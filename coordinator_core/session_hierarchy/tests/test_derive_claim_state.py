@@ -5,9 +5,10 @@ from unittest import mock
 from coordinator_core import claim_state
 from coordinator_core.session_hierarchy.derive import derive
 from coordinator_core.session_hub_path import hub_for_common
+from pathlib import Path
 
 
-def _write_claim_dir(common_dir, handoff_name, session_id, claimed_at=""):
+def _write_claim_dir(common_dir, handoff_name, session_id, claimed_at: str = ""):
     claim_dir = hub_for_common(common_dir) / "handoff-claims" / handoff_name
     claim_dir.mkdir(parents=True, exist_ok=True)
     (claim_dir / "session_id").write_text(session_id, encoding="utf-8")
@@ -16,12 +17,12 @@ def _write_claim_dir(common_dir, handoff_name, session_id, claimed_at=""):
     return claim_dir
 
 
-def _write_handoff(path, *, status="open"):
+def _write_handoff(path, *, status: str = "open") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"---\nstatus: {status}\n---\n\n# body\n", encoding="utf-8")
 
 
-def test_desynced_baton_session_node_survives_via_ledger(tmp_path):
+def test_desynced_baton_session_node_survives_via_ledger(tmp_path: Path) -> None:
     common_dir = tmp_path / "gitdir"
     common_dir.mkdir()
 
@@ -63,7 +64,7 @@ def test_desynced_baton_session_node_survives_via_ledger(tmp_path):
     assert child_node["parent_session_id"] == sid
 
 
-def test_legacy_consumed_by_only_still_resolves_dual_tolerance():
+def test_legacy_consumed_by_only_still_resolves_dual_tolerance() -> None:
     rec = {
         "path": "state/handoffs/2026-08-07-legacy.md",
         "frontmatter": {"consumed_by": "legacy-session", "workstream": "workstream-a"},

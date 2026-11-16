@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -14,14 +15,14 @@ from coordinator_core.ops.dispatch_emit.ask_contract import RESUME_RUN_ID_ARG, r
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     root = tmp_path / "repo"
     (root / ".git").mkdir(parents=True)
     return root
 
 
-def _park_behind_blocker(root):
+def _park_behind_blocker(root) -> None:
     run_token.mint(root, "blocker", "s.py", session_id="sess")
     run_token.mint(root, "waiter", "s.py", session_id="sess", sizing_rel="docs/x.yaml")
     stage_wait.park(root, "waiter", ["blocker"], ["a.py"], session_id="sess")
@@ -34,7 +35,7 @@ def _spooled_args(root):
     ]
 
 
-def test_refire_names_the_recorded_repo_root(repo):
+def test_refire_names_the_recorded_repo_root(repo) -> None:
     _park_behind_blocker(repo)
     run_token.consume(repo, "blocker")
     (args,) = _spooled_args(repo)
@@ -43,7 +44,7 @@ def test_refire_names_the_recorded_repo_root(repo):
     assert args[RESUME_RUN_ID_ARG] == "waiter"
 
 
-def test_refire_is_not_spooled_for_a_landed_run(repo):
+def test_refire_is_not_spooled_for_a_landed_run(repo) -> None:
     _park_behind_blocker(repo)
     marker_dir = record_dir(repo, "waiter")
     marker_dir.mkdir(parents=True, exist_ok=True)
@@ -52,7 +53,7 @@ def test_refire_is_not_spooled_for_a_landed_run(repo):
     assert _spooled_args(repo) == []
 
 
-def test_refire_is_spooled_for_a_halted_run(repo):
+def test_refire_is_spooled_for_a_halted_run(repo) -> None:
     _park_behind_blocker(repo)
     marker_dir = record_dir(repo, "waiter")
     marker_dir.mkdir(parents=True, exist_ok=True)

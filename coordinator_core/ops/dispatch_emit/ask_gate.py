@@ -22,10 +22,11 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Mapping, Optional, Sequence
 
+from coordinator_core.frontmatter.yaml_load import safe_load as _yaml_safe_load
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.warp_fire import fire_command
-from coordinator_core.ops.dispatch_emit import design_route, phase_ledger
+from coordinator_core.ops.dispatch_emit import design_route
 from coordinator_core.ops.dispatch_emit.ask_exclusions import excluded_paths
 
 RESUME_EXCLUDE_FIELD = "exclude"
@@ -132,6 +133,11 @@ _PARAMS = (
     Field("route_override_reason", "str"),
     Field("require_live_token", "bool"),
     Field("em_size", "nonempty_str"),
+    Field("stage_act", "bool"),
+    Field("gated", "list"),
+    Field("chain_emit", "bool"),
+    Field("target_root", "nonempty_str"),
+    Field("stop_after", "nonempty_str"),
 )
 _RECORD_KINDS = ("exit_criterion", "xl_exit", design_route.RECORD_KIND)
 _XL_PICKS = ("roadmap", "accept_multi_session", "split")
@@ -920,7 +926,7 @@ def _bind_plan_edge(repo_root: Path, sizing: dict, sizing_rel: str, plan_rel: st
     plan_rel = layout_edge(str(repo_root), single_dated_plan_edge(plan_rel))
 
     def mutate(old: str) -> str:
-        doc = yaml.safe_load(old) or {}
+        doc = _yaml_safe_load(old) or {}
         if doc.get("plan"):
             return old
         doc["plan"] = plan_rel
@@ -946,6 +952,7 @@ def _resume_phases(repo_root: Path, sizing_rel: str, resume, resume_ledger: Opti
     plan / plan_review (and plan_gate_rulings, for a plan-gate refusal) are credited only when
     `_plan_gate_resume_ready` holds with no ruling pending;
     an unreadable halt kind ("unknown") invalidates every phase."""
+    from coordinator_core.ops.dispatch_emit import phase_ledger
     from coordinator_core.ops.dispatch_emit.halted_run import _read, halted_ask_run_for
 
     root = Path(repo_root)
@@ -1373,8 +1380,11 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     from coordinator_core.git.git_objects import PackReadStalled
     from coordinator_core.ops.dispatch_emit.halt_remedy_class import PACK_READ_STALL_HALT_KIND
 
+    from coordinator_core.ops.dispatch_emit.sizing_fire import sizing_memo
+
     try:
-        return _gate_body(params, repo_root)
+        with sizing_memo():
+            return _close_gate_leg(params, _gate_body(params, repo_root), repo_root)
     except PackReadStalled as stall:
         sizing_rel = params.get("sizing_path")
         reason = f"{stall} (read retried once)"
@@ -1391,6 +1401,73 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
             attempts=1,
         )
         return verdict.to_json()
+
+
+def _close_gate_leg(params: dict, out: dict, repo_root: Optional[Path]) -> dict:
+    """The gate leg's closing acts, run in-process so the leg is one op call.
+
+    Adds the sizing's `tshirt` and `route` to every gate reply. With `stage_act` (bool; stage params
+    `cross_repo_approved`, `session_id`, `gated`) and a null halt it stages through `dispatch.ask_stage` for an
+    XS arm or an S arm with `resume_plan`, replying `stage_reply`; a reply already carrying `manifest_handle`
+    or `manifest` is passed through as `stage_reply`, staging nothing. With `chain_emit` (bool; `target_root`
+    required, `stop_after` optional) and a null halt on an M+ or roadmap arm it runs the chained run's
+    `dispatch.emit` and replies its `path` and `run_id` as `chain_emit` (`{error}` on failure).
+    """
+    if repo_root is None or "arm" not in out:
+        return out
+    sizing_rel = params["sizing_path"]
+    try:
+        sizing = load_sizing(main_worktree_root(Path(repo_root)), sizing_rel)
+        out["tshirt"] = sizing["estimate"]["tshirt"]
+        if isinstance(sizing.get("route"), str):
+            out["route"] = sizing["route"]
+    except (SizingFireRefused, KeyError, TypeError):
+        pass
+    if out.get("halt") is not None:
+        return out
+    if params.get("stage_act"):
+        if "manifest_handle" in out:
+            out["stage_reply"] = {"manifest_handle": out["manifest_handle"]}
+        elif isinstance(out.get("manifest"), dict) and "error" in out["manifest"]:
+            out["stage_reply"] = {"error": out["manifest"]["error"]}
+        elif out["arm"] == ARM_XS or (out["arm"] == ARM_S and out.get("resume_plan")):
+            from coordinator_core.ops.dispatch_emit import ask_stage as _ask_stage
+
+            base = {"cross_repo_approved": bool(params.get("cross_repo_approved"))}
+            if params.get("session_id"):
+                base["session_id"] = params["session_id"]
+            if out.get("resume_plan"):
+                stage_params = {**base, "run_id": params.get("run_id"), "plan_path": out["resume_plan"],
+                                "commit_sizing_path": sizing_rel}
+                if out.get("resume_rows") is not None:
+                    stage_params["only_rows"] = out["resume_rows"]
+            else:
+                stage_params = {**base, "run_id": params.get("run_id"), "writes": params.get("writes") or [],
+                                "sizing_path": sizing_rel, "gated": params.get("gated") or []}
+            out["stage_reply"] = _ask_stage._handler(stage_params, repo_root)
+    if params.get("chain_emit") and out["arm"] in (ARM_M_PLUS, ARM_ROADMAP):
+        from coordinator_core.ops.dispatch_emit.fan_launcher import LAUNCHER_CHILD_EMIT_PARAM
+        from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
+
+        emit_params = {
+            "ask": True, "sizing_path": sizing_rel, "target_root": params.get("target_root"),
+            "chain_parent": params.get("run_id"), LAUNCHER_CHILD_EMIT_PARAM: True,
+        }
+        if params.get("session_id"):
+            emit_params["session_id"] = params["session_id"]
+        if params.get("stop_after"):
+            emit_params["stop_after"] = params["stop_after"]
+        if params.get("cross_repo_approved"):
+            emit_params["cross_repo_approved"] = True
+        try:
+            reply = _dispatch_emit({k: v for k, v in emit_params.items() if v is not None}, repo_root)
+        except Exception as exc:  # noqa: BLE001 -- the leg reports the emit's failure as its reply
+            reply = {"error": f"{type(exc).__name__}: {exc}"}
+        out["chain_emit"] = (
+            {"error": str(reply["error"])} if reply.get("error")
+            else {k: reply[k] for k in ("path", "run_id") if k in reply}
+        )
+    return out
 
 
 def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
@@ -1523,6 +1600,8 @@ def _gate_body(params: dict, repo_root: Optional[Path] = None) -> dict:
                 pass
     out =(replace(verdict, recorded=recorded) if recorded is not None else verdict).to_json()
     if phases and verdict.halt is None:
+        from coordinator_core.ops.dispatch_emit import phase_ledger
+
         out[phase_ledger.RESUME_PHASES_FIELD] = phases[0]
     if route_verdicts:
         from coordinator_core.ops.dispatch_emit import route_preference as rp
@@ -2026,7 +2105,7 @@ def _bind_route_preference(
     from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 
     def mutate(old: str) -> str:
-        doc = yaml.safe_load(old) or {}
+        doc = _yaml_safe_load(old) or {}
         em = doc.get("em_analysis")
         em = dict(em) if isinstance(em, dict) else {}
         route = effective_route(doc)

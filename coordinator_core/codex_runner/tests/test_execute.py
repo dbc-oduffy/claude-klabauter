@@ -9,6 +9,10 @@ import pytest
 from coordinator_core._settings_home import settings_home
 from coordinator_core.codex_runner import codex_spawn_env, execute
 from coordinator_core.codex_runner.contract import RunRequest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import Popen
 
 FIXTURES = Path(__file__).parent / "fixtures"
 FAKE = str(FIXTURES / "fake_codex.py")
@@ -46,7 +50,7 @@ title: t
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     root = tmp_path / "repo"
     root.mkdir()
     plan = root / "plan.md"
@@ -60,7 +64,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.delenv("CODEX_RUNNER_ALLOW_API_KEY", raising=False)
     real_env = execute._build_env
 
-    def env_with_fake_knobs(*a, **kw):
+    def env_with_fake_knobs(*a, **kw) -> dict[str, str]:
         out = real_env(*a, **kw)
         if not a and "environ" not in kw:
             out.update({k: v for k, v in os.environ.items() if k.startswith("FAKE_CODEX_")})
@@ -70,7 +74,7 @@ def env(tmp_path, monkeypatch):
     return root, plan, argv_out, tmp_path, monkeypatch
 
 
-def _jsonl(tmp_path, monkeypatch, paths, extra=()):
+def _jsonl(tmp_path, monkeypatch, paths, extra=()) -> None:
     changes = [{"path": p, "kind": "update"} for p in paths]
     lines = [{"type": "thread.started", "thread_id": "t"}, {"type": "turn.started"}]
     if paths:
@@ -86,7 +90,7 @@ def _jsonl(tmp_path, monkeypatch, paths, extra=()):
     monkeypatch.setenv("FAKE_CODEX_JSONL", str(f))
 
 
-def _req(root, plan, chunk):
+def _req(root, plan, chunk) -> RunRequest:
     return RunRequest(mode="execute", repo_root=str(root), plan=str(plan), chunk=chunk)
 
 
@@ -96,7 +100,7 @@ def _run(root, plan, chunk, tmp_path):
     return res, pids
 
 
-def test_in_scope_file_change_is_ok(env):
+def test_in_scope_file_change_is_ok(env) -> None:
     root, plan, argv_out, tmp_path, mp = env
     _jsonl(tmp_path, mp, [str(root / "src" / "a.py"), str(root / "src" / "sub" / "b.py")])
     res, pids = _run(root, plan, "C1", tmp_path)
@@ -106,7 +110,7 @@ def test_in_scope_file_change_is_ok(env):
     assert pids == [res.codex_pid]
 
 
-def test_spawn_form_is_workspace_write_in_shared_tree(env):
+def test_spawn_form_is_workspace_write_in_shared_tree(env) -> None:
     root, plan, argv_out, tmp_path, mp = env
     _jsonl(tmp_path, mp, [])
     res, _ = _run(root, plan, "C1", tmp_path)
@@ -122,7 +126,7 @@ def test_spawn_form_is_workspace_write_in_shared_tree(env):
     assert "- src/a.py" in prompt and "Write only these files" in prompt
 
 
-def test_out_of_writes_path_is_scope_breach_naming_it(env):
+def test_out_of_writes_path_is_scope_breach_naming_it(env) -> None:
     root, plan, _, tmp_path, mp = env
     _jsonl(tmp_path, mp, [str(root / "src" / "a.py"), str(root / "src" / "evil.py")])
     res, _ = _run(root, plan, "C1", tmp_path)
@@ -131,7 +135,7 @@ def test_out_of_writes_path_is_scope_breach_naming_it(env):
     assert "src/evil.py" in res.error
 
 
-def test_path_outside_repo_root_is_breach(env):
+def test_path_outside_repo_root_is_breach(env) -> None:
     root, plan, _, tmp_path, mp = env
     outside = tmp_path / "elsewhere" / "a.py"
     _jsonl(tmp_path, mp, [str(outside)])
@@ -140,7 +144,7 @@ def test_path_outside_repo_root_is_breach(env):
     assert len(res.scope["paths"]) == 1
 
 
-def test_backslash_declared_write_matches(env):
+def test_backslash_declared_write_matches(env) -> None:
     root, plan, _, tmp_path, mp = env
     assert execute.audit_scope(
         [{"item": {"type": "file_change", "changes": [{"path": str(root / "src" / "sub" / "b.py")}]}}],
@@ -154,7 +158,7 @@ def test_backslash_declared_write_matches(env):
     ("C3", "is not open"),
     ("C9", "not found"),
 ])
-def test_refused_before_spawn(env, chunk, why):
+def test_refused_before_spawn(env, chunk, why) -> None:
     root, plan, argv_out, tmp_path, mp = env
     _jsonl(tmp_path, mp, [])
     res, pids = _run(root, plan, chunk, tmp_path)
@@ -164,7 +168,7 @@ def test_refused_before_spawn(env, chunk, why):
     assert not argv_out.exists()
 
 
-def test_limit_exhausted_detected(env):
+def test_limit_exhausted_detected(env) -> None:
     root, plan, _, tmp_path, mp = env
     mp.setenv("FAKE_CODEX_JSONL", str(FIXTURES / "limit_exhausted.jsonl"))
     mp.setenv("FAKE_CODEX_EXIT", "1")
@@ -172,7 +176,7 @@ def test_limit_exhausted_detected(env):
     assert res.status == "limit_exhausted"
 
 
-def test_nonzero_exit_without_events_is_failed(env):
+def test_nonzero_exit_without_events_is_failed(env) -> None:
     root, plan, _, tmp_path, mp = env
     _jsonl(tmp_path, mp, [])
     mp.setenv("FAKE_CODEX_EXIT", "2")
@@ -181,7 +185,7 @@ def test_nonzero_exit_without_events_is_failed(env):
     assert "2" in res.error
 
 
-def test_codex_unavailable_is_failed(env):
+def test_codex_unavailable_is_failed(env) -> None:
     root, plan, _, tmp_path, mp = env
 
     def boom():
@@ -192,7 +196,7 @@ def test_codex_unavailable_is_failed(env):
     assert res.status == "failed" and "unavailable" in res.error and pids == []
 
 
-def test_api_key_login_refused_before_spawn(env):
+def test_api_key_login_refused_before_spawn(env) -> None:
     root, plan, _, tmp_path, mp = env
     (tmp_path / "chome" / "auth.json").write_text('{"auth_mode": "apikey"}', encoding="utf-8")
     mp.setattr(execute.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned"))
@@ -200,14 +204,14 @@ def test_api_key_login_refused_before_spawn(env):
     assert res.status == "failed" and "API key" in res.error and pids == []
 
 
-def test_api_key_login_accepted_with_flag_and_env_scrubbed_otherwise(env):
+def test_api_key_login_accepted_with_flag_and_env_scrubbed_otherwise(env) -> None:
     root, plan, _, tmp_path, mp = env
     (tmp_path / "chome" / "auth.json").write_text('{"auth_mode": "apikey"}', encoding="utf-8")
     mp.setenv("OPENAI_API_KEY", "sk-x")
     seen = {}
     real = execute.subprocess.Popen
 
-    def spy(argv, **kw):
+    def spy(argv, **kw) -> "Popen[str]":
         seen.update(kw["env"])
         return real(argv, **kw)
 
@@ -223,14 +227,14 @@ def test_api_key_login_accepted_with_flag_and_env_scrubbed_otherwise(env):
     assert "OPENAI_API_KEY" not in seen and "PATH" in seen
 
 
-def test_request_flag_admits_api_key_login_and_env(env):
+def test_request_flag_admits_api_key_login_and_env(env) -> None:
     root, plan, _, tmp_path, mp = env
     (tmp_path / "chome" / "auth.json").write_text('{"auth_mode": "apikey"}', encoding="utf-8")
     mp.setenv("OPENAI_API_KEY", "sk-x")
     seen = {}
     real = execute.subprocess.Popen
 
-    def spy(argv, **kw):
+    def spy(argv, **kw) -> "Popen[str]":
         seen.update(kw["env"])
         return real(argv, **kw)
 
@@ -241,7 +245,7 @@ def test_request_flag_admits_api_key_login_and_env(env):
     assert res.status == "ok" and seen.get("OPENAI_API_KEY") == "sk-x"
 
 
-def test_unelevated_unproven_root_runs_with_advisory(env):
+def test_unelevated_unproven_root_runs_with_advisory(env) -> None:
     from coordinator_core.codex_runner import sandbox_preflight as sp
     root, plan, argv_out, tmp_path, mp = env
     (tmp_path / "chome" / "config.toml").write_text('[windows]\nsandbox = "unelevated"\n', encoding="utf-8")
@@ -249,7 +253,7 @@ def test_unelevated_unproven_root_runs_with_advisory(env):
     mp.setattr(codex_spawn_env, "check_pwsh_launchable", lambda env: None)
     seen = {}
 
-    def fake_check(root_, **kw):
+    def fake_check(root_, **kw) -> str:
         seen.update(kw)
         return "advisory: warming"
 
@@ -261,7 +265,7 @@ def test_unelevated_unproven_root_runs_with_advisory(env):
     assert "advisory: warming" in (tmp_path / "run1" / "codex.stderr").read_text(encoding="utf-8")
 
 
-def test_unelevated_proven_root_still_runs(env):
+def test_unelevated_proven_root_still_runs(env) -> None:
     import json as _json
     from coordinator_core.codex_runner import sandbox_preflight as sp
     root, plan, argv_out, tmp_path, mp = env
@@ -276,7 +280,7 @@ def test_unelevated_proven_root_still_runs(env):
     assert not (res.error or "").startswith("refused:")
 
 
-def test_windowsapps_pwsh_refused_before_spawn(env):
+def test_windowsapps_pwsh_refused_before_spawn(env) -> None:
     import subprocess
     from coordinator_core.codex_runner import sandbox_preflight as sp
     root, plan, argv_out, tmp_path, mp = env
@@ -293,7 +297,7 @@ def test_windowsapps_pwsh_refused_before_spawn(env):
     assert pids == []
 
 
-def test_popen_receives_the_helper_env_with_writable_temp(env):
+def test_popen_receives_the_helper_env_with_writable_temp(env) -> None:
     import subprocess
     root, plan, argv_out, tmp_path, mp = env
     built = []
@@ -305,7 +309,7 @@ def test_popen_receives_the_helper_env_with_writable_temp(env):
 
     calls = []
 
-    def counting_child_env(requested):
+    def counting_child_env(requested) -> dict[str, str]:
         calls.append(requested)
         return {"PATH": os.environ.get("PATH", "")}
 
@@ -314,7 +318,7 @@ def test_popen_receives_the_helper_env_with_writable_temp(env):
     real_popen = subprocess.Popen
     seen = []
 
-    def spy(*a, **k):
+    def spy(*a, **k) -> "Popen[str]":
         seen.append(k["env"])
         return real_popen(*a, **k)
 
@@ -325,13 +329,13 @@ def test_popen_receives_the_helper_env_with_writable_temp(env):
     assert seen and seen[0] is built[0]
 
 
-def test_real_shape_sets_temp_under_repo_scratch(env):
+def test_real_shape_sets_temp_under_repo_scratch(env) -> None:
     import subprocess
     root, plan, argv_out, tmp_path, mp = env
     real_popen = subprocess.Popen
     seen = []
 
-    def spy(*a, **k):
+    def spy(*a, **k) -> "Popen[str]":
         seen.append(k["env"])
         return real_popen(*a, **k)
 

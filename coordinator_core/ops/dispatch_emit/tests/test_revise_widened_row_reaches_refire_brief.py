@@ -11,6 +11,7 @@ from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
 from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
+from pathlib import Path
 
 RUN = "ask-20261103T000000-abc123"
 REL = "state/sizings/2026-11-03-row-widen.yaml"
@@ -48,7 +49,7 @@ Two rows.
 
 
 @pytest.fixture
-def run(tmp_path):
+def run(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / "state" / "sizings").mkdir(parents=True)
@@ -76,7 +77,7 @@ def _briefs(root) -> dict:
     return {r.id: (root / r.brief_path).read_text(encoding="utf-8") for r in manifest.rows}
 
 
-def test_row_named_add_path_reaches_that_rows_refired_brief(run):
+def test_row_named_add_path_reaches_that_rows_refired_brief(run) -> None:
     assert NEW not in _briefs(run)["C8"]
 
     reply = _revise(run, [{"row": "C8", "path": NEW}])
@@ -89,14 +90,14 @@ def test_row_named_add_path_reaches_that_rows_refired_brief(run):
     assert "Cover " not in (run / PLAN_REL).read_text(encoding="utf-8")
 
 
-def test_row_unknown_to_the_plan_falls_back_to_a_footprint_row(run):
+def test_row_unknown_to_the_plan_falls_back_to_a_footprint_row(run) -> None:
     reply = _revise(run, [{"row": "C99", "path": NEW}])
     assert reply.get("ok") is True, reply
     assert reply["footprint_widened"][0]["paths"] == [NEW]
     assert NEW not in _briefs(run)["C8"]
 
 
-def test_add_path_without_a_row_widens_no_row_brief(run):
+def test_add_path_without_a_row_widens_no_row_brief(run) -> None:
     reply = _revise(run, [NEW])
     assert reply.get("ok") is True, reply
     assert reply["footprint_widened"][0]["paths"] == [NEW]
@@ -104,7 +105,7 @@ def test_add_path_without_a_row_widens_no_row_brief(run):
     assert NEW not in briefs["C8"] and NEW not in briefs["C9"]
 
 
-def test_refused_revise_leaves_the_plan_unmutated(run, monkeypatch):
+def test_refused_revise_leaves_the_plan_unmutated(run, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import plan_tasks_mutate
 
     monkeypatch.setattr(plan_tasks_mutate, "_add_task", lambda *a, **k: {"applied": False})
@@ -114,7 +115,7 @@ def test_refused_revise_leaves_the_plan_unmutated(run, monkeypatch):
     assert (run / PLAN_REL).read_text(encoding="utf-8") == before
 
 
-def test_refused_fallback_leaves_an_earlier_stampable_row_unmutated(run, monkeypatch):
+def test_refused_fallback_leaves_an_earlier_stampable_row_unmutated(run, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import plan_tasks_mutate
 
     monkeypatch.setattr(plan_tasks_mutate, "_add_task", lambda *a, **k: {"applied": False})
@@ -124,14 +125,14 @@ def test_refused_fallback_leaves_an_earlier_stampable_row_unmutated(run, monkeyp
     assert (run / PLAN_REL).read_text(encoding="utf-8") == before
 
 
-def test_row_path_already_in_the_rows_writes_is_a_noop(run):
+def test_row_path_already_in_the_rows_writes_is_a_noop(run) -> None:
     before = (run / PLAN_REL).read_text(encoding="utf-8")
     reply = _revise(run, [{"row": "C8", "path": OLD}])
     assert reply.get("ok") is True, reply
     assert (run / PLAN_REL).read_text(encoding="utf-8") == before
 
 
-def test_repeated_revise_does_not_duplicate_the_path(run):
+def test_repeated_revise_does_not_duplicate_the_path(run) -> None:
     _revise(run, [{"row": "C8", "path": NEW}])
     _revise(run, [{"row": "C8", "path": NEW}])
     rows = yaml.safe_load((run / PLAN_REL).read_text(encoding="utf-8").split("```yaml plan-tasks\n")[1].split("```")[0])

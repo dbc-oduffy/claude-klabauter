@@ -12,6 +12,7 @@ from coordinator_core.install.substrate import (
     _resolve_bin_templates_manifest_root,
     _static_bin_family_names,
 )
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -21,7 +22,7 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def test_every_static_family_member_is_byte_identical_to_its_source(monkeypatch, tmp_path):
+def test_every_static_family_member_is_byte_identical_to_its_source(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     ml_bin = tmp_path / "ml_bin"
     ch_bin = tmp_path / "ch_bin"
     bin_dst = tmp_path / "bin_dst"

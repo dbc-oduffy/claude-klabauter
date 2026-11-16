@@ -46,7 +46,7 @@ RUN_ID = "ask-20261114T000000-c20000"
 MESSAGE = "spike: land run\n"
 
 
-def build_fixture(parent: Path, *, wf_dirs: int = shape.WF_DIRS, landing_paths: int = shape.LANDING_PATHS):
+def build_fixture(parent: Path, *, wf_dirs: int = shape.WF_DIRS, landing_paths: int = shape.LANDING_PATHS) -> tuple[Path, list[str], Path]:
     """A seeded repo with `landing_paths` new files under `pkg/` plus the session tree; returns
     `(repo, rels, workflows_dir)`."""
     repo = parent / "repo"

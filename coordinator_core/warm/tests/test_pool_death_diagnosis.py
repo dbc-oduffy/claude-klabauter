@@ -19,19 +19,20 @@ import pytest
 
 from coordinator_core.warm import breadcrumb, server
 from coordinator_core.warm.client import WARM_DISPATCH_INDETERMINATE, _indeterminate_envelope
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
 _MUTATING = "test.mutating_op"
 
 
-def _dying_worker(msg, caller):
+def _dying_worker(msg, caller) -> None:
     sys.stderr.write("worker-about-to-die: marker-" + "x" * 5000 + "-TAIL\n")
     sys.stderr.flush()
     os._exit(7)
 
 
-def _sigkilled_worker(msg, caller):
+def _sigkilled_worker(msg, caller) -> None:
     sys.stderr.write("sigkill-marker\n")
     sys.stderr.flush()
     os.kill(os.getpid(), signal.SIGKILL)
@@ -51,7 +52,7 @@ def _msg(method=_MUTATING):
     return {"jsonrpc": "2.0", "id": 11, "method": method, "params": {}}
 
 
-def test_worker_exit_code_and_stderr_tail_reach_the_envelope(tmp_path, monkeypatch):
+def test_worker_exit_code_and_stderr_tail_reach_the_envelope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "_pool_dispatch_worker", _dying_worker)
     ctx = _real_pool_ctx(tmp_path, monkeypatch)
     try:
@@ -76,7 +77,7 @@ def test_worker_exit_code_and_stderr_tail_reach_the_envelope(tmp_path, monkeypat
     assert "-TAIL" in error["message"]
 
 
-def test_a_dead_worker_never_re_runs_the_mutating_op(tmp_path, monkeypatch):
+def test_a_dead_worker_never_re_runs_the_mutating_op(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(server, "_pool_dispatch_worker", _dying_worker)
     monkeypatch.setattr(server, "_run_dispatch", lambda *a, **k: calls.append(1) or {})
@@ -93,7 +94,7 @@ def test_a_dead_worker_never_re_runs_the_mutating_op(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="signal exit codes are POSIX")
-def test_worker_killed_by_signal_names_the_signal(tmp_path, monkeypatch):
+def test_worker_killed_by_signal_names_the_signal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "_pool_dispatch_worker", _sigkilled_worker)
     ctx = _real_pool_ctx(tmp_path, monkeypatch)
     try:
@@ -109,7 +110,7 @@ def test_worker_killed_by_signal_names_the_signal(tmp_path, monkeypatch):
     assert "sigkill-marker" in diag["stderr_tail"]
 
 
-def test_dead_worker_diagnosis_without_a_pool_still_yields_the_case():
+def test_dead_worker_diagnosis_without_a_pool_still_yields_the_case() -> None:
     diag = server._dead_worker_diagnosis(None, None)
     assert diag["case"] == "worker_died"
     envelope = server._pool_broken_indeterminate_envelope(_msg(), diag)
@@ -121,7 +122,7 @@ class _StuckFuture:
     def result(self, timeout=None):
         raise concurrent.futures.TimeoutError()
 
-    def cancel(self):
+    def cancel(self) -> bool:
         return False
 
     def add_done_callback(self, fn):
@@ -129,11 +130,11 @@ class _StuckFuture:
 
 
 class _StuckPool:
-    def submit(self, *_a, **_k):
+    def submit(self, *_a, **_k) -> _StuckFuture:
         return _StuckFuture()
 
 
-def test_server_side_no_reply_names_op_and_wait(monkeypatch):
+def test_server_side_no_reply_names_op_and_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     ctx = server._ServerContext.__new__(server._ServerContext)
     ctx._dispatch_pool_lock = threading.Lock()
     ctx._pool_outstanding = server.InFlightCounter()
@@ -149,7 +150,7 @@ def test_server_side_no_reply_names_op_and_wait(monkeypatch):
     assert repr(_MUTATING) in out["error"]["message"]
 
 
-def test_client_no_reply_envelope_names_op_and_wait():
+def test_client_no_reply_envelope_names_op_and_wait() -> None:
     envelope = _indeterminate_envelope(
         _msg("memo.draft"), "no response within 30.0s", "k-1", waited_secs=30.04
     )

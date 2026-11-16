@@ -8,6 +8,7 @@ import json
 import pytest
 
 from coordinator_core.group_em import box_key, box_registry, member_box, relayed_grant_peer, suite_grant
+from pathlib import Path
 
 ISSUER = "box-issuer"
 
@@ -16,7 +17,7 @@ class _Mem:
     class MembershipError(Exception):
         pass
 
-    def __init__(self, members=None, error=None):
+    def __init__(self, members=None, error=None) -> None:
         self.members, self.error = members or [], error
 
     def verified_members(self, home, run=None):
@@ -26,7 +27,7 @@ class _Mem:
 
 
 @pytest.fixture
-def homes(tmp_path, monkeypatch):
+def homes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     far, near = tmp_path / "far", tmp_path / "near"
     far_id = box_registry.ensure_identity(far)
     key_b64 = base64.b64encode(box_key.ensure_key(near)).decode()
@@ -35,7 +36,7 @@ def homes(tmp_path, monkeypatch):
     return {"far": far, "far_id": far_id, "near": near, "key": key_b64, "mem": mem}
 
 
-def test_pins_a_member_peer_with_no_pin(homes):
+def test_pins_a_member_peer_with_no_pin(homes) -> None:
     out = relayed_grant_peer.receive_key_pin(ISSUER, homes["key"], ISSUER, homes["far"])
     assert out == {"ok": True, "reason": "pinned"}
     assert box_key.pinned_fingerprint(ISSUER, homes["far"]) == box_key.own_fingerprint(homes["near"])
@@ -45,13 +46,13 @@ def test_pins_a_member_peer_with_no_pin(homes):
     ("box_id", "peer", "reason"),
     [(ISSUER, None, "no_peer"), (ISSUER, "", "no_peer"), (ISSUER, "box-other", "issuer_not_peer"), ("../x", "../x", "bad_box")],
 )
-def test_refuses_unanchored_claims_and_writes_no_pin(homes, box_id, peer, reason):
+def test_refuses_unanchored_claims_and_writes_no_pin(homes, box_id, peer, reason) -> None:
     out = relayed_grant_peer.receive_key_pin(box_id, homes["key"], peer, homes["far"])
     assert (out["ok"], out["reason"]) == (False, reason)
     assert box_key.pinned_fingerprint(ISSUER, homes["far"]) is None
 
 
-def test_refuses_a_box_absent_from_verified_membership_and_unverifiable_membership(homes):
+def test_refuses_a_box_absent_from_verified_membership_and_unverifiable_membership(homes) -> None:
     homes["mem"].members = [{"box": "box-else", "host": "h", "user": "u"}]
     assert relayed_grant_peer.receive_key_pin(ISSUER, homes["key"], ISSUER, homes["far"])["reason"] == "not_member"
     homes["mem"].members = []
@@ -65,7 +66,7 @@ def test_refuses_a_box_absent_from_verified_membership_and_unverifiable_membersh
     assert box_key.pinned_fingerprint(ISSUER, homes["far"]) is None
 
 
-def test_refuses_a_bad_key_and_never_overwrites_an_existing_pin(homes):
+def test_refuses_a_bad_key_and_never_overwrites_an_existing_pin(homes) -> None:
     assert relayed_grant_peer.receive_key_pin(ISSUER, "!!", ISSUER, homes["far"])["reason"] == "bad_key"
     box_key.pin_peer_key(ISSUER, base64.b64encode(b"o" * 32).decode(), homes["far"])
     before = box_key.pinned_fingerprint(ISSUER, homes["far"])
@@ -74,7 +75,7 @@ def test_refuses_a_bad_key_and_never_overwrites_an_existing_pin(homes):
     assert box_key.pinned_fingerprint(ISSUER, homes["far"]) == before
 
 
-def _stored(homes, **over):
+def _stored(homes, **over) -> Path:
     env = {
         "kind": suite_grant.KIND,
         "issuer_box_id": ISSUER,
@@ -106,11 +107,11 @@ def _revoke(homes, **over):
     )
 
 
-def _pin_issuer(homes):
+def _pin_issuer(homes) -> None:
     box_key.pin_peer_key(ISSUER, homes["key"], homes["far"])
 
 
-def test_revoke_removes_the_grant_and_leaves_a_tombstone(homes):
+def test_revoke_removes_the_grant_and_leaves_a_tombstone(homes) -> None:
     path = _stored(homes)
     _pin_issuer(homes)
     out = relayed_grant_peer.receive_relayed_revoke(_revoke(homes), homes["far"])
@@ -129,7 +130,7 @@ def test_revoke_removes_the_grant_and_leaves_a_tombstone(homes):
         ({"kind": "other"}, "bad_record"),
     ],
 )
-def test_revoke_refusals_leave_the_grant_in_place(homes, over, reason):
+def test_revoke_refusals_leave_the_grant_in_place(homes, over, reason) -> None:
     path = _stored(homes)
     _pin_issuer(homes)
     out = relayed_grant_peer.receive_relayed_revoke(_revoke(homes, **over), homes["far"])
@@ -137,7 +138,7 @@ def test_revoke_refusals_leave_the_grant_in_place(homes, over, reason):
     assert path.exists() and not path.with_name("sess1.revoked.json").exists()
 
 
-def test_revoke_refuses_unsigned_forged_unpinned_and_absent_grant(homes):
+def test_revoke_refuses_unsigned_forged_unpinned_and_absent_grant(homes) -> None:
     path = _stored(homes)
     unsigned = {k: v for k, v in _revoke(homes).items() if k != "sig"}
     assert relayed_grant_peer.receive_relayed_revoke(_revoke(homes), homes["far"])["reason"].startswith(

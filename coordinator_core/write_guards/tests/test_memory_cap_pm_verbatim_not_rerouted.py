@@ -9,6 +9,7 @@ import os
 import pytest
 
 from coordinator_core.write_guards import guard_memory_store_cap as guard
+from pathlib import Path
 
 _LEVEL_ENV = "MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL_GUARD-MEMORY-STORE-CAP"
 _TYPES = ["user", "feedback", "project", "reference"]
@@ -19,7 +20,7 @@ def _body(mem_type: str, text: str = "x") -> str:
 
 
 @pytest.fixture
-def store(monkeypatch, tmp_path):
+def store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> tuple[Path, Path]:
     home = tmp_path / "home"
     mem = home / ".claude" / "projects" / "-Some-project" / "memory"
     mem.mkdir(parents=True)
@@ -49,7 +50,7 @@ def _seed(mem, oldest_type: str) -> None:
 
 
 @pytest.mark.parametrize("mem_type", _TYPES)
-def test_new_memory_of_any_type_at_cap_is_allowed_and_oldest_evicted(store, mem_type):
+def test_new_memory_of_any_type_at_cap_is_allowed_and_oldest_evicted(store, mem_type) -> None:
     mem, lessons = store
     _seed(mem, mem_type)
 
@@ -73,7 +74,7 @@ def test_new_memory_of_any_type_at_cap_is_allowed_and_oldest_evicted(store, mem_
     assert not [f for f in lessons.rglob("*.yaml") if "name: n-%s\n---\nnew" % mem_type in f.read_text(encoding="utf-8")]
 
 
-def test_oversize_new_body_at_cap_is_denied_and_still_evicts(store):
+def test_oversize_new_body_at_cap_is_denied_and_still_evicts(store) -> None:
     mem, _lessons = store
     _seed(mem, "feedback")
 
@@ -85,7 +86,7 @@ def test_oversize_new_body_at_cap_is_denied_and_still_evicts(store):
     assert (mem.parent / "memory-evictions.jsonl").exists()
 
 
-def test_eviction_failure_is_a_deny_naming_the_oldest(store, monkeypatch):
+def test_eviction_failure_is_a_deny_naming_the_oldest(store, monkeypatch: pytest.MonkeyPatch) -> None:
     mem, _lessons = store
     _seed(mem, "user")
 

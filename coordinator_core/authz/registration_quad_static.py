@@ -24,6 +24,10 @@ from coordinator_core.authz.registration_quad import (
     check_registration_quad,
     filter_known_violations,
 )
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from re import Pattern
 
 _LEDGER_FILE = "coordinator_core/authz/registration_quad.py"
 _SURFACE_PATHS = frozenset(_SURFACE_FILES.values())
@@ -52,7 +56,7 @@ def _norm(path: str) -> str:
     return path.replace("\\", "/")
 
 
-def _register_op_key_re():
+def _register_op_key_re() -> Pattern[str]:
     # Deferred: commit_tripwires pulls the git/bash-guard import graph this oracle must not
     # pay at import time.
     from coordinator_core.bash_guards.commit_tripwires import _REGISTER_OP_KEY_RE

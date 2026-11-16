@@ -176,6 +176,9 @@ def export_env(root: PurePath | str, base: dict[str, str] | None = None, *, shar
         env.pop(key, None)
     _rebind_pid_bound_inherits(env)
     env["GIT_CEILING_DIRECTORIES"] = os.fspath(Path(root).parent)
+    # Engine root leads PYTHONPATH on purpose: the live engine shadows any coordinator_core shipped in the export.
+    engine_root = os.fspath(Path(__file__).resolve().parents[2])
+    env["PYTHONPATH"] = os.pathsep.join(p for p in (engine_root, env.get("PYTHONPATH", "")) if p)
     if shared:
         env["PYTHONDONTWRITEBYTECODE"] = "1"
         opts = env.get("PYTEST_ADDOPTS", "")

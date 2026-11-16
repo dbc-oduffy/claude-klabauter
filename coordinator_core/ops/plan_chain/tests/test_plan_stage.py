@@ -7,9 +7,10 @@ import pytest
 
 from coordinator_core.ops.plan_chain import plan_stage
 from coordinator_core.ops.plan_chain.contract import ChainManifest, Halt, WorkflowResult
+from pathlib import Path
 
 
-def _wr(digest):
+def _wr(digest) -> WorkflowResult:
     return WorkflowResult(digest=digest, raw_result="", child_session_id="sid")
 
 
@@ -17,7 +18,7 @@ def _ready(plan_path):
     return {"kind": "plan", "outcome": "ready", "next_action": {"params": {"plan_path": plan_path}}}
 
 
-def test_ready_returns_existing_plan_path(tmp_path):
+def test_ready_returns_existing_plan_path(tmp_path: Path) -> None:
     (tmp_path / "p.md").write_text("x", encoding="utf-8")
     assert plan_stage.read_plan_result(_wr(_ready("p.md")), repo_root=tmp_path) == "p.md"
 
@@ -33,24 +34,24 @@ def test_ready_returns_existing_plan_path(tmp_path):
         (_ready("missing.md"), "plan"),
     ],
 )
-def test_halts(tmp_path, digest, halt_at):
+def test_halts(tmp_path: Path, digest, halt_at) -> None:
     out = plan_stage.read_plan_result(_wr(digest), repo_root=tmp_path)
     assert isinstance(out, Halt) and out.halted_at == halt_at
 
 
-def test_not_ready_reason_names_outcome(tmp_path):
+def test_not_ready_reason_names_outcome(tmp_path: Path) -> None:
     out = plan_stage.read_plan_result(_wr({"kind": "plan", "outcome": "replan"}), repo_root=tmp_path)
     assert "replan" in out.reason
 
 
-def _manifest(tmp_path, source):
+def _manifest(tmp_path, source) -> ChainManifest:
     return ChainManifest(
         sizing_object="s.yaml", baton="b", deliverable_id=None, interaction_mode="pm",
         repo_root=str(tmp_path), trail_dir="trail", wave_args={"k": 1}, script_source=str(source),
     )
 
 
-def test_bind_plan_script_writes_script_and_receipt(tmp_path):
+def test_bind_plan_script_writes_script_and_receipt(tmp_path: Path) -> None:
     src = tmp_path / "wf.mjs"
     src.write_text(
         "export const meta = {\n  name: 'x',\n}\nreturn args\n", encoding="utf-8"
@@ -62,7 +63,7 @@ def test_bind_plan_script_writes_script_and_receipt(tmp_path):
     assert receipt["session_id"] == "sess-1"
 
 
-def test_bind_plan_script_refuses_empty_session_and_missing_source(tmp_path):
+def test_bind_plan_script_refuses_empty_session_and_missing_source(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         plan_stage.bind_plan_script(_manifest(tmp_path, tmp_path / "x"), child_session_id="")
     with pytest.raises(ValueError):
@@ -70,7 +71,7 @@ def test_bind_plan_script_refuses_empty_session_and_missing_source(tmp_path):
     assert not list((tmp_path / "trail").glob("*")) if (tmp_path / "trail").exists() else True
 
 
-def test_plan_blitz_wave_return_nests_digest_under_digest_key(tmp_path):
+def test_plan_blitz_wave_return_nests_digest_under_digest_key(tmp_path: Path) -> None:
     (tmp_path / "p.md").write_text("x", encoding="utf-8")
     wave = {
         "waveIndex": 0,
@@ -83,13 +84,13 @@ def test_plan_blitz_wave_return_nests_digest_under_digest_key(tmp_path):
     assert plan_stage.plan_digest(_wr(wave)) == wave["digest"]
 
 
-def test_wave_return_without_digest_still_halts(tmp_path):
+def test_wave_return_without_digest_still_halts(tmp_path: Path) -> None:
     out = plan_stage.read_plan_result(_wr({"waveIndex": 0, "ready": []}), repo_root=tmp_path)
     assert isinstance(out, Halt) and out.halted_at == "plan"
 
 
 @pytest.mark.parametrize("digest", [None, {"kind": "plan", "outcome": "pulled"}])
-def test_a_pulled_plan_halts_naming_the_pull_reason(tmp_path, digest):
+def test_a_pulled_plan_halts_naming_the_pull_reason(tmp_path: Path, digest) -> None:
     wave = {
         "waveIndex": 0,
         "ready": [],

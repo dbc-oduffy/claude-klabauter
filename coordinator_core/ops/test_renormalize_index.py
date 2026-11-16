@@ -26,6 +26,7 @@ import pytest
 
 from coordinator_core.ops import renormalize_index as rni
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -57,11 +58,11 @@ def _new_repo(tmp_path):
     return d
 
 
-def _lf(path, body="alpha\nbeta\ngamma\n"):
+def _lf(path, body: str = "alpha\nbeta\ngamma\n") -> None:
     path.write_text(body, newline="\n")
 
 
-def _crlf(path, body="alpha\r\nbeta\r\ngamma\r\n"):
+def _crlf(path, body: str = "alpha\r\nbeta\r\ngamma\r\n") -> None:
     with open(path, "wb") as fh:
         fh.write(body.encode("ascii"))
 
@@ -81,14 +82,14 @@ def _worktree_diff_names(d):
     return set(res.stdout.splitlines())
 
 
-def test_not_a_git_repo(tmp_path):
+def test_not_a_git_repo(tmp_path: Path) -> None:
     d = tmp_path / "not-a-repo"
     d.mkdir()
     rc = rni.main([], cwd=str(d))
     assert rc == 1
 
 
-def test_clean_tree_is_noop(tmp_path, capsys):
+def test_clean_tree_is_noop(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     d = _new_repo(tmp_path)
     rc = rni.main([], cwd=str(d))
     assert rc == 0
@@ -97,7 +98,7 @@ def test_clean_tree_is_noop(tmp_path, capsys):
     assert captured.out == ""
 
 
-def test_real_edit_deletion_and_sibling_stage_excluded(tmp_path):
+def test_real_edit_deletion_and_sibling_stage_excluded(tmp_path: Path) -> None:
     d = _new_repo(tmp_path)
     _lf(d / "real.txt")
     _lf(d / "gone.txt")
@@ -122,7 +123,7 @@ def test_real_edit_deletion_and_sibling_stage_excluded(tmp_path):
     assert "real.txt" in _worktree_diff_names(d)
 
 
-def test_weird_named_real_edits_untouched(tmp_path):
+def test_weird_named_real_edits_untouched(tmp_path: Path) -> None:
     d = _new_repo(tmp_path)
     _lf(d / "with space.txt")
     _lf(d / "uni_cafe.txt")
@@ -140,7 +141,7 @@ def test_weird_named_real_edits_untouched(tmp_path):
     assert _staged_names(d) == set()
 
 
-def test_check_only_never_writes_index(tmp_path):
+def test_check_only_never_writes_index(tmp_path: Path) -> None:
     d = _new_repo(tmp_path)
     _lf(d / "sib.txt")
     _git(d, "add", "-A")
@@ -154,7 +155,7 @@ def test_check_only_never_writes_index(tmp_path):
     assert _rev_parse(d, ":sib.txt") == staged_before
 
 
-def test_bulk_real_edits_stay_excluded(tmp_path):
+def test_bulk_real_edits_stay_excluded(tmp_path: Path) -> None:
     d = _new_repo(tmp_path)
     for i in range(60):
         _lf(d / f"f{i}.txt")
@@ -168,7 +169,7 @@ def test_bulk_real_edits_stay_excluded(tmp_path):
     assert _staged_names(d) == set()
 
 
-def test_index_lock_present_defers(tmp_path):
+def test_index_lock_present_defers(tmp_path: Path) -> None:
     d = _new_repo(tmp_path)
     _lf(d / "real.txt")
     _git(d, "add", "-A")
@@ -186,7 +187,7 @@ def test_index_lock_present_defers(tmp_path):
         lock.unlink()
 
 
-def test_phantom_dirty_entry_cleared_or_skipped(tmp_path, capsys):
+def test_phantom_dirty_entry_cleared_or_skipped(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     d = _new_repo(tmp_path)
     _lf(d / "phantom.txt")
     _lf(d / "realB.txt")
@@ -221,7 +222,7 @@ def test_phantom_dirty_entry_cleared_or_skipped(tmp_path, capsys):
     assert captured.out == ""
 
 
-def test_leading_dash_filename_add_pathspec_safe(tmp_path):
+def test_leading_dash_filename_add_pathspec_safe(tmp_path: Path) -> None:
     d = _new_repo(tmp_path)
     _lf(d / "-rf.txt")
     _git(d, "add", "-A")
@@ -233,7 +234,7 @@ def test_leading_dash_filename_add_pathspec_safe(tmp_path):
     assert "-rf.txt" in _staged_names(d)
 
 
-def test_git_add_refresh_failure_exits_1(tmp_path, monkeypatch):
+def test_git_add_refresh_failure_exits_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     d = _new_repo(tmp_path)
     _lf(d / "ghost.txt")
     _git(d, "add", "-A")
@@ -259,7 +260,7 @@ def test_git_add_refresh_failure_exits_1(tmp_path, monkeypatch):
         ("_git_ls_files_modified", "git ls-files -m"),
     ],
 )
-def test_first_probe_failure_exits_1(tmp_path, monkeypatch, helper_name, expected_snippet):
+def test_first_probe_failure_exits_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, helper_name, expected_snippet) -> None:
     d = _new_repo(tmp_path)
 
     monkeypatch.setattr(rni, helper_name, lambda cwd=None: None)
@@ -273,7 +274,7 @@ def test_first_probe_failure_exits_1(tmp_path, monkeypatch, helper_name, expecte
     assert expected_snippet in err
 
 
-def test_second_diff_probe_failure_exits_1(tmp_path, monkeypatch):
+def test_second_diff_probe_failure_exits_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     d = _new_repo(tmp_path)
     _lf(d / "phantom.txt")
     _git(d, "add", "-A")

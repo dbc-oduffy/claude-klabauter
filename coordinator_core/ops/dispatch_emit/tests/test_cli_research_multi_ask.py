@@ -5,10 +5,11 @@ import pytest
 
 from coordinator_core.ops import _research_contract as rc
 from coordinator_core.ops.dispatch_emit import cli as cli_module
+from pathlib import Path
 
 
 @pytest.fixture
-def captured(monkeypatch, tmp_path):
+def captured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     (tmp_path / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
     seen: list[dict] = []
@@ -21,11 +22,11 @@ def captured(monkeypatch, tmp_path):
     return seen
 
 
-def _run(*argv):
+def _run(*argv) -> int:
     return cli_module.main(["--research", *argv])
 
 
-def test_two_asks_with_targets_and_combine(captured):
+def test_two_asks_with_targets_and_combine(captured) -> None:
     code = _run("--ask", "Q1", "--target", "repo=src", "--ask", "Q2", "--ask", "Q3", "--target", "local=uname:arg-1", "--combine")
     assert code == 0
     p = captured[0]
@@ -38,31 +39,31 @@ def test_two_asks_with_targets_and_combine(captured):
     assert p[rc.SCOUT_MODE_PARAM] == "combine"
 
 
-def test_repeated_target_builds_a_list(captured):
+def test_repeated_target_builds_a_list(captured) -> None:
     assert _run("--ask", "Q1", "--target", "web", "--target", "repo=src", "--target", "local=p:a") == 0
     assert captured[0][rc.SCOUT_QUESTIONS_PARAM] == [
         {"text": "Q1", "targets": ["web", "repo:src", "local:p:a"]}
     ]
 
 
-def test_identical_duplicate_target_refused(captured, capsys):
+def test_identical_duplicate_target_refused(captured, capsys: pytest.CaptureFixture[str]) -> None:
     assert _run("--ask", "Q1", "--target", "repo=src", "--target", "repo=src") == cli_module.EXIT_USAGE
     assert "ERROR" in capsys.readouterr().err
     assert captured == []
 
 
-def test_split_mode_sent(captured):
+def test_split_mode_sent(captured) -> None:
     assert _run("--ask", "Q1", "--ask", "Q2", "--split") == 0
     assert captured[0][rc.SCOUT_MODE_PARAM] == "split"
 
 
-def test_single_ask_with_target_sends_one_item(captured):
+def test_single_ask_with_target_sends_one_item(captured) -> None:
     assert _run("--ask", "Q1", "--target", "web") == 0
     assert captured[0][rc.SCOUT_QUESTIONS_PARAM] == [{"text": "Q1", "targets": ["web"]}]
     assert rc.SCOUT_MODE_PARAM not in captured[0]
 
 
-def test_plain_ask_unchanged(captured):
+def test_plain_ask_unchanged(captured) -> None:
     assert _run("--ask", "Q1") == 0
     assert captured[0]["ask"] == "Q1"
     assert rc.SCOUT_QUESTIONS_PARAM not in captured[0]
@@ -81,7 +82,7 @@ def test_plain_ask_unchanged(captured):
         ["--ask", "Q1", "--target", "web", "--list", "questions=a"],
     ],
 )
-def test_usage_refusals(captured, capsys, argv):
+def test_usage_refusals(captured, capsys: pytest.CaptureFixture[str], argv) -> None:
     assert _run(*argv) == cli_module.EXIT_USAGE
     assert "ERROR" in capsys.readouterr().err
     assert captured == []
@@ -96,12 +97,12 @@ def test_usage_refusals(captured, capsys, argv):
         ["--ask", "Q1", "--split"],
     ],
 )
-def test_refused_without_research(captured, capsys, argv):
+def test_refused_without_research(captured, capsys: pytest.CaptureFixture[str], argv) -> None:
     assert cli_module.main(argv) == cli_module.EXIT_USAGE
     assert "requires --research" in capsys.readouterr().err
     assert captured == []
 
 
-def test_split_and_combine_are_exclusive(captured):
+def test_split_and_combine_are_exclusive(captured) -> None:
     with pytest.raises(SystemExit):
         _run("--ask", "Q1", "--split", "--combine")

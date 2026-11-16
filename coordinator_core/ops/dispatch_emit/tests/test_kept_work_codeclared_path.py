@@ -5,6 +5,8 @@ from __future__ import annotations
 from coordinator_core.ops.dispatch_emit import halted_record_commit as hrc
 from coordinator_core.ops.dispatch_emit import halted_record_ledger as ledger
 from coordinator_core.ops.dispatch_emit import kept_work as k
+from pathlib import Path
+import pytest
 
 
 def _repo(tmp_path):
@@ -17,7 +19,7 @@ def _repo(tmp_path):
     return tmp_path
 
 
-def test_codeclared_path_recorded_under_post_checkpoint(tmp_path):
+def test_codeclared_path_recorded_under_post_checkpoint(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     owner = {"co.py": "C1", "own.py": "C2"}
     withheld = {"co.py": "peer-hunks-co-declared", "own.py": k.HALT_RECORD_ONLY}
@@ -30,7 +32,7 @@ def test_codeclared_path_recorded_under_post_checkpoint(tmp_path):
     assert k.kept_fingerprints(root / "rec")["co.py"] == frozenset({k.blob_sha(b"run + peer\n")})
 
 
-def test_unpersistable_codeclared_path_stays_out(tmp_path, monkeypatch):
+def test_unpersistable_codeclared_path_stays_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     monkeypatch.setattr(ledger, "_persist_blobs", lambda root, common_dir, post: set())
     out = hrc._record_kept(

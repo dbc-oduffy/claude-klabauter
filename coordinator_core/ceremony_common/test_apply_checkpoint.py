@@ -7,10 +7,11 @@ import subprocess
 import pytest
 
 from coordinator_core.ceremony_common import apply_checkpoint as ac
+from pathlib import Path
 
 
 @pytest.fixture
-def sess(tmp_path, monkeypatch):
+def sess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "sessions"
     root.mkdir()
     monkeypatch.setattr(ac, "sessions_dir", lambda _r: str(root))
@@ -31,7 +32,7 @@ def _files(sess):
     return sorted((sess / "workday-complete-apply").glob("*.jsonl"))
 
 
-def test_round_trip(sess):
+def test_round_trip(sess) -> None:
     cp = _open(sess, dirty_before={"a.md": "M"})
     cp.record_dispatching("d1")
     cp.record_landed("d1", {"x": 1}, stdout="out")
@@ -46,7 +47,7 @@ def test_round_trip(sess):
     assert again.args_changed("d1", {"x": 2})
 
 
-def test_stdout_absent_when_not_passed(sess):
+def test_stdout_absent_when_not_passed(sess) -> None:
     cp = _open(sess)
     cp.record_dispatching("d1")
     cp.record_landed("d1", {})
@@ -55,7 +56,7 @@ def test_stdout_absent_when_not_passed(sess):
     assert _open(sess).stdout_of("d1") is None
 
 
-def test_finished_resets_landed_set(sess):
+def test_finished_resets_landed_set(sess) -> None:
     cp = _open(sess, dirty_before={"a": "M"})
     cp.record_dispatching("d1")
     cp.record_landed("d1", {})
@@ -67,7 +68,7 @@ def test_finished_resets_landed_set(sess):
     assert fresh.dirty_before() == {"b": "M"}
 
 
-def test_other_day_finished_pruned_unfinished_kept(sess, monkeypatch):
+def test_other_day_finished_pruned_unfinished_kept(sess, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ac, "local_day", lambda _r=None: "2026-10-16")
     done = _open(sess)
     done.record_dispatching("d1")
@@ -85,7 +86,7 @@ def test_other_day_finished_pruned_unfinished_kept(sess, monkeypatch):
     assert cp.landed_ids() == frozenset()
 
 
-def test_for_date_and_only_keys_are_isolated(sess):
+def test_for_date_and_only_keys_are_isolated(sess) -> None:
     default = _open(sess)
     default.record_dispatching("d1")
     default.record_landed("d1", {})
@@ -95,7 +96,7 @@ def test_for_date_and_only_keys_are_isolated(sess):
     assert len(_files(sess)) == 3
 
 
-def test_malformed_line_tolerated(sess, capsys):
+def test_malformed_line_tolerated(sess, capsys: pytest.CaptureFixture[str]) -> None:
     cp = _open(sess)
     cp.record_dispatching("d1")
     cp.record_landed("d1", {})
@@ -107,7 +108,7 @@ def test_malformed_line_tolerated(sess, capsys):
     assert "malformed" in capsys.readouterr().err
 
 
-def test_unavailable_sessions_dir_is_empty_and_noop(monkeypatch, tmp_path, capsys):
+def test_unavailable_sessions_dir_is_empty_and_noop(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(ac, "sessions_dir", lambda _r: "")
     cp = ac.open_checkpoint(tmp_path, "workday-complete")
     assert not cp.available
@@ -118,7 +119,7 @@ def test_unavailable_sessions_dir_is_empty_and_noop(monkeypatch, tmp_path, capsy
     assert "resume unavailable" in capsys.readouterr().err
 
 
-def test_unreadable_file_fails_open(sess, capsys):
+def test_unreadable_file_fails_open(sess, capsys: pytest.CaptureFixture[str]) -> None:
     d = sess / "workday-complete-apply"
     d.mkdir()
     (d / f"2026-10-17-{ac._run_key(None, False)}.jsonl").write_bytes(b"\xff\xfe\x00bad")
@@ -128,7 +129,7 @@ def test_unreadable_file_fails_open(sess, capsys):
     assert "resume unavailable" in capsys.readouterr().err
 
 
-def test_failed_append_degrades(sess, monkeypatch, capsys):
+def test_failed_append_degrades(sess, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     cp = _open(sess)
     monkeypatch.setattr(ac, "append_line", lambda *a: (_ for _ in ()).throw(OSError("full")))
     cp.record_dispatching("d1")

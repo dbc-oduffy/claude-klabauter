@@ -59,7 +59,7 @@ if sys.platform == "win32" and not getattr(__import__("subprocess").Popen.__init
 
     _popen_init = _subprocess.Popen.__init__
 
-    def _windowless_popen_init(self, *args, **kwargs):
+    def _windowless_popen_init(self, *args, **kwargs) -> None:
         # creationflags is Popen's 14th positional parameter; a caller passing it positionally keeps it.
         if len(args) < 14 and not kwargs.get("creationflags"):
             kwargs["creationflags"] = _subprocess.CREATE_NO_WINDOW
@@ -481,7 +481,7 @@ def _build_stub_content_root(base_dir: str) -> str:
 
 
 @pytest.fixture(autouse=True)
-def _forwarder_selfheal_off(monkeypatch):
+def _forwarder_selfheal_off(monkeypatch: pytest.MonkeyPatch) -> None:
     """`hooks.sweep_boot` self-heals `<settings-home>/bin` forwarders; a test that
     runs the handler must opt in (``monkeypatch.delenv``) rather than inherit a write."""
     monkeypatch.setenv("COORDINATOR_FORWARDER_SELFHEAL_OFF", "1")
@@ -507,7 +507,7 @@ def _rmtree_with_real_open(path: Path) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
+def _quarantine_real_home(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch):
     """Redirect every home-resolution env var into a per-test throwaway dir.
 
     Autouse at the suite root, so it is instantiated before any package-local
@@ -803,7 +803,7 @@ def _quarantine_real_home(request, tmp_path_factory, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _fence_real_registry_writes(monkeypatch):
+def _fence_real_registry_writes(monkeypatch: pytest.MonkeyPatch) -> None:
     """No test reaches the operator's real registry.
 
     Trap: a fake install path and a cleared kill switch are not a sandbox —
@@ -834,7 +834,7 @@ def _reset_foreign_repo_probe_memo():
 
 
 @pytest.fixture(autouse=True)
-def _isolate_advisory_dedupe_gitdir(request, monkeypatch, tmp_path_factory):
+def _isolate_advisory_dedupe_gitdir(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
     """Point the per-session advisory dedupe store at a per-test directory.
 
     Tests dispatch with a fixed fake ``cwd`` and session id; when that ``cwd``
@@ -918,7 +918,7 @@ _HARNESS_OWNED_ENV_KEYS = frozenset({"PYTEST_CURRENT_TEST"})
 
 
 @pytest.fixture(autouse=True)
-def _fail_on_environ_leak(request):
+def _fail_on_environ_leak(request: pytest.FixtureRequest):
     """FAIL any test that leaves ``os.environ`` modified — do not silently restore.
 
     Why not just restore
@@ -1020,7 +1020,7 @@ def pytest_configure(config: pytest.Config) -> None:
 
 
 @pytest.fixture
-def exercise_suspended_op(monkeypatch):
+def exercise_suspended_op(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import op_budget_suspension
 
     monkeypatch.setattr(op_budget_suspension, "SUSPENDED_OPS", {})
@@ -1212,7 +1212,7 @@ _LIVE_DOE_LESSONS_OUTBOX = _resolve_live_doe_lessons_outbox()
 
 
 @_pytest.fixture(autouse=True)
-def _no_live_state_corpus_writes(request):
+def _no_live_state_corpus_writes(request: pytest.FixtureRequest):
     doe = _LIVE_DOE_LESSONS_OUTBOX
     guarded = _OWN_LIVE_STATE_DIRS + ((doe,) if doe is not None else ())
     before = {}
@@ -1241,7 +1241,7 @@ def _no_live_state_corpus_writes(request):
 
 
 @_pytest.fixture(autouse=True)
-def _redirect_live_session_hub(request, monkeypatch, tmp_path_factory):
+def _redirect_live_session_hub(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory):
     """Any `session.core.sessions_dir` resolution that lands on the REAL repo's hub
     is answered with a per-test tmp hub instead, so a cwd-derived root cannot mint
     or append live entries whatever session id the test carries. A test marked
@@ -1277,7 +1277,7 @@ def _redirect_live_session_hub(request, monkeypatch, tmp_path_factory):
 
 
 @_pytest.fixture(autouse=True)
-def _op_latency_never_appends_to_live_hub(monkeypatch):
+def _op_latency_never_appends_to_live_hub(monkeypatch: pytest.MonkeyPatch):
     """Drop op-latency rows whose sink is the REAL hub's `logs/op-latency.jsonl`.
 
     `op_latency._write_entry` falls back to `Path.cwd()` when no repo is stamped, and a
@@ -1299,7 +1299,7 @@ def _op_latency_never_appends_to_live_hub(monkeypatch):
 
 
 @_pytest.fixture(autouse=True)
-def _redirect_live_hub_from_common_dir_resolver(request, tmp_path_factory):
+def _redirect_live_hub_from_common_dir_resolver(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory):
     """Answer `claim_state._sessions_dir(<real repo .git>)` with a per-test tmp hub, and
     fail the test when it wrote anything there.
 
@@ -1421,7 +1421,7 @@ def _writers_of(names: "list[str]") -> str:
 
 
 @_pytest.fixture(autouse=True)
-def _no_writes_into_live_hub_entries(request):
+def _no_writes_into_live_hub_entries(request: pytest.FixtureRequest):
     """Fail a test whose own process wrote into a non-UUID entry of the real hub.
 
     Attribution is by audit hook, not by before/after stat: peers write the hub's
@@ -1727,7 +1727,7 @@ def _no_live_inbox_writes_from_suite():
 
 
 @pytest.fixture(autouse=True)
-def _pin_guard_level_strict_suite_wide(monkeypatch):
+def _pin_guard_level_strict_suite_wide(monkeypatch: pytest.MonkeyPatch):
     from coordinator_core import machine_profile
 
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")
@@ -1737,7 +1737,7 @@ def _pin_guard_level_strict_suite_wide(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _pin_out_of_repo_write_block_off_suite_wide(monkeypatch):
+def _pin_out_of_repo_write_block_off_suite_wide(monkeypatch: pytest.MonkeyPatch):
     from coordinator_core import machine_profile
 
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_FEATURE_OUT_OF_REPO_WRITE_BLOCK", "off")
@@ -1747,7 +1747,7 @@ def _pin_out_of_repo_write_block_off_suite_wide(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _pin_environment_answered_mode_defaults(monkeypatch):
+def _pin_environment_answered_mode_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     try:
         monkeypatch.setattr(
             "coordinator_core.session.mode_resolution."
@@ -1782,7 +1782,7 @@ def _pin_environment_answered_mode_defaults(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _pin_repo_hosts_coordinator_state(request, monkeypatch):
+def _pin_repo_hosts_coordinator_state(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Fixture repos read as onboarded unless the test carries `@pytest.mark.foreign_repo`."""
     if request.node.get_closest_marker("foreign_repo") is not None:
         return
@@ -1792,7 +1792,7 @@ def _pin_repo_hosts_coordinator_state(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _pin_auto_compact_window_absent(monkeypatch):
+def _pin_auto_compact_window_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CLAUDE_CODE_AUTO_COMPACT_WINDOW", raising=False)
 
 
@@ -1861,7 +1861,7 @@ except ImportError:
     _psutil_for_tripwire = None
 
 if _psutil_for_tripwire is not None:
-    def _wrap_psutil(name):
+    def _wrap_psutil(name) -> None:
         real = getattr(_psutil_for_tripwire.Process, name)
 
         def guarded(self, *args, **kwargs):
@@ -1886,7 +1886,7 @@ def _under_dispatch_emit_tests(request) -> bool:
 
 
 @pytest.fixture(autouse=True)
-def _no_ambient_plugin_root(request, monkeypatch):
+def _no_ambient_plugin_root(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Fixture rosters name agent types no real plugin ships; an ambient CLAUDE_PLUGIN_ROOT would
     arm emit-time agent-type resolution against them. A degraded host refuses every surviving
     coordinator: agentType, so the default host is the plugin-resolving one; degradation tests
@@ -1898,7 +1898,7 @@ def _no_ambient_plugin_root(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _unhoisted_ask_scripts(request, monkeypatch):
+def _unhoisted_ask_scripts(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Composer tests assert on literal script text; hoisting is pinned by test_ask_compose_prompt_fragments."""
     if not _under_dispatch_emit_tests(request):
         return
@@ -1908,7 +1908,7 @@ def _unhoisted_ask_scripts(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _no_ambient_box_terms(request, monkeypatch):
+def _no_ambient_box_terms(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """A box whose machine-local registry names box terms would preamble every CLI-driven brief
     here; tests that exercise the default patch it back in."""
     if not _under_dispatch_emit_tests(request):
@@ -1925,7 +1925,7 @@ def _no_ambient_box_terms(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _write_set_reads_clean(request, monkeypatch):
+def _write_set_reads_clean(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """The CLI plan route refuses on a dirty or unreadable write set; fixture repos here are fake
     `.git` dirs, so the guard is stubbed. test_dirty_write_set* modules run the real function."""
     if not _under_dispatch_emit_tests(request):

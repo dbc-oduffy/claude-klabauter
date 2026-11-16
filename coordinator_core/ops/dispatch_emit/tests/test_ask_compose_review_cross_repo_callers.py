@@ -5,6 +5,7 @@ from __future__ import annotations
 from coordinator_core.ops.dispatch_emit import ask_compose, prompt_fragments
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import AskPlanBlitzRefused
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+import pytest
 
 _STUB_KW = dict(
     wrap_stage=lambda _t: ("  async function planBlitz(args) {\n    return { ready: [] };\n  }", ["Size", "Plan"]),
@@ -24,12 +25,12 @@ def _composed(monkeypatch) -> str:
     return prompt_fragments.resolve_fragment_refs(script)
 
 
-def test_review_prompts_carry_the_cross_repo_caller_clause(monkeypatch):
+def test_review_prompts_carry_the_cross_repo_caller_clause(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _composed(monkeypatch)
     assert "search the sibling repos for callers" in script
     assert "keep the symbol and report it as a finding" in script
 
 
-def test_clause_is_part_of_the_review_head(monkeypatch):
+def test_clause_is_part_of_the_review_head(monkeypatch: pytest.MonkeyPatch) -> None:
     assert ask_compose._CROSS_REPO_CALLER_CLAUSE.strip() in _composed(monkeypatch)
     assert "sibling repos" in ask_compose._CROSS_REPO_CALLER_CLAUSE

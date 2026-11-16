@@ -24,6 +24,10 @@ from coordinator_core.ops.fleet.tests.test_memo_send import (
     _write_draft,
 )
 from coordinator_core.warm import push_cadence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -35,7 +39,7 @@ def _git(cwd, *args) -> str:
     return (out.decode() if isinstance(out, bytes) else out).strip()
 
 
-def _load_cli():
+def _load_cli() -> ModuleType:
     sys.path.insert(0, str(_CLI.parent))
     loader = importlib.machinery.SourceFileLoader("crm_sibling_box_under_test", str(_CLI))
     spec = importlib.util.spec_from_loader(loader.name, loader)
@@ -45,7 +49,7 @@ def _load_cli():
 
 
 @pytest.fixture(autouse=True)
-def _cadence(monkeypatch):
+def _cadence(monkeypatch: pytest.MonkeyPatch):
     push_cadence.reset_cadence_for_test()
     monkeypatch.setattr(push_cadence, "machine_profile", lambda: "author")
     yield
@@ -60,7 +64,7 @@ def _tick() -> bool:
     )
 
 
-def _two_boxes(tmp_path: Path):
+def _two_boxes(tmp_path: Path) -> tuple[Path, Path, Path]:
     """Receiver clone B and a sibling clone A of one bare origin, both on the migrated inbox layout."""
     sender = _make_sender_git_repo(tmp_path)
     box_b = _make_receiver_git_repo(tmp_path, name="box-b")
@@ -89,7 +93,7 @@ def _send_from_box_b(monkeypatch, sender: Path, box_b: Path, topic: str) -> str:
     return day
 
 
-def test_memo_sent_on_box_b_day_branch_is_listed_in_box_a_inbox(tmp_path, monkeypatch, capsys):
+def test_memo_sent_on_box_b_day_branch_is_listed_in_box_a_inbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     sender, box_a, box_b = _two_boxes(tmp_path)
     monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": box_b})))
     day_b = _send_from_box_b(monkeypatch, sender, box_b, "t-sibling")
@@ -111,7 +115,7 @@ def test_memo_sent_on_box_b_day_branch_is_listed_in_box_a_inbox(tmp_path, monkey
     assert _git(box_a, "status", "--porcelain") == ""
 
 
-def test_memo_is_not_listed_on_the_box_that_holds_it_on_its_own_branch(tmp_path, monkeypatch, capsys):
+def test_memo_is_not_listed_on_the_box_that_holds_it_on_its_own_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     sender, _box_a, box_b = _two_boxes(tmp_path)
     monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": box_b})))
     _send_from_box_b(monkeypatch, sender, box_b, "t-own")

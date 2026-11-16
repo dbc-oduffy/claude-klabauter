@@ -10,11 +10,16 @@ from types import SimpleNamespace
 
 from coordinator_core import archive_stamp
 from coordinator_core.ops.ceremony import git_native
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
-def _load_cli():
+def _load_cli() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "archive_stamp_cli_resolve_batch_test", str(_BIN_DIR / "archive-stamp-cli.py")
     )
@@ -34,7 +39,7 @@ def _help_text(subcmd: str) -> str:
     return "".join(c.args[0] for c in out.write.call_args_list if c.args)
 
 
-def test_resolve_memo_help_describes_each_flag_and_the_decision_rule():
+def test_resolve_memo_help_describes_each_flag_and_the_decision_rule() -> None:
     printed = _help_text("resolve-memo")
     assert "resolve-memo <memo_path>..." in printed
     assert "ONE commit" in printed
@@ -43,16 +48,16 @@ def test_resolve_memo_help_describes_each_flag_and_the_decision_rule():
     assert "Required with" in printed and "--decision-note" in printed
 
 
-def test_action_memo_help_shares_the_flag_descriptions():
+def test_action_memo_help_shares_the_flag_descriptions() -> None:
     assert "--decision <accepted|partial|declined>" in _help_text("action-memo")
 
 
-def test_realized_by_without_decision_defaults_to_accepted():
+def test_realized_by_without_decision_defaults_to_accepted() -> None:
     params = archive_stamp._parse_disposition_args(("--realized-by", "abc1234"))
     assert params["decision"] == "accepted"
 
 
-def test_explicit_decision_wins_and_decision_note_alone_gets_no_default():
+def test_explicit_decision_wins_and_decision_note_alone_gets_no_default() -> None:
     explicit = archive_stamp._parse_disposition_args(
         ("--realized-by", "abc1234", "--decision", "partial")
     )
@@ -61,26 +66,26 @@ def test_explicit_decision_wins_and_decision_note_alone_gets_no_default():
     assert "decision" not in note_only
 
 
-def test_superseded_by_gets_no_decision_default():
+def test_superseded_by_gets_no_decision_default() -> None:
     params = archive_stamp._parse_disposition_args(
         ("--superseded-by", "m.md", "--realized-by", "abc1234")
     )
     assert "decision" not in params
 
 
-def test_batch_of_three_memos_lands_one_commit(tmp_path, monkeypatch):
+def test_batch_of_three_memos_lands_one_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     memos = [tmp_path / f"m{i}.md" for i in range(3)]
     for m in memos:
         m.write_text("x", encoding="utf-8")
     transition_calls: list[dict] = []
 
-    def fake_transition(memo_path, params):
+    def fake_transition(memo_path, params) -> dict[str, int]:
         transition_calls.append(params)
         return {"exit_code": 0, "applied": True}
 
     commits: list[list[str]] = []
 
-    def fake_commit_scoped(paths, msg_file, cwd, **kwargs):
+    def fake_commit_scoped(paths, msg_file, cwd, **kwargs) -> SimpleNamespace:
         commits.append(list(paths))
         return SimpleNamespace(ok=True, stdout="deadbeef\n", stderr="")
 
@@ -104,7 +109,7 @@ def test_batch_of_three_memos_lands_one_commit(tmp_path, monkeypatch):
     assert all(c["defer_commit"] and c["decision"] == "accepted" for c in transition_calls)
 
 
-def _patch_batch(monkeypatch, tmp_path, commits):
+def _patch_batch(monkeypatch, tmp_path, commits) -> None:
     monkeypatch.setattr(
         archive_stamp, "_call_memo_transition", lambda p, params: {"exit_code": 0, "applied": True}
     )
@@ -123,11 +128,11 @@ def _patch_batch(monkeypatch, tmp_path, commits):
     monkeypatch.setattr("coordinator_core.session.scope.relocate_touched_path", _move)
 
 
-def _move(sid, src, dst, cwd=None):
+def _move(sid, src, dst, cwd=None) -> None:
     Path(src).replace(dst)
 
 
-def test_batch_moves_inbox_memos_to_archive_in_one_commit(tmp_path, monkeypatch):
+def test_batch_moves_inbox_memos_to_archive_in_one_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inbox = tmp_path / "state" / "inbox"
     inbox.mkdir(parents=True)
     memos = [inbox / f"m{i}.md" for i in range(3)]
@@ -146,7 +151,7 @@ def test_batch_moves_inbox_memos_to_archive_in_one_commit(tmp_path, monkeypatch)
     assert all((tmp_path / "state" / "archive" / m.name).exists() for m in memos)
 
 
-def test_batch_refuses_a_memo_whose_archive_target_exists(tmp_path, monkeypatch):
+def test_batch_refuses_a_memo_whose_archive_target_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inbox = tmp_path / "state" / "inbox"
     archive = tmp_path / "state" / "archive"
     inbox.mkdir(parents=True)
@@ -165,7 +170,7 @@ def test_batch_refuses_a_memo_whose_archive_target_exists(tmp_path, monkeypatch)
     assert sorted(commits[0]) == ["state/archive/b.md", "state/inbox/b.md"]
 
 
-def test_single_memo_form_still_routes_to_cs_resolve_memo(monkeypatch):
+def test_single_memo_form_still_routes_to_cs_resolve_memo(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(
         archive_stamp, "cs_resolve_memo", lambda p, *a, **k: calls.append((p, a)) or 0
@@ -174,7 +179,7 @@ def test_single_memo_form_still_routes_to_cs_resolve_memo(monkeypatch):
     assert calls == [("only.md", ("--realized-by", "abc1234"))]
 
 
-def test_cli_routes_multiple_paths_to_the_batch_function():
+def test_cli_routes_multiple_paths_to_the_batch_function() -> None:
     mock_mod = unittest.mock.Mock()
     mock_mod.cs_resolve_memos.return_value = 0
     with unittest.mock.patch.object(_cli, "_import_module", lambda: mock_mod):
@@ -185,7 +190,7 @@ def test_cli_routes_multiple_paths_to_the_batch_function():
     )
 
 
-def test_action_memo_still_refuses_extra_paths():
+def test_action_memo_still_refuses_extra_paths() -> None:
     mock_mod = unittest.mock.Mock()
     with unittest.mock.patch.object(_cli, "_import_module", lambda: mock_mod):
         with unittest.mock.patch("sys.stderr"):

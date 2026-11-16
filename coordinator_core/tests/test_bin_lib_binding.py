@@ -8,6 +8,7 @@ import sys
 import pytest
 
 from coordinator_core import bin_lib_binding
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
@@ -28,7 +29,7 @@ def _isolate_sys_path_and_modules():
             sys.modules["lib"] = saved_lib
 
 
-def test_engine_bin_is_inserted_once_and_idempotent():
+def test_engine_bin_is_inserted_once_and_idempotent() -> None:
     engine_bin = bin_lib_binding._ENGINE_BIN_DIR
     assert bin_lib_binding.ensure_bin_lib_bound(engine_bin) is True
     assert sys.path.count(engine_bin) == 1
@@ -36,7 +37,7 @@ def test_engine_bin_is_inserted_once_and_idempotent():
     assert sys.path.count(engine_bin) == 1
 
 
-def test_a_correctly_bound_lib_is_left_alone():
+def test_a_correctly_bound_lib_is_left_alone() -> None:
     engine_bin = bin_lib_binding._ENGINE_BIN_DIR
     bin_lib_binding.ensure_bin_lib_bound(engine_bin)
     import lib as _lib  # noqa: PLC0415 - binds coordinator/bin/lib for this test
@@ -47,7 +48,7 @@ def test_a_correctly_bound_lib_is_left_alone():
     del _lib
 
 
-def test_a_foreign_namespace_lib_is_evicted_and_a_following_import_binds_ours(tmp_path):
+def test_a_foreign_namespace_lib_is_evicted_and_a_following_import_binds_ours(tmp_path: Path) -> None:
     foreign_lib_dir = tmp_path / "lib"
     foreign_lib_dir.mkdir()
     from types import ModuleType as _ModuleType
@@ -68,7 +69,7 @@ def test_a_foreign_namespace_lib_is_evicted_and_a_following_import_binds_ours(tm
     del _lib
 
 
-def test_an_unset_lib_module_is_a_no_op_beyond_the_path_insert():
+def test_an_unset_lib_module_is_a_no_op_beyond_the_path_insert() -> None:
     assert "lib" not in sys.modules
     engine_bin = bin_lib_binding._ENGINE_BIN_DIR
     assert bin_lib_binding.ensure_bin_lib_bound(engine_bin) is True
@@ -76,7 +77,7 @@ def test_an_unset_lib_module_is_a_no_op_beyond_the_path_insert():
     assert "lib" not in sys.modules
 
 
-def test_a_foreign_bin_dir_is_never_durably_bound(tmp_path):
+def test_a_foreign_bin_dir_is_never_durably_bound(tmp_path: Path) -> None:
     other_bin = tmp_path / "other_bin"
     other_bin.mkdir()
     engine_bin = bin_lib_binding._ENGINE_BIN_DIR
@@ -94,7 +95,7 @@ def test_a_foreign_bin_dir_is_never_durably_bound(tmp_path):
     assert sys.path == path_before
 
 
-def test_exec_module_bin_bound_runs_a_tmp_bin_dir_module_transiently(tmp_path):
+def test_exec_module_bin_bound_runs_a_tmp_bin_dir_module_transiently(tmp_path: Path) -> None:
     other_bin = tmp_path / "other_bin"
     other_bin.mkdir()
     script = other_bin / "probe_script.py"

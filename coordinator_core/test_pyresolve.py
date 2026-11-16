@@ -19,6 +19,7 @@ import os
 import pytest
 
 from coordinator_core import pyresolve
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
@@ -28,7 +29,7 @@ def _clear_pyresolve_cache():
     pyresolve.clear_resolution_cache()
 
 
-def test_default_prefers_windowless_pyorg_probe_order(monkeypatch):
+def test_default_prefers_windowless_pyorg_probe_order(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pyresolve, "_is_windows", lambda: True)
 
     captured = {}
@@ -46,7 +47,7 @@ def test_default_prefers_windowless_pyorg_probe_order(monkeypatch):
     assert py_bin == r"C:\Program Files\Python313\pythonw.exe"
 
 
-def test_prefer_windowless_false_requests_console_probe_order(monkeypatch):
+def test_prefer_windowless_false_requests_console_probe_order(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pyresolve, "_is_windows", lambda: True)
 
     captured = {}
@@ -64,7 +65,7 @@ def test_prefer_windowless_false_requests_console_probe_order(monkeypatch):
     assert py_bin == r"C:\Program Files\Python313\python.exe"
 
 
-def test_resolve_machine_python_bin_ignores_a_set_pin(monkeypatch):
+def test_resolve_machine_python_bin_ignores_a_set_pin(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_PYTHON", "/pinned/shared/venv/python3")
     monkeypatch.setattr(pyresolve, "_machine_local_get", lambda key: "/pinned/ml/python3")
     monkeypatch.setattr(pyresolve, "_validate_interpreter", lambda path: True)
@@ -77,7 +78,7 @@ def test_resolve_machine_python_bin_ignores_a_set_pin(monkeypatch):
     assert py_args == []
 
 
-def test_prefer_windowless_false_reorders_path_fallback_probe_names(monkeypatch):
+def test_prefer_windowless_false_reorders_path_fallback_probe_names(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pyresolve, "_is_windows", lambda: True)
     monkeypatch.setattr(pyresolve, "_pyorg_search", lambda prefer_windowless: None)
     monkeypatch.delenv("COORDINATOR_PYTHON", raising=False)
@@ -100,7 +101,7 @@ def test_prefer_windowless_false_reorders_path_fallback_probe_names(monkeypatch)
     )
 
 
-def test_prefer_windowless_true_keeps_pythonw_first_in_path_fallback(monkeypatch):
+def test_prefer_windowless_true_keeps_pythonw_first_in_path_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pyresolve, "_is_windows", lambda: True)
     monkeypatch.setattr(pyresolve, "_pyorg_search", lambda prefer_windowless: None)
     monkeypatch.delenv("COORDINATOR_PYTHON", raising=False)
@@ -108,7 +109,7 @@ def test_prefer_windowless_true_keeps_pythonw_first_in_path_fallback(monkeypatch
 
     probed_names = []
 
-    def _fake_which(name):
+    def _fake_which(name) -> None:
         probed_names.append(name)
         return None
 
@@ -118,7 +119,7 @@ def test_prefer_windowless_true_keeps_pythonw_first_in_path_fallback(monkeypatch
     assert probed_names[0] == "pythonw"
 
 
-def test_validate_interpreter_spawns_once_across_repeated_calls(monkeypatch):
+def test_validate_interpreter_spawns_once_across_repeated_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
     class _FakeCompleted:
@@ -135,11 +136,11 @@ def test_validate_interpreter_spawns_once_across_repeated_calls(monkeypatch):
     assert len(calls) == 1
 
 
-def test_validate_interpreter_cache_distinguishes_paths(monkeypatch):
+def test_validate_interpreter_cache_distinguishes_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
     class _FakeCompleted:
-        def __init__(self, rc):
+        def __init__(self, rc) -> None:
             self.returncode = rc
 
     def _fake_run(cmd, **kwargs):
@@ -156,7 +157,7 @@ def test_validate_interpreter_cache_distinguishes_paths(monkeypatch):
     assert len(calls) == 2
 
 
-def test_validate_interpreter_false_result_is_cached_not_retried(monkeypatch):
+def test_validate_interpreter_false_result_is_cached_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
     class _FakeCompleted:
@@ -178,7 +179,7 @@ def test_validate_interpreter_false_result_is_cached_not_retried(monkeypatch):
     assert len(calls) == 1
 
 
-def test_machine_local_get_spawns_once_across_repeated_calls(monkeypatch, tmp_path):
+def test_machine_local_get_spawns_once_across_repeated_calls(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     impl = tmp_path / "_machine_local.py"
     impl.write_text("# fake impl\n")
     monkeypatch.setenv("MACHINE_LOCAL_IMPL", str(impl))
@@ -200,7 +201,7 @@ def test_machine_local_get_spawns_once_across_repeated_calls(monkeypatch, tmp_pa
     assert len(calls) == 1
 
 
-def test_machine_local_get_cache_invalidated_by_steering_env_change(monkeypatch, tmp_path):
+def test_machine_local_get_cache_invalidated_by_steering_env_change(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Changing MACHINE_LOCAL_IMPL (the machine-local override env this module
     reads) must not return a memoized value resolved under the old impl path --
     the cache key folds in the resolved impl path precisely so an env change
@@ -233,7 +234,7 @@ def test_machine_local_get_cache_invalidated_by_steering_env_change(monkeypatch,
     assert len(calls) == 2
 
 
-def test_clear_resolution_cache_resets_both_caches(monkeypatch):
+def test_clear_resolution_cache_resets_both_caches(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
     class _FakeCompleted:
@@ -254,7 +255,7 @@ def test_clear_resolution_cache_resets_both_caches(monkeypatch):
     assert len(calls) == 2
 
 
-def test_cli_mode_resolve_is_a_cold_process_memo_is_a_noop(monkeypatch, capsys):
+def test_cli_mode_resolve_is_a_cold_process_memo_is_a_noop(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.delenv("COORDINATOR_PYTHON", raising=False)
     monkeypatch.setattr(pyresolve, "_machine_local_get", lambda key: None)
     monkeypatch.setattr(pyresolve, "_is_windows", lambda: False)
@@ -274,11 +275,11 @@ def test_cli_mode_resolve_is_a_cold_process_memo_is_a_noop(monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_windowless_basenames_contains_both_known_forms():
+def test_windowless_basenames_contains_both_known_forms() -> None:
     assert pyresolve._WINDOWLESS_BASENAMES == ("pythonw.exe", "pyw.exe")
 
 
-def test_console_sibling_pythonw_returns_python_exe_when_present(monkeypatch):
+def test_console_sibling_pythonw_returns_python_exe_when_present(monkeypatch: pytest.MonkeyPatch) -> None:
     windowless = r"C:\Program Files\Python313\pythonw.exe"
     probed = []
     monkeypatch.setattr(
@@ -289,18 +290,18 @@ def test_console_sibling_pythonw_returns_python_exe_when_present(monkeypatch):
     assert result in probed
 
 
-def test_console_sibling_pyw_returns_py_exe_when_present(monkeypatch):
+def test_console_sibling_pyw_returns_py_exe_when_present(monkeypatch: pytest.MonkeyPatch) -> None:
     windowless = r"C:\Program Files\Python313\pyw.exe"
     monkeypatch.setattr(pyresolve.os.path, "isfile", lambda p: True)
     result = pyresolve._console_sibling(windowless)
     assert result == r"C:\Program Files\Python313\py.exe"
 
 
-def test_console_sibling_returns_empty_when_sibling_missing(monkeypatch):
+def test_console_sibling_returns_empty_when_sibling_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     windowless = r"C:\Program Files\Python313\pythonw.exe"
     monkeypatch.setattr(pyresolve.os.path, "isfile", lambda p: False)
     assert pyresolve._console_sibling(windowless) == ""
 
 
-def test_console_sibling_returns_empty_for_non_windowless_basename():
+def test_console_sibling_returns_empty_for_non_windowless_basename() -> None:
     assert pyresolve._console_sibling(r"C:\Program Files\Python313\python.exe") == ""

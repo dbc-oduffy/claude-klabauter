@@ -8,6 +8,8 @@ from coordinator_core.ops.dispatch_emit import emit
 from coordinator_core.ops.dispatch_emit.emit import emit_script
 
 from .conftest import REVIEW_KW
+from pathlib import Path
+import pytest
 
 _MARK = "Code lookup: example-retrieval-repo first."
 
@@ -56,13 +58,13 @@ def test_served_repo_script_states_the_line_exactly_once(tmp_path, monkeypatch):
     assert script.count("mcp__project-rag__project_staleness_check") == 1
 
 
-def test_unserved_repo_script_has_no_line(tmp_path, monkeypatch):
+def test_unserved_repo_script_has_no_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(tmp_path, monkeypatch, False)
     assert _MARK not in script
     assert "mcp__project-rag__project_staleness_check" not in script
 
 
-def test_unreadable_snippet_falls_back_to_the_hint(monkeypatch):
+def test_unreadable_snippet_falls_back_to_the_hint(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.subagent_sandbox.plugin_root.resolve_plugin_root", lambda *a, **k: None
     )
@@ -97,12 +99,12 @@ def test_unserved_ask_briefs_carry_neither(tmp_path, monkeypatch):
     assert "fall back to scoped grep" not in script
 
 
-def test_preamble_already_carrying_the_line_is_not_doubled(monkeypatch):
+def test_preamble_already_carrying_the_line_is_not_doubled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_rag_serving, "serves_repo", lambda cwd=None: True)
     once = emit._with_example_retrieval_repo_line("p", "REPO")
     assert emit._with_example_retrieval_repo_line(once, "REPO") == once
 
 
-def test_served_without_repo_root_leaves_preamble_untouched(monkeypatch):
+def test_served_without_repo_root_leaves_preamble_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_rag_serving, "serves_repo", lambda cwd=None: True)
     assert emit._with_example_retrieval_repo_line("p", None) == "p"

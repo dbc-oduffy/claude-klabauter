@@ -18,6 +18,7 @@ from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.nested_run_contract import CHAIN_HANDOFF_KEY
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests import test_launcher_child_m_plus_chains_incident as launcher
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -77,7 +78,7 @@ _GOOD = {"path": "scratch/warp/ask-r2.workflow.mjs", "run_id": "ask-r2", "fire_a
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("relay", [None, {"error": "not run: scout never emitted"}, {"path": "", "run_id": ""}, ["a"]],
                          ids=["null", "errored", "empty-path", "array"])
-def test_a_relay_without_a_path_is_retried_and_the_hand_off_carries_the_retry_path(relay):
+def test_a_relay_without_a_path_is_retried_and_the_hand_off_carries_the_retry_path(relay) -> None:
     for leg in handoff_legs():
         handoff, calls = run_leg(leg, relay, _GOOD)
         assert calls == 1
@@ -92,7 +93,7 @@ def test_a_relay_without_a_path_is_retried_and_the_hand_off_carries_the_retry_pa
     (None, _NO_EMIT),
     ({"__throw": True}, "boom"),
 ], ids=["error-reply", "empty-reply", "null-reply", "throws"])
-def test_a_failed_retry_carries_emit_error_and_no_path_or_error(retry, expected):
+def test_a_failed_retry_carries_emit_error_and_no_path_or_error(retry, expected) -> None:
     for leg in handoff_legs():
         handoff, calls = run_leg(leg, None, retry)
         assert calls == 1
@@ -101,14 +102,14 @@ def test_a_failed_retry_carries_emit_error_and_no_path_or_error(retry, expected)
 
 
 @pytest.mark.spawns_process
-def test_the_relay_error_is_the_emit_error_when_the_retry_names_none():
+def test_the_relay_error_is_the_emit_error_when_the_retry_names_none() -> None:
     for leg in handoff_legs():
         handoff, _ = run_leg(leg, {"error": "not run: x"}, None)
         assert handoff["emit_error"] == "not run: x"
 
 
 @pytest.mark.spawns_process
-def test_a_good_relay_is_kept_without_a_retry_and_loses_its_error_key():
+def test_a_good_relay_is_kept_without_a_retry_and_loses_its_error_key() -> None:
     relay = {**_GOOD, "error": ""}
     for leg in handoff_legs():
         handoff, calls = run_leg(leg, relay, {"error": "must not be called"})
@@ -117,7 +118,7 @@ def test_a_good_relay_is_kept_without_a_retry_and_loses_its_error_key():
 
 
 @pytest.mark.spawns_process
-def test_the_launcher_self_emits_for_a_hand_off_carrying_only_emit_error(tmp_path):
+def test_the_launcher_self_emits_for_a_hand_off_carrying_only_emit_error(tmp_path: Path) -> None:
     handoff = {"ask": True, "sizing_path": launcher._SIZING, "session_id": "s", "target_root": "/r", "emit_error": "denied"}
     out = launcher._drive(
         launcher._script(tmp_path),

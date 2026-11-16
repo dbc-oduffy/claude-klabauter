@@ -9,6 +9,7 @@ from coordinator_core.bash_guards import _write_bump_applicability as applicabil
 from coordinator_core.bash_guards import _write_bump_message as message
 from coordinator_core.tests.git_seed import seeded_repo
 from coordinator_core.write_guards import bump_out_of_repo_tool_write as guard
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -39,7 +40,7 @@ def _setup(tmp_path, monkeypatch, register: bool):
     return own, ws
 
 
-def _payload(path, cwd, agent_id=""):
+def _payload(path, cwd, agent_id: str = ""):
     return {
         "tool_name": "Write",
         "tool_input": {"file_path": str(path)},
@@ -49,7 +50,7 @@ def _payload(path, cwd, agent_id=""):
     }
 
 
-def test_write_into_non_git_workspace_gets_external_workspace_remedy(tmp_path, monkeypatch):
+def test_write_into_non_git_workspace_gets_external_workspace_remedy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     own, ws = _setup(tmp_path, monkeypatch, register=True)
     result = guard.check(_payload(ws / "f.txt", own))
     assert result is not None, "a Write into a non-git workspace must reach render_bump_message"
@@ -60,13 +61,13 @@ def test_write_into_non_git_workspace_gets_external_workspace_remedy(tmp_path, m
     assert "touch" not in text
 
 
-def test_unregistered_non_git_dir_keeps_old_copy(tmp_path, monkeypatch):
+def test_unregistered_non_git_dir_keeps_old_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     own, ws = _setup(tmp_path, monkeypatch, register=False)
     result = guard.check(_payload(ws / "f.txt", own))
     assert result is None or "someone else's code" not in _reason(result)
 
 
-def test_foreign_repo_target_still_renders_old_copy(tmp_path, monkeypatch):
+def test_foreign_repo_target_still_renders_old_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     own, _ = _setup(tmp_path, monkeypatch, register=True)
     other = seeded_repo(tmp_path / "other", name="Test")
     reg = tmp_path / "reg"
@@ -79,7 +80,7 @@ def test_foreign_repo_target_still_renders_old_copy(tmp_path, monkeypatch):
     assert "someone else's code" not in _reason(result)
 
 
-def test_renderer_variants_name_key_and_no_memo():
+def test_renderer_variants_name_key_and_no_memo() -> None:
     for agent in (message.AGENT_CLASS_EM, message.AGENT_CLASS_SUBAGENT):
         text = message.render_bump_message(
             agent_class=agent,

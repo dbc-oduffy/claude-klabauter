@@ -15,6 +15,7 @@ from coordinator_core.contract.cockpit_schema.entities.cross_repo_memo_summary i
     CrossRepoMemoSummary,
 )
 from coordinator_core.ops.emit.sections.cross_repo_memos import _collect_bucket
+from pathlib import Path
 
 _QUERY_TARGET = "coordinator_core.ops.emit.sections.cross_repo_memos._query_records"
 _NAMED = ("open", "in_progress", "actioned")
@@ -65,7 +66,7 @@ def _emit(tmp_path, statuses):
 
 
 @pytest.mark.parametrize("status", _NAMED + _OBSERVED)
-def test_every_status_emits_and_validates(tmp_path, status):
+def test_every_status_emits_and_validates(tmp_path: Path, status) -> None:
     records, malformed = _emit(tmp_path, [status])
     assert malformed == []
     assert [r["status"] for r in records] == [status]
@@ -73,24 +74,24 @@ def test_every_status_emits_and_validates(tmp_path, status):
 
 
 @pytest.mark.parametrize("status", ["", 7, ["open"], None])
-def test_non_string_or_empty_status_is_still_quarantined(tmp_path, status):
+def test_non_string_or_empty_status_is_still_quarantined(tmp_path: Path, status) -> None:
     records, malformed = _emit(tmp_path, [status])
     assert records == [] and len(malformed) == 1
 
 
-def test_schema_names_the_enum_and_falls_back_to_string():
+def test_schema_names_the_enum_and_falls_back_to_string() -> None:
     branches = build_entity_schema(CrossRepoMemoSummary)["properties"]["status"]["anyOf"]
     assert set(branches[0]["enum"]) == set(_NAMED)
     assert branches[1]["type"] == "string"
 
 
 @pytest.mark.parametrize("status", ["", 7, ["open"]])
-def test_generated_schema_rejects_empty_or_non_string_status(tmp_path, status):
+def test_generated_schema_rejects_empty_or_non_string_status(tmp_path: Path, status) -> None:
     records, _ = _emit(tmp_path, ["open"])
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({**records[0], "status": status}, build_entity_schema(CrossRepoMemoSummary))
 
 
-def test_contract_version_is_bumped_above_4_12_0():
+def test_contract_version_is_bumped_above_4_12_0() -> None:
     parts = tuple(int(p) for p in CONTRACT_VERSION.split("."))
     assert parts > (4, 12, 0)

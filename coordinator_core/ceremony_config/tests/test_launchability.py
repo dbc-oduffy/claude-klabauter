@@ -7,18 +7,19 @@ import sys
 import pytest
 
 from coordinator_core.ceremony_config import launchability
+from pathlib import Path
 
 
-def test_unresolved_name(monkeypatch):
+def test_unresolved_name(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(launchability.shutil, "which", lambda _n: None)
     assert launchability.check(["no-such-tool"]) == "not found on PATH"
 
 
-def test_empty_argv():
+def test_empty_argv() -> None:
     assert launchability.check([]) == "empty argv"
 
 
-def test_win32_cmd_shim_not_launchable(monkeypatch, tmp_path):
+def test_win32_cmd_shim_not_launchable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     shim = tmp_path / "pnpm.CMD"
     shim.write_text("@echo off\n")
     monkeypatch.setattr(launchability.shutil, "which", lambda _n: str(shim))
@@ -26,7 +27,7 @@ def test_win32_cmd_shim_not_launchable(monkeypatch, tmp_path):
     assert reason is not None and ".exe/.com" in reason
 
 
-def test_win32_extensionless_not_launchable(monkeypatch, tmp_path):
+def test_win32_extensionless_not_launchable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     shim = tmp_path / "pnpm"
     shim.write_text("#!/bin/sh\n")
     monkeypatch.setattr(launchability.shutil, "which", lambda _n: str(shim))
@@ -34,14 +35,14 @@ def test_win32_extensionless_not_launchable(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("name", ["tool.exe", "tool.EXE", "tool.com"])
-def test_win32_exe_and_com_launchable(monkeypatch, tmp_path, name):
+def test_win32_exe_and_com_launchable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, name) -> None:
     exe = tmp_path / name
     exe.write_text("x")
     monkeypatch.setattr(launchability.shutil, "which", lambda _n: str(exe))
     assert launchability.check(["tool"], platform="win32") is None
 
 
-def test_win32_path_argv0_checked_as_given(tmp_path):
+def test_win32_path_argv0_checked_as_given(tmp_path: Path) -> None:
     cmd = tmp_path / "run.bat"
     cmd.write_text("x")
     assert launchability.check([str(cmd)], platform="win32") is not None
@@ -50,7 +51,7 @@ def test_win32_path_argv0_checked_as_given(tmp_path):
     assert launchability.check([str(exe)], platform="win32") is None
 
 
-def test_win32_suffixless_path_resolves_to_exe(tmp_path):
+def test_win32_suffixless_path_resolves_to_exe(tmp_path: Path) -> None:
     (tmp_path / "hook.exe").write_text("x")
     given = str(tmp_path / "hook")
     assert launchability.resolve(given, platform="win32") == given + ".exe"
@@ -58,7 +59,7 @@ def test_win32_suffixless_path_resolves_to_exe(tmp_path):
     assert launchability.resolve(given, platform="linux") is None
 
 
-def test_win32_suffixless_path_without_exe_still_refused(tmp_path):
+def test_win32_suffixless_path_without_exe_still_refused(tmp_path: Path) -> None:
     (tmp_path / "hook.cmd").write_text("x")
     given = str(tmp_path / "hook")
     assert launchability.check([given], platform="win32") == "not found on PATH"
@@ -67,7 +68,7 @@ def test_win32_suffixless_path_without_exe_still_refused(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX executable bit")
-def test_posix_executable_bit(tmp_path):
+def test_posix_executable_bit(tmp_path: Path) -> None:
     f = tmp_path / "tool"
     f.write_text("#!/bin/sh\n")
     os.chmod(f, 0o644)

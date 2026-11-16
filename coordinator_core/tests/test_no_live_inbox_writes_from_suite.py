@@ -18,9 +18,10 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core import conftest as cc_conftest
+from pathlib import Path
 
 
-def test_a_write_into_a_stubbed_live_inbox_root_fails_loudly(tmp_path, monkeypatch):
+def test_a_write_into_a_stubbed_live_inbox_root_fails_loudly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "peer-inbox"
     root.mkdir()
     monkeypatch.setattr(cc_conftest, "_live_inbox_roots", lambda: (str(root),))
@@ -34,7 +35,7 @@ def test_a_write_into_a_stubbed_live_inbox_root_fails_loudly(tmp_path, monkeypat
             pass
 
 
-def test_an_external_write_during_a_test_is_not_flagged(tmp_path, monkeypatch):
+def test_an_external_write_during_a_test_is_not_flagged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "peer-inbox"
     root.mkdir()
     monkeypatch.setattr(cc_conftest, "_live_inbox_roots", lambda: (str(root),))
@@ -48,7 +49,7 @@ def test_an_external_write_during_a_test_is_not_flagged(tmp_path, monkeypatch):
         next(gen)
 
 
-def test_a_test_originated_rename_into_a_live_root_is_flagged(tmp_path, monkeypatch):
+def test_a_test_originated_rename_into_a_live_root_is_flagged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "peer-inbox"
     root.mkdir()
     monkeypatch.setattr(cc_conftest, "_live_inbox_roots", lambda: (str(root),))
@@ -64,7 +65,7 @@ def test_a_test_originated_rename_into_a_live_root_is_flagged(tmp_path, monkeypa
             pass
 
 
-def test_a_clean_test_does_not_trip_the_guard(tmp_path, monkeypatch):
+def test_a_clean_test_does_not_trip_the_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "peer-inbox"
     root.mkdir()
     monkeypatch.setattr(cc_conftest, "_live_inbox_roots", lambda: (str(root),))
@@ -74,7 +75,7 @@ def test_a_clean_test_does_not_trip_the_guard(tmp_path, monkeypatch):
         next(gen)
 
 
-def test_an_absent_root_is_not_an_error(tmp_path, monkeypatch):
+def test_an_absent_root_is_not_an_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         cc_conftest, "_live_inbox_roots", lambda: (str(tmp_path / "nope"),)
     )
@@ -84,14 +85,14 @@ def test_an_absent_root_is_not_an_error(tmp_path, monkeypatch):
         next(gen)
 
 
-def test_import_time_root_set_includes_this_repos_own_inbox():
+def test_import_time_root_set_includes_this_repos_own_inbox() -> None:
     roots = cc_conftest._LIVE_INBOX_ROOTS
     assert any(root.endswith(("cross-repo/inbox", "cross-repo\\inbox")) for root in roots), (
         f"import-time root set {roots!r} does not include this repo's own inbox"
     )
 
 
-def test_import_time_root_set_includes_a_peer_when_a_registry_exists():
+def test_import_time_root_set_includes_a_peer_when_a_registry_exists() -> None:
     from coordinator_core.ops.fleet import _memo_resolver
 
     try:

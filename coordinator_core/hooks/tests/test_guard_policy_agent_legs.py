@@ -7,6 +7,7 @@ from coordinator_core.hooks import preuse_agent_dispatch as pad
 from coordinator_core.hooks.block_unenumerated_agent_type import (
     GUARD_NAME as UNENUMERATED,
 )
+from pathlib import Path
 
 _GLOBAL = "MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL"
 
@@ -16,7 +17,7 @@ def _per_guard(name):
 
 
 @pytest.fixture(autouse=True)
-def _isolate(monkeypatch, tmp_path):
+def _isolate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     import os
 
     from coordinator_core import machine_profile
@@ -32,7 +33,7 @@ def _isolate(monkeypatch, tmp_path):
     machine_profile.reset_cache()
 
 
-def _set(monkeypatch, name, level):
+def _set(monkeypatch, name, level) -> None:
     monkeypatch.setenv(name, level)
 
 
@@ -54,32 +55,32 @@ def _hso(envelope):
     return envelope.get("hookSpecificOutput") or {}
 
 
-def test_unmodeled_default_rewrites_without_a_decision():
+def test_unmodeled_default_rewrites_without_a_decision() -> None:
     hso = _hso(bwua._handler(_unmodeled_payload()))
     assert "permissionDecision" not in hso
     assert "model: 'sonnet'" in hso["updatedInput"]["script"]
 
 
-def test_unmodeled_global_strict_still_never_denies(monkeypatch):
+def test_unmodeled_global_strict_still_never_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _set(monkeypatch, _GLOBAL, "strict")
     hso = _hso(bwua._handler(_unmodeled_payload()))
     assert hso.get("permissionDecision") != "deny"
     assert "updatedInput" in hso
 
 
-def test_agent_leg_default_allows_through_fanin():
+def test_agent_leg_default_allows_through_fanin() -> None:
     hso = _hso(pad._handler(_agent_payload()))
     assert hso.get("permissionDecision") != "deny"
 
 
-def test_agent_leg_global_strict_denies_through_fanin(monkeypatch):
+def test_agent_leg_global_strict_denies_through_fanin(monkeypatch: pytest.MonkeyPatch) -> None:
     _set(monkeypatch, _GLOBAL, "strict")
     hso = _hso(pad._handler(_agent_payload()))
     assert hso["permissionDecision"] == "allow"
     assert hso["additionalContext"].startswith("Advisory: ")
 
 
-def test_per_guard_strict_on_unregistered_agent_leg_stays_advisory_and_leaves_workflow_leg(monkeypatch):
+def test_per_guard_strict_on_unregistered_agent_leg_stays_advisory_and_leaves_workflow_leg(monkeypatch: pytest.MonkeyPatch) -> None:
     _set(monkeypatch, _GLOBAL, "warn")
     _set(monkeypatch, _per_guard(UNENUMERATED), "strict")
     hso = _hso(pad._handler(_agent_payload()))
@@ -88,7 +89,7 @@ def test_per_guard_strict_on_unregistered_agent_leg_stays_advisory_and_leaves_wo
     assert _hso(bwua._handler(_unmodeled_payload())).get("permissionDecision") != "deny"
 
 
-def test_per_guard_strict_on_workflow_leg_never_denies_and_leaves_agent_leg_warning(monkeypatch):
+def test_per_guard_strict_on_workflow_leg_never_denies_and_leaves_agent_leg_warning(monkeypatch: pytest.MonkeyPatch) -> None:
     _set(monkeypatch, _GLOBAL, "warn")
     _set(monkeypatch, _per_guard(bwua.GUARD_NAME), "strict")
     assert _hso(bwua._handler(_unmodeled_payload())).get("permissionDecision") != "deny"

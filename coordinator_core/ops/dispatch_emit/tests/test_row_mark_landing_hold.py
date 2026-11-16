@@ -15,13 +15,14 @@ from coordinator_core.ops.dispatch_emit.tests.test_checkpoint_stamp import (
     _rows,
 )
 from coordinator_core.session import landing_hold
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 HELD = "s-held"
 
 
-def test_checkpoint_stamp_defers_under_hold(tmp_path):
+def test_checkpoint_stamp_defers_under_hold(tmp_path: Path) -> None:
     root, sha = _repo(tmp_path)
     landing_hold.set_hold(str(root), HELD)
 
@@ -38,7 +39,7 @@ def test_checkpoint_stamp_defers_under_hold(tmp_path):
     assert entry["params"]["session_id"] == HELD
 
 
-def test_deferred_checkpoint_stamp_replays_through_land_stamp(tmp_path):
+def test_deferred_checkpoint_stamp_replays_through_land_stamp(tmp_path: Path) -> None:
     root, sha = _repo(tmp_path)
     landing_hold.set_hold(str(root), HELD)
     stamp_checkpoint(root, _message(), sha, session_id=HELD)
@@ -53,7 +54,7 @@ def test_deferred_checkpoint_stamp_replays_through_land_stamp(tmp_path):
 
 
 @pytest.mark.parametrize("session_id", ["s-other", None])
-def test_checkpoint_stamp_unheld_session_still_commits(tmp_path, session_id):
+def test_checkpoint_stamp_unheld_session_still_commits(tmp_path: Path, session_id) -> None:
     root, sha = _repo(tmp_path)
     landing_hold.set_hold(str(root), HELD)
 
@@ -68,7 +69,7 @@ def _coded(root, session_id, commit_v2):
     return terminal_commit_stamp._stamp_coded_commit(commit_v2, root, root, {PLAN: {"C1"}}, "a" * 40, session_id)
 
 
-def test_coded_stamp_defers_under_hold(tmp_path):
+def test_coded_stamp_defers_under_hold(tmp_path: Path) -> None:
     root, sha = _repo(tmp_path)
     landing_hold.set_hold(str(root), HELD)
     calls = []
@@ -87,7 +88,7 @@ def test_coded_stamp_defers_under_hold(tmp_path):
     assert entry["params"]["message"].startswith("mark 1 rows coded (aaaaaaa)")
 
 
-def test_coded_stamp_unheld_session_still_commits(tmp_path):
+def test_coded_stamp_unheld_session_still_commits(tmp_path: Path) -> None:
     root, _sha = _repo(tmp_path)
     landing_hold.set_hold(str(root), HELD)
     calls = []

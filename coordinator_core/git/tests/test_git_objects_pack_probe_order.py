@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 from pathlib import Path
+
+import pytest
 
 from coordinator_core.git import git_objects
 
@@ -26,7 +29,13 @@ def _clear() -> None:
         d.clear()
 
 
-def test_second_lookup_in_same_pack_probes_it_first(tmp_path, monkeypatch):
+@pytest.fixture(autouse=True)
+def _bare_tmp_common_dir(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The fixtures' "common dir" is a bare tmp dir, not a repo; the writer lock resolves a repo.
+    monkeypatch.setattr(git_objects.object_store_lock, "hold", lambda *a, **k: contextlib.nullcontext())
+
+
+def test_second_lookup_in_same_pack_probes_it_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _clear()
     shas = [_pack(tmp_path, n) for n in range(4)]
     probes: list[Path] = []
@@ -43,7 +52,7 @@ def test_second_lookup_in_same_pack_probes_it_first(tmp_path, monkeypatch):
     assert len(probes) == 1
 
 
-def test_listing_rebuild_drops_lookup_source_and_last_hit(tmp_path):
+def test_listing_rebuild_drops_lookup_source_and_last_hit(tmp_path: Path) -> None:
     _clear()
     sha = _pack(tmp_path, 0)
     assert git_objects.packed_contains(tmp_path, sha)
@@ -55,7 +64,7 @@ def test_listing_rebuild_drops_lookup_source_and_last_hit(tmp_path):
     assert key not in git_objects._LAST_HIT_PACK
 
 
-def test_new_pack_after_listing_change_is_found(tmp_path):
+def test_new_pack_after_listing_change_is_found(tmp_path: Path) -> None:
     _clear()
     first = _pack(tmp_path, 0)
     assert git_objects.packed_contains(tmp_path, first)

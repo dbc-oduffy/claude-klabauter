@@ -5,13 +5,14 @@ import pytest
 
 from coordinator_core.git import commit as gcommit
 from coordinator_core.session import core as session_core
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
-def _git(repo, *args, check=True):
+def _git(repo, *args, check: bool = True):
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **_NOWIN
     )
@@ -33,7 +34,7 @@ def _last_message(repo):
     return _git(repo, "log", "-1", "--format=%B").stdout
 
 
-def test_message_without_trailer_gets_exactly_one_when_sid_resolves(tmp_path, monkeypatch):
+def test_message_without_trailer_gets_exactly_one_when_sid_resolves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         session_core, "resolve_session_id", lambda cwd=None: "11111111-2222-4333-8444-555555555555"
     )
@@ -47,7 +48,7 @@ def test_message_without_trailer_gets_exactly_one_when_sid_resolves(tmp_path, mo
     assert lines == ["Session-Id: 11111111-2222-4333-8444-555555555555"], message
 
 
-def test_message_with_trailer_already_present_keeps_exactly_one(tmp_path, monkeypatch):
+def test_message_with_trailer_already_present_keeps_exactly_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         session_core, "resolve_session_id", lambda cwd=None: "11111111-2222-4333-8444-555555555555"
     )
@@ -63,7 +64,7 @@ def test_message_with_trailer_already_present_keeps_exactly_one(tmp_path, monkey
     assert lines == ["Session-Id: 99999999-2222-4333-8444-555555555555"], message
 
 
-def test_unresolvable_sid_leaves_message_unchanged(tmp_path, monkeypatch):
+def test_unresolvable_sid_leaves_message_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(session_core, "resolve_session_id", lambda cwd=None: "")
     repo = _repo(tmp_path)
     (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
@@ -75,7 +76,7 @@ def test_unresolvable_sid_leaves_message_unchanged(tmp_path, monkeypatch):
     assert message.strip() == "add new"
 
 
-def test_trailer_path_does_not_import_content_root_or_temp_layout(tmp_path):
+def test_trailer_path_does_not_import_content_root_or_temp_layout(tmp_path: Path) -> None:
     import os
     import sys
     from pathlib import Path

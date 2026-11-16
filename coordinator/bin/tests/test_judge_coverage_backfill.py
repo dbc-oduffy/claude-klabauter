@@ -5,11 +5,16 @@ from __future__ import annotations
 import importlib.util
 import json
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN = Path(__file__).resolve().parents[1]
 
 
-def _mod(name: str, file: str):
+def _mod(name: str, file: str) -> ModuleType:
     spec = importlib.util.spec_from_file_location(name, _BIN / file)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -52,7 +57,7 @@ def _judge_none_concluded(root: Path) -> int:
     return sum(1 for r in audit.audit(str(root)) if r["terminal"] in ("committed", "closed") and r["judge"] == "none")
 
 
-def test_backfill_clears_concluded_judge_none(tmp_path, capsys):
+def test_backfill_clears_concluded_judge_none(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     runs = _fixture(tmp_path)
     before = _snapshot([runs["met"], runs["halted"]])
     assert _judge_none_concluded(tmp_path) == 2
@@ -63,7 +68,7 @@ def test_backfill_clears_concluded_judge_none(tmp_path, capsys):
     assert not (runs["halted"] / "run-outcome.json").exists()
 
 
-def test_backfill_is_idempotent(tmp_path, capsys):
+def test_backfill_is_idempotent(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _fixture(tmp_path)
     backfill.main(["--root", str(tmp_path)])
     capsys.readouterr()
@@ -71,7 +76,7 @@ def test_backfill_is_idempotent(tmp_path, capsys):
     assert capsys.readouterr().out.strip() == "scanned=3 recorded=0"
 
 
-def test_dry_run_writes_nothing_and_prints_count(tmp_path, capsys):
+def test_dry_run_writes_nothing_and_prints_count(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     runs = _fixture(tmp_path)
     before = _snapshot(runs.values())
     assert backfill.main(["--root", str(tmp_path), "--dry-run"]) == 0
@@ -79,5 +84,5 @@ def test_dry_run_writes_nothing_and_prints_count(tmp_path, capsys):
     assert _snapshot(runs.values()) == before
 
 
-def test_missing_state_warp_exits_2(tmp_path):
+def test_missing_state_warp_exits_2(tmp_path: Path) -> None:
     assert backfill.main(["--root", str(tmp_path)]) == 2

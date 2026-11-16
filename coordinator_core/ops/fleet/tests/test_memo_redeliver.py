@@ -53,7 +53,7 @@ def _repo_state(repo: Path) -> tuple:
 
 
 @pytest.fixture()
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     sender = _make_sender_git_repo(tmp_path)
     receiver = _make_receiver_git_repo(tmp_path)
     monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": receiver})))
@@ -61,7 +61,7 @@ def world(tmp_path, monkeypatch):
 
 
 class TestPreservedDelivery:
-    def test_bytes_and_filename_survive_as_one_anchored_commit(self, tmp_path, world):
+    def test_bytes_and_filename_survive_as_one_anchored_commit(self, tmp_path: Path, world) -> None:
         sender, receiver = world
         source = _write_stranded(tmp_path)
 
@@ -79,7 +79,7 @@ class TestPreservedDelivery:
         assert len(_memo_push_pending.list_pending(sender)) == 1
         assert not (sender / ".coordinator-local" / "memo-outbox" / "sent").exists()
 
-    def test_author_equal_to_the_delivering_clone_is_not_self_addressed(self, tmp_path, world):
+    def test_author_equal_to_the_delivering_clone_is_not_self_addressed(self, tmp_path: Path, world) -> None:
         sender, receiver = world
         source = _write_stranded(tmp_path)
 
@@ -88,7 +88,7 @@ class TestPreservedDelivery:
         assert result["exit_code"] == 0, result
         assert "rejection_class" not in result
 
-    def test_second_call_reconciles_without_a_second_commit(self, tmp_path, world):
+    def test_second_call_reconciles_without_a_second_commit(self, tmp_path: Path, world) -> None:
         sender, receiver = world
         source = _write_stranded(tmp_path)
         _memo_redeliver({"dry_run": False, "path": str(source)}, repo_root=sender)
@@ -121,7 +121,7 @@ class TestPreservedDelivery:
         assert _delivered_text(receiver) == source.read_text(encoding="utf-8")
         assert len(_memo_push_pending.list_pending(sender)) == 1
 
-    def test_dry_run_previews_and_writes_nothing(self, tmp_path, world):
+    def test_dry_run_previews_and_writes_nothing(self, tmp_path: Path, world) -> None:
         sender, receiver = world
         source = _write_stranded(tmp_path)
         before = _repo_state(receiver)
@@ -135,7 +135,7 @@ class TestPreservedDelivery:
 
 
 class TestRefusals:
-    def test_owner_with_no_registered_clone_is_refused_by_class_and_writes_nothing(self, tmp_path, world):
+    def test_owner_with_no_registered_clone_is_refused_by_class_and_writes_nothing(self, tmp_path: Path, world) -> None:
         sender, receiver = world
         source = _write_stranded(tmp_path, to="example-retrieval-repo-blender-addon-em")
         before = _repo_state(receiver)
@@ -149,7 +149,7 @@ class TestRefusals:
         assert _repo_state(receiver) == before
         assert _memo_push_pending.list_pending(sender) == []
 
-    def test_memo_without_a_sender_is_invalid(self, tmp_path, world):
+    def test_memo_without_a_sender_is_invalid(self, tmp_path: Path, world) -> None:
         sender, receiver = world
         source = _write_stranded(tmp_path)
         source.write_text(source.read_text(encoding="utf-8").replace('from: "claude-klabauter-em"\n', ""), encoding="utf-8")
@@ -159,7 +159,7 @@ class TestRefusals:
         assert result["exit_code"] == 1, result
         assert result["rejection_class"] == "invalid_memo"
 
-    def test_a_different_memo_under_the_same_filename_is_a_collision(self, tmp_path, world):
+    def test_a_different_memo_under_the_same_filename_is_a_collision(self, tmp_path: Path, world) -> None:
         sender, receiver = world
         inbox = receiver / "cross-repo" / "inbox"
         (inbox / _FILENAME).write_text(
@@ -179,7 +179,7 @@ class TestRefusals:
         assert _repo_state(receiver) == before
         assert _memo_push_pending.list_pending(sender) == []
 
-    def test_unknown_param_is_refused(self, tmp_path, world):
+    def test_unknown_param_is_refused(self, tmp_path: Path, world) -> None:
         sender, _ = world
         result = _memo_redeliver({"dry_run": False, "path": "x.md", "to": "y"}, repo_root=sender)
         assert result["exit_code"] == 1

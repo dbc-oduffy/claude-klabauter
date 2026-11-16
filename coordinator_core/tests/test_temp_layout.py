@@ -17,33 +17,33 @@ from coordinator_core import temp_layout
 
 
 @pytest.fixture
-def fake_temp(tmp_path, monkeypatch):
+def fake_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     base = tmp_path / "systemp"
     base.mkdir()
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(base))
     return base
 
 
-def test_coordinator_temp_root_is_two_segments_under_gettempdir(fake_temp):
+def test_coordinator_temp_root_is_two_segments_under_gettempdir(fake_temp) -> None:
     assert temp_layout.coordinator_temp_root(Path("/work/my-repo")) == fake_temp / "coordinator" / "my-repo"
 
 
-def test_fleet_temp_root(fake_temp):
+def test_fleet_temp_root(fake_temp) -> None:
     assert temp_layout.fleet_temp_root() == fake_temp / "coordinator" / "_fleet"
 
 
-def test_pytest_basetemp_root(fake_temp):
+def test_pytest_basetemp_root(fake_temp) -> None:
     assert temp_layout.pytest_basetemp_root("/work/my-repo") == fake_temp / "coordinator" / "my-repo" / "pytest"
 
 
-def test_repo_named_fleet_is_refused(fake_temp):
+def test_repo_named_fleet_is_refused(fake_temp) -> None:
     with pytest.raises(ValueError):
         temp_layout.coordinator_temp_root(Path("/work/_fleet"))
     with pytest.raises(ValueError):
         temp_layout.pytest_basetemp_root(Path("/work/_fleet"))
 
 
-def test_kept_marker_name():
+def test_kept_marker_name() -> None:
     assert temp_layout.PYTEST_KEPT_MARKER == ".coordinator-kept-failing"
 
 
@@ -53,11 +53,11 @@ def test_kept_marker_name():
      ("1234-abcdefg", None), ("x-abcdef", None), ("1234-abcdef\n", None), ("", None),
      (".coordinator-kept-failing", None)],
 )
-def test_parse_pytest_run_dir(name, expected):
+def test_parse_pytest_run_dir(name, expected) -> None:
     assert temp_layout.parse_pytest_run_dir(name) == expected
 
 
-def test_resolver_reads_gettempdir_at_call_time(tmp_path, monkeypatch):
+def test_resolver_reads_gettempdir_at_call_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     first, second = tmp_path / "a", tmp_path / "b"
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(first))
     assert temp_layout.fleet_temp_root().parent.parent == first
@@ -65,7 +65,7 @@ def test_resolver_reads_gettempdir_at_call_time(tmp_path, monkeypatch):
     assert temp_layout.fleet_temp_root().parent.parent == second
 
 
-def test_managed_tempdir_fleet_and_repo_are_created(fake_temp):
+def test_managed_tempdir_fleet_and_repo_are_created(fake_temp) -> None:
     fleet = temp_layout.managed_tempdir()
     assert fleet == fake_temp / "coordinator" / "_fleet" and fleet.is_dir()
     repo = temp_layout.managed_tempdir("/work/my-repo")
@@ -73,12 +73,12 @@ def test_managed_tempdir_fleet_and_repo_are_created(fake_temp):
     assert temp_layout.managed_tempdir("/work/my-repo") == repo
 
 
-def test_managed_tempdir_refuses_fleet_named_repo(fake_temp):
+def test_managed_tempdir_refuses_fleet_named_repo(fake_temp) -> None:
     with pytest.raises(ValueError):
         temp_layout.managed_tempdir("/work/_fleet")
 
 
-def test_legacy_top_level_path_joins_gettempdir(fake_temp):
+def test_legacy_top_level_path_joins_gettempdir(fake_temp) -> None:
     assert temp_layout.legacy_top_level_path("rt-bark-once-s1") == fake_temp / "rt-bark-once-s1"
 
 
@@ -88,7 +88,7 @@ def _dead_pid() -> int:
     return proc.pid
 
 
-def test_managed_temp_dir_is_pid_stamped_and_removed_on_exit(fake_temp):
+def test_managed_temp_dir_is_pid_stamped_and_removed_on_exit(fake_temp) -> None:
     with temp_layout.managed_temp_dir("probe", "/work/my-repo") as d:
         assert d.parent == fake_temp / "coordinator" / "my-repo" / temp_layout.RUN_TEMP_DIRNAME
         assert re.fullmatch(rf"{os.getpid()}-[0-9a-f]{{6}}-probe", d.name)
@@ -96,14 +96,14 @@ def test_managed_temp_dir_is_pid_stamped_and_removed_on_exit(fake_temp):
     assert not d.exists()
 
 
-def test_managed_temp_dir_removed_when_body_raises(fake_temp):
+def test_managed_temp_dir_removed_when_body_raises(fake_temp) -> None:
     with pytest.raises(RuntimeError):
         with temp_layout.managed_temp_dir("probe") as d:
             raise RuntimeError("boom")
     assert not d.exists()
 
 
-def test_managed_temp_dir_removes_read_only_contents(fake_temp):
+def test_managed_temp_dir_removes_read_only_contents(fake_temp) -> None:
     with temp_layout.managed_temp_dir("ro") as d:
         f = d / "ro.txt"
         f.write_text("x")
@@ -111,7 +111,7 @@ def test_managed_temp_dir_removes_read_only_contents(fake_temp):
     assert not d.exists()
 
 
-def test_next_creation_reaps_dead_owner_dir_and_keeps_live_and_foreign(fake_temp):
+def test_next_creation_reaps_dead_owner_dir_and_keeps_live_and_foreign(fake_temp) -> None:
     run_temp = temp_layout.managed_tempdir() / temp_layout.RUN_TEMP_DIRNAME
     run_temp.mkdir()
     dead = run_temp / f"{_dead_pid()}-abcdef-old"
@@ -124,7 +124,7 @@ def test_next_creation_reaps_dead_owner_dir_and_keeps_live_and_foreign(fake_temp
         assert live.exists() and foreign.exists()
 
 
-def test_make_managed_temp_dir_registers_atexit_removal(fake_temp, monkeypatch):
+def test_make_managed_temp_dir_registers_atexit_removal(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
     registered = []
     monkeypatch.setattr(atexit, "register", lambda fn, *a: registered.append(fn))
     d = temp_layout.make_managed_temp_dir("handoff")
@@ -133,7 +133,7 @@ def test_make_managed_temp_dir_registers_atexit_removal(fake_temp, monkeypatch):
     assert not d.exists()
 
 
-def test_run_temp_dirname():
+def test_run_temp_dirname() -> None:
     assert temp_layout.RUN_TEMP_DIRNAME == "run-temp"
 
 
@@ -173,18 +173,18 @@ _GLOB_EXAMPLES = {
 }
 
 
-def test_every_legacy_glob_has_a_matching_example():
+def test_every_legacy_glob_has_a_matching_example() -> None:
     assert set(_GLOB_EXAMPLES) == set(temp_layout.LEGACY_TOP_LEVEL_GLOBS)
     for example in _GLOB_EXAMPLES.values():
         assert temp_layout.is_legacy_top_level(example), example
 
 
 @pytest.mark.parametrize("name", ["coordinator", "pytest-of-x", "random.txt", "git-pathspec", "coordinator-falsifier-x", "tmpab12cd34", ".tmpab12cd", "c10-census-fixture-x", "fmhook-claude-root-x", "ddct8c0-scratch", "git-index-foreign", "git-pathspec-tool.txt", "workflow-run-logs"])
-def test_non_legacy_names_are_not_matched(name):
+def test_non_legacy_names_are_not_matched(name) -> None:
     assert not temp_layout.is_legacy_top_level(name)
 
 
-def test_kept_dir_is_not_reaped_and_registers_no_atexit(fake_temp, monkeypatch):
+def test_kept_dir_is_not_reaped_and_registers_no_atexit(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
     registered = []
     monkeypatch.setattr(atexit, "register", lambda fn, *a: registered.append(fn))
     kept, cleanup = temp_layout.create_managed_temp_dir("keep")
@@ -195,7 +195,7 @@ def test_kept_dir_is_not_reaped_and_registers_no_atexit(fake_temp, monkeypatch):
     assert not kept.exists()
 
 
-def test_kept_dir_is_reaped_only_once_older_than_the_age_bar(fake_temp):
+def test_kept_dir_is_reaped_only_once_older_than_the_age_bar(fake_temp) -> None:
     run_temp = temp_layout.managed_tempdir() / temp_layout.RUN_TEMP_DIRNAME
     run_temp.mkdir()
     fresh, stale = run_temp / "kept-aaaaaa-fresh", run_temp / "kept-bbbbbb-stale"
@@ -208,7 +208,7 @@ def test_kept_dir_is_reaped_only_once_older_than_the_age_bar(fake_temp):
         assert not stale.exists()
 
 
-def test_reap_is_capped_per_creation(fake_temp):
+def test_reap_is_capped_per_creation(fake_temp) -> None:
     run_temp = temp_layout.managed_tempdir() / temp_layout.RUN_TEMP_DIRNAME
     run_temp.mkdir()
     dead_pid = _dead_pid()
@@ -220,7 +220,7 @@ def test_reap_is_capped_per_creation(fake_temp):
     assert len(left) == 3
 
 
-def test_teardown_error_does_not_replace_body_exception(fake_temp, monkeypatch):
+def test_teardown_error_does_not_replace_body_exception(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(_path):
         raise PermissionError("held")
 
@@ -230,12 +230,12 @@ def test_teardown_error_does_not_replace_body_exception(fake_temp, monkeypatch):
             raise ValueError("body")
 
 
-def test_mkdtemp_in_creates_under_chosen_parent(tmp_path):
+def test_mkdtemp_in_creates_under_chosen_parent(tmp_path: Path) -> None:
     d = temp_layout.mkdtemp_in("pre-", tmp_path)
     assert d.parent == tmp_path and d.name.startswith("pre-") and d.is_dir()
 
 
-def test_mkdtemp_in_is_private_and_retries_on_name_collision(tmp_path, monkeypatch):
+def test_mkdtemp_in_is_private_and_retries_on_name_collision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tokens = iter(["aaaaaaaa", "aaaaaaaa", "bbbbbbbb"])
     monkeypatch.setattr(temp_layout.secrets, "token_hex", lambda _n: next(tokens))
     first = temp_layout.mkdtemp_in("c-", tmp_path)
@@ -245,7 +245,7 @@ def test_mkdtemp_in_is_private_and_retries_on_name_collision(tmp_path, monkeypat
         assert stat.S_IMODE(first.stat().st_mode) == 0o700
 
 
-def test_strict_managed_temp_dir_raises_naming_leaked_path_on_failed_removal(fake_temp, monkeypatch):
+def test_strict_managed_temp_dir_raises_naming_leaked_path_on_failed_removal(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(_path):
         raise PermissionError("held")
 
@@ -257,7 +257,7 @@ def test_strict_managed_temp_dir_raises_naming_leaked_path_on_failed_removal(fak
     assert isinstance(ei.value.__cause__, PermissionError)
 
 
-def test_non_strict_managed_temp_dir_swallows_failed_removal(fake_temp, monkeypatch):
+def test_non_strict_managed_temp_dir_swallows_failed_removal(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(_path):
         raise PermissionError("held")
 
@@ -266,7 +266,7 @@ def test_non_strict_managed_temp_dir_swallows_failed_removal(fake_temp, monkeypa
         pass
 
 
-def test_strict_never_masks_body_exception_and_notes_the_leak(fake_temp, monkeypatch):
+def test_strict_never_masks_body_exception_and_notes_the_leak(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(_path):
         raise PermissionError("held")
 
@@ -277,13 +277,13 @@ def test_strict_never_masks_body_exception_and_notes_the_leak(fake_temp, monkeyp
     assert any(str(d) in n for n in ei.value.__notes__)
 
 
-def test_strict_clean_removal_is_silent(fake_temp):
+def test_strict_clean_removal_is_silent(fake_temp) -> None:
     with temp_layout.managed_temp_dir("strict-ok-", strict=True) as d:
         assert d.is_dir()
     assert not d.exists()
 
 
-def test_mkdtemp_in_none_parent_is_managed_run_temp_never_bare_temp(fake_temp):
+def test_mkdtemp_in_none_parent_is_managed_run_temp_never_bare_temp(fake_temp) -> None:
     d = temp_layout.mkdtemp_in("nop-", None)
     run_temp = fake_temp / "coordinator" / "_fleet" / "run-temp"
     assert d.parent == run_temp
@@ -292,13 +292,13 @@ def test_mkdtemp_in_none_parent_is_managed_run_temp_never_bare_temp(fake_temp):
     temp_layout._rmtree_strict(d)
 
 
-def test_temp_dir_in_none_parent_lands_under_managed_root(fake_temp):
+def test_temp_dir_in_none_parent_lands_under_managed_root(fake_temp) -> None:
     with temp_layout.temp_dir_in("tdn-", None) as d:
         assert d.parent == fake_temp / "coordinator" / "_fleet" / "run-temp"
     assert not d.exists()
 
 
-def test_managed_dir_does_not_renest_the_skeleton_inside_a_session_dir(fake_temp, monkeypatch):
+def test_managed_dir_does_not_renest_the_skeleton_inside_a_session_dir(fake_temp, monkeypatch: pytest.MonkeyPatch) -> None:
     session = fake_temp / "coordinator" / "_fleet" / "run-temp" / "1-abcdef-pytest-session"
     session.mkdir(parents=True)
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(session))
@@ -307,6 +307,6 @@ def test_managed_dir_does_not_renest_the_skeleton_inside_a_session_dir(fake_temp
     assert not (session / "coordinator").exists()
 
 
-def test_managed_dir_outside_a_session_dir_still_uses_the_skeleton(fake_temp):
+def test_managed_dir_outside_a_session_dir_still_uses_the_skeleton(fake_temp) -> None:
     made = temp_layout.make_managed_temp_dir("y-")
     assert made.parent == fake_temp / "coordinator" / "_fleet" / "run-temp"

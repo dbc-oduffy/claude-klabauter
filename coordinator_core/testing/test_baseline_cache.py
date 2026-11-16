@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.testing import baseline_cache as bc
 from coordinator_core.testing import baseline_export as be
+from pathlib import Path
 
 DEAD = 999_999_991
 
@@ -15,28 +16,28 @@ def _sha(n: int) -> str:
 
 
 @pytest.fixture
-def top(tmp_path):
+def top(tmp_path: Path) -> Path:
     t = tmp_path / "top"
     t.mkdir()
     return t
 
 
 class Extractor:
-    def __init__(self):
+    def __init__(self) -> None:
         self.calls = 0
 
-    def __call__(self, partial):
+    def __call__(self, partial) -> None:
         self.calls += 1
         (partial / "pkg" / "sub").mkdir(parents=True)
         (partial / "pkg" / "sub" / "mod.py").write_text("x = 1\n")
         (partial / "top.txt").write_text("t\n")
 
 
-def _build(top, n, extractor=None):
+def _build(top, n, extractor=None) -> tuple[Path, bool]:
     return bc.ensure_entry(top, _sha(n), extractor or Extractor())
 
 
-def test_second_ensure_calls_the_extractor_zero_times(top):
+def test_second_ensure_calls_the_extractor_zero_times(top) -> None:
     ex = Extractor()
     entry, built = bc.ensure_entry(top, _sha(1), ex)
     assert built is True and entry == bc.entry_path(top, _sha(1))
@@ -45,7 +46,7 @@ def test_second_ensure_calls_the_extractor_zero_times(top):
     assert ex.calls == 1
 
 
-def test_entry_files_are_read_only(top):
+def test_entry_files_are_read_only(top) -> None:
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         pytest.skip("root bypasses file permissions")
     entry, _ = _build(top, 1)
@@ -54,7 +55,7 @@ def test_entry_files_are_read_only(top):
     assert not os.stat(entry / "top.txt").st_mode & stat.S_IWUSR
 
 
-def test_fourth_sha_evicts_lru_unleased_never_a_leased_one(top):
+def test_fourth_sha_evicts_lru_unleased_never_a_leased_one(top) -> None:
     for n in (1, 2, 3):
         _build(top, n)
     with bc.lease(bc.entry_path(top, _sha(1))):
@@ -67,7 +68,7 @@ def test_fourth_sha_evicts_lru_unleased_never_a_leased_one(top):
     assert not list(bc.cache_root(top).glob("*.lease-*"))
 
 
-def test_hit_refreshes_recency(top):
+def test_hit_refreshes_recency(top) -> None:
     for n in (1, 2, 3):
         _build(top, n)
     _build(top, 1)
@@ -76,14 +77,14 @@ def test_hit_refreshes_recency(top):
     assert (root / _sha(1)).is_dir() and not (root / _sha(2)).exists()
 
 
-def test_evict_never_removes_keep(top):
+def test_evict_never_removes_keep(top) -> None:
     for n in (1, 2, 3, 4):
         _build(top, n)
     assert bc.evict(top, keep=_sha(4)) == []
     assert bc.evict(top, keep=_sha(1)) == []
 
 
-def test_dead_pid_lease_is_reclaimed(top, monkeypatch):
+def test_dead_pid_lease_is_reclaimed(top, monkeypatch: pytest.MonkeyPatch) -> None:
     for n in (1, 2, 3):
         _build(top, n)
     root = bc.cache_root(top)
@@ -95,7 +96,7 @@ def test_dead_pid_lease_is_reclaimed(top, monkeypatch):
     assert not (root / _sha(1)).exists()
 
 
-def test_live_foreign_lease_blocks_eviction(top, monkeypatch):
+def test_live_foreign_lease_blocks_eviction(top, monkeypatch: pytest.MonkeyPatch) -> None:
     for n in (1, 2, 3):
         _build(top, n)
     root = bc.cache_root(top)
@@ -105,7 +106,7 @@ def test_live_foreign_lease_blocks_eviction(top, monkeypatch):
     assert (root / _sha(1)).is_dir() and not (root / _sha(2)).exists()
 
 
-def test_dead_pid_partial_is_removed(top, monkeypatch):
+def test_dead_pid_partial_is_removed(top, monkeypatch: pytest.MonkeyPatch) -> None:
     root = bc.cache_root(top)
     stale = root / f"{_sha(9)}.partial-{DEAD}"
     (stale / "d").mkdir(parents=True)
@@ -117,7 +118,7 @@ def test_dead_pid_partial_is_removed(top, monkeypatch):
     assert not stale.exists()
 
 
-def test_failed_extract_leaves_no_partial_and_no_entry(top):
+def test_failed_extract_leaves_no_partial_and_no_entry(top) -> None:
     def boom(partial):
         (partial / "f").write_text("x")
         raise be.ExportError("nope")
@@ -127,11 +128,11 @@ def test_failed_extract_leaves_no_partial_and_no_entry(top):
     assert os.listdir(bc.cache_root(top)) == []
 
 
-def test_lost_publish_race_leaves_one_entry(top):
+def test_lost_publish_race_leaves_one_entry(top) -> None:
     sha = _sha(1)
     root = bc.cache_root(top)
 
-    def racing(partial):
+    def racing(partial) -> None:
         (partial / "mine").write_text("loser")
         winner = root / sha
         winner.mkdir()
@@ -144,14 +145,14 @@ def test_lost_publish_race_leaves_one_entry(top):
     assert [n for n in os.listdir(root) if n.startswith(sha) and "." not in n] == [sha]
 
 
-def test_read_only_marking_never_alters_a_file_behind_a_data_dirs_link(top, tmp_path):
+def test_read_only_marking_never_alters_a_file_behind_a_data_dirs_link(top, tmp_path: Path) -> None:
     live = tmp_path / "live"
     (live / "state").mkdir(parents=True)
     keep = live / "state" / "live.txt"
     keep.write_text("live")
     before = os.stat(keep).st_mode
 
-    def with_link(partial):
+    def with_link(partial) -> None:
         (partial / "src.py").write_text("x")
         be.link(str(live), partial, ("state",))
 
@@ -167,14 +168,14 @@ def test_read_only_marking_never_alters_a_file_behind_a_data_dirs_link(top, tmp_
     assert os.stat(keep).st_mode == before
 
 
-def test_check_drift_reports_a_new_file_two_directories_deep(top):
+def test_check_drift_reports_a_new_file_two_directories_deep(top) -> None:
     entry, _ = _build(top, 1)
     assert bc.check_drift(entry) is False
     (entry / "pkg" / "sub" / "polluted.pyc").write_text("junk")
     assert bc.check_drift(entry) is True
 
 
-def test_check_drift_reports_a_removed_file_and_a_new_top_level_file(top):
+def test_check_drift_reports_a_removed_file_and_a_new_top_level_file(top) -> None:
     entry, _ = _build(top, 1)
     (entry / "top-new.txt").write_text("n")
     assert bc.check_drift(entry) is True
@@ -185,13 +186,13 @@ def test_check_drift_reports_a_removed_file_and_a_new_top_level_file(top):
     assert bc.check_drift(entry2) is True
 
 
-def test_check_drift_is_true_when_unverifiable(top):
+def test_check_drift_is_true_when_unverifiable(top) -> None:
     entry, _ = _build(top, 1)
     bc._manifest(entry).unlink()
     assert bc.check_drift(entry) is True
 
 
-def test_lease_is_reentrant_within_a_process(top):
+def test_lease_is_reentrant_within_a_process(top) -> None:
     entry = bc.entry_path(top, _sha(1))
     with bc.lease(entry) as path:
         with bc.lease(entry):

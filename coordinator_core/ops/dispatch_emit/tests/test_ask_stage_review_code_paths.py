@@ -5,6 +5,7 @@ from __future__ import annotations
 from coordinator_core.ops.dispatch_emit import review_floor
 from coordinator_core.ops.dispatch_emit.ask_contract import StageManifest
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
+from pathlib import Path
 
 PLAN_REL = "docs/plans/2026-10-01-fixture.md"
 
@@ -24,20 +25,20 @@ def _stage(tmp_path, writes):
     return stage(tmp_path, run_id="r1", plan_rel=PLAN_REL)
 
 
-def test_code_run_carries_code_paths(tmp_path):
+def test_code_run_carries_code_paths(tmp_path: Path) -> None:
     m = _stage(tmp_path, ["pkg/a.py", "pkg/b.py"])
     assert {"pkg/a.py", "pkg/b.py"} <= set(m.review_code_paths)
     assert set(m.review_code_paths) == set(review_floor.code_paths(m.review_declared_paths))
     assert m.to_json()[review_floor.MANIFEST_KEY] == list(m.review_code_paths)
 
 
-def test_docs_only_run_carries_no_code_paths(tmp_path):
+def test_docs_only_run_carries_no_code_paths(tmp_path: Path) -> None:
     m = _stage(tmp_path, ["docs/x/notes.md"])
     assert m.review_code_paths == ()
     assert m.to_json()[review_floor.MANIFEST_KEY] == []
 
 
-def test_round_trip_and_older_manifest_without_key(tmp_path):
+def test_round_trip_and_older_manifest_without_key(tmp_path: Path) -> None:
     m = _stage(tmp_path, ["pkg/a.py"])
     assert StageManifest.from_json(m.to_json()).review_code_paths == m.review_code_paths
     older = {k: v for k, v in m.to_json().items() if k != review_floor.MANIFEST_KEY}

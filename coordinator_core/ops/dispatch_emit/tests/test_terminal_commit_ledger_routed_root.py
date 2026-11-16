@@ -10,13 +10,14 @@ import yaml
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+from pathlib import Path
 
 RUN = "ask-20261014T000000-abc123"
 REL = "state/sizings/2026-10-14-routed.yaml"
 
 
 @pytest.fixture
-def run(tmp_path):
+def run(tmp_path: Path) -> tuple[Path, Path]:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     doc = {
@@ -43,7 +44,7 @@ def _gate(run, verdict, manifest=None):
     return tc._ledger_gate(run[0], run[1], verdict, manifest)[0]
 
 
-def test_engine_routed_item_judged_at_the_cwd_is_refused(run, tmp_path):
+def test_engine_routed_item_judged_at_the_cwd_is_refused(run, tmp_path: Path) -> None:
     engine = (tmp_path / "engine").as_posix()
     manifest = _manifest(run[1], engine)
     refusal = _gate(run, {"items": [{"id": "R1", "status": "met", "wired": True, "root_read": run[0].as_posix()}]}, manifest)
@@ -51,14 +52,14 @@ def test_engine_routed_item_judged_at_the_cwd_is_refused(run, tmp_path):
     assert "owed the engine root" in refusal["ledger_failures"][0]["reason"]
 
 
-def test_engine_routed_item_judged_at_the_engine_root_passes(run, tmp_path):
+def test_engine_routed_item_judged_at_the_engine_root_passes(run, tmp_path: Path) -> None:
     engine = tmp_path / "engine"
     engine.mkdir()
     manifest = _manifest(run[1], engine.as_posix())
     assert _gate(run, {"items": [{"id": "R1", "status": "met", "wired": True, "root_read": [str(engine)]}]}, manifest) is None
 
 
-def test_no_manifest_or_unreadable_manifest_is_the_cwd_only_gate(run):
+def test_no_manifest_or_unreadable_manifest_is_the_cwd_only_gate(run) -> None:
     verdict = {"items": [{"id": "R1", "status": "met", "wired": True}]}
     assert _gate(run, verdict) is None
     bad = run[1] / "manifest.json"

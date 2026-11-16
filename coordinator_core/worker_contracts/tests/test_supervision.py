@@ -8,10 +8,11 @@ from types import SimpleNamespace
 import pytest
 
 from coordinator_core.worker_contracts import worker
+from pathlib import Path
 
 
 @pytest.fixture
-def admitted(monkeypatch, tmp_path):
+def admitted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     events = []
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     monkeypatch.setattr(worker.slot_grant, "check_slot_grant", lambda *a, **kw: (True, {}))
@@ -34,7 +35,7 @@ ASSIGNMENT = {"session_id": "parent", "run": "review", "declared_peak_mb": 1024}
 @pytest.mark.parametrize("provider,identity", [("openai", "codex"), ("anthropic", "claude"),
                                                ("google", "agy"), ("xai", "grok"),
                                                ("mistral", "mistral"), ("deepseek", "deepseek")])
-def test_six_real_provider_children_receive_identity_and_fresh_session_environment(tmp_path, admitted, provider, identity):
+def test_six_real_provider_children_receive_identity_and_fresh_session_environment(tmp_path: Path, admitted, provider, identity) -> None:
     script = "import json,os; print(json.dumps({k:v for k,v in os.environ.items() if k in ['COORDINATOR_AGENT_PROVIDER','CODEX_THREAD_ID','CLAUDE_SESSION_ID','CLAUDE_CODE_SESSION_ID','COORDINATOR_SESSION_ID']}))"
     output = tmp_path / "env.json"
     with output.open("w", encoding="utf-8") as sink:
@@ -48,7 +49,7 @@ def test_six_real_provider_children_receive_identity_and_fresh_session_environme
 
 
 @pytest.mark.parametrize("stage", ["spawn", "callback", "start-refused", "start-raises", "communicate"])
-def test_primary_failure_reaps_child_and_runs_all_cleanup(tmp_path, monkeypatch, admitted, stage):
+def test_primary_failure_reaps_child_and_runs_all_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, admitted, stage) -> None:
     class Process:
         pid = 456
         returncode = 0
@@ -56,7 +57,7 @@ def test_primary_failure_reaps_child_and_runs_all_cleanup(tmp_path, monkeypatch,
         def kill(self):
             admitted.append("kill")
             raise ProcessLookupError("already exited")
-        def communicate(self, prompt=None):
+        def communicate(self, prompt=None) -> None:
             self.calls += 1
             if stage == "communicate" and self.calls == 1:
                 raise RuntimeError("primary")
@@ -65,7 +66,7 @@ def test_primary_failure_reaps_child_and_runs_all_cleanup(tmp_path, monkeypatch,
         if stage == "spawn":
             raise RuntimeError("primary")
         return process
-    def callback(pid):
+    def callback(pid) -> None:
         if stage == "callback":
             raise RuntimeError("primary")
     original_post = worker.admission_post.post
@@ -85,7 +86,7 @@ def test_primary_failure_reaps_child_and_runs_all_cleanup(tmp_path, monkeypatch,
         assert any(isinstance(e, tuple) and e[0] == "END" for e in admitted)
 
 
-def test_cleanup_failures_do_not_mask_success_or_skip_remaining_legs(tmp_path, monkeypatch, admitted):
+def test_cleanup_failures_do_not_mask_success_or_skip_remaining_legs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, admitted) -> None:
     class Process:
         pid = 456
         returncode = 7
@@ -102,7 +103,7 @@ def test_cleanup_failures_do_not_mask_success_or_skip_remaining_legs(tmp_path, m
     assert any(isinstance(e, tuple) and e[0] == "END" for e in admitted)
 
 
-def test_registered_start_worker_request_runs_shared_launch_and_returns_result(tmp_path, monkeypatch, admitted):
+def test_registered_start_worker_request_runs_shared_launch_and_returns_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, admitted) -> None:
     from pathlib import Path
     from coordinator_core.ops import codex_runner as operations
     from coordinator_core.codex_runner.__main__ import run_worker

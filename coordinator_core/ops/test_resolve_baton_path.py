@@ -9,6 +9,7 @@ from coordinator_core.win_portability import (
     no_console_creationflags,
     no_console_passthrough_kwargs,
 )
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -31,7 +32,7 @@ def _init_repo(path):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path):
     return _init_repo(tmp_path / "repo")
 
 
@@ -45,7 +46,7 @@ def _rev_parse_toplevel(cwd):
     ).stdout.rstrip("\n")
 
 
-def test_baton_in_repo_subdir(repo):
+def test_baton_in_repo_subdir(repo) -> None:
     baton_dir = repo / "state" / "handoffs"
     baton_dir.mkdir(parents=True)
     baton = baton_dir / "2026-07-22_baton.md"
@@ -59,7 +60,7 @@ def test_baton_in_repo_subdir(repo):
     assert result["git_relative_path"] == "state/handoffs/2026-07-22_baton.md"
 
 
-def test_sharded_baton_cited_by_its_flat_path_resolves_to_the_shard(repo):
+def test_sharded_baton_cited_by_its_flat_path_resolves_to_the_shard(repo) -> None:
     shard = repo / "state" / "handoffs" / "2026-07"
     shard.mkdir(parents=True)
     baton = shard / "2026-07-22_baton.md"
@@ -72,7 +73,7 @@ def test_sharded_baton_cited_by_its_flat_path_resolves_to_the_shard(repo):
     assert result["git_relative_path"] == "state/handoffs/2026-07/2026-07-22_baton.md"
 
 
-def test_sharded_baton_cited_by_shard_path_is_unchanged(repo):
+def test_sharded_baton_cited_by_shard_path_is_unchanged(repo) -> None:
     shard = repo / "state" / "handoffs" / "2026-07"
     shard.mkdir(parents=True)
     baton = shard / "2026-07-22_baton.md"
@@ -83,7 +84,7 @@ def test_sharded_baton_cited_by_shard_path_is_unchanged(repo):
     assert result["git_relative_path"] == "state/handoffs/2026-07/2026-07-22_baton.md"
 
 
-def test_missing_baton_in_both_places_keeps_the_cited_flat_path(repo):
+def test_missing_baton_in_both_places_keeps_the_cited_flat_path(repo) -> None:
     (repo / "state" / "handoffs").mkdir(parents=True)
     ghost = repo / "state" / "handoffs" / "2026-07-22_ghost.md"
 
@@ -92,7 +93,7 @@ def test_missing_baton_in_both_places_keeps_the_cited_flat_path(repo):
     assert result["git_relative_path"] == "state/handoffs/2026-07-22_ghost.md"
 
 
-def test_baton_at_repo_root_empty_prefix(repo):
+def test_baton_at_repo_root_empty_prefix(repo) -> None:
     baton = repo / "baton.md"
     baton.write_text("baton\n", encoding="utf-8")
 
@@ -102,7 +103,7 @@ def test_baton_at_repo_root_empty_prefix(repo):
     assert result["git_relative_path"] == "baton.md"
 
 
-def test_relative_path_forms_resolve(repo, monkeypatch):
+def test_relative_path_forms_resolve(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     baton_dir = repo / "docs"
     baton_dir.mkdir()
     baton = baton_dir / "note.md"
@@ -116,7 +117,7 @@ def test_relative_path_forms_resolve(repo, monkeypatch):
     assert result["git_relative_path"] == "docs/note.md"
 
 
-def test_tilde_expansion_applied(repo, monkeypatch):
+def test_tilde_expansion_applied(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", str(repo))
     monkeypatch.setenv("USERPROFILE", str(repo))
     baton = repo / "b.md"
@@ -128,7 +129,7 @@ def test_tilde_expansion_applied(repo, monkeypatch):
     assert result["abs_path"] == str(baton.resolve())
 
 
-def test_outside_any_repo_structured_error(tmp_path):
+def test_outside_any_repo_structured_error(tmp_path: Path) -> None:
     loose = tmp_path / "not-a-repo" / "baton.md"
     loose.parent.mkdir(parents=True)
     loose.write_text("x\n", encoding="utf-8")
@@ -139,7 +140,7 @@ def test_outside_any_repo_structured_error(tmp_path):
     assert "not inside any git repository" in result["error"]
 
 
-def test_missing_parent_dir_structured_error(tmp_path):
+def test_missing_parent_dir_structured_error(tmp_path: Path) -> None:
     ghost = tmp_path / "no-such-dir" / "baton.md"
 
     result = _resolve_baton_path_and_repo({"baton_path": str(ghost)})
@@ -147,13 +148,13 @@ def test_missing_parent_dir_structured_error(tmp_path):
     assert set(result.keys()) == {"error"}
 
 
-def test_missing_param_structured_error():
+def test_missing_param_structured_error() -> None:
     assert "error" in _resolve_baton_path_and_repo({})
     assert "error" in _resolve_baton_path_and_repo({"baton_path": ""})
     assert "error" in _resolve_baton_path_and_repo({"baton_path": 42})
 
 
-def test_double_invocation_identical_result(repo):
+def test_double_invocation_identical_result(repo) -> None:
     baton_dir = repo / "state"
     baton_dir.mkdir()
     baton = baton_dir / "baton.md"
@@ -167,7 +168,7 @@ def test_double_invocation_identical_result(repo):
     assert first == second
 
 
-def test_registered_under_op_key():
+def test_registered_under_op_key() -> None:
     from coordinator_core.ipc import get_op_handler
 
     assert get_op_handler("baton.resolve_path_and_repo") is _resolve_baton_path_and_repo

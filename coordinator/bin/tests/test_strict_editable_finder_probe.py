@@ -16,11 +16,16 @@ import importlib.util
 import json
 import sys
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "strict-editable-finder-probe.py"
 
 
-def _load():
+def _load() -> ModuleType:
     spec = importlib.util.spec_from_file_location("strict_editable_finder_probe", _SCRIPT)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -41,7 +46,7 @@ def _write_pth(site_dir: Path, name: str, body: str) -> Path:
 # --- AC4 classification fixtures --------------------------------------------------------------
 
 
-def test_import_finder_pth_is_classified_import_finder(tmp_path):
+def test_import_finder_pth_is_classified_import_finder(tmp_path: Path) -> None:
     site_dir = tmp_path / "site-packages"
     _write_pth(
         site_dir,
@@ -56,7 +61,7 @@ def test_import_finder_pth_is_classified_import_finder(tmp_path):
     ]
 
 
-def test_compat_pth_pointing_at_repo_root_is_repo_root_on_path(tmp_path):
+def test_compat_pth_pointing_at_repo_root_is_repo_root_on_path(tmp_path: Path) -> None:
     site_dir = tmp_path / "site-packages"
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
@@ -70,7 +75,7 @@ def test_compat_pth_pointing_at_repo_root_is_repo_root_on_path(tmp_path):
     ]
 
 
-def test_compat_pth_pointing_at_src_with_no_project_file_is_clean(tmp_path):
+def test_compat_pth_pointing_at_src_with_no_project_file_is_clean(tmp_path: Path) -> None:
     site_dir = tmp_path / "site-packages"
     src_dir = tmp_path / "repo" / "src"
     src_dir.mkdir(parents=True)
@@ -81,7 +86,7 @@ def test_compat_pth_pointing_at_src_with_no_project_file_is_clean(tmp_path):
     assert findings == []
 
 
-def test_distutils_precedence_pth_is_never_flagged(tmp_path):
+def test_distutils_precedence_pth_is_never_flagged(tmp_path: Path) -> None:
     site_dir = tmp_path / "site-packages"
     _write_pth(
         site_dir,
@@ -94,7 +99,7 @@ def test_distutils_precedence_pth_is_never_flagged(tmp_path):
     assert findings == []
 
 
-def test_plain_non_editable_pth_is_never_flagged(tmp_path):
+def test_plain_non_editable_pth_is_never_flagged(tmp_path: Path) -> None:
     site_dir = tmp_path / "site-packages"
     other_dir = tmp_path / "somewhere"
     other_dir.mkdir()
@@ -106,7 +111,7 @@ def test_plain_non_editable_pth_is_never_flagged(tmp_path):
     assert findings == []
 
 
-def test_compat_pth_relative_path_line_resolved_against_pth_parent_dir(tmp_path):
+def test_compat_pth_relative_path_line_resolved_against_pth_parent_dir(tmp_path: Path) -> None:
     """Sixth fixture (AC4's relative-resolution rule): a relative path line in a compat `.pth`
     resolves against the `.pth` file's OWN parent directory, not the cwd or the site dir's
     ancestor -- and every non-blank, non-#, non-import line is evaluated, not only the first."""
@@ -130,7 +135,7 @@ def test_compat_pth_relative_path_line_resolved_against_pth_parent_dir(tmp_path)
     ]
 
 
-def test_dist_name_with_internal_hyphen_extracted_correctly(tmp_path):
+def test_dist_name_with_internal_hyphen_extracted_correctly(tmp_path: Path) -> None:
     site_dir = tmp_path / "site-packages"
     _write_pth(
         site_dir,
@@ -147,7 +152,7 @@ def test_dist_name_with_internal_hyphen_extracted_correctly(tmp_path):
 # --- AC3: JSON shape and exit codes, driven through main(argv) in-process ----------------------
 
 
-def test_main_no_findings_exits_zero_and_prints_empty_findings(tmp_path, capsys):
+def test_main_no_findings_exits_zero_and_prints_empty_findings(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     site_dir = tmp_path / "site-packages"
     site_dir.mkdir()
 
@@ -158,7 +163,7 @@ def test_main_no_findings_exits_zero_and_prints_empty_findings(tmp_path, capsys)
     assert out == {"findings": []}
 
 
-def test_main_with_findings_exits_one_and_prints_them(tmp_path, capsys):
+def test_main_with_findings_exits_one_and_prints_them(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     site_dir = tmp_path / "site-packages"
     _write_pth(
         site_dir,
@@ -175,7 +180,7 @@ def test_main_with_findings_exits_one_and_prints_them(tmp_path, capsys):
     ]
 
 
-def test_main_multiple_site_dirs_scanned_together(tmp_path, capsys):
+def test_main_multiple_site_dirs_scanned_together(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     site_dir_a = tmp_path / "a"
     site_dir_b = tmp_path / "b"
     _write_pth(site_dir_a, "__editable__.pkga-1.0.pth", "import pkga_finder\n")
@@ -189,7 +194,7 @@ def test_main_multiple_site_dirs_scanned_together(tmp_path, capsys):
     assert dists == {"pkga", "pkgb"}
 
 
-def test_main_missing_site_dir_is_skipped_not_an_error(tmp_path, capsys):
+def test_main_missing_site_dir_is_skipped_not_an_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     missing = tmp_path / "does-not-exist"
 
     rc = probe.main(["--site-dir", str(missing)])
@@ -199,7 +204,7 @@ def test_main_missing_site_dir_is_skipped_not_an_error(tmp_path, capsys):
     assert out == {"findings": []}
 
 
-def test_module_is_inert_until_main_is_called():
+def test_module_is_inert_until_main_is_called() -> None:
     """Reaching here at all (via `_load()` above, which imports/execs the module for every other
     test in this file) is already the proof; this additionally confirms `main` is present and
     callable without having been invoked yet."""

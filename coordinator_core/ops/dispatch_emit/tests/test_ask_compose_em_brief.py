@@ -10,6 +10,7 @@ from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR, EmBrief
 from coordinator_core.ops.dispatch_emit.ask_compose import AskComposeRefused, compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from pathlib import Path
 
 pytestmark = pytest.mark.usefixtures("m_plus_known_arm")
 
@@ -66,21 +67,21 @@ def _agent_prompts(script: str) -> list[str]:
     return prompts
 
 
-def test_every_composed_agent_prompt_carries_the_brief():
+def test_every_composed_agent_prompt_carries_the_brief() -> None:
     script, _ = _compose(em_brief=_BRIEF, accept_pending=True)
     prompts = _agent_prompts(script)
     assert len(prompts) >= 9
     assert [p for p in prompts if EM_BRIEF_VAR not in p] == []
 
 
-def test_every_agent_prompt_on_a_sized_xs_script_carries_the_brief(monkeypatch):
+def test_every_agent_prompt_on_a_sized_xs_script_carries_the_brief(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "xs")
     script, _ = _compose(prompt=None, sizing_rel="state/sizings/x.yaml", em_brief=_BRIEF, preamble="pre")
     prompts = _agent_prompts(script)
     assert prompts and [p for p in prompts if EM_BRIEF_VAR not in p] == []
 
 
-def test_brief_is_declared_once_before_use_with_ask_agent_alias():
+def test_brief_is_declared_once_before_use_with_ask_agent_alias() -> None:
     script, seen = _compose(em_brief=_BRIEF)
     assert script.count("const _EM_BRIEF = ") == 1
     alias = "const _askAgent = agent;"
@@ -91,26 +92,26 @@ def test_brief_is_declared_once_before_use_with_ask_agent_alias():
     assert seen == [{"agent_prefix_var": EM_BRIEF_VAR}]
 
 
-def test_a_brief_script_with_no_blitz_fn_has_one_alias_and_no_rebind(monkeypatch):
+def test_a_brief_script_with_no_blitz_fn_has_one_alias_and_no_rebind(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "xs")
     script, _ = _compose(prompt=None, sizing_rel="state/sizings/x.yaml", em_brief=_BRIEF, preamble="pre")
     assert script.count("const _askAgent = agent;") == 1
     assert "const planBlitz = (() => {" not in script
 
 
-def test_a_blitz_script_without_a_brief_carries_no_alias_or_rebind():
+def test_a_blitz_script_without_a_brief_carries_no_alias_or_rebind() -> None:
     script, _ = _compose()
     assert "const planBlitz = (() => {" in script
     assert "const _askAgent = agent;" not in script
 
 
-def test_brief_literal_round_trips_quotes_backslashes_and_newlines():
+def test_brief_literal_round_trips_quotes_backslashes_and_newlines() -> None:
     script, _ = _compose(em_brief=_BRIEF)
     decl = next(line for line in script.splitlines() if "const _EM_BRIEF = " in line)
     assert "\\\\ the plan\\nline2" in decl and "it\\'s" in decl
 
 
-def test_without_a_brief_the_script_has_no_brief_surface_and_wrap_takes_no_kwarg():
+def test_without_a_brief_the_script_has_no_brief_surface_and_wrap_takes_no_kwarg() -> None:
     script, seen = _compose()
     assert "_EM_BRIEF" not in script and "_askAgent" not in script
     assert seen == [{}]
@@ -119,7 +120,7 @@ def test_without_a_brief_the_script_has_no_brief_surface_and_wrap_takes_no_kwarg
 _RB = "export const meta = { name: 'rb', description: 'd', phases: [{ title: 'RB' }] };\nreturn {};\n"
 
 
-def test_roadmap_arm_composes_with_a_brief_and_prefixes_the_roadmap_stage(monkeypatch):
+def test_roadmap_arm_composes_with_a_brief_and_prefixes_the_roadmap_stage(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "roadmap")
     script, _ = _compose(prompt=None, sizing_rel="state/sizings/x.yaml", em_brief=_BRIEF, roadmap_blitz_text=_RB)
     stage = script[script.index("async function roadmapBlitz(") :]
@@ -128,20 +129,20 @@ def test_roadmap_arm_composes_with_a_brief_and_prefixes_the_roadmap_stage(monkey
     assert "const _EM_BRIEF = " in script and script.index("const _EM_BRIEF = ") < script.index("phase('roadmap-blitz')")
 
 
-def test_roadmap_arm_with_a_brief_refuses_when_the_roadmap_stage_cannot_load(monkeypatch):
+def test_roadmap_arm_with_a_brief_refuses_when_the_roadmap_stage_cannot_load(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "roadmap")
     with pytest.raises(AskComposeRefused, match="roadmap stage cannot be embedded"):
         _compose(prompt=None, sizing_rel="state/sizings/x.yaml", em_brief=_BRIEF)
 
 
-def test_em_size_rides_every_gate_command_and_is_absent_without_one():
+def test_em_size_rides_every_gate_command_and_is_absent_without_one() -> None:
     sized, _ = _compose(em_size="M", accept_pending=True)
     assert 'em_size: "M"' in sized and '"em_size":"M"' in sized
     unsized, _ = _compose(accept_pending=True)
     assert "em_size" not in unsized
 
 
-def test_em_size_routes_a_roadmap_sizing_into_the_body_that_carries_it(monkeypatch):
+def test_em_size_routes_a_roadmap_sizing_into_the_body_that_carries_it(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "roadmap")
     script, _ = _compose(prompt=None, sizing_rel="state/sizings/x.yaml", em_size="M", roadmap_blitz_text=_RB)
     assert 'em_size: "M"' in script and "phase('roadmap-blitz')" in script
@@ -152,7 +153,7 @@ _SID = "sid-arrival-check"
 
 
 @pytest.fixture
-def raw_ask_repo(tmp_path, monkeypatch):
+def raw_ask_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     from coordinator_core.ops import baton_pm_turns as PT
     from coordinator_core.session_baton import store
 
@@ -177,7 +178,7 @@ def _emit(root, **over):
     return _dispatch_emit(params, repo_root=root)
 
 
-def test_a_digest_with_no_loaded_brief_refuses_naming_the_missing_em_context(raw_ask_repo):
+def test_a_digest_with_no_loaded_brief_refuses_naming_the_missing_em_context(raw_ask_repo) -> None:
     from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
     from coordinator_core.ops.sizing_intake_contract import em_context_digest
 
@@ -185,7 +186,7 @@ def test_a_digest_with_no_loaded_brief_refuses_naming_the_missing_em_context(raw
         _emit(raw_ask_repo, em_context_digest=em_context_digest(_CTX))
 
 
-def test_a_digest_beside_a_brief_without_the_matching_block_refuses(raw_ask_repo):
+def test_a_digest_beside_a_brief_without_the_matching_block_refuses(raw_ask_repo) -> None:
     from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused
     from coordinator_core.ops.sizing_intake_contract import em_context_digest, with_em_context
 
@@ -194,7 +195,7 @@ def test_a_digest_beside_a_brief_without_the_matching_block_refuses(raw_ask_repo
 
 
 @pytest.mark.parametrize("via_file", [False, True])
-def test_a_matching_digest_proceeds_inline_or_from_a_spilled_file(raw_ask_repo, via_file):
+def test_a_matching_digest_proceeds_inline_or_from_a_spilled_file(raw_ask_repo, via_file) -> None:
     from coordinator_core.ops.sizing_intake_contract import em_context_digest, with_em_context
 
     brief = with_em_context("prose first", _CTX)
@@ -208,5 +209,5 @@ def test_a_matching_digest_proceeds_inline_or_from_a_spilled_file(raw_ask_repo, 
     assert "path" in result, result
 
 
-def test_a_run_with_no_digest_is_unchecked(raw_ask_repo):
+def test_a_run_with_no_digest_is_unchecked(raw_ask_repo) -> None:
     assert "path" in _emit(raw_ask_repo)

@@ -20,12 +20,13 @@ import time
 import pytest
 
 from coordinator_core.warm import server, telemetry
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 class _FakeVersionState:
-    def __init__(self, *, server_sha: str = "deadbeef"):
+    def __init__(self, *, server_sha: str = "deadbeef") -> None:
         self.server_sha = server_sha
 
     def is_skewed(self, client_token: str) -> bool:
@@ -35,7 +36,7 @@ class _FakeVersionState:
         return self.is_skewed(client_token)
 
 
-def test_worker_pool_depth_reports_full_pool_size_on_fresh_boot():
+def test_worker_pool_depth_reports_full_pool_size_on_fresh_boot() -> None:
     """A freshly started pool of `WORKER_POOL_SIZE` workers reports 30 live
     threads -- the fresh-boot baseline `worker_pool_depth()` exists to
     measure against."""
@@ -49,9 +50,9 @@ def test_worker_pool_depth_reports_full_pool_size_on_fresh_boot():
     assert ctx.worker_pool_depth() == server.WORKER_POOL_SIZE == 30
 
 
-def test_worker_pool_depth_detects_a_guard_bypassing_die_off(monkeypatch):
+def test_worker_pool_depth_detects_a_guard_bypassing_die_off(monkeypatch: pytest.MonkeyPatch) -> None:
 
-    def _fake_handle_connection(io, **kwargs):
+    def _fake_handle_connection(io, **kwargs) -> None:
         if io == "die":
             raise SystemExit("simulated death route past the except Exception guard")
 
@@ -74,7 +75,7 @@ def test_worker_pool_depth_detects_a_guard_bypassing_die_off(monkeypatch):
     assert ctx.worker_pool_depth() == 2
 
 
-def test_idle_tick_records_worker_pool_depth_through_telemetry(tmp_path, monkeypatch):
+def test_idle_tick_records_worker_pool_depth_through_telemetry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm import idle, lifecycle
 
     lifecycle.reset_shutdown_guard_for_test()

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -10,7 +11,7 @@ from coordinator_core.bash_guards import block_subagent_destructive_action as gu
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     (root / ".git").mkdir(parents=True)
     return root
@@ -39,7 +40,7 @@ def _run(command, cwd):
         "export GIT_INDEX_FILE=$PWD/.git/idx-X && git update-index --add --cacheinfo 100644,abc123,a/b.py",
     ],
 )
-def test_private_index_hand_land_is_allowed(repo, command):
+def test_private_index_hand_land_is_allowed(repo, command) -> None:
     assert _run(command, repo) is None
 
 
@@ -52,5 +53,5 @@ def test_private_index_hand_land_is_allowed(repo, command):
         "GIT_INDEX_FILE=.git/idx-X git read-tree -u HEAD",
     ],
 )
-def test_shared_index_or_worktree_write_stays_denied(repo, command):
+def test_shared_index_or_worktree_write_stays_denied(repo, command) -> None:
     assert _run(command, repo) is not None

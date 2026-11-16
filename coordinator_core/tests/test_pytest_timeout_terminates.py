@@ -10,6 +10,7 @@ import sys
 import time
 
 import pytest
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -21,7 +22,7 @@ _SPIN = "def test_spin():\n    while True:\n        sum(range(1000))\n"
 
 @pytest.mark.deliberate_wall_clock(reason="the assertion IS that a hung run ends in real time; process time of a killed child is not observable")
 @pytest.mark.parametrize("extra", [[], ["-n", "1"]], ids=["plain", "xdist"])
-def test_timeout_ends_a_cpu_bound_test(tmp_path, extra):
+def test_timeout_ends_a_cpu_bound_test(tmp_path: Path, extra) -> None:
     (tmp_path / "pytest.ini").write_text("[pytest]\n")
     (tmp_path / "test_spin.py").write_text(_SPIN)
     started = time.monotonic()

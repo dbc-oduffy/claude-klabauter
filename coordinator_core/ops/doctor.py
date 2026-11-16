@@ -1305,6 +1305,9 @@ def run_doctor(
     report.layers.append(_check_install_drift())
     report.layers.append(_check_spotlight_exclusion())
     report.layers.append(_check_box_identity())
+    from coordinator_core.ops.doctor_release_age import _check_release_age
+
+    report.layers.append(_check_release_age())
     from coordinator_core.ops.doctor_staged_behind import staged_behind_layer
 
     report.layers.append(staged_behind_layer())

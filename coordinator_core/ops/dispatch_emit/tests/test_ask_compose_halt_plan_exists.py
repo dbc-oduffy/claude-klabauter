@@ -19,9 +19,20 @@ def _halted(plan: str) -> dict:
     }
 
 
-def test_moved_plan_halt_names_no_missing_path(tmp_path):
+def test_moved_plan_halt_names_the_file_that_exists(tmp_path):
     (tmp_path / "docs/plans").mkdir(parents=True)
     (tmp_path / _WRITTEN).write_text("plan\n", encoding="utf-8")
+
+    got = c.halted_naming_existing_plan(tmp_path, _halted(_MINTED))
+
+    assert got[c.HALT_PLAN_FIELD] == _WRITTEN
+    assert _MINTED not in got["next_action"]
+    assert _WRITTEN in got["next_action"]
+    assert f"{c.HALT_PLAN_TRAILER}: {_WRITTEN}" in c.halted_record_message("r", got)
+
+
+def test_plan_on_neither_form_halt_names_no_missing_path(tmp_path):
+    (tmp_path / "docs/plans").mkdir(parents=True)
 
     got = c.halted_naming_existing_plan(tmp_path, _halted(_MINTED))
 

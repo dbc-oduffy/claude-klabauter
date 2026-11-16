@@ -36,24 +36,24 @@ from coordinator_core.host_hooks.contract import (
 )
 
 
-def test_host_event_is_frozen_with_payload_session():
+def test_host_event_is_frozen_with_payload_session() -> None:
     ev = HostEvent("codex", "PreToolUse", "s-1", "Bash", {"command": "ls"}, "/w")
     assert ev.session_id == "s-1"
     with pytest.raises(dataclasses.FrozenInstanceError):
         ev.session_id = "other"  # type: ignore[misc]
 
 
-def test_neutral_fallback_codex_is_empty_object():
+def test_neutral_fallback_codex_is_empty_object() -> None:
     assert neutral_fallback("codex") == {}
 
 
-def test_neutral_fallback_agy_asks_and_is_never_empty():
+def test_neutral_fallback_agy_asks_and_is_never_empty() -> None:
     fb = neutral_fallback("agy")
     assert fb["decision"] == "ask"
     assert fb != {}
 
 
-def test_grok_is_a_host_and_its_neutral_fallback_is_empty_object():
+def test_grok_is_a_host_and_its_neutral_fallback_is_empty_object() -> None:
     assert "grok" in HOSTS
     assert HOST_GROK == "grok"
     assert neutral_fallback("grok") == {}
@@ -61,27 +61,27 @@ def test_grok_is_a_host_and_its_neutral_fallback_is_empty_object():
     assert neutral_fallback("grok") == {}
 
 
-def test_neutral_fallback_returns_fresh_dict():
+def test_neutral_fallback_returns_fresh_dict() -> None:
     a = neutral_fallback("codex")
     a["x"] = 1
     assert neutral_fallback("codex") == {}
 
 
-def test_neutral_fallback_unknown_host_refuses():
+def test_neutral_fallback_unknown_host_refuses() -> None:
     with pytest.raises(ValueError):
         neutral_fallback("claude")
 
 
-def test_adapter_protocol_accepts_conforming_class_and_rejects_other():
+def test_adapter_protocol_accepts_conforming_class_and_rejects_other() -> None:
     class Good:
-        def adapt_event(self, payload):
+        def adapt_event(self, payload) -> HostEvent:
             return HostEvent("codex", "PreToolUse", payload["session_id"])
 
         def render(self, host_event, verdict):
             return {}
 
     class Bad:
-        def adapt_event(self, payload):
+        def adapt_event(self, payload) -> None:
             return None
 
     assert isinstance(Good(), Adapter)

@@ -7,6 +7,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
 from coordinator_core.ops.tests.test_review_stamp_superseding_record import _git, _record, _repo
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -26,14 +27,14 @@ def _delivery(repo, rel):
     return rd._frontmatter(repo / rel)["delivery"]
 
 
-def _record_pass(repo, rel, head, **kw):
+def _record_pass(repo, rel, head, **kw) -> str:
     return rd.record_delivery_verdict(
         repo_root=repo, supersedes=rel, plan_id="pln-example-abc123", head_sha=head,
         verdict="PASS", unbacked=[], **kw,
     )
 
 
-def test_pass_for_a_not_built_part_is_recorded_as_fail_with_per_part_entries(tmp_path):
+def test_pass_for_a_not_built_part_is_recorded_as_fail_with_per_part_entries(tmp_path: Path) -> None:
     repo, _, rel, head, plan = _setup(tmp_path)
     out = _record_pass(repo, rel, head, plan_path=str(plan))
     delivery = _delivery(repo, out)
@@ -44,7 +45,7 @@ def test_pass_for_a_not_built_part_is_recorded_as_fail_with_per_part_entries(tmp
     ]
 
 
-def test_caller_unbacked_list_is_not_mutated(tmp_path):
+def test_caller_unbacked_list_is_not_mutated(tmp_path: Path) -> None:
     repo, _, rel, head, plan = _setup(tmp_path)
     mine = [{"claim": "c", "anchor": "a"}]
     rd.record_delivery_verdict(
@@ -54,18 +55,18 @@ def test_caller_unbacked_list_is_not_mutated(tmp_path):
     assert mine == [{"claim": "c", "anchor": "a"}]
 
 
-def test_all_wired_plan_keeps_pass(tmp_path):
+def test_all_wired_plan_keeps_pass(tmp_path: Path) -> None:
     repo, _, rel, head, plan = _setup(tmp_path, wiring="")
     assert _delivery(repo, _record_pass(repo, rel, head, plan_path=str(plan)))["verdict"] == "PASS"
 
 
-def test_absent_or_unresolvable_plan_path_keeps_pass(tmp_path):
+def test_absent_or_unresolvable_plan_path_keeps_pass(tmp_path: Path) -> None:
     repo, _, rel, head, _ = _setup(tmp_path)
     assert _delivery(repo, _record_pass(repo, rel, head))["verdict"] == "PASS"
     assert _delivery(repo, _record_pass(repo, rel, head, plan_path="nope.md"))["verdict"] == "PASS"
 
 
-def test_a_requested_fail_is_untouched(tmp_path):
+def test_a_requested_fail_is_untouched(tmp_path: Path) -> None:
     repo, _, rel, head, plan = _setup(tmp_path)
     out = rd.record_delivery_verdict(
         repo_root=repo, supersedes=rel, plan_id=None, head_sha=head, verdict="FAIL",
@@ -74,7 +75,7 @@ def test_a_requested_fail_is_untouched(tmp_path):
     assert _delivery(repo, out)["unbacked"] == [{"claim": "c", "anchor": "a"}]
 
 
-def test_cli_result_json_threads_the_plan_path(tmp_path, capsys):
+def test_cli_result_json_threads_the_plan_path(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo, record, rel, head, plan = _setup(tmp_path)
     result = {
         "verdict": "PASS", "claims_unbacked": [],

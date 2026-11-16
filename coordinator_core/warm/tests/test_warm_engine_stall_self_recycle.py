@@ -222,12 +222,12 @@ def test_posix_engine_boost_is_recorded_and_workers_restore_the_base(monkeypatch
     monkeypatch.setattr(server.os, "PRIO_PROCESS", 0, raising=False)
     monkeypatch.setattr(server.os, "getpriority", lambda *_a: 0, raising=False)
     monkeypatch.setattr(server.os, "setpriority", lambda *a: calls.append(a), raising=False)
-    monkeypatch.setenv(server._BASE_NICE_ENV, "unset")
+    monkeypatch.setenv(server._BASE_NICE_ENV, "0")
 
     assert server._raise_engine_priority() is True
     assert calls[-1] == (0, 0, -5)
-    server._restore_worker_priority()
-    assert calls[-1] == (0, 0, 0)
+    assert server._raise_worker_priority() is True
+    assert calls[-1] == (0, 0, -2)
 
 
 def test_priority_boost_failure_never_raises(monkeypatch):

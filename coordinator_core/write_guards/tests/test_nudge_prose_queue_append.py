@@ -6,6 +6,7 @@ import os
 import pytest
 
 from coordinator_core.write_guards import nudge_prose_queue_append as guard
+from pathlib import Path
 
 
 def _payload(tool_name, tool_input, cwd=None):
@@ -39,7 +40,7 @@ def _make_queue(tmp_path, basename, body):
 
 
 class TestAppendAdvisoryFires:
-    def test_fires_on_write_adding_a_dated_row(self, tmp_path):
+    def test_fires_on_write_adding_a_dated_row(self, tmp_path: Path) -> None:
         target = _make_queue(tmp_path, "bug-backlog.md", "- 2026-07-01 | old | entry\n")
         result = guard.check(
             _payload(
@@ -54,7 +55,7 @@ class TestAppendAdvisoryFires:
         assert "coordinator-invoke fleet.migrate_prose_queue" in text
         assert "--schema bug-backlog" in text
 
-    def test_fires_on_edit_adding_a_dated_row(self, tmp_path):
+    def test_fires_on_edit_adding_a_dated_row(self, tmp_path: Path) -> None:
         target = _make_queue(tmp_path, "debt-backlog.md", "- 2026-07-01 | old | entry\n")
         result = guard.check(
             _payload(
@@ -68,7 +69,7 @@ class TestAppendAdvisoryFires:
         )
         _advisory_text(result)
 
-    def test_fires_on_multiedit_adding_a_dated_row(self, tmp_path):
+    def test_fires_on_multiedit_adding_a_dated_row(self, tmp_path: Path) -> None:
         target = _make_queue(tmp_path, "improvement-queue.md", "- 2026-07-01 | old | entry\n")
         result = guard.check(
             _payload(
@@ -88,7 +89,7 @@ class TestAppendAdvisoryFires:
 
 
 class TestAppendAdvisorySilent:
-    def test_silent_on_prune_row_count_decreases(self, tmp_path):
+    def test_silent_on_prune_row_count_decreases(self, tmp_path: Path) -> None:
         target = _make_queue(
             tmp_path,
             "bug-backlog.md",
@@ -105,7 +106,7 @@ class TestAppendAdvisorySilent:
         )
         assert result is None
 
-    def test_silent_on_pure_reformat_count_unchanged(self, tmp_path):
+    def test_silent_on_pure_reformat_count_unchanged(self, tmp_path: Path) -> None:
         target = _make_queue(tmp_path, "bug-backlog.md", "- 2026-07-01 | old | entry\n")
         result = guard.check(
             _payload(
@@ -118,7 +119,7 @@ class TestAppendAdvisorySilent:
         )
         assert result is None
 
-    def test_silent_on_closure_deletion(self, tmp_path):
+    def test_silent_on_closure_deletion(self, tmp_path: Path) -> None:
         target = _make_queue(
             tmp_path,
             "debt-backlog.md",
@@ -136,7 +137,7 @@ class TestAppendAdvisorySilent:
         )
         assert result is None
 
-    def test_silent_on_edit_touching_non_row_prose(self, tmp_path):
+    def test_silent_on_edit_touching_non_row_prose(self, tmp_path: Path) -> None:
         target = _make_queue(
             tmp_path, "bug-backlog.md", "# Bug backlog\n\n- 2026-07-01 | old | entry\n"
         )
@@ -152,7 +153,7 @@ class TestAppendAdvisorySilent:
         )
         assert result is None
 
-    def test_silent_on_yaml_directory_write(self, tmp_path):
+    def test_silent_on_yaml_directory_write(self, tmp_path: Path) -> None:
         state_dir = tmp_path / "state" / "improvement-queue"
         state_dir.mkdir(parents=True)
         target = state_dir / "2026-07-31-entry.yaml"
@@ -168,7 +169,7 @@ class TestAppendAdvisorySilent:
         )
         assert result is None
 
-    def test_silent_when_target_does_not_exist(self, tmp_path):
+    def test_silent_when_target_does_not_exist(self, tmp_path: Path) -> None:
         target = tmp_path / "state" / "bug-backlog.md"
         result = guard.check(
             _payload(
@@ -181,7 +182,7 @@ class TestAppendAdvisorySilent:
         )
         assert result is None
 
-    def test_silent_when_punt_env_set_non_trivial(self, tmp_path):
+    def test_silent_when_punt_env_set_non_trivial(self, tmp_path: Path) -> None:
         os.environ[guard._ESCAPE_HATCH_ENV_VAR] = "repo not migrating yet, tracked separately"
         target = _make_queue(tmp_path, "bug-backlog.md", "- 2026-07-01 | old | entry\n")
         result = guard.check(
@@ -197,8 +198,8 @@ class TestAppendAdvisorySilent:
 
 
 class TestFailOpen:
-    def test_non_write_tool_returns_none(self):
+    def test_non_write_tool_returns_none(self) -> None:
         assert guard.check(_payload("Read", {"file_path": "state/bug-backlog.md"})) is None
 
-    def test_missing_file_path_returns_none(self):
+    def test_missing_file_path_returns_none(self) -> None:
         assert guard.check(_payload("Write", {"content": "- 2026-07-31 | x | y"})) is None

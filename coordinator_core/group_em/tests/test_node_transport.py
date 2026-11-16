@@ -7,13 +7,18 @@ import time
 import pytest
 
 from coordinator_core.group_em import box_registry, box_send, box_transport, node_transport, remote_roster
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
 
 INV = "/x/coordinator-invoke"
 _REGISTERED: list = []
 
 
 @pytest.fixture(autouse=True)
-def _registry_and_limits(monkeypatch):
+def _registry_and_limits(monkeypatch: pytest.MonkeyPatch):
     _REGISTERED.clear()
     monkeypatch.setattr(box_registry, "read_boxes", lambda directory=None: list(_REGISTERED))
     box_transport._reset_limits()
@@ -27,11 +32,11 @@ def _ssh_box(host):
     return box
 
 
-def _cp(returncode=0, stdout="", stderr=""):
+def _cp(returncode: int = 0, stdout: str = "", stderr: str = "") -> "CompletedProcess[str]":
     return subprocess.CompletedProcess([], returncode, stdout, stderr)
 
 
-def test_select_kinds():
+def test_select_kinds() -> None:
     assert node_transport.select({"box_id": "b"}).kind == "fs"
     assert node_transport.select({"box_id": "b", "transport": {"kind": "fs"}}).kind == "fs"
     ssh = {"box_id": "b", "transport": {"kind": "ssh", "host": "192.0.2.2", "invoke": "/x/inv"}}
@@ -43,18 +48,18 @@ def test_select_kinds():
     assert node_transport.select({"box_id": "b", "transport": "ssh"}).kind == "unknown"
 
 
-def test_unknown_kind_replies_ok_false_and_never_raises():
+def test_unknown_kind_replies_ok_false_and_never_raises() -> None:
     t = node_transport.select({"box_id": "b", "transport": {"kind": "pigeon"}})
     for res in (t.list_sessions({"box_id": "b"}), t.send({"box_id": "b"}, "s", "hi", "me")):
         assert res["ok"] is False and "pigeon" in res["reason"]
     assert node_transport.select(None).list_sessions(None)["ok"] is False
 
 
-def test_ssh_list_and_send_through_runner():
+def test_ssh_list_and_send_through_runner() -> None:
     box = _ssh_box("192.0.2.2")
     calls = []
 
-    def runner(argv, timeout):
+    def runner(argv, timeout) -> "CompletedProcess[str]":
         calls.append(argv)
         if "session.peer_roster" in argv[-1]:
             rows = [{"session_id": "s1", "name": "alpha"}, {"session_id": "s2", "name": "beta"}]
@@ -72,11 +77,11 @@ def test_ssh_list_and_send_through_runner():
     assert calls[0][5] == "192.0.2.2"
 
 
-def test_ssh_host_may_be_a_wireguard_address():
+def test_ssh_host_may_be_a_wireguard_address() -> None:
     box = _ssh_box("10.8.0.2")
     calls = []
 
-    def runner(argv, timeout):
+    def runner(argv, timeout) -> "CompletedProcess[str]":
         calls.append(argv)
         return _cp(stdout=json.dumps({"rows": []}))
 
@@ -86,7 +91,7 @@ def test_ssh_host_may_be_a_wireguard_address():
     assert "10.8.0.2" in calls[0]
 
 
-def test_failed_ssh_send_marks_box_unreachable_and_keeps_prior_sessions(tmp_path):
+def test_failed_ssh_send_marks_box_unreachable_and_keeps_prior_sessions(tmp_path: Path) -> None:
     box = _ssh_box("h")
     prior = [{"session_id": "s1", "name": "alpha", "cwd": "/a", "status": "idle", "address": "x"}]
     assert remote_roster._write_snapshot(tmp_path, "home", True, prior, time.time())
@@ -108,7 +113,7 @@ def test_failed_ssh_send_marks_box_unreachable_and_keeps_prior_sessions(tmp_path
         remote_roster.snapshot_path(tmp_path, "home"))["sessions"])] == ["s1"]
 
 
-def test_ssh_failure_is_ok_false_with_reason(tmp_path):
+def test_ssh_failure_is_ok_false_with_reason(tmp_path: Path) -> None:
     box = _ssh_box("h")
     t = node_transport.select(
         box, tmp_path, runner=lambda argv, timeout: _cp(returncode=255, stderr="no")
@@ -119,7 +124,7 @@ def test_ssh_failure_is_ok_false_with_reason(tmp_path):
     assert node_transport.select(bad).list_sessions(bad)["ok"] is False
 
 
-def test_fs_list_reads_published_snapshot(tmp_path):
+def test_fs_list_reads_published_snapshot(tmp_path: Path) -> None:
     root = tmp_path / "far"
     gdir = root / "state" / "group-em"
     sessions = [{"session_id": "s1", "name": "alpha", "cwd": "/a", "status": "idle", "address": "x"}]
@@ -132,7 +137,7 @@ def test_fs_list_reads_published_snapshot(tmp_path):
     assert node_transport.select(box).list_sessions(box, run="zzz")["sessions"] == []
 
 
-def test_fs_list_missing_or_stale_snapshot_is_ok_false(tmp_path):
+def test_fs_list_missing_or_stale_snapshot_is_ok_false(tmp_path: Path) -> None:
     root = tmp_path / "far"
     box = {"box_id": "far", "root": str(root)}
     assert node_transport.select(box).list_sessions(box)["ok"] is False
@@ -141,7 +146,7 @@ def test_fs_list_missing_or_stale_snapshot_is_ok_false(tmp_path):
     assert node_transport.select({"box_id": "far"}).list_sessions({"box_id": "far"})["ok"] is False
 
 
-def test_fs_send_lands_in_inbox_and_refuses_unknown_box(tmp_path):
+def test_fs_send_lands_in_inbox_and_refuses_unknown_box(tmp_path: Path) -> None:
     primary = tmp_path / "primary"
     second = tmp_path / "second"
     gdir = primary / "state" / "group-em"
@@ -156,19 +161,19 @@ def test_fs_send_lands_in_inbox_and_refuses_unknown_box(tmp_path):
     assert bad == {"ok": False, "reason": "unknown_box"}
 
 
-def test_unknown_transport_deliver_grant_replies_ok_false():
+def test_unknown_transport_deliver_grant_replies_ok_false() -> None:
     t = node_transport.select({"box_id": "b", "transport": {"kind": "pigeon"}})
     res = t.deliver_grant({"box_id": "b"}, {"sig": "x"})
     assert res["ok"] is False and "pigeon" in res["reason"]
     assert node_transport.select(None).deliver_grant(None, {})["ok"] is False
 
 
-def test_ssh_deliver_grant_invokes_far_op_and_maps_the_reply():
+def test_ssh_deliver_grant_invokes_far_op_and_maps_the_reply() -> None:
     box = _ssh_box("h")
     calls = []
 
     def runner(reply):
-        def run(argv, timeout):
+        def run(argv, timeout) -> "CompletedProcess[str]":
             calls.append(argv)
             return _cp(stdout=json.dumps(reply))
 
@@ -183,17 +188,17 @@ def test_ssh_deliver_grant_invokes_far_op_and_maps_the_reply():
     assert down.deliver_grant(box, {})["ok"] is False
 
 
-def test_unknown_transport_revoke_and_key_pin_reply_ok_false():
+def test_unknown_transport_revoke_and_key_pin_reply_ok_false() -> None:
     t = node_transport.select({"box_id": "b", "transport": {"kind": "pigeon"}})
     assert "pigeon" in t.deliver_revoke({"box_id": "b"}, {})["reason"]
     assert "pigeon" in t.deliver_key_pin({"box_id": "b"}, {})["reason"]
 
 
-def test_ssh_deliver_revoke_and_key_pin_invoke_the_far_ops():
+def test_ssh_deliver_revoke_and_key_pin_invoke_the_far_ops() -> None:
     box = _ssh_box("h")
     calls = []
 
-    def run(argv, timeout):
+    def run(argv, timeout) -> "CompletedProcess[str]":
         calls.append(argv)
         return _cp(stdout=json.dumps({"ok": True}))
 
@@ -206,7 +211,7 @@ def test_ssh_deliver_revoke_and_key_pin_invoke_the_far_ops():
     assert down.deliver_revoke(box, {})["ok"] is False and down.deliver_key_pin(box, {})["ok"] is False
 
 
-def test_fs_revoke_and_key_pin_call_the_peer_receivers_against_the_box_root(tmp_path, monkeypatch):
+def test_fs_revoke_and_key_pin_call_the_peer_receivers_against_the_box_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.group_em import relayed_grant_peer
 
     seen = {}
@@ -226,7 +231,7 @@ def test_fs_revoke_and_key_pin_call_the_peer_receivers_against_the_box_root(tmp_
     assert t.deliver_revoke({"box_id": "b"}, {})["reason"] == "no_root"
 
 
-def test_fs_deliver_grant_calls_receive_against_the_box_root(tmp_path, monkeypatch):
+def test_fs_deliver_grant_calls_receive_against_the_box_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.group_em import suite_grant
 
     seen = {}

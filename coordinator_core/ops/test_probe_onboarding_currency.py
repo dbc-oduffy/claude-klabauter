@@ -6,9 +6,10 @@ import os
 import pytest
 
 from coordinator_core.ops.probe_onboarding_currency import main
+from pathlib import Path
 
 
-def _run(monkeypatch, repo_root, plugin_root, extra_env=None):
+def _run(monkeypatch, repo_root, plugin_root, extra_env=None) -> tuple[str, int]:
     for key in (
         "CLAUDE_HOME",
         "COORDINATOR_CURRENCY_REPO_ROOT",
@@ -40,7 +41,7 @@ def _make_sandbox(tmp_path, name, schema_version):
     return repo_root, plugin_root
 
 
-def test_case1_stamped_current(tmp_path, monkeypatch):
+def test_case1_stamped_current(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root, plugin_root = _make_sandbox(tmp_path, "case1", "1")
     (repo_root / "docs" / "coordinator-currency.yaml").write_text(
         "schema_version: 1\nstamped_at: 2026-05-29\n"
@@ -50,7 +51,7 @@ def test_case1_stamped_current(tmp_path, monkeypatch):
     assert rc == 0
 
 
-def test_case2_drift(tmp_path, monkeypatch):
+def test_case2_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root, plugin_root = _make_sandbox(tmp_path, "case2", "3")
     (repo_root / "docs" / "coordinator-currency.yaml").write_text(
         "schema_version: 1\nstamped_at: 2026-01-01\n"
@@ -60,7 +61,7 @@ def test_case2_drift(tmp_path, monkeypatch):
     assert rc == 0
 
 
-def test_case3_unstamped_legacy(tmp_path, monkeypatch):
+def test_case3_unstamped_legacy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root, plugin_root = _make_sandbox(tmp_path, "case3", "1")
     out, rc = _run(monkeypatch, repo_root, plugin_root)
     assert out == "unstamped(legacy)"
@@ -68,7 +69,7 @@ def test_case3_unstamped_legacy(tmp_path, monkeypatch):
     assert out != "current"
 
 
-def test_case4_inconclusive_schema_unreadable(tmp_path, monkeypatch):
+def test_case4_inconclusive_schema_unreadable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = tmp_path / "case4" / "fake-claude-home"
     (repo_root / "docs").mkdir(parents=True)
     empty_plugin_root = tmp_path / "case4" / "empty-plugin-root"
@@ -79,7 +80,7 @@ def test_case4_inconclusive_schema_unreadable(tmp_path, monkeypatch):
     assert rc == 0
 
 
-def test_case5_inconclusive_stamp_unparseable(tmp_path, monkeypatch):
+def test_case5_inconclusive_stamp_unparseable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root, plugin_root = _make_sandbox(tmp_path, "case5", "1")
     (repo_root / "docs" / "coordinator-currency.yaml").write_text(
         "stamped_at: 2026-05-01\n"
@@ -90,7 +91,7 @@ def test_case5_inconclusive_stamp_unparseable(tmp_path, monkeypatch):
     assert rc == 0
 
 
-def test_case6_source_is_live(tmp_path, monkeypatch):
+def test_case6_source_is_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = tmp_path / "case6" / "chome"
     (repo_root / "docs").mkdir(parents=True)
     plugin_root = tmp_path / "case6" / "fake-plugin-root"
@@ -103,7 +104,7 @@ def test_case6_source_is_live(tmp_path, monkeypatch):
     assert rc == 0
 
 
-def test_case7_forward_stamp_inconclusive(tmp_path, monkeypatch):
+def test_case7_forward_stamp_inconclusive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root, plugin_root = _make_sandbox(tmp_path, "case7", "1")
     (repo_root / "docs" / "coordinator-currency.yaml").write_text(
         "schema_version: 5\nstamped_at: 2026-05-29\n"
@@ -113,7 +114,7 @@ def test_case7_forward_stamp_inconclusive(tmp_path, monkeypatch):
     assert rc == 0
 
 
-def test_case8_default_claude_home_fatal_guard(tmp_path, monkeypatch):
+def test_case8_default_claude_home_fatal_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """F14 guard: CLAUDE_HOME already ending in /.claude → FATAL, exit 1."""
     bad_home = tmp_path / "homeF" / ".claude"
     bad_home.mkdir(parents=True)
@@ -131,7 +132,7 @@ def test_case8_default_claude_home_fatal_guard(tmp_path, monkeypatch):
     assert rc == 1
 
 
-def test_case9_default_claude_home_ok(tmp_path, monkeypatch):
+def test_case9_default_claude_home_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """CLAUDE_HOME not ending in /.claude → appended, no stamp → unstamped(legacy)."""
     home = tmp_path / "homeF"
     (home / ".claude" / "docs").mkdir(parents=True)
@@ -159,7 +160,7 @@ def test_case9_default_claude_home_ok(tmp_path, monkeypatch):
     assert rc == 0
 
 
-def test_case10_default_repo_root_uses_userprofile_when_home_absent(tmp_path, monkeypatch):
+def test_case10_default_repo_root_uses_userprofile_when_home_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Native-Windows condition for the default `repo_root` derivation
     (home-resolution-lint bare_home_or_chain fix, 2026-07-29): CLAUDE_HOME
     and HOME both absent, only USERPROFILE set. Must resolve `repo_root` via

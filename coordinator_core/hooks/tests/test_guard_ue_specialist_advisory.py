@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core.hooks import guard_ue_specialist_advisory as guard
 from coordinator_core.ops.dispatch_emit import ue_route_source
+from pathlib import Path
 
 SPECIALIST = "example-game-repo-control:ue-metahuman"
 GHOST = "example-game-repo-control:ue-ghost"
@@ -36,7 +37,7 @@ def _table() -> dict:
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A UE repo plus an installed example-game-repo plugin dir with a manifest and a one-agent roster."""
     plugin = tmp_path / "plugins" / "example-game-repo-control"
     (plugin / "routing").mkdir(parents=True)
@@ -53,7 +54,7 @@ def world(tmp_path, monkeypatch):
     ue_route_source.clear_caches()
 
 
-def _payload(cwd, prompt="fix the metahuman helmet", subagent_type="general-purpose", tool_name="Agent"):
+def _payload(cwd, prompt: str = "fix the metahuman helmet", subagent_type: str = "general-purpose", tool_name: str = "Agent"):
     tool_input = {"prompt": prompt}
     if subagent_type is not None:
         tool_input["subagent_type"] = subagent_type
@@ -65,55 +66,55 @@ def _text(out: dict) -> str:
 
 
 @pytest.mark.parametrize("subagent_type", ["general-purpose", EXECUTOR, None])
-def test_non_example_game_repo_dispatch_gets_advisory_naming_specialist(world, subagent_type):
+def test_non_example_game_repo_dispatch_gets_advisory_naming_specialist(world, subagent_type) -> None:
     out = guard.evaluate(_payload(world["repo"], subagent_type=subagent_type))
     assert f"route to {SPECIALIST}" in _text(out)
     assert out["hookSpecificOutput"]["hookEventName"] == "PreToolUse"
 
 
-def test_never_a_deny_or_rewrite(world):
+def test_never_a_deny_or_rewrite(world) -> None:
     hso = guard.evaluate(_payload(world["repo"]))["hookSpecificOutput"]
     assert "permissionDecision" not in hso
     assert "updatedInput" not in hso
 
 
 @pytest.mark.parametrize("subagent_type", [SPECIALIST, "example-game-repo-control:anything", "game-dev:ue-gameplay"])
-def test_example_game_repo_and_game_dev_agents_get_none(world, subagent_type):
+def test_example_game_repo_and_game_dev_agents_get_none(world, subagent_type) -> None:
     assert guard.evaluate(_payload(world["repo"], subagent_type=subagent_type)) == {}
 
 
-def test_non_ue_repo_gets_none(world):
+def test_non_ue_repo_gets_none(world) -> None:
     plain = world["tmp"] / "plain"
     plain.mkdir()
     assert guard.evaluate(_payload(plain)) == {}
 
 
-def test_example_game_repo_not_installed_gets_none(world, monkeypatch):
+def test_example_game_repo_not_installed_gets_none(world, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_PLUGIN_ROOTS", str(world["tmp"] / "nowhere"))
     ue_route_source.clear_caches()
     assert guard.evaluate(_payload(world["repo"])) == {}
 
 
-def test_specialist_absent_from_roster_is_never_named(world):
+def test_specialist_absent_from_roster_is_never_named(world) -> None:
     out = guard.evaluate(_payload(world["repo"], prompt="fix the niagara system"))
     assert out == {}
 
 
-def test_non_ue_brief_gets_none(world):
+def test_non_ue_brief_gets_none(world) -> None:
     assert guard.evaluate(_payload(world["repo"], prompt="refactor the python build script")) == {}
 
 
-def test_non_agent_tool_gets_none(world):
+def test_non_agent_tool_gets_none(world) -> None:
     assert guard.evaluate(_payload(world["repo"], tool_name="Bash")) == {}
 
 
-def test_malformed_manifest_fails_open(world):
+def test_malformed_manifest_fails_open(world) -> None:
     (world["plugin"] / "routing" / "ue-job-shapes.json").write_text("{not json", encoding="utf-8")
     ue_route_source.clear_caches()
     assert guard.evaluate(_payload(world["repo"])) == {}
 
 
-def test_internal_error_fails_open(world, monkeypatch):
+def test_internal_error_fails_open(world, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise RuntimeError("boom")
 
@@ -121,10 +122,10 @@ def test_internal_error_fails_open(world, monkeypatch):
     assert guard.evaluate(_payload(world["repo"])) == {}
 
 
-def test_explicit_repo_root_overrides_cwd(world):
+def test_explicit_repo_root_overrides_cwd(world) -> None:
     out = guard.evaluate(_payload("/nonexistent-cwd"), repo_root=world["repo"])
     assert f"route to {SPECIALIST}" in _text(out)
 
 
-def test_registered_op_dispatches(world):
+def test_registered_op_dispatches(world) -> None:
     assert f"route to {SPECIALIST}" in _text(guard._handler(_payload(world["repo"])))

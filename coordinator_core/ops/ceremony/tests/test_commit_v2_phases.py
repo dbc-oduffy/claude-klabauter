@@ -6,10 +6,11 @@ import pytest
 from coordinator_core.ops.ceremony import commit_v2_phases as cp
 from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.telemetry import op_latency
+from pathlib import Path
 
 
 @pytest.fixture
-def common_dir(tmp_path, monkeypatch):
+def common_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     d = tmp_path / ".git"
     d.mkdir()
     monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: d)
@@ -24,12 +25,12 @@ def _rows(common_dir):
     return [json.loads(x) for x in sink.read_text(encoding="utf-8").splitlines() if x]
 
 
-def _fake_clock(monkeypatch, ticks):
+def _fake_clock(monkeypatch, ticks) -> None:
     it = iter(ticks)
     monkeypatch.setattr(cp.time, "thread_time", lambda: next(it))
 
 
-def test_repeated_and_nested_phases_sum(monkeypatch):
+def test_repeated_and_nested_phases_sum(monkeypatch: pytest.MonkeyPatch) -> None:
     # outer: 0..10 ; inner a: 1..3 ; inner a again: 4..5 ; inner b: 6..9
     _fake_clock(monkeypatch, [0, 1, 3, 4, 5, 6, 9, 10])
     led = cp.PhaseLedger()
@@ -45,7 +46,7 @@ def test_repeated_and_nested_phases_sum(monkeypatch):
     assert list(ms) == ["a", "b", "outer"]
 
 
-def test_phase_records_on_exception(monkeypatch):
+def test_phase_records_on_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_clock(monkeypatch, [0, 2])
     led = cp.PhaseLedger()
     with pytest.raises(ValueError):
@@ -54,7 +55,7 @@ def test_phase_records_on_exception(monkeypatch):
     assert led.phases_ms() == {"x": 2000.0}
 
 
-def test_phase_charges_child_bucket(monkeypatch):
+def test_phase_charges_child_bucket(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import ipc
 
     _fake_clock(monkeypatch, [0, 0])
@@ -69,7 +70,7 @@ def test_phase_charges_child_bucket(monkeypatch):
     assert led.phases_ms() == {"git": 250.0}
 
 
-def test_emit_writes_one_phase_time_row(common_dir, tmp_path, monkeypatch):
+def test_emit_writes_one_phase_time_row(common_dir, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_clock(monkeypatch, [0, 1])
     led = cp.PhaseLedger(corr_id="c-1")
     with led.phase("stage"):
@@ -88,14 +89,14 @@ def test_emit_writes_one_phase_time_row(common_dir, tmp_path, monkeypatch):
     assert r["spawns"] == 7
 
 
-def test_emit_not_abandoned_by_default(common_dir, tmp_path):
+def test_emit_not_abandoned_by_default(common_dir, tmp_path: Path) -> None:
     cp.PhaseLedger().emit(tmp_path, abandoned=False, paths=0, spawns=None)
     (r,) = _rows(common_dir)
     assert r["abandoned"] is False
     assert r["spawns"] is None
 
 
-def test_emit_swallows_write_failure(tmp_path, monkeypatch):
+def test_emit_swallows_write_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(entry, repo_root):
         raise RuntimeError("x")
 
@@ -103,7 +104,7 @@ def test_emit_swallows_write_failure(tmp_path, monkeypatch):
     cp.PhaseLedger().emit(tmp_path, abandoned=False, paths=1, spawns=0)
 
 
-def test_kill_switch_writes_nothing(common_dir, tmp_path, monkeypatch):
+def test_kill_switch_writes_nothing(common_dir, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_OP_LATENCY_DISABLE", "1")
     cp.PhaseLedger().emit(tmp_path, abandoned=False, paths=1, spawns=0)
     assert _rows(common_dir) == []

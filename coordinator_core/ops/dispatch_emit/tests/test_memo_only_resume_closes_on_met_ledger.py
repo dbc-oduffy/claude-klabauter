@@ -10,6 +10,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import land_run, terminal_commit as tc
 from coordinator_core.ops.dispatch_emit.ask_contract import UNCHANGED_SINCE_HALT_REASON
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -60,14 +61,14 @@ def _twin_b(root, resume, verdict, manifest):
 
 @pytest.mark.parametrize("twin", [_twin_a, _twin_b])
 @pytest.mark.parametrize("declared", [[], ["prod.py"]])
-def test_met_rows_naming_a_landed_memo_commit_close_the_resume(tmp_path, twin, declared):
+def test_met_rows_naming_a_landed_memo_commit_close_the_resume(tmp_path: Path, twin, declared) -> None:
     manifest, halt, memo = _repo(tmp_path, declared)
     assert twin(tmp_path, _resume(halt), _verdict(memo), manifest) == []
 
 
 @pytest.mark.parametrize("twin", [_twin_a, _twin_b])
 @pytest.mark.parametrize("declared", [[], ["prod.py"]])
-def test_met_rows_naming_no_landed_commit_are_still_refused(tmp_path, twin, declared):
+def test_met_rows_naming_no_landed_commit_are_still_refused(tmp_path: Path, twin, declared) -> None:
     manifest, halt, _memo = _repo(tmp_path, declared)
     unlanded = "0123456789abcdef0123456789abcdef01234567"
     for met_by in (unlanded, "verified by hand", None):
@@ -77,7 +78,7 @@ def test_met_rows_naming_no_landed_commit_are_still_refused(tmp_path, twin, decl
 
 
 @pytest.mark.parametrize("twin", [_twin_a, _twin_b])
-def test_only_the_row_naming_a_landed_commit_is_credited(tmp_path, twin):
+def test_only_the_row_naming_a_landed_commit_is_credited(tmp_path: Path, twin) -> None:
     manifest, halt, memo = _repo(tmp_path, [])
     verdict = {"items": [
         {"id": "R1", "status": "met", "met_by": memo},

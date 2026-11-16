@@ -65,6 +65,14 @@ def _denied(out) -> bool:
     return out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
+def _unflagged(out) -> bool:
+    """No verification verdict: no deny, and no test-runner advisory (the generic dispatch nudge may ride)."""
+    if out is None:
+        return True
+    hso = out["hookSpecificOutput"]
+    return hso.get("permissionDecision") != "deny" and "test-runner" not in hso.get("additionalContext", "")
+
+
 def _advised(out) -> bool:
     """A Write/Edit verdict that is an allow carrying the advisory line, never a deny."""
     if out is None:
@@ -116,10 +124,10 @@ def test_autonomous_still_routes_bash_verification(repo, monkeypatch) -> None:
     assert _denied(g.check(_bash(repo, "pytest pkg")))
 
 
-def test_autonomous_scratch_write_exempt(repo, monkeypatch) -> None:
+def test_autonomous_scratch_write_is_never_denied(repo, monkeypatch) -> None:
     _executor_ran(repo)
     monkeypatch.setattr(nd, "resolve_mode", lambda k, sid: True)
-    assert nd.op(_write(repo, str(repo / "scratch" / "probe.py"))) is None
+    assert not _denied(nd.op(_write(repo, str(repo / "scratch" / "probe.py"))))
 
 
 def _sidecar(repo, status: str) -> None:
@@ -194,7 +202,7 @@ _STAGE_HELPER = (
 def test_stage_helper_naming_runner_only_in_text_never_matches(repo) -> None:
     _executor_ran(repo)
     assert g.written_text_verifies(_write(repo, str(repo / "scratch" / "stage_own.py"), content=_STAGE_HELPER), "x", str(repo)) is False
-    assert nd.op(_write(repo, str(repo / "scratch" / "stage_own.py"), content=_STAGE_HELPER)) is None
+    assert _unflagged(nd.op(_write(repo, str(repo / "scratch" / "stage_own.py"), content=_STAGE_HELPER)))
 
 
 def test_post_executor_verification_is_not_a_deny_registry_guard() -> None:
@@ -218,13 +226,13 @@ def test_scratch_launcher_config_edit_allowed_after_executor(repo, tmp_path) -> 
             "new_string": 'import os\nos.environ["EXAMPLE_RETRIEVAL_REPO_MEM_CAP_GIB_DERIVE"] = "6"\n',
         },
     }
-    assert nd.op(payload) is None
+    assert _unflagged(nd.op(payload))
 
 
 def test_scratch_non_test_probe_write_allowed_after_executor(repo) -> None:
     _executor_ran(repo)
     probe = "import pkg\nprint(pkg.__name__)\n"
-    assert nd.op(_write(repo, str(repo / "scratch" / "probe.py"), content=probe)) is None
+    assert _unflagged(nd.op(_write(repo, str(repo / "scratch" / "probe.py"), content=probe)))
 
 
 def test_scratch_edit_adding_runner_to_repo_importing_file_advised(repo) -> None:
@@ -253,7 +261,7 @@ _GLOB_HELPER = "import glob, json\nprint(json.dumps(sorted(glob.glob('docs/plans
 ])
 def test_scratch_py_write_not_naming_runner_and_repo_allowed_after_executor(repo, content) -> None:
     _executor_ran(repo)
-    assert nd.op(_write(repo, str(repo / "scratch" / "mise-plans.py"), content=content)) is None
+    assert _unflagged(nd.op(_write(repo, str(repo / "scratch" / "mise-plans.py"), content=content)))
 
 
 def test_scratch_py_edit_adding_verification_advised_after_executor(repo) -> None:
@@ -263,13 +271,14 @@ def test_scratch_py_edit_adding_verification_advised_after_executor(repo) -> Non
     assert _advised(nd.op(payload))
 
 
-def test_scratch_py_write_allowed_before_executor(repo) -> None:
-    assert nd.op(_write(repo, str(repo / "scratch" / "probe.py"))) is None
+def test_scratch_py_write_before_executor_draws_the_dispatch_nudge(repo) -> None:
+    out = nd.op(_write(repo, str(repo / "scratch" / "probe.py")))
+    assert out is not None and "em-code-dispatch nudge" in out["hookSpecificOutput"]["additionalContext"]
 
 
 def test_scratch_md_write_allowed_after_executor(repo) -> None:
     _executor_ran(repo)
-    assert nd.op(_write(repo, str(repo / "scratch" / "notes.md"))) is None
+    assert _unflagged(nd.op(_write(repo, str(repo / "scratch" / "notes.md"))))
 
 
 def test_scratch_py_sentinel_allows_and_logs(repo) -> None:
@@ -277,7 +286,7 @@ def test_scratch_py_sentinel_allows_and_logs(repo) -> None:
     with open(nd.dispatch_nudge_sentinel_path(SID), "w", encoding="utf-8") as fh:
         fh.write("one-off probe\n")
     _sidecar(repo, "blocked")
-    assert nd.op(_write(repo, str(repo / "scratch" / "probe.py"))) is None
+    assert _unflagged(nd.op(_write(repo, str(repo / "scratch" / "probe.py"))))
     assert len(list((repo / ".coordinator-local").rglob(ESCAPE_LOG_NAME))) == 1
     assert _advised(nd.op(_write(repo, str(repo / "scratch" / "probe.py"))))
 

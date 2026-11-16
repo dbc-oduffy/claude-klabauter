@@ -17,6 +17,7 @@ import pytest
 
 from coordinator_core.install import substrate
 from coordinator_core.install.substrate import _sweep_orphaned_agent_helpers
+from pathlib import Path
 
 
 def _forwarder_body(name: str, resolver: str) -> str:
@@ -34,7 +35,7 @@ def _forwarder_body(name: str, resolver: str) -> str:
 
 
 @pytest.fixture
-def sweepable(monkeypatch, tmp_path):
+def sweepable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     monkeypatch.setattr(
         substrate.tempfile, "gettempdir", lambda: str(tmp_path / "_unrelated-temp-root")
@@ -46,7 +47,7 @@ def sweepable(monkeypatch, tmp_path):
     "resolver",
     ["_resolve_claude_klabauter", "_resolve_claude_klabauter", "_resolve_some_future_name"],
 )
-def test_sweep_removes_orphan_under_any_resolver_basename(sweepable, resolver):
+def test_sweep_removes_orphan_under_any_resolver_basename(sweepable, resolver) -> None:
     orphan = sweepable / "handoff-reconcile-close-terminal"
     orphan.write_text(
         _forwarder_body("handoff-reconcile-close-terminal", resolver), encoding="utf-8"
@@ -60,11 +61,11 @@ def test_sweep_removes_orphan_under_any_resolver_basename(sweepable, resolver):
     )
 
 
-def test_current_marker_constant_matches_the_agnostic_pattern():
+def test_current_marker_constant_matches_the_agnostic_pattern() -> None:
     assert substrate._AGENT_FORWARDER_MARKER_RE.search(substrate._AGENT_FORWARDER_MARKER)
 
 
-def test_sweep_protects_a_current_forwarder_with_a_renamed_resolver(sweepable):
+def test_sweep_protects_a_current_forwarder_with_a_renamed_resolver(sweepable) -> None:
     name = "still-installed"
     kept = sweepable / name
     kept.write_text(_forwarder_body(name, "_resolve_claude_klabauter"), encoding="utf-8")
@@ -74,7 +75,7 @@ def test_sweep_protects_a_current_forwarder_with_a_renamed_resolver(sweepable):
     assert kept.exists()
 
 
-def test_sweep_leaves_an_unrelated_python_script_alone(sweepable):
+def test_sweep_leaves_an_unrelated_python_script_alone(sweepable) -> None:
     decoy = sweepable / "someones-own-tool"
     decoy.write_text("#!/usr/bin/env python3\nprint('not ours')\n", encoding="utf-8")
 
@@ -83,7 +84,7 @@ def test_sweep_leaves_an_unrelated_python_script_alone(sweepable):
     assert decoy.exists()
 
 
-def test_sweep_leaves_a_lookalike_import_of_another_symbol_alone(sweepable):
+def test_sweep_leaves_a_lookalike_import_of_another_symbol_alone(sweepable) -> None:
     decoy = sweepable / "imports-something-else"
     decoy.write_text(
         "#!/usr/bin/env python3\nfrom _resolve_claude_klabauter import claude_klabauter_root\n", encoding="utf-8"
@@ -94,7 +95,7 @@ def test_sweep_leaves_a_lookalike_import_of_another_symbol_alone(sweepable):
     assert decoy.exists()
 
 
-def test_publisher_only_forwarder_survives_a_mirror_derived_write_set(sweepable):
+def test_publisher_only_forwarder_survives_a_mirror_derived_write_set(sweepable) -> None:
     name = "percolate-push"
     kept = sweepable / name
     kept.write_text(_forwarder_body(name, "_resolve_claude_klabauter"), encoding="utf-8")

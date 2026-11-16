@@ -32,7 +32,7 @@ def _split_stage(script: str) -> str:
     return script[start : script.index("\n  }", start) + 4]
 
 
-def test_xl_exit_offers_split_with_slices_and_full_partition():
+def test_xl_exit_offers_split_with_slices_and_full_partition() -> None:
     props = _XL_SCHEMA["properties"]
     assert props["pick"]["enum"] == ["roadmap", "accept_multi_session", "split"]
     assert set(props["slices"]["items"]["required"]) == {"label", "ask", "rows"}
@@ -46,7 +46,7 @@ def test_xl_exit_offers_split_with_slices_and_full_partition():
     assert "_splitSlices = _xl.slices" in script
 
 
-def test_auto_fire_branch_exits_with_the_xl_exit_agents_fanout_reply():
+def test_auto_fire_branch_exits_with_the_xl_exit_agents_fanout_reply() -> None:
     script = _script()
     stage = _split_stage(script)
     assert "if (!_confirmSplit && _proposed.length)" in stage
@@ -63,7 +63,7 @@ def test_auto_fire_branch_exits_with_the_xl_exit_agents_fanout_reply():
     assert {"parent_id", "runs", "fire", "error"} <= set(props)
 
 
-def test_confirm_split_halts_with_the_proposed_slices_without_fanout():
+def test_confirm_split_halts_with_the_proposed_slices_without_fanout() -> None:
     stage = _split_stage(_script())
     assert "args.confirm_split === true" in stage
     assert "_halted = { ..._halted, slices: _proposed, confirm_split: _confirmSplit };" in stage
@@ -71,13 +71,13 @@ def test_confirm_split_halts_with_the_proposed_slices_without_fanout():
     assert "_fan = _splitFan" in stage[guard:]
 
 
-def test_partition_refusal_stays_a_split_halt_with_the_refusal_text():
+def test_partition_refusal_stays_a_split_halt_with_the_refusal_text() -> None:
     stage = _split_stage(_script())
     assert "reason: 'split refused: ' + String((_fan && _fan.error) || 'no reply')" in stage
     assert "halted: " not in stage.split("} else {")[-1]
 
 
-def test_split_never_reaches_roadmap_stage_or_execute():
+def test_split_never_reaches_roadmap_stage_or_execute() -> None:
     script = _script()
     split_at = script.index("if (_halted && _halted.halted === 'split')")
     assert split_at < script.index("if (!_halted && (_gate.arm === 'm_plus' || _gate.arm === 'roadmap')) {")
@@ -94,7 +94,7 @@ def test_split_never_reaches_roadmap_stage_or_execute():
     assert "if (_halted && _RUN_TOKEN && !(_commit && _commit.committed === true))" in script
 
 
-def test_script_lints_clean_and_declares_the_split_phase():
+def test_script_lints_clean_and_declares_the_split_phase() -> None:
     script = _script()
     assert not [f for f in run_checks(script) if f.severity == Severity.ERROR]
     assert "'split'" not in script.split("phases: [", 1)[1].split("]", 1)[0]

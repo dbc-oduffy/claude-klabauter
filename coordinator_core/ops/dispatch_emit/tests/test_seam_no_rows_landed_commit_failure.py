@@ -7,6 +7,7 @@ import shutil
 import pytest
 
 from coordinator_core.ops.dispatch_emit.tests import test_seam_wave_boundary as sw
+from pathlib import Path
 
 _NODE = sw._NODE
 
@@ -18,14 +19,14 @@ _HARNESS = sw._HARNESS.replace(
 )
 
 
-def test_the_no_commit_landed_seam_failure_is_gone():
+def test_the_no_commit_landed_seam_failure_is_gone() -> None:
     script = sw._compose(sw._two_plan_waves())
     assert "_seamFail(n, 'no commit landed')" not in script
     assert "_seamFail(n, " in script
 
 
 @_NODE
-def test_a_wave_landing_no_rows_holds_its_dependent_as_commit_failed_with_no_seam_failure(tmp_path, monkeypatch):
+def test_a_wave_landing_no_rows_holds_its_dependent_as_commit_failed_with_no_seam_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     if shutil.which("node") is None:
         pytest.skip("node is not installed")
     monkeypatch.setattr(sw, "_HARNESS", _HARNESS)

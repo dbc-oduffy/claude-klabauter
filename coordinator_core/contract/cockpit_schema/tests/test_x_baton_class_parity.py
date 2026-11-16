@@ -27,13 +27,14 @@ from coordinator_core.contract.cockpit_schema.emit_schema import (
 )
 from coordinator_core.contract.cockpit_schema.entities.summaries import HandoffSummary
 from coordinator_core.frontmatter.baton_class import baton_class
+from pathlib import Path
 
 
 def _emitted_handoff_summary() -> dict:
     return build_entity_schema(HandoffSummary)
 
 
-def test_x_baton_class_top_level_key_present_with_mapping_and_description():
+def test_x_baton_class_top_level_key_present_with_mapping_and_description() -> None:
     shaped = _emitted_handoff_summary()
     kind_enum = shaped["properties"]["kind"]["enum"]
 
@@ -46,7 +47,7 @@ def test_x_baton_class_top_level_key_present_with_mapping_and_description():
     assert isinstance(annotation.get("mapping"), dict)
 
 
-def test_mapping_has_one_entry_per_kind_enum_member():
+def test_mapping_has_one_entry_per_kind_enum_member() -> None:
     shaped = _emitted_handoff_summary()
     kind_enum = shaped["properties"]["kind"]["enum"]
     assert len(kind_enum) == 10, (
@@ -62,7 +63,7 @@ def test_mapping_has_one_entry_per_kind_enum_member():
     assert set(mapping.keys()) == set(kind_enum)
 
 
-def test_mapping_values_equal_baton_class_for_every_kind_including_spike_result():
+def test_mapping_values_equal_baton_class_for_every_kind_including_spike_result() -> None:
     shaped = _emitted_handoff_summary()
     kind_enum = shaped["properties"]["kind"]["enum"]
 
@@ -81,7 +82,7 @@ def test_mapping_values_equal_baton_class_for_every_kind_including_spike_result(
     assert mapping["spike-result"] is None
 
 
-def test_full_emission_carries_x_baton_class_on_handoff_summary_and_bundle(tmp_path):
+def test_full_emission_carries_x_baton_class_on_handoff_summary_and_bundle(tmp_path: Path) -> None:
     emitted = emit_schemas(ENTITY_SCHEMAS, out_dir=tmp_path)
 
     handoff_summary = emitted["handoff-summary"]
@@ -103,7 +104,7 @@ def test_full_emission_carries_x_baton_class_on_handoff_summary_and_bundle(tmp_p
     assert "x-baton-class" not in snapshot_envelope["properties"]["handoffs"]["items"]
 
 
-def test_reorder_appends_a_top_level_key_absent_from_key_order_rather_than_dropping_it():
+def test_reorder_appends_a_top_level_key_absent_from_key_order_rather_than_dropping_it() -> None:
     """Verify (not assume) `_reorder`'s documented top-level-append guarantee for
     a schema-level extension key, per the plan's substrate-verify instruction."""
     assert "x-baton-class" not in _KEY_ORDER
@@ -118,7 +119,7 @@ def test_reorder_appends_a_top_level_key_absent_from_key_order_rather_than_dropp
     assert reordered["x-baton-class"] == {"description": "d", "mapping": {"a": "b"}}
 
 
-def test_no_second_hand_typed_kind_to_class_table_in_cockpit_schema_package():
+def test_no_second_hand_typed_kind_to_class_table_in_cockpit_schema_package() -> None:
     """AC3 guard: the only place `cockpit_schema/` may compute a `kind ->
     baton_class` value is via `frontmatter.baton_class.baton_class()` —
     fail loud if a second literal `kind: class` mapping is introduced.

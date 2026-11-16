@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.hooks import submit_engine_ask as mod
+import pytest
 
 
 def _params(tmp_path: Path, args: dict) -> dict:
@@ -20,7 +21,7 @@ def _hso(env: dict) -> dict:
     return env["hookSpecificOutput"]
 
 
-def test_exception_in_evaluate_denies_naming_class_and_message(tmp_path, monkeypatch):
+def test_exception_in_evaluate_denies_naming_class_and_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(_payload):
         raise RuntimeError("boom")
 
@@ -33,7 +34,7 @@ def test_exception_in_evaluate_denies_naming_class_and_message(tmp_path, monkeyp
     assert "is down" not in reason
 
 
-def test_refusal_denies_at_every_guard_level_with_its_reason(tmp_path, monkeypatch):
+def test_refusal_denies_at_every_guard_level_with_its_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import machine_profile as mp
 
     monkeypatch.setattr(mod, "evaluate", lambda _p: mod._refuse("repo X is another checkout."))
@@ -44,7 +45,7 @@ def test_refusal_denies_at_every_guard_level_with_its_reason(tmp_path, monkeypat
         assert "another checkout" in _hso(env)["permissionDecisionReason"], level
 
 
-def test_other_guard_still_lowers_at_warn(monkeypatch):
+def test_other_guard_still_lowers_at_warn(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import machine_profile as mp
 
     monkeypatch.setattr(mp, "guard_level", lambda _name: "warn")
@@ -52,7 +53,7 @@ def test_other_guard_still_lowers_at_warn(monkeypatch):
     assert _hso(env)["permissionDecision"] == "allow"
 
 
-def test_non_submission_still_passes_through_the_handler(tmp_path):
+def test_non_submission_still_passes_through_the_handler(tmp_path: Path) -> None:
     params = _params(tmp_path, {"ask": "x"})
     params["tool_name"] = "Bash"
     env = mod._handler(params)
@@ -63,7 +64,7 @@ def _submit_root(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir(exist_ok=True)
 
 
-def test_emit_reply_with_no_run_and_no_words_is_denied_naming_the_cause(tmp_path):
+def test_emit_reply_with_no_run_and_no_words_is_denied_naming_the_cause(tmp_path: Path) -> None:
     _submit_root(tmp_path)
     for reply in ({}, {"ok": True}, None):
         env = mod.evaluate(_params(tmp_path, {"ask": "x"}), emit=lambda _p, _r, reply=reply: reply)
@@ -73,7 +74,7 @@ def test_emit_reply_with_no_run_and_no_words_is_denied_naming_the_cause(tmp_path
         assert cause and cause != "None", reply
 
 
-def test_emit_timeout_with_empty_message_names_its_class(tmp_path):
+def test_emit_timeout_with_empty_message_names_its_class(tmp_path: Path) -> None:
     _submit_root(tmp_path)
 
     def emit(_p, _r):
@@ -84,13 +85,13 @@ def test_emit_timeout_with_empty_message_names_its_class(tmp_path):
     assert "refused the submission: TimeoutError" in _hso(env)["permissionDecisionReason"]
 
 
-def test_emit_reply_with_findings_still_names_them(tmp_path):
+def test_emit_reply_with_findings_still_names_them(tmp_path: Path) -> None:
     _submit_root(tmp_path)
     env = mod.evaluate(_params(tmp_path, {"ask": "x"}), emit=lambda _p, _r: {"ok": False, "findings": "bad sizing"})
     assert "bad sizing" in _hso(env)["permissionDecisionReason"]
 
 
-def test_refusal_is_logged_whole_and_deny_leads_with_cause_and_log_path(tmp_path):
+def test_refusal_is_logged_whole_and_deny_leads_with_cause_and_log_path(tmp_path: Path) -> None:
     import json
 
     _submit_root(tmp_path)
@@ -107,7 +108,7 @@ def test_refusal_is_logged_whole_and_deny_leads_with_cause_and_log_path(tmp_path
     assert len((tmp_path / mod.REFUSAL_LOG_REL).read_text(encoding="utf-8").splitlines()) == 2
 
 
-def test_log_failure_leaves_the_refusal_unchanged(tmp_path):
+def test_log_failure_leaves_the_refusal_unchanged(tmp_path: Path) -> None:
     _submit_root(tmp_path)
     (tmp_path / "state").write_text("a file where the state dir should be", encoding="utf-8")
     env = mod.evaluate(_params(tmp_path, {"ask": "x"}), emit=lambda _p, _r: {"ok": False, "findings": "bad sizing"})
@@ -117,7 +118,7 @@ def test_log_failure_leaves_the_refusal_unchanged(tmp_path):
     assert mod.REFUSAL_LOG_REL not in reason
 
 
-def test_handler_never_returns_empty_for_a_submission(tmp_path, monkeypatch):
+def test_handler_never_returns_empty_for_a_submission(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod, "evaluate", lambda _p: {})
     monkeypatch.setattr("coordinator_core.machine_profile.apply_guard_level", lambda _name, env: None)
     env = mod._handler(_params(tmp_path, {"ask": "x"}))
@@ -125,7 +126,7 @@ def test_handler_never_returns_empty_for_a_submission(tmp_path, monkeypatch):
     assert _hso(env)["permissionDecisionReason"].strip()
 
 
-def test_handler_denies_a_submission_allow_that_carries_no_rewrite(tmp_path, monkeypatch):
+def test_handler_denies_a_submission_allow_that_carries_no_rewrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     allow = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"}}
     monkeypatch.setattr(mod, "evaluate", lambda _p: allow)
     monkeypatch.setattr("coordinator_core.machine_profile.apply_guard_level", lambda _name, env: env)
@@ -138,7 +139,7 @@ def _blank_deny(reason):
     return {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny", "permissionDecisionReason": reason}}
 
 
-def test_handler_names_a_submission_deny_that_carries_a_blank_reason(tmp_path, monkeypatch):
+def test_handler_names_a_submission_deny_that_carries_a_blank_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("coordinator_core.machine_profile.apply_guard_level", lambda _name, env: env)
     for blank in ("", "  \n", None):
         monkeypatch.setattr(mod, "evaluate", lambda _p, blank=blank: _blank_deny(blank))
@@ -147,7 +148,7 @@ def test_handler_names_a_submission_deny_that_carries_a_blank_reason(tmp_path, m
         assert "recorded no reason" in _hso(env)["permissionDecisionReason"], blank
 
 
-def test_handler_keeps_the_reason_of_a_live_run_deny_at_every_guard_level(tmp_path, monkeypatch):
+def test_handler_keeps_the_reason_of_a_live_run_deny_at_every_guard_level(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import machine_profile as mp
 
     live = "Run r1 is already working state/sizings/x.yaml; its completion is your one wake. End the turn."
@@ -159,14 +160,14 @@ def test_handler_keeps_the_reason_of_a_live_run_deny_at_every_guard_level(tmp_pa
         assert _hso(env)["permissionDecisionReason"] == live, level
 
 
-def test_handler_keeps_a_submission_allow_that_carries_a_rewrite(tmp_path, monkeypatch):
+def test_handler_keeps_a_submission_allow_that_carries_a_rewrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     allow = {"hookSpecificOutput": {"permissionDecision": "allow", "updatedInput": {"scriptPath": "run.js"}}}
     monkeypatch.setattr(mod, "evaluate", lambda _p: allow)
     monkeypatch.setattr("coordinator_core.machine_profile.apply_guard_level", lambda _name, env: env)
     assert mod._handler(_params(tmp_path, {"ask": "x"})) == allow
 
 
-def test_retire_failure_is_named_in_the_rewrite_and_does_not_block(tmp_path, monkeypatch):
+def test_retire_failure_is_named_in_the_rewrite_and_does_not_block(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".git").mkdir()
     sizing = "state/sizings/x.yaml"
     (tmp_path / "state" / "sizings").mkdir(parents=True)
@@ -191,7 +192,7 @@ def test_retire_failure_is_named_in_the_rewrite_and_does_not_block(tmp_path, mon
     assert hso["updatedInput"]["scriptPath"] == str(script)
 
 
-def test_refusal_log_keeps_its_newest_half_past_the_cap(tmp_path, monkeypatch):
+def test_refusal_log_keeps_its_newest_half_past_the_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _submit_root(tmp_path)
     monkeypatch.setattr(mod, "_REFUSAL_LOG_CAP_BYTES", 400)
     log = tmp_path / mod.REFUSAL_LOG_REL

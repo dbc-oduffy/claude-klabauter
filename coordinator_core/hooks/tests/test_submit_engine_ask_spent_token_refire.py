@@ -9,6 +9,7 @@ from coordinator_core.hooks.tests.test_submit_engine_ask import _Emit, _hso, _pa
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit.ask_gate import TOKEN_SPENT_FILE, token_retired
 from coordinator_core.ops.dispatch_emit.halted_run import halted_run_for, write_halt_marker
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -17,7 +18,7 @@ DEAD_RUN = "warp-2026-10-01-gate-20261027T142436-989a2d"
 ASK_RUN = "ask-20261109T233008-9b6883"
 
 
-def _strand_claim(root, run_id):
+def _strand_claim(root, run_id) -> None:
     """A timed-out land attempt: the token is redeemed and never consumed or released."""
     script = f"scratch/warp/{run_id}.workflow.mjs"
     token = run_token.mint(root, run_id, script, sizing_rel=SIZING)
@@ -25,7 +26,7 @@ def _strand_claim(root, run_id):
     assert not run_token.is_live(root, run_id)
 
 
-def test_first_refire_of_a_halted_run_with_a_stranded_claim_mints_a_fresh_run(tmp_path):
+def test_first_refire_of_a_halted_run_with_a_stranded_claim_mints_a_fresh_run(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     rd = root / "state" / "warp" / DEAD_RUN
     write_halt_marker(rd, halted="refusal", sizing_rel=SIZING)
@@ -42,7 +43,7 @@ def test_first_refire_of_a_halted_run_with_a_stranded_claim_mints_a_fresh_run(tm
     assert run_token.is_live(root, "ask-20261013T000000-abcdef")
 
 
-def test_a_halted_run_with_no_token_record_still_resumes(tmp_path):
+def test_a_halted_run_with_no_token_record_still_resumes(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     write_halt_marker(root / "state" / "warp" / DEAD_RUN, halted="refusal", sizing_rel=SIZING)
 
@@ -51,7 +52,7 @@ def test_a_halted_run_with_no_token_record_still_resumes(tmp_path):
     assert halted_run_for(root, SIZING) == DEAD_RUN
 
 
-def test_retired_covers_stranded_claim_and_spent_receipt_but_not_live_or_unfired(tmp_path):
+def test_retired_covers_stranded_claim_and_spent_receipt_but_not_live_or_unfired(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     assert token_retired(root, ASK_RUN) is False  # never fired
     run_token.mint(root, ASK_RUN, f"scratch/warp/{ASK_RUN}.workflow.mjs")
@@ -60,20 +61,20 @@ def test_retired_covers_stranded_claim_and_spent_receipt_but_not_live_or_unfired
     assert token_retired(root, "ask-20261109T233008-000001") is True
 
 
-def test_a_fanout_slice_reserved_run_with_a_stranded_claim_is_dropped_but_an_unfired_one_kept(tmp_path):
+def test_a_fanout_slice_reserved_run_with_a_stranded_claim_is_dropped_but_an_unfired_one_kept(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _strand_claim(root, ASK_RUN)
     assert mod._reserved_token_spent(root, ASK_RUN) is True
     assert mod._reserved_token_spent(root, "ask-20261109T233008-111111") is False
 
 
-def _claim_with_budget(root, run_id, budget_secs):
+def _claim_with_budget(root, run_id, budget_secs) -> None:
     script = f"scratch/warp/{run_id}.workflow.mjs"
     token = run_token.mint(root, run_id, script)
     assert run_token.redeem(root, run_id, token, script, budget_secs=budget_secs)
 
 
-def test_a_claim_inside_its_deadline_is_a_lander_in_flight_not_retired(tmp_path):
+def test_a_claim_inside_its_deadline_is_a_lander_in_flight_not_retired(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _claim_with_budget(root, ASK_RUN, 600)
     assert token_retired(root, ASK_RUN) is False
@@ -84,7 +85,7 @@ WARP_RUN = "warp-2026-10-01-gate-20261027T142436-989a2d"
 NOTE = "keep the exit criterion literal"
 
 
-def _write_notes(rd, note=NOTE):
+def _write_notes(rd, note=NOTE) -> None:
     import json
 
     rd.mkdir(parents=True, exist_ok=True)
@@ -106,7 +107,7 @@ def _spent_unmarked_run(root, run_id=WARP_RUN):
     return rd
 
 
-def test_refire_of_a_spent_run_with_no_halt_marker_mints_a_fresh_run_and_keeps_its_notes(tmp_path):
+def test_refire_of_a_spent_run_with_no_halt_marker_mints_a_fresh_run_and_keeps_its_notes(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.halted_run import notes_predecessor
 
     root = _repo(tmp_path)
@@ -123,7 +124,7 @@ def test_refire_of_a_spent_run_with_no_halt_marker_mints_a_fresh_run_and_keeps_i
     assert notes_predecessor(root, SIZING, exclude="ask-20261013T000000-abcdef") == WARP_RUN
 
 
-def test_refire_of_a_halted_spent_run_with_notes_mints_one_fresh_run_and_keeps_its_notes(tmp_path):
+def test_refire_of_a_halted_spent_run_with_notes_mints_one_fresh_run_and_keeps_its_notes(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.halted_run import notes_predecessor
 
     root = _repo(tmp_path)
@@ -141,7 +142,7 @@ def test_refire_of_a_halted_spent_run_with_notes_mints_one_fresh_run_and_keeps_i
     assert notes_predecessor(root, SIZING, exclude="ask-20261013T000000-abcdef") == DEAD_RUN
 
 
-def test_refire_of_a_sizing_bound_to_a_spent_ask_id_mints_one_fresh_run_and_keeps_notes(tmp_path):
+def test_refire_of_a_sizing_bound_to_a_spent_ask_id_mints_one_fresh_run_and_keeps_notes(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.halted_run import notes_predecessor
 
     root = _repo(tmp_path)
@@ -199,7 +200,7 @@ def _bound_slice(root, run_id=LIVE_ASK_RUN):
     return rd
 
 
-def test_refire_of_an_ask_id_run_whose_token_was_consumed_unlanded_emits_once_fresh_with_notes(tmp_path):
+def test_refire_of_an_ask_id_run_whose_token_was_consumed_unlanded_emits_once_fresh_with_notes(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.halted_run import notes_predecessor
 
     root = _repo(tmp_path)
@@ -219,7 +220,7 @@ def test_refire_of_an_ask_id_run_whose_token_was_consumed_unlanded_emits_once_fr
     assert notes_predecessor(root, SIZING, exclude="ask-20261013T000000-abcdef") == LIVE_ASK_RUN
 
 
-def test_refire_of_an_ask_id_run_whose_token_is_still_live_keeps_its_reserved_id(tmp_path):
+def test_refire_of_an_ask_id_run_whose_token_is_still_live_keeps_its_reserved_id(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _bound_slice(root)
     run_token.mint(root, LIVE_ASK_RUN, f"scratch/warp/{LIVE_ASK_RUN}.workflow.mjs", sizing_rel=SIZING)
@@ -230,7 +231,7 @@ def test_refire_of_an_ask_id_run_whose_token_is_still_live_keeps_its_reserved_id
     assert emit.calls[0][0].get("reserved_run_id") == LIVE_ASK_RUN
 
 
-def test_an_unmarked_run_with_an_unspent_token_is_still_the_resume_target(tmp_path):
+def test_an_unmarked_run_with_an_unspent_token_is_still_the_resume_target(tmp_path: Path) -> None:
     import json
 
     root = _repo(tmp_path)
@@ -245,7 +246,7 @@ def test_an_unmarked_run_with_an_unspent_token_is_still_the_resume_target(tmp_pa
     assert mod._unmarked_emitted_run(root, SIZING) is None
 
 
-def test_a_claim_past_its_deadline_is_retired(tmp_path):
+def test_a_claim_past_its_deadline_is_retired(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _claim_with_budget(root, ASK_RUN, 0.001)
     import time

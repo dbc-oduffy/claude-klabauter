@@ -28,7 +28,9 @@ def _expected(root: Path, name: str) -> str:
 def test_resolves_wire_derived_id(tmp_path: Path) -> None:
     p = _write(tmp_path, "state/handoffs/2026-10-14-gap-fill-host-asks.md", "hnd-gap-fill-host-asks")
     res = handoff_id.resolve(p, {"handoff_id": "hnd-gap-fill-host-asks"}, tmp_path)
-    assert res == Resolved({"handoff_id": _expected(tmp_path, p.name)})
+    assert res == Resolved(
+        {"handoff_id": _expected(tmp_path, p.name), "handoff_id_aliases": ["hnd-gap-fill-host-asks"]}
+    )
 
 
 def test_absent_id_resolves(tmp_path: Path) -> None:
@@ -85,11 +87,11 @@ def test_write_records_alias_as_a_list_and_old_id_resolves(tmp_path: Path) -> No
     assert p.read_text(encoding="utf-8") == text
 
 
-def test_write_without_citers_adds_no_alias(tmp_path: Path) -> None:
+def test_write_aliases_a_changed_id_without_any_citer(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     p = _write(tmp_path, "state/handoffs/a-thing.md", "hnd-a-thing")
     assert isinstance(handoff_id.write(p, tmp_path), Resolved)
-    assert "handoff_id_aliases" not in p.read_text(encoding="utf-8")
+    assert "handoff_id_aliases:\n  - hnd-a-thing\n" in p.read_text(encoding="utf-8")
 
 
 def test_archive_list_field_citer_yields_alias(tmp_path: Path) -> None:
@@ -109,6 +111,7 @@ def test_archive_list_field_citer_yields_alias(tmp_path: Path) -> None:
     [
         ("state/artifact-conformance/ledger.json", '{"handoff": "hnd-a-thing"}\n'),
         ("state/audits/triage/ledger-p1.yaml", "rows:\n  - id: hnd-a-thing\n"),
+        ("state/cross-repo/inbox/memo.md", "cites hnd-a-thing\n"),
     ],
 )
 def test_state_ledger_citer_yields_alias(tmp_path: Path, rel: str, body: str) -> None:
@@ -125,78 +128,25 @@ def test_self_is_not_a_citer(tmp_path: Path) -> None:
     assert isinstance(handoff_id.resolve(p, {"handoff_id": "hnd-a-thing"}, tmp_path), Resolved)
 
 
-def test_citer_scan_is_one_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_resolve_spawns_no_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     p = _write(tmp_path, "state/handoffs/a-thing.md", "hnd-a-thing")
     (tmp_path / "state" / "x.json").write_text('"hnd-a-thing"', encoding="utf-8")
-    calls: list[list[str]] = []
-    real = handoff_id.subprocess.run
 
-    def spy(cmd, *a, **k):
-        calls.append(cmd)
-        return real(cmd, *a, **k)
+    def boom(*a, **k):
+        raise AssertionError("resolve spawned a process")
 
-    monkeypatch.setattr(handoff_id.subprocess, "run", spy)
-    handoff_id.resolve(p, {"handoff_id": "hnd-a-thing"}, tmp_path)
-    assert len([c for c in calls if "grep" in c]) == 1
-
-
-def test_run_artifacts_under_state_warp_are_not_citers(tmp_path: Path) -> None:
-    p = _write(tmp_path, "state/handoffs/a-thing.md", "hnd-a-thing")
-    w = tmp_path / "state" / "warp" / "run-1" / "manifest.json"
-    w.parent.mkdir(parents=True)
-    w.write_text('"hnd-a-thing"', encoding="utf-8")
-    assert isinstance(handoff_id.resolve(p, {"handoff_id": "hnd-a-thing"}, tmp_path), Resolved)
-
-
-def test_run_artifacts_under_state_plan_blitz_are_not_citers(tmp_path: Path) -> None:
-    p = _write(tmp_path, "state/handoffs/a-thing.md", "hnd-a-thing")
-    w = tmp_path / "state" / "plan-blitz" / "r" / "x.json"
-    w.parent.mkdir(parents=True)
-    w.write_text('"hnd-a-thing"', encoding="utf-8")
-    assert isinstance(handoff_id.resolve(p, {"handoff_id": "hnd-a-thing"}, tmp_path), Resolved)
-
-
-def test_git_error_refuses_rather_than_reporting_no_citers(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    p = _write(tmp_path, "state/handoffs/a-thing.md", "hnd-a-thing")
-
-    class _Proc:
-        returncode = 128
-        stdout = b""
-
-    real = handoff_id.subprocess.run
-    monkeypatch.setattr(
-        handoff_id.subprocess,
-        "run",
-        lambda cmd, *a, **k: _Proc() if "grep" in cmd else real(cmd, *a, **k),
-    )
+    monkeypatch.setattr(handoff_id, "resolve_repo_name", lambda root: "repo")
+    monkeypatch.setattr(subprocess, "run", boom)
+    monkeypatch.setattr(subprocess, "Popen", boom)
     res = handoff_id.resolve(p, {"handoff_id": "hnd-a-thing"}, tmp_path)
-    assert isinstance(res, Refused) and res.reason == "handoff-id-referenced"
+    assert isinstance(res, Resolved) and res.value["handoff_id_aliases"] == ["hnd-a-thing"]
 
 
-@pytest.mark.parametrize("exc", [FileNotFoundError("git"), subprocess.TimeoutExpired("git", 2)])
-def test_spawn_failure_refuses_typed(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, exc: Exception
-) -> None:
-    p = _write(tmp_path, "state/handoffs/a-thing.md", "hnd-a-thing")
-
-    real = handoff_id.subprocess.run
-
-    def boom(cmd, *a, **k):
-        if "grep" in cmd:
-            raise exc
-        return real(cmd, *a, **k)
-
-    monkeypatch.setattr(handoff_id.subprocess, "run", boom)
-    res = handoff_id.resolve(p, {"handoff_id": "hnd-a-thing"}, tmp_path)
-    assert isinstance(res, Refused) and res.reason == "handoff-id-referenced"
-
-
-def test_unreferenced_old_id_is_not_refused(tmp_path: Path) -> None:
+def test_uncited_old_id_is_aliased_not_refused(tmp_path: Path) -> None:
     p = _write(tmp_path, "state/handoffs/a-thing.md", "hnd-a-thing")
     _write(tmp_path, "state/handoffs/other.md", "hnd-other-abcdef", "predecessor_id: hnd-zzz-123456\n")
-    assert isinstance(handoff_id.resolve(p, {"handoff_id": "hnd-a-thing"}, tmp_path), Resolved)
+    res = handoff_id.resolve(p, {"handoff_id": "hnd-a-thing"}, tmp_path)
+    assert isinstance(res, Resolved) and res.value["handoff_id_aliases"] == ["hnd-a-thing"]
 
 
 def test_refuses_collision_with_other_holder(tmp_path: Path) -> None:
@@ -243,8 +193,8 @@ def test_repo_label_is_the_emitting_repo(tmp_path: Path, monkeypatch: pytest.Mon
     assert seen == [resolve_repo_name(tmp_path)]
 
 
-def test_a_many_path_call_scans_citers_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """One citer scan per call, never per path: 14 per-path scans were ~2-3s of process time."""
+def test_a_many_path_call_spawns_no_git_grep(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """No citer scan on any path of a call: the git-grep scan was over the DR-344 kill bar."""
     from coordinator_core.ops import frontmatter_remint
 
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, capture_output=True)
@@ -260,9 +210,9 @@ def test_a_many_path_call_scans_citers_once(tmp_path: Path, monkeypatch: pytest.
             calls.append(argv)
         return real(argv, *a, **k)
 
-    monkeypatch.setattr(handoff_id.subprocess, "run", counting)
+    monkeypatch.setattr(subprocess, "run", counting)
     out = frontmatter_remint._handler({"paths": rels, "fields": ["handoff_id"]}, repo_root=tmp_path)
-    assert len(calls) == 1
+    assert calls == []
     outcomes = {r["path"]: r["fields"][0] for r in out["results"]}
     assert outcomes[rels[2]]["outcome"] == "written"
     assert "hnd-thing-2" in (tmp_path / rels[2]).read_text(encoding="utf-8").split("handoff_id_aliases:")[1]

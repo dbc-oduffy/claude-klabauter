@@ -8,10 +8,11 @@ from coordinator_core import machine_profile
 from coordinator_core.write_guards import block_home_root_write as guard
 from coordinator_core.write_guards import engine
 from coordinator_core.write_guards._home_root import DENY_REASON
+from pathlib import Path
 
 
 @pytest.fixture
-def home(tmp_path, monkeypatch):
+def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     h = tmp_path / "home"
     h.mkdir()
     monkeypatch.setenv("USERPROFILE", str(h))
@@ -20,52 +21,52 @@ def home(tmp_path, monkeypatch):
     return h
 
 
-def _payload(path, tool="Write", key="file_path", cwd=None):
+def _payload(path, tool: str = "Write", key: str = "file_path", cwd=None):
     payload = {"tool_name": tool, "tool_input": {key: str(path)}}
     if cwd is not None:
         payload["cwd"] = str(cwd)
     return payload
 
 
-def test_write_of_new_home_file_is_advised(home):
+def test_write_of_new_home_file_is_advised(home) -> None:
     """advisory-by-ruling (recoverable clutter at the home root): allow plus one advisory line."""
     out = guard.check(_payload(home / "fo.txt"))["hookSpecificOutput"]
     assert out["permissionDecision"] == "allow"
     assert out["additionalContext"] == machine_profile.ADVISORY_PREFIX + DENY_REASON
 
 
-def test_notebook_path_is_judged(home):
+def test_notebook_path_is_judged(home) -> None:
     assert guard.check(_payload(home / "n.ipynb", "NotebookEdit", "notebook_path")) is not None
 
 
-def test_tool_owned_dotfile_is_allowed(home):
+def test_tool_owned_dotfile_is_allowed(home) -> None:
     assert guard.check(_payload(home / ".gitconfig")) is None
 
 
-def test_edit_of_existing_home_file_is_allowed(home):
+def test_edit_of_existing_home_file_is_allowed(home) -> None:
     existing = home / "keep.txt"
     existing.write_text("x", encoding="utf-8")
     assert guard.check(_payload(existing, "Edit")) is None
 
 
-def test_home_subdir_is_allowed(home):
+def test_home_subdir_is_allowed(home) -> None:
     assert guard.check(_payload(home / "sub" / "fo.txt")) is None
 
 
-def test_malformed_payload_allows(home):
+def test_malformed_payload_allows(home) -> None:
     assert guard.check({"tool_input": "nope"}) is None
     assert guard.check({}) is None
 
 
 @pytest.mark.parametrize("level", ["strict", "warn", "off"])
-def test_no_guard_level_lifts_the_advisory_to_a_deny(home, monkeypatch, level):
+def test_no_guard_level_lifts_the_advisory_to_a_deny(home, monkeypatch: pytest.MonkeyPatch, level) -> None:
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
     machine_profile.reset_cache()
     out = guard.check(_payload(home / "fo.txt"))
     assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
-def test_home_under_a_git_repo_this_guard_wins_over_out_of_repo_bump(home, tmp_path):
+def test_home_under_a_git_repo_this_guard_wins_over_out_of_repo_bump(home, tmp_path: Path) -> None:
     other = tmp_path / "other-repo"
     (other / ".git").mkdir(parents=True)
     result = engine.evaluate(_payload(home / "fo.txt", cwd=other), cwd=str(other))

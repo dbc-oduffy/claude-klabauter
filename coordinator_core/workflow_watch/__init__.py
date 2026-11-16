@@ -30,7 +30,7 @@ DEFAULT_CAP_SECONDS = 30 * 60
 DEFAULT_CAP_MS = int(DEFAULT_CAP_SECONDS * 1000)
 
 
-def _make_renderer(journal_path: str):
+def _make_renderer(journal_path: str) -> JournalRenderer:
     return JournalRenderer(journal_path)
 
 

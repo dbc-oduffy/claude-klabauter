@@ -14,6 +14,7 @@ from coordinator_core.ops.dispatch_emit.ask_compose import (
     compose_ask_script,
 )
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -81,7 +82,7 @@ def _drive(first: dict, replies: list[dict], tmp_path) -> dict:
 
 
 @pytest.mark.parametrize("exit_fields", [{"exit_code": 0, "stdout": "not run", "stderr": ""}, {}], ids=["exit0-not-run", "no-exit-code"])
-def test_a_values_only_first_reply_assembles_via_one_retry_and_reaches_the_gate(exit_fields, tmp_path):
+def test_a_values_only_first_reply_assembles_via_one_retry_and_reaches_the_gate(exit_fields, tmp_path: Path) -> None:
     out = _drive({**_FULL, **exit_fields}, [_RETRY_OK], tmp_path)
     assert [c["label"] for c in out["calls"]] == ["size", "size-retry"]
     retry = out["calls"][1]["prompt"]
@@ -93,7 +94,7 @@ def test_a_values_only_first_reply_assembles_via_one_retry_and_reaches_the_gate(
     assert out["gate"]["arm"] == "M"
 
 
-def test_a_first_reply_missing_a_required_field_gets_the_no_values_retry(tmp_path):
+def test_a_first_reply_missing_a_required_field_gets_the_no_values_retry(tmp_path: Path) -> None:
     first = {k: v for k, v in _FULL.items() if k != "premise_evidence"}
     out = _drive({**first, "exit_code": 0, "stdout": "not run", "stderr": ""}, [_RETRY_OK], tmp_path)
     assert [c["label"] for c in out["calls"]] == ["size", "size-retry"]
@@ -102,7 +103,7 @@ def test_a_first_reply_missing_a_required_field_gets_the_no_values_retry(tmp_pat
     assert "--tshirt 'M'" not in retry
 
 
-def test_a_retry_that_also_proves_nothing_halts_with_a_named_refusal(tmp_path):
+def test_a_retry_that_also_proves_nothing_halts_with_a_named_refusal(tmp_path: Path) -> None:
     out = _drive({**_FULL, "exit_code": 0, "stdout": "not run", "stderr": ""}, [_RETRY_NO_PROOF], tmp_path)
     assert [c["label"] for c in out["calls"]] == ["size", "size-retry"]
     assert out["halted"]["halted"] == "refusal"
@@ -110,7 +111,7 @@ def test_a_retry_that_also_proves_nothing_halts_with_a_named_refusal(tmp_path):
     assert "sizing-assemble did not run" in reason or SCOUT_DID_NOT_ASSEMBLE_REASON in reason
 
 
-def test_a_retry_that_proves_nothing_but_reports_the_sizing_file_present_does_not_halt(tmp_path):
+def test_a_retry_that_proves_nothing_but_reports_the_sizing_file_present_does_not_halt(tmp_path: Path) -> None:
     out = _drive(
         {**_FULL, "exit_code": 0, "stdout": "not run", "stderr": ""},
         [{**_RETRY_NO_PROOF, "sizing_present": True}], tmp_path,
@@ -119,14 +120,14 @@ def test_a_retry_that_proves_nothing_but_reports_the_sizing_file_present_does_no
     assert out["halted"] is None
 
 
-def test_a_non_zero_exit_with_values_fires_no_retry(tmp_path):
+def test_a_non_zero_exit_with_values_fires_no_retry(tmp_path: Path) -> None:
     first = {**_FULL, "exit_code": 2, "stdout": "boom", "stderr": "bad"}
     out = _drive(first, [], tmp_path)
     assert [c["label"] for c in out["calls"]] == ["size"]
     assert "sizing-assemble failed (exit 2)" in out["halted"]["reason"]
 
 
-def test_staged_scout_body_moves_to_the_sink_and_the_retry_keeps_its_dynamic_command():
+def test_staged_scout_body_moves_to_the_sink_and_the_retry_keeps_its_dynamic_command() -> None:
     sink: dict[str, str] = {}
     staged = _compose(staged_out=sink)
     assert staged.count("run-1/prompts/scout.md in full") == 2  # the size leg and the size-retry leg
@@ -135,5 +136,5 @@ def test_staged_scout_body_moves_to_the_sink_and_the_retry_keeps_its_dynamic_com
     assert "sizing-assemble" in _compose()
 
 
-def test_the_size_retry_call_site_stays_single():
+def test_the_size_retry_call_site_stays_single() -> None:
     assert _compose().count("label: 'size-retry'") == 1

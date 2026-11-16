@@ -12,6 +12,7 @@ import pytest
 from coordinator_core.bash_guards import check_test_suite_invocation as guard
 from coordinator_core.session import suite_authority, tier_u_gate
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -34,7 +35,7 @@ def _repo(tmp_path, *, fast=None, full=None):
 
 
 @pytest.fixture
-def grant_calls(monkeypatch):
+def grant_calls(monkeypatch: pytest.MonkeyPatch):
     calls = []
 
     def _spy(**kw):
@@ -54,7 +55,7 @@ def _gate_f(repo, cmd):
         return tier_u_gate.enforce_tier_u_gate(cmd, repo_root=str(repo), session_id="s1")
 
 
-def test_tier_f_own_fast_cmd_refused_before_grant(tmp_path, monkeypatch, grant_calls):
+def test_tier_f_own_fast_cmd_refused_before_grant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, grant_calls) -> None:
     repo = _repo(tmp_path, fast=_FAST)
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "x::y (call)")
     result = _gate_f(repo, _FAST)
@@ -65,7 +66,7 @@ def test_tier_f_own_fast_cmd_refused_before_grant(tmp_path, monkeypatch, grant_c
     assert grant_calls == []
 
 
-def test_tier_f_space_prefix_extension_refused(tmp_path, monkeypatch, grant_calls):
+def test_tier_f_space_prefix_extension_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, grant_calls) -> None:
     repo = _repo(tmp_path, fast=_FAST)
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "x::y (call)")
     result = _gate_f(repo, _FAST + " coordinator_core/other/test_z.py")
@@ -73,7 +74,7 @@ def test_tier_f_space_prefix_extension_refused(tmp_path, monkeypatch, grant_call
     assert grant_calls == []
 
 
-def test_tier_u_full_cmd_refused_before_grant(tmp_path, monkeypatch, grant_calls):
+def test_tier_u_full_cmd_refused_before_grant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, grant_calls) -> None:
     repo = _repo(tmp_path, full="pytest")
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "x::y (call)")
     result = tier_u_gate.enforce_tier_u_gate("pytest", repo_root=str(repo), session_id="s1")
@@ -82,7 +83,7 @@ def test_tier_u_full_cmd_refused_before_grant(tmp_path, monkeypatch, grant_calls
     assert grant_calls == []
 
 
-def test_without_pytest_env_grant_is_consulted(tmp_path, monkeypatch, grant_calls):
+def test_without_pytest_env_grant_is_consulted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, grant_calls) -> None:
     repo = _repo(tmp_path, fast=_FAST)
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     result = _gate_f(repo, _FAST)
@@ -90,7 +91,7 @@ def test_without_pytest_env_grant_is_consulted(tmp_path, monkeypatch, grant_call
     assert len(grant_calls) == 1
 
 
-def test_no_on_disk_key_leaves_stub_injection_alone(tmp_path, monkeypatch, grant_calls):
+def test_no_on_disk_key_leaves_stub_injection_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, grant_calls) -> None:
     repo = _repo(tmp_path)
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "x::y (call)")
     assert tier_u_gate._resolving_own_tier_from_inside_its_suite(_FAST, str(repo)) is None
@@ -99,7 +100,7 @@ def test_no_on_disk_key_leaves_stub_injection_alone(tmp_path, monkeypatch, grant
     assert len(grant_calls) == 1
 
 
-def test_non_prefix_command_not_matched(tmp_path, monkeypatch):
+def test_non_prefix_command_not_matched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path, fast=_FAST)
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "x::y (call)")
     assert tier_u_gate._resolving_own_tier_from_inside_its_suite(_FAST + "x", str(repo)) is None

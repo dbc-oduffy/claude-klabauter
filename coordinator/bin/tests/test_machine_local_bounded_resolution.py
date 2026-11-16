@@ -27,7 +27,7 @@ def _toml_path(p: Path) -> str:
 
 
 @pytest.fixture
-def reg(tmp_path, monkeypatch):
+def reg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     d = tmp_path / "reg"
     d.mkdir()
     for k in [k for k in os.environ if k.startswith("REPO_")]:
@@ -50,7 +50,7 @@ def _search_root_with_candidates(tmp_path: Path, reg: Path, slug: str, n: int) -
     (reg / "search-roots.toml").write_text(f'{sys.platform} = ["{_toml_path(root)}"]\n')
 
 
-def test_declared_registry_key_resolves_with_zero_spawns(reg, tmp_path, monkeypatch):
+def test_declared_registry_key_resolves_with_zero_spawns(reg, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "declared"
     target.mkdir()
     (reg / "registry.local.toml").write_text(f'"repos.foo" = "{_toml_path(target)}"\n')
@@ -62,7 +62,7 @@ def test_declared_registry_key_resolves_with_zero_spawns(reg, tmp_path, monkeypa
     assert rc == 0 and Path(val) == target
 
 
-def test_declared_path_exception_resolves_with_zero_spawns(reg, tmp_path, monkeypatch):
+def test_declared_path_exception_resolves_with_zero_spawns(reg, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "exc"
     target.mkdir()
     (reg / "path-exceptions.toml").write_text(f'[{sys.platform}]\nfoo = "{_toml_path(target)}"\n')
@@ -73,14 +73,14 @@ def test_declared_path_exception_resolves_with_zero_spawns(reg, tmp_path, monkey
     assert rc == 0 and Path(val) == target
 
 
-def test_undeclared_key_still_autodiscovers(reg, tmp_path, monkeypatch):
+def test_undeclared_key_still_autodiscovers(reg, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _search_root_with_candidates(tmp_path, reg, "bar", 1)
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1, "", ""))
     rc, val = _ml.resolve_one("repos.bar")
     assert rc == 0 and val.endswith("copy0")
 
 
-def test_stalled_git_cannot_push_get_past_deadline(reg, tmp_path, monkeypatch):
+def test_stalled_git_cannot_push_get_past_deadline(reg, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _search_root_with_candidates(tmp_path, reg, "baz", 4)
     calls = []
 
@@ -101,7 +101,7 @@ def test_stalled_git_cannot_push_get_past_deadline(reg, tmp_path, monkeypatch):
     assert max(calls) <= 0.4
 
 
-def test_in_process_get_deadline_is_typed_timeout_not_absence(reg, tmp_path, monkeypatch, capsys):
+def test_in_process_get_deadline_is_typed_timeout_not_absence(reg, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _search_root_with_candidates(tmp_path, reg, "qux", 2)
     monkeypatch.setattr(_ml, "_deadline_at", time.monotonic() - 1)
     monkeypatch.setattr(sys, "argv", ["machine-local", "get", "repos.qux", "--default", "fallback"])
@@ -111,7 +111,7 @@ def test_in_process_get_deadline_is_typed_timeout_not_absence(reg, tmp_path, mon
     assert cap.err.startswith("machine-local-timeout:") and "fallback" not in cap.out
 
 
-def test_keys_set_only_timeout_is_typed_not_omitted(reg, tmp_path, monkeypatch, capsys):
+def test_keys_set_only_timeout_is_typed_not_omitted(reg, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     target = tmp_path / "declared"
     target.mkdir()
     (reg / "registry.local.toml").write_text(
@@ -134,13 +134,13 @@ def test_keys_set_only_timeout_is_typed_not_omitted(reg, tmp_path, monkeypatch, 
     assert cap.err.startswith("machine-local-timeout:") and "repos.beta" not in cap.out
 
 
-def test_unset_key_stays_exit_1(reg, monkeypatch):
+def test_unset_key_stays_exit_1(reg, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subprocess, "run", lambda *a, **k: subprocess.CompletedProcess(a, 1, "", ""))
     rc, _ = _ml.resolve_one("repos.nothere")
     assert rc == _ml.EXIT_NOT_FOUND
 
 
-def test_watchdog_exits_with_named_error_when_a_read_blocks(tmp_path):
+def test_watchdog_exits_with_named_error_when_a_read_blocks(tmp_path: Path) -> None:
     reg = tmp_path / "reg"
     reg.mkdir()
     code = (
@@ -155,7 +155,7 @@ def test_watchdog_exits_with_named_error_when_a_read_blocks(tmp_path):
     assert p.stderr.startswith("machine-local-timeout:") and "deadline of 0.3s exceeded" in p.stderr
 
 
-def test_oversize_registry_file_is_refused(reg, monkeypatch):
+def test_oversize_registry_file_is_refused(reg, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_ml, "_MAX_TOML_BYTES", 100)
     (reg / "registry.local.toml").write_text("# " + "x" * 500 + "\n")
     with pytest.raises(SystemExit) as ei:
@@ -163,7 +163,7 @@ def test_oversize_registry_file_is_refused(reg, monkeypatch):
     assert ei.value.code == _ml.EXIT_OPERATIONAL
 
 
-def test_dump_peak_memory_is_bounded_for_many_keys(reg, tmp_path, monkeypatch, capsys):
+def test_dump_peak_memory_is_bounded_for_many_keys(reg, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     lines = []
     for i in range(1500):
         t = tmp_path / f"r{i}"
@@ -187,14 +187,14 @@ def test_dump_peak_memory_is_bounded_for_many_keys(reg, tmp_path, monkeypatch, c
     assert peak < 40 * 1024 * 1024, peak
 
 
-def test_declared_key_with_slow_target_stat_still_resolves(reg, tmp_path, monkeypatch):
+def test_declared_key_with_slow_target_stat_still_resolves(reg, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "slow"
     target.mkdir()
     (reg / "path-exceptions.toml").write_text(f'[{sys.platform}]\nfoo = "{_toml_path(target)}"\n')
     monkeypatch.setattr(_ml, "_scan_budget_s", 0.8)
     real_exists = Path.exists
 
-    def slow_exists(self, *a, **k):
+    def slow_exists(self, *a, **k) -> bool:
         time.sleep(1.0)
         return real_exists(self, *a, **k)
 

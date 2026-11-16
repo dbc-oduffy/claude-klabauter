@@ -303,3 +303,25 @@ def test_dispositions_for_delivered_is_empty_when_nothing_was_delivered():
     rows = [{"id": "C1"}, {"id": "C2"}]
 
     assert dispositions_for_delivered(rows, []) == []
+
+
+def test_load_rows_parses_with_the_engine_loader_not_pure_python_safe_load(monkeypatch):
+    import yaml
+
+    def _refuse(*_a, **_k):
+        raise AssertionError("pure-Python yaml.safe_load on the spine")
+
+    monkeypatch.setattr(yaml, "safe_load", _refuse)
+    source = _plan_source("- id: C1\n  title: one\n  disposition: open\n")
+
+    result = load_rows(source)
+
+    assert result.status is LocateStatus.LOCATED
+    assert result.rows == [{"id": "C1", "title": "one", "disposition": "open"}]
+
+
+def test_load_rows_still_degrades_a_yaml_error_to_malformed():
+    result = load_rows(_plan_source("- id: C1\n  title: [unclosed\n"))
+
+    assert result.status is LocateStatus.MALFORMED
+    assert result.rows == []

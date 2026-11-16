@@ -1,5 +1,6 @@
 
 from coordinator_core.backlog_grind_assemble import apply as apply_mod
+import pytest
 
 
 def _run(argv, monkeypatch):
@@ -15,7 +16,7 @@ def _run(argv, monkeypatch):
     return rc, calls
 
 
-def test_a_bug_blitz_apply_without_wave_path_names_the_omission(monkeypatch, capsys):
+def test_a_bug_blitz_apply_without_wave_path_names_the_omission(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _run(["bug-blitz"], monkeypatch)
 
     err = capsys.readouterr().err
@@ -23,7 +24,7 @@ def test_a_bug_blitz_apply_without_wave_path_names_the_omission(monkeypatch, cap
     assert "nothing to resolve" in err
 
 
-def test_the_notice_does_not_fire_when_a_wave_path_is_given(monkeypatch, capsys):
+def test_the_notice_does_not_fire_when_a_wave_path_is_given(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _run(
         ["bug-blitz", "--wave-path", "README.md", "--granularity", "per-wave",
          "--message", "m"],
@@ -33,7 +34,7 @@ def test_the_notice_does_not_fire_when_a_wave_path_is_given(monkeypatch, capsys)
     assert "nothing to resolve" not in capsys.readouterr().err
 
 
-def test_the_notice_is_scoped_to_bug_blitz(monkeypatch, capsys):
+def test_the_notice_is_scoped_to_bug_blitz(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _run(["mise-en-place"], monkeypatch)
 
     assert "nothing to resolve" not in capsys.readouterr().err

@@ -7,11 +7,13 @@ from types import SimpleNamespace
 
 from coordinator_core.session import external_registry as registry, core, harness_registry
 from coordinator_core.group_em import session_registry
+from pathlib import Path
+import pytest
 
 SID = "01a1b63c-040a-76f2-a9b9-929d9a0d0098"
 
 
-def test_lifecycle_verifies_host_birth_and_publishes_global_consumers(tmp_path, monkeypatch):
+def test_lifecycle_verifies_host_birth_and_publishes_global_consumers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     directory = tmp_path / "host-registry"
     monkeypatch.setattr(registry, "settings_home", lambda: tmp_path)
     import psutil
@@ -34,7 +36,7 @@ def test_lifecycle_verifies_host_birth_and_publishes_global_consumers(tmp_path, 
     assert harness_registry.lookup(SID) is None
 
 
-def test_invalid_dead_and_reused_bindings_are_not_live(tmp_path, monkeypatch):
+def test_invalid_dead_and_reused_bindings_are_not_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(registry, "settings_home", lambda: tmp_path)
     base = registry.registry_dir()
     base.mkdir(parents=True)
@@ -45,7 +47,7 @@ def test_invalid_dead_and_reused_bindings_are_not_live(tmp_path, monkeypatch):
     assert registry.lookup(SID) is None
 
 
-def test_fractional_birth_uses_real_stable_pid_comparison(tmp_path, monkeypatch):
+def test_fractional_birth_uses_real_stable_pid_comparison(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(registry, "settings_home", lambda: tmp_path)
     base = registry.registry_dir()
     base.mkdir(parents=True)
@@ -63,7 +65,7 @@ def test_fractional_birth_uses_real_stable_pid_comparison(tmp_path, monkeypatch)
     assert registry.lookup(SID) is None
 
 
-def test_hook_boundary_stays_nonblocking_and_reads_payload(monkeypatch, capsys):
+def test_hook_boundary_stays_nonblocking_and_reads_payload(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     seen = []
     monkeypatch.setattr(registry.sys, "stdin", io.StringIO(json.dumps({"session_id": SID, "cwd": "fixture"})))
     monkeypatch.setattr(registry, "register_current", lambda payload: seen.append(payload))
@@ -76,7 +78,7 @@ def test_hook_boundary_stays_nonblocking_and_reads_payload(monkeypatch, capsys):
     assert out.out == "{}\n" and "external-session" in out.err
 
 
-def test_session_end_does_not_revive_from_shared_pid_local_metadata_and_resume_reopens(tmp_path, monkeypatch):
+def test_session_end_does_not_revive_from_shared_pid_local_metadata_and_resume_reopens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import liveness
     import psutil
     sid2 = "01a1b63c-040a-76f2-a9b9-929d9a0d0099"
@@ -110,7 +112,7 @@ def test_session_end_does_not_revive_from_shared_pid_local_metadata_and_resume_r
     assert liveness.session_live(SID, own) and liveness.session_live(SID, elsewhere)
 
 
-def test_registered_thread_sid_routes_without_mutating_explicit_bindings_and_end_withdraws(tmp_path, monkeypatch):
+def test_registered_thread_sid_routes_without_mutating_explicit_bindings_and_end_withdraws(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.agent_pipe import roster, bridge, codex_app_server
     from coordinator_core.agent_pipe.codex import CodexAdapter
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
@@ -140,7 +142,7 @@ def test_registered_thread_sid_routes_without_mutating_explicit_bindings_and_end
 
 
 
-def test_context_metadata_preserved_across_end_and_resume(tmp_path, monkeypatch):
+def test_context_metadata_preserved_across_end_and_resume(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import psutil
     monkeypatch.setattr(registry,'settings_home',lambda:tmp_path)
     native=SimpleNamespace(pid=4321,name=lambda:'codex.exe',create_time=lambda:time.time()-1,

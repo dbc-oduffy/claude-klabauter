@@ -24,6 +24,11 @@ import importlib.util
 import pathlib
 
 import pytest
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -38,7 +43,7 @@ _REPO_MODULE_PATH = (
 )
 
 
-def _load_repo_module():
+def _load_repo_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location("_repo", _REPO_MODULE_PATH)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -55,7 +60,7 @@ def _make_gitless_tree(tmp_path: pathlib.Path) -> pathlib.Path:
     return tmp_path
 
 
-def test_gitless_walk_excludes_gitignored_state_dir(tmp_path):
+def test_gitless_walk_excludes_gitignored_state_dir(tmp_path: Path) -> None:
     module = _load_repo_module()
     root = _make_gitless_tree(tmp_path)
     paths = module.repo_files(root)
@@ -65,7 +70,7 @@ def test_gitless_walk_excludes_gitignored_state_dir(tmp_path):
     assert "README.md" in paths
 
 
-def test_gitless_walk_excludes_extension_glob_pattern(tmp_path):
+def test_gitless_walk_excludes_extension_glob_pattern(tmp_path: Path) -> None:
     module = _load_repo_module()
     root = tmp_path
     (root / ".gitignore").write_text("*.bak\n", encoding="utf-8")
@@ -76,7 +81,7 @@ def test_gitless_walk_excludes_extension_glob_pattern(tmp_path):
     assert "keep.py" in paths
 
 
-def test_gitless_walk_excludes_globbed_directory_pattern(tmp_path):
+def test_gitless_walk_excludes_globbed_directory_pattern(tmp_path: Path) -> None:
     module = _load_repo_module()
     root = tmp_path
     (root / ".gitignore").write_text(".fleet-env.gen-*/\n", encoding="utf-8")
@@ -88,7 +93,7 @@ def test_gitless_walk_excludes_globbed_directory_pattern(tmp_path):
     assert paths == [".gitignore", "keep.py"]
 
 
-def test_gitless_walk_still_enumerates_a_non_ignored_leak_path(tmp_path):
+def test_gitless_walk_still_enumerates_a_non_ignored_leak_path(tmp_path: Path) -> None:
     module = _load_repo_module()
     root = _make_gitless_tree(tmp_path)
     leak_dir = root / "coordinator_core"
@@ -103,7 +108,7 @@ def test_gitless_walk_still_enumerates_a_non_ignored_leak_path(tmp_path):
     )
 
 
-def test_git_aware_walk_excludes_publish_staging_dir(tmp_path):
+def test_git_aware_walk_excludes_publish_staging_dir(tmp_path: Path) -> None:
     """`_create_publish_staging_dir` mints `.{dest_dir.name}.publish-staging-
     <random>` destination-ADJACENT (`coordinator/bin/publish.py`) -- untracked,
     and NOT covered by any `.gitignore` entry, so `_git_files`'s own
@@ -135,7 +140,7 @@ def test_git_aware_walk_excludes_publish_staging_dir(tmp_path):
     assert "README.md" in paths
 
 
-def test_tracked_publish_staging_dir_is_scanned_and_flagged(tmp_path):
+def test_tracked_publish_staging_dir_is_scanned_and_flagged(tmp_path: Path) -> None:
     """The staging skip's premise is "these bytes never ship", and that holds
     only while the directory is UNTRACKED. Once a blanket `git add` puts it
     in the index it IS the published payload -- pre-transform source bytes,
@@ -174,7 +179,7 @@ def test_tracked_publish_staging_dir_is_scanned_and_flagged(tmp_path):
     assert module.tracked_publish_staging_paths(root) == [rel]
 
 
-def test_untracked_publish_staging_dir_is_absent_from_the_tracked_enumeration(tmp_path):
+def test_untracked_publish_staging_dir_is_absent_from_the_tracked_enumeration(tmp_path: Path) -> None:
     module = _load_repo_module()
     root = tmp_path
     import subprocess
@@ -189,7 +194,7 @@ def test_untracked_publish_staging_dir_is_absent_from_the_tracked_enumeration(tm
     assert module.tracked_publish_staging_paths(root) == []
 
 
-def test_basename_containing_publish_staging_is_still_included(tmp_path):
+def test_basename_containing_publish_staging_is_still_included(tmp_path: Path) -> None:
     """Negative spec (§ module docstring's `SKIP_DIR_NAMES` discipline): a
     genuinely shipped FILE whose own basename contains `publish-staging-`
     must not be dropped -- only a directory COMPONENT is staging scratch."""
@@ -207,7 +212,7 @@ def test_basename_containing_publish_staging_is_still_included(tmp_path):
     )
 
 
-def test_unrecognized_gitignore_shapes_are_not_filtered(tmp_path):
+def test_unrecognized_gitignore_shapes_are_not_filtered(tmp_path: Path) -> None:
     module = _load_repo_module()
     root = tmp_path
     (root / ".gitignore").write_text("/anchored-dir/\nnested/path/\n!keep-me\n", encoding="utf-8")

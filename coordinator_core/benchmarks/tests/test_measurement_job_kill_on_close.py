@@ -12,6 +12,7 @@ from ctypes import wintypes
 import pytest
 
 from coordinator_core.benchmarks import process_time
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.skipif(not process_time.IS_WINDOWS, reason="Windows job-object behaviour"),
@@ -75,7 +76,7 @@ def _limit_flags(job) -> int:
     return int(info.BasicLimitInformation.LimitFlags)
 
 
-def test_created_job_carries_kill_on_close():
+def test_created_job_carries_kill_on_close() -> None:
     job = process_time._windows_create_kill_on_close_job()
     try:
         flags = _limit_flags(job)
@@ -84,7 +85,7 @@ def test_created_job_carries_kill_on_close():
     assert flags & process_time._JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 
 
-def test_job_without_the_flag_is_distinguishable():
+def test_job_without_the_flag_is_distinguishable() -> None:
     job = process_time._k32.CreateJobObjectW(None, None)
     try:
         flags = _limit_flags(job)
@@ -93,7 +94,7 @@ def test_job_without_the_flag_is_distinguishable():
     assert not flags & process_time._JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE
 
 
-def test_closing_the_job_handle_kills_a_live_member(tmp_path):
+def test_closing_the_job_handle_kills_a_live_member(tmp_path: Path) -> None:
     pid_file = tmp_path / "pid.txt"
     job = process_time._windows_create_kill_on_close_job()
     proc = subprocess.Popen(
@@ -119,7 +120,7 @@ def test_closing_the_job_handle_kills_a_live_member(tmp_path):
 
 @pytest.mark.deliberate_wall_clock(reason="bounds how long a hung child blocks the measurement before it raises, a wait CPU time cannot see")
 @pytest.mark.parametrize("entry", ["batched", "single_invocation"])
-def test_hung_child_raises_within_bound_and_is_killed(entry, tmp_path, monkeypatch):
+def test_hung_child_raises_within_bound_and_is_killed(entry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(process_time, "SPAWN_WAIT_TIMEOUT_S", _TIMEOUT_S)
     pid_file = tmp_path / "pid.txt"
     cmd = [sys.executable, "-c", _HUNG_CHILD, str(pid_file)]

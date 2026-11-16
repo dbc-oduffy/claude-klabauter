@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_inventory_tranche_and_withhel
     _n_rows,
     _repo,
 )
+from pathlib import Path
 
 _HEAD = (
     "---\nrun_id: 20261019T000000-acct\n---\n\n## Chunk table\n\n"
@@ -27,7 +28,7 @@ def _dogfood_inventory(tmp_path):
     (tmp_path / "state" / "mise-inventory").mkdir(parents=True)
     lines = []
 
-    def add(i, deps="—", disp="pending"):
+    def add(i, deps: str = "—", disp: str = "pending") -> None:
         lines.append(f"| m{i} | — | s{i} | `src/m{i}.py` | {deps} | v | S | {disp} |\n")
 
     for i in range(1, 44):
@@ -44,16 +45,16 @@ def _dogfood_inventory(tmp_path):
     return inv
 
 
-def _ids(inv):
+def _ids(inv) -> list[str]:
     return [im._strip_backtick(r["id"]) for r in im.parse_chunk_table(inv.read_text(encoding="utf-8"))]
 
 
-def _minted_items(text, item_ids):
+def _minted_items(text, item_ids) -> set[str]:
     rows = yaml.safe_load(text.split("```yaml plan-tasks\n", 1)[1].split("```", 1)[0]) or []
     return set(im._row_item_ids(rows, item_ids))
 
 
-def test_every_dogfood_item_is_minted_or_carries_a_reason(tmp_path):
+def test_every_dogfood_item_is_minted_or_carries_a_reason(tmp_path: Path) -> None:
     inv = _dogfood_inventory(tmp_path)
     ids = _ids(inv)
     assert len(ids) == 59
@@ -69,7 +70,7 @@ def test_every_dogfood_item_is_minted_or_carries_a_reason(tmp_path):
     assert ledger["m59"] == "dependency m58 routed out"
 
 
-def test_tranche_skipped_names_every_non_minted_item(tmp_path):
+def test_tranche_skipped_names_every_non_minted_item(tmp_path: Path) -> None:
     inv = _dogfood_inventory(tmp_path)
     ids = _ids(inv)
     ledger: dict = {}
@@ -88,7 +89,7 @@ def test_tranche_skipped_names_every_non_minted_item(tmp_path):
     assert ledger["m43"] and "row_budget" in ledger["m43"]
 
 
-def test_part_marks_items_of_other_parts(tmp_path):
+def test_part_marks_items_of_other_parts(tmp_path: Path) -> None:
     inv = _dogfood_inventory(tmp_path)
     ids = _ids(inv)
     ledger: dict = {}
@@ -100,7 +101,7 @@ def test_part_marks_items_of_other_parts(tmp_path):
     assert _minted_items(text, ids) == set(items)
 
 
-def test_plan_sites_withheld_landed_and_skip_landed(tmp_path):
+def test_plan_sites_withheld_landed_and_skip_landed(tmp_path: Path) -> None:
     held = [
         _chunk(
             "H1",

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from coordinator_core.warm.door import build
+import pytest
 
 
 def _write(tmp_path: Path, python_bin: Path) -> dict:
@@ -19,7 +20,7 @@ def _write(tmp_path: Path, python_bin: Path) -> dict:
     return json.loads(Path(side).read_text(encoding="utf-8"))
 
 
-def test_home_interpreter_is_recorded_home_relative(tmp_path, monkeypatch):
+def test_home_interpreter_is_recorded_home_relative(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = tmp_path / "operatorname"
     interp = home / "AppData" / "Python313" / "python.exe"
     interp.parent.mkdir(parents=True)
@@ -34,7 +35,7 @@ def test_home_interpreter_is_recorded_home_relative(tmp_path, monkeypatch):
     assert build.expand_python_bin(recorded) == interp.resolve()
 
 
-def test_interpreter_outside_home_stays_absolute(tmp_path, monkeypatch):
+def test_interpreter_outside_home_stays_absolute(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = tmp_path / "home"
     home.mkdir()
     interp = tmp_path / "opt" / "python.exe"
@@ -44,7 +45,7 @@ def test_interpreter_outside_home_stays_absolute(tmp_path, monkeypatch):
     assert build.portable_python_bin(interp) == str(interp.resolve())
 
 
-def test_tilde_record_with_unresolved_home_raises_typed_error(monkeypatch):
+def test_tilde_record_with_unresolved_home_raises_typed_error(monkeypatch: pytest.MonkeyPatch) -> None:
     import pytest
 
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: Path("~")))
@@ -52,10 +53,10 @@ def test_tilde_record_with_unresolved_home_raises_typed_error(monkeypatch):
         build.expand_python_bin("~/AppData/Python313/python.exe")
 
 
-def test_tilde_record_with_resolved_home_still_expands(tmp_path, monkeypatch):
+def test_tilde_record_with_resolved_home_still_expands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     assert build.expand_python_bin("~/a/python.exe") == tmp_path / "a" / "python.exe"
 
 
-def test_relative_recording_is_not_expanded_to_absolute():
+def test_relative_recording_is_not_expanded_to_absolute() -> None:
     assert not build.expand_python_bin("python.exe").is_absolute()

@@ -15,6 +15,7 @@ from coordinator_core.git import commit as commit_mod
 from coordinator_core.git import sshsig
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 _SIGN_ADDRESS_DEFAULT = inspect.signature(sshsig.sign_via_agent).parameters["address"].default
 
@@ -35,12 +36,12 @@ def _params() -> dict:
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     return bench.build_fixture(tmp_path)
 
 
 @pytest.fixture
-def ssh_repo(repo, tmp_path, monkeypatch):
+def ssh_repo(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     if shutil.which("ssh-keygen") is None:
         pytest.skip("ssh-keygen is not available on this host")
     key = tmp_path / "id_test"
@@ -57,14 +58,14 @@ def ssh_repo(repo, tmp_path, monkeypatch):
     return repo
 
 
-def test_incident_shaped_halted_call_lands_its_record(repo):
+def test_incident_shaped_halted_call_lands_its_record(repo) -> None:
     out = terminal_commit._handler(_params(), repo_root=repo / ".git")
 
     assert out["committed"] is True
     assert _git(repo, "merge-base", "--is-ancestor", out["sha"], "HEAD") == ""
 
 
-def test_short_deadline_before_commit_v2_replies_committed_false_naming_the_step(repo):
+def test_short_deadline_before_commit_v2_replies_committed_false_naming_the_step(repo) -> None:
     head = _git(repo, "rev-parse", "HEAD")
     token = dispatch_abandon.DEADLINE.set(time.monotonic() + dispatch_abandon.REPLY_MARGIN_SECS / 2)
     try:
@@ -78,7 +79,7 @@ def test_short_deadline_before_commit_v2_replies_committed_false_naming_the_step
 
 
 @pytest.mark.deliberate_wall_clock(reason="the served path must reply inside the dispatch deadline while signing stalls; a stalled wait burns no CPU")
-def test_signing_stall_replies_inside_the_deadline_through_the_served_path(ssh_repo, monkeypatch):
+def test_signing_stall_replies_inside_the_deadline_through_the_served_path(ssh_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm import dispatch_ack, server
 
     stall_s = 20.0
@@ -108,7 +109,7 @@ def test_signing_stall_replies_inside_the_deadline_through_the_served_path(ssh_r
     assert store.status(key)["state"] == dispatch_ack.STATE_FINISHED
 
 
-def test_cold_path_signs_with_the_default_agent_timeout(ssh_repo, monkeypatch):
+def test_cold_path_signs_with_the_default_agent_timeout(ssh_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict = {}
 
     def _spy(data, pub, env=None, timeout=sshsig._DEFAULT_TIMEOUT_S, *, address=_SIGN_ADDRESS_DEFAULT):
@@ -123,7 +124,7 @@ def test_cold_path_signs_with_the_default_agent_timeout(ssh_repo, monkeypatch):
     assert seen["timeout"] == sshsig._DEFAULT_TIMEOUT_S
 
 
-def test_bound_deadline_halves_the_remaining_budget_for_the_agent_timeout(ssh_repo, monkeypatch):
+def test_bound_deadline_halves_the_remaining_budget_for_the_agent_timeout(ssh_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict = {}
 
     def _spy(data, pub, env=None, timeout=sshsig._DEFAULT_TIMEOUT_S, *, address=_SIGN_ADDRESS_DEFAULT):
@@ -140,7 +141,7 @@ def test_bound_deadline_halves_the_remaining_budget_for_the_agent_timeout(ssh_re
     assert 0 < seen["timeout"] <= 2.0
 
 
-def test_signing_below_the_floor_is_skipped_and_the_commit_lands_unsigned(ssh_repo):
+def test_signing_below_the_floor_is_skipped_and_the_commit_lands_unsigned(ssh_repo) -> None:
     token = dispatch_abandon.DEADLINE.set(time.monotonic() + dispatch_abandon.REPLY_MARGIN_SECS + 0.2)
     try:
         sha, warning = commit_mod._sign_commit_tree(

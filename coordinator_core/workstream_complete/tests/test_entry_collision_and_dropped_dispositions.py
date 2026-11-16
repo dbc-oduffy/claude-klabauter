@@ -12,6 +12,7 @@ import pytest
 from coordinator_core.ops import coordinator_complete_entry as cce
 from coordinator_core.workstream_complete import apply as ws_apply
 from coordinator_core.workstream_complete import directives_commit_tail as tail
+from pathlib import Path
 
 _LOE = "loe:\n  agent_dispatches: null\n  opus_dispatches: null\n  em_tokens: null\n  tshirt: null"
 _PROSE = "Shipped the thing. It matters because of reasons."
@@ -36,7 +37,7 @@ def _run(monkeypatch, tmp_path, entry, decisions):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_second_close_with_different_title_is_a_collision(monkeypatch, tmp_path):
+def test_second_close_with_different_title_is_a_collision(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     entry = tmp_path / "entry.md"
     cce._write_entry(str(entry), "sid-123456", "", "chain-x", False, _LOE, "", "2026-10-13", "")
@@ -53,7 +54,7 @@ def test_second_close_with_different_title_is_a_collision(monkeypatch, tmp_path)
     assert code != 0
 
 
-def test_own_accomplished_scaffold_title_is_not_a_collision(tmp_path):
+def test_own_accomplished_scaffold_title_is_not_a_collision(tmp_path: Path) -> None:
     entry = tmp_path / "entry.md"
     entry.write_text('---\ntitle: "Accomplished: Close WS1"\n---\nbody\n', encoding="utf-8")
     assert ws_apply._entry_title_collision(entry, "Close WS1", "PLACEHOLDER") is None
@@ -62,14 +63,14 @@ def test_own_accomplished_scaffold_title_is_not_a_collision(tmp_path):
     assert other and "collision" in other
 
 
-def test_entry_filename_has_no_doubled_date():
+def test_entry_filename_has_no_doubled_date() -> None:
     path = cce.resolve_entry_path("/repo", "sid-abc123", "2026-10-13-run-close-ws1")
     name = path.replace("\\", "/").rsplit("/", 1)[1]
     assert name.count("-run-close-ws1-") == 1
     assert name.split("-run-close-ws1")[0].count("-") == 2  # exactly one yyyy-mm-dd prefix
 
 
-def test_rekey_follows_closing_plan_path():
+def test_rekey_follows_closing_plan_path() -> None:
     args = ["--sid", "s", "--governing-plan-slug", "2026-10-13-ws1"]
     out = ws_apply._rekey_complete_entry_args(
         args, {"governing_plan_path": "docs/plans/2026-10-13-ws4.md"}
@@ -82,7 +83,7 @@ def test_rekey_follows_closing_plan_path():
     ]
 
 
-def test_every_dropped_disposition_names_its_reason(monkeypatch, tmp_path):
+def test_every_dropped_disposition_names_its_reason(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     handoffs = tmp_path / "state" / "handoffs"
     handoffs.mkdir(parents=True)
     for name in ("ok.md", "nosha.md", "weird.md"):
@@ -116,13 +117,13 @@ def test_every_dropped_disposition_names_its_reason(monkeypatch, tmp_path):
     assert len(skipped) == 6 and all("missing decisions.subject" in d for d in skipped)
 
 
-def _handoff_claimed_by(tmp_path, name, claimed_by):
+def _handoff_claimed_by(tmp_path, name, claimed_by) -> None:
     d = tmp_path / "state" / "handoffs"
     d.mkdir(parents=True, exist_ok=True)
     (d / name).write_text(f"---\nclaimed_by: {claimed_by}\n---\n", encoding="utf-8")
 
 
-def test_frontmatter_claimed_by_closing_session_is_held_no_dropped_diagnostic(monkeypatch, tmp_path):
+def test_frontmatter_claimed_by_closing_session_is_held_no_dropped_diagnostic(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _handoff_claimed_by(tmp_path, "mine.md", "sid")
     monkeypatch.setattr(tail, "_held_handoff_basenames", lambda *_a, **_k: [])
     decisions = {
@@ -135,7 +136,7 @@ def test_frontmatter_claimed_by_closing_session_is_held_no_dropped_diagnostic(mo
     assert tail.dropped_disposition_diagnostics(tmp_path, "sid", decisions) == []
 
 
-def test_frontmatter_claimed_by_other_session_is_not_held(monkeypatch, tmp_path):
+def test_frontmatter_claimed_by_other_session_is_not_held(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _handoff_claimed_by(tmp_path, "theirs.md", "other-sid")
     monkeypatch.setattr(tail, "_held_handoff_basenames", lambda *_a, **_k: [])
     decisions = {

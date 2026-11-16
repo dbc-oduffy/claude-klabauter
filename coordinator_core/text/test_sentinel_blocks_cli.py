@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from coordinator_core.text.sentinel_blocks_cli import main
+from pathlib import Path
+import pytest
 
 
-def _write(tmp_path, name, content):
+def _write(tmp_path, name, content) -> str:
     p = tmp_path / name
     p.write_text(content, encoding="utf-8")
     return str(p)
@@ -13,7 +15,7 @@ BEGIN = "<!-- BEGIN alpha -->"
 END = "<!-- END alpha -->"
 
 
-def test_extract_prints_block_and_exits_0(tmp_path, capsys):
+def test_extract_prints_block_and_exits_0(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     path = _write(tmp_path, "f.md", f"before\n{BEGIN}\nfoo bar\n{END}\nafter\n")
     rc = main(["extract", path, BEGIN, END])
     assert rc == 0
@@ -21,7 +23,7 @@ def test_extract_prints_block_and_exits_0(tmp_path, capsys):
     assert out == "foo bar\n"
 
 
-def test_extract_missing_markers_exits_1(tmp_path, capsys):
+def test_extract_missing_markers_exits_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     path = _write(tmp_path, "f.md", "no markers here\n")
     rc = main(["extract", path, BEGIN, END])
     assert rc == 1
@@ -29,7 +31,7 @@ def test_extract_missing_markers_exits_1(tmp_path, capsys):
     assert "markers not found" in err
 
 
-def test_extract_missing_file_exits_1(tmp_path, capsys):
+def test_extract_missing_file_exits_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     missing = str(tmp_path / "does-not-exist.md")
     rc = main(["extract", missing, BEGIN, END])
     assert rc == 1
@@ -37,35 +39,35 @@ def test_extract_missing_file_exits_1(tmp_path, capsys):
     assert "cannot read file" in err
 
 
-def test_no_command_exits_1_with_usage(capsys):
+def test_no_command_exits_1_with_usage(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main([])
     assert rc == 1
     err = capsys.readouterr().err
     assert "Usage:" in err
 
 
-def test_unknown_command_exits_1(capsys):
+def test_unknown_command_exits_1(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["bogus"])
     assert rc == 1
     err = capsys.readouterr().err
     assert "unknown command: bogus" in err
 
 
-def test_extract_missing_args_exits_1(capsys):
+def test_extract_missing_args_exits_1(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["extract", "onlyfile"])
     assert rc == 1
     err = capsys.readouterr().err
     assert "Usage:" in err
 
 
-def test_extract_empty_block(tmp_path, capsys):
+def test_extract_empty_block(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     path = _write(tmp_path, "f.md", f"{BEGIN}\n{END}\n")
     rc = main(["extract", path, BEGIN, END])
     assert rc == 0
     assert capsys.readouterr().out == ""
 
 
-def test_usage_string_pins_retired_js_filename(capsys):
+def test_usage_string_pins_retired_js_filename(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main([])
     assert rc == 1
     err = capsys.readouterr().err

@@ -15,8 +15,10 @@ from __future__ import annotations
 import contextlib
 import datetime as _dt
 import json
+import statistics
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Iterator
@@ -24,6 +26,7 @@ from typing import Any, Callable, Iterator
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CEREMONY_DISPATCH_KEY = "workday_start"
 SENTINELS_STAGE = "sentinels"
+SENTINELS_RUNS = 5
 MUTATING_SENTINELS = frozenset({"sentinel-doctor-sentinel-full", "sentinel-corpus-currency-probe"})
 
 
@@ -31,11 +34,13 @@ MUTATING_SENTINELS = frozenset({"sentinel-doctor-sentinel-full", "sentinel-corpu
 def _count_popen() -> Iterator[list[int]]:
     """Count `subprocess.Popen` constructions; `subprocess.run` builds a Popen, so it is counted once."""
     counter = [0]
+    lock = threading.Lock()
     real = subprocess.Popen
 
     class _Counting(real):  # type: ignore[misc,valid-type]
         def __init__(self, *args: Any, **kwargs: Any) -> None:
-            counter[0] += 1
+            with lock:
+                counter[0] += 1
             super().__init__(*args, **kwargs)
 
     subprocess.Popen = _Counting  # type: ignore[misc]
@@ -123,8 +128,13 @@ def measure_redrive(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
     }
 
 
-def measure_sentinels(repo_root: Path = REPO_ROOT, today: _dt.date | None = None) -> dict[str, Any]:
-    """Run the owed sentinels steps through `run_stages`; the mutating two are stubbed."""
+def measure_sentinels(
+    repo_root: Path = REPO_ROOT, today: _dt.date | None = None, *, concurrent: bool = False,
+) -> dict[str, Any]:
+    """Run the owed sentinels steps through `run_stages`; the mutating two are stubbed.
+
+    `concurrent` passes the stage set `workday_start/run_spec.py` ships, so the figure is the default launch's.
+    """
     from coordinator_core.benchmarks.isolated_clone import rmtree_or_raise
     from coordinator_core.ceremony_common.run import runner
     from coordinator_core.temp_layout import make_managed_temp_dir
@@ -155,6 +165,7 @@ def measure_sentinels(repo_root: Path = REPO_ROOT, today: _dt.date | None = None
             wall0 = time.perf_counter()
             results = runner.run_stages(
                 steps, ceremony=CEREMONY_DISPATCH_KEY, repo_root=repo_root, run_dir=run_dir, dispatch=table,
+                concurrent_stages=frozenset({SENTINELS_STAGE}) if concurrent else frozenset(),
             )
             stage_wall_ms = (time.perf_counter() - wall0) * 1000.0
     finally:
@@ -176,9 +187,35 @@ def measure_sentinels(repo_root: Path = REPO_ROOT, today: _dt.date | None = None
     }
 
 
+def sentinels_spread(repo_root: Path = REPO_ROOT, *, concurrent: bool, runs: int = SENTINELS_RUNS) -> dict[str, Any]:
+    """`runs` sentinels measurements; one run is peer-load noise, so the bar compares the median."""
+    samples = [measure_sentinels(repo_root, concurrent=concurrent) for _ in range(runs)]
+    ms = [s["process_ms"] for s in samples]
+    return {
+        "concurrent": concurrent,
+        "process_ms_median": statistics.median(ms),
+        "process_ms_runs": ms,
+        "spawns_runs": [s["spawns"] for s in samples],
+        "popen_spawns_runs": [s["popen_spawns"] for s in samples],
+        "stage_wall_ms_runs": [s["stage_wall_ms"] for s in samples],
+    }
+
+
 def profile(repo_root: Path = REPO_ROOT) -> dict[str, Any]:
-    """Both axes: `{"redrive": ..., "sentinels": ...}`."""
-    return {"redrive": measure_redrive(repo_root), "sentinels": measure_sentinels(repo_root)}
+    """`{"redrive": ..., "sentinels": ..., "sentinels_serial": ..., "sentinels_concurrent": ..., "sentinels_concurrency_adds_ms": ...}`.
+
+    `sentinels` is one serial run; `sentinels_concurrency_adds_ms` is the same-tree, same-session concurrent
+    median minus serial median, the figure that isolates what concurrency costs from tree state and peer load.
+    """
+    serial = sentinels_spread(repo_root, concurrent=False)
+    concurrent = sentinels_spread(repo_root, concurrent=True)
+    return {
+        "redrive": measure_redrive(repo_root),
+        "sentinels": measure_sentinels(repo_root),
+        "sentinels_serial": serial,
+        "sentinels_concurrent": concurrent,
+        "sentinels_concurrency_adds_ms": round(concurrent["process_ms_median"] - serial["process_ms_median"], 1),
+    }
 
 
 def main() -> int:

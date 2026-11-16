@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest import mock
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -20,13 +21,13 @@ _RB_TEXT = "export const meta = { name: 'rb', description: 'd', phases: [{ title
 _CUT = ("waves", "execute", "workstream-complete")
 
 
-def _compose_standalone(repo, **over):
+def _compose_standalone(repo, **over) -> str:
     """Composed as a real ask fires it: with the production hoist pass on (the dispatch_emit conftest forces it off)."""
     with mock.patch.object(prompt_fragments, "HOIST_ENABLED", True):
         return _compose_standalone_raw(repo, **over)
 
 
-def _compose_in_run(**over):
+def _compose_in_run(**over) -> str:
     """The in-run roadmap leg rides only a script that embeds plan-blitz, i.e. an M+ re-fire."""
     with mock.patch.object(prompt_fragments, "HOIST_ENABLED", True), mock.patch.object(
         ask_compose, "_known_arm", lambda *_: ask_compose.ARM_M_PLUS
@@ -34,7 +35,7 @@ def _compose_in_run(**over):
         return _compose_raw(**over)
 
 
-def _script(repo, which, **over):
+def _script(repo, which, **over) -> str:
     """Composes only the requested variant, so one variant's refusal never reddens the other's tests."""
     _put(repo)
     if which == "standalone":
@@ -43,7 +44,7 @@ def _script(repo, which, **over):
 
 
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
-def test_no_waves_execute_or_workstream_complete_leg(repo, which):
+def test_no_waves_execute_or_workstream_complete_leg(repo, which) -> None:
     script = _script(repo, which)
     labels = [leg.label for leg in lr.emitted_legs(script)]
     assert not set(labels) & set(_CUT), set(labels) & set(_CUT)
@@ -51,7 +52,7 @@ def test_no_waves_execute_or_workstream_complete_leg(repo, which):
 
 
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
-def test_exactly_one_haiku_commit_leg_fires_the_fanout(repo, which):
+def test_exactly_one_haiku_commit_leg_fires_the_fanout(repo, which) -> None:
     script = _script(repo, which)
     commits = [leg for leg in lr.emitted_legs(script) if leg.label == "commit"]
     assert len(commits) == {"standalone": 1, "in-run": 2}[which], "in-run adds the post-retest recommit leg"
@@ -69,21 +70,21 @@ def test_exactly_one_haiku_commit_leg_fires_the_fanout(repo, which):
 
 
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
-def test_the_commit_gate_carries_no_roadmap_exclusion(repo, which):
+def test_the_commit_gate_carries_no_roadmap_exclusion(repo, which) -> None:
     script = _script(repo, which)
     gates = [ln for ln in script.splitlines() if "_nextAction.kind === 'terminal_commit' && _RUN_TOKEN" in ln]
     assert len(gates) == 1 and "_viaRoadmap" not in gates[0]
 
 
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
-def test_waves_come_from_the_stage_reply_and_a_missing_field_halts_by_name(repo, which):
+def test_waves_come_from_the_stage_reply_and_a_missing_field_halts_by_name(repo, which) -> None:
     script = _script(repo, which)
     assert "let _waves = [...(_rb?.stage?.waves ?? [])].sort((a, c) => a.index - c.index);" in script
     assert "roadmap-blitz stage reply carries no waves" in script
     assert script.index("_rb?.stage?.waves") < script.index("waveIndex: w.index")
 
 
-def test_the_in_run_fan_out_survives_the_closeable_overwrite(repo):
+def test_the_in_run_fan_out_survives_the_closeable_overwrite(repo) -> None:
     script = _script(repo, "in-run")
     assert "const _roadmapFan = !!(_viaRoadmap && !_halted" in script
     assert "_nextAction = _roadmapFan ? _nextAction : _closeable ?" in script
@@ -94,7 +95,7 @@ _SCRIPT_PATH = "scratch/warp/r1.mjs"
 
 
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
-def test_the_commit_params_block_carries_every_key_the_run_token_hook_requires(repo, which):
+def test_the_commit_params_block_carries_every_key_the_run_token_hook_requires(repo, which) -> None:
     from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import REQUIRED_STR_KEYS
 
     script = _script(repo, which)
@@ -109,21 +110,21 @@ def test_the_commit_params_block_carries_every_key_the_run_token_hook_requires(r
 
 
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
-def test_a_known_script_path_rides_the_next_action_and_the_commit_block(repo, which):
+def test_a_known_script_path_rides_the_next_action_and_the_commit_block(repo, which) -> None:
     script = _script(repo, which, script_path=_SCRIPT_PATH)
     assert f"script_path: '{_SCRIPT_PATH}', {FANOUT_RECORD_PARAM}: {{ plans:" in script
     assert f"script_path: _nextAction.params.script_path ?? '{_SCRIPT_PATH}', run_id: _runId" in script
 
 
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
-def test_the_fan_out_next_action_params_replay_with_a_run_id(repo, which):
+def test_the_fan_out_next_action_params_replay_with_a_run_id(repo, which) -> None:
     script = _script(repo, which)
     assert f"params: {{ run_id: _runId, {FANOUT_RECORD_PARAM}: {{ plans:" in script
     assert "script_path: null" not in script
 
 
 @pytest.mark.parametrize("which", ["standalone", "in-run"])
-def test_both_scripts_lint_clean(repo, which):
+def test_both_scripts_lint_clean(repo, which) -> None:
     assert not [f for f in run_checks(_script(repo, which)) if f.severity is Severity.ERROR]
 
 
@@ -140,7 +141,7 @@ _PLAN = "docs/plans/2026-10-16-a.md"
 
 
 @pytest.fixture
-def fan_repo(tmp_path, monkeypatch):
+def fan_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, str]:
     (tmp_path / ".git").mkdir()
     sizing = _sizing(tmp_path, "a", _PLAN)
     (tmp_path / _PLAN).parent.mkdir(parents=True, exist_ok=True)
@@ -152,7 +153,7 @@ def fan_repo(tmp_path, monkeypatch):
     return tmp_path, sizing
 
 
-def _sibling_script(repo, sizing_rel, run_id):
+def _sibling_script(repo, sizing_rel, run_id) -> str:
     doc = yaml.safe_load((repo / sizing_rel).read_text(encoding="utf-8"))
     doc.update({"route": "plan", "status": "sized"})
     (repo / sizing_rel).write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8", newline="\n")
@@ -163,7 +164,7 @@ def _sibling_script(repo, sizing_rel, run_id):
     )
 
 
-def _stages(script):
+def _stages(script) -> dict[str, bool]:
     labels = [leg.label for leg in lr.emitted_legs(script)]
     return {
         "review": "phase('Review wave')" in script or "phase('Review prep')" in script,
@@ -171,7 +172,7 @@ def _stages(script):
     }
 
 
-def test_fanout_record_drives_a_sibling_whose_script_reviews_and_commits(fan_repo):
+def test_fanout_record_drives_a_sibling_whose_script_reviews_and_commits(fan_repo) -> None:
     repo, sizing = fan_repo
     params = {FANOUT_RECORD_PARAM: {"plans": [_PLAN], "waves": {_PLAN: 0}}}
     assert land_run_contract.mode_of(params) == "fanout"

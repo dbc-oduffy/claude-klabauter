@@ -9,9 +9,10 @@ import pytest
 from coordinator_core.ops.dispatch_emit import wake_digest as wd
 from coordinator_core.ops.dispatch_emit.wake_digest import INTEGRATION_NOT_RUN_VAR
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 
-def _params_js(with_bookkeeping=True):
+def _params_js(with_bookkeeping: bool = True):
     review_vars = {
         "prep": "_reviewPrep",
         "wave": "_reviewWave",
@@ -32,7 +33,7 @@ def _params_js(with_bookkeeping=True):
     return params
 
 
-def _inline_review(tmp_path, *, not_run, integration, wave="[]"):
+def _inline_review(tmp_path, *, not_run, integration, wave: str = "[]"):
     node = shutil.which("node")
     if node is None:
         pytest.skip("node unavailable")
@@ -60,7 +61,7 @@ def _inline_review(tmp_path, *, not_run, integration, wave="[]"):
 
 
 @pytest.mark.spawns_process
-def test_not_run_with_empty_wave_yields_bookkeeping_form(tmp_path):
+def test_not_run_with_empty_wave_yields_bookkeeping_form(tmp_path: Path) -> None:
     ir = _inline_review(tmp_path, not_run="true", integration="null")
     assert ir["integration_stem"] == "bk-stem"
     assert ir["slices"] == 0
@@ -69,17 +70,17 @@ def test_not_run_with_empty_wave_yields_bookkeeping_form(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_owed_integration_returning_null_stays_null(tmp_path):
+def test_owed_integration_returning_null_stays_null(tmp_path: Path) -> None:
     assert _inline_review(tmp_path, not_run="false", integration="null") is None
 
 
 @pytest.mark.spawns_process
-def test_null_wave_with_not_run_stays_null(tmp_path):
+def test_null_wave_with_not_run_stays_null(tmp_path: Path) -> None:
     assert _inline_review(tmp_path, not_run="true", integration="null", wave="null") is None
 
 
 @pytest.mark.spawns_process
-def test_integrated_form_wins_when_integration_present(tmp_path):
+def test_integrated_form_wins_when_integration_present(tmp_path: Path) -> None:
     ir = _inline_review(
         tmp_path,
         not_run="false",
@@ -90,5 +91,5 @@ def test_integrated_form_wins_when_integration_present(tmp_path):
     assert ir["integration"]["sidecar"] == "i.md"
 
 
-def test_no_bookkeeping_stem_has_no_fallback():
+def test_no_bookkeeping_stem_has_no_fallback() -> None:
     assert INTEGRATION_NOT_RUN_VAR not in _params_js(with_bookkeeping=False)

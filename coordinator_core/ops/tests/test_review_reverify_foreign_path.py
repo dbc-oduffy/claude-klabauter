@@ -9,6 +9,7 @@ path another run withholds (`peer-withheld`)."""
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -24,7 +25,7 @@ from coordinator_core.ops.tests.test_review_reverify import (  # noqa: F401  (wo
 
 
 @pytest.fixture
-def world(tmp_path):
+def world(tmp_path: Path) -> tuple[Path, Path]:
     root = tmp_path / "repo"
     snap = tmp_path / "share" / "x.pre-review"
     (root / "pkg").mkdir(parents=True)
@@ -38,7 +39,7 @@ def world(tmp_path):
 WRITES = {"pkg/mine.py": b"probe-mine\n", "docs/plan.md": b"probe-plan\n"}
 
 
-def test_probe_refuses_a_path_another_live_run_withholds(world):
+def test_probe_refuses_a_path_another_live_run_withholds(world) -> None:
     root, snap = world
     live = {"other": LiveRun(withheld=frozenset({"docs/plan.md"}))}
     out = probe.open_probe(root, snap, WRITES, ["t::x"], run_id="me", live_runs=live)
@@ -48,21 +49,21 @@ def test_probe_refuses_a_path_another_live_run_withholds(world):
     assert not probe.is_open(snap)
 
 
-def test_probe_refuses_a_path_another_live_run_claims(world):
+def test_probe_refuses_a_path_another_live_run_claims(world) -> None:
     root, snap = world
     live = {"other": LiveRun(claims=frozenset({"docs"}))}
     out = probe.open_probe(root, snap, WRITES, ["t::x"], run_id="me", live_runs=live)
     assert out["error"] and not probe.is_open(snap)
 
 
-def test_probe_refuses_a_halted_peer_on_another_plan(world):
+def test_probe_refuses_a_halted_peer_on_another_plan(world) -> None:
     root, snap = world
     live = {"gone": LiveRun(plan="p2", claims=frozenset({"docs/plan.md"}))}
     out = probe.open_probe(root, snap, WRITES, ["t::x"], run_id="me", live_runs=live)
     assert "docs/plan.md" in out["error"] and not probe.is_open(snap)
 
 
-def test_probe_still_opens_a_superseded_predecessors_claimed_paths(world):
+def test_probe_still_opens_a_superseded_predecessors_claimed_paths(world) -> None:
     root, snap = world
     live = {"gone": LiveRun(superseded_by="me", claims=frozenset({"docs/plan.md"}))}
     out = probe.open_probe(root, snap, WRITES, ["t::x"], run_id="me", live_runs=live)
@@ -71,12 +72,12 @@ def test_probe_still_opens_a_superseded_predecessors_claimed_paths(world):
     assert (root / "docs" / "plan.md").read_bytes() == b"sibling stamps\n"
 
 
-def test_a_failed_midway_write_restores_every_probed_path(world, monkeypatch):
+def test_a_failed_midway_write_restores_every_probed_path(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, snap = world
     real = probe._put
     calls = {"n": 0}
 
-    def flaky(path, data):
+    def flaky(path, data) -> None:
         if path.is_relative_to(root):
             calls["n"] += 1
             if calls["n"] == 2 and data.startswith(b"probe-"):
@@ -91,12 +92,12 @@ def test_a_failed_midway_write_restores_every_probed_path(world, monkeypatch):
     assert not probe.is_open(snap)
 
 
-def test_a_failed_restore_leaves_the_probe_open_naming_the_stuck_path(world, monkeypatch):
+def test_a_failed_restore_leaves_the_probe_open_naming_the_stuck_path(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, snap = world
     real = probe._put
     calls = {"n": 0}
 
-    def flaky(path, data):
+    def flaky(path, data) -> None:
         if path.is_relative_to(root):
             calls["n"] += 1
             if calls["n"] >= 2:
@@ -109,7 +110,7 @@ def test_a_failed_restore_leaves_the_probe_open_naming_the_stuck_path(world, mon
     assert probe.is_open(snap)
 
 
-def test_review_prep_names_a_withheld_path_peer_held_and_keeps_it_in_review(repo):
+def test_review_prep_names_a_withheld_path_peer_held_and_keeps_it_in_review(repo) -> None:
     _write(repo, ["a/theirs.py"], 3)
     live = {"other": LiveRun(withheld=frozenset({"a/theirs.py"}))}
     reply = rp.review_prep(
@@ -120,7 +121,7 @@ def test_review_prep_names_a_withheld_path_peer_held_and_keeps_it_in_review(repo
     assert [f for s in reply["slices"] for f in s["files"]] == ["a/theirs.py"]
 
 
-def test_review_prep_answers_an_unresolvable_base_rather_than_slicing(repo):
+def test_review_prep_answers_an_unresolvable_base_rather_than_slicing(repo) -> None:
     _write(repo, ["a/theirs.py"], 3)
     reply = rp.review_prep(
         repo, base="abcd1234", paths=["a/theirs.py"], slice_prefix="p",
@@ -129,7 +130,7 @@ def test_review_prep_answers_an_unresolvable_base_rather_than_slicing(repo):
     assert reply["error"] and "abcd1234" in reply["error"] and not reply.get("slices")
 
 
-def test_live_runs_from_params_parses_and_rejects_malformed():
+def test_live_runs_from_params_parses_and_rejects_malformed() -> None:
     runs = rp.live_runs_from_params({"b": {"halted": True, "withheld": ["x"], "claims": ["y"]}})
     assert runs["b"] == LiveRun(withheld=frozenset({"x"}), claims=frozenset({"y"}))
     assert rp.live_runs_from_params({"b": "nope"}) is None
@@ -143,7 +144,7 @@ def _probe_open(root, sidecars, failing, **kw):
     )
 
 
-def test_review_reverify_entry_point_does_not_probe_a_foreign_halted_path(rr_world, monkeypatch):
+def test_review_reverify_entry_point_does_not_probe_a_foreign_halted_path(rr_world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, orig, _ = rr_world
     edited = "def test_p():\n    assert nope\n"
     (root / "tests/test_plain.py").write_text(edited, encoding="utf-8")
@@ -163,7 +164,7 @@ def test_review_reverify_entry_point_does_not_probe_a_foreign_halted_path(rr_wor
 
 
 @pytest.mark.parametrize("kw", [{"run_id": ""}, {}])
-def test_probe_open_refuses_an_empty_run_id(rr_world, monkeypatch, kw):
+def test_probe_open_refuses_an_empty_run_id(rr_world, monkeypatch: pytest.MonkeyPatch, kw) -> None:
     root, _orig, _ = rr_world
     edited = "def test_p():\n    assert nope\n"
     (root / "tests/test_plain.py").write_text(edited, encoding="utf-8")
@@ -181,7 +182,7 @@ def test_probe_open_refuses_an_empty_run_id(rr_world, monkeypatch, kw):
     assert (root / "tests/test_plain.py").read_text(encoding="utf-8") == edited
 
 
-def test_revert_skips_a_path_another_run_withholds(rr_world, monkeypatch):
+def test_revert_skips_a_path_another_run_withholds(rr_world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, orig, _ = rr_world
     edited = "def test_p():\n    assert nope\n"
     (root / "tests/test_plain.py").write_text(edited, encoding="utf-8")
@@ -198,7 +199,7 @@ def test_revert_skips_a_path_another_run_withholds(rr_world, monkeypatch):
     assert (root / "tests/test_plain.py").read_text(encoding="utf-8") == edited
 
 
-def test_review_reverify_entry_point_probes_when_no_foreign_run_holds_the_path(rr_world, monkeypatch):
+def test_review_reverify_entry_point_probes_when_no_foreign_run_holds_the_path(rr_world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, orig, _ = rr_world
     (root / "tests/test_plain.py").write_bytes(b"def test_p():\n    assert nope\n")
     sidecars = _ledger(monkeypatch, _row("F1", "tests/test_plain.py", "    assert True\n", "    assert nope\n"))

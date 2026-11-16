@@ -9,6 +9,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit.emit import checkpoint_landed_state, emit_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -22,11 +23,11 @@ _ROWS = (
 )
 
 
-def _repo(tmp_path, halted_by, plan_trailer=True):
+def _repo(tmp_path, halted_by, plan_trailer: bool = True):
     root = tmp_path / "repo"
     root.mkdir(parents=True)
 
-    def git(*a):
+    def git(*a) -> None:
         subprocess.run(["git", *a], cwd=str(root), check=True, capture_output=True, **no_console_creationflags())
 
     git("init", "-q")
@@ -48,17 +49,17 @@ def _repo(tmp_path, halted_by, plan_trailer=True):
     return root
 
 
-def test_ledger_check_halt_lands_its_chunks_for_the_plan(tmp_path):
+def test_ledger_check_halt_lands_its_chunks_for_the_plan(tmp_path: Path) -> None:
     root = _repo(tmp_path, "ledger-check")
     assert checkpoint_landed_state(root, _PLAN)[0] == {"C1"}
 
 
-def test_a_non_ledger_halt_or_another_plan_lands_nothing(tmp_path):
+def test_a_non_ledger_halt_or_another_plan_lands_nothing(tmp_path: Path) -> None:
     assert checkpoint_landed_state(_repo(tmp_path / "a", "refusal"), _PLAN)[0] == frozenset()
     assert checkpoint_landed_state(_repo(tmp_path / "b", "ledger-check"), "docs/plans/other.md")[0] == frozenset()
 
 
-def test_refire_drops_the_hand_landed_predecessor_and_dispatches_its_dependent(tmp_path):
+def test_refire_drops_the_hand_landed_predecessor_and_dispatches_its_dependent(tmp_path: Path) -> None:
     root = _repo(tmp_path, "ledger-check")
     script = emit_script(root / _PLAN, repo_root=root, landed_rows=frozenset(), **REVIEW_KW)
     assert "docs/x/c3.md" in script

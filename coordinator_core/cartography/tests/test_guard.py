@@ -4,9 +4,10 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.cartography._guard import PathEscapeError, path_guard
+from pathlib import Path
 
 
-def test_path_guard_accepts_relative_path_in_root(tmp_path):
+def test_path_guard_accepts_relative_path_in_root(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     (root / "file.py").write_text("x", encoding="utf-8")
@@ -15,7 +16,7 @@ def test_path_guard_accepts_relative_path_in_root(tmp_path):
     assert result == (root / "file.py").resolve()
 
 
-def test_path_guard_accepts_absolute_path_in_root(tmp_path):
+def test_path_guard_accepts_absolute_path_in_root(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     candidate = root / "file.py"
@@ -25,7 +26,7 @@ def test_path_guard_accepts_absolute_path_in_root(tmp_path):
     assert result == candidate.resolve()
 
 
-def test_path_guard_rejects_relative_traversal_escape(tmp_path):
+def test_path_guard_rejects_relative_traversal_escape(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     outside = tmp_path / "secret.py"
@@ -35,7 +36,7 @@ def test_path_guard_rejects_relative_traversal_escape(tmp_path):
         path_guard(root, "../secret.py")
 
 
-def test_path_guard_rejects_absolute_path_outside_root(tmp_path):
+def test_path_guard_rejects_absolute_path_outside_root(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     outside = tmp_path / "elsewhere" / "secret.py"
@@ -46,7 +47,7 @@ def test_path_guard_rejects_absolute_path_outside_root(tmp_path):
         path_guard(root, outside)
 
 
-def test_path_guard_symlink_escape_is_rejected(tmp_path):
+def test_path_guard_symlink_escape_is_rejected(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     outside_target = tmp_path / "elsewhere" / "secret.py"
@@ -63,7 +64,7 @@ def test_path_guard_symlink_escape_is_rejected(tmp_path):
         path_guard(root, "escape.py")
 
 
-def test_path_guard_accepts_nested_subdirectory_path(tmp_path):
+def test_path_guard_accepts_nested_subdirectory_path(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     nested = root / "pkg" / "sub"
     nested.mkdir(parents=True)

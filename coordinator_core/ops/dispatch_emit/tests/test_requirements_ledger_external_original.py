@@ -7,6 +7,7 @@ import yaml
 
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+from pathlib import Path
 
 RUN = "ask-20261105T000000-abc123"
 REL = "state/sizings/2026-11-05-original.yaml"
@@ -14,7 +15,7 @@ URL = "https://claude.ai/artifact/abc123"
 
 
 @pytest.fixture
-def ledger_and_root(tmp_path):
+def ledger_and_root(tmp_path: Path):
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     doc = {
@@ -41,7 +42,7 @@ def _blocked(out):
     return [f for f in out["failures"] if f.get("status") == "BLOCKED"]
 
 
-def test_met_without_originals_read_is_blocked(ledger_and_root):
+def test_met_without_originals_read_is_blocked(ledger_and_root) -> None:
     root, ledger, cited = ledger_and_root
     out = _judge(root, ledger, cited)
     assert out["pass"] is False
@@ -53,14 +54,14 @@ def test_met_without_originals_read_is_blocked(ledger_and_root):
     assert "capture age unknowable" in blocked["reason"]
 
 
-def test_met_with_originals_read_passes(ledger_and_root):
+def test_met_with_originals_read_passes(ledger_and_root) -> None:
     root, ledger, cited = ledger_and_root
     out = _judge(root, ledger, cited, originals_read=[URL])
     assert out["pass"] is True, out
     assert not _blocked(out)
 
 
-def test_capture_age_stamped_when_both_stamps_present(ledger_and_root):
+def test_capture_age_stamped_when_both_stamps_present(ledger_and_root) -> None:
     root, ledger, cited = ledger_and_root
     out = _judge(
         root, ledger, cited,
@@ -71,7 +72,7 @@ def test_capture_age_stamped_when_both_stamps_present(ledger_and_root):
     assert "capture age 90s" in blocked["reason"]
 
 
-def test_not_met_row_is_not_double_blocked(ledger_and_root):
+def test_not_met_row_is_not_double_blocked(ledger_and_root) -> None:
     root, ledger, cited = ledger_and_root
     items = [{"id": i.id, "status": "met"} for i in ledger.items if i is not cited]
     items.append({"id": cited.id, "status": "not_met", "remaining": ["x"]})

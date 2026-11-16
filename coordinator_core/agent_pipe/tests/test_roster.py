@@ -7,24 +7,25 @@ import pytest
 
 from coordinator_core.agent_pipe import roster
 from coordinator_core.agent_pipe.contract import BridgeMessage, PipeMessage, peers_path, roster_path, routes_path
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _home(tmp_path, monkeypatch):
+def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
 
 
-def test_paths_under_settings_home(tmp_path):
+def test_paths_under_settings_home(tmp_path: Path) -> None:
     assert roster_path() == tmp_path / "agent-pipe" / "roster.json"
     assert routes_path() == tmp_path / "agent-pipe" / "routes.json"
 
 
-def test_resolve_unbound_is_none_and_list_empty():
+def test_resolve_unbound_is_none_and_list_empty() -> None:
     assert roster.resolve("nobody") is None
     assert roster.list() == {}
 
 
-def test_bind_then_rebind_resolves_to_new_id():
+def test_bind_then_rebind_resolves_to_new_id() -> None:
     roster.bind("em", "claude", "sess-1", token="tok-1")
     roster.bind("em", "claude", "sess-2", token="tok-2")
     b = roster.resolve("em")
@@ -32,13 +33,13 @@ def test_bind_then_rebind_resolves_to_new_id():
     assert list(roster.list()) == ["em"]
 
 
-def test_codex_binding_carries_argv_and_token_optional():
+def test_codex_binding_carries_argv_and_token_optional() -> None:
     roster.bind("cx", "codex", "thr-1", argv=["codex", "app-server"])
     b = roster.resolve("cx")
     assert b["argv"] == ["codex", "app-server"] and b["token"] is None
 
 
-def test_bind_rejects_bad_kind_name_and_id():
+def test_bind_rejects_bad_kind_name_and_id() -> None:
     with pytest.raises(ValueError):
         roster.bind("x", "slack", "1")
     with pytest.raises(ValueError):
@@ -47,23 +48,23 @@ def test_bind_rejects_bad_kind_name_and_id():
         roster.bind("x", "claude", "")
 
 
-def test_write_is_atomic_json_and_leaves_no_temp(tmp_path):
+def test_write_is_atomic_json_and_leaves_no_temp(tmp_path: Path) -> None:
     roster.bind("a", "agy", "c1")
     assert json.loads(roster_path().read_text(encoding="utf-8"))["a"]["kind"] == "agy"
     assert [p.name for p in roster_path().parent.iterdir()] == ["roster.json"]
 
 
-def _write_peers(tmp_path, rows):
+def _write_peers(tmp_path, rows) -> None:
     p = peers_path()
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(json.dumps({"peers": rows}), encoding="utf-8")
 
 
-def test_peers_path_is_the_router_default(tmp_path):
+def test_peers_path_is_the_router_default(tmp_path: Path) -> None:
     assert peers_path() == tmp_path / "unimatrix" / "peers.json"
 
 
-def test_hook_bound_codex_peer_resolves_to_codex_binding(tmp_path, monkeypatch):
+def test_hook_bound_codex_peer_resolves_to_codex_binding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.agent_pipe.codex import CodexAdapter
 
     monkeypatch.setattr(CodexAdapter, "proxy_argv", lambda self: ["codex", "app-server", "proxy"])
@@ -74,13 +75,13 @@ def test_hook_bound_codex_peer_resolves_to_codex_binding(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("vendor", ["agy", "grok"])
-def test_peer_row_for_agy_and_grok_resolves_to_its_kind(tmp_path, vendor):
+def test_peer_row_for_agy_and_grok_resolves_to_its_kind(tmp_path: Path, vendor) -> None:
     _write_peers(tmp_path, [{"name": f"{vendor}-1", "vendor": vendor, "target": "conv-7"}])
     assert roster.resolve(f"{vendor}-1") == {"kind": vendor, "id": "conv-7", "token": None, "argv": None}
     assert roster.list()[f"{vendor}-1"]["kind"] == vendor
 
 
-def test_agy_and_grok_peers_coexist_in_one_peers_file(tmp_path):
+def test_agy_and_grok_peers_coexist_in_one_peers_file(tmp_path: Path) -> None:
     _write_peers(
         tmp_path,
         [{"name": "a", "vendor": "agy", "target": "c1"}, {"name": "g", "vendor": "grok", "target": "c2"}],
@@ -88,20 +89,20 @@ def test_agy_and_grok_peers_coexist_in_one_peers_file(tmp_path):
     assert roster.resolve("a")["kind"] == "agy" and roster.resolve("g")["kind"] == "grok"
 
 
-def test_roster_entry_shadows_peers_row(tmp_path):
+def test_roster_entry_shadows_peers_row(tmp_path: Path) -> None:
     _write_peers(tmp_path, [{"name": "em", "vendor": "codex", "target": "thr-old"}])
     roster.bind("em", "claude", "sess-1")
     assert roster.resolve("em")["kind"] == "claude"
 
 
-def test_peers_rows_unknown_vendor_or_malformed_are_ignored(tmp_path):
+def test_peers_rows_unknown_vendor_or_malformed_are_ignored(tmp_path: Path) -> None:
     _write_peers(tmp_path, [{"name": "a", "vendor": "slack", "target": "t"}, {"name": "b", "vendor": "codex"}, "junk"])
     assert roster.resolve("a") is None and roster.resolve("b") is None
     peers_path().write_text("{not json", encoding="utf-8")
     assert roster.resolve("a") is None
 
 
-def test_bridge_message_line_labels_and_drops_none():
+def test_bridge_message_line_labels_and_drops_none() -> None:
     m = BridgeMessage("m1", "em", "claude", "cx", "hi\nthere", "2026-11-04T00:00:00Z", origin="bridge", label="from em (claude)")
     d = json.loads(m.to_json_line())
     assert d["label"] == "from em (claude)" and d["content"] == "hi\nthere" and "\n" not in m.to_json_line()
@@ -109,6 +110,6 @@ def test_bridge_message_line_labels_and_drops_none():
     assert "origin" not in bare and "label" not in bare
 
 
-def test_pipe_message_line_unchanged():
+def test_pipe_message_line_unchanged() -> None:
     line = PipeMessage("m", "antigravity", "c", "s", "x", "t").to_json_line()
     assert line == '{"id":"m","sender_agent":"antigravity","sender_conversation":"c","to_session":"s","content":"x","ts":"t"}'

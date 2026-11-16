@@ -4,6 +4,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from coordinator_core import consolidate_assemble as ca
+import pytest
 
 _N = 25
 _SEP = "\x1f"
@@ -71,7 +72,7 @@ def test_full_evidence_keeps_every_commit_and_no_omitted(tmp_path: Path) -> None
     assert "omitted" not in ev
 
 
-def test_at_cap_branch_has_no_omitted(tmp_path: Path, monkeypatch) -> None:
+def test_at_cap_branch_has_no_omitted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ca, "EVIDENCE_COMMIT_CAP", _N)
     ev = _evidence(ca.brief(repo_root=tmp_path, run_git=_fake_git([])))
 
@@ -79,7 +80,7 @@ def test_at_cap_branch_has_no_omitted(tmp_path: Path, monkeypatch) -> None:
     assert "omitted" not in ev
 
 
-def test_main_parses_full_evidence_flag(monkeypatch) -> None:
+def test_main_parses_full_evidence_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict = {}
 
     def fake_brief(**kw):

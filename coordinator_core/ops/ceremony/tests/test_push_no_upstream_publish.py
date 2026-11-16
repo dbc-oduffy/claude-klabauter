@@ -8,6 +8,7 @@ import pytest
 from coordinator_core.ops.ceremony import git_native, push as push_mod
 from coordinator_core.ops.ceremony.git_native import GitResult
 from coordinator_core.ops.ceremony.tests.fixtures.push_repo import init_push_repo
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -30,7 +31,7 @@ _NON_DAY_BRANCH = "work/machine-b/2026-09-02-2"
 
 def _bare_push_always_refuses(monkeypatch, stderr: str, calls: list) -> None:
 
-    def _fake_push(*a, **kw):
+    def _fake_push(*a, **kw) -> GitResult:
         calls.append(1)
         return GitResult(returncode=128, stdout="", stderr=stderr)
 
@@ -49,8 +50,8 @@ def _remote_has(repo, branch: str) -> bool:
 
 
 def test_no_upstream_refusal_publishes_the_day_branch_and_reports_a_landed_push(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo = init_push_repo(tmp_path, branch=_DAY_BRANCH, set_upstream=False)
     assert not _remote_has(repo, _DAY_BRANCH)
 
@@ -68,7 +69,7 @@ def test_no_upstream_refusal_publishes_the_day_branch_and_reports_a_landed_push(
     assert push_mod._resolve_upstream_local(repo, _DAY_BRANCH) is not None
 
 
-def test_an_unrelated_push_failure_never_publishes(tmp_path, monkeypatch):
+def test_an_unrelated_push_failure_never_publishes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = init_push_repo(tmp_path, branch=_DAY_BRANCH, set_upstream=False)
     push_calls: list = []
     _bare_push_always_refuses(monkeypatch, _AUTH_STDERR, push_calls)
@@ -89,7 +90,7 @@ def test_an_unrelated_push_failure_never_publishes(tmp_path, monkeypatch):
     assert not _remote_has(repo, _DAY_BRANCH)
 
 
-def test_a_non_day_branch_is_never_published_by_this_path(tmp_path, monkeypatch):
+def test_a_non_day_branch_is_never_published_by_this_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = init_push_repo(tmp_path, branch=_NON_DAY_BRANCH, set_upstream=False)
     push_calls: list = []
     _bare_push_always_refuses(monkeypatch, _NO_UPSTREAM_STDERR, push_calls)
@@ -115,7 +116,7 @@ _TIMEOUT_RESULT = GitResult(
 )
 
 
-def test_a_timed_out_set_upstream_publish_is_unconfirmed_not_failed(tmp_path, monkeypatch):
+def test_a_timed_out_set_upstream_publish_is_unconfirmed_not_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = init_push_repo(tmp_path, branch=_DAY_BRANCH, set_upstream=False)
     monkeypatch.setattr(git_native, "push_set_upstream", lambda *a, **kw: _TIMEOUT_RESULT)
 
@@ -128,7 +129,7 @@ def test_a_timed_out_set_upstream_publish_is_unconfirmed_not_failed(tmp_path, mo
     assert not result.failed
 
 
-def test_a_git_reported_set_upstream_reject_stays_failed(tmp_path, monkeypatch):
+def test_a_git_reported_set_upstream_reject_stays_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = init_push_repo(tmp_path, branch=_DAY_BRANCH, set_upstream=False)
     monkeypatch.setattr(
         git_native,
@@ -140,7 +141,7 @@ def test_a_git_reported_set_upstream_reject_stays_failed(tmp_path, monkeypatch):
     assert outcome == "failed"
 
 
-def test_publish_day_branch_declines_every_shape_it_must(tmp_path):
+def test_publish_day_branch_declines_every_shape_it_must(tmp_path: Path) -> None:
     repo = init_push_repo(tmp_path, branch=_DAY_BRANCH, set_upstream=True)
 
     assert push_mod.publish_day_branch(repo, branch=_DAY_BRANCH)[0] == "already-published"

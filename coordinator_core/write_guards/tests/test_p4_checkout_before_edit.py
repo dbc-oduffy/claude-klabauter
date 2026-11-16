@@ -5,6 +5,7 @@ import os
 import stat
 
 import pytest
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -20,7 +21,7 @@ def identity():
     )
 
 
-def _payload(tool_name, file_path, cwd, session_id="sid-1"):
+def _payload(tool_name, file_path, cwd, session_id: str = "sid-1"):
     return {
         "tool_name": tool_name,
         "tool_input": {"file_path": file_path},
@@ -40,12 +41,12 @@ def _make_spy():
 
 
 class TestZeroSpawnAllowPaths:
-    def test_non_matcher_tool_allows(self, monkeypatch, tmp_path):
+    def test_non_matcher_tool_allows(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setattr(guard, "resolve_repo_root", lambda cwd: str(tmp_path))
         payload = _payload("Read", str(tmp_path / "x.txt"), str(tmp_path))
         assert guard.check(payload) is None
 
-    def test_git_only_repo_allows_zero_spawns(self, monkeypatch, tmp_path):
+    def test_git_only_repo_allows_zero_spawns(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setattr(guard, "resolve_repo_root", lambda cwd: str(tmp_path))
         monkeypatch.setattr(workspace, "is_p4_repo", lambda root: False)
         _, spy = _make_spy()
@@ -57,7 +58,7 @@ class TestZeroSpawnAllowPaths:
 
         assert guard.check(payload) is None
 
-    def test_writable_target_allows_zero_spawns(self, monkeypatch, tmp_path):
+    def test_writable_target_allows_zero_spawns(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setattr(guard, "resolve_repo_root", lambda cwd: str(tmp_path))
         monkeypatch.setattr(workspace, "is_p4_repo", lambda root: True)
         _, spy = _make_spy()
@@ -70,7 +71,7 @@ class TestZeroSpawnAllowPaths:
 
         assert guard.check(payload) is None
 
-    def test_nonexistent_target_allows_zero_spawns(self, monkeypatch, tmp_path):
+    def test_nonexistent_target_allows_zero_spawns(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setattr(guard, "resolve_repo_root", lambda cwd: str(tmp_path))
         monkeypatch.setattr(workspace, "is_p4_repo", lambda root: True)
         _, spy = _make_spy()
@@ -81,7 +82,7 @@ class TestZeroSpawnAllowPaths:
 
         assert guard.check(payload) is None
 
-    def test_unresolvable_repo_root_allows(self, monkeypatch, tmp_path):
+    def test_unresolvable_repo_root_allows(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setattr(guard, "resolve_repo_root", lambda cwd: None)
         payload = _payload("Edit", str(tmp_path / "x.txt"), str(tmp_path))
         assert guard.check(payload) is None
@@ -102,7 +103,7 @@ class _ReadOnlyFixture:
 
 
 class TestReadOnlyTargetDenies(_ReadOnlyFixture):
-    def test_binary_head_type_denies_no_edit_spawn(self, monkeypatch, tmp_path, identity):
+    def test_binary_head_type_denies_no_edit_spawn(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, identity) -> None:
         target = self.setup(monkeypatch, tmp_path, identity)
         calls = []
 
@@ -120,7 +121,7 @@ class TestReadOnlyTargetDenies(_ReadOnlyFixture):
         assert "checkout" in reason.lower()
         assert len(calls) == 1
 
-    def test_exclusive_open_with_other_open_denies_naming_holder(self, monkeypatch, tmp_path, identity):
+    def test_exclusive_open_with_other_open_denies_naming_holder(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, identity) -> None:
         target = self.setup(monkeypatch, tmp_path, identity)
 
         def fake_run(port, user, client, args, *, cwd=None, timeout=None, spec_input=None):
@@ -137,7 +138,7 @@ class TestReadOnlyTargetDenies(_ReadOnlyFixture):
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "alice@alice-ws" in reason
 
-    def test_other_lock_denies_naming_holder(self, monkeypatch, tmp_path, identity):
+    def test_other_lock_denies_naming_holder(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, identity) -> None:
         target = self.setup(monkeypatch, tmp_path, identity)
 
         def fake_run(port, user, client, args, *, cwd=None, timeout=None, spec_input=None):
@@ -154,7 +155,7 @@ class TestReadOnlyTargetDenies(_ReadOnlyFixture):
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "carol@carol-ws" in reason
 
-    def test_fstat_ticket_expired_denies_never_allow_through(self, monkeypatch, tmp_path, identity):
+    def test_fstat_ticket_expired_denies_never_allow_through(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, identity) -> None:
         target = self.setup(monkeypatch, tmp_path, identity)
 
         def fake_run(port, user, client, args, *, cwd=None, timeout=None, spec_input=None):
@@ -169,7 +170,7 @@ class TestReadOnlyTargetDenies(_ReadOnlyFixture):
         assert result is not None
         assert "ticket_expired" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
-    def test_fstat_runner_timeout_denies(self, monkeypatch, tmp_path, identity):
+    def test_fstat_runner_timeout_denies(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, identity) -> None:
         target = self.setup(monkeypatch, tmp_path, identity)
 
         def fake_run(port, user, client, args, *, cwd=None, timeout=None, spec_input=None):
@@ -184,7 +185,7 @@ class TestReadOnlyTargetDenies(_ReadOnlyFixture):
         assert "refused" in reason
         assert "timeout" in reason
 
-    def test_edit_spawn_refused_denies_after_two_spawns(self, monkeypatch, tmp_path, identity):
+    def test_edit_spawn_refused_denies_after_two_spawns(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, identity) -> None:
         target = self.setup(monkeypatch, tmp_path, identity)
         calls = []
 
@@ -204,7 +205,7 @@ class TestReadOnlyTargetDenies(_ReadOnlyFixture):
         assert len(calls) == 2
         assert calls[1][:2] == ["edit", "-c"]
 
-    def test_session_changelist_unavailable_denies(self, monkeypatch, tmp_path, identity):
+    def test_session_changelist_unavailable_denies(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, identity) -> None:
         target = self.setup(monkeypatch, tmp_path, identity)
 
         def fake_run(port, user, client, args, *, cwd=None, timeout=None, spec_input=None):
@@ -224,7 +225,7 @@ class TestReadOnlyTargetDenies(_ReadOnlyFixture):
 
 
 class TestReadOnlyTargetAllows(_ReadOnlyFixture):
-    def test_clean_read_only_file_opens_into_session_cl(self, monkeypatch, tmp_path, identity):
+    def test_clean_read_only_file_opens_into_session_cl(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, identity) -> None:
         target = self.setup(monkeypatch, tmp_path, identity)
         calls = []
 
@@ -245,7 +246,7 @@ class TestReadOnlyTargetAllows(_ReadOnlyFixture):
 
 class TestExplicitTimeout(_ReadOnlyFixture):
 
-    def test_fstat_and_edit_pass_explicit_timeout(self, monkeypatch, tmp_path, identity):
+    def test_fstat_and_edit_pass_explicit_timeout(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, identity) -> None:
         target = self.setup(monkeypatch, tmp_path, identity)
         seen_timeouts = []
 
@@ -264,7 +265,7 @@ class TestExplicitTimeout(_ReadOnlyFixture):
 
 
 class TestUnregisteredWorkspace(_ReadOnlyFixture):
-    def test_unregistered_workspace_denies_no_spawn(self, monkeypatch, tmp_path):
+    def test_unregistered_workspace_denies_no_spawn(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         target = tmp_path / "locked.txt"
         target.write_text("hi", encoding="utf-8")
         os.chmod(target, stat.S_IREAD)
@@ -284,7 +285,7 @@ class TestUnregisteredWorkspace(_ReadOnlyFixture):
         assert "unregistered" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_is_writable_predicate(tmp_path):
+def test_is_writable_predicate(tmp_path: Path) -> None:
     import os
     import stat
 

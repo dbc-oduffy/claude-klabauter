@@ -8,6 +8,7 @@ import yaml
 
 from coordinator_core.ops.dispatch_emit import op
 from coordinator_core.ops.dispatch_emit.sizing_xs_mint import recorded_xs_writes
+from pathlib import Path
 
 REL = "state/sizings/2026-10-15-xs-refire.yaml"
 
@@ -27,43 +28,43 @@ def _repo(tmp_path):
     return tmp_path
 
 
-def _record(root, run_id, writes, base="state/warp", row_id="X1"):
+def _record(root, run_id, writes, base: str = "state/warp", row_id: str = "X1") -> None:
     d = root / base / run_id
     d.mkdir(parents=True)
     rows = [{"id": row_id, "agent_type": "x", "model": "m", "brief_path": "b", "writes": writes, "wave": 0}]
     (d / "manifest.json").write_text(json.dumps({"rows": rows}), encoding="utf-8")
 
 
-def test_newest_recorded_x1_writes_win(tmp_path):
+def test_newest_recorded_x1_writes_win(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _record(root, "warp-2026-10-15-xs-refire-20261015T010101-aaaaaa", ["old.py"])
     _record(root, "warp-2026-10-15-xs-refire-20261015T020202-bbbbbb", ["new.py"], base="scratch/warp")
     assert recorded_xs_writes(root, REL) == ["new.py"]
 
 
-def test_other_sizing_runs_and_other_rows_are_ignored(tmp_path):
+def test_other_sizing_runs_and_other_rows_are_ignored(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _record(root, "warp-2026-10-15-xs-refire-extra-20261015T010101-aaaaaa", ["other.py"])
     _record(root, "warp-2026-10-15-xs-refire-20261015T020202-bbbbbb", ["s.py"], row_id="R1")
     assert recorded_xs_writes(root, REL) == []
 
 
-def test_no_record_yields_nothing(tmp_path):
+def test_no_record_yields_nothing(tmp_path: Path) -> None:
     assert recorded_xs_writes(_repo(tmp_path), REL) == []
 
 
-def test_emit_gate_seeds_the_refire_with_recorded_writes(tmp_path):
+def test_emit_gate_seeds_the_refire_with_recorded_writes(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _record(root, "warp-2026-10-15-xs-refire-20261015T020202-bbbbbb", ["pkg/a.py"])
     out = op._gate_sizing_at_emit(root, REL, [])
     assert out["writes"] == ["pkg/a.py"]
 
 
-def test_emit_gate_keeps_explicit_writes(tmp_path):
+def test_emit_gate_keeps_explicit_writes(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _record(root, "warp-2026-10-15-xs-refire-20261015T020202-bbbbbb", ["pkg/a.py"])
     assert op._gate_sizing_at_emit(root, REL, ["pkg/b.py"])["writes"] == ["pkg/b.py"]
 
 
-def test_first_fire_with_no_record_stays_unseeded(tmp_path):
+def test_first_fire_with_no_record_stays_unseeded(tmp_path: Path) -> None:
     assert op._gate_sizing_at_emit(_repo(tmp_path), REL, [])["writes"] == []

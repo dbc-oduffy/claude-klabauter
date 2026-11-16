@@ -9,12 +9,13 @@ from unittest import mock
 import pytest
 
 from coordinator_core.install import prereq_probe as pp
+from pathlib import Path
 
 
 pytestmark = pytest.mark.complete
 
 
-def _cp(returncode=0, stdout="", stderr=""):
+def _cp(returncode: int = 0, stdout: str = "", stderr: str = "") -> SimpleNamespace:
     return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
@@ -23,7 +24,7 @@ def _parse(line: str) -> dict:
     return json.loads(line)
 
 
-def test_probe_git_pass():
+def test_probe_git_pass() -> None:
     with mock.patch.object(pp, "_run", return_value=_cp(0, "git version 2.42.0\n")):
         rec = _parse(pp.probe_git())
     assert rec == {
@@ -32,7 +33,7 @@ def test_probe_git_pass():
     }
 
 
-def test_probe_git_absent():
+def test_probe_git_absent() -> None:
     with mock.patch.object(pp, "_run", return_value=None):
         rec = _parse(pp.probe_git())
     assert rec["status"] == "fail"
@@ -40,7 +41,7 @@ def test_probe_git_absent():
     assert "brew install git" in rec["remediation"]
 
 
-def test_probe_git_broken_stub():
+def test_probe_git_broken_stub() -> None:
     with mock.patch.object(pp, "_run", return_value=_cp(1, "")):
         rec = _parse(pp.probe_git())
     assert rec["status"] == "fail"
@@ -49,7 +50,7 @@ def test_probe_git_broken_stub():
 _CLEAN_PATH = "/usr/local/bin:/usr/bin:/bin"
 
 
-def test_probe_python_pass():
+def test_probe_python_pass() -> None:
     with mock.patch(
         "coordinator_core.install.manifest_reader.find_python", return_value="python3"
     ), mock.patch.object(pp, "_run", return_value=_cp(0, "Python 3.12.1\n")), mock.patch.object(
@@ -61,7 +62,7 @@ def test_probe_python_pass():
     assert "3.12.1" in rec["detail"]
 
 
-def test_probe_python_fail():
+def test_probe_python_fail() -> None:
     from coordinator_core.install.manifest_reader import NoPythonInterpreterError
 
     with mock.patch(
@@ -74,7 +75,7 @@ def test_probe_python_fail():
     assert "App execution alias" in rec["remediation"] or "App Execution alias" in rec["remediation"]
 
 
-def test_probe_python_precedence_clean_path_passes():
+def test_probe_python_precedence_clean_path_passes() -> None:
     with mock.patch(
         "coordinator_core.install.manifest_reader.find_python", return_value="python3"
     ), mock.patch.object(pp, "_run", return_value=_cp(0, "Python 3.12.1\n")), mock.patch.object(
@@ -84,7 +85,7 @@ def test_probe_python_precedence_clean_path_passes():
     assert rec["status"] == "pass"
 
 
-def test_probe_python_precedence_appx_alias_fails_arm_b():
+def test_probe_python_precedence_appx_alias_fails_arm_b() -> None:
     alias_dir = r"C:\Users\op\AppData\Local\Microsoft\WindowsApps"
     real_dir = r"C:\Python312"
     fake_path = ";".join([real_dir, alias_dir])
@@ -103,7 +104,7 @@ def test_probe_python_precedence_appx_alias_fails_arm_b():
         or "App execution aliases" in rec["remediation"]
 
 
-def test_probe_python_precedence_shim_class_ahead_fails():
+def test_probe_python_precedence_shim_class_ahead_fails() -> None:
     shim_dir = "/home/op/.pyenv/shims"
     real_dir = "/usr/local/bin"
     fake_path = os.pathsep.join([shim_dir, real_dir])
@@ -120,14 +121,14 @@ def test_probe_python_precedence_shim_class_ahead_fails():
     assert "pyenv shim" in rec["detail"]
 
 
-def test_probe_uv_missing_is_warn_not_fail():
+def test_probe_uv_missing_is_warn_not_fail() -> None:
     with mock.patch.object(pp, "_run", return_value=None):
         rec = _parse(pp.probe_uv())
     assert rec["status"] == "warn"
     assert rec["severity"] == "advisory"
 
 
-def test_probe_uv_pass():
+def test_probe_uv_pass() -> None:
     with mock.patch.object(pp, "_run", return_value=_cp(0, "uv 0.4.0\n")):
         rec = _parse(pp.probe_uv())
     assert rec["status"] == "pass"
@@ -136,11 +137,11 @@ def test_probe_uv_pass():
 # ---------------------------------------------------------------------------
 # probe_gh — three-step hard gate + optional COORDINATOR_GH_PROBE_REPO sub-probe
 # ---------------------------------------------------------------------------
-def test_probe_gh_pass_no_probe_repo(monkeypatch):
+def test_probe_gh_pass_no_probe_repo(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_GH_PROBE_REPO", raising=False)
     calls = {"n": 0}
 
-    def fake_run(argv, **kw):
+    def fake_run(argv, **kw) -> SimpleNamespace:
         calls["n"] += 1
         if argv == ["gh", "--version"]:
             return _cp(0, "gh version 2.40.0\n")
@@ -154,8 +155,8 @@ def test_probe_gh_pass_no_probe_repo(monkeypatch):
     assert calls["n"] == 2
 
 
-def test_probe_gh_unauthenticated():
-    def fake_run(argv, **kw):
+def test_probe_gh_unauthenticated() -> None:
+    def fake_run(argv, **kw) -> SimpleNamespace:
         if argv == ["gh", "--version"]:
             return _cp(0, "gh version 2.40.0\n")
         if argv == ["gh", "api", "user", "--jq", ".login"]:
@@ -168,10 +169,10 @@ def test_probe_gh_unauthenticated():
     assert "gh auth login" in rec["remediation"]
 
 
-def test_probe_gh_repo_subprobe_runs_when_env_set(monkeypatch):
+def test_probe_gh_repo_subprobe_runs_when_env_set(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_GH_PROBE_REPO", "owner/repo")
 
-    def fake_run(argv, **kw):
+    def fake_run(argv, **kw) -> SimpleNamespace:
         if argv == ["gh", "--version"]:
             return _cp(0, "gh version 2.40.0\n")
         if argv == ["gh", "api", "user", "--jq", ".login"]:
@@ -185,7 +186,7 @@ def test_probe_gh_repo_subprobe_runs_when_env_set(monkeypatch):
     assert rec["status"] == "pass"
 
 
-def test_probe_ue_env_override_hit(monkeypatch, tmp_path):
+def test_probe_ue_env_override_hit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     engine_dir = tmp_path / "UE_5.4"
     bin_dir = engine_dir / "Engine" / "Binaries" / "Mac"
     bin_dir.mkdir(parents=True)
@@ -197,14 +198,14 @@ def test_probe_ue_env_override_hit(monkeypatch, tmp_path):
     assert "UnrealEditor" in rec["detail"]
 
 
-def test_probe_ue_env_override_miss(monkeypatch, tmp_path):
+def test_probe_ue_env_override_miss(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("EXAMPLE_GAME_REPO_UE_ROOT", str(tmp_path / "nonexistent"))
     rec = _parse(pp.probe_ue())
     assert rec["status"] == "warn"
     assert rec["severity"] == "advisory"
 
 
-def test_probe_ue_not_found_on_path(monkeypatch):
+def test_probe_ue_not_found_on_path(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("EXAMPLE_GAME_REPO_UE_ROOT", raising=False)
     with mock.patch.object(pp, "_os_name", return_value="Darwin"), mock.patch(
         "shutil.which", return_value=None
@@ -214,7 +215,7 @@ def test_probe_ue_not_found_on_path(monkeypatch):
     assert rec["severity"] == "advisory"
 
 
-def test_probe_clone_auth_gh_wins(monkeypatch):
+def test_probe_clone_auth_gh_wins(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_AUTH_PROBE_URL", raising=False)
     with mock.patch.object(pp, "_run", return_value=_cp(0, "octocat\n")):
         rec = _parse(pp.probe_clone_auth())
@@ -222,10 +223,10 @@ def test_probe_clone_auth_gh_wins(monkeypatch):
     assert "GitHub CLI" in rec["detail"]
 
 
-def test_probe_clone_auth_ssh_success(monkeypatch):
+def test_probe_clone_auth_ssh_success(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_AUTH_PROBE_URL", raising=False)
 
-    def fake_run(argv, **kw):
+    def fake_run(argv, **kw) -> SimpleNamespace:
         if argv[:2] == ["gh", "api"] or argv[:2] == ["glab", "auth"]:
             return _cp(1, "", "not authenticated")
         if argv[0] == "ssh":
@@ -238,7 +239,7 @@ def test_probe_clone_auth_ssh_success(monkeypatch):
     assert "SSH key authenticated" in rec["detail"]
 
 
-def test_probe_clone_auth_offline_is_inconclusive(monkeypatch):
+def test_probe_clone_auth_offline_is_inconclusive(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_AUTH_PROBE_URL", raising=False)
 
     def fake_run(argv, **kw):
@@ -258,7 +259,7 @@ def test_probe_clone_auth_offline_is_inconclusive(monkeypatch):
     assert rec["severity"] == "advisory"
 
 
-def test_probe_clone_auth_no_method_found_is_semi_hard(monkeypatch):
+def test_probe_clone_auth_no_method_found_is_semi_hard(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_AUTH_PROBE_URL", raising=False)
 
     def fake_run(argv, **kw):
@@ -278,10 +279,10 @@ def test_probe_clone_auth_no_method_found_is_semi_hard(monkeypatch):
     assert rec["severity"] == "semi-hard"
 
 
-def test_probe_clone_auth_git_absent_is_inconclusive(monkeypatch):
+def test_probe_clone_auth_git_absent_is_inconclusive(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_AUTH_PROBE_URL", raising=False)
 
-    def fake_run(argv, **kw):
+    def fake_run(argv, **kw) -> None:
         if argv[:2] in (["gh", "api"], ["glab", "auth"]):
             return None
         if argv[0] == "ssh":
@@ -293,14 +294,14 @@ def test_probe_clone_auth_git_absent_is_inconclusive(monkeypatch):
     assert rec["status"] == "inconclusive"
 
 
-def test_probe_longpaths_non_windows():
+def test_probe_longpaths_non_windows() -> None:
     with mock.patch.object(pp, "_os_name", return_value="Darwin"):
         rec = _parse(pp.probe_longpaths())
     assert rec["status"] == "pass"
     assert rec["detail"] == "n/a (non-Windows)"
 
 
-def test_probe_longpaths_windows_configured():
+def test_probe_longpaths_windows_configured() -> None:
     with mock.patch.object(pp, "_os_name", return_value="MINGW64_NT"), mock.patch.object(
         pp, "_run", return_value=_cp(0, "true\n")
     ):
@@ -308,7 +309,7 @@ def test_probe_longpaths_windows_configured():
     assert rec["status"] == "pass"
 
 
-def test_probe_longpaths_windows_unset():
+def test_probe_longpaths_windows_unset() -> None:
     with mock.patch.object(pp, "_os_name", return_value="MINGW64_NT"), mock.patch.object(
         pp, "_run", return_value=_cp(1, "")
     ):
@@ -317,17 +318,17 @@ def test_probe_longpaths_windows_unset():
     assert "<unset>" in rec["detail"]
 
 
-def test_probe_shell_login_env_non_macos_short_circuits():
+def test_probe_shell_login_env_non_macos_short_circuits() -> None:
     with mock.patch.object(pp, "_os_name", return_value="Linux"):
         rec = _parse(pp.probe_shell_login_env())
     assert rec["status"] == "pass"
     assert "non-macOS" in rec["detail"]
 
 
-def test_probe_shell_login_env_bash_orphaned(monkeypatch):
+def test_probe_shell_login_env_bash_orphaned(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", "/Users/tester")
 
-    def fake_run(argv, **kw):
+    def fake_run(argv, **kw) -> SimpleNamespace:
         if argv[0] == "dscl":
             return _cp(0, "UserShell: /bin/bash\n")
         if argv[0] == "/bin/bash":
@@ -342,10 +343,10 @@ def test_probe_shell_login_env_bash_orphaned(monkeypatch):
     assert "$HOME/.local/bin absent" in rec["detail"]
 
 
-def test_probe_shell_login_env_bash_intact(monkeypatch):
+def test_probe_shell_login_env_bash_intact(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", "/Users/tester")
 
-    def fake_run(argv, **kw):
+    def fake_run(argv, **kw) -> SimpleNamespace:
         if argv[0] == "dscl":
             return _cp(0, "UserShell: /bin/bash\n")
         if argv[0] == "/bin/bash":
@@ -360,8 +361,8 @@ def test_probe_shell_login_env_bash_intact(monkeypatch):
     assert "claude resolves at" in rec["detail"]
 
 
-def test_probe_shell_login_env_non_bash_login_shell():
-    def fake_run(argv, **kw):
+def test_probe_shell_login_env_non_bash_login_shell() -> None:
+    def fake_run(argv, **kw) -> SimpleNamespace:
         if argv[0] == "dscl":
             return _cp(0, "UserShell: /bin/zsh\n")
         if argv[0] == "/bin/zsh":
@@ -376,7 +377,7 @@ def test_probe_shell_login_env_non_bash_login_shell():
     assert "not bash" in rec["detail"]
 
 
-def test_probe_all_order_and_count():
+def test_probe_all_order_and_count() -> None:
     names = [
         "git", "python", "uv", "gh", "node", "pwsh", "ue", "clone_auth", "longpaths",
         "shell_login_env", "skill_frontmatter_valid", "windows_terminal_presence",
@@ -390,7 +391,7 @@ def test_probe_all_order_and_count():
         assert _parse(line)["name"] == name
 
 
-def test_main_writes_ndjson_and_returns_zero(capsys):
+def test_main_writes_ndjson_and_returns_zero(capsys: pytest.CaptureFixture[str]) -> None:
     with mock.patch.object(pp, "probe_all", return_value=['{"name":"git","status":"pass","severity":"hard","detail":"","remediation":""}\n']):
         rc = pp.main([])
     assert rc == 0
@@ -398,7 +399,7 @@ def test_main_writes_ndjson_and_returns_zero(capsys):
     assert json.loads(out.strip())["name"] == "git"
 
 
-def test_run_passes_timeout_and_stdin_devnull():
+def test_run_passes_timeout_and_stdin_devnull() -> None:
     with mock.patch("subprocess.run") as mocked:
         mocked.return_value = _cp(0, "ok")
         pp._run(["git", "--version"])
@@ -407,17 +408,17 @@ def test_run_passes_timeout_and_stdin_devnull():
     assert kwargs["stdin"] == subprocess.DEVNULL
 
 
-def test_run_returns_none_on_timeout():
+def test_run_returns_none_on_timeout() -> None:
     with mock.patch("subprocess.run", side_effect=subprocess.TimeoutExpired(cmd="git", timeout=1)):
         assert pp._run(["git", "--version"]) is None
 
 
-def test_run_returns_none_on_oserror():
+def test_run_returns_none_on_oserror() -> None:
     with mock.patch("subprocess.run", side_effect=FileNotFoundError()):
         assert pp._run(["definitely-not-a-binary"]) is None
 
 
-def _write_skill_file(content_root, *, description="a description", with_frontmatter=True):
+def _write_skill_file(content_root, *, description: str = "a description", with_frontmatter: bool = True):
     skill_path = content_root.joinpath("coordinator", "skills", "setup", "SKILL.md")
     skill_path.parent.mkdir(parents=True, exist_ok=True)
     if with_frontmatter:
@@ -429,7 +430,7 @@ def _write_skill_file(content_root, *, description="a description", with_frontma
     return skill_path
 
 
-def test_check_skill_frontmatter_valid_ok(tmp_path):
+def test_check_skill_frontmatter_valid_ok(tmp_path: Path) -> None:
     _write_skill_file(tmp_path)
     with mock.patch(
         "coordinator_core.content_root.read_content_root", return_value=str(tmp_path)
@@ -438,19 +439,19 @@ def test_check_skill_frontmatter_valid_ok(tmp_path):
     assert result == {"ok": True, "error": None}
 
 
-def test_check_skill_frontmatter_valid_plugin_cache_layout(tmp_path):
+def test_check_skill_frontmatter_valid_plugin_cache_layout(tmp_path: Path) -> None:
     skill = tmp_path / "skills" / "setup" / "SKILL.md"
     skill.parent.mkdir(parents=True)
     skill.write_text('---\nname: setup\ndescription: "d"\n---\n', encoding="utf-8")
     assert pp._check_skill_frontmatter_valid(str(tmp_path)) == {"ok": True, "error": None}
 
 
-def test_check_skill_frontmatter_valid_checkout_layout_explicit_root(tmp_path):
+def test_check_skill_frontmatter_valid_checkout_layout_explicit_root(tmp_path: Path) -> None:
     _write_skill_file(tmp_path)
     assert pp._check_skill_frontmatter_valid(str(tmp_path)) == {"ok": True, "error": None}
 
 
-def test_check_skill_frontmatter_valid_explicit_root_beats_fallback(tmp_path):
+def test_check_skill_frontmatter_valid_explicit_root_beats_fallback(tmp_path: Path) -> None:
     good = tmp_path / "good"
     bad = tmp_path / "bad"
     bad.mkdir()
@@ -461,7 +462,7 @@ def test_check_skill_frontmatter_valid_explicit_root_beats_fallback(tmp_path):
         assert pp._check_skill_frontmatter_valid(str(good))["ok"] is True
 
 
-def test_probe_all_omits_ue_without_addon(monkeypatch):
+def test_probe_all_omits_ue_without_addon(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("EXAMPLE_GAME_REPO_UE_ROOT", raising=False)
     ue = mock.Mock(return_value="L\n")
     with mock.patch.object(pp, "probe_ue", ue), mock.patch.object(pp, "_PROBE_ORDER", (ue,)):
@@ -469,21 +470,21 @@ def test_probe_all_omits_ue_without_addon(monkeypatch):
     ue.assert_not_called()
 
 
-def test_probe_all_includes_ue_with_addon(monkeypatch):
+def test_probe_all_includes_ue_with_addon(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("EXAMPLE_GAME_REPO_UE_ROOT", "x")
     ue = mock.Mock(return_value="L\n")
     with mock.patch.object(pp, "probe_ue", ue), mock.patch.object(pp, "_PROBE_ORDER", (ue,)):
         assert pp.probe_all() == ["L\n"]
 
 
-def test_check_skill_frontmatter_valid_content_root_unresolvable():
+def test_check_skill_frontmatter_valid_content_root_unresolvable() -> None:
     with mock.patch("coordinator_core.content_root.read_content_root", return_value=""):
         result = pp._check_skill_frontmatter_valid()
     assert result["ok"] is False
     assert "unresolvable" in result["error"]
 
 
-def test_check_skill_frontmatter_valid_file_missing(tmp_path):
+def test_check_skill_frontmatter_valid_file_missing(tmp_path: Path) -> None:
     with mock.patch(
         "coordinator_core.content_root.read_content_root", return_value=str(tmp_path)
     ):
@@ -492,7 +493,7 @@ def test_check_skill_frontmatter_valid_file_missing(tmp_path):
     assert "not found" in result["error"]
 
 
-def test_check_skill_frontmatter_valid_no_frontmatter(tmp_path):
+def test_check_skill_frontmatter_valid_no_frontmatter(tmp_path: Path) -> None:
     _write_skill_file(tmp_path, with_frontmatter=False)
     with mock.patch(
         "coordinator_core.content_root.read_content_root", return_value=str(tmp_path)
@@ -502,7 +503,7 @@ def test_check_skill_frontmatter_valid_no_frontmatter(tmp_path):
     assert "no parseable frontmatter" in result["error"]
 
 
-def test_check_skill_frontmatter_valid_empty_description(tmp_path):
+def test_check_skill_frontmatter_valid_empty_description(tmp_path: Path) -> None:
     _write_skill_file(tmp_path, description="")
     with mock.patch(
         "coordinator_core.content_root.read_content_root", return_value=str(tmp_path)
@@ -512,7 +513,7 @@ def test_check_skill_frontmatter_valid_empty_description(tmp_path):
     assert "description" in result["error"]
 
 
-def test_check_skill_frontmatter_valid_double_invocation_is_stable(tmp_path):
+def test_check_skill_frontmatter_valid_double_invocation_is_stable(tmp_path: Path) -> None:
     _write_skill_file(tmp_path)
     with mock.patch(
         "coordinator_core.content_root.read_content_root", return_value=str(tmp_path)
@@ -522,7 +523,7 @@ def test_check_skill_frontmatter_valid_double_invocation_is_stable(tmp_path):
     assert first == second == {"ok": True, "error": None}
 
 
-def test_probe_skill_frontmatter_valid_pass(tmp_path):
+def test_probe_skill_frontmatter_valid_pass(tmp_path: Path) -> None:
     _write_skill_file(tmp_path)
     with mock.patch(
         "coordinator_core.content_root.read_content_root", return_value=str(tmp_path)
@@ -531,7 +532,7 @@ def test_probe_skill_frontmatter_valid_pass(tmp_path):
     assert rec["status"] == "pass"
 
 
-def test_probe_skill_frontmatter_valid_warn_on_missing_file(tmp_path):
+def test_probe_skill_frontmatter_valid_warn_on_missing_file(tmp_path: Path) -> None:
     with mock.patch(
         "coordinator_core.content_root.read_content_root", return_value=str(tmp_path)
     ):
@@ -540,7 +541,7 @@ def test_probe_skill_frontmatter_valid_warn_on_missing_file(tmp_path):
     assert "not found" in rec["detail"]
 
 
-def test_op_probe_skill_frontmatter_valid_handler(tmp_path):
+def test_op_probe_skill_frontmatter_valid_handler(tmp_path: Path) -> None:
     _write_skill_file(tmp_path)
     with mock.patch(
         "coordinator_core.content_root.read_content_root", return_value=str(tmp_path)
@@ -549,14 +550,14 @@ def test_op_probe_skill_frontmatter_valid_handler(tmp_path):
     assert result == {"ok": True, "error": None}
 
 
-def test_check_windows_terminal_presence_non_windows_short_circuits():
+def test_check_windows_terminal_presence_non_windows_short_circuits() -> None:
     with mock.patch.object(pp.sys, "platform", "darwin"), mock.patch.object(pp, "_run") as run_mock:
         result = pp._check_windows_terminal_presence()
     assert result == {"present": None, "method": "not-applicable-non-windows"}
     run_mock.assert_not_called()
 
 
-def test_check_windows_terminal_presence_found_on_path():
+def test_check_windows_terminal_presence_found_on_path() -> None:
     with mock.patch.object(pp.sys, "platform", "win32"), mock.patch(
         "shutil.which", return_value="C:/Windows/wt.exe"
     ), mock.patch.object(pp, "_run") as run_mock:
@@ -565,7 +566,7 @@ def test_check_windows_terminal_presence_found_on_path():
     run_mock.assert_not_called()
 
 
-def test_check_windows_terminal_presence_found_via_winget():
+def test_check_windows_terminal_presence_found_via_winget() -> None:
     with mock.patch.object(pp.sys, "platform", "win32"), mock.patch("shutil.which", return_value=None), mock.patch.object(
         pp, "_run", return_value=_cp(0, "Name    Id                            Version\nWindows Terminal    Microsoft.WindowsTerminal    1.19\n")
     ):
@@ -573,7 +574,7 @@ def test_check_windows_terminal_presence_found_via_winget():
     assert result == {"present": True, "method": "winget"}
 
 
-def test_check_windows_terminal_presence_absent_via_winget():
+def test_check_windows_terminal_presence_absent_via_winget() -> None:
     with mock.patch.object(pp.sys, "platform", "win32"), mock.patch("shutil.which", return_value=None), mock.patch.object(
         pp, "_run", return_value=_cp(0, "No installed package found matching input criteria.\n")
     ):
@@ -581,7 +582,7 @@ def test_check_windows_terminal_presence_absent_via_winget():
     assert result == {"present": False, "method": "winget"}
 
 
-def test_check_windows_terminal_presence_winget_unavailable():
+def test_check_windows_terminal_presence_winget_unavailable() -> None:
     with mock.patch.object(pp.sys, "platform", "win32"), mock.patch("shutil.which", return_value=None), mock.patch.object(
         pp, "_run", return_value=None
     ):
@@ -589,21 +590,21 @@ def test_check_windows_terminal_presence_winget_unavailable():
     assert result == {"present": None, "method": "winget-unavailable"}
 
 
-def test_check_windows_terminal_presence_double_invocation_is_stable():
+def test_check_windows_terminal_presence_double_invocation_is_stable() -> None:
     with mock.patch.object(pp.sys, "platform", "win32"), mock.patch("shutil.which", return_value="wt.exe"):
         first = pp._check_windows_terminal_presence()
         second = pp._check_windows_terminal_presence()
     assert first == second == {"present": True, "method": "path"}
 
 
-def test_probe_windows_terminal_presence_non_windows_is_pass():
+def test_probe_windows_terminal_presence_non_windows_is_pass() -> None:
     with mock.patch.object(pp.sys, "platform", "darwin"):
         rec = _parse(pp.probe_windows_terminal_presence())
     assert rec["status"] == "pass"
     assert "non-Windows" in rec["detail"]
 
 
-def test_probe_windows_terminal_presence_warn_when_absent():
+def test_probe_windows_terminal_presence_warn_when_absent() -> None:
     with mock.patch.object(pp.sys, "platform", "win32"), mock.patch("shutil.which", return_value=None), mock.patch.object(
         pp, "_run", return_value=_cp(0, "No installed package found matching input criteria.\n")
     ):
@@ -612,7 +613,7 @@ def test_probe_windows_terminal_presence_warn_when_absent():
     assert "winget install Microsoft.WindowsTerminal" in rec["remediation"]
 
 
-def test_probe_windows_terminal_presence_inconclusive_when_winget_unavailable():
+def test_probe_windows_terminal_presence_inconclusive_when_winget_unavailable() -> None:
     with mock.patch.object(pp.sys, "platform", "win32"), mock.patch("shutil.which", return_value=None), mock.patch.object(
         pp, "_run", return_value=None
     ):
@@ -620,13 +621,13 @@ def test_probe_windows_terminal_presence_inconclusive_when_winget_unavailable():
     assert rec["status"] == "inconclusive"
 
 
-def test_op_probe_windows_terminal_presence_handler():
+def test_op_probe_windows_terminal_presence_handler() -> None:
     with mock.patch.object(pp.sys, "platform", "win32"), mock.patch("shutil.which", return_value="wt.exe"):
         result = pp._probe_windows_terminal_presence_op({})
     assert result == {"present": True, "method": "path"}
 
 
-def test_import_succeeds_and_ops_register_when_ipc_is_importable():
+def test_import_succeeds_and_ops_register_when_ipc_is_importable() -> None:
     import importlib
 
     from coordinator_core import ipc as real_ipc
@@ -643,7 +644,7 @@ def test_import_succeeds_and_ops_register_when_ipc_is_importable():
     )
 
 
-def test_import_succeeds_with_register_op_fallback_when_ipc_unimportable(monkeypatch):
+def test_import_succeeds_with_register_op_fallback_when_ipc_unimportable(monkeypatch: pytest.MonkeyPatch) -> None:
     import importlib
     import sys
 
@@ -658,11 +659,11 @@ def test_import_succeeds_with_register_op_fallback_when_ipc_unimportable(monkeyp
     assert fresh.register_op("some.op")(marker) is marker
 
 
-def test_probe_gh_never_consults_gh_auth_status(monkeypatch):
+def test_probe_gh_never_consults_gh_auth_status(monkeypatch: pytest.MonkeyPatch) -> None:
     """Cloud GH_TOKEN is a proxy placeholder: `gh auth status` fails while the API works."""
     monkeypatch.delenv("COORDINATOR_GH_PROBE_REPO", raising=False)
 
-    def fake_run(argv, **kw):
+    def fake_run(argv, **kw) -> SimpleNamespace:
         if argv == ["gh", "--version"]:
             return _cp(0, "gh version 2.40.0\n")
         if argv[:3] == ["gh", "auth", "status"]:

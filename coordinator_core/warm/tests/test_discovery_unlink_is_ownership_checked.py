@@ -34,6 +34,7 @@ import json
 import pytest
 
 from coordinator_core.warm import front_door, supervisor
+from pathlib import Path
 
 
 MODULES = pytest.mark.parametrize("mod", [supervisor, front_door], ids=["supervisor", "front_door"])
@@ -46,7 +47,7 @@ def _write_record(mod, root, pid: int) -> None:
 
 
 @MODULES
-def test_departing_listener_does_not_delete_the_live_successors_record(mod, tmp_path):
+def test_departing_listener_does_not_delete_the_live_successors_record(mod, tmp_path: Path) -> None:
     """The measured failure, stated as the sequence that produced it."""
     _write_record(mod, tmp_path, pid=2222)  # successor B booted and overwrote A's
 
@@ -60,7 +61,7 @@ def test_departing_listener_does_not_delete_the_live_successors_record(mod, tmp_
 
 
 @MODULES
-def test_owner_removes_its_own_record(mod, tmp_path):
+def test_owner_removes_its_own_record(mod, tmp_path: Path) -> None:
     _write_record(mod, tmp_path, pid=1111)
 
     mod.unlink_discovery(tmp_path, owner_pid=1111)
@@ -69,7 +70,7 @@ def test_owner_removes_its_own_record(mod, tmp_path):
 
 
 @MODULES
-def test_unconditional_unlink_is_retained_when_no_owner_is_named(mod, tmp_path):
+def test_unconditional_unlink_is_retained_when_no_owner_is_named(mod, tmp_path: Path) -> None:
     """Existing callers pass no `owner_pid`; that path must not change."""
     _write_record(mod, tmp_path, pid=2222)
 
@@ -79,12 +80,12 @@ def test_unconditional_unlink_is_retained_when_no_owner_is_named(mod, tmp_path):
 
 
 @MODULES
-def test_absent_record_is_a_no_op_and_never_raises(mod, tmp_path):
+def test_absent_record_is_a_no_op_and_never_raises(mod, tmp_path: Path) -> None:
     mod.unlink_discovery(tmp_path, owner_pid=1111)  # must not raise
 
 
 @MODULES
-def test_unreadable_record_does_not_delete(mod, tmp_path):
+def test_unreadable_record_does_not_delete(mod, tmp_path: Path) -> None:
     """`read_discovery` returns None for malformed JSON. A record we cannot
     vouch for is one we must not delete -- same fail-safe direction as
     `discovery_is_live`'s "cannot vouch" -> False."""

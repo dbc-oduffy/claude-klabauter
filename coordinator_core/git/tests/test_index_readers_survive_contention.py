@@ -51,7 +51,7 @@ def repo(tmp_path: pathlib.Path) -> pathlib.Path:
     return tmp_path
 
 
-def _flaky(monkeypatch, attr: str, failures: int, exc: OSError):
+def _flaky(monkeypatch, attr: str, failures: int, exc: OSError) -> dict[str, int]:
     """Make `Path.<attr>` raise `exc` for the first `failures` calls AGAINST
     THE INDEX FILE ONLY, then behave normally.
 
@@ -80,8 +80,8 @@ class TestGitStateReadIndex:
     collapsed the staged-content guard to `[]`, i.e. to "nothing diverged"."""
 
     def test_a_transient_read_is_retried_rather_than_becoming_a_parse_error(
-        self, repo, monkeypatch
-    ):
+        self, repo, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         calls = _flaky(
             monkeypatch,
             "read_bytes",
@@ -92,7 +92,7 @@ class TestGitStateReadIndex:
         assert git_state.read_index(repo, fresh=True) == {}
         assert calls["n"] == _ATTEMPTS_TO_SUCCEED
 
-    def test_the_stat_beside_the_read_is_retried_too(self, repo, monkeypatch):
+    def test_the_stat_beside_the_read_is_retried_too(self, repo, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = _flaky(
             monkeypatch,
             "stat",
@@ -104,16 +104,16 @@ class TestGitStateReadIndex:
         assert calls["n"] == _ATTEMPTS_TO_SUCCEED
 
     def test_a_persistent_failure_still_raises_indexparseerror(
-        self, repo, monkeypatch
-    ):
+        self, repo, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         _flaky(monkeypatch, "read_bytes", 999, PermissionError(5, "Access is denied"))
 
         with pytest.raises(IndexParseError):
             git_state.read_index(repo, fresh=True)
 
     def test_an_absent_index_is_not_retried_and_is_not_an_error(
-        self, repo, monkeypatch
-    ):
+        self, repo, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         (repo / ".git" / "index").unlink()
         calls = _flaky(monkeypatch, "read_bytes", 0, PermissionError())
 
@@ -129,7 +129,7 @@ class TestReadIndexStatIdentity:
     prove THIS call touched the filesystem just now, so a transient here does
     not degrade an answer -- it destroys the only property the caller wants."""
 
-    def test_a_transient_stat_is_retried(self, repo, monkeypatch):
+    def test_a_transient_stat_is_retried(self, repo, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = _flaky(
             monkeypatch,
             "stat",
@@ -140,7 +140,7 @@ class TestReadIndexStatIdentity:
         assert git_state.read_index_stat_identity(repo) is not None
         assert calls["n"] == _ATTEMPTS_TO_SUCCEED
 
-    def test_an_absent_index_returns_none_without_retrying(self, repo, monkeypatch):
+    def test_an_absent_index_returns_none_without_retrying(self, repo, monkeypatch: pytest.MonkeyPatch) -> None:
         (repo / ".git" / "index").unlink()
         calls = _flaky(monkeypatch, "stat", 0, PermissionError())
 
@@ -154,7 +154,7 @@ class TestGitIndexScopedStatus:
     busy box, and now that both readers share one ladder it is also the leg
     that says the shared ladder did not regress the side that was fine."""
 
-    def test_a_transient_read_is_retried(self, repo, monkeypatch):
+    def test_a_transient_read_is_retried(self, repo, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = _flaky(
             monkeypatch,
             "read_bytes",
@@ -173,7 +173,7 @@ class TestExactlyOneLadder:
     reintroduces the exact defect, because the two ladders drift and only one
     of them gets the next fix."""
 
-    def test_both_readers_route_through_the_git_objects_ladder(self, repo, monkeypatch):
+    def test_both_readers_route_through_the_git_objects_ladder(self, repo, monkeypatch: pytest.MonkeyPatch) -> None:
         seen = []
         real = git_objects._retry_transient_read
 
@@ -191,7 +191,7 @@ class TestExactlyOneLadder:
         git_index.scoped_status(repo, ["a.txt"])
         assert seen, "git_index.scoped_status bypassed the shared ladder"
 
-    def test_neither_reader_module_calls_time_sleep_directly(self):
+    def test_neither_reader_module_calls_time_sleep_directly(self) -> None:
         # A name-grep
         # for "RETRY_DELAY" is evaded by a resurrected ladder under any other
         # name (`_BACKOFF_S`, `_READ_PAUSE_S`, a local var `vars(module)`

@@ -11,6 +11,11 @@ import yaml
 from coordinator_core.ops import sizing_intake_contract as contract
 from coordinator_core.ops.dispatch_emit import ask_compose, cli
 from coordinator_core.ops.dispatch_emit.ask_contract import OP_ASK_STAGE, RUN_DIR_ROOT, STOP_AFTER_KEY
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from datetime import datetime
 
 REL = "state/sizings/2026-10-21-slice.yaml"
 _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n"
@@ -18,7 +23,7 @@ STAGE_TEXT = OP_ASK_STAGE
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
@@ -28,7 +33,7 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _put(repo, stop=None):
+def _put(repo, stop=None) -> None:
     doc = contract.intake_record(name="slice", turn={"text": "plan it", "turn": 4}, today="2026-10-21")
     if stop is not None:
         doc["em_analysis"][STOP_AFTER_KEY] = stop
@@ -41,21 +46,21 @@ def _emit(repo, *extra):
     return code, (scripts[-1].read_text(encoding="utf-8") if scripts else "")
 
 
-def test_sizing_without_stop_after_composes_stage(repo):
+def test_sizing_without_stop_after_composes_stage(repo) -> None:
     _put(repo)
     code, script = _emit(repo)
     assert code == 0
     assert STAGE_TEXT in script
 
 
-def test_sizing_stop_after_plan_composes_no_stage(repo):
+def test_sizing_stop_after_plan_composes_no_stage(repo) -> None:
     _put(repo, stop="plan")
     code, script = _emit(repo)
     assert code == 0
     assert script and STAGE_TEXT not in script
 
 
-def test_non_plan_sizing_stop_after_refuses(repo, capsys):
+def test_non_plan_sizing_stop_after_refuses(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _put(repo, stop="execute")
     code, script = _emit(repo)
     assert code != 0
@@ -63,7 +68,7 @@ def test_non_plan_sizing_stop_after_refuses(repo, capsys):
     assert "stop_after" in capsys.readouterr().err
 
 
-def _marked_parent(repo, run_id="ask-20261104T170113-26e46c"):
+def _marked_parent(repo, run_id: str = "ask-20261104T170113-26e46c") -> str:
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir, write_stop_after_marker
 
     d = record_dir(repo, run_id)
@@ -83,7 +88,7 @@ def _latest_script(repo):
     return scripts[-1].read_text(encoding="utf-8") if scripts else ""
 
 
-def test_chained_emit_inherits_parent_stop_after_and_persists_marker(repo):
+def test_chained_emit_inherits_parent_stop_after_and_persists_marker(repo) -> None:
     import json
 
     from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_FILE, record_dir
@@ -98,7 +103,7 @@ def test_chained_emit_inherits_parent_stop_after_and_persists_marker(repo):
     assert json.loads((run_dir / "run.json").read_text())["chain_parent"] == parent
 
 
-def test_chained_emit_without_marked_parent_still_stages(repo):
+def test_chained_emit_without_marked_parent_still_stages(repo) -> None:
     from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_FILE, record_dir
 
     _put(repo)
@@ -108,13 +113,13 @@ def test_chained_emit_without_marked_parent_still_stages(repo):
     assert not (record_dir(repo, reply["run_id"]) / STOP_AFTER_FILE).exists()
 
 
-def test_chain_parent_without_record_dir_refuses(repo):
+def test_chain_parent_without_record_dir_refuses(repo) -> None:
     _put(repo)
     with pytest.raises(ValueError, match="chain_parent"):
         _chained(repo, chain_parent="ask-20261104T170113-aaaaaa")
 
 
-def test_staged_target_run_refuses_inherited_stop_after(repo, monkeypatch):
+def test_staged_target_run_refuses_inherited_stop_after(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     import types
     from datetime import datetime as real_datetime
 
@@ -123,7 +128,7 @@ def test_staged_target_run_refuses_inherited_stop_after(repo, monkeypatch):
 
     class _FixedNow:
         @staticmethod
-        def now():
+        def now() -> datetime:
             return real_datetime(2026, 11, 4, 17, 1, 59)
 
     monkeypatch.setattr(op, "datetime", _FixedNow)
@@ -137,7 +142,7 @@ def test_staged_target_run_refuses_inherited_stop_after(repo, monkeypatch):
         _chained(repo, chain_parent=parent)
 
 
-def test_resuming_a_parked_chained_run_does_not_repark_but_a_fresh_successor_does(repo):
+def test_resuming_a_parked_chained_run_does_not_repark_but_a_fresh_successor_does(repo) -> None:
     from coordinator_core.ops.dispatch_emit import halted_run
     from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PARKED, STOP_AFTER_PLAN, record_dir
     from coordinator_core.ops.dispatch_emit.op import _inherited_stop_after
@@ -150,7 +155,7 @@ def test_resuming_a_parked_chained_run_does_not_repark_but_a_fresh_successor_doe
     assert _inherited_stop_after(repo, "warp-2026-11-04-slice-20261104T171000-dddddd", None, fresh) == STOP_AFTER_PLAN
 
 
-def test_non_ask_route_refuses_marked_chain_parent(repo):
+def test_non_ask_route_refuses_marked_chain_parent(repo) -> None:
     from coordinator_core.ops.dispatch_emit.op import _refuse_non_ask_chain_parent
 
     parent = _marked_parent(repo)

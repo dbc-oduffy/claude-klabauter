@@ -1668,14 +1668,15 @@ def compose_grind_terminal_commit_call(
     repo_root_js: str = "REPO_ROOT",
 ) -> str:
     """The grind's one terminal `commit` (`coordinator:git-commit-agent`, haiku, low): runs
-    `grind-row prewrite-commit-params`, then `dispatch.land_run --params-file <path>`, and returns
-    the land_run reply verbatim.
+    `grind-row prewrite-commit-params` (the rows' fix-path records only), then
+    `dispatch.land_run --params-file <path>`, and returns the land_run reply verbatim.
 
     Trap: the land_run command stays one bare `coordinator-invoke` segment, which is all the
     `block_subagent_commit` run-token leg admits. The params ride in the prompt's fenced block;
-    the prewrite verb and that leg each read it back from the spawn transcript and write the same
-    file, so the commit never rests on the hook leg alone. The agent types only the
-    forward-slash file path, never JSON. ``params_file_js`` and ``params_js`` name JS
+    the SubagentStart leg writes the params file from it before the agent's first tool call, so
+    the prompt never asks the agent to write it. Command 1 stays only because the fix-path
+    records are a second job that leg cannot do; its own params write is an idempotent repeat.
+    The agent types only the forward-slash file path, never JSON. ``params_file_js`` and ``params_js`` name JS
     expressions evaluated at RUN time."""
     parts: list[tuple[str, str]] = [
         *_REPO_ANCHOR_PARTS,
@@ -1685,7 +1686,7 @@ def compose_grind_terminal_commit_call(
             "order, each as its own Bash call: no `cd &&`, no wrapper, no env prefix, no edit to "
             f"either. `{OP_NAME}` derives the paths from the grind's finished rows, so no "
             "`paths` array is owed.\n\n"
-            "Command 1, which pre-writes the params file and the rows' fix-path records:\n```\n"
+            "Command 1, which records the rows' fix-path files (the engine already wrote the params file):\n```\n"
             f"{ASSEMBLE_CMD} grind-row prewrite-commit-params --repo-root ",
         ),
         _shq_part(repo_root_js),
@@ -1697,7 +1698,7 @@ def compose_grind_terminal_commit_call(
             f"Command 2:\ncoordinator-invoke {OP_NAME} --params-file ",
         ),
         ("expr", params_file_js),
-        ("lit", "\n\nThe engine reads the params block below. Do not copy, edit or pass it.\n\n"),
+        ("lit", "\n\nThe engine already wrote the params block below to that file. Do not copy, edit or pass it.\n\n"),
         ("expr", f"_terminalCommitParamsBlock({params_js})"),
         (
             "lit",

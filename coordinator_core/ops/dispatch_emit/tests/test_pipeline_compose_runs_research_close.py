@@ -9,12 +9,13 @@ from coordinator_core.ops.dispatch_emit.tests.test_pipeline_compose_brief_and_ha
     _segment,
     _stage,
 )
+from pathlib import Path
 
 KW = {"run_id": "r1", "agent_type_host": None}
 CLOSE = {"op": "research.close", "params": {"run_id": "r1", "note": "it's"}}
 
 
-def _chain(tmp_path, action):
+def _chain(tmp_path, action) -> str:
     return compose_chain_script(
         [_segment(tmp_path, "pre", [_stage("gate", halts_unless="ok", schema=GATE_SCHEMA)]),
          _segment(tmp_path, "main", [_stage("work")])],
@@ -22,7 +23,7 @@ def _chain(tmp_path, action):
     )
 
 
-def test_scoped_close_runs_an_op_relay_call_gated_on_delivered(tmp_path):
+def test_scoped_close_runs_an_op_relay_call_gated_on_delivered(tmp_path: Path) -> None:
     script = _chain(tmp_path, CLOSE)
     assert script.count("label: 'research-close'") == 1
     assert f"agentType: '{CLOSE_AGENT_TYPE}'" in script and "model: '" in script
@@ -32,13 +33,13 @@ def test_scoped_close_runs_an_op_relay_call_gated_on_delivered(tmp_path):
     assert script.index("closeInRun(effective)") < script.index("next_action: effective")
 
 
-def test_next_action_returns_only_when_the_close_did_not_commit(tmp_path):
+def test_next_action_returns_only_when_the_close_did_not_commit(tmp_path: Path) -> None:
     script = _chain(tmp_path, CLOSE)
     assert "...(delivered && closed?.committed !== true ? { next_action: effective } : {})" in script
     assert script.count("next_action:") == 1
 
 
-def test_unscoped_close_runs_in_run_and_returns_next_action_on_refusal(tmp_path):
+def test_unscoped_close_runs_in_run_and_returns_next_action_on_refusal(tmp_path: Path) -> None:
     seg = _segment(tmp_path, "main", [_stage("work")])
     script = compose_chain_script([seg], next_action=CLOSE, **KW)
     assert "const closed = await closeInRun(NEXT_ACTION);" in script
@@ -71,7 +72,7 @@ def _run_close_in_run(reply_text):
     return json.loads(out.stdout)
 
 
-def test_closed_committed_follows_the_wrapped_close_reply():
+def test_closed_committed_follows_the_wrapped_close_reply() -> None:
     import json
 
     inner = {"committed": True, "sha": "604c181bca"}
@@ -85,7 +86,7 @@ def test_closed_committed_follows_the_wrapped_close_reply():
     assert _run_close_in_run("garbled " + '"committed": true' + " no braces")["committed"] is True
 
 
-def test_closed_committed_stays_false_when_the_close_did_not_commit():
+def test_closed_committed_stays_false_when_the_close_did_not_commit() -> None:
     import json
 
     assert _run_close_in_run(json.dumps({"committed": False}))["committed"] is False
@@ -93,7 +94,7 @@ def test_closed_committed_stays_false_when_the_close_did_not_commit():
     assert _run_close_in_run("not json at all")["committed"] is False
 
 
-def test_other_next_action_ops_keep_the_plain_tail(tmp_path):
+def test_other_next_action_ops_keep_the_plain_tail(tmp_path: Path) -> None:
     script = _chain(tmp_path, {"op": "other.op", "params": {"a": 1}})
     assert "closeInRun" not in script and "research-close" not in script
     assert "...(delivered ? { next_action:" in script

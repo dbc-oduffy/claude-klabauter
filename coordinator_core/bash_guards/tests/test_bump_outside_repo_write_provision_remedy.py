@@ -15,6 +15,7 @@ from coordinator_core.ops.sibling_repo_provision_contract import ROUTE_REMEDY
 from coordinator_core.testing.home_sandbox import sandbox_home
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -24,7 +25,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 @pytest.fixture()
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     root = tmp_path.resolve()
     for var in ("CLAUDE_PROJECT_DIR", "CLAUDE_HOME", "HOME", "USERPROFILE",
                 "MACHINE_LOCAL_REGISTRY_DIR", "TMPDIR", "TEMP", "TMP"):
@@ -62,7 +63,7 @@ def _reason(result) -> str:
     return result["hookSpecificOutput"]["additionalContext"]
 
 
-def test_mkdir_into_absent_sibling_bumps_with_the_advisory_line(world):
+def test_mkdir_into_absent_sibling_bumps_with_the_advisory_line(world) -> None:
     cmd = f"mkdir -p {world['sibling']}/x"
     result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-remedy", str(world["anchor"]), {})
     assert result is not None
@@ -70,21 +71,21 @@ def test_mkdir_into_absent_sibling_bumps_with_the_advisory_line(world):
     assert _reason(result) == "Advisory: " + CROSS_REPO_WARN_RISK
 
 
-def test_redirect_into_absent_sibling_bumps_with_the_advisory_line(world):
+def test_redirect_into_absent_sibling_bumps_with_the_advisory_line(world) -> None:
     cmd = f"echo hi > {world['sibling']}/f.txt"
     result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-remedy", str(world["anchor"]), {})
     assert result is not None
     assert _reason(result) == "Advisory: " + CROSS_REPO_WARN_RISK
 
 
-def test_non_sibling_outside_target_bumps_without_route(world):
+def test_non_sibling_outside_target_bumps_without_route(world) -> None:
     cmd = f"mkdir -p {world['elsewhere']}"
     result = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-remedy", str(world["anchor"]), {})
     assert result is not None
     assert ROUTE_REMEDY not in _reason(result)
 
 
-def test_remedy_is_text_only_verdict_matches_unremedied(world, monkeypatch):
+def test_remedy_is_text_only_verdict_matches_unremedied(world, monkeypatch: pytest.MonkeyPatch) -> None:
     cmd = f"mkdir -p {world['sibling']}/x"
     with_remedy = _enveloped(guard.check_bump_outside_repo_write)(cmd, "sess-remedy", str(world["anchor"]), {})
     monkeypatch.setattr(guard, "_with_route_remedy", lambda message, *_a: message)

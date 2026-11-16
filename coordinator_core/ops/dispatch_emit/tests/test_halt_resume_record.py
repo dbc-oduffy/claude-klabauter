@@ -5,6 +5,7 @@ import time
 import pytest
 
 from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
+from pathlib import Path
 
 
 def _setup(tmp_path):
@@ -19,7 +20,7 @@ def _record(fp):
     )
 
 
-def test_round_trip(tmp_path):
+def test_round_trip(tmp_path: Path) -> None:
     fp = _setup(tmp_path)
     rd = tmp_path / "run"
     hrr.write(rd, _record(fp))
@@ -29,7 +30,7 @@ def test_round_trip(tmp_path):
 
 
 @pytest.mark.parametrize("field", ["plan", "sizing", "head"])
-def test_fingerprint_mismatch_on_each_input(tmp_path, field):
+def test_fingerprint_mismatch_on_each_input(tmp_path: Path, field) -> None:
     fp = _setup(tmp_path)
     rec = _record(fp)
     if field == "plan":
@@ -41,12 +42,12 @@ def test_fingerprint_mismatch_on_each_input(tmp_path, field):
     assert hrr.matches(rec, fp)
 
 
-def test_none_halt_head_never_matches(tmp_path):
+def test_none_halt_head_never_matches(tmp_path: Path) -> None:
     fp = hrr.fingerprint_of(tmp_path, None, None, None)
     assert not hrr.matches(_record(fp), fp)
 
 
-def test_record_built_before_a_revise_is_not_served_after_it(tmp_path):
+def test_record_built_before_a_revise_is_not_served_after_it(tmp_path: Path) -> None:
     import json
 
     from coordinator_core.ops.dispatch_emit import halted_run
@@ -73,7 +74,7 @@ def test_record_built_before_a_revise_is_not_served_after_it(tmp_path):
     assert hrr.matches(rebuilt, after)
 
 
-def test_changed_resume_plan_resolution_with_same_bytes_mismatches(tmp_path):
+def test_changed_resume_plan_resolution_with_same_bytes_mismatches(tmp_path: Path) -> None:
     import json
 
     (tmp_path / "plan.md").write_bytes(b"same")
@@ -95,7 +96,7 @@ def test_changed_resume_plan_resolution_with_same_bytes_mismatches(tmp_path):
     assert not hrr.matches(rec, hrr.fingerprint_for_run(tmp_path, rd, "sizing.yaml", "plan.md"))
 
 
-def test_resolver_follows_sizing_edge_and_a_changed_resolution_is_not_served(tmp_path):
+def test_resolver_follows_sizing_edge_and_a_changed_resolution_is_not_served(tmp_path: Path) -> None:
     import json
 
     (tmp_path / "a.md").write_bytes(b"a")
@@ -117,14 +118,14 @@ def test_resolver_follows_sizing_edge_and_a_changed_resolution_is_not_served(tmp
     assert not hrr.matches(rec, hrr.fingerprint_for_run(tmp_path, rd, "state/sizings/z.yaml", now_plan))
 
 
-def test_in_backoff_honours_the_window():
+def test_in_backoff_honours_the_window() -> None:
     assert hrr.in_backoff({"retry_not_before": 100.0}, 99.0)
     assert not hrr.in_backoff({"retry_not_before": 100.0}, 100.0)
     assert not hrr.in_backoff({"retry_not_before": None}, 0.0)
     assert not hrr.in_backoff({}, 0.0)
 
 
-def test_missing_and_corrupt(tmp_path):
+def test_missing_and_corrupt(tmp_path: Path) -> None:
     assert hrr.read(tmp_path, 1000) is hrr.MISSING
     (tmp_path / hrr.RESUME_FILE).write_text("{not json")
     assert hrr.read(tmp_path, 1000) is hrr.MISSING
@@ -133,7 +134,7 @@ def test_missing_and_corrupt(tmp_path):
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds a stalled record read that must return the sentinel at its deadline")
-def test_stalled_read_returns_sentinel_without_raising_and_one_in_flight(tmp_path, monkeypatch):
+def test_stalled_read_returns_sentinel_without_raising_and_one_in_flight(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "f.bin").write_bytes(b"x")
     gate = threading.Event()
     monkeypatch.setattr(hrr, "_read_file", lambda p: (gate.wait(5), b"x")[1])
@@ -152,7 +153,7 @@ def test_stalled_read_returns_sentinel_without_raising_and_one_in_flight(tmp_pat
         pytest.fail("in-flight slot never freed")
 
 
-def test_stalled_record_read(tmp_path, monkeypatch):
+def test_stalled_record_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fp = _setup(tmp_path)
     hrr.write(tmp_path / "run", _record(fp))
     gate = threading.Event()
@@ -162,7 +163,7 @@ def test_stalled_record_read(tmp_path, monkeypatch):
     time.sleep(0.1)
 
 
-def test_fingerprint_for_run_is_stable_when_head_advances(tmp_path):
+def test_fingerprint_for_run_is_stable_when_head_advances(tmp_path: Path) -> None:
     import json
 
     (tmp_path / "plan.md").write_bytes(b"plan v1")
@@ -180,7 +181,7 @@ def test_fingerprint_for_run_is_stable_when_head_advances(tmp_path):
     assert hrr.matches(record, consumer)
 
 
-def _lineage_run(root, run_id, halted="criterion", **links):
+def _lineage_run(root, run_id, halted: str = "criterion", **links):
     import json
 
     from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN, record_dir, write_stop_after_marker
@@ -192,7 +193,7 @@ def _lineage_run(root, run_id, halted="criterion", **links):
     return rd, lambda: write_stop_after_marker(rd, STOP_AFTER_PLAN)
 
 
-def test_inherited_stop_after_follows_the_ancestor_chain_and_ends_at_a_discharged_park(tmp_path):
+def test_inherited_stop_after_follows_the_ancestor_chain_and_ends_at_a_discharged_park(tmp_path: Path) -> None:
     parent, mark = _lineage_run(tmp_path, "ask-parent")
     mark()
     child, _ = _lineage_run(tmp_path, "warp-child", chain_parent="ask-parent")
@@ -203,7 +204,7 @@ def test_inherited_stop_after_follows_the_ancestor_chain_and_ends_at_a_discharge
     assert hrr.inherited_stop_after(tmp_path, free) is None
 
 
-def test_a_record_built_before_the_lineage_gained_a_park_is_not_served_after_it(tmp_path):
+def test_a_record_built_before_the_lineage_gained_a_park_is_not_served_after_it(tmp_path: Path) -> None:
     (tmp_path / "plan.md").write_bytes(b"plan v1")
     (tmp_path / "sizing.yaml").write_bytes(b"sizing v1")
     parent, mark = _lineage_run(tmp_path, "ask-parent")
@@ -220,7 +221,7 @@ def test_a_record_built_before_the_lineage_gained_a_park_is_not_served_after_it(
     assert after["stop_after"] == "plan" and not hrr.matches(record, after)
 
 
-def test_a_record_composed_by_another_engine_is_not_served(tmp_path, monkeypatch):
+def test_a_record_composed_by_another_engine_is_not_served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import json
 
     (tmp_path / "plan.md").write_bytes(b"plan v1")
@@ -238,7 +239,7 @@ def test_a_record_composed_by_another_engine_is_not_served(tmp_path, monkeypatch
     assert not hrr.matches({**_record(legacy), "resume_plan_rel": "plan.md"}, hrr.fingerprint_for_run(tmp_path, rd, "sizing.yaml", "plan.md"))
 
 
-def test_hint_round_trips_per_sizing_and_refuses_an_unsafe_id(tmp_path):
+def test_hint_round_trips_per_sizing_and_refuses_an_unsafe_id(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
 
     hrr.write_hint(tmp_path, "state/a.yaml", "warp-a-20261029T010101-abc123")
@@ -248,7 +249,7 @@ def test_hint_round_trips_per_sizing_and_refuses_an_unsafe_id(tmp_path):
     assert hrr.read_hint(tmp_path, "state/c.yaml") is None
 
 
-def test_refire_record_names_script_sha_engine_and_time(tmp_path):
+def test_refire_record_names_script_sha_engine_and_time(tmp_path: Path) -> None:
     import hashlib
 
     script = tmp_path / "s.mjs"
@@ -266,7 +267,7 @@ def test_refire_record_names_script_sha_engine_and_time(tmp_path):
     assert lines[1]["kind"] == "launcher" and lines[1]["composed_by_engine_sha"] is None
 
 
-def test_bounded_reads_reuse_one_worker_thread(tmp_path):
+def test_bounded_reads_reuse_one_worker_thread(tmp_path: Path) -> None:
     f = tmp_path / "a.json"
     f.write_bytes(b"{}")
     hrr.bounded_read(f, 1000)
@@ -276,14 +277,14 @@ def test_bounded_reads_reuse_one_worker_thread(tmp_path):
     assert threading.active_count() <= before
 
 
-def test_stalled_read_does_not_block_the_next_read(tmp_path, monkeypatch):
+def test_stalled_read_does_not_block_the_next_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     slow, fast = tmp_path / "slow.json", tmp_path / "fast.json"
     slow.write_bytes(b"s")
     fast.write_bytes(b"f")
     release = threading.Event()
     real = hrr._read_file
 
-    def gated(path):
+    def gated(path) -> bytes:
         if path.name == "slow.json":
             release.wait(5)
         return real(path)
@@ -297,7 +298,7 @@ def test_stalled_read_does_not_block_the_next_read(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("status,written", [("landed", False), ("closed", False), ("halted", True), ("resumed", True)])
-def test_write_drops_the_record_of_a_finished_run(tmp_path, status, written):
+def test_write_drops_the_record_of_a_finished_run(tmp_path: Path, status, written) -> None:
     fp = _setup(tmp_path)
     rd = tmp_path / "run"
     rd.mkdir()
@@ -308,7 +309,7 @@ def test_write_drops_the_record_of_a_finished_run(tmp_path, status, written):
 
 
 @pytest.mark.parametrize("status,written", [("landed", False), ("closed", False), ("halted", True)])
-def test_refire_record_dropped_for_a_finished_run(tmp_path, status, written):
+def test_refire_record_dropped_for_a_finished_run(tmp_path: Path, status, written) -> None:
     rd = tmp_path / "run"
     rd.mkdir()
     (rd / "halted.json").write_text(json.dumps({"status": status}))
@@ -318,6 +319,34 @@ def test_refire_record_dropped_for_a_finished_run(tmp_path, status, written):
     assert (rd / hrr.REFIRE_LOG_FILE).exists() is written
 
 
-def test_write_without_a_marker_still_writes_the_record(tmp_path):
+def test_write_without_a_marker_still_writes_the_record(tmp_path: Path) -> None:
     fp = _setup(tmp_path)
     assert hrr.write(tmp_path / "fresh", _record(fp)).exists()
+
+
+def test_await_inflight_waits_for_the_stalled_read_and_plain_reads_still_refuse(tmp_path, monkeypatch):
+    f = tmp_path / "m.json"
+    f.write_bytes(b'{"k": 1}')
+    gate = threading.Event()
+    real = hrr._read_file
+    monkeypatch.setattr(hrr, "_read_file", lambda p: (gate.wait(5), real(p))[1])
+    try:
+        assert hrr.bounded_json_state(f, 20) is hrr.STALLED
+        assert hrr.bounded_json_state(f, 20, await_inflight=False) is hrr.STALLED  # plain retry stays deduped
+        assert hrr.bounded_json_state(f, 60, await_inflight=True) is hrr.STALLED  # still stalled: bounded
+        threading.Timer(0.1, gate.set).start()
+        assert hrr.bounded_json_state(f, 2000, await_inflight=True) == {"k": 1}
+    finally:
+        gate.set()
+
+
+def test_json_state_tells_missing_malformed_and_object_apart(tmp_path):
+    assert hrr.bounded_json_state(tmp_path / "none.json") is hrr.MISSING
+    bad, arr, big = tmp_path / "bad.json", tmp_path / "arr.json", tmp_path / "big.json"
+    bad.write_bytes(b"{nope")
+    arr.write_bytes(b"[1]")
+    big.write_bytes(b'{"k": "' + b"x" * 100 + b'"}')
+    assert hrr.bounded_json_state(bad) is hrr.MALFORMED
+    assert hrr.bounded_json_state(arr) is hrr.MALFORMED
+    assert hrr.bounded_json_state(big, max_bytes=20) is hrr.MALFORMED
+    assert hrr.bounded_json_object(bad) is None and hrr.bounded_json_object(tmp_path / "none.json") is None

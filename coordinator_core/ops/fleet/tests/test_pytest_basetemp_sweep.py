@@ -12,12 +12,13 @@ import pytest
 from coordinator_core.group_em import session_registry
 from coordinator_core.ops.fleet import pytest_basetemp_sweep as sweep
 from coordinator_core.temp_layout import FLEET_DIRNAME, PYTEST_KEPT_MARKER
+from pathlib import Path
 
 _OLD = time.time() - 10 * 3600.0
 
 
 @pytest.fixture
-def temp(tmp_path, monkeypatch):
+def temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     base = tmp_path / "Temp"
     base.mkdir()
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(base))
@@ -25,14 +26,14 @@ def temp(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def registry(tmp_path):
+def registry(tmp_path: Path) -> Path:
     d = tmp_path / "registry"
     d.mkdir()
     return d
 
 
 @pytest.fixture
-def dead_pid():
+def dead_pid() -> int:
     """A pid the OS reports dead, probed without spawning (the spawn ratchet admits no new spawning tests)."""
     for pid in range(4_000_000, 3_000_000, -7):
         if not session_registry.pid_alive(pid):
@@ -49,7 +50,7 @@ def _mk(path, files=("a.txt",)):
     return path
 
 
-def test_g5_deletes_dead_pid_dirs_across_repos(temp, registry, dead_pid):
+def test_g5_deletes_dead_pid_dirs_across_repos(temp, registry, dead_pid) -> None:
     a = _mk(temp / "repo-a" / "pytest" / f"{dead_pid}-a1b2c3")
     b = _mk(temp / "repo-b" / "pytest" / f"{dead_pid}-d4e5f6")
     recs = sweep.sweep_dead_runs(registry_dir=registry)
@@ -57,7 +58,7 @@ def test_g5_deletes_dead_pid_dirs_across_repos(temp, registry, dead_pid):
     assert sorted(r["action"] for r in recs) == ["deleted", "deleted"]
 
 
-def test_g6_never_deletes_live_or_own_pid(temp, registry, dead_pid, monkeypatch):
+def test_g6_never_deletes_live_or_own_pid(temp, registry, dead_pid, monkeypatch: pytest.MonkeyPatch) -> None:
     # A real foreign pid cannot be probed here: the conftest os.kill tripwire refuses
     # signalling outside the test's process tree, so liveness of "another" pid is stubbed.
     live_pid = dead_pid - 1
@@ -70,7 +71,7 @@ def test_g6_never_deletes_live_or_own_pid(temp, registry, dead_pid, monkeypatch)
     assert own.exists() and live.exists()
 
 
-def test_g7_leaves_marked_unparsable_and_fleet(temp, registry, dead_pid):
+def test_g7_leaves_marked_unparsable_and_fleet(temp, registry, dead_pid) -> None:
     marked = _mk(temp / "repo" / "pytest" / f"{dead_pid}-a1b2c3", files=(PYTEST_KEPT_MARKER,))
     odd = _mk(temp / "repo" / "pytest" / "abc-a1b2c3")
     fleet = _mk(temp / FLEET_DIRNAME / "pytest" / f"{dead_pid}-a1b2c3")
@@ -80,7 +81,7 @@ def test_g7_leaves_marked_unparsable_and_fleet(temp, registry, dead_pid):
     assert marked.exists() and odd.exists() and fleet.exists()
 
 
-def test_g8_dry_run_deletes_nothing_and_prints_would_delete(temp, dead_pid, capsys):
+def test_g8_dry_run_deletes_nothing_and_prints_would_delete(temp, dead_pid, capsys: pytest.CaptureFixture[str]) -> None:
     run = _mk(temp / "repo" / "pytest" / f"{dead_pid}-a1b2c3")
     assert sweep.main(["--dry-run"]) == 0
     assert run.exists()

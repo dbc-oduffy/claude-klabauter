@@ -1305,7 +1305,7 @@ def test_real_run_report_sidecar_provisioned_and_marker_present(tmp_path: Path) 
     assert (tmp_path / rel_path).is_file()
 
 
-def test_named_dispatch_miss_notice_names_a_channel_that_delivers():
+def test_named_dispatch_miss_notice_names_a_channel_that_delivers() -> None:
     """The no-path miss body must not tell a NAMED teammate to reply inline.
 
     A named teammate's final assistant text is never returned to the
@@ -1337,7 +1337,7 @@ def test_named_dispatch_miss_notice_names_a_channel_that_delivers():
     )
 
 
-def test_no_miss_body_leaves_a_foreign_sidecar_write_unforbidden():
+def test_no_miss_body_leaves_a_foreign_sidecar_write_unforbidden() -> None:
     """Every miss body forbids writing into another agent's sidecar.
 
     Observed 2026-08-31 (`state/bug-backlog/2026-08-31-missing-sidecar-
@@ -1380,7 +1380,7 @@ def test_no_miss_body_leaves_a_foreign_sidecar_write_unforbidden():
 # ---------------------------------------------------------------------------
 
 
-def _miss_payload(tmp_path, agent_id, agent_type="coordinator:executor"):
+def _miss_payload(tmp_path, agent_id, agent_type: str = "coordinator:executor"):
     return {
         "session_id": "f5dc95eb-e5ef-4e36-aff7-afd769f5e709",
         "agent_id": agent_id,
@@ -1396,7 +1396,7 @@ def _sentinels(tmp_path):
     return sorted(share.rglob("*.md"))
 
 
-def _force_sidecar_eligible(monkeypatch, mod, *types):
+def _force_sidecar_eligible(monkeypatch, mod, *types) -> None:
     """`load_policy(None)` resolves the sidecar policy out of the DoE plugin
     root, which is not derivable under a tmp_path repo -- it returns an EMPTY
     `report_sidecar`, so `_resolve_sidecar_leg` returns before reaching any
@@ -1409,7 +1409,7 @@ def _force_sidecar_eligible(monkeypatch, mod, *types):
     monkeypatch.setattr(mod, "load_policy", lambda *a, **k: _Policy())
 
 
-def test_named_raw_fallback_shape_gets_a_sentinel_on_the_eligible_arm(tmp_path, monkeypatch):
+def test_named_raw_fallback_shape_gets_a_sentinel_on_the_eligible_arm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The eligible-type miss arm serves the raw `a<name>-<16hex>` id too."""
     import subprocess
 
@@ -1432,7 +1432,7 @@ def test_named_raw_fallback_shape_gets_a_sentinel_on_the_eligible_arm(tmp_path, 
     assert path in text
 
 
-def test_sentinel_write_is_idempotent_for_a_refired_dispatch(tmp_path, monkeypatch):
+def test_sentinel_write_is_idempotent_for_a_refired_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     from coordinator_core.hooks import cater_subagent_start as mod
@@ -1460,7 +1460,7 @@ def test_sentinel_write_is_idempotent_for_a_refired_dispatch(tmp_path, monkeypat
     assert len(_sentinels(tmp_path)) == 1
 
 
-def test_a_non_receipt_type_gets_a_sentinel_without_a_receipt_block(tmp_path, monkeypatch):
+def test_a_non_receipt_type_gets_a_sentinel_without_a_receipt_block(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Only the receipt-bearing populations get a receipt. A sentinel for any
     other eligible type is still worth writing -- it is the agent's own place
     to persist findings instead of a sibling's file -- but it must not claim a
@@ -1717,8 +1717,8 @@ def _ue_repo(tmp_path: Path, *, rag: bool, uproject: bool = True) -> Path:
 
 
 def test_docs_checker_in_ue_repo_with_rag_gets_abort_clause_and_lookup_record(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     import json
 
     from coordinator_core.ops.dispatch_emit import run_stage_lookup
@@ -1752,8 +1752,8 @@ def test_docs_checker_in_ue_repo_with_rag_gets_abort_clause_and_lookup_record(
 
 
 def test_docs_checker_clause_absent_without_rag_or_without_uproject_or_other_agent(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     no_rag = _ue_repo(tmp_path / "a", rag=False)
     no_uproject = _ue_repo(tmp_path / "b", rag=True, uproject=False)
     ue_rag = _ue_repo(tmp_path / "c", rag=True)
@@ -1849,7 +1849,7 @@ def test_other_agent_types_never_write_a_params_file(tmp_path: Path) -> None:
 _PHASE_RUN = "ask-20261114T000000-abc123"
 
 
-def _phase_spawn(tmp_path: Path, monkeypatch, label: str, agent_type: str = "coordinator:executor"):
+def _phase_spawn(tmp_path: Path, monkeypatch, label: str, agent_type: str = "coordinator:executor") -> tuple[Path, dict[str, str]]:
     import json
 
     from coordinator_core.ops.dispatch_emit import ask_contract
@@ -1883,7 +1883,7 @@ def _phase_spawn(tmp_path: Path, monkeypatch, label: str, agent_type: str = "coo
 @pytest.mark.parametrize(
     "label,phase", [("plan", "plan-author"), ("plan-review", "review"), ("plan-revise", "plan-author")]
 )
-def test_plan_and_review_child_starts_stamp_the_run_phase(tmp_path, monkeypatch, label, phase):
+def test_plan_and_review_child_starts_stamp_the_run_phase(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, label, phase) -> None:
     from coordinator_core.ops.dispatch_emit import ask_contract
 
     repo, payload = _phase_spawn(tmp_path, monkeypatch, label)
@@ -1892,7 +1892,7 @@ def test_plan_and_review_child_starts_stamp_the_run_phase(tmp_path, monkeypatch,
     assert rec["phase"] == phase and rec["stage"] == "minted"
 
 
-def test_a_non_plan_non_review_label_stamps_no_phase(tmp_path, monkeypatch):
+def test_a_non_plan_non_review_label_stamps_no_phase(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import ask_contract
 
     for label in ("gate", "plan-docs-check", "work:C1"):
@@ -1901,7 +1901,7 @@ def test_a_non_plan_non_review_label_stamps_no_phase(tmp_path, monkeypatch):
         assert "phase" not in ask_contract.read_run_stage(repo, _PHASE_RUN)
 
 
-def test_a_terminal_run_is_never_rephased_and_the_hook_never_fails(tmp_path, monkeypatch):
+def test_a_terminal_run_is_never_rephased_and_the_hook_never_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import ask_contract
 
     repo, payload = _phase_spawn(tmp_path, monkeypatch, "plan")

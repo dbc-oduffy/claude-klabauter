@@ -87,6 +87,7 @@ from coordinator_core.reconcile.gate_eval import (
     evaluate_gate,
     evaluate_gate_triage,
 )
+from pathlib import Path
 
 
 pytestmark = pytest.mark.complete
@@ -1220,7 +1221,7 @@ class TestLineageFieldsNeverGateEmptyBlockedBy:
 class TestComputeIndexAgreesWithActTimeResolver:
 
     def test_same_handoff_id_resolves_to_same_deployment_state_both_resolvers(
-        self, tmp_path
+        self, tmp_path: Path
     ) -> None:
         from coordinator_core.ops.handoff_transition import (
             _resolve_blocker_deployment_state,
@@ -2909,7 +2910,7 @@ class TestDeriveReadinessBatch:
 
 class TestGateIndexBuiltOnceForSweep:
 
-    def test_repeated_evaluate_gate_calls_share_one_index_build(self, monkeypatch) -> None:
+    def test_repeated_evaluate_gate_calls_share_one_index_build(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import coordinator_core.reconcile.gate_eval as gate_eval_mod
 
         real_index_by_id = gate_eval_mod._index_by_id
@@ -2938,7 +2939,7 @@ class TestGateIndexBuiltOnceForSweep:
         assert result_b["verdict"] == "clear"
         assert len(calls) == 1, "expected exactly one _index_by_id build shared across the sweep"
 
-    def test_distinct_corpus_objects_never_share_a_memo_entry(self, monkeypatch) -> None:
+    def test_distinct_corpus_objects_never_share_a_memo_entry(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import coordinator_core.reconcile.gate_eval as gate_eval_mod
 
         real_index_by_id = gate_eval_mod._index_by_id

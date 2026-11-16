@@ -23,9 +23,10 @@ from __future__ import annotations
 import ntpath
 
 from coordinator_core.bash_guards import _write_bump_applicability as applicability
+import pytest
 
 
-def test_posix_tmp_literal_is_dropped_on_windows(monkeypatch):
+def test_posix_tmp_literal_is_dropped_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(applicability, "_host_is_windows", lambda: True)
     assert applicability._posix_tmp_literal() is None
 
@@ -33,7 +34,7 @@ def test_posix_tmp_literal_is_dropped_on_windows(monkeypatch):
     assert applicability._posix_tmp_literal() == "/tmp"
 
 
-def test_drive_relative_tmp_is_not_an_allowed_temp_root_on_windows(monkeypatch):
+def test_drive_relative_tmp_is_not_an_allowed_temp_root_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(applicability, "_host_is_windows", lambda: True)
     for var in ("TMPDIR", "TEMP", "TMP"):
         monkeypatch.delenv(var, raising=False)
@@ -46,6 +47,6 @@ def test_drive_relative_tmp_is_not_an_allowed_temp_root_on_windows(monkeypatch):
     assert drive_root_tmps == []
 
 
-def test_posix_branch_still_contributes_the_tmp_literal(monkeypatch):
+def test_posix_branch_still_contributes_the_tmp_literal(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(applicability, "_host_is_windows", lambda: False)
     assert applicability._posix_tmp_literal() == "/tmp"

@@ -132,5 +132,6 @@ def test_ask_file_blocked_write_raises_typed_degraded_error(tmp_path, monkeypatc
 
 def test_ask_file_unfrozen_write_lands(tmp_path):
     target = tmp_path / "rec2" / "ask-ok.md"
+    target.parent.mkdir()
     emit_op._write_record_file_bounded(target, "body")
     assert target.read_text(encoding="utf-8") == "body"

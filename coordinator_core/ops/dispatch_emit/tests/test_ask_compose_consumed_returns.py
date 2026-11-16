@@ -5,6 +5,7 @@ from __future__ import annotations
 from coordinator_core.ops.dispatch_emit import ask_compose, row_returns
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+import pytest
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
@@ -25,7 +26,7 @@ def _script(monkeypatch) -> str:
     )
 
 
-def test_the_binding_is_declared_before_execute_and_filled_only_at_the_settled_replies_site(monkeypatch):
+def test_the_binding_is_declared_before_execute_and_filled_only_at_the_settled_replies_site(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert script.count("let _consumedReturns = {};") == 1
     decl = script.index("let _consumedReturns = {};")
@@ -44,7 +45,7 @@ def test_the_binding_is_declared_before_execute_and_filled_only_at_the_settled_r
     assert "agent(" not in site
 
 
-def test_the_halt_params_block_names_the_key_even_with_no_deps(monkeypatch):
+def test_the_halt_params_block_names_the_key_even_with_no_deps(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     fn = script[script.index("async function _commitHaltRecord()") :]
     fn = fn[: fn.index("\n  }") if "\n  }" in fn else len(fn)]

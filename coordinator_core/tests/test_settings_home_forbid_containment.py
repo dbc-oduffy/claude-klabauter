@@ -7,9 +7,10 @@ from coordinator_core._settings_home import (
     RealSettingsHomeLeakError,
     _check_not_the_forbidden_real_home,
 )
+from pathlib import Path
 
 
-def test_child_path_raises(tmp_path, monkeypatch):
+def test_child_path_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     real = tmp_path / "real" / ".coordinator-claude-settings"
     monkeypatch.setenv(FORBID_REAL_SETTINGS_HOME_ENV, str(real))
     with pytest.raises(RealSettingsHomeLeakError):
@@ -18,7 +19,7 @@ def test_child_path_raises(tmp_path, monkeypatch):
         _check_not_the_forbidden_real_home(real)
 
 
-def test_sibling_and_unset_pass(tmp_path, monkeypatch):
+def test_sibling_and_unset_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     real = tmp_path / "real" / ".coordinator-claude-settings"
     monkeypatch.setenv(FORBID_REAL_SETTINGS_HOME_ENV, str(real))
     _check_not_the_forbidden_real_home(tmp_path / "other" / ".coordinator-claude-settings")

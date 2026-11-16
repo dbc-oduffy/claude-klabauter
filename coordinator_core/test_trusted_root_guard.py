@@ -13,6 +13,7 @@ from coordinator_core.trusted_root_guard import (
     coordinator_trusted_root_guard_or_exit,
     is_trusted,
 )
+from pathlib import Path
 
 
 pytestmark = pytest.mark.complete
@@ -28,17 +29,17 @@ def _env(**overrides):
     return base
 
 
-def test_trusted_under_dot_claude_prefix():
+def test_trusted_under_dot_claude_prefix() -> None:
     env = _env()
     assert is_trusted("/home/tester/.claude/plugins/coordinator", env=env)
 
 
-def test_untrusted_outside_any_anchor():
+def test_untrusted_outside_any_anchor() -> None:
     env = _env()
     assert not is_trusted("/tmp/evil", env=env)
 
 
-def test_trusted_under_content_root_sentinel(tmp_path, monkeypatch):
+def test_trusted_under_content_root_sentinel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = tmp_path
     (home / ".claude").mkdir()
     (home / ".claude" / ".coordinator-content-root").write_text(str(tmp_path / "coordinator-content-repo") + "\n")
@@ -46,7 +47,7 @@ def test_trusted_under_content_root_sentinel(tmp_path, monkeypatch):
     assert is_trusted(str(tmp_path / "coordinator-content-repo" / "coordinator"), env=env)
 
 
-def test_content_root_itself_is_trusted(tmp_path):
+def test_content_root_itself_is_trusted(tmp_path: Path) -> None:
     """A standalone coordinator-claude clone is its own plugin root, so the
     cloud pre-boot passes CLAUDE_PLUGIN_ROOT == repos.content_root exactly."""
     (tmp_path / ".claude").mkdir()
@@ -56,7 +57,7 @@ def test_content_root_itself_is_trusted(tmp_path):
     assert not is_trusted(str(tmp_path / "coordinator-claude-evil"), env=env)
 
 
-def test_content_root_trailing_slash_normalized(tmp_path):
+def test_content_root_trailing_slash_normalized(tmp_path: Path) -> None:
     home = tmp_path
     (home / ".claude").mkdir()
     (home / ".claude" / ".coordinator-content-root").write_text(str(tmp_path / "coordinator-content-repo") + "/\n")
@@ -72,7 +73,7 @@ def test_content_root_trailing_slash_normalized(tmp_path):
     "collapses this pathological `//` case. Windows behavior is asserted by "
     "test_windows_separator_and_case_normalization below.",
 )
-def test_content_root_only_single_trailing_slash_stripped(tmp_path):
+def test_content_root_only_single_trailing_slash_stripped(tmp_path: Path) -> None:
     home = tmp_path
     (home / ".claude").mkdir()
     (home / ".claude" / ".coordinator-content-root").write_text(str(tmp_path / "coordinator-content-repo") + "//\n")
@@ -82,7 +83,7 @@ def test_content_root_only_single_trailing_slash_stripped(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows path-spelling normalization")
-def test_windows_separator_and_case_normalization(tmp_path):
+def test_windows_separator_and_case_normalization(tmp_path: Path) -> None:
     """Regression: the DoE-clone trust anchor was dead on Windows.
 
     `.coordinator-content-root` is written with forward slashes (`C:/coordinator-content-repo`) while
@@ -103,17 +104,17 @@ def test_windows_separator_and_case_normalization(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows path-spelling normalization")
-def test_windows_backslash_traversal_is_rejected(tmp_path):
+def test_windows_backslash_traversal_is_rejected(tmp_path: Path) -> None:
     env = {"HOME": str(tmp_path)}
     assert not is_trusted(str(tmp_path / ".claude") + "\\..\\..\\tmp\\evil", env=env)
 
 
-def test_missing_content_root_sentinel_is_not_an_error(tmp_path):
+def test_missing_content_root_sentinel_is_not_an_error(tmp_path: Path) -> None:
     env = {"HOME": str(tmp_path)}
     assert not is_trusted(str(tmp_path / "coordinator-content-repo"), env=env)
 
 
-def test_registry_repos_content_root_ranks_above_content_root_file_mirrors(tmp_path):
+def test_registry_repos_content_root_ranks_above_content_root_file_mirrors(tmp_path: Path) -> None:
     """DR-071: the settings-home registry `repos.content_root` key is the
     canonical anchor and must outrank BOTH the durable file mirror and the
     legacy `.coordinator-content-root` file — all three deliberately hold DIFFERENT values so
@@ -139,7 +140,7 @@ def test_registry_repos_content_root_ranks_above_content_root_file_mirrors(tmp_p
     assert not is_trusted(str(legacy_root / "coordinator"), env=env)
 
 
-def test_registry_repos_claude_klabauter_is_trusted_anchor(tmp_path):
+def test_registry_repos_claude_klabauter_is_trusted_anchor(tmp_path: Path) -> None:
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
@@ -154,7 +155,7 @@ def test_registry_repos_claude_klabauter_is_trusted_anchor(tmp_path):
     assert not is_trusted(str(tmp_path / "claude-klabauter-evil" / "coordinator"), env=env)
 
 
-def test_absent_repos_claude_klabauter_key_degrades_cleanly(tmp_path):
+def test_absent_repos_claude_klabauter_key_degrades_cleanly(tmp_path: Path) -> None:
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
 
@@ -166,7 +167,7 @@ def test_absent_repos_claude_klabauter_key_degrades_cleanly(tmp_path):
     assert is_trusted(str(home / ".claude" / "plugins" / "coordinator"), env=env)
 
 
-def test_a_flat_clone_root_is_trusted_as_itself_not_only_its_children(tmp_path):
+def test_a_flat_clone_root_is_trusted_as_itself_not_only_its_children(tmp_path: Path) -> None:
     """Regression: a FLAT checkout's own root false-rejected its own anchor.
 
     The cloud pre-boot install chain registers the published mirror as a
@@ -188,7 +189,7 @@ def test_a_flat_clone_root_is_trusted_as_itself_not_only_its_children(tmp_path):
     assert is_trusted(str(clone / "coordinator"), env=env)
 
 
-def test_the_engine_root_is_trusted_as_itself(tmp_path):
+def test_the_engine_root_is_trusted_as_itself(tmp_path: Path) -> None:
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
@@ -200,7 +201,7 @@ def test_the_engine_root_is_trusted_as_itself(tmp_path):
     assert is_trusted(str(claude_klabauter_root), env=env)
 
 
-def test_the_widening_stops_at_the_anchor_never_reaches_its_parent(tmp_path):
+def test_the_widening_stops_at_the_anchor_never_reaches_its_parent(tmp_path: Path) -> None:
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     clone = tmp_path / "clones" / "coordinator-claude"
@@ -215,18 +216,18 @@ def test_the_widening_stops_at_the_anchor_never_reaches_its_parent(tmp_path):
     assert not is_trusted(str(tmp_path), env=env)
 
 
-def test_the_marketplace_anchor_stays_descendants_only(tmp_path):
+def test_the_marketplace_anchor_stays_descendants_only(tmp_path: Path) -> None:
     env = {"HOME": str(tmp_path)}
     assert not is_trusted(str(tmp_path / ".claude"), env=env)
     assert is_trusted(str(tmp_path / ".claude" / "plugins"), env=env)
 
 
-def test_traversal_segment_rejected_even_under_trusted_prefix():
+def test_traversal_segment_rejected_even_under_trusted_prefix() -> None:
     env = _env()
     assert not is_trusted("/home/tester/.claude/../../tmp/evil", env=env)
 
 
-def test_dotdot_prefixed_basename_false_reject_documented():
+def test_dotdot_prefixed_basename_false_reject_documented() -> None:
     # Documented pre-existing edge case in the bash trust-core: a
     # dotdot-PREFIXED (not traversal) segment like `..cache` still matches
     # the `*"/.."*` glob and is rejected, even though it is not a real `..`
@@ -235,12 +236,12 @@ def test_dotdot_prefixed_basename_false_reject_documented():
     assert not is_trusted("/home/tester/.claude/..cache", env=env)
 
 
-def test_plugin_root_trusted_env_opt_out():
+def test_plugin_root_trusted_env_opt_out() -> None:
     env = _env(COORDINATOR_PLUGIN_ROOT_TRUSTED="1")
     assert is_trusted("/tmp/some/plugin/dir", env=env)
 
 
-def test_plugin_root_trusted_env_opt_out_overrides_traversal_reset():
+def test_plugin_root_trusted_env_opt_out_overrides_traversal_reset() -> None:
     # Faithfully reproduced bash trust-core ordering, NOT "fixed": the
     # bash sourced-lib applies the traversal reset (`_cc_trusted=0`) BEFORE
     # the `COORDINATOR_PLUGIN_ROOT_TRUSTED=1` opt-out check, so the
@@ -264,23 +265,23 @@ def test_plugin_root_trusted_env_opt_out_overrides_traversal_reset():
 # USERPROFILE, reproducing a native-Windows shell invocation.
 
 
-def test_home_from_env_falls_back_to_userprofile_when_home_absent():
+def test_home_from_env_falls_back_to_userprofile_when_home_absent() -> None:
     env = {"USERPROFILE": "C:\\Users\\tester"}
     assert _home_from_env(env) == "C:\\Users\\tester"
 
 
-def test_home_from_env_precedence_claude_home_then_home_then_userprofile():
+def test_home_from_env_precedence_claude_home_then_home_then_userprofile() -> None:
     env = {"CLAUDE_HOME": "/a", "HOME": "/b", "USERPROFILE": "C:\\c"}
     assert _home_from_env(env) == "/a"
     assert _home_from_env({"HOME": "/b", "USERPROFILE": "C:\\c"}) == "/b"
     assert _home_from_env({"USERPROFILE": "C:\\c"}) == "C:\\c"
 
 
-def test_home_from_env_empty_when_nothing_set():
+def test_home_from_env_empty_when_nothing_set() -> None:
     assert _home_from_env({}) == ""
 
 
-def test_settings_home_resolves_with_only_userprofile_set():
+def test_settings_home_resolves_with_only_userprofile_set() -> None:
     """The failing configuration itself: no HOME, no CLAUDE_HOME, only
     USERPROFILE (a native PowerShell/cmd.exe environment). Pre-fix this
     returned "" and silently disabled every downstream resolution rung."""
@@ -289,7 +290,7 @@ def test_settings_home_resolves_with_only_userprofile_set():
     assert result == os.path.join("C:\\Users\\tester", ".coordinator-claude-settings")
 
 
-def test_content_root_durable_rung_resolves_with_only_userprofile_set(tmp_path):
+def test_content_root_durable_rung_resolves_with_only_userprofile_set(tmp_path: Path) -> None:
     """The direct F2 regression: the durable settings-home rung has a
     correct, present value, and the ONLY env var set is USERPROFILE (no
     HOME, no CLAUDE_HOME) -- exactly the shape of a native-Windows shell
@@ -306,7 +307,7 @@ def test_content_root_durable_rung_resolves_with_only_userprofile_set(tmp_path):
     assert is_trusted(str(content_root / "coordinator"), env=env)
 
 
-def test_settings_home_never_relative_when_home_fully_absent():
+def test_settings_home_never_relative_when_home_fully_absent() -> None:
     """F10: when home resolves fully empty, the settings-home dir must be
     the loud/empty "" -- never a relative path silently joined against
     whatever cwd the process happens to be invoked from (which produced a
@@ -321,26 +322,26 @@ def test_settings_home_never_relative_when_home_fully_absent():
 # --- coordinator_trusted_root_guard: mode REQUIRED, no default -----------
 
 
-def test_mode_empty_raises_value_error():
+def test_mode_empty_raises_value_error() -> None:
     env = _env()
     with pytest.raises(ValueError):
         coordinator_trusted_root_guard(mode="", root="/tmp/evil", env=env)
 
 
-def test_mode_unrecognized_raises_value_error():
+def test_mode_unrecognized_raises_value_error() -> None:
     env = _env()
     with pytest.raises(ValueError):
         coordinator_trusted_root_guard(mode="fail-quiet", root="/tmp/evil", env=env)
 
 
-def test_fail_loud_trusted_returns_true():
+def test_fail_loud_trusted_returns_true() -> None:
     env = _env()
     assert coordinator_trusted_root_guard(
         mode="fail-loud", root="/home/tester/.claude/x", env=env
     ) is True
 
 
-def test_fail_loud_untrusted_raises(capsys):
+def test_fail_loud_untrusted_raises(capsys: pytest.CaptureFixture[str]) -> None:
     env = _env()
     with pytest.raises(UntrustedRootError):
         coordinator_trusted_root_guard(
@@ -352,7 +353,7 @@ def test_fail_loud_untrusted_raises(capsys):
     assert "/tmp/evil" in err
 
 
-def test_fail_loud_diagnostics_show_empty_anchor_and_caveat_override(capsys, tmp_path):
+def test_fail_loud_diagnostics_show_empty_anchor_and_caveat_override(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     """Regression for F6 (2026-07-28 Windows install dogfood): a rejection
     with no HOME/USERPROFILE in env must show the empty anchor explicitly,
     and must NOT present COORDINATOR_PLUGIN_ROOT_TRUSTED=1 as an
@@ -377,7 +378,7 @@ def test_fail_loud_diagnostics_show_empty_anchor_and_caveat_override(capsys, tmp
     assert "COORDINATOR_PLUGIN_ROOT_TRUSTED=1 would mask it" in err
 
 
-def test_fail_loud_diagnostics_show_resolved_anchors_when_present(capsys, tmp_path):
+def test_fail_loud_diagnostics_show_resolved_anchors_when_present(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     settings_home_dir = tmp_path / "settings-home"
@@ -397,7 +398,7 @@ def test_fail_loud_diagnostics_show_resolved_anchors_when_present(capsys, tmp_pa
     assert "at least one anchor above resolved EMPTY" not in err
 
 
-def test_fail_loud_or_exit_untrusted_calls_sys_exit(capsys):
+def test_fail_loud_or_exit_untrusted_calls_sys_exit(capsys: pytest.CaptureFixture[str]) -> None:
     env = _env()
     with pytest.raises(SystemExit) as exc_info:
         coordinator_trusted_root_guard_or_exit(
@@ -406,7 +407,7 @@ def test_fail_loud_or_exit_untrusted_calls_sys_exit(capsys):
     assert exc_info.value.code == 1
 
 
-def test_fail_open_trusted_returns_true_no_stderr(capsys):
+def test_fail_open_trusted_returns_true_no_stderr(capsys: pytest.CaptureFixture[str]) -> None:
     env = _env()
     result = coordinator_trusted_root_guard(
         mode="fail-open", root="/home/tester/.claude/x", env=env
@@ -415,7 +416,7 @@ def test_fail_open_trusted_returns_true_no_stderr(capsys):
     assert capsys.readouterr().err == ""
 
 
-def test_fail_open_untrusted_existing_dir_warns(tmp_path, capsys):
+def test_fail_open_untrusted_existing_dir_warns(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     root = str(tmp_path)
     env = _env()
     result = coordinator_trusted_root_guard(mode="fail-open", root=root, env=env)
@@ -425,7 +426,7 @@ def test_fail_open_untrusted_existing_dir_warns(tmp_path, capsys):
     assert root in err
 
 
-def test_fail_open_untrusted_existing_dir_warning_includes_diagnostics(tmp_path, capsys):
+def test_fail_open_untrusted_existing_dir_warning_includes_diagnostics(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     root = str(tmp_path)
     env = _env()
     coordinator_trusted_root_guard(mode="fail-open", root=root, env=env)
@@ -433,14 +434,14 @@ def test_fail_open_untrusted_existing_dir_warning_includes_diagnostics(tmp_path,
     assert "content_root resolved to:" in err
 
 
-def test_fail_open_untrusted_empty_root_stays_silent(capsys):
+def test_fail_open_untrusted_empty_root_stays_silent(capsys: pytest.CaptureFixture[str]) -> None:
     env = _env()
     result = coordinator_trusted_root_guard(mode="fail-open", root="", env=env)
     assert result is False
     assert capsys.readouterr().err == ""
 
 
-def test_fail_open_untrusted_nonexistent_root_stays_silent(capsys):
+def test_fail_open_untrusted_nonexistent_root_stays_silent(capsys: pytest.CaptureFixture[str]) -> None:
     env = _env()
     result = coordinator_trusted_root_guard(
         mode="fail-open", root="/does/not/exist/anywhere", env=env
@@ -449,13 +450,13 @@ def test_fail_open_untrusted_nonexistent_root_stays_silent(capsys):
     assert capsys.readouterr().err == ""
 
 
-def test_fail_open_never_raises():
+def test_fail_open_never_raises() -> None:
     env = _env()
     result = coordinator_trusted_root_guard(mode="fail-open", root="/tmp/evil", env=env)
     assert result is False
 
 
-def test_an_empty_anchor_never_trusts_anything(tmp_path):
+def test_an_empty_anchor_never_trusts_anything(tmp_path: Path) -> None:
     env = {"HOME": str(tmp_path / "home")}
 
     assert not is_trusted("", env=env)
@@ -463,7 +464,7 @@ def test_an_empty_anchor_never_trusts_anything(tmp_path):
     assert not is_trusted("/", env=env)
 
 
-def test_a_root_only_registry_value_does_not_trust_the_whole_filesystem(tmp_path):
+def test_a_root_only_registry_value_does_not_trust_the_whole_filesystem(tmp_path: Path) -> None:
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text(
@@ -475,7 +476,7 @@ def test_a_root_only_registry_value_does_not_trust_the_whole_filesystem(tmp_path
     assert not is_trusted("/", env=env)
 
 
-def test_the_engine_anchor_has_the_same_negative_boundary_as_the_doe_anchor(tmp_path):
+def test_the_engine_anchor_has_the_same_negative_boundary_as_the_doe_anchor(tmp_path: Path) -> None:
     """Anchor 3 carried a positive arm only. The widening is symmetric across
     anchors 2 and 3, so its NEGATIVE boundary must be too — otherwise a
     regression on the engine anchor alone would pass."""
@@ -493,7 +494,7 @@ def test_the_engine_anchor_has_the_same_negative_boundary_as_the_doe_anchor(tmp_
     assert not is_trusted(str(tmp_path), env=env)
 
 
-def test_a_traversal_under_a_widened_anchor_is_still_refused(tmp_path):
+def test_a_traversal_under_a_widened_anchor_is_still_refused(tmp_path: Path) -> None:
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     engine = tmp_path / "clones" / "claude-klabauter"
@@ -520,7 +521,7 @@ def _write_plugin_mirror_registry(tmp_path, mirror_root, *, content_root=None):
     return settings_home_dir
 
 
-def test_the_served_plugin_mirror_is_a_trust_anchor_of_its_own(tmp_path):
+def test_the_served_plugin_mirror_is_a_trust_anchor_of_its_own(tmp_path: Path) -> None:
     mirror = tmp_path / "coordinator-claude-mirror"
     authoring = tmp_path / "authoring-tree"
     settings_home_dir = _write_plugin_mirror_registry(tmp_path, mirror, content_root=authoring)
@@ -531,7 +532,7 @@ def test_the_served_plugin_mirror_is_a_trust_anchor_of_its_own(tmp_path):
     assert is_trusted(str(authoring), env=env)
 
 
-def test_the_mirror_anchor_has_the_same_negative_boundary_as_the_others(tmp_path):
+def test_the_mirror_anchor_has_the_same_negative_boundary_as_the_others(tmp_path: Path) -> None:
     mirror = tmp_path / "coordinator-claude-mirror"
     settings_home_dir = _write_plugin_mirror_registry(tmp_path, mirror)
     env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
@@ -541,7 +542,7 @@ def test_the_mirror_anchor_has_the_same_negative_boundary_as_the_others(tmp_path
     assert not is_trusted(str(mirror / ".." / ".." / "tmp" / "evil"), env=env)
 
 
-def test_a_slash_dotdot_poisoned_anchor_value_is_neutralized_by_the_global_reset(tmp_path):
+def test_a_slash_dotdot_poisoned_anchor_value_is_neutralized_by_the_global_reset(tmp_path: Path) -> None:
     mirror = tmp_path / "legit" / ".." / "evil-mirror"
     settings_home_dir = _write_plugin_mirror_registry(tmp_path, mirror)
     env = {"HOME": str(tmp_path / "home"), "COORDINATOR_SETTINGS_HOME": str(settings_home_dir)}
@@ -552,7 +553,7 @@ def test_a_slash_dotdot_poisoned_anchor_value_is_neutralized_by_the_global_reset
     assert not is_trusted(str(mirror / "coordinator"), env=env)
 
 
-def test_an_absent_mirror_key_contributes_nothing_and_never_raises(tmp_path):
+def test_an_absent_mirror_key_contributes_nothing_and_never_raises(tmp_path: Path) -> None:
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     (settings_home_dir / "machine-local" / "registry.local.toml").write_text("")
@@ -562,8 +563,8 @@ def test_an_absent_mirror_key_contributes_nothing_and_never_raises(tmp_path):
 
 
 def test_diagnostics_name_the_mirror_anchor_without_calling_its_absence_the_defect(
-    capsys, tmp_path
-):
+    capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
     settings_home_dir = _write_plugin_mirror_registry(
         tmp_path, tmp_path / "mirror", content_root=tmp_path / "authoring"
     )

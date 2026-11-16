@@ -7,13 +7,18 @@ import subprocess
 from pathlib import Path
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
+    from types import ModuleType
 
 pytestmark = pytest.mark.complete
 
 _BIN = Path(__file__).resolve().parents[1]
 
 
-def _load(name, script):
+def _load(name, script) -> "ModuleType":
     spec = importlib.util.spec_from_file_location(name, _BIN / script)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -24,7 +29,7 @@ up = _load("unimatrix_pair_under_test", "unimatrix-pair.py")
 mem = up._mod("unimatrix-membership.py")
 
 
-def _keygen(path):
+def _keygen(path) -> str:
     subprocess.run(["ssh-keygen", "-q", "-t", "ed25519", "-N", "", "-C", "t", "-f", str(path)], check=True, capture_output=True)
     return Path(str(path) + ".pub").read_text(encoding="utf-8").strip()
 
@@ -37,7 +42,7 @@ def _member(box, tmp_path, cidrs=("10.0.0.0/24",)):
 class Counting:
     """Wraps a FakeSigner and counts sign() calls."""
 
-    def __init__(self, inner):
+    def __init__(self, inner) -> None:
         self.inner, self.calls = inner, 0
 
     def sign(self, payload):
@@ -46,7 +51,7 @@ class Counting:
 
 
 class Refusing:
-    def __init__(self):
+    def __init__(self) -> None:
         self.calls = 0
 
     def sign(self, payload):
@@ -55,7 +60,7 @@ class Refusing:
 
 
 class Rig:
-    def __init__(self, tmp_path):
+    def __init__(self, tmp_path) -> None:
         self.tmp = tmp_path
         self.home = tmp_path / "home"
         self.skey = tmp_path / "signer"
@@ -110,11 +115,11 @@ class Rig:
 
 
 @pytest.fixture
-def rig(tmp_path):
+def rig(tmp_path: Path) -> Rig:
     return Rig(tmp_path)
 
 
-def test_approve_signs_once_writes_next_epoch_logs_and_notifies(rig):
+def test_approve_signs_once_writes_next_epoch_logs_and_notifies(rig) -> None:
     rig.seed([rig.me, rig.beta])
     gamma = _member("gamma", rig.tmp)
     signer = Counting(rig.fake)
@@ -132,7 +137,7 @@ def test_approve_signs_once_writes_next_epoch_logs_and_notifies(rig):
     assert "ssh-rsa AAAAunrelated other" in ak and gamma["relay_pub"].split()[1] in ak and 'from="10.0.0.0/24"' in ak
 
 
-def test_approve_reports_per_member_push_and_skips_self(rig):
+def test_approve_reports_per_member_push_and_skips_self(rig) -> None:
     rig.seed([rig.me, rig.beta])
     rc, out, _ = rig.call(["approve", "-"], signer=rig.fake, stdin=json.dumps(_member("gamma", rig.tmp)))
     assert rc == 0
@@ -144,7 +149,7 @@ def test_approve_reports_per_member_push_and_skips_self(rig):
     assert "beta: pushed" in out and "gamma: pushed" in out
 
 
-def test_push_to_offline_member_reports_offline(rig):
+def test_push_to_offline_member_reports_offline(rig) -> None:
     rig.seed([rig.me, rig.beta])
     rig.push_reply = None
     rc, out, _ = rig.call(["approve", "-"], signer=rig.fake, stdin=json.dumps(_member("gamma", rig.tmp)))
@@ -152,7 +157,7 @@ def test_push_to_offline_member_reports_offline(rig):
     assert mem.load_snapshot(rig.home)[0]["epoch"] == 2
 
 
-def test_revoke_signs_once_removes_member_and_its_key(rig):
+def test_revoke_signs_once_removes_member_and_its_key(rig) -> None:
     rig.seed([rig.me, rig.beta])
     rig.call(["approve", "-"], signer=rig.fake, stdin=json.dumps(_member("gamma", rig.tmp)))
     rig.pushes.clear()
@@ -169,7 +174,7 @@ def test_revoke_signs_once_removes_member_and_its_key(rig):
     assert mem.fingerprint(rig.beta["relay_pub"]) in out
 
 
-def test_refusing_signer_leaves_state_byte_identical(rig):
+def test_refusing_signer_leaves_state_byte_identical(rig) -> None:
     rig.seed([rig.me, rig.beta])
     before = rig.state()
     for argv, stdin in ((["approve", "-"], json.dumps(_member("gamma", rig.tmp))), (["revoke", "beta"], None)):
@@ -180,7 +185,7 @@ def test_refusing_signer_leaves_state_byte_identical(rig):
     assert rig.log_lines() == [] and rig.pushes == []
 
 
-def test_service_token_refused_before_signing(rig):
+def test_service_token_refused_before_signing(rig) -> None:
     rig.seed([rig.me, rig.beta])
     before = rig.state()
     for argv, stdin in ((["approve", "-"], json.dumps(_member("gamma", rig.tmp))), (["revoke", "beta"], None)):
@@ -190,13 +195,13 @@ def test_service_token_refused_before_signing(rig):
         assert rig.state() == before
 
 
-def test_agent_signer_refuses_service_token_itself(rig):
+def test_agent_signer_refuses_service_token_itself(rig) -> None:
     signer = up.make_agent_signer(mem, rig.home / "unimatrix" / "membership" / "signer.pub", environ={"OP_SERVICE_ACCOUNT_TOKEN": "x"})
     with pytest.raises(mem.MembershipError, match="OP_SERVICE_ACCOUNT_TOKEN"):
         signer.sign(b"x")
 
 
-def test_agent_signer_argv_env_and_timeout_message(rig):
+def test_agent_signer_argv_env_and_timeout_message(rig) -> None:
     seen = {}
 
     def fake_run(cmd, **kw):
@@ -210,14 +215,14 @@ def test_agent_signer_argv_env_and_timeout_message(rig):
     assert seen["env"]["SSH_AUTH_SOCK"].endswith(".1password/agent.sock")
 
 
-def test_agent_socket_resolution_per_os():
+def test_agent_socket_resolution_per_os() -> None:
     assert up.agent_socket({"SSH_AUTH_SOCK": "/already"}, "darwin") == "/already"
     assert up.agent_socket({}, "win32") == up.WINDOWS_AGENT_PIPE
     assert up.agent_socket({}, "darwin", "/h").endswith("2BUA8C4S2C.com.1password/t/agent.sock")
     assert up.agent_socket({}, "linux", "/h").replace("\\", "/") == "/h/.1password/agent.sock"
 
 
-def test_bad_request_changes_nothing(rig):
+def test_bad_request_changes_nothing(rig) -> None:
     rig.seed([rig.me, rig.beta])
     before = rig.state()
     ip_host = {**_member("gamma", rig.tmp), "host": "10.1.2.3"}
@@ -229,7 +234,7 @@ def test_bad_request_changes_nothing(rig):
         assert rig.state() == before
 
 
-def test_first_approve_on_fresh_collective_includes_self(rig):
+def test_first_approve_on_fresh_collective_includes_self(rig) -> None:
     signer = Counting(rig.fake)
     rc, _, err = rig.call(["approve", "-"], signer=signer, stdin=json.dumps(rig.beta))
     assert rc == 0, err
@@ -238,7 +243,7 @@ def test_first_approve_on_fresh_collective_includes_self(rig):
     assert {m["box"] for m in snap["members"]} == {"alpha", "beta"} and signer.calls == 1
 
 
-def test_pin_writes_prints_fingerprint_and_refuses_repin(tmp_path):
+def test_pin_writes_prints_fingerprint_and_refuses_repin(tmp_path: Path) -> None:
     home = tmp_path / "h"
     pub = _keygen(tmp_path / "k")
     (tmp_path / "k.pub").write_text(pub + "\n", encoding="utf-8")
@@ -254,7 +259,7 @@ def test_pin_writes_prints_fingerprint_and_refuses_repin(tmp_path):
     assert mem.load_pin(home).split()[1] == pub.split()[1]
 
 
-def test_request_prints_one_join_record(tmp_path):
+def test_request_prints_one_join_record(tmp_path: Path) -> None:
     out = io.StringIO()
     rc = up.main(["request", "--cidr", "192.168.1.0/24"], out=out, home=tmp_path, own_key_fn=lambda b: (tmp_path / "k", "AAAAbody"), box="alpha")
     assert rc == 0
@@ -263,13 +268,13 @@ def test_request_prints_one_join_record(tmp_path):
     assert rec["relay_pub"] == "ssh-ed25519 AAAAbody" and set(rec) == set(mem.MEMBER_FIELDS)
 
 
-def test_fetch_refuses_without_pin(tmp_path):
+def test_fetch_refuses_without_pin(tmp_path: Path) -> None:
     err, calls = io.StringIO(), []
     rc = up.main(["fetch", "u@host.local"], out=io.StringIO(), err=err, home=tmp_path, run=lambda *a, **k: calls.append(a))
     assert rc == 1 and "no signer pin" in err.getvalue() and calls == []
 
 
-def test_fetch_adopts_a_valid_snapshot_and_refuses_a_forged_one(rig):
+def test_fetch_adopts_a_valid_snapshot_and_refuses_a_forged_one(rig) -> None:
     snap = mem.next_snapshot(None, {"op": "join", "member": rig.beta})
     sig = rig.fake.sign(mem.canonical_bytes(snap))
 
@@ -306,7 +311,7 @@ def _no_mint(tmp_path):
     return boom
 
 
-def test_local_member_adopts_every_recorded_key_for_member_boxes_deterministically(tmp_path):
+def test_local_member_adopts_every_recorded_key_for_member_boxes_deterministically(tmp_path: Path) -> None:
     rec = _recorded(tmp_path, "alpha", "beta", "zeta")
     one = up.local_member("alpha", ["10.0.0.0/24"], _no_mint(tmp_path), lambda peers=None: rec, {"alpha", "beta"})
     two = up.local_member("alpha", ["10.0.0.0/24"], _no_mint(tmp_path),
@@ -317,13 +322,13 @@ def test_local_member_adopts_every_recorded_key_for_member_boxes_deterministical
     mem._validate_member(one)
 
 
-def test_local_member_without_own_record_uses_smallest_alias(tmp_path):
+def test_local_member_without_own_record_uses_smallest_alias(tmp_path: Path) -> None:
     rec = _recorded(tmp_path, "mini", "example-fleet")
     m = up.local_member("alpha", [], _no_mint(tmp_path), lambda peers=None: rec)
     assert m["relay_pub"] == f"ssh-ed25519 {rec['example-fleet'][1]}" and set(m["relay_pubs"]) == {"mini", "example-fleet"}
 
 
-def test_local_member_passes_member_boxes_to_the_lister_and_matches_aliases_case_insensitively(tmp_path):
+def test_local_member_passes_member_boxes_to_the_lister_and_matches_aliases_case_insensitively(tmp_path: Path) -> None:
     rec = _recorded(tmp_path, "machine-b", "machine-a")
     asked = []
     m = up.local_member("macmini", [], _no_mint(tmp_path), lambda peers=None: asked.append(peers) or rec,
@@ -333,12 +338,12 @@ def test_local_member_passes_member_boxes_to_the_lister_and_matches_aliases_case
     mem._validate_member(m)
 
 
-def test_local_member_with_no_recorded_key_refuses(tmp_path):
+def test_local_member_with_no_recorded_key_refuses(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="no recorded pair key for alpha"):
         up.local_member("alpha", [], _no_mint(tmp_path), lambda peers=None: {})
 
 
-def test_first_approve_builds_member_from_two_recorded_keys_and_never_mints(rig):
+def test_first_approve_builds_member_from_two_recorded_keys_and_never_mints(rig) -> None:
     rec = _recorded(rig.tmp, "alpha", "beta")
     rig.me = None
     out, err = io.StringIO(), io.StringIO()
@@ -351,7 +356,7 @@ def test_first_approve_builds_member_from_two_recorded_keys_and_never_mints(rig)
     assert set(me["relay_pubs"]) == {"alpha", "beta"}
 
 
-def test_approve_with_no_recorded_key_exits_1_naming_record(rig):
+def test_approve_with_no_recorded_key_exits_1_naming_record(rig) -> None:
     def missing(box):
         raise RuntimeError(f"no recorded pair key for {box}: unimatrix.keys.{box} is unset")
     out, err = io.StringIO(), io.StringIO()
@@ -362,7 +367,7 @@ def test_approve_with_no_recorded_key_exits_1_naming_record(rig):
     assert rc == 1 and "no recorded pair key" in err.getvalue() and signer.calls == 0
 
 
-def test_push_carries_pin_line_and_per_member_key(rig):
+def test_push_carries_pin_line_and_per_member_key(rig) -> None:
     rig.seed([rig.me, rig.beta])
     keys = {"beta": rig.tmp / "k-beta", "gamma": rig.tmp / "k-gamma"}
     out, err = io.StringIO(), io.StringIO()
@@ -378,7 +383,7 @@ def test_push_carries_pin_line_and_per_member_key(rig):
         assert len(lines) == 3 and lines[2] == " ".join(mem.load_pin(rig.home).split()[:2])
 
 
-def test_member_with_no_recorded_pair_key_is_refused_and_not_dialled(rig):
+def test_member_with_no_recorded_pair_key_is_refused_and_not_dialled(rig) -> None:
     rig.seed([rig.me, rig.beta])
 
     def own(box):
@@ -394,7 +399,7 @@ def test_member_with_no_recorded_pair_key_is_refused_and_not_dialled(rig):
     assert [next(a for a in c[0] if "@" in a) for c in rig.pushes] == ["u@gamma.local"]
 
 
-def test_fetch_uses_adopt_only_key_for_fetched_box_and_refuses_when_unrecorded(rig):
+def test_fetch_uses_adopt_only_key_for_fetched_box_and_refuses_when_unrecorded(rig) -> None:
     asked = []
 
     def own(box):
@@ -420,7 +425,7 @@ def _alias_main(rig, argv, stdin, keys, alias_fn, own_key_fn=None):
     return rc, out.getvalue(), err.getvalue()
 
 
-def test_push_uses_the_alias_key_whose_hostname_matches_the_member_host(rig):
+def test_push_uses_the_alias_key_whose_hostname_matches_the_member_host(rig) -> None:
     member = {**_member("Mac-mini", rig.tmp), "host": "Mac-mini.local"}
     rig.seed([rig.me, rig.beta])
     keys = {"macmini-lan": rig.tmp / "k-lan"}
@@ -433,7 +438,7 @@ def test_push_uses_the_alias_key_whose_hostname_matches_the_member_host(rig):
     assert "Mac-mini: pushed" in out and "Mac-mini: refused" not in out
 
 
-def test_push_falls_back_to_the_box_name_when_no_alias_matches_and_refuses_when_neither_is_recorded(rig):
+def test_push_falls_back_to_the_box_name_when_no_alias_matches_and_refuses_when_neither_is_recorded(rig) -> None:
     rig.seed([rig.me, rig.beta])
     keys = {"gamma": rig.tmp / "k-gamma"}
     rc, out, _ = _alias_main(rig, ["approve", "-"], json.dumps(_member("gamma", rig.tmp)), keys, lambda host: None,
@@ -442,7 +447,7 @@ def test_push_falls_back_to_the_box_name_when_no_alias_matches_and_refuses_when_
     assert rc == 0 and "gamma: pushed" in out and "beta: refused: no recorded pair key for beta" in out
 
 
-def test_fetch_resolves_the_key_through_the_host_alias(rig):
+def test_fetch_resolves_the_key_through_the_host_alias(rig) -> None:
     asked = []
 
     def own(name):
@@ -455,8 +460,8 @@ def test_fetch_resolves_the_key_through_the_host_alias(rig):
     assert rc == 1 and asked == ["macmini-lan", "Mac-mini"] and rig.pushes == []
 
 
-def test_host_alias_matches_ssh_hostname_case_insensitively_ignoring_dot_local(monkeypatch):
-    def fake_run(cmd, **kw):
+def test_host_alias_matches_ssh_hostname_case_insensitively_ignoring_dot_local(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(cmd, **kw) -> "CompletedProcess[str]":
         host = {"macmini-lan": "mac-mini.local", "macmini": "100.64.0.9"}[cmd[-1]]
         return subprocess.CompletedProcess(cmd, 0, f"user x\nhostname {host}\n", "")
 
@@ -467,14 +472,14 @@ def test_host_alias_matches_ssh_hostname_case_insensitively_ignoring_dot_local(m
     assert alias_fn("elsewhere.local") is None
 
 
-def test_default_own_key_is_adopt_only(monkeypatch):
+def test_default_own_key_is_adopt_only(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
     fake = type("I", (), {"pair_key": staticmethod(lambda alias, **kw: seen.update(alias=alias, **kw) or ("p", "b"))})
     monkeypatch.setitem(up._MODS, "unimatrix-install.py", fake)
     assert up._default_own_key("x") == ("p", "b") and seen == {"alias": "x", "adopt_only": True}
 
 
-def test_pair_key_for_host_refusal_names_the_matched_alias_and_falls_back_to_the_box_key():
+def test_pair_key_for_host_refusal_names_the_matched_alias_and_falls_back_to_the_box_key() -> None:
     def own(name):
         if name == "Mac-mini":
             return ("p", "boxbody")
@@ -489,7 +494,7 @@ def test_pair_key_for_host_refusal_names_the_matched_alias_and_falls_back_to_the
         up.pair_key_for_host("Mac-mini", "Mac-mini.local", none, lambda h: "macmini-lan")
 
 
-def test_approve_of_existing_member_repushes_held_snapshot_without_signing(rig):
+def test_approve_of_existing_member_repushes_held_snapshot_without_signing(rig) -> None:
     rig.seed([rig.me, rig.beta])
     before = rig.state()
     signer = Counting(rig.fake)
@@ -500,7 +505,7 @@ def test_approve_of_existing_member_repushes_held_snapshot_without_signing(rig):
     assert json.loads(rig.pushes[0][1].decode().splitlines()[0])["epoch"] == 1
 
 
-def test_approve_of_new_member_still_signs_next_epoch(rig):
+def test_approve_of_new_member_still_signs_next_epoch(rig) -> None:
     rig.seed([rig.me, rig.beta])
     signer = Counting(rig.fake)
     rc, _, err = rig.call(["approve", "-"], signer=signer, stdin=json.dumps(_member("gamma", rig.tmp)))
@@ -508,7 +513,7 @@ def test_approve_of_new_member_still_signs_next_epoch(rig):
     assert signer.calls == 1 and mem.load_snapshot(rig.home)[0]["epoch"] == 2
 
 
-def test_push_and_fetch_dial_ipv4_only(rig):
+def test_push_and_fetch_dial_ipv4_only(rig) -> None:
     rig.seed([rig.me, rig.beta])
     rc, _, err = rig.call(["approve", "-"], signer=rig.fake, stdin=json.dumps(_member("gamma", rig.tmp)))
     assert rc == 0, err
@@ -527,7 +532,7 @@ def _approve_with_recorded(rig, rec, member):
     return rc, err.getvalue()
 
 
-def test_approve_reissues_own_record_with_relay_pubs_when_held_record_has_none(rig):
+def test_approve_reissues_own_record_with_relay_pubs_when_held_record_has_none(rig) -> None:
     rec = _recorded(rig.tmp, "alpha", "beta", "gamma")
     rig.seed([rig.me, rig.beta])
     rc, err = _approve_with_recorded(rig, rec, _member("gamma", rig.tmp))
@@ -539,7 +544,7 @@ def test_approve_reissues_own_record_with_relay_pubs_when_held_record_has_none(r
     assert me["relay_pub"] == rig.me["relay_pub"]
 
 
-def test_approve_keeps_own_record_when_it_already_has_relay_pubs_or_nothing_is_recorded(rig):
+def test_approve_keeps_own_record_when_it_already_has_relay_pubs_or_nothing_is_recorded(rig) -> None:
     rec = _recorded(rig.tmp, "alpha", "beta", "gamma")
     rig.me = {**rig.me, "relay_pubs": {"beta": rig.me["relay_pub"]}}
     rig.seed([rig.me, rig.beta])
@@ -561,26 +566,26 @@ def _own_recording(keys, asked=None):
     return own
 
 
-def test_pair_key_resolves_a_key_recorded_only_by_user_at_address_of_the_box():
+def test_pair_key_resolves_a_key_recorded_only_by_user_at_address_of_the_box() -> None:
     cand = up.make_candidate_fn(lambda b: ["192.168.0.175", "192.168.0.174"] if b == "Mac-mini" else [])
     own = _own_recording({"example-operator@192.168.0.174": "kip"})
     assert up.pair_key_for_host("Mac-mini", "Mac-mini.local", own, lambda h: None, cand, "example-operator") == ("kip", "x")
 
 
-def test_pair_key_matches_case_and_hyphen_variants_of_the_box_id():
+def test_pair_key_matches_case_and_hyphen_variants_of_the_box_id() -> None:
     cand = up.make_candidate_fn(lambda b: [])
     own = _own_recording({"macmini": "kv"})
     assert up.pair_key_for_host("Mac-mini", "Mac-mini.local", own, None, cand, "u") == ("kv", "x")
     assert up.box_variants("Mac-mini") == ["Mac-mini", "mac-mini", "macmini"]
 
 
-def test_pair_key_still_refuses_when_neither_alias_variant_nor_address_key_is_recorded():
+def test_pair_key_still_refuses_when_neither_alias_variant_nor_address_key_is_recorded() -> None:
     cand = up.make_candidate_fn(lambda b: ["10.0.0.5"])
     with pytest.raises(RuntimeError, match="no recorded pair key for Mac-mini"):
         up.pair_key_for_host("Mac-mini", "Mac-mini.local", _own_recording({"example-operator@10.0.0.9": "k"}), None, cand, "example-operator")
 
 
-def test_default_address_fn_reads_the_registry_key_under_each_box_spelling():
+def test_default_address_fn_reads_the_registry_key_under_each_box_spelling() -> None:
     asked = []
 
     def read(name):
@@ -600,7 +605,7 @@ def _address_main(rig, argv, stdin, keys, addresses, signer):
     return rc, out.getvalue(), err.getvalue()
 
 
-def test_approve_pushes_to_a_member_whose_key_is_recorded_only_by_address(rig):
+def test_approve_pushes_to_a_member_whose_key_is_recorded_only_by_address(rig) -> None:
     member = {**_member("Mac-mini", rig.tmp), "host": "Mac-mini.local", "user": "example-operator"}
     rig.seed([rig.me, rig.beta])
     keys = {"example-operator@192.168.0.175": rig.tmp / "k-ip", "beta": rig.tmp / "k-beta"}
@@ -611,7 +616,7 @@ def test_approve_pushes_to_a_member_whose_key_is_recorded_only_by_address(rig):
     assert "Mac-mini: pushed" in out
 
 
-def test_approve_of_existing_member_repushes_through_the_address_resolver(rig):
+def test_approve_of_existing_member_repushes_through_the_address_resolver(rig) -> None:
     member = {**_member("Mac-mini", rig.tmp), "host": "Mac-mini.local", "user": "example-operator"}
     rig.seed([rig.me, member])
     signer = Counting(rig.fake)
@@ -621,7 +626,7 @@ def test_approve_of_existing_member_repushes_through_the_address_resolver(rig):
     assert signer.calls == 0 and "already a member; re-pushing epoch 1" in out and "Mac-mini: pushed" in out
 
 
-def test_approve_refuses_before_signing_when_no_member_is_pushable_and_names_the_repush_command(rig):
+def test_approve_refuses_before_signing_when_no_member_is_pushable_and_names_the_repush_command(rig) -> None:
     rig.seed([rig.me, rig.beta])
     before = rig.state()
     signer = Counting(rig.fake)
@@ -632,7 +637,7 @@ def test_approve_refuses_before_signing_when_no_member_is_pushable_and_names_the
     assert gamma in err and "<request file>" not in err
 
 
-def test_repush_command_names_the_request_file_when_it_is_a_path(rig):
+def test_repush_command_names_the_request_file_when_it_is_a_path(rig) -> None:
     rig.seed([rig.me, rig.beta])
     req = rig.tmp / "gamma.json"
     req.write_text(json.dumps(_member("gamma", rig.tmp)), encoding="utf-8")
@@ -640,7 +645,7 @@ def test_repush_command_names_the_request_file_when_it_is_a_path(rig):
     assert rc == 1 and f"approve {req}" in err
 
 
-def test_unpushable_member_line_names_the_repush_command(rig):
+def test_unpushable_member_line_names_the_repush_command(rig) -> None:
     rig.seed([rig.me, rig.beta])
     rc, out, _ = _address_main(rig, ["approve", "-"], json.dumps(_member("gamma", rig.tmp)),
                                {"gamma": rig.tmp / "k"}, {}, rig.fake)

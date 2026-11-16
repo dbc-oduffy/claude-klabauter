@@ -12,9 +12,10 @@ from pathlib import Path
 
 import coordinator_core.ops.session_work_state as sws_op
 from coordinator_core.authz.registration_quad import check_registration_quad
+import pytest
 
 
-def test_veneer_converts_injected_common_dir_to_the_worktree_root(monkeypatch, tmp_path):
+def test_veneer_converts_injected_common_dir_to_the_worktree_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     captured = {}
 
     def _fake_build_work_state(repo_root):
@@ -29,7 +30,7 @@ def test_veneer_converts_injected_common_dir_to_the_worktree_root(monkeypatch, t
     assert captured["repo_root"] == tmp_path
 
 
-def test_absent_repo_root_is_a_well_formed_empty_answer_never_a_raise():
+def test_absent_repo_root_is_a_well_formed_empty_answer_never_a_raise() -> None:
     assert sws_op._session_work_state({}, repo_root=None) == {
         "held": [],
         "unclaimed": [],
@@ -37,7 +38,7 @@ def test_absent_repo_root_is_a_well_formed_empty_answer_never_a_raise():
     }
 
 
-def test_veneer_ignores_params_repo_root(monkeypatch, tmp_path):
+def test_veneer_ignores_params_repo_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     captured = {}
 
     def _fake_build_work_state(repo_root):
@@ -53,7 +54,7 @@ def test_veneer_ignores_params_repo_root(monkeypatch, tmp_path):
     assert captured["repo_root"] == tmp_path
 
 
-def test_veneer_returns_verbatim_shape(monkeypatch, tmp_path):
+def test_veneer_returns_verbatim_shape(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     payload = {"held": [{"path": "x"}], "unclaimed": [{"path": "y"}], "review_due": []}
     monkeypatch.setattr(sws_op, "build_work_state", lambda repo_root: payload)
 
@@ -63,7 +64,7 @@ def test_veneer_returns_verbatim_shape(monkeypatch, tmp_path):
     assert result is payload
 
 
-def test_registration_quad_clean_for_session_work_state():
+def test_registration_quad_clean_for_session_work_state() -> None:
     """AC5: session.work_state carries all five registration surfaces --
     OP_CLASSIFICATION, op_scopes.OP_KEY_SCOPE, OP_MODULE_MAP, and
     _EAGER_OP_MODULES membership, in addition to the live @register_op

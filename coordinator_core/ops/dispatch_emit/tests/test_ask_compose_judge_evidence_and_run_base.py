@@ -5,6 +5,7 @@ from __future__ import annotations
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _JUDGE_KW
+import pytest
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _EVIDENCE_JS = "'.evidence.yaml'"
@@ -28,7 +29,7 @@ def _script(monkeypatch, **extra) -> str:
     )
 
 
-def test_the_verify_prompt_names_the_plans_evidence_sidecar(monkeypatch):
+def test_the_verify_prompt_names_the_plans_evidence_sidecar(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     verify = script.index("label: 'verify'")
     assert "row_evidence: " in script
@@ -46,19 +47,19 @@ def test_the_verify_prompt_names_the_plans_evidence_sidecar(monkeypatch):
     assert script.count("_verdictText()") == 2
 
 
-def test_without_a_caller_base_the_base_is_head(monkeypatch):
+def test_without_a_caller_base_the_base_is_head(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert "h" * 40 in script
 
 
-def test_the_executed_run_base_is_the_staged_manifests_head_sha_and_no_agent_reads_head(monkeypatch):
+def test_the_executed_run_base_is_the_staged_manifests_head_sha_and_no_agent_reads_head(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert "label: 'run-base'" not in script and "rev-parse HEAD" not in script
     assert "_runBase = /^[0-9a-f]{40}$/.test(String(_manifest?.head_sha ?? '')) ? _manifest.head_sha : '';" in script
     assert script.index("_runBase = /^[0-9a-f]{40}$/") < script.index("phase(" + repr(ask_compose._emit._EXECUTE_PHASE_TITLE))
 
 
-def test_a_caller_run_base_is_the_only_base(monkeypatch):
+def test_a_caller_run_base_is_the_only_base(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch, run_base_sha="a" * 40)
     assert "a" * 40 in script
     assert "h" * 40 not in script

@@ -95,10 +95,10 @@ def test_probe_existing_holder_returns_payload_when_recognized() -> None:
         def __enter__(self):
             return self
 
-        def __exit__(self, *exc):
+        def __exit__(self, *exc) -> bool:
             return False
 
-        def read(self):
+        def read(self) -> bytes:
             return body
 
     result = front_door.probe_existing_holder(1, opener=lambda url, timeout: _Resp())
@@ -112,7 +112,7 @@ def test_probe_existing_holder_none_on_non_2xx_status() -> None:
         def __enter__(self):
             return self
 
-        def __exit__(self, *exc):
+        def __exit__(self, *exc) -> bool:
             return False
 
         def read(self):
@@ -128,7 +128,7 @@ def test_probe_existing_holder_none_on_malformed_json() -> None:
         def __enter__(self):
             return self
 
-        def __exit__(self, *exc):
+        def __exit__(self, *exc) -> bool:
             return False
 
         def read(self):
@@ -144,7 +144,7 @@ def test_probe_existing_holder_none_on_body_missing_marker() -> None:
         def __enter__(self):
             return self
 
-        def __exit__(self, *exc):
+        def __exit__(self, *exc) -> bool:
             return False
 
         def read(self):
@@ -177,7 +177,7 @@ class _DoorHealthHandler(BaseHTTPRequestHandler):
     def log_message(self, format, *args):  # noqa: A002
         pass
 
-    def do_GET(self):  # noqa: N802
+    def do_GET(self) -> None:  # noqa: N802
         from coordinator_core.warm.supervisor import HEALTH_PATH
 
         if self.path == HEALTH_PATH:
@@ -197,7 +197,7 @@ def test_probe_existing_holder_true_against_a_real_door_health_server() -> None:
     httpd = HTTPServer(("127.0.0.1", 0), _DoorHealthHandler)
     port = httpd.server_address[1]
 
-    def _serve():
+    def _serve() -> None:
         try:
             httpd.serve_forever(poll_interval=0.05)
         except BaseException as exc:  # noqa: BLE001 -- AC11: record, never bury
@@ -378,10 +378,10 @@ def _fake_resp(payload: dict):
         def __enter__(self):
             return self
 
-        def __exit__(self, *exc):
+        def __exit__(self, *exc) -> bool:
             return False
 
-        def read(self):
+        def read(self) -> bytes:
             return body
 
     return _Resp()
@@ -510,7 +510,7 @@ def test_discovery_is_live_false_on_missing_pid_front_door() -> None:
 def test_discovery_is_live_false_on_stable_pid_alive_exception_front_door(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def _raise(pid, stored_start_epoch=""):
+    def _raise(pid, stored_start_epoch: str = ""):
         raise RuntimeError("psutil is not installed")
 
     monkeypatch.setattr(front_door, "stable_pid_alive", _raise)
@@ -830,13 +830,13 @@ def test_main_wins_serves_health_and_tears_down_cleanly(
     real_ctx_cls = front_door._FrontDoorContext
 
     class _CapturingContext(real_ctx_cls):
-        def __init__(self, *a, **kw):
+        def __init__(self, *a, **kw) -> None:
             super().__init__(*a, **kw)
             ctx_holder.append(self)
 
     monkeypatch.setattr(front_door, "_FrontDoorContext", _CapturingContext)
 
-    def _run():
+    def _run() -> None:
         try:
             front_door.main()
         except BaseException as exc:  # noqa: BLE001 -- AC11: record, never bury
@@ -1230,7 +1230,7 @@ def test_zero_process_creation_across_election_and_a_real_fire(
 
     errors: List[BaseException] = []
 
-    def _serve():
+    def _serve() -> None:
         try:
             httpd.serve_forever(poll_interval=0.02)
         except BaseException as exc:  # noqa: BLE001 -- AC11: record, never bury
@@ -1296,7 +1296,7 @@ def test_brightline_process_time_for_the_added_loopback_hop(
 
     errors: List[BaseException] = []
 
-    def _serve():
+    def _serve() -> None:
         try:
             httpd.serve_forever(poll_interval=0.02)
         except BaseException as exc:  # noqa: BLE001 -- AC11: record, never bury
@@ -1536,7 +1536,7 @@ def test_skew_watchdog_loop_ends_promptly_once_stop_event_is_set(
     ticks: List[bool] = []
     monkeypatch.setattr(ctx, "_skew_watchdog_tick", lambda: ticks.append(True))
 
-    def _run():
+    def _run() -> None:
         try:
             ctx._skew_watchdog_loop()
         except BaseException as exc:  # noqa: BLE001 -- AC11: record, never bury
@@ -1578,7 +1578,7 @@ def test_skew_watchdog_self_evicts_a_republished_listener_without_a_caller_ever_
 
     errors: List[BaseException] = []
 
-    def _serve():
+    def _serve() -> None:
         try:
             httpd.serve_forever(poll_interval=0.02)
         except BaseException as exc:  # noqa: BLE001 -- AC11: record, never bury

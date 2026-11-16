@@ -4,13 +4,15 @@ import json
 import time
 
 from coordinator_core.workflow_watch import run_report
+from pathlib import Path
+import pytest
 
 
-def _write_agent(run_dir, agent_id, *, agent_type, model, start_min, end_min, usages):
+def _write_agent(run_dir, agent_id, *, agent_type, model, start_min, end_min, usages) -> None:
     meta = {"agentType": agent_type, "model": model}
     (run_dir / f"agent-{agent_id}.meta.json").write_text(json.dumps(meta), encoding="utf-8")
 
-    def stamp(minutes):
+    def stamp(minutes) -> str:
         return f"2026-10-16T10:{int(minutes) % 60:02d}:00Z" if minutes < 60 else \
             f"2026-10-16T11:{int(minutes) - 60:02d}:00Z"
 
@@ -27,7 +29,7 @@ def _usage(inp, create, read, out):
             "cache_read_input_tokens": read, "output_tokens": out}
 
 
-def _journal(run_dir, agents):
+def _journal(run_dir, agents) -> str:
     lines = [{"type": "launched"}]
     for agent_id, label in agents:
         lines.append({"type": "started", "agentId": agent_id, "key": f"k{agent_id}", "label": label})
@@ -36,7 +38,7 @@ def _journal(run_dir, agents):
     return str(path)
 
 
-def test_report_rows_and_over_cap_names_only_the_31_minute_row(tmp_path):
+def test_report_rows_and_over_cap_names_only_the_31_minute_row(tmp_path: Path) -> None:
     _write_agent(tmp_path, "s1", agent_type="general-purpose", model="haiku", start_min=0,
                  end_min=1, usages=[_usage(2, 12000, 35000, 100), _usage(1, 500, 47000, 2400)])
     _write_agent(tmp_path, "w1", agent_type="coordinator:executor", model="sonnet", start_min=0,
@@ -59,7 +61,7 @@ def test_report_rows_and_over_cap_names_only_the_31_minute_row(tmp_path):
     assert "work:B" not in text.split("over 1800s")[1]
 
 
-def test_missing_transcript_and_meta_is_unknown_not_a_crash(tmp_path):
+def test_missing_transcript_and_meta_is_unknown_not_a_crash(tmp_path: Path) -> None:
     journal = _journal(tmp_path, [("ghost", "work:C")])
     report = run_report.build_report(journal)
     row = report["rows"][0]
@@ -70,7 +72,7 @@ def test_missing_transcript_and_meta_is_unknown_not_a_crash(tmp_path):
     assert "unknown" in text and text.rstrip().endswith("none")
 
 
-def test_main_json_and_missing_journal(tmp_path, capsys):
+def test_main_json_and_missing_journal(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_agent(tmp_path, "s1", agent_type="t", model="haiku", start_min=0, end_min=1,
                  usages=[_usage(1, 2, 3, 4)])
     journal = _journal(tmp_path, [("s1", "stage")])
@@ -79,7 +81,7 @@ def test_main_json_and_missing_journal(tmp_path, capsys):
     assert run_report.main(["--journal", str(tmp_path / "nope.jsonl")]) == 2
 
 
-def test_large_transcript_reads_head_and_tail_only_and_marks_partial(tmp_path):
+def test_large_transcript_reads_head_and_tail_only_and_marks_partial(tmp_path: Path) -> None:
     _write_agent(tmp_path, "w1", agent_type="t", model="m", start_min=0, end_min=1,
                  usages=[_usage(1, 1, 1, 1)])
     path = tmp_path / "agent-w1.jsonl"
@@ -95,8 +97,8 @@ def test_large_transcript_reads_head_and_tail_only_and_marks_partial(tmp_path):
     assert row["turn1_context"] == 3
 
 
-def test_split_model_usd_and_run_total_rendered(tmp_path):
-    def agent(agent_id, model, usage):
+def test_split_model_usd_and_run_total_rendered(tmp_path: Path) -> None:
+    def agent(agent_id, model, usage) -> None:
         (tmp_path / f"agent-{agent_id}.jsonl").write_text(json.dumps(
             {"type": "assistant", "timestamp": "2026-10-16T10:00:00Z", "requestId": "r",
              "message": {"id": "m", "model": model, "usage": usage}}) + "\n", encoding="utf-8")
@@ -122,8 +124,8 @@ def test_split_model_usd_and_run_total_rendered(tmp_path):
         assert col in text
 
 
-def test_report_lists_per_agent_rag_use_and_fallback(tmp_path):
-    def write(agent_id, blocks):
+def test_report_lists_per_agent_rag_use_and_fallback(tmp_path: Path) -> None:
+    def write(agent_id, blocks) -> None:
         event = {"type": "assistant", "timestamp": "2026-10-16T10:00:00Z", "requestId": "r",
                  "message": {"id": "m", "model": "claude-opus-5-5",
                              "usage": _usage(1, 0, 0, 1), "content": blocks}}
@@ -140,7 +142,7 @@ def test_report_lists_per_agent_rag_use_and_fallback(tmp_path):
     assert "ragger: rag=1 failed=0 search=0" in text
 
 
-def test_forty_agent_report_is_fast_and_spawns_nothing(tmp_path, monkeypatch):
+def test_forty_agent_report_is_fast_and_spawns_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     def boom(*a, **k):
@@ -160,7 +162,7 @@ def test_forty_agent_report_is_fast_and_spawns_nothing(tmp_path, monkeypatch):
     assert len(report["rows"]) == 40
 
 
-def _exec_agent(run_dir, agent_id, *, ctxs, reads=(), calls_per_turn=1):
+def _exec_agent(run_dir, agent_id, *, ctxs, reads=(), calls_per_turn: int = 1) -> None:
     (run_dir / f"agent-{agent_id}.meta.json").write_text(
         json.dumps({"agentType": "coordinator:executor", "model": "sonnet"}), encoding="utf-8")
     lines = []
@@ -174,7 +176,7 @@ def _exec_agent(run_dir, agent_id, *, ctxs, reads=(), calls_per_turn=1):
         "\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
 
 
-def _phase_journal(run_dir, agents):
+def _phase_journal(run_dir, agents) -> str:
     lines = [{"type": "launched"}]
     for agent_id, label, phase in agents:
         event = {"type": "started", "agentId": agent_id, "label": label}
@@ -186,7 +188,7 @@ def _phase_journal(run_dir, agents):
     return str(path)
 
 
-def _fixture_run(tmp_path):
+def _fixture_run(tmp_path) -> str:
     _write_agent(tmp_path, "p1", agent_type="t", model="m", start_min=0, end_min=1,
                  usages=[_usage(100, 0, 0, 0)])
     _write_agent(tmp_path, "p2", agent_type="t", model="m", start_min=0, end_min=1,
@@ -196,7 +198,7 @@ def _fixture_run(tmp_path):
                                      ("e1", "work:C1", "Execute")])
 
 
-def test_phase_split_groups_case_insensitively_and_unknown(tmp_path):
+def test_phase_split_groups_case_insensitively_and_unknown(tmp_path: Path) -> None:
     _write_agent(tmp_path, "p1", agent_type="t", model="m", start_min=0, end_min=1,
                  usages=[_usage(300, 0, 0, 0)])
     _write_agent(tmp_path, "p2", agent_type="t", model="m", start_min=0, end_min=1,
@@ -209,7 +211,7 @@ def test_phase_split_groups_case_insensitively_and_unknown(tmp_path):
     assert split["unknown"]["total_tokens"] == 600 and split["unknown"]["share"] == 0.6
 
 
-def test_executors_carry_full_read_counts(tmp_path):
+def test_executors_carry_full_read_counts(tmp_path: Path) -> None:
     report = run_report.build_report(_fixture_run(tmp_path))
     assert [e["label"] for e in report["executors"]] == ["work:C1"]
     e = report["executors"][0]
@@ -217,7 +219,7 @@ def test_executors_carry_full_read_counts(tmp_path):
     assert e["max_same_file_reads"] == 2 and e["partial"] is False
 
 
-def test_write_record_ratchet_ok_and_breach(tmp_path):
+def test_write_record_ratchet_ok_and_breach(tmp_path: Path) -> None:
     journal = _fixture_run(tmp_path)
     ratchet = tmp_path / "ratchet.json"
     ratchet.write_text(json.dumps({"executor_peak_context": 4000, "executor_tool_calls": 10,
@@ -233,7 +235,7 @@ def test_write_record_ratchet_ok_and_breach(tmp_path):
     assert not list(tmp_path.glob("*.tmp-*"))
 
 
-def test_tighten_lowers_and_never_raises(tmp_path):
+def test_tighten_lowers_and_never_raises(tmp_path: Path) -> None:
     ratchet = tmp_path / "ratchet.json"
     ratchet.write_text(json.dumps({"executor_peak_context": 4000, "executor_tool_calls": 10,
                                    "executor_max_same_file_reads": 1}), encoding="utf-8")
@@ -246,7 +248,7 @@ def test_tighten_lowers_and_never_raises(tmp_path):
     assert json.loads(ratchet.read_text(encoding="utf-8")) == after
 
 
-def test_tighten_never_raises_a_peer_lowered_ceiling(tmp_path):
+def test_tighten_never_raises_a_peer_lowered_ceiling(tmp_path: Path) -> None:
     ratchet = tmp_path / "ratchet.json"
     block = {m: {"ceiling": 0, "observed": 0, "verdict": "ok"} for m in
              ("executor_peak_context", "executor_tool_calls", "executor_max_same_file_reads")}
@@ -258,7 +260,7 @@ def test_tighten_never_raises_a_peer_lowered_ceiling(tmp_path):
         assert json.loads(ratchet.read_text(encoding="utf-8"))["executor_tool_calls"] == expected
 
 
-def test_tracked_ratchet_at_or_below_measured_baseline():
+def test_tracked_ratchet_at_or_below_measured_baseline() -> None:
     from coordinator_core.ops.dispatch_emit.executor_economy import MEASURED_BASELINE, RATCHET_METRICS
 
     ceilings = run_report.load_ratchet()
@@ -266,7 +268,7 @@ def test_tracked_ratchet_at_or_below_measured_baseline():
     assert all(ceilings[m] <= MEASURED_BASELINE[m] for m in RATCHET_METRICS)
 
 
-def test_main_record_writes_run_cost(tmp_path, capsys):
+def test_main_record_writes_run_cost(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     journal = _fixture_run(tmp_path)
     assert run_report.main(["--journal", journal, "--record"]) == 0
     assert capsys.readouterr().out.strip() == str(tmp_path / "run-cost.json")

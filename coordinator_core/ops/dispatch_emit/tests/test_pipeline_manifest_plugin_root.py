@@ -7,6 +7,7 @@ import hashlib
 import yaml
 
 from coordinator_core.ops.dispatch_emit.pipeline_manifest import load_manifest
+from pathlib import Path
 
 TOKEN = "${CLAUDE_PLUGIN_ROOT}"
 
@@ -27,7 +28,7 @@ def _write(tmp_path, templates):
     return tmp_path / "content", manifest
 
 
-def test_token_is_replaced_with_the_content_root_posix_path(tmp_path):
+def test_token_is_replaced_with_the_content_root_posix_path(tmp_path: Path) -> None:
     content, _ = _write(tmp_path, {
         "a.md": f"run {TOKEN}/scripts/nlm-preflight.py then {TOKEN}/x {{{{brief}}}}",
         "b.md": f"also {TOKEN}",
@@ -39,11 +40,11 @@ def test_token_is_replaced_with_the_content_root_posix_path(tmp_path):
     assert manifest.templates["a.md"] == f"run {content.as_posix()}/scripts/nlm-preflight.py then {content.as_posix()}/x {{{{brief}}}}"
 
 
-def test_template_without_the_token_is_unchanged(tmp_path):
+def test_template_without_the_token_is_unchanged(tmp_path: Path) -> None:
     content, _ = _write(tmp_path, {"a.md": "plain {{brief}}"})
     assert load_manifest(content, "p").templates["a.md"] == "plain {{brief}}"
 
 
-def test_sha256_stays_over_the_manifest_bytes(tmp_path):
+def test_sha256_stays_over_the_manifest_bytes(tmp_path: Path) -> None:
     content, manifest_path = _write(tmp_path, {"a.md": f"{TOKEN}/x"})
     assert load_manifest(content, "p").sha256 == hashlib.sha256(manifest_path.read_bytes()).hexdigest()

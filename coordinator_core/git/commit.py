@@ -2328,8 +2328,9 @@ def _prepare_index_splice(
 
 
 def _reset_index_paths(repo: Union[str, Path], paths: Sequence[str]) -> bool:
-    """One batched `git reset -q` over a NUL pathspec on stdin, retried once on a held
-    `index.lock`; True when the index entries for `paths` now equal HEAD."""
+    """One batched `git reset -q` over a literal NUL pathspec on stdin, retried once on a held
+    `index.lock`; True when the index entries for exactly `paths` now equal HEAD (a glob
+    character in a landed path never reaches a peer's entry)."""
     from coordinator_core.git.run import run_git
 
     if not paths:
@@ -2337,7 +2338,7 @@ def _reset_index_paths(repo: Union[str, Path], paths: Sequence[str]) -> bool:
     payload = b"".join(p.encode("utf-8", "surrogateescape") + b"\0" for p in paths)
     for pause in (0.1, None):
         result = run_git(
-            ["reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"],
+            ["--literal-pathspecs", "reset", "-q", "--pathspec-from-file=-", "--pathspec-file-nul"],
             cwd=str(repo), input=payload,
         )
         if result.ok:

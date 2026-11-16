@@ -1,4 +1,10 @@
 from __future__ import annotations
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
+
 """
 test_harvest_deferrals_dedup_scan_memoized.py — spawn-count regression test
 for coordinator-harvest-deferrals.py's per-row dedup-scan root resolution.
@@ -67,7 +73,7 @@ _MANIFEST_PATH = os.path.join(
 )
 
 
-def _load_harvest_module():
+def _load_harvest_module() -> ModuleType:
     if _BIN_DIR not in sys.path:
         sys.path.insert(0, _BIN_DIR)
     loader = SourceFileLoader("coordinator_harvest_deferrals_module_spawn_test", _HARVEST_CLI)
@@ -95,7 +101,7 @@ _ENV_OVERRIDES_TO_CLEAR = (
 )
 
 
-def test_dedup_scan_root_resolution_memoized_across_candidate_rows(monkeypatch) -> None:
+def test_dedup_scan_root_resolution_memoized_across_candidate_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     """5 candidate rows must cost exactly the manifest's
     `resolution_calls_for_5_candidate_rows` total REAL `subprocess.run`
     SPAWNS reachable from the three underlying resolution primitives

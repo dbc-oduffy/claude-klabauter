@@ -22,7 +22,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 _RUN = ("repo-a", "ask-be779d", "implement", "2026-10-31T22:46:00Z")
 
 
-def test_live_run_hands_over_with_no_stop_across_the_land(tmp_path, monkeypatch):
+def test_live_run_hands_over_with_no_stop_across_the_land(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm import live_runs
 
     env = _q._setup(tmp_path, monkeypatch, True)
@@ -32,7 +32,7 @@ def test_live_run_hands_over_with_no_stop_across_the_land(tmp_path, monkeypatch)
     assert env.names("stop") == [] and env.names("land_diff") == [("land_diff", True)]
 
 
-def test_live_runs_are_read_with_the_marker_held_immediately_before_the_land(tmp_path, monkeypatch):
+def test_live_runs_are_read_with_the_marker_held_immediately_before_the_land(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env = _q._setup(tmp_path, monkeypatch, True)
     rc, err = _q._run(env)
     assert rc == 0, err

@@ -11,62 +11,63 @@ from coordinator_core.win_portability import no_console_creationflags
 
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as c
 from coordinator_core.ops.dispatch_emit import sibling_hold as sh
+from pathlib import Path
 
 RUN = "ask-20261016T152609-443905"
 PLAN = "docs/plans/2026-10-16-p.md"
 SIZING = "state/sizings/2026-10-16-s.yaml"
 
 
-def _write(root, rel, text):
+def _write(root, rel, text) -> None:
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
 
 
-def _halt(root, **fields):
+def _halt(root, **fields) -> None:
     _write(root, f"state/warp/{RUN}/halted.json", json.dumps({"status": "halted", **fields}))
 
 
-def _plan(root, status, rel=PLAN):
+def _plan(root, status, rel=PLAN) -> None:
     _write(root, rel, f"---\ntitle: p\nstatus: {status}\n---\n\nbody\n")
 
 
-def test_closed_by_status_mark(tmp_path):
+def test_closed_by_status_mark(tmp_path: Path) -> None:
     _write(tmp_path, c.status_rel(RUN), json.dumps({"status": "halted", "closed_by": PLAN}))
     assert sh.predecessor_closed(tmp_path, RUN) == PLAN
 
 
-def test_halt_record_plan_implemented(tmp_path):
+def test_halt_record_plan_implemented(tmp_path: Path) -> None:
     _halt(tmp_path, plan=PLAN, sizing_rel=SIZING)
     _plan(tmp_path, "implemented")
     assert sh.predecessor_closed(tmp_path, RUN) == PLAN
 
 
-def test_sizing_plan_edge_implemented(tmp_path):
+def test_sizing_plan_edge_implemented(tmp_path: Path) -> None:
     _halt(tmp_path, sizing_rel=SIZING)
     _write(tmp_path, SIZING, f"plan: {PLAN}\nintent: x\n")
     _plan(tmp_path, "implemented")
     assert sh.predecessor_closed(tmp_path, RUN) == PLAN
 
 
-def test_archived_plan_resolves_on_live_miss(tmp_path):
+def test_archived_plan_resolves_on_live_miss(tmp_path: Path) -> None:
     _halt(tmp_path, plan=PLAN)
     _plan(tmp_path, "implemented", rel="archive/specs/2026-10/2026-10-16-p.md")
     assert sh.predecessor_closed(tmp_path, RUN) == "archive/specs/2026-10/2026-10-16-p.md"
 
 
-def test_not_closed_for_unimplemented_plan_or_no_record(tmp_path):
+def test_not_closed_for_unimplemented_plan_or_no_record(tmp_path: Path) -> None:
     assert sh.predecessor_closed(tmp_path, RUN) is None
     _halt(tmp_path, plan=PLAN, sizing_rel=SIZING)
     _plan(tmp_path, "reviewed")
     assert sh.predecessor_closed(tmp_path, RUN) is None
 
 
-def test_unsafe_run_id_is_not_closed(tmp_path):
+def test_unsafe_run_id_is_not_closed(tmp_path: Path) -> None:
     assert sh.predecessor_closed(tmp_path, "../x") is None
 
 
-def _git(root, *args):
+def _git(root, *args) -> None:
     subprocess.run(
         ["git", *args], cwd=str(root), check=True, capture_output=True, **no_console_creationflags()
     )
@@ -83,7 +84,7 @@ def _commit_all(root, msg):
 
 
 @pytest.fixture
-def landed_repo(tmp_path):
+def landed_repo(tmp_path: Path):
     """Repo with src/a.py committed at base; returns (root, base_sha)."""
     root = tmp_path / "repo"
     root.mkdir()
@@ -95,7 +96,7 @@ def landed_repo(tmp_path):
     return root, _commit_all(root, "base")
 
 
-def _declare(root, base_sha, writes, *, base_field=True):
+def _declare(root, base_sha, writes, *, base_field: bool = True) -> None:
     fields = {"run_base_sha": base_sha} if base_field else {}
     _halt(root, **fields)
     _write(root, f"state/warp/{RUN}/manifest.json", json.dumps({"rows": [{"id": "C1", "writes": writes}]}))
@@ -112,7 +113,7 @@ def _marked(fn):
 
 
 @_marked
-def test_landed_writes_release_the_halted_predecessor(landed_repo):
+def test_landed_writes_release_the_halted_predecessor(landed_repo) -> None:
     root, base = landed_repo
     _declare(root, base, ["src/a.py", "src/b.py", "state/x.md", "scratch/log.txt"])
     _write(root, "src/a.py", "a2\n")
@@ -121,7 +122,7 @@ def test_landed_writes_release_the_halted_predecessor(landed_repo):
 
 
 @_marked
-def test_landed_arm_holds_on_dirty_untracked_or_unchanged(landed_repo):
+def test_landed_arm_holds_on_dirty_untracked_or_unchanged(landed_repo) -> None:
     root, base = landed_repo
     _declare(root, base, ["src/a.py"])
     assert sh.predecessor_closed(root, RUN) is None
@@ -144,7 +145,7 @@ def _git_head(root):
 
 @_marked
 @pytest.mark.parametrize("sha", [None, "abc123", "Z" * 40])
-def test_landed_arm_holds_on_absent_or_malformed_base(landed_repo, sha):
+def test_landed_arm_holds_on_absent_or_malformed_base(landed_repo, sha) -> None:
     root, base = landed_repo
     _write(root, "src/a.py", "a2\n")
     _commit_all(root, "land")
@@ -153,7 +154,7 @@ def test_landed_arm_holds_on_absent_or_malformed_base(landed_repo, sha):
 
 
 @_marked
-def test_landed_arm_holds_with_no_product_writes(landed_repo):
+def test_landed_arm_holds_with_no_product_writes(landed_repo) -> None:
     root, base = landed_repo
     _write(root, "src/a.py", "a2\n")
     _commit_all(root, "land")
@@ -162,7 +163,7 @@ def test_landed_arm_holds_with_no_product_writes(landed_repo):
 
 
 @_marked
-def test_landed_arm_holds_on_a_reader_gap(landed_repo, monkeypatch):
+def test_landed_arm_holds_on_a_reader_gap(landed_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, base = landed_repo
     _declare(root, base, ["src/a.py"])
     _write(root, "src/a.py", "a2\n")
@@ -172,7 +173,7 @@ def test_landed_arm_holds_on_a_reader_gap(landed_repo, monkeypatch):
 
 
 @_marked
-def test_landed_arm_spawns_no_process(landed_repo, monkeypatch):
+def test_landed_arm_spawns_no_process(landed_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, base = landed_repo
     _declare(root, base, ["src/a.py"])
     _write(root, "src/a.py", "a2\n")
@@ -187,7 +188,7 @@ def test_landed_arm_spawns_no_process(landed_repo, monkeypatch):
     assert sh.predecessor_closed(root, RUN) == f"landed@{head[:12]}"
 
 
-def test_mark_superseded_writes_once_and_is_idempotent(tmp_path):
+def test_mark_superseded_writes_once_and_is_idempotent(tmp_path: Path) -> None:
     first = sh.mark_superseded(tmp_path, RUN, "ask-new")
     assert first == {"run_id": RUN, "superseded_by": "ask-new", "written": True}
     assert c.read_superseded_by(tmp_path, RUN) == "ask-new"
@@ -195,14 +196,14 @@ def test_mark_superseded_writes_once_and_is_idempotent(tmp_path):
 
 
 @pytest.mark.parametrize("state", ["landed", "running"])
-def test_refuses_landed_or_running(tmp_path, state):
+def test_refuses_landed_or_running(tmp_path: Path, state) -> None:
     _write(tmp_path, c.status_rel(RUN), json.dumps({"status": state}))
     with pytest.raises(sh.SupersedeRefused, match=state):
         sh.mark_superseded(tmp_path, RUN, "ask-new")
     assert c.read_superseded_by(tmp_path, RUN) is None
 
 
-def test_refuses_different_by_self_and_unsafe_ids(tmp_path):
+def test_refuses_different_by_self_and_unsafe_ids(tmp_path: Path) -> None:
     sh.mark_superseded(tmp_path, RUN, "ask-new")
     assert "already superseded by ask-new" in sh.supersede_refusal(tmp_path, RUN, "ask-other")
     assert sh.supersede_refusal(tmp_path, "r", "r")

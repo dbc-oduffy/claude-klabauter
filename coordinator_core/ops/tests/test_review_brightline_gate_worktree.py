@@ -5,9 +5,10 @@ from __future__ import annotations
 import subprocess
 
 from coordinator_core.ops import review_brightline_gate as gate
+from pathlib import Path
 
 
-def _result(stdout="", returncode=0, timed_out=False, stderr=""):
+def _result(stdout: str = "", returncode: int = 0, timed_out: bool = False, stderr: str = ""):
     from coordinator_core.git.run import GitResult
 
     fields = dict.fromkeys(GitResult._fields)
@@ -15,7 +16,7 @@ def _result(stdout="", returncode=0, timed_out=False, stderr=""):
     return GitResult(**fields)
 
 
-def test_run_git_prefixes_no_optional_locks_through_the_shared_runner(monkeypatch):
+def test_run_git_prefixes_no_optional_locks_through_the_shared_runner(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
 
     def _fake_run_git(args, **kwargs):
@@ -28,7 +29,7 @@ def test_run_git_prefixes_no_optional_locks_through_the_shared_runner(monkeypatc
     assert seen["args"] == ["--no-optional-locks", "diff", "--numstat", "HEAD"]
 
 
-def test_run_git_timeout_degrades_to_nonzero_without_retry(monkeypatch):
+def test_run_git_timeout_degrades_to_nonzero_without_retry(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
     def _hang(args, **kwargs):
@@ -43,7 +44,7 @@ def test_run_git_timeout_degrades_to_nonzero_without_retry(monkeypatch):
     assert len(calls) == 1
 
 
-def test_run_git_missing_git_still_degrades_to_127(monkeypatch):
+def test_run_git_missing_git_still_degrades_to_127(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("coordinator_core.git.run.run_git", lambda args, **kw: _result("", 127, stderr="no git"))
 
     assert gate._run_git(["status"]) == ("", 127)
@@ -63,7 +64,7 @@ def _g(repo, *args):
     ).stdout
 
 
-def _init_repo(repo):
+def _init_repo(repo) -> None:
     repo.mkdir(parents=True, exist_ok=True)
     _g(repo, "init", "-q")
     _g(repo, "config", "user.email", "test@example.com")
@@ -75,7 +76,7 @@ def _init_repo(repo):
 
 @pytest.mark.cadence
 @pytest.mark.spawns_process
-def test_worktree_base_counts_tracked_and_untracked_declared_paths(tmp_path, capsys, monkeypatch):
+def test_worktree_base_counts_tracked_and_untracked_declared_paths(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
     base = _g(repo, "rev-parse", "HEAD").strip()
@@ -96,7 +97,7 @@ def test_worktree_base_counts_tracked_and_untracked_declared_paths(tmp_path, cap
 
 @pytest.mark.cadence
 @pytest.mark.spawns_process
-def test_worktree_base_requires_paths(tmp_path, capsys, monkeypatch):
+def test_worktree_base_requires_paths(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
     base = _g(repo, "rev-parse", "HEAD").strip()
@@ -112,7 +113,7 @@ def test_worktree_base_requires_paths(tmp_path, capsys, monkeypatch):
 
 @pytest.mark.cadence
 @pytest.mark.spawns_process
-def test_worktree_base_ignores_peer_commit_to_undeclared_path(tmp_path, capsys, monkeypatch):
+def test_worktree_base_ignores_peer_commit_to_undeclared_path(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
     base = _g(repo, "rev-parse", "HEAD").strip()

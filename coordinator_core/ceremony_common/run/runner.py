@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import dataclasses
 import importlib
 import json
 import sys
 import threading
 import time
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Sequence
@@ -341,19 +343,66 @@ def _apply_rule(
     if isinstance(resolved, Hold):
         return StepResult(
             id=step.id, status="ran", reason=f"{HELD_PREFIX}{resolved.reason}", exit_code=result.exit_code,
-            process_ms=result.process_ms, spawns=result.spawns, stdout=result.stdout, stderr=result.stderr,
+            process_ms=result.process_ms, spawns=result.spawns, wall_ms=result.wall_ms,
+            stdout=result.stdout, stderr=result.stderr,
         )
     if resolved is True:
         return StepResult(
             id=step.id, status="ran", reason=f"resolved-by:{rule_id}", exit_code=result.exit_code,
-            process_ms=result.process_ms, spawns=result.spawns, stdout=result.stdout, stderr=result.stderr,
+            process_ms=result.process_ms, spawns=result.spawns, wall_ms=result.wall_ms,
+            stdout=result.stdout, stderr=result.stderr,
         )
     if isinstance(resolved, str) and resolved:
         return StepResult(
             id=step.id, status="failed", reason=resolved, exit_code=result.exit_code,
-            process_ms=result.process_ms, spawns=result.spawns, stdout=result.stdout, stderr=result.stderr,
+            process_ms=result.process_ms, spawns=result.spawns, wall_ms=result.wall_ms,
+            stdout=result.stdout, stderr=result.stderr,
         )
     return result
+
+
+MAX_CONCURRENT = 4
+
+
+def _concurrent_eligible(step: StepSpec, concurrent_stages: frozenset[str]) -> bool:
+    """Only a `cli` step measures its own child; `op`'s in-process fallback and `inproc` read process-wide CPU time."""
+    return (
+        step.stage in concurrent_stages and step.kind == "cli"
+        and not step.gates_next and step.stdin_from is None
+    )
+
+
+def _raised(step: StepSpec, exc: BaseException) -> StepResult:
+    return StepResult(id=step.id, status="failed", reason=f"raised {type(exc).__name__}: {exc}")
+
+
+def _run_group(
+    group: Sequence[StepSpec], table: Mapping[str, Dispatcher], rules: Mapping[str, Rule], scope: _RuleScope,
+    *, run_dir: Path, done: Mapping[str, StepResult], allow_suite: bool, suite_grant: str | None,
+) -> list[StepResult]:
+    """Run `group` on a bounded pool; budget admission stays on this thread, results come back in step order."""
+    slots: list[StepResult | Future[StepResult]] = []
+    with ThreadPoolExecutor(max_workers=min(MAX_CONCURRENT, len(group)), thread_name_prefix="run-step") as pool:
+        for step in group:
+            try:
+                early, stdin_text = _admit(step, scope, done=done, allow_suite=allow_suite, suite_grant=suite_grant)
+            except Exception as exc:  # noqa: BLE001 -- the row is the report
+                slots.append(_raised(step, exc))
+                continue
+            slots.append(
+                early if early is not None
+                else pool.submit(_execute, step, table, rules, scope, run_dir=run_dir, stdin_text=stdin_text)
+            )
+        out: list[StepResult] = []
+        for step, slot in zip(group, slots):
+            if isinstance(slot, StepResult):
+                out.append(slot)
+                continue
+            try:
+                out.append(slot.result())
+            except Exception as exc:  # noqa: BLE001 -- the row is the report
+                out.append(_raised(step, exc))
+    return out
 
 
 def run_stages(
@@ -368,6 +417,7 @@ def run_stages(
     allow_suite: bool = False,
     suite_grant: str | None = None,
     held_stages: "frozenset[str] | None" = None,
+    concurrent_stages: frozenset[str] = frozenset(),
 ) -> list[StepResult]:
     """Run `steps` in order, appending exactly one terminal ledger row per step.
 
@@ -375,7 +425,9 @@ def run_stages(
     (failed, raised, deadline, not-composed) gives every remaining step `halted-by-gate`, unless
     it is `best_effort`. A gating step whose rule returned a `Hold` ends `ran` and gives the
     remaining steps in `held_stages` (all of them when None) `halted-by-gate` with the hold's
-    reason. A `suite` step starts only with `allow_suite=True` and a `ran` row for
+    reason. A maximal run of consecutive `cli` steps in a `concurrent_stages` stage that neither
+    gate nor read stdin runs on at most `MAX_CONCURRENT` threads; their rows land in step order
+    after the group finishes. A `suite` step starts only with `allow_suite=True` and a `ran` row for
     the step id `suite_grant`. Raises before any child starts when a `cli` step's bareword is outside the dispatch row.
     """
     repo = Path(repo_root)
@@ -393,7 +445,31 @@ def run_stages(
     held_by: str | None = None
     done: dict[str, StepResult] = {}
     try:
-        for step in steps:
+        queue = list(steps)
+        position = 0
+        while position < len(queue):
+            step = queue[position]
+            position += 1
+            if halted_by is None and held_by is None and _concurrent_eligible(step, concurrent_stages):
+                group = [step]
+                while (
+                    position < len(queue) and queue[position].stage == step.stage
+                    and _concurrent_eligible(queue[position], concurrent_stages)
+                ):
+                    group.append(queue[position])
+                    position += 1
+                if len(group) > 1:
+                    for member, member_result in zip(
+                        group,
+                        _run_group(
+                            group, table, rule_table, scope, run_dir=run_dir, done=done,
+                            allow_suite=allow_suite, suite_grant=suite_grant,
+                        ),
+                    ):
+                        ledger.append(run_dir, member_result)
+                        results.append(member_result)
+                        done[member.id] = member_result
+                    continue
             result = StepResult(id=step.id, status="failed", reason="runner-aborted")
             try:
                 if halted_by is not None:
@@ -456,37 +532,60 @@ def _launch_result(result: StepResult) -> StepResult:
         return result
     return StepResult(
         id=result.id, status="ran", reason=reason, exit_code=result.exit_code,
-        process_ms=result.process_ms, spawns=result.spawns, stdout=result.stdout, stderr=result.stderr,
+        process_ms=result.process_ms, spawns=result.spawns, wall_ms=result.wall_ms,
+        stdout=result.stdout, stderr=result.stderr,
     )
+
+
+def _admit(
+    step: StepSpec, scope: _RuleScope, *, done: Mapping[str, StepResult], allow_suite: bool, suite_grant: str | None,
+) -> tuple[StepResult | None, str | None]:
+    """Decide whether `step` starts a child: `(row, None)` when it ends without one, else `(None, stdin_text)`.
+
+    Charges the composition budget, so it runs on the calling thread.
+    """
+    if step.already_satisfied:
+        return StepResult(id=step.id, status="ran", reason="already-satisfied"), None
+    if step.cost_class == "over-bar":
+        return StepResult(id=step.id, status="not-composed", reason="over-bar"), None
+    stdin_text: str | None = None
+    if step.stdin_from is not None:
+        upstream = done.get(step.stdin_from)
+        if upstream is None or upstream.status != "ran" or upstream.reason == "already-satisfied":
+            return StepResult(id=step.id, status="not-composed", reason=step.stdin_from), None
+        stdin_text = upstream.stdout
+    if step.cost_class == "suite":
+        if not allow_suite:
+            return StepResult(id=step.id, status="not-composed", reason="not-in-launch"), None
+        granted = done.get(suite_grant) if suite_grant else None
+        if granted is None or granted.status != "ran":
+            return StepResult(id=step.id, status="not-composed", reason="no-grant"), None
+    if not scope.budget.check():
+        return StepResult(id=step.id, status="not-composed", reason=scope.budget.breached_units[-1]), None
+    scope.budget.record_invocation(step.id)
+    return None, stdin_text
 
 
 def _run_step(
     step: StepSpec, table: Mapping[str, Dispatcher], rules: Mapping[str, Rule], scope: _RuleScope,
     *, run_dir: Path, done: Mapping[str, StepResult], allow_suite: bool = False, suite_grant: str | None = None,
 ) -> StepResult:
-    if step.already_satisfied:
-        return StepResult(id=step.id, status="ran", reason="already-satisfied")
-    if step.cost_class == "over-bar":
-        return StepResult(id=step.id, status="not-composed", reason="over-bar")
-    stdin_text: str | None = None
-    if step.stdin_from is not None:
-        upstream = done.get(step.stdin_from)
-        if upstream is None or upstream.status != "ran" or upstream.reason == "already-satisfied":
-            return StepResult(id=step.id, status="not-composed", reason=step.stdin_from)
-        stdin_text = upstream.stdout
-    if step.cost_class == "suite":
-        if not allow_suite:
-            return StepResult(id=step.id, status="not-composed", reason="not-in-launch")
-        granted = done.get(suite_grant) if suite_grant else None
-        if granted is None or granted.status != "ran":
-            return StepResult(id=step.id, status="not-composed", reason="no-grant")
-    if not scope.budget.check():
-        return StepResult(id=step.id, status="not-composed", reason=scope.budget.breached_units[-1])
-    scope.budget.record_invocation(step.id)
+    early, stdin_text = _admit(step, scope, done=done, allow_suite=allow_suite, suite_grant=suite_grant)
+    if early is not None:
+        return early
+    return _execute(step, table, rules, scope, run_dir=run_dir, stdin_text=stdin_text)
+
+
+def _execute(
+    step: StepSpec, table: Mapping[str, Dispatcher], rules: Mapping[str, Rule], scope: _RuleScope,
+    *, run_dir: Path, stdin_text: str | None,
+) -> StepResult:
     deadline_s = DEADLINE_S[step.cost_class]
     extra = {} if stdin_text is None else {"stdin_text": stdin_text}
+    started = time.perf_counter()
     outcome = table[step.kind](step, repo_root=scope.repo_root, run_dir=run_dir, deadline_s=deadline_s, **extra)
-    result = _result_from(step, outcome)
+    wall_ms = (time.perf_counter() - started) * 1000.0
+    result = dataclasses.replace(_result_from(step, outcome), wall_ms=wall_ms)
     if result.status == "failed" and step.gates_next and not step.best_effort and outcome.reason != "deadline":
         rule_id = step.on_exit.get(outcome.exit_code)
         if rule_id is not None:

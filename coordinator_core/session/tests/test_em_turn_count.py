@@ -6,9 +6,10 @@ import time
 import pytest
 
 from coordinator_core.session import em_turn_count as etc
+from pathlib import Path
 
 
-def _line(mid, content=None, sidechain=False, model="claude-x", crlf=False):
+def _line(mid, content=None, sidechain: bool = False, model: str = "claude-x", crlf: bool = False) -> bytes:
     rec = {
         "isSidechain": sidechain,
         "message": {
@@ -31,12 +32,12 @@ def _write(p, *chunks):
     return p
 
 
-def test_split_message_counts_once(tmp_path):
+def test_split_message_counts_once(tmp_path: Path) -> None:
     t = _write(tmp_path / "t.jsonl", _line("a"), _line("a"), _line("b"))
     assert etc.advance(t, etc.fresh_state())["turns"] == 2
 
 
-def test_sidechain_and_synthetic_skipped(tmp_path):
+def test_sidechain_and_synthetic_skipped(tmp_path: Path) -> None:
     t = _write(
         tmp_path / "t.jsonl",
         _line("a", sidechain=True),
@@ -47,12 +48,12 @@ def test_sidechain_and_synthetic_skipped(tmp_path):
     assert etc.advance(t, etc.fresh_state())["turns"] == 1
 
 
-def test_crlf_safe(tmp_path):
+def test_crlf_safe(tmp_path: Path) -> None:
     t = _write(tmp_path / "t.jsonl", _line("a", crlf=True), _line("b", crlf=True))
     assert etc.advance(t, etc.fresh_state())["turns"] == 2
 
 
-def test_offset_resume_with_partial_trailing_line(tmp_path):
+def test_offset_resume_with_partial_trailing_line(tmp_path: Path) -> None:
     t = tmp_path / "t.jsonl"
     full = _line("b")
     t.write_bytes(_line("a") + full[:20])
@@ -64,13 +65,13 @@ def test_offset_resume_with_partial_trailing_line(tmp_path):
     assert etc.advance(t, s2)["turns"] == 3
 
 
-def test_reads_only_bytes_after_offset(tmp_path):
+def test_reads_only_bytes_after_offset(tmp_path: Path) -> None:
     t = _write(tmp_path / "t.jsonl", _line("a"), _line("b"))
     s = etc.advance(t, etc.fresh_state(offset=len(_line("a"))))
     assert s["turns"] == 1
 
 
-def test_fire_turn_only_for_engine_ask(tmp_path):
+def test_fire_turn_only_for_engine_ask(tmp_path: Path) -> None:
     t = _write(
         tmp_path / "t.jsonl",
         _line("a", _fire("other-flow")),
@@ -82,13 +83,13 @@ def test_fire_turn_only_for_engine_ask(tmp_path):
     assert s["fire_turn"] == 3 and s["turns"] == 4
 
 
-def test_non_workflow_tool_named_engine_ask_does_not_fire(tmp_path):
+def test_non_workflow_tool_named_engine_ask_does_not_fire(tmp_path: Path) -> None:
     c = [{"type": "tool_use", "name": "Bash", "input": {"name": "engine-ask"}}]
     t = _write(tmp_path / "t.jsonl", _line("a", c))
     assert etc.advance(t, etc.fresh_state())["fire_turn"] is None
 
 
-def test_over_cap_jumps_to_tail_and_marks_partial(tmp_path):
+def test_over_cap_jumps_to_tail_and_marks_partial(tmp_path: Path) -> None:
     big = b"x" * (etc.READ_CAP + 10) + b"\n"
     t = _write(tmp_path / "t.jsonl", _line("a"), big)
     s = etc.advance(t, etc.fresh_state())
@@ -98,7 +99,7 @@ def test_over_cap_jumps_to_tail_and_marks_partial(tmp_path):
     assert etc.advance(t, s)["turns"] == 1
 
 
-def test_malformed_state_resets_at_tail(tmp_path):
+def test_malformed_state_resets_at_tail(tmp_path: Path) -> None:
     t = _write(tmp_path / "t.jsonl", _line("a"), _line("b"))
     sp = tmp_path / "em-turns.json"
     sp.write_text("{not json", encoding="utf-8")
@@ -108,7 +109,7 @@ def test_malformed_state_resets_at_tail(tmp_path):
     assert etc.load_state(sp, t)["offset"] == t.stat().st_size
 
 
-def test_absent_state_starts_at_zero_and_round_trips(tmp_path):
+def test_absent_state_starts_at_zero_and_round_trips(tmp_path: Path) -> None:
     t = _write(tmp_path / "t.jsonl", _line("a"))
     sp = tmp_path / "sub" / "em-turns.json"
     s = etc.load_state(sp, t)
@@ -119,14 +120,14 @@ def test_absent_state_starts_at_zero_and_round_trips(tmp_path):
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds the save_state deadline against a stalled write; blocked time burns no CPU")
-def test_save_state_returns_within_deadline_under_stalled_write(tmp_path, monkeypatch):
+def test_save_state_returns_within_deadline_under_stalled_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import threading
     from pathlib import Path
 
     release = threading.Event()
     real = Path.write_text
 
-    def _stall(self, *a, **k):
+    def _stall(self, *a, **k) -> int:
         if self.name.startswith("stalled-em-turns"):
             release.wait(10)
         return real(self, *a, **k)
@@ -146,12 +147,12 @@ def test_save_state_returns_within_deadline_under_stalled_write(tmp_path, monkey
     assert ok.exists()
 
 
-def test_bars_are_the_ledger_values():
+def test_bars_are_the_ledger_values() -> None:
     assert etc.PRE_FIRE_TURNS_MAX == 10
     assert etc.POST_LANDING_TURNS_MAX == 5
 
 
-def test_one_mib_delta_under_20ms_process_time(tmp_path):
+def test_one_mib_delta_under_20ms_process_time(tmp_path: Path) -> None:
     parts, i, total = [], 0, 0
     while total < etc.READ_CAP - 4096:
         parts.append(_line(f"m{i}"))

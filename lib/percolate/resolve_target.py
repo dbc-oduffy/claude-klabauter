@@ -79,7 +79,7 @@ class ResolveError(Exception):
     operator-facing framing differs and "malformed row" is false for each.
     """
 
-    def __init__(self, message: str, code: int):
+    def __init__(self, message: str, code: int) -> None:
         super().__init__(message)
         self.message = message
         self.code = code

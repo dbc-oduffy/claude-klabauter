@@ -13,6 +13,7 @@ from coordinator_core.ops.plan_tasks_mutate import _handler
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ops.tests.test_plan_tasks_mutate import _make_git_repo, _seed_plan
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -83,7 +84,7 @@ def _hand_commit(repo) -> str:
     return _git(repo, "rev-parse", "HEAD")
 
 
-def _resolve(repo, plan, sha, detail="landed by hand"):
+def _resolve(repo, plan, sha, detail: str = "landed by hand"):
     return asyncio.run(_handler(
         {
             "verb": "resolve", "plan_path": str(plan), "id": "C1",
@@ -93,7 +94,7 @@ def _resolve(repo, plan, sha, detail="landed by hand"):
     ))
 
 
-def test_resolve_coded_clears_a_sibling_plans_depends_on_plan_edge(tmp_path):
+def test_resolve_coded_clears_a_sibling_plans_depends_on_plan_edge(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "hc.md", _PLAN)
     _seed_plan(repo, "gated.md", _GATED)
@@ -111,7 +112,7 @@ def test_resolve_coded_clears_a_sibling_plans_depends_on_plan_edge(tmp_path):
     assert after.named_row["disposition_ref"] == sha
 
 
-def test_resolve_coded_leaves_the_row_the_terminal_commit_stamp_leaves(tmp_path):
+def test_resolve_coded_leaves_the_row_the_terminal_commit_stamp_leaves(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "hc.md", _PLAN)
     original = plan.read_text(encoding="utf-8")

@@ -21,6 +21,7 @@ from coordinator_core.ops.dispatch_emit.tests._size_l_plan import (
     build_size_l_plan,
     isolate_launch_dirs,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -30,7 +31,7 @@ HOLD_SECS = 1.0
 SESSION_ID = "blocked-wait-session"
 
 
-def _fixture(tmp_path, monkeypatch, *, unclaimed_row: bool = False):
+def _fixture(tmp_path, monkeypatch, *, unclaimed_row: bool = False) -> tuple[Path, str, str]:
     isolate_launch_dirs(monkeypatch, tmp_path)
     root = tmp_path / "repo"
     root.mkdir()
@@ -52,14 +53,14 @@ def _fixture(tmp_path, monkeypatch, *, unclaimed_row: bool = False):
 class _Waits:
     """Records each `locked_rmw` call made on the staging thread: its caller frame and wall seconds."""
 
-    def __init__(self, monkeypatch):
+    def __init__(self, monkeypatch) -> None:
         self.calls: list[dict] = []
         real = locked_write.locked_rmw
         calls = self.calls
 
         staging = threading.get_ident()
 
-        def spy(target, mutate, **kw):
+        def spy(target, mutate, **kw) -> str:
             if threading.get_ident() != staging:
                 return real(target, mutate, **kw)
             caller = sys._getframe(1).f_code.co_name
@@ -105,7 +106,7 @@ def _stage_with_lock_held(repo_root, plan_rel, run_id):
     return manifest, {"process_ms": round(cpu_ms, 1), "wall_ms": round(wall_ms, 1), "wall_minus_cpu_ms": round(wall_ms - cpu_ms, 1)}
 
 
-def test_uncontended_stage_records_its_base_process_time(tmp_path, monkeypatch):
+def test_uncontended_stage_records_its_base_process_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root, plan_rel, run_id = _fixture(tmp_path, monkeypatch)
     waits = _Waits(monkeypatch)
 
@@ -116,7 +117,7 @@ def test_uncontended_stage_records_its_base_process_time(tmp_path, monkeypatch):
     assert ask_stage.stage(repo_root, run_id=run_id, plan_rel=plan_rel, session_id=SESSION_ID).rows
 
 
-def test_lock_held_with_an_unclaimed_row_stage_replies_naming_the_leg_without_waiting(tmp_path, monkeypatch):
+def test_lock_held_with_an_unclaimed_row_stage_replies_naming_the_leg_without_waiting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root, plan_rel, run_id = _fixture(tmp_path, monkeypatch, unclaimed_row=True)
     waits = _Waits(monkeypatch)
 
@@ -126,13 +127,13 @@ def test_lock_held_with_an_unclaimed_row_stage_replies_naming_the_leg_without_wa
     assert not waits.waited(), f"stage waited on the held plan lock in {waits.waited()}"
 
 
-def test_unclaimed_row_with_the_lock_free_is_claimed_and_staged(tmp_path, monkeypatch):
+def test_unclaimed_row_with_the_lock_free_is_claimed_and_staged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root, plan_rel, run_id = _fixture(tmp_path, monkeypatch, unclaimed_row=True)
 
     assert ask_stage.stage(repo_root, run_id=run_id, plan_rel=plan_rel, session_id=SESSION_ID).rows
 
 
-def test_lock_held_with_nothing_missing_stage_does_not_wait_on_the_plan_lock(tmp_path, monkeypatch):
+def test_lock_held_with_nothing_missing_stage_does_not_wait_on_the_plan_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root, plan_rel, run_id = _fixture(tmp_path, monkeypatch)
     waits = _Waits(monkeypatch)
 
@@ -144,7 +145,7 @@ def test_lock_held_with_nothing_missing_stage_does_not_wait_on_the_plan_lock(tmp
     assert measured["wall_minus_cpu_ms"] < WAIT_MS * 3, f"stage idled {measured['wall_minus_cpu_ms']}ms while the plan lock was held"
 
 
-def test_stage_process_time_under_the_brightline(tmp_path, monkeypatch):
+def test_stage_process_time_under_the_brightline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root, plan_rel, run_id = _fixture(tmp_path, monkeypatch)
 
     timing = in_process_time_ms(

@@ -7,6 +7,7 @@ import pytest
 from coordinator_core.ipc import CallerFacingValidationError
 from coordinator_core.ops import roadmap_plan_gate as op_module
 from coordinator_core.roadmap import gate_v2
+from pathlib import Path
 
 
 def _gate(open_: bool, blocking=()):
@@ -37,7 +38,7 @@ def _report():
 
 
 @pytest.fixture()
-def seen(monkeypatch, tmp_path):
+def seen(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     calls = []
 
     def fake(root, **kwargs):
@@ -53,41 +54,41 @@ def _call(tmp_path, **params):
     return op_module._handler(params, repo_root=tmp_path)
 
 
-def test_the_op_is_registered_under_its_wire_name():
+def test_the_op_is_registered_under_its_wire_name() -> None:
     from coordinator_core.ipc import _REGISTRY
 
     assert "roadmap.plan_gate" in _REGISTRY
 
 
-def test_the_op_is_reachable_through_the_lazy_import_map():
+def test_the_op_is_reachable_through_the_lazy_import_map() -> None:
     from coordinator_core.ops._registry_map import OP_MODULE_MAP
 
     assert OP_MODULE_MAP["roadmap.plan_gate"] == "coordinator_core.ops.roadmap_plan_gate"
 
 
-def test_the_op_declares_a_key_scope():
+def test_the_op_declares_a_key_scope() -> None:
     from coordinator_core.op_scopes import _OP_KEY_SCOPE
 
     assert _OP_KEY_SCOPE["roadmap.plan_gate"] == "common_dir"
 
 
-def test_selectors_pass_through(seen, tmp_path):
+def test_selectors_pass_through(seen, tmp_path: Path) -> None:
     _call(tmp_path, roadmap_id="rm-1", targets=["b-1"], subject="b-1", gate="planning")
     root, kwargs = seen[0]
     assert root == tmp_path
     assert kwargs == {"roadmap_id": "rm-1", "targets": ["b-1"], "subject": "b-1"}
 
 
-def test_no_selectors_sweeps(seen, tmp_path):
+def test_no_selectors_sweeps(seen, tmp_path: Path) -> None:
     _call(tmp_path)
     assert seen[0][1] == {"roadmap_id": None, "targets": None, "subject": None}
 
 
-def test_no_subject_leaves_verdict_null(seen, tmp_path):
+def test_no_subject_leaves_verdict_null(seen, tmp_path: Path) -> None:
     assert _call(tmp_path)["verdict"] is None
 
 
-def test_subject_with_gate_returns_holding_blockers(seen, tmp_path):
+def test_subject_with_gate_returns_holding_blockers(seen, tmp_path: Path) -> None:
     v = _call(tmp_path, subject="stub-1", gate="execution")["verdict"]
     assert v == {
         "subject": "stub-1", "resolved": True, "gate": "execution",
@@ -95,19 +96,19 @@ def test_subject_with_gate_returns_holding_blockers(seen, tmp_path):
     }
 
 
-def test_subject_default_gate_carries_both(seen, tmp_path):
+def test_subject_default_gate_carries_both(seen, tmp_path: Path) -> None:
     v = _call(tmp_path, subject="b-2")["verdict"]
     assert v["resolved"] is True
     assert v["planning_gate"]["open"] and v["execution_gate"]["open"]
 
 
-def test_both_gates_open_requires_execution_gate_open(seen, tmp_path):
+def test_both_gates_open_requires_execution_gate_open(seen, tmp_path: Path) -> None:
     v = _call(tmp_path, subject="b-1")["verdict"]
     assert v["planning_gate"]["open"] and not v["execution_gate"]["open"]
     assert v["open"] is False
 
 
-def test_unknown_subject_is_unresolved_and_shut(seen, tmp_path):
+def test_unknown_subject_is_unresolved_and_shut(seen, tmp_path: Path) -> None:
     v = _call(tmp_path, subject="nope")["verdict"]
     assert v["resolved"] is False and v["open"] is False
 
@@ -115,18 +116,18 @@ def test_unknown_subject_is_unresolved_and_shut(seen, tmp_path):
 @pytest.mark.parametrize("params", [
     {"gate": "bogus"}, {"targets": []}, {"targets": "b-1"}, {"subject": 3}, {"roadmap_id": 3},
 ])
-def test_bad_params_are_rejected(seen, tmp_path, params):
+def test_bad_params_are_rejected(seen, tmp_path: Path, params) -> None:
     with pytest.raises(ValueError):
         _call(tmp_path, **params)
     assert seen == []
 
 
-def test_missing_repo_root_is_rejected():
+def test_missing_repo_root_is_rejected() -> None:
     with pytest.raises(ValueError):
         op_module._handler({}, repo_root=None)
 
 
-def test_refused_read_arrives_as_an_error_reply_not_a_report(tmp_path, monkeypatch):
+def test_refused_read_arrives_as_an_error_reply_not_a_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def refuse(root, **kwargs):
         raise gate_v2.GateReadRefused("handoff dir unreadable")
 

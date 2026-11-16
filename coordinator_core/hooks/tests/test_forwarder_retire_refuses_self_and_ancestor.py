@@ -4,9 +4,10 @@ import os
 
 from coordinator_core.box_memory import orphan_reap
 from coordinator_core.hooks import sessionstart_ensure_http_forwarder as fwd
+import pytest
 
 
-def test_retire_refuses_self_and_ancestor_and_kills_unrelated(monkeypatch):
+def test_retire_refuses_self_and_ancestor_and_kills_unrelated(monkeypatch: pytest.MonkeyPatch) -> None:
     sent = []
     monkeypatch.setattr(fwd.os, "kill", lambda pid, sig: sent.append(pid))
     monkeypatch.setattr(orphan_reap, "protected_pids", lambda self_pid=None: frozenset({os.getpid(), 7}))

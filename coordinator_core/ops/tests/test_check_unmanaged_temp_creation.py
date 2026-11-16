@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops import check_unmanaged_temp_creation as m
+from pathlib import Path
 
 
 _OUTSIDE_ENGINE = "scripts/x.py"
@@ -26,7 +27,7 @@ def _scan(src: str, rel: str = "coordinator_core/x.py"):
         "from tempfile import mkdtemp\ndef f():\n    return mkdtemp('a', 'b')\n",
     ],
 )
-def test_bare_creation_is_a_finding(src):
+def test_bare_creation_is_a_finding(src) -> None:
     found = _scan(src, rel=_OUTSIDE_ENGINE)
     assert [f.kind for f in found] == ["bare-temp-create"]
     assert found[0].function == "f"
@@ -46,7 +47,7 @@ def test_bare_creation_is_a_finding(src):
         "import tempfile\ndef f():\n    return tempfile.SpooledTemporaryFile()\n",
     ],
 )
-def test_exempt_shapes_are_not_findings(src):
+def test_exempt_shapes_are_not_findings(src) -> None:
     assert _scan(src, rel=_OUTSIDE_ENGINE) == []
 
 
@@ -60,12 +61,12 @@ def test_exempt_shapes_are_not_findings(src):
         "from tempfile import mkdtemp\ndef f(d):\n    return mkdtemp('a', 'b', d)\n",
     ],
 )
-def test_engine_directory_creator_is_unmanaged_regardless_of_dir_or_with(src):
+def test_engine_directory_creator_is_unmanaged_regardless_of_dir_or_with(src) -> None:
     found = _scan(src)
     assert [f.kind for f in found] == ["unmanaged-temp-create"]
 
 
-def test_engine_directory_creator_is_legal_in_temp_layout():
+def test_engine_directory_creator_is_legal_in_temp_layout() -> None:
     src = "import tempfile\ndef f(d):\n    return tempfile.mkdtemp(dir=d)\n"
     assert _scan(src, rel="coordinator_core/temp_layout.py") == []
 
@@ -77,22 +78,22 @@ def test_engine_directory_creator_is_legal_in_temp_layout():
         "import tempfile\ndef f(d):\n    return tempfile.NamedTemporaryFile(dir=d, delete=False)\n",
     ],
 )
-def test_engine_atomic_write_sibling_stays_legal(src):
+def test_engine_atomic_write_sibling_stays_legal(src) -> None:
     assert _scan(src) == []
 
 
-def test_engine_bare_mkstemp_keeps_the_bare_rule():
+def test_engine_bare_mkstemp_keeps_the_bare_rule() -> None:
     src = "import tempfile\ndef f():\n    return tempfile.mkstemp()\n"
     assert [f.kind for f in _scan(src)] == ["bare-temp-create"]
 
 
-def test_other_trees_keep_the_dir_exemption_for_directory_creators():
+def test_other_trees_keep_the_dir_exemption_for_directory_creators() -> None:
     src = "import tempfile\ndef f(d):\n    return tempfile.mkdtemp(dir=d)\n"
     for rel in ("coordinator/bin/x.py", "scripts/x.py", "setup/x.py"):
         assert _scan(src, rel=rel) == []
 
 
-def test_main_exits_1_on_engine_mkdtemp_with_dir(tmp_path, capsys, monkeypatch):
+def test_main_exits_1_on_engine_mkdtemp_with_dir(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     pkg = tmp_path / "coordinator_core"
     pkg.mkdir()
     (pkg / "fix.py").write_text("import tempfile\nd = tempfile.mkdtemp(dir=x)\n", encoding="utf-8")
@@ -102,23 +103,23 @@ def test_main_exits_1_on_engine_mkdtemp_with_dir(tmp_path, capsys, monkeypatch):
     assert "unmanaged-temp-create" in out and "managed_temp_dir" in out
 
 
-def test_unlisted_gettempdir_is_a_finding():
+def test_unlisted_gettempdir_is_a_finding() -> None:
     src = "import tempfile\ndef g():\n    return tempfile.gettempdir()\n"
     found = _scan(src)
     assert [(f.kind, f.function) for f in found] == [("gettempdir", "g")]
 
 
-def test_aliased_gettempdir_is_a_finding():
+def test_aliased_gettempdir_is_a_finding() -> None:
     src = "def g(t):\n    return t().gettempdir()\n"
     assert [f.kind for f in _scan(src)] == ["gettempdir"]
 
 
-def test_module_level_gettempdir_reports_module():
+def test_module_level_gettempdir_reports_module() -> None:
     found = _scan("import tempfile\nX = tempfile.gettempdir()\n")
     assert found[0].function == "<module>"
 
 
-def test_listed_pair_is_exempt_and_other_function_is_not(monkeypatch):
+def test_listed_pair_is_exempt_and_other_function_is_not(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         m, "READ_ONLY_GETTEMPDIR", frozenset({("coordinator_core/x.py", "ok")})
     )
@@ -131,7 +132,7 @@ def test_listed_pair_is_exempt_and_other_function_is_not(monkeypatch):
     assert _scan(src, rel="coordinator_core/y.py") != [] and len(_scan(src, rel="coordinator_core/y.py")) == 2
 
 
-def test_nested_function_reports_innermost():
+def test_nested_function_reports_innermost() -> None:
     src = "import tempfile\ndef a():\n    def b():\n        return tempfile.mkdtemp()\n    return b\n"
     assert _scan(src, rel=_OUTSIDE_ENGINE)[0].function == "b"
 
@@ -154,11 +155,11 @@ def test_nested_function_reports_innermost():
         ("coordinator_core/a.txt", False),
     ],
 )
-def test_scope(rel, expected):
+def test_scope(rel, expected) -> None:
     assert m._in_scope(rel) is expected
 
 
-def test_scan_explicit_paths_and_main_exit_codes(tmp_path, capsys):
+def test_scan_explicit_paths_and_main_exit_codes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "bad.py").write_text("import tempfile\nd = tempfile.mkdtemp()\n", encoding="utf-8")
     (tmp_path / "good.py").write_text("x = 1\n", encoding="utf-8")
     assert [f.path for f in m.scan(["bad.py"], root=tmp_path)] == ["bad.py"]
@@ -177,11 +178,11 @@ def test_scan_explicit_paths_and_main_exit_codes(tmp_path, capsys):
         mod.show_toplevel = orig
 
 
-def test_syntax_error_source_yields_no_findings():
+def test_syntax_error_source_yields_no_findings() -> None:
     assert _scan("def (:\n") == []
 
 
-def test_mkdtemp_in_call_outside_temp_layout_is_legal_because_helper_owns_the_root():
+def test_mkdtemp_in_call_outside_temp_layout_is_legal_because_helper_owns_the_root() -> None:
     src = (
         "from coordinator_core.temp_layout import mkdtemp_in\n"
         "def f():\n    return mkdtemp_in('x-', None)\n"

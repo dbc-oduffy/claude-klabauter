@@ -9,12 +9,13 @@ import pytest
 
 from coordinator_core.write_guards import _doctrine_edit_sentinel as sentinel
 from coordinator_core.write_guards import guard_doctrine_surface_edits as guard
+from pathlib import Path
 
 _SUBAGENT = {"agent_id": "run-1", "agent_type": "executor"}
 
 
 @pytest.fixture
-def box(tmp_path, monkeypatch):
+def box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     home = tmp_path / "home"
     (home / ".claude" / "rules").mkdir(parents=True)
     repo = tmp_path / "repo"
@@ -46,7 +47,7 @@ def _edit(target, repo, **extra):
     }
 
 
-def _touch_sentinel(repo, age=0):
+def _touch_sentinel(repo, age: int = 0) -> None:
     path = repo / ".git" / sentinel.SENTINEL_BASENAME
     path.write_text("", encoding="utf-8")
     stamp = time.time() - age
@@ -58,7 +59,7 @@ def _targets(repo, home):
 
 
 @pytest.mark.parametrize("kind", ["claude_md", "rules"])
-def test_em_edit_without_sentinel_is_denied_naming_the_route(box, kind):
+def test_em_edit_without_sentinel_is_denied_naming_the_route(box, kind) -> None:
     repo, home = box
     target = _targets(repo, home)[kind]
     target.write_text("# doctrine\n", encoding="utf-8")
@@ -69,7 +70,7 @@ def test_em_edit_without_sentinel_is_denied_naming_the_route(box, kind):
 
 
 @pytest.mark.parametrize("kind", ["claude_md", "rules"])
-def test_em_edit_with_fresh_sentinel_is_admitted(box, kind):
+def test_em_edit_with_fresh_sentinel_is_admitted(box, kind) -> None:
     repo, home = box
     target = _targets(repo, home)[kind]
     target.write_text("# doctrine\n", encoding="utf-8")
@@ -79,7 +80,7 @@ def test_em_edit_with_fresh_sentinel_is_admitted(box, kind):
 
 
 @pytest.mark.parametrize("kind", ["claude_md", "rules"])
-def test_stale_sentinel_does_not_admit(box, kind):
+def test_stale_sentinel_does_not_admit(box, kind) -> None:
     repo, home = box
     target = _targets(repo, home)[kind]
     target.write_text("# doctrine\n", encoding="utf-8")
@@ -88,7 +89,7 @@ def test_stale_sentinel_does_not_admit(box, kind):
     assert out["permissionDecision"] == "deny"
 
 
-def test_write_creating_a_new_rules_file_is_denied(box):
+def test_write_creating_a_new_rules_file_is_denied(box) -> None:
     repo, home = box
     target = home / ".claude" / "rules" / "new.md"
     payload = {
@@ -100,7 +101,7 @@ def test_write_creating_a_new_rules_file_is_denied(box):
     assert guard.check(payload)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_first_time_create_of_missing_claude_md_stays_admitted(box):
+def test_first_time_create_of_missing_claude_md_stays_admitted(box) -> None:
     repo, _home = box
     payload = {
         "tool_name": "Write",
@@ -112,7 +113,7 @@ def test_first_time_create_of_missing_claude_md_stays_admitted(box):
     assert guard.check(payload) is None
 
 
-def test_subagent_claude_md_edit_is_denied_even_with_the_sentinel(box):
+def test_subagent_claude_md_edit_is_denied_even_with_the_sentinel(box) -> None:
     repo, _home = box
     _touch_sentinel(repo)
     out = guard.check(_edit(repo / "CLAUDE.md", repo, **_SUBAGENT))["hookSpecificOutput"]
@@ -120,7 +121,7 @@ def test_subagent_claude_md_edit_is_denied_even_with_the_sentinel(box):
     assert "dispatched agent may not edit CLAUDE.md" in out["permissionDecisionReason"]
 
 
-def test_a_file_outside_every_protected_surface_is_untouched(box):
+def test_a_file_outside_every_protected_surface_is_untouched(box) -> None:
     repo, home = box
     other = home / ".claude" / "notes.md"
     other.write_text("x", encoding="utf-8")

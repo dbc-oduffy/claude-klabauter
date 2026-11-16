@@ -10,6 +10,7 @@ from coordinator_core.archive_stamp import cs_stamp_plan_implemented
 from coordinator_core.ops.plan_tasks_mutate import _handler
 from coordinator_core.ops.tests.test_plan_tasks_mutate import _make_git_repo, _seed_plan
 from coordinator_core.workstream_complete import apply as ws_apply
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -54,7 +55,7 @@ def _resolve_delivered_elsewhere(repo, plan):
     ))
 
 
-def test_stamp_refuses_an_open_row_then_accepts_it_delivered_elsewhere(tmp_path, capsys):
+def test_stamp_refuses_an_open_row_then_accepts_it_delivered_elsewhere(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "de-close.md", _PLAN)
 
@@ -68,7 +69,7 @@ def test_stamp_refuses_an_open_row_then_accepts_it_delivered_elsewhere(tmp_path,
     assert cs_stamp_plan_implemented(str(plan), refuse_open_spine_rows=True, commit=False) == 0
 
 
-def test_no_commit_row_judgment_surfaces_open_row_and_ignores_delivered_elsewhere(tmp_path):
+def test_no_commit_row_judgment_surfaces_open_row_and_ignores_delivered_elsewhere(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "de-judgment.md", _PLAN)
     decisions = {"governing_plan_slug": "de-judgment"}

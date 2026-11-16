@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -18,7 +19,7 @@ SIZING = {
 }
 
 
-def test_mint_round_trips_to_one_dispatchable_row(tmp_path):
+def test_mint_round_trips_to_one_dispatchable_row(tmp_path: Path) -> None:
     text, path = mint_xs_spine(
         SIZING, sizing_rel=SIZING_REL, writes=["a/b.py", "a/test_b.py"], out_dir=tmp_path
     )
@@ -31,7 +32,7 @@ def test_mint_round_trips_to_one_dispatchable_row(tmp_path):
     assert "the thing passes" in rows[0].body
 
 
-def test_plan_body_beside_code_routes_to_sidecar_and_body_says_so(tmp_path):
+def test_plan_body_beside_code_routes_to_sidecar_and_body_says_so(tmp_path: Path) -> None:
     text, path = mint_xs_spine(
         SIZING,
         sizing_rel=SIZING_REL,
@@ -47,7 +48,7 @@ def test_plan_body_beside_code_routes_to_sidecar_and_body_says_so(tmp_path):
     ) in row.body
 
 
-def test_problems_body_and_plans_only_sets_are_left_as_declared(tmp_path):
+def test_problems_body_and_plans_only_sets_are_left_as_declared(tmp_path: Path) -> None:
     text, path = mint_xs_spine(
         SIZING, sizing_rel=SIZING_REL, writes=["src/x.py", "docs/problems/2026-10-14-q.md"], out_dir=tmp_path
     )
@@ -60,7 +61,7 @@ def test_problems_body_and_plans_only_sets_are_left_as_declared(tmp_path):
     assert "docs/plans/2026-10-14-p.md" in text
 
 
-def test_frontmatter_cites_sizing_and_statement(tmp_path):
+def test_frontmatter_cites_sizing_and_statement(tmp_path: Path) -> None:
     text, _ = mint_xs_spine(SIZING, sizing_rel=SIZING_REL, writes=["a.md"], out_dir=tmp_path)
     assert f"sizing_object: {SIZING_REL}" in text
     assert "deliverable_id: dlv-xs-thing-abc123" in text
@@ -68,28 +69,28 @@ def test_frontmatter_cites_sizing_and_statement(tmp_path):
     assert "the thing passes: 'quoted' text" in text
 
 
-def test_deliverable_id_omitted_when_absent(tmp_path):
+def test_deliverable_id_omitted_when_absent(tmp_path: Path) -> None:
     sizing = {k: v for k, v in SIZING.items() if k != "deliverable_id"}
     text, _ = mint_xs_spine(sizing, sizing_rel=SIZING_REL, writes=["a.py"], out_dir=tmp_path)
     assert "deliverable_id" not in text
 
 
-def test_glob_writes_refused(tmp_path):
+def test_glob_writes_refused(tmp_path: Path) -> None:
     with pytest.raises(im.GlobFootprintError):
         mint_xs_spine(SIZING, sizing_rel=SIZING_REL, writes=["a/*.py"], out_dir=tmp_path)
 
 
-def test_directory_writes_refused(tmp_path):
+def test_directory_writes_refused(tmp_path: Path) -> None:
     with pytest.raises(im.DirectoryShapedFootprintError):
         mint_xs_spine(SIZING, sizing_rel=SIZING_REL, writes=["a/dir/"], out_dir=tmp_path)
 
 
-def test_empty_writes_refused(tmp_path):
+def test_empty_writes_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         mint_xs_spine(SIZING, sizing_rel=SIZING_REL, writes=[], out_dir=tmp_path)
 
 
-def test_minted_spine_derives_lightweight_review_tier(tmp_path):
+def test_minted_spine_derives_lightweight_review_tier(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.emit import derive_review_tier
 
     (tmp_path / "state" / "sizings").mkdir(parents=True)
@@ -98,7 +99,7 @@ def test_minted_spine_derives_lightweight_review_tier(tmp_path):
     assert derive_review_tier(path, repo_root=tmp_path, plan_text=text) == "lightweight"
 
 
-def test_declared_gated_row_is_minted_withheld_never_dropped(tmp_path):
+def test_declared_gated_row_is_minted_withheld_never_dropped(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import gated_rows
     from coordinator_core.ops.plan_tasks_render import load_rows
 
@@ -122,7 +123,7 @@ def _gate_of(text: str, row_id: str) -> dict:
     return raw[row_id]["external_gate"][0]
 
 
-def test_landed_work_gate_is_minted_with_a_deterministic_closure_key(tmp_path):
+def test_landed_work_gate_is_minted_with_a_deterministic_closure_key(tmp_path: Path) -> None:
     gated = [{"title": "peer lands", "owner_repo": "coordinator-content-repo", "requires": "landed-work"}]
     text, _ = mint_xs_spine(SIZING, sizing_rel=SIZING_REL, writes=["a.py"], out_dir=tmp_path, gated=gated)
     again, _ = mint_xs_spine(SIZING, sizing_rel=SIZING_REL, writes=["a.py"], out_dir=tmp_path, gated=gated)
@@ -131,7 +132,7 @@ def test_landed_work_gate_is_minted_with_a_deterministic_closure_key(tmp_path):
     assert _gate_of(again, "X2")["closure_key"] == key
 
 
-def test_declared_closure_key_is_kept_and_malformed_one_is_replaced(tmp_path):
+def test_declared_closure_key_is_kept_and_malformed_one_is_replaced(tmp_path: Path) -> None:
     good = {"title": "t", "owner_repo": "r", "closure_key": {"kind": "memo-thread", "id": "m.md"}}
     bad = {"title": "t", "owner_repo": "r", "closure_key": {"kind": "bogus", "id": "m"}}
     text, _ = mint_xs_spine(SIZING, sizing_rel=SIZING_REL, writes=["a.py"], out_dir=tmp_path, gated=[good, bad])
@@ -139,7 +140,7 @@ def test_declared_closure_key_is_kept_and_malformed_one_is_replaced(tmp_path):
     assert _gate_of(text, "X3")["closure_key"]["kind"] == "deliverable"
 
 
-def test_closure_key_falls_back_to_plan_id_without_a_deliverable_id():
+def test_closure_key_falls_back_to_plan_id_without_a_deliverable_id() -> None:
     from coordinator_core.ops.dispatch_emit.sizing_xs_mint import _landed_work_closure_key, xs_spine_plan_id
 
     stem = "2026-10-01-xs-thing"
@@ -168,7 +169,7 @@ def _raw_memo_to(text):
     return {r["id"]: r.get("memo_to") for r in load_rows(text).rows}
 
 
-def test_memo_draft_splits_into_memo_send_row_with_receiver_from_exit_criterion(tmp_path):
+def test_memo_draft_splits_into_memo_send_row_with_receiver_from_exit_criterion(tmp_path: Path) -> None:
     rows, to = _spine_rows(tmp_path, MEMO_SIZING, ["a/ev.yaml", MEMO, "h/handoff.md"])
     by_id = {r.id: r for r in rows}
     assert list(by_id["X1"].writes) == ["a/ev.yaml", "h/handoff.md"]
@@ -176,21 +177,21 @@ def test_memo_draft_splits_into_memo_send_row_with_receiver_from_exit_criterion(
     assert to["M1"] == "claude-klabauter-em" and to["X1"] is None
 
 
-def test_sizing_memo_to_wins_over_draft_and_criterion(tmp_path):
+def test_sizing_memo_to_wins_over_draft_and_criterion(tmp_path: Path) -> None:
     (tmp_path / ".coordinator-local" / "memo-outbox").mkdir(parents=True)
     (tmp_path / MEMO).write_text("---\nto: draft-em\n---\nbody\n", encoding="utf-8")
     rows, to = _spine_rows(tmp_path, {**MEMO_SIZING, "memo_to": "sizing-em"}, [MEMO], repo_root=tmp_path)
     assert [r.id for r in rows] == ["M1"] and to["M1"] == "sizing-em"
 
 
-def test_draft_to_frontmatter_beats_exit_criterion(tmp_path):
+def test_draft_to_frontmatter_beats_exit_criterion(tmp_path: Path) -> None:
     (tmp_path / ".coordinator-local" / "memo-outbox").mkdir(parents=True)
     (tmp_path / MEMO).write_text("---\nto: draft-em\n---\nbody\n", encoding="utf-8")
     _, to = _spine_rows(tmp_path, MEMO_SIZING, ["a.py", MEMO], repo_root=tmp_path)
     assert to["M1"] == "draft-em"
 
 
-def test_unresolvable_receiver_is_a_named_refusal(tmp_path):
+def test_unresolvable_receiver_is_a_named_refusal(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.sizing_xs_mint import MemoReceiverUnresolvedError
 
     with pytest.raises(MemoReceiverUnresolvedError):
@@ -204,13 +205,13 @@ def test_unresolvable_receiver_is_a_named_refusal(tmp_path):
         "Reply to coordinator-content-repo-em with the shas.",
     ],
 )
-def test_receiver_resolves_from_memo_to_and_reply_to_phrasings(tmp_path, statement):
+def test_receiver_resolves_from_memo_to_and_reply_to_phrasings(tmp_path: Path, statement) -> None:
     sizing = {"intent": "x", "exit_criterion": {"statement": statement}}
     _, to = _spine_rows(tmp_path, sizing, ["a.py", MEMO])
     assert to["M1"] == "coordinator-content-repo-em"
 
 
-def test_criterion_naming_no_receiver_still_refuses(tmp_path):
+def test_criterion_naming_no_receiver_still_refuses(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.sizing_xs_mint import MemoReceiverUnresolvedError
 
     sizing = {"intent": "x", "exit_criterion": {"statement": "A memo naming the landing shas is sent"}}
@@ -218,12 +219,12 @@ def test_criterion_naming_no_receiver_still_refuses(tmp_path):
         mint_xs_spine(sizing, sizing_rel=SIZING_REL, writes=["a.py", MEMO], out_dir=tmp_path)
 
 
-def test_backslash_memo_path_splits_identically(tmp_path):
+def test_backslash_memo_path_splits_identically(tmp_path: Path) -> None:
     rows, _ = _spine_rows(tmp_path, MEMO_SIZING, ["a.py", MEMO.replace("/", "\\")])
     assert {r.id: list(r.writes) for r in rows} == {"X1": ["a.py"], "M1": [MEMO]}
 
 
-def test_sent_receipt_is_not_a_draft(tmp_path):
+def test_sent_receipt_is_not_a_draft(tmp_path: Path) -> None:
     receipt = ".coordinator-local/memo-outbox/sent/engine-asks.md"
     text, _ = mint_xs_spine(SIZING, sizing_rel=SIZING_REL, writes=["a.py", receipt], out_dir=tmp_path)
     assert "memo_to" not in text
@@ -256,7 +257,7 @@ def _rows_by_id(tmp_path, sizing, writes, repo):
     return text, {r["id"]: r for r in load_rows(text).rows}
 
 
-def test_ledger_plan_body_and_claude_md_split_into_x1_and_em_row(tmp_path):
+def test_ledger_plan_body_and_claude_md_split_into_x1_and_em_row(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path / "repo", "docs/plans/p.md", "CLAUDE.md", "src/x.py")
     sizing = _ledger_sizing(("strip the banner in docs/plans/p.md and edit CLAUDE.md", "open"))
     _, rows = _rows_by_id(tmp_path, sizing, ["src/x.py"], repo)
@@ -266,7 +267,7 @@ def test_ledger_plan_body_and_claude_md_split_into_x1_and_em_row(tmp_path):
     assert rows["E1"]["writes"] == ["CLAUDE.md"]
 
 
-def test_deferred_and_waived_rows_add_no_path(tmp_path):
+def test_deferred_and_waived_rows_add_no_path(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path / "repo", "docs/plans/p.md", "CLAUDE.md", "src/x.py")
     sizing = _ledger_sizing(("docs/plans/p.md", "deferred"), ("CLAUDE.md", "waived"))
     _, rows = _rows_by_id(tmp_path, sizing, ["src/x.py"], repo)
@@ -274,19 +275,19 @@ def test_deferred_and_waived_rows_add_no_path(tmp_path):
     assert rows["X1"]["writes"] == ["src/x.py"]
 
 
-def test_no_repo_root_leaves_mint_unchanged(tmp_path):
+def test_no_repo_root_leaves_mint_unchanged(tmp_path: Path) -> None:
     sizing = _ledger_sizing(("docs/plans/p.md CLAUDE.md", "open"))
     text, _ = mint_xs_spine(sizing, sizing_rel=SIZING_REL, writes=["src/x.py"], out_dir=tmp_path)
     assert "CLAUDE.md" not in text.split("## Tasks")[1]
 
 
-def test_em_row_body_never_mentions_a_grant(tmp_path):
+def test_em_row_body_never_mentions_a_grant(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path / "repo", "CLAUDE.md", "src/x.py")
     _, rows = _rows_by_id(tmp_path, _ledger_sizing(("edit CLAUDE.md", "open")), ["src/x.py"], repo)
     assert "grant" not in rows["E1"]["body"].lower()
 
 
-def test_plan_body_named_by_writes_and_register_stays_as_itself(tmp_path):
+def test_plan_body_named_by_writes_and_register_stays_as_itself(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path / "repo", "docs/plans/p.md", "src/x.py")
     text, rows = _rows_by_id(
         tmp_path, _ledger_sizing(("edit docs/plans/p.md", "open")), ["src/x.py", "docs/plans/p.md"], repo
@@ -296,33 +297,33 @@ def test_plan_body_named_by_writes_and_register_stays_as_itself(tmp_path):
     assert "evidence.yaml" not in text
 
 
-def test_path_named_only_as_provenance_is_not_a_write(tmp_path):
+def test_path_named_only_as_provenance_is_not_a_write(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path / "repo", "docs/x.md", "src/x.py")
     _, rows = _rows_by_id(tmp_path, _ledger_sizing(("provenance: see docs/x.md", "open")), ["src/x.py"], repo)
     assert rows["X1"]["writes"] == ["src/x.py"]
 
 
-def test_path_governed_by_an_edit_verb_is_kept(tmp_path):
+def test_path_governed_by_an_edit_verb_is_kept(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path / "repo", "docs/x.md", "src/x.py")
     _, rows = _rows_by_id(tmp_path, _ledger_sizing(("edit docs/x.md", "open")), ["src/x.py"], repo)
     assert "docs/x.md" in rows["X1"]["writes"]
 
 
-def test_provenance_sentence_in_a_row_with_a_verb_elsewhere_is_not_a_write(tmp_path):
+def test_provenance_sentence_in_a_row_with_a_verb_elsewhere_is_not_a_write(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path / "repo", "docs/x.md", "src/x.py")
     sizing = _ledger_sizing(("Fix the parser. Provenance: docs/x.md.", "open"))
     _, rows = _rows_by_id(tmp_path, sizing, ["src/x.py"], repo)
     assert rows["X1"]["writes"] == ["src/x.py"]
 
 
-def test_provenance_line_after_a_newline_is_not_a_write(tmp_path):
+def test_provenance_line_after_a_newline_is_not_a_write(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path / "repo", "docs/x.md", "src/x.py")
     sizing = _ledger_sizing(("Fix the parser\nprovenance: docs/x.md", "open"))
     _, rows = _rows_by_id(tmp_path, sizing, ["src/x.py"], repo)
     assert rows["X1"]["writes"] == ["src/x.py"]
 
 
-def test_case_variant_of_existing_file_mints_the_tracked_spelling(tmp_path):
+def test_case_variant_of_existing_file_mints_the_tracked_spelling(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path / "repo", "src/x.py", "src/blocked.py")
     sizing = _ledger_sizing(("fix SRC/BLOCKED.py", "open"))
     _, rows = _rows_by_id(tmp_path, sizing, ["src/x.py"], repo)
@@ -330,7 +331,7 @@ def test_case_variant_of_existing_file_mints_the_tracked_spelling(tmp_path):
     assert "SRC/BLOCKED.py" not in rows["X1"]["writes"]
 
 
-def test_new_file_in_existing_directory_is_minted_and_orphan_dir_is_not(tmp_path):
+def test_new_file_in_existing_directory_is_minted_and_orphan_dir_is_not(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path / "repo", "src/x.py")
     sizing = _ledger_sizing(("add src/test_missing.py and nodir/none.py", "open"))
     _, rows = _rows_by_id(tmp_path, sizing, ["src/x.py"], repo)
@@ -341,7 +342,7 @@ def test_new_file_in_existing_directory_is_minted_and_orphan_dir_is_not(tmp_path
 _EXCLUDING_ROW = "edit CLAUDE.md, global-doctrine/CLAUDE.md and a/b.py, but do not touch global-doctrine"
 
 
-def test_ask_excluded_path_names_no_row(tmp_path):
+def test_ask_excluded_path_names_no_row(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path / "repo", "CLAUDE.md", "global-doctrine/CLAUDE.md", "a/b.py")
     sizing = {**_ledger_sizing((_EXCLUDING_ROW, "open")), "intent": "Fix the thing\nnot global-doctrine"}
     text, rows = _rows_by_id(tmp_path, sizing, ["a/b.py"], repo)
@@ -355,7 +356,7 @@ def test_ask_excluded_path_names_no_row(tmp_path):
     assert "E1" not in rows
 
 
-def test_ask_excluded_supplied_write_refused(tmp_path):
+def test_ask_excluded_supplied_write_refused(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.sizing_xs_mint import AskExcludedWriteError
 
     repo = _repo_with(tmp_path / "repo", "global-doctrine/CLAUDE.md", "a/b.py")
@@ -369,21 +370,21 @@ def test_ask_excluded_supplied_write_refused(tmp_path):
     assert rows["X1"]["writes"] == ["a/b.py"]
 
 
-def test_plans_only_ledger_body_stays_in_x1(tmp_path):
+def test_plans_only_ledger_body_stays_in_x1(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path / "repo", "docs/plans/p.md")
     _, rows = _rows_by_id(tmp_path, _ledger_sizing(("docs/plans/p.md", "open")), ["docs/plans/p.md"], repo)
     assert list(rows) == ["X1"]
     assert rows["X1"]["writes"] == ["docs/plans/p.md"]
 
 
-def test_verbless_failing_node_id_file_joins_x1_writes(tmp_path):
+def test_verbless_failing_node_id_file_joins_x1_writes(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path / "repo", "src/x.py", "pkg/tests/test_k.py")
     sizing = _ledger_sizing(("pkg/tests/test_k.py::TestA::test_one is red", "open"))
     _, rows = _rows_by_id(tmp_path, sizing, ["src/x.py"], repo)
     assert rows["X1"]["writes"] == ["src/x.py", "pkg/tests/test_k.py"]
 
 
-def test_node_id_in_deferred_row_or_missing_file_adds_nothing(tmp_path):
+def test_node_id_in_deferred_row_or_missing_file_adds_nothing(tmp_path: Path) -> None:
     repo = _repo_with(tmp_path / "repo", "src/x.py", "pkg/tests/test_k.py")
     sizing = _ledger_sizing(
         ("pkg/tests/test_k.py::test_one is red", "deferred"),
@@ -393,7 +394,7 @@ def test_node_id_in_deferred_row_or_missing_file_adds_nothing(tmp_path):
     assert rows["X1"]["writes"] == ["src/x.py"]
 
 
-def test_ledger_named_test_files_drops_excluded(tmp_path):
+def test_ledger_named_test_files_drops_excluded(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.sizing_xs_mint import ledger_named_test_files
 
     repo = _repo_with(tmp_path / "repo", "pkg/tests/test_k.py", "keep/tests/test_j.py")

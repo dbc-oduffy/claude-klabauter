@@ -122,7 +122,7 @@ def test_an_ignored_run_record_is_named_in_the_reply_and_the_halt_marker_and_nev
     assert not [p for p in _git(["ls-files"], repo).splitlines() if p.startswith("state/warp")]
 
 
-def test_a_non_ignored_record_dir_is_committed_whole_prompts_included(repo):
+def test_a_record_dir_with_prompts_lands_only_its_outcome_and_names_the_prompts(repo):
     rec = _write_record(repo, RUN)
     (rec / "prompts").mkdir()
     (rec / "prompts" / "review-1.md").write_text("p\n", encoding="utf-8")
@@ -133,8 +133,8 @@ def test_a_non_ignored_record_dir_is_committed_whole_prompts_included(repo):
     assert not out.get("error") and not out.get("refused"), out
     assert out["committed"] is True
     landed = _landed(repo, out, "--name-only")
-    assert prompt in landed and f"state/warp/{RUN}/run.json" in landed
-    assert _git(["status", "--porcelain", "--untracked-files=all", "--", f"state/warp/{RUN}"], repo).strip() == ""
+    assert landed == [run_artifacts.outcome_rel(RUN)]
+    assert prompt in out["run_artifacts"]["ignored_excluded"]
 
 
 def test_a_tracked_legacy_run_record_edit_is_named_not_committed(repo):

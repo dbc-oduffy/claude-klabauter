@@ -44,6 +44,7 @@ import logging
 import mmap
 import os
 import re
+import stat
 import struct
 import threading
 import time
@@ -416,9 +417,59 @@ def _flush_pack_locked(gitdir: Path, pending: dict, may_fold: bool) -> None:
     if paused:
         return
     doomed = [n for n in (*stale, folded) if n is not None and n != name]
-    leftovers = [n for n in doomed if not _remove_pack_pair(pack_dir, n)]
+    if doomed and not _invalidate_midx_naming(gitdir, pack_dir, doomed):
+        leftovers = list(doomed)
+    else:
+        leftovers = [n for n in doomed if not _remove_pack_pair(pack_dir, n)]
     if (name, leftovers) != (tail, stale):
         _write_tail_marker(pack_dir, name, leftovers)
+
+
+#: Pause between the read-only clear and the unlink retry on a MIDX file.
+_MIDX_UNLINK_RETRY_S = 0.05
+
+
+def _unlink_midx_file(path: Path) -> bool:
+    """True when `path` is gone; one read-only clear and retry, as git writes these read-only."""
+    for attempt in range(2):
+        try:
+            path.unlink()
+            return True
+        except FileNotFoundError:
+            return True
+        except OSError:
+            if attempt:
+                break
+            try:
+                os.chmod(path, stat.S_IWRITE)
+            except OSError:
+                pass
+            time.sleep(_MIDX_UNLINK_RETRY_S)
+    return False
+
+
+def _invalidate_midx_naming(gitdir: Path, pack_dir: Path, doomed: list) -> bool:
+    """Drop the `multi-pack-index` (and its `-<hash>.bitmap`/`.rev` siblings) when it names a pack
+    in `doomed` or cannot be parsed, so no reader sees a MIDX naming a gone pack; no git spawn, the
+    daily tier rewrites it. False when the MIDX cannot be unlinked: the caller keeps every doomed
+    pack. Runs inside the object-store lock the caller holds."""
+    midx_path = pack_dir / "multi-pack-index"
+    if midx_path.exists():
+        midx = _parse_midx(Path(gitdir))
+        if midx is not None and not any(f"pack-{n}.idx" in midx.names for n in doomed):
+            return True
+        if not _unlink_midx_file(midx_path):
+            return False
+    try:
+        siblings = [p for p in pack_dir.glob("multi-pack-index-*") if p.suffix in (".bitmap", ".rev")]
+    except OSError:
+        siblings = []
+    for sibling in siblings:
+        _unlink_midx_file(sibling)
+    key = str(gitdir)
+    _LOOKUP_SOURCES.pop(key, None)
+    _RETIRED_SOURCES.pop(key, None)
+    return True
 
 
 def write_object(
@@ -1030,7 +1081,7 @@ class _LookupSource:
     """Where a sha lives, for one pack listing: the MIDX, then the packs the
     MIDX does not name (newer than it)."""
 
-    __slots__ = ("indexes", "midx", "midx_pos", "uncovered", "_merged", "_probes", "_pos_name", "_sids", "_sid_pos", "_prior")
+    __slots__ = ("indexes", "midx", "midx_pos", "uncovered", "_merged", "_probes", "_pos_name", "_sids", "_sid_pos", "_prior", "_survivors")
 
     #: Merged-table value: `(segment id << 32) | entry number`; the pack offset is read on a hit only.
     #: A segment id names one pack for the life of the process, so it survives listing changes;
@@ -1057,6 +1108,7 @@ class _LookupSource:
             self.uncovered = sorted(i for n, i in names.items() if n not in covered)
         self._merged: "Optional[dict[bytes, int]]" = None
         self._probes = 0
+        self._survivors: "Optional[list[int]]" = None
 
     def _merged_table(self) -> "dict[bytes, int]":
         """sha -> `(segment id << 32) | entry number` over every uncovered pack; the lowest position
@@ -1105,11 +1157,41 @@ class _LookupSource:
         return table
 
     def find(self, key: str, sha_hex: str, target: bytes) -> Optional[tuple[int, int]]:
-        """`(position in indexes, offset)` or `None`."""
+        """`(position in indexes, offset)` or `None`.
+
+        A MIDX hit naming a pack that is gone makes only that pack absent: the uncovered packs
+        answer first (a consolidation's output is newer than the MIDX), then the surviving
+        covered packs' own indexes."""
+        gone = False
         if self.midx is not None:
             hit = _midx_find(self.midx, target)
-            if hit is not None and hit[0] < len(self.midx_pos) and self.midx_pos[hit[0]] is not None:
-                return self.midx_pos[hit[0]], hit[1]
+            if hit is not None and hit[0] < len(self.midx_pos):
+                pos = self.midx_pos[hit[0]]
+                if pos is not None:
+                    return pos, hit[1]
+                gone = True
+        found = self._find_uncovered(key, sha_hex, target)
+        if found is None and gone:
+            return self._find_survivor(sha_hex)
+        return found
+
+    def _find_survivor(self, sha_hex: str) -> Optional[tuple[int, int]]:
+        """Probe the covered packs that still exist; the list is built on the first gone-pack
+        hit, and each survivor's `.idx` is parsed at most once per source (the pack set caches it)."""
+        survivors = self._survivors
+        if survivors is None:
+            survivors = self._survivors = [p for p in self.midx_pos if p is not None]
+            survivors.sort()
+        for i in survivors:
+            pidx = self.indexes[i][2]
+            if pidx is None:
+                continue
+            offset = _pack_index_find(pidx, sha_hex)
+            if offset is not None:
+                return i, offset
+        return None
+
+    def _find_uncovered(self, key: str, sha_hex: str, target: bytes) -> Optional[tuple[int, int]]:
         lazy = len(self.uncovered) <= _UNCOVERED_LAZY_MAX
         probing = not lazy and self._merged is None and self._probes < _PROBES_BEFORE_MERGE
         if lazy or probing:

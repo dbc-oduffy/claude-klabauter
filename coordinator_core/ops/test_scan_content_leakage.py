@@ -35,6 +35,7 @@ import coordinator_core.ops.scan_content_leakage  # noqa: F401 — fires @regist
 
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.scan_content_leakage import _scan_content_leakage_tiers
+from pathlib import Path
 
 _OP_NAME = "percolate.scan_content_leakage_tiers"
 assert _OP_NAME in _REGISTRY, (
@@ -54,23 +55,23 @@ def _scan(root):
     return _scan_content_leakage_tiers({"target_root": str(root)})
 
 
-def test_op_registered():
+def test_op_registered() -> None:
     assert _OP_NAME in _REGISTRY
 
 
-def test_missing_target_root_raises_value_error():
+def test_missing_target_root_raises_value_error() -> None:
     with pytest.raises(ValueError, match="target_root"):
         _scan_content_leakage_tiers({})
 
 
-def test_nonexistent_target_root_raises_value_error(tmp_path):
+def test_nonexistent_target_root_raises_value_error(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="not a directory"):
         _scan_content_leakage_tiers(
             {"target_root": str(tmp_path / "no-such-tree")}
         )
 
 
-def test_clean_tree_all_empty_not_blocked(tmp_path):
+def test_clean_tree_all_empty_not_blocked(tmp_path: Path) -> None:
     root = tmp_path / "pub"
     _write(root, "docs/readme.md", "Nothing to see here.\nJust prose.\n")
     result = _scan(root)
@@ -83,7 +84,7 @@ def test_clean_tree_all_empty_not_blocked(tmp_path):
     }
 
 
-def test_high_tier_credential_shape_blocks(tmp_path):
+def test_high_tier_credential_shape_blocks(tmp_path: Path) -> None:
     root = tmp_path / "pub"
     token = "ghp_" + "A1b2C3d4" * 3
     _write(root, "snippets/example.md", f"token = {token}\n")
@@ -101,13 +102,13 @@ def test_high_tier_credential_shape_blocks(tmp_path):
     ('"k": "-----BEGIN ' + 'PRIVATE KEY-----\\nMIIEvQIBADANBgkqhkiG9w0BAQEFAASC"', True),
     ('re.search(r"-----BEGIN ' + 'OPENSSH PRIVATE KEY-----(.*?)-----END")', False),
 ])
-def test_private_key_armor_needs_a_body_or_line_end(tmp_path, line, blocks):
+def test_private_key_armor_needs_a_body_or_line_end(tmp_path: Path, line, blocks) -> None:
     root = tmp_path / "pub"
     _write(root, "a.py", line + "\n")
     assert _scan(root)["blocked"] is blocks
 
 
-def test_medium_tier_internal_path_and_email_do_not_block(tmp_path):
+def test_medium_tier_internal_path_and_email_do_not_block(tmp_path: Path) -> None:
     root = tmp_path / "pub"
     _write(
         root,
@@ -123,7 +124,7 @@ def test_medium_tier_internal_path_and_email_do_not_block(tmp_path):
     assert ("wiki/notes.md", 2) in paths_lines
 
 
-def test_low_tier_commit_sha_informational_only(tmp_path):
+def test_low_tier_commit_sha_informational_only(tmp_path: Path) -> None:
     root = tmp_path / "pub"
     sha = "0123456789abcdef" * 2 + "01234567"
     _write(root, "docs/changelog.md", f"Fixed in {sha} last week.\n")
@@ -136,7 +137,7 @@ def test_low_tier_commit_sha_informational_only(tmp_path):
     assert result["medium"] == []
 
 
-def test_binary_file_skipped_with_note_sweep_completes(tmp_path):
+def test_binary_file_skipped_with_note_sweep_completes(tmp_path: Path) -> None:
     root = tmp_path / "pub"
     binary = root / "assets" / "logo.png"
     binary.parent.mkdir(parents=True)
@@ -148,7 +149,7 @@ def test_binary_file_skipped_with_note_sweep_completes(tmp_path):
     assert len(result["low"]) == 1
 
 
-def test_git_tree_excluded(tmp_path):
+def test_git_tree_excluded(tmp_path: Path) -> None:
     root = tmp_path / "pub"
     token = "ghp_" + "Zz9Yy8Xx7" * 3
     _write(root, ".git/config-blob.txt", f"leaked = {token}\n")
@@ -163,7 +164,7 @@ def test_git_tree_excluded(tmp_path):
     }
 
 
-def test_operator_identity_tokens_not_scanned_here(tmp_path):
+def test_operator_identity_tokens_not_scanned_here(tmp_path: Path) -> None:
     """Settlement B7 binding: identity-token scanning stays in DoE publish.py
     (PERSONAL_REVIEW_PATTERNS) — this op must NOT flag operator-identity-shaped
     content that matches no generic tier shape."""
@@ -183,7 +184,7 @@ def test_operator_identity_tokens_not_scanned_here(tmp_path):
     }
 
 
-def test_double_invocation_identical_result(tmp_path):
+def test_double_invocation_identical_result(tmp_path: Path) -> None:
     root = tmp_path / "pub"
     token = "xoxb-" + "1234567890-abc"
     _write(root, "docs/a.md", f"slack {token}\n")

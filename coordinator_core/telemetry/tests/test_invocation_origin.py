@@ -19,33 +19,34 @@ from __future__ import annotations
 import threading
 
 from coordinator_core.telemetry import op_latency, spawn_counter
+import pytest
 
 
-def test_undeclared_caller_reads_as_production(monkeypatch):
+def test_undeclared_caller_reads_as_production(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(op_latency.ORIGIN_ENV, raising=False)
     monkeypatch.delenv(op_latency._PYTEST_ENV, raising=False)
     assert op_latency.invocation_origin() == op_latency.PRODUCTION
 
 
-def test_pytest_stamp_is_detected_without_an_explicit_declaration(monkeypatch):
+def test_pytest_stamp_is_detected_without_an_explicit_declaration(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(op_latency.ORIGIN_ENV, raising=False)
     monkeypatch.setenv(op_latency._PYTEST_ENV, "some/test.py::test_thing (call)")
     assert op_latency.invocation_origin() == op_latency.TEST
 
 
-def test_explicit_declaration_beats_the_pytest_stamp(monkeypatch):
+def test_explicit_declaration_beats_the_pytest_stamp(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(op_latency._PYTEST_ENV, "some/test.py::test_thing (call)")
     monkeypatch.setenv(op_latency.ORIGIN_ENV, op_latency.BENCHMARK)
     assert op_latency.invocation_origin() == op_latency.BENCHMARK
 
 
-def test_unrecognised_declaration_degrades_rather_than_raising(monkeypatch):
+def test_unrecognised_declaration_degrades_rather_than_raising(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(op_latency._PYTEST_ENV, raising=False)
     monkeypatch.setenv(op_latency.ORIGIN_ENV, "wishful-thinking")
     assert op_latency.invocation_origin() == op_latency.PRODUCTION
 
 
-def test_stale_pytest_env_without_pytest_running_reads_as_production(monkeypatch):
+def test_stale_pytest_env_without_pytest_running_reads_as_production(monkeypatch: pytest.MonkeyPatch) -> None:
     """A long-lived process (warm server) that inherited a stale env var.
 
     `PYTEST_CURRENT_TEST` is an env-var SNAPSHOT taken at spawn time, not
@@ -62,7 +63,7 @@ def test_stale_pytest_env_without_pytest_running_reads_as_production(monkeypatch
     assert op_latency.invocation_origin() == op_latency.PRODUCTION
 
 
-def test_benchmark_declaration_does_not_overwrite_a_more_specific_one(monkeypatch):
+def test_benchmark_declaration_does_not_overwrite_a_more_specific_one(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.benchmarks import declare_benchmark_origin
 
     monkeypatch.setenv(op_latency.ORIGIN_ENV, op_latency.TEST)
@@ -70,7 +71,7 @@ def test_benchmark_declaration_does_not_overwrite_a_more_specific_one(monkeypatc
     assert op_latency.invocation_origin() == op_latency.TEST
 
 
-def test_spawn_counter_is_monotonic_and_read_as_a_delta():
+def test_spawn_counter_is_monotonic_and_read_as_a_delta() -> None:
     start = spawn_counter.spawn_count()
     spawn_counter.bump()
     spawn_counter.bump(3)
@@ -78,7 +79,7 @@ def test_spawn_counter_is_monotonic_and_read_as_a_delta():
     assert spawn_counter.spawn_count() >= start
 
 
-def test_spawn_counter_under_concurrency_never_over_counts():
+def test_spawn_counter_under_concurrency_never_over_counts() -> None:
     start = spawn_counter.spawn_count()
     n_threads = 20
     bumps_per_thread = 50

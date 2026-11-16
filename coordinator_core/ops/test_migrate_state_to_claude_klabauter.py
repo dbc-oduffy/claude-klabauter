@@ -17,6 +17,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -55,7 +56,7 @@ def _run(argv, claude_home: Path, claude_klabauter_root: Path, monkeypatch, caps
 # ---------------------------------------------------------------------------
 
 
-def test_no_args_prints_full_usage_and_exits_1(tmp_path, monkeypatch, capsys):
+def test_no_args_prints_full_usage_and_exits_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     claude_home = _mkclaude_home(tmp_path, {})
     claude_klabauter_root = tmp_path / "claude_klabauter_root"
     claude_klabauter_root.mkdir()
@@ -71,7 +72,7 @@ def test_no_args_prints_full_usage_and_exits_1(tmp_path, monkeypatch, capsys):
     assert "--finalize   Delta re-sync + remove ~/.claude originals (C6b)." in err
 
 
-def test_unknown_subcommand_prints_short_usage_only_and_exits_1(tmp_path, monkeypatch, capsys):
+def test_unknown_subcommand_prints_short_usage_only_and_exits_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """Regression test for a parity bug caught during the port: the bash
     oracle's `case ... *)` branch prints ONLY the one-line usage string, NOT
     the full --populate/--finalize help block (that's reserved for the
@@ -94,7 +95,7 @@ def test_unknown_subcommand_prints_short_usage_only_and_exits_1(tmp_path, monkey
     assert "--finalize   Delta" not in err
 
 
-def test_missing_claude_home_exits_1(tmp_path, monkeypatch, capsys):
+def test_missing_claude_home_exits_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     claude_klabauter_root = tmp_path / "claude_klabauter_root"
     claude_klabauter_root.mkdir()
     missing_home = tmp_path / "does-not-exist"
@@ -111,8 +112,8 @@ def test_missing_claude_home_exits_1(tmp_path, monkeypatch, capsys):
 
 
 def test_populate_copies_all_tree_pairs_and_leaves_originals_untouched(
-    tmp_path, monkeypatch, capsys
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     claude_home = _mkclaude_home(
         tmp_path,
         {
@@ -144,7 +145,7 @@ def test_populate_copies_all_tree_pairs_and_leaves_originals_untouched(
         assert (claude_home / rel).is_file()
 
 
-def test_populate_skips_absent_source_trees(tmp_path, monkeypatch, capsys):
+def test_populate_skips_absent_source_trees(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     # No state/, no docs/{research,problems} at all -- only docs/plans present.
     claude_home = _mkclaude_home(tmp_path, {"docs/plans/plan1.md": "world\n"})
     claude_klabauter_root = tmp_path / "claude_klabauter_root"
@@ -158,7 +159,7 @@ def test_populate_skips_absent_source_trees(tmp_path, monkeypatch, capsys):
     assert not (claude_klabauter_root / "state").exists()
 
 
-def test_populate_is_idempotent(tmp_path, monkeypatch, capsys):
+def test_populate_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     claude_home = _mkclaude_home(tmp_path, {"state/a.txt": "v1\n"})
     claude_klabauter_root = tmp_path / "claude_klabauter_root"
     claude_klabauter_root.mkdir()
@@ -177,7 +178,7 @@ def test_populate_is_idempotent(tmp_path, monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_finalize_removes_source_after_successful_populate(tmp_path, monkeypatch, capsys):
+def test_finalize_removes_source_after_successful_populate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     claude_home = _mkclaude_home(
         tmp_path,
         {"state/foo/a.txt": "hello\n", "docs/plans/plan1.md": "world\n"},
@@ -204,7 +205,7 @@ def test_finalize_removes_source_after_successful_populate(tmp_path, monkeypatch
     assert not (claude_home / "docs" / "plans").exists()
 
 
-def test_finalize_delta_resyncs_files_written_after_populate(tmp_path, monkeypatch, capsys):
+def test_finalize_delta_resyncs_files_written_after_populate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     claude_home = _mkclaude_home(tmp_path, {"state/a.txt": "v1\n"})
     claude_klabauter_root = tmp_path / "claude_klabauter_root"
     claude_klabauter_root.mkdir()
@@ -226,7 +227,7 @@ def test_finalize_delta_resyncs_files_written_after_populate(tmp_path, monkeypat
     assert dst.read_text() == "v2\n"
 
 
-def test_finalize_guard_fails_closed_when_claude_klabauter_copy_missing(tmp_path, monkeypatch, capsys):
+def test_finalize_guard_fails_closed_when_claude_klabauter_copy_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """Fail-closed edge: if a source file cannot be confirmed present in
     claude-klabauter (e.g. the delta-copy itself failed), --finalize MUST abort before
     removing anything, with a dedicated business exit code (1) distinct from
@@ -253,7 +254,7 @@ def test_finalize_guard_fails_closed_when_claude_klabauter_copy_missing(tmp_path
     assert (claude_home / "state/orphan.txt").is_file()
 
 
-def test_finalize_skips_absent_source_trees(tmp_path, monkeypatch, capsys):
+def test_finalize_skips_absent_source_trees(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     claude_home = _mkclaude_home(tmp_path, {"state/a.txt": "hello\n"})
     claude_klabauter_root = tmp_path / "claude_klabauter_root"
     claude_klabauter_root.mkdir()
@@ -270,6 +271,6 @@ def test_finalize_skips_absent_source_trees(tmp_path, monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_default_claude_klabauter_root_is_this_modules_own_repo_root():
+def test_default_claude_klabauter_root_is_this_modules_own_repo_root() -> None:
     root = mstm._default_claude_klabauter_root()
     assert (Path(root) / "coordinator_core" / "ops" / "migrate_state_to_claude_klabauter.py").is_file()

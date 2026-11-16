@@ -8,10 +8,11 @@ import pytest
 
 from coordinator_core.agent_pipe import bridge
 from coordinator_core.ops.workflow_fire import fire, op
+from pathlib import Path
 
 
 @pytest.fixture
-def registry(tmp_path, monkeypatch):
+def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     from coordinator_core.ops.workflow_fire import authority
     monkeypatch.setattr(authority, "caller_principal", lambda *a: authority.Principal("verified-test-em", "em", {}))
     monkeypatch.setattr(fire, "_registry_dir", lambda cwd=None: tmp_path)
@@ -20,7 +21,7 @@ def registry(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_rpc_fire_to_terminal_notification_is_persisted_once(registry, monkeypatch):
+def test_rpc_fire_to_terminal_notification_is_persisted_once(registry, monkeypatch: pytest.MonkeyPatch) -> None:
     delivered = []
     monkeypatch.setattr(bridge, "route", lambda msg: delivered.append(msg) or SimpleNamespace(status="delivered"))
     record = op._workflow_fire({"script_path": "run.mjs", "notify_to": "codex-peer"}, registry)
@@ -35,7 +36,7 @@ def test_rpc_fire_to_terminal_notification_is_persisted_once(registry, monkeypat
     assert len(delivered) == 1
 
 
-def test_running_status_and_missing_record_never_notify(registry, monkeypatch):
+def test_running_status_and_missing_record_never_notify(registry, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(bridge, "route", lambda msg: pytest.fail("premature notification"))
     op._workflow_fire({"script_path": "run.mjs", "notify_to": "codex-peer"}, registry)
     monkeypatch.setattr(fire, "_refresh_record_state", lambda rec: rec)
@@ -43,7 +44,7 @@ def test_running_status_and_missing_record_never_notify(registry, monkeypatch):
     assert op._workflow_fire_status({"fire_id": "absent"}, registry) == {"fire_id": "absent", "found": False}
 
 
-def test_unroutable_peer_is_retryable_on_later_status(registry, monkeypatch):
+def test_unroutable_peer_is_retryable_on_later_status(registry, monkeypatch: pytest.MonkeyPatch) -> None:
     op._workflow_fire({"script_path": "run.mjs", "notify_to": "codex-peer"}, registry)
     monkeypatch.setattr(fire, "_refresh_record_state", lambda rec: {**rec, "state": "exited"})
     monkeypatch.setattr(bridge, "route", lambda msg: SimpleNamespace(status="unroutable", reason="offline"))
@@ -56,13 +57,13 @@ def test_unroutable_peer_is_retryable_on_later_status(registry, monkeypatch):
 
 
 @pytest.mark.parametrize("target", ["", " ", 7, []])
-def test_invalid_target_cannot_spawn(registry, monkeypatch, target):
+def test_invalid_target_cannot_spawn(registry, monkeypatch: pytest.MonkeyPatch, target) -> None:
     monkeypatch.setattr(fire, "fire_workflow", lambda *a, **kw: pytest.fail("spawned invalid fire"))
     with pytest.raises(ValueError, match="notify_to"):
         op._workflow_fire({"script_path": "run.mjs", "notify_to": target}, registry)
 
 
-def test_notification_write_failure_keeps_the_spawned_handle(registry, monkeypatch):
+def test_notification_write_failure_keeps_the_spawned_handle(registry, monkeypatch: pytest.MonkeyPatch) -> None:
     def fail(*args):
         raise OSError("disk full")
 
@@ -71,7 +72,7 @@ def test_notification_write_failure_keeps_the_spawned_handle(registry, monkeypat
     assert result["fire_id"] == "f1" and "disk full" in result["notify_error"]
 
 
-def test_concurrent_terminal_refreshes_route_only_once(registry, monkeypatch):
+def test_concurrent_terminal_refreshes_route_only_once(registry, monkeypatch: pytest.MonkeyPatch) -> None:
     delivered = []
     monkeypatch.setattr(bridge, "route", lambda msg: delivered.append(msg) or SimpleNamespace(status="queued"))
     op._workflow_fire({"script_path": "run.mjs", "notify_to": "codex-peer"}, registry)
@@ -82,7 +83,7 @@ def test_concurrent_terminal_refreshes_route_only_once(registry, monkeypatch):
     assert final["notified_at"] and len(delivered) == 1
 
 
-def test_registry_sweep_also_delivers_terminal_notification(registry, monkeypatch):
+def test_registry_sweep_also_delivers_terminal_notification(registry, monkeypatch: pytest.MonkeyPatch) -> None:
     delivered = []
     monkeypatch.setattr(bridge, "route", lambda msg: delivered.append(msg) or SimpleNamespace(status="queued"))
     op._workflow_fire({"script_path": "run.mjs", "notify_to": "codex-peer"}, registry)
@@ -92,7 +93,7 @@ def test_registry_sweep_also_delivers_terminal_notification(registry, monkeypatc
     assert fire.count_live_fires(str(registry)) == 0 and len(delivered) == 1
 
 
-def test_retry_uses_a_stable_message_identity(registry, monkeypatch):
+def test_retry_uses_a_stable_message_identity(registry, monkeypatch: pytest.MonkeyPatch) -> None:
     messages = []
     monkeypatch.setattr(bridge, "route", lambda msg: messages.append(msg) or SimpleNamespace(status="unroutable", reason="offline"))
     op._workflow_fire({"script_path": "run.mjs", "notify_to": "codex-peer"}, registry)
@@ -102,7 +103,7 @@ def test_retry_uses_a_stable_message_identity(registry, monkeypatch):
     assert len(messages) == 2 and messages[0].id == messages[1].id
 
 
-def test_late_notification_target_preserves_newer_terminal_state(registry):
+def test_late_notification_target_preserves_newer_terminal_state(registry) -> None:
     path = fire._record_path(registry, "f1")
     fire._write_record(path, {"fire_id": "f1", "state": "exited", "exit_code": 7})
     saved = op._store_notification_record(
@@ -111,7 +112,7 @@ def test_late_notification_target_preserves_newer_terminal_state(registry):
     assert saved["notify_to"] == "peer"
 
 
-def test_ambiguous_reservation_notice_does_not_claim_driver_completion(registry, monkeypatch):
+def test_ambiguous_reservation_notice_does_not_claim_driver_completion(registry, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.workflow_fire import notify
     texts = []
     monkeypatch.setattr(bridge, "route", lambda msg: texts.append(msg.content) or SimpleNamespace(status="queued"))

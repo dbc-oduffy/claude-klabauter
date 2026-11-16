@@ -47,18 +47,18 @@ def _build(tmp_path: Path, *, edge: str | None = PLAN, halted_plan: str | None =
     return root
 
 
-def test_sizing_plan_edge_makes_evidence_own(tmp_path):
+def test_sizing_plan_edge_makes_evidence_own(tmp_path: Path) -> None:
     root = _build(tmp_path)
     assert own.own_artifact_paths(root, RUN).covers(EVIDENCE)
     assert not own.own_artifact_paths(root, RUN).covers(OTHER_EVIDENCE)
 
 
-def test_halted_plan_makes_evidence_own(tmp_path):
+def test_halted_plan_makes_evidence_own(tmp_path: Path) -> None:
     root = _build(tmp_path, edge=None, halted_plan=PLAN)
     assert own.own_artifact_paths(root, RUN).covers(EVIDENCE)
 
 
-def test_unproduced_hunks_accepts_own_evidence_and_refuses_other(tmp_path):
+def test_unproduced_hunks_accepts_own_evidence_and_refuses_other(tmp_path: Path) -> None:
     root = _build(tmp_path)
     for rel in (EVIDENCE, OTHER_EVIDENCE):
         (root / rel).write_text("criterion_evidence: {C6: ok}\n", encoding="utf-8")
@@ -70,7 +70,7 @@ def test_unproduced_hunks_accepts_own_evidence_and_refuses_other(tmp_path):
     assert found[0].detail.startswith("provenance unreadable")
 
 
-def test_flat_plan_edge_owns_the_sharded_plans_evidence_and_not_another(tmp_path):
+def test_flat_plan_edge_owns_the_sharded_plans_evidence_and_not_another(tmp_path: Path) -> None:
     root = _build(tmp_path)
     sharded = "docs/plans/2026-10/2026-10-31-my-plan.evidence.yaml"
     other = "docs/plans/2026-10/2026-10-31-other-plan.evidence.yaml"
@@ -81,7 +81,7 @@ def test_flat_plan_edge_owns_the_sharded_plans_evidence_and_not_another(tmp_path
     assert not owned.covers(other)
 
 
-def test_no_plan_edge_leaves_evidence_refused(tmp_path):
+def test_no_plan_edge_leaves_evidence_refused(tmp_path: Path) -> None:
     root = _build(tmp_path, edge=None)
     (root / EVIDENCE).write_text("criterion_evidence: {C6: ok}\n", encoding="utf-8")
 

@@ -77,3 +77,17 @@ def test_suite_and_remote_cost_get_own_lines_and_record_positions_fixed():
     heads = [ln for ln in md.splitlines() if ln.startswith("### ")]
     assert heads == ["### Alpha", "### Observations", "### Run cost"]
     assert "Parked for you" not in md
+
+
+def test_pre_change_row_without_wall_ms_is_accepted_and_slowest_line_omits_wall():
+    legacy = {"id": "a", "status": "ran", "reason": "", "exit_code": 0, "process_ms": 40.0, "spawns": 1,
+              "stdout": "x", "stderr": ""}
+    row = receipt.as_row(legacy)
+    assert row.wall_ms is None
+    lines = receipt._run_cost([row], {"a": _step("a")})
+    assert "slowest `a` 40ms" in lines[0] and "wall" not in lines[0]
+
+
+def test_slowest_line_shows_wall_when_the_row_carries_it():
+    row = StepResult("a", "ran", process_ms=40.0, spawns=1, wall_ms=1234.0)
+    assert "slowest `a` 40ms (wall 1234ms)" in receipt._run_cost([row], {"a": _step("a")})[0]

@@ -33,7 +33,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 @pytest.fixture(autouse=True)
-def _unpaused(monkeypatch):
+def _unpaused(monkeypatch: pytest.MonkeyPatch) -> None:
     """These tests pin the tiers themselves; the paused behaviour is pinned in test_pack_deletion_pause."""
     from coordinator_core.git import pack_deletion_pause
 
@@ -69,7 +69,7 @@ def _init_repo(tmp_path: Path) -> Path:
 # --------------------------------------------------------------------------
 
 
-def test_hourly_is_a_task_list_never_the_hourly_schedule():
+def test_hourly_is_a_task_list_never_the_hourly_schedule() -> None:
     """`--schedule=hourly` drags `prefetch` in: a `git fetch` against every
     remote plus two credential round-trips, 293.8ms and 11.2 procs, in an
     otherwise network-free design."""
@@ -77,7 +77,7 @@ def test_hourly_is_a_task_list_never_the_hourly_schedule():
     assert "--schedule=hourly" not in gm._TIER_ARGV["hourly"]
 
 
-def test_daily_and_weekly_are_task_lists_never_a_schedule():
+def test_daily_and_weekly_are_task_lists_never_a_schedule() -> None:
     """`maintenance.strategy=incremental` makes git's schedules cumulative, so
     `--schedule=weekly` re-runs every task `--schedule=daily` ran that same
     day. Measured, that put the weekly tier at 515.6ms/9 procs against the
@@ -104,21 +104,21 @@ def test_daily_and_weekly_are_task_lists_never_a_schedule():
     assert gm._TIER_ARGV["weekly"] == ("maintenance", "run", "--task=pack-refs")
 
 
-def test_unknown_tier_is_an_error_not_a_default(tmp_path):
+def test_unknown_tier_is_an_error_not_a_default(tmp_path: Path) -> None:
     result = gm.run_tier(_init_repo(tmp_path), "monthly")
 
     assert result.rc == 1
     assert "unknown tier" in result.errors[0]
 
 
-def test_main_rejects_a_missing_tier(tmp_path, monkeypatch):
+def test_main_rejects_a_missing_tier(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(_init_repo(tmp_path))
     assert gm.main([]) == 2
     assert gm.main(["hourly", "daily"]) == 2
     assert gm.main(["monthly"]) == 2
 
 
-def test_hourly_tier_runs_and_reports(tmp_path):
+def test_hourly_tier_runs_and_reports(tmp_path: Path) -> None:
     result = gm.run_tier(_init_repo(tmp_path), "hourly")
 
     assert result.ran is True
@@ -131,7 +131,7 @@ def test_hourly_tier_runs_and_reports(tmp_path):
 # --------------------------------------------------------------------------
 
 
-def test_defers_on_a_held_index_lock(tmp_path):
+def test_defers_on_a_held_index_lock(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / ".git" / "index.lock").write_text("", encoding="utf-8")
 
@@ -154,7 +154,7 @@ def test_defers_on_a_held_index_lock(tmp_path):
         ("REVERT_HEAD", "revert"),
     ],
 )
-def test_defers_mid_operation(tmp_path, marker, word):
+def test_defers_mid_operation(tmp_path: Path, marker, word) -> None:
     repo = _init_repo(tmp_path)
     (repo / ".git" / marker).write_text("", encoding="utf-8")
 
@@ -165,7 +165,7 @@ def test_defers_mid_operation(tmp_path, marker, word):
     assert result.ran is False
 
 
-def test_defer_predicate_takes_posix_shaped_paths(tmp_path):
+def test_defer_predicate_takes_posix_shaped_paths(tmp_path: Path) -> None:
     """MULTI-OS. The failure that motivates this predicate is a Windows
     file-sharing artifact, but a held index is equally real on POSIX and the
     production path carries no `os.name` branch — only path tests and plain
@@ -179,7 +179,7 @@ def test_defer_predicate_takes_posix_shaped_paths(tmp_path):
     assert gm.defer_reason(repo, git_dir) is None
 
 
-def test_no_os_name_branch_in_the_production_path():
+def test_no_os_name_branch_in_the_production_path() -> None:
     """MULTI-OS, asserted on the AST rather than on the text: no branch
     spelled as a bare `os.name`/`sys.platform`/`platform.system` attribute
     access reads the host identity. A text grep cannot make this claim — the
@@ -202,7 +202,7 @@ def test_no_os_name_branch_in_the_production_path():
     assert "platform.system" not in reads
 
 
-def test_defer_is_reported_distinctly_from_a_run(tmp_path, capsys):
+def test_defer_is_reported_distinctly_from_a_run(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _init_repo(tmp_path)
     (repo / ".git" / "index.lock").write_text("", encoding="utf-8")
 
@@ -241,7 +241,7 @@ def _plant_unreachable_blob(repo: Path, body: str, age_days: int) -> str:
     return sha
 
 
-def test_weekly_prunes_an_unreachable_object(tmp_path):
+def test_weekly_prunes_an_unreachable_object(tmp_path: Path) -> None:
     """Under maintenance.strategy=incremental nothing ever drops an
     unreachable object — loose-objects packs them, incremental-repack repacks
     them. Without this leg, gc.auto=0 means unreachable history forever."""
@@ -255,7 +255,7 @@ def test_weekly_prunes_an_unreachable_object(tmp_path):
     assert _git(repo, "cat-file", "-e", sha).returncode != 0, "unreachable blob survived"
 
 
-def test_an_unreachable_object_inside_the_expiry_window_survives(tmp_path):
+def test_an_unreachable_object_inside_the_expiry_window_survives(tmp_path: Path) -> None:
     """The other half of the contract, asserted so the expiry is a real window
     and not decoration: 2.weeks.ago means RECENT garbage stays. Anything
     wanting it gone immediately is choosing to drop objects a concurrent peer
@@ -268,7 +268,7 @@ def test_an_unreachable_object_inside_the_expiry_window_survives(tmp_path):
     assert _git(repo, "cat-file", "-e", sha).returncode == 0
 
 
-def test_prune_runs_before_the_maintenance_run_not_after(tmp_path, monkeypatch):
+def test_prune_runs_before_the_maintenance_run_not_after(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """ORDERING IS LOAD-BEARING ACROSS TIERS, NOT WITHIN THIS ONE. Weekly's own
     `--task=pack-refs` packs nothing, so this order is harmless-but-no-longer-
     required in isolation. It is still asserted because the DAILY tier's
@@ -301,7 +301,7 @@ def _churn(repo: Path, n: int) -> None:
         _git(repo, "commit", "-qm", f"churn {i}")
 
 
-def test_daily_then_weekly_reaps_an_object_daily_already_packed(tmp_path):
+def test_daily_then_weekly_reaps_an_object_daily_already_packed(tmp_path: Path) -> None:
     """THE R9 FALSIFIER (P153-C25): daily THEN weekly, one repo, an
     unreachable blob planted and backdated past the prune expiry BEFORE
     daily runs. Reproduces the spike's repro_steps and its kill criterion
@@ -324,7 +324,7 @@ def test_daily_then_weekly_reaps_an_object_daily_already_packed(tmp_path):
     assert _git(repo, "cat-file", "-e", sha).returncode != 0, "unreachable blob survived"
 
 
-def test_daily_then_weekly_falsifier_fails_against_the_pre_change_daily_argv(tmp_path, monkeypatch):
+def test_daily_then_weekly_falsifier_fails_against_the_pre_change_daily_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The other half of the falsifier: replaying the SAME scenario against
     the pre-R9 daily argv (`--schedule=daily`, which carries `loose-objects`)
     must reproduce the filed bug -- the blob survives, because daily already
@@ -351,7 +351,7 @@ def test_daily_then_weekly_falsifier_fails_against_the_pre_change_daily_argv(tmp
     )
 
 
-def test_prune_expiry_is_gits_own_default():
+def test_prune_expiry_is_gits_own_default() -> None:
     """2.weeks.ago is git's gc.pruneExpire default; diverging needs an argument
     about how fast unreachable objects accumulate here, and none exists."""
     assert gm._PRUNE_EXPIRE == "2.weeks.ago"
@@ -367,7 +367,7 @@ def _recorded_argv(tmp_path, tier, monkeypatch):
     invoked = []
     real_run_git = gm.run_git
 
-    def recording(args, **kwargs):
+    def recording(args, **kwargs) -> GitResult:
         invoked.append(tuple(args))
         return real_run_git(args, **kwargs)
 
@@ -376,7 +376,7 @@ def _recorded_argv(tmp_path, tier, monkeypatch):
     return invoked
 
 
-def test_gc_is_never_used_as_the_reaper(tmp_path, monkeypatch):
+def test_gc_is_never_used_as_the_reaper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`git prune --expire=2.weeks.ago` is 40.6ms/1 proc; `git gc
     --prune=2.weeks.ago` is 10,068.8ms/9 procs — twenty times over the bar, a
     kill-bar item on sight. Git's own docs add an independent reason: enabling
@@ -387,7 +387,7 @@ def test_gc_is_never_used_as_the_reaper(tmp_path, monkeypatch):
         assert not any(a.startswith("--prune=") for args in invoked for a in args), invoked
 
 
-def test_maintenance_register_and_start_are_never_invoked(tmp_path, monkeypatch):
+def test_maintenance_register_and_start_are_never_invoked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`register` writes this repo's path into the operator's GLOBAL config,
     read only by `git for-each-repo`, run only by the scheduler this design
     never runs. `start` writes that scheduler entry itself."""
@@ -397,7 +397,7 @@ def test_maintenance_register_and_start_are_never_invoked(tmp_path, monkeypatch)
         assert not any(set(args) & forbidden for args in invoked), invoked
 
 
-def test_no_global_config_is_ever_written(tmp_path, monkeypatch):
+def test_no_global_config_is_ever_written(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A same-host global write can strand a peer machine mid-sync, and
     `git_perf_config`'s negative spec forbids this module that surface."""
     for tier in gm.TIERS:
@@ -405,7 +405,7 @@ def test_no_global_config_is_ever_written(tmp_path, monkeypatch):
         assert not any("--global" in args for args in invoked), invoked
 
 
-def test_weekly_reaps_an_orphan_pack_through_the_ceremony(tmp_path, monkeypatch):
+def test_weekly_reaps_an_orphan_pack_through_the_ceremony(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The call site the prime falsifier's orphan-pack conjunct reaches when it
     says 'the ceremony runs'."""
     repo = _init_repo(tmp_path)
@@ -423,14 +423,14 @@ def test_weekly_reaps_an_orphan_pack_through_the_ceremony(tmp_path, monkeypatch)
     assert not orphan.exists()
 
 
-def test_stamp_does_not_fire_when_the_prune_leg_fails(tmp_path, monkeypatch):
+def test_stamp_does_not_fire_when_the_prune_leg_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The liveness stamp is the ONLY surface distinguishing 'never ran' from
     'ran and is fine' -- it must not also claim 'fine' for a tier whose prune
     leg errored, even though the maintenance-run leg after it succeeded."""
     repo = _init_repo(tmp_path)
     real_run_git = gm.run_git
 
-    def failing_prune(args, **kwargs):
+    def failing_prune(args, **kwargs) -> GitResult:
         if args and args[0] == "prune":
             # Stub the
             # real GitResult shape run_git now returns, not a bare
@@ -449,7 +449,7 @@ def test_stamp_does_not_fire_when_the_prune_leg_fails(tmp_path, monkeypatch):
     assert stamped == [], "stamp must not fire when the tier had an error"
 
 
-def test_stamp_fires_on_a_clean_weekly_run(tmp_path, monkeypatch):
+def test_stamp_fires_on_a_clean_weekly_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     stamped = []
     monkeypatch.setattr(gm, "_stamp", lambda repo: stamped.append(repo))
@@ -505,7 +505,7 @@ def _age(path: Path, seconds: int = 7200) -> Path:
     return path
 
 
-def _small_store_tuning(monkeypatch, *, max_packs: int, batch_packs: int, loose_dir_entries: int):
+def _small_store_tuning(monkeypatch, *, max_packs: int, batch_packs: int, loose_dir_entries: int) -> None:
     """Shrink the hygiene thresholds so a small fixture crosses them deterministically."""
     from coordinator_core.git import store_hygiene
 
@@ -514,7 +514,7 @@ def _small_store_tuning(monkeypatch, *, max_packs: int, batch_packs: int, loose_
     monkeypatch.setattr(store_hygiene, "_loose_in_fanout", lambda objects_dir: loose_dir_entries)
 
 
-def test_daily_merges_small_packs_and_covers_every_pack_with_the_midx(tmp_path):
+def test_daily_merges_small_packs_and_covers_every_pack_with_the_midx(tmp_path: Path) -> None:
     from coordinator_core.git.store_hygiene import status
 
     repo, unreachable = _daily_fixture(tmp_path)
@@ -531,7 +531,7 @@ def test_daily_merges_small_packs_and_covers_every_pack_with_the_midx(tmp_path):
     assert unreachable in _loose_shas(repo), "daily packed an unreachable object"
 
 
-def test_daily_process_time_is_under_the_brightline(tmp_path):
+def test_daily_process_time_is_under_the_brightline(tmp_path: Path) -> None:
     """Self plus children, the commit-graph and MIDX legs, on the loose-plus-many-pack fixture."""
     from coordinator_core.benchmarks.process_time import batched_process_time_ms
 
@@ -544,13 +544,13 @@ def test_daily_process_time_is_under_the_brightline(tmp_path):
     assert total < 500, total
 
 
-def test_daily_never_issues_a_repack(tmp_path, monkeypatch):
+def test_daily_never_issues_a_repack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`git repack` reads the index (rc 128 under a held one); no daily leg may be one."""
     invoked = _recorded_argv(tmp_path, "daily", monkeypatch)
     assert "repack" not in [args[0] for args in invoked], invoked
 
 
-def test_daily_runs_under_a_held_index_lock_through_the_handler(tmp_path):
+def test_daily_runs_under_a_held_index_lock_through_the_handler(tmp_path: Path) -> None:
     """AC1."""
     repo, _ = _daily_fixture(tmp_path)
     (repo / ".git" / "index.lock").write_text("", encoding="utf-8")
@@ -563,7 +563,7 @@ def test_daily_runs_under_a_held_index_lock_through_the_handler(tmp_path):
 
 
 @pytest.mark.parametrize("tier", ["hourly", "daily"])
-def test_non_index_tiers_ignore_a_mid_operation_marker(tmp_path, tier):
+def test_non_index_tiers_ignore_a_mid_operation_marker(tmp_path: Path, tier) -> None:
     repo = _init_repo(tmp_path)
     (repo / ".git" / "REBASE_HEAD").write_text("", encoding="utf-8")
     (repo / ".git" / "index.lock").write_text("", encoding="utf-8")
@@ -573,7 +573,7 @@ def test_non_index_tiers_ignore_a_mid_operation_marker(tmp_path, tier):
     assert result.deferred is None and result.ran is True
 
 
-def test_weekly_through_the_handler_still_defers_on_a_held_index_lock(tmp_path):
+def test_weekly_through_the_handler_still_defers_on_a_held_index_lock(tmp_path: Path) -> None:
     """AC2."""
     repo = _init_repo(tmp_path)
     (repo / ".git" / "index.lock").write_text("", encoding="utf-8")
@@ -583,7 +583,7 @@ def test_weekly_through_the_handler_still_defers_on_a_held_index_lock(tmp_path):
     assert out["ran"] is False and "index.lock" in out["deferred"], out
 
 
-def test_daily_reaps_the_orphan_classes_and_keeps_live_and_unknown_files(tmp_path):
+def test_daily_reaps_the_orphan_classes_and_keeps_live_and_unknown_files(tmp_path: Path) -> None:
     """AC3."""
     repo = _packed_repo(tmp_path, 3)
     pack_dir = repo / ".git" / "objects" / "pack"
@@ -608,7 +608,7 @@ def test_daily_reaps_the_orphan_classes_and_keeps_live_and_unknown_files(tmp_pat
     assert live <= set(_pack_files(repo)), "a live pack triplet was reaped"
 
 
-def test_daily_heals_a_midx_that_names_a_missing_pack(tmp_path):
+def test_daily_heals_a_midx_that_names_a_missing_pack(tmp_path: Path) -> None:
     """AC4."""
     from coordinator_core.git import store_hygiene
 
@@ -631,7 +631,89 @@ def test_daily_heals_a_midx_that_names_a_missing_pack(tmp_path):
     assert status.midx_pack_count == status.pack_count
 
 
-def test_one_daily_call_runs_one_batch_and_the_next_call_reduces_packs_further(tmp_path, monkeypatch):
+def _midx_naming_a_gone_pack(tmp_path: Path) -> tuple[Path, Path]:
+    from coordinator_core.git import store_hygiene
+
+    repo = _packed_repo(tmp_path, 3)
+    common = repo / ".git"
+    assert gm.run_tier(repo, "daily").rc == 0
+    victim = sorted((common / "objects" / "pack").glob("pack-*.idx"))[0]
+    for suffix in (".idx", ".pack", ".rev"):
+        store_hygiene._unlink_quiet(victim.with_suffix(suffix))
+    assert store_hygiene.midx_names_missing_pack(common)
+    return repo, common
+
+
+def test_light_daily_heals_and_rewrites_the_midx_with_no_batch_or_commit_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.benchmarks.process_time import batched_process_time_ms
+    from coordinator_core.git import store_hygiene
+
+    repo, common = _midx_naming_a_gone_pack(tmp_path)
+    invoked = []
+    real_run_git = gm.run_git
+
+    def recording(args, **kwargs) -> GitResult:
+        invoked.append(tuple(args))
+        return real_run_git(args, **kwargs)
+
+    monkeypatch.setattr(gm, "run_git", recording)
+    monkeypatch.setattr(store_hygiene, "consolidate_pack_batch", lambda c: pytest.fail("batch ran on a light run"))
+
+    result = gm.run_tier(repo, "daily", heavy=False)
+
+    assert result.rc == 0, result.errors
+    assert result.midx_healed is True and result.packs_merged == 0 and result.loose_packed == 0
+    assert invoked == [gm._MIDX_WRITE_ARGV], invoked
+    assert not store_hygiene.midx_names_missing_pack(common)
+    status = store_hygiene.status(common)
+    assert status.midx_pack_count == status.pack_count
+    sample = batched_process_time_ms(["git", "-C", str(repo), *gm._MIDX_WRITE_ARGV], k=1, cwd=str(repo))
+    assert sample["rc"] == 0 and sample["process_time_ms"] < 500, sample
+
+
+def test_light_daily_runs_while_paused_and_heavy_stays_deferred(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.git import pack_deletion_pause, store_hygiene
+
+    repo, common = _midx_naming_a_gone_pack(tmp_path)
+    monkeypatch.setattr(pack_deletion_pause, "paused", lambda: True)
+
+    heavy = gm.run_tier(repo, "daily")
+    assert heavy.deferred == gm.PAUSED_REASON and heavy.ran is False
+    assert store_hygiene.midx_names_missing_pack(common)
+    assert gm.run_tier(repo, "hourly", heavy=False).deferred == gm.PAUSED_REASON
+
+    light = gm.run_tier(repo, "daily", heavy=False)
+
+    assert light.rc == 0 and light.ran is True and light.deferred is None, light
+    assert not store_hygiene.midx_names_missing_pack(common)
+
+
+def test_heavy_daily_that_consolidated_pays_one_midx_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A batch that left a current MIDX under the lock makes the trailing write redundant."""
+    from coordinator_core.git import store_hygiene
+
+    repo = _packed_repo(tmp_path, 6)
+    invoked = []
+    real_run_git = gm.run_git
+
+    def recording(args, **kwargs) -> GitResult:
+        invoked.append(tuple(args))
+        return real_run_git(args, **kwargs)
+
+    def consolidate_and_midx(common):
+        real_run_git(list(gm._MIDX_WRITE_ARGV), cwd=str(repo))
+        return 2
+
+    monkeypatch.setattr(gm, "run_git", recording)
+    monkeypatch.setattr(store_hygiene, "consolidate_pack_batch", consolidate_and_midx)
+
+    result = gm.run_tier(repo, "daily")
+
+    assert result.rc == 0, result.errors
+    assert gm._MIDX_WRITE_ARGV not in invoked, invoked
+
+
+def test_one_daily_call_runs_one_batch_and_the_next_call_reduces_packs_further(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC5."""
     from coordinator_core.git.store_hygiene import status
 
@@ -655,7 +737,7 @@ def test_one_daily_call_runs_one_batch_and_the_next_call_reduces_packs_further(t
     assert status(repo / ".git").pack_count < n1
 
 
-def test_daily_loose_leg_packs_a_bounded_reachable_batch_and_leaves_unreachable(tmp_path, monkeypatch):
+def test_daily_loose_leg_packs_a_bounded_reachable_batch_and_leaves_unreachable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, unreachable = _daily_fixture(tmp_path)
     _small_store_tuning(monkeypatch, max_packs=1000, batch_packs=10, loose_dir_entries=10)
     monkeypatch.setattr(gm, "_LOOSE_BATCH_OBJECTS", 5)
@@ -677,7 +759,7 @@ def test_daily_loose_leg_packs_a_bounded_reachable_batch_and_leaves_unreachable(
     assert _git(repo, "fsck", "--no-dangling").returncode == 0
 
 
-def test_loose_leg_respects_the_byte_bound(tmp_path, monkeypatch):
+def test_loose_leg_respects_the_byte_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, _ = _daily_fixture(tmp_path)
     _small_store_tuning(monkeypatch, max_packs=1000, batch_packs=10, loose_dir_entries=10)
     monkeypatch.setattr(gm, "_LOOSE_BATCH_BYTES", 1)
@@ -687,12 +769,12 @@ def test_loose_leg_respects_the_byte_bound(tmp_path, monkeypatch):
     assert error is None and packed == 1, "the first object always fits; the byte cap stops the second"
 
 
-def test_a_clean_store_pays_no_loose_walk(tmp_path, monkeypatch):
+def test_a_clean_store_pays_no_loose_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     invoked = _recorded_argv(tmp_path, "daily", monkeypatch)
     assert not any(args[0] in ("rev-list", "pack-objects") for args in invoked), invoked
 
 
-def test_non_weekly_tiers_do_not_prune_or_sweep(tmp_path):
+def test_non_weekly_tiers_do_not_prune_or_sweep(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     for tier in ("hourly", "daily"):
         result = gm.run_tier(repo, tier)
@@ -706,7 +788,7 @@ def test_non_weekly_tiers_do_not_prune_or_sweep(tmp_path):
 
 
 @pytest.mark.cadence
-def test_every_tier_is_under_the_500ms_brightline(tmp_path):
+def test_every_tier_is_under_the_500ms_brightline(tmp_path: Path) -> None:
     """THE ACCEPTANCE ORACLE, and the only implementation of it left in the
     tree. Delegates to `coordinator_core.benchmarks.maintenance_tier_budget
     .check_maintenance_tier_budget` -- the same function the plan's own
@@ -764,7 +846,7 @@ def _write(path: Path, body: bytes = b"x" * 64, age_sec: int = 0) -> Path:
     return path
 
 
-def test_aged_stable_orphan_with_no_idx_is_reaped(tmp_path):
+def test_aged_stable_orphan_with_no_idx_is_reaped(tmp_path: Path) -> None:
     d = _pack_dir(tmp_path)
     orphan = _write(d / ".tmp-1234-pack-abcdef.pack", age_sec=3600)
 
@@ -775,7 +857,7 @@ def test_aged_stable_orphan_with_no_idx_is_reaped(tmp_path):
     assert result.failed == []
 
 
-def test_fresh_orphan_is_left_alone(tmp_path):
+def test_fresh_orphan_is_left_alone(tmp_path: Path) -> None:
     """A repack that started seconds ago has no `.idx` yet either."""
     d = _pack_dir(tmp_path)
     fresh = _write(d / ".tmp-1234-pack-abcdef.pack", age_sec=0)
@@ -787,12 +869,12 @@ def test_fresh_orphan_is_left_alone(tmp_path):
     assert fresh.exists()
 
 
-def test_unstable_orphan_is_left_alone(tmp_path):
+def test_unstable_orphan_is_left_alone(tmp_path: Path) -> None:
     """Past the age floor but still growing -- a slow repack, not garbage."""
     d = _pack_dir(tmp_path)
     growing = _write(d / ".tmp-1234-pack-abcdef.pack", age_sec=3600)
 
-    def mutate():
+    def mutate() -> None:
         growing.write_bytes(b"y" * 4096)
 
     result = gm.sweep_orphan_packs(d, on_wait=mutate)
@@ -802,7 +884,7 @@ def test_unstable_orphan_is_left_alone(tmp_path):
     assert growing.exists()
 
 
-def test_pack_with_an_idx_sibling_is_never_reaped(tmp_path):
+def test_pack_with_an_idx_sibling_is_never_reaped(tmp_path: Path) -> None:
     """A completed pack, whatever its age -- gate 1 rejects it at collection
     time so it never even enters the stability window."""
     d = _pack_dir(tmp_path)
@@ -816,7 +898,7 @@ def test_pack_with_an_idx_sibling_is_never_reaped(tmp_path):
     assert complete.exists()
 
 
-def test_n_orphans_cost_exactly_one_stability_window(tmp_path):
+def test_n_orphans_cost_exactly_one_stability_window(tmp_path: Path) -> None:
     """THE COST ASSERTION. A per-file window would be N waits; at the orphan
     counts observed in this worktree that is roughly ten serial 2s waits."""
     d = _pack_dir(tmp_path)
@@ -831,7 +913,7 @@ def test_n_orphans_cost_exactly_one_stability_window(tmp_path):
     assert sorted(result.reaped) == sorted(orphans)
 
 
-def test_no_candidates_pays_no_window_at_all(tmp_path):
+def test_no_candidates_pays_no_window_at_all(tmp_path: Path) -> None:
     d = _pack_dir(tmp_path)
     _write(d / "pack-abcdef.pack", age_sec=3600)  # an ordinary pack, not a tmp body
 
@@ -842,7 +924,7 @@ def test_no_candidates_pays_no_window_at_all(tmp_path):
     assert result.reaped == []
 
 
-def test_all_candidates_fresh_pays_no_window(tmp_path):
+def test_all_candidates_fresh_pays_no_window(tmp_path: Path) -> None:
     """The age gate runs BEFORE the window, so a set of fresh candidates costs
     no wait at all."""
     d = _pack_dir(tmp_path)
@@ -856,20 +938,20 @@ def test_all_candidates_fresh_pays_no_window(tmp_path):
     assert result.skipped == 2
 
 
-def test_missing_pack_dir_is_not_an_error(tmp_path):
+def test_missing_pack_dir_is_not_an_error(tmp_path: Path) -> None:
     result = gm.sweep_orphan_packs(tmp_path / "objects" / "pack")
 
     assert result.reaped == []
     assert result.failed == []
 
 
-def test_age_floor_default_is_ten_times_the_plausible_repack(tmp_path):
+def test_age_floor_default_is_ten_times_the_plausible_repack(tmp_path: Path) -> None:
     """600s, defended against this plan's own observation that a repack of a
     412 MB pack legitimately runs for minutes."""
     assert gm._ORPHAN_PACK_AGE_SEC == 600
 
 
-def test_env_knob_overrides_the_age_floor(tmp_path, monkeypatch):
+def test_env_knob_overrides_the_age_floor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     d = _pack_dir(tmp_path)
     orphan = _write(d / ".tmp-1234-pack-abcdef.pack", age_sec=30)
 
@@ -894,7 +976,7 @@ with hold(Path(sys.argv[1]), wait_s=30.0, holder_label="test-holder"):
 
 
 @pytest.fixture()
-def foreign_holder(tmp_path):
+def foreign_holder(tmp_path: Path):
     """Start a real process holding the object-store lock of `<repo>/.git`."""
     import sys
 
@@ -927,8 +1009,8 @@ def foreign_holder(tmp_path):
 
 @pytest.mark.parametrize("tier", ["hourly", "daily", "weekly"])
 def test_a_held_object_store_lock_defers_every_tier_with_no_git_spawned(
-    tmp_path, monkeypatch, foreign_holder, tier
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, foreign_holder, tier
+) -> None:
     repo = _init_repo(tmp_path)
     foreign_holder(repo / ".git")
 
@@ -947,8 +1029,8 @@ def test_a_held_object_store_lock_defers_every_tier_with_no_git_spawned(
 
 
 def test_a_held_object_store_lock_defers_the_orphan_sweep_and_unlinks_nothing(
-    tmp_path, foreign_holder
-):
+    tmp_path: Path, foreign_holder
+) -> None:
     d = _pack_dir(tmp_path)
     common = d.parent.parent
     orphan = _write(d / ".tmp-1234-pack-abcdef.pack", age_sec=3600)
@@ -960,13 +1042,13 @@ def test_a_held_object_store_lock_defers_the_orphan_sweep_and_unlinks_nothing(
     assert result.reaped == [] and orphan.exists()
 
 
-def test_the_tier_runs_once_the_foreign_holder_is_gone(tmp_path):
+def test_the_tier_runs_once_the_foreign_holder_is_gone(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     result = gm.run_tier(repo, "hourly")
     assert result.deferred is None and result.ran is True
 
 
-def test_sweep_refuses_a_pack_dir_not_shaped_objects_pack(tmp_path):
+def test_sweep_refuses_a_pack_dir_not_shaped_objects_pack(tmp_path: Path) -> None:
     odd = tmp_path / "elsewhere"
     odd.mkdir()
     with pytest.raises(ValueError):

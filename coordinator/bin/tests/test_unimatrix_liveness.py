@@ -9,6 +9,10 @@ import time
 from pathlib import Path
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = pytest.mark.complete
 
@@ -16,7 +20,7 @@ BIN = Path(__file__).resolve().parents[1]
 SRC = BIN / "unimatrix-liveness.py"
 
 
-def _load():
+def _load() -> "ModuleType":
     spec = importlib.util.spec_from_file_location("unimatrix_liveness", SRC)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -26,21 +30,21 @@ def _load():
 lv = _load()
 
 
-def test_module_does_not_import_subprocess():
+def test_module_does_not_import_subprocess() -> None:
     src = SRC.read_text(encoding="utf-8")
     assert not re.search(r"^\s*(import subprocess|from subprocess)", src, re.M)
     assert "subprocess" not in lv.__dict__
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="ps lstart is POSIX")
-def test_proc_start_matches_ps_lstart_for_own_pid():
+def test_proc_start_matches_ps_lstart_for_own_pid() -> None:
     want = subprocess.run(["ps", "-o", "lstart=", "-p", str(os.getpid())],
                           capture_output=True, text=True, check=True).stdout.strip()
     assert lv.proc_start(os.getpid()) == want
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="ps lstart is POSIX")
-def test_proc_start_matches_ps_lstart_for_child_pid():
+def test_proc_start_matches_ps_lstart_for_child_pid() -> None:
     child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
     try:
         want = subprocess.run(["ps", "-o", "lstart=", "-p", str(child.pid)],
@@ -51,13 +55,13 @@ def test_proc_start_matches_ps_lstart_for_child_pid():
         child.wait()
 
 
-def test_lstart_pads_one_digit_day():
+def test_lstart_pads_one_digit_day() -> None:
     epoch = time.mktime((2026, 11, 4, 1, 19, 29, 0, 0, -1))
     assert lv._lstart(epoch) == "Wed Nov  4 01:19:29 2026"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="posix pid")
-def test_proc_start_dead_pid_raises_oserror():
+def test_proc_start_dead_pid_raises_oserror() -> None:
     p = subprocess.Popen([sys.executable, "-c", "pass"])
     p.wait()
     with pytest.raises(OSError):
@@ -69,7 +73,7 @@ def _rec(pid=None):
     return {"pid": pid, "procStart": lv.proc_start(pid)}
 
 
-def test_supervisor_live_true_false_cases():
+def test_supervisor_live_true_false_cases() -> None:
     assert lv.supervisor_live(_rec())
     assert not lv.supervisor_live({"pid": os.getpid(), "procStart": "Mon Jan  1 00:00:00 2001"})
     assert not lv.supervisor_live({"pid": "x"})
@@ -78,21 +82,21 @@ def test_supervisor_live_true_false_cases():
     assert not lv.pid_alive(0) and not lv.pid_alive(-1)
 
 
-def test_entry_live_matching_procstart_is_live():
+def test_entry_live_matching_procstart_is_live() -> None:
     assert lv.entry_live(_rec())
 
 
-def test_entry_live_different_procstart_is_not_live():
+def test_entry_live_different_procstart_is_not_live() -> None:
     assert not lv.entry_live({"pid": os.getpid(), "procStart": "Mon Jan  1 00:00:00 2001"})
 
 
-def test_entry_live_without_procstart_falls_back_to_pid_alive():
+def test_entry_live_without_procstart_falls_back_to_pid_alive() -> None:
     assert lv.entry_live({"pid": os.getpid()})
     assert lv.entry_live({"pid": os.getpid(), "procStart": ""})
     assert lv.entry_live({"pid": os.getpid(), "procStart": 5})
 
 
-def test_entry_live_dead_or_malformed_pid_is_not_live():
+def test_entry_live_dead_or_malformed_pid_is_not_live() -> None:
     assert not lv.entry_live({"pid": 0, "procStart": "x"})
     assert not lv.entry_live({"pid": True})
     assert not lv.entry_live({"pid": "x"})
@@ -100,7 +104,7 @@ def test_entry_live_dead_or_malformed_pid_is_not_live():
     assert not lv.entry_live(None)
 
 
-def test_entry_live_proc_start_oserror_is_not_staleness(monkeypatch):
+def test_entry_live_proc_start_oserror_is_not_staleness(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(pid, platform=None):
         raise OSError("unreadable")
     monkeypatch.setattr(lv, "proc_start", boom)
@@ -109,7 +113,7 @@ def test_entry_live_proc_start_oserror_is_not_staleness(monkeypatch):
     assert not lv.entry_live({"pid": os.getpid(), "procStart": "anything"})
 
 
-def test_stamp_fresh_accepts_only_a_recent_integer_stamp():
+def test_stamp_fresh_accepts_only_a_recent_integer_stamp() -> None:
     now = 1_000_000.0
     ms = int(now * 1000)
     assert lv.stamp_fresh({"s": ms - 5000}, "s", 10, now=now) is True
@@ -128,24 +132,24 @@ def _agy_home(tmp_path, agy_pid):
     return tmp_path
 
 
-def test_agy_face_unbacked_when_its_agy_process_is_gone(tmp_path):
+def test_agy_face_unbacked_when_its_agy_process_is_gone(tmp_path: Path) -> None:
     face = {"name": "agy-x-on-box", "vendor": "agy", "unimatrixRouterPid": 7}
     assert lv.agy_face_unbacked(face, _agy_home(tmp_path, 2_000_000_000)) is True
 
 
-def test_agy_face_backed_while_its_agy_process_lives(tmp_path):
+def test_agy_face_backed_while_its_agy_process_lives(tmp_path: Path) -> None:
     face = {"name": "agy-x-on-box", "vendor": "agy", "unimatrixRouterPid": 7}
     assert lv.agy_face_unbacked(face, _agy_home(tmp_path, os.getpid())) is False
 
 
-def test_agy_face_without_a_leg_record_is_unbacked_and_a_non_face_never_is(tmp_path):
+def test_agy_face_without_a_leg_record_is_unbacked_and_a_non_face_never_is(tmp_path: Path) -> None:
     home = _agy_home(tmp_path, None)
     assert lv.agy_face_unbacked({"name": "agy-x-on-box", "vendor": "agy", "unimatrixRouterPid": 7}, home) is True
     assert lv.agy_face_unbacked({"name": "agy-x-on-box", "vendor": "agy"}, home) is False
     assert lv.agy_face_unbacked({"name": "agy-x-on-box", "vendor": "codex", "unimatrixRouterPid": 7}, home) is False
 
 
-def test_agy_face_with_no_peers_row_is_unbacked_but_an_unreadable_peers_file_is_not(tmp_path):
+def test_agy_face_with_no_peers_row_is_unbacked_but_an_unreadable_peers_file_is_not(tmp_path: Path) -> None:
     home = _agy_home(tmp_path, os.getpid())
     assert lv.agy_face_unbacked({"name": "agy-Temp-bafde89c04-on-machine-a", "vendor": "agy",
                                  "unimatrixRouterPid": 7}, home) is True
@@ -162,7 +166,7 @@ def _peer_home(tmp_path, rows, legs=()):
     return tmp_path
 
 
-def test_agy_peer_rows_orphaned_lists_only_agy_rows_without_a_leg_record(tmp_path):
+def test_agy_peer_rows_orphaned_lists_only_agy_rows_without_a_leg_record(tmp_path: Path) -> None:
     home = _peer_home(tmp_path, [
         {"name": "a-dead", "vendor": "agy", "target": "dead-1"},
         {"name": "a-live", "vendor": "agy", "target": "live-1"},
@@ -176,48 +180,48 @@ def test_agy_peer_rows_orphaned_lists_only_agy_rows_without_a_leg_record(tmp_pat
     assert lv.agy_peer_rows_orphaned(home) == [("a-dead", "dead-1")]
 
 
-def test_agy_peer_rows_orphaned_reads_the_peers_container_shape(tmp_path):
+def test_agy_peer_rows_orphaned_reads_the_peers_container_shape(tmp_path: Path) -> None:
     home = _peer_home(tmp_path, {"peers": [{"name": "a-dead", "vendor": "agy", "target": "dead-1"}]})
     assert lv.agy_peer_rows_orphaned(home) == [("a-dead", "dead-1")]
 
 
-def test_agy_peer_rows_orphaned_unreadable_or_missing_peers_file_is_empty(tmp_path):
+def test_agy_peer_rows_orphaned_unreadable_or_missing_peers_file_is_empty(tmp_path: Path) -> None:
     home = _peer_home(tmp_path, [])
     (tmp_path / "unimatrix" / "peers.json").write_text("{not json")
     assert lv.agy_peer_rows_orphaned(home) == []
     assert lv.agy_peer_rows_orphaned(tmp_path / "nowhere") == []
 
 
-def test_codex_holder_live_matching_start_is_live():
+def test_codex_holder_live_matching_start_is_live() -> None:
     me = _rec()
     assert lv.codex_holder_live({"codexPid": me["pid"], "codexProcStart": me["procStart"]}) is True
 
 
-def test_codex_holder_live_dead_pid_is_false(monkeypatch):
+def test_codex_holder_live_dead_pid_is_false(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(lv, "pid_alive", lambda pid: False)
     assert lv.codex_holder_live({"codexPid": 4242, "codexProcStart": "x"}) is False
 
 
-def test_codex_holder_live_differing_start_is_false():
+def test_codex_holder_live_differing_start_is_false() -> None:
     row = {"codexPid": os.getpid(), "codexProcStart": "Mon Jan  1 00:00:00 2001"}
     assert lv.codex_holder_live(row) is False
 
 
-def test_codex_holder_live_no_holder_is_none():
+def test_codex_holder_live_no_holder_is_none() -> None:
     assert lv.codex_holder_live({}) is None
     assert lv.codex_holder_live({"codexPid": True}) is None
     assert lv.codex_holder_live({"codexPid": "7"}) is None
     assert lv.codex_holder_live(None) is None
 
 
-def test_codex_holder_live_unreadable_start_is_not_staleness(monkeypatch):
+def test_codex_holder_live_unreadable_start_is_not_staleness(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(pid, platform=None):
         raise OSError("unreadable")
     monkeypatch.setattr(lv, "proc_start", boom)
     assert lv.codex_holder_live({"codexPid": os.getpid(), "codexProcStart": "x"}) is True
 
 
-def test_codex_probe_cli_prints_one_line_per_codex_peer(tmp_path):
+def test_codex_probe_cli_prints_one_line_per_codex_peer(tmp_path: Path) -> None:
     me = _rec()
     locks = tmp_path / "locks"
     locks.mkdir()
@@ -243,12 +247,12 @@ def test_codex_probe_cli_prints_one_line_per_codex_peer(tmp_path):
     ]
 
 
-def test_codex_probe_cli_rejects_unknown_command():
+def test_codex_probe_cli_rejects_unknown_command() -> None:
     r = subprocess.run([sys.executable, str(SRC), "bogus"], capture_output=True, text=True)
     assert r.returncode == 2
 
 
-def _setup(tmp_path, aliases, live=True, age=0):
+def _setup(tmp_path, aliases, live: bool = True, age: int = 0):
     sdir = tmp_path / "unimatrix"
     sdir.mkdir()
     cache = sdir / "autolink-boxes.json"
@@ -262,58 +266,58 @@ def _setup(tmp_path, aliases, live=True, age=0):
     return sdir
 
 
-def test_healthy_true_when_all_live(tmp_path):
+def test_healthy_true_when_all_live(tmp_path: Path) -> None:
     assert lv.healthy(_setup(tmp_path, ["a@h", "b"]))
 
 
-def test_healthy_true_for_fresh_empty_cache(tmp_path):
+def test_healthy_true_for_fresh_empty_cache(tmp_path: Path) -> None:
     assert lv.healthy(_setup(tmp_path, []))
 
 
-def test_healthy_false_when_one_role_dead(tmp_path):
+def test_healthy_false_when_one_role_dead(tmp_path: Path) -> None:
     assert not lv.healthy(_setup(tmp_path, ["a"], live=False))
 
 
-def test_healthy_false_when_record_missing(tmp_path):
+def test_healthy_false_when_record_missing(tmp_path: Path) -> None:
     sdir = _setup(tmp_path, ["a"])
     (sdir / "autolink-a.json").unlink()
     assert not lv.healthy(sdir)
 
 
-def test_healthy_false_without_cache(tmp_path):
+def test_healthy_false_without_cache(tmp_path: Path) -> None:
     (tmp_path / "unimatrix").mkdir()
     assert not lv.healthy(tmp_path / "unimatrix")
     assert not lv.healthy(tmp_path / "absent")
 
 
-def test_healthy_false_for_stale_cache_over_24h(tmp_path):
+def test_healthy_false_for_stale_cache_over_24h(tmp_path: Path) -> None:
     assert not lv.healthy(_setup(tmp_path, ["a"], age=24 * 3600 + 5))
 
 
-def test_healthy_true_just_under_24h(tmp_path):
+def test_healthy_true_just_under_24h(tmp_path: Path) -> None:
     assert lv.healthy(_setup(tmp_path, ["a"], age=24 * 3600 - 60))
 
 
-def test_healthy_honors_now(tmp_path):
+def test_healthy_honors_now(tmp_path: Path) -> None:
     sdir = _setup(tmp_path, ["a"])
     assert not lv.healthy(sdir, now=time.time() + 25 * 3600)
 
 
-def test_healthy_probe_answered_for_every_alias_is_healthy(tmp_path):
+def test_healthy_probe_answered_for_every_alias_is_healthy(tmp_path: Path) -> None:
     seen = []
     assert lv.healthy(_setup(tmp_path, ["a@h", "b"]), probe=lambda a: seen.append(a))
     assert seen == ["a@h", "b"]
 
 
-def test_healthy_probe_reason_on_any_alias_is_unhealthy(tmp_path):
+def test_healthy_probe_reason_on_any_alias_is_unhealthy(tmp_path: Path) -> None:
     sdir = _setup(tmp_path, ["a@h", "b"])
     assert not lv.healthy(sdir, probe=lambda a: "no echo" if a == "b" else None)
 
 
-def test_healthy_probe_reaches_every_dead_alias(tmp_path):
+def test_healthy_probe_reaches_every_dead_alias(tmp_path: Path) -> None:
     seen = []
 
-    def probe(a):
+    def probe(a) -> str:
         seen.append(a)
         return "no echo"
 
@@ -321,41 +325,41 @@ def test_healthy_probe_reaches_every_dead_alias(tmp_path):
     assert sorted(seen) == ["a@h", "b"]
 
 
-def test_healthy_probes_run_concurrently(tmp_path):
+def test_healthy_probes_run_concurrently(tmp_path: Path) -> None:
     import threading
 
     barrier = threading.Barrier(2, timeout=5)
 
-    def probe(a):
+    def probe(a) -> None:
         barrier.wait()
         return None
 
     assert lv.healthy(_setup(tmp_path, ["a@h", "b"]), probe=probe)
 
 
-def test_healthy_probe_not_called_when_a_local_supervisor_is_dead(tmp_path):
+def test_healthy_probe_not_called_when_a_local_supervisor_is_dead(tmp_path: Path) -> None:
     calls = []
     assert not lv.healthy(_setup(tmp_path, ["a"], live=False), probe=lambda a: calls.append(a))
     assert calls == []
 
 
-def test_healthy_probe_not_called_for_stale_cache(tmp_path):
+def test_healthy_probe_not_called_for_stale_cache(tmp_path: Path) -> None:
     calls = []
     assert not lv.healthy(_setup(tmp_path, ["a"], age=24 * 3600 + 5), probe=lambda a: calls.append(a))
     assert calls == []
 
 
-def test_healthy_without_probe_is_unchanged_for_live_records(tmp_path):
+def test_healthy_without_probe_is_unchanged_for_live_records(tmp_path: Path) -> None:
     assert lv.healthy(_setup(tmp_path, ["a"]), probe=None)
 
 
-def test_healthy_false_for_malformed_cache(tmp_path):
+def test_healthy_false_for_malformed_cache(tmp_path: Path) -> None:
     sdir = _setup(tmp_path, [])
     (sdir / "autolink-boxes.json").write_text(json.dumps({"aliases": "a"}))
     assert not lv.healthy(sdir)
 
 
-def test_backoff_doubles_caps_and_clears(tmp_path):
+def test_backoff_doubles_caps_and_clears(tmp_path: Path) -> None:
     assert lv.backoff_until(tmp_path, "a") == 0.0
     expect = [60, 120, 240, 480, 960, 1920, 3600, 3600]
     for n, delay in enumerate(expect):
@@ -368,18 +372,18 @@ def test_backoff_doubles_caps_and_clears(tmp_path):
     lv.note_probe(tmp_path, "a", True)
 
 
-def test_backoff_is_per_alias_and_slugged(tmp_path):
+def test_backoff_is_per_alias_and_slugged(tmp_path: Path) -> None:
     lv.note_probe(tmp_path, "u@h", False, now=0.0)
     assert (tmp_path / "autolink-u_at_h.backoff.json").exists()
     assert lv.backoff_until(tmp_path, "other") == 0.0
 
 
-def test_state_dir_derives_from_settings_home(tmp_path, monkeypatch):
+def test_state_dir_derives_from_settings_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     assert lv.state_dir() == tmp_path / "unimatrix"
 
 
-def _logs_db(home, name, rows):
+def _logs_db(home, name, rows) -> None:
     import sqlite3
     from contextlib import closing
     with closing(sqlite3.connect(home / name)) as conn:
@@ -389,7 +393,7 @@ def _logs_db(home, name, rows):
         conn.commit()
 
 
-def test_codex_thread_holder_takes_newest_process_across_dbs(tmp_path):
+def test_codex_thread_holder_takes_newest_process_across_dbs(tmp_path: Path) -> None:
     me = os.getpid()
     _logs_db(tmp_path, "logs_1.sqlite", [(10, 0, "t1", "pid:999999:old"), (5, 0, "t2", "pid:7:x")])
     _logs_db(tmp_path, "logs_2.sqlite", [(20, 0, "t1", f"pid:{me}:new"), (30, 0, "t1", None)])
@@ -399,14 +403,14 @@ def test_codex_thread_holder_takes_newest_process_across_dbs(tmp_path):
     assert lv.codex_holder_live(got) is True
 
 
-def test_codex_thread_holder_unknown_thread_or_no_db_is_empty(tmp_path):
+def test_codex_thread_holder_unknown_thread_or_no_db_is_empty(tmp_path: Path) -> None:
     assert lv.codex_thread_holder(tmp_path, "t1") == {}
     _logs_db(tmp_path, "logs_1.sqlite", [(10, 0, "other", "pid:5:x"), (11, 0, "t1", "garbage")])
     assert lv.codex_thread_holder(tmp_path, "t1") == {}
     assert lv.codex_thread_holder(tmp_path, "missing") == {}
 
 
-def test_codex_thread_holder_dead_pid_reads_dead(tmp_path):
+def test_codex_thread_holder_dead_pid_reads_dead(tmp_path: Path) -> None:
     _logs_db(tmp_path, "logs_1.sqlite", [(10, 0, "t1", "pid:2147480000:x")])
     got = lv.codex_thread_holder(tmp_path, "t1")
     assert got == {"codexPid": 2147480000}
@@ -420,23 +424,23 @@ def _codex_home(tmp_path, **holder):
     return tmp_path
 
 
-def _codex_face(started_ago_seconds=5000):
+def _codex_face(started_ago_seconds: int = 5000):
     return {"name": "codex-x", "vendor": "codex", "sessionId": "peer-codex-x-9", "target": "t-1",
             "startedAt": int((time.time() - started_ago_seconds) * 1000)}
 
 
-def test_codex_face_unbacked_when_its_holder_is_dead_and_backed_while_it_lives(tmp_path):
+def test_codex_face_unbacked_when_its_holder_is_dead_and_backed_while_it_lives(tmp_path: Path) -> None:
     assert lv.codex_face_unbacked(_codex_face(), _codex_home(tmp_path, codexPid=2_000_000_000)) is True
     assert lv.codex_face_unbacked(_codex_face(), _codex_home(tmp_path, codexPid=os.getpid())) is False
 
 
-def test_codex_face_with_no_recorded_holder_is_unbacked_only_past_its_grace(tmp_path):
+def test_codex_face_with_no_recorded_holder_is_unbacked_only_past_its_grace(tmp_path: Path) -> None:
     home = _codex_home(tmp_path)
     assert lv.codex_face_unbacked(_codex_face(5000), home) is True
     assert lv.codex_face_unbacked(_codex_face(5), home) is False
 
 
-def test_codex_face_check_never_claims_what_it_cannot_prove(tmp_path):
+def test_codex_face_check_never_claims_what_it_cannot_prove(tmp_path: Path) -> None:
     home = _codex_home(tmp_path, codexPid=2_000_000_000)
     assert lv.codex_face_unbacked(dict(_codex_face(), target="t-other", name="other"), home) is False
     assert lv.codex_face_unbacked(dict(_codex_face(), unimatrixRemote="me@box"), home) is False
@@ -450,11 +454,11 @@ def _far_codex(**extra):
 
 
 @pytest.mark.parametrize("extra", [{}, {"codexHolder": "unknown"}, {"codexHolder": "dead"}, {"codexHolder": 7}])
-def test_far_codex_row_without_a_live_holder_is_unbacked_past_grace(extra):
+def test_far_codex_row_without_a_live_holder_is_unbacked_past_grace(extra) -> None:
     assert lv.far_codex_row_unbacked(_far_codex(**extra)) is True
 
 
-def test_far_codex_row_is_backed_while_live_fresh_unstamped_or_not_codex():
+def test_far_codex_row_is_backed_while_live_fresh_unstamped_or_not_codex() -> None:
     assert lv.far_codex_row_unbacked(_far_codex(codexHolder="live")) is False
     assert lv.far_codex_row_unbacked(_far_codex(startedAt=int(time.time() * 1000))) is False
     assert lv.far_codex_row_unbacked({k: v for k, v in _far_codex().items() if k != "startedAt"}) is False

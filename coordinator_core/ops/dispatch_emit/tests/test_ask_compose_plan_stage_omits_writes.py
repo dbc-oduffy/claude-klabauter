@@ -29,7 +29,7 @@ def _compose() -> str:
     )
 
 
-def test_no_plan_branch_stage_params_carry_writes():
+def test_no_plan_branch_stage_params_carry_writes() -> None:
     script = _compose()
     plan_params = re.findall(r"JSON\.stringify\(\{ run_id: _runId, plan_path:[^}]*", script)
     ready_ops = re.findall(r"readyOp: \{ op: [^{]*\{[^}]*", script)

@@ -29,7 +29,7 @@ _CMDS = [
 
 
 @pytest.mark.parametrize("cmd", _CMDS)
-def test_bump_guards_admit_the_invocation(repos, monkeypatch, cmd):
+def test_bump_guards_admit_the_invocation(repos, monkeypatch: pytest.MonkeyPatch, cmd) -> None:
     _set_anchor(monkeypatch, repos, _SID)
     cwd = str(repos["anchor"])
     payload = {"agent_id": "deadbeef0123", "session_id": _SID}
@@ -38,7 +38,7 @@ def test_bump_guards_admit_the_invocation(repos, monkeypatch, cmd):
 
 
 @pytest.mark.parametrize("cmd", _CMDS)
-def test_destructive_action_guard_admits_the_invocation(repos, cmd):
+def test_destructive_action_guard_admits_the_invocation(repos, cmd) -> None:
     payload = {
         "tool_name": "Bash",
         "tool_input": {"command": cmd},

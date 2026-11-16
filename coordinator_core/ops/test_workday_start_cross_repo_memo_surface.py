@@ -23,6 +23,7 @@ from coordinator_core.win_portability import (
     no_console_creationflags,
     no_console_passthrough_kwargs,
 )
+from pathlib import Path
 
 # Declared, not excused: `test_main_performs_no_archival_in_a_real_git_worktree`
 # spawns a real git process because it deliberately regression-tests the
@@ -36,11 +37,11 @@ from coordinator_core.win_portability import (
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
-def _write_memo(dirpath, fname, frontmatter):
+def _write_memo(dirpath, fname, frontmatter) -> None:
     (dirpath / fname).write_text(f"---\n{frontmatter}\n---\n\nMemo body.\n")
 
 
-def _run(env_overrides, monkeypatch):
+def _run(env_overrides, monkeypatch) -> tuple[int, str]:
     for k, v in env_overrides.items():
         monkeypatch.setenv(k, v)
     buf = io.StringIO()
@@ -49,7 +50,7 @@ def _run(env_overrides, monkeypatch):
     return rc, buf.getvalue()
 
 
-def test_empty_dir_silent(tmp_path, monkeypatch):
+def test_empty_dir_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     rc, out = _run({"CROSS_REPO_INBOX_DIR": str(inbox)}, monkeypatch)
@@ -57,7 +58,7 @@ def test_empty_dir_silent(tmp_path, monkeypatch):
     assert out == ""
 
 
-def test_open_memo_created_today(tmp_path, monkeypatch):
+def test_open_memo_created_today(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     _write_memo(
@@ -75,7 +76,7 @@ def test_open_memo_created_today(tmp_path, monkeypatch):
     assert "[STALE" not in out
 
 
-def test_open_memo_10_days_old_stale(tmp_path, monkeypatch):
+def test_open_memo_10_days_old_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     _write_memo(
@@ -92,7 +93,7 @@ def test_open_memo_10_days_old_stale(tmp_path, monkeypatch):
     assert "10 days old" in out
 
 
-def test_open_memo_20_days_old_stale(tmp_path, monkeypatch):
+def test_open_memo_20_days_old_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     _write_memo(
@@ -109,7 +110,7 @@ def test_open_memo_20_days_old_stale(tmp_path, monkeypatch):
     assert "20 days old" in out
 
 
-def test_action_taken_filtered_open_surfaced(tmp_path, monkeypatch):
+def test_action_taken_filtered_open_surfaced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     _write_memo(
@@ -135,7 +136,7 @@ def test_action_taken_filtered_open_surfaced(tmp_path, monkeypatch):
     assert "archive-stamp-cli resolve-memo" in out
 
 
-def test_truncation_at_8_entries(tmp_path, monkeypatch):
+def test_truncation_at_8_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     for i in range(1, 11):
@@ -155,7 +156,7 @@ def test_truncation_at_8_entries(tmp_path, monkeypatch):
     assert "archive-stamp-cli resolve-memo" in out
 
 
-def test_precutoff_memo_grandfathered_silent(tmp_path, monkeypatch):
+def test_precutoff_memo_grandfathered_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     _write_memo(
@@ -171,7 +172,7 @@ def test_precutoff_memo_grandfathered_silent(tmp_path, monkeypatch):
     assert out == ""
 
 
-def test_kind_banding_ask_consult_before_fyi(tmp_path, monkeypatch):
+def test_kind_banding_ask_consult_before_fyi(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     _write_memo(
@@ -207,7 +208,7 @@ def test_kind_banding_ask_consult_before_fyi(tmp_path, monkeypatch):
     assert "[fyi]" not in lines[idx_consult]
 
 
-def test_missing_kind_defaults_to_ask(tmp_path, monkeypatch):
+def test_missing_kind_defaults_to_ask(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     _write_memo(
@@ -233,7 +234,7 @@ def test_missing_kind_defaults_to_ask(tmp_path, monkeypatch):
     assert "[fyi]" not in lines[idx_nokind]
 
 
-def test_pipe_in_title_sanitized(tmp_path, monkeypatch):
+def test_pipe_in_title_sanitized(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     _write_memo(
@@ -253,7 +254,7 @@ def test_pipe_in_title_sanitized(tmp_path, monkeypatch):
     assert "–" in line
 
 
-def test_proposal_kind_bands_urgent(tmp_path, monkeypatch):
+def test_proposal_kind_bands_urgent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     _write_memo(
@@ -279,7 +280,7 @@ def test_proposal_kind_bands_urgent(tmp_path, monkeypatch):
     assert "[fyi]" not in lines[idx_proposal]
 
 
-def test_in_progress_surfaced_with_claimed_tag_no_stale_flag(tmp_path, monkeypatch):
+def test_in_progress_surfaced_with_claimed_tag_no_stale_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """status: in_progress is surfaced (not hidden) with a [CLAIMED by ...]
     tag, and the stale flag is suppressed even when the memo is >7 days old
     -- claimed work is not "awaiting your action". Spec backlink:
@@ -301,7 +302,7 @@ def test_in_progress_surfaced_with_claimed_tag_no_stale_flag(tmp_path, monkeypat
     assert "[STALE" not in out
 
 
-def test_footer_names_close_command_once_not_per_memo(tmp_path, monkeypatch):
+def test_footer_names_close_command_once_not_per_memo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The close-command footer line names archive-stamp-cli resolve-memo
     exactly ONCE regardless of how many memos qualify -- never one line per
     memo (that would be noise on a boot-hot-path surface). Absent entirely
@@ -322,7 +323,7 @@ def test_footer_names_close_command_once_not_per_memo(tmp_path, monkeypatch):
     assert out.count("archive-stamp-cli resolve-memo") == 1
 
 
-def test_no_footer_when_no_qualifying_memos(tmp_path, monkeypatch):
+def test_no_footer_when_no_qualifying_memos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     rc, out = _run({"CROSS_REPO_INBOX_DIR": str(inbox)}, monkeypatch)
@@ -331,14 +332,14 @@ def test_no_footer_when_no_qualifying_memos(tmp_path, monkeypatch):
     assert "archive-stamp-cli" not in out
 
 
-def test_absent_inbox_dir_silent(tmp_path, monkeypatch):
+def test_absent_inbox_dir_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     absent = tmp_path / "does-not-exist"
     rc, out = _run({"CROSS_REPO_INBOX_DIR": str(absent)}, monkeypatch)
     assert rc == 0
     assert out == ""
 
 
-def test_unparseable_created_date_yields_zero_age(tmp_path, monkeypatch):
+def test_unparseable_created_date_yields_zero_age(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inbox = tmp_path / "inbox"
     inbox.mkdir()
     _write_memo(
@@ -355,7 +356,7 @@ def test_unparseable_created_date_yields_zero_age(tmp_path, monkeypatch):
     assert "[STALE" not in out
 
 
-def test_env_override_wins_over_git_root(tmp_path, monkeypatch):
+def test_env_override_wins_over_git_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """CROSS_REPO_INBOX_DIR takes priority over git-root resolution even
     when cwd is inside an unrelated git repo (Windows-parity: no reliance
     on TMPDIR/POSIX-only assumptions in the override path)."""
@@ -375,7 +376,7 @@ def test_env_override_wins_over_git_root(tmp_path, monkeypatch):
     assert "Explicit Override" in out
 
 
-def test_dead_sweep_helper_and_silent_swallow_are_gone():
+def test_dead_sweep_helper_and_silent_swallow_are_gone() -> None:
     """The module-level symbol and its bare `except Exception` swallow must
     not merely be unreferenced -- they must not exist at all, since a
     reintroduced-but-uncalled stub would still carry the same silent-swallow
@@ -389,7 +390,7 @@ def test_dead_sweep_helper_and_silent_swallow_are_gone():
     )
 
 
-def test_main_performs_no_archival_in_a_real_git_worktree(tmp_path, monkeypatch):
+def test_main_performs_no_archival_in_a_real_git_worktree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Prior to C14, `main()` unconditionally invoked the actioned-memo
     archival sweep (git mv + commit) whenever CROSS_REPO_INBOX_DIR was unset
     -- exactly the surfacing path exercised here. Run against a REAL git

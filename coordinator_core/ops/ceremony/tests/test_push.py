@@ -6,6 +6,7 @@ import pytest
 from coordinator_core.ops.ceremony import git_native, push as push_mod
 from coordinator_core.ops.ceremony.tests.fixtures.push_repo import init_push_repo
 from coordinator_core.ops.ceremony.git_native import GitResult
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -23,7 +24,7 @@ _NON_FAST_FORWARD_STDERR = (
 
 
 def _always_reject(monkeypatch, stderr: str, push_calls: list, *, returncode: int = 1) -> None:
-    def _fake_push(*a, **kw):
+    def _fake_push(*a, **kw) -> GitResult:
         push_calls.append(1)
         return GitResult(returncode=returncode, stdout="", stderr=stderr)
 
@@ -31,7 +32,7 @@ def _always_reject(monkeypatch, stderr: str, push_calls: list, *, returncode: in
     monkeypatch.setattr(git_native, "push_refspec", _fake_push)
 
 
-def test_ref_lock_rejection_is_cadence_pending_single_attempt(tmp_path, monkeypatch):
+def test_ref_lock_rejection_is_cadence_pending_single_attempt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = init_push_repo(tmp_path)
     push_calls: list = []
     _always_reject(monkeypatch, _REF_LOCK_STDERR, push_calls)
@@ -62,8 +63,8 @@ def test_ref_lock_rejection_is_cadence_pending_single_attempt(tmp_path, monkeypa
 
 
 def test_genuine_non_fast_forward_still_reaches_push_failed_same_attempt_count(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo = init_push_repo(tmp_path)
     push_calls: list = []
     _always_reject(monkeypatch, _NON_FAST_FORWARD_STDERR, push_calls)
@@ -90,25 +91,25 @@ def test_genuine_non_fast_forward_still_reaches_push_failed_same_attempt_count(
     assert push_mod.derive_push_status(outcome) == push_mod.PUSH_STATUS_FAILED
 
 
-def test_is_indeterminate_push_result_stall_arm_with_real_returncode():
+def test_is_indeterminate_push_result_stall_arm_with_real_returncode() -> None:
     result = GitResult(
         returncode=-15, stdout="", stderr="Writing objects: 10%\n", stall_killed=True
     )
     assert push_mod._is_indeterminate_push_result(result) is True
 
 
-def test_is_indeterminate_push_result_existing_timeout_arm_unchanged():
+def test_is_indeterminate_push_result_existing_timeout_arm_unchanged() -> None:
     result = GitResult(returncode=-1, stdout="", stderr="fatal: timed out after 30s")
     assert push_mod._is_indeterminate_push_result(result) is True
 
 
-def test_is_indeterminate_push_result_oserror_returncode_minus_one_stays_false():
+def test_is_indeterminate_push_result_oserror_returncode_minus_one_stays_false() -> None:
     result = GitResult(returncode=-1, stdout="", stderr="OSError: [Errno 2] No such file or directory: 'git'")
     assert result.stall_killed is False
     assert push_mod._is_indeterminate_push_result(result) is False
 
 
-def test_marker_line_alone_does_not_match_the_timeout_regex():
+def test_marker_line_alone_does_not_match_the_timeout_regex() -> None:
     """`git_native.PUSH_STALL_MARKER`, formatted, must not match
     `_PUSH_TIMEOUT_RE` on its own -- the two consumers (the typed field and
     the marker line) are deliberately independent channels."""
@@ -118,11 +119,11 @@ def test_marker_line_alone_does_not_match_the_timeout_regex():
     assert push_mod._is_indeterminate_push_result(result) is False
 
 
-def test_stall_kill_routes_to_unconfirmed_never_failed_never_retried(tmp_path, monkeypatch):
+def test_stall_kill_routes_to_unconfirmed_never_failed_never_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = init_push_repo(tmp_path, set_upstream=False)
     stall_calls: list = []
 
-    def _fake_push_streamed(*a, **kw):
+    def _fake_push_streamed(*a, **kw) -> GitResult:
         stall_calls.append(1)
         return GitResult(
             returncode=-15,
@@ -141,7 +142,7 @@ def test_stall_kill_routes_to_unconfirmed_never_failed_never_retried(tmp_path, m
     assert push_mod.derive_push_status(outcome) == push_mod.PUSH_STATUS_UNCONFIRMED
 
 
-def test_budget_exhaustion_still_yields_failed_not_unconfirmed(tmp_path, monkeypatch):
+def test_budget_exhaustion_still_yields_failed_not_unconfirmed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """NEGATIVE SPEC pinned again alongside the stall-kill test above: an
     exhausted `budget_secs` ladder deadline is `failed`, never
     `unconfirmed` -- a stall-kill must not widen this existing distinction."""
@@ -170,14 +171,14 @@ def test_budget_exhaustion_still_yields_failed_not_unconfirmed(tmp_path, monkeyp
 
 
 def test_accepted_remote_prefixed_notice_printed_once_and_push_attempted(
-    tmp_path, monkeypatch, capsys
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     repo = init_push_repo(tmp_path)
     notice = "coordinator-auto-push: pushing origin/work/x (notice)"
     monkeypatch.setattr(push_mod, "branch_gate", lambda b: (True, notice))
     push_calls: list = []
 
-    def _ok_push(*a, **kw):
+    def _ok_push(*a, **kw) -> GitResult:
         push_calls.append(1)
         return GitResult(returncode=0, stdout="", stderr="")
 
@@ -190,6 +191,6 @@ def test_accepted_remote_prefixed_notice_printed_once_and_push_attempted(
     assert push_calls
 
 
-def test_accepted_remote_prefixed_arm_raises_without_message():
+def test_accepted_remote_prefixed_arm_raises_without_message() -> None:
     with pytest.raises(ValueError):
         push_mod._emit_push_policy_line("accepted-remote-prefixed")

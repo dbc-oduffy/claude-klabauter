@@ -13,6 +13,11 @@ import coordinator_core.ipc as ipc
 from coordinator_core.group_em import box_transport
 from coordinator_core.invoke.__main__ import _dispatch_argv, _remote_failover
 from coordinator_core.remote_engine import background, fallback
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
 
 OP = "session.peer_roster"
 SSH = {"kind": "ssh", "host": "h", "invoke": "/x/coordinator-invoke"}
@@ -23,16 +28,16 @@ BOXES = [
 
 
 class Runner:
-    def __init__(self):
+    def __init__(self) -> None:
         self.calls = []
 
-    def __call__(self, argv, timeout):
+    def __call__(self, argv, timeout) -> CompletedProcess[str]:
         self.calls.append((argv, timeout))
         return subprocess.CompletedProcess(argv, 0, '{"result": {"rows": ["remote"]}}', "")
 
 
 @pytest.fixture
-def runner(monkeypatch, tmp_path):
+def runner(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Runner:
     r = Runner()
     monkeypatch.setattr(box_transport, "_run", r)
     monkeypatch.setattr(fallback.box_registry, "read_boxes", lambda *a, **k: BOXES)
@@ -44,13 +49,13 @@ def runner(monkeypatch, tmp_path):
 class Spawner:
     """Records each launch the door made (the handle key); `fail` makes launch return None."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.launched_keys = []
         self.fail = False
 
 
 @pytest.fixture
-def spawner(monkeypatch, tmp_path):
+def spawner(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Spawner:
     sp = Spawner()
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "sh"))
     real = background.launch
@@ -91,7 +96,7 @@ def _local_handler():
         ipc._REGISTRY[OP] = saved
 
 
-def _run(monkeypatch, tmp_path, *, op=OP, boot_wait="5", reason=None, allow_unstamped=False, params="{}"):
+def _run(monkeypatch, tmp_path, *, op=OP, boot_wait: str = "5", reason=None, allow_unstamped: bool = False, params: str = "{}") -> tuple[str, str, int]:
     monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", boot_wait)
     monkeypatch.setattr(ipc, "_unstamped_dispatch_allowed", allow_unstamped)
     monkeypatch.delenv(ipc.PYTEST_UNSTAMPED_DISPATCH_ENV, raising=False)
@@ -106,8 +111,8 @@ def _run(monkeypatch, tmp_path, *, op=OP, boot_wait="5", reason=None, allow_unst
 
 
 def test_failed_health_probe_launches_background_retry_and_local_stands(
-    monkeypatch, tmp_path, runner, spawner
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, runner, spawner
+) -> None:
     stdout, stderr, code = _run(
         monkeypatch, tmp_path, reason="warm engine: resolved engine root does not exist: /x"
     )
@@ -124,8 +129,8 @@ def test_failed_health_probe_launches_background_retry_and_local_stands(
 
 
 def test_phase2_op_returns_pending_error_and_never_runs_locally(
-    monkeypatch, tmp_path, runner, spawner, phase2_spy
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, runner, spawner, phase2_spy
+) -> None:
     stdout, _stderr, code = _run(
         monkeypatch, tmp_path, op=PHASE2, reason="warm engine: resolved engine root does not exist: /x"
     )
@@ -138,8 +143,8 @@ def test_phase2_op_returns_pending_error_and_never_runs_locally(
 
 
 def test_phase2_launch_failure_reports_not_run_and_never_runs_locally(
-    monkeypatch, tmp_path, runner, spawner, phase2_spy
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, runner, spawner, phase2_spy
+) -> None:
     spawner.fail = True
     stdout, _stderr, code = _run(
         monkeypatch, tmp_path, op=PHASE2, reason="warm engine: resolved engine root does not exist: /x"
@@ -149,7 +154,7 @@ def test_phase2_launch_failure_reports_not_run_and_never_runs_locally(
     assert phase2_spy == []
 
 
-def test_phase2_with_local_path_param_stays_local(monkeypatch, tmp_path, runner, spawner, phase2_spy):
+def test_phase2_with_local_path_param_stays_local(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, runner, spawner, phase2_spy) -> None:
     _run(
         monkeypatch,
         tmp_path,
@@ -160,13 +165,13 @@ def test_phase2_with_local_path_param_stays_local(monkeypatch, tmp_path, runner,
     assert spawner.launched_keys == [] and len(phase2_spy) == 1
 
 
-def test_phase2_in_hook_context_stays_local(monkeypatch, tmp_path, runner, spawner, phase2_spy):
+def test_phase2_in_hook_context_stays_local(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, runner, spawner, phase2_spy) -> None:
     monkeypatch.setenv("COORDINATOR_HOOK_CONTEXT", "1")
     _run(monkeypatch, tmp_path, op=PHASE2, reason="warm engine: resolved engine root does not exist: /x")
     assert spawner.launched_keys == [] and len(phase2_spy) == 1
 
 
-def test_hot_path_budget_failover_returns_pending_without_ssh(monkeypatch, tmp_path, runner, spawner):
+def test_hot_path_budget_failover_returns_pending_without_ssh(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, runner, spawner) -> None:
     monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", "5")
     monkeypatch.setattr(ipc, "_unstamped_dispatch_allowed", False)
     monkeypatch.delenv(ipc.PYTEST_UNSTAMPED_DISPATCH_ENV, raising=False)
@@ -179,7 +184,7 @@ def test_hot_path_budget_failover_returns_pending_without_ssh(monkeypatch, tmp_p
     assert calls == [] and runner.calls == []
 
 
-def test_child_writes_indeterminate_handle_with_reconcile_instruction(monkeypatch, tmp_path):
+def test_child_writes_indeterminate_handle_with_reconcile_instruction(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "sh"))
     key = background.launch(PHASE2, {}, popen=lambda argv, **kw: None)
     served = {"indeterminate": True, "served_by": "far", "reason": "timeout", "request_key": "k1"}
@@ -189,7 +194,7 @@ def test_child_writes_indeterminate_handle_with_reconcile_instruction(monkeypatc
     assert "warm.request_status" in handle["instruction"] and "k1" in handle["instruction"]
 
 
-def test_child_runs_try_remote_directly_and_records_reply(monkeypatch, tmp_path, runner):
+def test_child_runs_try_remote_directly_and_records_reply(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, runner) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "sh"))
     monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", "5")
     key = background.launch(OP, {}, popen=lambda argv, **kw: None)
@@ -203,11 +208,11 @@ def test_child_runs_try_remote_directly_and_records_reply(monkeypatch, tmp_path,
 SECRET = {"prompt": "SECRET-PROMPT-BODY"}
 
 
-def _files():
+def _files() -> list[str]:
     return sorted(p.name for p in background.requests_dir().iterdir())
 
 
-def test_handle_files_never_hold_raw_params_and_child_consumes_the_side_file(monkeypatch, tmp_path):
+def test_handle_files_never_hold_raw_params_and_child_consumes_the_side_file(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "sh"))
     key = background.launch(PHASE2, SECRET, popen=lambda argv, **kw: None)
     assert "SECRET-PROMPT-BODY" not in background._handle_path(key).read_text()
@@ -219,7 +224,7 @@ def test_handle_files_never_hold_raw_params_and_child_consumes_the_side_file(mon
     assert "SECRET-PROMPT-BODY" not in background._handle_path(key).read_text()
 
 
-def test_sweep_removes_only_files_older_than_ttl(monkeypatch, tmp_path):
+def test_sweep_removes_only_files_older_than_ttl(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "sh"))
     key = background.launch(OP, SECRET, popen=lambda argv, **kw: None)
     assert background.sweep(60, now=time.time()) == 0
@@ -228,7 +233,7 @@ def test_sweep_removes_only_files_older_than_ttl(monkeypatch, tmp_path):
     assert background.read_handle(key) is None
 
 
-def test_launch_sweeps_expired_handles(monkeypatch, tmp_path):
+def test_launch_sweeps_expired_handles(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "sh"))
     old = background.launch(OP, {}, popen=lambda argv, **kw: None)
     aged = time.time() - 2 * background.HANDLE_TTL_S
@@ -238,7 +243,7 @@ def test_launch_sweeps_expired_handles(monkeypatch, tmp_path):
     assert background.read_handle(fresh) is not None
 
 
-def test_handle_op_reads_outcome_and_answers_not_found(monkeypatch, tmp_path):
+def test_handle_op_reads_outcome_and_answers_not_found(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.ops.remote_engine_handle import _remote_engine_handle
 
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "sh"))
@@ -252,7 +257,7 @@ def test_handle_op_reads_outcome_and_answers_not_found(monkeypatch, tmp_path):
         _remote_engine_handle({})
 
 
-def test_launch_spawns_no_process_and_costs_little(monkeypatch, tmp_path):
+def test_launch_spawns_no_process_and_costs_little(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "sh"))
 
     def boom(*a, **k):
@@ -266,7 +271,7 @@ def test_launch_spawns_no_process_and_costs_little(monkeypatch, tmp_path):
     assert time.process_time() - t0 < 0.05
 
 
-def test_drain_pending_runs_queued_entry_through_node_transport(monkeypatch, tmp_path, runner):
+def test_drain_pending_runs_queued_entry_through_node_transport(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, runner) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "sh"))
     monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", "5")
     key = background.launch(OP, {})
@@ -276,7 +281,7 @@ def test_drain_pending_runs_queued_entry_through_node_transport(monkeypatch, tmp
     assert background.drain_pending() == 0 and len(runner.calls) == 1
 
 
-def test_drain_pending_is_bounded_per_call(monkeypatch, tmp_path):
+def test_drain_pending_is_bounded_per_call(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "sh"))
     keys = [background.launch(OP, {}) for _ in range(background.DRAIN_BATCH + 2)]
     assert background.drain_pending(try_remote=lambda op, p: None) == background.DRAIN_BATCH
@@ -284,27 +289,27 @@ def test_drain_pending_is_bounded_per_call(monkeypatch, tmp_path):
     assert statuses.count("pending") == 2
 
 
-def test_second_claim_of_the_same_entry_runs_nothing(monkeypatch, tmp_path):
+def test_second_claim_of_the_same_entry_runs_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "sh"))
     key = background.launch(OP, {})
     background._params_path(key).unlink()
     assert background.run_child(key, try_remote=lambda op, p: pytest.fail("ran")) == 1
 
 
-def test_fallback_refuses_a_non_ssh_box(monkeypatch, tmp_path, runner):
+def test_fallback_refuses_a_non_ssh_box(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, runner) -> None:
     monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", "5")
     monkeypatch.setattr(fallback, "pick_box", lambda boxes, lid: {"box_id": "far", "transport": {"kind": "weird"}})
     assert fallback.try_remote(OP, {}) is None
     assert runner.calls == []
 
 
-def test_read_handle_rejects_traversal_and_missing():
+def test_read_handle_rejects_traversal_and_missing() -> None:
     assert background.read_handle("../x") is None
     assert background.read_handle("nope") is None
 
 
 @pytest.mark.deliberate_wall_clock(reason="fail-open bound: a hook context must not wait on a remote boot")
-def test_hook_context_makes_no_remote_call_and_fails_open_fast(monkeypatch, tmp_path, runner):
+def test_hook_context_makes_no_remote_call_and_fails_open_fast(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, runner) -> None:
     t0 = time.monotonic()
     stdout, _stderr, code = _run(
         monkeypatch, tmp_path, boot_wait="0", reason="warm engine: resolved engine root does not exist: /x"
@@ -314,20 +319,20 @@ def test_hook_context_makes_no_remote_call_and_fails_open_fast(monkeypatch, tmp_
     assert code == 0 and json.loads(stdout)["result"] == {"pong": True}
 
 
-def test_viable_cold_run_makes_zero_runner_calls(monkeypatch, tmp_path, runner):
+def test_viable_cold_run_makes_zero_runner_calls(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, runner) -> None:
     stdout, _stderr, code = _run(monkeypatch, tmp_path, boot_wait="0", reason=None)
     assert code == 0 and json.loads(stdout)["result"] == {"pong": True}
     assert runner.calls == []
 
 
-def test_cold_by_design_clone_stays_local(monkeypatch, tmp_path, runner):
+def test_cold_by_design_clone_stays_local(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, runner) -> None:
     reason = "warm engine: this clone carries no engine build stamp, so it is not a warm-server host"
     stdout, _stderr, code = _run(monkeypatch, tmp_path, reason=reason)
     assert code == 0 and json.loads(stdout)["result"] == {"pong": True}
     assert runner.calls == []
 
 
-def test_allow_unstamped_dispatch_never_goes_remote(monkeypatch, tmp_path, runner):
+def test_allow_unstamped_dispatch_never_goes_remote(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, runner) -> None:
     stdout, _stderr, code = _run(
         monkeypatch, tmp_path, reason="ENGINE_SKEW", allow_unstamped=True
     )
@@ -335,12 +340,12 @@ def test_allow_unstamped_dispatch_never_goes_remote(monkeypatch, tmp_path, runne
     assert runner.calls == []
 
 
-def test_trim_file_cache_never_routes_remotely(monkeypatch, tmp_path, runner):
+def test_trim_file_cache_never_routes_remotely(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, runner) -> None:
     _run(monkeypatch, tmp_path, op="trim-file-cache", reason="ENGINE_SKEW")
     assert runner.calls == []
 
 
-def test_cold_dispatch_overrun_launches_background_retry_once(monkeypatch, tmp_path, runner, spawner):
+def test_cold_dispatch_overrun_launches_background_retry_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, runner, spawner) -> None:
     ipc._REGISTRY[OP] = lambda params, ctx=None, repo_root=None: time.sleep(1.5) or {"pong": True}
     monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", "0.3")
     stdout, _stderr, _code = _run(monkeypatch, tmp_path, reason=None, boot_wait="0.2")

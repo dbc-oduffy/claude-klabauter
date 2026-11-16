@@ -7,211 +7,212 @@ import pytest
 
 from coordinator_core.search import sources_read as sr
 from coordinator_core.search.engine import MAX_RENDER_BYTES, Unanswerable
+from pathlib import Path
 
 
 @pytest.fixture()
-def workdir(tmp_path):
+def workdir(tmp_path: Path) -> str:
     (tmp_path / "a.txt").write_text("one\ntwo\nthree\n", newline="")
     (tmp_path / "b.txt").write_text("four\nfive", newline="")
     (tmp_path / "empty.txt").write_text("", newline="")
     return str(tmp_path)
 
 
-def _produce(tokens, cwd):
+def _produce(tokens, cwd) -> str:
     return sr.parse_read_segment(tokens).produce(cwd)
 
 
-def test_cat_single_file(workdir):
+def test_cat_single_file(workdir) -> None:
     assert _produce(["cat", "a.txt"], workdir) == "one\ntwo\nthree\n"
 
 
-def test_cat_concatenation_no_headers(workdir):
+def test_cat_concatenation_no_headers(workdir) -> None:
     assert _produce(["cat", "a.txt", "b.txt"], workdir) == "one\ntwo\nthree\nfour\nfive"
 
 
-def test_cat_preserves_missing_final_newline(workdir):
+def test_cat_preserves_missing_final_newline(workdir) -> None:
     assert _produce(["cat", "b.txt"], workdir) == "four\nfive"
 
 
-def test_cat_absolute_operand_passthrough(workdir):
+def test_cat_absolute_operand_passthrough(workdir) -> None:
     abs_path = os.path.join(workdir, "a.txt")
     assert _produce(["cat", abs_path], workdir) == "one\ntwo\nthree\n"
 
 
-def test_cat_relative_operand_joins_cwd(workdir):
+def test_cat_relative_operand_joins_cwd(workdir) -> None:
     sub = os.path.join(workdir, "sub")
     os.mkdir(sub)
     (open(os.path.join(sub, "c.txt"), "w", encoding="utf-8")).write("x")
     assert _produce(["cat", "c.txt"], sub) == "x"
 
 
-def test_cat_declines_any_flag(workdir):
+def test_cat_declines_any_flag(workdir) -> None:
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["cat", "-n", "a.txt"])
 
 
-def test_cat_declines_stdin_dash(workdir):
+def test_cat_declines_stdin_dash(workdir) -> None:
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["cat", "-"])
 
 
-def test_cat_declines_absent_operand():
+def test_cat_declines_absent_operand() -> None:
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["cat"])
 
 
-def test_head_default_n10(workdir):
+def test_head_default_n10(workdir) -> None:
     with open(os.path.join(workdir, "many.txt"), "w", newline="", encoding="utf-8") as fh:
         fh.write("\n".join(str(i) for i in range(1, 21)) + "\n")
     out = _produce(["head", "many.txt"], workdir)
     assert out == "\n".join(str(i) for i in range(1, 11)) + "\n"
 
 
-def test_head_dash_n_value(workdir):
+def test_head_dash_n_value(workdir) -> None:
     assert _produce(["head", "-n", "2", "a.txt"], workdir) == "one\ntwo\n"
 
 
-def test_head_glued_short_count(workdir):
+def test_head_glued_short_count(workdir) -> None:
     assert _produce(["head", "-2", "a.txt"], workdir) == "one\ntwo\n"
 
 
-def test_tail_dash_n_value(workdir):
+def test_tail_dash_n_value(workdir) -> None:
     assert _produce(["tail", "-n", "1", "a.txt"], workdir) == "three\n"
 
 
-def test_tail_glued_short_count(workdir):
+def test_tail_glued_short_count(workdir) -> None:
     assert _produce(["tail", "-1", "a.txt"], workdir) == "three\n"
 
 
-def test_tail_zero_count_is_empty(workdir):
+def test_tail_zero_count_is_empty(workdir) -> None:
     assert _produce(["tail", "-n", "0", "a.txt"], workdir) == ""
 
 
-def test_head_tail_decline_multi_file(workdir):
+def test_head_tail_decline_multi_file(workdir) -> None:
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["head", "a.txt", "b.txt"])
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["tail", "a.txt", "b.txt"])
 
 
-def test_head_declines_unsupported_flag(workdir):
+def test_head_declines_unsupported_flag(workdir) -> None:
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["head", "-c", "10", "a.txt"])
 
 
-def test_head_declines_non_numeric_n(workdir):
+def test_head_declines_non_numeric_n(workdir) -> None:
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["head", "-n", "x", "a.txt"])
 
 
-def test_sed_range(workdir):
+def test_sed_range(workdir) -> None:
     assert _produce(["sed", "-n", "2,3p", "a.txt"], workdir) == "two\nthree\n"
 
 
-def test_sed_single_line(workdir):
+def test_sed_single_line(workdir) -> None:
     assert _produce(["sed", "-n", "2p", "a.txt"], workdir) == "two\n"
 
 
-def test_sed_dollar_end_bound(workdir):
+def test_sed_dollar_end_bound(workdir) -> None:
     assert _produce(["sed", "-n", "2,$p", "a.txt"], workdir) == "two\nthree\n"
 
 
-def test_sed_dollar_single_line(workdir):
+def test_sed_dollar_single_line(workdir) -> None:
     assert _produce(["sed", "-n", "$p", "a.txt"], workdir) == "three\n"
 
 
-def test_sed_without_dash_n_declines(workdir):
+def test_sed_without_dash_n_declines(workdir) -> None:
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["sed", "2,3p", "a.txt"])
 
 
-def test_sed_other_program_declines(workdir):
+def test_sed_other_program_declines(workdir) -> None:
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["sed", "-n", "s/a/b/", "a.txt"])
 
 
-def test_sed_trailing_q_optimisation_declines(workdir):
+def test_sed_trailing_q_optimisation_declines(workdir) -> None:
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["sed", "-n", "20,40p;40q", "a.txt"])
 
 
-def test_sed_out_of_bounds_range_declines(workdir):
+def test_sed_out_of_bounds_range_declines(workdir) -> None:
     with pytest.raises(Unanswerable):
         _produce(["sed", "-n", "5,10p", "a.txt"], workdir)
 
 
-def test_declines_redirection_gt(workdir):
+def test_declines_redirection_gt(workdir) -> None:
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["cat", "a.txt", ">", "out.txt"])
 
 
-def test_declines_redirection_append(workdir):
+def test_declines_redirection_append(workdir) -> None:
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["cat", "a.txt", ">>", "out.txt"])
 
 
-def test_declines_redirection_stderr(workdir):
+def test_declines_redirection_stderr(workdir) -> None:
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["cat", "a.txt", "2>", "err.txt"])
 
 
-def test_declines_command_substitution(workdir):
+def test_declines_command_substitution(workdir) -> None:
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["cat", "$(echo a.txt)"])
 
 
-def test_declines_backtick_substitution(workdir):
+def test_declines_backtick_substitution(workdir) -> None:
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["cat", "`echo a.txt`"])
 
 
-def test_declines_process_substitution(workdir):
+def test_declines_process_substitution(workdir) -> None:
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["cat", "<(echo a.txt)"])
 
 
-def test_declines_variable_expansion_operand(workdir):
+def test_declines_variable_expansion_operand(workdir) -> None:
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["cat", "$HOME/a.txt"])
 
 
-def test_sed_dollar_end_bound_survives_substitution_check(workdir):
+def test_sed_dollar_end_bound_survives_substitution_check(workdir) -> None:
     assert _produce(["sed", "-n", "1,$p", "a.txt"], workdir) == "one\ntwo\nthree\n"
 
 
-def test_declines_unsupported_verb():
+def test_declines_unsupported_verb() -> None:
     with pytest.raises(Unanswerable):
         sr.parse_read_segment(["awk", "{print}", "a.txt"])
 
 
-def test_declines_empty_segment():
+def test_declines_empty_segment() -> None:
     with pytest.raises(Unanswerable):
         sr.parse_read_segment([])
 
 
-def test_declines_glob_operand(workdir):
+def test_declines_glob_operand(workdir) -> None:
     with pytest.raises(Unanswerable):
         _produce(["cat", "*.txt"], workdir)
 
 
-def test_declines_brace_operand(workdir):
+def test_declines_brace_operand(workdir) -> None:
     with pytest.raises(Unanswerable):
         _produce(["cat", "{a,b}.txt"], workdir)
 
 
-def test_declines_nonexistent_path(workdir):
+def test_declines_nonexistent_path(workdir) -> None:
     with pytest.raises(Unanswerable):
         _produce(["cat", "does-not-exist.txt"], workdir)
 
 
-def test_declines_directory(workdir):
+def test_declines_directory(workdir) -> None:
     sub = os.path.join(workdir, "sub")
     os.mkdir(sub)
     with pytest.raises(Unanswerable):
         _produce(["cat", "sub"], workdir)
 
 
-def test_declines_nul_byte_anywhere_in_file(workdir):
+def test_declines_nul_byte_anywhere_in_file(workdir) -> None:
     path = os.path.join(workdir, "mostly-text.dat")
     with open(path, "wb") as fh:
         fh.write(b"line\n" * 4000)
@@ -220,7 +221,7 @@ def test_declines_nul_byte_anywhere_in_file(workdir):
         _produce(["cat", "mostly-text.dat"], workdir)
 
 
-def test_declines_non_utf8_bytes(workdir):
+def test_declines_non_utf8_bytes(workdir) -> None:
     path = os.path.join(workdir, "latin1.txt")
     with open(path, "wb") as fh:
         fh.write("café".encode("latin-1"))
@@ -228,7 +229,7 @@ def test_declines_non_utf8_bytes(workdir):
         _produce(["cat", "latin1.txt"], workdir)
 
 
-def test_declines_oversized_file_without_reading(workdir):
+def test_declines_oversized_file_without_reading(workdir) -> None:
     path = os.path.join(workdir, "big.txt")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("x" * (MAX_RENDER_BYTES + 1))
@@ -236,7 +237,7 @@ def test_declines_oversized_file_without_reading(workdir):
         _produce(["cat", "big.txt"], workdir)
 
 
-def test_at_cap_file_is_still_served(workdir):
+def test_at_cap_file_is_still_served(workdir) -> None:
     path = os.path.join(workdir, "exact.txt")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("x" * MAX_RENDER_BYTES)

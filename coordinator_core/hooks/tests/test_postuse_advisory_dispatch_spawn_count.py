@@ -16,11 +16,12 @@ from coordinator_core.benchmarks.budget import load_manifest
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.hooks import postuse_advisory_dispatch as pad
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> None:
     subprocess.run(
         ["git", *args], cwd=repo, check=True, capture_output=True, text=True,
         **no_console_creationflags(),
@@ -32,7 +33,7 @@ def _budget() -> dict:
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(root, "init", "-q")
@@ -48,7 +49,7 @@ def _fire(repo, monkeypatch, params):
     return spawns
 
 
-def test_ascii_write_touch_spawns_nothing(repo, monkeypatch):
+def test_ascii_write_touch_spawns_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "plain.py").write_text("x = 1\n", encoding="utf-8")
     spawns = _fire(
         repo,
@@ -58,7 +59,7 @@ def test_ascii_write_touch_spawns_nothing(repo, monkeypatch):
     assert len(spawns) == _budget()["ascii_write_touch"], [s.argv for s in spawns]
 
 
-def test_non_ascii_write_touch_spawns_exactly_the_budgeted_ls_files(repo, monkeypatch):
+def test_non_ascii_write_touch_spawns_exactly_the_budgeted_ls_files(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "café.py").write_text("x = 1\n", encoding="utf-8")
     spawns = _fire(
         repo,

@@ -27,35 +27,35 @@ def _seed_archived(repo_root: Path, rel: str, *, handoff_id: str | None = None) 
 
 
 class TestFindArchivedTwinByFilename:
-    def test_sharded_match(self, tmp_path):
+    def test_sharded_match(self, tmp_path: Path) -> None:
         archived = _seed_archived(tmp_path, "2026-07/2026-07-22-foo.md")
         target = tmp_path / "state" / "handoffs" / "2026-07-22-foo.md"
         found = find_archived_twin_by_filename(target, tmp_path)
         assert found == archived
 
-    def test_unsharded_match(self, tmp_path):
+    def test_unsharded_match(self, tmp_path: Path) -> None:
         archived = _seed_archived(tmp_path, "2026-07-22-foo.md")
         target = tmp_path / "state" / "handoffs" / "2026-07-22-foo.md"
         found = find_archived_twin_by_filename(target, tmp_path)
         assert found == archived
 
-    def test_no_match(self, tmp_path):
+    def test_no_match(self, tmp_path: Path) -> None:
         _seed_archived(tmp_path, "2026-07/2026-07-22-other.md")
         target = tmp_path / "state" / "handoffs" / "2026-07-22-foo.md"
         assert find_archived_twin_by_filename(target, tmp_path) is None
 
-    def test_no_archive_dir(self, tmp_path):
+    def test_no_archive_dir(self, tmp_path: Path) -> None:
         target = tmp_path / "state" / "handoffs" / "2026-07-22-foo.md"
         assert find_archived_twin_by_filename(target, tmp_path) is None
 
 
 class TestFindArchivedTwinByHandoffId:
-    def test_match(self, tmp_path):
+    def test_match(self, tmp_path: Path) -> None:
         archived = _seed_archived(tmp_path, "2026-07/2026-07-22-foo.md", handoff_id="hnd-foo-abc123")
         found = find_archived_twin_by_handoff_id("hnd-foo-abc123", tmp_path)
         assert found == archived
 
-    def test_no_match(self, tmp_path):
+    def test_no_match(self, tmp_path: Path) -> None:
         _seed_archived(tmp_path, "2026-07/2026-07-22-foo.md", handoff_id="hnd-foo-abc123")
         assert find_archived_twin_by_handoff_id("hnd-bar-zzz999", tmp_path) is None
 
@@ -66,7 +66,7 @@ class TestFindArchivedTwinByHandoffId:
             ["handoff_id_aliases: [hnd-older-bbbbbb, 'hnd-old-aaaaaa']"],
         ],
     )
-    def test_alias_matches_in_block_and_flow_form(self, tmp_path, alias_lines):
+    def test_alias_matches_in_block_and_flow_form(self, tmp_path: Path, alias_lines) -> None:
         archived = tmp_path / "archive" / "handoffs" / "2026-07" / "2026-07-22-foo.md"
         archived.parent.mkdir(parents=True)
         archived.write_text(
@@ -77,20 +77,20 @@ class TestFindArchivedTwinByHandoffId:
         assert find_archived_twin_by_handoff_id("hnd-new-cccccc", tmp_path) == archived
         assert find_archived_twin_by_handoff_id("hnd-other-dddddd", tmp_path) is None
 
-    def test_alias_text_in_body_is_ignored(self, tmp_path):
+    def test_alias_text_in_body_is_ignored(self, tmp_path: Path) -> None:
         archived = tmp_path / "archive" / "handoffs" / "2026-07" / "2026-07-22-foo.md"
         archived.parent.mkdir(parents=True)
         archived.write_text("---\nhandoff_id: hnd-new-cccccc\n---\nhandoff_id_aliases:\n  - hnd-old-aaaaaa\n", encoding="utf-8")
         assert find_archived_twin_by_handoff_id("hnd-old-aaaaaa", tmp_path) is None
 
-    def test_none_handoff_id_returns_none(self, tmp_path):
+    def test_none_handoff_id_returns_none(self, tmp_path: Path) -> None:
         _seed_archived(tmp_path, "2026-07/2026-07-22-foo.md", handoff_id="hnd-foo-abc123")
         assert find_archived_twin_by_handoff_id(None, tmp_path) is None
 
-    def test_empty_handoff_id_returns_none(self, tmp_path):
+    def test_empty_handoff_id_returns_none(self, tmp_path: Path) -> None:
         assert find_archived_twin_by_handoff_id("", tmp_path) is None
 
-    def test_id_in_body_not_frontmatter_is_ignored(self, tmp_path):
+    def test_id_in_body_not_frontmatter_is_ignored(self, tmp_path: Path) -> None:
         archived = tmp_path / "archive" / "handoffs" / "2026-07" / "2026-07-22-foo.md"
         archived.parent.mkdir(parents=True, exist_ok=True)
         archived.write_text(
@@ -109,7 +109,7 @@ class TestFindArchivedTwinByHandoffId:
         )
         assert find_archived_twin_by_handoff_id("hnd-body-only-999", tmp_path) is None
 
-    def test_malformed_no_closing_fence_still_resolves(self, tmp_path):
+    def test_malformed_no_closing_fence_still_resolves(self, tmp_path: Path) -> None:
         archived = tmp_path / "archive" / "handoffs" / "2026-07" / "2026-07-22-malformed.md"
         archived.parent.mkdir(parents=True, exist_ok=True)
         archived.write_text(
@@ -129,7 +129,7 @@ class TestFindArchivedTwinByHandoffId:
         found = find_archived_twin_by_handoff_id("hnd-malformed-1", tmp_path)
         assert found == archived
 
-    def test_large_corpus_narrowing_reads_only_frontmatter(self, tmp_path):
+    def test_large_corpus_narrowing_reads_only_frontmatter(self, tmp_path: Path) -> None:
         huge_body = "\n".join(f"filler line {i} of an enormous archived body" for i in range(50_000))
         archived = tmp_path / "archive" / "handoffs" / "2026-07" / "2026-07-22-huge.md"
         archived.parent.mkdir(parents=True, exist_ok=True)
@@ -147,11 +147,11 @@ class TestFindArchivedTwinByHandoffId:
 
 
 class TestAssertNoArchivedTwin:
-    def test_no_twin_is_noop(self, tmp_path):
+    def test_no_twin_is_noop(self, tmp_path: Path) -> None:
         target = tmp_path / "state" / "handoffs" / "2026-07-22-fresh.md"
         assert assert_no_archived_twin(target, tmp_path) is None
 
-    def test_filename_collision_raises(self, tmp_path):
+    def test_filename_collision_raises(self, tmp_path: Path) -> None:
         archived = _seed_archived(tmp_path, "2026-07/2026-07-22-foo.md")
         target = tmp_path / "state" / "handoffs" / "2026-07-22-foo.md"
         with pytest.raises(HandoffArchivedTwinError) as exc_info:
@@ -161,7 +161,7 @@ class TestAssertNoArchivedTwin:
         assert "git mv" in msg
         assert "predecessor" in msg
 
-    def test_handoff_id_collision_raises(self, tmp_path):
+    def test_handoff_id_collision_raises(self, tmp_path: Path) -> None:
         archived = _seed_archived(
             tmp_path, "2026-07/2026-07-22-differently-named.md", handoff_id="hnd-dup-abc123"
         )
@@ -171,13 +171,13 @@ class TestAssertNoArchivedTwin:
         msg = str(exc_info.value)
         assert str(archived) in msg
 
-    def test_filename_match_checked_before_handoff_id(self, tmp_path):
+    def test_filename_match_checked_before_handoff_id(self, tmp_path: Path) -> None:
         _seed_archived(tmp_path, "2026-07/2026-07-22-foo.md")
         target = tmp_path / "state" / "handoffs" / "2026-07-22-foo.md"
         with pytest.raises(HandoffArchivedTwinError):
             assert_no_archived_twin(target, tmp_path, handoff_id=None)
 
-    def test_stalled_scan_allows_creation_within_deadline(self, tmp_path, monkeypatch):
+    def test_stalled_scan_allows_creation_within_deadline(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import time
 
         from coordinator_core import handoff_creation_guard as hcg
@@ -187,7 +187,7 @@ class TestAssertNoArchivedTwin:
         monkeypatch.setattr(hcg, "run_bounded", lambda k, f, **kw: real(k, f, **{**kw, "deadline": 0.05}))
         release = []
 
-        def slow(_path):
+        def slow(_path) -> None:
             while not release:
                 time.sleep(0.01)
             return None
@@ -201,7 +201,7 @@ class TestAssertNoArchivedTwin:
             release.append(1)
         assert time.monotonic() - start < 0.25
 
-    def test_no_escape_parameter(self):
+    def test_no_escape_parameter(self) -> None:
         sig = inspect.signature(assert_no_archived_twin)
         for forbidden in ("force", "escape", "override", "skip"):
             assert forbidden not in sig.parameters, (

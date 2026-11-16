@@ -14,6 +14,7 @@ import pytest
 from coordinator_core.ops import fold_execution_record as fer
 from coordinator_core.testing import symlink_capability
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -94,22 +95,22 @@ def _sidecar_content(chunk_id: str, obs_body: str) -> str:
         (".md", ""),
     ],
 )
-def test_derive_plan_slug_parity_cases(filename, expected):
+def test_derive_plan_slug_parity_cases(filename, expected) -> None:
     assert fer._derive_plan_slug(f"/some/dir/{filename}") == expected
 
 
-def test_derive_plan_slug_case_preserved_not_lowercased():
+def test_derive_plan_slug_case_preserved_not_lowercased() -> None:
     assert fer._derive_plan_slug("2026-07-13-MixedCase-Slug.md") == "MixedCase-Slug"
 
 
-def test_slug_valid_regex_rejects_uppercase_and_underscore():
+def test_slug_valid_regex_rejects_uppercase_and_underscore() -> None:
     assert fer._SLUG_VALID_RE.match("plan-slug")
     assert not fer._SLUG_VALID_RE.match("Plan-Slug")
     assert not fer._SLUG_VALID_RE.match("plan_slug")
     assert not fer._SLUG_VALID_RE.match("-leading-dash")
 
 
-def test_skip_plan_not_found(tmp_path, capsys):
+def test_skip_plan_not_found(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = fer.main(["--plan", str(tmp_path / "nope.md")])
     assert rc == 0
     out = capsys.readouterr()
@@ -117,7 +118,7 @@ def test_skip_plan_not_found(tmp_path, capsys):
     assert "plan not found or unreadable" in out.err
 
 
-def test_skip_slug_derivation_failed(tmp_path, capsys):
+def test_skip_slug_derivation_failed(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     plan_path = tmp_path / "2026-07-13-.md"
     _write(plan_path, "# stub\n")
     rc = fer.main(["--plan", str(plan_path)])
@@ -126,7 +127,7 @@ def test_skip_slug_derivation_failed(tmp_path, capsys):
     assert "SKIP slug-derivation-failed" in out.out
 
 
-def test_skip_invalid_slug(tmp_path, capsys):
+def test_skip_invalid_slug(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     plan_path = tmp_path / "2026-07-13-Bad_Slug.md"
     _write(plan_path, "# stub\n")
     rc = fer.main(["--plan", str(plan_path)])
@@ -136,7 +137,7 @@ def test_skip_invalid_slug(tmp_path, capsys):
     assert "invalid plan-slug derived from filename" in out.err
 
 
-def test_skip_repo_root_unresolvable(tmp_path, capsys, monkeypatch):
+def test_skip_repo_root_unresolvable(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     plan_path = tmp_path / "2026-07-13-my-plan.md"
     _write(plan_path, "# stub\n")
     monkeypatch.setattr(fer, "_resolve_git_root", lambda _p: "")
@@ -147,7 +148,7 @@ def test_skip_repo_root_unresolvable(tmp_path, capsys, monkeypatch):
     assert "cannot resolve repo root" in out.err
 
 
-def test_resolve_git_root_fallback_grandparent_no_git(tmp_path):
+def test_resolve_git_root_fallback_grandparent_no_git(tmp_path: Path) -> None:
     non_git_root = tmp_path / "not-a-repo"
     plan_dir = non_git_root / "docs" / "plans"
     plan_dir.mkdir(parents=True)
@@ -159,7 +160,7 @@ def test_resolve_git_root_fallback_grandparent_no_git(tmp_path):
 
 
 @symlink_capability.requires_symlink_capability
-def test_resolve_git_root_fallback_does_not_resolve_symlinks(tmp_path):
+def test_resolve_git_root_fallback_does_not_resolve_symlinks(tmp_path: Path) -> None:
     real_target = tmp_path / "real-target"
     real_target.mkdir()
     symlinked_root = tmp_path / "symlinked-root"
@@ -175,7 +176,7 @@ def test_resolve_git_root_fallback_does_not_resolve_symlinks(tmp_path):
     assert "real-target" not in result
 
 
-def test_skip_no_subagent_share_dir(tmp_path, capsys):
+def test_skip_no_subagent_share_dir(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo, plan_path = _make_repo_with_plan(tmp_path, "2026-07-13-my-plan.md", _PLAN_BODY)
     rc = fer.main(["--plan", str(plan_path)])
     assert rc == 0
@@ -184,7 +185,7 @@ def test_skip_no_subagent_share_dir(tmp_path, capsys):
     assert out.err == ""
 
 
-def test_skip_no_sidecars(tmp_path, capsys):
+def test_skip_no_sidecars(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo, plan_path = _make_repo_with_plan(tmp_path, "2026-07-13-my-plan.md", _PLAN_BODY)
     (repo / "state" / "subagent-share").mkdir(parents=True)
     rc = fer.main(["--plan", str(plan_path)])
@@ -195,7 +196,7 @@ def test_skip_no_sidecars(tmp_path, capsys):
     assert out.err == ""
 
 
-def test_skip_all_observations_trivial(tmp_path, capsys):
+def test_skip_all_observations_trivial(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo, plan_path = _make_repo_with_plan(tmp_path, "2026-07-13-my-plan.md", _PLAN_BODY)
     sidecar = _sidecar_path(repo, "sess1", "my-plan", "c1")
     _write(sidecar, _sidecar_content("c1", "N/A"))
@@ -206,37 +207,37 @@ def test_skip_all_observations_trivial(tmp_path, capsys):
     assert out.err == ""
 
 
-def test_missing_plan_flag_is_usage_error(capsys):
+def test_missing_plan_flag_is_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
     rc = fer.main([])
     assert rc == 1
     assert "Usage:" in capsys.readouterr().err
 
 
-def test_plan_requires_argument(capsys):
+def test_plan_requires_argument(capsys: pytest.CaptureFixture[str]) -> None:
     rc = fer.main(["--plan"])
     assert rc == 1
     assert "--plan requires an argument" in capsys.readouterr().err
 
 
-def test_desc_requires_argument(tmp_path, capsys):
+def test_desc_requires_argument(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = fer.main(["--plan", str(tmp_path / "x.md"), "--desc"])
     assert rc == 1
     assert "--desc requires an argument" in capsys.readouterr().err
 
 
-def test_unknown_flag_errors(capsys):
+def test_unknown_flag_errors(capsys: pytest.CaptureFixture[str]) -> None:
     rc = fer.main(["--bogus"])
     assert rc == 1
     assert "unknown flag: --bogus" in capsys.readouterr().err
 
 
-def test_unexpected_positional_errors(capsys):
+def test_unexpected_positional_errors(capsys: pytest.CaptureFixture[str]) -> None:
     rc = fer.main(["stray"])
     assert rc == 1
     assert "unexpected positional argument: stray" in capsys.readouterr().err
 
 
-def test_sidecar_discovery_sort_order_deterministic(tmp_path):
+def test_sidecar_discovery_sort_order_deterministic(tmp_path: Path) -> None:
     repo, plan_path = _make_repo_with_plan(tmp_path, "2026-07-13-my-plan.md", _PLAN_BODY)
     _write(_sidecar_path(repo, "session-zzz", "my-plan", "c2"), _sidecar_content("c2", "obs2"))
     _write(_sidecar_path(repo, "session-aaa", "my-plan", "c1"), _sidecar_content("c1", "obs1"))
@@ -248,7 +249,7 @@ def test_sidecar_discovery_sort_order_deterministic(tmp_path):
     assert found[1].endswith(os.path.join("session-zzz", "my-plan.c2.md"))
 
 
-def test_sidecar_discovery_ignores_non_matching_names(tmp_path):
+def test_sidecar_discovery_ignores_non_matching_names(tmp_path: Path) -> None:
     repo, plan_path = _make_repo_with_plan(tmp_path, "2026-07-13-my-plan.md", _PLAN_BODY)
     _write(_sidecar_path(repo, "sess1", "my-plan", "c1"), _sidecar_content("c1", "obs"))
     _write(_sidecar_path(repo, "sess1", "other-plan", "c1"), _sidecar_content("c1", "obs"))
@@ -258,19 +259,19 @@ def test_sidecar_discovery_ignores_non_matching_names(tmp_path):
     assert "my-plan.c1.md" in found[0]
 
 
-def test_parse_chunk_ac_map_ignores_headings_outside_chunks_section():
+def test_parse_chunk_ac_map_ignores_headings_outside_chunks_section() -> None:
     ac_map = fer._parse_chunk_ac_map(_PLAN_BODY)
     assert ac_map == {"c1": "Registry P0", "c2": "Docs Sweep"}
 
 
-def test_parse_chunk_ac_map_em_dash_and_hyphen_separators():
+def test_parse_chunk_ac_map_em_dash_and_hyphen_separators() -> None:
     body = "## Chunks\n\n### C1 - Hyphen Separated\n### C2 — Em Dash Separated\n"
     ac_map = fer._parse_chunk_ac_map(body)
     assert ac_map["c1"] == "Hyphen Separated"
     assert ac_map["c2"] == "Em Dash Separated"
 
 
-def test_extract_frontmatter_chunk_strips_quotes_independently():
+def test_extract_frontmatter_chunk_strips_quotes_independently() -> None:
     lines = ["---", "chunk: 'c1", "---"]
     assert fer._extract_frontmatter_chunk(lines) == "c1"
     lines2 = ["---", 'chunk: c1"', "---"]
@@ -279,12 +280,12 @@ def test_extract_frontmatter_chunk_strips_quotes_independently():
     assert fer._extract_frontmatter_chunk(lines3) == "c1"
 
 
-def test_extract_frontmatter_chunk_missing_returns_empty():
+def test_extract_frontmatter_chunk_missing_returns_empty() -> None:
     lines = ["---", "plan: foo", "---", "body"]
     assert fer._extract_frontmatter_chunk(lines) == ""
 
 
-def test_extract_observations_body_prefix_match_heading_variant():
+def test_extract_observations_body_prefix_match_heading_variant() -> None:
     lines = [
         "## Observations & Notes",
         "line one",
@@ -296,12 +297,12 @@ def test_extract_observations_body_prefix_match_heading_variant():
     assert body == ["line one", "line two"]
 
 
-def test_trim_blank_lines_removes_leading_and_trailing_only():
+def test_trim_blank_lines_removes_leading_and_trailing_only() -> None:
     lines = ["", "  ", "content 1", "", "content 2", "", ""]
     assert fer._trim_blank_lines(lines) == ["content 1", "", "content 2"]
 
 
-def test_is_trivial_observation_variants():
+def test_is_trivial_observation_variants() -> None:
     assert fer._is_trivial_observation("")
     assert fer._is_trivial_observation("   ")
     assert fer._is_trivial_observation("N/A")
@@ -312,12 +313,12 @@ def test_is_trivial_observation_variants():
     assert not fer._is_trivial_observation("real content here")
 
 
-def test_title_case_slug_collapses_whitespace_and_preserves_rest_case():
+def test_title_case_slug_collapses_whitespace_and_preserves_rest_case() -> None:
     assert fer._title_case_slug("my-cool-plan") == "My Cool Plan"
     assert fer._title_case_slug("aBc-def") == "ABc Def"
 
 
-def test_full_success_emits_part_a_and_part_b(tmp_path, capsys):
+def test_full_success_emits_part_a_and_part_b(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo, plan_path = _make_repo_with_plan(tmp_path, "2026-07-13-my-plan.md", _PLAN_BODY)
     _write(
         _sidecar_path(repo, "sess1", "my-plan", "c1"),
@@ -349,7 +350,7 @@ def test_full_success_emits_part_a_and_part_b(tmp_path, capsys):
     )
 
 
-def test_success_falls_back_to_filename_chunk_id_when_no_frontmatter(tmp_path, capsys):
+def test_success_falls_back_to_filename_chunk_id_when_no_frontmatter(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo, plan_path = _make_repo_with_plan(tmp_path, "2026-07-13-my-plan.md", _PLAN_BODY)
     no_fm_content = "no frontmatter here\n\n## Observations\n\nfilename fallback obs.\n"
     _write(_sidecar_path(repo, "sess1", "my-plan", "c1"), no_fm_content)
@@ -360,7 +361,7 @@ def test_success_falls_back_to_filename_chunk_id_when_no_frontmatter(tmp_path, c
     assert "filename fallback obs." in stdout
 
 
-def test_unresolved_chunk_ac_mapping_annotated_manually(tmp_path, capsys):
+def test_unresolved_chunk_ac_mapping_annotated_manually(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo, plan_path = _make_repo_with_plan(tmp_path, "2026-07-13-my-plan.md", _PLAN_BODY)
     _write(
         _sidecar_path(repo, "sess1", "my-plan", "c9"),
@@ -372,7 +373,7 @@ def test_unresolved_chunk_ac_mapping_annotated_manually(tmp_path, capsys):
     assert "C9 (chunk-to-AC mapping not resolved — annotate manually)" in stdout
 
 
-def test_no_desc_flag_emits_judgment_step_title(tmp_path, capsys):
+def test_no_desc_flag_emits_judgment_step_title(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo, plan_path = _make_repo_with_plan(tmp_path, "2026-07-13-my-plan.md", _PLAN_BODY)
     _write(
         _sidecar_path(repo, "sess1", "my-plan", "c1"),
@@ -385,7 +386,7 @@ def test_no_desc_flag_emits_judgment_step_title(tmp_path, capsys):
     assert "[Caller-supplied description]" not in stdout
 
 
-def test_read_divergence_surfaces_diverged_prose_and_names_unreadable(tmp_path, capsys) -> None:
+def test_read_divergence_surfaces_diverged_prose_and_names_unreadable(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     clean = tmp_path / "clean.md"
     diverged = tmp_path / "div.md"
     _write(clean, '---\nchunk: C1\ndivergence: {"diverged": false}\n---\n\n## Observations\nfine\n')

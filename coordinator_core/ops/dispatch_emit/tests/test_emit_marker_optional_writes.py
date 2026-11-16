@@ -8,6 +8,7 @@ from coordinator_core.ops.dispatch_emit.emit import _terminal_commit_marker
 from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 _REVIEWED = {
     "integration_stem": "rev-stem", "slices": 1, "fixes": 1,
@@ -29,31 +30,31 @@ def _chunks(body, writes=("a.py", "b.npz")):
     return parse_marker(marker).chunks
 
 
-def test_optional_write_is_carried_and_leaves_gating():
+def test_optional_write_is_carried_and_leaves_gating() -> None:
     (chunk,) = _chunks("do it\noptional_writes: `b.npz`\n")
     assert chunk.optional == ("b.npz",)
     assert chunk.gating_paths() == ("a.py",)
 
 
-def test_unmarked_row_keeps_every_write_gating():
+def test_unmarked_row_keeps_every_write_gating() -> None:
     (chunk,) = _chunks("do it\n")
     assert chunk.optional == ()
     assert chunk.gating_paths() == ("a.py", "b.npz")
 
 
-def test_optional_naming_an_undeclared_path_is_ignored():
+def test_optional_naming_an_undeclared_path_is_ignored() -> None:
     (chunk,) = _chunks("optional_writes: other.py\n")
     assert chunk.optional == ()
     assert chunk.gating_paths() == ("a.py", "b.npz")
 
 
-def test_declared_write_marked_required_false_in_the_row_body_is_optional():
+def test_declared_write_marked_required_false_in_the_row_body_is_optional() -> None:
     (chunk,) = _chunks("phase: code\n- `b.npz` (required: false)\nb.npz is built\n")
     assert chunk.optional == ("b.npz",)
     assert chunk.gating_paths() == ("a.py",)
 
 
-def test_required_false_beside_prose_naming_a_path_is_not_a_marking():
+def test_required_false_beside_prose_naming_a_path_is_not_a_marking() -> None:
     (chunk,) = _chunks("when b.npz is absent the field required: false is unrelated\n")
     assert chunk.optional == ()
 
@@ -96,13 +97,13 @@ def _landing(tmp_path, body):
     return terminal_commit._handler(params, repo_root=root / ".git"), root
 
 
-def test_required_false_write_absent_lands_through_terminal_commit(tmp_path):
+def test_required_false_write_absent_lands_through_terminal_commit(tmp_path: Path) -> None:
     out, root = _landing(tmp_path, "- `b.npz` (required: false)\n")
     assert out["committed"] is True, out
     assert "a.py" in _git(["ls-tree", "-r", "--name-only", "HEAD"], root).split()
 
 
-def test_unmarked_absent_write_still_refuses_through_terminal_commit(tmp_path):
+def test_unmarked_absent_write_still_refuses_through_terminal_commit(tmp_path: Path) -> None:
     out, _ = _landing(tmp_path, "build it\n")
     assert out["committed"] is False, out
     assert out["refused"] == "declared-write-missing", out

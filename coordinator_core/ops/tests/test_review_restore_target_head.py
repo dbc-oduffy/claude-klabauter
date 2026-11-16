@@ -15,6 +15,7 @@ from coordinator_core.ops import review_reverify as rr
 from coordinator_core.ops.dispatch_emit import review_edits
 from coordinator_core.ops.review_mint import execute_review as er
 from coordinator_core.session.machinery_paths import share_dir
+import pytest
 
 _REAL_RUN = subprocess.run
 SESSION = "sess-own"
@@ -60,7 +61,7 @@ def _arm(monkeypatch, rows: list) -> None:
     monkeypatch.setattr(review_findings_ledger, "read_ledger", lambda _p: (True, rows))
 
 
-def test_revert_after_a_peer_commit_keeps_head_bytes_not_run_base_bytes(tmp_path, monkeypatch):
+def test_revert_after_a_peer_commit_keeps_head_bytes_not_run_base_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _git(tmp_path, "init", "-q")
     base = _commit(tmp_path, {"pkg/__init__.py": b"", "pkg/op.py": BASE_OP, "tests/test_op.py": TEST_PY}, "base")
     _snapshot(tmp_path, base, {"pkg/op.py": BASE_OP})
@@ -77,7 +78,7 @@ def test_revert_after_a_peer_commit_keeps_head_bytes_not_run_base_bytes(tmp_path
     assert (tmp_path / "pkg/op.py").read_bytes() == PEER_OP == _git(tmp_path, "show", "HEAD:pkg/op.py").encode() + b"\n"
 
 
-def test_unedited_path_a_peer_commit_changed_is_not_reported_edited_and_stays_head(tmp_path, monkeypatch):
+def test_unedited_path_a_peer_commit_changed_is_not_reported_edited_and_stays_head(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _git(tmp_path, "init", "-q")
     base = _commit(tmp_path, {"pkg/op.py": BASE_OP}, "base")
     _snapshot(tmp_path, base, {"pkg/op.py": BASE_OP})

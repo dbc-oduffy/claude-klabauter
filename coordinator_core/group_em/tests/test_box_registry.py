@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 
 from coordinator_core.group_em import box_registry
+from pathlib import Path
 
 
-def test_local_box_id_absent_is_local(tmp_path):
+def test_local_box_id_absent_is_local(tmp_path: Path) -> None:
     assert box_registry.local_box_id(tmp_path) == "local"
 
 
-def test_local_box_id_malformed_is_local(tmp_path):
+def test_local_box_id_malformed_is_local(tmp_path: Path) -> None:
     p = tmp_path / "state" / "group-em"
     p.mkdir(parents=True)
     (p / "box.json").write_text("{not json", encoding="utf-8")
@@ -20,14 +21,14 @@ def test_local_box_id_malformed_is_local(tmp_path):
     assert box_registry.local_box_id(tmp_path) == "local"
 
 
-def test_ensure_identity_mints_once(tmp_path):
+def test_ensure_identity_mints_once(tmp_path: Path) -> None:
     first = box_registry.ensure_identity(tmp_path)
     assert first.startswith("box-") and first != "local"
     assert box_registry.ensure_identity(tmp_path) == first
     assert box_registry.local_box_id(tmp_path) == first
 
 
-def test_register_round_trip_second_home(tmp_path):
+def test_register_round_trip_second_home(tmp_path: Path) -> None:
     primary = tmp_path / "primary" / "state" / "group-em"
     second = tmp_path / "second"
     cap = {"os": "linux", "gpu": "5090"}
@@ -43,7 +44,7 @@ def test_register_round_trip_second_home(tmp_path):
     assert box_registry.box_root(rec["box_id"], directory=primary) == second
 
 
-def test_register_peer_by_explicit_id_writes_nothing_under_root(tmp_path):
+def test_register_peer_by_explicit_id_writes_nothing_under_root(tmp_path: Path) -> None:
     d = tmp_path / "me"
     root = tmp_path / "far"
     t = {"kind": "ssh", "host": "10.0.0.2", "invoke": "/x/ci"}
@@ -54,7 +55,7 @@ def test_register_peer_by_explicit_id_writes_nothing_under_root(tmp_path):
     assert "transport" not in box_registry.register(tmp_path / "s", {}, directory=d)
 
 
-def test_register_validates_remote_shell_and_pinned_ssh(tmp_path):
+def test_register_validates_remote_shell_and_pinned_ssh(tmp_path: Path) -> None:
     import pytest
 
     t = {"kind": "ssh", "host": "h", "invoke": "C:/x/coordinator-invoke.cmd", "remote_shell": "cmd",  # abs-path-ok: Windows fixture
@@ -67,7 +68,7 @@ def test_register_validates_remote_shell_and_pinned_ssh(tmp_path):
                                   transport={**t, **bad})
 
 
-def test_register_rejects_unsafe_explicit_id(tmp_path):
+def test_register_rejects_unsafe_explicit_id(tmp_path: Path) -> None:
     import pytest
 
     with pytest.raises(ValueError):
@@ -75,7 +76,7 @@ def test_register_rejects_unsafe_explicit_id(tmp_path):
     assert box_registry.read_boxes(directory=tmp_path) == []
 
 
-def test_reregister_keeps_id_and_refreshes_capability(tmp_path):
+def test_reregister_keeps_id_and_refreshes_capability(tmp_path: Path) -> None:
     primary = tmp_path / "p"
     second = tmp_path / "s"
     a = box_registry.register(second, {"cores": 8}, directory=primary)
@@ -85,7 +86,7 @@ def test_reregister_keeps_id_and_refreshes_capability(tmp_path):
     assert [x["capability"] for x in boxes] == [{"cores": 16}]
 
 
-def test_read_boxes_skips_malformed_and_missing_dir(tmp_path):
+def test_read_boxes_skips_malformed_and_missing_dir(tmp_path: Path) -> None:
     assert box_registry.read_boxes(directory=tmp_path) == []
     good = box_registry.register(tmp_path / "s", {}, directory=tmp_path)
     d = tmp_path / "boxes"
@@ -97,7 +98,7 @@ def test_read_boxes_skips_malformed_and_missing_dir(tmp_path):
     assert [b["box_id"] for b in box_registry.read_boxes(directory=tmp_path)] == [good["box_id"]]
 
 
-def test_box_root_unknown_and_unsafe(tmp_path):
+def test_box_root_unknown_and_unsafe(tmp_path: Path) -> None:
     assert box_registry.box_root("nope", directory=tmp_path) is None
     assert box_registry.box_root("../x", directory=tmp_path) is None
     assert box_registry.box_root("", directory=tmp_path) is None

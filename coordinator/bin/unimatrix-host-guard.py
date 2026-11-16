@@ -149,15 +149,24 @@ def _run_shim(host, stdin_text, engine_root, box):
         box["cause"] = "import_error"
         return
     try:
+        take = getattr(shim, "take_pending_nag", None)
+        if take:
+            take()
         box["answer"] = shim.run(host, stdin_text)
+        if take:
+            box["nag"] = take()
+            box["shim"] = shim
     except Exception:
         box["cause"] = "run_error"
 
 
-def guard(host, stdin_text, engine_root, budget_secs=DEFAULT_BUDGET_SECS):
+def guard(host, stdin_text, engine_root, budget_secs=DEFAULT_BUDGET_SECS, pending=None):
     """Return (answer, state): "engine" for a Codex nested deny or a valid agy answer; "neutral-unknown" for a
     Codex bare {} (the shim emits it for a real neutral verdict, a warm miss and a caught internal error alike);
-    else "degraded" with the host's neutral answer. Only "engine" may count as governance evidence."""
+    else "degraded" with the host's neutral answer. Only "engine" may count as governance evidence.
+
+    `pending`, a list, receives (shim, nag) when the shim finished in time and merged a DIY nag; a timeout,
+    degrade or neutral substitution leaves it empty, and `main` stamps the nag window only after writing."""
     if host not in NEUTRAL:
         return {}, "degraded"
     if not engine_root or not Path(engine_root).is_dir():
@@ -178,6 +187,8 @@ def guard(host, stdin_text, engine_root, budget_secs=DEFAULT_BUDGET_SECS):
         answer = box.get("answer")
         if not _valid_answer(host, answer):
             return _degrade(host, "invalid_answer", budget_secs, cpu_secs)
+        if pending is not None and box.get("nag"):
+            pending[:] = [(box["shim"], box["nag"])]
         if host == "codex" and (answer == {} or _is_codex_advisory(answer)):
             return answer, NEUTRAL_UNKNOWN
         if host == "grok" and answer.get("hookSpecificOutput", {}).get("permissionDecision") != "deny":
@@ -208,16 +219,23 @@ def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     host = _argv_value(argv, "--host") or ""
     answer, state = _neutral(host), "degraded"
+    pending = []
     try:
         try:
             stdin_text = sys.stdin.read()
         except Exception:
             stdin_text = ""
-        answer, state = guard(host, stdin_text, _argv_value(argv, "--engine-root"))
+        answer, state = guard(host, stdin_text, _argv_value(argv, "--engine-root"), pending=pending)
     except Exception:
         answer, state = _neutral(host), "degraded"
     sys.stdout.write(json.dumps(answer) + "\n")
     sys.stdout.flush()
+    if pending:
+        try:
+            shim, nag = pending[0]
+            shim.mark_if_delivered(nag, answer)
+        except Exception:
+            pass
     sys.stderr.write(state + "\n")
     return 0
 

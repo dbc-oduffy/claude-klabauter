@@ -24,6 +24,7 @@ import pytest
 from coordinator_core.ops.delegation_check import check_delegation
 from coordinator_core.session import fleet_delegation as fd
 from coordinator_core.session.grant_authorship import AuthorshipVerdict, Verdict
+from pathlib import Path
 
 
 def _iso(dt: datetime) -> str:
@@ -35,13 +36,13 @@ def _now() -> datetime:
 
 
 @pytest.fixture(autouse=True)
-def _isolate_settings_home(tmp_path, monkeypatch):
+def _isolate_settings_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(fd, "settings_home", lambda: tmp_path)
     return tmp_path
 
 
 @pytest.fixture
-def human_verdict(monkeypatch):
+def human_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         fd,
         "authorship_verdict",
@@ -49,7 +50,7 @@ def human_verdict(monkeypatch):
     )
 
 
-def _write_live_grant(**overrides):
+def _write_live_grant(**overrides) -> None:
     """Write a grant designating THIS process (real, live pid/create_time)
     so ``_designated_live``'s real psutil probe (not a fake) resolves live
     -- the budget/functional tests exercise the real read path end to end.
@@ -81,23 +82,23 @@ def _write_live_grant(**overrides):
 
 
 class TestSignatureShape:
-    def test_parameter_list_is_exactly_decision_class(self):
+    def test_parameter_list_is_exactly_decision_class(self) -> None:
         sig = inspect.signature(check_delegation)
         assert list(sig.parameters.keys()) == ["decision_class"]
 
-    def test_extra_authority_kwarg_raises_type_error(self):
+    def test_extra_authority_kwarg_raises_type_error(self) -> None:
         with pytest.raises(TypeError):
             check_delegation("execute-approved-plan", authority="peer-claim")
 
-    def test_extra_claimed_holder_kwarg_raises_type_error(self):
+    def test_extra_claimed_holder_kwarg_raises_type_error(self) -> None:
         with pytest.raises(TypeError):
             check_delegation("execute-approved-plan", claimed_holder="peer-session-id")
 
-    def test_extra_session_token_kwarg_raises_type_error(self):
+    def test_extra_session_token_kwarg_raises_type_error(self) -> None:
         with pytest.raises(TypeError):
             check_delegation("execute-approved-plan", session_token="tok-123")
 
-    def test_extra_positional_arg_raises_type_error(self):
+    def test_extra_positional_arg_raises_type_error(self) -> None:
         with pytest.raises(TypeError):
             check_delegation("execute-approved-plan", "peer-claim")
 
@@ -108,11 +109,11 @@ class TestSignatureShape:
 
 
 class TestCheckDelegation:
-    def test_no_grant_file_returns_absent_shape(self):
+    def test_no_grant_file_returns_absent_shape(self) -> None:
         result = check_delegation("execute-approved-plan")
         assert result == {"granted": False, "designated": None, "reason": "no-grant"}
 
-    def test_granted_class_returns_granted_with_designated(self, human_verdict):
+    def test_granted_class_returns_granted_with_designated(self, human_verdict) -> None:
         import psutil
 
         this_proc = psutil.Process(os.getpid())
@@ -123,7 +124,7 @@ class TestCheckDelegation:
         assert result["designated"]["pid"] == os.getpid()
         assert result["designated"]["create_time"] == pytest.approx(this_proc.create_time())
 
-    def test_class_not_in_grant_returns_absent_shape_without_disclosing_designated(self, human_verdict):
+    def test_class_not_in_grant_returns_absent_shape_without_disclosing_designated(self, human_verdict) -> None:
         # Both are real allow-listed classes: a grant covering one, asked
         # about the other. A made-up token here would be refused by the
         # writer and this test would assert over an absent file.
@@ -131,7 +132,7 @@ class TestCheckDelegation:
         result = check_delegation("execute-approved-plan")
         assert result == {"granted": False, "designated": None, "reason": "no-grant"}
 
-    def test_expired_grant_returns_absent_shape(self, human_verdict):
+    def test_expired_grant_returns_absent_shape(self, human_verdict) -> None:
         now = _now()
         _write_live_grant(
             granted_at=_iso(now - timedelta(minutes=1)),
@@ -140,7 +141,7 @@ class TestCheckDelegation:
         result = check_delegation("execute-approved-plan")
         assert result == {"granted": False, "designated": None, "reason": "no-grant"}
 
-    def test_expired_grant_aged_in_place_is_byte_identical_to_absent(self, human_verdict, tmp_path):
+    def test_expired_grant_aged_in_place_is_byte_identical_to_absent(self, human_verdict, tmp_path: Path) -> None:
         """THE identity property lives here, not at the session-function
         layer (coordinator_core/session/tests/test_fleet_delegation.py ::
         test_expired_denial_carries_the_record_no_file_does_not) --
@@ -178,7 +179,7 @@ class TestCheckDelegation:
 
         assert expired_result == no_grant_result == {"granted": False, "designated": None, "reason": "no-grant"}
 
-    def test_dead_grantee_returns_absent_shape_without_disclosing_designated(self, human_verdict, monkeypatch):
+    def test_dead_grantee_returns_absent_shape_without_disclosing_designated(self, human_verdict, monkeypatch: pytest.MonkeyPatch) -> None:
         # A live-looking grant whose designated process cannot be found --
         # C2 denies it (not-live), and this wrapper must still not disclose
         # the (pid, create_time) pair of the dead grantee.
@@ -198,12 +199,12 @@ class TestCheckDelegation:
         result = check_delegation("execute-approved-plan")
         assert result == {"granted": False, "designated": None, "reason": "no-grant"}
 
-    def test_malformed_record_returns_absent_shape(self, tmp_path):
+    def test_malformed_record_returns_absent_shape(self, tmp_path: Path) -> None:
         (tmp_path / "fleet-delegation.json").write_text("{not json", encoding="utf-8")
         result = check_delegation("execute-approved-plan")
         assert result == {"granted": False, "designated": None, "reason": "no-grant"}
 
-    def test_never_delegable_class_absent_entirely(self):
+    def test_never_delegable_class_absent_entirely(self) -> None:
         # NEVER_DELEGABLE classes can never reach a written grant (C2's own
         # writer rejects them), so this exercises the same absent-grant code
         # path as test_no_grant_file_returns_absent_shape above -- it does
@@ -220,7 +221,7 @@ class TestCheckDelegation:
 
 
 class TestBudget:
-    def test_check_body_median_process_time_under_5ms(self, human_verdict):
+    def test_check_body_median_process_time_under_5ms(self, human_verdict) -> None:
         _write_live_grant()
 
         samples_s = []

@@ -46,12 +46,13 @@ from coordinator_core.frontmatter.schema_validate import (
     _ROADMAP_GRAPH_OVERRIDE_ENV_VAR,
     _cf_spinoff_roadmap_requires_graph,
 )
+import pytest
 
 #: A roadmap baton missing every one of the five required graph fields.
 _INCOMPLETE_BATON = {'kind': 'roadmap-baton'}
 
 
-def test_key_is_spelled_exactly_as_scdr016_specifies():
+def test_key_is_spelled_exactly_as_scdr016_specifies() -> None:
     """SC-DR-016 names the key literally; the spelling is not ours to shorten.
 
     The table row in `docs/reference/guard-override-keys.md` and the operator's
@@ -60,7 +61,7 @@ def test_key_is_spelled_exactly_as_scdr016_specifies():
     assert _ROADMAP_GRAPH_OVERRIDE_ENV_VAR == 'COORDINATOR_OVERRIDE_ROADMAP_GRAPH_FIELDS'
 
 
-def test_deny_fires_without_the_override(monkeypatch):
+def test_deny_fires_without_the_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(_ROADMAP_GRAPH_OVERRIDE_ENV_VAR, raising=False)
 
     err = _cf_spinoff_roadmap_requires_graph(_INCOMPLETE_BATON)
@@ -71,7 +72,7 @@ def test_deny_fires_without_the_override(monkeypatch):
         assert field in err['field']
 
 
-def test_deny_hint_is_usable_but_silent_on_the_override(monkeypatch):
+def test_deny_hint_is_usable_but_silent_on_the_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ruling D5 (`b1e1119f9`) retired the deny-text pointer on purpose.
 
     The hint still has to guide an operator to the fix — the missing-fields
@@ -90,13 +91,13 @@ def test_deny_hint_is_usable_but_silent_on_the_override(monkeypatch):
     assert _ROADMAP_GRAPH_OVERRIDE_ENV_VAR not in err['hint']
 
 
-def test_override_suppresses_the_deny(monkeypatch):
+def test_override_suppresses_the_deny(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(_ROADMAP_GRAPH_OVERRIDE_ENV_VAR, '1')
 
     assert _cf_spinoff_roadmap_requires_graph(_INCOMPLETE_BATON) is None
 
 
-def test_override_is_flag_shaped_not_merely_present(monkeypatch):
+def test_override_is_flag_shaped_not_merely_present(monkeypatch: pytest.MonkeyPatch) -> None:
     """`VAR=1`, matching every flag-shaped key in the override table.
 
     A truthiness read (`if os.environ.get(VAR)`) would make `VAR=0` — the
@@ -110,7 +111,7 @@ def test_override_is_flag_shaped_not_merely_present(monkeypatch):
     assert _cf_spinoff_roadmap_requires_graph(_INCOMPLETE_BATON) is not None
 
 
-def test_override_does_not_widen_beyond_this_rule(monkeypatch):
+def test_override_does_not_widen_beyond_this_rule(monkeypatch: pytest.MonkeyPatch) -> None:
     """The hatch suppresses the required-graph-fields deny and nothing else.
 
     A complete baton is unaffected either way, and a non-baton kind was never
@@ -134,7 +135,7 @@ def test_override_does_not_widen_beyond_this_rule(monkeypatch):
     assert _cf_spinoff_roadmap_requires_graph({'kind': 'handoff'}) is None
 
 
-def test_registered_in_the_guard_override_keys_table():
+def test_registered_in_the_guard_override_keys_table() -> None:
     """SC-DR-016 requires the table row IN THE SAME CHANGE as the deny.
 
     Reads the reference doc rather than trusting that whoever added the key

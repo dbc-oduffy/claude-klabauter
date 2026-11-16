@@ -5,21 +5,22 @@ import pytest
 from coordinator_core.backlog_grind_assemble import apply as bga_apply
 from coordinator_core.backlog_grind_assemble import directives as bga_directives
 from coordinator_core.resolve_validation_cmd import ResolvedCommand
+from pathlib import Path
 
 
 class TestResolveValidationCmdRegistration:
-    def test_registered_in_closed_dispatch_table(self):
+    def test_registered_in_closed_dispatch_table(self) -> None:
         assert (
             bga_apply._CLI_DISPATCH[bga_directives._RESOLVE_VALIDATION_CMD_CLI]
             is bga_apply._dispatch_resolve_validation_cmd
         )
 
-    def test_shares_one_cli_constant_with_directives_module(self):
+    def test_shares_one_cli_constant_with_directives_module(self) -> None:
         assert bga_apply._RESOLVE_VALIDATION_CMD_CLI is bga_directives._RESOLVE_VALIDATION_CMD_CLI
 
 
 class TestDispatchResolveValidationCmd:
-    def test_full_resolution_rc0_reports_full_coverage(self, tmp_path, monkeypatch):
+    def test_full_resolution_rc0_reports_full_coverage(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             bga_apply,
             "cs_resolve_full_test_cmd",
@@ -35,8 +36,8 @@ class TestDispatchResolveValidationCmd:
         }
 
     def test_fast_tier_fallback_rc3_surfaces_the_downgrade_not_silently(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(
             bga_apply,
             "cs_resolve_full_test_cmd",
@@ -48,7 +49,7 @@ class TestDispatchResolveValidationCmd:
         assert result["resolved_cmd"] == "pytest -m fast"
         assert result["fallback"] is True
 
-    def test_unconfigured_rc2_reports_skipped_not_failed(self, tmp_path, monkeypatch):
+    def test_unconfigured_rc2_reports_skipped_not_failed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             bga_apply,
             "cs_resolve_full_test_cmd",
@@ -59,7 +60,7 @@ class TestDispatchResolveValidationCmd:
         assert result["status"] == "skipped"
         assert result["resolved_cmd"] is None
 
-    def test_hard_environment_failure_rc127_raises(self, tmp_path, monkeypatch):
+    def test_hard_environment_failure_rc127_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             bga_apply,
             "cs_resolve_full_test_cmd",
@@ -68,10 +69,10 @@ class TestDispatchResolveValidationCmd:
         with pytest.raises(RuntimeError, match="rc=127"):
             bga_apply._dispatch_resolve_validation_cmd([], tmp_path)
 
-    def test_calls_in_process_with_repo_root_as_string(self, tmp_path, monkeypatch):
+    def test_calls_in_process_with_repo_root_as_string(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         seen = {}
 
-        def _fake(repo_root):
+        def _fake(repo_root) -> ResolvedCommand:
             seen["repo_root"] = repo_root
             return ResolvedCommand("cmd", 0)
 
@@ -81,7 +82,7 @@ class TestDispatchResolveValidationCmd:
 
 
 class TestBuildResolveValidationCmd:
-    def test_builds_bare_directive_with_empty_args(self):
+    def test_builds_bare_directive_with_empty_args(self) -> None:
         directive = bga_directives.build_resolve_validation_cmd(id="d-resolve")
         assert directive == {
             "id": "d-resolve",
@@ -90,7 +91,7 @@ class TestBuildResolveValidationCmd:
             "depends_on": None,
         }
 
-    def test_optional_depends_on_threads_through(self):
+    def test_optional_depends_on_threads_through(self) -> None:
         directive = bga_directives.build_resolve_validation_cmd(
             id="d-resolve", depends_on="jp-1"
         )

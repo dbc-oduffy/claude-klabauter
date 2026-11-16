@@ -8,10 +8,15 @@ import pytest
 
 from coordinator_core.benchmarks import object_read_stall_profile as bench
 from coordinator_core.git import git_objects as go
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import SimpleNamespace
 
 
 @pytest.fixture(scope="module")
-def fx(tmp_path_factory):
+def fx(tmp_path_factory: pytest.TempPathFactory) -> SimpleNamespace:
     return bench.build_fixtures(go, tmp_path_factory.mktemp("read-object-header"))
 
 
@@ -33,7 +38,7 @@ def _ofs_offset(n: int) -> bytes:
 
 
 @pytest.fixture()
-def ofs_repo(tmp_path):
+def ofs_repo(tmp_path: Path) -> tuple[Path, str, str, bytes, bytes]:
     """A pack whose second entry is an OFS_DELTA on the first (base sorts first by sha)."""
     filler = bytes((i * 11 + 5) & 0xFF for i in range(50_000))
     tail = b"ofs-tail\n"
@@ -107,13 +112,13 @@ def test_uppercase_sha_is_accepted(fx) -> None:
     assert go.read_object_header(fx.common_dir, fx.pack_sha.upper()) == ("blob", len(fx.pack_payload))
 
 
-def test_object_cache_hit_answers_without_touching_disk(fx, monkeypatch) -> None:
+def test_object_cache_hit_answers_without_touching_disk(fx, monkeypatch: pytest.MonkeyPatch) -> None:
     go.read_object(fx.common_dir, fx.pack_sha)
     monkeypatch.setattr(go, "_open_packed", lambda *a, **k: pytest.fail("cache hit reread the pack"))
     assert go.read_object_header(fx.common_dir, fx.pack_sha) == ("blob", len(fx.pack_payload))
 
 
-def test_stalled_header_read_raises_deadline_not_none(fx, monkeypatch) -> None:
+def test_stalled_header_read_raises_deadline_not_none(fx, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(go, "PACK_READ_DEADLINE_SECS", 0.3)
     with bench.Stall(go, hold=3.0, pack_path=fx.pack_path) as stall:
         with pytest.raises(go.PackReadDeadline):

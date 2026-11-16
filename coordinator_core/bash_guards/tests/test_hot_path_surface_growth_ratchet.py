@@ -155,7 +155,7 @@ def test_eager_import_ratchet_green_at_head() -> None:
     _assert_eager_import_ratchet()
 
 
-def test_eager_import_ratchet_reds_on_synthetic_growth(tmp_path, monkeypatch) -> None:
+def test_eager_import_ratchet_reds_on_synthetic_growth(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC7 leg 1, red: a synthetic copy of dispatch.py with one extra
     module-scope import trips the pin. Never touches the tracked file."""
     synthetic = tmp_path / "dispatch.py"
@@ -177,7 +177,7 @@ def test_dispatch_checks_line_ratchet_green_at_head() -> None:
 
 
 def test_dispatch_checks_line_ratchet_reds_on_synthetic_growth(
-    tmp_path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC7 leg 2, red: tmp_path copies of the facade and every _dc_* module,
     the facade grown past the pin by a full pin's worth of lines. Never
@@ -207,7 +207,7 @@ def test_registered_entry_ratchet_green_at_head() -> None:
     _assert_registered_entry_ratchet()
 
 
-def test_registered_entry_ratchet_reds_on_synthetic_growth(monkeypatch) -> None:
+def test_registered_entry_ratchet_reds_on_synthetic_growth(monkeypatch: pytest.MonkeyPatch) -> None:
     """AC7 leg 3, red: a synthetic roster one entry past the pin. Never
     invokes the live `guard_roster()` or touches `dispatch.py`."""
     synthetic_roster = tuple(range(_REGISTERED_ENTRY_CEILING + 1))

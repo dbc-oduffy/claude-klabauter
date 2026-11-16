@@ -24,7 +24,7 @@ def _out_path(argv):
     return None
 
 
-def main(argv):
+def main(argv) -> int:
     argv_out = os.environ.get("FAKE_CODEX_ARGV_OUT")
     if argv_out:
         with open(argv_out, "w", encoding="utf-8") as f:

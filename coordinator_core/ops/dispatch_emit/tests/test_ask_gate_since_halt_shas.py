@@ -6,6 +6,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import RESUME_LEDGER_SINCE_
 from coordinator_core.ops.dispatch_emit.ask_gate import _resume_ledger
 from coordinator_core.ops.dispatch_emit.emit import ResumeLanded
 from coordinator_core.ops.dispatch_emit.sizing_fire import _carry, since_halt_shas_of
+from pathlib import Path
 
 PLAN = "docs/plans/p.md"
 SIZING = "state/sizings/s.yaml"
@@ -26,7 +27,7 @@ def _state(ordinals: dict, checkpoints: tuple) -> ResumeLanded:
     )
 
 
-def test_field_rides_the_verdict(tmp_path):
+def test_field_rides_the_verdict(tmp_path: Path) -> None:
     halt = _halt(since_halt_shas=(_s("a"),))
     (tmp_path / ".git").mkdir()
     plan = tmp_path / PLAN
@@ -36,25 +37,25 @@ def test_field_rides_the_verdict(tmp_path):
     assert out[RESUME_LEDGER_SINCE_HALT_SHAS_FIELD] == [_s("a")]
 
 
-def test_halt_base_keeps_only_newer_checkpoints():
+def test_halt_base_keeps_only_newer_checkpoints() -> None:
     # walk newest first: c1(0) c2(1) HALT(2) c3(3); the halt is never a checkpoint.
     state = _state({_s("1"): 0, _s("2"): 1, _s("h"): 2, _s("3"): 3}, (_s("1"), _s("2"), _s("3")))
     assert since_halt_shas_of(state, _halt()) == (_s("1"), _s("2"))
 
 
-def test_since_sha_is_the_base_when_set():
+def test_since_sha_is_the_base_when_set() -> None:
     state = _state({_s("1"): 0, _s("h"): 1, _s("2"): 2, _s("f"): 3}, (_s("1"), _s("2")))
     assert since_halt_shas_of(state, _halt(since_sha=_s("f"))) == (_s("1"), _s("2"))
     assert since_halt_shas_of(state, _halt()) == (_s("1"),)
 
 
-def test_base_outside_the_walk_is_empty():
+def test_base_outside_the_walk_is_empty() -> None:
     state = _state({_s("1"): 0}, (_s("1"),))
     assert since_halt_shas_of(state, _halt()) == ()
     assert since_halt_shas_of(state, LedgerHalt("r", PLAN, SIZING, ())) == ()
 
 
-def test_carry_sets_it_on_the_returned_halt():
+def test_carry_sets_it_on_the_returned_halt() -> None:
     state = _state({_s("1"): 0, _s("h"): 1}, (_s("1"),))
     out = _carry(None, PLAN, _halt(halted="commit"), state)
     assert out.since_halt_shas == (_s("1"),)

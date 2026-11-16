@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.bash_guards import _dc_rewrites, dispatch
 from coordinator_core.bash_guards._rewrite_support import _bt_python3_invocation
+from pathlib import Path
 
 SCRIPT = "C:/dev/claude-klabauter/coordinator/bin/plan-spine-check.py"  # abs-path-ok: synthetic command text under test, never executed
 
@@ -30,7 +31,7 @@ def _updated(out):
     return (out.get("hookSpecificOutput") or {}).get("updatedInput", {}).get("command")
 
 
-def test_dispatch_rewrites_incident_command_to_run_under_python(tmp_path):
+def test_dispatch_rewrites_incident_command_to_run_under_python(tmp_path: Path) -> None:
     cmd = "%s docs/plans/x.md | tail -5" % SCRIPT
     new = _updated(_dispatch(cmd, tmp_path))
     assert new is not None, "dispatch left the bare script command untouched"
@@ -52,7 +53,7 @@ def test_dispatch_rewrites_incident_command_to_run_under_python(tmp_path):
         ("echo $(bin/x.py)", 1),
     ],
 )
-def test_command_positions_are_found(cmd, expected_points):
+def test_command_positions_are_found(cmd, expected_points) -> None:
     assert len(_dc_rewrites._bare_py_insert_points(cmd)) == expected_points
 
 
@@ -77,18 +78,18 @@ def test_command_positions_are_found(cmd, expected_points):
         "",
     ],
 )
-def test_interpreter_led_or_non_command_words_are_left_alone(cmd):
+def test_interpreter_led_or_non_command_words_are_left_alone(cmd) -> None:
     assert _dc_rewrites._bare_py_insert_points(cmd) == []
     assert _dc_rewrites._bare_py_command_word_rewrite(cmd, None) is None
 
 
-def test_rewrite_only_advises_and_never_denies(tmp_path):
+def test_rewrite_only_advises_and_never_denies(tmp_path: Path) -> None:
     out = _dispatch("bin/x.py", tmp_path)
     hso = out["hookSpecificOutput"]
     assert hso["permissionDecision"] == "allow"
     assert hso["updatedInput"]["command"].endswith(" bin/x.py")
 
 
-def test_rewrite_also_applies_when_grep_override_is_set(tmp_path, monkeypatch):
+def test_rewrite_also_applies_when_grep_override_is_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_ALLOW_GREP_VIA_BASH", "1")
     assert _updated(_dispatch("bin/x.py", tmp_path)) is not None

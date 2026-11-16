@@ -12,11 +12,18 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from argparse import Namespace
+    from subprocess import CompletedProcess
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
-def _load():
+def _load() -> ModuleType:
     spec = importlib.util.spec_from_file_location("percolate_round_progress_under_test", _BIN_DIR / "percolate-round.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -32,7 +39,7 @@ def _drive_default_round(monkeypatch, tmp_path, run_side_effect):
     """Run `_cmd_round_default` to the end of Step 1 with a failing publish leg."""
     seen = {}
 
-    def fake_run(cmd, *, timeout, **kwargs):
+    def fake_run(cmd, *, timeout, **kwargs) -> CompletedProcess[str]:
         seen["cmd"] = cmd
         run_side_effect(cmd, seen)
         return subprocess.CompletedProcess(cmd, returncode=1, stdout="", stderr="Rows FAILED: row-a")
@@ -51,11 +58,11 @@ def _drive_default_round(monkeypatch, tmp_path, run_side_effect):
     return rc, seen
 
 
-def test_progress_file_exists_before_the_publish_child_runs(monkeypatch, tmp_path):
+def test_progress_file_exists_before_the_publish_child_runs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     progress = tmp_path / "publish-progress.json"
     at_spawn = {}
 
-    def side_effect(cmd, seen):
+    def side_effect(cmd, seen) -> None:
         idx = cmd.index("--progress-file")
         assert Path(cmd[idx + 1]) == progress
         at_spawn["exists"] = progress.exists()
@@ -69,7 +76,7 @@ def test_progress_file_exists_before_the_publish_child_runs(monkeypatch, tmp_pat
     assert at_spawn["record"]["driver_pid"] > 0
 
 
-def test_driver_closes_its_own_record_with_the_outcome(monkeypatch, tmp_path):
+def test_driver_closes_its_own_record_with_the_outcome(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _drive_default_round(monkeypatch, tmp_path, lambda cmd, seen: None)
 
     record = json.loads((tmp_path / "publish-progress.json").read_text(encoding="utf-8"))
@@ -77,7 +84,7 @@ def test_driver_closes_its_own_record_with_the_outcome(monkeypatch, tmp_path):
     assert record["returncode"] == 1
 
 
-def test_a_raising_publish_leg_closes_the_record_as_failed(monkeypatch, tmp_path):
+def test_a_raising_publish_leg_closes_the_record_as_failed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import pytest
 
     def side_effect(cmd, seen):
@@ -90,10 +97,10 @@ def test_a_raising_publish_leg_closes_the_record_as_failed(monkeypatch, tmp_path
     assert record["phase"] == "publish-failed" and record["error"] == "TimeoutExpired"
 
 
-def test_driver_does_not_overwrite_a_record_the_child_wrote(monkeypatch, tmp_path):
+def test_driver_does_not_overwrite_a_record_the_child_wrote(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     progress = tmp_path / "publish-progress.json"
 
-    def side_effect(cmd, seen):
+    def side_effect(cmd, seen) -> None:
         progress.write_text(json.dumps({"writer": "publish", "staged": 3, "declared": 9}), encoding="utf-8")
 
     _drive_default_round(monkeypatch, tmp_path, side_effect)
@@ -101,13 +108,13 @@ def test_driver_does_not_overwrite_a_record_the_child_wrote(monkeypatch, tmp_pat
     assert json.loads(progress.read_text(encoding="utf-8")) == {"writer": "publish", "staged": 3, "declared": 9}
 
 
-def test_hang_dump_is_one_shot(monkeypatch):
+def test_hang_dump_is_one_shot(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(pr, "_bootstrap_engine", lambda: None)
     monkeypatch.setattr(pr.faulthandler, "dump_traceback_later", lambda *a, **k: calls.append((a, k)))
 
     class _Parser:
-        def parse_args(self, argv):
+        def parse_args(self, argv) -> Namespace:
             return argparse.Namespace(open_only=False, no_publish=False, func=lambda a: 0)
 
     monkeypatch.setattr(pr, "_build_parser", lambda: _Parser())

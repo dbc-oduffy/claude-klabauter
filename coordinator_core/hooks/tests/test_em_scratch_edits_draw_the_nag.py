@@ -44,7 +44,7 @@ def _make_repo(root: Path) -> str:
 
 
 @pytest.fixture(autouse=True)
-def _env(tmp_path, monkeypatch):
+def _env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
     for target in (mod, leaf):
         monkeypatch.setattr(target, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
@@ -85,7 +85,7 @@ def _payload(root: Path, target: Path) -> dict:
 
 
 @pytest.mark.parametrize("name", CASES)
-def test_scratch_edit_draws_the_advisory(tmp_path, monkeypatch, name):
+def test_scratch_edit_draws_the_advisory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name) -> None:
     root, target, _ = _case(tmp_path, name)
     monkeypatch.setattr(sizing, "_repo_root", lambda payload: None)
     result = mod.op(_payload(root, target))
@@ -96,7 +96,7 @@ def test_scratch_edit_draws_the_advisory(tmp_path, monkeypatch, name):
 
 
 @pytest.mark.parametrize("name", CASES)
-def test_scratch_edit_counts_against_the_xs_budget(tmp_path, name):
+def test_scratch_edit_counts_against_the_xs_budget(tmp_path: Path, name) -> None:
     root, target, sha = _case(tmp_path, name)
     assert xb.open_xs_lane(root, SID, sha)
     payload = {"session_id": SID, "cwd": str(root)}
@@ -106,7 +106,7 @@ def test_scratch_edit_counts_against_the_xs_budget(tmp_path, name):
 
 
 @pytest.mark.parametrize("name", CASES)
-def test_scratch_edit_past_the_budget_is_refused(tmp_path, name):
+def test_scratch_edit_past_the_budget_is_refused(tmp_path: Path, name) -> None:
     root, target, sha = _case(tmp_path, name)
     assert xb.open_xs_lane(root, SID, sha)
     payload = {"session_id": SID, "cwd": str(root)}
@@ -117,7 +117,7 @@ def test_scratch_edit_past_the_budget_is_refused(tmp_path, name):
 
 
 @pytest.mark.parametrize("name", CASES)
-def test_size_stage_spawn_scratch_write_is_treated_like_any_product_write(tmp_path, monkeypatch, name):
+def test_size_stage_spawn_scratch_write_is_treated_like_any_product_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name) -> None:
     from coordinator_core import warp_live
     from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 

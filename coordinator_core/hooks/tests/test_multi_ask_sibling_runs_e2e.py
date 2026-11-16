@@ -36,7 +36,7 @@ EMIT_CALLS: list[dict] = []
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     for name in ("CLAUDE_CODE_REMOTE", "CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_CONTAINER_ID",
                  "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_PLUGIN_ROOT", "DELIVERABLE_ID"):
         monkeypatch.delenv(name, raising=False)
@@ -144,7 +144,7 @@ def _submission(root: Path, run_id: str) -> dict | None:
     return json.loads(path.read_text(encoding="utf-8")) if path.is_file() else None
 
 
-def test_a_disjoint_pair_replies_parent_and_runs_and_starts_both_under_one_launcher(repo):
+def test_a_disjoint_pair_replies_parent_and_runs_and_starts_both_under_one_launcher(repo) -> None:
     env = _submit(repo, {"asks": _disjoint()})
 
     assert _hso(env)["permissionDecision"] == "allow", env
@@ -169,7 +169,7 @@ def test_a_disjoint_pair_replies_parent_and_runs_and_starts_both_under_one_launc
         assert c.parse_ask_parent(doc["em_analysis"]["ask_parent"]) == (reply["parent_id"], run.run_id)
 
 
-def test_slice_ledgers_union_to_the_parent_register_and_seed_no_verbatim(repo):
+def test_slice_ledgers_union_to_the_parent_register_and_seed_no_verbatim(repo) -> None:
     env = _submit(repo, {"asks": _disjoint()})
     reply = _reply_json(env)
     _run_launcher_emits(repo, env)
@@ -194,7 +194,7 @@ def test_slice_ledgers_union_to_the_parent_register_and_seed_no_verbatim(repo):
     [[{"ask": "one", "writes": ["pkg"]}, {"ask": "two", "writes": ["pkg/x.py"]}]],
     ids=["overlapping"],
 )
-def test_a_sequenced_slice_is_denied_until_the_predecessor_close_names_its_fire_call(repo, asks):
+def test_a_sequenced_slice_is_denied_until_the_predecessor_close_names_its_fire_call(repo, asks) -> None:
     reply = _reply_json(_submit(repo, {"asks": asks}))
     first, second = reply["runs"]
     assert second["after"] == [first["run_id"]] and "after" not in first
@@ -214,14 +214,14 @@ def test_a_sequenced_slice_is_denied_until_the_predecessor_close_names_its_fire_
     assert _status(repo, parent.runs[1].run_id) == "running"
 
 
-def test_unhinted_siblings_run_in_parallel_with_no_after(repo):
+def test_unhinted_siblings_run_in_parallel_with_no_after(repo) -> None:
     env = _submit(repo, {"asks": [{"ask": "one", "writes": ["a.py"]}, {"ask": "two"}]})
     reply = _reply_json(env)
     assert all("after" not in r for r in reply["runs"])
     assert [r.status for r in _parent(repo, reply["parent_id"]).runs] == ["ready", "ready"]
 
 
-def test_a_halted_predecessor_releases_no_successor(repo):
+def test_a_halted_predecessor_releases_no_successor(repo) -> None:
     reply = _reply_json(_submit(repo, {"asks": [{"ask": "one", "writes": ["a"]}, {"ask": "two", "writes": ["a"]}]}))
     first, second = reply["runs"]
     close = run_close.sibling_release(repo, first["run_id"], None)
@@ -231,7 +231,7 @@ def test_a_halted_predecessor_releases_no_successor(repo):
     assert "fresh" in _hso(denied)["permissionDecisionReason"]
 
 
-def test_a_halted_predecessor_with_every_row_committed_admits_the_successor(repo):
+def test_a_halted_predecessor_with_every_row_committed_admits_the_successor(repo) -> None:
     reply = _reply_json(_submit(repo, {"asks": [{"ask": "one", "writes": ["a"]}, {"ask": "two", "writes": ["a"]}]}))
     first, second = reply["runs"]
     parent = _parent(repo, reply["parent_id"])
@@ -243,7 +243,7 @@ def test_a_halted_predecessor_with_every_row_committed_admits_the_successor(repo
     assert _status(repo, second["run_id"]) == "running"
 
 
-def test_a_three_ask_submission_with_one_after_edge_launches_the_two_ready_runs_only(repo):
+def test_a_three_ask_submission_with_one_after_edge_launches_the_two_ready_runs_only(repo) -> None:
     env = _submit(repo, {"asks": [
         {"ask": "one", "writes": ["a"]},
         {"ask": "two", "writes": ["b"]},
@@ -278,7 +278,7 @@ def test_a_three_ask_submission_with_one_after_edge_launches_the_two_ready_runs_
     assert not (repo / c.status_rel(held[0].run_id)).exists()
 
 
-def test_three_disjoint_asks_all_read_ready_and_the_launcher_leaves_all_three_running(repo):
+def test_three_disjoint_asks_all_read_ready_and_the_launcher_leaves_all_three_running(repo) -> None:
     env = _submit(repo, {"asks": _disjoint(3)})
     reply = _reply_json(env)
     _run_launcher_emits(repo, env)
@@ -307,7 +307,7 @@ def _split_parent(repo: Path) -> str:
     return rel
 
 
-def test_a_duplicated_and_an_unclaimed_row_on_the_slices_arm_are_refused_naming_both(repo):
+def test_a_duplicated_and_an_unclaimed_row_on_the_slices_arm_are_refused_naming_both(repo) -> None:
     parent = _split_parent(repo)
     before = sorted(p.name for p in (repo / "state" / "sizings").iterdir())
     out = fanout_mod.fanout({
@@ -325,7 +325,7 @@ def test_a_duplicated_and_an_unclaimed_row_on_the_slices_arm_are_refused_naming_
     assert not (repo / "scratch" / "warp").exists()
 
 
-def test_slices_arm_ledgers_union_exactly_to_the_parent_register(repo):
+def test_slices_arm_ledgers_union_exactly_to_the_parent_register(repo) -> None:
     parent = _split_parent(repo)
     out = fanout_mod.fanout({
         "parent_sizing": parent, "session_id": SID,
@@ -346,7 +346,7 @@ def test_slices_arm_ledgers_union_exactly_to_the_parent_register(repo):
     assert sorted(seeded) == sorted(r[rr.ROW_TEXT] for r in parent_rows)
 
 
-def test_a_mixed_relayed_and_pm_submission_records_each_slice_origin(repo):
+def test_a_mixed_relayed_and_pm_submission_records_each_slice_origin(repo) -> None:
     env = _submit(repo, {"asks": [{"ask": "relay job", "source": "relayed", "writes": ["a.py"]},
                                   {"ask": "pm job", "source": "pm", "writes": ["b.py"]}]})
     assert _hso(env)["permissionDecision"] == "allow", env
@@ -368,7 +368,7 @@ def test_a_mixed_relayed_and_pm_submission_records_each_slice_origin(repo):
     assert anchors == {"relay job": [ledger.ORIGIN_RELAYED], "pm job": [ledger.ORIGIN_ASK]}
 
 
-def test_an_entry_context_reaches_only_its_own_slice_run_record_ledger_and_script(repo):
+def test_an_entry_context_reaches_only_its_own_slice_run_record_ledger_and_script(repo) -> None:
     ctx = "concrete host bug: X"
     env = _submit(repo, {"asks": [{"ask": "first job", "source": "relayed", "writes": ["a.py"]},
                                   {"ask": "second job", "source": "relayed", "writes": ["b.py"], "context": [ctx]}]})
@@ -403,7 +403,7 @@ def test_an_entry_context_reaches_only_its_own_slice_run_record_ledger_and_scrip
     assert ctx not in (first_dir / "relayed-ask.md").read_text(encoding="utf-8")
 
 
-def test_an_unknown_asks_entry_key_is_denied_naming_it_and_writes_nothing(repo):
+def test_an_unknown_asks_entry_key_is_denied_naming_it_and_writes_nothing(repo) -> None:
     env = _submit(repo, {"asks": [{"ask": "one"}, {"ask": "x", "contxt": ["a bug"]}]})
 
     assert _hso(env)["permissionDecision"] == "deny"
@@ -413,13 +413,13 @@ def test_an_unknown_asks_entry_key_is_denied_naming_it_and_writes_nothing(repo):
     assert list((repo / "state" / "sizings").iterdir()) == []
 
 
-def test_a_malformed_asks_element_is_denied_before_anything_is_written(repo):
+def test_a_malformed_asks_element_is_denied_before_anything_is_written(repo) -> None:
     env = _submit(repo, {"asks": [{"ask": ""}, {"ask": "two"}]})
     assert _hso(env)["permissionDecision"] == "deny"
     assert not (repo / "scratch" / "warp").exists()
 
 
-def test_a_default_launch_two_entry_pm_submission_writes_a_launcher_without_a_missing_argument_refusal(repo, monkeypatch):
+def test_a_default_launch_two_entry_pm_submission_writes_a_launcher_without_a_missing_argument_refusal(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_emit(params: dict, repo_root: Path) -> dict:
         rid = params["reserved_run_id"]
         return {"path": (repo_root / "scratch" / "warp" / rid / "s.workflow.mjs").as_posix(), "run_id": rid, "fire_args": {}}
@@ -465,7 +465,7 @@ def _run_m_plus_block(tmp_path: Path, reply: dict) -> dict:
 
 
 @pytest.mark.spawns_process
-def test_an_in_run_ask_that_sizes_m_plus_chains_to_the_path_derived_run_id(tmp_path):
+def test_an_in_run_ask_that_sizes_m_plus_chains_to_the_path_derived_run_id(tmp_path: Path) -> None:
     path = f"{tmp_path.as_posix()}/scratch/warp/ask-r2.workflow.mjs"
     got = _run_m_plus_block(tmp_path, {"path": path, "run_id": "ask-r2", "fire_args": {}})
     assert got["started"] == [path]
@@ -473,7 +473,7 @@ def test_an_in_run_ask_that_sizes_m_plus_chains_to_the_path_derived_run_id(tmp_p
 
 
 @pytest.mark.spawns_process
-def test_an_in_run_m_plus_chain_starts_on_a_fresh_path_whose_relayed_run_id_is_the_asks_own(tmp_path):
+def test_an_in_run_m_plus_chain_starts_on_a_fresh_path_whose_relayed_run_id_is_the_asks_own(tmp_path: Path) -> None:
     path = f"{tmp_path.as_posix()}/scratch/warp/ask-r2.workflow.mjs"
     got = _run_m_plus_block(tmp_path, {"path": path, "run_id": "run-1", "fire_args": {}})
     assert got["started"] == [path]
@@ -481,7 +481,7 @@ def test_an_in_run_m_plus_chain_starts_on_a_fresh_path_whose_relayed_run_id_is_t
 
 
 @pytest.mark.spawns_process
-def test_an_in_run_m_plus_chain_halts_by_name_on_a_path_that_is_the_asks_own_script(tmp_path):
+def test_an_in_run_m_plus_chain_halts_by_name_on_a_path_that_is_the_asks_own_script(tmp_path: Path) -> None:
     path = f"{tmp_path.as_posix()}/scratch/warp/run-1.workflow.mjs"
     got = _run_m_plus_block(tmp_path, {"path": path, "run_id": "ask-r2", "fire_args": {}})
     assert got["started"] == []

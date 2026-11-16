@@ -106,17 +106,17 @@ def _placeholder_text() -> str:
 class PredicateTest(unittest.TestCase):
     """AC9 — `_is_unworked_placeholder` is pure, no I/O, spawn-free."""
 
-    def test_scaffold_output_with_no_edits_is_a_placeholder(self):
+    def test_scaffold_output_with_no_edits_is_a_placeholder(self) -> None:
         doc_new = _load_module("coordinator_doc_new_abandon_test", "coordinator-doc-new.py")
         text = doc_new._scaffold_handoff("Test title", "branch-x")
         self.assertTrue(_cli._is_unworked_placeholder(text))
 
-    def test_crlf_copy_of_scaffold_output_is_still_a_placeholder(self):
+    def test_crlf_copy_of_scaffold_output_is_still_a_placeholder(self) -> None:
         doc_new = _load_module("coordinator_doc_new_abandon_crlf_test", "coordinator-doc-new.py")
         text = doc_new._scaffold_handoff("Test title", "branch-x")
         self.assertTrue(_cli._is_unworked_placeholder(text.replace("\n", "\r\n")))
 
-    def test_one_sentence_added_is_no_longer_a_placeholder(self):
+    def test_one_sentence_added_is_no_longer_a_placeholder(self) -> None:
         doc_new = _load_module("coordinator_doc_new_abandon_edit_test", "coordinator-doc-new.py")
         text = doc_new._scaffold_handoff("Test title", "branch-x")
         edited = text.replace(
@@ -127,7 +127,7 @@ class PredicateTest(unittest.TestCase):
         )
         self.assertFalse(_cli._is_unworked_placeholder(edited))
 
-    def test_placeholder_fixture_used_by_the_e2e_tests_is_itself_a_placeholder(self):
+    def test_placeholder_fixture_used_by_the_e2e_tests_is_itself_a_placeholder(self) -> None:
         self.assertTrue(_cli._is_unworked_placeholder(_placeholder_text()))
 
 
@@ -137,7 +137,7 @@ class _AbandonHarness(unittest.TestCase):
     (`_call_transition`) — `cs_close_handoff`
     and `_resolve_repo_root` stay real."""
 
-    def setUp(self):
+    def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.repo_root = Path(self._tmp.name).resolve()
@@ -157,12 +157,12 @@ class _AbandonHarness(unittest.TestCase):
 
         _cli._call_transition = _stub_call_transition
 
-    def _restore(self):
+    def _restore(self) -> None:
         _cli._call_transition = self._orig_route_mutation
 
 
 class AbandonSuccessTest(_AbandonHarness):
-    def test_placeholder_baton_closes_then_chains(self):
+    def test_placeholder_baton_closes_then_chains(self) -> None:
         """AC7: an all-scaffold, carried_items-empty baton is closed
         (deployment_state: closed, closed_reason: cancelled — via the real,
         in-process `cs_close_handoff`) and then chain-dispatched (mode
@@ -183,7 +183,7 @@ class AbandonSuccessTest(_AbandonHarness):
         self.assertNotIn("continued_into:", text)
         self.assertNotIn("shipped_in:", text)
 
-    def test_live_holder_retains_stays_closed_but_unarchived_rc0(self):
+    def test_live_holder_retains_stays_closed_but_unarchived_rc0(self) -> None:
         """A retained stamp_shipped envelope (live claim holder) is not a
         failure: the baton stays closed on disk, unarchived, rc 0."""
         self.route_result = {
@@ -203,19 +203,19 @@ class AbandonSuccessTest(_AbandonHarness):
 
 
 class AbandonRefusalTest(_AbandonHarness):
-    def test_bad_reason_refuses_and_writes_nothing(self):
+    def test_bad_reason_refuses_and_writes_nothing(self) -> None:
         before = self.handoff_path.read_text(encoding="utf-8")
         rc = _cli.cmd_abandon(str(self.handoff_path), "nope")
         self.assertNotEqual(rc, 0)
         self.assertEqual(self.route_calls, [])
         self.assertEqual(self.handoff_path.read_text(encoding="utf-8"), before)
 
-    def test_missing_reason_argument_refuses(self):
+    def test_missing_reason_argument_refuses(self) -> None:
         rc = _cli.cmd_abandon(str(self.handoff_path), "")
         self.assertNotEqual(rc, 0)
         self.assertEqual(self.route_calls, [])
 
-    def test_worked_body_refuses_and_names_close_handoff(self):
+    def test_worked_body_refuses_and_names_close_handoff(self) -> None:
         """AC8: a body carrying anything beyond HTML comments / headings /
         whitespace refuses, and the message names
         `archive-stamp-cli close-handoff` as the deliberate door for a
@@ -240,7 +240,7 @@ class AbandonRefusalTest(_AbandonHarness):
         self.assertIn("archive-stamp-cli close-handoff", buf.getvalue())
         self.assertEqual(self.handoff_path.read_text(encoding="utf-8"), worked_text)
 
-    def test_non_empty_carried_items_refuses(self):
+    def test_non_empty_carried_items_refuses(self) -> None:
         """AC8: a non-empty carried_items refuses — those obligations would
         be dropped."""
         base = _placeholder_text()
@@ -264,7 +264,7 @@ class AbandonRefusalTest(_AbandonHarness):
         self.assertEqual(self.route_calls, [])
         self.assertEqual(self.handoff_path.read_text(encoding="utf-8"), text)
 
-    def test_path_outside_state_handoffs_refuses(self):
+    def test_path_outside_state_handoffs_refuses(self) -> None:
         outside = self.repo_root / "docs" / "not-a-handoff.md"
         outside.parent.mkdir(parents=True)
         outside.write_text(_placeholder_text(), encoding="utf-8")

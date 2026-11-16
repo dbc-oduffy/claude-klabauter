@@ -5,6 +5,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from coordinator_core.ops.dispatch_emit import terminal_commit
+from pathlib import Path
 
 _OUTBOX = ".coordinator-local/memo-outbox"
 _INBOX = "coordinator-content-repo/state/cross-repo/inbox/topic.md"
@@ -26,7 +27,7 @@ def _plan(tmp_path, row: str) -> None:
     )
 
 
-def _receipt(tmp_path, slug="topic") -> None:
+def _receipt(tmp_path, slug: str = "topic") -> None:
     sent = tmp_path / _OUTBOX / "sent"
     sent.mkdir(parents=True, exist_ok=True)
     (sent / f"{slug}.md").write_text("sent\n", encoding="utf-8")
@@ -36,14 +37,14 @@ def _gate(tmp_path) -> dict:
     return terminal_commit._memo_rows_without_receipt(tmp_path, SimpleNamespace(plan_path="p.md"))
 
 
-def test_inbox_row_with_receipt_field_maps_to_slug_until_receipt_exists(tmp_path):
+def test_inbox_row_with_receipt_field_maps_to_slug_until_receipt_exists(tmp_path: Path) -> None:
     _plan(tmp_path, _row(f"  receipt: {_OUTBOX}/sent/topic.md\n"))
     assert _gate(tmp_path) == {"M1": "topic"}
     _receipt(tmp_path)
     assert _gate(tmp_path) == {}
 
 
-def test_inbox_row_resolved_delivered_elsewhere_is_not_reported(tmp_path):
+def test_inbox_row_resolved_delivered_elsewhere_is_not_reported(tmp_path: Path) -> None:
     _plan(
         tmp_path,
         _row(
@@ -55,6 +56,6 @@ def test_inbox_row_resolved_delivered_elsewhere_is_not_reported(tmp_path):
     assert _gate(tmp_path) == {}
 
 
-def test_inbox_row_without_slug_is_reported_not_dropped(tmp_path):
+def test_inbox_row_without_slug_is_reported_not_dropped(tmp_path: Path) -> None:
     _plan(tmp_path, _row(""))
     assert _gate(tmp_path) == {"M1": "no slug: declare receipt:"}

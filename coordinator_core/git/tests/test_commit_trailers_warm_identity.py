@@ -31,13 +31,14 @@ import pytest
 
 from coordinator_core.git import commit_trailers
 from coordinator_core.session import core as session_core
+from pathlib import Path
 
 _SERVER_OWNER = "0dcf3da2-1c32-423f-9376-63ebde4b947c"
 _CALLER = "8b40d62c-55ef-4702-83ce-0cd8dc6513e3"
 
 
 @pytest.fixture
-def ambient_is_the_server_owner(monkeypatch):
+def ambient_is_the_server_owner(monkeypatch: pytest.MonkeyPatch):
     for var in session_core.SESSION_ENV_PRECEDENCE:
         monkeypatch.setenv(var, _SERVER_OWNER)
     return _SERVER_OWNER
@@ -47,14 +48,14 @@ def _session_ids_in(message: str):
     return re.findall(r"^Session-Id: (.+)$", message, flags=re.MULTILINE)
 
 
-def test_cold_call_still_stamps_the_ambient_identity(tmp_path, ambient_is_the_server_owner):
+def test_cold_call_still_stamps_the_ambient_identity(tmp_path: Path, ambient_is_the_server_owner) -> None:
     out = commit_trailers.apply_missing_trailers("a cold commit\n", tmp_path)
     assert _session_ids_in(out) == [ambient_is_the_server_owner]
 
 
 def test_warm_call_with_no_carried_identity_omits_rather_than_guessing(
-    tmp_path, ambient_is_the_server_owner
-):
+    tmp_path: Path, ambient_is_the_server_owner
+) -> None:
     with session_core.warm_served_request():
         out = commit_trailers.apply_missing_trailers("a warm-served commit\n", tmp_path)
     assert _session_ids_in(out) == [], (
@@ -65,8 +66,8 @@ def test_warm_call_with_no_carried_identity_omits_rather_than_guessing(
 
 
 def test_warm_call_stamps_the_carried_identity_not_the_ambient_one(
-    tmp_path, ambient_is_the_server_owner
-):
+    tmp_path: Path, ambient_is_the_server_owner
+) -> None:
     with session_core.warm_served_request():
         with session_core.session_identity_override(_CALLER):
             out = commit_trailers.apply_missing_trailers("a warm commit\n", tmp_path)
@@ -75,8 +76,8 @@ def test_warm_call_stamps_the_carried_identity_not_the_ambient_one(
 
 
 def test_the_warm_flag_unwinds_so_a_later_cold_call_is_unaffected(
-    tmp_path, ambient_is_the_server_owner
-):
+    tmp_path: Path, ambient_is_the_server_owner
+) -> None:
     with session_core.warm_served_request():
         pass
     assert session_core.in_warm_served_request() is False
@@ -84,7 +85,7 @@ def test_the_warm_flag_unwinds_so_a_later_cold_call_is_unaffected(
     assert _session_ids_in(out) == [ambient_is_the_server_owner]
 
 
-def test_native_provenance_replaces_message_claims(tmp_path, monkeypatch):
+def test_native_provenance_replaces_message_claims(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import agent_provenance
     monkeypatch.setattr(agent_provenance, "WRITER_READINESS_ACKS", {"project-rag": "test-ack", "example-cockpit-repo": "test-ack"})
     monkeypatch.setenv("CODEX_THREAD_ID", _CALLER)
@@ -98,14 +99,14 @@ def test_native_provenance_replaces_message_claims(tmp_path, monkeypatch):
     assert "Agent-Vendor: claude" not in out
 
 
-def test_warm_native_spawner_provenance_is_not_caller(tmp_path, monkeypatch):
+def test_warm_native_spawner_provenance_is_not_caller(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CODEX_THREAD_ID", _SERVER_OWNER)
     with session_core.warm_served_request(), session_core.session_identity_override(_CALLER):
         out = commit_trailers.apply_missing_trailers("caller commit\n", tmp_path)
     assert "Agent-Vendor:" not in out
 
 
-def test_native_writer_hold_strips_forgery_and_preserves_session(tmp_path, monkeypatch):
+def test_native_writer_hold_strips_forgery_and_preserves_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CODEX_THREAD_ID", _CALLER)
     out = commit_trailers.apply_missing_trailers("held commit\n\nAgent-Vendor: claude\n", tmp_path)
     assert "Agent-Vendor:" not in out

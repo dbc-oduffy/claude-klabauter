@@ -10,6 +10,8 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import PLAN, PLAN_REL
 from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
+from pathlib import Path
+import pytest
 
 _NEW = "ask-new"
 _OLD = "ask-old"
@@ -40,7 +42,7 @@ def _stage(root) -> dict:
     return ask_stage._handler({"run_id": _NEW, "plan_path": PLAN_REL, "writes": []}, repo_root=root)
 
 
-def test_a_plain_ask_resuming_a_parked_predecessor_stages(tmp_path):
+def test_a_plain_ask_resuming_a_parked_predecessor_stages(tmp_path: Path) -> None:
     for edge in ("resumed_from", "resumes_ask", "reserved_parent"):
         _seed(tmp_path)
         _old_parked_run(tmp_path, edge=edge)
@@ -50,7 +52,7 @@ def test_a_plain_ask_resuming_a_parked_predecessor_stages(tmp_path):
         (record_dir(tmp_path, _NEW) / "manifest.json").unlink()
 
 
-def test_a_chain_child_of_a_live_marker_still_parks_and_names_the_source(tmp_path):
+def test_a_chain_child_of_a_live_marker_still_parks_and_names_the_source(tmp_path: Path) -> None:
     _seed(tmp_path)
     old = record_dir(tmp_path, _OLD)
     old.mkdir(parents=True, exist_ok=True)
@@ -66,7 +68,7 @@ def test_a_chain_child_of_a_live_marker_still_parks_and_names_the_source(tmp_pat
     assert reply[PARK_SOURCE_REPLY_KEY] == {"run_id": _OLD, "from": "claude-em-old", "inherited": True}
 
 
-def test_a_plain_relayed_emit_and_its_unmarked_chain_child_write_no_stop_after_marker(tmp_path, monkeypatch):
+def test_a_plain_relayed_emit_and_its_unmarked_chain_child_write_no_stop_after_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The emit-side pin: no stop_after requested and none in the lineage leaves no marker, single or chained."""
     import yaml
 

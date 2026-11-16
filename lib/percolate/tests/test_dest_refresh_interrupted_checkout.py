@@ -42,7 +42,7 @@ def _commit(root: Path, files: dict, message: str, remove: tuple = ()) -> None:
 
 
 @pytest.fixture()
-def behind_clone(tmp_path: Path):
+def behind_clone(tmp_path: Path) -> tuple[Path, str, str]:
     origin = tmp_path / "origin"
     origin.mkdir()
     _git(origin, "init", "-b", "main")
@@ -63,7 +63,7 @@ def _killed_merge(clone: Path, tip: str, *, hold_lock: bool = True):
     """Patch target: a ff-only merge that writes part of the tree, strands the lock, times out."""
     real = dest_refresh._git
 
-    def fake(repo_root, args, *, remote=False):
+    def fake(repo_root, args, *, remote: bool = False) -> GitResult:
         if "merge" in args and "--ff-only" in args:
             (clone / "a.txt").write_text("a1\n", encoding="utf-8")
             (clone / "sub").mkdir(exist_ok=True)
@@ -87,7 +87,7 @@ def _assert_prior_tree(clone: Path, prior: str) -> None:
     assert not (clone / "sub").exists()
 
 
-def test_fast_forward_dest_killed_mid_checkout_restores_prior_tree(behind_clone, monkeypatch):
+def test_fast_forward_dest_killed_mid_checkout_restores_prior_tree(behind_clone, monkeypatch: pytest.MonkeyPatch) -> None:
     clone, prior, tip = behind_clone
     monkeypatch.setattr(dest_refresh, "_git", _killed_merge(clone, tip))
     fetched = dest_refresh.fetch_dest_upstream(clone, out=io.StringIO(), err=io.StringIO())
@@ -97,7 +97,7 @@ def test_fast_forward_dest_killed_mid_checkout_restores_prior_tree(behind_clone,
     _assert_prior_tree(clone, prior)
 
 
-def test_fast_forward_consumer_killed_mid_checkout_restores_prior_tree(behind_clone, monkeypatch):
+def test_fast_forward_consumer_killed_mid_checkout_restores_prior_tree(behind_clone, monkeypatch: pytest.MonkeyPatch) -> None:
     clone, prior, tip = behind_clone
     monkeypatch.setattr(dest_refresh, "_git", _killed_merge(clone, tip))
     result = dest_refresh.fast_forward_consumer(clone)
@@ -105,7 +105,7 @@ def test_fast_forward_consumer_killed_mid_checkout_restores_prior_tree(behind_cl
     _assert_prior_tree(clone, prior)
 
 
-def test_foreign_index_lock_is_never_removed(behind_clone, monkeypatch):
+def test_foreign_index_lock_is_never_removed(behind_clone, monkeypatch: pytest.MonkeyPatch) -> None:
     """A lock that predates the merge belongs to a live peer's git."""
     clone, prior, tip = behind_clone
     lock = clone / ".git" / "index.lock"
@@ -118,7 +118,7 @@ def test_foreign_index_lock_is_never_removed(behind_clone, monkeypatch):
     assert lock.exists()
 
 
-def test_uninterrupted_fast_forward_lands_at_upstream_tip(behind_clone):
+def test_uninterrupted_fast_forward_lands_at_upstream_tip(behind_clone) -> None:
     clone, _prior, tip = behind_clone
     fetched = dest_refresh.fetch_dest_upstream(clone, out=io.StringIO(), err=io.StringIO())
     result = dest_refresh.fast_forward_dest(fetched, out=io.StringIO(), err=io.StringIO())

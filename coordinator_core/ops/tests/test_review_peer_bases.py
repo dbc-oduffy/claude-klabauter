@@ -46,6 +46,14 @@ def _commit(repo: Path, name: str, text: str, session=None, deliverable=None) ->
     return _git(repo, "rev-parse", "HEAD")
 
 
+def _same_content(repo, got: dict, want: dict) -> bool:
+    """Same keys, and each mapped sha holds the path's content as the wanted sha does."""
+    def blob(sha, path):
+        return _git(repo, "rev-parse", f"{sha}:{path}")
+
+    return set(got) == set(want) and all(blob(got[k], k) == blob(want[k], k) for k in want)
+
+
 def _run(repo, base, paths, deliverable=DELIVERABLE):
     return rpb.peer_path_bases(repo, base, None, paths, SESSION, deliverable)
 
@@ -119,6 +127,57 @@ def test_paths_are_independent(repo):
     got = _run(repo, base, ["a.py", "b.py"])
     assert set(got) == {"a.py"}
     assert _git(repo, "show", f"{got['a.py']}:a.py") == _git(repo, "show", f"{peer}:a.py")
+
+
+def test_undeclared_file_is_not_keyed(repo):
+    (repo / "b.py").write_text("b = 0\n", encoding="utf-8")
+    base = _git(repo, "rev-parse", "HEAD")
+    _commit(repo, "b.py", "b = 1\n", "sess-peer")
+    assert _run(repo, base, ["a.py"]) == {}
+
+
+def test_declared_directory_keys_files_under_it_only(repo):
+    (repo / "pkg").mkdir()
+    (repo / "pkgx").mkdir()
+    base = _git(repo, "rev-parse", "HEAD")
+    peer = _commit(repo, "pkg/m.py", "m = 1\n", "sess-peer")
+    _commit(repo, "pkgx/n.py", "n = 1\n", "sess-peer")
+    assert _same_content(repo, _run(repo, base, ["pkg/"]), {"pkg/m.py": peer})
+    assert _same_content(repo, _run(repo, base, ["pkg"]), {"pkg/m.py": peer})
+
+
+def test_bracket_path_matches_literally(repo):
+    (repo / "[id]").mkdir()
+    (repo / "i").mkdir()
+    base = _git(repo, "rev-parse", "HEAD")
+    peer = _commit(repo, "[id]/page.py", "p = 1\n", "sess-peer")
+    _commit(repo, "i/page.py", "q = 1\n", "sess-peer")
+    assert _same_content(repo, _run(repo, base, ["[id]/page.py"]), {"[id]/page.py": peer})
+
+
+def test_glob_entry_still_goes_through_git_pathspec(repo):
+    base = _git(repo, "rev-parse", "HEAD")
+    peer = _commit(repo, "a.py", "a = 1\n", "sess-peer")
+    _commit(repo, "b.txt", "b\n", "sess-peer")
+    assert _run(repo, base, ["*.py"]) == {"a.py": peer}
+
+
+def test_spawn_count_independent_of_declared_path_count(repo, monkeypatch):
+    base = _git(repo, "rev-parse", "HEAD")
+    names = [f"f{i}.py" for i in range(150)]
+    for n in names[:40]:
+        _commit(repo, n, "x\n", "sess-peer")
+    calls = []
+    real = rpb.run_git
+
+    def counting(args, **kw):
+        calls.append(args)
+        return real(args, **kw)
+
+    monkeypatch.setattr(rpb, "run_git", counting)
+    assert len(_run(repo, base, names)) == 40
+    assert len(calls) == 1
+    assert "--" not in calls[0]
 
 
 def test_exactly_one_git_spawn(repo, monkeypatch):
@@ -293,3 +352,54 @@ def test_review_prep_returns_slices_and_discloses_a_timed_out_peer_base_log(repo
     )
     assert reply["error"] is None and reply["slices"]
     assert reply["peer_bases_degraded"] == "timeout"
+
+
+def test_peer_bases_share_one_sha_when_no_own_commit_intervenes(repo):
+    base = _git(repo, "rev-parse", "HEAD")
+    names = [f"f{i}.py" for i in range(12)]
+    peers = {n: _commit(repo, n, "x\n", f"sess-peer-{i}") for i, n in enumerate(names)}
+    got = _run(repo, base, names)
+    assert len(set(got.values())) == 1
+    assert _same_content(repo, got, peers)
+
+
+def test_peer_bases_never_cross_an_own_commit_on_the_path(repo):
+    base = _git(repo, "rev-parse", "HEAD")
+    first = _commit(repo, "f0.py", "x\n", "sess-peer-0")
+    _commit(repo, "f0.py", "own\n", SESSION, DELIVERABLE)
+    second = _commit(repo, "f1.py", "y\n", "sess-peer-1")
+    got = _run(repo, base, ["f0.py", "f1.py"])
+    assert got["f0.py"] == first
+    assert _same_content(repo, got, {"f0.py": first, "f1.py": second})
+    assert len(set(got.values())) == 2
+
+
+def test_nonlinear_history_keeps_each_peer_commit(repo):
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "checkout", "-q", "-b", "side")
+    one = _commit(repo, "f0.py", "x\n", "sess-peer-0")
+    _git(repo, "checkout", "-q", "-")
+    two = _commit(repo, "f1.py", "y\n", "sess-peer-1")
+    _git(repo, "-c", "user.email=t@example.com", "-c", "user.name=T", "merge", "-q", "--no-ff", "-m", "m", "side")
+    assert _run(repo, base, ["f0.py", "f1.py"]) == {"f0.py": one, "f1.py": two}
+
+
+def test_changed_names_cover_own_and_peer_commits_under_declared_paths(repo):
+    base = _git(repo, "rev-parse", "HEAD")
+    _commit(repo, "a.py", "a = 1\n", "sess-peer")
+    _commit(repo, "b.py", "b = 1\n", SESSION, DELIVERABLE)
+    _commit(repo, "other.py", "o = 1\n", "sess-peer")
+    got = _run(repo, base, ["a.py", "b.py"])
+    assert got.changed == frozenset({"a.py", "b.py"})
+
+
+def test_foreign_claims_from_scanned_names_spawns_nothing(repo, monkeypatch):
+    from coordinator_core.ops import review_prep
+
+    def boom(*a, **k):
+        raise AssertionError("spawned")
+
+    monkeypatch.setattr(review_prep, "run_git", boom)
+    monkeypatch.setattr(review_prep.claim_index, "lookup", lambda names, cwd=None: {})
+    assert review_prep.foreign_claims(repo, "x..HEAD", ["a.py"], SESSION, frozenset({"a.py"})) == []
+    assert review_prep.foreign_claims(repo, "x..HEAD", ["a.py"], SESSION, frozenset()) == []

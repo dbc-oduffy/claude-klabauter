@@ -10,12 +10,13 @@ import pytest
 
 from coordinator_core import machine_profile as mp
 from coordinator_core.write_guards import guard_doctrine_surface_edits as write_guard
+from pathlib import Path
 
 KEY = "coordinator.feature.doctrine_edit_gate"
 
 
 @pytest.fixture()
-def box(tmp_path, monkeypatch):
+def box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     reg = tmp_path / "reg"
     reg.mkdir()
     repo = tmp_path / "repo"
@@ -40,7 +41,7 @@ def _write(path, content):
     return {"tool_name": "Write", "tool_input": {"file_path": str(path), "content": content}}
 
 
-def _advises(result, what):
+def _advises(result, what) -> None:
     assert result is not None
     out = result["hookSpecificOutput"]
     assert "permissionDecision" not in out
@@ -49,7 +50,7 @@ def _advises(result, what):
 
 
 @pytest.mark.parametrize("name", ["registry.local.toml", "registry.toml"])
-def test_registry_file_write_off_lands_with_an_advisory(box, name):
+def test_registry_file_write_off_lands_with_an_advisory(box, name) -> None:
     path = box[0] / name
     _advises(write_guard.check(_write(path, f'"{KEY}" = \'off\'\n')), "turns off the doctrine-edit gate")
     _advises(
@@ -58,7 +59,7 @@ def test_registry_file_write_off_lands_with_an_advisory(box, name):
     )
 
 
-def test_registry_file_edit_off_lands_with_an_advisory(box):
+def test_registry_file_edit_off_lands_with_an_advisory(box) -> None:
     path = box[0] / "registry.local.toml"
     path.write_text(f'"{KEY}" = \'on\'\n', encoding="utf-8")
     payload = {
@@ -68,13 +69,13 @@ def test_registry_file_edit_off_lands_with_an_advisory(box):
     _advises(write_guard.check(payload), "turns off the doctrine-edit gate")
 
 
-def test_registry_file_on_and_unrelated_writes_land_quietly(box):
+def test_registry_file_on_and_unrelated_writes_land_quietly(box) -> None:
     path = box[0] / "registry.local.toml"
     assert write_guard.check(_write(path, f'"{KEY}" = \'on\'\n')) is None
     assert write_guard.check(_write(path, '"repos.x" = \'/p\'\n')) is None
 
 
-def test_already_off_file_unrelated_edit_lands_quietly(box):
+def test_already_off_file_unrelated_edit_lands_quietly(box) -> None:
     path = box[0] / "registry.local.toml"
     path.write_text(f'"{KEY}" = \'off\'\n"a" = \'1\'\n', encoding="utf-8")
     payload = {
@@ -84,7 +85,7 @@ def test_already_off_file_unrelated_edit_lands_quietly(box):
     assert write_guard.check(payload) is None
 
 
-def test_registry_file_level_lowering_lands_with_an_advisory(box):
+def test_registry_file_level_lowering_lands_with_an_advisory(box) -> None:
     path = box[0] / "registry.local.toml"
     path.write_text('"coordinator.guard_level" = "strict"\n', encoding="utf-8")
     _advises(write_guard.check(_write(path, '"coordinator.guard_level" = "off"\n')), "lowers the guard level")
@@ -105,7 +106,7 @@ def _settings(box, where):
 @pytest.mark.parametrize("where", [".claude", "home"])
 @pytest.mark.parametrize("name", ["settings.json", "settings.local.json"])
 @pytest.mark.parametrize("tool", ["Write", "Edit", "MultiEdit"])
-def test_settings_env_weakening_lands_with_an_advisory(box, where, name, tool):
+def test_settings_env_weakening_lands_with_an_advisory(box, where, name, tool) -> None:
     path = _settings(box, where) / name
     path.write_text('{"env": {"MACHINE_LOCAL_COORDINATOR_FEATURE_PUBLISHING": "on", "MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL": "strict"}}', encoding="utf-8")
     new_text = path.read_text().replace('FEATURE_PUBLISHING": "on"', 'FEATURE_PUBLISHING": "off"')

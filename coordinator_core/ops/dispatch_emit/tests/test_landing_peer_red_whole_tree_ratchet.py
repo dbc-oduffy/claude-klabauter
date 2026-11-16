@@ -91,9 +91,7 @@ def test_an_unevidenced_foreign_red_the_recorded_owed_check_does_not_clear_still
 
     findings, check = landing_integrity.landing_test_gate(repo, params, RUN, ["ok.py"])
 
-    assert check == "failed"
-    assert [f.reason for f in findings] == [landing_targeted_tests.TARGETED_TESTS_FAILED]
-    assert all("owed base check" in f.detail and landing_integrity.retest_remedy(params) in f.detail for f in findings)
+    assert check == landing_integrity.UNKNOWN_ONLY and list(findings) == [] and findings.unknown_ids == [RATCHET]
 
 
 def test_a_caused_red_also_red_at_the_base_is_attributed_pre_existing_and_leaves_the_gate_clear(repo):

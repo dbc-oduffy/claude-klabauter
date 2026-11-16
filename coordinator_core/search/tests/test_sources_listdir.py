@@ -12,6 +12,7 @@ from coordinator_core.search.sources_listdir import (
     parse_ls_segment,
     run,
 )
+from pathlib import Path
 
 
 def _locale_available(name: str) -> bool:
@@ -31,22 +32,22 @@ _AVAILABLE_UTF8_LOCALE = next(
 )
 
 
-def test_parse_bare_ls():
+def test_parse_bare_ls() -> None:
     spec = parse_ls_segment(["ls"])
     assert spec == LsSpec(directory=".", show_all=False)
 
 
-def test_parse_ls_with_directory():
+def test_parse_ls_with_directory() -> None:
     spec = parse_ls_segment(["ls", "subdir"])
     assert spec == LsSpec(directory="subdir", show_all=False)
 
 
-def test_parse_ls_dash_1():
+def test_parse_ls_dash_1() -> None:
     spec = parse_ls_segment(["ls", "-1", "subdir"])
     assert spec == LsSpec(directory="subdir", show_all=False)
 
 
-def test_parse_ls_dash_a():
+def test_parse_ls_dash_a() -> None:
     spec = parse_ls_segment(["ls", "-a", "subdir"])
     assert spec == LsSpec(directory="subdir", show_all=True)
 
@@ -55,28 +56,28 @@ def test_parse_ls_dash_a():
     ["ls", "-1a", "subdir"],
     ["ls", "-a1", "subdir"],
 ])
-def test_parse_ls_combined_flags(tokens):
+def test_parse_ls_combined_flags(tokens) -> None:
     spec = parse_ls_segment(tokens)
     assert spec == LsSpec(directory="subdir", show_all=True)
 
 
 @pytest.mark.parametrize("flag", ["-l", "-R", "-t", "-S", "-r", "-F"])
-def test_decline_unsupported_flags(flag):
+def test_decline_unsupported_flags(flag) -> None:
     with pytest.raises(Unanswerable):
         parse_ls_segment(["ls", flag])
 
 
-def test_decline_long_color_flag():
+def test_decline_long_color_flag() -> None:
     with pytest.raises(Unanswerable):
         parse_ls_segment(["ls", "--color"])
 
 
-def test_decline_multiple_operands():
+def test_decline_multiple_operands() -> None:
     with pytest.raises(Unanswerable):
         parse_ls_segment(["ls", "dir1", "dir2"])
 
 
-def test_decline_glob_operand():
+def test_decline_glob_operand() -> None:
     with pytest.raises(Unanswerable):
         parse_ls_segment(["ls", "*.py"])
 
@@ -93,30 +94,30 @@ def test_decline_glob_operand():
     ["ls", "<(cat f)"],
     ["ls", "$HOME"],
 ])
-def test_decline_redirection_and_substitution(tokens):
+def test_decline_redirection_and_substitution(tokens) -> None:
     with pytest.raises(Unanswerable):
         parse_ls_segment(tokens)
 
 
-def test_decline_not_ls():
+def test_decline_not_ls() -> None:
     with pytest.raises(Unanswerable):
         parse_ls_segment(["cat", "file.txt"])
 
 
-def test_decline_nonexistent_directory(tmp_path):
+def test_decline_nonexistent_directory(tmp_path: Path) -> None:
     spec = LsSpec(directory="does-not-exist", show_all=False)
     with pytest.raises(Unanswerable):
         run(spec, cwd=str(tmp_path))
 
 
-def test_decline_file_operand(tmp_path):
+def test_decline_file_operand(tmp_path: Path) -> None:
     (tmp_path / "plain.txt").write_text("hi", encoding="utf-8")
     spec = LsSpec(directory="plain.txt", show_all=False)
     with pytest.raises(Unanswerable):
         run(spec, cwd=str(tmp_path))
 
 
-def test_run_omits_dotfiles_by_default(tmp_path):
+def test_run_omits_dotfiles_by_default(tmp_path: Path) -> None:
     (tmp_path / "visible.txt").write_text("x", encoding="utf-8")
     (tmp_path / ".hidden").write_text("x", encoding="utf-8")
     spec = LsSpec(directory=".", show_all=False)
@@ -124,7 +125,7 @@ def test_run_omits_dotfiles_by_default(tmp_path):
     assert result == ["visible.txt"]
 
 
-def test_run_dash_a_includes_dot_and_dotdot(tmp_path):
+def test_run_dash_a_includes_dot_and_dotdot(tmp_path: Path) -> None:
     (tmp_path / "visible.txt").write_text("x", encoding="utf-8")
     (tmp_path / ".hidden").write_text("x", encoding="utf-8")
     spec = LsSpec(directory=".", show_all=True)
@@ -142,7 +143,7 @@ def test_run_dash_a_includes_dot_and_dotdot(tmp_path):
         ),
     ),
 ])
-def test_collation_matches_locale(tmp_path, monkeypatch, env_locale):
+def test_collation_matches_locale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, env_locale) -> None:
     names = ["banana", "Apple", "_zeta", "apple2"]
     for name in names:
         (tmp_path / name).write_text("x", encoding="utf-8")
@@ -165,7 +166,7 @@ def test_collation_matches_locale(tmp_path, monkeypatch, env_locale):
     assert result == expected
 
 
-def test_collation_disagrees_between_locales(tmp_path, monkeypatch):
+def test_collation_disagrees_between_locales(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """C and a UTF-8 locale must produce genuinely DIFFERENT orderings for the
     same directory -- a test that cannot see a disagreement can never report
     one, which is exactly the shape the staff review rejected."""
@@ -186,7 +187,7 @@ def test_collation_disagrees_between_locales(tmp_path, monkeypatch):
     assert c_result != utf8_result
 
 
-def test_collation_declines_on_uninstalled_locale(tmp_path, monkeypatch):
+def test_collation_declines_on_uninstalled_locale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "a").write_text("x", encoding="utf-8")
     monkeypatch.setenv("LC_ALL", "zz_not_a_real_locale.UTF-8")
     spec = LsSpec(directory=".", show_all=False)
@@ -194,7 +195,7 @@ def test_collation_declines_on_uninstalled_locale(tmp_path, monkeypatch):
         run(spec, cwd=str(tmp_path))
 
 
-def test_collation_restores_previous_lc_collate(tmp_path, monkeypatch):
+def test_collation_restores_previous_lc_collate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     if _AVAILABLE_UTF8_LOCALE is None:
         pytest.skip("no UTF-8 locale installed in this Python on this box")
     (tmp_path / "a").write_text("x", encoding="utf-8")

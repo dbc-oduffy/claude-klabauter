@@ -9,13 +9,14 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_contract as c
 from coordinator_core.ops.dispatch_emit import run_close
+from pathlib import Path
 
 RUN = "ask-20261103T063704-417c3b"
 SHA = "a" * 40
 
 
 @pytest.fixture(autouse=True)
-def _session(monkeypatch):
+def _session(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-1")
 
 
@@ -32,7 +33,7 @@ def _staged(root) -> None:
     assert _stage(root) == "staged"
 
 
-def test_write_close_job_after_restart_lands_the_staged_run(tmp_path):
+def test_write_close_job_after_restart_lands_the_staged_run(tmp_path: Path) -> None:
     _staged(tmp_path)
     run_close.write_close_job(tmp_path, f"{RUN}.workflow", [], _deadline(), terminal_sha=SHA, inputs={})
     stamped = c.read_run_stage(tmp_path, RUN)
@@ -40,7 +41,7 @@ def test_write_close_job_after_restart_lands_the_staged_run(tmp_path):
     assert stamped["steps_planned"] == 1
 
 
-def test_write_close_job_with_incomplete_rows_leaves_the_stage(tmp_path):
+def test_write_close_job_with_incomplete_rows_leaves_the_stage(tmp_path: Path) -> None:
     _staged(tmp_path)
     run_close.write_close_job(
         tmp_path, RUN, [], _deadline(), terminal_sha=SHA, inputs={"incomplete": ["C2"]},
@@ -48,7 +49,7 @@ def test_write_close_job_with_incomplete_rows_leaves_the_stage(tmp_path):
     assert _stage(tmp_path) == "staged"
 
 
-def test_write_close_job_not_met_criterion_or_no_terminal_sha_leaves_the_stage(tmp_path):
+def test_write_close_job_not_met_criterion_or_no_terminal_sha_leaves_the_stage(tmp_path: Path) -> None:
     _staged(tmp_path)
     run_close.write_close_job(
         tmp_path, RUN, [], _deadline(), terminal_sha=SHA, criterion={"status": "not_met", "observation": "x"},
@@ -57,14 +58,14 @@ def test_write_close_job_not_met_criterion_or_no_terminal_sha_leaves_the_stage(t
     assert _stage(tmp_path) == "staged"
 
 
-def test_amend_close_job_settles_a_run_the_landing_missed(tmp_path):
+def test_amend_close_job_settles_a_run_the_landing_missed(tmp_path: Path) -> None:
     run_close.write_close_job(tmp_path, RUN, [], _deadline(), terminal_sha=SHA, inputs={})
     _staged(tmp_path)  # the landing-time stamp never happened
     run_close.amend_close_job(tmp_path, RUN, criterion={"status": "met", "observation": "ok"})
     assert _stage(tmp_path) == "landed"
 
 
-def test_settle_never_regresses_or_creates(tmp_path):
+def test_settle_never_regresses_or_creates(tmp_path: Path) -> None:
     assert run_close.settle_run_stage(tmp_path, RUN) is False
     assert c.read_run_stage(tmp_path, RUN) is None
     for stage in ("halted", "landed"):
@@ -74,7 +75,7 @@ def test_settle_never_regresses_or_creates(tmp_path):
 
 
 @pytest.mark.parametrize("bad", [None, "", "../x", 5])
-def test_settle_refuses_an_unusable_run_id(tmp_path, bad):
+def test_settle_refuses_an_unusable_run_id(tmp_path: Path, bad) -> None:
     assert run_close.settle_run_stage(tmp_path, bad) is False
 
 
@@ -90,14 +91,14 @@ def _already_landed_call(tmp_path, monkeypatch, incomplete):
     return land_run._land_inner(tmp_path, tmp_path, params, {}, {})
 
 
-def test_land_run_already_landed_answer_after_restart_lands_the_staged_run(tmp_path, monkeypatch):
+def test_land_run_already_landed_answer_after_restart_lands_the_staged_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _staged(tmp_path)
     out = _already_landed_call(tmp_path, monkeypatch, [])
     assert out.get("already_landed") is True, out
     assert _stage(tmp_path) == "landed"
 
 
-def test_land_run_already_landed_answer_with_incomplete_chunks_leaves_the_stage(tmp_path, monkeypatch):
+def test_land_run_already_landed_answer_with_incomplete_chunks_leaves_the_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _staged(tmp_path)
     out = _already_landed_call(tmp_path, monkeypatch, ["C2"])
     assert out.get("already_landed") is True, out

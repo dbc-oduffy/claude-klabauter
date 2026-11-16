@@ -2884,9 +2884,24 @@ async def rm_and_commit(
         if not paths:
             return [], pre_failed
 
-        # Initialise the private index from HEAD so git rm can locate tracked files.
+        # HEAD-race CAS anchor, captured BEFORE the seed so the private index
+        # and the commit's CAS parent share one base: seeding from a HEAD read
+        # after this sha would let a commit landing between the two be
+        # reverted under a CAS that passes. See archive_and_commit's identical
+        # capture for the incident (b4f0bfe88 etc.).
+        old_head = _read_head_sha(worktree_root)
+        if old_head is None:
+            return [], pre_failed + [
+                {
+                    "id": _rel_id(p),
+                    "reason": "index-init-failed: HEAD has no resolvable commit",
+                }
+                for p in paths
+            ]
+
+        # Initialise the private index from old_head so git rm can locate tracked files.
         proc = await asyncio.create_subprocess_exec(
-            "git", "read-tree", "HEAD",
+            "git", "read-tree", old_head,
             cwd=str(worktree_root),
             env=base_env,
             stdout=asyncio.subprocess.PIPE,
@@ -2902,21 +2917,6 @@ async def rm_and_commit(
             )
             return [], pre_failed + [
                 {"id": _rel_id(p), "reason": f"index-init-failed: {err_msg}"}
-                for p in paths
-            ]
-
-        # HEAD-race CAS anchor — see archive_and_commit's identical capture
-        # for the full incident this closes (b4f0bfe88 etc.): read-tree HEAD
-        # above seeds the private index, but the per-path git rm loop and
-        # the eventual commit are un-bridged from it unless this sha is
-        # captured now and used as the commit's CAS parent below.
-        old_head = _read_head_sha(worktree_root)
-        if old_head is None:
-            return [], pre_failed + [
-                {
-                    "id": _rel_id(p),
-                    "reason": "index-init-failed: HEAD has no resolvable commit",
-                }
                 for p in paths
             ]
 

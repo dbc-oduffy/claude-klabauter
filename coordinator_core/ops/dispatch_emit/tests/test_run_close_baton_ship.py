@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -28,11 +29,11 @@ BODY = (
 
 
 @pytest.fixture
-def session_env(monkeypatch):
+def session_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SESSION_ID", _AUTHOR_SESSION)
 
 
-def _baton(repo, name):
+def _baton(repo, name) -> str:
     extra = (
         "deployment_state: in_flight\n"
         f"claimed_by: {_AUTHOR_SESSION}\n"
@@ -46,7 +47,7 @@ def _baton(repo, name):
     return f"state/handoffs/{name}"
 
 
-def _forbid_spawn(monkeypatch):
+def _forbid_spawn(monkeypatch) -> None:
     def refuse(*args, **kwargs):
         raise AssertionError("a process was spawned")
 
@@ -54,11 +55,11 @@ def _forbid_spawn(monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", refuse)
 
 
-def test_no_claimed_baton_is_not_applicable(tmp_path):
+def test_no_claimed_baton_is_not_applicable(tmp_path: Path) -> None:
     assert baton_ship_leg(tmp_path, "run-1", [], SHA).status == "not-applicable"
 
 
-def test_ran_stamps_and_appends_one_parseable_row_per_baton(tmp_path, session_env, monkeypatch):
+def test_ran_stamps_and_appends_one_parseable_row_per_baton(tmp_path: Path, session_env, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _make_git_repo(tmp_path)
     batons = [_baton(repo, "a.md"), _baton(repo, "b.md")]
     _forbid_spawn(monkeypatch)
@@ -75,7 +76,7 @@ def test_ran_stamps_and_appends_one_parseable_row_per_baton(tmp_path, session_en
         assert unparseable_ledger_rows("## Session Ledger\n\n" + row + "\n") == []
 
 
-def test_open_baton_is_shipped_with_its_ledger_row_without_correct_body(tmp_path, session_env):
+def test_open_baton_is_shipped_with_its_ledger_row_without_correct_body(tmp_path: Path, session_env) -> None:
     repo = _make_git_repo(tmp_path)
     rel = _baton(repo, "a.md")
     path = repo / rel
@@ -93,7 +94,7 @@ def test_open_baton_is_shipped_with_its_ledger_row_without_correct_body(tmp_path
     assert baton_ship_leg(repo, "run-1", [rel], SHA).status == "discharged"
 
 
-def test_rerun_is_discharged_and_adds_no_second_row(tmp_path, session_env, monkeypatch):
+def test_rerun_is_discharged_and_adds_no_second_row(tmp_path: Path, session_env, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _make_git_repo(tmp_path)
     batons = [_baton(repo, "a.md")]
     assert baton_ship_leg(repo, "run-1", batons, SHA).status == "ran"
@@ -106,7 +107,7 @@ def test_rerun_is_discharged_and_adds_no_second_row(tmp_path, session_env, monke
     assert (repo / batons[0]).read_text(encoding="utf-8") == before
 
 
-def test_unreadable_baton_is_failed(tmp_path):
+def test_unreadable_baton_is_failed(tmp_path: Path) -> None:
     result = baton_ship_leg(tmp_path, "run-1", ["state/handoffs/missing.md"], SHA)
     assert result.status == "failed"
     assert "missing.md" in result.detail

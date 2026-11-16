@@ -9,10 +9,11 @@ import pytest
 
 from coordinator_core.git.run import GitResult
 from coordinator_core.p4 import runner, shelve, workspace
+from pathlib import Path
 
 
 @pytest.fixture
-def sdir(tmp_path):
+def sdir(tmp_path: Path) -> Path:
     d = tmp_path / "session"
     d.mkdir()
     (d / "meta.json").write_text("{}", encoding="utf-8")
@@ -42,15 +43,15 @@ def _fstat_block(client_file: str, *, have_rev: bool, action: str = None) -> str
 
 class TestModeOnlyDriftIsRestored:
     def test_synced_unopened_path_gets_read_only_bit_restored(
-        self, monkeypatch, tmp_path, sdir, identity
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sdir, identity
+    ) -> None:
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         drifted = repo_root / "a.uasset"
         drifted.write_text("unchanged\n", encoding="utf-8")
         drifted.chmod(0o644)
 
-        def fake_run_git(args, **kw):
+        def fake_run_git(args, **kw) -> GitResult:
             if "cat-file" in args:
                 return _git_ok()
             if "log" in args:
@@ -90,15 +91,15 @@ class TestModeOnlyDriftIsRestored:
 
 class TestOpenPathIsNeverRestored:
     def test_already_open_path_is_excluded_from_restore(
-        self, monkeypatch, tmp_path, sdir, identity
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sdir, identity
+    ) -> None:
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         opened = repo_root / "b.uasset"
         opened.write_text("changed\n", encoding="utf-8")
         opened.chmod(0o644)
 
-        def fake_run_git(args, **kw):
+        def fake_run_git(args, **kw) -> GitResult:
             if "cat-file" in args:
                 return _git_ok()
             if "log" in args:

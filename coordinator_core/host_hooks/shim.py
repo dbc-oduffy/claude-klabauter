@@ -140,9 +140,42 @@ def _nag_text(host: str, event: HostEvent, engine_event: Mapping[str, Any]) -> s
             env["COORDINATOR_AGENT_PROVIDER"] = host
         from coordinator_core.session import op_dispatch_nag
 
-        return op_dispatch_nag.advisory_for_dispatch(event.cwd, event.session_id, env) or ""
+        nag = op_dispatch_nag.advisory_for_dispatch(event.cwd, event.session_id, env) or ""
+        if nag:
+            _pending[:] = [(event.cwd, event.session_id, nag)]
+        return nag
     except Exception:  # noqa: BLE001 -- advisory only
         return ""
+
+
+#: The last nag `_nag_text` produced: (repo_root, session_id, text). Not yet on the wire, so not yet stamped.
+_pending: list = []
+
+
+def take_pending_nag() -> Optional[tuple]:
+    """The nag merged into the last answer as (repo_root, session_id, text), cleared; None if none."""
+    taken = _pending[0] if _pending else None
+    del _pending[:]
+    return taken
+
+
+def _carries(obj: Any, text: str) -> bool:
+    if isinstance(obj, str):
+        return text in obj
+    if isinstance(obj, Mapping):
+        return any(_carries(v, text) for v in obj.values())
+    return False
+
+
+def mark_if_delivered(pending: Optional[tuple], answer: Any) -> None:
+    """Stamp the nag window once the writer's answer, already written and flushed, still carries the nag."""
+    try:
+        if pending and _carries(answer, pending[2]):
+            from coordinator_core.session import op_dispatch_nag
+
+            op_dispatch_nag.mark_nag_emitted(pending[0], pending[1])
+    except Exception:  # noqa: BLE001 -- stamping never breaks the hook
+        return
 
 
 def _with_nag(host: str, event: HostEvent, engine_event: Mapping[str, Any], verdict: Dict[str, Any]) -> Dict[str, Any]:
@@ -228,9 +261,12 @@ def main(argv: Optional[list] = None) -> int:
         stdin_text = sys.stdin.read()
     except Exception:  # noqa: BLE001
         stdin_text = ""
+    take_pending_nag()
     answer = run(host, stdin_text)
+    pending = take_pending_nag()
     sys.stdout.write(json.dumps(answer))
     sys.stdout.flush()
+    mark_if_delivered(pending, answer)
     return 0
 
 

@@ -99,7 +99,7 @@ def _labels(out: dict) -> list[str]:
     return [c["label"] for c in out["calls"]]
 
 
-def test_an_all_landed_resume_with_a_zero_row_manifest_reaches_verify_then_commit_with_no_executor(monkeypatch):
+def test_an_all_landed_resume_with_a_zero_row_manifest_reaches_verify_then_commit_with_no_executor(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(_script(monkeypatch))
     res = out["result"]
     labels = _labels(out)
@@ -110,7 +110,7 @@ def test_an_all_landed_resume_with_a_zero_row_manifest_reaches_verify_then_commi
     assert res["commit"]["committed"] is True
 
 
-def test_the_all_landed_judge_prompt_omits_the_halt_diff_clause(monkeypatch):
+def test_the_all_landed_judge_prompt_omits_the_halt_diff_clause(monkeypatch: pytest.MonkeyPatch) -> None:
     verify = next(c for c in _run(_script(monkeypatch))["calls"] if c["label"] == "verify")["prompt"]
     assert "Judge only these requirement rows, now, against the landed work of the plan at HEAD: R1" in verify
     assert "changed since the halt commit" not in verify
@@ -118,7 +118,7 @@ def test_the_all_landed_judge_prompt_omits_the_halt_diff_clause(monkeypatch):
     assert "a remaining-work leg then ran" not in verify
 
 
-def test_a_ledger_check_resume_keeps_the_halt_diff_clause(monkeypatch):
+def test_a_ledger_check_resume_keeps_the_halt_diff_clause(monkeypatch: pytest.MonkeyPatch) -> None:
     resume = {k: v for k, v in _RESUME.items() if k != RESUME_LEDGER_KIND_FIELD}
     resume.update(run_id="ask-prior", halt_sha="a" * 40)
     out = _run(_script(monkeypatch), resume=resume)
@@ -128,7 +128,7 @@ def test_a_ledger_check_resume_keeps_the_halt_diff_clause(monkeypatch):
     assert "ledger-remaining" in _labels(out)
 
 
-def test_a_not_met_verdict_on_an_all_landed_resume_lands_the_ledger_check_halt_commit(monkeypatch):
+def test_a_not_met_verdict_on_an_all_landed_resume_lands_the_ledger_check_halt_commit(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(_script(monkeypatch), verify=_UNMET)
     res = out["result"]
     labels = _labels(out)

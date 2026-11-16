@@ -8,20 +8,21 @@ from coordinator_core.session import claim_index
 from coordinator_core.session import claim_neighbours
 from coordinator_core.session import scope
 from coordinator_core.session import touch_record
+from pathlib import Path
 
 
-def _write(path, content):
+def _write(path, content) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(content)
 
 
-def _write_artifact(path, frontmatter: dict, body: str = "\n# body\n"):
+def _write_artifact(path, frontmatter: dict, body: str = "\n# body\n") -> None:
     fm_text = yaml.safe_dump(frontmatter, default_flow_style=False, sort_keys=False)
     _write(path, f"---\n{fm_text}---\n{body}")
 
 
-def _session_touched(base, sid, lines):
+def _session_touched(base, sid, lines) -> None:
     sink = os.path.join(str(base), sid, scope._TOUCH_RECORD_FILENAME)
     os.makedirs(os.path.dirname(sink), exist_ok=True)
     for line in lines:
@@ -40,17 +41,17 @@ def _epoch(ts):
     return ts.timestamp() if ts is not None else None
 
 
-def _touch_line(verb, path, when="2026-08-16T10:00:00.000000Z"):
+def _touch_line(verb, path, when: str = "2026-08-16T10:00:00.000000Z") -> str:
     return f"{verb} {when} {path}"
 
 
-def _write_plan_claim(base, sid, slug):
+def _write_plan_claim(base, sid, slug) -> None:
     claim_dir = os.path.join(str(base), "plan-claims", slug)
     os.makedirs(claim_dir, exist_ok=True)
     _write(os.path.join(claim_dir, "session_id"), sid + "\n")
 
 
-def test_plan_with_scope_resolves_live_neighbour(tmp_path, monkeypatch):
+def test_plan_with_scope_resolves_live_neighbour(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sessions = tmp_path / "sessions"
     repo = tmp_path / "repo"
     plan_path = repo / "docs" / "plans" / "my-plan.md"
@@ -87,7 +88,7 @@ def test_plan_with_scope_resolves_live_neighbour(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_handoff_with_only_deliverable_id_is_unresolvable(tmp_path, monkeypatch):
+def test_handoff_with_only_deliverable_id_is_unresolvable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sessions = tmp_path / "sessions"
     repo = tmp_path / "repo"
     plan_path = repo / "docs" / "plans" / "bridge-plan.md"
@@ -124,7 +125,7 @@ def test_handoff_with_only_deliverable_id_is_unresolvable(tmp_path, monkeypatch)
     assert result.reason is not None
 
 
-def test_handoff_resolves_via_governing_plan_stamp_no_deliverable_id(tmp_path, monkeypatch):
+def test_handoff_resolves_via_governing_plan_stamp_no_deliverable_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sessions = tmp_path / "sessions"
     repo = tmp_path / "repo"
     plan_path = repo / "docs" / "plans" / "stamped-plan.md"
@@ -157,7 +158,7 @@ def test_handoff_resolves_via_governing_plan_stamp_no_deliverable_id(tmp_path, m
     assert [n.session_id for n in result.neighbours] == ["peer-sid"]
 
 
-def test_governing_plan_stamp_ignores_unrelated_deliverable_id(tmp_path, monkeypatch):
+def test_governing_plan_stamp_ignores_unrelated_deliverable_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A `deliverable_id:` alongside a `governing_plan:` stamp is inert --
     only the stamp is read (it would resolve to a DIFFERENT plan's scope
     here if `deliverable_id` were consulted, proving it is not)."""
@@ -195,7 +196,7 @@ def test_governing_plan_stamp_ignores_unrelated_deliverable_id(tmp_path, monkeyp
     assert result.file_set == ["coordinator_core/session/claim_neighbours.py"]
 
 
-def test_governing_plan_stamp_none_sentinel_is_unresolvable_not_scanned(tmp_path, monkeypatch):
+def test_governing_plan_stamp_none_sentinel_is_unresolvable_not_scanned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A ``governing_plan: none`` sentinel (the explicit-null shape C5's
     writer uses) is treated the same as an absent field -- UNRESOLVABLE
     directly. No fallback scan against ``deliverable_id`` is performed even
@@ -237,7 +238,7 @@ def test_governing_plan_stamp_none_sentinel_is_unresolvable_not_scanned(tmp_path
     assert result.reason is not None
 
 
-def test_governing_plan_stamp_unreadable_is_unresolvable_not_scanned(tmp_path):
+def test_governing_plan_stamp_unreadable_is_unresolvable_not_scanned(tmp_path: Path) -> None:
     """A stamped path that does not resolve to a readable plan is
     UNRESOLVABLE directly -- the stamp is definitive, so this does NOT fall
     through to a deliverable_id scan even when one would have matched."""
@@ -276,7 +277,7 @@ def test_governing_plan_stamp_unreadable_is_unresolvable_not_scanned(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_unresolvable_is_not_the_same_as_resolved_empty(tmp_path):
+def test_unresolvable_is_not_the_same_as_resolved_empty(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     artifact_path = repo / "docs" / "plans" / "no-scope-no-bridge.md"
     _write_artifact(str(artifact_path), {"title": "carries neither field"})
@@ -297,7 +298,7 @@ def test_unresolvable_is_not_the_same_as_resolved_empty(tmp_path):
     assert unresolvable.neighbours == [] and resolved_empty.neighbours == []
 
 
-def test_callers_own_session_excluded(tmp_path, monkeypatch):
+def test_callers_own_session_excluded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sessions = tmp_path / "sessions"
     repo = tmp_path / "repo"
     plan_path = repo / "docs" / "plans" / "self-only.md"
@@ -315,7 +316,7 @@ def test_callers_own_session_excluded(tmp_path, monkeypatch):
     assert result.reason is None
 
 
-def test_dead_claimant_excluded(tmp_path, monkeypatch):
+def test_dead_claimant_excluded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sessions = tmp_path / "sessions"
     repo = tmp_path / "repo"
     plan_path = repo / "docs" / "plans" / "dead-peer.md"
@@ -332,7 +333,7 @@ def test_dead_claimant_excluded(tmp_path, monkeypatch):
     assert result.neighbours == []
 
 
-def test_raising_claim_index_degrades_not_raises(tmp_path, monkeypatch):
+def test_raising_claim_index_degrades_not_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     plan_path = repo / "docs" / "plans" / "raises.md"
     _write_artifact(str(plan_path), {"title": "x", "scope": ["some/file.py"]})
@@ -352,7 +353,7 @@ def test_raising_claim_index_degrades_not_raises(tmp_path, monkeypatch):
     assert result.reason is not None and "claim_index" in result.reason
 
 
-def test_raising_liveness_check_skips_that_candidate(tmp_path, monkeypatch):
+def test_raising_liveness_check_skips_that_candidate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sessions = tmp_path / "sessions"
     repo = tmp_path / "repo"
     plan_path = repo / "docs" / "plans" / "flaky-liveness.md"
@@ -373,7 +374,7 @@ def test_raising_liveness_check_skips_that_candidate(tmp_path, monkeypatch):
     assert result.neighbours == []
 
 
-def test_neighbour_carries_peers_claimed_plan(tmp_path, monkeypatch):
+def test_neighbour_carries_peers_claimed_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sessions = tmp_path / "sessions"
     repo = tmp_path / "repo"
     plan_path = repo / "docs" / "plans" / "mine.md"
@@ -392,7 +393,7 @@ def test_neighbour_carries_peers_claimed_plan(tmp_path, monkeypatch):
     assert result.neighbours[0].artifact_path == "docs/plans/peers-own-plan.md"
 
 
-def test_neighbour_with_no_artifact_claim_reports_none(tmp_path, monkeypatch):
+def test_neighbour_with_no_artifact_claim_reports_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sessions = tmp_path / "sessions"
     repo = tmp_path / "repo"
     plan_path = repo / "docs" / "plans" / "mine2.md"
@@ -410,7 +411,7 @@ def test_neighbour_with_no_artifact_claim_reports_none(tmp_path, monkeypatch):
     assert result.neighbours[0].artifact_path is None
 
 
-def test_paths_seam_returns_live_peer_for_claimed_path(tmp_path, monkeypatch):
+def test_paths_seam_returns_live_peer_for_claimed_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sessions = tmp_path / "sessions"
     _session_touched(sessions, "peer-sid", [_touch_line("T", "some/file.py")])
     monkeypatch.setattr(
@@ -429,7 +430,7 @@ def test_paths_seam_returns_live_peer_for_claimed_path(tmp_path, monkeypatch):
     assert result.abort_cause is None
 
 
-def test_paths_seam_excludes_callers_own_session(tmp_path, monkeypatch):
+def test_paths_seam_excludes_callers_own_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sessions = tmp_path / "sessions"
     _session_touched(sessions, "my-own-sid", [_touch_line("T", "some/file.py")])
     monkeypatch.setattr(claim_neighbours.liveness, "session_live", lambda sid, cwd=None: True)
@@ -442,7 +443,7 @@ def test_paths_seam_excludes_callers_own_session(tmp_path, monkeypatch):
     assert result.no_claimant_paths == ["some/file.py"]
 
 
-def test_paths_seam_excludes_dead_claimant(tmp_path, monkeypatch):
+def test_paths_seam_excludes_dead_claimant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sessions = tmp_path / "sessions"
     _session_touched(sessions, "dead-sid", [_touch_line("T", "some/file.py")])
     monkeypatch.setattr(claim_neighbours.liveness, "session_live", lambda sid, cwd=None: False)
@@ -456,7 +457,7 @@ def test_paths_seam_excludes_dead_claimant(tmp_path, monkeypatch):
     assert result.unanswerable_paths == []
 
 
-def test_paths_seam_lookup_raised_when_claim_index_raises(tmp_path, monkeypatch):
+def test_paths_seam_lookup_raised_when_claim_index_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*args, **kwargs):
         raise RuntimeError("simulated claim_index failure")
 
@@ -473,7 +474,7 @@ def test_paths_seam_lookup_raised_when_claim_index_raises(tmp_path, monkeypatch)
     assert result.abort_cause is None
 
 
-def test_paths_seam_abort_cause_distinct_from_lookup_raised_on_incomplete_walk(tmp_path):
+def test_paths_seam_abort_cause_distinct_from_lookup_raised_on_incomplete_walk(tmp_path: Path) -> None:
     """Drives a REAL (not monkeypatched) incomplete-walk-without-raising:
     an empty ``sessions_dir`` and a ``cwd`` outside any git repo both
     resolve to no resolvable base, which ``claim_index.lookup()`` answers
@@ -495,7 +496,7 @@ def test_paths_seam_abort_cause_distinct_from_lookup_raised_on_incomplete_walk(t
     assert result.abort_cause == claim_neighbours.claim_index.ABORT_CAUSE_EMPTY_BASE
 
 
-def test_paths_seam_no_claimant_distinct_from_unanswerable(tmp_path, monkeypatch):
+def test_paths_seam_no_claimant_distinct_from_unanswerable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sessions = tmp_path / "sessions"
     _session_touched(sessions, "dead-sid", [_touch_line("T", "answerable/file.py")])
     monkeypatch.setattr(claim_neighbours.liveness, "session_live", lambda sid, cwd=None: False)

@@ -12,7 +12,7 @@ from coordinator_core.ops.dispatch_emit.ask_plan_blitz import AskPlanBlitzRefuse
 from coordinator_core.ops.dispatch_emit.ask_brief import EmBrief, EmBriefRefused, load_em_brief
 
 
-def test_hook_forwards_context_beside_a_sizing(tmp_path):
+def test_hook_forwards_context_beside_a_sizing(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "ctx.md").write_text("x", encoding="utf-8")
@@ -37,7 +37,7 @@ def test_hook_forwards_context_beside_a_sizing(tmp_path):
     assert seen[0]["ask_context"] == ["docs/ctx.md"]
 
 
-def test_outside_context_refusal_names_the_accepted_shapes(tmp_path):
+def test_outside_context_refusal_names_the_accepted_shapes(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     peer = tmp_path / "peer.md"
@@ -46,7 +46,7 @@ def test_outside_context_refusal_names_the_accepted_shapes(tmp_path):
         load_em_brief(repo, brief=None, brief_file=None, context=[str(peer)], session_id="s1")
 
 
-def test_outside_brief_file_refusal_names_the_accepted_shape(tmp_path):
+def test_outside_brief_file_refusal_names_the_accepted_shape(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     peer = tmp_path / "peer.md"
@@ -55,7 +55,7 @@ def test_outside_brief_file_refusal_names_the_accepted_shape(tmp_path):
         load_em_brief(repo, brief=None, brief_file=str(peer), context=[])
 
 
-def test_hook_surfaces_the_engine_refusal_text_in_the_deny_reason(tmp_path):
+def test_hook_surfaces_the_engine_refusal_text_in_the_deny_reason(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / "ctx.md").write_text("x", encoding="utf-8")
 
@@ -101,7 +101,7 @@ def _ask_payload(cwd_repo, ctx):
     }
 
 
-def test_ask_with_context_in_a_registered_sibling_repo_emits_a_run(tmp_path, monkeypatch):
+def test_ask_with_context_in_a_registered_sibling_repo_emits_a_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit.ask_brief import load_em_brief as real_load
 
     cwd_repo, sibling, ctx = _sibling_setup(tmp_path, monkeypatch, register=True)
@@ -120,7 +120,7 @@ def test_ask_with_context_in_a_registered_sibling_repo_emits_a_run(tmp_path, mon
     assert roots == [sibling]
 
 
-def test_ask_with_context_in_an_unregistered_repo_keeps_the_cwd_root(tmp_path, monkeypatch):
+def test_ask_with_context_in_an_unregistered_repo_keeps_the_cwd_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cwd_repo, _sibling, ctx = _sibling_setup(tmp_path, monkeypatch, register=False)
     roots: list[Path] = []
 
@@ -132,7 +132,7 @@ def test_ask_with_context_in_an_unregistered_repo_keeps_the_cwd_root(tmp_path, m
     assert roots == [cwd_repo]
 
 
-def test_ask_with_explicit_repo_arg_is_never_rerooted(tmp_path, monkeypatch):
+def test_ask_with_explicit_repo_arg_is_never_rerooted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cwd_repo, _sibling, ctx = _sibling_setup(tmp_path, monkeypatch, register=True)
     payload = _ask_payload(cwd_repo, ctx)
     payload["tool_input"]["args"]["repo"] = str(cwd_repo)
@@ -146,7 +146,7 @@ def test_ask_with_explicit_repo_arg_is_never_rerooted(tmp_path, monkeypatch):
     assert roots == [cwd_repo]
 
 
-def test_bad_context_refusal_reaches_the_deny_reason_whole(tmp_path):
+def test_bad_context_refusal_reaches_the_deny_reason_whole(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / "ctx.md").write_text("x", encoding="utf-8")
     long_reason ="--context /x/" + "d/" * 300 + "f.md: no such file; accepted: a file inside the repo or in this session's scratchpad"
@@ -164,13 +164,13 @@ def test_bad_context_refusal_reaches_the_deny_reason_whole(tmp_path):
     assert long_reason in env["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_in_repo_context_alone_is_admitted(tmp_path):
+def test_in_repo_context_alone_is_admitted(tmp_path: Path) -> None:
     (tmp_path / "ctx.md").write_text("x", encoding="utf-8")
     b = load_em_brief(tmp_path, brief=None, brief_file=None, context=["ctx.md"])
     assert b == EmBrief(text="", source="inline", context=("ctx.md",))
 
 
-def test_roadmap_arm_refusal_names_the_workflow_args(monkeypatch):
+def test_roadmap_arm_refusal_names_the_workflow_args(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: ask_compose.ARM_ROADMAP)
     monkeypatch.setattr(ask_compose, "parse_execute_review", lambda *_, **__: None)
     monkeypatch.setattr(ask_compose, "_read_plan_blitz", lambda: "")

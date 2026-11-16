@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.benchmarks import land_gate_reach_profile as lgrp
+from pathlib import Path
 
 
 def _rows(measured_ms: float, land_ms: float, added: int = 0) -> list:
@@ -15,12 +16,12 @@ def _rows(measured_ms: float, land_ms: float, added: int = 0) -> list:
     ]
 
 
-def test_default_bar_is_unchanged():
+def test_default_bar_is_unchanged() -> None:
     assert lgrp.BAR_MS == 500.0
     assert lgrp.exit_code(_rows(265.6, 390.6)) == 0
 
 
-def test_bar_ms_flag_tightens_the_exit_and_the_print():
+def test_bar_ms_flag_tightens_the_exit_and_the_print() -> None:
     rows = _rows(265.6, 390.6)
     assert lgrp.exit_code(rows, 200.0) == 1
     assert "OVER" in lgrp.render(rows, 200.0)
@@ -28,14 +29,14 @@ def test_bar_ms_flag_tightens_the_exit_and_the_print():
     assert lgrp.exit_code(_rows(150.0, 190.0), 200.0) == 0
 
 
-def test_added_git_spawn_or_missing_reach_module_fails():
+def test_added_git_spawn_or_missing_reach_module_fails() -> None:
     assert lgrp.exit_code(_rows(10.0, 10.0, added=1), 200.0) == 1
     rows = _rows(10.0, 10.0)
     rows[1].attribution["reach_module_present"] = False
     assert lgrp.exit_code(rows) == 1
 
 
-def test_bar_ms_parses_in_main(monkeypatch):
+def test_bar_ms_parses_in_main(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
 
     def fake_run(source, workdir, overlay=()):
@@ -48,11 +49,11 @@ def test_bar_ms_parses_in_main(monkeypatch):
     assert seen == {"default": 0, "tight": 1, "loose": 0}
 
 
-def test_profiled_attribution_splits_named_legs():
-    def inner_a():
+def test_profiled_attribution_splits_named_legs() -> None:
+    def inner_a() -> int:
         return sum(range(1000))
 
-    def outer():
+    def outer() -> None:
         inner_a()
 
     out = lgrp._profiled_attribution(outer, {"a": ("inner_a",), "missing": ("nope",)})
@@ -61,14 +62,14 @@ def test_profiled_attribution_splits_named_legs():
     assert out["legs"]["missing"] == 0.0
 
 
-def test_profiled_attribution_reports_a_raised_call():
+def test_profiled_attribution_reports_a_raised_call() -> None:
     def boom():
         raise ValueError("x")
 
     assert lgrp._profiled_attribution(boom)["error"] == "ValueError"
 
 
-def test_apply_overlay_copies_source_files_into_the_clone(tmp_path):
+def test_apply_overlay_copies_source_files_into_the_clone(tmp_path: Path) -> None:
     src, clone = tmp_path / "src", tmp_path / "clone"
     (src / "pkg").mkdir(parents=True)
     (src / "pkg" / "a.py").write_text("new\n")
@@ -80,7 +81,7 @@ def test_apply_overlay_copies_source_files_into_the_clone(tmp_path):
         lgrp.apply_overlay(src, clone, ["pkg/missing.py"])
 
 
-def test_overlay_flag_reaches_run(monkeypatch):
+def test_overlay_flag_reaches_run(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
 
     def fake_run(source, workdir, overlay=()):
@@ -92,7 +93,7 @@ def test_overlay_flag_reaches_run(monkeypatch):
     assert seen["overlay"] == ("a/b.py", "c.py")
 
 
-def test_copy_lf_folds_crlf_text_and_leaves_binary_alone(tmp_path):
+def test_copy_lf_folds_crlf_text_and_leaves_binary_alone(tmp_path: Path) -> None:
     text, binary = tmp_path / "a.py", tmp_path / "b.bin"
     text.write_bytes(b"x = 1\r\ny = 2\r\n")
     binary.write_bytes(b"\x00\r\n\x01")

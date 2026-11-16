@@ -60,6 +60,10 @@ import unittest.mock
 from pathlib import Path
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = pytest.mark.complete
 
@@ -457,7 +461,7 @@ class TestIsTimeoutError(unittest.TestCase):
         self.assertFalse(_mod.is_timeout_error(ValueError("not even a RuntimeError")))
 
 
-def _load_bin_module(name: str, filename: str):
+def _load_bin_module(name: str, filename: str) -> ModuleType:
     """Load a bin/ CLI module by file path — mirrors the idiom used by the sibling
     archive-stamp-cli tests (extensionless/hyphenated entrypoints aren't importable by
     dotted name)."""
@@ -650,13 +654,13 @@ class TimeoutMessageClaimsOnlyWhatTheDoorKnows(unittest.TestCase):
         ordinary = _mod._timeout_exceeded_message("queue.append", 12)
         return {"ceremony": ceremony, "ordinary": ordinary}
 
-    def test_neither_branch_asserts_what_the_engine_is_doing(self):
+    def test_neither_branch_asserts_what_the_engine_is_doing(self) -> None:
         for name, text in self._both_branches().items():
             with self.subTest(branch=name):
                 self.assertNotIn("does not stop when this client", text)
                 self.assertNotIn("slow op is not a hung one", text)
 
-    def test_neither_branch_prescribes_making_the_op_cheaper(self):
+    def test_neither_branch_prescribes_making_the_op_cheaper(self) -> None:
         """Measured counterexample: a no-op `ping` took 28.8s through a door
         whose process and every pool member sat at 0.0% CPU. There was nothing
         to make cheaper, and a remedy naming the wrong cause teaches the reader
@@ -667,7 +671,7 @@ class TimeoutMessageClaimsOnlyWhatTheDoorKnows(unittest.TestCase):
                 self.assertNotIn("fewer spawns", text)
                 self.assertNotIn("fewer git spawns", text)
 
-    def test_both_branches_keep_the_reconcile_instruction(self):
+    def test_both_branches_keep_the_reconcile_instruction(self) -> None:
         """The half that was right, and the half a peer's reconcile is why
         nothing was double-executed. Weakening it is the failure this test
         exists to refuse."""
@@ -680,7 +684,7 @@ class TimeoutMessageClaimsOnlyWhatTheDoorKnows(unittest.TestCase):
                 self.assertIn("may have", flat)
                 self.assertIn("git log", flat)
 
-    def test_both_branches_still_carry_the_discriminator_prefix(self):
+    def test_both_branches_still_carry_the_discriminator_prefix(self) -> None:
         """`is_timeout_error` matches on this prefix. A reworded message that
         drops it turns every timeout into an unclassified RuntimeError."""
         for name, text in self._both_branches().items():
@@ -688,7 +692,7 @@ class TimeoutMessageClaimsOnlyWhatTheDoorKnows(unittest.TestCase):
                 self.assertTrue(text.startswith(_mod._TIMEOUT_MESSAGE_PREFIX))
                 self.assertTrue(_mod.is_timeout_error(RuntimeError(text)))
 
-    def test_the_warm_clients_indeterminate_message_makes_no_engine_claim(self):
+    def test_the_warm_clients_indeterminate_message_makes_no_engine_claim(self) -> None:
         """The same C4 cut, on the message a warm-served refusal actually
         prints. The cc_invoke remedies above were fixed first and this one was
         missed -- it surfaced verbatim in the next indeterminate after they
@@ -711,7 +715,7 @@ class TimeoutMessageClaimsOnlyWhatTheDoorKnows(unittest.TestCase):
         self.assertIn("may never have started", text)
         self.assertIn("absence of a trace is not evidence", text)
 
-    def test_no_branch_names_an_override_key(self):
+    def test_no_branch_names_an_override_key(self) -> None:
         """Unchanged contract from this file's original subject — re-asserted
         here because C4 rewrote both branches and a reworded message is exactly
         where a helpful-sounding env var creeps back in."""

@@ -160,7 +160,7 @@ def _registered_names() -> set:
     return {entry.name for entry in chain}
 
 
-def test_every_speaking_row_matches_the_committed_baseline():
+def test_every_speaking_row_matches_the_committed_baseline() -> None:
     """A key that disappears or appears is a failure, never a skip."""
     baseline = _load_baseline()
     rendered = render_all()
@@ -188,7 +188,7 @@ def test_every_speaking_row_matches_the_committed_baseline():
     assert not drifted, "EM-audience render changed for: %s%s" % (drifted, detail)
 
 
-def test_every_expected_speaker_row_has_a_fixture_entry():
+def test_every_expected_speaker_row_has_a_fixture_entry() -> None:
     baseline = _load_baseline()
     missing = sorted(
         _key(row)
@@ -198,7 +198,7 @@ def test_every_expected_speaker_row_has_a_fixture_entry():
     assert not missing, "expected-speaker rows absent from the fixture: %s" % missing
 
 
-def test_baseline_keys_are_chain_entry_names_never_module_paths():
+def test_baseline_keys_are_chain_entry_names_never_module_paths() -> None:
     names = _registered_names()
     for key in _load_baseline():
         guard, _, row_id = key.partition("::")
@@ -206,7 +206,7 @@ def test_baseline_keys_are_chain_entry_names_never_module_paths():
         assert row_id and "/" not in key and "\\" not in key and ".py" not in key, key
 
 
-def test_every_registered_guard_speaks_to_the_em_or_is_pinned_silent():
+def test_every_registered_guard_speaks_to_the_em_or_is_pinned_silent() -> None:
     spoke = {key.partition("::")[0] for key in _load_baseline()}
     silent = _registered_names() - spoke
     assert silent == set(_SILENT_FOR_EM), (
@@ -216,7 +216,7 @@ def test_every_registered_guard_speaks_to_the_em_or_is_pinned_silent():
     assert all(_SILENT_FOR_EM.values())
 
 
-def test_baseline_text_carries_no_per_fire_noise():
+def test_baseline_text_carries_no_per_fire_noise() -> None:
     for key, text in _load_baseline().items():
         assert not _SESSION_RE.search(text), key
         assert not _SCRATCH_TAIL_RE.search(text), key
@@ -226,5 +226,5 @@ def test_baseline_text_carries_no_per_fire_noise():
     os.environ.get(REGENERATE_ENV) != "1",
     reason="rewrites the committed baseline; set %s=1 to run" % REGENERATE_ENV,
 )
-def test_regenerate_baseline():
+def test_regenerate_baseline() -> None:
     write_baseline()

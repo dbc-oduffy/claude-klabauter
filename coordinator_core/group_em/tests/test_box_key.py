@@ -3,21 +3,22 @@ import base64
 import pytest
 
 from coordinator_core.group_em import box_key
+from pathlib import Path
 
 
-def _pin_own(home_signer, home_verifier, box_id="box-a"):
+def _pin_own(home_signer, home_verifier, box_id: str = "box-a") -> None:
     key = box_key.ensure_key(home_signer)
     box_key.pin_peer_key(box_id, base64.b64encode(key).decode(), home_verifier)
 
 
-def test_ensure_key_mints_once_and_is_stable(tmp_path):
+def test_ensure_key_mints_once_and_is_stable(tmp_path: Path) -> None:
     first = box_key.ensure_key(tmp_path)
     assert len(first) == box_key.KEY_BYTES
     assert box_key.ensure_key(tmp_path) == first
     assert (tmp_path / "state" / "group-em" / "box-key").is_file()
 
 
-def test_pin_writes_record_and_refuses_invalid_id(tmp_path):
+def test_pin_writes_record_and_refuses_invalid_id(tmp_path: Path) -> None:
     key_b64 = base64.b64encode(b"k" * 32).decode()
     rec = box_key.pin_peer_key("box-a", key_b64, tmp_path)
     assert rec["box_id"] == "box-a" and rec["key_b64"] == key_b64
@@ -29,7 +30,7 @@ def test_pin_writes_record_and_refuses_invalid_id(tmp_path):
         box_key.pin_peer_key("box-a", "!!not base64!!", tmp_path)
 
 
-def test_sign_verify_roundtrip_across_homes(tmp_path):
+def test_sign_verify_roundtrip_across_homes(tmp_path: Path) -> None:
     a, b = tmp_path / "a", tmp_path / "b"
     _pin_own(a, b)
     rec = {"grantee": "s1", "n": 3, "nested": {"z": 1, "a": [1, 2]}}
@@ -38,28 +39,28 @@ def test_sign_verify_roundtrip_across_homes(tmp_path):
     assert box_key.verify(signed, "box-a", b) is True
 
 
-def test_sign_replaces_extant_sig(tmp_path):
+def test_sign_replaces_extant_sig(tmp_path: Path) -> None:
     a, b = tmp_path / "a", tmp_path / "b"
     _pin_own(a, b)
     signed = box_key.sign({"x": 1, "sig": "stale"}, a)
     assert box_key.verify(signed, "box-a", b) is True
 
 
-def test_missing_sig_is_false(tmp_path):
+def test_missing_sig_is_false(tmp_path: Path) -> None:
     a, b = tmp_path / "a", tmp_path / "b"
     _pin_own(a, b)
     assert box_key.verify({"x": 1}, "box-a", b) is False
     assert box_key.verify({"x": 1, "sig": ""}, "box-a", b) is False
 
 
-def test_wrong_key_is_false(tmp_path):
+def test_wrong_key_is_false(tmp_path: Path) -> None:
     a, b, c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
     _pin_own(a, b)
     forged = box_key.sign({"x": 1}, c)
     assert box_key.verify(forged, "box-a", b) is False
 
 
-def test_altered_field_is_false(tmp_path):
+def test_altered_field_is_false(tmp_path: Path) -> None:
     a, b = tmp_path / "a", tmp_path / "b"
     _pin_own(a, b)
     signed = box_key.sign({"x": 1, "y": "ok"}, a)
@@ -67,13 +68,13 @@ def test_altered_field_is_false(tmp_path):
     assert box_key.verify({**signed, "extra": 1}, "box-a", b) is False
 
 
-def test_unpinned_box_is_false(tmp_path):
+def test_unpinned_box_is_false(tmp_path: Path) -> None:
     a, b = tmp_path / "a", tmp_path / "b"
     signed = box_key.sign({"x": 1}, a)
     assert box_key.verify(signed, "box-a", b) is False
 
 
-def test_fingerprint_is_short_and_not_the_key(tmp_path):
+def test_fingerprint_is_short_and_not_the_key(tmp_path: Path) -> None:
     key = box_key.ensure_key(tmp_path)
     fp = box_key.own_fingerprint(tmp_path)
     assert len(fp) == 12 and fp == box_key.key_fingerprint(key)
@@ -81,7 +82,7 @@ def test_fingerprint_is_short_and_not_the_key(tmp_path):
     assert box_key.pinned_fingerprint("box-a", tmp_path) is None
 
 
-def test_diagnose_names_each_failure_kind(tmp_path):
+def test_diagnose_names_each_failure_kind(tmp_path: Path) -> None:
     a, b, c = tmp_path / "a", tmp_path / "b", tmp_path / "c"
     stamp = lambda home: {"x": 1, "issuer_key_fp": box_key.own_fingerprint(home)}  # noqa: E731
     good = box_key.sign(stamp(a), a)
@@ -103,12 +104,12 @@ def test_diagnose_names_each_failure_kind(tmp_path):
     assert box_key.diagnose(box_key.sign({"x": 1}, c), "box-a", b)["kind"] == "unverified_issuer_key"
 
 
-def test_diagnose_never_raises(tmp_path):
+def test_diagnose_never_raises(tmp_path: Path) -> None:
     for rec in (None, "str", 5, {"sig": 7}):
         assert box_key.diagnose(rec, "box-a", tmp_path)["kind"] == "unsigned"
 
 
-def test_verify_never_raises(tmp_path):
+def test_verify_never_raises(tmp_path: Path) -> None:
     a, b = tmp_path / "a", tmp_path / "b"
     _pin_own(a, b)
     peer = b / "state" / "group-em" / "peer-keys" / "box-a.json"

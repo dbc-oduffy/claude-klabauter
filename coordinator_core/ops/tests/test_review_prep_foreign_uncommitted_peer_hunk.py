@@ -24,7 +24,7 @@ def _git(repo: Path, *args: str) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@example.com")
     _git(tmp_path, "config", "user.name", "T")
@@ -48,25 +48,25 @@ def _no_spawn(monkeypatch) -> None:
     monkeypatch.setattr(rp, "run_git", boom)
 
 
-def test_dirty_declared_path_claimed_by_a_live_peer_is_listed_without_a_spawn(repo, monkeypatch):
+def test_dirty_declared_path_claimed_by_a_live_peer_is_listed_without_a_spawn(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _claims(monkeypatch, {"pkg/held.py": [PEER]})
     _no_spawn(monkeypatch)
     found = rp.foreign_claims(repo, "a..b", ["pkg"], SESSION, frozenset(), frozenset({"pkg/held.py"}))
     assert found == ["pkg/held.py"]
 
 
-def test_dirty_path_with_only_an_own_claim_is_not_listed(repo, monkeypatch):
+def test_dirty_path_with_only_an_own_claim_is_not_listed(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _claims(monkeypatch, {"pkg/own.py": [SESSION]})
     assert rp.foreign_claims(repo, "a..b", ["pkg"], SESSION, frozenset(), frozenset({"pkg/own.py"})) == []
 
 
-def test_clean_claimed_path_is_not_listed(repo, monkeypatch):
+def test_clean_claimed_path_is_not_listed(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _claims(monkeypatch, {"pkg/held.py": [PEER]})
     assert rp.foreign_claims(repo, "a..b", ["pkg"], SESSION, frozenset(), None) == []
     assert rp.foreign_claims(repo, "a..b", ["pkg"], SESSION, frozenset(), frozenset()) == []
 
 
-def test_dirty_joins_the_git_log_changed_set(repo, monkeypatch):
+def test_dirty_joins_the_git_log_changed_set(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     base = _git(repo, "rev-parse", "HEAD").strip()
     (repo / "pkg").mkdir()
     (repo / "pkg" / "committed.py").write_text("v = 1\n", encoding="utf-8")
@@ -77,7 +77,7 @@ def test_dirty_joins_the_git_log_changed_set(repo, monkeypatch):
     assert found == ["pkg/committed.py", "pkg/dirty.py"]
 
 
-def test_review_prep_lists_an_uncommitted_peer_claimed_declared_file(repo, monkeypatch):
+def test_review_prep_lists_an_uncommitted_peer_claimed_declared_file(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     base = _git(repo, "rev-parse", "HEAD").strip()
     (repo / "pkg").mkdir()
     (repo / "pkg" / "held.py").write_text("v = 1\n" * 3, encoding="utf-8")

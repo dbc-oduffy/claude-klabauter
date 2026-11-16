@@ -10,22 +10,23 @@ import pytest
 
 from coordinator_core.ops._plan_merge_contract import CHECK_KEYS, RowAccount
 from coordinator_core.ops.plan_merge import _handler
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _git_dir(tmp_path):
+def _git_dir(tmp_path: Path) -> None:
     """main_worktree_root refuses a root with no .git entry."""
     (tmp_path / ".git").mkdir(exist_ok=True)
 
 
-def _row(rid, extra="", body="work"):
+def _row(rid, extra: str = "", body: str = "work") -> str:
     return (
         f"- id: {rid}\n  title: \"t {rid}\"\n  change_kind: code-edit\n  surface: x.py\n  writes: []\n"
         f"{extra}  body: |\n    {body}\n"
     )
 
 
-def _plan(rows, pre="# Title\n\nintro\n", extra_section="", heading="Tasks", title="A"):
+def _plan(rows, pre: str = "# Title\n\nintro\n", extra_section: str = "", heading: str = "Tasks", title: str = "A"):
     return (
         f"---\ntitle: \"{title}\"\ncreated: \"2026-10-22\"\nauthor: EM\nstatus: draft\n---\n\n{pre}\n"
         f"{extra_section}## {heading}\n\n```yaml plan-tasks\n" + "".join(rows) + "```\n"
@@ -45,7 +46,7 @@ def _delta(**over):
     return d
 
 
-def _stub_helpers(monkeypatch, apply_delta=None):
+def _stub_helpers(monkeypatch, apply_delta=None) -> None:
     rekey = types.ModuleType("coordinator_core.ops._plan_merge_rekey")
     rekey.detect_collisions = lambda rows: []
     rekey.apply_rekey = lambda rows, mapping: list(rows)
@@ -60,7 +61,7 @@ def _stub_helpers(monkeypatch, apply_delta=None):
     monkeypatch.setitem(sys.modules, "coordinator_core.ops._plan_merge_delta", delta)
 
 
-def _write(tmp_path, a=None, b=None, delta=None, nl="\n"):
+def _write(tmp_path, a=None, b=None, delta=None, nl: str = "\n") -> None:
     a = a if a is not None else _plan([_row("A1"), _row("A2")], title="A")
     b = b if b is not None else _plan([_row("B1")], title="B")
     for name, text in (("a.md", a), ("b.md", b)):
@@ -75,7 +76,7 @@ def _run(tmp_path, **params):
     return _handler(p, tmp_path)
 
 
-def test_clean_merge_writes_once_and_reports(tmp_path, monkeypatch):
+def test_clean_merge_writes_once_and_reports(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_helpers(monkeypatch)
     _write(tmp_path)
     res = _run(tmp_path)
@@ -93,7 +94,7 @@ def test_clean_merge_writes_once_and_reports(tmp_path, monkeypatch):
     assert not list(tmp_path.glob(".atomic-write.*"))
 
 
-def test_crlf_sources_report_untouched(tmp_path, monkeypatch):
+def test_crlf_sources_report_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_helpers(monkeypatch)
     _write(tmp_path, nl="\r\n")
     res = _run(tmp_path)
@@ -102,7 +103,7 @@ def test_crlf_sources_report_untouched(tmp_path, monkeypatch):
     assert b"\r" not in (tmp_path / "o.md").read_bytes()
 
 
-def test_carried_section_prefixed_with_origin_label(tmp_path, monkeypatch):
+def test_carried_section_prefixed_with_origin_label(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_helpers(monkeypatch)
     a = _plan([_row("A1")], extra_section="## Notes\n\nkeep this prose\n\n")
     _write(tmp_path, a=a)
@@ -120,14 +121,14 @@ def _refused(tmp_path, code):
     return res["refusal"]
 
 
-def test_undeclared_preamble_refuses_section_unaccounted(tmp_path, monkeypatch):
+def test_undeclared_preamble_refuses_section_unaccounted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_helpers(monkeypatch)
     d = _delta(dropped_sections=[{"heading": "(preamble)", "source": "a.md", "reason": "r"}])
     _write(tmp_path, delta=d)
     _refused(tmp_path, "SECTION_UNACCOUNTED")
 
 
-def test_phantom_drop_refuses_section_unaccounted(tmp_path, monkeypatch):
+def test_phantom_drop_refuses_section_unaccounted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_helpers(monkeypatch)
     d = _delta()
     d["dropped_sections"].append({"heading": "## Nope", "source": "a.md", "reason": "r"})
@@ -135,7 +136,7 @@ def test_phantom_drop_refuses_section_unaccounted(tmp_path, monkeypatch):
     _refused(tmp_path, "SECTION_UNACCOUNTED")
 
 
-def test_helper_altering_untouched_row_refuses_fidelity_breach(tmp_path, monkeypatch):
+def test_helper_altering_untouched_row_refuses_fidelity_breach(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def tamper(rows, d):
         texts = [r.text for r in rows]
         texts[0] = texts[0].replace("work", "tampered")
@@ -146,7 +147,7 @@ def test_helper_altering_untouched_row_refuses_fidelity_breach(tmp_path, monkeyp
     _refused(tmp_path, "FIDELITY_BREACH")
 
 
-def test_amended_row_must_keep_unnamed_keys_and_body_prefix(tmp_path, monkeypatch):
+def test_amended_row_must_keep_unnamed_keys_and_body_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def amend(rows, d):
         texts = [r.text for r in rows]
         texts[0] = texts[0].replace("surface: x.py", "surface: y.py")
@@ -166,7 +167,7 @@ def test_amended_row_must_keep_unnamed_keys_and_body_prefix(tmp_path, monkeypatc
     assert res["report"]["counts"]["amended"] == 1
 
 
-def test_amended_body_must_extend_source_body(tmp_path, monkeypatch):
+def test_amended_body_must_extend_source_body(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def note(rows, d):
         texts = [r.text for r in rows]
         texts[0] = texts[0] + "\n    CONSOLIDATION: n"
@@ -189,7 +190,7 @@ def test_amended_body_must_extend_source_body(tmp_path, monkeypatch):
     assert not (tmp_path / "p.md").exists()
 
 
-def test_unaccounted_source_row_refuses(tmp_path, monkeypatch):
+def test_unaccounted_source_row_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def lose(rows, d):
         keep = rows[1:]
         return [r.text for r in keep], [RowAccount(r.row_id, r.source, "untouched") for r in keep]
@@ -199,13 +200,13 @@ def test_unaccounted_source_row_refuses(tmp_path, monkeypatch):
     _refused(tmp_path, "FIDELITY_BREACH")
 
 
-def test_duplicate_ids_refuse_id_collision(tmp_path, monkeypatch):
+def test_duplicate_ids_refuse_id_collision(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_helpers(monkeypatch)
     _write(tmp_path, b=_plan([_row("A1")], title="B"))
     _refused(tmp_path, "ID_COLLISION")
 
 
-def test_collision_reported_by_helper_refuses(tmp_path, monkeypatch):
+def test_collision_reported_by_helper_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_helpers(monkeypatch)
     sys.modules["coordinator_core.ops._plan_merge_rekey"].detect_collisions = lambda rows: [("A1", ("a.md", "b.md"))]
     _write(tmp_path)
@@ -213,14 +214,14 @@ def test_collision_reported_by_helper_refuses(tmp_path, monkeypatch):
     assert ref["row_ids"] == ["A1"]
 
 
-def test_schema_invalid_row_refuses(tmp_path, monkeypatch):
+def test_schema_invalid_row_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_helpers(monkeypatch)
     bad = _row("B1").replace("change_kind: code-edit", "change_kind: not-a-kind")
     _write(tmp_path, b=_plan([bad], title="B"))
     _refused(tmp_path, "SCHEMA_INVALID")
 
 
-def test_differing_required_scalar_without_delta_value_refuses(tmp_path, monkeypatch):
+def test_differing_required_scalar_without_delta_value_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_helpers(monkeypatch)
     d = _delta()
     del d["frontmatter"]["title"]
@@ -229,7 +230,7 @@ def test_differing_required_scalar_without_delta_value_refuses(tmp_path, monkeyp
     assert "'A'" in ref["message"] and "'B'" in ref["message"]
 
 
-def test_authorization_key_in_delta_refuses(tmp_path, monkeypatch):
+def test_authorization_key_in_delta_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_helpers(monkeypatch)
     d = _delta()
     d["frontmatter"]["execution_authorized_by"] = "PM"
@@ -237,7 +238,7 @@ def test_authorization_key_in_delta_refuses(tmp_path, monkeypatch):
     _refused(tmp_path, "SCHEMA_INVALID")
 
 
-def test_dangling_edge_refuses(tmp_path, monkeypatch):
+def test_dangling_edge_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_helpers(monkeypatch)
     dep = _row("B1", "  depends_on:\n    - chunk: GONE\n      gate_kind: output-consumption-runtime\n      note: n\n")
     _write(tmp_path, b=_plan([dep], title="B"))
@@ -245,7 +246,7 @@ def test_dangling_edge_refuses(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("which", ["absent", "two"])
-def test_spine_malformed_refuses(tmp_path, monkeypatch, which):
+def test_spine_malformed_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, which) -> None:
     _stub_helpers(monkeypatch)
     good = _plan([_row("B1")], title="B")
     bad = good.replace("```yaml plan-tasks", "```yaml other") if which == "absent" else good + "\n" + good.split("## Tasks")[1]
@@ -253,7 +254,7 @@ def test_spine_malformed_refuses(tmp_path, monkeypatch, which):
     _refused(tmp_path, "SPINE_MALFORMED")
 
 
-def test_single_fence_check_runs_on_output(tmp_path, monkeypatch):
+def test_single_fence_check_runs_on_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_helpers(monkeypatch)
     _write(tmp_path)
     d = _delta(new_sections=[{"heading": "## Extra", "content": "```yaml plan-tasks\n- id: Z\n```"}])
@@ -261,7 +262,7 @@ def test_single_fence_check_runs_on_output(tmp_path, monkeypatch):
     _refused(tmp_path, "SPINE_MALFORMED")
 
 
-def test_spine_bearing_prose_is_carried_and_fence_consumed(tmp_path, monkeypatch):
+def test_spine_bearing_prose_is_carried_and_fence_consumed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_helpers(monkeypatch)
     a = _plan([_row("A1")], heading="Open for the PM")
     a = a.replace("## Open for the PM\n\n", "## Open for the PM\n\nquestions here\n\n")
@@ -274,7 +275,7 @@ def test_spine_bearing_prose_is_carried_and_fence_consumed(tmp_path, monkeypatch
     assert text.count("```yaml plan-tasks") == 1
 
 
-def test_existing_out_replaced_only_with_force_and_only_after_checks(tmp_path, monkeypatch):
+def test_existing_out_replaced_only_with_force_and_only_after_checks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_helpers(monkeypatch)
     _write(tmp_path)
     (tmp_path / "o.md").write_text("keep", encoding="utf-8")
@@ -286,7 +287,7 @@ def test_existing_out_replaced_only_with_force_and_only_after_checks(tmp_path, m
     assert (tmp_path / "o.md").read_text(encoding="utf-8") == "keep"
 
 
-def test_each_check_flag_is_false_when_its_arm_fails(tmp_path, monkeypatch):
+def test_each_check_flag_is_false_when_its_arm_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import plan_merge
 
     seen = {}

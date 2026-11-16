@@ -14,6 +14,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_stage_resume_added_rows i
     _row,
 )
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage_resume_added_rows import _stage as _stage_reply
+from pathlib import Path
 
 
 def _stage_with_run_script(tmp_path, only_rows):
@@ -27,7 +28,7 @@ _HELD = (
 )
 
 
-def test_epistemic_held_row_is_reported_not_refused(tmp_path):
+def test_epistemic_held_row_is_reported_not_refused(tmp_path: Path) -> None:
     _plan(tmp_path, _row("C3") + _HELD)
     resume_snapshot.write(tmp_path, RUN, PLAN_REL, [], ["C3", "C4"])
     reply = _stage_with_run_script(tmp_path, ["C3", "C4"])
@@ -43,7 +44,7 @@ _DECLARED_C4 = _row("C4", "  depends_on:\n    - chunk: C3\n      gate_kind: epis
 _REPORT_DIR = ".coordinator-local/subagent-share/dispatch-reports/p"
 
 
-def _c3_report(tmp_path, text, name="C3.md", age=-60):
+def _c3_report(tmp_path, text, name: str = "C3.md", age: int = -60) -> None:
     """A premise report written `age` seconds from now: the run record is made at refire, so a negative
     age is older than the run and a positive one was written during it."""
     path = tmp_path / _REPORT_DIR / name
@@ -59,7 +60,7 @@ def _refire(tmp_path, c4):
     return _stage_with_run_script(tmp_path, ["C3", "C4"])
 
 
-def test_premise_that_ran_in_this_run_is_not_rerun_and_its_dependent_stages(tmp_path):
+def test_premise_that_ran_in_this_run_is_not_rerun_and_its_dependent_stages(tmp_path: Path) -> None:
     _c3_report(tmp_path, "DONE: C3\n<exit-status>DONE</exit-status>\n", age=60)
     reply = _refire(tmp_path, _HELD)
     assert {r["id"] for r in reply["rows"]} == {"C4"}
@@ -67,38 +68,38 @@ def test_premise_that_ran_in_this_run_is_not_rerun_and_its_dependent_stages(tmp_
     assert set(reasons) == {"C3"} and "already ran" in reasons["C3"]
 
 
-def test_premise_report_older_than_the_run_still_holds(tmp_path):
+def test_premise_report_older_than_the_run_still_holds(tmp_path: Path) -> None:
     _c3_report(tmp_path, "DONE: C3\n<exit-status>DONE</exit-status>\n", age=-3600)
     reply = _refire(tmp_path, _HELD)
     assert reply["dropped_rows"] == [{"id": "C4", "reason": "held behind C3 (epistemic-premise)"}]
     assert {r["id"] for r in reply["rows"]} == {"C3"}
 
 
-def test_prior_leg_report_set_aside_as_prior_still_counts(tmp_path):
+def test_prior_leg_report_set_aside_as_prior_still_counts(tmp_path: Path) -> None:
     _c3_report(tmp_path, "DONE: C3\n", name="C3.prior.md", age=60)
     reply = _refire(tmp_path, _HELD)
     assert "C4" in {r["id"] for r in reply["rows"]}
 
 
-def test_first_leg_premise_with_no_report_still_holds(tmp_path):
+def test_first_leg_premise_with_no_report_still_holds(tmp_path: Path) -> None:
     reply = _refire(tmp_path, _HELD)
     assert reply["dropped_rows"] == [{"id": "C4", "reason": "held behind C3 (epistemic-premise)"}]
 
 
-def test_premise_whose_prior_report_is_blocked_still_holds(tmp_path):
+def test_premise_whose_prior_report_is_blocked_still_holds(tmp_path: Path) -> None:
     _c3_report(tmp_path, "BLOCKED: C3\n<exit-status>BLOCKED</exit-status>\n", age=60)
     reply = _refire(tmp_path, _HELD)
     assert reply["dropped_rows"] == [{"id": "C4", "reason": "held behind C3 (epistemic-premise)"}]
 
 
-def test_dependent_with_declared_writes_stages_after_the_premise(tmp_path):
+def test_dependent_with_declared_writes_stages_after_the_premise(tmp_path: Path) -> None:
     reply = _refire(tmp_path, _DECLARED_C4)
     rows = {r["id"]: r["wave"] for r in reply["rows"]}
     assert rows["C4"] > rows["C3"]
     assert not reply.get("dropped_rows")
 
 
-def test_landed_predecessor_gives_no_held_behind_reason(tmp_path):
+def test_landed_predecessor_gives_no_held_behind_reason(tmp_path: Path) -> None:
     _plan(tmp_path, _row("C3") + _row("C5") + _HELD)
     resume_snapshot.write(tmp_path, RUN, PLAN_REL, ["C3"], ["C4"], reasons={"C3": "landed"})
     reply = _stage_with_run_script(tmp_path, ["C4"])

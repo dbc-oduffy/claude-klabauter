@@ -10,9 +10,11 @@ from coordinator_core.ops.fleet.tests._scratch_hygiene_fixture import (
     REPO_NAME,
     build_two_root_fixture,
 )
+from pathlib import Path
+import pytest
 
 
-def _backdate(path, seconds):
+def _backdate(path, seconds) -> None:
     """Plain os.utime: the shared fixture's age() swallows NotImplementedError on Windows and ages nothing."""
     stamp = time.time() - seconds
     for dirpath, dirnames, filenames in os.walk(path):
@@ -21,7 +23,7 @@ def _backdate(path, seconds):
     os.utime(path, (stamp, stamp))
 
 
-def test_two_entries_exact_shape(tmp_path, monkeypatch):
+def test_two_entries_exact_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fx = build_two_root_fixture(tmp_path, monkeypatch)
     try:
         _backdate(fx.hold_missing, 400 * 24 * 3600)
@@ -44,11 +46,11 @@ def test_two_entries_exact_shape(tmp_path, monkeypatch):
     assert len(recs) == 2
 
 
-def test_missing_hold_dir_yields_nothing(tmp_path):
+def test_missing_hold_dir_yields_nothing(tmp_path: Path) -> None:
     assert hold_nag(tmp_path / "nowhere") == []
 
 
-def test_bare_file_sibling_readme_and_md(tmp_path):
+def test_bare_file_sibling_readme_and_md(tmp_path: Path) -> None:
     hold = tmp_path / "r" / "scratch-hold"
     hold.mkdir(parents=True)
     (hold / "f.bin").write_bytes(b"123")
@@ -62,7 +64,7 @@ def test_bare_file_sibling_readme_and_md(tmp_path):
     assert recs["scratch-hold/d"]["readme"] == "# dir note"
 
 
-def test_read_only_and_links_not_followed(tmp_path):
+def test_read_only_and_links_not_followed(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "big.bin").write_bytes(b"x" * 5000)

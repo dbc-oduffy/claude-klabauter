@@ -8,37 +8,38 @@ from coordinator_core.bash_guards import _host_probe
 from coordinator_core.group_em import admission_post
 from coordinator_core.ops.ceremony import post_close_admission as pca
 from coordinator_core.ops.dispatch_emit.run_close import check_path_hygiene
+from pathlib import Path
 
 
-def test_constants():
+def test_constants() -> None:
     assert pca.RESERVE_MB == 8192
     assert set(pca.DECLARED_PEAK_MB) == {"structural-index", "scip-rebuild"}
 
 
-def test_admit_exactly_at_threshold():
+def test_admit_exactly_at_threshold() -> None:
     need = pca.DECLARED_PEAK_MB["structural-index"] + pca.RESERVE_MB
     assert pca.admit("structural-index", need, True).admitted
     assert not pca.admit("structural-index", need - 1, True).admitted
 
 
-def test_admit_subtracts_already_admitted():
+def test_admit_subtracts_already_admitted() -> None:
     need = pca.DECLARED_PEAK_MB["scip-rebuild"] + pca.RESERVE_MB
     assert pca.admit("scip-rebuild", need + 100, True, already_admitted_mb=100).admitted
     assert not pca.admit("scip-rebuild", need + 99, True, already_admitted_mb=100).admitted
 
 
-def test_admit_untrusted_or_none_defers():
+def test_admit_untrusted_or_none_defers() -> None:
     assert pca.admit("structural-index", 999999, False).reason == "memory unreadable"
     v = pca.admit("structural-index", None, True)
     assert not v.admitted and v.reason == "memory unreadable"
 
 
-def test_admit_unknown_label():
+def test_admit_unknown_label() -> None:
     v = pca.admit("nope", 999999, True)
     assert not v.admitted and v.reason == "no declared peak"
 
 
-def test_reason_is_path_hygienic():
+def test_reason_is_path_hygienic() -> None:
     for v in (
         pca.admit("structural-index", 4608, True),
         pca.admit("structural-index", None, False),
@@ -49,10 +50,10 @@ def test_reason_is_path_hygienic():
     assert pca.admit("structural-index", 4608, True).reason == "need 10240MB > avail 4608MB"
 
 
-def test_notice_admitted_posts_one_start(monkeypatch):
+def test_notice_admitted_posts_one_start(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
-    def fake_post(phase, **kw):
+    def fake_post(phase, **kw) -> dict[str, bool]:
         calls.append((phase, kw))
         return {"posted": True}
 
@@ -67,10 +68,10 @@ def test_notice_admitted_posts_one_start(monkeypatch):
     assert "pids" not in kw
 
 
-def test_notice_forwards_pids(monkeypatch):
+def test_notice_forwards_pids(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
-    def fake_post(phase, **kw):
+    def fake_post(phase, **kw) -> dict[str, bool]:
         calls.append(kw)
         return {"posted": True}
 
@@ -80,7 +81,7 @@ def test_notice_forwards_pids(monkeypatch):
     assert calls[0]["pids"] == [4242]
 
 
-def test_notice_without_holder_appends_to_admission_jsonl(tmp_path, monkeypatch):
+def test_notice_without_holder_appends_to_admission_jsonl(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.group_em import nomination
 
     monkeypatch.setattr(nomination, "box_holder", lambda directory=None, now=None: None)
@@ -91,12 +92,12 @@ def test_notice_without_holder_appends_to_admission_jsonl(tmp_path, monkeypatch)
     assert '"phase":"START"' in text and '"run":"run9"' in text
 
 
-def test_notice_deferred_posts_nothing(monkeypatch):
+def test_notice_deferred_posts_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(admission_post, "post", lambda *a, **k: pytest.fail("posted"))
     assert pca.notice(pca.admit("structural-index", 100, True), "r") is False
 
 
-def test_notice_raise_is_contained_and_reported(monkeypatch, capsys):
+def test_notice_raise_is_contained_and_reported(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     def boom(*a, **k):
         raise OSError("x")
 
@@ -105,7 +106,7 @@ def test_notice_raise_is_contained_and_reported(monkeypatch, capsys):
     assert "not delivered: post raised OSError" in capsys.readouterr().err
 
 
-def test_notice_undelivered_surfaces_reason(monkeypatch, capsys):
+def test_notice_undelivered_surfaces_reason(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(
         admission_post,
         "post",
@@ -116,25 +117,25 @@ def test_notice_undelivered_surfaces_reason(monkeypatch, capsys):
     assert "structural-index" in err and "r7" in err and "short_write" in err
 
 
-def test_notice_posted_but_not_delivered_is_false(monkeypatch, capsys):
+def test_notice_posted_but_not_delivered_is_false(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(admission_post, "post", lambda *a, **k: {"posted": True, "delivered": False})
     assert pca.notice(pca.admit("structural-index", 20000, True), "r") is False
     assert "not delivered" in capsys.readouterr().err
 
 
-def test_notice_deferred_is_silent(capsys):
+def test_notice_deferred_is_silent(capsys: pytest.CaptureFixture[str]) -> None:
     assert pca.notice(pca.admit("structural-index", 100, True), "r") is False
     assert capsys.readouterr().err == ""
 
 
-def test_read_available_maps_reading(monkeypatch):
+def test_read_available_maps_reading(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         _host_probe, "read_available_mb", lambda: _host_probe.MemoryReading(12345, True, "t")
     )
     assert pca.read_available() == (12345, True)
 
 
-def test_read_available_raising_probe(monkeypatch):
+def test_read_available_raising_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom():
         raise RuntimeError("x")
 

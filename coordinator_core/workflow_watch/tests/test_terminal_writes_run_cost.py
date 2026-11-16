@@ -8,10 +8,11 @@ import pytest
 
 from coordinator_core import workflow_watch as ww
 from coordinator_core.workflow_watch import run_report
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _no_repo_root(monkeypatch, tmp_path):
+def _no_repo_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
 
 
@@ -24,7 +25,7 @@ class _Watcher:
     def __init__(self, *_a):
         pass
 
-    def check_record(self):
+    def check_record(self) -> _Rec:
         return _Rec()
 
 
@@ -41,7 +42,7 @@ def _run(monkeypatch, tmp_path, capsys, write_record):
 def _writer(tmp_path, verdicts):
     calls = []
 
-    def write_record(journal_path, **_kw):
+    def write_record(journal_path, **_kw) -> str:
         calls.append(journal_path)
         out = tmp_path / "run-cost.json"
         out.write_text(json.dumps({"ratchet": {m: {"verdict": v} for m, v in verdicts.items()}}))
@@ -51,7 +52,7 @@ def _writer(tmp_path, verdicts):
     return write_record
 
 
-def test_writes_once_and_prints_breach_after_terminal(monkeypatch, tmp_path, capsys):
+def test_writes_once_and_prints_breach_after_terminal(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     w = _writer(tmp_path, {"peak_context": "breach", "tool_calls": "ok", "max_same_file_reads": "breach"})
     rc, out = _run(monkeypatch, tmp_path, capsys, w)
     assert rc == 0
@@ -59,13 +60,13 @@ def test_writes_once_and_prints_breach_after_terminal(monkeypatch, tmp_path, cap
     assert len(w.calls) == 1
 
 
-def test_no_breach_prints_only_terminal(monkeypatch, tmp_path, capsys):
+def test_no_breach_prints_only_terminal(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc, out = _run(monkeypatch, tmp_path, capsys, _writer(tmp_path, {"peak_context": "ok"}))
     assert rc == 0
     assert out == "terminal: completed\n"
 
 
-def test_write_failure_keeps_exit_zero_and_silent(monkeypatch, tmp_path, capsys):
+def test_write_failure_keeps_exit_zero_and_silent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     def boom(_p, **_kw):
         raise OSError("disk")
 

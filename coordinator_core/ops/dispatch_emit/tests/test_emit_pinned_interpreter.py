@@ -6,6 +6,7 @@ import sys
 
 from coordinator_core.ops.dispatch_emit import emit
 from coordinator_core.ops.dispatch_emit import interpreter_pin as ti
+from pathlib import Path
 
 
 def _repo(tmp_path, **keys):
@@ -14,37 +15,37 @@ def _repo(tmp_path, **keys):
     return tmp_path
 
 
-def _assert_pinned(text):
+def _assert_pinned(text) -> None:
     assert sys.executable in text
     assert "falling back" not in text
 
 
-def test_runner_clause_carries_the_pin(tmp_path):
+def test_runner_clause_carries_the_pin(tmp_path: Path) -> None:
     repo = _repo(tmp_path, targeted_test_python=sys.executable)
     _assert_pinned(emit._test_runner_clause(repo))
 
 
-def test_runner_clause_without_repo_root_keeps_portable_text():
+def test_runner_clause_without_repo_root_keeps_portable_text() -> None:
     assert emit._test_runner_clause().endswith(f"{ti.PORTABLE_CLAUSE} {ti.LITERAL_PATHS_CLAUSE}")
 
 
-def test_runner_clause_without_pin_keeps_portable_text(tmp_path):
+def test_runner_clause_without_pin_keeps_portable_text(tmp_path: Path) -> None:
     repo = _repo(tmp_path, fast_test_cmd="python3 -m pytest")
     assert emit._test_runner_clause(repo).endswith(f"{ti.PORTABLE_CLAUSE} {ti.LITERAL_PATHS_CLAUSE}")
 
 
-def test_unresolvable_pin_names_the_defect(tmp_path):
+def test_unresolvable_pin_names_the_defect(tmp_path: Path) -> None:
     repo = _repo(tmp_path, targeted_test_python=str(tmp_path / "no-such-python"))
     assert ti.DEFECT_PREFIX in emit._test_runner_clause(repo)
 
 
-def test_scoped_test_steps_carry_the_pin(tmp_path):
+def test_scoped_test_steps_carry_the_pin(tmp_path: Path) -> None:
     repo = _repo(tmp_path, targeted_test_python=sys.executable)
     text = emit._scoped_test_steps(["tests/test_x.py"], repo, None, None, None, None, None)
     _assert_pinned(text)
 
 
-def test_row_verify_literal_carries_the_pin(tmp_path):
+def test_row_verify_literal_carries_the_pin(tmp_path: Path) -> None:
     repo = _repo(tmp_path, targeted_test_python=sys.executable)
     helper = emit._run_row_helper_js(repo_root=repo)
     assert sys.executable.replace("\\", "\\\\") in helper or sys.executable in helper
@@ -60,18 +61,18 @@ def _seam_js(repo_root):
     return js.split("Step 2, only when tests are listed", 1)[1].split("Run no other command", 1)[0]
 
 
-def test_seam_leg_test_step_carries_the_pin(tmp_path):
+def test_seam_leg_test_step_carries_the_pin(tmp_path: Path) -> None:
     repo = _repo(tmp_path, targeted_test_python=sys.executable)
     js = _seam_js(repo)
     assert json.dumps(sys.executable)[1:-1] in js
     assert "python -m pytest" not in js
 
 
-def test_seam_leg_test_step_without_root_is_portable():
+def test_seam_leg_test_step_without_root_is_portable() -> None:
     js = _seam_js(None)
     assert ti.PORTABLE_CLAUSE in js
     assert "python -m pytest" not in js
 
 
-def test_row_verify_literal_without_root_is_portable():
+def test_row_verify_literal_without_root_is_portable() -> None:
     assert "falling back" in emit._run_row_helper_js()

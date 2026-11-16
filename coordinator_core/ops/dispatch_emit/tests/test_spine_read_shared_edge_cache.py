@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import spine_read
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
+from pathlib import Path
 
 
 def _plan(path, rows_yaml: str):
@@ -36,7 +37,7 @@ def _fixture(tmp_path):
     )
 
 
-def _spy(monkeypatch):
+def _spy(monkeypatch) -> list[str]:
     seen: list[str] = []
     real = spine_read.load_rows_memo
 
@@ -52,7 +53,7 @@ def _shape(rows):
     return [(r.id, r.status) if hasattr(r, "status") else r.id for r in rows]
 
 
-def test_shared_cache_loads_target_once(tmp_path, monkeypatch):
+def test_shared_cache_loads_target_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     one, two = _fixture(tmp_path)
     seen = _spy(monkeypatch)
     cache: dict = {}
@@ -65,13 +66,13 @@ def test_shared_cache_loads_target_once(tmp_path, monkeypatch):
     assert [_shape(r) for r in shared] == [_shape(r) for r in unshared]
 
 
-def test_shared_cache_with_landed_plan_chunks_raises(tmp_path):
+def test_shared_cache_with_landed_plan_chunks_raises(tmp_path: Path) -> None:
     one, _ = _fixture(tmp_path)
     with pytest.raises(ValueError):
         read_spine(one, plan_edge_cache={}, landed_plan_chunks={("docs/plans/pred.md", "P1"): "abc"})
 
 
-def test_default_cache_is_per_call(tmp_path, monkeypatch):
+def test_default_cache_is_per_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     one, _ = _fixture(tmp_path)
     seen = _spy(monkeypatch)
     read_spine(one)
@@ -79,7 +80,7 @@ def test_default_cache_is_per_call(tmp_path, monkeypatch):
     assert sum("pred-target" in s for s in seen) == 2
 
 
-def test_own_plan_path_resolved_once_per_path(tmp_path):
+def test_own_plan_path_resolved_once_per_path(tmp_path: Path) -> None:
     spine_read._absolute_plan_key.cache_clear()
     writes = ["docs/plans/one.md", "x.py"]
     for _ in range(5):
@@ -88,7 +89,7 @@ def test_own_plan_path_resolved_once_per_path(tmp_path):
     assert (info.misses, info.hits) == (1, 4)
 
 
-def test_evaluate_plan_reads_each_predecessor_plan_once(tmp_path, monkeypatch):
+def test_evaluate_plan_reads_each_predecessor_plan_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The prep gate shares one edge cache across its spine reads and EXTERNAL_DEPS."""
     from coordinator_core.roadmap import prep_gate
 

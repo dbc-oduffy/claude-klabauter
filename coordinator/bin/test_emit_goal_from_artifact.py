@@ -40,6 +40,7 @@ import sys
 from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -265,7 +266,7 @@ period_value: "2026-W28"
 """
 
 
-def test_emit_goal_from_artifact(tmp_path):
+def test_emit_goal_from_artifact(tmp_path: Path) -> None:
     tmp_base = str(tmp_path)
     shim_dir = os.path.join(tmp_base, "shim-bin")
     shim = _write_shim(shim_dir)
@@ -384,7 +385,7 @@ def test_emit_goal_from_artifact(tmp_path):
     assert ev_closed.get("status") == "dropped", "artifact status 'closed' maps to wire status 'dropped'"
 
 
-def test_help_flag_prints_usage_and_exits_zero():
+def test_help_flag_prints_usage_and_exits_zero() -> None:
     """F2 (klabauter#71): --help must work instead of falling through to
     'Unknown argument'."""
     result = subprocess.run(
@@ -423,7 +424,7 @@ def _write_events_capturing_shim(shim_dir: str) -> str:
     return path
 
 
-def test_artifact_flag_emits_only_named_file(tmp_path):
+def test_artifact_flag_emits_only_named_file(tmp_path: Path) -> None:
     """F2: --artifact <path> emits only the named scaffolded artifact, not a
     whole-directory scan — 'run the emitter against the scaffolded artifact'."""
     repo = os.path.join(tmp_path, "repo-artifact")
@@ -450,7 +451,7 @@ def test_artifact_flag_emits_only_named_file(tmp_path):
     assert "goal-b" in events[0]["text"], events
 
 
-def test_bare_positional_path_is_artifact_shorthand(tmp_path):
+def test_bare_positional_path_is_artifact_shorthand(tmp_path: Path) -> None:
     """F2: a bare positional path argument is accepted as --artifact shorthand."""
     repo = os.path.join(tmp_path, "repo-positional")
     _write_goal(repo, "goal-a.yaml", FIXTURE_LEGIBILITY)

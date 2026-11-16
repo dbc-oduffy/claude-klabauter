@@ -4,9 +4,10 @@ from __future__ import annotations
 import textwrap
 
 from coordinator_core.source_test_map import map_changed_sources, map_source_to_tests
+from pathlib import Path
 
 
-def _pyproject(testpaths):
+def _pyproject(testpaths) -> str:
     roots = ", ".join(f'"{r}"' for r in testpaths)
     return textwrap.dedent(
         f"""
@@ -23,13 +24,13 @@ def _make_repo(tmp_path, testpaths):
     return tmp_path
 
 
-def _touch(root, rel):
+def _touch(root, rel) -> None:
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("", encoding="utf-8")
 
 
-def test_layout_mod_tests_subdir(tmp_path):
+def test_layout_mod_tests_subdir(tmp_path: Path) -> None:
     root = _make_repo(tmp_path, ["coordinator_core"])
     _touch(root, "coordinator_core/session/foo.py")
     _touch(root, "coordinator_core/session/tests/test_foo.py")
@@ -38,7 +39,7 @@ def test_layout_mod_tests_subdir(tmp_path):
     assert matches == ["coordinator_core/session/tests/test_foo.py"]
 
 
-def test_layout_flat_inside_module(tmp_path):
+def test_layout_flat_inside_module(tmp_path: Path) -> None:
     root = _make_repo(tmp_path, ["coordinator_core"])
     _touch(root, "coordinator_core/session/bar.py")
     _touch(root, "coordinator_core/session/test_bar.py")
@@ -47,7 +48,7 @@ def test_layout_flat_inside_module(tmp_path):
     assert matches == ["coordinator_core/session/test_bar.py"]
 
 
-def test_layout_flat_top(tmp_path):
+def test_layout_flat_top(tmp_path: Path) -> None:
     root = _make_repo(tmp_path, ["coordinator_core"])
     _touch(root, "coordinator_core/baz.py")
     _touch(root, "coordinator_core/test_baz.py")
@@ -56,7 +57,7 @@ def test_layout_flat_top(tmp_path):
     assert matches == ["coordinator_core/test_baz.py"]
 
 
-def test_layout_bin_tests_subdir_with_dash_normalization(tmp_path):
+def test_layout_bin_tests_subdir_with_dash_normalization(tmp_path: Path) -> None:
     root = _make_repo(tmp_path, ["coordinator/bin"])
     _touch(root, "coordinator/bin/some-cli.py")
     _touch(root, "coordinator/bin/tests/test_some_cli.py")
@@ -65,7 +66,7 @@ def test_layout_bin_tests_subdir_with_dash_normalization(tmp_path):
     assert matches == ["coordinator/bin/tests/test_some_cli.py"]
 
 
-def test_layout_coordinator_tests_flat(tmp_path):
+def test_layout_coordinator_tests_flat(tmp_path: Path) -> None:
     root = _make_repo(tmp_path, ["coordinator_core", "coordinator/tests"])
     _touch(root, "coordinator_core/quux.py")
     _touch(root, "coordinator/tests/test_quux.py")
@@ -74,7 +75,7 @@ def test_layout_coordinator_tests_flat(tmp_path):
     assert matches == ["coordinator/tests/test_quux.py"]
 
 
-def test_two_root_case_returns_every_candidate(tmp_path):
+def test_two_root_case_returns_every_candidate(tmp_path: Path) -> None:
     root = _make_repo(tmp_path, ["coordinator/tests", "coordinator/bin/tests"])
     _touch(root, "coordinator/bin/workday-complete-step1-validate.py")
     _touch(root, "coordinator/tests/test_workday_complete_step1_validate.py")
@@ -89,20 +90,20 @@ def test_two_root_case_returns_every_candidate(tmp_path):
     ]
 
 
-def test_unmappable_source_returns_empty_candidates(tmp_path):
+def test_unmappable_source_returns_empty_candidates(tmp_path: Path) -> None:
     root = _make_repo(tmp_path, ["coordinator_core"])
     matches = map_source_to_tests("coordinator_core/nope.py", str(root))
     assert matches == []
 
 
-def test_map_changed_sources_empty_input_is_fully_mapped_trivially(tmp_path):
+def test_map_changed_sources_empty_input_is_fully_mapped_trivially(tmp_path: Path) -> None:
     root = _make_repo(tmp_path, ["coordinator_core"])
     candidates, fully_mapped = map_changed_sources([], str(root))
     assert candidates == []
     assert fully_mapped is True
 
 
-def test_map_changed_sources_all_mapped(tmp_path):
+def test_map_changed_sources_all_mapped(tmp_path: Path) -> None:
     root = _make_repo(tmp_path, ["coordinator_core"])
     _touch(root, "coordinator_core/a.py")
     _touch(root, "coordinator_core/test_a.py")
@@ -116,7 +117,7 @@ def test_map_changed_sources_all_mapped(tmp_path):
     assert fully_mapped is True
 
 
-def test_one_unmappable_file_forces_fully_mapped_false_for_whole_set(tmp_path):
+def test_one_unmappable_file_forces_fully_mapped_false_for_whole_set(tmp_path: Path) -> None:
     root = _make_repo(tmp_path, ["coordinator_core"])
     _touch(root, "coordinator_core/a.py")
     _touch(root, "coordinator_core/test_a.py")
@@ -129,7 +130,7 @@ def test_one_unmappable_file_forces_fully_mapped_false_for_whole_set(tmp_path):
     assert fully_mapped is False
 
 
-def test_all_unmappable_yields_no_candidates_and_not_fully_mapped(tmp_path):
+def test_all_unmappable_yields_no_candidates_and_not_fully_mapped(tmp_path: Path) -> None:
     root = _make_repo(tmp_path, ["coordinator_core"])
     candidates, fully_mapped = map_changed_sources(
         ["coordinator_core/x.py", "coordinator_core/y.py"], str(root)

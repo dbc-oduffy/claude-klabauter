@@ -6,6 +6,7 @@ from coordinator_core.hooks import submit_engine_ask as hook
 from coordinator_core.ops.dispatch_emit import ask_contract as c
 from coordinator_core.ops.dispatch_emit import requirements_ledger
 from coordinator_core.session.core import session_identity_override, warm_served_request
+from pathlib import Path
 
 SPAWNER = "e9b562a0-383c-447f-a14b-c9d9fcd9284f"
 CALLER_A = "11111111-1111-4111-8111-111111111111"
@@ -13,7 +14,7 @@ CALLER_B = "22222222-2222-4222-8222-222222222222"
 
 
 @pytest.fixture(autouse=True)
-def _spawner_env(monkeypatch):
+def _spawner_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
         monkeypatch.delenv(var, raising=False)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", SPAWNER)
@@ -25,7 +26,7 @@ def _minted(root, run_id):
     return stage["session_id"]
 
 
-def test_ledger_start_carried_session_wins_over_spawner_env(tmp_path):
+def test_ledger_start_carried_session_wins_over_spawner_env(tmp_path: Path) -> None:
     with warm_served_request():
         with session_identity_override(CALLER_A):
             requirements_ledger.start(tmp_path, "run-a")
@@ -35,24 +36,24 @@ def test_ledger_start_carried_session_wins_over_spawner_env(tmp_path):
     assert _minted(tmp_path, "run-b") == CALLER_B
 
 
-def test_warm_request_without_a_carried_session_records_none_not_the_spawner(tmp_path):
+def test_warm_request_without_a_carried_session_records_none_not_the_spawner(tmp_path: Path) -> None:
     with warm_served_request():
         requirements_ledger.start(tmp_path, "run-x")
     assert _minted(tmp_path, "run-x") is None
 
 
-def test_cold_start_still_reads_the_process_environment(tmp_path):
+def test_cold_start_still_reads_the_process_environment(tmp_path: Path) -> None:
     requirements_ledger.start(tmp_path, "run-cold")
     assert _minted(tmp_path, "run-cold") == SPAWNER
 
 
-def test_explicit_session_beats_ambient(tmp_path):
+def test_explicit_session_beats_ambient(tmp_path: Path) -> None:
     with warm_served_request():
         requirements_ledger.start(tmp_path, "run-e", session_id=CALLER_B)
     assert _minted(tmp_path, "run-e") == CALLER_B
 
 
-def test_hook_mint_path_records_each_callers_payload_session(tmp_path):
+def test_hook_mint_path_records_each_callers_payload_session(tmp_path: Path) -> None:
     def emit(params, root):
         requirements_ledger.start(root, params["run"])
         return {}

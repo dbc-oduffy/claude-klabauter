@@ -2,6 +2,8 @@
 from coordinator_core.ops.fast_red_census import (
     classify_summary, cluster_rows, main, render_table,
 )
+from pathlib import Path
+import pytest
 
 CAPTURE = """\
 ERROR coordinator_core/tests/test_a.py - ImportError: cannot import name 'x'
@@ -19,7 +21,7 @@ def _by_id():
     return {r.nodeid: r for r in classify_summary(CAPTURE)}
 
 
-def test_shapes():
+def test_shapes() -> None:
     r = _by_id()
     assert r["coordinator_core/tests/test_a.py"].shape == "collection-import"
     assert r["coordinator_core/tests/test_b.py::test_setup"].shape == "fixture-env"
@@ -28,19 +30,19 @@ def test_shapes():
     assert r["coordinator_core/tests/test_e.py::test_t"].shape == "unclassified"
 
 
-def test_tail_parse_and_absent_tail():
+def test_tail_parse_and_absent_tail() -> None:
     r = _by_id()
     a = r["coordinator_core/tests/test_a.py"]
     assert (a.exc_type, a.outcome) == ("ImportError", "ERROR")
     assert r["coordinator_core/tests/test_h.py"].exc_type == ""
 
 
-def test_bare_importerror_tail():
+def test_bare_importerror_tail() -> None:
     rows = classify_summary("ERROR tests/x.py - ImportError\n")
     assert rows[0].exc_type == "ImportError" and rows[0].shape == "collection-import"
 
 
-def test_path_only_difference_clusters_together():
+def test_path_only_difference_clusters_together() -> None:
     clusters = cluster_rows(classify_summary(CAPTURE))
     sizes = sorted(len(v) for v in clusters.values())
     assert 2 in sizes
@@ -49,11 +51,11 @@ def test_path_only_difference_clusters_together():
         "coordinator_core/tests/test_f.py", "coordinator_core/tests/test_g.py"}
 
 
-def test_slugs_stable():
+def test_slugs_stable() -> None:
     assert list(cluster_rows(classify_summary(CAPTURE))) == list(cluster_rows(classify_summary(CAPTURE)))
 
 
-def test_cli_table(tmp_path, capsys):
+def test_cli_table(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     f = tmp_path / "cap.txt"
     f.write_text(CAPTURE, encoding="utf-8")
     assert main(["cluster", str(f)]) == 0

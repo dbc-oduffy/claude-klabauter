@@ -35,12 +35,13 @@ from coordinator_core.test_baton_assemble import (
     _init_repo,
     _write_artifact,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 @pytest.fixture(autouse=True)
-def _stub_operator_config(monkeypatch):
+def _stub_operator_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
     monkeypatch.setattr(ba_apply, "_resolve_claude_klabauter_bin", lambda: _REPO_CLAUDE_KLABAUTER_BIN)
 
@@ -61,7 +62,7 @@ class TestApplyNeverReachesUnification:
     unification surface at all, for any kind -- so the exclusion cannot drift
     into a special case, because there is nothing to special-case."""
 
-    def test_apply_module_never_imports_the_unification_surface(self):
+    def test_apply_module_never_imports_the_unification_surface(self) -> None:
         """Scans actual `import` statements only (never prose/docstrings, this
         module's own docstrings among them, which legitimately NAME these
         symbols while explaining why they are absent from the code)."""
@@ -87,13 +88,13 @@ class TestFreshSpinoffMintIsNeverSelfClaimed:
     run, that a spinoff's own mint never lands self-claimed -- the one shape
     that could ever make a held-set read pick it up."""
 
-    def test_an_unclaimed_fresh_mint_passes(self, tmp_path):
+    def test_an_unclaimed_fresh_mint_passes(self, tmp_path: Path) -> None:
         rel = "state/handoffs/2026-08-19-fresh-spinoff.md"
         _write_artifact(tmp_path / rel, ["deliverable_id: DEL-1"])
 
         ba_apply._warn_if_spinoff_mint_self_claimed(tmp_path, rel)
 
-    def test_a_self_claimed_mint_is_reported_observably(self, tmp_path, capsys):
+    def test_a_self_claimed_mint_is_reported_observably(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         """Regression guard: if a future change ever stamped `status:
         claimed`/`claimed_by` onto a spinoff's OWN freshly-minted file, that
         must SURFACE rather than silently opening the unification-on-mint hole
@@ -116,7 +117,7 @@ class TestFreshSpinoffMintIsNeverSelfClaimed:
         assert "landed self-claimed" in err
         assert rel in err
 
-    def test_a_missing_file_declines_silently(self, tmp_path):
+    def test_a_missing_file_declines_silently(self, tmp_path: Path) -> None:
         """Best-effort: nothing to assert about a file this run did not
         commit."""
         ba_apply._warn_if_spinoff_mint_self_claimed(tmp_path, "state/handoffs/absent.md")
@@ -132,7 +133,7 @@ class TestAuthoringASpinoffLeavesTheHeldClaimUntouched:
     ):
         return ba_apply.APPLY_EXIT_OK, {"landed": [d["id"] for d in directives]}
 
-    def test_the_held_claim_survives_a_spinoff_mint_byte_identical(self, tmp_path, monkeypatch):
+    def test_the_held_claim_survives_a_spinoff_mint_byte_identical(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _init_repo(tmp_path)
         session_id = "sid-author-holds-a-claim"
         monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)

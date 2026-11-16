@@ -28,7 +28,7 @@ def _git(repo: Path, *args: str) -> str:
 
 
 @pytest.fixture
-def launches(monkeypatch):
+def launches(monkeypatch: pytest.MonkeyPatch):
     calls: list = []
     monkeypatch.setattr(op, "_launch", lambda root, run_id: calls.append(run_id) or True)
     return calls
@@ -50,7 +50,7 @@ def _repo(root: Path, *, plan_in_marker: bool) -> str:
     return _git(root, "rev-parse", "HEAD")
 
 
-def test_commit_stage_halt_naming_the_plan_queues_plan_reconciliation(tmp_path, launches):
+def test_commit_stage_halt_naming_the_plan_queues_plan_reconciliation(tmp_path: Path, launches) -> None:
     sha = _repo(tmp_path, plan_in_marker=True)
     close = op._handler({"run_id": RID, "sha": sha, "session_id": UUID}, tmp_path)["close"]
     assert close.get("detail") != "halt record names no plan"
@@ -62,7 +62,7 @@ def test_commit_stage_halt_naming_the_plan_queues_plan_reconciliation(tmp_path, 
     assert job["plan_rel"] == PLAN
 
 
-def test_commit_stage_halt_naming_no_plan_still_answers_not_applicable(tmp_path, launches):
+def test_commit_stage_halt_naming_no_plan_still_answers_not_applicable(tmp_path: Path, launches) -> None:
     sha = _repo(tmp_path, plan_in_marker=False)
     close = op._handler({"run_id": RID, "sha": sha, "session_id": UUID}, tmp_path)["close"]
     assert close == {"status": "not-applicable", "detail": "halt record names no plan"}
@@ -97,21 +97,21 @@ def _stages():
             lines, head="h", anchor="a", repo_root="/r", run_id=RID, manifest_rel="m.json")
         return "\n".join(lines)
 
-    def roadmap():
+    def roadmap() -> str:
         return "\n".join(ask_compose.roadmap_commit_lines(head="h", anchor="a", repo_root="/r", run_id=RID))
 
     return {"in_run": in_run, "roadmap": roadmap}
 
 
 @pytest.mark.parametrize("stage", ["in_run", "roadmap"])
-def test_emitted_commit_halt_carries_the_run_plan_and_run_id(stage):
+def test_emitted_commit_halt_carries_the_run_plan_and_run_id(stage) -> None:
     halted = _emitted_halt(_stages()[stage](), plan_decl=f"const _planRel = '{PLAN}';")
     assert halted["halted"] == "commit"
     assert halted["plan"] == PLAN
     assert halted["run_id"] == "r"
 
 
-def test_roadmap_commit_halt_without_a_declared_plan_records_null():
+def test_roadmap_commit_halt_without_a_declared_plan_records_null() -> None:
     halted = _emitted_halt(_stages()["roadmap"](), plan_decl="")
     assert halted["halted"] == "commit"
     assert halted["plan"] is None

@@ -10,6 +10,7 @@ import yaml
 
 from coordinator_core.execute_plan_assemble.close_out_and_stamp import _open_blocking_chunk_ids
 from coordinator_core.ops.ceremony import commit_v2
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -27,7 +28,7 @@ def _git(repo, *args):
     ).stdout.strip()
 
 
-def _w(path, text, newline="\n"):
+def _w(path, text, newline: str = "\n") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline=newline)
 
@@ -46,12 +47,12 @@ def _spine(text: str) -> list:
 
 
 @pytest.fixture(params=["lf", "crlf"])
-def repo_eol(request):
+def repo_eol(request: pytest.FixtureRequest):
     return request.param
 
 
 @pytest.fixture()
-def repo(repo_eol, tmp_path):
+def repo(repo_eol, tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/p")
@@ -78,7 +79,7 @@ def _checkpoint_message(base: str) -> str:
     )
 
 
-def test_a_real_shape_checkpoint_reads_coded_and_close_finds_no_open_row(repo, repo_eol):
+def test_a_real_shape_checkpoint_reads_coded_and_close_finds_no_open_row(repo, repo_eol) -> None:
     base = _git(repo, "rev-parse", "HEAD")
     _w(repo / _PRODUCT, "row\n")
     _w(repo / _PROCESS, "handoff\n")

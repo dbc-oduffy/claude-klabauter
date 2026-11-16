@@ -6,6 +6,7 @@ import os
 import pytest
 
 from coordinator_core.warm import telemetry
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
@@ -15,7 +16,7 @@ def _clean_ring():
     telemetry._REQUESTS.clear()
 
 
-def test_record_is_memory_only_until_flush(tmp_path):
+def test_record_is_memory_only_until_flush(tmp_path: Path) -> None:
     telemetry.record_request(op="guard.check", session="s1", enqueue_ts=1.0, start_ts=2.0, end_ts=3.0, busy_workers=4)
     assert telemetry.request_samples() == [
         {
@@ -31,7 +32,7 @@ def test_record_is_memory_only_until_flush(tmp_path):
     assert not telemetry.request_telemetry_path(tmp_path).exists()
 
 
-def test_record_request_keeps_every_named_field_and_is_keyword_only():
+def test_record_request_keeps_every_named_field_and_is_keyword_only() -> None:
     telemetry.record_request(
         op="hooks.preuse_bash_dispatch", session="s2", enqueue_ts=1.0, start_ts=1.5, end_ts=2.0,
         busy_workers=30, outcome="ok", pid=11, worker_pid=12, lane="guard", dispatch_key="k1",
@@ -46,13 +47,13 @@ def test_record_request_keeps_every_named_field_and_is_keyword_only():
         telemetry.record_request("positional")
 
 
-def test_queue_wait_ms_omitted_without_both_timestamps():
+def test_queue_wait_ms_omitted_without_both_timestamps() -> None:
     telemetry.record_request(op="a", enqueue_ts=1.0)
     telemetry.record_request(op="b", start_ts=2.0)
     assert all("queue_wait_ms" not in r for r in telemetry.request_samples())
 
 
-def test_slow_request_rows_returns_only_rows_over_threshold():
+def test_slow_request_rows_returns_only_rows_over_threshold() -> None:
     telemetry.record_request(op="slow", session="s9", enqueue_ts=100.0, start_ts=108.5, end_ts=109.0, busy_workers=6)
     telemetry.record_request(op="fast", session="s1", enqueue_ts=100.0, start_ts=100.01, end_ts=100.02, busy_workers=1)
     telemetry.record_request(op="exact", enqueue_ts=0.0, start_ts=1.0, end_ts=telemetry.SLOW_REQUEST_SECS)
@@ -63,7 +64,7 @@ def test_slow_request_rows_returns_only_rows_over_threshold():
     assert [r["op"] for r in telemetry.slow_request_rows(telemetry.request_samples(), threshold_secs=0.5)] == ["slow", "exact"]
 
 
-def test_ring_is_bounded_and_evicts_oldest():
+def test_ring_is_bounded_and_evicts_oldest() -> None:
     for i in range(telemetry.REQUEST_TELEMETRY_KEEP + 5):
         telemetry.record_request(op=f"op{i}")
     rows = telemetry.request_samples()
@@ -71,7 +72,7 @@ def test_ring_is_bounded_and_evicts_oldest():
     assert rows[0]["op"] == "op5"
 
 
-def test_flush_appends_once_and_drains(tmp_path):
+def test_flush_appends_once_and_drains(tmp_path: Path) -> None:
     telemetry.record_request(op="a")
     telemetry.record_request(op="b")
     telemetry.flush_requests(tmp_path)
@@ -82,7 +83,7 @@ def test_flush_appends_once_and_drains(tmp_path):
     assert len(telemetry.request_telemetry_path(tmp_path).read_text().splitlines()) == 2
 
 
-def test_record_and_flush_never_raise(tmp_path, monkeypatch):
+def test_record_and_flush_never_raise(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     telemetry.record_request(op="a")
 
     def _boom(*a, **k):
@@ -95,21 +96,21 @@ def test_record_and_flush_never_raise(tmp_path, monkeypatch):
     monkeypatch.undo()
 
 
-def test_server_boot_names_parent_and_reason(tmp_path):
+def test_server_boot_names_parent_and_reason(tmp_path: Path) -> None:
     telemetry.record_server_boot(listener_secs=0.1, ready_secs=0.2, pid=7, engine_root=tmp_path, boot_reason="supervisor-respawn")
     row = telemetry.server_boot_samples(tmp_path)[0]
     assert row["parent_pid"] == os.getppid()
     assert row["boot_reason"] == "supervisor-respawn"
 
 
-def test_server_boot_reason_omitted_when_unnamed(tmp_path):
+def test_server_boot_reason_omitted_when_unnamed(tmp_path: Path) -> None:
     telemetry.record_server_boot(listener_secs=0.1, ready_secs=0.2, pid=7, engine_root=tmp_path, parent_pid=99)
     row = telemetry.server_boot_samples(tmp_path)[0]
     assert row["parent_pid"] == 99
     assert "boot_reason" not in row
 
 
-def test_record_request_carries_slow_phase_and_spans_and_omits_none():
+def test_record_request_carries_slow_phase_and_spans_and_omits_none() -> None:
     telemetry.record_request(op="a", slow_phase="git_read", spans=[{"name": "git_read", "wall_ms": 1200.0}])
     telemetry.record_request(op="b")
     first, second = telemetry.request_samples()
@@ -117,13 +118,13 @@ def test_record_request_carries_slow_phase_and_spans_and_omits_none():
     assert "slow_phase" not in second and "spans" not in second
 
 
-def test_chokepoint_forwards_slow_phase_for_preuse_ops_only(monkeypatch):
+def test_chokepoint_forwards_slow_phase_for_preuse_ops_only(monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
 
     from coordinator_core import ipc
     from coordinator_core.telemetry import op_row_fields
 
-    async def _handler(params, repo_root=None):
+    async def _handler(params, repo_root=None) -> dict[str, bool]:
         op_row_fields.attach(slow_phase="x", spans=[["x", 9.0]])
         return {"ok": True}
 
@@ -143,7 +144,7 @@ def test_chokepoint_forwards_slow_phase_for_preuse_ops_only(monkeypatch):
     assert _run("other.c2_probe") == {}
 
 
-def test_pool_dispatch_moves_worker_fields_to_row_and_strips_reply():
+def test_pool_dispatch_moves_worker_fields_to_row_and_strips_reply() -> None:
     from coordinator_core.warm import server
 
     class _Fake:

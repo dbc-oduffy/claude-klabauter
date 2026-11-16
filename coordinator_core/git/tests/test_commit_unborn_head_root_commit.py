@@ -7,6 +7,7 @@ import pytest
 
 from coordinator_core.git import commit as gcommit
 from coordinator_core.git.commit import CommitRefused
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -20,7 +21,7 @@ def _git(repo, *args):
 
 
 @pytest.fixture()
-def unborn(tmp_path):
+def unborn(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/a")
@@ -29,7 +30,7 @@ def unborn(tmp_path):
     return r
 
 
-def test_scoped_commit_on_unborn_head_makes_root_commit(unborn):
+def test_scoped_commit_on_unborn_head_makes_root_commit(unborn) -> None:
     (unborn / "docs").mkdir()
     (unborn / "docs" / "a.md").write_text("a\n", encoding="utf-8", newline="\n")
     (unborn / "b.md").write_text("b\n", encoding="utf-8", newline="\n")
@@ -50,7 +51,7 @@ def test_scoped_commit_on_unborn_head_makes_root_commit(unborn):
     assert second.sha != outcome.sha
 
 
-def test_head_naming_an_unreadable_commit_still_refuses(unborn):
+def test_head_naming_an_unreadable_commit_still_refuses(unborn) -> None:
     (unborn / "a.md").write_text("a\n", encoding="utf-8", newline="\n")
     bogus = "1" * 40
     ref = unborn / ".git" / "refs" / "heads" / "work" / "a"

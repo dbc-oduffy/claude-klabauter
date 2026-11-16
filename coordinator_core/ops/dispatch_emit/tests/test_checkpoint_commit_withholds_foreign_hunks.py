@@ -28,7 +28,7 @@ def _git(args, cwd: Path) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], root)
@@ -56,7 +56,7 @@ def _params(repo: Path, paths: list) -> dict:
     }
 
 
-def test_checkpoint_lands_own_new_file_and_withholds_the_peer_new_file(repo):
+def test_checkpoint_lands_own_new_file_and_withholds_the_peer_new_file(repo) -> None:
     (repo / "mine.txt").write_bytes(b"mine\n")
     (repo / "theirs.txt").write_bytes(b"run B wiring\n")
 
@@ -69,7 +69,7 @@ def test_checkpoint_lands_own_new_file_and_withholds_the_peer_new_file(repo):
     assert "?? theirs.txt" in _git(["status", "--porcelain", "-uall"], repo)
 
 
-def test_checkpoint_with_only_a_peer_new_file_commits_nothing(repo):
+def test_checkpoint_with_only_a_peer_new_file_commits_nothing(repo) -> None:
     (repo / "theirs.txt").write_bytes(b"run B wiring\n")
     head = _git(["rev-parse", "HEAD"], repo).strip()
 
@@ -80,7 +80,7 @@ def test_checkpoint_with_only_a_peer_new_file_commits_nothing(repo):
     assert _git(["rev-parse", "HEAD"], repo).strip() == head
 
 
-def test_the_new_file_gate_is_the_shared_unproduced_hunk_check(repo, monkeypatch):
+def test_the_new_file_gate_is_the_shared_unproduced_hunk_check(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list = []
     real = hunk_provenance.unproduced_hunks
 
@@ -97,7 +97,7 @@ def test_the_new_file_gate_is_the_shared_unproduced_hunk_check(repo, monkeypatch
     assert seen == [("runA", ["mine.txt"])]
 
 
-def test_a_real_manifest_baseline_naming_the_new_file_lands_it(repo, monkeypatch):
+def test_a_real_manifest_baseline_naming_the_new_file_lands_it(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     import json
 
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT

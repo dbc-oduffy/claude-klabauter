@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from coordinator_core.ops.dispatch_emit import interpreter_pin as ti
+from pathlib import Path
 
 
 def _repo(tmp_path, **keys):
@@ -15,7 +16,7 @@ def _repo(tmp_path, **keys):
     return tmp_path
 
 
-def test_key_pin_resolves_absolute_path(tmp_path):
+def test_key_pin_resolves_absolute_path(tmp_path: Path) -> None:
     repo = _repo(tmp_path, targeted_test_python=sys.executable)
     got = ti.resolve_targeted_test_python(repo)
     assert got == ti.TargetedPython(sys.executable, "targeted_test_python", None)
@@ -23,38 +24,38 @@ def test_key_pin_resolves_absolute_path(tmp_path):
     assert sys.executable in clause and "falling back" not in clause
 
 
-def test_key_pin_bare_name_resolved_by_which(tmp_path, monkeypatch):
+def test_key_pin_bare_name_resolved_by_which(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ti.shutil, "which", lambda name: "found" if name == "mypy3.99" else None)
     got = ti.resolve_targeted_test_python(_repo(tmp_path, targeted_test_python="mypy3.99"))
     assert got.command == "mypy3.99" and got.defect is None
 
 
-def test_fast_cmd_absolute_leading_token(tmp_path):
+def test_fast_cmd_absolute_leading_token(tmp_path: Path) -> None:
     repo = _repo(tmp_path, fast_test_cmd=f"{sys.executable} -m pytest")
     got = ti.resolve_targeted_test_python(repo)
     assert got.command == sys.executable and got.source == "fast_test_cmd" and got.defect is None
     assert sys.executable in ti.interpreter_clause(repo)
 
 
-def test_fast_cmd_versioned_name_leading_token(tmp_path, monkeypatch):
+def test_fast_cmd_versioned_name_leading_token(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ti.shutil, "which", lambda name: "x")
     got = ti.resolve_targeted_test_python(_repo(tmp_path, fast_test_cmd="python3.14 -m pytest"))
     assert (got.command, got.source) == ("python3.14", "fast_test_cmd")
 
 
 @pytest.mark.parametrize("cmd", ["python3 -m pytest", "python -m pytest", "pytest -q", "make test"])
-def test_bare_interpreter_or_non_interpreter_is_not_a_pin(tmp_path, cmd):
+def test_bare_interpreter_or_non_interpreter_is_not_a_pin(tmp_path: Path, cmd) -> None:
     repo = _repo(tmp_path, fast_test_cmd=cmd)
     assert ti.resolve_targeted_test_python(repo) == ti.TargetedPython(None, "none", None)
     assert ti.interpreter_clause(repo) == f"{ti.PORTABLE_CLAUSE} {ti.LITERAL_PATHS_CLAUSE}"
 
 
-def test_key_outranks_fast_cmd(tmp_path):
+def test_key_outranks_fast_cmd(tmp_path: Path) -> None:
     repo = _repo(tmp_path, targeted_test_python=sys.executable, fast_test_cmd="python3.14 -m pytest")
     assert ti.resolve_targeted_test_python(repo).source == "targeted_test_python"
 
 
-def test_unresolvable_pin_yields_defect_clause(tmp_path):
+def test_unresolvable_pin_yields_defect_clause(tmp_path: Path) -> None:
     missing = str(tmp_path / "no" / "python3.14")
     repo = _repo(tmp_path, targeted_test_python=missing)
     got = ti.resolve_targeted_test_python(repo)
@@ -63,19 +64,19 @@ def test_unresolvable_pin_yields_defect_clause(tmp_path):
     assert missing in clause and "interpreter-resolution-defect:" in clause and "tests_run: 0" in clause
 
 
-def test_unresolvable_bare_pin_yields_defect(tmp_path, monkeypatch):
+def test_unresolvable_bare_pin_yields_defect(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ti.shutil, "which", lambda name: None)
     got = ti.resolve_targeted_test_python(_repo(tmp_path, targeted_test_python="python9.99"))
     assert got.defect and "python9.99" in got.defect
 
 
-def test_no_settings_file_and_none_root_are_portable(tmp_path):
+def test_no_settings_file_and_none_root_are_portable(tmp_path: Path) -> None:
     assert ti.interpreter_clause(tmp_path) == f"{ti.PORTABLE_CLAUSE} {ti.LITERAL_PATHS_CLAUSE}"
     assert ti.interpreter_clause(None) == f"{ti.PORTABLE_CLAUSE} {ti.LITERAL_PATHS_CLAUSE}"
     assert "falling back to `python`" in ti.PORTABLE_CLAUSE
 
 
-def test_no_process_is_spawned(tmp_path, monkeypatch):
+def test_no_process_is_spawned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("spawned")
 
@@ -87,7 +88,7 @@ def test_no_process_is_spawned(tmp_path, monkeypatch):
     ti.interpreter_clause(_repo(tmp_path, targeted_test_python=str(tmp_path / "nope")))
 
 
-def test_launcher_key_outranks_python_pin_and_keeps_repo_args(tmp_path):
+def test_launcher_key_outranks_python_pin_and_keeps_repo_args(tmp_path: Path) -> None:
     (tmp_path / "scripts").mkdir()
     (tmp_path / "scripts" / "run.py").write_text("", encoding="utf-8")
     repo = _repo(tmp_path, targeted_test_launcher="scripts/run.py --tier targeted", targeted_test_python=sys.executable)
@@ -96,14 +97,14 @@ def test_launcher_key_outranks_python_pin_and_keeps_repo_args(tmp_path):
     assert ti.DEFECT_PREFIX not in clause
 
 
-def _as_claude_klabauter_root(monkeypatch, root, path):
+def _as_claude_klabauter_root(monkeypatch, root, path) -> None:
     from coordinator_core.install import provisioned_interpreter as pi
 
     monkeypatch.setattr(pi, "_CLAUDE_KLABAUTER_ROOT", root.resolve())
     monkeypatch.setattr(ti, "_provisioned_path", lambda: path)
 
 
-def test_claude_klabauter_root_without_pin_falls_to_provisioned_interpreter(tmp_path, monkeypatch):
+def test_claude_klabauter_root_without_pin_falls_to_provisioned_interpreter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path, fast_test_cmd="python3 -m pytest")
     _as_claude_klabauter_root(monkeypatch, tmp_path, sys.executable)
     got = ti.resolve_targeted_test_python(repo)
@@ -111,7 +112,7 @@ def test_claude_klabauter_root_without_pin_falls_to_provisioned_interpreter(tmp_
     assert sys.executable in ti.interpreter_clause(repo)
 
 
-def test_claude_klabauter_root_pin_outranks_provisioned_and_unresolved_provisioned_is_none(tmp_path, monkeypatch):
+def test_claude_klabauter_root_pin_outranks_provisioned_and_unresolved_provisioned_is_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path, targeted_test_python=sys.executable)
     _as_claude_klabauter_root(monkeypatch, tmp_path, "/never/used")
     assert ti.resolve_targeted_test_python(repo).source == "targeted_test_python"
@@ -120,7 +121,7 @@ def test_claude_klabauter_root_pin_outranks_provisioned_and_unresolved_provision
     assert ti.resolve_targeted_test_python(unpinned) == ti.TargetedPython(None, "none", None)
 
 
-def test_non_claude_klabauter_root_never_consults_provisioned(tmp_path, monkeypatch):
+def test_non_claude_klabauter_root_never_consults_provisioned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.install import provisioned_interpreter as pi
 
     monkeypatch.setattr(pi, "_CLAUDE_KLABAUTER_ROOT", (tmp_path / "elsewhere").resolve())
@@ -132,7 +133,7 @@ def test_non_claude_klabauter_root_never_consults_provisioned(tmp_path, monkeypa
     assert ti.resolve_targeted_test_python(_repo(tmp_path)).source == "none"
 
 
-def test_launcher_missing_or_absolute_is_a_resolution_defect(tmp_path):
+def test_launcher_missing_or_absolute_is_a_resolution_defect(tmp_path: Path) -> None:
     assert ti.DEFECT_PREFIX in ti.interpreter_clause(_repo(tmp_path, targeted_test_launcher="scripts/none.py"))
     assert ti.DEFECT_PREFIX in ti.interpreter_clause(_repo(tmp_path, targeted_test_launcher=sys.executable))
 
@@ -140,21 +141,21 @@ def test_launcher_missing_or_absolute_is_a_resolution_defect(tmp_path):
 @pytest.mark.parametrize(
     "cmd", ["python3.14 bin/run-fast-tests.py", "python3.14 -u bin/run-fast-tests.py --fast", "python3.14 -X utf8 bin/run.py"],
 )
-def test_wrapper_script_launcher_is_not_a_pin(tmp_path, monkeypatch, cmd):
+def test_wrapper_script_launcher_is_not_a_pin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cmd) -> None:
     monkeypatch.setattr(ti.shutil, "which", lambda name: "x")
     repo = _repo(tmp_path, fast_test_cmd=cmd)
     assert ti.resolve_targeted_test_python(repo) == ti.TargetedPython(None, "none", None)
     assert ti.interpreter_clause(repo) == f"{ti.PORTABLE_CLAUSE} {ti.LITERAL_PATHS_CLAUSE}"
 
 
-def test_absolute_interpreter_plus_script_is_not_a_pin_but_flags_then_module_is(tmp_path, monkeypatch):
+def test_absolute_interpreter_plus_script_is_not_a_pin_but_flags_then_module_is(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ti.shutil, "which", lambda name: "x")
     assert ti.resolve_targeted_test_python(_repo(tmp_path, fast_test_cmd=f"{sys.executable} bin/run.py")).command is None
     got = ti.resolve_targeted_test_python(_repo(tmp_path, fast_test_cmd=f"{sys.executable} -u -m pytest -q"))
     assert got.command == sys.executable and got.source == "fast_test_cmd"
 
 
-def test_machine_local_pin_resolves_the_registry_value(tmp_path, monkeypatch):
+def test_machine_local_pin_resolves_the_registry_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import machine_resolver
 
     monkeypatch.setattr(machine_resolver, "registry_get", lambda key: sys.executable if key == "example_retrieval_repo.python" else None)
@@ -163,7 +164,7 @@ def test_machine_local_pin_resolves_the_registry_value(tmp_path, monkeypatch):
     assert sys.executable in ti.interpreter_clause(repo)
 
 
-def test_machine_local_pin_absent_key_or_unexecutable_value_is_a_defect_naming_the_key(tmp_path, monkeypatch):
+def test_machine_local_pin_absent_key_or_unexecutable_value_is_a_defect_naming_the_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import machine_resolver
 
     repo = _repo(tmp_path, targeted_test_python="machine-local:example_retrieval_repo.python")
@@ -177,7 +178,7 @@ def test_machine_local_pin_absent_key_or_unexecutable_value_is_a_defect_naming_t
     assert got.defect and "example_retrieval_repo.python" in got.defect
 
 
-def _concern_registry(tmp_path, monkeypatch, *, local_body, registry_local_body=""):
+def _concern_registry(tmp_path, monkeypatch, *, local_body, registry_local_body="") -> None:
     reg = tmp_path / "machine-local"
     reg.mkdir()
     (reg / "registry.toml").write_text('concerns = ["project_rag"]\n', encoding="utf-8")
@@ -187,7 +188,7 @@ def _concern_registry(tmp_path, monkeypatch, *, local_body, registry_local_body=
     monkeypatch.delenv("MACHINE_LOCAL_EXAMPLE_RETRIEVAL_REPO_PYTHON", raising=False)
 
 
-def test_machine_local_pin_reads_a_concern_namespace_file_without_a_registry_stub(tmp_path, monkeypatch):
+def test_machine_local_pin_reads_a_concern_namespace_file_without_a_registry_stub(tmp_path, monkeypatch) -> None:
     _concern_registry(tmp_path, monkeypatch, local_body=f"python = '{sys.executable}'\n")
     repo = _repo(tmp_path, targeted_test_python="machine-local:example_retrieval_repo.python")
     got = ti.resolve_targeted_test_python(repo)
@@ -195,7 +196,7 @@ def test_machine_local_pin_reads_a_concern_namespace_file_without_a_registry_stu
     assert "not set" not in (got.defect or "")
 
 
-def test_machine_local_pin_ignores_a_concern_key_declared_only_in_the_top_level_registry(tmp_path, monkeypatch):
+def test_machine_local_pin_ignores_a_concern_key_declared_only_in_the_top_level_registry(tmp_path, monkeypatch) -> None:
     _concern_registry(
         tmp_path, monkeypatch, local_body="other = 'x'\n", registry_local_body=f'"example_retrieval_repo.python" = "{sys.executable}"\n',
     )
@@ -203,6 +204,6 @@ def test_machine_local_pin_ignores_a_concern_key_declared_only_in_the_top_level_
     assert got.defect and "example_retrieval_repo.python" in got.defect and "not set" in got.defect
 
 
-def test_remedy_names_the_machine_local_form_and_no_absolute_path():
+def test_remedy_names_the_machine_local_form_and_no_absolute_path() -> None:
     assert "targeted_test_python: machine-local:<key>" in ti.REMEDY
     assert not any(tok.startswith(("/", "~")) or ":\\" in tok for tok in ti.REMEDY.split())

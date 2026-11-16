@@ -6,21 +6,22 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.owned_red import read_owned_red
+from pathlib import Path
 
 RUN = "ask-20261025T000000-aaaaaa"
 
 
-def _write(repo, text):
+def _write(repo, text) -> None:
     d = rl.run_dir(repo, RUN)
     d.mkdir(parents=True, exist_ok=True)
     (d / rl.OWNED_RED_FILE).write_text(text, encoding="utf-8")
 
 
-def test_absent_file_is_empty(tmp_path):
+def test_absent_file_is_empty(tmp_path: Path) -> None:
     assert read_owned_red(tmp_path, RUN) == {}
 
 
-def test_reads_rows_skips_malformed_and_later_wins(tmp_path):
+def test_reads_rows_skips_malformed_and_later_wins(tmp_path: Path) -> None:
     rows = [
         {"nodeid": "a.py::t1", "owner_run_id": "111", "at": "x"},
         {"nodeid": "a.py::t1", "owner_run_id": "222"},
@@ -31,6 +32,6 @@ def test_reads_rows_skips_malformed_and_later_wins(tmp_path):
     assert read_owned_red(tmp_path, RUN) == {"a.py::t1": "222"}
 
 
-def test_unsafe_run_key_refused(tmp_path):
+def test_unsafe_run_key_refused(tmp_path: Path) -> None:
     with pytest.raises(rl.LedgerRefused):
         read_owned_red(tmp_path, "../x")

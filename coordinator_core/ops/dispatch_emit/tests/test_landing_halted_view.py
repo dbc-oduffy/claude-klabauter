@@ -82,7 +82,7 @@ def test_shared_computes_once_inside_a_scope_and_every_time_outside() -> None:
     assert len(calls) == 2  # a new scope starts empty
 
 
-def test_index_walk_is_shared_and_widened_only_by_a_new_path(tmp_path, monkeypatch) -> None:
+def test_index_walk_is_shared_and_widened_only_by_a_new_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _repo(tmp_path)
     walks: list = []
     real = git_index.parse_index_identity
@@ -102,7 +102,7 @@ def test_index_walk_is_shared_and_widened_only_by_a_new_path(tmp_path, monkeypat
     assert view.index_identity(tmp_path, ["a.py"]) == real(tmp_path, wanted={"a.py"})
 
 
-def test_index_walk_repeats_after_the_index_file_changes(tmp_path, monkeypatch) -> None:
+def test_index_walk_repeats_after_the_index_file_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _repo(tmp_path)
     walks: list = []
     real = git_index.parse_index_identity
@@ -117,7 +117,7 @@ def test_index_walk_repeats_after_the_index_file_changes(tmp_path, monkeypatch) 
         assert len(walks) == 2
 
 
-def test_dirty_withheld_decides_each_path_once_per_index_state(tmp_path, monkeypatch) -> None:
+def test_dirty_withheld_decides_each_path_once_per_index_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.ceremony import commit_companion
 
     _repo(tmp_path)
@@ -135,7 +135,7 @@ def test_dirty_withheld_decides_each_path_once_per_index_state(tmp_path, monkeyp
     assert seen == [("a.py", "b.py"), ("c.py",)]
 
 
-def test_dirty_status_and_dirty_withheld_hash_a_worktree_file_once(tmp_path, monkeypatch) -> None:
+def test_dirty_status_and_dirty_withheld_hash_a_worktree_file_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.ceremony import commit_companion
 
     _repo(tmp_path)
@@ -149,7 +149,7 @@ def test_dirty_status_and_dirty_withheld_hash_a_worktree_file_once(tmp_path, mon
     assert hashed.count("a.py") == 1
 
 
-def test_differs_from_index_hashes_once_per_call_scope_without_a_release_scope(tmp_path, monkeypatch) -> None:
+def test_differs_from_index_hashes_once_per_call_scope_without_a_release_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import call_io_scope
     from coordinator_core.ops.ceremony import commit_companion
 
@@ -168,7 +168,7 @@ def test_differs_from_index_hashes_once_per_call_scope_without_a_release_scope(t
     assert hashed == ["a.py"] * 3
 
 
-def test_scoped_dirty_withheld_answers_as_own_left_behind_under_a_resolver(tmp_path) -> None:
+def test_scoped_dirty_withheld_answers_as_own_left_behind_under_a_resolver(tmp_path: Path) -> None:
     from coordinator_core.ops.ceremony import commit_companion
 
     _repo(tmp_path)
@@ -191,7 +191,7 @@ def _porcelain(root: Path, paths) -> set:
     return {line.split(None, 1)[1] for line in out.splitlines()}
 
 
-def test_dirty_status_matches_git_status_over_each_kind_of_dirt(tmp_path) -> None:
+def test_dirty_status_matches_git_status_over_each_kind_of_dirt(tmp_path: Path) -> None:
     _repo(tmp_path)
     _write(tmp_path / "a.py", KEPT_TEXT)  # modified in the worktree
     _write(tmp_path / "staged.py", BASE_TEXT)
@@ -208,14 +208,14 @@ def test_dirty_status_matches_git_status_over_each_kind_of_dirt(tmp_path) -> Non
     assert decided == _porcelain(tmp_path, paths) == {"a.py", "b.py", "c.py", "staged.py", "new.py"}
 
 
-def test_dirty_status_of_a_clean_tree_is_empty_and_a_directory_is_left_to_git(tmp_path) -> None:
+def test_dirty_status_of_a_clean_tree_is_empty_and_a_directory_is_left_to_git(tmp_path: Path) -> None:
     _repo(tmp_path)
     assert view.dirty_status(tmp_path, list(PATHS)) == set() == _porcelain(tmp_path, PATHS)
     (tmp_path / "sub").mkdir()
     assert view.dirty_status(tmp_path, ["sub"]) is None
 
 
-def test_dirty_reader_spawns_no_git_when_the_view_decides_and_asks_git_when_it_cannot(tmp_path, monkeypatch) -> None:
+def test_dirty_reader_spawns_no_git_when_the_view_decides_and_asks_git_when_it_cannot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import run as git_run
 
     _repo(tmp_path)
@@ -230,7 +230,7 @@ def test_dirty_reader_spawns_no_git_when_the_view_decides_and_asks_git_when_it_c
     assert any("status" in a for a in spawned)
 
 
-def test_tree_entries_reads_each_directory_once_across_path_sets(tmp_path, monkeypatch) -> None:
+def test_tree_entries_reads_each_directory_once_across_path_sets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _repo(tmp_path)
     _write(tmp_path / "d/e/f.py", BASE_TEXT)
     _git(tmp_path, "add", "d")
@@ -247,7 +247,7 @@ def test_tree_entries_reads_each_directory_once_across_path_sets(tmp_path, monke
     assert first == git_state.head_blobs(tmp_path, ["a.py", "d/e/f.py"])
 
 
-def test_committer_variants_share_one_weighing_of_the_runs_own_rules(tmp_path, monkeypatch) -> None:
+def test_committer_variants_share_one_weighing_of_the_runs_own_rules(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _repo(tmp_path)
     halted, committing = _halted_runs(tmp_path)
     other = _rid(20, "eeeeee")
@@ -264,7 +264,7 @@ def test_committer_variants_share_one_weighing_of_the_runs_own_rules(tmp_path, m
     assert heads == [run]
 
 
-def test_sibling_claim_pass_over_halted_runs_walks_the_index_once_and_spawns_no_git(tmp_path, monkeypatch) -> None:
+def test_sibling_claim_pass_over_halted_runs_walks_the_index_once_and_spawns_no_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import run as git_run
 
     _repo(tmp_path)

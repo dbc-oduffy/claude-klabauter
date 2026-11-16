@@ -2,6 +2,7 @@
 
 from coordinator_core.roadmap import prep_gate as pg
 from coordinator_core.roadmap.tests.test_prep_gate_four_legs import _CLEAN_FM, _write_plan
+from pathlib import Path
 
 _ROW = """- id: C0
   title: Timing baseline
@@ -35,7 +36,7 @@ def _cls(tmp_path, spine):
     return _gate(tmp_path, spine)["classes"]["TEST_RUNNER_OUT_OF_ROLE"]
 
 
-def test_timing_measurement_row_is_refused_naming_performer_em(tmp_path):
+def test_timing_measurement_row_is_refused_naming_performer_em(tmp_path: Path) -> None:
     result = _gate(tmp_path, _ROW)
     cls = result["classes"]["TEST_RUNNER_OUT_OF_ROLE"]
     assert result["verdict"] == pg.NOT_PREPPED
@@ -47,7 +48,7 @@ def test_timing_measurement_row_is_refused_naming_performer_em(tmp_path):
     assert "performer: em" in result["message"]
 
 
-def test_broad_suite_row_is_refused(tmp_path):
+def test_broad_suite_row_is_refused(tmp_path: Path) -> None:
     spine = _ROW.replace("verification timing measurement", "verification").replace(
         "Alone runs, then a load generator.", "Run `pnpm vitest run`."
     )
@@ -56,25 +57,25 @@ def test_broad_suite_row_is_refused(tmp_path):
     assert "C0" in cls["withheld"]
 
 
-def test_verification_string_full_suite_is_read(tmp_path):
+def test_verification_string_full_suite_is_read(tmp_path: Path) -> None:
     spine = _VERIFY_ROW.replace("`python -m pytest src/test_a.py`", "the suite").replace(
         "  disposition: open", "  verification: pnpm vitest run\n  disposition: open"
     )
     assert _cls(tmp_path, spine)["status"] == "DEFECT"
 
 
-def test_targeted_verify_row_passes(tmp_path):
+def test_targeted_verify_row_passes(tmp_path: Path) -> None:
     assert _cls(tmp_path, _VERIFY_ROW)["status"] == "PASS"
 
 
-def test_targeted_vitest_file_with_worker_cap_passes(tmp_path):
+def test_targeted_vitest_file_with_worker_cap_passes(tmp_path: Path) -> None:
     spine = _VERIFY_ROW.replace(
         "`python -m pytest src/test_a.py`", "`pnpm vitest run src/a.test.ts --maxWorkers=2`"
     )
     assert _cls(tmp_path, spine)["status"] == "PASS"
 
 
-def test_pnpm_test_with_path_passes_and_bare_pnpm_test_is_refused(tmp_path):
+def test_pnpm_test_with_path_passes_and_bare_pnpm_test_is_refused(tmp_path: Path) -> None:
     scoped = _VERIFY_ROW.replace("`python -m pytest src/test_a.py`", "`pnpm test src/a.test.ts`")
     assert _cls(tmp_path, scoped)["status"] == "PASS"
     bare = _VERIFY_ROW.replace("`python -m pytest src/test_a.py`", "`pnpm test`")
@@ -83,24 +84,24 @@ def test_pnpm_test_with_path_passes_and_bare_pnpm_test_is_refused(tmp_path):
     assert _cls(tmp_path, flags_only)["status"] == "DEFECT"
 
 
-def test_pnpm_test_with_path_stays_test_tier_for_admission():
+def test_pnpm_test_with_path_stays_test_tier_for_admission() -> None:
     from coordinator_core.bash_guards._heavy_command_class import HeavyClass, classify
 
     cls = classify("pnpm test src/a.test.ts", None, ".", 1 << 30)
     assert cls is not None and cls.heavy_class is HeavyClass.TEST_TIER
 
 
-def test_timing_row_not_declaring_test_runner_passes(tmp_path):
+def test_timing_row_not_declaring_test_runner_passes(tmp_path: Path) -> None:
     spine = _ROW.replace("  agent_type: coordinator:test-runner\n", "")
     assert _cls(tmp_path, spine)["status"] == "PASS"
 
 
-def test_timing_row_declaring_performer_em_passes(tmp_path):
+def test_timing_row_declaring_performer_em_passes(tmp_path: Path) -> None:
     spine = _ROW.replace("  disposition: open", "  performer: em\n  disposition: open")
     assert _cls(tmp_path, spine)["status"] == "PASS"
 
 
-def test_wont_do_row_passes(tmp_path):
+def test_wont_do_row_passes(tmp_path: Path) -> None:
     spine = _ROW.replace("disposition: open", "disposition: wont_do")
     assert _cls(tmp_path, spine)["status"] == "PASS"
 
@@ -110,22 +111,22 @@ def _body_cls(tmp_path, text):
     return _cls(tmp_path, spine)["status"]
 
 
-def test_quoted_broad_command_mid_sentence_passes(tmp_path):
+def test_quoted_broad_command_mid_sentence_passes(tmp_path: Path) -> None:
     assert _body_cls(tmp_path, "Earlier we ran `pnpm vitest run` and it was slow.") == "PASS"
     assert _body_cls(tmp_path, "```yaml\n    note: pnpm vitest run\n    ```") == "PASS"
 
 
-def test_broad_command_as_step_span_or_shell_fence_is_refused(tmp_path):
+def test_broad_command_as_step_span_or_shell_fence_is_refused(tmp_path: Path) -> None:
     assert _body_cls(tmp_path, "Run `pnpm vitest run`.") == "DEFECT"
     assert _body_cls(tmp_path, "`pnpm vitest run`") == "DEFECT"
     assert _body_cls(tmp_path, "```sh\n    pnpm vitest run\n    ```") == "DEFECT"
 
 
-def test_sh_fenced_path_scoped_pnpm_test_passes(tmp_path):
+def test_sh_fenced_path_scoped_pnpm_test_passes(tmp_path: Path) -> None:
     assert _body_cls(tmp_path, "```sh\n    pnpm test src/a.test.ts\n    ```") == "PASS"
 
 
-def test_refusal_names_rule_and_both_repair_forms(tmp_path):
+def test_refusal_names_rule_and_both_repair_forms(tmp_path: Path) -> None:
     result = _gate(tmp_path, _ROW)
     cls = result["classes"]["TEST_RUNNER_OUT_OF_ROLE"]
     for text in (cls["detail"], result["message"]):
@@ -135,13 +136,13 @@ def test_refusal_names_rule_and_both_repair_forms(tmp_path):
         assert "depends on it" in text
 
 
-def test_class_is_mechanical_with_repair(tmp_path):
+def test_class_is_mechanical_with_repair(tmp_path: Path) -> None:
     cls = _cls(tmp_path, _ROW)
     assert cls["mechanical"] is True
     assert "performer: em" in cls["repair"] and "C0" in cls["repair"]
 
 
-def test_class_order(tmp_path):
+def test_class_order(tmp_path: Path) -> None:
     result = _gate(tmp_path, _ROW)
     assert tuple(result["classes"]) == pg.CLASS_ORDER
     order = pg.CLASS_ORDER

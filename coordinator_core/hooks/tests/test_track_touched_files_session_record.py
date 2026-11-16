@@ -52,6 +52,7 @@ from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.session import touch_record
 from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+from pathlib import Path
 
 # Spawns a real external process (git init fixture); runs at cadence gates,
 # not per-commit.
@@ -72,7 +73,7 @@ def _make_repo(tmp_path):
     return tmp_path
 
 
-def _fire(repo, common_dir, session_id, target):
+def _fire(repo, common_dir, session_id, target) -> None:
     params = {
         "session_id": session_id,
         "tool_name": "Edit",
@@ -86,7 +87,7 @@ class TestSessionRecordAccompaniesTheClaim:
     claiming ceremony — the Write/Edit-only shape — must still be resolvable
     by ``live_session_ids``."""
 
-    def test_meta_json_is_created_alongside_the_first_claim_acquiring_tool_call(self, tmp_path):
+    def test_meta_json_is_created_alongside_the_first_claim_acquiring_tool_call(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
         (repo / "src").mkdir()
         target = repo / "src" / "new.py"
@@ -121,7 +122,7 @@ class TestSessionRecordAccompaniesTheClaim:
         record = json.loads(meta_file.read_text(encoding="utf-8"))
         assert record.get("session_id") == session_id
 
-    def test_existing_meta_json_is_not_rewritten_by_a_later_edit(self, tmp_path):
+    def test_existing_meta_json_is_not_rewritten_by_a_later_edit(self, tmp_path: Path) -> None:
         """The guard is on ABSENCE, never staleness: once the record exists,
         subsequent Edit/Write fires cost one ``isfile`` stat and nothing else.
         Pinned by a sentinel field ``init``'s refresh branch would not

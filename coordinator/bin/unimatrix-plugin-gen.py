@@ -33,7 +33,7 @@ def load_table():
     return json.loads((Path(__file__).resolve().with_name(TABLE_NAME)).read_text(encoding="utf-8"))
 
 
-def _is_text(data):
+def _is_text(data) -> bool:
     if b"\x00" in data:
         return False
     try:
@@ -48,7 +48,7 @@ def _lf(text):
     return text if not text or text.endswith("\n") else text + "\n"
 
 
-def _json_bytes(obj):
+def _json_bytes(obj) -> bytes:
     return (json.dumps(obj, indent=2, sort_keys=True) + "\n").encode("utf-8")
 
 
@@ -84,7 +84,7 @@ def _field(head, key):
     return None, None
 
 
-def _ensure_description(head, body, fallback):
+def _ensure_description(head, body, fallback) -> None:
     """Add a one-line `description:` (first prose line of body, else fallback) when absent or empty; agy skips an item without one."""
     i, val = _field(head, "description")
     if val:
@@ -99,26 +99,26 @@ def _ensure_description(head, body, fallback):
 class _Plan:
     """Collects translated files and the unmapped report; writes nothing until finished."""
 
-    def __init__(self, cfg, token_suffixes):
+    def __init__(self, cfg, token_suffixes) -> None:
         self.cfg = cfg
         self.files = {}
         self.unmapped = set()
         self.suffixes = tuple(token_suffixes)
 
-    def miss(self, kind, source, reason):
+    def miss(self, kind, source, reason) -> None:
         self.unmapped.add((kind, source, reason))
 
-    def put(self, rel, data, kind, source):
+    def put(self, rel, data, kind, source) -> bool:
         if rel in self.files:
             self.miss(kind, source, f"output path {rel} already produced by another source")
             return False
         self.files[rel] = data
         return True
 
-    def rewrite(self, text):
+    def rewrite(self, text) -> str:
         return TOKEN_RE.sub(lambda _m: self.cfg["plugin_root_token"], text)
 
-    def put_file(self, rel, src_path, kind, source):
+    def put_file(self, rel, src_path, kind, source) -> bool:
         """Copy one source file; text is LF-normalised and gets the plugin-root token rewritten."""
         data = src_path.read_bytes()
         if _is_text(data):
@@ -168,7 +168,7 @@ def _map_model(value, cfg):
     return None, f"model {value!r} is not a known tier"
 
 
-def _agents(plan, plugin_root):
+def _agents(plan, plugin_root) -> None:
     d = plugin_root / "agents"
     if not d.is_dir():
         return
@@ -193,7 +193,7 @@ def _agents(plan, plugin_root):
         plan.put(src, text.encode("utf-8"), "agent", src)
 
 
-def _command_skills(plan, plugin_root):
+def _command_skills(plan, plugin_root) -> None:
     d = plugin_root / "commands"
     if not d.is_dir():
         return
@@ -218,7 +218,7 @@ def _command_skills(plan, plugin_root):
         _put_skill_md(plan, out, _join_frontmatter(head, body), src)
 
 
-def _put_skill_md(plan, out, text, src):
+def _put_skill_md(plan, out, text, src) -> None:
     data = text.encode("utf-8")
     cap = plan.cfg["max_text_bytes"]
     if len(data) > cap:
@@ -227,7 +227,7 @@ def _put_skill_md(plan, out, text, src):
     plan.put(out, data, "skill", src)
 
 
-def _skills(plan, plugin_root):
+def _skills(plan, plugin_root) -> None:
     d = plugin_root / "skills"
     if not d.is_dir():
         return
@@ -278,7 +278,7 @@ def _flatten_groups(groups, event, plan):
     return flat
 
 
-def _hook_name(event):
+def _hook_name(event) -> str:
     """agy hook name for one event's handlers: the event in kebab case (PreToolUse -> pre-tool-use)."""
     return re.sub(r"(?<!^)(?=[A-Z])", "-", event).lower()
 
@@ -502,7 +502,7 @@ def _win_cmdline(argv):
     return " ".join(quote(a) for a in argv)
 
 
-def _hooks(plan, plugin_root):
+def _hooks(plan, plugin_root) -> None:
     src = plugin_root / "hooks" / "hooks.json"
     if not src.is_file():
         return
@@ -559,7 +559,7 @@ def _hooks(plan, plugin_root):
         plan.put(SHIM_REL, SHIM_SOURCE.encode("utf-8"), "hooks", "hooks/hooks.json")
 
 
-def _rules(plan, plugin_root):
+def _rules(plan, plugin_root) -> None:
     text = _doctrine_text(plugin_root)
     if text is None:
         plan.miss("rules", DOCTRINE_SOURCES[0], "no global-doctrine/CLAUDE.md beside the plugin root")
@@ -580,7 +580,7 @@ def _rules(plan, plugin_root):
     plan.put(plan.cfg["rules_path"], data, "rules", DOCTRINE_SOURCES[0])
 
 
-def _manifest(plan, plugin_root):
+def _manifest(plan, plugin_root) -> None:
     """plugin.json at the output root: name, version, description, logo from the source manifest."""
     src = plugin_root / plan.cfg["source_manifest_path"]
     source = {}
@@ -605,7 +605,7 @@ def _manifest(plan, plugin_root):
     plan.put(plan.cfg["manifest_path"], _json_bytes(manifest), "manifest", plan.cfg["source_manifest_path"])
 
 
-def _copied_dirs(plan, plugin_root):
+def _copied_dirs(plan, plugin_root) -> None:
     for name in plan.cfg["copy_dirs"]:
         d = plugin_root / name
         if not d.is_dir():
@@ -616,7 +616,7 @@ def _copied_dirs(plan, plugin_root):
             plan.put_file(f"{name}/{rel}", p, "file", f"{name}/{rel}")
 
 
-def _unhandled_top_level(plan, plugin_root):
+def _unhandled_top_level(plan, plugin_root) -> None:
     handled = {"agents", "commands", "skills", "hooks", *plan.cfg["copy_dirs"], *plan.cfg["ignore_top_level"]}
     for child in sorted(plugin_root.iterdir(), key=lambda c: c.name):
         if child.name not in handled and child.name not in SKIP_NAMES:
@@ -642,7 +642,7 @@ def _prepare_out(out_dir, plugin_root):
     return out
 
 
-def generate(plugin_root, out_dir, host="agy"):
+def generate(plugin_root, out_dir, host: str = "agy"):
     """Write `host`'s plugin tree for `plugin_root` into `out_dir`.
 
     Returns {"written": [sorted posix rel paths, UNMAPPED.json included],

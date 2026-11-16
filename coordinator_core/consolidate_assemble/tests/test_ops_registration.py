@@ -8,6 +8,7 @@ from coordinator_core.authz.classification import OpClass, classify
 from coordinator_core.ipc import get_op_handler
 from coordinator_core.op_scopes import OP_KEY_SCOPE
 from coordinator_core.ops import _registry_map
+import pytest
 
 
 def test_brief_resolves_via_get_op_handler() -> None:
@@ -31,12 +32,12 @@ def test_registry_map_names_the_ops_module() -> None:
     )
 
 
-def test_handler_passes_repo_root_and_superseded_through(monkeypatch, tmp_path: Path) -> None:
+def test_handler_passes_repo_root_and_superseded_through(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.consolidate_assemble import ops
 
     seen: dict = {}
 
-    def fake_brief(**kwargs):
+    def fake_brief(**kwargs) -> dict[str, str]:
         seen.update(kwargs)
         return {"artifact": "x"}
 

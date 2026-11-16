@@ -10,15 +10,16 @@ from coordinator_core.ops.dispatch_emit.tests.test_pipeline_compose_brief_and_ha
     _segment,
     _stage,
 )
+from pathlib import Path
 
 KW = {"run_id": "r1", "agent_type_host": None}
 
 
-def _gate(tmp_path, name="pre"):
+def _gate(tmp_path, name: str = "pre"):
     return _segment(tmp_path, name, [_stage("gate", halts_unless="ok", schema=GATE_SCHEMA)])
 
 
-def test_chained_halt_breaks_to_its_segment_label_and_never_returns(tmp_path):
+def test_chained_halt_breaks_to_its_segment_label_and_never_returns(tmp_path: Path) -> None:
     script = compose_chain_script([_gate(tmp_path), _segment(tmp_path, "main", [_stage("work")])], **KW)
     assert "return { halted" not in script
     assert script.count("break segment") == 1 and "break segment1;" in script
@@ -28,7 +29,7 @@ def test_chained_halt_breaks_to_its_segment_label_and_never_returns(tmp_path):
     assert script.rstrip().endswith("return { results, segment_halts };")
 
 
-def test_shared_leg_emits_a_skip_guard_in_the_later_segment(tmp_path):
+def test_shared_leg_emits_a_skip_guard_in_the_later_segment(tmp_path: Path) -> None:
     script = compose_chain_script(
         [_gate(tmp_path), _segment(tmp_path, "nb", [_stage("work")]), _segment(tmp_path, "web", [_stage("w")])],
         legs={"pre": "nb"}, **KW,
@@ -40,7 +41,7 @@ def test_shared_leg_emits_a_skip_guard_in_the_later_segment(tmp_path):
     assert len(re.findall(r"break segment\d;", script)) == 2
 
 
-def test_next_action_return_spreads_halted_segments_only_when_a_leg_delivered(tmp_path):
+def test_next_action_return_spreads_halted_segments_only_when_a_leg_delivered(tmp_path: Path) -> None:
     script = compose_chain_script(
         [_gate(tmp_path), _segment(tmp_path, "nb", [_stage("work")]), _segment(tmp_path, "web", [_stage("w")])],
         legs={"pre": "nb"}, next_action={"op": "research.close", "params": {"a": 1}}, **KW,
@@ -52,13 +53,13 @@ def test_next_action_return_spreads_halted_segments_only_when_a_leg_delivered(tm
     assert "halted_segments: [...new Set(haltedSegments)]" in script
 
 
-def test_one_segment_without_legs_is_byte_identical_to_the_plain_script(tmp_path):
+def test_one_segment_without_legs_is_byte_identical_to_the_plain_script(tmp_path: Path) -> None:
     seg = _gate(tmp_path)
     plain = compose_pipeline_script(*seg, **KW)
     assert plain == compose_chain_script([seg], **KW)
     assert "return { halted: 'pre.gate'" in plain and "segment_halts" not in plain
 
 
-def test_one_segment_with_legs_is_scoped(tmp_path):
+def test_one_segment_with_legs_is_scoped(tmp_path: Path) -> None:
     script = compose_chain_script([_gate(tmp_path)], legs={}, **KW)
     assert "break segment1;" in script and "return { halted" not in script

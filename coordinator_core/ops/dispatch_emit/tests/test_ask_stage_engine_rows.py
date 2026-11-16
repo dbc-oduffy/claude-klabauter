@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import ask_stage
 from coordinator_core.ops.dispatch_emit.ask_contract import StageManifest
+from pathlib import Path
+import pytest
 
 PLAN_REL = "docs/plans/2026-10-14-engine-rows.md"
 PLAN = """---
@@ -37,7 +39,7 @@ def _repo(tmp_path):
     return tmp_path
 
 
-def test_stage_stores_the_classifier_rows_and_hands_it_the_ungated_plan_rows(tmp_path, monkeypatch):
+def test_stage_stores_the_classifier_rows_and_hands_it_the_ungated_plan_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
     row = {"id": "T8", "owner_repo": "claude-klabauter", "owner_root": "R", "root_class": "c", "engine": True}
 
@@ -54,13 +56,13 @@ def test_stage_stores_the_classifier_rows_and_hands_it_the_ungated_plan_rows(tmp
     assert seen["cwd"] == root
 
 
-def test_stage_without_engine_rows_stores_none(tmp_path, monkeypatch):
+def test_stage_without_engine_rows_stores_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_stage, "engine_owner_rows", lambda *_: [])
     manifest = ask_stage.stage(_repo(tmp_path), run_id="r2", plan_rel=PLAN_REL)
     assert manifest.engine_rows == ()
 
 
-def test_manifest_round_trips_and_an_absent_key_reads_empty():
+def test_manifest_round_trips_and_an_absent_key_reads_empty() -> None:
     row = {"id": "T8", "owner_repo": "claude-klabauter", "owner_root": "R", "root_class": "c", "engine": True}
     base = ask_stage.StageManifest(run_dir="d", rows=(), review_declared_paths=(), marker_path="m", engine_rows=(row,))
     assert StageManifest.from_json(base.to_json()).engine_rows == (row,)

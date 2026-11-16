@@ -9,6 +9,7 @@ from coordinator_core.subagent_sandbox import engine as _sandbox_engine
 from coordinator_core.bash_guards import _helpers
 from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -29,7 +30,7 @@ def _payload(agent_id, agent_type, cwd, session_id):
 
 
 @pytest.fixture
-def named_dispatch(tmp_path, monkeypatch):
+def named_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     session_id = "1617ff7f-e12a-40db-a9d8-0f63a351914d"
     name = "parity-plans"
     raw_agent_id = f"a{name}-0123456789abcdef"
@@ -62,7 +63,7 @@ def named_dispatch(tmp_path, monkeypatch):
     return raw_agent_id, name, session_id, root
 
 
-def test_named_dispatch_is_allowed_from_a_cwd_outside_the_repo(named_dispatch, tmp_path):
+def test_named_dispatch_is_allowed_from_a_cwd_outside_the_repo(named_dispatch, tmp_path: Path) -> None:
     raw_agent_id, name, session_id, root = named_dispatch
     scratch = tmp_path / "scratchpad"
     scratch.mkdir()
@@ -83,7 +84,7 @@ def test_named_dispatch_is_allowed_from_a_cwd_outside_the_repo(named_dispatch, t
     )
 
 
-def test_a_real_confined_agent_stays_confined_from_every_cwd(named_dispatch, tmp_path):
+def test_a_real_confined_agent_stays_confined_from_every_cwd(named_dispatch, tmp_path: Path) -> None:
     _, _, session_id, root = named_dispatch
     scratch = tmp_path / "scratchpad"
     scratch.mkdir()
@@ -98,7 +99,7 @@ def test_a_real_confined_agent_stays_confined_from_every_cwd(named_dispatch, tmp
         )
 
 
-def test_a_type_unknown_on_both_legs_stays_fail_closed(named_dispatch, tmp_path):
+def test_a_type_unknown_on_both_legs_stays_fail_closed(named_dispatch, tmp_path: Path) -> None:
     _, _, session_id, root = named_dispatch
     verdict = guard.check(
         _payload("afabricated-0123456789abcdef", "totally-made-up", str(root), session_id)

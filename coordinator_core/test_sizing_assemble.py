@@ -38,32 +38,33 @@ import itertools
 import pytest
 
 import coordinator_core.sizing_assemble as sa
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
 
-def test_express_lane_short_circuits_to_dispatch():
+def test_express_lane_short_circuits_to_dispatch() -> None:
     decision = sa.route(appetite="small", estimate={"tshirt": "XL"}, express_lane=True)
     assert decision["route"] == "dispatch"
     assert decision["detents"] == []
     assert decision["fork"] is None
 
 
-def test_conforming_estimate_auto_routes_no_fork():
+def test_conforming_estimate_auto_routes_no_fork() -> None:
     decision = sa.route(appetite="medium", estimate={"tshirt": "M"})
     assert decision["route"] == "plan"
     assert decision["fork"] is None
     assert "appetite_conform" in decision["detents"]
 
 
-def test_small_tshirt_routes_spec_dispatch():
+def test_small_tshirt_routes_spec_dispatch() -> None:
     decision = sa.route(appetite="small", estimate={"tshirt": "S"}, scout_evidence=["e"])
     assert decision["route"] == "spec-dispatch"
     assert decision["fork"] is None
     assert decision["xl_exit"] is None
 
 
-def test_small_tshirt_route_distinct_from_xs():
+def test_small_tshirt_route_distinct_from_xs() -> None:
     xs_decision = sa.route(appetite="small", estimate={"tshirt": "XS"})
     s_decision = sa.route(appetite="small", estimate={"tshirt": "S"}, scout_evidence=["e"])
     assert xs_decision["route"] == "dispatch"
@@ -71,7 +72,7 @@ def test_small_tshirt_route_distinct_from_xs():
     assert xs_decision["route"] != s_decision["route"]
 
 
-def test_appetite_exceeded_surfaces_fork_not_auto_resolved():
+def test_appetite_exceeded_surfaces_fork_not_auto_resolved() -> None:
     decision = sa.route(appetite="small", estimate={"tshirt": "L"})
     # appetite_exceeded is the sole divergence signal; fork stays None from
     # route() always — it is the skill's resolution slot, filled only once
@@ -81,14 +82,14 @@ def test_appetite_exceeded_surfaces_fork_not_auto_resolved():
     assert decision["route"] in sa.ROUTE_ENUM
 
 
-def test_symmetric_resize_collapses_over_read():
+def test_symmetric_resize_collapses_over_read() -> None:
     baseline = sa.route(appetite="large", estimate={"tshirt": "L"})
     collapsed = sa.route(appetite="large", estimate={"tshirt": "L"}, probe_signal="collapse")
     assert collapsed["resolved_estimate"]["tshirt"] == "M"
     assert baseline["resolved_estimate"]["tshirt"] == "L"
 
 
-def test_symmetric_resize_raises_under_read():
+def test_symmetric_resize_raises_under_read() -> None:
     raised = sa.route(appetite="large", estimate={"tshirt": "S"}, probe_signal="raise")
     assert raised["resolved_estimate"]["tshirt"] == "M"
     # S alone would dispatch; the raised M reads plan — the resize caught
@@ -97,7 +98,7 @@ def test_symmetric_resize_raises_under_read():
     assert "route_boundary_crossed" in raised["detents"]
 
 
-def test_raise_can_cross_appetite_ceiling_into_a_fork():
+def test_raise_can_cross_appetite_ceiling_into_a_fork() -> None:
     # A small-appetite S under-read raised to M by the probe should surface
     # the appetite/estimate divergence rather than silently plan-routing.
     # The divergence signal is the appetite_exceeded detent; fork stays
@@ -109,7 +110,7 @@ def test_raise_can_cross_appetite_ceiling_into_a_fork():
     assert decision["fork"] is None
 
 
-def test_large_and_jtbd_unclear_routes_shape():
+def test_large_and_jtbd_unclear_routes_shape() -> None:
     decision = sa.route(
         appetite="large",
         estimate={"tshirt": "L"},
@@ -119,7 +120,7 @@ def test_large_and_jtbd_unclear_routes_shape():
     assert "scope_boundary_acknowledged" in decision["detents"]
 
 
-def test_large_and_well_trodden_step_change_routes_shape():
+def test_large_and_well_trodden_step_change_routes_shape() -> None:
     decision = sa.route(
         appetite="large",
         estimate={"tshirt": "XL"},
@@ -128,7 +129,7 @@ def test_large_and_well_trodden_step_change_routes_shape():
     assert decision["route"] == "shape"
 
 
-def test_well_trodden_step_change_routes_shape_at_non_large_tshirt():
+def test_well_trodden_step_change_routes_shape_at_non_large_tshirt() -> None:
     # D5 condition (b) is spec'd size-independent (plan D5; module docstring)
     # — well_trodden_step_change alone must route to shape even at S/M,
     # not just at L/XL. This is the exact gap Finding 1 identified: the
@@ -143,7 +144,7 @@ def test_well_trodden_step_change_routes_shape_at_non_large_tshirt():
     assert "scope_boundary_acknowledged" in decision["detents"]
 
 
-def test_xl_but_clear_skips_shape_routes_pm_decision():
+def test_xl_but_clear_skips_shape_routes_pm_decision() -> None:
     decision = sa.route(appetite="large", estimate={"tshirt": "XL"})
     assert decision["route"] == "pm-decision"
     assert decision["fork"] is None
@@ -151,7 +152,7 @@ def test_xl_but_clear_skips_shape_routes_pm_decision():
     assert "pm_decision_pending" in decision["detents"]
 
 
-def test_xl_route_sets_pm_decision_pending_detent():
+def test_xl_route_sets_pm_decision_pending_detent() -> None:
     decision = sa.route(appetite="large", estimate={"tshirt": "XL"})
     assert "pm_decision_pending" in decision["detents"]
 
@@ -162,7 +163,7 @@ _TWO_DISJOINT = [
 ]
 
 
-def test_bundle_detent_for_two_disjoint_initiatives_at_xl():
+def test_bundle_detent_for_two_disjoint_initiatives_at_xl() -> None:
     decision = sa.route(estimate={"tshirt": "XL"}, initiatives=_TWO_DISJOINT)
     assert "bundle" in decision["detents"]
     assert decision["initiatives"] == ["alpha", "beta"]
@@ -182,21 +183,21 @@ def test_bundle_detent_for_two_disjoint_initiatives_at_xl():
         (None, "XL"),
     ],
 )
-def test_no_bundle_detent_for_single_overlapping_non_xl_or_absent(initiatives, tshirt):
+def test_no_bundle_detent_for_single_overlapping_non_xl_or_absent(initiatives, tshirt) -> None:
     decision = sa.route(estimate={"tshirt": tshirt}, initiatives=initiatives)
     assert "bundle" not in decision["detents"]
     assert decision["initiatives"] is None
     assert "split` first" not in decision["next_move"]
 
 
-def test_parse_initiatives_refuses_bad_shapes():
+def test_parse_initiatives_refuses_bad_shapes() -> None:
     ok, errs = sa.parse_initiatives('[{"label":"a","rows":["R1"]},{"label":"b","rows":["R2"]}]')
     assert errs == [] and len(ok) == 2
     for bad in ("not json", "[]", '[{"label":"","rows":["R1"]}]', '[{"label":"a","rows":[]}]', '[{"label":"a","rows":["R1"],"z":1}]'):
         assert sa.parse_initiatives(bad)[1]
 
 
-def test_d5_gate_still_wins_over_pm_decision():
+def test_d5_gate_still_wins_over_pm_decision() -> None:
     # XL + jtbd_unclear must still route shape — the D5 gate is unchanged
     # and wins over the new pm-decision base route exactly as it won over
     # the old roadmap base route.
@@ -209,7 +210,7 @@ def test_d5_gate_still_wins_over_pm_decision():
     assert "pm_decision_pending" not in decision["detents"]
 
 
-def test_xl_exit_is_none_on_every_path():
+def test_xl_exit_is_none_on_every_path() -> None:
     express = sa.route(appetite="small", estimate={"tshirt": "XL"}, express_lane=True)
     assert express["xl_exit"] is None
 
@@ -223,7 +224,7 @@ def test_xl_exit_is_none_on_every_path():
     assert shaped["xl_exit"] is None
 
 
-def test_appetite_exceeded_and_pm_decision_combined_next_move_mentions_both_forks():
+def test_appetite_exceeded_and_pm_decision_combined_next_move_mentions_both_forks() -> None:
     # small appetite (ceiling S) + XL estimate is both appetite_exceeded AND
     # pm-decision — the combined next_move must mention BOTH forks so the EM
     # makes one PM ask, not two.
@@ -240,14 +241,14 @@ def test_appetite_exceeded_and_pm_decision_combined_next_move_mentions_both_fork
 # and-goal-setting-route plan) --------------------------------------------
 
 
-def test_xxl_routes_goal_setting_when_d5_gate_does_not_fire():
+def test_xxl_routes_goal_setting_when_d5_gate_does_not_fire() -> None:
     # AC1 — qualified: fires ONLY when the D5 shape-entry gate does not
     # trigger (jtbd_unclear not set, well_trodden_step_change false).
     decision = sa.route(estimate={"tshirt": "XXL"})
     assert decision["route"] == "goal-setting"
 
 
-def test_xxl_with_jtbd_unclear_routes_shape_not_goal_setting():
+def test_xxl_with_jtbd_unclear_routes_shape_not_goal_setting() -> None:
     # AC11 — the D5 shape-entry gate PRE-EMPTS `_BASE_ROUTE_BY_TSHIRT`
     # before it is consulted (finding 3): an XXL with jtbd_unclear=True
     # resolves shape, never goal-setting, and carries
@@ -258,14 +259,14 @@ def test_xxl_with_jtbd_unclear_routes_shape_not_goal_setting():
     assert "scope_boundary_acknowledged" in decision["detents"]
 
 
-def test_xxl_weight_and_validation():
+def test_xxl_weight_and_validation() -> None:
     # AC2/AC3.
     assert sa.TSHIRT_WEIGHT["XXL"] == 32
     sa._validate_tshirt("XXL")  # must not raise
     assert "goal-setting" in sa.ROUTE_ENUM
 
 
-def test_goal_setting_in_route_enum_and_defensive_raise_unreachable():
+def test_goal_setting_in_route_enum_and_defensive_raise_unreachable() -> None:
     # AC3 — the `resolved_route not in ROUTE_ENUM` defensive raise never
     # fires for an XXL resolution, because `goal-setting` is a member.
     assert "goal-setting" in sa.ROUTE_ENUM
@@ -277,7 +278,7 @@ def test_goal_setting_in_route_enum_and_defensive_raise_unreachable():
 # deliberate non-change --------------------------------------------------
 
 
-def test_xxl_fires_premise_detents_large_tshirts_widened():
+def test_xxl_fires_premise_detents_large_tshirts_widened() -> None:
     # `_LARGE_TSHIRTS` widened to include XXL.
     decision = sa.route(
         estimate={"tshirt": "XXL"}, premise_provenance="read"
@@ -285,7 +286,7 @@ def test_xxl_fires_premise_detents_large_tshirts_widened():
     assert "premise_unproven" in decision["detents"]
 
 
-def test_xxl_fires_d5_shape_gate_large_tshirts_widened():
+def test_xxl_fires_d5_shape_gate_large_tshirts_widened() -> None:
     # `_LARGE_TSHIRTS` widened -- XXL + jtbd_unclear fires the shape gate
     # (also asserted by test_xxl_with_jtbd_unclear_routes_shape_not_goal_setting
     # above; this one names the constant explicitly per AC4's "one assertion
@@ -294,13 +295,13 @@ def test_xxl_fires_d5_shape_gate_large_tshirts_widened():
     assert "scope_boundary_acknowledged" in decision["detents"]
 
 
-def test_xxl_post_size_prompt_pending_tshirts_widened():
+def test_xxl_post_size_prompt_pending_tshirts_widened() -> None:
     # `_POST_SIZE_PROMPT_TSHIRTS` widened to include XXL.
     decision = sa.route(estimate={"tshirt": "XXL"})
     assert "post_size_prompt_pending" in decision["detents"]
 
 
-def test_xxl_against_large_appetite_still_reads_appetite_exceeded():
+def test_xxl_against_large_appetite_still_reads_appetite_exceeded() -> None:
     # `_APPETITE_CEILING_TSHIRT` deliberately NOT widened -- the negative
     # case that catches a later "helpful" fix. XXL against the largest
     # budget ("large" -> XL ceiling) still reads appetite_exceeded.
@@ -309,7 +310,7 @@ def test_xxl_against_large_appetite_still_reads_appetite_exceeded():
     assert "appetite_conform" not in decision["detents"]
 
 
-def test_xxl_against_large_appetite_next_move_carries_goal_setting_framing():
+def test_xxl_against_large_appetite_next_move_carries_goal_setting_framing() -> None:
     # Review-integrator P1 fix (coordinator:code-reviewer 2026-08-07): the
     # appetite_exceeded arm used to shadow the goal-setting arm entirely for
     # this cell -- both detents fire, but next_move only ever surfaced the
@@ -328,7 +329,7 @@ def test_xxl_against_large_appetite_next_move_carries_goal_setting_framing():
 # --- AC5: xxl_unprobed -- BOTH reachable cells (Key-decision section) ------
 
 
-def test_xxl_unprobed_fires_on_promotion_from_xl_with_empty_evidence():
+def test_xxl_unprobed_fires_on_promotion_from_xl_with_empty_evidence() -> None:
     # Cell (a): --tshirt XL --probe-signal raise, empty scout_evidence ->
     # resolves XXL (promotion) AND emits xxl_unprobed.
     decision = sa.route(
@@ -338,7 +339,7 @@ def test_xxl_unprobed_fires_on_promotion_from_xl_with_empty_evidence():
     assert "xxl_unprobed" in decision["detents"]
 
 
-def test_xxl_unprobed_fires_on_noop_clamp_from_xxl_with_empty_evidence():
+def test_xxl_unprobed_fires_on_noop_clamp_from_xxl_with_empty_evidence() -> None:
     # Cell (b): --tshirt XXL --probe-signal raise, empty scout_evidence ->
     # resolves XXL (no-op clamp, resized == tshirt) AND still emits
     # xxl_unprobed -- the missed cell DoE's reply named.
@@ -349,7 +350,7 @@ def test_xxl_unprobed_fires_on_noop_clamp_from_xxl_with_empty_evidence():
     assert "xxl_unprobed" in decision["detents"]
 
 
-def test_xxl_unprobed_absent_on_promotion_with_evidence():
+def test_xxl_unprobed_absent_on_promotion_with_evidence() -> None:
     decision = sa.route(
         estimate={"tshirt": "XL"},
         probe_signal="raise",
@@ -359,7 +360,7 @@ def test_xxl_unprobed_absent_on_promotion_with_evidence():
     assert "xxl_unprobed" not in decision["detents"]
 
 
-def test_xxl_unprobed_absent_on_noop_clamp_with_evidence():
+def test_xxl_unprobed_absent_on_noop_clamp_with_evidence() -> None:
     decision = sa.route(
         estimate={"tshirt": "XXL"},
         probe_signal="raise",
@@ -369,7 +370,7 @@ def test_xxl_unprobed_absent_on_noop_clamp_with_evidence():
     assert "xxl_unprobed" not in decision["detents"]
 
 
-def test_only_raise_reaches_xxl_collapse_at_xxl_resolves_xl_no_xxl_unprobed():
+def test_only_raise_reaches_xxl_collapse_at_xxl_resolves_xl_no_xxl_unprobed() -> None:
     # Fourth case pinning the "only raise reaches XXL" premise: a collapse
     # probe at XXL resolves XL, not XXL, and never emits xxl_unprobed.
     decision = sa.route(estimate={"tshirt": "XXL"}, probe_signal="collapse")
@@ -380,18 +381,18 @@ def test_only_raise_reaches_xxl_collapse_at_xxl_resolves_xl_no_xxl_unprobed():
 # --- I47 C2: xxl_infra_check_owed fires at every resolved XXL --------------
 
 
-def test_xxl_infra_check_owed_is_last_detent():
+def test_xxl_infra_check_owed_is_last_detent() -> None:
     assert sa.DETENT_ENUM[-1] == "xxl_infra_check_owed"
 
 
-def test_xxl_infra_check_owed_fires_on_promotion_without_evidence():
+def test_xxl_infra_check_owed_fires_on_promotion_without_evidence() -> None:
     decision = sa.route(
         estimate={"tshirt": "XL"}, probe_signal="raise", scout_evidence=[]
     )
     assert "xxl_infra_check_owed" in decision["detents"]
 
 
-def test_xxl_infra_check_owed_fires_on_promotion_with_evidence():
+def test_xxl_infra_check_owed_fires_on_promotion_with_evidence() -> None:
     decision = sa.route(
         estimate={"tshirt": "XL"},
         probe_signal="raise",
@@ -402,7 +403,7 @@ def test_xxl_infra_check_owed_fires_on_promotion_with_evidence():
     assert "xxl_infra_check_owed" in decision["detents"]
 
 
-def test_xxl_infra_check_owed_fires_on_noop_clamp():
+def test_xxl_infra_check_owed_fires_on_noop_clamp() -> None:
     decision = sa.route(
         estimate={"tshirt": "XXL"}, probe_signal="raise", scout_evidence=[]
     )
@@ -410,12 +411,12 @@ def test_xxl_infra_check_owed_fires_on_noop_clamp():
     assert "xxl_infra_check_owed" in decision["detents"]
 
 
-def test_xxl_infra_check_owed_absent_at_xl():
+def test_xxl_infra_check_owed_absent_at_xl() -> None:
     decision = sa.route(estimate={"tshirt": "XL"})
     assert "xxl_infra_check_owed" not in decision["detents"]
 
 
-def test_xxl_infra_check_owed_leaves_route_and_xl_exit_identical():
+def test_xxl_infra_check_owed_leaves_route_and_xl_exit_identical() -> None:
     with_it = sa.route(estimate={"tshirt": "XXL"}, scout_evidence=[])
     assert "xxl_infra_check_owed" in with_it["detents"]
     assert with_it["route"] == "goal-setting"
@@ -426,7 +427,7 @@ def test_xxl_infra_check_owed_leaves_route_and_xl_exit_identical():
 # resolved_estimate. Modeled on the premise-provenance invariance shape.
 
 
-def test_xxl_unprobed_present_absent_leaves_everything_but_detents_next_move_identical():
+def test_xxl_unprobed_present_absent_leaves_everything_but_detents_next_move_identical() -> None:
     with_advisory = sa.route(
         estimate={"tshirt": "XL"}, probe_signal="raise", scout_evidence=[]
     )
@@ -446,7 +447,7 @@ def test_xxl_unprobed_present_absent_leaves_everything_but_detents_next_move_ide
         assert with_advisory[key] == without_advisory[key], key
 
 
-def test_xl_exit_enum_byte_identical_to_pre_plan_value():
+def test_xl_exit_enum_byte_identical_to_pre_plan_value() -> None:
     # AC9 -- cheap tripwire on the one thing the memo explicitly asked us
     # not to touch. `split` stays a member of XL_EXIT_ENUM (the vocabulary
     # word) even though this plan's C2 drops `split` from the pm-decision
@@ -455,12 +456,12 @@ def test_xl_exit_enum_byte_identical_to_pre_plan_value():
     assert sa.XL_EXIT_ENUM == ("split", "shape", "roadmap", "accept_multi_session")
 
 
-def test_unknown_appetite_raises_usage_error():
+def test_unknown_appetite_raises_usage_error() -> None:
     with pytest.raises(sa.SizingAssembleError):
         sa.route(appetite="huge", estimate={"tshirt": "M"})
 
 
-def test_unknown_tshirt_raises_usage_error():
+def test_unknown_tshirt_raises_usage_error() -> None:
     # Fixture updated 2026-08-07 (sizing-ladder-xxl-notch-and-goal-setting-
     # route plan, C5): "XXL" is now a valid ladder member (C1), so it can no
     # longer serve as the junk fixture proving an unknown tshirt raises.
@@ -470,7 +471,7 @@ def test_unknown_tshirt_raises_usage_error():
         sa.route(appetite="medium", estimate={"tshirt": "XXXL"})
 
 
-def test_route_is_read_only_does_not_mutate_inputs():
+def test_route_is_read_only_does_not_mutate_inputs() -> None:
     estimate = {"tshirt": "M"}
     scout_evidence = ["docs/wiki/foo.md"]
     sa.route(appetite="medium", estimate=estimate, scout_evidence=scout_evidence)
@@ -478,19 +479,19 @@ def test_route_is_read_only_does_not_mutate_inputs():
     assert scout_evidence == ["docs/wiki/foo.md"]
 
 
-def test_cli_main_smoke(capsys):
+def test_cli_main_smoke(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = sa.main(["--appetite", "medium", "--tshirt", "M"])
     assert exit_code == sa.EXIT_OK
     out = capsys.readouterr().out
     assert '"route": "plan"' in out
 
 
-def test_cli_main_usage_error_on_missing_args(capsys):
+def test_cli_main_usage_error_on_missing_args(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = sa.main(["--appetite", "medium"])
     assert exit_code == sa.EXIT_USAGE
 
 
-def test_cli_main_express_lane_flag(capsys):
+def test_cli_main_express_lane_flag(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = sa.main(["--appetite", "small", "--tshirt", "XL", "--express-lane"])
     assert exit_code == sa.EXIT_OK
     out = capsys.readouterr().out
@@ -498,7 +499,7 @@ def test_cli_main_express_lane_flag(capsys):
     assert '"detents": []' in out
 
 
-def test_cli_main_probe_signal_flag(capsys):
+def test_cli_main_probe_signal_flag(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = sa.main(
         ["--appetite", "large", "--tshirt", "L", "--probe-signal", "collapse"]
     )
@@ -507,7 +508,7 @@ def test_cli_main_probe_signal_flag(capsys):
     assert '"tshirt": "M"' in out
 
 
-def test_cli_main_jtbd_unclear_flag(capsys):
+def test_cli_main_jtbd_unclear_flag(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = sa.main(
         ["--appetite", "large", "--tshirt", "L", "--jtbd-unclear"]
     )
@@ -516,7 +517,7 @@ def test_cli_main_jtbd_unclear_flag(capsys):
     assert '"route": "shape"' in out
 
 
-def test_cli_main_well_trodden_step_change_flag(capsys):
+def test_cli_main_well_trodden_step_change_flag(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = sa.main(
         ["--appetite", "small", "--tshirt", "S", "--well-trodden-step-change"]
     )
@@ -525,7 +526,7 @@ def test_cli_main_well_trodden_step_change_flag(capsys):
     assert '"route": "shape"' in out
 
 
-def test_cli_main_spec_dispatch_smoke(capsys):
+def test_cli_main_spec_dispatch_smoke(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = sa.main(["--appetite", "small", "--tshirt", "S", "--precedent", "shipped-before"])
     assert exit_code == sa.EXIT_OK
     out = capsys.readouterr().out
@@ -533,7 +534,7 @@ def test_cli_main_spec_dispatch_smoke(capsys):
     assert '"xl_exit": null' in out
 
 
-def test_cli_main_scout_evidence_flag(capsys):
+def test_cli_main_scout_evidence_flag(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = sa.main(
         [
             "--appetite",
@@ -559,7 +560,7 @@ def test_cli_main_scout_evidence_flag(capsys):
     "tshirt,expected_route",
     [("L", "plan"), ("XL", "pm-decision"), ("XXL", "goal-setting")],
 )
-def test_premise_unproven_fires_at_large_plan_routed(tshirt, expected_route):
+def test_premise_unproven_fires_at_large_plan_routed(tshirt, expected_route) -> None:
     decision = sa.route(
         appetite="large", estimate={"tshirt": tshirt}, premise_provenance="read"
     )
@@ -567,7 +568,7 @@ def test_premise_unproven_fires_at_large_plan_routed(tshirt, expected_route):
     assert "premise_unproven" in decision["detents"]
 
 
-def test_premise_unproven_fires_on_shape_routed_large():
+def test_premise_unproven_fires_on_shape_routed_large() -> None:
     decision = sa.route(
         appetite="large",
         estimate={"tshirt": "L"},
@@ -578,7 +579,7 @@ def test_premise_unproven_fires_on_shape_routed_large():
     assert "premise_unproven" in decision["detents"]
 
 
-def test_premise_unproven_fires_on_pm_decision_routed_large():
+def test_premise_unproven_fires_on_pm_decision_routed_large() -> None:
     decision = sa.route(
         appetite="large", estimate={"tshirt": "XL"}, premise_provenance="read"
     )
@@ -586,7 +587,7 @@ def test_premise_unproven_fires_on_pm_decision_routed_large():
     assert "premise_unproven" in decision["detents"]
 
 
-def test_premise_not_applicable_fires_at_large_plan_routed():
+def test_premise_not_applicable_fires_at_large_plan_routed() -> None:
     decision = sa.route(
         appetite="large", estimate={"tshirt": "L"}, premise_provenance="not-applicable"
     )
@@ -594,7 +595,7 @@ def test_premise_not_applicable_fires_at_large_plan_routed():
     assert "premise_not_applicable" in decision["detents"]
 
 
-def test_premise_not_applicable_fires_on_shape_routed_large():
+def test_premise_not_applicable_fires_on_shape_routed_large() -> None:
     decision = sa.route(
         appetite="large",
         estimate={"tshirt": "XL"},
@@ -605,7 +606,7 @@ def test_premise_not_applicable_fires_on_shape_routed_large():
     assert "premise_not_applicable" in decision["detents"]
 
 
-def test_premise_not_applicable_fires_on_pm_decision_routed_large():
+def test_premise_not_applicable_fires_on_pm_decision_routed_large() -> None:
     decision = sa.route(
         appetite="large", estimate={"tshirt": "XL"}, premise_provenance="not-applicable"
     )
@@ -614,7 +615,7 @@ def test_premise_not_applicable_fires_on_pm_decision_routed_large():
 
 
 @pytest.mark.parametrize("tshirt", ["XS", "S"])
-def test_premise_detents_do_not_fire_below_large(tshirt):
+def test_premise_detents_do_not_fire_below_large(tshirt) -> None:
     read_decision = sa.route(
         appetite="large", estimate={"tshirt": tshirt}, premise_provenance="read"
     )
@@ -626,7 +627,7 @@ def test_premise_detents_do_not_fire_below_large(tshirt):
 
 
 @pytest.mark.parametrize("provenance", ["executed", "unrecorded", None])
-def test_premise_detents_do_not_fire_for_non_read_non_not_applicable(provenance):
+def test_premise_detents_do_not_fire_for_non_read_non_not_applicable(provenance) -> None:
     for tshirt in ("L", "XL"):
         decision = sa.route(
             appetite="large",
@@ -637,7 +638,7 @@ def test_premise_detents_do_not_fire_for_non_read_non_not_applicable(provenance)
         assert "premise_not_applicable" not in decision["detents"]
 
 
-def test_premise_unproven_fires_at_m_plan_routed():
+def test_premise_unproven_fires_at_m_plan_routed() -> None:
     # M is in _PREMISE_DETENT_TSHIRTS but NOT in _LARGE_TSHIRTS — the gap
     # this dispatch closes (coordinator-content-repo-em was hand-reading M for this).
     decision = sa.route(
@@ -647,7 +648,7 @@ def test_premise_unproven_fires_at_m_plan_routed():
     assert "premise_unproven" in decision["detents"]
 
 
-def test_premise_not_applicable_fires_at_m_plan_routed():
+def test_premise_not_applicable_fires_at_m_plan_routed() -> None:
     decision = sa.route(
         appetite="large", estimate={"tshirt": "M"}, premise_provenance="not-applicable"
     )
@@ -655,7 +656,7 @@ def test_premise_not_applicable_fires_at_m_plan_routed():
     assert "premise_not_applicable" in decision["detents"]
 
 
-def test_m_jtbd_unclear_still_routes_to_plan_not_shape():
+def test_m_jtbd_unclear_still_routes_to_plan_not_shape() -> None:
     # Regression guard: _LARGE_TSHIRTS (which gates the shape-route
     # condition) must NOT have been widened to include "M" as a side effect
     # of closing the premise-detent gap above.
@@ -667,7 +668,7 @@ def test_m_jtbd_unclear_still_routes_to_plan_not_shape():
     assert decision["route"] == "plan"
 
 
-def test_premise_unproven_keys_on_resized_size_not_pre_resize_size():
+def test_premise_unproven_keys_on_resized_size_not_pre_resize_size() -> None:
     # An XS estimate raised to S by the probe must still NOT fire the
     # detent — keyed on the RESIZED size, never the pre-resize tshirt (memo:
     # "key it on resized SIZE, not resolved ROUTE" — this asserts the size
@@ -691,7 +692,7 @@ def test_premise_unproven_keys_on_resized_size_not_pre_resize_size():
     assert "premise_unproven" in decision2["detents"]
 
 
-def test_premise_unproven_advisory_wording_present_in_next_move():
+def test_premise_unproven_advisory_wording_present_in_next_move() -> None:
     decision = sa.route(
         appetite="large", estimate={"tshirt": "L"}, premise_provenance="read"
     )
@@ -701,7 +702,7 @@ def test_premise_unproven_advisory_wording_present_in_next_move():
     assert "does not alter the route" in decision["next_move"]
 
 
-def test_premise_not_applicable_advisory_wording_present_in_next_move():
+def test_premise_not_applicable_advisory_wording_present_in_next_move() -> None:
     decision = sa.route(
         appetite="large", estimate={"tshirt": "L"}, premise_provenance="not-applicable"
     )
@@ -710,7 +711,7 @@ def test_premise_not_applicable_advisory_wording_present_in_next_move():
     assert "never block" in decision["next_move"]
 
 
-def test_premise_provenance_never_populates_xl_exit_or_alters_route():
+def test_premise_provenance_never_populates_xl_exit_or_alters_route() -> None:
     baseline = sa.route(appetite="large", estimate={"tshirt": "XL"})
     read_decision = sa.route(
         appetite="large", estimate={"tshirt": "XL"}, premise_provenance="read"
@@ -720,12 +721,12 @@ def test_premise_provenance_never_populates_xl_exit_or_alters_route():
     assert read_decision["fork"] is None
 
 
-def test_unknown_premise_provenance_raises_usage_error():
+def test_unknown_premise_provenance_raises_usage_error() -> None:
     with pytest.raises(sa.SizingAssembleError):
         sa.route(appetite="medium", estimate={"tshirt": "M"}, premise_provenance="bogus")
 
 
-def test_unknown_premise_provenance_raises_even_on_express_lane_path():
+def test_unknown_premise_provenance_raises_even_on_express_lane_path() -> None:
     # _validate_premise_provenance fires regardless of whether express_lane
     # will end up consuming the value — same unconditional-validation
     # property as _validate_probe_signal (Finding 5).
@@ -738,7 +739,7 @@ def test_unknown_premise_provenance_raises_even_on_express_lane_path():
         )
 
 
-def test_premise_unproven_not_populated_on_express_lane_regardless_of_provenance():
+def test_premise_unproven_not_populated_on_express_lane_regardless_of_provenance() -> None:
     decision = sa.route(
         appetite="small",
         estimate={"tshirt": "XL"},
@@ -748,12 +749,12 @@ def test_premise_unproven_not_populated_on_express_lane_regardless_of_provenance
     assert decision["detents"] == []
 
 
-def test_detent_enum_widened_with_both_premise_values_together():
+def test_detent_enum_widened_with_both_premise_values_together() -> None:
     assert "premise_unproven" in sa.DETENT_ENUM
     assert "premise_not_applicable" in sa.DETENT_ENUM
 
 
-def test_cli_main_premise_provenance_flag(capsys):
+def test_cli_main_premise_provenance_flag(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = sa.main(
         ["--appetite", "large", "--tshirt", "L", "--premise-provenance", "read"]
     )
@@ -762,7 +763,7 @@ def test_cli_main_premise_provenance_flag(capsys):
     assert '"premise_unproven"' in out
 
 
-def test_cli_main_unknown_premise_provenance_usage_error(capsys):
+def test_cli_main_unknown_premise_provenance_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
     exit_code = sa.main(
         ["--appetite", "medium", "--tshirt", "M", "--premise-provenance", "bogus"]
     )
@@ -796,7 +797,7 @@ _INVARIANCE_PARAMS = [
 ]
 
 
-def test_invariance_cases_count_rises_360_to_432_with_xxl_notch():
+def test_invariance_cases_count_rises_360_to_432_with_xxl_notch() -> None:
     # AC10: _INVARIANCE_CASES derives from sa.TSHIRT_ORDER, so it
     # auto-expands the moment a notch is appended/removed. Assert the count
     # explicitly (6 tshirts * 3 appetites * 3 probe signals * 8 bool combos
@@ -812,7 +813,7 @@ def test_invariance_cases_count_rises_360_to_432_with_xxl_notch():
 )
 def test_provenance_invariance_read_vs_executed(
     tshirt, appetite, probe_signal, jtbd_unclear, well_trodden_step_change, express_lane
-):
+) -> None:
     # A `read` call must produce IDENTICAL route()/fork/xl_exit/
     # resolved_estimate/scout_evidence/narration output to an `executed`
     # call — the only permitted divergence is `detents`/`next_move`. This
@@ -862,7 +863,7 @@ def _without_premise_args(directives):
 )
 def test_provenance_invariance_not_applicable_vs_executed(
     tshirt, appetite, probe_signal, jtbd_unclear, well_trodden_step_change, express_lane
-):
+) -> None:
     kwargs = dict(
         appetite=appetite,
         estimate={"tshirt": tshirt},
@@ -892,7 +893,7 @@ def test_provenance_invariance_not_applicable_vs_executed(
 
 
 @pytest.mark.parametrize("tshirt", sa.TSHIRT_ORDER)
-def test_absent_appetite_succeeds_and_omits_appetite_detents(tshirt):
+def test_absent_appetite_succeeds_and_omits_appetite_detents(tshirt) -> None:
     # AC1, AC3.
     decision = sa.route(estimate={"tshirt": tshirt})
     assert decision["route"] in sa.ROUTE_ENUM
@@ -900,14 +901,14 @@ def test_absent_appetite_succeeds_and_omits_appetite_detents(tshirt):
     assert "appetite_exceeded" not in decision["detents"]
 
 
-def test_absent_appetite_sets_post_size_prompt_pending_at_xl():
+def test_absent_appetite_sets_post_size_prompt_pending_at_xl() -> None:
     # AC4, narrowed by the 2026-10-10 PM ruling: below XL a plan route is never asked.
     decision = sa.route(estimate={"tshirt": "XL"})
     assert "post_size_prompt_pending" in decision["detents"]
 
 
 @pytest.mark.parametrize("tshirt", ["M", "L"])
-def test_plan_route_below_xl_tells_the_em_to_fire_not_ask(tshirt):
+def test_plan_route_below_xl_tells_the_em_to_fire_not_ask(tshirt) -> None:
     decision = sa.route(estimate={"tshirt": tshirt})
     assert decision["route"] == "plan"
     assert "post_size_prompt_pending" not in decision["detents"]
@@ -917,7 +918,7 @@ def test_plan_route_below_xl_tells_the_em_to_fire_not_ask(tshirt):
 
 
 @pytest.mark.parametrize("tshirt", ["XL", "XXL"])
-def test_absent_appetite_sets_post_size_prompt_pending_at_xl_and_above(tshirt):
+def test_absent_appetite_sets_post_size_prompt_pending_at_xl_and_above(tshirt) -> None:
     # AC4, narrowed by the engine size rule: only sizes whose acceptance the PM keeps ask.
     decision = sa.route(estimate={"tshirt": tshirt})
     assert "post_size_prompt_pending" in decision["detents"]
@@ -925,7 +926,7 @@ def test_absent_appetite_sets_post_size_prompt_pending_at_xl_and_above(tshirt):
 
 @pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
 @pytest.mark.parametrize("tshirt", ["M", "L"])
-def test_absent_appetite_drops_post_size_prompt_where_engine_skips_acceptance(tshirt, mode):
+def test_absent_appetite_drops_post_size_prompt_where_engine_skips_acceptance(tshirt, mode) -> None:
     # A plan- or spec-dispatch-routed M/L goes straight to execution in every mode, so nothing asks the PM.
     decision = sa.route(estimate={"tshirt": tshirt}, interaction_mode=mode)
     assert sa.sizing_acceptance_skipped(decision["route"], tshirt)
@@ -933,7 +934,7 @@ def test_absent_appetite_drops_post_size_prompt_where_engine_skips_acceptance(ts
 
 
 @pytest.mark.parametrize("tshirt", ["XS", "S"])
-def test_absent_appetite_omits_post_size_prompt_pending_below_m(tshirt):
+def test_absent_appetite_omits_post_size_prompt_pending_below_m(tshirt) -> None:
     # AC5: no post_size_prompt_pending, and next_move equals today's text for
     # that route (i.e. the same next_move a volunteered "small" appetite
     # would produce for the same tshirt, since neither appetite_conform nor
@@ -945,7 +946,7 @@ def test_absent_appetite_omits_post_size_prompt_pending_below_m(tshirt):
     assert absent_decision["next_move"] == small_decision["next_move"]
 
 
-def test_absent_appetite_next_move_excludes_closed_fork_tokens():
+def test_absent_appetite_next_move_excludes_closed_fork_tokens() -> None:
     # AC6: the open question never contains the closed cut_to_fit/
     # raise_appetite pair.
     decision = sa.route(estimate={"tshirt": "XL"})
@@ -954,7 +955,7 @@ def test_absent_appetite_next_move_excludes_closed_fork_tokens():
     assert "raise_appetite" not in decision["next_move"]
 
 
-def test_absent_appetite_next_move_bundles_open_question_at_pm_decision():
+def test_absent_appetite_next_move_bundles_open_question_at_pm_decision() -> None:
     # AC6a, re-cut: the appetite plan specced SUPPRESSION here, on the premise
     # that the pm-decision branch offered `split` as one of its enumerated
     # exits. The XXL plan landed second and dropped `split` from that text,
@@ -973,7 +974,7 @@ def test_absent_appetite_next_move_bundles_open_question_at_pm_decision():
     assert "raise_appetite" not in decision["next_move"]
 
 
-def test_pm_decision_enumerated_exits_still_omit_split():
+def test_pm_decision_enumerated_exits_still_omit_split() -> None:
     # The XXL plan's C2 item 4 ruling stands — `split` is a vocabulary value
     # in XL_EXIT_ENUM, not a menu item in the enumerated exits. The bundled
     # open question above reintroduces splitting as an OPEN answer, which is
@@ -983,7 +984,7 @@ def test_pm_decision_enumerated_exits_still_omit_split():
     assert "split (" not in exits_text
 
 
-def test_absent_appetite_question_precedes_advisory_at_pm_decision():
+def test_absent_appetite_question_precedes_advisory_at_pm_decision() -> None:
     # The ordering rule holds on the pm-decision path too: a live PM question
     # must never sit behind a non-actionable advisory.
     decision = sa.route(estimate={"tshirt": "XL"}, premise_provenance="not-applicable")
@@ -994,7 +995,7 @@ def test_absent_appetite_question_precedes_advisory_at_pm_decision():
     ].index("ADVISORY")
 
 
-def test_absent_appetite_next_move_question_precedes_premise_advisory():
+def test_absent_appetite_next_move_question_precedes_premise_advisory() -> None:
     # AC6: ordering — when both the open question and a premise advisory
     # apply, the question comes first.
     decision = sa.route(
@@ -1007,7 +1008,7 @@ def test_absent_appetite_next_move_question_precedes_premise_advisory():
     assert question_idx < advisory_idx
 
 
-def test_absent_appetite_narration_omits_appetite_clause_and_never_says_none():
+def test_absent_appetite_narration_omits_appetite_clause_and_never_says_none() -> None:
     # AC7.
     decision = sa.route(estimate={"tshirt": "M"})
     assert "appetite=None" not in decision["narration"]
@@ -1015,7 +1016,7 @@ def test_absent_appetite_narration_omits_appetite_clause_and_never_says_none():
 
 
 @pytest.mark.parametrize("tshirt", sa.TSHIRT_ORDER)
-def test_route_invariant_across_appetite_presence(tshirt):
+def test_route_invariant_across_appetite_presence(tshirt) -> None:
     # AC2 — the invariance test DoE explicitly asked for: for every t-shirt,
     # `route` is identical across appetite absent / small / medium / large.
     routes = {
@@ -1027,13 +1028,13 @@ def test_route_invariant_across_appetite_presence(tshirt):
     assert len(routes) == 1
 
 
-def test_absent_appetite_still_validates_present_appetite_value():
+def test_absent_appetite_still_validates_present_appetite_value() -> None:
     # The optionality must not weaken validation of a present value.
     with pytest.raises(sa.SizingAssembleError):
         sa.route(appetite="huge", estimate={"tshirt": "M"})
 
 
-def test_post_size_prompt_pending_in_detent_enum():
+def test_post_size_prompt_pending_in_detent_enum() -> None:
     assert "post_size_prompt_pending" in sa.DETENT_ENUM
 
 
@@ -1055,7 +1056,7 @@ def _vendored_sizing_object_fixture():
     }
 
 
-def test_vendored_sizing_object_schema_validates_full_xxl_object():
+def test_vendored_sizing_object_schema_validates_full_xxl_object() -> None:
     from coordinator_core.frontmatter.schema_validate import validate
 
     result = validate("sizing-object", _vendored_sizing_object_fixture())
@@ -1085,7 +1086,7 @@ _DESIGN_ROUTE_OBJ = {
         },
     ],
 )
-def test_vendored_schema_admits_each_design_route_form(value):
+def test_vendored_schema_admits_each_design_route_form(value) -> None:
     from coordinator_core.frontmatter.schema_validate import validate
 
     obj = _vendored_sizing_object_fixture()
@@ -1110,7 +1111,7 @@ def test_vendored_schema_admits_each_design_route_form(value):
         "bogus",
     ],
 )
-def test_vendored_schema_refuses_malformed_design_route(value):
+def test_vendored_schema_refuses_malformed_design_route(value) -> None:
     from coordinator_core.frontmatter.schema_validate import validate
 
     obj = _vendored_sizing_object_fixture()
@@ -1118,7 +1119,7 @@ def test_vendored_schema_refuses_malformed_design_route(value):
     assert not validate("sizing-object", obj)["ok"]
 
 
-def test_vendored_sizing_object_schema_still_rejects_unknown_tshirt():
+def test_vendored_sizing_object_schema_still_rejects_unknown_tshirt() -> None:
     from coordinator_core.frontmatter.schema_validate import validate
 
     fixture = _vendored_sizing_object_fixture()
@@ -1127,7 +1128,7 @@ def test_vendored_sizing_object_schema_still_rejects_unknown_tshirt():
     assert not result["ok"]
 
 
-def test_vendored_completion_entry_schema_validates_xxl_loe_tshirt():
+def test_vendored_completion_entry_schema_validates_xxl_loe_tshirt() -> None:
     from coordinator_core.frontmatter.schema_validate import validate
 
     result = validate(
@@ -1143,8 +1144,8 @@ def test_vendored_completion_entry_schema_validates_xxl_loe_tshirt():
 
 
 def test_write_guard_validate_frontmatter_schema_deny_accepts_real_xxl_sizing_object(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # AC7 write-guard leg -- the 2026-08-06 vendoring inversion moved the
     # duty to validate against the claude-klabauter-side write path
     # (validate_frontmatter_schema_deny), not just the validator leg above.
@@ -1177,7 +1178,7 @@ def test_write_guard_validate_frontmatter_schema_deny_accepts_real_xxl_sizing_ob
         assert hso.get("permissionDecision") != "deny", hso.get("permissionDecisionReason")
 
 
-def test_sizing_object_schema_version_and_bump_class():
+def test_sizing_object_schema_version_and_bump_class() -> None:
     # AC13.
     import json
     import pathlib
@@ -1302,7 +1303,7 @@ def test_sizing_object_schema_version_and_bump_class():
     assert schema["x-bump-class"] == "nested-field-additive"
 
 
-def test_completion_entry_schema_version_and_bump_class():
+def test_completion_entry_schema_version_and_bump_class() -> None:
     # AC13.
     import json
     import pathlib
@@ -1318,7 +1319,7 @@ def test_completion_entry_schema_version_and_bump_class():
     assert schema["x-bump-class"] == "major"
 
 
-def test_vendored_schema_widened_enums_order_exact():
+def test_vendored_schema_widened_enums_order_exact() -> None:
     # AC14 -- order-exact against the agreed emitted arrays (C4's body),
     # append-at-end, no re-sorting. Not merely set-equal.
     import json
@@ -1396,7 +1397,7 @@ def test_vendored_schema_widened_enums_order_exact():
     assert tshirt_arm["enum"] == ["XS", "S", "M", "L", "XL", "XXL"]
 
 
-def test_vendored_schema_enums_stay_parity_with_the_engine_tuples():
+def test_vendored_schema_enums_stay_parity_with_the_engine_tuples() -> None:
     """The two tests directly above pin the vendored schema's `detents` and
     `route` enums against a HARDCODED literal, and this module's own tests
     never check them against `DETENT_ENUM`/`ROUTE_ENUM` at all — so a tuple
@@ -1422,23 +1423,23 @@ def test_vendored_schema_enums_stay_parity_with_the_engine_tuples():
 # --- AC12: goal_setting_pm_gated detent ------------------------------------
 
 
-def test_goal_setting_pm_gated_in_detent_enum():
+def test_goal_setting_pm_gated_in_detent_enum() -> None:
     assert "goal_setting_pm_gated" in sa.DETENT_ENUM
 
 
-def test_goal_setting_pm_gated_fires_when_route_is_goal_setting():
+def test_goal_setting_pm_gated_fires_when_route_is_goal_setting() -> None:
     decision = sa.route(estimate={"tshirt": "XXL"})
     assert decision["route"] == "goal-setting"
     assert "goal_setting_pm_gated" in decision["detents"]
 
 
-def test_goal_setting_pm_gated_never_fires_off_goal_setting_route():
+def test_goal_setting_pm_gated_never_fires_off_goal_setting_route() -> None:
     decision = sa.route(estimate={"tshirt": "M"})
     assert decision["route"] != "goal-setting"
     assert "goal_setting_pm_gated" not in decision["detents"]
 
 
-def test_post_size_prompt_tshirts_covers_every_tshirt_order_notch_from_m_up():
+def test_post_size_prompt_tshirts_covers_every_tshirt_order_notch_from_m_up() -> None:
     # AC17 — forward-compat property test, derived from TSHIRT_ORDER itself
     # rather than hard-coded to today's XS/S/M/L/XL. Reds the moment a
     # future notch (e.g. XXL) is appended above M without a matching update
@@ -1457,24 +1458,24 @@ def test_post_size_prompt_tshirts_covers_every_tshirt_order_notch_from_m_up():
 # where a property holds for both, it is asserted for both.
 
 
-def test_boundary_and_scout_kind_detents_in_detent_enum():
+def test_boundary_and_scout_kind_detents_in_detent_enum() -> None:
     assert "boundary_counted_in_notch" in sa.DETENT_ENUM
     assert "scout_evidence_mention_count" in sa.DETENT_ENUM
 
 
-def test_boundary_in_notch_yes_fires_detent():
+def test_boundary_in_notch_yes_fires_detent() -> None:
     decision = sa.route(estimate={"tshirt": "S"}, boundary_in_notch="yes")
     assert "boundary_counted_in_notch" in decision["detents"]
 
 
-def test_boundary_in_notch_no_and_absent_fire_nothing():
+def test_boundary_in_notch_no_and_absent_fire_nothing() -> None:
     for value in ("no", None):
         decision = sa.route(estimate={"tshirt": "S"}, boundary_in_notch=value)
         assert "boundary_counted_in_notch" not in decision["detents"], value
 
 
 @pytest.mark.parametrize("tshirt", ["XS", "S", "M", "L", "XL", "XXL"])
-def test_boundary_in_notch_is_not_size_gated(tshirt):
+def test_boundary_in_notch_is_not_size_gated(tshirt) -> None:
     # The deliberate asymmetry against _PREMISE_DETENT_TSHIRTS. The motivating
     # incident was an S sized XL: a detent gated at M-and-above would exempt
     # it the moment the collapse it is meant to prompt actually landed.
@@ -1482,7 +1483,7 @@ def test_boundary_in_notch_is_not_size_gated(tshirt):
     assert "boundary_counted_in_notch" in decision["detents"], tshirt
 
 
-def test_boundary_advisory_names_the_memo_vs_co_design_discriminator():
+def test_boundary_advisory_names_the_memo_vs_co_design_discriminator() -> None:
     # The engine cannot apply the discriminator (the flag has two values, not
     # three), so the advisory must HAND it over rather than render a verdict.
     decision = sa.route(estimate={"tshirt": "L"}, boundary_in_notch="yes")
@@ -1492,18 +1493,18 @@ def test_boundary_advisory_names_the_memo_vs_co_design_discriminator():
     assert "GATE, not a size" in text
 
 
-def test_scout_evidence_kind_mention_count_fires_detent():
+def test_scout_evidence_kind_mention_count_fires_detent() -> None:
     decision = sa.route(estimate={"tshirt": "M"}, scout_evidence_kind="mention-count")
     assert "scout_evidence_mention_count" in decision["detents"]
 
 
 @pytest.mark.parametrize("kind", ["change-set", "site-count", None])
-def test_scout_evidence_kind_qualified_answers_fire_nothing(kind):
+def test_scout_evidence_kind_qualified_answers_fire_nothing(kind) -> None:
     decision = sa.route(estimate={"tshirt": "M"}, scout_evidence_kind=kind)
     assert "scout_evidence_mention_count" not in decision["detents"]
 
 
-def test_scout_evidence_kind_advisory_names_the_compat_shim():
+def test_scout_evidence_kind_advisory_names_the_compat_shim() -> None:
     decision = sa.route(estimate={"tshirt": "M"}, scout_evidence_kind="mention-count")
     text = decision["next_move"]
     assert "ADVISORY (warn, never block; does not alter the route above)" in text
@@ -1511,7 +1512,7 @@ def test_scout_evidence_kind_advisory_names_the_compat_shim():
     assert "back-compat shim" in text
 
 
-def test_scout_evidence_kind_is_independent_of_scout_evidence_contents():
+def test_scout_evidence_kind_is_independent_of_scout_evidence_contents() -> None:
     # The negative-spec leg: the KIND is never inferred from the list. A long
     # list with kind=change-set stays silent; an EMPTY list with
     # kind=mention-count still fires. Neither length nor contents is read.
@@ -1531,7 +1532,7 @@ def test_scout_evidence_kind_is_independent_of_scout_evidence_contents():
 
 
 @pytest.mark.parametrize("tshirt", ["XS", "S", "M", "L", "XL", "XXL"])
-def test_neither_new_detent_alters_route_or_xl_exit(tshirt):
+def test_neither_new_detent_alters_route_or_xl_exit(tshirt) -> None:
     baseline = sa.route(estimate={"tshirt": tshirt}, scout_evidence=["e"])
     flagged = sa.route(
         estimate={"tshirt": tshirt},
@@ -1545,12 +1546,12 @@ def test_neither_new_detent_alters_route_or_xl_exit(tshirt):
     assert flagged["resolved_estimate"] == baseline["resolved_estimate"], tshirt
 
 
-def test_unknown_boundary_in_notch_raises_usage_error():
+def test_unknown_boundary_in_notch_raises_usage_error() -> None:
     with pytest.raises(sa.SizingAssembleError):
         sa.route(estimate={"tshirt": "M"}, boundary_in_notch="maybe")
 
 
-def test_unknown_scout_evidence_kind_raises_usage_error():
+def test_unknown_scout_evidence_kind_raises_usage_error() -> None:
     with pytest.raises(sa.SizingAssembleError):
         sa.route(estimate={"tshirt": "M"}, scout_evidence_kind="grep-count")
 
@@ -1562,7 +1563,7 @@ def test_unknown_scout_evidence_kind_raises_usage_error():
         {"scout_evidence_kind": "grep-count"},
     ],
 )
-def test_new_validators_fire_even_on_express_lane_path(kwargs):
+def test_new_validators_fire_even_on_express_lane_path(kwargs) -> None:
     # Same unconditional-validation property as _validate_probe_signal /
     # _validate_premise_provenance (Finding 5): validation runs BEFORE the
     # express_lane short-circuit, not only on paths reaching detent
@@ -1571,7 +1572,7 @@ def test_new_validators_fire_even_on_express_lane_path(kwargs):
         sa.route(estimate={"tshirt": "M"}, express_lane=True, **kwargs)
 
 
-def test_new_detents_never_populated_on_express_lane():
+def test_new_detents_never_populated_on_express_lane() -> None:
     decision = sa.route(
         estimate={"tshirt": "L"},
         express_lane=True,
@@ -1582,7 +1583,7 @@ def test_new_detents_never_populated_on_express_lane():
     assert decision["route"] == "dispatch"
 
 
-def test_new_advisories_follow_the_premise_advisory_in_next_move():
+def test_new_advisories_follow_the_premise_advisory_in_next_move() -> None:
     # Append-not-reorder discipline: the ordering contract is route text ->
     # appetite question -> xxl_unprobed -> premise -> boundary -> scout-kind.
     decision = sa.route(
@@ -1598,7 +1599,7 @@ def test_new_advisories_follow_the_premise_advisory_in_next_move():
     assert premise_at < boundary_at < scout_at
 
 
-def test_cli_main_boundary_and_scout_kind_flags(capsys):
+def test_cli_main_boundary_and_scout_kind_flags(capsys: pytest.CaptureFixture[str]) -> None:
     rc = sa.main(
         [
             "--tshirt",
@@ -1622,20 +1623,20 @@ def test_cli_main_boundary_and_scout_kind_flags(capsys):
         ["--tshirt", "M", "--scout-evidence-kind", "grep-count"],
     ],
 )
-def test_cli_main_unknown_new_flag_values_usage_error(argv, capsys):
+def test_cli_main_unknown_new_flag_values_usage_error(argv, capsys: pytest.CaptureFixture[str]) -> None:
     rc = sa.main(argv)
     capsys.readouterr()
     assert rc == sa.EXIT_USAGE
 
 
-def test_usage_string_advertises_both_new_flags(capsys):
+def test_usage_string_advertises_both_new_flags(capsys: pytest.CaptureFixture[str]) -> None:
     sa.main([])
     err = capsys.readouterr().err
     assert "--boundary-in-notch yes|no" in err
     assert "--scout-evidence-kind mention-count|change-set|site-count" in err
 
 
-def test_vendored_schema_validates_object_carrying_both_new_detents():
+def test_vendored_schema_validates_object_carrying_both_new_detents() -> None:
     from coordinator_core.frontmatter.schema_validate import validate
 
     fixture = _vendored_sizing_object_fixture()
@@ -1653,7 +1654,7 @@ def test_vendored_schema_validates_object_carrying_both_new_detents():
 # an executor-run verification step reported in the run-report, not a test.
 
 
-def test_pejorative_appetite_sense_preserved_in_phantom_sweep_test():
+def test_pejorative_appetite_sense_preserved_in_phantom_sweep_test() -> None:
     import pathlib
 
     text = pathlib.Path(
@@ -1662,7 +1663,7 @@ def test_pejorative_appetite_sense_preserved_in_phantom_sweep_test():
     assert "concrete, non-appetite reason" in text
 
 
-def test_pejorative_appetite_sense_preserved_in_plan_coverage_check_template():
+def test_pejorative_appetite_sense_preserved_in_plan_coverage_check_template() -> None:
     import pathlib
 
     text = pathlib.Path(
@@ -1671,7 +1672,7 @@ def test_pejorative_appetite_sense_preserved_in_plan_coverage_check_template():
     assert "### Weak OOS / hedges (appetite-based deferrals)" in text
 
 
-def test_pejorative_appetite_sense_preserved_in_coordinator_doc_new():
+def test_pejorative_appetite_sense_preserved_in_coordinator_doc_new() -> None:
     import pathlib
 
     text = pathlib.Path("coordinator/bin/coordinator-doc-new.py").read_text(
@@ -1691,7 +1692,7 @@ def test_pejorative_appetite_sense_preserved_in_coordinator_doc_new():
 # ---------------------------------------------------------------------------
 
 
-def test_substrate_condition_raise_is_not_applied():
+def test_substrate_condition_raise_is_not_applied() -> None:
     """The incident's exact mechanism: a raise justified by findings about the
     area, not the ask, must not move the notch."""
     out = sa.route(
@@ -1706,7 +1707,7 @@ def test_substrate_condition_raise_is_not_applied():
     assert "route_boundary_crossed" not in out["detents"]
 
 
-def test_ask_scope_raise_still_applies():
+def test_ask_scope_raise_still_applies() -> None:
     """The suppression must not break the legitimate raise — an ask that
     genuinely grew still moves the notch (Finding 2's under-read net)."""
     out = sa.route(
@@ -1719,14 +1720,14 @@ def test_ask_scope_raise_still_applies():
     assert out["route"] == "pm-decision"
 
 
-def test_raise_without_a_declared_basis_is_unchanged():
+def test_raise_without_a_declared_basis_is_unchanged() -> None:
     """Back-compat: every existing caller omits the flag and must be unaffected."""
     out = sa.route(estimate={"tshirt": "L"}, probe_signal="raise")
     assert out["resolved_estimate"]["tshirt"] == "XL"
     assert "probe_raise_on_substrate_condition" not in out["detents"]
 
 
-def test_collapse_is_never_suppressed_by_the_basis_flag():
+def test_collapse_is_never_suppressed_by_the_basis_flag() -> None:
     """The basis flag qualifies a RAISE only — a collapse is the direction with
     a downstream net and must always land."""
     out = sa.route(
@@ -1738,14 +1739,14 @@ def test_collapse_is_never_suppressed_by_the_basis_flag():
     assert "probe_raise_on_substrate_condition" not in out["detents"]
 
 
-def test_intent_is_echoed_so_the_ask_and_the_size_share_a_frame():
+def test_intent_is_echoed_so_the_ask_and_the_size_share_a_frame() -> None:
     out = sa.route(
         estimate={"tshirt": "XL"}, intent="commit it and push it"
     )
     assert out["intent"] == "commit it and push it"
 
 
-def test_intent_echoed_on_the_express_lane_too():
+def test_intent_echoed_on_the_express_lane_too() -> None:
     out = sa.route(
         estimate={"tshirt": "XS"}, intent="commit it", express_lane=True
     )
@@ -1753,7 +1754,7 @@ def test_intent_echoed_on_the_express_lane_too():
     assert out["detents"] == []
 
 
-def test_em_elaborated_intent_fires_at_every_size():
+def test_em_elaborated_intent_fires_at_every_size() -> None:
     """Not size-gated, for boundary_counted_in_notch's reason: the size is what
     an elaborated intent is suspected of having inflated."""
     for tshirt in ("XS", "S", "M", "L", "XL", "XXL"):
@@ -1764,14 +1765,14 @@ def test_em_elaborated_intent_fires_at_every_size():
         assert "verbatim" in out["next_move"]
 
 
-def test_pm_verbatim_intent_fires_nothing():
+def test_pm_verbatim_intent_fires_nothing() -> None:
     out = sa.route(
         estimate={"tshirt": "XL"}, intent_source="pm-verbatim"
     )
     assert "intent_em_elaborated" not in out["detents"]
 
 
-def test_shipped_before_precedent_fires_and_names_the_discharge():
+def test_shipped_before_precedent_fires_and_names_the_discharge() -> None:
     out = sa.route(
         estimate={"tshirt": "L"}, precedent="shipped-before"
     )
@@ -1781,12 +1782,12 @@ def test_shipped_before_precedent_fires_and_names_the_discharge():
     assert out["route"] == "plan"
 
 
-def test_novel_precedent_fires_nothing():
+def test_novel_precedent_fires_nothing() -> None:
     out = sa.route(estimate={"tshirt": "L"}, precedent="novel")
     assert "precedent_shipped_before" not in out["detents"]
 
 
-def test_the_incident_replayed_end_to_end():
+def test_the_incident_replayed_end_to_end() -> None:
     """The exact call made on 2026-08-11, plus the three new answers, must no
     longer produce an XL."""
     out = sa.route(
@@ -1812,7 +1813,7 @@ def test_the_incident_replayed_end_to_end():
         assert expected in out["detents"]
 
 
-def test_new_flags_validate_unconditionally_even_on_express_lane():
+def test_new_flags_validate_unconditionally_even_on_express_lane() -> None:
     """Same unconditional-validation property every sibling validator has
     (Finding 5, code-reviewer 2026-07-24)."""
     for kwargs in (
@@ -1826,7 +1827,7 @@ def test_new_flags_validate_unconditionally_even_on_express_lane():
             )
 
 
-def test_new_detents_are_declared_in_the_enum():
+def test_new_detents_are_declared_in_the_enum() -> None:
     for name in (
         "intent_em_elaborated",
         "precedent_shipped_before",
@@ -1844,7 +1845,7 @@ def test_new_detents_are_declared_in_the_enum():
 # ---------------------------------------------------------------------------
 
 
-def test_ask_scope_raise_leaves_a_queryable_mark():
+def test_ask_scope_raise_leaves_a_queryable_mark() -> None:
     out = sa.route(
         estimate={"tshirt": "L"}, probe_signal="raise", probe_raise_basis="ask-scope"
     )
@@ -1854,7 +1855,7 @@ def test_ask_scope_raise_leaves_a_queryable_mark():
     assert "ASK-SCOPE" in out["next_move"]
 
 
-def test_both_basis_answers_now_leave_a_mark():
+def test_both_basis_answers_now_leave_a_mark() -> None:
     """The gradient is closed: neither answer is the silent one."""
     marks = set()
     for basis in ("ask-scope", "substrate-condition"):
@@ -1874,7 +1875,7 @@ def test_both_basis_answers_now_leave_a_mark():
     assert len(marks) == 2, "each answer must leave its OWN distinct mark"
 
 
-def test_ask_scope_mark_needs_an_actual_raise():
+def test_ask_scope_mark_needs_an_actual_raise() -> None:
     """The detent describes a raise's basis — with no raise there is nothing to
     describe, so a stray flag must not manufacture one."""
     for signal in (None, "collapse"):
@@ -1886,7 +1887,7 @@ def test_ask_scope_mark_needs_an_actual_raise():
         assert "probe_raise_ask_scope_asserted" not in out["detents"], signal
 
 
-def test_ask_scope_mark_is_advisory_only():
+def test_ask_scope_mark_is_advisory_only() -> None:
     """Same advisory contract as its siblings — never touches route/xl_exit."""
     marked = sa.route(
         estimate={"tshirt": "S"}, probe_signal="raise", probe_raise_basis="ask-scope"
@@ -1897,7 +1898,7 @@ def test_ask_scope_mark_is_advisory_only():
     assert marked["resolved_estimate"] == unmarked["resolved_estimate"]
 
 
-def test_ask_scope_detent_is_declared_in_the_enum():
+def test_ask_scope_detent_is_declared_in_the_enum() -> None:
     assert "probe_raise_ask_scope_asserted" in sa.DETENT_ENUM
 
 
@@ -1909,7 +1910,7 @@ def test_ask_scope_detent_is_declared_in_the_enum():
 # ---------------------------------------------------------------------------
 
 
-def test_breadth_raise_is_not_applied():
+def test_breadth_raise_is_not_applied() -> None:
     """A raise justified only by site count must not move the notch, and
     fires its own detent rather than the substrate-condition one."""
     out = sa.route(
@@ -1925,7 +1926,7 @@ def test_breadth_raise_is_not_applied():
     assert "route_boundary_crossed" not in out["detents"]
 
 
-def test_breadth_and_substrate_condition_detents_are_disjoint():
+def test_breadth_and_substrate_condition_detents_are_disjoint() -> None:
     """Each suppressing basis fires exactly its own detent, never the other's."""
     for basis, expected, other in (
         ("breadth", "probe_raise_on_breadth", "probe_raise_on_substrate_condition"),
@@ -1938,7 +1939,7 @@ def test_breadth_and_substrate_condition_detents_are_disjoint():
         assert other not in out["detents"], basis
 
 
-def test_breadth_basis_validates():
+def test_breadth_basis_validates() -> None:
     """`breadth` is accepted by `_validate_probe_raise_basis`; an unknown
     basis still raises, naming all three values."""
     sa._validate_probe_raise_basis("breadth")  # no raise
@@ -1949,7 +1950,7 @@ def test_breadth_basis_validates():
     assert "breadth" in str(exc_info.value)
 
 
-def test_breadth_collapse_and_bare_raise_paths_unchanged():
+def test_breadth_collapse_and_bare_raise_paths_unchanged() -> None:
     """`collapse` and a bare `raise` (no basis) are untouched by the breadth
     arm's addition."""
     collapsed = sa.route(
@@ -1965,7 +1966,7 @@ def test_breadth_collapse_and_bare_raise_paths_unchanged():
     assert "probe_raise_on_breadth" not in bare["detents"]
 
 
-def test_breadth_detent_is_declared_in_the_enum():
+def test_breadth_detent_is_declared_in_the_enum() -> None:
     assert "probe_raise_on_breadth" in sa.DETENT_ENUM
 
 
@@ -1979,7 +1980,7 @@ def test_breadth_detent_is_declared_in_the_enum():
 # ---------------------------------------------------------------------------
 
 
-def test_every_route_in_the_enum_has_a_stage_chain():
+def test_every_route_in_the_enum_has_a_stage_chain() -> None:
     """Totality is the point. A route added to ROUTE_ENUM without a chain would
     emit a recorder that silently stops early, so the table asserts at import —
     this test is the statement of that contract, not a second implementation."""
@@ -1988,7 +1989,7 @@ def test_every_route_in_the_enum_has_a_stage_chain():
         assert chain["rows"], route_name
 
 
-def test_terminal_is_a_function_of_size_not_route():
+def test_terminal_is_a_function_of_size_not_route() -> None:
     """XS/S close at quick-wrap, M and above at /workstream-complete — the one
     rule most likely to be got wrong by hand, because the route is the salient
     field and the size is not."""
@@ -1998,13 +1999,13 @@ def test_terminal_is_a_function_of_size_not_route():
     assert sa.stages("dispatch", "M")["terminal"] == "/workstream-complete"
 
 
-def test_a_lobby_owned_chain_ends_on_its_terminal():
+def test_a_lobby_owned_chain_ends_on_its_terminal() -> None:
     chain = sa.stages("spec-dispatch", "S")
     assert chain["owned_by"] == "lobby"
     assert chain["rows"][-1] == chain["terminal"] == "quick-wrap"
 
 
-def test_a_room_owned_route_records_an_entry_row_and_stops():
+def test_a_room_owned_route_records_an_entry_row_and_stops() -> None:
     """shape/roadmap/goal-setting/pm-decision: the room owns everything after
     the entry, so a chain guessed here would be stages nobody agreed to."""
     for route_name in ("shape", "roadmap", "goal-setting", "pm-decision"):
@@ -2014,7 +2015,7 @@ def test_a_room_owned_route_records_an_entry_row_and_stops():
         assert chain["owned_by"] == route_name
 
 
-def test_route_returns_the_chain_for_the_RESIZED_tshirt():
+def test_route_returns_the_chain_for_the_RESIZED_tshirt() -> None:
     """A probe that moved the notch moves the terminal with it — reading the
     chain off the caller's original t-shirt is the bug this pins."""
     collapsed = sa.route(estimate={"tshirt": "M"}, probe_signal="collapse")
@@ -2023,14 +2024,14 @@ def test_route_returns_the_chain_for_the_RESIZED_tshirt():
     assert collapsed["stages"]["terminal"] == "quick-wrap"
 
 
-def test_express_lane_still_carries_a_chain():
+def test_express_lane_still_carries_a_chain() -> None:
     """D3 persists no sizing object on this arm, but the ask still runs work and
     still closes. An absent field here would make absence mean two things."""
     result = sa.route(estimate={"tshirt": "XS"}, express_lane=True)
     assert result["stages"]["rows"] == ["the work", "quick-wrap"]
 
 
-def test_stages_mutates_nothing_and_is_stable_across_calls():
+def test_stages_mutates_nothing_and_is_stable_across_calls() -> None:
     first = sa.stages("plan", "M")
     first["rows"].append("tampered")
     second = sa.stages("plan", "M")
@@ -2055,7 +2056,7 @@ def _entry(entry_id):
     raise AssertionError(f"no registry entry named {entry_id!r}")
 
 
-def test_d_lobby_lane_is_served():
+def test_d_lobby_lane_is_served() -> None:
     result = sa.dispositions("plan", "M")
     served_ids = [e["id"] for e in result["served"]]
     assert "d-lobby-lane" in served_ids
@@ -2069,7 +2070,7 @@ def test_d_lobby_lane_is_served():
     assert entry["basis"].keys() == set(_entry("d-lobby-lane")["inputs"])
 
 
-def test_d_xl_exit_declines():
+def test_d_xl_exit_declines() -> None:
     # Call returns normally — a no-arm entry is a first-class ordinary
     # return, never an exception.
     result = sa.dispositions("pm-decision", "XL")
@@ -2083,7 +2084,7 @@ def test_d_xl_exit_declines():
     assert entry["basis"]
 
 
-def test_room_owned_routes_serve_the_single_entry_row():
+def test_room_owned_routes_serve_the_single_entry_row() -> None:
     room_owned_routes = ("shape", "roadmap", "goal-setting", "pm-decision")
     for route_name in room_owned_routes:
         chain = sa.stages(route_name, "M")
@@ -2106,7 +2107,7 @@ def test_room_owned_routes_serve_the_single_entry_row():
         assert light_arm == heavy_arm, route_name
 
 
-def test_dispositions_recompute_with_no_flag_or_reset():
+def test_dispositions_recompute_with_no_flag_or_reset() -> None:
     first = sa.dispositions("plan", "S")
     second = sa.dispositions("plan", "XL")
     first_arm = next(e for e in first["served"] if e["id"] == "d-lobby-lane")["arm"]
@@ -2118,14 +2119,14 @@ def test_dispositions_recompute_with_no_flag_or_reset():
         assert chain["terminal"] in arm
 
 
-def test_express_lane_return_carries_dispositions():
+def test_express_lane_return_carries_dispositions() -> None:
     result = sa.route(estimate={"tshirt": "XS"}, express_lane=True)
     assert "dispositions" in result
     served_ids = [e["id"] for e in result["dispositions"]["served"]]
     assert "d-lobby-lane" in served_ids
 
 
-def test_disposition_registry_totality_rejects_neither_and_both():
+def test_disposition_registry_totality_rejects_neither_and_both() -> None:
     # `_assert_disposition_registry_total` takes no argument and reads the
     # module global, so monkeypatching a copy would be invisible to it — the
     # attribute itself must be replaced.
@@ -2162,21 +2163,21 @@ def test_disposition_registry_totality_rejects_neither_and_both():
         ("M", {"jtbd_unclear": True}, "plan"),
     ],
 )
-def test_m_routes_plan_with_no_first_person_arm(tshirt, kwargs, expected):
+def test_m_routes_plan_with_no_first_person_arm(tshirt, kwargs, expected) -> None:
     decision = sa.route(estimate={"tshirt": tshirt}, **kwargs)
     assert decision["route"] == expected
 
 
-def test_repo_span_flag_is_unrecognised():
+def test_repo_span_flag_is_unrecognised() -> None:
     exit_code = sa.main(["--tshirt", "M", "--repo-span", "single"])
     assert exit_code == sa.EXIT_USAGE
 
 
-def test_route_enum_has_no_first_person():
+def test_route_enum_has_no_first_person() -> None:
     assert "first-person" not in sa.ROUTE_ENUM
 
 
-def test_ask_scope_raise_names_the_raise_line():
+def test_ask_scope_raise_names_the_raise_line() -> None:
     out = sa.route(
         estimate={"tshirt": "L"},
         probe_signal="raise",
@@ -2186,7 +2187,7 @@ def test_ask_scope_raise_names_the_raise_line():
     assert out["probe_raise"] in out["narration"]
 
 
-def test_no_raise_line_without_a_resize():
+def test_no_raise_line_without_a_resize() -> None:
     assert sa.route(estimate={"tshirt": "L"})["probe_raise"] is None
 
 
@@ -2194,7 +2195,7 @@ def test_no_raise_line_without_a_resize():
 
 
 @pytest.mark.parametrize("appetite, tshirt", [("small", "XS"), ("small", "S"), ("medium", "M")])
-def test_fire_routes_print_the_one_workflow_fire(appetite, tshirt):
+def test_fire_routes_print_the_one_workflow_fire(appetite, tshirt) -> None:
     from coordinator_core import warp_fire
 
     decision = sa.route(appetite=appetite, estimate={"tshirt": tshirt})
@@ -2203,11 +2204,11 @@ def test_fire_routes_print_the_one_workflow_fire(appetite, tshirt):
     assert decision["next_move"].startswith(warp_fire.fire_step(sa._SCAFFOLDED_SIZING))
 
 
-def test_room_routes_print_no_fire():
+def test_room_routes_print_no_fire() -> None:
     assert sa.route(appetite="large", estimate={"tshirt": "XL"})["fire"] is None
 
 
-def test_express_lane_fires_the_ask_not_a_hand_dispatch():
+def test_express_lane_fires_the_ask_not_a_hand_dispatch() -> None:
     decision = sa.route(appetite="small", estimate={"tshirt": "XS"}, express_lane=True)
     from coordinator_core import warp_fire
 
@@ -2215,7 +2216,7 @@ def test_express_lane_fires_the_ask_not_a_hand_dispatch():
     assert "Dispatch directly" not in decision["next_move"]
 
 
-def test_scaffold_directive_out_is_month_sharded():
+def test_scaffold_directive_out_is_month_sharded() -> None:
     from datetime import date
 
     today = date.today().isoformat()

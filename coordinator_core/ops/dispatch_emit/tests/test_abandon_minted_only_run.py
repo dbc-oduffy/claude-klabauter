@@ -5,11 +5,12 @@ from __future__ import annotations
 import json
 
 from coordinator_core.ops.dispatch_emit import halted_run, op, run_token
+from pathlib import Path
 
 RUN = "ask-20261101T032019-6ac67b"
 
 
-def _run(tmp_path, stage="minted", marker=None):
+def _run(tmp_path, stage: str | None = "minted", marker=None):
     (tmp_path / ".git").mkdir(exist_ok=True)
     rdir = tmp_path / "state" / "warp" / RUN
     rdir.mkdir(parents=True)
@@ -28,7 +29,7 @@ def _marker(rdir):
     return json.loads((rdir / halted_run.HALTED_FILE).read_text(encoding="utf-8"))
 
 
-def test_minted_only_run_without_token_is_closed(tmp_path):
+def test_minted_only_run_without_token_is_closed(tmp_path: Path) -> None:
     rdir = _run(tmp_path)
     out = _abandon(tmp_path)
     assert out["abandoned"] is True
@@ -37,13 +38,13 @@ def test_minted_only_run_without_token_is_closed(tmp_path):
     assert not halted_run._is_shell(rdir)
 
 
-def test_run_without_stage_file_is_closed(tmp_path):
+def test_run_without_stage_file_is_closed(tmp_path: Path) -> None:
     rdir = _run(tmp_path, stage=None)
     assert _abandon(tmp_path)["abandoned"] is True
     assert (rdir / halted_run.HALTED_FILE).exists()
 
 
-def test_live_token_run_is_untouched(tmp_path):
+def test_live_token_run_is_untouched(tmp_path: Path) -> None:
     rdir = _run(tmp_path)
     run_token.mint(tmp_path, RUN, "scratch/w.mjs", session_id="other", sizing_rel="state/sizings/s.yaml")
     assert _abandon(tmp_path)["abandoned"] is False
@@ -51,25 +52,25 @@ def test_live_token_run_is_untouched(tmp_path):
     assert run_token.is_live(tmp_path, RUN)
 
 
-def test_launched_workflow_run_is_untouched(tmp_path):
+def test_launched_workflow_run_is_untouched(tmp_path: Path) -> None:
     rdir = _run(tmp_path, stage="staged")
     assert _abandon(tmp_path)["abandoned"] is False
     assert not (rdir / halted_run.HALTED_FILE).exists()
 
 
-def test_halted_run_is_untouched(tmp_path):
+def test_halted_run_is_untouched(tmp_path: Path) -> None:
     rdir = _run(tmp_path, marker=halted_run.STATUS_HALTED)
     assert _abandon(tmp_path)["abandoned"] is False
     assert _marker(rdir)["status"] == halted_run.STATUS_HALTED
 
 
-def test_missing_run_dir_writes_nothing(tmp_path):
+def test_missing_run_dir_writes_nothing(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     assert _abandon(tmp_path)["abandoned"] is False
     assert not (tmp_path / "state" / "warp" / RUN).exists()
 
 
-def test_closed_run_is_skipped_by_shell_detection(tmp_path):
+def test_closed_run_is_skipped_by_shell_detection(tmp_path: Path) -> None:
     rdir = _run(tmp_path)
     _abandon(tmp_path)
     assert halted_run._is_shell(rdir) is False

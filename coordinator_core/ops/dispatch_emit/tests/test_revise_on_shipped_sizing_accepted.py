@@ -7,6 +7,7 @@ import yaml
 
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 RUN = "ask-20261028T000001-abc125"
 REL = "state/sizings/2026-10-28-revise-shipped.yaml"
@@ -23,7 +24,7 @@ def _sizing():
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / REL).write_text(yaml.safe_dump(_sizing(), sort_keys=False), encoding="utf-8")
@@ -32,7 +33,7 @@ def repo(tmp_path):
     return tmp_path
 
 
-def _ship(repo, rows_edit):
+def _ship(repo, rows_edit) -> None:
     rl._mutate_register(repo, REL, rows_edit)
     path = repo / REL
     path.write_text(path.read_text(encoding="utf-8").replace("status: sized", "status: shipped", 1), encoding="utf-8")
@@ -46,7 +47,7 @@ def _doc(repo):
     return yaml.safe_load((repo / REL).read_text(encoding="utf-8"))
 
 
-def test_revise_on_a_shipped_sizing_is_accepted_and_reopens_it(repo):
+def test_revise_on_a_shipped_sizing_is_accepted_and_reopens_it(repo) -> None:
     _ship(repo, _met)
     out = rl._handler({"run_id": RUN, "verbatim": WORDS}, repo_root=repo)
     assert out.get("ok"), out
@@ -56,13 +57,13 @@ def test_revise_on_a_shipped_sizing_is_accepted_and_reopens_it(repo):
     assert out["item"] == doc["requirement_register"]["rows"][-1]["id"]
 
 
-def test_a_shipped_sizing_whose_rows_all_hold_stays_shipped(repo):
+def test_a_shipped_sizing_whose_rows_all_hold_stays_shipped(repo) -> None:
     _ship(repo, _met)
     rl._mutate_register(repo, REL, lambda rows: [dict(r) for r in rows] + [])
     assert _doc(repo)["status"] == "shipped"
 
 
-def test_reopening_does_not_excuse_an_otherwise_invalid_row(repo):
+def test_reopening_does_not_excuse_an_otherwise_invalid_row(repo) -> None:
     _ship(repo, _met)
     before = (repo / REL).read_bytes()
     with pytest.raises(rl.LedgerRefused):
@@ -70,7 +71,7 @@ def test_reopening_does_not_excuse_an_otherwise_invalid_row(repo):
     assert (repo / REL).read_bytes() == before
 
 
-def test_every_row_the_engine_writes_validates_on_a_shipped_sizing(repo):
+def test_every_row_the_engine_writes_validates_on_a_shipped_sizing(repo) -> None:
     _ship(repo, _met)
     rl.revise(repo, RUN, verbatim=WORDS)
     rows = rr.read_register((repo / REL).read_text(encoding="utf-8")).rows

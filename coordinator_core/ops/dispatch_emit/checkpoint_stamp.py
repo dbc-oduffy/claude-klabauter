@@ -115,6 +115,40 @@ def checkpoint_withheld(message: str) -> frozenset:
     return frozenset(_forward(m.group("v")) for m in _CHECKPOINT_WITHHELD_LINE.finditer(message or ""))
 
 
+CHECKPOINT_WITHHELD_ROWS_TRAILER = "Checkpoint-Withheld-Rows"
+
+
+def checkpoint_message_naming_carried_rows(worktree_root: Path, message: str, withheld) -> str:
+    """``message`` with its subject naming only the rows that declare no ``withheld`` path.
+
+    The dropped rows go in a ``Checkpoint-Withheld-Rows:`` line under the subject. Unchanged when
+    nothing is withheld, the message is no checkpoint's, no named row declares a withheld path, or
+    the plan is unreadable. When every named row is dropped the subject's id list reads ``(none)``. No git spawn.
+    """
+    held = frozenset(_forward(p) for p in withheld or () if isinstance(p, str) and p.strip())
+    cp = parse_checkpoint(message) if held else None
+    if cp is None:
+        return message
+    from coordinator_core.ops.dispatch_emit.worktree_snapshot import read_rel
+
+    plan_text = read_rel(Path(worktree_root), cp.plan_rel)
+    dropped = _rows_declaring(plan_text, set(cp.row_ids), held) if plan_text else set()
+    if not dropped:
+        return message
+    subject, _, rest = message.partition("\n")
+    subject = subject.strip()
+    start = CHECKPOINT_SUBJECT.match(subject).start("ids")
+    named = _ids_in_order(subject[start:])
+    kept = [i for i in named if i not in dropped]
+    head = re.sub(r"\d+ rows? — $", f"{len(kept)} {'row' if len(kept) == 1 else 'rows'} — ", subject[:start])
+    trailer = f"{CHECKPOINT_WITHHELD_ROWS_TRAILER}: {', '.join(i for i in named if i in dropped)}"
+    return f"{head}{', '.join(kept) or '(none)'}\n{trailer}\n{rest}"
+
+
+def _ids_in_order(text: str) -> list:
+    return list(dict.fromkeys(i for i in re.split(r"[,\s]+", text) if i))
+
+
 def _spine_rows(plan_text: str, row_ids: set) -> dict:
     """``{row id: declared writes (forward-slash)}`` for the ``row_ids`` found in the plan spine."""
     from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
@@ -213,7 +247,7 @@ def terminal_plan_closures(message: str, changed_paths) -> frozenset:
 
 
 def _ids(text: str) -> frozenset:
-    return frozenset(i.strip() for i in re.split(r"[,\s]+", text) if i.strip())
+    return frozenset(i.strip() for i in re.split(r"[,\s]+", text) if i.strip() and i.strip() != "(none)")
 
 
 def parse_checkpoint(message: str) -> Optional[Checkpoint]:

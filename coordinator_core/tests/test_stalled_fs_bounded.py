@@ -12,6 +12,7 @@ from coordinator_core import locked_write
 from coordinator_core.bash_guards import _advisory_dedupe
 from coordinator_core.git import git_objects
 from coordinator_core.ops.fleet import memo_send
+from pathlib import Path
 
 _BUDGET = 3.0
 
@@ -32,7 +33,7 @@ def _blocking(release, real):
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds how long a blocked mkdir holds mark_advised, a wait CPU time cannot see")
-def test_mark_advised_returns_at_deadline_when_mkdir_blocks(tmp_path, monkeypatch, release):
+def test_mark_advised_returns_at_deadline_when_mkdir_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, release) -> None:
     monkeypatch.setattr(_advisory_dedupe, "_FS_DEADLINE_SECS", 0.1)
     real = type(tmp_path).mkdir
     monkeypatch.setattr(type(tmp_path), "mkdir", _blocking(release, real))
@@ -42,7 +43,7 @@ def test_mark_advised_returns_at_deadline_when_mkdir_blocks(tmp_path, monkeypatc
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds how long a blocked stat holds already_advised, a wait CPU time cannot see")
-def test_already_advised_fails_open_when_stat_blocks(tmp_path, monkeypatch, release):
+def test_already_advised_fails_open_when_stat_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, release) -> None:
     monkeypatch.setattr(_advisory_dedupe, "_FS_DEADLINE_SECS", 0.1)
     real = type(tmp_path).exists
     monkeypatch.setattr(type(tmp_path), "exists", _blocking(release, real))
@@ -51,13 +52,13 @@ def test_already_advised_fails_open_when_stat_blocks(tmp_path, monkeypatch, rele
     assert time.monotonic() - t0 < _BUDGET
 
 
-def test_mark_advised_still_writes_when_fs_is_healthy(tmp_path):
+def test_mark_advised_still_writes_when_fs_is_healthy(tmp_path: Path) -> None:
     _advisory_dedupe.mark_advised(tmp_path, "sess-c", "guard__abc")
     assert _advisory_dedupe.already_advised(tmp_path, "sess-c", "guard__abc") is True
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds how long a blocked open holds the inbox create, a wait CPU time cannot see")
-def test_inbox_create_refuses_with_oserror_when_open_blocks(tmp_path, monkeypatch, release):
+def test_inbox_create_refuses_with_oserror_when_open_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, release) -> None:
     monkeypatch.setattr(memo_send, "_INBOX_CREATE_DEADLINE_SECS", 0.1)
     monkeypatch.setattr(os, "open", _blocking(release, os.open))
     target = tmp_path / "inbox" / "m.md"
@@ -68,7 +69,7 @@ def test_inbox_create_refuses_with_oserror_when_open_blocks(tmp_path, monkeypatc
     assert time.monotonic() - t0 < _BUDGET
 
 
-def test_inbox_create_collision_still_refuses_as_file_exists(tmp_path):
+def test_inbox_create_collision_still_refuses_as_file_exists(tmp_path: Path) -> None:
     target = tmp_path / "inbox" / "m.md"
     memo_send._create_inbox_file(target.parent, target, "one\n")
     with pytest.raises(FileExistsError):
@@ -76,7 +77,7 @@ def test_inbox_create_collision_still_refuses_as_file_exists(tmp_path):
     assert target.read_text(encoding="utf-8") == "one\n"
 
 
-def test_late_inbox_create_leaves_no_orphan(tmp_path, monkeypatch, release):
+def test_late_inbox_create_leaves_no_orphan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, release) -> None:
     monkeypatch.setattr(memo_send, "_INBOX_CREATE_DEADLINE_SECS", 0.1)
     real_open = os.open
     monkeypatch.setattr(os, "open", _blocking(release, real_open))
@@ -93,7 +94,7 @@ def test_late_inbox_create_leaves_no_orphan(tmp_path, monkeypatch, release):
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds how long a blocked sidecar open holds locked_rmw, a wait CPU time cannot see")
-def test_locked_rmw_raises_lock_timeout_when_sidecar_open_blocks(tmp_path, monkeypatch, release):
+def test_locked_rmw_raises_lock_timeout_when_sidecar_open_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, release) -> None:
     monkeypatch.setattr(locked_write, "_lock_dir_path", lambda root: tmp_path / ".git" / "coordinator-locks")
     monkeypatch.setattr(locked_write, "SIDECAR_OPEN_DEADLINE_SECS", 0.1)
     monkeypatch.setattr(os, "open", _blocking(release, os.open))
@@ -110,7 +111,7 @@ def _eacces_then_real(fails):
     real = os.open
     state = {"n": 0}
 
-    def _fn(path, *a, **k):
+    def _fn(path, *a, **k) -> int:
         if str(path).endswith(".lock") and (fails is None or state["n"] < fails):
             state["n"] += 1
             raise PermissionError(13, "Permission denied", str(path))
@@ -119,7 +120,7 @@ def _eacces_then_real(fails):
     return _fn, state
 
 
-def test_windows_eacces_on_sidecar_open_is_retried_then_succeeds(tmp_path, monkeypatch):
+def test_windows_eacces_on_sidecar_open_is_retried_then_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(locked_write, "_FCNTL_AVAILABLE", False)
     monkeypatch.setattr(locked_write, "_plat_try_lock", lambda fd: True)
     monkeypatch.setattr(locked_write, "_plat_unlock", lambda fd: None)
@@ -134,7 +135,7 @@ def test_windows_eacces_on_sidecar_open_is_retried_then_succeeds(tmp_path, monke
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds the retry deadline on a persistent EACCES sidecar open, a wait CPU time cannot see")
-def test_windows_persistent_eacces_raises_lock_timeout_past_the_bound(tmp_path, monkeypatch):
+def test_windows_persistent_eacces_raises_lock_timeout_past_the_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(locked_write, "_FCNTL_AVAILABLE", False)
     monkeypatch.setattr(locked_write, "SIDECAR_OPEN_DEADLINE_SECS", 0.2)
     monkeypatch.setattr(locked_write, "_lock_dir_path", lambda root: tmp_path / ".git" / "coordinator-locks")
@@ -149,7 +150,7 @@ def test_windows_persistent_eacces_raises_lock_timeout_past_the_bound(tmp_path, 
     assert target.read_text(encoding="utf-8") == "a"
 
 
-def test_posix_eacces_on_sidecar_open_still_propagates(tmp_path, monkeypatch):
+def test_posix_eacces_on_sidecar_open_still_propagates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(locked_write, "_FCNTL_AVAILABLE", True)
     monkeypatch.setattr(locked_write, "_lock_dir_path", lambda root: tmp_path / ".git" / "coordinator-locks")
     fn, _ = _eacces_then_real(None)
@@ -160,7 +161,7 @@ def test_posix_eacces_on_sidecar_open_still_propagates(tmp_path, monkeypatch):
         locked_write.locked_rmw(target, lambda s: s + "b", repo_root=tmp_path)
 
 
-def test_try_once_lock_on_a_healthy_fs_is_not_a_stall(tmp_path, monkeypatch):
+def test_try_once_lock_on_a_healthy_fs_is_not_a_stall(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # timeout=0 bounds lock contention only; the sidecar open keeps its own deadline.
     monkeypatch.setattr(locked_write, "_lock_dir_path", lambda root: tmp_path / ".git" / "coordinator-locks")
     target = tmp_path / "f.txt"
@@ -169,14 +170,14 @@ def test_try_once_lock_on_a_healthy_fs_is_not_a_stall(tmp_path, monkeypatch):
     assert target.read_text(encoding="utf-8") == "ab"
 
 
-def test_locked_rmw_propagates_real_errors_unchanged(tmp_path, monkeypatch):
+def test_locked_rmw_propagates_real_errors_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(locked_write, "_lock_dir_path", lambda root: tmp_path / ".git" / "coordinator-locks")
     with pytest.raises(FileNotFoundError):
         locked_write.locked_rmw(tmp_path / "absent.txt", lambda s: s, repo_root=tmp_path)
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds how long a blocked placement holds write_object, a wait CPU time cannot see")
-def test_write_object_raises_timeout_when_placement_blocks(tmp_path, monkeypatch, release):
+def test_write_object_raises_timeout_when_placement_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, release) -> None:
     monkeypatch.setattr(git_objects, "_WRITE_OBJECT_DEADLINE_SECS", 0.1)
     real = type(tmp_path).mkdir
     monkeypatch.setattr(type(tmp_path), "mkdir", _blocking(release, real))
@@ -187,7 +188,7 @@ def test_write_object_raises_timeout_when_placement_blocks(tmp_path, monkeypatch
     assert time.monotonic() - t0 < _BUDGET
 
 
-def test_write_object_places_and_reports_created_when_fs_is_healthy(tmp_path):
+def test_write_object_places_and_reports_created_when_fs_is_healthy(tmp_path: Path) -> None:
     gitdir = tmp_path / ".git"
     created: set = set()
     sha = git_objects.write_object(gitdir, b"blob", b"payload", created=created)

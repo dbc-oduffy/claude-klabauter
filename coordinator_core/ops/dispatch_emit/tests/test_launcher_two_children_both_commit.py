@@ -14,6 +14,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_launcher_child_stage_no_token
     _twin_inline,
 )
 from coordinator_core.ops.dispatch_emit.tests.test_sizing_fire_wiring import env  # noqa: F401
+import pytest
 
 
 def _emit_distinct_child(env, monkeypatch, n: int) -> dict:  # noqa: F811
@@ -44,7 +45,7 @@ def _commit(root: Path, run_id: str, token: str) -> None:
     assert run_token.spent_receipt(root, run_id, token, script) is not None
 
 
-def test_both_launcher_children_reach_commit_with_their_own_token_after_a_stage_wait_wake(env, monkeypatch):  # noqa: F811
+def test_both_launcher_children_reach_commit_with_their_own_token_after_a_stage_wait_wake(env, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     root = env.root
     first = _emit_distinct_child(env, monkeypatch, 1)
     second = _emit_distinct_child(env, monkeypatch, 2)
@@ -64,7 +65,7 @@ def test_both_launcher_children_reach_commit_with_their_own_token_after_a_stage_
     _commit(root, waiter, tokens[waiter])
 
 
-def test_a_woken_waiter_without_escrow_is_still_retired_and_refired(env, monkeypatch):  # noqa: F811
+def test_a_woken_waiter_without_escrow_is_still_retired_and_refired(env, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     root = env.root
     run_token.mint(root, "blocker", "scratch/warp/blocker.workflow.mjs", session_id="peer")
     run_token.mint(root, "waiter", "scratch/warp/waiter.workflow.mjs", session_id="s1", sizing_rel="state/sizings/x.yaml")

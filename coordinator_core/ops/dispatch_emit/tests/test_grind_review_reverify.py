@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit.tests.test_grind_compose import _compose
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 _GUARD = (
     "const _reviewFixWithheld = _reviewReverify ? "
@@ -20,7 +21,7 @@ _GUARD = (
 )
 
 
-def test_reverify_phase_follows_the_review_blocks_and_precedes_review_fixes():
+def test_reverify_phase_follows_the_review_blocks_and_precedes_review_fixes() -> None:
     script = _compose()
     assert (
         script.index("phase('Review wave')")
@@ -31,14 +32,14 @@ def test_reverify_phase_follows_the_review_blocks_and_precedes_review_fixes():
     assert "'Review integration', 'Review re-verify', 'Review fixes'" in script
 
 
-def test_script_carries_the_verbatim_withhold_guard():
+def test_script_carries_the_verbatim_withhold_guard() -> None:
     script = _compose()
     assert _GUARD in script
     assert "'indeterminate'" in _GUARD
     assert script.index("phase('Review re-verify')") < script.index(_GUARD) < script.index("phase('Review fixes')")
 
 
-def test_review_fix_call_sits_under_the_negated_guard_and_logs_when_withheld():
+def test_review_fix_call_sits_under_the_negated_guard_and_logs_when_withheld() -> None:
     script = _compose()
     guard_at = script.index("if (!_reviewFixWithheld) {")
     fix_at = script.index("label: 'review-fix-commit'")
@@ -61,7 +62,7 @@ def test_review_fix_call_sits_under_the_negated_guard_and_logs_when_withheld():
         ({"status_before": "not_run", "status_after": "not_run", "failing": []}, False),
     ],
 )
-def test_withhold_guard_spares_only_an_all_pre_existing_fail(verdict, withheld):
+def test_withhold_guard_spares_only_an_all_pre_existing_fail(verdict, withheld) -> None:
     import json
 
     node = shutil.which("node")
@@ -81,7 +82,7 @@ def test_withhold_guard_spares_only_an_all_pre_existing_fail(verdict, withheld):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_composed_script_parses_as_an_async_function_body(tmp_path):
+def test_composed_script_parses_as_an_async_function_body(tmp_path: Path) -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")

@@ -9,9 +9,11 @@ from coordinator_core.session import claims
 from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.workstream_complete import apply as _apply
 from coordinator_core.workstream_complete import directives_commit_tail
+from pathlib import Path
+import pytest
 
 
-def _baton(root, name, authoring_session):
+def _baton(root, name, authoring_session) -> None:
     d = root / "state" / "handoffs"
     d.mkdir(parents=True, exist_ok=True)
     (d / name).write_text(
@@ -20,13 +22,13 @@ def _baton(root, name, authoring_session):
     )
 
 
-def _fake_store(monkeypatch):
+def _fake_store(monkeypatch) -> list[str]:
     held: list[str] = []
     monkeypatch.setattr(
         directives_commit_tail, "_held_handoff_basenames", lambda *_a, **_k: list(held)
     )
 
-    def _claim(basename, baton_repo_root="", cwd=None):
+    def _claim(basename, baton_repo_root: str = "", cwd=None) -> bool:
         held.append(basename)
         return True
 
@@ -34,7 +36,7 @@ def _fake_store(monkeypatch):
     return held
 
 
-def test_minted_baton_disposition_is_kept_with_no_prior_claim(tmp_path, monkeypatch):
+def test_minted_baton_disposition_is_kept_with_no_prior_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _baton(tmp_path, "mine.md", "sid-1")
     held = _fake_store(monkeypatch)
     decisions = {"handoff_dispositions": {"mine.md": {"disposition": "shipped", "shipped_in": "deadbeef"}}}
@@ -46,7 +48,7 @@ def test_minted_baton_disposition_is_kept_with_no_prior_claim(tmp_path, monkeypa
     assert candidates == [("state/handoffs/mine.md", "deadbeef")]
 
 
-def test_baton_authored_by_another_session_is_not_claimed(tmp_path, monkeypatch):
+def test_baton_authored_by_another_session_is_not_claimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _baton(tmp_path, "theirs.md", "sid-other")
     held = _fake_store(monkeypatch)
     decisions = {"handoff_dispositions": {"theirs.md": {"disposition": "closed", "closed_reason": "stale"}}}
@@ -55,7 +57,7 @@ def test_baton_authored_by_another_session_is_not_claimed(tmp_path, monkeypatch)
     assert held == []
 
 
-def test_close_tail_claims_minted_batons_before_resolving(tmp_path, monkeypatch):
+def test_close_tail_claims_minted_batons_before_resolving(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _baton(tmp_path, "mine.md", "sid-1")
     _fake_store(monkeypatch)
     seen: list = []
@@ -83,7 +85,7 @@ def test_close_tail_claims_minted_batons_before_resolving(tmp_path, monkeypatch)
     assert seen and all(s == ["mine.md"] for s in seen)
 
 
-def test_real_store_claim_is_visible_to_the_held_read_and_not_reclaimed(tmp_path, monkeypatch):
+def test_real_store_claim_is_visible_to_the_held_read_and_not_reclaimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.pickup_assemble.tests._git_harness import init_repo
 
     init_repo(tmp_path)
@@ -100,7 +102,7 @@ def test_real_store_claim_is_visible_to_the_held_read_and_not_reclaimed(tmp_path
     assert calls == []
 
 
-def test_reapply_after_ship_stamp_drops_the_shipped_disposition():
+def test_reapply_after_ship_stamp_drops_the_shipped_disposition() -> None:
     """A re-apply after the ship stamp landed does not re-stamp or refuse."""
     decisions = {"handoff_dispositions": {"mine.md": {"disposition": "shipped"}, "o.md": {"disposition": "closed"}}}
     out = _apply._undischarged_ship_dispositions(decisions, {"d-ship-consumed-handoff:mine.md": "x"})

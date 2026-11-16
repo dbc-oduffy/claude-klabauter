@@ -18,6 +18,7 @@ from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from pathlib import Path
 
 REL = "state/sizings/2026-10-17-intake.yaml"
 _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n"
@@ -26,7 +27,7 @@ HEADING = "## EM route preference"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
@@ -46,7 +47,7 @@ def _pref_file(repo, result):
     return repo / RECORD_DIR_ROOT / result["run_id"] / rp.ROUTE_PREFERENCE_FILE
 
 
-def test_a_raw_ask_with_a_preference_writes_the_record_file_and_renders_the_block(repo):
+def test_a_raw_ask_with_a_preference_writes_the_record_file_and_renders_the_block(repo) -> None:
     result, script = _emit(repo, route_preference="roadmap", em_rationale=WHY)
     saved = json.loads(_pref_file(repo, result).read_text(encoding="utf-8"))
     assert saved == {"route_preference": "roadmap", "em_rationale": WHY}
@@ -55,7 +56,7 @@ def test_a_raw_ask_with_a_preference_writes_the_record_file_and_renders_the_bloc
     assert script.index(HEADING) < script.index("Relayed ask (")
 
 
-def test_each_key_is_independently_optional(repo):
+def test_each_key_is_independently_optional(repo) -> None:
     result, script = _emit(repo, em_rationale=WHY)
     assert json.loads(_pref_file(repo, result).read_text(encoding="utf-8")) == {
         "route_preference": None, "em_rationale": WHY,
@@ -63,13 +64,13 @@ def test_each_key_is_independently_optional(repo):
     assert HEADING in script and WHY in script
 
 
-def test_no_preference_writes_no_file_and_adds_no_block_or_slot(repo):
+def test_no_preference_writes_no_file_and_adds_no_block_or_slot(repo) -> None:
     result, script = _emit(repo)
     assert not _pref_file(repo, result).exists()
     assert HEADING not in script and "omit when it matches" not in script
 
 
-def test_the_scout_prompt_is_byte_identical_without_a_preference():
+def test_the_scout_prompt_is_byte_identical_without_a_preference() -> None:
     kw = dict(repo_root="REPO", prompt="add a thing", sizing_rel=None, run_id="run-1", session_id=None,
               wrap_stage=lambda _t: ("  async function planBlitz(args) {\n    return { ready: [] };\n  }", ["Size"]),
               plan_blitz_text="stub", **REVIEW_KW)
@@ -79,7 +80,7 @@ def test_the_scout_prompt_is_byte_identical_without_a_preference():
     assert with_pref != plain and HEADING in with_pref
 
 
-def test_a_preference_adds_the_override_slot_to_every_scout_gate_command():
+def test_a_preference_adds_the_override_slot_to_every_scout_gate_command() -> None:
     kw = dict(repo_root="REPO", prompt="add a thing", sizing_rel=None, run_id="run-1", session_id=None,
               wrap_stage=lambda _t: ("  async function planBlitz(args) {\n    return { ready: [] };\n  }", ["Size"]),
               plan_blitz_text="stub", **REVIEW_KW)
@@ -91,20 +92,20 @@ def test_a_preference_adds_the_override_slot_to_every_scout_gate_command():
     assert "reworded sizing routes differently" in script
 
 
-def test_an_invalid_preference_is_refused_naming_the_key(repo):
+def test_an_invalid_preference_is_refused_naming_the_key(repo) -> None:
     with pytest.raises(ValueError, match="route_preference"):
         _emit(repo, route_preference="shape")
     with pytest.raises(ValueError, match="em_rationale"):
         _emit(repo, em_rationale="x" * 2001)
 
 
-def _put_intake(repo, **em):
+def _put_intake(repo, **em) -> None:
     doc = contract.intake_record(name="intake", turn={"text": "ship it", "turn": 4}, today="2026-10-17")
     doc["em_analysis"].update(em)
     (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
 
 
-def test_an_intake_slice_carrying_the_keys_persists_and_renders_them(repo):
+def test_an_intake_slice_carrying_the_keys_persists_and_renders_them(repo) -> None:
     _put_intake(repo, route_preference="plan", em_rationale=WHY)
     assert cli.main(["--ask", "--sizing", REL, "--repo-root", str(repo)]) == 0
     (script_path,) = sorted((repo / RUN_DIR_ROOT).glob("*.workflow.mjs"))
@@ -114,13 +115,13 @@ def test_an_intake_slice_carrying_the_keys_persists_and_renders_them(repo):
     assert HEADING in script and WHY in script
 
 
-def test_an_intake_slice_without_the_keys_writes_no_file(repo):
+def test_an_intake_slice_without_the_keys_writes_no_file(repo) -> None:
     _put_intake(repo)
     assert cli.main(["--ask", "--sizing", REL, "--repo-root", str(repo)]) == 0
     assert not list((repo / RECORD_DIR_ROOT).rglob(rp.ROUTE_PREFERENCE_FILE))
 
 
-def test_either_key_beside_a_non_intake_sizing_path_raises(repo):
+def test_either_key_beside_a_non_intake_sizing_path_raises(repo) -> None:
     _put_intake(repo)
     doc = yaml.safe_load((repo / REL).read_text(encoding="utf-8"))
     doc["status"] = "routed"
@@ -130,7 +131,7 @@ def test_either_key_beside_a_non_intake_sizing_path_raises(repo):
             _dispatch_emit({"sizing_path": REL, "repo_root": str(repo), **extra}, repo_root=repo)
 
 
-def _compose(route_preference=None):
+def _compose(route_preference=None) -> str:
     kw = dict(repo_root="REPO", prompt="add a thing", sizing_rel=None, run_id="run-1", session_id=None,
               wrap_stage=lambda _t: ("  async function planBlitz(args) {\n    return { ready: [] };\n  }", ["Size"]),
               plan_blitz_text="stub", **REVIEW_KW)
@@ -143,18 +144,18 @@ _INIT = f"{_KEY}: _scouted.{_KEY} ?? null"
 _RESULT = f"{_KEY}: _gate?.{_KEY} ?? null"
 
 
-def test_a_preference_tells_both_scout_tails_to_return_the_verdict():
+def test_a_preference_tells_both_scout_tails_to_return_the_verdict() -> None:
     script = _compose(rp.parse("goal", None))
     assert f"design_route, {_KEY} when present" in script
     assert script.count(f"design_route, {_KEY}; when the command is denied") == 1
 
 
-def test_no_preference_leaves_the_scout_tails_without_the_verdict():
+def test_no_preference_leaves_the_scout_tails_without_the_verdict() -> None:
     assert f"design_route, {_KEY}" not in _compose()
 
 
 @pytest.mark.parametrize("pref", [rp.parse("goal", None), None])
-def test_the_verdict_fold_gate_initialiser_and_result_are_emitted_with_or_without_a_preference(pref):
+def test_the_verdict_fold_gate_initialiser_and_result_are_emitted_with_or_without_a_preference(pref) -> None:
     script = _compose(pref)
     assert _FOLD in script and _INIT in script
     assert script.count(_RESULT) == 1

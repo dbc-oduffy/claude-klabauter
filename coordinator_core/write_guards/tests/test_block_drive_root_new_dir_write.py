@@ -6,10 +6,11 @@ import pytest
 
 from coordinator_core.write_guards import block_drive_root_new_dir_write as guard
 from coordinator_core.write_guards import block_home_root_write
+from pathlib import Path
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     root = tmp_path / "root"
     home = tmp_path / "home"
     root.mkdir()
@@ -23,7 +24,7 @@ def world(tmp_path, monkeypatch):
     return root, home
 
 
-def _payload(path, tool="Write", key="file_path", **extra):
+def _payload(path, tool: str = "Write", key: str = "file_path", **extra):
     return {"tool_name": tool, "tool_input": {key: str(path)}, **extra}
 
 
@@ -34,7 +35,7 @@ def _reason(out):
     return body["permissionDecisionReason"]
 
 
-def test_write_to_new_top_level_is_denied_naming_scratch(world):
+def test_write_to_new_top_level_is_denied_naming_scratch(world) -> None:
     root, _ = world
     reason = _reason(guard.check(_payload(root / "fresh" / "f.txt")))
     assert "<repo>/scratch/" in reason
@@ -43,30 +44,30 @@ def test_write_to_new_top_level_is_denied_naming_scratch(world):
 
 
 @pytest.mark.parametrize("tool,key", [("Edit", "file_path"), ("MultiEdit", "file_path"), ("NotebookEdit", "notebook_path")])
-def test_other_tools_are_judged(world, tool, key):
+def test_other_tools_are_judged(world, tool, key) -> None:
     root, _ = world
     assert guard.check(_payload(root / "fresh" / "n.ipynb", tool, key)) is not None
 
 
-def test_existing_top_level_and_nested_allowed(world):
+def test_existing_top_level_and_nested_allowed(world) -> None:
     root, _ = world
     assert guard.check(_payload(root / "existing" / "f.txt")) is None
     assert guard.check(_payload(root / "existing" / "a" / "b" / "f.txt")) is None
 
 
-def test_placed_checkout_allowed(world):
+def test_placed_checkout_allowed(world) -> None:
     root, _ = world
     (root / "placed" / ".git").mkdir(parents=True)
     assert guard.check(_payload(root / "placed" / "src" / "f.py")) is None
 
 
-def test_payload_env_override_allows(world):
+def test_payload_env_override_allows(world) -> None:
     root, _ = world
     payload = _payload(root / "fresh" / "f.txt", env={"COORDINATOR_ALLOW_DRIVE_ROOT_NEW_DIR": "1"})
     assert guard.check(payload) is None
 
 
-def test_group_em_cwd_is_exempt_other_cwd_still_denied(world, monkeypatch):
+def test_group_em_cwd_is_exempt_other_cwd_still_denied(world, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.group_em import gem_home
 
     root, _ = world
@@ -78,7 +79,7 @@ def test_group_em_cwd_is_exempt_other_cwd_still_denied(world, monkeypatch):
     assert _reason(guard.check(_payload(target, cwd=str(root / "existing"))))
 
 
-def test_home_new_first_component_denied_but_depth_one_left_to_home_pair(world):
+def test_home_new_first_component_denied_but_depth_one_left_to_home_pair(world) -> None:
     _, home = world
     assert guard.check(_payload(home / "newdir" / "f.txt")) is not None
     target = home / "fo.txt"
@@ -86,7 +87,7 @@ def test_home_new_first_component_denied_but_depth_one_left_to_home_pair(world):
     assert block_home_root_write.check(_payload(target)) is not None
 
 
-def test_malformed_payload_allows(world):
+def test_malformed_payload_allows(world) -> None:
     assert guard.check({"tool_input": "nope"}) is None
     assert guard.check({}) is None
     assert guard.check({"tool_input": {"file_path": ""}}) is None

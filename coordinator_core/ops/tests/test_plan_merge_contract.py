@@ -12,13 +12,14 @@ from coordinator_core.ops._plan_merge_contract import (
     normalize_newlines,
 )
 from coordinator_core.ops.plan_merge import _handler
+from pathlib import Path
 
 
-def test_normalize_newlines():
+def test_normalize_newlines() -> None:
     assert normalize_newlines("a\r\nb\rc\nd") == "a\nb\nc\nd"
 
 
-def _report():
+def _report() -> MergeReport:
     rows = (
         RowAccount("A", "s1", "untouched"),
         RowAccount("B", "s1", "amended", ("fields", "note")),
@@ -27,7 +28,7 @@ def _report():
     return MergeReport(rows, ("A", "B", "C"), ("Old",), {k: True for k in CHECK_KEYS})
 
 
-def test_counts_arithmetic():
+def test_counts_arithmetic() -> None:
     assert _report().counts() == {
         "source_rows": 3, "untouched": 1, "amended": 1, "unaccounted": 1,
         "new": 1, "out": 3, "dropped_sections": 1,
@@ -35,23 +36,23 @@ def test_counts_arithmetic():
     assert _report().to_dict()["counts"]["out"] == 3
 
 
-def test_checks_keys_enforced():
+def test_checks_keys_enforced() -> None:
     with pytest.raises(ValueError):
         MergeReport((), (), (), {"row_partition": True})
 
 
-def test_refusal_code_enforced():
+def test_refusal_code_enforced() -> None:
     with pytest.raises(ValueError):
         Refusal("NOPE", "m")
 
 
-def _setup(tmp_path):
+def _setup(tmp_path) -> None:
     (tmp_path / ".git").mkdir()
     for n in ("a.md", "b.md", "d.yaml"):
         (tmp_path / n).write_text("x", encoding="utf-8")
 
 
-def test_output_is_source_refused_even_with_force(tmp_path):
+def test_output_is_source_refused_even_with_force(tmp_path: Path) -> None:
     _setup(tmp_path)
     for force in (False, True):
         res = _handler({"sources": ["a.md", "b.md"], "delta": "d.yaml", "out": "./a.md", "force": force}, tmp_path)
@@ -59,7 +60,7 @@ def test_output_is_source_refused_even_with_force(tmp_path):
     assert (tmp_path / "a.md").read_text(encoding="utf-8") == "x"
 
 
-def test_output_exists_without_force(tmp_path):
+def test_output_exists_without_force(tmp_path: Path) -> None:
     _setup(tmp_path)
     (tmp_path / "o.md").write_text("keep", encoding="utf-8")
     res = _handler({"sources": ["a.md", "b.md"], "delta": "d.yaml", "out": "o.md"}, tmp_path)
@@ -67,14 +68,14 @@ def test_output_exists_without_force(tmp_path):
     assert (tmp_path / "o.md").read_text(encoding="utf-8") == "keep"
 
 
-def test_unparseable_sources_refuse_spine_malformed(tmp_path):
+def test_unparseable_sources_refuse_spine_malformed(tmp_path: Path) -> None:
     _setup(tmp_path)
     res = _handler({"sources": ["a.md", "b.md"], "delta": "d.yaml", "out": "o.md"}, tmp_path)
     assert res["ok"] is False and res["refusal"]["code"] == "SPINE_MALFORMED"
     assert not (tmp_path / "o.md").exists()
 
 
-def test_param_validation(tmp_path):
+def test_param_validation(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         _handler({"sources": ["a.md"], "delta": "d", "out": "o"}, tmp_path)
     with pytest.raises(ValueError):

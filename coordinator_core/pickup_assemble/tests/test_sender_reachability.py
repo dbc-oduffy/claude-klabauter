@@ -32,6 +32,7 @@ from typing import Optional
 
 import coordinator_core.pickup_assemble as pa
 from coordinator_core.session import reachability as reachability_mod
+import pytest
 
 
 @dataclass
@@ -45,12 +46,12 @@ class _FakeResolveResult:
 _WARNING_REGISTER = ("warning", "unavailable", "could not", "failed", "unfortunately", "⚠", "!")
 
 
-def test_empty_sent_by_renders_nothing():
+def test_empty_sent_by_renders_nothing() -> None:
     assert pa.compute_sender_reachability(None) == {}
     assert pa.compute_sender_reachability("") == {}
 
 
-def test_sentinel_unresolved_arm_is_not_one_of_the_four(monkeypatch):
+def test_sentinel_unresolved_arm_is_not_one_of_the_four(monkeypatch: pytest.MonkeyPatch) -> None:
     # A resolve_address call would be a bug for this arm — an "unresolved"
     # string is not a session id. Fail loud if it's ever called.
     def _boom(_owner_id):
@@ -69,7 +70,7 @@ def test_sentinel_unresolved_arm_is_not_one_of_the_four(monkeypatch):
     assert result["resolved_at"]
 
 
-def test_own_session_arm_names_self_receipt(monkeypatch):
+def test_own_session_arm_names_self_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         reachability_mod, "resolve_address", lambda sid: _FakeResolveResult(outcome="own_session", session_id=sid)
     )
@@ -83,7 +84,7 @@ def test_own_session_arm_names_self_receipt(monkeypatch):
     assert result["resolved_at"]
 
 
-def test_reachable_arm_renders_the_address(monkeypatch):
+def test_reachable_arm_renders_the_address(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         reachability_mod,
         "resolve_address",
@@ -99,7 +100,7 @@ def test_reachable_arm_renders_the_address(monkeypatch):
     assert result["resolved_at"]
 
 
-def test_reachable_arm_with_falsy_address_degrades_to_not_reachable(monkeypatch):
+def test_reachable_arm_with_falsy_address_degrades_to_not_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
     """Guards a future `resolve_address` contract change, not an observed
     live case: today no input can produce a "reachable" outcome with a
     falsy or "<this session>" address (see the comment at the call site),
@@ -120,7 +121,7 @@ def test_reachable_arm_with_falsy_address_degrades_to_not_reachable(monkeypatch)
     assert result["address"] == ""
 
 
-def test_reachable_arm_with_placeholder_address_degrades_to_not_reachable(monkeypatch):
+def test_reachable_arm_with_placeholder_address_degrades_to_not_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
     """Same degrade, hit via the other falsy-equivalent value: an address
     literally equal to "<this session>" (reserved for the own_session arm)
     must not be rendered as a reply target either.
@@ -138,7 +139,7 @@ def test_reachable_arm_with_placeholder_address_degrades_to_not_reachable(monkey
     assert result["address"] == ""
 
 
-def test_reachable_arm_does_not_take_a_second_live_registry_scan(monkeypatch):
+def test_reachable_arm_does_not_take_a_second_live_registry_scan(monkeypatch: pytest.MonkeyPatch) -> None:
     """`result.address` from the one `resolve_address` call already carries
     the answer -- `resolve_advisory_address` re-running a second, independent
     `harness_registry.snapshot()` scan for the reachable arm is the exact
@@ -163,7 +164,7 @@ def test_reachable_arm_does_not_take_a_second_live_registry_scan(monkeypatch):
     assert result["message"] == "Sender is reachable — reply via SendMessage to cafefeed0000."
 
 
-def test_not_reachable_arm_is_the_dominant_ordinary_render(monkeypatch):
+def test_not_reachable_arm_is_the_dominant_ordinary_render(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(reachability_mod, "resolve_address", lambda sid: _FakeResolveResult(outcome="not_reachable"))
 
     result = pa.compute_sender_reachability("33333333-3333-3333-3333-333333333333")
@@ -180,7 +181,7 @@ def test_not_reachable_arm_is_the_dominant_ordinary_render(monkeypatch):
         assert banned not in lowered, f"not_reachable render leaked warning-register token: {banned!r}"
 
 
-def test_ambiguous_arm_does_not_collapse_into_not_reachable(monkeypatch):
+def test_ambiguous_arm_does_not_collapse_into_not_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         reachability_mod,
         "resolve_address",
@@ -198,7 +199,7 @@ def test_ambiguous_arm_does_not_collapse_into_not_reachable(monkeypatch):
     assert result["resolved_at"]
 
 
-def test_resolver_import_or_call_failure_degrades_to_not_reachable(monkeypatch):
+def test_resolver_import_or_call_failure_degrades_to_not_reachable(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(_sid):
         raise RuntimeError("harness_registry.snapshot() blew up")
 
@@ -210,7 +211,7 @@ def test_resolver_import_or_call_failure_degrades_to_not_reachable(monkeypatch):
     assert result["message"] == "Sender's session has ended — action this the normal way."
 
 
-def test_render_is_resolved_at_call_time_not_trusted_off_a_persisted_decision_object(monkeypatch):
+def test_render_is_resolved_at_call_time_not_trusted_off_a_persisted_decision_object(monkeypatch: pytest.MonkeyPatch) -> None:
     """AC9: a re-read decision object is not trusted for contact.
 
     Simulates the real lifecycle -- brief() resolves `reachable` once, that
@@ -252,7 +253,7 @@ def test_render_is_resolved_at_call_time_not_trusted_off_a_persisted_decision_ob
     assert second["address"] != persisted_decision_object["gates"]["sender_reachability"]["address"]
 
 
-def test_sentinel_literal_matches_the_historical_send_path_spelling():
+def test_sentinel_literal_matches_the_historical_send_path_spelling() -> None:
     """Pin `pickup_assemble._SENT_BY_UNRESOLVED` to the literal every already-
     delivered memo on disk was written with.
 
@@ -275,7 +276,7 @@ def test_sentinel_literal_matches_the_historical_send_path_spelling():
     )
 
 
-def test_resolver_produces_no_arm_this_render_does_not_handle():
+def test_resolver_produces_no_arm_this_render_does_not_handle() -> None:
     """A fifth `ResolveResult.outcome` must break this test, not degrade silently.
 
     `ResolveResult.outcome` is a bare `str`, not an enum or a `Literal` — so

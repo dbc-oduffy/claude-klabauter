@@ -53,7 +53,7 @@ _PROG = "handoff-carry-gate"
 
 class CarryGateError(Exception):
 
-    def __init__(self, violations: List[str]):
+    def __init__(self, violations: List[str]) -> None:
         self.violations = violations
         super().__init__("\n".join(violations))
 

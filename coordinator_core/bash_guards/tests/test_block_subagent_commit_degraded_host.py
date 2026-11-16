@@ -30,6 +30,7 @@ from typing import Any, Dict, List
 
 from coordinator_core.bash_guards import block_subagent_commit as guard
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -40,7 +41,7 @@ _FAKE_REPO_ROOT = "/repo"
 
 
 @pytest.fixture(autouse=True)
-def _repo_root_under_tmp_path(tmp_path, monkeypatch):
+def _repo_root_under_tmp_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A stand-down here writes real audit logs under the resolved root."""
     monkeypatch.setattr(sys.modules[__name__], "_FAKE_REPO_ROOT", str(tmp_path / "repo"))
 
@@ -52,7 +53,7 @@ _SCOPED_COMMIT_CMD = 'git commit -m "msg" -- src/foo.py'
 _OLD_SENTINEL_TEXT = "coordinator:terminal-commit-request"
 
 
-def _payload(command, agent_type, transcript_path=None, agent_id="deadbeef0123"):
+def _payload(command, agent_type, transcript_path=None, agent_id: str = "deadbeef0123"):
     p: Dict[str, Any] = {
         "tool_name": "Bash",
         "tool_input": {"command": command},
@@ -81,7 +82,7 @@ def _git_commit_agent_setup(monkeypatch, *, scope_result=(True, "")):
         guard, "_read_backpointer_subagent_type", lambda git_root, agent_id: ""
     )
 
-    def _spy(session_id, paths, cwd=None, *, allow_orphans=False):
+    def _spy(session_id, paths, cwd=None, *, allow_orphans: bool = False):
         calls.append(
             {"session_id": session_id, "paths": paths, "cwd": cwd, "allow_orphans": allow_orphans}
         )
@@ -91,7 +92,7 @@ def _git_commit_agent_setup(monkeypatch, *, scope_result=(True, "")):
     return calls
 
 
-def _write_transcript(tmp_path, first_line):
+def _write_transcript(tmp_path, first_line) -> str:
     path = tmp_path / "transcript.jsonl"
     path.write_text(first_line + "\n", encoding="utf-8")
     return str(path)
@@ -100,7 +101,7 @@ def _write_transcript(tmp_path, first_line):
 # --- Deleted-leg negative specs ---
 
 
-def test_leg_symbols_no_longer_exist_on_the_guard_module():
+def test_leg_symbols_no_longer_exist_on_the_guard_module() -> None:
     """The degraded-host sentinel leg's constant, import and reader
     function are gone entirely -- not renamed, not stubbed."""
     for name in (
@@ -112,7 +113,7 @@ def test_leg_symbols_no_longer_exist_on_the_guard_module():
         assert not hasattr(guard, name), f"{name} should have been deleted"
 
 
-def test_degraded_general_purpose_with_old_sentinel_text_still_denies(monkeypatch, tmp_path):
+def test_degraded_general_purpose_with_old_sentinel_text_still_denies(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A general-purpose subagent whose transcript carries the old sentinel
     text is denied like any other subagent -- the leg that used to read it
     is gone, so the text is inert."""
@@ -131,7 +132,7 @@ def test_degraded_general_purpose_with_old_sentinel_text_still_denies(monkeypatc
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_ordinary_coordinator_agent_type_still_works_unchanged(monkeypatch, tmp_path):
+def test_ordinary_coordinator_agent_type_still_works_unchanged(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The pre-existing, non-degraded route (agent_type ==
     coordinator:git-commit-agent) keeps working unchanged."""
     _git_commit_agent_setup(monkeypatch)
@@ -147,7 +148,7 @@ def test_ordinary_coordinator_agent_type_still_works_unchanged(monkeypatch, tmp_
 # --- AC19: dispatch.terminal_commit is denied to subagents ---
 
 
-def test_subagent_invoking_terminal_commit_op_is_denied(monkeypatch):
+def test_subagent_invoking_terminal_commit_op_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: _FAKE_REPO_ROOT)
     monkeypatch.setattr(
         guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123"
@@ -165,15 +166,15 @@ def test_subagent_invoking_terminal_commit_op_is_denied(monkeypatch):
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_terminal_commit_op_name_is_a_committing_op():
+def test_terminal_commit_op_name_is_a_committing_op() -> None:
     assert "dispatch.terminal_commit" in guard._COMMITTING_OP_NAMES
 
 
-def test_land_run_op_name_is_a_committing_op():
+def test_land_run_op_name_is_a_committing_op() -> None:
     assert "dispatch.land_run" in guard._COMMITTING_OP_NAMES
 
 
-def test_subagent_invoking_land_run_op_is_denied(monkeypatch):
+def test_subagent_invoking_land_run_op_is_denied(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: _FAKE_REPO_ROOT)
     monkeypatch.setattr(
         guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123"

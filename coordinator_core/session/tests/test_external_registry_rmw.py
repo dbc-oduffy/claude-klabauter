@@ -7,11 +7,12 @@ from types import SimpleNamespace
 import pytest
 
 from coordinator_core.session import external_registry as registry
+from pathlib import Path
 
 SID = "00000000-0000-4000-8000-000000000001"
 
 @pytest.fixture
-def live(tmp_path, monkeypatch):
+def live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     from coordinator_core.session import core
     monkeypatch.setattr(core, 'stable_pid_alive', lambda *a,**k:True)
     monkeypatch.setattr(core, 'ensure_session', lambda *a,**k:None)
@@ -29,7 +30,7 @@ def read(directory):
     return json.loads((directory/f'{SID}.json').read_text())
 
 
-def test_original_task_title_is_idempotent_and_birth_verified(live,monkeypatch):
+def test_original_task_title_is_idempotent_and_birth_verified(live,monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import core
     first=registry.preserve_task_title(SID,'Original task',live)
     assert first['original_task_title']=='Original task'
@@ -40,20 +41,20 @@ def test_original_task_title_is_idempotent_and_birth_verified(live,monkeypatch):
     assert read(live)['original_task_title']=='Original task'
 
 
-def test_end_and_title_rmw_do_not_erase_either_record(live,monkeypatch):
+def test_end_and_title_rmw_do_not_erase_either_record(live,monkeypatch: pytest.MonkeyPatch) -> None:
     original=registry.atomic_write_bytes
     title_writing=threading.Event(); release=threading.Event(); end_started=threading.Event()
-    def delayed(path,data):
+    def delayed(path,data) -> None:
         if threading.current_thread().name.startswith('title'):
             title_writing.set()
             assert release.wait(0.15)
         original(path,data)
     monkeypatch.setattr(registry,'atomic_write_bytes',delayed)
     errors=[]
-    def title():
+    def title() -> None:
         try:registry.preserve_task_title(SID,'Concurrent original',live)
         except Exception as exc:errors.append(exc)
-    def end():
+    def end() -> None:
         end_started.set()
         try:registry.unregister(SID,live)
         except Exception as exc:errors.append(exc)
@@ -69,7 +70,7 @@ def test_end_and_title_rmw_do_not_erase_either_record(live,monkeypatch):
     assert registry.preserve_task_title(SID,'Ended thread',live) is None
 
 
-def test_late_start_cannot_erase_newer_end_but_later_resume_can(live,monkeypatch):
+def test_late_start_cannot_erase_newer_end_but_later_resume_can(live,monkeypatch: pytest.MonkeyPatch) -> None:
     row=read(live);row.update(ended_at=20,original_task_title='Original')
     (live/f'{SID}.json').write_text(json.dumps(row))
     payload={'session_id':SID,'cwd':str(live),'hook_event_name':'SessionStart','source':'resume'}
@@ -82,7 +83,7 @@ def test_late_start_cannot_erase_newer_end_but_later_resume_can(live,monkeypatch
     assert resumed['transcript_path']==str(live/'rollout.jsonl')
 
 
-def test_alias_allocates_once_then_stays_immutable_across_repo_resume(live,monkeypatch):
+def test_alias_allocates_once_then_stays_immutable_across_repo_resume(live,monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(registry.socket,'gethostname',lambda:'MACHINE-A.long.example')
     payload={'session_id':SID,'cwd':str(live),'hook_event_name':'SessionStart','source':'startup'}
     first=registry.register_current(payload,live)
@@ -96,7 +97,7 @@ def test_alias_allocates_once_then_stays_immutable_across_repo_resume(live,monke
     assert (live/'.alias-sequence').read_bytes()==counter
 
 
-def test_alias_counter_reset_cannot_reuse_ended_row_address(live,monkeypatch):
+def test_alias_counter_reset_cannot_reuse_ended_row_address(live,monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(registry.socket,'gethostname',lambda:'machine-a')
     payload={'session_id':SID,'cwd':str(live)}
     first=registry.register_current(payload,live)
@@ -106,7 +107,7 @@ def test_alias_counter_reset_cannot_reuse_ended_row_address(live,monkeypatch):
     assert first['name']!=second['name'] and second['name'].endswith('-2')
 
 
-def test_parallel_alias_allocation_uses_one_global_sequence(live,monkeypatch):
+def test_parallel_alias_allocation_uses_one_global_sequence(live,monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(registry.socket,'gethostname',lambda:'machine-a')
     barrier=threading.Barrier(2)
     def start(number):
@@ -123,7 +124,7 @@ def test_parallel_alias_allocation_uses_one_global_sequence(live,monkeypatch):
     {'hook_event_name':'SubagentStop'},
     {'hook_event_name':'SessionStart','agent_id':'native-child'},
 ])
-def test_constructor_cannot_replace_parent_binding_from_subagent_payload(live,child_fields):
+def test_constructor_cannot_replace_parent_binding_from_subagent_payload(live,child_fields) -> None:
     path=live/f'{SID}.json'
     before=path.read_bytes()
     with pytest.raises(ValueError,match='parent thread binding'):
@@ -137,7 +138,7 @@ def test_constructor_cannot_replace_parent_binding_from_subagent_payload(live,ch
     {'hook_event_name':'SubagentStop'},
     {'hook_event_name':'SessionEnd','agent_id':'native-child'},
 ])
-def test_session_end_cannot_tombstone_parent_from_subagent_payload(live,child_fields):
+def test_session_end_cannot_tombstone_parent_from_subagent_payload(live,child_fields) -> None:
     path=live/f'{SID}.json'
     before=path.read_bytes()
     with pytest.raises(ValueError,match='parent thread binding'):
@@ -145,12 +146,12 @@ def test_session_end_cannot_tombstone_parent_from_subagent_payload(live,child_fi
     assert path.read_bytes()==before and not registry.is_ended(SID,live)
 
 
-def test_real_thread_session_end_with_payload_still_tombstones(live):
+def test_real_thread_session_end_with_payload_still_tombstones(live) -> None:
     registry.unregister(SID,live,payload={'hook_event_name':'SessionEnd','session_id':SID})
     assert registry.is_ended(SID,live)
 
 
-def test_module_session_end_door_preserves_subagent_evidence(live,monkeypatch,capsys):
+def test_module_session_end_door_preserves_subagent_evidence(live,monkeypatch: pytest.MonkeyPatch,capsys: pytest.CaptureFixture[str]) -> None:
     import io
     before=(live/f'{SID}.json').read_bytes()
     monkeypatch.setattr(registry,'registry_dir',lambda directory=None:live)
@@ -165,7 +166,7 @@ def test_module_session_end_door_preserves_subagent_evidence(live,monkeypatch,ca
 @pytest.mark.parametrize('argv,expected',[
     (['codex','-m','model','-c','a=1','-c','b=2','exec','-'],'worker'),
     (['codex','--model','exec'],'em'), (['codex','--profile','main','review'],'reviewer')])
-def test_registry_reuses_observed_cli_audience_for_native_start(live,monkeypatch,argv,expected):
+def test_registry_reuses_observed_cli_audience_for_native_start(live,monkeypatch: pytest.MonkeyPatch,argv,expected) -> None:
     import psutil
     host=psutil.Process(0).parents()[0]
     host.cmdline=lambda:argv
@@ -175,7 +176,7 @@ def test_registry_reuses_observed_cli_audience_for_native_start(live,monkeypatch
     assert row['role']==expected
 
 
-def test_session_start_payload_model_is_observation_and_survives_end(live,monkeypatch):
+def test_session_start_payload_model_is_observation_and_survives_end(live,monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('COORDINATOR_AGENT_MODEL','parent-requested-model')
     payload={'session_id':SID,'cwd':str(live),'hook_event_name':'SessionStart',
              'source':'startup','model':'actual-active-model','turn_id':'actual-turn'}
@@ -189,7 +190,7 @@ def test_session_start_payload_model_is_observation_and_survives_end(live,monkey
     assert ended['session_start_model_evidence']==row['session_start_model_evidence']
 
 
-def test_resume_missing_model_removes_old_observation_not_refreshes_it(live):
+def test_resume_missing_model_removes_old_observation_not_refreshes_it(live) -> None:
     payload={'session_id':SID,'cwd':str(live),'hook_event_name':'SessionStart','source':'startup'}
     registry.register_current({**payload,'model':'before-resume','turn_id':'before-turn'},live)
     resumed=registry.register_current({**payload,'source':'resume'},live)
@@ -200,7 +201,7 @@ def test_resume_missing_model_removes_old_observation_not_refreshes_it(live):
 
 
 @pytest.mark.parametrize('event,model',[('SessionStart','  '),('SessionStart',None),('SessionStart',{}),('OtherEvent','claimed-model')])
-def test_unsupplied_or_non_start_model_never_promotes_requested_setting(live,monkeypatch,event,model):
+def test_unsupplied_or_non_start_model_never_promotes_requested_setting(live,monkeypatch: pytest.MonkeyPatch,event,model) -> None:
     monkeypatch.setenv('COORDINATOR_AGENT_MODEL','parent-model')
     import psutil
     psutil.Process(0).parents()[0].cmdline=lambda:['codex','--model','argv-requested-model']
@@ -208,7 +209,7 @@ def test_unsupplied_or_non_start_model_never_promotes_requested_setting(live,mon
     assert 'session_start_model' not in row and 'session_start_model_evidence' not in row
 
 
-def test_session_start_model_conflict_is_historical_and_monotonic(live):
+def test_session_start_model_conflict_is_historical_and_monotonic(live) -> None:
     payload={'session_id':SID,'cwd':str(live),'hook_event_name':'SessionStart','source':'startup'}
     first=registry.register_current({**payload,'model':'model-a'},live)
     assert first['session_start_model_initial']=='model-a'

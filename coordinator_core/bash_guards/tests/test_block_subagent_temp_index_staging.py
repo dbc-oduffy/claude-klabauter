@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -12,7 +13,7 @@ _CACHEINFO = "git update-index --add --cacheinfo 100644,abc123,a/b.py"
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     (root / ".git").mkdir(parents=True)
     return root
@@ -46,7 +47,7 @@ def _run(command, cwd):
         "git apply --cached --recount p.patch",
     ],
 )
-def test_scratch_index_staging_is_admitted(repo, command):
+def test_scratch_index_staging_is_admitted(repo, command) -> None:
     assert _run(command, repo) is None
 
 
@@ -64,5 +65,5 @@ def test_scratch_index_staging_is_admitted(repo, command):
         "git apply --cached --3way p.patch",
     ],
 )
-def test_shared_index_or_worktree_write_stays_denied(repo, command):
+def test_shared_index_or_worktree_write_stays_denied(repo, command) -> None:
     assert _run(command, repo) is not None

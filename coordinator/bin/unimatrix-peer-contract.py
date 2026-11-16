@@ -22,7 +22,7 @@ PROVENANCE_FIELDS = ("peer", "vendor", "target", "router_pid", "msg_id")
 _RE_CACHE = {}
 
 
-def _memo_re(key, pattern, flags=0):
+def _memo_re(key, pattern, flags: int = 0):
     if key not in _RE_CACHE:
         _RE_CACHE[key] = re.compile(pattern, flags)
     return _RE_CACHE[key]
@@ -45,7 +45,7 @@ class PeerConfigError(ValueError):
     """peers.json is malformed, names an unknown vendor, or repeats a peer name."""
 
 
-def safe_alias(name):
+def safe_alias(name) -> bool:
     return (isinstance(name, str) and 1 <= len(name) <= 64 and '..' not in name and
             re.fullmatch(r'[A-Za-z0-9_-](?:[A-Za-z0-9_.-]*[A-Za-z0-9_-])?', name) is not None)
 
@@ -176,7 +176,7 @@ def intended_receiver(frame):
     return m.group(1) if m else ""
 
 
-def role_of(name):
+def role_of(name) -> str:
     """The role a session name carries: its name without box label and trailing id segment.
 
     group-em-c1.machine-b -> group-em; example-stats-repo-0d -> example-stats-repo; a name with no hyphen is its own role."""
@@ -185,14 +185,14 @@ def role_of(name):
     return head if sep and head else base
 
 
-def holds_receiver(session_name, receiver):
+def holds_receiver(session_name, receiver) -> bool:
     """True when the session called `session_name` is `receiver`, by name (box label ignored) or by role."""
     base = str(session_name).partition(".")[0]
     want = str(receiver).partition(".")[0]
     return bool(want) and want in (base, role_of(base))
 
 
-def label(peer, text):
+def label(peer, text) -> str:
     """Prefix a reply with the peer that produced it."""
     return f"[{peer}] {text}"
 
@@ -226,7 +226,7 @@ def stamp(frame, peer, vendor, target, router_pid, from_box=None):
     return out
 
 
-def is_ip_literal(host):
+def is_ip_literal(host) -> bool:
     """True for an IPv4 or IPv6 literal (bracketed or zone-suffixed forms included)."""
     h = str(host).strip()
     if h.startswith("[") and h.endswith("]"):
@@ -292,7 +292,7 @@ def split_by_box(rows, local_box, self_name=None):
     return same, other
 
 
-def main(argv=None):
+def main(argv=None) -> int:
     """Validate a peers.json: `unimatrix-peer-contract.py <peers.json>` prints each peer or the error."""
     argv = sys.argv[1:] if argv is None else list(argv)
     if len(argv) != 1:

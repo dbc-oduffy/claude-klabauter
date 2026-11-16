@@ -244,7 +244,7 @@ _GESTURES = {
 @pytest.mark.parametrize("gesture", _GESTURES.values(), ids=_GESTURES.keys())
 def test_prime_exit_criterion_deliver_destroy_gc_heal_back(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, gesture: Callable[[Path, str], None],
-):
+) -> None:
     sender = _make_sender_repo(tmp_path)
     receiver = _make_receiver_repo(tmp_path)
     root_sha = _rev_parse(receiver, "HEAD")
@@ -318,7 +318,7 @@ def _common_dir(repo: Path) -> Path:
 
 def test_archived_with_no_heal_before_the_gestures_is_restored_not_retired(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     sender = _make_sender_repo(tmp_path)
     receiver = _make_receiver_repo(tmp_path)
     root_sha = _rev_parse(receiver, "HEAD")
@@ -343,7 +343,7 @@ def test_archived_with_no_heal_before_the_gestures_is_restored_not_retired(
 
 def test_reachable_only_from_a_kept_second_branch_is_left_alone(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     sender = _make_sender_repo(tmp_path)
     receiver = _make_receiver_repo(tmp_path)
     root_sha = _rev_parse(receiver, "HEAD")

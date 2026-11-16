@@ -8,6 +8,7 @@ import subprocess
 import pytest
 
 from coordinator_core.bash_guards import dispatch
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -55,7 +56,7 @@ def repo_cwd() -> str:
 
 
 @pytest.fixture()
-def fresh_git_repo(tmp_path, monkeypatch):
+def fresh_git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     subprocess.run(
         ["git", "init", "-q"], cwd=str(tmp_path), check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),

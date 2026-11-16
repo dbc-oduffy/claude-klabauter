@@ -16,6 +16,7 @@ import pytest
 from coordinator_core import dispatch_abandon
 from coordinator_core.ops.dispatch_emit import land_deadline, land_run
 from coordinator_core.warm.client import MUTATION_READ_DEADLINE_SECS as WINDOW_SECS
+from pathlib import Path
 
 LAND_BUDGET = land_deadline.LAND_BUDGET_SECS
 MAX_FULL_BUDGET_WAIT = WINDOW_SECS - LAND_BUDGET - dispatch_abandon.REPLY_MARGIN_SECS
@@ -31,7 +32,7 @@ class FakeClock:
 
 
 @pytest.fixture
-def run(tmp_path, monkeypatch):
+def run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     clock = FakeClock()
     monkeypatch.setattr(land_deadline, "_now", clock)
     monkeypatch.setattr(dispatch_abandon, "time", types.SimpleNamespace(monotonic=clock))
@@ -65,16 +66,16 @@ def _slow_landing(first_leg_secs):
     return legs
 
 
-def test_the_queue_wait_exceeds_the_budget_the_scenario_is_about():
+def test_the_queue_wait_exceeds_the_budget_the_scenario_is_about() -> None:
     assert LAND_BUDGET < QUEUE_WAIT_SECS <= MAX_FULL_BUDGET_WAIT
 
 
-def test_a_landing_that_queued_past_the_budget_still_gets_its_full_leg_budget(run):
+def test_a_landing_that_queued_past_the_budget_still_gets_its_full_leg_budget(run) -> None:
     reply = run(_slow_landing(LAND_BUDGET - 1.0), QUEUE_WAIT_SECS)
     assert reply == {"committed": True, "sha": "abc"}
 
 
-def test_a_leg_past_the_full_budget_halts_with_queue_wait_and_per_leg_elapsed(run):
+def test_a_leg_past_the_full_budget_halts_with_queue_wait_and_per_leg_elapsed(run) -> None:
     first_leg = LAND_BUDGET + land_deadline.RESERVE_SECS + 1.0
     reply = run(_slow_landing(first_leg), QUEUE_WAIT_SECS)
     assert reply["refused"] == land_deadline.REFUSED
@@ -88,7 +89,7 @@ def test_a_leg_past_the_full_budget_halts_with_queue_wait_and_per_leg_elapsed(ru
     assert "retried" not in reply
 
 
-def test_a_queue_wait_beyond_the_server_window_halts_early_rather_than_overrunning(run):
+def test_a_queue_wait_beyond_the_server_window_halts_early_rather_than_overrunning(run) -> None:
     wait = MAX_FULL_BUDGET_WAIT + 4.0
     reply = run(_slow_landing(LAND_BUDGET - 3.0), wait)
     assert reply["refused"] == land_deadline.REFUSED
@@ -96,7 +97,7 @@ def test_a_queue_wait_beyond_the_server_window_halts_early_rather_than_overrunni
     assert "retried" not in reply
 
 
-def test_a_halt_landing_past_the_leg_budget_still_lands_inside_the_dispatcher_window(run, monkeypatch):
+def test_a_halt_landing_past_the_leg_budget_still_lands_inside_the_dispatcher_window(run, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(land_run.contract, "mode_of", lambda params: "halted")
     reply = run(_slow_landing(LAND_BUDGET + land_deadline.RESERVE_SECS + 1.0), 0.0)
     assert reply == {"committed": True, "sha": "abc"}

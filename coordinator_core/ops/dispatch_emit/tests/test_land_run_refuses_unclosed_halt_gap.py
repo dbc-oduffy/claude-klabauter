@@ -17,6 +17,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     GAPS_CLOSED_FIELD, HALT_GAP_UNCLOSED_REASON, RECORD_DIR_ROOT,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -33,33 +34,33 @@ def _git(root, *a):
     ).stdout.strip()
 
 
-def _verdict(*closed, status="met"):
+def _verdict(*closed, status: str = "met"):
     item = {"id": "R1", "status": status, "wired": True}
     if closed:
         item[GAPS_CLOSED_FIELD] = list(closed)
     return {"items": [item]}
 
 
-def _resume(halt, remaining=True):
+def _resume(halt, remaining: bool = True):
     out = {"run_id": HALTED, "halt_sha": halt, "blocking": ["R1"]}
     if remaining:
         out["remaining"] = {"R1": {"remaining": [GAP], "evidence": "e"}}
     return out
 
 
-def test_pure_met_without_gaps_closed_fails_naming_row():
+def test_pure_met_without_gaps_closed_fails_naming_row() -> None:
     gaps = {"R1": {"remaining": [f"  {GAP}  "]}}
     out = lr._unclosed_halt_gaps(_resume("x"), _verdict(), gaps)
     assert out == [{"id": "R1", "reason": f"{HALT_GAP_UNCLOSED_REASON}: {GAP}"}]
 
 
-def test_pure_matching_entry_passes_and_post_commit_is_judged():
+def test_pure_matching_entry_passes_and_post_commit_is_judged() -> None:
     gaps = {"R1": {"remaining": [GAP]}}
     assert lr._unclosed_halt_gaps(_resume("x"), _verdict(CLOSED), gaps) == []
     assert lr._unclosed_halt_gaps(_resume("x"), _verdict(status="post_commit"), gaps)[0]["id"] == "R1"
 
 
-def test_pure_empty_how_wrong_gap_and_unmet_rows():
+def test_pure_empty_how_wrong_gap_and_unmet_rows() -> None:
     gaps = {"R1": {"remaining": [GAP]}}
     assert lr._unclosed_halt_gaps(_resume("x"), _verdict({"gap": GAP, "how": " "}), gaps)
     assert lr._unclosed_halt_gaps(_resume("x"), _verdict({"gap": "other", "how": "h"}), gaps)
@@ -68,7 +69,7 @@ def test_pure_empty_how_wrong_gap_and_unmet_rows():
     assert lr._unclosed_halt_gaps(_resume("x"), _verdict(), {}) == []
 
 
-def test_pure_commit_line_and_post_commit_acts_are_discharged_by_the_commit():
+def test_pure_commit_line_and_post_commit_acts_are_discharged_by_the_commit() -> None:
     gaps = {"R1": {"remaining": ["Fix X", "commit"]}}
     fix = {"gap": "Fix X", "how": "fixed"}
     verdict = _verdict(fix, status="post_commit")
@@ -83,7 +84,7 @@ def test_pure_commit_line_and_post_commit_acts_are_discharged_by_the_commit():
     assert lr._unclosed_halt_gaps(_resume("x"), verdict, acts) == []
 
 
-def test_terminal_commit_passes_post_commit_row_with_commit_remaining(run):
+def test_terminal_commit_passes_post_commit_row_with_commit_remaining(run) -> None:
     resume = _resume(run[3])
     resume["remaining"] = {"R1": {"remaining": ["Fix X", "commit"], "evidence": "e"}}
     verdict = _verdict({"gap": "Fix X", "how": "fixed"}, status="post_commit")
@@ -92,7 +93,7 @@ def test_terminal_commit_passes_post_commit_row_with_commit_remaining(run):
     assert refusal is None or HALT_GAP_UNCLOSED_REASON not in json.dumps(refusal)
 
 
-def _halt_record(root):
+def _halt_record(root) -> None:
     d = root / RECORD_DIR_ROOT / HALTED
     d.mkdir(parents=True)
     (d / "halted.json").write_text(json.dumps({
@@ -102,7 +103,7 @@ def _halt_record(root):
     (d / "manifest.json").write_text(json.dumps({"rows": [{"id": "C1"}]}), encoding="utf-8")
 
 
-def test_gap_lines_from_payload_then_record_without_subprocess(tmp_path, monkeypatch):
+def test_gap_lines_from_payload_then_record_without_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _halt_record(tmp_path)
 
     def boom(*a, **k):
@@ -116,14 +117,14 @@ def test_gap_lines_from_payload_then_record_without_subprocess(tmp_path, monkeyp
     assert lr._unclosed_halt_gaps(_resume("x", remaining=False), _verdict(), from_record)
 
 
-def test_no_payload_and_no_record_means_no_failures(tmp_path):
+def test_no_payload_and_no_record_means_no_failures(tmp_path: Path) -> None:
     resume = _resume("x", remaining=False)
     gaps = lr._halt_gap_lines(tmp_path, resume)
     assert gaps == {}
     assert lr._unclosed_halt_gaps(resume, _verdict(), gaps) == []
 
 
-def test_halted_commit_params_keeps_gaps_closed():
+def test_halted_commit_params_keeps_gaps_closed() -> None:
     digest = {
         "halted_by": {"halted": "commit"}, "run_id": "r", "arm": "xs",
         "ledger": {"items": [{"id": "R1", "status": "met", GAPS_CLOSED_FIELD: [CLOSED]}]},
@@ -134,7 +135,7 @@ def test_halted_commit_params_keeps_gaps_closed():
 
 
 @pytest.fixture
-def run(tmp_path):
+def run(tmp_path: Path):
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@t.example")
     _git(tmp_path, "config", "user.name", "t")
@@ -164,7 +165,7 @@ def _gate(run, verdict, resume):
     return terminal_commit_ledger._ledger_gate(root, run_dir, verdict, mpath, resume_ledger=resume)[0]
 
 
-def test_terminal_commit_refuses_unclosed_gap_and_passes_closed(run):
+def test_terminal_commit_refuses_unclosed_gap_and_passes_closed(run) -> None:
     refusal = _gate(run, _verdict(), _resume(run[3]))
     assert refusal["refused"] == "ledger-unmet"
     assert refusal["ledger_failures"] == [{"id": "R1", "reason": f"{HALT_GAP_UNCLOSED_REASON}: {GAP}"}]
@@ -176,7 +177,7 @@ def _land_gate(run, verdict, resume):
     return lr._ledger_gate(root, run_dir, verdict, mpath, (), {}, None, {}, resume, REL)[0]
 
 
-def test_land_run_refuses_unclosed_gap_and_passes_closed(run):
+def test_land_run_refuses_unclosed_gap_and_passes_closed(run) -> None:
     refusal = _land_gate(run, _verdict(), _resume(run[3]))
     assert refusal is not None
     assert {"id": "R1", "reason": f"{HALT_GAP_UNCLOSED_REASON}: {GAP}"} in refusal["ledger_failures"]
@@ -184,5 +185,5 @@ def test_land_run_refuses_unclosed_gap_and_passes_closed(run):
     assert HALT_GAP_UNCLOSED_REASON not in json.dumps(closed)
 
 
-def test_terminal_commit_non_resume_is_unaffected(run):
+def test_terminal_commit_non_resume_is_unaffected(run) -> None:
     assert _gate(run, _verdict(), None) is None

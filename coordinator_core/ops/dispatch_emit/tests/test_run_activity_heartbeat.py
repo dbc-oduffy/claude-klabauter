@@ -12,11 +12,13 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     touch_run_activity,
 )
 from coordinator_core.session import record_homes
+from pathlib import Path
+import pytest
 
 T0 = datetime(2026, 11, 5, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def _stage(d, stage="staged", at=T0):
+def _stage(d, stage: str = "staged", at: datetime = T0) -> None:
     d.mkdir(parents=True, exist_ok=True)
     (d / RUN_STAGE_FILE).write_text(
         json.dumps({"stage": stage, "phase": "executing", "last_activity_at": at.strftime("%Y-%m-%dT%H:%M:%SZ"), "session_id": "s"}),
@@ -28,7 +30,7 @@ def _read(d):
     return json.loads((d / RUN_STAGE_FILE).read_text(encoding="utf-8"))
 
 
-def test_advances_stamp_and_leaves_stage_and_other_keys(tmp_path):
+def test_advances_stamp_and_leaves_stage_and_other_keys(tmp_path: Path) -> None:
     _stage(tmp_path)
     later = T0 + timedelta(seconds=HEARTBEAT_MIN_S + 1)
     assert touch_run_activity(tmp_path, now=later) is True
@@ -37,7 +39,7 @@ def test_advances_stamp_and_leaves_stage_and_other_keys(tmp_path):
     assert data["stage"] == "staged" and data["session_id"] == "s"
 
 
-def test_a_second_touch_inside_the_throttle_writes_nothing(tmp_path):
+def test_a_second_touch_inside_the_throttle_writes_nothing(tmp_path: Path) -> None:
     _stage(tmp_path)
     assert touch_run_activity(tmp_path, now=T0 + timedelta(seconds=HEARTBEAT_MIN_S + 1)) is True
     before = (tmp_path / RUN_STAGE_FILE).read_bytes()
@@ -45,13 +47,13 @@ def test_a_second_touch_inside_the_throttle_writes_nothing(tmp_path):
     assert (tmp_path / RUN_STAGE_FILE).read_bytes() == before
 
 
-def test_young_stamp_is_refused_and_old_one_accepted(tmp_path):
+def test_young_stamp_is_refused_and_old_one_accepted(tmp_path: Path) -> None:
     _stage(tmp_path)
     assert touch_run_activity(tmp_path, now=T0 + timedelta(seconds=HEARTBEAT_MIN_S - 1)) is False
     assert touch_run_activity(tmp_path, now=T0 + timedelta(seconds=HEARTBEAT_MIN_S)) is True
 
 
-def test_terminal_and_absent_stage_are_not_touched(tmp_path):
+def test_terminal_and_absent_stage_are_not_touched(tmp_path: Path) -> None:
     assert touch_run_activity(tmp_path / "nope", now=T0 + timedelta(hours=1)) is False
     for stage in ("halted", "landed", "complete"):
         _stage(tmp_path, stage)
@@ -60,7 +62,7 @@ def test_terminal_and_absent_stage_are_not_touched(tmp_path):
         assert (tmp_path / RUN_STAGE_FILE).read_bytes() == before
 
 
-def test_a_token_admit_stamps_the_run_and_a_refused_admit_does_not(tmp_path, monkeypatch):
+def test_a_token_admit_stamps_the_run_and_a_refused_admit_does_not(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run_id, token, script = "ask-20261105T000000-abcdef", "t" * 32, "/s/script.mjs"
     monkeypatch.setattr(run_token, "_read_rec", lambda root, rid, **k: {"run_id": rid, "script_path": script})
     monkeypatch.setattr(run_token, "_matches", lambda rec, rid, tok, sp: tok == token)
@@ -77,7 +79,7 @@ def test_a_token_admit_stamps_the_run_and_a_refused_admit_does_not(tmp_path, mon
     assert _read(d)["stage"] == "staged"
 
 
-def test_an_admit_still_succeeds_when_the_heartbeat_raises(tmp_path, monkeypatch):
+def test_an_admit_still_succeeds_when_the_heartbeat_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run_id, token, script = "ask-20261105T000000-abcdef", "t" * 32, "/s/script.mjs"
     monkeypatch.setattr(run_token, "_read_rec", lambda root, rid, **k: {"run_id": rid, "script_path": script})
     monkeypatch.setattr(run_token, "_matches", lambda rec, rid, tok, sp: tok == token)

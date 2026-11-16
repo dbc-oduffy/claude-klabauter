@@ -13,9 +13,10 @@ being true.
 import os
 
 from coordinator_core import memo_corpus
+from pathlib import Path
 
 
-def test_memo_corpus_root_prefers_new_root_when_present(tmp_path):
+def test_memo_corpus_root_prefers_new_root_when_present(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     new_root = os.path.join(repo_root, "state", "cross-repo")
     os.makedirs(new_root)
@@ -27,7 +28,7 @@ def test_memo_corpus_root_prefers_new_root_when_present(tmp_path):
     assert result == new_root
 
 
-def test_memo_corpus_root_falls_back_to_legacy_when_only_legacy_present(tmp_path):
+def test_memo_corpus_root_falls_back_to_legacy_when_only_legacy_present(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     legacy_root = os.path.join(repo_root, "cross-repo")
     os.makedirs(legacy_root)
@@ -37,7 +38,7 @@ def test_memo_corpus_root_falls_back_to_legacy_when_only_legacy_present(tmp_path
     assert result == legacy_root
 
 
-def test_memo_corpus_root_creates_new_root_when_neither_exists(tmp_path):
+def test_memo_corpus_root_creates_new_root_when_neither_exists(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     new_root = os.path.join(repo_root, "state", "cross-repo")
 
@@ -46,7 +47,7 @@ def test_memo_corpus_root_creates_new_root_when_neither_exists(tmp_path):
     assert result == new_root
 
 
-def test_memo_corpus_root_re_resolves_when_this_repo_migrates_mid_process(tmp_path):
+def test_memo_corpus_root_re_resolves_when_this_repo_migrates_mid_process(tmp_path: Path) -> None:
     """The inverse of the test this replaces.
 
     `memo_corpus_root` was process-lifetime `lru_cache`d when it landed, and
@@ -78,12 +79,12 @@ def test_memo_corpus_root_re_resolves_when_this_repo_migrates_mid_process(tmp_pa
     )
 
 
-def test_memo_corpus_root_carries_no_cache_attribute(tmp_path):
+def test_memo_corpus_root_carries_no_cache_attribute(tmp_path: Path) -> None:
     assert not hasattr(memo_corpus.memo_corpus_root, "cache_clear")
     assert not hasattr(memo_corpus.memo_corpus_root, "cache_info")
 
 
-def test_receiver_inbox_root_prefers_new_root_when_present(tmp_path):
+def test_receiver_inbox_root_prefers_new_root_when_present(tmp_path: Path) -> None:
     repo_path = str(tmp_path)
     new_root = os.path.join(repo_path, "state", "cross-repo")
     os.makedirs(new_root)
@@ -94,7 +95,7 @@ def test_receiver_inbox_root_prefers_new_root_when_present(tmp_path):
     assert root_isdir is True
 
 
-def test_receiver_inbox_root_falls_back_to_legacy_for_unmigrated_peer(tmp_path):
+def test_receiver_inbox_root_falls_back_to_legacy_for_unmigrated_peer(tmp_path: Path) -> None:
     repo_path = str(tmp_path)
     legacy_root = os.path.join(repo_path, "cross-repo")
     os.makedirs(legacy_root)
@@ -105,7 +106,7 @@ def test_receiver_inbox_root_falls_back_to_legacy_for_unmigrated_peer(tmp_path):
     assert root_isdir is True
 
 
-def test_receiver_inbox_root_reports_false_when_neither_exists(tmp_path):
+def test_receiver_inbox_root_reports_false_when_neither_exists(tmp_path: Path) -> None:
     repo_path = str(tmp_path)
     legacy_root = os.path.join(repo_path, "cross-repo")
 
@@ -115,7 +116,7 @@ def test_receiver_inbox_root_reports_false_when_neither_exists(tmp_path):
     assert root_isdir is False
 
 
-def test_receiver_inbox_root_is_not_process_lifetime_cached(tmp_path):
+def test_receiver_inbox_root_is_not_process_lifetime_cached(tmp_path: Path) -> None:
     repo_path = str(tmp_path)
     legacy_root = os.path.join(repo_path, "cross-repo")
     new_root = os.path.join(repo_path, "state", "cross-repo")

@@ -17,6 +17,7 @@ from .conftest import REVIEW_KW
 from .test_ask_compose import _compose as _compose_ask
 from .test_emit import _wave_row
 from .test_wake_digest_contract import _kwargs
+from pathlib import Path
 
 _BASE = "a" * 40
 
@@ -32,7 +33,7 @@ def _test_prompt(script: str) -> str:
 
 
 @pytest.fixture
-def script(tmp_path):
+def script(tmp_path: Path) -> str:
     (tmp_path / "tsconfig.json").write_text("{}\n", encoding="utf-8")
     tsc = tmp_path / "node_modules" / ".bin" / "tsc"
     tsc.parent.mkdir(parents=True)
@@ -43,7 +44,7 @@ def script(tmp_path):
     )
 
 
-def test_terminal_test_phase_runs_after_every_review_stage(script):
+def test_terminal_test_phase_runs_after_every_review_stage(script) -> None:
     phases = _phases(script)
     phase_at = phases.index("Scoped test run")
 
@@ -54,7 +55,7 @@ def test_terminal_test_phase_runs_after_every_review_stage(script):
     assert script.index("phase('Review wave')") < script.index("phase('Review integration')") < test_at
 
 
-def test_terminal_test_prompt_covers_review_edited_files_beside_the_row_writes(script):
+def test_terminal_test_prompt_covers_review_edited_files_beside_the_row_writes(script) -> None:
     prompt = _test_prompt(script)
 
     assert "git diff --name-only ' + _runBase + '" in prompt
@@ -64,14 +65,14 @@ def test_terminal_test_prompt_covers_review_edited_files_beside_the_row_writes(s
     assert "node_modules/.bin/tsc --noEmit -p ." in prompt
 
 
-def test_review_edit_scope_falls_back_to_head_without_a_run_base():
+def test_review_edit_scope_falls_back_to_head_without_a_run_base() -> None:
     waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"])]]
     script = compose_script(waves, name="wf", description="py", **REVIEW_KW)
 
     assert "git diff --name-only HEAD" in _test_prompt(script)
 
 
-def test_ask_route_terminal_test_covers_review_edits_too():
+def test_ask_route_terminal_test_covers_review_edits_too() -> None:
     ask = _compose_ask()
 
     assert ask.index("phase('Review wave')") < ask.index("phase('Verify')")
@@ -116,7 +117,7 @@ _CLI = "coordinator-invoke dispatch.terminal_commit --from-task-output TASK_OUTP
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_digest_carries_one_pasteable_terminal_commit_line(tmp_path):
+def test_digest_carries_one_pasteable_terminal_commit_line(tmp_path: Path) -> None:
     digest = _digest(tmp_path)
 
     assert digest["terminal_commit_cli"] == _CLI
@@ -126,7 +127,7 @@ def test_digest_carries_one_pasteable_terminal_commit_line(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_params_free_text_never_reaches_the_cli_line(tmp_path):
+def test_params_free_text_never_reaches_the_cli_line(tmp_path: Path) -> None:
     digest = _digest(tmp_path, inline_note="it's <&> E:\\x\\.coordinator-local\\")
 
     assert digest["terminal_commit_cli"] == _CLI
@@ -135,7 +136,7 @@ def test_params_free_text_never_reaches_the_cli_line(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_params_task_output_path_is_named_in_the_line(tmp_path):
+def test_a_params_task_output_path_is_named_in_the_line(tmp_path: Path) -> None:
     digest = _digest(tmp_path, params_extra="task_output_path: '/t/run.output'")
 
     assert digest["next_action"]["params"]["task_output_path"] == "/t/run.output"
@@ -146,7 +147,7 @@ def test_a_params_task_output_path_is_named_in_the_line(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_the_line_pastes_into_a_shell_as_one_invocation(tmp_path):
+def test_the_line_pastes_into_a_shell_as_one_invocation(tmp_path: Path) -> None:
     digest = _digest(tmp_path, params_extra="task_output_path: 'C:\\\\t\\\\run.output'")  # abs-path-ok: quoting fixture
     bash = shutil.which("bash")
     if bash is None:
@@ -163,7 +164,7 @@ def test_the_line_pastes_into_a_shell_as_one_invocation(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_digest_with_no_next_action_params_has_a_null_line(tmp_path):
+def test_a_digest_with_no_next_action_params_has_a_null_line(tmp_path: Path) -> None:
     js = wd.completion_return_js(**_kwargs(review_vars=None, has_commit_request=False, skipped_rows=[]))
     node = shutil.which("node")
     if node is None:
@@ -184,7 +185,7 @@ def test_a_digest_with_no_next_action_params_has_a_null_line(tmp_path):
     assert digest["next_action"]["params"] is None and digest["terminal_commit_cli"] is None
 
 
-def test_the_ask_route_return_carries_the_line_too():
+def test_the_ask_route_return_carries_the_line_too() -> None:
     ask = _compose_ask()
 
     assert "get terminal_commit_cli()" in ask and "function _terminalCommitCli(" in ask

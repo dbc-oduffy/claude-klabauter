@@ -3,9 +3,10 @@ import linecache
 import logging
 
 from coordinator_core import source_free_traceback
+import pytest
 
 
-def test_logged_exception_never_touches_linecache(monkeypatch):
+def test_logged_exception_never_touches_linecache(monkeypatch: pytest.MonkeyPatch) -> None:
     source_free_traceback.install()
     monkeypatch.setattr(linecache, "getline", lambda *a, **k: (_ for _ in ()).throw(AssertionError("opened source")))
     try:

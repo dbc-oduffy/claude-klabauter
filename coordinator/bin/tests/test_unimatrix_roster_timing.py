@@ -5,12 +5,17 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 BIN = Path(__file__).resolve().parents[1]
 SCRIPT = BIN / "unimatrix-roster-timing.py"
 
 
-def _timing():
+def _timing() -> "ModuleType":
     spec = importlib.util.spec_from_file_location("unimatrix_roster_timing_t", SCRIPT)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -21,7 +26,7 @@ def _snapshot(d):
     return {p.name: p.read_bytes() for p in d.iterdir()}
 
 
-def _seed(sess, monkeypatch, tmp_path):
+def _seed(sess, monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
     live = os.getpid()
     (sess / f"{live}.json").write_text(json.dumps({"pid": live, "name": "live", "kind": "interactive"}))
@@ -33,7 +38,7 @@ def _seed(sess, monkeypatch, tmp_path):
     (sess / "99999.json").write_text("not json")
 
 
-def test_measure_reports_phases_rows_and_skips_read_only(tmp_path, monkeypatch):
+def test_measure_reports_phases_rows_and_skips_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sess = tmp_path / "sessions"
     sess.mkdir()
     _seed(sess, monkeypatch, tmp_path)
@@ -51,7 +56,7 @@ def test_measure_reports_phases_rows_and_skips_read_only(tmp_path, monkeypatch):
     assert report["phase_calls"]["entry_live"] >= 2
 
 
-def test_measure_restores_patched_globals(tmp_path, monkeypatch):
+def test_measure_restores_patched_globals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sess = tmp_path / "sessions"
     sess.mkdir()
     _seed(sess, monkeypatch, tmp_path)
@@ -60,7 +65,7 @@ def test_measure_restores_patched_globals(tmp_path, monkeypatch):
     assert (os.listdir, json.load, subprocess.Popen) == (listdir, load, popen)
 
 
-def test_cli_prints_json_for_an_empty_sessions_dir(tmp_path):
+def test_cli_prints_json_for_an_empty_sessions_dir(tmp_path: Path) -> None:
     sess = tmp_path / "sessions"
     sess.mkdir()
     env = {**os.environ, "COORDINATOR_SETTINGS_HOME": str(tmp_path / "home")}

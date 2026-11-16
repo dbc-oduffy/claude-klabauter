@@ -4,9 +4,10 @@ from __future__ import annotations
 import os
 
 from coordinator_core.install import substrate
+from pathlib import Path
 
 
-def test_writing_one_slot_leaves_its_hardlinked_siblings_alone(tmp_path):
+def test_writing_one_slot_leaves_its_hardlinked_siblings_alone(tmp_path: Path) -> None:
     door = tmp_path / "door-image"
     door.write_bytes(b"\xcf\xfa\xed\xfe native door")
     slot, sibling = tmp_path / "slot-a", tmp_path / "slot-b"

@@ -8,11 +8,12 @@ import pytest
 
 import coordinator_core.ops.dispatch_emit as _pkg
 from coordinator_core.ops.dispatch_emit import cli
+from pathlib import Path
 
 
 class _Admitted:
     @staticmethod
-    def await_admission(start_dir, *, hold_allowed):
+    def await_admission(start_dir, *, hold_allowed) -> dict[str, str]:
         return {"verdict": "disabled"}
 
 
@@ -28,14 +29,14 @@ def _acc(emitted, skipped=(), refused=()):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(_pkg, "admission", _Admitted, raising=False)
     return tmp_path
 
 
-def test_single_inventory_emit_prints_summary_and_each_edited_plan(repo, monkeypatch, capsys):
+def test_single_inventory_emit_prints_summary_and_each_edited_plan(repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     inv = repo / "inv.md"
     inv.write_text("---\nrun_id: r1\n---\n", encoding="utf-8")
     reply = {
@@ -59,7 +60,7 @@ def test_single_inventory_emit_prints_summary_and_each_edited_plan(repo, monkeyp
     assert err.count("edited ") == 2
 
 
-def test_single_emit_without_plan_edits_prints_no_edited_line(repo, monkeypatch, capsys):
+def test_single_emit_without_plan_edits_prints_no_edited_line(repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     inv = repo / "inv.md"
     inv.write_text("---\nrun_id: r1\n---\n", encoding="utf-8")
     reply = {
@@ -76,7 +77,7 @@ def test_single_emit_without_plan_edits_prints_no_edited_line(repo, monkeypatch,
     assert "edited " not in err
 
 
-def test_parts_mode_merges_accounting_and_plan_edits_and_names_both_totals(tmp_path, monkeypatch, capsys):
+def test_parts_mode_merges_accounting_and_plan_edits_and_names_both_totals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     tranche = tmp_path / "run7.md"
     tranche.write_text("---\nrun_id: run7\n---\n", encoding="utf-8")
     from coordinator_core.ops.dispatch_emit import inventory_accounting as ia
@@ -114,7 +115,7 @@ def test_parts_mode_merges_accounting_and_plan_edits_and_names_both_totals(tmp_p
     assert err.count("edited ") == 2
 
 
-def test_parts_mode_with_an_unplaced_item_refuses(tmp_path, monkeypatch):
+def test_parts_mode_with_an_unplaced_item_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import inventory_accounting as ia
 
     tranche = tmp_path / "run7.md"

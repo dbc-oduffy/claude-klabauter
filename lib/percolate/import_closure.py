@@ -1003,6 +1003,18 @@ def find_commit_module_attr_violations(
     `commit` every time. The caller keys the cache on this module's source hash
     and flushes it. `progress(done, total)` is called after each importer."""
     sources, dirs = _read_commit_py_blobs(repo, commit, roots)
+    return _module_attr_violations(sources, dirs, sorted(sources), cache, progress)
+
+
+def _module_attr_violations(
+    sources,
+    dirs: set[str],
+    importers: list[str],
+    cache=None,
+    progress: Callable[[int, int], None] | None = None,
+) -> tuple[int, list[tuple[str, str]]]:
+    """Shared resolution: `importers` checked against the `sources` mapping
+    (`in` / `[]` by repo-relative path) and `dirs`."""
     namespace_cache: dict[str, tuple[set[str], bool]] = {}
 
     def namespace_of(path: str) -> tuple[set[str], bool]:
@@ -1023,11 +1035,10 @@ def find_commit_module_attr_violations(
 
     violations: set[tuple[str, str]] = set()
     examined = 0
-    ordered = sorted(sources)
-    for done, importer in enumerate(ordered, 1):
+    for done, importer in enumerate(importers, 1):
         if progress is not None:
-            progress(done, len(ordered))
-        if _is_test_path(importer) or "coordinator_core" not in sources[importer]:
+            progress(done, len(importers))
+        if _is_test_path(importer) or importer not in sources or "coordinator_core" not in sources[importer]:
             continue
         facts = _attr_cached(
             cache, sources[importer], _ATTR_IMPORTER_DIGEST, lambda: _attr_importer_facts(sources[importer], importer)
@@ -1112,6 +1123,24 @@ def find_would_be_tree_from_import_violations(
     `None` = deleted), judged for the overlay's non-test `.py` importers only.
     `reader(blob_sha) -> bytes | None` reads base blobs; only the importers'
     targets are read. One git spawn. Raises `CommitReadError` on a failed listing."""
+    sources, dirs, importers = _would_be_tree(repo, base_commit, overlay, reader, roots)
+    return _from_import_violations(sources, dirs, importers)
+
+
+def find_would_be_tree_violations(
+    repo: Path, base_commit: str, overlay: dict, reader, roots: tuple[str, ...] = COMMIT_NAME_ROOTS
+) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """`(from_import_violations, module_attr_violations)` over one would-be tree
+    and one listing spawn."""
+    sources, dirs, importers = _would_be_tree(repo, base_commit, overlay, reader, roots)
+    return (
+        _from_import_violations(sources, dirs, importers)[1],
+        _module_attr_violations(sources, dirs, importers)[1],
+    )
+
+
+def _would_be_tree(repo: Path, base_commit: str, overlay: dict, reader, roots: tuple[str, ...]):
+    """`(sources, dirs, importers)` for `base_commit` with `overlay` applied."""
     entries, dirs = _list_commit_py_entries(repo, base_commit, roots)
     for path, source in overlay.items():
         if source is not None:
@@ -1122,7 +1151,7 @@ def find_would_be_tree_from_import_violations(
         p for p, s in overlay.items()
         if s is not None and p.endswith(".py") and any(p.startswith(r + "/") for r in roots)
     )
-    return _from_import_violations(sources, dirs, importers)
+    return sources, dirs, importers
 
 
 def _from_import_violations(sources, dirs: set[str], importers: list[str]) -> tuple[int, list[tuple[str, str]]]:

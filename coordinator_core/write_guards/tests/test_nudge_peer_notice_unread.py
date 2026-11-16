@@ -18,6 +18,8 @@ import json
 
 from coordinator_core.ops import peer_notice_send
 from coordinator_core.write_guards import nudge_peer_notice_unread as guard
+from pathlib import Path
+import pytest
 
 
 def _repo_root(tmp_path):
@@ -25,7 +27,7 @@ def _repo_root(tmp_path):
     return tmp_path
 
 
-def _send(root, monkeypatch, target, message, sender="sender-1", artifact="a.py"):
+def _send(root, monkeypatch, target, message, sender: str = "sender-1", artifact: str = "a.py"):
     monkeypatch.setattr(
         "coordinator_core.ops.peer_notice_send.main_worktree_root", lambda p: root
     )
@@ -52,13 +54,13 @@ def _payload(tool_name, session_id, cwd):
     }
 
 
-def test_no_notices_is_silent(tmp_path):
+def test_no_notices_is_silent(tmp_path: Path) -> None:
     root = _repo_root(tmp_path)
     result = guard.check(_payload("Write", "peer-abc", root))
     assert result is None
 
 
-def test_one_notice_fires_and_never_denies(tmp_path, monkeypatch):
+def test_one_notice_fires_and_never_denies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo_root(tmp_path)
     _send(root, monkeypatch, "peer-abc", "I am editing this function")
 
@@ -72,7 +74,7 @@ def test_one_notice_fires_and_never_denies(tmp_path, monkeypatch):
     assert "PEER NOTICE" in envelope["additionalContext"]
 
 
-def test_firing_delivers_notice_so_second_call_is_silent(tmp_path, monkeypatch):
+def test_firing_delivers_notice_so_second_call_is_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo_root(tmp_path)
     _send(root, monkeypatch, "peer-abc", "collision")
 
@@ -87,7 +89,7 @@ def test_firing_delivers_notice_so_second_call_is_silent(tmp_path, monkeypatch):
     assert len(list(delivered_dir.glob("*.json"))) == 1
 
 
-def test_bounded_surfacing(tmp_path, monkeypatch):
+def test_bounded_surfacing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo_root(tmp_path)
     for i in range(guard._MAX_NOTICES + 2):
         _send(root, monkeypatch, "peer-abc", f"msg-{i}", artifact=f"f{i}.py")
@@ -98,13 +100,13 @@ def test_bounded_surfacing(tmp_path, monkeypatch):
     assert "...and 2 more" in context
 
 
-def test_missing_session_id_is_silent(tmp_path):
+def test_missing_session_id_is_silent(tmp_path: Path) -> None:
     root = _repo_root(tmp_path)
     payload = _payload("Write", "", root)
     assert guard.check(payload) is None
 
 
-def test_non_mutating_tool_is_silent(tmp_path, monkeypatch):
+def test_non_mutating_tool_is_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo_root(tmp_path)
     _send(root, monkeypatch, "peer-abc", "hi")
     payload = {
@@ -116,13 +118,13 @@ def test_non_mutating_tool_is_silent(tmp_path, monkeypatch):
     assert guard.check(payload) is None
 
 
-def test_module_contract():
+def test_module_contract() -> None:
     assert guard.CLASS == "advisory"
     assert set(guard.MATCHERS) == {"Write", "Edit", "MultiEdit", "NotebookEdit"}
     assert isinstance(guard.PRIORITY, int)
 
 
-def test_unsafe_session_id_is_silent_not_raised(tmp_path):
+def test_unsafe_session_id_is_silent_not_raised(tmp_path: Path) -> None:
     root = _repo_root(tmp_path)
     payload = _payload("Write", "../escape", root)
     assert guard.check(payload) is None

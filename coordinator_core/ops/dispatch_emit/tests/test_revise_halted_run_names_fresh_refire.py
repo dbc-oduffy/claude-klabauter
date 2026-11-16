@@ -8,12 +8,13 @@ from coordinator_core.ops.dispatch_emit import halted_run
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 from coordinator_core.warp_fire import fire_command
+from pathlib import Path
 
 RUN = "ask-20261015T000000-abc123"
 REL = "state/sizings/2026-10-15-revise.yaml"
 
 
-def _repo(tmp_path, *, emit=True):
+def _repo(tmp_path, *, emit: bool = True):
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     sizing = {
@@ -33,7 +34,7 @@ def _revise(root):
     return rl._handler({"run_id": RUN, "verbatim": "also cover Windows"}, repo_root=root)
 
 
-def test_halted_marker_makes_the_run_not_live_and_names_the_fresh_refire(tmp_path):
+def test_halted_marker_makes_the_run_not_live_and_names_the_fresh_refire(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     dir_ = record_dir(root, RUN)
     halted_run.write_halt_marker(dir_, halted="stalled", sizing_rel=REL)
@@ -44,7 +45,7 @@ def test_halted_marker_makes_the_run_not_live_and_names_the_fresh_refire(tmp_pat
     assert halted_run.revised_halt(dir_)
 
 
-def test_a_resumed_marker_is_left_alone(tmp_path):
+def test_a_resumed_marker_is_left_alone(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     dir_ = record_dir(root, RUN)
     halted_run.write_halt_marker(dir_, halted="stalled", sizing_rel=REL)
@@ -54,14 +55,14 @@ def test_a_resumed_marker_is_left_alone(tmp_path):
     assert halted_run.REVISED_AT_FIELD not in halted_run._read(dir_)
 
 
-def test_no_marker_keeps_the_unchanged_reply(tmp_path):
+def test_no_marker_keeps_the_unchanged_reply(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     out = _revise(root)
     assert "resumeFromRunId" not in out.get("note", "")
     assert not (record_dir(root, RUN) / halted_run.HALTED_FILE).exists()
 
 
-def test_a_held_run_writes_no_marker(tmp_path):
+def test_a_held_run_writes_no_marker(tmp_path: Path) -> None:
     root = _repo(tmp_path, emit=False)
     out = _revise(root)
     assert "error" in out or out.get("held") is True

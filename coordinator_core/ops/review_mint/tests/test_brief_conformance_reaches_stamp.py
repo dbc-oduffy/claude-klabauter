@@ -18,6 +18,7 @@ from coordinator_core.ops.review_mint.tests.test_execute_review import (
     _v5_fragment,
 )
 from coordinator_core.ops.review_mint.wave_bookkeeping import bookkeep_wave
+from pathlib import Path
 
 _ROWS = [
     {"brief_item": "a", "requirement": "r", "file_line": "f:1", "verified_how": "v", "status": "met"},
@@ -38,7 +39,7 @@ def _wave_block(**kw) -> str:
     return dict(phases)["Review wave"]
 
 
-def test_code_reviewer_prompts_carry_the_brief_conformance_instruction():
+def test_code_reviewer_prompts_carry_the_brief_conformance_instruction() -> None:
     block = _wave_block(criterion=OperativeCriterion("the operative statement"))
     assert block.count("Brief conformance:") >= 2
     assert "frontmatter `brief_conformance:` list" in block
@@ -61,7 +62,7 @@ def _bookkeep(tmp_path, sidecar_text: str) -> dict:
     )["brief_conformance"]
 
 
-def test_rows_in_the_sidecar_body_section_reach_the_integration_count(tmp_path):
+def test_rows_in_the_sidecar_body_section_reach_the_integration_count(tmp_path: Path) -> None:
     text = (
         "---\nagent_type: coordinator:code-reviewer\napplied: 0\n---\n# Review\n\n"
         "## Findings\n\nNone.\n\n## Brief conformance\n\n```json\n"
@@ -70,12 +71,12 @@ def test_rows_in_the_sidecar_body_section_reach_the_integration_count(tmp_path):
     assert _bookkeep(tmp_path, text) == {"items": 2, "met": 1, "unmet": 1}
 
 
-def test_frontmatter_rows_win_over_the_body_section(tmp_path):
+def test_frontmatter_rows_win_over_the_body_section(tmp_path: Path) -> None:
     fm = yaml.safe_dump({"agent_type": "coordinator:code-reviewer", "brief_conformance": _ROWS[:1]})
     text = f"---\n{fm}---\n# Review\n\n## Brief conformance\n\n```json\n{json.dumps(_ROWS)}\n```\n"
     assert _bookkeep(tmp_path, text) == {"items": 1, "met": 1, "unmet": 0}
 
 
-def test_a_sidecar_with_no_rows_anywhere_still_counts_zero(tmp_path):
+def test_a_sidecar_with_no_rows_anywhere_still_counts_zero(tmp_path: Path) -> None:
     text = "---\nagent_type: coordinator:code-reviewer\n---\n# Review\n\n## Findings\n\nNone.\n"
     assert _bookkeep(tmp_path, text) == {"items": 0, "met": 0, "unmet": 0}

@@ -270,6 +270,7 @@ Negative-spec:
 from __future__ import annotations
 
 import ast
+import functools
 import json
 import logging
 import os
@@ -1357,10 +1358,13 @@ def _dedupe_preserve_order(paths: list[str]) -> list[str]:
 
 
 def _widen_with_test_candidates(
-    paths: list[str], repo_root: Optional[Path] = None
+    paths: list[str],
+    repo_root: Optional[Path] = None,
+    probe_memo: Optional[dict] = None,
 ) -> list[str]:
     """``paths`` plus each entry's stem-derived test-file candidate
     (``pathspec.candidate_test_additions``), deduped, order preserved.
+    ``probe_memo`` is the caller's call-scoped stat memo, forwarded to that function.
 
     The widening a committer's handed pathspec needs so an AC-satisfying
     executor's own test file reads as declared rather than a stranded-work
@@ -1373,7 +1377,7 @@ def _widen_with_test_candidates(
     """
     if not paths:
         return paths
-    return _dedupe_preserve_order([*paths, *candidate_test_additions(paths, repo_root)])
+    return _dedupe_preserve_order([*paths, *candidate_test_additions(paths, repo_root, probe_memo)])
 
 
 def _widen_waves_with_test_referencers(waves: list, repo_root: Path) -> list:
@@ -1665,6 +1669,9 @@ def _agent_type_host_degraded_narration() -> str:
 
 _TEST_PHASE_TITLE = "Scoped test run"
 _EXECUTE_PHASE_TITLE = "Execute"
+#: A stage of more rows than this records the row briefs in one batched file and the composed script
+#: materialises each wave's files before that wave launches; at or below it the files are written at stage.
+LAZY_BRIEFS_ABOVE_ROWS = 200
 
 _SIDECAR_WORKFLOW = "emit"
 _VERIFY_LABEL_JS = "'verify:' + id"
@@ -1674,9 +1681,21 @@ _SEAM_LABEL_JS = "'seam:wave-' + n"
 _SIDECAR_NO_PLAN_KEY = "no-plan"
 
 
+@functools.lru_cache(maxsize=64)
+def _plan_stem(plan_path: str) -> str:
+    """``Path(plan_path).stem``, memoized: a thousands-row wave asks it per row for one plan."""
+    return Path(plan_path).stem
+
+
+@functools.lru_cache(maxsize=8192)
+def _sidecar_dir_memo(workflow: str, run_key: str, label: str) -> str:
+    """`_sidecar_dir`, memoized: a row's prompt asks the same dir three times; a raise is never cached."""
+    return _sidecar_dir(workflow, run_key, label)
+
+
 def _sidecar_run_key(plan_path: Optional[str]) -> str:
     """The plan file's stem, or ``_SIDECAR_NO_PLAN_KEY`` when the composition has no plan."""
-    return Path(plan_path.replace("\\", "/")).stem if plan_path else _SIDECAR_NO_PLAN_KEY
+    return _plan_stem(plan_path.replace("\\", "/")) if plan_path else _SIDECAR_NO_PLAN_KEY
 
 
 def _review_run_key(session_id: Optional[str], plan_path: Optional[str], script_path: Optional[str]) -> Optional[str]:
@@ -1691,7 +1710,7 @@ def _review_run_key(session_id: Optional[str], plan_path: Optional[str], script_
 
 def _emit_sidecar_clause(plan_path: Optional[str], label: str) -> str:
     """Prompt-tail text for an agent whose label is known at compose time."""
-    return _sidecar_clause(_sidecar_dir(_SIDECAR_WORKFLOW, _sidecar_run_key(plan_path), label))
+    return _sidecar_clause(_sidecar_dir_memo(_SIDECAR_WORKFLOW, _sidecar_run_key(plan_path), label))
 
 
 def _emit_sidecar_clause_js(
@@ -2726,7 +2745,7 @@ def _dispatch_report_path(plan_path: str, row_id: str) -> str:
             f"row_id {row_id!r} is a Windows reserved device name -- "
             "refusing to compose a dispatch report path from it"
         )
-    return f"{_DISPATCH_REPORT_DIR}/{Path(plan_path).stem}/{row_id}.md"
+    return f"{_DISPATCH_REPORT_DIR}/{_plan_stem(plan_path)}/{row_id}.md"
 
 
 #: The line an executor ends its reply with when a STOP RULE in its own spine
@@ -2785,13 +2804,20 @@ def _vitest_cap_clause() -> str:
     return _VITEST_CAP_CLAUSE.format(cap=cap) if cap else ""
 
 
+_SCOPED_FOREGROUND_CLAUSE = (
+    "Run only the test files covering the touched files, never a broad suite or a directory. "
+    "Run them in the foreground and wait for the exit. "
+    "Return only once every process you started has exited; kill any that remain."
+)
+
+
 def _test_runner_clause(repo_root: Optional[str | Path] = None) -> str:
-    """The skip-report and changed-file rules, the vitest cap when the box sets one, and the target
+    """The skip-report, changed-file and scoped-foreground rules, the vitest cap when the box sets one, and the target
     repo's interpreter clause."""
     from coordinator_core.ops.dispatch_emit.interpreter_pin import interpreter_clause
 
     cap = _vitest_cap_clause()
-    base = f"{_SKIP_REPORT_CLAUSE} {_CHANGED_FILES_CLAUSE}"
+    base = f"{_SKIP_REPORT_CLAUSE} {_CHANGED_FILES_CLAUSE} {_SCOPED_FOREGROUND_CLAUSE}"
     base = f"{base} {cap}" if cap else base
     return f"{base} {interpreter_clause(repo_root)}"
 
@@ -2966,7 +2992,7 @@ def _declared_scope_block(row: WaveRow) -> str:
 def _checkpoint_path_for(plan_path: Optional[str], row_id: str, n: int) -> str:
     """The n-th checkpoint file of row `row_id`, inside the row's own sidecar dir (already in its fence)."""
     return checkpoint_path(
-        _sidecar_dir(_SIDECAR_WORKFLOW, _sidecar_run_key(plan_path), row_id), row_id, n
+        _sidecar_dir_memo(_SIDECAR_WORKFLOW, _sidecar_run_key(plan_path), row_id), row_id, n
     )
 
 
@@ -3024,7 +3050,7 @@ def _row_return_contract(
                 "[list]",
                 _shared_pathspec_text(
                     _fenced_paths(
-                        [*footprint, _sidecar_dir(_SIDECAR_WORKFLOW, _sidecar_run_key(plan_path), row.id)],
+                        [*footprint, _sidecar_dir_memo(_SIDECAR_WORKFLOW, _sidecar_run_key(plan_path), row.id)],
                         row.writes_under,
                         row.surface,
                     ),
@@ -3036,12 +3062,7 @@ def _row_return_contract(
     else:
         footprint = [report_path]
 
-    parts.append(
-        self_verify_constraint(
-            commit_authority=_EMITTED_COMMIT_AUTHORITY,
-            deferred_verification_authority=_EMITTED_DEFERRED_VERIFICATION_AUTHORITY,
-        )
-    )
+    parts.append(_self_verify_text())
 
     porcelain_paths = _shared_pathspec_text(
         [_shell_pathspec(p) for p in footprint], shared, " "
@@ -3060,12 +3081,26 @@ def _row_return_contract(
             checkpoint_path_template=_checkpoint_path_for(plan_path, row.id, 1),
         )
     )
-    parts.append(_stop_rule_clause())
-    parts.append(_SCRATCH_HYGIENE_CLAUSE)
-    parts.append(_foreign_red_clause())
-    parts.append(_isolated_arm_build_clause())
+    parts.append(_row_independent_tail())
     parts.append(_declared_scope_block(row))
     return "\n\n".join(parts)
+
+
+@functools.lru_cache(maxsize=1)
+def _self_verify_text() -> str:
+    """The self-verify constraint: identical for every row, so one render serves a thousands-row wave."""
+    return self_verify_constraint(
+        commit_authority=_EMITTED_COMMIT_AUTHORITY,
+        deferred_verification_authority=_EMITTED_DEFERRED_VERIFICATION_AUTHORITY,
+    )
+
+
+@functools.lru_cache(maxsize=1)
+def _row_independent_tail() -> str:
+    """The four row-independent clauses closing every return contract, joined as `_row_return_contract` joins parts."""
+    return "\n\n".join(
+        (_stop_rule_clause(), _SCRATCH_HYGIENE_CLAUSE, _foreign_red_clause(), _isolated_arm_build_clause())
+    )
 
 
 def _shell_pathspec(path: str) -> str:
@@ -3190,8 +3225,12 @@ def _row_prompt(
     new_module_paths: tuple = (),
     predecessor_state: Optional[str] = None,
     excerpts: Optional[str] = None,
+    memo: Optional[dict] = None,
 ) -> str:
     """Compose one executor row's dispatch prompt.
+
+    ``memo`` (optional) is the caller's call-scoped dict: a caller composing many rows passes one so
+    the repo's route table and the plan-context head are resolved once, not per row.
 
     ``excerpts`` (optional) is the pre-rendered ``## Row excerpts`` block
     (``row_excerpts.excerpt_block``); omitted, the block carries the row body
@@ -3243,6 +3282,7 @@ def _row_prompt(
     rather than replacing one another. Both are no-ops when omitted.
     """
     head = f"Execute {row.id}: {row.title}"
+    memo = _call_memo(plan_context, memo)
     prompt_head = _prompt_head(preamble, _is_verification_row(row))
     sidecar = _emit_sidecar_clause(plan_path, row.id)
     if not plan_path:
@@ -3300,7 +3340,7 @@ def _row_prompt(
         if is_slot_row:
             body += f"\n\n{_slot_row_clause(gate_commands)}"
         else:
-            fence = _agent_route.run_only_fence(row, plan_context.repo_root)
+            fence = _run_only_fence(row, plan_context.repo_root, memo)
             if gate_commands:
                 body += f"\n\n{_build_gate_clause(gate_commands)}"
             if fence is not None:
@@ -3313,8 +3353,56 @@ def _row_prompt(
     if predecessor_state:
         body += f"\n\n{predecessor_state}"
     if plan_context is not None:
-        body = f"{_plan_context_head(plan_context)}\n\n{body}"
+        body = f"{_memo_plan_context_head(plan_context, memo)}\n\n{body}"
     return f"{prompt_head}\n\n{body}"
+
+
+_CONTEXT_MEMOS: dict = {}
+
+
+def _call_memo(context: Optional[PlanContext], memo: Optional[dict]) -> Optional[dict]:
+    """`memo`, else the dict bound to this `context` object for its lifetime (dropped when the
+    context is collected): a caller composing every row against one context shares one memo."""
+    if memo is not None or context is None:
+        return memo
+    held = _CONTEXT_MEMOS.get(id(context))
+    if held is None:
+        import weakref
+
+        held = _CONTEXT_MEMOS[id(context)] = {}
+        weakref.finalize(context, _CONTEXT_MEMOS.pop, id(context), None)
+    return held
+
+
+def _run_only_fence(row: WaveRow, repo_root, memo: Optional[dict]):
+    """`agent_route.run_only_fence`, answered `None` straight from `memo` once the repo has no route
+    table (a row is unfenced without one); a repo with a table is judged per row."""
+    if memo is None or not repo_root:
+        return _agent_route.run_only_fence(row, repo_root)
+    key = ("route_table", str(repo_root))
+    if key not in memo:
+        try:
+            table = _agent_route.load_route_table(repo_root)
+            if table is None:
+                table = _agent_route._plugin_table(repo_root)[0]
+        except Exception:  # noqa: BLE001 - run_only_fence never raises; an unusable table is unfenced
+            table = None
+        memo[key] = table
+    if memo[key] is None:
+        return None
+    return _agent_route.run_only_fence(row, repo_root)
+
+
+def _memo_plan_context_head(context: PlanContext, memo: Optional[dict]) -> str:
+    """`_plan_context_head(context)`, built once per `memo` for one context object."""
+    if memo is None:
+        return _plan_context_head(context)
+    held = memo.get("plan_context_head")
+    if held is not None and held[0] is context:
+        return held[1]
+    head = _plan_context_head(context)
+    memo["plan_context_head"] = (context, head)
+    return head
 
 
 def _row_agent_call_expr(
@@ -4979,6 +5067,19 @@ def _planned_partial_seed(plan_text: Optional[str]) -> dict:
     }
 
 
+#: Folds every checkpoint-withheld path and its reason into the halt (string reason or typed
+#: record), so a halted run never leaves a withheld path unnamed. Runs after the last `_halted` writer.
+_HALT_NAMES_WITHHELD_JS = (
+    "  if (_halted && typeof _heldPathsNamed !== 'undefined' && _heldPathsNamed.length) {\n"
+    "    const _heldNamed = Object.fromEntries(_heldPathsNamed.map((h) => [h.path, h.reason]));\n"
+    "    const _heldText = 'checkpoint withheld: ' + _heldPathsNamed"
+    ".map((h) => h.path + ' (' + h.reason + ')').join('; ');\n"
+    "    _halted = typeof _halted === 'string' ? _halted + ' [' + _heldText + ']' "
+    ": { ..._halted, checkpoint_withheld: _heldNamed, reason: String(_halted.reason || '') + ' [' + _heldText + ']' };\n"
+    "  }"
+)
+
+
 def _held_halt_record_js() -> str:
     """JS lifting a bare held-dependents `_halted` into the typed halt whose `next_action` detail names the accept_partial revise form."""
     from coordinator_core.ops.dispatch_emit.ask_contract import ACCEPT_PARTIAL_FORM, HALT_DEPENDENTS_UNSTARTED
@@ -5409,6 +5510,7 @@ _CHECKPOINT_COMMIT_SCHEMA = {
         "sha": {"type": "string"},
         "reason": {"type": "string"},
         "withheld_paths": {"type": "array", "items": {"type": "string"}},
+        "withheld_reasons": {"type": "object", "additionalProperties": {"type": "string"}},
     },
 }
 
@@ -6026,7 +6128,8 @@ def _checkpoint_commit_js(
         "committed without a sha. "
         + _INDETERMINATE_RECONCILE_CLAUSE
         + " On commit-failed, put the verbatim refusal in `reason`."
-        " Copy the reply's `checkpoint_withheld_paths` verbatim into `withheld_paths`."
+        " Copy the reply's `checkpoint_withheld_paths` verbatim into `withheld_paths` and its "
+        "`checkpoint_withheld_reasons` verbatim into `withheld_reasons`."
         + _dispatching_session_id_paragraph(session_id)
     )
     commit_type = _js_string_literal(_degrade_agent_type(_COMMIT_AGENT_TYPE, agent_type_host))
@@ -6091,6 +6194,7 @@ def _checkpoint_commit_js(
         "  const _commitFailures = [];",
         "  const _landed = {};",
         "  const _checkpointShas = [];",
+        "  const _heldPathsNamed = [];",
         "  const _waveTriggers = [];",
         "  const _carried = [];",
         "  let _commitChain = Promise.resolve();",
@@ -6181,6 +6285,11 @@ def _checkpoint_commit_js(
         "    const _pending = [...new Set([..._carried, ...done])];",
         "    _carried.length = 0;",
         "    const _withheld = new Set(Array.isArray(r.withheld_paths) ? r.withheld_paths : []);",
+        "    const _withheldWhy = r.withheld_reasons && typeof r.withheld_reasons === 'object' ? r.withheld_reasons : {};",
+        "    _withheld.forEach((p) => _heldPathsNamed.push({ wave: n, path: p, "
+        "reason: String(_withheldWhy[p] || 'no reason returned') }));",
+        "    if (_withheld.size) log('Checkpoint wave ' + n + ' withheld: ' + [..._withheld]"
+        ".map((p) => p + ' (' + String(_withheldWhy[p] || 'no reason returned') + ')').join('; '));",
         "    const _heldBack = _pending.filter((i) => [..._landed[i].paths, ..._landed[i].declared].some((p) => _withheld.has(p)));",
         "    _heldBack.forEach((i) => _carried.push(i));",
         *(
@@ -7802,6 +7911,8 @@ def compose_script(
     body_blocks.append(
         "  if (!_halted) {\n" + "\n\n".join(guarded_blocks) + "\n  }"
     )
+    if not review_only:
+        body_blocks.append(_HALT_NAMES_WITHHELD_JS)
 
     body_blocks.append(
         completion_return_js(
@@ -8521,25 +8632,32 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
     the ``Lands-Chunks:`` ids of commits whose ``Halt-Plan:`` names ``plan`` and whose
     ``Halted-By:`` is ``ledger-check``; and the run id parsed from the newest such halt commit's
     subject, with its sha; ``run_halts`` also covers halt commits with no ``Halt-Plan:`` trailer.
-    One ``git log`` spawn; empty when git cannot answer."""
+    Reads the landed-trailer record in process; spawns one ``git log`` only when no usable record
+    exists (to seed it). Empty when neither can answer."""
     from coordinator_core.git.checkpoint_guard import checkpoint_plan_matches, plan_commit_row_ids
+    from coordinator_core.git.git_state import head_sha
     from coordinator_core.git.run import run_git
+    from coordinator_core.ops.dispatch_emit import landed_trailer_record
     from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PLAN_TRAILER, halted_run_id
 
-    result = run_git(
-        [
-            "log", "-n", "500", "--grep=^Checkpoint-Plan: ", f"--grep=^{HALT_PLAN_TRAILER}: ",
-            "--grep=^warp: record halted ",
-            "--format=%s\x1f%(trailers:key=Checkpoint-Plan,valueonly,separator=%x1d)"
-            f"\x1f%(trailers:key={HALT_PLAN_TRAILER},valueonly,separator=%x1d)"
-            "\x1f%(trailers:key=Halted-By,valueonly,separator=%x1d)"
-            "\x1f%(trailers:key=Lands-Chunks,valueonly,separator=%x1d)\x1f%H"
-            f"\x1f%(trailers:key={STOP_RULE_TRAILER},valueonly,separator=%x1d)\x1e",
-        ],
-        cwd=str(repo_root),
-    )
-    if result.returncode != 0:
-        return ResumeLanded(frozenset(), None)
+    entries = landed_trailer_record.trailer_entries(repo_root)
+    if entries is None:
+        head_before = head_sha(repo_root)
+        result = run_git(
+            [
+                "log", "-n", "500", "--grep=^Checkpoint-Plan: ", f"--grep=^{HALT_PLAN_TRAILER}: ",
+                "--grep=^warp: record halted ",
+                "--format=%s\x1f%(trailers:key=Checkpoint-Plan,valueonly,separator=%x1d)"
+                f"\x1f%(trailers:key={HALT_PLAN_TRAILER},valueonly,separator=%x1d)"
+                "\x1f%(trailers:key=Halted-By,valueonly,separator=%x1d)"
+                "\x1f%(trailers:key=Lands-Chunks,valueonly,separator=%x1d)\x1f%H"
+                f"\x1f%(trailers:key={STOP_RULE_TRAILER},valueonly,separator=%x1d)\x1e",
+            ],
+            cwd=str(repo_root),
+        )
+        if result.returncode != 0:
+            return ResumeLanded(frozenset(), None)
+        entries = landed_trailer_record.refresh_from_git_log(repo_root, result.stdout, head=head_before)
     ids: set = set()
     ledger_run: Optional[str] = None
     ledger_sha: Optional[str] = None
@@ -8561,14 +8679,10 @@ def resume_landed_state(repo_root: Path, plan: str) -> ResumeLanded:
                 landing.setdefault(i, set()).add(landing_sha)
                 (process_shas if process else row_shas).setdefault(i, landing_sha)
 
-    for record in result.stdout.split("\x1e"):
-        parts = record.strip("\r\n").split("\x1f")
-        if len(parts) < 6:
-            continue
-        subject, checkpoint, halt_plan, halted_by, chunks, sha = parts[:6]
+    for subject, checkpoint, halt_plan, halted_by, chunks, sha, stop_rule in entries:
         sha = sha.strip()
         position += 1
-        stop_ids = {i for i in re.split(r"[,\s\x1d]+", parts[6]) if i} if len(parts) > 6 else set()
+        stop_ids = {i for i in re.split(r"[,\s\x1d]+", stop_rule) if i}
         if any(checkpoint_plan_matches(v, plan) for v in checkpoint.split("\x1d") if v.strip()):
             checkpoint_ids = set(plan_commit_row_ids(without_process_half(subject))) - stop_ids
             _land(checkpoint_ids, sha, subject)

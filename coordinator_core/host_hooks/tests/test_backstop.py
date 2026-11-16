@@ -10,16 +10,17 @@ from coordinator_core import deny_registry
 from coordinator_core.bash_guards import block_push_pr_non_owned_remote as push_guard
 from coordinator_core.host_hooks import backstop
 from coordinator_core.host_hooks.contract import HostEvent
+from pathlib import Path
 
 
-def _event(command, tool_name="Bash", cwd="/nonexistent-backstop-cwd"):
+def _event(command, tool_name: str = "Bash", cwd: str = "/nonexistent-backstop-cwd") -> HostEvent:
     return HostEvent(
         host="codex", event="PreToolUse", session_id="s1",
         tool_name=tool_name, tool_input={"command": command}, cwd=cwd,
     )
 
 
-def test_guard_set_equals_irreversible_external_registry_entries():
+def test_guard_set_equals_irreversible_external_registry_entries() -> None:
     expected = {
         g for g, c in deny_registry.GUARD_DENY_CLASS.items()
         if c == deny_registry.IRREVERSIBLE_EXTERNAL
@@ -27,7 +28,7 @@ def test_guard_set_equals_irreversible_external_registry_entries():
     assert set(backstop.GUARD_MODULES) == expected
 
 
-def test_push_to_non_owned_remote_denied(monkeypatch):
+def test_push_to_non_owned_remote_denied(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(push_guard, "_configured_prefixes", lambda: ["github.com/stranger/"])
     verdict = backstop.match(_event("git push https://github.com/stranger/repo.git main"))
     assert verdict is not None
@@ -35,25 +36,25 @@ def test_push_to_non_owned_remote_denied(monkeypatch):
     assert verdict["reason"]
 
 
-def test_push_to_owned_remote_allowed(monkeypatch):
+def test_push_to_owned_remote_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(push_guard, "_configured_prefixes", lambda: ["github.com/stranger/"])
     assert backstop.match(_event("git push https://github.com/mine/repo.git main")) is None
 
 
-def test_non_command_tool_input_is_ignored():
+def test_non_command_tool_input_is_ignored() -> None:
     event = HostEvent(host="agy", event="PreToolUse", session_id="s", tool_name="view_file",
                       tool_input={"path": "x"})
     assert backstop.match(event) is None
 
 
-def test_agy_commandline_shape_is_checked(monkeypatch):
+def test_agy_commandline_shape_is_checked(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(push_guard, "_configured_prefixes", lambda: ["github.com/stranger/"])
     event = HostEvent(host="agy", event="PreToolUse", session_id="s", tool_name="run_command",
                       tool_input={"CommandLine": "git push https://github.com/stranger/r.git main"})
     assert backstop.match(event)["decision"] == "deny"
 
 
-def test_raising_guard_is_skipped(monkeypatch):
+def test_raising_guard_is_skipped(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(_payload):
         raise RuntimeError("guard broke")
 
@@ -71,7 +72,7 @@ def test_raising_guard_is_skipped(monkeypatch):
     "git add . && git push origin main --force",
     "git push --force --all",
 ])
-def test_force_push_to_main_denied(command):
+def test_force_push_to_main_denied(command) -> None:
     verdict = backstop.match(_event(command))
     assert verdict is not None and verdict["decision"] == "deny"
     assert "force-pushes main" in verdict["reason"]
@@ -86,33 +87,33 @@ def test_force_push_to_main_denied(command):
     "git commit -m 'never git push --force origin main'",
     "echo git push --force origin main",
 ])
-def test_non_main_or_non_force_push_not_denied(command):
+def test_non_main_or_non_force_push_not_denied(command) -> None:
     assert backstop.match(_event(command)) is None
 
 
-def _repo_on(tmp_path, branch):
+def _repo_on(tmp_path, branch) -> str:
     (tmp_path / ".git").mkdir()
     (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/%s\n" % branch, encoding="utf-8")
     return str(tmp_path)
 
 
 @pytest.mark.parametrize("command", ["git push --force", "git push -f origin HEAD"])
-def test_bare_force_push_resolves_the_current_branch(tmp_path, command):
+def test_bare_force_push_resolves_the_current_branch(tmp_path: Path, command) -> None:
     assert backstop.match(_event(command, cwd=_repo_on(tmp_path, "main")))["decision"] == "deny"
 
 
 @pytest.mark.parametrize("command", ["git push --force", "git push -f origin HEAD"])
-def test_bare_force_push_on_a_topic_branch_passes(tmp_path, command):
+def test_bare_force_push_on_a_topic_branch_passes(tmp_path: Path, command) -> None:
     assert backstop.match(_event(command, cwd=_repo_on(tmp_path, "topic"))) is None
 
 
-def test_agy_force_push_to_main_denied():
+def test_agy_force_push_to_main_denied() -> None:
     event = HostEvent(host="agy", event="PreToolUse", session_id="s", tool_name="run_command",
                       tool_input={"CommandLine": "git push --force origin main"})
     assert backstop.match(event)["decision"] == "deny"
 
 
-def test_backstop_loads_no_warm_or_ops_module():
+def test_backstop_loads_no_warm_or_ops_module() -> None:
     code = (
         "import sys\n"
         "from coordinator_core.host_hooks import backstop\n"

@@ -12,6 +12,11 @@ import time
 from pathlib import Path
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
+    from types import ModuleType
 
 pytestmark = pytest.mark.complete
 
@@ -21,7 +26,7 @@ NAMES = ("mirror-all", "roster", "reshape")
 FAR_SOCK = "/tmp/cc-socks/4242.sock"
 
 
-def load(name):
+def load(name) -> "ModuleType":
     path = BIN / f"unimatrix-{name}.py"
     spec = importlib.util.spec_from_file_location(f"unimatrix_{name.replace('-', '_')}", path)
     mod = importlib.util.module_from_spec(spec)
@@ -30,7 +35,7 @@ def load(name):
 
 
 class FakeProc:
-    def __init__(self, pid, alive=True):
+    def __init__(self, pid, alive: bool = True) -> None:
         self.pid = pid
         self._alive = alive
 
@@ -39,7 +44,7 @@ class FakeProc:
 
 
 @pytest.fixture
-def sessions(tmp_path, monkeypatch):
+def sessions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     d = tmp_path / "sessions"
     d.mkdir()
     return d
@@ -49,7 +54,7 @@ FAKE_DNS = {"farbox": "10.9.0.5", "other": "10.9.0.6"}
 
 
 @pytest.fixture(autouse=True)
-def stub_dns(monkeypatch):
+def stub_dns(monkeypatch: pytest.MonkeyPatch) -> None:
     def getaddrinfo(host, port, *args, **kwargs):
         if host not in FAKE_DNS:
             raise OSError("no such host")
@@ -59,12 +64,12 @@ def stub_dns(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def near_box_name(monkeypatch):
+def near_box_name(monkeypatch: pytest.MonkeyPatch) -> None:
     """This box sorts before every far box in these tests, so it owns the mirror unless a test says otherwise."""
     monkeypatch.setattr(socket, "gethostname", lambda: "aaa-near")
 
 
-def test_endpoint_is_harness_shaped_on_every_platform():
+def test_endpoint_is_harness_shaped_on_every_platform() -> None:
     roster = load("roster")
     hexname = hashlib.md5(f"unimatrix-{FAR_SOCK}".encode()).hexdigest()
     assert roster.local_endpoint(FAR_SOCK, platform="win32") == "\\\\.\\pipe\\LOCAL\\cc-msg-" + hexname
@@ -73,18 +78,18 @@ def test_endpoint_is_harness_shaped_on_every_platform():
     assert roster.local_endpoint(FAR_SOCK, platform="darwin") == posix
 
 
-def test_key_name_lowercases_only_on_windows():
+def test_key_name_lowercases_only_on_windows() -> None:
     roster = load("roster")
     ep = "\\\\.\\pipe\\LOCAL\\cc-msg-ABCDEF"
     assert roster.key_name(9, ep, platform="win32") == f"9.{hashlib.sha256(ep.lower().encode()).hexdigest()}.key"
     assert roster.key_name(9, ep, platform="linux") == f"9.{hashlib.sha256(ep.encode()).hexdigest()}.key"
 
 
-def test_proc_start_posix_branch_is_the_ps_lstart_string(monkeypatch):
+def test_proc_start_posix_branch_is_the_ps_lstart_string(monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     seen = {}
 
-    def fake_run(cmd, **kw):
+    def fake_run(cmd, **kw) -> "CompletedProcess[str]":
         seen["cmd"] = cmd
         return subprocess.CompletedProcess(cmd, 0, stdout="Wed Nov  4 01:19:29 2026\n")
 
@@ -99,7 +104,7 @@ def test_proc_start_posix_branch_is_the_ps_lstart_string(monkeypatch):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX proc_start")
-def test_proc_start_of_a_live_pid_spawns_nothing(monkeypatch):
+def test_proc_start_of_a_live_pid_spawns_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
 
     def no_spawn(*a, **kw):
@@ -111,12 +116,12 @@ def test_proc_start_of_a_live_pid_spawns_nothing(monkeypatch):
     assert re.fullmatch(r"[A-Z][a-z]{2} [A-Z][a-z]{2} [ \d]\d \d\d:\d\d:\d\d \d{4}", stamp)  # abs-path-ok: timestamp regex, not a path
 
 
-def test_roster_has_no_private_filetime_reader():
+def test_roster_has_no_private_filetime_reader() -> None:
     assert not hasattr(load("roster"), "_filetime")
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="GetProcessTimes is Windows-only")
-def test_proc_start_windows_is_the_raw_filetime_string():
+def test_proc_start_windows_is_the_raw_filetime_string() -> None:
     roster = load("roster")
     import os
     stamp = roster.proc_start(os.getpid(), platform="win32")
@@ -125,14 +130,14 @@ def test_proc_start_windows_is_the_raw_filetime_string():
     assert int(stamp) > 125_000_000_000_000_000
 
 
-def test_pid_domain_per_platform():
+def test_pid_domain_per_platform() -> None:
     roster = load("roster")
     assert roster.pid_domain("darwin") == "darwin"
     assert roster.pid_domain("linux") == "linux"
     assert re.fullmatch(r"win32:.+", roster.pid_domain("win32"))
 
 
-def test_bridge_cmd_is_relay_mode_with_remote_and_key():
+def test_bridge_cmd_is_relay_mode_with_remote_and_key() -> None:
     roster = load("roster")
     cmd = roster.bridge_cmd("ep", "b.log", "farbox", "k")
     assert cmd[2:5] == ["ep", "relay", "b.log"] and cmd[-4:] == ["--remote", "farbox", "--key", "k"]
@@ -140,7 +145,7 @@ def test_bridge_cmd_is_relay_mode_with_remote_and_key():
     assert with_leg[5:7] == ["18991", "inbox-ep"]
 
 
-def test_tree_kill_reaches_a_grandchild(tmp_path):
+def test_tree_kill_reaches_a_grandchild(tmp_path: Path) -> None:
     roster = load("roster")
     pidfile = tmp_path / "grandchild.pid"
     code = (
@@ -169,7 +174,7 @@ def test_tree_kill_reaches_a_grandchild(tmp_path):
 
 
 @pytest.mark.parametrize("n", [1, 5])
-def test_tree_kill_many_on_win32_is_one_taskkill_for_any_pid_count(monkeypatch, n):
+def test_tree_kill_many_on_win32_is_one_taskkill_for_any_pid_count(monkeypatch: pytest.MonkeyPatch, n) -> None:
     roster = load("roster")
     calls = []
     monkeypatch.setattr(roster.sys, "platform", "win32")
@@ -182,7 +187,7 @@ def test_tree_kill_many_on_win32_is_one_taskkill_for_any_pid_count(monkeypatch, 
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="process groups are POSIX-only")
-def test_spawn_starts_children_in_their_own_process_group():
+def test_spawn_starts_children_in_their_own_process_group() -> None:
     import os
     roster = load("roster")
     p = roster.spawn([sys.executable, "-c", "import time; time.sleep(30)"])
@@ -193,26 +198,26 @@ def test_spawn_starts_children_in_their_own_process_group():
         p.wait(timeout=10)
 
 
-def test_bridge_cmd_carries_the_tunnel_alias_only_when_set():
+def test_bridge_cmd_carries_the_tunnel_alias_only_when_set() -> None:
     roster = load("roster")
     cmd = roster.bridge_cmd("ep", "b.log", "farbox", "k", tunnel_remote="farbox-wg")
     assert cmd[-2:] == ["--tunnel-remote", "farbox-wg"] and cmd[-6:-2] == ["--remote", "farbox", "--key", "k"]
     assert "--tunnel-remote" not in roster.bridge_cmd("ep", "b.log", "farbox", "k")
 
 
-def test_pick_remote_uses_the_lan_alias_when_it_answers():
+def test_pick_remote_uses_the_lan_alias_when_it_answers() -> None:
     roster = load("roster")
     probed = []
     assert roster.pick_remote("lan", "wg", reachable=lambda a: probed.append(a) or True) == "lan"
     assert probed == ["lan"]
 
 
-def test_pick_remote_falls_back_to_the_tunnel_only_when_the_lan_is_unreachable():
+def test_pick_remote_falls_back_to_the_tunnel_only_when_the_lan_is_unreachable() -> None:
     roster = load("roster")
     assert roster.pick_remote("lan", "wg", reachable=lambda a: False) == "wg"
 
 
-def test_pick_remote_without_a_tunnel_alias_never_probes_and_never_needs_the_tunnel():
+def test_pick_remote_without_a_tunnel_alias_never_probes_and_never_needs_the_tunnel() -> None:
     roster = load("roster")
 
     def boom(alias):
@@ -222,12 +227,12 @@ def test_pick_remote_without_a_tunnel_alias_never_probes_and_never_needs_the_tun
     assert roster.pick_remote("lan", "lan", reachable=boom) == "lan"
 
 
-def test_lan_reachable_is_a_tcp_connect_to_the_endpoint_ssh_resolves():
+def test_lan_reachable_is_a_tcp_connect_to_the_endpoint_ssh_resolves() -> None:
     roster = load("roster")
     seen = []
 
     class Sock:
-        def close(self):
+        def close(self) -> None:
             seen.append("closed")
 
     def connect(ep, timeout):
@@ -244,7 +249,7 @@ def test_lan_reachable_is_a_tcp_connect_to_the_endpoint_ssh_resolves():
     assert not roster.lan_reachable("lan", resolve=lambda a: None, connect=connect)
 
 
-def test_stable_remote_prefers_the_lan_alias_and_skips_mdns_when_it_answers():
+def test_stable_remote_prefers_the_lan_alias_and_skips_mdns_when_it_answers() -> None:
     roster = load("roster")
 
     def boom(*a, **k):
@@ -254,7 +259,7 @@ def test_stable_remote_prefers_the_lan_alias_and_skips_mdns_when_it_answers():
     assert roster.stable_remote("me@box", reachable=lambda a: a == "me@box-lan", fields=boom, connect=boom) == "me@box-lan"
 
 
-def test_stable_remote_falls_back_to_dot_local_with_the_resolved_user():
+def test_stable_remote_falls_back_to_dot_local_with_the_resolved_user() -> None:
     roster = load("roster")
     dialled = []
 
@@ -271,11 +276,11 @@ def test_stable_remote_falls_back_to_dot_local_with_the_resolved_user():
     assert got == "kim@box.local" and dialled == [("box.local", 22)]
 
 
-def test_stable_remote_returns_the_first_verified_listed_address_before_dot_local():
+def test_stable_remote_returns_the_first_verified_listed_address_before_dot_local() -> None:
     roster = load("roster")
     keys, tried = [], []
 
-    def read_key(k):
+    def read_key(k) -> str:
         keys.append(k)
         return "192.0.2.7, 192.0.2.8"
 
@@ -290,7 +295,7 @@ def test_stable_remote_returns_the_first_verified_listed_address_before_dot_loca
     assert tried == ["kim@192.0.2.7", "kim@192.0.2.8"] and keys and "box" in keys[0]
 
 
-def test_stable_remote_falls_through_to_dot_local_when_no_listed_address_verifies():
+def test_stable_remote_falls_through_to_dot_local_when_no_listed_address_verifies() -> None:
     roster = load("roster")
     dialled = []
 
@@ -313,7 +318,7 @@ def test_stable_remote_falls_through_to_dot_local_when_no_listed_address_verifie
     assert got == "kim@box.local"
 
 
-def test_stable_remote_is_none_when_nothing_answers_or_the_port_is_custom():
+def test_stable_remote_is_none_when_nothing_answers_or_the_port_is_custom() -> None:
     roster = load("roster")
 
     def refuse(ep, timeout):
@@ -329,11 +334,11 @@ def test_stable_remote_is_none_when_nothing_answers_or_the_port_is_custom():
                                 fields=lambda a: {}, connect=refuse, read_key=nokeys) is None
 
 
-def test_stable_remote_spends_one_ssh_g_across_both_legs():
+def test_stable_remote_spends_one_ssh_g_across_both_legs() -> None:
     roster = load("roster")
     asked = []
 
-    def fields(a):
+    def fields(a) -> dict[str, str]:
         asked.append(a)
         return {"hostname": "10.0.0.9", "port": "22", "user": "kim"}
 
@@ -355,11 +360,11 @@ def test_stable_remote_spends_one_ssh_g_across_both_legs():
     assert asked == ["me@box-lan"]
 
 
-def test_fetch_roster_dials_the_lan_alias_by_default_and_the_tunnel_when_the_lan_is_down(monkeypatch):
+def test_fetch_roster_dials_the_lan_alias_by_default_and_the_tunnel_when_the_lan_is_down(monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     argvs = []
 
-    def run(argv, **kw):
+    def run(argv, **kw) -> "CompletedProcess[bytes]":
         argvs.append(argv)
         return subprocess.CompletedProcess(argv, 0, b"", b"")
 
@@ -374,7 +379,7 @@ def test_fetch_roster_dials_the_lan_alias_by_default_and_the_tunnel_when_the_lan
     assert "wg" in argvs[-1] and "lan" not in argvs[-1]
 
 
-def test_tunnel_alias_comes_from_the_flag_else_the_environment(monkeypatch):
+def test_tunnel_alias_comes_from_the_flag_else_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     monkeypatch.delenv(roster.TUNNEL_ENV, raising=False)
     assert roster.parse_args(["log.txt", "--remote", "lan"]).tunnel_remote is None
@@ -387,7 +392,7 @@ def test_tunnel_alias_comes_from_the_flag_else_the_environment(monkeypatch):
     assert cmd[-2:] == ["--tunnel-remote", "wg"]
 
 
-def test_roster_mirror_writes_entry_and_key_the_harness_accepts(sessions, monkeypatch):
+def test_roster_mirror_writes_entry_and_key_the_harness_accepts(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     ep = "\\\\.\\pipe\\LOCAL\\cc-msg-" + "a" * 32
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
@@ -424,7 +429,7 @@ def _fake_box(prefix, n):
             for i in range(n)]
 
 
-def test_two_fake_boxes_sync_to_n_plus_m_rows_without_echoes(tmp_path, monkeypatch):
+def test_two_fake_boxes_sync_to_n_plus_m_rows_without_echoes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     n, m = 3, 2
     a_local, b_local = _fake_box("a", n), _fake_box("b", m)
@@ -443,14 +448,14 @@ def test_two_fake_boxes_sync_to_n_plus_m_rows_without_echoes(tmp_path, monkeypat
     assert len(for_a) + len(a_local) == n + m and len(for_b) + len(b_local) == n + m
 
 
-def test_mirrorable_drops_skipped_sockets_and_names_a_live_inbound_mirror_reaches():
+def test_mirrorable_drops_skipped_sockets_and_names_a_live_inbound_mirror_reaches() -> None:
     roster = load("roster")
     rows = _old_relay_roster(_fake_box("b", 3))
     got = roster.mirrorable(rows, {"/tmp/cc-socks/b0.sock"}, {"b-1"})
     assert [r["entry"]["name"] for r in got.values()] == ["b-2"]
 
 
-def test_inbound_names_counts_only_live_unimatrix_mirror_entries(sessions, monkeypatch):
+def test_inbound_names_counts_only_live_unimatrix_mirror_entries(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     monkeypatch.setattr(roster._liveness(), "pid_alive", lambda pid: pid != 2)
@@ -460,7 +465,7 @@ def test_inbound_names_counts_only_live_unimatrix_mirror_entries(sessions, monke
     assert roster.inbound_names() == {"n1"}
 
 
-def _put(sessions, fname, /, **entry):
+def _put(sessions, fname, /, **entry) -> None:
     (sessions / fname).write_text(json.dumps(entry))
 
 
@@ -469,7 +474,7 @@ def _own(roster, **extra):
     return {"pid": me, "procStart": roster.proc_start(me), **extra}
 
 
-def test_live_sessions_drops_a_recycled_pid_and_keeps_the_same_process(sessions, monkeypatch):
+def test_live_sessions_drops_a_recycled_pid_and_keeps_the_same_process(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     _put(sessions, "a.json", name="same", **_own(roster))
@@ -477,7 +482,7 @@ def test_live_sessions_drops_a_recycled_pid_and_keeps_the_same_process(sessions,
     assert roster.live_sessions() == [("same", None)]
 
 
-def test_inbound_names_drops_a_recycled_pid(sessions, monkeypatch):
+def test_inbound_names_drops_a_recycled_pid(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     _put(sessions, "a.json", name="n1", unimatrixMirror=True, **_own(roster))
@@ -485,7 +490,7 @@ def test_inbound_names_drops_a_recycled_pid(sessions, monkeypatch):
     assert roster.inbound_names() == {"n1"}
 
 
-def test_a_mirror_needs_a_live_roster_supervisor_to_be_listed(sessions, monkeypatch):
+def test_a_mirror_needs_a_live_roster_supervisor_to_be_listed(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     me = os.getpid()
@@ -499,7 +504,7 @@ def test_a_mirror_needs_a_live_roster_supervisor_to_be_listed(sessions, monkeypa
     assert sorted(n for n, _ in roster.live_sessions()) == ["live-sup", "local"]
 
 
-def test_a_bridge_only_mirror_with_no_fresh_far_sighting_is_not_listed(sessions, monkeypatch):
+def test_a_bridge_only_mirror_with_no_fresh_far_sighting_is_not_listed(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     me = os.getpid()
@@ -514,7 +519,7 @@ def test_a_bridge_only_mirror_with_no_fresh_far_sighting_is_not_listed(sessions,
     assert not roster.entry_listed(_own(roster, **far, **{roster.FAR_SEEN_FIELD: stale}))
 
 
-def test_an_agy_router_face_is_listed_only_while_its_agy_process_lives(tmp_path, monkeypatch):
+def test_an_agy_router_face_is_listed_only_while_its_agy_process_lives(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     base = tmp_path / "unimatrix"
@@ -527,7 +532,7 @@ def test_an_agy_router_face_is_listed_only_while_its_agy_process_lives(tmp_path,
     assert not roster.entry_listed(face)
 
 
-def test_an_agy_router_face_with_no_peers_row_is_not_listed(tmp_path, monkeypatch):
+def test_an_agy_router_face_with_no_peers_row_is_not_listed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     base = tmp_path / "unimatrix"
@@ -537,7 +542,7 @@ def test_an_agy_router_face_with_no_peers_row_is_not_listed(tmp_path, monkeypatc
                                         unimatrixRouterPid=7))
 
 
-def test_a_hand_started_relay_row_with_no_far_socket_is_listed_only_on_a_fresh_far_sighting(sessions, monkeypatch):
+def test_a_hand_started_relay_row_with_no_far_socket_is_listed_only_on_a_fresh_far_sighting(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     relay = _own(roster, name="codex-hand", unimatrixRemote="farbox")
@@ -548,7 +553,7 @@ def test_a_hand_started_relay_row_with_no_far_socket_is_listed_only_on_a_fresh_f
 
 
 def test_supervisor_pass_reaps_unbacked_agy_faces_and_relay_rows_but_keeps_backed_ones(
-        tmp_path, sessions, monkeypatch):
+        tmp_path: Path, sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     base = tmp_path / "unimatrix"
@@ -582,7 +587,7 @@ def test_supervisor_pass_reaps_unbacked_agy_faces_and_relay_rows_but_keeps_backe
     assert sorted(p.name for p in sessions.iterdir()) == ["999972.json"]
 
 
-def test_sync_stamps_a_mirror_whose_far_row_is_present_and_stops_when_the_row_vanishes(sessions, monkeypatch):
+def test_sync_stamps_a_mirror_whose_far_row_is_present_and_stops_when_the_row_vanishes(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     cfg, killed = _sync_setup(roster, sessions, monkeypatch)
     roster._ABSENT.clear()
@@ -601,14 +606,14 @@ def test_sync_stamps_a_mirror_whose_far_row_is_present_and_stops_when_the_row_va
     assert roster._liveness().stamp_fresh(stamped, roster.FAR_SEEN_FIELD, roster.POLL_SECONDS)
 
 
-def test_bridge_cmd_names_its_supervisor_only_when_given():
+def test_bridge_cmd_names_its_supervisor_only_when_given() -> None:
     roster = load("roster")
     cmd = roster.bridge_cmd("ep", "b.log", "farbox", "k", supervisor=4321)
     assert cmd[-2:] == ["--supervisor", "4321"]
     assert "--supervisor" not in roster.bridge_cmd("ep", "b.log", "farbox", "k")
 
 
-def test_mirror_records_its_supervisor_and_launches_the_bridge_with_it(sessions, monkeypatch):
+def test_mirror_records_its_supervisor_and_launches_the_bridge_with_it(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     cmds = []
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
@@ -624,7 +629,7 @@ def test_mirror_records_its_supervisor_and_launches_the_bridge_with_it(sessions,
     assert cmds[0][-2:] == ["--supervisor", str(os.getpid())]
 
 
-def test_rename_live_mirror_rewrites_a_legacy_mirror_with_the_supervisor(sessions, monkeypatch):
+def test_rename_live_mirror_rewrites_a_legacy_mirror_with_the_supervisor(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     cfg, entry = _mirror_one(roster, sessions, monkeypatch, "farbox")
     path = sessions / "31339.json"
@@ -636,7 +641,7 @@ def test_rename_live_mirror_rewrites_a_legacy_mirror_with_the_supervisor(session
     assert after["unimatrixRosterPid"] == os.getpid() and after["unimatrixRosterProcStart"] == "1"
 
 
-def test_reap_removes_orphaned_mirrors_and_kills_only_a_bridge_that_is_still_its_process(sessions, monkeypatch):
+def test_reap_removes_orphaned_mirrors_and_kills_only_a_bridge_that_is_still_its_process(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     killed = []
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
@@ -656,7 +661,7 @@ def test_reap_removes_orphaned_mirrors_and_kills_only_a_bridge_that_is_still_its
     assert len(lines) == 2
 
 
-def test_reap_unbacked_removes_the_registry_row_of_an_unseen_mirror_but_never_a_kept_or_seen_one(sessions, monkeypatch):
+def test_reap_unbacked_removes_the_registry_row_of_an_unseen_mirror_but_never_a_kept_or_seen_one(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     monkeypatch.setattr(roster, "tree_kill_many", lambda pids: None)
@@ -672,7 +677,7 @@ def test_reap_unbacked_removes_the_registry_row_of_an_unseen_mirror_but_never_a_
     assert sorted(p.name for p in sessions.iterdir()) == ["999995.json", "999996.json"]
 
 
-def test_reap_unbacked_agy_faces_drops_a_dead_agent_face_but_spares_a_backed_or_new_one(sessions, monkeypatch):
+def test_reap_unbacked_agy_faces_drops_a_dead_agent_face_but_spares_a_backed_or_new_one(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     monkeypatch.setattr(roster, "tree_kill_many", lambda pids: None)
@@ -707,7 +712,7 @@ def _orphan_home(tmp_path, monkeypatch):
 
 
 def test_reap_unbacked_agy_faces_drops_an_orphaned_agy_peer_row_but_keeps_a_backed_or_non_agy_one(
-        sessions, tmp_path, monkeypatch):
+        sessions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     peers = _orphan_home(tmp_path, monkeypatch)
@@ -718,7 +723,7 @@ def test_reap_unbacked_agy_faces_drops_an_orphaned_agy_peer_row_but_keeps_a_back
     assert lines == ["reaped orphaned agy peer row agy-orphan (target gone)"]
 
 
-def test_reap_unbacked_agy_faces_survives_a_failing_peer_row_drop(sessions, tmp_path, monkeypatch):
+def test_reap_unbacked_agy_faces_survives_a_failing_peer_row_drop(sessions, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     _orphan_home(tmp_path, monkeypatch)
@@ -729,7 +734,7 @@ def test_reap_unbacked_agy_faces_survives_a_failing_peer_row_drop(sessions, tmp_
     assert len(lines) == 1 and "locked" in lines[0]
 
 
-def _mirror_one(roster, sessions, monkeypatch, remote, entry_extra=None, pid=31339):
+def _mirror_one(roster, sessions, monkeypatch, remote, entry_extra=None, pid: int = 31339):
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
     monkeypatch.setattr(roster, "spawn", lambda cmd: FakeProc(pid))
     monkeypatch.setattr(roster, "proc_start", lambda p, platform=None: "1")
@@ -741,18 +746,18 @@ def _mirror_one(roster, sessions, monkeypatch, remote, entry_extra=None, pid=313
     return cfg, json.loads((sessions / f"{pid}.json").read_text())
 
 
-def test_mirror_records_the_far_boxs_resolved_ip_beside_its_label(sessions, monkeypatch):
+def test_mirror_records_the_far_boxs_resolved_ip_beside_its_label(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     _, entry = _mirror_one(load("roster"), sessions, monkeypatch, "me@farbox")
     assert entry["unimatrixRemote"] == "me@farbox" and entry["unimatrixRemoteIp"] == "10.9.0.5"
 
 
-def test_mirror_omits_the_ip_when_the_remote_does_not_resolve(sessions, monkeypatch):
+def test_mirror_omits_the_ip_when_the_remote_does_not_resolve(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     _, entry = _mirror_one(load("roster"), sessions, monkeypatch, "nowhere",
                            entry_extra={"unimatrixRemoteIp": "6.6.6.6"})
     assert "unimatrixRemoteIp" not in entry
 
 
-def test_rename_live_mirror_refreshes_the_ip_when_the_remote_changes(sessions, monkeypatch):
+def test_rename_live_mirror_refreshes_the_ip_when_the_remote_changes(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     cfg, _ = _mirror_one(roster, sessions, monkeypatch, "farbox")
     cfg.remote = "other"
@@ -767,18 +772,18 @@ def test_rename_live_mirror_refreshes_the_ip_when_the_remote_changes(sessions, m
 
 
 @pytest.mark.parametrize("remote", ["example-operator@Machine-b-LAN.local", "machine-b", "Machine-b.local", "u@machine-b-lan"])
-def test_mirror_stamps_the_normalised_far_box_from_any_alias(sessions, monkeypatch, remote):
+def test_mirror_stamps_the_normalised_far_box_from_any_alias(sessions, monkeypatch: pytest.MonkeyPatch, remote) -> None:
     _, entry = _mirror_one(load("roster"), sessions, monkeypatch, remote)
     assert entry["unimatrixBox"] == "machine-b"
 
 
-def test_mirror_keeps_a_far_vendor_and_a_far_box_stamp(sessions, monkeypatch):
+def test_mirror_keeps_a_far_vendor_and_a_far_box_stamp(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     _, entry = _mirror_one(load("roster"), sessions, monkeypatch, "machine-b",
                            {"unimatrixVendor": "codex", "unimatrixBox": "elsewhere"})
     assert entry["unimatrixVendor"] == "codex" and entry["unimatrixBox"] == "elsewhere"
 
 
-def test_rename_live_mirror_preserves_box_and_vendor(sessions, monkeypatch):
+def test_rename_live_mirror_preserves_box_and_vendor(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     cfg, entry = _mirror_one(roster, sessions, monkeypatch, "u@Machine-b-LAN", {"unimatrixVendor": "codex"})
     row = {"entry": {"pid": 7, "name": "far-c", "messagingSocketPath": FAR_SOCK}}
@@ -789,12 +794,12 @@ def test_rename_live_mirror_preserves_box_and_vendor(sessions, monkeypatch):
     assert after["unimatrixBox"] == "machine-b" and after["unimatrixVendor"] == "codex"
 
 
-def test_roster_loads_the_contract_lazily_not_at_import():
+def test_roster_loads_the_contract_lazily_not_at_import() -> None:
     roster = load("roster")
     assert roster._CONTRACT == []
 
 
-def test_mirror_records_the_far_pid_for_a_win32_pipe_far_socket(sessions, monkeypatch):
+def test_mirror_records_the_far_pid_for_a_win32_pipe_far_socket(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     pipe = "\\\\.\\pipe\\LOCAL\\cc-msg-" + "c" * 32
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
@@ -813,7 +818,7 @@ def test_mirror_records_the_far_pid_for_a_win32_pipe_far_socket(sessions, monkey
     ("\\\\.\\pipe\\LOCAL\\cc-msg-" + "d" * 32, 7777, "7777"),
     ("/tmp/cc-socks/4242.sock", None, "4242"),
 ])
-def test_relay_send_addresses_the_far_session_by_stored_far_pid(tmp_path, monkeypatch, far_socket, stored, expect):
+def test_relay_send_addresses_the_far_session_by_stored_far_pid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, far_socket, stored, expect) -> None:
     import types
     spec = importlib.util.spec_from_file_location("unimatrix_bridge", BIN / "unimatrix-bridge.py")
     bridge = importlib.util.module_from_spec(spec)
@@ -837,7 +842,7 @@ def test_relay_send_addresses_the_far_session_by_stored_far_pid(tmp_path, monkey
     class Conn:
         chunks = [b'{"from": "uds:/s.sock", "message": "hi"}\n', b""]
 
-        def read(self):
+        def read(self) -> bytes:
             return self.chunks.pop(0)
 
         def close(self):
@@ -850,7 +855,7 @@ def test_relay_send_addresses_the_far_session_by_stored_far_pid(tmp_path, monkey
     assert argvs[0][-1] == f"send-session {expect} {digest} {name_digest} sid-far"
 
 
-def test_roster_sync_unmirrors_a_vanished_far_session(sessions, monkeypatch):
+def test_roster_sync_unmirrors_a_vanished_far_session(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     killed = []
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sessions))
@@ -866,7 +871,7 @@ def test_roster_sync_unmirrors_a_vanished_far_session(sessions, monkeypatch):
     assert sorted(p.name for p in sessions.iterdir()) == ["56.json"]
 
 
-def test_roster_sync_keeps_a_live_peer_mirror_across_one_missed_poll_and_a_respawn(sessions, monkeypatch):
+def test_roster_sync_keeps_a_live_peer_mirror_across_one_missed_poll_and_a_respawn(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     cfg, killed = _sync_setup(roster, sessions, monkeypatch)
     roster._ABSENT.clear()
@@ -881,7 +886,7 @@ def test_roster_sync_keeps_a_live_peer_mirror_across_one_missed_poll_and_a_respa
     assert killed == [] and "/far/a.sock" in bridges
 
 
-def test_roster_sync_unmirrors_a_row_missing_past_the_grace_and_a_dead_bridge_at_once(sessions, monkeypatch):
+def test_roster_sync_unmirrors_a_row_missing_past_the_grace_and_a_dead_bridge_at_once(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     cfg, killed = _sync_setup(roster, sessions, monkeypatch)
     roster._ABSENT.clear()
@@ -908,7 +913,7 @@ def _put_mirror(sessions, pid, name, sock, far_pid):
     return path
 
 
-def test_sync_repairs_far_pid_reuse_in_place_without_a_misroute(sessions, monkeypatch):
+def test_sync_repairs_far_pid_reuse_in_place_without_a_misroute(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     cfg, killed = _sync_setup(roster, sessions, monkeypatch)
     _put_mirror(sessions, 60, "far-c", FAR_SOCK, 7)
@@ -919,7 +924,7 @@ def test_sync_repairs_far_pid_reuse_in_place_without_a_misroute(sessions, monkey
     assert killed == [] and not any("MISROUTE" in m for m in lines)
 
 
-def test_sync_logs_misroute_and_unmirrors_a_mirror_whose_far_pid_is_not_its_rows(sessions, monkeypatch):
+def test_sync_logs_misroute_and_unmirrors_a_mirror_whose_far_pid_is_not_its_rows(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     cfg, killed = _sync_setup(roster, sessions, monkeypatch)
     _put_mirror(sessions, 60, "far-c", FAR_SOCK, 7)
@@ -933,7 +938,7 @@ def test_sync_logs_misroute_and_unmirrors_a_mirror_whose_far_pid_is_not_its_rows
     assert not (sessions / "60.json").exists()
 
 
-def test_sync_unmirrors_a_misroute_marked_mirror_then_rebuilds_it_from_the_row(sessions, monkeypatch):
+def test_sync_unmirrors_a_misroute_marked_mirror_then_rebuilds_it_from_the_row(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     cfg, killed = _sync_setup(roster, sessions, monkeypatch)
     _put_mirror(sessions, 60, "far-c", FAR_SOCK, 9)
@@ -952,7 +957,7 @@ def test_sync_unmirrors_a_misroute_marked_mirror_then_rebuilds_it_from_the_row(s
     assert rebuilt == [row] and bridges[FAR_SOCK].pid == 61
 
 
-def test_sync_keeps_an_unmarked_mirror_whose_far_pid_matches(sessions, monkeypatch):
+def test_sync_keeps_an_unmarked_mirror_whose_far_pid_matches(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     cfg, killed = _sync_setup(roster, sessions, monkeypatch)
     _put_mirror(sessions, 60, "far-c", FAR_SOCK, 9)
@@ -964,7 +969,7 @@ def test_sync_keeps_an_unmarked_mirror_whose_far_pid_matches(sessions, monkeypat
     assert killed == [] and not any("MISROUTE" in m for m in lines)
 
 
-def test_sync_logs_misroute_for_two_mirrors_sharing_one_session_name(sessions, monkeypatch):
+def test_sync_logs_misroute_for_two_mirrors_sharing_one_session_name(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     cfg, killed = _sync_setup(roster, sessions, monkeypatch)
     sock_b = "/tmp/cc-socks/5555.sock"
@@ -980,7 +985,7 @@ def test_sync_logs_misroute_for_two_mirrors_sharing_one_session_name(sessions, m
     assert sorted(killed) == [60, 61] and bridges == {}
 
 
-def test_sync_keeps_a_box_labelled_twin_of_a_bare_named_mirror(sessions, monkeypatch):
+def test_sync_keeps_a_box_labelled_twin_of_a_bare_named_mirror(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     cfg, killed = _sync_setup(roster, sessions, monkeypatch)
     sock_b = "/tmp/cc-socks/5555.sock"
@@ -995,17 +1000,17 @@ def test_sync_keeps_a_box_labelled_twin_of_a_bare_named_mirror(sessions, monkeyp
     assert killed == [] and len(bridges) == 2 and not any("MISROUTE" in m for m in lines)
 
 
-def test_roster_requires_remote():
+def test_roster_requires_remote() -> None:
     with pytest.raises(SystemExit):
         load("roster").parse_args(["log.txt"])
 
 
-def test_mirror_all_selects_only_live_local_named_sessions(sessions, monkeypatch):
+def test_mirror_all_selects_only_live_local_named_sessions(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     mirror_all = load("mirror-all")
     monkeypatch.setattr(mirror_all.R, "sessions_dir", lambda: str(sessions))
     monkeypatch.setattr(mirror_all.R, "pid_alive", lambda pid: pid != 3)
 
-    def put(pid, **kw):
+    def put(pid, **kw) -> None:
         (sessions / f"{pid}.json").write_text(json.dumps({"pid": pid, "messagingSocketPath": f"ep{pid}", **kw}))
 
     put(1, name="local-a")
@@ -1019,11 +1024,11 @@ def test_mirror_all_selects_only_live_local_named_sessions(sessions, monkeypatch
     assert sorted(live) == ["local-a"]
 
 
-def test_mirror_all_starts_client_with_deliver_endpoint_and_kills_it_on_exit(tmp_path, monkeypatch):
+def test_mirror_all_starts_client_with_deliver_endpoint_and_kills_it_on_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mirror_all = load("mirror-all")
     started, killed = [], []
 
-    def fake_spawn(cmd):
+    def fake_spawn(cmd) -> FakeProc:
         started.append(cmd)
         return FakeProc(900 + len(started))
 
@@ -1043,11 +1048,11 @@ def test_mirror_all_starts_client_with_deliver_endpoint_and_kills_it_on_exit(tmp
     assert clients == {} and killed == [901]
 
 
-def test_mirror_all_keeps_a_client_across_one_missed_poll_of_its_session(tmp_path, monkeypatch):
+def test_mirror_all_keeps_a_client_across_one_missed_poll_of_its_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mirror_all = load("mirror-all")
     started, killed = [], []
 
-    def fake_spawn(cmd):
+    def fake_spawn(cmd) -> FakeProc:
         started.append(cmd)
         return FakeProc(900 + len(started))
 
@@ -1066,11 +1071,11 @@ def test_mirror_all_keeps_a_client_across_one_missed_poll_of_its_session(tmp_pat
     assert killed == [901] and clients == {}
 
 
-def test_mirror_all_restarts_a_client_whose_session_pid_changed(tmp_path, monkeypatch):
+def test_mirror_all_restarts_a_client_whose_session_pid_changed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mirror_all = load("mirror-all")
     killed, n = [], [0]
 
-    def fake_spawn(cmd):
+    def fake_spawn(cmd) -> FakeProc:
         n[0] += 1
         return FakeProc(700 + n[0])
 
@@ -1089,7 +1094,7 @@ def _two_box_side(tmp_path, monkeypatch, me, far, mux_off):
     mirror_all = load("mirror-all")
     started = []
 
-    def fake_spawn(cmd):
+    def fake_spawn(cmd) -> FakeProc:
         started.append(cmd)
         return FakeProc(800 + len(started))
 
@@ -1105,7 +1110,7 @@ LIVE = {"a": {"pid": 11, "name": "a", "messagingSocketPath": "ep11"}}
 
 
 @pytest.mark.parametrize("mux_off", [False, True], ids=["mux", "per-name"])
-def test_a_link_opened_from_both_sides_starts_exactly_one_mirror_on_the_owner(tmp_path, monkeypatch, mux_off):
+def test_a_link_opened_from_both_sides_starts_exactly_one_mirror_on_the_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mux_off) -> None:
     lower, lower_cfg, lower_started = _two_box_side(tmp_path, monkeypatch, "alpha", "zulu", mux_off)
     lower.sync({}, LIVE, lower_cfg, lambda m: None)
     higher, higher_cfg, higher_started = _two_box_side(tmp_path, monkeypatch, "zulu", "alpha", mux_off)
@@ -1114,13 +1119,13 @@ def test_a_link_opened_from_both_sides_starts_exactly_one_mirror_on_the_owner(tm
 
 
 @pytest.mark.parametrize("mux_off", [False, True], ids=["mux", "per-name"])
-def test_the_owner_starts_its_mirror_though_the_far_side_never_syncs(tmp_path, monkeypatch, mux_off):
+def test_the_owner_starts_its_mirror_though_the_far_side_never_syncs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mux_off) -> None:
     owner, cfg, started = _two_box_side(tmp_path, monkeypatch, "alpha", "zulu", mux_off)
     owner.sync({}, LIVE, cfg, lambda m: None)
     assert len(started) == 1
 
 
-def test_the_non_owner_alone_starts_no_mirror_and_says_who_owns_it(tmp_path, monkeypatch):
+def test_the_non_owner_alone_starts_no_mirror_and_says_who_owns_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     side, cfg, started = _two_box_side(tmp_path, monkeypatch, "zulu", "alpha", False)
     said = []
     clients = {}
@@ -1130,7 +1135,7 @@ def test_the_non_owner_alone_starts_no_mirror_and_says_who_owns_it(tmp_path, mon
     assert said == ["alpha owns the zulu/alpha mirror; this side starts none"]
 
 
-def test_owner_is_decided_on_box_ids_not_alias_spelling(tmp_path, monkeypatch):
+def test_owner_is_decided_on_box_ids_not_alias_spelling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     side, cfg, started = _two_box_side(tmp_path, monkeypatch, "Zulu.local", "u@Alpha-LAN.local", False)
     side.sync({}, LIVE, cfg, lambda m: None)
     assert started == []
@@ -1139,7 +1144,7 @@ def test_owner_is_decided_on_box_ids_not_alias_spelling(tmp_path, monkeypatch):
     assert len(started) == 1
 
 
-def test_reshape_repoints_entry_key_and_stops_the_old_bridge(sessions, monkeypatch):
+def test_reshape_repoints_entry_key_and_stops_the_old_bridge(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     reshape = load("reshape")
     R = reshape.R
     ep = "\\\\.\\pipe\\LOCAL\\cc-msg-" + "b" * 32
@@ -1168,7 +1173,7 @@ def test_reshape_repoints_entry_key_and_stops_the_old_bridge(sessions, monkeypat
     assert sorted(p.name for p in sessions.iterdir()) == ["8080.json", "8080.newhash.key"]
 
 
-def test_reshape_refuses_before_killing_anything(sessions, monkeypatch):
+def test_reshape_refuses_before_killing_anything(sessions, monkeypatch: pytest.MonkeyPatch) -> None:
     reshape = load("reshape")
     killed = []
     monkeypatch.setattr(reshape.R, "sessions_dir", lambda: str(sessions))
@@ -1183,13 +1188,13 @@ def test_reshape_refuses_before_killing_anything(sessions, monkeypatch):
     assert killed == []
 
 
-def test_reshape_return_leg_flags_go_together():
+def test_reshape_return_leg_flags_go_together() -> None:
     with pytest.raises(SystemExit):
         load("reshape").parse_args(["50", "b.log", "--return-port", "1", "--remote", "farbox"])
 
 
 @pytest.mark.parametrize("name", NAMES)
-def test_scripts_have_no_top_level_win32_import_or_powershell(name):
+def test_scripts_have_no_top_level_win32_import_or_powershell(name) -> None:
     src = (BIN / f"unimatrix-{name}.py").read_text(encoding="utf-8")
     assert not [l for l in src.splitlines() if re.match(r"(import|from)\s+(pywintypes|win32)", l)]
     assert "powershell" not in src.lower()
@@ -1201,13 +1206,13 @@ USER_AT_HOST = re.compile(r"\b[A-Za-z0-9_.-]+@[A-Za-z0-9][A-Za-z0-9.-]*\b")
 
 
 @pytest.mark.parametrize("name", NAMES)
-def test_no_ip_literal_or_user_at_host(name):
+def test_no_ip_literal_or_user_at_host(name) -> None:
     src = (BIN / f"unimatrix-{name}.py").read_text(encoding="utf-8")
     assert IPV4.findall(src) == []
     assert USER_AT_HOST.findall(src) == []
 
 
-def test_publish_targets_ship_every_unimatrix_script_and_test():
+def test_publish_targets_ship_every_unimatrix_script_and_test() -> None:
     targets = REPO / "setup" / "publish-targets.portable"
     if not targets.exists():
         pytest.skip("publish targets are not part of the released plugin")
@@ -1221,7 +1226,7 @@ def test_publish_targets_ship_every_unimatrix_script_and_test():
         assert p.name in listed, p.name
 
 
-def test_roster_failure_names_the_ssh_reason(monkeypatch):
+def test_roster_failure_names_the_ssh_reason(monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     monkeypatch.setattr(roster, "_is_win", lambda platform=None: False)
     monkeypatch.setattr(roster, "mux_options", lambda remote, key=None: [])
@@ -1234,7 +1239,7 @@ def test_roster_failure_names_the_ssh_reason(monkeypatch):
 
 @pytest.mark.skipif(sys.platform == "win32", reason="SIGTERM handler is POSIX-only")
 @pytest.mark.parametrize("name", ["roster", "mirror-all"])
-def test_a_sigterm_stop_is_logged_and_exits_nonzero(tmp_path, name):
+def test_a_sigterm_stop_is_logged_and_exits_nonzero(tmp_path: Path, name) -> None:
     # A clean 0 on SIGTERM dropped every mirror with no trace; the stop must say so and fail.
     log = tmp_path / "sup.log"
     p = subprocess.Popen([sys.executable, str(BIN / f"unimatrix-{name}.py"), str(log),
@@ -1256,14 +1261,14 @@ def test_a_sigterm_stop_is_logged_and_exits_nonzero(tmp_path, name):
             p.wait(timeout=10)
 
 
-def test_fetch_roster_retries_one_transient_stall_but_not_a_persistent_failure(monkeypatch):
+def test_fetch_roster_retries_one_transient_stall_but_not_a_persistent_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     monkeypatch.setattr(roster, "_is_win", lambda platform=None: False)
     monkeypatch.setattr(roster, "mux_options", lambda remote, key=None: [])
     monkeypatch.setattr(roster, "lan_reachable", lambda alias: True)
     calls = []
 
-    def flaky(argv, **kw):
+    def flaky(argv, **kw) -> "CompletedProcess[bytes]":
         calls.append(argv)
         if len(calls) == 1:
             raise subprocess.TimeoutExpired(argv, 20)
@@ -1309,7 +1314,7 @@ def test_kickstart_router_agent_is_false_off_darwin(monkeypatch):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="router supervision is POSIX-only")
-def test_ensure_router_spawns_a_silent_router_detached_and_leaves_an_answering_one(tmp_path, monkeypatch):
+def test_ensure_router_spawns_a_silent_router_detached_and_leaves_an_answering_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = iter([False, True])
     mirror_all, started = _router_harness(tmp_path, monkeypatch, lambda: next(seen))
     assert mirror_all.ensure_router(lambda m: None) is True
@@ -1319,7 +1324,7 @@ def test_ensure_router_spawns_a_silent_router_detached_and_leaves_an_answering_o
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="router supervision is POSIX-only")
-def test_ensure_router_defers_to_a_supervisor_holding_the_lock(tmp_path, monkeypatch):
+def test_ensure_router_defers_to_a_supervisor_holding_the_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import fcntl
     mirror_all, started = _router_harness(tmp_path, monkeypatch, lambda: False)
     lock_dir = tmp_path / "unimatrix" / "router"
@@ -1330,7 +1335,7 @@ def test_ensure_router_defers_to_a_supervisor_holding_the_lock(tmp_path, monkeyp
     assert started == []
 
 
-def test_ensure_router_is_supervised_on_win32(tmp_path, monkeypatch):
+def test_ensure_router_is_supervised_on_win32(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = iter([False, True])
     mirror_all, started = _router_harness(tmp_path, monkeypatch, lambda: next(seen))
     transport = mirror_all._router_module()._transport()
@@ -1340,7 +1345,7 @@ def test_ensure_router_is_supervised_on_win32(tmp_path, monkeypatch):
     assert mirror_all.ensure_router(lambda m: None) is True and len(started) == 1
 
 
-def test_ensure_router_waits_for_a_draining_routers_lifetime_lock(tmp_path, monkeypatch):
+def test_ensure_router_waits_for_a_draining_routers_lifetime_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mirror_all, started = _router_harness(tmp_path, monkeypatch, lambda: False)
     lock_dir = tmp_path / "unimatrix" / "router"
     lock_dir.mkdir(parents=True)
@@ -1355,7 +1360,7 @@ def test_ensure_router_waits_for_a_draining_routers_lifetime_lock(tmp_path, monk
 
 
 class ExitedProc:
-    def __init__(self, pid, rc):
+    def __init__(self, pid, rc) -> None:
         self.pid = pid
         self.rc = rc
 
@@ -1367,7 +1372,7 @@ def _sync_rig(tmp_path, monkeypatch, rcs):
     mirror_all = load("mirror-all")
     started, clock = [], [1000.0]
 
-    def fake_spawn(cmd):
+    def fake_spawn(cmd) -> ExitedProc:
         started.append(cmd)
         return ExitedProc(800 + len(started), rcs[min(len(started) - 1, len(rcs) - 1)])
 
@@ -1379,7 +1384,7 @@ def _sync_rig(tmp_path, monkeypatch, rcs):
     return mirror_all, started, clock, cfg
 
 
-def test_unsupported_host_exit_marks_the_remote_and_is_never_redialed(tmp_path, monkeypatch):
+def test_unsupported_host_exit_marks_the_remote_and_is_never_redialed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mirror_all, started, clock, cfg = _sync_rig(tmp_path, monkeypatch, [3])
     live = {"a": {"pid": 1, "messagingSocketPath": "e"}, "b": {"pid": 2, "messagingSocketPath": "e"}}
     clients = {}
@@ -1391,7 +1396,7 @@ def test_unsupported_host_exit_marks_the_remote_and_is_never_redialed(tmp_path, 
     assert first == 2 and len(started) == 2 and mirror_all._STATE["unsupported"]
 
 
-def test_other_exit_waits_a_doubling_capped_backoff_before_respawn(tmp_path, monkeypatch):
+def test_other_exit_waits_a_doubling_capped_backoff_before_respawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mirror_all, started, clock, cfg = _sync_rig(tmp_path, monkeypatch, [255])
     live = {"a": {"pid": 1, "messagingSocketPath": "e"}}
     clients = {}
@@ -1414,7 +1419,7 @@ def test_other_exit_waits_a_doubling_capped_backoff_before_respawn(tmp_path, mon
     assert [mirror_all.backoff_seconds(n) for n in (0, 1, 4, 5, 9)] == [30, 60, 480, 600, 600]
 
 
-def test_a_client_refused_by_the_far_owner_parks_at_the_cap_and_other_exits_do_not(tmp_path, monkeypatch):
+def test_a_client_refused_by_the_far_owner_parks_at_the_cap_and_other_exits_do_not(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mirror_all, started, clock, cfg = _sync_rig(tmp_path, monkeypatch, [1])
     live = {"a": {"pid": 1, "messagingSocketPath": "e"}, "b": {"pid": 2, "messagingSocketPath": "e"}}
     (tmp_path / "unimatrix-inbox-a.log").write_text("far: name a belongs to a live local session\n", encoding="utf-8")
@@ -1432,7 +1437,7 @@ def test_a_client_refused_by_the_far_owner_parks_at_the_cap_and_other_exits_do_n
     assert dials("a") == 2
 
 
-def test_a_client_that_stayed_up_stable_seconds_resets_the_backoff(tmp_path, monkeypatch):
+def test_a_client_that_stayed_up_stable_seconds_resets_the_backoff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mirror_all, started, clock, cfg = _sync_rig(tmp_path, monkeypatch, [255])
     live = {"a": {"pid": 1, "messagingSocketPath": "e"}}
     clients = {}
@@ -1447,7 +1452,7 @@ def test_a_client_that_stayed_up_stable_seconds_resets_the_backoff(tmp_path, mon
     assert mirror_all._STATE["fails"] == {}
 
 
-def test_relay_inbox_exits_3_on_a_pipe_host_and_the_code_matches_the_supervisor():
+def test_relay_inbox_exits_3_on_a_pipe_host_and_the_code_matches_the_supervisor() -> None:
     relay = importlib.util.module_from_spec(importlib.util.spec_from_file_location("unimatrix_relay_c4", BIN / "unimatrix-relay.py"))
     relay.__spec__.loader.exec_module(relay)
     assert relay.UNSUPPORTED_HOST_RC == 3 == load("mirror-all").UNSUPPORTED_HOST_RC
@@ -1457,7 +1462,7 @@ def test_relay_inbox_exits_3_on_a_pipe_host_and_the_code_matches_the_supervisor(
     assert e.value.code == 3
 
 
-def test_remote_ip_retries_a_failed_lookup_and_refreshes_a_stale_hit(monkeypatch):
+def test_remote_ip_retries_a_failed_lookup_and_refreshes_a_stale_hit(monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     clock = [1000.0]
     monkeypatch.setattr(roster.time, "monotonic", lambda: clock[0])
@@ -1476,7 +1481,7 @@ def test_remote_ip_retries_a_failed_lookup_and_refreshes_a_stale_hit(monkeypatch
         FAKE_DNS.pop("flaky", None)
 
 
-def test_stable_remote_tries_at_most_the_capped_addresses_then_dot_local():
+def test_stable_remote_tries_at_most_the_capped_addresses_then_dot_local() -> None:
     roster = load("roster")
     tried = []
 
@@ -1492,7 +1497,7 @@ def test_stable_remote_tries_at_most_the_capped_addresses_then_dot_local():
     assert len(tried) == roster.FAR_ADDRESSES_TRIED
 
 
-def test_alias_identity_takes_a_pinned_per_box_key_and_refuses_stock_or_missing(tmp_path):
+def test_alias_identity_takes_a_pinned_per_box_key_and_refuses_stock_or_missing(tmp_path: Path) -> None:
     roster = load("roster")
     pinned = tmp_path / "unimatrix-zero-box"
     pinned.write_text("k")
@@ -1504,7 +1509,7 @@ def test_alias_identity_takes_a_pinned_per_box_key_and_refuses_stock_or_missing(
     assert roster.alias_identity("kim@box", lambda a: {}) is None
 
 
-def test_stable_remote_verifies_listed_addresses_with_the_alias_key_not_the_shared_default(tmp_path, monkeypatch):
+def test_stable_remote_verifies_listed_addresses_with_the_alias_key_not_the_shared_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     roster = load("roster")
     pinned = tmp_path / "unimatrix-zero-box"
     pinned.write_text("k")

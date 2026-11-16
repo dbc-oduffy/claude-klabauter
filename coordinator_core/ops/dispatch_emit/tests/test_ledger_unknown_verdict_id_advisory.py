@@ -14,6 +14,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_land_run_revise_note_met_land
     _stage,
     repo,
 )
+from pathlib import Path
 
 RUN = "ask-20261109T000000-aaaaaa"
 REL = "state/sizings/2026-11-09-unknown-verdict-id.yaml"
@@ -37,7 +38,7 @@ def _ledger(tmp_path):
     return rl.read_ledger(tmp_path, tmp_path / RECORD_DIR_ROOT / RUN)
 
 
-def test_judge_passes_met_rows_plus_an_unregistered_x1_and_names_it(tmp_path):
+def test_judge_passes_met_rows_plus_an_unregistered_x1_and_names_it(tmp_path: Path) -> None:
     ledger = _ledger(tmp_path)
     assert [i.id for i in ledger.items] == ["R1", "R2"]
 
@@ -48,13 +49,13 @@ def test_judge_passes_met_rows_plus_an_unregistered_x1_and_names_it(tmp_path):
     assert rl.advisory_text(got) == "verdict ids that are not register rows were ignored: X1"
 
 
-def test_judge_without_unknown_ids_carries_no_advisory(tmp_path):
+def test_judge_without_unknown_ids_carries_no_advisory(tmp_path: Path) -> None:
     got = rl.judge(_ledger(tmp_path), {"items": [{"id": "R1", "status": "met"}, {"id": "R2", "status": "met"}]})
 
     assert got["pass"] is True and "advisory" not in got and rl.advisory_text(got) is None
 
 
-def test_an_unmet_register_row_still_fails_beside_an_unregistered_id(tmp_path):
+def test_an_unmet_register_row_still_fails_beside_an_unregistered_id(tmp_path: Path) -> None:
     got = rl.judge(
         _ledger(tmp_path), {"items": [{"id": "R1", "status": "met"}, {"id": "R2", "status": "not_met"}, X1]},
     )
@@ -66,7 +67,7 @@ def test_an_unmet_register_row_still_fails_beside_an_unregistered_id(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_the_default_land_path_commits_the_x1_shape_with_the_advisory(repo):  # noqa: F811
+def test_the_default_land_path_commits_the_x1_shape_with_the_advisory(repo) -> None:  # noqa: F811
     token = _stage(repo, CODE)
 
     out = _land(repo, token, [R1_MET, X1])
@@ -77,7 +78,7 @@ def test_the_default_land_path_commits_the_x1_shape_with_the_advisory(repo):  # 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_the_default_land_path_still_refuses_an_unmet_row_beside_x1(repo):  # noqa: F811
+def test_the_default_land_path_still_refuses_an_unmet_row_beside_x1(repo) -> None:  # noqa: F811
     token = _stage(repo, CODE)
 
     out = _land(repo, token, [{"id": "R1", "status": "not_met"}, X1])

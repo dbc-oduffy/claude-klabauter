@@ -58,7 +58,7 @@ def _git(args, cwd: Path) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     (root / "docs/plans").mkdir(parents=True)
     (root / "pkg/tests").mkdir(parents=True)
@@ -94,7 +94,7 @@ def _landed(repo: Path) -> set:
     return set(_git(["diff", "--name-only", f"{seed}..HEAD"], repo).split()) - {PLAN}
 
 
-def test_cross_row_tests_importing_or_naming_withheld_code_wait_with_it(repo):
+def test_cross_row_tests_importing_or_naming_withheld_code_wait_with_it(repo) -> None:
     base = _git(["rev-parse", "HEAD"], repo).strip()
     message = f"checkpoint(wave 1): 2 rows — R1, R2\n\nCheckpoint-Plan: {PLAN}\nCheckpoint-Base: {base}\n"
 
@@ -114,7 +114,7 @@ def test_cross_row_tests_importing_or_naming_withheld_code_wait_with_it(repo):
     )
 
 
-def test_fixpoint_unit_chain_and_non_test_untouched(tmp_path):
+def test_fixpoint_unit_chain_and_non_test_untouched(tmp_path: Path) -> None:
     for rel, body in FILES.items():
         (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
         (tmp_path / rel).write_text(body, encoding="utf-8")

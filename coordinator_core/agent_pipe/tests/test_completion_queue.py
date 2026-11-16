@@ -5,18 +5,19 @@ import pytest
 
 from coordinator_core.agent_pipe import bridge, codex_app_server, roster
 from coordinator_core.ops.workflow_fire.notify import notify_terminal
+from pathlib import Path
 
 
-def test_enqueue_uses_experimental_persistent_queue(monkeypatch):
+def test_enqueue_uses_experimental_persistent_queue(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
     class Conn:
-        def request(self, method, params, deadline):
+        def request(self, method, params, deadline) -> dict[str, dict[str, str]]:
             calls.append((method, params))
             return {"queuedSubmission": {"id": "q1"}}
 
     @contextmanager
-    def connect(argv, *, experimental=False, timeout=None):
+    def connect(argv, *, experimental: bool = False, timeout=None):
         assert argv == ["proxy"] and experimental is True and timeout == 0.2
         yield Conn()
 
@@ -28,7 +29,7 @@ def test_enqueue_uses_experimental_persistent_queue(monkeypatch):
     })]
 
 
-def test_workflow_completion_waits_for_queue_acceptance(tmp_path, monkeypatch):
+def test_workflow_completion_waits_for_queue_acceptance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     roster.bind("codex-peer", "codex", "t1", argv=["proxy"])
     calls = []
@@ -43,7 +44,7 @@ def test_workflow_completion_waits_for_queue_acceptance(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
-def test_queue_failure_remains_retryable(tmp_path, monkeypatch):
+def test_queue_failure_remains_retryable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     roster.bind("codex-peer", "codex", "t1", argv=["proxy"])
 
@@ -55,7 +56,7 @@ def test_queue_failure_remains_retryable(tmp_path, monkeypatch):
     assert "notified_at" not in done and "offline" in done["notify_error"]
 
 
-def test_muted_peer_is_not_queued(tmp_path, monkeypatch):
+def test_muted_peer_is_not_queued(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     roster.bind("codex-peer", "codex", "t1", argv=["proxy"])
     bridge.set_mute("codex-peer")
@@ -64,7 +65,7 @@ def test_muted_peer_is_not_queued(tmp_path, monkeypatch):
     assert done["notify_status"] == "refused" and "notified_at" not in done
 
 
-def test_ceremony_notice_queues_without_competing_writer(tmp_path, monkeypatch):
+def test_ceremony_notice_queues_without_competing_writer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     roster.bind("codex-peer", "codex", "t1", argv=["proxy"])
     calls = []
@@ -76,7 +77,7 @@ def test_ceremony_notice_queues_without_competing_writer(tmp_path, monkeypatch):
 
 
 @pytest.mark.spawns_process
-def test_terminal_notification_uses_real_codex_queue_transport(tmp_path, monkeypatch):
+def test_terminal_notification_uses_real_codex_queue_transport(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import json
     import sys
     from pathlib import Path

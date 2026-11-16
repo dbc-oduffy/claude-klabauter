@@ -22,6 +22,7 @@ from coordinator_core.ceremony_common.run.tests.test_driver import (
     _results,
     _step,
 )
+from pathlib import Path
 
 
 class _Kill(BaseException):
@@ -29,7 +30,7 @@ class _Kill(BaseException):
 
 
 @pytest.fixture
-def box(tmp_path, capsys):
+def box(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> Box:
     return Box(tmp_path, capsys)
 
 
@@ -56,7 +57,7 @@ def _kill_on(box: Box, step_id: str) -> dict:
     return armed
 
 
-def test_a_relaunch_after_a_killed_launch_does_not_repeat_a_step_that_ran(box, monkeypatch):
+def test_a_relaunch_after_a_killed_launch_does_not_repeat_a_step_that_ran(box, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = []
     real_acquire = single_flight.acquire
 
@@ -94,7 +95,7 @@ def test_a_relaunch_after_a_killed_launch_does_not_repeat_a_step_that_ran(box, m
     assert box.ran.count("orient") == 2 and box.ran.count("prep-1") == 2
 
 
-def test_a_second_finish_after_a_killed_finish_does_not_repeat_a_step_that_ran(box):
+def test_a_second_finish_after_a_killed_finish_does_not_repeat_a_step_that_ran(box) -> None:
     spec = box.spec(
         finish_steps=lambda decisions, rows, *, run: [_step("tail-1", "tail"), _step("tail-2", "tail")]
     )

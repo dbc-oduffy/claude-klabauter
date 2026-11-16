@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+import pytest
 
 _COORDINATOR_LIB = Path(__file__).resolve().parents[2]
 if str(_COORDINATOR_LIB) not in sys.path:
@@ -65,7 +66,7 @@ def _seed(tmp_path: Path) -> "tuple[Path, Path]":
 
 
 class TestForeignDirNamesExemptsASiblingRow:
-    def test_sibling_subdir_exempted_preflight_and_sweep_stay_quiet(self, tmp_path, capsys):
+    def test_sibling_subdir_exempted_preflight_and_sweep_stay_quiet(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         src, dst = _seed(tmp_path)
 
         synced, removed = publish_sync.sync_mirror(
@@ -79,7 +80,7 @@ class TestForeignDirNamesExemptsASiblingRow:
         assert "FATAL" not in captured.err
         assert "sibling" not in captured.err
 
-    def test_a_genuine_orphan_alongside_an_exempted_one_still_aborts(self, tmp_path):
+    def test_a_genuine_orphan_alongside_an_exempted_one_still_aborts(self, tmp_path: Path) -> None:
         src, dst = _seed(tmp_path)
         (dst / "stray").mkdir()
         (dst / "stray" / "orphan.py").write_text("stray\n", encoding="utf-8")
@@ -98,7 +99,7 @@ class TestForeignDirNamesExemptsASiblingRow:
         assert (dst / "sibling" / "owned.py").is_file()
         assert (dst / "stray" / "orphan.py").is_file()
 
-    def test_omitting_the_parameter_aborts_exactly_as_today(self, tmp_path):
+    def test_omitting_the_parameter_aborts_exactly_as_today(self, tmp_path: Path) -> None:
         src, dst = _seed(tmp_path)
 
         try:

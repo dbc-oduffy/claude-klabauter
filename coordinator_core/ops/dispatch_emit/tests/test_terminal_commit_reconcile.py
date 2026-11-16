@@ -9,20 +9,21 @@ import pytest
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit import terminal_commit_reconcile as tcr
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import ALREADY_LANDED_KEY
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _ENV = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit.gpgsign=false"]
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> str:
     return subprocess.run(
         ["git", *_ENV, *args], cwd=repo, check=True, capture_output=True, text=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     ).stdout.strip()
 
 
-def _commit(repo, name):
+def _commit(repo, name) -> str:
     (repo / name).write_text(name, encoding="utf-8")
     _git(repo, "add", name)
     _git(repo, "commit", "-q", "-m", name)
@@ -30,7 +31,7 @@ def _commit(repo, name):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> tuple[Path, str, str, str]:
     _git(tmp_path, "init", "-q", "-b", "main")
     a = _commit(tmp_path, "a")
     b = _commit(tmp_path, "b")
@@ -41,7 +42,7 @@ def repo(tmp_path):
     return tmp_path, a, b, side
 
 
-def test_landed_on_head_head_ancestor_offbranch_unknown(repo):
+def test_landed_on_head_head_ancestor_offbranch_unknown(repo) -> None:
     root, a, b, side = repo
     assert tcr.landed_on_head(root, b)
     assert tcr.landed_on_head(root, a)
@@ -50,18 +51,18 @@ def test_landed_on_head_head_ancestor_offbranch_unknown(repo):
     assert not tcr.landed_on_head(root, "")
 
 
-def test_landed_on_head_false_without_head(tmp_path):
+def test_landed_on_head_false_without_head(tmp_path: Path) -> None:
     assert not tcr.landed_on_head(tmp_path, "a" * 40)
 
 
-def _spent(root, sha):
+def _spent(root, sha) -> str:
     token = run_token.mint(root, "ask-1", "s.mjs")
     assert run_token.redeem(root, "ask-1", token, "s.mjs")
     run_token.consume(root, "ask-1", landed={"sha": sha, "rows": ["C1"], "paths": ["a"]})
     return token
 
 
-def test_already_landed_reply_on_head(repo):
+def test_already_landed_reply_on_head(repo) -> None:
     root, a, b, _side = repo
     token = _spent(root, a)
     assert tcr.already_landed_reply(root, "ask-1", token, "s.mjs") == {
@@ -70,31 +71,31 @@ def test_already_landed_reply_on_head(repo):
     }
 
 
-def test_already_landed_reply_none_off_head(repo):
+def test_already_landed_reply_none_off_head(repo) -> None:
     root, _a, _b, side = repo
     token = _spent(root, side)
     assert tcr.already_landed_reply(root, "ask-1", token, "s.mjs") is None
 
 
-def test_already_landed_reply_none_for_wrong_token_or_script(repo):
+def test_already_landed_reply_none_for_wrong_token_or_script(repo) -> None:
     root, a, _b, _side = repo
     token = _spent(root, a)
     assert tcr.already_landed_reply(root, "ask-1", "wrong", "s.mjs") is None
     assert tcr.already_landed_reply(root, "ask-1", token, "other.mjs") is None
 
 
-def test_already_landed_reply_none_without_receipt(repo):
+def test_already_landed_reply_none_without_receipt(repo) -> None:
     root, _a, _b, _side = repo
     token = run_token.mint(root, "ask-1", "s.mjs")
     assert tcr.already_landed_reply(root, "ask-1", token, "s.mjs") is None
 
 
-def test_clause_carries_pinned_tokens():
+def test_clause_carries_pinned_tokens() -> None:
     for needle in ("-32004", "reconcile_command", "finished", "exactly once", "already_landed"):
         assert needle in tcr.TERMINAL_COMMIT_RECONCILE_CLAUSE
 
 
-def test_landed_on_head_spawns_nothing(repo, monkeypatch):
+def test_landed_on_head_spawns_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, a, _b, side = repo
     spawns = []
 

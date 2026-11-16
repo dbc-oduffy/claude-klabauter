@@ -64,7 +64,7 @@ def _fixture_profile():
     return profile
 
 
-def _compose(**overrides):
+def _compose(**overrides) -> str:
     profile = overrides.pop("profile", None) or _fixture_profile()
     appetite = overrides.pop("appetite", "standard")
     stage_models = overrides.pop("stage_models", None)
@@ -91,13 +91,13 @@ def _compose(**overrides):
 # ---------------------------------------------------------------------------
 
 
-def test_golden_byte_identical():
+def test_golden_byte_identical() -> None:
     script = _compose()
     golden = _GOLDEN_PATH.read_text(encoding="utf-8")
     assert script == golden
 
 
-def test_review_wave_sizes_reviewers_by_committed_row_count():
+def test_review_wave_sizes_reviewers_by_committed_row_count() -> None:
     import copy
 
     fragment = copy.deepcopy(REVIEW_KW["review_roster_fragment"])
@@ -121,7 +121,7 @@ def test_review_wave_sizes_reviewers_by_committed_row_count():
     assert "_groupSlices(" in script
 
 
-def test_commit_stage_archive_path_is_computed_not_relayed_from_close_agent():
+def test_commit_stage_archive_path_is_computed_not_relayed_from_close_agent() -> None:
     script = _compose()
     profile = _fixture_profile()
     assert f"const ARCHIVE_PATH = {gc._js_string_literal(profile.archive_path)};" in script
@@ -131,7 +131,7 @@ def test_commit_stage_archive_path_is_computed_not_relayed_from_close_agent():
     assert "item.new_path" not in script
 
 
-def test_fix_stage_archive_path_is_computed_not_relayed_from_fix_agent():
+def test_fix_stage_archive_path_is_computed_not_relayed_from_fix_agent() -> None:
     script = _compose()
     assert "result.close_result.new" not in script
     assert "result.close_result.old" not in script
@@ -139,14 +139,14 @@ def test_fix_stage_archive_path_is_computed_not_relayed_from_fix_agent():
     assert "row.closeResult = { old: row.path, new: _archived };" in script
 
 
-def test_every_phase_title_is_declared_in_meta_phases():
+def test_every_phase_title_is_declared_in_meta_phases() -> None:
     script = _compose()
     m = re.search(r"export const meta = \{.*?\n\};", script, re.S)
     findings = wc.check_phase_mismatch(script, m.group(0) if m else None)
     assert [f.code for f in findings] == []
 
 
-def test_reemit_is_byte_identical():
+def test_reemit_is_byte_identical() -> None:
     a = _compose()
     b = _compose()
     assert a == b
@@ -170,14 +170,14 @@ def _stage_model_option_count(script: str) -> int:
     return len(re.findall(rf"model: '(?:{names})'", script))
 
 
-def test_every_agent_call_site_carries_a_stage_model():
+def test_every_agent_call_site_carries_a_stage_model() -> None:
     script = grind_only(_compose())
     calls = len(re.findall(r"\bagent\(", script))
     assert calls > 0
     assert calls == _stage_model_option_count(script)
 
 
-def test_stage_models_override_changes_one_call_and_records_it():
+def test_stage_models_override_changes_one_call_and_records_it() -> None:
     base = grind_only(_compose())
     script = grind_only(_compose(stage_models={"triage": "opus"}))
     assert script.count("model: 'opus'") == base.count("model: 'opus'") + 1
@@ -187,7 +187,7 @@ def test_stage_models_override_changes_one_call_and_records_it():
     assert _compose(stage_models={}) == _compose()
 
 
-def test_no_banned_tokens_and_zero_error_findings():
+def test_no_banned_tokens_and_zero_error_findings() -> None:
     script = _compose()
     for token in ("git mv", "git stash", "add -A", "Date.now", "Math.random", "new Date()"):
         assert token not in script
@@ -215,18 +215,18 @@ def _undeclared_assignments(script: str) -> set[str]:
     return assigned - declared
 
 
-def test_every_bare_assigned_identifier_is_declared_in_the_emitted_script():
+def test_every_bare_assigned_identifier_is_declared_in_the_emitted_script() -> None:
     script = _compose()
     assert "let _waveNotRun = [];" in script
     assert _undeclared_assignments(script) == set()
 
 
-def test_undeclared_assignment_guard_fails_on_the_prefix_golden():
+def test_undeclared_assignment_guard_fails_on_the_prefix_golden() -> None:
     pre_fix = _GOLDEN_PATH.read_text(encoding="utf-8").replace("let _waveNotRun = [];\n", "")
     assert _undeclared_assignments(pre_fix) == {"_waveNotRun"}
 
 
-def test_no_lock_global_only_the_inscript_mutex_object():
+def test_no_lock_global_only_the_inscript_mutex_object() -> None:
     """The first attempt called `lock.acquire`/`lock.release` -- no such
     runtime global exists. This module defines its own mutex object
     in-script (`_locked`/`_waiters`/`_acquire`/`_release`); every `lock.`
@@ -239,7 +239,7 @@ def test_no_lock_global_only_the_inscript_mutex_object():
     assert "function withLock(keys, fn)" in script
 
 
-def test_lock_invariant_acquire_all_or_nothing_release_precedes_reacquire():
+def test_lock_invariant_acquire_all_or_nothing_release_precedes_reacquire() -> None:
     script = _compose()
     assert "await _acquire(_keys);" in script
     assert "_release(_keys);" in script
@@ -250,7 +250,7 @@ def test_lock_invariant_acquire_all_or_nothing_release_precedes_reacquire():
     assert "if (keys.some((k) => _locked.has(k))) return false;" in script
 
 
-def test_no_per_row_commit_remains_and_the_mutex_key_is_gone():
+def test_no_per_row_commit_remains_and_the_mutex_key_is_gone() -> None:
     script = _compose()
     assert "@commit" not in script
     assert "_commitCall" not in script
@@ -258,7 +258,7 @@ def test_no_per_row_commit_remains_and_the_mutex_key_is_gone():
     assert "lockKeys = ['@commit'].concat(" not in script
 
 
-def test_the_terminal_commit_is_one_bare_invoke_segment_with_the_params_block():
+def test_the_terminal_commit_is_one_bare_invoke_segment_with_the_params_block() -> None:
     script = _compose()
     assert script.count("coordinator-invoke dispatch.land_run --params-file ' + (_paramsFile) + '") == 1
     assert "_terminalCommitParamsBlock(params)" in script
@@ -268,7 +268,7 @@ def test_the_terminal_commit_is_one_bare_invoke_segment_with_the_params_block():
     assert "/scratch/warp/" in script and "terminal-commit-params.json" in script
 
 
-def test_the_run_close_is_the_outer_finally_after_review_and_adjudication():
+def test_the_run_close_is_the_outer_finally_after_review_and_adjudication() -> None:
     script = _compose()
     inner = (
         "try { await runGrind(); } catch (e) { _grindErr = e; throw e; } "
@@ -286,7 +286,7 @@ def test_the_run_close_is_the_outer_finally_after_review_and_adjudication():
     assert "_drainSweep" not in script
 
 
-def test_run_close_is_one_drain_call_retried_once_and_names_both_failures():
+def test_run_close_is_one_drain_call_retried_once_and_names_both_failures() -> None:
     script = _compose()
     close = script[script.index("async function _runClose()"):]
     close = close[: close.index("\n}\n")]
@@ -298,7 +298,7 @@ def test_run_close_is_one_drain_call_retried_once_and_names_both_failures():
     assert "run record may be missing or incomplete: state/queue-grind/fixture/runs/${RUN_ID}.json" in close
 
 
-def test_drain_call_is_the_one_run_record_sweep_command_with_declared_writes_and_decisions():
+def test_drain_call_is_the_one_run_record_sweep_command_with_declared_writes_and_decisions() -> None:
     script = _compose()
     drain = script[script.index("async function _drainCall()"):]
     drain = drain[: drain.index("\n}\n")]
@@ -309,7 +309,7 @@ def test_drain_call_is_the_one_run_record_sweep_command_with_declared_writes_and
     assert "label: 'ledger-sweep:drain'" in drain
 
 
-def test_terminal_commit_skips_when_nothing_queued_and_hands_back_without_a_token():
+def test_terminal_commit_skips_when_nothing_queued_and_hands_back_without_a_token() -> None:
     script = _compose()
     fn = script[script.index("async function _terminalCommit()"):]
     fn = fn[: fn.index("\n}\n")]
@@ -322,19 +322,19 @@ def test_terminal_commit_skips_when_nothing_queued_and_hands_back_without_a_toke
     assert "'budget-exhausted'" in reason and "_grindErr" in reason
 
 
-def test_ledger_settle_verb_is_never_a_commit_step():
+def test_ledger_settle_verb_is_never_a_commit_step() -> None:
     script = _compose()
     assert "_ledgerPathFor" not in script
     assert "grind-row settle " not in script.replace("grind-row settle-run", "")
 
 
-def test_no_leg_labelled_undo_or_run_record_close_is_emitted():
+def test_no_leg_labelled_undo_or_run_record_close_is_emitted() -> None:
     script = _compose()
     assert "label: 'undo'" not in script and "label: 'run-record:close'" not in script
     assert "await _drainCall()" in script
 
 
-def test_commit_failed_hand_back_names_the_runnable_settle_run_command():
+def test_commit_failed_hand_back_names_the_runnable_settle_run_command() -> None:
     script = _compose()
     assert "SWEEP_HINT" not in script
     assert script.count("+ SETTLE_HINT") == 6
@@ -346,13 +346,13 @@ def test_commit_failed_hand_back_names_the_runnable_settle_run_command():
     assert " --queue state/bug-backlog --repo-root " in hint
 
 
-def test_no_git_mv_stash_add_dash_a():
+def test_no_git_mv_stash_add_dash_a() -> None:
     script = _compose()
     for token in ("git mv", "git stash", "add -A"):
         assert token not in script
 
 
-def test_every_agent_call_site_has_recordcall_equivalent():
+def test_every_agent_call_site_has_recordcall_equivalent() -> None:
     """Defect: fix/verify/commit/refute-close never called `_recordCall`.
     Every captured call (`_capture`) appends `_recordCall(<kind>);`
     immediately after its own `agent(...)` -- count them 1:1."""
@@ -365,7 +365,7 @@ def test_every_agent_call_site_has_recordcall_equivalent():
     assert records == calls
 
 
-def test_no_dead_batch_id_comparisons():
+def test_no_dead_batch_id_comparisons() -> None:
     """Defect: `_runTriage` compared `batchId === 'P0:b0'` against a value
     that never matched. This rewrite keys every call map by the manifest's
     OWN batch/row ids (looked up, never string-compared against a literal
@@ -375,7 +375,7 @@ def test_no_dead_batch_id_comparisons():
     assert "=== 'P0:b0'" not in script
 
 
-def test_each_stage_composed_once_per_row_no_pipeline_over_batches():
+def test_each_stage_composed_once_per_row_no_pipeline_over_batches() -> None:
     """Each stage kind is composed ONCE, as a function taking the row/batch
     object -- never unrolled per row/batch (EM follow-up: the Workflow
     tool's 512 KB inline-script cap, and the design's "manifest is the
@@ -392,7 +392,7 @@ def test_each_stage_composed_once_per_row_no_pipeline_over_batches():
     assert "async function _triageCall(batchId, batchKey, rowIds) {" in script
 
 
-def test_agent_call_site_count_independent_of_row_count():
+def test_agent_call_site_count_independent_of_row_count() -> None:
     """The number of literal `agent(` call SITES must be a small constant
     regardless of manifest size -- a 7-row and a 300-row manifest emit the
     identical count (break-class defect: the prior rewrite unrolled one
@@ -401,7 +401,7 @@ def test_agent_call_site_count_independent_of_row_count():
     profile = _fixture_profile()
     knobs = gp.resolve_appetite(profile, "sweep")
 
-    def _manifest(n):
+    def _manifest(n) -> Manifest:
         keys = ["P0", "P1", "P2", "P3"]
         entries = tuple(
             ManifestEntry(
@@ -412,7 +412,7 @@ def test_agent_call_site_count_independent_of_row_count():
         )
         return Manifest(entries=entries, batch_sizes={}, source=None, digest="deadbeef")
 
-    def _agent_count(n):
+    def _agent_count(n) -> tuple[int, int]:
         script = gc.compose_grind_script(
             _manifest(n), profile, knobs,
             run_dir=Path("state/queue-grind/fixture/run-1"), agent_type_host=None, **REVIEW_KW,
@@ -425,7 +425,7 @@ def test_agent_call_site_count_independent_of_row_count():
     assert large_bytes < 184 * 1024
 
 
-def test_triage_declared_files_never_overwrites_touched_files():
+def test_triage_declared_files_never_overwrites_touched_files() -> None:
     """A triage record's `declared_files` (files the triage merely CITED as
     evidence, never edited) sets the row's lock scope (`declaredFiles`)
     only. Overwriting `touchedFiles` too hands the committer paths with no
@@ -445,7 +445,7 @@ def test_triage_declared_files_never_overwrites_touched_files():
     assert m.group(1).strip() == "row.declaredFiles = rec.declared_files;"
 
 
-def test_real_bounded_concurrency_not_serial_pipeline():
+def test_real_bounded_concurrency_not_serial_pipeline() -> None:
     script = _compose()
     assert "runGrind" in script
     assert "Promise.race" not in script
@@ -453,7 +453,7 @@ def test_real_bounded_concurrency_not_serial_pipeline():
     assert "_runBatchWorker(batchState).catch(" in script
 
 
-def test_fix_commit_undo_interpolate_live_row_state_not_static_manifest_path():
+def test_fix_commit_undo_interpolate_live_row_state_not_static_manifest_path() -> None:
     """The fix/commit/undo prompts read the row's own live
     declaredFiles/touchedFiles/removedFiles -- never a literal manifest
     path baked in as a stand-in for the run-time touched/declared list."""
@@ -475,7 +475,7 @@ def test_fix_commit_undo_interpolate_live_row_state_not_static_manifest_path():
 # ---------------------------------------------------------------------------
 
 
-def test_non_default_appetite_reaches_appetite_name():
+def test_non_default_appetite_reaches_appetite_name() -> None:
     """Live-run defect 9: a run emitted with `--appetite hunt` reported
     `"appetite": "standard"` in its hand-back -- `knobs` never carried an
     `appetite` key, so `compose_grind_script` fell back to the default."""
@@ -484,20 +484,20 @@ def test_non_default_appetite_reaches_appetite_name():
     assert "appetite: APPETITE_NAME" in script
 
 
-def test_stage_output_tokens_all_positive():
+def test_stage_output_tokens_all_positive() -> None:
     assert gc.STAGE_OUTPUT_TOKENS
     for kind, value in gc.STAGE_OUTPUT_TOKENS.items():
         assert value > 0, f"{kind}: {value}"
 
 
-def test_batch_reserve_monotone_in_batch_size():
+def test_batch_reserve_monotone_in_batch_size() -> None:
     sizes = [1, 2, 4, 8, 16]
     reserves = [gc.batch_reserve(n) for n in sizes]
     assert reserves == sorted(reserves)
     assert len(set(reserves)) == len(reserves)
 
 
-def test_batch_reserve_refuses_nonpositive():
+def test_batch_reserve_refuses_nonpositive() -> None:
     with pytest.raises(ValueError):
         gc.batch_reserve(0)
 
@@ -507,7 +507,7 @@ def test_batch_reserve_refuses_nonpositive():
 # ---------------------------------------------------------------------------
 
 
-def test_routing_table_rendered_matches_profile_graph_edges_including_size_and_tradeoff_gate():
+def test_routing_table_rendered_matches_profile_graph_edges_including_size_and_tradeoff_gate() -> None:
     profile = _fixture_profile()
     routing = gc.build_routing_table(profile)
     script = _compose(profile=profile)
@@ -535,11 +535,11 @@ def test_routing_table_rendered_matches_profile_graph_edges_including_size_and_t
 
 
 class _StubBudgetSpender:
-    def __init__(self, total=None):
+    def __init__(self, total=None) -> None:
         self._spent = 0
         self.total = total
 
-    def spend(self, amount):
+    def spend(self, amount) -> None:
         self._spent += amount
 
     def spent(self):
@@ -566,7 +566,7 @@ def _agent_stub(script_by_kind, budget):
     return _agent
 
 
-def _run(batches, script_by_kind, *, batch_size=4, max_agent_calls=None, budget_tokens=None, repo_root=None):
+def _run(batches, script_by_kind, *, batch_size: int = 4, max_agent_calls=None, budget_tokens=None, repo_root=None):
     routing, triage_node = _fixture_routing()
     budget = _StubBudgetSpender(total=budget_tokens)
     agent_fn = _agent_stub(script_by_kind, budget)
@@ -602,7 +602,7 @@ def _triage_script(verdict_by_row):
     return _triage
 
 
-def test_downstream_before_triage_and_window_bound():
+def test_downstream_before_triage_and_window_bound() -> None:
     batches = [("b0", ["r0", "r1"]), ("b1", ["r2", "r3"]), ("b2", ["r4", "r5"])]
     verdicts = {**_all_close_batches(["r0", "r1"]), **_all_fix_batches(["r2", "r3", "r4", "r5"])}
     triage = _triage_script(verdicts)
@@ -626,7 +626,7 @@ def test_downstream_before_triage_and_window_bound():
     assert [c for c in call_log if c[0] == "commit"] == [("commit", "run")]
 
 
-def test_admission_checks_spend_before_every_triage_admit_and_drain_hands_back_budget_exhausted():
+def test_admission_checks_spend_before_every_triage_admit_and_drain_hands_back_budget_exhausted() -> None:
     batches = [(f"b{i}", [f"r{i}"]) for i in range(5)]
     verdicts = _all_fix_batches([f"r{i}" for i in range(5)])
     script_by_kind = {
@@ -642,7 +642,7 @@ def test_admission_checks_spend_before_every_triage_admit_and_drain_hands_back_b
     assert reasons and all("emit-admitted row" in r for r in reasons)
 
 
-def test_max_agent_calls_is_the_deterministic_secondary_bound():
+def test_max_agent_calls_is_the_deterministic_secondary_bound() -> None:
     batches = [(f"b{i}", [f"r{i}"]) for i in range(10)]
     verdicts = _all_fix_batches([f"r{i}" for i in range(10)])
     script_by_kind = {
@@ -658,7 +658,7 @@ def test_max_agent_calls_is_the_deterministic_secondary_bound():
     assert "budget-exhausted" in handback_types
 
 
-def test_budget_tokens_ceiling_halts_admission_independent_of_budget_total():
+def test_budget_tokens_ceiling_halts_admission_independent_of_budget_total() -> None:
     # Parity for the
     # rendered `.mjs`'s BUDGET_TOKENS ceiling: exercised here with
     # budget.total left None, so only the new `budget_tokens` param can be
@@ -685,7 +685,7 @@ def test_budget_tokens_ceiling_halts_admission_independent_of_budget_total():
     assert "budget-exhausted" in handback_types
 
 
-def test_close_confirmed_routed_straight_to_handback_commits_inline_and_settles():
+def test_close_confirmed_routed_straight_to_handback_commits_inline_and_settles() -> None:
     # Parity for the
     # rendered `.mjs`'s inline archive-move-commit branch: a profile graph
     # where refute-close's `confirmed` edge has no explicit `commit` node
@@ -722,18 +722,18 @@ def test_close_confirmed_routed_straight_to_handback_commits_inline_and_settles(
 # ---------------------------------------------------------------------------
 
 
-def test_refuted_row_reaches_fix_and_by_refute_origin_counts_confirmed_and_refuted():
+def test_refuted_row_reaches_fix_and_by_refute_origin_counts_confirmed_and_refuted() -> None:
     verdicts = _all_close_batches(["r0", "r1"])
     triage = _triage_script(verdicts)
     fix_calls = []
 
-    def close_stub(bid):
+    def close_stub(bid) -> dict[str, list[dict[str, str]]]:
         return {
             "confirmed": [{"row": "r0", "new_path": "archive/r0.yaml"}],
             "refuted": [{"row": "r1", "reason": "still reproduces at HEAD"}],
         }
 
-    def fix_stub(rid):
+    def fix_stub(rid) -> dict[str, str]:
         fix_calls.append(rid)
         return {"outcome": "NEEDS_PLAN"}
 
@@ -760,7 +760,7 @@ def test_refuted_row_reaches_fix_and_by_refute_origin_counts_confirmed_and_refut
     assert "triage:not-reproduced" in handback["reason"]
 
 
-def test_by_refute_origin_keys_by_origin_not_batch_id():
+def test_by_refute_origin_keys_by_origin_not_batch_id() -> None:
     verdicts = _all_close_batches(["r0", "r1"])
     triage = _triage_script(verdicts)
 
@@ -782,7 +782,7 @@ def test_by_refute_origin_keys_by_origin_not_batch_id():
     assert result["by_refute_origin"] == {"triage:not-reproduced": {"confirmed": 2, "refuted": 0}}
 
 
-def test_composed_fix_call_interpolates_the_refuters_reason_verbatim():
+def test_composed_fix_call_interpolates_the_refuters_reason_verbatim() -> None:
     """The JS renderer's `_fixCall` interpolates `row.refuteNote` -- the
     same string `_closeBatch` set verbatim from the refute-close agent's
     own `refuted[].reason` -- into the composed fix prompt."""
@@ -793,25 +793,25 @@ def test_composed_fix_call_interpolates_the_refuters_reason_verbatim():
     assert "row.refuteNote = entry.reason || '';" in close_fn
 
 
-def test_counts_expose_by_refute_origin_from_the_rendered_script():
+def test_counts_expose_by_refute_origin_from_the_rendered_script() -> None:
     script = _compose()
     assert "by_refute_origin: _byRefuteOrigin" in script
     assert "function _bumpRefuteOrigin(origin, key)" in script
 
 
-def test_triage_sets_row_origin_from_its_own_verdict_not_batch_id():
+def test_triage_sets_row_origin_from_its_own_verdict_not_batch_id() -> None:
     script = _compose()
     triage_fn = script[script.index("async function _triageBatch"): script.index("async function _closeBatch")]
     assert "row.origin = `triage:${rec.verdict}`;" in triage_fn
 
 
-def test_close_proposals_carry_their_own_origin_field():
+def test_close_proposals_carry_their_own_origin_field() -> None:
     script = _compose()
     close_fn = script[script.index("async function _closeBatch"): script.index("async function _fixStage")]
     assert "origin: row.origin" in close_fn
 
 
-def test_widen_release_reacquire_exactly_once_then_widen_exhausted():
+def test_widen_release_reacquire_exactly_once_then_widen_exhausted() -> None:
     calls = {"fix": 0}
     verdicts = _all_fix_batches(["r0"])
     script_by_kind = {
@@ -823,7 +823,7 @@ def test_widen_release_reacquire_exactly_once_then_widen_exhausted():
     assert any(h["type"] == "widen-exhausted" for h in result["handed_back"])
 
 
-def test_verify_retry_exactly_once_then_undo_rejected_after_retry():
+def test_verify_retry_exactly_once_then_undo_rejected_after_retry() -> None:
     seen = []
     verdicts = _all_fix_batches(["r0"])
     script_by_kind = {
@@ -838,7 +838,7 @@ def test_verify_retry_exactly_once_then_undo_rejected_after_retry():
 
 
 @pytest.mark.parametrize("undo_result", [None, {}, {"outcome": "undo-failed", "reason": "3 files still modified"}])
-def test_undo_that_does_not_return_undone_hands_back_stage_dead_undo_failed(undo_result):
+def test_undo_that_does_not_return_undone_hands_back_stage_dead_undo_failed(undo_result) -> None:
     verdicts = _all_fix_batches(["r0"])
     script_by_kind = {
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
@@ -853,7 +853,7 @@ def test_undo_that_does_not_return_undone_hands_back_stage_dead_undo_failed(undo
     assert not result["settled"]
 
 
-def test_golden_verify_stage_gates_rejected_after_retry_on_undone_outcome():
+def test_golden_verify_stage_gates_rejected_after_retry_on_undone_outcome() -> None:
     golden = _GOLDEN_PATH.read_text(encoding="utf-8")
     stage = golden[golden.index("async function _verifyStage"):golden.index("async function _commitStage")]
     assert "const _undone = result.undo || {};" in stage
@@ -863,7 +863,7 @@ def test_golden_verify_stage_gates_rejected_after_retry_on_undone_outcome():
     assert "'undo-failed: " in stage
 
 
-def test_row_sized_m_or_above_routes_to_baton_never_fix():
+def test_row_sized_m_or_above_routes_to_baton_never_fix() -> None:
     verdicts = {"r0": {"verdict": "confirmed-bug", "tshirt_size": "M", "tradeoff": ""}}
     fix_calls = {"n": 0}
     script_by_kind = {
@@ -876,7 +876,7 @@ def test_row_sized_m_or_above_routes_to_baton_never_fix():
     assert any(h["type"] == "baton" and h["row"] == "r0" for h in result["handed_back"])
 
 
-def test_tradeoff_below_plan_weight_routes_to_needs_judgment_never_fix():
+def test_tradeoff_below_plan_weight_routes_to_needs_judgment_never_fix() -> None:
     verdicts = {"r0": {"verdict": "confirmed-bug", "tshirt_size": "S", "has_tradeoff": True, "tradeoff": "cuts a corner"}}
     fix_calls = {"n": 0}
     script_by_kind = {
@@ -888,7 +888,7 @@ def test_tradeoff_below_plan_weight_routes_to_needs_judgment_never_fix():
     assert any(h["type"] == "needs-judgment" and h["row"] == "r0" for h in result["handed_back"])
 
 
-def test_fixer_reported_tradeoff_also_routes_needs_judgment():
+def test_fixer_reported_tradeoff_also_routes_needs_judgment() -> None:
     verdicts = _all_fix_batches(["r0"])
     script_by_kind = {
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
@@ -898,7 +898,7 @@ def test_fixer_reported_tradeoff_also_routes_needs_judgment():
     assert any(h["type"] == "needs-judgment" and h["row"] == "r0" for h in result["handed_back"])
 
 
-def test_each_stage_runs_exactly_once_per_row_in_call_log():
+def test_each_stage_runs_exactly_once_per_row_in_call_log() -> None:
     verdicts = _all_fix_batches(["r0", "r1"])
     script_by_kind = {
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0", "r1"]),
@@ -915,7 +915,7 @@ def test_each_stage_runs_exactly_once_per_row_in_call_log():
     assert counts[("commit", "run")] == 1
 
 
-def test_refute_close_confirmed_routes_to_commit_refuted_revives_to_fix():
+def test_refute_close_confirmed_routes_to_commit_refuted_revives_to_fix() -> None:
     verdicts = _all_close_batches(["r0", "r1"])
     script_by_kind = {
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0", "r1"]),
@@ -938,7 +938,7 @@ def test_refute_close_confirmed_routes_to_commit_refuted_revives_to_fix():
 # ---------------------------------------------------------------------------
 
 
-def test_handback_spend_matches_stub_budget_delta_and_call_counts():
+def test_handback_spend_matches_stub_budget_delta_and_call_counts() -> None:
     verdicts = {
         "r0": {"verdict": "not-reproduced", "tshirt_size": "S", "tradeoff": ""},
         "r1": {"verdict": "confirmed-bug", "tshirt_size": "S", "tradeoff": ""},
@@ -959,13 +959,13 @@ def test_handback_spend_matches_stub_budget_delta_and_call_counts():
     assert dict(spend["agent_calls_by_stage_kind"]) == dict(expected)
 
 
-def test_on_fail_traversed_at_most_once_structurally():
+def test_on_fail_traversed_at_most_once_structurally() -> None:
     profile = _fixture_profile()
     for node in profile.graph.values():
         assert node.on_fail is None or node.on_fail in profile.graph
 
 
-def test_on_fail_naming_a_hand_back_type_hands_back_without_spending_the_retry():
+def test_on_fail_naming_a_hand_back_type_hands_back_without_spending_the_retry() -> None:
     routing = {
         "fix": {"kind": "fix", "edges": {"done": "verify"}, "on_fail": "needs-judgment"},
         "verify": {"kind": "verify", "edges": {"pass": "commit"}, "on_fail": "fix"},
@@ -982,7 +982,7 @@ def test_on_fail_naming_a_hand_back_type_hands_back_without_spending_the_retry()
 # ---------------------------------------------------------------------------
 
 
-def test_no_literal_script_placeholder_in_golden():
+def test_no_literal_script_placeholder_in_golden() -> None:
     script = _compose()
     assert "<script>" not in script
 
@@ -992,7 +992,7 @@ def test_no_literal_script_placeholder_in_golden():
 # ---------------------------------------------------------------------------
 
 
-def test_fix_manifest_stale_outcome_hands_back_manifest_stale():
+def test_fix_manifest_stale_outcome_hands_back_manifest_stale() -> None:
     verdicts = _all_fix_batches(["r0"])
     script_by_kind = {
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
@@ -1002,7 +1002,7 @@ def test_fix_manifest_stale_outcome_hands_back_manifest_stale():
     assert any(h["type"] == "manifest-stale" and h["row"] == "r0" for h in result["handed_back"])
 
 
-def test_refute_close_stale_row_hands_back_manifest_stale():
+def test_refute_close_stale_row_hands_back_manifest_stale() -> None:
     verdicts = _all_close_batches(["r0", "r1"])
     script_by_kind = {
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0", "r1"]),
@@ -1019,13 +1019,13 @@ def test_refute_close_stale_row_hands_back_manifest_stale():
     assert any(h["type"] == "manifest-stale" and h["row"] == "r0" for h in result["handed_back"])
 
 
-def test_verify_fail_routes_back_to_fix_with_feedback_then_undo_on_second_fail():
+def test_verify_fail_routes_back_to_fix_with_feedback_then_undo_on_second_fail() -> None:
     """DR-404: a verify failure routes back to FIX with the verifier's
     reason as feedback, not a blind re-verify of the same fix."""
     verdicts = _all_fix_batches(["r0"])
     seen = []
 
-    def fix_stub(rid):
+    def fix_stub(rid) -> dict[str, str]:
         seen.append("fix")
         return {"outcome": "done"}
 
@@ -1043,7 +1043,7 @@ def test_verify_fail_routes_back_to_fix_with_feedback_then_undo_on_second_fail()
     assert any(h["type"] == "rejected-after-retry" for h in result["handed_back"])
 
 
-def test_triage_rows_omitted_from_result_hand_back_stage_dead_not_stranded():
+def test_triage_rows_omitted_from_result_hand_back_stage_dead_not_stranded() -> None:
     """A row triage never returns a record for must hand back `stage-dead`,
     never stay pending with `node === null` forever."""
     routing, triage_node = _fixture_routing()
@@ -1074,7 +1074,7 @@ def _omitting_triage(verdicts, omit_on_calls):
     return _triage, calls
 
 
-def test_triage_rows_omitted_then_returned_by_the_retry_route_by_verdict_not_stage_dead():
+def test_triage_rows_omitted_then_returned_by_the_retry_route_by_verdict_not_stage_dead() -> None:
     triage, calls = _omitting_triage(_all_fix_batches(["r0", "r1"]), omit_on_calls=1)
     script_by_kind = {
         "triage": triage,
@@ -1088,7 +1088,7 @@ def test_triage_rows_omitted_then_returned_by_the_retry_route_by_verdict_not_sta
     assert ("fix", "r1") in result["call_log"]
 
 
-def test_triage_row_still_absent_after_the_one_retry_hands_back_stage_dead():
+def test_triage_row_still_absent_after_the_one_retry_hands_back_stage_dead() -> None:
     triage, calls = _omitting_triage(_all_fix_batches(["r0", "r1"]), omit_on_calls=99)
     script_by_kind = {
         "triage": triage,
@@ -1101,14 +1101,14 @@ def test_triage_row_still_absent_after_the_one_retry_hands_back_stage_dead():
     assert [h["row"] for h in result["handed_back"] if h["type"] == "stage-dead"] == ["r1"]
 
 
-def test_emitted_triage_batch_retries_unreturned_rows_once_before_stage_dead():
+def test_emitted_triage_batch_retries_unreturned_rows_once_before_stage_dead() -> None:
     golden = _GOLDEN_PATH.read_text(encoding="utf-8")
     stage = golden[golden.index("async function _triageBatch"):golden.index("async function _closeBatch")]
     assert stage.count("_triageCall(") == 2
     assert stage.index("_missing") < stage.index("'stage-dead'")
 
 
-def test_drain_commit_is_handed_the_run_cost_record_body():
+def test_drain_commit_is_handed_the_run_cost_record_body() -> None:
     """The drain agent writes runs/<run-id>.json; it must be given the body
     (profile, appetite, resolved_knobs, manifest_digest, counts, spend), not
     just the file name."""
@@ -1126,7 +1126,7 @@ def test_drain_commit_is_handed_the_run_cost_record_body():
         assert key in record_fn, key
 
 
-def test_run_cost_record_reads_not_run_until_the_review_wave_assigns_it():
+def test_run_cost_record_reads_not_run_until_the_review_wave_assigns_it() -> None:
     """Node is barred, so the record's initial state and the only assignment sites are checked over the script."""
     script = _compose()
     assert "let _reviewState = 'not-run';\nlet _reviewVerdictsRecord = null;" in script
@@ -1136,7 +1136,7 @@ def test_run_cost_record_reads_not_run_until_the_review_wave_assigns_it():
     assert script.index("_reviewState = 'ran'") < script.index("_reviewState = 'withheld'") < script.index("phase('Review fixes')")
 
 
-def test_run_cost_record_carries_only_wave_entries_that_have_a_verdict():
+def test_run_cost_record_carries_only_wave_entries_that_have_a_verdict() -> None:
     script = _compose()
     start = script.index("const _waveVerdicts = ")
     block = script[start:script.index("\n  }", start)]
@@ -1146,7 +1146,7 @@ def test_run_cost_record_carries_only_wave_entries_that_have_a_verdict():
     assert "_reviewVerdictsRecord = []" not in script
 
 
-def test_run_record_review_verdicts_are_assigned_inside_the_review_gate_before_run_close():
+def test_run_record_review_verdicts_are_assigned_inside_the_review_gate_before_run_close() -> None:
     script = _compose()
     record_fn = script[script.index("function _runCostRecord()"):]
     assert "review_verdicts: _reviewVerdictsRecord" in record_fn[: record_fn.index("\n}")]
@@ -1156,7 +1156,7 @@ def test_run_record_review_verdicts_are_assigned_inside_the_review_gate_before_r
     assert gate < assign < close
 
 
-def test_batch_helpers_receive_a_batches_entry_never_batch_state():
+def test_batch_helpers_receive_a_batches_entry_never_batch_state() -> None:
     """`batchState` ({id, batchKey, triaged, closedRows}) has no `.rows`; a
     helper typed on a BATCHES entry that is handed batchState throws at run
     time (every grind died at _finishBatch this way). Node is barred, so the
@@ -1180,7 +1180,7 @@ def test_batch_helpers_receive_a_batches_entry_never_batch_state():
 # ---------------------------------------------------------------------------
 
 
-def test_finding1_every_captured_agent_result_is_null_guarded():
+def test_finding1_every_captured_agent_result_is_null_guarded() -> None:
     """Every `_result = await agent(...)` capture is wrapped `|| {}` so a
     null/undefined agent result reads as an empty object instead of
     throwing on the first `.field` access."""
@@ -1191,7 +1191,7 @@ def test_finding1_every_captured_agent_result_is_null_guarded():
     assert len(captures) == len(guards) == len(re.findall(r"\bagent\(", script))
 
 
-def test_finding1_null_fix_verify_close_route_to_stage_dead_never_throw():
+def test_finding1_null_fix_verify_close_route_to_stage_dead_never_throw() -> None:
     """A null result from fix/verify/close routes its row(s) to stage-dead
     rather than throwing (driven through the pure-Python admission model,
     which mirrors the guarded rendered script)."""
@@ -1213,7 +1213,7 @@ def test_finding1_null_fix_verify_close_route_to_stage_dead_never_throw():
     ]
 
 
-def test_finding1_null_commit_result_hands_back_commit_failed():
+def test_finding1_null_commit_result_hands_back_commit_failed() -> None:
     routing, triage_node = _fixture_routing()
     budget = _StubBudgetSpender()
 
@@ -1236,7 +1236,7 @@ def test_finding1_null_commit_result_hands_back_commit_failed():
     assert any(h["row"] == "r0" and h["type"] == "commit-failed" for h in result["handed_back"])
 
 
-def test_finding2_run_batch_worker_wraps_body_in_try_catch_and_still_finishes():
+def test_finding2_run_batch_worker_wraps_body_in_try_catch_and_still_finishes() -> None:
     script = _compose()
     worker = script[script.index("async function _runBatchWorker"): script.index("async function runGrind")]
     assert "try {" in worker
@@ -1249,7 +1249,7 @@ def test_finding2_run_batch_worker_wraps_body_in_try_catch_and_still_finishes():
     assert catch_idx < finish_idx
 
 
-def test_finding3_refute_close_leftover_hands_back_stage_dead_behaviourally():
+def test_finding3_refute_close_leftover_hands_back_stage_dead_behaviourally() -> None:
     verdicts = _all_close_batches(["r0", "r1"])
     script_by_kind = {
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0", "r1"]),
@@ -1263,7 +1263,7 @@ def test_finding3_refute_close_leftover_hands_back_stage_dead_behaviourally():
     assert ("r1", "stage-dead") in handback_types
 
 
-def test_finding5_cross_batch_triage_record_is_ignored_python_model():
+def test_finding5_cross_batch_triage_record_is_ignored_python_model() -> None:
     """A triage record naming a row from another batch never reroutes it
     (misroute 5) -- the python model already filters by `batch.row_ids`."""
     routing, triage_node = _fixture_routing()
@@ -1287,7 +1287,7 @@ def test_finding5_cross_batch_triage_record_is_ignored_python_model():
     assert any(h["row"] == "r0" and h["type"] == "stage-dead" for h in result["handed_back"])
 
 
-def test_finding9_refuted_to_commit_edge_now_refused():
+def test_finding9_refuted_to_commit_edge_now_refused() -> None:
     """The predecessor plan's fixture-authoring choice -- refute_close's
     `refuted -> commit` edge, settling both confirmed and refuted proposals
     via commit -- is exactly the KEPT_OPEN stranding the 2026-09-21 grind
@@ -1314,7 +1314,7 @@ def test_finding9_refuted_to_commit_edge_now_refused():
 # ---------------------------------------------------------------------------
 
 
-def test_every_while_loop_has_a_progress_guarantee_reference():
+def test_every_while_loop_has_a_progress_guarantee_reference() -> None:
     """Every `while` loop in the golden sits next to a comment or a call
     naming the progress mechanism that prevents it spinning forever."""
     script = _compose().replace(grind_commit_contract.RELAY_SHA256_JS, "")
@@ -1327,7 +1327,7 @@ def test_every_while_loop_has_a_progress_guarantee_reference():
         assert any(marker in window for marker in progress_markers), lines[idx]
 
 
-def test_no_row_can_stay_non_done_forever_for_the_fixture_graph_under_every_outcome_including_null():
+def test_no_row_can_stay_non_done_forever_for_the_fixture_graph_under_every_outcome_including_null() -> None:
     """Drive the pure-Python admission model over the fixture graph under
     every distinct agent outcome the stage library's own schemas enumerate
     (including a null/None result) and assert `_pendingRow`'s python
@@ -1446,7 +1446,7 @@ def _m_triage(row_ids):
     ]
 
 
-def test_scout_below_plan_weight_reaches_the_fix_node_with_size_origin():
+def test_scout_below_plan_weight_reaches_the_fix_node_with_size_origin() -> None:
     fix_seen = []
 
     def fix(row_id):
@@ -1460,7 +1460,7 @@ def test_scout_below_plan_weight_reaches_the_fix_node_with_size_origin():
     assert "size-assemble" not in result["spend"]["agent_calls_by_stage_kind"]
 
 
-def test_scout_below_plan_weight_marks_origin_size_below_plan_weight():
+def test_scout_below_plan_weight_marks_origin_size_below_plan_weight() -> None:
     origins = []
 
     def fix(row_id):
@@ -1469,7 +1469,7 @@ def test_scout_below_plan_weight_marks_origin_size_below_plan_weight():
     original = gc.Row
 
     class _Spy(original):
-        def __setattr__(self, name, value):
+        def __setattr__(self, name, value) -> None:
             if name == "origin":
                 origins.append(value)
             super().__setattr__(name, value)
@@ -1482,7 +1482,7 @@ def test_scout_below_plan_weight_marks_origin_size_below_plan_weight():
     assert "size:below-plan-weight" in origins
 
 
-def test_scout_at_plan_weight_hands_back_baton_naming_the_sizing():
+def test_scout_at_plan_weight_hands_back_baton_naming_the_sizing() -> None:
     script_by_kind = {
         "triage": _m_triage(["r0"]),
         "size": lambda rid: _scout("M", exit_code=0),
@@ -1505,14 +1505,14 @@ def _size_baton(tmp_path, *, write_sizing):
     return sizing, result, next(h for h in result["handed_back"] if h["row"] == "r0")
 
 
-def test_exit_zero_without_a_sizing_file_hands_back_a_size_step_failure(tmp_path):
+def test_exit_zero_without_a_sizing_file_hands_back_a_size_step_failure(tmp_path: Path) -> None:
     sizing, result, hand = _size_baton(tmp_path, write_sizing=False)
     assert "sized at" not in hand["reason"]
     assert hand["reason"] == f"intent M (size step failed: exit 0 but no sizing file at {sizing})"
     assert result["by_triage_check"]["size_confirmed"] == 1
 
 
-def test_exit_zero_with_a_sizing_file_still_names_it(tmp_path):
+def test_exit_zero_with_a_sizing_file_still_names_it(tmp_path: Path) -> None:
     sizing, _, hand = _size_baton(tmp_path, write_sizing=True)
     assert hand["reason"] == f"sized at {sizing}: intent M"
 
@@ -1521,13 +1521,13 @@ def _skipped_scout():
     return _scout("M", exit_code=0, stdout="size skipped: a superseded predecessor already carries route-to-plan\n")
 
 
-def test_skip_message_is_the_size_chains_own():
+def test_skip_message_is_the_size_chains_own() -> None:
     from coordinator_core.backlog_grind_assemble import grind_size_chain
 
     assert gc.SIZE_SKIPPED_MESSAGE == grind_size_chain.SKIP_MESSAGE
 
 
-def test_skipped_size_chain_baton_names_no_sizing_and_carries_the_ask():
+def test_skipped_size_chain_baton_names_no_sizing_and_carries_the_ask() -> None:
     result, _ = _run([("b0", ["r0"])], {"triage": _m_triage(["r0"]), "size": lambda rid: _skipped_scout()})
     hand = next(h for h in result["handed_back"] if h["row"] == "r0")
     assert hand["type"] == "baton"
@@ -1535,14 +1535,14 @@ def test_skipped_size_chain_baton_names_no_sizing_and_carries_the_ask():
     assert "fire the ask: Resolve backlog row r0 (" in hand["reason"] and hand["reason"].endswith("): intent M")
 
 
-def test_a_written_size_chain_baton_still_names_its_sizing():
+def test_a_written_size_chain_baton_still_names_its_sizing() -> None:
     scout = _scout("M", exit_code=0, stdout="wrote state/sizings/x.yaml\n")
     result, _ = _run([("b0", ["r0"])], {"triage": _m_triage(["r0"]), "size": lambda rid: scout})
     hand = next(h for h in result["handed_back"] if h["row"] == "r0")
     assert hand["reason"].startswith("sized at state/sizings/") and "fire the ask" not in hand["reason"]
 
 
-def test_handed_back_baton_named_action_fires_through_dispatch_emit(tmp_path, monkeypatch):
+def test_handed_back_baton_named_action_fires_through_dispatch_emit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import ask_compose
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
     from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
@@ -1568,7 +1568,7 @@ def test_handed_back_baton_named_action_fires_through_dispatch_emit(tmp_path, mo
         _dispatch_emit({"sizing_path": absent, "repo_root": str(tmp_path)}, repo_root=tmp_path)
 
 
-def test_emitted_script_hands_back_the_ask_when_the_size_chain_skipped():
+def test_emitted_script_hands_back_the_ask_when_the_size_chain_skipped() -> None:
     script = _compose()
     to_size = script[script.index("let scouted = await _issue(batchState.id, rid, () => _sizeCall(row));"):]
     to_size = to_size[:to_size.index("async function _closeBatch")]
@@ -1577,7 +1577,7 @@ def test_emitted_script_hands_back_the_ask_when_the_size_chain_skipped():
     assert "'Resolve backlog row ' + rid + ' (' + row.path + '): ' + _intent" in to_size
 
 
-def test_nonzero_assemble_exit_is_a_baton_naming_the_exit_code():
+def test_nonzero_assemble_exit_is_a_baton_naming_the_exit_code() -> None:
     script_by_kind = {
         "triage": _m_triage(["r0"]),
         "size": lambda rid: _scout("L", exit_code=3),
@@ -1588,7 +1588,7 @@ def test_nonzero_assemble_exit_is_a_baton_naming_the_exit_code():
     assert hand["reason"] == "intent L (size step failed: exit 3: (no stderr))"
 
 
-def test_nonzero_assemble_exit_hand_back_carries_the_stderr_tail():
+def test_nonzero_assemble_exit_hand_back_carries_the_stderr_tail() -> None:
     script_by_kind = {
         "triage": _m_triage(["r0"]),
         "size": lambda rid: _scout("L", exit_code=1, stderr="  error: estimate.tshirt is 'XS'  "),
@@ -1598,7 +1598,7 @@ def test_nonzero_assemble_exit_hand_back_carries_the_stderr_tail():
     assert hand["reason"] == "intent L (size step failed: exit 1: error: estimate.tshirt is 'XS')"
 
 
-def test_scout_that_returns_no_exit_code_is_a_baton_naming_a_missing_exit():
+def test_scout_that_returns_no_exit_code_is_a_baton_naming_a_missing_exit() -> None:
     result, _ = _run([("b0", ["r0"])], {"triage": _m_triage(["r0"]), "size": lambda rid: _scout("M")})
     hand = next(h for h in result["handed_back"] if h["row"] == "r0")
     assert hand["reason"] == (
@@ -1606,7 +1606,7 @@ def test_scout_that_returns_no_exit_code_is_a_baton_naming_a_missing_exit():
     )
 
 
-def test_scout_with_no_exit_code_is_redispatched_once_and_the_second_reply_sizes_the_row():
+def test_scout_with_no_exit_code_is_redispatched_once_and_the_second_reply_sizes_the_row() -> None:
     replies = [_scout("M"), _scout("M", exit_code=0)]
     result, _ = _run([("b0", ["r0"])], {"triage": _m_triage(["r0"]), "size": lambda rid: replies.pop(0)})
     hand = next(h for h in result["handed_back"] if h["row"] == "r0")
@@ -1614,7 +1614,7 @@ def test_scout_with_no_exit_code_is_redispatched_once_and_the_second_reply_sizes
     assert result["spend"]["agent_calls_by_stage_kind"]["size"] == 2
 
 
-def test_scout_with_no_exit_code_twice_hands_back_naming_its_own_reason_after_one_retry():
+def test_scout_with_no_exit_code_twice_hands_back_naming_its_own_reason_after_one_retry() -> None:
     replies = [_scout("M"), _scout("M", reason="could not run: no shell")]
     result, _ = _run([("b0", ["r0"])], {"triage": _m_triage(["r0"]), "size": lambda rid: replies.pop(0)})
     hand = next(h for h in result["handed_back"] if h["row"] == "r0")
@@ -1625,28 +1625,28 @@ def test_scout_with_no_exit_code_twice_hands_back_naming_its_own_reason_after_on
     assert result["spend"]["agent_calls_by_stage_kind"]["size"] == 2
 
 
-def test_scout_that_ran_the_fail_command_and_named_a_reason_is_not_redispatched():
+def test_scout_that_ran_the_fail_command_and_named_a_reason_is_not_redispatched() -> None:
     result, _ = _run(
         [("b0", ["r0"])], {"triage": _m_triage(["r0"]), "size": lambda rid: _scout("M", reason="no shell")}
     )
     assert result["spend"]["agent_calls_by_stage_kind"]["size"] == 1
 
 
-def test_scout_with_an_exit_code_is_not_redispatched():
+def test_scout_with_an_exit_code_is_not_redispatched() -> None:
     result, _ = _run(
         [("b0", ["r0"])], {"triage": _m_triage(["r0"]), "size": lambda rid: _scout("L", exit_code=3)}
     )
     assert result["spend"]["agent_calls_by_stage_kind"]["size"] == 1
 
 
-def test_emitted_script_redispatches_a_size_scout_without_an_exit_code_once():
+def test_emitted_script_redispatches_a_size_scout_without_an_exit_code_once() -> None:
     script = _compose()
     assert "Number.isInteger(scouted.exit_code)" in script
     assert script.count("_sizeCall(row, true)") == 1
     assert "reason" in gc.stages.SIZE_SCOUT_SCHEMA["properties"]
 
 
-def test_scout_with_no_size_hands_back_baton_without_an_assemble_call():
+def test_scout_with_no_size_hands_back_baton_without_an_assemble_call() -> None:
     script_by_kind = {"triage": _m_triage(["r0"]), "size": lambda rid: {"reason": "refused"}}
     result, _ = _run([("b0", ["r0"])], script_by_kind)
     hand = next(h for h in result["handed_back"] if h["row"] == "r0")
@@ -1655,7 +1655,7 @@ def test_scout_with_no_size_hands_back_baton_without_an_assemble_call():
     assert "size-assemble" not in result["spend"]["agent_calls_by_stage_kind"]
 
 
-def test_two_plan_weight_rows_in_two_batches_make_two_scouts_and_no_assemble_call():
+def test_two_plan_weight_rows_in_two_batches_make_two_scouts_and_no_assemble_call() -> None:
     batches = [("b0", ["r0"]), ("b1", ["r1"])]
 
     def triage(batch_id):
@@ -1672,7 +1672,7 @@ def test_two_plan_weight_rows_in_two_batches_make_two_scouts_and_no_assemble_cal
     assert {h["row"] for h in result["handed_back"] if h["type"] == "baton"} == {"r0", "r1"}
 
 
-def test_a_run_with_no_plan_weight_row_makes_no_size_call():
+def test_a_run_with_no_plan_weight_row_makes_no_size_call() -> None:
     verdicts = _all_fix_batches(["r0"])
     script_by_kind = {
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
@@ -1685,8 +1685,8 @@ def test_a_run_with_no_plan_weight_row_makes_no_size_call():
     assert "size" not in by_kind and "size-assemble" not in by_kind
 
 
-def test_by_triage_check_counts_each_branch_and_a_straight_hand_back():
-    def triage(batch_id):
+def test_by_triage_check_counts_each_branch_and_a_straight_hand_back() -> None:
+    def triage(batch_id) -> list[dict[str, str]]:
         return [
             {"row": "r0", "verdict": "confirmed-bug", "tshirt_size": "S", "tradeoff": "a corner"},
             {"row": "r1", "verdict": "confirmed-bug", "tshirt_size": "M", "tradeoff": ""},
@@ -1719,7 +1719,7 @@ def test_by_triage_check_counts_each_branch_and_a_straight_hand_back():
     }
 
 
-def test_fix_not_reproduced_is_counted():
+def test_fix_not_reproduced_is_counted() -> None:
     verdicts = _all_fix_batches(["r0"])
     script_by_kind = {
         "triage": lambda bid: _triage_script(verdicts)(bid, ["r0"]),
@@ -1729,7 +1729,7 @@ def test_fix_not_reproduced_is_counted():
     assert result["by_triage_check"]["fix_not_reproduced"] == 1
 
 
-def test_two_fix_kind_triage_targets_leave_the_fix_verdict_unresolved_and_the_row_sized():
+def test_two_fix_kind_triage_targets_leave_the_fix_verdict_unresolved_and_the_row_sized() -> None:
     """`triage_fix_verdict` refuses to pick a fix node when triage's own edges
     reach TWO fix-kind targets, so a plan-weight scout size is assembled."""
     routing = {
@@ -1739,7 +1739,7 @@ def test_two_fix_kind_triage_targets_leave_the_fix_verdict_unresolved_and_the_ro
     }
     assert gc.triage_fix_verdict(routing, "triage") is None
 
-    def triage(batch_id):
+    def triage(batch_id) -> list[dict[str, str]]:
         return [{"row": "r0", "verdict": "v1", "tshirt_size": "M", "tradeoff": ""}]
 
     budget = _StubBudgetSpender()
@@ -1754,7 +1754,7 @@ def test_two_fix_kind_triage_targets_leave_the_fix_verdict_unresolved_and_the_ro
     assert hand["type"] == "baton"
 
 
-def test_triage_fix_verdict_resolves_the_fix_kind_verdict():
+def test_triage_fix_verdict_resolves_the_fix_kind_verdict() -> None:
     routing = {
         "triage": {"kind": "triage", "edges": {"confirmed-bug": "fix", "not-reproduced": "refute_close"}, "on_fail": None},
         "fix": {"kind": "fix", "edges": {}, "on_fail": None},
@@ -1767,14 +1767,14 @@ def test_triage_fix_verdict_resolves_the_fix_kind_verdict():
     assert verdict is None or verdict in profile.verdicts
 
 
-def test_golden_size_call_site_ordered_before_first_dispatch_row_call():
+def test_golden_size_call_site_ordered_before_first_dispatch_row_call() -> None:
     script = _compose()
     size_agent_idx = script.index("label: 'size'")
     dispatch_row_call_idx = script.index("await _dispatchRow(")
     assert size_agent_idx < dispatch_row_call_idx
 
 
-def test_golden_size_scout_hands_back_the_baton_from_its_own_assemble_reply():
+def test_golden_size_scout_hands_back_the_baton_from_its_own_assemble_reply() -> None:
     script = _compose()
     assert "_sizeAssembleCall" not in script and "_sizePending" not in script
     assert "_recordCall('size-assemble')" not in script and "_recordCall('size')" in script
@@ -1787,12 +1787,12 @@ def test_golden_size_scout_hands_back_the_baton_from_its_own_assemble_reply():
     assert "size step failed: ' + _sizeFailReason(scouted)" in to_size
 
 
-def test_golden_holds_no_resize_in_any_case():
+def test_golden_holds_no_resize_in_any_case() -> None:
     assert "resize" not in _GOLDEN_PATH.read_text(encoding="utf-8").lower()
     assert "resize" not in _compose().lower()
 
 
-def test_golden_run_cost_record_holds_no_sized_key_and_counts_by_triage_check():
+def test_golden_run_cost_record_holds_no_sized_key_and_counts_by_triage_check() -> None:
     script = _compose()
     record = script[script.index("function _runCostRecord()"):]
     record = record[:record.index("\n}")]
@@ -1815,11 +1815,11 @@ def test_golden_run_cost_record_holds_no_sized_key_and_counts_by_triage_check():
         ("coordinator_core/f.py", False),
     ],
 )
-def test_out_of_root_paths_classifier(path, escapes):
+def test_out_of_root_paths_classifier(path, escapes) -> None:
     assert gc._out_of_root_paths([path]) == ([path] if escapes else [])
 
 
-def test_fix_exit_out_of_root_path_hands_back_needs_judgment_without_verify_or_commit():
+def test_fix_exit_out_of_root_path_hands_back_needs_judgment_without_verify_or_commit() -> None:
     seen = []
     verdicts = _all_fix_batches(["r0"])
     script_by_kind = {
@@ -1834,7 +1834,7 @@ def test_fix_exit_out_of_root_path_hands_back_needs_judgment_without_verify_or_c
     assert len(hb) == 1 and "/sib/repo/f.py" in str(hb[0])
 
 
-def test_fix_exit_in_root_path_routes_unchanged():
+def test_fix_exit_in_root_path_routes_unchanged() -> None:
     seen = []
     verdicts = _all_fix_batches(["r0"])
     script_by_kind = {
@@ -1848,7 +1848,7 @@ def test_fix_exit_in_root_path_routes_unchanged():
     assert not any(h["type"] == "needs-judgment" for h in result["handed_back"])
 
 
-def test_fixstage_script_carries_out_of_root_check_before_follow_edge():
+def test_fixstage_script_carries_out_of_root_check_before_follow_edge() -> None:
     script = _compose()
     assert "function _outOfRootPaths(paths)" in script
     fix_fn = script[script.index("async function _fixStage"): script.index("async function _verifyStage")]
@@ -1870,7 +1870,7 @@ def _fence_run(declared, fix_reply):
 
 
 @pytest.mark.parametrize("escaping", ["/abs/sibling/f.py", "C:\\sib\\f.py", "//srv/share/f.py", "../sib/f.py"])
-def test_declared_file_outside_repo_root_hands_back_before_the_fix_agent_runs(escaping):
+def test_declared_file_outside_repo_root_hands_back_before_the_fix_agent_runs(escaping) -> None:
     seen, result = _fence_run(["a/ok.py", escaping], {"outcome": "done", "touched_files": ["a/ok.py"]})
     assert seen == []
     hb = [h for h in result["handed_back"] if h["type"] == "needs-judgment"]
@@ -1878,13 +1878,13 @@ def test_declared_file_outside_repo_root_hands_back_before_the_fix_agent_runs(es
     assert "a/ok.py" not in hb[0]["reason"].split("cross-repo change): ")[1]
 
 
-def test_in_root_declared_files_still_reach_the_fix_agent():
+def test_in_root_declared_files_still_reach_the_fix_agent() -> None:
     seen, result = _fence_run(["a/ok.py", "./b/../c.py"], {"outcome": "done", "touched_files": ["a/ok.py"]})
     assert seen[0] == "fix"
     assert not any("no fix applied" in h["reason"] for h in result["handed_back"])
 
 
-def test_widened_extra_file_outside_repo_root_hands_back_without_a_second_fix_call():
+def test_widened_extra_file_outside_repo_root_hands_back_without_a_second_fix_call() -> None:
     seen, result = _fence_run(
         ["a/ok.py"], {"outcome": "NEEDS_WIDER_SCOPE", "extra_files": ["a/more.py", "/sib/repo/g.py"]}
     )
@@ -1893,13 +1893,13 @@ def test_widened_extra_file_outside_repo_root_hands_back_without_a_second_fix_ca
     assert len(hb) == 1 and "/sib/repo/g.py" in hb[0]["reason"] and "no fix applied" in hb[0]["reason"]
 
 
-def test_widened_in_root_extra_files_keep_the_one_widen_retry():
+def test_widened_in_root_extra_files_keep_the_one_widen_retry() -> None:
     seen, result = _fence_run(["a/ok.py"], {"outcome": "NEEDS_WIDER_SCOPE", "extra_files": ["a/more.py"]})
     assert seen == ["fix", "fix"]
     assert any(h["type"] == "widen-exhausted" for h in result["handed_back"])
 
 
-def test_fixstage_script_fences_declared_and_widened_files_before_the_fix_call():
+def test_fixstage_script_fences_declared_and_widened_files_before_the_fix_call() -> None:
     script = _compose()
     fix_fn = script[script.index("async function _fixStage"): script.index("async function _verifyStage")]
     assert fix_fn.index("_outOfRootPaths(row.declaredFiles)") < fix_fn.index("withLock(")
@@ -1907,14 +1907,14 @@ def test_fixstage_script_fences_declared_and_widened_files_before_the_fix_call()
     assert gc._PRE_FIX_FENCE_HEAD in fix_fn
 
 
-def test_fix_brief_names_the_repo_root_fence():
+def test_fix_brief_names_the_repo_root_fence() -> None:
     import coordinator_core.ops.dispatch_emit.grind_stages as stages
 
     call = stages.compose_fix_call(label="fix", phase_title="Fix")
     assert "Every write stays inside the repo root" in call and "NEEDS_WIDER_SCOPE" in call
 
 
-def test_fix_prompt_withholds_close_when_tradeoff_reported():
+def test_fix_prompt_withholds_close_when_tradeoff_reported() -> None:
     """A fixer that reports a tradeoff must not archive the row: the
     adjudicator edits `pm_ruling` on the row in place, and
     block_subagent_archive_write denies an edit under archive/."""
@@ -1925,7 +1925,7 @@ def test_fix_prompt_withholds_close_when_tradeoff_reported():
     assert "When `has_tradeoff` is true, do not run `backlog-grind-assemble grind-row close`" in call
 
 
-def test_targeted_runner_off_is_the_golden():
+def test_targeted_runner_off_is_the_golden() -> None:
     assert _compose(targeted_runner=False) == _GOLDEN_PATH.read_text(encoding="utf-8")
 
 
@@ -1934,11 +1934,11 @@ def _forced_line(script: str) -> str:
     return next(ln for ln in verify.splitlines() if "const _forced" in ln)
 
 
-def test_targeted_runner_non_bug_profile_keeps_agent_verdict_on_no_runner():
+def test_targeted_runner_non_bug_profile_keeps_agent_verdict_on_no_runner() -> None:
     assert '["failed", "refused", "passed-on-foreign-uncommitted"]' in _forced_line(_compose(targeted_runner=True))
 
 
-def test_targeted_runner_verify_forces_fail_on_runner_failure_outcomes():
+def test_targeted_runner_verify_forces_fail_on_runner_failure_outcomes() -> None:
     import dataclasses
 
     bug = dataclasses.replace(_fixture_profile(), name="bug")
@@ -1949,7 +1949,7 @@ def test_targeted_runner_verify_forces_fail_on_runner_failure_outcomes():
     assert "reason: JSON.stringify(_result.output)" in verify
 
 
-def test_targeted_runner_script_names_the_runner_and_no_suite_command():
+def test_targeted_runner_script_names_the_runner_and_no_suite_command() -> None:
     script = _compose(targeted_runner=True)
     assert "targeted-test-run" in script
     for banned in ("fast_test_cmd", "full_test_cmd", "with-suite-mutex", "tier-u-grant-cli"):
@@ -1990,7 +1990,7 @@ def _fix_script(rows, *, fix=None, declared=None, commit=None):
     }
 
 
-def test_two_non_overlapping_rows_end_with_one_commit_call():
+def test_two_non_overlapping_rows_end_with_one_commit_call() -> None:
     result, sink = _run_sink([("b0", ["r0", "r1"])], _fix_script(["r0", "r1"]))
     assert [c for c in result["call_log"] if c[0] == "commit"] == [("commit", "run")]
     assert len(sink) == 1
@@ -2002,7 +2002,7 @@ def test_two_non_overlapping_rows_end_with_one_commit_call():
     assert all(s["sha"] == "tip" for s in result["settled"])
 
 
-def test_exhausted_run_still_records_the_commit_with_halted_budget_exhausted():
+def test_exhausted_run_still_records_the_commit_with_halted_budget_exhausted() -> None:
     batches = [(f"b{i}", [f"r{i}"]) for i in range(4)]
     rows = [f"r{i}" for i in range(4)]
     script = _fix_script(rows)
@@ -2016,7 +2016,7 @@ def test_exhausted_run_still_records_the_commit_with_halted_budget_exhausted():
     assert any(h["type"] == "budget-exhausted" for h in result["handed_back"])
 
 
-def test_a_stage_that_raises_after_one_row_finished_still_commits_that_row_with_the_error_as_halted():
+def test_a_stage_that_raises_after_one_row_finished_still_commits_that_row_with_the_error_as_halted() -> None:
     def fix(rid):
         if rid == "r1":
             raise RuntimeError("stage blew up")
@@ -2029,7 +2029,7 @@ def test_a_stage_that_raises_after_one_row_finished_still_commits_that_row_with_
     assert [r["row_id"] for r in sink[0]["grind"]["rows"]] == ["r0"]
 
 
-def test_a_row_declaring_a_queued_rows_path_is_overlap_deferred_with_no_fix_call():
+def test_a_row_declaring_a_queued_rows_path_is_overlap_deferred_with_no_fix_call() -> None:
     script = _fix_script(
         ["r0", "r1"],
         declared={"r0": ["shared.py"], "r1": ["shared.py"]},
@@ -2043,7 +2043,7 @@ def test_a_row_declaring_a_queued_rows_path_is_overlap_deferred_with_no_fix_call
     assert [r["row_id"] for r in sink[0]["grind"]["rows"]] == ["r0"]
 
 
-def test_a_post_fix_collision_hands_both_rows_back_entangled_undone_and_no_commit():
+def test_a_post_fix_collision_hands_both_rows_back_entangled_undone_and_no_commit() -> None:
     script = _fix_script(
         ["r0", "r1"],
         declared={"r0": ["a.py"], "r1": ["b.py"]},
@@ -2059,7 +2059,7 @@ def test_a_post_fix_collision_hands_both_rows_back_entangled_undone_and_no_commi
     assert sink == [] and ("commit", "run") not in result["call_log"]
 
 
-def test_a_reply_with_one_row_only_in_dropped_hands_that_row_back_and_stamps_the_other():
+def test_a_reply_with_one_row_only_in_dropped_hands_that_row_back_and_stamps_the_other() -> None:
     dropped = [{"row_id": "r1", "path": "state/queue-grind/p/r1.done.md", "reason": "ledger-root"}]
     reply = {
         "committed": True, "sha": "tip",
@@ -2074,7 +2074,7 @@ def test_a_reply_with_one_row_only_in_dropped_hands_that_row_back_and_stamps_the
     assert result["terminal_commit_dropped"] == dropped
 
 
-def test_a_failed_terminal_commit_hands_every_queued_row_back_naming_the_settle_run_recovery():
+def test_a_failed_terminal_commit_hands_every_queued_row_back_naming_the_settle_run_recovery() -> None:
     reply = {"committed": False, "refused": "no readable pathspec"}
     result, _sink = _run_sink([("b0", ["r0", "r1"])], _fix_script(["r0", "r1"], commit=lambda _unit: reply))
     failed = [h for h in result["handed_back"] if h["type"] == "commit-failed"]
@@ -2083,14 +2083,14 @@ def test_a_failed_terminal_commit_hands_every_queued_row_back_naming_the_settle_
     assert result["settled"] == []
 
 
-def test_no_run_token_hands_the_queue_back_without_calling_the_commit_agent():
+def test_no_run_token_hands_the_queue_back_without_calling_the_commit_agent() -> None:
     result, sink = _run_sink([("b0", ["r0"])], _fix_script(["r0"]), has_run_token=False)
     assert ("commit", "run") not in result["call_log"] and sink == []
     assert [h["type"] for h in result["handed_back"] if h["row"] == "r0"] == ["commit-failed"]
     assert "settle-run" in result["handed_back"][0]["reason"]
 
 
-def test_a_200_row_params_block_renders_under_the_spawn_transcript_read_cap():
+def test_a_200_row_params_block_renders_under_the_spawn_transcript_read_cap() -> None:
     import json
 
     from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import (
@@ -2127,7 +2127,7 @@ def test_a_200_row_params_block_renders_under_the_spawn_transcript_read_cap():
     assert len(json.dumps(render_params_block(_params(200, sources=4)))) > gc.PARAMS_ESCAPED_BUDGET
 
 
-def test_a_params_block_over_the_transcript_budget_hands_every_row_back_and_calls_no_commit_agent():
+def test_a_params_block_over_the_transcript_budget_hands_every_row_back_and_calls_no_commit_agent() -> None:
     heavy = "x" * 40000
     script = _fix_script(
         ["r0", "r1"], fix=lambda rid: {"outcome": "done", "touched_files": [f"src/{heavy}/{rid}.py"]}
@@ -2142,7 +2142,7 @@ def test_a_params_block_over_the_transcript_budget_hands_every_row_back_and_call
     assert "if (_size > PARAMS_BUDGET) { _failAll(" in script_text
 
 
-def test_the_composer_and_stages_never_branch_on_the_profile_name():
+def test_the_composer_and_stages_never_branch_on_the_profile_name() -> None:
     here = Path(gc.__file__).parent
     for name in ("grind_compose.py", "grind_stages.py"):
         for lineno, line in enumerate((here / name).read_text(encoding="utf-8").splitlines(), 1):
@@ -2150,7 +2150,7 @@ def test_the_composer_and_stages_never_branch_on_the_profile_name():
                 assert "RUNNER_FAIL_OUTCOMES" in line, f"{name}:{lineno} branches on the profile name: {line.strip()}"
 
 
-def test_the_script_has_one_terminal_stage_for_the_fixture_profile():
+def test_the_script_has_one_terminal_stage_for_the_fixture_profile() -> None:
     script = _compose()
     assert script.count("async function _terminalCommit()") == 1
     assert "@commit" not in script
@@ -2183,7 +2183,7 @@ def _run_logged(batches, script_by_kind, **kw):
     return result, kinds, sink
 
 
-def test_a_grind_that_throws_still_records_exactly_one_run_record_last_and_rethrows():
+def test_a_grind_that_throws_still_records_exactly_one_run_record_last_and_rethrows() -> None:
     def fix(rid):
         if rid == "r1":
             raise RuntimeError("stage blew up")
@@ -2199,7 +2199,7 @@ def test_a_grind_that_throws_still_records_exactly_one_run_record_last_and_rethr
     assert sink[0]["record"]["halted"] is True and sink[0]["record"]["halted_reason"] == "stage blew up"
 
 
-def test_a_clean_run_records_once_after_the_review_and_adjudication_calls():
+def test_a_clean_run_records_once_after_the_review_and_adjudication_calls() -> None:
     script = _fix_script(["r0"])
     script.update({"review": lambda u: {}, "adjudicate": lambda u: {}})
     result, kinds, sink = _run_logged([("b0", ["r0"])], script, post_stages=("review",))
@@ -2209,7 +2209,7 @@ def test_a_clean_run_records_once_after_the_review_and_adjudication_calls():
     assert result["halted"] is False
 
 
-def test_a_failed_or_throwing_review_stage_still_closes_the_run():
+def test_a_failed_or_throwing_review_stage_still_closes_the_run() -> None:
     def review(unit):
         raise RuntimeError("review blew up")
 
@@ -2220,7 +2220,7 @@ def test_a_failed_or_throwing_review_stage_still_closes_the_run():
     assert kinds[-1] == "ledger-sweep" and sink[0]["record"]["halted_reason"] == "review blew up"
 
 
-def test_a_drain_whose_sweep_failed_still_records_and_names_the_sweep_in_record_and_hand_back():
+def test_a_drain_whose_sweep_failed_still_records_and_names_the_sweep_in_record_and_hand_back() -> None:
     script = _fix_script(["r0"])
     script["ledger-sweep"] = lambda u: {"outcome": "recorded", "swept": False, "sweep_reason": "ledger locked"}
     result, kinds, sink = _run_logged([("b0", ["r0"])], script)
@@ -2234,7 +2234,7 @@ def test_a_drain_whose_sweep_failed_still_records_and_names_the_sweep_in_record_
 
 
 @pytest.mark.parametrize("raises", ["once", "twice"])
-def test_a_drain_that_raises_is_retried_once_and_only_a_second_raise_is_stage_dead(raises):
+def test_a_drain_that_raises_is_retried_once_and_only_a_second_raise_is_stage_dead(raises) -> None:
     calls = {"n": 0}
 
     def ledger_sweep(unit):
@@ -2256,7 +2256,7 @@ def test_a_drain_that_raises_is_retried_once_and_only_a_second_raise_is_stage_de
         assert dead[1].startswith("run record may be missing or incomplete") and dead[1].endswith("drain exploded")
 
 
-def test_a_failed_run_record_is_named_on_the_hand_back_and_never_masks_the_grind_result():
+def test_a_failed_run_record_is_named_on_the_hand_back_and_never_masks_the_grind_result() -> None:
     script = _fix_script(["r0"])
     script["ledger-sweep"] = lambda u: {"outcome": "record-failed", "swept": True, "reason": "commit refused"}
     result, kinds, _sink = _run_logged([("b0", ["r0"])], script)
@@ -2273,7 +2273,7 @@ def test_a_failed_run_record_is_named_on_the_hand_back_and_never_masks_the_grind
         ({"outcome": "recorded", "swept": False}, True, False),
     ],
 )
-def test_a_drain_that_reports_failure_without_a_reason_still_names_one(reply, expect_sweep_dead, expect_record_dead):
+def test_a_drain_that_reports_failure_without_a_reason_still_names_one(reply, expect_sweep_dead, expect_record_dead) -> None:
     script = _fix_script(["r0"])
     script["ledger-sweep"] = lambda u: reply
     result, _kinds, sink = _run_logged([("b0", ["r0"])], script)
@@ -2301,7 +2301,7 @@ def _corrupt_then(second):
     return ledger_sweep
 
 
-def test_a_relay_corrupt_record_failed_is_redriven_once_and_a_good_second_reply_hands_nothing_back():
+def test_a_relay_corrupt_record_failed_is_redriven_once_and_a_good_second_reply_hands_nothing_back() -> None:
     script = _fix_script(["r0"])
     script["ledger-sweep"] = _corrupt_then({"outcome": "recorded", "swept": True})
     result, kinds, _sink = _run_logged([("b0", ["r0"])], script)
@@ -2309,7 +2309,7 @@ def test_a_relay_corrupt_record_failed_is_redriven_once_and_a_good_second_reply_
     assert [h for h in result["handed_back"] if h["type"] == "stage-dead"] == []
 
 
-def test_two_relay_corrupt_replies_make_two_calls_and_one_stage_dead_naming_the_head():
+def test_two_relay_corrupt_replies_make_two_calls_and_one_stage_dead_naming_the_head() -> None:
     script = _fix_script(["r0"])
     script["ledger-sweep"] = _corrupt_then(None)
     result, kinds, _sink = _run_logged([("b0", ["r0"])], script)
@@ -2318,14 +2318,14 @@ def test_two_relay_corrupt_replies_make_two_calls_and_one_stage_dead_naming_the_
     assert len(dead) == 2 and any(grind_commit_contract.RELAY_CORRUPT_HEAD in h["reason"] for h in dead)
 
 
-def test_a_record_failed_without_the_relay_head_is_not_redriven():
+def test_a_record_failed_without_the_relay_head_is_not_redriven() -> None:
     script = _fix_script(["r0"])
     script["ledger-sweep"] = lambda u: {"outcome": "record-failed", "swept": True, "reason": "commit refused"}
     _result, kinds, _sink = _run_logged([("b0", ["r0"])], script)
     assert kinds.count("ledger-sweep") == 1
 
 
-def test_the_composed_script_emits_the_sha256_helper_once_and_retries_on_the_contract_head():
+def test_the_composed_script_emits_the_sha256_helper_once_and_retries_on_the_contract_head() -> None:
     script = _compose()
     assert script.count("function _sha256Ascii(") == 1
     run_close = script[script.index("async function _runClose()"):]
@@ -2333,7 +2333,7 @@ def test_the_composed_script_emits_the_sha256_helper_once_and_retries_on_the_con
     assert run_close.index(".includes(") < run_close.index("_drained.swept === false")
 
 
-def test_a_halted_run_without_a_throw_runs_the_close_and_the_record_says_halted():
+def test_a_halted_run_without_a_throw_runs_the_close_and_the_record_says_halted() -> None:
     batches = [(f"b{i}", [f"r{i}"]) for i in range(4)]
     script = _fix_script([f"r{i}" for i in range(4)])
     script["triage"] = lambda bid: [
@@ -2345,7 +2345,7 @@ def test_a_halted_run_without_a_throw_runs_the_close_and_the_record_says_halted(
     assert result["halted"] is True
 
 
-def test_the_run_record_carries_every_required_key_and_the_declared_writes():
+def test_the_run_record_carries_every_required_key_and_the_declared_writes() -> None:
     from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
 
     script = _fix_script(["r0", "r1"])
@@ -2357,7 +2357,7 @@ def test_the_run_record_carries_every_required_key_and_the_declared_writes():
     assert sink[0]["declared"] == ["r0", "r1"]
 
 
-def test_a_row_rejected_twice_accumulates_both_attempts_paths_for_the_undo_and_the_commit():
+def test_a_row_rejected_twice_accumulates_both_attempts_paths_for_the_undo_and_the_commit() -> None:
     attempts = {"n": 0}
 
     def fix(rid):
@@ -2366,7 +2366,7 @@ def test_a_row_rejected_twice_accumulates_both_attempts_paths_for_the_undo_and_t
 
     verifies = {"n": 0}
 
-    def verify(rid):
+    def verify(rid) -> dict[str, str]:
         verifies["n"] += 1
         return {"outcome": "fail"} if verifies["n"] == 1 else {"outcome": "pass"}
 
@@ -2376,7 +2376,7 @@ def test_a_row_rejected_twice_accumulates_both_attempts_paths_for_the_undo_and_t
     assert sink[0]["grind"]["rows"][0]["paths"] == ["src/attempt1.py", "src/attempt2.py", "new1.py", "new2.py"]
 
 
-def test_the_emitted_fix_stage_accumulates_touched_and_created_paths_across_attempts():
+def test_the_emitted_fix_stage_accumulates_touched_and_created_paths_across_attempts() -> None:
     script = _compose()
     fix = script[script.index("async function _fixStage(rowId)"):]
     fix = fix[: fix.index("\n}\n")]
@@ -2387,7 +2387,7 @@ def test_the_emitted_fix_stage_accumulates_touched_and_created_paths_across_atte
 
 
 @pytest.mark.parametrize("written", ["state/warp/x.md", "./docs/plans/p.md", "state/sizings/s.yaml"])
-def test_a_fix_that_writes_a_historical_record_is_undone_and_handed_back_needs_judgment(written):
+def test_a_fix_that_writes_a_historical_record_is_undone_and_handed_back_needs_judgment(written) -> None:
     undone: list = []
     script = _fix_script(
         ["r0"], fix=lambda rid: {"outcome": "done", "touched_files": ["src/r0.py"], "created_files": [written]},
@@ -2402,7 +2402,7 @@ def test_a_fix_that_writes_a_historical_record_is_undone_and_handed_back_needs_j
     assert result["settled"] == []
 
 
-def test_a_historical_write_whose_undo_fails_is_stage_dead_naming_the_undo_failure():
+def test_a_historical_write_whose_undo_fails_is_stage_dead_naming_the_undo_failure() -> None:
     script = _fix_script(["r0"], fix=lambda rid: {"outcome": "done", "touched_files": ["state/warp/x.md"]})
     script["verify"] = lambda rid: {"undo": {"outcome": "undo-failed", "reason": "left: state/warp/x.md (peer)"}}
     result, _kinds, _sink = _run_logged([("b0", ["r0"])], script)
@@ -2412,13 +2412,13 @@ def test_a_historical_write_whose_undo_fails_is_stage_dead_naming_the_undo_failu
     assert "left: state/warp/x.md (peer)" in handed[0]["reason"]
 
 
-def test_a_non_historical_path_that_merely_resembles_a_prefix_is_not_refused():
+def test_a_non_historical_path_that_merely_resembles_a_prefix_is_not_refused() -> None:
     assert gc._historical_paths(["state/warp-notes/x.md", "docs/plans.md", "src/state/warp/x.py", "state/warp/x.md"]) == [
         "state/warp/x.md"
     ]
 
 
-def test_the_emitted_fix_stage_checks_historical_records_before_the_entangle_check():
+def test_the_emitted_fix_stage_checks_historical_records_before_the_entangle_check() -> None:
     script = _compose()
     fix = script[script.index("async function _fixStage(rowId)"):]
     fix = fix[: fix.index("\n}\n")]
@@ -2427,7 +2427,7 @@ def test_the_emitted_fix_stage_checks_historical_records_before_the_entangle_che
     assert 'const HISTORICAL_PREFIXES = ["state/warp/", "docs/plans/", "state/handoffs/", "state/sizings/", "docs/decisions/"];' in script
 
 
-def test_a_fix_tradeoff_is_handed_back_verbatim_and_rides_the_run_record():
+def test_a_fix_tradeoff_is_handed_back_verbatim_and_rides_the_run_record() -> None:
     text = "keeps the old retry path; costs one extra spawn"
     script = _fix_script(
         ["r0"], fix=lambda rid: {"outcome": "done", "touched_files": ["src/r0.py"], "has_tradeoff": True, "tradeoff": text},
@@ -2439,7 +2439,7 @@ def test_a_fix_tradeoff_is_handed_back_verbatim_and_rides_the_run_record():
     assert [h for h in sink[0]["record"]["handed_back"] if h["row"] == "r0"][0]["tradeoff"] == text
 
 
-def test_a_triage_tradeoff_is_handed_back_verbatim_and_rides_the_run_record():
+def test_a_triage_tradeoff_is_handed_back_verbatim_and_rides_the_run_record() -> None:
     text = "two valid readings of the row"
     script = _fix_script(["r0"])
     script["triage"] = lambda bid: [
@@ -2451,7 +2451,7 @@ def test_a_triage_tradeoff_is_handed_back_verbatim_and_rides_the_run_record():
     assert sink[0]["record"]["handed_back"][0]["tradeoff"] == text
 
 
-def test_the_emitted_script_carries_the_tradeoff_on_both_handbacks():
+def test_the_emitted_script_carries_the_tradeoff_on_both_handbacks() -> None:
     script = _compose()
     assert "const _entry = tradeoff ? { row: rowId, type, reason, tradeoff } : { row: rowId, type, reason };" in script
     assert "'fix reported a tradeoff: ' + tradeoff, tradeoff)" in script
@@ -2482,7 +2482,7 @@ _NONLANDING = [
 
 @pytest.mark.parametrize(("htype", "fix_reply"), _NONLANDING)
 @pytest.mark.parametrize("undone", [True, False])
-def test_every_post_fix_hand_back_with_reported_writes_makes_one_reject_undo(htype, fix_reply, undone):
+def test_every_post_fix_hand_back_with_reported_writes_makes_one_reject_undo(htype, fix_reply, undone) -> None:
     undo = {"outcome": "undone"} if undone else {"outcome": "undo-failed", "reason": "left: src/r0.py"}
     result, kinds, _sink = _run_logged([("b0", ["r0"])], _undo_script({**_WRITES, **fix_reply}, undo=undo))
     assert kinds.count("verify") == 1 and "commit" not in kinds
@@ -2498,7 +2498,7 @@ def test_every_post_fix_hand_back_with_reported_writes_makes_one_reject_undo(hty
 
 
 @pytest.mark.parametrize("undone", [True, False])
-def test_an_entangled_pair_is_undone_row_by_row(undone):
+def test_an_entangled_pair_is_undone_row_by_row(undone) -> None:
     undo = {"outcome": "undone"} if undone else {"outcome": "undo-failed"}
     script = _fix_script(
         ["r0", "r1"], declared={"r0": ["a.py"], "r1": ["b.py"]},
@@ -2514,7 +2514,7 @@ def test_an_entangled_pair_is_undone_row_by_row(undone):
         assert all(h["reason"].startswith("undo-failed: the row was handed back entangled") for h in handed.values())
 
 
-def test_a_row_whose_fix_reported_no_writes_makes_no_undo_call():
+def test_a_row_whose_fix_reported_no_writes_makes_no_undo_call() -> None:
     result, kinds, _sink = _run_logged(
         [("b0", ["r0"])], _undo_script({"outcome": "NEEDS_PLAN"}, undo={"outcome": "undone"}),
     )
@@ -2522,7 +2522,7 @@ def test_a_row_whose_fix_reported_no_writes_makes_no_undo_call():
     assert [h["type"] for h in result["handed_back"] if h["row"] == "r0"] == ["baton"]
 
 
-def test_a_commit_failed_row_makes_no_undo_call():
+def test_a_commit_failed_row_makes_no_undo_call() -> None:
     reply = {"committed": False, "refused": "no readable pathspec"}
     script = _fix_script(["r0"], commit=lambda _unit: reply)
     result, kinds, _sink = _run_logged([("b0", ["r0"])], script)
@@ -2530,7 +2530,7 @@ def test_a_commit_failed_row_makes_no_undo_call():
     assert kinds.count("verify") == 1 and kinds.index("verify") < kinds.index("commit")
 
 
-def test_a_widen_exhausted_row_undoes_once_after_both_attempts_and_the_script_unions_their_paths():
+def test_a_widen_exhausted_row_undoes_once_after_both_attempts_and_the_script_unions_their_paths() -> None:
     attempts = {"n": 0}
 
     def fix(rid):
@@ -2555,7 +2555,7 @@ def test_a_widen_exhausted_row_undoes_once_after_both_attempts_and_the_script_un
     assert "_undoPaths(row)" in script_js[script_js.index("async function _rejectUndoCall"):script_js.index("async function _handBackRow(")]
 
 
-def test_an_out_of_root_needs_judgment_row_undoes_only_its_in_root_paths():
+def test_an_out_of_root_needs_judgment_row_undoes_only_its_in_root_paths() -> None:
     fix = {"outcome": "done", "touched_files": ["/etc/outside.conf"], "created_files": []}
     result, kinds, _sink = _run_logged(
         [("b0", ["r0"])], _undo_script(fix, undo={"outcome": "undone"}),
@@ -2576,7 +2576,7 @@ def test_an_out_of_root_needs_judgment_row_undoes_only_its_in_root_paths():
     assert "_outOfRootPaths([p]).length === 0" in undo_paths
 
 
-def test_a_row_reaching_stage_dead_through_a_verify_edge_with_writes_is_undone():
+def test_a_row_reaching_stage_dead_through_a_verify_edge_with_writes_is_undone() -> None:
     calls = {"n": 0}
 
     def verify(rid):
@@ -2591,7 +2591,7 @@ def test_a_row_reaching_stage_dead_through_a_verify_edge_with_writes_is_undone()
     assert handed[0]["type"] == "stage-dead" and handed[0]["reason"].endswith("; undone")
 
 
-def test_a_thrown_runs_unfinished_row_with_writes_is_undone_after_the_terminal_commit():
+def test_a_thrown_runs_unfinished_row_with_writes_is_undone_after_the_terminal_commit() -> None:
     state = {"n": 0}
 
     def fix(rid):
@@ -2610,7 +2610,7 @@ def test_a_thrown_runs_unfinished_row_with_writes_is_undone_after_the_terminal_c
     assert "run threw: ${_msg}" in inner
 
 
-def test_the_emitted_fix_stage_has_no_bare_hand_back_for_a_non_landing_row():
+def test_the_emitted_fix_stage_has_no_bare_hand_back_for_a_non_landing_row() -> None:
     script = _compose()
     fix = script[script.index("async function _fixStage(rowId)"):]
     fix = fix[: fix.index("\n}\n")]
@@ -2655,7 +2655,7 @@ def _golden_undo_verdict(row: dict) -> dict:
     return json.loads(out.stdout)
 
 
-def test_the_emitted_undo_helpers_read_removed_files_and_never_close_result():
+def test_the_emitted_undo_helpers_read_removed_files_and_never_close_result() -> None:
     for name in ("_undoPaths", "_hasWrites"):
         body = _golden_function(name)
         assert "removedFiles" in body and "closeResult" not in body
@@ -2684,14 +2684,14 @@ def test_the_emitted_undo_helpers_read_removed_files_and_never_close_result():
         (dict(), dict(fixReported=False, touchedFiles=[], createdFiles=[], removedFiles=[])),
     ],
 )
-def test_python_and_emitted_undo_helpers_agree(py_row, js_row):
+def test_python_and_emitted_undo_helpers_agree(py_row, js_row) -> None:
     row = gc.Row(row_id="r0", path="r0", batch_id="b0", **py_row)
     seen = _golden_undo_verdict(js_row)
     assert seen["wrote"] is gc._has_writes(row)
     assert seen["paths"] == gc._undo_paths(row)
 
 
-def test_an_out_of_root_escape_with_in_root_writes_names_the_paths_left_dirty_not_a_bare_undone():
+def test_an_out_of_root_escape_with_in_root_writes_names_the_paths_left_dirty_not_a_bare_undone() -> None:
     mixed = {"outcome": "done", "touched_files": ["/etc/outside.conf", "src/r0.py"]}
     result, kinds, _sink = _run_logged(
         [("b0", ["r0"])], _undo_script(mixed, undo={"outcome": "undone"}),
@@ -2702,7 +2702,7 @@ def test_an_out_of_root_escape_with_in_root_writes_names_the_paths_left_dirty_no
     assert f"{gc._NOT_UNDONE_OUT_OF_ROOT}: /etc/outside.conf" in reason
 
 
-def test_an_out_of_root_only_escape_with_no_undo_call_names_the_paths_left_dirty():
+def test_an_out_of_root_only_escape_with_no_undo_call_names_the_paths_left_dirty() -> None:
     fix = {"outcome": "done", "touched_files": ["/etc/a.conf"], "created_files": ["/etc/b.conf"]}
     result, kinds, _sink = _run_logged([("b0", ["r0"])], _undo_script(fix, undo={"outcome": "undone"}))
     assert "verify" not in kinds
@@ -2711,7 +2711,7 @@ def test_an_out_of_root_only_escape_with_no_undo_call_names_the_paths_left_dirty
     assert not reason.endswith("; undone")
 
 
-def test_a_hand_back_with_only_in_root_writes_still_ends_undone():
+def test_a_hand_back_with_only_in_root_writes_still_ends_undone() -> None:
     result, _kinds, _sink = _run_logged(
         [("b0", ["r0"])], _undo_script({**_WRITES, "outcome": "NEEDS_PLAN"}, undo={"outcome": "undone"}),
     )
@@ -2719,7 +2719,7 @@ def test_a_hand_back_with_only_in_root_writes_still_ends_undone():
     assert reason.endswith("; undone") and gc._NOT_UNDONE_OUT_OF_ROOT not in reason
 
 
-def test_the_emitted_hand_back_names_out_of_root_paths_left_dirty_in_both_branches():
+def test_the_emitted_hand_back_names_out_of_root_paths_left_dirty_in_both_branches() -> None:
     script = _compose()
     body = script[script.index("async function _handBackRow("):]
     body = body[: body.index("\n}\n")]
@@ -2728,13 +2728,13 @@ def test_the_emitted_hand_back_names_out_of_root_paths_left_dirty_in_both_branch
     assert "_outOfRootPaths(" in _golden_function("_outOfRootWritten")
 
 
-def test_a_removed_only_row_is_a_write_with_an_undo_set():
+def test_a_removed_only_row_is_a_write_with_an_undo_set() -> None:
     row = gc.Row(row_id="r0", path="r0", batch_id="b0", removed_files=["state/bug-backlog/gone.yaml"])
     assert gc._has_writes(row) is True
     assert gc._undo_paths(row) == ["state/bug-backlog/gone.yaml"]
 
 
-def test_a_peer_dirty_row_with_writes_makes_no_undo_call_and_names_the_paths_left():
+def test_a_peer_dirty_row_with_writes_makes_no_undo_call_and_names_the_paths_left() -> None:
     fix = {**_WRITES, "outcome": "PEER_DIRTY"}
     undo_sink: list = []
     result, kinds, _sink = _run_logged(
@@ -2748,7 +2748,7 @@ def test_a_peer_dirty_row_with_writes_makes_no_undo_call_and_names_the_paths_lef
     assert not handed[0]["reason"].endswith("; undone")
 
 
-def test_the_emitted_hand_back_tests_the_exempt_set_and_it_holds_both_types():
+def test_the_emitted_hand_back_tests_the_exempt_set_and_it_holds_both_types() -> None:
     script = _compose()
     assert 'const _UNDO_EXEMPT = ["commit-failed", "peer-dirty"];' in script
     body = script[script.index("async function _handBackRow("):]
@@ -2757,10 +2757,10 @@ def test_the_emitted_hand_back_tests_the_exempt_set_and_it_holds_both_types():
     assert set(gc._UNDO_EXEMPT) == {"commit-failed", "peer-dirty"}
 
 
-def test_a_thrown_runs_unfinished_row_whose_only_write_is_a_removed_file_is_undone():
+def test_a_thrown_runs_unfinished_row_whose_only_write_is_a_removed_file_is_undone() -> None:
     calls = {"n": 0}
 
-    def verify(rid):
+    def verify(rid) -> dict[str, dict[str, str]]:
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("verify blew up")
@@ -2847,7 +2847,7 @@ def _run_replay_harness(tmp_path, order: str) -> dict:
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_the_emitted_grind_issues_the_same_agent_call_keys_in_either_completion_order(tmp_path):
+def test_the_emitted_grind_issues_the_same_agent_call_keys_in_either_completion_order(tmp_path: Path) -> None:
     """The runner chains every replay key on the call before it; one recorded result set delivered
     with batch 0 first and with batch 1 first must therefore yield one key sequence."""
     forward = _run_replay_harness(tmp_path, "fwd")["keys"]
@@ -2859,13 +2859,13 @@ def test_the_emitted_grind_issues_the_same_agent_call_keys_in_either_completion_
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_the_emitted_terminal_commit_settles_an_already_landed_reply_and_hands_back_unlanded(tmp_path):
+def test_the_emitted_terminal_commit_settles_an_already_landed_reply_and_hands_back_unlanded(tmp_path: Path) -> None:
     seen = _run_replay_harness(tmp_path, "fwd")
     assert seen["landed_sha_in_record"] is True
     assert seen["unlanded_reason_in_record"] is True
 
 
-def test_every_agent_call_issued_by_a_batch_worker_goes_through_the_issue_gate():
+def test_every_agent_call_issued_by_a_batch_worker_goes_through_the_issue_gate() -> None:
     script = _compose()
     worker_half = script[script.index("function _gateTick()"): script.index("const HANDBACK")]
     for call in ("_triageCall(", "_sizeCall(", "_closeCall(", "_fixCall(", "_rejectUndoCall(", "_verifyCall("):
@@ -2876,21 +2876,21 @@ def test_every_agent_call_issued_by_a_batch_worker_goes_through_the_issue_gate()
     assert "withLock" not in gate
 
 
-def test_the_issue_gate_sits_outside_the_lock_it_would_otherwise_deadlock_against():
+def test_the_issue_gate_sits_outside_the_lock_it_would_otherwise_deadlock_against() -> None:
     script = _compose()
     assert "_issue(row.batchId, rowId, () => withLock(lockKeys, async () => _fixCall(row)))" in script
     assert "_issue(row.batchId, rowId, () => withLock(lockKeys, async () => _verifyCall(row)))" in script
     assert "withLock(lockKeys, async () => _issue(" not in script
 
 
-def test_the_terminal_commit_prompt_and_schema_carry_already_landed_and_unlanded():
+def test_the_terminal_commit_prompt_and_schema_carry_already_landed_and_unlanded() -> None:
     script = _compose()
     call = script[script.index("async function _terminalCommitCall"): script.index("function _counts()")]
     assert grind_commit_contract.ALREADY_LANDED_KEY in call and grind_commit_contract.UNLANDED_KEY in call
     assert f"{grind_commit_contract.ALREADY_LANDED_KEY}, {grind_commit_contract.UNLANDED_KEY} and close_refused, verbatim" in call
 
 
-def test_the_emitted_terminal_commit_reads_unlanded_rows_with_the_engines_reason():
+def test_the_emitted_terminal_commit_reads_unlanded_rows_with_the_engines_reason() -> None:
     script = _compose()
     body = script[script.index("async function _terminalCommit()"):]
     body = body[: body.index("\n}\n")]
@@ -2902,7 +2902,7 @@ def test_the_emitted_terminal_commit_reads_unlanded_rows_with_the_engines_reason
     assert "every path of this row was dropped" not in unlanded_branch
 
 
-def test_the_twin_terminal_commit_hands_an_unlanded_row_back_with_the_engines_reason():
+def test_the_twin_terminal_commit_hands_an_unlanded_row_back_with_the_engines_reason() -> None:
     batches = [("b0", ["r0", "r1"])]
     verdicts = _all_fix_batches(["r0", "r1"])
     script_by_kind = {
@@ -2922,7 +2922,7 @@ def test_the_twin_terminal_commit_hands_an_unlanded_row_back_with_the_engines_re
     assert [s["sha"] for s in result["settled"] if s["row"] == "r0"] == ["abc123"]
 
 
-def test_refute_close_waits_for_the_batch_and_closes_every_arrival_in_one_call():
+def test_refute_close_waits_for_the_batch_and_closes_every_arrival_in_one_call() -> None:
     """Rows at a refute-close node wait behind rows still in fix, so one close call settles all of them."""
     routing = {
         "triage": {"kind": "triage", "edges": {"confirmed-bug": "fix", "not-reproduced": "close"}, "on_fail": None},
@@ -2954,7 +2954,7 @@ def test_refute_close_waits_for_the_batch_and_closes_every_arrival_in_one_call()
     assert {h["row"] for h in result["handed_back"] if h["type"] == "settled-direct"} == {"r0", "r1"}
 
 
-def test_rendered_refute_close_guard_is_keyed_by_row():
+def test_rendered_refute_close_guard_is_keyed_by_row() -> None:
     script = _compose()
     assert "closeCalled" not in script
     assert "closedRows.has(rowId)" in script and "closedRows.add(r)" in script
@@ -2964,7 +2964,7 @@ def _retire_triage(verdict, tshirt):
     return lambda batch_id: [{"row": "r0", "verdict": verdict, "tshirt_size": tshirt, "tradeoff": ""}]
 
 
-def test_retire_verdict_row_skips_baton_and_size_routing():
+def test_retire_verdict_row_skips_baton_and_size_routing() -> None:
     for verdict in sorted(vocab.RETIRE_VERDICTS):
         routing = {
             "triage": {"kind": "triage", "edges": {verdict: "fix"}},
@@ -2974,13 +2974,13 @@ def test_retire_verdict_row_skips_baton_and_size_routing():
         assert gc.route_after_triage(routing, "triage", "other", "L", "") == ("handback", "baton")
 
 
-def test_retire_verdict_gate_is_in_the_emitted_script():
+def test_retire_verdict_gate_is_in_the_emitted_script() -> None:
     script = _compose()
     assert 'const RETIRE_VERDICTS = ["dedupe", "discard"];' in script
     assert "!RETIRE_VERDICTS.includes(verdict) && _tshirtRank(size) >= PLAN_WEIGHT_FLOOR_RANK" in script
 
 
-def test_size_fail_reason_names_missing_exit_and_exit_code_with_stderr_tail():
+def test_size_fail_reason_names_missing_exit_and_exit_code_with_stderr_tail() -> None:
     assert gc.size_fail_reason({}) == "exit missing: the scout ran no size-chain command; (no stderr)"
     assert gc.size_fail_reason({"exit_code": 1, "stderr": "x" * 400}) == "exit 1: " + "x" * 300
     assert gc.size_fail_reason({"reason": "no shell"}) == (
@@ -2988,7 +2988,7 @@ def test_size_fail_reason_names_missing_exit_and_exit_code_with_stderr_tail():
     )
 
 
-def test_fix_target_reached_through_verify_nodes_is_found_and_ambiguity_refused():
+def test_fix_target_reached_through_verify_nodes_is_found_and_ambiguity_refused() -> None:
     routing = {
         "triage": {"kind": "triage", "edges": {"a": "vfix", "b": "vfix", "c": "vclose"}},
         "vfix": {"kind": "verify", "edges": {"pass": "fix"}},
@@ -3001,7 +3001,7 @@ def test_fix_target_reached_through_verify_nodes_is_found_and_ambiguity_refused(
     assert gc.triage_fix_target(routing, "triage") is None
 
 
-def test_below_floor_size_collapse_only_for_a_row_whose_own_verdict_reaches_fix():
+def test_below_floor_size_collapse_only_for_a_row_whose_own_verdict_reaches_fix() -> None:
     script = _compose()
     assert 'const SIZE_FIX_ENTRIES = {"confirmed-bug": "fix"};' in script
     assert "SIZE_FIX_ENTRIES[String(row.origin)" in script
@@ -3032,7 +3032,7 @@ def _run_multi_fix(verdict, size_reply):
     )
 
 
-def test_below_floor_size_fail_reply_reaches_fix_when_several_verdicts_reach_fix():
+def test_below_floor_size_fail_reply_reaches_fix_when_several_verdicts_reach_fix() -> None:
     routing, triage_node = _multi_fix_routing()
     assert gc.triage_fix_target(routing, triage_node) is None
     assert gc.triage_fix_entries(routing, triage_node)["regression"] == "vfix"
@@ -3043,13 +3043,13 @@ def test_below_floor_size_fail_reply_reaches_fix_when_several_verdicts_reach_fix
         assert not any("size step failed" in str(h["reason"]) for h in result["handed_back"])
 
 
-def test_plan_weight_size_fail_reply_still_hands_back_when_several_verdicts_reach_fix():
+def test_plan_weight_size_fail_reply_still_hands_back_when_several_verdicts_reach_fix() -> None:
     result = _run_multi_fix("regression", _scout("M", reason="boom"))
     assert result["by_triage_check"]["size_collapsed"] == 0
     assert any("size step failed" in str(h["reason"]) for h in result["handed_back"])
 
 
-def test_below_floor_size_reply_for_a_row_whose_edge_reaches_no_fix_proceeds_to_a_fix_entry():
+def test_below_floor_size_reply_for_a_row_whose_edge_reaches_no_fix_proceeds_to_a_fix_entry() -> None:
     routing, triage_node = _multi_fix_routing()
     routing[triage_node]["edges"]["not-reproduced"] = "close"
     budget = _StubBudgetSpender()
@@ -3070,7 +3070,7 @@ def test_below_floor_size_reply_for_a_row_whose_edge_reaches_no_fix_proceeds_to_
     assert not any("size step failed" in str(h["reason"]) for h in result["handed_back"])
 
 
-def test_plan_weight_size_reply_for_a_row_whose_edge_reaches_no_fix_still_hands_back():
+def test_plan_weight_size_reply_for_a_row_whose_edge_reaches_no_fix_still_hands_back() -> None:
     routing, triage_node = _multi_fix_routing()
     routing[triage_node]["edges"]["not-reproduced"] = "close"
     budget = _StubBudgetSpender()
@@ -3089,12 +3089,12 @@ def test_plan_weight_size_reply_for_a_row_whose_edge_reaches_no_fix_still_hands_
     assert any("size step failed" in str(h["reason"]) for h in result["handed_back"])
 
 
-def test_emitted_size_loop_falls_back_to_a_fix_entry_for_a_below_floor_row():
+def test_emitted_size_loop_falls_back_to_a_fix_entry_for_a_below_floor_row() -> None:
     script = _compose()
     assert "|| SIZE_FIX_ENTRIES[Object.keys(SIZE_FIX_ENTRIES).sort()[0]]" in script
 
 
-def test_emitted_size_call_makes_the_scout_check_the_sizing_file_exists():
+def test_emitted_size_call_makes_the_scout_check_the_sizing_file_exists() -> None:
     script = _compose()
     start = script.index("async function _sizeCall(row, retry)")
     call = script[start : script.index("\n}", start)]
@@ -3113,7 +3113,7 @@ def _items(n):
     return [{"title": f"item {i}", "evidence": f"e{i}", "declared_files": [f"f{i}.py"]} for i in range(n)]
 
 
-def _split_run(items, *, split_reply=None, size="M"):
+def _split_run(items, *, split_reply=None, size: str = "M"):
     record = {"verdict": "confirmed-bug", "tshirt_size": size, "tradeoff": ""}
     if items is not None:
         record["items"] = items
@@ -3139,7 +3139,7 @@ def _split_run(items, *, split_reply=None, size="M"):
     return result, calls, sink
 
 
-def test_split_record_routes_no_baton_records_one_split_call_and_queues_parent_and_children():
+def test_split_record_routes_no_baton_records_one_split_call_and_queues_parent_and_children() -> None:
     result, calls, sink = _split_run(_items(2))
     assert calls == ["r0"]
     assert not [h for h in result["handed_back"] if h["row"] == "r0"]
@@ -3150,7 +3150,7 @@ def test_split_record_routes_no_baton_records_one_split_call_and_queues_parent_a
     assert queued["paths"] == ["r0", "c0.yaml", "c1.yaml"]
 
 
-def test_record_without_items_or_with_one_item_still_batons_and_never_splits():
+def test_record_without_items_or_with_one_item_still_batons_and_never_splits() -> None:
     for items in (None, [], _items(1)):
         result, calls, _ = _split_run(items)
         assert calls == []
@@ -3158,19 +3158,19 @@ def test_record_without_items_or_with_one_item_still_batons_and_never_splits():
         assert any(h["type"] == "baton" and h["row"] == "r0" for h in result["handed_back"])
 
 
-def test_nine_items_hand_back_needs_judgment_and_mint_nothing():
+def test_nine_items_hand_back_needs_judgment_and_mint_nothing() -> None:
     result, calls, _ = _split_run(_items(gc.MAX_SPLIT_ITEMS + 1))
     assert calls == []
     assert result["by_triage_check"]["split"] == 0
     assert [h["type"] for h in result["handed_back"] if h["row"] == "r0"] == ["needs-judgment"]
 
 
-def test_max_items_split():
+def test_max_items_split() -> None:
     result, calls, _ = _split_run(_items(gc.MAX_SPLIT_ITEMS))
     assert calls == ["r0"] and result["by_triage_check"]["split"] == 1
 
 
-def test_failed_split_hands_back_stage_dead_and_counts_no_split():
+def test_failed_split_hands_back_stage_dead_and_counts_no_split() -> None:
     result, calls, _ = _split_run(_items(3), split_reply={"outcome": "split-failed", "reason": "no row"})
     assert calls == ["r0"]
     assert result["by_triage_check"]["split"] == 0
@@ -3178,7 +3178,7 @@ def test_failed_split_hands_back_stage_dead_and_counts_no_split():
     assert hand["type"] == "stage-dead" and "no row" in hand["reason"]
 
 
-def test_emitted_script_carries_the_split_branch_before_routing():
+def test_emitted_script_carries_the_split_branch_before_routing() -> None:
     script = _compose()
     start = script.index("async function _triageBatch")
     ingest = script[start : script.index("for (const staleRef", start)]
@@ -3190,7 +3190,7 @@ def test_emitted_script_carries_the_split_branch_before_routing():
     assert "split: 0" in script
 
 
-def test_sizing_path_carries_the_month_shard_in_python_and_js_twin():
+def test_sizing_path_carries_the_month_shard_in_python_and_js_twin() -> None:
     assert gc._sizing_path("20260101T000000Z", {"name": "Scout Name"}, "r0") == (
         "state/sizings/2026-01/2026-01-01-scout-name-r0.yaml"
     )
@@ -3220,7 +3220,7 @@ def _eval_lock_keys(script: str, declared_by_row: dict[str, list[str]]) -> dict[
     return json.loads(done.stdout)
 
 
-def test_lessons_rows_share_the_lessons_md_lock_key_and_other_profiles_do_not():
+def test_lessons_rows_share_the_lessons_md_lock_key_and_other_profiles_do_not() -> None:
     keys = _eval_lock_keys(
         _lessons_script(),
         {"a": ["state/lessons/a.yaml"], "b": ["state/lessons/b.yaml"], "c": ["state/lessons.md"]},
@@ -3234,7 +3234,7 @@ def test_lessons_rows_share_the_lessons_md_lock_key_and_other_profiles_do_not():
     assert not set(other["a"]) & set(other["b"])
 
 
-def test_lock_keys_hold_shared_write_keys_on_the_withlock_path():
+def test_lock_keys_hold_shared_write_keys_on_the_withlock_path() -> None:
     script = _lessons_script()
     assert 'const SHARED_WRITE_KEYS = ["state/lessons.md"];' in script
     assert "const SHARED_WRITE_KEYS = [];" in _compose()
@@ -3242,7 +3242,7 @@ def test_lock_keys_hold_shared_write_keys_on_the_withlock_path():
     assert script.count("withLock(lockKeys, async () => _fixCall(row))") == 1
 
 
-def _sized_manifest(tmp_path, sizes_by_key):
+def _sized_manifest(tmp_path, sizes_by_key) -> Manifest:
     """Rows whose files are real, `sizes_by_key` = {key: [bytes, ...]}."""
     entries = []
     for key, sizes in sizes_by_key.items():
@@ -3254,7 +3254,7 @@ def _sized_manifest(tmp_path, sizes_by_key):
     return Manifest(entries=tuple(entries), batch_sizes={}, source=None, digest="d")
 
 
-def test_group_into_batches_splits_a_batch_over_the_tier_and_keeps_one_under_it(tmp_path):
+def test_group_into_batches_splits_a_batch_over_the_tier_and_keeps_one_under_it(tmp_path: Path) -> None:
     from coordinator_core.distill.prompt_tier import LONG_PROMPT_TIER_TOKENS, estimate_tokens
 
     big = LONG_PROMPT_TIER_TOKENS * 4 // 2 + 400
@@ -3270,12 +3270,12 @@ def test_group_into_batches_splits_a_batch_over_the_tier_and_keeps_one_under_it(
     assert sorted(e.row_id for rows in split.values() for e in rows) == [f"A-r{n}" for n in range(4)]
 
 
-def test_group_into_batches_without_repo_root_is_unchanged_by_row_size(tmp_path):
+def test_group_into_batches_without_repo_root_is_unchanged_by_row_size(tmp_path: Path) -> None:
     manifest = _sized_manifest(tmp_path, {"A": [800_000] * 4})
     assert [bid for bid, _ in gc._group_into_batches(manifest, {"batch_size": 4})] == ["A-b0"]
 
 
-def test_group_into_batches_bounds_a_packed_batch_and_keeps_a_lone_oversize_row(tmp_path):
+def test_group_into_batches_bounds_a_packed_batch_and_keeps_a_lone_oversize_row(tmp_path: Path) -> None:
     from coordinator_core.distill.prompt_tier import LONG_PROMPT_TIER_TOKENS, estimate_tokens
 
     half = LONG_PROMPT_TIER_TOKENS * 4 // 2 + 400
@@ -3302,19 +3302,19 @@ def _entries(*row_ids: str) -> list[ManifestEntry]:
     ]
 
 
-def test_chunk_entries_without_clusters_is_plain_slicing():
+def test_chunk_entries_without_clusters_is_plain_slicing() -> None:
     rows = _entries("a", "b", "c", "d", "e")
     assert [[e.row_id for e in c] for c in gc._chunk_entries(rows, 2, None)] == [["a", "b"], ["c", "d"], ["e"]]
 
 
-def test_chunk_entries_keeps_a_fitting_cluster_in_one_chunk():
+def test_chunk_entries_keeps_a_fitting_cluster_in_one_chunk() -> None:
     rows = _entries("a", "b", "c", "d", "e", "f")
     clusters = {"a": 0, "b": 1, "c": 0, "d": 1, "e": 2, "f": 2}
     chunks = [[e.row_id for e in c] for c in gc._chunk_entries(rows, 2, clusters)]
     assert chunks == [["a", "c"], ["b", "d"], ["e", "f"]]
 
 
-def test_chunk_entries_spills_a_cluster_larger_than_size_into_adjacent_chunks():
+def test_chunk_entries_spills_a_cluster_larger_than_size_into_adjacent_chunks() -> None:
     rows = _entries("a", "b", "c", "d", "e", "f")
     clusters = {"a": 0, "b": 1, "c": 0, "d": 1, "e": 0, "f": 2}
     chunks = [[e.row_id for e in c] for c in gc._chunk_entries(rows, 2, clusters)]
@@ -3339,7 +3339,7 @@ def _row_file(root: Path, row_id: str, **fields) -> ManifestEntry:
     return ManifestEntry(row_id=row_id, path=rel, digest="0" * 64, batch_key="P0")
 
 
-def test_triage_manifest_drops_a_row_citing_a_path_gone_at_head_and_keeps_the_rest(tmp_path):
+def test_triage_manifest_drops_a_row_citing_a_path_gone_at_head_and_keeps_the_rest(tmp_path: Path) -> None:
     root = _git_repo(tmp_path, {"pkg/live.py": "x = 1\n"})
     entries = (
         _row_file(root, "live1", surface="pkg/live.py"),
@@ -3355,7 +3355,7 @@ def test_triage_manifest_drops_a_row_citing_a_path_gone_at_head_and_keeps_the_re
     assert outcome.error == ""
 
 
-def test_triage_manifest_does_not_verify_a_non_test_row_in_an_unlisted_profile(tmp_path):
+def test_triage_manifest_does_not_verify_a_non_test_row_in_an_unlisted_profile(tmp_path: Path) -> None:
     root = _git_repo(tmp_path, {"live.py": "x = 1\n"})
     manifest = Manifest(
         entries=(_row_file(root, "r1", surface="gone/missing.py"),), batch_sizes={"P0": 4}, source=None, digest="d"
@@ -3365,7 +3365,7 @@ def test_triage_manifest_does_not_verify_a_non_test_row_in_an_unlisted_profile(t
     assert outcome.closed == ()
 
 
-def test_triage_manifest_drops_a_test_row_that_passes_in_isolation(tmp_path, monkeypatch):
+def test_triage_manifest_drops_a_test_row_that_passes_in_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.grind_triage import triage as triage_mod
     from coordinator_core.grind_triage.contract import TriageResult, Verdict
 
@@ -3391,7 +3391,7 @@ def test_triage_manifest_drops_a_test_row_that_passes_in_isolation(tmp_path, mon
     assert [c["verdict"] for c in outcome.closed] == ["flake"]
 
 
-def test_triage_manifest_fails_open_when_triage_raises(tmp_path, monkeypatch):
+def test_triage_manifest_fails_open_when_triage_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.grind_triage import triage as triage_mod
 
     root = _git_repo(tmp_path, {"live.py": "x\n"})
@@ -3408,7 +3408,7 @@ def _outcome_with_one_closed(manifest: Manifest) -> "gc.TriageOutcome":
     )
 
 
-def test_close_triaged_rows_closes_as_flake_under_the_run_id_stamp(tmp_path, monkeypatch):
+def test_close_triaged_rows_closes_as_flake_under_the_run_id_stamp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.backlog_grind_assemble import grind_rows
 
     calls = []
@@ -3424,7 +3424,7 @@ def test_close_triaged_rows_closes_as_flake_under_the_run_id_stamp(tmp_path, mon
     assert Path(argv["--evidence-file"]).read_text(encoding="utf-8").startswith("triage flake")
 
 
-def test_close_triaged_rows_leaves_a_refused_row_open_and_names_why(tmp_path, monkeypatch):
+def test_close_triaged_rows_leaves_a_refused_row_open_and_names_why(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.backlog_grind_assemble import grind_rows
 
     monkeypatch.setattr(grind_rows, "cmd_close", lambda argv: 2)
@@ -3435,7 +3435,7 @@ def test_close_triaged_rows_leaves_a_refused_row_open_and_names_why(tmp_path, mo
     assert closed[0]["closed"] is False and closed[0]["error"] == "exit 2"
 
 
-def test_close_triaged_rows_closes_a_not_reproduced_row_already_green_not_flake(tmp_path, monkeypatch):
+def test_close_triaged_rows_closes_a_not_reproduced_row_already_green_not_flake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.backlog_grind_assemble import grind_rows
 
     calls = []
@@ -3450,7 +3450,7 @@ def test_close_triaged_rows_closes_a_not_reproduced_row_already_green_not_flake(
     assert argv["--closed-by"] == "already-green"
 
 
-def test_close_triaged_rows_closes_nothing_without_a_run_stamp(tmp_path, monkeypatch):
+def test_close_triaged_rows_closes_nothing_without_a_run_stamp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.backlog_grind_assemble import grind_rows
 
     calls = []
@@ -3460,7 +3460,7 @@ def test_close_triaged_rows_closes_nothing_without_a_run_stamp(tmp_path, monkeyp
     assert calls == [] and closed[0]["closed"] is False and "run stamp" in closed[0]["error"]
 
 
-def test_compose_with_repo_root_drops_triaged_rows_and_reports_them(tmp_path, monkeypatch):
+def test_compose_with_repo_root_drops_triaged_rows_and_reports_them(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     full = _fixture_manifest()
     survivors = Manifest(entries=full.entries[1:], batch_sizes=full.batch_sizes, source=None, digest=full.digest)
     outcome = gc.TriageOutcome(
@@ -3490,6 +3490,31 @@ def test_compose_with_repo_root_drops_triaged_rows_and_reports_them(tmp_path, mo
     assert "_checkpoint();" in script and "checkpoints: _checkpointsReported" in script
 
 
-def test_compose_without_repo_root_never_triages(monkeypatch):
+def test_compose_triages_unless_isolation_triage_is_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ran: list[bool] = []
+
+    def fake_triage(m, root, name):
+        ran.append(True)
+        return gc.TriageOutcome(manifest=m)
+
+    monkeypatch.setattr(gc, "triage_manifest", fake_triage)
+    monkeypatch.setattr(gc, "close_triaged_rows", lambda o, m, p, root, **kw: ())
+    profile = _fixture_profile()
+
+    def compose() -> str:
+        return gc.compose_grind_script(
+            _fixture_manifest(), profile, gp.resolve_appetite(profile, "standard"),
+            run_dir=Path("state/queue-grind/fixture/run-1"), appetite="standard", agent_type_host=None,
+            queue_dirs=["state/bug-backlog"], repo_root=tmp_path, **REVIEW_KW,
+        )
+
+    with gc.isolation_triage_skipped():
+        compose()
+    assert ran == []
+    compose()
+    assert ran == [True]
+
+
+def test_compose_without_repo_root_never_triages(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gc, "triage_manifest", lambda *a, **k: pytest.fail("triage ran without a repo_root"))
     assert "const _checkpointsReported" in _compose()

@@ -23,6 +23,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_met_refire_lands_its_own_prod
     _git,
     _refire,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -41,7 +42,7 @@ def _resume(halt_sha: str, **extra) -> dict:
 
 
 @pytest.fixture
-def declared(tmp_path):
+def declared(tmp_path: Path):
     import subprocess
 
     from coordinator_core.win_portability import no_console_creationflags
@@ -67,30 +68,30 @@ def _check(declared, verdict, **extra):
     return land_run._unchanged_since_halt(root, _resume(halt, **extra), verdict, manifest, None, {})
 
 
-def test_a_row_met_by_an_em_discharged_row_owes_no_diff(declared):
+def test_a_row_met_by_an_em_discharged_row_owes_no_diff(declared) -> None:
     assert _check(declared, _verdict(["E1"]), **{RESUME_LEDGER_EM_DISCHARGED_FIELD: DISCHARGED}) == []
 
 
-def test_a_discharge_text_naming_the_register_row_owes_no_diff(declared):
+def test_a_discharge_text_naming_the_register_row_owes_no_diff(declared) -> None:
     discharged = {"E1": "R1 landed by hand at c72e924dbb"}
     assert _check(declared, _verdict(["c72e924dbb"]), **{RESUME_LEDGER_EM_DISCHARGED_FIELD: discharged}) == []
 
 
-def test_the_same_row_with_no_discharge_still_refuses(declared):
+def test_the_same_row_with_no_discharge_still_refuses(declared) -> None:
     assert _check(declared, _verdict(["E1"])) == REFUSED
     assert _check(declared, _verdict(["E1"]), **{RESUME_LEDGER_EM_DISCHARGED_FIELD: {}}) == REFUSED
 
 
-def test_a_discharge_nothing_links_to_the_row_still_refuses(declared):
+def test_a_discharge_nothing_links_to_the_row_still_refuses(declared) -> None:
     discharged = {"E2": "did something else"}
     assert _check(declared, _verdict(["E1"]), **{RESUME_LEDGER_EM_DISCHARGED_FIELD: discharged}) == REFUSED
 
 
-def test_a_row_id_that_only_contains_the_discharged_id_is_not_credited(declared):
+def test_a_row_id_that_only_contains_the_discharged_id_is_not_credited(declared) -> None:
     assert _check(declared, _verdict(["E10"]), **{RESUME_LEDGER_EM_DISCHARGED_FIELD: DISCHARGED}) == REFUSED
 
 
-def test_a_post_commit_row_gets_no_credit(declared):
+def test_a_post_commit_row_gets_no_credit(declared) -> None:
     verdict = {"items": [{"id": "R1", "status": "post_commit", "met_by": ["E1"]}]}
     assert _check(declared, verdict, **{RESUME_LEDGER_EM_DISCHARGED_FIELD: DISCHARGED}) == REFUSED
 
@@ -105,7 +106,7 @@ def _terminal(root, token, resume, verdict) -> dict:
     )
 
 
-def test_land_run_lands_the_close_for_an_em_discharged_row(halted):  # noqa: F811
+def test_land_run_lands_the_close_for_an_em_discharged_row(halted) -> None:  # noqa: F811
     resume = {**_composed(halted), RESUME_LEDGER_EM_DISCHARGED_FIELD: DISCHARGED}
     refire = _refire(halted, edit=False)
 
@@ -117,7 +118,7 @@ def test_land_run_lands_the_close_for_an_em_discharged_row(halted):  # noqa: F81
     assert not landed & {"a.py", B}, landed
 
 
-def test_land_run_credits_the_undischarged_refire_to_the_carrier_commit(halted):  # noqa: F811
+def test_land_run_credits_the_undischarged_refire_to_the_carrier_commit(halted) -> None:  # noqa: F811
     resume = _composed(halted)
     refire = _refire(halted, edit=False)
     head = _git(halted, "rev-parse", "HEAD")

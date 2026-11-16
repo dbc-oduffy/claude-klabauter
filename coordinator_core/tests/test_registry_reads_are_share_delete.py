@@ -18,6 +18,7 @@ import pathlib
 import re
 import time
 from typing import Dict, List
+from pathlib import Path
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 _SCAN_ROOTS = ("coordinator_core", "coordinator", "scripts")
@@ -141,24 +142,24 @@ def _evaluate(found: List[str], ceiling: Dict[str, str]) -> List[str]:
     return problems
 
 
-def test_the_live_ceiling_is_exact():
+def test_the_live_ceiling_is_exact() -> None:
     assert _evaluate(scan_direct_registry_readers(_REPO_ROOT), _CEILING) == []
 
 
-def test_the_registry_owners_are_never_on_the_ceiling():
+def test_the_registry_owners_are_never_on_the_ceiling() -> None:
     for path in _MUST_NOT_BE_REGISTERED:
         assert path not in _CEILING
         assert path not in scan_direct_registry_readers(_REPO_ROOT)
 
 
-def test_scan_cost_is_at_or_below_the_budget():
+def test_scan_cost_is_at_or_below_the_budget() -> None:
     start = time.process_time()
     scan_direct_registry_readers(_REPO_ROOT)
     elapsed_ms = (time.process_time() - start) * 1000.0
     assert elapsed_ms <= _SCAN_MS_BUDGET, f"scan took {elapsed_ms:.1f}ms"
 
 
-def test_an_unregistered_direct_reader_goes_red(tmp_path):
+def test_an_unregistered_direct_reader_goes_red(tmp_path: Path) -> None:
     mod = tmp_path / "coordinator_core" / "leaky.py"
     mod.parent.mkdir()
     mod.write_text('p = "registry.local.toml"\nopen(p, "rb")\n', encoding="utf-8")
@@ -167,7 +168,7 @@ def test_an_unregistered_direct_reader_goes_red(tmp_path):
     assert _evaluate(found, {}) == ["unregistered direct registry reader: coordinator_core/leaky.py"]
 
 
-def test_a_registered_reader_that_stops_hitting_goes_red(tmp_path):
+def test_a_registered_reader_that_stops_hitting_goes_red(tmp_path: Path) -> None:
     mod = tmp_path / "coordinator_core" / "clean.py"
     mod.parent.mkdir()
     mod.write_text('p = "registry.toml"\nread_bytes_shared(p)\n', encoding="utf-8")
@@ -178,7 +179,7 @@ def test_a_registered_reader_that_stops_hitting_goes_red(tmp_path):
     ]
 
 
-def test_a_module_that_reads_through_the_shared_reader_is_not_a_hit(tmp_path):
+def test_a_module_that_reads_through_the_shared_reader_is_not_a_hit(tmp_path: Path) -> None:
     mod = tmp_path / "coordinator_core" / "migrated.py"
     mod.parent.mkdir()
     mod.write_text(
@@ -188,7 +189,7 @@ def test_a_module_that_reads_through_the_shared_reader_is_not_a_hit(tmp_path):
     assert scan_direct_registry_readers(tmp_path) == []
 
 
-def test_a_module_naming_the_registry_without_opening_it_is_not_a_hit(tmp_path):
+def test_a_module_naming_the_registry_without_opening_it_is_not_a_hit(tmp_path: Path) -> None:
     mod = tmp_path / "coordinator_core" / "namer.py"
     mod.parent.mkdir()
     mod.write_text('NAME = "registry.local.toml"\n', encoding="utf-8")

@@ -185,6 +185,63 @@ def test_packed_contains_overrun_raises_not_false(monkeypatch, tmp_path: Path, _
         release.set()
 
 
+def test_stalled_idx_probe_is_named_with_elapsed_in_message_and_log(
+    monkeypatch, tmp_path: Path, _short_wall, caplog
+) -> None:
+    import threading
+
+    release = threading.Event()
+    idx = tmp_path / "pack-deadbeef.idx"
+    fast = tmp_path / "pack-fast.idx"
+
+    def memoized(p):
+        if p.name == "pack-deadbeef.idx":
+            release.wait(30)
+        return None
+
+    monkeypatch.setattr(go, "_parse_pack_index_memoized", memoized)
+
+    def probe_both():
+        go._parse_pack_index(fast)
+        return go._parse_pack_index(idx)
+
+    caplog.set_level("WARNING", logger=go.__name__)
+    try:
+        with pytest.raises(go.PackReadDeadline) as ei:
+            go._under_read_wall("pack-listing", tmp_path, "a" * 40, probe_both)
+    finally:
+        release.set()
+    msg = str(ei.value)
+    assert "pack-deadbeef.idx=" in msg and "(in flight)" in msg and "pack-fast.idx=" in msg
+    assert msg.index("pack-deadbeef.idx") < msg.index("pack-fast.idx")  # slowest first
+    assert any("pack-deadbeef.idx=" in r.getMessage() for r in caplog.records)
+
+
+def test_stall_without_idx_probe_keeps_plain_message(monkeypatch, tmp_path: Path, _short_wall) -> None:
+    import threading
+
+    release = threading.Event()
+    try:
+        with pytest.raises(go.PackReadDeadline) as ei:
+            go._under_read_wall("pack-listing", tmp_path, "a" * 40, lambda: release.wait(30))
+    finally:
+        release.set()
+    assert ".idx probed" not in str(ei.value)
+
+
+def test_probes_are_not_recorded_outside_the_wall(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(go, "_parse_pack_index_memoized", lambda p: None)
+    assert go._PACK_PROBES.get() is None
+    assert go._parse_pack_index(tmp_path / "x.idx") is None
+
+
+def test_probe_report_caps_and_orders() -> None:
+    probes = [[f"p{i}.idx", 0.0, i / 1000] for i in range(50)]
+    report = go._probe_report(probes)
+    assert report.startswith("50 .idx probed")
+    assert "p49.idx=0.049s" in report and "p0.idx" not in report and "(+14 more)" in report
+
+
 def test_read_local_object_propagates_deadline_not_missing(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(go, "_read_loose_object", lambda c, s: None)
 

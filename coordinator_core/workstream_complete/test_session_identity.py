@@ -7,6 +7,7 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import session_identity
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.cadence,
@@ -43,7 +44,7 @@ def _commit_with_message(path, filename: str, content: str, message: str) -> str
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     _init_repo(root)
     sha = _commit_with_message(root, "seed.txt", "seed\n", "seed\n")
@@ -52,7 +53,7 @@ def repo(tmp_path):
     return root
 
 
-def test_single_trailer_resolves(repo):
+def test_single_trailer_resolves(repo) -> None:
     _commit_with_message(
         repo,
         "a.txt",
@@ -66,7 +67,7 @@ def test_single_trailer_resolves(repo):
     assert result.commits[0].source == "trailer"
 
 
-def test_several_commits_share_one_trailer(repo):
+def test_several_commits_share_one_trailer(repo) -> None:
     _commit_with_message(
         repo, "a.txt", "a\n", "chunk A\n\nSession-Id: sid-1\nDeliverable-Id: dlv-alpha\n"
     )
@@ -80,7 +81,7 @@ def test_several_commits_share_one_trailer(repo):
     assert all(c.deliverable_id == "dlv-alpha" for c in result.commits)
 
 
-def test_conflicting_trailers_are_representable_not_first_wins(repo):
+def test_conflicting_trailers_are_representable_not_first_wins(repo) -> None:
     _commit_with_message(
         repo, "a.txt", "a\n", "chunk A\n\nSession-Id: sid-1\nDeliverable-Id: dlv-alpha\n"
     )
@@ -94,7 +95,7 @@ def test_conflicting_trailers_are_representable_not_first_wins(repo):
     assert "CONFLICTING" in result.reason
 
 
-def test_zero_commits_for_session_is_ok_but_empty(repo):
+def test_zero_commits_for_session_is_ok_but_empty(repo) -> None:
     _commit_with_message(
         repo, "a.txt", "a\n", "chunk A\n\nSession-Id: sid-other\nDeliverable-Id: dlv-alpha\n"
     )
@@ -105,7 +106,7 @@ def test_zero_commits_for_session_is_ok_but_empty(repo):
     assert "sid-1" in result.reason
 
 
-def test_trailer_demoted_outside_last_paragraph_uses_body_fallback(repo):
+def test_trailer_demoted_outside_last_paragraph_uses_body_fallback(repo) -> None:
     message = "chunk A\n\nDeliverable-Id: dlv-gamma\n\nSession-Id: sid-1\n"
     _commit_with_message(repo, "a.txt", "a\n", message)
 
@@ -121,7 +122,7 @@ def test_trailer_demoted_outside_last_paragraph_uses_body_fallback(repo):
     assert result.commits[0].source == "body-fallback"
 
 
-def test_empty_session_id_returns_ok_empty_without_git_spawn(repo, monkeypatch):
+def test_empty_session_id_returns_ok_empty_without_git_spawn(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*args, **kwargs):
         raise AssertionError("git must not be spawned for an empty session_id")
 
@@ -132,7 +133,7 @@ def test_empty_session_id_returns_ok_empty_without_git_spawn(repo, monkeypatch):
     assert result.commits == ()
 
 
-def test_git_failure_reports_ok_false(tmp_path):
+def test_git_failure_reports_ok_false(tmp_path: Path) -> None:
     not_a_repo = tmp_path / "not-a-repo"
     not_a_repo.mkdir()
     result = session_identity.session_deliverable_ids(not_a_repo, "sid-1")
@@ -147,7 +148,7 @@ def _history_for(repo, sid, floor, monkeypatch):
     return session_history.read_session_history(repo, sid)
 
 
-def _forbid_spawn(monkeypatch):
+def _forbid_spawn(monkeypatch) -> None:
     def _boom(*args, **kwargs):
         raise AssertionError("a handed history must not spawn")
 
@@ -155,7 +156,7 @@ def _forbid_spawn(monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", _boom)
 
 
-def test_injected_history_matches_walk_and_spawns_nothing(repo, monkeypatch):
+def test_injected_history_matches_walk_and_spawns_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     floor = _git("rev-parse", "HEAD", cwd=repo).stdout.strip()
     _commit_with_message(
         repo, "a.txt", "a\n", "chunk A\n\nSession-Id: sid-1\nDeliverable-Id: dlv-alpha\n"
@@ -181,7 +182,7 @@ def test_injected_history_matches_walk_and_spawns_nothing(repo, monkeypatch):
     assert injected.reason == walked.reason
 
 
-def test_injected_history_excludes_merges(repo, monkeypatch):
+def test_injected_history_excludes_merges(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.workstream_complete.session_history import (
         SessionCommit,
         SessionHistory,
@@ -197,7 +198,7 @@ def test_injected_history_excludes_merges(repo, monkeypatch):
     assert [c.sha for c in result.commits] == ["a" * 40]
 
 
-def test_unresolved_history_is_degraded_not_a_walk(repo, monkeypatch):
+def test_unresolved_history_is_degraded_not_a_walk(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.workstream_complete.session_history import SessionHistory
 
     _commit_with_message(

@@ -12,6 +12,8 @@ from coordinator_core.ops.dispatch_emit import halt_tree_check, halt_tree_evict
 from coordinator_core.ops.dispatch_emit.halted_record_eviction import (
     EVICTED_NOT_IMPORTABLE, plan_tree_eviction,
 )
+from pathlib import Path
+import pytest
 
 REC = "state/warp/run-x"
 RUN = "r1"
@@ -55,7 +57,7 @@ def _plan(root, withheld, paths):
     )
 
 
-def test_foreign_hunk_survives_eviction_and_own_hunk_goes_to_head(tmp_path, monkeypatch):
+def test_foreign_hunk_survives_eviction_and_own_hunk_goes_to_head(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     foreign = {3: "FOREIGN three"}
     root, tree = _world(tmp_path, monkeypatch, foreign, {**foreign, 20: "OWN twenty"})
     withheld: dict = {}
@@ -71,7 +73,7 @@ def test_foreign_hunk_survives_eviction_and_own_hunk_goes_to_head(tmp_path, monk
     assert ev.evicted == [PATH]
 
 
-def test_restore_round_trips_the_spliced_file(tmp_path, monkeypatch):
+def test_restore_round_trips_the_spliced_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     foreign = {3: "FOREIGN three"}
     root, tree = _world(tmp_path, monkeypatch, foreign, {**foreign, 20: "OWN twenty"})
     ev = _plan(root, {}, [])
@@ -81,7 +83,7 @@ def test_restore_round_trips_the_spliced_file(tmp_path, monkeypatch):
     assert (root / PATH).read_bytes() == tree
 
 
-def test_tree_with_no_hunk_of_the_run_is_refused_named_unowned_and_bytes_unchanged(tmp_path, monkeypatch):
+def test_tree_with_no_hunk_of_the_run_is_refused_named_unowned_and_bytes_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Every changed hunk predates the run's baseline: nothing is the run's to remove.
     root, tree = _world(tmp_path, monkeypatch, {5: "FOREIGN five"}, {5: "FOREIGN five"})
     withheld = {PATH: "run-dirt-uncommitted"}
@@ -97,7 +99,7 @@ def test_tree_with_no_hunk_of_the_run_is_refused_named_unowned_and_bytes_unchang
     assert not (root / REC / halt_tree_evict.EVICTED_FILE).exists()
 
 
-def test_refused_path_without_an_origin_reason_leaves_withheld(tmp_path, monkeypatch):
+def test_refused_path_without_an_origin_reason_leaves_withheld(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, tree = _world(tmp_path, monkeypatch, {5: "FOREIGN five"}, {5: "FOREIGN five"})
     withheld: dict = {}
     ev = _plan(root, withheld, [])

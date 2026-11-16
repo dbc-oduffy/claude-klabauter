@@ -37,7 +37,7 @@ def record(run_dir: str | Path, key: str, run_id: str, stage: str) -> None:
             data = {}
         data[key] = {"run_id": run_id, "stage": stage}
         tmp = path.with_name(f"{LOOKUP_FILENAME}.{os.getpid()}.tmp")
-        tmp.write_text(json.dumps(data, sort_keys=True), encoding="utf-8")
+        tmp.write_text(json.dumps(data, sort_keys=True), encoding="utf-8", newline="\n")
         tmp.replace(path)
     except OSError:
         return

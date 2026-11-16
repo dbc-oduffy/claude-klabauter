@@ -7,6 +7,8 @@ import yaml
 from coordinator_core.ops.dispatch_emit import op
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+from pathlib import Path
+import pytest
 
 RUN = "ask-20261015T000000-abc123"
 REL = "state/sizings/2026-10-15-refire.yaml"
@@ -29,7 +31,7 @@ def _ctx(root, run_id):
     return {"root": str(root), "run_id": run_id, "sizing_rel": REL, "prompt": "the ask"}
 
 
-def test_start_requirements_returns_the_bound_ledger_with_inherited_revisions(tmp_path):
+def test_start_requirements_returns_the_bound_ledger_with_inherited_revisions(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     rl.start(root, RUN)
     rl.bind(root, RUN, REL, ask_text="the ask")
@@ -42,13 +44,13 @@ def test_start_requirements_returns_the_bound_ledger_with_inherited_revisions(tm
     assert any(i.origin == "ask" for i in ledger.items)
 
 
-def test_a_first_run_with_no_revisions_inherits_none(tmp_path):
+def test_a_first_run_with_no_revisions_inherits_none(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     ledger = op._start_requirements(_ctx(root, RUN), all_of_pm_ask=False)
     assert [i for i in ledger.items if i.origin == "revision"] == []
 
 
-def test_the_emit_reply_names_the_revisions_a_refire_inherited(tmp_path, monkeypatch):
+def test_the_emit_reply_names_the_revisions_a_refire_inherited(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import ask_compose
 
     root = _repo(tmp_path)
@@ -76,7 +78,7 @@ def test_the_emit_reply_names_the_revisions_a_refire_inherited(tmp_path, monkeyp
     assert reply["revisions_inherited"]
 
 
-def test_no_sizing_binds_no_ledger(tmp_path):
+def test_no_sizing_binds_no_ledger(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     ctx = {**_ctx(root, RUN), "sizing_rel": None}
     assert op._start_requirements(ctx, all_of_pm_ask=False) is None

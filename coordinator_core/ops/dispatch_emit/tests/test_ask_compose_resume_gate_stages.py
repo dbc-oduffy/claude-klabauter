@@ -8,6 +8,7 @@ from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit.ask_contract import OP_ASK_STAGE
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _gate_prompt, _presized
+import pytest
 
 _FIXTURE = json.loads(
     (Path(__file__).parent / "fixtures" / "gate_return_resume_no_stage_reply_44e645.json").read_text(encoding="utf-8")
@@ -24,13 +25,13 @@ def _stages(prompt: str, gate: dict) -> bool:
     return arm == cond.group(1) or bool(cond.group(2) and arm == cond.group(2) and gate.get("resume_plan"))
 
 
-def test_the_44e645_resume_gate_shape_is_told_to_stage(monkeypatch):
+def test_the_44e645_resume_gate_shape_is_told_to_stage(monkeypatch: pytest.MonkeyPatch) -> None:
     prompt = _gate_prompt(_presized(monkeypatch))
     assert OP_ASK_STAGE in prompt and _FIXTURE["arm"] == "s" and _FIXTURE["resume_plan"]
     assert _stages(prompt, _FIXTURE)
 
 
-def test_an_s_gate_without_resume_plan_a_halted_gate_and_other_arms_are_not(monkeypatch):
+def test_an_s_gate_without_resume_plan_a_halted_gate_and_other_arms_are_not(monkeypatch: pytest.MonkeyPatch) -> None:
     prompt = _gate_prompt(_presized(monkeypatch))
     assert not _stages(prompt, {**_FIXTURE, "resume_plan": None})
     assert not _stages(prompt, {**_FIXTURE, "halt": {"kind": "refusal"}})

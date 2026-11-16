@@ -7,6 +7,7 @@ import pytest
 from coordinator_core.backlog_grind_assemble import readers_blitz, readers_mise
 from coordinator_core.ops.dispatch_emit import ask_compose, cli
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT, RUN_RECORD_FILES
+from pathlib import Path
 
 _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n"
 _SCRATCH_SEGMENTS = {"scratch", "tasks"}
@@ -21,7 +22,7 @@ _SCRATCH_SEGMENTS = {"scratch", "tasks"}
     ],
     ids=["blitz-done", "mise-done", "mise-verify"],
 )
-def test_grind_evidence_templates_live_under_queue_grind(template):
+def test_grind_evidence_templates_live_under_queue_grind(template) -> None:
     tokens = [t.strip("`'\".,;:()") for t in template.split() if "queue-grind" in t or "evidence/" in t]
     candidates = tokens or [template]
     assert any(c.startswith("state/queue-grind/") for c in candidates), (
@@ -34,7 +35,7 @@ def test_grind_evidence_templates_live_under_queue_grind(template):
             )
 
 
-def test_warp_run_records_land_under_record_root_not_run_root(tmp_path, monkeypatch):
+def test_warp_run_records_land_under_record_root_not_run_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
     monkeypatch.delenv("DELIVERABLE_ID", raising=False)

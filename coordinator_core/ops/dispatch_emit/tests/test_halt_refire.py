@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import halt_refire as hr
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 _CALL = "Workflow({ script: 'x' })"
 _RESUME_CALL = "Workflow({ resumeFromRunId: 'r1' })"
@@ -21,24 +22,24 @@ def _env(**kw):
     return hr.refire_next_action(**base)
 
 
-def test_adopt_route_accepted_and_unknown_route_refused():
+def test_adopt_route_accepted_and_unknown_route_refused() -> None:
     ok = hr.exit_next_action(reason="orphan", route=hr.ROUTE_ADOPT, call="coordinator-invoke dispatch.adopt_orphaned_run '{}'")
     assert hr.ROUTE_ADOPT == "adopt" and hr.is_exit_next_action(ok)
     assert not hr.is_exit_next_action({**ok, "route": "resurrect"})
     assert not hr.is_exit_next_action({**ok, "call": "Workflow({ script: 'x' })"})
 
 
-def test_orphaned_envelopes_carry_resume_phase():
+def test_orphaned_envelopes_carry_resume_phase() -> None:
     assert _env(halted="orphaned_staged")["resume"]["phase"] == "execute"
     assert _env(halted="orphaned_planned")["resume"]["phase"] == "plan_review"
     assert "phase" not in _env(halted="orphaned")["resume"]
 
 
-def test_builder_output_passes_validator():
+def test_builder_output_passes_validator() -> None:
     assert hr.is_refire_next_action(_env())
 
 
-def test_each_legacy_kind_maps_into_input_with_fields_intact():
+def test_each_legacy_kind_maps_into_input_with_fields_intact() -> None:
     for legacy_kind, mapped in hr.LEGACY_INPUT_KIND.items():
         legacy = {"kind": legacy_kind, "rulings": [{"id": "J1"}], "x": 1}
         inp = hr.legacy_input(legacy)
@@ -47,62 +48,62 @@ def test_each_legacy_kind_maps_into_input_with_fields_intact():
         assert hr.is_refire_next_action(_env(input=inp))
 
 
-def test_hand_repair_text_fails_validator():
+def test_hand_repair_text_fails_validator() -> None:
     assert not hr.is_refire_next_action(_env(detail="Fix the unapplied findings"))
     assert not hr.is_refire_next_action(_env(call=_CALL + " then fix the file"))
 
 
-def test_two_workflow_calls_fail():
+def test_two_workflow_calls_fail() -> None:
     assert not hr.is_refire_next_action(_env(call=_CALL + "; " + _CALL))
 
 
-def test_stage_defaults_none_and_passes_through():
+def test_stage_defaults_none_and_passes_through() -> None:
     assert _env()["resume"]["stage"] is None
     handle = {"opaque": [1, 2]}
     assert _env(stage=handle)["resume"]["stage"] is handle
 
 
-def test_stage_js_lands_verbatim():
+def test_stage_js_lands_verbatim() -> None:
     js = hr.refire_next_action_js("C", "L", "K", "D", stage_js="_halted.hnd_x")
     assert "stage: _halted.hnd_x" in js
     assert "stage: null" in hr.refire_next_action_js("C", "L", "K", "D")
 
 
-def test_usage_limit_workflow_resume_passes():
+def test_usage_limit_workflow_resume_passes() -> None:
     assert hr.is_refire_next_action(_env(op=hr.OP_WORKFLOW_RESUME, call="resume with resumeFromRunId r1 via Workflow"))
     assert not hr.is_refire_next_action(_env(op=hr.OP_WORKFLOW_RESUME, call="no handle here"))
 
 
-def test_ruling_input_quoting_fix_the_still_passes():
+def test_ruling_input_quoting_fix_the_still_passes() -> None:
     inp = {"kind": "rule", "rulings": [{"id": "J1", "ask": "Fix the thing?"}]}
     assert hr.is_refire_next_action(_env(input=inp))
 
 
-def test_all_owed_prefix_in_js_maps_to_em_discharge():
+def test_all_owed_prefix_in_js_maps_to_em_discharge() -> None:
     js = hr.refire_next_action_js("C", "L", "K", "D")
     assert json.dumps(hr.ALL_OWED_PREFIX) in js and "em-discharge" in js
 
 
-def test_exempt_and_fanned_sets():
+def test_exempt_and_fanned_sets() -> None:
     assert hr.ENVELOPE_EXEMPT_KINDS == ("parked", "no-op")
     assert hr.FANNED_KINDS == ("split", "research")
     assert hr.INPUT_BY_HALT == {"design-review": "touchpoint", "usage_limit": "wait"}
 
 
-def test_usage_limit_spelling_matches_ask_compose():
+def test_usage_limit_spelling_matches_ask_compose() -> None:
     from coordinator_core.ops.dispatch_emit import ask_compose
 
     assert hr.HALT_USAGE_LIMIT == ask_compose.HALT_USAGE_LIMIT
 
 
-def test_bad_shapes_fail():
+def test_bad_shapes_fail() -> None:
     assert not hr.is_refire_next_action("a string")
     assert not hr.is_refire_next_action(_env(run_id=""))
     assert not hr.is_refire_next_action(_env(input={"kind": "bogus"}))
     assert not hr.is_refire_next_action(_env(op="other"))
 
 
-def test_js_embeds_each_constant_and_is_idempotent():
+def test_js_embeds_each_constant_and_is_idempotent() -> None:
     js = hr.refire_next_action_js("C", "L", "K", "D")
     for const in (hr.ENVELOPE_EXEMPT_KINDS, hr.FANNED_KINDS, hr.LEGACY_INPUT_KIND, hr.INPUT_BY_HALT):
         assert json.dumps(list(const) if isinstance(const, tuple) else const) in js
@@ -112,7 +113,7 @@ def test_js_embeds_each_constant_and_is_idempotent():
 @pytest.mark.cadence
 @pytest.mark.spawns_process
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
-def test_js_runs_under_node(tmp_path):
+def test_js_runs_under_node(tmp_path: Path) -> None:
     js = hr.refire_next_action_js("'CALL'", "_halted.next_action", "_halted.halted", "'why'")
     script = (
         "let _runId='r', _sizingRel='s';\n"

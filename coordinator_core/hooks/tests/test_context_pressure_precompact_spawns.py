@@ -8,12 +8,13 @@ import subprocess
 import pytest
 
 from coordinator_core.hooks import context_pressure_precompact as cpp
+from pathlib import Path
 
 # _git builds the fixture repo with real git processes.
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> None:
     subprocess.run(
         ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
         cwd=repo, check=True, capture_output=True,
@@ -21,7 +22,7 @@ def _git(repo, *args):
     )
 
 
-def test_build_git_section_reads_repo_without_spawning(tmp_path, monkeypatch):
+def test_build_git_section_reads_repo_without_spawning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "feature")

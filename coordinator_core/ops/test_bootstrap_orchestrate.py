@@ -37,6 +37,7 @@ from coordinator_core.win_portability import (
     no_console_creationflags,
     no_console_passthrough_kwargs,
 )
+from pathlib import Path
 
 # Declared, not excused: this file spawns a real git process because the
 # orchestrate pipeline under test validates/commits against a real target
@@ -158,24 +159,24 @@ def _make_coordinator_root(tmp_path, name: str = "fake-coordinator") -> str:
 
 
 @pytest.fixture
-def coordinator_root(tmp_path):
+def coordinator_root(tmp_path: Path) -> str:
     return _make_coordinator_root(tmp_path)
 
 
 @pytest.fixture(autouse=True)
-def _set_coordinator_root(monkeypatch, coordinator_root):
+def _set_coordinator_root(monkeypatch: pytest.MonkeyPatch, coordinator_root) -> None:
     monkeypatch.setenv("COORDINATOR_ROOT", coordinator_root)
 
 
 @pytest.fixture
-def fake_home(tmp_path, monkeypatch):
+def fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     monkeypatch.setenv("HOME", str(home))
     return home
 
 
-def _write_working_repos_yaml(home, *repo_paths):
+def _write_working_repos_yaml(home, *repo_paths) -> str:
     yaml_path = home / ".claude" / "working-repos.yaml"
     lines = [
         "# fixture working-repos.yaml",
@@ -197,7 +198,7 @@ def _write_working_repos_yaml(home, *repo_paths):
 # ---------------------------------------------------------------------------
 
 
-def test_absent_yaml_exits_two_with_remediation(fake_home, capsys):
+def test_absent_yaml_exits_two_with_remediation(fake_home, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--non-interactive"])
     assert rc == 2
     err = capsys.readouterr().err
@@ -209,7 +210,7 @@ def test_absent_yaml_exits_two_with_remediation(fake_home, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_check_only_produces_action_list_and_writes_nothing(tmp_path, fake_home, capsys):
+def test_check_only_produces_action_list_and_writes_nothing(tmp_path: Path, fake_home, capsys: pytest.CaptureFixture[str]) -> None:
     repo = tmp_path / "dry-repo"
     repo.mkdir()
     _init_git(str(repo))
@@ -233,7 +234,7 @@ def test_check_only_produces_action_list_and_writes_nothing(tmp_path, fake_home,
 # ---------------------------------------------------------------------------
 
 
-def test_express_rerun_is_idempotent(tmp_path, fake_home, capsys):
+def test_express_rerun_is_idempotent(tmp_path: Path, fake_home, capsys: pytest.CaptureFixture[str]) -> None:
     repo = tmp_path / "idem-repo"
     repo.mkdir()
     _init_git(str(repo))
@@ -267,7 +268,7 @@ def test_express_rerun_is_idempotent(tmp_path, fake_home, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_missing_repo_skipped_real_repo_still_bootstrapped(tmp_path, fake_home, capsys):
+def test_missing_repo_skipped_real_repo_still_bootstrapped(tmp_path: Path, fake_home, capsys: pytest.CaptureFixture[str]) -> None:
     real_repo = tmp_path / "miss-real"
     real_repo.mkdir()
     _init_git(str(real_repo))
@@ -290,7 +291,7 @@ def test_missing_repo_skipped_real_repo_still_bootstrapped(tmp_path, fake_home, 
 # ---------------------------------------------------------------------------
 
 
-def test_failing_hook_surfaced_other_repo_still_succeeds(tmp_path, fake_home, capsys):
+def test_failing_hook_surfaced_other_repo_still_succeeds(tmp_path: Path, fake_home, capsys: pytest.CaptureFixture[str]) -> None:
     good_repo = tmp_path / "hook-good"
     good_repo.mkdir()
     _init_git(str(good_repo))
@@ -324,7 +325,7 @@ def test_failing_hook_surfaced_other_repo_still_succeeds(tmp_path, fake_home, ca
 # ---------------------------------------------------------------------------
 
 
-def test_dash_prefixed_path_rejected_exit_three(tmp_path, fake_home, capsys):
+def test_dash_prefixed_path_rejected_exit_three(tmp_path: Path, fake_home, capsys: pytest.CaptureFixture[str]) -> None:
     real_repo = tmp_path / "dash-real"
     real_repo.mkdir()
     _init_git(str(real_repo))
@@ -366,7 +367,7 @@ def test_dash_prefixed_path_rejected_exit_three(tmp_path, fake_home, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_comment_stripping_space_and_tab(tmp_path, fake_home, capsys):
+def test_comment_stripping_space_and_tab(tmp_path: Path, fake_home, capsys: pytest.CaptureFixture[str]) -> None:
     space_repo = tmp_path / "cmt-space"
     tab_repo = tmp_path / "cmt-tab"
     space_repo.mkdir()
@@ -402,7 +403,7 @@ def test_comment_stripping_space_and_tab(tmp_path, fake_home, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_embedded_hash_without_leading_whitespace_preserved():
+def test_embedded_hash_without_leading_whitespace_preserved() -> None:
     from coordinator_core.ops.bootstrap_orchestrate import _strip_yaml_value
 
     assert _strip_yaml_value("/repos/a#b") == "/repos/a#b"
@@ -415,7 +416,7 @@ def test_embedded_hash_without_leading_whitespace_preserved():
 # ---------------------------------------------------------------------------
 
 
-def test_help_exits_zero_and_prints_usage(capsys):
+def test_help_exits_zero_and_prints_usage(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--help"])
     assert rc == 0
     out = capsys.readouterr().out
@@ -423,19 +424,19 @@ def test_help_exits_zero_and_prints_usage(capsys):
     assert "Exit codes:" in out
 
 
-def test_unknown_flag_exits_one(capsys):
+def test_unknown_flag_exits_one(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--bogus"])
     assert rc == 1
     assert "unknown flag" in capsys.readouterr().err
 
 
-def test_unexpected_positional_exits_one(capsys):
+def test_unexpected_positional_exits_one(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["stray-arg"])
     assert rc == 1
     assert "unexpected argument" in capsys.readouterr().err
 
 
-def test_empty_repos_block_exits_one(fake_home, capsys):
+def test_empty_repos_block_exits_one(fake_home, capsys: pytest.CaptureFixture[str]) -> None:
     yaml_path = fake_home / ".claude" / "working-repos.yaml"
     yaml_path.write_text("version: 1\nrepos:\n")
     rc = main(["--non-interactive"])
@@ -443,7 +444,7 @@ def test_empty_repos_block_exits_one(fake_home, capsys):
     assert "no repo paths found" in capsys.readouterr().err.lower()
 
 
-def test_out_of_tree_paths_not_collected(tmp_path, fake_home, capsys):
+def test_out_of_tree_paths_not_collected(tmp_path: Path, fake_home, capsys: pytest.CaptureFixture[str]) -> None:
     """out_of_tree: block paths are NOT bootstrapped -- negative-spec parity."""
     real_repo = tmp_path / "in-tree"
     real_repo.mkdir()
@@ -480,7 +481,7 @@ def test_out_of_tree_paths_not_collected(tmp_path, fake_home, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_currency_commit_does_not_absorb_unrelated_staged_file(tmp_path, fake_home, monkeypatch):
+def test_currency_commit_does_not_absorb_unrelated_staged_file(tmp_path: Path, fake_home, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "ambient-repo"
     repo.mkdir()
     _init_git(str(repo))
@@ -532,7 +533,7 @@ def test_currency_commit_does_not_absorb_unrelated_staged_file(tmp_path, fake_ho
 # ---------------------------------------------------------------------------
 
 
-def test_currency_write_writes_stamp(tmp_path):
+def test_currency_write_writes_stamp(tmp_path: Path) -> None:
     plugin_root = tmp_path / "plugin"
     plugin_root.mkdir()
     (plugin_root / "coordinator-schema-version").write_text("7\n")
@@ -549,7 +550,7 @@ def test_currency_write_writes_stamp(tmp_path):
     assert "stamped_at:" in text
 
 
-def test_currency_write_idempotent_no_file_change(tmp_path):
+def test_currency_write_idempotent_no_file_change(tmp_path: Path) -> None:
     plugin_root = tmp_path / "plugin"
     plugin_root.mkdir()
     (plugin_root / "coordinator-schema-version").write_text("7\n")
@@ -564,7 +565,7 @@ def test_currency_write_idempotent_no_file_change(tmp_path):
     assert stamp.stat().st_mtime_ns == first_mtime
 
 
-def test_currency_write_refreshes_on_version_drift(tmp_path):
+def test_currency_write_refreshes_on_version_drift(tmp_path: Path) -> None:
     plugin_root = tmp_path / "plugin"
     plugin_root.mkdir()
     (plugin_root / "coordinator-schema-version").write_text("7\n")
@@ -580,7 +581,7 @@ def test_currency_write_refreshes_on_version_drift(tmp_path):
     assert "schema_version: 8" in stamp.read_text(encoding="utf-8")
 
 
-def test_currency_write_missing_version_file_fails_loud(tmp_path, capsys):
+def test_currency_write_missing_version_file_fails_loud(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     plugin_root = tmp_path / "plugin-no-version"
     plugin_root.mkdir()
     repo_root = tmp_path / "repo"

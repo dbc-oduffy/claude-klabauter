@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.ops.check_wsc_inline_budget import check, count_bash_fences, main
+import pytest
 
 _FAKE_SKILL = """# Fake workstream-complete SKILL (test fixture)
 
@@ -100,14 +101,14 @@ def test_zero_blocks_no_baseline(tmp_path: Path) -> None:
     assert "0" in message
 
 
-def test_main_missing_argv_returns_2(capsys) -> None:
+def test_main_missing_argv_returns_2(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main([])
     assert rc == 2
     captured = capsys.readouterr()
     assert "missing required" in captured.err
 
 
-def test_main_prints_and_returns_rc(tmp_path: Path, capsys) -> None:
+def test_main_prints_and_returns_rc(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     skill = _write_skill(tmp_path)
     baseline = tmp_path / "baseline-b"
     baseline.write_text("1\n", encoding="utf-8")

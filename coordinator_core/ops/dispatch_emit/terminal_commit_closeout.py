@@ -412,9 +412,30 @@ def _dropped_part_rows(worktree_root: Path, sizing_rel: str, note_text: str) -> 
 USAGE_FILE = "usage.json"
 
 
+def _stamp_usage_marker(worktree_root: Path, run_id: str) -> dict:
+    """Stamp ``state/warp/<run_id>/usage.json`` ``as_of: terminal-commit`` (``sibling_hold`` reads it at
+    HEAD as the landed marker), keeping any existing body, and return the reply's usage fields. Reads
+    no session journal and never raises; the token figures are the close job's."""
+    reply = {"usage_total": None, "usage_reason": "token figures recorded by the close job"}
+    try:
+        target = worktree_root / RECORD_DIR_ROOT / run_id / USAGE_FILE
+        target.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            body = json.loads(target.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            body = None
+        body = dict(body) if isinstance(body, dict) else {"unsettled": []}
+        body["as_of"] = "terminal-commit"
+        replace_text(target, json.dumps(body, indent=2, sort_keys=True) + "\n")
+    except Exception as exc:  # noqa: BLE001 -- usage is a report, never a commit gate
+        reply["usage_reason"] = f"usage marker failed: {exc!r}"
+    return reply
+
+
 def _write_usage(worktree_root: Path, session_id: Optional[str], run_id: str) -> dict:
     """Write ``state/warp/<run_id>/usage.json`` (``scan_run`` shape, ``as_of: terminal-commit``,
     ``unsettled`` agent ids) and return ``{total_tokens, usd}``, else ``{usage_total: None, usage_reason}``.
+    Scans the session's journals: never call it on the commit path (``_stamp_usage_marker`` is that leg).
 
     Never raises: a run dir that does not resolve uniquely, or any I/O failure, leaves no file."""
     if not session_id:
@@ -713,6 +734,10 @@ def _close_block(ctx: dict, reply: dict) -> dict:
                 and not reply.get("plan_status")
             ):
                 legs["plan-reconciliation"] = na
+            if reply.get("coded_sha"):
+                legs.setdefault("coded-stamp", _leg("ran", "coded-stamp commit landed"))
+            elif "coded_stamp_error" in reply:
+                legs.setdefault("coded-stamp", _leg("failed", _NOT_LANDED, ctx["root"]))
             for leg in RUN_BOUND_LEGS:
                 legs.setdefault(leg, na)
         if reply.get("committed") is not True:

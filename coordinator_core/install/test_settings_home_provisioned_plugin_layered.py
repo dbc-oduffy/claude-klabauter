@@ -42,6 +42,7 @@ from coordinator_core.install.substrate import (
     _load_bin_templates_manifest,
     _resolve_bin_templates_manifest_root,
 )
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -78,7 +79,7 @@ def _plugin_layered_sources(tmp_path: Path) -> "tuple[Path, Path]":
     return ml_bin, ch_bin
 
 
-def test_settings_home_resolves_independently_of_the_plugin_layout(monkeypatch, tmp_path):
+def test_settings_home_resolves_independently_of_the_plugin_layout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """An OSS consumer's settings-home must not be derived from where the plugin
     happens to be cached. If it were, a plugin-layered install would provision a
     settings-home inside the plugin cache — wiped on the next plugin upgrade.
@@ -118,7 +119,7 @@ def test_settings_home_resolves_independently_of_the_plugin_layout(monkeypatch, 
     )
 
 
-def test_plugin_layered_install_provisions_the_settings_home_bin(monkeypatch, tmp_path):
+def test_plugin_layered_install_provisions_the_settings_home_bin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     settings_home_dir = tmp_path / ".coordinator-claude-settings"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
     _use_checkout_as_engine_root(monkeypatch)
@@ -146,7 +147,7 @@ def test_plugin_layered_install_provisions_the_settings_home_bin(monkeypatch, tm
     )
 
 
-def test_provisioning_is_idempotent_across_a_reinstall(monkeypatch, tmp_path):
+def test_provisioning_is_idempotent_across_a_reinstall(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     settings_home_dir = tmp_path / ".coordinator-claude-settings"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home_dir))
     _use_checkout_as_engine_root(monkeypatch)

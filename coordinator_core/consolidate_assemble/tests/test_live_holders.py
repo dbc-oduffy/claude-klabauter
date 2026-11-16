@@ -5,6 +5,11 @@ import time
 from pathlib import Path
 
 from coordinator_core.consolidate_assemble import live_holders as lh
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
 
 _PORCELAIN = (
     "worktree /r\nHEAD aaa\nbranch refs/heads/work\n\n"
@@ -16,7 +21,7 @@ _PORCELAIN = (
 def _git(rc: int = 0, out: str = _PORCELAIN):
     calls = []
 
-    def _fake(argv, cwd):
+    def _fake(argv, cwd) -> CompletedProcess[str]:
         calls.append(argv)
         return subprocess.CompletedProcess(argv, rc, stdout=out, stderr="")
 
@@ -25,21 +30,21 @@ def _git(rc: int = 0, out: str = _PORCELAIN):
 
 
 def _routed(listing: str, rc: int = 0):
-    def _fake(argv, cwd):
+    def _fake(argv, cwd) -> CompletedProcess[str]:
         out = listing if argv[0] == "for-each-ref" else _PORCELAIN
         return subprocess.CompletedProcess(argv, rc if argv[0] == "for-each-ref" else 0, stdout=out, stderr="")
 
     return _fake
 
 
-def test_no_holder_and_no_recent_push_is_free():
+def test_no_holder_and_no_recent_push_is_free() -> None:
     g = _git()
     result = lh.live_holders(g, Path("r"), ["free", "other"])
     assert result == {"free": [], "other": []}
     assert len(g.calls) == 2
 
 
-def test_recent_remote_push_is_held_by_another_box():
+def test_recent_remote_push_is_held_by_another_box() -> None:
     fresh = int(time.time()) - 60
     old = int(time.time()) - 3 * 24 * 3600
     g = _routed(f"origin/fresh\t{fresh}\norigin/stale\t{old}\n")
@@ -49,22 +54,22 @@ def test_recent_remote_push_is_held_by_another_box():
     assert result["absent"] == []
 
 
-def test_failed_remote_listing_is_unknown():
+def test_failed_remote_listing_is_unknown() -> None:
     result = lh.live_holders(_routed("", rc=128), Path("r"), ["free"])
     assert result == {"free": None}
 
 
-def test_local_worktree_holder_is_nonempty_list():
+def test_local_worktree_holder_is_nonempty_list() -> None:
     result = lh.live_holders(_git(), Path("r"), ["held", "free"])
     assert result["held"] == ["worktree /r-wt"]
     assert result["free"] == []
 
 
-def test_failed_worktree_probe_is_unknown_for_all():
+def test_failed_worktree_probe_is_unknown_for_all() -> None:
     assert lh.live_holders(_git(128, ""), Path("r"), ["held"]) == {"held": None}
 
 
-def test_definite_cross_box_answer_allows_empty(monkeypatch):
+def test_definite_cross_box_answer_allows_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(lh, "_cross_box_holders", lambda g, r, b: {"free": [], "held": ["box2 pushing"]})
     result = lh.live_holders(_git(), Path("r"), ["free", "held", "unseen"])
     assert result["free"] == []

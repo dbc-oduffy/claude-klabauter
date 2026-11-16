@@ -531,7 +531,7 @@ class _BinTemplatesManifest:
 
     __slots__ = ("ml_family", "ml_explicit", "platform_localize", "launcher_templates", "all")
 
-    def __init__(self, ml_family, ml_explicit, platform_localize, launcher_templates, all_entries):
+    def __init__(self, ml_family, ml_explicit, platform_localize, launcher_templates, all_entries) -> None:
         self.ml_family = ml_family
         self.ml_explicit = ml_explicit
         self.platform_localize = platform_localize

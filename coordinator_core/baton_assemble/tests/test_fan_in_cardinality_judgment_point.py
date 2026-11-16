@@ -19,6 +19,7 @@ from coordinator_core.session_hub_path import hub_for_common
 
 import coordinator_core.baton_assemble as ba
 from coordinator_core.test_baton_assemble import _FAKE_OPERATOR_CONFIG, _init_repo, _write_artifact
+from pathlib import Path
 
 # `_init_repo` (imported above) spawns real git to build the repo `ba.brief()`
 # reads -- `brief()`'s lineage/claim resolution walks real `.git/` state
@@ -30,7 +31,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 @pytest.fixture(autouse=True)
-def _stub_operator_config(monkeypatch):
+def _stub_operator_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
 
 
@@ -43,8 +44,8 @@ def _seed_handoff_claim(repo_root, session_id: str, basename: str, claimed_at: s
 
 class TestFanInCardinalityJudgmentPointFires:
     def test_two_claimed_batons_surface_the_new_point_with_deliverable_id_evidence(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         _init_repo(tmp_path)
         first_claimed = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-07-20-first-alpha.md",
@@ -88,7 +89,7 @@ class TestFanInCardinalityJudgmentPointFires:
         assert "DEL-EXTRA-1" in jp["evidence"]
         assert "carried onto the successor's deliverable_ids" in jp["evidence"]
 
-    def test_new_point_id_never_appears_in_any_depends_on(self, tmp_path, monkeypatch):
+    def test_new_point_id_never_appears_in_any_depends_on(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _init_repo(tmp_path)
         first_claimed = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-07-20-first-alpha.md",
@@ -114,8 +115,8 @@ class TestFanInCardinalityJudgmentPointFires:
 
 class TestFanInCardinalityJudgmentPointDoesNotFireOnSinglePredecessor:
     def test_single_predecessor_brief_has_no_fan_in_point_and_is_unaffected(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         _init_repo(tmp_path)
         single = _write_artifact(
             tmp_path / "state" / "handoffs" / "2026-07-20-single.md",

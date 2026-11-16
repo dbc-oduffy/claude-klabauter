@@ -22,6 +22,7 @@ import pytest
 from coordinator_core import tracker_entities
 from coordinator_core import tracker_store
 from coordinator_core import tracker_transitions as tt
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -34,7 +35,7 @@ def _make_git_repo(root):
     """
     root.mkdir(parents=True, exist_ok=True)
 
-    def _git(*args):
+    def _git(*args) -> None:
         subprocess.run(
             ["git"] + list(args),
             cwd=str(root),
@@ -55,7 +56,7 @@ def _make_git_repo(root):
 
 
 @pytest.fixture
-def repo_root(tmp_path, monkeypatch):
+def repo_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(tracker_store, "machine_slug", lambda *a, **kw: "this-machine")
     return _make_git_repo(tmp_path / "repo")
 
@@ -65,7 +66,7 @@ def repo_root(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_ac4_code_complete_dedup_on_replayed_evidence_sha(repo_root):
+def test_ac4_code_complete_dedup_on_replayed_evidence_sha(repo_root) -> None:
     first = tt.emit_transition(
         "item-1",
         "code_complete",
@@ -92,7 +93,7 @@ def test_ac4_code_complete_dedup_on_replayed_evidence_sha(repo_root):
     assert len(events) == 1
 
 
-def test_ac4_null_sha_axis_dedup_on_source_observation_id(repo_root):
+def test_ac4_null_sha_axis_dedup_on_source_observation_id(repo_root) -> None:
     first = tt.emit_transition(
         "item-1",
         "qa_verified",
@@ -119,7 +120,7 @@ def test_ac4_null_sha_axis_dedup_on_source_observation_id(repo_root):
     assert len(events) == 1
 
 
-def test_ac4_manual_close_dedup_on_source_observation_id(repo_root):
+def test_ac4_manual_close_dedup_on_source_observation_id(repo_root) -> None:
     first = tt.emit_transition(
         "item-1",
         "manual_close",
@@ -151,7 +152,7 @@ def test_ac4_manual_close_dedup_on_source_observation_id(repo_root):
 # ---------------------------------------------------------------------------
 
 
-def test_ac5_direct_human_event_never_deduped_replayed_three_times(repo_root):
+def test_ac5_direct_human_event_never_deduped_replayed_three_times(repo_root) -> None:
     stored = [
         tt.emit_transition(
             "item-2",
@@ -172,7 +173,7 @@ def test_ac5_direct_human_event_never_deduped_replayed_three_times(repo_root):
     assert len(events) == 3
 
 
-def test_ac5_verify_fail_reverify_records_three_real_events(repo_root):
+def test_ac5_verify_fail_reverify_records_three_real_events(repo_root) -> None:
     verify = tt.emit_transition(
         "item-3",
         "qa_verified",
@@ -218,7 +219,7 @@ def test_ac5_verify_fail_reverify_records_three_real_events(repo_root):
 
 def test_ac4_ac5_precedence_direct_human_code_complete_with_sha_never_deduped(
     repo_root,
-):
+) -> None:
     first = tt.emit_transition(
         "item-4",
         "code_complete",
@@ -250,7 +251,7 @@ def test_ac4_ac5_precedence_direct_human_code_complete_with_sha_never_deduped(
 # ---------------------------------------------------------------------------
 
 
-def test_ac9_cascade_neither_axis_asserted_yields_only_manual_close(monkeypatch):
+def test_ac9_cascade_neither_axis_asserted_yields_only_manual_close(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tracker_store, "machine_slug", lambda *a, **kw: "this-machine")
     current_states = {"code_complete": None, "qa_verified": None}
 
@@ -262,7 +263,7 @@ def test_ac9_cascade_neither_axis_asserted_yields_only_manual_close(monkeypatch)
     assert payloads[0]["from_state"] is None
 
 
-def test_ac9_cascade_only_code_complete_asserted(monkeypatch):
+def test_ac9_cascade_only_code_complete_asserted(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tracker_store, "machine_slug", lambda *a, **kw: "this-machine")
     current_states = {"code_complete": "asserted", "qa_verified": None}
 
@@ -273,7 +274,7 @@ def test_ac9_cascade_only_code_complete_asserted(monkeypatch):
     assert payloads[1]["from_state"] == "asserted"
 
 
-def test_ac9_cascade_only_qa_verified_asserted(monkeypatch):
+def test_ac9_cascade_only_qa_verified_asserted(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tracker_store, "machine_slug", lambda *a, **kw: "this-machine")
     current_states = {"code_complete": None, "qa_verified": "verified"}
 
@@ -284,7 +285,7 @@ def test_ac9_cascade_only_qa_verified_asserted(monkeypatch):
     assert payloads[1]["from_state"] == "verified"
 
 
-def test_ac9_cascade_both_axes_asserted_ordering(monkeypatch):
+def test_ac9_cascade_both_axes_asserted_ordering(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tracker_store, "machine_slug", lambda *a, **kw: "this-machine")
     current_states = {"code_complete": "asserted", "qa_verified": "verified"}
 
@@ -301,8 +302,8 @@ def test_ac9_cascade_both_axes_asserted_ordering(monkeypatch):
 
 
 def test_ac9_cascade_emitted_through_exactly_one_append_events_call(
-    repo_root, monkeypatch
-):
+    repo_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls = []
     orig_append_events = tracker_store.append_events
 
@@ -358,7 +359,7 @@ def test_ac9_cascade_emitted_through_exactly_one_append_events_call(
 # ---------------------------------------------------------------------------
 
 
-def test_ac7_manual_close_reopened_null_from_state_is_accepted(repo_root):
+def test_ac7_manual_close_reopened_null_from_state_is_accepted(repo_root) -> None:
     stored = tt.emit_transition(
         "item-5",
         "manual_close",
@@ -380,7 +381,7 @@ def test_ac7_manual_close_reopened_null_from_state_is_accepted(repo_root):
 # ---------------------------------------------------------------------------
 
 
-def test_unknown_axis_rejected_with_typed_error():
+def test_unknown_axis_rejected_with_typed_error() -> None:
     with pytest.raises(tt.TrackerTransitionError):
         tt.transition_event(
             "item-6",
@@ -393,7 +394,7 @@ def test_unknown_axis_rejected_with_typed_error():
         )
 
 
-def test_applied_at_null_only_for_suggest_tier(repo_root):
+def test_applied_at_null_only_for_suggest_tier(repo_root) -> None:
     suggest = tt.emit_transition(
         "item-7",
         "code_complete",
@@ -425,7 +426,7 @@ def test_applied_at_null_only_for_suggest_tier(repo_root):
 # ---------------------------------------------------------------------------
 
 
-def test_unknown_tier_rejected_with_typed_error():
+def test_unknown_tier_rejected_with_typed_error() -> None:
     with pytest.raises(tt.TrackerTransitionError):
         tt.transition_event(
             "item-tier-1",
@@ -438,7 +439,7 @@ def test_unknown_tier_rejected_with_typed_error():
         )
 
 
-def test_ac3_four_row_tier_table_through_emit_transition(repo_root):
+def test_ac3_four_row_tier_table_through_emit_transition(repo_root) -> None:
     """AC3's regression lock (director review, F8): each tier's event is
     emitted through `emit_transition`, not `_emit` directly, so the row
     proves the constructor's tier gate actually runs on this path."""
@@ -462,7 +463,7 @@ def test_ac3_four_row_tier_table_through_emit_transition(repo_root):
     assert rows["deferred"]["applied_at"] is None
 
 
-def test_ac2_direct_tier_reopen_cascade_still_stamps_applied_at(repo_root):
+def test_ac2_direct_tier_reopen_cascade_still_stamps_applied_at(repo_root) -> None:
     """AC2 regression this chunk exists to avoid introducing: a `direct`-tier
     reopen-cascade event (`_build_reopen_cascade`/`_REOPEN_TIER`) must still
     stamp `applied_at`, not fall into the newly widened null set."""
@@ -494,7 +495,7 @@ def test_ac2_direct_tier_reopen_cascade_still_stamps_applied_at(repo_root):
 
 def test_mixed_shard_entity_and_snapshot_events_do_not_crash_transition_dedup(
     repo_root,
-):
+) -> None:
     tracker_entities.emit_project_created(
         "proj-1", name="Project One", repo_root=repo_root
     )
@@ -549,8 +550,8 @@ def test_mixed_shard_entity_and_snapshot_events_do_not_crash_transition_dedup(
 
 
 def test_emit_batch_partial_dedup_keeps_only_new_payloads_in_append_call(
-    repo_root, monkeypatch
-):
+    repo_root, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls = []
     orig_append_events = tracker_store.append_events
 
@@ -606,7 +607,7 @@ def test_emit_batch_partial_dedup_keeps_only_new_payloads_in_append_call(
 # ---------------------------------------------------------------------------
 
 
-def test_ac5_revert_of_revert_re_assert_is_a_distinct_event(repo_root):
+def test_ac5_revert_of_revert_re_assert_is_a_distinct_event(repo_root) -> None:
     assert_a = tt.emit_transition(
         "item-gen-1",
         "code_complete",
@@ -648,7 +649,7 @@ def test_ac5_revert_of_revert_re_assert_is_a_distinct_event(repo_root):
     )
 
 
-def test_ac5b_two_full_revert_cycles_yield_five_distinct_events(repo_root):
+def test_ac5b_two_full_revert_cycles_yield_five_distinct_events(repo_root) -> None:
     events_out = []
     events_out.append(
         tt.emit_transition(
@@ -731,7 +732,7 @@ def test_ac5b_two_full_revert_cycles_yield_five_distinct_events(repo_root):
     )
 
 
-def test_ac5c_generation_is_not_a_caller_supplied_field(repo_root):
+def test_ac5c_generation_is_not_a_caller_supplied_field(repo_root) -> None:
     with pytest.raises(TypeError):
         tt.transition_event(
             "item-gen-3",
@@ -757,7 +758,7 @@ def test_ac5c_generation_is_not_a_caller_supplied_field(repo_root):
         )
 
 
-def test_ac5d_emit_batch_advances_generation_within_batch(repo_root):
+def test_ac5d_emit_batch_advances_generation_within_batch(repo_root) -> None:
     payload_1 = tt.transition_event(
         "item-gen-4",
         "code_complete",
@@ -792,7 +793,7 @@ def test_ac5d_emit_batch_advances_generation_within_batch(repo_root):
     assert len(stored) == 2
 
 
-def test_ac7a_pre_c3_event_missing_generation_field_reads_as_zero(repo_root):
+def test_ac7a_pre_c3_event_missing_generation_field_reads_as_zero(repo_root) -> None:
     pre_c3_event = {
         "id": "evt-this-machine-precthreeabc",
         "item_id": "item-gen-5",
@@ -865,7 +866,7 @@ def test_ac7a_pre_c3_event_missing_generation_field_reads_as_zero(repo_root):
     assert len(stored) == 3
 
 
-def test_ac6_mint_and_dedup_addresses_change_together_no_duplicate_id_error(repo_root):
+def test_ac6_mint_and_dedup_addresses_change_together_no_duplicate_id_error(repo_root) -> None:
     tt.emit_transition(
         "item-gen-6",
         "code_complete",
@@ -910,7 +911,7 @@ def test_ac6_mint_and_dedup_addresses_change_together_no_duplicate_id_error(repo
     assert re_assert in stored
 
 
-def test_ac11_replay_inside_one_generation_still_dedups_to_a_single_event(repo_root):
+def test_ac11_replay_inside_one_generation_still_dedups_to_a_single_event(repo_root) -> None:
     tt.emit_transition(
         "item-gen-7",
         "code_complete",
@@ -965,7 +966,7 @@ def test_ac11_replay_inside_one_generation_still_dedups_to_a_single_event(repo_r
     assert len(stored) == 3
 
 
-def test_suggest_tier_event_invisible_to_read_events(repo_root):
+def test_suggest_tier_event_invisible_to_read_events(repo_root) -> None:
     tt.emit_transition(
         "item-8",
         "code_complete",
@@ -992,7 +993,7 @@ def test_suggest_tier_event_invisible_to_read_events(repo_root):
 # ---------------------------------------------------------------------------
 
 
-def test_retract_re_observed_dedups_to_the_same_stored_event(repo_root):
+def test_retract_re_observed_dedups_to_the_same_stored_event(repo_root) -> None:
     """The regression this fix exists for. Re-emitting the SAME retract
     observation (same item_id/axis/to_state/evidence.sha/
     source_observation_id) must resolve to the already-stored event, not
@@ -1033,7 +1034,7 @@ def test_retract_re_observed_dedups_to_the_same_stored_event(repo_root):
     assert len(stored) == 1
 
 
-def test_out_of_order_retract_replay_still_dedups_to_its_own_original(repo_root):
+def test_out_of_order_retract_replay_still_dedups_to_its_own_original(repo_root) -> None:
     """Two distinct retracts (different sha/observation) land as two
     events; replaying the FIRST one again — after the second has already
     been stored — must still dedup to R1's own original event, not mint a
@@ -1085,7 +1086,7 @@ def test_out_of_order_retract_replay_still_dedups_to_its_own_original(repo_root)
 
 def test_emit_batch_duplicate_retract_does_not_advance_counter_for_later_payloads(
     repo_root,
-):
+) -> None:
     """A batch containing a retract that matches an already-stored event
     must not inflate the running generation counter for later payloads in
     the same batch (the secondary, dormant defect from the same review
@@ -1143,7 +1144,7 @@ def test_emit_batch_duplicate_retract_does_not_advance_counter_for_later_payload
 # ---------------------------------------------------------------------------
 
 
-def test_withdrawal_event_appends_and_names_the_withdrawn_id(repo_root):
+def test_withdrawal_event_appends_and_names_the_withdrawn_id(repo_root) -> None:
     queued = tt.emit_transition(
         "item-withdraw-1",
         "qa_verified",
@@ -1176,12 +1177,12 @@ def test_withdrawal_event_appends_and_names_the_withdrawn_id(repo_root):
     assert withdrawal["id"] in stored_ids
 
 
-def test_withdrawal_event_rejects_a_foreign_shard_id():
+def test_withdrawal_event_rejects_a_foreign_shard_id() -> None:
     with pytest.raises(tt.TrackerTransitionError):
         tt.withdrawal_event("evt-other-machine-abc123", actor="human")
 
 
-def test_withdrawal_event_rejects_a_fold_marker_shaped_id():
+def test_withdrawal_event_rejects_a_fold_marker_shaped_id() -> None:
     # Fold-marker ids are shaped `<slug>-fold-<digest>`, with NO `evt-`
     # prefix — a generic "split on `-` and take the second segment" would
     # misparse this as same-shard; the prefix test must not.
@@ -1189,7 +1190,7 @@ def test_withdrawal_event_rejects_a_fold_marker_shaped_id():
         tt.withdrawal_event("this-machine-fold-abc123", actor="human")
 
 
-def test_withdrawal_event_accepts_a_same_shard_id(monkeypatch):
+def test_withdrawal_event_accepts_a_same_shard_id(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tracker_store, "machine_slug", lambda *a, **kw: "this-machine")
     payload = tt.withdrawal_event("evt-this-machine-abc123", actor="human")
     assert payload["withdraws"] == "evt-this-machine-abc123"
@@ -1201,7 +1202,7 @@ def test_withdrawal_event_accepts_a_same_shard_id(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_probe_result_error_is_refused_with_typed_error():
+def test_probe_result_error_is_refused_with_typed_error() -> None:
     with pytest.raises(tt.TrackerTransitionError):
         tt.transition_event(
             "item-probe-1",
@@ -1214,7 +1215,7 @@ def test_probe_result_error_is_refused_with_typed_error():
         )
 
 
-def test_probe_present_but_not_error_is_accepted():
+def test_probe_present_but_not_error_is_accepted() -> None:
     payload = tt.transition_event(
         "item-probe-2",
         "code_complete",
@@ -1227,7 +1228,7 @@ def test_probe_present_but_not_error_is_accepted():
     assert payload["evidence"]["probe"]["probe_result"] == "ok"
 
 
-def test_evidence_with_no_probe_key_is_unaffected_by_the_guard():
+def test_evidence_with_no_probe_key_is_unaffected_by_the_guard() -> None:
     payload = tt.transition_event(
         "item-probe-3",
         "code_complete",
@@ -1242,7 +1243,7 @@ def test_evidence_with_no_probe_key_is_unaffected_by_the_guard():
 
 def test_null_evidence_round_trips_byte_identical_and_idempotency_unchanged(
     repo_root,
-):
+) -> None:
     """Additivity proof, arm 1: `evidence: null`. Round-trips through
     `emit_transition`/`_emit` and reads back identical, and the
     (source_observation_id, evidence_sha) null-SHA dedup arm still keys on
@@ -1284,7 +1285,7 @@ def test_null_evidence_round_trips_byte_identical_and_idempotency_unchanged(
 
 def test_full_six_key_evidence_round_trips_byte_identical_and_idempotency_unchanged(
     repo_root,
-):
+) -> None:
     """Additivity proof, arm 2: the full section 4.3 six-key `evidence`
     object, with no `probe` key present. Round-trips through
     `emit_transition`/`_emit` and reads back identical, and the
@@ -1334,7 +1335,7 @@ def test_full_six_key_evidence_round_trips_byte_identical_and_idempotency_unchan
     assert len(tracker_store.read_events(repo_root=repo_root)) == 1
 
 
-def test_withdrawal_and_withdrawn_row_both_present_in_shard(repo_root):
+def test_withdrawal_and_withdrawn_row_both_present_in_shard(repo_root) -> None:
     queued = tt.emit_transition(
         "item-withdraw-2",
         "manual_close",
@@ -1358,7 +1359,7 @@ def test_withdrawal_and_withdrawn_row_both_present_in_shard(repo_root):
     )
 
 
-def test_evidence_is_copied_in_rather_than_aliased():
+def test_evidence_is_copied_in_rather_than_aliased() -> None:
     """The event is a record of an observation, so it must not change when the
     caller reuses the dict it was built from. Deep, not shallow: `evidence` is
     documented as nested, and a shallow copy leaves the same bug one level
@@ -1391,7 +1392,7 @@ def test_evidence_is_copied_in_rather_than_aliased():
 # ---------------------------------------------------------------------------
 
 
-def test_suggest_tier_event_dedupes_against_itself_on_replay(repo_root):
+def test_suggest_tier_event_dedupes_against_itself_on_replay(repo_root) -> None:
     """Before the fix, `_emit`'s pre-append scan read `tracker_store.
     read_events`, which filters out the null-`applied_at` suggest event by
     design — so the dedup check never finds it, and the replay mints the
@@ -1435,7 +1436,7 @@ def test_suggest_tier_event_dedupes_against_itself_on_replay(repo_root):
 
 def test_auto_tier_upgrade_of_suggest_tier_event_appends_a_distinct_event(
     repo_root,
-):
+) -> None:
     """The ordinary branch-then-merge lifecycle: a `suggest`-tier assert
     while unmerged, then an `auto`-tier assert of the SAME evidence sha
     once reachable. Before the fix, the assert-arm of

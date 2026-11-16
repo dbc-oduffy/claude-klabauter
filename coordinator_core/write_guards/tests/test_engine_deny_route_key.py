@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core.guard_routes import keys
 from coordinator_core.write_guards import engine
+from pathlib import Path
 
 _GUARD = "destructive-rm"  # a deny_registry guard: an unregistered name is demoted to an advisory
 _ENVELOPE = {
@@ -19,7 +20,7 @@ _ENVELOPE = {
 
 
 @pytest.fixture
-def seeded(tmp_path, monkeypatch):
+def seeded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     folder = tmp_path / ".coordinator-claude-settings" / "coordinator-claude" / "docs" / "wiki" / "guard-routes"
     folder.mkdir(parents=True)
     (folder / keys.ROUTES_INDEX).write_text("# guard routes\n", encoding="utf-8")
@@ -50,11 +51,11 @@ def _reason(out):
     return out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_em_payload_deny_carries_route_key(seeded):
+def test_em_payload_deny_carries_route_key(seeded) -> None:
     assert "gr:" + _GUARD in _reason(engine.evaluate(_payload()))
 
 
-def test_subagent_payload_deny_carries_no_route(seeded):
+def test_subagent_payload_deny_carries_no_route(seeded) -> None:
     text = _reason(engine.evaluate(_payload(agent_id="a0123456789abcdef")))
     assert "gr:" not in text
     assert "guard-routes" not in text

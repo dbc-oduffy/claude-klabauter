@@ -14,6 +14,7 @@ import os
 import sys
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.cadence
 
@@ -29,7 +30,7 @@ _wsdbr = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_wsdbr)  # type: ignore[union-attr]
 
 
-def test_reap_log_writes_under_claude_config_dir(monkeypatch, tmp_path):
+def test_reap_log_writes_under_claude_config_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config_dir = tmp_path / "harness-config"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
     monkeypatch.setattr(_wsdbr, "_run_reap_sessions", lambda: "reaped 2 sessions")
@@ -42,7 +43,7 @@ def test_reap_log_writes_under_claude_config_dir(monkeypatch, tmp_path):
     assert "reaped 2 sessions" in log_file.read_text(encoding="utf-8")
 
 
-def test_reap_log_no_write_when_reap_output_empty(monkeypatch, tmp_path):
+def test_reap_log_no_write_when_reap_output_empty(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config_dir = tmp_path / "harness-config"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
     monkeypatch.setattr(_wsdbr, "_run_reap_sessions", lambda: "")

@@ -107,6 +107,11 @@ def _assert_spooled(proc, repo: Path, payload: bytes) -> str:
     body = json.loads(proc.stdout.decode("utf-8"))
     for text in (body["systemMessage"], body["hookSpecificOutput"]["additionalContext"]):
         assert f"spooled as {header['spool_id']}" in text
+        assert "ask_spool.withdraw" in text
+        assert (
+            f"""ask_spool.withdraw '{{"spool_id":"{header["spool_id"]}","reason":"..."}}'."""
+            in text
+        )
     assert "permissionDecision" not in json.dumps(body)
     return header["spool_id"]
 
@@ -162,6 +167,37 @@ def test_another_op_on_the_same_failure_path_is_passed_loudly_and_not_spooled(do
     assert proc.returncode == 0
     assert "guard did not run" in json.loads(proc.stdout)["systemMessage"]
     assert _spool_files(repo) == []
+
+
+def _blocked_spool(repo: Path) -> None:
+    (repo / ".coordinator-local").write_text("a file where the spool dir should be", encoding="utf-8")
+
+
+def _assert_remedy_advisory(proc) -> None:
+    assert proc.returncode == 0
+    assert proc.stdout.strip()
+    body = json.loads(proc.stdout.decode("utf-8"))
+    assert "permissionDecision" not in json.dumps(body)
+    for msg in (body["systemMessage"], body["hookSpecificOutput"]["additionalContext"]):
+        assert "could not be spooled" in msg and "nothing was minted" in msg
+        assert "re-submit" in msg and "state/warp" in msg
+
+
+def test_a_failed_spool_write_answers_a_loud_advisory_with_a_remedy_not_a_deny(door, tmp_path, runtime_base):
+    root = _make_stub_engine_root(tmp_path)
+    repo = _repo(tmp_path)
+    _blocked_spool(repo)
+    _assert_remedy_advisory(_run(door, root, runtime_base, repo, _payload(repo)))
+
+
+def test_a_failed_spool_write_on_another_op_is_still_passed_loudly(door, tmp_path, runtime_base):
+    root = _make_stub_engine_root(tmp_path)
+    repo = _repo(tmp_path)
+    _blocked_spool(repo)
+    proc = _run(door, root, runtime_base, repo, _payload(repo), op="hooks.preuse_bash_dispatch")
+    body = json.loads(proc.stdout.decode("utf-8"))
+    assert "guard did not run" in body["systemMessage"]
+    assert "permissionDecision" not in json.dumps(body)
 
 
 def test_the_spool_id_matches_the_python_contract(door, tmp_path, runtime_base):

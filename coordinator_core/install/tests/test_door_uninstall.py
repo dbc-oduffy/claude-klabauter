@@ -18,28 +18,29 @@ from coordinator_core.install import door_install, door_uninstall
 from coordinator_core.install.door_uninstall import _UNINSTALL_FALLBACK_CMD_MARKER
 from coordinator_core.install.substrate import _AGENT_FORWARDER_MARKER
 from coordinator_core.warm.door import build as door_build
+from pathlib import Path
 
 
-def _stamp_engine_root(root):
+def _stamp_engine_root(root) -> None:
     stamp_dir = root / "coordinator_core"
     stamp_dir.mkdir(parents=True, exist_ok=True)
     (stamp_dir / "_engine_stamp").write_text("sha:deadbeef\n", encoding="utf-8")
 
 
-def test_uninstall_is_noop_on_never_installed_bin_dst(tmp_path):
+def test_uninstall_is_noop_on_never_installed_bin_dst(tmp_path: Path) -> None:
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     removed = door_uninstall.uninstall_door(bin_dst)
     assert removed == []
 
 
-def test_uninstall_is_noop_on_absent_bin_dst(tmp_path):
+def test_uninstall_is_noop_on_absent_bin_dst(tmp_path: Path) -> None:
     bin_dst = tmp_path / "does-not-exist" / "bin"
     removed = door_uninstall.uninstall_door(bin_dst)
     assert removed == []
 
 
-def test_uninstall_removes_installed_door_and_sidecars(tmp_path):
+def test_uninstall_removes_installed_door_and_sidecars(tmp_path: Path) -> None:
     if not door_install._PREBUILT_DOOR_EXE.exists():
         pytest.skip("no committed prebuilt door for this platform in this checkout")
 
@@ -80,7 +81,7 @@ def test_uninstall_removes_installed_door_and_sidecars(tmp_path):
     assert _UNINSTALL_FALLBACK_CMD_MARKER in cmd_fallback.read_text(encoding="utf-8")
 
 
-def test_uninstall_is_idempotent(tmp_path):
+def test_uninstall_is_idempotent(tmp_path: Path) -> None:
     if not door_install._PREBUILT_DOOR_EXE.exists():
         pytest.skip("no committed prebuilt door for this platform in this checkout")
 
@@ -96,7 +97,7 @@ def test_uninstall_is_idempotent(tmp_path):
     assert second == []
 
 
-def test_uninstall_leaves_other_bin_contents_untouched(tmp_path):
+def test_uninstall_leaves_other_bin_contents_untouched(tmp_path: Path) -> None:
     if not door_install._PREBUILT_DOOR_EXE.exists():
         pytest.skip("no committed prebuilt door for this platform in this checkout")
 
@@ -114,7 +115,7 @@ def test_uninstall_leaves_other_bin_contents_untouched(tmp_path):
     assert unrelated.read_text(encoding="utf-8") == "keep me"
 
 
-def test_module_is_runnable_as_a_script(tmp_path, capsys):
+def test_module_is_runnable_as_a_script(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     rc = door_uninstall.main(["--bin-dst", str(bin_dst)])

@@ -49,6 +49,7 @@ Negative-spec (hard-won, restated for this row):
 from __future__ import annotations
 
 import contextlib
+import os
 import sys
 import time
 from pathlib import Path
@@ -94,6 +95,7 @@ from coordinator_core.ops.ceremony.commit_gates import (
     split_process_paths,
     claude_md_budget_gate,
     declared_deletion_gate,
+    files_present,
     import_closure_gate,
     machine_path_leak_gate,
     op_scope_coverage_gate,
@@ -436,6 +438,49 @@ def _landed_text(read_source: Callable[[str], Optional[bytes]]) -> Callable[[str
     return read
 
 
+def _read_worktree_bytes(root: str, rel: str) -> Optional[bytes]:
+    """Bytes of `root/rel`, None when unreadable; one open and one read for a file under 64 KiB."""
+    try:
+        fd = os.open(os.path.join(root, rel), os.O_RDONLY | getattr(os, "O_BINARY", 0))
+    except (OSError, ValueError):
+        return None
+    try:
+        data = os.read(fd, 65536)
+        if len(data) < 65536:
+            return data
+        chunks = [data]
+        while True:
+            chunk = os.read(fd, 1 << 20)
+            if not chunk:
+                return b"".join(chunks)
+            chunks.append(chunk)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+
+
+def _worktree_landed_text(
+    root: Path, read_source: Callable[[str], Optional[bytes]], off_source: set,
+) -> Callable[[str], Optional[str]]:
+    """Landed text for a path whose landed bytes ARE its worktree bytes, read from the landing's
+    memoised `read_source` with the newline translation `Path.read_text` applies; a path in
+    `off_source` (declared removed, so absent from the landed tree) keeps its worktree read."""
+    from coordinator_core.authoring_leaks.import_closure import read_text
+
+    def read(rel: str) -> Optional[str]:
+        if rel.replace("\\", "/") in off_source:
+            return read_text(root / rel)
+        data = read_source(rel)
+        if data is None:
+            return None
+        try:
+            return data.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+        except UnicodeDecodeError:
+            return None
+    return read
+
+
 def _pre_commit_gates(
     worktree_root: Path,
     paths: list,
@@ -444,6 +489,8 @@ def _pre_commit_gates(
     prefer_staged: Sequence[str] = (),
     deliberate_stage: bool = False,
     advisories: Optional[list] = None,
+    known_present: Optional[set] = None,
+    fast_worktree_read: bool = False,
 ) -> Optional[str]:
     """Run the gates `run_commit_pipeline` ran before landing, returning a
     refusal string or None. TWO of its four, and the omissions are the point.
@@ -547,9 +594,32 @@ def _pre_commit_gates(
 
     # `declared_deletion_gate` takes the declaration the other gates do not, so it runs outside the
     # `(name, gate)` loop, explicitly and BEFORE `commit_paths`: a refusal after the commit is none.
-    deletion_outcome = declared_deletion_gate(worktree_root, gate_paths, deleted_paths)
+    deletion_outcome = declared_deletion_gate(
+        worktree_root, gate_paths, deleted_paths,
+        known_present={p.replace("\\", "/") for p in known_present} if known_present else None,
+    )
     if not deletion_outcome.passed:
         return "declared_deletion_gate: " + "; ".join(deletion_outcome.diagnostics[:5])
+
+    # One read per landed path for every gate that judges landed bytes. With `fast_worktree_read`
+    # (the caller's `read_source` is `commit_source.post_commit_reader`), a path landing its worktree
+    # bytes (declared, not removed, not staged-preferred) is read here without the pathlib and
+    # buffered-IO layers; every other path asks the reader.
+    landed: dict = {}
+    source = read_source
+    worktree_landed = None if deliberate_stage or not fast_worktree_read else {
+        p.replace("\\", "/") for p in paths
+    } - {p.replace("\\", "/") for p in (*deleted_paths, *prefer_staged)}
+    root_str = os.fspath(worktree_root)
+
+    def read_source(rel: str) -> Optional[bytes]:
+        if rel not in landed:
+            key = rel.replace("\\", "/")
+            if worktree_landed is not None and key in worktree_landed:
+                landed[rel] = _read_worktree_bytes(root_str, key)
+            else:
+                landed[rel] = source(rel)
+        return landed[rel]
 
     # Named explicitly rather than read off `gate.__name__`: a wrapped gate would report `<lambda>`.
     for name, gate in (
@@ -557,7 +627,10 @@ def _pre_commit_gates(
         ("residue_gate", residue_gate),
         ("op_scope_coverage_gate", partial(op_scope_coverage_gate, read_source=read_source)),
         ("leak_gate", partial(leak_gate, landed_text=(
-            _landed_text(read_source) if prefer_staged or deliberate_stage else None
+            _landed_text(read_source) if prefer_staged or deliberate_stage
+            else _worktree_landed_text(
+                worktree_root, read_source, {p.replace("\\", "/") for p in deleted_paths},
+            )
         ))),
         ("registration_quad_gate", partial(registration_quad_gate, read_source=read_source)),
         ("claude_md_budget_gate", partial(claude_md_budget_gate, read_source=read_source)),
@@ -568,6 +641,7 @@ def _pre_commit_gates(
         ("attribution_gate", partial(
             attribution_gate, vacated=deleted_paths,
             prefer_staged=prefer_staged, deliberate_stage=deliberate_stage,
+            read_source=read_source,
         )),
     ):
         outcome = gate(worktree_root, gate_paths)
@@ -614,18 +688,26 @@ def _drop_missing(worktree_root: Path, paths: list) -> tuple:
     return [p for p in paths if p not in gone], [p for p in paths if p in gone]
 
 
-def _index_classify(worktree_root: Path, paths: list) -> tuple:
+def _index_classify(
+    worktree_root: Path, paths: list, head_absent_out: Optional[set] = None, present_out: Optional[set] = None,
+) -> tuple:
     """(kept, untracked, in_index): on-disk HEAD-tracked paths absent from the index move to
     untracked, so a `git rm --cached` lands. `in_index` is the on-disk members of `paths` the index
     holds, or None when unread; zero spawns, one scoped index walk; any read failure leaves `paths`
-    as given."""
-    present = [p for p in paths if (worktree_root / p).is_file()]
+    as given. `head_absent_out`, when given, receives the on-disk members HEAD lacks (the one HEAD
+    spine walk, shared with `_ignored_untracked`)."""
+    on_disk = files_present(worktree_root, paths)
+    present = [p for p in paths if p in on_disk]
+    if present_out is not None:
+        present_out.update(present)
     if not present:
         return list(paths), [], None
     try:
         partition = partition_declared_deletions(worktree_root, present)
         if partition is None:
             return list(paths), [], None
+        if head_absent_out is not None:
+            head_absent_out.update(partition[1])
         in_index = set(parse_index_identity(
             worktree_root, wanted={p.replace("\\", "/") for p in present}
         ))
@@ -670,8 +752,9 @@ def _checkpoint_symbol_refusal(
 def _checkpoint_import_refusal(
     worktree_root: Path, paths: list, deleted: list, untracked: list, blobs: dict
 ) -> Optional[str]:
-    """Refusal text when a staged `.py` from-imports a `coordinator_core` name the would-be tree
-    does not define; fails open when the resolver is absent or HEAD unresolvable."""
+    """Refusal text when a staged `.py` from-imports a `coordinator_core` name, or reads a
+    `module.attr`, the would-be tree does not define; fails open when the resolver is absent or
+    HEAD unresolvable."""
     staged_py = [p for p in [*paths, *untracked] if p.endswith(".py")]
     if not staged_py:
         return None
@@ -686,7 +769,7 @@ def _checkpoint_import_refusal(
         sys.path.insert(0, str(lib))
     from percolate.import_closure import (
         CommitReadError,
-        find_would_be_tree_from_import_violations,
+        find_would_be_tree_violations,
     )
     from coordinator_core.git.git_objects import read_object
 
@@ -713,14 +796,15 @@ def _checkpoint_import_refusal(
         return got[1] if got else None
 
     try:
-        _examined, violations = find_would_be_tree_from_import_violations(
-            worktree_root, head, overlay, reader
-        )
+        violations, attr_violations = find_would_be_tree_violations(worktree_root, head, overlay, reader)
     except CommitReadError:
         return None
-    if not violations:
+    if not violations and not attr_violations:
         return None
-    listed = "; ".join(f"{importer} imports {name}" for importer, name in violations[:10])
+    listed = "; ".join(
+        ([f"{importer} imports {name}" for importer, name in violations]
+         + [f"{importer} reads {name}" for importer, name in attr_violations])[:10]
+    )
     return (
         f"checkpoint would land an import absent from the committed tree: {listed}. "
         "Stage the defining file or hunk in the same checkpoint."
@@ -740,24 +824,58 @@ def _split_gone_tracked(worktree_root: Path, paths: list) -> tuple:
     return [p for p in paths if p not in gone], [p for p in paths if p in gone]
 
 
-def _ignored_untracked(worktree_root: Path, paths: list) -> list:
-    present = [p for p in paths if (worktree_root / p).is_file()]
-    partition = partition_declared_deletions(worktree_root, present)
-    if partition is None or not partition[1]:
+def _ignored_untracked(worktree_root: Path, paths: list, head_absent: Optional[set] = None) -> list:
+    """`paths` that are gitignored and untracked. `head_absent` is `_index_classify`'s HEAD-absent
+    set for the same landing: it replaces the stat pass and HEAD spine walk here."""
+    if head_absent is not None:
+        candidates = [p for p in paths if p in head_absent]
+    else:
+        present = [p for p in paths if (worktree_root / p).is_file()]
+        partition = partition_declared_deletions(worktree_root, present)
+        if partition is None:
+            return []
+        candidates = partition[1]
+    if not candidates:
         return []
-    candidates = partition[1]
+    locally_ignored: set = set()
+    if head_absent is not None:
+        # The in-process matcher answers when it reproduces git's verdict; only a shape it declines
+        # (`None`) still reaches the spawn. `head_absent` callers pass index-untracked paths, so no
+        # tracked path (which check-ignore never reports) is judged here.
+        from coordinator_core.git.ignore_match import IgnoreMatcher
+
+        unresolved: list = []
+        try:
+            matcher = IgnoreMatcher(worktree_root)
+        except Exception:  # noqa: BLE001 -- the spawn answers
+            matcher = None
+        for p in candidates:
+            try:
+                verdict = None if matcher is None else matcher.ignored(p.replace("\\", "/"), False)
+            except Exception:  # noqa: BLE001
+                verdict = None
+            if verdict is None:
+                unresolved.append(p)
+            elif verdict:
+                locally_ignored.add(p)
+        if not unresolved:
+            return [p for p in candidates if p in locally_ignored]
+        decided = candidates
+        candidates = unresolved
+    else:
+        decided = candidates
     # Per-use spawn: ignore rules (.gitignore stack, info/exclude, core.excludesFile) have no
-    # in-process evaluator; one batched spawn for all candidates, skipped when the caller supplies
-    # `ignored_untracked` (terminal_commit does, from its status snapshot).
+    # in-process evaluator for every shape; one batched spawn for the candidates the matcher declined,
+    # skipped when the caller supplies `ignored_untracked` (terminal_commit does, from its status snapshot).
     result = run_git(
         ["-C", str(worktree_root), "--no-optional-locks", "check-ignore", "-z", "--stdin"],
         input=b"\0".join(p.replace("\\", "/").encode("utf-8") for p in candidates),
         binary=True,
     )
     if result.timed_out or result.returncode not in (0, 1):
-        return []
+        return [p for p in decided if p in locally_ignored]
     ignored = {s.decode("utf-8", "surrogateescape") for s in result.stdout_bytes.split(b"\0") if s}
-    return [p for p in candidates if p.replace("\\", "/") in ignored]
+    return [p for p in decided if p in locally_ignored or p.replace("\\", "/") in ignored]
 
 
 #: Retired carry params and the owner of the job each did: a true value refuses naming the owner.
@@ -1410,7 +1528,9 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
                     skipped_missing=skipped_missing,
                 )
 
-        raw_paths, index_untracked, in_index = _index_classify(worktree_root, raw_paths)
+        head_absent: set = set()
+        stat_present: set = set()
+        raw_paths, index_untracked, in_index = _index_classify(worktree_root, raw_paths, head_absent, stat_present)
         raw_untracked = list(raw_untracked) + [p for p in index_untracked if p not in raw_untracked]
         raw_untracked = _expand_untracked_dirs(worktree_root, raw_untracked)
 
@@ -1419,7 +1539,10 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
                 raw_paths if in_index is None
                 else [p for p in raw_paths if p.replace("\\", "/") not in in_index]
             )
-            found_ignored = _ignored_untracked(worktree_root, probe)
+            found_ignored = (
+                _ignored_untracked(worktree_root, probe) if in_index is None
+                else _ignored_untracked(worktree_root, probe, head_absent)
+            )
         else:
             supplied = {p.replace("\\", "/") for p in supplied_ignored}
             found_ignored = [p for p in raw_paths if p.replace("\\", "/") in supplied]
@@ -1484,6 +1607,8 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
             prefer_staged=raw_prefer_staged,
             deliberate_stage=raw_prefer_deliberate_stage,
             advisories=reparse_advisories,
+            known_present=stat_present,
+            fast_worktree_read=True,
         )
     if gate_refusal is not None:
         return _error(gate_refusal)
@@ -1544,6 +1669,14 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
             )
         if declared_refusal:
             return _error(declared_refusal)
+        # `dropped_ignored` left raw_paths before the branch; a path that left earlier is still the caller's.
+        _entered = {
+            p.replace("\\", "/") for p in [*raw_paths, *raw_deleted, *raw_untracked, *dropped_ignored]
+        }
+        for p in dropped_ignored:
+            checkpoint_reasons.setdefault(
+                p.replace("\\", "/"), "gitignored and untracked: dropped before the checkpoint"
+            )
         with ledger.phase("checkpoint_own_hunks"):
             run_id = checkpoint_hunks.checkpoint_run_id(worktree_root, message, own_sid)
             own_blobs, checkpoint_withheld = checkpoint_hunks.checkpoint_own_blobs(
@@ -1572,31 +1705,41 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
                     p for p in raw_paths
                     if p.replace("\\", "/") not in in_head and (worktree_root / p).is_file()
                 ]
-                foreign_new = {
-                    f.path for f in hunk_provenance.unproduced_hunks(
-                        worktree_root, run_id, new_paths,
-                        own_plan=checkpoint_hunks._message_plan(message) or None,
-                    )
-                } if new_paths else set()
+                foreign_new: dict = {}
+                if new_paths:
+                    # Joins an enclosing landing's invariants scope, else opens one for this call.
+                    with hunk_provenance.invariants_scope(worktree_root, run_id):
+                        foreign_new = {
+                            f.path: f.detail for f in hunk_provenance.unproduced_hunks(
+                                worktree_root, run_id, new_paths,
+                                own_plan=checkpoint_hunks._message_plan(message) or None,
+                            )
+                        }
                 if foreign_new:
                     raw_paths = [p for p in raw_paths if p.replace("\\", "/") not in foreign_new]
                     checkpoint_withheld = sorted({*checkpoint_withheld, *foreign_new})
-                    for p in foreign_new:
-                        checkpoint_reasons.setdefault(p, "new file holds content no run baseline attributes to this run")
+                    for p, detail in foreign_new.items():
+                        reason = "new file holds content no run baseline attributes to this run"
+                        checkpoint_reasons.setdefault(p, f"{reason}; {detail}" if detail else reason)
             # A row's tests never land without the row's withheld code.
-            paired = set(checkpoint_hunks.tests_of_withheld_code(
-                worktree_root, message, [*raw_paths, *raw_deleted, *raw_untracked], checkpoint_withheld,
-            ))
-            if paired:
-                raw_paths = [p for p in raw_paths if p.replace("\\", "/") not in paired]
-                raw_deleted = [p for p in raw_deleted if p.replace("\\", "/") not in paired]
-                raw_untracked = [p for p in raw_untracked if p.replace("\\", "/") not in paired]
+            # A staged consumer of a withheld producer's new definition waits with the producer.
+            from coordinator_core.ops.dispatch_emit import own_hunk_candidate
+
+            closed = own_hunk_candidate.close_over(
+                worktree_root, [*raw_paths, *raw_deleted, *raw_untracked], checkpoint_withheld,
+                blobs=expectations["supplied_blobs"], message=message, pair_by_stem=False,
+            ) if checkpoint_withheld else {}
+            if closed:
+                gone = {p.replace("\\", "/") for p in closed}
+                raw_paths = [p for p in raw_paths if p.replace("\\", "/") not in gone]
+                raw_deleted = [p for p in raw_deleted if p.replace("\\", "/") not in gone]
+                raw_untracked = [p for p in raw_untracked if p.replace("\\", "/") not in gone]
                 for p in list(expectations["supplied_blobs"]):
-                    if p.replace("\\", "/") in paired:
+                    if p.replace("\\", "/") in gone:
                         del expectations["supplied_blobs"][p]
-                checkpoint_withheld = sorted({*checkpoint_withheld, *paired})
-                for p in paired:
-                    checkpoint_reasons.setdefault(p, "test of a row whose code is withheld: the row lands whole or waits")
+                checkpoint_withheld = sorted({*checkpoint_withheld, *gone})
+                for p, why in closed.items():
+                    checkpoint_reasons.setdefault(p.replace("\\", "/"), why)
             # A staged or untracked test that imports or names withheld code waits with it.
             exercising = checkpoint_hunks.tests_exercising_withheld_code(
                 worktree_root, [*raw_paths, *raw_untracked], checkpoint_withheld, expectations["supplied_blobs"],
@@ -1611,6 +1754,16 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
                 checkpoint_withheld = sorted({*checkpoint_withheld, *gone})
                 for p, why in exercising.items():
                     checkpoint_reasons.setdefault(p.replace("\\", "/"), f"test exercises withheld code: {why}")
+        # Invariant: every path that entered the branch ends in the commit set or in the named withheld set.
+        _still = {p.replace("\\", "/") for p in [*raw_paths, *raw_deleted, *raw_untracked]}
+        _named = {p.replace("\\", "/") for p in checkpoint_withheld}
+        _lost = sorted(_entered - _still - _named)
+        if _lost:
+            checkpoint_withheld = sorted({*checkpoint_withheld, *_lost})
+            for p in _lost:
+                checkpoint_reasons.setdefault(p, "dropped from the checkpoint commit set without a recorded reason")
+        for p in checkpoint_withheld:
+            checkpoint_reasons.setdefault(p.replace("\\", "/"), "withheld: no reason recorded")
         if not (raw_paths or raw_deleted or raw_untracked):
             return _error(
                 "every checkpoint path holds hunks outside this run or the run is unresolved, nothing to commit: "
@@ -1621,8 +1774,12 @@ def _handler_body(params: dict, repo_root: Optional[Path], ledger: PhaseLedger) 
             )
         if checkpoint_withheld:
             # Same `message` reaches stamp_checkpoint, which skips rows declaring a withheld path.
-            from coordinator_core.ops.dispatch_emit.checkpoint_stamp import checkpoint_withheld_trailer_lines
+            from coordinator_core.ops.dispatch_emit.checkpoint_stamp import (
+                checkpoint_message_naming_carried_rows,
+                checkpoint_withheld_trailer_lines,
+            )
 
+            message = checkpoint_message_naming_carried_rows(worktree_root, message, checkpoint_withheld)
             message = f"{message.rstrip(chr(10))}\n" + "\n".join(
                 checkpoint_withheld_trailer_lines(checkpoint_withheld)
             ) + "\n"

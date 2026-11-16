@@ -13,6 +13,7 @@ from coordinator_core.ops.distill_workflow_input import (
     translate_to_workflow_input,
     validate_workflow_input,
 )
+from pathlib import Path
 
 _WIKI = "docs" + "/wiki/"
 
@@ -31,14 +32,14 @@ def _sample_manifest() -> dict:
     )
 
 
-def test_translate_top_level_field_renames():
+def test_translate_top_level_field_renames() -> None:
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/repo")
     assert payload["runId"] == "2026-08-06-15h20"
     assert payload["repoRoot"] == "/repo"
     assert set(payload) == set(CONSUMER_TOP_LEVEL_FIELDS)
 
 
-def test_translate_batches_shape_and_ids():
+def test_translate_batches_shape_and_ids() -> None:
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/repo")
     batches = payload["batches"]
     assert [b["batchId"] for b in batches] == ["batch-1", "batch-2"]
@@ -50,81 +51,81 @@ def test_translate_batches_shape_and_ids():
         assert b["formatHints"] == {}
 
 
-def test_translate_wiki_slugs_is_flat_object_map():
+def test_translate_wiki_slugs_is_flat_object_map() -> None:
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/repo")
     assert payload["wikiSlugs"] == {"foo": _WIKI + "foo.md"}
     assert isinstance(payload["wikiSlugs"], dict)
 
 
-def test_translate_batch_count_and_total_file_count():
+def test_translate_batch_count_and_total_file_count() -> None:
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/repo")
     assert payload["batch_count"] == 2
     assert payload["total_file_count"] == 3
 
 
-def test_translate_format_hints_applied_uniformly():
+def test_translate_format_hints_applied_uniformly() -> None:
     payload = translate_to_workflow_input(
         _sample_manifest(), repo_root="/repo", format_hints={"style": "verbose"}
     )
     assert all(b["formatHints"] == {"style": "verbose"} for b in payload["batches"])
 
 
-def test_validate_well_formed_payload_clean():
+def test_validate_well_formed_payload_clean() -> None:
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/repo")
     assert validate_workflow_input(payload) == []
 
 
-def test_validate_catches_renamed_top_level_field():
+def test_validate_catches_renamed_top_level_field() -> None:
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/repo")
     payload["run_id"] = payload.pop("runId")
     errors = validate_workflow_input(payload)
     assert any("runId" in e for e in errors)
 
 
-def test_validate_catches_missing_per_batch_field():
+def test_validate_catches_missing_per_batch_field() -> None:
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/repo")
     del payload["batches"][0]["batchId"]
     errors = validate_workflow_input(payload)
     assert any("batchId" in e for e in errors)
 
 
-def test_validate_catches_batch_count_integrity_mismatch():
+def test_validate_catches_batch_count_integrity_mismatch() -> None:
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/repo")
     payload["batch_count"] = 999
     errors = validate_workflow_input(payload)
     assert any("integrity mismatch" in e for e in errors)
 
 
-def test_validate_catches_total_file_count_integrity_mismatch():
+def test_validate_catches_total_file_count_integrity_mismatch() -> None:
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/repo")
     payload["total_file_count"] = 1
     errors = validate_workflow_input(payload)
     assert any("integrity mismatch" in e for e in errors)
 
 
-def test_validate_catches_wiki_slugs_wrong_type():
+def test_validate_catches_wiki_slugs_wrong_type() -> None:
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/repo")
     payload["wikiSlugs"] = [{"slug": "foo", "path": _WIKI + "foo.md"}]
     errors = validate_workflow_input(payload)
     assert any("wikiSlugs" in e for e in errors)
 
 
-def test_handler_raises_on_missing_manifest():
+def test_handler_raises_on_missing_manifest() -> None:
     with pytest.raises(ValueError, match=r"manifest.*distill\.scope"):
         _handler({"repo_root": "/repo"}, repo_root=None)
 
 
-def test_handler_raises_on_manifest_lacking_keys_naming_the_producer_not_keyerror():
+def test_handler_raises_on_manifest_lacking_keys_naming_the_producer_not_keyerror() -> None:
     with pytest.raises(ValueError, match=r"lacks .*wiki_slugs.*distill\.scope"):
         _handler({"manifest": {"run_id": "r", "input_json_path": "x"}, "repo_root": "/repo"}, repo_root=None)
 
 
-def test_handler_raises_on_missing_repo_root():
+def test_handler_raises_on_missing_repo_root() -> None:
     with pytest.raises(ValueError, match="repo_root"):
         _handler({"manifest": _sample_manifest()}, repo_root=None)
 
 
-def test_dispatch_message_smoke():
+def test_dispatch_message_smoke() -> None:
     import coordinator_core.ipc as ipc
     import coordinator_core.ops  # noqa: F401 — triggers eager registration
 
@@ -140,7 +141,7 @@ def test_dispatch_message_smoke():
     assert d["result"]["batch_count"] == 2
 
 
-def test_shard_splits_batches_and_slugs_with_matching_counts():
+def test_shard_splits_batches_and_slugs_with_matching_counts() -> None:
     import json
 
     from coordinator_core.ops.distill_workflow_input import SLUG_SHARD_MAX_BYTES, shard_workflow_input
@@ -168,7 +169,7 @@ def test_shard_splits_batches_and_slugs_with_matching_counts():
     assert manifest["batchFiles"][0] == "batch-0001.json"
 
 
-def test_oversize_slug_entry_gets_its_own_shard():
+def test_oversize_slug_entry_gets_its_own_shard() -> None:
     from coordinator_core.ops.distill_workflow_input import SLUG_SHARD_MAX_BYTES, shard_workflow_input
 
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/r")
@@ -178,7 +179,7 @@ def test_oversize_slug_entry_gets_its_own_shard():
     assert [list(files[n]["entries"]) for n in manifest["slugShardFiles"]] == [["a"], ["huge"], ["b"]]
 
 
-def test_handler_emits_relevant_guides_per_batch_additively(tmp_path):
+def test_handler_emits_relevant_guides_per_batch_additively(tmp_path: Path) -> None:
     (tmp_path / "docs" / "wiki").mkdir(parents=True)
     (tmp_path / "docs" / "wiki" / "foo.md").write_text("# Quartz relay\nquartz relay shards\n", encoding="utf-8")
     (tmp_path / "docs" / "wiki" / "bar.md").write_text("# Other\nnothing\n", encoding="utf-8")
@@ -200,7 +201,7 @@ def test_handler_emits_relevant_guides_per_batch_additively(tmp_path):
     assert validate_workflow_input(payload) == []
 
 
-def test_relevant_guides_drop_outlines_before_the_batch_cap_refuses():
+def test_relevant_guides_drop_outlines_before_the_batch_cap_refuses() -> None:
     from coordinator_core.ops.distill_workflow_input import SLUG_SHARD_MAX_BYTES, shard_workflow_input
 
     big = [{"slug": f"g{i}", "path": "p", "outline": ["# " + "x" * 400]} for i in range(60)]
@@ -210,7 +211,7 @@ def test_relevant_guides_drop_outlines_before_the_batch_cap_refuses():
     shard_workflow_input(payload)  # does not raise: the hint yielded, the batch fit
 
 
-def test_attach_relevant_guides_after_digests_degrades_to_paths_and_fits():
+def test_attach_relevant_guides_after_digests_degrades_to_paths_and_fits() -> None:
     from coordinator_core.ops.distill_workflow_input import (
         SLUG_SHARD_MAX_BYTES,
         attach_relevant_guides,
@@ -230,20 +231,20 @@ def test_attach_relevant_guides_after_digests_degrades_to_paths_and_fits():
     assert SLUG_SHARD_MAX_BYTES == 12_000
 
 
-def test_relevant_guides_yield_entries_when_even_paths_do_not_fit():
+def test_relevant_guides_yield_entries_when_even_paths_do_not_fit() -> None:
     huge = [{"slug": f"g{i}", "path": "p" * 500, "outline": []} for i in range(60)]
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/r", relevant_guides=[huge, []])
     kept = payload["batches"][0]["relevantGuides"]
     assert 0 < len(kept) < len(huge) and kept == huge[: len(kept)]
 
 
-def test_validate_catches_relevant_guides_wrong_type():
+def test_validate_catches_relevant_guides_wrong_type() -> None:
     payload = translate_to_workflow_input(_sample_manifest(), repo_root="/r")
     payload["batches"][0]["relevantGuides"] = "foo"
     assert any("relevantGuides" in e for e in validate_workflow_input(payload))
 
 
-def test_batch_over_relay_cap_refuses():
+def test_batch_over_relay_cap_refuses() -> None:
     import pytest
 
     from coordinator_core.ops.distill_workflow_input import SLUG_SHARD_MAX_BYTES, shard_workflow_input
@@ -254,7 +255,7 @@ def test_batch_over_relay_cap_refuses():
         shard_workflow_input(payload)
 
 
-def _sized(root, rel, n):
+def _sized(root, rel, n) -> None:
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(b"x" * n)
@@ -271,7 +272,7 @@ def _tier_manifest(files_by_batch):
     )
 
 
-def test_handler_digests_an_over_tier_batch_before_splitting(tmp_path):
+def test_handler_digests_an_over_tier_batch_before_splitting(tmp_path: Path) -> None:
     from coordinator_core.distill.run_cost import project_run_cost
 
     big = "# T\n" + ("prose line\n" * 20) + "```yaml plan-tasks\n" + "- id: C1\n  title: t\n  body: " + "y" * 450_000 + "\n```\n"
@@ -285,7 +286,7 @@ def test_handler_digests_an_over_tier_batch_before_splitting(tmp_path):
     assert cost["max_scan_prompt_tokens"] <= 100_000
 
 
-def test_handler_splits_when_digests_are_not_enough_and_renumbers(tmp_path):
+def test_handler_splits_when_digests_are_not_enough_and_renumbers(tmp_path: Path) -> None:
     from coordinator_core.distill.run_cost import project_run_cost
 
     (tmp_path / "docs" / "wiki").mkdir(parents=True)
@@ -303,7 +304,7 @@ def test_handler_splits_when_digests_are_not_enough_and_renumbers(tmp_path):
     assert max(cost["scan_prompt_tokens_by_batch"]) <= 100_000
 
 
-def test_under_tier_batches_are_untouched(tmp_path):
+def test_under_tier_batches_are_untouched(tmp_path: Path) -> None:
     (tmp_path / "docs" / "wiki").mkdir(parents=True)
     (tmp_path / "docs" / "wiki" / "g.md").write_text("# g\n", encoding="utf-8")
     (tmp_path / "a.md").write_text("small", encoding="utf-8")
@@ -312,7 +313,7 @@ def test_under_tier_batches_are_untouched(tmp_path):
     assert not (tmp_path / "state").exists()
 
 
-def test_split_past_max_batches_drops_the_trailing_batches_and_never_raises(tmp_path):
+def test_split_past_max_batches_drops_the_trailing_batches_and_never_raises(tmp_path: Path) -> None:
     from coordinator_core.ops.distill_workflow_input import fit_scan_tier
 
     files = [f"f{i}.md" for i in range(5)]
@@ -325,7 +326,7 @@ def test_split_past_max_batches_drops_the_trailing_batches_and_never_raises(tmp_
     assert [b["batchId"] for b in payload["batches"]] == ["batch-1", "batch-2"]
 
 
-def test_split_within_max_batches_keeps_every_file(tmp_path):
+def test_split_within_max_batches_keeps_every_file(tmp_path: Path) -> None:
     from coordinator_core.ops.distill_workflow_input import fit_scan_tier
 
     files = [f"f{i}.md" for i in range(5)]
@@ -337,7 +338,7 @@ def test_split_within_max_batches_keeps_every_file(tmp_path):
         assert payload["total_file_count"] == 5 and payload["batch_count"] == 5
 
 
-def test_a_manifest_already_over_the_cap_is_not_refused_when_nothing_splits(tmp_path):
+def test_a_manifest_already_over_the_cap_is_not_refused_when_nothing_splits(tmp_path: Path) -> None:
     (tmp_path / "docs" / "wiki").mkdir(parents=True)
     (tmp_path / "docs" / "wiki" / "g.md").write_text("# g\n", encoding="utf-8")
     batches = [[f"f{i}.md"] for i in range(8)]
@@ -345,7 +346,7 @@ def test_a_manifest_already_over_the_cap_is_not_refused_when_nothing_splits(tmp_
     assert payload["batch_count"] == 8
 
 
-def test_fit_scan_tier_prices_guides_into_every_split_batch(tmp_path):
+def test_fit_scan_tier_prices_guides_into_every_split_batch(tmp_path: Path) -> None:
     from coordinator_core.ops.distill_workflow_input import fit_scan_tier
 
     _sized(tmp_path, "a.md", 200_000)
@@ -359,7 +360,7 @@ def test_fit_scan_tier_prices_guides_into_every_split_batch(tmp_path):
     assert all(b["relevantGuides"] for b in payload["batches"])
 
 
-def test_fit_scan_tier_lone_oversized_file_sheds_guides_and_is_reported(tmp_path):
+def test_fit_scan_tier_lone_oversized_file_sheds_guides_and_is_reported(tmp_path: Path) -> None:
     from coordinator_core.ops.distill_workflow_input import fit_scan_tier
 
     _sized(tmp_path, "huge.md", 500_000)
@@ -369,7 +370,7 @@ def test_fit_scan_tier_lone_oversized_file_sheds_guides_and_is_reported(tmp_path
     assert still_over == ["batch-1"] and payload["batches"][0]["relevantGuides"] == []
 
 
-def test_handler_names_a_batch_no_split_can_bring_under_the_tier(tmp_path):
+def test_handler_names_a_batch_no_split_can_bring_under_the_tier(tmp_path: Path) -> None:
     (tmp_path / "docs" / "wiki").mkdir(parents=True)
     (tmp_path / "docs" / "wiki" / "g.md").write_text("# g\n", encoding="utf-8")
     (tmp_path / "huge.md").write_text("prose line\n" * 40_000, encoding="utf-8")
@@ -380,7 +381,7 @@ def test_handler_names_a_batch_no_split_can_bring_under_the_tier(tmp_path):
     assert "over_tier_batches" not in fine
 
 
-def _write_digests(root, run_id):
+def _write_digests(root, run_id) -> None:
     import json
 
     d = root / "state" / "scratch" / "backlog-pass" / run_id
@@ -392,7 +393,7 @@ def _write_digests(root, run_id):
     (d / "digests.json").write_text(json.dumps({"topics": topics}), encoding="utf-8")
 
 
-def test_handler_with_digests_emits_one_unit_per_topic(tmp_path):
+def test_handler_with_digests_emits_one_unit_per_topic(tmp_path: Path) -> None:
     _write_digests(tmp_path, "2026-08-06-15h20")
     payload = _handler({"manifest": _sample_manifest(), "repo_root": str(tmp_path)}, repo_root=None)
     assert [b["batchId"] for b in payload["batches"]] == ["topic-1", "topic-2"]
@@ -402,7 +403,7 @@ def test_handler_with_digests_emits_one_unit_per_topic(tmp_path):
     assert validate_workflow_input(payload) == []
 
 
-def test_handler_reports_only_the_over_tier_topic_digest(tmp_path):
+def test_handler_reports_only_the_over_tier_topic_digest(tmp_path: Path) -> None:
     import json
 
     from coordinator_core.distill.prompt_tier import BYTES_PER_TOKEN, LONG_PROMPT_TIER_TOKENS
@@ -420,7 +421,7 @@ def test_handler_reports_only_the_over_tier_topic_digest(tmp_path):
     assert "over_tier_batches" not in clean
 
 
-def test_handler_backlog_run_id_param_selects_the_digests(tmp_path):
+def test_handler_backlog_run_id_param_selects_the_digests(tmp_path: Path) -> None:
     _write_digests(tmp_path, "other-run")
     payload = _handler(
         {"manifest": _sample_manifest(), "repo_root": str(tmp_path), "backlog_run_id": "other-run"},
@@ -429,13 +430,13 @@ def test_handler_backlog_run_id_param_selects_the_digests(tmp_path):
     assert payload["batch_count"] == 2
 
 
-def test_handler_without_digests_keeps_per_file_batches(tmp_path):
+def test_handler_without_digests_keeps_per_file_batches(tmp_path: Path) -> None:
     payload = _handler({"manifest": _sample_manifest(), "repo_root": str(tmp_path)}, repo_root=None)
     assert [b["batchId"] for b in payload["batches"]] == ["batch-1", "batch-2"]
     assert all("topic" not in b for b in payload["batches"])
 
 
-def test_backlog_run_id_escaping_the_pass_dir_is_ignored(tmp_path):
+def test_backlog_run_id_escaping_the_pass_dir_is_ignored(tmp_path: Path) -> None:
     from coordinator_core.ops.distill_workflow_input import load_backlog_digests
 
     assert load_backlog_digests(tmp_path, "../x") is None

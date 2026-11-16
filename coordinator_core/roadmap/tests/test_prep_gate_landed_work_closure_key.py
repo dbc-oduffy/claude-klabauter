@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from coordinator_core.roadmap import prep_gate as pg
 from coordinator_core.roadmap.tests.test_prep_gate_four_legs import _CLEAN_FM, _write_plan
+from pathlib import Path
 
 _ROW = """- id: C1
   title: gated row
@@ -27,7 +28,7 @@ def _ext(tmp_path, extra: str, slug: str) -> dict:
     return pg.gate_plan(tmp_path, plan)["classes"]["EXTERNAL_DEPS"]
 
 
-def test_unkeyed_landed_work_gate_is_a_defect_naming_the_repair(tmp_path):
+def test_unkeyed_landed_work_gate_is_a_defect_naming_the_repair(tmp_path: Path) -> None:
     ext = _ext(tmp_path, "", "2026-10-03-unkeyed.md")
     assert ext["status"] == "DEFECT"
     assert ext["kind"] == "external-gate-unclearable"
@@ -35,14 +36,14 @@ def test_unkeyed_landed_work_gate_is_a_defect_naming_the_repair(tmp_path):
     assert "closure_key: {kind: deliverable|memo-thread, id}" in ext["detail"]
 
 
-def test_keyed_gate_passes_and_withholds(tmp_path):
+def test_keyed_gate_passes_and_withholds(tmp_path: Path) -> None:
     extra = "      closure_key: {kind: deliverable, id: d-1}\n"
     ext = _ext(tmp_path, extra, "2026-10-03-keyed.md")
     assert ext["status"] == "PASS"
     assert ext["withheld"] == ["C1"]
 
 
-def test_cleared_gate_passes_and_withholds_nothing(tmp_path):
+def test_cleared_gate_passes_and_withholds_nothing(tmp_path: Path) -> None:
     ext = _ext(tmp_path, "      cleared: true\n", "2026-10-03-cleared.md")
     assert ext["status"] == "PASS"
     assert ext["withheld"] == []

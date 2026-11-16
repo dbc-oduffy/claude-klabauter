@@ -130,6 +130,7 @@ def test_ratchet_sees_a_planted_module_name_reason_in_any_dispatch_emit_module(t
 # Emitted today but absent from the closed table: never refuses (is_refusal is False for it).
 _UNTABLED_NON_REFUSING = frozenset({
     landing_targeted_tests.ZERO_FAIL_UNATTRIBUTED,
+    landing_targeted_tests.INVARIANT_UNMEASURED,
     hunk_provenance.FOREIGN_HUNK_UNPRODUCED,
     # emit.py's plan-lint findings: raised at emit time, never on a landing path.
     "absent-edit-target",

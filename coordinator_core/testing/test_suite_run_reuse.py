@@ -4,13 +4,14 @@ import pytest
 
 from coordinator_core.testing import suite_run_record as srr
 from coordinator_core.testing import suite_run_reuse as reuse
+from pathlib import Path
 
 CMD = ["pytest", "-q"]
 SHA = "a" * 40
 
 
-def _setup(tmp_path, monkeypatch, *, fresh=True, command=None, outcome="pass",
-           truncated=False, log=True, slot="current"):
+def _setup(tmp_path, monkeypatch, *, fresh: bool = True, command=None, outcome: str = "pass",
+           truncated: bool = False, log: bool = True, slot: str = "current") -> Path:
     rec_dir = srr.record_dir(tmp_path, "default")
     rec_dir.mkdir(parents=True)
     if log:
@@ -30,13 +31,13 @@ def _setup(tmp_path, monkeypatch, *, fresh=True, command=None, outcome="pass",
     return rec_dir
 
 
-def test_fresh_record_is_reused(tmp_path, monkeypatch):
+def test_fresh_record_is_reused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rec_dir = _setup(tmp_path, monkeypatch)
     r = reuse.find_reusable(tmp_path, "default", CMD)
     assert r == reuse.Reuse("default", SHA, 0, "pass", None, str(rec_dir / "current.log"))
 
 
-def test_fail_outcome_is_reused(tmp_path, monkeypatch):
+def test_fail_outcome_is_reused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _setup(tmp_path, monkeypatch, outcome="fail")
     assert reuse.find_reusable(tmp_path, "default", CMD).exit_code == 1
 
@@ -45,30 +46,30 @@ def test_fail_outcome_is_reused(tmp_path, monkeypatch):
     {"fresh": False}, {"command": ["other"]}, {"outcome": "interrupted"},
     {"outcome": "timeout"}, {"truncated": True}, {"log": False}, {"slot": "previous"},
 ])
-def test_not_reusable(tmp_path, monkeypatch, kw):
+def test_not_reusable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kw) -> None:
     _setup(tmp_path, monkeypatch, **kw)
     assert reuse.find_reusable(tmp_path, "default", CMD) is None
 
 
-def test_no_record(tmp_path, monkeypatch):
+def test_no_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(reuse, "_suite_runs", lambda params: {"collections": {}})
     assert reuse.find_reusable(tmp_path, "default", CMD) is None
 
 
-def test_command_key_resolves_like_which(monkeypatch):
+def test_command_key_resolves_like_which(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(reuse.shutil, "which", lambda n: "/x/" + n)
     assert reuse.command_key(["a", "b"]) == ["/x/a", "b"]
     monkeypatch.setattr(reuse.shutil, "which", lambda n: None)
     assert reuse.command_key(["a", "b"]) == ["a", "b"]
 
 
-def test_line_formats():
+def test_line_formats() -> None:
     r = reuse.Reuse("c", SHA, 0, "pass", None, "/l")
     assert reuse.reused_line(r) == f"suite-run: reused c@{SHA} outcome=pass log=/l"
     assert reuse.ran_line("c", SHA, "fail", "/l") == f"suite-run: ran c@{SHA} outcome=fail log=/l"
 
 
-def test_git_head_and_dirty_parses_porcelain_v2(monkeypatch):
+def test_git_head_and_dirty_parses_porcelain_v2(monkeypatch: pytest.MonkeyPatch) -> None:
     out = (
         f"# branch.oid {SHA}\n# branch.head main\n"
         "1 .M N... 100644 100644 100644 aaa bbb dir/a.py\n"
@@ -82,7 +83,7 @@ def test_git_head_and_dirty_parses_porcelain_v2(monkeypatch):
     assert reuse._git_head_and_dirty("r") == (SHA, ["dir/a.py", "new.py", "conflict.py"])
 
 
-def test_git_head_and_dirty_git_failure(monkeypatch):
+def test_git_head_and_dirty_git_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         reuse.subprocess, "run",
         lambda *a, **k: reuse.subprocess.CompletedProcess(a, 128, stdout="", stderr="x"),
@@ -92,7 +93,7 @@ def test_git_head_and_dirty_git_failure(monkeypatch):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_tee_survives_log_write_failure(tmp_path):
+def test_tee_survives_log_write_failure(tmp_path: Path) -> None:
     import subprocess
     import sys
 
@@ -108,11 +109,11 @@ def test_tee_survives_log_write_failure(tmp_path):
     assert tee.finish() is True
 
 
-def test_record_run_swallows_failure(tmp_path, capsys):
+def test_record_run_swallows_failure(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     reuse.record_run(str(tmp_path), "Bad Name", CMD, SHA, [], "t", 0.0, 0, "pass", True, None, False)
     assert "suite-run record not written:" in capsys.readouterr().err
 
 
-def test_record_run_writes_current(tmp_path):
+def test_record_run_writes_current(tmp_path: Path) -> None:
     reuse.record_run(str(tmp_path), "default", CMD, SHA, [], "t", 0.0, 0, "pass", True, None, False)
     assert srr.read_runs(srr.record_dir(tmp_path, "default"))["current"]["outcome"] == "pass"

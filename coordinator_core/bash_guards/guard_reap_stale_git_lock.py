@@ -95,6 +95,7 @@ from typing import List, Optional, Tuple
 from coordinator_core.bash_guards.dispatch_checks import (
     _GIT_GLOBAL_OPT_NO_ARG_SIMPLE,
     _GIT_GLOBAL_OPT_WITH_ARG,
+    _awk_quote_aware_split,
     _bt_exceeds_tokenizable_ceiling,
     _crlf_strip,
     _normalize_executable_basename,
@@ -114,11 +115,6 @@ _LOCK_TAKING_SUBCOMMANDS = frozenset({
     "submodule", "read-tree", "update-index", "sparse-checkout",
 })
 
-#: Separator characters that split ``cmd`` into candidate git segments --
-#: same vocabulary ``guard_no_optional_locks._SEP_TOKEN_CHARS`` uses, not
-#: imported from there since that name is that module's own private detail.
-_SEP_CHARS = frozenset(";&|")
-
 #: Bound on the upward directory walk used to find an enclosing ``.git``
 #: when no ``-C``/``--git-dir`` override is present (see module docstring's
 #: COST DISCIPLINE section) -- large enough for any real repo nesting depth,
@@ -127,16 +123,8 @@ _MAX_UPWARD_WALK = 64
 
 
 def _split_segments(cmd: str) -> List[str]:
-    segs: List[str] = []
-    current: List[str] = []
-    for ch in cmd:
-        if ch in _SEP_CHARS:
-            segs.append("".join(current))
-            current = []
-        else:
-            current.append(ch)
-    segs.append("".join(current))
-    return segs
+    """Top-level command segments: quoted separators and heredoc bodies stay data."""
+    return _awk_quote_aware_split(cmd)
 
 
 def _seg_git_invocation(seg: str) -> Optional[Tuple[str, Optional[str], Optional[str]]]:

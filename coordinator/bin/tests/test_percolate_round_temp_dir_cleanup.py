@@ -13,6 +13,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = pytest.mark.complete
 
@@ -20,7 +24,7 @@ _BIN_DIR = Path(__file__).resolve().parent.parent
 _REPO_ROOT = _BIN_DIR.parent.parent
 
 
-def _load_module():
+def _load_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "percolate_round_temp_dir_cleanup", _BIN_DIR / "percolate-round.py"
     )
@@ -37,7 +41,7 @@ def _round_dirs(root: Path) -> list:
 
 
 @pytest.fixture
-def round_env(tmp_path, monkeypatch):
+def round_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     """Drive `_cmd_round` with every preflight green and tmp_path as the temp root."""
     monkeypatch.setattr(tempfile, "tempdir", str(tmp_path))
     if str(_REPO_ROOT) not in sys.path:
@@ -71,27 +75,27 @@ def round_env(tmp_path, monkeypatch):
     return SimpleNamespace(args=args, seen=seen, root=tmp_path)
 
 
-def test_success_removes_dir(round_env):
+def test_success_removes_dir(round_env) -> None:
     round_env.seen["action"] = lambda: 0
     assert _mod._cmd_round(round_env.args) == 0
     assert not round_env.seen["tmp"].exists()
     assert _round_dirs(round_env.root) == []
 
 
-def test_refusal_leaves_no_dir(round_env, monkeypatch):
+def test_refusal_leaves_no_dir(round_env, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_mod, "_registry_integrity_refusal", lambda *a, **k: "refused")
     round_env.seen["action"] = lambda: 0
     assert _mod._cmd_round(round_env.args) == _mod._EXIT_FAIL
     assert _round_dirs(round_env.root) == []
 
 
-def test_nonzero_return_removes_dir(round_env):
+def test_nonzero_return_removes_dir(round_env) -> None:
     round_env.seen["action"] = lambda: _mod._EXIT_FAIL
     assert _mod._cmd_round(round_env.args) == _mod._EXIT_FAIL
     assert _round_dirs(round_env.root) == []
 
 
-def test_raised_failure_removes_dir(round_env):
+def test_raised_failure_removes_dir(round_env) -> None:
     def _boom():
         raise RuntimeError("boom")
 
@@ -103,10 +107,10 @@ def test_raised_failure_removes_dir(round_env):
 
 @pytest.mark.skipif(not hasattr(signal, "SIGHUP"), reason="POSIX signals")
 @pytest.mark.parametrize("signame", ["SIGTERM", "SIGHUP"])
-def test_signal_unwinds_and_removes_dir(round_env, signame):
+def test_signal_unwinds_and_removes_dir(round_env, signame) -> None:
     prior = signal.getsignal(getattr(signal, signame))
 
-    def _kill_self():
+    def _kill_self() -> int:
         os.kill(os.getpid(), getattr(signal, signame))
         time.sleep(5)
         return 0
@@ -124,14 +128,14 @@ def _dead_pid() -> int:
     return proc.pid
 
 
-def test_dead_pid_dir_reaped_live_pid_dir_kept_at_round_start(round_env):
+def test_dead_pid_dir_reaped_live_pid_dir_kept_at_round_start(round_env) -> None:
     dead = round_env.root / f"percolate-round-{_dead_pid()}-abcd1234"
     live = round_env.root / f"percolate-round-{os.getpid()}-live0000"
     for d in (dead, live):
         d.mkdir()
         (d / "f.txt").write_text("x")
 
-    def _during():
+    def _during() -> int:
         assert not dead.exists()
         assert live.exists()
         return 0
@@ -142,7 +146,7 @@ def test_dead_pid_dir_reaped_live_pid_dir_kept_at_round_start(round_env):
     assert live.exists()
 
 
-def test_legacy_unstamped_dir_reaped_only_when_over_a_day_old(round_env):
+def test_legacy_unstamped_dir_reaped_only_when_over_a_day_old(round_env) -> None:
     old = round_env.root / "percolate-round-i98oqar_"
     fresh = round_env.root / "percolate-round-fresh123"
     for d in (old, fresh):

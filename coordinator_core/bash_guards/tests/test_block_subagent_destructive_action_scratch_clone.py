@@ -192,6 +192,65 @@ def test_drive_letter_dest_is_absolute_not_joined_onto_cwd(repo, source, spellin
     assert "F:" not in {entry.name for entry in repo.iterdir()}
 
 
+URL = "https://example.invalid/x/y.git"
+
+
+@pytest.mark.parametrize(
+    "tail", ["", "; echo ok", " && ls", " | tail -3", " 2>&1 | tail -3", " > /dev/null 2>&1; echo ok", " >out.log; echo ok"]
+)
+def test_absent_dest_clone_is_admitted_through_compound_chains(repo, tmp_path, tail):
+    dest = tmp_path / "ref-root" / "absent"
+    assert _run(f"git clone {URL} {_p(dest)}{tail}", repo) is None
+    assert _run(f"git clone --depth 1 -b main {URL} {_p(dest)}{tail}", repo) is None
+
+
+@pytest.mark.parametrize("tail", ["", "; echo ok", " && ls", " 2>&1 | tail"])
+def test_chained_clone_into_non_empty_dir_or_with_forbidden_flag_stays_denied(repo, tmp_path, tail):
+    full = tmp_path / "ref-root" / "full"
+    _occupy(full)
+    assert _run(f"git clone {URL} {_p(full)}{tail}", repo) is not None
+    assert _run(f"git clone --template=/x {URL} {_p(tmp_path / 'ref-root' / 'new')}{tail}", repo) is not None
+    assert _run(f"git clone -c core.hooksPath=/x {URL} {_p(tmp_path / 'ref-root' / 'new')}{tail}", repo) is not None
+
+
+def test_msys_drive_destination_is_translated_on_windows():
+    assert guard._msys_to_drive("/f/dev/x", True) == "F:/dev/x"
+    assert guard._msys_to_drive("/f", True) == "F:/"
+    assert guard._msys_to_drive("/f/dev/x", False) == "/f/dev/x"
+    assert guard._msys_to_drive("/usr/local/x", True) == "/usr/local/x"
+    assert guard._msys_to_drive("rel/x", True) == "rel/x"
+
+
+@pytest.mark.skipif(__import__("os").name != "nt", reason="msys drive spelling is a Windows concern")
+def test_msys_spelled_non_empty_destination_is_checked_not_joined_onto_cwd(repo, tmp_path):
+    full = tmp_path / "ref-root" / "full"
+    _occupy(full)
+    p = _p(full)
+    msys = f"/{p[0].lower()}{p[2:]}"
+    assert _run(f"git clone {URL} {msys}", repo) is not None
+    assert _run(f"git clone {URL} {msys}; echo ok", repo) is not None
+    assert _run(f"git clone {URL} {msys}-new; echo ok", repo) is None
+
+
+def test_denial_for_a_repointed_cwd_names_the_parser_trip_not_the_destination_rule(repo):
+    result = _run(f"cd {_p(repo)}/sub ; git clone {URL} fresh", repo)
+    assert result is not None
+    assert "working directory is unknown" in result.summary
+    assert "must be an empty or absent" not in result.summary
+
+
+def test_denial_for_unreadable_operands_names_the_parser_trip(repo, tmp_path):
+    result = _run(f"git clone {URL} {_p(tmp_path / 'a')} extra", repo)
+    assert result is not None
+    assert "could not read exactly one url and one destination" in result.summary
+
+
+def test_denial_for_a_refused_option_names_the_option(repo, tmp_path):
+    result = _run(f"git clone --template=/x {URL} {_p(tmp_path / 'a')}", repo)
+    assert result is not None
+    assert "are refused" in result.summary
+
+
 def test_drive_letter_classifier_is_host_independent():
     assert guard._DRIVE_ABS_RE.match("F:/dev/x") and guard._DRIVE_ABS_RE.match("f:\\dev")
     assert not guard._DRIVE_ABS_RE.match("dev/F:/x")

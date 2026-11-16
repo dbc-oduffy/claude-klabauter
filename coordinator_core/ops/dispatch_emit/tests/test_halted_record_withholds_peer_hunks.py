@@ -55,7 +55,7 @@ def _land_only(root) -> dict:
     )
 
 
-def test_a_product_path_carrying_a_peer_hunk_is_withheld_and_not_committed(repo):
+def test_a_product_path_carrying_a_peer_hunk_is_withheld_and_not_committed(repo) -> None:
     # The peer wrote line 2 before the run staged (it is in the baseline, uncommitted); the run wrote line 8.
     _halted_run(repo, baseline_text=_text({2: "PEER"}), tree_text=_text({2: "PEER", 8: "OWN"}))
 
@@ -66,7 +66,7 @@ def test_a_product_path_carrying_a_peer_hunk_is_withheld_and_not_committed(repo)
     assert (repo / SHARED).read_text(encoding="utf-8") == _text({2: "PEER", 8: "OWN"})
 
 
-def test_a_product_path_holding_only_the_runs_own_hunks_still_lands(repo):
+def test_a_product_path_holding_only_the_runs_own_hunks_still_lands(repo) -> None:
     _halted_run(repo, baseline_text=_text({}), tree_text=_text({8: "OWN"}))
 
     out = _land_only(repo)

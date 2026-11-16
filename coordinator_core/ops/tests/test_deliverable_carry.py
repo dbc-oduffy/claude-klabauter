@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 
-def _write_frontmatter(path, **fields):
+def _write_frontmatter(path, **fields) -> None:
     lines = ["---"]
     for key, value in fields.items():
         lines.append(f"{key}: {value}")
@@ -20,7 +25,7 @@ from coordinator_core.ops.deliverable_carry import (
 import pytest
 
 
-def test_live_chain_carries_the_positive_control(tmp_path):
+def test_live_chain_carries_the_positive_control(tmp_path: Path) -> None:
     handoff = tmp_path / "handoff.md"
     _write_frontmatter(
         handoff,
@@ -36,7 +41,7 @@ def test_live_chain_carries_the_positive_control(tmp_path):
 
 
 @pytest.mark.parametrize("terminal_state", sorted(HANDOFF_TERMINAL_DEPLOYMENT))
-def test_terminal_chain_falls_through_to_mint(tmp_path, terminal_state):
+def test_terminal_chain_falls_through_to_mint(tmp_path: Path, terminal_state) -> None:
     handoff = tmp_path / "handoff.md"
     _write_frontmatter(
         handoff,
@@ -48,7 +53,7 @@ def test_terminal_chain_falls_through_to_mint(tmp_path, terminal_state):
     assert resolve_session_chain_deliverable_id(read_frontmatter_field, str(handoff)) is None
 
 
-def test_claimed_status_alone_does_not_block_the_carry(tmp_path):
+def test_claimed_status_alone_does_not_block_the_carry(tmp_path: Path) -> None:
     """`status` is the wrong axis and this pins it. `claimed` is a member of
     HANDOFF_TERMINAL_STATUS *and* the status of every actively-worked
     handoff, so a gate written against `status` would disable the tier
@@ -64,7 +69,7 @@ def test_claimed_status_alone_does_not_block_the_carry(tmp_path):
     )
 
 
-def test_absent_deployment_state_carries(tmp_path):
+def test_absent_deployment_state_carries(tmp_path: Path) -> None:
     handoff = tmp_path / "handoff.md"
     _write_frontmatter(handoff, deliverable_id="dlv-no-deployment-state-ddd444")
 
@@ -74,7 +79,7 @@ def test_absent_deployment_state_carries(tmp_path):
     )
 
 
-def test_terminal_does_not_mean_the_chain_is_finished_and_the_gate_still_mints(tmp_path):
+def test_terminal_does_not_mean_the_chain_is_finished_and_the_gate_still_mints(tmp_path: Path) -> None:
     handoff = tmp_path / "handoff.md"
     _write_frontmatter(
         handoff,
@@ -86,7 +91,7 @@ def test_terminal_does_not_mean_the_chain_is_finished_and_the_gate_still_mints(t
     assert resolve_session_chain_deliverable_id(read_frontmatter_field, str(handoff)) is None
 
 
-def test_sizing_object_doc_type_declines_a_live_chain(tmp_path):
+def test_sizing_object_doc_type_declines_a_live_chain(tmp_path: Path) -> None:
     handoff = tmp_path / "handoff.md"
     _write_frontmatter(
         handoff,
@@ -103,7 +108,7 @@ def test_sizing_object_doc_type_declines_a_live_chain(tmp_path):
     )
 
 
-def test_sizing_object_gate_fires_before_touching_the_chain_path(tmp_path):
+def test_sizing_object_gate_fires_before_touching_the_chain_path(tmp_path: Path) -> None:
     missing_path = str(tmp_path / "does-not-exist.md")
 
     assert (
@@ -114,7 +119,7 @@ def test_sizing_object_gate_fires_before_touching_the_chain_path(tmp_path):
     )
 
 
-def test_non_sizing_doc_type_is_unaffected_by_the_gate(tmp_path):
+def test_non_sizing_doc_type_is_unaffected_by_the_gate(tmp_path: Path) -> None:
     handoff = tmp_path / "handoff.md"
     _write_frontmatter(
         handoff,
@@ -139,7 +144,7 @@ import importlib.util as _importlib_util  # noqa: E402
 from pathlib import Path as _Path  # noqa: E402
 
 
-def _load_coordinator_doc_new_module():
+def _load_coordinator_doc_new_module() -> ModuleType:
     _repo_root = _Path(__file__).resolve().parents[3]
     _module_path = _repo_root / "coordinator" / "bin" / "coordinator-doc-new.py"
     _spec = _importlib_util.spec_from_file_location(
@@ -151,8 +156,8 @@ def _load_coordinator_doc_new_module():
 
 
 def test_wrapper_threads_doc_type_into_the_engine_sizing_object_gate(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _module = _load_coordinator_doc_new_module()
 
     handoff = tmp_path / "handoff.md"

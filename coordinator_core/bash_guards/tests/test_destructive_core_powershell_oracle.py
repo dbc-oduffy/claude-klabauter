@@ -5,6 +5,7 @@ import json
 import os
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -104,7 +105,7 @@ class TestVocabularyDetail:
 
 class TestBashLegUnchanged:
 
-    def test_bash_rm_of_ordinary_file_untouched(self, tmp_path, repo_cwd) -> None:
+    def test_bash_rm_of_ordinary_file_untouched(self, tmp_path: Path, repo_cwd) -> None:
         scratch = tmp_path / "scratch-oracle-file.txt"
         scratch.write_text("scratch")
         assert not _denies("rm %s" % scratch, "Bash", repo_cwd)
@@ -130,7 +131,7 @@ class TestDestructiveGitOrphanForcePush:
 class TestBlanketGitAdd:
 
     @pytest.fixture(autouse=True)
-    def _checkout_is_a_registered_fleet_repo(self, repo_cwd, tmp_path, monkeypatch) -> None:
+    def _checkout_is_a_registered_fleet_repo(self, repo_cwd, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The blanket-add guard denies only inside a repo the machine registry lists, so the
         checkout under test is registered in an isolated registry dir."""
         (tmp_path / "registry.local.toml").write_text(

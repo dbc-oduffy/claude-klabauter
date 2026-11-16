@@ -14,6 +14,7 @@ from coordinator_core.ops.dispatch_emit import kept_work as k
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -63,7 +64,7 @@ def _run_wrap(wrap: str, stopped: list, halted, rows: dict, by_hold: bool = Fals
     return json.loads(proc.stdout.splitlines()[-1])
 
 
-def test_the_reason_names_the_row_and_its_reply_and_the_entry_joins_the_returns(monkeypatch):
+def test_the_reason_names_the_row_and_its_reply_and_the_entry_joins_the_returns(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run_wrap(_wrap(_script(monkeypatch)), ["C1"], "C1", {"C1": "BLOCKED: C1 needs the seam\nSTOP-RULE-FIRED: x"})
     h = out["halted"]
     assert h["halted"] == "stop_rule" and h["stopped_rows"] == ["C1"]
@@ -71,13 +72,13 @@ def test_the_reason_names_the_row_and_its_reply_and_the_entry_joins_the_returns(
     assert out["consumed"] == {"C1": "BLOCKED: C1 needs the seam\nSTOP-RULE-FIRED: x"}
 
 
-def test_a_row_that_returned_nothing_says_so_in_both(monkeypatch):
+def test_a_row_that_returned_nothing_says_so_in_both(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run_wrap(_wrap(_script(monkeypatch)), ["C1"], "C1", {"C1": None})
     assert out["halted"]["reason"] == "stop rule fired on C1: returned nothing"
     assert out["consumed"] == {"C1": "returned nothing"}
 
 
-def test_the_reply_in_the_reason_is_truncated_and_a_consumed_entry_is_kept(monkeypatch):
+def test_the_reply_in_the_reason_is_truncated_and_a_consumed_entry_is_kept(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run_wrap(
         _wrap(_script(monkeypatch)), ["C1"], "C1", {"C1": "x" * 5000}, consumed={"C1": "DONE: kept"}
     )
@@ -85,7 +86,7 @@ def test_the_reply_in_the_reason_is_truncated_and_a_consumed_entry_is_kept(monke
     assert out["consumed"] == {"C1": "DONE: kept"}
 
 
-def test_a_held_dependents_halt_keeps_its_reason_and_adds_no_return(monkeypatch):
+def test_a_held_dependents_halt_keeps_its_reason_and_adds_no_return(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run_wrap(
         _wrap(_script(monkeypatch)), ["C1"], "dependents unstarted: Y (held by X)", {"C1": "STOP"}, by_hold=True
     )
@@ -94,13 +95,13 @@ def test_a_held_dependents_halt_keeps_its_reason_and_adds_no_return(monkeypatch)
     assert out["halted"]["stopped_rows"] == [] and out["consumed"] == {}
 
 
-def test_the_consumed_returns_fill_site_stays_single(monkeypatch):
+def test_the_consumed_returns_fill_site_stays_single(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert script.count("_consumedReturns[") == 1
     assert script.index(_OPEN) > script.index("await Promise.all(_verifications);")
 
 
-def test_the_record_writes_the_stopped_row_return_but_does_not_keep_it_as_finished(tmp_path):
+def test_the_record_writes_the_stopped_row_return_but_does_not_keep_it_as_finished(tmp_path: Path) -> None:
     (tmp_path / ".git" / "objects").mkdir(parents=True)
     (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     (tmp_path / "rec").mkdir()
@@ -115,7 +116,7 @@ def test_the_record_writes_the_stopped_row_return_but_does_not_keep_it_as_finish
     assert "C1" not in kept["chunks"] and "C2" in kept["chunks"]
 
 
-def test_without_the_stopped_marker_a_returned_row_is_kept_as_finished(tmp_path):
+def test_without_the_stopped_marker_a_returned_row_is_kept_as_finished(tmp_path: Path) -> None:
     (tmp_path / ".git" / "objects").mkdir(parents=True)
     (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     (tmp_path / "rec").mkdir()

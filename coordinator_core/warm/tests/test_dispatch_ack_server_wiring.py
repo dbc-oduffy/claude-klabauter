@@ -12,7 +12,7 @@ pytestmark = [pytest.mark.cadence]
 
 
 class _FakeIO:
-    def __init__(self, lines):
+    def __init__(self, lines) -> None:
         self._lines = list(lines)
         self.written: list[bytes] = []
         self.closed = False
@@ -33,7 +33,7 @@ class _FakeIO:
 
 
 class _FakeVersionState:
-    def __init__(self, *, skewed: bool = False):
+    def __init__(self, *, skewed: bool = False) -> None:
         self._skewed = skewed
 
     def is_skewed(self, client_token: str) -> bool:
@@ -43,7 +43,7 @@ class _FakeVersionState:
         return self.is_skewed(client_token)
 
 
-def _frame(*, id_=1, method="ceremony.commit_v2", extra=None, token="client-token") -> bytes:
+def _frame(*, id_: int = 1, method: str = "ceremony.commit_v2", extra=None, token: str = "client-token") -> bytes:
     msg = {"jsonrpc": "2.0", "id": id_, "method": method, "params": {}}
     if token is not None:
         msg["_engine_token"] = token
@@ -56,7 +56,7 @@ def _written(io_obj: _FakeIO) -> list[dict]:
     return [json.loads(line) for line in io_obj.written]
 
 
-def _run_serve_line(io_obj, *, dispatch, version_state=None):
+def _run_serve_line(io_obj, *, dispatch, version_state=None) -> None:
     server._handle_connection(
         io_obj,
         version_state=version_state or _FakeVersionState(),
@@ -69,13 +69,13 @@ def _run_serve_line(io_obj, *, dispatch, version_state=None):
 
 
 @pytest.fixture(autouse=True)
-def _fresh_ack_store(monkeypatch):
+def _fresh_ack_store(monkeypatch: pytest.MonkeyPatch):
     store = dispatch_ack.AckStore(boot_ns=0)
     monkeypatch.setattr(server, "_ack_store", store)
     return store
 
 
-def test_request_status_is_answered_without_reaching_dispatch(_fresh_ack_store):
+def test_request_status_is_answered_without_reaching_dispatch(_fresh_ack_store) -> None:
     def _must_not_run(*_a, **_k):  # pragma: no cover
         raise AssertionError("warm.request_status must never reach dispatch()")
 
@@ -88,7 +88,7 @@ def test_request_status_is_answered_without_reaching_dispatch(_fresh_ack_store):
     assert "engine_pid" in response["result"]
 
 
-def test_request_status_reflects_an_admitted_key(_fresh_ack_store):
+def test_request_status_reflects_an_admitted_key(_fresh_ack_store) -> None:
     _fresh_ack_store.admit("1-500", "ceremony.commit_v2")
 
     def _noop(*_a, **_k):  # pragma: no cover
@@ -101,7 +101,7 @@ def test_request_status_reflects_an_admitted_key(_fresh_ack_store):
     assert response["result"]["state"] == dispatch_ack.STATE_EXECUTING
 
 
-def test_a_keyed_mutating_frame_is_admitted_before_dispatch_runs(_fresh_ack_store):
+def test_a_keyed_mutating_frame_is_admitted_before_dispatch_runs(_fresh_ack_store) -> None:
     seen_key = {}
 
     def _dispatch(msg, *, caller=None, dispatch_key=None):
@@ -116,7 +116,7 @@ def test_a_keyed_mutating_frame_is_admitted_before_dispatch_runs(_fresh_ack_stor
     assert _written(io_obj)[0]["result"] == "ok"
 
 
-def test_a_replayed_key_is_refused_with_the_tombstone_code_never_dispatched(_fresh_ack_store):
+def test_a_replayed_key_is_refused_with_the_tombstone_code_never_dispatched(_fresh_ack_store) -> None:
     _fresh_ack_store.admit("1-777", "ceremony.commit_v2")
 
     def _must_not_run(*_a, **_k):  # pragma: no cover
@@ -129,7 +129,7 @@ def test_a_replayed_key_is_refused_with_the_tombstone_code_never_dispatched(_fre
     assert response["error"]["code"] == server.DISPATCH_KEY_TOMBSTONED_ERROR
 
 
-def test_an_unkeyed_frame_is_dispatched_exactly_as_today_and_recorded_nowhere(_fresh_ack_store):
+def test_an_unkeyed_frame_is_dispatched_exactly_as_today_and_recorded_nowhere(_fresh_ack_store) -> None:
     calls = []
 
     def _dispatch(msg, *, caller=None):
@@ -143,7 +143,7 @@ def test_an_unkeyed_frame_is_dispatched_exactly_as_today_and_recorded_nowhere(_f
     assert _written(io_obj)[0]["result"] == "ok"
 
 
-def test_a_compute_only_method_is_never_admitted(_fresh_ack_store, monkeypatch):
+def test_a_compute_only_method_is_never_admitted(_fresh_ack_store, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "_op_may_mutate", lambda method: False)
     calls = []
 
@@ -158,7 +158,7 @@ def test_a_compute_only_method_is_never_admitted(_fresh_ack_store, monkeypatch):
     assert _fresh_ack_store.status("1-999")["state"] == dispatch_ack.STATE_NOT_RECEIVED
 
 
-def test_settings_home_refusal_stamps_not_dispatched_handler_never_ran(_fresh_ack_store, monkeypatch):
+def test_settings_home_refusal_stamps_not_dispatched_handler_never_ran(_fresh_ack_store, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm.caller_context import CallerContext
 
     handler_ran = []
@@ -187,7 +187,7 @@ def test_settings_home_refusal_stamps_not_dispatched_handler_never_ran(_fresh_ac
 
 class _DoneFuture:
 
-    def __init__(self, *, result=None, exception=None, cancelled=False):
+    def __init__(self, *, result=None, exception=None, cancelled: bool = False) -> None:
         self._result = result
         self._exception = exception
         self._cancelled = cancelled
@@ -200,11 +200,11 @@ class _DoneFuture:
     def exception(self, timeout=None):
         return self._exception
 
-    def cancelled(self):
+    def cancelled(self) -> bool:
         return self._cancelled
 
 
-def test_pool_worker_marker_stamps_not_dispatched_and_marker_never_reaches_the_wire(_fresh_ack_store):
+def test_pool_worker_marker_stamps_not_dispatched_and_marker_never_reaches_the_wire(_fresh_ack_store) -> None:
     _fresh_ack_store.admit("1-555", "ceremony.commit_v2")
     envelope = {"jsonrpc": "2.0", "id": 1, "result": "ok", server._NOT_DISPATCHED_MARKER: True}
 
@@ -217,22 +217,22 @@ def test_pool_worker_marker_stamps_not_dispatched_and_marker_never_reaches_the_w
 
 
 class _CancellableFuture:
-    def __init__(self):
+    def __init__(self) -> None:
         self.cancel_called = False
         self._callbacks = []
 
     def result(self, timeout=None):
         raise concurrent.futures.TimeoutError()
 
-    def cancel(self):
+    def cancel(self) -> bool:
         self.cancel_called = True
         return True
 
-    def add_done_callback(self, fn):
+    def add_done_callback(self, fn) -> None:
         self._callbacks.append(fn)
         fn(self)
 
-    def cancelled(self):
+    def cancelled(self) -> bool:
         return True
 
     def exception(self, timeout=None):
@@ -240,14 +240,14 @@ class _CancellableFuture:
 
 
 class _Pool:
-    def __init__(self, future):
+    def __init__(self, future) -> None:
         self.future = future
 
     def submit(self, *_a, **_k):
         return self.future
 
 
-def test_successful_cancel_stamps_not_dispatched_never_executing(_fresh_ack_store, monkeypatch):
+def test_successful_cancel_stamps_not_dispatched_never_executing(_fresh_ack_store, monkeypatch: pytest.MonkeyPatch) -> None:
     _fresh_ack_store.admit("1-888", "ceremony.commit_v2")
     fut = _CancellableFuture()
 
@@ -266,7 +266,7 @@ def test_successful_cancel_stamps_not_dispatched_never_executing(_fresh_ack_stor
     assert status == {"state": dispatch_ack.STATE_NOT_RECEIVED, "outcome": dispatch_ack.OUTCOME_NOT_DISPATCHED}
 
 
-def test_ipc_internal_op_timeout_stamps_abandoned_via_run_dispatch(_fresh_ack_store, monkeypatch):
+def test_ipc_internal_op_timeout_stamps_abandoned_via_run_dispatch(_fresh_ack_store, monkeypatch: pytest.MonkeyPatch) -> None:
     _fresh_ack_store.admit("1-111", "ceremony.commit_v2")
 
     async def _fake_dispatch_message(msg, *, caller=None, corr_id=None):
@@ -290,7 +290,7 @@ def test_ipc_internal_op_timeout_stamps_abandoned_via_run_dispatch(_fresh_ack_st
     assert status["state"] != dispatch_ack.STATE_NOT_RECEIVED
 
 
-def test_broken_process_pool_stamps_worker_lost_for_a_mutating_op(_fresh_ack_store, monkeypatch):
+def test_broken_process_pool_stamps_worker_lost_for_a_mutating_op(_fresh_ack_store, monkeypatch: pytest.MonkeyPatch) -> None:
     _fresh_ack_store.admit("1-222", "ceremony.commit_v2")
 
     class _BrokenPool:

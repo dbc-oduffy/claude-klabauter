@@ -4,6 +4,7 @@ import pytest
 
 import coordinator_core.pickup_assemble as pa
 from coordinator_core.session import core as _session_core
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence]
 
@@ -12,7 +13,7 @@ _SERVER_OWNER = "aaaaaaaa-1111-4111-8111-aaaaaaaaaaaa"
 
 class TestReportWarmUncarriedResolve:
 
-    def test_fires_when_warm_and_uncarried(self, monkeypatch, capsys):
+    def test_fires_when_warm_and_uncarried(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         for var in _session_core.SESSION_ENV_PRECEDENCE:
             monkeypatch.setenv(var, _SERVER_OWNER)
         with _session_core.warm_served_request():
@@ -21,7 +22,7 @@ class TestReportWarmUncarriedResolve:
         assert "pickup_assemble.some_site" in err
         assert "report-only, not refused" in err
 
-    def test_silent_when_carried(self, monkeypatch, capsys):
+    def test_silent_when_carried(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         for var in _session_core.SESSION_ENV_PRECEDENCE:
             monkeypatch.setenv(var, _SERVER_OWNER)
         with _session_core.warm_served_request():
@@ -29,7 +30,7 @@ class TestReportWarmUncarriedResolve:
                 pa._report_warm_uncarried_resolve("some_site")
         assert capsys.readouterr().err == ""
 
-    def test_silent_when_cold(self, monkeypatch, capsys):
+    def test_silent_when_cold(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         for var in _session_core.SESSION_ENV_PRECEDENCE:
             monkeypatch.setenv(var, _SERVER_OWNER)
         pa._report_warm_uncarried_resolve("some_site")
@@ -39,8 +40,8 @@ class TestReportWarmUncarriedResolve:
 class TestFinishUnificationClaimsReportsButNeverRefuses:
 
     def test_reports_and_still_claims_successor_under_warm_uncarried(
-        self, tmp_path, monkeypatch, capsys
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         claimed = []
         released = []
         monkeypatch.setattr(

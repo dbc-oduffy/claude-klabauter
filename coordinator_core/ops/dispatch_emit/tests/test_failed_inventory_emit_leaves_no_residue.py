@@ -78,7 +78,8 @@ def test_refused_emits_then_success_keep_script_and_spine_tranche_numbers_equal(
     assert not list(inventory.parent.glob("*-t[2-9].md"))
 
 
-def test_session_bearing_emit_with_no_resolvable_git_root_does_not_raise_type_error(tmp_path, monkeypatch):
+def test_session_bearing_emit_with_no_resolvable_git_root_still_refuses_foreign_emission(tmp_path, monkeypatch):
+    """Pins only the None-root guard on the review-targets ledgering; rollback of a tracked targets file is not asserted here."""
     inventory = _inventory(tmp_path)
     out = inventory.parent / "20261008T000000-tr-t1.workflow.mjs"
     out.write_text("// someone else's script\n", encoding="utf-8")

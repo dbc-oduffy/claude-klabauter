@@ -6,9 +6,10 @@ from types import SimpleNamespace
 
 from coordinator_core.ops.dispatch_emit import cli as cli_module
 from coordinator_core.ops.dispatch_emit import inventory_mint as im
+import pytest
 
 
-def test_part_script_name_carries_exactly_the_spine_part_id(tmp_path, monkeypatch):
+def test_part_script_name_carries_exactly_the_spine_part_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tranche = tmp_path / "run7-t3.md"
     tranche.write_text("---\nrun_id: run7-t3\n---\n", encoding="utf-8")
     seen = []

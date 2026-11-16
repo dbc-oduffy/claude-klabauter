@@ -8,20 +8,21 @@ import pytest
 
 from coordinator_core.ops import review_tripwires as rt
 from coordinator_core.ops.tests.test_review_tripwires import EDITED, _repo
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence]
 
 BODY = 'X = "run_pass.py"\n'
 
 
-def test_only_the_tracked_module_is_opened(tmp_path, monkeypatch):
+def test_only_the_tracked_module_is_opened(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path, {"tests/test_tracked.py": BODY})
     for i in range(5000):
         (repo / "tests" / f"test_untracked_{i}.py").write_text(BODY, encoding="utf-8")
     opened = []
     real_open = os.open
 
-    def counting_open(path, *a, **kw):
+    def counting_open(path, *a, **kw) -> int:
         if os.path.basename(str(path)).startswith("test_"):
             opened.append(str(path))
         return real_open(path, *a, **kw)
@@ -31,26 +32,26 @@ def test_only_the_tracked_module_is_opened(tmp_path, monkeypatch):
     assert len(opened) == 1
 
 
-def test_untracked_module_holding_the_literal_is_not_selected(tmp_path):
+def test_untracked_module_holding_the_literal_is_not_selected(tmp_path: Path) -> None:
     repo = _repo(tmp_path, {"tests/test_a.py": "X = 1\n"})
     (repo / "tests" / "test_b.py").write_text(BODY, encoding="utf-8")
     assert rt.literal_namers(repo, [EDITED]) == {}
 
 
-def test_split_index_raises_scan_unavailable(tmp_path):
+def test_split_index_raises_scan_unavailable(tmp_path: Path) -> None:
     repo = _repo(tmp_path, {"tests/test_a.py": BODY})
     (repo / ".git" / "sharedindex.abc").write_bytes(b"")
     with pytest.raises(rt.TripwireScanUnavailable):
         rt.literal_namers(repo, [EDITED])
 
 
-def test_absent_index_is_empty_not_an_error(tmp_path):
+def test_absent_index_is_empty_not_an_error(tmp_path: Path) -> None:
     repo = _repo(tmp_path, {"tests/test_a.py": BODY}, track=False)
     (repo / ".git").mkdir()
     assert rt.literal_namers(repo, [EDITED]) == {}
 
 
-def test_tracked_hidden_and_pycache_dirs_still_skipped(tmp_path):
+def test_tracked_hidden_and_pycache_dirs_still_skipped(tmp_path: Path) -> None:
     repo = _repo(
         tmp_path,
         {
@@ -66,7 +67,7 @@ def _opens(monkeypatch):
     opened = []
     real_open = os.open
 
-    def counting_open(path, *a, **kw):
+    def counting_open(path, *a, **kw) -> int:
         if os.path.basename(str(path)).startswith("test_"):
             opened.append(str(path))
         return real_open(path, *a, **kw)
@@ -75,7 +76,7 @@ def _opens(monkeypatch):
     return opened
 
 
-def test_scan_tracked_is_the_union_of_both_scanners_from_one_read(tmp_path, monkeypatch):
+def test_scan_tracked_is_the_union_of_both_scanners_from_one_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     files = {
         "tests/test_names.py": BODY,
         "tests/test_walks.py": 'import pathlib\nlist(pathlib.Path(".").rglob("*"))\nD = "pkg/sub"\n',
@@ -90,7 +91,7 @@ def test_scan_tracked_is_the_union_of_both_scanners_from_one_read(tmp_path, monk
     assert len(opened) == len(files)
 
 
-def test_scan_tracked_with_nothing_to_look_for_reads_nothing(tmp_path, monkeypatch):
+def test_scan_tracked_with_nothing_to_look_for_reads_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path, {"tests/test_a.py": BODY})
     opened = _opens(monkeypatch)
     assert rt.scan_tracked(repo, [], []) == []

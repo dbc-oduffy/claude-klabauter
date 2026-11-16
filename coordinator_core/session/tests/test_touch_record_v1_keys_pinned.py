@@ -3,6 +3,7 @@
 import json
 
 from coordinator_core.session import touch_record
+from pathlib import Path
 
 CONTRACT = "coordinator_core/contract/touch-record-v1-producer-contract.md"
 ALWAYS = {"v", "verb", "ts", "sid", "agent", "path"}
@@ -13,11 +14,11 @@ def _read(sink):
     return [json.loads(line) for line in sink.read_text(encoding="utf-8").splitlines()]
 
 
-def _msg(keys):
+def _msg(keys) -> str:
     return f"touch-record key set drifted to {sorted(keys)}; update {CONTRACT} and its version policy"
 
 
-def test_minimal_line_emits_exactly_the_always_keys(tmp_path):
+def test_minimal_line_emits_exactly_the_always_keys(tmp_path: Path) -> None:
     sink = tmp_path / "sid1" / touch_record.RECORD_FILENAME
     touch_record.append_event(
         sink, session_id="sid1", agent_id=None, verb="T", path="a/b.py",
@@ -28,7 +29,7 @@ def test_minimal_line_emits_exactly_the_always_keys(tmp_path):
     assert rec["v"] == 1 and rec["agent"] is None
 
 
-def test_full_line_emits_always_plus_optional_keys(tmp_path):
+def test_full_line_emits_always_plus_optional_keys(tmp_path: Path) -> None:
     sink = tmp_path / ".agents" / "ag1" / touch_record.RECORD_FILENAME
     touch_record.append_event(
         sink, session_id="sid1", agent_id="ag1", verb="T", path="a/b.py",
@@ -39,7 +40,7 @@ def test_full_line_emits_always_plus_optional_keys(tmp_path):
     assert rec["sid"] == "sid1" and rec["agent"] == "ag1"
 
 
-def test_release_line_and_filename_pinned(tmp_path):
+def test_release_line_and_filename_pinned(tmp_path: Path) -> None:
     assert touch_record.RECORD_FILENAME == "touch-record.jsonl", CONTRACT
     sink = tmp_path / "sid1" / touch_record.RECORD_FILENAME
     touch_record.append_event(

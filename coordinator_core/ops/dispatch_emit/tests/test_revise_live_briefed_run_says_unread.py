@@ -9,6 +9,8 @@ import yaml
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+from pathlib import Path
+import pytest
 
 RUN = "ask-20261015T000000-abc123"
 REL = "state/sizings/2026-10-15-revise.yaml"
@@ -34,7 +36,7 @@ def _revise(root, monkeypatch):
     return rl._handler({"run_id": RUN, "verbatim": "also cover Windows"}, repo_root=root)
 
 
-def test_briefed_live_run_says_the_revise_will_not_be_read(tmp_path, monkeypatch):
+def test_briefed_live_run_says_the_revise_will_not_be_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     manifest = {"rows": [{"id": "X1", "brief_path": "scratch/warp/x/briefs/X1.md"}]}
     (record_dir(root, RUN) / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
@@ -43,7 +45,7 @@ def test_briefed_live_run_says_the_revise_will_not_be_read(tmp_path, monkeypatch
     assert "no row brief reads this revision" in out["note"]
 
 
-def test_unbriefed_live_run_names_the_late_row_leg(tmp_path, monkeypatch):
+def test_unbriefed_live_run_names_the_late_row_leg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     out = _revise(root, monkeypatch)
     assert out["run_live"] is True
@@ -51,7 +53,7 @@ def test_unbriefed_live_run_names_the_late_row_leg(tmp_path, monkeypatch):
     assert out["item"]
 
 
-def test_manifest_without_briefs_is_unbriefed(tmp_path, monkeypatch):
+def test_manifest_without_briefs_is_unbriefed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     (record_dir(root, RUN) / "manifest.json").write_text(json.dumps({"rows": []}), encoding="utf-8")
     out = _revise(root, monkeypatch)

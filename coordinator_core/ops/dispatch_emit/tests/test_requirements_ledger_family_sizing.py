@@ -7,6 +7,7 @@ import yaml
 
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 REL = "state/sizings/2026-10-01-family.yaml"
 RUN = "ask-20261001T000000-cccccc"
@@ -39,7 +40,7 @@ def _texts(repo):
     return [r["source_text"] for r in rr.read_register((repo / REL).read_text(encoding="utf-8")).rows]
 
 
-def test_verbatim_records_on_a_family_sizing(tmp_path, monkeypatch):
+def test_verbatim_records_on_a_family_sizing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path, monkeypatch, family="agy")
     before = _texts(repo)
     rl.revise(repo, RUN, verbatim="do the other thing")
@@ -47,7 +48,7 @@ def test_verbatim_records_on_a_family_sizing(tmp_path, monkeypatch):
     assert yaml.safe_load((repo / REL).read_text(encoding="utf-8"))["family"] == "agy"
 
 
-def test_other_unknown_key_still_refuses(tmp_path, monkeypatch):
+def test_other_unknown_key_still_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path, monkeypatch, bogus_key="x")
     with pytest.raises(rl.LedgerRefused, match="bogus_key"):
         rl.revise(repo, RUN, verbatim="do the other thing")

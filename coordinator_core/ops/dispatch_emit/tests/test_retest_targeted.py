@@ -13,7 +13,7 @@ from coordinator_core.testing.git_write import write_seen_by_git
 
 
 @pytest.fixture(autouse=True)
-def _ambient_spawn_depth_is_zero(monkeypatch):
+def _ambient_spawn_depth_is_zero(monkeypatch: pytest.MonkeyPatch) -> None:
     """A suite run by an engine spawner carries depth 1; these tests set their own depth."""
     from coordinator_core.testing import spawn_depth
 
@@ -33,7 +33,7 @@ def _git(root: Path, *args: str) -> None:
 
 
 @pytest.fixture(scope="session")
-def _repo_template(tmp_path_factory):
+def _repo_template(tmp_path_factory: pytest.TempPathFactory) -> Path:
     tpl = tmp_path_factory.mktemp("retest-tpl") / "repo"
     tpl.mkdir()
     _git(tpl, "init", "-q")
@@ -46,7 +46,7 @@ def _repo_template(tmp_path_factory):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch, _repo_template):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _repo_template) -> Path:
     import shutil
 
     root = tmp_path / "repo"
@@ -65,7 +65,7 @@ def _task_output(tmp_path: Path, baseline=None) -> Path:
     return out
 
 
-def test_pass_writes_verdict_the_gate_accepts(repo, tmp_path):
+def test_pass_writes_verdict_the_gate_accepts(repo, tmp_path: Path) -> None:
     (repo / "dirty.txt").write_text("x", encoding="utf-8")
     seen = []
     rc = retest_targeted.main(
@@ -81,7 +81,7 @@ def test_pass_writes_verdict_the_gate_accepts(repo, tmp_path):
     assert li.landing_test_gate(repo, {"targeted_tests": {"status": "fail", "baseline": None}}, RUN_ID)[1] == "pass-on-retest"
 
 
-def test_fail_writes_status_fail_and_exits_1(repo, tmp_path):
+def test_fail_writes_status_fail_and_exits_1(repo, tmp_path: Path) -> None:
     rc = retest_targeted.main(
         ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"],
         run=lambda argv, cwd, **_kw: 1,
@@ -90,7 +90,7 @@ def test_fail_writes_status_fail_and_exits_1(repo, tmp_path):
     assert li.fresh_targeted_verdict(repo, RUN_ID)["status"] == "fail"
 
 
-def test_caused_node_ids_name_the_tests(repo, tmp_path):
+def test_caused_node_ids_name_the_tests(repo, tmp_path: Path) -> None:
     out = _task_output(tmp_path, baseline={"caused": ["test_a.py::test_a"]})
     seen = []
     retest_targeted.main(
@@ -100,7 +100,7 @@ def test_caused_node_ids_name_the_tests(repo, tmp_path):
     assert seen and seen[0][-1] == "test_a.py"
 
 
-def test_no_targeted_set_writes_stale_note(repo, tmp_path, capsys):
+def test_no_targeted_set_writes_stale_note(repo, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = retest_targeted.main(
         ["--from-task-output", str(_task_output(tmp_path)), "--repo-root", str(repo)],
         run=lambda argv, cwd, **_kw: pytest.fail("must not run"),
@@ -112,7 +112,7 @@ def test_no_targeted_set_writes_stale_note(repo, tmp_path, capsys):
     assert "stale" in capsys.readouterr().out
 
 
-def test_pathless_failure_reruns_recorded_targeted_set(repo, tmp_path):
+def test_pathless_failure_reruns_recorded_targeted_set(repo, tmp_path: Path) -> None:
     out = _task_output(tmp_path)
     data = json.loads(out.read_text(encoding="utf-8"))
     data["next_action"]["params"]["targeted_tests"]["tests"] = ["test_a.py::test_a"]
@@ -127,7 +127,7 @@ def test_pathless_failure_reruns_recorded_targeted_set(repo, tmp_path):
 
 
 @pytest.mark.parametrize("value", ["test_a.py test_b.py", "test_a.py,test_b.py", "test_a.py, test_b.py"])
-def test_combined_tests_value_is_split_into_paths(repo, tmp_path, value):
+def test_combined_tests_value_is_split_into_paths(repo, tmp_path: Path, value) -> None:
     (repo / "test_b.py").write_text("def test_b():\n    pass\n", encoding="utf-8")
     seen = []
     rc = retest_targeted.main(
@@ -138,7 +138,7 @@ def test_combined_tests_value_is_split_into_paths(repo, tmp_path, value):
     assert li.fresh_targeted_verdict(repo, RUN_ID)["tests"] == ["test_a.py", "test_b.py"]
 
 
-def test_missing_target_is_dropped_with_a_note_and_the_rest_runs(repo, tmp_path, capsys):
+def test_missing_target_is_dropped_with_a_note_and_the_rest_runs(repo, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     seen = []
     rc = retest_targeted.main(
         ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py,nope.py", "--repo-root", str(repo), "--detached-child"],
@@ -151,7 +151,7 @@ def test_missing_target_is_dropped_with_a_note_and_the_rest_runs(repo, tmp_path,
     assert record["dropped"] == ["nope.py"] and "nope.py" in record["note"]
 
 
-def test_all_targets_missing_records_no_tests_not_error(repo, tmp_path):
+def test_all_targets_missing_records_no_tests_not_error(repo, tmp_path: Path) -> None:
     rc = retest_targeted.main(
         ["--from-task-output", str(_task_output(tmp_path)), "--tests", "nope.py", "--repo-root", str(repo)],
         run=lambda argv, cwd, **_kw: pytest.fail("must not run"),
@@ -163,7 +163,7 @@ def test_all_targets_missing_records_no_tests_not_error(repo, tmp_path):
     assert record["dropped"] == ["nope.py"] and "nope.py" in record["note"]
 
 
-def test_launcher_collecting_nothing_records_no_tests(repo, tmp_path):
+def test_launcher_collecting_nothing_records_no_tests(repo, tmp_path: Path) -> None:
     rc = retest_targeted.main(
         ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"],
         run=lambda argv, cwd, **_kw: 5,
@@ -173,7 +173,7 @@ def test_launcher_collecting_nothing_records_no_tests(repo, tmp_path):
     assert record["status"] == "no-tests" and record["tests_run"] == 0 and "test_a.py" in record["reason"]
 
 
-def test_marker_filter_is_stripped_so_a_named_cadence_file_runs(repo, tmp_path, monkeypatch):
+def test_marker_filter_is_stripped_so_a_named_cadence_file_runs(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "test_slow.py").write_text(
         "import pytest\n\n@pytest.mark.cadence\ndef test_slow():\n    pass\n", encoding="utf-8")
     (repo / "pytest.ini").write_text("[pytest]\nmarkers = cadence\n", encoding="utf-8")
@@ -187,13 +187,13 @@ def test_marker_filter_is_stripped_so_a_named_cadence_file_runs(repo, tmp_path, 
     assert rc == 0 and record["status"] == "pass"
 
 
-def test_strip_drops_marker_filter_in_both_spellings(repo):
+def test_strip_drops_marker_filter_in_both_spellings(repo) -> None:
     argv = retest_targeted._strip_collection_roots(repo, "python -m pytest -m 'not cadence' -mfoo -q --maxprocesses=7")
     assert argv == ["python", "-m", "pytest", "-q", "--maxprocesses=7"]
 
 
-def test_failed_record_carries_node_ids_from_the_log(repo, tmp_path):
-    def run(argv, cwd, *, log=None, **_kw):
+def test_failed_record_carries_node_ids_from_the_log(repo, tmp_path: Path) -> None:
+    def run(argv, cwd, *, log=None, **_kw) -> int:
         log.write_text("FAILED test_a.py::test_a - assert 0\n", encoding="utf-8")
         return 1
 
@@ -205,13 +205,13 @@ def test_failed_record_carries_node_ids_from_the_log(repo, tmp_path):
     assert record["status"] == "fail" and record[li.FAILED_TESTS_PARAM] == ["test_a.py::test_a"] and record["head"]
 
 
-def test_dirty_paths_reads_untracked_and_modified(repo):
+def test_dirty_paths_reads_untracked_and_modified(repo) -> None:
     (repo / "new.txt").write_text("x", encoding="utf-8")
     (repo / "test_a.py").write_text("changed\n", encoding="utf-8")
     assert sorted(retest_targeted.dirty_paths(repo)) == ["new.txt", "test_a.py"]
 
 
-def test_covered_drops_unrelated_untracked_keeps_tracked_edits_and_new_modules(repo, tmp_path):
+def test_covered_drops_unrelated_untracked_keeps_tracked_edits_and_new_modules(repo, tmp_path: Path) -> None:
     (repo / ".salvage-staged-embed").mkdir()
     (repo / ".salvage-staged-embed" / "x.py").write_text("x", encoding="utf-8")
     (repo / "notes.txt").write_text("x", encoding="utf-8")
@@ -226,7 +226,7 @@ def test_covered_drops_unrelated_untracked_keeps_tracked_edits_and_new_modules(r
     assert set(record["covered"]) == {"test_a.py", "newmod.py"}
 
 
-def test_covered_excludes_plan_evidence_sidecar_tracked_or_new(repo):
+def test_covered_excludes_plan_evidence_sidecar_tracked_or_new(repo) -> None:
     (repo / "docs" / "plans").mkdir(parents=True)
     tracked = repo / "docs" / "plans" / "p.evidence.yaml"
     tracked.write_text("a: 1\n", encoding="utf-8")
@@ -243,7 +243,7 @@ def _declare(repo: Path, **keys: str) -> None:
     (repo / "coordinator.local.md").write_text(f"---\n{body}---\n", encoding="utf-8")
 
 
-def test_declared_launcher_outranks_fast_test_cmd(repo, tmp_path):
+def test_declared_launcher_outranks_fast_test_cmd(repo, tmp_path: Path) -> None:
     (repo / "scripts").mkdir()
     (repo / "scripts" / "run.py").write_text("", encoding="utf-8")
     _declare(repo, targeted_test_launcher="scripts/run.py --tier targeted", fast_test_cmd="scripts/tier.py --tier sufficient")
@@ -257,7 +257,7 @@ def test_declared_launcher_outranks_fast_test_cmd(repo, tmp_path):
     assert "sufficient" not in " ".join(seen[0])
 
 
-def test_nonzero_launcher_exit_other_than_test_failure_records_error_with_reason(repo, tmp_path):
+def test_nonzero_launcher_exit_other_than_test_failure_records_error_with_reason(repo, tmp_path: Path) -> None:
     rc = retest_targeted.main(
         ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"],
         run=lambda argv, cwd, **_kw: 126,
@@ -268,7 +268,7 @@ def test_nonzero_launcher_exit_other_than_test_failure_records_error_with_reason
 
 
 def _exit4(stderr: str):
-    def run(argv, cwd, *, log, append=False, **_kw):
+    def run(argv, cwd, *, log, append: bool = False, **_kw) -> int:
         with open(log, "a" if append else "w", encoding="utf-8") as fh:
             fh.write(stderr)
         return 4
@@ -286,7 +286,7 @@ def _retest_reason(repo, tmp_path, run) -> str:
     return record["reason"]
 
 
-def test_exit4_unrecognized_timeout_is_a_provisioning_defect_naming_the_pip_line(repo, tmp_path):
+def test_exit4_unrecognized_timeout_is_a_provisioning_defect_naming_the_pip_line(repo, tmp_path: Path) -> None:
     (repo / "pyproject.toml").write_text(
         '[project]\nname = "x"\n[project.optional-dependencies]\ntest = ["pytest>=9.1", "pytest-timeout>=2.3"]\n',
         encoding="utf-8")
@@ -297,28 +297,28 @@ def test_exit4_unrecognized_timeout_is_a_provisioning_defect_naming_the_pip_line
     assert "no test results" not in reason
 
 
-def test_exit4_unrecognized_timeout_without_pyproject_names_bare_plugin(repo, tmp_path):
+def test_exit4_unrecognized_timeout_without_pyproject_names_bare_plugin(repo, tmp_path: Path) -> None:
     reason = _retest_reason(repo, tmp_path, _exit4("pytest: error: unrecognized arguments: --timeout=300\n"))
     assert 'pip install "pytest-timeout"' in reason
 
 
-def test_exit4_unrecognized_numprocesses_names_xdist_alongside_timeout(repo, tmp_path):
+def test_exit4_unrecognized_numprocesses_names_xdist_alongside_timeout(repo, tmp_path: Path) -> None:
     reason = _retest_reason(repo, tmp_path, _exit4(
         "pytest: error: unrecognized arguments: --timeout=300 -n 4 --dist=loadfile\n"))
     assert 'pip install "pytest-timeout" "pytest-xdist"' in reason
 
 
-def test_exit4_other_unrecognized_option_stays_a_crashed_launcher(repo, tmp_path):
+def test_exit4_other_unrecognized_option_stays_a_crashed_launcher(repo, tmp_path: Path) -> None:
     reason = _retest_reason(repo, tmp_path, _exit4("pytest: error: unrecognized arguments: --bogus\n"))
     assert "provisioning defect" not in reason and "no test results" in reason
 
 
-def test_exit4_without_unrecognized_output_stays_a_crashed_launcher(repo, tmp_path):
+def test_exit4_without_unrecognized_output_stays_a_crashed_launcher(repo, tmp_path: Path) -> None:
     reason = _retest_reason(repo, tmp_path, _exit4("ERROR: file or directory not found\n"))
     assert "provisioning defect" not in reason and "exited 4" in reason
 
 
-def test_undeclared_launcher_file_records_error(repo, tmp_path):
+def test_undeclared_launcher_file_records_error(repo, tmp_path: Path) -> None:
     _declare(repo, targeted_test_launcher="scripts/missing.py")
     rc = retest_targeted.main(
         ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"],
@@ -329,7 +329,7 @@ def test_undeclared_launcher_file_records_error(repo, tmp_path):
     assert record["status"] == "error" and "missing.py" in record["reason"]
 
 
-def test_node_id_passes_through_and_covered_names_the_file(repo, tmp_path):
+def test_node_id_passes_through_and_covered_names_the_file(repo, tmp_path: Path) -> None:
     seen = []
     rc = retest_targeted.main(
         ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py::test_a", "--repo-root", str(repo), "--detached-child"],
@@ -343,7 +343,7 @@ def test_node_id_passes_through_and_covered_names_the_file(repo, tmp_path):
     assert li.fresh_targeted_verdict(repo, RUN_ID) is not None
 
 
-def test_gate_on_error_record_says_rerun_retest_not_failed_tests(repo, tmp_path):
+def test_gate_on_error_record_says_rerun_retest_not_failed_tests(repo, tmp_path: Path) -> None:
     from coordinator_core.git.git_state import head_sha
 
     record = {"run_id": RUN_ID, "head": head_sha(repo), "tests": ["test_a.py"], "covered": {}, "status": "error",
@@ -357,7 +357,7 @@ def test_gate_on_error_record_says_rerun_retest_not_failed_tests(repo, tmp_path)
     assert "pass params" not in findings[0].detail
 
 
-def test_gate_fresh_fail_record_honours_failed_tests_param(repo, tmp_path):
+def test_gate_fresh_fail_record_honours_failed_tests_param(repo, tmp_path: Path) -> None:
     from coordinator_core.git.git_state import head_sha
 
     record = {"run_id": RUN_ID, "head": head_sha(repo), "tests": ["test_a.py"], "covered": {}, "status": "fail"}
@@ -373,12 +373,12 @@ def test_gate_fresh_fail_record_honours_failed_tests_param(repo, tmp_path):
     "script_path",
     ["scratch/warp/run-x/wf/run-x.workflow.js", "scratch\\warp\\run-x\\wf\\run-x.workflow.js"],
 )
-def test_run_id_from_script_stem_drops_workflow_suffix(script_path):
+def test_run_id_from_script_stem_drops_workflow_suffix(script_path) -> None:
     assert retest_targeted._run_id_of({"script_path": script_path}) == "run-x"
     assert retest_targeted._run_id_of({"script_path": script_path, "run_id": "real"}) == "real"
 
 
-def test_record_without_run_id_is_keyed_by_the_real_run_id(repo, tmp_path):
+def test_record_without_run_id_is_keyed_by_the_real_run_id(repo, tmp_path: Path) -> None:
     params = {"script_path": "s/run-x.workflow.js", "targeted_tests": {"status": "fail", "baseline": None}}
     out = tmp_path / "task.output"
     out.write_text(json.dumps({"next_action": {"params": params}}), encoding="utf-8")
@@ -392,7 +392,7 @@ def test_record_without_run_id_is_keyed_by_the_real_run_id(repo, tmp_path):
 
 
 @pytest.mark.parametrize("run_id", ["../escape", "a/b", ".."])
-def test_unsafe_run_id_refuses_before_any_write(repo, tmp_path, run_id):
+def test_unsafe_run_id_refuses_before_any_write(repo, tmp_path: Path, run_id) -> None:
     params = {"run_id": run_id, "script_path": "x/y", "targeted_tests": {"status": "fail", "baseline": None}}
     out = tmp_path / "task.output"
     out.write_text(json.dumps({"next_action": {"params": params}}), encoding="utf-8")
@@ -405,7 +405,7 @@ def test_unsafe_run_id_refuses_before_any_write(repo, tmp_path, run_id):
 
 
 @pytest.mark.parametrize("test_path", ["../outside.py", "../../x.py::t"])
-def test_test_path_escaping_the_repo_refuses_without_running(repo, tmp_path, test_path):
+def test_test_path_escaping_the_repo_refuses_without_running(repo, tmp_path: Path, test_path) -> None:
     rc = retest_targeted.main(
         ["--from-task-output", str(_task_output(tmp_path)), "--tests", test_path, "--repo-root", str(repo), "--detached-child"],
         run=lambda argv, cwd, **_kw: pytest.fail("must not run"),
@@ -423,7 +423,7 @@ def _real_args(tmp_path: Path, repo: Path) -> list[str]:
     return ["--from-task-output", str(_task_output(tmp_path)), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"]
 
 
-def test_hung_launcher_ends_as_error_verdict_within_the_bound(repo, tmp_path, monkeypatch):
+def test_hung_launcher_ends_as_error_verdict_within_the_bound(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import time
 
     monkeypatch.setattr(retest_targeted, "RETEST_CHILD_TIMEOUT_SECS", 1.0)
@@ -436,12 +436,12 @@ def test_hung_launcher_ends_as_error_verdict_within_the_bound(repo, tmp_path, mo
     assert record["status"] == "error" and "launcher exceeded 1s" in record["reason"]
 
 
-def test_launcher_that_reads_stdin_returns_at_once(repo, tmp_path):
+def test_launcher_that_reads_stdin_returns_at_once(repo, tmp_path: Path) -> None:
     _launcher(repo, "import sys\nsys.stdin.read()\n")
     assert retest_targeted.main(_real_args(tmp_path, repo)) == 0
 
 
-def test_verdict_log_holds_the_childs_output(repo, tmp_path):
+def test_verdict_log_holds_the_childs_output(repo, tmp_path: Path) -> None:
     _launcher(repo, "import sys\nprint('out-marker')\nprint('err-marker', file=sys.stderr)\n")
     assert retest_targeted.main(_real_args(tmp_path, repo)) == 0
     record = json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))
@@ -450,7 +450,7 @@ def test_verdict_log_holds_the_childs_output(repo, tmp_path):
     assert "out-marker" in text and "err-marker" in text
 
 
-def test_fast_test_cmd_roots_are_dropped_and_only_targets_run(repo, tmp_path, monkeypatch):
+def test_fast_test_cmd_roots_are_dropped_and_only_targets_run(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for d in ("roots_a", "roots_b"):
         (repo / d).mkdir()
     monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "python -m pytest -q roots_a roots_b")
@@ -476,13 +476,13 @@ def _run_two_roots(repo, tmp_path):
     return rc, json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))
 
 
-def test_two_test_roots_run_in_separate_sessions_and_pass(repo, tmp_path, monkeypatch):
+def test_two_test_roots_run_in_separate_sessions_and_pass(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "python -m pytest -q -p no:cacheprovider")
     rc, record = _run_two_roots(repo, tmp_path)
     assert rc == 0 and record["status"] == "pass", record
 
 
-def test_runner_tier_option_is_dropped_so_no_default_collection_is_added(repo, tmp_path, monkeypatch):
+def test_runner_tier_option_is_dropped_so_no_default_collection_is_added(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "scripts").mkdir()
     (repo / "scripts" / "run-tests.py").write_text(
         "import sys, pytest\n"
@@ -500,13 +500,13 @@ def test_runner_tier_option_is_dropped_so_no_default_collection_is_added(repo, t
     assert rc == 0 and record["status"] == "pass", record
 
 
-def test_scopes_split_one_command_per_conftest_root(repo):
+def test_scopes_split_one_command_per_conftest_root(repo) -> None:
     _two_roots(repo, "")
     _base, groups = retest_targeted._launch_plan(repo, ["rootx/test_rootx.py", "rooty/test_rooty.py", "test_a.py"])
     assert [g[-1] for g in groups] == ["rootx/test_rootx.py", "rooty/test_rooty.py", "test_a.py"]
 
 
-def test_runner_script_survives_root_stripping(repo):
+def test_runner_script_survives_root_stripping(repo) -> None:
     (repo / "scripts").mkdir()
     (repo / "scripts" / "run-tests.py").write_text("", encoding="utf-8")
     argv = retest_targeted._strip_collection_roots(repo, "python3 scripts/run-tests.py --tier fast")
@@ -515,7 +515,7 @@ def test_runner_script_survives_root_stripping(repo):
     assert retest_targeted._strip_collection_roots(repo, "pytest roots_a -q") == ["pytest", "-q"]
 
 
-def test_option_values_survive_root_stripping(repo):
+def test_option_values_survive_root_stripping(repo) -> None:
     (repo / "roots_a").mkdir()
     (repo / "setup.cfg").write_text("", encoding="utf-8")
     argv = retest_targeted._strip_collection_roots(
@@ -528,11 +528,11 @@ def _warm_args(tmp_path: Path, repo: Path) -> list[str]:
     return _real_args(tmp_path, repo)[:-1]
 
 
-def _no_launch(monkeypatch):
+def _no_launch(monkeypatch) -> None:
     monkeypatch.setattr(retest_targeted, "_launch_plan", lambda *a, **k: pytest.fail("warm path must not launch"))
 
 
-def test_warm_entry_records_running_and_spawns_without_launching(repo, tmp_path, monkeypatch):
+def test_warm_entry_records_running_and_spawns_without_launching(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import time
 
     from coordinator_core.ops import invoke_from_argv
@@ -564,7 +564,7 @@ def test_warm_entry_records_running_and_spawns_without_launching(repo, tmp_path,
     assert json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))["status"] == "running"
 
 
-def test_failed_spawn_overwrites_running_with_error(repo, tmp_path, monkeypatch):
+def test_failed_spawn_overwrites_running_with_error(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _no_launch(monkeypatch)
     rc = retest_targeted.main(_warm_args(tmp_path, repo), spawn=lambda *a, **k: False)
     assert rc == 2
@@ -572,14 +572,14 @@ def test_failed_spawn_overwrites_running_with_error(repo, tmp_path, monkeypatch)
     assert record["status"] == "error" and "failed to spawn" in record["reason"]
 
 
-def test_second_call_while_running_exits_3_without_spawning(repo, tmp_path, monkeypatch):
+def test_second_call_while_running_exits_3_without_spawning(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _no_launch(monkeypatch)
     assert retest_targeted.main(_warm_args(tmp_path, repo), spawn=lambda *a, **k: True) == 0
     rc = retest_targeted.main(_warm_args(tmp_path, repo), spawn=lambda *a, **k: pytest.fail("must not spawn"))
     assert rc == 3
 
 
-def test_second_call_past_deadline_respawns(repo, tmp_path, monkeypatch):
+def test_second_call_past_deadline_respawns(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _no_launch(monkeypatch)
     assert retest_targeted.main(_warm_args(tmp_path, repo), spawn=lambda *a, **k: True) == 0
     path = li.fresh_verdict_path(repo, RUN_ID)
@@ -600,7 +600,7 @@ def _params_file(repo: Path, **extra) -> Path:
     return path
 
 
-def test_params_file_input_writes_the_verdict_the_gate_accepts(repo):
+def test_params_file_input_writes_the_verdict_the_gate_accepts(repo) -> None:
     seen = []
     rc = retest_targeted.main(
         ["--params-file", str(_params_file(repo)), "--tests", "test_a.py", "--repo-root", str(repo), "--detached-child"],
@@ -610,7 +610,7 @@ def test_params_file_input_writes_the_verdict_the_gate_accepts(repo):
     assert li.fresh_targeted_verdict(repo, RUN_ID)["status"] == "pass"
 
 
-def test_params_file_naming_a_task_output_expands_it_and_the_file_keys_win(repo, tmp_path):
+def test_params_file_naming_a_task_output_expands_it_and_the_file_keys_win(repo, tmp_path: Path) -> None:
     out = _task_output(tmp_path)
     data = json.loads(out.read_text(encoding="utf-8"))
     data["next_action"]["params"]["targeted_tests"]["tests"] = ["test_a.py::test_a"]
@@ -624,7 +624,7 @@ def test_params_file_naming_a_task_output_expands_it_and_the_file_keys_win(repo,
     assert li.fresh_verdict_path(repo, "other-run").exists() and not li.fresh_verdict_path(repo, RUN_ID).exists()
 
 
-def test_absent_params_file_exits_2_naming_its_writer_and_writes_no_record(repo, capsys):
+def test_absent_params_file_exits_2_naming_its_writer_and_writes_no_record(repo, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import params_path
 
     missing = params_path(repo, RUN_ID)
@@ -637,7 +637,7 @@ def test_absent_params_file_exits_2_naming_its_writer_and_writes_no_record(repo,
     assert not li.fresh_verdict_path(repo, RUN_ID).exists()
 
 
-def test_unreadable_params_file_exits_2_without_a_traceback(repo, tmp_path, capsys):
+def test_unreadable_params_file_exits_2_without_a_traceback(repo, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     bad = tmp_path / "params.json"
     bad.write_text("[1]", encoding="utf-8")
     rc = retest_targeted.main(["--params-file", str(bad), "--repo-root", str(repo)])
@@ -646,14 +646,14 @@ def test_unreadable_params_file_exits_2_without_a_traceback(repo, tmp_path, caps
     assert retest_targeted.main(["--params-file", str(bad), "--repo-root", str(repo)]) == 2
 
 
-def test_both_inputs_or_neither_is_a_usage_error(repo, tmp_path):
+def test_both_inputs_or_neither_is_a_usage_error(repo, tmp_path: Path) -> None:
     for argv in (["--from-task-output", str(_task_output(tmp_path)), "--params-file", str(_params_file(repo))], []):
         with pytest.raises(SystemExit) as exc:
             retest_targeted.main(argv)
         assert exc.value.code == 2
 
 
-def test_the_poll_line_and_child_argv_carry_the_params_file_flag(repo, capsys):
+def test_the_poll_line_and_child_argv_carry_the_params_file_flag(repo, capsys: pytest.CaptureFixture[str]) -> None:
     params = _params_file(repo)
     spawned = []
     args = ["--params-file", str(params), "--tests", "test_a.py", "--repo-root", str(repo)]
@@ -664,7 +664,7 @@ def test_the_poll_line_and_child_argv_carry_the_params_file_flag(repo, capsys):
     assert retest_targeted.main([*args, "--poll"]) == 3
 
 
-def _poll_exit(repo, tmp_path, record):
+def _poll_exit(repo, tmp_path, record) -> int:
     path = li.fresh_verdict_path(repo, RUN_ID)
     if record is not None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -678,7 +678,7 @@ def _poll_exit(repo, tmp_path, record):
     return rc
 
 
-def test_poll_exit_codes(repo, tmp_path, capsys):
+def test_poll_exit_codes(repo, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     from datetime import datetime, timedelta, timezone
 
     future = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
@@ -701,7 +701,7 @@ def test_poll_exit_codes(repo, tmp_path, capsys):
     ("python -m pytest -q roots_a", ["python", "-m", "pytest", "-q"]),
     ("uv run pytest roots_a -q", ["uv", "run", "pytest", "-q"]),
 ])
-def test_launcher_shapes_keep_the_runner_script_and_treat_pytest_exe_as_pytest(repo, cmd, expected):
+def test_launcher_shapes_keep_the_runner_script_and_treat_pytest_exe_as_pytest(repo, cmd, expected) -> None:
     (repo / "scripts").mkdir()
     for name in ("run-tests.py", "x.py"):
         (repo / "scripts" / name).write_text("", encoding="utf-8")
@@ -709,14 +709,14 @@ def test_launcher_shapes_keep_the_runner_script_and_treat_pytest_exe_as_pytest(r
     assert retest_targeted._strip_collection_roots(repo, cmd) == expected
 
 
-def _two_conftest_launcher(repo: Path):
+def _two_conftest_launcher(repo: Path) -> None:
     _two_roots(repo, "")
     (repo / "scripts").mkdir(exist_ok=True)
     (repo / "scripts" / "run.py").write_text("", encoding="utf-8")
     _declare(repo, targeted_test_launcher="scripts/run.py")
 
 
-def test_declared_launcher_runs_once_with_all_ids_when_scopes_do_not_conflict(repo):
+def test_declared_launcher_runs_once_with_all_ids_when_scopes_do_not_conflict(repo) -> None:
     (repo / "sub").mkdir()
     (repo / "sub" / "test_s.py").write_text("def test_s():\n    pass\n", encoding="utf-8")
     (repo / "scripts").mkdir()
@@ -726,7 +726,7 @@ def test_declared_launcher_runs_once_with_all_ids_when_scopes_do_not_conflict(re
     assert groups == [["test_a.py", "sub/test_s.py"]]
 
 
-def test_declared_launcher_splits_only_when_conftests_collide(repo):
+def test_declared_launcher_splits_only_when_conftests_collide(repo) -> None:
     _two_conftest_launcher(repo)
     _base, groups = retest_targeted._launch_plan(repo, ["rootx/test_rootx.py", "rooty/test_rooty.py"])
     assert [g[-1] for g in groups] == ["rootx/test_rootx.py", "rooty/test_rooty.py"]
@@ -746,14 +746,14 @@ def _main_calls(repo, tmp_path, tests):
     return rc, calls
 
 
-def test_main_runs_one_session_when_scopes_do_not_conflict(repo, tmp_path):
+def test_main_runs_one_session_when_scopes_do_not_conflict(repo, tmp_path: Path) -> None:
     _one_conftest_sub(repo)
     rc, calls = _main_calls(repo, tmp_path, "test_a.py,sub/test_s.py")
     assert rc == 0 and len(calls) == 1
     assert calls[0][-2:] == ["test_a.py", "sub/test_s.py"]
 
 
-def test_main_declared_launcher_runs_one_session_when_scopes_do_not_conflict(repo, tmp_path):
+def test_main_declared_launcher_runs_one_session_when_scopes_do_not_conflict(repo, tmp_path: Path) -> None:
     _one_conftest_sub(repo)
     (repo / "scripts").mkdir()
     (repo / "scripts" / "run.py").write_text("", encoding="utf-8")
@@ -763,7 +763,7 @@ def test_main_declared_launcher_runs_one_session_when_scopes_do_not_conflict(rep
     assert calls[0][-2:] == ["test_a.py", "sub/test_s.py"]
 
 
-def test_main_conflicting_scopes_run_one_session_per_scope(repo, tmp_path):
+def test_main_conflicting_scopes_run_one_session_per_scope(repo, tmp_path: Path) -> None:
     _two_roots(repo, "")
     rc, calls = _main_calls(repo, tmp_path, "rootx/test_rootx.py,rooty/test_rooty.py,test_a.py")
     assert rc == 0 and len(calls) == 3
@@ -771,7 +771,7 @@ def test_main_conflicting_scopes_run_one_session_per_scope(repo, tmp_path):
 
 
 @pytest.mark.parametrize("conflicting", [False, True])
-def test_launch_plan_fast_cmd_keep_tier_changes_base_only(repo, monkeypatch, conflicting):
+def test_launch_plan_fast_cmd_keep_tier_changes_base_only(repo, monkeypatch: pytest.MonkeyPatch, conflicting) -> None:
     monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "python scripts/run-tests.py --tier fast")
     (repo / "scripts").mkdir()
     (repo / "scripts" / "run-tests.py").write_text("", encoding="utf-8")
@@ -788,7 +788,7 @@ def test_launch_plan_fast_cmd_keep_tier_changes_base_only(repo, monkeypatch, con
     assert len(dropped[1]) == (3 if conflicting else 1)
 
 
-def test_launch_plan_unresolved_declared_launcher_returns_reason(repo):
+def test_launch_plan_unresolved_declared_launcher_returns_reason(repo) -> None:
     _declare(repo, targeted_test_launcher="scripts/missing.py")
     assert isinstance(retest_targeted._launch_plan(repo, ["test_a.py"]), str)
 
@@ -802,7 +802,7 @@ def _tier_runner(repo, monkeypatch, tmp_path, codes):
     keep_calls = []
     real = retest_targeted._launch_plan
 
-    def spy(root, tests, *, keep_tier=False):
+    def spy(root, tests, *, keep_tier: bool = False):
         if keep_tier:
             keep_calls.append(tests)
         return real(root, tests, keep_tier=keep_tier)
@@ -812,7 +812,7 @@ def _tier_runner(repo, monkeypatch, tmp_path, codes):
     return rc, calls, rec, keep_calls
 
 
-def test_multi_group_rc2_retries_only_that_group_with_tier_kept(repo, tmp_path, monkeypatch):
+def test_multi_group_rc2_retries_only_that_group_with_tier_kept(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, calls, rec, keep_calls = _tier_runner(repo, monkeypatch, tmp_path, [0, 2, 0, 0])
     assert rc == 0 and rec["status"] == "pass" and len(calls) == 4
     argvs = [c[0] for c in calls]
@@ -822,19 +822,19 @@ def test_multi_group_rc2_retries_only_that_group_with_tier_kept(repo, tmp_path, 
     assert len(keep_calls) == 1
 
 
-def test_two_rc2_groups_plan_keep_tier_once(repo, tmp_path, monkeypatch):
+def test_two_rc2_groups_plan_keep_tier_once(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, calls, rec, keep_calls = _tier_runner(repo, monkeypatch, tmp_path, [2, 0, 2, 0, 0])
     assert rc == 0 and len(calls) == 5
     assert len(keep_calls) == 1
 
 
-def _fake_runner(repo, monkeypatch, tmp_path, codes, tests="rootx/test_rootx.py,rooty/test_rooty.py,test_a.py",
-                 cmd="python -m pytest -q"):
+def _fake_runner(repo, monkeypatch, tmp_path, codes, tests: str = "rootx/test_rootx.py,rooty/test_rooty.py,test_a.py",
+                 cmd: str = "python -m pytest -q"):
     _two_roots(repo, "")
     monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", cmd)
     calls = []
 
-    def run(argv, cwd, *, log=None, timeout=None, append=False):
+    def run(argv, cwd, *, log=None, timeout=None, append: bool = False):
         n = len(calls)
         calls.append((argv, timeout, append))
         if codes[n] == 1:
@@ -854,13 +854,13 @@ def _fake_runner(repo, monkeypatch, tmp_path, codes, tests="rootx/test_rootx.py,
     return rc, calls, json.loads(li.fresh_verdict_path(repo, RUN_ID).read_text(encoding="utf-8"))
 
 
-def test_aggregate_fail_then_pass_is_fail(repo, tmp_path, monkeypatch):
+def test_aggregate_fail_then_pass_is_fail(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [1, 0, 0])
     assert rc == 1 and rec["status"] == "fail" and len(calls) == 3
     assert rec[li.FAILED_TESTS_PARAM] == ["rootx/test_rootx.py::t"]
 
 
-def test_aggregate_fail_then_crash_keeps_failed_ids_and_names_both(repo, tmp_path, monkeypatch):
+def test_aggregate_fail_then_crash_keeps_failed_ids_and_names_both(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [1, 126, 0])
     assert rc == 2 and rec["status"] == "error"
     assert rec[li.FAILED_TESTS_PARAM] == ["rootx/test_rootx.py::t"]
@@ -868,29 +868,29 @@ def test_aggregate_fail_then_crash_keeps_failed_ids_and_names_both(repo, tmp_pat
     assert "failing session(s)" in rec["reason"] and "rootx/test_rootx.py" in rec["reason"]
 
 
-def test_aggregate_no_tests_then_pass_is_pass(repo, tmp_path, monkeypatch):
+def test_aggregate_no_tests_then_pass_is_pass(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [5, 0, 5])
     assert rc == 0 and rec["status"] == "pass"
 
 
-def test_aggregate_all_no_tests_is_no_tests(repo, tmp_path, monkeypatch):
+def test_aggregate_all_no_tests_is_no_tests(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [5, 5, 5])
     assert rc == 0 and rec["status"] == "no-tests" and rec["tests_run"] == 0
 
 
-def test_oserror_mid_sequence_is_error_naming_the_session(repo, tmp_path, monkeypatch):
+def test_oserror_mid_sequence_is_error_naming_the_session(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [0, "raise", 0])
     assert rc == 2 and rec["status"] == "error" and "boom" in rec["reason"]
 
 
-def test_spent_deadline_launches_nothing_and_states_the_budget(repo, tmp_path, monkeypatch):
+def test_spent_deadline_launches_nothing_and_states_the_budget(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(retest_targeted, "RETEST_CHILD_TIMEOUT_SECS", 0.0)
     rc, calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [0, 0, 0])
     assert rc == 2 and not calls and rec["status"] == "error"
     assert "not started" in rec["reason"] and "0s budget" in rec["reason"]
 
 
-def test_spent_budget_records_budget_exhausted_and_gate_reads_not_run(repo, tmp_path, monkeypatch):
+def test_spent_budget_records_budget_exhausted_and_gate_reads_not_run(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(retest_targeted, "RETEST_CHILD_TIMEOUT_SECS", 0.0)
     _rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [0, 0, 0])
     assert rec["zero_run_cause"] == "budget-exhausted"
@@ -898,38 +898,38 @@ def test_spent_budget_records_budget_exhausted_and_gate_reads_not_run(repo, tmp_
     assert check == li.NOT_RUN_CHECK and not findings and "budget-exhausted" in findings.deleted_note
 
 
-def test_first_session_timeout_records_budget_exhausted(repo, tmp_path, monkeypatch):
+def test_first_session_timeout_records_budget_exhausted(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [retest_targeted.LAUNCH_TIMED_OUT, 0, 0])
     assert rec["zero_run_cause"] == "budget-exhausted"
 
 
-def test_timeout_after_a_finished_session_names_no_zero_run_cause(repo, tmp_path, monkeypatch):
+def test_timeout_after_a_finished_session_names_no_zero_run_cause(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [0, retest_targeted.LAUNCH_TIMED_OUT, 0])
     assert rec["status"] == "error" and "zero_run_cause" not in rec
 
 
-def test_collection_failure_records_its_cause(repo, tmp_path, monkeypatch):
+def test_collection_failure_records_its_cause(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, ["collect-error"], tests="test_a.py")
     assert rec["status"] == "error" and rec["zero_run_cause"] == "collection-failure"
 
 
-def test_empty_selection_records_its_cause(repo, tmp_path, monkeypatch):
+def test_empty_selection_records_its_cause(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [5, 5, 5])
     assert rec["status"] == "no-tests" and rec["zero_run_cause"] == "empty-selection"
 
 
-def test_crashed_launcher_names_no_zero_run_cause(repo, tmp_path, monkeypatch):
+def test_crashed_launcher_names_no_zero_run_cause(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [126, 126, 126])
     assert rec["status"] == "error" and "zero_run_cause" not in rec
 
 
-def test_timeout_mid_sequence_skips_later_sessions(repo, tmp_path, monkeypatch):
+def test_timeout_mid_sequence_skips_later_sessions(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [retest_targeted.LAUNCH_TIMED_OUT, 0, 0])
     assert rc == 2 and len(calls) == 1 and "exceeded 1800s" in rec["reason"]
     assert all(t <= retest_targeted.RETEST_CHILD_TIMEOUT_SECS for _a, t, _p in calls)
 
 
-def test_tier_runner_that_needs_tier_falls_back_to_it(repo, tmp_path, monkeypatch):
+def test_tier_runner_that_needs_tier_falls_back_to_it(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "scripts").mkdir()
     (repo / "scripts" / "run-tests.py").write_text("", encoding="utf-8")
     rc, calls, rec = _fake_runner(
@@ -940,12 +940,12 @@ def test_tier_runner_that_needs_tier_falls_back_to_it(repo, tmp_path, monkeypatc
     assert rc == 0 and rec["status"] == "pass"
 
 
-def test_tier_is_not_retried_when_the_cmd_has_none(repo, tmp_path, monkeypatch):
+def test_tier_is_not_retried_when_the_cmd_has_none(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [2], tests="test_a.py")
     assert len(calls) == 1 and rc == 2 and rec["status"] == "error"
 
 
-def test_tier_is_not_retried_after_a_pytest_collection_error(repo, tmp_path, monkeypatch):
+def test_tier_is_not_retried_after_a_pytest_collection_error(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "scripts").mkdir()
     (repo / "scripts" / "run-tests.py").write_text("", encoding="utf-8")
     rc, calls, rec = _fake_runner(
@@ -954,19 +954,19 @@ def test_tier_is_not_retried_after_a_pytest_collection_error(repo, tmp_path, mon
     assert len(calls) == 1 and rc == 2 and rec["status"] == "error"
 
 
-def test_targeted_set_is_shared_with_the_landing_gate():
+def test_targeted_set_is_shared_with_the_landing_gate() -> None:
     params = {"targeted_tests": {"status": "fail", "baseline": {"caused": ["a/test_x.py::t1"]}},
               "targeted_test_paths": ["b/test_y.py"]}
     assert retest_targeted._tests_to_run([], params) == li.targeted_set(params, li.targeted_test_verdict(params))
     assert retest_targeted._tests_to_run([], params) == ["a/test_x.py"]
 
 
-def test_errored_retest_with_failed_tests_and_no_tests_run_keeps_the_ids(repo, tmp_path, monkeypatch):
+def test_errored_retest_with_failed_tests_and_no_tests_run_keeps_the_ids(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, _calls, rec = _fake_runner(repo, monkeypatch, tmp_path, [1, 126, 0])
     assert rec["status"] == "error" and "tests_run" not in rec and rec[li.FAILED_TESTS_PARAM]
 
 
-def test_covered_is_the_run_manifest_writes_not_foreign_dirt(repo, tmp_path):
+def test_covered_is_the_run_manifest_writes_not_foreign_dirt(repo, tmp_path: Path) -> None:
     (repo / "scratch" / "warp" / "run-abc").mkdir(parents=True)
     (repo / "scratch" / "warp" / "run-abc" / "manifest.json").write_text(
         json.dumps({"rows": [{"writes": ["mine.py"]}]}), encoding="utf-8")
@@ -1002,19 +1002,19 @@ def _seed_state_invariant_and_run_artifacts(repo: Path) -> None:
     ask_contract.write_run_stage(repo, RUN_ID, "staged")
 
 
-def test_run_artifacts_owe_no_state_invariant_but_a_chunk_written_state_path_does(repo, tmp_path):
+def test_run_artifacts_owe_no_state_invariant_but_a_chunk_written_state_path_does(repo, tmp_path: Path) -> None:
     _seed_state_invariant_and_run_artifacts(repo)
     assert retest_targeted._with_invariants(repo, ["test_a.py"], lambda _root: [], RUN_ID, {}) == ["test_a.py"]
     dirty = lambda _root: ["state/lessons/x.md"]
     assert retest_targeted._with_invariants(repo, ["test_a.py"], dirty, RUN_ID, {}) == ["test_a.py", _STATE_NODE]
 
 
-def test_without_a_run_the_clean_tree_owes_no_invariant(repo):
+def test_without_a_run_the_clean_tree_owes_no_invariant(repo) -> None:
     _seed_state_invariant_and_run_artifacts(repo)
     assert retest_targeted._with_invariants(repo, ["test_a.py"], lambda _root: []) == ["test_a.py"]
 
 
-def test_retest_runs_the_state_invariant_and_the_gate_credits_it(repo, tmp_path):
+def test_retest_runs_the_state_invariant_and_the_gate_credits_it(repo, tmp_path: Path) -> None:
     _seed_state_invariant_and_run_artifacts(repo)
     seen = []
     rc = retest_targeted.main(
@@ -1026,14 +1026,14 @@ def test_retest_runs_the_state_invariant_and_the_gate_credits_it(repo, tmp_path)
     assert any(_STATE_INVARIANT in str(arg) for arg in seen[0])
     found = li.invariant_findings(repo, ["state/lessons/x.md", "state/warp/%s/run-stage.json" % RUN_ID], RUN_ID, {})
     assert not found
-def test_many_node_ids_split_into_bounded_sessions_in_order(repo):
+def test_many_node_ids_split_into_bounded_sessions_in_order(repo) -> None:
     tests = [f"test_a.py::t{i}" for i in range(retest_targeted.RETEST_MAX_NODES * 2 + 1)]
     _base, groups = retest_targeted._launch_plan(repo, tests)
     assert [len(g) for g in groups] == [retest_targeted.RETEST_MAX_NODES] * 2 + [1]
     assert [t for g in groups for t in g] == tests
 
 
-def test_node_count_at_the_bound_stays_one_session(repo):
+def test_node_count_at_the_bound_stays_one_session(repo) -> None:
     tests = [f"test_a.py::t{i}" for i in range(retest_targeted.RETEST_MAX_NODES)]
     assert len(retest_targeted._launch_plan(repo, tests)[1]) == 1
 
@@ -1045,11 +1045,11 @@ def test_node_count_at_the_bound_stays_one_session(repo):
     (["pytest", "--numprocesses=auto"], ["pytest", "--numprocesses=2"]),
     (["pytest", "-q"], ["pytest", "-q"]),
 ])
-def test_cap_workers_clamps_the_worker_count(tokens, expected):
+def test_cap_workers_clamps_the_worker_count(tokens, expected) -> None:
     assert retest_targeted._cap_workers(tokens, 2) == expected
 
 
-def test_launch_plan_base_never_exceeds_the_worker_cap(repo, monkeypatch):
+def test_launch_plan_base_never_exceeds_the_worker_cap(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "pytest -n auto --maxprocesses=7")
     base, _groups = retest_targeted._launch_plan(repo, ["test_a.py"])
     assert base[base.index("-n") + 1] == str(retest_targeted.worker_cap())
@@ -1057,7 +1057,7 @@ def test_launch_plan_base_never_exceeds_the_worker_cap(repo, monkeypatch):
     assert 1 <= retest_targeted.worker_cap() <= retest_targeted.RETEST_MAX_WORKERS
 
 
-def test_declared_launcher_worker_count_is_clamped(repo):
+def test_declared_launcher_worker_count_is_clamped(repo) -> None:
     (repo / "scripts").mkdir()
     (repo / "scripts" / "run.py").write_text("", encoding="utf-8")
     _declare(repo, targeted_test_launcher="scripts/run.py -n 99 --maxprocesses=50")
@@ -1066,12 +1066,12 @@ def test_declared_launcher_worker_count_is_clamped(repo):
     assert not any(t.startswith("--maxprocesses") for t in base)
 
 
-def test_main_launches_one_child_per_node_chunk(repo, tmp_path, monkeypatch):
+def test_main_launches_one_child_per_node_chunk(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     real = retest_targeted._chunks
     monkeypatch.setattr(retest_targeted, "_chunks", lambda g, size=2: real(g, 2))
     calls = []
 
-    def run(argv, cwd, **kw):
+    def run(argv, cwd, **kw) -> int:
         calls.append(argv)
         return 0
 
@@ -1086,7 +1086,7 @@ def test_main_launches_one_child_per_node_chunk(repo, tmp_path, monkeypatch):
 INVARIANT = "test_a.py::test_every_tracked_segment_is_on_the_allowlist"
 
 
-def test_run_uncaused_invariant_red_in_a_file_with_a_run_new_id_lands_pre_existing(tmp_path, monkeypatch):
+def test_run_uncaused_invariant_red_in_a_file_with_a_run_new_id_lands_pre_existing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The export is red on an invariant also red in the HEAD-only export; the run targets its own new
     id in that file (absent at HEAD). The HEAD pass runs the whole file, so caused == [] and the gate
     reads pre-existing-only. A red new id still lands in caused."""
@@ -1108,7 +1108,7 @@ def test_run_uncaused_invariant_red_in_a_file_with_a_run_new_id_lands_pre_existi
     monkeypatch.setattr(le, "build_head_export", build)
     seen: list[list[str]] = []
 
-    def run(argv, cwd, *, log=None, timeout=None, append=False):
+    def run(argv, cwd, *, log=None, timeout=None, append: bool = False):
         seen.append(list(argv))
         if "--collect-only" in argv:
             if any("::" in a for a in argv):
@@ -1142,7 +1142,7 @@ def test_run_uncaused_invariant_red_in_a_file_with_a_run_new_id_lands_pre_existi
 
 
 @pytest.mark.parametrize("timeout, expected", [(30, 0), (0.05, retest_targeted.LAUNCH_TIMED_OUT)])
-def test_run_argv_frees_its_admission_reservation_on_exit_and_on_timeout(tmp_path, monkeypatch, timeout, expected):
+def test_run_argv_frees_its_admission_reservation_on_exit_and_on_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, timeout, expected) -> None:
     import sys
 
     from coordinator_core.bash_guards import _heavy_command_class as hcc
@@ -1173,7 +1173,7 @@ def _patched_popen(monkeypatch):
     class FakeProc:
         pid = 1
 
-        def wait(self, timeout=None):
+        def wait(self, timeout=None) -> int:
             if spawned_wait:
                 raise spawned_wait.pop()
             return 0
@@ -1190,7 +1190,7 @@ def _patched_popen(monkeypatch):
     return spawned
 
 
-def test_run_argv_stamps_child_depth_and_strips_current_test(tmp_path, monkeypatch):
+def test_run_argv_stamps_child_depth_and_strips_current_test(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.testing import nested_session_guard, spawn_depth
 
     spawned = _patched_popen(monkeypatch)
@@ -1217,7 +1217,7 @@ def _run_pytest_argv_twice(tmp_path, monkeypatch, argv):
     return spawned
 
 
-def test_run_argv_gives_each_pytest_session_its_own_basetemp_and_matching_tmp(tmp_path, monkeypatch):
+def test_run_argv_gives_each_pytest_session_its_own_basetemp_and_matching_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     spawned = _run_pytest_argv_twice(tmp_path, monkeypatch, ["python", "-m", "pytest", "test_a.py"])
     seen = []
     for argv, kw in spawned:
@@ -1231,14 +1231,14 @@ def test_run_argv_gives_each_pytest_session_its_own_basetemp_and_matching_tmp(tm
     assert not any(b.parent.exists() for b in seen), "the per-run dir is reaped when the session ends"
 
 
-def test_run_argv_honours_a_caller_basetemp_and_leaves_non_pytest_argv_alone(tmp_path, monkeypatch):
+def test_run_argv_honours_a_caller_basetemp_and_leaves_non_pytest_argv_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     spawned = _run_pytest_argv_twice(tmp_path, monkeypatch, ["python", "-m", "pytest", "--basetemp=X", "test_a.py"])
     assert all(argv.count("--basetemp=X") == 1 and "--basetemp" not in argv for argv, _ in spawned)
     spawned = _run_pytest_argv_twice(tmp_path, monkeypatch, ["git", "status"])
     assert all("--basetemp" not in argv and kw["env"].get("TEMP") != str(tmp_path / "ptbase") for argv, kw in spawned)
 
 
-def test_run_argv_timeout_closes_the_whole_job(tmp_path, monkeypatch):
+def test_run_argv_timeout_closes_the_whole_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     from coordinator_core.testing import spawn_depth
@@ -1251,7 +1251,7 @@ def test_run_argv_timeout_closes_the_whole_job(tmp_path, monkeypatch):
     assert len(spawned.closes) >= 1
 
 
-def test_run_argv_refuses_at_depth_and_spawns_nothing(tmp_path, monkeypatch):
+def test_run_argv_refuses_at_depth_and_spawns_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.testing import spawn_depth
 
     spawned = _patched_popen(monkeypatch)
@@ -1261,7 +1261,7 @@ def test_run_argv_refuses_at_depth_and_spawns_nothing(tmp_path, monkeypatch):
     assert spawned == []
 
 
-def test_run_argv_refuses_selection_containing_calling_test(tmp_path, monkeypatch):
+def test_run_argv_refuses_selection_containing_calling_test(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.testing import spawn_depth
 
     spawned = _patched_popen(monkeypatch)
@@ -1277,16 +1277,16 @@ def test_run_argv_refuses_selection_containing_calling_test(tmp_path, monkeypatc
     assert len(spawned) == 1
 
 
-def test_release_spawn_frees_the_pair_and_never_raises():
+def test_release_spawn_frees_the_pair_and_never_raises() -> None:
     from coordinator_core.bash_guards import _heavy_command_class as hcc
 
     calls = []
 
     class Host:
-        def admission_file(self):
+        def admission_file(self) -> str:
             return "adm"
 
-        def release_command(self, path, key, pid):
+        def release_command(self, path, key, pid) -> None:
             calls.append((path, key, pid))
 
     hcc.release_spawn("k", 7, Host())
@@ -1302,7 +1302,7 @@ def test_release_spawn_frees_the_pair_and_never_raises():
 def _sessions(repo, tmp_path, n_ids, entry):
     seen = []
 
-    def run(argv, cwd, **kw):
+    def run(argv, cwd, **kw) -> int:
         seen.append(list(argv))
         return 0
 
@@ -1318,19 +1318,19 @@ def _sessions(repo, tmp_path, n_ids, entry):
 
 
 @pytest.mark.parametrize("entry", ["run_pass", "collect_ids"])
-def test_session_count_grows_with_groups_never_with_ids(repo, tmp_path, entry):
+def test_session_count_grows_with_groups_never_with_ids(repo, tmp_path: Path, entry) -> None:
     cap = retest_targeted.RETEST_MAX_NODES
     counts = [len(_sessions(repo, tmp_path, n, entry)) for n in (1, cap, cap * 2, cap * 2 + 1)]
     assert counts == [1, 1, 2, 3]
 
 
-def test_each_session_argv_carries_exactly_its_own_group(repo, tmp_path):
+def test_each_session_argv_carries_exactly_its_own_group(repo, tmp_path: Path) -> None:
     cap = retest_targeted.RETEST_MAX_NODES
     seen = _sessions(repo, tmp_path, cap + 1, "run_pass")
     assert [sum(a.startswith("test_a.py::") for a in argv) for argv in seen] == [cap, 1]
 
 
-def test_overlay_sha_reads_the_measured_record_and_is_none_without_one(tmp_path):
+def test_overlay_sha_reads_the_measured_record_and_is_none_without_one(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
 
     assert retest_targeted._overlay_sha(tmp_path, "r1") is None
@@ -1342,7 +1342,7 @@ def test_overlay_sha_reads_the_measured_record_and_is_none_without_one(tmp_path)
     assert retest_targeted._overlay_sha(tmp_path, "r1") == "b" * 40
 
 
-def test_isolated_body_exports_the_overlay_sha_when_the_record_names_one(tmp_path, monkeypatch):
+def test_isolated_body_exports_the_overlay_sha_when_the_record_names_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import landing_export as le
 
     calls = []
@@ -1370,7 +1370,7 @@ def _foreign_cwd(repo, tmp_path, monkeypatch, **extra):
     return other, path
 
 
-def test_default_root_is_the_runs_repo_not_the_dispatchers_cwd(repo, tmp_path, monkeypatch, capsys):
+def test_default_root_is_the_runs_repo_not_the_dispatchers_cwd(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _other, params_path = _foreign_cwd(repo, tmp_path, monkeypatch)
     seen = []
     rc = retest_targeted.main(
@@ -1384,7 +1384,7 @@ def test_default_root_is_the_runs_repo_not_the_dispatchers_cwd(repo, tmp_path, m
     assert record["status"] == "pass" and record["tests"] == ["test_a.py"] and "dropped" not in record
 
 
-def test_explicit_repo_root_outranks_the_runs_repo(repo, tmp_path):
+def test_explicit_repo_root_outranks_the_runs_repo(repo, tmp_path: Path) -> None:
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     _git(elsewhere, "init", "-q")
@@ -1393,7 +1393,7 @@ def test_explicit_repo_root_outranks_the_runs_repo(repo, tmp_path):
     assert retest_targeted._repo_root(None, params) == Path(retest_targeted._run_repo(params))
 
 
-def test_run_naming_no_repo_falls_back_to_the_cwd_repo(repo, tmp_path, monkeypatch):
+def test_run_naming_no_repo_falls_back_to_the_cwd_repo(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(repo)
     assert retest_targeted._run_repo({"script_path": "s.mjs"}) is None
     assert retest_targeted._repo_root(None, {"script_path": "s.mjs"}) == Path(retest_targeted.show_toplevel())

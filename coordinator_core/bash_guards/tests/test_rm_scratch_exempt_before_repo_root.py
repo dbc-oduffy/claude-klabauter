@@ -11,6 +11,7 @@ import pytest
 from coordinator_core.bash_guards.dispatch_checks import check_destructive_rm
 from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -37,7 +38,7 @@ def _init_with_commit(path) -> None:
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     _init_with_commit(root)
     (root / "scratch").mkdir()
@@ -48,20 +49,20 @@ def _check(cmd: str):
     return envelope_of(check_destructive_rm(cmd))
 
 
-def test_nested_repo_root_in_scratch_passes(repo):
+def test_nested_repo_root_in_scratch_passes(repo) -> None:
     probe = repo / "scratch" / "fam-1a" / "r5-repo"
     _init_with_commit(probe)
     (probe / "dirty.txt").write_text("uncommitted\n")
     assert _check(f"rm -rf {probe}") is None
 
 
-def test_git_store_inside_scratch_clone_passes(repo):
+def test_git_store_inside_scratch_clone_passes(repo) -> None:
     probe = repo / "scratch" / "probe"
     _init_with_commit(probe)
     assert _check(f"rm -rf {probe / '.git'}") is None
 
 
-def test_same_repo_root_outside_scratch_is_denied_with_move_remedy(repo, tmp_path):
+def test_same_repo_root_outside_scratch_is_denied_with_move_remedy(repo, tmp_path: Path) -> None:
     probe = tmp_path / "repo" / ".coordinator-local" / "r5-repo"
     _init_with_commit(probe)
     out = _check(f"rm -rf {probe}")

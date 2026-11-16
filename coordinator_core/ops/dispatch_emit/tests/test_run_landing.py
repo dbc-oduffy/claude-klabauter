@@ -16,12 +16,13 @@ from coordinator_core.ops.dispatch_emit.tests.test_landing_parity import (
     _repo,
     _review,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return _repo(tmp_path, monkeypatch)
 
 
@@ -36,7 +37,7 @@ def _fsck_clean(root) -> None:
     assert _git(["status", "--porcelain", "--untracked-files=no"], root) == ""
 
 
-def test_a_plain_landing_spawns_no_git_process(repo, monkeypatch):
+def test_a_plain_landing_spawns_no_git_process(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "a.py").write_text("a = 1\n", encoding="utf-8")
     real = subprocess.Popen
 
@@ -53,7 +54,7 @@ def test_a_plain_landing_spawns_no_git_process(repo, monkeypatch):
     _fsck_clean(repo)
 
 
-def test_a_crlf_file_under_autocrlf_lands_its_lf_blob_and_stays_clean(repo):
+def test_a_crlf_file_under_autocrlf_lands_its_lf_blob_and_stays_clean(repo) -> None:
     _git(["config", "core.autocrlf", "true"], repo)
     (repo / "w.py").write_bytes(b"a = 1\r\nb = 2\r\n")
 
@@ -64,7 +65,7 @@ def test_a_crlf_file_under_autocrlf_lands_its_lf_blob_and_stays_clean(repo):
     _fsck_clean(repo)
 
 
-def test_a_text_unset_attribute_keeps_the_crs_the_file_carries(repo):
+def test_a_text_unset_attribute_keeps_the_crs_the_file_carries(repo) -> None:
     _git(["config", "core.autocrlf", "true"], repo)
     (repo / ".gitattributes").write_text("*.dat -text\n", encoding="utf-8")
     (repo / "x.dat").write_bytes(b"a\r\nb\r\n")
@@ -75,7 +76,7 @@ def test_a_text_unset_attribute_keeps_the_crs_the_file_carries(repo):
     assert _blob(repo, "x.dat") == b"a\r\nb\r\n"
 
 
-def test_a_name_specific_attribute_line_is_resolved_per_path(repo):
+def test_a_name_specific_attribute_line_is_resolved_per_path(repo) -> None:
     _git(["config", "core.autocrlf", "true"], repo)
     (repo / ".gitattributes").write_text("special.txt -text\n", encoding="utf-8")
     (repo / "special.txt").write_bytes(b"a\r\n")
@@ -88,7 +89,7 @@ def test_a_name_specific_attribute_line_is_resolved_per_path(repo):
     assert _blob(repo, "plain.txt") == b"a\n"
 
 
-def test_a_clean_filter_the_process_cannot_run_refuses_and_commits_nothing(repo):
+def test_a_clean_filter_the_process_cannot_run_refuses_and_commits_nothing(repo) -> None:
     (repo / ".gitattributes").write_text("*.lfs filter=lfs\n", encoding="utf-8")
     _git(["add", ".gitattributes"], repo)
     _git(["commit", "-q", "-m", "attrs"], repo)
@@ -101,7 +102,7 @@ def test_a_clean_filter_the_process_cannot_run_refuses_and_commits_nothing(repo)
     assert _head(repo) == head
 
 
-def test_a_deletion_that_empties_a_directory_drops_the_directory_from_the_tree(repo):
+def test_a_deletion_that_empties_a_directory_drops_the_directory_from_the_tree(repo) -> None:
     (repo / "d").mkdir()
     (repo / "d" / "only.py").write_text("x = 1\n", encoding="utf-8")
     _git(["add", "."], repo)
@@ -115,7 +116,7 @@ def test_a_deletion_that_empties_a_directory_drops_the_directory_from_the_tree(r
     _fsck_clean(repo)
 
 
-def test_a_tracked_executable_keeps_its_mode_when_edited(repo):
+def test_a_tracked_executable_keeps_its_mode_when_edited(repo) -> None:
     (repo / "run.sh").write_text("echo 1\n", encoding="utf-8")
     _git(["add", "run.sh"], repo)
     _git(["update-index", "--chmod=+x", "run.sh"], repo)
@@ -128,7 +129,7 @@ def test_a_tracked_executable_keeps_its_mode_when_edited(repo):
     assert _git(["ls-tree", "HEAD", "run.sh"], repo).startswith("100755")
 
 
-def test_a_second_call_with_a_spent_token_answers_already_landed(repo):
+def test_a_second_call_with_a_spent_token_answers_already_landed(repo) -> None:
     (repo / "a.py").write_text("a = 1\n", encoding="utf-8")
     run_id = "ask-20261114T000000-aaaaaa"
     token = run_token.mint(repo, run_id, "run.mjs", session_id="5e1f0000-0000-4000-8000-0000000000f1")
@@ -142,7 +143,7 @@ def test_a_second_call_with_a_spent_token_answers_already_landed(repo):
     assert _git(["rev-list", "--count", "HEAD"], repo) == "2"
 
 
-def test_a_refused_landing_releases_the_token_for_a_refire(repo):
+def test_a_refused_landing_releases_the_token_for_a_refire(repo) -> None:
     (repo / "a.py").write_text("a = 1\n", encoding="utf-8")
     run_id = "ask-20261114T000000-bbbbbb"
     token = run_token.mint(repo, run_id, "run.mjs", session_id="5e1f0000-0000-4000-8000-0000000000f1")
@@ -155,7 +156,7 @@ def test_a_refused_landing_releases_the_token_for_a_refire(repo):
     assert landed["committed"] is True, landed
 
 
-def test_an_own_kept_blob_for_a_reverted_path_lands_and_converges_the_worktree(repo):
+def test_an_own_kept_blob_for_a_reverted_path_lands_and_converges_the_worktree(repo) -> None:
     run_id = "ask-20261114T000001-cccccc"
     blob = subprocess.run(["git", "hash-object", "-w", "--stdin"], cwd=str(repo), input=b"k = 2\n",
                           capture_output=True, check=True).stdout.decode().strip()
@@ -174,7 +175,7 @@ def test_an_own_kept_blob_for_a_reverted_path_lands_and_converges_the_worktree(r
     assert (repo / "k.py").read_bytes() == b"k = 2\n"
 
 
-def test_the_reply_keeps_the_keys_callers_branch_on(repo):
+def test_the_reply_keeps_the_keys_callers_branch_on(repo) -> None:
     (repo / "a.py").write_text("a = 1\n", encoding="utf-8")
 
     out = _fire("new", repo, {"C1": ["a.py"]})
@@ -185,7 +186,7 @@ def test_the_reply_keeps_the_keys_callers_branch_on(repo):
     assert out["chunks_committed"] == ["C1"]
 
 
-def test_a_mode_param_is_not_a_product_landing(repo):
+def test_a_mode_param_is_not_a_product_landing(repo) -> None:
     out = run_landing.land_run({"halted_by": {"x": 1}}, repo / ".git")
 
     assert out["committed"] is False

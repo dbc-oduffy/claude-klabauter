@@ -3,11 +3,16 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _SCRIPT = Path(__file__).resolve().parent.parent / "assert-no-terminal-plans-in-live.py"
 
 
-def _load():
+def _load() -> ModuleType:
     spec = importlib.util.spec_from_file_location("assert_no_terminal_plans_in_live", _SCRIPT)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -30,19 +35,19 @@ def _run(mod, monkeypatch, tmp_path, holder_status: str) -> int:
     return mod.main(["--root", str(tmp_path)])
 
 
-def test_closed_is_in_the_shared_terminal_tuple():
+def test_closed_is_in_the_shared_terminal_tuple() -> None:
     mod = _load()
     assert "closed" in mod._TERMINAL_PLAN_STATUSES
     assert "abandoned" in mod._TERMINAL_PLAN_STATUSES
 
 
-def test_closed_plan_is_excluded_from_live_plan_refs(monkeypatch, tmp_path):
+def test_closed_plan_is_excluded_from_live_plan_refs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert _run(_load(), monkeypatch, tmp_path, "closed") == 1
 
 
-def test_abandoned_plan_is_excluded_from_live_plan_refs(monkeypatch, tmp_path):
+def test_abandoned_plan_is_excluded_from_live_plan_refs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert _run(_load(), monkeypatch, tmp_path, "abandoned") == 1
 
 
-def test_active_plan_still_holds_its_reference(monkeypatch, tmp_path):
+def test_active_plan_still_holds_its_reference(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert _run(_load(), monkeypatch, tmp_path, "active") == 0

@@ -12,6 +12,7 @@ import os
 import subprocess
 import sys
 import textwrap
+from pathlib import Path
 
 BIN = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "queue-closure-sweep.py"
@@ -27,7 +28,7 @@ import pytest
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def write_entry(root, queue, name, **fields):
+def write_entry(root, queue, name, **fields) -> str:
     d = os.path.join(root, "state", queue)
     os.makedirs(d, exist_ok=True)
     body = "".join(f"{k}: {v}\n" for k, v in fields.items())
@@ -35,11 +36,11 @@ def write_entry(root, queue, name, **fields):
     return f"state/{queue}/{name}"
 
 
-def classes(root, name="repo", siblings=()):
+def classes(root, name: str = "repo", siblings=()):
     return {e.path: e.klass for e in classify_repo(root, name, sibling_roots=siblings)}
 
 
-def test_terminal_status_is_archivable_including_off_schema_spellings(tmp_path):
+def test_terminal_status_is_archivable_including_off_schema_spellings(tmp_path: Path) -> None:
     root = str(tmp_path)
     for i, status in enumerate(["closed", "fixed", "resolved", "done", "obe", "wontfix"]):
         write_entry(root, "bug-backlog", f"2026-01-0{i+1}-e{i}.yaml",
@@ -47,7 +48,7 @@ def test_terminal_status_is_archivable_including_off_schema_spellings(tmp_path):
     assert set(classes(root).values()) == {ARCHIVABLE}
 
 
-def test_live_entry_is_never_archivable(tmp_path):
+def test_live_entry_is_never_archivable(tmp_path: Path) -> None:
     root = str(tmp_path)
     for i, status in enumerate(["open", "deferred", "in_progress", "proposed", "closeable"]):
         write_entry(root, "bug-backlog", f"2026-01-0{i+1}-e{i}.yaml",
@@ -55,14 +56,14 @@ def test_live_entry_is_never_archivable(tmp_path):
     assert ARCHIVABLE not in set(classes(root).values())
 
 
-def test_closure_note_on_a_live_entry_is_flagged_not_closed(tmp_path):
+def test_closure_note_on_a_live_entry_is_flagged_not_closed(tmp_path: Path) -> None:
     root = str(tmp_path)
     p = write_entry(root, "bug-backlog", "2026-01-01-a.yaml", created="2026-01-01",
                     title="t", status="open", resolution_2026_01_02="'verified fixed'")
     assert classes(root)[p] == CLOSURE_NOTE_OPEN
 
 
-def test_surface_present_in_sibling_is_not_reported_vanished(tmp_path):
+def test_surface_present_in_sibling_is_not_reported_vanished(tmp_path: Path) -> None:
     """A DoE entry naming a claude-klabauter path is a routing mistake, not a fix signal."""
     here, there = str(tmp_path / "here"), str(tmp_path / "there")
     os.makedirs(os.path.join(there, "coordinator_core"), exist_ok=True)
@@ -74,14 +75,14 @@ def test_surface_present_in_sibling_is_not_reported_vanished(tmp_path):
     assert classes(here, "here", siblings=[("here", here)])[p] == SURFACE_VANISHED
 
 
-def test_prose_surface_never_becomes_a_candidate(tmp_path):
+def test_prose_surface_never_becomes_a_candidate(tmp_path: Path) -> None:
     root = str(tmp_path)
     p = write_entry(root, "bug-backlog", "2026-01-01-a.yaml", created="2026-01-01",
                     title="t", status="open", surface="the commit ceremony, broadly")
     assert classes(root)[p] == OPEN_UNVERIFIED
 
 
-def test_duplicate_titles_group_and_missing_status_is_its_own_class(tmp_path):
+def test_duplicate_titles_group_and_missing_status_is_its_own_class(tmp_path: Path) -> None:
     root = str(tmp_path)
     a = write_entry(root, "bug-backlog", "2026-01-01-a.yaml", created="2026-01-01",
                     title="The Same  Thing!", status="open")
@@ -93,7 +94,7 @@ def test_duplicate_titles_group_and_missing_status_is_its_own_class(tmp_path):
     assert got[c] == STATUS_MISSING
 
 
-def test_apply_moves_only_terminal_entries_and_leaves_live_ones_in_place(tmp_path):
+def test_apply_moves_only_terminal_entries_and_leaves_live_ones_in_place(tmp_path: Path) -> None:
     root = str(tmp_path)
     dead = write_entry(root, "bug-backlog", "2026-03-04-dead.yaml", created="2026-03-04",
                        title="dead", status="fixed")
@@ -115,7 +116,7 @@ def test_apply_moves_only_terminal_entries_and_leaves_live_ones_in_place(tmp_pat
     assert "No claim is made that the underlying defect was verified fixed" in text
 
 
-def test_apply_normalizes_a_mixed_case_terminal_status_on_disk(tmp_path):
+def test_apply_normalizes_a_mixed_case_terminal_status_on_disk(tmp_path: Path) -> None:
     """`classify_repo` lowercases `status` before comparing against TERMINAL_STATUSES, but the
     archival-time substitution used to match the lowercased value against not-lowercased text and
     silently no-op on `status: Fixed`. Pin BOTH halves: the file is actually rewritten, and the
@@ -137,7 +138,7 @@ def test_apply_normalizes_a_mixed_case_terminal_status_on_disk(tmp_path):
     assert "archival_note:" in text and "`fixed`" in text
 
 
-def test_apply_is_idempotent_and_never_overwrites_an_existing_archive_entry(tmp_path):
+def test_apply_is_idempotent_and_never_overwrites_an_existing_archive_entry(tmp_path: Path) -> None:
     root = str(tmp_path)
     write_entry(root, "bug-backlog", "2026-03-04-dead.yaml", created="2026-03-04",
                 title="dead", status="closed")
@@ -150,7 +151,7 @@ def test_apply_is_idempotent_and_never_overwrites_an_existing_archive_entry(tmp_
         not os.listdir(os.path.join(root, "state/bug-backlog"))
 
 
-def test_report_runs_read_only(tmp_path):
+def test_report_runs_read_only(tmp_path: Path) -> None:
     root = str(tmp_path)
     p = write_entry(root, "bug-backlog", "2026-03-04-dead.yaml", created="2026-03-04",
                     title="dead", status="closed")
@@ -163,7 +164,7 @@ def test_report_runs_read_only(tmp_path):
     assert "archivable" in r.stdout
 
 
-def test_hyphenated_status_is_read_whole_not_truncated_at_the_hyphen(tmp_path):
+def test_hyphenated_status_is_read_whole_not_truncated_at_the_hyphen(tmp_path: Path) -> None:
     """`partially-resolved` must not be read as `partially`.
 
     Truncating at the hyphen fails in the safe direction -- the stub falls through to
@@ -181,7 +182,7 @@ def test_hyphenated_status_is_read_whole_not_truncated_at_the_hyphen(tmp_path):
     assert entries[dead].status == "wont-fix"
 
 
-def test_an_unrecognised_live_status_still_gets_the_closure_and_surface_checks(tmp_path):
+def test_an_unrecognised_live_status_still_gets_the_closure_and_surface_checks(tmp_path: Path) -> None:
     """Liveness is the complement of terminal, not membership in an enumerated list -- the live
     side spells itself a dozen ways on disk, and gating the candidate checks on a known-live list
     would make every unenumerated spelling skip them silently."""
@@ -196,7 +197,7 @@ def test_an_unrecognised_live_status_still_gets_the_closure_and_surface_checks(t
     assert got[gone] == SURFACE_VANISHED
 
 
-def test_block_scalar_titles_do_not_collapse_into_one_colliding_key(tmp_path):
+def test_block_scalar_titles_do_not_collapse_into_one_colliding_key(tmp_path: Path) -> None:
     """`title: |-` puts the text on the FOLLOWING lines.
 
     Reading the scalar header literally yields "|-" for every such entry, and they then collide
@@ -217,7 +218,7 @@ def test_block_scalar_titles_do_not_collapse_into_one_colliding_key(tmp_path):
     assert DUPLICATE_TITLE not in {e.klass for e in entries.values()}
 
 
-def test_provenance_surfaces_are_not_read_as_fix_signals(tmp_path):
+def test_provenance_surfaces_are_not_read_as_fix_signals(tmp_path: Path) -> None:
     """A central-scope entry, and any lessons-file surface, cite where an observation was
     CAPTURED -- not where a fix belongs. Reading either absence as evidence misclassified 199
     correctly-filed entries in one measured run, and the lessons case is this instrument's
@@ -234,7 +235,7 @@ def test_provenance_surfaces_are_not_read_as_fix_signals(tmp_path):
     assert got[lesson] == OPEN_UNVERIFIED
 
 
-def test_a_verifiers_receipt_does_not_re_flag_the_entry_on_the_next_run(tmp_path):
+def test_a_verifiers_receipt_does_not_re_flag_the_entry_on_the_next_run(tmp_path: Path) -> None:
     """A drain pass that settles an entry and leaves it open writes a dated receipt onto it --
     without its own class that receipt reads as a fresh candidate on every later run, and each
     pass re-dispatches a verifier over its predecessor's finished work."""
@@ -259,7 +260,7 @@ def test_a_verifiers_receipt_does_not_re_flag_the_entry_on_the_next_run(tmp_path
     assert got[unread] == SURFACE_VANISHED
 
 
-def test_a_receipt_never_outranks_a_terminal_status(tmp_path):
+def test_a_receipt_never_outranks_a_terminal_status(tmp_path: Path) -> None:
     """An entry a verifier closed is archivable, not parked in the receipt class."""
     root = str(tmp_path)
     closed = write_entry(root, "bug-backlog", "a.yaml", status="closed", title="A",
@@ -269,7 +270,7 @@ def test_a_receipt_never_outranks_a_terminal_status(tmp_path):
     assert classes(root)[closed] == ARCHIVABLE
 
 
-def test_a_key_written_twice_is_flagged_and_never_archived(tmp_path):
+def test_a_key_written_twice_is_flagged_and_never_archived(tmp_path: Path) -> None:
     """Appending `status: closed` instead of editing the existing line leaves two status keys.
     YAML is last-wins, so the file reads correctly to every consumer and a safe_load parse check
     passes -- the corruption is invisible to exactly the instruments that would catch it. An
@@ -291,7 +292,7 @@ def test_a_key_written_twice_is_flagged_and_never_archived(tmp_path):
     assert "status" in entry.reason
 
 
-def _git(root, *args, date=None):
+def _git(root, *args, date=None) -> str:
     env = {k: v for k, v in os.environ.items()
            if k not in ("GIT_DIR", "GIT_INDEX_FILE", "GIT_WORK_TREE")}
     if date:
@@ -305,7 +306,7 @@ def _git(root, *args, date=None):
     return r.stdout.strip()
 
 
-def _git_repo(tmp_path, stem="2026-01-01-a", extra_entry=""):
+def _git_repo(tmp_path, stem: str = "2026-01-01-a", extra_entry: str = "") -> tuple[str, str]:
     root = str(tmp_path)
     _git(root, "init", "-q")
     path = write_entry(root, "bug-backlog", f"{stem}.yaml", created="2026-01-01",
@@ -316,7 +317,7 @@ def _git_repo(tmp_path, stem="2026-01-01-a", extra_entry=""):
     return root, path
 
 
-def _commit(root, message, date="2026-02-01"):
+def _commit(root, message, date: str = "2026-02-01") -> str:
     _git(root, "add", "-A")
     _git(root, "commit", "-q", "--allow-empty", "-m", message, date=date)
     return _git(root, "rev-parse", "HEAD")
@@ -333,7 +334,7 @@ def _sweep_entries(root):
         root, "repo", read_claims=lambda since: mod.read_fixes_row_claims(root, since))}
 
 
-def test_fixes_row_in_final_trailer_block_claims_the_row(tmp_path):
+def test_fixes_row_in_final_trailer_block_claims_the_row(tmp_path: Path) -> None:
     root, path = _git_repo(tmp_path)
     sha = _commit(root, "fix a\n\nbody\n\nFixes-Row: 2026-01-01-a\nSession-Id: x")
     e = _sweep_entries(root)[path]
@@ -341,13 +342,13 @@ def test_fixes_row_in_final_trailer_block_claims_the_row(tmp_path):
     assert sha in e.to_dict()["claimed_by"]  # dr084: reads sweep output key, not frontmatter
 
 
-def test_fixes_row_outside_the_final_trailer_block_claims_nothing(tmp_path):
+def test_fixes_row_outside_the_final_trailer_block_claims_nothing(tmp_path: Path) -> None:
     root, path = _git_repo(tmp_path)
     _commit(root, "fix a\n\nFixes-Row: 2026-01-01-a\n\nclosing prose here.\n\nSession-Id: x")
     assert _sweep_entries(root)[path].klass != COMMIT_CLAIMED
 
 
-def test_fixes_row_sharing_a_block_with_prose_follows_gits_own_trailer_parse(tmp_path):
+def test_fixes_row_sharing_a_block_with_prose_follows_gits_own_trailer_parse(tmp_path: Path) -> None:
     root, path = _git_repo(tmp_path)
     msg = "fix a\n\nsome prose line\nFixes-Row: 2026-01-01-a\nSession-Id: x"
     _commit(root, msg)
@@ -356,14 +357,14 @@ def test_fixes_row_sharing_a_block_with_prose_follows_gits_own_trailer_parse(tmp
     assert _sweep_entries(root)[path].klass == expect
 
 
-def test_fixes_row_naming_no_live_row_changes_nothing(tmp_path):
+def test_fixes_row_naming_no_live_row_changes_nothing(tmp_path: Path) -> None:
     root, path = _git_repo(tmp_path)
     _commit(root, "fix\n\nFixes-Row: 2026-09-09-nonexistent")
     got = _sweep_entries(root)
     assert set(got) == {path} and got[path].klass == OPEN_UNVERIFIED
 
 
-def test_receipt_on_or_after_claim_stays_verified_open_and_later_claim_wins(tmp_path):
+def test_receipt_on_or_after_claim_stays_verified_open_and_later_claim_wins(tmp_path: Path) -> None:
     root, path = _git_repo(tmp_path, extra_entry="verified_2026_02_01: 'checked'\n")
     _commit(root, "fix\n\nFixes-Row: 2026-01-01-a", date="2026-02-01")
     assert _sweep_entries(root)[path].klass == VERIFIED_OPEN
@@ -371,14 +372,14 @@ def test_receipt_on_or_after_claim_stays_verified_open_and_later_claim_wins(tmp_
     assert _sweep_entries(root)[path].klass == COMMIT_CLAIMED
 
 
-def test_newest_of_several_receipt_keys_is_the_one_compared(tmp_path):
+def test_newest_of_several_receipt_keys_is_the_one_compared(tmp_path: Path) -> None:
     root, path = _git_repo(
         tmp_path, extra_entry="verified_2026_01_05: 'x'\ndivergence_2026_03_01: 'y'\n")
     _commit(root, "fix\n\nFixes-Row: 2026-01-01-a", date="2026-02-01")
     assert _sweep_entries(root)[path].klass == VERIFIED_OPEN
 
 
-def test_a_live_row_without_created_reads_claims_unbounded(tmp_path):
+def test_a_live_row_without_created_reads_claims_unbounded(tmp_path: Path) -> None:
     root = str(tmp_path)
     write_entry(root, "bug-backlog", "nocreated.yaml", title="t", status="open")
     seen = []
@@ -391,7 +392,7 @@ def test_a_live_row_without_created_reads_claims_unbounded(tmp_path):
     assert seen == [None]
 
 
-def test_read_claims_is_skipped_when_every_row_is_terminal_and_called_once_otherwise(tmp_path):
+def test_read_claims_is_skipped_when_every_row_is_terminal_and_called_once_otherwise(tmp_path: Path) -> None:
     root = str(tmp_path)
     write_entry(root, "bug-backlog", "a.yaml", created="2026-01-01", title="a", status="closed")
     calls = []
@@ -403,7 +404,7 @@ def test_read_claims_is_skipped_when_every_row_is_terminal_and_called_once_other
     assert calls == ["2026-02-01"]
 
 
-def test_apply_archivable_leaves_a_claimed_row_byte_identical(tmp_path):
+def test_apply_archivable_leaves_a_claimed_row_byte_identical(tmp_path: Path) -> None:
     root, path = _git_repo(tmp_path)
     _commit(root, "fix\n\nFixes-Row: 2026-01-01-a")
     full = os.path.join(root, path)
@@ -416,7 +417,7 @@ def test_apply_archivable_leaves_a_claimed_row_byte_identical(tmp_path):
     assert "commit-claimed" in r.stdout
 
 
-def test_non_git_root_yields_no_claims_with_a_stderr_note_and_exit_zero(tmp_path):
+def test_non_git_root_yields_no_claims_with_a_stderr_note_and_exit_zero(tmp_path: Path) -> None:
     root = str(tmp_path)
     write_entry(root, "bug-backlog", "a.yaml", created="2026-01-01", title="a", status="open")
     r = subprocess.run([sys.executable, BIN, "--repo", root], capture_output=True, text=True,

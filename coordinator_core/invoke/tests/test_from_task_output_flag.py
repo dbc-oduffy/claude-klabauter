@@ -10,7 +10,7 @@ from coordinator_core.invoke.__main__ import _build_arg_parser, _dispatch_argv
 
 
 @pytest.fixture
-def captured(monkeypatch, tmp_path):
+def captured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     (tmp_path / ".git").mkdir()
     seen: list[dict] = []
 
@@ -22,14 +22,14 @@ def captured(monkeypatch, tmp_path):
     return seen
 
 
-def test_parser_accepts_the_flag():
+def test_parser_accepts_the_flag() -> None:
     args = _build_arg_parser().parse_intermixed_args(
         ["dispatch.terminal_commit", "--from-task-output", "out.json"]
     )
     assert args.from_task_output == "out.json"
 
 
-def test_params_carry_the_absolute_path_resolved_against_cwd(captured, tmp_path):
+def test_params_carry_the_absolute_path_resolved_against_cwd(captured, tmp_path: Path) -> None:
     _, stderr, code = _dispatch_argv(
         ["dispatch.terminal_commit", "--from-task-output", "out.json"],
         str(tmp_path),
@@ -40,7 +40,7 @@ def test_params_carry_the_absolute_path_resolved_against_cwd(captured, tmp_path)
     assert Path(captured[0]["task_output_path"]).is_absolute()
 
 
-def test_the_flag_with_empty_object_positional_params_is_admitted(captured, tmp_path):
+def test_the_flag_with_empty_object_positional_params_is_admitted(captured, tmp_path: Path) -> None:
     _, stderr, code = _dispatch_argv(
         ["dispatch.terminal_commit", "{}", "--from-task-output", "out.json"],
         str(tmp_path),
@@ -50,7 +50,7 @@ def test_the_flag_with_empty_object_positional_params_is_admitted(captured, tmp_
     assert captured == [{"task_output_path": str((tmp_path / "out.json").resolve())}]
 
 
-def test_a_matching_positional_task_output_path_is_accepted(captured, tmp_path):
+def test_a_matching_positional_task_output_path_is_accepted(captured, tmp_path: Path) -> None:
     abs_path = str((tmp_path / "out.json").resolve())
     import json
 
@@ -64,7 +64,7 @@ def test_a_matching_positional_task_output_path_is_accepted(captured, tmp_path):
     assert captured == [{"task_output_path": abs_path, "k": 1}]
 
 
-def test_land_run_takes_the_flag_and_carries_the_absolute_path(captured, tmp_path):
+def test_land_run_takes_the_flag_and_carries_the_absolute_path(captured, tmp_path: Path) -> None:
     _, stderr, code = _dispatch_argv(
         ["dispatch.land_run", "--from-task-output", "out.json"],
         str(tmp_path),
@@ -74,7 +74,7 @@ def test_land_run_takes_the_flag_and_carries_the_absolute_path(captured, tmp_pat
     assert captured == [{"task_output_path": str((tmp_path / "out.json").resolve())}]
 
 
-def test_land_run_conflicting_task_output_path_is_refused(captured, tmp_path):
+def test_land_run_conflicting_task_output_path_is_refused(captured, tmp_path: Path) -> None:
     _, stderr, code = _dispatch_argv(
         ["dispatch.land_run", '{"task_output_path": "other.json"}',
          "--from-task-output", "out.json"],
@@ -86,7 +86,7 @@ def test_land_run_conflicting_task_output_path_is_refused(captured, tmp_path):
     assert captured == []
 
 
-def test_another_op_is_a_usage_error(captured, tmp_path):
+def test_another_op_is_a_usage_error(captured, tmp_path: Path) -> None:
     _, stderr, code = _dispatch_argv(
         ["ping", "--from-task-output", "out.json"], str(tmp_path), allow_warm=False
     )
@@ -95,7 +95,7 @@ def test_another_op_is_a_usage_error(captured, tmp_path):
     assert captured == []
 
 
-def test_a_conflicting_positional_task_output_path_is_refused(captured, tmp_path):
+def test_a_conflicting_positional_task_output_path_is_refused(captured, tmp_path: Path) -> None:
     _, stderr, code = _dispatch_argv(
         ["dispatch.terminal_commit", '{"task_output_path": "other.json"}',
          "--from-task-output", "out.json"],

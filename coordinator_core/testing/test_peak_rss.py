@@ -19,19 +19,19 @@ MIB = 1024 * 1024
 
 
 @pytest.fixture(autouse=True)
-def _no_nested_refusal():
+def _no_nested_refusal() -> None:
     refusal = spawn_depth.refusal_for_spawn(os.environ)
     if refusal:
         pytest.skip(refusal)
 
 
-def test_over_bound_filters_by_peak():
+def test_over_bound_filters_by_peak() -> None:
     results = [peak_rss.PeakResult("a", 10, 0), peak_rss.PeakResult("b", 50, 0)]
     assert [r.path for r in peak_rss.over_bound(results, 32)] == ["b"]
     assert peak_rss.over_bound(results, 50) == []
 
 
-def test_tiny_file_measured_and_under_bound(tmp_path: Path):
+def test_tiny_file_measured_and_under_bound(tmp_path: Path) -> None:
     f = tmp_path / "test_tiny.py"
     f.write_text("def test_ok():\n    assert True\n", encoding="utf-8")
     result = peak_rss.measure_file(str(f))
@@ -40,7 +40,7 @@ def test_tiny_file_measured_and_under_bound(tmp_path: Path):
     assert not peak_rss.over_bound([result], peak_rss.BOUND_BYTES)
 
 
-def test_allocating_file_is_over_an_explicit_bound(tmp_path: Path):
+def test_allocating_file_is_over_an_explicit_bound(tmp_path: Path) -> None:
     f = tmp_path / "test_alloc.py"
     f.write_text(
         "import time\n"
@@ -58,7 +58,7 @@ def test_allocating_file_is_over_an_explicit_bound(tmp_path: Path):
     assert peak_rss.over_bound([result], 32 * MIB) == [result]
 
 
-def test_discover_files_finds_test_modules_under_scope(tmp_path: Path):
+def test_discover_files_finds_test_modules_under_scope(tmp_path: Path) -> None:
     (tmp_path / "sub").mkdir()
     (tmp_path / "sub" / "test_a.py").write_text("", encoding="utf-8")
     (tmp_path / "helper.py").write_text("", encoding="utf-8")
@@ -66,7 +66,7 @@ def test_discover_files_finds_test_modules_under_scope(tmp_path: Path):
     assert [Path(p).name for p in found] == ["test_a.py"]
 
 
-def test_timeout_is_recorded_per_file_and_the_sweep_continues(tmp_path: Path, capsys):
+def test_timeout_is_recorded_per_file_and_the_sweep_continues(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     slow = tmp_path / "test_slow.py"
     slow.write_text("import time\n\ndef test_slow():\n    time.sleep(60)\n", encoding="utf-8")
     fast = tmp_path / "test_fast.py"

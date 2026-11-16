@@ -7,11 +7,12 @@ from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import landing_targeted_tests, retest_targeted
 from coordinator_core.ops.dispatch_emit.tests.test_retest_isolated_baseline import _setup
+import pytest
 
 RATCHET = "test_a.py::t0"
 
 
-def test_ran_short_whole_file_falls_back_to_node_measure_and_records_foreign(tmp_path, monkeypatch):
+def test_ran_short_whole_file_falls_back_to_node_measure_and_records_foreign(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, record, _ = _setup(
         tmp_path, monkeypatch, export_red=[RATCHET], head_red=[RATCHET], head_ran_short=1,
     )
@@ -24,7 +25,7 @@ def test_ran_short_whole_file_falls_back_to_node_measure_and_records_foreign(tmp
     assert landing_targeted_tests.failed_targeted_tests(record) == ([], "pre-existing-only")
 
 
-def test_node_measure_keeps_a_run_caused_red_caused(tmp_path, monkeypatch):
+def test_node_measure_keeps_a_run_caused_red_caused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, record, _ = _setup(
         tmp_path, monkeypatch, export_red=[RATCHET], head_red=[], head_ran_short=1,
     )
@@ -34,7 +35,7 @@ def test_node_measure_keeps_a_run_caused_red_caused(tmp_path, monkeypatch):
     assert landing_targeted_tests.failed_targeted_tests(record)[1] == "failed"
 
 
-def test_node_measure_unmeasurable_keeps_baseline_skipped(tmp_path, monkeypatch):
+def test_node_measure_unmeasurable_keeps_baseline_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, record, _ = _setup(tmp_path, monkeypatch, export_red=[RATCHET], head_red=[RATCHET], head_collect_error=True)
     assert "baseline" not in record
     assert "test_a.py" in record["baseline_skipped"]["reason"]
@@ -68,7 +69,7 @@ def _base():
                          "evidence": ["test_a.py::t0"]}}
 
 
-def test_live_only_red_is_foreign_undeclared_dirt(tmp_path):
+def test_live_only_red_is_foreign_undeclared_dirt(tmp_path: Path) -> None:
     record = _dual(tmp_path, export_summary=True, baseline=_base(), live_red=["test_a.py::t0", "test_b.py::dirt"])
     assert record["baseline"]["foreign"] == ["test_a.py::t0", "test_b.py::dirt"]
     assert record["baseline"]["foreign_reason"] == {"test_b.py::dirt": "undeclared-dirt"}
@@ -81,7 +82,7 @@ _SECTION = (
 )
 
 
-def test_live_only_red_naming_a_peer_path_is_dirt_with_evidence(tmp_path):
+def test_live_only_red_naming_a_peer_path_is_dirt_with_evidence(tmp_path: Path) -> None:
     record = _dual(
         tmp_path, export_summary=True, baseline=_base(), live_red=["test_b.py::dirt"],
         write_set=("pkg/mine.py",), live_detail=_SECTION.format(named="pkg/peer_untracked.py"),
@@ -92,7 +93,7 @@ def test_live_only_red_naming_a_peer_path_is_dirt_with_evidence(tmp_path):
     assert landing_targeted_tests.failed_targeted_tests(record) == ([], "pre-existing-only")
 
 
-def test_live_only_red_naming_an_own_path_stays_caused_and_refuses(tmp_path):
+def test_live_only_red_naming_an_own_path_stays_caused_and_refuses(tmp_path: Path) -> None:
     record = _dual(
         tmp_path, export_summary=True, baseline=_base(), live_red=["test_b.py::dirt"],
         write_set=("pkg/mine.py",), live_detail=_SECTION.format(named="pkg\\mine.py"),
@@ -102,13 +103,13 @@ def test_live_only_red_naming_an_own_path_stays_caused_and_refuses(tmp_path):
     assert landing_targeted_tests.failed_targeted_tests(record)[1] == "failed"
 
 
-def test_baseline_skipped_gains_no_baseline_from_dirt(tmp_path):
+def test_baseline_skipped_gains_no_baseline_from_dirt(tmp_path: Path) -> None:
     skipped = {"baseline_skipped": {"reason": "x", "files": {}}}
     record = _dual(tmp_path, export_summary=True, baseline=skipped, live_red=["test_b.py::dirt"])
     assert "baseline" not in record and "baseline_skipped" in record
 
 
-def test_export_pass_without_a_summary_records_no_dirt(tmp_path):
+def test_export_pass_without_a_summary_records_no_dirt(tmp_path: Path) -> None:
     record = _dual(tmp_path, export_summary=False, baseline=_base(), live_red=["test_b.py::dirt"])
     assert record["baseline"]["foreign"] == ["test_a.py::t0"]
     assert "foreign_reason" not in record["baseline"]

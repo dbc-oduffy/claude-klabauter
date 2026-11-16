@@ -74,7 +74,7 @@ def test_then_build_with_empty_writes_splits_a_writes_less_build_sibling(repo):
     assert (r["status"], b["status"]) == ("ready", "after")
     assert b["after"] == [r["run_id"]]
     build_doc = yaml.safe_load((repo / b["sizing"]).read_text(encoding="utf-8"))
-    assert "research" not in build_doc and "writes" not in build_doc and build_doc["route"] == "plan"
+    assert "research" not in build_doc and "writes" not in build_doc and build_doc["route"] == "spec-dispatch"
     research_doc = yaml.safe_load((repo / r["sizing"]).read_text(encoding="utf-8"))
     assert "then_build" not in research_doc["research"]
 
@@ -122,7 +122,7 @@ def test_each_slice_cites_its_own_month_dir_plan_path(repo):
         stem = rel.rsplit("/", 1)[-1][: -len(".yaml")]
         assert doc["plan"] == f"docs/plans/2026-10/{stem}.md"
     build = yaml.safe_load((repo / split["build"]["sizing"]).read_text(encoding="utf-8"))
-    assert build["route"] == "plan"
+    assert build["route"] == "spec-dispatch"
 
 
 def test_a_parent_plan_edge_is_kept_on_both_slices(repo):

@@ -334,21 +334,51 @@ def _walk_md_via_git(root: str, stamps: Optional[Dict[str, Tuple[int, int]]]) ->
     listed = _git_listed_md(root)
     if listed is None:
         return None
-    results: List[str] = []
+    kept: List[Tuple[str, str, str]] = []
+    base = os.path.join(root, "")  # root + separator exactly as os.path.join(root, *parts) spells it
+    wanted: Dict[str, set] = {}
+    excluded_dirs: Dict[str, bool] = {}
     for rel in listed:
-        parts = rel.split("/")
-        if any(_is_excluded_dir(d) for d in parts[:-1]):
+        head, _, name = rel.rpartition("/")
+        skip = excluded_dirs.get(head)
+        if skip is None:
+            skip = excluded_dirs[head] = any(_is_excluded_dir(d) for d in head.split("/")) if head else False
+        if skip:
             continue
-        path = os.path.join(root, *parts)
+        kept.append((base + (rel.replace("/", os.sep) if os.sep != "/" else rel), head, name))
+        wanted.setdefault(head, set()).add(name)
+
+    # One scandir per directory supplies type and (size, mtime_ns); an lstat per file does not scale.
+    found: Dict[Tuple[str, str], Tuple[int, int]] = {}
+    for head, names in wanted.items():
         try:
-            st = os.lstat(path)
+            with os.scandir(os.path.join(root, *head.split("/")) if head else root) as it:
+                for e in it:
+                    if e.name in names:
+                        try:
+                            if e.is_file(follow_symlinks=False):
+                                st = e.stat(follow_symlinks=False)
+                                found[(head, e.name)] = (st.st_size, st.st_mtime_ns)
+                        except OSError:
+                            continue
         except OSError:
             continue
-        if not stat.S_ISREG(st.st_mode):
-            continue
+
+    results: List[str] = []
+    for path, head, name in kept:
+        stamp = found.get((head, name))
+        if stamp is None:
+            # Not in the listing under that spelling (case-folded name): ask the file itself.
+            try:
+                st = os.lstat(path)
+            except OSError:
+                continue
+            if not stat.S_ISREG(st.st_mode):
+                continue
+            stamp = (st.st_size, st.st_mtime_ns)
         results.append(path)
         if stamps is not None:
-            stamps[path] = (st.st_size, st.st_mtime_ns)
+            stamps[path] = stamp
     return results
 
 

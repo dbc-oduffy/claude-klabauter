@@ -12,6 +12,7 @@ from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.ops.dispatch_emit import peer_hunk_gate, run_hunk_claims, run_token, run_write_prints
 from coordinator_core.ops.dispatch_emit.run_hunk_claims import Hunk, HunkSplit
 from coordinator_core.win_portability import no_console_creationflags
+import pytest
 
 _ENV = {"GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t", "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
 PLAN = "docs/plans/p.md"
@@ -42,13 +43,13 @@ def _blob(root: Path, sha: str) -> bytes:
     return got[1]
 
 
-def _stub(monkeypatch, split_fn, holds=()):
+def _stub(monkeypatch, split_fn, holds=()) -> None:
     monkeypatch.setattr(peer_hunk_gate, "co_declared_peer_holds", lambda *a, **k: list(holds))
     monkeypatch.setattr(run_hunk_claims, "own_hunks", split_fn)
     monkeypatch.setattr(run_write_prints, "read", lambda root, run_id: {"f.txt": None})
 
 
-def test_own_and_foreign_hunk_blob_holds_own_only(tmp_path, monkeypatch):
+def test_own_and_foreign_hunk_blob_holds_own_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _stub(
         monkeypatch,
@@ -61,13 +62,13 @@ def test_own_and_foreign_hunk_blob_holds_own_only(tmp_path, monkeypatch):
     assert "OWN" in text and "FOREIGN" not in text and "line9" in text
 
 
-def test_all_own_needs_no_blob(tmp_path, monkeypatch):
+def test_all_own_needs_no_blob(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _stub(monkeypatch, lambda r, run, path, hunks, holders: HunkSplit(own=list(hunks)))
     assert ch.checkpoint_own_blobs(root, "run1", ["f.txt"], MSG) == ({}, [])
 
 
-def test_unattributed_hunk_withholds(tmp_path, monkeypatch):
+def test_unattributed_hunk_withholds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _stub(
         monkeypatch,
@@ -76,7 +77,7 @@ def test_unattributed_hunk_withholds(tmp_path, monkeypatch):
     assert ch.checkpoint_own_blobs(root, "run1", ["f.txt"], MSG) == ({}, ["f.txt"])
 
 
-def test_overlapping_hunk_withholds(tmp_path, monkeypatch):
+def test_overlapping_hunk_withholds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _stub(
         monkeypatch,
@@ -85,7 +86,7 @@ def test_overlapping_hunk_withholds(tmp_path, monkeypatch):
     assert ch.checkpoint_own_blobs(root, "run1", ["f.txt"], MSG) == ({}, ["f.txt"])
 
 
-def test_withheld_reasons_name_the_foreign_hunk(tmp_path, monkeypatch):
+def test_withheld_reasons_name_the_foreign_hunk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _stub(
         monkeypatch,
@@ -96,7 +97,7 @@ def test_withheld_reasons_name_the_foreign_hunk(tmp_path, monkeypatch):
     assert "@@ -9,1 @@" in reasons["f.txt"]
 
 
-def test_nonrun_hunk_is_named_while_the_own_hunk_lands(tmp_path, monkeypatch):
+def test_nonrun_hunk_is_named_while_the_own_hunk_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _stub(
         monkeypatch,
@@ -112,7 +113,7 @@ def test_nonrun_hunk_is_named_while_the_own_hunk_lands(tmp_path, monkeypatch):
     assert "non-run edit" in reasons["f.txt"] and "@@ -9,1 @@" in reasons["f.txt"]
 
 
-def test_only_nonrun_hunks_withhold_the_path_and_name_them(tmp_path, monkeypatch):
+def test_only_nonrun_hunks_withhold_the_path_and_name_them(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _stub(monkeypatch, lambda r, run, path, hunks, holders: HunkSplit(nonrun=list(hunks)))
     reasons: dict = {}
@@ -120,7 +121,7 @@ def test_only_nonrun_hunks_withhold_the_path_and_name_them(tmp_path, monkeypatch
     assert reasons["f.txt"].startswith("hunk a non-run edit wrote after this run's last recorded write")
 
 
-def test_diffed_path_without_a_run_print_withholds_and_is_named(tmp_path, monkeypatch):
+def test_diffed_path_without_a_run_print_withholds_and_is_named(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _stub(monkeypatch, lambda r, run, path, hunks, holders: HunkSplit(own=list(hunks)))
     monkeypatch.setattr(run_write_prints, "read", lambda root, run_id: None)
@@ -129,7 +130,7 @@ def test_diffed_path_without_a_run_print_withholds_and_is_named(tmp_path, monkey
     assert reasons["f.txt"] == ch.NO_PRINT_REASON
 
 
-def test_credited_chunk_path_without_a_print_counts_as_the_runs_own(tmp_path, monkeypatch):
+def test_credited_chunk_path_without_a_print_counts_as_the_runs_own(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import run_credit
 
     root = _repo(tmp_path)
@@ -141,7 +142,7 @@ def test_credited_chunk_path_without_a_print_counts_as_the_runs_own(tmp_path, mo
     assert withheld == [] and "f.txt" in blobs and reasons == {}
 
 
-def test_uncredited_path_without_a_print_still_withholds(tmp_path, monkeypatch):
+def test_uncredited_path_without_a_print_still_withholds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import run_credit
 
     root = _repo(tmp_path)
@@ -153,7 +154,7 @@ def test_uncredited_path_without_a_print_still_withholds(tmp_path, monkeypatch):
     assert reasons["f.txt"] == ch.NO_PRINT_REASON
 
 
-def test_credited_writes_reads_declared_writes_of_credited_rows(tmp_path):
+def test_credited_writes_reads_declared_writes_of_credited_rows(tmp_path: Path) -> None:
     import json
 
     from coordinator_core.ops.dispatch_emit import run_credit
@@ -174,26 +175,26 @@ def test_credited_writes_reads_declared_writes_of_credited_rows(tmp_path):
     assert run_credit.credited_writes(tmp_path, "no-such-run") == frozenset()
 
 
-def test_unresolved_run_reason_is_recorded(tmp_path):
+def test_unresolved_run_reason_is_recorded(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     reasons: dict = {}
     ch.checkpoint_own_blobs(root, None, ["f.txt"], MSG, reasons)
     assert "run unresolved" in reasons["f.txt"]
 
 
-def test_unresolved_run_withholds_path_with_a_diff(tmp_path):
+def test_unresolved_run_withholds_path_with_a_diff(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     assert ch.checkpoint_own_blobs(root, None, ["f.txt"], MSG) == ({}, ["f.txt"])
 
 
-def test_untracked_and_unchanged_paths_are_omitted(tmp_path):
+def test_untracked_and_unchanged_paths_are_omitted(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     (root / "new.txt").write_text("x")
     _git(root, "checkout", "--", "f.txt")
     assert ch.checkpoint_own_blobs(root, None, ["f.txt", "new.txt"], MSG) == ({}, [])
 
 
-def test_split_failure_withholds_and_never_raises(tmp_path, monkeypatch):
+def test_split_failure_withholds_and_never_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
 
     def boom(*a, **k):
@@ -203,12 +204,12 @@ def test_split_failure_withholds_and_never_raises(tmp_path, monkeypatch):
     assert ch.checkpoint_own_blobs(root, "run1", ["f.txt"], MSG) == ({}, ["f.txt"])
 
 
-def _runs(monkeypatch, tmp_path, records, plans):
+def _runs(monkeypatch, tmp_path, records, plans) -> None:
     monkeypatch.setattr(run_token, "live_records", lambda root: iter(records))
     monkeypatch.setattr(ch, "_sizing_plan", lambda root, rel: plans.get(rel, ""))
 
 
-def test_run_resolves_by_session_and_plan(tmp_path, monkeypatch):
+def test_run_resolves_by_session_and_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _runs(
         monkeypatch, tmp_path,
         [
@@ -222,7 +223,7 @@ def test_run_resolves_by_session_and_plan(tmp_path, monkeypatch):
     assert ch.checkpoint_run_id(tmp_path, MSG, None) is None
 
 
-def test_run_unresolved_when_plan_differs_or_ambiguous(tmp_path, monkeypatch):
+def test_run_unresolved_when_plan_differs_or_ambiguous(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _runs(
         monkeypatch, tmp_path,
         [
@@ -254,7 +255,7 @@ def _live_run(root: Path, run_id: str, sizing_rel: str, plan: str, *, session: s
     (record_dir(root, run_id) / "run.json").write_text(f'{{"sizing_rel": "{sizing_rel}"}}', encoding="utf-8")
 
 
-def test_run_resolves_when_the_token_record_omits_its_sizing(tmp_path):
+def test_run_resolves_when_the_token_record_omits_its_sizing(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     _live_run(tmp_path, "ask-1", "state/sizings/a.yaml", PLAN, in_token=False)
     _live_run(tmp_path, "ask-2", "state/sizings/b.yaml", "docs/plans/other.md", in_token=False)
@@ -262,14 +263,14 @@ def test_run_resolves_when_the_token_record_omits_its_sizing(tmp_path):
     assert ch.checkpoint_run_id(tmp_path, MSG, "s9") is None
 
 
-def test_run_unresolved_when_two_token_less_sizing_runs_match(tmp_path):
+def test_run_unresolved_when_two_token_less_sizing_runs_match(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     _live_run(tmp_path, "ask-1", "state/sizings/a.yaml", PLAN, in_token=False)
     _live_run(tmp_path, "ask-2", "state/sizings/b.yaml", PLAN, in_token=True)
     assert ch.checkpoint_run_id(tmp_path, MSG, "s1") is None
 
 
-def test_blob_equal_to_head_is_withheld_with_a_reason(tmp_path):
+def test_blob_equal_to_head_is_withheld_with_a_reason(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     head_sha = subprocess.run(
         ["git", "rev-parse", "HEAD:f.txt"], cwd=root, capture_output=True, text=True, check=True,
@@ -281,7 +282,7 @@ def test_blob_equal_to_head_is_withheld_with_a_reason(tmp_path):
     assert reasons["f.txt"] == ch.HEAD_EQUAL_REASON
 
 
-def test_blob_differing_from_head_is_kept(tmp_path):
+def test_blob_differing_from_head_is_kept(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     other = git_objects.write_object(resolve_git_common_dir(root), b"blob", b"changed\n")
     reasons: dict = {}

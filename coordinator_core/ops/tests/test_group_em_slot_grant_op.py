@@ -12,9 +12,11 @@ from coordinator_core.group_em.suite_grant import IssueResult
 from coordinator_core.op_scopes import OP_KEY_SCOPE
 from coordinator_core.ops import _registry_map
 from coordinator_core.ops import group_em_slot_grant as op
+from pathlib import Path
+import pytest
 
 
-def test_registration_quad():
+def test_registration_quad() -> None:
     for key, cls in (
         ("groupem.slot_grant", OpClass.MUTATING),
         ("groupem.slot_check", OpClass.COMPUTE_ONLY),
@@ -25,7 +27,7 @@ def test_registration_quad():
         assert OP_CLASSIFICATION[key] is cls
 
 
-def test_issue_refused_for_non_holder(tmp_path, monkeypatch):
+def test_issue_refused_for_non_holder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     monkeypatch.setattr(slot_grant.core, "resolve_session_id", lambda: "imposter")
     monkeypatch.setattr(
@@ -38,7 +40,7 @@ def test_issue_refused_for_non_holder(tmp_path, monkeypatch):
     assert not list(tmp_path.rglob("*.json"))
 
 
-def test_revoke_dispatches(monkeypatch):
+def test_revoke_dispatches(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(
         slot_grant, "revoke_slot_grant", lambda g, r: calls.append((g, r)) or IssueResult(True, "absent", None)
@@ -48,7 +50,7 @@ def test_revoke_dispatches(monkeypatch):
     assert calls == [("s1", "r1")]
 
 
-def test_check_reads_one_path(monkeypatch):
+def test_check_reads_one_path(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = []
     monkeypatch.setattr(
         slot_grant, "check_slot_grant", lambda sid, run: seen.append((sid, run)) or (True, {"run": run})
@@ -58,13 +60,13 @@ def test_check_reads_one_path(monkeypatch):
     assert seen == [("s1", "r1")]
 
 
-def test_check_without_grant_is_ungranted(tmp_path, monkeypatch):
+def test_check_without_grant_is_ungranted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     monkeypatch.setattr(nomination, "box_holder", lambda directory=None, now=None: None)
     assert op._groupem_slot_check({"session_id": "s1", "run": "r1"}) == {"granted": False, "record": None}
 
 
-def test_invalid_params_return_error():
+def test_invalid_params_return_error() -> None:
     assert "error" in op._groupem_slot_grant({"grantee": "s1"})
     assert "error" in op._groupem_slot_grant({"action": "x", "grantee": "s1", "run": "r"})
     assert "error" in op._groupem_slot_check({"session_id": "s1"})

@@ -553,7 +553,7 @@ def read_ledger(sidecar_path: Path) -> Optional[Tuple[bool, List[Dict[str, Any]]
 
 
 class VerifyOutcome:
-    def __init__(self, ok: bool, failures: Optional[List[str]] = None, stamp: Optional[Dict[str, Any]] = None):
+    def __init__(self, ok: bool, failures: Optional[List[str]] = None, stamp: Optional[Dict[str, Any]] = None) -> None:
         self.ok = ok
         self.failures = failures or []
         self.stamp = stamp or {}

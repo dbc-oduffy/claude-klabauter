@@ -12,6 +12,7 @@ import pytest
 from coordinator_core.hooks import postuse_advisory_dispatch as pad
 from coordinator_core.hooks import stop_dispatch as sd
 from coordinator_core.ipc import _REGISTRY
+from pathlib import Path
 
 SID = "sess-1"
 NOW = 2_000_000_000.0
@@ -19,7 +20,7 @@ OP = "hooks.workflow_stall_stop"
 
 
 @pytest.fixture
-def tdir(tmp_path, monkeypatch):
+def tdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     d = tmp_path / "tmp"
     d.mkdir()
     monkeypatch.setattr(pad, "_managed_tmpdir", lambda: str(d))
@@ -27,7 +28,7 @@ def tdir(tmp_path, monkeypatch):
     return d
 
 
-def _stale_run(tmp_path, tdir):
+def _stale_run(tmp_path, tdir) -> None:
     run_dir = tmp_path / "r1"
     (run_dir / "subagents").mkdir(parents=True)
     journal = run_dir / "journal.jsonl"
@@ -49,7 +50,7 @@ def _stale_run(tmp_path, tdir):
         json.dump(rec, fh)
 
 
-def _blocked(result):
+def _blocked(result) -> bool:
     return sd._extract_advisory(result)[0]
 
 
@@ -61,37 +62,37 @@ def _call(params):
     return result
 
 
-def test_op_blocks_on_stale_run(tmp_path, tdir):
+def test_op_blocks_on_stale_run(tmp_path: Path, tdir) -> None:
     _stale_run(tmp_path, tdir)
     result = _call({"payload": {"session_id": SID, "transcript_path": "", "stop_hook_active": False}})
     assert result["decision"] == "block"
 
 
-def test_op_flat_params_also_block(tmp_path, tdir):
+def test_op_flat_params_also_block(tmp_path: Path, tdir) -> None:
     _stale_run(tmp_path, tdir)
     result = _call({"session_id": SID, "transcript_path": "", "stop_hook_active": False})
     assert result["decision"] == "block"
 
 
-def test_op_chained_stop_downgrades_to_advisory(tmp_path, tdir):
+def test_op_chained_stop_downgrades_to_advisory(tmp_path: Path, tdir) -> None:
     _stale_run(tmp_path, tdir)
     result = _call({"payload": {"session_id": SID, "stop_hook_active": True}})
     assert not _blocked(result)
     assert result["hookSpecificOutput"]["additionalContext"]
 
 
-def test_op_passes_with_no_stale_run(tdir):
+def test_op_passes_with_no_stale_run(tdir) -> None:
     result = _call({"payload": {"session_id": SID, "transcript_path": "", "stop_hook_active": False}})
     assert not _blocked(result)
     assert sd._extract_advisory(result) == (False, None)
 
 
-def test_fan_in_calls_the_same_function():
+def test_fan_in_calls_the_same_function() -> None:
     assert dict(sd._FOLDED_LEGS)["workflow_stall_resume"]
     assert _REGISTRY[OP] is sd._workflow_stall_stop_op
 
 
-def test_stop_dispatch_composes_exactly_these_legs_in_order():
+def test_stop_dispatch_composes_exactly_these_legs_in_order() -> None:
     assert tuple(n for n, _ in sd._FOLDED_LEGS) == (
         "runtime_tripwire_em_check",
         "watchdog_undischarged_next_move",
@@ -109,7 +110,7 @@ def test_stop_dispatch_composes_exactly_these_legs_in_order():
 
 
 @pytest.fixture
-def drive(tmp_path, monkeypatch):
+def drive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "drive"
     root.mkdir()
     (root / "existing").mkdir()
@@ -124,12 +125,12 @@ def _drive_params(tmp_path, **extra):
     return {"payload": {"cwd": str(tmp_path), "session_id": SID, **extra}}
 
 
-def test_drive_root_first_sight_seeds_silently(tmp_path, drive):
+def test_drive_root_first_sight_seeds_silently(tmp_path: Path, drive) -> None:
     res = sd._guard_drive_root_new_dir_handler(_drive_params(tmp_path))
     assert not _blocked(res)
 
 
-def test_drive_root_new_dir_blocks_once(tmp_path, drive):
+def test_drive_root_new_dir_blocks_once(tmp_path: Path, drive) -> None:
     sd._guard_drive_root_new_dir_handler(_drive_params(tmp_path))
     (drive / "stray").mkdir()
     res = sd._guard_drive_root_new_dir_handler(_drive_params(tmp_path))
@@ -139,7 +140,7 @@ def test_drive_root_new_dir_blocks_once(tmp_path, drive):
     assert not _blocked(again)
 
 
-def test_drive_root_override_and_checkout_and_chained_stop_pass(tmp_path, drive, monkeypatch):
+def test_drive_root_override_and_checkout_and_chained_stop_pass(tmp_path: Path, drive, monkeypatch: pytest.MonkeyPatch) -> None:
     sd._guard_drive_root_new_dir_handler(_drive_params(tmp_path))
     (drive / "placed").mkdir()
     (drive / "placed" / ".git").mkdir()
@@ -153,7 +154,7 @@ def test_drive_root_override_and_checkout_and_chained_stop_pass(tmp_path, drive,
     assert not _blocked(res)
 
 
-def test_drive_root_override_is_caller_keyed_not_ambient(tmp_path, drive, monkeypatch):
+def test_drive_root_override_is_caller_keyed_not_ambient(tmp_path: Path, drive, monkeypatch: pytest.MonkeyPatch) -> None:
     sd._guard_drive_root_new_dir_handler(_drive_params(tmp_path))
     (drive / "stray3").mkdir()
     monkeypatch.setenv("COORDINATOR_ALLOW_DRIVE_ROOT_NEW_DIR", "1")

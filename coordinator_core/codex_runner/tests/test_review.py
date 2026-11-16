@@ -318,7 +318,7 @@ def test_windowsapps_only_path_refused_before_popen(env):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="PATH shaping is Windows-only")
-def test_ps7_placed_ahead_of_windowsapps_at_popen(env):
+def test_ps7_kept_and_windowsapps_dropped_at_popen(env):
     tmp_path, run_dir, req, mp = env
     apps, ps7 = _windowsapps_layout(tmp_path, mp, ps7=True)
     mp.setattr(review, "_unattended_env", lambda **kw: {"PATH": apps})

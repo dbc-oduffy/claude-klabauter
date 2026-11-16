@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -20,7 +21,7 @@ def _handoff(path: str = _CHAIN_REL) -> dict:
 
 
 @pytest.mark.spawns_process
-def test_a_first_leg_hand_off_starts_the_chained_path_with_start_args(repo, tmp_path):
+def test_a_first_leg_hand_off_starts_the_chained_path_with_start_args(repo, tmp_path: Path) -> None:
     got = _node(_direct_script(repo), tmp_path, [], [_handoff(), {"done": True}])
     starts = _starts(got)
     assert [s["scriptPath"] for s in starts] == [f"{repo.as_posix()}/{RUN_REL}", f"{repo.as_posix()}/{_CHAIN_REL}"]
@@ -29,7 +30,7 @@ def test_a_first_leg_hand_off_starts_the_chained_path_with_start_args(repo, tmp_
 
 
 @pytest.mark.spawns_process
-def test_the_chained_run_answers_stage_pending_with_its_staged_twin(repo, tmp_path):
+def test_the_chained_run_answers_stage_pending_with_its_staged_twin(repo, tmp_path: Path) -> None:
     got = _node(_direct_script(repo), tmp_path, [], [_handoff(), _pending(), {"done": True}])
     starts = _starts(got)
     assert len(starts) == 3 and ".staged-" in starts[2]["scriptPath"]
@@ -37,14 +38,14 @@ def test_the_chained_run_answers_stage_pending_with_its_staged_twin(repo, tmp_pa
 
 
 @pytest.mark.spawns_process
-def test_a_second_hand_off_from_the_chained_run_fails_the_hop(repo, tmp_path):
+def test_a_second_hand_off_from_the_chained_run_fails_the_hop(repo, tmp_path: Path) -> None:
     got = _node(_direct_script(repo), tmp_path, [], [_handoff(), _handoff()])
     assert got["out"]["status"] == "failed" and "second hand-off" in got["out"]["error"]
     assert len(_starts(got)) == 2
 
 
 @pytest.mark.spawns_process
-def test_a_chain_path_naming_the_ask_itself_starts_nothing(repo, tmp_path):
+def test_a_chain_path_naming_the_ask_itself_starts_nothing(repo, tmp_path: Path) -> None:
     again = {"path": RUN_REL, "run_id": RUN_ID, "fire_args": {}}
     got = _node(_direct_script(repo), tmp_path, [again], [_handoff(RUN_REL)])
     assert got["out"]["status"] == "failed" and "not a fresh run id" in got["out"]["error"]
@@ -53,7 +54,7 @@ def test_a_chain_path_naming_the_ask_itself_starts_nothing(repo, tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("run_id", ["", RUN_ID])
-def test_a_chain_path_naming_no_run_script_without_a_fresh_minted_run_id_starts_nothing(repo, tmp_path, run_id):
+def test_a_chain_path_naming_no_run_script_without_a_fresh_minted_run_id_starts_nothing(repo, tmp_path: Path, run_id) -> None:
     handoff = {CHAIN_HANDOFF_KEY: {"path": "scratch/warp/not-a-run-script.mjs", "run_id": run_id}}
     replies = [{"path": RUN_REL, "run_id": RUN_ID, "fire_args": {}}] if run_id else []
     got = _node(_direct_script(repo), tmp_path, replies, [handoff])
@@ -62,18 +63,18 @@ def test_a_chain_path_naming_no_run_script_without_a_fresh_minted_run_id_starts_
 
 
 @pytest.mark.spawns_process
-def test_a_chain_path_naming_no_run_script_falls_back_to_the_emits_minted_run_id(repo, tmp_path):
+def test_a_chain_path_naming_no_run_script_falls_back_to_the_emits_minted_run_id(repo, tmp_path: Path) -> None:
     got = _node(_direct_script(repo), tmp_path, [], [_handoff("scratch/warp/not-a-run-script.mjs"), {"done": True}])
     assert len(_starts(got)) == 2
     assert got["out"] == {"done": True, "chained_from": RUN_ID}
 
 
 @pytest.mark.spawns_process
-def test_a_plain_result_is_returned_without_a_hop(repo, tmp_path):
+def test_a_plain_result_is_returned_without_a_hop(repo, tmp_path: Path) -> None:
     got = _node(_direct_script(repo), tmp_path, [], [{"done": True}])
     assert got["out"] == {"done": True} and len(_starts(got)) == 1
 
 
-def test_both_start_scripts_splice_the_one_chain_follow_block(repo):
+def test_both_start_scripts_splice_the_one_chain_follow_block(repo) -> None:
     follow = mod._CHAIN_FOLLOW_JS
     assert follow in mod._DIRECT_START_JS and follow in mod._DEFERRED_START_JS

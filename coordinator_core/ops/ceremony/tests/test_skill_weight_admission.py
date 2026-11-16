@@ -20,6 +20,7 @@ from coordinator_core.ops.ceremony import commit_admission, git_native
 from coordinator_core.win_portability import no_console_creationflags
 
 from .fixtures.real_git import real_git_repo
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -70,13 +71,13 @@ def _git(args, cwd):
     )
 
 
-def _write(root, rel, text):
+def _write(root, rel, text) -> None:
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
 
 
-def _doe_repo(tmp_path, skills=3, fleet_limit=100_000):
+def _doe_repo(tmp_path, skills: int = 3, fleet_limit: int = 100_000) -> Path:
     root = real_git_repo(tmp_path)
     _write(root, _ADMISSION_REL, _ADMISSION)
     _write(root, _HARNESS_REL, _HARNESS)
@@ -103,7 +104,7 @@ def _commit(root, path, content):
     return git_native.commit_authored_content(path, content, msg, root)
 
 
-def test_growth_past_a_skill_limit_lands_and_is_advisory(tmp_path):
+def test_growth_past_a_skill_limit_lands_and_is_advisory(tmp_path: Path) -> None:
     root = _doe_repo(tmp_path)
     before = _head(root)
     result = _commit(root, "coordinator/skills/s0/SKILL.md", "x" * 500)
@@ -111,7 +112,7 @@ def test_growth_past_a_skill_limit_lands_and_is_advisory(tmp_path):
     assert _head(root) != before
 
 
-def test_fleet_overrun_is_advisory(tmp_path):
+def test_fleet_overrun_is_advisory(tmp_path: Path) -> None:
     root = _doe_repo(tmp_path, fleet_limit=160)
     new = {"coordinator/skills/s1/SKILL.md": (0o100644, _blob(root, "x" * 90))}
     refusal, note = commit_admission.skill_weight_check(root, new)
@@ -119,7 +120,7 @@ def test_fleet_overrun_is_advisory(tmp_path):
     assert "fleet resident" in note
 
 
-def test_a_new_skill_over_its_limit_is_advisory(tmp_path):
+def test_a_new_skill_over_its_limit_is_advisory(tmp_path: Path) -> None:
     root = _doe_repo(tmp_path)
     new = {"coordinator/skills/fresh/SKILL.md": (0o100644, _blob(root, "x" * 500))}
     refusal, note = commit_admission.skill_weight_check(root, new)
@@ -127,19 +128,19 @@ def test_a_new_skill_over_its_limit_is_advisory(tmp_path):
     assert "skill fresh" in note
 
 
-def test_a_shrink_and_an_unrelated_path_are_admitted(tmp_path):
+def test_a_shrink_and_an_unrelated_path_are_admitted(tmp_path: Path) -> None:
     root = _doe_repo(tmp_path)
     assert _commit(root, "coordinator/skills/s0/SKILL.md", "x" * 10).ok
     assert _commit(root, "seed.txt", "seed\nmore\n").ok
 
 
-def test_a_baseline_raise_in_the_same_commit_is_honoured(tmp_path):
+def test_a_baseline_raise_in_the_same_commit_is_honoured(tmp_path: Path) -> None:
     root = _doe_repo(tmp_path, fleet_limit=100)
     raised = json.dumps({"fleet": {"resident_limit": 100_000}, "exceptions": {"s0": 600}})
     assert _commit(root, _BASELINE_REL, raised).ok
 
 
-def test_a_repo_without_the_admission_script_reads_no_blob(tmp_path, monkeypatch):
+def test_a_repo_without_the_admission_script_reads_no_blob(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = real_git_repo(tmp_path)
     reads = []
     monkeypatch.setattr(
@@ -150,7 +151,7 @@ def test_a_repo_without_the_admission_script_reads_no_blob(tmp_path, monkeypatch
     assert reads == []
 
 
-def test_the_leg_leaves_sys_path_and_modules_untouched_and_is_fast(tmp_path):
+def test_the_leg_leaves_sys_path_and_modules_untouched_and_is_fast(tmp_path: Path) -> None:
     root = _doe_repo(tmp_path, skills=132, fleet_limit=10_000_000)
     path_before, modules_before = list(sys.path), set(sys.modules)
     grown = {"coordinator/skills/s0/SKILL.md": (0o100644, _blob(root, "x" * 70))}
@@ -168,7 +169,7 @@ def _blob(root, text):
     ).stdout.strip()
 
 
-def test_a_plumbing_failure_admits_with_a_note(tmp_path, caplog):
+def test_a_plumbing_failure_admits_with_a_note(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     root = _doe_repo(tmp_path)
     (root / _HARNESS_REL).write_text("raise RuntimeError('boom')\n", encoding="utf-8")
     grown = {"coordinator/skills/s0/SKILL.md": (0o100644, _blob(root, "x" * 500))}
@@ -181,7 +182,7 @@ def test_a_plumbing_failure_admits_with_a_note(tmp_path, caplog):
     assert "boom" in note
 
 
-def test_an_over_budget_measure_yields_a_warning_note_and_an_admit_yields_neither(tmp_path):
+def test_an_over_budget_measure_yields_a_warning_note_and_an_admit_yields_neither(tmp_path: Path) -> None:
     root = _doe_repo(tmp_path)
     over = {"coordinator/skills/s0/SKILL.md": (0o100644, _blob(root, "x" * 500))}
     refusal, note = commit_admission.skill_weight_check(root, over)
@@ -192,7 +193,7 @@ def test_an_over_budget_measure_yields_a_warning_note_and_an_admit_yields_neithe
     assert commit_admission.skill_weight_check(root, shrunk) == (None, None)
 
 
-def test_an_already_over_skill_held_at_its_base_size_is_admitted(tmp_path):
+def test_an_already_over_skill_held_at_its_base_size_is_admitted(tmp_path: Path) -> None:
     root = _doe_repo(tmp_path)
     assert _commit(root, _BASELINE_REL, json.dumps(
         {"fleet": {"resident_limit": 100_000}, "exceptions": {"s0": 10}}
@@ -201,7 +202,7 @@ def test_an_already_over_skill_held_at_its_base_size_is_admitted(tmp_path):
     assert commit_admission.skill_weight_check(root, same) == (None, None)
 
 
-def test_the_working_tree_copy_is_not_measured(tmp_path):
+def test_the_working_tree_copy_is_not_measured(tmp_path: Path) -> None:
     root = _doe_repo(tmp_path)
     (root / "coordinator/skills/s0/SKILL.md").write_text("x" * 5000, encoding="utf-8")
     staged = {"coordinator/skills/s0/SKILL.md": (0o100644, _blob(root, "x" * 60))}
@@ -218,7 +219,7 @@ def _v2(root, path):
     )
 
 
-def test_commit_v2_lands_a_growth_with_a_warning(tmp_path):
+def test_commit_v2_lands_a_growth_with_a_warning(tmp_path: Path) -> None:
     root = _doe_repo(tmp_path)
     before = _head(root)
     (root / "coordinator/skills/s0/SKILL.md").write_text("x" * 500, encoding="utf-8")
@@ -228,7 +229,7 @@ def test_commit_v2_lands_a_growth_with_a_warning(tmp_path):
     assert _head(root) != before
 
 
-def test_commit_v2_lands_and_warns_when_the_check_could_not_run(tmp_path):
+def test_commit_v2_lands_and_warns_when_the_check_could_not_run(tmp_path: Path) -> None:
     root = _doe_repo(tmp_path)
     (root / _HARNESS_REL).write_text("raise RuntimeError('boom')\n", encoding="utf-8")
     _git(["commit", "-q", "-am", "break harness"], root)
@@ -246,7 +247,7 @@ def _crlf_lines(n):
 
 
 @pytest.mark.parametrize("attributes", [None, "* text=auto\n"], ids=["no-attr", "text-auto"])
-def test_a_crlf_skill_whose_lf_blob_fits_is_admitted(tmp_path, attributes):
+def test_a_crlf_skill_whose_lf_blob_fits_is_admitted(tmp_path: Path, attributes) -> None:
     root = _doe_repo(tmp_path)
     _git(["config", "core.autocrlf", "true"], root)
     if attributes:
@@ -257,7 +258,7 @@ def test_a_crlf_skill_whose_lf_blob_fits_is_admitted(tmp_path, attributes):
 
 
 @pytest.mark.parametrize("attributes", [None, "* text=auto\n"], ids=["no-attr", "text-auto"])
-def test_a_crlf_skill_whose_lf_blob_is_over_the_limit_warns_with_the_blob_size(tmp_path, attributes):
+def test_a_crlf_skill_whose_lf_blob_is_over_the_limit_warns_with_the_blob_size(tmp_path: Path, attributes) -> None:
     root = _doe_repo(tmp_path)
     _git(["config", "core.autocrlf", "true"], root)
     if attributes:
@@ -268,7 +269,7 @@ def test_a_crlf_skill_whose_lf_blob_is_over_the_limit_warns_with_the_blob_size(t
     assert any("  skill s0: 180 B (+130)" in w for w in result["warnings"])
 
 
-def test_commit_v2_non_triggering_commit_carries_no_warning(tmp_path):
+def test_commit_v2_non_triggering_commit_carries_no_warning(tmp_path: Path) -> None:
     root = _doe_repo(tmp_path)
     (root / "other.txt").write_text("o\n", encoding="utf-8")
     result = _v2(root, "other.txt")
@@ -287,7 +288,7 @@ def limit_raises(proposed_baseline, base_baseline):
 '''
 
 
-def test_a_baseline_limit_raise_is_refused_and_a_lowering_admitted(tmp_path):
+def test_a_baseline_limit_raise_is_refused_and_a_lowering_admitted(tmp_path: Path) -> None:
     root = _doe_repo(tmp_path, fleet_limit=100_000)
     _write(root, _ADMISSION_REL, _ADMISSION + _LIMIT_RAISES)
     _git(["add", _ADMISSION_REL], root)
@@ -303,7 +304,7 @@ def test_a_baseline_limit_raise_is_refused_and_a_lowering_admitted(tmp_path):
     assert _commit(root, _BASELINE_REL, lowered).ok
 
 
-def test_commit_v2_refuses_a_baseline_limit_raise_while_warning_on_growth(tmp_path):
+def test_commit_v2_refuses_a_baseline_limit_raise_while_warning_on_growth(tmp_path: Path) -> None:
     root = _doe_repo(tmp_path, fleet_limit=100_000)
     _write(root, _ADMISSION_REL, _ADMISSION + _LIMIT_RAISES)
     _git(["add", _ADMISSION_REL], root)

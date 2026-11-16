@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from coordinator_core.contract.cockpit_schema import ENTITY_SCHEMAS
 from coordinator_core.contract.cockpit_schema.emit_schema import emit_schemas
+from pathlib import Path
 
 
-def test_emitted_schema_files_are_lf_only(tmp_path):
+def test_emitted_schema_files_are_lf_only(tmp_path: Path) -> None:
     out_dir = tmp_path / "emit"
     emit_schemas(ENTITY_SCHEMAS, out_dir=out_dir)
 

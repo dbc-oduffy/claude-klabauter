@@ -29,6 +29,7 @@ import pytest
 
 from coordinator_core.bash_guards import block_subagent_commit as guard
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -38,7 +39,7 @@ _SUBAGENT_TYPE = "coordinator:executor"
 _GIT_COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 
 
-def _payload(command, agent_id="deadbeef0123", agent_type=None, session_id="sess1"):
+def _payload(command, agent_id: str = "deadbeef0123", agent_type=None, session_id: str = "sess1"):
     p: Dict[str, Any] = {
         "tool_name": "Bash",
         "tool_input": {"command": command},
@@ -52,7 +53,7 @@ def _payload(command, agent_id="deadbeef0123", agent_type=None, session_id="sess
     return p
 
 
-def _subagent(monkeypatch, subagent_type=_SUBAGENT_TYPE):
+def _subagent(monkeypatch, subagent_type=_SUBAGENT_TYPE) -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(
         guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123"
@@ -74,7 +75,7 @@ def _denies(monkeypatch, cmd):
     return result
 
 
-def _allows(monkeypatch, cmd, agent_type=_SUBAGENT_TYPE):
+def _allows(monkeypatch, cmd, agent_type=_SUBAGENT_TYPE) -> None:
     _subagent(monkeypatch)
     result = _enveloped(guard.check)(_payload(cmd, agent_type=agent_type))
     assert result is None, f"expected ALLOW for: {cmd!r}, got {result!r}"
@@ -93,7 +94,7 @@ _MEMO_HEREDOC = (
 )
 
 
-def test_memo_shape_heredoc_import_denies(monkeypatch):
+def test_memo_shape_heredoc_import_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """The memo's exact shape -- a stdin-fed (``python3 -``) heredoc
     whose body imports ``commit_paths`` from ``coordinator_core.git.
     commit`` -- previously passed the served guard. It must now deny.
@@ -101,7 +102,7 @@ def test_memo_shape_heredoc_import_denies(monkeypatch):
     _denies(monkeypatch, _MEMO_HEREDOC)
 
 
-def test_same_heredoc_without_import_allows(monkeypatch):
+def test_same_heredoc_without_import_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """The same heredoc shape, body swapped for text with no import and
     no other commit-shaped signal, must still allow -- the fix is scoped
     to the import, not to every ``python3 <<EOF`` heredoc.
@@ -114,7 +115,7 @@ def test_same_heredoc_without_import_allows(monkeypatch):
     _allows(monkeypatch, cmd)
 
 
-def test_bare_python_heredoc_without_stdin_dash_denies(monkeypatch):
+def test_bare_python_heredoc_without_stdin_dash_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """``python3 <<'PYEOF'`` (no leading ``-`` argv, heredoc feeds stdin
     implicitly) with the same import body.
     """
@@ -127,7 +128,7 @@ def test_bare_python_heredoc_without_stdin_dash_denies(monkeypatch):
     _denies(monkeypatch, cmd)
 
 
-def test_import_statement_form_denies(monkeypatch):
+def test_import_statement_form_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """``import coordinator_core.git.commit`` (module import, not a
     ``from ... import`` name) is also a matched shape.
     """
@@ -140,7 +141,7 @@ def test_import_statement_form_denies(monkeypatch):
     _denies(monkeypatch, cmd)
 
 
-def test_from_git_import_commit_form_denies(monkeypatch):
+def test_from_git_import_commit_form_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """``from coordinator_core.git import commit`` (submodule import via
     the package, third recognized spelling).
     """
@@ -153,7 +154,7 @@ def test_from_git_import_commit_form_denies(monkeypatch):
     _denies(monkeypatch, cmd)
 
 
-def test_piped_stdin_python_c_script_literal_denies(monkeypatch):
+def test_piped_stdin_python_c_script_literal_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """No heredoc at all -- the script text is a quoted literal piped
     into ``python3`` via stdin (``echo '<script>' | python3``).
     """
@@ -164,12 +165,12 @@ def test_piped_stdin_python_c_script_literal_denies(monkeypatch):
     _denies(monkeypatch, cmd)
 
 
-def test_piped_stdin_without_import_allows(monkeypatch):
+def test_piped_stdin_without_import_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     cmd = "echo 'print(1)' | python3"
     _allows(monkeypatch, cmd)
 
 
-def test_heredoc_piped_into_python_denies(monkeypatch):
+def test_heredoc_piped_into_python_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """Heredoc attached to ``cat``, piped into ``python3`` on the same
     line -- the interpreter is not the token immediately before ``<<``.
     """
@@ -182,7 +183,7 @@ def test_heredoc_piped_into_python_denies(monkeypatch):
     _denies(monkeypatch, cmd)
 
 
-def test_heredoc_fed_to_non_python_interpreter_allows(monkeypatch):
+def test_heredoc_fed_to_non_python_interpreter_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """A heredoc that mentions the module path but is fed to ``bash``,
     not a Python interpreter, is out of this matcher's scope (it may
     still be caught by unrelated matchers, but this shape carries no
@@ -216,7 +217,7 @@ def _heredoc(body):
         "from coordinator_core.git.commit import (\n    CommitRefused,\n)\nprint(CommitRefused)",
     ],
 )
-def test_import_only_heredoc_allows(monkeypatch, body):
+def test_import_only_heredoc_allows(monkeypatch: pytest.MonkeyPatch, body) -> None:
     _allows(monkeypatch, _heredoc(body))
 
 
@@ -236,11 +237,11 @@ def test_import_only_heredoc_allows(monkeypatch, body):
         "import coordinator_core.git.commit",
     ],
 )
-def test_import_and_call_heredoc_denies(monkeypatch, body):
+def test_import_and_call_heredoc_denies(monkeypatch: pytest.MonkeyPatch, body) -> None:
     _denies(monkeypatch, _heredoc(body))
 
 
-def test_script_file_import_only_allows_and_call_denies(monkeypatch, tmp_path):
+def test_script_file_import_only_allows_and_call_denies(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     only = tmp_path / "only.py"
     only.write_text("from coordinator_core.git import commit\nprint(commit.__file__)\n")
     calls = tmp_path / "calls.py"
@@ -253,7 +254,7 @@ def test_script_file_import_only_allows_and_call_denies(monkeypatch, tmp_path):
     _denies(monkeypatch, f"python3 {calls_arg}")
 
 
-def test_entry_point_set_matches_commit_module_public_functions():
+def test_entry_point_set_matches_commit_module_public_functions() -> None:
     import inspect
 
     from coordinator_core.git import commit as mod
@@ -271,7 +272,7 @@ def test_entry_point_set_matches_commit_module_public_functions():
 # ---------------------------------------------------------------------------
 
 
-def test_ceremony_commit_v2_op_door_still_allows(monkeypatch):
+def test_ceremony_commit_v2_op_door_still_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """``ceremony.commit_v2`` through the op door, for the one identity
     permitted to use it, must still allow -- this fix's new matcher never
     fires on it (no heredoc, no stdin-piped python, no import), and must
@@ -291,7 +292,7 @@ def test_ceremony_commit_v2_op_door_still_allows(monkeypatch):
     assert result is None, f"expected ALLOW for: {cmd!r}, got {result!r}"
 
 
-def test_ordinary_python_dash_m_pytest_allows(monkeypatch):
+def test_ordinary_python_dash_m_pytest_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """A plain, common dispatched-agent command -- must not regress."""
     _allows(monkeypatch, "python3 -m pytest coordinator_core/tests/test_x.py")
 

@@ -9,6 +9,7 @@ import pytest
 from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.hooks import sessionstart_dispatch as sd
 from coordinator_core.ops.dispatch_emit.owed_leg_queue import write_owed_legs
+from pathlib import Path
 
 PLAN = "docs/plans/p.md"
 _ROW = "- id: {rid}\n  title: t\n  change_kind: code-edit\n  surface: a.md\n  writes: [a.md]\n  disposition: {disp}\n  body: b\n"
@@ -20,7 +21,7 @@ def _plan_text(c1):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / PLAN).write_text(_plan_text("open"), encoding="utf-8")
@@ -29,30 +30,30 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _run(repo, source="startup"):
+def _run(repo, source: str = "startup"):
     result = asyncio.run(sd._handler({"payload": {"source": source, "cwd": str(repo)}}))
     return result.get("hookSpecificOutput", {}).get("additionalContext", "")
 
 
-def _owe(repo, *ids):
+def _owe(repo, *ids) -> None:
     write_owed_legs(
         repo, "run1", PLAN, [{"id": i, "reason": "em-performed", "detail": ""} for i in ids]
     )
 
 
 @pytest.mark.parametrize("source", ["startup", "resume", "clear", "compact", "fork"])
-def test_each_open_leg_is_named_on_every_source(repo, source):
+def test_each_open_leg_is_named_on_every_source(repo, source) -> None:
     _owe(repo, "C1", "C2")
     ctx = _run(repo, source)
     assert "OWED run1 C1 (em-performed)" in ctx
     assert "OWED run1 C2 (em-performed)" in ctx
 
 
-def test_nothing_added_when_none_open(repo):
+def test_nothing_added_when_none_open(repo) -> None:
     assert _run(repo) == ""
 
 
-def test_discharged_leg_is_dropped(repo):
+def test_discharged_leg_is_dropped(repo) -> None:
     _owe(repo, "C1", "C2")
     (repo / PLAN).write_text(
         _plan_text("coded"), encoding="utf-8",
@@ -62,23 +63,23 @@ def test_discharged_leg_is_dropped(repo):
     assert "OWED run1 C2" in ctx
 
 
-def test_no_repo_root_adds_nothing(tmp_path):
+def test_no_repo_root_adds_nothing(tmp_path: Path) -> None:
     assert sd._leg_owed_legs({"source": "startup", "cwd": str(tmp_path)}) is None
     assert sd._leg_owed_legs({"source": "startup"}) is None
 
 
-def test_unmatched_source_still_returns_only_breadcrumb(repo):
+def test_unmatched_source_still_returns_only_breadcrumb(repo) -> None:
     _owe(repo, "C1")
     ctx = _run(repo, "bogus")
     assert "matches no guard in REGISTRY" in ctx
     assert "OWED" not in ctx
 
 
-def test_hundred_rows_read_under_budget(repo):
+def test_hundred_rows_read_under_budget(repo) -> None:
     _owe(repo, *[f"R{i}" for i in range(100)])
     out: dict = {}
 
-    def _call():
+    def _call() -> None:
         out["text"] = sd._leg_owed_legs({"cwd": str(repo)})
 
     timing = in_process_time_ms(_call)

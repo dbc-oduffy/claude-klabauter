@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from coordinator_core.ops.dispatch_emit.ask_contract import LEG_DISPATCH, LEG_SKIP
 from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import remaining_leg_plan
+from pathlib import Path
 
 SIZING = "state/sizings/s.yaml"
 _SIZING_TEXT = """requirement_register:
@@ -28,7 +29,7 @@ def _root(tmp_path, text=_SIZING_TEXT):
     return tmp_path
 
 
-def _row(writes, register_rows):
+def _row(writes, register_rows) -> SimpleNamespace:
     return SimpleNamespace(writes=tuple(writes), register_rows=tuple(register_rows))
 
 
@@ -38,26 +39,26 @@ def _plan(root, rows, notes=("met by 2fd9d96c",)):
     )
 
 
-def test_re_ruling_only_refire_footprint_lists_ruled_out_row_writes(tmp_path):
+def test_re_ruling_only_refire_footprint_lists_ruled_out_row_writes(tmp_path: Path) -> None:
     plan = _plan(_root(tmp_path), [_row(["pkg/venv.py"], ["R1"])])
     assert plan["action"] == LEG_SKIP
     assert plan["writes"] == ["pkg/venv.py"]
 
 
-def test_dispatch_footprint_keeps_serving_and_ruled_out_writes(tmp_path):
+def test_dispatch_footprint_keeps_serving_and_ruled_out_writes(tmp_path: Path) -> None:
     rows = [_row(["pkg/a.py"], ["R2"]), _row(["pkg/venv.py"], ["R1"])]
     plan = _plan(_root(tmp_path), rows, notes=())
     assert plan["action"] == LEG_DISPATCH
     assert plan["writes"] == ["pkg/a.py", "pkg/venv.py"]
 
 
-def test_row_serving_a_live_unblocking_id_stays_out(tmp_path):
+def test_row_serving_a_live_unblocking_id_stays_out(tmp_path: Path) -> None:
     root = _root(tmp_path, _SIZING_TEXT + "  - id: R3\n    source_text: x\n    anchor: relayed\n    status: open\n")
     plan = _plan(root, [_row(["pkg/other.py"], ["R3"]), _row(["pkg/mixed.py"], ["R1", "R3"])])
     assert plan["action"] == LEG_SKIP
     assert plan["writes"] == []
 
 
-def test_unreadable_sizing_keeps_footprint_strict(tmp_path):
+def test_unreadable_sizing_keeps_footprint_strict(tmp_path: Path) -> None:
     plan = _plan(tmp_path, [_row(["pkg/venv.py"], ["R1"])])
     assert plan["writes"] == []

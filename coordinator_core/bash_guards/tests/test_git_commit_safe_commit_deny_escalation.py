@@ -49,6 +49,7 @@ from coordinator_core.win_portability import no_console_creationflags, no_consol
 
 import pytest
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -69,7 +70,7 @@ def _init_repo(tmp_path):
     return repo
 
 
-def _stage(repo, name, content="x"):
+def _stage(repo, name, content: str = "x") -> None:
     path = repo / name
     path.write_text(content)
     subprocess.run(["git", "add", name], cwd=repo, check=True, **no_console_passthrough_kwargs())
@@ -91,7 +92,7 @@ def _rewritten(cmd: str) -> str:
     return out["hookSpecificOutput"]["updatedInput"]["command"]
 
 
-def _compound_cmd(repo, own_paths, commit_flags='-m "x"'):
+def _compound_cmd(repo, own_paths, commit_flags: str = '-m "x"') -> str:
     repo_q = shlex.quote(str(repo))
     paths_q = " ".join(shlex.quote(p) for p in own_paths)
     return (
@@ -100,7 +101,7 @@ def _compound_cmd(repo, own_paths, commit_flags='-m "x"'):
     )
 
 
-def test_rewrite_when_index_holds_foreign_staged_paths(tmp_path):
+def test_rewrite_when_index_holds_foreign_staged_paths(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     cmd = _compound_cmd(repo, ["own.txt"])
@@ -108,7 +109,7 @@ def test_rewrite_when_index_holds_foreign_staged_paths(tmp_path):
     assert _rewritten(cmd) == cmd + " -- own.txt"
 
 
-def test_rewrite_when_own_add_names_paths_positionally_without_separator(tmp_path):
+def test_rewrite_when_own_add_names_paths_positionally_without_separator(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     repo_q = shlex.quote(str(repo))
@@ -117,7 +118,7 @@ def test_rewrite_when_own_add_names_paths_positionally_without_separator(tmp_pat
     assert _rewritten(cmd) == cmd + " -- own.txt"
 
 
-def test_separatorless_add_rewrites_even_when_it_covers_the_whole_index(tmp_path):
+def test_separatorless_add_rewrites_even_when_it_covers_the_whole_index(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "own.txt")
     repo_q = shlex.quote(str(repo))
@@ -125,7 +126,7 @@ def test_separatorless_add_rewrites_even_when_it_covers_the_whole_index(tmp_path
     assert _verdict(cmd) == "rewrite"
 
 
-def test_rewrite_is_refused_when_add_and_commit_name_different_repos(tmp_path):
+def test_rewrite_is_refused_when_add_and_commit_name_different_repos(tmp_path: Path) -> None:
     """The same relative path names a different file under a different
     `-C`, so no scope can be copied across -- the shape denies."""
     repo = _init_repo(tmp_path)
@@ -135,8 +136,8 @@ def test_rewrite_is_refused_when_add_and_commit_name_different_repos(tmp_path):
 
 @pytest.mark.parametrize("add_operand", [".", ":/", "*.py", "$FILE"])
 def test_rewrite_is_refused_for_operands_that_are_not_literal_paths(
-    tmp_path, add_operand
-):
+    tmp_path: Path, add_operand
+) -> None:
     repo = _init_repo(tmp_path)
     repo_q = shlex.quote(str(repo))
     cmd = 'git -C %s add %s && git -C %s commit -m "x"' % (
@@ -145,7 +146,7 @@ def test_rewrite_is_refused_for_operands_that_are_not_literal_paths(
     assert _verdict(cmd) == "deny", add_operand
 
 
-def test_rewrite_is_refused_when_the_commit_is_not_the_last_segment(tmp_path):
+def test_rewrite_is_refused_when_the_commit_is_not_the_last_segment(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     repo_q = shlex.quote(str(repo))
     cmd = 'git -C %s add own.txt && git -C %s commit -m "x" && git -C %s log -1' % (
@@ -155,8 +156,8 @@ def test_rewrite_is_refused_when_the_commit_is_not_the_last_segment(tmp_path):
 
 
 def test_rewrite_is_refused_when_a_trailing_comment_would_swallow_the_scope(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     repo = _init_repo(tmp_path)
     repo_q = shlex.quote(str(repo))
     cmd = 'git -C %s add own.txt && git -C %s commit -m "x"  # done' % (
@@ -165,14 +166,14 @@ def test_rewrite_is_refused_when_a_trailing_comment_would_swallow_the_scope(
     assert _verdict(cmd) == "deny"
 
 
-def test_rewrite_quotes_a_path_with_a_space(tmp_path):
+def test_rewrite_quotes_a_path_with_a_space(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     repo_q = shlex.quote(str(repo))
     cmd = "git -C %s add 'my file.txt' && git -C %s commit -m x" % (repo_q, repo_q)
     assert _rewritten(cmd) == cmd + " -- 'my file.txt'"
 
 
-def test_rewrite_nag_names_the_rewritten_command(tmp_path):
+def test_rewrite_nag_names_the_rewritten_command(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     cmd = _compound_cmd(repo, ["own.txt"])
     out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-c7")
@@ -181,7 +182,7 @@ def test_rewrite_nag_names_the_rewritten_command(tmp_path):
     assert cmd + " -- own.txt" in context
 
 
-def test_flag_only_add_denies_too(tmp_path):
+def test_flag_only_add_denies_too(tmp_path: Path) -> None:
     """INVERTED 2026-08-30. An add with no path operands (`git add -A`,
     `git add -u`) used to stay advisory because it contributed no
     own-pathspec for the set-difference to compare against. With the
@@ -200,7 +201,7 @@ def test_flag_only_add_denies_too(tmp_path):
         assert _verdict(cmd) == "deny", add_flags
 
 
-def test_pathspec_from_file_add_denies_too(tmp_path):
+def test_pathspec_from_file_add_denies_too(tmp_path: Path) -> None:
     """INVERTED 2026-08-30, same reasoning as the flag-only arm above:
     `--pathspec-from-file` named paths no predicate here reads, which made
     the set-difference incomputable and the shape fail open. The deny no
@@ -215,7 +216,7 @@ def test_pathspec_from_file_add_denies_too(tmp_path):
     assert _verdict(cmd) == "deny"
 
 
-def test_denies_even_when_index_holds_only_the_commands_own_pathspec(tmp_path):
+def test_denies_even_when_index_holds_only_the_commands_own_pathspec(tmp_path: Path) -> None:
     """INVERTED 2026-08-30 -- this row IS the reversal of C7 PM Ruling 2.
     The "safe single-session case" (index holds exactly what THIS command's
     own `git add` staged, nothing else) was the carve-out that kept the deny
@@ -226,7 +227,7 @@ def test_denies_even_when_index_holds_only_the_commands_own_pathspec(tmp_path):
     assert _verdict(cmd) == "rewrite"
 
 
-def test_denies_when_index_holds_exactly_the_union_of_two_own_adds(tmp_path):
+def test_denies_when_index_holds_exactly_the_union_of_two_own_adds(tmp_path: Path) -> None:
     """INVERTED 2026-08-30. A compound command may run MORE THAN ONE
     `git add` before its commit; the union of those adds used to buy an
     advisory when it covered the whole index. It no longer does -- but the
@@ -245,7 +246,7 @@ def test_denies_when_index_holds_exactly_the_union_of_two_own_adds(tmp_path):
     assert _rewritten(cmd) == cmd + " -- one.txt two.txt"
 
 
-def test_denies_even_when_nothing_is_staged_at_all(tmp_path):
+def test_denies_even_when_nothing_is_staged_at_all(tmp_path: Path) -> None:
     """INVERTED 2026-08-30. An empty index held no foreign paths by
     construction, so this was the clearest advisory row of the set. It is
     now the clearest statement of what changed: the deny reads the COMMAND,
@@ -256,27 +257,27 @@ def test_denies_even_when_nothing_is_staged_at_all(tmp_path):
     assert _verdict(cmd) == "rewrite"
 
 
-def test_solo_bare_commit_denies_when_index_holds_any_staged_paths(tmp_path):
+def test_solo_bare_commit_denies_when_index_holds_any_staged_paths(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     cmd = 'git -C %s commit -m "x"' % shlex.quote(str(repo))
     assert _verdict(cmd) == "deny"
 
 
-def test_solo_bare_commit_stays_advisory_when_index_is_empty(tmp_path):
+def test_solo_bare_commit_stays_advisory_when_index_is_empty(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     cmd = 'git -C %s commit -m "x"' % shlex.quote(str(repo))
     assert _verdict(cmd) == "advisory"
 
 
-def test_solo_bare_commit_amend_denies_when_index_holds_foreign_paths(tmp_path):
+def test_solo_bare_commit_amend_denies_when_index_holds_foreign_paths(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     cmd = 'git -C %s commit --amend -m "x"' % shlex.quote(str(repo))
     assert _verdict(cmd) == "deny"
 
 
-def test_solo_bare_commit_amend_only_with_pathspec_never_fires(tmp_path):
+def test_solo_bare_commit_amend_only_with_pathspec_never_fires(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "mine.txt")
     subprocess.run(
@@ -288,7 +289,7 @@ def test_solo_bare_commit_amend_only_with_pathspec_never_fires(tmp_path):
     assert _verdict(cmd) == "none"
 
 
-def _commit_with_trailer(repo, message, sid):
+def _commit_with_trailer(repo, message, sid) -> None:
     subprocess.run(
         ["git", "commit", "-m", "%s\n\nSession-Id: %s" % (message, sid)],
         cwd=repo,
@@ -297,7 +298,7 @@ def _commit_with_trailer(repo, message, sid):
     )
 
 
-def test_amend_scoped_denies_when_head_is_not_this_session(tmp_path):
+def test_amend_scoped_denies_when_head_is_not_this_session(tmp_path: Path) -> None:
     """The silence bug Finding 2 reports: a SCOPED amend (`--only --
     <paths>`) used to exit via `_bt_commit_has_explicit_pathspec` before
     ownership was ever considered. HEAD here carries no `Session-Id:`
@@ -313,7 +314,7 @@ def test_amend_scoped_denies_when_head_is_not_this_session(tmp_path):
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_amend_scoped_denies_when_head_is_a_different_session(tmp_path):
+def test_amend_scoped_denies_when_head_is_a_different_session(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "mine.txt")
     _commit_with_trailer(repo, "peer base", "sess-peer")
@@ -324,7 +325,7 @@ def test_amend_scoped_denies_when_head_is_a_different_session(tmp_path):
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_amend_scoped_stays_silent_when_head_is_this_session(tmp_path):
+def test_amend_scoped_stays_silent_when_head_is_this_session(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "mine.txt")
     _commit_with_trailer(repo, "my base", "sess-mine")
@@ -333,7 +334,7 @@ def test_amend_scoped_stays_silent_when_head_is_this_session(tmp_path):
     assert _verdict_with_sid(cmd, "sess-mine") == "none"
 
 
-def test_amend_bare_own_head_still_reaches_bare_commit_chain(tmp_path):
+def test_amend_bare_own_head_still_reaches_bare_commit_chain(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "mine.txt")
     _commit_with_trailer(repo, "my base", "sess-mine")
@@ -344,7 +345,7 @@ def test_amend_bare_own_head_still_reaches_bare_commit_chain(tmp_path):
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_amend_missing_session_id_fails_closed(tmp_path):
+def test_amend_missing_session_id_fails_closed(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "mine.txt")
     subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
@@ -355,7 +356,7 @@ def test_amend_missing_session_id_fails_closed(tmp_path):
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_amend_probe_failure_fails_closed_never_silent(monkeypatch, tmp_path):
+def test_amend_probe_failure_fails_closed_never_silent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The deliberate INVERSION of this module's other probe-failure rows
     (`test_probe_failure_fails_open_never_denies` et al.): every other
     probe in this check fails OPEN. The amend-ownership probe fails
@@ -377,7 +378,7 @@ def test_amend_probe_failure_fails_closed_never_silent(monkeypatch, tmp_path):
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_amend_override_key_allows_foreign_head(tmp_path, monkeypatch):
+def test_amend_override_key_allows_foreign_head(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`COORDINATOR_ALLOW_GIT_COMMIT_AMEND` unlocks the amend gate
     independently of `COORDINATOR_ALLOW_GIT_COMMIT_BARE` -- the two keys
     must be tunable separately, per the memo's proposal (3)."""
@@ -390,7 +391,7 @@ def test_amend_override_key_allows_foreign_head(tmp_path, monkeypatch):
     assert _verdict_with_sid(cmd, "sess-mine") == "none"
 
 
-def test_amend_deny_reason_names_the_commit_and_notes_remedy(tmp_path):
+def test_amend_deny_reason_names_the_commit_and_notes_remedy(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "mine.txt")
     subprocess.run(["git", "commit", "-m", "peer subject line"], cwd=repo, check=True, **no_console_passthrough_kwargs())
@@ -403,7 +404,7 @@ def test_amend_deny_reason_names_the_commit_and_notes_remedy(tmp_path):
     assert "scoped-git-commit" not in reason
 
 
-def test_amend_does_not_regress_non_amend_commits(tmp_path):
+def test_amend_does_not_regress_non_amend_commits(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     cmd = 'git -C %s commit -m "x"' % shlex.quote(str(repo))
     assert _verdict(cmd) == "advisory"
@@ -418,14 +419,14 @@ def _verdict_with_sid(cmd: str, sid: str) -> str:
     return "deny" if decision == "deny" else "advisory"
 
 
-def test_solo_bare_commit_dash_a_excluded_from_new_deny(tmp_path):
+def test_solo_bare_commit_dash_a_excluded_from_new_deny(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     cmd = 'git -C %s commit -am "x"' % shlex.quote(str(repo))
     assert _verdict(cmd) == "advisory"
 
 
-def test_solo_bare_commit_deny_reason_offers_scoped_forms(tmp_path):
+def test_solo_bare_commit_deny_reason_offers_scoped_forms(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     cmd = 'git -C %s commit -m "the subject"' % shlex.quote(str(repo))
@@ -436,7 +437,7 @@ def test_solo_bare_commit_deny_reason_offers_scoped_forms(tmp_path):
     assert "scoped-git-commit" not in reason
 
 
-def test_solo_bare_commit_probe_failure_fails_open_never_denies(monkeypatch, tmp_path):
+def test_solo_bare_commit_probe_failure_fails_open_never_denies(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     cmd = 'git -C %s commit -m "x"' % shlex.quote(str(repo))
@@ -448,7 +449,7 @@ def test_solo_bare_commit_probe_failure_fails_open_never_denies(monkeypatch, tmp
     assert _verdict(cmd) == "advisory"
 
 
-def test_dash_a_excludes_from_escalation_even_with_foreign_staged_paths(tmp_path):
+def test_dash_a_excludes_from_escalation_even_with_foreign_staged_paths(tmp_path: Path) -> None:
     """PM Ruling 2, finding 6: `-a` sweeps from the WORKTREE at commit
     time, invisible to a clean-index probe -- unconditionally excluded
     from index-based reasoning, deny-side included."""
@@ -458,7 +459,7 @@ def test_dash_a_excludes_from_escalation_even_with_foreign_staged_paths(tmp_path
     assert _verdict(cmd) == "advisory"
 
 
-def test_dash_dash_all_excludes_from_escalation(tmp_path):
+def test_dash_dash_all_excludes_from_escalation(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     cmd = _compound_cmd(repo, ["own.txt"], commit_flags='--all -m "x"')
@@ -466,8 +467,8 @@ def test_dash_dash_all_excludes_from_escalation(tmp_path):
 
 
 def test_compound_deny_survives_a_dead_git_because_it_never_probes(
-    monkeypatch, tmp_path
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """INVERTED 2026-08-30, and the sharpest pin on the new predicate. This
     row used to assert the fail-OPEN posture: a forced `_run_git` failure
     degraded the compound deny to advisory, because the deny rested on a
@@ -485,7 +486,7 @@ def test_compound_deny_survives_a_dead_git_because_it_never_probes(
     assert _verdict(cmd) == "rewrite"
 
 
-def test_compound_deny_spends_no_index_probe(tmp_path, monkeypatch):
+def test_compound_deny_spends_no_index_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     cmd = _compound_cmd(repo, ["own.txt"])
@@ -504,7 +505,7 @@ def test_compound_deny_spends_no_index_probe(tmp_path, monkeypatch):
     assert len(spawned) == 3, spawned
 
 
-def test_explicit_pathspec_on_commit_still_short_circuits_before_any_probe(tmp_path):
+def test_explicit_pathspec_on_commit_still_short_circuits_before_any_probe(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     repo_q = shlex.quote(str(repo))
@@ -512,7 +513,7 @@ def test_explicit_pathspec_on_commit_still_short_circuits_before_any_probe(tmp_p
     assert _verdict(cmd) == "none"
 
 
-def test_add_positional_and_separator_paths_deny_like_any_other_add(tmp_path):
+def test_add_positional_and_separator_paths_deny_like_any_other_add(tmp_path: Path) -> None:
     """RETIRED DISTINCTION, kept as a regression row. `git add <pos> -- <pos>`
     used to need its two halves unioned into "the command's own pathspec",
     because miscounting them dropped `one.txt` into the foreign set and
@@ -534,7 +535,7 @@ def test_add_positional_and_separator_paths_deny_like_any_other_add(tmp_path):
     assert _rewritten(cmd) == cmd + " -- one.txt two.txt"
 
 
-def test_deny_reason_names_the_shape_and_offers_a_runnable_scoped_form(tmp_path):
+def test_deny_reason_names_the_shape_and_offers_a_runnable_scoped_form(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     repo_q = shlex.quote(str(repo))
@@ -561,14 +562,14 @@ def _force_hazard(monkeypatch, is_hazard: bool) -> None:
     monkeypatch.setattr(dispatch_checks._dc_git_shared, "_is_hazard_repo", lambda git_root: is_hazard)
 
 
-def _touch_worktree(repo, name, content="worktree-edit"):
+def _touch_worktree(repo, name, content: str = "worktree-edit") -> None:
     path = repo / name
     path.write_text(content)
 
 
 def test_dash_am_denies_in_a_hazard_repo_when_worktree_holds_modified_paths(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
     subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
@@ -578,7 +579,7 @@ def test_dash_am_denies_in_a_hazard_repo_when_worktree_holds_modified_paths(
     assert _verdict(cmd) == "deny"
 
 
-def test_dash_a_dash_m_separate_tokens_denies_in_a_hazard_repo(tmp_path, monkeypatch):
+def test_dash_a_dash_m_separate_tokens_denies_in_a_hazard_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
     subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
@@ -588,7 +589,7 @@ def test_dash_a_dash_m_separate_tokens_denies_in_a_hazard_repo(tmp_path, monkeyp
     assert _verdict(cmd) == "deny"
 
 
-def test_bundled_dash_sam_denies_in_a_hazard_repo(tmp_path, monkeypatch):
+def test_bundled_dash_sam_denies_in_a_hazard_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
     subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
@@ -598,7 +599,7 @@ def test_bundled_dash_sam_denies_in_a_hazard_repo(tmp_path, monkeypatch):
     assert _verdict(cmd) == "deny"
 
 
-def test_dash_dash_all_denies_in_a_hazard_repo(tmp_path, monkeypatch):
+def test_dash_dash_all_denies_in_a_hazard_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
     subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
@@ -609,8 +610,8 @@ def test_dash_dash_all_denies_in_a_hazard_repo(tmp_path, monkeypatch):
 
 
 def test_dash_am_with_trailing_pathspec_still_participates_in_escalation(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
     subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
@@ -622,7 +623,7 @@ def test_dash_am_with_trailing_pathspec_still_participates_in_escalation(
     assert _verdict(cmd) == "advisory"
 
 
-def test_dash_c_prefixed_dash_am_denies_in_a_hazard_repo(tmp_path, monkeypatch):
+def test_dash_c_prefixed_dash_am_denies_in_a_hazard_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
     subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
@@ -632,7 +633,7 @@ def test_dash_c_prefixed_dash_am_denies_in_a_hazard_repo(tmp_path, monkeypatch):
     assert _verdict(cmd) == "deny"
 
 
-def test_git_index_file_prefixed_dash_am_denies_in_a_hazard_repo(tmp_path, monkeypatch):
+def test_git_index_file_prefixed_dash_am_denies_in_a_hazard_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC4: honours a leading `GIT_INDEX_FILE=` assignment -- reuses
     `_bt_git_index_file_env` rather than re-deriving it."""
     repo = _init_repo(tmp_path)
@@ -647,7 +648,7 @@ def test_git_index_file_prefixed_dash_am_denies_in_a_hazard_repo(tmp_path, monke
     assert _verdict(cmd) == "deny"
 
 
-def test_piped_dash_am_segment_denies_in_a_hazard_repo(tmp_path, monkeypatch):
+def test_piped_dash_am_segment_denies_in_a_hazard_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
     subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
@@ -657,7 +658,7 @@ def test_piped_dash_am_segment_denies_in_a_hazard_repo(tmp_path, monkeypatch):
     assert _verdict(cmd) == "deny"
 
 
-def test_compound_add_then_dash_am_still_denies_in_a_hazard_repo(tmp_path, monkeypatch):
+def test_compound_add_then_dash_am_still_denies_in_a_hazard_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
     subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
@@ -670,14 +671,14 @@ def test_compound_add_then_dash_am_still_denies_in_a_hazard_repo(tmp_path, monke
     assert _verdict(cmd) == "deny"
 
 
-def test_dash_am_stays_advisory_in_a_hazard_repo_when_tree_is_clean(tmp_path, monkeypatch):
+def test_dash_am_stays_advisory_in_a_hazard_repo_when_tree_is_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     _force_hazard(monkeypatch, True)
     cmd = 'git -C %s commit -am "x"' % shlex.quote(str(repo))
     assert _verdict(cmd) == "advisory"
 
 
-def test_dash_am_stays_advisory_in_a_non_hazard_repo_even_when_dirty(tmp_path, monkeypatch):
+def test_dash_am_stays_advisory_in_a_non_hazard_repo_even_when_dirty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
     subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
@@ -687,7 +688,7 @@ def test_dash_am_stays_advisory_in_a_non_hazard_repo_even_when_dirty(tmp_path, m
     assert _verdict(cmd) == "advisory"
 
 
-def test_dash_am_budget_spent_dispatch_stays_advisory_never_deny(tmp_path, monkeypatch):
+def test_dash_am_budget_spent_dispatch_stays_advisory_never_deny(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC3/AC9: a budget-spent dispatch (`_run_git` returning
     `_GIT_PROBE_BUDGET_SPENT_RC`) on `git commit -am` asserts ADVISORY,
     never DENY."""
@@ -705,7 +706,7 @@ def test_dash_am_budget_spent_dispatch_stays_advisory_never_deny(tmp_path, monke
     assert _verdict(cmd) == "advisory"
 
 
-def test_dash_am_probe_failure_fails_open_never_denies(tmp_path, monkeypatch):
+def test_dash_am_probe_failure_fails_open_never_denies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "base.txt")
     subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, **no_console_passthrough_kwargs())
@@ -720,7 +721,7 @@ def test_dash_am_probe_failure_fails_open_never_denies(tmp_path, monkeypatch):
     assert _verdict(cmd) == "advisory"
 
 
-def test_bare_commit_predicates_still_return_false_on_dash_a(tmp_path):
+def test_bare_commit_predicates_still_return_false_on_dash_a(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     tokens = dispatch_checks._bt_tokenize_full_command(
@@ -733,8 +734,8 @@ def test_bare_commit_predicates_still_return_false_on_dash_a(tmp_path):
 
 
 def test_solo_bare_commit_deny_fires_through_the_real_dispatcher_under_powershell(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     cmd = 'git -C %s commit -m "x"' % shlex.quote(str(repo))
@@ -752,8 +753,8 @@ def test_solo_bare_commit_deny_fires_through_the_real_dispatcher_under_powershel
 
 
 def test_solo_bare_commit_advisory_still_fires_through_the_real_dispatcher_under_bash(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     repo = _init_repo(tmp_path)
     cmd = 'git -C %s commit -m "x"' % shlex.quote(str(repo))
     payload = json.dumps(
@@ -769,7 +770,7 @@ def test_solo_bare_commit_advisory_still_fires_through_the_real_dispatcher_under
     assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
-def _commit_on(repo, branch, name, content):
+def _commit_on(repo, branch, name, content) -> None:
     subprocess.run(["git", "checkout", "-q", "-B", branch], cwd=repo, check=True, **no_console_passthrough_kwargs())
     (repo / name).write_text(content)
     subprocess.run(["git", "add", name], cwd=repo, check=True, **no_console_passthrough_kwargs())
@@ -796,13 +797,13 @@ def _repo_mid_merge(tmp_path):
     return repo
 
 
-def test_bare_commit_mid_merge_is_advisory_not_deny(tmp_path):
+def test_bare_commit_mid_merge_is_advisory_not_deny(tmp_path: Path) -> None:
     repo = _repo_mid_merge(tmp_path)
     cmd = 'git -C %s commit -m "x"' % (shlex.quote(str(repo)),)
     assert _verdict(cmd) == "advisory"
 
 
-def test_bare_commit_mid_merge_advisory_names_the_continue_verb(tmp_path):
+def test_bare_commit_mid_merge_advisory_names_the_continue_verb(tmp_path: Path) -> None:
     repo = _repo_mid_merge(tmp_path)
     cmd = 'git -C %s commit -m "x"' % (shlex.quote(str(repo)),)
     out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-c7")
@@ -811,7 +812,7 @@ def test_bare_commit_mid_merge_advisory_names_the_continue_verb(tmp_path):
     assert "MERGE_HEAD" in context
 
 
-def test_the_denys_own_remediation_really_is_unrunnable_mid_merge(tmp_path):
+def test_the_denys_own_remediation_really_is_unrunnable_mid_merge(tmp_path: Path) -> None:
     repo = _repo_mid_merge(tmp_path)
     scoped = subprocess.run(
         ["git", "commit", "-m", "x", "--", "conflict.txt"],
@@ -822,7 +823,7 @@ def test_the_denys_own_remediation_really_is_unrunnable_mid_merge(tmp_path):
     assert "partial commit" in (scoped.stderr + scoped.stdout).lower()
 
 
-def test_bare_commit_outside_any_sequencer_still_denies(tmp_path):
+def test_bare_commit_outside_any_sequencer_still_denies(tmp_path: Path) -> None:
     """The carve-out must not retire the guard for ordinary bare commits --
     same command shape, same non-empty index, no MERGE_HEAD."""
     repo = _init_repo(tmp_path)
@@ -838,8 +839,8 @@ def test_bare_commit_outside_any_sequencer_still_denies(tmp_path):
     ids=["-m", "-F"],
 )
 def test_compound_deny_escalation_matches_across_m_and_f_heredoc_shapes(
-    tmp_path, commit_flags
-):
+    tmp_path: Path, commit_flags
+) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     cmd = _compound_cmd(repo, ["own.txt"], commit_flags)
@@ -853,8 +854,8 @@ def test_compound_deny_escalation_matches_across_m_and_f_heredoc_shapes(
     ids=["-m", "-F"],
 )
 def test_compound_scoped_trailing_pathspec_matches_across_m_and_f_heredoc_shapes(
-    tmp_path, commit_flags
-):
+    tmp_path: Path, commit_flags
+) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     cmd = _compound_cmd(repo, ["own.txt"], commit_flags)
@@ -870,8 +871,8 @@ def test_compound_scoped_trailing_pathspec_matches_across_m_and_f_heredoc_shapes
     ids=["-m", "-F"],
 )
 def test_compound_unscoped_commit_is_caught_by_the_real_predicate_for_m_and_f(
-    tmp_path, commit_flags, verdict, reason_key
-):
+    tmp_path: Path, commit_flags, verdict, reason_key
+) -> None:
     repo = _init_repo(tmp_path)
     _stage(repo, "foreign.txt")
     cmd = _compound_cmd(repo, ["own.txt"], commit_flags)

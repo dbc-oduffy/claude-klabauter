@@ -22,6 +22,7 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceDeclaration,
     WriteSurfaceEntry,
 )
+from pathlib import Path
 
 
 def test_static_clause_derives_directly_with_no_resolution() -> None:
@@ -271,7 +272,7 @@ def _sample_receipt() -> InstallReceipt:
     return build_receipt([(decl, None)], unreported_writer_ids=["never-ran"])
 
 
-def test_persist_then_load_round_trips(tmp_path, monkeypatch) -> None:
+def test_persist_then_load_round_trips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     receipt = _sample_receipt()
 
@@ -286,30 +287,30 @@ def test_persist_then_load_round_trips(tmp_path, monkeypatch) -> None:
     assert loaded.reported("some-other-writer") is None
 
 
-def test_persist_writes_atomically_via_shared_primitive(tmp_path, monkeypatch) -> None:
+def test_persist_writes_atomically_via_shared_primitive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     persist_receipt(_sample_receipt(), settings_home_override=tmp_path)
     leftovers = [p for p in tmp_path.iterdir() if p.name.startswith(".atomic-write.")]
     assert leftovers == []
 
 
-def test_persist_refused_when_machine_mutation_disabled(tmp_path, monkeypatch) -> None:
+def test_persist_refused_when_machine_mutation_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
     with pytest.raises(Exception):
         persist_receipt(_sample_receipt(), settings_home_override=tmp_path)
     assert not (tmp_path / "install-receipt.json").exists()
 
 
-def test_load_receipt_returns_none_when_file_absent(tmp_path) -> None:
+def test_load_receipt_returns_none_when_file_absent(tmp_path: Path) -> None:
     assert load_receipt(settings_home_override=tmp_path) is None
 
 
-def test_load_receipt_returns_none_on_malformed_json(tmp_path) -> None:
+def test_load_receipt_returns_none_on_malformed_json(tmp_path: Path) -> None:
     (tmp_path / "install-receipt.json").write_text("{not valid json", encoding="utf-8")
     assert load_receipt(settings_home_override=tmp_path) is None
 
 
-def test_load_receipt_returns_none_on_truncated_file(tmp_path, monkeypatch) -> None:
+def test_load_receipt_returns_none_on_truncated_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     persist_receipt(_sample_receipt(), settings_home_override=tmp_path)
     target = tmp_path / "install-receipt.json"
@@ -318,7 +319,7 @@ def test_load_receipt_returns_none_on_truncated_file(tmp_path, monkeypatch) -> N
     assert load_receipt(settings_home_override=tmp_path) is None
 
 
-def test_load_receipt_returns_none_on_unrecognized_schema_version(tmp_path) -> None:
+def test_load_receipt_returns_none_on_unrecognized_schema_version(tmp_path: Path) -> None:
     doc = {
         "schema_version": RECEIPT_SCHEMA_VERSION + 999,
         "entries": [],
@@ -329,7 +330,7 @@ def test_load_receipt_returns_none_on_unrecognized_schema_version(tmp_path) -> N
     assert load_receipt(settings_home_override=tmp_path) is None
 
 
-def test_load_receipt_returns_none_on_wrong_shape_that_does_not_round_trip(tmp_path) -> None:
+def test_load_receipt_returns_none_on_wrong_shape_that_does_not_round_trip(tmp_path: Path) -> None:
     doc = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "entries": "this should be a list, not a string",
@@ -340,7 +341,7 @@ def test_load_receipt_returns_none_on_wrong_shape_that_does_not_round_trip(tmp_p
     assert load_receipt(settings_home_override=tmp_path) is None
 
 
-def test_load_receipt_returns_none_on_entry_missing_required_key(tmp_path) -> None:
+def test_load_receipt_returns_none_on_entry_missing_required_key(tmp_path: Path) -> None:
     doc = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "entries": [{"kind": "git-config-key"}],
@@ -351,7 +352,7 @@ def test_load_receipt_returns_none_on_entry_missing_required_key(tmp_path) -> No
     assert load_receipt(settings_home_override=tmp_path) is None
 
 
-def test_load_receipt_returns_none_when_settings_home_unresolvable(tmp_path, monkeypatch) -> None:
+def test_load_receipt_returns_none_when_settings_home_unresolvable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.delenv("HOME", raising=False)
     monkeypatch.delenv("USERPROFILE", raising=False)
@@ -359,7 +360,7 @@ def test_load_receipt_returns_none_when_settings_home_unresolvable(tmp_path, mon
     assert load_receipt() is None
 
 
-def test_load_receipt_returns_none_when_writer_id_in_both_reported_and_unreported(tmp_path) -> None:
+def test_load_receipt_returns_none_when_writer_id_in_both_reported_and_unreported(tmp_path: Path) -> None:
     doc = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "entries": [],
@@ -370,7 +371,7 @@ def test_load_receipt_returns_none_when_writer_id_in_both_reported_and_unreporte
     assert load_receipt(settings_home_override=tmp_path) is None
 
 
-def test_load_receipt_returns_none_on_entry_with_non_string_path(tmp_path) -> None:
+def test_load_receipt_returns_none_on_entry_with_non_string_path(tmp_path: Path) -> None:
     doc = {
         "schema_version": RECEIPT_SCHEMA_VERSION,
         "entries": [
@@ -384,7 +385,7 @@ def test_load_receipt_returns_none_on_entry_with_non_string_path(tmp_path) -> No
 
 
 def test_persist_receipt_raises_receipt_persistence_error_when_settings_home_unresolvable(
-    monkeypatch,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     from coordinator_core.install.receipt import ReceiptPersistenceError
 

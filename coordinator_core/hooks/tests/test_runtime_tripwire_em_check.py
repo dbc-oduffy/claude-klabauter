@@ -25,6 +25,7 @@ import os
 from coordinator_core.authz.classification import OpClass, classify
 from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.warm.hook_http import HOOK_PATH, op_for_path
+from pathlib import Path
 
 
 def test_op_registers_and_resolves_through_op_for_path() -> None:
@@ -59,7 +60,7 @@ def _base_payload(cwd: str, session_id: str = "sess-abc12345", agent_id: str = "
     }
 
 
-def test_op_suppresses_for_a_subagent_session(tmp_path) -> None:
+def test_op_suppresses_for_a_subagent_session(tmp_path: Path) -> None:
     from coordinator_core.hooks.runtime_tripwire_em_check import _handler
 
     repo = tmp_path / "repo"
@@ -74,7 +75,7 @@ def test_op_suppresses_for_a_subagent_session(tmp_path) -> None:
     assert result == {}
 
 
-def test_op_returns_no_advisory_on_first_call_establishing_baselines(tmp_path) -> None:
+def test_op_returns_no_advisory_on_first_call_establishing_baselines(tmp_path: Path) -> None:
     from coordinator_core.hooks.runtime_tripwire_em_check import _handler
 
     repo = tmp_path / "repo"
@@ -88,7 +89,7 @@ def test_op_returns_no_advisory_on_first_call_establishing_baselines(tmp_path) -
     assert (cursor_dir / "hooks-json-boot-hash.txt").is_file()
 
 
-def test_op_surfaces_hooks_json_staleness_on_second_call_after_edit(tmp_path) -> None:
+def test_op_surfaces_hooks_json_staleness_on_second_call_after_edit(tmp_path: Path) -> None:
     from coordinator_core.hooks.runtime_tripwire_em_check import _handler
 
     repo = tmp_path / "repo"
@@ -108,7 +109,7 @@ def test_op_surfaces_hooks_json_staleness_on_second_call_after_edit(tmp_path) ->
     assert "PLUGIN-HOOKS-JSON-RESTART-GATED" in hso["additionalContext"]
 
 
-def test_op_surfaces_push_failure_growth_on_a_work_branch(tmp_path) -> None:
+def test_op_surfaces_push_failure_growth_on_a_work_branch(tmp_path: Path) -> None:
     from coordinator_core.hooks.runtime_tripwire_em_check import _handler
 
     repo = tmp_path / "repo"
@@ -147,7 +148,7 @@ def test_op_returns_no_advisory_on_malformed_payload() -> None:
     assert _handler({}) == {}
 
 
-def test_op_returns_no_advisory_without_session_id(tmp_path) -> None:
+def test_op_returns_no_advisory_without_session_id(tmp_path: Path) -> None:
     from coordinator_core.hooks.runtime_tripwire_em_check import _handler
 
     repo = tmp_path / "repo"

@@ -13,6 +13,7 @@ import pytest
 from coordinator_core.git import git_dir, git_objects
 from coordinator_core.ops.dispatch_emit import run_hunk_claims as rhc
 from coordinator_core.ops.dispatch_emit.kept_work import blob_sha
+from pathlib import Path
 
 PATH = "src/target.py"
 ME = "ask-20261103T092804-6dc8fa"
@@ -38,7 +39,7 @@ def _record(root, run_id: str, *, baseline: bytes, stage: dict, kept: dict | Non
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     blobs: dict[str, bytes] = {}
 
     def no_spawn(*a, **k):
@@ -56,7 +57,7 @@ def world(tmp_path, monkeypatch):
         tree = _text({2: "CHECKPOINTED", 9: "REMAINDER"})
 
         @classmethod
-        def stage_run(cls, run_id, *, baseline=None, stage, kept=None):
+        def stage_run(cls, run_id, *, baseline=None, stage, kept=None) -> None:
             data = cls.base if baseline is None else baseline
             blobs[blob_sha(data)] = data
             _record(tmp_path, run_id, baseline=data, stage=stage, kept=kept)
@@ -70,7 +71,7 @@ _LANDER = {"started_at": "2026-11-03T09:28:00Z"}
 _HALTED_BEFORE = {"stage": "halted", "last_activity_at": "2026-11-03T01:00:00Z"}
 
 
-def test_halted_holder_with_the_same_baseline_does_not_claim_the_remaining_hunks(world):
+def test_halted_holder_with_the_same_baseline_does_not_claim_the_remaining_hunks(world) -> None:
     world.stage_run(ME, stage=_LANDER)
     world.stage_run(HALTED_PEER, stage=_HALTED_BEFORE)
     split = rhc.own_hunks(world.root, ME, PATH, [_h(9)], {HALTED_PEER: True})
@@ -78,40 +79,40 @@ def test_halted_holder_with_the_same_baseline_does_not_claim_the_remaining_hunks
     assert split.unattributed == [] and split.overlapping == {}
 
 
-def test_live_holder_with_the_same_baseline_still_leaves_the_hunks_unattributed(world):
+def test_live_holder_with_the_same_baseline_still_leaves_the_hunks_unattributed(world) -> None:
     world.stage_run(ME, stage=_LANDER)
     world.stage_run(LIVE_PEER, stage={"started_at": "2026-11-03T09:00:00Z"})
     split = rhc.own_hunks(world.root, ME, PATH, [_h(9)], {LIVE_PEER: True})
     assert split.own == [] and split.unattributed == [_h(9)]
 
 
-def test_halted_holder_whose_kept_print_matches_the_tree_still_claims(world):
+def test_halted_holder_whose_kept_print_matches_the_tree_still_claims(world) -> None:
     world.stage_run(ME, stage=_LANDER)
     world.stage_run(HALTED_PEER, stage=_HALTED_BEFORE, kept={PATH: blob_sha(world.tree)})
     split = rhc.own_hunks(world.root, ME, PATH, [_h(9)], {HALTED_PEER: True})
     assert split.own == [] and split.unattributed == [_h(9)]
 
 
-def test_halted_holder_that_started_after_the_lander_still_claims(world):
+def test_halted_holder_that_started_after_the_lander_still_claims(world) -> None:
     world.stage_run(ME, stage=_LANDER)
     world.stage_run(HALTED_PEER, stage={"stage": "halted", "last_activity_at": "2026-11-03T10:00:00Z"})
     split = rhc.own_hunks(world.root, ME, PATH, [_h(9)], {HALTED_PEER: True})
     assert split.own == [] and split.unattributed == [_h(9)]
 
 
-def _drop_from_baseline(world, run_id):
+def _drop_from_baseline(world, run_id) -> None:
     manifest = world.root / "state" / "warp" / run_id / "manifest.json"
     manifest.write_text(json.dumps({"write_baseline": {"other/file.py": None}}), encoding="utf-8")
 
 
-def test_revision_added_path_absent_from_the_baseline_attributes_own(world):
+def test_revision_added_path_absent_from_the_baseline_attributes_own(world) -> None:
     world.stage_run(ME, stage=_LANDER)
     _drop_from_baseline(world, ME)
     split = rhc.own_hunks(world.root, ME, PATH, [_h(2), _h(9)], {})
     assert split.own == [_h(2), _h(9)] and split.unattributed == []
 
 
-def test_revision_added_path_with_a_live_claimant_still_holds(world):
+def test_revision_added_path_with_a_live_claimant_still_holds(world) -> None:
     world.stage_run(ME, stage=_LANDER)
     _drop_from_baseline(world, ME)
     world.stage_run(LIVE_PEER, stage={"started_at": "2026-11-03T09:00:00Z"})
@@ -119,13 +120,13 @@ def test_revision_added_path_with_a_live_claimant_still_holds(world):
     assert split.own == [] and split.unattributed == [_h(9)]
 
 
-def test_unreadable_manifest_still_holds(world):
+def test_unreadable_manifest_still_holds(world) -> None:
     # No record for ME at all: unknown is never own.
     split = rhc.own_hunks(world.root, ME, PATH, [_h(9)], {})
     assert split.own == [] and split.unattributed == [_h(9)]
 
 
-def test_halted_holder_with_a_different_baseline_stays_a_claimant_and_its_hunk_is_never_own(world):
+def test_halted_holder_with_a_different_baseline_stays_a_claimant_and_its_hunk_is_never_own(world) -> None:
     # The run staged over a line-15 edit already in the tree; the halted peer staged before it.
     world.stage_run(ME, baseline=_text({15: "PEER"}), stage=_LANDER)
     world.stage_run(HALTED_PEER, stage=_HALTED_BEFORE)

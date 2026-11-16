@@ -29,13 +29,14 @@ from __future__ import annotations
 
 from coordinator_core.bash_guards import guard_powershell_via_bash as guard
 from coordinator_core.guard_messages.testing import envelope_of
+import pytest
 
 
 def _enveloped(check):
     return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
-def _payload(command, tool_name="Bash"):
+def _payload(command, tool_name: str = "Bash"):
     return {
         "tool_name": tool_name,
         "tool_input": {"command": command},
@@ -44,7 +45,7 @@ def _payload(command, tool_name="Bash"):
     }
 
 
-def _result(cmd, tool_name="Bash"):
+def _result(cmd, tool_name: str = "Bash"):
     return _enveloped(guard.check)(_payload(cmd, tool_name=tool_name))
 
 
@@ -61,87 +62,87 @@ _LIVE_INCIDENT_CMD = (
 
 
 class TestLiveIncidentFires:
-    def test_fires_advisory(self):
+    def test_fires_advisory(self) -> None:
         out = _envelope(_LIVE_INCIDENT_CMD)
         assert out["permissionDecision"] == "allow"
         assert "additionalContext" in out
         assert "permissionDecisionReason" not in out
 
-    def test_names_the_powershell_tool_as_the_alternative(self):
+    def test_names_the_powershell_tool_as_the_alternative(self) -> None:
         out = _envelope(_LIVE_INCIDENT_CMD)
         assert "PowerShell" in out["additionalContext"]
 
-    def test_names_the_mechanism_not_a_refusal(self):
+    def test_names_the_mechanism_not_a_refusal(self) -> None:
         out = _envelope(_LIVE_INCIDENT_CMD)
         ctx = out["additionalContext"]
         assert "expand" in ctx.lower()
 
 
 class TestSingleQuotedBodyNeverFires:
-    def test_pwsh_single_quoted_with_dollar_inside_is_silent(self):
+    def test_pwsh_single_quoted_with_dollar_inside_is_silent(self) -> None:
         cmd = "pwsh -Command 'Write-Host $HOME; if ($true) { \"ok\" }'"
         assert _result(cmd) is None
 
-    def test_powershell_single_quoted_is_silent(self):
+    def test_powershell_single_quoted_is_silent(self) -> None:
         cmd = "powershell.exe -Command 'Get-Process -Id $pid'"
         assert _result(cmd) is None
 
 
 class TestEncodedCommandExempt:
-    def test_bare_encoded_command_is_silent(self):
+    def test_bare_encoded_command_is_silent(self) -> None:
         cmd = "powershell.exe -NoProfile -EncodedCommand SQBmACgAJAB0AHIAdQBlACkA"
         assert _result(cmd) is None
 
-    def test_encoded_command_short_flag_is_silent(self):
+    def test_encoded_command_short_flag_is_silent(self) -> None:
         cmd = 'pwsh -e "some base64 payload with a $ in it"'
         assert _result(cmd) is None
 
 
 class TestDoubleQuotedNoDollarIsSilent:
-    def test_no_dollar_in_body(self):
+    def test_no_dollar_in_body(self) -> None:
         cmd = 'powershell.exe -Command "Get-Date"'
         assert _result(cmd) is None
 
-    def test_escaped_dollar_only_is_silent(self):
+    def test_escaped_dollar_only_is_silent(self) -> None:
         cmd = r'powershell.exe -Command "echo \$5"'
         assert _result(cmd) is None
 
 
 class TestBinarySpellingsAllFire:
-    def test_pwsh_bare(self):
+    def test_pwsh_bare(self) -> None:
         assert _result('pwsh -Command "Write-Host $HOME"') is not None
 
-    def test_pwsh_exe(self):
+    def test_pwsh_exe(self) -> None:
         assert _result('pwsh.exe -Command "Write-Host $HOME"') is not None
 
-    def test_powershell_bare(self):
+    def test_powershell_bare(self) -> None:
         assert _result('powershell -Command "Write-Host $HOME"') is not None
 
-    def test_powershell_uppercase_exe(self):
+    def test_powershell_uppercase_exe(self) -> None:
         assert _result('POWERSHELL.EXE -Command "Write-Host $HOME"') is not None
 
-    def test_c_short_flag_also_fires(self):
+    def test_c_short_flag_also_fires(self) -> None:
         assert _result('powershell.exe -c "Write-Host $HOME"') is not None
 
 
 class TestNonMatches:
-    def test_non_bash_tool_is_silent(self):
+    def test_non_bash_tool_is_silent(self) -> None:
         assert _result(_LIVE_INCIDENT_CMD, tool_name="PowerShell") is None
 
-    def test_empty_command_is_silent(self):
+    def test_empty_command_is_silent(self) -> None:
         assert _result("") is None
 
-    def test_unrelated_command_is_silent(self):
+    def test_unrelated_command_is_silent(self) -> None:
         assert _result('echo "$HOME is set"') is None
 
 
 class TestOverrideEnvVar:
-    def test_override_suppresses_the_guard(self, monkeypatch):
+    def test_override_suppresses_the_guard(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COORDINATOR_OVERRIDE_POWERSHELL_VIA_BASH_GUARD", "1")
         assert _result(_LIVE_INCIDENT_CMD) is None
 
 
 class TestNeverDenies:
-    def test_firing_envelope_is_never_a_deny(self):
+    def test_firing_envelope_is_never_a_deny(self) -> None:
         out = _envelope(_LIVE_INCIDENT_CMD)
         assert out.get("permissionDecision") != "deny"

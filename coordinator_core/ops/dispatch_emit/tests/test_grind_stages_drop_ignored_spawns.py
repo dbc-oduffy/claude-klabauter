@@ -4,6 +4,7 @@ test_grind_stages.py because these tests spawn git."""
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -13,7 +14,7 @@ def _drop_ignored_repo(tmp_path):
 
     from coordinator_core.win_portability import no_console_creationflags
 
-    def git(*args):
+    def git(*args) -> None:
         subprocess.run(
             ["git", *args], cwd=str(repo), capture_output=True, check=True,
             **no_console_creationflags(),
@@ -40,7 +41,7 @@ def _commit_v2(repo, **params):
     return commit_v2._handler(params, repo_root=repo / ".git")
 
 
-def test_drop_ignored_commits_the_real_change_and_names_the_dropped_path(tmp_path):
+def test_drop_ignored_commits_the_real_change_and_names_the_dropped_path(tmp_path: Path) -> None:
     repo = _drop_ignored_repo(tmp_path)
     (repo / "keep.txt").write_text("b\n", encoding="utf-8", newline="\n")
     refused = _commit_v2(repo, paths=["keep.txt", "scratch/evidence.txt"], message="fix")
@@ -53,7 +54,7 @@ def test_drop_ignored_commits_the_real_change_and_names_the_dropped_path(tmp_pat
     assert any("scratch/evidence.txt" in w for w in out["warnings"])
 
 
-def test_drop_ignored_with_only_ignored_paths_still_fails_loudly(tmp_path):
+def test_drop_ignored_with_only_ignored_paths_still_fails_loudly(tmp_path: Path) -> None:
     repo = _drop_ignored_repo(tmp_path)
     out = _commit_v2(repo, paths=["scratch/evidence.txt"], message="fix", drop_ignored=True)
     assert out["committed"] is False

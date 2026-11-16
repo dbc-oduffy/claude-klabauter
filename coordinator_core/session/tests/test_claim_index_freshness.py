@@ -10,6 +10,7 @@ import shutil
 from pathlib import Path
 
 from coordinator_core.session import claim_index, touch_record
+import pytest
 
 T0 = 1_780_000_000.0
 W = touch_record.KIND_WRITE
@@ -20,7 +21,7 @@ def _sink(base, sid):
     return os.path.join(base, sid, "touch-record.jsonl")
 
 
-def _ev(base, sid, verb, path, kind=W, ts=T0):
+def _ev(base, sid, verb, path, kind=W, ts=T0) -> None:
     touch_record.append_event(
         _sink(base, sid),
         session_id=sid,
@@ -33,7 +34,7 @@ def _ev(base, sid, verb, path, kind=W, ts=T0):
     )
 
 
-def _agent(base, agent_id, owner_sid, verb, path, kind=W):
+def _agent(base, agent_id, owner_sid, verb, path, kind=W) -> None:
     agent_dir = os.path.join(base, ".agents", agent_id)
     os.makedirs(agent_dir, exist_ok=True)
     with open(os.path.join(agent_dir, "em-session-id.txt"), "w", encoding="utf-8") as fh:
@@ -50,7 +51,7 @@ def _agent(base, agent_id, owner_sid, verb, path, kind=W):
     )
 
 
-def test_second_claim_by_existing_session_seen_by_next_lookup(tmp_path):
+def test_second_claim_by_existing_session_seen_by_next_lookup(tmp_path: Path) -> None:
     base = str(tmp_path)
     _ev(base, "peer", "T", "a.py")
     assert claim_index.lookup(["a.py", "b.py"], sessions_dir=base) == {
@@ -66,7 +67,7 @@ def test_second_claim_by_existing_session_seen_by_next_lookup(tmp_path):
     }
 
 
-def test_second_claim_via_append_touch_claims_seen_by_next_lookup(tmp_path):
+def test_second_claim_via_append_touch_claims_seen_by_next_lookup(tmp_path: Path) -> None:
     root = str(tmp_path)
     base = os.path.join(root, ".coordinator-local", "coordinator-sessions")
     touch_record.append_touch_claims(["a.py"], "peer", root, kind=W)
@@ -77,7 +78,7 @@ def test_second_claim_via_append_touch_claims_seen_by_next_lookup(tmp_path):
     assert claim_index.lookup(["b.py"], sessions_dir=base) == {"b.py": ["peer"]}
 
 
-def test_brand_new_session_first_claim_seen_by_next_lookup(tmp_path):
+def test_brand_new_session_first_claim_seen_by_next_lookup(tmp_path: Path) -> None:
     base = str(tmp_path)
     _ev(base, "old", "T", "a.py")
     assert claim_index.lookup(["new.py"], sessions_dir=base) == {"new.py": []}
@@ -87,7 +88,7 @@ def test_brand_new_session_first_claim_seen_by_next_lookup(tmp_path):
     assert claim_index.lookup(["new.py"], sessions_dir=base) == {"new.py": ["fresh"]}
 
 
-def test_new_agent_dir_attributed_to_owner_sid(tmp_path):
+def test_new_agent_dir_attributed_to_owner_sid(tmp_path: Path) -> None:
     base = str(tmp_path)
     _ev(base, "owner", "T", "a.py")
     assert claim_index.lookup(["agent.py"], sessions_dir=base) == {"agent.py": []}
@@ -99,7 +100,7 @@ def test_new_agent_dir_attributed_to_owner_sid(tmp_path):
     assert "agent-1" not in result["agent.py"]
 
 
-def test_release_after_claim_removes_claimant(tmp_path):
+def test_release_after_claim_removes_claimant(tmp_path: Path) -> None:
     base = str(tmp_path)
     _ev(base, "peer", "T", "a.py", ts=T0)
     assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": ["peer"]}
@@ -111,13 +112,13 @@ def test_release_after_claim_removes_claimant(tmp_path):
     assert result.complete is True
 
 
-def test_unreadable_sink_makes_unclaimed_paths_unanswerable(tmp_path, monkeypatch):
+def test_unreadable_sink_makes_unclaimed_paths_unanswerable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = str(tmp_path)
     _ev(base, "peer", "T", "a.py")
     bad_name = Path(_sink(base, "peer")).name
     real_read_bytes = Path.read_bytes
 
-    def flaky_read_bytes(self):
+    def flaky_read_bytes(self) -> bytes:
         if self.name == bad_name:
             raise OSError("simulated unreadable sink")
         return real_read_bytes(self)
@@ -132,7 +133,7 @@ def test_unreadable_sink_makes_unclaimed_paths_unanswerable(tmp_path, monkeypatc
     assert result["a.py"] != []
 
 
-def test_reaped_sink_dir_never_yields_its_claimant(tmp_path):
+def test_reaped_sink_dir_never_yields_its_claimant(tmp_path: Path) -> None:
     base = str(tmp_path)
     _ev(base, "gone", "T", "a.py")
     _ev(base, "stays", "T", "b.py")
@@ -152,7 +153,7 @@ def _claimants(result):
     return {path: sorted(sids) for path, sids in result.items()}
 
 
-def test_forced_rotation_keeps_claimant_set(tmp_path):
+def test_forced_rotation_keeps_claimant_set(tmp_path: Path) -> None:
     base = str(tmp_path)
     _ev(base, "peer", "T", "a.py", ts=T0)
     _ev(base, "peer", "T", "t.py", ts=T0)
@@ -174,7 +175,7 @@ def test_forced_rotation_keeps_claimant_set(tmp_path):
     }
 
 
-def test_compaction_keeps_claimant_set(tmp_path):
+def test_compaction_keeps_claimant_set(tmp_path: Path) -> None:
     base = str(tmp_path)
     _ev(base, "peer", "T", "a.py", ts=T0)
     _ev(base, "peer", "T", "t.py", ts=T0)
@@ -191,7 +192,7 @@ def test_compaction_keeps_claimant_set(tmp_path):
     assert _claimants(claim_index.lookup(paths, sessions_dir=base)) == before
 
 
-def test_held_by_lists_write_paths_and_excludes_read_paths(tmp_path):
+def test_held_by_lists_write_paths_and_excludes_read_paths(tmp_path: Path) -> None:
     base = str(tmp_path)
     _ev(base, "peer", "T", "a.py", W)
     _ev(base, "peer", "T", "t.py", W)
@@ -203,7 +204,7 @@ def test_held_by_lists_write_paths_and_excludes_read_paths(tmp_path):
     assert result.held_by == {"peer": ["a.py", "t.py"]}
 
 
-def test_repeat_lookup_with_no_write_between_is_equal(tmp_path):
+def test_repeat_lookup_with_no_write_between_is_equal(tmp_path: Path) -> None:
     base = str(tmp_path)
     _ev(base, "peer", "T", "a.py")
     _ev(base, "other", "T", "a.py", ts=T0 + 1)

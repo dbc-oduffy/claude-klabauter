@@ -13,7 +13,7 @@ from coordinator_core.hooks import flag_em_poll_in_flight
 ROOT = str(Path(__file__).resolve().parents[3])
 
 
-def _runs(monkeypatch, value):
+def _runs(monkeypatch, value) -> None:
     def fake(sid):
         if isinstance(value, Exception):
             raise value
@@ -29,13 +29,13 @@ def _fresh_verdicts():
     pf._VERDICTS.clear()
 
 
-def _clock(monkeypatch, start=1000.0):
+def _clock(monkeypatch, start: float = 1000.0) -> list[float]:
     t = [start]
     monkeypatch.setattr(pf, "_now", lambda: t[0])
     return t
 
 
-def test_markers_are_read_once_per_window_and_a_refire_is_live_after_it(monkeypatch, tmp_path):
+def test_markers_are_read_once_per_window_and_a_refire_is_live_after_it(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.ops import warp_run_deliverable as wrd
 
     t = _clock(monkeypatch)
@@ -53,13 +53,13 @@ def test_markers_are_read_once_per_window_and_a_refire_is_live_after_it(monkeypa
     assert reads.count("run-h") == 2
 
 
-def test_scan_past_the_time_budget_stops_and_fails_open(monkeypatch, tmp_path):
+def test_scan_past_the_time_budget_stops_and_fails_open(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.ops import warp_run_deliverable as wrd
 
     t = _clock(monkeypatch)
     reads = []
 
-    def slow_halted(root, rid):
+    def slow_halted(root, rid) -> bool:
         reads.append(rid)
         t[0] += pf.SCAN_BUDGET_S + 0.1
         return False
@@ -71,36 +71,36 @@ def test_scan_past_the_time_budget_stops_and_fails_open(monkeypatch, tmp_path):
     assert reads == ["run-1"]
 
 
-def test_guard_name_is_not_a_floor_guard():
+def test_guard_name_is_not_a_floor_guard() -> None:
     assert pf.GUARD_NAME == "block-em-post-fire-product-write"
     assert pf.GUARD_NAME not in mp.FLOOR_GUARDS
 
 
-def test_fired_true_with_a_run(monkeypatch, tmp_path):
+def test_fired_true_with_a_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _runs(monkeypatch, ["run-1"])
     assert pf.fired("s1", str(tmp_path)) is True
 
 
-def test_fired_false_without_a_run_or_session(monkeypatch, tmp_path):
+def test_fired_false_without_a_run_or_session(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _runs(monkeypatch, [])
     assert pf.fired("s1", str(tmp_path)) is False
     _runs(monkeypatch, ["run-1"])
     assert pf.fired("", str(tmp_path)) is False
 
 
-def test_fired_fails_open_on_exception(monkeypatch, tmp_path):
+def test_fired_fails_open_on_exception(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _runs(monkeypatch, OSError("boom"))
     assert pf.fired("s1", str(tmp_path)) is False
 
 
-def test_fired_without_root_counts_no_launched_run(monkeypatch):
+def test_fired_without_root_counts_no_launched_run(monkeypatch: pytest.MonkeyPatch) -> None:
     _runs(monkeypatch, ["run-1"])
     assert pf.fired("s1") is False
     assert pf.fired("s1", "") is False
 
 
 @pytest.mark.parametrize("marker", ["_halted", "_landed"])
-def test_fired_excludes_a_halted_or_landed_run(monkeypatch, tmp_path, marker):
+def test_fired_excludes_a_halted_or_landed_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, marker) -> None:
     from coordinator_core.ops import warp_run_deliverable as wrd
 
     _runs(monkeypatch, ["run-1"])
@@ -109,7 +109,7 @@ def test_fired_excludes_a_halted_or_landed_run(monkeypatch, tmp_path, marker):
     assert pf.fired("s1", str(tmp_path)) is False
 
 
-def test_post_fire_deny_gates_the_engine_route_on_a_live_run(monkeypatch, tmp_path):
+def test_post_fire_deny_gates_the_engine_route_on_a_live_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.hooks import nudge_em_code_dispatch as mod
     from coordinator_core.ops import warp_run_deliverable as wrd
 
@@ -132,19 +132,19 @@ def test_post_fire_deny_gates_the_engine_route_on_a_live_run(monkeypatch, tmp_pa
 
 
 @pytest.fixture
-def owned(monkeypatch):
+def owned(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pf, "_owned_by_live_run", lambda path, base, sid: True)
 
 
-def test_product_path_inside_root(owned):
+def test_product_path_inside_root(owned) -> None:
     assert pf.is_product_path(ROOT + "/coordinator_core/ops/x.py", ROOT, "s1") is True
 
 
-def test_path_no_live_run_owns_is_not_product():
+def test_path_no_live_run_owns_is_not_product() -> None:
     assert pf.is_product_path(ROOT + "/coordinator_core/ops/x.py", ROOT, "s1") is False
 
 
-def test_bare_root_is_product():
+def test_bare_root_is_product() -> None:
     assert pf.is_product_path(ROOT, ROOT, "s1") is True
 
 
@@ -152,26 +152,26 @@ def test_bare_root_is_product():
     "rel",
     ["state/handoffs/x.md", ".coordinator-local/a/b.md"],
 )
-def test_non_product_paths_inside_root(owned, rel):
+def test_non_product_paths_inside_root(owned, rel) -> None:
     assert pf.is_product_path(ROOT + "/" + rel, ROOT, "s1") is False
 
 
-def test_scratch_path_a_live_run_owns_is_product(owned):
+def test_scratch_path_a_live_run_owns_is_product(owned) -> None:
     assert pf.is_product_path(ROOT + "/scratch/x.py", ROOT, "s1") is True
 
 
-def test_path_outside_root_is_not_product(tmp_path):
+def test_path_outside_root_is_not_product(tmp_path: Path) -> None:
     assert pf.is_product_path(str(tmp_path / "x.py"), ROOT, "s1") is False
     assert pf.is_product_path(ROOT + "-sibling/x.py", ROOT, "s1") is False
 
 
-def test_empty_inputs_are_not_product():
+def test_empty_inputs_are_not_product() -> None:
     assert pf.is_product_path("", ROOT, "s1") is False
     assert pf.is_product_path(ROOT + "/a.py", "", "s1") is False
 
 
 @pytest.mark.parametrize("level", ["warn", "off", "strict"])
-def test_deny_envelope_never_denies_at_any_level(monkeypatch, tmp_path, level):
+def test_deny_envelope_never_denies_at_any_level(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, level) -> None:
     reg = tmp_path / "registry.toml"
     reg.write_text('"coordinator.guard_level" = "%s"\n' % level)
     monkeypatch.setattr(mp, "guard_level", lambda name: level)
@@ -190,7 +190,7 @@ def _advisory(env):
 
 
 @pytest.mark.parametrize("rel", ["CLAUDE.md", "sub/CLAUDE.md", ".claude/CLAUDE.md"])
-def test_claude_md_class_path_gets_the_grant_route_variant(rel):
+def test_claude_md_class_path_gets_the_grant_route_variant(rel) -> None:
     from coordinator_core.session.claude_md_grant import GRANT_CLI_COMMAND
 
     text = _advisory(pf.deny_envelope(paths=(ROOT + "/" + rel,)))
@@ -199,20 +199,20 @@ def test_claude_md_class_path_gets_the_grant_route_variant(rel):
 
 
 @pytest.mark.parametrize("rel", ["src/x.py", "CLAUDE.md"])
-def test_every_advisory_variant_names_the_commit_route(rel):
+def test_every_advisory_variant_names_the_commit_route(rel) -> None:
     from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
 
     assert COMMIT_ROUTE in _advisory(pf.deny_envelope(paths=(ROOT + "/" + rel,)))
     assert COMMIT_ROUTE in _advisory(pf.deny_envelope())
 
 
-def test_other_path_keeps_the_generic_advisory():
+def test_other_path_keeps_the_generic_advisory() -> None:
     env = pf.deny_envelope(paths=(ROOT + "/src/x.py",))
     assert _text(env) == _text(pf.deny_envelope())
     assert "grant" not in _text(env)
 
 
-def test_classify_failure_falls_back_to_generic_advisory(monkeypatch):
+def test_classify_failure_falls_back_to_generic_advisory(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import claude_md_budget
 
     def boom(path):
@@ -247,7 +247,7 @@ _PLAN = """\
 
 
 @pytest.fixture
-def em_repo(tmp_path, monkeypatch):
+def em_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     from coordinator_core.hooks import _em_write_budget as wb
 
     monkeypatch.setattr(wb, "_is_bootstrap_or_out_of_repo", lambda p: False)
@@ -265,31 +265,31 @@ def em_repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_open_em_row_surface_is_not_product(em_repo):
+def test_open_em_row_surface_is_not_product(em_repo) -> None:
     assert pf.is_product_path(str(em_repo / "docs" / "verdict.md"), str(em_repo), "s1") is False
 
 
 @pytest.mark.parametrize("rel", ["src/peer.py", "docs/closed.md", "docs/other.md"])
-def test_other_product_paths_stay_product(em_repo, rel):
+def test_other_product_paths_stay_product(em_repo, rel) -> None:
     assert pf.is_product_path(str(em_repo / rel), str(em_repo), "s1") is True
 
 
-def test_surface_of_an_unfired_run_is_not_product(em_repo, monkeypatch):
+def test_surface_of_an_unfired_run_is_not_product(em_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _runs(monkeypatch, [])
     assert pf.is_product_path(str(em_repo / "docs" / "verdict.md"), str(em_repo), "s1") is False
 
 
-def test_discharged_row_surface_is_product_again(em_repo):
+def test_discharged_row_surface_is_product_again(em_repo) -> None:
     (em_repo / "docs" / "plans" / "p.evidence.yaml").write_text("em_discharged:\n  S2: {text: done}\n")
     assert pf.is_product_path(str(em_repo / "docs" / "verdict.md"), str(em_repo), "s1") is True
 
 
-def test_unreadable_plan_fails_toward_product(em_repo):
+def test_unreadable_plan_fails_toward_product(em_repo) -> None:
     (em_repo / "docs" / "plans" / "p.md").unlink()
     assert pf.is_product_path(str(em_repo / "docs" / "verdict.md"), str(em_repo), "s1") is True
 
 
-def _wf_session(em_repo, monkeypatch, script):
+def _wf_session(em_repo, monkeypatch, script) -> None:
     import json
 
     tmp = em_repo / "tmpd"
@@ -302,18 +302,18 @@ def _wf_session(em_repo, monkeypatch, script):
     _runs(monkeypatch, ["wf_8fd4e9da-2d4"])
 
 
-def test_wf_id_maps_to_engine_run_for_the_em_row_surface(em_repo, monkeypatch):
+def test_wf_id_maps_to_engine_run_for_the_em_row_surface(em_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _wf_session(em_repo, monkeypatch, "/x/scratch/warp/r1.workflow.mjs")
     assert pf.is_product_path(str(em_repo / "docs" / "verdict.md"), str(em_repo), "s1") is False
     assert pf.is_product_path(str(em_repo / "docs" / "other.md"), str(em_repo), "s1") is True
 
 
-def test_wf_id_with_no_launch_record_owns_nothing(em_repo, monkeypatch):
+def test_wf_id_with_no_launch_record_owns_nothing(em_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _wf_session(em_repo, monkeypatch, "/x/scratch/warp/nope.workflow.mjs")
     assert pf.is_product_path(str(em_repo / "docs" / "verdict.md"), str(em_repo), "s1") is False
 
 
-def test_row_surface_lookup_is_inside_the_bar(em_repo):
+def test_row_surface_lookup_is_inside_the_bar(em_repo) -> None:
     import time
 
     t = time.perf_counter()
@@ -321,7 +321,7 @@ def test_row_surface_lookup_is_inside_the_bar(em_repo):
     assert time.perf_counter() - t < 0.5
 
 
-def _index(paths, version=2, extension=b""):
+def _index(paths, version: int = 2, extension: bytes = b""):
     body = b"DIRC" + version.to_bytes(4, "big") + len(paths).to_bytes(4, "big")
     for p in paths:
         name = p.encode()
@@ -330,26 +330,26 @@ def _index(paths, version=2, extension=b""):
     return body + extension + b"\x00" * 20
 
 
-def _repo(tmp_path, index=None):
+def _repo(tmp_path, index=None) -> str:
     (tmp_path / ".git").mkdir()
     if index is not None:
         (tmp_path / ".git" / "index").write_bytes(index)
     return str(tmp_path)
 
 
-def test_empty_untracked_true_when_index_lacks_the_path(tmp_path):
+def test_empty_untracked_true_when_index_lacks_the_path(tmp_path: Path) -> None:
     root = _repo(tmp_path, _index(["a.py", "dir/b.py"]))
     (tmp_path / "=").write_bytes(b"")
     assert pf.is_empty_untracked(str(tmp_path / "="), root) is True
 
 
-def test_empty_untracked_false_when_tracked(tmp_path):
+def test_empty_untracked_false_when_tracked(tmp_path: Path) -> None:
     root = _repo(tmp_path, _index(["a.py", "="]))
     (tmp_path / "=").write_bytes(b"")
     assert pf.is_empty_untracked(str(tmp_path / "="), root) is False
 
 
-def test_empty_untracked_false_when_nonempty_missing_or_symlink(tmp_path):
+def test_empty_untracked_false_when_nonempty_missing_or_symlink(tmp_path: Path) -> None:
     root = _repo(tmp_path, _index(["a.py"]))
     (tmp_path / "f").write_bytes(b"x")
     assert pf.is_empty_untracked(str(tmp_path / "f"), root) is False
@@ -359,7 +359,7 @@ def test_empty_untracked_false_when_nonempty_missing_or_symlink(tmp_path):
     assert pf.is_empty_untracked(str(tmp_path / "ln"), root) is False
 
 
-def test_empty_untracked_false_on_v4_link_extension_and_unreadable_index(tmp_path):
+def test_empty_untracked_false_on_v4_link_extension_and_unreadable_index(tmp_path: Path) -> None:
     (tmp_path / "=").write_bytes(b"")
     target = str(tmp_path / "=")
     assert pf.is_empty_untracked(target, _repo(tmp_path)) is False
@@ -372,7 +372,7 @@ def test_empty_untracked_false_on_v4_link_extension_and_unreadable_index(tmp_pat
     assert pf.is_empty_untracked(target, str(tmp_path)) is False
 
 
-def test_empty_untracked_resolves_a_gitdir_file(tmp_path):
+def test_empty_untracked_resolves_a_gitdir_file(tmp_path: Path) -> None:
     gitdir = tmp_path / "wt-gitdir"
     gitdir.mkdir()
     (gitdir / "index").write_bytes(_index(["a.py"]))
@@ -385,7 +385,7 @@ _OWNED_SID = "sess-owned-scope"
 
 
 @pytest.fixture
-def owned_repo(tmp_path, monkeypatch):
+def owned_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Repo whose session holds one landed run (no halt marker); `halted_repo` adds a halted run."""
     import coordinator_core.machine_profile as machine_profile
     from coordinator_core.hooks import _em_write_budget as leaf
@@ -418,13 +418,13 @@ def _post_fire_advised(result) -> bool:
 
 
 @pytest.mark.parametrize("rel", ["scripts/retire_scratch_junctions.py", "scripts/test_retire_scratch_junctions.py"])
-def test_landed_only_session_may_write_unowned_xs_paths(owned_repo, rel):
+def test_landed_only_session_may_write_unowned_xs_paths(owned_repo, rel) -> None:
     from coordinator_core.hooks import nudge_em_code_dispatch as mod
 
     assert not _post_fire_advised(mod.op(_edit(owned_repo, rel)))
 
 
-def test_halted_runs_withheld_path_owns_nothing(owned_repo, monkeypatch):
+def test_halted_runs_withheld_path_owns_nothing(owned_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _runs(monkeypatch, ["landed-run", "halted-run"])
     from coordinator_core.hooks import nudge_em_code_dispatch as mod
     from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx

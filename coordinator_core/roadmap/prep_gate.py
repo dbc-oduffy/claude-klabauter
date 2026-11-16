@@ -572,6 +572,23 @@ def _spine(
             "plan-row key(s) the spine reader does not consume: " + "; ".join(unknown[:8])
             + " (rename to a known key or drop it)",
         )
+    from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row, memo_row_slug
+
+    slugless = [
+        str(row.get("id", "?"))
+        for row in load_rows_memo(text).rows
+        if isinstance(row, dict)
+        and _is_memo_send_row(row)
+        and row.get("disposition", "open") == "open"
+        and row.get("performer") != "em"
+        and memo_row_slug(row) is None
+    ]
+    if slugless:
+        return _defect(
+            "memo-send-slugless",
+            f"open memo-send rows with no memo slug: {', '.join(slugless)} "
+            "(set `receipt: <slug>`; a memo disposition is a memo.transition row per memo)",
+        )
     excluded: list = []
     try:
         rows = read_spine(plan_path, exclusions=excluded, plan_edge_cache=plan_edge_cache)

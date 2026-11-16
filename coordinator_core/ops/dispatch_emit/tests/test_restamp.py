@@ -20,11 +20,12 @@ from coordinator_core.ops.dispatch_emit.op import (
     emission_receipt_path,
     restamp,
 )
+from pathlib import Path
 
 _RECEIPT_KEYS = {"sha256", "session_id", "emitted_at", "plan"}
 
 
-def _write_script_and_receipt(tmp_path, *, session_id, body=b"// original"):
+def _write_script_and_receipt(tmp_path, *, session_id, body: bytes = b"// original"):
     script_path = tmp_path / "emitted.mjs"
     script_path.write_bytes(body)
     receipt_path = emission_receipt_path(script_path)
@@ -42,7 +43,7 @@ def _write_script_and_receipt(tmp_path, *, session_id, body=b"// original"):
     return script_path, receipt_path
 
 
-def test_round_trip_restamps_sha256_over_edited_bytes(tmp_path):
+def test_round_trip_restamps_sha256_over_edited_bytes(tmp_path: Path) -> None:
     script_path, receipt_path = _write_script_and_receipt(tmp_path, session_id="sess-ours")
     script_path.write_bytes(b"// edited after emission")
 
@@ -59,7 +60,7 @@ def test_round_trip_restamps_sha256_over_edited_bytes(tmp_path):
     assert on_disk["emitted_at"] == "2026-09-16T09:00:00"
 
 
-def test_round_trip_output_is_accepted_by_test_op_emission_receipts_reader_shape(tmp_path):
+def test_round_trip_output_is_accepted_by_test_op_emission_receipts_reader_shape(tmp_path: Path) -> None:
     """Same shape ``test_op_emission_receipt.py`` reads: sorted keys, two-space
     indent, one trailing newline, sha256 matching the bytes on disk."""
     script_path, receipt_path = _write_script_and_receipt(tmp_path, session_id="sess-ours")
@@ -74,7 +75,7 @@ def test_round_trip_output_is_accepted_by_test_op_emission_receipts_reader_shape
     assert parsed["sha256"] == hashlib.sha256(script_path.read_bytes()).hexdigest()
 
 
-def test_refuses_a_receipt_naming_a_foreign_session(tmp_path):
+def test_refuses_a_receipt_naming_a_foreign_session(tmp_path: Path) -> None:
     script_path, receipt_path = _write_script_and_receipt(tmp_path, session_id="sess-peer")
     before = receipt_path.read_text(encoding="utf-8")
 
@@ -84,7 +85,7 @@ def test_refuses_a_receipt_naming_a_foreign_session(tmp_path):
     assert receipt_path.read_text(encoding="utf-8") == before
 
 
-def test_refuses_when_session_id_is_empty(tmp_path):
+def test_refuses_when_session_id_is_empty(tmp_path: Path) -> None:
     script_path, receipt_path = _write_script_and_receipt(tmp_path, session_id="sess-peer")
     before = receipt_path.read_text(encoding="utf-8")
 
@@ -94,7 +95,7 @@ def test_refuses_when_session_id_is_empty(tmp_path):
     assert receipt_path.read_text(encoding="utf-8") == before
 
 
-def test_refuses_when_no_receipt_exists(tmp_path):
+def test_refuses_when_no_receipt_exists(tmp_path: Path) -> None:
     script_path = tmp_path / "emitted.mjs"
     script_path.write_bytes(b"// no receipt beside this one")
 
@@ -102,7 +103,7 @@ def test_refuses_when_no_receipt_exists(tmp_path):
         restamp(script_path, "sess-ours")
 
 
-def test_refuses_when_script_does_not_exist(tmp_path):
+def test_refuses_when_script_does_not_exist(tmp_path: Path) -> None:
     script_path = tmp_path / "missing.mjs"
 
     with pytest.raises(NoReceiptToRestampError):
@@ -123,7 +124,7 @@ if __name__ == "__main__":
         b"/* never closed\n",
     ],
 )
-def test_refuses_to_stamp_bytes_that_do_not_parse(tmp_path, broken):
+def test_refuses_to_stamp_bytes_that_do_not_parse(tmp_path: Path, broken) -> None:
     script_path, receipt_path = _write_script_and_receipt(tmp_path, session_id="sess-ours")
     before = receipt_path.read_text(encoding="utf-8")
     script_path.write_bytes(broken)
@@ -134,7 +135,7 @@ def test_refuses_to_stamp_bytes_that_do_not_parse(tmp_path, broken):
     assert receipt_path.read_text(encoding="utf-8") == before
 
 
-def test_restamp_accepts_unmodified_script_with_interpolation_regex_and_backtick_class(tmp_path):
+def test_restamp_accepts_unmodified_script_with_interpolation_regex_and_backtick_class(tmp_path: Path) -> None:
     script_path, _ = _write_script_and_receipt(tmp_path, session_id="sess-ours")
     script_path.write_bytes(
         b"const a = `x ${v.replace(/'/g, '')} y`;\nconst R = /[*_`]/g;\nf([1]);\n"
@@ -143,7 +144,7 @@ def test_restamp_accepts_unmodified_script_with_interpolation_regex_and_backtick
     assert restamp(script_path, "sess-ours")["session_id"] == "sess-ours"
 
 
-def test_regex_and_division_restamp_clean(tmp_path):
+def test_regex_and_division_restamp_clean(tmp_path: Path) -> None:
     script_path, _ = _write_script_and_receipt(tmp_path, session_id="sess-ours")
     script_path.write_bytes(
         b"const a = 1 / 2 / 3;\nif (/^\"?(?:PARTIAL|BLOCKED):|<\\/x>[(]/.test(s)) return {a};\n"

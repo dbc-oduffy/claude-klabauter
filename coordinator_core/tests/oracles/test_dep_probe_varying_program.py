@@ -28,6 +28,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import coordinator_core.ops.setup_chain_walker as setup_chain_walker
+import pytest
 
 _M = 4
 
@@ -55,15 +56,15 @@ def _write_manifest(tmp_path: Path, exprs: list[str]) -> tuple[Path, Path]:
     return manifest_path, repo_root
 
 
-def _patched_run(monkeypatch, calls: list):
-    def fake_run(argv, **kwargs):
+def _patched_run(monkeypatch, calls: list) -> None:
+    def fake_run(argv, **kwargs) -> SimpleNamespace:
         calls.append(tuple(argv))
         return SimpleNamespace(returncode=0, stdout=b"", stderr=b"")
 
     monkeypatch.setattr(setup_chain_walker.subprocess, "run", fake_run)
 
 
-def test_dep_probe_all_issues_one_spawn_per_python_import_dep(tmp_path, monkeypatch):
+def test_dep_probe_all_issues_one_spawn_per_python_import_dep(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list = []
     _patched_run(monkeypatch, calls)
 
@@ -81,7 +82,7 @@ def test_dep_probe_all_issues_one_spawn_per_python_import_dep(tmp_path, monkeypa
     )
 
 
-def test_dep_probe_all_python_import_spawns_have_distinct_argv(tmp_path, monkeypatch):
+def test_dep_probe_all_python_import_spawns_have_distinct_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list = []
     _patched_run(monkeypatch, calls)
 
@@ -100,7 +101,7 @@ def test_dep_probe_all_python_import_spawns_have_distinct_argv(tmp_path, monkeyp
     )
 
 
-def test_oracle_fails_when_all_deps_share_one_expr(tmp_path, monkeypatch):
+def test_oracle_fails_when_all_deps_share_one_expr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list = []
     _patched_run(monkeypatch, calls)
 

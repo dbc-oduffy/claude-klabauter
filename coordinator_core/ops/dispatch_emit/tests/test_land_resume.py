@@ -11,10 +11,11 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import land_resume as lr
 from coordinator_core.warm import breadcrumb
+from pathlib import Path
 
 
 @pytest.fixture
-def root(tmp_path, monkeypatch):
+def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path / "rt"))
     return tmp_path / "engine"
 
@@ -22,11 +23,11 @@ def root(tmp_path, monkeypatch):
 PARAMS = {"root": "R", "mode": "product"}
 
 
-def test_queue_dir_under_runtime_base(root, tmp_path):
+def test_queue_dir_under_runtime_base(root, tmp_path: Path) -> None:
     assert str(lr.queue_dir(root)).startswith(str(tmp_path / "rt"))
 
 
-def test_enqueue_creates_one_entry_with_fields(root):
+def test_enqueue_creates_one_entry_with_fields(root) -> None:
     assert lr.enqueue(root, "run-1", PARAMS, "land_run.commit") is True
     entry = lr.load(root, "run-1")
     assert entry["run_id"] == "run-1"
@@ -37,7 +38,7 @@ def test_enqueue_creates_one_entry_with_fields(root):
     assert "enqueued_at" in entry
 
 
-def test_second_enqueue_bumps_not_duplicates_or_resets(root):
+def test_second_enqueue_bumps_not_duplicates_or_resets(root) -> None:
     lr.enqueue(root, "run-1", PARAMS, "land_run.integrity")
     first = lr.load(root, "run-1")["enqueued_at"]
     assert lr.enqueue(root, "run-1", PARAMS, "land_run.commit") is True
@@ -50,22 +51,22 @@ def test_second_enqueue_bumps_not_duplicates_or_resets(root):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="posix mode bits")
-def test_entry_is_0600(root):
+def test_entry_is_0600(root) -> None:
     lr.enqueue(root, "run-1", PARAMS, "x")
     mode = stat.S_IMODE(os.stat(lr.queue_dir(root) / "run-1.json").st_mode)
     assert mode == 0o600
 
 
-def test_unsafe_run_id_refused(root):
+def test_unsafe_run_id_refused(root) -> None:
     assert lr.enqueue(root, "../x", PARAMS, "x") is False
     assert lr.enqueue(root, "", PARAMS, "x") is False
 
 
-def test_empty_queue_next_due_is_none(root):
+def test_empty_queue_next_due_is_none(root) -> None:
     assert lr.next_due(root, time.time()) is None
 
 
-def test_next_due_claims_by_rename_and_second_drainer_gets_none(root):
+def test_next_due_claims_by_rename_and_second_drainer_gets_none(root) -> None:
     lr.enqueue(root, "run-1", PARAMS, "x")
     path = lr.next_due(root, time.time())
     assert path is not None and path.name == "run-1.claimed"
@@ -73,7 +74,7 @@ def test_next_due_claims_by_rename_and_second_drainer_gets_none(root):
     assert lr.next_due(root, time.time()) is None
 
 
-def test_finish_closes_and_blocks_requeue(root):
+def test_finish_closes_and_blocks_requeue(root) -> None:
     lr.enqueue(root, "run-1", PARAMS, "x")
     lr.next_due(root, time.time())
     assert lr.finish(root, "run-1", lr.OUTCOME_LANDED) is True
@@ -83,7 +84,7 @@ def test_finish_closes_and_blocks_requeue(root):
     assert lr.next_due(root, time.time()) is None
 
 
-def test_enqueue_during_claim_requeues_on_finish(root):
+def test_enqueue_during_claim_requeues_on_finish(root) -> None:
     lr.enqueue(root, "run-1", PARAMS, "x")
     lr.next_due(root, time.time())
     assert lr.enqueue(root, "run-1", PARAMS, "land_run.commit") is True
@@ -93,12 +94,12 @@ def test_enqueue_during_claim_requeues_on_finish(root):
     assert (lr.queue_dir(root) / "run-1.json").exists()
 
 
-def test_bump_racing_a_claim_leaves_one_live_entry(root, monkeypatch):
+def test_bump_racing_a_claim_leaves_one_live_entry(root, monkeypatch: pytest.MonkeyPatch) -> None:
     lr.enqueue(root, "run-1", PARAMS, "x")
     real_write = lr._write
     raced = []
 
-    def claim_then_write(path, entry):
+    def claim_then_write(path, entry) -> None:
         if not raced and path.name == "run-1.json":
             raced.append(lr.next_due(root, time.time()))
         real_write(path, entry)
@@ -115,7 +116,7 @@ def test_bump_racing_a_claim_leaves_one_live_entry(root, monkeypatch):
     assert lr.load(root, "run-1")["attempts"] == 2
 
 
-def test_stale_claim_of_dead_holder_is_reclaimed(root, monkeypatch):
+def test_stale_claim_of_dead_holder_is_reclaimed(root, monkeypatch: pytest.MonkeyPatch) -> None:
     lr.enqueue(root, "run-1", PARAMS, "x")
     claimed = lr.next_due(root, time.time())
     old = time.time() - lr.CLAIM_STALE_SECS - 10
@@ -125,7 +126,7 @@ def test_stale_claim_of_dead_holder_is_reclaimed(root, monkeypatch):
     assert again is not None and again.name == "run-1.claimed"
 
 
-def test_stale_claim_of_live_or_doubtful_holder_is_kept(root, monkeypatch):
+def test_stale_claim_of_live_or_doubtful_holder_is_kept(root, monkeypatch: pytest.MonkeyPatch) -> None:
     lr.enqueue(root, "run-1", PARAMS, "x")
     claimed = lr.next_due(root, time.time())
     old = time.time() - lr.CLAIM_STALE_SECS - 10
@@ -135,14 +136,14 @@ def test_stale_claim_of_live_or_doubtful_holder_is_kept(root, monkeypatch):
         assert lr.next_due(root, time.time()) is None
 
 
-def test_fresh_claim_is_not_reclaimed(root, monkeypatch):
+def test_fresh_claim_is_not_reclaimed(root, monkeypatch: pytest.MonkeyPatch) -> None:
     lr.enqueue(root, "run-1", PARAMS, "x")
     lr.next_due(root, time.time())
     monkeypatch.setattr(lr.record, "pid_state", lambda pid: False)
     assert lr.next_due(root, time.time()) is None
 
 
-def test_expired_by_attempts_and_age():
+def test_expired_by_attempts_and_age() -> None:
     now = 10_000.0
     assert lr.expired({"attempts": lr.MAX_ATTEMPTS, "enqueued_at": now}, now) is False
     assert lr.expired({"attempts": lr.MAX_ATTEMPTS + 1, "enqueued_at": now}, now) is True
@@ -150,7 +151,7 @@ def test_expired_by_attempts_and_age():
     assert lr.expired({"attempts": 1, "enqueued_at": now - lr.MAX_AGE_SECS - 1}, now) is True
 
 
-def test_next_due_finishes_expired_entry_and_skips_it(root):
+def test_next_due_finishes_expired_entry_and_skips_it(root) -> None:
     lr.enqueue(root, "old", PARAMS, "x")
     lr.enqueue(root, "fresh", PARAMS, "x")
     assert lr.next_due(root, time.time() + lr.MAX_AGE_SECS + 5) is None
@@ -158,7 +159,7 @@ def test_next_due_finishes_expired_entry_and_skips_it(root):
     assert (lr.queue_dir(root) / "fresh.done").exists()
 
 
-def test_log_line_per_state_change(root):
+def test_log_line_per_state_change(root) -> None:
     lr.enqueue(root, "run-1", PARAMS, "x")
     lr.enqueue(root, "run-1", PARAMS, "y")
     lr.next_due(root, time.time())

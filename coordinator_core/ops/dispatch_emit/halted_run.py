@@ -119,7 +119,7 @@ UNREADABLE_HALT_RECORD = "unreadable-halt-record"
 class UnreadableHaltRecord(ValueError):
     """A halt marker that exists but cannot be read; `reason` names the run dir it came from."""
 
-    def __init__(self, run_id: str, detail: str = ""):
+    def __init__(self, run_id: str, detail: str = "") -> None:
         self.run_id = run_id
         self.reason = f"{UNREADABLE_HALT_RECORD}:{run_id}"
         super().__init__(f"{self.reason} {detail}".strip())
@@ -535,7 +535,7 @@ class AmbiguousHaltedRuns(ValueError):
 
     caller_facing_validation = True  # ipc renders the message as INVALID_PARAMS, not a bare Internal error
 
-    def __init__(self, sizing_rel: str, candidates):
+    def __init__(self, sizing_rel: str, candidates) -> None:
         self.candidates = tuple(candidates)
         self.reason = f"ambiguous-halted-runs:{','.join(self.candidates)}"
         super().__init__(
@@ -556,6 +556,22 @@ def _halted_candidates(repo_root: Path, sizing_rel: str) -> list:
     return ([warp] if warp else []) + _halted_asks(repo_root, sizing_rel)
 
 
+def _minted_iso(run_id: str) -> str:
+    """A run id's mint stamp as `%Y-%m-%dT%H:%M:%SZ`, comparable with `revised_at`."""
+    s = _run_stamp(run_id)
+    return f"{s[:4]}-{s[4:6]}-{s[6:8]}T{s[9:11]}:{s[11:13]}:{s[13:15]}Z"
+
+
+def _superseded_revise(root: Path, best: str, best_at: str, ordered: list) -> bool:
+    """True when another candidate was minted after `best`'s revise stamp (so it halted after it) or carries
+    a later note: the revise then no longer outranks the newest halt. Mint time is the proxy for halt time;
+    a run minted before the revise but halted after it is not detected."""
+    return any(
+        name != best and (_minted_iso(name) > best_at or _latest_note_at(root / name) > best_at)
+        for name in ordered
+    )
+
+
 def _prefer(repo_root: Path, sizing_rel: str, candidates: list, caller_session: Optional[str]) -> str:
     """The candidate to resume among two or more: the caller's own newest run; else the latest `revised_at`
     stamp; else the newest. `AmbiguousHaltedRuns` when the caller owns none, no stamp breaks the tie and the
@@ -569,7 +585,9 @@ def _prefer(repo_root: Path, sizing_rel: str, candidates: list, caller_session: 
     root = Path(repo_root) / RECORD_DIR_ROOT
     stamps = [(at, name) for name in ordered if (at := revised_halt(root / name))]
     if stamps:
-        return max(stamps)[1]
+        best_at, best = max(stamps)
+        if not _superseded_revise(root, best, best_at, ordered):
+            return best
     if caller_session and len({o for o in owners.values() if o}) > 1:
         raise AmbiguousHaltedRuns(_norm(sizing_rel), ordered)
     return ordered[0]
@@ -626,7 +644,7 @@ def _latest_revised(repo_root: Path, sizing_rel: str, runs: set, picked: str) ->
         return picked
     # Trap: a later ruling posted on another run of this sizing (`notes.jsonl`) supersedes `best`'s;
     # without this the OLDEST halt of a lineage won (example-game-repo 06ca65: cc36f8 over 0845c4).
-    if any(_latest_note_at(root / name) > best_at for name in runs if name != best and safe_id(name)):
+    if _superseded_revise(root, best, best_at, [n for n in runs if safe_id(n)]):
         return picked
     return halted_run_named(repo_root, best, sizing_rel) or picked
 

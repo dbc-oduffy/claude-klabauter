@@ -134,6 +134,7 @@ _SWEPT_HELP_ENTRYPOINTS = (
     "bug-backlog-reap.py",
     "update-docs-bookkeeping.py",
     "gem-inbox-apply.py",
+    "update-docs-bookkeeping.py",
 )
 
 

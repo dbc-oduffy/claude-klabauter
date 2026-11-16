@@ -9,6 +9,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import RELAY_CORRUPT_HEAD
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler, stage
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import PLAN_REL
+from pathlib import Path
 
 ROWS = 40
 RUN = "big"
@@ -23,7 +24,7 @@ _ROW = """- id: C{n}
 
 
 @pytest.fixture
-def big_repo(tmp_path):
+def big_repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     body = "".join(_ROW.format(n=n) for n in range(1, ROWS + 1))
@@ -32,7 +33,7 @@ def big_repo(tmp_path):
     return tmp_path
 
 
-def test_forty_row_reply_is_a_short_handle_and_the_manifest_reads_back_intact(big_repo):
+def test_forty_row_reply_is_a_short_handle_and_the_manifest_reads_back_intact(big_repo) -> None:
     reply = _handler({"run_id": RUN, "plan_path": PLAN_REL}, repo_root=big_repo)
     assert set(reply) == {"manifest_handle"}
     assert len(str(reply)) < 300
@@ -48,7 +49,7 @@ def test_forty_row_reply_is_a_short_handle_and_the_manifest_reads_back_intact(bi
     assert "head_sha" in manifest
 
 
-def test_a_tampered_manifest_is_refused(big_repo):
+def test_a_tampered_manifest_is_refused(big_repo) -> None:
     handle = _handler({"run_id": RUN, "plan_path": PLAN_REL}, repo_root=big_repo)["manifest_handle"]
     target = big_repo / handle["path"]
     raw = bytearray(target.read_bytes())
@@ -59,6 +60,6 @@ def test_a_tampered_manifest_is_refused(big_repo):
     assert str(exc.value).startswith(RELAY_CORRUPT_HEAD)
 
 
-def test_a_refusal_reply_stays_an_error_object(big_repo):
+def test_a_refusal_reply_stays_an_error_object(big_repo) -> None:
     reply = _handler({"run_id": RUN, "plan_path": "docs/plans/missing.md"}, repo_root=big_repo)
     assert "manifest_handle" not in reply and "error" in reply

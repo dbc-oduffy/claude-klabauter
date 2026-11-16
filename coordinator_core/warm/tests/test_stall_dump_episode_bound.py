@@ -7,6 +7,8 @@ import threading
 import time
 
 from coordinator_core.warm import hang_restart, server
+from pathlib import Path
+import pytest
 
 
 def _records(stall_dir):
@@ -17,13 +19,13 @@ def _full(stall_dir):
     return [p for p in _records(stall_dir) if "--- threads ---" in p.read_text(encoding="utf-8")]
 
 
-def test_concurrent_burst_writes_one_full_dump_and_n_minus_one_stubs(tmp_path, monkeypatch):
+def test_concurrent_burst_writes_one_full_dump_and_n_minus_one_stubs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stall_dir = tmp_path / "svc" / "stall-dumps"
     monkeypatch.setattr(hang_restart, "maybe_restart", lambda *a, **k: None)
     n = 8
     barrier = threading.Barrier(n)
 
-    def _stall(i):
+    def _stall(i) -> None:
         barrier.wait()
         server._write_stall_record(stall_dir, None, key=f"k{i}", leg="{}")
 
@@ -41,7 +43,7 @@ def test_concurrent_burst_writes_one_full_dump_and_n_minus_one_stubs(tmp_path, m
     assert all(p.read_text(encoding="utf-8").startswith("stub:") for p in stubs)
 
 
-def test_stall_after_window_writes_a_new_full_dump(tmp_path, monkeypatch):
+def test_stall_after_window_writes_a_new_full_dump(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stall_dir = tmp_path / "svc" / "stall-dumps"
     monkeypatch.setattr(hang_restart, "maybe_restart", lambda *a, **k: None)
     server._write_stall_record(stall_dir, None, key="a")
@@ -52,7 +54,7 @@ def test_stall_after_window_writes_a_new_full_dump(tmp_path, monkeypatch):
     assert server._claim_stall_episode(stall_dir, 5.0) is False
 
 
-def test_stub_records_count_toward_the_restart_threshold(tmp_path, monkeypatch):
+def test_stub_records_count_toward_the_restart_threshold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stall_dir = tmp_path / "svc" / "stall-dumps"
     exits = []
     monkeypatch.setattr(hang_restart, "exit_server", exits.append)
@@ -64,7 +66,7 @@ def test_stub_records_count_toward_the_restart_threshold(tmp_path, monkeypatch):
     assert seen == [0] * (hang_restart.HANG_DUMP_THRESHOLD - 1) + [1]
 
 
-def test_operator_dump_request_bypasses_the_episode_gate(tmp_path, monkeypatch):
+def test_operator_dump_request_bypasses_the_episode_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stall_dir = tmp_path / "svc" / "stall-dumps"
     monkeypatch.setattr(hang_restart, "maybe_restart", lambda *a, **k: None)
     server._write_stall_record(stall_dir, None, key="a")

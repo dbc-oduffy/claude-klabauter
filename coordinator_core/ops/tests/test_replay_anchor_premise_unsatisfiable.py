@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.ops import _anchor_premise as ap
 from coordinator_core.ops import plan_readiness_verdict as prv
+from pathlib import Path
 
 _UNEVALUABLE = [
     {"id": "AP-PIPE", "claim": "pipe", "check": {"command": "grep -c hello a.txt | wc -l", "expect": "1"}},
@@ -32,7 +33,7 @@ def _verdict(tmp_path, entries, checker_ran):
 
 @pytest.mark.parametrize("checker_ran", [True, False])
 @pytest.mark.parametrize("entries", [_UNEVALUABLE, _REFUSED], ids=["unevaluable", "screen-refused"])
-def test_unsatisfiable_premise_is_a_note_not_a_pull(tmp_path, entries, checker_ran):
+def test_unsatisfiable_premise_is_a_note_not_a_pull(tmp_path: Path, entries, checker_ran) -> None:
     out = _verdict(tmp_path, entries, checker_ran)
     assert out["blocking"] == [], out
     if checker_ran:
@@ -65,7 +66,7 @@ _NAMED_PLANS = {
 
 @pytest.mark.parametrize("checker_ran", [True, False])
 @pytest.mark.parametrize("plan", ["L-r41", "XL-r41", "XXL-r40"])
-def test_named_run_plan_not_refused_by_anchor_gate(tmp_path, plan, checker_ran):
+def test_named_run_plan_not_refused_by_anchor_gate(tmp_path: Path, plan, checker_ran) -> None:
     out = _verdict(tmp_path, _NAMED_PLANS[plan], checker_ran)
     assert not any("anchor-premise" in b for b in out["blocking"]), out
     if checker_ran:
@@ -76,7 +77,7 @@ def test_named_run_plan_not_refused_by_anchor_gate(tmp_path, plan, checker_ran):
 
 
 @pytest.mark.parametrize("checker_ran", [True, False])
-def test_malformed_premise_still_blocks(tmp_path, checker_ran):
+def test_malformed_premise_still_blocks(tmp_path: Path, checker_ran) -> None:
     out = _verdict(tmp_path, _MALFORMED, checker_ran)
     assert out["verdict"] == "judgment", out
     assert any("P9" in b for b in out["blocking"]), out

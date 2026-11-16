@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.session import safe_commit_offer as sco
+from pathlib import Path
 
 
 def _repo(tmp_path, *, branch, remote):
@@ -19,7 +20,7 @@ def _repo(tmp_path, *, branch, remote):
 
 
 @pytest.fixture()
-def reached(monkeypatch):
+def reached(monkeypatch: pytest.MonkeyPatch):
     calls = []
 
     def fake_commit(session_id, cwd, groups):
@@ -43,27 +44,27 @@ def _call(repo, **extra):
     return sco._handler({"cwd": str(repo), "session_id": "s-1", **extra})
 
 
-def test_refuses_on_remote_backed_main_and_commits_nothing(tmp_path, reached):
+def test_refuses_on_remote_backed_main_and_commits_nothing(tmp_path: Path, reached) -> None:
     repo = _repo(tmp_path, branch="main", remote=True)
     out = _call(repo)
     assert "workday-start-day-branch-resolve day-branch-assert" in out["error"]
     assert reached == []
 
 
-def test_override_reason_admits(tmp_path, reached):
+def test_override_reason_admits(tmp_path: Path, reached) -> None:
     repo = _repo(tmp_path, branch="main", remote=True)
     out = _call(repo, on_main_reason="release-index commit")
     assert "error" not in out
     assert len(reached) == 1
 
 
-def test_remote_less_main_admits(tmp_path, reached):
+def test_remote_less_main_admits(tmp_path: Path, reached) -> None:
     repo = _repo(tmp_path, branch="main", remote=False)
     assert "error" not in _call(repo)
     assert len(reached) == 1
 
 
-def test_work_branch_with_remote_admits(tmp_path, reached):
+def test_work_branch_with_remote_admits(tmp_path: Path, reached) -> None:
     repo = _repo(tmp_path, branch="work/x/2026-10-16", remote=True)
     assert "error" not in _call(repo)
     assert len(reached) == 1

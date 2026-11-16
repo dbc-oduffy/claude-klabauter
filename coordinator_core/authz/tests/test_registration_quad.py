@@ -27,6 +27,7 @@ from coordinator_core.authz.registration_quad import (
     partition_suspended,
     prune_known_incomplete,
 )
+import pytest
 
 
 def _qv(op_key: str) -> QuadViolation:
@@ -46,7 +47,7 @@ class TestSuspendedPartition:
         assert live == [a, c]
         assert by_design == [b, d]
 
-    def test_filter_default_resolves_live_suspended_ops(self, monkeypatch) -> None:
+    def test_filter_default_resolves_live_suspended_ops(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core import op_budget_suspension
 
         monkeypatch.setattr(op_budget_suspension, "SUSPENDED_OPS", {"susp.op": {}})

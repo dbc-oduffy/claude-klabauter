@@ -36,6 +36,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.install.substrate import SubstrateFatalError, _install_one
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence]
 
@@ -93,8 +94,8 @@ def _install_one_kwargs(tmp_path, name: str, write_strategy: str, force_overwrit
 
 @pytest.mark.parametrize("name,live_rewrites,write_strategy,force_overwrite", _CASES)
 def test_check_verdict_matches_what_live_actually_does(
-    tmp_path, name, live_rewrites, write_strategy, force_overwrite
-):
+    tmp_path: Path, name, live_rewrites, write_strategy, force_overwrite
+) -> None:
     """check_only must not FATAL on a destination live would leave alone."""
     src, dst = _fixture(tmp_path, name)
     before = dst.read_text(encoding="utf-8")
@@ -124,7 +125,7 @@ def test_check_verdict_matches_what_live_actually_does(
     )
 
 
-def test_the_reported_file_no_longer_fatals(tmp_path):
+def test_the_reported_file_no_longer_fatals(tmp_path: Path) -> None:
     """The literal regression: settings-manifest.md diverged on disk.
 
     Named separately from the matrix because this is the case that made the
@@ -135,7 +136,7 @@ def test_the_reported_file_no_longer_fatals(tmp_path):
     _install_one(src, dst, False, "machine-local", True)  # must not raise
 
 
-def test_absent_destination_still_reports_in_check_mode(tmp_path):
+def test_absent_destination_still_reports_in_check_mode(tmp_path: Path) -> None:
     """The asymmetry fix must not have silenced the absent case.
 
     A destination that does not exist yet is not a preserve-vs-rewrite

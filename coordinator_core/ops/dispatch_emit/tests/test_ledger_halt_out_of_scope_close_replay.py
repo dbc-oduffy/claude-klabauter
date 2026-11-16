@@ -16,7 +16,7 @@ from coordinator_core.ops.dispatch_emit import ask_fanout_contract as c
 from coordinator_core.ops.dispatch_emit import halted_run_landed as op
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import terminal_commit
-from coordinator_core.ops.dispatch_emit.ask_contract import halted_record_message
+from coordinator_core.ops.dispatch_emit.ask_contract import ALL_LANDED_HALT_KIND, halted_record_message
 from coordinator_core.ops.dispatch_emit.sizing_fire import resumable_plan
 from coordinator_core.testing.git_write import write_seen_by_git
 from coordinator_core.warp_fire import fire_command
@@ -157,8 +157,9 @@ def _drive(root: Path, sha: str) -> dict:
     assert revised["ok"] and revised["withheld"] == ["R1"]
     assert _register(root)["R1"]["status"] == "deferred"
 
-    refire = resumable_plan(yaml.safe_load((root / SIZING).read_text(encoding="utf-8")), SIZING, root, "m_plus")
-    assert refire.incomplete == () and refire.ledger.halted == "all-landed" and refire.ledger.run_id == RUN
+    resume = resumable_plan(yaml.safe_load((root / SIZING).read_text(encoding="utf-8")), SIZING, root, "m_plus")
+    assert resume is not None and resume.incomplete == ()
+    assert resume.ledger is not None and resume.ledger.halted == ALL_LANDED_HALT_KIND and resume.ledger.run_id == RUN
 
     digest = root / "scratch" / "task-output.json"
     digest.parent.mkdir(parents=True, exist_ok=True)
@@ -167,7 +168,7 @@ def _drive(root: Path, sha: str) -> dict:
     refused = terminal_commit._handler({"task_output_path": str(digest)}, repo_root=root)
     assert refused["refused"] == "halted-run" and ROUTE in refused["error"]
 
-    return op._handler({"run_id": RUN, "sha": sha}, root)
+    return op._handler({"run_id": RUN, "sha": sha, "met_by": {"R1": sha}}, root)
 
 
 def _stage_review(root: Path, sha: str) -> None:

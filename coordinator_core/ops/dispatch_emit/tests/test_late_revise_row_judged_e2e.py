@@ -28,6 +28,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_plain_resume_refire_stages_cu
     PLAN_REL,
     _plan,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -36,7 +37,7 @@ _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
 
 @pytest.fixture
-def repo(_bare_repo, monkeypatch):
+def repo(_bare_repo, monkeypatch: pytest.MonkeyPatch):
     (_bare_repo / ".git").mkdir()
     monkeypatch.setattr(ask_gate, "_bind_run", lambda *a, **k: None)
     monkeypatch.setattr(run_token, "is_live", lambda *_a, **_k: True)
@@ -63,7 +64,7 @@ def _revise(root, text):
     return out
 
 
-def _ledger_ids(root):
+def _ledger_ids(root) -> list[str]:
     return [i.id for i in rl.read_ledger(root, record_dir(root, RUN)).items]
 
 
@@ -71,7 +72,7 @@ def _verdict(ids):
     return {"items": [{"id": i, "status": "met", "wired": True, "met_by": "pkg/C1.py"} for i in ids]}
 
 
-def _compose():
+def _compose() -> str:
     return compose_ask_script(
         repo_root="REPO", prompt="add a thing", sizing_rel=None, run_id="run-1", session_id=None,
         wrap_stage=lambda text: (_BLITZ_FN, ["Size", "Plan"]), plan_blitz_text="stub",
@@ -79,7 +80,7 @@ def _compose():
     )
 
 
-def test_a_row_revised_before_verify_is_late_unioned_into_verify_and_judged(repo):
+def test_a_row_revised_before_verify_is_late_unioned_into_verify_and_judged(repo) -> None:
     manifest = _stage(repo)
     staged = list(manifest["ledger_item_ids"])
     assert staged and not rl.verify_staged(record_dir(repo, RUN))
@@ -102,7 +103,7 @@ def test_a_row_revised_before_verify_is_late_unioned_into_verify_and_judged(repo
     assert [f["id"] for f in skipped["failures"] if "unjudged" in f["reason"]] == [added]
 
 
-def test_pre_verify_late_ids_run_one_bounded_executor_leg_before_the_verify_leg():
+def test_pre_verify_late_ids_run_one_bounded_executor_leg_before_the_verify_leg() -> None:
     script = _compose()
     assert script.count("_lateLeg = async (_ids) =>") == 1
     read = script.index("_verifyLateIds = await _lateRead(true);")
@@ -170,7 +171,7 @@ def _run_composed_late_legs(reads, tmp_path, added=("C2",)):
 
 
 @pytest.mark.parametrize("reads", [[[], ["R2"]], [["R2"], ["R2"]]])
-def test_a_row_revised_after_execute_is_executed_once_then_verify_runs_without_a_halt(reads, tmp_path):
+def test_a_row_revised_after_execute_is_executed_once_then_verify_runs_without_a_halt(reads, tmp_path: Path) -> None:
     out = _run_composed_late_legs(reads, tmp_path)
     executors = [lbl for lbl in out["order"] if lbl.endswith("C2")]
     assert len(executors) == 1, out["order"]
@@ -180,31 +181,31 @@ def test_a_row_revised_after_execute_is_executed_once_then_verify_runs_without_a
     assert out["verifyIds"] == ["R2"]
 
 
-def test_a_late_row_the_replan_cannot_plan_is_retried_within_the_bound_then_recorded_unplanned(tmp_path):
+def test_a_late_row_the_replan_cannot_plan_is_retried_within_the_bound_then_recorded_unplanned(tmp_path: Path) -> None:
     out = _run_composed_late_legs([["R2"], ["R2"]], tmp_path, added=())
     assert out["order"].count("ledger-late") == MAX_IN_RUN_REMEDY_ATTEMPTS, out["order"]
     assert out["unplanned"] == ["R2"] and out["rows"] == ["C1"] and out["halted"] is None
     assert out["order"][-1] == "verify"
 
 
-def test_a_late_row_without_register_rows_serves_nothing_and_its_ids_are_recorded_unplanned(tmp_path):
+def test_a_late_row_without_register_rows_serves_nothing_and_its_ids_are_recorded_unplanned(tmp_path: Path) -> None:
     out = _run_composed_late_legs([["R2"], []], tmp_path)
     assert out["rows"] == ["C1", "C2"] and out["unplanned"] == ["R2"], out
 
 
-def test_the_ledger_check_rules_late_ids_rulable_and_names_unplanned_rows_by_refusal_token():
+def test_the_ledger_check_rules_late_ids_rulable_and_names_unplanned_rows_by_refusal_token() -> None:
     script = _compose()
     assert "..._lateIds, ..._verifyLateIds])]" in _between(script, "const _rulable =", r";\n")
     ledger = script[script.index("{ halted: 'ledger-check'"):]
     assert "_lateUnplanned.length" in ledger and REGISTER_ROWS_UNCLAIMED_REFUSAL in ledger
 
 
-def test_no_late_row_runs_no_extra_leg(tmp_path):
+def test_no_late_row_runs_no_extra_leg(tmp_path: Path) -> None:
     out = _run_composed_late_legs([[], []], tmp_path)
     assert "ledger-late" not in out["order"] and out["order"][-1] == "verify"
 
 
-def test_a_row_revised_after_verify_lands_on_refire_and_the_refire_stages_both_rows(repo):
+def test_a_row_revised_after_verify_lands_on_refire_and_the_refire_stages_both_rows(repo) -> None:
     manifest = _stage(repo)
     r2 = _revise(repo, "also cover Windows")["item"]
     read = rl._late_rows_handler({"run_id": RUN, "verify_read": True}, repo_root=repo)

@@ -9,6 +9,7 @@ from coordinator_core.ops.dispatch_emit import ask_stage, halted_withheld_index
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, ManifestRow
 from coordinator_core.ops.dispatch_emit.kept_work import blob_sha, fingerprint
 from coordinator_core.ops.dispatch_emit.write_baseline import unwritten
+import pytest
 
 SIZING_A = "state/sizings/a.yaml"
 SIZING_OTHER = "state/sizings/other.yaml"
@@ -31,7 +32,7 @@ def _stage_b(root: Path, sizing: str) -> dict:
     return ask_stage._stage_write_baseline(root, rows, rec, sizing)
 
 
-def test_same_sizing_hunk_is_credited_to_b_not_its_base(tmp_path, monkeypatch):
+def test_same_sizing_hunk_is_credited_to_b_not_its_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _run_a_halts(tmp_path, SIZING_A)
     (tmp_path / "pkg" / "other.py").write_text("plain dirt\n", encoding="utf-8", newline="\n")
     monkeypatch.setattr(git_state, "head_blobs", lambda root, paths: {p: (0o100644, HEAD_BLOB) for p in paths})
@@ -41,13 +42,13 @@ def test_same_sizing_hunk_is_credited_to_b_not_its_base(tmp_path, monkeypatch):
     assert got["pkg/other.py"] == fingerprint(tmp_path, "pkg/other.py")
 
 
-def test_same_sizing_hunk_absent_from_head_baselines_none(tmp_path, monkeypatch):
+def test_same_sizing_hunk_absent_from_head_baselines_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _run_a_halts(tmp_path, SIZING_A)
     monkeypatch.setattr(git_state, "head_blobs", lambda root, paths: {})
     assert _stage_b(tmp_path, SIZING_A)["pkg/w.py"] is None
 
 
-def test_different_sizing_hunk_stays_a_is_neither_base_nor_b_work(tmp_path):
+def test_different_sizing_hunk_stays_a_is_neither_base_nor_b_work(tmp_path: Path) -> None:
     _run_a_halts(tmp_path, SIZING_OTHER)
     got = _stage_b(tmp_path, SIZING_A)
     assert "pkg/w.py" not in got
@@ -55,7 +56,7 @@ def test_different_sizing_hunk_stays_a_is_neither_base_nor_b_work(tmp_path):
     assert halted_withheld_index.withheld_by_path(tmp_path)["pkg/w.py"] == "runA"
 
 
-def test_edited_after_halt_is_ordinary_capture(tmp_path):
+def test_edited_after_halt_is_ordinary_capture(tmp_path: Path) -> None:
     _run_a_halts(tmp_path, SIZING_A)
     (tmp_path / "pkg" / "w.py").write_text("foreign edit\n", encoding="utf-8", newline="\n")
     got = _stage_b(tmp_path, SIZING_A)

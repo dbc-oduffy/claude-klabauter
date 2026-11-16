@@ -258,9 +258,9 @@ def measured_rev(run_id: str, paths: Sequence[str], repo_root: Path | str | None
     if untouched:
         result["untouched_declared"] = sorted(untouched)
     record.parent.mkdir(parents=True, exist_ok=True)
-    record.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8")
+    record.write_text(json.dumps(result, indent=2, sort_keys=True), encoding="utf-8", newline="\n")
     # Trap: the record is pinned equal to the reply and the reply to `MEASURED_REV_KEYS`, so `touched` is its own file.
-    touched_record_path(root, run_id).write_text(json.dumps(rels), encoding="utf-8")
+    touched_record_path(root, run_id).write_text(json.dumps(rels), encoding="utf-8", newline="\n")
     return result
 
 

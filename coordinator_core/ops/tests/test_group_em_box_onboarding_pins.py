@@ -6,10 +6,11 @@ import pytest
 
 from coordinator_core.group_em import box_key, box_onboarding_pins, box_registry, box_transport
 from coordinator_core.ops import group_em_box_federation as op
+from pathlib import Path
 
 
 @pytest.fixture()
-def fleet(tmp_path, monkeypatch):
+def fleet(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     reg = tmp_path / "reg"
     reg.mkdir()
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(reg))
@@ -19,11 +20,11 @@ def fleet(tmp_path, monkeypatch):
     box_transport._reset_limits()
 
 
-def _b64_own(home):
+def _b64_own(home) -> str:
     return box_onboarding_pins._b64(box_key._read_own_key(home))
 
 
-def test_local_new_box_with_one_peer_pins_both_directions(fleet, tmp_path):
+def test_local_new_box_with_one_peer_pins_both_directions(fleet, tmp_path: Path) -> None:
     peer = tmp_path / "peer"
     peer.mkdir()
     box_registry.register(peer, {})
@@ -47,7 +48,7 @@ def test_local_new_box_with_one_peer_pins_both_directions(fleet, tmp_path):
     assert (fleet / "state" / "group-em" / "peer-keys" / f"{new_id}.json").is_file()
 
 
-def test_remote_new_box_without_key_or_route_names_both_directions_unpinned(fleet):
+def test_remote_new_box_without_key_or_route_names_both_directions_unpinned(fleet) -> None:
     out = op._groupem_box_register({"root": "/nonexistent/mini", "box_id": "box-mini", "capability": {}})
 
     assert out["registered"] is True
@@ -58,7 +59,7 @@ def test_remote_new_box_without_key_or_route_names_both_directions_unpinned(flee
     assert pins["peers_unpinned_new"] == [{"id": box_registry.local_box_id(fleet), "reason": "new_key_unavailable"}]
 
 
-def test_remote_new_box_with_key_b64_pins_the_registrar_only(fleet):
+def test_remote_new_box_with_key_b64_pins_the_registrar_only(fleet) -> None:
     key = box_onboarding_pins._b64(b"m" * 32)
     out = op._groupem_box_register({"root": "/nonexistent/mini", "box_id": "box-mini", "capability": {}, "key_b64": key})
 
@@ -68,7 +69,7 @@ def test_remote_new_box_with_key_b64_pins_the_registrar_only(fleet):
     assert box_key.pinned_fingerprint("box-mini", fleet) == box_key.key_fingerprint(b"m" * 32)
 
 
-def test_pin_failure_never_turns_registered_into_an_error(fleet, monkeypatch):
+def test_pin_failure_never_turns_registered_into_an_error(fleet, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise RuntimeError("x")
 
@@ -78,12 +79,12 @@ def test_pin_failure_never_turns_registered_into_an_error(fleet, monkeypatch):
     assert out["pins"]["new_box_unpinned"]
 
 
-def test_register_rejects_bad_box_id_and_transport_types(fleet):
+def test_register_rejects_bad_box_id_and_transport_types(fleet) -> None:
     assert "error" in op._groupem_box_register({"root": "x", "box_id": 3})
     assert "error" in op._groupem_box_register({"root": "x", "transport": "ssh"})
 
 
-def test_box_key_pin_refuse_mismatch_leaves_a_differing_pin(fleet):
+def test_box_key_pin_refuse_mismatch_leaves_a_differing_pin(fleet) -> None:
     a, b = box_onboarding_pins._b64(b"a" * 32), box_onboarding_pins._b64(b"b" * 32)
     assert op._groupem_box_key_pin({"box_id": "box-p", "key_b64": a}) == {"pinned": True, "box_id": "box-p"}
     out = op._groupem_box_key_pin({"box_id": "box-p", "key_b64": b, "refuse_mismatch": True})

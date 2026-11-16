@@ -8,13 +8,18 @@ import pathlib
 import subprocess
 
 import pytest
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _load_cli_module():
+def _load_cli_module() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "coordinator_safe_commit", str(_BIN_DIR / "coordinator-safe-commit.py")
     )
@@ -25,18 +30,18 @@ def _load_cli_module():
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
 
-def _staged(repo):
+def _staged(repo) -> list[str]:
     out = subprocess.run(["git", "diff", "--cached", "--name-only"], cwd=repo, capture_output=True, text=True)
     return out.stdout.split()
 
 
-def test_oversize_untracked_set_is_refused_before_anything_is_staged(repo, monkeypatch, capsys):
+def test_oversize_untracked_set_is_refused_before_anything_is_staged(repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     mod = _load_cli_module()
     (repo / "data").mkdir()
     (repo / "data" / "big.bin").write_bytes(b"x" * 4096)
@@ -49,7 +54,7 @@ def test_oversize_untracked_set_is_refused_before_anything_is_staged(repo, monke
     assert _staged(repo) == []
 
 
-def test_ignored_trees_do_not_count_toward_the_ceiling(repo, monkeypatch):
+def test_ignored_trees_do_not_count_toward_the_ceiling(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_cli_module()
     (repo / ".gitignore").write_text("scratch/\n", encoding="utf-8")
     (repo / "scratch").mkdir()
@@ -59,7 +64,7 @@ def test_ignored_trees_do_not_count_toward_the_ceiling(repo, monkeypatch):
     assert _staged(repo) == [".gitignore"]
 
 
-def test_an_overrunning_add_is_killed_and_refused(repo, monkeypatch, capsys):
+def test_an_overrunning_add_is_killed_and_refused(repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     mod = _load_cli_module()
     real_run = subprocess.run
 

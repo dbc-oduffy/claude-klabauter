@@ -137,9 +137,11 @@ def _settle_minted(root: Path, run_id: str) -> None:
 
 
 def _default_emit(params: dict, repo_root: Path) -> dict:
+    from coordinator_core.ops.dispatch_emit.grind_compose import isolation_triage_skipped
     from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 
-    return _dispatch_emit(params, repo_root)
+    with isolation_triage_skipped():
+        return _dispatch_emit(params, repo_root)
 
 
 def _profile_dir() -> str:

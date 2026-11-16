@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from coordinator_core.git import git_objects
+import pytest
 
 
 def _pair(pack_dir: Path, stem: str, mtime: int) -> None:
@@ -15,7 +16,7 @@ def _pair(pack_dir: Path, stem: str, mtime: int) -> None:
     os.utime(idx, ns=(mtime, mtime))
 
 
-def _fresh(monkeypatch, tmp_path: Path):
+def _fresh(monkeypatch, tmp_path: Path) -> tuple[Path, list[str]]:
     pack_dir = tmp_path / "objects" / "pack"
     pack_dir.mkdir(parents=True)
     parsed: list[str] = []
@@ -25,7 +26,7 @@ def _fresh(monkeypatch, tmp_path: Path):
     return pack_dir, parsed
 
 
-def test_newest_idx_is_first_and_unprobed_idx_is_never_parsed(monkeypatch, tmp_path):
+def test_newest_idx_is_first_and_unprobed_idx_is_never_parsed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     pack_dir, parsed = _fresh(monkeypatch, tmp_path)
     _pair(pack_dir, "pack-a", 3_000_000_000)
     _pair(pack_dir, "pack-b", 1_000_000_000)
@@ -38,7 +39,7 @@ def test_newest_idx_is_first_and_unprobed_idx_is_never_parsed(monkeypatch, tmp_p
     assert parsed == ["pack-a.idx", "pack-c.idx", "pack-b.idx"]
 
 
-def test_a_lookup_stops_parsing_at_the_hit(monkeypatch, tmp_path):
+def test_a_lookup_stops_parsing_at_the_hit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     pack_dir, parsed = _fresh(monkeypatch, tmp_path)
     for n, stem in enumerate(("pack-a", "pack-b", "pack-c")):
         _pair(pack_dir, stem, 1_000_000_000 + n * 1_000_000_000)
@@ -53,7 +54,7 @@ def test_a_lookup_stops_parsing_at_the_hit(monkeypatch, tmp_path):
     assert parsed == ["pack-c.idx"]
 
 
-def test_iteration_skips_an_unparseable_idx_and_a_miss_still_probes_the_rest(monkeypatch, tmp_path):
+def test_iteration_skips_an_unparseable_idx_and_a_miss_still_probes_the_rest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     pack_dir, parsed = _fresh(monkeypatch, tmp_path)
     _pair(pack_dir, "pack-a", 2_000_000_000)
     _pair(pack_dir, "pack-b", 1_000_000_000)

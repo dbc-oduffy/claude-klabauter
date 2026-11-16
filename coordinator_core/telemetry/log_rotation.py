@@ -85,6 +85,10 @@ import os
 import threading
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from logging import Logger
 
 _ROTATE_THRESHOLD_BYTES = 25 * 1024 * 1024
 
@@ -93,7 +97,7 @@ _MAX_GENERATIONS = 4
 _logger = None
 
 
-def _log():
+def _log() -> Logger:
     global _logger
     if _logger is None:
         import logging

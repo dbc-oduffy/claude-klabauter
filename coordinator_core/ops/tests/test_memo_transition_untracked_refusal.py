@@ -56,7 +56,7 @@ def _resolve(memo: Path, **extra) -> dict:
     }))
 
 
-def test_untracked_memo_is_refused_and_bytes_unchanged(tmp_path):
+def test_untracked_memo_is_refused_and_bytes_unchanged(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     memo = repo / "cross-repo" / "inbox" / "memo.md"
     memo.write_text(_OPEN_MEMO, encoding="utf-8")
@@ -71,7 +71,7 @@ def test_untracked_memo_is_refused_and_bytes_unchanged(tmp_path):
     assert memo.read_bytes() == before
 
 
-def test_tracked_memo_still_resolves(tmp_path):
+def test_tracked_memo_still_resolves(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     memo = repo / "cross-repo" / "inbox" / "memo.md"
     memo.write_text(_OPEN_MEMO, encoding="utf-8")
@@ -87,7 +87,7 @@ def test_tracked_memo_still_resolves(tmp_path):
     assert "status: actioned" in memo.read_text(encoding="utf-8")
 
 
-def test_deferred_batch_resolve_is_not_refused(tmp_path):
+def test_deferred_batch_resolve_is_not_refused(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     memo = repo / "cross-repo" / "inbox" / "memo.md"
     memo.write_text(_OPEN_MEMO, encoding="utf-8")

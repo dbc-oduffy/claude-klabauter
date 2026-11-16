@@ -135,7 +135,7 @@ def mark_stale(name, state, until, box):
     tmp = f"{path}.tmp{os.getpid()}"
     label = client_box(client_address())[1]
     shown = f"{name.partition('.')[0]}.{label}" if label else name
-    with open(tmp, "w", encoding="utf-8") as fh:
+    with open(tmp, "w", encoding="utf-8", newline="\n") as fh:
         json.dump({"name": shown, "state": state, "until": until, "box": box}, fh)
     os.replace(tmp, path)
     return {"ok": True}
@@ -1176,7 +1176,7 @@ def register_name(name, raw, key_body, export_reply=False, mux=False):
         base = os.path.expanduser(SESS)
         entry_path = os.path.join(base, f"{pid}.{name_digest(name)}.json" if mux else f"{pid}.json")
         key_path = os.path.join(base, key_file_name(pid, path))
-        with open(entry_path, "w", encoding="utf-8") as fh:
+        with open(entry_path, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(entry, fh)
         helpers = load_roster()
         helpers.write_peer_key(key_path, helpers.local_peer_key(
@@ -1726,7 +1726,7 @@ def reconcile_authorized_keys(members, path, membership, is_admin=windows_admin,
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
     try:
-        tmp.write_text(new, encoding="utf-8")
+        tmp.write_text(new, encoding="utf-8", newline="\n")
         if os.name == "posix":
             os.chmod(tmp, 0o600)
         os.replace(tmp, path)

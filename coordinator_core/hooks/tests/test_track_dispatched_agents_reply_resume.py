@@ -8,33 +8,35 @@ from __future__ import annotations
 import coordinator_core.hooks.track_dispatched_agents as tda
 from coordinator_core.bash_guards import block_reviewer_bash_outside_allowlist as guard
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
+import pytest
 
 TYPE = "coordinator:executor"
 ROSTER = frozenset({TYPE, "coordinator:code-reviewer"})
 
 
-def test_same_type_resume_leaves_row_untouched():
+def test_same_type_resume_leaves_row_untouched() -> None:
     row = ["a1", "opus", TYPE, "1700000000"]
     assert tda._resolve_row_collision(row, "opus", TYPE) is None
     assert tda._resolve_row_collision(row, "unknown", TYPE) is None
 
 
-def test_resume_with_placeholder_type_never_downgrades_or_collides():
+def test_resume_with_placeholder_type_never_downgrades_or_collides() -> None:
     row = ["a1", "opus", TYPE, "1700000000"]
     assert tda._resolve_row_collision(row, "unknown", tda.PLACEHOLDER_TYPE) is None
 
 
-def test_cross_type_reuse_is_ambiguous():
+def test_cross_type_reuse_is_ambiguous() -> None:
     cols = tda._resolve_row_collision(["a1", "opus", TYPE, "1"], "opus", "coordinator:code-reviewer")
     assert cols is not None and cols[2] == tda.AMBIGUOUS_TYPE
 
 
-def test_first_dispatch_unchanged_by_resume_seam():
+def test_first_dispatch_unchanged_by_resume_seam() -> None:
     assert tda._is_reply_resume(TYPE, "Coordinator:Executor")
     assert not tda._is_reply_resume(TYPE, "coordinator:code-reviewer")
 
 
-def _wire(monkeypatch, row_type):
+def _wire(monkeypatch, row_type) -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake")
     monkeypatch.setattr(guard, "_resolve_subagent_identity", lambda raw, sid: "deadbeef0123")
     monkeypatch.setattr(guard, "_read_backpointer_subagent_type", lambda *a, **k: row_type)
@@ -54,32 +56,32 @@ def _bash(cmd):
     }
 
 
-def test_resumed_same_type_row_is_not_confined(monkeypatch):
+def test_resumed_same_type_row_is_not_confined(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire(monkeypatch, TYPE)
     assert guard.check(_bash("git status")) is None
     assert guard.check(_bash("python3 -c 1")) is None
 
 
-def test_ambiguous_row_still_confines(monkeypatch):
+def test_ambiguous_row_still_confines(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire(monkeypatch, tda.AMBIGUOUS_TYPE)
     res = envelope_of(guard.check(_bash("python3 -c 1")), "em")
     assert res is not None
     assert res["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_workflow_agent_resume_reported_as_general_purpose_is_the_same_agent():
+def test_workflow_agent_resume_reported_as_general_purpose_is_the_same_agent() -> None:
     # Row shape and incoming type as captured by DoE spike S2 (2026-09-30).
     row = ["a1", "unknown", "workflow-subagent", "1700000000"]
     assert tda._resolve_row_collision(row, "unknown", "general-purpose") is None
 
 
-def test_workflow_executor_resume_reported_as_general_purpose_keeps_its_type():
+def test_workflow_executor_resume_reported_as_general_purpose_keeps_its_type() -> None:
     row = ["abf59bedf905ef121", "opus", TYPE, "1700000000"]
     assert tda._is_reply_resume(TYPE, "general-purpose")
     assert tda._resolve_row_collision(row, "unknown", "general-purpose") is None
 
 
-def test_resume_report_never_rewrites_type_through_the_file_path(tmp_path):
+def test_resume_report_never_rewrites_type_through_the_file_path(tmp_path: Path) -> None:
     f = tmp_path / "dispatched-agents.txt"
     f.write_text(f"abf59bedf905ef121\topus\t{TYPE}\t1700000000\n", encoding="utf-8")
     out = tda._make_dispatch_mutate("abf59bedf905ef121", "unknown", "general-purpose")(
@@ -92,13 +94,13 @@ def test_resume_report_never_rewrites_type_through_the_file_path(tmp_path):
     assert other.split("\t")[2] == tda.AMBIGUOUS_TYPE
 
 
-def test_general_purpose_fallback_does_not_cover_unrecorded_or_ambiguous_rows():
+def test_general_purpose_fallback_does_not_cover_unrecorded_or_ambiguous_rows() -> None:
     for recorded in ("", tda.PLACEHOLDER_TYPE, tda.AMBIGUOUS_TYPE):
         assert not tda._is_reply_resume(recorded, "general-purpose")
     assert not tda._is_reply_resume("general-purpose", TYPE)
 
 
-def test_resume_pair_is_one_directional_and_exact():
+def test_resume_pair_is_one_directional_and_exact() -> None:
     assert not tda._is_reply_resume("general-purpose", "workflow-subagent")
     cols = tda._resolve_row_collision(
         ["a1", "unknown", "workflow-subagent", "1"], "opus", "coordinator:executor"

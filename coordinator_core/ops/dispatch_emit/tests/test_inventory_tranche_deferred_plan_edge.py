@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_inventory_tranche_and_withhel
     _chunk,
     _repo,
 )
+from pathlib import Path
 
 _GATE = "output-consumption-runtime"
 
@@ -43,7 +44,7 @@ def _tranche(inv, budget):
 
 
 @pytest.mark.parametrize("budget", [1, 2, 3, 100])
-def test_edge_onto_unminted_chunk_of_taken_item_defers_dependent(tmp_path, budget):
+def test_edge_onto_unminted_chunk_of_taken_item_defers_dependent(tmp_path: Path, budget) -> None:
     inv = _repo(tmp_path, _plans(), [("pred", "—"), ("dep", "—"), ("free", "—")])
     text, spine_path, rows, report = _tranche(inv, budget)
     ids = {r["id"] for r in rows}
@@ -58,7 +59,7 @@ def test_edge_onto_unminted_chunk_of_taken_item_defers_dependent(tmp_path, budge
     assert {r.id for r in read_spine(spine_path)} == ids
 
 
-def test_whole_set_cut_counts_only_placeable_items_and_holds_the_dependent(tmp_path):
+def test_whole_set_cut_counts_only_placeable_items_and_holds_the_dependent(tmp_path: Path) -> None:
     inv = _repo(tmp_path, _plans(), [("pred", "—"), ("dep", "—"), ("free", "—")])
 
     assert im.whole_set_part_count(str(inv), 100, 1) is None, "a set within max_rows is one run"
@@ -69,7 +70,7 @@ def test_whole_set_cut_counts_only_placeable_items_and_holds_the_dependent(tmp_p
     assert "dep.C1" not in text and held["dep"].startswith("waits on pred.C1")
 
 
-def test_edge_onto_chunk_of_no_inventory_item_still_refuses(tmp_path):
+def test_edge_onto_chunk_of_no_inventory_item_still_refuses(tmp_path: Path) -> None:
     rows = [
         {"id": "a.C1", "title": "t", "surface": "s.py", "writes": ["s.py"], "change_kind": "code-edit",
          "body": "b", "depends_on": [{"chunk": "ghost.C1", "gate_kind": _GATE}]},

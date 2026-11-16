@@ -27,12 +27,18 @@ The stamps come from instrumentation appended to the throwaway clone's own `warm
 hardlink: the live source is untouched) that wraps `_ServerContext` and `_AdmissionGate` in the engine process.
 The figures are recorded, not enforced (`--enforce-bar` exits 2 when a refire spooled or any leg passes 500ms).
 
+`--starve-outcomes` replaces the load with starvation: it suspends the throwaway engine's own processes at four legs
+(`door_bound`, `hook_start`, `warm_timeout`, `spool_failed`: the door bound with the ask spool unwritable;
+`starve_targets`) across one submit each and classifies the door's stdout
+as minted, refused (a deny naming a remedy), spooled or silent (`classify_outcome`); an unstarved `control` submit
+must mint. The report's `silent_legs` names the leg that dropped a submit.
+
 This mode measures and locates; it applies no fix to the leg it names.
 
 Windows is first-class; the POSIX door shape is the same but unmeasured here.
 
 Run: `python -m coordinator_core.benchmarks.submit_ask_hook_to_reply_legs [--concurrent-runs N] [--runs N]
-[--warmups N] [--settle-secs S] [--door PATH] [--load-workers N] [--against-installed] [--enforce-bar]`. Scratch lives in managed temp dirs this script removes.
+[--warmups N] [--settle-secs S] [--door PATH] [--load-workers N] [--against-installed] [--starve-outcomes] [--enforce-bar]`. Scratch lives in managed temp dirs this script removes.
 """
 
 from __future__ import annotations
@@ -41,6 +47,7 @@ import argparse
 import contextlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -68,6 +75,7 @@ from coordinator_core.benchmarks.isolated_clone import (
 from coordinator_core.benchmarks.submit_engine_ask_process_budget import (
     SIZING_REL,
     SPOOL_MARKER,
+    _git,
     _payload,
     _reset,
     build_fixture,
@@ -387,7 +395,7 @@ def _door_cpu_ms(proc: subprocess.Popen) -> Optional[float]:
 
 def _door_call(door: Path, env: dict, repo: Path, payload: dict) -> dict:
     """One hook-mode submit through the door: total wall ms, door CPU ms, stdout."""
-    env = {**env, "COORDINATOR_DOOR_STDIN_MODE": "hook"}
+    env = {"COORDINATOR_AGENT_TYPE_HOST": "coordinator", **env, "COORDINATOR_DOOR_STDIN_MODE": "hook"}
     spawn_wall = time.time()
     started = time.monotonic()
     proc = subprocess.Popen(
@@ -478,6 +486,7 @@ def measure(concurrent_runs: int = DEFAULT_CONCURRENT_RUNS, runs: int = DEFAULT_
         loaddir = scratch / "load"
         loaddir.mkdir()
         build_fixture(repo, starts=concurrent_runs)
+        _git(repo, "config", "core.longpaths", "true")
         stamps = scratch / "stamps.jsonl"
         with fixture_settings_home(scratch):
             evaluate = measure_concurrent(repo, concurrent_runs, runs=1)["max_process_ms"]
@@ -548,6 +557,183 @@ def measure_installed(runs: int = DEFAULT_RUNS, door: Optional[Path] = None,
     return {"door": str(door), "load_workers": load_workers, "rows": rows, "fail_open_lines": lines}
 
 
+#: What a starved submit can end as. `silent` is the defect: empty stdout, or an allow that minted nothing.
+OUTCOMES = ("minted", "refused", "spooled", "silent")
+#: Starvation legs: where in the submit path the starved process sits. Starved by suspending the throwaway engine's
+#: own processes, never by loading the box.
+STARVE_LEGS = ("door_bound", "hook_start", "warm_timeout", "spool_failed")
+CONTROL_LEG = "control"
+#: Longer than the door's hook read bound (`DOOR_HOOK_SUBMIT_READ_DEADLINE_MS`, 8000), so its deadline fires.
+_DOOR_BOUND_HOLD_S = 10.0
+#: Just under that bound: the engine accepts late, so the hook starts with almost none of the door's budget left.
+_HOOK_START_HOLD_S = 7.0
+STARVE_HOLD_S = {"door_bound": _DOOR_BOUND_HOLD_S, "hook_start": _HOOK_START_HOLD_S, "warm_timeout": _DOOR_BOUND_HOLD_S,
+                 "spool_failed": _DOOR_BOUND_HOLD_S}
+#: After a starved submit the resumed engine finishes the work it was holding; the next leg starts after it drains.
+_STARVE_DRAIN_S = 4.0
+_RUN_MINTED = re.compile(r"Submitted to the engine as runs? \S|Engine submission: (?:minted )?run ")
+_SPOOLED = re.compile(r"spooled as \S|the ask was spooled;")
+_SPOOL_FAILED = re.compile(r"could not be spooled")
+_REMEDY = re.compile(r"instead:|re-?submit|start or abandon|to withdraw|check state/warp", re.IGNORECASE)
+
+
+def _text_of(node: object) -> str:
+    if isinstance(node, str):
+        return node
+    if isinstance(node, dict):
+        return "\n".join(_text_of(v) for v in node.values())
+    if isinstance(node, list):
+        return "\n".join(_text_of(v) for v in node)
+    return ""
+
+
+def classify_outcome(stdout: str) -> str:
+    """The door's stdout for one submit as `minted`, `refused`, `spooled` or `silent`.
+
+    `spooled`: the reply names the spooled ask (`spooled as <id>`), whether it rides an allow or a deny.
+    `refused`: a deny that names a remedy (a deny without one is a drop), or an allow saying the ask could not be
+    spooled and naming the remedy. `minted`: an allow naming the run it started. Empty stdout, an unparseable
+    non-text reply, and an allow naming no run and no spool-failure remedy (a bare pass-loudly advisory) are
+    `silent`."""
+    text = stdout.strip()
+    if not text:
+        return "silent"
+    try:
+        doc = json.loads(text)
+    except ValueError:
+        doc = text
+    blob = _text_of(doc)
+    hso = doc.get("hookSpecificOutput") if isinstance(doc, dict) else None
+    decision = hso.get("permissionDecision") if isinstance(hso, dict) else None
+    if _SPOOLED.search(blob):
+        return "spooled"
+    if decision == "deny":
+        return "refused" if _REMEDY.search(blob) else "silent"
+    if _RUN_MINTED.search(blob):
+        return "minted"
+    if _SPOOL_FAILED.search(blob) and _REMEDY.search(blob):
+        return "refused"
+    return "silent"
+
+
+class _Suspended:
+    """Suspends `procs` on entry and resumes them on exit or after `hold_s`, whichever is first."""
+
+    def __init__(self, procs: list, hold_s: float) -> None:
+        self._procs = procs
+        self._hold_s = hold_s
+        self._lock = threading.Lock()
+        self._resumed = False
+        self._timer: Optional[threading.Timer] = None
+
+    def resume(self) -> None:
+        with self._lock:
+            if self._resumed:
+                return
+            self._resumed = True
+        for proc in self._procs:
+            try:
+                proc.resume()
+            except Exception:  # noqa: BLE001 -- a process that already exited needs no resume
+                pass
+
+    def __enter__(self) -> "_Suspended":
+        for proc in self._procs:
+            try:
+                proc.suspend()
+            except Exception:  # noqa: BLE001 -- a process that already exited cannot be starved
+                pass
+        self._timer = threading.Timer(self._hold_s, self.resume)
+        self._timer.daemon = True
+        self._timer.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        if self._timer is not None:
+            self._timer.cancel()
+        self.resume()
+
+
+def starve_targets(leg: str, server_pid: int) -> list:
+    """The throwaway engine's processes a starvation `leg` suspends: `door_bound` the server and its pool workers
+    (nothing answers inside the door's bound; `spool_failed` is the same with the repo's ask spool unwritable, so the
+    door cannot spool either), `hook_start` the server alone (accept and enqueue come late, so the
+    hook starts late), `warm_timeout` the pool workers alone (the server holds the request, the hook never runs)."""
+    import psutil
+
+    server = psutil.Process(server_pid)
+    workers = server.children(recursive=True)
+    if leg in ("door_bound", "spool_failed"):
+        return [server, *workers]
+    if leg == "hook_start":
+        return [server]
+    if leg == "warm_timeout":
+        return workers
+    raise ValueError(f"unknown starvation leg {leg!r}; one of {STARVE_LEGS}")
+
+
+def _block_ask_spool(repo: Path) -> None:
+    """Make the repo's ask spool directory a regular file, so every spool write under it fails."""
+    from coordinator_core.ask_spool.record import SPOOL_RELPATH
+
+    blocker = repo.joinpath(*SPOOL_RELPATH)
+    blocker.parent.mkdir(parents=True, exist_ok=True)
+    blocker.write_text("blocked", encoding="utf-8")
+
+
+def measure_starved(runs: int = 1, door: Optional[Path] = None, legs: tuple = STARVE_LEGS) -> dict:
+    """Boot the throwaway engine and submit one run start per `legs` entry per run, each leg's engine processes
+    suspended across the submit (plus an unstarved `control` first, which must mint).
+
+    Returns `{door, rows: [{leg, run, outcome, door_total_ms, hold_s, reply}], counts, silent_legs, control_minted}`;
+    `counts` is per outcome over the starved legs and `silent_legs` the legs that produced a `silent` outcome."""
+    door = door or installed_door()
+    if door is None:
+        raise RuntimeError(f"no installed {ENTRYPOINT} door under the settings home")
+    from coordinator_core.temp_layout import make_managed_temp_dir
+    from coordinator_core.warm import breadcrumb
+
+    source_root = Path(__file__).resolve().parents[2]
+    scratch = make_managed_temp_dir(prefix="submit-legs-starve-")
+    rows: list[dict] = []
+    try:
+        repo = scratch / "repo"
+        repo.mkdir()
+        build_fixture(repo, starts=1 + len(legs) * runs)
+        _git(repo, "config", "core.longpaths", "true")
+        stamps = scratch / "stamps.jsonl"
+        sizing_index = 0
+        with fixture_settings_home(scratch):
+            with instrumented_engine(source_root, stamps) as env:
+                crumb = breadcrumb.read_breadcrumb(engine_root=Path(env["COORDINATOR_ENGINE_ROOT"]))
+                server_pid = int(crumb["pid"])
+                for leg in (CONTROL_LEG, *legs):
+                    for n in range(1 if leg == CONTROL_LEG else runs):
+                        _reset(repo)
+                        payload = _tagged(repo, start_sizing_rel(sizing_index), f"starve-{leg}-{n}")
+                        sizing_index += 1
+                        if leg == "spool_failed":
+                            _block_ask_spool(repo)
+                        hold = STARVE_HOLD_S.get(leg, 0.0)
+                        starving = (_Suspended(starve_targets(leg, server_pid), hold) if leg != CONTROL_LEG
+                                    else contextlib.nullcontext())
+                        with starving:
+                            call = _door_call(door, env, repo, payload)
+                        rows.append({"leg": leg, "run": n, "outcome": classify_outcome(call["stdout"]),
+                                     "door_total_ms": round(call["door_total_ms"], 1), "hold_s": hold,
+                                     "reply": call["stdout"][:600]})
+                        time.sleep(_STARVE_DRAIN_S)
+    finally:
+        rmtree_or_raise(scratch, label="submit-legs-starve")
+    starved = [r for r in rows if r["leg"] != CONTROL_LEG]
+    return {
+        "door": str(door), "rows": rows,
+        "counts": {o: sum(r["outcome"] == o for r in starved) for o in OUTCOMES},
+        "silent_legs": sorted({r["leg"] for r in starved if r["outcome"] == "silent"}),
+        "control_minted": all(r["outcome"] == "minted" for r in rows if r["leg"] == CONTROL_LEG),
+    }
+
+
 def main() -> int:
     declare_benchmark_origin()
     ap = argparse.ArgumentParser(description=__doc__)
@@ -561,7 +747,17 @@ def main() -> int:
                     help="synthetic CPU/IO processes per measured round (0 for none)")
     ap.add_argument("--against-installed", action="store_true",
                     help="probe the installed door and the live engine (door-side legs and the fail-open log only)")
+    ap.add_argument("--starve-outcomes", action="store_true",
+                    help="suspend the throwaway engine's processes per starvation leg and classify each submit's "
+                         "outcome (minted|refused|spooled|silent); --runs is the submits per leg; --enforce-bar "
+                         "exits 2 on any silent outcome")
     args = ap.parse_args()
+    if args.starve_outcomes:
+        starved = measure_starved(args.runs, args.door)
+        for row in starved["rows"]:
+            print("starve: " + " ".join(f"{k}={row[k]}" for k in ("leg", "run", "outcome", "door_total_ms", "hold_s", "reply")))
+        print(json.dumps({k: v for k, v in starved.items() if k != "rows"}))
+        return 2 if args.enforce_bar and (starved["silent_legs"] or not starved["control_minted"]) else 0
     if args.against_installed:
         installed = measure_installed(args.runs, args.door, args.load_workers)
         for row in installed["rows"]:

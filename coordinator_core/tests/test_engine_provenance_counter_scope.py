@@ -8,21 +8,22 @@ import pytest
 
 from coordinator_core import engine_provenance_counter as epc
 from coordinator_core import machine_profile, repo_standing
+from pathlib import Path
 
 
-def _standing(path, registered=None, onboarded=False):
+def _standing(path, registered=None, onboarded: bool = False):
     return repo_standing.RepoStanding(
         path=str(path), registered_key=registered, onboarded=onboarded, install_clone=False
     )
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(epc, "resolve_git_root_cheap", lambda cwd=None: str(tmp_path))
     return tmp_path
 
 
-def _call():
+def _call() -> None:
     epc.record_engine_provenance("c", "dispatch", "match", None, None)
 
 
@@ -30,7 +31,7 @@ def _counts(repo):
     return repo / "state" / epc._COUNTS_FILENAME
 
 
-def test_unonboarded_consumer_writes_nothing(repo, monkeypatch):
+def test_unonboarded_consumer_writes_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(machine_profile, "machine_profile", lambda: "consumer")
     monkeypatch.setattr(repo_standing, "repo_standing", lambda p: _standing(p))
     _call()
@@ -38,21 +39,21 @@ def test_unonboarded_consumer_writes_nothing(repo, monkeypatch):
     assert not (repo / "state").exists()
 
 
-def test_onboarded_writes(repo, monkeypatch):
+def test_onboarded_writes(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(machine_profile, "machine_profile", lambda: "consumer")
     monkeypatch.setattr(repo_standing, "repo_standing", lambda p: _standing(p, onboarded=True))
     _call()
     assert _counts(repo).exists()
 
 
-def test_registered_writes(repo, monkeypatch):
+def test_registered_writes(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(machine_profile, "machine_profile", lambda: "consumer")
     monkeypatch.setattr(repo_standing, "repo_standing", lambda p: _standing(p, registered="repos.x"))
     _call()
     assert _counts(repo).exists()
 
 
-def test_author_writes_without_standing_lookup(repo, monkeypatch):
+def test_author_writes_without_standing_lookup(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(machine_profile, "machine_profile", lambda: "author")
 
     def boom(p):
@@ -63,7 +64,7 @@ def test_author_writes_without_standing_lookup(repo, monkeypatch):
     assert _counts(repo).exists()
 
 
-def test_gate_spawns_nothing(repo, monkeypatch):
+def test_gate_spawns_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(machine_profile, "machine_profile", lambda: "consumer")
     monkeypatch.setattr(repo_standing, "repo_standing", lambda p: _standing(p))
 

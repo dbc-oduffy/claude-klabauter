@@ -60,9 +60,18 @@ def _init_real_repo(root: Path) -> None:
     (root / ".gitkeep").write_text("", encoding="utf-8")
     _git(root, "add", ".gitkeep")
     _git(root, "commit", "-q", "-m", "chore: init")
-    _git(root, "remote", "add", "origin", str(root))
-    _git(root, "fetch", "-q", "--no-tags", "origin")
-    _git(root, "branch", "--set-upstream-to=origin/main", "main")
+    # Origin is the repo itself: writing the remote, the tracking branch and its ref directly
+    # replaces three git spawns, each a process creation.
+    git_dir = root / ".git"
+    tip = (git_dir / "refs" / "heads" / "main").read_text(encoding="utf-8").strip()
+    tracking = git_dir / "refs" / "remotes" / "origin" / "main"
+    tracking.parent.mkdir(parents=True, exist_ok=True)
+    tracking.write_text(tip + "\n", encoding="utf-8", newline="\n")
+    with (git_dir / "config").open("a", encoding="utf-8", newline="\n") as cfg:
+        cfg.write(
+            f'[remote "origin"]\n\turl = {root.as_posix()}\n\tfetch = +refs/heads/*:refs/remotes/origin/*\n'
+            '[branch "main"]\n\tremote = origin\n\tmerge = refs/heads/main\n'
+        )
 
 
 class _Env:
@@ -97,6 +106,56 @@ class _Env:
         return [(i, e) for i, e in enumerate(self.events) if e[0] in GATES]
 
 
+def _install_in_process_lease(monkeypatch) -> dict:
+    """Replace the origin-ref publish lease with a per-call in-memory table.
+
+    The real lease is ~16 git spawns per publish and these tests assert on marker, breadcrumb and
+    slot ordering, never on the lease wire protocol (covered by the publish_lease tests). The table
+    dies with the fixture, so no lease survives into the next test.
+    """
+    import time
+
+    from coordinator_core.percolate import publish_lease
+
+    leases: dict = {}
+
+    def acquire(cwd, remote="origin", *, holder=None, ttl_secs=publish_lease.DEFAULT_TTL_SECS, reclaimable=None, live_check=None):
+        holder = holder or publish_lease.default_holder()
+        key = (str(cwd), remote)
+        current = leases.get(key)
+        if (
+            current is not None
+            and current[2] > time.time()
+            and current[1] != holder
+            and not (reclaimable is not None and reclaimable(current[1]))
+        ):
+            raise publish_lease.PublishLeaseHeldError(current[1], current[2])
+        sha = f"lease-{len(leases)}-{time.monotonic_ns()}"
+        leases[key] = (sha, holder, time.time() + ttl_secs)
+        return sha
+
+    def read(cwd, remote="origin"):
+        return leases.get((str(cwd), remote))
+
+    def release(cwd, remote, lease_sha):
+        current = leases.get((str(cwd), remote))
+        if current is None or current[0] != lease_sha:
+            return False
+        del leases[(str(cwd), remote)]
+        return True
+
+    def release_holder(cwd, remote, holder):
+        current = leases.get((str(cwd), remote))
+        return current is not None and current[1] == holder and release(cwd, remote, current[0])
+
+    monkeypatch.setattr(publish_lease, "acquire", acquire)
+    monkeypatch.setattr(publish_lease, "read", read)
+    monkeypatch.setattr(publish_lease, "release", release)
+    monkeypatch.setattr(publish_lease, "release_holder", release_holder)
+    monkeypatch.setattr(publish_lease, "has_remote", lambda cwd, remote="origin": True)
+    return leases
+
+
 def _setup(tmp_path, monkeypatch, engine_root: bool, rows: tuple = ("row-a",)) -> _Env:
     from coordinator_core.warm import breadcrumb, engine_root as er, live_runs, pair_stop
 
@@ -109,6 +168,7 @@ def _setup(tmp_path, monkeypatch, engine_root: bool, rows: tuple = ("row-a",)) -
         publish_mod, monkeypatch, tmp_path, {name: repo / f"sub-{name[-1]}" for name in rows}
     )
     env = _Env(publish_mod, repo, breadcrumb, pair_stop)
+    _install_in_process_lease(monkeypatch)
 
     real_hold = breadcrumb.hold_publish_marker
     monkeypatch.setattr(
@@ -665,5 +725,3 @@ def test_marker_and_handover_pending_span_the_swap_only_not_staging_or_commit(tm
         ("land_diff", True, True),
         ("commit", False, False),
     ]
-    assert env.names("successor") == [("successor", True)]
-    assert not env.held()

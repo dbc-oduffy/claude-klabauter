@@ -41,7 +41,7 @@ def _write(root: Path, rel: str, text: str) -> None:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], root)
@@ -78,7 +78,7 @@ def _head_files(root: Path) -> set:
 
 
 @pytest.mark.parametrize("op", [terminal_commit, land_run])
-def test_the_unique_edited_sibling_is_credited_and_lands(repo, op):
+def test_the_unique_edited_sibling_is_credited_and_lands(repo, op) -> None:
     _write(repo, SIBLING, "def test_x():\n    assert True\n")
 
     out = op._handler(_params([MOD, SIBLING]), repo_root=repo / ".git")
@@ -89,7 +89,7 @@ def test_the_unique_edited_sibling_is_credited_and_lands(repo, op):
 
 
 @pytest.mark.parametrize("op", [terminal_commit, land_run])
-def test_no_edited_sibling_keeps_the_stranded_refusal(repo, op):
+def test_no_edited_sibling_keeps_the_stranded_refusal(repo, op) -> None:
     out = op._handler(_params([MOD]), repo_root=repo / ".git")
 
     assert out.get("committed") is not True, out
@@ -97,7 +97,7 @@ def test_no_edited_sibling_keeps_the_stranded_refusal(repo, op):
 
 
 @pytest.mark.parametrize("op", [terminal_commit, land_run])
-def test_two_edited_siblings_guess_nothing(repo, op):
+def test_two_edited_siblings_guess_nothing(repo, op) -> None:
     _write(repo, SIBLING, "def test_x():\n    assert True\n")
     _write(repo, OTHER_SIBLING, "def test_x():\n    assert True\n")
 

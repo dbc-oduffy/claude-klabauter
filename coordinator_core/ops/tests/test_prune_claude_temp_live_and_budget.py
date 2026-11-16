@@ -6,11 +6,13 @@ import os
 import time
 
 from coordinator_core.ops import prune_claude_temp as pct
+from pathlib import Path
+import pytest
 
 HOUR = 3600
 
 
-def _write(path, size, age_s, now):
+def _write(path, size, age_s, now) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_bytes(b"x" * size)
     os.utime(path, (now - age_s, now - age_s))
@@ -25,7 +27,7 @@ def _claude_root(tmp_path, monkeypatch):
     return root
 
 
-def test_live_session_dir_kept_past_retention_dead_one_removed(tmp_path, monkeypatch):
+def test_live_session_dir_kept_past_retention_dead_one_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _claude_root(tmp_path, monkeypatch)
     now = time.time()
     _write(root / "proj" / "live" / "scratchpad" / "work.txt", 1, 5 * 24 * HOUR, now)
@@ -42,7 +44,7 @@ def test_live_session_dir_kept_past_retention_dead_one_removed(tmp_path, monkeyp
     assert not (root / "proj" / "dead").exists()
 
 
-def test_unknown_liveness_keeps_every_session(tmp_path, monkeypatch):
+def test_unknown_liveness_keeps_every_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _claude_root(tmp_path, monkeypatch)
     now = time.time()
     _write(root / "proj" / "s1" / "scratchpad" / "work.txt", 1, 5 * 24 * HOUR, now)
@@ -50,7 +52,7 @@ def test_unknown_liveness_keeps_every_session(tmp_path, monkeypatch):
     assert (root / "proj" / "s1" / "scratchpad" / "work.txt").exists()
 
 
-def test_budget_deletes_oldest_idle_until_session_fits(tmp_path):
+def test_budget_deletes_oldest_idle_until_session_fits(tmp_path: Path) -> None:
     root = tmp_path / "claude"
     now = time.time()
     pad = root / "proj" / "s1" / "scratchpad"
@@ -62,7 +64,7 @@ def test_budget_deletes_oldest_idle_until_session_fits(tmp_path):
     assert sorted(p.name for p in pad.iterdir()) == ["idle.bin"]
 
 
-def test_tree_stats_of_a_loose_file_is_its_own_size_and_mtime(tmp_path):
+def test_tree_stats_of_a_loose_file_is_its_own_size_and_mtime(tmp_path: Path) -> None:
     now = time.time()
     f = tmp_path / "loose.bin"
     _write(f, 123, 600, now)
@@ -71,7 +73,7 @@ def test_tree_stats_of_a_loose_file_is_its_own_size_and_mtime(tmp_path):
     assert abs(newest - (now - 600)) < 2
 
 
-def test_loose_files_count_toward_the_budget(tmp_path):
+def test_loose_files_count_toward_the_budget(tmp_path: Path) -> None:
     root = tmp_path / "claude"
     now = time.time()
     pad = root / "proj" / "s1" / "scratchpad"
@@ -80,7 +82,7 @@ def test_loose_files_count_toward_the_budget(tmp_path):
     assert pct.over_budget_sessions(root, 150, pct._Budget(None)) == {str(root / "proj" / "s1"): 200}
 
 
-def test_over_budget_session_keeps_fresh_loose_file_beside_old_large_dir(tmp_path):
+def test_over_budget_session_keeps_fresh_loose_file_beside_old_large_dir(tmp_path: Path) -> None:
     root = tmp_path / "claude"
     now = time.time()
     pad = root / "proj" / "s1" / "scratchpad"
@@ -91,7 +93,7 @@ def test_over_budget_session_keeps_fresh_loose_file_beside_old_large_dir(tmp_pat
     assert sorted(p.name for p in pad.iterdir()) == ["fresh.txt"]
 
 
-def test_over_budget_session_keeps_a_fresh_empty_dir(tmp_path):
+def test_over_budget_session_keeps_a_fresh_empty_dir(tmp_path: Path) -> None:
     root = tmp_path / "claude"
     now = time.time()
     pad = root / "proj" / "s1" / "scratchpad"
@@ -102,7 +104,7 @@ def test_over_budget_session_keeps_a_fresh_empty_dir(tmp_path):
     assert sorted(p.name for p in pad.iterdir()) == ["fresh_dir"]
 
 
-def test_budget_never_takes_a_child_written_within_the_idle_window(tmp_path):
+def test_budget_never_takes_a_child_written_within_the_idle_window(tmp_path: Path) -> None:
     root = tmp_path / "claude"
     now = time.time()
     pad = root / "proj" / "s1" / "scratchpad"

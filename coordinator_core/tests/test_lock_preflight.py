@@ -26,6 +26,7 @@ import pytest
 
 from coordinator_core.lock_preflight import preflight_reap_stale_lock
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 # Every case here needs a real `.git/index.lock` on disk (including a real
 # `git worktree add`-produced linked worktree, whose `.git` is a file
@@ -71,7 +72,7 @@ def _write_lock(repo: pathlib.Path, age_sec: float | None) -> pathlib.Path:
 
 
 class TestStaleLockIsReaped:
-    def test_stale_stable_lock_is_removed(self, scratch_repo, monkeypatch):
+    def test_stale_stable_lock_is_removed(self, scratch_repo, monkeypatch: pytest.MonkeyPatch) -> None:
         lock = _write_lock(scratch_repo, age_sec=300)
         monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")
         monkeypatch.chdir(scratch_repo)
@@ -82,7 +83,7 @@ class TestStaleLockIsReaped:
 
 
 class TestFreshLockIsNotReaped:
-    def test_fresh_lock_left_in_place_no_exception(self, scratch_repo, monkeypatch):
+    def test_fresh_lock_left_in_place_no_exception(self, scratch_repo, monkeypatch: pytest.MonkeyPatch) -> None:
         """Exit code 2 from the reaper (a FRESH index.lock) must NOT be
         treated as a failure to reap -- it means a live commit may
         genuinely be in progress, and the caller proceeds either way
@@ -97,7 +98,7 @@ class TestFreshLockIsNotReaped:
 
 
 class TestReaperExceptionIsSwallowed:
-    def test_raising_reaper_never_propagates(self, scratch_repo, monkeypatch):
+    def test_raising_reaper_never_propagates(self, scratch_repo, monkeypatch: pytest.MonkeyPatch) -> None:
         _write_lock(scratch_repo, age_sec=300)
         monkeypatch.chdir(scratch_repo)
 
@@ -120,8 +121,8 @@ class TestLinkedWorktreeGitDirIsAFile:
     `guard_reap_stale_git_lock.py` was independently fixed for."""
 
     def test_stale_lock_in_the_real_git_dir_is_still_swept(
-        self, scratch_repo, tmp_path, monkeypatch
-    ):
+        self, scratch_repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         linked = tmp_path / "linked-worktree"
         _git(scratch_repo, "worktree", "add", "-q", str(linked), "-b", "linked-branch")
 
@@ -144,7 +145,7 @@ class TestLinkedWorktreeGitDirIsAFile:
 
 
 class TestNoLockNoSubprocess:
-    def test_no_lock_present_costs_no_subprocess(self, scratch_repo, monkeypatch):
+    def test_no_lock_present_costs_no_subprocess(self, scratch_repo, monkeypatch: pytest.MonkeyPatch) -> None:
         def _forbidden_run(*args, **kwargs):
             raise AssertionError(
                 "subprocess.run must not be called when no lock file is present"

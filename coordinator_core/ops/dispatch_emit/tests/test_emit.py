@@ -34,6 +34,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED, read_spine
 from ._shared_expand import expand_shared
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow, build_waves
 from coordinator_core.ops.workflow_scaffold import _js_string_literal
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -60,8 +61,8 @@ def _extract_phase_titles(script: str) -> list[str]:
 
 
 def _wave_row(
-    id_, writes, reads=None, surface="dispatch_emit", agent_type=None, agent_model=None
-):
+    id_, writes, reads=None, surface: str = "dispatch_emit", agent_type=None, agent_model=None
+) -> WaveRow:
     return WaveRow(
         id=id_,
         title=f"title-{id_}",
@@ -74,19 +75,19 @@ def _wave_row(
     )
 
 
-def _two_wave_fixture():
+def _two_wave_fixture() -> list[list[WaveRow]]:
     return [
         [_wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"])],
         [_wave_row("C2", ["coordinator_core/ops/dispatch_emit/wave_map.py"])],
     ]
 
 
-def test_compose_script_refuses_on_empty_waves():
+def test_compose_script_refuses_on_empty_waves() -> None:
     with pytest.raises(NoWavesError):
         compose_script([], name="empty", description="empty spine", **REVIEW_KW)
 
 
-def test_compose_script_refuses_before_touching_pathspec_derivation():
+def test_compose_script_refuses_before_touching_pathspec_derivation() -> None:
     with pytest.raises(NoWavesError) as excinfo:
         compose_script([], name="empty", description="empty spine", **REVIEW_KW)
     assert "zero waves" in str(excinfo.value)
@@ -97,7 +98,7 @@ def test_compose_script_refuses_before_touching_pathspec_derivation():
 # ---------------------------------------------------------------------------
 
 
-def test_composed_script_never_wraps_body_in_an_uninvoked_run_function():
+def test_composed_script_never_wraps_body_in_an_uninvoked_run_function() -> None:
     waves = _two_wave_fixture()
     script = compose_script(waves, name="wf", description="two waves", **REVIEW_KW)
 
@@ -105,7 +106,7 @@ def test_composed_script_never_wraps_body_in_an_uninvoked_run_function():
     assert "function run (" not in script
 
 
-def test_first_statement_after_meta_block_is_a_phase_call():
+def test_first_statement_after_meta_block_is_a_phase_call() -> None:
     """The invariant this guards is "never wrapped in a function nothing
     calls" (module docstring § Top-level body), not literally "the very
     first token is `phase(`" -- `const _incompleteChunks = [];` is a
@@ -123,7 +124,7 @@ def test_first_statement_after_meta_block_is_a_phase_call():
     assert phase_idx < rows_idx
 
 
-def test_terminal_test_phase_is_last():
+def test_terminal_test_phase_is_last() -> None:
     waves = _two_wave_fixture()
     script = compose_script(waves, name="wf", description="two waves", **REVIEW_KW)
 
@@ -132,7 +133,7 @@ def test_terminal_test_phase_is_last():
     assert phase_titles[-1] == "Scoped test run"
 
 
-def test_every_row_gets_one_execute_phase_no_commit_phase():
+def test_every_row_gets_one_execute_phase_no_commit_phase() -> None:
     waves = _two_wave_fixture()
     script = compose_script(waves, name="wf", description="two waves", **REVIEW_KW)
 
@@ -141,13 +142,13 @@ def test_every_row_gets_one_execute_phase_no_commit_phase():
     assert phase_titles == ["Execute", "Review prep", "Review wave", "Review integration", "Review re-verify", "Scoped test run"]
 
 
-def test_wave_phase_carries_executor_agent_type():
+def test_wave_phase_carries_executor_agent_type() -> None:
     waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"])]]
     script = compose_script(waves, name="wf", description="one wave", **REVIEW_KW)
     assert "agentType: 'coordinator:executor'" in script
 
 
-def test_git_commit_agent_appears_only_as_the_serialised_checkpoint_committer():
+def test_git_commit_agent_appears_only_as_the_serialised_checkpoint_committer() -> None:
     waves = _two_wave_fixture()
     script = compose_script(waves, name="wf", description="two waves", **REVIEW_KW)
     assert script.count("agentType: 'coordinator:git-commit-agent'") == 1
@@ -155,13 +156,13 @@ def test_git_commit_agent_appears_only_as_the_serialised_checkpoint_committer():
     assert "Commit wave" not in script
 
 
-def test_terminal_phase_carries_test_runner_agent_type():
+def test_terminal_phase_carries_test_runner_agent_type() -> None:
     waves = _two_wave_fixture()
     script = compose_script(waves, name="wf", description="two waves", **REVIEW_KW)
     assert "agentType: 'coordinator:test-runner'" in script
 
 
-def test_multi_row_wave_never_uses_parallel_wrap():
+def test_multi_row_wave_never_uses_parallel_wrap() -> None:
     waves = [
         [
             _wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"]),
@@ -173,7 +174,7 @@ def test_multi_row_wave_never_uses_parallel_wrap():
     assert script.count("agentType: 'coordinator:executor'") == 2
 
 
-def test_plan_body_write_row_derives_enricher_agent_type():
+def test_plan_body_write_row_derives_enricher_agent_type() -> None:
     waves = [
         [
             _wave_row("C1", ["docs/plans/2026-08-13-example.md"]),
@@ -185,14 +186,14 @@ def test_plan_body_write_row_derives_enricher_agent_type():
     assert script.count("agentType: 'coordinator:executor'") == 1
 
 
-def test_ordinary_code_row_still_derives_executor_agent_type():
+def test_ordinary_code_row_still_derives_executor_agent_type() -> None:
     waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"])]]
     script = compose_script(waves, name="wf", description="code row", **REVIEW_KW)
     assert "agentType: 'coordinator:executor'" in script
     assert "agentType: 'coordinator:enricher'" not in script
 
 
-def test_mixed_plan_body_and_code_row_raises_mixed_agent_type_error():
+def test_mixed_plan_body_and_code_row_raises_mixed_agent_type_error() -> None:
     waves = [
         [
             _wave_row(
@@ -208,7 +209,7 @@ def test_mixed_plan_body_and_code_row_raises_mixed_agent_type_error():
         compose_script(waves, name="wf", description="mixed row", **REVIEW_KW)
 
 
-def test_evidence_sidecar_row_routes_to_executor_and_brief_names_evidence_append():
+def test_evidence_sidecar_row_routes_to_executor_and_brief_names_evidence_append() -> None:
     waves = [
         [
             _wave_row(
@@ -231,7 +232,7 @@ def test_evidence_sidecar_row_routes_to_executor_and_brief_names_evidence_append
     assert "evidence-append" not in plain
 
 
-def test_problem_set_write_row_derives_enricher_agent_type():
+def test_problem_set_write_row_derives_enricher_agent_type() -> None:
     waves = [
         [
             _wave_row("C1", ["docs/problems/2026-08-13-example.md"]),
@@ -243,7 +244,7 @@ def test_problem_set_write_row_derives_enricher_agent_type():
     assert script.count("agentType: 'coordinator:executor'") == 1
 
 
-def test_mixed_problem_set_and_code_row_raises_mixed_agent_type_error():
+def test_mixed_problem_set_and_code_row_raises_mixed_agent_type_error() -> None:
     waves = [
         [
             _wave_row(
@@ -259,7 +260,7 @@ def test_mixed_problem_set_and_code_row_raises_mixed_agent_type_error():
         compose_script(waves, name="wf", description="mixed problem-set row", **REVIEW_KW)
 
 
-def test_undeclared_writes_row_propagates_no_writes_declared_before_agent_type_matters():
+def test_undeclared_writes_row_propagates_no_writes_declared_before_agent_type_matters() -> None:
     # UNDECLARED never reaches agentType derivation in a real run: pathspec's
     # commit_pathspec refuses it first (NoWritesDeclaredError). Regression
     # guard for that ordering -- see _row_agent_type's UNDECLARED docstring.
@@ -268,7 +269,7 @@ def test_undeclared_writes_row_propagates_no_writes_declared_before_agent_type_m
         compose_script(waves, name="wf", description="undeclared row", **REVIEW_KW)
 
 
-def test_malformed_agent_type_raises_malformed_agent_override_error():
+def test_malformed_agent_type_raises_malformed_agent_override_error() -> None:
     waves = [
         [
             _wave_row(
@@ -282,7 +283,7 @@ def test_malformed_agent_type_raises_malformed_agent_override_error():
         compose_script(waves, name="wf", description="malformed agent_type", **REVIEW_KW)
 
 
-def test_malformed_agent_model_raises_malformed_agent_override_error():
+def test_malformed_agent_model_raises_malformed_agent_override_error() -> None:
     waves = [
         [
             _wave_row(
@@ -296,7 +297,7 @@ def test_malformed_agent_model_raises_malformed_agent_override_error():
         compose_script(waves, name="wf", description="malformed agent_model", **REVIEW_KW)
 
 
-def test_mixed_writes_row_still_raises_even_with_explicit_agent_type():
+def test_mixed_writes_row_still_raises_even_with_explicit_agent_type() -> None:
     waves = [
         [
             _wave_row(
@@ -323,32 +324,32 @@ def _plugin_home(tmp_path, monkeypatch, plugin, stem, text):
     return path
 
 
-def test_resolve_agent_model_reads_plugin_definition_frontmatter(tmp_path, monkeypatch):
+def test_resolve_agent_model_reads_plugin_definition_frontmatter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _plugin_home(tmp_path, monkeypatch, "game-dev", "staff-game-dev", "---\nname: staff-game-dev\nmodel: opus\n---\nbody\n")
     assert emit.resolve_agent_model("game-dev:staff-game-dev") == "opus"
     assert emit._model_opt("game-dev:staff-game-dev") == "model: 'opus'"
 
 
-def test_resolve_agent_model_refuses_naming_looked_for_path(tmp_path, monkeypatch):
+def test_resolve_agent_model_refuses_naming_looked_for_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = _plugin_home(tmp_path, monkeypatch, "game-dev", "staff-game-dev", None)
     with pytest.raises(MalformedAgentOverrideError) as exc:
         emit.resolve_agent_model("game-dev:staff-game-dev")
     assert str(path) in str(exc.value)
 
 
-def test_resolve_agent_model_override_wins_over_definition(tmp_path, monkeypatch):
+def test_resolve_agent_model_override_wins_over_definition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _plugin_home(tmp_path, monkeypatch, "game-dev", "staff-game-dev", "---\nmodel: opus\n---\n")
     assert emit.resolve_agent_model("game-dev:staff-game-dev", "sonnet") == "sonnet"
 
 
-def test_resolve_agent_model_refuses_when_definition_pin_is_inherit(tmp_path, monkeypatch):
+def test_resolve_agent_model_refuses_when_definition_pin_is_inherit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = _plugin_home(tmp_path, monkeypatch, "game-dev", "staff-game-dev", "---\nmodel: inherit\n---\n")
     with pytest.raises(MalformedAgentOverrideError) as exc:
         emit.resolve_agent_model("game-dev:staff-game-dev")
     assert str(path) in str(exc.value)
 
 
-def test_unmodellable_agent_type_alone_raises_malformed_agent_override_error(tmp_path, monkeypatch):
+def test_unmodellable_agent_type_alone_raises_malformed_agent_override_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An explicit agent_type absent from _AGENT_MODELS, with no agent_model
     supplied, refuses rather than silently downgrading to a default model
     (Ruling 2: the field that closes the silent-Sonnet-downgrade hole is the
@@ -367,7 +368,7 @@ def test_unmodellable_agent_type_alone_raises_malformed_agent_override_error(tmp
         compose_script(waves, name="wf", description="unmodellable agent_type alone", **REVIEW_KW)
 
 
-def test_unmodellable_agent_type_with_agent_model_does_not_raise():
+def test_unmodellable_agent_type_with_agent_model_does_not_raise() -> None:
     """The same agent_type as above does NOT refuse once agent_model
     accompanies it -- agent_model is the mechanism that satisfies the
     refusal, not a knob only the informed find."""
@@ -386,7 +387,7 @@ def test_unmodellable_agent_type_with_agent_model_does_not_raise():
     assert "model: 'opus'" in script
 
 
-def test_agent_model_is_escaped_not_interpolated_raw():
+def test_agent_model_is_escaped_not_interpolated_raw() -> None:
     """agent_model is spliced into `model: '{...}'` the same way agent_type
     is spliced into `agentType:` -- through `_js_string_literal`, not a raw
     f-string -- so a value carrying a quote cannot deform the emitted
@@ -408,7 +409,7 @@ def test_agent_model_is_escaped_not_interpolated_raw():
     assert "model: 'opus-model'" in script
 
 
-def test_row_agent_model_changing_a_pinned_type_is_dropped_for_the_pin():
+def test_row_agent_model_changing_a_pinned_type_is_dropped_for_the_pin() -> None:
     waves = [
         [
             _wave_row(
@@ -426,7 +427,7 @@ def test_row_agent_model_changing_a_pinned_type_is_dropped_for_the_pin():
         compose_script(bad, name="wf", description="pinned override", **REVIEW_KW)
 
 
-def test_spine_text_agent_type_reaches_emitted_call(tmp_path):
+def test_spine_text_agent_type_reaches_emitted_call(tmp_path: Path) -> None:
     """End-to-end: spine text -> read_spine -> build_waves -> compose_script.
 
     ``test_explicit_agent_type_overrides_write_target_derivation`` above
@@ -469,7 +470,7 @@ def _plan_with_row(tmp_path, row_lines: str):
     return plan_path
 
 
-def test_spine_text_change_kind_reaches_wave_row(tmp_path):
+def test_spine_text_change_kind_reaches_wave_row(tmp_path: Path) -> None:
     """The inert-field leg, asserted BEFORE the refusal legs that depend on it.
 
     ``WaveRow``'s own docstring records that the two agent-override fields
@@ -495,7 +496,7 @@ def test_spine_text_change_kind_reaches_wave_row(tmp_path):
     assert build_waves(rows)[0][0].change_kind == "verification"
 
 
-def test_verification_row_writing_only_a_plan_body_raises_unroutable(tmp_path):
+def test_verification_row_writing_only_a_plan_body_raises_unroutable(tmp_path: Path) -> None:
     """The measured case (wf_71d241c7-e62): execution-tier work whose only
     declared write is an immutable body. No agentType can serve it -- the
     executor is the plan-body guard's sole block target, the enricher's
@@ -518,7 +519,7 @@ def test_verification_row_writing_only_a_plan_body_raises_unroutable(tmp_path):
     assert "Split the row" in str(excinfo.value)
 
 
-def test_an_explicit_agent_type_does_not_escape_the_unroutable_refusal(tmp_path):
+def test_an_explicit_agent_type_does_not_escape_the_unroutable_refusal(tmp_path: Path) -> None:
     """No override reconciles an unroutable row, the same way none reconciles
     a mixed-writes one: the check sits above the override. An override names
     WHO runs a coherent row; an execution-tier row writing only an immutable
@@ -548,7 +549,7 @@ def test_an_explicit_agent_type_does_not_escape_the_unroutable_refusal(tmp_path)
     assert "Split the row" in str(excinfo.value)
 
 
-def test_verification_row_writing_an_ordinary_path_still_routes_executor(tmp_path):
+def test_verification_row_writing_an_ordinary_path_still_routes_executor(tmp_path: Path) -> None:
     """Negative control: ``verification`` is only un-routable in combination
     with an immutable-body-only write set. On an ordinary path the executor
     both runs and writes, so nothing is refused."""
@@ -568,7 +569,7 @@ def test_verification_row_writing_an_ordinary_path_still_routes_executor(tmp_pat
     assert "agentType: 'coordinator:executor'" in script
 
 
-def test_doc_edit_row_writing_a_plan_body_still_routes_enricher(tmp_path):
+def test_doc_edit_row_writing_a_plan_body_still_routes_enricher(tmp_path: Path) -> None:
     """The other negative control, and the one that matters most: the
     write-path derivation is CORRECT and must be left alone. An edit-shaped
     ``change_kind`` on an immutable body is ordinary enricher work."""
@@ -588,7 +589,7 @@ def test_doc_edit_row_writing_a_plan_body_still_routes_enricher(tmp_path):
     assert "agentType: 'coordinator:enricher'" in script
 
 
-def test_spine_text_with_neither_agent_key_emits_byte_identically(tmp_path):
+def test_spine_text_with_neither_agent_key_emits_byte_identically(tmp_path: Path) -> None:
     """A spine declaring neither key must still emit byte-identically to the
     pre-existing hand-built ``WaveRow`` path -- the negative-spec twin of
     the positive case above, and an actual byte-for-byte comparison rather
@@ -623,14 +624,14 @@ def test_spine_text_with_neither_agent_key_emits_byte_identically(tmp_path):
     assert "model: 'opus'" not in execute_section(script_from_spine)
 
 
-def test_single_row_wave_is_a_plain_await_agent():
+def test_single_row_wave_is_a_plain_await_agent() -> None:
     waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"])]]
     script = compose_script(waves, name="wf", description="serial wave", **REVIEW_KW)
     assert "await parallel(" not in execute_section(script)
     assert "await agent(" in script
 
 
-def test_a_degraded_gitignore_filter_is_visible_in_the_emitted_script(tmp_path, monkeypatch, caplog):
+def test_a_degraded_gitignore_filter_is_visible_in_the_emitted_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     """Fail-open on git absence/timeout stays fail-open (reproducing pre-fix
     behaviour beats halting a whole run over a transient git hiccup), but
     the degradation must be MORE than a `logging.warning` nothing downstream
@@ -659,7 +660,7 @@ def test_a_degraded_gitignore_filter_is_visible_in_the_emitted_script(tmp_path, 
     assert "could not run" in caplog.text
 
 
-def test_a_healthy_gitignore_filter_carries_no_degraded_narration(tmp_path):
+def test_a_healthy_gitignore_filter_carries_no_degraded_narration(tmp_path: Path) -> None:
     """The negative half: an ordinary run (no paths to filter, so the early
     return never touches git) must not emit the degraded narration."""
     waves = [[_wave_row("C1", ["a.py"])]]
@@ -667,7 +668,7 @@ def test_a_healthy_gitignore_filter_carries_no_degraded_narration(tmp_path):
     assert "GITIGNORE FILTER DID NOT RUN" not in script
 
 
-def test_completed_run_returns_a_positive_record_not_undefined():
+def test_completed_run_returns_a_positive_record_not_undefined() -> None:
     """A finished run and a run that fell off the end must not look alike.
 
     The body used to end on `await agent(...)`, so a completed run returned
@@ -681,7 +682,7 @@ def test_completed_run_returns_a_positive_record_not_undefined():
     assert script.rstrip().endswith("};")
 
 
-def test_completion_record_names_the_chunks_the_recovery_triple_greps_for():
+def test_completion_record_names_the_chunks_the_recovery_triple_greps_for() -> None:
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves", **REVIEW_KW)
     tail = script[script.index("return {"):]
     assert "chunks: [" in tail
@@ -690,7 +691,7 @@ def test_completion_record_names_the_chunks_the_recovery_triple_greps_for():
             assert f'"{row.id}"' in tail, row.id
 
 
-def test_completion_return_is_last_so_no_phase_follows_it():
+def test_completion_return_is_last_so_no_phase_follows_it() -> None:
     """An early completion return would silently skip the phases after it."""
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves", **REVIEW_KW)
     # The one sanctioned early return: a clean prep over no product file
@@ -708,7 +709,7 @@ def test_completion_return_is_last_so_no_phase_follows_it():
     assert "await agent(" not in script[completion:]
 
 
-def test_a_landed_row_vetoes_the_no_op_halt():
+def test_a_landed_row_vetoes_the_no_op_halt() -> None:
     """A checkpointed run once halted no-op on prep's count of 0 and shipped
     its rows unreviewed: the halt must also require that no row landed."""
     script = compose_script(_two_wave_fixture(), name="wf", description="two waves", **REVIEW_KW)
@@ -717,7 +718,7 @@ def test_a_landed_row_vetoes_the_no_op_halt():
     assert "const _landed = {};" in script
 
 
-def test_a_finished_row_with_no_commit_vetoes_the_no_op_halt():
+def test_a_finished_row_with_no_commit_vetoes_the_no_op_halt() -> None:
     """A verification row whose only write is gitignored finishes with no
     commit, so _landed stays empty; the halt must still see it finished, or
     the run skips its test phase and terminal judge."""
@@ -728,7 +729,7 @@ def test_a_finished_row_with_no_commit_vetoes_the_no_op_halt():
     assert "if (!incomplete) _finished.add(id);" in script
 
 
-def test_a_non_done_chunk_report_flips_completed_false_and_names_the_chunk():
+def test_a_non_done_chunk_report_flips_completed_false_and_names_the_chunk() -> None:
     """Defect: a workflow reported `completed: true` while a chunk's own
     agent report carried `Status: PARTIAL`. Runtime behaviour is not
     executable from a compose-time test (there is no JS runtime here), so
@@ -753,7 +754,7 @@ def test_a_non_done_chunk_report_flips_completed_false_and_names_the_chunk():
         ("report written\n<exit-status>PARTIAL</exit-status>", True),
     ],
 )
-def test_the_status_check_reads_the_contracts_status_position(reply, incomplete):
+def test_the_status_check_reads_the_contracts_status_position(reply, incomplete) -> None:
     """The emitted regex has no JS runtime here, but its body is also a valid
     Python pattern, so it is exercised against the JSON-stringified reply the
     emitted script actually tests."""
@@ -766,7 +767,7 @@ def test_the_status_check_reads_the_contracts_status_position(reply, incomplete)
     assert bool(re.search(body, json.dumps(reply))) is incomplete
 
 
-def test_multi_row_wave_status_checked_per_row_via_its_own_promise():
+def test_multi_row_wave_status_checked_per_row_via_its_own_promise() -> None:
     """Each row is its own memoised promise (§ Design D4), so status
     classification is per-row inside the shared ``_runRow`` helper, never
     an array indexed by dispatch position (there is no shared results
@@ -777,7 +778,7 @@ def test_multi_row_wave_status_checked_per_row_via_its_own_promise():
     assert "_rows['C2'] = _runRow('C2', []," in script
 
 
-def test_test_runner_calls_carry_charter_haiku_while_rows_stay_sonnet():
+def test_test_runner_calls_carry_charter_haiku_while_rows_stay_sonnet() -> None:
     """A call-site ``model:`` OVERRIDES the named agent definition's own
     frontmatter, so the emitted tier must track each agentType's charter
     rather than one constant. ``test-runner`` is haiku by charter; a
@@ -787,7 +788,7 @@ def test_test_runner_calls_carry_charter_haiku_while_rows_stay_sonnet():
     waves = _two_wave_fixture()
     script = compose_script(waves, name="wf", description="tier check", **REVIEW_KW)
 
-    def opts_for(label):
+    def opts_for(label) -> str:
         idx = script.index(label)
         return script[idx:script.index("})", idx)]
 
@@ -805,7 +806,7 @@ def test_test_runner_calls_carry_charter_haiku_while_rows_stay_sonnet():
     )
 
 
-def test_every_agent_call_carries_an_active_model():
+def test_every_agent_call_carries_an_active_model() -> None:
     waves = [
         [
             _wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"]),
@@ -827,7 +828,7 @@ def test_every_agent_call_carries_an_active_model():
     assert "// model:" not in script
 
 
-def test_run_checks_reports_no_model_default_warn():
+def test_run_checks_reports_no_model_default_warn() -> None:
     waves = _two_wave_fixture()
     script = compose_script(waves, name="wf", description="warn check", **REVIEW_KW)
     findings = run_checks(script)
@@ -835,7 +836,7 @@ def test_run_checks_reports_no_model_default_warn():
     assert model_warns == []
 
 
-def test_composed_script_passes_run_checks_with_zero_errors():
+def test_composed_script_passes_run_checks_with_zero_errors() -> None:
     waves = _two_wave_fixture()
     script = compose_script(waves, name="wf", description="round trip", **REVIEW_KW)
 
@@ -844,19 +845,19 @@ def test_composed_script_passes_run_checks_with_zero_errors():
     assert errors == [], f"unexpected ERROR findings: {errors}"
 
 
-def test_assert_zero_errors_does_not_raise_on_a_conformant_script():
+def test_assert_zero_errors_does_not_raise_on_a_conformant_script() -> None:
     waves = _two_wave_fixture()
     script = compose_script(waves, name="wf", description="round trip", **REVIEW_KW)
     assert_zero_errors(script)
 
 
-def test_assert_zero_errors_raises_on_a_broken_meta_block():
+def test_assert_zero_errors_raises_on_a_broken_meta_block() -> None:
     broken_script = "async function run(ctx) {}\n"
     with pytest.raises(ValueError, match="ERROR findings"):
         assert_zero_errors(broken_script)
 
 
-def test_multi_row_wave_script_also_passes_run_checks():
+def test_multi_row_wave_script_also_passes_run_checks() -> None:
     waves = [
         [
             _wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"]),
@@ -868,13 +869,13 @@ def test_multi_row_wave_script_also_passes_run_checks():
     assert errors == []
 
 
-def test_compose_script_propagates_no_writes_declared_from_commit_pathspec():
+def test_compose_script_propagates_no_writes_declared_from_commit_pathspec() -> None:
     waves = [[_wave_row("C1", UNDECLARED, surface="dispatch_emit")]]
     with pytest.raises(NoWritesDeclaredError):
         compose_script(waves, name="wf", description="undeclared", **REVIEW_KW)
 
 
-def test_all_empty_writes_wave_emits_with_no_marker():
+def test_all_empty_writes_wave_emits_with_no_marker() -> None:
     from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 
     waves = [[_wave_row("C1", []), _wave_row("C2", [])]]
@@ -884,13 +885,13 @@ def test_all_empty_writes_wave_emits_with_no_marker():
     assert parse_marker(script) is None
 
 
-def test_all_empty_writes_wave_still_dispatches_its_agent_calls():
+def test_all_empty_writes_wave_still_dispatches_its_agent_calls() -> None:
     waves = [[_wave_row("C1", [])]]
     script = compose_script(waves, name="wf", description="all-empty wave", **REVIEW_KW)
     assert "C1" in script
 
 
-def test_mixed_writes_wave_is_unaffected_by_the_all_empty_branch():
+def test_mixed_writes_wave_is_unaffected_by_the_all_empty_branch() -> None:
     from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 
     waves = [
@@ -906,7 +907,7 @@ def test_mixed_writes_wave_is_unaffected_by_the_all_empty_branch():
     assert request.chunks[0].paths == ()
 
 
-def test_compose_script_threads_expected_branch_into_the_marker():
+def test_compose_script_threads_expected_branch_into_the_marker() -> None:
     from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 
     waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
@@ -916,28 +917,28 @@ def test_compose_script_threads_expected_branch_into_the_marker():
     assert parse_marker(without).expected_branch is None
 
 
-def _emit_with_head(tmp_path, head_text):
+def _emit_with_head(tmp_path, head_text) -> str:
     (tmp_path / ".git").mkdir()
     (tmp_path / ".git" / "HEAD").write_text(head_text, encoding="utf-8")
     plan = _absent_target_plan(tmp_path, ("C1", "code-edit", ["pkg/x.py"]))
     return emit_script(plan, repo_root=tmp_path, **REVIEW_KW)
 
 
-def test_emit_script_captures_the_head_branch_into_the_marker(tmp_path):
+def test_emit_script_captures_the_head_branch_into_the_marker(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 
     script = _emit_with_head(tmp_path, "ref: refs/heads/feat-x\n")
     assert parse_marker(script).expected_branch == "feat-x"
 
 
-def test_emit_script_maps_a_detached_head_to_no_expected_branch(tmp_path):
+def test_emit_script_maps_a_detached_head_to_no_expected_branch(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 
     script = _emit_with_head(tmp_path, "0123456789abcdef0123456789abcdef01234567\n")
     assert parse_marker(script).expected_branch is None
 
 
-def test_all_undeclared_wave_still_raises_not_folded_into_all_empty_branch():
+def test_all_undeclared_wave_still_raises_not_folded_into_all_empty_branch() -> None:
     # Refusal 1 (every row UNDECLARED) must keep raising -- it is not the
     # same shape as every row explicitly declaring `writes: []`.
     waves = [[_wave_row("C1", UNDECLARED, surface="dispatch_emit")]]
@@ -945,13 +946,13 @@ def test_all_undeclared_wave_still_raises_not_folded_into_all_empty_branch():
         compose_script(waves, name="wf", description="all-undeclared", **REVIEW_KW)
 
 
-def test_commit_pathspec_directly_still_refuses_an_all_empty_wave():
+def test_commit_pathspec_directly_still_refuses_an_all_empty_wave() -> None:
     waves = [_wave_row("C1", []), _wave_row("C2", [])]
     with pytest.raises(NoWritesDeclaredError):
         commit_pathspec(waves)
 
 
-def test_compose_script_no_longer_propagates_no_test_target_but_degrades_loudly():
+def test_compose_script_no_longer_propagates_no_test_target_but_degrades_loudly() -> None:
     waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/nonexistent_module.py"])]]
     script = compose_script(waves, name="wf", description="uncovered module", **REVIEW_KW)
     assert "No terminal test phase" in script
@@ -959,7 +960,7 @@ def test_compose_script_no_longer_propagates_no_test_target_but_degrades_loudly(
     assert "no prime_exit_criterion.falsifier" in script
 
 
-def test_compose_script_falls_back_to_the_plans_falsifier_when_no_test_target_resolves():
+def test_compose_script_falls_back_to_the_plans_falsifier_when_no_test_target_resolves() -> None:
     waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/nonexistent_module.py"])]]
     falsifier = {
         "how": "run the migration and check the flag",
@@ -977,7 +978,7 @@ def test_compose_script_falls_back_to_the_plans_falsifier_when_no_test_target_re
     assert "No terminal test phase" not in script
 
 
-def test_criterion_status_guards_a_null_falsifier_result_on_the_halted_path():
+def test_criterion_status_guards_a_null_falsifier_result_on_the_halted_path() -> None:
     """When a falsifier stage is present, the terminal `return`'s
     `criterion.status` must guard `_falsifierResult` the same way
     `tests.status` guards its own stage-result var (`_testResult ? ... :
@@ -997,14 +998,14 @@ def test_criterion_status_guards_a_null_falsifier_result_on_the_halted_path():
     assert "'not_met' : _falsifierResult.status))) : 'not_run')" in script
 
 
-def test_compose_script_omits_the_terminal_phase_for_a_prose_only_spine():
+def test_compose_script_omits_the_terminal_phase_for_a_prose_only_spine() -> None:
     waves = [[_wave_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
     script = compose_script(waves, name="wf", description="doc only", **REVIEW_KW)
     assert "Scoped test run" not in script
     assert "_rows['C1'] = _runRow('C1', [], null," in script
 
 
-def test_prime_exit_criterion_falsifier_reads_how_and_expected_when_true():
+def test_prime_exit_criterion_falsifier_reads_how_and_expected_when_true() -> None:
     plan_text = textwrap.dedent(
         """\
         ---
@@ -1028,7 +1029,7 @@ def test_prime_exit_criterion_falsifier_reads_how_and_expected_when_true():
     }
 
 
-def test_prime_exit_criterion_falsifier_is_none_when_absent_or_incomplete():
+def test_prime_exit_criterion_falsifier_is_none_when_absent_or_incomplete() -> None:
     assert emit._prime_exit_criterion_falsifier("no frontmatter here") is None
     assert (
         emit._prime_exit_criterion_falsifier(
@@ -1044,7 +1045,7 @@ def test_prime_exit_criterion_falsifier_is_none_when_absent_or_incomplete():
     )
 
 
-def test_a_prose_only_spine_declares_the_absent_test_run_on_the_emitted_script():
+def test_a_prose_only_spine_declares_the_absent_test_run_on_the_emitted_script() -> None:
     waves = [[_wave_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
     script = compose_script(waves, name="wf", description="doc only", **REVIEW_KW)
     assert "No terminal test phase" in script
@@ -1052,7 +1053,7 @@ def test_a_prose_only_spine_declares_the_absent_test_run_on_the_emitted_script()
     assert "log(" in script
 
 
-def test_compose_script_still_composes_the_terminal_phase_for_a_mixed_spine():
+def test_compose_script_still_composes_the_terminal_phase_for_a_mixed_spine() -> None:
     waves = [
         [
             _wave_row(
@@ -1117,7 +1118,7 @@ _FIXTURE_PLAN = textwrap.dedent(
 )
 
 
-def test_emit_script_reads_a_plan_file_and_composes_a_conformant_script(tmp_path):
+def test_emit_script_reads_a_plan_file_and_composes_a_conformant_script(tmp_path: Path) -> None:
     plan_path = tmp_path / "fixture-plan.md"
     plan_path.write_text(_FIXTURE_PLAN, encoding="utf-8")
 
@@ -1130,7 +1131,7 @@ def test_emit_script_reads_a_plan_file_and_composes_a_conformant_script(tmp_path
     assert phase_titles[0] == "Execute"
 
 
-def test_emit_script_honors_explicit_name_and_description(tmp_path):
+def test_emit_script_honors_explicit_name_and_description(tmp_path: Path) -> None:
     plan_path = tmp_path / "fixture-plan.md"
     plan_path.write_text(_FIXTURE_PLAN, encoding="utf-8")
 
@@ -1140,7 +1141,7 @@ def test_emit_script_honors_explicit_name_and_description(tmp_path):
     assert "description: 'custom description'" in script
 
 
-def test_emit_script_preamble_reaches_every_executor_prompt_once(tmp_path):
+def test_emit_script_preamble_reaches_every_executor_prompt_once(tmp_path: Path) -> None:
     """#89 K2: a run-wide posture block is rendered ONCE, as a `_shared`
     const, and reaches every executor row's prompt via that const's
     reference -- never inlined per row (module docstring's SharedBlocks
@@ -1159,7 +1160,7 @@ def test_emit_script_preamble_reaches_every_executor_prompt_once(tmp_path):
     assert preamble not in baseline
 
 
-def test_plan_standing_rules_reach_every_executor_prompt_once(tmp_path):
+def test_plan_standing_rules_reach_every_executor_prompt_once(tmp_path: Path) -> None:
     plan_path = tmp_path / "fixture-plan.md"
     rule = "never run UBT without the EM's slot"
     text = _FIXTURE_PLAN.replace("---\n", f"---\nstanding_rules:\n  - \"{rule}\"\n", 1)
@@ -1205,12 +1206,12 @@ def _write_plan_with_sizing(tmp_path, tshirt: str):
         ("XXL", "full"),
     ],
 )
-def test_derive_review_tier_maps_every_tshirt_notch(tmp_path, tshirt, expected_tier):
+def test_derive_review_tier_maps_every_tshirt_notch(tmp_path: Path, tshirt, expected_tier) -> None:
     plan_path = _write_plan_with_sizing(tmp_path, tshirt)
     assert derive_review_tier(plan_path, repo_root=tmp_path) == expected_tier
 
 
-def test_derive_review_tier_returns_none_when_sizing_object_absent(tmp_path):
+def test_derive_review_tier_returns_none_when_sizing_object_absent(tmp_path: Path) -> None:
     plan_path = tmp_path / "no-sizing-plan.md"
     plan_path.write_text(
         "---\ntitle: \"No sizing\"\nsizing_object: null\n---\n\n# No sizing\n",
@@ -1219,7 +1220,7 @@ def test_derive_review_tier_returns_none_when_sizing_object_absent(tmp_path):
     assert derive_review_tier(plan_path, repo_root=tmp_path) is None
 
 
-def test_derive_review_tier_returns_none_when_citation_does_not_resolve(tmp_path):
+def test_derive_review_tier_returns_none_when_citation_does_not_resolve(tmp_path: Path) -> None:
     plan_path = tmp_path / "dangling-plan.md"
     plan_path.write_text(
         "---\ntitle: \"Dangling\"\nsizing_object: \"state/sizings/missing.yaml\"\n---\n\n# Dangling\n",
@@ -1228,7 +1229,7 @@ def test_derive_review_tier_returns_none_when_citation_does_not_resolve(tmp_path
     assert derive_review_tier(plan_path, repo_root=tmp_path) is None
 
 
-def test_derive_review_tier_resolves_a_citation_whose_sizing_was_archived(tmp_path):
+def test_derive_review_tier_resolves_a_citation_whose_sizing_was_archived(tmp_path: Path) -> None:
     """A terminal sizing moves to `archive/sizings/<month>/` and its citation
     is never rewritten; the tier must still derive, or the emitted workflow
     silently composes no review phase at all."""
@@ -1249,7 +1250,7 @@ def test_derive_review_tier_resolves_a_citation_whose_sizing_was_archived(tmp_pa
     assert derive_review_tier(plan_path, repo_root=tmp_path) == "full"
 
 
-def test_derive_review_tier_returns_none_when_archive_match_is_ambiguous(tmp_path):
+def test_derive_review_tier_returns_none_when_archive_match_is_ambiguous(tmp_path: Path) -> None:
     """Two same-basename archived records mean the resolver cannot say which
     one the plan meant — it refuses rather than picking one."""
     for month in ("2026-07", "2026-08"):
@@ -1270,7 +1271,7 @@ def test_derive_review_tier_returns_none_when_archive_match_is_ambiguous(tmp_pat
     assert derive_review_tier(plan_path, repo_root=tmp_path) is None
 
 
-def test_derive_review_tier_prefers_the_live_sizing_over_an_archived_namesake(tmp_path):
+def test_derive_review_tier_prefers_the_live_sizing_over_an_archived_namesake(tmp_path: Path) -> None:
     live_dir = tmp_path / "state" / "sizings"
     live_dir.mkdir(parents=True)
     (live_dir / "example.yaml").write_text(
@@ -1294,7 +1295,7 @@ def test_derive_review_tier_prefers_the_live_sizing_over_an_archived_namesake(tm
     assert derive_review_tier(plan_path, repo_root=tmp_path) == "lightweight"
 
 
-def test_derive_review_tier_returns_none_when_citation_traverses_outside_root(tmp_path):
+def test_derive_review_tier_returns_none_when_citation_traverses_outside_root(tmp_path: Path) -> None:
     outside_dir = tmp_path.parent / f"{tmp_path.name}-outside-sizing"
     outside_dir.mkdir(exist_ok=True)
     (outside_dir / "escape.yaml").write_text(
@@ -1312,7 +1313,7 @@ def test_derive_review_tier_returns_none_when_citation_traverses_outside_root(tm
     assert derive_review_tier(plan_path, repo_root=tmp_path) is None
 
 
-def test_derive_review_tier_returns_none_when_citation_is_absolute_path(tmp_path):
+def test_derive_review_tier_returns_none_when_citation_is_absolute_path(tmp_path: Path) -> None:
     outside_dir = tmp_path.parent / f"{tmp_path.name}-absolute-sizing"
     outside_dir.mkdir(exist_ok=True)
     absolute_sizing_path = outside_dir / "absolute.yaml"
@@ -1331,13 +1332,13 @@ def test_derive_review_tier_returns_none_when_citation_is_absolute_path(tmp_path
     assert derive_review_tier(plan_path, repo_root=tmp_path) is None
 
 
-def test_derive_review_tier_raises_on_unmapped_tshirt(tmp_path):
+def test_derive_review_tier_raises_on_unmapped_tshirt(tmp_path: Path) -> None:
     plan_path = _write_plan_with_sizing(tmp_path, "not-a-real-notch")
     with pytest.raises(ValueError):
         derive_review_tier(plan_path, repo_root=tmp_path)
 
 
-def test_compose_script_refuses_a_missing_or_pre_v5_review_roster():
+def test_compose_script_refuses_a_missing_or_pre_v5_review_roster() -> None:
     waves = _two_wave_fixture()
     v4_fragment = {"schema": "review-roster-fragment", "schema_version": 4, "tiers": {}}
 
@@ -1361,7 +1362,7 @@ def test_compose_script_refuses_a_missing_or_pre_v5_review_roster():
         )
 
 
-def test_compose_script_composes_the_v5_execute_review_wave():
+def test_compose_script_composes_the_v5_execute_review_wave() -> None:
     waves = _two_wave_fixture()
     script = compose_script(
         waves,
@@ -1381,7 +1382,7 @@ def test_compose_script_composes_the_v5_execute_review_wave():
     assert "review:coordinator:integrator" in script
 
 
-def test_compose_script_review_wave_is_guarded_by_halted_and_precedes_the_test_phase():
+def test_compose_script_review_wave_is_guarded_by_halted_and_precedes_the_test_phase() -> None:
     waves = _two_wave_fixture()
     script = compose_script(
         waves,
@@ -1398,7 +1399,7 @@ def test_compose_script_review_wave_is_guarded_by_halted_and_precedes_the_test_p
     assert phase_titles[integration_index + 2] == "Scoped test run"
 
 
-def test_compose_script_registers_declared_paths_as_review_targets(tmp_path):
+def test_compose_script_registers_declared_paths_as_review_targets(tmp_path: Path) -> None:
     """wf_f2892741-12c regression: the v5 integration stage runs as
     `coordinator:code-reviewer`, whose Edit is sandbox-denied outside its
     own sidecar unless its files are registered review targets
@@ -1430,7 +1431,7 @@ def test_compose_script_registers_declared_paths_as_review_targets(tmp_path):
     assert registered, "review-targets.txt was created but registered no paths"
 
 
-def test_parse_execute_review_raises_on_malformed_fragment():
+def test_parse_execute_review_raises_on_malformed_fragment() -> None:
     waves = _two_wave_fixture()
     with pytest.raises(ReviewRosterFragmentError):
         compose_script(
@@ -1442,7 +1443,7 @@ def test_parse_execute_review_raises_on_malformed_fragment():
         )
 
 
-def _mirror_repo_test_targets(tmp_path):
+def _mirror_repo_test_targets(tmp_path) -> None:
     """Mirror JUST enough of the real repo layout under ``tmp_path`` for
     ``pathspec.terminal_test_scope``'s stem-named-test check to resolve
     the two write paths ``_FIXTURE_PLAN`` declares (``spine_read.py``,
@@ -1458,8 +1459,8 @@ def _mirror_repo_test_targets(tmp_path):
 
 
 def test_emit_script_composes_a_review_phase_when_a_v5_fragment_and_schemas_are_supplied(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     _mirror_repo_test_targets(tmp_path)
     plan_path = tmp_path / "fixture-plan.md"
     sizing_dir = tmp_path / "state" / "sizings"
@@ -1488,14 +1489,14 @@ _REAL_TEST_MAPPED_PATHS = [
 ]
 
 
-def _large_wave(n: int, prefix: str = "C"):
+def _large_wave(n: int, prefix: str = "C") -> list[WaveRow]:
     return [
         _wave_row(f"{prefix}{i}", [_REAL_TEST_MAPPED_PATHS[i % 2]])
         for i in range(1, n + 1)
     ]
 
 
-def test_wave_at_threshold_emits_no_marker_split():
+def test_wave_at_threshold_emits_no_marker_split() -> None:
     waves = [_large_wave(10)]
     script = compose_script(waves, name="wf", description="at threshold", **REVIEW_KW)
 
@@ -1503,7 +1504,7 @@ def test_wave_at_threshold_emits_no_marker_split():
     assert phase_titles == ["Execute", "Review prep", "Review wave", "Review integration", "Review re-verify", "Scoped test run"]
 
 
-def test_wave_over_threshold_still_a_single_execute_phase():
+def test_wave_over_threshold_still_a_single_execute_phase() -> None:
     waves = [_large_wave(12)]
     script = compose_script(waves, name="wf", description="over threshold", **REVIEW_KW)
 
@@ -1513,7 +1514,7 @@ def test_wave_over_threshold_still_a_single_execute_phase():
         assert f"work:C{i}'" in script
 
 
-def test_wave_over_threshold_script_passes_run_checks():
+def test_wave_over_threshold_script_passes_run_checks() -> None:
     waves = [_large_wave(12)]
     script = compose_script(waves, name="wf", description="round trip", **REVIEW_KW)
 
@@ -1521,11 +1522,11 @@ def test_wave_over_threshold_script_passes_run_checks():
     assert errors == []
 
 
-def _one_wave_fixture_with_writes(writes):
+def _one_wave_fixture_with_writes(writes) -> list[list[WaveRow]]:
     return [[_wave_row("C1", writes)]]
 
 
-def test_emitted_row_prompt_carries_the_footprint_constraint_over_writes_plus_report():
+def test_emitted_row_prompt_carries_the_footprint_constraint_over_writes_plus_report() -> None:
     """The footprint constraint must be spliced into the emitted SCRIPT text
     (never asserted against the module constant alone -- see
     `test_compose_script_commit_prompt_names_every_measured_false_refusal`'s
@@ -1539,7 +1540,7 @@ def test_emitted_row_prompt_carries_the_footprint_constraint_over_writes_plus_re
     assert ".coordinator-local/subagent-share/dispatch-reports/example/C1.md" in script
 
 
-def test_emitted_row_prompt_carries_the_self_verify_constraint_naming_emitted_authority():
+def test_emitted_row_prompt_carries_the_self_verify_constraint_naming_emitted_authority() -> None:
     """The self-verify clause must name the EMITTED commit/verification
     authority (this run's terminal scoped commit + its per-row `verify:`
     calls) -- never the hand-dispatch "the EM" text, which is false on this
@@ -1553,7 +1554,7 @@ def test_emitted_row_prompt_carries_the_self_verify_constraint_naming_emitted_au
     assert "Only the EM commits, once per wave" not in script
 
 
-def test_emitted_row_prompt_carries_the_done_summary_constraint_with_reply_and_porcelain():
+def test_emitted_row_prompt_carries_the_done_summary_constraint_with_reply_and_porcelain() -> None:
     """The done-summary constraint's structured-reply rule and its
     porcelain changed-path clause must both reach the emitted script,
     scoped to THIS row's own footprint (writes + report path)."""
@@ -1568,7 +1569,7 @@ def test_emitted_row_prompt_carries_the_done_summary_constraint_with_reply_and_p
     assert "| cut -c4-`" in script
 
 
-def test_emitted_row_prompt_omits_footprint_constraint_when_writes_undeclared():
+def test_emitted_row_prompt_omits_footprint_constraint_when_writes_undeclared() -> None:
     """An UNDECLARED `writes:` is a legal epistemic-premise-gated state,
     distinct from `writes: []` -- the footprint constraint must not render
     at all (never as "you may write nothing"), while the report path still
@@ -1589,7 +1590,7 @@ def test_emitted_row_prompt_omits_footprint_constraint_when_writes_undeclared():
     assert expected_report_path in prompt
 
 
-def test_dispatch_report_path_uses_plan_stem_and_row_id_never_mise_done():
+def test_dispatch_report_path_uses_plan_stem_and_row_id_never_mise_done() -> None:
     """The report path is `.coordinator-local/subagent-share/dispatch-
     reports/<plan stem>/<row id>.md`, NOT `tasks/mise-done/` -- see the C3
     row body's three-reason argument."""
@@ -1600,14 +1601,14 @@ def test_dispatch_report_path_uses_plan_stem_and_row_id_never_mise_done():
     assert "tasks/mise-done" not in emit._dispatch_report_path("docs/plans/example.md", "C7")
 
 
-def test_dispatch_report_path_is_inside_the_bookkeeping_allowlist():
+def test_dispatch_report_path_is_inside_the_bookkeeping_allowlist() -> None:
     """C3 must be safe to land alone: the report path this module renders
     into every row prompt lands under `_DISPATCH_REPORT_DIR`."""
     report_path = emit._dispatch_report_path("docs/plans/example.md", "C1")
     assert report_path.startswith(emit._DISPATCH_REPORT_DIR)
 
 
-def test_dispatch_report_path_refuses_a_row_id_containing_path_separators():
+def test_dispatch_report_path_refuses_a_row_id_containing_path_separators() -> None:
     """
     -- a row id spliced raw with `../` would pass the allowlist's
     `str.startswith` check while resolving outside `_BOOKKEEPING_PREFIXES`
@@ -1619,7 +1620,7 @@ def test_dispatch_report_path_refuses_a_row_id_containing_path_separators():
             emit._dispatch_report_path("docs/plans/example.md", bad_id)
 
 
-def test_dispatch_report_path_accepts_ordinary_row_ids():
+def test_dispatch_report_path_accepts_ordinary_row_ids() -> None:
     """The allowlist rewrite
     must still accept every ordinary row-id shape a plan spine writes today."""
     for good_id in ("C1", "c-1", "C_1.a"):
@@ -1627,7 +1628,7 @@ def test_dispatch_report_path_accepts_ordinary_row_ids():
         assert report_path == f".coordinator-local/subagent-share/dispatch-reports/example/{good_id}.md"
 
 
-def test_dispatch_report_path_refuses_windows_hazardous_row_ids():
+def test_dispatch_report_path_refuses_windows_hazardous_row_ids() -> None:
     """
     `spine_read` validates row-id presence, type and uniqueness only, never
     character shape, so a row id shaped like a drive letter, a leading
@@ -1654,7 +1655,7 @@ def test_dispatch_report_path_refuses_windows_hazardous_row_ids():
             emit._dispatch_report_path("docs/plans/example.md", bad_id)
 
 
-def test_emitted_script_names_the_rows_own_dispatch_report_path():
+def test_emitted_script_names_the_rows_own_dispatch_report_path() -> None:
     """End-to-end: compose a script for a wave whose row writes nothing
     else, and confirm its own dispatch report path reaches the emitted
     script (the terminal commit, not this module, judges divergence now)."""
@@ -1665,7 +1666,7 @@ def test_emitted_script_names_the_rows_own_dispatch_report_path():
     assert report_path in script
 
 
-def test_row_prompt_return_contract_is_escaped_via_js_string_literal_not_template_literal():
+def test_row_prompt_return_contract_is_escaped_via_js_string_literal_not_template_literal() -> None:
     """Row prompts (including the return-contract text spliced into them)
     go through `workflow_scaffold._js_string_literal` at the
     `_wave_agent_calls` splice points -- never
@@ -1686,7 +1687,7 @@ def test_row_prompt_return_contract_is_escaped_via_js_string_literal_not_templat
     assert f"`{row_prompt}`" not in script
 
 
-def test_emitted_row_prompt_tells_an_executor_how_to_declare_a_fired_stop_rule():
+def test_emitted_row_prompt_tells_an_executor_how_to_declare_a_fired_stop_rule() -> None:
     """Asserted against the emitted SCRIPT, not the builder's return value,
     for the reason
     `test_emitted_row_prompt_carries_the_footprint_constraint_over_writes_plus_report`
@@ -1701,7 +1702,7 @@ def test_emitted_row_prompt_tells_an_executor_how_to_declare_a_fired_stop_rule()
     assert "status (DONE | BLOCKED | PARTIAL)" in script
 
 
-def test_withdrawn_and_void_rows_get_their_own_tokens_that_never_halt():
+def test_withdrawn_and_void_rows_get_their_own_tokens_that_never_halt() -> None:
     """A row withdrawn by its own gate, and a conditional row that never armed,
     decided nothing: each declares a token distinct from the halt token, and
     the emitted halt matcher fires on neither."""
@@ -1723,7 +1724,7 @@ def test_withdrawn_and_void_rows_get_their_own_tokens_that_never_halt():
     assert emit._VOID_TOKEN not in helper
 
 
-def test_the_stop_rule_gate_is_declared_inside_the_shared_run_row_helper():
+def test_the_stop_rule_gate_is_declared_inside_the_shared_run_row_helper() -> None:
     """Placement is the whole design (§ Design D4) -- unified into the ONE
     shared `_runRow` helper, not a per-wave halt gate any more."""
     waves = _one_wave_fixture_with_writes(["coordinator_core/ops/dispatch_emit/emit.py"])
@@ -1735,7 +1736,7 @@ def test_the_stop_rule_gate_is_declared_inside_the_shared_run_row_helper():
     assert f"{emit._STOP_RULE_TOKEN}[*_]" in script
 
 
-def test_a_writeless_row_still_carries_the_stop_rule_gate():
+def test_a_writeless_row_still_carries_the_stop_rule_gate() -> None:
     """A row with no writes must not become the hole a stop rule falls
     through -- ``_runRow`` classifies every row identically regardless of
     write-capability."""
@@ -1747,7 +1748,7 @@ def test_a_writeless_row_still_carries_the_stop_rule_gate():
     assert f"{emit._STOP_RULE_TOKEN}[*_]" in script
 
 
-def test_the_stop_rule_pattern_matches_a_declaration_and_not_a_bare_mention():
+def test_the_stop_rule_pattern_matches_a_declaration_and_not_a_bare_mention() -> None:
     r"""The emitted matcher is line-anchored for `_preflight_halt_gate`'s
     reason: the prompt itself carries the token text, so a substring test
     would fail OPEN on an agent quoting its own instructions mid-sentence.
@@ -1768,7 +1769,7 @@ def test_the_stop_rule_pattern_matches_a_declaration_and_not_a_bare_mention():
     assert not rx.search(f"{emit._STOP_RULE_TOKEN}:")
 
 
-def test_a_solitary_writes_empty_row_rides_the_marker_as_a_pathless_chunk():
+def test_a_solitary_writes_empty_row_rides_the_marker_as_a_pathless_chunk() -> None:
     """A `change_kind: verification` row still dispatches; it wrote nothing, so
     its chunk carries no path and the terminal commit closes the row no-change."""
     from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
@@ -1785,7 +1786,7 @@ def test_a_solitary_writes_empty_row_rides_the_marker_as_a_pathless_chunk():
     assert [c.id for c in request.chunks] == ["C1", "C2"]
 
 
-def test_the_verdict_rows_paths_are_absent_from_the_marker():
+def test_the_verdict_rows_paths_are_absent_from_the_marker() -> None:
     """A row that writes nothing carries no path in the terminal-
     commit-request marker."""
     from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
@@ -1801,7 +1802,7 @@ def test_the_verdict_rows_paths_are_absent_from_the_marker():
     assert list(request.chunks[1].paths) == ["docs/wiki/dispatch-emit.md"]
 
 
-def test_compose_script_widens_the_marker_pathspec_with_the_stem_test_candidate():
+def test_compose_script_widens_the_marker_pathspec_with_the_stem_test_candidate() -> None:
     """state/bug-backlog/2026-08-26-emitted-wave-commit-legs-are-handed-a-wr-
     c0f443ac1fdb.yaml: a row's `writes:` names only the production module, but
     the ACs require the executor to also write the test covering it, so the
@@ -1818,7 +1819,7 @@ def test_compose_script_widens_the_marker_pathspec_with_the_stem_test_candidate(
     assert "coordinator_core/ops/brand_new_thing.py" in request.chunks[0].paths
 
 
-def test_a_done_with_concerns_reply_answers_its_brief():
+def test_a_done_with_concerns_reply_answers_its_brief() -> None:
     """An executor ending `DONE_WITH_CONCERNS: <path>` in backticks did its
     work; reading it as an unanswered brief halted a run as a dispatch defect."""
     import json
@@ -1829,7 +1830,7 @@ def test_a_done_with_concerns_reply_answers_its_brief():
     assert re.search(pattern, reply)
 
 
-def test_a_done_with_concerns_reply_with_closed_backtick_answers_its_brief():
+def test_a_done_with_concerns_reply_with_closed_backtick_answers_its_brief() -> None:
     """The more common markdown convention closes the
     inline-code span right before the colon (`` `DONE_WITH_CONCERNS`: <path> ``);
     the trailing class must admit a backtick too, or this reproduces the exact
@@ -1859,7 +1860,7 @@ def _plan_with_row_body(body_line: str, *, external_gate: str = "", disposition:
     )
 
 
-def test_blocked_prose_with_no_gate_raises_dispatch_gate_violation(tmp_path):
+def test_blocked_prose_with_no_gate_raises_dispatch_gate_violation(tmp_path: Path) -> None:
     plan_path = tmp_path / "fixture.md"
     plan_path.write_text(
         _plan_with_row_body("Do not start before confirming the directive is live."),
@@ -1871,7 +1872,7 @@ def test_blocked_prose_with_no_gate_raises_dispatch_gate_violation(tmp_path):
     assert "C1" in str(excinfo.value)
 
 
-def test_blocked_prose_with_a_gate_does_not_raise(tmp_path):
+def test_blocked_prose_with_a_gate_does_not_raise(tmp_path: Path) -> None:
     gate = (
         "  external_gate:\n"
         "    - owner_repo: coordinator-content-repo\n"
@@ -1889,7 +1890,7 @@ def test_blocked_prose_with_a_gate_does_not_raise(tmp_path):
     emit.emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
 
 
-def test_already_happened_prose_with_open_disposition_raises(tmp_path):
+def test_already_happened_prose_with_open_disposition_raises(tmp_path: Path) -> None:
     plan_path = tmp_path / "fixture.md"
     plan_path.write_text(
         _plan_with_row_body("The memo was sent already -- for traceability only."),
@@ -1900,7 +1901,7 @@ def test_already_happened_prose_with_open_disposition_raises(tmp_path):
     assert "Check B" in str(excinfo.value)
 
 
-def test_already_happened_prose_with_coded_disposition_does_not_raise(tmp_path):
+def test_already_happened_prose_with_coded_disposition_does_not_raise(tmp_path: Path) -> None:
     """A row already marked `disposition: coded` is excluded from
     `read_spine`'s output before `check_unschedulable_rows` ever sees it, so
     the plan has zero dispatchable rows and `build_waves` refuses instead --
@@ -1916,7 +1917,7 @@ def test_already_happened_prose_with_coded_disposition_does_not_raise(tmp_path):
         emit.emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
 
 
-def test_gate_discharge_claim_uncleared_raises(tmp_path):
+def test_gate_discharge_claim_uncleared_raises(tmp_path: Path) -> None:
     """DoE parity (2b3cd386e/4537df652): a gate whose condition prose
     declares discharge in shout-case while `cleared` stays unset is refused,
     even though the row body itself carries no contradicting prose."""
@@ -1937,7 +1938,7 @@ def test_gate_discharge_claim_uncleared_raises(tmp_path):
     assert "gate" in str(excinfo.value).lower()
 
 
-def test_gate_discharge_claim_cleared_does_not_raise(tmp_path):
+def test_gate_discharge_claim_cleared_does_not_raise(tmp_path: Path) -> None:
     """The same discharge-claim prose on a gate that DOES carry
     `cleared: true` is not a Check B violation -- the prose and the field
     agree."""
@@ -1956,7 +1957,7 @@ def test_gate_discharge_claim_cleared_does_not_raise(tmp_path):
     emit.emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
 
 
-def test_ordinary_prose_does_not_raise(tmp_path):
+def test_ordinary_prose_does_not_raise(tmp_path: Path) -> None:
     """Negative-spec: Check B is deliberately narrow. Ordinary future-
     conditional executor instruction prose ("report BLOCKED rather than...")
     must not fire -- the DoE pattern this class was tuned against."""
@@ -1994,7 +1995,7 @@ def _emit_findings(plan_path, root):
     return script, out
 
 
-def test_edit_row_against_an_absent_path_warns_naming_row_path_and_kind(tmp_path):
+def test_edit_row_against_an_absent_path_warns_naming_row_path_and_kind(tmp_path: Path) -> None:
     plan = _absent_target_plan(tmp_path, ("C1", "code-edit", ["pkg/deleted.py"]))
 
     _, findings = _emit_findings(plan, tmp_path)
@@ -2005,7 +2006,7 @@ def test_edit_row_against_an_absent_path_warns_naming_row_path_and_kind(tmp_path
     assert "C1: pkg/deleted.py" in findings[0].message
 
 
-def test_many_absent_paths_aggregate_into_one_finding(tmp_path):
+def test_many_absent_paths_aggregate_into_one_finding(tmp_path: Path) -> None:
     rows = [(f"C{i}", "code-edit", [f"pkg/new_{i}.py"]) for i in range(1, 15)]
     plan = _absent_target_plan(tmp_path, *rows)
 
@@ -2017,7 +2018,7 @@ def test_many_absent_paths_aggregate_into_one_finding(tmp_path):
     assert "(+4 more)" in findings[0].message
 
 
-def test_edit_row_against_a_present_path_does_not_warn(tmp_path):
+def test_edit_row_against_a_present_path_does_not_warn(tmp_path: Path) -> None:
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "live.py").write_text("x = 1\n", encoding="utf-8")
     plan = _absent_target_plan(tmp_path, ("C1", "script-edit", ["pkg/live.py"]))
@@ -2025,7 +2026,7 @@ def test_edit_row_against_a_present_path_does_not_warn(tmp_path):
     assert _emit_findings(plan, tmp_path)[1] == []
 
 
-def test_creating_kinds_do_not_warn_on_an_absent_path(tmp_path):
+def test_creating_kinds_do_not_warn_on_an_absent_path(tmp_path: Path) -> None:
     plan = _absent_target_plan(
         tmp_path,
         ("C1", "wiki-new", ["pkg/new-page.md"]),
@@ -2036,7 +2037,7 @@ def test_creating_kinds_do_not_warn_on_an_absent_path(tmp_path):
     assert absent == []
 
 
-def test_a_later_row_editing_what_an_earlier_row_creates_is_not_flagged(tmp_path):
+def test_a_later_row_editing_what_an_earlier_row_creates_is_not_flagged(tmp_path: Path) -> None:
     plan = _absent_target_plan(
         tmp_path,
         ("C1", "wiki-new", ["pkg/made.py"]),
@@ -2046,7 +2047,7 @@ def test_a_later_row_editing_what_an_earlier_row_creates_is_not_flagged(tmp_path
     assert _emit_findings(plan, tmp_path)[1] == []
 
 
-def test_absent_target_finding_never_refuses_the_emit(tmp_path):
+def test_absent_target_finding_never_refuses_the_emit(tmp_path: Path) -> None:
     plan = _absent_target_plan(tmp_path, ("C1", "code-edit", ["pkg/deleted.py"]))
 
     script, findings = _emit_findings(plan, tmp_path)
@@ -2055,14 +2056,14 @@ def test_absent_target_finding_never_refuses_the_emit(tmp_path):
     assert_zero_errors(script)
 
 
-def test_no_repo_root_or_no_sink_is_a_no_op(tmp_path):
+def test_no_repo_root_or_no_sink_is_a_no_op(tmp_path: Path) -> None:
     plan = _absent_target_plan(tmp_path, ("C1", "code-edit", ["pkg/deleted.py"]))
 
     assert _emit_findings(plan, None)[1] == []
     assert emit_script(plan, repo_root=tmp_path, **REVIEW_KW)
 
 
-def test_dispatch_emit_reply_carries_the_absent_target_warn(tmp_path):
+def test_dispatch_emit_reply_carries_the_absent_target_warn(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 
     plan = _absent_target_plan(tmp_path, ("C1", "code-edit", ["pkg/deleted.py"]))
@@ -2085,7 +2086,7 @@ def test_dispatch_emit_reply_carries_the_absent_target_warn(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _import_window_findings(tmp_path, writes, importer_src, *, importer="pkg/user.py"):
+def _import_window_findings(tmp_path, writes, importer_src, *, importer: str = "pkg/user.py"):
     (tmp_path / "pkg").mkdir(exist_ok=True)
     (tmp_path / "pkg" / "__init__.py").write_text("", encoding="utf-8")
     (tmp_path / importer).write_text(importer_src, encoding="utf-8")
@@ -2106,7 +2107,7 @@ def _import_window_findings(tmp_path, writes, importer_src, *, importer="pkg/use
         "from pkg import (\n    other,\n    fresh,\n)\n",
     ],
 )
-def test_row_writing_a_new_module_and_its_importer_warns(tmp_path, src):
+def test_row_writing_a_new_module_and_its_importer_warns(tmp_path: Path, src) -> None:
     hits = _import_window_findings(tmp_path, ["pkg/fresh.py", "pkg/user.py"], src)
 
     assert len(hits) == 1
@@ -2115,7 +2116,7 @@ def test_row_writing_a_new_module_and_its_importer_warns(tmp_path, src):
     assert "depends_on" in hits[0].message
 
 
-def test_new_package_init_counts_as_the_module(tmp_path):
+def test_new_package_init_counts_as_the_module(tmp_path: Path) -> None:
     hits = _import_window_findings(
         tmp_path, ["pkg/newpkg/__init__.py", "pkg/user.py"], "import pkg.newpkg\n"
     )
@@ -2123,7 +2124,7 @@ def test_new_package_init_counts_as_the_module(tmp_path):
     assert len(hits) == 1
 
 
-def test_importer_not_importing_the_new_module_does_not_warn(tmp_path):
+def test_importer_not_importing_the_new_module_does_not_warn(tmp_path: Path) -> None:
     hits = _import_window_findings(
         tmp_path, ["pkg/fresh.py", "pkg/user.py"], "from pkg.other import x\nimport pkg.freshly\n"
     )
@@ -2131,7 +2132,7 @@ def test_importer_not_importing_the_new_module_does_not_warn(tmp_path):
     assert hits == []
 
 
-def test_existing_module_is_not_new(tmp_path):
+def test_existing_module_is_not_new(tmp_path: Path) -> None:
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "fresh.py").write_text("x = 1\n", encoding="utf-8")
 
@@ -2142,7 +2143,7 @@ def test_existing_module_is_not_new(tmp_path):
     assert hits == []
 
 
-def test_existing_test_module_importing_the_new_module_does_not_warn(tmp_path):
+def test_existing_test_module_importing_the_new_module_does_not_warn(tmp_path: Path) -> None:
     hits = _import_window_findings(
         tmp_path,
         ["pkg/fresh.py", "pkg/test_user.py"],
@@ -2153,7 +2154,7 @@ def test_existing_test_module_importing_the_new_module_does_not_warn(tmp_path):
     assert hits == []
 
 
-def test_new_module_and_importer_in_separate_rows_do_not_warn(tmp_path):
+def test_new_module_and_importer_in_separate_rows_do_not_warn(tmp_path: Path) -> None:
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "user.py").write_text("from pkg.fresh import x\n", encoding="utf-8")
     plan = _absent_target_plan(
@@ -2172,7 +2173,7 @@ def test_new_module_and_importer_in_separate_rows_do_not_warn(tmp_path):
     assert [f for f in findings if f.code == emit.IMPORT_WINDOW_CODE] == []
 
 
-def test_unparseable_importer_is_skipped_and_the_warn_never_refuses(tmp_path):
+def test_unparseable_importer_is_skipped_and_the_warn_never_refuses(tmp_path: Path) -> None:
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "user.py").write_text("def broken(:\n", encoding="utf-8")
     plan = _absent_target_plan(tmp_path, ("C1", "code-edit", ["pkg/fresh.py", "pkg/user.py"]))
@@ -2183,7 +2184,7 @@ def test_unparseable_importer_is_skipped_and_the_warn_never_refuses(tmp_path):
     assert_zero_errors(script)
 
 
-def test_import_window_warn_is_a_no_op_without_a_repo_root(tmp_path):
+def test_import_window_warn_is_a_no_op_without_a_repo_root(tmp_path: Path) -> None:
     assert emit.find_import_window_rows([], None) == []
 
 
@@ -2197,7 +2198,7 @@ def test_import_window_warn_is_a_no_op_without_a_repo_root(tmp_path):
         ({"plan_path": "p.md", "overrides": []}, "overrides must be an object"),
     ],
 )
-def test_dispatch_emit_refuses_malformed_request_without_raising(params, needle):
+def test_dispatch_emit_refuses_malformed_request_without_raising(params, needle) -> None:
     from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 
     out = _dispatch_emit(params)
@@ -2254,7 +2255,7 @@ def _sized_plan(tmp_path, tshirt: str, rows: int):
 
 
 @pytest.mark.parametrize("tshirt,kira", [("M", False), ("L", True)])
-def test_plan_route_gates_overengineering_reviewer_on_the_sizing_tshirt(tmp_path, tshirt, kira):
+def test_plan_route_gates_overengineering_reviewer_on_the_sizing_tshirt(tmp_path: Path, tshirt, kira) -> None:
     plan_path = _sized_plan(tmp_path, tshirt, 2)
     script = emit_script(
         plan_path, repo_root=tmp_path, review_roster_fragment=_sized_roster(),
@@ -2263,7 +2264,7 @@ def test_plan_route_gates_overengineering_reviewer_on_the_sizing_tshirt(tmp_path
     assert ("coordinator:overengineering-reviewer" in script) is kira
 
 
-def test_plan_route_renders_group_count_from_row_count_and_roster_max(tmp_path):
+def test_plan_route_renders_group_count_from_row_count_and_roster_max(tmp_path: Path) -> None:
     plan_path = _sized_plan(tmp_path, "L", 9)
     script = emit_script(
         plan_path, repo_root=tmp_path, review_roster_fragment=_sized_roster(),
@@ -2280,8 +2281,68 @@ def test_plan_route_renders_group_count_from_row_count_and_roster_max(tmp_path):
 
 
 @pytest.mark.parametrize("bad", [None, [], "x", [1]])
-def test_dispatch_emit_refuses_non_object_params_by_name(bad):
+def test_dispatch_emit_refuses_non_object_params_by_name(bad) -> None:
     from coordinator_core.ops.dispatch_emit import op
 
     out = op._dispatch_emit(bad)
     assert out == {"error": f"dispatch.emit params must be an object, got {type(bad).__name__}"}
+
+
+def _fence_ctx(repo, table):
+    import json as _json
+
+    from coordinator_core.ops.dispatch_emit.emit import derive_plan_context
+
+    if table is not None:
+        (repo / ".claude").mkdir()
+        (repo / ".claude" / "route-table.json").write_text(_json.dumps(table), encoding="utf-8")
+    text = "---\ntitle: P\n---\n\n# P\n\n## Goal\n\nG.\n\n## Tasks\n\nx\n"
+    return derive_plan_context(text, fallback_title="p", repo_root=repo.as_posix())
+
+
+def test_row_prompt_resolves_the_route_table_once_per_context_without_a_caller_memo(tmp_path, monkeypatch) -> None:
+    from coordinator_core.ops.dispatch_emit import agent_route
+    from coordinator_core.ops.dispatch_emit.emit import _CONTEXT_MEMOS, _row_prompt
+
+    ctx = _fence_ctx(tmp_path, None)
+    calls = []
+    real = agent_route.load_route_table
+    monkeypatch.setattr(agent_route, "load_route_table", lambda root: calls.append(root) or real(root))
+    for n in range(40):
+        row = WaveRow(f"R{n}", "t", "pkg", [f"pkg/a{n}.py"], [], [], change_kind="code-edit")
+        _row_prompt(row, "docs/plans/p.md", ctx)
+    assert len(calls) == 1
+    assert id(ctx) in _CONTEXT_MEMOS
+
+
+def test_row_prompt_still_fences_a_run_only_row_when_the_repo_has_a_route_table(tmp_path) -> None:
+    from coordinator_core.ops.dispatch_emit.emit import _row_prompt
+
+    table = {
+        "schema_version": 1,
+        "default_agent_type": "coordinator:executor",
+        "work_classes": [
+            {"id": "fenced-tests", "match": {"paths": ["pkg/fenced/*"]}, "agent_type": "spec:specialist",
+             "on_mismatch": "redirect", "run_only": True}
+        ],
+    }
+    ctx = _fence_ctx(tmp_path, table)
+    fenced = WaveRow("C1", "t", "pkg", ["pkg/fenced/a.py"], [], [], change_kind="code-edit")
+    open_ = WaveRow("C2", "t", "pkg", ["pkg/open/b.py"], [], [], change_kind="code-edit")
+    assert "run-only fence, work class fenced-tests" in _row_prompt(fenced, "docs/plans/p.md", ctx)
+    assert "run-only fence" not in _row_prompt(open_, "docs/plans/p.md", ctx)
+    assert "run-only fence, work class fenced-tests" in _row_prompt(fenced, "docs/plans/p.md", ctx)
+
+
+def test_context_memo_is_dropped_with_its_context(tmp_path) -> None:
+    import gc
+
+    from coordinator_core.ops.dispatch_emit.emit import _CONTEXT_MEMOS, _call_memo
+
+    ctx = _fence_ctx(tmp_path, None)
+    key = id(ctx)
+    _call_memo(ctx, None)["k"] = 1
+    assert key in _CONTEXT_MEMOS
+    del ctx
+    gc.collect()
+    assert key not in _CONTEXT_MEMOS

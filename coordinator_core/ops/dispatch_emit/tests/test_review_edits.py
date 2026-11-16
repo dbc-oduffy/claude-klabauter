@@ -5,6 +5,8 @@ import sys
 import types
 
 from coordinator_core.ops.dispatch_emit import review_edits as re_
+from pathlib import Path
+import pytest
 
 
 def _p(writes, **kw):
@@ -14,12 +16,12 @@ def _p(writes, **kw):
     return re_.partition(writes, **args)
 
 
-def test_land_when_changed_present_uncontested():
+def test_land_when_changed_present_uncontested() -> None:
     v = _p({"b/x.py": "a1", "a/y.py": "a1"}, changed={"a/y.py", "b/x.py"})
     assert v.land == ("a/y.py", "b/x.py") and v.halt == {} and v.unanswerable is None
 
 
-def test_halt_tokens():
+def test_halt_tokens() -> None:
     v = _p(
         {"c.py": "a", "d.py": "a", "../sib/e.py": "a", "/abs/f.py": "a"},
         changed={"c.py", "d.py"},
@@ -35,7 +37,7 @@ def test_halt_tokens():
     }
 
 
-def test_committed_clean_ignored_sibling_are_neither():
+def test_committed_clean_ignored_sibling_are_neither() -> None:
     v = _p(
         {"a": "x", "b": "x", "c": "x", "d": "x"},
         changed={"a", "c", "d"},
@@ -46,17 +48,17 @@ def test_committed_clean_ignored_sibling_are_neither():
     assert v.land == () and v.halt == {}
 
 
-def test_none_writes_is_unanswerable():
+def test_none_writes_is_unanswerable() -> None:
     v = _p(None)
     assert v.unanswerable and v.land == () and v.halt == {}
 
 
-def test_backslash_key_normalises():
+def test_backslash_key_normalises() -> None:
     v = _p({"a\\b\\c.py": "x"}, changed={"a/b/c.py"})
     assert v.land == ("a/b/c.py",)
 
 
-def test_live_sibling_declared(tmp_path, monkeypatch):
+def test_live_sibling_declared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import abandoned_runs
 
     monkeypatch.setattr(
@@ -74,7 +76,7 @@ def test_live_sibling_declared(tmp_path, monkeypatch):
     assert re_.live_sibling_declared(tmp_path, "own") == {"s/one.py": "sib", "two.py": "sib"}
 
 
-def test_review_writes_delegates_lazily(tmp_path, monkeypatch):
+def test_review_writes_delegates_lazily(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mod = types.ModuleType("coordinator_core.ops.dispatch_emit.review_edit_source")
     mod.session_review_writes = lambda root, sid, since: {"f.py": f"{sid}:{since}"}
     monkeypatch.setitem(sys.modules, "coordinator_core.ops.dispatch_emit.review_edit_source", mod)
@@ -83,7 +85,7 @@ def test_review_writes_delegates_lazily(tmp_path, monkeypatch):
     assert re_.review_writes(tmp_path, "s1", 5.0) == {"f.py": "s1:5.0"}
 
 
-def test_recorded_edits_include_outside_declared_and_nothing_unrecorded():
+def test_recorded_edits_include_outside_declared_and_nothing_unrecorded() -> None:
     from coordinator_core.ops.dispatch_emit import terminal_commit_review as tcr
 
     review = {"reverify": {"outside_declared": ["web/contracts.test.ts"], "edited": []}}

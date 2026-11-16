@@ -8,9 +8,10 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     ResumePlan,
     StageManifest,
 )
+from pathlib import Path
 
 
-def test_reasons_round_trip(tmp_path):
+def test_reasons_round_trip(tmp_path: Path) -> None:
     resume_snapshot.write(tmp_path, "r1", "p.md", ["B", "A"], ["C"], reasons={"B": "landed", "A": "closed"})
     snap = resume_snapshot.read(tmp_path, "r1", "p.md")
     assert dict(snap.reasons) == {"A": "closed", "B": "landed"}
@@ -18,14 +19,14 @@ def test_reasons_round_trip(tmp_path):
     assert list(raw["reasons"]) == ["A", "B"]
 
 
-def test_absent_reasons_read_empty(tmp_path):
+def test_absent_reasons_read_empty(tmp_path: Path) -> None:
     resume_snapshot.write(tmp_path, "r1", "p.md", ["A"], [])
     raw = json.loads((tmp_path / "scratch/warp/r1/resume-snapshot.json").read_text(encoding="utf-8"))
     assert "reasons" not in raw
     assert dict(resume_snapshot.read(tmp_path, "r1", "p.md").reasons) == {}
 
 
-def test_non_str_entries_dropped_and_malformed_reads_empty(tmp_path):
+def test_non_str_entries_dropped_and_malformed_reads_empty(tmp_path: Path) -> None:
     resume_snapshot.write(tmp_path, "r1", "p.md", ["A"], [])
     path = tmp_path / "scratch/warp/r1/resume-snapshot.json"
     body = json.loads(path.read_text(encoding="utf-8"))
@@ -37,7 +38,7 @@ def test_non_str_entries_dropped_and_malformed_reads_empty(tmp_path):
     assert dict(resume_snapshot.read(tmp_path, "r1", "p.md").reasons) == {}
 
 
-def test_drop_lines_are_not_notes(tmp_path):
+def test_drop_lines_are_not_notes(tmp_path: Path) -> None:
     p = tmp_path / "notes.jsonl"
     n1 = (json.dumps({"note": "one", "at": "t"}) + "\n").encode()
     n2 = (json.dumps({"note": "two", "at": "t"}) + "\n").encode()
@@ -49,13 +50,13 @@ def test_drop_lines_are_not_notes(tmp_path):
     assert run_notes.drop_entries(tmp_path / "missing") == []
 
 
-def test_manifest_dropped_rows_round_trip():
+def test_manifest_dropped_rows_round_trip() -> None:
     base = dict(run_dir="d", rows=(), review_declared_paths=(), marker_path="m")
     assert "dropped_rows" not in StageManifest(**base).to_json()
     m = StageManifest(**base, dropped_rows=({"id": "FA", "reason": "r"},))
     assert StageManifest.from_json(m.to_json()).dropped_rows == ({"id": "FA", "reason": "r"},)
 
 
-def test_names_and_defaults():
+def test_names_and_defaults() -> None:
     assert ROWS_DROPPED_WITHOUT_REASON == "ROWS-DROPPED-WITHOUT-REASON"
     assert ResumePlan("p", ("A",)).not_run_reasons == ()

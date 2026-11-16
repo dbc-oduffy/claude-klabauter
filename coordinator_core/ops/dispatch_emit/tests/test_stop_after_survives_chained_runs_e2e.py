@@ -41,7 +41,7 @@ _SIZING_DOC = {
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / REL).write_text(yaml.safe_dump(_SIZING_DOC, sort_keys=False), encoding="utf-8", newline="\n")
@@ -98,7 +98,7 @@ def _without_source(reply: dict) -> dict:
     return {k: v for k, v in reply.items() if k != PARK_SOURCE_REPLY_KEY}
 
 
-def test_stop_after_plan_survives_chain_resume_launcher_child_and_stage(repo):
+def test_stop_after_plan_survives_chain_resume_launcher_child_and_stage(repo) -> None:
     before = _product_files(repo)
 
     ask = _emit_ask(repo)
@@ -145,7 +145,7 @@ def test_stop_after_plan_survives_chain_resume_launcher_child_and_stage(repo):
     assert _product_files(repo) == before
 
 
-def test_a_successor_that_cannot_park_refuses(repo):
+def test_a_successor_that_cannot_park_refuses(repo) -> None:
     ask_id = _emit_ask(repo)["run_id"]
 
     with pytest.raises(ValueError, match="stop_after"):
@@ -156,14 +156,14 @@ def test_a_successor_that_cannot_park_refuses(repo):
     assert not list((repo / RUN_DIR_ROOT).glob("warp-*.workflow.mjs"))
 
 
-def test_a_run_with_no_marked_lineage_still_stages(repo):
+def test_a_run_with_no_marked_lineage_still_stages(repo) -> None:
     plain = _dispatch_emit({"ask": True, "sizing_path": REL, "target_root": str(repo)})
     assert "error" not in plain, plain
     assert OP_ASK_STAGE in _script(plain)
     assert not (record_dir(repo, plain["run_id"]) / STOP_AFTER_FILE).exists()
 
 
-def test_resuming_a_parked_chained_run_does_not_park_again_but_a_fresh_successor_still_does(repo):
+def test_resuming_a_parked_chained_run_does_not_park_again_but_a_fresh_successor_still_does(repo) -> None:
     ask = _emit_ask(repo)
     ask_id = ask["run_id"]
     params = _chain_params_from(_script(ask), repo, ask_id)

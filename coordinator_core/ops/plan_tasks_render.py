@@ -85,6 +85,7 @@ from typing import NamedTuple
 import yaml
 
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+from coordinator_core.frontmatter.yaml_load import safe_load
 from coordinator_core.timestamps import with_age
 
 
@@ -129,7 +130,7 @@ def load_rows(source: str) -> RowsResult:
         return RowsResult(status=result.status, rows=[])
 
     try:
-        rows = yaml.safe_load(result.body) or []
+        rows = safe_load(result.body) or []
     except yaml.YAMLError:
         return RowsResult(status=LocateStatus.MALFORMED, rows=[])
 

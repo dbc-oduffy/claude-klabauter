@@ -24,30 +24,31 @@ from __future__ import annotations
 import json
 
 from coordinator_core.warm import hook_http
+import pytest
 
 
 def _caller_of(frame):
     return frame["_caller"]
 
 
-def test_event_session_id_lands_at_the_frames_top_level():
+def test_event_session_id_lands_at_the_frames_top_level() -> None:
     event = {"hook_event_name": "PreToolUse", "session_id": "sess-distinct-abc123"}
     frame = json.loads(hook_http.build_request(event, hook_http.DEFAULT_OP_NAME))
     assert _caller_of(frame)["session_id"] == "sess-distinct-abc123"
 
 
-def test_top_level_session_id_matches_the_nested_payload_copy():
+def test_top_level_session_id_matches_the_nested_payload_copy() -> None:
     event = {"hook_event_name": "PreToolUse", "session_id": "sess-xyz"}
     frame = json.loads(hook_http.build_request(event, hook_http.DEFAULT_OP_NAME))
     assert _caller_of(frame)["session_id"] == frame["params"]["payload"]["session_id"] == "sess-xyz"
 
 
-def test_absent_session_id_carries_no_fabricated_identity():
+def test_absent_session_id_carries_no_fabricated_identity() -> None:
     frame = json.loads(hook_http.build_request({"hook_event_name": "PreToolUse"}, hook_http.DEFAULT_OP_NAME))
     assert _caller_of(frame)["session_id"] is None
 
 
-def test_empty_string_session_id_also_carries_no_identity():
+def test_empty_string_session_id_also_carries_no_identity() -> None:
     frame = json.loads(
         hook_http.build_request({"hook_event_name": "PreToolUse", "session_id": ""}, hook_http.DEFAULT_OP_NAME)
     )
@@ -70,7 +71,7 @@ _CALLER_CONTEXT_FIELDS_NOT_ON_THE_WIRE_OBJECT = frozenset(
 )
 
 
-def test_caller_object_mirrors_the_caller_context_dataclass():
+def test_caller_object_mirrors_the_caller_context_dataclass() -> None:
     """`_caller` IS `CallerContext` serialised -- not a shape merely said to match it.
     A field added to the dataclass and forgotten here is the drift this asserts against,
     except the two fields that are never part of THIS wire object by design (see
@@ -92,7 +93,7 @@ def test_caller_object_mirrors_the_caller_context_dataclass():
     assert settings_home_claim.SETTINGS_HOME_FIELD == "_settings_home"
 
 
-def test_distinct_callers_do_not_cross_contaminate():
+def test_distinct_callers_do_not_cross_contaminate() -> None:
     frame_a = json.loads(
         hook_http.build_request({"session_id": "caller-a"}, hook_http.DEFAULT_OP_NAME)
     )
@@ -103,12 +104,12 @@ def test_distinct_callers_do_not_cross_contaminate():
     assert _caller_of(frame_b)["session_id"] == "caller-b"
 
 
-def test_retired_session_id_key_is_not_resurrected():
+def test_retired_session_id_key_is_not_resurrected() -> None:
     frame = json.loads(hook_http.build_request({"session_id": "sess-1"}, hook_http.DEFAULT_OP_NAME))
     assert "_session_id" not in frame
 
 
-def test_caller_stamp_does_not_disturb_the_engine_token_contract():
+def test_caller_stamp_does_not_disturb_the_engine_token_contract() -> None:
     frame = json.loads(
         hook_http.build_request({"session_id": "sess-1", "env": {}}, "guard.evaluate")
     )
@@ -136,7 +137,7 @@ from coordinator_core.warm.caller_context import CallerContext
 
 class _FakePipe:
 
-    def __init__(self, read_result=b'{"jsonrpc":"2.0","id":1,"result":{}}\n'):
+    def __init__(self, read_result: bytes = b'{"jsonrpc":"2.0","id":1,"result":{}}\n') -> None:
         self.written: list = []
         self._read_result = read_result
 
@@ -146,14 +147,14 @@ class _FakePipe:
     def flush(self) -> None:
         pass
 
-    def readline(self):
+    def readline(self) -> bytes:
         return self._read_result
 
     def close(self) -> None:
         pass
 
 
-def test_pipe_leg_wire_carries_a_top_level_caller_object(monkeypatch):
+def test_pipe_leg_wire_carries_a_top_level_caller_object(monkeypatch: pytest.MonkeyPatch) -> None:
     """An event carrying a distinct identity SET produces a frame whose TOP-LEVEL
     `_caller` equals it, serialised from a `CallerContext` carrying `pid`."""
     monkeypatch.setattr(_warm_client, "is_warm_enabled", lambda: True)
@@ -176,7 +177,7 @@ def test_pipe_leg_wire_carries_a_top_level_caller_object(monkeypatch):
     assert set(caller.keys()) == {"plugin_root", "cwd", "session_id", "agent_id", "pid"}
 
 
-def test_pipe_leg_absent_session_id_carries_no_fabricated_identity(monkeypatch):
+def test_pipe_leg_absent_session_id_carries_no_fabricated_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_warm_client, "is_warm_enabled", lambda: True)
     monkeypatch.setattr(_warm_client, "engine_token", lambda: "faketoken")
     monkeypatch.setattr(_warm_client, "_caller_session_id", lambda: "")
@@ -190,7 +191,7 @@ def test_pipe_leg_absent_session_id_carries_no_fabricated_identity(monkeypatch):
     assert sent["_caller"]["pid"]
 
 
-def test_pipe_leg_env_carries_declared_caller_names_set_and_nonempty_only(monkeypatch):
+def test_pipe_leg_env_carries_declared_caller_names_set_and_nonempty_only(monkeypatch: pytest.MonkeyPatch) -> None:
     """The Python producer stamps declared `FORWARDING_SET` names into `_env` the
     way the doors do: a CALLER-mode name the caller set arrives; an empty one does not."""
     monkeypatch.setattr(_warm_client, "is_warm_enabled", lambda: True)
@@ -208,7 +209,7 @@ def test_pipe_leg_env_carries_declared_caller_names_set_and_nonempty_only(monkey
     assert "CLAUDE_CODE_REMOTE" not in env
 
 
-def test_serve_line_reads_the_widened_caller_object_and_threads_the_pid():
+def test_serve_line_reads_the_widened_caller_object_and_threads_the_pid() -> None:
     captured: dict = {}
 
     def _dispatch(msg, *, caller=None):

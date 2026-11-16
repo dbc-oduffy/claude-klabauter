@@ -17,6 +17,7 @@ from coordinator_core.ops.fleet_machinery_sweep import (
     sweep_repo,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -44,7 +45,7 @@ def _init_repo(root: str) -> None:
     _git(root, "config", "user.name", "test")
 
 
-def test_selector_matches_full_prefix():
+def test_selector_matches_full_prefix() -> None:
     paths = [
         "state/subagent-share/abc/sidecar.md",
         "state/review-trail/findings/x.md",
@@ -52,7 +53,7 @@ def test_selector_matches_full_prefix():
     assert select_machinery_paths(paths) == sorted(paths)
 
 
-def test_selector_rejects_name_token_lookalike():
+def test_selector_rejects_name_token_lookalike() -> None:
     paths = [
         "coordinator_core/session/subagent_share.py",
         "docs/reference/state-subagent-share-notes.md",
@@ -64,25 +65,25 @@ def test_selector_rejects_name_token_lookalike():
     assert "docs/reference/state-subagent-share-notes.md" not in selected
 
 
-def test_selector_matches_bucket_root_itself():
+def test_selector_matches_bucket_root_itself() -> None:
     paths = ["state/review-trail"]
     assert select_machinery_paths(paths) == ["state/review-trail"]
 
 
-def test_publish_repo_excluded_by_basename(tmp_path):
+def test_publish_repo_excluded_by_basename(tmp_path: Path) -> None:
     pub = tmp_path / "claude-klabauter"
     pub.mkdir()
     assert _is_publish_repo(str(pub)) is True
 
 
-def test_repo_with_publish_substring_not_excluded(tmp_path):
+def test_repo_with_publish_substring_not_excluded(tmp_path: Path) -> None:
     decoy = tmp_path / "claude-klabauter-notes"
     decoy.mkdir()
     assert _is_publish_repo(str(decoy)) is False
     assert "claude-klabauter-notes" not in _PUBLISH_REPO_NAMES
 
 
-def test_discover_sibling_repos_excludes_self_and_publish(tmp_path):
+def test_discover_sibling_repos_excludes_self_and_publish(tmp_path: Path) -> None:
     self_root = tmp_path / "claude-klabauter"
     sib = tmp_path / "sibling-repo"
     pub = tmp_path / "claude-klabauter"
@@ -97,7 +98,7 @@ def test_discover_sibling_repos_excludes_self_and_publish(tmp_path):
     assert found_names == {"sibling-repo"}
 
 
-def test_dry_run_select_full_set(tmp_path):
+def test_dry_run_select_full_set(tmp_path: Path) -> None:
     root = str(tmp_path)
     _init_repo(root)
     _write(root, "state/subagent-share/abc/sidecar.md")
@@ -112,7 +113,7 @@ def test_dry_run_select_full_set(tmp_path):
     assert "README.md" not in selected
 
 
-def test_sweep_repo_dry_run_does_not_mutate(tmp_path):
+def test_sweep_repo_dry_run_does_not_mutate(tmp_path: Path) -> None:
     root = str(tmp_path)
     _init_repo(root)
     _write(root, "state/subagent-share/abc/sidecar.md")
@@ -129,7 +130,7 @@ def test_sweep_repo_dry_run_does_not_mutate(tmp_path):
     assert "state/subagent-share/abc/sidecar.md" in result["selected"]
 
 
-def test_write_ignore_block_is_idempotent(tmp_path):
+def test_write_ignore_block_is_idempotent(tmp_path: Path) -> None:
     root = str(tmp_path)
     os.makedirs(root, exist_ok=True)
     first = _write_ignore_block(root)
@@ -141,7 +142,7 @@ def test_write_ignore_block_is_idempotent(tmp_path):
     assert content.count("state/subagent-share/") == 1
 
 
-def test_sweep_repo_mutate_relocates_and_untracks(tmp_path):
+def test_sweep_repo_mutate_relocates_and_untracks(tmp_path: Path) -> None:
     root = str(tmp_path)
     _init_repo(root)
     _write(root, "state/review-trail/findings/x.md")
@@ -168,13 +169,13 @@ def test_sweep_repo_mutate_relocates_and_untracks(tmp_path):
     assert status.stdout.strip() != ""
 
 
-def test_relocate_buckets_defers_on_existing_destination(tmp_path):
+def test_relocate_buckets_defers_on_existing_destination(tmp_path: Path) -> None:
     root = str(tmp_path)
     _write(root, "state/review-trail/findings/x.md")
     os.makedirs(os.path.join(root, ".coordinator-local", "review-trail"))
     _write(root, ".coordinator-local/review-trail/already-there.md")
 
-    def rename_fn(src, dst):
+    def rename_fn(src, dst) -> None:
         os.rename(src, dst)
 
     moved, deferred = _relocate_buckets(root, rename_fn, buckets=("state/review-trail/",))
@@ -191,7 +192,7 @@ def test_relocate_buckets_defers_on_existing_destination(tmp_path):
 # reached and reported as a genuine, permanent, non-retryable failure.
 # ---------------------------------------------------------------------------
 
-def test_relocate_buckets_records_permanent_oserror_as_deferred(tmp_path):
+def test_relocate_buckets_records_permanent_oserror_as_deferred(tmp_path: Path) -> None:
     root = str(tmp_path)
     _write(root, "state/ceremony/record.md")
 
@@ -204,6 +205,6 @@ def test_relocate_buckets_records_permanent_oserror_as_deferred(tmp_path):
     assert "Bad file descriptor" in deferred[0]["error"]
 
 
-def test_errno_13_is_a_permission_error_not_a_bare_oserror():
+def test_errno_13_is_a_permission_error_not_a_bare_oserror() -> None:
     exc = OSError(13, "Permission denied")
     assert isinstance(exc, PermissionError)

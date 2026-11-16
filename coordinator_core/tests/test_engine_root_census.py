@@ -16,13 +16,14 @@ import json
 import pytest
 
 from coordinator_core import engine_root, engine_root_census
+from pathlib import Path
 
 _DAY = 86400.0
 _NOW = 1_760_000_000.0
 
 
 @pytest.fixture
-def sink(tmp_path):
+def sink(tmp_path: Path) -> Path:
     return tmp_path / "settings-home"
 
 
@@ -34,7 +35,7 @@ def _census(sink, **kw):
 # --- observation counters --------------------------------------------------
 
 
-def test_missing_series_reports_no_observations(sink):
+def test_missing_series_reports_no_observations(sink) -> None:
     """No prior sink data reads as "never observed", not an error."""
     report = _census(sink)
     assert report["series_present"] is False
@@ -42,7 +43,7 @@ def test_missing_series_reports_no_observations(sink):
     assert report["days_since_last"] is None
 
 
-def test_a_read_inside_the_window_is_counted(sink):
+def test_a_read_inside_the_window_is_counted(sink) -> None:
     """A read inside the window is reflected in `reads_in_window` -- the
     stale-pin regression signal this module now exists to carry."""
     engine_root_census.record_fallback_read(
@@ -57,12 +58,12 @@ def test_a_read_inside_the_window_is_counted(sink):
     assert report["total_reads"] == 2
 
 
-def test_window_days_is_echoed_back(sink):
+def test_window_days_is_echoed_back(sink) -> None:
     """The N asked cannot be lost between call and report."""
     assert _census(sink, window_days=14)["window_days"] == 14
 
 
-def test_no_verdict_field_in_report(sink):
+def test_no_verdict_field_in_report(sink) -> None:
     """Regression test: `census()` must never re-grow a verdict field.
 
     C14 item 4 was discharged elsewhere (C23's three-leg ratchet, a proven
@@ -85,7 +86,7 @@ def test_no_verdict_field_in_report(sink):
 # --- the record side ------------------------------------------------------
 
 
-def test_record_appends_one_json_line_per_call(sink):
+def test_record_appends_one_json_line_per_call(sink) -> None:
     engine_root_census.record_fallback_read("a.site", sink_root=sink, now=_NOW)
     engine_root_census.record_fallback_read("b.site", sink_root=sink, now=_NOW)
 
@@ -99,7 +100,7 @@ def test_record_appends_one_json_line_per_call(sink):
     assert [json.loads(ln)["site"] for ln in lines] == ["a.site", "b.site"]
 
 
-def test_record_captures_the_root_that_answered(sink):
+def test_record_captures_the_root_that_answered(sink) -> None:
     """The 2026-08-20 measurement's real finding was the CAUSE, not the
     count -- every read traced to a hand-pinned old name. A recurrence
     should be self-diagnosing."""
@@ -112,7 +113,7 @@ def test_record_captures_the_root_that_answered(sink):
     assert entry["root"] == "C:/claude-klabauter"
 
 
-def test_record_never_raises_on_an_unwritable_sink(tmp_path):
+def test_record_never_raises_on_an_unwritable_sink(tmp_path: Path) -> None:
     """Negative-spec: this runs on the commit hot path. A sink whose parent
     is a FILE cannot be created, and that must degrade to "not recorded"."""
     blocker = tmp_path / "blocker"
@@ -121,7 +122,7 @@ def test_record_never_raises_on_an_unwritable_sink(tmp_path):
     engine_root_census.record_fallback_read("a.site", sink_root=blocker, now=_NOW)
 
 
-def test_census_never_raises_on_a_corrupt_series(sink):
+def test_census_never_raises_on_a_corrupt_series(sink) -> None:
     """A corrupt series degrades to what it can prove -- and critically
     NOT to a false clear."""
     path = engine_root_census.series_path(sink)
@@ -149,7 +150,7 @@ def test_census_never_raises_on_a_corrupt_series(sink):
     assert report["undatable_rows"] == 1
 
 
-def test_days_since_last_computes_the_real_elapsed_gap(sink):
+def test_days_since_last_computes_the_real_elapsed_gap(sink) -> None:
     """`days_since_last` must compute a real, non-None value off an actual
     recorded read, not just report None on an empty sink -- the only case
     the rest of the suite otherwise exercises."""
@@ -162,7 +163,7 @@ def test_days_since_last_computes_the_real_elapsed_gap(sink):
     assert report["days_since_last"] == pytest.approx(30.0)
 
 
-def test_sites_are_reported_per_site(sink):
+def test_sites_are_reported_per_site(sink) -> None:
     """C14's exit wants to know WHICH site still reads, not only that one
     does -- the 2026-08-20 measurement's value was the single named site."""
     engine_root_census.record_fallback_read("a.site", sink_root=sink, now=_NOW - _DAY)
@@ -181,7 +182,7 @@ def test_sites_are_reported_per_site(sink):
 # --- the wiring into the accessor ----------------------------------------
 
 
-def test_accessor_retired_name_read_reaches_the_sink(sink, monkeypatch):
+def test_accessor_retired_name_read_reaches_the_sink(sink, monkeypatch: pytest.MonkeyPatch) -> None:
     """The hook and the sink fire together, so the sink cannot silently stop
     tracking the advisory.
 
@@ -207,7 +208,7 @@ def test_accessor_retired_name_read_reaches_the_sink(sink, monkeypatch):
     )
 
 
-def test_accessor_records_once_per_site_per_process(sink, monkeypatch):
+def test_accessor_records_once_per_site_per_process(sink, monkeypatch: pytest.MonkeyPatch) -> None:
     """The sink inherits the advisory's dedupe rather than adding a write
     per read -- the cost property that keeps this off the hot path's
     budget."""
@@ -227,7 +228,7 @@ def test_accessor_records_once_per_site_per_process(sink, monkeypatch):
     assert recorded == ["test.site"]
 
 
-def test_new_name_winning_records_nothing(sink, monkeypatch):
+def test_new_name_winning_records_nothing(sink, monkeypatch: pytest.MonkeyPatch) -> None:
     """A read answered by the new name is convergence. Recording it would
     drown the stale-pin signal this sink now exists to carry."""
     recorded = []
@@ -244,7 +245,7 @@ def test_new_name_winning_records_nothing(sink, monkeypatch):
     assert recorded == []
 
 
-def test_a_code_defect_is_reported_once_not_swallowed(tmp_path, monkeypatch, capsys):
+def test_a_code_defect_is_reported_once_not_swallowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     import coordinator_core.engine_root_census as census_mod
 
     monkeypatch.setattr(census_mod, "_DEFECT_REPORTED", False)

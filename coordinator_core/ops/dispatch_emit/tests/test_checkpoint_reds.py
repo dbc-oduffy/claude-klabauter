@@ -6,19 +6,20 @@ import yaml
 
 from coordinator_core.ipc import get_op_handler
 from coordinator_core.ops.dispatch_emit import checkpoint_reds as cr
+from pathlib import Path
 
 
-def test_classify_splits_base_red_from_introduced():
+def test_classify_splits_base_red_from_introduced() -> None:
     out = cr.classify(["a", "b"], base_red={"a"})
     assert out == [{"id": "a", "class": "red_at_base"}, {"id": "b", "class": "introduced"}]
 
 
-def test_classify_normalises_backslashes_and_dedups():
+def test_classify_normalises_backslashes_and_dedups() -> None:
     out = cr.classify(["t\\x.py::a", "t/x.py::a"], base_red={"t/x.py::a"})
     assert out == [{"id": "t/x.py::a", "class": "red_at_base"}]
 
 
-def test_mint_writes_schema_valid_open_row_and_reuses_it(tmp_path):
+def test_mint_writes_schema_valid_open_row_and_reuses_it(tmp_path: Path) -> None:
     rows = cr.mint_fix_rows(tmp_path, "run-1", ["t/x.py::b"])
     assert len(rows) == 1
     data = yaml.safe_load((tmp_path / rows[0]["path"]).read_text(encoding="utf-8"))
@@ -32,7 +33,7 @@ def test_mint_writes_schema_valid_open_row_and_reuses_it(tmp_path):
     assert len(list((tmp_path / cr.BUG_HOME).iterdir())) == 1
 
 
-def test_open_rows_list_until_closed(tmp_path):
+def test_open_rows_list_until_closed(tmp_path: Path) -> None:
     rows = cr.mint_fix_rows(tmp_path, "run-1", ["t/x.py::b"])
     assert [r["test_id"] for r in cr.open_introduced_fix_rows(tmp_path)] == ["t/x.py::b"]
     path = tmp_path / rows[0]["path"]
@@ -42,20 +43,20 @@ def test_open_rows_list_until_closed(tmp_path):
     assert fresh[0]["path"] != rows[0]["path"]
 
 
-def test_non_introduced_rows_are_not_listed(tmp_path):
+def test_non_introduced_rows_are_not_listed(tmp_path: Path) -> None:
     home = tmp_path / cr.BUG_HOME
     home.mkdir(parents=True)
     (home / "2026-01-01-other-aaaaaaaaaaaa.yaml").write_text("status: open\n", encoding="utf-8")
     assert cr.open_introduced_fix_rows(tmp_path) == []
 
 
-def test_commit_lines_lists_each_red_and_fix_rows():
+def test_commit_lines_lists_each_red_and_fix_rows() -> None:
     block = cr.commit_lines(cr.classify(["a", "b"], {"a"}), ["abc123abc123"])
     assert "red: a (red_at_base)" in block and "red: b (introduced)" in block and "abc123abc123" in block
     assert cr.commit_lines([], []) == ""
 
 
-def test_handler_end_to_end_mints_only_introduced(tmp_path):
+def test_handler_end_to_end_mints_only_introduced(tmp_path: Path) -> None:
     handler = get_op_handler(cr.OP_NAME)
     reply = handler({"run_id": "r", "failing": ["a", "b"], "base_red": ["a"]}, repo_root=tmp_path)
     assert reply["ok"] and len(reply["fix_ids"]) == 1 and len(reply["fix_paths"]) == 1
@@ -65,5 +66,5 @@ def test_handler_end_to_end_mints_only_introduced(tmp_path):
     assert clean["ok"] and clean["fix_ids"] == []
 
 
-def test_handler_refuses_missing_run_id(tmp_path):
+def test_handler_refuses_missing_run_id(tmp_path: Path) -> None:
     assert get_op_handler(cr.OP_NAME)({"failing": ["a"]}, repo_root=tmp_path)["ok"] is False

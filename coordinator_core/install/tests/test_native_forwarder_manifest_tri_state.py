@@ -22,9 +22,11 @@ from coordinator_core.install.substrate import (
     _union_native_forwarder_manifest,
     _write_native_forwarder_manifest,
 )
+from pathlib import Path
+import pytest
 
 
-def test_absent_manifest_is_measured_empty(tmp_path):
+def test_absent_manifest_is_measured_empty(tmp_path: Path) -> None:
     """The normal pre-C5 state -- no manifest ever written -- is
     `measured=True`, never confused with a read that failed."""
     state = _read_native_forwarder_manifest_state(tmp_path)
@@ -33,7 +35,7 @@ def test_absent_manifest_is_measured_empty(tmp_path):
     assert _read_native_forwarder_manifest(tmp_path) == set()
 
 
-def test_valid_empty_manifest_is_measured_empty(tmp_path):
+def test_valid_empty_manifest_is_measured_empty(tmp_path: Path) -> None:
     _write_native_forwarder_manifest(tmp_path, set())
 
     state = _read_native_forwarder_manifest_state(tmp_path)
@@ -41,7 +43,7 @@ def test_valid_empty_manifest_is_measured_empty(tmp_path):
     assert state == NativeForwarderManifestRead(frozenset(), True)
 
 
-def test_valid_nonempty_manifest_is_measured(tmp_path):
+def test_valid_nonempty_manifest_is_measured(tmp_path: Path) -> None:
     _write_native_forwarder_manifest(tmp_path, {"cross-repo-memo"})
 
     state = _read_native_forwarder_manifest_state(tmp_path)
@@ -49,7 +51,7 @@ def test_valid_nonempty_manifest_is_measured(tmp_path):
     assert state == NativeForwarderManifestRead(frozenset({"cross-repo-memo"}), True)
 
 
-def test_malformed_json_is_unmeasured(tmp_path):
+def test_malformed_json_is_unmeasured(tmp_path: Path) -> None:
     path = _native_forwarder_manifest_path(tmp_path)
     path.write_text("not json{{{", encoding="utf-8")
 
@@ -62,7 +64,7 @@ def test_malformed_json_is_unmeasured(tmp_path):
     assert _read_native_forwarder_manifest(tmp_path) == set()
 
 
-def test_names_field_wrong_shape_is_unmeasured(tmp_path):
+def test_names_field_wrong_shape_is_unmeasured(tmp_path: Path) -> None:
     path = _native_forwarder_manifest_path(tmp_path)
     path.write_text('{"names": "not-a-list"}', encoding="utf-8")
 
@@ -71,7 +73,7 @@ def test_names_field_wrong_shape_is_unmeasured(tmp_path):
     assert state.measured is False
 
 
-def test_unreadable_existing_path_is_unmeasured(tmp_path):
+def test_unreadable_existing_path_is_unmeasured(tmp_path: Path) -> None:
     """A manifest path that exists but cannot be read as a file (e.g. it is
     a directory) is unmeasured, not "absent"."""
     path = _native_forwarder_manifest_path(tmp_path)
@@ -82,7 +84,7 @@ def test_unreadable_existing_path_is_unmeasured(tmp_path):
     assert state.measured is False
 
 
-def test_union_skips_write_on_unmeasured_read_rather_than_truncating(tmp_path):
+def test_union_skips_write_on_unmeasured_read_rather_than_truncating(tmp_path: Path) -> None:
     """The defect this row exists to fix: naively treating an unreadable
     manifest as empty and unioning into it would OVERWRITE the manifest
     with only this run's partial write set, silently dropping every
@@ -98,7 +100,7 @@ def test_union_skips_write_on_unmeasured_read_rather_than_truncating(tmp_path):
     assert path.read_text(encoding="utf-8") == "not json{{{"
 
 
-def test_union_still_unions_on_a_measured_read(tmp_path):
+def test_union_still_unions_on_a_measured_read(tmp_path: Path) -> None:
     _write_native_forwarder_manifest(tmp_path, {"already-recorded-cli"})
 
     _union_native_forwarder_manifest(tmp_path, {"newly-written-cli"})
@@ -109,7 +111,7 @@ def test_union_still_unions_on_a_measured_read(tmp_path):
     }
 
 
-def test_door_owned_slot_unaffected_by_manifest_shape_signature(tmp_path, monkeypatch):
+def test_door_owned_slot_unaffected_by_manifest_shape_signature(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`_is_door_owned_forwarder_slot` keeps its pre-existing boolean-only
     return (other callers rely on it, e.g.
     `test_report_reads_a_cut_over_bin_correctly.py`); this row exposes
@@ -137,7 +139,7 @@ def test_door_owned_slot_unaffected_by_manifest_shape_signature(tmp_path, monkey
     assert state.measured is False
 
 
-def test_door_owned_slot_true_on_a_clean_manifest_match(tmp_path, monkeypatch):
+def test_door_owned_slot_true_on_a_clean_manifest_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.install import settings_home_report
 
     bin_dir = tmp_path
@@ -157,7 +159,7 @@ def test_door_owned_slot_true_on_a_clean_manifest_match(tmp_path, monkeypatch):
     assert state.measured is True
 
 
-def test_check_settings_home_surfaces_manifest_unmeasured(tmp_path, monkeypatch):
+def test_check_settings_home_surfaces_manifest_unmeasured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """End-to-end through the reporting surface: an unmeasured manifest for
     a name this check cannot otherwise confirm door-owned lands in
     `native_forwarder_manifest_unmeasured`, not silently folded into

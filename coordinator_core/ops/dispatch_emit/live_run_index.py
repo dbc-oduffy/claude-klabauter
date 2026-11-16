@@ -32,6 +32,10 @@ INDEX_FILE = "coordinator-warp-live-run-index.json"
 CLAIMS_DIR = "coordinator-warp-live-claims"
 SCHEMA = "live-run-index/1"
 WRITE_DEADLINE_MS = 2000.0
+# Above this many paths a claim goes through the locked index alone: the locked `apply` already makes
+# check-and-claim atomic against every claimer, markers only cover a failed lock, and one file per path
+# is the per-row cost of a very large footprint.
+MARKER_CLAIM_MAX_PATHS = 256
 
 _write_lock = threading.Lock()
 
@@ -108,14 +112,24 @@ def claim(
     if path is None:
         return None
     mine = sorted({w for w in writes if isinstance(w, str) and w})
-    over = ended if ended is not None else lambda rid: run_holds_no_claim(Path(root), rid)
+    judge = ended if ended is not None else lambda rid: run_holds_no_claim(Path(root), rid)
+    judged: dict[str, bool] = {}
+
+    def over(rid: str) -> bool:
+        # One verdict per holder per claim: a holder with many colliding paths is read once.
+        if rid not in judged:
+            judged[rid] = bool(judge(rid))
+        return judged[rid]
+
     claims = _claims_dir(path)
     created: list[Path] = []
-    try:
-        hits = _claim_markers(claims, run_id, mine, over, created)
-    except OSError:
-        _unlink_all(created)
-        return None
+    hits: dict[str, list[str]] = {}
+    if len(mine) <= MARKER_CLAIM_MAX_PATHS:
+        try:
+            hits = _claim_markers(claims, run_id, mine, over, created)
+        except OSError:
+            _unlink_all(created)
+            return None
     if hits:
         _unlink_all(created)
         return hits
@@ -163,17 +177,31 @@ def _epoch(stamp: object) -> Optional[float]:
         return None
 
 
-def run_is_stale(root: Union[str, Path], run_id: str, now: Optional[float] = None) -> bool:
+def _run_records(root: Path, run_id: str, shared: Optional[dict]) -> tuple[dict, dict]:
+    """`(token record, submission)` for the run; read once per `shared` dict when the caller passes one."""
+    from coordinator_core.ops.dispatch_emit import run_token
+
+    if shared is not None and "recs" in shared:
+        return shared["recs"]
+    recs = (
+        run_token._read_rec(root, run_id) or {},
+        warp_live._read_json(warp_live._submission_path(root, run_id)) or {},
+    )
+    if shared is not None:
+        shared["recs"] = recs
+    return recs
+
+
+def run_is_stale(
+    root: Union[str, Path], run_id: str, now: Optional[float] = None, _shared: Optional[dict] = None
+) -> bool:
     """True when the run's owner session has exited (`warp_live._owner_exited`) and its last activity
     (`run-stage.json` `last_activity_at`, else the token's or index entry's `minted_at`, else the stage's
     `started_at`/`staged_at`) is more than `STALE_RUN_SECONDS` old. The owner is the submission's, else the
     token's, else `run-stage.json`'s `session_id`. An unknown owner or an unknown activity time answers False; never raises."""
     try:
-        from coordinator_core.ops.dispatch_emit import run_token
-
         root = Path(root)
-        record = run_token._read_rec(root, run_id) or {}
-        submission = warp_live._read_json(warp_live._submission_path(root, run_id)) or {}
+        record, submission = _run_records(root, run_id, _shared)
         stage = warp_live._read_json(warp_live._ask_record_dir(root, run_id) / "run-stage.json") or {}
         owner = submission.get("session_id") or record.get("session_id") or stage.get("session_id")
         if not (isinstance(owner, str) and owner):
@@ -196,21 +224,18 @@ def run_is_stale(root: Union[str, Path], run_id: str, now: Optional[float] = Non
         return False
 
 
-def run_is_abandoned(root: Union[str, Path], run_id: str) -> bool:
+def run_is_abandoned(root: Union[str, Path], run_id: str, _shared: Optional[dict] = None) -> bool:
     """True when the run's `run-stage.json` stage is `staged`, it holds no `halted.json` marker, and its
     owner session (submission, else token record, else `run-stage.json` `session_id`) has exited (`warp_live._owner_exited`); no age
     requirement. An unknown owner, a live owner, a halted or unstaged run answers False; never raises.
     Reads only this run's records, so call it for overlap hits, never across the index."""
     try:
-        from coordinator_core.ops.dispatch_emit import run_token
-
         root = Path(root)
         record_dir = warp_live._ask_record_dir(root, run_id)
         stage = warp_live._read_json(record_dir / "run-stage.json") or {}
         if stage.get("stage") != "staged" or (record_dir / warp_live._HALTED_FILE).exists():
             return False
-        record = run_token._read_rec(root, run_id) or {}
-        submission = warp_live._read_json(warp_live._submission_path(root, run_id)) or {}
+        record, submission = _run_records(root, run_id, _shared)
         owner = submission.get("session_id") or record.get("session_id") or stage.get("session_id")
         if not (isinstance(owner, str) and owner):
             return False
@@ -234,7 +259,8 @@ def run_holds_no_claim(root: Union[str, Path], run_id: str) -> bool:
             return True
     except Exception:  # noqa: BLE001
         pass
-    return run_is_abandoned(root, run_id) or run_is_stale(root, run_id)
+    shared: dict = {}
+    return run_is_abandoned(root, run_id, _shared=shared) or run_is_stale(root, run_id, _shared=shared)
 
 
 def _claims_dir(index_file: Path) -> Path:
@@ -253,7 +279,8 @@ def _read_marker(p: Path) -> Optional[tuple[str, str]]:
     """(run_id, path) of a claim marker; None when gone or still unwritten after a short wait."""
     for _ in range(10):
         try:
-            data = json.loads(p.read_bytes().decode("utf-8"))
+            with open(p, "rb") as fh:
+                data = json.loads(fh.read().decode("utf-8"))
             return str(data["run"]), str(data["path"])
         except FileNotFoundError:
             return None
@@ -305,7 +332,10 @@ def _claim_markers(
             break
     held: dict[str, set[str]] = {}
     markers: dict[Path, str] = {}
+    just_written = {c.name for c in created}
     for p in claims.iterdir():
+        if p.name in just_written:
+            continue
         read_back = _read_marker(p)
         if read_back is None:
             if p.name in wanted and not p.exists():

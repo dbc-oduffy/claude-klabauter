@@ -70,7 +70,7 @@ _fail_on_live_registry_write = pytest.fixture(autouse=True)(fail_on_live_registr
 # regardless of the box, matching `coordinator/bin/conftest.py`'s existing
 # pin for its own tree.
 @pytest.fixture(autouse=True)
-def _pin_warm_disabled_for_cli_driving_tests(monkeypatch):
+def _pin_warm_disabled_for_cli_driving_tests(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_WARM", "0")
 
 
@@ -80,7 +80,7 @@ def _pin_warm_disabled_for_cli_driving_tests(monkeypatch):
 # process-wide env reaches every real repo's git child and gates the
 # in-process snapshot path.
 @pytest.fixture(autouse=True)
-def _temp_repos_sign_off_locally(monkeypatch, tmp_path_factory):
+def _temp_repos_sign_off_locally(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
     template = tmp_path_factory.mktemp("git-template")
     (template / "config").write_text(
         "[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n"

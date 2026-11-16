@@ -154,8 +154,8 @@ def _cmd_repomap_gate(args: argparse.Namespace) -> int:
     """Delegates to `updatedocs_gates._gate_repomap`.
 
     Exit codes:
-      0 — repomap skipped (RAG fresh) or generated (GateVerdict.CLEAN).
-      1 — regeneration ran and failed (GateVerdict.FINDING).
+      0 — repomap skipped (RAG fresh) or regeneration started detached (GateVerdict.CLEAN).
+      1 — a gate FINDING verdict (the repomap gate no longer returns one).
       2 — the gate could not run: generate-repomap.py unresolvable or could
           not be spawned (GateVerdict.UNAVAILABLE); summary goes to stderr.
     """

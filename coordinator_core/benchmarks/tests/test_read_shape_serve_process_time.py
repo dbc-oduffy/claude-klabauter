@@ -78,6 +78,7 @@ from coordinator_core.benchmarks.process_time import (
 from coordinator_core.search.answer import answer
 from coordinator_core.search.engine import MAX_RENDER_BYTES
 from coordinator_core.search.tests._posix_shell import POSIX_SHELL, requires_posix_shell
+from pathlib import Path
 
 K_SUBPROCESS = 20
 """Matches `bash_dispatch_probe.K_INVOCATIONS` -- the amortisation factor
@@ -116,7 +117,7 @@ def _cmd_path(path) -> str:
 
 
 @pytest.fixture()
-def decline_corpus(tmp_path):
+def decline_corpus(tmp_path: Path) -> dict[str, str]:
     """Read-shaped commands that ultimately decline, spanning both decline
     stages `answer()` can hit -- not just non-matching commands (a command
     whose first token is not in `READ_VERBS` at all costs nothing extra by
@@ -151,7 +152,7 @@ def decline_corpus(tmp_path):
         "glob_operand",
     ],
 )
-def test_declining_read_shape_process_time_corpus(decline_corpus, tmp_path, label):
+def test_declining_read_shape_process_time_corpus(decline_corpus, tmp_path: Path, label) -> None:
     cmd = decline_corpus[label]
     assert answer(cmd, cwd=str(tmp_path)) is None, (
         f"{label}: expected this row to decline (return None), it did not -- "
@@ -169,7 +170,7 @@ def test_declining_read_shape_process_time_corpus(decline_corpus, tmp_path, labe
     [100, 2_000, 20_000, MAX_RENDER_BYTES - 1],
     ids=["100b", "2kb", "20kb", "at_cap_minus_1"],
 )
-def test_serve_cost_stays_under_ceiling_up_to_the_render_cap(tmp_path, size_bytes):
+def test_serve_cost_stays_under_ceiling_up_to_the_render_cap(tmp_path: Path, size_bytes) -> None:
     path = tmp_path / "served.txt"
     _write(str(path), b"a" * size_bytes)
     cmd = "cat %s" % _cmd_path(path)
@@ -188,7 +189,7 @@ def test_serve_cost_stays_under_ceiling_up_to_the_render_cap(tmp_path, size_byte
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @requires_posix_shell
-def test_serve_cost_stays_far_under_the_fork_it_replaces_at_the_render_cap(tmp_path):
+def test_serve_cost_stays_far_under_the_fork_it_replaces_at_the_render_cap(tmp_path: Path) -> None:
     _require_supported_platform()
     path = tmp_path / "at_cap.txt"
     _write(str(path), b"a" * (MAX_RENDER_BYTES - 1))
@@ -211,7 +212,7 @@ def test_serve_cost_stays_far_under_the_fork_it_replaces_at_the_render_cap(tmp_p
     )
 
 
-def test_decline_above_the_render_cap_is_flat_regardless_of_how_far_over(tmp_path):
+def test_decline_above_the_render_cap_is_flat_regardless_of_how_far_over(tmp_path: Path) -> None:
     just_over = tmp_path / "just_over.txt"
     _write(str(just_over), b"a" * (MAX_RENDER_BYTES + 1))
     far_over = tmp_path / "far_over.txt"

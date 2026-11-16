@@ -5,6 +5,7 @@ from __future__ import annotations
 from coordinator_core.ops.dispatch_emit.sizing_fire import _drop_em_discharged
 from coordinator_core.ops.dispatch_emit.spine_read import load_rows_memo
 from coordinator_core.ops.plan_tasks_mutate import evidence_sidecar_path
+from pathlib import Path
 
 _PLAN = """---
 run_id: fixture
@@ -45,16 +46,16 @@ def _setup(tmp_path, discharged):
     return plan, text, list(load_rows_memo(text).rows)
 
 
-def test_a_discharged_derived_em_row_drops_from_open_ids(tmp_path):
+def test_a_discharged_derived_em_row_drops_from_open_ids(tmp_path: Path) -> None:
     plan, text, rows = _setup(tmp_path, ["B1"])
     assert _drop_em_discharged(plan, text, rows, ["B1", "C1"]) == ["C1"]
 
 
-def test_an_undischarged_derived_em_row_stays_open(tmp_path):
+def test_an_undischarged_derived_em_row_stays_open(tmp_path: Path) -> None:
     plan, text, rows = _setup(tmp_path, [])
     assert _drop_em_discharged(plan, text, rows, ["B1", "C1"]) == ["B1", "C1"]
 
 
-def test_a_discharge_entry_for_a_plain_agent_row_does_not_drop_it(tmp_path):
+def test_a_discharge_entry_for_a_plain_agent_row_does_not_drop_it(tmp_path: Path) -> None:
     plan, text, rows = _setup(tmp_path, ["C1"])
     assert _drop_em_discharged(plan, text, rows, ["B1", "C1"]) == ["B1", "C1"]

@@ -9,10 +9,11 @@ import logging
 import pytest
 
 from coordinator_core.session import scope
+from pathlib import Path
 
 
 @pytest.fixture
-def calls(monkeypatch):
+def calls(monkeypatch: pytest.MonkeyPatch):
     seen: list[tuple] = []
     monkeypatch.setattr(
         scope,
@@ -22,23 +23,23 @@ def calls(monkeypatch):
     return seen
 
 
-def test_releases_under_the_given_sid(calls, tmp_path):
+def test_releases_under_the_given_sid(calls, tmp_path: Path) -> None:
     scope.release_committed_claims_or_retain(tmp_path, iter(["a.md", "b.md"]), "s1", "x")
     assert calls == [("s1", ["a.md", "b.md"], str(tmp_path))]
 
 
 @pytest.mark.parametrize("sid", [None, ""])
-def test_falsy_sid_skips_without_releasing(calls, tmp_path, sid):
+def test_falsy_sid_skips_without_releasing(calls, tmp_path: Path, sid) -> None:
     scope.release_committed_claims_or_retain(tmp_path, ["a.md"], sid, "x")
     assert calls == []
 
 
-def test_empty_paths_is_a_noop(calls, tmp_path):
+def test_empty_paths_is_a_noop(calls, tmp_path: Path) -> None:
     scope.release_committed_claims_or_retain(tmp_path, [], "s1", "x")
     assert calls == []
 
 
-def test_release_failure_is_retained_and_logged(monkeypatch, tmp_path, caplog):
+def test_release_failure_is_retained_and_logged(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     def boom(sid, paths, cwd=None):
         raise RuntimeError("git gone")
 
@@ -48,7 +49,7 @@ def test_release_failure_is_retained_and_logged(monkeypatch, tmp_path, caplog):
     assert "my_route: release_committed_claims failed post-commit" in caplog.text
 
 
-def _agent(base, agent_id, owner, path):
+def _agent(base, agent_id, owner, path) -> None:
     from pathlib import Path
 
     from coordinator_core.session import touch_record
@@ -66,7 +67,7 @@ def _agent(base, agent_id, owner, path):
 
 
 @pytest.fixture
-def agent_world(tmp_path, monkeypatch):
+def agent_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, str, list[str]]:
     from coordinator_core.session import claim_index, core
 
     base = str(tmp_path / "coordinator-sessions")
@@ -87,7 +88,7 @@ def agent_world(tmp_path, monkeypatch):
     return tmp_path, base, opened
 
 
-def test_named_paths_release_opens_only_indexed_sinks(agent_world):
+def test_named_paths_release_opens_only_indexed_sinks(agent_world) -> None:
     from coordinator_core.session import claim_index
 
     tmp_path, base, opened = agent_world
@@ -99,14 +100,14 @@ def test_named_paths_release_opens_only_indexed_sinks(agent_world):
     }
 
 
-def test_full_release_still_scans_every_owned_agent_dir(agent_world):
+def test_full_release_still_scans_every_owned_agent_dir(agent_world) -> None:
     tmp_path, _base, opened = agent_world
     scope.release_all_committed_claims("em", cwd=str(tmp_path))
     agent_sinks = [s for s in opened if "/.agents/" in s]
     assert {s.split("/.agents/")[1].split("/")[0] for s in agent_sinks} == {"a-hit", "a-other-path"}
 
 
-def test_absent_index_falls_back_to_scan(agent_world):
+def test_absent_index_falls_back_to_scan(agent_world) -> None:
     import shutil
 
     from coordinator_core.session import touch_record
@@ -117,7 +118,7 @@ def test_absent_index_falls_back_to_scan(agent_world):
     assert any("/a-hit/" in s for s in opened)
 
 
-def test_path_generator_failure_is_retained(calls, tmp_path):
+def test_path_generator_failure_is_retained(calls, tmp_path: Path) -> None:
     def bad_paths():
         yield "a.md"
         raise ValueError("outside root")

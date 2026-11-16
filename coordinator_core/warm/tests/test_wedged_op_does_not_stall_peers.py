@@ -10,6 +10,7 @@ import time
 import pytest
 
 from coordinator_core.warm import server
+from pathlib import Path
 
 _RELEASE = threading.Event()
 
@@ -32,12 +33,12 @@ def _ctx(tmp_path, workers):
     return ctx
 
 
-def _msg(method, i=1):
+def _msg(method, i: int = 1):
     return {"jsonrpc": "2.0", "id": i, "method": method, "params": {}}
 
 
 @pytest.mark.deliberate_wall_clock(reason="stall bound: light ops answer while heavy slots block forever, which burns no CPU")
-def test_light_ops_answer_while_every_heavy_slot_is_wedged(tmp_path, monkeypatch):
+def test_light_ops_answer_while_every_heavy_slot_is_wedged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "DISPATCH_PROCESS_POOL_SIZE", 2)
     monkeypatch.setattr(server, "_pool_dispatch_worker_body", _body)
     monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", 20.0)
@@ -63,7 +64,7 @@ def test_light_ops_answer_while_every_heavy_slot_is_wedged(tmp_path, monkeypatch
         ctx._dispatch_pool.shutdown(wait=False, cancel_futures=True)
 
 
-def test_a_heavy_op_still_queues_behind_wedged_heavy_slots():
+def test_a_heavy_op_still_queues_behind_wedged_heavy_slots() -> None:
     gate = server._AdmissionGate(1, 2)
     assert gate.acquire(True, 0.0) == 0.0
     assert gate.acquire(True, 0.05) is None
@@ -71,7 +72,7 @@ def test_a_heavy_op_still_queues_behind_wedged_heavy_slots():
     assert gate.acquire(True, 0.05, light=True) == 0.0
 
 
-def test_budget_crossing_stall_names_dump_or_absent_reason():
+def test_budget_crossing_stall_names_dump_or_absent_reason() -> None:
     data: dict = {"diagnosis": {"stall_dump": "/x/a.txt"}}
     server._name_stall_dump(data, "Stall dump: /x/a.txt.")
     assert data["stall_dump"] == "/x/a.txt" and "stall_dump_absent_reason" not in data
@@ -82,12 +83,12 @@ def test_budget_crossing_stall_names_dump_or_absent_reason():
     assert "stall_dump" not in data
 
 
-def test_stall_dump_arms_inside_a_short_op_budget():
+def test_stall_dump_arms_inside_a_short_op_budget() -> None:
     assert server._stall_arm_secs(6.0) == 3.0
     assert server._stall_arm_secs(28.0) == server.STALL_DUMP_SECS
 
 
-def test_timed_out_running_op_error_data_names_its_dump(tmp_path, monkeypatch):
+def test_timed_out_running_op_error_data_names_its_dump(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "DISPATCH_PROCESS_POOL_SIZE", 2)
     monkeypatch.setattr(server, "_pool_dispatch_worker_body", _body)
     monkeypatch.setattr(server, "_withdrawal_deadline_secs", lambda *_a, **_k: 0.3)
@@ -104,7 +105,7 @@ def test_timed_out_running_op_error_data_names_its_dump(tmp_path, monkeypatch):
         assert data["stall_dump"] in out["error"]["message"]
 
 
-def test_thread_stacks_render_without_faulthandler_file_writes(monkeypatch):
+def test_thread_stacks_render_without_faulthandler_file_writes(monkeypatch: pytest.MonkeyPatch) -> None:
     import faulthandler
 
     monkeypatch.setattr(faulthandler, "dump_traceback", lambda **kw: (_ for _ in ()).throw(AssertionError("GIL-held fd write")))
@@ -113,7 +114,7 @@ def test_thread_stacks_render_without_faulthandler_file_writes(monkeypatch):
     assert "_render_all_thread_stacks" in text
 
 
-def test_stall_record_survives_a_blocking_temp_dir(tmp_path, monkeypatch):
+def test_stall_record_survives_a_blocking_temp_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import tempfile
 
     monkeypatch.setattr(tempfile, "TemporaryFile", lambda *a, **k: (_ for _ in ()).throw(AssertionError("temp file used")))
@@ -128,7 +129,7 @@ def _isolated_ctx(tmp_path):
     return ctx
 
 
-def test_hook_class_op_runs_in_the_guard_pool_and_heavy_op_in_the_main_pool(tmp_path, monkeypatch):
+def test_hook_class_op_runs_in_the_guard_pool_and_heavy_op_in_the_main_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "_pool_dispatch_worker_body", lambda msg, caller: {"jsonrpc": "2.0", "id": 1, "result": {"pool": threading.current_thread().name}})
     ctx = _isolated_ctx(tmp_path)
     try:
@@ -142,7 +143,7 @@ def test_hook_class_op_runs_in_the_guard_pool_and_heavy_op_in_the_main_pool(tmp_
         ctx._guard_pool.shutdown(wait=False, cancel_futures=True)
 
 
-def test_recycling_the_stalled_heavy_pool_leaves_an_in_flight_guard_op_alone(tmp_path, monkeypatch):
+def test_recycling_the_stalled_heavy_pool_leaves_an_in_flight_guard_op_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "STALL_DUMP_SECS", 0.01)
     monkeypatch.setattr(server, "DISPATCH_PROCESS_POOL_SIZE", 1)
     ctx = _isolated_ctx(tmp_path)
@@ -165,7 +166,7 @@ def test_recycling_the_stalled_heavy_pool_leaves_an_in_flight_guard_op_alone(tmp
         old_guard.shutdown(wait=False, cancel_futures=True)
 
 
-def _wait_for_records(stall_dir, count=1, secs=5.0):
+def _wait_for_records(stall_dir, count: int = 1, secs: float = 5.0):
     end = time.monotonic() + secs
     while time.monotonic() < end:
         found = sorted(stall_dir.glob("*.txt")) if stall_dir.exists() else []
@@ -187,13 +188,13 @@ def _accept_stall(tmp_path, monkeypatch, phase):
     return marks, records
 
 
-def test_an_accept_stall_in_the_gate_phase_adds_no_mark_but_still_writes_an_io_wait_record(tmp_path, monkeypatch):
+def test_an_accept_stall_in_the_gate_phase_adds_no_mark_but_still_writes_an_io_wait_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     marks, records = _accept_stall(tmp_path, monkeypatch, "gate")
     assert marks == []
     assert records and "stall-class: io-wait" in records[0].read_text(encoding="utf-8").splitlines()[0]
 
 
-def test_an_accept_stall_in_the_submit_phase_still_marks_and_stays_unclassed(tmp_path, monkeypatch):
+def test_an_accept_stall_in_the_submit_phase_still_marks_and_stays_unclassed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     marks, records = _accept_stall(tmp_path, monkeypatch, "submit")
     assert len(marks) == 1
     assert records and "stall-class" not in records[0].read_text(encoding="utf-8")
@@ -213,19 +214,19 @@ def _worker_stall(tmp_path, monkeypatch, probe_ms):
     return marks, records
 
 
-def test_a_worker_stalled_on_a_slow_drive_is_not_marked_and_its_record_says_io_wait(tmp_path, monkeypatch):
+def test_a_worker_stalled_on_a_slow_drive_is_not_marked_and_its_record_says_io_wait(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     marks, records = _worker_stall(tmp_path, monkeypatch, server._SLOW_DRIVE_PROBE_MS + 1)
     assert marks == []
     assert records and records[0].read_text(encoding="utf-8").splitlines()[0] == "stall-class: io-wait"
 
 
-def test_a_worker_stalled_on_a_healthy_drive_is_marked_and_unclassed(tmp_path, monkeypatch):
+def test_a_worker_stalled_on_a_healthy_drive_is_marked_and_unclassed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     marks, records = _worker_stall(tmp_path, monkeypatch, 1.0)
     assert len(marks) == 1
     assert records and "stall-class" not in records[0].read_text(encoding="utf-8")
 
 
-def test_a_context_without_a_guard_pool_keeps_one_shared_pool(tmp_path, monkeypatch):
+def test_a_context_without_a_guard_pool_keeps_one_shared_pool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "_pool_dispatch_worker_body", lambda msg, caller: {"jsonrpc": "2.0", "id": 1, "result": {"pool": threading.current_thread().name}})
     ctx = _ctx(tmp_path, 2)
     ctx._dispatch_pool.shutdown(wait=False)

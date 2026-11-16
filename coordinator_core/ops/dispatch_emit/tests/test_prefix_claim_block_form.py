@@ -6,50 +6,51 @@ from types import SimpleNamespace
 
 from coordinator_core.ops.dispatch_emit import land_run, land_run_halt, terminal_commit_ledger
 from coordinator_core.ops.dispatch_emit.commit_request import parse_prefix_claims
+from pathlib import Path
 
 
-def test_block_form_returns_every_path():
+def test_block_form_returns_every_path() -> None:
     text = "DONE: C1\ncreated-under-prefix:\ndocs/decisions/a.md\n- `docs/decisions/b.md`\n\nNotes: x\n"
     assert parse_prefix_claims(text) == ["docs/decisions/a.md", "docs/decisions/b.md"]
 
 
-def test_single_line_form_unchanged():
+def test_single_line_form_unchanged() -> None:
     assert parse_prefix_claims("created-under-prefix: docs/x/a.md\n") == ["docs/x/a.md"]
 
 
-def test_mixed_single_line_and_block():
+def test_mixed_single_line_and_block() -> None:
     text = "created-under-prefix: docs/x/a.md\ncreated-under-prefix:\ndocs/x/b.md\ndocs/x/c.md\n"
     assert parse_prefix_claims(text) == ["docs/x/a.md", "docs/x/b.md", "docs/x/c.md"]
 
 
-def test_block_ended_by_next_field():
+def test_block_ended_by_next_field() -> None:
     text = "created-under-prefix:\ndocs/x/a.md\nNotes: docs/x/not-a-claim.md\ndocs/x/also-not.md\n"
     assert parse_prefix_claims(text) == ["docs/x/a.md"]
 
 
-def test_block_ended_by_status_line():
+def test_block_ended_by_status_line() -> None:
     text = "created-under-prefix:\ndocs/x/a.md\nDONE\ndocs/x/not-a-claim.md\n"
     assert parse_prefix_claims(text) == ["docs/x/a.md"]
 
 
-def test_block_ended_by_blank_line():
+def test_block_ended_by_blank_line() -> None:
     assert parse_prefix_claims("created-under-prefix:\ndocs/x/a.md\n\ndocs/x/no.md\n") == ["docs/x/a.md"]
 
 
-def test_none_claims_nothing():
+def test_none_claims_nothing() -> None:
     assert parse_prefix_claims("created-under-prefix: none\n") == []
     assert parse_prefix_claims("created-under-prefix:\n\nNotes: x\n") == []
 
 
-def test_no_label_returns_none():
+def test_no_label_returns_none() -> None:
     assert parse_prefix_claims("DONE: C1\nnothing here\n") is None
 
 
-def test_ledger_alias_is_the_shared_parser():
+def test_ledger_alias_is_the_shared_parser() -> None:
     assert terminal_commit_ledger._parse_prefix_claims is parse_prefix_claims
 
 
-def test_land_run_and_halt_read_block_form(tmp_path):
+def test_land_run_and_halt_read_block_form(tmp_path: Path) -> None:
     report = tmp_path / "r.md"
     report.write_text("DONE\ncreated-under-prefix:\ndocs/d/a.md\ndocs/other/b.md\n", encoding="utf-8")
     chunk = SimpleNamespace(prefixes=("docs/d/",), report="r.md")

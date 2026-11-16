@@ -29,17 +29,17 @@ JOB_MEMORY_BYTES = 4 * 1024 ** 3
 PRIVATE_ROSTER_ENV = 'COORDINATOR_WARM_PRIVATE_ROSTER'
 
 
-def _module_engine_root():
+def _module_engine_root() -> Path:
     return Path(__file__).resolve().parents[3]
 
 
-def _module_affinity(module, engine_root):
+def _module_affinity(module, engine_root) -> None:
     path = _plain(module.__file__, directory=False)
     if not path.is_relative_to(engine_root / 'coordinator_core'):
         raise ValueError('private engine helper module was imported from another source root')
 
 
-def _plain(path, *, directory=None):
+def _plain(path, *, directory=None) -> Path:
     path = Path(path)
     if not path.is_absolute() or '..' in path.parts:
         raise ValueError('private engine paths must be absolute without parent traversal')
@@ -54,11 +54,11 @@ def _plain(path, *, directory=None):
     return path
 
 
-def _same(a, b):
+def _same(a, b) -> bool:
     return os.path.normcase(str(Path(a))) == os.path.normcase(str(Path(b)))
 
 
-def _digest(path):
+def _digest(path) -> str:
     digest = hashlib.sha256()
     with Path(path).open('rb') as stream:
         for block in iter(lambda: stream.read(1024 * 1024), b''):
@@ -103,7 +103,7 @@ def _process_argv(pid):
     return psutil.Process(pid).cmdline()
 
 
-def _creation_filetime(process):
+def _creation_filetime(process) -> str:
     """Raw creation FILETIME from the owned Popen HANDLE, never a guessed PID."""
     if sys.platform != 'win32' or not hasattr(process, '_handle'):
         raise RuntimeError('private server identity requires an owned Windows process HANDLE')
@@ -118,7 +118,7 @@ def _creation_filetime(process):
     return str((created.dwHighDateTime << 32) | created.dwLowDateTime)
 
 
-def _endpoint_exists(endpoint):
+def _endpoint_exists(endpoint) -> bool:
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
     fn = kernel.WaitNamedPipeW
     fn.argtypes = (wintypes.LPCWSTR, wintypes.DWORD)
@@ -133,7 +133,7 @@ def _endpoint_exists(endpoint):
     raise ctypes.WinError(error)
 
 
-def _pipe_server_pid(stream):
+def _pipe_server_pid(stream) -> int:
     import msvcrt
     kernel = ctypes.WinDLL('kernel32', use_last_error=True)
     fn = kernel.GetNamedPipeServerProcessId
@@ -145,7 +145,7 @@ def _pipe_server_pid(stream):
     return pid.value
 
 
-def _ping(endpoint, token, owner, repo_root, timeout, *, expected_process, expected_creation_ft):
+def _ping(endpoint, token, owner, repo_root, timeout, *, expected_process, expected_creation_ft) -> dict[str, int]:
     """Direct existing transport only: no client autostart, cold op or registry."""
     from coordinator_core.warm import client
     _module_affinity(client, _module_engine_root())
@@ -197,7 +197,7 @@ class OwnedPrivateEngine:
     request_id/role/evidence contract; there is no parent or field alias fallback.
     """
 
-    def __init__(self, record_path, record, *, door_image, door_provenance):
+    def __init__(self, record_path, record, *, door_image, door_provenance) -> None:
         self._lock = threading.RLock()
         self._process = self._close_job = None
         self._outputs = []
@@ -286,7 +286,7 @@ class OwnedPrivateEngine:
                 'max_workers': MAX_WORKERS, 'max_roster_bytes': MAX_ROSTER_BYTES,
                 'excluded_private_helpers': list(self.excluded_helpers)}
 
-    def _validate_provenance(self):
+    def _validate_provenance(self) -> None:
         proof = json.loads(self.door_provenance.read_text(encoding='utf-8'))
         from coordinator_core.warm.door import build
         _module_affinity(build, self.engine_root)
@@ -313,7 +313,7 @@ class OwnedPrivateEngine:
         if hashlib.sha256(rendered.encode('utf-8')).hexdigest() != proof['rendered_source_sha256']:
             raise ValueError('native require-warm rendered-source digest does not reproduce')
 
-    def _atomic_json(self, path, value):
+    def _atomic_json(self, path, value) -> None:
         _plain(path.parent, directory=True)
         if path.exists():
             _plain(path, directory=False)
@@ -328,10 +328,10 @@ class OwnedPrivateEngine:
         finally:
             temporary.unlink(missing_ok=True)
 
-    def _write_roster(self):
+    def _write_roster(self) -> None:
         self._atomic_json(self.bindings_path, self.roster)
 
-    def _provision(self):
+    def _provision(self) -> None:
         _plain(self.artifact_dir, directory=True)
         if self.bindings_path.exists() or self.private_bin.exists():
             raise ValueError('private fire artifacts already exist; never reuse another instance')
@@ -347,7 +347,7 @@ class OwnedPrivateEngine:
         build.write_sidecar(self.private_bin / (self.allowed_cli[0] + '.exe'), self.engine_root)
         self._write_roster()
 
-    def start(self, timeout_s=10):
+    def start(self, timeout_s: int = 10):
         with self._lock:
             if self._closed or self._attempted:
                 raise RuntimeError('private engine may start only once')
@@ -434,7 +434,7 @@ class OwnedPrivateEngine:
             self._write_roster()
             return dict(row)
 
-    def on_native_thread(self, request_id, facts):
+    def on_native_thread(self, request_id, facts) -> bool:
         with self._lock:
             row = self._worker(request_id)
             if self._closed or row['state'] == 'ended':
@@ -471,13 +471,13 @@ class OwnedPrivateEngine:
             self._write_roster()
             return True
 
-    def end_worker(self, request_id):
+    def end_worker(self, request_id) -> None:
         with self._lock:
             row = self._worker(request_id)
             row['state'] = 'ended'
             self._write_roster()
 
-    def worker_env(self):
+    def worker_env(self) -> dict[str, str]:
         if not self._ready or self._closed:
             raise RuntimeError('private worker environment requested before readiness')
         return {'COORDINATOR_ENGINE_ROOT': str(self.engine_root), 'COORDINATOR_WARM': '0',
@@ -485,7 +485,7 @@ class OwnedPrivateEngine:
                 'COORDINATOR_WARM_LISTENER_AUTOSTART': '0',
                 'PATH': str(self.private_bin) + os.pathsep + os.environ.get('PATH', '')}
 
-    def close(self):
+    def close(self) -> None:
         with self._lock:
             if self._closed:
                 return
@@ -513,5 +513,5 @@ class OwnedPrivateEngine:
         self.start()
         return self
 
-    def __exit__(self, *_):
+    def __exit__(self, *_) -> None:
         self.close()

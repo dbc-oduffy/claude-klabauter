@@ -12,6 +12,7 @@ from coordinator_core.roadmap.post_stamp_clause import (
     post_stamp_refusal,
     suite_tier_refusal,
 )
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -34,7 +35,7 @@ FOLLOW_ONS = (
         FOLLOW_ONS,
     ],
 )
-def test_refused(text):
+def test_refused(text) -> None:
     assert post_stamp_clause(text)
     assert "pre-stamp mechanism" in post_stamp_refusal(text)
 
@@ -51,17 +52,17 @@ def test_refused(text):
         "cascade_terminal measures under 200ms process time",
     ],
 )
-def test_allowed(text):
+def test_allowed(text) -> None:
     assert post_stamp_refusal(text) is None
 
 
-def test_prime_exit_defect():
+def test_prime_exit_defect() -> None:
     fm = {"prime_exit_criterion": {"statement": "the sizing reaches shipped", "derived_from": "x"}}
     v = pg._prime_exit(fm)
     assert v["kind"] == "prime-exit-post-stamp"
 
 
-def test_accept_op_refuses(tmp_path):
+def test_accept_op_refuses(tmp_path: Path) -> None:
     from coordinator_core.ops.sizing_accept_exit_criterion import _handler
 
     (tmp_path / ".git").mkdir()
@@ -75,7 +76,7 @@ def test_accept_op_refuses(tmp_path):
     assert r["exit_code"] == 1 and "pre-stamp mechanism" in r["error"]
 
 
-def test_under_50ms():
+def test_under_50ms() -> None:
     assert in_process_time_ms(lambda: post_stamp_clause(FOLLOW_ONS))["process_time_ms"] < 50
 
 
@@ -88,7 +89,7 @@ _BODY = """## Exit criteria — verification
 """
 
 
-def test_body_exit_list_is_gated():
+def test_body_exit_list_is_gated() -> None:
     from coordinator_core.roadmap.post_stamp_clause import exit_criteria_items, post_stamp_body_refusal
 
     assert len(exit_criteria_items(_BODY)) == 2
@@ -96,13 +97,13 @@ def test_body_exit_list_is_gated():
     assert post_stamp_body_refusal(_BODY.replace("The sizing reaches `shipped`", "a test proves")) is None
 
 
-def test_prime_exit_refuses_body_item():
+def test_prime_exit_refuses_body_item() -> None:
     fm = {"prime_exit_criterion": {"statement": "the gate refuses X", "derived_from": "state/sizings/x.yaml"}}
     assert pg._prime_exit(fm, None, _BODY)["kind"] == "prime-exit-post-stamp"
     assert pg._prime_exit(fm, None, None)["status"] == "PASS"
 
 
-def test_prime_exit_refuses_suite_tier():
+def test_prime_exit_refuses_suite_tier() -> None:
     fm = {"prime_exit_criterion": {"statement": "fast tier green", "derived_from": "state/sizings/x.yaml"}}
     v = pg._prime_exit(fm)
     assert v["kind"] == "prime-exit-suite-tier" and "tests covering touched files pass" in v["detail"]
@@ -130,7 +131,7 @@ SUITE_TIER_PHRASES = (
 
 
 @pytest.mark.parametrize("text", SUITE_TIER_PHRASES)
-def test_suite_tier_refused(text):
+def test_suite_tier_refused(text) -> None:
     from coordinator_core.roadmap.post_stamp_clause import suite_tier_refusal
 
     msg = suite_tier_refusal(text)
@@ -152,14 +153,14 @@ def test_suite_tier_refused(text):
         None,
     ],
 )
-def test_suite_tier_allowed(text):
+def test_suite_tier_allowed(text) -> None:
     from coordinator_core.roadmap.post_stamp_clause import suite_tier_refusal
 
     assert suite_tier_refusal(text) is None
 
 
 @pytest.mark.parametrize("statement", ["fast tier green", "full test suite passes"])
-def test_accept_op_refuses_suite_tier_and_accepts_replacement(tmp_path, statement):
+def test_accept_op_refuses_suite_tier_and_accepts_replacement(tmp_path: Path, statement) -> None:
     from coordinator_core.ops.sizing_accept_exit_criterion import _handler
 
     (tmp_path / ".git").mkdir()
@@ -178,7 +179,7 @@ def test_accept_op_refuses_suite_tier_and_accepts_replacement(tmp_path, statemen
     assert "suite tier" not in (r.get("error") or "")
 
 
-def test_tier_u_as_subject_is_not_a_suite_tier():
+def test_tier_u_as_subject_is_not_a_suite_tier() -> None:
     from coordinator_core.roadmap.post_stamp_clause import suite_tier_refusal
     assert suite_tier_refusal("the Tier-U ask names each tier's command and cost") is None
     assert suite_tier_refusal("tier_u arg reaches the tier-u-grant-cli") is None
@@ -186,11 +187,11 @@ def test_tier_u_as_subject_is_not_a_suite_tier():
 
 
 @pytest.mark.parametrize("spelling", SUITE_TIER_SPELLINGS)
-def test_every_listed_spelling_is_refused(spelling):
+def test_every_listed_spelling_is_refused(spelling) -> None:
     assert suite_tier_refusal(f"the {spelling} passes") is not None
 
 
-def test_refusal_lists_spellings_and_keeps_remediation_tail():
+def test_refusal_lists_spellings_and_keeps_remediation_tail() -> None:
     from coordinator_core.roadmap import post_stamp_clause as psc
     msg = psc.suite_tier_refusal("tierU passes")
     assert all(s in msg for s in psc.SUITE_TIER_SPELLINGS)
@@ -212,7 +213,7 @@ def test_refusal_lists_spellings_and_keeps_remediation_tail():
         "tests pass. PM approval of the README is recorded",
     ],
 )
-def test_doc_approval_refused(text):
+def test_doc_approval_refused(text) -> None:
     from coordinator_core.roadmap import post_stamp_clause as psc
 
     msg = psc.doc_approval_refusal(text)
@@ -236,13 +237,13 @@ def test_doc_approval_refused(text):
         None,
     ],
 )
-def test_doc_approval_allowed(text):
+def test_doc_approval_allowed(text) -> None:
     from coordinator_core.roadmap.post_stamp_clause import doc_approval_refusal
 
     assert doc_approval_refusal(text) is None
 
 
-def test_doc_approval_body_refusal_names_item():
+def test_doc_approval_body_refusal_names_item() -> None:
     from coordinator_core.roadmap.post_stamp_clause import doc_approval_body_refusal
 
     plan = "## Exit criteria\n\n1. tests pass\n2. PM approval of the install doc\n"

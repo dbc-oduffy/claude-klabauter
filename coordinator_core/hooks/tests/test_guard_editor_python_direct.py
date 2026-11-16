@@ -7,6 +7,7 @@ import json
 import pytest
 
 from coordinator_core.hooks import guard_editor_python_direct as g
+from pathlib import Path
 
 UE_TOOL = "mcp__example_game_repo-control__execute_python_code"
 UE_CMD = "UnrealEditor-Cmd.exe proj.uproject -run=pythonscript -script=x.py"
@@ -43,7 +44,7 @@ def _payload(tmp_path, tool, **extra):
     return p
 
 
-def _editor(level="warn", **kw):
+def _editor(level: str = "warn", **kw):
     base = {"preferred_agent_type": "example-game-repo-control:ue-python", "level": level}
     base.update(kw)
     return base
@@ -53,7 +54,7 @@ def _ctx(out):
     return out["hookSpecificOutput"]["additionalContext"]
 
 
-def test_em_tool_call_advises_preferred_agent(tmp_path):
+def test_em_tool_call_advises_preferred_agent(tmp_path: Path) -> None:
     _repo(tmp_path, _editor(tool_names=[UE_TOOL]))
     out = g.evaluate(_payload(tmp_path, UE_TOOL))
     assert "editor_python.preferred_agent_type" in _ctx(out)
@@ -61,12 +62,12 @@ def test_em_tool_call_advises_preferred_agent(tmp_path):
     assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
-def test_subagent_call_is_untouched(tmp_path):
+def test_subagent_call_is_untouched(tmp_path: Path) -> None:
     _repo(tmp_path, _editor(tool_names=[UE_TOOL]))
     assert g.evaluate(_payload(tmp_path, UE_TOOL, agent_id="a1")) == {}
 
 
-def test_bash_pattern_match_advises(tmp_path):
+def test_bash_pattern_match_advises(tmp_path: Path) -> None:
     _repo(tmp_path, _editor(bash_patterns=["-run=pythonscript"]))
     p = _payload(tmp_path, "Bash", tool_input={"command": UE_CMD})
     assert "editor_python.preferred_agent_type" in _ctx(g.evaluate(p))
@@ -77,7 +78,7 @@ UNANCHORED = "-run=pythonscript"
 HEREDOC = "python - <<'EOF'\nUnrealEditor-Cmd p.uproject -run=pythonscript\nEOF"
 
 
-def _bash(tmp_path, command, level="warn", pattern=ANCHORED):
+def _bash(tmp_path, command, level: str = "warn", pattern=ANCHORED):
     _repo(tmp_path, _editor(level, bash_patterns=[pattern]))
     return g.evaluate(_payload(tmp_path, "Bash", tool_input={"command": command}))
 
@@ -90,7 +91,7 @@ def _bash(tmp_path, command, level="warn", pattern=ANCHORED):
         "cd proj && UnrealEditor-Cmd p.uproject -run=pythonscript",
     ],
 )
-def test_bash_launch_advises(tmp_path, command):
+def test_bash_launch_advises(tmp_path: Path, command) -> None:
     out = _bash(tmp_path, command)
     assert "editor_python.preferred_agent_type" in _ctx(out)
 
@@ -103,12 +104,12 @@ def test_bash_launch_advises(tmp_path, command):
         HEREDOC,
     ],
 )
-def test_bash_benign_text_is_untouched(tmp_path, command):
+def test_bash_benign_text_is_untouched(tmp_path: Path, command) -> None:
     assert _bash(tmp_path, command) == {}
 
 
 @pytest.mark.parametrize("command", ["echo hi # UnrealEditor-Cmd -run=pythonscript", HEREDOC])
-def test_unanchored_pattern_still_skips_comment_and_heredoc(tmp_path, command):
+def test_unanchored_pattern_still_skips_comment_and_heredoc(tmp_path: Path, command) -> None:
     assert _bash(tmp_path, command, pattern=UNANCHORED) == {}
 
 
@@ -117,42 +118,42 @@ def _shell(tmp_path, tool, command):
     return g.evaluate(_payload(tmp_path, tool, tool_input={"command": command}))
 
 
-def test_powershell_launch_yields_same_advisory_as_bash(tmp_path):
+def test_powershell_launch_yields_same_advisory_as_bash(tmp_path: Path) -> None:
     ps = _shell(tmp_path, "PowerShell", UE_CMD)
     assert ps != {}
     assert ps == _shell(tmp_path, "Bash", UE_CMD)
 
 
-def test_powershell_benign_command_is_untouched(tmp_path):
+def test_powershell_benign_command_is_untouched(tmp_path: Path) -> None:
     assert _shell(tmp_path, "PowerShell", "Get-ChildItem") == {}
 
 
-def test_unlisted_tool_with_launch_command_is_untouched(tmp_path):
+def test_unlisted_tool_with_launch_command_is_untouched(tmp_path: Path) -> None:
     assert _shell(tmp_path, "Read", UE_CMD) == {}
 
 
-def test_bash_leg_at_strict_is_advisory_never_deny(tmp_path):
+def test_bash_leg_at_strict_is_advisory_never_deny(tmp_path: Path) -> None:
     out = _bash(tmp_path, UE_CMD, level="strict")
     assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
     assert "editor_python.preferred_agent_type" in _ctx(out)
 
 
-def test_unresolved_command_is_skipped(tmp_path):
+def test_unresolved_command_is_skipped(tmp_path: Path) -> None:
     assert _bash(tmp_path, "$LAUNCH p.uproject -run=pythonscript", pattern=UNANCHORED) == {}
 
 
-def test_unrelated_bash_is_untouched(tmp_path):
+def test_unrelated_bash_is_untouched(tmp_path: Path) -> None:
     _repo(tmp_path, _editor(bash_patterns=["-run=pythonscript"]))
     p = _payload(tmp_path, "Bash", tool_input={"command": "ls -la"})
     assert g.evaluate(p) == {}
 
 
-def test_bash_only_table_ignores_other_tools(tmp_path):
+def test_bash_only_table_ignores_other_tools(tmp_path: Path) -> None:
     _repo(tmp_path, _editor(bash_patterns=["-run=pythonscript"]))
     assert g.evaluate(_payload(tmp_path, UE_TOOL)) == {}
 
 
-def test_strict_mcp_leg_is_advisory_not_deny(tmp_path, monkeypatch):
+def test_strict_mcp_leg_is_advisory_not_deny(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A non-deny_registry guard never denies: apply_guard_level resolves strict to an advisory."""
     from coordinator_core import machine_profile
 
@@ -163,33 +164,33 @@ def test_strict_mcp_leg_is_advisory_not_deny(tmp_path, monkeypatch):
     assert "editor_python.preferred_agent_type" in json.dumps(out)
 
 
-def test_no_table_is_untouched(tmp_path):
+def test_no_table_is_untouched(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     assert g.evaluate(_payload(tmp_path, UE_TOOL)) == {}
 
 
-def test_no_editor_python_is_untouched(tmp_path):
+def test_no_editor_python_is_untouched(tmp_path: Path) -> None:
     _repo(tmp_path, None)
     assert g.evaluate(_payload(tmp_path, UE_TOOL)) == {}
 
 
-def test_malformed_table_fails_open(tmp_path):
+def test_malformed_table_fails_open(tmp_path: Path) -> None:
     _repo(tmp_path, None, raw="{not json")
     assert g.evaluate(_payload(tmp_path, UE_TOOL)) == {}
 
 
-def test_explicit_repo_root_wins(tmp_path):
+def test_explicit_repo_root_wins(tmp_path: Path) -> None:
     root = _repo(tmp_path / "r", _editor(tool_names=[UE_TOOL]))
     out = g.evaluate({"tool_name": UE_TOOL, "cwd": str(tmp_path)}, repo_root=root)
     assert out != {}
 
 
-def test_handler_delegates(tmp_path):
+def test_handler_delegates(tmp_path: Path) -> None:
     _repo(tmp_path, _editor(tool_names=[UE_TOOL]))
     assert g._handler(_payload(tmp_path, UE_TOOL)) != {}
 
 
-def test_no_subprocess(tmp_path, monkeypatch):
+def test_no_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     def boom(*a, **k):
@@ -202,5 +203,5 @@ def test_no_subprocess(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("bad", [None, "x", 3])
-def test_bad_payload_fails_open(bad):
+def test_bad_payload_fails_open(bad) -> None:
     assert g.evaluate(bad) == {}

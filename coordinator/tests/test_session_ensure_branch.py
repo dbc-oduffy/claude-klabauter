@@ -5,6 +5,7 @@ import subprocess
 import sys
 
 import pytest
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -30,7 +31,7 @@ def _claude_klabauter_root() -> str:
 
 
 @pytest.fixture(autouse=True)
-def _claude_klabauter_on_path():
+def _claude_klabauter_on_path() -> None:
     root = _claude_klabauter_root()
     if root not in sys.path:
         sys.path.insert(0, root)
@@ -44,7 +45,7 @@ def _run(cmd, cwd):
 
 
 @pytest.fixture
-def sandbox_repo(tmp_path, monkeypatch):
+def sandbox_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     origin = tmp_path / "origin.git"
     work = tmp_path / "work"
     _run(["git", "init", "--bare", "-q", str(origin)], str(tmp_path))
@@ -65,7 +66,7 @@ def _branches(work) -> str:
     return _run(["git", "branch"], str(work)).stdout
 
 
-def test_on_main_zero_ahead_cuts_daily_branch(sandbox_repo):
+def test_on_main_zero_ahead_cuts_daily_branch(sandbox_repo) -> None:
     res = seb.session_ensure_branch(
         "testmachine", "2026-07-21", "main", "no", "0",
         env=dict(os.environ), stderr=sys.stderr,
@@ -75,7 +76,7 @@ def test_on_main_zero_ahead_cuts_daily_branch(sandbox_repo):
     assert "work/testmachine/2026-07-21" in _branches(sandbox_repo)
 
 
-def test_parseable_span_branch_zero_ahead_is_noop(sandbox_repo):
+def test_parseable_span_branch_zero_ahead_is_noop(sandbox_repo) -> None:
     seb.session_ensure_branch(
         "testmachine", "2026-07-21", "main", "no", "0",
         env=dict(os.environ), stderr=sys.stderr,
@@ -88,7 +89,7 @@ def test_parseable_span_branch_zero_ahead_is_noop(sandbox_repo):
     assert res.new_branch == ""
 
 
-def test_detached_head_collision_safe_suffix(sandbox_repo):
+def test_detached_head_collision_safe_suffix(sandbox_repo) -> None:
     seb.session_ensure_branch(
         "testmachine", "2026-07-21", "main", "no", "0",
         env=dict(os.environ), stderr=sys.stderr,
@@ -102,7 +103,7 @@ def test_detached_head_collision_safe_suffix(sandbox_repo):
     assert res.new_branch == "work/testmachine/2026-07-21-2"
 
 
-def test_nonspan_branch_with_commits_ahead_is_noop(sandbox_repo):
+def test_nonspan_branch_with_commits_ahead_is_noop(sandbox_repo) -> None:
     _run(["git", "checkout", "-q", "-b", "feature/foo"], str(sandbox_repo))
     (sandbox_repo / "g.txt").write_text("y", encoding="utf-8")
     _run(["git", "add", "g.txt"], str(sandbox_repo))
@@ -115,7 +116,7 @@ def test_nonspan_branch_with_commits_ahead_is_noop(sandbox_repo):
     assert res.result == ""
 
 
-def test_nonspan_branch_zero_ahead_cuts_daily_branch(sandbox_repo):
+def test_nonspan_branch_zero_ahead_cuts_daily_branch(sandbox_repo) -> None:
     _run(["git", "checkout", "-q", "-b", "feature/foo"], str(sandbox_repo))
     res = seb.session_ensure_branch(
         "testmachine", "2026-07-21", "feature/foo", "no", "0",
@@ -126,12 +127,12 @@ def test_nonspan_branch_zero_ahead_cuts_daily_branch(sandbox_repo):
 
 
 class _FakeVerdict:
-    def __init__(self, outcome, reason):
+    def __init__(self, outcome, reason) -> None:
         self.outcome = outcome
         self.reason = reason
 
 
-def test_refused_verdict_blocks_cut_and_leaves_branch_untouched(sandbox_repo, monkeypatch):
+def test_refused_verdict_blocks_cut_and_leaves_branch_untouched(sandbox_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         seb,
         "_branch_mutation_verdict",
@@ -148,7 +149,7 @@ def test_refused_verdict_blocks_cut_and_leaves_branch_untouched(sandbox_repo, mo
     assert "work/testmachine/2026-07-21" not in _branches(sandbox_repo)
 
 
-def test_unknown_verdict_treated_same_as_refused(sandbox_repo, monkeypatch):
+def test_unknown_verdict_treated_same_as_refused(sandbox_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         seb,
         "_branch_mutation_verdict",
@@ -164,7 +165,7 @@ def test_unknown_verdict_treated_same_as_refused(sandbox_repo, monkeypatch):
     assert _branches(sandbox_repo) == before
 
 
-def test_ok_verdict_cuts_as_before(sandbox_repo, monkeypatch):
+def test_ok_verdict_cuts_as_before(sandbox_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         seb,
         "_branch_mutation_verdict",
@@ -189,7 +190,7 @@ def _sha(work, rev: str) -> str:
     return _run(["git", "rev-parse", rev], str(work)).stdout.strip()
 
 
-def test_boot_advances_a_day_branch_that_main_has_moved_past(sandbox_repo):
+def test_boot_advances_a_day_branch_that_main_has_moved_past(sandbox_repo) -> None:
     work = sandbox_repo
     _run(["git", "checkout", "-q", "-b", "work/testmachine/2026-07-21"], str(work))
     _commit(work, "on-day-branch.txt")
@@ -210,7 +211,7 @@ def test_boot_advances_a_day_branch_that_main_has_moved_past(sandbox_repo):
     assert _sha(work, "work/testmachine/2026-07-21") == head_before
 
 
-def test_boot_still_refuses_a_day_branch_carrying_commits_head_lacks(sandbox_repo):
+def test_boot_still_refuses_a_day_branch_carrying_commits_head_lacks(sandbox_repo) -> None:
     work = sandbox_repo
     _run(["git", "checkout", "-q", "-b", "work/testmachine/2026-07-21"], str(work))
     _commit(work, "unmerged.txt")
@@ -230,7 +231,7 @@ def test_boot_still_refuses_a_day_branch_carrying_commits_head_lacks(sandbox_rep
     assert _sha(work, "work/testmachine/2026-07-21") == day_sha
 
 
-def test_boot_still_adopts_when_head_is_already_at_the_branch_tip(sandbox_repo):
+def test_boot_still_adopts_when_head_is_already_at_the_branch_tip(sandbox_repo) -> None:
     """THE UNCHANGED ARM. Equal shas keep taking ADOPTED-EXISTING, not the
     new one -- the repair must not swallow the every-boot routine case.
     """

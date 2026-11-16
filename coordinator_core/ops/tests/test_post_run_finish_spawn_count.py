@@ -15,6 +15,7 @@ from coordinator_core.benchmarks.budget import load_manifest
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.ops import post_run_finish
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -33,7 +34,7 @@ def _budget() -> dict:
 
 
 @pytest.mark.parametrize("pages", [1, 6])
-def test_finishing_a_run_commits_with_the_budgeted_spawns(tmp_path, monkeypatch, pages):
+def test_finishing_a_run_commits_with_the_budgeted_spawns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pages) -> None:
     _git(tmp_path, "init", "-q", "-b", "main")
     (tmp_path / "f").write_text("1")
     _git(tmp_path, "add", "f")

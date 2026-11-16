@@ -9,6 +9,11 @@ import sys
 import types
 
 import pytest
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType, SimpleNamespace
 
 pytestmark = pytest.mark.complete
 
@@ -16,7 +21,7 @@ _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 _N = 2000
 
 
-def _load_cli_module():
+def _load_cli_module() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "coordinator_safe_commit", str(_BIN_DIR / "coordinator-safe-commit.py")
     )
@@ -71,7 +76,7 @@ def _stub_commit_path(monkeypatch, mod, root: pathlib.Path):
 
 
 class TestParse:
-    def test_two_thousand_paths_arrive_intact_and_ordered(self, tmp_path):
+    def test_two_thousand_paths_arrive_intact_and_ordered(self, tmp_path: Path) -> None:
         mod = _load_cli_module()
         names = _names()
         args = mod.parse_args(
@@ -79,7 +84,7 @@ class TestParse:
         )
         assert args.paths == names
 
-    def test_blank_and_comment_lines_are_ignored(self, tmp_path):
+    def test_blank_and_comment_lines_are_ignored(self, tmp_path: Path) -> None:
         mod = _load_cli_module()
         listing = _write_list(
             tmp_path, ["# header", "", "a/one.py", "   ", "  # indented note", "b/two.py"]
@@ -87,14 +92,14 @@ class TestParse:
         args = mod.parse_args(["--pathspec-from-file", listing, "bulk regen"])
         assert args.paths == ["a/one.py", "b/two.py"]
 
-    def test_crlf_and_bom_are_tolerated(self, tmp_path):
+    def test_crlf_and_bom_are_tolerated(self, tmp_path: Path) -> None:
         mod = _load_cli_module()
         f = tmp_path / "p.txt"
         f.write_bytes(b"\xef\xbb\xbfa/one.py\r\nb/two.py\r\n")
         args = mod.parse_args(["--pathspec-from-file", str(f), "bulk regen"])
         assert args.paths == ["a/one.py", "b/two.py"]
 
-    def test_merges_with_positional_paths_and_deduplicates(self, tmp_path):
+    def test_merges_with_positional_paths_and_deduplicates(self, tmp_path: Path) -> None:
         mod = _load_cli_module()
         listing = _write_list(tmp_path, ["a/one.py", "b/two.py", "c/three.py"])
         args = mod.parse_args(
@@ -102,7 +107,7 @@ class TestParse:
         )
         assert args.paths == ["b/two.py", "z/last.py", "a/one.py", "c/three.py"]
 
-    def test_dash_reads_stdin(self, monkeypatch):
+    def test_dash_reads_stdin(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mod = _load_cli_module()
         monkeypatch.setattr(
             sys, "stdin", types.SimpleNamespace(buffer=io.BytesIO(b"a/one.py\n# c\nb/two.py\n"))
@@ -110,24 +115,24 @@ class TestParse:
         args = mod.parse_args(["--pathspec-from-file", "-", "bulk regen"])
         assert args.paths == ["a/one.py", "b/two.py"]
 
-    def test_empty_list_is_a_usage_error(self, tmp_path):
+    def test_empty_list_is_a_usage_error(self, tmp_path: Path) -> None:
         mod = _load_cli_module()
         listing = _write_list(tmp_path, ["# nothing", ""])
         with pytest.raises(mod.UsageError):
             mod.parse_args(["--pathspec-from-file", listing, "bulk regen"])
 
-    def test_unreadable_file_is_a_usage_error(self, tmp_path):
+    def test_unreadable_file_is_a_usage_error(self, tmp_path: Path) -> None:
         mod = _load_cli_module()
         with pytest.raises(mod.UsageError):
             mod.parse_args(["--pathspec-from-file", str(tmp_path / "nope.txt"), "bulk regen"])
 
-    def test_combined_with_blanket_is_refused(self, tmp_path):
+    def test_combined_with_blanket_is_refused(self, tmp_path: Path) -> None:
         mod = _load_cli_module()
         listing = _write_list(tmp_path, ["a/one.py"])
         with pytest.raises(mod.UsageError):
             mod.parse_args(["--blanket", "--pathspec-from-file", listing, "bulk regen"])
 
-    def test_help_documents_the_flag(self):
+    def test_help_documents_the_flag(self) -> None:
         mod = _load_cli_module()
         stream = io.StringIO()
         mod.usage(stream)
@@ -137,7 +142,7 @@ class TestParse:
 
 
 class TestReachesCommitOp:
-    def test_two_thousand_paths_reach_commit_v2_params_intact(self, monkeypatch, tmp_path):
+    def test_two_thousand_paths_reach_commit_v2_params_intact(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         mod = _load_cli_module()
         names = _names()
         _make_files(tmp_path, names)
@@ -152,7 +157,7 @@ class TestReachesCommitOp:
         assert params["paths"] == names
         assert params["deleted_paths"] == []
 
-    def test_file_and_positional_paths_merge_into_one_commit(self, monkeypatch, tmp_path):
+    def test_file_and_positional_paths_merge_into_one_commit(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         mod = _load_cli_module()
         names = _names(50)
         _make_files(tmp_path, names)
@@ -165,7 +170,7 @@ class TestReachesCommitOp:
 
         assert calls[0][1]["paths"] == names[29:] + names[:29]
 
-    def test_a_directory_line_is_still_refused(self, monkeypatch, tmp_path, capsys):
+    def test_a_directory_line_is_still_refused(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         mod = _load_cli_module()
         _make_files(tmp_path, ["gen/a.txt"])
         calls = _stub_commit_path(monkeypatch, mod, tmp_path)
@@ -178,7 +183,7 @@ class TestReachesCommitOp:
         assert "gen is a directory" in capsys.readouterr().err
         assert calls == []
 
-    def test_an_unknown_path_line_is_still_refused(self, monkeypatch, tmp_path, capsys):
+    def test_an_unknown_path_line_is_still_refused(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         mod = _load_cli_module()
         _make_files(tmp_path, ["gen/a.txt"])
         calls = _stub_commit_path(monkeypatch, mod, tmp_path)
@@ -191,7 +196,7 @@ class TestReachesCommitOp:
         assert "gen/ghost.txt is neither in the worktree nor in HEAD" in capsys.readouterr().err
         assert calls == []
 
-    def test_contest_gate_receives_the_full_merged_list(self, monkeypatch, tmp_path):
+    def test_contest_gate_receives_the_full_merged_list(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         mod = _load_cli_module()
         names = _names(300)
         _make_files(tmp_path, names)
@@ -207,7 +212,7 @@ class TestReachesCommitOp:
 
 
 class TestGitHopsNeverCarryTheFullListOnOneArgv:
-    def test_argv_batches_bound_every_run_and_lose_nothing(self):
+    def test_argv_batches_bound_every_run_and_lose_nothing(self) -> None:
         mod = _load_cli_module()
         names = [f"deep/{'d' * 60}/{i:05d}.txt" for i in range(_N)]
         batches = mod._argv_batches(names)
@@ -216,18 +221,18 @@ class TestGitHopsNeverCarryTheFullListOnOneArgv:
         for batch in batches:
             assert sum(len(p) + 1 for p in batch) < mod._ARGV_PATHSPEC_BUDGET
 
-    def test_short_list_is_a_single_spawn(self):
+    def test_short_list_is_a_single_spawn(self) -> None:
         mod = _load_cli_module()
         assert mod._argv_batches(["a", "b", "c"]) == [["a", "b", "c"]]
 
     def test_head_probe_over_two_thousand_paths_stays_under_the_command_line_cap(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         mod = _load_cli_module()
         names = [f"deep/{'d' * 60}/{i:05d}.txt" for i in range(_N)]
         argv_lengths: list[int] = []
 
-        def _fake_run(cmd, **_kwargs):
+        def _fake_run(cmd, **_kwargs) -> SimpleNamespace:
             argv_lengths.append(sum(len(c) + 1 for c in cmd))
             return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -237,13 +242,13 @@ class TestGitHopsNeverCarryTheFullListOnOneArgv:
         assert len(argv_lengths) > 1
         assert max(argv_lengths) < 32000
 
-    def test_staged_deletion_probe_carries_no_pathspec(self, monkeypatch, tmp_path):
+    def test_staged_deletion_probe_carries_no_pathspec(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         mod = _load_cli_module()
         names = _names(50)
         _make_files(tmp_path, names)
         seen: list[list[str]] = []
 
-        def _fake_run(cmd, **_kwargs):
+        def _fake_run(cmd, **_kwargs) -> SimpleNamespace:
             seen.append(cmd)
             return types.SimpleNamespace(returncode=0, stdout=names[3] + "\0", stderr="")
 

@@ -6,12 +6,13 @@ import pytest
 
 from coordinator_core.hooks import preuse_bash_dispatch
 from coordinator_core.warm.hook_http import FORWARDED_ENV_NAMES, payload_from_event
+from pathlib import Path
 
 _CHAIN = "git add notes.md && git commit -m wip && git push -u origin claude/fix-abc123"
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/claude/fix-abc123\n", encoding="utf-8")
     return tmp_path
@@ -35,20 +36,20 @@ def _topic_denied(out):
     return hso.get("permissionDecision") == "deny" and "topic branch" in hso.get("permissionDecisionReason", "")
 
 
-def test_hook_run_door_forwards_the_cloud_marker(repo, monkeypatch):
+def test_hook_run_door_forwards_the_cloud_marker(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
     payload = payload_from_event(_event(repo, {"CLAUDE_CODE_REMOTE": "true"}), FORWARDED_ENV_NAMES)
     assert not _topic_denied(preuse_bash_dispatch._handler({"payload": payload}))
 
 
-def test_http_door_reads_the_cloud_host(repo, monkeypatch):
+def test_http_door_reads_the_cloud_host(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
     payload = payload_from_event(_event(repo))
     assert payload["env"] == {}
     assert not _topic_denied(preuse_bash_dispatch._handler({"payload": payload}))
 
 
-def test_a_desk_no_longer_denies_or_nudges_the_claude_branch(repo, monkeypatch):
+def test_a_desk_no_longer_denies_or_nudges_the_claude_branch(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     # block-topic-branch is in ADVISORY_BY_RULING (b17ec35251; DR-475) and emits nothing for a
     # topic-branch push: a desk is neither denied nor nudged about the `claude/*` branch.
     monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)

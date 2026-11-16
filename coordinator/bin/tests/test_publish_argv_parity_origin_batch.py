@@ -28,11 +28,16 @@ import importlib.util
 import subprocess
 import sys
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
-def _load_publish_module():
+def _load_publish_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "publish_argv_parity_origin_batch_under_test", _BIN_DIR / "publish.py"
     )
@@ -53,7 +58,7 @@ class _FakeCompleted:
         self.stderr = b""
 
 
-def test_porcelain_touched_paths_parses_ordinary_and_rename_records():
+def test_porcelain_touched_paths_parses_ordinary_and_rename_records() -> None:
     unicode_path = "café/módule.py"
     stream = (
         b" M plain/touched.py\0"
@@ -70,11 +75,11 @@ def test_porcelain_touched_paths_parses_ordinary_and_rename_records():
     }
 
 
-def test_porcelain_touched_paths_empty_stream():
+def test_porcelain_touched_paths_empty_stream() -> None:
     assert publish._porcelain_touched_paths(b"") == set()
 
 
-def test_batch_resolves_all_three_origins_from_one_spawn(tmp_path, monkeypatch):
+def test_batch_resolves_all_three_origins_from_one_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     touched = repo_root / "mod" / "touched.py"
@@ -87,7 +92,7 @@ def test_batch_resolves_all_three_origins_from_one_spawn(tmp_path, monkeypatch):
 
     calls = []
 
-    def _fake_run(argv, **kwargs):
+    def _fake_run(argv, **kwargs) -> _FakeCompleted:
         calls.append(argv)
         return _FakeCompleted(0, stdout)
 
@@ -105,7 +110,7 @@ def test_batch_resolves_all_three_origins_from_one_spawn(tmp_path, monkeypatch):
     }
 
 
-def test_special_character_path_is_attributed_via_z_not_missed(tmp_path, monkeypatch):
+def test_special_character_path_is_attributed_via_z_not_missed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     rel = "mod/nön-ascii ⚡ file.py"
@@ -120,7 +125,7 @@ def test_special_character_path_is_attributed_via_z_not_missed(tmp_path, monkeyp
     assert origins[rel] == "destination-only (locally modified in the mirror working tree)"
 
 
-def test_batch_spawn_failure_falls_back_to_per_item_isolation(tmp_path, monkeypatch):
+def test_batch_spawn_failure_falls_back_to_per_item_isolation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     resolvable = repo_root / "mod" / "resolvable.py"
@@ -129,7 +134,7 @@ def test_batch_spawn_failure_falls_back_to_per_item_isolation(tmp_path, monkeypa
 
     call_n = {"i": 0}
 
-    def _fake_run(argv, **kwargs):
+    def _fake_run(argv, **kwargs) -> _FakeCompleted:
         call_n["i"] += 1
         if call_n["i"] == 1:
             return _FakeCompleted(1, b"")
@@ -149,7 +154,7 @@ def test_batch_spawn_failure_falls_back_to_per_item_isolation(tmp_path, monkeypa
     assert origins["mod/unresolvable.py"] == "unknown-origin"
 
 
-def test_batch_empty_input_short_circuits_without_spawning(monkeypatch):
+def test_batch_empty_input_short_circuits_without_spawning(monkeypatch: pytest.MonkeyPatch) -> None:
     def _fail(*a, **k):
         raise AssertionError("must not spawn for an empty rel_modules list")
 
@@ -163,7 +168,7 @@ def _init_bare_git_dir(root: Path) -> Path:
     return gitdir
 
 
-def test_git_head_corrupt_detached_text_fails_closed(tmp_path):
+def test_git_head_corrupt_detached_text_fails_closed(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     gitdir = _init_bare_git_dir(root)
     (gitdir / "HEAD").write_text("not-a-ref-and-not-a-sha\n", encoding="utf-8")
@@ -171,7 +176,7 @@ def test_git_head_corrupt_detached_text_fails_closed(tmp_path):
     assert publish._git_head(root) == ""
 
 
-def test_git_head_valid_detached_sha_is_returned(tmp_path):
+def test_git_head_valid_detached_sha_is_returned(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     gitdir = _init_bare_git_dir(root)
     sha = "a" * 40

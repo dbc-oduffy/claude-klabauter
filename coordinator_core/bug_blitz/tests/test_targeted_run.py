@@ -13,17 +13,18 @@ from coordinator_core.bug_blitz import targeted_run
 from coordinator_core.bug_blitz.contract import EXIT_CODES, record_schema_path
 from coordinator_core.bug_blitz.tests.test_runner_shapes_admitted import ADMITTED_HEADS
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
 
 @pytest.fixture(autouse=True)
-def _settings_home(tmp_path, monkeypatch):
+def _settings_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     (root / "tests").mkdir(parents=True)
     (root / "pkg").mkdir()
@@ -35,18 +36,18 @@ def repo(tmp_path):
     return root
 
 
-def _row(repo, surface, row_id="row-1"):
+def _row(repo, surface, row_id: str = "row-1"):
     path = repo / f"{row_id}.yaml"
     path.write_text(f"id: {row_id}\nsurface: {surface}\n")
     return path
 
 
-def _validate(rec):
+def _validate(rec) -> None:
     schema = json.loads(record_schema_path().read_text())
     jsonschema.validate(rec.to_json(), schema)
 
 
-def test_table_matches_s0_admitted_heads():
+def test_table_matches_s0_admitted_heads() -> None:
     assert ADMITTED_HEADS["pytest"] == [sys.executable, "-m", "pytest"]
     assert sorted(targeted_run._VITEST_HEADS.values()) == sorted(
         v for k, v in ADMITTED_HEADS.items() if k.startswith("vitest")
@@ -54,7 +55,7 @@ def test_table_matches_s0_admitted_heads():
     assert list(targeted_run._JEST_HEADS.values()) == [ADMITTED_HEADS["jest-pnpm"]]
 
 
-def test_select_unions_surface_touched_tests_and_covering_tests(repo):
+def test_select_unions_surface_touched_tests_and_covering_tests(repo) -> None:
     (repo / "tests" / "test_extra.py").write_text("")
     row = _row(repo, "tests/test_good.py")
     selected, dropped = targeted_run.select(
@@ -71,7 +72,7 @@ def test_select_unions_surface_touched_tests_and_covering_tests(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_select_js_covering_tests_from_git_index(tmp_path):
+def test_select_js_covering_tests_from_git_index(tmp_path: Path) -> None:
     root = tmp_path / "js"
     (root / "src").mkdir(parents=True)
     (root / "src" / "foo.ts").write_text("")
@@ -85,7 +86,7 @@ def test_select_js_covering_tests_from_git_index(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_passed_run_writes_valid_record_and_exit_zero(repo):
+def test_passed_run_writes_valid_record_and_exit_zero(repo) -> None:
     row = _row(repo, "tests/test_good.py")
     record = repo / "out" / "row-1.tests.json"
     code = targeted_run.main(
@@ -100,7 +101,7 @@ def test_passed_run_writes_valid_record_and_exit_zero(repo):
 
 
 @pytest.mark.spawns_process
-def test_failed_run_names_failing_ids(repo):
+def test_failed_run_names_failing_ids(repo) -> None:
     row = _row(repo, "tests/test_bad.py")
     rec = targeted_run.run(repo, row)
     assert rec.outcome == "failed"
@@ -109,7 +110,7 @@ def test_failed_run_names_failing_ids(repo):
     _validate(rec)
 
 
-def test_empty_selection_spawns_nothing(repo, monkeypatch):
+def test_empty_selection_spawns_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     spawned = []
     monkeypatch.setattr(targeted_run, "_spawn", lambda *a, **k: spawned.append(a) or (0, ""))
     rec = targeted_run.run(repo, _row(repo, "docs/readme.md"))
@@ -119,7 +120,7 @@ def test_empty_selection_spawns_nothing(repo, monkeypatch):
     _validate(rec)
 
 
-def test_refused_argv_starts_no_process(repo, monkeypatch):
+def test_refused_argv_starts_no_process(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     spawned = []
     monkeypatch.setattr(targeted_run, "_spawn", lambda *a, **k: spawned.append(a) or (0, ""))
     monkeypatch.setattr(targeted_run, "admit", lambda argv, root: False)
@@ -130,13 +131,13 @@ def test_refused_argv_starts_no_process(repo, monkeypatch):
     _validate(rec)
 
 
-def test_admit_refuses_a_suite_shaped_argv(repo):
+def test_admit_refuses_a_suite_shaped_argv(repo) -> None:
     assert targeted_run.admit([sys.executable, "-m", "pytest", "tests/test_good.py"], repo)
     assert not targeted_run.admit([sys.executable, "-m", "pytest"], repo)
     assert not targeted_run.admit(["pnpm", "test"], repo)
 
 
-def test_no_runner_when_package_manager_missing(tmp_path, monkeypatch):
+def test_no_runner_when_package_manager_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "js2"
     root.mkdir()
     (root / "a.test.ts").write_text("")
@@ -148,7 +149,7 @@ def test_no_runner_when_package_manager_missing(tmp_path, monkeypatch):
     _validate(rec)
 
 
-def test_runner_holds_a_tier_t_slot_during_the_run(repo, monkeypatch):
+def test_runner_holds_a_tier_t_slot_during_the_run(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.testing import tier_t_slots
 
     seen = []
@@ -161,7 +162,7 @@ def test_runner_holds_a_tier_t_slot_during_the_run(repo, monkeypatch):
     assert tier_t_slots.occupancy()[0] == 0
 
 
-def test_pytest_spawn_runs_in_capped_job_with_depth_sentinel_and_closes(tmp_path, monkeypatch):
+def test_pytest_spawn_runs_in_capped_job_with_depth_sentinel_and_closes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.diagnostics import contained_run
     from coordinator_core.testing import spawn_depth
 
@@ -176,7 +177,7 @@ def test_pytest_spawn_runs_in_capped_job_with_depth_sentinel_and_closes(tmp_path
     def fake(argv, *, popen_kwargs=None, **kw):
         seen["argv"], seen["kw"] = list(argv), dict(popen_kwargs)
 
-        def close():
+        def close() -> None:
             seen["closed"] += 1
 
         return _P(), close
@@ -188,7 +189,7 @@ def test_pytest_spawn_runs_in_capped_job_with_depth_sentinel_and_closes(tmp_path
     assert seen["closed"] >= 1
 
 
-def test_pytest_spawn_timeout_closes_the_job_and_reports_124(tmp_path, monkeypatch):
+def test_pytest_spawn_timeout_closes_the_job_and_reports_124(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.diagnostics import contained_run
 
     closed = []
@@ -196,7 +197,7 @@ def test_pytest_spawn_timeout_closes_the_job_and_reports_124(tmp_path, monkeypat
     class _P:
         returncode = None
 
-        def __init__(self):
+        def __init__(self) -> None:
             self.n = 0
 
         def communicate(self, timeout=None):
@@ -211,7 +212,7 @@ def test_pytest_spawn_timeout_closes_the_job_and_reports_124(tmp_path, monkeypat
     assert closed
 
 
-def test_non_pytest_spawn_bypasses_the_capped_job(tmp_path, monkeypatch):
+def test_non_pytest_spawn_bypasses_the_capped_job(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.diagnostics import contained_run
 
     monkeypatch.setattr(
@@ -228,7 +229,7 @@ def _ext_row(root):
     return path
 
 
-def _git(root, *args):
+def _git(root, *args) -> None:
     subprocess.run(
         ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args],
         cwd=root, check=True, capture_output=True, **no_console_creationflags(),
@@ -236,7 +237,7 @@ def _git(root, *args):
 
 
 @pytest.fixture
-def git_repo(tmp_path):
+def git_repo(tmp_path: Path) -> Path:
     """Committed HEAD where tests/test_dep.py fails (VALUE = 0); a dirty pkg/dep.py would make it pass."""
     root = tmp_path / "grepo"
     (root / "tests").mkdir(parents=True)
@@ -253,7 +254,7 @@ def git_repo(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_foreign_uncommitted_pass_reports_distinct_outcome_with_holder(git_repo, monkeypatch, tmp_path):
+def test_foreign_uncommitted_pass_reports_distinct_outcome_with_holder(git_repo, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.session import scope
 
     monkeypatch.setattr(
@@ -272,7 +273,7 @@ def test_foreign_uncommitted_pass_reports_distinct_outcome_with_holder(git_repo,
 
 
 @pytest.mark.spawns_process
-def test_own_edit_is_judged_not_treated_as_foreign(git_repo):
+def test_own_edit_is_judged_not_treated_as_foreign(git_repo) -> None:
     (git_repo / "pkg" / "dep.py").write_text("VALUE = 1\n")
     rec = targeted_run.run(git_repo, _ext_row(git_repo), ["pkg/dep.py"])
     assert rec.outcome == "passed"
@@ -280,7 +281,7 @@ def test_own_edit_is_judged_not_treated_as_foreign(git_repo):
 
 
 @pytest.mark.spawns_process
-def test_failing_at_head_and_live_stays_failed_despite_foreign_dirt(git_repo):
+def test_failing_at_head_and_live_stays_failed_despite_foreign_dirt(git_repo) -> None:
     (git_repo / "notes.txt").write_text("unrelated foreign dirt\n")
     rec = targeted_run.run(git_repo, _ext_row(git_repo))
     assert rec.outcome == "failed"
@@ -289,7 +290,7 @@ def test_failing_at_head_and_live_stays_failed_despite_foreign_dirt(git_repo):
 
 
 @pytest.mark.spawns_process
-def test_passing_at_head_with_foreign_dirt_is_passed(git_repo):
+def test_passing_at_head_with_foreign_dirt_is_passed(git_repo) -> None:
     (git_repo / "tests" / "test_dep.py").write_text("def test_value():\n    assert True\n")
     _git(git_repo, "commit", "-q", "-am", "fix")
     (git_repo / "notes.txt").write_text("unrelated foreign dirt\n")
@@ -299,7 +300,7 @@ def test_passing_at_head_with_foreign_dirt_is_passed(git_repo):
 
 
 @pytest.mark.spawns_process
-def test_committed_head_row_owned_dirty_hunk_does_not_read_passed(git_repo):
+def test_committed_head_row_owned_dirty_hunk_does_not_read_passed(git_repo) -> None:
     (git_repo / "pkg" / "dep.py").write_text("VALUE = 1\n")
     row = _ext_row(git_repo)
     own = targeted_run.run(git_repo, row, ["pkg/dep.py"])
@@ -310,7 +311,7 @@ def test_committed_head_row_owned_dirty_hunk_does_not_read_passed(git_repo):
 
 
 @pytest.mark.spawns_process
-def test_committed_head_cli_flag_reads_red_and_exit_code_is_failed(git_repo, tmp_path):
+def test_committed_head_cli_flag_reads_red_and_exit_code_is_failed(git_repo, tmp_path: Path) -> None:
     (git_repo / "pkg" / "dep.py").write_text("VALUE = 1\n")
     record = tmp_path / "rec.json"
     code = targeted_run.main(
@@ -322,7 +323,7 @@ def test_committed_head_cli_flag_reads_red_and_exit_code_is_failed(git_repo, tmp
 
 
 @pytest.mark.spawns_process
-def test_committed_head_green_at_head_is_passed_with_dirty_tree(git_repo):
+def test_committed_head_green_at_head_is_passed_with_dirty_tree(git_repo) -> None:
     (git_repo / "tests" / "test_dep.py").write_text("def test_value():\n    assert True\n")
     _git(git_repo, "commit", "-q", "-am", "fix")
     (git_repo / "pkg" / "dep.py").write_text("VALUE = 5\n")
@@ -331,7 +332,7 @@ def test_committed_head_green_at_head_is_passed_with_dirty_tree(git_repo):
 
 
 @pytest.mark.spawns_process
-def test_committed_head_clean_tree_judged_in_place(git_repo, monkeypatch):
+def test_committed_head_clean_tree_judged_in_place(git_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("clean tree must not build a HEAD tree")
 
@@ -341,7 +342,7 @@ def test_committed_head_clean_tree_judged_in_place(git_repo, monkeypatch):
 
 
 @pytest.mark.spawns_process
-def test_committed_head_never_falls_back_to_live_tree(git_repo, monkeypatch):
+def test_committed_head_never_falls_back_to_live_tree(git_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     (git_repo / "pkg" / "dep.py").write_text("VALUE = 1\n")
 
     def boom(*a, **k):

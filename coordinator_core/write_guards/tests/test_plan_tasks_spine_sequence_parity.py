@@ -21,6 +21,7 @@ import pytest
 from coordinator_core.testing.content_root import content_root_and_present
 from coordinator_core.write_guards import validate_frontmatter_schema_advisory as advisory_guard
 from coordinator_core.write_guards import validate_frontmatter_schema_deny as deny_guard
+from pathlib import Path
 
 _content_root, _doe_present = content_root_and_present()
 
@@ -28,7 +29,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 @pytest.fixture(autouse=True)
-def _pin_content_root(monkeypatch):
+def _pin_content_root(monkeypatch: pytest.MonkeyPatch) -> None:
     if not _doe_present:
         pytest.skip("sibling coordinator-content-repo checkout not found")
     monkeypatch.setattr(deny_guard, "read_content_root", lambda: _content_root)
@@ -117,7 +118,7 @@ def _write_and_check(guard, tmp_path, tasks_block):
 
 class TestOrderingLegSplitByGuard:
 
-    def test_advisory_warns_on_ordering_violation(self, tmp_path):
+    def test_advisory_warns_on_ordering_violation(self, tmp_path: Path) -> None:
         result = _write_and_check(advisory_guard, tmp_path, _ORDERING_VIOLATING)
         assert result is not None
         hso = result["hookSpecificOutput"]
@@ -126,16 +127,16 @@ class TestOrderingLegSplitByGuard:
         assert "plan-tasks" in text
         assert "disposition" in text and "backlogged" in text
 
-    def test_deny_does_not_block_on_ordering_violation(self, tmp_path):
+    def test_deny_does_not_block_on_ordering_violation(self, tmp_path: Path) -> None:
         result = _write_and_check(deny_guard, tmp_path, _ORDERING_VIOLATING)
         assert result is None
 
 
 class TestCleanSpineSilentOnBoth:
-    def test_clean_spine_silent_advisory(self, tmp_path):
+    def test_clean_spine_silent_advisory(self, tmp_path: Path) -> None:
         assert _write_and_check(advisory_guard, tmp_path, _CLEAN) is None
 
-    def test_clean_spine_silent_deny(self, tmp_path, monkeypatch):
+    def test_clean_spine_silent_deny(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
         assert _write_and_check(deny_guard, tmp_path, _CLEAN) is None
 
@@ -148,7 +149,7 @@ class TestMultiDefectAllRowsAccumulationUnchanged:
     find — proving the routing adds a row only when a violation is
     actually present, not on every multi-defect spine."""
 
-    def test_deny_reports_both_rows_under_strict(self, tmp_path, monkeypatch):
+    def test_deny_reports_both_rows_under_strict(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
         result = _write_and_check(deny_guard, tmp_path, _MULTI_DEFECT_ORDERING_VALID)
         assert result is not None
@@ -159,7 +160,7 @@ class TestMultiDefectAllRowsAccumulationUnchanged:
         assert "tasks[C2].disposition" in text
         assert "plan-tasks" not in text.replace("tasks[C1]", "").replace("tasks[C2]", "")
 
-    def test_advisory_reports_both_rows_no_ordering_row(self, tmp_path):
+    def test_advisory_reports_both_rows_no_ordering_row(self, tmp_path: Path) -> None:
         result = _write_and_check(advisory_guard, tmp_path, _MULTI_DEFECT_ORDERING_VALID)
         assert result is not None
         hso = result["hookSpecificOutput"]
@@ -221,7 +222,7 @@ class TestSpineLegDeclarationDesyncRegression:
         monkeypatch.setattr(module, "_plan_tasks_spine_errors_driver", _spy, raising=True)
         return captured
 
-    def test_deny_guard_actual_declaration_matches_expected(self, tmp_path, monkeypatch):
+    def test_deny_guard_actual_declaration_matches_expected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.frontmatter.schema_validate import plan_tasks_spine_errors as real
 
         captured = self._capture_driver_call(monkeypatch, deny_guard, real)
@@ -234,7 +235,7 @@ class TestSpineLegDeclarationDesyncRegression:
         assert captured["legs"] == expected_legs
         assert captured["legs_out_of_band"] == expected_out_of_band
 
-    def test_advisory_guard_actual_declaration_matches_expected(self, tmp_path, monkeypatch):
+    def test_advisory_guard_actual_declaration_matches_expected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.frontmatter.schema_validate import plan_tasks_spine_errors as real
 
         captured = self._capture_driver_call(monkeypatch, advisory_guard, real)
@@ -246,7 +247,7 @@ class TestSpineLegDeclarationDesyncRegression:
         assert captured["legs"] == expected_legs
         assert captured["legs_out_of_band"] == expected_out_of_band
 
-    def test_check_plan_tasks_source_actual_declaration_matches_expected(self, monkeypatch):
+    def test_check_plan_tasks_source_actual_declaration_matches_expected(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import coordinator_core.frontmatter.schema_validate as sv
 
         real = sv.plan_tasks_spine_errors
@@ -264,18 +265,18 @@ class TestSpineLegDeclarationDesyncRegression:
         assert captured["legs"] == expected_legs
         assert captured["legs_out_of_band"] == expected_out_of_band
 
-    def test_deny_guard_omits_ordering_deliberately(self):
+    def test_deny_guard_omits_ordering_deliberately(self) -> None:
         legs, out_of_band = self._EXPECTED["deny guard (_plan_tasks_spine_errors)"]
         assert "ordering" not in legs
         assert "ordering" not in out_of_band
 
-    def test_check_plan_tasks_source_omits_integrity_deliberately(self):
+    def test_check_plan_tasks_source_omits_integrity_deliberately(self) -> None:
         legs, out_of_band = self._EXPECTED["check_plan_tasks_source"]
         assert "integrity" not in legs
         assert "integrity" not in out_of_band
 
     @pytest.mark.parametrize("site_name", list(_EXPECTED))
-    def test_declared_names_are_known_legs(self, site_name):
+    def test_declared_names_are_known_legs(self, site_name) -> None:
         from coordinator_core.frontmatter.schema_validate import PLAN_TASKS_SPINE_SEQUENCE
 
         known = frozenset(name for name, _ in PLAN_TASKS_SPINE_SEQUENCE)

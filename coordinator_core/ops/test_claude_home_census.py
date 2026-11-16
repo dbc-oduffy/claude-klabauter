@@ -6,25 +6,27 @@ import os
 import time
 
 from coordinator_core.ops import claude_home_census as cen
+from pathlib import Path
+import pytest
 
 
-def _write(path, size, age_hours=0.0):
+def _write(path, size, age_hours: float = 0.0) -> None:
     cen._sparse(path, size, age_hours)
 
 
-def test_measure_sums_bytes_and_files(tmp_path):
+def test_measure_sums_bytes_and_files(tmp_path: Path) -> None:
     _write(tmp_path / "a" / "x.bin", 100)
     _write(tmp_path / "a" / "b" / "y.bin", 50)
     walk = cen.measure(tmp_path, None)
     assert (walk.bytes, walk.files, walk.complete) == (150, 2, True)
 
 
-def test_measure_missing_path_is_empty_and_complete(tmp_path):
+def test_measure_missing_path_is_empty_and_complete(tmp_path: Path) -> None:
     walk = cen.measure(tmp_path / "nope")
     assert (walk.bytes, walk.files, walk.complete) == (0, 0, True)
 
 
-def test_measure_budget_stops_and_resumes_to_same_total(tmp_path):
+def test_measure_budget_stops_and_resumes_to_same_total(tmp_path: Path) -> None:
     for i in range(20):
         _write(tmp_path / f"d{i}" / "f.bin", 10)
     partial = cen.measure(tmp_path, budget_seconds=0.0)
@@ -34,7 +36,7 @@ def test_measure_budget_stops_and_resumes_to_same_total(tmp_path):
     assert (finished.bytes, finished.files) == (200, 20)
 
 
-def test_projects_breakdown_separates_subagents(tmp_path):
+def test_projects_breakdown_separates_subagents(tmp_path: Path) -> None:
     proj = tmp_path / "projects"
     _write(proj / "p" / "s1.jsonl", 100)
     _write(proj / "p" / "s1" / "subagents" / "a.jsonl", 40)
@@ -46,7 +48,7 @@ def test_projects_breakdown_separates_subagents(tmp_path):
     assert out["complete"] is True
 
 
-def test_settings_home_rows_name_writer_and_flag_unmapped(tmp_path):
+def test_settings_home_rows_name_writer_and_flag_unmapped(tmp_path: Path) -> None:
     _write(tmp_path / "project-rag" / "x", 10)
     _write(tmp_path / "mystery" / "x", 5)
     rows = {r["name"]: r for r in cen.settings_home_rows(tmp_path, None)}
@@ -55,7 +57,7 @@ def test_settings_home_rows_name_writer_and_flag_unmapped(tmp_path):
     assert rows["mystery"]["writer"] == "unmapped" and rows["mystery"]["regenerable"] is False
 
 
-def test_thresholds_default_and_override():
+def test_thresholds_default_and_override() -> None:
     assert cen.transcript_max_bytes(lambda k: None) == 250 * cen.MB
     assert cen.transcript_max_age_seconds(lambda k: None) == 48 * 3600
     vals = {cen.KEY_MAX_MB: "10", cen.KEY_MAX_AGE_HOURS: "2"}
@@ -63,16 +65,16 @@ def test_thresholds_default_and_override():
     assert cen.transcript_max_age_seconds(vals.get) == 2 * 3600
 
 
-def test_thresholds_reject_garbage_and_nonpositive():
+def test_thresholds_reject_garbage_and_nonpositive() -> None:
     for bad in ("abc", "0", "-5", ""):
         assert cen.transcript_max_bytes(lambda k, b=bad: b) == 250 * cen.MB
 
 
-def test_cache_cap_key_shape():
+def test_cache_cap_key_shape() -> None:
     assert cen.cache_cap_key("debug", "max_mb") == "cache_caps.debug.max_mb"
 
 
-def test_census_reports_every_axis(tmp_path):
+def test_census_reports_every_axis(tmp_path: Path) -> None:
     home = tmp_path / "home"
     _write(home / "projects" / "p" / "s.jsonl", 10)
     _write(home / "debug" / "d.log", 20)
@@ -87,17 +89,17 @@ def test_census_reports_every_axis(tmp_path):
     assert out["settings_home"][0]["name"] == "state"
 
 
-def test_fixture_ratchet_baseline_without_entry_point_is_equal(tmp_path):
+def test_fixture_ratchet_baseline_without_entry_point_is_equal(tmp_path: Path) -> None:
     result = cen.fixture_ratchet(tmp_path, entry_point=lambda **_: None)
     assert result["bytes_after_total"] == result["bytes_before_total"]
     assert all(result["survives"].values())
 
 
-def test_fixture_ratchet_with_entry_point_deletes_and_keeps_live(tmp_path):
+def test_fixture_ratchet_with_entry_point_deletes_and_keeps_live(tmp_path: Path) -> None:
     cap = 250 * cen.MB
     cutoff = 48 * 3600
 
-    def retention(claude_home, temp_root, live_session_ids, apply):
+    def retention(claude_home, temp_root, live_session_ids, apply) -> None:
         now = time.time()
         live_dirs = set(live_session_ids)
         for root in (claude_home / "projects", temp_root):
@@ -122,7 +124,7 @@ def test_fixture_ratchet_with_entry_point_deletes_and_keeps_live(tmp_path):
     assert result["bytes_after_total"] < result["bytes_before_total"]
 
 
-def test_cli_fixture_ratchet_prints_json(tmp_path, capsys):
+def test_cli_fixture_ratchet_prints_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert cen.main(["--fixture-ratchet", "--root", str(tmp_path)]) == 0
     import json
 

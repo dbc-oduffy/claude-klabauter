@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.warm import breadcrumb, idle, lifecycle, server, supervisor
+from pathlib import Path
 
 
 class _FakeVersionState:
@@ -21,7 +22,7 @@ def _reset():
 
 
 @pytest.fixture
-def leaked_copy(tmp_path, monkeypatch):
+def leaked_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """The observed shape: a copy with `.lifecycle.lock` beside it, no `.leases`."""
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path / "rt"))
     engines = tmp_path / "engines"
@@ -32,7 +33,7 @@ def leaked_copy(tmp_path, monkeypatch):
     return root
 
 
-def test_lease_gone_with_only_lifecycle_lock_beside_copy_is_ladder_scoped(tmp_path):
+def test_lease_gone_with_only_lifecycle_lock_beside_copy_is_ladder_scoped(tmp_path: Path) -> None:
     root = tmp_path / "e-6598de473c50ab51"
     root.mkdir()
     (tmp_path / ".lifecycle.lock").write_text("", encoding="utf-8")
@@ -41,14 +42,14 @@ def test_lease_gone_with_only_lifecycle_lock_beside_copy_is_ladder_scoped(tmp_pa
     assert gone() is True
 
 
-def test_ordinary_clone_still_has_no_predicate(tmp_path):
+def test_ordinary_clone_still_has_no_predicate(tmp_path: Path) -> None:
     root = tmp_path / "clone"
     root.mkdir()
     (tmp_path / "unrelated.txt").write_text("x", encoding="utf-8")
     assert idle.make_ladder_gone(root) is None
 
 
-def test_ordinary_clone_beside_sibling_leases_or_lock_is_not_retired(tmp_path):
+def test_ordinary_clone_beside_sibling_leases_or_lock_is_not_retired(tmp_path: Path) -> None:
     root = tmp_path / "myclone"
     root.mkdir()
     (tmp_path / "e-6598de473c50ab51.leases").mkdir()
@@ -56,7 +57,7 @@ def test_ordinary_clone_beside_sibling_leases_or_lock_is_not_retired(tmp_path):
     assert idle.make_ladder_gone(root) is None
 
 
-def test_lifecycle_lock_matched_by_exact_name_only(tmp_path):
+def test_lifecycle_lock_matched_by_exact_name_only(tmp_path: Path) -> None:
     root = tmp_path / "e-6598de473c50ab51"
     root.mkdir()
     (tmp_path / "x.lifecycle.lock").write_text("", encoding="utf-8")
@@ -64,7 +65,7 @@ def test_lifecycle_lock_matched_by_exact_name_only(tmp_path):
     assert idle.make_ladder_gone(root) is None
 
 
-def test_server_boots_tombstones_and_demotes_leaked_copy(leaked_copy, monkeypatch):
+def test_server_boots_tombstones_and_demotes_leaked_copy(leaked_copy, monkeypatch: pytest.MonkeyPatch) -> None:
     root = leaked_copy
     calls = []
     monkeypatch.setattr(idle, "demote_if_idle", lambda **kw: calls.append(kw["ladder_gone"]()))
@@ -83,7 +84,7 @@ def test_server_boots_tombstones_and_demotes_leaked_copy(leaked_copy, monkeypatc
     assert idle.ladder_gone_tombstoned(root)
 
 
-def test_supervisor_stops_leaked_copy_and_is_not_respawned(leaked_copy, monkeypatch):
+def test_supervisor_stops_leaked_copy_and_is_not_respawned(leaked_copy, monkeypatch: pytest.MonkeyPatch) -> None:
     root = leaked_copy
     ctx = supervisor._ServerContext(
         httpd=None, engine_root=root, version_state=_FakeVersionState()

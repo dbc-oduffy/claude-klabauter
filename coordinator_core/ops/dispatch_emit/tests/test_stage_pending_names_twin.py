@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import nested_run_contract as nrc
 from coordinator_core.ops.dispatch_emit import reply_sidecar
+from pathlib import Path
 
 _RUN = "run1"
 _SCRIPT = f"export const meta = {{ name: 'x' }}\n{nrc.STAGED_INLINE_SLOT}\nreturn 1;\n"
@@ -16,7 +17,7 @@ def _restage(root, payload):
     return handle, twin
 
 
-def test_restage_names_the_new_twin_on_disk(tmp_path):
+def test_restage_names_the_new_twin_on_disk(tmp_path: Path) -> None:
     script = tmp_path / "scratch" / "warp" / f"{_RUN}.workflow.mjs"
     script.parent.mkdir(parents=True)
     script.write_text(_SCRIPT, encoding="utf-8")

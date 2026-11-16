@@ -146,6 +146,14 @@ def test_far_relay_lacking_send_session_is_a_failed_outcome_the_sender_can_read(
     assert bridge.notices == ["far relay lacks send-session; upgrade it (version skew)"]
 
 
+def test_misdelivery_notice_names_the_reached_session_and_never_says_not_delivered(env, monkeypatch: pytest.MonkeyPatch) -> None:
+    bridge, _ = env
+    frames = []
+    monkeypatch.setattr(bridge, "write_local", lambda endpoint, frame: frames.append(json.loads(frame)["message"]))
+    bridge.notify_misdelivered(SENT, "far.lan (far)", "addon-38", "Machine-b")
+    assert frames == ["Misdelivered: your message to far.lan (far) was written to addon-38 on Machine-b, not the addressed session."]
+
+
 @pytest.mark.parametrize("stdout", [
     b'{"ok": true}\n',
     b'{"ok": true, "digest": "deadbeef"}\n',

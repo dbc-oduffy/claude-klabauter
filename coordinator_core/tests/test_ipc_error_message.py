@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from coordinator_core.ipc import INTERNAL_ERROR, _handler_exception_error, _timeout_error_envelope
 from coordinator_core.telemetry import op_latency
+import pytest
 
 
-def test_internal_error_message_carries_exception_text():
+def test_internal_error_message_carries_exception_text() -> None:
     exc = ValueError("distinctive text naming the offending field")
     error = _handler_exception_error(exc)
 
@@ -21,7 +22,7 @@ def test_internal_error_message_carries_exception_text():
     assert "distinctive text naming the offending field" in error["message"]
 
 
-def test_timeout_envelope_says_cold_when_not_in_warm_engine(monkeypatch):
+def test_timeout_envelope_says_cold_when_not_in_warm_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(op_latency.ROUTE_ENV, raising=False)
     msg = _timeout_error_envelope("ceremony.commit_v2", 30.0, 1)["error"]["message"]
 
@@ -30,7 +31,7 @@ def test_timeout_envelope_says_cold_when_not_in_warm_engine(monkeypatch):
     assert "warm dispatch indeterminate" not in msg
 
 
-def test_timeout_envelope_says_warm_inside_warm_engine(monkeypatch):
+def test_timeout_envelope_says_warm_inside_warm_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(op_latency.ROUTE_ENV, op_latency.WARM_SERVER)
     msg = _timeout_error_envelope("ceremony.commit_v2", 30.0, 1)["error"]["message"]
 
@@ -38,7 +39,7 @@ def test_timeout_envelope_says_warm_inside_warm_engine(monkeypatch):
     assert "inside the warm engine" in msg
 
 
-def test_mutating_timeout_envelope_states_retry_is_not_safe(monkeypatch):
+def test_mutating_timeout_envelope_states_retry_is_not_safe(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(op_latency.ROUTE_ENV, op_latency.WARM_SERVER)
     error = _timeout_error_envelope("ceremony.commit_v2", 30.0, 1)["error"]
 
@@ -47,7 +48,7 @@ def test_mutating_timeout_envelope_states_retry_is_not_safe(monkeypatch):
     assert "COORDINATOR_DISPATCH_TIMEOUT_SECS" not in error["message"]
 
 
-def test_hung_past_ceiling_envelope_states_retry_is_not_safe():
+def test_hung_past_ceiling_envelope_states_retry_is_not_safe() -> None:
     from coordinator_core.ipc import _hung_past_ceiling_envelope
 
     error = _hung_past_ceiling_envelope("ceremony.commit_v2", 30.0, 2.0, 2.5, 1)["error"]

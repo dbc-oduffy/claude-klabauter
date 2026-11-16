@@ -12,6 +12,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import objective_write as ow
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
@@ -26,17 +27,17 @@ GOOD = (
 GARBAGE = "#!{py}\nprint('not json')\n"
 
 
-def _git(root, *args):
+def _git(root, *args) -> None:
     subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True, **no_console_creationflags())
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     _git(tmp_path, "init", "-q")
     return tmp_path
 
 
-def _script(repo, body=GOOD, name="fals.py", track=True, executable=True):
+def _script(repo, body=GOOD, name: str = "fals.py", track: bool = True, executable: bool = True):
     path = repo / name
     path.write_text(body.format(py=sys.executable), encoding="utf-8")
     path.chmod(path.stat().st_mode | (stat.S_IXUSR if executable else 0))
@@ -53,7 +54,7 @@ def _call(repo, **over):
     return ow._handler(params, repo)
 
 
-def test_first_write_records_candidate_sha_and_leaves_pin_null(repo):
+def test_first_write_records_candidate_sha_and_leaves_pin_null(repo) -> None:
     path = _script(repo)
     res = _call(repo)
     assert res["written"] is True
@@ -64,7 +65,7 @@ def test_first_write_records_candidate_sha_and_leaves_pin_null(repo):
     assert obj["axes"][0]["id"] == "a"
 
 
-def test_base_json_written_when_script_runs_at_base(repo):
+def test_base_json_written_when_script_runs_at_base(repo) -> None:
     _script(repo)
     res = _call(repo)
     assert res["base_written"] is True
@@ -72,7 +73,7 @@ def test_base_json_written_when_script_runs_at_base(repo):
     assert base["axes"][0]["axis"] == "a" and base["axes"][0]["pass"] is False
 
 
-def test_no_base_json_when_script_output_is_unparseable_and_pin_still_null(repo):
+def test_no_base_json_when_script_output_is_unparseable_and_pin_still_null(repo) -> None:
     _script(repo, GARBAGE)
     res = _call(repo)
     assert res["written"] is True and res["base_written"] is False
@@ -81,7 +82,7 @@ def test_no_base_json_when_script_output_is_unparseable_and_pin_still_null(repo)
     assert obj["falsifier_sha256"] is None and obj["pinned_at"] is None
 
 
-def test_second_write_is_refused_and_file_unchanged(repo):
+def test_second_write_is_refused_and_file_unchanged(repo) -> None:
     _script(repo)
     _call(repo)
     before = (repo / "state/warp/run-1/objective.json").read_bytes()
@@ -90,7 +91,7 @@ def test_second_write_is_refused_and_file_unchanged(repo):
     assert (repo / "state/warp/run-1/objective.json").read_bytes() == before
 
 
-def test_untracked_script_refused(repo):
+def test_untracked_script_refused(repo) -> None:
     _script(repo, track=False)
     res = _call(repo)
     assert res["written"] is False and "not git-tracked" in res["error"]
@@ -98,29 +99,29 @@ def test_untracked_script_refused(repo):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="no exec bit on Windows")
-def test_non_executable_script_refused(repo):
+def test_non_executable_script_refused(repo) -> None:
     _script(repo, name="fals", executable=False)
     res = _call(repo, falsifier_script="fals")
     assert res["written"] is False and "not executable" in res["error"]
 
 
-def test_python_script_needs_no_exec_bit(repo):
+def test_python_script_needs_no_exec_bit(repo) -> None:
     _script(repo, executable=False)
     assert _call(repo)["written"] is True
 
 
-def test_script_escaping_repo_refused(repo):
+def test_script_escaping_repo_refused(repo) -> None:
     res = _call(repo, falsifier_script="../outside.py")
     assert res["written"] is False
 
 
-def test_missing_verbatim_and_no_sizing_refused(repo):
+def test_missing_verbatim_and_no_sizing_refused(repo) -> None:
     _script(repo)
     res = _call(repo, verbatim="")
     assert res["written"] is False and "no verbatim" in res["error"]
 
 
-def test_verbatim_falls_back_to_sizing_pm_verbatims_newest(repo, monkeypatch):
+def test_verbatim_falls_back_to_sizing_pm_verbatims_newest(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _script(repo)
     from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 
@@ -134,7 +135,7 @@ def test_verbatim_falls_back_to_sizing_pm_verbatims_newest(repo, monkeypatch):
     assert obj["verbatim"] == "newest words"
 
 
-def test_verbatim_falls_back_to_register_first_row_source_text(repo, monkeypatch):
+def test_verbatim_falls_back_to_register_first_row_source_text(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _script(repo)
     from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 
@@ -150,7 +151,7 @@ def test_verbatim_falls_back_to_register_first_row_source_text(repo, monkeypatch
     assert obj["verbatim"] == "first row words"
 
 
-def _sizing(tshirt="M", **ec):
+def _sizing(tshirt: str = "M", **ec):
     return {"estimate": {"tshirt": tshirt}, "exit_criterion": {"statement": "ship it", **ec}}
 
 
@@ -158,7 +159,7 @@ def _obj(repo):
     return json.loads((repo / "state/warp/run-1/objective.json").read_text(encoding="utf-8"))
 
 
-def test_at_sizing_writes_judge_only_objective_without_falsifier(repo):
+def test_at_sizing_writes_judge_only_objective_without_falsifier(repo) -> None:
     res = ow.write_objective_at_sizing(repo, "run-1", _sizing())
     assert res["written"] is True
     obj = _obj(repo)
@@ -172,7 +173,7 @@ def test_at_sizing_writes_judge_only_objective_without_falsifier(repo):
     assert oc.Objective.from_json(obj).verbatim == "ship it"
 
 
-def test_at_sizing_tags_command_with_expect_deterministic_else_judged(repo):
+def test_at_sizing_tags_command_with_expect_deterministic_else_judged(repo) -> None:
     sizing = _sizing(criteria=[
         {"statement": "greps one", "command": "grep -c x f", "expect": "1"},
         {"statement": "command but no expected result", "command": "ls"},
@@ -186,18 +187,18 @@ def test_at_sizing_tags_command_with_expect_deterministic_else_judged(repo):
 
 
 @pytest.mark.parametrize("tshirt", ["XS", "S", "", "bogus"])
-def test_at_sizing_noop_below_m(repo, tshirt):
+def test_at_sizing_noop_below_m(repo, tshirt) -> None:
     res = ow.write_objective_at_sizing(repo, "run-1", _sizing(tshirt))
     assert res["written"] is False
     assert not (repo / "state/warp/run-1/objective.json").exists()
 
 
 @pytest.mark.parametrize("tshirt", ["M", "L", "XL", "XXL"])
-def test_at_sizing_writes_at_m_and_above(repo, tshirt):
+def test_at_sizing_writes_at_m_and_above(repo, tshirt) -> None:
     assert ow.write_objective_at_sizing(repo, "run-1", _sizing(tshirt))["written"] is True
 
 
-def test_at_sizing_noop_when_file_exists(repo):
+def test_at_sizing_noop_when_file_exists(repo) -> None:
     ow.write_objective_at_sizing(repo, "run-1", _sizing())
     before = (repo / "state/warp/run-1/objective.json").read_bytes()
     res = ow.write_objective_at_sizing(repo, "run-1", _sizing(statement="drifted"))
@@ -205,7 +206,7 @@ def test_at_sizing_noop_when_file_exists(repo):
     assert (repo / "state/warp/run-1/objective.json").read_bytes() == before
 
 
-def test_axes_must_be_unique_and_nonempty(repo):
+def test_axes_must_be_unique_and_nonempty(repo) -> None:
     _script(repo)
     assert _call(repo, axes=[])["written"] is False
     assert _call(repo, axes=[{"id": "a"}, {"id": "a"}])["written"] is False

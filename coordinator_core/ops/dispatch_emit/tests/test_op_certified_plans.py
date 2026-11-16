@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit.op import _certified_plans
+from pathlib import Path
 
 _TABLE = (
     "---\nrun_id: r\n---\n\n## Chunk table\n\n"
@@ -17,18 +18,18 @@ def _inv(path, specs):
     return path
 
 
-def test_a_tranche_answers_for_its_base_inventorys_full_set(tmp_path):
+def test_a_tranche_answers_for_its_base_inventorys_full_set(tmp_path: Path) -> None:
     _inv(tmp_path / "run.md", ["docs/plans/a.md", "docs/plans/b.md", "docs/plans/c.md"])
     tranche = _inv(tmp_path / "run-t2.md", ["docs/plans/a.md"])
     assert _certified_plans(str(tranche)) == ["docs/plans/a.md", "docs/plans/b.md", "docs/plans/c.md"]
 
 
-def test_a_main_inventory_answers_for_itself(tmp_path):
+def test_a_main_inventory_answers_for_itself(tmp_path: Path) -> None:
     inv = _inv(tmp_path / "run.md", ["docs/plans/b.md", "docs/plans/a.md"])
     assert _certified_plans(str(inv)) == ["docs/plans/a.md", "docs/plans/b.md"]
 
 
-def test_no_inventory_or_unreadable_table_is_empty(tmp_path):
+def test_no_inventory_or_unreadable_table_is_empty(tmp_path: Path) -> None:
     assert _certified_plans(None) == []
     bad = tmp_path / "x.md"
     bad.write_text("no table\n", encoding="utf-8")

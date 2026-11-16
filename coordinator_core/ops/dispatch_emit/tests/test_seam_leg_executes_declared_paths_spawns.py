@@ -11,17 +11,18 @@ from coordinator_core.ops.dispatch_emit.emit import compose_script
 from .conftest import REVIEW_KW
 from .test_seam_leg_executes_declared_paths import _test_row_waves
 from .test_seam_wave_boundary import ABSENT_EDGES, CLEAN_REPLY, P2, _NODE, _row, _run_script
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _git(root, *args):
+def _git(root, *args) -> None:
     subprocess.run(["git", *args], cwd=root, check=True, capture_output=True,
                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
 @_NODE
-def test_a_caller_widened_referencer_test_is_declared_but_the_seam_never_runs_it(tmp_path):
+def test_a_caller_widened_referencer_test_is_declared_but_the_seam_never_runs_it(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     (repo / "tests").mkdir(parents=True)
     (repo / "a.py").write_text("x = 1\n")

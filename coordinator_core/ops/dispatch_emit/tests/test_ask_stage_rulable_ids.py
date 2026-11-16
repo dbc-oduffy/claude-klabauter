@@ -11,7 +11,7 @@ from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 
 RUN = "ask-20261016T000000-abc123"
-PLAN_REL = "docs/plans/2026-10-16-rulable.md"
+PLAN_REL = "docs/plans/2026-10/2026-10-16-rulable.md"
 SIZING_REL = "state/sizings/2026-10-16-rulable.yaml"
 
 PLAN = """---
@@ -58,7 +58,7 @@ def _sizing(register: dict | None) -> dict:
 
 def _stage(tmp_path, sizing: dict | None, *, run_token: bool = True):
     (tmp_path / ".git").mkdir()
-    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / PLAN_REL).parent.mkdir(parents=True)
     (tmp_path / PLAN_REL).write_text(PLAN, encoding="utf-8", newline="\n")
     params = {"run_id": RUN, "plan_path": PLAN_REL}
     if sizing is not None:

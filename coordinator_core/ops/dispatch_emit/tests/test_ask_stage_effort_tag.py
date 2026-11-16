@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
+from pathlib import Path
 
 PLAN_REL = "docs/plans/2026-10-01-effort.md"
 
@@ -26,7 +27,7 @@ def _stage(tmp_path, efforts):
     return stage(tmp_path, run_id="r1", plan_rel=PLAN_REL)
 
 
-def test_effort_serialised_only_when_set_and_splits_groups(tmp_path):
+def test_effort_serialised_only_when_set_and_splits_groups(tmp_path: Path) -> None:
     m = _stage(tmp_path, ["high", "high", None])
     by_id = {r.id: r for r in m.rows}
     js = {r.id: r.to_json() for r in m.rows}

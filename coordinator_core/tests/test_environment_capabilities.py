@@ -16,9 +16,10 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core import environment as env_mod
+from pathlib import Path
 
 
-def test_env_is_read_per_call_not_from_module_state():
+def test_env_is_read_per_call_not_from_module_state() -> None:
     remote = {"CLAUDE_CODE_ENTRYPOINT": "remote"}
     workstation = {"CLAUDECODE": "1", "COORDINATOR_SETTINGS_HOME": "/nonexistent-home"}
 
@@ -27,7 +28,7 @@ def test_env_is_read_per_call_not_from_module_state():
     assert env_mod.capability("ephemeral_host", remote).value is True
 
 
-def test_override_arrives_through_the_passed_env(monkeypatch):
+def test_override_arrives_through_the_passed_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_CAP_FLEET_PRESENT", raising=False)
     forced = env_mod.capability(
         "fleet_present", {"CLAUDE_CODE_ENTRYPOINT": "remote", "COORDINATOR_CAP_FLEET_PRESENT": "1"}
@@ -37,14 +38,14 @@ def test_override_arrives_through_the_passed_env(monkeypatch):
     assert "inferred False" in forced.evidence
 
 
-def test_a_typo_in_an_override_is_ignored_not_read_as_false():
+def test_a_typo_in_an_override_is_ignored_not_read_as_false() -> None:
     cap = env_mod.capability(
         "ephemeral_host", {"CLAUDE_CODE_ENTRYPOINT": "remote", "COORDINATOR_CAP_EPHEMERAL_HOST": "maybe"}
     )
     assert cap.value is True and cap.overridden is False
 
 
-def test_engine_installed_accepts_more_than_one_witness(tmp_path):
+def test_engine_installed_accepts_more_than_one_witness(tmp_path: Path) -> None:
     home = tmp_path / "settings-home"
     (home / "machine-local").mkdir(parents=True)
     cap = env_mod.capability("engine_installed", {"COORDINATOR_SETTINGS_HOME": str(home)})
@@ -52,13 +53,13 @@ def test_engine_installed_accepts_more_than_one_witness(tmp_path):
     assert "machine-local/" in cap.evidence
 
 
-def test_engine_not_installed_when_no_witness_is_present(tmp_path):
+def test_engine_not_installed_when_no_witness_is_present(tmp_path: Path) -> None:
     home = tmp_path / "empty-home"
     home.mkdir()
     assert env_mod.capability("engine_installed", {"COORDINATOR_SETTINGS_HOME": str(home)}).value is False
 
 
-def test_durable_repo_probes_for_a_real_remote(tmp_path, monkeypatch):
+def test_durable_repo_probes_for_a_real_remote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     (repo / ".git" / "config").write_text("[core]\n", encoding="utf-8")
@@ -71,7 +72,7 @@ def test_durable_repo_probes_for_a_real_remote(tmp_path, monkeypatch):
     assert env_mod.capability("durable_repo", {}).value is True
 
 
-def test_a_raising_probe_degrades_permissive_without_a_caller_handler(monkeypatch):
+def test_a_raising_probe_degrades_permissive_without_a_caller_handler(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(env, **kw):
         raise RuntimeError("probe exploded")
 
@@ -81,12 +82,12 @@ def test_a_raising_probe_degrades_permissive_without_a_caller_handler(monkeypatc
     assert "probe raised RuntimeError" in cap.evidence
 
 
-def test_unknown_capability_is_permissive_not_an_exception():
+def test_unknown_capability_is_permissive_not_an_exception() -> None:
     cap = env_mod.capability("not_a_real_capability", {})
     assert cap.value is True and "defaulting permissive" in cap.evidence
 
 
-def test_asking_for_one_capability_never_runs_another(monkeypatch, tmp_path):
+def test_asking_for_one_capability_never_runs_another(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     ran = []
     real = env_mod._PROBES["durable_repo"]
 
@@ -99,7 +100,7 @@ def test_asking_for_one_capability_never_runs_another(monkeypatch, tmp_path):
     assert ran == []
 
 
-def test_probing_spawns_no_subprocess(monkeypatch):
+def test_probing_spawns_no_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     def forbidden(*a, **k):
@@ -110,12 +111,12 @@ def test_probing_spawns_no_subprocess(monkeypatch):
     env_mod.capabilities({"CLAUDE_CODE_ENTRYPOINT": "remote"})
 
 
-def test_capabilities_report_is_immutable():
+def test_capabilities_report_is_immutable() -> None:
     caps = env_mod.capabilities({})
     with pytest.raises(TypeError):
         caps["fleet_present"] = None
 
 
-def test_every_capability_carries_evidence():
+def test_every_capability_carries_evidence() -> None:
     for name, cap in env_mod.capabilities({}).items():
         assert cap.evidence.strip() and cap.name == name

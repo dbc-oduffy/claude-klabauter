@@ -37,6 +37,7 @@ import pytest
 
 from coordinator_core import baton_assemble as ba
 from coordinator_core.baton_assemble import apply as ba_apply
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -67,7 +68,7 @@ from coordinator_core.test_baton_assemble import (  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
-def _stub_operator_config(monkeypatch):
+def _stub_operator_config(monkeypatch: pytest.MonkeyPatch) -> None:
     """The sibling module's autouse fixture of the same name, restated because
     an autouse fixture is module-scoped and does not cross into this one. The
     VALUES have one home -- both are imported above, never re-derived here.
@@ -146,7 +147,7 @@ class TestADegradeCompensatesNothing:
     `live_handoffs()` came back `["predecessor.md"]`, the successor having been
     minted and then deleted."""
 
-    def test_the_minted_successor_survives_the_decline(self, tmp_path, monkeypatch):
+    def test_the_minted_successor_survives_the_decline(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         harness = _declining_harness(tmp_path, monkeypatch)
         exit_code, report = harness.run()
 
@@ -174,8 +175,8 @@ class TestADegradeCompensatesNothing:
         ]
 
     def test_the_decline_triggers_no_compensation_pass_at_all(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         harness = _declining_harness(tmp_path, monkeypatch)
         _, report = harness.run()
 
@@ -185,8 +186,8 @@ class TestADegradeCompensatesNothing:
         )
 
     def test_the_surviving_successor_is_committed_not_left_loose(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A run that ends `ok` reaches `_scoped_commit`, so the operator is not
         handed an uncommitted baton to finish by hand -- the "relocated
         transcription" the module's own resume model exists to end."""
@@ -196,8 +197,8 @@ class TestADegradeCompensatesNothing:
         assert report["commit_sha"]
 
     def test_the_predecessor_is_left_untouched_by_the_decline(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """DR-242's substance is unchanged: a predecessor that fails the gate
         is still never superseded, and the predecessor is left byte-identical.
 
@@ -228,7 +229,7 @@ class TestAGenuineFailureStillCompensates:
     compensation path it narrows. Same never-claimed predecessor, but a
     directive genuinely raises."""
 
-    def test_a_genuine_failure_still_compensates(self, tmp_path, monkeypatch):
+    def test_a_genuine_failure_still_compensates(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         harness = _declining_harness(tmp_path, monkeypatch)
         harness.fail_at = "d5"
         exit_code, report = harness.run()
@@ -242,8 +243,8 @@ class TestAGenuineFailureStillCompensates:
         assert harness.live_handoffs() == ["predecessor.md"]
 
     def test_compensation_still_declines_to_delete_operator_content(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The compensator's own pristine gate is untouched: a scaffold
         carrying real prose survives a genuine failure, as it did before."""
         harness = _declining_harness(tmp_path, monkeypatch)
@@ -266,8 +267,8 @@ class TestTheReportDistinguishesTheTwoCases:
     from either field."""
 
     def test_decline_reports_ok_and_failure_reports_partial(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         declined = _declining_harness(tmp_path, monkeypatch)
         _, decline_report = declined.run()
 
@@ -282,8 +283,8 @@ class TestTheReportDistinguishesTheTwoCases:
         assert [d["directive_id"] for d in decline_report["degraded"]] == ["d6"]
 
     def test_the_degrade_row_names_the_directive_the_cli_and_the_reason(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         harness = _declining_harness(tmp_path, monkeypatch)
         _, report = harness.run()
 
@@ -300,7 +301,7 @@ class TestTheReportDistinguishesTheTwoCases:
         # verbatim here would make this suite a second owner of that text.
         assert "clause 4" in row["error"], row
 
-    def test_a_clean_run_reports_an_empty_degraded_list(self, tmp_path, monkeypatch):
+    def test_a_clean_run_reports_an_empty_degraded_list(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Present-as-[] -- "nothing declined" and "this report does not say"
         must not read the same.
 
@@ -345,7 +346,7 @@ class TestCollectDegradedNormalization:
     d6) and d3's LIST of per-field degrade rows. Both flatten to the same row
     shape, so a caller never branches on which handler produced the entry."""
 
-    def test_a_list_valued_degrade_flattens_to_one_row_per_entry(self):
+    def test_a_list_valued_degrade_flattens_to_one_row_per_entry(self) -> None:
         report = {
             "results": [
                 {
@@ -375,7 +376,7 @@ class TestCollectDegradedNormalization:
             },
         ]
 
-    def test_a_null_degrade_contributes_no_row(self):
+    def test_a_null_degrade_contributes_no_row(self) -> None:
         report = {
             "results": [
                 {"id": "d4", "detail": {"cli": "render-project-tracker", "degraded": None}},
@@ -385,7 +386,7 @@ class TestCollectDegradedNormalization:
         }
         assert ba_apply._collect_degraded(report) == []
 
-    def test_a_report_with_no_results_key_is_not_an_error(self):
+    def test_a_report_with_no_results_key_is_not_an_error(self) -> None:
         assert ba_apply._collect_degraded({"landed": []}) == []
 
 
@@ -394,8 +395,8 @@ class TestTheDeclineIsVisibleAtTheHandlerSeam:
     from, asserted without a whole `apply()` run."""
 
     def test_a_choke_point_refusal_returns_a_degrade_and_keeps_the_successor(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Renamed from `..._never_composes_the_op` (2026-09-12).
 
         The op IS composed now, deliberately: this wrapper stopped pre-empting
@@ -499,8 +500,8 @@ class TestAKilledArchiveTransitionDegradesToo:
         return successor_rel, successor_abs
 
     def test_a_killed_housekeeping_op_degrades_and_keeps_the_successor(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from coordinator_core.op_budget_suspension import OpSuspendedError
 
         successor_rel, successor_abs = self._seam_args(tmp_path)
@@ -530,8 +531,8 @@ class TestAKilledArchiveTransitionDegradesToo:
         assert result["degraded"]["continued_into"] == successor_rel
 
     def test_a_half_applied_succession_still_raises_and_still_cleans_up(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The negative half, co-located deliberately. `superseded is False` is
         reached only AFTER the op has run, where the predecessor may be
         half-stamped -- it must keep raising. A fix that made the suspension
@@ -561,7 +562,7 @@ class TestAKilledArchiveTransitionDegradesToo:
         )
 
 
-def test_the_module_under_test_is_importable_without_a_repo():
+def test_the_module_under_test_is_importable_without_a_repo() -> None:
     """Guards the import idiom above -- this package had no `tests/` directory
     before 2026-08-03, so the seam is new."""
     assert ba.KINDS

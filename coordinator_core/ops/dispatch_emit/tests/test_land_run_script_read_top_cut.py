@@ -4,13 +4,14 @@ from __future__ import annotations
 import hashlib
 
 from coordinator_core.ops.dispatch_emit import land_run
+from pathlib import Path
 
 
 def _sha(data: bytes) -> str:
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
-def test_worktree_blob_hashes_a_file_and_reads_absent_and_dir_as_none(tmp_path):
+def test_worktree_blob_hashes_a_file_and_reads_absent_and_dir_as_none(tmp_path: Path) -> None:
     (tmp_path / "a.txt").write_bytes(b"hello\n")
     (tmp_path / "d").mkdir()
     assert land_run._worktree_blob(tmp_path, "a.txt") == _sha(b"hello\n")
@@ -18,12 +19,12 @@ def test_worktree_blob_hashes_a_file_and_reads_absent_and_dir_as_none(tmp_path):
     assert land_run._worktree_blob(tmp_path, "d") is None
 
 
-def test_worktree_blob_does_not_stat_before_the_read(tmp_path, monkeypatch):
+def test_worktree_blob_does_not_stat_before_the_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "a.txt").write_bytes(b"x\n")
     calls = []
     real = type(tmp_path).is_file
 
-    def spy(self):
+    def spy(self) -> bool:
         calls.append(str(self))
         return real(self)
 
@@ -32,7 +33,7 @@ def test_worktree_blob_does_not_stat_before_the_read(tmp_path, monkeypatch):
     assert [c for c in calls if c.endswith("a.txt")] == []
 
 
-def test_superseded_finds_an_earlier_same_sizing_dir_and_skips_a_malformed_one(tmp_path, monkeypatch):
+def test_superseded_finds_an_earlier_same_sizing_dir_and_skips_a_malformed_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rec = tmp_path / land_run.RECORD_DIR_ROOT
     earlier = "ask-20261030T100000-aaaaaa"
     other = "ask-20261030T110000-bbbbbb"
@@ -77,7 +78,7 @@ def _run_id(n: int) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     (root / ".git").mkdir(parents=True)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", SESSION)
@@ -99,11 +100,11 @@ def _halted(root, n: int, withheld: str) -> str:
 
 
 @pytest.fixture
-def marker_reads(monkeypatch):
+def marker_reads(monkeypatch: pytest.MonkeyPatch):
     seen: list = []
     real = halted_run._marker_text
 
-    def spy(record_dir):
+    def spy(record_dir) -> str:
         seen.append(record_dir.name)
         return real(record_dir)
 
@@ -120,8 +121,8 @@ def _scan_reads(root, seen: list) -> int:
 
 
 def test_marker_reads_do_not_grow_with_halted_runs_that_withhold_nothing_of_the_landing(
-    tmp_path, repo, marker_reads
-):
+    tmp_path: Path, repo, marker_reads
+) -> None:
     for n in range(1, 7):
         _halted(repo, n, f"elsewhere/{n}.py")
     few = _scan_reads(repo, marker_reads)
@@ -131,7 +132,7 @@ def test_marker_reads_do_not_grow_with_halted_runs_that_withhold_nothing_of_the_
     assert few == many == 0
 
 
-def test_a_run_withholding_a_landing_path_still_holds_it_and_is_the_only_marker_read(repo, marker_reads):
+def test_a_run_withholding_a_landing_path_still_holds_it_and_is_the_only_marker_read(repo, marker_reads) -> None:
     for n in range(1, 6):
         _halted(repo, n, f"elsewhere/{n}.py")
     holder = _halted(repo, 9, WANTED)
@@ -141,13 +142,13 @@ def test_a_run_withholding_a_landing_path_still_holds_it_and_is_the_only_marker_
     assert {name for name in marker_reads} == {holder}
 
 
-def test_a_directory_withhold_over_a_landing_path_is_not_cleared(repo):
+def test_a_directory_withhold_over_a_landing_path_is_not_cleared(repo) -> None:
     holder = _halted(repo, 1, "src")
     halted_withheld_index.rebuild(repo)
     assert holder not in sibling_claims.index_clear_runs(repo, [WANTED])
 
 
-def test_a_run_without_an_index_entry_has_its_marker_read(repo, marker_reads):
+def test_a_run_without_an_index_entry_has_its_marker_read(repo, marker_reads) -> None:
     holder = _halted(repo, 1, WANTED)
     halted_withheld_index.rebuild(repo)
     halted_withheld_index.remove_run(repo, holder)
@@ -157,7 +158,7 @@ def test_a_run_without_an_index_entry_has_its_marker_read(repo, marker_reads):
     assert holder in marker_reads
 
 
-def test_an_unreadable_index_entry_falls_back_to_the_marker(repo):
+def test_an_unreadable_index_entry_falls_back_to_the_marker(repo) -> None:
     holder = _halted(repo, 1, WANTED)
     halted_withheld_index.rebuild(repo)
     (repo / halted_withheld_index.INDEX_DIR / f"{holder}.json").write_text("{not json", encoding="utf-8")
@@ -165,7 +166,7 @@ def test_an_unreadable_index_entry_falls_back_to_the_marker(repo):
     assert [r.name for r, _ in sibling_claims.halted_records(repo, "ask-own", [WANTED])] == [holder]
 
 
-def test_a_declared_only_entry_is_not_cleared(repo):
+def test_a_declared_only_entry_is_not_cleared(repo) -> None:
     run_id = _run_id(1)
     (repo / land_run.RECORD_DIR_ROOT / run_id).mkdir(parents=True)
     halted_withheld_index.rebuild(repo)
@@ -173,7 +174,7 @@ def test_a_declared_only_entry_is_not_cleared(repo):
     assert sibling_claims.index_clear_runs(repo, [WANTED]) == frozenset()
 
 
-def test_a_corrupt_marker_of_an_unindexed_run_still_holds_every_landing_path(repo):
+def test_a_corrupt_marker_of_an_unindexed_run_still_holds_every_landing_path(repo) -> None:
     bad = repo / land_run.RECORD_DIR_ROOT / _run_id(1)
     bad.mkdir(parents=True)
     (bad / "halted.json").write_text("{corrupt", encoding="utf-8")

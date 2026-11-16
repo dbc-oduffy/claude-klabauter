@@ -6,11 +6,16 @@ import importlib.machinery
 import importlib.util
 import pathlib
 import sys
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _load_cli():
+def _load_cli() -> ModuleType:
     sys.path.insert(0, str(_BIN_DIR))
     loader = importlib.machinery.SourceFileLoader("cross_repo_memo_w5c", str(_BIN_DIR / "cross-repo-memo.py"))
     spec = importlib.util.spec_from_loader("cross_repo_memo_w5c", loader)
@@ -24,14 +29,14 @@ class _Refusal(RuntimeError):
     result = None
 
 
-def test_over_cap_refusal_reaches_stdout_with_actual_length(capsys):
+def test_over_cap_refusal_reaches_stdout_with_actual_length(capsys: pytest.CaptureFixture[str]) -> None:
     cli = _load_cli()
     cli._echo_summary_cap_refusal_to_stdout(_Refusal("refused"))
     out = capsys.readouterr().out
     assert "summary is 250 chars, cap is 240" in out
 
 
-def test_unrelated_refusal_prints_nothing_on_stdout(capsys):
+def test_unrelated_refusal_prints_nothing_on_stdout(capsys: pytest.CaptureFixture[str]) -> None:
     cli = _load_cli()
     cli._echo_summary_cap_refusal_to_stdout(RuntimeError("collision"))
     assert capsys.readouterr().out == ""

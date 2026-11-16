@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.benchmarks import review_tripwires_scan_profile as sp
 from coordinator_core.ops.tests.test_review_tripwires import _repo
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -18,7 +19,7 @@ FILES = {
 }
 
 
-def test_rows_cover_both_scanners_with_counts(tmp_path):
+def test_rows_cover_both_scanners_with_counts(tmp_path: Path) -> None:
     repo = _repo(tmp_path, FILES)
     rows = {r.axis: r for r in sp.profile(repo, named=10, created=10, repeat=1)}
     assert set(rows) == {"literal_namers", "tree_scanners", "scan_tracked"}
@@ -30,7 +31,7 @@ def test_rows_cover_both_scanners_with_counts(tmp_path):
         assert len(r.digest) == 64
 
 
-def test_digest_tracks_output_and_is_repeatable(tmp_path):
+def test_digest_tracks_output_and_is_repeatable(tmp_path: Path) -> None:
     repo = _repo(tmp_path, FILES)
     first = {r.axis: r.digest for r in sp.profile(repo, repeat=1)}
     again = {r.axis: r.digest for r in sp.profile(repo, repeat=1)}
@@ -41,7 +42,7 @@ def test_digest_tracks_output_and_is_repeatable(tmp_path):
     assert sp.digest_of([]) !=sp.digest_of(["tests/test_walk.py"])
 
 
-def test_over_bar_flag_and_exit_code(tmp_path, monkeypatch):
+def test_over_bar_flag_and_exit_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path, FILES)
     monkeypatch.setenv("COORDINATOR_INVOCATION_ORIGIN", "benchmark")
     monkeypatch.setattr(sp, "BAR_MS", -1.0)

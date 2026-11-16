@@ -6,6 +6,7 @@ import pytest
 
 import coordinator_core.baton_assemble as ba
 from coordinator_core.test_baton_assemble import _FAKE_OPERATOR_CONFIG, _write_artifact
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -13,11 +14,11 @@ _NOTE = "operator-authorized break-glass excise"
 
 
 @pytest.fixture(autouse=True)
-def _stub_operator_config(monkeypatch):
+def _stub_operator_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
 
 
-def _artifact(tmp_path):
+def _artifact(tmp_path) -> Path:
     predecessor = _write_artifact(
         tmp_path / "state" / "handoffs" / "predecessor.md", ["handoff_id: hnd-predecessor-1a2b3c"]
     )
@@ -38,7 +39,7 @@ def _lineage(tmp_path, entry):
     ).decision_object["artifact"]["lineage"]
 
 
-def test_value_only_excise_resolves_like_disposition(tmp_path):
+def test_value_only_excise_resolves_like_disposition(tmp_path: Path) -> None:
     by_disposition = _lineage(tmp_path, {"disposition": "excise", "decision_note": _NOTE})
     by_value = _lineage(tmp_path, {"value": "excise", "decision_note": _NOTE})
     assert by_value["predecessor"] is None
@@ -46,7 +47,7 @@ def test_value_only_excise_resolves_like_disposition(tmp_path):
     assert by_value["predecessor"] == by_disposition["predecessor"]
 
 
-def test_unrecognized_entry_refuses_naming_key_and_shapes():
+def test_unrecognized_entry_refuses_naming_key_and_shapes() -> None:
     with pytest.raises(ValueError, match=r"j-continuation-vs-fork.*\{\"value\"") as exc:
         ba._decision_entry({"j-continuation-vs-fork": {"decision_note": "x"}}, "j-continuation-vs-fork")
     assert "disposition" in str(exc.value)
@@ -54,7 +55,7 @@ def test_unrecognized_entry_refuses_naming_key_and_shapes():
         ba._decision_entry({"j-continuation-vs-fork": 3}, "j-continuation-vs-fork")
 
 
-def test_disposition_entry_is_not_rewritten():
+def test_disposition_entry_is_not_rewritten() -> None:
     entry = {"disposition": "override", "value": "payload"}
     assert ba._decision_entry({"k": entry}, "k") == entry
     assert ba._decision_entry({}, "k") is None

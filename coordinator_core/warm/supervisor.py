@@ -1330,6 +1330,16 @@ def _assert_credential_ready(root: Path) -> None:
     cookie.assert_directory_private(root)
 
 
+def _start_basetemp_sweeper() -> None:
+    """Start the pytest basetemp sweeper daemon; a failure is logged, never raised."""
+    try:
+        from coordinator_core.warm.pytest_basetemp_sweep import start_sweeper
+
+        start_sweeper()
+    except Exception as exc:  # noqa: BLE001 -- housekeeping must never stop the server
+        print(f"[warm-http-supervisor] pytest basetemp sweeper not started: {exc!r}", file=sys.stderr)
+
+
 def main() -> int:
     """The supervisor process entrypoint `ensure_listener`'s spawn trigger
     targets. Boot sequence, mirroring `warm.server.main`'s numbered steps:
@@ -1435,6 +1445,7 @@ def main() -> int:
 
     try:
         threading.Thread(target=ctx._skew_watchdog_loop, daemon=True, name="warm-http-skew-watchdog").start()
+        _start_basetemp_sweeper()
         httpd.serve_forever()
     finally:
         ctx.ctx_shutdown()

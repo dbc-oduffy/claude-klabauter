@@ -16,6 +16,7 @@ from coordinator_core.bash_guards.tests.test_check5_foreign_hunk_merge_conclusio
     _w,
 )
 from coordinator_core.session import core
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -44,7 +45,7 @@ def _peer_owns(root: str, path: str) -> None:
     _claim(root, "peer-sess", path, content_hash="1" * 64)
 
 
-def test_merge_incoming_path_outside_touch_list_is_not_a_sweep(tmp_path):
+def test_merge_incoming_path_outside_touch_list_is_not_a_sweep(tmp_path: Path) -> None:
     root = _merge_in_progress(tmp_path)
     sid = _session(root)
     _claim(root, sid, "unrelated.txt", content_hash="0" * 64)
@@ -53,7 +54,7 @@ def test_merge_incoming_path_outside_touch_list_is_not_a_sweep(tmp_path):
     assert "BLOCKED" not in text
 
 
-def test_non_incoming_peer_path_staged_mid_merge_still_flagged(tmp_path):
+def test_non_incoming_peer_path_staged_mid_merge_still_flagged(tmp_path: Path) -> None:
     root = _merge_in_progress(tmp_path)
     _w(root, "c.txt", "peer edit\n")
     _git(root, "add", "c.txt")
@@ -65,7 +66,7 @@ def test_non_incoming_peer_path_staged_mid_merge_still_flagged(tmp_path):
     assert "a.txt" not in text
 
 
-def test_no_merge_in_progress_never_runs_the_diff_probe(tmp_path, monkeypatch):
+def test_no_merge_in_progress_never_runs_the_diff_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _ = _branch_point(tmp_path)
     _w(root, "a.txt", "changed\n")
     _git(root, "add", "a.txt")
@@ -74,7 +75,7 @@ def test_no_merge_in_progress_never_runs_the_diff_probe(tmp_path, monkeypatch):
     calls = []
     real = _dc_commit._run_git
 
-    def counting(args, *a, **kw):
+    def counting(args, *a, **kw) -> tuple[int, str]:
         calls.append(list(args))
         return real(args, *a, **kw)
 

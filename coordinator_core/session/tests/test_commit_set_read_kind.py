@@ -5,11 +5,13 @@ import os
 import subprocess
 
 from coordinator_core.session import claim_index, touch_record
+from pathlib import Path
+import pytest
 
 T = "2026-08-08T10:00:00.000000Z"
 
 
-def _hold(base, sid, path, kinds):
+def _hold(base, sid, path, kinds) -> None:
     sink = os.path.join(str(base), sid, "touch-record.jsonl")
     for kind in kinds:
         touch_record.append_event(
@@ -23,28 +25,28 @@ def _hold(base, sid, path, kinds):
         )
 
 
-def test_read_only_self_hold_leaves_paths(tmp_path):
+def test_read_only_self_hold_leaves_paths(tmp_path: Path) -> None:
     _hold(tmp_path, "me", "r.py", ["r"])
     cs = claim_index.commit_set("me", sessions_dir=str(tmp_path))
     assert cs.paths == []
     assert cs.read_only == ["r.py"]
 
 
-def test_write_then_read_stays_in_paths(tmp_path):
+def test_write_then_read_stays_in_paths(tmp_path: Path) -> None:
     _hold(tmp_path, "me", "w.py", ["w", "r"])
     cs = claim_index.commit_set("me", sessions_dir=str(tmp_path))
     assert cs.paths == ["w.py"]
     assert cs.read_only == []
 
 
-def test_kindless_hold_stays_in_paths(tmp_path):
+def test_kindless_hold_stays_in_paths(tmp_path: Path) -> None:
     _hold(tmp_path, "me", "k.py", [None])
     cs = claim_index.commit_set("me", sessions_dir=str(tmp_path))
     assert cs.paths == ["k.py"]
     assert cs.read_only == []
 
 
-def test_peer_read_hold_still_contests(tmp_path):
+def test_peer_read_hold_still_contests(tmp_path: Path) -> None:
     _hold(tmp_path, "me", "c.py", ["w"])
     _hold(tmp_path, "peer", "c.py", ["r"])
     _hold(tmp_path, "peer", "p.py", ["r"])
@@ -55,7 +57,7 @@ def test_peer_read_hold_still_contests(tmp_path):
     assert cs.read_only == []
 
 
-def test_read_only_sorted_and_zero_spawn(tmp_path, monkeypatch):
+def test_read_only_sorted_and_zero_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _hold(tmp_path, "me", "b.py", ["r"])
     _hold(tmp_path, "me", "a.py", ["r"])
 

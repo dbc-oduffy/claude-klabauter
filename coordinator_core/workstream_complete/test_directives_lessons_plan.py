@@ -35,6 +35,7 @@ from coordinator_core.workstream_complete.directives_lessons_plan import (
     build_plan_claim_and_stamp_directives,
     resolve_governing_plan_with_source,
 )
+import pytest
 
 
 def _write_plan(tmp_path: Path, slug: str, status: str | None = None) -> None:
@@ -55,7 +56,7 @@ def _write_plan(tmp_path: Path, slug: str, status: str | None = None) -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_baton_stamp_resolves_governing_plan(tmp_path):
+def test_baton_stamp_resolves_governing_plan(tmp_path: Path) -> None:
     slug = "2026-08-04-some-shipped-plan"
     _write_plan(tmp_path, slug)
 
@@ -71,7 +72,7 @@ def test_baton_stamp_resolves_governing_plan(tmp_path):
     assert resolved.path == tmp_path / "docs" / "plans" / f"{slug}.md"
 
 
-def test_baton_stamp_named_but_file_missing_does_not_fall_through(tmp_path):
+def test_baton_stamp_named_but_file_missing_does_not_fall_through(tmp_path: Path) -> None:
     resolved, source = resolve_governing_plan_with_source(
         tmp_path,
         decisions={},
@@ -82,7 +83,7 @@ def test_baton_stamp_named_but_file_missing_does_not_fall_through(tmp_path):
     assert source == "handoff_frontmatter_not_found"
 
 
-def test_null_string_stamp_treated_as_absent(tmp_path):
+def test_null_string_stamp_treated_as_absent(tmp_path: Path) -> None:
     resolved, source = resolve_governing_plan_with_source(
         tmp_path,
         decisions={},
@@ -93,7 +94,7 @@ def test_null_string_stamp_treated_as_absent(tmp_path):
     assert source == "none"
 
 
-def test_no_stamp_no_override_warns_absent_no_search_attempted(tmp_path):
+def test_no_stamp_no_override_warns_absent_no_search_attempted(tmp_path: Path) -> None:
     # Deliberately seed disk with what the OLD fixed-file fallback would
     # have picked up — proving no scan is attempted at any price (C10, R1).
     (tmp_path / "tasks").mkdir()
@@ -109,7 +110,7 @@ def test_no_stamp_no_override_warns_absent_no_search_attempted(tmp_path):
     assert source == "none"
 
 
-def test_unused_deliverable_id_and_session_id_params_accepted_for_caller_compat(tmp_path):
+def test_unused_deliverable_id_and_session_id_params_accepted_for_caller_compat(tmp_path: Path) -> None:
     """`__init__.py` (out of this chunk's `writes:` scope) still calls this
     function with five positional args — a signature change there would be
     the caller-first hazard this plan's own Anti-scope forbids. Both
@@ -132,7 +133,7 @@ def test_unused_deliverable_id_and_session_id_params_accepted_for_caller_compat(
 # ---------------------------------------------------------------------------
 
 
-def test_decisions_slug_still_wins_over_baton_stamp(tmp_path):
+def test_decisions_slug_still_wins_over_baton_stamp(tmp_path: Path) -> None:
     decisions_slug = "decisions-named-plan"
     stamped_slug = "stamped-plan"
     _write_plan(tmp_path, decisions_slug)
@@ -148,7 +149,7 @@ def test_decisions_slug_still_wins_over_baton_stamp(tmp_path):
     assert resolved.slug == decisions_slug
 
 
-def test_decisions_path_still_wins_over_baton_stamp(tmp_path):
+def test_decisions_path_still_wins_over_baton_stamp(tmp_path: Path) -> None:
     decisions_slug = "decisions-path-plan"
     stamped_slug = "stamped-plan"
     _write_plan(tmp_path, decisions_slug)
@@ -164,7 +165,7 @@ def test_decisions_path_still_wins_over_baton_stamp(tmp_path):
     assert resolved.slug == decisions_slug
 
 
-def test_decisions_slug_named_but_missing_does_not_fall_through_to_stamp(tmp_path):
+def test_decisions_slug_named_but_missing_does_not_fall_through_to_stamp(tmp_path: Path) -> None:
     stamped_slug = "stamped-plan"
     _write_plan(tmp_path, stamped_slug)
 
@@ -190,7 +191,7 @@ def test_decisions_slug_named_but_missing_does_not_fall_through_to_stamp(tmp_pat
 # ---------------------------------------------------------------------------
 
 
-def test_already_implemented_plan_still_resolves_and_emits_the_same_directive_pair(tmp_path):
+def test_already_implemented_plan_still_resolves_and_emits_the_same_directive_pair(tmp_path: Path) -> None:
     slug = "already-implemented-plan"
     _write_plan(tmp_path, slug, status="implemented")
 
@@ -207,7 +208,7 @@ def test_already_implemented_plan_still_resolves_and_emits_the_same_directive_pa
     assert ids == {"d-claim-plan-execution-lock", "d-stamp-plan-implemented"}
 
 
-def test_stamp_directive_depends_on_the_claim_landing():
+def test_stamp_directive_depends_on_the_claim_landing() -> None:
     """Field-level pin (secondary check only — see the behavioural test
     below for the actual enforcement). `depends_on` naming a SIBLING
     DIRECTIVE id is inert at `apply_halt.py::_directive_gate_open` (hits a
@@ -222,7 +223,7 @@ def test_stamp_directive_depends_on_the_claim_landing():
     assert by_id["d-stamp-plan-implemented"]["args"][-1] == "{d-claim-plan-execution-lock.landed}"
 
 
-def test_stamp_directive_does_not_execute_when_claim_is_denied():
+def test_stamp_directive_does_not_execute_when_claim_is_denied() -> None:
     """Behavioural coverage: drive the real directives through `apply.py`'s
     directive-execution seam (`_execute_directives`, the function `apply()`
     itself delegates to for directive dispatch/halt) with the claim
@@ -270,7 +271,7 @@ def test_stamp_directive_does_not_execute_when_claim_is_denied():
     assert "d-stamp-plan-implemented" in failed_ids
 
 
-def test_directives_carry_the_resolved_path_not_a_docs_plans_guess(tmp_path):
+def test_directives_carry_the_resolved_path_not_a_docs_plans_guess(tmp_path: Path) -> None:
     """A plan resolved OUTSIDE `docs/plans/` reaches every directive at the
     path the resolver actually returned.
 
@@ -337,13 +338,13 @@ def _add_args(decisions, repo_root=None):
     return build_lesson_capture_directives(decisions, repo_root)[0]["args"]
 
 
-def test_single_line_body_still_travels_as_body():
+def test_single_line_body_still_travels_as_body() -> None:
     args = _add_args({"lessons": [_lesson()]})
     assert args[args.index("--body") + 1] == "one line"
     assert "--body-file" not in args
 
 
-def test_multi_paragraph_body_is_spooled_and_forwarded_as_body_file(tmp_path):
+def test_multi_paragraph_body_is_spooled_and_forwarded_as_body_file(tmp_path: Path) -> None:
     body = "First paragraph.\n\nSecond paragraph, the half that makes it actionable."
     args = _add_args({"lessons": [_lesson(body=body)]}, repo_root=tmp_path)
 
@@ -353,7 +354,7 @@ def test_multi_paragraph_body_is_spooled_and_forwarded_as_body_file(tmp_path):
     assert spooled.parent == tmp_path / "state" / "ceremony" / "wsc-lesson-body"
 
 
-def test_multi_paragraph_body_spool_is_idempotent_across_passes(tmp_path):
+def test_multi_paragraph_body_spool_is_idempotent_across_passes(tmp_path: Path) -> None:
     body = "Para one.\n\nPara two."
     first = _add_args({"lessons": [_lesson(body=body)]}, repo_root=tmp_path)
     second = _add_args({"lessons": [_lesson(body=body)]}, repo_root=tmp_path)
@@ -363,27 +364,27 @@ def test_multi_paragraph_body_spool_is_idempotent_across_passes(tmp_path):
     assert [p.name for p in spool_dir.iterdir()] == [Path(first[first.index("--body-file") + 1]).name]
 
 
-def test_explicit_body_file_is_forwarded_verbatim(tmp_path):
+def test_explicit_body_file_is_forwarded_verbatim(tmp_path: Path) -> None:
     args = _add_args({"lessons": [_lesson(body=None, body_file="state/scratch/body.md")]})
     assert args[args.index("--body-file") + 1] == "state/scratch/body.md"
     assert "--body" not in args
 
 
-def test_body_and_body_file_together_are_refused():
+def test_body_and_body_file_together_are_refused() -> None:
     import pytest
 
     with pytest.raises(ValueError, match="exactly one of 'body' or 'body_file'"):
         _add_args({"lessons": [_lesson(body_file="somewhere.md")]})
 
 
-def test_neither_body_nor_body_file_is_refused():
+def test_neither_body_nor_body_file_is_refused() -> None:
     import pytest
 
     with pytest.raises(ValueError, match="exactly one of 'body' or 'body_file'"):
         _add_args({"lessons": [_lesson(body="")]})
 
 
-def test_multi_paragraph_body_without_a_repo_root_refuses_rather_than_composing_argv():
+def test_multi_paragraph_body_without_a_repo_root_refuses_rather_than_composing_argv() -> None:
     import pytest
 
     with pytest.raises(ValueError, match="multi-paragraph"):
@@ -424,13 +425,13 @@ def _queue_args(decisions, repo_root=None):
     return queue[0]["args"]
 
 
-def test_single_line_queue_body_still_travels_as_body():
+def test_single_line_queue_body_still_travels_as_body() -> None:
     args = _queue_args({"lessons": [_universal_lesson()]})
     assert args[args.index("--body") + 1] == "one line"
     assert "--body-file" not in args
 
 
-def test_multi_paragraph_queue_body_is_spooled_and_forwarded_as_body_file(tmp_path):
+def test_multi_paragraph_queue_body_is_spooled_and_forwarded_as_body_file(tmp_path: Path) -> None:
     body = "First paragraph.\n\nSecond paragraph, the half a truncated queue entry lost."
     args = _queue_args({"lessons": [_universal_lesson(queue_body=body)]}, repo_root=tmp_path)
 
@@ -440,14 +441,14 @@ def test_multi_paragraph_queue_body_is_spooled_and_forwarded_as_body_file(tmp_pa
     assert spooled.parent == tmp_path / "state" / "ceremony" / "wsc-lesson-body"
 
 
-def test_multi_paragraph_queue_body_without_a_repo_root_refuses_rather_than_composing_argv():
+def test_multi_paragraph_queue_body_without_a_repo_root_refuses_rather_than_composing_argv() -> None:
     import pytest
 
     with pytest.raises(ValueError, match="multi-paragraph"):
         _queue_args({"lessons": [_universal_lesson(queue_body="a\n\nb")]})
 
 
-def test_resolves_ids_never_spools_a_body(tmp_path):
+def test_resolves_ids_never_spools_a_body(tmp_path: Path) -> None:
     """`lesson_capture_resolves_ids` holds no repo_root; deriving the id
     list must not walk the argv builder into a disk write."""
     from coordinator_core.workstream_complete.directives_lessons_plan import (
@@ -467,7 +468,7 @@ def test_resolves_ids_never_spools_a_body(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_lessons_template_default_names_every_required_and_optional_key():
+def test_lessons_template_default_names_every_required_and_optional_key() -> None:
     from coordinator_core.workstream_complete.directives_lessons_plan import (
         LESSONS_TEMPLATE_DEFAULT,
         _LESSON_OPTIONAL_FLAGS,
@@ -485,7 +486,7 @@ def test_lessons_template_default_names_every_required_and_optional_key():
     assert all(value is None for value in shape.values())
 
 
-def test_build_decisions_template_ships_the_lessons_shape_not_a_bare_none():
+def test_build_decisions_template_ships_the_lessons_shape_not_a_bare_none() -> None:
     from coordinator_core.workstream_complete import build_decisions_template
     from coordinator_core.workstream_complete.directives_lessons_plan import (
         LESSONS_TEMPLATE_DEFAULT,
@@ -507,7 +508,7 @@ def test_build_decisions_template_ships_the_lessons_shape_not_a_bare_none():
 # ---------------------------------------------------------------------------
 
 
-def test_build_directives_forwards_repo_root_to_lesson_capture():
+def test_build_directives_forwards_repo_root_to_lesson_capture() -> None:
     import inspect
 
     from coordinator_core import workstream_complete as wsc
@@ -519,7 +520,7 @@ def test_build_directives_forwards_repo_root_to_lesson_capture():
     )
 
 
-def test_stale_docs_plans_pointer_resolves_to_the_archived_plan(tmp_path):
+def test_stale_docs_plans_pointer_resolves_to_the_archived_plan(tmp_path: Path) -> None:
     """A baton stamped `docs/plans/<slug>.md` before an archiver moved the plan
     resolves to the archived file instead of dangling."""
     slug = "2026-08-01-some-terminal-plan"
@@ -534,7 +535,7 @@ def test_stale_docs_plans_pointer_resolves_to_the_archived_plan(tmp_path):
     assert resolved is not None and resolved.rel == f"archive/specs/2026-08/{slug}.md"
 
 
-def test_pointer_missing_everywhere_still_reports_not_found(tmp_path):
+def test_pointer_missing_everywhere_still_reports_not_found(tmp_path: Path) -> None:
     resolved, source = resolve_governing_plan_with_source(
         tmp_path, decisions={}, handoff_governing_plan_field="docs/plans/2026-08-01-nowhere.md"
     )
@@ -555,7 +556,7 @@ def _archive_plan(tmp_path: Path, slug: str = _ARCH_SLUG) -> Path:
     return d / f"{slug}.md"
 
 
-def test_handoff_pointer_to_moved_plan_resolves_archived(tmp_path):
+def test_handoff_pointer_to_moved_plan_resolves_archived(tmp_path: Path) -> None:
     arch = _archive_plan(tmp_path)
     resolved, source = resolve_governing_plan_with_source(
         tmp_path, decisions={}, handoff_governing_plan_field=f"docs/plans/{_ARCH_SLUG}.md"
@@ -566,7 +567,7 @@ def test_handoff_pointer_to_moved_plan_resolves_archived(tmp_path):
     assert resolved.rel == f"archive/specs/2026-09/{_ARCH_SLUG}.md"
 
 
-def test_literal_hit_is_unchanged_and_not_archived(tmp_path):
+def test_literal_hit_is_unchanged_and_not_archived(tmp_path: Path) -> None:
     _write_plan(tmp_path, _ARCH_SLUG)
     resolved, source = resolve_governing_plan_with_source(
         tmp_path, decisions={}, handoff_governing_plan_field=f"docs/plans/{_ARCH_SLUG}.md"
@@ -575,7 +576,7 @@ def test_literal_hit_is_unchanged_and_not_archived(tmp_path):
     assert resolved is not None and resolved.archived is False
 
 
-def test_slug_and_path_arms_follow_the_archive(tmp_path):
+def test_slug_and_path_arms_follow_the_archive(tmp_path: Path) -> None:
     _archive_plan(tmp_path)
     r1, s1 = resolve_governing_plan_with_source(tmp_path, decisions={"governing_plan_slug": _ARCH_SLUG})
     r2, s2 = resolve_governing_plan_with_source(
@@ -585,7 +586,7 @@ def test_slug_and_path_arms_follow_the_archive(tmp_path):
     assert s2 == "decisions_path_archived" and r2 is not None and r2.archived
 
 
-def test_pointer_naming_archive_directly_is_archived(tmp_path):
+def test_pointer_naming_archive_directly_is_archived(tmp_path: Path) -> None:
     _archive_plan(tmp_path)
     resolved, source = resolve_governing_plan_with_source(
         tmp_path, decisions={"governing_plan_path": f"archive/specs/2026-09/{_ARCH_SLUG}.md"}
@@ -594,7 +595,7 @@ def test_pointer_naming_archive_directly_is_archived(tmp_path):
     assert resolved is not None and resolved.archived is True
 
 
-def test_pointer_resolving_nowhere_is_still_not_found(tmp_path):
+def test_pointer_resolving_nowhere_is_still_not_found(tmp_path: Path) -> None:
     for kwargs, expected in (
         ({"decisions": {"governing_plan_slug": _ARCH_SLUG}}, "decisions_slug_not_found"),
         ({"decisions": {"governing_plan_path": f"docs/plans/{_ARCH_SLUG}.md"}}, "decisions_path_not_found"),
@@ -607,7 +608,7 @@ def test_pointer_resolving_nowhere_is_still_not_found(tmp_path):
         assert resolved is None and source == expected
 
 
-def test_claim_and_stamp_skipped_for_archived_but_emitted_for_live():
+def test_claim_and_stamp_skipped_for_archived_but_emitted_for_live() -> None:
     live = GoverningPlan(slug="p", path=Path("docs/plans/p.md"), rel="docs/plans/p.md")
     moved = GoverningPlan(slug="p", path=Path("archive/specs/2026-09/p.md"), rel="archive/specs/2026-09/p.md", archived=True)
     assert [d["id"] for d in build_plan_claim_and_stamp_directives(live)] == [
@@ -618,7 +619,7 @@ def test_claim_and_stamp_skipped_for_archived_but_emitted_for_live():
     assert build_deferral_harvest_directives([moved])
 
 
-def test_resolution_spawns_no_subprocess(tmp_path, monkeypatch):
+def test_resolution_spawns_no_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     _archive_plan(tmp_path)

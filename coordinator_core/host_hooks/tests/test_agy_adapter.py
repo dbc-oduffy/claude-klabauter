@@ -15,11 +15,11 @@ PAYLOAD = {
 }
 
 
-def test_conforms_to_adapter_protocol():
+def test_conforms_to_adapter_protocol() -> None:
     assert isinstance(AgyAdapter(), Adapter)
 
 
-def test_adapt_event_maps_run_command_to_bash_with_session_from_payload(monkeypatch):
+def test_adapt_event_maps_run_command_to_bash_with_session_from_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("ANTIGRAVITY_CONVERSATION_ID", "env-conv")
     ev = AgyAdapter().adapt_event(PAYLOAD)
     assert ev.session_id == "1efd6565-4b6a-434a-989d-f7814c28bdd8"
@@ -27,7 +27,7 @@ def test_adapt_event_maps_run_command_to_bash_with_session_from_payload(monkeypa
     assert ev.tool_input == {"command": "git push origin main"}
 
 
-def test_non_shell_tool_passes_args_through():
+def test_non_shell_tool_passes_args_through() -> None:
     ev = AgyAdapter().adapt_event({**PAYLOAD, "toolCall": {"name": "view_file", "args": {"AbsolutePath": "/a"}}})
     assert (ev.tool_name, ev.tool_input) == ("view_file", {"AbsolutePath": "/a"})
 
@@ -36,7 +36,7 @@ def _edit_call(name, args):
     return {**PAYLOAD, "toolCall": {"name": name, "args": args}}
 
 
-def test_edit_tools_map_to_write_guard_names_with_file_path():
+def test_edit_tools_map_to_write_guard_names_with_file_path() -> None:
     expected = {
         "write_file": "Write", "write_to_file": "Write", "edit_file": "Edit",
         "replace_file_content": "Edit", "sed_file": "Edit", "multi_replace_file_content": "MultiEdit",
@@ -47,13 +47,13 @@ def test_edit_tools_map_to_write_guard_names_with_file_path():
         assert (ev.tool_name, ev.tool_input["file_path"]) == (tool, "/work/repo/a.py")
 
 
-def test_edit_without_a_path_arg_yields_empty_file_path_and_view_file_stays_unmapped():
+def test_edit_without_a_path_arg_yields_empty_file_path_and_view_file_stays_unmapped() -> None:
     ev = AgyAdapter().adapt_event(_edit_call("edit_file", {}))
     assert ev.tool_input["file_path"] == ""
     assert AgyAdapter().adapt_event(_edit_call("view_file", {"AbsolutePath": "/a"})).tool_name == "view_file"
 
 
-def test_path_key_is_matched_case_insensitively_so_write_file_with_Path_gets_file_path():
+def test_path_key_is_matched_case_insensitively_so_write_file_with_Path_gets_file_path() -> None:
     for name in ("write_file", "edit_file"):
         for key in ("Path", "path", "TARGETFILE"):
             ev = AgyAdapter().adapt_event(_edit_call(name, {key: "/work/repo/a.py", "Content": "x"}))
@@ -65,7 +65,7 @@ def test_path_key_is_matched_case_insensitively_so_write_file_with_Path_gets_fil
 
 
 @pytest.mark.parametrize("path_key", ["TargetFile", "Path"])
-def test_agy_edit_file_event_reaches_write_guards_engine(monkeypatch, path_key):
+def test_agy_edit_file_event_reaches_write_guards_engine(monkeypatch: pytest.MonkeyPatch, path_key) -> None:
     from coordinator_core.host_hooks import tool_policy
     from coordinator_core.write_guards import engine
 
@@ -78,12 +78,12 @@ def test_agy_edit_file_event_reaches_write_guards_engine(monkeypatch, path_key):
     assert (seen[0]["tool_name"], seen[0]["tool_input"]["file_path"]) == ("Edit", "/work/repo/a.py")
 
 
-def test_missing_workspace_and_session_are_empty():
+def test_missing_workspace_and_session_are_empty() -> None:
     ev = AgyAdapter().adapt_event({"toolCall": {"name": "run_command", "args": {}}})
     assert (ev.cwd, ev.session_id) == ("", "")
 
 
-def test_top_level_cwd_is_the_fallback_and_reaches_origin_worktree():
+def test_top_level_cwd_is_the_fallback_and_reaches_origin_worktree() -> None:
     import json
 
     adapter = AgyAdapter()
@@ -97,7 +97,7 @@ def test_top_level_cwd_is_the_fallback_and_reaches_origin_worktree():
     assert adapter.adapt_event({**PAYLOAD, "cwd": "/other"}).cwd == "/work/repo"
 
 
-def test_event_resolution_explicit_then_inferred():
+def test_event_resolution_explicit_then_inferred() -> None:
     adapter = AgyAdapter()
     assert adapter.adapt_event(PAYLOAD, event="PostToolUse").event == "PostToolUse"
     assert adapter.adapt_event({**PAYLOAD, "hookEventName": "PostToolUse"}).event == "PostToolUse"
@@ -105,7 +105,7 @@ def test_event_resolution_explicit_then_inferred():
     assert adapter.adapt_event({"conversationId": "c", "terminationReason": "NO_TOOL_CALL"}).event == ""
 
 
-def test_subagent_payload_carries_agent_id_into_engine_event_and_em_payload_does_not():
+def test_subagent_payload_carries_agent_id_into_engine_event_and_em_payload_does_not() -> None:
     adapter = AgyAdapter()
     for key in ("agentId", "agent_id"):
         sub = adapter.engine_event(adapter.adapt_event({**PAYLOAD, key: "sub-1"}))
@@ -114,7 +114,7 @@ def test_subagent_payload_carries_agent_id_into_engine_event_and_em_payload_does
         assert "agent_id" not in adapter.engine_event(adapter.adapt_event({**PAYLOAD, **em_extra}))
 
 
-def test_subagent_payload_reaches_the_guard_chain_with_agent_id(monkeypatch):
+def test_subagent_payload_reaches_the_guard_chain_with_agent_id(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.host_hooks import tool_policy
 
     seen = []
@@ -127,11 +127,11 @@ def test_subagent_payload_reaches_the_guard_chain_with_agent_id(monkeypatch):
     assert seen and seen[0]["agent_id"] == "sub-1"
 
 
-def test_served_events_match_hook_http():
+def test_served_events_match_hook_http() -> None:
     assert SERVED_EVENTS == hook_http.SERVED_EVENTS
 
 
-def test_engine_event_is_framed_by_build_request_with_payload_session():
+def test_engine_event_is_framed_by_build_request_with_payload_session() -> None:
     import json
 
     adapter = AgyAdapter()
@@ -143,26 +143,26 @@ def test_engine_event_is_framed_by_build_request_with_payload_session():
     assert frame["_origin_worktree"] == "/work/repo"
 
 
-def test_unserved_event_has_no_engine_event_and_renders_ask_fallback():
+def test_unserved_event_has_no_engine_event_and_renders_ask_fallback() -> None:
     adapter = AgyAdapter()
     ev = adapter.adapt_event(PAYLOAD, event="SessionStart")
     assert adapter.engine_event(ev) is None
     assert adapter.render(ev, {"decision": "deny", "reason": "x"}) == neutral_fallback("agy")
 
 
-def test_deny_renders_agy_deny_with_reason():
+def test_deny_renders_agy_deny_with_reason() -> None:
     adapter = AgyAdapter()
     out = adapter.render(adapter.adapt_event(PAYLOAD), {"decision": "deny", "reason": "irreversible"})
     assert out == {"decision": "deny", "reason": "irreversible"}
 
 
-def test_nested_claude_shaped_deny_is_rendered_as_agy_deny():
+def test_nested_claude_shaped_deny_is_rendered_as_agy_deny() -> None:
     adapter = AgyAdapter()
     out = adapter.render(adapter.adapt_event(PAYLOAD), hook_http.deny_response("PreToolUse", "nested"))
     assert out == {"decision": "deny", "reason": "nested"}
 
 
-def test_allow_and_empty_verdict_render_explicit_allow_never_empty_object():
+def test_allow_and_empty_verdict_render_explicit_allow_never_empty_object() -> None:
     adapter = AgyAdapter()
     ev = adapter.adapt_event(PAYLOAD)
     for verdict in ({}, {"decision": "allow"}):
@@ -170,7 +170,7 @@ def test_allow_and_empty_verdict_render_explicit_allow_never_empty_object():
         assert out == {"decision": "allow"}
 
 
-def test_allow_with_additional_context_renders_ask_carrying_the_text_never_allow():
+def test_allow_with_additional_context_renders_ask_carrying_the_text_never_allow() -> None:
     adapter = AgyAdapter()
     ev = adapter.adapt_event(PAYLOAD)
     nested = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "heads up"}}
@@ -182,7 +182,7 @@ def test_allow_with_additional_context_renders_ask_carrying_the_text_never_allow
     assert deny == {"decision": "deny", "reason": "no"}
 
 
-def test_ask_is_passed_through():
+def test_ask_is_passed_through() -> None:
     adapter = AgyAdapter()
     out = adapter.render(adapter.adapt_event(PAYLOAD), {"decision": "ask", "reason": "confirm"})
     assert out == {"decision": "ask", "reason": "confirm"}

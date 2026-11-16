@@ -7,12 +7,13 @@ import json
 import pytest
 
 from coordinator_core.ops.dispatch_emit import halted_run, op, run_token
+from pathlib import Path
 
 RUN = "ask-20261029T000000-aaaaaa"
 SIZING = "state/sizings/s.yaml"
 
 
-def _stalled(tmp_path, session="s1"):
+def _stalled(tmp_path, session: str = "s1"):
     (tmp_path / ".git").mkdir()
     rdir = tmp_path / "state" / "warp" / RUN
     rdir.mkdir(parents=True)
@@ -25,7 +26,7 @@ def _abandon(tmp_path, **extra):
     return op._abandon_run({"abandon_run": RUN, "_caller_cwd": str(tmp_path / "sub"), **extra}, None)
 
 
-def test_own_session_stalled_run_is_closed_and_token_released(tmp_path):
+def test_own_session_stalled_run_is_closed_and_token_released(tmp_path: Path) -> None:
     rdir = _stalled(tmp_path)
     (tmp_path / "sub").mkdir()
     out = _abandon(tmp_path, session_id="s1")
@@ -34,7 +35,7 @@ def test_own_session_stalled_run_is_closed_and_token_released(tmp_path):
     assert not run_token.is_live(tmp_path, RUN)
 
 
-def test_stalled_run_holding_kept_chunks_stays_open(tmp_path):
+def test_stalled_run_holding_kept_chunks_stays_open(tmp_path: Path) -> None:
     rdir = _stalled(tmp_path)
     (tmp_path / "sub").mkdir()
     (rdir / "kept.json").write_text(json.dumps({"chunks": {"C1": {"files": {}}}}), encoding="utf-8")
@@ -44,7 +45,7 @@ def test_stalled_run_holding_kept_chunks_stays_open(tmp_path):
     assert run_token.is_live(tmp_path, RUN)
 
 
-def test_stalled_run_holding_post_checkpoint_stays_open(tmp_path):
+def test_stalled_run_holding_post_checkpoint_stays_open(tmp_path: Path) -> None:
     rdir = _stalled(tmp_path)
     (tmp_path / "sub").mkdir()
     (rdir / "kept.json").write_text(json.dumps({"post_checkpoint": {"a.py": "abc"}}), encoding="utf-8")
@@ -52,7 +53,7 @@ def test_stalled_run_holding_post_checkpoint_stays_open(tmp_path):
     assert run_token.is_live(tmp_path, RUN)
 
 
-def test_stalled_run_with_empty_kept_json_is_closed(tmp_path):
+def test_stalled_run_with_empty_kept_json_is_closed(tmp_path: Path) -> None:
     rdir = _stalled(tmp_path)
     (tmp_path / "sub").mkdir()
     (rdir / "kept.json").write_text(json.dumps({"chunks": {}}), encoding="utf-8")
@@ -60,7 +61,7 @@ def test_stalled_run_with_empty_kept_json_is_closed(tmp_path):
     assert not run_token.is_live(tmp_path, RUN)
 
 
-def test_foreign_session_run_is_untouched(tmp_path):
+def test_foreign_session_run_is_untouched(tmp_path: Path) -> None:
     rdir = _stalled(tmp_path, session="other")
     (tmp_path / "sub").mkdir()
     out = _abandon(tmp_path, session_id="s1")
@@ -72,7 +73,7 @@ def test_foreign_session_run_is_untouched(tmp_path):
 PARENT = "ask-20261029T000000-bbbbbb"
 
 
-def _chained(tmp_path, *, child_stage="minted", child_sizing=SIZING, parent_sizing=SIZING, parent_dir=True):
+def _chained(tmp_path, *, child_stage: str = "minted", child_sizing=SIZING, parent_sizing=SIZING, parent_dir: bool = True):
     (tmp_path / ".git").mkdir()
     (tmp_path / "sub").mkdir()
     rdir = tmp_path / "state" / "warp" / RUN
@@ -90,7 +91,7 @@ def _closed(rdir):
     return (rdir / halted_run.HALTED_FILE).exists()
 
 
-def test_minted_only_chained_child_is_closed(tmp_path):
+def test_minted_only_chained_child_is_closed(tmp_path: Path) -> None:
     rdir = _chained(tmp_path)
     out = _abandon(tmp_path, session_id="s1", chained_from=PARENT)
     assert out["abandoned"] is True
@@ -99,52 +100,52 @@ def test_minted_only_chained_child_is_closed(tmp_path):
     assert not run_token.is_live(tmp_path, RUN)
 
 
-def test_chained_child_without_chained_from_is_untouched(tmp_path):
+def test_chained_child_without_chained_from_is_untouched(tmp_path: Path) -> None:
     rdir = _chained(tmp_path)
     assert _abandon(tmp_path, session_id="s1")["abandoned"] is False
     assert not _closed(rdir)
 
 
-def test_chained_child_past_minted_is_untouched(tmp_path):
+def test_chained_child_past_minted_is_untouched(tmp_path: Path) -> None:
     rdir = _chained(tmp_path, child_stage="staged")
     assert _abandon(tmp_path, session_id="s1", chained_from=PARENT)["abandoned"] is False
     assert not _closed(rdir)
     assert run_token.is_live(tmp_path, RUN)
 
 
-def test_chained_from_missing_parent_is_untouched(tmp_path):
+def test_chained_from_missing_parent_is_untouched(tmp_path: Path) -> None:
     rdir = _chained(tmp_path, parent_dir=False)
     assert _abandon(tmp_path, session_id="s1", chained_from=PARENT)["abandoned"] is False
     assert not _closed(rdir)
 
 
-def test_chained_from_parent_on_other_sizing_is_untouched(tmp_path):
+def test_chained_from_parent_on_other_sizing_is_untouched(tmp_path: Path) -> None:
     rdir = _chained(tmp_path, parent_sizing="state/sizings/other.yaml")
     assert _abandon(tmp_path, session_id="s1", chained_from=PARENT)["abandoned"] is False
     assert not _closed(rdir)
     assert run_token.is_live(tmp_path, RUN)
 
 
-def test_chained_from_is_an_accepted_param():
+def test_chained_from_is_an_accepted_param() -> None:
     assert op._unknown_param_refusal({"abandon_run": RUN, "chained_from": PARENT}) is None
 
 
-def test_no_root_raises(tmp_path):
+def test_no_root_raises(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         op._abandon_run({"abandon_run": RUN, "session_id": "s1"}, None)
 
 
-def test_relative_plan_path_anchors_to_caller_cwd(tmp_path):
+def test_relative_plan_path_anchors_to_caller_cwd(tmp_path: Path) -> None:
     out = op._anchor_relative_paths({"plan_path": "docs/p.md", "_caller_cwd": str(tmp_path)})
     assert out["plan_path"] == str(tmp_path / "docs/p.md")
 
 
-def test_relative_plan_path_anchors_to_repo_root_without_stamp(tmp_path):
+def test_relative_plan_path_anchors_to_repo_root_without_stamp(tmp_path: Path) -> None:
     out = op._anchor_relative_paths({"plan_path": "docs/p.md"}, tmp_path)
     assert out["plan_path"] == str(tmp_path / "docs/p.md")
 
 
-def test_absolute_path_and_missing_cwd_unchanged(tmp_path):
+def test_absolute_path_and_missing_cwd_unchanged(tmp_path: Path) -> None:
     absolute = str(tmp_path / "p.md")
     assert op._anchor_relative_paths({"plan_path": absolute, "_caller_cwd": "/x"})["plan_path"] == absolute
     assert op._anchor_relative_paths({"plan_path": "docs/p.md"})["plan_path"] == "docs/p.md"

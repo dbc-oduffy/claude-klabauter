@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit.em_only_act import row_is_em_performed
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
+from pathlib import Path
 
 
 def _plan(tmp_path, agent_type):
@@ -28,18 +29,18 @@ def _run(tmp_path, agent_type):
     return rows, out
 
 
-def test_em_owned_row_is_withheld_and_spawns_no_agent(tmp_path):
+def test_em_owned_row_is_withheld_and_spawns_no_agent(tmp_path: Path) -> None:
     rows, out = _run(tmp_path, "coordinator:em")
     assert [(e["id"], e["reason"]) for e in out] == [("M1", "em-performed")]
     assert [r.id for r in rows] == ["A1"]
 
 
-def test_agent_type_executor_row_is_still_dispatched(tmp_path):
+def test_agent_type_executor_row_is_still_dispatched(tmp_path: Path) -> None:
     rows, out = _run(tmp_path, "coordinator:executor")
     assert out == []
     assert sorted(r.id for r in rows) == ["A1", "M1"]
 
 
-def test_predicate_pins_both_sides():
+def test_predicate_pins_both_sides() -> None:
     assert row_is_em_performed({"agent_type": "coordinator:em"}) is True
     assert row_is_em_performed({"agent_type": "coordinator:executor"}) is False

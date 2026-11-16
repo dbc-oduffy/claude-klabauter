@@ -8,6 +8,7 @@ import yaml
 
 from coordinator_core.frontmatter.schema_validate import validate_frontmatter
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 REL = "state/sizings/2026-10-27-engine-rows.yaml"
 
@@ -22,7 +23,7 @@ def _doc(status):
 
 
 @pytest.mark.parametrize("status", ["sized", "shipped"])
-def test_every_engine_written_row_validates(tmp_path, status):
+def test_every_engine_written_row_validates(tmp_path: Path, status) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     path = tmp_path / REL

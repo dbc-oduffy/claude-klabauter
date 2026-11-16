@@ -23,6 +23,7 @@ from coordinator_core.install.substrate import (
     SubstrateFatalError,
     _load_setup_template_manifest,
 )
+from pathlib import Path
 
 _MANIFEST_BODY = '''\
 """Synthetic test fixture manifest."""
@@ -51,7 +52,7 @@ def _write_manifest(tmp_path, body: str = _MANIFEST_BODY):
     return tmp_path
 
 
-def test_load_setup_template_manifest_parses_three_lists(tmp_path):
+def test_load_setup_template_manifest_parses_three_lists(tmp_path: Path) -> None:
     claude_klabauter_root = _write_manifest(tmp_path)
     files, exec_files, hook_files = _load_setup_template_manifest(claude_klabauter_root)
     assert files == ["publish.sh", "publish_sync.py"]
@@ -59,19 +60,19 @@ def test_load_setup_template_manifest_parses_three_lists(tmp_path):
     assert hook_files == ["percolate-hooks/README.md"]
 
 
-def test_load_setup_template_manifest_exec_files_subset_of_files(tmp_path):
+def test_load_setup_template_manifest_exec_files_subset_of_files(tmp_path: Path) -> None:
     claude_klabauter_root = _write_manifest(tmp_path)
     files, exec_files, _hook_files = _load_setup_template_manifest(claude_klabauter_root)
     assert set(exec_files) <= set(files)
 
 
-def test_load_setup_template_manifest_missing_file_raises(tmp_path):
+def test_load_setup_template_manifest_missing_file_raises(tmp_path: Path) -> None:
     claude_klabauter_root = tmp_path
     with pytest.raises(SubstrateFatalError, match="not found"):
         _load_setup_template_manifest(claude_klabauter_root)
 
 
-def test_load_setup_template_manifest_empty_files_list_raises(tmp_path):
+def test_load_setup_template_manifest_empty_files_list_raises(tmp_path: Path) -> None:
     empty_body = (
         "SETUP_TEMPLATE_FILES: list = []\n"
         "SETUP_TEMPLATE_EXEC_FILES: list = []\n"
@@ -82,7 +83,7 @@ def test_load_setup_template_manifest_empty_files_list_raises(tmp_path):
         _load_setup_template_manifest(claude_klabauter_root)
 
 
-def test_load_setup_template_manifest_missing_attr_raises(tmp_path):
+def test_load_setup_template_manifest_missing_attr_raises(tmp_path: Path) -> None:
     body = (
         "SETUP_TEMPLATE_FILES: list = ['publish.sh']\n"
         "SETUP_TEMPLATE_EXEC_FILES: list = ['publish.sh']\n"
@@ -96,14 +97,14 @@ def test_load_setup_template_manifest_missing_attr_raises(tmp_path):
     assert hook_files == []
 
 
-def test_load_setup_template_manifest_syntax_error_raises_loud_not_traceback(tmp_path):
+def test_load_setup_template_manifest_syntax_error_raises_loud_not_traceback(tmp_path: Path) -> None:
     body = "SETUP_TEMPLATE_FILES: list = [\n"
     claude_klabauter_root = _write_manifest(tmp_path, body=body)
     with pytest.raises(SubstrateFatalError, match="failed to import"):
         _load_setup_template_manifest(claude_klabauter_root)
 
 
-def test_load_setup_template_manifest_matches_live_claude_klabauter_oracle(monkeypatch):
+def test_load_setup_template_manifest_matches_live_claude_klabauter_oracle(monkeypatch: pytest.MonkeyPatch) -> None:
     """Parity oracle: the REAL setup-templates-manifest.py in this checkout's
     own coordinator/lib/ must import without error and every EXEC_FILES entry
     must remain a subset of FILES. Uses CLAUDE_KLABAUTER_ROOT pinned to this checkout

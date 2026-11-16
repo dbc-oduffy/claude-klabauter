@@ -5,6 +5,7 @@ from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.docindex.render import OPEN_SENTINEL
 from coordinator_core.ops.docindex_emit import _docindex_emit
 import pytest
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -29,7 +30,7 @@ def _emit(root, **params):
     return asyncio.run(out) if asyncio.iscoroutine(out) else out
 
 
-def test_a_hand_edit_refusal_names_the_repair_and_write_leaves_it(tmp_path):
+def test_a_hand_edit_refusal_names_the_repair_and_write_leaves_it(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     (result,) = _emit(root, write=True)["results"]
     assert result["hand_edit"] and not result["written"]
@@ -37,7 +38,7 @@ def test_a_hand_edit_refusal_names_the_repair_and_write_leaves_it(tmp_path):
     assert "typed by hand" in (root / "index.md").read_text(encoding="utf-8")
 
 
-def test_rebaseline_rewrites_the_region_from_source(tmp_path):
+def test_rebaseline_rewrites_the_region_from_source(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     (result,) = _emit(root, rebaseline=True)["results"]
     assert result["written"] and result["rebaselined"]
@@ -47,7 +48,7 @@ def test_rebaseline_rewrites_the_region_from_source(tmp_path):
     assert not again["hand_edit"]
 
 
-def test_discovery_finds_a_declared_index_and_skips_a_body_only_mention(tmp_path):
+def test_discovery_finds_a_declared_index_and_skips_a_body_only_mention(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     (root / "notes.md").write_text("---\ntitle: n\n---\nindex_source_dir: entries/ is how an index declares itself\n", encoding="utf-8")
     (root / "plain.md").write_text("no frontmatter at all\n", encoding="utf-8")

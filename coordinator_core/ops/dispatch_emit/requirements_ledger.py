@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Collection, Iterable, Mapping, Optional, Sequence
 
+from coordinator_core.frontmatter.yaml_load import safe_load as _yaml_safe_load
 from coordinator_core.ipc import register_op
 from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.locked_write import MutateAbort
@@ -458,14 +459,9 @@ def _plan_row_writes(repo_root: Path, sizing_rel: Optional[str]) -> tuple[set[st
     plan = _sizing_plan(Path(repo_root), sizing_rel)[1]
     if plan is None:
         return set(), []
-    import yaml
-
-    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
-
     try:
-        located = locate_fenced_block(plan.read_text(encoding="utf-8", errors="replace"))
-        rows = yaml.safe_load(located.body) if located.status is LocateStatus.LOCATED else None
-    except (OSError, yaml.YAMLError):
+        rows = _spine_rows(plan.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
         return set(), []
     files: set[str] = set()
     dirs: list[str] = []
@@ -485,7 +481,7 @@ def _sizing_writes(repo_root: Path, sizing_rel: Optional[str]) -> set[str]:
     import yaml
 
     try:
-        sizing = yaml.safe_load(_sizing_path(Path(repo_root), sizing_rel).read_text(encoding="utf-8"))
+        sizing = _yaml_safe_load(_sizing_path(Path(repo_root), sizing_rel).read_text(encoding="utf-8"))
     except (LedgerRefused, OSError, yaml.YAMLError):
         return set()
     return {w for w in sizing.get("writes") or [] if isinstance(w, str)} if isinstance(sizing, dict) else set()
@@ -714,14 +710,9 @@ def _stamp_for_rows(
     plan_rel, plan, _ = _sizing_plan(root, sizing_rel)
     if plan_rel is None or plan is None:
         return None
-    import yaml
-
-    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
-
     try:
-        located = locate_fenced_block(plan.read_text(encoding="utf-8", errors="replace"))
-        rows = yaml.safe_load(located.body) if located.status is LocateStatus.LOCATED else None
-    except (OSError, yaml.YAMLError):
+        rows = _spine_rows(plan.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
         return None
     by_id = {r.get("id"): r for r in rows if isinstance(r, dict)} if isinstance(rows, list) else {}
     updates: list[dict] = []
@@ -746,6 +737,30 @@ def _apply_row_writes(root: Path, stamp: tuple[str, list]) -> bool:
     return bool(plan_tasks_mutate._stamp(stamp[0], stamp[1], root, root).get("applied"))
 
 
+def _drop_ignored_untracked(root: Path, paths: Sequence[str]) -> tuple[list[str], list[str]]:
+    """`(kept, dropped)`: `dropped` are `paths` the in-process ignore matcher says are gitignored and
+    that the index does not track (`commit_v2._ignored_untracked` refuses them at every checkpoint).
+    An undecided verdict or an unreadable index keeps the path."""
+    from coordinator_core.git.git_state import read_index_paths
+    from coordinator_core.git.ignore_match import IgnoreMatcher
+
+    try:
+        matcher = IgnoreMatcher(root)
+        tracked = read_index_paths(root)
+    except Exception:  # noqa: BLE001 -- keep every path
+        return list(paths), []
+    kept: list[str] = []
+    dropped: list[str] = []
+    for p in paths:
+        rel = p.replace("\\", "/")
+        try:
+            verdict = matcher.ignored(rel, False)
+        except Exception:  # noqa: BLE001
+            verdict = None
+        (dropped if verdict and rel not in tracked else kept).append(p)
+    return kept, dropped
+
+
 def _widen_footprint(
     root: Path, run: Optional[Mapping], run_id: str, paths: Sequence[str], why: str, outcome: Optional[dict],
 ) -> bool:
@@ -757,15 +772,16 @@ def _widen_footprint(
     plan_rel, plan, sizing_text = _sizing_plan(root, sizing_rel)
     if plan_rel is None or plan is None or not paths:
         return False
-    import yaml
-
-    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+    paths, dropped = _drop_ignored_untracked(root, paths)
+    if dropped and outcome is not None:
+        outcome.setdefault("footprint_ignored_dropped", []).extend(dropped)
+    if not paths:
+        return True
     from coordinator_core.ops import plan_tasks_mutate
 
     try:
-        located = locate_fenced_block(plan.read_text(encoding="utf-8", errors="replace"))
-        rows = yaml.safe_load(located.body) if located.status is LocateStatus.LOCATED else None
-    except (OSError, yaml.YAMLError):
+        rows = _spine_rows(plan.read_text(encoding="utf-8", errors="replace"))
+    except OSError:
         return False
     taken = {r.get("id") for r in rows if isinstance(r, dict)} if isinstance(rows, list) else set()
     n = 1
@@ -915,22 +931,31 @@ def ledger_ids(rows: Sequence[Mapping]) -> tuple[tuple[str, ...], tuple[str, ...
     return tuple(i.id for i in ledger.items), tuple(w["id"] for w in ledger.withheld)
 
 
-def _next_id(rows: Sequence[Mapping]) -> str:
-    used = {str(r.get(rr.ROW_ID)) for r in rows}
+def _next_id(rows: Sequence[Mapping], used: Optional[set] = None) -> str:
+    """`R<n>` for the first free n from `len(rows) + 1`; a caller adding many rows passes its running `used` ids."""
+    if used is None:
+        used = {str(r.get(rr.ROW_ID)) for r in rows}
     n = len(rows) + 1
     while f"R{n}" in used:
         n += 1
     return f"R{n}"
 
 
-def _validated(text: str) -> str:
+def _validated(text: str, register_body: Optional[Mapping] = None) -> str:
+    """`text` when it validates against the sizing schema, else MutateAbort. `register_body` is the
+    register mapping `text` was written with: given, the register block of `text` is not parsed back."""
     import yaml
 
     from coordinator_core.frontmatter.schema_validate import format_validation_errors, validate_frontmatter
     from coordinator_core.locked_write import MutateAbort
 
     try:
-        obj = yaml.safe_load(text) or {}
+        if register_body is None:
+            obj = _yaml_safe_load(text) or {}
+        else:
+            obj = _yaml_safe_load(rr.without_register_block(text)) or {}
+            if isinstance(obj, dict):
+                obj[rr.REGISTER_KEY] = register_body
         if isinstance(obj, dict):
             # `family` routes the family-stage arm and is not in the vendored schema.
             obj = {k: v for k, v in obj.items() if k != "family"}
@@ -965,13 +990,40 @@ SIDECAR_RETRY_BUDGET_SECS: float = 4.0
 SIDECAR_RETRY_PAUSE_SECS: float = 0.05
 
 
-def _mutate_register(root: Path, sizing_rel: str, edit, *, unrelated: Sequence[Mapping] = ()) -> list[dict]:
+_UNSET = object()
+
+
+def _file_key(path: Path) -> Optional[tuple[int, int]]:
+    """`(mtime_ns, size)` of `path`, None when it cannot be stat'd."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return st.st_mtime_ns, st.st_size
+
+
+def _mutate_register(
+    root: Path, sizing_rel: str, edit, *, unrelated: Sequence[Mapping] = (),
+    snapshot: Optional[tuple[Sequence[Mapping], Optional[tuple[int, int]]]] = None,
+) -> list[dict]:
     """Apply `edit(rows) -> rows | None` to the sizing's register under the file lock; None or an
     unchanged list writes nothing. `unrelated` entries (`{turn, reason}`) join the register's
-    `unrelated_turns` when rows were written. Returns the rows on disk afterwards."""
+    `unrelated_turns` when rows were written. Returns the rows on disk afterwards.
+
+    `snapshot` is `(rows, file key)` of a register this call already parsed: when the sizing file still
+    has that key and `edit` leaves those rows unchanged, nothing is read, locked or written and the
+    snapshot rows are returned (an `edit` that refuses, or any change to the file, takes the locked path)."""
     from coordinator_core.locked_write import LockTimeout, MutateAbort, locked_rmw
 
     path = _sizing_path(root, sizing_rel)
+    if snapshot is not None and not unrelated and snapshot[1] is not None and _file_key(path) == snapshot[1]:
+        held = [dict(r) for r in snapshot[0]]
+        try:
+            trial = edit([dict(r) for r in held])
+        except MutateAbort:
+            trial = _UNSET
+        if trial is None or trial == held:
+            return held
     out: dict = {"rows": []}
 
     def mutate(old: str) -> str:
@@ -994,9 +1046,8 @@ def _mutate_register(root: Path, sizing_rel: str, edit, *, unrelated: Sequence[M
             waived += [dict(e) for e in unrelated if e["turn"] not in have_turns]
             block[rr.UNRELATED_TURNS_KEY] = waived
         crlf = "\r\n" in old
-        new = _validated(_reopened(
-            rr.write_register_text(old.replace("\r\n", "\n"), block, datetime.now(timezone.utc)), new_rows
-        ))
+        written, body = rr.write_register_text_and_body(old.replace("\r\n", "\n"), block, datetime.now(timezone.utc))
+        new = _validated(_reopened(written, new_rows), body)
         out["rows"] = new_rows
         return new.replace("\n", "\r\n") if crlf else new
 
@@ -1113,6 +1164,7 @@ def _append_rows(
     root: Path, sizing_rel: str, entries: Sequence[tuple[str, str]], *, drop_turns: Optional[Mapping[int, str]] = None,
     withhold: Optional[Mapping] = None, list_turns: Optional[Mapping[int, str]] = None,
     plan_rows: Sequence[tuple[str, str]] = (), reuse: Optional[dict] = None, retract_row: Optional[str] = None,
+    snapshot: Optional[tuple[Sequence[Mapping], Optional[tuple[int, int]]]] = None,
 ) -> list[dict]:
     """Append one open row per `(text, anchor)`; a PM-word or ask row already on the register
     (same verbatim text) is not added twice, a revision always is, unless `reuse` is a dict: then a
@@ -1181,9 +1233,12 @@ def _append_rows(
                 rr.ROW_SURFACE: ROW_SURFACE, rr.ROW_STATUS: rr.STATUS_OPEN, rr.ROW_CLAIMED_BY: [],
             })
         if plan_rows and ledger_ids(rows) == ((), ()):
+            used_ids = {str(r.get(rr.ROW_ID)) for r in rows}
             for pid, title in plan_rows:
+                next_id = _next_id(rows, used_ids)
+                used_ids.add(next_id)
                 rows.append({
-                    rr.ROW_ID: _next_id(rows), rr.ROW_TEXT: f"Plan row {pid}: {title}".strip(),
+                    rr.ROW_ID: next_id, rr.ROW_TEXT: f"Plan row {pid}: {title}".strip(),
                     rr.ROW_ANCHOR: f"{PLAN_ROW_ANCHOR_PREFIX}{pid}",
                     rr.ROW_SURFACE: ROW_SURFACE, rr.ROW_STATUS: rr.STATUS_OPEN, rr.ROW_CLAIMED_BY: [],
                 })
@@ -1200,7 +1255,7 @@ def _append_rows(
         return rows
 
     unrelated = [{"turn": n, "reason": FOREIGN_TURN_REASON} for n in sorted({*drop_turns, *list_turns})]
-    return _mutate_register(root, sizing_rel, edit, unrelated=unrelated)
+    return _mutate_register(root, sizing_rel, edit, unrelated=unrelated, snapshot=snapshot)
 
 
 def render(ledger: Ledger, run_id: str) -> str:
@@ -1245,10 +1300,11 @@ def _queued_ledger(dir_: Path, all_of: bool) -> Ledger:
     )
 
 
-def read_ledger(repo_root: Path, dir_: Path) -> Optional[Ledger]:
+def read_ledger(repo_root: Path, dir_: Path, *, register_rows: Optional[Sequence[Mapping]] = None) -> Optional[Ledger]:
     """The run's requirements, or None when the run was emitted without a ledger. Before the
     sizing is bound, the queued revisions are the only items. LedgerRefused when the bound
-    sizing is unreadable."""
+    sizing is unreadable. `register_rows` are the rows a register write in this call just left
+    on disk: the ledger is built from them and the sizing is neither re-read nor re-parsed."""
     run = read_run(dir_)
     if run is None:
         return None
@@ -1256,6 +1312,8 @@ def read_ledger(repo_root: Path, dir_: Path) -> Optional[Ledger]:
     sizing_rel = run.get("sizing_rel") if isinstance(run.get("sizing_rel"), str) else None
     if not sizing_rel:
         return _queued_ledger(dir_, all_of)
+    if register_rows is not None:
+        return _ledger_of(register_rows, all_of, sizing_rel)
     try:
         text = _sizing_path(repo_root, sizing_rel).read_text(encoding="utf-8")
     except OSError as exc:
@@ -1264,11 +1322,13 @@ def read_ledger(repo_root: Path, dir_: Path) -> Optional[Ledger]:
     return _ledger_of(register.rows if register is not None else [], all_of, sizing_rel)
 
 
-def _write_view(repo_root: Path, dir_: Path, run_id: str) -> Optional[Ledger]:
+def _write_view(
+    repo_root: Path, dir_: Path, run_id: str, register_rows: Optional[Sequence[Mapping]] = None
+) -> Optional[Ledger]:
     from coordinator_core.atomic_replace import atomic_write_bytes
 
     try:
-        ledger = read_ledger(repo_root, dir_)
+        ledger = read_ledger(repo_root, dir_, register_rows=register_rows)
     except LedgerRefused:
         # The view is advisory; terminal_commit._ledger_gate refuses the unreadable sizing.
         return None
@@ -1539,7 +1599,8 @@ def bind(
     try:
         incoming_path = _sizing_path(root, sizing_rel)
         stamp = run_token.sizing_stamp(root, sizing_rel)
-        sizing = yaml.safe_load(incoming_path.read_text(encoding="utf-8"))
+        parsed_key = _file_key(incoming_path)
+        sizing = _parsed_sizing(root, sizing_rel, incoming_path)
     except (OSError, yaml.YAMLError) as exc:
         raise LedgerRefused(f"cannot read sizing {sizing_rel}: {exc}") from exc
     rebinding = False
@@ -1571,19 +1632,47 @@ def bind(
             entries.append((text, f"{ORIGIN_REVISION}@{_now()}" if fresh else origin))
     queued = _inbox(dir_)
     entries.extend((e["text"], _revision_anchor(str(e.get("at") or _now()), e.get("from"))) for e in queued)
+    on_disk: Optional[list[dict]] = None
     if entries or foreign or unbound or plan_rows:
-        _append_rows(root, sizing_rel, entries, drop_turns=foreign, list_turns=unbound, plan_rows=plan_rows)
+        parsed_rows = _parsed_register_rows(register)
+        on_disk = _append_rows(
+            root, sizing_rel, entries, drop_turns=foreign, list_turns=unbound, plan_rows=plan_rows,
+            snapshot=(parsed_rows, parsed_key) if parsed_rows is not None else None,
+        )
     if not bound or rebinding:
         inherited = _inherited_revisions(root, run, bound if rebinding else None, sizing_rel)
         if inherited:
-            _append_rows(root, sizing_rel, inherited, reuse={})
+            on_disk = _append_rows(root, sizing_rel, inherited, reuse={})
         updated = {**run, "sizing_rel": sizing_rel, SIZING_STAMP_FIELD: stamp}
         if rebinding:
             updated[EARLIER_SIZINGS_FIELD] = _earlier_with(run, bound, drop=sizing_rel)
         _write_run(dir_, updated)
     if queued:
         (dir_ / INBOX_FILE).unlink(missing_ok=True)
-    return _write_view(root, dir_, run_id)
+    return _write_view(root, dir_, run_id, on_disk if on_disk is not None else _parsed_register_rows(register))
+
+
+def _parsed_sizing(root: Path, sizing_rel: str, path: Path) -> object:
+    """`path` parsed; a sizing the open `sizing_memo` scope already parsed is not parsed again."""
+    from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
+
+    try:
+        return load_sizing(root, sizing_rel)
+    except SizingFireRefused:
+        return _yaml_safe_load(path.read_text(encoding="utf-8"))
+
+
+def _parsed_register_rows(register: Mapping) -> Optional[list]:
+    """The register rows of an already-parsed sizing when every row is a mapping with a string id and
+    text (what `rr.read_register` would return for them), else None: the caller re-reads the file."""
+    rows = register.get(rr.ROWS_KEY)
+    if not isinstance(rows, list) or not rows:
+        return None
+    for r in rows:
+        if not (isinstance(r, dict) and isinstance(r.get(rr.ROW_ID), str) and r[rr.ROW_ID]
+                and isinstance(r.get(rr.ROW_TEXT), str)):
+            return None
+    return rows
 
 
 def _note_canvas_conflicts(root: Path, dir_: Path, sizing_rel: Optional[str], note: str) -> list[dict]:
@@ -1596,7 +1685,7 @@ def _note_canvas_conflicts(root: Path, dir_: Path, sizing_rel: Optional[str], no
     sizing = None
     if sizing_rel:
         try:
-            loaded = yaml.safe_load(_sizing_path(Path(root), sizing_rel).read_text(encoding="utf-8"))
+            loaded = _yaml_safe_load(_sizing_path(Path(root), sizing_rel).read_text(encoding="utf-8"))
             sizing = loaded if isinstance(loaded, dict) else None
         except (LedgerRefused, OSError, yaml.YAMLError):
             sizing = None
@@ -2147,6 +2236,22 @@ def _misrouted(row: Mapping, owed: str) -> Optional[str]:
     return f"judged at {', '.join(read) or 'no root named'}, owed the engine root {owed or '(unresolved)'}"
 
 
+CRITERION_ITEM_ID = "criterion"
+
+
+def _criterion_credited(plan_text: Optional[str]) -> frozenset[str]:
+    """Register-row ids the plan maps to the work its exit criterion judges: the live spine rows'
+    `register_rows` and the frontmatter `register_claims.rows`. Empty without a plan text."""
+    if not plan_text:
+        return frozenset()
+    from coordinator_core.ops.dispatch_emit import revise_absorb
+
+    text = plan_text.replace("\r\n", "\n")
+    _, claimed = rr.plan_claims(revise_absorb._plan_fm(text))
+    spine = _spine_rows(text) or []
+    return frozenset(claimed) | frozenset(rr.spine_claimants(spine))
+
+
 class AfterPublishCommand(str):
     """An owed em-performed row's detail: `judge` lists the row it withholds open as
     `owed-after-publish <id>` where a plain operator command reads `awaiting_operator <id>`."""
@@ -2205,6 +2310,10 @@ def judge(
     `post_commit_acts` is a non-empty list drawn from `POST_COMMIT_ACTS` (commit, sha_reply,
     sha_memo, baton_archive, plan_implemented, bug_close).
 
+    A register row the verdict omits is judged as the `criterion` item when that item is `met` and
+    `plan_text` maps the row (spine `register_rows` or `register_claims.rows`); every other omitted row
+    fails `unjudged`.
+
     A design-conformance row (anchor `design-registry:<id>`) is always essential: `essential: false`
     is ignored, `post_commit` fails, and `met` passes only when `design_conformance.evidence_refusal`
     (given `repo_root` and the run's `plan_text`) returns None; a `met` that fails it is judged
@@ -2247,12 +2356,18 @@ def judge(
             failures.append({"id": rid, "reason": "judged twice"})
         by_id[rid] = row
     order = {item.id: n for n, item in enumerate(ledger.items)}
+    criterion = by_id.get(CRITERION_ITEM_ID)
+    if criterion is not None and criterion.get("status") != "met":
+        criterion = None
+    credited = _criterion_credited(plan_text) if criterion is not None else frozenset()
     for item in ledger.items:
         row = by_id.get(item.id)
         if item.text.lstrip().startswith(EM_CONTEXT_MARKER) and not _is_design(item.anchor):
             if row is None or row.get("status") != "met":
                 open_rows.append({"id": item.id, "reason": "em-context"})
             continue
+        if row is None and criterion is not None and item.id in credited:
+            row = {**criterion, "id": item.id}
         if row is None:
             failures.append({"id": item.id, "reason": "unjudged (arrived after the check, or skipped)"})
             continue
@@ -2594,6 +2709,8 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         out["claimed"] = outcome["claimed"]
     if "footprint_widened" in outcome:
         out["footprint_widened"] = outcome["footprint_widened"]
+    if "footprint_ignored_dropped" in outcome:
+        out["footprint_ignored_dropped"] = outcome["footprint_ignored_dropped"]
     if outcome.get("widened"):
         out["widened"] = outcome["widened"]
     if params.get("stop_after"):
@@ -2869,7 +2986,7 @@ def _sizing_plan(root: Path, sizing_rel: Optional[str]) -> tuple[Optional[str], 
 
     try:
         sizing_text = _sizing_path(root, sizing_rel).read_text(encoding="utf-8")
-        sizing = yaml.safe_load(sizing_text)
+        sizing = _yaml_safe_load(sizing_text)
     except (LedgerRefused, OSError, yaml.YAMLError):
         return None, None, ""
     edge = sizing.get("plan") if isinstance(sizing, dict) else None
@@ -2962,14 +3079,22 @@ def _unclaimed_rows(
 
 def _spine_rows(plan_text: str) -> Optional[list]:
     """The plan's `plan-tasks` spine rows, or None when the plan has no readable spine (a plan not yet
-    written out claims through its frontmatter alone)."""
+    written out claims through its frontmatter alone). A plan whose spine parses to a non-empty list of
+    rows reads through the engine's process memo (`spine_read.load_rows_memo`, read-only: never mutate
+    the result); any other shape re-parses so malformed and empty spines keep their historic result."""
     import yaml
 
     from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+    from coordinator_core.ops.dispatch_emit.spine_read import load_rows_memo
 
+    memo = load_rows_memo(plan_text)
+    if memo.status is LocateStatus.LOCATED and memo.rows:
+        return memo.rows
+    if memo.status is LocateStatus.ABSENT:
+        return None
     try:
         located = locate_fenced_block(plan_text)
-        rows = yaml.safe_load(located.body) if located.status is LocateStatus.LOCATED else None
+        rows = _yaml_safe_load(located.body) if located.status is LocateStatus.LOCATED else None
     except yaml.YAMLError:
         return None
     return rows if isinstance(rows, list) else None
@@ -3000,7 +3125,7 @@ def _sizing_shipped(root: Path, sizing_rel: Optional[str]) -> bool:
     import yaml
 
     try:
-        doc = yaml.safe_load(_sizing_path(root, sizing_rel).read_text(encoding="utf-8"))
+        doc = _yaml_safe_load(_sizing_path(root, sizing_rel).read_text(encoding="utf-8"))
     except (LedgerRefused, OSError, yaml.YAMLError):
         return False
     return isinstance(doc, dict) and doc.get("status") == "shipped"

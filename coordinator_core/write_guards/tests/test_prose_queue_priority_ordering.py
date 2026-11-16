@@ -21,9 +21,10 @@ Spec: coordinator-content-repo docs/decisions/DR-115-queue-shape-is-a-scope-coll
 from __future__ import annotations
 
 from coordinator_core.write_guards import engine
+from pathlib import Path
 
 
-def test_new_improvement_queue_with_justification_creation_guard_wins(tmp_path):
+def test_new_improvement_queue_with_justification_creation_guard_wins(tmp_path: Path) -> None:
     target = tmp_path / "state" / "improvement-queue.md"
     payload = {
         "tool_name": "Write",

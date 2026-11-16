@@ -6,6 +6,7 @@ from pathlib import Path
 
 from coordinator_core.backlog_grind_assemble import grind_rows
 from coordinator_core.usage import run_locate
+import pytest
 
 RUN_ID = "20261017T000000Z"
 SID = "11111111-2222-3333-4444-555555555555"
@@ -28,12 +29,12 @@ def _run(tmp_path: Path, monkeypatch, record: dict) -> dict:
     return json.loads(target.read_text(encoding="utf-8"))
 
 
-def _patch_session(monkeypatch, sid):
+def _patch_session(monkeypatch, sid) -> None:
     from coordinator_core.session import core
     monkeypatch.setattr(core, "resolve_session_id", lambda *_a, **_k: sid)
 
 
-def test_located_run_dir_merges_usage_and_leaves_spend(tmp_path, monkeypatch):
+def test_located_run_dir_merges_usage_and_leaves_spend(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     wf = tmp_path / "wf_1"
     wf.mkdir()
     (wf / "journal.jsonl").write_text(
@@ -42,7 +43,7 @@ def test_located_run_dir_merges_usage_and_leaves_spend(tmp_path, monkeypatch):
     monkeypatch.setattr(run_locate, "session_dir_for", lambda sid, root=None: tmp_path)
     seen = {}
 
-    def fake_locate(session_dir, run_id, *, agent_descriptions):
+    def fake_locate(session_dir, run_id, *, agent_descriptions) -> Path:
         seen["descriptions"] = agent_descriptions
         return wf
 
@@ -56,7 +57,7 @@ def test_located_run_dir_merges_usage_and_leaves_spend(tmp_path, monkeypatch):
     assert seen["descriptions"] == grind_rows.GRIND_CLOSE_AGENT_DESCRIPTIONS
 
 
-def test_located_run_dir_writes_a_spend_row_from_the_same_scan(tmp_path, monkeypatch):
+def test_located_run_dir_writes_a_spend_row_from_the_same_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     wf = tmp_path / "wf_1"
     wf.mkdir()
     (wf / "journal.jsonl").write_text(
@@ -73,7 +74,7 @@ def test_located_run_dir_writes_a_spend_row_from_the_same_scan(tmp_path, monkeyp
     assert {"tokens", "usd", "by_role"} <= set(row)
 
 
-def test_absent_run_dir_writes_no_spend_row(tmp_path, monkeypatch):
+def test_absent_run_dir_writes_no_spend_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_session(monkeypatch, SID)
     monkeypatch.setattr(run_locate, "session_dir_for", lambda sid, root=None: tmp_path)
     monkeypatch.setattr(run_locate, "locate_run_dir", lambda *a, **k: None)
@@ -81,7 +82,7 @@ def test_absent_run_dir_writes_no_spend_row(tmp_path, monkeypatch):
     assert not (tmp_path / "state" / "spend").exists()
 
 
-def test_absent_run_dir_records_null_with_reason(tmp_path, monkeypatch):
+def test_absent_run_dir_records_null_with_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_session(monkeypatch, SID)
     monkeypatch.setattr(run_locate, "session_dir_for", lambda sid, root=None: tmp_path)
     monkeypatch.setattr(run_locate, "locate_run_dir", lambda *a, **k: None)
@@ -110,7 +111,7 @@ def _settled_wf(session_dir: Path, name: str, agent_id: str, run_id: str, usage:
     return wf
 
 
-def test_no_close_leg_agent_still_records_the_runs_own_four_totals(tmp_path, monkeypatch):
+def test_no_close_leg_agent_still_records_the_runs_own_four_totals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Real locate_run_dir (no close-leg agent, all settled) returns None; the run-scoped scan
     still yields non-null usage. A wf dir that does not name the run contributes nothing."""
     _patch_session(monkeypatch, SID)
@@ -136,7 +137,7 @@ def test_no_close_leg_agent_still_records_the_runs_own_four_totals(tmp_path, mon
     assert out["spend"] == {"output_tokens": 1}
 
 
-def test_run_needle_is_matched_only_within_the_transcript_head(tmp_path):
+def test_run_needle_is_matched_only_within_the_transcript_head(tmp_path: Path) -> None:
     needle = f"scratch/warp/{RUN_ID}/"
     inside, beyond = tmp_path / "wf_in", tmp_path / "wf_beyond"
     for wf in (inside, beyond):
@@ -148,7 +149,7 @@ def test_run_needle_is_matched_only_within_the_transcript_head(tmp_path):
     assert grind_rows._names_run(beyond, needle) is False
 
 
-def test_scan_failure_never_fails_the_record(tmp_path, monkeypatch):
+def test_scan_failure_never_fails_the_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_session(monkeypatch, SID)
     monkeypatch.setattr(run_locate, "session_dir_for", lambda sid, root=None: tmp_path)
 
@@ -160,18 +161,18 @@ def test_scan_failure_never_fails_the_record(tmp_path, monkeypatch):
     assert out["usage"] is None and "RuntimeError" in out["usage_reason"]
 
 
-def test_no_session_leaves_record_untouched(tmp_path, monkeypatch):
+def test_no_session_leaves_record_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_session(monkeypatch, None)
     assert _run(tmp_path, monkeypatch, _record()) == _record()
 
 
-def test_caller_supplied_usage_is_kept(tmp_path, monkeypatch):
+def test_caller_supplied_usage_is_kept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_session(monkeypatch, SID)
     out = _run(tmp_path, monkeypatch, {**_record(), "usage": {"mine": 1}})
     assert out["usage"] == {"mine": 1}
 
 
-def test_prewrite_commit_params_is_in_the_verb_usage_and_requires_its_flags(capsys):
+def test_prewrite_commit_params_is_in_the_verb_usage_and_requires_its_flags(capsys: pytest.CaptureFixture[str]) -> None:
     assert grind_rows.main([]) == grind_rows.EXIT_USAGE
     assert "prewrite-commit-params" in capsys.readouterr().err
     assert grind_rows.main(["prewrite-commit-params", "--repo-root", "r"]) == grind_rows.EXIT_USAGE

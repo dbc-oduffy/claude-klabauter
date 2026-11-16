@@ -14,6 +14,7 @@ from coordinator_core.ops import review_prep as rp
 from coordinator_core.ops import warp_run_deliverable
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 from coordinator_core.session import claim_index, liveness
+from pathlib import Path
 
 RUN = "ask-20261106T002934-26c3fc"
 PROD = "pkg/mod.py"
@@ -26,14 +27,14 @@ class _Found(dict):
     recorded_kind = None
 
 
-def _stage(tmp_path, declared):
+def _stage(tmp_path, declared) -> None:
     base = record_dir(tmp_path, RUN)
     base.mkdir(parents=True, exist_ok=True)
     (base / "manifest.json").write_text(json.dumps({"review_declared_paths": declared}), encoding="utf-8")
 
 
-def _peer_touches(monkeypatch, paths):
-    def lookup(asked, **kw):
+def _peer_touches(monkeypatch, paths) -> None:
+    def lookup(asked, **kw) -> _Found:
         found = _Found({p: [PEER] if p in paths else [] for p in asked})
         found.recorded_kind = {p: {PEER: "write"} if p in paths else {} for p in asked}
         return found
@@ -44,7 +45,7 @@ def _peer_touches(monkeypatch, paths):
     monkeypatch.setattr(warp_run_deliverable, "live_run_write_claims", lambda *a, **kw: {})
 
 
-def test_a_declared_path_a_peer_also_touched_stays_reviewable(tmp_path, monkeypatch):
+def test_a_declared_path_a_peer_also_touched_stays_reviewable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stage(tmp_path, [PROD, TEST])
     _peer_touches(monkeypatch, {TEST})
 
@@ -54,21 +55,21 @@ def test_a_declared_path_a_peer_also_touched_stays_reviewable(tmp_path, monkeypa
     assert held == {TEST: [PEER]}
 
 
-def test_a_run_whose_every_path_is_peer_touched_still_reviews_them_all(tmp_path, monkeypatch):
+def test_a_run_whose_every_path_is_peer_touched_still_reviews_them_all(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stage(tmp_path, [PROD, TEST])
     _peer_touches(monkeypatch, {PROD, TEST})
 
     assert rp.declared_paths_and_held(tmp_path, RUN, own_session="mine")[0] == [PROD, TEST]
 
 
-def test_the_landing_side_view_still_withholds_the_peer_touched_path(tmp_path, monkeypatch):
+def test_the_landing_side_view_still_withholds_the_peer_touched_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stage(tmp_path, [PROD, TEST])
     _peer_touches(monkeypatch, {TEST})
 
     assert rp.declared_paths_for_run(tmp_path, RUN, own_session="mine") == [PROD]
 
 
-def test_the_prep_reply_names_the_peer_touched_path(tmp_path, monkeypatch):
+def test_the_prep_reply_names_the_peer_touched_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stage(tmp_path, [PROD, TEST])
     _peer_touches(monkeypatch, {TEST})
     seen: dict = {}
@@ -90,7 +91,7 @@ def test_the_prep_reply_names_the_peer_touched_path(tmp_path, monkeypatch):
     assert PROD in seen["paths"] and TEST in seen["paths"], seen
 
 
-def test_nothing_declared_still_raises_without_a_peer_held_clause(tmp_path, monkeypatch):
+def test_nothing_declared_still_raises_without_a_peer_held_clause(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stage(tmp_path, [])
     _peer_touches(monkeypatch, set())
 
@@ -99,7 +100,7 @@ def test_nothing_declared_still_raises_without_a_peer_held_clause(tmp_path, monk
     assert "peer-held" not in str(exc.value)
 
 
-def test_a_run_with_no_peer_touch_reviews_every_declared_path(tmp_path, monkeypatch):
+def test_a_run_with_no_peer_touch_reviews_every_declared_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stage(tmp_path, [PROD, TEST])
     _peer_touches(monkeypatch, set())
 

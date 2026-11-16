@@ -24,7 +24,7 @@ def _git(repo: Path, *args: str) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@example.com")
     _git(tmp_path, "config", "user.name", "T")
@@ -41,7 +41,7 @@ def repo(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def _own_session_claims(monkeypatch):
+def _own_session_claims(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import claim_index, liveness
 
     class _Found(dict):
@@ -64,7 +64,7 @@ def _slice_files(reply: dict) -> set:
 
 
 @pytest.mark.parametrize("declared", [[TRACKED, NEW], ["src/"], ["src"]])
-def test_untracked_and_modified_declared_files_reach_a_slice(repo, declared):
+def test_untracked_and_modified_declared_files_reach_a_slice(repo, declared) -> None:
     (repo / TRACKED).write_text("x = 2\n" * 40, encoding="utf-8")
     (repo / NEW).write_text("z = 1\n" * 40, encoding="utf-8")
     reply = rp._handler(
@@ -84,7 +84,7 @@ def test_untracked_and_modified_declared_files_reach_a_slice(repo, declared):
     assert {TRACKED, NEW} <= _slice_files(reply)
 
 
-def test_untracked_member_of_declared_dir_survives_peer_bases(repo, monkeypatch):
+def test_untracked_member_of_declared_dir_survives_peer_bases(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     base = _git(repo, "rev-parse", "HEAD").strip()
     monkeypatch.setattr(rp, "_peer_bases", lambda *a, **k: {"src/other.py": base})
     (repo / TRACKED).write_text("x = 2\n" * 40, encoding="utf-8")

@@ -8,10 +8,11 @@ import subprocess
 import pytest
 
 from coordinator_core.group_em import box_probe, box_registry
+from pathlib import Path
 
 
 @pytest.fixture
-def no_spawn(monkeypatch):
+def no_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*a, **k):
         raise AssertionError("probe must not spawn a subprocess")
 
@@ -19,7 +20,7 @@ def no_spawn(monkeypatch):
     monkeypatch.setattr(subprocess, "run", _boom)
 
 
-def test_probe_shape_and_zero_spawn(no_spawn):
+def test_probe_shape_and_zero_spawn(no_spawn) -> None:
     cap = box_probe.probe()
     assert set(cap) == {"os", "arch", "cpu_count", "ram_mb", "python", "gpu", "has_p4", "has_ue"}
     assert cap["gpu"] is None
@@ -28,7 +29,7 @@ def test_probe_shape_and_zero_spawn(no_spawn):
     assert isinstance(cap["ram_mb"], int) and cap["ram_mb"] > 0
 
 
-def test_probe_reports_tool_presence(no_spawn, monkeypatch, tmp_path):
+def test_probe_reports_tool_presence(no_spawn, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.group_em import placement
 
     cap = box_probe.probe()
@@ -55,12 +56,12 @@ def test_probe_reports_tool_presence(no_spawn, monkeypatch, tmp_path):
     assert box_probe.probe()["has_ue"] is True
 
 
-def test_ram_unknown_is_none(monkeypatch):
+def test_ram_unknown_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(box_probe.host_sampler, "avail_mb", lambda: (None, None))
     assert box_probe._ram_mb() is None
 
 
-def test_write_capability_mints_identity_and_records(tmp_path, no_spawn):
+def test_write_capability_mints_identity_and_records(tmp_path: Path, no_spawn) -> None:
     rec = box_probe.write_capability(tmp_path)
     box_id = box_registry.local_box_id(tmp_path)
     assert box_id != box_registry.LOCAL_BOX_ID
@@ -70,7 +71,7 @@ def test_write_capability_mints_identity_and_records(tmp_path, no_spawn):
     assert on_disk["capability"]["gpu"] is None
 
 
-def test_write_capability_keeps_existing_id_and_refreshes(tmp_path):
+def test_write_capability_keeps_existing_id_and_refreshes(tmp_path: Path) -> None:
     box_id = box_registry.ensure_identity(tmp_path)
     box_probe.write_capability(tmp_path)
     path = tmp_path / "state" / "group-em" / "box.json"
@@ -84,7 +85,7 @@ def test_write_capability_keeps_existing_id_and_refreshes(tmp_path):
     assert "minted_at" in fresh
 
 
-def test_stored_capability_reads_without_minting(tmp_path):
+def test_stored_capability_reads_without_minting(tmp_path: Path) -> None:
     assert box_probe.stored_capability(tmp_path) is None
     assert not (tmp_path / "state").exists()
     box_registry.ensure_identity(tmp_path)
@@ -94,14 +95,14 @@ def test_stored_capability_reads_without_minting(tmp_path):
 
 
 @pytest.mark.parametrize("body", ["[1, 2]", "not json", '{"capability": "x"}'])
-def test_stored_capability_refuses_malformed(tmp_path, body):
+def test_stored_capability_refuses_malformed(tmp_path: Path, body) -> None:
     path = tmp_path / "state" / "group-em" / "box.json"
     path.parent.mkdir(parents=True)
     path.write_text(body, encoding="utf-8")
     assert box_probe.stored_capability(tmp_path) is None
 
 
-def test_write_capability_survives_non_dict_box_json(tmp_path):
+def test_write_capability_survives_non_dict_box_json(tmp_path: Path) -> None:
     path = tmp_path / "state" / "group-em" / "box.json"
     path.parent.mkdir(parents=True)
     path.write_text("[1, 2]", encoding="utf-8")
@@ -111,7 +112,7 @@ def test_write_capability_survives_non_dict_box_json(tmp_path):
     assert "capability" in data
 
 
-def test_stored_capability_reads_recorded_and_refuses_absent_or_empty(tmp_path):
+def test_stored_capability_reads_recorded_and_refuses_absent_or_empty(tmp_path: Path) -> None:
     assert box_probe.stored_capability(tmp_path) is None
     path = tmp_path / "state" / "group-em" / "box.json"
     path.parent.mkdir(parents=True)

@@ -7,11 +7,17 @@ import importlib.util
 import pathlib
 import sys
 import types
+from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _load_cli_module():
+def _load_cli_module() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "cross_repo_memo", str(_BIN_DIR / "cross-repo-memo.py")
     )
@@ -35,7 +41,7 @@ def _run(monkeypatch, capsys, envelope: dict, *, apply_: bool, root: str):
     return code, captured.out, captured.err
 
 
-def test_a_reported_rows_note_is_printed(monkeypatch, capsys, tmp_path):
+def test_a_reported_rows_note_is_printed(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     envelope = {
         "candidates": [
             {
@@ -56,7 +62,7 @@ def test_a_reported_rows_note_is_printed(monkeypatch, capsys, tmp_path):
     assert "delivered but this repo holds no committed receipt" in out
 
 
-def test_a_noteless_row_prints_no_empty_continuation(monkeypatch, capsys, tmp_path):
+def test_a_noteless_row_prints_no_empty_continuation(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     envelope = {
         "candidates": [
             {"disposition": "move", "status": "sent", "filename": "done.md", "note": None}
@@ -71,7 +77,7 @@ def test_a_noteless_row_prints_no_empty_continuation(monkeypatch, capsys, tmp_pa
     assert "└─" not in out
 
 
-def test_a_tracked_legacy_move_is_told_to_commit(monkeypatch, capsys, tmp_path):
+def test_a_tracked_legacy_move_is_told_to_commit(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     root = str(tmp_path)
     envelope = {
         "acted": [
@@ -92,8 +98,8 @@ def test_a_tracked_legacy_move_is_told_to_commit(monkeypatch, capsys, tmp_path):
 
 
 def test_a_move_that_began_in_the_untracked_root_has_nothing_to_commit(
-    monkeypatch, capsys, tmp_path
-):
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
     root = str(tmp_path)
     outbox = tmp_path / ".coordinator-local" / "memo-outbox"
     envelope = {

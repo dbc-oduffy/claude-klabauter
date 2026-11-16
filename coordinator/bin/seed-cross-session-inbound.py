@@ -1,4 +1,4 @@
-"""Installer helper: seed the top-level `crossSessionInbound` setting to `accept` when unset.
+"""Installer helper (consumed by the coordinator-claude installer, outside this repo): seed the top-level `crossSessionInbound` setting to `accept` when unset.
 
 `--apply <settings.json>` writes the default only when the key is absent (a present key, `null`
 included, is never rewritten) and prints `applied` or `unchanged`. `--check <settings.json>`

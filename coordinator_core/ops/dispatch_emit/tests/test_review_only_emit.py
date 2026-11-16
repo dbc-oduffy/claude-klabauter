@@ -20,6 +20,7 @@ from coordinator_core.ops.dispatch_emit.wake_digest import (
     RUNTIME_VARS,
 )
 from coordinator_core.ops.dispatch_emit.tests.test_emit_dag import _write_row
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -35,7 +36,7 @@ _FORBIDDEN = (
 )
 
 
-def _script(host):
+def _script(host) -> str:
     return compose_script(
         [[_write_row("C1"), _write_row("C2")]],
         name="wf",
@@ -50,7 +51,7 @@ def _script(host):
     )
 
 
-def test_review_only_compose_without_a_pinned_terminal_sha_raises():
+def test_review_only_compose_without_a_pinned_terminal_sha_raises() -> None:
     with pytest.raises(ValueError, match="pinned review_terminal_sha"):
         compose_script(
             [[_write_row("C1")]],
@@ -59,7 +60,7 @@ def test_review_only_compose_without_a_pinned_terminal_sha_raises():
 
 
 @pytest.mark.parametrize("host", ["coordinator", "host"])
-def test_no_row_commit_or_push_machinery(host):
+def test_no_row_commit_or_push_machinery(host) -> None:
     script = _script(host)
 
     for needle in _FORBIDDEN:
@@ -69,7 +70,7 @@ def test_no_row_commit_or_push_machinery(host):
 
 
 @pytest.mark.parametrize("host", ["coordinator", "host"])
-def test_every_digest_var_read_is_declared(host):
+def test_every_digest_var_read_is_declared(host) -> None:
     script = _script(host)
 
     for name in (*RUNTIME_VARS, PLAN_HELD_VAR, CHUNK_REASON_VAR):
@@ -77,20 +78,20 @@ def test_every_digest_var_read_is_declared(host):
             assert re.search(rf"\b(const|let) {re.escape(name)}\b", script), name
 
 
-def test_landed_seed_stands_outside_any_commit_wave():
+def test_landed_seed_stands_outside_any_commit_wave() -> None:
     script = _script("coordinator")
 
     assert "const _landed = { 'C1': { paths: ['pkg/C1.py'" in script
     assert "_commitWave" not in script
 
 
-def test_given_base_reaches_the_prep_prompt():
+def test_given_base_reaches_the_prep_prompt() -> None:
     script = _script("coordinator")
 
     assert _BASE in script.split("phase('Review prep')", 1)[1]
 
 
-def test_unnamed_spine_row_appears_nowhere():
+def test_unnamed_spine_row_appears_nowhere() -> None:
     script = compose_script(
         [[_write_row("C1")]],
         name="wf", description="d", run_base_sha=_BASE, review_only=True,
@@ -100,14 +101,14 @@ def test_unnamed_spine_row_appears_nowhere():
     assert "C2" not in script and "pkg/C2.py" not in script
 
 
-def _row(id_, deps=()):
+def _row(id_, deps=()) -> EmitterRow:
     return EmitterRow(
         id=id_, title=id_, surface="s", writes=[f"p/{id_}.py"], reads=(),
         depends_on=[{"chunk": d} for d in deps],
     )
 
 
-def test_keep_landed_strips_edges_to_dropped_rows():
+def test_keep_landed_strips_edges_to_dropped_rows() -> None:
     kept = _keep_landed_rows([_row("A"), _row("B", ["A"]), _row("C", ["B"])], frozenset({"B", "C"}))
 
     assert [r.id for r in kept] == ["B", "C"]
@@ -115,19 +116,19 @@ def test_keep_landed_strips_edges_to_dropped_rows():
     assert kept[1].depends_on == [{"chunk": "B"}]
 
 
-def test_keep_landed_refuses_an_unknown_id():
+def test_keep_landed_refuses_an_unknown_id() -> None:
     with pytest.raises(ValueError):
         _keep_landed_rows([_row("A")], frozenset({"Z"}))
 
 
-def test_keep_landed_names_an_excluded_rows_reason_and_detail():
+def test_keep_landed_names_an_excluded_rows_reason_and_detail() -> None:
     exc = [{"id": "Z", "reason": "external_gate", "detail": "waits on memo"}]
     with pytest.raises(ValueError) as e:
         _keep_landed_rows([_row("A")], frozenset({"Z"}), exc)
     assert "Z: external_gate (waits on memo)" in str(e.value)
 
 
-def test_keep_landed_names_an_absent_id_as_no_such_row():
+def test_keep_landed_names_an_absent_id_as_no_such_row() -> None:
     with pytest.raises(ValueError, match="Y: no such row in this spine"):
         _keep_landed_rows([_row("A")], frozenset({"Y"}), [])
 
@@ -137,7 +138,7 @@ def _run(args, capsys):
     return code, capsys.readouterr().err
 
 
-def test_flags_require_each_other(tmp_path, capsys):
+def test_flags_require_each_other(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     run = tmp_path / "run.txt"
     run.write_text("x checkpoint(wave 1): 1 rows — A", encoding="utf-8")
 
@@ -145,7 +146,7 @@ def test_flags_require_each_other(tmp_path, capsys):
     assert _run(["--plan", "p.md", "--run-base", _BASE], capsys)[0] == cli.EXIT_USAGE
 
 
-def test_bad_sha_and_missing_plan_refused(tmp_path, capsys):
+def test_bad_sha_and_missing_plan_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     run = tmp_path / "run.txt"
     run.write_text("x", encoding="utf-8")
 
@@ -167,7 +168,7 @@ def test_bad_sha_and_missing_plan_refused(tmp_path, capsys):
         ["--pipeline", "x"],
     ],
 )
-def test_conflicting_flags_refused(tmp_path, capsys, extra):
+def test_conflicting_flags_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str], extra) -> None:
     run = tmp_path / "run.txt"
     run.write_text("x", encoding="utf-8")
 
@@ -177,7 +178,7 @@ def test_conflicting_flags_refused(tmp_path, capsys, extra):
     assert "exclusive of" in err
 
 
-def test_review_only_takes_plan_or_inventory_not_both(tmp_path, capsys):
+def test_review_only_takes_plan_or_inventory_not_both(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     run = tmp_path / "run.txt"
     run.write_text("x", encoding="utf-8")
 
@@ -193,7 +194,7 @@ _PLAN = (
 )
 
 
-def test_empty_landed_set_refused(tmp_path, capsys):
+def test_empty_landed_set_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     run = tmp_path / "run.txt"
     run.write_text("no checkpoint subjects here", encoding="utf-8")
     plan = tmp_path / "p.md"
@@ -205,7 +206,7 @@ def test_empty_landed_set_refused(tmp_path, capsys):
     assert "names no row" in err
 
 
-def test_review_only_marker_tells_the_terminal_commit_to_leave_rows_alone():
+def test_review_only_marker_tells_the_terminal_commit_to_leave_rows_alone() -> None:
     from coordinator_core.ops.dispatch_emit.commit_request import (
         ChunkCommit,
         CommitRequest,
@@ -228,7 +229,7 @@ _SPINE_TEXT = (
 )
 
 
-def _g(repo, *args):
+def _g(repo, *args) -> str:
     from coordinator_core.git.run import run_git
 
     done = run_git(list(args), cwd=str(repo))
@@ -255,7 +256,7 @@ def _real_repo(tmp_path):
     return repo, base, head
 
 
-def _build_real_repo(repo):
+def _build_real_repo(repo) -> tuple[str, str]:
     repo.mkdir()
     _g(repo, "init", "-q")
     _g(repo, "config", "user.email", "t@example.com")
@@ -271,7 +272,7 @@ def _build_real_repo(repo):
     return base, _g(repo, "rev-parse", "HEAD")
 
 
-def _emit_review_only(repo, base):
+def _emit_review_only(repo, base) -> str:
     from coordinator_core.ops.dispatch_emit.emit import emit_script
 
     return emit_script(
@@ -285,7 +286,7 @@ def _emit_review_only(repo, base):
 
 
 @pytest.mark.spawns_process
-def test_review_only_emit_pins_the_terminal_sha_and_omits_a_peers_uncommitted_file(tmp_path):
+def test_review_only_emit_pins_the_terminal_sha_and_omits_a_peers_uncommitted_file(tmp_path: Path) -> None:
     repo, base, head = _real_repo(tmp_path)
     (repo / "peer_uncommitted.py").write_text("x\n", encoding="utf-8")
     (repo / "a.py").write_text("peer edit\n", encoding="utf-8")
@@ -299,7 +300,7 @@ def test_review_only_emit_pins_the_terminal_sha_and_omits_a_peers_uncommitted_fi
 
 
 @pytest.mark.spawns_process
-def test_review_only_emit_refuses_a_base_that_is_not_an_ancestor_of_head(tmp_path):
+def test_review_only_emit_refuses_a_base_that_is_not_an_ancestor_of_head(tmp_path: Path) -> None:
     repo, base, head = _real_repo(tmp_path)
     _g(repo, "checkout", "-q", "-b", "side", base)
     (repo / "side.py").write_text("s\n", encoding="utf-8")
@@ -313,7 +314,7 @@ def test_review_only_emit_refuses_a_base_that_is_not_an_ancestor_of_head(tmp_pat
 
 
 @pytest.mark.spawns_process
-def test_review_only_emit_refuses_an_unreadable_ancestry_instead_of_proceeding(tmp_path):
+def test_review_only_emit_refuses_an_unreadable_ancestry_instead_of_proceeding(tmp_path: Path) -> None:
     repo, _, _ = _real_repo(tmp_path)
 
     with pytest.raises(ValueError, match="unreadable"):
@@ -321,7 +322,7 @@ def test_review_only_emit_refuses_an_unreadable_ancestry_instead_of_proceeding(t
 
 
 @pytest.mark.spawns_process
-def test_normal_run_emit_does_not_pin_a_terminal_sha(tmp_path):
+def test_normal_run_emit_does_not_pin_a_terminal_sha(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.emit import emit_script
 
     repo, _, head = _real_repo(tmp_path)

@@ -10,6 +10,7 @@ import pytest
 from coordinator_core.hooks import nudge_hand_written_plan as nhp
 from coordinator_core.hooks import postuse_advisory_dispatch as pad
 from coordinator_core.ops.artifact_adopt_contract import adopt_command
+from pathlib import Path
 
 PLAN = "docs/plans/2026-10-06-x.md"
 NO_FM = "# Plan\n\nbody\n"
@@ -24,16 +25,16 @@ MINTED_BAD_STATUS = (
 
 
 @pytest.fixture(autouse=True)
-def _sentinel_dir(tmp_path, monkeypatch):
+def _sentinel_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(nhp.tempfile, "gettempdir", lambda: str(tmp_path))
 
 
-def _run(tool="Write", path=PLAN, content=NO_FM, session="test-session-hw-a", root=None):
+def _run(tool: str = "Write", path=PLAN, content=NO_FM, session: str = "test-session-hw-a", root=None) -> str:
     return asyncio.run(nhp.advisory_text(tool, path, content, session, root))
 
 
 @pytest.mark.parametrize("content", [NO_FM, NO_ID_FM])
-def test_fires_for_frontmatterless_and_planidless(content):
+def test_fires_for_frontmatterless_and_planidless(content) -> None:
     text = _run(content=content, session="test-session-hw-fires")
     assert text.startswith("[adopt] ")
     assert adopt_command(PLAN) in text
@@ -44,7 +45,7 @@ def test_fires_for_frontmatterless_and_planidless(content):
     "content,field",
     [(MINTED_NO_AUTHOR, "author"), (MINTED_BAD_STATUS, "status"), ('---\nplan_id: "pln-a-1"\n---\n', "title")],
 )
-def test_fires_for_plan_id_but_missing_required_field(content, field):
+def test_fires_for_plan_id_but_missing_required_field(content, field) -> None:
     text = _run(content=content, session="test-session-hw-missing-" + field)
     assert text.startswith("[adopt] ")
     assert "missing cockpit-required field(s)" in text
@@ -53,7 +54,7 @@ def test_fires_for_plan_id_but_missing_required_field(content, field):
     assert "\n" not in text
 
 
-def test_fires_for_absolute_path_under_repo_root(tmp_path):
+def test_fires_for_absolute_path_under_repo_root(tmp_path: Path) -> None:
     abs_path = str(tmp_path / "docs" / "plans" / "2026-10-06-x.md")
     text = _run(path=abs_path, root=tmp_path, session="test-session-hw-abs")
     assert adopt_command(PLAN) in text
@@ -70,23 +71,23 @@ def test_fires_for_absolute_path_under_repo_root(tmp_path):
         ("Write", "docs/plans/sub/x.md", NO_FM),
     ],
 )
-def test_silent_cases(tool, path, content):
+def test_silent_cases(tool, path, content) -> None:
     assert _run(tool=tool, path=path, content=content, session="test-session-hw-silent") == ""
 
 
-def test_second_identical_write_same_session_is_silent():
+def test_second_identical_write_same_session_is_silent() -> None:
     assert _run(session="test-session-hw-dup")
     assert _run(session="test-session-hw-dup") == ""
 
 
-def test_other_session_and_no_session_still_fire():
+def test_other_session_and_no_session_still_fire() -> None:
     assert _run(session="test-session-hw-s1")
     assert _run(session="test-session-hw-s2")
     assert _run(session="")
     assert _run(session="")
 
 
-def test_dispatcher_merges_into_one_post_advisory():
+def test_dispatcher_merges_into_one_post_advisory() -> None:
     params = {
         "session_id": "test-session-hw-merge",
         "transcript_path": "",
@@ -103,7 +104,7 @@ def test_dispatcher_merges_into_one_post_advisory():
     assert context.count("[adopt]") == 1
 
 
-def test_dispatcher_fires_without_session_id():
+def test_dispatcher_fires_without_session_id() -> None:
     params = {"tool_name": "Write", "file_path": PLAN, "content": NO_FM}
     result = asyncio.run(pad._handler(params))
     assert "[adopt]" in result["hookSpecificOutput"]["additionalContext"]

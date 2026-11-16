@@ -135,6 +135,7 @@ from coordinator_core.git import run as git_run
 from coordinator_core.spawn_policy import is_test_tree_site
 from coordinator_core.spawn_policy.detect import DEFAULT_EXCLUDE, discover_source_files
 from coordinator_core.spawn_policy.detect import _RECOGNIZED as _SPAWN_TARGETS
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -1184,14 +1185,14 @@ def _dial_message(dials: list) -> str:
 # review-trail retirement (e.g. scope_orphan_census.py, session/scope.py). The
 # ceiling drop shrinks the registers correctly; it does not touch, cause, or
 # claim to fix these two pre-existing failures.
-def test_no_new_private_git_runner_outside_the_frozen_inventory():
+def test_no_new_private_git_runner_outside_the_frozen_inventory() -> None:
     """The gate. A module spawning git outside the inventory fails here."""
     sites, _dials = collect_private_git_runners()
     new = [site for site in sites if site.module not in _GRANDFATHERED_RUNNER_MODULES]
     assert not new, _runner_message(new)
 
 
-def test_no_new_module_private_git_dial_outside_the_frozen_inventory():
+def test_no_new_module_private_git_dial_outside_the_frozen_inventory() -> None:
     """The other half. A new number bounding a git spawn fails here, whether
     it is a module constant or a parameter default."""
     _sites, dials = collect_private_git_runners()
@@ -1199,7 +1200,7 @@ def test_no_new_module_private_git_dial_outside_the_frozen_inventory():
     assert not new, _dial_message(new)
 
 
-def test_the_registers_are_shrink_only():
+def test_the_registers_are_shrink_only() -> None:
     """The ratchet. Adding a grandfather row costs what raising a budget
     costs: this literal must move too, in the same diff, as an argument that
     the tree needs one more private git runner than it had yesterday.
@@ -1227,7 +1228,7 @@ def test_the_registers_are_shrink_only():
     )
 
 
-def test_every_grandfathered_runner_still_spawns_git():
+def test_every_grandfathered_runner_still_spawns_git() -> None:
     """Self-invalidation. A row naming a module that has migrated, been
     renamed, or been deleted is not harmless: it is a standing, reviewed-
     looking pre-approval for whatever next takes that path. A failure here is
@@ -1242,7 +1243,7 @@ def test_every_grandfathered_runner_still_spawns_git():
     )
 
 
-def test_every_grandfathered_dial_still_bounds_a_git_spawn():
+def test_every_grandfathered_dial_still_bounds_a_git_spawn() -> None:
     """Self-invalidation for the dial register, same rule and same remedy."""
     _sites, dials = collect_private_git_runners()
     live = set(dials)
@@ -1277,7 +1278,7 @@ def test_every_grandfathered_dial_still_bounds_a_git_spawn():
         ),
     ],
 )
-def test_collector_sees_a_which_resolved_argv_head(source):
+def test_collector_sees_a_which_resolved_argv_head(source) -> None:
     """The blind spot, pinned. A module resolving git through
     `shutil.which("git")` and spawning `[git_bin, ...]` carries no literal
     `"git"` head; before 2026-08-25 the collector saw nothing and the module
@@ -1322,7 +1323,7 @@ def test_collector_sees_a_which_resolved_argv_head(source):
         ),
     ],
 )
-def test_collector_sees_a_one_hop_bound_argv_name(source):
+def test_collector_sees_a_one_hop_bound_argv_name(source) -> None:
     """The blind spot this gate's own docstring did not yet name: the
     argv-expression walk at the call site sees only the EXPRESSION passed
     to the spawn, so a name bound to a `["git", ...]` literal one line
@@ -1339,7 +1340,7 @@ def test_collector_sees_a_one_hop_bound_argv_name(source):
     assert dials == [("fake/one_hop.py", "_PROBE_TIMEOUT_SECS")]
 
 
-def test_contract_exempt_modules_still_declare_their_standalone_contract():
+def test_contract_exempt_modules_still_declare_their_standalone_contract() -> None:
     """Self-invalidation for the exemption list, the same rule the two
     registers get. An exemption whose reason has quietly gone away is worse
     than no exemption: it is a standing, reviewed-looking permission for a
@@ -1365,7 +1366,7 @@ def test_contract_exempt_modules_still_declare_their_standalone_contract():
         )
 
 
-def test_the_collector_is_not_vacuous():
+def test_the_collector_is_not_vacuous() -> None:
     """Guards the guard. Every assertion above passes trivially against an
     empty sweep, so a scope, traversal, or exclusion change that silently
     stops finding anything would land green. This is the leg that notices."""
@@ -1378,7 +1379,7 @@ def test_the_collector_is_not_vacuous():
     assert dials, "the collector found no git dial anywhere -- see above."
 
 
-def test_the_collector_fires_on_a_synthetic_private_runner(tmp_path):
+def test_the_collector_fires_on_a_synthetic_private_runner(tmp_path: Path) -> None:
     """Fails-when-inverted leg. Proves the detector reports the shape it
     claims to, including the split argv/spawn pair that a naive one-function
     matcher misses, rather than passing because the tree happens to be clean.
@@ -1404,7 +1405,7 @@ def test_the_collector_fires_on_a_synthetic_private_runner(tmp_path):
     assert [site.enclosing for site in split_sites] == ["_git"]
 
 
-def test_a_module_calling_the_shared_runner_is_not_a_site():
+def test_a_module_calling_the_shared_runner_is_not_a_site() -> None:
     """The negative control that matters most: migrating must actually clear
     the flag. A module that calls `run_git(["status"])` builds no `git` argv
     of its own and must be invisible to both legs -- otherwise the gate
@@ -1420,7 +1421,7 @@ def test_a_module_calling_the_shared_runner_is_not_a_site():
     assert dials == []
 
 
-def test_the_primitives_three_numbers_ratchet_down_only():
+def test_the_primitives_three_numbers_ratchet_down_only() -> None:
     """The seam's own numbers, pinned the way `test_ceremony_budget_ratchet.py`
     pins the ceremony budget: second, independent copies that must move in the
     same diff. The local budget is the one the six already-correct modules had
@@ -1449,7 +1450,7 @@ def test_the_primitives_three_numbers_ratchet_down_only():
     )
 
 
-def test_the_budget_and_the_wall_bound_are_not_the_same_number():
+def test_the_budget_and_the_wall_bound_are_not_the_same_number() -> None:
     """The split G1 measured this module into, and the one property that stops
     it being 'simplified' back.
 
@@ -1476,7 +1477,7 @@ def test_the_budget_and_the_wall_bound_are_not_the_same_number():
     )
 
 
-def test_an_explicit_timeout_narrows_the_budget_and_never_widens_it():
+def test_an_explicit_timeout_narrows_the_budget_and_never_widens_it() -> None:
     """The property that makes `run_git`'s `timeout=` not a dial. DR-349 § 3's
     `min()`-after-resolution, the shape `ipc._timeout_for` already proves for
     `ceremony.*`. Asserted on the BUDGET axis, which is the one a call site
@@ -1489,7 +1490,7 @@ def test_an_explicit_timeout_narrows_the_budget_and_never_widens_it():
     assert git_run._resolve_budget(1.0, True) == 1.0
 
 
-def test_stdin_input_runs_in_binary_mode_and_is_never_newline_translated(monkeypatch):
+def test_stdin_input_runs_in_binary_mode_and_is_never_newline_translated(monkeypatch: pytest.MonkeyPatch) -> None:
     """The `--stdin` contract, pinned structurally rather than by spawning.
 
     Python's text-mode stdin wrapper carries `newline=None` and rewrites every
@@ -1520,14 +1521,14 @@ def test_stdin_input_runs_in_binary_mode_and_is_never_newline_translated(monkeyp
         def __enter__(self):
             return self
 
-        def __exit__(self, *exc):
+        def __exit__(self, *exc) -> bool:
             return False
 
         def communicate(self, input=None, timeout=None):
             recorded["input"] = input
             return (b"a/b\0c/d\0", b"")
 
-        def wait(self, timeout=None):
+        def wait(self, timeout=None) -> int:
             recorded['input'] = recorded['kwargs']['stdin'].read()
             recorded['kwargs']['stdout'].write(b"a/b\0c/d\0")
             return self.returncode
@@ -1554,7 +1555,7 @@ def test_stdin_input_runs_in_binary_mode_and_is_never_newline_translated(monkeyp
     assert result.stdout == "a/b\0c/d\0"
 
 
-def test_a_call_without_stdin_keeps_text_mode_and_a_closed_stdin(monkeypatch):
+def test_a_call_without_stdin_keeps_text_mode_and_a_closed_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
     """The other half of the mode switch: every pre-existing caller keeps the
     behaviour it has today, and still gets `stdin=DEVNULL` so a git command
     that would prompt cannot block on an inherited terminal."""
@@ -1575,14 +1576,14 @@ def test_a_call_without_stdin_keeps_text_mode_and_a_closed_stdin(monkeypatch):
         def __enter__(self):
             return self
 
-        def __exit__(self, *exc):
+        def __exit__(self, *exc) -> bool:
             return False
 
         def communicate(self, input=None, timeout=None):
             recorded["input"] = input
             return ("ok\n", "")
 
-        def wait(self, timeout=None):
+        def wait(self, timeout=None) -> int:
             recorded['input'] = None
             recorded['kwargs']['stdout'].write(b'ok\r\n')
             return self.returncode
@@ -1605,7 +1606,7 @@ def test_a_call_without_stdin_keeps_text_mode_and_a_closed_stdin(monkeypatch):
     assert recorded["input"] is None
 
 
-def test_str_input_raises_type_error_before_any_spawn(monkeypatch):
+def test_str_input_raises_type_error_before_any_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
     """The bytes-only contract the module docstring's negative-spec claims
     ("Does NOT accept `str` for `input`") is now real, not just documented.
 
@@ -1628,7 +1629,7 @@ def test_str_input_raises_type_error_before_any_spawn(monkeypatch):
         git_run.run_git(["check-ignore", "-z", "--stdin"], input="a/b\0c/d\0")
 
 
-def test_the_pre_split_spellings_are_gone_and_stay_gone():
+def test_the_pre_split_spellings_are_gone_and_stay_gone() -> None:
     """The transitional aliases are deleted, and this is the leg that keeps
     them from growing back.
 
@@ -1668,7 +1669,7 @@ def _verb_message(entries: list) -> str:
     )
 
 
-def test_no_new_destructive_verb_site_outside_the_frozen_inventory():
+def test_no_new_destructive_verb_site_outside_the_frozen_inventory() -> None:
     """The gate (plan AC2/AC3). A call site reaching git with an
     unregistered destructive verb fails here, in either spawn shape --
     `run_git`/`_run_git`-shaped argv element 0, or a raw `["git", verb]`
@@ -1679,7 +1680,7 @@ def test_no_new_destructive_verb_site_outside_the_frozen_inventory():
     assert not new, _verb_message(sorted(new))
 
 
-def test_the_verb_register_is_shrink_only():
+def test_the_verb_register_is_shrink_only() -> None:
     """The ratchet (plan AC3). Adding a row costs what raising
     `_PINNED_RUNNER_CEILING` costs above: a literal that must move in the
     same diff, arguing in writing that the tree needs one more unenumerated
@@ -1691,7 +1692,7 @@ def test_the_verb_register_is_shrink_only():
     )
 
 
-def test_every_frozen_destructive_verb_site_is_still_live():
+def test_every_frozen_destructive_verb_site_is_still_live() -> None:
     """Self-invalidation (plan AC5), same rule as
     `test_every_grandfathered_runner_still_spawns_git`. A row naming a site
     that has been deleted, migrated off that verb, or renamed is a standing,
@@ -1709,7 +1710,7 @@ def test_every_frozen_destructive_verb_site_is_still_live():
     )
 
 
-def test_the_verb_collector_is_not_vacuous():
+def test_the_verb_collector_is_not_vacuous() -> None:
     """Guards the guard (plan AC5), same rule as
     `test_the_collector_is_not_vacuous`. A scope, traversal, or exclusion
     change that silently stops finding anything would otherwise land
@@ -1722,7 +1723,7 @@ def test_the_verb_collector_is_not_vacuous():
     )
 
 
-def test_the_verb_collector_fires_on_a_synthetic_run_git_shaped_call():
+def test_the_verb_collector_fires_on_a_synthetic_run_git_shaped_call() -> None:
     """Fails-when-inverted leg, `run_git`-shaped half (plan AC4). Matches
     `test_the_collector_fires_on_a_synthetic_private_runner`'s direct case:
     proves the detector reports the shape it claims to rather than passing
@@ -1736,7 +1737,7 @@ def test_the_verb_collector_fires_on_a_synthetic_run_git_shaped_call():
     assert [(s.enclosing, s.verb) for s in sites] == [("_wipe", "reset")]
 
 
-def test_the_verb_collector_fires_on_a_synthetic_raw_argv_call():
+def test_the_verb_collector_fires_on_a_synthetic_raw_argv_call() -> None:
     """Fails-when-inverted leg, raw-argv half (plan AC4). Matches
     `test_the_collector_fires_on_a_synthetic_private_runner`'s split case:
     the raw-argv shape is the exact bypass population the baton exists
@@ -1751,7 +1752,7 @@ def test_the_verb_collector_fires_on_a_synthetic_raw_argv_call():
     assert [(s.enclosing, s.verb) for s in sites] == [("_wipe", "reset")]
 
 
-def test_a_which_resolved_raw_argv_verb_is_also_detected():
+def test_a_which_resolved_raw_argv_verb_is_also_detected() -> None:
     """The `_resolved_git_names` blind spot G7 closed on 2026-08-25 applies
     identically to the verb axis: a module resolving git through
     `shutil.which("git")` and spawning `[git_bin, "reset", "--hard"]` carries
@@ -1767,7 +1768,7 @@ def test_a_which_resolved_raw_argv_verb_is_also_detected():
     assert [(s.enclosing, s.verb) for s in sites] == [("_wipe", "reset")]
 
 
-def test_a_module_calling_the_shared_runner_with_a_non_destructive_verb_is_not_a_site():
+def test_a_module_calling_the_shared_runner_with_a_non_destructive_verb_is_not_a_site() -> None:
     """Negative control: a `run_git` call whose verb is not in
     `_DESTRUCTIVE_VERBS` (a plain read) must be invisible, or every module
     ever migrated onto the seam would immediately start failing this gate."""

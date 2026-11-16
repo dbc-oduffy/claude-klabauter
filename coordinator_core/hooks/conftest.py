@@ -2,7 +2,7 @@ import pytest
 
 
 @pytest.fixture(autouse=True)
-def _pin_guard_level_strict(monkeypatch):
+def _pin_guard_level_strict(monkeypatch: pytest.MonkeyPatch):
     """Hook tests assert the strict (deny) behaviour; warn/off tests override."""
     from coordinator_core import machine_profile
 

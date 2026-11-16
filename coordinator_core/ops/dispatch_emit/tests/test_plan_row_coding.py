@@ -14,6 +14,7 @@ from coordinator_core.ops.dispatch_emit.plan_row_coding import (
     outside_landing_detail,
     source_rows_by_plan,
 )
+from pathlib import Path
 
 _SHA = "a" * 40
 _REL = "plan.md"
@@ -28,7 +29,7 @@ def _rows(text: str) -> dict:
     return {r["id"]: r for r in yaml.safe_load(locate_fenced_block(text).body)}
 
 
-def test_flip_stamps_noop_rows_with_the_no_change_detail():
+def test_flip_stamps_noop_rows_with_the_no_change_detail() -> None:
     text, flipped = flip_rows_coded(_PLAN, {"C1", "C2"}, _SHA, {"C2": NOOP_DETAIL})
     rows = _rows(text)
     assert flipped == ["C1", "C2"]
@@ -38,13 +39,13 @@ def test_flip_stamps_noop_rows_with_the_no_change_detail():
     assert "disposition_detail" not in rows["C1"]
 
 
-def test_flip_leaves_a_row_that_is_not_open_alone():
+def test_flip_leaves_a_row_that_is_not_open_alone() -> None:
     coded, _ = flip_rows_coded(_PLAN, {"C1"}, _SHA)
     again, flipped = flip_rows_coded(coded, {"C1"}, "b" * 40)
     assert flipped == [] and again == coded
 
 
-def test_flip_keeps_a_crlf_plan_crlf():
+def test_flip_keeps_a_crlf_plan_crlf() -> None:
     crlf = _PLAN.replace("\n", "\r\n")
     text, flipped = flip_rows_coded(crlf, {"C1"}, _SHA)
     assert flipped == ["C1"] and "\r\n" in text and "\n" not in text.replace("\r\n", "")
@@ -55,36 +56,36 @@ def _with_status(status: str) -> str:
 
 
 @pytest.mark.parametrize("status", ["draft", "reviewed", "approved"])
-def test_a_flipped_row_advances_a_pre_executing_plan(status):
+def test_a_flipped_row_advances_a_pre_executing_plan(status) -> None:
     text, flipped = flip_rows_coded(_with_status(status), {"C1"}, _SHA)
     assert flipped == ["C1"] and "status: executing\n" in text and f"status: {status}" not in text
 
 
 @pytest.mark.parametrize("status", ["executing", "landed", "implemented", "blocked", "superseded"])
-def test_a_flipped_row_leaves_other_statuses_byte_identical(status):
+def test_a_flipped_row_leaves_other_statuses_byte_identical(status) -> None:
     plan = _with_status(status)
     text, _ = flip_rows_coded(plan, {"C1"}, _SHA)
     assert f"status: {status}\n" in text
     assert advance_to_executing(plan) is plan
 
 
-def test_no_flipped_row_leaves_the_status_alone():
+def test_no_flipped_row_leaves_the_status_alone() -> None:
     coded, _ = flip_rows_coded(_with_status("executing"), {"C1", "C2"}, _SHA)
     plan = coded.replace("status: executing", "status: reviewed")
     again, flipped = flip_rows_coded(plan, {"C1", "C2"}, _SHA)
     assert flipped == [] and again is plan
 
 
-def test_a_crlf_reviewed_plan_stays_crlf_and_reads_executing():
+def test_a_crlf_reviewed_plan_stays_crlf_and_reads_executing() -> None:
     text, flipped = flip_rows_coded(_with_status("reviewed").replace("\n", "\r\n"), {"C1"}, _SHA)
     assert flipped == ["C1"] and "status: executing\r\n" in text and "\n" not in text.replace("\r\n", "")
 
 
-def test_advance_without_frontmatter_returns_the_input():
+def test_advance_without_frontmatter_returns_the_input() -> None:
     assert advance_to_executing("no frontmatter\n") == "no frontmatter\n"
 
 
-def test_a_plan_mode_marker_maps_its_chunk_ids_to_itself(tmp_path):
+def test_a_plan_mode_marker_maps_its_chunk_ids_to_itself(tmp_path: Path) -> None:
     (tmp_path / _REL).write_text(_PLAN, encoding="utf-8")
     assert source_rows_by_plan(tmp_path, _REL, ["C1", "C2"]) == {_REL: {"C1", "C2"}}
     assert source_rows_by_plan(tmp_path, _REL, []) == {}
@@ -92,20 +93,20 @@ def test_a_plan_mode_marker_maps_its_chunk_ids_to_itself(tmp_path):
     assert source_rows_by_plan(tmp_path, "missing.md", ["C1"]) == {}
 
 
-def test_a_merged_chunk_id_maps_to_every_constituent_row(tmp_path):
+def test_a_merged_chunk_id_maps_to_every_constituent_row(tmp_path: Path) -> None:
     (tmp_path / _REL).write_text(_PLAN, encoding="utf-8")
     assert source_rows_by_plan(tmp_path, _REL, ["C1-C2"]) == {_REL: {"C1", "C2"}}
     assert source_rows_by_plan(tmp_path, _REL, ["C1-C2", "C1"]) == {_REL: {"C1", "C2"}}
 
 
-def test_a_merged_id_with_a_dashed_constituent_and_an_unknown_id_stay_whole(tmp_path):
+def test_a_merged_id_with_a_dashed_constituent_and_an_unknown_id_stay_whole(tmp_path: Path) -> None:
     dashed = _PLAN.replace("- id: C2", "- id: C-2")
     (tmp_path / _REL).write_text(dashed, encoding="utf-8")
     assert source_rows_by_plan(tmp_path, _REL, ["C1-C-2"]) == {_REL: {"C1", "C-2"}}
     assert source_rows_by_plan(tmp_path, _REL, ["C1-C9"]) == {_REL: {"C1-C9"}}
 
 
-def test_a_merged_inventory_chunk_id_maps_to_each_constituents_source_row(tmp_path):
+def test_a_merged_inventory_chunk_id_maps_to_each_constituents_source_row(tmp_path: Path) -> None:
     for name in ("a", "b"):
         (tmp_path / f"{name}.md").write_text(_PLAN, encoding="utf-8")
     inv = (
@@ -123,10 +124,10 @@ def test_a_merged_inventory_chunk_id_maps_to_each_constituents_source_row(tmp_pa
     assert source_rows_by_plan(tmp_path, spine, ["a.C1-b.C1"]) == {"a.md": {"C1"}, "b.md": {"C1"}}
 
 
-def test_inventory_record_rel_is_none_for_a_path_that_is_not_a_spine(tmp_path):
+def test_inventory_record_rel_is_none_for_a_path_that_is_not_a_spine(tmp_path: Path) -> None:
     assert inventory_record_rel(tmp_path, "docs/plans/p.md") is None
 
 
-def test_outside_landing_detail_names_the_short_shas():
+def test_outside_landing_detail_names_the_short_shas() -> None:
     text = outside_landing_detail(["a" * 40, "b" * 40])
     assert "aaaaaaaaaa, bbbbbbbbbb" in text and text.startswith("resolved as a no-op")

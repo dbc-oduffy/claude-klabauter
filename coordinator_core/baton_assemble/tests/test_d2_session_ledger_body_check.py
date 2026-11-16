@@ -13,6 +13,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.baton_assemble import apply as ba_apply
+from pathlib import Path
 
 
 class _FakeCompletedProcess:
@@ -39,21 +40,21 @@ def _write(tmp_path, rel: str, body: str) -> str:
     return rel
 
 
-def test_heading_absent_body_is_silent_and_reports_only_cli_and_args(tmp_path, capsys) -> None:
+def test_heading_absent_body_is_silent_and_reports_only_cli_and_args(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rel = _write(tmp_path, "state/handoffs/2026-08-20-x.md", "# Some Handoff\n\nno ledger here.")
     detail = ba_apply._dispatch_lint_frontmatter(["--file", rel], tmp_path)
     assert detail == {"cli": "lint-frontmatter", "args": ["--file", rel]}
     assert capsys.readouterr().err == ""
 
 
-def test_heading_present_body_is_silent_and_reports_only_cli_and_args(tmp_path, capsys) -> None:
+def test_heading_present_body_is_silent_and_reports_only_cli_and_args(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rel = _write(tmp_path, "state/handoffs/2026-08-20-ok.md", "## Session Ledger\n")
     detail = ba_apply._dispatch_lint_frontmatter(["--file", rel], tmp_path)
     assert detail == {"cli": "lint-frontmatter", "args": ["--file", rel]}
     assert capsys.readouterr().err == ""
 
 
-def test_lint_failure_still_raises(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_lint_failure_still_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         ba_apply.subprocess, "run", lambda *a, **k: _FakeCompletedProcess(returncode=1, stderr="bad")
     )

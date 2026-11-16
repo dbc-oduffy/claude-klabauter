@@ -5,13 +5,14 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit import live_write_guard, run_hunk_claims, sibling_claims
+from pathlib import Path
 
 PATH = "pkg/mod.py"
 HEAD = [b"a\n", b"b\n", b"c\n", b"d\n"]
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     (tmp_path / "pkg").mkdir()
     state = {"claims": {PATH: "peer-run"}, "own": False, "unattributed": False}
 
@@ -29,7 +30,7 @@ def world(tmp_path, monkeypatch):
 
     monkeypatch.setattr(run_hunk_claims, "own_hunks", fake_own)
 
-    def write_live(lines):
+    def write_live(lines) -> None:
         (tmp_path / PATH).write_bytes(b"".join(lines))
 
     state["write_live"] = write_live
@@ -37,53 +38,53 @@ def world(tmp_path, monkeypatch):
     return state
 
 
-def test_drop_of_peer_insertion_is_refused_naming_holder(world):
+def test_drop_of_peer_insertion_is_refused_naming_holder(world) -> None:
     world["write_live"]([b"a\n", b"PEER\n", b"b\n", b"c\n", b"d\n"])
     out = live_write_guard.check_live_write(world["root"], "me", PATH, b"".join(HEAD))
     assert out is not None and "peer-run" in out and PATH in out
 
 
-def test_write_preserving_peer_hunk_passes(world):
+def test_write_preserving_peer_hunk_passes(world) -> None:
     world["write_live"]([b"a\n", b"PEER\n", b"b\n", b"c\n", b"d\n"])
     new = b"a\nPEER\nb\nc\nd\nmine\n"
     assert live_write_guard.check_live_write(world["root"], "me", PATH, new) is None
 
 
-def test_drop_of_peer_deletion_is_refused(world):
+def test_drop_of_peer_deletion_is_refused(world) -> None:
     world["write_live"]([b"a\n", b"c\n", b"d\n"])
     assert live_write_guard.check_live_write(world["root"], "me", PATH, b"".join(HEAD)) is not None
 
 
-def test_drop_of_peer_replacement_is_refused(world):
+def test_drop_of_peer_replacement_is_refused(world) -> None:
     world["write_live"]([b"a\n", b"B2\n", b"c\n", b"d\n"])
     assert live_write_guard.check_live_write(world["root"], "me", PATH, b"".join(HEAD)) is not None
 
 
-def test_own_hunks_may_be_dropped(world):
+def test_own_hunks_may_be_dropped(world) -> None:
     world["own"] = True
     world["write_live"]([b"a\n", b"MINE\n", b"b\n", b"c\n", b"d\n"])
     assert live_write_guard.check_live_write(world["root"], "me", PATH, b"".join(HEAD)) is None
 
 
-def test_unattributed_hunk_drop_refuses_as_unattributed(world):
+def test_unattributed_hunk_drop_refuses_as_unattributed(world) -> None:
     world["unattributed"] = True
     world["write_live"]([b"a\n", b"???\n", b"b\n", b"c\n", b"d\n"])
     out = live_write_guard.check_live_write(world["root"], "me", PATH, b"".join(HEAD))
     assert out is not None and live_write_guard.UNATTRIBUTED in out
 
 
-def test_unheld_path_passes(world):
+def test_unheld_path_passes(world) -> None:
     world["claims"].clear()
     world["write_live"]([b"a\n", b"PEER\n", b"b\n", b"c\n", b"d\n"])
     assert live_write_guard.check_live_write(world["root"], "me", PATH, b"".join(HEAD)) is None
 
 
-def test_head_clean_live_passes(world):
+def test_head_clean_live_passes(world) -> None:
     world["write_live"](HEAD)
     assert live_write_guard.check_live_write(world["root"], "me", PATH, b"x\n") is None
 
 
-def test_never_raises(world, monkeypatch):
+def test_never_raises(world, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise RuntimeError("x")
 

@@ -11,9 +11,11 @@ import coordinator_core.ops  # noqa: F401 — populates _REGISTRY (import guard,
 
 from coordinator_core.ops import queue_promote
 from coordinator_core.ops.queue_promote import _queue_promote_handler
+from pathlib import Path
+import pytest
 
 
-def test_content_root_param_routes_the_write(tmp_path, monkeypatch):
+def test_content_root_param_routes_the_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LESSON_PROMOTE_OUTBOX_ROOT", raising=False)
     registered = tmp_path / "registered"
     caller = tmp_path / "caller"
@@ -32,7 +34,7 @@ def test_content_root_param_routes_the_write(tmp_path, monkeypatch):
     assert not registered.exists()
 
 
-def test_absent_param_keeps_registry_resolution(tmp_path, monkeypatch):
+def test_absent_param_keeps_registry_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LESSON_PROMOTE_OUTBOX_ROOT", raising=False)
     registered = tmp_path / "registered"
     monkeypatch.setattr(queue_promote, "read_content_root", lambda: str(registered))
@@ -48,13 +50,13 @@ def test_absent_param_keeps_registry_resolution(tmp_path, monkeypatch):
     assert result["out_path"].startswith(str(registered / "state" / "lessons-outbox"))
 
 
-def _seed_oss_mirror_marker(root):
+def _seed_oss_mirror_marker(root) -> None:
     marker_dir = root / ".claude-plugin"
     marker_dir.mkdir(parents=True)
     (marker_dir / "plugin.json").write_text("{}\n", encoding="utf-8")
 
 
-def test_registry_resolved_oss_mirror_refuses_write(tmp_path, monkeypatch):
+def test_registry_resolved_oss_mirror_refuses_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LESSON_PROMOTE_OUTBOX_ROOT", raising=False)
     mirror = tmp_path / "coordinator-claude-mirror"
     _seed_oss_mirror_marker(mirror)
@@ -74,7 +76,7 @@ def test_registry_resolved_oss_mirror_refuses_write(tmp_path, monkeypatch):
     assert not (mirror / "state" / "lessons-outbox").exists()
 
 
-def test_content_root_param_resolved_oss_mirror_refuses_write(tmp_path, monkeypatch):
+def test_content_root_param_resolved_oss_mirror_refuses_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("LESSON_PROMOTE_OUTBOX_ROOT", raising=False)
     mirror = tmp_path / "caller-resolved-mirror"
     _seed_oss_mirror_marker(mirror)
@@ -95,7 +97,7 @@ def test_content_root_param_resolved_oss_mirror_refuses_write(tmp_path, monkeypa
     assert not (mirror / "state" / "lessons-outbox").exists()
 
 
-def test_is_oss_publish_mirror_marker_probe(tmp_path):
+def test_is_oss_publish_mirror_marker_probe(tmp_path: Path) -> None:
     plain = tmp_path / "plain"
     plain.mkdir()
     assert queue_promote._is_oss_publish_mirror(str(plain)) is False

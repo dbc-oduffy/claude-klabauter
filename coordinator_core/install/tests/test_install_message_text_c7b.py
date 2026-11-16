@@ -14,9 +14,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.install import gen_settings_hooks, prereq_probe
+import pytest
 
 
-def test_gen_settings_hooks_remediation_does_not_name_content_root(tmp_path: Path):
+def test_gen_settings_hooks_remediation_does_not_name_content_root(tmp_path: Path) -> None:
     out_path = tmp_path / "settings.json"
     (tmp_path / ".coordinator-hooks-enabled").touch()
 
@@ -34,13 +35,13 @@ def test_gen_settings_hooks_remediation_does_not_name_content_root(tmp_path: Pat
     assert "coordinator-claude repo is cloned" in message
 
 
-def test_gen_settings_hooks_usage_text_keeps_functional_env_key():
+def test_gen_settings_hooks_usage_text_keeps_functional_env_key() -> None:
     usage = gen_settings_hooks._usage_text()
     assert "REPO_DOE_CLAUDE" in usage
     assert "repos.content_root" in usage
 
 
-def test_probe_ue_functional_env_key_untouched(monkeypatch, tmp_path: Path):
+def test_probe_ue_functional_env_key_untouched(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # EXAMPLE_GAME_REPO_UE_ROOT is a functional env-var identifier, not narrative
     # prose naming a repo — it must survive the sweep unchanged.
     #

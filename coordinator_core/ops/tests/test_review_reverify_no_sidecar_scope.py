@@ -7,6 +7,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import review_edit_source
 from coordinator_core.ops.review_reverify import review_reverify
 from coordinator_core.ops.tests.test_review_reverify_head_clamp import BASE_FILES, PREFIX, SESSION, Repo
+from pathlib import Path
 
 FOREIGN = "tests/test_foreign_wip.py"
 FOREIGN_DIRT = b"def test_f():\r\n    assert False  # another run's WIP\r\n"
@@ -15,7 +16,7 @@ OWN_BYTES = b"def test_o():\n    assert False\n"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Repo:
     return Repo(tmp_path, monkeypatch)
 
 
@@ -33,7 +34,7 @@ def _world(repo: Repo) -> str:
     return base
 
 
-def test_default_call_leaves_foreign_dirt_untouched_and_removes_only_the_run_s_own_new_path(repo):
+def test_default_call_leaves_foreign_dirt_untouched_and_removes_only_the_run_s_own_new_path(repo) -> None:
     base = _world(repo)
     out = review_reverify(
         repo.root, base=base, slice_prefix=PREFIX, session_id=SESSION,
@@ -48,7 +49,7 @@ def test_default_call_leaves_foreign_dirt_untouched_and_removes_only_the_run_s_o
     assert (repo.root / out["reverted"][0]["kept_at"]).read_bytes() == OWN_BYTES
 
 
-def test_a_foreign_path_in_the_implicated_set_is_fenced_even_with_a_finding(repo, monkeypatch):
+def test_a_foreign_path_in_the_implicated_set_is_fenced_even_with_a_finding(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     base = _world(repo)
     from coordinator_core.ops import review_reverify as rr
 

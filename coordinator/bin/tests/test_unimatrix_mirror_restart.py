@@ -5,6 +5,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 spec = importlib.util.spec_from_file_location(
     "restart_roster", Path(__file__).resolve().parents[1] / "unimatrix-roster.py")
@@ -13,7 +17,7 @@ spec.loader.exec_module(roster)
 
 
 @pytest.mark.parametrize("name", ["codex-repo-12", None])
-def test_existing_bridge_refreshes_far_pid_without_changing_local_identity(tmp_path, monkeypatch, name):
+def test_existing_bridge_refreshes_far_pid_without_changing_local_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name) -> None:
     sock = "/tmp/cc-socks/stable.sock"
     local = {"pid": 31337, "procStart": "local-start", "pidDomain": "win32:box",
              "name": "codex-repo-12", "farPid": 62725, "messagingSocketPath": "local-pipe",
@@ -44,7 +48,7 @@ def test_existing_bridge_refreshes_far_pid_without_changing_local_identity(tmp_p
     roster.sync(bridges, {sock: row}, cfg, lambda *a: None)
 
 
-def test_far_names_never_collapse_onto_one_near_session():
+def test_far_names_never_collapse_onto_one_near_session() -> None:
     scan = [("alpha", "local-sock")]
     a = {"name": "alpha", "pid": 1}
     b = {"name": "beta", "pid": 2}
@@ -61,7 +65,7 @@ def _mirror_all_rig(tmp_path, monkeypatch):
     s.loader.exec_module(mod)
     procs, clock = [], [1000.0]
 
-    def fake_spawn(cmd):
+    def fake_spawn(cmd) -> SimpleNamespace:
         p = SimpleNamespace(pid=900 + len(procs), rc=None)
         p.poll = lambda p=p: p.rc
         procs.append(p)
@@ -87,7 +91,7 @@ def _mirror_all_rig(tmp_path, monkeypatch):
     return mod, procs, clock, cfg
 
 
-def test_a_client_that_keeps_dying_backs_off_across_deaths_not_resetting_per_poll(tmp_path, monkeypatch):
+def test_a_client_that_keeps_dying_backs_off_across_deaths_not_resetting_per_poll(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mod, procs, clock, cfg = _mirror_all_rig(tmp_path, monkeypatch)
     live = {"a": {"pid": 1, "messagingSocketPath": "e"}}
     clients = {}
@@ -104,7 +108,7 @@ def test_a_client_that_keeps_dying_backs_off_across_deaths_not_resetting_per_pol
     assert waits == [30, 60, 120] and len(procs) == 4
 
 
-def test_a_client_up_for_the_stable_window_resets_the_backoff(tmp_path, monkeypatch):
+def test_a_client_up_for_the_stable_window_resets_the_backoff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mod, procs, clock, cfg = _mirror_all_rig(tmp_path, monkeypatch)
     live = {"a": {"pid": 1, "messagingSocketPath": "e"}}
     clients = {}
@@ -126,7 +130,7 @@ def _state(tmp_path):
     return json.loads((tmp_path / "unimatrix-mirror-state.json").read_text())
 
 
-def test_rc3_is_a_quiet_recorded_stop_with_no_backoff_or_redial(tmp_path, monkeypatch):
+def test_rc3_is_a_quiet_recorded_stop_with_no_backoff_or_redial(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mod, procs, clock, cfg = _mirror_all_rig(tmp_path, monkeypatch)
     live = {"a": {"pid": 1, "messagingSocketPath": "e"}, "b": {"pid": 2, "messagingSocketPath": "e2"}}
     clients, said = {}, []
@@ -146,7 +150,7 @@ def test_rc3_is_a_quiet_recorded_stop_with_no_backoff_or_redial(tmp_path, monkey
 
 
 @pytest.mark.parametrize("rc", [1, 255])
-def test_the_host_refusal_text_latches_at_any_rc(tmp_path, monkeypatch, rc):
+def test_the_host_refusal_text_latches_at_any_rc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, rc) -> None:
     mod, procs, clock, cfg = _mirror_all_rig(tmp_path, monkeypatch)
     live = {"a": {"pid": 1, "messagingSocketPath": "e"}}
     clients, said = {}, []
@@ -160,7 +164,7 @@ def test_the_host_refusal_text_latches_at_any_rc(tmp_path, monkeypatch, rc):
     assert _state(tmp_path)["a"]["state"] == "host-refused"
 
 
-def test_an_unrelated_failure_log_still_backs_off(tmp_path, monkeypatch):
+def test_an_unrelated_failure_log_still_backs_off(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mod, procs, clock, cfg = _mirror_all_rig(tmp_path, monkeypatch)
     live = {"a": {"pid": 1, "messagingSocketPath": "e"}}
     clients = {}
@@ -171,7 +175,7 @@ def test_an_unrelated_failure_log_still_backs_off(tmp_path, monkeypatch):
     assert _state(tmp_path)["a"]["state"] == "backoff"
 
 
-def test_a_dying_client_is_recorded_as_backoff_with_its_retry_time(tmp_path, monkeypatch):
+def test_a_dying_client_is_recorded_as_backoff_with_its_retry_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mod, procs, clock, cfg = _mirror_all_rig(tmp_path, monkeypatch)
     live = {"a": {"pid": 1, "messagingSocketPath": "e"}}
     clients = {}
@@ -183,7 +187,7 @@ def test_a_dying_client_is_recorded_as_backoff_with_its_retry_time(tmp_path, mon
     assert rec["retry_at_epoch"] > __import__("time").time()
 
 
-def test_a_backed_off_mirror_is_published_to_the_far_box_once_and_an_up_one_never(tmp_path, monkeypatch):
+def test_a_backed_off_mirror_is_published_to_the_far_box_once_and_an_up_one_never(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mod, procs, clock, cfg = _mirror_all_rig(tmp_path, monkeypatch)
     live = {"a": {"pid": 1, "messagingSocketPath": "e"}, "b": {"pid": 2, "messagingSocketPath": "e2"}}
     clients = {}
@@ -198,7 +202,7 @@ def test_a_backed_off_mirror_is_published_to_the_far_box_once_and_an_up_one_neve
     assert box
 
 
-def test_a_host_refused_mirror_is_not_published(tmp_path, monkeypatch):
+def test_a_host_refused_mirror_is_not_published(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mod, procs, clock, cfg = _mirror_all_rig(tmp_path, monkeypatch)
     live = {"a": {"pid": 1, "messagingSocketPath": "e"}}
     clients = {}
@@ -208,7 +212,7 @@ def test_a_host_refused_mirror_is_not_published(tmp_path, monkeypatch):
     assert _state(tmp_path)["a"]["state"] == "host-refused" and mod.sent == []
 
 
-def test_the_relay_accepts_only_a_well_formed_stale_mark():
+def test_the_relay_accepts_only_a_well_formed_stale_mark() -> None:
     relay = _load_relay()
     ok = relay.parse_mode("mirror-stale a backoff 1900000000 box-1")
     assert ok == ("mirror-stale", ("a", "backoff", 1900000000, "box-1"))
@@ -217,7 +221,7 @@ def test_the_relay_accepts_only_a_well_formed_stale_mark():
         assert relay.parse_mode(bad) is None
 
 
-def _load_relay():
+def _load_relay() -> "ModuleType":
     s = importlib.util.spec_from_file_location(
         "restart_relay", Path(__file__).resolve().parents[1] / "unimatrix-relay.py")
     m = importlib.util.module_from_spec(s)
@@ -225,7 +229,7 @@ def _load_relay():
     return m
 
 
-def test_a_stale_mark_written_by_the_relay_lists_the_name_stale_in_the_router(tmp_path, monkeypatch):
+def test_a_stale_mark_written_by_the_relay_lists_the_name_stale_in_the_router(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     relay = _load_relay()
     monkeypatch.setattr(relay, "SOCKS", str(tmp_path))
     relay.mark_stale("a", "backoff", int(__import__("time").time()) + 100, "winbox")
@@ -239,7 +243,7 @@ def test_a_stale_mark_written_by_the_relay_lists_the_name_stale_in_the_router(tm
     assert list(markers) == ["a"] and markers["a"]["box"] == "winbox"
 
 
-def test_an_alive_unchanged_client_is_never_respawned_and_a_new_session_pid_is(tmp_path, monkeypatch):
+def test_an_alive_unchanged_client_is_never_respawned_and_a_new_session_pid_is(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mod, procs, clock, cfg = _mirror_all_rig(tmp_path, monkeypatch)
     live = {"a": {"pid": 1, "messagingSocketPath": "e"}}
     clients = {}
@@ -255,7 +259,7 @@ def test_an_alive_unchanged_client_is_never_respawned_and_a_new_session_pid_is(t
 
 # A neutral name sorting below "farbox" (so this side owns the mirror); a real box name is rewritten on publish.
 @pytest.mark.parametrize("host", ["Alpha-box.local", "alpha-box", "ALPHA-BOX.Local"])
-def test_mirror_stale_label_is_one_box_id_across_hostname_spellings(tmp_path, monkeypatch, host):
+def test_mirror_stale_label_is_one_box_id_across_hostname_spellings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, host) -> None:
     mod, procs, clock, cfg = _mirror_all_rig(tmp_path, monkeypatch)
     monkeypatch.setattr(mod.socket, "gethostname", lambda: host)
     live = {"a": {"pid": 1, "messagingSocketPath": "e"}}

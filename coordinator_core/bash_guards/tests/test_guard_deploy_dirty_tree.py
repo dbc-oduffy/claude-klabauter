@@ -1,6 +1,7 @@
 import subprocess
 
 import pytest
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -13,18 +14,18 @@ def _enveloped(check):
     return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
-def _payload(cmd, cwd, tool="Bash"):
+def _payload(cmd, cwd, tool: str = "Bash"):
     return {"tool_name": tool, "tool_input": {"command": cmd}, "cwd": str(cwd)}
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     return tmp_path
 
 
 @pytest.fixture
-def no_git(monkeypatch):
+def no_git(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(_cwd):
         raise AssertionError("git work on a command that is not a deploy")
 
@@ -49,19 +50,19 @@ DEPLOYS = [
 
 
 @pytest.mark.parametrize("cmd", DEPLOYS)
-def test_deploy_with_dirty_tree_denies(repo, cmd):
+def test_deploy_with_dirty_tree_denies(repo, cmd) -> None:
     (repo / "peer.txt").write_text("x")
     out = _enveloped(g.check)(_payload(cmd, repo))
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "peer.txt" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_powershell_tool_name_matches(repo):
+def test_powershell_tool_name_matches(repo) -> None:
     (repo / "peer.txt").write_text("x")
     assert _enveloped(g.check)(_payload("firebase deploy", repo, tool="PowerShell"))
 
 
-def test_tracked_modification_denies(repo):
+def test_tracked_modification_denies(repo) -> None:
     for k, v in (("user.email", "t@t"), ("user.name", "t")):
         subprocess.run(["git", "-C", str(repo), "config", k, v], check=True, **no_console_creationflags())
     (repo / "a.txt").write_text("1")
@@ -72,11 +73,11 @@ def test_tracked_modification_denies(repo):
     assert _enveloped(g.check)(_payload("vercel deploy", repo))
 
 
-def test_clean_tree_passes(repo):
+def test_clean_tree_passes(repo) -> None:
     assert _enveloped(g.check)(_payload("firebase deploy", repo)) is None
 
 
-def test_ignored_files_pass(repo):
+def test_ignored_files_pass(repo) -> None:
     (repo / ".gitignore").write_text("build/\n")
     (repo / "build").mkdir()
     (repo / "build" / "o.js").write_text("x")
@@ -89,18 +90,18 @@ def test_ignored_files_pass(repo):
     assert _enveloped(g.check)(_payload("firebase deploy", repo)) is None
 
 
-def test_path_list_is_capped(repo):
+def test_path_list_is_capped(repo) -> None:
     for i in range(14):
         (repo / f"f{i:02}.txt").write_text("x")
     reason = _enveloped(g.check)(_payload("firebase deploy", repo))["hookSpecificOutput"]["permissionDecisionReason"]
     assert "(+4 more)" in reason and "f09.txt" in reason and "f10.txt" not in reason
 
 
-def test_not_a_git_repo_passes(tmp_path):
+def test_not_a_git_repo_passes(tmp_path: Path) -> None:
     assert _enveloped(g.check)(_payload("firebase deploy", tmp_path)) is None
 
 
-def test_git_check_exception_passes(monkeypatch, tmp_path):
+def test_git_check_exception_passes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     def boom(_cwd):
         raise RuntimeError("x")
 
@@ -124,11 +125,11 @@ def test_git_check_exception_passes(monkeypatch, tmp_path):
         "cat <<'EOF'\nfirebase deploy\nEOF",
     ],
 )
-def test_unrelated_or_mentioned_command_passes_without_git(no_git, cmd):
+def test_unrelated_or_mentioned_command_passes_without_git(no_git, cmd) -> None:
     assert _enveloped(g.check)(_payload(cmd, "/nonexistent")) is None
 
 
-def _declare(repo, body):
+def _declare(repo, body) -> None:
     (repo / "coordinator.local.md").write_text(f"---\n{body}\n---\n")
     (repo / "peer.txt").write_text("x")
 
@@ -142,12 +143,12 @@ def _declare(repo, body):
     ],
 )
 @pytest.mark.parametrize("cmd", ["pnpm run deploy:hosted", "npm run deploy:hosted"])
-def test_declared_ships_head_script_passes_dirty(repo, body, cmd):
+def test_declared_ships_head_script_passes_dirty(repo, body, cmd) -> None:
     _declare(repo, body)
     assert _enveloped(g.check)(_payload(cmd, repo)) is None
 
 
-def test_declared_script_passes_without_git(repo, monkeypatch):
+def test_declared_script_passes_without_git(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _declare(repo, 'deploy_ships_head: ["deploy:hosted"]')
     monkeypatch.setattr(g, "_dirty_paths", lambda _c: (_ for _ in ()).throw(AssertionError("git")))
     assert _enveloped(g.check)(_payload("pnpm run deploy:hosted", repo)) is None
@@ -157,7 +158,7 @@ def test_declared_script_passes_without_git(repo, monkeypatch):
     "cmd",
     ["pnpm run deploy:prod", "npm run deploy", "firebase deploy", "vercel deploy", "wrangler deploy"],
 )
-def test_unlisted_or_non_script_deploy_still_denies(repo, cmd):
+def test_unlisted_or_non_script_deploy_still_denies(repo, cmd) -> None:
     _declare(repo, 'deploy_ships_head: ["deploy:hosted"]')
     assert _enveloped(g.check)(_payload(cmd, repo))["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -170,20 +171,20 @@ def test_unlisted_or_non_script_deploy_still_denies(repo, cmd):
         "pnpm run deploy:hosted && pnpm run deploy:prod",
     ],
 )
-def test_compound_with_non_exempt_deploy_still_denies(repo, cmd):
+def test_compound_with_non_exempt_deploy_still_denies(repo, cmd) -> None:
     _declare(repo, 'deploy_ships_head: ["deploy:hosted"]')
     assert _enveloped(g.check)(_payload(cmd, repo))["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_declaration_for_other_key_or_absent_denies(repo):
+def test_declaration_for_other_key_or_absent_denies(repo) -> None:
     _declare(repo, 'other: ["deploy:hosted"]')
     assert _enveloped(g.check)(_payload("pnpm run deploy:hosted", repo))
 
 
-def test_no_config_file_denies(repo):
+def test_no_config_file_denies(repo) -> None:
     (repo / "peer.txt").write_text("x")
     assert _enveloped(g.check)(_payload("pnpm run deploy:hosted", repo))
 
 
-def test_other_tool_name_passes(no_git):
+def test_other_tool_name_passes(no_git) -> None:
     assert _enveloped(g.check)(_payload("firebase deploy", "/x", tool="Read")) is None

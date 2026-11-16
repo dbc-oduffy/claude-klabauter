@@ -14,17 +14,22 @@ from coordinator_core.ops.dispatch_emit import ask_stage
 from coordinator_core.ops.dispatch_emit.ask_contract import ManifestRow
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
 from coordinator_core.ops.dispatch_emit.kept_work import blob_sha, fingerprint
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import SimpleNamespace
 
 SIZING_REL = "state/sizings/2026-10-23-fixture.yaml"
 
 
-def _sizing(repo):
+def _sizing(repo) -> None:
     doc = {"intent": "Fix pkg/a.py and pkg/new.py.", "exit_criterion": {"statement": "ok"}, "estimate": {"tshirt": "XS"}}
     (repo / "state" / "sizings").mkdir(parents=True, exist_ok=True)
     (repo / SIZING_REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
 
 
-def test_stage_records_dirty_blob_and_null_for_absent(tmp_path, monkeypatch):
+def test_stage_records_dirty_blob_and_null_for_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _sizing(tmp_path)
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "a.py").write_text("dirty\n", encoding="utf-8", newline="\n")
@@ -49,14 +54,14 @@ def test_stage_records_dirty_blob_and_null_for_absent(tmp_path, monkeypatch):
     assert data["write_baseline"]["pkg/new.py"] is None
 
 
-def test_directories_and_globs_are_never_baselined(tmp_path):
+def test_directories_and_globs_are_never_baselined(tmp_path: Path) -> None:
     (tmp_path / "d").mkdir()
     (tmp_path / "f.py").write_text("x\n", encoding="utf-8", newline="\n")
     rows = [ManifestRow("C1", "executor", "sonnet", "b.md", ("d", "d/", "g/*.py", "f.py"), 0)]
     assert set(ask_stage._stage_write_baseline(tmp_path, rows)) == {"f.py"}
 
 
-def test_adopting_row_paths_are_absent(tmp_path):
+def test_adopting_row_paths_are_absent(tmp_path: Path) -> None:
     (tmp_path / "s.py").write_text("x\n", encoding="utf-8", newline="\n")
     rows = [
         ManifestRow("S1", "executor", "sonnet", "b.md", ("s.py",), 0, adopts_stranded=True),
@@ -65,7 +70,7 @@ def test_adopting_row_paths_are_absent(tmp_path):
     assert ask_stage._stage_write_baseline(tmp_path, rows) == {"c.py": None}
 
 
-def _halt(tmp_path, run_id, baseline, base_sha="a" * 40):
+def _halt(tmp_path, run_id, baseline, base_sha="a" * 40) -> Path:
     rec = ask_stage.record_dir(tmp_path, run_id)
     rec.mkdir(parents=True, exist_ok=True)
     (rec / "halted.json").write_text(
@@ -90,7 +95,7 @@ BASE = _oid(b"commit", _COMMIT)
 
 
 @pytest.fixture
-def base_repo(tmp_path):
+def base_repo(tmp_path: Path) -> Path:
     """A `.git` holding commit `BASE` whose tree holds only pkg/extra.py, written in process."""
     gitdir = tmp_path / ".git"
     (gitdir / "objects").mkdir(parents=True)
@@ -100,7 +105,7 @@ def base_repo(tmp_path):
     return tmp_path
 
 
-def test_refire_baseline_is_the_halted_run_base_not_the_live_tree(tmp_path, base_repo):
+def test_refire_baseline_is_the_halted_run_base_not_the_live_tree(tmp_path: Path, base_repo) -> None:
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "a.py").write_text("first fire output\n", encoding="utf-8", newline="\n")
     (tmp_path / "pkg" / "extra.py").write_text("live\n", encoding="utf-8", newline="\n")
@@ -115,7 +120,7 @@ def test_refire_baseline_is_the_halted_run_base_not_the_live_tree(tmp_path, base
     assert ask_stage._write_baseline.unwritten(tmp_path, got, ["pkg/a.py"]) == []
 
 
-def test_refire_without_a_usable_manifest_baselines_at_the_run_base(tmp_path, base_repo):
+def test_refire_without_a_usable_manifest_baselines_at_the_run_base(tmp_path: Path, base_repo) -> None:
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "extra.py").write_text("first fire output\n", encoding="utf-8", newline="\n")
     rows = [ManifestRow("C1", "executor", "sonnet", "b.md", ("pkg/extra.py", "pkg/new.py"), 0)]
@@ -132,7 +137,7 @@ def test_refire_without_a_usable_manifest_baselines_at_the_run_base(tmp_path, ba
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_git_config(tmp_path, monkeypatch):
+def _hermetic_git_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """No system, global or env-injected git config: the zero-spawn path is read against a known stack."""
     empty = tmp_path.parent / f"{tmp_path.name}-empty-gitconfig"
     empty.write_text("", encoding="utf-8", newline="\n")
@@ -143,7 +148,7 @@ def _hermetic_git_config(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def git_spawns(monkeypatch):
+def git_spawns(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     """Counts `run_git` spawns made by `ask_stage`; any other process start fails the test."""
     from coordinator_core.git import run as git_run
 
@@ -158,7 +163,7 @@ def git_spawns(monkeypatch):
     return calls
 
 
-def test_refire_baseline_converts_in_process_with_zero_spawns(base_repo, git_spawns, monkeypatch):
+def test_refire_baseline_converts_in_process_with_zero_spawns(base_repo, git_spawns, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("process spawned")
 
@@ -180,7 +185,7 @@ def _real_repo(tmp_path, attrs=None):
     root = tmp_path / "real"
     root.mkdir()
 
-    def git(*a):
+    def git(*a) -> str:
         return subprocess.run(
             ["git", "-C", str(root), *a], check=True, capture_output=True, text=True, creationflags=flags
         ).stdout.strip()
@@ -201,7 +206,7 @@ CRLF_SHA = blob_sha(b"a\r\nb\r\n")
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_plain_config_refire_baseline_spawns_nothing_on_a_real_repo(tmp_path, git_spawns):
+def test_plain_config_refire_baseline_spawns_nothing_on_a_real_repo(tmp_path: Path, git_spawns) -> None:
     root, base, _ = _real_repo(tmp_path)
     assert ask_stage._run_base_blobs(root, base, ["f.txt", "g.txt"]) == {
         "f.txt": blob_sha(b"a\nb\n"),
@@ -212,7 +217,7 @@ def test_plain_config_refire_baseline_spawns_nothing_on_a_real_repo(tmp_path, gi
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_eol_crlf_attribute_converts_in_process_on_a_real_repo(tmp_path, git_spawns):
+def test_eol_crlf_attribute_converts_in_process_on_a_real_repo(tmp_path: Path, git_spawns) -> None:
     root, base, _ = _real_repo(tmp_path, attrs="f.txt text eol=crlf\n")
     assert ask_stage._run_base_blobs(root, base, ["f.txt", "g.txt"]) == {
         "f.txt": CRLF_SHA,
@@ -223,7 +228,7 @@ def test_eol_crlf_attribute_converts_in_process_on_a_real_repo(tmp_path, git_spa
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_repo_autocrlf_true_takes_one_spawn_and_succeeds(tmp_path, git_spawns):
+def test_repo_autocrlf_true_takes_one_spawn_and_succeeds(tmp_path: Path, git_spawns) -> None:
     root, base, git = _real_repo(tmp_path)
     git("config", "core.autocrlf", "true")
     assert ask_stage._run_base_blobs(root, base, ["f.txt", "g.txt"]) == {"f.txt": CRLF_SHA, "g.txt": CRLF_SHA}
@@ -232,7 +237,7 @@ def test_repo_autocrlf_true_takes_one_spawn_and_succeeds(tmp_path, git_spawns):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_global_only_autocrlf_true_takes_the_spawn_path(tmp_path, git_spawns, monkeypatch):
+def test_global_only_autocrlf_true_takes_the_spawn_path(tmp_path: Path, git_spawns, monkeypatch: pytest.MonkeyPatch) -> None:
     root, base, _ = _real_repo(tmp_path)
     glob = tmp_path / "global-gitconfig"
     glob.write_text("[core]\n\tautocrlf = true\n", encoding="utf-8", newline="\n")
@@ -243,7 +248,7 @@ def test_global_only_autocrlf_true_takes_the_spawn_path(tmp_path, git_spawns, mo
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_env_injected_autocrlf_takes_the_spawn_path(tmp_path, git_spawns, monkeypatch):
+def test_env_injected_autocrlf_takes_the_spawn_path(tmp_path: Path, git_spawns, monkeypatch: pytest.MonkeyPatch) -> None:
     root, base, _ = _real_repo(tmp_path)
     monkeypatch.setenv("GIT_CONFIG_COUNT", "1")
     monkeypatch.setenv("GIT_CONFIG_KEY_0", "core.autocrlf")
@@ -254,7 +259,7 @@ def test_env_injected_autocrlf_takes_the_spawn_path(tmp_path, git_spawns, monkey
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_filter_and_text_auto_paths_share_one_spawn_and_never_refuse(tmp_path, git_spawns):
+def test_filter_and_text_auto_paths_share_one_spawn_and_never_refuse(tmp_path: Path, git_spawns) -> None:
     root, base, _ = _real_repo(tmp_path, attrs="f.txt filter=nothing\ng.txt text=auto\n")
     assert ask_stage._run_base_blobs(root, base, ["f.txt", "g.txt"]) == {
         "f.txt": blob_sha(b"a\nb\n"),
@@ -263,7 +268,7 @@ def test_filter_and_text_auto_paths_share_one_spawn_and_never_refuse(tmp_path, g
     assert len(git_spawns) == 1
 
 
-def test_refire_whose_run_base_cannot_be_read_refuses_by_name(tmp_path):
+def test_refire_whose_run_base_cannot_be_read_refuses_by_name(tmp_path: Path) -> None:
     rec = _halt(tmp_path, "bad", {}, BASE)
     (rec / "manifest.json").unlink()
     rows = [ManifestRow("C1", "executor", "sonnet", "b.md", ("pkg/extra.py",), 0)]
@@ -273,10 +278,10 @@ def test_refire_whose_run_base_cannot_be_read_refuses_by_name(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_refire_baseline_is_in_the_fingerprint_domain_under_an_eol_rule(tmp_path):
+def test_refire_baseline_is_in_the_fingerprint_domain_under_an_eol_rule(tmp_path: Path) -> None:
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
-    def git(*a):
+    def git(*a) -> None:
         subprocess.run(
             ["git", "-C", str(tmp_path), "-c", "core.autocrlf=false", *a],
             check=True,
@@ -306,7 +311,7 @@ def test_refire_baseline_is_in_the_fingerprint_domain_under_an_eol_rule(tmp_path
     assert ask_stage._write_baseline.unwritten(tmp_path, got, ["f.txt", "g.txt"]) == ["f.txt"]
 
 
-def test_refire_with_a_whitespace_path_refuses_before_spawning_git(tmp_path, base_repo, git_spawns):
+def test_refire_with_a_whitespace_path_refuses_before_spawning_git(tmp_path: Path, base_repo, git_spawns) -> None:
     rec = _halt(tmp_path, "ws", {}, BASE)
     rows = [ManifestRow("C1", "executor", "sonnet", "b.md", ("pkg/has space.py",), 0)]
     with pytest.raises(ask_stage.RefireBaselineError):
@@ -314,14 +319,14 @@ def test_refire_with_a_whitespace_path_refuses_before_spawning_git(tmp_path, bas
     assert git_spawns == []
 
 
-def test_refire_with_every_path_recorded_spawns_no_git(tmp_path, base_repo, git_spawns):
+def test_refire_with_every_path_recorded_spawns_no_git(tmp_path: Path, base_repo, git_spawns) -> None:
     rec = _halt(tmp_path, "full", {"pkg/a.py": None}, BASE)
     rows = [ManifestRow("C1", "executor", "sonnet", "b.md", ("pkg/a.py",), 0)]
     assert ask_stage._stage_write_baseline(tmp_path, rows, rec) == {"pkg/a.py": None}
     assert git_spawns == []
 
 
-def test_non_refire_record_still_captures_the_live_tree(tmp_path):
+def test_non_refire_record_still_captures_the_live_tree(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("x\n", encoding="utf-8", newline="\n")
     rows = [ManifestRow("C1", "executor", "sonnet", "b.md", ("a.py",), 0)]
     rec = ask_stage.record_dir(tmp_path, "r2")
@@ -331,7 +336,7 @@ def test_non_refire_record_still_captures_the_live_tree(tmp_path):
     assert ask_stage._stage_write_baseline(tmp_path, rows) == {"a.py": fingerprint(tmp_path, "a.py")}
 
 
-def test_stage_of_a_halted_run_keeps_the_prior_baseline(tmp_path, base_repo):
+def test_stage_of_a_halted_run_keeps_the_prior_baseline(tmp_path: Path, base_repo) -> None:
     _sizing(tmp_path)
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "a.py").write_text("first fire output\n", encoding="utf-8", newline="\n")
@@ -343,7 +348,7 @@ def test_stage_of_a_halted_run_keeps_the_prior_baseline(tmp_path, base_repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_capture_persists_the_raw_crlf_blob_and_it_matches_head(tmp_path):
+def test_capture_persists_the_raw_crlf_blob_and_it_matches_head(tmp_path: Path) -> None:
     from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.git.git_objects import read_object
     from coordinator_core.ops.dispatch_emit import kept_work
@@ -367,7 +372,7 @@ def test_capture_persists_the_raw_crlf_blob_and_it_matches_head(tmp_path):
     assert kept_work.matches_committed(root, rel, got[rel], head_sha)
 
 
-def test_capture_survives_an_unwritable_object_store(tmp_path, monkeypatch):
+def test_capture_survives_an_unwritable_object_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / "a.py").write_text("x\n", encoding="utf-8", newline="\n")
 
@@ -378,7 +383,7 @@ def test_capture_survives_an_unwritable_object_store(tmp_path, monkeypatch):
     assert ask_stage._write_baseline.capture(tmp_path, ["a.py"]) == {"a.py": fingerprint(tmp_path, "a.py")}
 
 
-def test_run_base_blobs_persist_each_segment_body(tmp_path, monkeypatch):
+def test_run_base_blobs_persist_each_segment_body(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The git-filtered path stores each converted body: the store holds only the raw (CRLF) blob, so
     the converted blob `BASE_EXTRA` is absent until `_run_base_blobs` persists it."""
     from types import SimpleNamespace
@@ -399,7 +404,7 @@ def test_run_base_blobs_persist_each_segment_body(tmp_path, monkeypatch):
     loose = gitdir / "objects" / BASE_EXTRA[:2] / BASE_EXTRA[2:]
     assert not loose.exists()
 
-    def fake_run_git(args, cwd=None, input=None, **_):
+    def fake_run_git(args, cwd=None, input=None, **_) -> SimpleNamespace:
         tok = input.decode("utf-8").splitlines()[1][:-1].encode()
         b = base.encode()
         out = b"%s commit 0\n%s\n%s0 missing\n" % (b, commit, tok)
@@ -414,7 +419,7 @@ def test_run_base_blobs_persist_each_segment_body(tmp_path, monkeypatch):
     assert read_object(gitdir, BASE_EXTRA) == ("blob", EXTRA_BYTES)
 
 
-def test_adopts_stranded_flag_is_deterministic():
+def test_adopts_stranded_flag_is_deterministic() -> None:
     f = ask_stage._adopts_stranded
     assert f({"authorization": {"source": "em-inferred", "rationale": "the stranded 9 files"}})
     assert not f({"authorization": {"source": "em-inferred", "rationale": "other"}})

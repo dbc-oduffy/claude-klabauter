@@ -19,25 +19,25 @@ from coordinator_core.ops.dispatch_emit.grind_admission import ROW_OUTPUT_TOKENS
         contract.CheckpointEvent(percent=25, settled=1, total=4),
     ],
 )
-def test_shapes_are_frozen(obj):
+def test_shapes_are_frozen(obj) -> None:
     field = dataclasses.fields(obj)[0].name
     with pytest.raises(dataclasses.FrozenInstanceError):
         setattr(obj, field, "x")
 
 
-def test_verdict_values_and_checkpoint_percents():
+def test_verdict_values_and_checkpoint_percents() -> None:
     assert {v.value for v in contract.Verdict} == {"flake", "not_reproduced", "survivor"}
     assert contract.CHECKPOINT_PERCENTS == (25, 50, 75)
 
 
 @pytest.mark.parametrize("n", [1, 7, 77])
-def test_default_budget_admits_every_row(n):
+def test_default_budget_admits_every_row(n) -> None:
     ids = [f"r{i}" for i in range(n)]
     adm = admit(ids, max_agent_calls=None, budget_tokens=contract.default_budget(n))
     assert adm.admitted == tuple(ids)
 
 
-def test_default_budget_scales_with_rows_and_is_bounded():
+def test_default_budget_scales_with_rows_and_is_bounded() -> None:
     assert contract.default_budget(10) > contract.default_budget(5) >= 5 * ROW_OUTPUT_TOKENS
     assert contract.default_budget(0) > 0
     # Bounded: one fewer row's worth of budget no longer covers all rows.
@@ -45,6 +45,6 @@ def test_default_budget_scales_with_rows_and_is_bounded():
     assert admit([str(i) for i in range(10)], max_agent_calls=None, budget_tokens=short).not_admitted
 
 
-def test_default_budget_rejects_negative():
+def test_default_budget_rejects_negative() -> None:
     with pytest.raises(ValueError):
         contract.default_budget(-1)

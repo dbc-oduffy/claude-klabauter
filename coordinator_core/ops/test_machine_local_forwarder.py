@@ -12,9 +12,10 @@ import os
 import pytest
 
 from coordinator_core.ops import machine_local_forwarder as mlf
+from pathlib import Path
 
 
-def test_forwards_to_real_machine_local_when_present(tmp_path, monkeypatch):
+def test_forwards_to_real_machine_local_when_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
     real = tmp_path / ".claude" / "bin" / "machine-local"
     real.parent.mkdir(parents=True)
@@ -44,7 +45,7 @@ def test_forwards_to_real_machine_local_when_present(tmp_path, monkeypatch):
     assert captured["args"] == [str(real), "get", "repos.foo"]
 
 
-def test_exits_127_when_real_binary_absent(tmp_path, monkeypatch, capsys):
+def test_exits_127_when_real_binary_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
     monkeypatch.setattr("coordinator_core.bare_forwarder.is_executable", lambda path: False)
 
@@ -57,7 +58,7 @@ def test_exits_127_when_real_binary_absent(tmp_path, monkeypatch, capsys):
     assert "run /coordinator:setup (Phase 3)" in err
 
 
-def test_falls_back_to_home_when_claude_home_unset(tmp_path, monkeypatch):
+def test_falls_back_to_home_when_claude_home_unset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     # `home_dir()`'s fallback is `Path.home()`, which reads USERPROFILE on

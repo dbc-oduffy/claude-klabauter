@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from coordinator_core.write_guards import nudge_handoff_ac_shape as guard
+from pathlib import Path
 
 _PROSE_BODY = (
     "---\n"
@@ -46,7 +47,7 @@ def _handoff_dir(tmp_path):
 
 
 class TestFires:
-    def test_fires_on_write_with_prose_bullets(self, tmp_path):
+    def test_fires_on_write_with_prose_bullets(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "some-handoff.md"
         spinoff_body = _PROSE_BODY.replace(
@@ -66,7 +67,7 @@ class TestFires:
         assert "checkboxes" in hso["additionalContext"]
         assert "COORDINATOR_" not in hso["additionalContext"]
 
-    def test_fires_on_spinoff_shaped_path_same_directory(self, tmp_path):
+    def test_fires_on_spinoff_shaped_path_same_directory(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "some-spinoff.md"
         spinoff_body = _PROSE_BODY.replace(
@@ -82,7 +83,7 @@ class TestFires:
         assert result is not None
         assert "additionalContext" in result["hookSpecificOutput"]
 
-    def test_fires_on_multi_edit_sequential_fragments(self, tmp_path):
+    def test_fires_on_multi_edit_sequential_fragments(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "some-handoff.md"
         target.write_text(
@@ -117,7 +118,7 @@ class TestFires:
 
 
 class TestSilent:
-    def test_silent_on_checkboxes(self, tmp_path):
+    def test_silent_on_checkboxes(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "some-handoff.md"
         result = guard.check(
@@ -129,7 +130,7 @@ class TestSilent:
         )
         assert result is None
 
-    def test_silent_when_heading_absent(self, tmp_path):
+    def test_silent_when_heading_absent(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "some-handoff.md"
         result = guard.check(
@@ -141,7 +142,7 @@ class TestSilent:
         )
         assert result is None
 
-    def test_silent_on_session_handoff_kind(self, tmp_path):
+    def test_silent_on_session_handoff_kind(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "some-handoff.md"
         result = guard.check(
@@ -153,7 +154,7 @@ class TestSilent:
         )
         assert result is None
 
-    def test_silent_on_unchanged_ac_section(self, tmp_path):
+    def test_silent_on_unchanged_ac_section(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "some-handoff.md"
         spinoff_body = _PROSE_BODY.replace(
@@ -173,7 +174,7 @@ class TestSilent:
         )
         assert result is None
 
-    def test_silent_on_non_handoff_path(self, tmp_path):
+    def test_silent_on_non_handoff_path(self, tmp_path: Path) -> None:
         d = tmp_path / "docs" / "plans"
         d.mkdir(parents=True)
         target = d / "some-plan.md"
@@ -186,7 +187,7 @@ class TestSilent:
         )
         assert result is None
 
-    def test_silent_on_edit_producing_no_ac_section(self, tmp_path):
+    def test_silent_on_edit_producing_no_ac_section(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "some-handoff.md"
         target.write_text(_NO_HEADING_BODY)
@@ -203,7 +204,7 @@ class TestSilent:
         )
         assert result is None
 
-    def test_silent_on_edit_with_stale_old_string(self, tmp_path):
+    def test_silent_on_edit_with_stale_old_string(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "some-handoff.md"
         target.write_text(_PROSE_BODY)
@@ -220,7 +221,7 @@ class TestSilent:
         )
         assert result is None
 
-    def test_silent_on_path_outside_git_root(self, tmp_path):
+    def test_silent_on_path_outside_git_root(self, tmp_path: Path) -> None:
         """Containment regression test: `_HANDOFF_RE` matches on a
         substring, so an absolute path carrying `state/handoffs/<x>.md`
         outside the resolved git root still matches the regex — the

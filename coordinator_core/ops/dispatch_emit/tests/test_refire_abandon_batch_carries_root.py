@@ -12,6 +12,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import fan_launcher as fl
 from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY
 from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
+from pathlib import Path
 
 
 def _abandon_prompt(tmp_path) -> str:
@@ -47,7 +48,7 @@ def _abandon_prompt(tmp_path) -> str:
 
 
 @pytest.mark.spawns_process
-def test_abandon_batch_params_name_the_repo_and_the_engine_resolves_a_root(tmp_path):
+def test_abandon_batch_params_name_the_repo_and_the_engine_resolves_a_root(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     prompt = _abandon_prompt(tmp_path)
     params = json.loads(re.search(r"'(\{.*\})'", prompt).group(1))
@@ -58,7 +59,7 @@ def test_abandon_batch_params_name_the_repo_and_the_engine_resolves_a_root(tmp_p
     assert "error" not in reply["replies"][0], reply
 
 
-def test_the_same_batch_without_a_root_is_refused_by_the_engine(tmp_path, monkeypatch):
+def test_the_same_batch_without_a_root_is_refused_by_the_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     reply = _dispatch_emit({"emits": [{"abandon_run": "warp-ask-r1"}]}, None)
     assert "requires repo_root, target_root or a caller cwd" in reply["replies"][0]["error"]

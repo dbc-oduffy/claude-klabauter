@@ -17,13 +17,17 @@ measured cost of each (spike figures, n=1, lower bounds — see § below):
   daily   -> store_hygiene.sweep_orphan_pack_files        0 spawns
              then MIDX heal (unlink a MIDX naming a gone  0 spawns
              pack)
-             then ONE batch leg: consolidate_pack_batch   ~190 ms (40 packs)
-             (while small packs exceed the ceiling) or
-             the bounded loose leg (while the loose       ~360 ms (500 objs)
-             estimate exceeds STALE_LOOSE_SLACK)
-             then commit-graph, only on a call that ran   ~110 ms
-             no batch leg
-             then git multi-pack-index write              ~70  ms
+             then, heavy=True only, ONE batch leg:        ~190 ms (40 packs)
+             consolidate_pack_batch (while small packs
+             exceed the ceiling) or the bounded loose     ~360 ms (500 objs)
+             leg (while the loose estimate exceeds
+             STALE_LOOSE_SLACK)
+             then commit-graph, only on a heavy call      ~110 ms
+             that ran no batch leg
+             then git multi-pack-index write, always      ~70  ms
+             (skipped when the batch left a current MIDX)
+             A light run (heavy=False) is sweep, heal and the MIDX write only: it runs
+             under box load and under pack_deletion_pause (it deletes no pack).
   weekly  -> git prune --expire=2.weeks.ago              175.0 ms,  1.0 proc
              then git maintenance run --task=pack-refs    53.1 ms,  2.0 procs
              then sweep_orphan_packs()                    ~2 s (one window)
@@ -483,15 +487,18 @@ def defer_reason(repo: Path, git_dir: Path) -> Optional[str]:
     return None
 
 
-def run_tier(repo: Path, tier: Optional[str]) -> MaintenanceResult:
+def run_tier(repo: Path, tier: Optional[str], *, heavy: bool = True) -> MaintenanceResult:
+    """Run one tier. `heavy=False` applies to daily only: sweep, MIDX heal and MIDX write,
+    no batch leg and no commit-graph; it still runs while pack deletion is paused."""
     if tier not in _TIER_ARGV:
         result = MaintenanceResult(tier=tier)
         result.errors.append(f"unknown tier {tier!r} -- expected one of {', '.join(TIERS)}")
         return result
 
     result = MaintenanceResult(tier=tier)
+    heavy = heavy or tier != "daily"
 
-    if pack_deletion_pause.paused():
+    if heavy and pack_deletion_pause.paused():
         result.deferred = PAUSED_REASON
         return result
 
@@ -508,7 +515,7 @@ def run_tier(repo: Path, tier: Optional[str]) -> MaintenanceResult:
     try:
         with fleet_maintenance_lock.hold(wait_s=0, holder_label=f"git-maintenance:{tier}"):
             with hold(common, wait_s=0, holder_label=f"git-maintenance:{tier}"):
-                return _run_tier_locked(repo, tier, result, git_dir, common)
+                return _run_tier_locked(repo, tier, result, git_dir, common, heavy=heavy)
     except (FleetMaintenanceBusy, FleetLockHomeUnresolved) as exc:
         result.deferred = f"fleet maintenance lock is held or unavailable -- another engine is mutating an object store ({exc})"
         return result
@@ -518,7 +525,7 @@ def run_tier(repo: Path, tier: Optional[str]) -> MaintenanceResult:
 
 
 def _run_tier_locked(
-    repo: Path, tier: str, result: MaintenanceResult, git_dir: Path, common: Path
+    repo: Path, tier: str, result: MaintenanceResult, git_dir: Path, common: Path, *, heavy: bool = True
 ) -> MaintenanceResult:
     if tier in _INDEX_READING_TIERS:
         reason = defer_reason(repo, git_dir)
@@ -560,11 +567,11 @@ def _run_tier_locked(
 
     legs: List[Tuple[str, ...]] = [_TIER_ARGV[tier]]
     if tier == "daily":
-        batch_ran = _daily_prelude(repo, common, result)
+        batch_ran = _daily_prelude(repo, common, result, heavy=heavy)
         if result.errors:
             return result
-        legs = [] if batch_ran else legs
-        if store_hygiene.status(common).pack_count:
+        legs = [] if batch_ran or not heavy else legs
+        if (result.packs_merged == 0 or not (common / "objects" / "pack" / "multi-pack-index").exists()) and store_hygiene.status(common).pack_count:
             legs.append(_MIDX_WRITE_ARGV)
 
     for argv in legs:
@@ -590,12 +597,12 @@ def _run_tier_locked(
     return result
 
 
-def _daily_prelude(repo: Path, common: Path, result: MaintenanceResult) -> bool:
+def _daily_prelude(repo: Path, common: Path, result: MaintenanceResult, *, heavy: bool = True) -> bool:
     """Daily's legs before the commit-graph and MIDX writes; True when a batch leg ran.
 
-    Reaps orphan pack-dir files, heals a MIDX naming a gone pack, then runs AT MOST ONE
-    batch (small-pack consolidation, else the loose leg while the loose estimate is over
-    STALE_LOOSE_SLACK): two together exceed the 500 ms bar. A failure lands in
+    Reaps orphan pack-dir files, heals a MIDX naming a gone pack, then, when `heavy`, runs
+    AT MOST ONE batch (small-pack consolidation, else the loose leg while the loose estimate
+    is over STALE_LOOSE_SLACK): two together exceed the 500 ms bar. A failure lands in
     `result.errors`. The caller holds the object-store lock."""
     result.pack_files_reaped = store_hygiene.sweep_orphan_pack_files(common)
     if store_hygiene.midx_names_missing_pack(common):
@@ -604,6 +611,8 @@ def _daily_prelude(repo: Path, common: Path, result: MaintenanceResult) -> bool:
             result.errors.append(f"stale multi-pack-index not removable: {midx}")
             return False
         result.midx_healed = True
+    if not heavy:
+        return False
     result.packs_merged = store_hygiene.consolidate_pack_batch(common)
     if result.packs_merged:
         return True

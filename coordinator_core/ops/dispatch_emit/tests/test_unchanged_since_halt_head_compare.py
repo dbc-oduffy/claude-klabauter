@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit import halted_run
 from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, UNCHANGED_SINCE_HALT_REASON
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -28,7 +29,7 @@ def _git(root, *a):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path):
     """The manifest declares prod.py (clean); the run's record names other.py, outside the manifest."""
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@t.example")
@@ -47,7 +48,7 @@ def _resume(halt):
     return {"run_id": RUN, "halt_sha": halt, "blocking": ["R1"], "unlanded": ["C1"]}
 
 
-def _record(root, withheld):
+def _record(root, withheld) -> None:
     record_dir = root / RECORD_DIR_ROOT / RUN
     record_dir.mkdir(parents=True)
     (record_dir / "manifest.json").write_text(
@@ -57,20 +58,20 @@ def _record(root, withheld):
     halted_run.record_withheld(record_dir, withheld)
 
 
-def test_withheld_write_set_path_differing_from_head_is_not_refused(repo):
+def test_withheld_write_set_path_differing_from_head_is_not_refused(repo) -> None:
     root, manifest, halt = repo
     _record(root, {"other.py": "halt-record-only"})
     (root / "other.py").write_text("y = 2\n", encoding="utf-8", newline="\n")
     assert tc._unchanged_since_halt_failures(root, _resume(halt), MET, manifest) == []
 
 
-def test_withheld_write_set_path_equal_to_head_still_refuses(repo):
+def test_withheld_write_set_path_equal_to_head_still_refuses(repo) -> None:
     root, manifest, halt = repo
     _record(root, {"other.py": "halt-record-only"})
     assert tc._unchanged_since_halt_failures(root, _resume(halt), MET, manifest) == REFUSED
 
 
-def test_dirty_path_with_nothing_withheld_still_refuses_and_spawns_no_head_leg(repo, monkeypatch):
+def test_dirty_path_with_nothing_withheld_still_refuses_and_spawns_no_head_leg(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, manifest, halt = repo
     (root / "other.py").write_text("y = 2\n", encoding="utf-8", newline="\n")
     seen = []

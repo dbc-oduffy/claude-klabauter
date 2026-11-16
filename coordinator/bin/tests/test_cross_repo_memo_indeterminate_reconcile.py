@@ -148,7 +148,9 @@ def test_send_indeterminate_before_receipt_resumes_once_and_renders_receipt(
             raise _Indeterminate("worker_died")
         return {
             "exit_code": 0,
-            "acted": [{"id": "/r/cross-repo/inbox/t.md", "sent_receipt": "sent/t.md"}],
+            "acted": [
+                {"id": "/r/cross-repo/inbox/t.md", "sent_receipt": "sent/t.md", "anchored": True}
+            ],
         }
 
     args, _sent = _send_harness(mod, monkeypatch, tmp_path, route)
@@ -157,7 +159,8 @@ def test_send_indeterminate_before_receipt_resumes_once_and_renders_receipt(
     out = capsys.readouterr().out
     assert rc == 0
     assert len(calls) == 2
-    assert "Receiver-side:" in out
+    assert "not materialized" in out
+    assert "Sender-side receipt: sent/t.md" in out
     assert "REFUSED" not in out
 
 

@@ -10,6 +10,7 @@ from coordinator_core.completion_receipts.test_verdict import (
     derive_verdict,
     record_test_verdict,
 )
+from pathlib import Path
 
 SIDECAR = "---\nagent_type: coordinator:test-runner\nstatus: complete\ntarget_plan: null\n---\nbody\n"
 
@@ -20,7 +21,7 @@ def _res(**kw):
     return base
 
 
-def test_constants():
+def test_constants() -> None:
     assert RECORD_VERB == "test-verdict record"
 
 
@@ -29,7 +30,7 @@ def test_constants():
     ({"status": "fail", "tests_failed": 2}, "fail"),
     ({"status": "error", "tests_run": 0}, "errored"),
 ])
-def test_derive_ok(kw, want):
+def test_derive_ok(kw, want) -> None:
     assert derive_verdict(_res(**kw)) == want
 
 
@@ -42,18 +43,18 @@ def test_derive_ok(kw, want):
     {"tests_failed": -1},
     {"status": "pass", "tests_failed": 1},
 ])
-def test_derive_refuses(kw):
+def test_derive_refuses(kw) -> None:
     with pytest.raises(TestVerdictRefused):
         derive_verdict(_res(**kw))
 
 
-def _write(tmp_path, text=SIDECAR, name="sc.md"):
+def _write(tmp_path, text=SIDECAR, name: str = "sc.md"):
     p = tmp_path / name
     p.write_bytes(text.encode())
     return p
 
 
-def test_record_writes_once(tmp_path):
+def test_record_writes_once(tmp_path: Path) -> None:
     p = _write(tmp_path)
     out = record_test_verdict(tmp_path, _res(), plan_path="docs/plans/x.md")
     assert out == p.resolve()
@@ -67,14 +68,14 @@ def test_record_writes_once(tmp_path):
     assert p.read_bytes() == before
 
 
-def test_record_preserves_crlf(tmp_path):
+def test_record_preserves_crlf(tmp_path: Path) -> None:
     p = _write(tmp_path, SIDECAR.replace("\n", "\r\n"))
     record_test_verdict(tmp_path, _res())
     b = p.read_bytes()
     assert b"\r\n" in b and b.replace(b"\r\n", b"").count(b"\n") == 0
 
 
-def test_record_never_overwrites_bound_keys(tmp_path):
+def test_record_never_overwrites_bound_keys(tmp_path: Path) -> None:
     p = _write(tmp_path, SIDECAR.replace("target_plan: null", "target_plan: keep.md"))
     record_test_verdict(tmp_path, _res(), plan_path="other.md")
     assert "target_plan: keep.md" in p.read_text()
@@ -82,7 +83,7 @@ def test_record_never_overwrites_bound_keys(tmp_path):
 
 @pytest.mark.parametrize("text", [None, "no frontmatter\n", SIDECAR.replace("---\nbody", "test_verdict: pass\n---\nbody"),
                                   SIDECAR.replace("coordinator:test-runner", "coordinator:executor")])
-def test_record_refusals_leave_bytes(tmp_path, text):
+def test_record_refusals_leave_bytes(tmp_path: Path, text) -> None:
     p = _write(tmp_path, text) if text is not None else tmp_path / "sc.md"
     before = p.read_bytes() if p.exists() else None
     with pytest.raises(TestVerdictRefused):
@@ -90,13 +91,13 @@ def test_record_refusals_leave_bytes(tmp_path, text):
     assert (p.read_bytes() if p.exists() else None) == before
 
 
-def test_record_allows_passed_agent_type_equal(tmp_path):
+def test_record_allows_passed_agent_type_equal(tmp_path: Path) -> None:
     p = _write(tmp_path, SIDECAR.replace("coordinator:test-runner", "host-native"))
     record_test_verdict(tmp_path, _res(), agent_type="host-native")
     assert "test_verdict: pass" in p.read_text()
 
 
-def test_bind_sidecar(tmp_path):
+def test_bind_sidecar(tmp_path: Path) -> None:
     p = _write(tmp_path, SIDECAR.replace("---\nbody", "test_verdict: pass\n---\nbody"))
     assert bind_sidecar(tmp_path, "sc.md", plan_path="docs/plans/x.md") is True
     t = p.read_text()
@@ -128,7 +129,7 @@ def _base_log(tmp_path):
     return log
 
 
-def test_baseline_export_all_pre_existing_is_pass(tmp_path):
+def test_baseline_export_all_pre_existing_is_pass(tmp_path: Path) -> None:
     p = _write(tmp_path)
     record_test_verdict(tmp_path, _failres("export", log=_base_log(tmp_path)))
     fm, eff = _effective(p)
@@ -137,25 +138,25 @@ def test_baseline_export_all_pre_existing_is_pass(tmp_path):
     assert eff == "pass"
 
 
-def test_baseline_with_caused_stays_fail(tmp_path):
+def test_baseline_with_caused_stays_fail(tmp_path: Path) -> None:
     p = _write(tmp_path)
     record_test_verdict(tmp_path, _failres("export", caused=["a::t3"]))
     assert _effective(p)[1] == "fail"
 
 
-def test_baseline_export_without_evidence_stays_fail(tmp_path):
+def test_baseline_export_without_evidence_stays_fail(tmp_path: Path) -> None:
     p = _write(tmp_path)
     record_test_verdict(tmp_path, _failres("export"))
     assert _effective(p)[1] == "fail"
 
 
-def test_baseline_heuristic_stays_fail(tmp_path):
+def test_baseline_heuristic_stays_fail(tmp_path: Path) -> None:
     p = _write(tmp_path)
     record_test_verdict(tmp_path, _failres("heuristic"))
     assert _effective(p)[1] == "fail"
 
 
-def test_no_baseline_keys_absent(tmp_path):
+def test_no_baseline_keys_absent(tmp_path: Path) -> None:
     p = _write(tmp_path)
     record_test_verdict(tmp_path, _res(baseline=None, baseline_method=None))
     t = p.read_text()

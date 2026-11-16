@@ -19,6 +19,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import (
 from coordinator_core.win_portability import no_console_creationflags
 
 import yaml
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -27,7 +28,7 @@ from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 _REVIEWED = reviewed()
 
 
-def _git(args, cwd, check=True):
+def _git(args, cwd, check: bool = True):
     return subprocess.run(
         ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=check,
         **no_console_creationflags(),
@@ -39,7 +40,7 @@ def _call(repo, params):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], root)
@@ -53,7 +54,7 @@ def repo(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def claims(monkeypatch):
+def claims(monkeypatch: pytest.MonkeyPatch):
     claimed: list = []
     monkeypatch.setattr(
         "coordinator_core.session.claims.list_claims_by_session_checked",
@@ -62,13 +63,13 @@ def claims(monkeypatch):
     return claimed
 
 
-def _write(root, rel, text):
+def _write(root, rel, text) -> None:
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
-def _script(repo, request):
+def _script(repo, request) -> str:
     _write(repo, "run.mjs", "// emitted\n" + render_marker(request) + "\n")
     return "run.mjs"
 
@@ -80,7 +81,7 @@ _PLAN = (
 _SID = "11111111-2222-3333-4444-555555555555"
 
 
-def _plan_run(repo):
+def _plan_run(repo) -> str:
     _write(repo, "docs/plan.md", _PLAN)
     _git(["add", "."], repo)
     _git(["commit", "-q", "-m", "plan"], repo)
@@ -97,7 +98,7 @@ def _receipt_files(repo):
     return sorted((repo / "state").rglob("*.md")) if (repo / "state").exists() else []
 
 
-def test_plan_run_commit_tree_carries_one_valid_receipt(repo, claims):
+def test_plan_run_commit_tree_carries_one_valid_receipt(repo, claims) -> None:
     script = _plan_run(repo)
     out = _call(repo, {"script_path": script, "incomplete_chunks": [], "session_id": _SID})
     assert out["committed"] is True
@@ -111,7 +112,7 @@ def test_plan_run_commit_tree_carries_one_valid_receipt(repo, claims):
     assert fm["deliverable_id"] == DLV and fm["baton_id"] is None
 
 
-def test_unreviewed_call_writes_no_receipt(repo, claims):
+def test_unreviewed_call_writes_no_receipt(repo, claims) -> None:
     script = _plan_run(repo)
     out = terminal_commit._handler(
         {"script_path": script, "incomplete_chunks": []}, repo_root=repo / ".git"
@@ -120,7 +121,7 @@ def test_unreviewed_call_writes_no_receipt(repo, claims):
     assert _receipt_files(repo) == []
 
 
-def test_receipt_write_failure_refuses_without_a_commit(repo, claims, monkeypatch):
+def test_receipt_write_failure_refuses_without_a_commit(repo, claims, monkeypatch: pytest.MonkeyPatch) -> None:
     script = _plan_run(repo)
     head = _git(["rev-parse", "HEAD"], repo)
 
@@ -136,7 +137,7 @@ def test_receipt_write_failure_refuses_without_a_commit(repo, claims, monkeypatc
     assert _receipt_files(repo) == []
 
 
-def test_second_receipt_failure_removes_the_first(repo, claims, monkeypatch):
+def test_second_receipt_failure_removes_the_first(repo, claims, monkeypatch: pytest.MonkeyPatch) -> None:
     script = _plan_run(repo)
     _write(repo, "state/handoffs/b1.md", f"---\nhandoff_id: hnd-one-111111\ndeliverable_id: {DLV}\n---\n\nx\n")
     _write(repo, "state/handoffs/b2.md", f"---\nhandoff_id: hnd-two-222222\ndeliverable_id: {DLV}\n---\n\nx\n")
@@ -144,7 +145,7 @@ def test_second_receipt_failure_removes_the_first(repo, claims, monkeypatch):
     real = cr.write_receipt
     calls = []
 
-    def flaky(root, fm, prose):
+    def flaky(root, fm, prose) -> str:
         calls.append(1)
         if len(calls) == 2:
             raise ReceiptWriteError("second failed")
@@ -157,7 +158,7 @@ def test_second_receipt_failure_removes_the_first(repo, claims, monkeypatch):
     assert [p for p in _receipt_files(repo) if "handoffs" not in p.parts] == []
 
 
-def test_inventory_run_writes_one_receipt_per_claimed_baton(repo, claims):
+def test_inventory_run_writes_one_receipt_per_claimed_baton(repo, claims) -> None:
     _write(repo, "docs/plan.md", _PLAN)
     _write(
         repo,
@@ -196,7 +197,7 @@ def test_inventory_run_writes_one_receipt_per_claimed_baton(repo, claims):
     assert ids == {"hnd-one-111111", "hnd-two-222222"}
 
 
-def test_nothing_to_commit_writes_no_receipt(repo, claims):
+def test_nothing_to_commit_writes_no_receipt(repo, claims) -> None:
     _write(repo, "docs/plan.md", _PLAN)
     _git(["add", "."], repo)
     _git(["commit", "-q", "-m", "plan"], repo)

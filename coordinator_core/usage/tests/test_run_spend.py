@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.usage import run_spend
 from coordinator_core.usage.run_spend import ceremony_of, record_run, spend_summary
+from pathlib import Path
 
 OPUS = "claude-opus-5-5-20260101"
 
@@ -40,11 +41,11 @@ def _wf(tmp_path):
     (None, "other"),
     ("", "other"),
 ])
-def test_ceremony_of_table(path, expected):
+def test_ceremony_of_table(path, expected) -> None:
     assert ceremony_of(path) == expected
 
 
-def test_record_run_writes_spend_row(tmp_path):
+def test_record_run_writes_spend_row(tmp_path: Path) -> None:
     wf = _wf(tmp_path)
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -63,7 +64,7 @@ def test_record_run_writes_spend_row(tmp_path):
     assert sum(b["agents"] for b in row["by_role"].values()) == 2
 
 
-def test_record_run_reuses_passed_scan(tmp_path, monkeypatch):
+def test_record_run_reuses_passed_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     scan = {"agents": [{}], "by_model": {}, "by_role": {"r": {"agents": 1}},
             "run_total": {"total_tokens": 7, "usd": 0.5}}
     repo = tmp_path / "repo"
@@ -74,12 +75,12 @@ def test_record_run_reuses_passed_scan(tmp_path, monkeypatch):
     assert json.loads((repo / out["spend_row"]).read_text())["script_stem"] is None
 
 
-def test_record_run_never_raises(tmp_path):
+def test_record_run_never_raises(tmp_path: Path) -> None:
     assert "reason" in record_run(str(tmp_path / "missing"), str(tmp_path), "../evil", "other")
     assert "reason" in record_run(str(tmp_path), str(tmp_path), "ok", "other", scan={"agents": 1})
 
 
-def test_record_run_write_failure_returns_reason(tmp_path, monkeypatch):
+def test_record_run_write_failure_returns_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise OSError("disk")
     monkeypatch.setattr("coordinator_core.session.claimed_write.replace_text", boom)

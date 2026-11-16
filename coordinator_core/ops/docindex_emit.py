@@ -55,16 +55,19 @@ DISCOVERY (AC6's discovery clause, F4/F5/F7): enumerates tracked markdown via
 ONE `git ls-files '*.md'` spawn (AC10/AC15 — bounded, never per-index or
 per-entry), pruned through coordinator_core.cartography._skip_dirs.SKIP_DIR_NAMES
 (imported, never respelled) plus state/, archive/, tasks/ before any
-frontmatter read. Each survivor's LEADING FRONTMATTER BLOCK ONLY is parsed
+frontmatter read. Each survivor passes a raw-bytes gate (`_may_declare_index`,
+memoised per (mtime_ns, size) in a derived cache) that only ever rejects a
+document that provably has no top-level `index_source_dir:` line in its
+leading frontmatter; every document the gate admits has its LEADING
+FRONTMATTER BLOCK ONLY parsed
 (coordinator_core.frontmatter.primitives.split_frontmatter) for
-`index_source_dir:` — never a text/grep scan of file contents, which would
-self-poison on this plan's own output (docs/reference/generated-doc-indexes.md's
-fenced example, and this plan file itself, both contain that token outside any
-frontmatter block). A document whose parsed frontmatter carries
-`index_source_dir:` is treated as a declared index and its full frontmatter is
-handed to `docindex.spec.parse_index_spec`, which raises IndexSpecError (named,
-loud) on any further malformed field — never a silent skip once a document has
-declared itself an index.
+`index_source_dir:` — the parse, never the gate, decides, so a text mention
+outside frontmatter (docs/reference/generated-doc-indexes.md's fenced example,
+and this plan file itself) never self-poisons. A document whose parsed
+frontmatter carries `index_source_dir:` is treated as a declared index and its
+full frontmatter is handed to `docindex.spec.parse_index_spec`, which raises
+IndexSpecError (named, loud) on any further malformed field — never a silent
+skip once a document has declared itself an index.
 
 Entry-file discovery, per resolved index, lists `*.md` children of
 `index_source_dir` directly via `pathlib.Path.glob` — a single in-process
@@ -132,7 +135,11 @@ Negative-spec:
 """
 from __future__ import annotations
 
+import json
+import os
+import re
 import subprocess
+import threading
 from pathlib import Path
 from typing import Optional
 
@@ -158,6 +165,10 @@ from coordinator_core.ipc import register_op
 MUTATES = ["**/*.md"]
 
 _EXCLUDED_TOP_SEGMENTS = ("state", "archive", "tasks")
+_PREFILTER_BYTES = 4096
+_FENCE_LINE = re.compile(rb"^---[ \t]*\r?$", re.MULTILINE)
+_DECLARES_KEY = re.compile(rb"""^["']?index_source_dir["']?[ \t]*:""", re.MULTILINE)
+_CACHE_RELPATH = Path(".coordinator-local") / "cache" / "docindex" / "may-declare.json"
 
 
 class DocindexEmitError(ValueError):
@@ -178,7 +189,7 @@ def _list_tracked_markdown(repo_root: Path) -> list[str]:
 
 
 def _is_pruned(rel_path: str) -> bool:
-    parts = rel_path.split("/")[:-1]
+    parts = rel_path.replace("\\", "/").split("/")[:-1]
     if any(part in SKIP_DIR_NAMES for part in parts):
         return True
     return bool(parts) and parts[0] in _EXCLUDED_TOP_SEGMENTS
@@ -206,33 +217,84 @@ def _resolves_under_excluded_root(index_source_dir: str, repo_root: Path) -> boo
     return any(part in SKIP_DIR_NAMES for part in parts)
 
 
-_INDEX_KEY = "index_source_dir"
-_INDEX_KEY_BYTES = _INDEX_KEY.encode()
+def _may_declare_index(abs_path: "str | Path") -> bool:
+    """Cheap raw-bytes gate ahead of the YAML parse (which dominates discovery cost).
 
-
-def _declares_index_key(abs_path: Path) -> bool:
-    """Cheap necessary-condition prefilter: the leading frontmatter text names
-    `index_source_dir`. A document failing it cannot declare an index, so the YAML
-    parse (the dominant cost over thousands of tracked files) is skipped."""
+    False only when the document provably cannot declare a top-level `index_source_dir:` key in its
+    leading frontmatter: no such line in the first chunk AND either the chunk holds the whole file,
+    the file does not open a fence, or the fence closes inside the chunk. An unclosed fence reads the
+    rest of the file and tests it whole; a hit is only a candidate, the YAML parse arbitrates.
+    """
     try:
         with open(abs_path, "rb") as fh:
-            data = fh.read()
+            data = fh.read(_PREFILTER_BYTES)
+            if _DECLARES_KEY.search(data):
+                return True
+            if len(data) < _PREFILTER_BYTES:
+                return False
+            head = data.lstrip()
+            if not (head.startswith(b"---") or head.startswith(b"<!--")):
+                return False
+            if len(_FENCE_LINE.findall(data)) != 1:
+                return False
+            data += fh.read()
     except OSError:
         return False
-    if _INDEX_KEY_BYTES not in data:
-        return False
-    split = split_frontmatter(data.decode("utf-8", errors="replace"))
-    return split is not None and _INDEX_KEY in split.fm_text
+    return bool(_DECLARES_KEY.search(data))
+
+
+def _load_gate_cache(path: Path) -> dict:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _store_gate_cache(path: Path, cache: dict) -> None:
+    tmp = path.with_suffix(f".{os.getpid()}.{threading.get_ident()}.tmp")
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp.write_text(json.dumps(cache, separators=(",", ":")), encoding="utf-8", newline="")
+        os.replace(tmp, path)
+    except OSError:
+        tmp.unlink(missing_ok=True)
 
 
 def _discover_index_paths(repo_root: Path) -> list[str]:
+    """Tracked, unpruned markdown whose leading frontmatter declares `index_source_dir`.
+
+    `_may_declare_index` verdicts are memoised per (mtime_ns, size) in a derived, rebuildable
+    cache file under the gitignored `.coordinator-local/cache/`, so a warm call stats each
+    document and reads none.
+    """
+    cache_path = repo_root / _CACHE_RELPATH
+    cached = _load_gate_cache(cache_path)
+    fresh: dict = {}
     candidates: list[str] = []
+    prefix = str(repo_root) + os.sep
     for rel_path in _list_tracked_markdown(repo_root):
-        if _is_pruned(rel_path) or not _declares_index_key(repo_root / rel_path):
+        if _is_pruned(rel_path):
             continue
-        fm = _read_leading_frontmatter(repo_root / rel_path)
+        abs_path = prefix + rel_path
+        try:
+            st = os.stat(abs_path)
+        except OSError:
+            continue
+        sig = [st.st_mtime_ns, st.st_size]
+        rec = cached.get(rel_path)
+        if isinstance(rec, list) and len(rec) == 3 and rec[:2] == sig:
+            may = bool(rec[2])
+        else:
+            may = _may_declare_index(abs_path)
+        fresh[rel_path] = sig + [may]
+        if not may:
+            continue
+        fm = _read_leading_frontmatter(Path(abs_path))
         if fm is not None and "index_source_dir" in fm:
             candidates.append(rel_path)
+    if fresh != cached:
+        _store_gate_cache(cache_path, fresh)
     return sorted(candidates)
 
 

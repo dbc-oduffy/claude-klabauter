@@ -19,6 +19,7 @@ from __future__ import annotations
 import pytest
 
 import coordinator_core.liveness as _liveness
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
@@ -28,14 +29,14 @@ def _reset_live_ids_cache_between_tests():
     _liveness._reset_live_ids_cache()
 
 
-def _reset_cache(monkeypatch):
+def _reset_cache(monkeypatch) -> None:
     """_lib_path() memoizes into module-level _CACHED_LIB; reset it per-test so
     mocked subprocess behavior is actually exercised rather than short-circuited
     by a prior test's cached result."""
     monkeypatch.setattr(_liveness, "_CACHED_LIB", None)
 
 
-def test_lib_path_resolves_via_engine_root_when_file_present(tmp_path, monkeypatch):
+def test_lib_path_resolves_via_engine_root_when_file_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """COORDINATOR_ENGINE_ROOT resolvable and
     coordinator/lib/coordinator_session.py present under it -> that path is
     returned and cached.
@@ -62,7 +63,7 @@ def test_lib_path_resolves_via_engine_root_when_file_present(tmp_path, monkeypat
     assert result == str(script), f"Expected engine-root-anchored successor path; got {result}"
 
 
-def test_lib_path_missing_successor_file_returns_none(tmp_path, monkeypatch):
+def test_lib_path_missing_successor_file_returns_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """CLAUDE_KLABAUTER_ROOT resolvable but the successor file doesn't exist under it ->
     None (no invented fallback)."""
     _reset_cache(monkeypatch)
@@ -76,7 +77,7 @@ def test_lib_path_missing_successor_file_returns_none(tmp_path, monkeypatch):
     assert result is None
 
 
-def test_lib_path_unresolvable_engine_root_degrades_to_none(monkeypatch):
+def test_lib_path_unresolvable_engine_root_degrades_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
     """coordinator_engine_root() raising RuntimeError (no CLAUDE_KLABAUTER_ROOT env, no
     settings-home pointer, no machine-local registry entry) must degrade to
     None rather than raise — matching _lib_path()'s "or None if not found"
@@ -94,13 +95,13 @@ def test_lib_path_unresolvable_engine_root_degrades_to_none(monkeypatch):
     assert result is None
 
 
-def test_resolve_live_session_ids_caches_within_ttl(monkeypatch):
+def test_resolve_live_session_ids_caches_within_ttl(monkeypatch: pytest.MonkeyPatch) -> None:
     _liveness._reset_live_ids_cache()
     monkeypatch.setattr(_liveness, "_LIVE_IDS_CACHE_TTL_SEC", 60.0)
 
     calls = []
 
-    def _fake_uncached():
+    def _fake_uncached() -> frozenset[str]:
         calls.append(1)
         return frozenset({"sid-1"})
 
@@ -114,13 +115,13 @@ def test_resolve_live_session_ids_caches_within_ttl(monkeypatch):
     assert len(calls) == 1, "second call within TTL must reuse the cached value, not re-invoke the bash bridge"
 
 
-def test_resolve_live_session_ids_recomputes_after_ttl_expiry(monkeypatch):
+def test_resolve_live_session_ids_recomputes_after_ttl_expiry(monkeypatch: pytest.MonkeyPatch) -> None:
     _liveness._reset_live_ids_cache()
     monkeypatch.setattr(_liveness, "_LIVE_IDS_CACHE_TTL_SEC", 1.0)
 
     calls = []
 
-    def _fake_uncached():
+    def _fake_uncached() -> frozenset[str]:
         calls.append(1)
         return frozenset({"sid-%d" % len(calls)})
 
@@ -137,12 +138,12 @@ def test_resolve_live_session_ids_recomputes_after_ttl_expiry(monkeypatch):
     assert first != second
 
 
-def test_reset_live_ids_cache_forces_recompute(monkeypatch):
+def test_reset_live_ids_cache_forces_recompute(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_liveness, "_LIVE_IDS_CACHE_TTL_SEC", 60.0)
 
     calls = []
 
-    def _fake_uncached():
+    def _fake_uncached() -> frozenset[str]:
         calls.append(1)
         return frozenset({"sid-x"})
 
@@ -155,7 +156,7 @@ def test_reset_live_ids_cache_forces_recompute(monkeypatch):
     assert len(calls) == 2, "_reset_live_ids_cache must clear the cache so the next call recomputes"
 
 
-def test_resolve_live_session_ids_uncached_degrades_to_empty_on_error(monkeypatch):
+def test_resolve_live_session_ids_uncached_degrades_to_empty_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def _raise():
         raise RuntimeError("boom")
@@ -181,7 +182,7 @@ def test_resolve_live_session_ids_uncached_degrades_to_empty_on_error(monkeypatc
 # ---------------------------------------------------------------------------
 
 
-def test_cs_claim_holder_live_confirmed_alive(monkeypatch):
+def test_cs_claim_holder_live_confirmed_alive(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         _liveness._session_liveness, "claim_holder_live", lambda claim_path: True
     )
@@ -189,7 +190,7 @@ def test_cs_claim_holder_live_confirmed_alive(monkeypatch):
     assert _liveness.cs_claim_holder_live("/some/claim/dir") is True
 
 
-def test_cs_claim_holder_live_confirmed_dead(monkeypatch):
+def test_cs_claim_holder_live_confirmed_dead(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         _liveness._session_liveness, "claim_holder_live", lambda claim_path: False
     )
@@ -197,7 +198,7 @@ def test_cs_claim_holder_live_confirmed_dead(monkeypatch):
     assert _liveness.cs_claim_holder_live("/some/claim/dir") is False
 
 
-def test_cs_claim_holder_live_indeterminate_propagates_not_false(monkeypatch):
+def test_cs_claim_holder_live_indeterminate_propagates_not_false(monkeypatch: pytest.MonkeyPatch) -> None:
     import pytest
 
     def _raise(claim_path):
@@ -209,7 +210,7 @@ def test_cs_claim_holder_live_indeterminate_propagates_not_false(monkeypatch):
         _liveness.cs_claim_holder_live("/some/claim/dir")
 
 
-def test_cs_claim_holder_live_empty_claim_path_raises_valueerror():
+def test_cs_claim_holder_live_empty_claim_path_raises_valueerror() -> None:
     import pytest
 
     with pytest.raises(ValueError):

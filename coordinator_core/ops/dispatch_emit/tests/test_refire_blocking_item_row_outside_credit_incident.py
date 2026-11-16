@@ -14,6 +14,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
 from coordinator_core.ops.dispatch_emit.sizing_fire import resumable_plan
 from coordinator_core.ops.dispatch_emit.tests.test_refire_after_ledger_halt_resumes_incident import _git
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -75,7 +76,7 @@ def _incident_repo(repo, remaining: str = REMAINING, *, item: str = "R1", stage_
         (repo / PLAN_REL).write_text(_rows(with_t2=True), encoding="utf-8", newline="\n")
 
 
-def test_open_non_em_row_a_blocking_item_names_is_not_outside_credited(tmp_path):
+def test_open_non_em_row_a_blocking_item_names_is_not_outside_credited(tmp_path: Path) -> None:
     _incident_repo(tmp_path)
     got = resumable_plan({"plan": PLAN_REL}, SIZING_REL, tmp_path)
     assert got.ledger is None, got

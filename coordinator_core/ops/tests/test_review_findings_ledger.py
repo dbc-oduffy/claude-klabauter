@@ -11,6 +11,7 @@ import hashlib
 import json
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -45,7 +46,7 @@ def _write_sidecar(tmp_path, *, baseline: dict, findings_count: int, rows: list,
     return sidecar
 
 
-def test_verify_passes_a_clean_replacement(tmp_path):
+def test_verify_passes_a_clean_replacement(tmp_path: Path) -> None:
     target = tmp_path / "src.py"
     baseline_content = "x = 1\n"
     target.write_text("x = 2\n", encoding="utf-8")
@@ -72,7 +73,7 @@ def _capture_rung_fires(monkeypatch) -> list:
     return calls
 
 
-def test_verify_fires_stamp_reviewed_on_a_reviewed_plan(tmp_path, monkeypatch):
+def test_verify_fires_stamp_reviewed_on_a_reviewed_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _capture_rung_fires(monkeypatch)
     plan = tmp_path / "docs" / "plans" / "p.md"
     plan.parent.mkdir(parents=True)
@@ -87,7 +88,7 @@ def test_verify_fires_stamp_reviewed_on_a_reviewed_plan(tmp_path, monkeypatch):
     assert calls == [["stamp-reviewed", "--plan", str(plan)]]
 
 
-def test_verify_refuses_when_reviewed_plan_frontmatter_no_longer_parses(tmp_path, monkeypatch):
+def test_verify_refuses_when_reviewed_plan_frontmatter_no_longer_parses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """F24b (gh-klabauter#71): a reviewer's edit that broke the reviewed
     plan's own YAML frontmatter must refuse `verify` -- not stamp
     `status: reviewed` over a document nothing can read frontmatter off."""
@@ -108,7 +109,7 @@ def test_verify_refuses_when_reviewed_plan_frontmatter_no_longer_parses(tmp_path
     assert "findings_ledger:" not in sidecar.read_text(encoding="utf-8")
 
 
-def test_verify_fires_no_rung_for_a_non_plan_target(tmp_path, monkeypatch):
+def test_verify_fires_no_rung_for_a_non_plan_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _capture_rung_fires(monkeypatch)
     (tmp_path / "src.py").write_text("x = 2\n", encoding="utf-8")
     sidecar = _write_sidecar(
@@ -121,7 +122,7 @@ def test_verify_fires_no_rung_for_a_non_plan_target(tmp_path, monkeypatch):
     assert calls == []
 
 
-def test_verify_fails_on_row_count_mismatch(tmp_path):
+def test_verify_fails_on_row_count_mismatch(tmp_path: Path) -> None:
     target = tmp_path / "src.py"
     target.write_text("x = 2\n", encoding="utf-8")
     sidecar = _write_sidecar(
@@ -135,7 +136,7 @@ def test_verify_fails_on_row_count_mismatch(tmp_path):
     assert any("declared 2" in f for f in outcome.failures)
 
 
-def test_verify_fails_when_after_text_absent(tmp_path):
+def test_verify_fails_when_after_text_absent(tmp_path: Path) -> None:
     target = tmp_path / "src.py"
     target.write_text("x = 999\n", encoding="utf-8")
     sidecar = _write_sidecar(
@@ -149,7 +150,7 @@ def test_verify_fails_when_after_text_absent(tmp_path):
     assert any("not found" in f for f in outcome.failures)
 
 
-def test_verify_accepts_em_rejected_row_with_reason(tmp_path):
+def test_verify_accepts_em_rejected_row_with_reason(tmp_path: Path) -> None:
     target = tmp_path / "src.py"
     target.write_text("x = 1\n", encoding="utf-8")
     sidecar = _write_sidecar(
@@ -172,7 +173,7 @@ def test_verify_accepts_em_rejected_row_with_reason(tmp_path):
     assert outcome.stamp["em_rejected"] == 1
 
 
-def test_verify_refuses_em_rejected_row_with_no_reason(tmp_path):
+def test_verify_refuses_em_rejected_row_with_no_reason(tmp_path: Path) -> None:
     target = tmp_path / "src.py"
     target.write_text("x = 1\n", encoding="utf-8")
     sidecar = _write_sidecar(
@@ -186,7 +187,7 @@ def test_verify_refuses_em_rejected_row_with_no_reason(tmp_path):
     assert any("no `reason`" in f for f in outcome.failures)
 
 
-def test_verify_accepts_suspended_row_under_premise_verdict(tmp_path):
+def test_verify_accepts_suspended_row_under_premise_verdict(tmp_path: Path) -> None:
     target = tmp_path / "src.py"
     target.write_text("x = 1\n", encoding="utf-8")
     sidecar = _write_sidecar(
@@ -202,7 +203,7 @@ def test_verify_accepts_suspended_row_under_premise_verdict(tmp_path):
 
 
 @pytest.mark.parametrize("verdict", ["APPROVED_WITH_NOTES", ""])
-def test_verify_accepts_handed_to_em_row_and_counts_it_apart(tmp_path, verdict):
+def test_verify_accepts_handed_to_em_row_and_counts_it_apart(tmp_path: Path, verdict) -> None:
     target = tmp_path / "src.py"
     target.write_text("x = 1\n", encoding="utf-8")
     sidecar = _write_sidecar(
@@ -219,7 +220,7 @@ def test_verify_accepts_handed_to_em_row_and_counts_it_apart(tmp_path, verdict):
     assert "handed_to_em: 1" in sidecar.read_text(encoding="utf-8")
 
 
-def test_verify_still_refuses_suspended_row_under_approved_with_notes(tmp_path):
+def test_verify_still_refuses_suspended_row_under_approved_with_notes(tmp_path: Path) -> None:
     target = tmp_path / "src.py"
     target.write_text("x = 1\n", encoding="utf-8")
     sidecar = _write_sidecar(
@@ -235,7 +236,7 @@ def test_verify_still_refuses_suspended_row_under_approved_with_notes(tmp_path):
 
 
 @pytest.mark.parametrize("verdict", ["", "PROCEED"])
-def test_verify_refuses_suspended_row_without_premise_verdict(tmp_path, verdict):
+def test_verify_refuses_suspended_row_without_premise_verdict(tmp_path: Path, verdict) -> None:
     target = tmp_path / "src.py"
     target.write_text("x = 1\n", encoding="utf-8")
     sidecar = _write_sidecar(
@@ -251,7 +252,7 @@ def test_verify_refuses_suspended_row_without_premise_verdict(tmp_path, verdict)
     assert "findings_ledger:" not in sidecar.read_text(encoding="utf-8")
 
 
-def test_verify_reruns_clean_after_a_prior_verify(tmp_path):
+def test_verify_reruns_clean_after_a_prior_verify(tmp_path: Path) -> None:
     target = tmp_path / "src.py"
     target.write_text("x = 2\n", encoding="utf-8")
     sidecar = _write_sidecar(
@@ -266,7 +267,7 @@ def test_verify_reruns_clean_after_a_prior_verify(tmp_path):
     assert second.ok
 
 
-def test_reject_restores_before_and_records_reason(tmp_path):
+def test_reject_restores_before_and_records_reason(tmp_path: Path) -> None:
     target = tmp_path / "src.py"
     target.write_text("x = 2\n", encoding="utf-8")
     sidecar = _write_sidecar(
@@ -283,7 +284,7 @@ def test_reject_restores_before_and_records_reason(tmp_path):
     assert rows[0]["reason"] == "premise was wrong"
 
 
-def test_reject_refuses_empty_reason(tmp_path):
+def test_reject_refuses_empty_reason(tmp_path: Path) -> None:
     target = tmp_path / "src.py"
     target.write_text("x = 2\n", encoding="utf-8")
     sidecar = _write_sidecar(
@@ -296,7 +297,7 @@ def test_reject_refuses_empty_reason(tmp_path):
         m.reject(sidecar, "finding-1", "  ", repo_root=tmp_path)
 
 
-def test_reject_refuses_ambiguous_multiple_occurrences(tmp_path):
+def test_reject_refuses_ambiguous_multiple_occurrences(tmp_path: Path) -> None:
     target = tmp_path / "src.py"
     target.write_text("x = 2\nx = 2\n", encoding="utf-8")
     sidecar = _write_sidecar(
@@ -309,7 +310,7 @@ def test_reject_refuses_ambiguous_multiple_occurrences(tmp_path):
         m.reject(sidecar, "finding-1", "no longer needed", repo_root=tmp_path)
 
 
-def test_targets_add_dedupes_and_persists(tmp_path):
+def test_targets_add_dedupes_and_persists(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     merged = m.targets_add(tmp_path, "session-1", ["a/b.py", "c/d.py", "a/b.py"])
     assert merged == ["a/b.py", "c/d.py"]
@@ -319,7 +320,7 @@ def test_targets_add_dedupes_and_persists(tmp_path):
     assert target_file.read_text(encoding="utf-8").splitlines() == ["a/b.py", "c/d.py", "e/f.py"]
 
 
-def test_targets_add_agent_key_writes_a_separate_per_dispatch_file(tmp_path):
+def test_targets_add_agent_key_writes_a_separate_per_dispatch_file(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     m.targets_add(tmp_path, "session-1", ["a.py"])
     merged = m.targets_add(tmp_path, "session-1", ["b.py"], agent_key="agent-x")
@@ -329,28 +330,28 @@ def test_targets_add_agent_key_writes_a_separate_per_dispatch_file(tmp_path):
     assert (base / "review-targets.txt").read_text(encoding="utf-8") == "a.py\n"
 
 
-def test_targets_add_refuses_a_root_that_is_not_a_repo(tmp_path):
+def test_targets_add_refuses_a_root_that_is_not_a_repo(tmp_path: Path) -> None:
     with pytest.raises(m.LedgerError, match="not a git repository root"):
         m.targets_add(tmp_path, "session-1", ["a.py"])
     assert not (tmp_path / ".git").exists()
 
 
-def test_targets_add_refuses_a_path_shaped_agent_key(tmp_path):
+def test_targets_add_refuses_a_path_shaped_agent_key(tmp_path: Path) -> None:
     with pytest.raises(m.LedgerError, match="agent-key"):
         m.targets_add(tmp_path, "session-1", ["a.py"], agent_key="../evil")
 
 
-def test_targets_add_refuses_absolute_path(tmp_path):
+def test_targets_add_refuses_absolute_path(tmp_path: Path) -> None:
     with pytest.raises(m.LedgerError):
         m.targets_add(tmp_path, "session-1", ["/etc/passwd"])
 
 
-def test_targets_add_refuses_drive_relative_path(tmp_path):
+def test_targets_add_refuses_drive_relative_path(tmp_path: Path) -> None:
     with pytest.raises(m.LedgerError):
         m.targets_add(tmp_path, "session-1", ["C:foo.py"])
 
 
-def test_verify_refuses_sidecar_outside_subagent_share(tmp_path):
+def test_verify_refuses_sidecar_outside_subagent_share(tmp_path: Path) -> None:
     target = tmp_path / "src.py"
     target.write_text("x = 2\n", encoding="utf-8")
     text = (
@@ -366,7 +367,7 @@ def test_verify_refuses_sidecar_outside_subagent_share(tmp_path):
         m.verify(sidecar, repo_root=tmp_path)
 
 
-def test_verify_refuses_non_reviewer_agent_type(tmp_path):
+def test_verify_refuses_non_reviewer_agent_type(tmp_path: Path) -> None:
     target = tmp_path / "src.py"
     target.write_text("x = 2\n", encoding="utf-8")
     text = (
@@ -393,7 +394,7 @@ def test_verify_refuses_non_reviewer_agent_type(tmp_path):
     ],
     ids=["crlf", "mixed-lf-first", "mixed-crlf-first"],
 )
-def test_verify_accepts_multiline_after_in_crlf_or_mixed_file(tmp_path, on_disk):
+def test_verify_accepts_multiline_after_in_crlf_or_mixed_file(tmp_path: Path, on_disk) -> None:
     target = tmp_path / "src.py"
     target.write_bytes(on_disk)
     sidecar = _write_sidecar(
@@ -406,7 +407,7 @@ def test_verify_accepts_multiline_after_in_crlf_or_mixed_file(tmp_path, on_disk)
     assert outcome.ok, outcome.failures
 
 
-def test_verify_still_refuses_a_multiline_after_that_is_absent_from_a_crlf_file(tmp_path):
+def test_verify_still_refuses_a_multiline_after_that_is_absent_from_a_crlf_file(tmp_path: Path) -> None:
     target = tmp_path / "src.py"
     target.write_bytes(b"a = 1\r\nb = 9\r\nc = 3\r\n")
     sidecar = _write_sidecar(
@@ -420,7 +421,7 @@ def test_verify_still_refuses_a_multiline_after_that_is_absent_from_a_crlf_file(
     assert "not found" in outcome.failures[0]
 
 
-def test_cli_verify_help_prints_verify_usage(capsys):
+def test_cli_verify_help_prints_verify_usage(capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit) as exc:
         m.main(["verify", "-h"])
     assert exc.value.code == 0
@@ -429,7 +430,7 @@ def test_cli_verify_help_prints_verify_usage(capsys):
     assert "--sidecar" in out
 
 
-def test_cli_verify_exit_codes(tmp_path):
+def test_cli_verify_exit_codes(tmp_path: Path) -> None:
     target = tmp_path / "src.py"
     target.write_text("x = 2\n", encoding="utf-8")
     sidecar = _write_sidecar(
@@ -441,7 +442,7 @@ def test_cli_verify_exit_codes(tmp_path):
     assert m.main(["--root", str(tmp_path), "verify", "--sidecar", str(sidecar)]) == 0
 
 
-def test_cli_reject_and_targets(tmp_path):
+def test_cli_reject_and_targets(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     target = tmp_path / "src.py"
     target.write_text("x = 2\n", encoding="utf-8")
@@ -460,7 +461,7 @@ def test_cli_reject_and_targets(tmp_path):
     assert m.main(["--root", str(tmp_path), "targets", "--add", "x.py", "--session-id", "s1"]) == 0
 
 
-def test_cli_targets_add_accepts_multiple_paths_in_one_flag(tmp_path):
+def test_cli_targets_add_accepts_multiple_paths_in_one_flag(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     assert (
         m.main(
@@ -472,7 +473,7 @@ def test_cli_targets_add_accepts_multiple_paths_in_one_flag(tmp_path):
     assert target_file.read_text(encoding="utf-8").splitlines() == ["a.py", "b.py", "c.py"]
 
 
-def test_cli_targets_add_defaults_session_id_from_hook_env(tmp_path, monkeypatch):
+def test_cli_targets_add_defaults_session_id_from_hook_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".git").mkdir()
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
@@ -484,7 +485,7 @@ def test_cli_targets_add_defaults_session_id_from_hook_env(tmp_path, monkeypatch
     assert target_file.is_file()
 
 
-def test_cli_targets_add_without_session_id_or_env_refuses(tmp_path, monkeypatch):
+def test_cli_targets_add_without_session_id_or_env_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
@@ -509,24 +510,24 @@ _PLAN_TMPL = """# P
 """
 
 
-def _plan(tmp_path, extra=""):
+def _plan(tmp_path, extra: str = ""):
     p = tmp_path / "plan.md"
     p.write_text(_PLAN_TMPL % extra, encoding="utf-8")
     return p
 
 
-def test_plan_targets_is_the_plan_then_the_deduped_union_of_row_writes(tmp_path):
+def test_plan_targets_is_the_plan_then_the_deduped_union_of_row_writes(tmp_path: Path) -> None:
     plan = _plan(tmp_path)
     assert m.plan_targets(plan) == [plan.as_posix(), "x/a.py", "x/b.py", "y/c.py"]
 
 
-def test_plan_targets_fails_loud_naming_an_undeclared_row(tmp_path):
+def test_plan_targets_fails_loud_naming_an_undeclared_row(tmp_path: Path) -> None:
     plan = _plan(tmp_path, "- id: C\n  title: c\n  surface: s\n")
     with pytest.raises(m.LedgerError, match="C"):
         m.plan_targets(plan)
 
 
-def test_plan_targets_skips_an_undeclared_row_held_by_an_epistemic_premise_gate(tmp_path):
+def test_plan_targets_skips_an_undeclared_row_held_by_an_epistemic_premise_gate(tmp_path: Path) -> None:
     extra = (
         "- id: C\n  title: c\n  surface: s\n"
         "  depends_on:\n    - {chunk: A, gate_kind: epistemic-premise}\n"
@@ -535,7 +536,7 @@ def test_plan_targets_skips_an_undeclared_row_held_by_an_epistemic_premise_gate(
     assert m.plan_targets(plan) == [plan.as_posix(), "x/a.py", "x/b.py", "y/c.py"]
 
 
-def test_plan_targets_still_refuses_an_undeclared_row_with_only_a_non_premise_edge(tmp_path):
+def test_plan_targets_still_refuses_an_undeclared_row_with_only_a_non_premise_edge(tmp_path: Path) -> None:
     extra = (
         "- id: C\n  title: c\n  surface: s\n"
         "  depends_on:\n    - {chunk: A, gate_kind: build}\n"
@@ -545,7 +546,7 @@ def test_plan_targets_still_refuses_an_undeclared_row_with_only_a_non_premise_ed
         m.plan_targets(plan)
 
 
-def test_targets_cli_from_plan_merges_with_explicit_add(tmp_path, capsys):
+def test_targets_cli_from_plan_merges_with_explicit_add(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / ".git").mkdir()
     plan = _plan(tmp_path)
     rc = m.main(["--root", str(tmp_path), "targets", "--from-plan", str(plan),
@@ -556,7 +557,7 @@ def test_targets_cli_from_plan_merges_with_explicit_add(tmp_path, capsys):
         "z.py", "plan.md", "x/a.py", "x/b.py", "y/c.py"]
 
 
-def test_verify_refuses_a_plan_spine_with_consumes_and_reads_at_head_overlap(tmp_path, monkeypatch):
+def test_verify_refuses_a_plan_spine_with_consumes_and_reads_at_head_overlap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _capture_rung_fires(monkeypatch)
     spine = (
         "## Tasks\n\n```yaml plan-tasks\n"
@@ -578,14 +579,14 @@ def test_verify_refuses_a_plan_spine_with_consumes_and_reads_at_head_overlap(tmp
     assert calls == []
 
 
-def test_read_ledger_reports_missing_stamp_and_never_writes(tmp_path):
+def test_read_ledger_reports_missing_stamp_and_never_writes(tmp_path: Path) -> None:
     sidecar = _write_sidecar(tmp_path, baseline={}, findings_count=1, rows=[{"id": "F1"}])
     before = sidecar.read_bytes()
     assert m.read_ledger(sidecar) == (False, [{"id": "F1"}])
     assert sidecar.read_bytes() == before
 
 
-def test_read_ledger_reports_a_present_stamp(tmp_path):
+def test_read_ledger_reports_a_present_stamp(tmp_path: Path) -> None:
     sidecar = _write_sidecar(tmp_path, baseline={}, findings_count=1, rows=[{"id": "F1"}])
     sidecar.write_text(
         sidecar.read_text(encoding="utf-8").replace(
@@ -596,7 +597,7 @@ def test_read_ledger_reports_a_present_stamp(tmp_path):
     assert m.read_ledger(sidecar) == (True, [{"id": "F1"}])
 
 
-def test_read_ledger_returns_none_when_unparseable_or_absent(tmp_path):
+def test_read_ledger_returns_none_when_unparseable_or_absent(tmp_path: Path) -> None:
     sidecar = _write_sidecar(tmp_path, baseline={}, findings_count=1, rows=[])
     sidecar.write_text(
         sidecar.read_text(encoding="utf-8").replace("[]", "{not json"), encoding="utf-8"
@@ -636,14 +637,14 @@ def _plan_reviewer_sidecar(tmp_path, agent_type: str):
 
 
 @pytest.mark.parametrize("agent_type", ["game-dev:executor", "coordinator:staff-unknown", "game-dev:"])
-def test_scope_refuses_non_reviewer_plugin_agent_types(tmp_path, agent_type):
+def test_scope_refuses_non_reviewer_plugin_agent_types(tmp_path: Path, agent_type) -> None:
     sidecar = _plan_reviewer_sidecar(tmp_path, agent_type)
     with pytest.raises(m.LedgerError, match="agent_type"):
         m._check_sidecar_scope(sidecar, tmp_path, sidecar.read_text(encoding="utf-8"))
 
 
 @pytest.mark.parametrize("agent_type", ["coordinator:plan-reviewer", "review-findings", "game-dev:staff-game-dev"])
-def test_verify_accepts_a_plan_reviewer_sidecar_of_either_shape(tmp_path, monkeypatch, agent_type):
+def test_verify_accepts_a_plan_reviewer_sidecar_of_either_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent_type) -> None:
     from coordinator_core.ops import plan_status_transition
 
     monkeypatch.setattr(plan_status_transition, "main", lambda argv: 0)
@@ -654,7 +655,7 @@ def test_verify_accepts_a_plan_reviewer_sidecar_of_either_shape(tmp_path, monkey
 
 
 @pytest.mark.parametrize("status", [None, "open", "applied", "em_rejected"])
-def test_verify_keeps_an_out_of_ask_row_and_it_reaches_the_peer_hunk_gate(tmp_path, status):
+def test_verify_keeps_an_out_of_ask_row_and_it_reaches_the_peer_hunk_gate(tmp_path: Path, status) -> None:
     from coordinator_core.ops.dispatch_emit import peer_hunk_gate
 
     row = {"id": "finding-1", "file": "peer/x.py", "out_of_ask": True}
@@ -673,19 +674,19 @@ def test_verify_keeps_an_out_of_ask_row_and_it_reaches_the_peer_hunk_gate(tmp_pa
         assert unresolved[0][1] == "peer/x.py"
 
 
-def test_verify_still_refuses_an_out_of_ask_row_with_an_unknown_status(tmp_path):
+def test_verify_still_refuses_an_out_of_ask_row_with_an_unknown_status(tmp_path: Path) -> None:
     row = {"id": "finding-1", "file": "peer/x.py", "out_of_ask": True, "status": "bogus"}
     sidecar = _write_sidecar(tmp_path, baseline={}, findings_count=1, rows=[row])
     assert not m.verify(sidecar, repo_root=tmp_path).ok
 
 
-def test_verify_still_refuses_open_status_on_a_normal_row(tmp_path):
+def test_verify_still_refuses_open_status_on_a_normal_row(tmp_path: Path) -> None:
     row = {"id": "finding-1", "file": "a.py", "before": "x", "after": "y", "status": "open"}
     sidecar = _write_sidecar(tmp_path, baseline={}, findings_count=1, rows=[row])
     assert not m.verify(sidecar, repo_root=tmp_path).ok
 
 
-def test_run_diff_check_pins_both_sides_file_and_line():
+def test_run_diff_check_pins_both_sides_file_and_line() -> None:
     diff = m.normalize_run_diff({"src\\a.py": [(5, 9)], "./b.py": None, "c.py": []})
     assert set(diff) == {"src/a.py", "b.py", "c.py"}
 
@@ -699,7 +700,7 @@ def test_run_diff_check_pins_both_sides_file_and_line():
     assert not m.applied_row_in_run_diff({"file": ""}, diff)
 
 
-def test_rows_not_in_run_diff_skips_other_statuses_and_peer_hunks():
+def test_rows_not_in_run_diff_skips_other_statuses_and_peer_hunks() -> None:
     rows = [
         {"id": "a", "file": "gone.py"},
         {"id": "b", "file": "gone.py", "status": "em-rejected", "reason": "no"},
@@ -711,7 +712,7 @@ def test_rows_not_in_run_diff_skips_other_statuses_and_peer_hunks():
     assert [r["id"] for r in missing] == ["a", "e"]
 
 
-def test_diff_evidenced_rows_is_the_complement_over_applied_in_ask_rows():
+def test_diff_evidenced_rows_is_the_complement_over_applied_in_ask_rows() -> None:
     rows = [
         {"id": "a", "file": "gone.py"},
         {"id": "b", "file": "here.py", "status": "em-rejected", "reason": "no"},

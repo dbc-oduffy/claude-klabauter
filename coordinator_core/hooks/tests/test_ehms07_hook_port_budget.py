@@ -13,6 +13,7 @@ import pytest
 
 from coordinator_core.benchmarks.budget import resolve_budget
 from coordinator_core.benchmarks.process_time import in_process_time_ms
+from pathlib import Path
 
 
 def _non_matching_command() -> dict:
@@ -73,8 +74,8 @@ _IDS = [
 
 @pytest.mark.parametrize(("op", "module", "factory"), CASES, ids=_IDS)
 def test_dominant_path_fits_hook_port_band_with_zero_spawns(
-    op, module, factory, tmp_path, monkeypatch
-):
+    op, module, factory, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
     handler = importlib.import_module(f"coordinator_core.hooks.{module}")._handler
     payload = factory(tmp_path)

@@ -13,6 +13,11 @@ from coordinator_core.authz.completion_evidence import OP_COMPLETION_EVIDENCE, E
 from coordinator_core.ops.ceremony import close_background as cb
 from coordinator_core.ops.dispatch_emit import run_close
 from coordinator_core.ops.dispatch_emit.run_close import LegResult
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import SimpleNamespace
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
@@ -23,7 +28,7 @@ def _ctx(root, batons=(), memo=None):
     return cb.JobContext(root, root / ".git", RUN, tuple(batons), memo)
 
 
-def _queue(root, legs=cb.BACKGROUND_LEGS, minutes=10):
+def _queue(root, legs: tuple[str, ...] = cb.BACKGROUND_LEGS, minutes: int = 10) -> None:
     run_close.write_close_job(root, RUN, legs, datetime.now().astimezone() + timedelta(minutes=minutes))
 
 
@@ -31,16 +36,16 @@ def _record(root):
     return json.loads((root / run_close.close_job_path(RUN)).read_text(encoding="utf-8"))["legs"]
 
 
-def _ok(status="ran", detail="done"):
+def _ok(status: str = "ran", detail: str = "done"):
     return lambda ctx: LegResult(status, detail)
 
 
-def test_each_leg_outcome_is_recorded_in_ledger_order(tmp_path):
+def test_each_leg_outcome_is_recorded_in_ledger_order(tmp_path: Path) -> None:
     _queue(tmp_path)
     order = []
 
     def leg(name):
-        def run(ctx):
+        def run(ctx) -> LegResult:
             order.append(name)
             return LegResult("ran", f"{name} paid")
         return run
@@ -55,7 +60,7 @@ def test_each_leg_outcome_is_recorded_in_ledger_order(tmp_path):
         assert rec[name] == {"status": "ran", "detail": f"{name} paid"}
 
 
-def test_a_raising_leg_is_recorded_failed_and_the_others_still_run(tmp_path):
+def test_a_raising_leg_is_recorded_failed_and_the_others_still_run(tmp_path: Path) -> None:
     _queue(tmp_path)
 
     def boom(ctx):
@@ -73,7 +78,7 @@ def test_a_raising_leg_is_recorded_failed_and_the_others_still_run(tmp_path):
         assert rec[name]["status"] == "ran"
 
 
-def test_only_legs_listed_queued_in_the_record_run(tmp_path):
+def test_only_legs_listed_queued_in_the_record_run(tmp_path: Path) -> None:
     _queue(tmp_path, legs=("baton-drain", "post-close"))
     seen = []
     runners = {name: (lambda ctx, n=name: (seen.append(n), LegResult("ran"))[1]) for name in cb.BACKGROUND_LEGS}
@@ -81,7 +86,7 @@ def test_only_legs_listed_queued_in_the_record_run(tmp_path):
     assert seen == ["baton-drain", "post-close"]
 
 
-def test_budget_spent_records_the_remaining_legs_deferred_queued_not_run(tmp_path):
+def test_budget_spent_records_the_remaining_legs_deferred_queued_not_run(tmp_path: Path) -> None:
     _queue(tmp_path, legs=("baton-drain", "orientation-refresh", "memo-lifecycle", "post-close"))
     clock = iter([0.0, 10.0, 500.0, 500.0, 500.0])
     ran = []
@@ -96,7 +101,7 @@ def test_budget_spent_records_the_remaining_legs_deferred_queued_not_run(tmp_pat
         assert rec[name]["detail"].startswith("deferred#1:")
 
 
-def test_past_deadline_runs_nothing(tmp_path):
+def test_past_deadline_runs_nothing(tmp_path: Path) -> None:
     _queue(tmp_path, minutes=-5)
     ran = []
     runners = {name: (lambda ctx, n=name: (ran.append(n), LegResult("ran"))[1]) for name in cb.BACKGROUND_LEGS}
@@ -104,7 +109,7 @@ def test_past_deadline_runs_nothing(tmp_path):
     assert ran == []
 
 
-def test_missing_record_raises_and_the_handler_reports_it(tmp_path):
+def test_missing_record_raises_and_the_handler_reports_it(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         cb.run_background(_ctx(tmp_path), {})
     (tmp_path / ".git").mkdir()
@@ -112,12 +117,12 @@ def test_missing_record_raises_and_the_handler_reports_it(tmp_path):
     assert "error" in reply
 
 
-def test_handler_rejects_a_request_without_run_id(tmp_path):
+def test_handler_rejects_a_request_without_run_id(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     assert "run_id" in cb._handler({}, tmp_path / ".git")["error"]
 
 
-def test_handler_runs_the_default_legs_for_a_run_with_nothing_to_pay(tmp_path):
+def test_handler_runs_the_default_legs_for_a_run_with_nothing_to_pay(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     _queue(tmp_path, legs=("baton-drain", "memo-lifecycle"))
     reply = cb._handler({"run_id": RUN, "claimed_batons": [], "source_memo": None}, tmp_path / ".git")
@@ -126,7 +131,7 @@ def test_handler_runs_the_default_legs_for_a_run_with_nothing_to_pay(tmp_path):
     assert _record(tmp_path)["memo-lifecycle"]["status"] == "not-applicable"
 
 
-def test_memo_already_archived_is_discharged(tmp_path):
+def test_memo_already_archived_is_discharged(tmp_path: Path) -> None:
     from coordinator_core.memo_corpus import memo_corpus_root
 
     archive = tmp_path / "state" / "cross-repo" / "archive"
@@ -136,7 +141,7 @@ def test_memo_already_archived_is_discharged(tmp_path):
     assert cb._memo_lifecycle(_ctx(tmp_path, memo="m.md")).status == "discharged"
 
 
-def test_memo_in_neither_place_is_failed_by_name(tmp_path):
+def test_memo_in_neither_place_is_failed_by_name(tmp_path: Path) -> None:
     (tmp_path / "state" / "cross-repo" / "inbox").mkdir(parents=True)
     result = cb._memo_lifecycle(_ctx(tmp_path, memo="gone.md"))
     assert result.status == "failed" and "gone.md" in result.detail
@@ -145,15 +150,15 @@ def test_memo_in_neither_place_is_failed_by_name(tmp_path):
 def _chain_stub(calls, verdicts=None, raises=None):
     class Stub:
         @staticmethod
-        def flag_staleness(root):
+        def flag_staleness(root) -> None:
             calls.append("flag")
 
         @staticmethod
-        def refresh(root, timeout):
+        def refresh(root, timeout) -> None:
             calls.append("refresh")
 
         @staticmethod
-        def run(ceremony, root):
+        def run(ceremony, root) -> None:
             calls.append("scip")
 
         @staticmethod
@@ -166,7 +171,7 @@ def _chain_stub(calls, verdicts=None, raises=None):
     return Stub
 
 
-def _verdict(chain, closed):
+def _verdict(chain, closed) -> SimpleNamespace:
     from types import SimpleNamespace
 
     return SimpleNamespace(chain=chain, closed=closed)
@@ -176,7 +181,7 @@ BATONS = ("state/handoffs/a.md", "state/handoffs/b.md")
 
 
 @pytest.fixture(autouse=True)
-def _admission(monkeypatch):
+def _admission(monkeypatch: pytest.MonkeyPatch):
     """Ample trusted reading, notices recorded; individual tests re-patch the reading."""
     from coordinator_core.ops.ceremony import post_close_admission as pca
 
@@ -187,7 +192,7 @@ def _admission(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _reaper(monkeypatch):
+def _reaper(monkeypatch: pytest.MonkeyPatch):
     """Stub the abandoned-run reaper; tests re-patch the reply."""
     from coordinator_core.ops.dispatch_emit import abandoned_runs
 
@@ -199,14 +204,14 @@ def _reaper(monkeypatch):
     return calls
 
 
-def test_post_close_calls_the_reaper_once_and_reports_zero(tmp_path, monkeypatch, _reaper):
+def test_post_close_calls_the_reaper_once_and_reports_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _reaper) -> None:
     _queue(tmp_path, legs=("post-close",))
     monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub([]))
     result = cb._post_close(_ctx(tmp_path))
     assert _reaper == [tmp_path] and "reaped: 0 run(s)" in result.detail and result.status == "ran"
 
 
-def test_post_close_reports_reaped_count(tmp_path, monkeypatch):
+def test_post_close_reports_reaped_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import abandoned_runs
 
     monkeypatch.setattr(abandoned_runs, "_handler", lambda p, repo_root=None: {"ok": True, "reaped": ["a", "b"]})
@@ -214,7 +219,7 @@ def test_post_close_reports_reaped_count(tmp_path, monkeypatch):
     assert "reaped: 2 run(s)" in cb._post_close(_ctx(tmp_path)).detail
 
 
-def test_post_close_raising_reaper_fails_the_leg_after_launchers_ran(tmp_path, monkeypatch):
+def test_post_close_raising_reaper_fails_the_leg_after_launchers_ran(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import abandoned_runs
 
     def boom(p, repo_root=None):
@@ -228,7 +233,7 @@ def test_post_close_raising_reaper_fails_the_leg_after_launchers_ran(tmp_path, m
     assert result.status == "failed" and "reap RuntimeError" in result.detail
 
 
-def test_post_close_not_ok_reaper_reply_names_its_error(tmp_path, monkeypatch):
+def test_post_close_not_ok_reaper_reply_names_its_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import abandoned_runs
 
     monkeypatch.setattr(abandoned_runs, "_handler", lambda p, repo_root=None: {"ok": False, "error": "status failed"})
@@ -237,7 +242,7 @@ def test_post_close_not_ok_reaper_reply_names_its_error(tmp_path, monkeypatch):
     assert result.status == "failed" and "reap status failed" in result.detail
 
 
-def test_post_close_runs_chain_closure_and_names_a_closed_chain(tmp_path, monkeypatch):
+def test_post_close_runs_chain_closure_and_names_a_closed_chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     stub = _chain_stub(calls, [_verdict("dlv-x", True), _verdict("dlv-x", True)])
     _queue(tmp_path, legs=("post-close",))
@@ -248,7 +253,7 @@ def test_post_close_runs_chain_closure_and_names_a_closed_chain(tmp_path, monkey
     assert "2 baton(s), 1 chain(s) closed: dlv-x" in result.detail
 
 
-def test_post_close_open_chain_is_ran_with_zero_closed(tmp_path, monkeypatch):
+def test_post_close_open_chain_is_ran_with_zero_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stub = _chain_stub([], [_verdict("dlv-x", False)])
     _queue(tmp_path, legs=("post-close",))
     monkeypatch.setattr(cb, "_bin_script", lambda name: stub)
@@ -256,7 +261,7 @@ def test_post_close_open_chain_is_ran_with_zero_closed(tmp_path, monkeypatch):
     assert result.status == "ran" and "0 chain(s) closed" in result.detail
 
 
-def test_post_close_with_no_claimed_baton_never_loads_the_chain_script(tmp_path, monkeypatch):
+def test_post_close_with_no_claimed_baton_never_loads_the_chain_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     loaded = []
     stub = _chain_stub([])
     _queue(tmp_path, legs=("post-close",))
@@ -266,7 +271,7 @@ def test_post_close_with_no_claimed_baton_never_loads_the_chain_script(tmp_path,
     assert "baton-chain-closure" not in loaded
 
 
-def test_post_close_names_a_raising_chain_closure_and_still_runs_launchers(tmp_path, monkeypatch):
+def test_post_close_names_a_raising_chain_closure_and_still_runs_launchers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     stub = _chain_stub(calls, raises=RuntimeError("boom"))
     monkeypatch.setattr(cb, "_bin_script", lambda name: stub)
@@ -275,14 +280,14 @@ def test_post_close_names_a_raising_chain_closure_and_still_runs_launchers(tmp_p
     assert result.status == "failed" and "baton-chain-closure RuntimeError" in result.detail
 
 
-def test_post_close_survives_a_failing_launcher(tmp_path, monkeypatch):
+def test_post_close_survives_a_failing_launcher(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     class Stub:
         @staticmethod
         def flag_staleness(root):
             raise OSError("no")
 
         @staticmethod
-        def run(ceremony, root):
+        def run(ceremony, root) -> str:
             return "ok"
 
     monkeypatch.setattr(cb, "_bin_script", lambda name: Stub)
@@ -290,13 +295,13 @@ def test_post_close_survives_a_failing_launcher(tmp_path, monkeypatch):
     assert "structural-index-flag OSError" in result.detail and "scip-rebuild" in result.detail
 
 
-def _reading(monkeypatch, avail, trusted=True):
+def _reading(monkeypatch, avail, trusted: bool = True) -> None:
     from coordinator_core.ops.ceremony import post_close_admission as pca
 
     monkeypatch.setattr(pca, "read_available", lambda: (avail, trusted))
 
 
-def test_low_reading_defers_scip_and_the_leg_stays_ran(tmp_path, monkeypatch, _admission):
+def test_low_reading_defers_scip_and_the_leg_stays_ran(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _admission) -> None:
     calls = []
     _queue(tmp_path, legs=("post-close",))
     monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub(calls))
@@ -308,7 +313,7 @@ def test_low_reading_defers_scip_and_the_leg_stays_ran(tmp_path, monkeypatch, _a
     assert _admission == []
 
 
-def test_untrusted_reading_defers_scip_as_unreadable(tmp_path, monkeypatch, _admission):
+def test_untrusted_reading_defers_scip_as_unreadable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _admission) -> None:
     calls = []
     _queue(tmp_path, legs=("post-close",))
     monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub(calls))
@@ -318,7 +323,7 @@ def test_untrusted_reading_defers_scip_as_unreadable(tmp_path, monkeypatch, _adm
     assert result.detail.count("memory unreadable") == 1
 
 
-def test_ample_reading_launches_scip_and_only_flags_structural_index(tmp_path, monkeypatch, _admission):
+def test_ample_reading_launches_scip_and_only_flags_structural_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _admission) -> None:
     calls = []
     _queue(tmp_path, legs=("post-close",))
     monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub(calls))
@@ -328,7 +333,7 @@ def test_ample_reading_launches_scip_and_only_flags_structural_index(tmp_path, m
     assert "deferred" not in result.detail
 
 
-def test_deferral_survives_detail_truncation_behind_a_long_chain_list(tmp_path, monkeypatch):
+def test_deferral_survives_detail_truncation_behind_a_long_chain_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     names = [_verdict(f"dlv-{'x' * 30}-{i}", True) for i in range(8)]
     monkeypatch.setattr(cb, "_bin_script", lambda name: _chain_stub([], names))
     _reading(monkeypatch, 1024)
@@ -337,7 +342,7 @@ def test_deferral_survives_detail_truncation_behind_a_long_chain_list(tmp_path, 
     assert "deferred: scip-rebuild" in result.detail
 
 
-def test_op_is_registered_mutating_fire_and_forget_common_dir():
+def test_op_is_registered_mutating_fire_and_forget_common_dir() -> None:
     from coordinator_core.op_scopes import _OP_KEY_SCOPE as OP_SCOPES
 
     assert OP_CLASSIFICATION["close.background"] is OpClass.MUTATING
@@ -345,14 +350,14 @@ def test_op_is_registered_mutating_fire_and_forget_common_dir():
     assert OP_SCOPES["close.background"] == "common_dir"
 
 
-def test_background_ledger_ends_in_the_legacy_legs_then_symbol_knowledge_without_review():
+def test_background_ledger_ends_in_the_legacy_legs_then_symbol_knowledge_without_review() -> None:
     assert cb.BACKGROUND_LEGS[-6:] == (
         "baton-drain", "orientation-refresh", "memo-lifecycle", "post-close", "symbol-knowledge", "scratch-reap",
     )
     assert "review" not in cb.DEFAULT_RUNNERS
 
 
-def test_symbol_knowledge_leg_is_registered_and_run_bound(monkeypatch):
+def test_symbol_knowledge_leg_is_registered_and_run_bound(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import run_close as rc
     from coordinator_core.symbol_knowledge import leg as sk
 
@@ -362,14 +367,14 @@ def test_symbol_knowledge_leg_is_registered_and_run_bound(monkeypatch):
     assert cb.DEFAULT_RUNNERS["symbol-knowledge"](object()) is sentinel
 
 
-def _stub_launchers(monkeypatch):
+def _stub_launchers(monkeypatch) -> None:
     class Stub:
         @staticmethod
-        def refresh(root, timeout):
+        def refresh(root, timeout) -> None:
             return None
 
         @staticmethod
-        def run(ceremony, root):
+        def run(ceremony, root) -> None:
             return None
 
         @staticmethod
@@ -379,7 +384,7 @@ def _stub_launchers(monkeypatch):
     monkeypatch.setattr(cb, "_bin_script", lambda name: Stub)
 
 
-def test_post_close_launches_close_review_when_the_record_queues_review(tmp_path, monkeypatch):
+def test_post_close_launches_close_review_when_the_record_queues_review(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_launchers(monkeypatch)
     _queue(tmp_path, legs=("review", "post-close"))
     spawned = []
@@ -396,7 +401,7 @@ def test_post_close_launches_close_review_when_the_record_queues_review(tmp_path
     assert "close.review" in result.detail
 
 
-def test_post_close_does_not_launch_close_review_when_review_is_not_queued(tmp_path, monkeypatch):
+def test_post_close_does_not_launch_close_review_when_review_is_not_queued(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_launchers(monkeypatch)
     _queue(tmp_path, legs=("post-close",))
     spawned = []
@@ -408,7 +413,7 @@ def test_post_close_does_not_launch_close_review_when_review_is_not_queued(tmp_p
     assert spawned == []
 
 
-def test_post_close_names_a_close_review_that_did_not_start(tmp_path, monkeypatch):
+def test_post_close_names_a_close_review_that_did_not_start(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_launchers(monkeypatch)
     _queue(tmp_path, legs=("review", "post-close"))
     monkeypatch.setattr("coordinator_core.ops.ceremony.detached_spawn.spawn_detached", lambda *a, **k: False)
@@ -416,7 +421,7 @@ def test_post_close_names_a_close_review_that_did_not_start(tmp_path, monkeypatc
 
 
 
-def test_close_review_still_imports_its_close_background_names():
+def test_close_review_still_imports_its_close_background_names() -> None:
     import importlib
 
     importlib.import_module("coordinator_core.ops.ceremony.close_review")
@@ -449,13 +454,13 @@ def _cascade_repo(tmp_path, baton_state):
     return repo, f"state/handoffs/{name}", _git
 
 
-def _drain(repo, rel):
+def _drain(repo, rel) -> LegResult:
     run_close.write_close_job(repo, RUN, ("baton-drain",), datetime.now().astimezone() + timedelta(minutes=10))
     ctx = cb.JobContext(repo, repo / ".git", RUN, (rel,), None, "a" * 40)
     return cb.run_background(ctx, {"baton-drain": cb._baton_drain})["baton-drain"]
 
 
-def test_baton_drain_fires_the_cascade_for_an_archived_shipped_baton(tmp_path, monkeypatch):
+def test_baton_drain_fires_the_cascade_for_an_archived_shipped_baton(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
 
     from coordinator_core.ops.cascade_backstop_sweep import _handler as sweep_handler
@@ -477,7 +482,7 @@ def test_baton_drain_fires_the_cascade_for_an_archived_shipped_baton(tmp_path, m
 
 
 @pytest.mark.parametrize("baton_rel", ["state/handoffs/2026-07-02_b.md", "state/handoffs/2026-07/2026-07-02_b.md"])
-def test_cited_baton_containment_accepts_flat_and_sharded_handoffs(tmp_path, baton_rel):
+def test_cited_baton_containment_accepts_flat_and_sharded_handoffs(tmp_path: Path, baton_rel) -> None:
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / "docs" / "plans" / "p.md").write_text(
@@ -494,7 +499,7 @@ def test_cited_baton_containment_accepts_flat_and_sharded_handoffs(tmp_path, bat
     assert baton == "state/handoffs/2026-07/2026-07-02_b.md"
 
 
-def test_cited_baton_in_the_flat_root_still_resolves(tmp_path):
+def test_cited_baton_in_the_flat_root_still_resolves(tmp_path: Path) -> None:
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / "state" / "handoffs").mkdir(parents=True)
@@ -507,7 +512,7 @@ def test_cited_baton_in_the_flat_root_still_resolves(tmp_path):
     assert cb._cited(_ctx(tmp_path), "docs/plans/p.md")[1] == "state/handoffs/2026-07-02_b.md"
 
 
-def test_baton_drain_skips_non_terminal_batons_without_calling_the_op(tmp_path, monkeypatch):
+def test_baton_drain_skips_non_terminal_batons_without_calling_the_op(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.warm.entry_seam as entry_seam
 
     def boom(*a, **k):
@@ -522,7 +527,7 @@ def test_baton_drain_skips_non_terminal_batons_without_calling_the_op(tmp_path, 
     assert "cascade: 0 fired, 0 advanced, 0 refused, 1 skipped" in result.detail
 
 
-def test_baton_drain_cascade_error_fails_the_leg_after_the_archive_step_ran(tmp_path, monkeypatch):
+def test_baton_drain_cascade_error_fails_the_leg_after_the_archive_step_ran(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.ops.dispatch_emit.run_baton_cascade as rbc
 
     def bad(*a, **k):
@@ -537,10 +542,10 @@ def test_baton_drain_cascade_error_fails_the_leg_after_the_archive_step_ran(tmp_
     assert "archived 0 of 1 claimed baton(s)" in result.detail
 
 
-def _fold_with(monkeypatch, tmp_path, *, stdout="", rc=0, raises=None):
+def _fold_with(monkeypatch, tmp_path, *, stdout: str = "", rc: int = 0, raises=None) -> str:
     from coordinator_core.ops import fold_execution_record as fer
 
-    def main(argv):
+    def main(argv) -> int:
         assert argv[0] == "--plan" and argv[1].replace("\\", "/").endswith("docs/plans/p.md")
         if raises:
             raise raises
@@ -554,22 +559,22 @@ def _fold_with(monkeypatch, tmp_path, *, stdout="", rc=0, raises=None):
     return cb._fold_observations(_ctx(tmp_path), "docs/plans/p.md")
 
 
-def test_fold_with_observations_is_reported_folded(tmp_path, monkeypatch):
+def test_fold_with_observations_is_reported_folded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _fold_with(monkeypatch, tmp_path, stdout="## Execution Observations\n\n### C1 - x\n\nobs\n\n### C2 - y\n\nobs\n")
     assert out == "folded 2 chunk observation(s)"
 
 
-def test_fold_without_observations_is_not_a_failure(tmp_path, monkeypatch):
+def test_fold_without_observations_is_not_a_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _fold_with(monkeypatch, tmp_path, stdout="<!-- coordinator-fold-execution-record: SKIP no-sidecars-in x/*/p.*.md -->\n")
     assert out == "fold skipped: no-sidecars-in"
 
 
-def test_fold_hard_skip_is_failed(tmp_path, monkeypatch):
+def test_fold_hard_skip_is_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _fold_with(monkeypatch, tmp_path, stdout="<!-- coordinator-fold-execution-record: SKIP plan-not-found -->\n")
     assert out == "failed: plan-not-found"
 
 
-def test_fold_error_and_raise_are_failed(tmp_path, monkeypatch):
+def test_fold_error_and_raise_are_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert _fold_with(monkeypatch, tmp_path, rc=1).startswith("failed: exit 1")
     assert _fold_with(monkeypatch, tmp_path, raises=OSError("boom")).startswith("failed: OSError: boom")
 
@@ -577,7 +582,7 @@ def test_fold_error_and_raise_are_failed(tmp_path, monkeypatch):
 _SIDECAR = "---\nchunk: C1\n---\n\n## Observations\n\nthe fold saw a real divergence\n"
 
 
-def test_plan_flip_writes_one_observations_section_and_replaces_it_on_rerun(tmp_path, monkeypatch):
+def test_plan_flip_writes_one_observations_section_and_replaces_it_on_rerun(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.ceremony.tests import test_close_background_land_run_legs as lr
 
     root = tmp_path / "repo"
@@ -612,7 +617,7 @@ def test_plan_flip_writes_one_observations_section_and_replaces_it_on_rerun(tmp_
     assert "coordinator-fold-execution-record: SKIP" not in again
 
 
-def test_an_inner_h2_in_the_observations_leaves_no_orphan_tail_on_rerun(tmp_path):
+def test_an_inner_h2_in_the_observations_leaves_no_orphan_tail_on_rerun(tmp_path: Path) -> None:
     from types import SimpleNamespace
 
     from coordinator_core.ops.ceremony import close_background as cb

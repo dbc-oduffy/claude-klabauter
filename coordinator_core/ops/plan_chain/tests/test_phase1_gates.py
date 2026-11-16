@@ -6,6 +6,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.plan_chain import contract, phase1_gates as pg
+from pathlib import Path
 
 PLAN = "docs/plans/2026-10-08-demo.md"
 
@@ -18,7 +19,7 @@ def _manifest(baton: str = "state/handoffs/b.md") -> contract.ChainManifest:
 
 
 @pytest.fixture
-def calls(monkeypatch, tmp_path):
+def calls(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     log: list[str] = []
     state = {"stamp": "match", "auth": 0, "roadmap": None, "claim": True}
 
@@ -36,7 +37,7 @@ def calls(monkeypatch, tmp_path):
             print("sizing not accepted", file=sys.stderr)
         return state["auth"]
 
-    def fake_claim(slug, cwd=None, *, for_execution=False, plan_path=None):
+    def fake_claim(slug, cwd=None, *, for_execution: bool = False, plan_path=None):
         log.append("claim")
         assert for_execution and slug == "2026-10-08-demo" and plan_path == PLAN
         if not state["claim"]:
@@ -55,11 +56,11 @@ def calls(monkeypatch, tmp_path):
     return state
 
 
-def _roadmap_baton(state):
+def _roadmap_baton(state) -> None:
     state["baton"].write_text("---\nroadmap_id: r1\n---\n", encoding="utf-8")
 
 
-def test_all_proceed_in_order_skips_roadmap_for_plain_baton(calls, tmp_path, monkeypatch):
+def test_all_proceed_in_order_skips_roadmap_for_plain_baton(calls, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("gate read for a baton with no roadmap_id")
 
@@ -69,19 +70,19 @@ def test_all_proceed_in_order_skips_roadmap_for_plain_baton(calls, tmp_path, mon
 
 
 @pytest.mark.parametrize("verdict", ["match", "stale-bookkeeping", "absent"])
-def test_non_substantive_stamp_verdicts_proceed(calls, tmp_path, verdict):
+def test_non_substantive_stamp_verdicts_proceed(calls, tmp_path: Path, verdict) -> None:
     calls["stamp"] = verdict
     assert pg.run(_manifest(), PLAN, repo_root=tmp_path) is None
 
 
-def test_stale_substantive_halts_first(calls, tmp_path):
+def test_stale_substantive_halts_first(calls, tmp_path: Path) -> None:
     calls["stamp"] = "stale-substantive"
     h = pg.run(_manifest(), PLAN, repo_root=tmp_path)
     assert h.halted_at == contract.HALTS["stamp-stale-substantive"]
     assert calls["log"] == ["stamp"]
 
 
-def test_authorize_refusal_carries_stderr(calls, tmp_path):
+def test_authorize_refusal_carries_stderr(calls, tmp_path: Path) -> None:
     calls["auth"] = 2
     h = pg.run(_manifest(), PLAN, repo_root=tmp_path)
     assert h.halted_at == "execute" and "sizing not accepted" in h.reason
@@ -92,7 +93,7 @@ def _report(open_, blocking=()):
     return {"verdict": {"execution_gate": {"open": open_, "blocking": [{"blocker": b} for b in blocking]}}}
 
 
-def test_roadmap_baton_with_open_gate_proceeds_to_the_claim(calls, tmp_path, monkeypatch):
+def test_roadmap_baton_with_open_gate_proceeds_to_the_claim(calls, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _roadmap_baton(calls)
     seen = {}
 
@@ -106,7 +107,7 @@ def test_roadmap_baton_with_open_gate_proceeds_to_the_claim(calls, tmp_path, mon
     assert calls["log"] == ["stamp", "auth", "claim"]
 
 
-def test_roadmap_baton_with_shut_gate_halts_listing_blockers(calls, tmp_path, monkeypatch):
+def test_roadmap_baton_with_shut_gate_halts_listing_blockers(calls, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _roadmap_baton(calls)
     monkeypatch.setattr(pg, "compute_gate_report", lambda root, **kw: _report(False, ["b-1", "b-2"]))
     h = pg.run(_manifest(), PLAN, repo_root=tmp_path)
@@ -115,7 +116,7 @@ def test_roadmap_baton_with_shut_gate_halts_listing_blockers(calls, tmp_path, mo
     assert calls["log"] == ["stamp", "auth"]
 
 
-def test_roadmap_baton_read_cannot_answer_halts_never_proceeds(calls, tmp_path, monkeypatch):
+def test_roadmap_baton_read_cannot_answer_halts_never_proceeds(calls, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _roadmap_baton(calls)
 
     def refuse(root, **kw):
@@ -128,21 +129,21 @@ def test_roadmap_baton_read_cannot_answer_halts_never_proceeds(calls, tmp_path, 
     assert calls["log"] == ["stamp", "auth"]
 
 
-def test_malformed_report_halts_never_proceeds(calls, tmp_path, monkeypatch):
+def test_malformed_report_halts_never_proceeds(calls, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _roadmap_baton(calls)
     monkeypatch.setattr(pg, "compute_gate_report", lambda root, **kw: {})
     h = pg.run(_manifest(), PLAN, repo_root=tmp_path)
     assert h.halted_at == contract.HALTS["roadmap-gate-shut"]
 
 
-def test_peer_claim_refusal_halts(calls, tmp_path):
+def test_peer_claim_refusal_halts(calls, tmp_path: Path) -> None:
     calls["claim"] = False
     h = pg.run(_manifest(), PLAN, repo_root=tmp_path)
     assert h.halted_at == contract.HALTS["peer-claim"] and "held by peer" in h.reason
     assert calls["log"][-1] == "claim"
 
 
-def test_no_subprocess_is_touched(calls, tmp_path, monkeypatch):
+def test_no_subprocess_is_touched(calls, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("subprocess used")
 
@@ -152,7 +153,7 @@ def test_no_subprocess_is_touched(calls, tmp_path, monkeypatch):
     assert pg.run(_manifest(), PLAN, repo_root=tmp_path) is None
 
 
-def _sizing(tmp_path, *, route, tshirt, accepted=None):
+def _sizing(tmp_path, *, route, tshirt, accepted=None) -> None:
     import yaml
 
     p = tmp_path / "state/sizings/s.yaml"
@@ -169,7 +170,7 @@ def _sizing(tmp_path, *, route, tshirt, accepted=None):
 @pytest.mark.parametrize(
     "route,tshirt", [("plan", "L"), ("plan", "M"), ("dispatch", "XS"), ("spec-dispatch", "S")]
 )
-def test_unasked_sizing_still_in_the_skip_zone_proceeds(calls, tmp_path, route, tshirt):
+def test_unasked_sizing_still_in_the_skip_zone_proceeds(calls, tmp_path: Path, route, tshirt) -> None:
     _sizing(tmp_path, route=route, tshirt=tshirt)
     assert pg.run(_manifest(), PLAN, repo_root=tmp_path) is None
 
@@ -179,15 +180,15 @@ def test_unasked_sizing_still_in_the_skip_zone_proceeds(calls, tmp_path, route, 
     [("pm-decision", "XL"), ("plan", "XL"), ("shape", "S"), ("roadmap", "M"), ("goal-setting", "XXL")],
 )
 def test_resize_out_of_the_skip_zone_halts_at_ready_gate_before_any_other_gate(
-    calls, tmp_path, route, tshirt
-):
+    calls, tmp_path: Path, route, tshirt
+) -> None:
     _sizing(tmp_path, route=route, tshirt=tshirt)
     h = pg.run(_manifest(), PLAN, repo_root=tmp_path)
     assert h.halted_at == "ready-gate" and route in h.reason and tshirt in h.reason
     assert calls["log"] == []
 
 
-def test_pm_accepted_sizing_is_not_re_halted_by_the_resize_gate(calls, tmp_path):
+def test_pm_accepted_sizing_is_not_re_halted_by_the_resize_gate(calls, tmp_path: Path) -> None:
     _sizing(tmp_path, route="pm-decision", tshirt="XL", accepted={"pm_quote": "go", "on": "d", "mode": "pm"})
     assert pg.run(_manifest(), PLAN, repo_root=tmp_path) is None
 
@@ -201,7 +202,7 @@ def _fired(route, tshirt):
 _PM_OK = {"pm_quote": "go", "on": "d", "mode": "pm"}
 
 
-def test_manifest_without_the_fired_route_and_size_still_loads():
+def test_manifest_without_the_fired_route_and_size_still_loads() -> None:
     import json
 
     old = {k: v for k, v in json.loads(_manifest().to_json()).items() if not k.startswith("accepted_")}
@@ -209,19 +210,19 @@ def test_manifest_without_the_fired_route_and_size_still_loads():
     assert (m.accepted_route, m.accepted_tshirt) == (None, None)
 
 
-def test_accepted_sizing_unchanged_since_the_fire_proceeds(calls, tmp_path):
+def test_accepted_sizing_unchanged_since_the_fire_proceeds(calls, tmp_path: Path) -> None:
     _sizing(tmp_path, route="plan", tshirt="M", accepted=_PM_OK)
     assert pg.run(_fired("plan", "M"), PLAN, repo_root=tmp_path) is None
 
 
 @pytest.mark.parametrize("route,tshirt", [("plan", "XL"), ("pm-decision", "XL"), ("shape", "M"), ("plan", "L")])
-def test_resize_after_the_pm_accepted_halts(calls, tmp_path, route, tshirt):
+def test_resize_after_the_pm_accepted_halts(calls, tmp_path: Path, route, tshirt) -> None:
     _sizing(tmp_path, route=route, tshirt=tshirt, accepted=_PM_OK)
     h = pg.run(_fired("plan", "M"), PLAN, repo_root=tmp_path)
     assert h.halted_at == "ready-gate" and "fired as route 'plan' at 'M'" in h.reason
     assert calls["log"] == []
 
 
-def test_unaccepted_resize_within_the_skip_zone_still_halts_on_the_fired_size(calls, tmp_path):
+def test_unaccepted_resize_within_the_skip_zone_still_halts_on_the_fired_size(calls, tmp_path: Path) -> None:
     _sizing(tmp_path, route="plan", tshirt="L")
     assert pg.run(_fired("plan", "M"), PLAN, repo_root=tmp_path).halted_at == "ready-gate"

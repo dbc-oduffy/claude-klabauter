@@ -6,6 +6,7 @@ import asyncio
 import pytest
 
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _run(result):
@@ -14,20 +15,20 @@ def _run(result):
     return result
 
 
-def test_preuse_bash_dispatch_registers_op():
+def test_preuse_bash_dispatch_registers_op() -> None:
     from coordinator_core.ipc import _REGISTRY
     import coordinator_core.hooks.preuse_bash_dispatch  # noqa: F401
 
     assert "hooks.preuse_bash_dispatch" in _REGISTRY
 
 
-def test_preuse_bash_dispatch_fails_open_on_non_dict():
+def test_preuse_bash_dispatch_fails_open_on_non_dict() -> None:
     from coordinator_core.hooks.preuse_bash_dispatch import _handler
 
     assert _handler(None) == {}
 
 
-def test_preuse_bash_dispatch_allows_ordinary_command():
+def test_preuse_bash_dispatch_allows_ordinary_command() -> None:
     from coordinator_core.hooks.preuse_bash_dispatch import _handler
 
     out = _handler(
@@ -44,7 +45,7 @@ def test_preuse_bash_dispatch_allows_ordinary_command():
         assert hso.get("permissionDecision") != "deny"
 
 
-def test_preuse_bash_dispatch_fails_open_when_chain_raises(monkeypatch):
+def test_preuse_bash_dispatch_fails_open_when_chain_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks import preuse_bash_dispatch as mod
 
     def _boom(*a, **kw):
@@ -63,7 +64,7 @@ def test_preuse_bash_dispatch_fails_open_when_chain_raises(monkeypatch):
     assert "boom" in context
 
 
-def test_preuse_bash_dispatch_missing_origin_worktree_surfaces_visibly(monkeypatch):
+def test_preuse_bash_dispatch_missing_origin_worktree_surfaces_visibly(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks import preuse_bash_dispatch as mod
 
     def _raise_missing_routing_key(*a, **kw):
@@ -109,13 +110,13 @@ def _decision(out):
     return (out.get("hookSpecificOutput") or {}).get("permissionDecision")
 
 
-def test_preuse_bash_dispatch_denies_through_the_envelope_the_doors_send(tmp_path):
+def test_preuse_bash_dispatch_denies_through_the_envelope_the_doors_send(tmp_path: Path) -> None:
     from coordinator_core.hooks.preuse_bash_dispatch import _handler
 
     assert _decision(_handler(_wire_params(tmp_path, _banned_command(tmp_path)))) == "deny"
 
 
-def test_preuse_bash_dispatch_deny_and_allow_are_distinguishable(tmp_path):
+def test_preuse_bash_dispatch_deny_and_allow_are_distinguishable(tmp_path: Path) -> None:
     """A verdict surface that answers the same for both is worse than one that
     errors: it reads as a clean pass. Pinning the DIFFERENCE catches the whole
     class, including a future fail-open that keeps the deny leg working."""
@@ -127,14 +128,14 @@ def test_preuse_bash_dispatch_deny_and_allow_are_distinguishable(tmp_path):
     assert _decision(allowed) != "deny"
 
 
-def test_preuse_bash_dispatch_still_reads_a_flat_payload(tmp_path):
+def test_preuse_bash_dispatch_still_reads_a_flat_payload(tmp_path: Path) -> None:
     from coordinator_core.hooks.preuse_bash_dispatch import _handler
 
     flat = _wire_params(tmp_path, _banned_command(tmp_path))["payload"]
     assert _decision(_handler(flat)) == "deny"
 
 
-def test_bash_ban_op_registers_and_reaches_check():
+def test_bash_ban_op_registers_and_reaches_check() -> None:
     from coordinator_core.ipc import _REGISTRY
     from coordinator_core.hooks.guard_host_subagent_bash_ban import _handler
 
@@ -142,13 +143,13 @@ def test_bash_ban_op_registers_and_reaches_check():
     assert _handler({"tool_name": "Bash", "cwd": "/tmp"}) == {}
 
 
-def test_bash_ban_op_fails_open_on_non_dict():
+def test_bash_ban_op_fails_open_on_non_dict() -> None:
     from coordinator_core.hooks.guard_host_subagent_bash_ban import _handler
 
     assert _handler(None) == {}
 
 
-def test_bash_ban_op_denies_under_deny_policy(tmp_path):
+def test_bash_ban_op_denies_under_deny_policy(tmp_path: Path) -> None:
     from coordinator_core.hooks.guard_host_subagent_bash_ban import _handler
 
     (tmp_path / "coordinator.local.md").write_text(
@@ -166,7 +167,7 @@ def test_bash_ban_op_denies_under_deny_policy(tmp_path):
     assert hso.get("permissionDecision") == "deny"
 
 
-def test_bash_spawn_shapes_op_registers_and_fails_open_on_non_dict():
+def test_bash_spawn_shapes_op_registers_and_fails_open_on_non_dict() -> None:
     from coordinator_core.ipc import _REGISTRY
     from coordinator_core.hooks.guard_host_subagent_bash_spawn_shapes import _handler
 
@@ -174,27 +175,27 @@ def test_bash_spawn_shapes_op_registers_and_fails_open_on_non_dict():
     assert _handler(None) == {}
 
 
-def test_block_unenumerated_agent_type_op_registers():
+def test_block_unenumerated_agent_type_op_registers() -> None:
     from coordinator_core.ipc import _REGISTRY
     import coordinator_core.hooks.block_unenumerated_agent_type  # noqa: F401
 
     assert "hooks.block_unenumerated_agent_type" in _REGISTRY
 
 
-def test_block_unenumerated_agent_type_op_no_op_for_non_agent():
+def test_block_unenumerated_agent_type_op_no_op_for_non_agent() -> None:
     from coordinator_core.hooks.block_unenumerated_agent_type import _handler
 
     assert _handler({"tool_name": "Bash"}) == {}
 
 
-def test_named_dispatch_restriction_op_registers():
+def test_named_dispatch_restriction_op_registers() -> None:
     from coordinator_core.ipc import _REGISTRY
     import coordinator_core.hooks.guard_named_dispatch_tool_restriction  # noqa: F401
 
     assert "hooks.guard_named_dispatch_tool_restriction" in _REGISTRY
 
 
-def test_named_dispatch_restriction_strips_named_explore():
+def test_named_dispatch_restriction_strips_named_explore() -> None:
     from coordinator_core.hooks.guard_named_dispatch_tool_restriction import _handler
 
     out = _handler(
@@ -212,7 +213,7 @@ def test_named_dispatch_restriction_strips_named_explore():
     assert hso["updatedInput"]["subagent_type"] == "Explore"
 
 
-def test_named_dispatch_restriction_passes_unnamed_ordinary_type():
+def test_named_dispatch_restriction_passes_unnamed_ordinary_type() -> None:
     from coordinator_core.hooks.guard_named_dispatch_tool_restriction import _handler
 
     out = _handler(
@@ -224,7 +225,7 @@ def test_named_dispatch_restriction_passes_unnamed_ordinary_type():
     assert out == {}
 
 
-def test_named_dispatch_restriction_denies_through_the_wrapped_envelope():
+def test_named_dispatch_restriction_denies_through_the_wrapped_envelope() -> None:
     from coordinator_core.hooks.guard_named_dispatch_tool_restriction import _handler
 
     out = _handler(
@@ -246,20 +247,20 @@ def test_named_dispatch_restriction_denies_through_the_wrapped_envelope():
     assert "denied" in hso["additionalContext"]
 
 
-def test_enforce_agent_dispatch_mode_registers():
+def test_enforce_agent_dispatch_mode_registers() -> None:
     from coordinator_core.ipc import _REGISTRY
     import coordinator_core.hooks.enforce_agent_dispatch_mode  # noqa: F401
 
     assert "hooks.enforce_agent_dispatch_mode" in _REGISTRY
 
 
-def test_enforce_agent_dispatch_mode_no_op_on_empty_payload():
+def test_enforce_agent_dispatch_mode_no_op_on_empty_payload() -> None:
     from coordinator_core.hooks.enforce_agent_dispatch_mode import _handler
 
     assert _handler({}) == {}
 
 
-def test_enforce_agent_dispatch_mode_elevates_mode():
+def test_enforce_agent_dispatch_mode_elevates_mode() -> None:
     from coordinator_core.hooks.enforce_agent_dispatch_mode import _handler
 
     out = _handler(
@@ -272,7 +273,7 @@ def test_enforce_agent_dispatch_mode_elevates_mode():
     assert hso["updatedInput"]["mode"] == "bypassPermissions"
 
 
-def test_enforce_agent_dispatch_mode_teammate_name_path_segment_denied():
+def test_enforce_agent_dispatch_mode_teammate_name_path_segment_denied() -> None:
     from coordinator_core.hooks.enforce_agent_dispatch_mode import _handler
 
     out = _handler(
@@ -290,7 +291,7 @@ def test_enforce_agent_dispatch_mode_teammate_name_path_segment_denied():
     assert "illegal in a sidecar path" in hso["additionalContext"]
 
 
-def test_enforce_agent_dispatch_mode_mode_escape_hatch(monkeypatch):
+def test_enforce_agent_dispatch_mode_mode_escape_hatch(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks.enforce_agent_dispatch_mode import _handler
 
     monkeypatch.setenv("COORDINATOR_AGENT_MODE_OK", "1")
@@ -303,20 +304,20 @@ def test_enforce_agent_dispatch_mode_mode_escape_hatch(monkeypatch):
     assert out == {}
 
 
-def test_preuse_agent_dispatch_registers():
+def test_preuse_agent_dispatch_registers() -> None:
     from coordinator_core.ipc import _REGISTRY
     import coordinator_core.hooks.preuse_agent_dispatch  # noqa: F401
 
     assert "hooks.preuse_agent_dispatch" in _REGISTRY
 
 
-def test_preuse_agent_dispatch_no_op_on_non_dict():
+def test_preuse_agent_dispatch_no_op_on_non_dict() -> None:
     from coordinator_core.hooks.preuse_agent_dispatch import _handler
 
     assert _handler(None) == {}
 
 
-def test_preuse_agent_dispatch_skips_absent_suite_invocation_leg_and_reaches_leg4():
+def test_preuse_agent_dispatch_skips_absent_suite_invocation_leg_and_reaches_leg4() -> None:
     from coordinator_core.hooks.preuse_agent_dispatch import _handler
 
     out = _handler(
@@ -329,7 +330,7 @@ def test_preuse_agent_dispatch_skips_absent_suite_invocation_leg_and_reaches_leg
     assert hso["updatedInput"]["mode"] == "bypassPermissions"
 
 
-def test_preuse_agent_dispatch_first_deny_wins_over_leg4():
+def test_preuse_agent_dispatch_first_deny_wins_over_leg4() -> None:
     from coordinator_core.hooks.preuse_agent_dispatch import _handler
 
     out = _handler(
@@ -349,14 +350,14 @@ def test_preuse_agent_dispatch_first_deny_wins_over_leg4():
     assert hso["updatedInput"]["mode"] == "bypassPermissions"
 
 
-def test_preuse_skill_dispatch_registers():
+def test_preuse_skill_dispatch_registers() -> None:
     from coordinator_core.ipc import _REGISTRY
     import coordinator_core.hooks.preuse_skill_dispatch  # noqa: F401
 
     assert "hooks.preuse_skill_dispatch" in _REGISTRY
 
 
-def test_preuse_skill_dispatch_no_op_on_unmatched_verb():
+def test_preuse_skill_dispatch_no_op_on_unmatched_verb() -> None:
     from coordinator_core.hooks.preuse_skill_dispatch import _handler
 
     out = _run(
@@ -372,7 +373,7 @@ def test_preuse_skill_dispatch_no_op_on_unmatched_verb():
     assert out == {}
 
 
-def test_preuse_skill_dispatch_degrades_silently_when_every_matched_leg_absent():
+def test_preuse_skill_dispatch_degrades_silently_when_every_matched_leg_absent() -> None:
     """Every REGISTRY leg's owning module is a sibling row's writes:, not
     landed here — a matched verb must degrade to no_advisory(), never
     raise, since every leg import fails inside its own isolation."""

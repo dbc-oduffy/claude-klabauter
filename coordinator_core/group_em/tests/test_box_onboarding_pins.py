@@ -9,11 +9,16 @@ import subprocess
 import pytest
 
 from coordinator_core.group_em import box_key, box_onboarding_pins, box_registry, box_transport
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
 
 INVOKE = "/opt/far/bin/coordinator-invoke"
 
 
-def _ssh_box(box_id, host="far.example"):
+def _ssh_box(box_id, host: str = "far.example"):
     return {
         "box_id": box_id,
         "root": "/nonexistent/far/root",
@@ -27,7 +32,7 @@ def _local_box(box_id_home, capability=None):
 
 
 @pytest.fixture
-def fleet(monkeypatch, tmp_path):
+def fleet(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     rows: list = []
     monkeypatch.setattr(box_registry, "lock_dir", lambda home=None: tmp_path / "box-locks")
     monkeypatch.setattr(box_registry, "read_boxes", lambda directory=None: list(rows))
@@ -39,12 +44,12 @@ def fleet(monkeypatch, tmp_path):
     box_transport._reset_limits()
 
 
-def _b64_own(home):
+def _b64_own(home) -> str:
     return box_onboarding_pins._b64(box_key._read_own_key(home))
 
 
-def _runner(reply, calls=None, returncode=0):
-    def run(argv, timeout):
+def _runner(reply, calls=None, returncode: int = 0):
+    def run(argv, timeout) -> CompletedProcess[str]:
         if calls is not None:
             calls.append(argv)
         return subprocess.CompletedProcess(argv, returncode, json.dumps(reply), "")
@@ -52,7 +57,7 @@ def _runner(reply, calls=None, returncode=0):
     return run
 
 
-def test_local_new_box_pins_both_directions(fleet, tmp_path):
+def test_local_new_box_pins_both_directions(fleet, tmp_path: Path) -> None:
     registrar, rows = fleet
     peer_home = tmp_path / "peer"
     box_registry._write(box_registry._identity_path(peer_home), {"box_id": "box-peer"})
@@ -73,7 +78,7 @@ def test_local_new_box_pins_both_directions(fleet, tmp_path):
     assert box_key._read_peer_key(new_box["box_id"], peer_home) == box_key._read_own_key(new_home)
 
 
-def test_one_direction_onboarding_names_each_unpinned_id(fleet):
+def test_one_direction_onboarding_names_each_unpinned_id(fleet) -> None:
     registrar, rows = fleet
     rows.append(_ssh_box("box-mini"))
     rows.append(_ssh_box("box-far", host="other.example"))
@@ -81,7 +86,7 @@ def test_one_direction_onboarding_names_each_unpinned_id(fleet):
     new_box = _ssh_box("box-new", host="new.example")
     rows.append(new_box)
 
-    def down(argv, timeout):
+    def down(argv, timeout) -> CompletedProcess[str]:
         return subprocess.CompletedProcess(argv, 255, "", "unreachable")
 
     out = box_onboarding_pins.exchange(new_box, home=registrar, runner=down, timeout=5)
@@ -94,7 +99,7 @@ def test_one_direction_onboarding_names_each_unpinned_id(fleet):
     assert reasons == {"box-reg": "new_key_unavailable", "box-mini": "new_key_unavailable", "box-far": "new_key_unavailable"}
 
 
-def test_key_b64_pins_registrar_and_pushes_remote_with_refuse_mismatch(fleet):
+def test_key_b64_pins_registrar_and_pushes_remote_with_refuse_mismatch(fleet) -> None:
     registrar, rows = fleet
     rows.append(_ssh_box("box-peer"))
     new_box = _ssh_box("box-new", host="new.example")
@@ -114,7 +119,7 @@ def test_key_b64_pins_registrar_and_pushes_remote_with_refuse_mismatch(fleet):
     assert {"box_id": "box-new", "key_b64": new_key, "refuse_mismatch": True} in sent
 
 
-def test_remote_not_pinned_reply_maps_to_unpinned_with_reason(fleet):
+def test_remote_not_pinned_reply_maps_to_unpinned_with_reason(fleet) -> None:
     registrar, rows = fleet
     rows.append(_ssh_box("box-peer"))
     new_box = _ssh_box("box-new", host="new.example")
@@ -134,7 +139,7 @@ def test_remote_not_pinned_reply_maps_to_unpinned_with_reason(fleet):
     ]
 
 
-def test_differing_extant_local_pin_is_reported_and_left_alone(fleet, tmp_path):
+def test_differing_extant_local_pin_is_reported_and_left_alone(fleet, tmp_path: Path) -> None:
     registrar, rows = fleet
     new_home = tmp_path / "new"
     new_box = _local_box(new_home)
@@ -147,7 +152,7 @@ def test_differing_extant_local_pin_is_reported_and_left_alone(fleet, tmp_path):
     assert box_key._read_peer_key(new_box["box_id"], registrar) == b"x" * 32
 
 
-def test_no_route_peer_is_named(fleet):
+def test_no_route_peer_is_named(fleet) -> None:
     registrar, rows = fleet
     rows.append({"box_id": "box-lost", "root": "/nonexistent/lost", "capability": {}})
     out = box_onboarding_pins.exchange(
@@ -157,7 +162,7 @@ def test_no_route_peer_is_named(fleet):
     assert {"id": "box-lost", "reason": "no_route"} in out["peers_unpinned_new"]
 
 
-def test_registering_self_skips_the_registrar(fleet):
+def test_registering_self_skips_the_registrar(fleet) -> None:
     registrar, rows = fleet
     out = box_onboarding_pins.exchange(
         {"box_id": "box-reg", "root": str(registrar), "capability": {}}, home=registrar, timeout=5
@@ -165,7 +170,7 @@ def test_registering_self_skips_the_registrar(fleet):
     assert out == {"new_box_pinned": [], "new_box_unpinned": [], "peers_pinned_new": [], "peers_unpinned_new": []}
 
 
-def test_never_raises_on_garbage(fleet):
+def test_never_raises_on_garbage(fleet) -> None:
     registrar, _ = fleet
     for bad in (None, {}, {"box_id": "../x"}, "str"):
         out = box_onboarding_pins.exchange(bad, home=registrar, timeout=5)

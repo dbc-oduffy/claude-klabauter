@@ -12,6 +12,7 @@ import pytest
 
 from coordinator_core.op_census import kill_ledger_inventory as kli
 from coordinator_core.op_census.cross_repo_consumers import ConsumerHit
+from pathlib import Path
 
 
 def _entry(status: str, *, key: str = "K-900", title: str = "a thing") -> str:
@@ -24,7 +25,7 @@ def test_parse_count_matches_heading_count() -> None:
     assert [e.key for e in entries] == ["K-900", "K-901"]
 
 
-def test_parser_drop_is_an_exception_not_a_silent_omission(tmp_path) -> None:
+def test_parser_drop_is_an_exception_not_a_silent_omission(tmp_path: Path) -> None:
     ledger = tmp_path / "kill-ledger.md"
     ledger.write_text(_entry("**LANDED**"), encoding="utf-8")
     original = kli.parse_ledger
@@ -300,7 +301,7 @@ def _make_entry(*, population: str, op_name, status: str = "", key: str = "K-900
     )
 
 
-def test_join_scans_nomination_shaped_populations_only(monkeypatch) -> None:
+def test_join_scans_nomination_shaped_populations_only(monkeypatch: pytest.MonkeyPatch) -> None:
     """AC4: CANDIDATE/CONVICTED are joined; a LANDED entry never even reaches
     the scan — the positive/negative control the plan's test surface names."""
     candidate = _make_entry(population="CANDIDATE", op_name="fleet.candidate_op")
@@ -324,7 +325,7 @@ def test_join_scans_nomination_shaped_populations_only(monkeypatch) -> None:
     assert landed.cross_repo_hits == []
 
 
-def test_join_skips_entries_with_no_op_name(monkeypatch) -> None:
+def test_join_skips_entries_with_no_op_name(monkeypatch: pytest.MonkeyPatch) -> None:
     entry = _make_entry(population="CANDIDATE", op_name=None)
     called = []
 
@@ -360,7 +361,7 @@ def test_render_section_prints_scanned_none_found_when_clean() -> None:
     assert "scanned — none found" in report
 
 
-def test_fail_on_cross_repo_evidence_exits_1_and_names_the_memo(monkeypatch, capsys) -> None:
+def test_fail_on_cross_repo_evidence_exits_1_and_names_the_memo(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     entry = _make_entry(population="CANDIDATE", op_name="fleet.candidate_op")
     entry.cross_repo_hits = [
         ConsumerHit(memo_path="cross-repo/inbox/example.md", box="inbox", shape="op_name")
@@ -375,7 +376,7 @@ def test_fail_on_cross_repo_evidence_exits_1_and_names_the_memo(monkeypatch, cap
     assert "cross-repo/inbox/example.md" in err
 
 
-def test_fail_on_cross_repo_evidence_absent_leaves_exit_unchanged(monkeypatch) -> None:
+def test_fail_on_cross_repo_evidence_absent_leaves_exit_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     entry = _make_entry(population="CANDIDATE", op_name="fleet.candidate_op")
     entry.cross_repo_hits = [
         ConsumerHit(memo_path="cross-repo/inbox/example.md", box="inbox", shape="op_name")
@@ -385,7 +386,7 @@ def test_fail_on_cross_repo_evidence_absent_leaves_exit_unchanged(monkeypatch) -
     assert kli.main([]) == 0
 
 
-def test_fail_on_contested_stays_byte_identical(monkeypatch, capsys) -> None:
+def test_fail_on_contested_stays_byte_identical(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     entry = _make_entry(population="CONTESTED", op_name="fleet.contested_op")
     entry.notes = ["status line matched no population rule"]
     monkeypatch.setattr(kli, "build", lambda ledger: ([entry], 1))
@@ -396,7 +397,7 @@ def test_fail_on_contested_stays_byte_identical(monkeypatch, capsys) -> None:
     assert capsys.readouterr().err == "CONTESTED K-900: status line matched no population rule\n"
 
 
-def test_both_fail_flags_together_exit_1_if_either_fires(monkeypatch, capsys) -> None:
+def test_both_fail_flags_together_exit_1_if_either_fires(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     contested = _make_entry(population="CONTESTED", op_name="fleet.contested_op")
     contested.notes = ["status line matched no population rule"]
     hit_entry = _make_entry(
@@ -429,7 +430,7 @@ def _entry_body(text):
     return parse_ledger(f"## K-900 — `some.op`\n{text}\n")[0]
 
 
-def test_disposition_first_entry_is_read_not_contested():
+def test_disposition_first_entry_is_read_not_contested() -> None:
     entry = _entry_body(
         "**WITHDRAWN.** The nomination is retracted; the op stays and the surface\n"
         "stays with it.\n"
@@ -437,19 +438,19 @@ def test_disposition_first_entry_is_read_not_contested():
     assert entry.status_text.lower().startswith("withdrawn")
 
 
-def test_labelled_status_still_wins_over_a_leading_bold_run():
+def test_labelled_status_still_wins_over_a_leading_bold_run() -> None:
     entry = _entry_body(
         "**LANDED.** prose that is not the status\n\n**Status:** not yet cut, deferred\n"
     )
     assert entry.status_text == "not yet cut, deferred"
 
 
-def test_a_bold_section_heading_is_not_read_as_a_disposition():
+def test_a_bold_section_heading_is_not_read_as_a_disposition() -> None:
     entry = _entry_body("**Cut scope:** three call sites and their tests\n")
     assert entry.status_text == ""
 
 
-def test_an_entry_stating_no_disposition_still_reaches_contested():
+def test_an_entry_stating_no_disposition_still_reaches_contested() -> None:
     from coordinator_core.op_census.kill_ledger_inventory import classify
 
     entry = _entry_body("**What is removed:** the op and its trampoline\n")
@@ -458,7 +459,7 @@ def test_an_entry_stating_no_disposition_still_reaches_contested():
     assert entry.population == "CONTESTED"
 
 
-def test_the_vocabulary_is_derived_from_the_marker_tuples():
+def test_the_vocabulary_is_derived_from_the_marker_tuples() -> None:
     from coordinator_core.op_census import kill_ledger_inventory as k
 
     for marker in k._LANDED_MARKERS + k._NON_CUT_MARKERS + k._WITHDRAWN_MARKERS:
@@ -473,7 +474,7 @@ def _fate_entry(fate: str, *, key: str = "K-900", title: str = "`some.op`") -> s
     )
 
 
-def test_fate_entries_carries_heading_keys_and_fate(tmp_path) -> None:
+def test_fate_entries_carries_heading_keys_and_fate(tmp_path: Path) -> None:
     ledger = tmp_path / "kill-ledger.md"
     ledger.write_text(_fate_entry("DEAD"), encoding="utf-8")
     [entry] = kli.fate_entries(ledger)
@@ -482,7 +483,7 @@ def test_fate_entries_carries_heading_keys_and_fate(tmp_path) -> None:
     assert entry.fate_values == ["DEAD"]
 
 
-def test_fate_entries_never_reaches_live_op_names_or_classify(tmp_path, monkeypatch) -> None:
+def test_fate_entries_never_reaches_live_op_names_or_classify(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     ledger = tmp_path / "kill-ledger.md"
     ledger.write_text(_fate_entry("LIVE"), encoding="utf-8")
 
@@ -494,7 +495,7 @@ def test_fate_entries_never_reaches_live_op_names_or_classify(tmp_path, monkeypa
     kli.fate_entries(ledger)
 
 
-def test_fate_entries_on_a_missing_ledger_raises_not_returns_empty(tmp_path) -> None:
+def test_fate_entries_on_a_missing_ledger_raises_not_returns_empty(tmp_path: Path) -> None:
     missing = tmp_path / "does-not-exist" / "kill-ledger.md"
     with pytest.raises(kli.LedgerAbsent):
         kli.fate_entries(missing)

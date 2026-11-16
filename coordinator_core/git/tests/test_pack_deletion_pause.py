@@ -60,12 +60,12 @@ def git_made_store(common: Path) -> tuple[Path, list[Path]]:
     return pack_dir, files
 
 
-def test_shipped_default_is_paused():
+def test_shipped_default_is_paused() -> None:
     assert pack_deletion_pause.PACK_DELETION_PAUSED is True
     assert pack_deletion_pause.paused() is True
 
 
-def test_flush_leaves_a_git_made_pack_and_its_rev_intact(common, git_made_store):
+def test_flush_leaves_a_git_made_pack_and_its_rev_intact(common, git_made_store) -> None:
     pack_dir, files = git_made_store
     marker_before = (pack_dir / "claude-klabauter-tail").read_bytes()
     go._flush_pack(common, _pending(3, b"paused"))
@@ -76,7 +76,7 @@ def test_flush_leaves_a_git_made_pack_and_its_rev_intact(common, git_made_store)
     assert len(new_idx) == 1, "pending must become its own pack"
 
 
-def test_unpaused_flush_still_folds_and_deletes(common, git_made_store, monkeypatch):
+def test_unpaused_flush_still_folds_and_deletes(common, git_made_store, monkeypatch: pytest.MonkeyPatch) -> None:
     _set_paused(monkeypatch, False)
     pack_dir, _ = git_made_store
     go._flush_pack(common, _pending(3, b"unpaused"))
@@ -84,7 +84,7 @@ def test_unpaused_flush_still_folds_and_deletes(common, git_made_store, monkeypa
     assert not (pack_dir / f"pack-{_STALE}.pack").exists()
 
 
-def test_tick_spawns_nothing_and_stats_nothing(tmp_path, monkeypatch):
+def test_paused_tick_spawns_nothing_while_no_midx_upkeep_is_owed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     spawned = []
@@ -98,7 +98,7 @@ def test_tick_spawns_nothing_and_stats_nothing(tmp_path, monkeypatch):
     assert maintenance_tick._next_check == {}
 
 
-def test_unpaused_tick_still_launches(tmp_path, monkeypatch):
+def test_unpaused_tick_still_launches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _set_paused(monkeypatch, False)
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
@@ -111,7 +111,7 @@ def test_unpaused_tick_still_launches(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("tier", ["daily", "weekly"])
-def test_run_tier_defers_without_a_git_spawn(tmp_path, monkeypatch, tier):
+def test_run_tier_defers_without_a_git_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tier) -> None:
     def boom(*_a, **_k):
         raise AssertionError("a paused run_tier spawned git")
 
@@ -123,7 +123,7 @@ def test_run_tier_defers_without_a_git_spawn(tmp_path, monkeypatch, tier):
     assert result.rc == 0
 
 
-def test_sweep_orphan_packs_defers_and_unlinks_nothing(common, monkeypatch):
+def test_sweep_orphan_packs_defers_and_unlinks_nothing(common, monkeypatch: pytest.MonkeyPatch) -> None:
     pack_dir = common / "objects" / "pack"
     orphan = pack_dir / "tmp-1-pack-xyz.pack"
     orphan.write_bytes(b"x")
@@ -140,7 +140,7 @@ def test_sweep_orphan_packs_defers_and_unlinks_nothing(common, monkeypatch):
     assert not orphan.exists()
 
 
-def test_sweep_orphan_pack_files_unlinks_nothing(common, monkeypatch):
+def test_sweep_orphan_pack_files_unlinks_nothing(common, monkeypatch: pytest.MonkeyPatch) -> None:
     pack_dir = common / "objects" / "pack"
     rev = pack_dir / f"pack-{_GIT_MADE}.rev"
     rev.write_bytes(b"rev")
@@ -153,7 +153,7 @@ def test_sweep_orphan_pack_files_unlinks_nothing(common, monkeypatch):
     assert not rev.exists()
 
 
-def test_consolidate_pack_batch_spawns_nothing_and_unlinks_nothing(common, monkeypatch):
+def test_consolidate_pack_batch_spawns_nothing_and_unlinks_nothing(common, monkeypatch: pytest.MonkeyPatch) -> None:
     pack_dir = common / "objects" / "pack"
     files = []
     for i in range(store_hygiene.CONSOLIDATE_MAX_PACKS + 5):

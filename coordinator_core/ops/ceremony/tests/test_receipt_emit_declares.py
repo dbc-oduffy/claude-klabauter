@@ -7,6 +7,7 @@ from coordinator_core.ops.ceremony import receipt_emit
 from coordinator_core.ops.ceremony.pipeline_context import PipelineContext
 from coordinator_core.session import core as session_core
 from coordinator_core.session import scope as session_scope
+import pytest
 
 
 def _init_git_repo(tmp_path: Path) -> Path:
@@ -28,7 +29,7 @@ def _claimed_paths(repo_root: Path, sid: str) -> set[str]:
     return session_scope.project_self_scope(lines)
 
 
-def test_emit_receipt_declares_written_path(tmp_path):
+def test_emit_receipt_declares_written_path(tmp_path: Path) -> None:
     repo_root = _init_git_repo(tmp_path)
     sid = "test-sid-declares-01"
     session_core.init(sid, "test goal", str(repo_root))
@@ -43,7 +44,7 @@ def test_emit_receipt_declares_written_path(tmp_path):
     assert rel_path in _claimed_paths(repo_root, sid)
 
 
-def test_emit_receipt_declares_nothing_on_failed_write(tmp_path, monkeypatch):
+def test_emit_receipt_declares_nothing_on_failed_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = _init_git_repo(tmp_path)
     sid = "test-sid-declares-02"
     session_core.init(sid, "test goal", str(repo_root))
@@ -67,7 +68,7 @@ def test_emit_receipt_declares_nothing_on_failed_write(tmp_path, monkeypatch):
     assert _claimed_paths(repo_root, sid) == set()
 
 
-def test_emit_receipt_absent_session_dir_declares_silently(tmp_path):
+def test_emit_receipt_absent_session_dir_declares_silently(tmp_path: Path) -> None:
     repo_root = _init_git_repo(tmp_path)
     sid = "test-sid-declares-absent-03"
 

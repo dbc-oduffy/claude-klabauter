@@ -16,6 +16,7 @@ from coordinator_core.ops.ceremony.wsc_disposition import SINGLE_SESSION
 from coordinator_core.ops.dispatch_emit import run_close as rc
 from coordinator_core.ops.dispatch_emit.run_close import LegResult
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -27,12 +28,12 @@ SWEEPS = ("d-sweep-terminal-handoffs", "d-sweep-terminal-sizings")
 REVIEW = ("d-run-review-brightline-gate", "d-close-coverage-advisory")
 
 
-def _git(root, *args):
+def _git(root, *args) -> None:
     subprocess.run(["git", *args], cwd=str(root), check=True, capture_output=True, **no_console_creationflags())
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(root, "init", "-q")
@@ -53,13 +54,13 @@ def repo(tmp_path, monkeypatch):
     return root
 
 
-def _plan(root):
+def _plan(root) -> None:
     path = root / PLAN
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("---\nstatus: executing\nreview_stamp: {verdict: PASS}\n---\n\n# p\n", encoding="utf-8")
 
 
-def _record(root, session=SID):
+def _record(root, session=SID) -> str:
     legs = {leg: LegResult("ran", "") for leg in ("review", "baton-drain", "post-close")}
     return rc.write_close_job(
         root, RUN, [], datetime.now(timezone.utc) + timedelta(minutes=5), session_id=session,
@@ -75,7 +76,7 @@ def _stamps(env):
     return {d["id"]: d[rc.DISCHARGED_BY_KEY] for d in env["directives"]}
 
 
-def test_plan_run_record_discharges_the_legs_it_paid(repo):
+def test_plan_run_record_discharges_the_legs_it_paid(repo) -> None:
     _plan(repo)
     _record(repo)
     env = _brief(repo)
@@ -88,7 +89,7 @@ def test_plan_run_record_discharges_the_legs_it_paid(repo):
     assert payload["discharged"] == {did: RUN for did in stamps if stamps[did] == RUN}
 
 
-def test_a_foreign_sessions_record_discharges_nothing(repo):
+def test_a_foreign_sessions_record_discharges_nothing(repo) -> None:
     _plan(repo)
     _record(repo, session="another-session")
     env = _brief(repo)
@@ -96,7 +97,7 @@ def test_a_foreign_sessions_record_discharges_nothing(repo):
     assert set(_stamps(env).values()) == {None}
 
 
-def test_run_less_entry_discharges_complete_entry_by_its_path(repo):
+def test_run_less_entry_discharges_complete_entry_by_its_path(repo) -> None:
     folder = repo / "archive" / "completed" / "202610"
     folder.mkdir(parents=True)
     entry = folder / f"20261013-adhoc-{SID[-6:]}.md"
@@ -112,7 +113,7 @@ def test_run_less_entry_discharges_complete_entry_by_its_path(repo):
     assert {v for k, v in _stamps(env).items() if k != "d-complete-entry"} == {None}
 
 
-def test_judgment_point_gating_only_discharged_directives_is_reported_not_asked(repo, monkeypatch):
+def test_judgment_point_gating_only_discharged_directives_is_reported_not_asked(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _plan(repo)
     original = wsc._build_preserved_judgment_points
 
@@ -134,7 +135,7 @@ def test_judgment_point_gating_only_discharged_directives_is_reported_not_asked(
     assert "jp-reindex-question" not in [j["id"] for j in _brief(repo)["judgment_points"]]
 
 
-def test_record_older_than_a_later_claim_is_still_read(repo):
+def test_record_older_than_a_later_claim_is_still_read(repo) -> None:
     _plan(repo)
     _record(repo)
     claim = hub_for_common(repo / ".git") / SID
@@ -145,7 +146,7 @@ def test_record_older_than_a_later_claim_is_still_read(repo):
     assert _brief(repo)["gates"]["run_close"]["run_ids"] == [RUN]
 
 
-def test_no_absolute_path_reaches_gates_or_stamps(repo):
+def test_no_absolute_path_reaches_gates_or_stamps(repo) -> None:
     _plan(repo)
     _record(repo)
     env = _brief(repo)

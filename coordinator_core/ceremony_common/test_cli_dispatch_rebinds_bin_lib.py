@@ -14,12 +14,17 @@ import sys
 from pathlib import Path
 
 from coordinator_core.ceremony_common.cli_dispatch import invoke_cli_main
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN = Path(__file__).resolve().parents[2] / "coordinator" / "bin"
 _SIBLINGS = ("lib", "python_interp", "memo_compose", "machine_local_impl_resolve", "dr_allocator")
 
 
-def _load_doc_new(name: str):
+def _load_doc_new(name: str) -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(name, str(_BIN / "coordinator-doc-new.py"))
     spec = importlib.util.spec_from_loader(name, loader)
     module = importlib.util.module_from_spec(spec)
@@ -28,7 +33,7 @@ def _load_doc_new(name: str):
     return module
 
 
-def test_doc_new_bootstrap_with_lib_cached_and_its_dir_off_sys_path(monkeypatch):
+def test_doc_new_bootstrap_with_lib_cached_and_its_dir_off_sys_path(monkeypatch: pytest.MonkeyPatch) -> None:
     for mod in _SIBLINGS:
         monkeypatch.delitem(sys.modules, mod, raising=False)
     monkeypatch.setattr(sys, "path", [str(_BIN)] + list(sys.path))
@@ -47,7 +52,7 @@ def test_doc_new_bootstrap_with_lib_cached_and_its_dir_off_sys_path(monkeypatch)
     assert str(_BIN / "lib") not in sys.path, "the per-call bind must not outlive the call"
 
 
-def test_doc_new_direct_bootstrap_with_lib_cached_and_its_dir_off_sys_path(monkeypatch):
+def test_doc_new_direct_bootstrap_with_lib_cached_and_its_dir_off_sys_path(monkeypatch: pytest.MonkeyPatch) -> None:
     """`dispatch.emit -> mint_baton_from_sizing` calls `_bootstrap_engine` directly, outside both
     `invoke_cli_main` and the served-entrypoint re-bind (example-game-repo-19, 2026-11-11 05:55Z)."""
     for mod in _SIBLINGS:

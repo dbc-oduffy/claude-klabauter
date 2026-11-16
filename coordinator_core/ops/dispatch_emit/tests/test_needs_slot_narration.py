@@ -5,6 +5,7 @@ from __future__ import annotations
 from coordinator_core.ops.dispatch_emit.emit import emit_script
 
 from .conftest import REVIEW_KW
+from pathlib import Path
 
 
 def _row(row_id: str, extra: str = "") -> str:
@@ -27,19 +28,19 @@ def _plan(tmp_path, *rows):
     return path
 
 
-def test_slot_rows_are_named(tmp_path):
+def test_slot_rows_are_named(tmp_path: Path) -> None:
     plan = _plan(tmp_path, _row("A1", "  needs_slot: true\n"), _row("B1"))
     script = emit_script(plan, repo_root=tmp_path, **REVIEW_KW)
     line = next(l for l in script.splitlines() if "needs_slot" in l)
     assert "A1" in line and "B1" not in line
 
 
-def test_no_slot_rows_no_narration(tmp_path):
+def test_no_slot_rows_no_narration(tmp_path: Path) -> None:
     plan = _plan(tmp_path, _row("A1"), _row("B1", "  needs_slot: false\n"))
     assert "needs_slot" not in emit_script(plan, repo_root=tmp_path, **REVIEW_KW)
 
 
-def test_a_slot_row_brief_is_author_only_and_drops_its_build_gate(tmp_path):
+def test_a_slot_row_brief_is_author_only_and_drops_its_build_gate(tmp_path: Path) -> None:
     plan = _plan(tmp_path, _row("A1", "  needs_slot: true\n"), _row("B1"))
     text = plan.read_text(encoding="utf-8").replace(
         "title: p\n", "title: p\nrow_build_gate:\n  - command: build-plugin.ps1\n"
@@ -51,7 +52,7 @@ def test_a_slot_row_brief_is_author_only_and_drops_its_build_gate(tmp_path):
     assert script.count("Build gate (mandatory)") == 1  # B1 keeps its gate; A1's moves to the EM
 
 
-def test_slot_row_prompt_names_admission_post_and_non_slot_row_does_not(tmp_path):
+def test_slot_row_prompt_names_admission_post_and_non_slot_row_does_not(tmp_path: Path) -> None:
     slot = emit_script(
         _plan(tmp_path, _row("A1", "  needs_slot: true\n")), repo_root=tmp_path, **REVIEW_KW
     )

@@ -6,17 +6,18 @@ import coordinator_core.baton_assemble as ba
 from coordinator_core.ops.deliverable_carry import DroppedDeliverableJoinError
 from coordinator_core.test_baton_assemble import _FAKE_OPERATOR_CONFIG, _init_repo, _write_artifact
 from coordinator_core.testing import symlink_capability
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 @pytest.fixture(autouse=True)
-def _stub_operator_config(monkeypatch):
+def _stub_operator_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
 
 
 class TestPlanInputAxisArmsTheRefusal:
-    def test_plan_input_with_no_id_anywhere_raises_dropped_join(self, tmp_path, monkeypatch):
+    def test_plan_input_with_no_id_anywhere_raises_dropped_join(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _init_repo(tmp_path)
         plan = _write_artifact(
             tmp_path / "docs" / "plans" / "2026-08-13-arm-c1-no-id.md",
@@ -30,7 +31,7 @@ class TestPlanInputAxisArmsTheRefusal:
         message = str(excinfo.value)
         assert str(plan.relative_to(tmp_path)) in message or str(plan) in message
 
-    def test_plan_input_with_id_still_carries_it_no_raise(self, tmp_path, monkeypatch):
+    def test_plan_input_with_id_still_carries_it_no_raise(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _init_repo(tmp_path)
         plan = _write_artifact(
             tmp_path / "docs" / "plans" / "2026-08-13-arm-c1-has-id.md",
@@ -44,7 +45,7 @@ class TestPlanInputAxisArmsTheRefusal:
         assert lineage["deliverable_id"] == "DEL-ARM-C1-HAS-ID"
         assert lineage["discovery"] == "plan-input"
 
-    def test_plan_input_with_literal_null_plan_id_still_raises(self, tmp_path, monkeypatch):
+    def test_plan_input_with_literal_null_plan_id_still_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """2026-08-13 review finding 1, pinned: `plan_id: null` (a literal
         YAML null, not an absent field) must still count as PRESENT for
         this predicate -- `_fm_field` (`read_fm_field_unquoted`) does not
@@ -63,7 +64,7 @@ class TestPlanInputAxisArmsTheRefusal:
             ba.brief("handoff", str(plan), repo_root=tmp_path)
 
     @symlink_capability.requires_symlink_capability
-    def test_symlinked_plan_input_still_arms_the_guard(self, tmp_path, monkeypatch):
+    def test_symlinked_plan_input_still_arms_the_guard(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _init_repo(tmp_path)
         outside_dir = tmp_path.parent / "outside-plan-store"
         outside_dir.mkdir(exist_ok=True)
@@ -79,7 +80,7 @@ class TestPlanInputAxisArmsTheRefusal:
         with pytest.raises(DroppedDeliverableJoinError):
             ba.brief("handoff", str(symlink_path), repo_root=tmp_path)
 
-    def test_ordinary_handoff_predecessor_with_no_id_still_mints(self, tmp_path, monkeypatch):
+    def test_ordinary_handoff_predecessor_with_no_id_still_mints(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Anti-scope pin: an ORDINARY handoff predecessor (not plan-shaped --
         no `plan_id`, not under docs/plans/) carrying no deliverable_id is
         the benign standalone-mint case and must keep minting, never refuse.

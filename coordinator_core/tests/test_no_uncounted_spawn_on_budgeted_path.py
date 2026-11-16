@@ -489,6 +489,10 @@ _BUDGETED_ENTRYPOINTS: dict[str, tuple[str, tuple[str, ...]]] = {
         "coordinator_core/ops/dispatch_emit/requirements_ledger.py",
         ("_handler",),
     ),
+    "workflow.cancel": (
+        "coordinator_core/ops/dispatch_emit/run_cancel.py",
+        ("_handler",),
+    ),
     # Spawn-free (two file reads), 2026-10-30.
     "workflow.late_rows": (
         "coordinator_core/ops/dispatch_emit/requirements_ledger.py",
@@ -2269,16 +2273,6 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
         "`test_git_fallback_issues_exactly_one_spawn_for_many_changed_files` (`assert len(spawns) == 1` "
         "over three changed files, origin asserted run_git); first run asserted spawn-free.",
     ),
-    # frontmatter.remint's citer scan: `handoff_id.scan_citers` issues ONE `git grep --no-index`
-    # per call for every id, scoped to state/ and archive/handoffs (67a8fca527, 2026-11-15).
-    ("frontmatter.remint", "coordinator_core/ops/frontmatter_remint/handoff_id.py", "scan_citers", "git", 0):
-    _Legitimation(
-        counter=_GLOBAL_SUBPROCESS_RUN,
-        counted_by="coordinator_core/tests/test_no_uncounted_spawn_on_budgeted_path.py",
-        executed="Measured under `test_remint_citer_scan_is_one_git_spawn_for_many_ids` with "
-        "`subprocess.run` substituted: `scan_citers` over three ids and `primed` + `_citers` over "
-        "the same ids each make exactly one spawn, `argv[:2] == ['git', '-c']`.",
-    ),
     # The orientation hook's scratch-hygiene launch: the one detached Popen, taken at most once per
     # SCRATCH_TRIGGER_INTERVAL_SECS, behind the `_launch_scratch_hygiene` seam.
     ("hooks.project_orientation", "coordinator_core/hooks/project_orientation.py", "_launch_scratch_hygiene", "<dynamic>", 0):
@@ -2305,6 +2299,7 @@ _LEGITIMIZED_SITES: dict[tuple[str, str, str, str, int], _Legitimation] = {
             "roadmap.blitz_land",
             "roadmap.blitz_stage",
             "workflow.revise",
+            "workflow.cancel",
             "dispatch.measured_rev",
         )
     },
@@ -7517,6 +7512,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # plan.mise_prep_probe: one reachable git site (HEAD sha read in `_head_sha`); the census
     # leg's per-entry shell spawns are the counted carve-out, bounded by `_census_deadline`.
     "plan.mise_prep_probe": 1,
+    # dispatch.close_plan_checkpoints: one reachable git site, run_git; constant per call.
+    "dispatch.close_plan_checkpoints": 1,
     # ceremony.plan_wiki_map (56c85f, 2026-11-13): two git sites in weekly_doc_files, the batched
     # fallback taken only when no example-retrieval-repo doc_files view serves (`_git`, `_plan_texts`);
     # constant count per call, never per plan.
@@ -7551,10 +7548,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # Measured 2026-11-10: a detached spawn is 2.3ms wall max (parent never waits); a git read
     # 123.9ms wall max, parent CPU below the 15.6ms clock tick. The pin is a static ceiling; the
     # detached legs add no blocking time, so the op stays under the 500ms bar.
-    # 5 -> 6: 8a86c65476 (fe18ae) routes a sandboxed caller through
-    # warm.sandboxed_spawn.forward_spawn_to_warm; the static walk reaches the warm client's
-    # server-start site, which _install_no_spawn_seam blocks at runtime (Windows restricted token only).
-    "engine_ask.submit": 6,
+    "engine_ask.submit": 5,
     # Enrolled 2026-08-30 (second reconciliation pass): both entered the live
     # registry mid-close from concurrent peer work, measured at their live
     # reachable-site counts.
@@ -7725,10 +7719,7 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # composition-gate.md, C2) -- the op is now enrolled in _BUDGETED_ENTRYPOINTS with an
     # execution-backed _LEGITIMIZED_SITES entry per reachable site; a COUNT-tier pin beside
     # an enrolment is dead weight (AC20c).
-    # 5 -> 6: 8a86c65476 (fe18ae) routes a sandboxed caller through
-    # warm.sandboxed_spawn.forward_spawn_to_warm; the static walk reaches the warm client's
-    # server-start site, which _install_no_spawn_seam blocks at runtime (Windows restricted token only).
-    "workflow.fire": 6,
+    "workflow.fire": 5,
     "machine.hibernate": 4,
     # 4 -> 1, 2026-10-12: build_cache resolves its git facts once through `_git`; the
     # `find` argv, the `is_inside_work_tree` probe and the per-fact rev-parse spawns are gone.
@@ -7890,6 +7881,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     "percolate.run_pre_ci_hooks": 1,
     "plan.list_stale_executing": 1,
     "plan.persist_capture": 1,
+    # Enrolled 2026-11-16: the stamp-implemented route reaches three git sites (measured live count).
+    "plan.status_done": 3,
     "plugin_health.drift": 1,
     "records.history": 1,
     "repo_setup.validate_target_root": 1,
@@ -7962,6 +7955,8 @@ _STATIC_SPAWN_COUNT_PINS: dict[str, int] = {
     # measured 0ms CPU / 2-5ms wall (2026-10-29), skipped under pytest, never waited on.
     "dispatch.reap_abandoned_runs": 2,
     "dispatch.commit_halted_rows": 1,
+    # Enrolled 2026-11-15: the temporary blob-landing op reaches one `git.run.run_git` site.
+    "dispatch.land_blobs": 1,
     "docindex.emit": 1,
     # cat-file/grep join reaches only git.run.run_git.
     "ceremony.wiki_candidates": 1,
@@ -8297,32 +8292,3 @@ def test_headless_admission_is_in_process_and_never_dials_the_engine(monkeypatch
     assert dialed == ["box_memory.admit"]
 
 
-def test_remint_citer_scan_is_one_git_spawn_for_many_ids(tmp_path, monkeypatch):
-    """Companion for the `frontmatter.remint` legitimization: the citer scan spawns once for any
-    number of ids, and a primed `_citers` lookup spawns nothing further."""
-    import subprocess
-
-    from coordinator_core.ops.frontmatter_remint import handoff_id
-
-    (tmp_path / "state").mkdir()
-    (tmp_path / "state" / "ledger.md").write_text("cites hnd-a-111111 and hnd-b-222222\n")
-    ids = ["hnd-a-111111", "hnd-b-222222", "hnd-c-333333"]
-
-    real_run = subprocess.run
-    calls: list = []
-
-    def counting_run(argv, *args, **kwargs):
-        calls.append(list(argv))
-        return real_run(argv, *args, **kwargs)
-
-    monkeypatch.setattr(subprocess, "run", counting_run)
-    found = handoff_id.scan_citers(ids, tmp_path)
-    assert found == {"hnd-a-111111": ["state/ledger.md"], "hnd-b-222222": ["state/ledger.md"],
-                     "hnd-c-333333": []}
-    assert len(calls) == 1 and calls[0][:2] == ["git", "-c"], calls
-
-    calls.clear()
-    with handoff_id.primed(ids, tmp_path):
-        for old_id in ids:
-            handoff_id._citers(old_id, tmp_path, "")
-    assert len(calls) == 1, calls

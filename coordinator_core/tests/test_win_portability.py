@@ -18,6 +18,12 @@ from coordinator_core.win_portability import (
     split_path,
     split_path_list,
 )
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from os import stat_result
+    from subprocess import CompletedProcess
 
 
 @pytest.mark.skipif(
@@ -30,7 +36,7 @@ from coordinator_core.win_portability import (
         "platform by test_is_executable_posix_true_for_exec_mode_bits."
     ),
 )
-def test_is_executable_posix_true_for_chmod_plus_x_file(tmp_path, monkeypatch):
+def test_is_executable_posix_true_for_chmod_plus_x_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win_portability, "_is_windows", lambda: False)
     target = tmp_path / "a-script"
     target.write_text("#!/bin/sh\necho hi\n")
@@ -38,14 +44,14 @@ def test_is_executable_posix_true_for_chmod_plus_x_file(tmp_path, monkeypatch):
     assert is_executable(target) is True
 
 
-def test_is_executable_posix_true_for_exec_mode_bits(tmp_path, monkeypatch):
+def test_is_executable_posix_true_for_exec_mode_bits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win_portability, "_is_windows", lambda: False)
     target = tmp_path / "a-script"
     target.write_text("#!/bin/sh\necho hi\n")
 
     real_stat = os.stat
 
-    def _stat_with_exec_bit(p, *args, **kwargs):
+    def _stat_with_exec_bit(p, *args, **kwargs) -> stat_result:
         st = real_stat(p, *args, **kwargs)
         if os.path.abspath(os.fspath(p)) == os.path.abspath(os.fspath(target)):
             return os.stat_result(
@@ -57,19 +63,19 @@ def test_is_executable_posix_true_for_exec_mode_bits(tmp_path, monkeypatch):
     assert is_executable(target) is True
 
 
-def test_is_executable_posix_false_for_non_executable_file(tmp_path, monkeypatch):
+def test_is_executable_posix_false_for_non_executable_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win_portability, "_is_windows", lambda: False)
     target = tmp_path / "readme.txt"
     target.write_text("not executable")
     assert is_executable(target) is False
 
 
-def test_is_executable_posix_false_for_missing_file(tmp_path, monkeypatch):
+def test_is_executable_posix_false_for_missing_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win_portability, "_is_windows", lambda: False)
     assert is_executable(tmp_path / "does-not-exist") is False
 
 
-def test_is_executable_windows_true_for_pathext_extension(tmp_path, monkeypatch):
+def test_is_executable_windows_true_for_pathext_extension(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win_portability, "_is_windows", lambda: True)
     monkeypatch.delenv("PATHEXT", raising=False)
     target = tmp_path / "machine-local.CMD"
@@ -77,7 +83,7 @@ def test_is_executable_windows_true_for_pathext_extension(tmp_path, monkeypatch)
     assert is_executable(target) is True
 
 
-def test_is_executable_windows_false_for_non_pathext_extension(tmp_path, monkeypatch):
+def test_is_executable_windows_false_for_non_pathext_extension(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win_portability, "_is_windows", lambda: True)
     monkeypatch.delenv("PATHEXT", raising=False)
     target = tmp_path / "helper.py"
@@ -85,7 +91,7 @@ def test_is_executable_windows_false_for_non_pathext_extension(tmp_path, monkeyp
     assert is_executable(target) is False
 
 
-def test_is_executable_windows_extensionless_resolves_via_pathext_sibling(tmp_path, monkeypatch):
+def test_is_executable_windows_extensionless_resolves_via_pathext_sibling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win_portability, "_is_windows", lambda: True)
     monkeypatch.delenv("PATHEXT", raising=False)
     bare = tmp_path / "machine-local"
@@ -94,7 +100,7 @@ def test_is_executable_windows_extensionless_resolves_via_pathext_sibling(tmp_pa
     assert is_executable(bare) is True
 
 
-def test_is_executable_windows_extensionless_bare_file_alone_is_false(tmp_path, monkeypatch):
+def test_is_executable_windows_extensionless_bare_file_alone_is_false(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Negative-spec pin: an extensionless file's own EXISTENCE must never be
     sufficient on Windows -- this is exactly the degrade-to-F_OK failure mode
     `os.access(path, os.X_OK)` produces there, which this primitive replaces."""
@@ -105,7 +111,7 @@ def test_is_executable_windows_extensionless_bare_file_alone_is_false(tmp_path, 
     assert is_executable(bare) is False
 
 
-def test_is_executable_windows_respects_custom_pathext_env(tmp_path, monkeypatch):
+def test_is_executable_windows_respects_custom_pathext_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win_portability, "_is_windows", lambda: True)
     monkeypatch.setenv("PATHEXT", ".EXE;.FOO")
     target = tmp_path / "tool.foo"
@@ -116,16 +122,16 @@ def test_is_executable_windows_respects_custom_pathext_env(tmp_path, monkeypatch
     assert is_executable(other) is False
 
 
-def test_split_path_list_uses_os_pathsep(monkeypatch):
+def test_split_path_list_uses_os_pathsep(monkeypatch: pytest.MonkeyPatch) -> None:
     value = os.pathsep.join(["/a/bin", "/b/bin", "/c/bin"])
     assert split_path_list(value) == ["/a/bin", "/b/bin", "/c/bin"]
 
 
-def test_join_path_list_uses_os_pathsep():
+def test_join_path_list_uses_os_pathsep() -> None:
     assert join_path_list(["/a/bin", "/b/bin"]) == os.pathsep.join(["/a/bin", "/b/bin"])
 
 
-def test_split_path_list_never_uses_literal_colon_on_windows_shaped_input(monkeypatch):
+def test_split_path_list_never_uses_literal_colon_on_windows_shaped_input(monkeypatch: pytest.MonkeyPatch) -> None:
     windows_style = ";".join(["C:\\a\\bin", "C:\\b\\bin"])
     banned_result = windows_style.split(":")
     assert banned_result != ["C:\\a\\bin", "C:\\b\\bin"]
@@ -134,12 +140,12 @@ def test_split_path_list_never_uses_literal_colon_on_windows_shaped_input(monkey
     assert split_path_list(windows_style) == ["C:\\a\\bin", "C:\\b\\bin"]
 
 
-def test_split_path_folds_backslash_windows_native_form():
+def test_split_path_folds_backslash_windows_native_form() -> None:
     result = split_path("C:\\coordinator-content-repo\\coordinator", maxsplit=1, from_right=True)
     assert result == ["C:/coordinator-content-repo", "coordinator"]
 
 
-def test_split_path_matches_purewindowspath_parent_and_name():
+def test_split_path_matches_purewindowspath_parent_and_name() -> None:
     raw = "C:\\coordinator-content-repo\\coordinator"
     result = split_path(raw, maxsplit=1, from_right=True)
 
@@ -150,32 +156,32 @@ def test_split_path_matches_purewindowspath_parent_and_name():
     assert result == [expected_parent, expected_leaf]
 
 
-def test_split_path_msys_mount_form_already_forward_slash_unaffected():
+def test_split_path_msys_mount_form_already_forward_slash_unaffected() -> None:
     result = split_path("/x/coordinator-content-repo/coordinator", maxsplit=1, from_right=True)
     assert result == ["/x/coordinator-content-repo", "coordinator"]
 
 
-def test_split_path_posix_form_unaffected_by_fold():
+def test_split_path_posix_form_unaffected_by_fold() -> None:
     result = split_path("/usr/local/bin", maxsplit=1, from_right=True)
     assert result == ["/usr/local", "bin"]
 
 
-def test_split_path_left_split_matches_model_helper():
+def test_split_path_left_split_matches_model_helper() -> None:
     raw = "C:\\a\\b\\c"
     assert split_path(raw) == win_portability._model_windows_split(raw)
 
 
-def test_split_path_bypasses_forward_slash_lint_class_no_fs_access(tmp_path, monkeypatch):
+def test_split_path_bypasses_forward_slash_lint_class_no_fs_access(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     result = split_path("nonexistent\\segment\\path", maxsplit=1, from_right=True)
     assert result == ["nonexistent/segment", "path"]
 
 
-def test_no_console_creationflags_posix_returns_empty_mapping(monkeypatch):
+def test_no_console_creationflags_posix_returns_empty_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win_portability, "_is_windows", lambda: False)
     assert no_console_creationflags() == {}
 
 
-def test_no_console_creationflags_windows_returns_create_no_window_flag(monkeypatch):
+def test_no_console_creationflags_windows_returns_create_no_window_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win_portability, "_is_windows", lambda: True)
     result = no_console_creationflags()
     assert set(result) == {"creationflags"}
@@ -189,18 +195,18 @@ def test_no_console_creationflags_windows_returns_create_no_window_flag(monkeypa
     assert result["creationflags"] == expected
 
 
-def test_no_console_creationflags_does_not_set_stdio_kwargs(monkeypatch):
+def test_no_console_creationflags_does_not_set_stdio_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(win_portability, "_is_windows", lambda: False)
     assert set(no_console_creationflags()) <= {"creationflags"}
     monkeypatch.setattr(win_portability, "_is_windows", lambda: True)
     assert set(no_console_creationflags()) <= {"creationflags"}
 
 
-def test_same_path_uses_samefile_when_both_paths_exist(tmp_path):
+def test_same_path_uses_samefile_when_both_paths_exist(tmp_path: Path) -> None:
     assert same_path(str(tmp_path), str(tmp_path) + os.sep) is True
 
 
-def test_same_path_samefile_leg_detects_alias_realpath_alone_would_miss(tmp_path):
+def test_same_path_samefile_leg_detects_alias_realpath_alone_would_miss(tmp_path: Path) -> None:
     # The load-bearing case this primitive exists for: two DIFFERENT path
     # strings that samefile recognises as the same entry via a symlink alias,
     # which a naive same-string-after-realpath check would also catch here
@@ -218,7 +224,7 @@ def test_same_path_samefile_leg_detects_alias_realpath_alone_would_miss(tmp_path
     assert same_path(str(real), str(alias)) is True
 
 
-def test_same_path_false_for_distinct_existing_paths(tmp_path):
+def test_same_path_false_for_distinct_existing_paths(tmp_path: Path) -> None:
     a = tmp_path / "a"
     b = tmp_path / "b"
     a.mkdir()
@@ -226,24 +232,24 @@ def test_same_path_false_for_distinct_existing_paths(tmp_path):
     assert same_path(str(a), str(b)) is False
 
 
-def test_same_path_falls_back_to_realpath_normcase_when_a_path_is_missing(tmp_path):
+def test_same_path_falls_back_to_realpath_normcase_when_a_path_is_missing(tmp_path: Path) -> None:
     existing = tmp_path / "exists"
     existing.mkdir()
     missing = tmp_path / "does-not-exist"
     assert same_path(str(existing), str(missing)) is False
 
 
-def test_same_path_fallback_true_for_identical_missing_path_strings(tmp_path):
+def test_same_path_fallback_true_for_identical_missing_path_strings(tmp_path: Path) -> None:
     missing = tmp_path / "does-not-exist"
     assert same_path(str(missing), str(missing)) is True
 
 
-def test_same_path_never_raises_for_unreadable_or_malformed_input():
+def test_same_path_never_raises_for_unreadable_or_malformed_input() -> None:
     assert same_path("", "") in (True, False)
     assert same_path("\x00bad", "\x00bad") in (True, False)
 
 
-def test_same_path_case_insensitive_on_windows(tmp_path, monkeypatch):
+def test_same_path_case_insensitive_on_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     if os.name != "nt":
         pytest.skip("normcase is a no-op on POSIX; this asserts Windows-real casefold behaviour")
     missing_upper = str(tmp_path / "DOES-NOT-EXIST")
@@ -270,7 +276,7 @@ def test_same_path_case_insensitive_on_windows(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def _write_child_script(tmp_path, stdout_text="out-line\n", stderr_text="err-line\n", returncode=0):
+def _write_child_script(tmp_path, stdout_text: str = "out-line\n", stderr_text: str = "err-line\n", returncode: int = 0) -> str:
     script = tmp_path / "run_forwarding_child.py"
     script.write_text(
         "import sys\n"
@@ -281,7 +287,7 @@ def _write_child_script(tmp_path, stdout_text="out-line\n", stderr_text="err-lin
     return str(script)
 
 
-def test_run_forwarding_reaches_a_plain_capture_buffer(tmp_path):
+def test_run_forwarding_reaches_a_plain_capture_buffer(tmp_path: Path) -> None:
     import io
 
     child = _write_child_script(tmp_path, stdout_text="plain stdout\n", stderr_text="plain stderr\n")
@@ -293,7 +299,7 @@ def test_run_forwarding_reaches_a_plain_capture_buffer(tmp_path):
     assert "plain stderr" in forwarded
 
 
-def test_run_forwarding_under_redirect_stderr_reaches_the_buffer(tmp_path):
+def test_run_forwarding_under_redirect_stderr_reaches_the_buffer(tmp_path: Path) -> None:
     import contextlib
     import io
 
@@ -307,7 +313,7 @@ def test_run_forwarding_under_redirect_stderr_reaches_the_buffer(tmp_path):
     assert "child stderr" in forwarded
 
 
-def test_run_forwarding_returncode_propagates_nonzero(tmp_path):
+def test_run_forwarding_returncode_propagates_nonzero(tmp_path: Path) -> None:
     import io
 
     child = _write_child_script(tmp_path, returncode=3)
@@ -316,7 +322,7 @@ def test_run_forwarding_returncode_propagates_nonzero(tmp_path):
     assert proc.returncode == 3
 
 
-def test_run_forwarding_check_true_raises_after_forwarding(tmp_path):
+def test_run_forwarding_check_true_raises_after_forwarding(tmp_path: Path) -> None:
     import io
     import subprocess
 
@@ -328,11 +334,11 @@ def test_run_forwarding_check_true_raises_after_forwarding(tmp_path):
     assert exc_info.value.returncode == 1
 
 
-def test_run_forwarding_passthrough_unchanged_for_real_fileno_stream(monkeypatch):
+def test_run_forwarding_passthrough_unchanged_for_real_fileno_stream(monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     class _FakeConsoleStream:
-        def fileno(self):
+        def fileno(self) -> int:
             return 5
 
     calls: dict = {}
@@ -350,13 +356,13 @@ def test_run_forwarding_passthrough_unchanged_for_real_fileno_stream(monkeypatch
     assert "text" not in calls
 
 
-def test_run_forwarding_merges_stderr_into_stdout_for_same_fileno_less_target(monkeypatch):
+def test_run_forwarding_merges_stderr_into_stdout_for_same_fileno_less_target(monkeypatch: pytest.MonkeyPatch) -> None:
     import io
     import subprocess
 
     calls: dict = {}
 
-    def _fake_run(argv, **kwargs):
+    def _fake_run(argv, **kwargs) -> CompletedProcess[str]:
         calls.update(kwargs)
         return subprocess.CompletedProcess(argv, 0, stdout="merged output\n")
 
@@ -369,7 +375,7 @@ def test_run_forwarding_merges_stderr_into_stdout_for_same_fileno_less_target(mo
     assert buf.getvalue() == "merged output\n"
 
 
-def test_is_executable_on_nt_follows_pathext_suffix(tmp_path, monkeypatch):
+def test_is_executable_on_nt_follows_pathext_suffix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import win_portability as wp
 
     monkeypatch.setattr(wp, "_is_windows", lambda: True)

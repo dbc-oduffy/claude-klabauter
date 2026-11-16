@@ -44,6 +44,7 @@ from __future__ import annotations
 import inspect
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -77,7 +78,7 @@ def _envelope(cmd, **kwargs):
 
 
 class TestRewriteScriptCompilesAndFallsBack:
-    def test_windows_path_and_backslash_regex_compile(self):
+    def test_windows_path_and_backslash_regex_compile(self) -> None:
         import shlex
 
         for cmd in (
@@ -89,7 +90,7 @@ class TestRewriteScriptCompilesAndFallsBack:
             assert rewrite is not None, cmd
             compile(shlex.split(rewrite)[-1], "x", "exec")
 
-    def test_rewrite_error_falls_back_to_original(self, monkeypatch):
+    def test_rewrite_error_falls_back_to_original(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import shlex
 
         def boom(parsed):
@@ -99,7 +100,7 @@ class TestRewriteScriptCompilesAndFallsBack:
         rewrite, reason = guard._substitutable_rewrite(shlex.split("grep -n foo src"))
         assert rewrite is None and reason == guard._REASON_UNTRANSLATABLE
 
-    def test_standalone_rewrite_that_will_not_compile_keeps_the_original(self, monkeypatch):
+    def test_standalone_rewrite_that_will_not_compile_keeps_the_original(self, monkeypatch: pytest.MonkeyPatch) -> None:
         cmd = "grep -n foo src"
         assert _enveloped(_dc_rewrites.check_grep_via_bash_rewrite)(cmd) is not None
         monkeypatch.setattr(
@@ -109,22 +110,22 @@ class TestRewriteScriptCompilesAndFallsBack:
 
 
 class TestSubstitutableResidueIsSilent:
-    def test_windows_no_longer_denies(self):
+    def test_windows_no_longer_denies(self) -> None:
         assert _result("grep -rn TODO src/", host_is_windows=True) is None
 
-    def test_macos_no_longer_advises(self):
+    def test_macos_no_longer_advises(self) -> None:
         assert _result("grep -rn TODO src/", host_is_windows=False) is None
 
-    def test_case_insensitive_and_filenames_only_flags_also_silent(self):
+    def test_case_insensitive_and_filenames_only_flags_also_silent(self) -> None:
         for cmd in ("grep -il TODO src/", "grep -rc TODO src/"):
             assert _result(cmd, host_is_windows=True) is None, cmd
 
-    def test_egrep_fgrep_rg_all_silent(self):
+    def test_egrep_fgrep_rg_all_silent(self) -> None:
         for binary in ("egrep", "fgrep", "rg"):
             cmd = "%s -rn TODO src/" % binary
             assert _result(cmd, host_is_windows=True) is None, cmd
 
-    def test_still_shares_the_rewrite_target_bx16_would_emit(self):
+    def test_still_shares_the_rewrite_target_bx16_would_emit(self) -> None:
         """Sanity check that this guard's own substitutability test still
         agrees with BX-16's rewrite check on what counts as substitutable
         -- even though this guard no longer speaks about it, a drift here
@@ -135,7 +136,7 @@ class TestSubstitutableResidueIsSilent:
 
 
 class TestPartialRewriteIsDeleted:
-    def test_two_segment_pipe_offer_is_absent(self):
+    def test_two_segment_pipe_offer_is_absent(self) -> None:
         for cmd in (
             "grep -rn TODO src/ | wc -l",
             "grep -l X . | xargs grep -l Y",
@@ -144,13 +145,13 @@ class TestPartialRewriteIsDeleted:
             for host_is_windows in (True, False):
                 assert _result(cmd, host_is_windows=host_is_windows) is None, cmd
 
-    def test_partial_pipe_rewrite_symbols_are_gone(self):
+    def test_partial_pipe_rewrite_symbols_are_gone(self) -> None:
         assert not hasattr(guard, "_partial_pipe_rewrite")
         assert not hasattr(guard, "_downstream_token_needs_expansion")
         assert not hasattr(guard, "_DOWNSTREAM_SAFE_TOKEN_RE")
         assert "one-fewer-fork" not in inspect.getsource(guard._composed_advisory)
 
-    def test_gnu_only_pipe_advisory_carries_no_replacement_offer(self):
+    def test_gnu_only_pipe_advisory_carries_no_replacement_offer(self) -> None:
         out = _envelope("grep -Pn TODO src/ | wc -l", host_is_windows=True)
         ctx = out["additionalContext"]
         assert "GNU-only" in ctx
@@ -160,25 +161,25 @@ class TestPartialRewriteIsDeleted:
 
 
 class TestNoActionableAlternativeIsSilent:
-    def test_piped_in_composed_is_silent(self):
+    def test_piped_in_composed_is_silent(self) -> None:
         assert _result("cat file.txt | grep TODO", host_is_windows=True) is None
 
-    def test_semicolon_chained_is_silent(self):
+    def test_semicolon_chained_is_silent(self) -> None:
         assert _result("echo hi; grep -rn TODO src/", host_is_windows=True) is None
 
-    def test_and_chained_is_silent(self):
+    def test_and_chained_is_silent(self) -> None:
         assert _result("grep -rn TODO src/ && echo done", host_is_windows=True) is None
 
-    def test_three_segment_pipe_is_silent(self):
+    def test_three_segment_pipe_is_silent(self) -> None:
         assert _result("grep -rn TODO src/ | sort | wc -l", host_is_windows=True) is None
 
-    def test_unrecognized_short_flag_is_silent(self):
+    def test_unrecognized_short_flag_is_silent(self) -> None:
         assert _result("grep -A3 TODO src/x.py", host_is_windows=True) is None
 
-    def test_untranslatable_regex_dialect_is_silent(self):
+    def test_untranslatable_regex_dialect_is_silent(self) -> None:
         assert _result(r'grep -n "a\|b" file', host_is_windows=True) is None
 
-    def test_downstream_expansion_declines_the_partial_rewrite_and_stays_silent(self):
+    def test_downstream_expansion_declines_the_partial_rewrite_and_stays_silent(self) -> None:
         """A downstream token needing shell expansion (`$VAR`, a glob, a
         leading `~`, a backtick, redirection, brace expansion) makes
         a pipe-downstream, with no GNU-only construct, is silent."""
@@ -192,61 +193,61 @@ class TestNoActionableAlternativeIsSilent:
         ):
             assert _result(cmd, host_is_windows=True) is None, cmd
 
-    def test_untranslatable_upstream_in_a_pipe_is_silent(self):
+    def test_untranslatable_upstream_in_a_pipe_is_silent(self) -> None:
         cmd = "grep -A3 TODO src/x.py | wc -l"
         assert _result(cmd, host_is_windows=True) is None
 
 
 class TestGnuOnlyConstructStillAdvises:
-    def test_dash_capital_p_on_single_segment_advises(self):
+    def test_dash_capital_p_on_single_segment_advises(self) -> None:
         # -P is not in `_GREP_SUBSTITUTABLE_SHORT_FLAGS`, so this is
         # untranslatable-reason, and -P is genuinely GNU-only.
         out = _envelope("grep -Pn TODO src/", host_is_windows=True)
         assert out["permissionDecision"] == "allow"
         assert "GNU-only" in out["additionalContext"]
 
-    def test_dash_z_advises(self):
+    def test_dash_z_advises(self) -> None:
         out = _envelope("grep -rnz TODO src/", host_is_windows=True)
         assert "GNU-only" in out["additionalContext"]
 
-    def test_long_option_on_the_denylist_advises(self):
+    def test_long_option_on_the_denylist_advises(self) -> None:
         # `--group-separator` is on the C2 denylist (absent on BSD grep) --
         # unlike the deleted allowlist shape, this asserts a DENYLISTED
         # long option fires, not merely "not on a two-entry allowlist".
         out = _envelope("grep --group-separator=== TODO src/", host_is_windows=True)
         assert "GNU-only" in out["additionalContext"]
 
-    def test_include_and_exclude_do_not_count_as_gnu_only(self):
+    def test_include_and_exclude_do_not_count_as_gnu_only(self) -> None:
         assert _result("grep -rn TODO --include=*.py src/", host_is_windows=True) is None
 
-    def test_exclude_dir_does_not_count_as_gnu_only(self):
+    def test_exclude_dir_does_not_count_as_gnu_only(self) -> None:
         assert (
             _result("grep -rn TODO --exclude-dir=.git src/", host_is_windows=True)
             is None
         )
 
-    def test_version_does_not_count_as_gnu_only(self):
+    def test_version_does_not_count_as_gnu_only(self) -> None:
         assert _result("grep --version", host_is_windows=True) is None
 
-    def test_color_does_not_count_as_gnu_only(self):
+    def test_color_does_not_count_as_gnu_only(self) -> None:
         assert _result("grep --color TODO src/", host_is_windows=True) is None
 
-    def test_dash_o_and_dash_r_do_not_count_as_gnu_only(self):
+    def test_dash_o_and_dash_r_do_not_count_as_gnu_only(self) -> None:
         # `-o`/`-r` exist on BSD grep too -- semantic divergence, not a
         # portability hazard this guard should flag. `-o` alone is outside
         # `_GREP_SUBSTITUTABLE_SHORT_FLAGS`, so this is untranslatable-
         # reason (not chained), same gate as the rest of this class.
         assert _result("grep -ro TODO src/", host_is_windows=True) is None
 
-    def test_dash_capital_z_advises(self):
+    def test_dash_capital_z_advises(self) -> None:
         out = _envelope("grep -rnZ TODO src/", host_is_windows=True)
         assert "GNU-only" in out["additionalContext"]
 
-    def test_dash_capital_t_advises(self):
+    def test_dash_capital_t_advises(self) -> None:
         out = _envelope("grep -rnT TODO src/", host_is_windows=True)
         assert "GNU-only" in out["additionalContext"]
 
-    def test_gnu_only_construct_in_a_chained_command_still_advises(self):
+    def test_gnu_only_construct_in_a_chained_command_still_advises(self) -> None:
         """The GNU-only check scans every grep-family segment of a chained
         command, not only a lone single-segment one -- `_REASON_CHAINED`
         short-circuits before flags are ever inspected, so this must be a
@@ -254,12 +255,12 @@ class TestGnuOnlyConstructStillAdvises:
         out = _envelope("grep -Pn TODO src/ && echo done", host_is_windows=True)
         assert "GNU-only" in out["additionalContext"]
 
-    def test_message_names_the_subagent_fallback(self):
+    def test_message_names_the_subagent_fallback(self) -> None:
         out = _envelope("grep -Pn TODO src/", host_is_windows=True)
         ctx = out["additionalContext"]
         assert "Explore or general-purpose subagent" in ctx
 
-    def test_message_points_to_the_override_route_doc(self):
+    def test_message_points_to_the_override_route_doc(self) -> None:
         """See the sibling assertion (renamed the same way, same day) in
         TestComposedAdvisoryWithoutRewrite for the full rationale (a
         code-review finding, M17, 2026-07-30, updated 2026-08-11 for the
@@ -280,7 +281,7 @@ class TestGnuOnlyConstructStillAdvises:
 
 
 class TestPrecedence:
-    def test_composite_banner_plus_grep_plus_head_is_silent_but_correctly_classified(self):
+    def test_composite_banner_plus_grep_plus_head_is_silent_but_correctly_classified(self) -> None:
         from coordinator_core.bash_guards._shape_classifier import (
             Shape as _Shape,
             classify_command as _classify_command,
@@ -292,7 +293,7 @@ class TestPrecedence:
         assert classification.has_shape(_Shape.GREP_VIA_BASH)
         assert classification.primary.shape is _Shape.GREP_VIA_BASH
 
-    def test_composite_with_a_gnu_only_flag_still_names_grep_via_bash(self):
+    def test_composite_with_a_gnu_only_flag_still_names_grep_via_bash(self) -> None:
         cmd = 'echo "=== status ==="; cat log.txt | grep -P error | head'
         out = _envelope(cmd, host_is_windows=True)
         ctx = out["additionalContext"]
@@ -311,7 +312,7 @@ class TestPrecedence:
 
 class TestGnuOnlyDenylistRationaleDocumented:
     @staticmethod
-    def _source_around(const_name):
+    def _source_around(const_name) -> str:
         """Return the source lines spanning from the comment block
         immediately preceding ``const_name``'s assignment through the
         assignment itself, so a rationale comment attached to that
@@ -329,7 +330,7 @@ class TestGnuOnlyDenylistRationaleDocumented:
             start -= 1
         return "\n".join(source_lines[start : assign_idx + 1])
 
-    def test_every_short_flag_entry_has_a_rationale_comment(self):
+    def test_every_short_flag_entry_has_a_rationale_comment(self) -> None:
         block = self._source_around("_GNU_ONLY_SHORT_FLAGS")
         for flag in guard._GNU_ONLY_SHORT_FLAGS:
             assert ("`%s`" % flag) in block or ("`-%s`" % flag) in block, (
@@ -337,32 +338,32 @@ class TestGnuOnlyDenylistRationaleDocumented:
                 block,
             )
 
-    def test_every_long_opt_entry_has_a_rationale_comment(self):
+    def test_every_long_opt_entry_has_a_rationale_comment(self) -> None:
         block = self._source_around("_GNU_ONLY_LONG_OPTS")
         for opt in guard._GNU_ONLY_LONG_OPTS:
             assert ("`%s`" % opt) in block, (opt, block)
 
-    def test_denylist_constants_are_frozensets(self):
+    def test_denylist_constants_are_frozensets(self) -> None:
         assert isinstance(guard._GNU_ONLY_SHORT_FLAGS, frozenset)
         assert isinstance(guard._GNU_ONLY_LONG_OPTS, frozenset)
 
-    def test_derivation_date_and_platform_recorded(self):
+    def test_derivation_date_and_platform_recorded(self) -> None:
         block = self._source_around("_GNU_ONLY_LONG_OPTS")
         assert "2026-08-01" in block
         assert "macOS 26.5" in block
 
 
 class TestOverrideEnvVar:
-    def test_override_suppresses_gnu_only_pipe_advisory(self, monkeypatch):
+    def test_override_suppresses_gnu_only_pipe_advisory(self, monkeypatch: pytest.MonkeyPatch) -> None:
         assert _result("grep -Pn TODO src/ | wc -l", host_is_windows=True) is not None
         monkeypatch.setenv("COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD", "1")
         assert _result("grep -Pn TODO src/ | wc -l", host_is_windows=True) is None
 
-    def test_override_suppresses_gnu_only_advisory(self, monkeypatch):
+    def test_override_suppresses_gnu_only_advisory(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD", "1")
         assert _result("grep -Pn TODO src/", host_is_windows=True) is None
 
-    def test_wrong_value_does_not_suppress(self, monkeypatch):
+    def test_wrong_value_does_not_suppress(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COORDINATOR_OVERRIDE_GREP_VIA_BASH_GUARD", "yes")
         result = _result("grep -Pn TODO src/", host_is_windows=True)
         assert result is not None
@@ -370,20 +371,20 @@ class TestOverrideEnvVar:
 
 
 class TestNonMatches:
-    def test_non_bash_tool_allows(self):
+    def test_non_bash_tool_allows(self) -> None:
         payload = {"tool_name": "Read", "tool_input": {"file_path": "x"}}
         assert _enveloped(guard.check)(payload) is None
 
-    def test_empty_command_allows(self):
+    def test_empty_command_allows(self) -> None:
         assert _result("") is None
 
-    def test_no_grep_family_binary_allows(self):
+    def test_no_grep_family_binary_allows(self) -> None:
         assert _result("ls -la") is None
 
-    def test_missing_tool_input_allows(self):
+    def test_missing_tool_input_allows(self) -> None:
         assert _enveloped(guard.check)({"tool_name": "Bash"}) is None
 
-    def test_unparseable_command_allows(self):
+    def test_unparseable_command_allows(self) -> None:
         assert _result("grep 'unterminated") is None
 
 
@@ -404,7 +405,7 @@ class TestPowerShellDialect:
             "cwd": None,
         }
 
-    def test_select_string_declares_silent_not_false_clean(self):
+    def test_select_string_declares_silent_not_false_clean(self) -> None:
         from coordinator_core.bash_guards._verdict import collecting, was_silent
 
         with collecting() as silences:
@@ -412,7 +413,7 @@ class TestPowerShellDialect:
         assert result is None
         assert was_silent("guard_grep_via_bash", silences)
 
-    def test_sls_alias_declares_silent(self):
+    def test_sls_alias_declares_silent(self) -> None:
         from coordinator_core.bash_guards._verdict import collecting, was_silent
 
         with collecting() as silences:
@@ -420,7 +421,7 @@ class TestPowerShellDialect:
         assert result is None
         assert was_silent("guard_grep_via_bash", silences)
 
-    def test_non_grep_powershell_command_is_a_genuine_clean(self):
+    def test_non_grep_powershell_command_is_a_genuine_clean(self) -> None:
         from coordinator_core.bash_guards._verdict import collecting, was_silent
 
         with collecting() as silences:
@@ -439,7 +440,7 @@ class TestPowerShellTokenizesOnce:
     def _ps(self, command):
         return {**self._PS, "tool_input": {"command": command}}
 
-    def test_one_tokenize_per_grep_recognized_call(self, monkeypatch):
+    def test_one_tokenize_per_grep_recognized_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.bash_guards import _shape_classifier as sc
 
         calls = []
@@ -453,7 +454,7 @@ class TestPowerShellTokenizesOnce:
         _enveloped(guard.check)(self._ps("grep -rnP TODO src"))
         assert len(calls) == 1
 
-    def test_heredoc_body_does_not_trigger_select_string_decline(self):
+    def test_heredoc_body_does_not_trigger_select_string_decline(self) -> None:
         # The raw (unstripped) tokenize fails on this command; the stripped
         # one sees only `grep -rnP TODO src <<EOF`. The heredoc-stripped
         # policy is chosen for both the decline check and the
@@ -463,7 +464,7 @@ class TestPowerShellTokenizesOnce:
         assert result is not None
         assert "GNU-only" in result["hookSpecificOutput"]["additionalContext"]
 
-    def test_real_select_string_still_declines(self):
+    def test_real_select_string_still_declines(self) -> None:
         from coordinator_core.bash_guards._verdict import collecting, was_silent
 
         with collecting() as silences:
@@ -471,7 +472,7 @@ class TestPowerShellTokenizesOnce:
         assert result is None
         assert was_silent("guard_grep_via_bash", silences)
 
-    def test_heredoc_body_select_string_is_data_not_a_decline(self):
+    def test_heredoc_body_select_string_is_data_not_a_decline(self) -> None:
         """A Select-String inside a heredoc body is stdin data, so the grep
         invocation is judged on its own and is not declared SILENT."""
         from coordinator_core.bash_guards._verdict import collecting, was_silent
@@ -483,7 +484,7 @@ class TestPowerShellTokenizesOnce:
 
 
 class TestClassifyCommandPreTokenizedInput:
-    def test_tokens_kwarg_matches_self_tokenized_classification(self):
+    def test_tokens_kwarg_matches_self_tokenized_classification(self) -> None:
         from coordinator_core.bash_guards._dialect import Dialect
         from coordinator_core.bash_guards import _shape_classifier as sc
 
@@ -492,7 +493,7 @@ class TestClassifyCommandPreTokenizedInput:
         assert tokens == ["grep", "-rn", "TODO", "src", "<<EOF"]
         assert sc.classify_command(cmd, tokens=tokens) == sc.classify_command(cmd)
 
-    def test_tokens_kwarg_skips_tokenize(self, monkeypatch):
+    def test_tokens_kwarg_skips_tokenize(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.bash_guards import _shape_classifier as sc
 
         monkeypatch.setattr(
@@ -506,7 +507,7 @@ class TestProjectRagRecommendation:
     """Recommend example-retrieval-repo only where the local verdict file lists the repo; never a deny."""
 
     @staticmethod
-    def _repo(tmp_path, monkeypatch, served, name="servedrepo", reachable=True, age_s=0):
+    def _repo(tmp_path, monkeypatch, served, name: str = "servedrepo", reachable: bool = True, age_s: int = 0):
         import json
         import os
         import time
@@ -533,7 +534,7 @@ class TestProjectRagRecommendation:
         record = guard.check(payload, host_is_windows=False)
         return record, (envelope_of(record) if record is not None else None)
 
-    def test_served_whole_repo_grep_recommends_example_retrieval_repo(self, tmp_path, monkeypatch):
+    def test_served_whole_repo_grep_recommends_example_retrieval_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = self._repo(tmp_path, monkeypatch, served=True)
         record, env = self._text("grep -r foo .", repo)
         assert record is not None and record.verdict_kind == "advisory"
@@ -541,22 +542,22 @@ class TestProjectRagRecommendation:
         for name in ("project_semantic_search", "project_symbol", "project_referencers", "ToolSearch"):
             assert name in text
 
-    def test_unserved_repo_gets_no_recommendation(self, tmp_path, monkeypatch):
+    def test_unserved_repo_gets_no_recommendation(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = self._repo(tmp_path, monkeypatch, served=False)
         record, _env = self._text("grep -r foo .", repo)
         assert record is None
 
-    def test_unreachable_or_stale_verdict_is_not_served(self, tmp_path, monkeypatch):
+    def test_unreachable_or_stale_verdict_is_not_served(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = self._repo(tmp_path, monkeypatch, served=True, reachable=False)
         assert self._text("grep -r foo .", repo)[0] is None
         repo = self._repo(tmp_path / "b", monkeypatch, served=True, age_s=3 * 3600)
         assert self._text("grep -r foo .", repo)[0] is None
 
-    def test_scoped_search_is_not_recommended_even_when_served(self, tmp_path, monkeypatch):
+    def test_scoped_search_is_not_recommended_even_when_served(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = self._repo(tmp_path, monkeypatch, served=True)
         assert self._text("grep -rn TODO src/", repo)[0] is None
 
-    def test_gnu_only_advisory_gains_the_hint_only_when_served(self, tmp_path, monkeypatch):
+    def test_gnu_only_advisory_gains_the_hint_only_when_served(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = self._repo(tmp_path, monkeypatch, served=True)
         record, env = self._text("grep -Pn TODO src/ | wc -l", repo)
         assert "project_semantic_search" in str(env)
@@ -564,7 +565,7 @@ class TestProjectRagRecommendation:
         record, env = self._text("grep -Pn TODO src/ | wc -l", repo)
         assert record is not None and "project-rag" not in str(env)
 
-    def test_never_a_deny_and_no_network_or_subprocess(self, tmp_path, monkeypatch):
+    def test_never_a_deny_and_no_network_or_subprocess(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import socket
         import subprocess
 
@@ -579,13 +580,13 @@ class TestProjectRagRecommendation:
             assert record is not None and record.verdict_kind == "advisory"
 
     @pytest.mark.parametrize("cmd", ["grep -R foo .", "grep -r foo", "grep -rn foo"])
-    def test_capital_r_and_bare_target_forms_are_recommended(self, tmp_path, monkeypatch, cmd):
+    def test_capital_r_and_bare_target_forms_are_recommended(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cmd) -> None:
         repo = self._repo(tmp_path, monkeypatch, served=True)
         record, env = self._text(cmd, repo)
         assert record is not None and record.verdict_kind == "advisory"
         assert "project_semantic_search" in str(env)
 
-    def test_chain_at_served_repo_root_still_names_example_retrieval_repo(self, tmp_path, monkeypatch):
+    def test_chain_at_served_repo_root_still_names_example_retrieval_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Through the production entrypoint, `rewrite-repo-root-search` claims the command
         before this guard; the served-repo answer must still point at example-retrieval-repo."""
         import json

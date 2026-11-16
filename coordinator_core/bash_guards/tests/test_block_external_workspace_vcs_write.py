@@ -11,6 +11,7 @@ from coordinator_core import machine_profile
 from coordinator_core import machine_resolver as mr
 from coordinator_core.bash_guards import block_external_workspace_vcs_write as guard
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -18,7 +19,7 @@ def _enveloped(check):
 
 
 @pytest.fixture
-def ws(tmp_path, monkeypatch):
+def ws(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     reg = tmp_path / "ml"
     reg.mkdir()
     root = tmp_path / "slice"
@@ -35,7 +36,7 @@ def ws(tmp_path, monkeypatch):
     mr._external_ws_cache.clear()
 
 
-def _p(cmd: str, cwd=None, tool="Bash") -> dict:
+def _p(cmd: str, cwd=None, tool: str = "Bash") -> dict:
     payload = {"tool_name": tool, "tool_input": {"command": cmd}}
     if cwd is not None:
         payload["cwd"] = str(cwd)
@@ -46,25 +47,25 @@ def _denied(out) -> bool:
     return out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_commit_in_cwd_inside_denied(ws):
+def test_commit_in_cwd_inside_denied(ws) -> None:
     out = _enveloped(guard.check)(_p("git commit -m x", cwd=ws / "slice" / "sub"))
     assert _denied(out)
     assert "p4_x" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_dash_c_from_outside_denied(ws):
+def test_git_dash_c_from_outside_denied(ws) -> None:
     assert _denied(_enveloped(guard.check)(_p(f"git -C {(ws / 'slice').as_posix()} commit -m x", cwd=ws / "sibling")))
 
 
-def test_relative_dash_c_denied(ws):
+def test_relative_dash_c_denied(ws) -> None:
     assert _denied(_enveloped(guard.check)(_p("git -C ../slice commit -m x", cwd=ws / "sibling")))
 
 
-def test_cd_then_commit_denied(ws):
+def test_cd_then_commit_denied(ws) -> None:
     assert _denied(_enveloped(guard.check)(_p(f"cd {(ws / 'slice').as_posix()} && git commit -m x", cwd=ws / "sibling")))
 
 
-def test_git_dir_and_work_tree_denied(ws):
+def test_git_dir_and_work_tree_denied(ws) -> None:
     root = (ws / "slice").as_posix()
     assert _denied(_enveloped(guard.check)(_p(f"git --git-dir={root}/.git commit -m x", cwd=ws / "sibling")))
     assert _denied(_enveloped(guard.check)(_p(f"git --work-tree {root} commit -m x", cwd=ws / "sibling")))
@@ -77,28 +78,28 @@ def test_git_dir_and_work_tree_denied(ws):
      "export FOO=1 GIT_DIR={r}/.git", "export GIT_DIR='{r}/.git'"],
 )
 @pytest.mark.parametrize("sep", ["; ", " && "])
-def test_carried_env_then_commit_denied(ws, stmt, sep):
+def test_carried_env_then_commit_denied(ws, stmt, sep) -> None:
     root = (ws / "slice").as_posix()
     cmd = stmt.format(r=root) + sep + "git commit -m x"
     assert _denied(_enveloped(guard.check)(_p(cmd, cwd=ws / "sibling")))
 
 
-def test_carried_env_hidden_value_denies_only_inside(ws):
+def test_carried_env_hidden_value_denies_only_inside(ws) -> None:
     cmd = "export GIT_DIR=$X/.git; git commit -m x"
     assert _denied(_enveloped(guard.check)(_p(cmd, cwd=ws / "slice")))
     assert _enveloped(guard.check)(_p(cmd, cwd=ws / "sibling")) is None
 
 
-def test_carried_env_relative_value_resolves_against_cwd(ws):
+def test_carried_env_relative_value_resolves_against_cwd(ws) -> None:
     assert _denied(_enveloped(guard.check)(_p("export GIT_WORK_TREE=../slice; git commit -m x", cwd=ws / "sibling")))
 
 
-def test_carried_env_windows_shaped_path_does_not_crash(ws):
+def test_carried_env_windows_shaped_path_does_not_crash(ws) -> None:
     cmd = "export GIT_DIR=C:\\other\\ws\\.git; git commit -m x"  # abs-path-ok: Windows-shape parse fixture
     assert _enveloped(guard.check)(_p(cmd, cwd=ws / "sibling")) is None
 
 
-def test_carried_env_outside_or_unrelated_allowed(ws):
+def test_carried_env_outside_or_unrelated_allowed(ws) -> None:
     sib = (ws / "sibling").as_posix()
     assert _enveloped(guard.check)(_p(f"export GIT_DIR={sib}/.git; git commit -m x", cwd=ws / "sibling")) is None
     assert _enveloped(guard.check)(_p("export FOO=bar; git commit -m x", cwd=ws / "sibling")) is None
@@ -106,7 +107,7 @@ def test_carried_env_outside_or_unrelated_allowed(ws):
     assert _enveloped(guard.check)(_p(f"export GIT_DIR={root}/.git; git status", cwd=ws / "sibling")) is None
 
 
-def test_carried_env_followed_even_when_command_has_parens(ws):
+def test_carried_env_followed_even_when_command_has_parens(ws) -> None:
     root = (ws / "slice").as_posix()
     cmd = f"export GIT_DIR={root}/.git; echo $(true); git commit -m x"
     assert _denied(_enveloped(guard.check)(_p(cmd, cwd=ws / "sibling")))
@@ -130,12 +131,12 @@ def test_carried_env_followed_even_when_command_has_parens(ws):
         "(git -C {r} commit -m x)",
     ],
 )
-def test_subshell_scoped_env_and_cd_denied(ws, tmpl):
+def test_subshell_scoped_env_and_cd_denied(ws, tmpl) -> None:
     cmd = tmpl.format(r=(ws / "slice").as_posix())
     assert _denied(_enveloped(guard.check)(_p(cmd, cwd=ws / "sibling")))
 
 
-def test_subshell_carry_does_not_leak_past_close(ws):
+def test_subshell_carry_does_not_leak_past_close(ws) -> None:
     root = (ws / "slice").as_posix()
     for cmd in (
         f"(cd {root}); git commit -m x",
@@ -150,28 +151,28 @@ def test_subshell_carry_does_not_leak_past_close(ws):
         assert _enveloped(guard.check)(_p(cmd, cwd=ws / "sibling")) is None, cmd
 
 
-def test_subshell_outer_carry_visible_inside(ws):
+def test_subshell_outer_carry_visible_inside(ws) -> None:
     root = (ws / "slice").as_posix()
     assert _denied(_enveloped(guard.check)(_p(f"export GIT_DIR={root}/.git; (git commit -m x)", cwd=ws / "sibling")))
     assert _denied(_enveloped(guard.check)(_p(f"cd {root}; (true; git commit -m x)", cwd=ws / "sibling")))
 
 
-def test_subshell_git_write_inside_cwd_denied_and_outside_allowed(ws):
+def test_subshell_git_write_inside_cwd_denied_and_outside_allowed(ws) -> None:
     assert _denied(_enveloped(guard.check)(_p("(git commit -m x)", cwd=ws / "slice")))
     assert _enveloped(guard.check)(_p("(git commit -m x)", cwd=ws / "sibling")) is None
     assert _enveloped(guard.check)(_p("(git commit -m 'a)'; git status)", cwd=ws / "sibling")) is None
 
 
-def test_quoted_close_paren_does_not_end_scope(ws):
+def test_quoted_close_paren_does_not_end_scope(ws) -> None:
     root = (ws / "slice").as_posix()
     assert _denied(_enveloped(guard.check)(_p(f"(cd {root}; git log --format='%h)'; git commit -m x)", cwd=ws / "sibling")))
 
 
-def test_cd_then_commit_across_statements_still_denied(ws):
+def test_cd_then_commit_across_statements_still_denied(ws) -> None:
     assert _denied(_enveloped(guard.check)(_p(f"cd {(ws / 'slice').as_posix()}; git commit -m x", cwd=ws / "sibling")))
 
 
-def test_init_and_clone_destination_denied(ws):
+def test_init_and_clone_destination_denied(ws) -> None:
     root = (ws / "slice").as_posix()
     assert _denied(_enveloped(guard.check)(_p(f"git init {root}/sub", cwd=ws / "sibling")))
     assert _denied(_enveloped(guard.check)(_p(f"git clone x {root}/y", cwd=ws / "sibling")))
@@ -179,7 +180,7 @@ def test_init_and_clone_destination_denied(ws):
     assert _denied(_enveloped(guard.check)(_p("git init", cwd=ws / "slice")))
 
 
-def test_clone_from_workspace_to_outside_allowed(ws):
+def test_clone_from_workspace_to_outside_allowed(ws) -> None:
     root = (ws / "slice").as_posix()
     assert _enveloped(guard.check)(_p(f"git clone {root} {(ws / 'sibling' / 'c').as_posix()}", cwd=ws / "sibling")) is None
 
@@ -192,7 +193,7 @@ def test_clone_from_workspace_to_outside_allowed(ws):
         "branch topic", "checkout -b topic", "switch -c topic", "worktree add ../w",
     ],
 )
-def test_history_and_ref_verbs_denied(ws, cmd):
+def test_history_and_ref_verbs_denied(ws, cmd) -> None:
     assert _denied(_enveloped(guard.check)(_p(f"git {cmd}", cwd=ws / "slice")))
 
 
@@ -204,58 +205,58 @@ def test_history_and_ref_verbs_denied(ws, cmd):
         "checkout main", "-C . status",
     ],
 )
-def test_read_verbs_allowed(ws, cmd):
+def test_read_verbs_allowed(ws, cmd) -> None:
     assert _enveloped(guard.check)(_p(f"git {cmd}", cwd=ws / "slice")) is None
 
 
-def test_commit_in_sibling_allowed(ws):
+def test_commit_in_sibling_allowed(ws) -> None:
     assert _enveloped(guard.check)(_p("git commit -m x", cwd=ws / "sibling")) is None
     assert _enveloped(guard.check)(_p("git commit -m x", cwd=ws / "slice2")) is None
 
 
-def test_hidden_dir_inside_workspace_denies_outside_allows(ws):
+def test_hidden_dir_inside_workspace_denies_outside_allows(ws) -> None:
     assert _denied(_enveloped(guard.check)(_p("git -C $D commit -m x", cwd=ws / "slice")))
     assert _enveloped(guard.check)(_p("git -C $D commit -m x", cwd=ws / "sibling")) is None
     assert _denied(_enveloped(guard.check)(_p("cd $(pwd)/x && git commit -m y", cwd=ws / "slice")))
 
 
-def test_quoted_prose_and_wrapped_shell_forms(ws):
+def test_quoted_prose_and_wrapped_shell_forms(ws) -> None:
     assert _enveloped(guard.check)(_p('echo "git commit -m x"', cwd=ws / "slice")) is None
     assert _denied(_enveloped(guard.check)(_p("sh -c 'git commit -m x'", cwd=ws / "slice")))
     assert _denied(_enveloped(guard.check)(_p("git status && git commit -m x", cwd=ws / "slice")))
 
 
-def test_powershell_tool_covered(ws):
+def test_powershell_tool_covered(ws) -> None:
     assert _denied(_enveloped(guard.check)(_p("git.exe commit -m x", cwd=ws / "slice", tool="PowerShell")))
 
 
 @pytest.mark.skipif(os.path.normcase("A") == "A", reason="case-insensitive normcase only on Windows")
-def test_case_variant_denied(ws):
+def test_case_variant_denied(ws) -> None:
     assert _denied(_enveloped(guard.check)(_p(f"git -C {(ws / 'slice').as_posix().upper()} commit -m x", cwd=ws)))
 
 
 @pytest.mark.skipif(os.name != "nt", reason="drive-letter paths only resolve on Windows")
-def test_drive_letter_forward_slash_denied(ws):
+def test_drive_letter_forward_slash_denied(ws) -> None:
     root = (ws / "slice").as_posix()
     assert root[1] == ":"
     assert _denied(_enveloped(guard.check)(_p(f"git -C {root} commit -m x", cwd=ws / "sibling")))
 
 
 @pytest.mark.skipif(os.name == "nt", reason="symlink creation needs privilege on Windows")
-def test_symlink_into_workspace_denied(ws):
+def test_symlink_into_workspace_denied(ws) -> None:
     link = ws / "sibling" / "lnk"
     link.symlink_to(ws / "slice", target_is_directory=True)
     assert _denied(_enveloped(guard.check)(_p("git commit -m x", cwd=link)))
 
 
-def test_deny_survives_every_guard_level(ws, monkeypatch):
+def test_deny_survives_every_guard_level(ws, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _enveloped(guard.check)(_p("git commit -m x", cwd=ws / "slice"))
     for level in ("strict", "warn", "off"):
         monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
         assert machine_profile.apply_guard_level("block-external-workspace-vcs-write", out) == out
 
 
-def test_unreadable_registry_denies_write_allows_read(ws, monkeypatch):
+def test_unreadable_registry_denies_write_allows_read(ws, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mr, "external_workspace_registry_readable", lambda: False)
     out = _enveloped(guard.check)(_p("git commit -m x", cwd=ws / "sibling"))
     assert _denied(out)
@@ -263,7 +264,7 @@ def test_unreadable_registry_denies_write_allows_read(ws, monkeypatch):
     assert _enveloped(guard.check)(_p("git status", cwd=ws / "sibling")) is None
 
 
-def test_no_workspace_registered_allows(ws, tmp_path, monkeypatch):
+def test_no_workspace_registered_allows(ws, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     empty = tmp_path / "empty"
     empty.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(empty))
@@ -271,12 +272,12 @@ def test_no_workspace_registered_allows(ws, tmp_path, monkeypatch):
     assert _enveloped(guard.check)(_p("git commit -m x", cwd=ws / "slice")) is None
 
 
-def test_non_git_command_and_other_tools_ignored(ws):
+def test_non_git_command_and_other_tools_ignored(ws) -> None:
     assert _enveloped(guard.check)(_p("ls", cwd=ws / "slice")) is None
     assert _enveloped(guard.check)({"tool_name": "Write", "tool_input": {"command": "git commit"}}) is None
 
 
-def test_check_is_fast_and_spawns_nothing(ws, monkeypatch):
+def test_check_is_fast_and_spawns_nothing(ws, monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     def boom(*a, **k):

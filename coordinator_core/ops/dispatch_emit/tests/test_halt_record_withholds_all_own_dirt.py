@@ -15,6 +15,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record
     _write_record,
     repo,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -24,7 +25,7 @@ PEER_DIRT = "product.py"
 
 
 @pytest.fixture
-def own_dirt(repo, monkeypatch):
+def own_dirt(repo, monkeypatch: pytest.MonkeyPatch):
     """The 6137b0 shape: an undeclared tracked hunk and an undeclared untracked file the run wrote,
     beside a tracked edit a peer made."""
     (repo / "pkg").mkdir()
@@ -39,7 +40,7 @@ def own_dirt(repo, monkeypatch):
     return repo
 
 
-def test_undeclared_own_tracked_and_untracked_dirt_reaches_the_halt_record(own_dirt):
+def test_undeclared_own_tracked_and_untracked_dirt_reaches_the_halt_record(own_dirt) -> None:
     out = _call(own_dirt, LEDGER, **PASSING)
 
     held = warp_run_deliverable.halted_withheld_paths(own_dirt, RUN)
@@ -49,7 +50,7 @@ def test_undeclared_own_tracked_and_untracked_dirt_reaches_the_halt_record(own_d
     assert out["withheld"][UNTRACKED] == halted_record_commit.RUN_DIRT_UNCOMMITTED
 
 
-def test_own_dirt_stays_uncommitted_and_the_peer_edit_is_not_claimed(own_dirt):
+def test_own_dirt_stays_uncommitted_and_the_peer_edit_is_not_claimed(own_dirt) -> None:
     _call(own_dirt, LEDGER, **PASSING)
 
     status = _git(["status", "--porcelain", "-uall"], own_dirt)
@@ -58,7 +59,7 @@ def test_own_dirt_stays_uncommitted_and_the_peer_edit_is_not_claimed(own_dirt):
 
 
 @pytest.fixture
-def touch_record_dirt(repo, tmp_path, monkeypatch):
+def touch_record_dirt(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """The same dirt, but `_run_written` is real: the paths come from a session touch record."""
     from coordinator_core.ops.dispatch_emit import terminal_commit
     from coordinator_core.session import core, touch_record
@@ -92,12 +93,12 @@ def touch_record_dirt(repo, tmp_path, monkeypatch):
     return repo
 
 
-def test_run_written_reads_the_touch_record_and_drops_scratch_reads_and_pre_run(touch_record_dirt):
+def test_run_written_reads_the_touch_record_and_drops_scratch_reads_and_pre_run(touch_record_dirt) -> None:
     assert halted_record_commit._run_written(touch_record_dirt, "sess-1", RUN) == [TRACKED, UNTRACKED]
     assert halted_record_commit._run_written(touch_record_dirt, None, RUN) == []
 
 
-def test_touch_record_dirt_reaches_the_halt_record(touch_record_dirt, monkeypatch):
+def test_touch_record_dirt_reaches_the_halt_record(touch_record_dirt, monkeypatch: pytest.MonkeyPatch) -> None:
     real = halted_record_commit._run_written
     monkeypatch.setattr(halted_record_commit, "_run_written", lambda root, _sid, rid: real(root, "sess-1", rid))
 
@@ -109,7 +110,7 @@ def test_touch_record_dirt_reaches_the_halt_record(touch_record_dirt, monkeypatc
     assert out["withheld"][TRACKED] == halted_record_commit.RUN_DIRT_UNCOMMITTED
 
 
-def test_red_without_the_run_dirt_capture(own_dirt, monkeypatch):
+def test_red_without_the_run_dirt_capture(own_dirt, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(halted_record_commit, "_withhold_run_dirt", lambda *_a, **_k: None)
 
     _call(own_dirt, LEDGER, **PASSING)

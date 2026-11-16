@@ -11,10 +11,15 @@ import pytest
 from coordinator_core import dispatch_abandon
 from coordinator_core.git_lock_retry import run_with_lock_retry
 from coordinator_core.ops.ceremony import git_native
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds a hung git child that must be killed at the request deadline")
-def test_child_killed_when_request_deadline_nearly_spent(monkeypatch, tmp_path):
+def test_child_killed_when_request_deadline_nearly_spent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     real_run = subprocess.run
 
     def hanging_run(argv, **kw):
@@ -33,10 +38,10 @@ def test_child_killed_when_request_deadline_nearly_spent(monkeypatch, tmp_path):
     assert elapsed < 1.0
 
 
-def test_unbound_deadline_keeps_caller_timeout(monkeypatch, tmp_path):
+def test_unbound_deadline_keeps_caller_timeout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen = []
 
-    def fake_run(argv, **kw):
+    def fake_run(argv, **kw) -> CompletedProcess[str]:
         seen.append(kw["timeout"])
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
@@ -46,10 +51,10 @@ def test_unbound_deadline_keeps_caller_timeout(monkeypatch, tmp_path):
     assert seen == [45]
 
 
-def test_ample_deadline_does_not_shorten_timeout(monkeypatch, tmp_path):
+def test_ample_deadline_does_not_shorten_timeout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen = []
 
-    def fake_run(argv, **kw):
+    def fake_run(argv, **kw) -> CompletedProcess[str]:
         seen.append(kw["timeout"])
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
@@ -62,15 +67,15 @@ def test_ample_deadline_does_not_shorten_timeout(monkeypatch, tmp_path):
     assert seen == [45]
 
 
-def _locked():
+def _locked() -> SimpleNamespace:
     return SimpleNamespace(returncode=1, stderr="fatal: Unable to create index.lock")
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds a lock retry that must not sleep past the request deadline")
-def test_retry_starts_no_attempt_past_deadline():
+def test_retry_starts_no_attempt_past_deadline() -> None:
     calls = []
 
-    def invoke():
+    def invoke() -> SimpleNamespace:
         calls.append(1)
         return _locked()
 
@@ -85,10 +90,10 @@ def test_retry_starts_no_attempt_past_deadline():
     assert time.monotonic() - start < 0.5
 
 
-def test_retry_unbound_still_retries():
+def test_retry_unbound_still_retries() -> None:
     calls = []
 
-    def invoke():
+    def invoke() -> SimpleNamespace:
         calls.append(1)
         return _locked()
 

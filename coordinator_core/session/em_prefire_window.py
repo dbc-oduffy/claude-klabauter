@@ -68,6 +68,7 @@ LIFECYCLE_OPS = (
     "sizing.supersede",
     "memo.transition",
     "workflow.revise",
+    "workflow.cancel",
     "baton.awaiting_gate_recheck",
     "roadmap.plan_gate",
     "handoff.append_session_ledger",

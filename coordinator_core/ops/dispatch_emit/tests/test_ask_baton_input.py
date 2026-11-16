@@ -21,7 +21,7 @@ _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: 
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / "state" / "handoffs").mkdir(parents=True)
@@ -32,13 +32,13 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _baton(repo, handoff_id="hnd-x-abc123", dlv="dlv-x-abc123"):
+def _baton(repo, handoff_id: str = "hnd-x-abc123", dlv: str = "dlv-x-abc123") -> None:
     (repo / BATON).write_text(
         f"---\nhandoff_id: {handoff_id}\ndeliverable_id: {dlv}\n---\nbody\n", encoding="utf-8", newline="\n"
     )
 
 
-def _sizing(repo, tshirt="M", mode="pm", accepted=None, **over):
+def _sizing(repo, tshirt: str = "M", mode: str = "pm", accepted=None, **over) -> None:
     doc = {
         "schema": "sizing-object",
         "name": "baton fixture",
@@ -57,19 +57,19 @@ def _sizing(repo, tshirt="M", mode="pm", accepted=None, **over):
     (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
 
 
-def test_read_baton_ids_returns_path_and_id(repo):
+def test_read_baton_ids_returns_path_and_id(repo) -> None:
     _baton(repo)
     assert _read_baton_ids(repo, BATON, None) == {"path": BATON, "deliverable_id": "dlv-x-abc123"}
     assert _read_baton_ids(repo, BATON, "dlv-x-abc123")["deliverable_id"] == "dlv-x-abc123"
     assert _read_baton_ids(repo, None, None) is None
 
 
-def test_read_baton_ids_unquotes_a_quoted_id(repo):
+def test_read_baton_ids_unquotes_a_quoted_id(repo) -> None:
     _baton(repo, dlv='"dlv-x-abc123"')
     assert _read_baton_ids(repo, BATON, "dlv-x-abc123")["deliverable_id"] == "dlv-x-abc123"
 
 
-def test_read_baton_ids_refuses_missing_null_and_mismatch(repo):
+def test_read_baton_ids_refuses_missing_null_and_mismatch(repo) -> None:
     with pytest.raises(SizingFireRefused, match="not found"):
         _read_baton_ids(repo, BATON, None)
     _baton(repo, dlv="null")
@@ -83,21 +83,21 @@ def test_read_baton_ids_refuses_missing_null_and_mismatch(repo):
 
 
 @pytest.mark.parametrize("tshirt", ["S"])
-def test_gate_drops_baton_at_arm_that_mints_none(repo, tshirt):
+def test_gate_drops_baton_at_arm_that_mints_none(repo, tshirt) -> None:
     _sizing(repo, tshirt, accepted={"pm_quote": "y", "on": "2026-10-06", "mode": "pm"})
     v = gate(repo, REL, writes=["a.py"], baton=BATON)
     # A surplus baton at an arm that mints none is dropped, not refused: the verdict arms and carries no baton.
     assert v.halt is None and v.arm == tshirt.lower() and v.baton is None
 
 
-def test_gate_carries_xs_baton_named_by_the_sizings_own_baton_field(repo):
+def test_gate_carries_xs_baton_named_by_the_sizings_own_baton_field(repo) -> None:
     _baton(repo)
     _sizing(repo, "XS", accepted={"pm_quote": "y", "on": "2026-10-06", "mode": "pm"}, baton=BATON)
     v = gate(repo, REL, writes=["a.py"], baton=BATON)
     assert v.halt is None and v.baton is None
 
 
-def test_unaccepted_pm_sizing_emit_gate_sets_accept_pending(repo, monkeypatch):
+def test_unaccepted_pm_sizing_emit_gate_sets_accept_pending(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import plan_blitz_args
 
     monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")
@@ -107,7 +107,7 @@ def test_unaccepted_pm_sizing_emit_gate_sets_accept_pending(repo, monkeypatch):
     assert out["accept_pending"] is True and out["batons"] == [BATON]
 
 
-def test_unaccepted_pm_xl_sizing_emit_gate_skips_the_accept_stage(repo, monkeypatch):
+def test_unaccepted_pm_xl_sizing_emit_gate_skips_the_accept_stage(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import plan_blitz_args
 
     monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")
@@ -117,13 +117,13 @@ def test_unaccepted_pm_xl_sizing_emit_gate_skips_the_accept_stage(repo, monkeypa
     assert "accept_pending" not in out and out["batons"] == [BATON]
 
 
-def test_unaccepted_hands_on_still_refuses(repo):
+def test_unaccepted_hands_on_still_refuses(repo) -> None:
     _sizing(repo, "M", mode="hands-on", route="pm-decision", xl_exit="accept_multi_session")
     with pytest.raises(SizingFireRefused, match="touchpoint"):
         _gate_sizing_at_emit(repo, REL, [])
 
 
-def test_unaccepted_hands_on_xl_no_longer_refuses(repo, monkeypatch):
+def test_unaccepted_hands_on_xl_no_longer_refuses(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import plan_blitz_args
 
     monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")
@@ -133,20 +133,20 @@ def test_unaccepted_hands_on_xl_no_longer_refuses(repo, monkeypatch):
 
 
 @pytest.mark.parametrize("flag", ["--baton", "--deliverable-id"])
-def test_flags_refused_off_the_ask_route(repo, capsys, flag):
+def test_flags_refused_off_the_ask_route(repo, capsys: pytest.CaptureFixture[str], flag) -> None:
     rc = cli.main(["--plan", "docs/plans/x.md", flag, "x", "--repo-root", str(repo)])
     assert rc != 0 and "--baton/--deliverable-id" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("bad", ["state/handoffs/../../etc/x.md", "docs/x.md", "/abs/state/handoffs/x.md"])
-def test_read_baton_ids_refuses_path_outside_handoffs(repo, bad):
+def test_read_baton_ids_refuses_path_outside_handoffs(repo, bad) -> None:
     with pytest.raises(SizingFireRefused, match="under state/handoffs/"):
         _read_baton_ids(repo, bad, None)
 
 
 @pytest.mark.cadence
 @pytest.mark.spawns_process
-def test_emit_with_baton_joins_it_and_embeds_accept_phase(repo, capsys, monkeypatch):
+def test_emit_with_baton_joins_it_and_embeds_accept_phase(repo, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import plan_blitz_args
 
     monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")
@@ -165,7 +165,7 @@ def test_emit_with_baton_joins_it_and_embeds_accept_phase(repo, capsys, monkeypa
 
 @pytest.mark.cadence
 @pytest.mark.spawns_process
-def test_raw_ask_with_baton_threads_id_into_size_and_gate(repo, capsys, monkeypatch):
+def test_raw_ask_with_baton_threads_id_into_size_and_gate(repo, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import plan_blitz_args
 
     monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")
@@ -190,7 +190,7 @@ _SKELETON = "## Specification\n\n## Reference materials (read first)\n  \n## Acc
     (_SKELETON, ["## Specification", "## Reference materials (read first)", "## Acceptance criteria"]),
     (_FILLED, []),
 ])
-def test_empty_baton_sections_named(tmp_path, body, empty):
+def test_empty_baton_sections_named(tmp_path: Path, body, empty) -> None:
     from coordinator_core.ops.dispatch_emit.op import _empty_baton_sections
 
     p = tmp_path / "b.md"
@@ -198,7 +198,7 @@ def test_empty_baton_sections_named(tmp_path, body, empty):
     assert _empty_baton_sections(p) == empty
 
 
-def test_gate_refuses_skeleton_baton_then_passes_once_filled(repo, monkeypatch):
+def test_gate_refuses_skeleton_baton_then_passes_once_filled(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import plan_blitz_args
 
     monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")
@@ -215,7 +215,7 @@ def test_gate_refuses_skeleton_baton_then_passes_once_filled(repo, monkeypatch):
     assert _gate_sizing_at_emit(repo, REL, [], baton=b)["batons"] == [BATON]
 
 
-def test_prompt_ask_blitz_call_carries_resolved_args(repo, capsys, monkeypatch):
+def test_prompt_ask_blitz_call_carries_resolved_args(repo, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import plan_blitz_args
 
     monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")

@@ -6,9 +6,10 @@ from pathlib import Path
 
 from coordinator_core.git import commit_walk, git_objects
 from coordinator_core.ops.dispatch_emit import checkpoint_stamp as cs
+import pytest
 
 
-def test_a_present_commit_is_read_once_and_an_absent_one_is_not_remembered(monkeypatch, tmp_path):
+def test_a_present_commit_is_read_once_and_an_absent_one_is_not_remembered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cs._WALK_META_CACHE.clear()
     reads: list[str] = []
     store: dict = {}

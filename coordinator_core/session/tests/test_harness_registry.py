@@ -8,6 +8,7 @@ import time
 from datetime import datetime, timezone
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -17,7 +18,7 @@ _HAS_TZSET = hasattr(time, "tzset")
 
 
 @pytest.fixture
-def one_hour_east_local_mktime(monkeypatch):
+def one_hour_east_local_mktime(monkeypatch: pytest.MonkeyPatch) -> None:
     # Stand-in for a local zone one hour east of UTC: the buggy local-time
     # reading then differs from the correct UTC epoch whatever the box's TZ,
     # including Windows where tzset cannot pin a zone.
@@ -42,7 +43,7 @@ def _pin_non_utc_timezone():
         time.tzset()
 
 
-def _write_record(sessions_dir, filename, session_id, pid, proc_start_ticks):
+def _write_record(sessions_dir, filename, session_id, pid, proc_start_ticks) -> None:
     sessions_dir.mkdir(parents=True, exist_ok=True)
     payload = {"sessionId": session_id, "pid": pid, "procStart": proc_start_ticks}
     (sessions_dir / filename).write_text(json.dumps(payload), encoding="utf-8")
@@ -53,28 +54,28 @@ def _epoch_to_filetime_ticks(epoch: float) -> int:
 
 
 class TestFiletimeConversion:
-    def test_known_good_pair(self):
+    def test_known_good_pair(self) -> None:
         # Clock-relative so the epoch stays inside the sanity band; ticks are
         # (epoch + 11644473600) * 1e7.
         epoch = float(int(time.time()) - 3600)
         ticks = _epoch_to_filetime_ticks(epoch)
         assert hr._proc_start_to_epoch(ticks) == pytest.approx(epoch, abs=1e-3)
 
-    def test_out_of_band_past_rejected(self):
+    def test_out_of_band_past_rejected(self) -> None:
         epoch = time.time() - hr._SANITY_BAND_PAST_SEC - 3600
         ticks = _epoch_to_filetime_ticks(epoch)
         assert hr._proc_start_to_epoch(ticks) is None
 
-    def test_out_of_band_future_rejected(self):
+    def test_out_of_band_future_rejected(self) -> None:
         epoch = time.time() + hr._SANITY_BAND_FUTURE_SEC + 3600
         ticks = _epoch_to_filetime_ticks(epoch)
         assert hr._proc_start_to_epoch(ticks) is None
 
-    def test_non_numeric_rejected(self):
+    def test_non_numeric_rejected(self) -> None:
         assert hr._proc_start_to_epoch("not-a-number") is None
         assert hr._proc_start_to_epoch(None) is None
 
-    def test_ctime_string_in_band_parses(self, one_hour_east_local_mktime):
+    def test_ctime_string_in_band_parses(self, one_hour_east_local_mktime) -> None:
         epoch = int(time.time()) - 60
         ctime_str = time.strftime("%a %b %d %H:%M:%S %Y", time.gmtime(epoch))
         result = hr._proc_start_to_epoch(ctime_str)
@@ -83,7 +84,7 @@ class TestFiletimeConversion:
         buggy = time.mktime(time.strptime(ctime_str, "%a %b %d %H:%M:%S %Y"))
         assert result != pytest.approx(buggy, abs=1.0)
 
-    def test_iso8601_naive_string_parses(self, one_hour_east_local_mktime):
+    def test_iso8601_naive_string_parses(self, one_hour_east_local_mktime) -> None:
         # A naive ISO-8601 procStart is treated as UTC, not local time.
         epoch = int(time.time()) - 60
         iso_str = datetime.fromtimestamp(epoch, tz=timezone.utc).replace(tzinfo=None).isoformat()
@@ -94,23 +95,23 @@ class TestFiletimeConversion:
         buggy = time.mktime(naive.timetuple())
         assert result != pytest.approx(buggy, abs=1.0)
 
-    def test_iso8601_aware_string_parses(self):
+    def test_iso8601_aware_string_parses(self) -> None:
         epoch = time.time() - 60
         iso_str = datetime.fromtimestamp(epoch, tz=timezone.utc).isoformat()
         result = hr._proc_start_to_epoch(iso_str)
         assert result is not None
         assert result == pytest.approx(epoch, abs=1.0)
 
-    def test_ctime_string_out_of_band_rejected(self):
+    def test_ctime_string_out_of_band_rejected(self) -> None:
         epoch = time.time() - hr._SANITY_BAND_PAST_SEC - 3600
         ctime_str = time.strftime("%a %b %d %H:%M:%S %Y", time.gmtime(epoch))
         assert hr._proc_start_to_epoch(ctime_str) is None
 
-    def test_garbage_string_rejected(self):
+    def test_garbage_string_rejected(self) -> None:
         assert hr._proc_start_to_epoch("not-a-date-or-number") is None
         assert hr._proc_start_to_epoch("") is None
 
-    def test_float_procstart_falls_through_not_truncated_into_filetime(self):
+    def test_float_procstart_falls_through_not_truncated_into_filetime(self) -> None:
         # A JSON float must never silently truncate via int() into the
         # FILETIME leg (Defect 1) -- it is neither a genuine int nor a
         # ctime/ISO-8601 string, so it must yield None, not a coincidentally
@@ -119,7 +120,7 @@ class TestFiletimeConversion:
         ticks_float = float(_epoch_to_filetime_ticks(epoch))
         assert hr._proc_start_to_epoch(ticks_float) is None
 
-    def test_numeric_string_tries_ctime_and_iso_before_filetime(self):
+    def test_numeric_string_tries_ctime_and_iso_before_filetime(self) -> None:
         # A numeric-looking string (e.g. "133...") must not be swallowed
         # into the FILETIME leg via a bare int(raw) ahead of the ctime/
         # ISO-8601 string branches -- but as of the digits-string FILETIME
@@ -132,31 +133,31 @@ class TestFiletimeConversion:
         result = hr._proc_start_to_epoch(str(in_band_ticks))
         assert result == pytest.approx(epoch, abs=1e-3)
 
-    def test_digits_string_out_of_band_rejected(self):
+    def test_digits_string_out_of_band_rejected(self) -> None:
         out_of_band_ticks = _epoch_to_filetime_ticks(
             time.time() - hr._SANITY_BAND_PAST_SEC - 3600
         )
         assert hr._proc_start_to_epoch(str(out_of_band_ticks)) is None
 
-    def test_signed_digits_string_not_admitted_as_filetime(self):
+    def test_signed_digits_string_not_admitted_as_filetime(self) -> None:
         # No sign handling on the digits-string leg -- str.isdigit() rejects
         # a leading '-', so a negative numeric string must still fall
         # through to None rather than being admitted as a FILETIME.
         in_band_ticks = _epoch_to_filetime_ticks(time.time() - 60)
         assert hr._proc_start_to_epoch("-" + str(in_band_ticks)) is None
 
-    def test_bool_procstart_rejected(self):
+    def test_bool_procstart_rejected(self) -> None:
         # bool is an int subclass in Python -- must not be admitted to the
         # FILETIME leg (mirrors _parse_one's own pid bool-rejection).
         assert hr._proc_start_to_epoch(True) is None
         assert hr._proc_start_to_epoch(False) is None
 
-    def test_unicode_digit_string_rejected_not_raised(self):
+    def test_unicode_digit_string_rejected_not_raised(self) -> None:
         assert hr._proc_start_to_epoch("²²²") is None
 
 
 class TestSnapshotAndLookup:
-    def test_matching_record_resolves(self, tmp_path, monkeypatch):
+    def test_matching_record_resolves(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         epoch = time.time() - 60
         ticks = _epoch_to_filetime_ticks(epoch)
@@ -168,7 +169,7 @@ class TestSnapshotAndLookup:
         assert record.pid == 12345
         assert record.start_epoch == pytest.approx(epoch, abs=1e-3)
 
-    def test_procstart_mismatch_or_out_of_band_reads_none(self, tmp_path, monkeypatch):
+    def test_procstart_mismatch_or_out_of_band_reads_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         bad_epoch = time.time() - hr._SANITY_BAND_PAST_SEC - 3600
         bad_ticks = _epoch_to_filetime_ticks(bad_epoch)
@@ -178,7 +179,7 @@ class TestSnapshotAndLookup:
         assert hr.lookup("sess-bad") is None
         assert hr.snapshot() == {}
 
-    def test_unmatched_session_id_reads_none(self, tmp_path, monkeypatch):
+    def test_unmatched_session_id_reads_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         ticks = _epoch_to_filetime_ticks(time.time() - 60)
         _write_record(sessions_dir, "1.json", "sess-real", 1, ticks)
@@ -186,20 +187,20 @@ class TestSnapshotAndLookup:
 
         assert hr.lookup("sess-other") is None
 
-    def test_absent_directory_yields_empty_snapshot_and_none_lookup(self, tmp_path, monkeypatch):
+    def test_absent_directory_yields_empty_snapshot_and_none_lookup(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         missing = tmp_path / "does-not-exist"
         monkeypatch.setattr(hr, "registry_dir", lambda: missing)
 
         assert hr.snapshot() == {}
         assert hr.lookup("anything") is None
 
-    def test_registry_dir_none_degrades_cleanly(self, monkeypatch):
+    def test_registry_dir_none_degrades_cleanly(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(hr, "registry_dir", lambda: None)
 
         assert hr.snapshot() == {}
         assert hr.lookup("anything") is None
 
-    def test_absent_file_within_present_dir_yields_none(self, tmp_path, monkeypatch):
+    def test_absent_file_within_present_dir_yields_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
         monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
@@ -207,7 +208,7 @@ class TestSnapshotAndLookup:
         assert hr.snapshot() == {}
         assert hr.lookup("nope") is None
 
-    def test_malformed_json_yields_none(self, tmp_path, monkeypatch):
+    def test_malformed_json_yields_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
         (sessions_dir / "broken.json").write_text("{not valid json", encoding="utf-8")
@@ -216,7 +217,7 @@ class TestSnapshotAndLookup:
         assert hr.snapshot() == {}
         assert hr.lookup("anything") is None
 
-    def test_missing_procstart_yields_none(self, tmp_path, monkeypatch):
+    def test_missing_procstart_yields_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
         payload = {"sessionId": "sess-x", "pid": 1}
@@ -226,7 +227,7 @@ class TestSnapshotAndLookup:
         assert hr.snapshot() == {}
         assert hr.lookup("sess-x") is None
 
-    def test_non_numeric_procstart_yields_none(self, tmp_path, monkeypatch):
+    def test_non_numeric_procstart_yields_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
         payload = {"sessionId": "sess-y", "pid": 1, "procStart": "banana"}
@@ -236,7 +237,7 @@ class TestSnapshotAndLookup:
         assert hr.snapshot() == {}
         assert hr.lookup("sess-y") is None
 
-    def test_non_numeric_pid_yields_none(self, tmp_path, monkeypatch):
+    def test_non_numeric_pid_yields_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
         ticks = _epoch_to_filetime_ticks(time.time() - 60)
@@ -247,7 +248,7 @@ class TestSnapshotAndLookup:
         assert hr.snapshot() == {}
         assert hr.lookup("sess-z") is None
 
-    def test_float_pid_yields_none(self, tmp_path, monkeypatch):
+    def test_float_pid_yields_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
         ticks = _epoch_to_filetime_ticks(time.time() - 60)
@@ -258,7 +259,7 @@ class TestSnapshotAndLookup:
         assert hr.snapshot() == {}
         assert hr.lookup("sess-float") is None
 
-    def test_non_positive_pid_yields_none(self, tmp_path, monkeypatch):
+    def test_non_positive_pid_yields_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
         ticks = _epoch_to_filetime_ticks(time.time() - 60)
@@ -272,7 +273,7 @@ class TestSnapshotAndLookup:
 
 
 class TestCtimeShapedRegistry:
-    def test_snapshot_parses_all_ctime_shaped_records(self, tmp_path, monkeypatch):
+    def test_snapshot_parses_all_ctime_shaped_records(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
         epoch_a = int(time.time()) - 60
@@ -292,7 +293,7 @@ class TestCtimeShapedRegistry:
         assert result["sess-b"].pid == 2
         assert result["sess-b"].start_epoch == pytest.approx(epoch_b, abs=1.0)
 
-    def test_unicode_digit_procstart_skips_record_not_whole_scan(self, tmp_path, monkeypatch):
+    def test_unicode_digit_procstart_skips_record_not_whole_scan(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
         good_ticks = _epoch_to_filetime_ticks(time.time() - 60)
@@ -308,7 +309,7 @@ class TestCtimeShapedRegistry:
 
 
 class TestExceptionBoundary:
-    def test_snapshot_swallows_arbitrary_internal_exception(self, tmp_path, monkeypatch):
+    def test_snapshot_swallows_arbitrary_internal_exception(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
         (sessions_dir / "a.json").write_text("{}", encoding="utf-8")
@@ -324,7 +325,7 @@ class TestExceptionBoundary:
 
         assert hr.snapshot() == {}
 
-    def test_lookup_swallows_arbitrary_internal_exception(self, monkeypatch):
+    def test_lookup_swallows_arbitrary_internal_exception(self, monkeypatch: pytest.MonkeyPatch) -> None:
         class Boom(RuntimeError):
             pass
 
@@ -338,7 +339,7 @@ class TestExceptionBoundary:
 
 class TestSelfRecord:
 
-    def test_self_record_hit(self, tmp_path, monkeypatch):
+    def test_self_record_hit(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         epoch = time.time() - 60
         ticks = _epoch_to_filetime_ticks(epoch)
@@ -364,7 +365,7 @@ class TestSelfRecord:
         assert record.cwd == str(tmp_path)
         assert record.stable_pid_capture == "env-hit"
 
-    def test_self_record_threads_reason_onto_record(self, tmp_path, monkeypatch):
+    def test_self_record_threads_reason_onto_record(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         epoch = time.time() - 60
         ticks = _epoch_to_filetime_ticks(epoch)
@@ -386,7 +387,7 @@ class TestSelfRecord:
         _session_id, record = result
         assert record.stable_pid_capture == "env-miss:name-mismatch"
 
-    def test_self_record_miss_no_claude_pid(self, tmp_path, monkeypatch):
+    def test_self_record_miss_no_claude_pid(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
         monkeypatch.setattr(
@@ -396,7 +397,7 @@ class TestSelfRecord:
 
         assert hr.self_record() is None
 
-    def test_self_record_miss_file_absent(self, tmp_path, monkeypatch):
+    def test_self_record_miss_file_absent(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
         monkeypatch.setattr(hr, "registry_dir", lambda: sessions_dir)
@@ -407,7 +408,7 @@ class TestSelfRecord:
 
         assert hr.self_record() is None
 
-    def test_self_record_malformed_yields_none(self, tmp_path, monkeypatch):
+    def test_self_record_malformed_yields_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir(parents=True, exist_ok=True)
         (sessions_dir / "555.json").write_text("{not valid json", encoding="utf-8")
@@ -421,7 +422,7 @@ class TestSelfRecord:
 
 
 class TestCwdField:
-    def test_cwd_parsed(self, tmp_path, monkeypatch):
+    def test_cwd_parsed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         ticks = _epoch_to_filetime_ticks(time.time() - 60)
         sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -433,7 +434,7 @@ class TestCwdField:
         assert record is not None
         assert record.cwd == "/some/dir"
 
-    def test_cwd_absent_defaults_none(self, tmp_path, monkeypatch):
+    def test_cwd_absent_defaults_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         ticks = _epoch_to_filetime_ticks(time.time() - 60)
         _write_record(sessions_dir, "1.json", "sess-nocwd", 1, ticks)
@@ -446,7 +447,7 @@ class TestCwdField:
 
 class TestNameAndSocketFields:
 
-    def test_name_and_socket_parsed(self, tmp_path, monkeypatch):
+    def test_name_and_socket_parsed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         ticks = _epoch_to_filetime_ticks(time.time() - 60)
         sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -465,7 +466,7 @@ class TestNameAndSocketFields:
         assert record.name == "claude-klabauter-57"
         assert record.messaging_socket_path == "/tmp/cc-socks/57557.sock"
 
-    def test_name_and_socket_absent_default_none(self, tmp_path, monkeypatch):
+    def test_name_and_socket_absent_default_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         ticks = _epoch_to_filetime_ticks(time.time() - 60)
         _write_record(sessions_dir, "1.json", "sess-bare", 1, ticks)
@@ -476,7 +477,7 @@ class TestNameAndSocketFields:
         assert record.name is None
         assert record.messaging_socket_path is None
 
-    def test_non_string_name_and_socket_yield_none(self, tmp_path, monkeypatch):
+    def test_non_string_name_and_socket_yield_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
         ticks = _epoch_to_filetime_ticks(time.time() - 60)
@@ -498,7 +499,7 @@ class TestNameAndSocketFields:
 
 class TestStatusField:
 
-    def test_status_parsed(self, tmp_path, monkeypatch):
+    def test_status_parsed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         ticks = _epoch_to_filetime_ticks(time.time() - 60)
         sessions_dir.mkdir(parents=True, exist_ok=True)
@@ -515,7 +516,7 @@ class TestStatusField:
         assert record is not None
         assert record.status == "busy"
 
-    def test_status_absent_defaults_none(self, tmp_path, monkeypatch):
+    def test_status_absent_defaults_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         ticks = _epoch_to_filetime_ticks(time.time() - 60)
         _write_record(sessions_dir, "1.json", "sess-nostatus", 1, ticks)
@@ -525,7 +526,7 @@ class TestStatusField:
         assert record is not None
         assert record.status is None
 
-    def test_non_string_status_yields_none(self, tmp_path, monkeypatch):
+    def test_non_string_status_yields_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
         ticks = _epoch_to_filetime_ticks(time.time() - 60)
@@ -542,7 +543,7 @@ class TestStatusField:
         assert record is not None
         assert record.status is None
 
-    def test_status_never_attaches_a_verdict(self, tmp_path, monkeypatch):
+    def test_status_never_attaches_a_verdict(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
         out_of_band_ticks = _epoch_to_filetime_ticks(time.time() - hr._SANITY_BAND_PAST_SEC - 3600)
@@ -559,7 +560,7 @@ class TestStatusField:
 
 
 class TestSingleScanInvariant:
-    def test_snapshot_performs_exactly_one_directory_scan(self, tmp_path, monkeypatch):
+    def test_snapshot_performs_exactly_one_directory_scan(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
         ticks = _epoch_to_filetime_ticks(time.time() - 60)
@@ -587,7 +588,7 @@ class TestSingleScanInvariant:
 
 class TestRegistryRecordFieldContract:
 
-    def test_field_set_matches_documented_contract(self):
+    def test_field_set_matches_documented_contract(self) -> None:
         import dataclasses
 
         field_names = tuple(f.name for f in dataclasses.fields(hr.RegistryRecord))
@@ -602,7 +603,7 @@ class TestRegistryRecordFieldContract:
             "stable_pid_capture",
         )
 
-    def test_all_fields_except_pid_and_start_epoch_default_to_none(self):
+    def test_all_fields_except_pid_and_start_epoch_default_to_none(self) -> None:
         import dataclasses
 
         for f in dataclasses.fields(hr.RegistryRecord):
@@ -612,7 +613,7 @@ class TestRegistryRecordFieldContract:
 
 
 class TestRecordForPid:
-    def test_reads_the_pid_keyed_file(self, tmp_path, monkeypatch):
+    def test_reads_the_pid_keyed_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         epoch = time.time() - 600
         _write_record(sessions_dir, "4242.json", "sid-a", 4242, _epoch_to_filetime_ticks(epoch))
@@ -622,7 +623,7 @@ class TestRecordForPid:
         assert record.pid == 4242
         assert record.start_epoch == pytest.approx(epoch, abs=1e-3)
 
-    def test_absent_unreadable_or_bad_pid_yield_none(self, tmp_path, monkeypatch):
+    def test_absent_unreadable_or_bad_pid_yield_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         sessions_dir.mkdir()
         (sessions_dir / "7.json").write_text("{nope", encoding="utf-8")
@@ -633,11 +634,11 @@ class TestRecordForPid:
         assert hr.record_for_pid(-3) is None
         assert hr.record_for_pid("7") is None
 
-    def test_registry_dir_none_yields_none(self, monkeypatch):
+    def test_registry_dir_none_yields_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(hr, "registry_dir", lambda: None)
         assert hr.record_for_pid(1) is None
 
-    def test_self_record_delegates_to_record_for_pid(self, tmp_path, monkeypatch):
+    def test_self_record_delegates_to_record_for_pid(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = tmp_path / "sessions"
         _write_record(
             sessions_dir, "99.json", "sid-self", 99,
@@ -661,7 +662,7 @@ class TestLinuxBootTicksProcStart:
     boot (e.g. "798"); the registry must resolve them or a live session reads
     as having no registry record."""
 
-    def _ticks_for(self, epoch):
+    def _ticks_for(self, epoch) -> int:
         btime = next(
             int(line.split()[1])
             for line in open("/proc/stat", encoding="utf-8")
@@ -669,12 +670,12 @@ class TestLinuxBootTicksProcStart:
         )
         return int(round((epoch - btime) * os.sysconf("SC_CLK_TCK")))
 
-    def test_ticks_since_boot_string_resolves_to_epoch(self):
+    def test_ticks_since_boot_string_resolves_to_epoch(self) -> None:
         epoch = time.time() - 60
         got = hr._proc_start_to_epoch(str(self._ticks_for(epoch)))
         assert got == pytest.approx(epoch, abs=1.0)
 
-    def test_ticks_record_round_trips_through_lookup(self, tmp_path, monkeypatch):
+    def test_ticks_record_round_trips_through_lookup(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(hr, "registry_dir", lambda: tmp_path)
         epoch = time.time() - 60
         _write_record(tmp_path, "9.json", "sid-ticks", 9, str(self._ticks_for(epoch)))
@@ -682,7 +683,7 @@ class TestLinuxBootTicksProcStart:
         assert rec is not None and rec.start_epoch == pytest.approx(epoch, abs=1.0)
 
 
-def test_parse_one_accepts_leading_object_before_stray_brace(tmp_path):
+def test_parse_one_accepts_leading_object_before_stray_brace(tmp_path: Path) -> None:
     path = tmp_path / "1561.json"
     start = datetime.fromtimestamp(time.time() - 60, tz=timezone.utc).isoformat()
     payload = {"sessionId": "sid-tail", "pid": 1561, "procStart": start}
@@ -692,7 +693,7 @@ def test_parse_one_accepts_leading_object_before_stray_brace(tmp_path):
     assert parsed[0] == "sid-tail" and parsed[1].pid == 1561
 
 
-def test_parse_one_malformed_text_still_none(tmp_path):
+def test_parse_one_malformed_text_still_none(tmp_path: Path) -> None:
     path = tmp_path / "bad.json"
     path.write_text("{not json}\n}", encoding="utf-8")
     assert hr._parse_one(path) is None

@@ -18,6 +18,7 @@ from coordinator_core.guard_census import BLOCK, DELETED, GUIDE, Row, enumerate_
 _REDIRECT = {
     "block-push-pr-non-owned-remote": "push to an owned remote, or route the publish to the G-EM",
     "block-empty-source-push": "push an explicit 40-char sha source",
+    "block-held-push": "push-hold clear, or push the hold's allow-sha as an explicit refspec",
     "block-perforce-submit": "the p4 review flow; the PM submits",
     "p4-verb-fence": "the read-only p4 verbs",
     "destructive-git-orphan": "a non-destructive ref operation",
@@ -33,6 +34,7 @@ _REDIRECT = {
     "block-external-workspace-vcs-write": "the workspace's own owner",
     "block-editor-kill-by-name": "close the editor by pid",
     "blanket-git-add": "ceremony.commit_v2 with literal paths",
+    "stale-temp-index-base": "rebuild the temp index from current HEAD, or ceremony.commit_v2 with literal paths",
     "check-test-suite-invocation": "a scoped pytest run of named test files, or the EM's scheduled suite leg",
     "guard-subagent-heavy-ue-launch": "return the launch to the EM as a slot leg",
     "block-subagent-destructive-action": "the trash-then-prune op",

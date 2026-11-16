@@ -25,6 +25,7 @@ import pytest
 
 from coordinator_core.workstream_complete import apply as _apply
 from coordinator_core.workstream_complete import directives_commit_tail
+from pathlib import Path
 
 
 def _commit_tail_outcome(*, committed_sha, commit_failed):
@@ -44,7 +45,7 @@ def _commit_tail_outcome(*, committed_sha, commit_failed):
 # ---------------------------------------------------------------------------
 
 
-def test_delivered_baton_is_a_candidate(tmp_path, monkeypatch):
+def test_delivered_baton_is_a_candidate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "state" / "handoffs").mkdir(parents=True)
     (tmp_path / "state" / "handoffs" / "foo.md").write_text("x\n", encoding="utf-8")
     monkeypatch.setattr(
@@ -58,7 +59,7 @@ def test_delivered_baton_is_a_candidate(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("disposition", ["closed", "abandoned", "continued"])
-def test_non_delivered_terminal_baton_is_not_a_candidate(tmp_path, monkeypatch, disposition):
+def test_non_delivered_terminal_baton_is_not_a_candidate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, disposition) -> None:
     (tmp_path / "state" / "handoffs").mkdir(parents=True)
     (tmp_path / "state" / "handoffs" / "foo.md").write_text("x\n", encoding="utf-8")
     monkeypatch.setattr(
@@ -71,7 +72,7 @@ def test_non_delivered_terminal_baton_is_not_a_candidate(tmp_path, monkeypatch, 
     assert candidates == []
 
 
-def test_already_archived_baton_is_left_alone(tmp_path, monkeypatch):
+def test_already_archived_baton_is_left_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # No file under state/handoffs/ at all -- it is already under archive/handoffs/,
     # i.e. already consumed per the PM's folder-fact ruling. The claim ledger still
     # names the basename (a stale/late-release claim), but there is nothing active
@@ -86,7 +87,7 @@ def test_already_archived_baton_is_left_alone(tmp_path, monkeypatch):
     assert candidates == []
 
 
-def test_held_claim_this_close_never_touched_is_not_a_candidate(tmp_path, monkeypatch):
+def test_held_claim_this_close_never_touched_is_not_a_candidate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # The claim ledger says the session holds "bar.md", but this close's own
     # decisions never mention it -- a claim held merely to read (or on a baton
     # this close did not itself close) is excluded by the POSITIVE rule, not
@@ -110,7 +111,7 @@ def test_held_claim_this_close_never_touched_is_not_a_candidate(tmp_path, monkey
 # ---------------------------------------------------------------------------
 
 
-def test_delivered_baton_folds_into_the_close_s_own_commit_with_no_second_commit(monkeypatch, tmp_path):
+def test_delivered_baton_folds_into_the_close_s_own_commit_with_no_second_commit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     commit_calls = []
 
     def _fake_run_close_commit_and_release_claims(worktree_root, **kwargs):
@@ -149,7 +150,7 @@ def test_delivered_baton_folds_into_the_close_s_own_commit_with_no_second_commit
     assert report["committed_sha"] == "abc123"
 
 
-def test_session_holding_no_batons_produces_a_read_signal(monkeypatch, tmp_path):
+def test_session_holding_no_batons_produces_a_read_signal(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         directives_commit_tail, "resolve_ship_stamp_candidates", lambda *_a, **_k: []
     )
@@ -168,7 +169,7 @@ def test_session_holding_no_batons_produces_a_read_signal(monkeypatch, tmp_path)
     assert report["ship_stamp"]["stamped"] == []
 
 
-def test_write_lands_then_commit_raises_reverts_the_stamp(monkeypatch, tmp_path):
+def test_write_lands_then_commit_raises_reverts_the_stamp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     revert_calls = []
     monkeypatch.setattr(
         directives_commit_tail, "resolve_ship_stamp_candidates",
@@ -210,7 +211,7 @@ def test_write_lands_then_commit_raises_reverts_the_stamp(monkeypatch, tmp_path)
     [(None, False), ("abc123", True)],
     ids=["no-op-commit-no-sha", "commit-refused"],
 )
-def test_stamp_reverted_when_commit_did_not_land(monkeypatch, tmp_path, committed_sha, commit_failed):
+def test_stamp_reverted_when_commit_did_not_land(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, committed_sha, commit_failed) -> None:
     revert_calls = []
     monkeypatch.setattr(
         directives_commit_tail, "resolve_ship_stamp_candidates",
@@ -259,7 +260,7 @@ _SHIP_CANDIDATE_RESOLUTION_CEILING_MS = 50.0
 _ITERATIONS = 200
 
 
-def test_resolve_ship_stamp_candidates_process_time_budget(tmp_path, monkeypatch):
+def test_resolve_ship_stamp_candidates_process_time_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "state" / "handoffs").mkdir(parents=True)
     (tmp_path / "state" / "handoffs" / "foo.md").write_text("x\n", encoding="utf-8")
     monkeypatch.setattr(

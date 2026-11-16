@@ -46,6 +46,7 @@ from coordinator_core.bash_guards._shape_classifier import (
     classify_command,
 )
 from coordinator_core.bash_guards._verdict import collecting
+import pytest
 
 
 class TestQuotedMetacharacters:
@@ -637,7 +638,7 @@ class TestDialectParameter:
         assert len(silences) == 1
         assert "None" in silences[0].reason
 
-    def test_powershell_dialect_never_calls_posix_tokenizer(self, monkeypatch) -> None:
+    def test_powershell_dialect_never_calls_posix_tokenizer(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _fail_if_called(*args, **kwargs):
             raise AssertionError(
                 "tokenize_full_command must not be called under "

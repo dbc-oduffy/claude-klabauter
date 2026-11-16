@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from coordinator_core.roadmap import prep_gate as pg
 from coordinator_core.roadmap.tests.test_prep_gate_four_legs import _write_plan
+from pathlib import Path
 
 _FM = """census: []
 prime_exit_criterion:
@@ -41,7 +42,7 @@ def _prime(tmp_path, spine: str, slug: str, fm: str = _FM) -> dict:
     return pg.gate_plan(tmp_path, plan)["classes"]["PRIME_EXIT"]
 
 
-def test_criterion_resting_only_on_em_owned_rows_warns_and_keeps_verdict(tmp_path):
+def test_criterion_resting_only_on_em_owned_rows_warns_and_keeps_verdict(tmp_path: Path) -> None:
     prime = _prime(tmp_path, _CODE_ROW + _EM_ROW, "2026-10-15-em-only.md")
     assert prime["status"] == "PASS"
     assert len(prime["warnings"]) == 1
@@ -49,10 +50,10 @@ def test_criterion_resting_only_on_em_owned_rows_warns_and_keeps_verdict(tmp_pat
     assert "C1" not in prime["warnings"][0]
 
 
-def test_criterion_citing_a_dispatchable_row_carries_no_warning(tmp_path):
+def test_criterion_citing_a_dispatchable_row_carries_no_warning(tmp_path: Path) -> None:
     fm = _FM.replace("row C2", "rows C1 and C2")
     assert _prime(tmp_path, _CODE_ROW + _EM_ROW, "2026-10-15-mixed.md", fm)["warnings"] == []
 
 
-def test_plan_with_no_em_owned_row_carries_no_warning(tmp_path):
+def test_plan_with_no_em_owned_row_carries_no_warning(tmp_path: Path) -> None:
     assert _prime(tmp_path, _CODE_ROW, "2026-10-15-none.md")["warnings"] == []

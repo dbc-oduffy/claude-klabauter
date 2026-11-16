@@ -8,17 +8,18 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import diff_test_select as d
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _git(root, *args):
+def _git(root, *args) -> None:
     subprocess.run(["git", "-c", "user.email=t@t", "-c", "user.name=t", "-c", "commit.gpgsign=false", *args],
                    cwd=root, check=True,
                    capture_output=True, **no_console_creationflags())
 
 
-def test_main_refuses_when_git_diff_fails(tmp_path, capsys):
+def test_main_refuses_when_git_diff_fails(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _git(tmp_path, "init", "-q")
     rc = d.main(["--base", "no-such-rev", "--surface", "pkg", "--repo-root", str(tmp_path)])
     cap = capsys.readouterr()
@@ -27,7 +28,7 @@ def test_main_refuses_when_git_diff_fails(tmp_path, capsys):
     assert "selection refused" in cap.err
 
 
-def test_main_end_to_end(tmp_path, capsys):
+def test_main_end_to_end(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "pkg/tests").mkdir(parents=True)
     (tmp_path / "pkg/a.py").write_text("x = 1\n")
     (tmp_path / "pkg/tests/test_a.py").write_text("from pkg.a import x\n")

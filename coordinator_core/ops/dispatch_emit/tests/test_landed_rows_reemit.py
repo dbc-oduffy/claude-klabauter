@@ -6,23 +6,24 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit.emit import _drop_landed_rows, landed_rows_from_text
 from coordinator_core.ops.dispatch_emit.spine_read import EmitterRow
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _row(id_, deps=()):
+def _row(id_, deps=()) -> EmitterRow:
     return EmitterRow(
         id=id_, title=id_, surface="s", writes=[f"p/{id_}.py"], reads=(),
         depends_on=[{"chunk": d} for d in deps],
     )
 
 
-def test_landed_ids_parsed_from_checkpoint_subjects():
+def test_landed_ids_parsed_from_checkpoint_subjects() -> None:
     text = "abc checkpoint(wave 1): 2 rows — A, B\ndef checkpoint(wave 2): 1 rows — C\nnoise"
     assert landed_rows_from_text(text) == {"A", "B", "C"}
 
 
-def test_prose_after_checkpoint_subject_never_yields_ids():
+def test_prose_after_checkpoint_subject_never_yields_ids() -> None:
     text = (
         'x checkpoint(wave 2): 5 rows — l07.C6, l07.C8, l07.C17\\\\\\"), Session-Id c9c3 '
         "(verified via trailer). Committed paths, read back with git show --name-only: a/b"
@@ -30,7 +31,7 @@ def test_prose_after_checkpoint_subject_never_yields_ids():
     assert landed_rows_from_text(text) == {"l07.C6", "l07.C8", "l07.C17"}
 
 
-def test_drop_landed_strips_edges_and_keeps_rest():
+def test_drop_landed_strips_edges_and_keeps_rest() -> None:
     rows = [_row("A"), _row("B", ["A"]), _row("C", ["A", "B"])]
     kept = _drop_landed_rows(rows, frozenset({"A"}))
     assert [r.id for r in kept] == ["B", "C"]
@@ -38,12 +39,12 @@ def test_drop_landed_strips_edges_and_keeps_rest():
     assert kept[1].depends_on == [{"chunk": "B"}]
 
 
-def test_unknown_landed_id_refused():
+def test_unknown_landed_id_refused() -> None:
     with pytest.raises(ValueError):
         _drop_landed_rows([_row("A")], frozenset({"Z"}))
 
 
-def test_landed_id_closed_in_the_spine_is_skipped_not_refused():
+def test_landed_id_closed_in_the_spine_is_skipped_not_refused() -> None:
     kept = _drop_landed_rows([_row("B")], frozenset({"A", "B"}), frozenset({"A"}))
     assert kept == []
 
@@ -56,7 +57,7 @@ def _git_repo(tmp_path):
     r = tmp_path / "repo"
     r.mkdir()
 
-    def git(*a):
+    def git(*a) -> None:
         subprocess.run(["git", *a], cwd=str(r), check=True, capture_output=True, **no_console_creationflags())
 
     git("init", "-q")
@@ -65,14 +66,14 @@ def _git_repo(tmp_path):
     return r, git
 
 
-def _commit_with(r, git, name, subject, *trailers):
+def _commit_with(r, git, name, subject, *trailers) -> None:
     (r / name).write_text(name, encoding="utf-8")
     git("add", "--", name)
     git("commit", "-q", "-m", subject, "-m", "\n".join(trailers))
 
 
 @pytest.mark.spawns_process
-def test_leading_id_commit_with_plan_trailer_counts_as_landed(tmp_path):
+def test_leading_id_commit_with_plan_trailer_counts_as_landed(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.emit import checkpoint_landed_rows
 
     r, git = _git_repo(tmp_path)
@@ -84,7 +85,7 @@ def test_leading_id_commit_with_plan_trailer_counts_as_landed(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_gate_owed_trailer_is_read_in_the_same_spawn(tmp_path):
+def test_gate_owed_trailer_is_read_in_the_same_spawn(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.emit import checkpoint_landed_state
 
     r, git = _git_repo(tmp_path)
@@ -98,6 +99,6 @@ def test_gate_owed_trailer_is_read_in_the_same_spawn(tmp_path):
     )
 
 
-def test_landed_id_absent_from_rows_and_closed_set_still_refused():
+def test_landed_id_absent_from_rows_and_closed_set_still_refused() -> None:
     with pytest.raises(ValueError):
         _drop_landed_rows([_row("B")], frozenset({"A", "Z"}), frozenset({"A"}))

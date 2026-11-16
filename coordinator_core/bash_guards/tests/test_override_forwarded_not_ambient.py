@@ -26,9 +26,10 @@ from __future__ import annotations
 
 from coordinator_core.bash_guards.dispatch_checks import _override
 from coordinator_core.warm import hook_http
+import pytest
 
 
-def test_server_environ_override_is_not_seen_by_a_forwarded_event(monkeypatch):
+def test_server_environ_override_is_not_seen_by_a_forwarded_event(monkeypatch: pytest.MonkeyPatch) -> None:
     """THE INVISIBLE DISARM. The override lives only in this process (standing in for the
     resident server); the forwarded event carries none. The guard must not see it."""
     monkeypatch.setenv("COORDINATOR_ALLOW_RM", "1")
@@ -40,7 +41,7 @@ def test_server_environ_override_is_not_seen_by_a_forwarded_event(monkeypatch):
     assert _override("COORDINATOR_ALLOW_RM", payload=payload) is False
 
 
-def test_caller_override_is_seen_when_the_event_carries_it(monkeypatch):
+def test_caller_override_is_seen_when_the_event_carries_it(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_ALLOW_RM", raising=False)
 
     payload = hook_http.payload_from_event(
@@ -50,7 +51,7 @@ def test_caller_override_is_seen_when_the_event_carries_it(monkeypatch):
     assert _override("COORDINATOR_ALLOW_RM", payload=payload) is True
 
 
-def test_caller_override_wins_over_a_conflicting_server_environ(monkeypatch):
+def test_caller_override_wins_over_a_conflicting_server_environ(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_ALLOW_RM", "0")
 
     payload = hook_http.payload_from_event(
@@ -60,7 +61,7 @@ def test_caller_override_wins_over_a_conflicting_server_environ(monkeypatch):
     assert _override("COORDINATOR_ALLOW_RM", payload=payload) is True
 
 
-def test_caller_absence_wins_over_a_permissive_server_environ(monkeypatch):
+def test_caller_absence_wins_over_a_permissive_server_environ(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_ALLOW_RM", "1")
 
     payload = hook_http.payload_from_event(
@@ -70,7 +71,7 @@ def test_caller_absence_wins_over_a_permissive_server_environ(monkeypatch):
     assert _override("COORDINATOR_ALLOW_RM", payload=payload) is False
 
 
-def test_forwarder_emits_env_even_when_the_caller_set_nothing(monkeypatch):
+def test_forwarder_emits_env_even_when_the_caller_set_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_ALLOW_RM", "1")
 
     payload = hook_http.payload_from_event({"hook_event_name": "PreToolUse"})

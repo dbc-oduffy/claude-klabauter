@@ -1499,7 +1499,7 @@ class _ApprovalSentinelDetector(SentinelCreationDetector):
 _detector = _ApprovalSentinelDetector(_TARGET_BASENAME)
 
 
-def _evaluate(cmd: str, dialect: Optional[Dialect] = None, cwd: Optional[str] = None):
+def _evaluate(cmd: str, dialect: Optional[Dialect] = None, cwd: Optional[str] = None) -> tuple[bool, str, str]:
     if dialect is None or dialect is Dialect.BASH:
         return _detector.evaluate(cmd, cwd=cwd)
     return _detector.evaluate_for_dialect(

@@ -40,6 +40,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from coordinator_core.win_portability import leaf_spawn_creationflags
+from pathlib import Path
 
 # Real-git spawn is load-bearing for section (g) below: `reset_paths` is
 # asserted against a real index/worktree so the "unstage-only, never a bare
@@ -311,7 +312,7 @@ _BYTES_MODE_WRAPPERS = {"cat_file_batch", "cat_file_batch_objects"}
 _STREAMING_WRAPPERS = {"push_streamed"}
 
 
-def test_all_public_wrappers_are_covered():
+def test_all_public_wrappers_are_covered() -> None:
     """Guard: every public function in git_native.py (besides `_git` itself,
     the `GitResult` dataclass, `_COMPOSITE_ENTRYPOINTS`, `_NON_SUBPROCESS_
     HELPERS`, and `_STDIN_INPUT_WRAPPERS`) has a corresponding entry in
@@ -344,7 +345,7 @@ def test_all_public_wrappers_are_covered():
 # ---------------------------------------------------------------------------
 
 
-def test_directory_pathspecs_returns_only_directory_entries(tmp_path):
+def test_directory_pathspecs_returns_only_directory_entries(tmp_path: Path) -> None:
     (tmp_path / "a_dir").mkdir()
     (tmp_path / "a_file.txt").write_text("content", encoding="utf-8")
 
@@ -355,11 +356,11 @@ def test_directory_pathspecs_returns_only_directory_entries(tmp_path):
     assert result == ["a_dir"]
 
 
-def test_directory_pathspecs_empty_input_returns_empty_list(tmp_path):
+def test_directory_pathspecs_empty_input_returns_empty_list(tmp_path: Path) -> None:
     assert git_native.directory_pathspecs(tmp_path, []) == []
 
 
-def test_directory_pathspecs_preserves_input_order(tmp_path):
+def test_directory_pathspecs_preserves_input_order(tmp_path: Path) -> None:
     (tmp_path / "dir_one").mkdir()
     (tmp_path / "dir_two").mkdir()
 
@@ -368,7 +369,7 @@ def test_directory_pathspecs_preserves_input_order(tmp_path):
     assert result == ["dir_two", "dir_one"]
 
 
-def test_directory_pathspec_diagnostic_names_the_path():
+def test_directory_pathspec_diagnostic_names_the_path() -> None:
     diagnostic = git_native.directory_pathspec_diagnostic("some/dir")
 
     assert "some/dir" in diagnostic
@@ -376,42 +377,42 @@ def test_directory_pathspec_diagnostic_names_the_path():
     assert "Pass explicit file paths instead" in diagnostic
 
 
-def test_canonical_repo_relative_path_refusal_accepts_a_canonical_path():
+def test_canonical_repo_relative_path_refusal_accepts_a_canonical_path() -> None:
     assert git_native.canonical_repo_relative_path_refusal("state/handoffs/x.md") is None
 
 
-def test_canonical_repo_relative_path_refusal_refuses_a_traversal_segment():
+def test_canonical_repo_relative_path_refusal_refuses_a_traversal_segment() -> None:
     refusal = git_native.canonical_repo_relative_path_refusal("coordinator/../coordinator_core/x.py")
     assert refusal is not None
     assert "'..' path component" in refusal
     assert "coordinator_core/x.py" in refusal  # canonical form offered as a hint
 
 
-def test_canonical_repo_relative_path_refusal_refuses_an_absolute_path():
+def test_canonical_repo_relative_path_refusal_refuses_an_absolute_path() -> None:
     refusal = git_native.canonical_repo_relative_path_refusal("/etc/passwd")
     assert refusal is not None
     assert "absolute path" in refusal
 
 
-def test_canonical_repo_relative_path_refusal_refuses_a_windows_drive_letter():
+def test_canonical_repo_relative_path_refusal_refuses_a_windows_drive_letter() -> None:
     refusal = git_native.canonical_repo_relative_path_refusal("C:/Windows/x.txt")
     assert refusal is not None
     assert "Windows drive letter" in refusal
 
 
-def test_canonical_repo_relative_path_refusal_refuses_a_dot_git_component():
+def test_canonical_repo_relative_path_refusal_refuses_a_dot_git_component() -> None:
     refusal = git_native.canonical_repo_relative_path_refusal("state/.git/hooks/x")
     assert refusal is not None
     assert "'.git' path component" in refusal
 
 
-def test_first_non_canonical_path_refusal_none_when_every_path_is_canonical():
+def test_first_non_canonical_path_refusal_none_when_every_path_is_canonical() -> None:
     assert git_native.first_non_canonical_path_refusal(
         ["state/a.md", "coordinator_core/b.py"]
     ) is None
 
 
-def test_first_non_canonical_path_refusal_reports_the_first_offender():
+def test_first_non_canonical_path_refusal_reports_the_first_offender() -> None:
     refusal = git_native.first_non_canonical_path_refusal(
         ["state/a.md", "../escape.md", "also/../bad.md"]
     )
@@ -419,7 +420,7 @@ def test_first_non_canonical_path_refusal_reports_the_first_offender():
     assert "'../escape.md'" in refusal
 
 
-def test_patch_id_matches_across_a_clean_rebase_and_differs_across_a_different_diff(tmp_path):
+def test_patch_id_matches_across_a_clean_rebase_and_differs_across_a_different_diff(tmp_path: Path) -> None:
     """`patch_id` is what `push.resolve_post_push_sha` uses to tell a clean
     `rebase --onto` reparent (same patch id) apart from a genuinely different
     commit (different patch id) -- see that function's own docstring for the
@@ -482,7 +483,7 @@ def test_patch_id_matches_across_a_clean_rebase_and_differs_across_a_different_d
     assert original_id != peer_id  # a genuinely different diff -> a different patch id
 
 
-def test_rev_parse_head_spawns_nothing(tmp_path):
+def test_rev_parse_head_spawns_nothing(tmp_path: Path) -> None:
     """`rev_parse_head` must reach HEAD's sha WITHOUT a process.
 
     Replaces its row in `_WRAPPER_INVOCATIONS` (see the note there). That row
@@ -515,7 +516,7 @@ def test_rev_parse_head_spawns_nothing(tmp_path):
     assert result.stdout == ""
 
 
-def test_rev_parse_head_returns_head_sha_with_trailing_newline(tmp_path):
+def test_rev_parse_head_returns_head_sha_with_trailing_newline(tmp_path: Path) -> None:
     """The success branch, against a real repo: same text `git rev-parse` emits."""
     repo = _init_real_repo(tmp_path)
     (repo / "seed.txt").write_text("seed\n", encoding="utf-8")
@@ -544,7 +545,7 @@ def test_rev_parse_head_returns_head_sha_with_trailing_newline(tmp_path):
     _WRAPPER_INVOCATIONS,
     ids=[fn.__name__ for fn, _, _ in _WRAPPER_INVOCATIONS],
 )
-def test_flags_present_on_every_wrapper(fn, args, kwargs):
+def test_flags_present_on_every_wrapper(fn, args, kwargs) -> None:
     with patch.object(git_native.subprocess, "run", return_value=_make_completed()) as mock_run:
         fn(*args, **kwargs)
 
@@ -588,7 +589,7 @@ _NO_OPTIONAL_LOCKS_EXCLUDED = [
     _NO_OPTIONAL_LOCKS_WRAPPERS,
     ids=[fn.__name__ for fn, _, _, _ in _NO_OPTIONAL_LOCKS_WRAPPERS],
 )
-def test_no_optional_locks_precedes_subcommand(fn, args, kwargs, subcommand):
+def test_no_optional_locks_precedes_subcommand(fn, args, kwargs, subcommand) -> None:
     with patch.object(git_native.subprocess, "run", return_value=_make_completed()) as mock_run:
         fn(*args, **kwargs)
 
@@ -607,7 +608,7 @@ def test_no_optional_locks_precedes_subcommand(fn, args, kwargs, subcommand):
     _NO_OPTIONAL_LOCKS_EXCLUDED,
     ids=[fn.__name__ for fn, _, _, _ in _NO_OPTIONAL_LOCKS_EXCLUDED],
 )
-def test_phantom_clearing_readers_keep_the_optional_lock(fn, args, kwargs, subcommand):
+def test_phantom_clearing_readers_keep_the_optional_lock(fn, args, kwargs, subcommand) -> None:
     """The exclusion is load-bearing, not an oversight the next sweep should
     tidy up: these wrappers depend on git's stat-cache WRITE-BACK, which
     `--no-optional-locks` suppresses, to let a phantom-dirty entry self-heal.
@@ -635,7 +636,7 @@ def test_phantom_clearing_readers_keep_the_optional_lock(fn, args, kwargs, subco
 # ---------------------------------------------------------------------------
 
 
-def test_push_set_upstream_builds_the_explicit_refspec_argv():
+def test_push_set_upstream_builds_the_explicit_refspec_argv() -> None:
     """Refspec must be explicit and NEVER carry `--force`/`--force-with-lease`/
     a `+` prefix -- the negative spec `push_set_upstream`'s own docstring
     names (create-or-fast-forward publish only)."""
@@ -650,7 +651,7 @@ def test_push_set_upstream_builds_the_explicit_refspec_argv():
     assert not any(token.startswith("+") for token in argv if isinstance(token, str))
 
 
-def test_push_set_upstream_reports_success():
+def test_push_set_upstream_reports_success() -> None:
     with patch.object(
         git_native.subprocess,
         "run",
@@ -663,7 +664,7 @@ def test_push_set_upstream_reports_success():
     assert result.stderr == ""
 
 
-def test_push_set_upstream_reports_rejection_without_raising():
+def test_push_set_upstream_reports_rejection_without_raising() -> None:
     with patch.object(
         git_native.subprocess,
         "run",
@@ -683,7 +684,7 @@ def test_push_set_upstream_reports_rejection_without_raising():
 # ---------------------------------------------------------------------------
 
 
-def test_push_refspec_builds_the_explicit_two_sided_refspec_argv():
+def test_push_refspec_builds_the_explicit_two_sided_refspec_argv() -> None:
     """Both sides named explicitly, no `--set-upstream`, no `--force`."""
     with patch.object(git_native.subprocess, "run", return_value=_make_completed()) as mock_run:
         git_native.push_refspec(
@@ -699,7 +700,7 @@ def test_push_refspec_builds_the_explicit_two_sided_refspec_argv():
     assert not any(token.startswith("+") for token in argv if isinstance(token, str))
 
 
-def test_push_refspec_reports_success():
+def test_push_refspec_reports_success() -> None:
     with patch.object(
         git_native.subprocess,
         "run",
@@ -718,7 +719,7 @@ def test_push_refspec_reports_success():
 # ---------------------------------------------------------------------------
 
 
-def test_git_returns_typed_result_on_success():
+def test_git_returns_typed_result_on_success() -> None:
     with patch.object(
         git_native.subprocess, "run", return_value=_make_completed(0, "hello\n", "")
     ):
@@ -731,7 +732,7 @@ def test_git_returns_typed_result_on_success():
     assert result.stderr == ""
 
 
-def test_git_oserror_never_raises():
+def test_git_oserror_never_raises() -> None:
     with patch.object(git_native.subprocess, "run", side_effect=OSError("git not found")):
         result = git_native._git(["status"], cwd="/tmp/repo")
 
@@ -739,7 +740,7 @@ def test_git_oserror_never_raises():
     assert "git not found" in result.stderr
 
 
-def test_git_timeout_never_raises():
+def test_git_timeout_never_raises() -> None:
     with patch.object(
         git_native.subprocess,
         "run",
@@ -751,7 +752,7 @@ def test_git_timeout_never_raises():
     assert "timed out" in result.stderr
 
 
-def test_git_check_true_raises_on_nonzero():
+def test_git_check_true_raises_on_nonzero() -> None:
     with patch.object(
         git_native.subprocess, "run", return_value=_make_completed(1, "", "fatal: boom")
     ):
@@ -759,7 +760,7 @@ def test_git_check_true_raises_on_nonzero():
             git_native._git(["status"], cwd="/tmp/repo", check=True)
 
 
-def test_git_check_false_does_not_raise_on_nonzero():
+def test_git_check_false_does_not_raise_on_nonzero() -> None:
     with patch.object(
         git_native.subprocess, "run", return_value=_make_completed(1, "", "fatal: boom")
     ):
@@ -774,7 +775,7 @@ def test_git_check_false_does_not_raise_on_nonzero():
 # ---------------------------------------------------------------------------
 
 
-def test_git_capture_default_matches_hardcoded_prior_behaviour():
+def test_git_capture_default_matches_hardcoded_prior_behaviour() -> None:
     with patch.object(
         git_native.subprocess, "run", return_value=_make_completed(0, "hello\n", "")
     ) as mock_run:
@@ -785,7 +786,7 @@ def test_git_capture_default_matches_hardcoded_prior_behaviour():
     assert result.stderr == ""
 
 
-def test_git_capture_true_explicit_matches_default():
+def test_git_capture_true_explicit_matches_default() -> None:
     with patch.object(
         git_native.subprocess, "run", return_value=_make_completed(0, "hello\n", "")
     ) as mock_run:
@@ -796,7 +797,7 @@ def test_git_capture_true_explicit_matches_default():
     assert result.stderr == ""
 
 
-def test_git_capture_false_omits_capture_output_and_result_is_empty():
+def test_git_capture_false_omits_capture_output_and_result_is_empty() -> None:
     with patch.object(
         git_native.subprocess, "run", return_value=_make_completed(0, None, None)
     ) as mock_run:
@@ -809,7 +810,7 @@ def test_git_capture_false_omits_capture_output_and_result_is_empty():
     assert result.stderr == ""
 
 
-def test_git_capture_false_still_carries_windows_safe_flags():
+def test_git_capture_false_still_carries_windows_safe_flags() -> None:
     with patch.object(
         git_native.subprocess, "run", return_value=_make_completed(0, None, None)
     ) as mock_run:
@@ -821,7 +822,7 @@ def test_git_capture_false_still_carries_windows_safe_flags():
     assert call_kwargs.get("creationflags", 0) == no_console_creationflags().get("creationflags", 0)
 
 
-def test_git_capture_false_with_input_data_still_feeds_stdin_not_devnull():
+def test_git_capture_false_with_input_data_still_feeds_stdin_not_devnull() -> None:
     with patch.object(
         git_native.subprocess, "run", return_value=_make_completed(0, None, None)
     ) as mock_run:
@@ -835,7 +836,7 @@ def test_git_capture_false_with_input_data_still_feeds_stdin_not_devnull():
     assert "capture_output" not in call_kwargs
 
 
-def test_git_capture_false_check_true_raises_with_none_output_not_synthesized_string():
+def test_git_capture_false_check_true_raises_with_none_output_not_synthesized_string() -> None:
     with patch.object(
         git_native.subprocess, "run", return_value=_make_completed(1, None, None)
     ):
@@ -851,7 +852,7 @@ def test_git_capture_false_check_true_raises_with_none_output_not_synthesized_st
 # ---------------------------------------------------------------------------
 
 
-def test_no_bash_or_node_argv():
+def test_no_bash_or_node_argv() -> None:
     with patch.object(git_native.subprocess, "run", return_value=_make_completed()) as mock_run:
         for fn, args, kwargs in _WRAPPER_INVOCATIONS:
             fn(*args, **kwargs)
@@ -915,7 +916,7 @@ def _init_real_repo(tmp_path):
     return repo
 
 
-def test_reset_paths_empty_input_is_a_documented_noop_never_a_bare_reset(tmp_path):
+def test_reset_paths_empty_input_is_a_documented_noop_never_a_bare_reset(tmp_path: Path) -> None:
     """`git reset -q HEAD --` with zero paths after `--` unstages the ENTIRE
     index -- the exact hazard this function's own docstring names. A caller
     passing an empty `paths` list (e.g. `explicit_stage` staged nothing this
@@ -934,7 +935,7 @@ def test_reset_paths_empty_input_is_a_documented_noop_never_a_bare_reset(tmp_pat
     assert any(line.startswith("A") and line.endswith("b.txt") for line in status_lines)
 
 
-def test_reset_paths_unstages_only_the_given_pathspec(tmp_path):
+def test_reset_paths_unstages_only_the_given_pathspec(tmp_path: Path) -> None:
     """A peer's own staged file OUTSIDE the given pathspec must survive
     `reset_paths()` untouched -- the scoped-rollback counterpart to
     `add_paths()`'s own explicit-pathspec contract."""
@@ -951,7 +952,7 @@ def test_reset_paths_unstages_only_the_given_pathspec(tmp_path):
     assert any(line.startswith("A") and line.endswith("sibling.txt") for line in status_lines)
 
 
-def test_reset_paths_drops_directory_entries_but_still_resets_file_entries(tmp_path):
+def test_reset_paths_drops_directory_entries_but_still_resets_file_entries(tmp_path: Path) -> None:
     """A directory entry in `paths` must never reach the `git reset`
     pathspec (it would match whatever is CURRENTLY inside it, including a
     peer's own file added since this call's own staging) -- it is dropped,
@@ -974,7 +975,7 @@ def test_reset_paths_drops_directory_entries_but_still_resets_file_entries(tmp_p
     assert any(line.strip() == "?? plain.txt" for line in status_lines)
 
 
-def test_reset_paths_on_content_matching_head_is_a_true_noop(tmp_path):
+def test_reset_paths_on_content_matching_head_is_a_true_noop(tmp_path: Path) -> None:
     """Rolling back a path whose staged content already matches `HEAD` (the
     ordinary already-committed-no-op shape) must be silent and harmless --
     `git reset -q` never raises/prints for this case."""
@@ -998,7 +999,7 @@ def test_reset_paths_on_content_matching_head_is_a_true_noop(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_ls_files_deleted_reports_unstaged_deletion(tmp_path):
+def test_ls_files_deleted_reports_unstaged_deletion(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     (repo / "gone.txt").write_text("content")
     _real_git(["add", "--", "gone.txt"], repo)
@@ -1012,7 +1013,7 @@ def test_ls_files_deleted_reports_unstaged_deletion(tmp_path):
     assert result.stdout.splitlines() == ["gone.txt"]
 
 
-def test_ls_files_deleted_does_not_report_a_staged_deletion(tmp_path):
+def test_ls_files_deleted_does_not_report_a_staged_deletion(tmp_path: Path) -> None:
     """Once a deletion is staged (`git rm`), the index no longer holds the
     file's content -- `--deleted` (worktree vs INDEX) no longer reports it.
     This is the exact reason `explicit_stage()` needs a SECOND check
@@ -1031,7 +1032,7 @@ def test_ls_files_deleted_does_not_report_a_staged_deletion(tmp_path):
     assert result.stdout.splitlines() == []
 
 
-def test_ls_files_deleted_does_not_report_an_untracked_missing_path(tmp_path):
+def test_ls_files_deleted_does_not_report_an_untracked_missing_path(tmp_path: Path) -> None:
     """A path that was never tracked at all is not a deletion -- must not be
     misreported, even though it is equally absent from the worktree."""
     repo = _init_real_repo(tmp_path)
@@ -1045,7 +1046,7 @@ def test_ls_files_deleted_does_not_report_an_untracked_missing_path(tmp_path):
     assert result.stdout.splitlines() == []
 
 
-def test_ls_files_deleted_empty_paths_is_a_documented_noop_never_a_whole_tree_scan(tmp_path):
+def test_ls_files_deleted_empty_paths_is_a_documented_noop_never_a_whole_tree_scan(tmp_path: Path) -> None:
     """Empty `paths` must never fall through to a bare `git ls-files
     --deleted` (whole-tree scan) -- the exact hazard `reset_paths()`'s own
     empty-input guard exists to close, one layer over."""
@@ -1069,7 +1070,7 @@ def test_ls_files_deleted_empty_paths_is_a_documented_noop_never_a_whole_tree_sc
 # ---------------------------------------------------------------------------
 
 
-def test_check_ignore_tracked_path_matching_gitignore_is_not_ignored(tmp_path):
+def test_check_ignore_tracked_path_matching_gitignore_is_not_ignored(tmp_path: Path) -> None:
     """A tracked path that matches a (later-added) `.gitignore` pattern must
     NOT be classified ignored -- `git add` on an already-tracked path
     succeeds regardless of the pattern, so misreporting it here would
@@ -1088,7 +1089,7 @@ def test_check_ignore_tracked_path_matching_gitignore_is_not_ignored(tmp_path):
     assert git_native.parse_check_ignore_stdin_z(result.stdout) == []
 
 
-def test_check_ignore_untracked_path_matching_gitignore_is_ignored(tmp_path):
+def test_check_ignore_untracked_path_matching_gitignore_is_ignored(tmp_path: Path) -> None:
     """An untracked path matching `.gitignore` IS classified ignored -- the
     case `explicit_stage()`'s pre-filter must still drop from the stage
     set."""
@@ -1103,7 +1104,7 @@ def test_check_ignore_untracked_path_matching_gitignore_is_ignored(tmp_path):
     assert {m[3] for m in matches} == {"untracked.txt"}
 
 
-def test_check_ignore_empty_input_is_a_documented_noop(tmp_path):
+def test_check_ignore_empty_input_is_a_documented_noop(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     result = git_native.check_ignore(repo, [])
     # returncode == 1 -- "nothing matched" -- is the documented no-op shape,
@@ -1112,7 +1113,7 @@ def test_check_ignore_empty_input_is_a_documented_noop(tmp_path):
     assert result.stdout == ""
 
 
-def test_check_ignore_flags_gitignore_blocked_path_only(tmp_path):
+def test_check_ignore_flags_gitignore_blocked_path_only(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     (repo / ".gitignore").write_text("ignored_dir/\n")
     (repo / "ignored_dir").mkdir()
@@ -1127,7 +1128,7 @@ def test_check_ignore_flags_gitignore_blocked_path_only(tmp_path):
     assert matched_paths == {"ignored_dir/cache.txt"}
 
 
-def test_check_ignore_no_matches_returns_returncode_one_not_a_failure(tmp_path):
+def test_check_ignore_no_matches_returns_returncode_one_not_a_failure(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     (repo / "a.txt").write_text("a")
     (repo / "b.txt").write_text("b")
@@ -1138,7 +1139,7 @@ def test_check_ignore_no_matches_returns_returncode_one_not_a_failure(tmp_path):
     assert git_native.parse_check_ignore_stdin_z(result.stdout) == []
 
 
-def test_parse_check_ignore_stdin_z_multiple_matches():
+def test_parse_check_ignore_stdin_z_multiple_matches() -> None:
     stdout = (
         ".gitignore\x001\x00ignored_dir/\x00ignored_dir/cache.txt\x00"
         ".gitignore\x002\x00*.log\x00debug.log\x00"
@@ -1164,7 +1165,7 @@ def _blob_sha(repo, text: str) -> str:
     ).stdout.strip()
 
 
-def test_update_refs_stdin_create_then_delete_one_atomic_transaction_each(tmp_path):
+def test_update_refs_stdin_create_then_delete_one_atomic_transaction_each(tmp_path: Path) -> None:
     """A `create` line lands a brand-new ref; a later `delete` line (old
     value = the ref's current value) removes it -- each its own one-line
     transaction, matching `memo.heal_inbox`'s adopt/retire shapes."""
@@ -1185,7 +1186,7 @@ def test_update_refs_stdin_create_then_delete_one_atomic_transaction_each(tmp_pa
     assert verify.returncode != 0
 
 
-def test_update_refs_stdin_batches_several_ref_writes_in_one_call(tmp_path):
+def test_update_refs_stdin_batches_several_ref_writes_in_one_call(tmp_path: Path) -> None:
     """Retire + adopt land together: one `delete` and one `create` for two
     DIFFERENT refs, issued as a single `commands` batch, both take effect."""
     repo = _init_real_repo(tmp_path)
@@ -1208,7 +1209,7 @@ def test_update_refs_stdin_batches_several_ref_writes_in_one_call(tmp_path):
     assert verify.returncode != 0
 
 
-def test_update_refs_stdin_is_all_or_nothing_on_a_stale_old_value(tmp_path, monkeypatch):
+def test_update_refs_stdin_is_all_or_nothing_on_a_stale_old_value(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """One bad old-value in a multi-command batch refuses the WHOLE
     transaction -- the ref this test seeds correctly must NOT land either.
     This is the property `memo.heal_inbox`'s report-and-converge contract
@@ -1235,14 +1236,14 @@ def test_update_refs_stdin_is_all_or_nothing_on_a_stale_old_value(tmp_path, monk
     assert verify.returncode != 0
 
 
-def test_update_refs_stdin_empty_batch_refuses_without_spawning():
+def test_update_refs_stdin_empty_batch_refuses_without_spawning() -> None:
     with patch("subprocess.run") as mock_run:
         result = git_native.update_refs_stdin("/tmp/repo", [])
     mock_run.assert_not_called()
     assert not result.ok
 
 
-def test_rev_list_not_prints_a_commit_unreachable_from_the_not_target(tmp_path):
+def test_rev_list_not_prints_a_commit_unreachable_from_the_not_target(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     (repo / "a.txt").write_text("a")
     _real_git(["add", "-A"], repo)
@@ -1262,7 +1263,7 @@ def test_rev_list_not_prints_a_commit_unreachable_from_the_not_target(tmp_path):
     assert side_sha in result.stdout.splitlines()
 
 
-def test_rev_list_not_omits_a_commit_reachable_from_the_not_target(tmp_path):
+def test_rev_list_not_omits_a_commit_reachable_from_the_not_target(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     (repo / "a.txt").write_text("a")
     _real_git(["add", "-A"], repo)
@@ -1283,7 +1284,7 @@ def test_rev_list_not_omits_a_commit_reachable_from_the_not_target(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_composite_entrypoints_never_call_subprocess_run_directly():
+def test_composite_entrypoints_never_call_subprocess_run_directly() -> None:
     """AC3 for every `_COMPOSITE_ENTRYPOINTS` member: a composite is exempt
     from the (a) harness because it issues MANY `_git()` calls, not one — it
     is NOT exempt from routing all of them through `_git()`.
@@ -1310,7 +1311,7 @@ def test_composite_entrypoints_never_call_subprocess_run_directly():
         )
 
 
-def test_commit_authored_content_issues_its_git_sequence_through_the_shared_git_wrapper(tmp_path):
+def test_commit_authored_content_issues_its_git_sequence_through_the_shared_git_wrapper(tmp_path: Path) -> None:
     """`commit_authored_content()` never reaches `subprocess.run` directly --
     every step of its residual `_git()`-routed sequence (whose Windows-
     safe-flag contract is already independently covered by
@@ -1430,7 +1431,7 @@ def test_commit_authored_content_issues_its_git_sequence_through_the_shared_git_
     assert fsck.returncode == 0, fsck.stderr
 
 
-def test_commit_authored_content_refuses_a_path_absent_from_head(tmp_path):
+def test_commit_authored_content_refuses_a_path_absent_from_head(tmp_path: Path) -> None:
     """C3: `head_sha`/`head_blobs` replace the `rev-parse`/`ls-tree` reads,
     but the reserved-noun "does not exist in HEAD" refusal this entrypoint's
     own docstring names (`commit_authored_content` is for in-place mutation
@@ -1454,7 +1455,7 @@ def test_commit_authored_content_refuses_a_path_absent_from_head(tmp_path):
     assert "ledger.txt" in result.stderr
 
 
-def test_commit_authored_content_cas_still_fails_loud_on_concurrent_head_move(tmp_path):
+def test_commit_authored_content_cas_still_fails_loud_on_concurrent_head_move(tmp_path: Path) -> None:
     """C3's swap of `rev-parse HEAD` for `git_state.head_sha()` must not
     weaken the ref CAS: `old_head` (however it was obtained) is passed as
     the CAS's expected old value, and the write is refused atomically if
@@ -1479,7 +1480,7 @@ def test_commit_authored_content_cas_still_fails_loud_on_concurrent_head_move(tm
 
     real_cas_ref = git_native.cas_ref
 
-    def _sibling_commits_first(*args, **kwargs):
+    def _sibling_commits_first(*args, **kwargs) -> bool:
         (repo / "sibling.txt").write_text("sibling\n", encoding="utf-8")
         _real_git(["add", "--", "sibling.txt"], repo)
         _real_git(["commit", "-q", "-m", "concurrent sibling commit"], repo)
@@ -1526,7 +1527,7 @@ def _committed_content_at_head(repo, rel: str) -> str:
     return result.stdout
 
 
-def test_hash_object_stdin_bytes_carries_the_windows_safe_creationflag(tmp_path):
+def test_hash_object_stdin_bytes_carries_the_windows_safe_creationflag(tmp_path: Path) -> None:
     """`_hash_object_stdin_bytes()` deliberately bypasses `_git()` (it needs
     raw-bytes stdin, not `_git()`'s `text=True` leg -- see its own
     docstring), so it re-implements the `creationflags=CREATE_NO_WINDOW`
@@ -1559,7 +1560,7 @@ def test_hash_object_stdin_bytes_carries_the_windows_safe_creationflag(tmp_path)
     assert "encoding" not in kwargs
 
 
-def test_cat_file_batch_carries_the_windows_safe_creationflag(tmp_path):
+def test_cat_file_batch_carries_the_windows_safe_creationflag(tmp_path: Path) -> None:
     """`cat_file_batch()` deliberately bypasses `_git()` (raw-bytes stdin/
     stdout, not `_git()`'s `text=True` leg -- see its own docstring), so it
     re-implements its Windows-safe creationflag independently rather than
@@ -1597,7 +1598,7 @@ def test_cat_file_batch_carries_the_windows_safe_creationflag(tmp_path):
     assert "text" not in kwargs
 
 
-def test_cat_file_batch_empty_paths_returns_empty_dict_no_spawn(tmp_path):
+def test_cat_file_batch_empty_paths_returns_empty_dict_no_spawn(tmp_path: Path) -> None:
     """Empty `rel_paths` short-circuits to `{}` without spawning a subprocess
     -- mirrors every other empty-input guard in this module."""
     repo = _init_real_repo(tmp_path)
@@ -1607,7 +1608,7 @@ def test_cat_file_batch_empty_paths_returns_empty_dict_no_spawn(tmp_path):
     mock_run.assert_not_called()
 
 
-def test_cat_file_batch_missing_path_resolves_to_none(tmp_path):
+def test_cat_file_batch_missing_path_resolves_to_none(tmp_path: Path) -> None:
     """A `rel_path` absent at `ref` resolves to `None`, never a raised
     error or a silently-dropped key -- the "missing" case in
     `git cat-file --batch`'s own header line."""
@@ -1638,7 +1639,7 @@ def _repo_with_two_commits(tmp_path):
     return repo, first_sha, second_sha
 
 
-def test_cat_file_batch_objects_resolves_specs_across_different_revs_in_one_call(tmp_path):
+def test_cat_file_batch_objects_resolves_specs_across_different_revs_in_one_call(tmp_path: Path) -> None:
     """THE property this function exists for, and the one most likely to break
     if the parser is later "simplified": many `<rev>:<path>` specs spanning
     DIFFERENT revs, resolved in a SINGLE spawn, each bound to its own slot.
@@ -1679,7 +1680,7 @@ def test_cat_file_batch_objects_resolves_specs_across_different_revs_in_one_call
     assert len(spawns) == 1, "four specs across two revs must cost exactly one spawn"
 
 
-def test_cat_file_batch_objects_carries_the_windows_safe_creationflag(tmp_path):
+def test_cat_file_batch_objects_carries_the_windows_safe_creationflag(tmp_path: Path) -> None:
     """Same bytes-mode `_git()` bypass as `cat_file_batch` (which now delegates
     here), so the creationflag is re-implemented rather than inherited and
     must be asserted at this layer -- mirrors
@@ -1708,7 +1709,7 @@ def test_cat_file_batch_objects_carries_the_windows_safe_creationflag(tmp_path):
     assert "text" not in kwargs
 
 
-def test_cat_file_batch_objects_empty_input_returns_empty_dict_no_spawn(tmp_path):
+def test_cat_file_batch_objects_empty_input_returns_empty_dict_no_spawn(tmp_path: Path) -> None:
     """Empty `objects` short-circuits to `{}` without spawning -- mirrors every
     other empty-input guard in this module."""
     repo = _init_real_repo(tmp_path)
@@ -1718,7 +1719,7 @@ def test_cat_file_batch_objects_empty_input_returns_empty_dict_no_spawn(tmp_path
     mock_run.assert_not_called()
 
 
-def test_cat_file_batch_objects_bogus_rev_resolves_to_none(tmp_path):
+def test_cat_file_batch_objects_bogus_rev_resolves_to_none(tmp_path: Path) -> None:
     """An unresolvable REV (not merely a missing path) is `git cat-file
     --batch`'s "missing" header just the same, and must land as `None` in that
     spec's own slot without disturbing the resolvable specs beside it. The
@@ -1740,7 +1741,7 @@ def test_cat_file_batch_objects_bogus_rev_resolves_to_none(tmp_path):
     }
 
 
-def test_commit_authored_content_explicit_deliverable_id_wins_over_session_resolved(tmp_path):
+def test_commit_authored_content_explicit_deliverable_id_wins_over_session_resolved(tmp_path: Path) -> None:
     """Bound 2's contract: an explicitly-passed `deliverable_id` is the
     tier-0 join key and must win over a `Deliverable-Id` trailer
     `compute_missing_trailer_args()` itself resolves from the session/
@@ -1754,7 +1755,7 @@ def test_commit_authored_content_explicit_deliverable_id_wins_over_session_resol
     msg_file = tmp_path / "msg.txt"
     msg_file.write_text("a commit message\n", encoding="utf-8")
 
-    def _fake_compute_missing_trailer_args(_msg_file, _root, paths=None, session_id_override=None):
+    def _fake_compute_missing_trailer_args(_msg_file, _root, paths=None, session_id_override=None) -> list[str]:
         return ["--trailer", "Session-Id: session-resolved-session-id", "--trailer",
                 "Deliverable-Id: session-resolved-deliverable-id"]
 
@@ -1783,7 +1784,7 @@ def test_commit_authored_content_explicit_deliverable_id_wins_over_session_resol
     assert "Session-Id: session-resolved-session-id" in log_result.stdout
 
 
-def test_validate_explicit_deliverable_id_accepts_archived_spec_only(tmp_path):
+def test_validate_explicit_deliverable_id_accepts_archived_spec_only(tmp_path: Path) -> None:
     """AC3 (C1, docs/plans/2026-08-10-archived-specs-rejoin-the-scan-surface.md):
     a deliverable_id resolving ONLY from an artifact under archive/specs/<YYYY-MM>/
     (the fourth scan root `_scan_artifacts_by_deliverable_id` gained in C1) is
@@ -1809,7 +1810,7 @@ def test_validate_explicit_deliverable_id_accepts_archived_spec_only(tmp_path):
     )
 
 
-def test_validate_explicit_deliverable_id_accepts_pln_prefix(tmp_path):
+def test_validate_explicit_deliverable_id_accepts_pln_prefix(tmp_path: Path) -> None:
     """C10b leg (c): the citation convention now PREFERS citing a plan by its
     own `pln-` id (§ PM rulings, docs/plans/2026-08-13-spec-backlinks-cite-a-
     stable-deliverable-id.md; DoE's ratified doctrine at their commit
@@ -1833,7 +1834,7 @@ def test_validate_explicit_deliverable_id_accepts_pln_prefix(tmp_path):
     )
 
 
-def test_validate_explicit_deliverable_id_rejects_bogus_prefix(tmp_path):
+def test_validate_explicit_deliverable_id_rejects_bogus_prefix(tmp_path: Path) -> None:
     """Regression: a shape neither `dlv-` nor `pln-` is STILL rejected before
     any existence scan -- widening the shape check to admit `pln-` must not
     also admit an arbitrary prefix."""
@@ -1848,7 +1849,7 @@ def test_validate_explicit_deliverable_id_rejects_bogus_prefix(tmp_path):
     assert "'dlv-' or 'pln-' shape convention" in result
 
 
-def test_validate_explicit_deliverable_id_rejects_unresolvable_pln(tmp_path):
+def test_validate_explicit_deliverable_id_rejects_unresolvable_pln(tmp_path: Path) -> None:
     """Regression: a `pln-`-shaped id that resolves to no real artifact is
     STILL rejected -- shape acceptance does not bypass the existence scan."""
     root = tmp_path / "repo"
@@ -1871,7 +1872,7 @@ def test_validate_explicit_deliverable_id_rejects_unresolvable_pln(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_index_blobs_reads_staged_sha_with_no_git_spawn(tmp_path, monkeypatch):
+def test_index_blobs_reads_staged_sha_with_no_git_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`_index_blobs` must answer from `git_state.read_index` alone -- no
     `_git()` subprocess call reachable from this function any more (the
     INDEX side becomes spawn-free per this chunk's own AC)."""
@@ -1892,7 +1893,7 @@ def test_index_blobs_reads_staged_sha_with_no_git_spawn(tmp_path, monkeypatch):
     assert blobs["a.txt"] != git_native._GIT_PATH_UNRECONCILED
 
 
-def test_index_blobs_empty_paths_returns_empty_dict_no_read(tmp_path, monkeypatch):
+def test_index_blobs_empty_paths_returns_empty_dict_no_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def _fail(*_a, **_kw):
         raise AssertionError("read_index must not be reached for empty paths")
 
@@ -1901,7 +1902,7 @@ def test_index_blobs_empty_paths_returns_empty_dict_no_read(tmp_path, monkeypatc
     assert git_native._index_blobs(tmp_path, []) == {}
 
 
-def test_index_blobs_maps_parse_failure_to_git_read_failed_sentinel(tmp_path, monkeypatch):
+def test_index_blobs_maps_parse_failure_to_git_read_failed_sentinel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A `read_index` failure (`IndexParseError`) must degrade EVERY
     requested path to `_GIT_READ_FAILED`, never a plain `None` -- the exact
     "degraded reads" P1 this sentinel exists to close (see `_index_blobs`'s
@@ -1919,7 +1920,7 @@ def test_index_blobs_maps_parse_failure_to_git_read_failed_sentinel(tmp_path, mo
     assert blobs["b.txt"] is git_native._GIT_READ_FAILED
 
 
-def test_head_blobs_reads_committed_sha_via_git_state_reader(tmp_path):
+def test_head_blobs_reads_committed_sha_via_git_state_reader(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     (repo / "a.txt").write_text("one\n")
     _real_git(["add", "--", "a.txt"], repo)
@@ -1931,7 +1932,7 @@ def test_head_blobs_reads_committed_sha_via_git_state_reader(tmp_path):
     assert blobs["untracked.txt"] is None
 
 
-def test_head_blobs_unborn_branch_reads_as_absent_not_read_failed(tmp_path):
+def test_head_blobs_unborn_branch_reads_as_absent_not_read_failed(tmp_path: Path) -> None:
     """No commits yet -- `git_state.head_blobs` folds the "not a valid
     object name HEAD" case into an ordinary empty answer; this must still
     read as `None` (absent), never `_GIT_READ_FAILED`, matching pre-C2
@@ -1945,7 +1946,7 @@ def test_head_blobs_unborn_branch_reads_as_absent_not_read_failed(tmp_path):
     assert blobs["a.txt"] is None
 
 
-def test_head_blobs_infra_failure_maps_to_git_read_failed_sentinel(tmp_path, monkeypatch):
+def test_head_blobs_infra_failure_maps_to_git_read_failed_sentinel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A genuine infrastructure failure below `git_state.read_tree_spine`
     (e.g. an unresolvable `.git` dir) must still surface as
     `_GIT_READ_FAILED`, never silently downgraded to `None`. C11 (`state/
@@ -1965,7 +1966,7 @@ def test_head_blobs_infra_failure_maps_to_git_read_failed_sentinel(tmp_path, mon
     assert blobs["a.txt"] is git_native._GIT_READ_FAILED
 
 
-def test_resolve_mode_for_paths_prefers_index_over_head(tmp_path):
+def test_resolve_mode_for_paths_prefers_index_over_head(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     (repo / "exe.sh").write_text("#!/bin/sh\n")
     _real_git(["add", "--", "exe.sh"], repo)
@@ -1977,7 +1978,7 @@ def test_resolve_mode_for_paths_prefers_index_over_head(tmp_path):
     assert modes["exe.sh"] == "100755"
 
 
-def test_resolve_mode_for_paths_falls_back_to_head_when_no_index_entry(tmp_path):
+def test_resolve_mode_for_paths_falls_back_to_head_when_no_index_entry(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     (repo / "exe.sh").write_text("#!/bin/sh\n")
     _real_git(["add", "--", "exe.sh"], repo)
@@ -1990,7 +1991,7 @@ def test_resolve_mode_for_paths_falls_back_to_head_when_no_index_entry(tmp_path)
     assert modes["exe.sh"] == "100755"
 
 
-def test_resolve_mode_for_paths_absent_path_omitted(tmp_path):
+def test_resolve_mode_for_paths_absent_path_omitted(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
 
     modes = git_native._resolve_mode_for_paths(repo, ["nowhere.txt"])
@@ -1998,7 +1999,7 @@ def test_resolve_mode_for_paths_absent_path_omitted(tmp_path):
     assert "nowhere.txt" not in modes
 
 
-def test_agree_branch_cas_refusal_second_index_read_is_a_fresh_observation(tmp_path):
+def test_agree_branch_cas_refusal_second_index_read_is_a_fresh_observation(tmp_path: Path) -> None:
     """THE LOAD-BEARING CONSTRAINT (C2 brief): `_agree_branch_cas_refusal`'s
     SECOND `_index_blobs` call, taken immediately before the agree branch's
     own `git add`, must remain a genuine fresh observation once re-pointed
@@ -2029,7 +2030,7 @@ def test_agree_branch_cas_refusal_second_index_read_is_a_fresh_observation(tmp_p
     assert "index entry changed since this call's own snapshot" in result.stderr
 
 
-def test_agree_branch_cas_refusal_no_mutation_between_reads_does_not_refuse(tmp_path):
+def test_agree_branch_cas_refusal_no_mutation_between_reads_does_not_refuse(tmp_path: Path) -> None:
     """Sibling control case: with nothing mutated between the two reads, the
     CAS re-check must NOT refuse -- proves the fresh-observation test above
     is actually detecting the mutation, not just always refusing."""
@@ -2048,7 +2049,7 @@ def test_agree_branch_cas_refusal_no_mutation_between_reads_does_not_refuse(tmp_
     assert result is None
 
 
-def test_agree_branch_cas_refusal_stays_fresh_under_an_open_index_cache_scope(tmp_path):
+def test_agree_branch_cas_refusal_stays_fresh_under_an_open_index_cache_scope(tmp_path: Path) -> None:
     """C2 AC3: `_agree_branch_cas_refusal`'s own `_index_blobs` call must
     remain a real disk read even while `git_state.index_read_cache_scope()`
     is open for the surrounding commit -- the compare-and-swap must never be
@@ -2085,7 +2086,7 @@ def test_agree_branch_cas_refusal_stays_fresh_under_an_open_index_cache_scope(tm
 # ---------------------------------------------------------------------------
 
 
-def test_commit_identity_prefers_env_vars_without_spawning(tmp_path, monkeypatch):
+def test_commit_identity_prefers_env_vars_without_spawning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Env vars are git's own highest-precedence source, so a hit here must
     not spawn at all -- the common case on every commit this box makes."""
     repo = _init_real_repo(tmp_path)
@@ -2098,7 +2099,7 @@ def test_commit_identity_prefers_env_vars_without_spawning(tmp_path, monkeypatch
     spawn.assert_not_called()
 
 
-def test_commit_identity_falls_back_to_one_git_var_spawn_not_the_ladder(tmp_path, monkeypatch):
+def test_commit_identity_falls_back_to_one_git_var_spawn_not_the_ladder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The regression this test exists for: when the cheap config readers
     miss -- `includeIf`, system config, any shape they do not parse -- the
     identity must be recovered by ONE `git var GIT_COMMITTER_IDENT` spawn,
@@ -2128,7 +2129,7 @@ def test_commit_identity_falls_back_to_one_git_var_spawn_not_the_ladder(tmp_path
     assert calls == [["var", "GIT_COMMITTER_IDENT"]], "exactly one spawn, and only git var"
 
 
-def test_commit_identity_returns_none_when_git_itself_cannot_resolve(tmp_path, monkeypatch):
+def test_commit_identity_returns_none_when_git_itself_cannot_resolve(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`git var` failing is a genuine ladder condition -- git has no identity
     either, so the ladder's own commit-tree will produce git's diagnostic,
     which beats anything invented here."""
@@ -2150,7 +2151,7 @@ def test_commit_identity_returns_none_when_git_itself_cannot_resolve(tmp_path, m
     assert git_native._resolve_commit_identity(repo) is None
 
 
-def test_commit_identity_never_returns_a_half_pair(tmp_path, monkeypatch):
+def test_commit_identity_never_returns_a_half_pair(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A malformed `git var` line must be a ladder fall-back, never a commit
     object carrying `"None <None>"` in its author line."""
     repo = _init_real_repo(tmp_path)
@@ -2171,7 +2172,7 @@ def test_commit_identity_never_returns_a_half_pair(tmp_path, monkeypatch):
     assert git_native._resolve_commit_identity(repo) is None
 
 
-def test_head_entry_falls_back_to_head_blobs_when_the_spine_is_unreadable(tmp_path, monkeypatch):
+def test_head_entry_falls_back_to_head_blobs_when_the_spine_is_unreadable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The sibling of the zero-`run_git` assertion above, and the reason that
     one can be trusted.
 
@@ -2280,8 +2281,8 @@ def _git_out(root, *args):
     ],
 )
 def test_rewrite_head_spine_prunes_emptied_dirs_like_git(
-    tmp_path, head, moved, dest, expect_gone
-):
+    tmp_path: Path, head, moved, dest, expect_gone
+) -> None:
     """`_rewrite_head_spine`'s root sha equals `git write-tree`'s for the same
     content, including when a rename empties its source directory.
 
@@ -2346,7 +2347,7 @@ def test_rewrite_head_spine_prunes_emptied_dirs_like_git(
 # ---------------------------------------------------------------------------
 
 
-def test_agree_branch_commits_at_zero_or_one_spawn_via_private_index_route(tmp_path, monkeypatch):
+def test_agree_branch_commits_at_zero_or_one_spawn_via_private_index_route(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC6: the agree branch (`diverged == []`) must land through
     `_commit_via_head_spine`'s fast path -- object writes plus a locked
     `cas_ref`, never a spawned `git add`/`git commit` pair. A brand-new,
@@ -2419,7 +2420,7 @@ def test_agree_branch_commits_at_zero_or_one_spawn_via_private_index_route(tmp_p
     assert committed == "brand new content\n"
 
 
-def test_agree_branch_commits_correctly_immediately_after_pack_refs(tmp_path):
+def test_agree_branch_commits_correctly_immediately_after_pack_refs(tmp_path: Path) -> None:
     """Named hazard (spike verdict, "packed-refs breaks it outright"): after
     `git pack-refs --all` there is no loose ref file for the branch HEAD
     points at. `_resolve_cas_ref_target` refuses (returns `None`) rather
@@ -2465,7 +2466,7 @@ def _real_git_out(cwd, *args) -> str:
     ).stdout.strip()
 
 
-def test_pathspec_file_is_nul_separated_and_never_dequoted(tmp_path):
+def test_pathspec_file_is_nul_separated_and_never_dequoted(tmp_path: Path) -> None:
     """A pathspec whose name starts with a quote is never C-dequoted.
 
     Regression guard (2026-08-26). `_write_pathspec_file` wrote
@@ -2510,7 +2511,7 @@ def test_pathspec_file_is_nul_separated_and_never_dequoted(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_hash_worktree_blobs_clean_path_writes_in_process_no_spawn(tmp_path):
+def test_hash_worktree_blobs_clean_path_writes_in_process_no_spawn(tmp_path: Path) -> None:
     """A plain, CR-free, unattributed path is written entirely in process --
     zero `git` spawns -- and its sha matches what `git hash-object -w` would
     have produced for the same bytes."""
@@ -2537,7 +2538,7 @@ def test_hash_worktree_blobs_clean_path_writes_in_process_no_spawn(tmp_path):
     assert result.stdout.splitlines() == [expected_sha]
 
 
-def test_hash_worktree_blobs_cr_content_falls_back_to_spawn_byte_identical(tmp_path):
+def test_hash_worktree_blobs_cr_content_falls_back_to_spawn_byte_identical(tmp_path: Path) -> None:
     """Content carrying a CR byte cannot be reproduced by an in-process
     verbatim write (the clean pipeline's CRLF normalization might apply) --
     refused into the SAME `git hash-object -w --stdin-paths` spawn ladder
@@ -2553,7 +2554,7 @@ def test_hash_worktree_blobs_cr_content_falls_back_to_spawn_byte_identical(tmp_p
     assert result.stdout.splitlines() == [expected_sha]
 
 
-def test_hash_worktree_blobs_filter_attributed_path_falls_back_to_spawn_byte_identical(tmp_path):
+def test_hash_worktree_blobs_filter_attributed_path_falls_back_to_spawn_byte_identical(tmp_path: Path) -> None:
     """A path a repo-local `.gitattributes` `filter=` pattern matches is
     refused for the in-process write (a `filter.*.clean` driver might apply)
     -- falls back to the spawn, byte-identical to `git hash-object -w`."""
@@ -2568,7 +2569,7 @@ def test_hash_worktree_blobs_filter_attributed_path_falls_back_to_spawn_byte_ide
     assert result.stdout.splitlines() == [expected_sha]
 
 
-def test_hash_worktree_blobs_mixed_paths_preserve_input_order(tmp_path):
+def test_hash_worktree_blobs_mixed_paths_preserve_input_order(tmp_path: Path) -> None:
     """A clean in-process path and a refused (CR-carrying) spawned path in
     the same call return shas in the SAME ORDER `paths` was given, matching
     `_hash_object_stdin_paths`'s own ordering contract."""
@@ -2595,7 +2596,7 @@ def test_hash_worktree_blobs_mixed_paths_preserve_input_order(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_hash_worktree_blobs_autocrlf_true_crlf_content_writes_in_process_no_spawn(tmp_path):
+def test_hash_worktree_blobs_autocrlf_true_crlf_content_writes_in_process_no_spawn(tmp_path: Path) -> None:
     """Under `core.autocrlf=true` and no attribute pin, CR-carrying content
     is now written IN PROCESS -- zero spawns -- and matches real git's own
     checkin-side CRLF normalization exactly."""
@@ -2624,7 +2625,7 @@ def test_hash_worktree_blobs_autocrlf_true_crlf_content_writes_in_process_no_spa
     assert result.stdout.splitlines() == [real_stdin_sha]
 
 
-def test_hash_worktree_blobs_autocrlf_true_binary_nul_content_left_verbatim(tmp_path):
+def test_hash_worktree_blobs_autocrlf_true_binary_nul_content_left_verbatim(tmp_path: Path) -> None:
     """A NUL byte anywhere marks content binary under `text=auto` -- left
     byte-for-byte untouched even though it also carries CRLF pairs."""
     repo = _init_real_repo(tmp_path)
@@ -2643,7 +2644,7 @@ def test_hash_worktree_blobs_autocrlf_true_binary_nul_content_left_verbatim(tmp_
     assert result.stdout.splitlines() == [real_sha]
 
 
-def test_hash_worktree_blobs_autocrlf_true_lone_cr_blocks_whole_buffer_conversion(tmp_path):
+def test_hash_worktree_blobs_autocrlf_true_lone_cr_blocks_whole_buffer_conversion(tmp_path: Path) -> None:
     """A lone CR (not followed by LF) ANYWHERE in the buffer blocks
     conversion of the entire buffer, including an earlier well-formed CRLF
     pair -- not merely the offending line."""
@@ -2663,7 +2664,7 @@ def test_hash_worktree_blobs_autocrlf_true_lone_cr_blocks_whole_buffer_conversio
     assert result.stdout.splitlines() == [real_sha]
 
 
-def test_hash_worktree_blobs_autocrlf_true_text_attribute_pin_falls_back_to_spawn(tmp_path):
+def test_hash_worktree_blobs_autocrlf_true_text_attribute_pin_falls_back_to_spawn(tmp_path: Path) -> None:
     """A path with an explicit `.gitattributes` `eol=`/`text` pin is a
     disposition C3c's spike never measured (forced text ignores the NUL
     heuristic; `-text` never converts) -- refused to the spawn ladder even
@@ -2691,7 +2692,7 @@ def test_hash_worktree_blobs_autocrlf_true_text_attribute_pin_falls_back_to_spaw
     assert result.stdout.splitlines() == [expected_sha]
 
 
-def test_repo_autocrlf_true_reads_repo_local_config(tmp_path, monkeypatch):
+def test_repo_autocrlf_true_reads_repo_local_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`_repo_autocrlf_true` resolves from repo-local config, case-
     insensitively, and is `False` for any other value or when unset.
 
@@ -2715,7 +2716,7 @@ def test_repo_autocrlf_true_reads_repo_local_config(tmp_path, monkeypatch):
     assert git_native._repo_autocrlf_true(repo) is True
 
 
-def test_repo_autocrlf_true_sees_the_system_layer(tmp_path, monkeypatch):
+def test_repo_autocrlf_true_sees_the_system_layer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """THE TEST THAT WOULD HAVE CAUGHT C3d. Git for Windows writes
     `core.autocrlf=true` into the SYSTEM config, not the repo config and not
     `~/.gitconfig`. A probe reading only the latter two resolves `False` on a
@@ -2740,7 +2741,7 @@ def test_repo_autocrlf_true_sees_the_system_layer(tmp_path, monkeypatch):
     )
 
 
-def test_repo_local_autocrlf_false_beats_a_system_true(tmp_path, monkeypatch):
+def test_repo_local_autocrlf_false_beats_a_system_true(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Git's precedence is LAST WINS across layers -- system, then global,
     then repo-local. A first-hit walk in that order would return the system
     value and normalize content the repo explicitly asked to be left alone,
@@ -2757,7 +2758,7 @@ def test_repo_local_autocrlf_false_beats_a_system_true(tmp_path, monkeypatch):
     )
 
 
-def test_autocrlf_checkin_normalize_matches_real_git_corpus(tmp_path):
+def test_autocrlf_checkin_normalize_matches_real_git_corpus(tmp_path: Path) -> None:
     """Direct unit coverage of the pure transform against the exact corpus
     the C3c spike ran, independent of the `_hash_worktree_blobs` wiring."""
     repo = _init_real_repo(tmp_path)
@@ -2785,7 +2786,7 @@ def test_autocrlf_checkin_normalize_matches_real_git_corpus(tmp_path):
         assert got_sha == real_sha, f"mismatch for {content!r}"
 
 
-def test_hash_worktree_blobs_empty_paths_is_a_documented_noop_no_spawn(tmp_path):
+def test_hash_worktree_blobs_empty_paths_is_a_documented_noop_no_spawn(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
 
     with patch.object(git_native, "_git", side_effect=AssertionError("must not spawn")):
@@ -2794,7 +2795,7 @@ def test_hash_worktree_blobs_empty_paths_is_a_documented_noop_no_spawn(tmp_path)
     assert result == git_native.GitResult(returncode=0, stdout="", stderr="")
 
 
-def test_commit_scoped_private_index_worktree_leg_uses_hash_worktree_blobs(tmp_path):
+def test_commit_scoped_private_index_worktree_leg_uses_hash_worktree_blobs(tmp_path: Path) -> None:
     """The rewire point itself: `_commit_scoped_private_index`'s worktree-
     sourced leg must call the new in-process-first helper, not the old
     unconditional-spawn one directly."""
@@ -2849,14 +2850,14 @@ class _ControllableStderr:
     actually stop the reader thread rather than have it block forever.
     """
 
-    def __init__(self, schedule, *, forever_line=None, forever_delay=None):
+    def __init__(self, schedule, *, forever_line=None, forever_delay=None) -> None:
         self._schedule = list(schedule)
         self._idx = 0
         self._forever_line = forever_line
         self._forever_delay = forever_delay
         self._stopped = _threading_mod.Event()
 
-    def close(self):
+    def close(self) -> None:
         self._stopped.set()
 
     def __iter__(self):
@@ -2890,7 +2891,7 @@ class _FakeProc:
     (mirroring a genuinely hung child).
     """
 
-    def __init__(self, stderr, *, exit_delay=None, exit_returncode=0):
+    def __init__(self, stderr, *, exit_delay=None, exit_returncode: int = 0) -> None:
         self.stderr = stderr
         self.stdin = None
         self._start = _time_mod.monotonic()
@@ -2909,29 +2910,29 @@ class _FakeProc:
             return self._returncode
         return None
 
-    def terminate(self):
+    def terminate(self) -> None:
         self._terminated = True
         self.stderr.close()
 
-    def wait(self, timeout=None):
+    def wait(self, timeout=None) -> int:
         if self._returncode is None:
             self._returncode = -15 if self._terminated else self._exit_returncode
         return self._returncode
 
 
-def _patched_popen(monkeypatch, fake_proc):
+def _patched_popen(monkeypatch, fake_proc) -> None:
     monkeypatch.setattr(git_native.subprocess, "Popen", lambda *a, **kw: fake_proc)
 
 
-def _active_thread_names():
+def _active_thread_names() -> set[str]:
     return {t.name for t in _threading_mod.enumerate() if t.is_alive()}
 
 
-def test_push_streamed_default_stall_killed_is_false_on_a_plain_gitresult():
+def test_push_streamed_default_stall_killed_is_false_on_a_plain_gitresult() -> None:
     assert git_native.GitResult(returncode=0, stdout="", stderr="").stall_killed is False
 
 
-def test_push_streamed_streams_to_completion_not_killed(tmp_path, monkeypatch):
+def test_push_streamed_streams_to_completion_not_killed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """(a) streams steadily to completion -- never killed, real returncode
     kept, `stall_killed` False."""
     stderr = _ControllableStderr([(0.01, "Writing objects: 50%\n"), (0.01, "Writing objects: 100%\n")])
@@ -2949,7 +2950,7 @@ def test_push_streamed_streams_to_completion_not_killed(tmp_path, monkeypatch):
     assert _active_thread_names() <= before
 
 
-def test_push_streamed_goes_silent_past_window_is_killed(tmp_path, monkeypatch):
+def test_push_streamed_goes_silent_past_window_is_killed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """(b) streams, then goes silent past `silence_secs` -- killed,
     `stall_killed` True, real signal returncode kept (never rewritten to
     -1), stderr carried verbatim plus the marker line."""
@@ -2973,7 +2974,7 @@ def test_push_streamed_goes_silent_past_window_is_killed(tmp_path, monkeypatch):
     assert _active_thread_names() <= before
 
 
-def test_push_streamed_silent_but_clean_exit_is_not_a_hang(tmp_path, monkeypatch):
+def test_push_streamed_silent_but_clean_exit_is_not_a_hang(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """(c) exits cleanly with no output at all -- a quiet-but-healthy push
     (C1's fast-push class) must not be classified as a hang."""
     stderr = _ControllableStderr([])
@@ -2990,7 +2991,7 @@ def test_push_streamed_silent_but_clean_exit_is_not_a_hang(tmp_path, monkeypatch
 @pytest.mark.deliberate_wall_clock(
     reason="asserts the total-duration bound kills a never-silent child: a deadline that CPU time cannot see"
 )
-def test_push_streamed_never_silent_but_terminated_by_total_bound(tmp_path, monkeypatch):
+def test_push_streamed_never_silent_but_terminated_by_total_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """(d) AC8 -- a child that emits a progress line every
     `silence_secs - epsilon` forever is still terminated by the surviving
     total-duration bound, never mistaken for a healthy push that runs
@@ -3018,7 +3019,7 @@ def test_push_streamed_never_silent_but_terminated_by_total_bound(tmp_path, monk
     assert _active_thread_names() <= before
 
 
-def test_stall_silence_secs_derived_from_measured_s_max():
+def test_stall_silence_secs_derived_from_measured_s_max() -> None:
     """Constant relationship guard: `STALL_SILENCE_SECS` is the plan's `2 x
     S_max` derivation, never an invented number -- and stays a small,
     finite, positive figure sane for a poll loop."""
@@ -3032,7 +3033,7 @@ def test_stall_silence_secs_derived_from_measured_s_max():
 # ---------------------------------------------------------------------------
 
 
-def test_status_porcelain_default_argv_is_byte_identical_to_head(tmp_path):
+def test_status_porcelain_default_argv_is_byte_identical_to_head(tmp_path: Path) -> None:
     """The two new keyword-only options (`untracked_files`, `quotepath_false`)
     default to a no-op -- every existing caller's argv is unchanged. Pinned
     directly against the spawned argv, not against output."""
@@ -3043,7 +3044,7 @@ def test_status_porcelain_default_argv_is_byte_identical_to_head(tmp_path):
     assert argv == ["git", "--no-optional-locks", "status", "--porcelain"]
 
 
-def test_status_porcelain_untracked_files_appends_the_flag(tmp_path):
+def test_status_porcelain_untracked_files_appends_the_flag(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     with patch("subprocess.run", side_effect=lambda *a, **k: _make_completed(0, "", "")) as mock_run:
         git_native.status_porcelain(repo, untracked_files="all")
@@ -3053,7 +3054,7 @@ def test_status_porcelain_untracked_files_appends_the_flag(tmp_path):
     ]
 
 
-def test_status_porcelain_quotepath_false_prepends_the_dash_c(tmp_path):
+def test_status_porcelain_quotepath_false_prepends_the_dash_c(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     with patch("subprocess.run", side_effect=lambda *a, **k: _make_completed(0, "", "")) as mock_run:
         git_native.status_porcelain(repo, quotepath_false=True)
@@ -3063,7 +3064,7 @@ def test_status_porcelain_quotepath_false_prepends_the_dash_c(tmp_path):
     ]
 
 
-def test_status_porcelain_both_options_compose_with_untracked_files_last(tmp_path):
+def test_status_porcelain_both_options_compose_with_untracked_files_last(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     with patch("subprocess.run", side_effect=lambda *a, **k: _make_completed(0, "", "")) as mock_run:
         git_native.status_porcelain(repo, untracked_files="all", quotepath_false=True)
@@ -3074,7 +3075,7 @@ def test_status_porcelain_both_options_compose_with_untracked_files_last(tmp_pat
     ]
 
 
-def test_status_porcelain_untracked_all_unscoped_argv(tmp_path):
+def test_status_porcelain_untracked_all_unscoped_argv(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     with patch("subprocess.run", side_effect=lambda *a, **k: _make_completed(0, "", "")) as mock_run:
         git_native.status_porcelain(repo, untracked_all=True)
@@ -3084,7 +3085,7 @@ def test_status_porcelain_untracked_all_unscoped_argv(tmp_path):
     ]
 
 
-def test_status_porcelain_untracked_all_chunked_argv(tmp_path):
+def test_status_porcelain_untracked_all_chunked_argv(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     with patch("subprocess.run", side_effect=lambda *a, **k: _make_completed(0, "", "")) as mock_run:
         git_native.status_porcelain(repo, ["a.md", "b.md"], untracked_all=True)
@@ -3095,8 +3096,8 @@ def test_status_porcelain_untracked_all_chunked_argv(tmp_path):
 
 
 def test_dirty_relpaths_from_porcelain_returns_the_same_set_before_and_after_projection(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     """P014-C1 resolve pass R5: `dirty_relpaths_from_porcelain` is now a thin
     fail-closed projection of the `session_facts` producer -- same rename-both-
     halves, quoted-path, overflow-branch-directory-roots and fail-closed
@@ -3112,7 +3113,7 @@ def test_dirty_relpaths_from_porcelain_returns_the_same_set_before_and_after_pro
     assert dirty == {"a.txt"}
 
 
-def test_dirty_relpaths_from_porcelain_keeps_both_rename_halves(tmp_path, monkeypatch):
+def test_dirty_relpaths_from_porcelain_keeps_both_rename_halves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import session_facts as _session_facts
 
     monkeypatch.setattr(
@@ -3135,8 +3136,8 @@ def test_dirty_relpaths_from_porcelain_keeps_both_rename_halves(tmp_path, monkey
 
 
 def test_dirty_relpaths_from_porcelain_fails_closed_on_a_degraded_producer_record(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from coordinator_core.session import session_facts as _session_facts
 
     monkeypatch.setattr(
@@ -3154,7 +3155,7 @@ def test_dirty_relpaths_from_porcelain_fails_closed_on_a_degraded_producer_recor
     assert dirty == {"a.txt", "b.txt"}
 
 
-def test_add_paths_refuses_dotgit_component(tmp_path):
+def test_add_paths_refuses_dotgit_component(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     sess = hub_for_common(repo / ".git") / "sid"
     sess.mkdir(parents=True)

@@ -4,6 +4,7 @@ import pytest
 
 from coordinator_core.ops import plan_readiness_verdict as op
 from coordinator_core.roadmap.tests import _executor_heavy_shapes as shapes
+from pathlib import Path
 
 HEAVY = "EXECUTOR_HEAVY:executor-heavy-command-row"
 SHAPES = {
@@ -27,7 +28,7 @@ def _verdict(gated):
 
 @pytest.mark.parametrize("roles", ROLES.values(), ids=ROLES.keys())
 @pytest.mark.parametrize("spine", SHAPES.values(), ids=SHAPES.keys())
-def test_executor_heavy_is_repaired_in_wave_and_regates_clean(tmp_path, monkeypatch, spine, roles):
+def test_executor_heavy_is_repaired_in_wave_and_regates_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spine, roles) -> None:
     shapes.agents(tmp_path, monkeypatch, roles)
     # Hermetic: an unpinned repaired type (coordinator:builder) resolves its model from the
     # installed plugin definition, which only some boxes carry.

@@ -10,13 +10,15 @@ import threading
 import time
 
 from coordinator_core.session import core
+from pathlib import Path
+import pytest
 
 
-def _seed(tmp_path):
+def _seed(tmp_path) -> None:
     (tmp_path / "meta.json").write_text(json.dumps({"session_id": "x"}))
 
 
-def test_concurrent_writers_keep_every_field(tmp_path, monkeypatch):
+def test_concurrent_writers_keep_every_field(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _seed(tmp_path)
     real_replace = os.replace
 
@@ -30,10 +32,10 @@ def test_concurrent_writers_keep_every_field(tmp_path, monkeypatch):
 
     results = {}
 
-    def single():
+    def single() -> None:
         results["goal"] = core.update_meta_field(str(tmp_path), "goal", "g")
 
-    def batch():
+    def batch() -> None:
         results["batch"] = core.update_meta_fields(
             str(tmp_path), {"last_activity": "t", "pid": 7}
         )
@@ -50,7 +52,7 @@ def test_concurrent_writers_keep_every_field(tmp_path, monkeypatch):
     assert not (tmp_path / core._META_LOCK_NAME).exists()
 
 
-def test_writer_waits_for_held_lock(tmp_path, monkeypatch):
+def test_writer_waits_for_held_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _seed(tmp_path)
     # Stale/wait windows far above any scheduler stall: the lock is released by
     # rmdir below, never by the writer reaping it as stale or timing out.
@@ -61,7 +63,7 @@ def test_writer_waits_for_held_lock(tmp_path, monkeypatch):
     done = threading.Event()
     result = {}
 
-    def write():
+    def write() -> None:
         result["ok"] = core.update_meta_field(str(tmp_path), "goal", "g")
         done.set()
 
@@ -75,7 +77,7 @@ def test_writer_waits_for_held_lock(tmp_path, monkeypatch):
     assert core.read_meta_field(str(tmp_path), "goal") == "g"
 
 
-def test_stale_lock_from_crashed_holder_is_reaped(tmp_path):
+def test_stale_lock_from_crashed_holder_is_reaped(tmp_path: Path) -> None:
     _seed(tmp_path)
     lock_dir = tmp_path / core._META_LOCK_NAME
     lock_dir.mkdir()
@@ -86,7 +88,7 @@ def test_stale_lock_from_crashed_holder_is_reaped(tmp_path):
     assert not lock_dir.exists()
 
 
-def test_lock_timeout_reports_failure_and_writes_nothing(tmp_path, monkeypatch):
+def test_lock_timeout_reports_failure_and_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _seed(tmp_path)
     monkeypatch.setattr(core, "_META_LOCK_WAIT_SECONDS", 0.05)
     lock_dir = tmp_path / core._META_LOCK_NAME
@@ -96,7 +98,7 @@ def test_lock_timeout_reports_failure_and_writes_nothing(tmp_path, monkeypatch):
     assert lock_dir.exists()  # a timed-out waiter never releases a peer's lock
 
 
-def test_lock_released_on_unreadable_meta(tmp_path):
+def test_lock_released_on_unreadable_meta(tmp_path: Path) -> None:
     (tmp_path / "meta.json").write_text("{not json")
     assert core.update_meta_field(str(tmp_path), "goal", "g") is False
     assert not (tmp_path / core._META_LOCK_NAME).exists()

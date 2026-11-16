@@ -29,11 +29,16 @@ import importlib.util
 import io
 import sys
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
-def _load_publish_module():
+def _load_publish_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "publish_main_copy_shadow_under_test", _BIN_DIR / "publish.py"
     )
@@ -47,14 +52,14 @@ def _load_publish_module():
 publish = _load_publish_module()
 
 
-def _stub_out_unrelated_gates(monkeypatch, publish):
+def _stub_out_unrelated_gates(monkeypatch, publish) -> None:
     monkeypatch.setattr(publish, "check_live_install_clobber", lambda *a, **k: True)
     monkeypatch.setattr(publish, "check_marketplace_version_regression", lambda *a, **k: True)
     monkeypatch.setattr(publish, "check_version_consistency", lambda *a, **k: True)
     monkeypatch.setattr(publish, "warn_machine_slug_net", lambda *a, **k: None)
 
 
-def test_main_copy_gate_result_source_dir_is_the_shadow_not_raw_source(monkeypatch, tmp_path):
+def test_main_copy_gate_result_source_dir_is_the_shadow_not_raw_source(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     raw_source = tmp_path / "raw-source-checkout"
     raw_source.mkdir()
     dest_dir = tmp_path / "dest"

@@ -3,6 +3,7 @@ import os
 from types import SimpleNamespace
 import pytest
 from coordinator_core.worker_contracts import worker
+from pathlib import Path
 
 OWN_IDS = ("CODEX_THREAD_ID", "ANTIGRAVITY_CONVERSATION_ID", "AGY_SESSION_ID",
            "COORDINATOR_AGENT_SESSION", "COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID",
@@ -11,7 +12,7 @@ OWN_IDS = ("CODEX_THREAD_ID", "ANTIGRAVITY_CONVERSATION_ID", "AGY_SESSION_ID",
 
 @pytest.mark.parametrize('args,model', [([],None),(['--model','gpt-6.1-sol'],'gpt-6.1-sol'),
                                       (['--model=gpt-6.1-sol'],'gpt-6.1-sol')])
-def test_supervised_worker_spawn_has_actual_role_vendor_and_no_parent_identity(tmp_path,monkeypatch,args,model):
+def test_supervised_worker_spawn_has_actual_role_vendor_and_no_parent_identity(tmp_path: Path,monkeypatch: pytest.MonkeyPatch,args,model) -> None:
     captured={}
     base={key:'parent-own-id' for key in OWN_IDS}
     base.update(COORDINATOR_AGENT_ROLE='em',COORDINATOR_AGENT_PROVIDER='claude',

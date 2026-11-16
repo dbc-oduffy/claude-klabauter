@@ -5,6 +5,7 @@ import os
 import sys
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.cadence
 
@@ -20,19 +21,19 @@ _cmv = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_cmv)  # type: ignore[union-attr]
 
 
-def test_settings_path_honours_claude_config_dir(monkeypatch, tmp_path):
+def test_settings_path_honours_claude_config_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config_dir = tmp_path / "harness-config"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
     assert _cmv._settings_path() == os.path.join(str(config_dir), "settings.json")
 
 
-def test_marker_path_honours_claude_config_dir(monkeypatch, tmp_path):
+def test_marker_path_honours_claude_config_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     config_dir = tmp_path / "harness-config"
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(config_dir))
     assert _cmv._marker_path() == os.path.join(str(config_dir), ".mcp-version-check")
 
 
-def test_settings_path_falls_back_to_home_dot_claude_when_unset(monkeypatch):
+def test_settings_path_falls_back_to_home_dot_claude_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     expected = os.path.join(os.path.expanduser("~"), ".claude", "settings.json")

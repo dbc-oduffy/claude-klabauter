@@ -20,6 +20,8 @@ import importlib
 
 from coordinator_core.authz.classification import OpClass, classify
 from coordinator_core.warm.hook_http import HOOK_PATH, op_for_path
+from pathlib import Path
+import pytest
 
 
 def test_op_registers_and_resolves_through_op_for_path() -> None:
@@ -54,7 +56,7 @@ def _init_repo(path) -> None:
     (path / "docs" / "plans").mkdir(parents=True)
 
 
-def test_op_returns_post_advisory_shape_for_a_firing_payload(tmp_path, monkeypatch) -> None:
+def test_op_returns_post_advisory_shape_for_a_firing_payload(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks.plan_persistence_check import _handler
     from coordinator_core.ops import plan_capture_persist as pcp_mod
 
@@ -127,7 +129,7 @@ def test_op_suppresses_on_empty_plan() -> None:
     assert _handler({"payload": payload}) == {}
 
 
-def test_op_suppresses_on_unresolvable_repo_root(tmp_path) -> None:
+def test_op_suppresses_on_unresolvable_repo_root(tmp_path: Path) -> None:
     from coordinator_core.hooks.plan_persistence_check import _handler
 
     not_a_repo = tmp_path / "not-a-repo"
@@ -136,7 +138,7 @@ def test_op_suppresses_on_unresolvable_repo_root(tmp_path) -> None:
     assert _handler({"payload": payload}) == {}
 
 
-def test_op_suppresses_when_docs_convention_absent(tmp_path) -> None:
+def test_op_suppresses_when_docs_convention_absent(tmp_path: Path) -> None:
     from coordinator_core.hooks.plan_persistence_check import _handler
 
     repo = tmp_path / "repo-no-docs"
@@ -146,7 +148,7 @@ def test_op_suppresses_when_docs_convention_absent(tmp_path) -> None:
     assert _handler({"payload": payload}) == {}
 
 
-def test_op_reads_claude_project_dir_from_payload_env_not_os_environ(tmp_path, monkeypatch) -> None:
+def test_op_reads_claude_project_dir_from_payload_env_not_os_environ(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """CLAUDE_PROJECT_DIR must be read from params["payload"]["env"], never
     from this process's own os.environ — the payload-in contract this
     chunk's brief pins."""
@@ -185,7 +187,7 @@ def test_op_reads_claude_project_dir_from_payload_env_not_os_environ(tmp_path, m
     assert list((other_repo / "docs" / "plans").rglob("*.md")) == []
 
 
-def test_op_readme_row_shape_matches_between_routed_and_fallback_paths(tmp_path, monkeypatch) -> None:
+def test_op_readme_row_shape_matches_between_routed_and_fallback_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The
     routed path's README row (plan_capture_persist.readme_row()) and the
     fallback path's inline-built row must resolve to the same link-target
@@ -223,7 +225,7 @@ def test_op_readme_row_shape_matches_between_routed_and_fallback_paths(tmp_path,
     assert "](docs/plans/" not in readme_text2
 
 
-def test_op_slug_collision_does_not_overwrite(tmp_path, monkeypatch) -> None:
+def test_op_slug_collision_does_not_overwrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks.plan_persistence_check import _handler
 
     repo = tmp_path / "collision-repo"
@@ -252,7 +254,7 @@ def test_op_slug_collision_does_not_overwrite(tmp_path, monkeypatch) -> None:
     assert written[0].read_text(encoding="utf-8") == "# Collide\n\nFirst body."
 
 
-def test_op_idempotent_on_byte_identical_refire(tmp_path, monkeypatch) -> None:
+def test_op_idempotent_on_byte_identical_refire(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.hooks.plan_persistence_check as mod
 
     repo = tmp_path / "idempotent-repo"
@@ -271,7 +273,7 @@ def test_op_idempotent_on_byte_identical_refire(tmp_path, monkeypatch) -> None:
     assert "ALREADY PERSISTED" in second["hookSpecificOutput"]["additionalContext"]
 
 
-def test_op_routes_meta_repo_to_engine_root(tmp_path, monkeypatch) -> None:
+def test_op_routes_meta_repo_to_engine_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A firing repo canonically equal to the resolved ~/.claude reroutes the
     write into this engine's own docs/plans/ (here, a fake substituted engine
     root), never the meta-repo's own docs/ tree."""

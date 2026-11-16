@@ -23,6 +23,7 @@ from pathlib import Path
 
 import coordinator_core.ops.push_outstanding as po
 from coordinator_core.ops.ceremony.push import PushOutcome
+import pytest
 
 
 def _envelope(monkeypatch, outcome: PushOutcome) -> dict:
@@ -31,7 +32,7 @@ def _envelope(monkeypatch, outcome: PushOutcome) -> dict:
     return po._handler({}, repo_root=Path("C:/nonexistent"))
 
 
-def test_a_failed_push_carries_its_reason(monkeypatch):
+def test_a_failed_push_carries_its_reason(monkeypatch: pytest.MonkeyPatch) -> None:
     env = _envelope(
         monkeypatch,
         PushOutcome(
@@ -45,7 +46,7 @@ def test_a_failed_push_carries_its_reason(monkeypatch):
     assert env["failed"] == ["git push: rejected (non-fast-forward)"]
 
 
-def test_an_indeterminate_push_is_not_reported_as_a_confirmed_failure(monkeypatch):
+def test_an_indeterminate_push_is_not_reported_as_a_confirmed_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     env = _envelope(
         monkeypatch,
         PushOutcome(exit_code=1, unconfirmed=["git push: timed out, outcome unobserved"]),
@@ -55,7 +56,7 @@ def test_an_indeterminate_push_is_not_reported_as_a_confirmed_failure(monkeypatc
     assert env["failed"] == []
 
 
-def test_a_policy_decline_carries_the_branch_gate_message(monkeypatch):
+def test_a_policy_decline_carries_the_branch_gate_message(monkeypatch: pytest.MonkeyPatch) -> None:
     env = _envelope(
         monkeypatch,
         PushOutcome(
@@ -68,7 +69,7 @@ def test_a_policy_decline_carries_the_branch_gate_message(monkeypatch):
     assert env["message"] == "refusing to push protected branch 'main'"
 
 
-def test_a_landed_push_carries_its_range(monkeypatch):
+def test_a_landed_push_carries_its_range(monkeypatch: pytest.MonkeyPatch) -> None:
     env = _envelope(
         monkeypatch,
         PushOutcome(exit_code=0, acted=["push"], pushed_range="aaa..bbb", pushed_count=3),

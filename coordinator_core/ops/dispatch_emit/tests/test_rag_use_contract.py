@@ -15,6 +15,21 @@ def _runner(payload, seen=None):
     return run
 
 
+def test_touches_ue_path_accepts_ue_paths_and_refuses_python_and_docs():
+    for ue in (
+        "control/plugin/Foo/Bar.txt", "Source/Game/X.cs", "Plugins/P/Source/P/Y.cpp",
+        "a/b.h", "Content/Hair.uasset", "control\\plugin\\x", "A/B.CPP",
+    ):
+        assert rag_use.touches_ue_path([ue]) is True, ue
+    for other in (
+        "tools/likeness-prototype/likeness/hairstyle_class/labeller.py", "detector_findings.py",
+        "docs/batch-contract.md", "schema/batch.json", "resources/Sourcery.py", "tests/test_x.py",
+    ):
+        assert rag_use.touches_ue_path([other]) is False, other
+    assert rag_use.touches_ue_path([]) is False
+    assert rag_use.touches_ue_path(["x.py", "y/Source/z"]) is True
+
+
 def test_usage_parses_and_builds_argv():
     seen = []
     u = rag_use.read_usage(

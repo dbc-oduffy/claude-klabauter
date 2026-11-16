@@ -7,17 +7,18 @@ import json
 import pytest
 
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 RUN = "ask-20261022T001857-d6d0dd"
 
 
-def _run_with_note(repo):
+def _run_with_note(repo) -> tuple[Path, Path]:
     d = rl.start(repo, RUN)
     rl.revise(repo, RUN, note="C11b done by EM")
     return d, d / rl.NOTES_FILE
 
 
-def test_retract_appends_and_never_rewrites(tmp_path):
+def test_retract_appends_and_never_rewrites(tmp_path: Path) -> None:
     _, notes = _run_with_note(tmp_path)
     before = notes.read_bytes()
     rl.revise(tmp_path, RUN, retract_note={"note_id": "N1", "reason": "applied by hand"}, sender="em-1")
@@ -27,7 +28,7 @@ def test_retract_appends_and_never_rewrites(tmp_path):
     assert last["retracts"] == "N1" and last["reason"] == "applied by hand" and last["from"] == "em-1"
 
 
-def test_retract_adds_no_row_and_the_view_shows_it_retracted(tmp_path):
+def test_retract_adds_no_row_and_the_view_shows_it_retracted(tmp_path: Path) -> None:
     d, _ = _run_with_note(tmp_path)
     ledger, _, added = rl.revise(tmp_path, RUN, retract_note={"note_id": "N1", "reason": "done"})
     assert added is None and ledger.items == ()
@@ -44,7 +45,7 @@ def test_retract_adds_no_row_and_the_view_shows_it_retracted(tmp_path):
         "N1",
     ],
 )
-def test_bad_retract_refuses_and_writes_nothing(tmp_path, bad):
+def test_bad_retract_refuses_and_writes_nothing(tmp_path: Path, bad) -> None:
     _, notes = _run_with_note(tmp_path)
     before = notes.read_bytes()
     with pytest.raises(rl.LedgerRefused):
@@ -52,7 +53,7 @@ def test_bad_retract_refuses_and_writes_nothing(tmp_path, bad):
     assert notes.read_bytes() == before
 
 
-def test_repeat_retract_refuses_naming_the_earlier_at(tmp_path):
+def test_repeat_retract_refuses_naming_the_earlier_at(tmp_path: Path) -> None:
     _, notes = _run_with_note(tmp_path)
     rl.revise(tmp_path, RUN, retract_note={"note_id": "N1", "reason": "first"})
     before = notes.read_bytes()
@@ -62,20 +63,20 @@ def test_repeat_retract_refuses_naming_the_earlier_at(tmp_path):
     assert notes.read_bytes() == before
 
 
-def test_a_held_run_refuses(tmp_path):
+def test_a_held_run_refuses(tmp_path: Path) -> None:
     with pytest.raises(rl.LedgerRefused, match="emit it first"):
         rl.revise(tmp_path, "ask-held", retract_note={"note_id": "N1", "reason": "x"})
     assert not (tmp_path / "state" / "warp" / "ask-held").exists()
 
 
-def test_a_halted_run_accepts(tmp_path):
+def test_a_halted_run_accepts(tmp_path: Path) -> None:
     d, _ = _run_with_note(tmp_path)
     (d / "halted.json").write_text("{}", encoding="utf-8")
     rl.revise(tmp_path, RUN, retract_note={"note_id": "N1", "reason": "done"})
     assert "retracts" in (d / rl.NOTES_FILE).read_text(encoding="utf-8")
 
 
-def test_handler_replies_retracted_note_and_retract_alone_passes_the_precondition(tmp_path):
+def test_handler_replies_retracted_note_and_retract_alone_passes_the_precondition(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     _run_with_note(tmp_path)
     out = rl._handler({"run_id": RUN, "retract_note": {"note_id": "N1", "reason": "done"}}, repo_root=tmp_path)

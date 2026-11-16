@@ -26,6 +26,7 @@ import pytest
 from coordinator_core.content_root import _LEGACY_POINTER, POINTER_NAME
 from coordinator_core.install import _shared, substrate, uninstall_legs
 from coordinator_core.win_portability import is_executable
+from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
@@ -38,7 +39,7 @@ pytestmark = pytest.mark.complete
 _HOME_VARS = ("CLAUDE_HOME", "HOME", "USERPROFILE")
 
 
-def _strip_all_home_vars(monkeypatch):
+def _strip_all_home_vars(monkeypatch) -> None:
     """Clear EVERY home env var, which is what "stripped env" now means.
 
     USERPROFILE joined the set when require_home() gained its Windows rung:
@@ -53,20 +54,20 @@ def _strip_all_home_vars(monkeypatch):
         monkeypatch.delenv(var, raising=False)
 
 
-def test_require_home_raises_when_all_unset(monkeypatch):
+def test_require_home_raises_when_all_unset(monkeypatch: pytest.MonkeyPatch) -> None:
     _strip_all_home_vars(monkeypatch)
     with pytest.raises(_shared.RequireHomeError):
         _shared.require_home("test-caller")
 
 
-def test_require_home_raises_on_empty_string_env(monkeypatch):
+def test_require_home_raises_on_empty_string_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in _HOME_VARS:
         monkeypatch.setenv(var, "")
     with pytest.raises(_shared.RequireHomeError):
         _shared.require_home("test-caller")
 
 
-def test_require_home_uses_userprofile_when_home_absent(monkeypatch):
+def test_require_home_uses_userprofile_when_home_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     """Native-Windows shape: only USERPROFILE is set."""
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.delenv("HOME", raising=False)
@@ -75,7 +76,7 @@ def test_require_home_uses_userprofile_when_home_absent(monkeypatch):
     assert _shared.require_home("test-caller") == os.path.join(os.sep, "Users", "someone")
 
 
-def test_require_home_precedence_prefers_claude_home_then_home(monkeypatch):
+def test_require_home_precedence_prefers_claude_home_then_home(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("USERPROFILE", os.path.join(os.sep, "up"))
     monkeypatch.setenv("HOME", os.path.join(os.sep, "h"))
     monkeypatch.setenv("CLAUDE_HOME", os.path.join(os.sep, "ch"))
@@ -86,7 +87,7 @@ def test_require_home_precedence_prefers_claude_home_then_home(monkeypatch):
 
 
 @pytest.mark.parametrize("var", _HOME_VARS)
-def test_require_home_raises_on_relative_home(monkeypatch, var):
+def test_require_home_raises_on_relative_home(monkeypatch: pytest.MonkeyPatch, var) -> None:
     """A relative home anchored every derived destructive target at the process
     cwd — the same hazard class as the empty home this guard was written for."""
     _strip_all_home_vars(monkeypatch)
@@ -96,7 +97,7 @@ def test_require_home_raises_on_relative_home(monkeypatch, var):
         _shared.require_home("test-caller")
 
 
-def test_require_home_raises_on_windows_drive_relative_home(monkeypatch):
+def test_require_home_raises_on_windows_drive_relative_home(monkeypatch: pytest.MonkeyPatch) -> None:
     """`C:foo` names a path relative to the cwd ON drive C:, not an absolute
     path. Rejected on Windows as drive-relative; on POSIX as an ordinary
     relative name."""
@@ -111,7 +112,7 @@ def test_require_home_raises_on_windows_drive_relative_home(monkeypatch):
     "mode",
     ["remove-substrate", "remove-shim", "strip-settings-hooks", "set-plugin-endstate"],
 )
-def test_every_leg_refuses_to_mutate_with_home_unset(monkeypatch, mode):
+def test_every_leg_refuses_to_mutate_with_home_unset(monkeypatch: pytest.MonkeyPatch, mode) -> None:
     """Adversarial fixture: no home env at all MUST refuse before any
     destructive path touches disk — pinned per recipe § 6 known bug-history."""
     _strip_all_home_vars(monkeypatch)
@@ -138,7 +139,7 @@ def test_every_leg_refuses_to_mutate_with_home_unset(monkeypatch, mode):
 
 
 @pytest.mark.parametrize("home_state", ["unset", "empty-string"])
-def test_settings_home_derivation_is_absolute_without_home(monkeypatch, home_state):
+def test_settings_home_derivation_is_absolute_without_home(monkeypatch: pytest.MonkeyPatch, home_state) -> None:
     """With CLAUDE_HOME/HOME unset OR set to "", the derived settings home must
     be absolute and must not be drive- or cwd-relative.
 
@@ -166,14 +167,14 @@ def test_settings_home_derivation_is_absolute_without_home(monkeypatch, home_sta
     assert parent.name, f"settings home derived directly at a root: {resolved!r}"
 
 
-def test_settings_home_derivation_honours_override(monkeypatch, tmp_path):
+def test_settings_home_derivation_honours_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "explicit"))
     assert uninstall_legs._settings_home_from(str(tmp_path / "home")) == str(
         tmp_path / "explicit"
     )
 
 
-def test_settings_home_derivation_rejects_relative_override(monkeypatch, tmp_path):
+def test_settings_home_derivation_rejects_relative_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A relative override anchored the rmtree/registry targets at the cwd."""
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", "relative-settings-home")
     with pytest.raises(_shared.RequireHomeError, match="non-absolute"):
@@ -183,7 +184,7 @@ def test_settings_home_derivation_rejects_relative_override(monkeypatch, tmp_pat
 @pytest.mark.parametrize(
     "leg", ["remove-substrate", "set-plugin-endstate"]
 )
-def test_legs_return_false_on_relative_settings_home_override(monkeypatch, tmp_path, leg):
+def test_legs_return_false_on_relative_settings_home_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, leg) -> None:
     """The derivation raises RequireHomeError; the legs must convert that to
     their False return contract, not let it escape."""
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "home"))
@@ -200,12 +201,12 @@ def test_legs_return_false_on_relative_settings_home_override(monkeypatch, tmp_p
 # ---------------------------------------------------------------------------
 
 
-def test_strip_settings_hooks_noop_when_absent(tmp_path, monkeypatch):
+def test_strip_settings_hooks_noop_when_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
     assert uninstall_legs.uninstall_strip_settings_hooks() is True
 
 
-def test_inverse_strip_removes_generated_preserves_other(tmp_path):
+def test_inverse_strip_removes_generated_preserves_other(tmp_path: Path) -> None:
     coordinator_root = tmp_path / "coordinator"
     (coordinator_root / "hooks").mkdir(parents=True)
     settings = {
@@ -245,14 +246,14 @@ def test_inverse_strip_removes_generated_preserves_other(tmp_path):
     assert result["enabledPlugins"] == {"coordinator-claude": True}
 
 
-def test_inverse_strip_raises_on_missing_file(tmp_path):
+def test_inverse_strip_raises_on_missing_file(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         _shared.settings_hook_identity_inverse_strip(
             str(tmp_path / "absent.json"), str(tmp_path), str(tmp_path / "out.json")
         )
 
 
-def test_full_strip_leg_idempotent_reruns(tmp_path, monkeypatch):
+def test_full_strip_leg_idempotent_reruns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Re-run against an already-stripped settings.json is a no-op (zero
     groups match the generated-dir prefix)."""
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
@@ -289,12 +290,12 @@ def test_full_strip_leg_idempotent_reruns(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_remove_substrate_rejects_unrecognized_mode(tmp_path, monkeypatch):
+def test_remove_substrate_rejects_unrecognized_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
     assert uninstall_legs.uninstall_remove_substrate("bogus-mode") is False
 
 
-def test_remove_substrate_full_remove_is_idempotent_on_absent_targets(tmp_path, monkeypatch):
+def test_remove_substrate_full_remove_is_idempotent_on_absent_targets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Every removal is a no-op (success) when its target is already absent.
     Isolates PATH so a real dev-machine `machine-local` install cannot leak
     into the sandbox (mirrors the bash test harness's PATH-sandboxing)."""
@@ -310,14 +311,14 @@ def test_remove_substrate_full_remove_is_idempotent_on_absent_targets(tmp_path, 
 # ---------------------------------------------------------------------------
 
 
-def test_remove_shim_noop_on_fresh_home(tmp_path, monkeypatch):
+def test_remove_shim_noop_on_fresh_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.delenv("SHELL", raising=False)
     assert uninstall_legs.uninstall_remove_shim() is True
 
 
-def test_remove_shim_refuses_hand_modified_legacy_block(tmp_path, monkeypatch):
+def test_remove_shim_refuses_hand_modified_legacy_block(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     bashrc = tmp_path / ".bashrc"
@@ -332,7 +333,7 @@ def test_remove_shim_refuses_hand_modified_legacy_block(tmp_path, monkeypatch):
     assert "hand-modified" in bashrc.read_text(encoding="utf-8")
 
 
-def test_remove_shim_strips_matching_legacy_block(tmp_path, monkeypatch):
+def test_remove_shim_strips_matching_legacy_block(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     expected_repo = f"{tmp_path}/X/coordinator-content-repo"
@@ -358,7 +359,7 @@ def test_remove_shim_strips_matching_legacy_block(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_register_hardware_concern_inline_array(tmp_path):
+def test_register_hardware_concern_inline_array(tmp_path: Path) -> None:
     registry = tmp_path / "registry.toml"
     registry.write_text('concerns = ["project_rag", "unreal"]\n', encoding="utf-8")
     substrate._register_hardware_concern(registry)
@@ -368,7 +369,7 @@ def test_register_hardware_concern_inline_array(tmp_path):
     assert set(data["concerns"]) == {"project_rag", "unreal", "hardware"}
 
 
-def test_register_hardware_concern_multiline_array_preserves_existing(tmp_path):
+def test_register_hardware_concern_multiline_array_preserves_existing(tmp_path: Path) -> None:
     registry = tmp_path / "registry.toml"
     registry.write_text(
         "concerns = [\n"
@@ -389,7 +390,7 @@ def test_register_hardware_concern_multiline_array_preserves_existing(tmp_path):
     assert data["sibling"]["key"] == ""
 
 
-def test_register_hardware_concern_noop_when_already_present(tmp_path):
+def test_register_hardware_concern_noop_when_already_present(tmp_path: Path) -> None:
     registry = tmp_path / "registry.toml"
     original = 'concerns = ["hardware", "unreal"]\n'
     registry.write_text(original, encoding="utf-8")
@@ -406,7 +407,7 @@ def test_register_hardware_concern_noop_when_already_present(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_run_hardware_audit_check_only_is_noop(capsys, monkeypatch):
+def test_run_hardware_audit_check_only_is_noop(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     called = []
     monkeypatch.setattr(
         "coordinator_core.ops.detect_hardware.main", lambda argv: called.append(argv) or 0
@@ -416,7 +417,7 @@ def test_run_hardware_audit_check_only_is_noop(capsys, monkeypatch):
     assert "would: run hardware audit" in capsys.readouterr().out
 
 
-def test_run_hardware_audit_calls_detect_hardware_in_process(capsys, monkeypatch):
+def test_run_hardware_audit_calls_detect_hardware_in_process(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     called = []
     monkeypatch.setattr(
         "coordinator_core.ops.detect_hardware.main", lambda argv: called.append(list(argv)) or 0
@@ -426,13 +427,13 @@ def test_run_hardware_audit_calls_detect_hardware_in_process(capsys, monkeypatch
     assert capsys.readouterr().err == ""
 
 
-def test_run_hardware_audit_nonzero_rc_warns(capsys, monkeypatch):
+def test_run_hardware_audit_nonzero_rc_warns(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("coordinator_core.ops.detect_hardware.main", lambda argv: 1)
     substrate._run_hardware_audit(check_only=False)
     assert "hardware audit failed" in capsys.readouterr().err
 
 
-def test_run_hardware_audit_flushes_stdout_before_detect_hardware(monkeypatch):
+def test_run_hardware_audit_flushes_stdout_before_detect_hardware(monkeypatch: pytest.MonkeyPatch) -> None:
     # C9(b): detect_hardware's `machine-local set` children write to the
     # inherited fd directly, bypassing Python's buffered stdout. Any
     # `print()` queued by this module (or a caller) before this call must be
@@ -449,7 +450,7 @@ def test_run_hardware_audit_flushes_stdout_before_detect_hardware(monkeypatch):
     assert order == ["flush", "detect_hardware.main"]
 
 
-def test_run_hardware_audit_never_spawns_bash(monkeypatch):
+def test_run_hardware_audit_never_spawns_bash(monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     monkeypatch.setattr("coordinator_core.ops.detect_hardware.main", lambda argv: 0)
@@ -470,7 +471,7 @@ SEED_WIKI_FIXTURE_PAGE = "stub-seed-wiki.md"
 SEED_WIKI_FIXTURE_BODY = "# stub seed wiki\n"
 
 
-def _build_success_fixture(tmp_path, monkeypatch, *, omit_plugin_root_lib=True):
+def _build_success_fixture(tmp_path, monkeypatch, *, omit_plugin_root_lib: bool = True):
     """Lay down the MINIMUM dual-anchor tree substrate.run() actually needs to
     reach rc==0: a DoE-side ``plugin_root`` (templates/{bin,setup,machine-local}
     + whoami/ deliberately ABSENT — no-viable-whoami is a non-fatal warning
@@ -614,7 +615,7 @@ def _build_success_fixture(tmp_path, monkeypatch, *, omit_plugin_root_lib=True):
     return plugin_root, claude_klabauter_root
 
 
-def test_substrate_run_success_path_dual_anchor_populated_tree(tmp_path, monkeypatch):
+def test_substrate_run_success_path_dual_anchor_populated_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Empirical gap closed: before this test, nothing drove ``run()`` to a
     success return against a populated tree — a fixture-manufactured bash
     manifest masked the fact the installer was dead post-relocation. This
@@ -697,7 +698,7 @@ def test_substrate_run_success_path_dual_anchor_populated_tree(tmp_path, monkeyp
     assert (home_setup := tmp_path / "home" / ".claude" / "setup" / "hello.py").is_file()
 
 
-def test_substrate_run_success_path_resolves_home_via_userprofile(tmp_path, monkeypatch):
+def test_substrate_run_success_path_resolves_home_via_userprofile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Native-Windows condition for `run()`'s install-destination resolution
     (home-resolution-lint bare_home_or_chain fix, 2026-07-29): CLAUDE_HOME and
     HOME both absent, only USERPROFILE set (the PowerShell/cmd.exe shape).
@@ -716,7 +717,7 @@ def test_substrate_run_success_path_resolves_home_via_userprofile(tmp_path, monk
     assert (home / ".claude" / "setup" / "hello.py").is_file()
 
 
-def test_substrate_run_manifest_resolves_off_claude_klabauter_root_not_plugin_root(tmp_path, monkeypatch):
+def test_substrate_run_manifest_resolves_off_claude_klabauter_root_not_plugin_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression pin: manifest resolution must consult the claude-klabauter root, never
     ``plugin_root/lib`` — this reconstructs a competing, WRONG manifest at
     ``plugin_root/lib`` (a booby-trapped ``SETUP_TEMPLATE_FILES`` naming a file
@@ -766,7 +767,7 @@ def test_substrate_run_manifest_resolves_off_claude_klabauter_root_not_plugin_ro
 # ---------------------------------------------------------------------------
 
 
-def test_orchestrate_help_exits_zero_and_prints_usage(capsys):
+def test_orchestrate_help_exits_zero_and_prints_usage(capsys: pytest.CaptureFixture[str]) -> None:
     rc = uninstall_legs.orchestrate_uninstall(["--help"])
     assert rc == 0
     out = capsys.readouterr().out
@@ -774,14 +775,14 @@ def test_orchestrate_help_exits_zero_and_prints_usage(capsys):
     assert "--keep-marketplace" in out
 
 
-def test_orchestrate_unrecognized_option_exits_one(capsys):
+def test_orchestrate_unrecognized_option_exits_one(capsys: pytest.CaptureFixture[str]) -> None:
     rc = uninstall_legs.orchestrate_uninstall(["--bogus"])
     assert rc == 1
     err = capsys.readouterr().err
     assert "unrecognized option '--bogus'" in err
 
 
-def test_orchestrate_dry_run_performs_zero_leg_calls(tmp_path, monkeypatch, capsys):
+def test_orchestrate_dry_run_performs_zero_leg_calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """--dry-run must never invoke a leg function — patch every leg to raise
     if called, matching the bash oracle's "ZERO filesystem writes and ZERO
     registry-key clears... every mutating call is skipped entirely" guarantee."""
@@ -801,7 +802,7 @@ def test_orchestrate_dry_run_performs_zero_leg_calls(tmp_path, monkeypatch, caps
     assert "ZERO filesystem writes and ZERO registry-key clears" in out
 
 
-def test_orchestrate_keep_marketplace_dry_run_reports_mode(capsys):
+def test_orchestrate_keep_marketplace_dry_run_reports_mode(capsys: pytest.CaptureFixture[str]) -> None:
     rc = uninstall_legs.orchestrate_uninstall(["--keep-marketplace", "--dry-run"])
     assert rc == 0
     out = capsys.readouterr().out
@@ -809,7 +810,7 @@ def test_orchestrate_keep_marketplace_dry_run_reports_mode(capsys):
     assert "6. set plugin end-state (revert-to-marketplace)" in out
 
 
-def test_orchestrate_stops_at_first_failing_leg(tmp_path, monkeypatch, capsys):
+def test_orchestrate_stops_at_first_failing_leg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """Fail-loud-on-ambiguity: a failing leg 1 must short-circuit — legs
     2-4 are never invoked."""
     monkeypatch.setattr(uninstall_legs, "uninstall_strip_settings_hooks", lambda: False)
@@ -824,26 +825,26 @@ def test_orchestrate_stops_at_first_failing_leg(tmp_path, monkeypatch, capsys):
     assert "stopping — not continuing past a fail-loud leg" in err
 
 
-def test_orchestrate_full_success_sequences_all_four_legs_and_completes(capsys):
+def test_orchestrate_full_success_sequences_all_four_legs_and_completes(capsys: pytest.CaptureFixture[str]) -> None:
     calls = []
 
-    def _ok_strip():
+    def _ok_strip() -> bool:
         calls.append("strip")
         return True
 
-    def _ok_shim():
+    def _ok_shim() -> bool:
         calls.append("shim")
         return True
 
-    def _ok_substrate(mode, *, purge_operator_config, force, plugin_root):
+    def _ok_substrate(mode, *, purge_operator_config, force, plugin_root) -> bool:
         calls.append("substrate")
         return True
 
-    def _ok_endstate(mode, *, plugin_root):
+    def _ok_endstate(mode, *, plugin_root) -> bool:
         calls.append("endstate")
         return True
 
-    def _ok_sampler():
+    def _ok_sampler() -> bool:
         calls.append("sampler")
         return True
 
@@ -873,17 +874,17 @@ def test_orchestrate_full_success_sequences_all_four_legs_and_completes(capsys):
     assert "coordinator-uninstall: complete (mode=full-remove)." in out
 
 
-def test_substrate_run_fails_loud_without_plugin_root(monkeypatch):
+def test_substrate_run_fails_loud_without_plugin_root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     assert substrate.run() == 1
 
 
-def test_substrate_run_fails_loud_on_bad_layout(tmp_path, monkeypatch):
+def test_substrate_run_fails_loud_on_bad_layout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(tmp_path))
     assert substrate.run() == 1
 
 
-def test_substrate_run_fails_loud_when_claude_klabauter_lib_missing(tmp_path, monkeypatch):
+def test_substrate_run_fails_loud_when_claude_klabauter_lib_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """DoE-side layout (plugin_root/templates) satisfied, but claude-klabauter-side
     coordinator/lib is missing at the resolved CLAUDE_KLABAUTER_ROOT — the dual-anchor
     precondition (§ item 3) must fail loud rather than treat the DoE-side
@@ -904,7 +905,7 @@ def test_substrate_run_fails_loud_when_claude_klabauter_lib_missing(tmp_path, mo
     assert substrate.run() == 1
 
 
-def test_substrate_run_fails_loud_when_bin_resolvers_step_raises(tmp_path, monkeypatch, capsys):
+def test_substrate_run_fails_loud_when_bin_resolvers_step_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """The `.cmd`-twin claude-klabauter-live-root repoint inside `_install_bin_resolvers`
     (~3349) calls the real `coordinator_engine_root_with_class()` a *second*
     time (the first is run()'s own dual-anchor precondition at ~2517) and
@@ -996,7 +997,7 @@ def test_substrate_run_fails_loud_when_bin_resolvers_step_raises(tmp_path, monke
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_coordinator_root_raises_when_unresolvable(tmp_path, monkeypatch):
+def test_resolve_coordinator_root_raises_when_unresolvable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_ROOT", raising=False)
     monkeypatch.delenv("REPO_DOE_CLAUDE", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
@@ -1014,13 +1015,13 @@ def test_resolve_coordinator_root_raises_when_unresolvable(tmp_path, monkeypatch
         _shared.resolve_coordinator_root()
 
 
-def test_resolve_coordinator_root_env_override(tmp_path):
+def test_resolve_coordinator_root_env_override(tmp_path: Path) -> None:
     root = tmp_path / "coord"
     root.mkdir()
     assert _shared.resolve_coordinator_root(str(root)) == str(root)
 
 
-def test_resolve_coordinator_root_repo_content_root_nested_dev_clone(tmp_path, monkeypatch):
+def test_resolve_coordinator_root_repo_content_root_nested_dev_clone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A dev-clone-shaped `REPO_DOE_CLAUDE` (content nested under
     `<repo>/coordinator`, carrying the machine-local marker) resolves to
     that nested dir -- unchanged dev-tree behavior."""
@@ -1036,7 +1037,7 @@ def test_resolve_coordinator_root_repo_content_root_nested_dev_clone(tmp_path, m
     assert _shared.resolve_coordinator_root() == str(nested)
 
 
-def test_resolve_coordinator_root_repo_content_root_flat_published_clone(tmp_path, monkeypatch):
+def test_resolve_coordinator_root_repo_content_root_flat_published_clone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """claude-klabauter#6 / DoE F7: a flat OSS/marketplace-shaped
     `REPO_DOE_CLAUDE` (content directly at the repo root, no `coordinator/`
     subdir) must resolve to the repo root itself, decided by the same
@@ -1052,7 +1053,7 @@ def test_resolve_coordinator_root_repo_content_root_flat_published_clone(tmp_pat
     assert _shared.resolve_coordinator_root() == str(repo)
 
 
-def test_resolve_coordinator_root_content_root_pointer_rung_uses_userprofile(tmp_path, monkeypatch):
+def test_resolve_coordinator_root_content_root_pointer_rung_uses_userprofile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Native-Windows condition for the content-root pointer-file rung
     (home-resolution-lint bare_home_or_chain fix, 2026-07-29): HOME absent,
     only USERPROFILE set. The rung must resolve via `read_content_root()`
@@ -1104,7 +1105,7 @@ def test_resolve_coordinator_root_content_root_pointer_rung_uses_userprofile(tmp
 # ---------------------------------------------------------------------------
 
 
-def test_install_bin_resolvers_no_longer_writes_compat_mirror(tmp_path, monkeypatch):
+def test_install_bin_resolvers_no_longer_writes_compat_mirror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`_install_bin_resolvers` takes no `compat_bin_dst` param post-retirement
     and must never create or write into a ``~/.claude/bin/``-shaped directory
     — the Step 3c-compat block that used to do so was deleted outright."""
@@ -1169,7 +1170,7 @@ def test_install_bin_resolvers_no_longer_writes_compat_mirror(tmp_path, monkeypa
     )
 
 
-def test_uninstall_leg7_removes_legacy_compat_mirror_artifacts(tmp_path, monkeypatch):
+def test_uninstall_leg7_removes_legacy_compat_mirror_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Machines installed BEFORE the retirement still have a populated
     ``~/.claude/bin/`` compat mirror on disk. full-remove uninstall must
     still sweep those pre-existing artifacts by name, even though nothing
@@ -1249,7 +1250,7 @@ def test_uninstall_leg7_removes_legacy_compat_mirror_artifacts(tmp_path, monkeyp
 # ---------------------------------------------------------------------------
 
 
-def test_purge_operator_config_claude_local_pristine_render_matches_and_deletes(tmp_path, monkeypatch):
+def test_purge_operator_config_claude_local_pristine_render_matches_and_deletes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A pristine (unmodified) CLAUDE.local.md — one that byte-matches a
     fresh in-process render_template.render() of the real template with the
     caller's own operator_name/working-repos — is removed WITHOUT --force.
@@ -1285,7 +1286,7 @@ def test_purge_operator_config_claude_local_pristine_render_matches_and_deletes(
     assert not claude_local.exists()
 
 
-def test_purge_operator_config_claude_local_hand_edited_refused_without_force(tmp_path, monkeypatch, capsys):
+def test_purge_operator_config_claude_local_hand_edited_refused_without_force(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """A hand-edited CLAUDE.local.md (does not byte-match a fresh render)
     is refused without --force — the fail-safe the old bash byte-compare
     enforced, preserved by the native in-process render."""
@@ -1310,7 +1311,7 @@ def test_purge_operator_config_claude_local_hand_edited_refused_without_force(tm
     assert "possibly hand-edited. Refusing to remove without --force" in err
 
 
-def test_purge_operator_config_claude_local_force_removes_without_render(tmp_path, monkeypatch):
+def test_purge_operator_config_claude_local_force_removes_without_render(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """--force bypasses the render-and-compare step entirely (matches the
     bash oracle's force-short-circuit — no render call is even attempted)."""
     claude_home = tmp_path / "claude_home"
@@ -1329,7 +1330,7 @@ def test_purge_operator_config_claude_local_force_removes_without_render(tmp_pat
     assert not (claude_home / ".claude" / "CLAUDE.local.md").exists()
 
 
-def test_plugin_endstate_revert_to_marketplace_runs_localize_in_process_no_bash(tmp_path, monkeypatch):
+def test_plugin_endstate_revert_to_marketplace_runs_localize_in_process_no_bash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """revert-to-marketplace's CHECK 5 step calls platform_localize.main()
     in-process — this must succeed (and mutate nothing bash-shaped) even
     with PATH poisoned to a nonexistent dir, proving no subprocess/bash
@@ -1369,7 +1370,7 @@ def test_plugin_endstate_revert_to_marketplace_runs_localize_in_process_no_bash(
 # ---------------------------------------------------------------------------
 
 
-def test_uninstall_leg7_sweeps_legacy_names_from_settings_home_bin_directly(tmp_path, monkeypatch):
+def test_uninstall_leg7_sweeps_legacy_names_from_settings_home_bin_directly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Isolated from leg #8's wholesale rmtree by monkeypatching
     `_rmtree_target` to skip the settings-home bin/ subtree specifically —
     so only the per-name sweep under test can account for the legacy
@@ -1405,7 +1406,7 @@ def test_uninstall_leg7_sweeps_legacy_names_from_settings_home_bin_directly(tmp_
     assert not (settings_home_bin / "coordinator-settings-home").exists()
 
 
-def test_uninstall_leg7_still_removes_from_retired_claude_bin_mirror_too(tmp_path, monkeypatch):
+def test_uninstall_leg7_still_removes_from_retired_claude_bin_mirror_too(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression guard: fixing the settings-home/bin directory bug must not
     regress the pre-existing ~/.claude/bin compat-mirror legacy sweep — both
     directories are covered by the same per-name loop now."""
@@ -1424,7 +1425,7 @@ def test_uninstall_leg7_still_removes_from_retired_claude_bin_mirror_too(tmp_pat
     assert not (claude_bin / "platform-localize.sh").exists()
 
 
-def test_plugin_endstate_revert_to_marketplace_reports_localize_failure(tmp_path, monkeypatch):
+def test_plugin_endstate_revert_to_marketplace_reports_localize_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A non-zero platform_localize.main() rc surfaces as a leg error
     (function still returns False overall) — the parity case for the old
     bash subprocess's non-zero-returncode branch."""
@@ -1461,7 +1462,7 @@ def _git_setup(*args, cwd):
     return substrate._run(["git", *args], cwd=str(cwd), capture_output=True, text=True)
 
 
-def _seed_setup_dir_git_repo(setup_dir, *, tracked_relpath, tracked_content):
+def _seed_setup_dir_git_repo(setup_dir, *, tracked_relpath, tracked_content) -> None:
     """A real git repo AT setup_dir with exactly one path committed (so
     `git ls-files` reports it TRACKED) -- a stand-in for a foreign repo
     (e.g. a prime-v3-shaped checkout) sitting at the installed setup/
@@ -1477,7 +1478,7 @@ def _seed_setup_dir_git_repo(setup_dir, *, tracked_relpath, tracked_content):
     _git_setup("commit", "-q", "-m", "seed", cwd=setup_dir)
 
 
-def _isolate_path_to_git_only(monkeypatch):
+def _isolate_path_to_git_only(monkeypatch) -> None:
     """Poison PATH down to ONLY the directory containing the real `git`
     binary -- keeps the tracked-set probe usable (this test's whole point)
     while still isolating from a dev machine's real `machine-local` CLI, the
@@ -1489,7 +1490,7 @@ def _isolate_path_to_git_only(monkeypatch):
 
 
 @pytest.mark.parametrize("mode", ["full-remove", "revert-to-marketplace"])
-def test_uninstall_setup_dir_leg_through_remove_substrate_both_modes(tmp_path, monkeypatch, mode):
+def test_uninstall_setup_dir_leg_through_remove_substrate_both_modes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode) -> None:
     """Exercised THROUGH uninstall_remove_substrate itself (not only a direct
     unit call), in BOTH mode values -- AC10's anti-vacuity bar. Mode-specific
     expectation: a stale installed setup/ affects root resolution (rung 3)
@@ -1533,7 +1534,7 @@ def test_uninstall_setup_dir_leg_through_remove_substrate_both_modes(tmp_path, m
 
 
 @pytest.mark.parametrize("mode", ["full-remove", "revert-to-marketplace"])
-def test_uninstall_setup_dir_leg_reports_foreign_tracked_and_portable_marker(tmp_path, monkeypatch, mode, capsys):
+def test_uninstall_setup_dir_leg_reports_foreign_tracked_and_portable_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode, capsys: pytest.CaptureFixture[str]) -> None:
     """Same fixture as above, asserting the REPORT side (stderr content) in
     both modes -- a leg that silently skipped instead of reporting would
     still pass the file-survival assertions above but fail this one."""
@@ -1561,7 +1562,7 @@ def test_uninstall_setup_dir_leg_reports_foreign_tracked_and_portable_marker(tmp
     )
 
 
-def test_uninstall_setup_dir_leg_noop_when_setup_dir_absent(tmp_path, monkeypatch):
+def test_uninstall_setup_dir_leg_noop_when_setup_dir_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Idempotent: no <CLAUDE_HOME>/.claude/setup at all is a no-op, not an
     error -- the leg's is_dir() guard, exercised directly."""
     errors: list = []
@@ -1569,7 +1570,7 @@ def test_uninstall_setup_dir_leg_noop_when_setup_dir_absent(tmp_path, monkeypatc
     assert errors == []
 
 
-def test_uninstall_setup_dir_leg_untracked_dir_deletes_everything_but_portable(tmp_path, monkeypatch):
+def test_uninstall_setup_dir_leg_untracked_dir_deletes_everything_but_portable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Direct unit call (in addition to the through-uninstall_remove_substrate
     tests above): a setup/ dir that is not inside any git repo at all
     (`_resolve_directory_tracked_set` -> empty frozenset, not None) deletes
@@ -1598,8 +1599,8 @@ def test_uninstall_setup_dir_leg_untracked_dir_deletes_everything_but_portable(t
 # parametrized over both mode values, matching the setup/ leg test style above.
 @pytest.mark.parametrize("mode", ["full-remove", "revert-to-marketplace"])
 def test_uninstall_setup_overwrite_backups_leg_through_remove_substrate_both_modes(
-    tmp_path, monkeypatch, mode
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, mode
+) -> None:
     """full-remove: the disposable setup-overwrite-backups/ directory (C6's
     pre-overwrite backups, outside the git-tracked setup/ tree) is removed
     entirely. revert-to-marketplace: it survives -- that mode is not a
@@ -1627,7 +1628,7 @@ def test_uninstall_setup_overwrite_backups_leg_through_remove_substrate_both_mod
         assert (backups_dir / "some-file.pre-install-20260101T000000000000Z.bak").is_file()
 
 
-def test_uninstall_setup_overwrite_backups_leg_noop_when_absent(tmp_path):
+def test_uninstall_setup_overwrite_backups_leg_noop_when_absent(tmp_path: Path) -> None:
     """Idempotent: no setup-overwrite-backups/ at all is a no-op, not an
     error -- the leg's is_dir() guard, exercised directly."""
     errors: list = []
@@ -1635,7 +1636,7 @@ def test_uninstall_setup_overwrite_backups_leg_noop_when_absent(tmp_path):
     assert errors == []
 
 
-def test_uninstall_setup_overwrite_backups_leg_reports_foreign_tracked(tmp_path, monkeypatch, capsys):
+def test_uninstall_setup_overwrite_backups_leg_reports_foreign_tracked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """A setup-overwrite-backups/ directory that is (unexpectedly) itself a
     git repo with tracked content is reported and left in place, never
     deleted -- the tracked-ness check is reused rather than assuming this
@@ -1660,7 +1661,7 @@ def test_uninstall_setup_overwrite_backups_leg_reports_foreign_tracked(tmp_path,
 # ---------------------------------------------------------------------------
 
 
-def test_legs_target_under_dot_claude_never_the_home_itself(tmp_path, monkeypatch):
+def test_legs_target_under_dot_claude_never_the_home_itself(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Every destructive target these legs derive lives under `<home>/.claude/`,
     never beside it.
 
@@ -1697,7 +1698,7 @@ def test_legs_target_under_dot_claude_never_the_home_itself(tmp_path, monkeypatc
     assert (home / POINTER_NAME).read_text(encoding="utf-8") == "theirs"
 
 
-def test_strip_settings_hooks_reads_the_installed_settings_json(tmp_path, monkeypatch):
+def test_strip_settings_hooks_reads_the_installed_settings_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The strip leg must find `<home>/.claude/settings.json` — the path
     `gen_settings_hooks.resolve_settings_out_path` actually writes — and must
     not be satisfied by a decoy beside it."""
@@ -1729,7 +1730,7 @@ def test_strip_settings_hooks_reads_the_installed_settings_json(tmp_path, monkey
     )
 
 
-def test_dry_run_banner_names_the_sampler_leg_platform_neutrally(capsys):
+def test_dry_run_banner_names_the_sampler_leg_platform_neutrally(capsys: pytest.CaptureFixture[str]) -> None:
     assert uninstall_legs.orchestrate_uninstall(["--dry-run"]) == 0
     out = capsys.readouterr().out
     assert "host-sampler scheduler registration" in out

@@ -16,11 +16,12 @@ from coordinator_core.benchmarks.budget import load_manifest
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.hooks import stop_dispatch
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> None:
     subprocess.run(
         ["git", *args], cwd=repo, check=True, capture_output=True, text=True,
         **no_console_creationflags(),
@@ -31,7 +32,7 @@ def _budget() -> dict:
     return load_manifest()["overrides"]["hooks.stop_dispatch"]["spawn_count_budget"]
 
 
-def test_stop_with_a_session_commit_spawns_exactly_the_budgeted_git_log(tmp_path, monkeypatch):
+def test_stop_with_a_session_commit_spawns_exactly_the_budgeted_git_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "r"
     repo.mkdir()
     _git(repo, "init", "-q")
@@ -50,7 +51,7 @@ def test_stop_with_a_session_commit_spawns_exactly_the_budgeted_git_log(tmp_path
     assert all("log" in s.argv for s in spawns), [s.argv for s in spawns]
 
 
-def test_deferred_release_leg_with_no_record_adds_no_spawn(tmp_path, monkeypatch):
+def test_deferred_release_leg_with_no_record_adds_no_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     payload = {"session_id": "sess-no-record", "cwd": str(tmp_path)}
     with _count_spawns_attributed(monkeypatch) as spawns:
         stop_dispatch._deferred_release_stop_handler({"payload": payload})
@@ -58,7 +59,7 @@ def test_deferred_release_leg_with_no_record_adds_no_spawn(tmp_path, monkeypatch
     assert spawns == [], [s.argv for s in spawns]
 
 
-def test_unmapped_directive_leg_adds_no_spawn(tmp_path, monkeypatch):
+def test_unmapped_directive_leg_adds_no_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     entries = [{"turn": 20, "index": i, "text": f"fix thing {i}"} for i in range(3)]
     from coordinator_core.ops import pm_directive_map
     monkeypatch.setattr(pm_directive_map, "unmapped_directives", lambda *_a, **_k: entries)

@@ -5,9 +5,10 @@ from coordinator_core.git.commit_trailers import (
     extract_closure_facts,
     extract_closure_facts_from_text,
 )
+from pathlib import Path
 
 
-def test_demoted_closes_paragraph_still_records():
+def test_demoted_closes_paragraph_still_records() -> None:
     # Built the way `git commit -m subject -m "Closes: RECS-1" -m "Commit-Token: abc"`
     # produces it: three blank-line-separated paragraphs, `Closes:` sitting
     # ABOVE the trailer block git itself would parse -- the exact demotion
@@ -18,32 +19,32 @@ def test_demoted_closes_paragraph_still_records():
     assert reverts_sha is None
 
 
-def test_multi_closes_lines_all_captured():
+def test_multi_closes_lines_all_captured() -> None:
     text = "Subject\n\nCloses: RECS-1\nCloses: RECS-2\n\nCommit-Token: abc123\n"
     closes, _ = extract_closure_facts_from_text(text)
     assert closes == ["RECS-1", "RECS-2"]
 
 
-def test_properly_blocked_trailer_records():
+def test_properly_blocked_trailer_records() -> None:
     text = "Subject\n\nBody paragraph text.\n\nCloses: RECS-3\nCommit-Token: abc123\n"
     closes, _ = extract_closure_facts_from_text(text)
     assert closes == ["RECS-3"]
 
 
-def test_non_line_anchored_closes_does_not_record():
+def test_non_line_anchored_closes_does_not_record() -> None:
     text = "Subject\n\nThis change closes the loop on the earlier bug.\n"
     closes, _ = extract_closure_facts_from_text(text)
     assert closes == []
 
 
-def test_revert_line_captured():
+def test_revert_line_captured() -> None:
     text = 'Revert "Subject line"\n\nThis reverts commit deadbeefdeadbeefdeadbeefdeadbeefdeadbeef.\n'
     closes, reverts_sha = extract_closure_facts_from_text(text)
     assert closes == []
     assert reverts_sha == "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 
 
-def test_quoted_embedded_closes_outside_trailing_region_not_recorded():
+def test_quoted_embedded_closes_outside_trailing_region_not_recorded() -> None:
     # A quoted prior commit message sitting in the body, separated from the
     # trailing region by an ordinary (non-trailer-shaped) paragraph -- the
     # DECISION-2 supersession's named hazard this bound must still close.
@@ -59,7 +60,7 @@ def test_quoted_embedded_closes_outside_trailing_region_not_recorded():
     assert closes == []
 
 
-def test_unindented_quoted_closes_outside_trailing_region_not_recorded():
+def test_unindented_quoted_closes_outside_trailing_region_not_recorded() -> None:
     """The sibling above indents its quoted ``Closes:`` by four spaces, so
     ``_CLOSES_LINE_RE`` (anchored ``^Closes:``, no leading-whitespace
     allowance) rejects it on the line pattern alone and the trailing-region
@@ -86,12 +87,12 @@ def test_unindented_quoted_closes_outside_trailing_region_not_recorded():
     )
 
 
-def test_empty_text_returns_empty():
+def test_empty_text_returns_empty() -> None:
     assert extract_closure_facts_from_text("") == ([], None)
     assert extract_closure_facts_from_text("   \n\n  \n") == ([], None)
 
 
-def test_extract_closure_facts_reads_file(tmp_path):
+def test_extract_closure_facts_reads_file(tmp_path: Path) -> None:
     msg_file = tmp_path / "COMMIT_EDITMSG"
     msg_file.write_text("Subject\n\nCloses: RECS-7\n\nCommit-Token: abc123\n", encoding="utf-8")
     closes, reverts_sha = extract_closure_facts(msg_file)
@@ -99,7 +100,7 @@ def test_extract_closure_facts_reads_file(tmp_path):
     assert reverts_sha is None
 
 
-def test_extract_closure_facts_missing_file_degrades():
+def test_extract_closure_facts_missing_file_degrades() -> None:
     closes, reverts_sha = extract_closure_facts("/does/not/exist/COMMIT_EDITMSG")
     assert closes == []
     assert reverts_sha is None

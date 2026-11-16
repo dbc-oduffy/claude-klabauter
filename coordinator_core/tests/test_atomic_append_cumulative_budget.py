@@ -5,15 +5,16 @@ import time
 import pytest
 
 from coordinator_core import atomic_append
+from pathlib import Path
 
 _real_write = atomic_append.os.write
 
 
 @pytest.fixture
-def all_blocked(monkeypatch):
+def all_blocked(monkeypatch: pytest.MonkeyPatch):
     gate = threading.Event()
 
-    def write(fd, data):
+    def write(fd, data) -> int:
         if threading.current_thread().name.startswith("atomic-append-writer"):
             gate.wait(10)
         return _real_write(fd, data)
@@ -27,7 +28,7 @@ def all_blocked(monkeypatch):
 
 
 @pytest.mark.deliberate_wall_clock(reason="total wait over many wedged sinks must stay inside one window")
-def test_many_fresh_wedged_sinks_wait_one_window_total(tmp_path, all_blocked):
+def test_many_fresh_wedged_sinks_wait_one_window_total(tmp_path: Path, all_blocked) -> None:
     t0 = time.perf_counter()
     for i in range(8):
         atomic_append.append_line(tmp_path / f"s{i}.jsonl", b"a\n", droppable=True)
@@ -37,7 +38,7 @@ def test_many_fresh_wedged_sinks_wait_one_window_total(tmp_path, all_blocked):
 
 
 @pytest.mark.deliberate_wall_clock(reason="a spent window gives a fresh sink zero wait")
-def test_spent_window_fresh_sink_returns_without_waiting(tmp_path, all_blocked):
+def test_spent_window_fresh_sink_returns_without_waiting(tmp_path: Path, all_blocked) -> None:
     atomic_append.append_line(tmp_path / "a.jsonl", b"a\n", droppable=True)
     time.sleep(atomic_append.APPEND_DEADLINE_SECS + 0.05)
     t0 = time.perf_counter()
@@ -46,7 +47,7 @@ def test_spent_window_fresh_sink_returns_without_waiting(tmp_path, all_blocked):
 
 
 @pytest.mark.deliberate_wall_clock(reason="the window clears when the wedged writer returns")
-def test_window_clears_when_writer_returns(tmp_path, all_blocked):
+def test_window_clears_when_writer_returns(tmp_path: Path, all_blocked) -> None:
     atomic_append.append_line(tmp_path / "a.jsonl", b"a\n", droppable=True)
     all_blocked.set()
     deadline = time.monotonic() + 3

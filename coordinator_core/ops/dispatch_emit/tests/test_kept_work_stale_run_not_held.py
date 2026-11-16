@@ -10,6 +10,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_run, kept_work, run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 from coordinator_core.ops.dispatch_emit.tests._kept_fixture import git, hold_kept
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -38,32 +39,32 @@ def _repo(tmp_path, run=None):
     return root
 
 
-def _age(root, seconds):
+def _age(root, seconds) -> None:
     path = record_dir(root, RUN) / halted_run.HALTED_FILE
     stamp = time.time() - seconds
     os.utime(path, (stamp, stamp))
 
 
-def test_fresh_halt_holds(tmp_path):
+def test_fresh_halt_holds(tmp_path: Path) -> None:
     young = _mint(300, "0b0874")
     root = _repo(tmp_path, young)
     assert kept_work.held_paths(root, [REL]) == {REL: young}
 
 
-def test_halt_past_the_bound_with_no_token_is_not_held(tmp_path):
+def test_halt_past_the_bound_with_no_token_is_not_held(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _age(root, PAST)
     assert kept_work.held_paths(root, [REL]) == {}
 
 
-def test_halt_past_the_bound_with_its_own_live_token_still_holds(tmp_path):
+def test_halt_past_the_bound_with_its_own_live_token_still_holds(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _age(root, PAST)
     run_token.mint(root, RUN, "wf/y.mjs")
     assert kept_work.held_paths(root, [REL]) == {REL: RUN}
 
 
-def test_stale_run_does_not_hide_a_fresh_peer(tmp_path):
+def test_stale_run_does_not_hide_a_fresh_peer(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _age(root, PAST)
     peer = _mint(300, "bbbbbb")

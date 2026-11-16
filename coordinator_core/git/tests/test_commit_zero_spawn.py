@@ -3,6 +3,7 @@ import subprocess
 import pytest
 
 from coordinator_core.git import commit as gcommit
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -10,7 +11,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
-def _git(repo, *args, check=True):
+def _git(repo, *args, check: bool = True):
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **_NOWIN
     )
@@ -30,7 +31,7 @@ def _repo(tmp_path):
 
 class _SpawnCounter:
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.argvs = []
 
     def __enter__(self):
@@ -43,7 +44,7 @@ class _SpawnCounter:
             return counter._run(*a, **k)
 
         class PopenSpy(counter._popen):  # type: ignore[misc,valid-type]
-            def __init__(self, *a, **k):
+            def __init__(self, *a, **k) -> None:
                 if a:
                     counter.argvs.append(a[0])
                 super().__init__(*a, **k)
@@ -51,7 +52,7 @@ class _SpawnCounter:
         subprocess.run, subprocess.Popen = run_spy, PopenSpy
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc) -> bool:
         subprocess.run, subprocess.Popen = self._run, self._popen
         return False
 
@@ -62,7 +63,7 @@ def _commit(repo, paths, msg, **kw):
     return outcome, counter.argvs
 
 
-def test_new_file_zero_spawns_and_clean_status(tmp_path):
+def test_new_file_zero_spawns_and_clean_status(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
 
@@ -74,7 +75,7 @@ def test_new_file_zero_spawns_and_clean_status(tmp_path):
     assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "add new"
 
 
-def test_edited_tracked_file_zero_spawns_and_clean_status(tmp_path):
+def test_edited_tracked_file_zero_spawns_and_clean_status(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "seed.txt").write_text("edited\n", encoding="utf-8", newline="\n")
 
@@ -85,7 +86,7 @@ def test_edited_tracked_file_zero_spawns_and_clean_status(tmp_path):
     assert _git(repo, "show", "HEAD:seed.txt").stdout == "edited\n"
 
 
-def test_new_file_in_new_directory_zero_spawns(tmp_path):
+def test_new_file_in_new_directory_zero_spawns(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "sub").mkdir()
     (repo / "sub" / "deep.txt").write_text("deep\n", encoding="utf-8", newline="\n")
@@ -97,7 +98,7 @@ def test_new_file_in_new_directory_zero_spawns(tmp_path):
     assert _git(repo, "show", "HEAD:sub/deep.txt").stdout == "deep\n"
 
 
-def test_staged_bytes_beat_worktree_bytes(tmp_path):
+def test_staged_bytes_beat_worktree_bytes(tmp_path: Path) -> None:
     """INVARIANT 1. A deliberately staged version must be what lands, not the
     newer worktree bytes -- on a shared tree the worktree may hold a peer's
     half-finished edit. DECLARED via `prefer_staged`, never inferred from
@@ -115,7 +116,7 @@ def test_staged_bytes_beat_worktree_bytes(tmp_path):
     assert outcome.staged_preferred == ("seed.txt",)
 
 
-def test_deletion_zero_spawns_and_clean_status(tmp_path):
+def test_deletion_zero_spawns_and_clean_status(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "seed.txt").unlink()
 
@@ -126,7 +127,7 @@ def test_deletion_zero_spawns_and_clean_status(tmp_path):
     assert _git(repo, "cat-file", "-e", f"{outcome.sha}:seed.txt", check=False).returncode != 0
 
 
-def test_absolute_pathspec_commits_repo_relative_not_a_drive_tree(tmp_path):
+def test_absolute_pathspec_commits_repo_relative_not_a_drive_tree(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
 
@@ -145,7 +146,7 @@ def test_absolute_pathspec_commits_repo_relative_not_a_drive_tree(tmp_path):
     assert "new.txt" in identity
 
 
-def test_absolute_deleted_paths_also_routed_through_index_key(tmp_path):
+def test_absolute_deleted_paths_also_routed_through_index_key(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "seed.txt").unlink()
 
@@ -158,7 +159,7 @@ def test_absolute_deleted_paths_also_routed_through_index_key(tmp_path):
     assert _git(repo, "cat-file", "-e", f"{outcome.sha}:seed.txt", check=False).returncode != 0
 
 
-def test_pathspec_outside_repo_raises_commit_refused(tmp_path):
+def test_pathspec_outside_repo_raises_commit_refused(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     outside = tmp_path / "elsewhere.txt"
     outside.write_text("nope\n", encoding="utf-8", newline="\n")
@@ -167,7 +168,7 @@ def test_pathspec_outside_repo_raises_commit_refused(tmp_path):
         gcommit.commit_paths(repo, [str(outside)], "should refuse")
 
 
-def test_lost_cas_race_refuses_and_writes_no_ref(tmp_path):
+def test_lost_cas_race_refuses_and_writes_no_ref(tmp_path: Path) -> None:
     """INVARIANT 2. If the ref moved under us, refuse -- never commit past a
     peer, and never retry silently on a tree built against the old HEAD."""
     repo = _repo(tmp_path)
@@ -185,14 +186,14 @@ def test_lost_cas_race_refuses_and_writes_no_ref(tmp_path):
     assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "seed"
 
 
-def test_empty_pathspec_is_refused_never_defaulted(tmp_path):
+def test_empty_pathspec_is_refused_never_defaulted(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     with pytest.raises(gcommit.CommitRefused, match="empty pathspec"):
         gcommit.commit_paths(repo, [], "nothing")
 
 
 @pytest.mark.parametrize("rel", [".git/coordinator-sessions/sid/review-targets.txt", "sub/.GIT/x"])
-def test_dotgit_path_component_is_refused(tmp_path, rel):
+def test_dotgit_path_component_is_refused(tmp_path: Path, rel) -> None:
     repo = _repo(tmp_path)
     target = repo / rel
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -201,7 +202,7 @@ def test_dotgit_path_component_is_refused(tmp_path, rel):
         gcommit.commit_paths(repo, [rel], "never")
 
 
-def test_directory_pathspec_is_refused(tmp_path):
+def test_directory_pathspec_is_refused(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "sub").mkdir()
     (repo / "sub" / "a.txt").write_text("a\n", encoding="utf-8", newline="\n")
@@ -221,7 +222,7 @@ def _attrs_repo(tmp_path):
     return repo
 
 
-def test_refused_paths_batch_into_one_fallback_call(tmp_path):
+def test_refused_paths_batch_into_one_fallback_call(tmp_path: Path) -> None:
     repo = _attrs_repo(tmp_path)
     (repo / "plain.txt").write_text("lf only\n", encoding="utf-8", newline="\n")
     (repo / "a.cmd").write_bytes(b"echo one\r\necho two\r\n")
@@ -247,14 +248,14 @@ def test_refused_paths_batch_into_one_fallback_call(tmp_path):
     assert _git(repo, "log", "-1", "--format=%s").stdout.strip() == "mixed"
 
 
-def test_no_fallback_supplied_refuses_and_names_the_paths(tmp_path):
+def test_no_fallback_supplied_refuses_and_names_the_paths(tmp_path: Path) -> None:
     repo = _attrs_repo(tmp_path)
     (repo / "c.cmd").write_bytes(b"echo\r\n")
     with pytest.raises(gcommit.FilterUnsupported, match="c.cmd"):
         gcommit.commit_paths(repo, ["c.cmd"], "no fallback")
 
 
-def test_all_lf_commit_never_calls_the_fallback(tmp_path):
+def test_all_lf_commit_never_calls_the_fallback(tmp_path: Path) -> None:
     repo = _attrs_repo(tmp_path)
     (repo / "one.txt").write_text("a\n", encoding="utf-8", newline="\n")
     (repo / "two.txt").write_text("b\n", encoding="utf-8", newline="\n")

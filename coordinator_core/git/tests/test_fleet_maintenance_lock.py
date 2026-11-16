@@ -54,7 +54,7 @@ def box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return home
 
 
-def _spawn(script: str, *args: str, cwd: Path, stdin=subprocess.DEVNULL) -> subprocess.Popen:
+def _spawn(script: str, *args: str, cwd: Path, stdin: int = subprocess.DEVNULL) -> subprocess.Popen:
     env = dict(os.environ)
     env["PYTHONPATH"] = _REPO_ROOT + os.pathsep + env.get("PYTHONPATH", "")
     return subprocess.Popen(
@@ -76,7 +76,7 @@ def _wait_for(path: Path, timeout: float = 20.0) -> None:
         time.sleep(0.02)
 
 
-def test_second_process_is_busy_for_two_different_repos(box: Path, tmp_path: Path):
+def test_second_process_is_busy_for_two_different_repos(box: Path, tmp_path: Path) -> None:
     repos = [tmp_path / "repo-a", tmp_path / "repo-b"]
     for repo in repos:
         repo.mkdir()
@@ -102,7 +102,7 @@ def test_second_process_is_busy_for_two_different_repos(box: Path, tmp_path: Pat
     assert out.strip() == "acquired", err
 
 
-def test_reentrant_within_one_process_and_depth_resets(box: Path, tmp_path: Path):
+def test_reentrant_within_one_process_and_depth_resets(box: Path, tmp_path: Path) -> None:
     with hold(wait_s=0, holder_label="outer"):
         with hold(wait_s=0, holder_label="inner"):
             pass
@@ -112,7 +112,7 @@ def test_reentrant_within_one_process_and_depth_resets(box: Path, tmp_path: Path
     assert fleet_maintenance_lock._depth.__dict__.get("depths") == {}
 
 
-def test_exception_releases_and_resets_depth(box: Path):
+def test_exception_releases_and_resets_depth(box: Path) -> None:
     with pytest.raises(RuntimeError):
         with hold(wait_s=0, holder_label="boom"):
             raise RuntimeError("boom")
@@ -121,7 +121,7 @@ def test_exception_releases_and_resets_depth(box: Path):
         pass
 
 
-def test_lock_target_lives_under_the_settings_home(box: Path):
+def test_lock_target_lives_under_the_settings_home(box: Path) -> None:
     target = fleet_maintenance_lock.lock_target()
     assert box in target.parents
 
@@ -163,7 +163,7 @@ def _blob_pending(tag: bytes) -> dict:
     return {hashlib.sha1(b"blob %d\0" % len(tag) + tag).hexdigest(): (b"blob", tag)}
 
 
-def test_fold_defers_while_another_process_holds_the_fleet_lock(box, unpaused, tmp_path):
+def test_fold_defers_while_another_process_holds_the_fleet_lock(box, unpaused, tmp_path: Path) -> None:
     from coordinator_core.git import git_objects as go
 
     common = _fake_common(tmp_path)
@@ -188,8 +188,8 @@ def test_fold_defers_while_another_process_holds_the_fleet_lock(box, unpaused, t
 
 
 def test_sweep_orphan_pack_files_defers_while_another_process_holds_the_fleet_lock(
-    box, unpaused, other_process_holds, tmp_path
-):
+    box, unpaused, other_process_holds, tmp_path: Path
+) -> None:
     from coordinator_core.git import store_hygiene
 
     pack_dir = tmp_path / "objects" / "pack"
@@ -202,7 +202,7 @@ def test_sweep_orphan_pack_files_defers_while_another_process_holds_the_fleet_lo
     assert rev.exists()
 
 
-def test_sweep_orphan_pack_files_reaps_when_the_fleet_lock_is_free(box, unpaused, tmp_path):
+def test_sweep_orphan_pack_files_reaps_when_the_fleet_lock_is_free(box, unpaused, tmp_path: Path) -> None:
     from coordinator_core.git import store_hygiene
 
     pack_dir = tmp_path / "objects" / "pack"
@@ -216,8 +216,8 @@ def test_sweep_orphan_pack_files_reaps_when_the_fleet_lock_is_free(box, unpaused
 
 
 def test_consolidate_pack_batch_defers_while_another_process_holds_the_fleet_lock(
-    box, unpaused, other_process_holds, tmp_path
-):
+    box, unpaused, other_process_holds, tmp_path: Path
+) -> None:
     from coordinator_core.git import store_hygiene
 
     pack_dir = tmp_path / "objects" / "pack"
@@ -230,7 +230,7 @@ def test_consolidate_pack_batch_defers_while_another_process_holds_the_fleet_loc
     assert _pack_files(pack_dir) == before
 
 
-def test_consolidate_sources_exclude_packs_with_a_git_sibling(tmp_path):
+def test_consolidate_sources_exclude_packs_with_a_git_sibling(tmp_path: Path) -> None:
     from coordinator_core.git import store_hygiene
 
     pack_dir = tmp_path / "objects" / "pack"
@@ -252,8 +252,8 @@ def _init_repo(path: Path) -> Path:
 
 
 def test_run_tier_defers_while_another_process_holds_the_fleet_lock(
-    box, unpaused, other_process_holds, tmp_path, monkeypatch
-):
+    box, unpaused, other_process_holds, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from coordinator_core.ops import git_maintenance as gm
 
     repo = _init_repo(tmp_path / "repo")
@@ -265,8 +265,8 @@ def test_run_tier_defers_while_another_process_holds_the_fleet_lock(
 
 
 def test_orphan_pack_sweep_defers_while_another_process_holds_the_fleet_lock(
-    box, unpaused, other_process_holds, tmp_path
-):
+    box, unpaused, other_process_holds, tmp_path: Path
+) -> None:
     from coordinator_core.ops import git_maintenance as gm
 
     pack_dir = _fake_common(tmp_path) / "objects" / "pack"
@@ -279,7 +279,7 @@ def test_orphan_pack_sweep_defers_while_another_process_holds_the_fleet_lock(
     assert orphan.exists()
 
 
-def test_orphan_pack_sweep_reaps_when_the_fleet_lock_is_free(box, unpaused, tmp_path):
+def test_orphan_pack_sweep_reaps_when_the_fleet_lock_is_free(box, unpaused, tmp_path: Path) -> None:
     from coordinator_core.ops import git_maintenance as gm
 
     pack_dir = _fake_common(tmp_path) / "objects" / "pack"
@@ -292,8 +292,8 @@ def test_orphan_pack_sweep_reaps_when_the_fleet_lock_is_free(box, unpaused, tmp_
 
 
 def test_tick_child_defers_every_tier_while_another_process_holds_the_fleet_lock(
-    box, unpaused, other_process_holds, tmp_path, monkeypatch
-):
+    box, unpaused, other_process_holds, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from coordinator_core.git import maintenance_tick, store_hygiene
     from coordinator_core.ops import git_maintenance as gm
 
@@ -309,7 +309,7 @@ def test_tick_child_defers_every_tier_while_another_process_holds_the_fleet_lock
 
 def test_unresolvable_settings_home_is_a_typed_refusal_naming_the_key(
     monkeypatch: pytest.MonkeyPatch,
-):
+) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", "relative/not-rooted")
     entered = False
     with pytest.raises(FleetLockHomeUnresolved, match="COORDINATOR_SETTINGS_HOME"):

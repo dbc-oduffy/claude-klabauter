@@ -3,13 +3,14 @@
 from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
+import pytest
 
 
 def _clause(n: int) -> str:
     return rd._scope_clause([f"coordinator_core/tests/test_t_{i:03d}.py" for i in range(n)], "", "abc123")
 
 
-def test_multi_batch_set_carries_the_per_batch_admit_gate():
+def test_multi_batch_set_carries_the_per_batch_admit_gate() -> None:
     clause = _clause(100)
     assert "box-memory-snapshot.py --command-key reverify-pytest --admit-peak" in clause
     assert "--register-pid" in clause and "--release-pid" in clause and "--record-peak" in clause
@@ -17,19 +18,19 @@ def test_multi_batch_set_carries_the_per_batch_admit_gate():
     assert "never skips, fails or stops the batch" in clause
 
 
-def test_gate_leaves_stdin_assembly_forbidden_and_adds_no_substitution():
+def test_gate_leaves_stdin_assembly_forbidden_and_adds_no_substitution() -> None:
     gate = rd._ADMIT_GATE
     assert "$(" not in gate and "xargs" not in gate and "`" in gate
     assert "never assemble a command from stdin" in _clause(100)
 
 
-def test_single_file_and_empty_sets_carry_no_gate():
+def test_single_file_and_empty_sets_carry_no_gate() -> None:
     assert "box-memory-snapshot" not in _clause(1)
     assert "box-memory-snapshot" not in _clause(0)
     assert "box-memory-snapshot" in _clause(2)
 
 
-def test_gate_flags_are_accepted_by_the_snapshot_cli():
+def test_gate_flags_are_accepted_by_the_snapshot_cli() -> None:
     import re
     from pathlib import Path
 
@@ -39,7 +40,7 @@ def test_gate_flags_are_accepted_by_the_snapshot_cli():
         assert f'"{flag}"' in src, flag
 
 
-def test_slot_admit_command_flags_are_accepted_by_the_engine_cli():
+def test_slot_admit_command_flags_are_accepted_by_the_engine_cli() -> None:
     import re
     from pathlib import Path
 
@@ -48,7 +49,7 @@ def test_slot_admit_command_flags_are_accepted_by_the_engine_cli():
         assert f'"{flag}"' in src, flag
 
 
-def test_admit_slot_calls_request_and_wait_in_mb(monkeypatch):
+def test_admit_slot_calls_request_and_wait_in_mb(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.group_em import slot_wait
 
     seen = {}
@@ -63,7 +64,7 @@ def test_admit_slot_calls_request_and_wait_in_mb(monkeypatch):
     assert seen == {"sid": "s1", "run": "reverify-pytest", "peak": 4096}
 
 
-def test_admit_cli_exit_codes(monkeypatch, capsys):
+def test_admit_cli_exit_codes(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(rd, "admit_slot", lambda run, gib, **k: {"admitted": False, "reason": "timeout"})
     assert rd.main(["admit", "--run", "r", "--peak-gib", "4"]) == 3
     assert "DENIED reason=timeout" in capsys.readouterr().out
@@ -71,21 +72,21 @@ def test_admit_cli_exit_codes(monkeypatch, capsys):
     assert rd.main(["admit", "--run", "r", "--peak-gib", "4"]) == 0
 
 
-def test_memory_admit_needs_no_grant(monkeypatch):
+def test_memory_admit_needs_no_grant(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.group_em import slot_wait
 
     monkeypatch.setattr(slot_wait, "request_and_wait", lambda *a, **k: 1 / 0)
     assert rd.admit_slot("reverify-pytest", 4, session_id="s1", host=_host(20))["admitted"] is True
 
 
-def test_granted_wait_admits_a_held_batch(monkeypatch):
+def test_granted_wait_admits_a_held_batch(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.group_em import slot_wait
 
     monkeypatch.setattr(slot_wait, "request_and_wait", lambda *a, **k: {"admitted": True, "reason": "granted"})
     assert rd.admit_slot("reverify-pytest", 4, session_id="s1", host=_host(1))["admitted"] is True
 
 
-def test_composer_neither_sleeps_nor_spawns(monkeypatch):
+def test_composer_neither_sleeps_nor_spawns(monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
     import time
 

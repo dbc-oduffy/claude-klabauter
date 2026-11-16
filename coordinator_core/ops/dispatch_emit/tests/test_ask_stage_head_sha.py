@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import PLAN, PLAN_REL, read_stage_reply
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 _RUN = "headrun"
 
@@ -28,7 +29,7 @@ def _manifest(root) -> dict:
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_head_sha_is_the_40_hex_head_in_reply_and_manifest(tmp_path):
+def test_head_sha_is_the_40_hex_head_in_reply_and_manifest(tmp_path: Path) -> None:
     git = lambda *a: subprocess.run(  # noqa: E731
         ["git", "-C", str(tmp_path), "-c", "user.email=t@e.x", "-c", "user.name=t", *a],
         capture_output=True, text=True, check=True, **no_console_creationflags(),
@@ -46,7 +47,7 @@ def test_head_sha_is_the_40_hex_head_in_reply_and_manifest(tmp_path):
     assert _manifest(tmp_path)["head_sha"] == head
 
 
-def test_head_sha_is_null_when_head_does_not_resolve(tmp_path):
+def test_head_sha_is_null_when_head_does_not_resolve(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     reply = _stage(tmp_path)
 

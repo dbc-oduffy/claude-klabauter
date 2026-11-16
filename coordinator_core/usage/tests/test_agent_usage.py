@@ -3,6 +3,7 @@
 import json
 
 from coordinator_core.usage.agent_usage import role_of, scan_run
+from pathlib import Path
 
 OPUS = "claude-opus-5-5-20260101"
 HAIKU = "claude-haiku-5-5-20260101"
@@ -16,7 +17,7 @@ def _u(inp, out, read, write, speed=None):
     return u
 
 
-def _agent(run_dir, agent_id, rows):
+def _agent(run_dir, agent_id, rows) -> None:
     """rows: (message id, requestId, model, usage) in file order."""
     lines = [{"type": "user", "message": {"role": "user"}}]
     for mid, rid, model, usage in rows:
@@ -28,14 +29,14 @@ def _agent(run_dir, agent_id, rows):
         "\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
 
 
-def _journal(run_dir, agents):
+def _journal(run_dir, agents) -> None:
     lines = [{"type": "launched"}] + [
         {"type": "started", "agentId": a, "key": f"k{a}", "label": label} for a, label in agents]
     (run_dir / "journal.jsonl").write_text(
         "\n".join(json.dumps(x) for x in lines) + "\n", encoding="utf-8")
 
 
-def test_opus_44k_costs_more_than_three_haiku_185k(tmp_path):
+def test_opus_44k_costs_more_than_three_haiku_185k(tmp_path: Path) -> None:
     _agent(tmp_path, "o1", [("m1", "r1", OPUS, _u(10_000, 4_600, 30_000, 0))])
     for i in range(3):
         _agent(tmp_path, f"h{i}", [("m1", "r1", HAIKU, _u(2_000, 2_000, 57_933, 0))])
@@ -56,7 +57,7 @@ def test_opus_44k_costs_more_than_three_haiku_185k(tmp_path):
     assert by_id["o1"]["cache_read_input_tokens"] == 30_000
 
 
-def test_by_role_groups_family_labels_and_empty_is_unknown(tmp_path):
+def test_by_role_groups_family_labels_and_empty_is_unknown(tmp_path: Path) -> None:
     for aid in ("a", "b", "c", "d"):
         _agent(tmp_path, aid, [("m1", "r1", OPUS, _u(1_000, 100, 0, 0))])
     _journal(tmp_path, [("a", "work:C1"), ("b", "work:C2"), ("c", "verify:C1"), ("d", "opus")])
@@ -70,7 +71,7 @@ def test_by_role_groups_family_labels_and_empty_is_unknown(tmp_path):
     assert sum(r["total_tokens"] for r in roles.values()) == res["run_total"]["total_tokens"]
 
 
-def test_split_streamed_message_counts_once_last_row_wins(tmp_path):
+def test_split_streamed_message_counts_once_last_row_wins(tmp_path: Path) -> None:
     _agent(tmp_path, "a", [
         ("m1", "r1", OPUS, _u(100, 5, 0, 0)),
         ("m1", "r1", OPUS, _u(100, 50, 0, 0)),
@@ -81,7 +82,7 @@ def test_split_streamed_message_counts_once_last_row_wins(tmp_path):
     assert row["input_tokens"] == 110 and row["output_tokens"] == 51
 
 
-def test_unknown_model_is_unpriced_not_zero(tmp_path):
+def test_unknown_model_is_unpriced_not_zero(tmp_path: Path) -> None:
     _agent(tmp_path, "a", [("m1", "r1", "claude-mystery-9", _u(1_000, 0, 0, 0))])
     _agent(tmp_path, "b", [("m1", "r1", OPUS, _u(1_000_000, 0, 0, 0))])
     _journal(tmp_path, [("a", "a"), ("b", "b")])
@@ -94,7 +95,7 @@ def test_unknown_model_is_unpriced_not_zero(tmp_path):
     assert res["run_total"]["total_tokens"] == 1_001_000
 
 
-def test_fast_speed_doubles_and_meta_model_fallback(tmp_path):
+def test_fast_speed_doubles_and_meta_model_fallback(tmp_path: Path) -> None:
     _agent(tmp_path, "a", [("m1", "r1", OPUS, _u(1_000_000, 0, 0, 0, speed="fast"))])
     _agent(tmp_path, "b", [("m1", "r1", None, _u(5, 5, 0, 0))])
     (tmp_path / "agent-b.meta.json").write_text(json.dumps({"model": "sonnet"}), encoding="utf-8")
@@ -104,7 +105,7 @@ def test_fast_speed_doubles_and_meta_model_fallback(tmp_path):
     assert b["model"] == "sonnet" and b["unpriced"] is True
 
 
-def test_missing_transcript_and_journal_do_not_crash(tmp_path):
+def test_missing_transcript_and_journal_do_not_crash(tmp_path: Path) -> None:
     _journal(tmp_path, [("ghost", "g")])
     res = scan_run(str(tmp_path))
     assert res["agents"][0]["total_tokens"] == 0 and res["agents"][0]["model"] is None
@@ -122,7 +123,7 @@ def _tu(tid, name, path=None):
             "input": {"file_path": path} if path else {"command": "x"}}
 
 
-def test_tool_calls_peak_context_and_same_file_reads(tmp_path):
+def test_tool_calls_peak_context_and_same_file_reads(tmp_path: Path) -> None:
     lines = [
         _tool_msg("m1", "r1", [_tu("t1", "Read", "/a/File.py")], _u(10, 1, 100, 5)),
         _tool_msg("m1", "r1", [_tu("t1", "Read", "/a/File.py"), _tu("t2", "Bash")],
@@ -140,7 +141,7 @@ def test_tool_calls_peak_context_and_same_file_reads(tmp_path):
     assert row["max_same_file_reads"] == 2
 
 
-def test_rag_calls_counts_only_example_retrieval_repo_tools(tmp_path):
+def test_rag_calls_counts_only_example_retrieval_repo_tools(tmp_path: Path) -> None:
     lines = [
         _tool_msg("m1", "r1", [_tu("t1", "mcp__project-rag__project_symbol"), _tu("t2", "Read", "/a")],
                   _u(1, 1, 0, 0)),
@@ -159,8 +160,8 @@ def _bash(tid, command):
     return {"type": "tool_use", "id": tid, "name": "Bash", "input": {"command": command}}
 
 
-def test_search_calls_and_rag_uptake_ratio(tmp_path):
-    def write(aid, blocks):
+def test_search_calls_and_rag_uptake_ratio(tmp_path: Path) -> None:
+    def write(aid, blocks) -> None:
         (tmp_path / f"agent-{aid}.jsonl").write_text(
             json.dumps(_tool_msg("m1", "r1", blocks, _u(1, 1, 0, 0))) + "\n", encoding="utf-8")
 
@@ -185,7 +186,7 @@ def _result(tid, is_error):
         {"type": "tool_result", "tool_use_id": tid, "is_error": is_error, "content": "x"}]}}
 
 
-def test_failed_rag_call_then_grep_records_fallback(tmp_path):
+def test_failed_rag_call_then_grep_records_fallback(tmp_path: Path) -> None:
     rag = "mcp__project-rag__project_symbol"
     lines = [
         _tool_msg("m1", "r1", [_tu("t1", rag)], _u(1, 1, 0, 0)),
@@ -215,7 +216,7 @@ def test_failed_rag_call_then_grep_records_fallback(tmp_path):
     assert res["run_total"]["rag_uptake"]["fallback_agents"] == 1
 
 
-def test_rag_failures_split_by_kind(tmp_path):
+def test_rag_failures_split_by_kind(tmp_path: Path) -> None:
     rag = "mcp__project-rag__project_engine_examples"
 
     def res(tid, text):
@@ -234,20 +235,20 @@ def test_rag_failures_split_by_kind(tmp_path):
     assert (row["rag_failed"], row["rag_timeouts"], row["rag_refused"]) == (3, 1, 1)
 
 
-def test_rag_uptake_ratio_none_without_searchers(tmp_path):
+def test_rag_uptake_ratio_none_without_searchers(tmp_path: Path) -> None:
     _agent(tmp_path, "a", [("m1", "r1", OPUS, _u(1, 1, 0, 0))])
     _journal(tmp_path, [("a", "a")])
     assert scan_run(str(tmp_path))["run_total"]["rag_uptake"]["ratio"] is None
 
 
-def test_missing_transcript_zeroes_new_fields(tmp_path):
+def test_missing_transcript_zeroes_new_fields(tmp_path: Path) -> None:
     _journal(tmp_path, [("ghost", "g")])
     row = scan_run(str(tmp_path))["agents"][0]
     assert row["rag_calls"] == 0
     assert (row["tool_calls"], row["peak_context"], row["max_same_file_reads"]) == (0, 0, 0)
 
 
-def test_messages_and_session_cost_advance_agree(tmp_path):
+def test_messages_and_session_cost_advance_agree(tmp_path: Path) -> None:
     from coordinator_core.usage import session_cost
     from coordinator_core.usage.agent_usage import _messages
     from coordinator_core.usage.price_table import estimate_usd

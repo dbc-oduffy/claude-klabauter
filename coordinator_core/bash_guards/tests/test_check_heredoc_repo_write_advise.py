@@ -25,6 +25,7 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -32,7 +33,7 @@ def _enveloped(check):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_temp_env(monkeypatch):
+def _isolate_temp_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """pytest's own `tmp_path` fixture (used below as a stand-in `git_root`)
     lives UNDER the real `$TEMP`/`$TMP` directory -- so without this, every
     fires-test's `git_root` would itself misclassify as a scratch root via
@@ -50,7 +51,7 @@ def _heredoc(body: str) -> str:
 
 
 @pytest.fixture
-def fires_git_root(tmp_path) -> str:
+def fires_git_root(tmp_path: Path) -> str:
     """A stand-in `git_root` for the "should fire" tests below, deliberately
     NOT the bare `tmp_path` the other classes use: `_heredoc_write_target_is_scratch`
     treats any path under a literal `/tmp` as scratch by design (mirroring a
@@ -70,7 +71,7 @@ def _hso(result):
 
 
 class TestFires:
-    def test_pathlib_write_text_under_git_root(self, fires_git_root):
+    def test_pathlib_write_text_under_git_root(self, fires_git_root) -> None:
         cmd = _heredoc(
             'import pathlib\npathlib.Path("coordinator_core/x.py").write_text("hi")'
         )
@@ -79,7 +80,7 @@ class TestFires:
         assert hso["permissionDecision"] == "allow"
         assert "coordinator_core/x.py" in hso["additionalContext"]
 
-    def test_open_write_mode_under_git_root(self, fires_git_root):
+    def test_open_write_mode_under_git_root(self, fires_git_root) -> None:
         cmd = _heredoc('open("docs/foo.md", "w").write("hi")')
         result = _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, fires_git_root)
         hso = _hso(result)
@@ -88,7 +89,7 @@ class TestFires:
 
 
 class TestSilent:
-    def test_target_under_scratchpad_temp_root(self, tmp_path, monkeypatch):
+    def test_target_under_scratchpad_temp_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         scratch = tmp_path / "AppData" / "Local" / "Temp" / "claude" / "proj"
         scratch.mkdir(parents=True)
         rel = os.path.relpath(str(scratch), str(tmp_path)).replace("\\", "/")
@@ -97,40 +98,40 @@ class TestSilent:
         )
         assert _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, str(tmp_path)) is None
 
-    def test_target_outside_git_root(self, tmp_path):
+    def test_target_outside_git_root(self, tmp_path: Path) -> None:
         cmd = _heredoc(
             'import pathlib\npathlib.Path("../outside/x.py").write_text("hi")'
         )
         assert _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, str(tmp_path)) is None
 
-    def test_read_only_heredoc(self, tmp_path):
+    def test_read_only_heredoc(self, tmp_path: Path) -> None:
         cmd = _heredoc(
             'import pathlib\ndata = pathlib.Path("coordinator_core/x.py").read_text()'
         )
         assert _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, str(tmp_path)) is None
 
-    def test_open_read_mode_is_not_a_write(self, tmp_path):
+    def test_open_read_mode_is_not_a_write(self, tmp_path: Path) -> None:
         cmd = _heredoc('open("coordinator_core/x.py", "r").read()')
         assert _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, str(tmp_path)) is None
 
-    def test_unresolvable_variable_path(self, tmp_path):
+    def test_unresolvable_variable_path(self, tmp_path: Path) -> None:
         cmd = _heredoc('p = "coordinator_core/x.py"\nopen(p, "w").write("hi")')
         assert _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, str(tmp_path)) is None
 
-    def test_unresolvable_fstring_path(self, tmp_path):
+    def test_unresolvable_fstring_path(self, tmp_path: Path) -> None:
         cmd = _heredoc(
             'name = "x"\nopen(f"coordinator_core/{name}.py", "w").write("hi")'
         )
         assert _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, str(tmp_path)) is None
 
-    def test_empty_git_root(self):
+    def test_empty_git_root(self) -> None:
         cmd = _heredoc(
             'import pathlib\npathlib.Path("coordinator_core/x.py").write_text("hi")'
         )
         assert _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, "") is None
         assert _enveloped(dc.check_heredoc_repo_write_advise)(cmd, "sess", None, None) is None
 
-    def test_shell_heredoc_body_never_scanned(self, tmp_path):
+    def test_shell_heredoc_body_never_scanned(self, tmp_path: Path) -> None:
         """A `bash <<'EOF' ... EOF` heredoc is a DIFFERENT class
         (`_classify_heredoc_intro` returns `"shell"`, not `"scriptable"`) --
         this guard only ever looks at scriptable-interpreter bodies, so a
@@ -142,7 +143,7 @@ class TestSilent:
 
 class TestClaudeMemoryExempt:
     @pytest.fixture
-    def home(self, tmp_path, monkeypatch):
+    def home(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
         # A fake home outside TEMP/TMP: a real tmp_path home would be classed as
         # scratch first (TEMP-rooted on Windows, /tmp on Linux), making the
         # silent cases pass vacuously and the advisory cases fail.
@@ -152,39 +153,39 @@ class TestClaudeMemoryExempt:
         monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
         return h
 
-    def _write(self, target):
+    def _write(self, target) -> str:
         return _heredoc('open(%r, "w").write("hi")' % target)
 
-    def test_memory_file_silent_when_git_root_is_config_dir(self, home):
+    def test_memory_file_silent_when_git_root_is_config_dir(self, home) -> None:
         cfg = home + "/.claude"
         target = cfg + "/projects/-slug/memory/note.md"
         assert _enveloped(dc.check_heredoc_repo_write_advise)(self._write(target), "s", None, cfg) is None
 
-    def test_memory_file_silent_with_windows_separators(self, home):
+    def test_memory_file_silent_with_windows_separators(self, home) -> None:
         cfg = home + "/.claude"
         target = (cfg + "/Projects/-slug/MEMORY/note.md").replace("/", "\\")
         assert dc._heredoc_write_target_is_claude_memory(target)
         assert not dc._heredoc_write_target_is_claude_memory(cfg.replace("/", "\\") + "\\projects\\-slug\\memory")
 
-    def test_memory_file_silent_under_claude_config_dir_env(self, tmp_path, monkeypatch):
+    def test_memory_file_silent_under_claude_config_dir_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         cfg = "/fires-git-root-fixture/" + tmp_path.name + "/cfg"
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", cfg)
         target = cfg + "/projects/p/memory/a.md"
         assert _enveloped(dc.check_heredoc_repo_write_advise)(self._write(target), "s", None, cfg) is None
 
-    def test_non_memory_file_in_config_dir_still_advises(self, home):
+    def test_non_memory_file_in_config_dir_still_advises(self, home) -> None:
         cfg = home + "/.claude"
         target = cfg + "/projects/-slug/other/note.md"
         assert _enveloped(dc.check_heredoc_repo_write_advise)(self._write(target), "s", None, cfg) is not None
 
-    def test_memory_shaped_path_in_ordinary_repo_still_advises(self, home):
+    def test_memory_shaped_path_in_ordinary_repo_still_advises(self, home) -> None:
         root = "/fires-git-root-fixture/repo"
         target = root + "/projects/x/memory/a.md"
         assert _enveloped(dc.check_heredoc_repo_write_advise)(self._write(target), "s", None, root) is not None
 
 
 class TestAdvisoryNeverBlocking:
-    def test_all_firing_cases_are_advisory_allow(self, fires_git_root):
+    def test_all_firing_cases_are_advisory_allow(self, fires_git_root) -> None:
         cases = [
             _heredoc('import pathlib\npathlib.Path("coordinator_core/x.py").write_text("hi")'),
             _heredoc('open("docs/foo.md", "w").write("hi")'),
@@ -196,7 +197,7 @@ class TestAdvisoryNeverBlocking:
 
 
 class TestOverride:
-    def test_override_env_var_suppresses(self, tmp_path, monkeypatch):
+    def test_override_env_var_suppresses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COORDINATOR_ALLOW_HEREDOC_REPO_WRITE", "1")
         cmd = _heredoc(
             'import pathlib\npathlib.Path("coordinator_core/x.py").write_text("hi")'

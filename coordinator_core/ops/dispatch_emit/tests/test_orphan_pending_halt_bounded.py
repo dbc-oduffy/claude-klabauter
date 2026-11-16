@@ -8,13 +8,14 @@ import time
 import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_gate, halt_resume_record, orphan_adopt
+from pathlib import Path
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds a stalled binding scan that must answer none at its wall bound")
-def test_stalled_binding_scan_answers_none_under_500ms(tmp_path, monkeypatch):
+def test_stalled_binding_scan_answers_none_under_500ms(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     release = threading.Event()
 
-    def blocked(*_a, **_k):
+    def blocked(*_a, **_k) -> str:
         release.wait(10)
         return "ask-20261104T110309-625d2d"
 
@@ -29,7 +30,7 @@ def test_stalled_binding_scan_answers_none_under_500ms(tmp_path, monkeypatch):
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds a stalled record read that must answer none at its wall bound")
-def test_stalled_record_read_answers_none_under_500ms(tmp_path, monkeypatch):
+def test_stalled_record_read_answers_none_under_500ms(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run = tmp_path / "state" / "warp" / "ask-20261104T110309-625d2d"
     run.mkdir(parents=True)
     (run / "run.json").write_text('{"sizing_rel": "docs/x.md"}', encoding="utf-8")
@@ -50,7 +51,7 @@ def test_stalled_record_read_answers_none_under_500ms(tmp_path, monkeypatch):
     assert time.monotonic() - t0 < 0.5
 
 
-def test_fast_lookup_still_reports_the_orphan(tmp_path, monkeypatch):
+def test_fast_lookup_still_reports_the_orphan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_gate, "_newest_run_binding", lambda *a: "ask-20261104T110309-625d2d")
     monkeypatch.setattr(
         orphan_adopt, "orphan_verdict",

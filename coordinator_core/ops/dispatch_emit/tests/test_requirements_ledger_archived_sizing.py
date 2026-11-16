@@ -9,6 +9,7 @@ from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+from pathlib import Path
 
 RUN = "ask-20261013T000000-abc123"
 NAME = "2026-10-13-ledger.yaml"
@@ -31,18 +32,18 @@ def _write(path, doc=None):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     return tmp_path
 
 
-def test_live_sizing_resolves(repo):
+def test_live_sizing_resolves(repo) -> None:
     live = _write(repo / REL)
     assert rl._sizing_path(repo, REL) == live.resolve()
 
 
-def test_archived_only_sizing_resolves_and_read_ledger_returns_rows(repo):
+def test_archived_only_sizing_resolves_and_read_ledger_returns_rows(repo) -> None:
     rl.start(repo, RUN)
     _write(repo / REL)
     rl.bind(repo, RUN, REL, ask_text="a raw ask")
@@ -54,14 +55,14 @@ def test_archived_only_sizing_resolves_and_read_ledger_returns_rows(repo):
     assert [i.id for i in ledger.items] == ["R1", "R2"]
 
 
-def test_two_archive_matches_refuse(repo):
+def test_two_archive_matches_refuse(repo) -> None:
     _write(repo / "archive" / "sizings" / "2026-09" / NAME)
     _write(repo / "archive" / "sizings" / "2026-10" / NAME)
     with pytest.raises(rl.LedgerRefused):
         rl._sizing_path(repo, REL)
 
 
-def test_path_escaping_both_homes_refuses(repo):
+def test_path_escaping_both_homes_refuses(repo) -> None:
     _write(repo / "elsewhere" / NAME)
     with pytest.raises(rl.LedgerRefused):
         rl._sizing_path(repo, "elsewhere/" + NAME)
@@ -69,7 +70,7 @@ def test_path_escaping_both_homes_refuses(repo):
         rl._sizing_path(repo, "../" + NAME)
 
 
-def test_ledger_gate_over_an_archived_sizing_is_not_unreadable(repo):
+def test_ledger_gate_over_an_archived_sizing_is_not_unreadable(repo) -> None:
     rl.start(repo, RUN)
     _write(repo / REL)
     rl.bind(repo, RUN, REL, ask_text="a raw ask")
@@ -83,7 +84,7 @@ def test_ledger_gate_over_an_archived_sizing_is_not_unreadable(repo):
     assert ledger is not None
 
 
-def test_mutate_register_on_archived_sizing_writes_the_archive_only(repo):
+def test_mutate_register_on_archived_sizing_writes_the_archive_only(repo) -> None:
     _write(repo / REL)
     archived = repo / "archive" / "sizings" / "2026-10" / NAME
     archived.parent.mkdir(parents=True)

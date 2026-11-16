@@ -10,10 +10,11 @@ import time
 import pytest
 
 from coordinator_core.warm import breadcrumb, front_door, supervisor
+from pathlib import Path
 
 
 @pytest.fixture
-def root(tmp_path, monkeypatch):
+def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path / "rt"))
     eng = tmp_path / "engine"
     eng.mkdir()
@@ -21,7 +22,7 @@ def root(tmp_path, monkeypatch):
     return eng
 
 
-def _all_three(root):
+def _all_three(root) -> tuple[bool, bool, bool]:
     return (
         breadcrumb.should_spawn(root),
         supervisor.should_spawn(root),
@@ -29,7 +30,7 @@ def _all_three(root):
     )
 
 
-def test_handover_pending_held_inside_the_hold_and_released_after(root):
+def test_handover_pending_held_inside_the_hold_and_released_after(root) -> None:
     assert not breadcrumb.handover_pending_held(root)
     with breadcrumb.hold_handover_pending(root) as path:
         assert path.exists()
@@ -41,26 +42,26 @@ def test_handover_pending_held_inside_the_hold_and_released_after(root):
     assert not path.exists()
 
 
-def test_handover_pending_expires_so_a_crashed_publish_cannot_wedge_mints(root):
+def test_handover_pending_expires_so_a_crashed_publish_cannot_wedge_mints(root) -> None:
     with breadcrumb.hold_handover_pending(root):
         future = time.time() + breadcrumb.HANDOVER_PENDING_TTL_SECS + 1
         assert not breadcrumb.handover_pending_held(root, now=future)
 
 
-def test_handover_pending_unreadable_reads_not_held(root):
+def test_handover_pending_unreadable_reads_not_held(root) -> None:
     path = breadcrumb.handover_pending_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{not json", encoding="utf-8")
     assert not breadcrumb.handover_pending_held(root)
 
 
-def test_handover_pending_exit_leaves_a_hold_another_publisher_rewrote(root):
+def test_handover_pending_exit_leaves_a_hold_another_publisher_rewrote(root) -> None:
     with breadcrumb.hold_handover_pending(root) as path:
         path.write_text(json.dumps({"pid": 1, "token": "other", "expires_at": time.time() + 60}), encoding="utf-8")
     assert path.exists()
 
 
-def test_marker_blocks_all_three_and_release_allows(root):
+def test_marker_blocks_all_three_and_release_allows(root) -> None:
     with breadcrumb.hold_publish_marker(root, holder="t") as path:
         assert path.exists()
         assert _all_three(root) == (False, False, False)
@@ -68,7 +69,7 @@ def test_marker_blocks_all_three_and_release_allows(root):
     assert _all_three(root) == (True, True, True)
 
 
-def test_ensure_listener_records_no_spawn_while_held(root, monkeypatch):
+def test_ensure_listener_records_no_spawn_while_held(root, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(supervisor, "is_engine_root", lambda r: True)
     monkeypatch.setattr(supervisor, "spawn_detached", lambda *a, **k: calls.append(a) or True)
@@ -79,13 +80,13 @@ def test_ensure_listener_records_no_spawn_while_held(root, monkeypatch):
     assert len(calls) == 1
 
 
-def test_dead_holder_does_not_block(root, monkeypatch):
+def test_dead_holder_does_not_block(root, monkeypatch: pytest.MonkeyPatch) -> None:
     with breadcrumb.hold_publish_marker(root, holder="t"):
         monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda *a, **k: False)
         assert breadcrumb.should_spawn(root) is True
 
 
-def test_unparseable_marker_blocks_until_aged_out(root):
+def test_unparseable_marker_blocks_until_aged_out(root) -> None:
     path = breadcrumb.publish_marker_path(root)
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("{not json", encoding="utf-8")
@@ -96,7 +97,7 @@ def test_unparseable_marker_blocks_until_aged_out(root):
     assert path.exists()
 
 
-def test_check_spawns_no_subprocess(root, monkeypatch):
+def test_check_spawns_no_subprocess(root, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("subprocess spawned")
 
@@ -106,7 +107,7 @@ def test_check_spawns_no_subprocess(root, monkeypatch):
         assert breadcrumb.should_spawn(root) is False
 
 
-def test_exit_leaves_marker_rewritten_by_another_pid(root):
+def test_exit_leaves_marker_rewritten_by_another_pid(root) -> None:
     with breadcrumb.hold_publish_marker(root, holder="t") as path:
         rec = json.loads(path.read_text(encoding="utf-8"))
         rec["pid"] = os.getpid() + 1
@@ -114,7 +115,7 @@ def test_exit_leaves_marker_rewritten_by_another_pid(root):
     assert path.exists()
 
 
-def _write_marker_for(root, pid, holder="parent"):
+def _write_marker_for(root, pid, holder: str = "parent"):
     from coordinator_core.session.core import _win_create_time_epoch
 
     path = breadcrumb.publish_marker_path(root)
@@ -132,12 +133,12 @@ def _write_marker_for(root, pid, holder="parent"):
 _FAKE_ANCESTOR = 2**22 + 7
 
 
-def _stub_ancestor(monkeypatch, pid=_FAKE_ANCESTOR, alive=True):
+def _stub_ancestor(monkeypatch, pid=_FAKE_ANCESTOR, alive: bool = True) -> None:
     monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda *a, **k: alive)
     monkeypatch.setattr(breadcrumb, "_is_ancestor_pid", lambda p: p == pid)
 
 
-def test_nested_hold_leaves_live_ancestor_marker_intact(root, monkeypatch):
+def test_nested_hold_leaves_live_ancestor_marker_intact(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_ancestor(monkeypatch)
     path, rec = _write_marker_for(root, _FAKE_ANCESTOR)
     before = path.read_text(encoding="utf-8")
@@ -148,7 +149,7 @@ def test_nested_hold_leaves_live_ancestor_marker_intact(root, monkeypatch):
     assert path.read_text(encoding="utf-8") == before
 
 
-def test_same_pid_nested_hold_is_reentrant(root):
+def test_same_pid_nested_hold_is_reentrant(root) -> None:
     with breadcrumb.hold_publish_marker(root, holder="outer") as path:
         before = path.read_bytes()
         with breadcrumb.hold_publish_marker(root, holder="inner") as inner:
@@ -159,7 +160,7 @@ def test_same_pid_nested_hold_is_reentrant(root):
     assert not path.exists()
 
 
-def test_pid_reuse_marker_is_rewritten_and_released(root):
+def test_pid_reuse_marker_is_rewritten_and_released(root) -> None:
     path, rec = _write_marker_for(root, os.getpid())
     rec["stable_pid_start_epoch"] = "1"
     path.write_text(json.dumps(rec), encoding="utf-8")
@@ -183,7 +184,7 @@ _CHILD = (
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_real_child_nests_under_real_parent_marker(root):
+def test_real_child_nests_under_real_parent_marker(root) -> None:
     pytest.importorskip("psutil")
     import sys
     from pathlib import Path
@@ -208,7 +209,7 @@ def test_real_child_nests_under_real_parent_marker(root):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_live_non_ancestor_marker_is_overwritten_and_released(root):
+def test_live_non_ancestor_marker_is_overwritten_and_released(root) -> None:
     import sys
 
     child = subprocess.Popen(
@@ -225,7 +226,7 @@ def test_live_non_ancestor_marker_is_overwritten_and_released(root):
         child.wait()
 
 
-def test_stale_ancestor_marker_is_reclaimed(root, monkeypatch):
+def test_stale_ancestor_marker_is_reclaimed(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_ancestor(monkeypatch, alive=False)
     path, _ = _write_marker_for(root, _FAKE_ANCESTOR)
     with breadcrumb.hold_publish_marker(root, holder="t"):
@@ -233,7 +234,7 @@ def test_stale_ancestor_marker_is_reclaimed(root, monkeypatch):
     assert not path.exists()
 
 
-def test_aged_out_ancestor_marker_is_reclaimed(root, monkeypatch):
+def test_aged_out_ancestor_marker_is_reclaimed(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_ancestor(monkeypatch)
     path, rec = _write_marker_for(root, _FAKE_ANCESTOR)
     old = time.gmtime(time.time() - breadcrumb.PUBLISH_MARKER_MAX_AGE_SECS - 60)
@@ -244,18 +245,18 @@ def test_aged_out_ancestor_marker_is_reclaimed(root, monkeypatch):
     assert not path.exists()
 
 
-def test_aged_out_marker_with_live_holder_does_not_block(root):
+def test_aged_out_marker_with_live_holder_does_not_block(root) -> None:
     with breadcrumb.hold_publish_marker(root, holder="t"):
         later = time.time() + breadcrumb.PUBLISH_MARKER_MAX_AGE_SECS + 5
         assert breadcrumb.publish_marker_held(breadcrumb.svc_dir(root), now=later) is False
 
 
-def test_extra_liveness_false_branch_gated_by_marker(root, monkeypatch):
+def test_extra_liveness_false_branch_gated_by_marker(root, monkeypatch: pytest.MonkeyPatch) -> None:
     started = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     record = {"pid": os.getpid(), "started_at": started, "stable_pid_start_epoch": 0}
     lock = breadcrumb.boot_lock_path(breadcrumb.breadcrumb_path(root))
 
-    def decide():
+    def decide() -> bool:
         return breadcrumb.should_spawn_decision(
             record, lock_path=lock, extra_liveness=lambda r: False
         )
@@ -268,29 +269,29 @@ def test_extra_liveness_false_branch_gated_by_marker(root, monkeypatch):
 
 
 class _FakeClock:
-    def __init__(self):
+    def __init__(self) -> None:
         self.now = 0.0
         self.slept = 0.0
 
     def clock(self):
         return self.now
 
-    def sleep(self, secs):
+    def sleep(self, secs) -> None:
         self.slept += secs
         self.now += secs
 
 
-def test_drain_wait_secs_is_under_the_load_norm():
+def test_drain_wait_secs_is_under_the_load_norm() -> None:
     assert 0 < breadcrumb.DRAIN_WAIT_SECS <= 0.5
 
 
-def test_wait_returns_true_at_once_when_nothing_is_held(root):
+def test_wait_returns_true_at_once_when_nothing_is_held(root) -> None:
     fake = _FakeClock()
     assert breadcrumb.wait_for_publish_release(root, sleep=fake.sleep, clock=fake.clock) is True
     assert fake.slept == 0
 
 
-def test_wait_times_out_false_and_is_clamped_to_drain_wait(root):
+def test_wait_times_out_false_and_is_clamped_to_drain_wait(root) -> None:
     fake = _FakeClock()
     with breadcrumb.hold_publish_marker(root, holder="t") as path:
         got = breadcrumb.wait_for_publish_release(root, 30.0, sleep=fake.sleep, clock=fake.clock)
@@ -299,11 +300,11 @@ def test_wait_times_out_false_and_is_clamped_to_drain_wait(root):
     assert fake.slept <= breadcrumb.DRAIN_WAIT_SECS + 1e-9
 
 
-def test_wait_returns_true_when_marker_released_mid_wait(root):
+def test_wait_returns_true_when_marker_released_mid_wait(root) -> None:
     fake = _FakeClock()
     with breadcrumb.hold_publish_marker(root, holder="t") as path:
 
-        def release_on_first_sleep(secs):
+        def release_on_first_sleep(secs) -> None:
             fake.sleep(secs)
             path.unlink()
 
@@ -314,11 +315,11 @@ def test_wait_returns_true_when_marker_released_mid_wait(root):
     assert fake.slept < breadcrumb.DRAIN_WAIT_SECS
 
 
-def test_swap_wait_outlasts_drain_wait_and_returns_true_on_release(root):
+def test_swap_wait_outlasts_drain_wait_and_returns_true_on_release(root) -> None:
     fake = _FakeClock()
     with breadcrumb.hold_publish_marker(root, holder="t") as path:
 
-        def release_after_swap(secs):
+        def release_after_swap(secs) -> None:
             fake.sleep(secs)
             if fake.slept > 5 * breadcrumb.DRAIN_WAIT_SECS:
                 path.unlink()
@@ -328,7 +329,7 @@ def test_swap_wait_outlasts_drain_wait_and_returns_true_on_release(root):
     assert fake.slept > breadcrumb.DRAIN_WAIT_SECS
 
 
-def test_swap_wait_is_bounded_by_the_backstop_when_heartbeat_keeps_ticking(root):
+def test_swap_wait_is_bounded_by_the_backstop_when_heartbeat_keeps_ticking(root) -> None:
     fake = _FakeClock()
     with breadcrumb.hold_publish_marker(root, holder="t") as path:
         got = breadcrumb.wait_for_publish_swap(
@@ -339,12 +340,12 @@ def test_swap_wait_is_bounded_by_the_backstop_when_heartbeat_keeps_ticking(root)
     assert breadcrumb.PUBLISH_SWAP_BACKSTOP_SECS - 1 <= fake.slept <= breadcrumb.PUBLISH_SWAP_BACKSTOP_SECS + 1e-9
 
 
-def _age_marker(path, secs):
+def _age_marker(path, secs) -> None:
     old = time.time() - secs
     os.utime(path, (old, old))
 
 
-def test_swap_wait_returns_at_once_on_live_holder_with_stale_heartbeat(root):
+def test_swap_wait_returns_at_once_on_live_holder_with_stale_heartbeat(root) -> None:
     fake = _FakeClock()
     with breadcrumb.hold_publish_marker(root, holder="t") as path:
         _age_marker(path, breadcrumb.PUBLISH_HEARTBEAT_STALE_SECS + 5)
@@ -354,12 +355,12 @@ def test_swap_wait_returns_at_once_on_live_holder_with_stale_heartbeat(root):
     assert fake.slept == 0
 
 
-def test_swap_wait_keeps_waiting_on_a_fresh_heartbeat_then_drains(root):
+def test_swap_wait_keeps_waiting_on_a_fresh_heartbeat_then_drains(root) -> None:
     fake = _FakeClock()
     with breadcrumb.hold_publish_marker(root, holder="t") as path:
         _age_marker(path, breadcrumb.PUBLISH_HEARTBEAT_STALE_SECS - 10)
 
-        def release(secs):
+        def release(secs) -> None:
             fake.sleep(secs)
             if fake.slept > 1.0:
                 path.unlink()
@@ -368,7 +369,7 @@ def test_swap_wait_keeps_waiting_on_a_fresh_heartbeat_then_drains(root):
     assert got is True
 
 
-def test_marker_without_heartbeat_field_is_never_wedged(root):
+def test_marker_without_heartbeat_field_is_never_wedged(root) -> None:
     svc = breadcrumb.svc_dir(root)
     with breadcrumb.hold_publish_marker(root, holder="t") as path:
         record = json.loads(path.read_text(encoding="utf-8"))
@@ -379,7 +380,7 @@ def test_marker_without_heartbeat_field_is_never_wedged(root):
         assert breadcrumb.publish_marker_wedged(svc) is False
 
 
-def test_holder_thread_refreshes_marker_mtime(root, monkeypatch):
+def test_holder_thread_refreshes_marker_mtime(root, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(breadcrumb, "PUBLISH_HEARTBEAT_SECS", 0.05)
     with breadcrumb.hold_publish_marker(root, holder="t") as path:
         _age_marker(path, 600)
@@ -389,7 +390,7 @@ def test_holder_thread_refreshes_marker_mtime(root, monkeypatch):
         assert breadcrumb.publish_marker_wedged(breadcrumb.svc_dir(root)) is False
 
 
-def test_wedge_remedy_names_holder_pid_and_marker_path(root):
+def test_wedge_remedy_names_holder_pid_and_marker_path(root) -> None:
     with breadcrumb.hold_publish_marker(root, holder="t") as path:
         remedy = breadcrumb.publish_wedge_remedy(root)
     assert str(os.getpid()) in remedy and str(path) in remedy

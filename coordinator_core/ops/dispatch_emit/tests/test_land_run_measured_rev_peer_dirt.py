@@ -29,16 +29,16 @@ def _own(text: str) -> str:
     return text.replace("line10\n", "own-ten\n")
 
 
-def _git(root, *args):
+def _git(root, *args) -> None:
     subprocess.run(["git", *args], cwd=str(root), capture_output=True, text=True, check=True, **no_console_creationflags())
 
 
-def _blob(root, text):
+def _blob(root, text) -> str:
     return git_objects.write_object(resolve_git_common_dir(root), b"blob", text.encode())
 
 
 @pytest.fixture
-def reg_repo(tmp_path, monkeypatch):
+def reg_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     for cmd in (("init", "-q"), ("config", "user.email", "t@e.com"), ("config", "user.name", "t"),
                 ("config", "commit.gpgsign", "false"), ("config", "core.autocrlf", "false")):
         _git(tmp_path, *cmd)
@@ -57,52 +57,52 @@ def _mismatch(root, measured, landed, settled=None):
     return land_run._measured_mismatch(root, record, [REG], [], settled or {}, baseline=baseline)
 
 
-def test_peer_hunks_in_measured_blob_but_not_in_landed_blob_is_no_drift(reg_repo):
+def test_peer_hunks_in_measured_blob_but_not_in_landed_blob_is_no_drift(reg_repo) -> None:
     measured = _own(PEER_AT_BASELINE)
     stripped = _own(SEED)
     assert _mismatch(reg_repo, measured, stripped, {REG: _blob(reg_repo, stripped)}) == []
 
 
-def test_peer_hunk_added_after_measure_leaves_unchanged_own_hunks_no_drift(reg_repo):
+def test_peer_hunk_added_after_measure_leaves_unchanged_own_hunks_no_drift(reg_repo) -> None:
     measured = _own(PEER_AT_BASELINE)
     landed = measured.replace("line5\n", "late-peer-five\n")
     assert _mismatch(reg_repo, measured, landed) == []
 
 
-def test_late_peer_hunk_does_not_mask_a_changed_own_hunk(reg_repo):
+def test_late_peer_hunk_does_not_mask_a_changed_own_hunk(reg_repo) -> None:
     measured = _own(PEER_AT_BASELINE)
     landed = measured.replace("line5\n", "late-peer-five\n").replace("own-ten\n", "own-ten-changed\n")
     assert _mismatch(reg_repo, measured, landed) == [REG]
 
 
-def test_run_with_no_measured_own_hunks_does_not_absorb_late_hunks(reg_repo):
+def test_run_with_no_measured_own_hunks_does_not_absorb_late_hunks(reg_repo) -> None:
     landed = PEER_AT_BASELINE.replace("line5\n", "late-peer-five\n")
     assert _mismatch(reg_repo, PEER_AT_BASELINE, landed) == [REG]
 
 
-def test_own_hunk_changed_after_measure_still_refuses(reg_repo):
+def test_own_hunk_changed_after_measure_still_refuses(reg_repo) -> None:
     measured = _own(PEER_AT_BASELINE)
     landed = measured.replace("own-ten\n", "own-ten-changed\n")
     assert _mismatch(reg_repo, measured, landed) == [REG]
 
 
-def test_own_hunk_missing_from_landed_blob_still_refuses(reg_repo):
+def test_own_hunk_missing_from_landed_blob_still_refuses(reg_repo) -> None:
     assert _mismatch(reg_repo, _own(PEER_AT_BASELINE), PEER_AT_BASELINE) == [REG]
 
 
-def test_without_a_baseline_the_whole_blob_comparison_stands(reg_repo):
+def test_without_a_baseline_the_whole_blob_comparison_stands(reg_repo) -> None:
     (reg_repo / REG).write_text(_own(SEED), encoding="utf-8", newline="\n")
     record = {"blobs": {REG: _blob(reg_repo, _own(PEER_AT_BASELINE))}, "removed": []}
     assert land_run._measured_mismatch(reg_repo, record, [REG], [], {}) == [REG]
 
 
-def test_unmeasured_path_holding_only_peer_dirt_is_not_the_runs(reg_repo):
+def test_unmeasured_path_holding_only_peer_dirt_is_not_the_runs(reg_repo) -> None:
     baseline = {REG: _blob(reg_repo, PEER_AT_BASELINE)}
     (reg_repo / REG).write_text(PEER_AT_BASELINE, encoding="utf-8", newline="\n")
     assert land_run._peer_dirt_only(reg_repo, REG, baseline)
 
 
-def test_unmeasured_path_holding_an_own_hunk_is_still_the_runs(reg_repo):
+def test_unmeasured_path_holding_an_own_hunk_is_still_the_runs(reg_repo) -> None:
     baseline = {REG: _blob(reg_repo, PEER_AT_BASELINE)}
     (reg_repo / REG).write_text(_own(PEER_AT_BASELINE), encoding="utf-8", newline="\n")
     assert not land_run._peer_dirt_only(reg_repo, REG, baseline)

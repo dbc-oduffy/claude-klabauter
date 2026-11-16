@@ -59,14 +59,21 @@ def _commit(repo: Path, name: str) -> str:
 
 
 @pytest.fixture
-def world(tmp_path):
+def world(tmp_path: Path):
     """Source repo holding `base` and `live` on main plus a `sibling` branch off `base` that
     lacks `live`; a mirror whose HEAD trailer names `live`."""
     source = tmp_path / "source"
     (source / "coordinator" / "bin").mkdir(parents=True)
     (source / "coordinator" / "bin" / "publish.py").write_text(_STUB_DRIVER, encoding="utf-8")
     shutil.copy2(_WRAPPER, source / "coordinator" / "bin" / "coordinator-publish.py")
+    # The door publishes from a commit clone of HEAD: the driver and the clone machinery must be committed.
+    (source / "coordinator" / "bin" / "lib").mkdir()
+    shutil.copy2(_WRAPPER.parent / "lib" / "commit_clone.py", source / "coordinator" / "bin" / "lib" / "commit_clone.py")
+    # No __init__.py: a regular package here would shadow the real coordinator_core the guard imports.
+    (source / "coordinator_core").mkdir()
+    shutil.copy2(_REPO_ROOT / "coordinator_core" / "temp_layout.py", source / "coordinator_core" / "temp_layout.py")
     _git(source, "init", "-q", "-b", "main")
+    _git(source, "add", "--", "coordinator", "coordinator_core")
     base = _commit(source, "base.txt")
     live = _commit(source, "live-fix.txt")
     _git(source, "checkout", "-q", "-b", "sibling", base)
@@ -93,6 +100,8 @@ def _publish(world, *args: str):
         "PYTHONPATH": str(_REPO_ROOT),
         "MACHINE_LOCAL_REPOS_CLAUDE_KLABAUTER": str(world["mirror"]),
         "COORDINATOR_SETTINGS_HOME": str(world["settings"]),
+        # The commit-clone cache lives under TMP; keep it inside this test's tree.
+        "TMP": str(world["settings"]), "TEMP": str(world["settings"]), "TMPDIR": str(world["settings"]),
     }
     return subprocess.run(
         [sys.executable, str(world["source"] / "coordinator" / "bin" / "coordinator-publish.py"), *args],
@@ -105,20 +114,20 @@ def _publish(world, *args: str):
     )
 
 
-def test_descendant_of_the_live_head_is_admitted(world):
+def test_descendant_of_the_live_head_is_admitted(world) -> None:
     _commit(world["source"], "later.txt")
     proc = _publish(world, "klabauter")
     assert proc.returncode == 0, proc.stderr
     assert "DRIVER_RAN" in proc.stdout
 
 
-def test_source_at_the_live_head_is_admitted(world):
+def test_source_at_the_live_head_is_admitted(world) -> None:
     proc = _publish(world)
     assert proc.returncode == 0, proc.stderr
     assert "DRIVER_RAN" in proc.stdout
 
 
-def test_sibling_source_dropping_a_commit_is_refused_before_the_driver_runs(world):
+def test_sibling_source_dropping_a_commit_is_refused_before_the_driver_runs(world) -> None:
     _git(world["source"], "checkout", "-q", "sibling")
     proc = _publish(world, "klabauter")
     assert proc.returncode != 0
@@ -128,7 +137,7 @@ def test_sibling_source_dropping_a_commit_is_refused_before_the_driver_runs(worl
     assert "--allow-source-rollback" in proc.stderr
 
 
-def test_rollback_override_admits_the_sibling_and_never_reaches_the_driver(world):
+def test_rollback_override_admits_the_sibling_and_never_reaches_the_driver(world) -> None:
     _git(world["source"], "checkout", "-q", "sibling")
     proc = _publish(world, "klabauter", "--allow-source-rollback")
     assert proc.returncode == 0, proc.stderr
@@ -136,7 +145,7 @@ def test_rollback_override_admits_the_sibling_and_never_reaches_the_driver(world
     assert "--allow-source-rollback" not in proc.stdout
 
 
-def test_named_source_ref_is_judged_instead_of_head(world):
+def test_named_source_ref_is_judged_instead_of_head(world) -> None:
     refused = _publish(world, "klabauter", "--source-ref", world["sibling"])
     assert refused.returncode != 0
     assert "DRIVER_RAN" not in refused.stdout
@@ -144,20 +153,20 @@ def test_named_source_ref_is_judged_instead_of_head(world):
     assert admitted.returncode == 0, admitted.stderr
 
 
-def test_dry_run_and_other_targets_are_not_judged(world):
+def test_dry_run_and_other_targets_are_not_judged(world) -> None:
     _git(world["source"], "checkout", "-q", "sibling")
     assert _publish(world, "klabauter", "--dry-run").returncode == 0
     assert _publish(world, "coordinator-claude").returncode == 0
 
 
-def test_mirror_without_a_trailer_leaves_the_guard_silent(world):
+def test_mirror_without_a_trailer_leaves_the_guard_silent(world) -> None:
     _git(world["source"], "checkout", "-q", "sibling")
     _git(world["mirror"], "commit", "-q", "--amend", "-m", "publish without trailers")
     proc = _publish(world, "klabauter")
     assert proc.returncode == 0, proc.stderr
 
 
-def test_provenance_record_stands_in_when_the_mirror_has_no_trailer(world):
+def test_provenance_record_stands_in_when_the_mirror_has_no_trailer(world) -> None:
     _git(world["source"], "checkout", "-q", "sibling")
     _git(world["mirror"], "commit", "-q", "--amend", "-m", "publish without trailers")
     record = world["settings"] / "machine-local" / "publish-provenance.json"
@@ -181,7 +190,7 @@ def test_provenance_record_stands_in_when_the_mirror_has_no_trailer(world):
     assert world["live"][:7] in proc.stderr
 
 
-def test_refusal_over_the_listing_cap_says_over_and_truncates(world):
+def test_refusal_over_the_listing_cap_says_over_and_truncates(world) -> None:
     for i in range(11):
         world["live"] = _commit(world["source"], f"more{i}.txt")
     _git(world["mirror"], "commit", "-q", "--amend", "-m",
@@ -193,7 +202,7 @@ def test_refusal_over_the_listing_cap_says_over_and_truncates(world):
     assert "and more" in proc.stderr
 
 
-def test_dest_root_flag_value_is_not_mistaken_for_the_target(world):
+def test_dest_root_flag_value_is_not_mistaken_for_the_target(world) -> None:
     _git(world["source"], "checkout", "-q", "sibling")
     proc = _publish(world, "--dest-root-override", "elsewhere", "klabauter")
     assert proc.returncode != 0

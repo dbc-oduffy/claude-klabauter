@@ -23,6 +23,7 @@ from coordinator_core.ops.plan_tasks_mutate import (
     read_row_evidence,
 )
 from coordinator_core.ops.tests.test_plan_tasks_mutate import _make_git_repo, _seed_plan
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -41,14 +42,14 @@ def _params(plan, out, **extra):
             "output_path": str(out), "exit_code": 0, **extra}
 
 
-def test_registration_surfaces():
+def test_registration_surfaces() -> None:
     assert ipc._REGISTRY.get("criterion_evidence.record") is not None
     assert _registry_map.OP_MODULE_MAP["criterion_evidence.record"] == "coordinator_core.ops.criterion_evidence"
     assert OP_KEY_SCOPE["criterion_evidence.record"] == "common_dir"
     assert OP_CLASSIFICATION["criterion_evidence.record"] is OpClass.MUTATING
 
 
-def test_record_round_trips_and_leaves_plan_and_rows_alone(tmp_path):
+def test_record_round_trips_and_leaves_plan_and_rows_alone(tmp_path: Path) -> None:
     repo, plan, out = _setup(tmp_path)
     before = plan.read_bytes()
     res = record(_params(plan, out, exit_code=0), repo_root=repo / ".git")
@@ -60,7 +61,7 @@ def test_record_round_trips_and_leaves_plan_and_rows_alone(tmp_path):
     assert has_recorded_evidence(plan)
 
 
-def test_refusals_write_no_sidecar(tmp_path):
+def test_refusals_write_no_sidecar(tmp_path: Path) -> None:
     repo, plan, out = _setup(tmp_path)
     empty = tmp_path / "empty.txt"
     empty.write_text("  \n", encoding="utf-8")
@@ -87,7 +88,7 @@ def _load(plan):
     return yaml.safe_load(evidence_sidecar_path(plan).read_text(encoding="utf-8"))
 
 
-def test_reviews_round_trip_appends_and_leaves_other_keys(tmp_path):
+def test_reviews_round_trip_appends_and_leaves_other_keys(tmp_path: Path) -> None:
     repo, plan, out = _setup(tmp_path)
     record(_params(plan, out), repo_root=repo / ".git")
     before = _load(plan)
@@ -99,7 +100,7 @@ def test_reviews_round_trip_appends_and_leaves_other_keys(tmp_path):
     assert after["criterion_evidence"] == before["criterion_evidence"]
 
 
-def test_reviews_two_calls_append_never_replace(tmp_path):
+def test_reviews_two_calls_append_never_replace(tmp_path: Path) -> None:
     repo, plan, _ = _setup(tmp_path)
     record({"plan_path": str(plan), "reviews": [_review(leg="a"), _review(leg="b", max_severity=None)]},
            repo_root=repo / ".git")
@@ -107,7 +108,7 @@ def test_reviews_two_calls_append_never_replace(tmp_path):
     assert [r["leg"] for r in _load(plan)["reviews"]] == ["a", "b", "c"]
 
 
-def test_reviews_refusals_write_no_sidecar(tmp_path):
+def test_reviews_refusals_write_no_sidecar(tmp_path: Path) -> None:
     repo, plan, out = _setup(tmp_path)
     missing = _review()
     del missing["applied"]
@@ -125,13 +126,13 @@ def test_reviews_refusals_write_no_sidecar(tmp_path):
     assert not evidence_sidecar_path(plan).exists()
 
 
-def test_reviews_only_sidecar_is_not_recorded_evidence(tmp_path):
+def test_reviews_only_sidecar_is_not_recorded_evidence(tmp_path: Path) -> None:
     repo, plan, _ = _setup(tmp_path)
     record({"plan_path": str(plan), "reviews": [_review()]}, repo_root=repo / ".git")
     assert not has_recorded_evidence(plan)
 
 
-def _rejudge(plan, repo):
+def _rejudge(plan, repo) -> str:
     return compose_rejudge_script(
         fragment=_fragment(),
         stage_schemas={**_STAGE_SCHEMAS, "judge-result": {"type": "object"}},
@@ -139,7 +140,7 @@ def _rejudge(plan, repo):
     )
 
 
-def test_rejudge_points_judge_at_sidecar_only_once_evidence_exists(tmp_path):
+def test_rejudge_points_judge_at_sidecar_only_once_evidence_exists(tmp_path: Path) -> None:
     repo, plan, out = _setup(tmp_path)
     before = _rejudge(plan, repo)
     assert "criterion_evidence.record" in before  # the preamble names the door regardless

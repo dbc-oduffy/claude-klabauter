@@ -11,6 +11,8 @@ from coordinator_core.ops.dispatch_emit import land_run, measured_rev, own_check
 from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 from coordinator_core.ops.dispatch_emit import write_baseline as wb
 from coordinator_core.ops.dispatch_emit.ask_contract import ManifestRow, StageManifest
+from pathlib import Path
+import pytest
 
 PRED = "ask-20261027T135906-d0f621"
 REFIRE = "warp-2026-10-27-american-spelling-ui-d0f621-20261027T143416-633153"
@@ -29,17 +31,17 @@ def _records(root, withheld):
     return run
 
 
-def _write(root, names):
+def _write(root, names) -> None:
     for n in names:
         (root / n).write_text("x\n")
 
 
-def test_prior_pass_written_credits_the_predecessors_withheld_paths(tmp_path):
+def test_prior_pass_written_credits_the_predecessors_withheld_paths(tmp_path: Path) -> None:
     run = _records(tmp_path, ["a.py"])
     assert "a.py" in wb.prior_pass_written(tmp_path, run)
 
 
-def test_prior_pass_written_credits_a_grandpredecessors_withheld_paths(tmp_path):
+def test_prior_pass_written_credits_a_grandpredecessors_withheld_paths(tmp_path: Path) -> None:
     run = _records(tmp_path, [])
     grand = "ask-20261027T120000-aaaaaa"
     (tmp_path / "state" / "warp" / PRED / "run.json").write_text(json.dumps({"resumed_from": grand}))
@@ -66,13 +68,13 @@ def _land_gate(tmp_path, monkeypatch, paths, run_dir):
     )[0]
 
 
-def test_land_run_passes_a_predecessors_withheld_path(tmp_path, monkeypatch):
+def test_land_run_passes_a_predecessors_withheld_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run = _records(tmp_path, ["a.py"])
     _write(tmp_path, ["a.py"])
     assert _land_gate(tmp_path, monkeypatch, ["a.py"], run) is None
 
 
-def test_land_run_still_refuses_foreign_dirt_beside_withheld(tmp_path, monkeypatch):
+def test_land_run_still_refuses_foreign_dirt_beside_withheld(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run = _records(tmp_path, ["a.py"])
     _write(tmp_path, ["a.py", "foreign.py"])
     out = _land_gate(tmp_path, monkeypatch, ["a.py", "foreign.py"], run)
@@ -81,7 +83,7 @@ def test_land_run_still_refuses_foreign_dirt_beside_withheld(tmp_path, monkeypat
     assert "pre-existing-dirt: a.py" not in json.dumps(out)
 
 
-def _manifest(root, names):
+def _manifest(root, names) -> StageManifest:
     _write(root, names)
     row = ManifestRow(
         id="C1", agent_type="x", model="m", brief_path="b", writes=tuple(names), wave=0,
@@ -93,14 +95,14 @@ def _manifest(root, names):
     )
 
 
-def test_terminal_commit_passes_a_predecessors_withheld_path(tmp_path, monkeypatch):
+def test_terminal_commit_passes_a_predecessors_withheld_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run = _records(tmp_path, ["a.py"])
     m = _manifest(tmp_path, ["a.py"])
     monkeypatch.setattr(tc, "_plan_checkpoint_touched", lambda root, plan, paths: frozenset())
     assert tc._pre_existing_dirt_refusal(tmp_path, m, VERDICT, LEDGER, PLAN, run) is None
 
 
-def test_terminal_commit_still_refuses_foreign_dirt_beside_withheld(tmp_path, monkeypatch):
+def test_terminal_commit_still_refuses_foreign_dirt_beside_withheld(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run = _records(tmp_path, ["a.py"])
     m = _manifest(tmp_path, ["a.py", "foreign.py"])
     monkeypatch.setattr(tc, "_plan_checkpoint_touched", lambda root, plan, paths: frozenset())

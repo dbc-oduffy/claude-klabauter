@@ -4,23 +4,25 @@ import sys
 from unittest import mock
 
 from coordinator_core.warm import polite_io
+from pathlib import Path
+import pytest
 
 
-def test_lower_own_priority_returns_status_never_raises():
+def test_lower_own_priority_returns_status_never_raises() -> None:
     with mock.patch.object(polite_io, "_lower_windows", return_value={"memory": True, "io": True}), \
          mock.patch.object(polite_io, "_lower_posix", return_value={"memory": True, "io": True}):
         st = polite_io.lower_own_priority()
     assert isinstance(st, dict) and "memory" in st and "io" in st and st["platform"] == sys.platform
 
 
-def test_lower_own_priority_swallows_platform_failure():
+def test_lower_own_priority_swallows_platform_failure() -> None:
     with mock.patch.object(polite_io, "_lower_windows", side_effect=OSError("x")), \
          mock.patch.object(polite_io, "_lower_posix", side_effect=OSError("x")):
         st = polite_io.lower_own_priority()
     assert st["memory"] is False and st["io"] is False and "error" in st
 
 
-def test_module_has_no_top_level_ctypes_import():
+def test_module_has_no_top_level_ctypes_import() -> None:
     import ast
     with open(polite_io.__file__, encoding="utf-8") as fh:
         tree = ast.parse(fh.read())
@@ -30,7 +32,7 @@ def test_module_has_no_top_level_ctypes_import():
         assert not any(n and n.startswith("ctypes") for n in names)
 
 
-def test_open_bulk_reads_content(tmp_path):
+def test_open_bulk_reads_content(tmp_path: Path) -> None:
     p = tmp_path / "f.bin"
     p.write_bytes(b"abc" * 1000)
     with polite_io.open_bulk(p) as f:
@@ -38,13 +40,13 @@ def test_open_bulk_reads_content(tmp_path):
     assert f.closed
 
 
-def test_open_bulk_uses_sequential_flag_and_fadvise(tmp_path):
+def test_open_bulk_uses_sequential_flag_and_fadvise(tmp_path: Path) -> None:
     p = tmp_path / "f.bin"
     p.write_bytes(b"x")
     seen = {}
     real_open = os.open
 
-    def spy(path, flags, *a, **k):
+    def spy(path, flags, *a, **k) -> int:
         seen["flags"] = flags
         return real_open(path, flags, *a, **k)
 
@@ -61,7 +63,7 @@ def test_open_bulk_uses_sequential_flag_and_fadvise(tmp_path):
         assert advices == [os.POSIX_FADV_SEQUENTIAL, os.POSIX_FADV_DONTNEED]
 
 
-def test_open_bulk_missing_file_raises(tmp_path):
+def test_open_bulk_missing_file_raises(tmp_path: Path) -> None:
     try:
         with polite_io.open_bulk(tmp_path / "nope"):
             pass
@@ -71,14 +73,14 @@ def test_open_bulk_missing_file_raises(tmp_path):
 
 
 class _Clock:
-    def __init__(self):
+    def __init__(self) -> None:
         self.t = 0.0
         self.slept = []
 
     def now(self):
         return self.t
 
-    def sleep(self, s):
+    def sleep(self, s) -> None:
         self.slept.append(s)
         self.t += s
 
@@ -88,14 +90,14 @@ def _limiter(rate, thr):
     return polite_io.ReadRateLimiter(rate, thr, clock=c.now, sleep=c.sleep), c
 
 
-def test_below_threshold_never_waits():
+def test_below_threshold_never_waits() -> None:
     lim, c = _limiter(1000, 500)
     for _ in range(100):
         assert lim.acquire(499) == 0.0
     assert c.slept == []
 
 
-def test_at_or_above_threshold_waits_once_burst_spent():
+def test_at_or_above_threshold_waits_once_burst_spent() -> None:
     lim, c = _limiter(1000, 500)
     assert lim.acquire(1000) == 0.0  # burst of one second
     w = lim.acquire(500)
@@ -103,14 +105,14 @@ def test_at_or_above_threshold_waits_once_burst_spent():
     assert c.slept == [w]
 
 
-def test_tokens_refill_with_time():
+def test_tokens_refill_with_time() -> None:
     lim, c = _limiter(1000, 100)
     lim.acquire(1000)
     c.t += 1.0
     assert lim.acquire(1000) == 0.0
 
 
-def test_hook_path_read_never_waits(tmp_path, monkeypatch):
+def test_hook_path_read_never_waits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.search import engine
 
     slept = []
@@ -126,7 +128,7 @@ def test_hook_path_read_never_waits(tmp_path, monkeypatch):
     assert counted[0] == 3 * 1024 * 1024
 
 
-def test_run_throttle_reaches_limiter_only_when_opted_in(tmp_path, monkeypatch):
+def test_run_throttle_reaches_limiter_only_when_opted_in(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.search import engine
 
     slept = []
@@ -143,7 +145,7 @@ def test_run_throttle_reaches_limiter_only_when_opted_in(tmp_path, monkeypatch):
     assert slept
 
 
-def test_run_truncates_at_byte_cap(tmp_path, monkeypatch):
+def test_run_truncates_at_byte_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.search import engine
 
     monkeypatch.setattr(engine, "MAX_BYTES_SCANNED", 1000)
@@ -155,7 +157,7 @@ def test_run_truncates_at_byte_cap(tmp_path, monkeypatch):
     assert result.files_scanned < 3
 
 
-def test_bulk_throttle_opt_in_waits(tmp_path, monkeypatch):
+def test_bulk_throttle_opt_in_waits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.search import engine
 
     slept = []

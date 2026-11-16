@@ -6,13 +6,18 @@ import pathlib
 import types
 
 import pytest
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = pytest.mark.complete
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _load_cli_module():
+def _load_cli_module() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "coordinator_safe_commit", str(_BIN_DIR / "coordinator-safe-commit.py")
     )
@@ -23,17 +28,17 @@ def _load_cli_module():
 
 
 class TestIsLockContention:
-    def test_raw_git_cli_refusal_text_is_recognized(self):
+    def test_raw_git_cli_refusal_text_is_recognized(self) -> None:
         mod = _load_cli_module()
         exc = RuntimeError("fatal: Unable to create '/repo/.git/index.lock': File exists.")
         assert mod._is_lock_contention(exc) is True
 
-    def test_index_write_lock_busy_message_is_recognized(self):
+    def test_index_write_lock_busy_message_is_recognized(self) -> None:
         mod = _load_cli_module()
         exc = RuntimeError(".git/index.lock exists -- a peer holds the index")
         assert mod._is_lock_contention(exc) is True
 
-    def test_an_unrelated_runtime_error_is_not_lock_contention(self):
+    def test_an_unrelated_runtime_error_is_not_lock_contention(self) -> None:
         mod = _load_cli_module()
         assert mod._is_lock_contention(RuntimeError("some other refusal")) is False
 
@@ -68,7 +73,7 @@ def _stub_cc_invoke_module(monkeypatch, mod, calls, outcomes):
 
 
 class TestDoPathspecRetriesOnLockContention:
-    def test_lock_contention_is_retried_and_eventually_succeeds(self, monkeypatch, tmp_path, capsys):
+    def test_lock_contention_is_retried_and_eventually_succeeds(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         mod = _load_cli_module()
         args = _args_for_pathspec(mod, tmp_path)
         monkeypatch.chdir(tmp_path)
@@ -92,7 +97,7 @@ class TestDoPathspecRetriesOnLockContention:
         assert "index-lock contention" in err
         assert "committed sha=deadbeef" in err
 
-    def test_a_non_lock_runtime_error_is_never_retried(self, monkeypatch, tmp_path, capsys):
+    def test_a_non_lock_runtime_error_is_never_retried(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         mod = _load_cli_module()
         args = _args_for_pathspec(mod, tmp_path)
         monkeypatch.chdir(tmp_path)
@@ -112,8 +117,8 @@ class TestDoPathspecRetriesOnLockContention:
         assert len(calls) == 1, "a non-lock error must not be retried"
 
     def test_persistent_lock_contention_exhausts_retries_and_reports_the_error(
-        self, monkeypatch, tmp_path, capsys
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         mod = _load_cli_module()
         args = _args_for_pathspec(mod, tmp_path)
         monkeypatch.chdir(tmp_path)

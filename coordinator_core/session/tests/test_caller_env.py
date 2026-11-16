@@ -1,9 +1,10 @@
 """Daemon identity never becomes role/delegation authority for another request."""
 from coordinator_core.session.caller_env import carried_caller_env, effective_caller_env
 from coordinator_core.warm.entry_seam import per_request_state
+import pytest
 
 
-def test_warm_unisolated_uses_actual_packet_and_preserves_reentry(monkeypatch):
+def test_warm_unisolated_uses_actual_packet_and_preserves_reentry(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('COORDINATOR_AGENT_ROLE', 'em')
     actual = {'COORDINATOR_AGENT_ROLE': 'workflow-agent', 'COORDINATOR_PARENT_SESSION_ID': 'parent'}
     with per_request_state(warm_served=True, isolated=False, env=actual):
@@ -19,7 +20,7 @@ def test_warm_unisolated_uses_actual_packet_and_preserves_reentry(monkeypatch):
     assert effective_caller_env()['COORDINATOR_AGENT_ROLE'] == 'em'
 
 
-def test_new_missing_warm_request_clears_outer_authority(monkeypatch):
+def test_new_missing_warm_request_clears_outer_authority(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('COORDINATOR_ALLOW_FIRE_TOKEN', 'daemon-not-caller')
     with per_request_state(warm_served=True, isolated=False, env={'COORDINATOR_AGENT_ROLE': 'em'}):
         with per_request_state(warm_served=True, isolated=False):
@@ -27,7 +28,7 @@ def test_new_missing_warm_request_clears_outer_authority(monkeypatch):
         assert carried_caller_env() == {'COORDINATOR_AGENT_ROLE': 'em'}
 
 
-def test_cold_explicit_packet_and_unbound_own_environment(monkeypatch):
+def test_cold_explicit_packet_and_unbound_own_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('COORDINATOR_AGENT_ROLE', 'worker')
     assert carried_caller_env() == {}
     assert effective_caller_env()['COORDINATOR_AGENT_ROLE'] == 'worker'

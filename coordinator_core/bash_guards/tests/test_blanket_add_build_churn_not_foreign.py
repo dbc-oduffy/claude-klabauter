@@ -14,14 +14,15 @@ import pytest
 from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
 from coordinator_core.bash_guards import dispatch_checks as guard
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 CHURN = "src/lib/build/app.generated.json"
 
 
-def _wire(monkeypatch, root, paths):
+def _wire(monkeypatch, root, paths) -> None:
     monkeypatch.setattr(_dc_git_shared, "_is_hazard_repo", lambda r: True)
 
-    def _fake_run_git(args, cwd=None, timeout=2.0, extra_env=None):
+    def _fake_run_git(args, cwd=None, timeout: float = 2.0, extra_env=None):
         if args[:2] == ["rev-parse", "--show-toplevel"]:
             return 0, root + "\n"
         if args[:2] == ["add", "--dry-run"]:
@@ -43,7 +44,7 @@ def _wire(monkeypatch, root, paths):
             return d
 
         @staticmethod
-        def project_live_claims(*a, cwd=None):
+        def project_live_claims(*a, cwd=None) -> SimpleNamespace:
             return projection
 
     monkeypatch.setitem(
@@ -52,7 +53,7 @@ def _wire(monkeypatch, root, paths):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     (root / "src").mkdir(parents=True)
     monkeypatch.chdir(root)
@@ -66,13 +67,13 @@ CMDS = {
 
 
 @pytest.mark.parametrize("side", ["add", "commit"])
-def test_build_churn_alone_is_not_foreign(monkeypatch, repo, side):
+def test_build_churn_alone_is_not_foreign(monkeypatch: pytest.MonkeyPatch, repo, side) -> None:
     _wire(monkeypatch, str(repo), ["src/mine.py", CHURN])
     assert guard.check_blanket_git_add(CMDS[side], session_id="s1", hook_payload={}) is None
 
 
 @pytest.mark.parametrize("side", ["add", "commit"])
-def test_foreign_path_still_denies_and_names_churn_count(monkeypatch, repo, side):
+def test_foreign_path_still_denies_and_names_churn_count(monkeypatch: pytest.MonkeyPatch, repo, side) -> None:
     _wire(monkeypatch, str(repo), ["src/mine.py", "src/peer.py", CHURN])
     result = guard.check_blanket_git_add(CMDS[side], session_id="s1", hook_payload={})
     assert result is not None
@@ -83,7 +84,7 @@ def test_foreign_path_still_denies_and_names_churn_count(monkeypatch, repo, side
 
 
 @pytest.mark.parametrize("side", ["add", "commit"])
-def test_foreign_without_churn_omits_the_churn_note(monkeypatch, repo, side):
+def test_foreign_without_churn_omits_the_churn_note(monkeypatch: pytest.MonkeyPatch, repo, side) -> None:
     _wire(monkeypatch, str(repo), ["src/peer.py"])
     result = guard.check_blanket_git_add(CMDS[side], session_id="s1", hook_payload={})
     assert result is not None

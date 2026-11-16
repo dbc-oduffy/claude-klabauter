@@ -11,6 +11,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import halt_refire as hr
 from coordinator_core.ops.dispatch_emit.phase_ledger import HALT_PHASE
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 KINDS = [*HALT_PHASE, "totally_unknown", "toString"]
 
@@ -18,7 +19,7 @@ KINDS = [*HALT_PHASE, "totally_unknown", "toString"]
 @pytest.mark.cadence
 @pytest.mark.spawns_process
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
-def test_resume_phase_matches_python_for_every_kind(tmp_path):
+def test_resume_phase_matches_python_for_every_kind(tmp_path: Path) -> None:
     js = hr.refire_next_action_js("'CALL'", "'why'", "_halted.halted", "null")
     script = (
         "let _runId='r', _sizingRel='s';\nlet _halted;\n"

@@ -58,6 +58,17 @@ def test_plan_edge_to_a_missing_plan_is_refused_as_dangling_naming_the_file(tmp_
         stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
 
 
+MONTH_REL = "docs/plans/2026-10/2026-10-01-gate.md"
+
+
+def test_dangling_month_edge_stages_the_flat_plan_on_disk(tmp_path):
+    _sizing(tmp_path, plan=MONTH_REL)
+    _plan(tmp_path)
+    write_run_scripts(tmp_path, "r1")
+    m = stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
+    assert [r.id for r in m.rows] == ["A1"]
+
+
 def _move_plan(repo, dest):
     src = repo / PLAN_REL
     (repo / dest).parent.mkdir(parents=True, exist_ok=True)
@@ -72,6 +83,14 @@ def test_sharded_edge_with_a_flat_plan_stages_the_plan(tmp_path):
     assert [r.id for r in m.rows] == ["A1"]
 
 
+def test_dangling_flat_edge_stages_the_month_dir_plan_on_disk(tmp_path):
+    _sizing(tmp_path)
+    _plan(tmp_path, rel=MONTH_REL)
+    write_run_scripts(tmp_path, "r1")
+    m = stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
+    assert [r.id for r in m.rows] == ["A1"]
+
+
 def test_flat_edge_with_a_sharded_plan_stages_the_plan(tmp_path):
     _sizing(tmp_path)
     _plan(tmp_path)
@@ -79,6 +98,13 @@ def test_flat_edge_with_a_sharded_plan_stages_the_plan(tmp_path):
     write_run_scripts(tmp_path, "r1")
     m = stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
     assert [r.id for r in m.rows] == ["A1"]
+
+
+def test_wholly_dangling_edge_refusal_names_the_edge(tmp_path):
+    _sizing(tmp_path, plan=MONTH_REL)
+    with pytest.raises(AskStageError, match="^PLAN-EDGE-DANGLING: ") as exc:
+        stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
+    assert MONTH_REL in str(exc.value)
 
 
 def test_sharded_edge_with_a_sharded_plan_stages_the_plan(tmp_path):

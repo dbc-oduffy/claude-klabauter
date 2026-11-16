@@ -64,7 +64,7 @@ def _put(repo: Path, rel: str, text: str) -> None:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     (tmp_path / "wave-review.md").write_text("# review\n", encoding="utf-8")
@@ -151,7 +151,7 @@ def _product(repo: Path, rev: str) -> set:
     return _names(repo, rev) - {PLAN, SIZING, f"{RECORD_DIR_ROOT}/{RUN}/usage.json"}
 
 
-def test_ask_run_lands_its_note_with_the_product_and_the_close_job_stamps_the_plan_in_one_close_commit(repo):
+def test_ask_run_lands_its_note_with_the_product_and_the_close_job_stamps_the_plan_in_one_close_commit(repo) -> None:
     _closable_plan(repo, PLAN)
     _write(repo, "docs/delivery/run1.md", "# delivered\n")
     _write(repo, "docs/reference/x.md", "# ref\n")
@@ -180,7 +180,7 @@ def test_ask_run_lands_its_note_with_the_product_and_the_close_job_stamps_the_pl
     assert f"disposition_ref: {out['sha']}" in (repo / PLAN).read_text(encoding="utf-8")
 
 
-def test_ask_run_lands_the_baton_its_sizing_names_with_the_run_and_the_close_commit_carries_the_sizing(repo):
+def test_ask_run_lands_the_baton_its_sizing_names_with_the_run_and_the_close_commit_carries_the_sizing(repo) -> None:
     baton = "state/handoffs/2026-01-01-p.md"
     _closable_plan(repo, PLAN)
     _write(repo, SIZING, (repo / SIZING).read_text(encoding="utf-8") + f"baton: {baton}\n")
@@ -195,7 +195,7 @@ def test_ask_run_lands_the_baton_its_sizing_names_with_the_run_and_the_close_com
 
 
 @pytest.mark.parametrize("cited", ["docs/reference/x.md", "state/handoffs/../../docs/reference/x.md"])
-def test_a_baton_outside_the_handoffs_home_is_not_committed(repo, cited):
+def test_a_baton_outside_the_handoffs_home_is_not_committed(repo, cited) -> None:
     _closable_plan(repo, PLAN)
     _write(repo, SIZING, (repo / SIZING).read_text(encoding="utf-8") + f"baton: {cited}\n")
     _write(repo, "docs/reference/x.md", "# not a handoff\n")
@@ -204,7 +204,7 @@ def test_a_baton_outside_the_handoffs_home_is_not_committed(repo, cited):
     assert "docs/reference/x.md" not in _git(repo, "ls-files").split()
 
 
-def test_ask_run_with_a_gitignored_plan_stamps_it_on_disk_and_the_close_commit_never_lands_it(repo):
+def test_ask_run_with_a_gitignored_plan_stamps_it_on_disk_and_the_close_commit_never_lands_it(repo) -> None:
     ignored_plan = "scratch/plans/p.md"
     _closable_plan(repo, ignored_plan)
     request = CommitRequest(
@@ -219,33 +219,33 @@ def test_ask_run_with_a_gitignored_plan_stamps_it_on_disk_and_the_close_commit_n
     assert f"disposition_ref: {out['sha']}" in (repo / ignored_plan).read_text(encoding="utf-8")
 
 
-def test_a_ledgered_run_without_a_verdict_is_refused(repo):
+def test_a_ledgered_run_without_a_verdict_is_refused(repo) -> None:
     out = _call(repo, ledger_verdict=None)
     assert out["committed"] is False and out["refused"] == "ledger-unjudged"
     assert _git(repo, "log", "--format=%s").splitlines() == ["seed"]
 
 
-def test_a_revision_the_checker_never_saw_refuses_the_commit(repo):
+def test_a_revision_the_checker_never_saw_refuses_the_commit(repo) -> None:
     rl.revise(repo, RUN, verbatim="and b.py too")
     out = _call(repo)
     assert out["refused"] == "ledger-unmet"
     assert out["ledger_failures"] == [{"id": "R2", "reason": "unjudged (arrived after the check, or skipped)"}]
 
 
-def test_an_inessential_unmet_item_passes_without_all_of_pm_ask(repo):
+def test_an_inessential_unmet_item_passes_without_all_of_pm_ask(repo) -> None:
     rl.revise(repo, RUN, verbatim="nice to have: a changelog line")
     verdict = {"items": [{"id": "R1", "status": "met"}, {"id": "R2", "status": "not_met", "essential": False}]}
     assert _call(repo, ledger_verdict=verdict)["committed"] is True
 
 
-def test_all_of_pm_ask_set_mid_run_makes_every_item_mandatory(repo):
+def test_all_of_pm_ask_set_mid_run_makes_every_item_mandatory(repo) -> None:
     rl.revise(repo, RUN, verbatim="nice to have: a changelog line", all_of_pm_ask=True)
     verdict = {"items": [{"id": "R1", "status": "met"}, {"id": "R2", "status": "not_met", "essential": False}]}
     out = _call(repo, ledger_verdict=verdict)
     assert out["refused"] == "ledger-unmet" and out["all_of_pm_ask"] is True
 
 
-def test_a_post_commit_ledger_item_commits(repo):
+def test_a_post_commit_ledger_item_commits(repo) -> None:
     rl.revise(repo, RUN, verbatim="send a memo naming the landed sha")
     verdict = {"items": [
         {"id": "R1", "status": "post_commit", "wired": True, "post_commit_acts": ["commit", "sha_reply"]},
@@ -254,32 +254,32 @@ def test_a_post_commit_ledger_item_commits(repo):
     assert _call(repo, ledger_verdict=verdict)["committed"] is True
 
 
-def test_a_not_met_item_remaining_only_the_commit_commits(repo):
+def test_a_not_met_item_remaining_only_the_commit_commits(repo) -> None:
     verdict = {"items": [
         {"id": "R1", "status": "not_met", "essential": True, "wired": True, "remaining": ["commit"]},
     ]}
     assert _call(repo, ledger_verdict=verdict)["committed"] is True
 
 
-def test_a_post_commit_item_naming_no_act_is_refused_unmet(repo):
+def test_a_post_commit_item_naming_no_act_is_refused_unmet(repo) -> None:
     verdict = {"items": [{"id": "R1", "status": "post_commit", "post_commit_acts": []}]}
     out = _call(repo, ledger_verdict=verdict)
     assert out["committed"] is False and out["refused"] == "ledger-unmet"
 
 
-def test_a_run_emitted_before_the_ledger_is_not_gated(repo):
+def test_a_run_emitted_before_the_ledger_is_not_gated(repo) -> None:
     (repo / RUN_DIR_ROOT / RUN / rl.RUN_FILE).unlink()
     assert _call(repo, ledger_verdict=None)["committed"] is True
 
 
-def test_review_trailer_pins_the_uncommitted_review_record(tmp_path):
+def test_review_trailer_pins_the_uncommitted_review_record(tmp_path: Path) -> None:
     record = tmp_path / "rec.md"
     record.write_text("---\nplan_id: p\n---\n", encoding="utf-8")
     trailers = land_run._ask_trailers(tmp_path, None, record, [])
     assert trailers == [f"Review: {hashlib.sha256(record.read_bytes()).hexdigest()}"]
 
 
-def test_the_sizings_doc_consumers_and_ask_conflicts_ride_the_product_commit(repo):
+def test_the_sizings_doc_consumers_and_ask_conflicts_ride_the_product_commit(repo) -> None:
     text = (repo / SIZING).read_text(encoding="utf-8")
     _write(
         repo, SIZING,
@@ -304,11 +304,11 @@ _L_REVIEW = {
 }
 
 
-def _size_l(repo):
+def _size_l(repo) -> None:
     _write(repo, SIZING, (repo / SIZING).read_text(encoding="utf-8").replace("tshirt: S", "tshirt: L"))
 
 
-def test_an_xs_run_with_an_empty_review_wave_commits_without_a_review_verdict(repo):
+def test_an_xs_run_with_an_empty_review_wave_commits_without_a_review_verdict(repo) -> None:
     _write(repo, "docs/reference/x.md", "x\n")
     docs_only = CommitRequest(
         chunks=(ChunkCommit(id="C1", title="t", paths=("docs/reference/x.md",)),), deliverable_id=DLV, plan_path=PLAN
@@ -323,7 +323,7 @@ def test_an_xs_run_with_an_empty_review_wave_commits_without_a_review_verdict(re
     assert out.get("plan_status") != "implemented", out
 
 
-def test_an_l_run_with_a_passing_ledger_but_null_delivery_does_not_close(repo):
+def test_an_l_run_with_a_passing_ledger_but_null_delivery_does_not_close(repo) -> None:
     _size_l(repo)
     out = _call(repo, inline_review={**_REVIEWED, "delivery": None, "criterion": None})
     assert out["committed"] is True and out.get("plan_status") != "implemented", out
@@ -332,13 +332,13 @@ def test_an_l_run_with_a_passing_ledger_but_null_delivery_does_not_close(repo):
     assert legs["completion-entry"][0] == "ran", legs
 
 
-def test_an_l_run_with_a_failing_ledger_is_refused_though_delivery_passes(repo):
+def test_an_l_run_with_a_failing_ledger_is_refused_though_delivery_passes(repo) -> None:
     _size_l(repo)
     out = _call(repo, inline_review=_L_REVIEW, ledger_verdict={"items": [{"id": "R1", "status": "not_met"}]})
     assert out["committed"] is False and out["refused"] == "ledger-unmet"
 
 
-def test_an_l_run_with_ledger_delivery_and_criterion_passing_commits(repo):
+def test_an_l_run_with_ledger_delivery_and_criterion_passing_commits(repo) -> None:
     _size_l(repo)
     out = _call(repo, inline_review=_L_REVIEW)
     assert out["committed"] is True, out
@@ -346,7 +346,7 @@ def test_an_l_run_with_ledger_delivery_and_criterion_passing_commits(repo):
     assert _run_close_job(repo, out)["completion-entry"][1] != "criterion absent"
 
 
-def test_a_peer_dirty_wiki_page_outside_the_declared_docs_is_not_committed(repo):
+def test_a_peer_dirty_wiki_page_outside_the_declared_docs_is_not_committed(repo) -> None:
     _write(repo, "docs/delivery/run1.md", "# delivered\n")
     _write(repo, "docs/" "wiki/peer.md", "# peer wip\n")
     _request(repo, docs=("docs/delivery/run1.md",))
@@ -355,7 +355,7 @@ def test_a_peer_dirty_wiki_page_outside_the_declared_docs_is_not_committed(repo)
     assert _product(repo, out["sha"]) == {"a.py", "docs/delivery/run1.md"}
 
 
-def test_the_runs_own_delivery_note_lands_without_a_docs_chunk_and_other_docs_stay_out(repo):
+def test_the_runs_own_delivery_note_lands_without_a_docs_chunk_and_other_docs_stay_out(repo) -> None:
     _write(repo, "docs/delivery/run1.md", "# delivered\n")
     _write(repo, "docs/reference/x.md", "# ref\n")
     out = _call(repo)
@@ -367,7 +367,7 @@ def _spawns(monkeypatch) -> list:
     seen: list = []
     real_init = subprocess.Popen.__init__
 
-    def counting(self, *args, **kwargs):
+    def counting(self, *args, **kwargs) -> None:
         seen.append(args[0] if args else kwargs.get("args"))
         real_init(self, *args, **kwargs)
 
@@ -393,14 +393,14 @@ def _into_record_dir(repo: Path) -> str:
     return rel
 
 
-def test_ask_run_spawn_count_is_bounded(repo, monkeypatch):
+def test_ask_run_spawn_count_is_bounded(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = _spawns(monkeypatch)
     out = _call(repo)
     assert out["committed"] is True, out
     assert len(seen) <= 1, seen
 
 
-def test_a_record_dir_run_commits_its_record_files_with_the_run(repo, monkeypatch):
+def test_a_record_dir_run_commits_its_record_files_with_the_run(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     rel = _into_record_dir(repo)
     _write(repo, f"{RUN_DIR_ROOT}/{RUN}/brief.md", "working file\n")
     seen = _spawns(monkeypatch)
@@ -413,7 +413,7 @@ def test_a_record_dir_run_commits_its_record_files_with_the_run(repo, monkeypatc
     }
 
 
-def test_a_scratch_run_dir_adds_nothing(repo):
+def test_a_scratch_run_dir_adds_nothing(repo) -> None:
     _write(repo, f"{RUN_DIR_ROOT}/{RUN}/pm-intent.md", "intent\n")
     out = _call(repo)
     assert out["committed"] is True, out
@@ -436,7 +436,7 @@ def _composed_digest(ledger_js: str) -> dict:
     stubs = (
         "const _manifest={plan_id:'p'}, _incompleteChunks=[], _notStarted=[], _planHeld={}, _verifications=[], "
         "_reviewIntegration={fixes_applied:0,sidecar_path:'x'}, _reviewReverify=null, _reviewPrep={slices:[1]}, _reviewWave=[], "
-        "_deliveryVerdict=null, _deliveryNotRun=null, _waveNotRun=[], _haltCommit=null, _commitHaltRecord=async () => null, _testResult=null, _halted=null, _splitExit=null, _viaRoadmap=false, _RUN_TOKEN=null, "
+        "_deliveryVerdict=null, _deliveryNotRun=null, _waveNotRun=[], _ragDegraded=[], _checkpointFixIds=[], _haltCommit=null, _commitHaltRecord=async () => null, _testResult=null, _halted=null, _splitExit=null, _viaRoadmap=false, _RUN_TOKEN=null, "
         "_sizingRel='s', _planRel=null, _resumeLedger=false, REPO_ROOT='/r', _gate={arm:'xs'}, _runId='r', _heldBy=[], _unansweredBriefs=[], "
         f"_stoppedBy=[], _rows={{}}, _haltedByHold=false, _consumedReturns={{}}, _alreadyDelivered=null, _blockedChunks=[], _recoveryWithheld=[], _docs=null, _commit=null, _refireNextAction=() => {{}}, _haltNextActionText=() => '', _terminalCommitParamsBlock=(p) => JSON.stringify(p), _falsifierResult=null, _falsifierSpec=null, _memoCloseOnly=false, _preHaltCredit=false, log=() => {{}}; let _nextAction=null; const _ledger={ledger_js};\n"
     )
@@ -452,16 +452,19 @@ def _printed_params(digest: dict) -> dict:
     return digest["next_action"]["params"]
 
 
-def test_the_printed_terminal_commit_params_carry_the_ledger_verdict_top_level(repo):
+def test_the_printed_terminal_commit_params_carry_the_ledger_verdict_top_level(repo) -> None:
     digest = _composed_digest("{items:[{id:'R1',status:'met'}],verdict:'pass'}")
     params = _printed_params(digest)
-    assert params["ledger_verdict"] == {"items": [{"id": "R1", "status": "met", "essential": True, "wired": False}]}
+    assert params["ledger_verdict"] == {
+        "items": [{"id": "R1", "status": "met", "essential": True, "wired": False}],
+        "conflicts": [],
+    }
     assert "ledger_verdict" not in params["inline_review"]
     out = _call(repo, **{k: v for k, v in params.items() if k in ("ledger_verdict",)})
     assert out["committed"] is True, out
 
 
-def test_a_digest_whose_ledger_check_never_returned_prints_no_verdict_and_the_gate_refuses(repo):
+def test_a_digest_whose_ledger_check_never_returned_prints_no_verdict_and_the_gate_refuses(repo) -> None:
     params = _printed_params(_composed_digest("null"))
     assert "ledger_verdict" not in params
     out = _call(repo, ledger_verdict=None)

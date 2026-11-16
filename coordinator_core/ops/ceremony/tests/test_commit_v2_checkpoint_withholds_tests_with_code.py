@@ -57,11 +57,12 @@ def repo(tmp_path, monkeypatch):
     _git(["config", "user.name", "t"], root)
     _git(["config", "core.autocrlf", "false"], root)
     (root / PLAN).write_bytes(SPINE.encode())
-    for rel in ("pkg/code.py", "pkg/tests/test_code.py", "pkg/other.py", "pkg/tests/test_other.py"):
+    rels = ("pkg/code.py", "pkg/tests/test_code.py", "pkg/other.py", "pkg/tests/test_other.py")
+    for rel in rels:
         (root / rel).write_bytes(b"v1\n")
     _git(["add", "."], root)
     _git(["commit", "-q", "-m", "seed"], root)
-    for rel in ("pkg/code.py", "pkg/tests/test_code.py", "pkg/other.py", "pkg/tests/test_other.py"):
+    for rel in rels:
         (root / rel).write_bytes(b"v2\n")
     monkeypatch.setenv("COORDINATOR_SESSION_ID", SELF)
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
@@ -71,9 +72,7 @@ def repo(tmp_path, monkeypatch):
     monkeypatch.setattr(peer_hunk_gate, "co_declared_peer_holds", lambda *a, **k: [])
     # The run's write-time prints attribute a path to the run: record them through the production
     # recorder the way the executor's write hook does, never a stub of the reader.
-    run_write_prints.record(
-        root, "run1", ("pkg/code.py", "pkg/tests/test_code.py", "pkg/other.py", "pkg/tests/test_other.py"),
-    )
+    run_write_prints.record(root, "run1", rels)
     return root
 
 

@@ -6,6 +6,7 @@ import json
 import pytest
 
 from coordinator_core.warm import idle, lifecycle, push_cadence, server
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
@@ -21,14 +22,14 @@ def _reset_state():
     idle.reset_idle_clock_for_test()
 
 
-def _repo(tmp_path, name="repo"):
+def _repo(tmp_path, name: str = "repo"):
     root = tmp_path / name
     (root / ".git").mkdir(parents=True)
     return root
 
 
 class _FakeVersionState:
-    def __init__(self, *, skewed: bool = False, server_sha: str = "deadbeef"):
+    def __init__(self, *, skewed: bool = False, server_sha: str = "deadbeef") -> None:
         self._skewed = skewed
         self.server_sha = server_sha
 
@@ -44,14 +45,14 @@ def _make_context():
 
 
 @pytest.fixture(autouse=True)
-def _author_profile(monkeypatch):
+def _author_profile(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(push_cadence, "machine_profile", lambda: "author")
 
-def test_on_idle_tick_seeds_first_tick_then_waits_for_interval():
+def test_on_idle_tick_seeds_first_tick_then_waits_for_interval() -> None:
     fake_now = [0.0]
     calls = []
 
-    def _fake_sweep(repos, **kwargs):
+    def _fake_sweep(repos, **kwargs) -> None:
         calls.append(list(repos))
 
     ran_first = push_cadence.on_idle_tick(
@@ -74,11 +75,11 @@ def test_on_idle_tick_seeds_first_tick_then_waits_for_interval():
     assert calls == []
 
 
-def test_on_idle_tick_fires_once_interval_has_elapsed():
+def test_on_idle_tick_fires_once_interval_has_elapsed() -> None:
     fake_now = [0.0]
     calls = []
 
-    def _fake_sweep(repos, **kwargs):
+    def _fake_sweep(repos, **kwargs) -> None:
         calls.append(list(repos))
 
     push_cadence.on_idle_tick(
@@ -98,11 +99,11 @@ def test_on_idle_tick_fires_once_interval_has_elapsed():
     assert calls == [["r"]]
 
 
-def test_push_cadence_interval_is_strictly_under_idle_deadline():
+def test_push_cadence_interval_is_strictly_under_idle_deadline() -> None:
     assert push_cadence.PUSH_CADENCE_INTERVAL_SECS < idle.DEFAULT_IDLE_MINUTES * 60.0
 
 
-def test_begin_shutdown_runs_registered_final_sweep_hook():
+def test_begin_shutdown_runs_registered_final_sweep_hook() -> None:
     calls = []
     lifecycle.set_final_sweep_hook(lambda: calls.append("swept"))
 
@@ -118,7 +119,7 @@ def test_begin_shutdown_runs_registered_final_sweep_hook():
     assert order.index("ctx_shutdown") < order.index(("exit_fn", 0))
 
 
-def test_drain_and_exit_also_runs_the_final_sweep_hook():
+def test_drain_and_exit_also_runs_the_final_sweep_hook() -> None:
     calls = []
     lifecycle.set_final_sweep_hook(lambda: calls.append("swept"))
 
@@ -131,7 +132,7 @@ def test_drain_and_exit_also_runs_the_final_sweep_hook():
     assert calls == ["swept"]
 
 
-def test_no_hook_registered_is_a_silent_no_op():
+def test_no_hook_registered_is_a_silent_no_op() -> None:
     result = lifecycle.begin_shutdown(
         close_listener=lambda: None,
         in_flight_count=lambda: 0,
@@ -141,7 +142,7 @@ def test_no_hook_registered_is_a_silent_no_op():
     assert result is True
 
 
-def test_final_sweep_hook_exception_never_blocks_exit_fn():
+def test_final_sweep_hook_exception_never_blocks_exit_fn() -> None:
     order = []
 
     def _raising_hook():
@@ -157,7 +158,7 @@ def test_final_sweep_hook_exception_never_blocks_exit_fn():
     assert order == [0]
 
 
-def test_idle_tick_runs_cadence_only_when_should_demote_is_false(monkeypatch):
+def test_idle_tick_runs_cadence_only_when_should_demote_is_false(monkeypatch: pytest.MonkeyPatch) -> None:
     ctx = _make_context()
     sweep_calls = []
     monkeypatch.setattr(
@@ -175,11 +176,11 @@ def test_idle_tick_runs_cadence_only_when_should_demote_is_false(monkeypatch):
     assert sweep_calls == []
 
 
-def _all_ahead(monkeypatch):
+def _all_ahead(monkeypatch) -> None:
     monkeypatch.setattr(push_cadence, "is_ahead", lambda root: True)
 
 
-def test_every_default_ceiling_repo_is_admitted_whatever_the_clock_reads(tmp_path, monkeypatch):
+def test_every_default_ceiling_repo_is_admitted_whatever_the_clock_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     swept = []
     monkeypatch.setattr(push_cadence, "_sweep_one", lambda root: swept.append(root.name))
     _all_ahead(monkeypatch)
@@ -193,7 +194,7 @@ def test_every_default_ceiling_repo_is_admitted_whatever_the_clock_reads(tmp_pat
     assert sorted(swept) == ["a", "b", "c"]
 
 
-def test_second_concurrent_sweeper_declines(tmp_path):
+def test_second_concurrent_sweeper_declines(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     live_pid = os_getpid()
     first = push_cadence._acquire_sweep_lock(repo, now=1000.0, pid=live_pid)
@@ -203,7 +204,7 @@ def test_second_concurrent_sweeper_declines(tmp_path):
     assert second is False
 
 
-def test_stale_holder_is_taken_over(tmp_path):
+def test_stale_holder_is_taken_over(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     lock_path = push_cadence._sweep_lock_path(repo)
     lock_path.write_text(
@@ -214,13 +215,13 @@ def test_stale_holder_is_taken_over(tmp_path):
     assert acquired is True
 
 
-def os_getpid():
+def os_getpid() -> int:
     import os
 
     return os.getpid()
 
 
-def test_release_only_removes_own_record(tmp_path):
+def test_release_only_removes_own_record(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     assert push_cadence._acquire_sweep_lock(repo, now=1.0, pid=111) is True
     push_cadence._release_sweep_lock(repo, pid=222)
@@ -229,7 +230,7 @@ def test_release_only_removes_own_record(tmp_path):
     assert not push_cadence._sweep_lock_path(repo).exists()
 
 
-def test_sweep_repos_touches_only_the_served_set(tmp_path, monkeypatch):
+def test_sweep_repos_touches_only_the_served_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     served = _repo(tmp_path, "served")
     unserved_marker = []
 
@@ -251,7 +252,7 @@ def test_sweep_repos_touches_only_the_served_set(tmp_path, monkeypatch):
     assert unserved_marker == [served]
 
 
-def test_server_context_served_repos_reflects_only_recorded_repos(tmp_path):
+def test_server_context_served_repos_reflects_only_recorded_repos(tmp_path: Path) -> None:
     ctx = _make_context()
     assert ctx.served_repos() == []
     repo_a = tmp_path / "a"
@@ -261,7 +262,7 @@ def test_server_context_served_repos_reflects_only_recorded_repos(tmp_path):
     assert ctx.served_repos() == [repo_a]
 
 
-def test_failed_push_feeds_the_failure_detector(tmp_path, monkeypatch):
+def test_failed_push_feeds_the_failure_detector(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     monkeypatch.setattr(push_cadence, "head_branch", lambda root: "work/x/2026-08-30")
 
@@ -293,7 +294,7 @@ def test_failed_push_feeds_the_failure_detector(tmp_path, monkeypatch):
     assert unconfirmed is False
 
 
-def test_sweep_feed_reports_the_outcomes_own_attempt_count(tmp_path, monkeypatch):
+def test_sweep_feed_reports_the_outcomes_own_attempt_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     monkeypatch.setattr(push_cadence, "head_branch", lambda root: "work/x/2026-08-30")
 
@@ -317,7 +318,7 @@ def test_sweep_feed_reports_the_outcomes_own_attempt_count(tmp_path, monkeypatch
     assert seen == [1, 2, 3, None]
 
 
-def test_sweep_one_passes_the_cadence_budget_not_the_interactive_one(tmp_path, monkeypatch):
+def test_sweep_one_passes_the_cadence_budget_not_the_interactive_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`_sweep_one` must hand `push_outstanding` the cadence's OWN, smaller
     `CADENCE_PUSH_RETRY_BUDGET_SECS` -- never the interactive
     `PUSH_RETRY_BUDGET_SECS` every other `push_outstanding` caller defaults
@@ -347,8 +348,8 @@ def test_sweep_one_passes_the_cadence_budget_not_the_interactive_one(tmp_path, m
 
 
 def test_a_push_longer_than_the_sweep_ceiling_still_starts_for_every_ahead_repo(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     swept = []
     monkeypatch.setattr(push_cadence, "_sweep_one", lambda root: swept.append(root.name))
     _all_ahead(monkeypatch)
@@ -362,8 +363,8 @@ def test_a_push_longer_than_the_sweep_ceiling_still_starts_for_every_ahead_repo(
 
 
 def test_an_unreached_extended_repo_keeps_its_old_key_and_leads_the_next_tick(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     swept = []
     monkeypatch.setattr(push_cadence, "_sweep_one", lambda root: swept.append(root.name))
     _all_ahead(monkeypatch)
@@ -384,18 +385,18 @@ def test_an_unreached_extended_repo_keeps_its_old_key_and_leads_the_next_tick(
     assert sorted(swept) == ["b", "c"]
 
 
-def test_default_push_ceiling_fits_inside_both_sweep_ceilings():
+def test_default_push_ceiling_fits_inside_both_sweep_ceilings() -> None:
     # Admission no longer consults the sweep ceiling; the occupancy bound holds
     # only while a default-ceiling push fits inside it.
     assert push_cadence.CADENCE_PUSH_RETRY_BUDGET_SECS <= push_cadence.EXIT_SWEEP_CEILING_SECS
     assert push_cadence.EXIT_SWEEP_CEILING_SECS <= push_cadence.SWEEP_TOTAL_CEILING_SECS
 
 
-def test_exit_sweep_ceiling_secs_stays_tighter_than_the_idle_ceiling():
+def test_exit_sweep_ceiling_secs_stays_tighter_than_the_idle_ceiling() -> None:
     assert push_cadence.EXIT_SWEEP_CEILING_SECS < push_cadence.SWEEP_TOTAL_CEILING_SECS
 
 
-def test_sweep_lock_hold_secs_is_keyed_to_the_largest_per_repo_ceiling():
+def test_sweep_lock_hold_secs_is_keyed_to_the_largest_per_repo_ceiling() -> None:
     """`_SWEEP_LOCK_HOLD_SECS` must cover the largest push a sweep can admit --
     a repo configured up to `PUSH_CEILING_MAX_SECS` -- plus a bounded margin, so
     the lock never expires under a push still in flight."""
@@ -415,7 +416,7 @@ def test_sweep_lock_hold_secs_is_keyed_to_the_largest_per_repo_ceiling():
 # ---------------------------------------------------------------------------
 
 
-def test_sweep_total_ceiling_secs_is_cadence_budget_plus_its_named_margin():
+def test_sweep_total_ceiling_secs_is_cadence_budget_plus_its_named_margin() -> None:
     """`SWEEP_TOTAL_CEILING_SECS` = `CADENCE_PUSH_RETRY_BUDGET_SECS` + 2.0 --
     the one-repo-per-tick sizing this module's own docstring derives (2.0s
     covering the sweep's own per-repo overhead beyond the push itself)."""
@@ -425,7 +426,7 @@ def test_sweep_total_ceiling_secs_is_cadence_budget_plus_its_named_margin():
     )
 
 
-def test_exit_sweep_ceiling_secs_is_cadence_budget_plus_its_named_margin():
+def test_exit_sweep_ceiling_secs_is_cadence_budget_plus_its_named_margin() -> None:
     """`EXIT_SWEEP_CEILING_SECS` = `CADENCE_PUSH_RETRY_BUDGET_SECS` + 1.0 --
     strictly under `SWEEP_TOTAL_CEILING_SECS`'s own +2.0 margin, per that
     constant's own docstring (exit-path latency is the more sensitive of
@@ -436,7 +437,7 @@ def test_exit_sweep_ceiling_secs_is_cadence_budget_plus_its_named_margin():
     )
 
 
-def test_cadence_push_retry_budget_secs_was_not_retired():
+def test_cadence_push_retry_budget_secs_was_not_retired() -> None:
     """Arm B's negative spec: unlike arm A, `CADENCE_PUSH_RETRY_BUDGET_SECS`
     survives as the fallback bound rather than being retired outright, and
     every constant re-derived off it still imports it live rather than a
@@ -447,7 +448,7 @@ def test_cadence_push_retry_budget_secs_was_not_retired():
     assert push_cadence.CADENCE_PUSH_RETRY_BUDGET_SECS > 0
 
 
-def test_successful_push_does_not_feed_the_failure_detector(tmp_path, monkeypatch):
+def test_successful_push_does_not_feed_the_failure_detector(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
 
     class _OkOutcome:
@@ -470,7 +471,7 @@ def test_successful_push_does_not_feed_the_failure_detector(tmp_path, monkeypatc
     assert logged == []
 
 
-def _fresh_branch_repo(tmp_path, *, head="a" * 40, remote_ref_sha="a" * 40, branch_upstream=False):
+def _fresh_branch_repo(tmp_path, *, head="a" * 40, remote_ref_sha="a" * 40, branch_upstream: bool = False):
     repo = tmp_path / "repo"
     (repo / ".git" / "refs" / "remotes" / "origin").mkdir(parents=True)
     (repo / ".git" / "refs" / "remotes" / "origin" / "main").write_text(remote_ref_sha + "\n")
@@ -481,7 +482,7 @@ def _fresh_branch_repo(tmp_path, *, head="a" * 40, remote_ref_sha="a" * 40, bran
     return repo
 
 
-def test_sweep_is_silent_noop_on_fresh_branch_with_no_upstream(tmp_path, monkeypatch):
+def test_sweep_is_silent_noop_on_fresh_branch_with_no_upstream(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _fresh_branch_repo(tmp_path)
     monkeypatch.setattr(push_cadence, "machine_profile", lambda: "author")
     monkeypatch.setattr(push_cadence, "head_branch", lambda root: "work/x/day")
@@ -492,7 +493,7 @@ def test_sweep_is_silent_noop_on_fresh_branch_with_no_upstream(tmp_path, monkeyp
     assert calls == []
 
 
-def test_sweep_still_pushes_branch_with_new_commits_and_no_upstream(tmp_path, monkeypatch):
+def test_sweep_still_pushes_branch_with_new_commits_and_no_upstream(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _fresh_branch_repo(tmp_path, remote_ref_sha="b" * 40)
     monkeypatch.setattr(push_cadence, "machine_profile", lambda: "author")
     monkeypatch.setattr(push_cadence, "head_branch", lambda root: "work/x/day")
@@ -509,7 +510,7 @@ def test_sweep_still_pushes_branch_with_new_commits_and_no_upstream(tmp_path, mo
     assert len(calls) == 1
 
 
-def test_sweep_does_not_run_on_consumer_profile(tmp_path, monkeypatch):
+def test_sweep_does_not_run_on_consumer_profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _fresh_branch_repo(tmp_path, remote_ref_sha="b" * 40)
     monkeypatch.setattr(push_cadence, "machine_profile", lambda: "consumer")
     calls = []
@@ -557,20 +558,20 @@ def _ref_lock_sweep(tmp_path, monkeypatch, *, reaped):
     return push_cadence._sweep_one(repo), pushes, reap_calls
 
 
-def test_ref_lock_failure_reaps_named_lock_and_retries_once(tmp_path, monkeypatch):
+def test_ref_lock_failure_reaps_named_lock_and_retries_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     result, pushes, reap_calls = _ref_lock_sweep(tmp_path, monkeypatch, reaped=True)
     assert result == "pushed"
     assert len(pushes) == 2
     assert reap_calls == ["/r/.git/refs/remotes/origin/work/x/day.lock"]
 
 
-def test_ref_lock_failure_left_alone_when_reaper_refuses(tmp_path, monkeypatch):
+def test_ref_lock_failure_left_alone_when_reaper_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     result, pushes, _ = _ref_lock_sweep(tmp_path, monkeypatch, reaped=False)
     assert result == "failed"
     assert len(pushes) == 1
 
 
-def test_non_lock_failure_never_calls_the_reaper(tmp_path, monkeypatch):
+def test_non_lock_failure_never_calls_the_reaper(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
 
     class _Fail:

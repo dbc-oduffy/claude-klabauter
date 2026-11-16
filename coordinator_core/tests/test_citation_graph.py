@@ -609,3 +609,28 @@ def test_equal_depth_and_no_claims_stay_ambiguous(tmp_path):
 def test_note_on_unambiguous_basename_is_unread(tmp_path):
     wiki = _scope_fixture(tmp_path, {"p.md": "."})
     assert cg.load_disambiguation_notes(cg.load_wiki_index(wiki), wiki) == {}
+
+
+def _git(root, *args):
+    import subprocess
+
+    subprocess.run(["git", "-C", str(root), *args], check=True, capture_output=True,
+                   creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+
+def test_load_repo_index_in_git_checkout_skips_ignored_keeps_untracked(tmp_path):
+    _git(tmp_path, "init", "-q")
+    (tmp_path / ".gitignore").write_text("scratch/\n", encoding="utf-8")
+    (tmp_path / "scratch").mkdir()
+    (tmp_path / "scratch" / "ignored.md").write_text("x", encoding="utf-8")
+    (tmp_path / "tracked.md").write_text("x", encoding="utf-8")
+    (tmp_path / "untracked.md").write_text("x", encoding="utf-8")
+    _git(tmp_path, "add", "tracked.md", ".gitignore")
+    (tmp_path / "gone.md").write_text("x", encoding="utf-8")
+    _git(tmp_path, "add", "gone.md")
+    (tmp_path / "gone.md").unlink()
+
+    index = cg.load_repo_index(tmp_path)
+    assert "tracked.md" in index and "untracked.md" in index
+    assert "ignored.md" not in index
+    assert "gone.md" not in index

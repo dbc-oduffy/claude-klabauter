@@ -22,6 +22,8 @@ import io
 import json
 
 from coordinator_core.invoke.__main__ import _dispatch_argv
+from pathlib import Path
+import pytest
 
 # THE `.buffer` LEG IS HERE BECAUSE TWO REVIEWERS DISAGREED ABOUT IT.
 # overengineering-reviewer had it dropped as covering no caller this diff
@@ -40,7 +42,7 @@ class _TextOnlyStdin:
         raise AssertionError("the refusal must fire before any read")
 
 
-def test_absent_stdin_refuses_before_dispatch(monkeypatch, tmp_path):
+def test_absent_stdin_refuses_before_dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("sys.stdin", None, raising=False)
     stdout, stderr, exit_code = _dispatch_argv(
         ["ping", "--params-file", "-"], str(tmp_path), allow_warm=False
@@ -53,7 +55,7 @@ def test_absent_stdin_refuses_before_dispatch(monkeypatch, tmp_path):
     assert "--params-file <path>" in envelope["error"]["message"]
 
 
-def test_a_text_only_stdin_refuses_identically(monkeypatch, tmp_path):
+def test_a_text_only_stdin_refuses_identically(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("sys.stdin", _TextOnlyStdin(), raising=False)
     _, stderr, exit_code = _dispatch_argv(
         ["ping", "--params-file", "-"], str(tmp_path), allow_warm=False
@@ -62,7 +64,7 @@ def test_a_text_only_stdin_refuses_identically(monkeypatch, tmp_path):
     assert "--params-file -" in json.loads(stderr.strip())["error"]["message"]
 
 
-def test_a_real_stdin_still_dispatches(monkeypatch, tmp_path):
+def test_a_real_stdin_still_dispatches(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     class _Stdin:
         buffer = io.BytesIO(b"{}")
 
@@ -74,7 +76,7 @@ def test_a_real_stdin_still_dispatches(monkeypatch, tmp_path):
     assert json.loads(stdout)["result"]["ok"] is True
 
 
-def test_a_params_file_path_is_unaffected_by_an_absent_stdin(monkeypatch, tmp_path):
+def test_a_params_file_path_is_unaffected_by_an_absent_stdin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     params_path = tmp_path / "params.json"
     params_path.write_text("{}", encoding="utf-8")
     monkeypatch.setattr("sys.stdin", None, raising=False)

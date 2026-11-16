@@ -25,6 +25,7 @@ from typing import Any, Optional
 
 import jsonschema
 
+from coordinator_core import tenant_priority
 from coordinator_core.agent_pipe.contract import (
     CAUSE_LOGIN_REQUIRED,
     CAUSE_QUOTA,
@@ -259,9 +260,11 @@ def review_run(
     stderr_path = run_dir / STDERR_FILE
     try:
         with open(stderr_path, "wb") as err_fh:
+            argv = build_argv(prefix, prompt)
             proc = subprocess.Popen(
-                build_argv(prefix, prompt), cwd=str(run_dir), env=_build_env(), shell=False,
+                argv, cwd=str(run_dir), env=_build_env(), shell=False,
                 stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=err_fh, creationflags=flags,
+                **tenant_priority.popen_kwargs(argv),
             )
     except OSError as exc:
         return _failed(run_id, f"grok spawn failed: {exc}")

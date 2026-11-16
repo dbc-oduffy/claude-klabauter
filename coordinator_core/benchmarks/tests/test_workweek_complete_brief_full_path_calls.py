@@ -6,12 +6,13 @@ import pytest
 
 from coordinator_core.benchmarks import workweek_complete_brief_full_path as driver
 from coordinator_core.workweek_complete import brief as brief_module
+from pathlib import Path
 
 _OK = (0, {"judgment_points": [{"id": driver.SENTINEL_ID}]})
 
 
 @pytest.fixture
-def counted(monkeypatch, tmp_path):
+def counted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> dict[str, int]:
     """main() against a stub fixture dir and a counting brief(): no history build."""
     monkeypatch.setattr(driver, "declare_benchmark_origin", lambda: None)
     monkeypatch.setattr(driver, "ensure_fixture", lambda parent: tmp_path)
@@ -36,12 +37,12 @@ def counted(monkeypatch, tmp_path):
         (["--calls", "3", "d"], 3),
     ],
 )
-def test_call_count(counted, argv, expected):
+def test_call_count(counted, argv, expected) -> None:
     assert driver.main(argv) == 0
     assert counted["n"] == expected
 
 
-def test_setup_only_makes_no_call(counted):
+def test_setup_only_makes_no_call(counted) -> None:
     assert driver.main(["d", "--setup-only", "--calls", "3"]) == 0
     assert counted["n"] == 0
 
@@ -58,7 +59,7 @@ def test_setup_only_makes_no_call(counted):
         [],
     ],
 )
-def test_malformed_exits_2_with_usage(counted, capsys, argv):
+def test_malformed_exits_2_with_usage(counted, capsys: pytest.CaptureFixture[str], argv) -> None:
     assert driver.main(argv) == 2
     assert "usage:" in capsys.readouterr().err
     assert counted["n"] == 0

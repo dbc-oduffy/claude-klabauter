@@ -5,6 +5,9 @@ import pytest
 
 from coordinator_core.ops.review_mint.execute_review import (
     _PREP_BUSY_RETRIES,
+    _PREP_EMPTY_ATTEMPTS,
+    EMPTY_PREP_HALT,
+    NO_SLICES_HALT,
     _wave_schema_literal,
     PREP_MALFORMED_HALT,
     PREP_BUSY_HALT,
@@ -134,7 +137,8 @@ def test_compose_execute_review_emits_three_phases_in_order():
 def test_prep_phase_binds_reviewprep_and_carries_plan_and_sha():
     _, phases = _compose()
     _, prep_block = phases[0]
-    assert "const _reviewPrep = await (async () => { try { return await agent(" in prep_block
+    assert "const _prepAsk = () => (async () => { try { return await agent(" in prep_block
+    assert "const _reviewPrep = await _prepAsk();" in prep_block
     assert "docs/plans/example.md" in prep_block
     assert "a" * 40 in prep_block
     assert "'label: " not in prep_block  # label rendered unquoted key
@@ -754,7 +758,7 @@ def test_single_reviewer_ok_with_product_files_yields_exactly_one_whole_diff_sli
 @pytest.mark.parametrize(
     "prep",
     [
-        {**_PREP, "verdict": "PARTITION-MANDATORY"},
+        {**_PREP, "verdict": "PARTITION-MANDATORY", "error": "refused"},
         {**_PREP, "verdict": "PARTITION-MANDATORY", "product_files": 0},
         {**_PREP, "product_files": 0, "foreign_claims": ["peer.py"]},
         None,
@@ -764,6 +768,61 @@ def test_empty_slices_without_single_reviewer_ok_over_product_files_still_refuse
     result = _run_prep_block(prep)
     assert result["halted"].startswith("review prep returned no slices")
     assert "error" not in result and result["wave"] is None
+
+
+def _run_prep_block_with_replies(replies: list) -> dict:
+    """Execute the emitted prep block under node with the prep agent stubbed to answer each call
+    from ``replies`` in order (the last repeats); returns the block's outcome plus ``calls``."""
+    import shutil
+    import subprocess
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    _, phases = _compose()
+    body = [ln for ln in phases[0][1].splitlines() if not ln.lstrip().startswith("phase(")]
+    script = (
+        "(async () => { try { let _calls = 0; const _replies = " + json.dumps(replies) + ";\n"
+        "const agent = async () => JSON.parse(JSON.stringify(_replies[Math.min(_calls++, _replies.length - 1)]));\n"
+        "const _out = await (async () => {\n" + "\n".join(body) + "\n"
+        " return {slices: _reviewPrep?.slices ?? null, verifyOnly: _verifyOnly}; })();\n"
+        " console.log(JSON.stringify({..._out, calls: _calls}));\n"
+        "} catch (e) { console.log(JSON.stringify({error: e.message})); } })();"
+    )
+    out = subprocess.run(
+        [node, "-"], input=script, capture_output=True, text=True, check=True,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return json.loads(out.stdout)
+
+
+_EMPTY_NULL_ERROR_PREP = {**_PREP, "verdict": "PARTITION-MANDATORY", "error": None}
+_PARTITIONED_PREP = {**_EMPTY_NULL_ERROR_PREP, "slices": [{"id": "prep-1", "files": ["a.py"]}]}
+
+
+def test_empty_null_error_prep_over_product_files_recovers_on_a_later_ask():
+    result = _run_prep_block_with_replies([_EMPTY_NULL_ERROR_PREP, _EMPTY_NULL_ERROR_PREP, _PARTITIONED_PREP])
+    assert "halted" not in result and "error" not in result
+    assert result["slices"] == _PARTITIONED_PREP["slices"] and result["calls"] == 3
+
+
+def test_empty_null_error_prep_halts_typed_after_the_bound():
+    result = _run_prep_block_with_replies([_EMPTY_NULL_ERROR_PREP])
+    assert result["calls"] == _PREP_EMPTY_ATTEMPTS
+    assert result["halted"].startswith(EMPTY_PREP_HALT)
+    assert not result["halted"].startswith(NO_SLICES_HALT)
+    assert f"{_PREP_EMPTY_ATTEMPTS} attempts" in result["halted"] and result["wave"] is None
+
+
+def test_empty_prep_reasks_never_cover_errored_refused_or_whole_diff_preps():
+    for prep in (
+        {**_EMPTY_NULL_ERROR_PREP, "error": "refused"},
+        {**_EMPTY_NULL_ERROR_PREP, "product_files": 0},
+        {**_PREP, "error": None},
+    ):
+        result = _run_prep_block_with_replies([prep])
+        assert result["calls"] == 1
+        assert not str(result.get("halted", "")).startswith(EMPTY_PREP_HALT)
 
 
 def test_prep_prompt_says_single_reviewer_ok_returns_one_whole_diff_slice():
@@ -848,7 +907,7 @@ def test_landed_rows_with_no_product_file_proceed_verification_only_not_refuse()
     [
         {**_PREP, "verdict": "PARTITION-MANDATORY", "product_files": 0},
         {**_PREP, "product_files": 0, "foreign_claims": ["peer.py"]},
-        {**_PREP, "verdict": "PARTITION-MANDATORY", "product_files": 3},
+        {**_PREP, "verdict": "PARTITION-MANDATORY", "product_files": 3, "error": "refused"},
         None,
     ],
 )
@@ -928,14 +987,14 @@ def test_host_degraded_review_wave_emits_no_coordinator_agent_type_and_keeps_eve
 
 
 def test_halt_names_the_prep_verdict():
-    result = _run_prep_block({**_PREP, "verdict": "PARTITION-MANDATORY"})
+    result = _run_prep_block({**_PREP, "verdict": "PARTITION-MANDATORY", "error": "refused"})
     assert result["halted"] == "review prep returned no slices (prep verdict: PARTITION-MANDATORY)"
     assert result["prep"]["verdict"] == "PARTITION-MANDATORY"
 
 
 def test_halt_names_the_excluded_paths_and_keeps_the_prefix():
     excluded = [{"path": "a.py", "reason": "binary"}, {"path": "b.py", "reason": "peer-held"}]
-    result = _run_prep_block({**_PREP, "verdict": "none", "excluded": excluded})
+    result = _run_prep_block({**_PREP, "verdict": "none", "excluded": excluded, "error": "refused"})
     assert result["halted"] == (
         "review prep returned no slices (prep verdict: none); excluded: a.py: binary, b.py: peer-held"
     )
@@ -1897,8 +1956,39 @@ def test_reverify_saves_the_base_export_and_every_revert_call_passes_its_path(pr
     assert block.count('"failing_at_base":[<failing_at_base ids>]') == 1
 
 
+def _reverify_run_block(base_ref, group_prefixes=(), run_id="run-x1", repo_root="/r") -> str:
+    from coordinator_core.ops.review_mint.execute_review import _reverify_phase
+
+    return _reverify_phase(
+        base_ref=base_ref, prep_slice_id="prep1", repo_root=repo_root, plan_path="docs/plans/example.md",
+        run_base_sha=base_ref, prompt_head="head", host_degraded=False,
+        sc=lambda call, *_: call, group_prefixes=group_prefixes, run_id=run_id, run_key=run_id,
+    )[1].replace('\\"', '"')
+
+
+@pytest.mark.parametrize("base_ref", ["b" * 40, "run_base_sha"])
 @pytest.mark.parametrize("prefixes", [(), ("g1", "g2")])
-def test_reverify_prompt_omits_the_base_run_when_the_base_is_unset(prefixes):
+def test_reverify_reruns_failing_ids_once_in_the_export_and_every_revert_call_passes_its_path(
+    prefixes, base_ref
+) -> None:
+    block = _reverify_run_block(base_ref, prefixes)
+    path = "scratch/reverify-export-run-x1.txt"
+    assert block.count("clean_overlay_verify --export-run --run-id run-x1 --repo-root /r --") == 1
+    assert f"saved to `{path}`" in block
+    assert block.count(f'"export_failing_path":"{path}"') == 1
+    assert block.index("--export-run") < block.index('"export_failing_path"')
+
+
+@pytest.mark.parametrize("base_ref", ["b" * 40, "run_base_sha"])
+@pytest.mark.parametrize("prefixes", [(), ("g1", "g2")])
+def test_reverify_prompt_without_a_run_id_has_no_export_step(prefixes, base_ref) -> None:
+    block = _reverify_phase_block(base_ref, prefixes)
+    assert "--export-run" not in block
+    assert "export_failing_path" not in block
+
+
+@pytest.mark.parametrize("prefixes", [(), ("g1", "g2")])
+def test_reverify_prompt_omits_the_base_run_when_the_base_is_unset(prefixes) -> None:
     block = _reverify_phase_block("run_base_sha", prefixes)
     assert "base_export_path" not in block
     assert "reverify_base_measure" not in block

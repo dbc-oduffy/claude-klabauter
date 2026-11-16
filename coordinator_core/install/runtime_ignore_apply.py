@@ -3,7 +3,8 @@
 `apply_runtime_ignore` appends the template rules the root `.gitignore` does not cover and
 untracks (`git rm --cached`, index only) the tracked runtime files they match. Paths under
 `UNTRACK_EXEMPT_PREFIXES` (memo-outbox) are never untracked. `ENGINE_RULES` (engine-owned, e.g.
-warp run prompts) apply in addition to the template and even when the template is absent.
+warp run prompts) and `ENGINE_RUNTIME_IGNORE_RULES` (machine receipts) apply in addition to the
+template and even when the template is absent.
 `UNREAL_ONLY_RULES` apply only to a repo root carrying a `.uproject`/`.uplugin`. Never commits.
 """
 from __future__ import annotations
@@ -20,6 +21,7 @@ from coordinator_core.install.write_surface import (
     WriteSurfaceEntry,
 )
 from coordinator_core.workday_start.runtime_ignore_set import (
+    ENGINE_RUNTIME_IGNORE_RULES,
     load_template_rules,
     resolve_template_path,
     runtime_ignore_findings,
@@ -110,7 +112,8 @@ def apply_runtime_ignore(repo_root: Path, template: Path | None = None) -> Apply
     rules = load_template_rules(template) if template is not None else ()
     if not _is_unreal_repo(root):
         rules = tuple(r for r in rules if r not in UNREAL_ONLY_RULES)
-    rules += tuple(r for r in ENGINE_RULES if r not in rules)
+    for extra in (ENGINE_RULES, ENGINE_RUNTIME_IGNORE_RULES):
+        rules += tuple(r for r in extra if r not in rules)
     findings = runtime_ignore_findings(root, rules)
     if findings.missing:
         _append_rules(root, findings.missing)

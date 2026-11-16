@@ -9,6 +9,7 @@ from coordinator_core.ops.dispatch_emit.owed_leg_queue import (
     render_owed_legs,
     write_owed_legs,
 )
+from pathlib import Path
 
 PLAN = "docs/plans/p.md"
 
@@ -34,7 +35,7 @@ OWED = [
 ]
 
 
-def test_write_persists_one_yaml_per_owed_row(tmp_path):
+def test_write_persists_one_yaml_per_owed_row(tmp_path: Path) -> None:
     paths = write_owed_legs(tmp_path, "run-1", PLAN, OWED)
     assert [p.name for p in paths] == ["run-1--E1.yaml", "run-1--O1.yaml"]
     record = yaml.safe_load(paths[0].read_text(encoding="utf-8"))
@@ -45,7 +46,7 @@ def test_write_persists_one_yaml_per_owed_row(tmp_path):
     assert b"\r\n" not in paths[0].read_bytes()
 
 
-def test_write_is_idempotent_and_keeps_created(tmp_path):
+def test_write_is_idempotent_and_keeps_created(tmp_path: Path) -> None:
     first = write_owed_legs(tmp_path, "run-1", PLAN, OWED)[0]
     stamped = yaml.safe_load(first.read_text(encoding="utf-8"))
     stamped["created"] = "2020-01-01T00:00:00Z"
@@ -57,23 +58,23 @@ def test_write_is_idempotent_and_keeps_created(tmp_path):
     assert len(list((tmp_path / "state" / "owed-legs").glob("*.yaml"))) == 2
 
 
-def test_write_skips_rows_without_an_id(tmp_path):
+def test_write_skips_rows_without_an_id(tmp_path: Path) -> None:
     assert write_owed_legs(tmp_path, "r", PLAN, [{"reason": "operator"}, {"id": "", "reason": "x"}]) == []
 
 
-def test_open_lists_every_leg_while_the_plan_rows_are_open(tmp_path):
+def test_open_lists_every_leg_while_the_plan_rows_are_open(tmp_path: Path) -> None:
     _plan(tmp_path, {"E1": "open", "O1": "open"})
     write_owed_legs(tmp_path, "run-1", PLAN, OWED)
     assert [r["id"] for r in open_owed_legs(tmp_path)] == ["E1", "O1"]
 
 
-def test_disposition_off_open_discharges_the_leg(tmp_path):
+def test_disposition_off_open_discharges_the_leg(tmp_path: Path) -> None:
     _plan(tmp_path, {"E1": "open", "O1": "coded"})
     write_owed_legs(tmp_path, "run-1", PLAN, OWED)
     assert [r["id"] for r in open_owed_legs(tmp_path)] == ["E1"]
 
 
-def test_em_discharge_in_the_evidence_sidecar_discharges_an_open_row(tmp_path):
+def test_em_discharge_in_the_evidence_sidecar_discharges_an_open_row(tmp_path: Path) -> None:
     plan = _plan(tmp_path, {"E1": "open", "O1": "open"})
     write_owed_legs(tmp_path, "run-1", PLAN, OWED)
     plan.with_name("p.evidence.yaml").write_text(
@@ -83,12 +84,12 @@ def test_em_discharge_in_the_evidence_sidecar_discharges_an_open_row(tmp_path):
     assert [r["id"] for r in open_owed_legs(tmp_path)] == ["O1"]
 
 
-def test_an_unreadable_plan_leaves_the_leg_open(tmp_path):
+def test_an_unreadable_plan_leaves_the_leg_open(tmp_path: Path) -> None:
     write_owed_legs(tmp_path, "run-1", PLAN, OWED)
     assert [r["id"] for r in open_owed_legs(tmp_path)] == ["E1", "O1"]
 
 
-def test_no_queue_dir_and_malformed_files_read_as_empty(tmp_path):
+def test_no_queue_dir_and_malformed_files_read_as_empty(tmp_path: Path) -> None:
     assert open_owed_legs(tmp_path) == []
     directory = tmp_path / "state" / "owed-legs"
     directory.mkdir(parents=True)
@@ -97,7 +98,7 @@ def test_no_queue_dir_and_malformed_files_read_as_empty(tmp_path):
     assert open_owed_legs(tmp_path) == []
 
 
-def test_render_one_line_per_row():
+def test_render_one_line_per_row() -> None:
     rows = [{"run_id": "r1", "id": "E1", "reason": "em-performed", "plan": PLAN}]
     assert render_owed_legs(rows) == f"OWED r1 E1 (em-performed) {PLAN}"
     assert render_owed_legs([]) == ""

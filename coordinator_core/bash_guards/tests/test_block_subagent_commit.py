@@ -64,7 +64,7 @@ _GENERIC_REASON = (
 )
 
 
-def _payload(command, agent_id="deadbeef0123", agent_type=None, session_id="sess1"):
+def _payload(command, agent_id: str | None = "deadbeef0123", agent_type=None, session_id: str = "sess1"):
     p = {
         "tool_name": "Bash",
         "tool_input": {"command": command},
@@ -78,7 +78,7 @@ def _payload(command, agent_id="deadbeef0123", agent_type=None, session_id="sess
     return p
 
 
-def _subagent(monkeypatch, subagent_type=_SUBAGENT_TYPE):
+def _subagent(monkeypatch, subagent_type=_SUBAGENT_TYPE) -> None:
     """Wire the guard's identity-resolution seam so agent_id resolves
     truthy and the effective type resolves to ``subagent_type`` -- lets
     the deny path fire without a real git repo/back-pointer chain on disk.
@@ -94,7 +94,7 @@ def _subagent(monkeypatch, subagent_type=_SUBAGENT_TYPE):
     )
 
 
-def _denies(monkeypatch, cmd):
+def _denies(monkeypatch, cmd) -> None:
     _subagent(monkeypatch)
     result = _enveloped(guard.check)(_payload(cmd, agent_type=_SUBAGENT_TYPE))
     assert result is not None, f"expected DENY for: {cmd!r}"
@@ -103,7 +103,7 @@ def _denies(monkeypatch, cmd):
     ), f"expected DENY for: {cmd!r}"
 
 
-def _allows(monkeypatch, cmd):
+def _allows(monkeypatch, cmd) -> None:
     _subagent(monkeypatch)
     result = _enveloped(guard.check)(_payload(cmd, agent_type=_SUBAGENT_TYPE))
     assert result is None, f"expected ALLOW for: {cmd!r}, got {result!r}"
@@ -114,7 +114,7 @@ def _allows(monkeypatch, cmd):
 # ---------------------------------------------------------------------------
 
 
-def test_bypass_1_git_dash_c_global_config_flag_denies(monkeypatch):
+def test_bypass_1_git_dash_c_global_config_flag_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """``git -c user.name=x commit -m "msg"`` -- ``-c`` is not ``-C``, and
     the option's separate-arg VALUE token (``user.name=x``) is neither a
     flag nor ``commit``, which the old fixed-shape prefilter/regex could
@@ -123,14 +123,14 @@ def test_bypass_1_git_dash_c_global_config_flag_denies(monkeypatch):
     _denies(monkeypatch, 'git -c user.name=x commit -m "msg"')
 
 
-def test_bypass_2_double_space_git_commit_denies(monkeypatch):
+def test_bypass_2_double_space_git_commit_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """``git  commit -m "msg"`` (two spaces) -- the old prefilter required
     the literal single-space substring ``"git commit"``.
     """
     _denies(monkeypatch, 'git  commit -m "msg"')
 
 
-def test_bypass_3_coordinator_safe_commit_bare_denies(monkeypatch):
+def test_bypass_3_coordinator_safe_commit_bare_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """``coordinator-safe-commit -m "msg"`` -- the old prefilter never
     checked for the helper name at all, despite the module docstring's
     claim that the helper is in scope.
@@ -143,34 +143,34 @@ def test_bypass_3_coordinator_safe_commit_bare_denies(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_git_capital_c_global_flag_denies(monkeypatch):
+def test_git_capital_c_global_flag_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(monkeypatch, 'git -C /some/repo commit -m "msg"')
 
 
-def test_git_git_dir_attached_long_flag_denies(monkeypatch):
+def test_git_git_dir_attached_long_flag_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(monkeypatch, 'git --git-dir=/x/.git commit -m "msg"')
 
 
-def test_git_no_pager_boolean_flag_denies(monkeypatch):
+def test_git_no_pager_boolean_flag_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(monkeypatch, 'git --no-pager commit -m "msg"')
 
 
-def test_git_combination_of_global_flags_denies(monkeypatch):
+def test_git_combination_of_global_flags_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(
         monkeypatch,
         'git --no-pager -c user.name=x -C /some/repo commit -m "msg"',
     )
 
 
-def test_git_tab_whitespace_denies(monkeypatch):
+def test_git_tab_whitespace_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(monkeypatch, 'git\tcommit -m "msg"')
 
 
-def test_git_multiple_internal_spaces_denies(monkeypatch):
+def test_git_multiple_internal_spaces_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(monkeypatch, 'git   commit    -m   "msg"')
 
 
-def test_lowercase_c_and_capital_c_are_not_conflated(monkeypatch):
+def test_lowercase_c_and_capital_c_are_not_conflated(monkeypatch: pytest.MonkeyPatch) -> None:
     """``-c`` (config override, separate arg) and ``-C`` (repo-root
     override, separate arg) are DIFFERENT git options, both handled as
     separate-arg-consuming -- neither is lowercased/normalised into the
@@ -185,25 +185,25 @@ def test_lowercase_c_and_capital_c_are_not_conflated(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_coordinator_safe_commit_bin_prefixed_denies(monkeypatch):
+def test_coordinator_safe_commit_bin_prefixed_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(monkeypatch, 'bin/coordinator-safe-commit -m "msg"')
 
 
-def test_coordinator_safe_commit_absolute_path_denies(monkeypatch):
+def test_coordinator_safe_commit_absolute_path_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(
         monkeypatch,
         '/x/.coordinator-claude-settings/bin/coordinator-safe-commit -m "msg"',
     )
 
 
-def test_coordinator_safe_commit_python3_prefixed_denies(monkeypatch):
+def test_coordinator_safe_commit_python3_prefixed_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(
         monkeypatch,
         'python3 /x/.coordinator-claude-settings/bin/coordinator-safe-commit -m "msg"',
     )
 
 
-def test_coordinator_safe_commit_windows_backslash_path_denies(monkeypatch):
+def test_coordinator_safe_commit_windows_backslash_path_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(
         monkeypatch,
         r'C:\Users\x\.coordinator-claude-settings\bin\coordinator-safe-commit -m "msg"',
@@ -217,19 +217,19 @@ def test_coordinator_safe_commit_windows_backslash_path_denies(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_git_absolute_path_usr_bin_denies(monkeypatch):
+def test_git_absolute_path_usr_bin_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(monkeypatch, '/usr/bin/git commit -m "msg"')
 
 
-def test_git_absolute_path_homebrew_denies(monkeypatch):
+def test_git_absolute_path_homebrew_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(monkeypatch, '/opt/homebrew/bin/git commit -m "msg"')
 
 
-def test_git_bin_relative_path_denies(monkeypatch):
+def test_git_bin_relative_path_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(monkeypatch, 'bin/git commit -m "msg"')
 
 
-def test_git_windows_backslash_path_denies(monkeypatch):
+def test_git_windows_backslash_path_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """Windows path, no ``.exe`` suffix and no embedded space -- the
     original supported Windows shape. ``.exe``-suffixed and embedded-space
     forms are covered separately below (2026-07-29 parts 2 and 3).
@@ -238,8 +238,8 @@ def test_git_windows_backslash_path_denies(monkeypatch):
 
 
 def test_git_absolute_path_combined_with_global_flags_and_whitespace_denies(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An absolute-path ``git`` invocation combined with a global option
     AND irregular whitespace must still deny -- both the path-boundary
     widening and the pre-existing global-flag/whitespace tolerance must
@@ -261,7 +261,7 @@ def test_git_absolute_path_combined_with_global_flags_and_whitespace_denies(
 # ---------------------------------------------------------------------------
 
 
-def test_git_exe_spaced_path_backslash_commit_denies(monkeypatch):
+def test_git_exe_spaced_path_backslash_commit_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unquoted, backslash-separated, git-for-Windows' default install
     location -- the exact shape ``block_subagent_destructive_action.py``
     fixed the same day for its own surface.
@@ -269,12 +269,12 @@ def test_git_exe_spaced_path_backslash_commit_denies(monkeypatch):
     _denies(monkeypatch, r'C:\Program Files\Git\bin\git.exe commit -m "msg"')
 
 
-def test_git_exe_spaced_path_forward_slash_commit_denies(monkeypatch):
+def test_git_exe_spaced_path_forward_slash_commit_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """Same hole, forward-slash separator form."""
     _denies(monkeypatch, 'C:/Program Files/Git/bin/git.exe commit -m "msg"')
 
 
-def test_git_spaced_path_no_exe_suffix_commit_denies(monkeypatch):
+def test_git_spaced_path_no_exe_suffix_commit_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """Spaced path with no ``.exe`` suffix -- the normalization must not
     require the suffix to be present.
     """
@@ -295,7 +295,7 @@ def test_git_spaced_path_no_exe_suffix_commit_denies(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_powershell_call_operator_prefixed_git_exe_commit_denies_same_as_bash(monkeypatch):
+def test_powershell_call_operator_prefixed_git_exe_commit_denies_same_as_bash(monkeypatch: pytest.MonkeyPatch) -> None:
     """`& git.exe commit -m "msg"` -- the PowerShell call-operator prefix
     (used to invoke a command whose name is a quoted/variable string) must
     reach the SAME deny as the bare bash spelling; the leading `&` is
@@ -306,7 +306,7 @@ def test_powershell_call_operator_prefixed_git_exe_commit_denies_same_as_bash(mo
     _denies(monkeypatch, 'git.exe commit -m "msg"')
 
 
-def test_powershell_semicolon_chained_git_commit_denies_same_as_bash(monkeypatch):
+def test_powershell_semicolon_chained_git_commit_denies_same_as_bash(monkeypatch: pytest.MonkeyPatch) -> None:
     """`Set-Location C:\\repo; git commit -m "msg"` -- a PowerShell
     statement-separator `;` chain ahead of the commit must not shield it;
     `;` is recognized separator punctuation on both dialects.
@@ -314,7 +314,7 @@ def test_powershell_semicolon_chained_git_commit_denies_same_as_bash(monkeypatch
     _denies(monkeypatch, 'Set-Location C:\\repo; git commit -m "msg"')
 
 
-def test_git_commit_denies_via_actual_powershell_tool_name(monkeypatch):
+def test_git_commit_denies_via_actual_powershell_tool_name(monkeypatch: pytest.MonkeyPatch) -> None:
     """2026-08-19 subagent-boundary MATCHERS widening: the prior tests in
     this section issue PowerShell-*shaped text* through the Bash tool,
     which per docs/reference/guard-tool-name-membership.md proves detection
@@ -346,7 +346,7 @@ def test_git_commit_denies_via_actual_powershell_tool_name(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_coordinator_safe_commit_spaced_path_unquoted_backslash_denies(monkeypatch):
+def test_coordinator_safe_commit_spaced_path_unquoted_backslash_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unquoted, backslash-separated, embedded-space Windows path -- an
     ordinary Windows username-with-a-space carrier
     (``C:\\Users\\John Doe\\...``), the counterpart of
@@ -359,7 +359,7 @@ def test_coordinator_safe_commit_spaced_path_unquoted_backslash_denies(monkeypat
     )
 
 
-def test_coordinator_safe_commit_spaced_path_double_quoted_denies(monkeypatch):
+def test_coordinator_safe_commit_spaced_path_double_quoted_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """An already double-quoted spaced Windows path must still deny -- the
     counterpart of ``test_git_exe_spaced_path_already_quoted_double_commit_
     denies`` for this binary. Confirmed ALLOW (bypass) before this fix.
@@ -370,7 +370,7 @@ def test_coordinator_safe_commit_spaced_path_double_quoted_denies(monkeypatch):
     )
 
 
-def test_coordinator_safe_commit_spaced_path_posix_single_quoted_denies(monkeypatch):
+def test_coordinator_safe_commit_spaced_path_posix_single_quoted_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """A single-quoted POSIX path with an embedded space -- the extractor
     this fix retired mis-split this at the first raw space regardless of
     quoting. Confirmed ALLOW (bypass) before this fix.
@@ -381,14 +381,14 @@ def test_coordinator_safe_commit_spaced_path_posix_single_quoted_denies(monkeypa
     )
 
 
-def test_coordinator_safe_commit_spaced_path_posix_double_quoted_denies(monkeypatch):
+def test_coordinator_safe_commit_spaced_path_posix_double_quoted_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(
         monkeypatch,
         '"/opt/coordinator tools/coordinator-safe-commit" -m "msg"',
     )
 
 
-def test_coordinator_safe_commit_windows_no_space_bare_still_denies(monkeypatch):
+def test_coordinator_safe_commit_windows_no_space_bare_still_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """No-space Windows backslash path with no launcher suffix -- must
     still deny after generalizing the normalization passes (regression
     guard on the pre-existing, already-passing space-free case).
@@ -397,8 +397,8 @@ def test_coordinator_safe_commit_windows_no_space_bare_still_denies(monkeypatch)
 
 
 def test_coordinator_safe_commit_spaced_path_mention_in_unrelated_command_allows(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """A spaced Windows coordinator-safe-commit path mentioned as a plain
     ARGUMENT to an unrelated command (not at argv0 position) must not be
     rewritten into a recognized invocation -- counterpart of
@@ -410,14 +410,14 @@ def test_coordinator_safe_commit_spaced_path_mention_in_unrelated_command_allows
     )
 
 
-def test_git_exe_spaced_path_already_quoted_double_commit_denies(monkeypatch):
+def test_git_exe_spaced_path_already_quoted_double_commit_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """An already double-quoted spaced path must still deny -- the
     normalization must not double-wrap an already-quoted token.
     """
     _denies(monkeypatch, '"C:\\Program Files\\Git\\bin\\git.exe" commit -m "msg"')
 
 
-def test_git_exe_spaced_path_mention_in_unrelated_command_allows(monkeypatch):
+def test_git_exe_spaced_path_mention_in_unrelated_command_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """A spaced Windows git.exe path mentioned as a plain ARGUMENT to an
     unrelated command (not at argv0 position) must not be rewritten into a
     recognized invocation -- the argv0-head regex is anchored to command/
@@ -429,7 +429,7 @@ def test_git_exe_spaced_path_mention_in_unrelated_command_allows(monkeypatch):
     )
 
 
-def test_evil_git_hyphen_suffix_allows(monkeypatch):
+def test_evil_git_hyphen_suffix_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """``evil-git`` is a single bareword token whose character immediately
     preceding the ``git`` suffix is a hyphen, not a path separator -- same
     boundary rule as ``evil-coordinator-safe-commit`` below. Not a
@@ -438,15 +438,15 @@ def test_evil_git_hyphen_suffix_allows(monkeypatch):
     _allows(monkeypatch, 'evil-git commit -m x')
 
 
-def test_mygit_allows(monkeypatch):
+def test_mygit_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     _allows(monkeypatch, 'mygit commit -m x')
 
 
-def test_gitlab_allows(monkeypatch):
+def test_gitlab_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     _allows(monkeypatch, 'gitlab commit -m x')
 
 
-def test_evil_coordinator_safe_commit_hyphen_suffix_allows(monkeypatch):
+def test_evil_coordinator_safe_commit_hyphen_suffix_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """Boundary semantics chosen: PATH-SEPARATOR boundary, not hyphen
     boundary (mirrors ``block_reviewer_bash_outside_allowlist.py``'s
     ``_token_matches_binary``). ``evil-coordinator-safe-commit`` is a
@@ -460,7 +460,7 @@ def test_evil_coordinator_safe_commit_hyphen_suffix_allows(monkeypatch):
     _allows(monkeypatch, 'evil-coordinator-safe-commit -m "msg"')
 
 
-def test_evil_coordinator_safe_commit_cmd_suffix_allows(monkeypatch):
+def test_evil_coordinator_safe_commit_cmd_suffix_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """Same hyphen-boundary check, ``.cmd``-suffixed -- the generalized
     launcher-suffix stripping (2026-07-29 part 4) must not turn a hyphen
     boundary into a separator boundary: suffix-stripping happens on the
@@ -469,7 +469,7 @@ def test_evil_coordinator_safe_commit_cmd_suffix_allows(monkeypatch):
     _allows(monkeypatch, 'evil-coordinator-safe-commit.cmd -m "msg"')
 
 
-def test_evil_coordinator_safe_commit_windows_path_allows(monkeypatch):
+def test_evil_coordinator_safe_commit_windows_path_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """A Windows path whose basename is ``evil-coordinator-safe-commit``
     (hyphen-adjacent, not path-separator-adjacent) must not be recognized
     by the generalized ``_WINDOWS_ARGV0_HEAD_PATH_RE`` alternation either --
@@ -488,70 +488,70 @@ def test_evil_coordinator_safe_commit_windows_path_allows(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_ceremony_scoped_git_commit_python3_dash_m_denies(monkeypatch):
+def test_ceremony_scoped_git_commit_python3_dash_m_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(
         monkeypatch,
         "python3 -m coordinator_core.invoke ceremony.scoped_git_commit '{}'",
     )
 
 
-def test_ceremony_scoped_git_commit_python_dash_m_denies(monkeypatch):
+def test_ceremony_scoped_git_commit_python_dash_m_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(
         monkeypatch,
         "python -m coordinator_core.invoke ceremony.scoped_git_commit '{}'",
     )
 
 
-def test_ceremony_scoped_git_commit_absolute_interpreter_path_denies(monkeypatch):
+def test_ceremony_scoped_git_commit_absolute_interpreter_path_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(
         monkeypatch,
         "/usr/bin/python3 -m coordinator_core.invoke ceremony.scoped_git_commit '{}'",
     )
 
 
-def test_ceremony_scoped_git_commit_exe_suffixed_interpreter_denies(monkeypatch):
+def test_ceremony_scoped_git_commit_exe_suffixed_interpreter_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(
         monkeypatch,
         "python3.exe -m coordinator_core.invoke ceremony.scoped_git_commit '{}'",
     )
 
 
-def test_ceremony_scoped_git_commit_env_prefixed_denies(monkeypatch):
+def test_ceremony_scoped_git_commit_env_prefixed_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(
         monkeypatch,
         "env FOO=1 python3 -m coordinator_core.invoke ceremony.scoped_git_commit '{}'",
     )
 
 
-def test_ceremony_scoped_git_commit_bare_env_assignment_prefixed_denies(monkeypatch):
+def test_ceremony_scoped_git_commit_bare_env_assignment_prefixed_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(
         monkeypatch,
         "FOO=1 python3 -m coordinator_core.invoke ceremony.scoped_git_commit '{}'",
     )
 
 
-def test_ceremony_scoped_git_commit_wrapper_prefixed_denies(monkeypatch):
+def test_ceremony_scoped_git_commit_wrapper_prefixed_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(
         monkeypatch,
         "timeout 30 python3 -m coordinator_core.invoke ceremony.scoped_git_commit '{}'",
     )
 
 
-def test_ceremony_scoped_git_commit_with_repo_flag_denies(monkeypatch):
+def test_ceremony_scoped_git_commit_with_repo_flag_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(
         monkeypatch,
         "python3 -m coordinator_core.invoke ceremony.scoped_git_commit '{}' --repo /x",
     )
 
 
-def test_ceremony_scoped_git_commit_shell_c_wrapped_denies(monkeypatch):
+def test_ceremony_scoped_git_commit_shell_c_wrapped_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(
         monkeypatch,
         "sh -c 'python3 -m coordinator_core.invoke ceremony.scoped_git_commit \"{}\"'",
     )
 
 
-def test_ceremony_scoped_git_commit_chained_denies(monkeypatch):
+def test_ceremony_scoped_git_commit_chained_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(
         monkeypatch,
         "python3 -m coordinator_core.invoke ceremony.scoped_git_commit '{}' && echo done",
@@ -577,7 +577,7 @@ def test_ceremony_scoped_git_commit_chained_denies(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_coordinator_safe_commit_single_command_piped_denies(monkeypatch):
+def test_coordinator_safe_commit_single_command_piped_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """Unscoped single-command form, piped through ``tail`` -- the shape
     reported as "succeeded normally" (i.e. reached a verdict, no crash) in
     the live incident.
@@ -588,7 +588,7 @@ def test_coordinator_safe_commit_single_command_piped_denies(monkeypatch):
     )
 
 
-def test_coordinator_safe_commit_semicolon_chained_piped_denies(monkeypatch):
+def test_coordinator_safe_commit_semicolon_chained_piped_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """The exact incident shape: a benign command piped through ``tail``,
     ``;``-chained with a ``coordinator-safe-commit`` invocation also piped
     through ``tail``. Must deny, and must not raise.
@@ -600,7 +600,7 @@ def test_coordinator_safe_commit_semicolon_chained_piped_denies(monkeypatch):
     )
 
 
-def test_git_commit_semicolon_chained_piped_denies(monkeypatch):
+def test_git_commit_semicolon_chained_piped_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """Same chained-and-piped shape, plain ``git commit`` leg."""
     _denies(
         monkeypatch,
@@ -608,7 +608,7 @@ def test_git_commit_semicolon_chained_piped_denies(monkeypatch):
     )
 
 
-def test_ceremony_scoped_git_commit_semicolon_chained_piped_denies(monkeypatch):
+def test_ceremony_scoped_git_commit_semicolon_chained_piped_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """Same chained-and-piped shape, the ceremony-op invocation leg."""
     _denies(
         monkeypatch,
@@ -617,7 +617,7 @@ def test_ceremony_scoped_git_commit_semicolon_chained_piped_denies(monkeypatch):
     )
 
 
-def test_ceremony_invoke_different_op_allows(monkeypatch):
+def test_ceremony_invoke_different_op_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """A DIFFERENT op dispatched through the same generic CLI (not the
     commit op) must not be denied by this guard -- it is not in scope for
     an EM-only commit gate.
@@ -628,7 +628,7 @@ def test_ceremony_invoke_different_op_allows(monkeypatch):
     )
 
 
-def test_ceremony_invoke_module_mention_in_prose_allows(monkeypatch):
+def test_ceremony_invoke_module_mention_in_prose_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """The module/op names appearing as plain prose text (not an actual
     invocation) must not be denied.
     """
@@ -638,7 +638,7 @@ def test_ceremony_invoke_module_mention_in_prose_allows(monkeypatch):
     )
 
 
-def test_ceremony_scoped_git_commit_em_main_loop_allows():
+def test_ceremony_scoped_git_commit_em_main_loop_allows() -> None:
     """No ``agent_id`` in the payload -> EM main-loop -> allowed exactly
     like a plain ``git commit``.
     """
@@ -654,27 +654,27 @@ def test_ceremony_scoped_git_commit_em_main_loop_allows():
 # ---------------------------------------------------------------------------
 
 
-def test_non_bash_tool_allows():
+def test_non_bash_tool_allows() -> None:
     payload = {"tool_name": "Write", "tool_input": {"command": "git commit -m x"}}
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_status_allows(monkeypatch):
+def test_git_status_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     _allows(monkeypatch, "git status")
 
 
-def test_git_log_allows(monkeypatch):
+def test_git_log_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     _allows(monkeypatch, "git log --oneline")
 
 
-def test_git_commitment_fund_subcommand_allows(monkeypatch):
+def test_git_commitment_fund_subcommand_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """``commitment-fund`` is not the ``commit`` subcommand token -- the
     token walk requires an exact ``commit`` token, not a prefix match.
     """
     _allows(monkeypatch, "git commitment-fund --help")
 
 
-def test_echo_commit_words_allows(monkeypatch):
+def test_echo_commit_words_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """``commit`` appears in the string but there is no ``git``/
     ``coordinator-safe-commit`` invocation at all -- the pre-filter's
     over-approximation correctly lets this through to the full matchers,
@@ -683,19 +683,19 @@ def test_echo_commit_words_allows(monkeypatch):
     _allows(monkeypatch, 'echo "commit early commit often"')
 
 
-def test_no_agent_id_em_main_loop_allows():
+def test_no_agent_id_em_main_loop_allows() -> None:
     payload = _payload("git commit -m x", agent_id=None)
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_plain_git_commit_still_denies(monkeypatch):
+def test_plain_git_commit_still_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pre-existing baseline case (not a bypass) -- must remain denied
     after the hardening.
     """
     _denies(monkeypatch, 'git commit -m "msg"')
 
 
-def test_unresolvable_agent_id_still_denies_via_agent_type_leg(monkeypatch):
+def test_unresolvable_agent_id_still_denies_via_agent_type_leg(monkeypatch: pytest.MonkeyPatch) -> None:
     """2026-07-30 fix: an unparseable ``agent_id`` used to short-circuit to
     allow BEFORE the (already-known) ``agent_type`` leg was even consulted
     -- so a payload that plainly named its caller as ``coordinator:executor``
@@ -711,7 +711,7 @@ def test_unresolvable_agent_id_still_denies_via_agent_type_leg(monkeypatch):
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_no_effective_type_confines_as_subagent(monkeypatch):
+def test_no_effective_type_confines_as_subagent(monkeypatch: pytest.MonkeyPatch) -> None:
     """2026-07-30 fix: a subagent (raw agent_id present) whose KIND could
     not be resolved via either OR-resolver leg -- unreadable/missing
     backpointer chain, no ``agent_type`` in the payload -- is still a
@@ -730,7 +730,7 @@ def test_no_effective_type_confines_as_subagent(monkeypatch):
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_empty_command_allows(monkeypatch):
+def test_empty_command_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     _subagent(monkeypatch)
     payload = _payload("", agent_type=_SUBAGENT_TYPE)
     assert _enveloped(guard.check)(payload) is None
@@ -746,7 +746,7 @@ def test_empty_command_allows(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_heredoc_prose_about_commit_mechanics_allows(monkeypatch):
+def test_heredoc_prose_about_commit_mechanics_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """The reported shape: a bash heredoc writes a markdown review sidecar
     whose PROSE body discusses this very guard's git-commit enforcement.
     The executed command (``cat <<'EOF' > review.md`` ... ``EOF``) runs no
@@ -764,7 +764,7 @@ def test_heredoc_prose_about_commit_mechanics_allows(monkeypatch):
     _allows(monkeypatch, cmd)
 
 
-def test_heredoc_prose_git_commit_adjacent_words_allows(monkeypatch):
+def test_heredoc_prose_git_commit_adjacent_words_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """Even a heredoc body where the words ``git`` and ``commit`` appear
     literally adjacent (no punctuation between them) must not be scanned --
     the body is stdin data for ``cat``, never shell command tokens.
@@ -777,7 +777,7 @@ def test_heredoc_prose_git_commit_adjacent_words_allows(monkeypatch):
     _allows(monkeypatch, cmd)
 
 
-def test_heredoc_introducer_with_real_git_commit_still_denies(monkeypatch):
+def test_heredoc_introducer_with_real_git_commit_still_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """A heredoc body is stripped, but the command LINE that introduces it
     is not -- a genuine ``git commit`` on that same line must still deny.
     """
@@ -789,17 +789,17 @@ def test_heredoc_introducer_with_real_git_commit_still_denies(monkeypatch):
     _denies(monkeypatch, cmd)
 
 
-def test_git_commit_followed_by_ampersand_chain_denies(monkeypatch):
+def test_git_commit_followed_by_ampersand_chain_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """A real ``git commit`` chained with ``&&`` still denies."""
     _denies(monkeypatch, 'git add -- foo.py && git commit -m "msg"')
 
 
-def test_git_dash_capital_c_path_flag_denies(monkeypatch):
+def test_git_dash_capital_c_path_flag_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """``git -C <path> commit`` still denies after the tokenizer switch."""
     _denies(monkeypatch, 'git -C /some/repo commit -m "msg"')
 
 
-def test_quoted_multiword_argument_mentioning_git_commit_allows(monkeypatch):
+def test_quoted_multiword_argument_mentioning_git_commit_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """``commit`` (and even the word ``git``) inside a SINGLE quoted
     argument to a non-git command is not a git invocation -- the quoted
     span is one shlex word, not separate executable tokens.
@@ -818,7 +818,7 @@ def test_quoted_multiword_argument_mentioning_git_commit_allows(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_python3_dash_c_scoped_git_commit_trampoline_denies(monkeypatch):
+def test_python3_dash_c_scoped_git_commit_trampoline_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """The exact repro this chunk closes: a ``scoped-git-commit`` invocation
     quoted as the ``-c`` payload to ``python3`` was previously ALLOWED
     outright by all three matchers.
@@ -829,27 +829,27 @@ def test_python3_dash_c_scoped_git_commit_trampoline_denies(monkeypatch):
     )
 
 
-def test_python3_dash_c_git_commit_denies(monkeypatch):
+def test_python3_dash_c_git_commit_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(monkeypatch, 'python3 -c "import os; os.system(\'git commit -m x\')"')
 
 
-def test_python_bare_dash_c_git_commit_denies(monkeypatch):
+def test_python_bare_dash_c_git_commit_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """Bare ``python`` (not ``python3``) spelling."""
     _denies(monkeypatch, 'python -c "import os; os.system(\'git commit -m x\')"')
 
 
-def test_python3_versioned_dash_c_git_commit_denies(monkeypatch):
+def test_python3_versioned_dash_c_git_commit_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """A versioned interpreter basename (``python3.11``) must normalize to
     the same identity as bare ``python3``.
     """
     _denies(monkeypatch, 'python3.11 -c "import os; os.system(\'git commit -m x\')"')
 
 
-def test_python_dotted_patch_version_dash_c_git_commit_denies(monkeypatch):
+def test_python_dotted_patch_version_dash_c_git_commit_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(monkeypatch, 'python3.12.1 -c "import os; os.system(\'git commit -m x\')"')
 
 
-def test_python3_absolute_path_dash_c_git_commit_denies(monkeypatch):
+def test_python3_absolute_path_dash_c_git_commit_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """Interpreter-path-prefixed spelling (``/usr/bin/python3``)."""
     _denies(
         monkeypatch,
@@ -857,7 +857,7 @@ def test_python3_absolute_path_dash_c_git_commit_denies(monkeypatch):
     )
 
 
-def test_python_venv_relative_path_dash_c_git_commit_denies(monkeypatch):
+def test_python_venv_relative_path_dash_c_git_commit_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """Interpreter-path-prefixed spelling (``.venv/bin/python``)."""
     _denies(
         monkeypatch,
@@ -865,7 +865,7 @@ def test_python_venv_relative_path_dash_c_git_commit_denies(monkeypatch):
     )
 
 
-def test_python_windows_backslash_path_dash_c_git_commit_denies(monkeypatch):
+def test_python_windows_backslash_path_dash_c_git_commit_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """Windows backslash-path-prefixed, ``.exe``-suffixed spelling (a
     relative launcher-directory suffix, deliberately no drive letter --
     test fixture text, not a citation of any real machine path).
@@ -876,18 +876,18 @@ def test_python_windows_backslash_path_dash_c_git_commit_denies(monkeypatch):
     )
 
 
-def test_python3_bundled_dash_i_c_flag_git_commit_denies(monkeypatch):
+def test_python3_bundled_dash_i_c_flag_git_commit_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """Bundled short flag (``-ic``), mirroring the existing shell ``-ic``
     coverage above for ``_BUNDLED_C_FLAG_RE``.
     """
     _denies(monkeypatch, 'python3 -ic "import os; os.system(\'git commit -m x\')"')
 
 
-def test_python3_dash_c_coordinator_safe_commit_denies(monkeypatch):
+def test_python3_dash_c_coordinator_safe_commit_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(monkeypatch, 'python3 -c "import os; os.system(\'coordinator-safe-commit -m x\')"')
 
 
-def test_python3_dash_c_ceremony_scoped_git_commit_invoke_denies(monkeypatch):
+def test_python3_dash_c_ceremony_scoped_git_commit_invoke_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(
         monkeypatch,
         "python3 -c \"import subprocess; subprocess.run(['python3','-m',"
@@ -895,7 +895,7 @@ def test_python3_dash_c_ceremony_scoped_git_commit_invoke_denies(monkeypatch):
     )
 
 
-def test_python3_dash_c_env_prefixed_denies(monkeypatch):
+def test_python3_dash_c_env_prefixed_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """``env python3 -c '...'`` -- same env-prefix peel as the shell case."""
     _denies(
         monkeypatch,
@@ -903,7 +903,7 @@ def test_python3_dash_c_env_prefixed_denies(monkeypatch):
     )
 
 
-def test_shell_wrapping_python_dash_c_nested_denies(monkeypatch):
+def test_shell_wrapping_python_dash_c_nested_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """``sh -c 'python3 -c "..."'`` -- a Python ``-c`` payload nested inside
     a shell ``-c`` payload, confirming the two interpreter families
     interoperate through the shared recursive unwrap.
@@ -914,7 +914,7 @@ def test_shell_wrapping_python_dash_c_nested_denies(monkeypatch):
     )
 
 
-def test_python3_dash_c_unrelated_payload_allows(monkeypatch):
+def test_python3_dash_c_unrelated_payload_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """A ``python3 -c`` payload that mentions neither ``commit`` nor any
     committing op must not be denied -- confirms the widened unwrap did not
     turn into an over-broad "any python3 -c denies" rule.
@@ -922,14 +922,14 @@ def test_python3_dash_c_unrelated_payload_allows(monkeypatch):
     _allows(monkeypatch, 'python3 -c "print(\'hello world\')"')
 
 
-def test_python3_dash_m_pytest_allows(monkeypatch):
+def test_python3_dash_m_pytest_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """A completely ordinary, non-``-c`` Python invocation (running the
     test suite) must not be affected by the widened interpreter check.
     """
     _allows(monkeypatch, "python3 -m pytest -q")
 
 
-def test_normalized_interpreter_head_strips_version_and_path():
+def test_normalized_interpreter_head_strips_version_and_path() -> None:
     """Unit-level pin on the new normalization helper directly, independent
     of the full ``check()`` seam.
     """
@@ -946,7 +946,7 @@ def test_normalized_interpreter_head_strips_version_and_path():
     assert guard._normalized_interpreter_head("pythonista") == "pythonista"
 
 
-def test_wrapped_shell_c_payloads_yields_python_dash_c_payload():
+def test_wrapped_shell_c_payloads_yields_python_dash_c_payload() -> None:
     """Unit-level pin on the shared unwrap generator itself: a Python
     ``-c`` payload is yielded exactly like a shell ``-c`` payload is (AC2 --
     same routine, no fourth matcher).
@@ -957,7 +957,7 @@ def test_wrapped_shell_c_payloads_yields_python_dash_c_payload():
     assert payloads == ["git commit -m x"]
 
 
-def test_wrapped_shell_c_payloads_honours_max_unwrap_depth():
+def test_wrapped_shell_c_payloads_honours_max_unwrap_depth() -> None:
     """A Python ``-c`` payload nested past ``_MAX_COMMIT_UNWRAP_DEPTH`` is
     not infinitely unwrapped -- same bound the shell case already honours.
     """
@@ -1026,7 +1026,7 @@ def _reason(monkeypatch, cmd):
 
 
 @pytest.mark.parametrize("cmd,expect_deny", _VERDICT_PARITY_MATRIX)
-def test_payload_leg_threading_changes_no_verdict(monkeypatch, cmd, expect_deny):
+def test_payload_leg_threading_changes_no_verdict(monkeypatch: pytest.MonkeyPatch, cmd, expect_deny) -> None:
     """AC1: threading the leg tag out of the unwrap is MESSAGE SELECTION
     ONLY -- every command that denied before still denies, every command
     that allowed still allows.
@@ -1040,7 +1040,7 @@ def test_payload_leg_threading_changes_no_verdict(monkeypatch, cmd, expect_deny)
 @pytest.mark.parametrize("cmd,_expect_deny", _VERDICT_PARITY_MATRIX)
 def test_matchers_return_the_same_verdict_with_and_without_a_leg_collector(
     cmd, _expect_deny
-):
+) -> None:
     """The collector is optional by construction: a ``None`` ``legs``
     argument must leave each matcher byte-identical in behaviour to the
     same call with a collector attached.
@@ -1054,7 +1054,7 @@ def test_matchers_return_the_same_verdict_with_and_without_a_leg_collector(
         assert matcher(cmd) == matcher(cmd, legs=set()), (matcher.__name__, cmd)
 
 
-def test_provably_inert_read_only_payload_now_allows(monkeypatch):
+def test_provably_inert_read_only_payload_now_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """Part 14 supersedes part 13's verdict for this ONE shape: the reported
     incident command carries no execution sink at all
     (``_python_c_payload_is_provably_inert``), so the reconstruction leg is
@@ -1065,7 +1065,7 @@ def test_provably_inert_read_only_payload_now_allows(monkeypatch):
     _allows(monkeypatch, _READ_ONLY_PAYLOAD_NAMING_THE_HELPER)
 
 
-def test_read_only_python_c_payload_deny_message_names_the_payload_leg(monkeypatch):
+def test_read_only_python_c_payload_deny_message_names_the_payload_leg(monkeypatch: pytest.MonkeyPatch) -> None:
     """The reported incident's message fix, still live for every read-only
     payload the inert allowlist cannot PROVE sinkless (here: ``pathlib``,
     outside the import allowlist). The generic "finish your edits and report
@@ -1081,7 +1081,7 @@ def test_read_only_python_c_payload_deny_message_names_the_payload_leg(monkeypat
     assert "report to the EM" not in reason
 
 
-def test_python_c_subprocess_commit_gets_the_same_payload_leg_message(monkeypatch):
+def test_python_c_subprocess_commit_gets_the_same_payload_leg_message(monkeypatch: pytest.MonkeyPatch) -> None:
     """The genuinely-committing shape gets the SAME message, and that is the
     honest answer: the reconstruction discards all Python syntax between the
     literals, so it cannot tell this apart from the read-only command above.
@@ -1095,7 +1095,7 @@ def test_python_c_subprocess_commit_gets_the_same_payload_leg_message(monkeypatc
     assert reason == guard._PYTHON_C_PAYLOAD_DENY_REASON
 
 
-def test_plain_commit_deny_message_is_still_the_generic_one(monkeypatch):
+def test_plain_commit_deny_message_is_still_the_generic_one(monkeypatch: pytest.MonkeyPatch) -> None:
     """No leg tag, no new message -- the generic text is unchanged for every
     command that did not reach a match through the reconstruction.
     """
@@ -1104,7 +1104,7 @@ def test_plain_commit_deny_message_is_still_the_generic_one(monkeypatch):
     assert reason != guard._PYTHON_C_PAYLOAD_DENY_REASON
 
 
-def test_shell_c_payload_deny_message_is_still_the_generic_one(monkeypatch):
+def test_shell_c_payload_deny_message_is_still_the_generic_one(monkeypatch: pytest.MonkeyPatch) -> None:
     """A shell `-c` payload is genuinely executed text, not a reconstruction
     -- it carries no tag and must keep the generic message.
     """
@@ -1112,7 +1112,7 @@ def test_shell_c_payload_deny_message_is_still_the_generic_one(monkeypatch):
     assert reason == guard._deny_reason("a", _SUBAGENT_TYPE, _SUBAGENT_TYPE, "cmd")
 
 
-def test_python_c_payload_leg_message_fits_prose_cap():
+def test_python_c_payload_leg_message_fits_prose_cap() -> None:
     from coordinator_core.bash_guards._message_size import (
         MESSAGE_PROSE_CAP_BYTES,
         measure_envelope,
@@ -1125,7 +1125,7 @@ def test_python_c_payload_leg_message_fits_prose_cap():
     assert measurement.prose_bytes <= MESSAGE_PROSE_CAP_BYTES
 
 
-def test_payload_leg_message_is_selected_by_the_threaded_tag_not_by_rescanning():
+def test_payload_leg_message_is_selected_by_the_threaded_tag_not_by_rescanning() -> None:
     """`_deny_reason` must not re-derive the leg from ``cmd``: handed the
     triggering command text but an EMPTY ``command_leg``, it falls back to
     the generic message. A second, independently-derived notion of why this
@@ -1146,7 +1146,7 @@ def test_payload_leg_message_is_selected_by_the_threaded_tag_not_by_rescanning()
     assert tagged == guard._PYTHON_C_PAYLOAD_DENY_REASON
 
 
-def test_payload_leg_selection_is_keyed_on_command_shape_not_identity():
+def test_payload_leg_selection_is_keyed_on_command_shape_not_identity() -> None:
     """The new branch reads no identity field, so it cannot become the
     probing seam `_deny_reason`'s own Finding-2 note describes -- the same
     tag yields the same message for every ``agent_type``/``effective_type``
@@ -1173,7 +1173,7 @@ def test_payload_leg_selection_is_keyed_on_command_shape_not_identity():
         ), (agent_type, effective_type)
 
 
-def test_wrapped_shell_c_payload_legs_tags_only_the_reconstruction():
+def test_wrapped_shell_c_payload_legs_tags_only_the_reconstruction() -> None:
     """Unit pin on the tagging seam itself: a payload a real interpreter
     received carries no tag; the synthetic argv line rebuilt from the
     payload's own string literals carries `_PAYLOAD_LEG_PYTHON_STRING_
@@ -1194,7 +1194,7 @@ def test_wrapped_shell_c_payload_legs_tags_only_the_reconstruction():
     assert shell_only == [("git commit -m x", "")]
 
 
-def test_untagged_generator_view_is_unchanged():
+def test_untagged_generator_view_is_unchanged() -> None:
     """`_wrapped_shell_c_payloads` keeps its original signature and yield
     list -- callers that only need payload TEXT never see the tag.
     """
@@ -1267,7 +1267,7 @@ def _git_commit_agent_setup(
         guard, "_read_backpointer_subagent_type", lambda git_root, agent_id: subagent_type
     )
 
-    def _spy(session_id, paths, cwd=None, *, allow_orphans=False):
+    def _spy(session_id, paths, cwd=None, *, allow_orphans: bool = False):
         calls.append(
             {
                 "session_id": session_id,
@@ -1292,7 +1292,7 @@ def _gca_denies(monkeypatch, cmd, agent_type=_GIT_COMMIT_AGENT_TYPE, **setup_kwa
     return result
 
 
-def _gca_allows(monkeypatch, cmd, agent_type=_GIT_COMMIT_AGENT_TYPE, **setup_kwargs):
+def _gca_allows(monkeypatch, cmd, agent_type=_GIT_COMMIT_AGENT_TYPE, **setup_kwargs) -> None:
     _git_commit_agent_setup(monkeypatch, **setup_kwargs)
     result = _enveloped(guard.check)(_payload(cmd, agent_type=agent_type))
     assert result is None, f"expected ALLOW for: {cmd!r}, got {result!r}"
@@ -1301,11 +1301,11 @@ def _gca_allows(monkeypatch, cmd, agent_type=_GIT_COMMIT_AGENT_TYPE, **setup_kwa
 # --- AC6: the full deny matrix (non-scoped shapes; empty/absent pathspec) ---
 
 
-def test_git_commit_agent_bare_git_commit_denies(monkeypatch):
+def test_git_commit_agent_bare_git_commit_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _gca_denies(monkeypatch, 'git commit -m "msg"')
 
 
-def test_git_commit_agent_git_commit_dash_a_denies(monkeypatch):
+def test_git_commit_agent_git_commit_dash_a_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _gca_denies(monkeypatch, 'git commit -a -m "msg"')
 
 
@@ -1328,41 +1328,41 @@ def test_git_commit_agent_git_commit_dash_a_denies(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_git_commit_agent_plain_git_commit_scoped_pathspec_allows(monkeypatch):
+def test_git_commit_agent_plain_git_commit_scoped_pathspec_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     _gca_allows(monkeypatch, 'git commit -m "msg" -- src/foo.py')
 
 
 def test_git_commit_agent_plain_git_commit_global_opts_scoped_pathspec_allows(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _gca_allows(
         monkeypatch, 'git -C /repo commit -m "msg" -- src/foo.py src/bar.py'
     )
 
 
-def test_git_commit_agent_plain_git_commit_no_pathspec_still_denies(monkeypatch):
+def test_git_commit_agent_plain_git_commit_no_pathspec_still_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _gca_denies(monkeypatch, 'git commit -m "msg"')
 
 
 def test_git_commit_agent_plain_git_commit_dash_a_with_pathspec_still_denies(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _gca_denies(monkeypatch, 'git commit -a -m "msg" -- src/foo.py')
 
 
 def test_git_commit_agent_plain_git_commit_dash_all_with_pathspec_still_denies(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _gca_denies(monkeypatch, 'git commit --all -m "msg" -- src/foo.py')
 
 
 def test_git_commit_agent_plain_git_commit_sweeping_dot_pathspec_still_denies(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     _gca_denies(monkeypatch, 'git commit -m "msg" -- .')
 
 
-def test_git_commit_agent_git_add_dash_capital_a_denies(monkeypatch):
+def test_git_commit_agent_git_add_dash_capital_a_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """NOTE: ``git add -A`` is pre-existing OUT OF SCOPE for this guard's
     matchers regardless of subagent type or this chunk -- it stages but does
     not commit, and none of ``_has_git_commit``/``_has_coordinator_safe_
@@ -1377,7 +1377,7 @@ def test_git_commit_agent_git_add_dash_capital_a_denies(monkeypatch):
     _gca_denies(monkeypatch, 'git commit -a -m "msg"')
 
 
-def test_git_commit_agent_coordinator_safe_commit_denies(monkeypatch):
+def test_git_commit_agent_coordinator_safe_commit_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """``coordinator-safe-commit`` is a DIFFERENT helper from
     ``scoped-git-commit`` -- LEG 2 requires the invocation to resolve to
     ``ceremony.scoped_git_commit`` specifically (the only op with an
@@ -1386,7 +1386,7 @@ def test_git_commit_agent_coordinator_safe_commit_denies(monkeypatch):
     _gca_denies(monkeypatch, 'coordinator-safe-commit -m "msg"')
 
 
-def test_git_commit_agent_scoped_git_commit_empty_pathspec_denies(monkeypatch):
+def test_git_commit_agent_scoped_git_commit_empty_pathspec_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _gca_denies(
         monkeypatch,
         "python3 -m coordinator_core.invoke ceremony.scoped_git_commit "
@@ -1394,7 +1394,7 @@ def test_git_commit_agent_scoped_git_commit_empty_pathspec_denies(monkeypatch):
     )
 
 
-def test_git_commit_agent_scoped_git_commit_absent_pathspec_denies(monkeypatch):
+def test_git_commit_agent_scoped_git_commit_absent_pathspec_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _gca_denies(
         monkeypatch,
         "python3 -m coordinator_core.invoke ceremony.scoped_git_commit "
@@ -1402,11 +1402,11 @@ def test_git_commit_agent_scoped_git_commit_absent_pathspec_denies(monkeypatch):
     )
 
 
-def test_git_commit_agent_trampoline_no_paths_after_separator_denies(monkeypatch):
+def test_git_commit_agent_trampoline_no_paths_after_separator_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _gca_denies(monkeypatch, 'scoped-git-commit -m "msg" --')
 
 
-def test_git_commit_agent_scoped_git_commit_params_file_form_denies(monkeypatch):
+def test_git_commit_agent_scoped_git_commit_params_file_form_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """``--params-file`` payload text is never visible in argv -- not
     determinable from ``cmd`` at all, treated identically to an absent
     pathspec (deny), never as an implicit allow.
@@ -1441,14 +1441,14 @@ def test_git_commit_agent_scoped_git_commit_params_file_form_denies(monkeypatch)
         "--all",
     ],
 )
-def test_git_commit_agent_ac14_sweeping_pathspec_forms_deny(monkeypatch, sweeping_element):
+def test_git_commit_agent_ac14_sweeping_pathspec_forms_deny(monkeypatch: pytest.MonkeyPatch, sweeping_element) -> None:
     _gca_denies(
         monkeypatch,
         'git commit -m "msg" -- %s' % sweeping_element,
     )
 
 
-def test_git_commit_agent_one_sweeping_element_among_others_denies(monkeypatch):
+def test_git_commit_agent_one_sweeping_element_among_others_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """A single sweeping element among otherwise-fine ones still denies the
     WHOLE pathspec (AC14) -- this is not an element-by-element filter.
     """
@@ -1461,11 +1461,11 @@ def test_git_commit_agent_one_sweeping_element_among_others_denies(monkeypatch):
 # --- The one allowed shape: explicit, non-sweeping pathspec ---
 
 
-def test_git_commit_agent_scoped_git_commit_trampoline_explicit_pathspec_allows(monkeypatch):
+def test_git_commit_agent_scoped_git_commit_trampoline_explicit_pathspec_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     _gca_allows(monkeypatch, 'git commit -m "msg" -- src/foo.py')
 
 
-def test_git_commit_agent_scoped_git_commit_invoke_explicit_pathspec_allows(monkeypatch):
+def test_git_commit_agent_scoped_git_commit_invoke_explicit_pathspec_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     _gca_allows(
         monkeypatch,
         "python3 -m coordinator_core.invoke ceremony.commit_v2 "
@@ -1473,14 +1473,14 @@ def test_git_commit_agent_scoped_git_commit_invoke_explicit_pathspec_allows(monk
     )
 
 
-def test_git_commit_agent_scoped_git_commit_multiple_non_sweeping_paths_allows(monkeypatch):
+def test_git_commit_agent_scoped_git_commit_multiple_non_sweeping_paths_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     _gca_allows(
         monkeypatch,
         'git commit -m "msg" -- src/foo.py docs/bar.md',
     )
 
 
-def test_git_commit_agent_allow_branch_is_gated_by_may_commit_helper(monkeypatch):
+def test_git_commit_agent_allow_branch_is_gated_by_may_commit_helper(monkeypatch: pytest.MonkeyPatch) -> None:
     """Mutation check: forcing ``_git_commit_agent_may_commit`` to always
     return ``False`` turns the otherwise-allowed sanctioned-route command
     into a deny -- confirms the allow branch is actually gated by that
@@ -1510,7 +1510,7 @@ def test_git_commit_agent_allow_branch_is_gated_by_may_commit_helper(monkeypatch
 # ---------------------------------------------------------------------------
 
 
-def test_git_commit_agent_chained_second_committing_segment_denies(monkeypatch):
+def test_git_commit_agent_chained_second_committing_segment_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """EM repro #2: a legitimate scoped-commit segment chained via ``;``
     with a second, unvalidated ``git commit -a`` sweep -- previously ALLOWED
     in full, now denies.
@@ -1522,7 +1522,7 @@ def test_git_commit_agent_chained_second_committing_segment_denies(monkeypatch):
     )
 
 
-def test_git_commit_agent_chained_and_second_committing_segment_denies(monkeypatch):
+def test_git_commit_agent_chained_and_second_committing_segment_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """EM repro #3: same shape, chained via ``&&``."""
     _gca_denies(
         monkeypatch,
@@ -1531,7 +1531,7 @@ def test_git_commit_agent_chained_and_second_committing_segment_denies(monkeypat
     )
 
 
-def test_git_commit_agent_chained_semicolon_git_add_dash_capital_a_denies(monkeypatch):
+def test_git_commit_agent_chained_semicolon_git_add_dash_capital_a_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """EM repro #4: a legitimate scoped-commit segment chained via ``;``
     with a second, unvalidated ``git add -A`` (stages the whole tree).
     """
@@ -1541,7 +1541,7 @@ def test_git_commit_agent_chained_semicolon_git_add_dash_capital_a_denies(monkey
     )
 
 
-def test_git_commit_agent_chained_or_second_committing_segment_denies(monkeypatch):
+def test_git_commit_agent_chained_or_second_committing_segment_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _gca_denies(
         monkeypatch,
         'git commit -m "msg" -- src/foo.py || '
@@ -1549,7 +1549,7 @@ def test_git_commit_agent_chained_or_second_committing_segment_denies(monkeypatc
     )
 
 
-def test_git_commit_agent_chained_pipe_second_segment_denies(monkeypatch):
+def test_git_commit_agent_chained_pipe_second_segment_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """The pipe (``|``) separator variant named in the fix brief -- also a
     genuine `_segments_from_tokens` boundary, also denied by the
     single-segment precondition.
@@ -1561,7 +1561,7 @@ def test_git_commit_agent_chained_pipe_second_segment_denies(monkeypatch):
     )
 
 
-def test_git_commit_agent_semicolon_inside_quoted_message_still_allows(monkeypatch):
+def test_git_commit_agent_semicolon_inside_quoted_message_still_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """False-positive check: a ``;`` INSIDE a quoted commit-message argument
     is not a real segment boundary -- an otherwise single-segment, valid,
     non-sweeping-pathspec command must NOT be denied merely because its
@@ -1575,7 +1575,7 @@ def test_git_commit_agent_semicolon_inside_quoted_message_still_allows(monkeypat
     )
 
 
-def test_git_commit_agent_shell_wrapped_compound_payload_denies(monkeypatch):
+def test_git_commit_agent_shell_wrapped_compound_payload_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """Interpreter-payload variant: a single TOP-LEVEL segment (``sh -c
     "..."``) whose ``-c`` payload is itself a compound command chaining a
     scoped invocation with a second, unvalidated committing segment.
@@ -1595,19 +1595,19 @@ def test_git_commit_agent_shell_wrapped_compound_payload_denies(monkeypatch):
     )
 
 
-def test_command_is_single_segment_true_for_ordinary_scoped_commit():
+def test_command_is_single_segment_true_for_ordinary_scoped_commit() -> None:
     assert guard._command_is_single_segment(
         'git commit -m "msg" -- src/foo.py'
     ) is True
 
 
-def test_command_is_single_segment_false_for_semicolon_chain():
+def test_command_is_single_segment_false_for_semicolon_chain() -> None:
     assert guard._command_is_single_segment(
         'git commit -m "msg" -- src/foo.py ; git commit -a -m sweep'
     ) is False
 
 
-def test_command_is_single_segment_false_for_spaced_ampersand_redirect_chain():
+def test_command_is_single_segment_false_for_spaced_ampersand_redirect_chain() -> None:
     """The 2026-08-04 security-audit finding, pinned.
 
     `... & >/dev/null git commit -a -m sweep` is TWO real bash commands, and
@@ -1627,13 +1627,13 @@ def test_command_is_single_segment_false_for_spaced_ampersand_redirect_chain():
     ) is True
 
 
-def test_command_is_single_segment_true_for_quoted_semicolon():
+def test_command_is_single_segment_true_for_quoted_semicolon() -> None:
     assert guard._command_is_single_segment(
         'git commit -m "fix; cleanup" -- src/foo.py'
     ) is True
 
 
-def test_command_is_single_segment_false_for_unparseable_command():
+def test_command_is_single_segment_false_for_unparseable_command() -> None:
     """Fails CLOSED on an unparseable command (unterminated quote)."""
     assert guard._command_is_single_segment('scoped-git-commit -m "unterminated') is False
 
@@ -1650,7 +1650,7 @@ def test_command_is_single_segment_false_for_unparseable_command():
 # from this guard's side because this is where it was observed biting.
 
 
-def test_command_is_single_segment_true_for_trailing_stderr_redirect():
+def test_command_is_single_segment_true_for_trailing_stderr_redirect() -> None:
     """`2>&1` is a redirection, not a control operator -- it starts no new
     command and must not make an ordinary invocation read as compound.
     """
@@ -1659,7 +1659,7 @@ def test_command_is_single_segment_true_for_trailing_stderr_redirect():
     ) is True
 
 
-def test_command_is_single_segment_true_for_fd_dup_and_file_redirects():
+def test_command_is_single_segment_true_for_fd_dup_and_file_redirects() -> None:
     for cmd in (
         'git commit -m "msg" -- src/foo.py >&2',
         'git commit -m "msg" -- src/foo.py &>/tmp/out.log',
@@ -1669,7 +1669,7 @@ def test_command_is_single_segment_true_for_fd_dup_and_file_redirects():
         assert guard._command_is_single_segment(cmd) is True, cmd
 
 
-def test_command_is_single_segment_false_for_background_after_redirect():
+def test_command_is_single_segment_false_for_background_after_redirect() -> None:
     """The re-join must not swallow a REAL separator: a genuine chaining `&`
     after a redirection still bounds a second segment.
     """
@@ -1678,7 +1678,7 @@ def test_command_is_single_segment_false_for_background_after_redirect():
     ) is False
 
 
-def test_git_commit_agent_trailing_stderr_redirect_still_allows(monkeypatch):
+def test_git_commit_agent_trailing_stderr_redirect_still_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """End-to-end repro of the observed incident: the sanctioned form with a
     trailing `2>&1` must reach the ownership leg and be allowed, not denied
     on the single-segment precondition.
@@ -1689,7 +1689,7 @@ def test_git_commit_agent_trailing_stderr_redirect_still_allows(monkeypatch):
     )
 
 
-def test_redirection_target_is_not_treated_as_a_pathspec_element():
+def test_redirection_target_is_not_treated_as_a_pathspec_element() -> None:
     """A redirection and its target are shell syntax the CLI never receives,
     so they must not be handed to the ownership-scope check as paths.
     """
@@ -1701,7 +1701,7 @@ def test_redirection_target_is_not_treated_as_a_pathspec_element():
     ) == (["src/foo.py"], False)
 
 
-def test_pathspec_token_after_a_mid_pathspec_redirect_is_still_checked():
+def test_pathspec_token_after_a_mid_pathspec_redirect_is_still_checked() -> None:
     """A redirect interspersed mid-
     pathspec previously truncated the guard's own ownership check at the
     first redirection token, silently dropping every real path after it
@@ -1720,7 +1720,7 @@ def test_pathspec_token_after_a_mid_pathspec_redirect_is_still_checked():
 # --- 2026-08-04: the deny message must name the leg that actually denied ---
 
 
-def test_compound_command_denial_does_not_blame_the_pathspec(monkeypatch):
+def test_compound_command_denial_does_not_blame_the_pathspec(monkeypatch: pytest.MonkeyPatch) -> None:
     """The defect that stranded two agents: denied on the compound-command
     leg, told to re-check a pathspec the guard never even looked at. Both
     agents had already verified their pathspec with `git status --porcelain`,
@@ -1737,7 +1737,7 @@ def test_compound_command_denial_does_not_blame_the_pathspec(monkeypatch):
     assert "Check path scope" not in reason
 
 
-def test_git_commit_agent_leg_messages_fit_prose_cap():
+def test_git_commit_agent_leg_messages_fit_prose_cap() -> None:
     from coordinator_core.bash_guards._message_size import (
         MESSAGE_PROSE_CAP_BYTES,
         measure_envelope,
@@ -1751,7 +1751,7 @@ def test_git_commit_agent_leg_messages_fit_prose_cap():
         assert measurement.prose_bytes <= MESSAGE_PROSE_CAP_BYTES, leg
 
 
-def test_unknown_leg_sentinel_falls_back_to_the_static_message():
+def test_unknown_leg_sentinel_falls_back_to_the_static_message() -> None:
     """`_deny_reason` maps sentinels through a fixed table, so an
     unrecognized value can only ever reach the static text -- never splice
     caller-supplied prose into the capped envelope.
@@ -1764,7 +1764,7 @@ def test_unknown_leg_sentinel_falls_back_to_the_static_message():
 # --- AC7: type membership alone is not the mechanism ---
 
 
-def test_ac7_type_membership_alone_is_not_the_mechanism(monkeypatch):
+def test_ac7_type_membership_alone_is_not_the_mechanism(monkeypatch: pytest.MonkeyPatch) -> None:
     """AC7: the exemption is keyed on (type AND route AND non-sweeping
     pathspec), never on type membership alone. Two halves:
       (1) the REAL guard denies a bare, pathspec-free ``git commit`` for
@@ -1788,7 +1788,7 @@ def test_ac7_type_membership_alone_is_not_the_mechanism(monkeypatch):
 # --- AC15: the backpointer leg alone is insufficient for LEG 1 ---
 
 
-def test_ac15_backpointer_leg_alone_insufficient_denies(monkeypatch):
+def test_ac15_backpointer_leg_alone_insufficient_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """AC15: empty/absent ``agent_type`` + a backpointer resolving to
     ``coordinator:git-commit-agent`` still DENIES the sanctioned route --
     LEG 1 is keyed strictly on the harness-supplied ``payload["agent_type"]``,
@@ -1812,7 +1812,7 @@ def test_ac15_backpointer_leg_alone_insufficient_denies(monkeypatch):
 # --- AC19: a NAMED (teammate) dispatch denies the sanctioned route ---
 
 
-def test_ac19_named_teammate_dispatch_denies(monkeypatch):
+def test_ac19_named_teammate_dispatch_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """AC19: a NAMED (teammate) dispatch of ``coordinator:git-commit-agent``
     -- ``agent_type`` carries the teammate's NAME, the real type resolves
     only via the forgeable backpointer disk leg -- DENIES the sanctioned
@@ -1830,7 +1830,7 @@ def test_ac19_named_teammate_dispatch_denies(monkeypatch):
 # --- AC8: every other subagent type is unaffected ---
 
 
-def test_ac8_other_subagent_type_scoped_commit_still_denies(monkeypatch):
+def test_ac8_other_subagent_type_scoped_commit_still_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """AC8: every OTHER subagent type's commit verdicts are unchanged --
     ``coordinator:executor`` still denies the exact shape that ALLOWS for
     ``coordinator:git-commit-agent``, and gets the byte-identical generic
@@ -1847,7 +1847,7 @@ def test_ac8_other_subagent_type_scoped_commit_still_denies(monkeypatch):
     assert "git-commit-agent" not in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_ac8_unresolved_effective_type_path_still_denies(monkeypatch):
+def test_ac8_unresolved_effective_type_path_still_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """AC8: the pre-existing fail-closed unresolved-``effective_type`` path
     (no ``agent_type``, no resolvable backpointer) is untouched by C3.
     """
@@ -1863,7 +1863,7 @@ def test_ac8_unresolved_effective_type_path_still_denies(monkeypatch):
 # --- Landing-order safety net (required, not optional) ---
 
 
-def test_landing_order_safety_scope_import_unavailable_denies(monkeypatch):
+def test_landing_order_safety_scope_import_unavailable_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """If ``_assert_paths_in_session_scope`` failed to import (a partial/
     out-of-order landing of C4's ownership check), the allow branch must
     hard-DENY rather than allow -- never treat a missing import as "no
@@ -1880,7 +1880,7 @@ def test_landing_order_safety_scope_import_unavailable_denies(monkeypatch):
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_landing_order_safety_git_root_unresolvable_denies(monkeypatch):
+def test_landing_order_safety_git_root_unresolvable_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """LEG 1 (``agent_type``) is satisfiable with no repo to compute scope
     from at all -- the allow branch must explicitly deny when ``git_root``
     does not resolve, not silently skip the sweeping-pathspec check.
@@ -1916,7 +1916,7 @@ def _cwd_unresolvable_explicit_root_resolves(monkeypatch, explicit_root=_FAKE_RE
     return calls
 
 
-def test_git_dash_c_absolute_root_resolves_when_cwd_unresolvable(monkeypatch):
+def test_git_dash_c_absolute_root_resolves_when_cwd_unresolvable(monkeypatch: pytest.MonkeyPatch) -> None:
     _cwd_unresolvable_explicit_root_resolves(monkeypatch)
     payload = _payload(
         f'git -C {_FAKE_REPO_ROOT} commit -m "msg" -- src/foo.py',
@@ -1925,7 +1925,7 @@ def test_git_dash_c_absolute_root_resolves_when_cwd_unresolvable(monkeypatch):
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_dash_c_relative_root_still_denies(monkeypatch):
+def test_git_dash_c_relative_root_still_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """A RELATIVE ``-C`` value names nothing this guard can anchor without
     the still-unresolved ``cwd`` -- the fallback must not treat it as
     explicit.
@@ -1940,7 +1940,7 @@ def test_git_dash_c_relative_root_still_denies(monkeypatch):
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_git_dash_c_root_failing_toplevel_validation_still_denies(monkeypatch):
+def test_git_dash_c_root_failing_toplevel_validation_still_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """An absolute ``-C`` value that is NOT actually a git toplevel (the
     validation call to the same ``resolve_git_root`` helper returns ``None``
     or a divergent path) must not be trusted as the root.
@@ -1957,7 +1957,7 @@ def test_git_dash_c_root_failing_toplevel_validation_still_denies(monkeypatch):
     assert calls == []
 
 
-def test_commit_v2_cli_dash_dash_repo_absolute_resolves_when_cwd_unresolvable(monkeypatch):
+def test_commit_v2_cli_dash_dash_repo_absolute_resolves_when_cwd_unresolvable(monkeypatch: pytest.MonkeyPatch) -> None:
     _cwd_unresolvable_explicit_root_resolves(monkeypatch)
     payload = _payload(
         "python3 -m coordinator_core.invoke --repo %s ceremony.commit_v2 "
@@ -1968,7 +1968,7 @@ def test_commit_v2_cli_dash_dash_repo_absolute_resolves_when_cwd_unresolvable(mo
 
 
 @pytest.mark.parametrize("key", ["repo", "repo_root"])
-def test_commit_v2_json_repo_keys_are_not_read_as_explicit_root(monkeypatch, key):
+def test_commit_v2_json_repo_keys_are_not_read_as_explicit_root(monkeypatch: pytest.MonkeyPatch, key) -> None:
     """commit_v2 refuses ``repo`` and treats ``repo_root`` as an assertion,
     never the worktree source -- neither anchors the commit, even when the
     named path would validate."""
@@ -1985,7 +1985,7 @@ def test_commit_v2_json_repo_keys_are_not_read_as_explicit_root(monkeypatch, key
     assert calls == []
 
 
-def test_no_explicit_root_named_still_denies_unresolvable(monkeypatch):
+def test_no_explicit_root_named_still_denies_unresolvable(monkeypatch: pytest.MonkeyPatch) -> None:
     """No ``-C``/``--repo``/``repo_root`` anywhere -- the ordinary
     unresolvable-root deny is unchanged.
     """
@@ -2004,12 +2004,12 @@ def test_no_explicit_root_named_still_denies_unresolvable(monkeypatch):
 # --- Direct unit coverage of the extractor itself ---
 
 
-def test_explicit_absolute_root_from_cmd_picks_last_dash_c():
+def test_explicit_absolute_root_from_cmd_picks_last_dash_c() -> None:
     cmd = f'git -C /wrong -C {_FAKE_REPO_ROOT} commit -m "msg" -- src/foo.py'
     assert guard._explicit_absolute_root_from_cmd(cmd) == _FAKE_REPO_ROOT
 
 
-def test_explicit_absolute_root_from_cmd_none_without_commit_subcommand():
+def test_explicit_absolute_root_from_cmd_none_without_commit_subcommand() -> None:
     """A ``-C <abs>`` on a NON-commit git invocation names no root for this
     guard's purpose -- the walk requires the chain to actually reach
     ``commit``, mirroring ``_tokens_reach_commit_after_git``.
@@ -2017,12 +2017,12 @@ def test_explicit_absolute_root_from_cmd_none_without_commit_subcommand():
     assert guard._explicit_absolute_root_from_cmd(f"git -C {_FAKE_REPO_ROOT} status") is None
 
 
-def test_explicit_absolute_root_from_cmd_none_for_relative_repo_flag():
+def test_explicit_absolute_root_from_cmd_none_for_relative_repo_flag() -> None:
     cmd = 'coordinator-invoke --repo relative ceremony.commit_v2 \'{"paths": ["a.py"], "message": "x"}\''
     assert guard._explicit_absolute_root_from_cmd(cmd) is None
 
 
-def test_explicit_absolute_root_from_cmd_windows_drive_absolute():
+def test_explicit_absolute_root_from_cmd_windows_drive_absolute() -> None:
     # abs-path-ok: a literal fixture string the tokenizer parses as a
     # Windows drive-absolute -C value, never a real host path. Forward-slash
     # form -- an unescaped backslash is this module's tokenizer's own escape
@@ -2031,28 +2031,28 @@ def test_explicit_absolute_root_from_cmd_windows_drive_absolute():
     assert guard._explicit_absolute_root_from_cmd(cmd) == "C:/repo"
 
 
-def test_committing_segments_with_different_roots_name_no_root():
+def test_committing_segments_with_different_roots_name_no_root() -> None:
     cmd = f'git -C {_FAKE_REPO_ROOT} commit -m a -- x.py; git -C /foreign commit -m b -- y.py'
     assert guard._explicit_absolute_root_from_cmd(cmd) is None
     assert guard._committing_segment_roots(cmd) == [(0, _FAKE_REPO_ROOT), (1, "/foreign")]
 
 
-def test_committing_segments_with_the_same_root_keep_it():
+def test_committing_segments_with_the_same_root_keep_it() -> None:
     cmd = f'git -C {_FAKE_REPO_ROOT} commit -m a -- x.py; git -C {_FAKE_REPO_ROOT}/ commit -m b -- y.py'
     assert guard._explicit_absolute_root_from_cmd(cmd) == _FAKE_REPO_ROOT
 
 
-def test_a_committing_segment_without_a_root_vetoes_the_other_segments_root():
+def test_a_committing_segment_without_a_root_vetoes_the_other_segments_root() -> None:
     cmd = f'git -C {_FAKE_REPO_ROOT} commit -m a -- x.py; git commit -m b -- y.py'
     assert guard._explicit_absolute_root_from_cmd(cmd) is None
 
 
-def test_non_committing_segment_root_is_ignored():
+def test_non_committing_segment_root_is_ignored() -> None:
     cmd = f'git -C /elsewhere status; git -C {_FAKE_REPO_ROOT} commit -m a -- x.py'
     assert guard._explicit_absolute_root_from_cmd(cmd) == _FAKE_REPO_ROOT
 
 
-def test_ownership_scope_rejection_denies(monkeypatch):
+def test_ownership_scope_rejection_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """AC11/AC12-adjacent defense-in-depth: an ownership-scope rejection
     (a path outside the calling session's own claimed scope) denies even
     when legs 1-3 all otherwise hold.
@@ -2064,7 +2064,7 @@ def test_ownership_scope_rejection_denies(monkeypatch):
     )
 
 
-def test_ownership_scope_exception_denies(monkeypatch):
+def test_ownership_scope_exception_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """`_assert_paths_in_session_scope` raising must never propagate past
     this guard's fail-closed contract -- it denies exactly like an
     ordinary ``(False, ...)`` return.
@@ -2087,7 +2087,7 @@ def test_ownership_scope_exception_denies(monkeypatch):
 # --- AC16: the specialized deny message ---
 
 
-def test_ac16_deny_message_names_sanctioned_route_for_git_commit_agent(monkeypatch):
+def test_ac16_deny_message_names_sanctioned_route_for_git_commit_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     result = _gca_denies(monkeypatch, "git commit -m x")
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "ceremony.commit_v2 --params-file <f>" in reason
@@ -2096,7 +2096,7 @@ def test_ac16_deny_message_names_sanctioned_route_for_git_commit_agent(monkeypat
     assert "subagents may not commit" not in reason
 
 
-def test_ac16_deny_message_names_ownership_scope_leg_not_just_argv_shape(monkeypatch):
+def test_ac16_deny_message_names_ownership_scope_leg_not_just_argv_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression pin (spike-verdict `2026-08-03-git-commit-agent-leg3-
     payload-triple.md`): the message must name the ownership-scope leg
     (`_assert_paths_in_session_scope`) alongside the argv-shape leg
@@ -2132,7 +2132,7 @@ def test_ac16_deny_message_names_ownership_scope_leg_not_just_argv_shape(monkeyp
     assert "path scope was never checked" in reason
 
 
-def test_deny_prose_never_routes_to_the_retired_scoped_git_commit_launcher():
+def test_deny_prose_never_routes_to_the_retired_scoped_git_commit_launcher() -> None:
     """Never-regrow pin. `ceremony.scoped_git_commit` is retired and the
     surviving `scoped-git-commit` launchers under the settings-home `bin/`
     fail with a helper-missing error (exit 127), not the `-32006` the
@@ -2156,14 +2156,14 @@ def test_deny_prose_never_routes_to_the_retired_scoped_git_commit_launcher():
         )
 
 
-def test_ac16_deny_message_unchanged_for_other_types(monkeypatch):
+def test_ac16_deny_message_unchanged_for_other_types(monkeypatch: pytest.MonkeyPatch) -> None:
     _subagent(monkeypatch)
     result = _enveloped(guard.check)(_payload("git commit -m x", agent_type=_SUBAGENT_TYPE))
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert reason == _GENERIC_REASON
 
 
-def test_ac16_deny_message_within_prose_cap_budget():
+def test_ac16_deny_message_within_prose_cap_budget() -> None:
     from coordinator_core.bash_guards._message_size import (
         MESSAGE_PROSE_CAP_BYTES,
         measure_envelope,
@@ -2185,7 +2185,7 @@ def test_ac16_deny_message_within_prose_cap_budget():
 # falling back to the static argv-shape-only text for every deny. ---
 
 
-def test_ownership_leg_denial_names_path_and_classification(monkeypatch):
+def test_ownership_leg_denial_names_path_and_classification(monkeypatch: pytest.MonkeyPatch) -> None:
     """When the ownership-scope check itself runs and denies (a genuine
     `scoped-git-commit` invocation, non-sweeping pathspec -- both prior legs
     pass), the deny message must name the denied path and its classification
@@ -2210,7 +2210,7 @@ def test_ownership_leg_denial_names_path_and_classification(monkeypatch):
     assert "Already used that form?" not in reason
 
 
-def test_ownership_leg_denial_names_peer_claim(monkeypatch):
+def test_ownership_leg_denial_names_peer_claim(monkeypatch: pytest.MonkeyPatch) -> None:
     """Same as above, for the peer-claimed classification shape."""
     scope_reason = (
         "path outside session sess1 scope: 'shared.py' (claimed by live "
@@ -2228,7 +2228,7 @@ def test_ownership_leg_denial_names_peer_claim(monkeypatch):
     assert "claimed by live session" in reason
 
 
-def test_ownership_leg_orphan_denial_names_no_holder_caveat(monkeypatch):
+def test_ownership_leg_orphan_denial_names_no_holder_caveat(monkeypatch: pytest.MonkeyPatch) -> None:
     """A5/DD4: the orphan classification gets a DEDICATED deny message
     carrying SC-DR-023's own "no holder is not evidence" caveat, cited
     verbatim -- the same wording `session-claim-cli.py`'s `who-claims-path`
@@ -2249,7 +2249,7 @@ def test_ownership_leg_orphan_denial_names_no_holder_caveat(monkeypatch):
     assert "SC-DR-023" in reason
 
 
-def test_ownership_leg_orphan_denial_stays_under_prose_cap(monkeypatch):
+def test_ownership_leg_orphan_denial_stays_under_prose_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     """The dedicated orphan message is a FIXED string (no per-call
     interpolation), so it needs no `_ownership_leg_summary` truncation --
     still pinned against the real cap so a future re-wording cannot regress
@@ -2275,7 +2275,7 @@ def test_ownership_leg_orphan_denial_stays_under_prose_cap(monkeypatch):
     assert measurement.prose_bytes <= MESSAGE_PROSE_CAP_BYTES
 
 
-def _orphan_scope_reason(paths, *, peer=None):
+def _orphan_scope_reason(paths, *, peer=None) -> str:
     """The real multi-path reason shape ``assert_paths_in_session_scope``
     writes: lead fragment for the first denied path, then the enumeration."""
     cls = _scope_report._CLASSIFICATION_ORPHAN
@@ -2290,7 +2290,7 @@ def _orphan_scope_reason(paths, *, peer=None):
     )
 
 
-def test_ownership_leg_orphan_denial_names_the_orphan_path(monkeypatch):
+def test_ownership_leg_orphan_denial_names_the_orphan_path(monkeypatch: pytest.MonkeyPatch) -> None:
     result = _gca_denies(
         monkeypatch,
         'git commit -m "msg" -- orphan.py',
@@ -2301,7 +2301,7 @@ def test_ownership_leg_orphan_denial_names_the_orphan_path(monkeypatch):
     assert "SC-DR-023" in reason
 
 
-def test_ownership_leg_orphan_denial_names_only_orphans_in_a_mixed_pathspec(monkeypatch):
+def test_ownership_leg_orphan_denial_names_only_orphans_in_a_mixed_pathspec(monkeypatch: pytest.MonkeyPatch) -> None:
     reason_text = _orphan_scope_reason(["a/orphan1.py", "b/orphan2.py"], peer="held.py")
     result = _gca_denies(
         monkeypatch,
@@ -2313,7 +2313,7 @@ def test_ownership_leg_orphan_denial_names_only_orphans_in_a_mixed_pathspec(monk
     assert "held.py" not in reason
 
 
-def test_ownership_leg_orphan_denial_with_many_long_paths_stays_under_cap(monkeypatch):
+def test_ownership_leg_orphan_denial_with_many_long_paths_stays_under_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.bash_guards._message_size import (
         MESSAGE_PROSE_CAP_BYTES,
         measure_envelope,
@@ -2338,7 +2338,7 @@ def test_ownership_leg_orphan_denial_with_many_long_paths_stays_under_cap(monkey
     ["\u65e5\u672c\u8a9e" * 20 + ".py", "x/" + "\u00e9" * 80],
     ids=["cjk", "latin1-accents"],
 )
-def test_ownership_leg_orphan_denial_with_multibyte_path_stays_under_cap(monkeypatch, path):
+def test_ownership_leg_orphan_denial_with_multibyte_path_stays_under_cap(monkeypatch: pytest.MonkeyPatch, path) -> None:
     from coordinator_core.bash_guards._message_size import measure_envelope
 
     result = _gca_denies(
@@ -2352,7 +2352,7 @@ def test_ownership_leg_orphan_denial_with_multibyte_path_stays_under_cap(monkeyp
     assert not measurement.over_cap
 
 
-def test_ownership_leg_indeterminate_denial_stands_down(monkeypatch):
+def test_ownership_leg_indeterminate_denial_stands_down(monkeypatch: pytest.MonkeyPatch) -> None:
     """REVERSED VERDICT, and the reversal is the fix: an indeterminate call no
     longer denies here.
 
@@ -2407,7 +2407,7 @@ def test_ownership_leg_indeterminate_denial_stands_down(monkeypatch):
     )
 
 
-def test_include_orphans_no_longer_denies_the_shape_leg():
+def test_include_orphans_no_longer_denies_the_shape_leg() -> None:
     """BV-20260927-01 (2026-09-27) supersedes SC-DR-022's predicate-level
     pin: `_pathspec_shape_permitted` no longer refuses on `include_orphans`
     at all -- the flag is read (still threaded through, for callers like
@@ -2422,8 +2422,8 @@ def test_include_orphans_no_longer_denies_the_shape_leg():
 
 
 def test_git_commit_agent_sweeping_element_denies_before_ownership_leg_even_reached(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Dispatch-brief item 3: a sweeping element among otherwise-fine paths
     still DENIES, and denies on the ARGV leg (`_pathspec_element_is_
     sweeping`), proving orphan adoption did not become a sweeping-commit
@@ -2477,8 +2477,8 @@ def test_git_commit_agent_sweeping_element_denies_before_ownership_leg_even_reac
 
 
 def test_git_commit_agent_trampoline_without_include_orphans_flag_passes_true(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """BV-20260927-01: no `--include-orphans` anywhere in the invocation --
     `allow_orphans` is now passed `True` UNCONDITIONALLY, since the paths
     reaching this call are already this invocation's own explicit,
@@ -2496,8 +2496,8 @@ def test_git_commit_agent_trampoline_without_include_orphans_flag_passes_true(
 
 
 def test_git_commit_agent_retired_trampoline_denies_and_never_reaches_ownership(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The `scoped-git-commit` trampoline is no longer an allow shape at all
     (2026-08-30): its binary is gone from `coordinator/bin` and its
     settings-home launchers fail helper-missing, so
@@ -2522,7 +2522,7 @@ def test_git_commit_agent_retired_trampoline_denies_and_never_reaches_ownership(
     assert calls == []
 
 
-def test_git_commit_agent_invoke_module_include_orphans_key_is_inert(monkeypatch):
+def test_git_commit_agent_invoke_module_include_orphans_key_is_inert(monkeypatch: pytest.MonkeyPatch) -> None:
     """An `"include_orphans": true` key in a `ceremony.commit_v2` payload is
     INERT -- it neither widens nor narrows the verdict, since
     `allow_orphans=True` is now passed unconditionally at this call site
@@ -2542,8 +2542,8 @@ def test_git_commit_agent_invoke_module_include_orphans_key_is_inert(monkeypatch
 
 
 def test_git_commit_agent_invoke_module_without_include_orphans_key_passes_true(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The JSON-body spelling with no `include_orphans` key at all -- must
     also pass `allow_orphans=True`, same as the trampoline's no-flag case
     (BV-20260927-01: the flag is no longer what decides this).
@@ -2560,7 +2560,7 @@ def test_git_commit_agent_invoke_module_without_include_orphans_key_passes_true(
     assert calls[0]["allow_orphans"] is True
 
 
-def test_ownership_leg_denial_still_within_prose_cap_budget(monkeypatch):
+def test_ownership_leg_denial_still_within_prose_cap_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     """A pathological long path/classification must still stay under
     `MESSAGE_PROSE_CAP_BYTES` -- `_ownership_leg_summary`'s truncation, not
     an unbounded splice of the raw `assert_paths_in_session_scope` reason.
@@ -2589,7 +2589,7 @@ def test_ownership_leg_denial_still_within_prose_cap_budget(monkeypatch):
     assert measurement.prose_bytes <= MESSAGE_PROSE_CAP_BYTES
 
 
-def test_ownership_leg_summary_truncates_over_budget_fragment():
+def test_ownership_leg_summary_truncates_over_budget_fragment() -> None:
     """Direct unit coverage of `_ownership_leg_summary`'s own truncation,
     independent of the full deny-message plumbing above."""
     reason = "path outside session sess1 scope: " + ("z" * 200) + "; denied paths (1): ..."
@@ -2598,14 +2598,14 @@ def test_ownership_leg_summary_truncates_over_budget_fragment():
     assert summary.endswith("...")
 
 
-def test_ownership_leg_summary_empty_for_empty_reason():
+def test_ownership_leg_summary_empty_for_empty_reason() -> None:
     assert guard._ownership_leg_summary("") == ""
 
 
 # --- AC9: the allow-set docstring no longer describes an inaccurate intent ---
 
 
-def test_ac9_allowed_subagent_types_still_empty_and_excludes_git_commit_agent():
+def test_ac9_allowed_subagent_types_still_empty_and_excludes_git_commit_agent() -> None:
     """AC9: `_ALLOWED_SUBAGENT_TYPES` stays empty, and specifically does NOT
     contain `coordinator:git-commit-agent` -- its exemption is granted by
     the narrower, command-shape-aware C3 predicate instead (see the
@@ -2618,7 +2618,7 @@ def test_ac9_allowed_subagent_types_still_empty_and_excludes_git_commit_agent():
 # --- Direct unit coverage of the new extraction/sweeping-check helpers ---
 
 
-def test_pathspec_element_is_sweeping_ordinary_subdirectory_is_not_sweeping():
+def test_pathspec_element_is_sweeping_ordinary_subdirectory_is_not_sweeping() -> None:
     """A directory pathspec that is NOT the repo root or an ancestor of it
     (e.g. an ordinary subdirectory) is accepted -- AC14 does not reject
     every directory pathspec, only the repo root and its ancestors.
@@ -2627,7 +2627,7 @@ def test_pathspec_element_is_sweeping_ordinary_subdirectory_is_not_sweeping():
     assert guard._pathspec_element_is_sweeping("src/foo.py", _FAKE_REPO_ROOT) is False
 
 
-def test_pathspec_element_is_sweeping_colon_bang_exclude_shorthand():
+def test_pathspec_element_is_sweeping_colon_bang_exclude_shorthand() -> None:
     """Finding 4: git's `:!<pattern>` exclude-shorthand magic pathspec is
     rejected, same as the `:(exclude)<pattern>` long form.
     """
@@ -2635,7 +2635,7 @@ def test_pathspec_element_is_sweeping_colon_bang_exclude_shorthand():
     assert guard._pathspec_element_is_sweeping(":!", _FAKE_REPO_ROOT) is True
 
 
-def test_pathspec_element_is_sweeping_windows_drive_path_not_a_false_positive():
+def test_pathspec_element_is_sweeping_windows_drive_path_not_a_false_positive() -> None:
     """The generalized ``candidate.startswith(":")`` check must not
     misclassify a plain Windows drive-letter path -- its colon is never the
     first character (the drive letter precedes it). Built from parts (not a
@@ -2648,8 +2648,8 @@ def test_pathspec_element_is_sweeping_windows_drive_path_not_a_false_positive():
 
 
 def test_pathspec_element_is_sweeping_literal_bracket_path_on_disk_is_not_sweeping(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     """A literal on-disk name containing ``[`` (e.g. Next.js's ``[slug]``
     directory convention) resolves against the filesystem, not as a glob --
     item 61. The element is accepted once the filesystem confirms it is a
@@ -2660,8 +2660,8 @@ def test_pathspec_element_is_sweeping_literal_bracket_path_on_disk_is_not_sweepi
 
 
 def test_pathspec_element_is_sweeping_bracket_path_not_on_disk_still_a_glob(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     """The literal-bracket carve-out is existence-gated: a bracket element
     that does NOT exist on disk is still treated as a glob pattern and
     rejected, same as before this change.
@@ -2669,7 +2669,7 @@ def test_pathspec_element_is_sweeping_bracket_path_not_on_disk_still_a_glob(
     assert guard._pathspec_element_is_sweeping("[slug]", str(tmp_path)) is True
 
 
-def test_pathspec_element_is_sweeping_bracket_glob_with_star_still_a_glob(tmp_path):
+def test_pathspec_element_is_sweeping_bracket_glob_with_star_still_a_glob(tmp_path: Path) -> None:
     """A ``[`` element combined with an actual glob metacharacter (``*`` or
     ``?``) is never eligible for the literal-existence carve-out, even if a
     same-named path happens to exist on disk.
@@ -2680,7 +2680,7 @@ def test_pathspec_element_is_sweeping_bracket_glob_with_star_still_a_glob(tmp_pa
     assert guard._pathspec_element_is_sweeping("[slug]*", str(tmp_path)) is True
 
 
-def test_resolve_git_commit_agent_pathspec_no_matching_invocation_returns_none():
+def test_resolve_git_commit_agent_pathspec_no_matching_invocation_returns_none() -> None:
     assert guard._resolve_git_commit_agent_pathspec('git commit -m "x"') is None
 
 
@@ -2715,7 +2715,7 @@ def _make_real_repo(tmp_path):
     return tmp_path
 
 
-def _real_scope_payload(cmd, cwd, session_id, agent_id="deadbeef0123"):
+def _real_scope_payload(cmd, cwd, session_id, agent_id: str = "deadbeef0123"):
     return {
         "tool_name": "Bash",
         "tool_input": {"command": cmd},
@@ -2727,7 +2727,7 @@ def _real_scope_payload(cmd, cwd, session_id, agent_id="deadbeef0123"):
 
 
 class TestRealOwnershipScopeWiring:
-    def test_own_session_paths_allow(self, tmp_path):
+    def test_own_session_paths_allow(self, tmp_path: Path) -> None:
         repo = _make_real_repo(tmp_path)
         _session_core.init("mine", cwd=str(repo))
         (repo / "a.py").write_text("a")
@@ -2739,7 +2739,7 @@ class TestRealOwnershipScopeWiring:
         result = _enveloped(guard.check)(payload)
         assert result is None, f"expected ALLOW, got deny: {result!r}"
 
-    def test_another_live_sessions_paths_deny(self, tmp_path):
+    def test_another_live_sessions_paths_deny(self, tmp_path: Path) -> None:
         repo = _make_real_repo(tmp_path)
         _session_core.init("mine", cwd=str(repo))
         _session_core.init("other", cwd=str(repo))
@@ -2754,7 +2754,7 @@ class TestRealOwnershipScopeWiring:
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_dead_own_session_paths_still_allow(self, tmp_path):
+    def test_dead_own_session_paths_still_allow(self, tmp_path: Path) -> None:
         """Liveness gating (``coordinator_core.session.liveness``) governs
         whether a PEER's claim is pruned as stale -- it is never a
         precondition for a session's OWN claim on its OWN paths (see
@@ -2777,7 +2777,7 @@ class TestRealOwnershipScopeWiring:
         result = _enveloped(guard.check)(payload)
         assert result is None, f"expected ALLOW (self-liveness is not gated), got deny: {result!r}"
 
-    def test_orphan_inside_declared_pathspec_is_adopted(self, tmp_path):
+    def test_orphan_inside_declared_pathspec_is_adopted(self, tmp_path: Path) -> None:
         """BV-20260927-01 (PM ruling 2026-09-27, supersedes SC-DR-022):
         an unclaimed dirty path INSIDE this invocation's own explicit,
         non-sweeping pathspec is now adoptable -- no `--include-orphans`
@@ -2800,8 +2800,8 @@ class TestRealOwnershipScopeWiring:
         assert result is None, f"expected ALLOW: orphan.py is inside the declared pathspec, got deny: {result!r}"
 
     def test_orphan_inside_pathspec_adopted_with_include_orphans_flag_too(
-        self, tmp_path
-    ):
+        self, tmp_path: Path
+    ) -> None:
         """The `--include-orphans` flag is now read but INERT -- carrying it
         must not change the verdict from the flag-absent case above. Pins
         that the flag is not a required opt-in, nor a separately-refused
@@ -2822,8 +2822,8 @@ class TestRealOwnershipScopeWiring:
         assert result is None, f"expected ALLOW: {result!r}"
 
     def test_git_commit_agent_peer_claimed_path_still_denies_with_orphans_allowed(
-        self, tmp_path
-    ):
+        self, tmp_path: Path
+    ) -> None:
         """Security-critical pin (dispatch brief AC-2): `allow_orphans=True`
         must NEVER relax the peer-claimed case -- a path claimed by a LIVE
         peer session denies regardless of the flag (incident 62e9a1f73,
@@ -2888,7 +2888,7 @@ class TestRealOwnershipScopeWiring:
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "claimed by live session other" in reason
 
-    def test_a_clean_declared_path_does_not_deny_the_dirty_remainder(self, tmp_path):
+    def test_a_clean_declared_path_does_not_deny_the_dirty_remainder(self, tmp_path: Path) -> None:
         repo = _make_real_repo(tmp_path)
         _session_core.init("mine", cwd=str(repo))
         (repo / "edited.py").write_text("e")
@@ -2899,7 +2899,7 @@ class TestRealOwnershipScopeWiring:
         )
         assert _enveloped(guard.check)(payload) is None
 
-    def test_a_clean_path_does_not_unlock_a_peer_claimed_one(self, tmp_path):
+    def test_a_clean_path_does_not_unlock_a_peer_claimed_one(self, tmp_path: Path) -> None:
         repo = _make_real_repo(tmp_path)
         _session_core.init("mine", cwd=str(repo))
         _session_core.init("other", cwd=str(repo))
@@ -2914,7 +2914,7 @@ class TestRealOwnershipScopeWiring:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "shared.py" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
-    def test_unresolvable_session_id_denies(self, tmp_path):
+    def test_unresolvable_session_id_denies(self, tmp_path: Path) -> None:
         repo = _make_real_repo(tmp_path)
         (repo / "a.py").write_text("a")
 
@@ -2925,7 +2925,7 @@ class TestRealOwnershipScopeWiring:
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_mixed_authorship_pathspec_is_allowed(self, tmp_path):
+    def test_mixed_authorship_pathspec_is_allowed(self, tmp_path: Path) -> None:
         """CONTRACT CHANGE (BV-20260927-01, 2026-09-27) -- supersedes this
         test's SC-DR-022-era `_denies_when_adoption_is_requested` form,
         which asserted DENY here.
@@ -2976,7 +2976,7 @@ class TestRealOwnershipScopeWiring:
 # defect independent of whether the verdict is right", on a third leg.
 
 
-def test_repo_relativize_pathspec_rewrites_an_in_repo_absolute_element():
+def test_repo_relativize_pathspec_rewrites_an_in_repo_absolute_element() -> None:
     """A POSIX-absolute element inside the repo becomes the repo-relative
     form the membership test is built from; a relative sibling in the same
     pathspec is passed through byte-identical.
@@ -2986,7 +2986,7 @@ def test_repo_relativize_pathspec_rewrites_an_in_repo_absolute_element():
     ) == (["src/foo.py", "src/bar.py"], False)
 
 
-def test_repo_relativize_pathspec_handles_windows_drive_and_backslash_forms():
+def test_repo_relativize_pathspec_handles_windows_drive_and_backslash_forms() -> None:
     """Windows is first-class: a drive-absolute element -- in either slash
     spelling -- relativizes the same way, and a differently-cased drive
     letter still resolves (only the drive letter's case is folded).
@@ -3003,7 +3003,7 @@ def test_repo_relativize_pathspec_handles_windows_drive_and_backslash_forms():
     assert guard._repo_relativize_pathspec([other_case], root) == (["src/foo.py"], False)
 
 
-def test_repo_relativize_pathspec_out_of_repo_absolute_signals_the_named_leg():
+def test_repo_relativize_pathspec_out_of_repo_absolute_signals_the_named_leg() -> None:
     """An absolute element that does NOT resolve inside the repo is not
     relativizable, and no ownership verdict about it would be meaningful --
     the helper reports it so the caller can deny at
@@ -3015,7 +3015,7 @@ def test_repo_relativize_pathspec_out_of_repo_absolute_signals_the_named_leg():
     ) == ([], True)
 
 
-def test_repo_relativize_pathspec_folds_no_case_beyond_the_drive_letter():
+def test_repo_relativize_pathspec_folds_no_case_beyond_the_drive_letter() -> None:
     """Only the drive letter is case-folded. Folding the rest would let a
     differently-cased element resolve against a `safe_paths` entry it does
     not literally name -- the widening the ownership leg exists to refuse.
@@ -3028,8 +3028,8 @@ def test_repo_relativize_pathspec_folds_no_case_beyond_the_drive_letter():
 
 
 def test_git_commit_agent_in_repo_absolute_pathspec_reaches_ownership_relativized(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """End-to-end: the reported invocation shape. The ownership helper is
     reached (it was, before this fix, too) but now receives the
     REPO-RELATIVE path, so a session that owns the file is no longer denied
@@ -3049,8 +3049,8 @@ def test_git_commit_agent_in_repo_absolute_pathspec_reaches_ownership_relativize
 
 
 def test_git_commit_agent_out_of_repo_absolute_denies_before_the_ownership_leg(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An out-of-repo absolute element denies at its OWN leg, naming the
     path form -- and never reaches the ownership helper (`calls == []`), so
     the message cannot be the scope-shaped one that sent earlier agents to
@@ -3097,7 +3097,7 @@ def _recognizer_op_names():
     return set(re.findall(r'"(ceremony\.[a-z_0-9]+)"', source))
 
 
-def test_both_canonical_routes_the_messages_name_actually_resolve():
+def test_both_canonical_routes_the_messages_name_actually_resolve() -> None:
     """Each shape an agent-facing message tells a denied agent to use must
     come back from `_resolve_git_commit_agent_pathspec` with its pathspec
     read -- the single fact whose absence caused the incident.
@@ -3124,7 +3124,7 @@ def test_both_canonical_routes_the_messages_name_actually_resolve():
     assert plain == (["src/foo.py"], False)
 
 
-def test_deny_message_names_only_recognizable_routes():
+def test_deny_message_names_only_recognizable_routes() -> None:
     """No agent-facing message may name an op the recognizer does not key
     on. Renaming the op in `_extract_invoke_commit_v2_paths` without
     updating the messages fails here rather than in the field.
@@ -3146,7 +3146,7 @@ def test_deny_message_names_only_recognizable_routes():
             )
 
 
-def test_deleted_scoped_git_commit_op_is_named_by_no_allow_leg():
+def test_deleted_scoped_git_commit_op_is_named_by_no_allow_leg() -> None:
     """`ceremony.scoped_git_commit` is DELETED, not suspended -- its module
     does not exist at HEAD. An allow leg keyed to it permits nothing, which
     is how the allow surface came to read as three routes with one live.
@@ -3165,7 +3165,7 @@ def test_deleted_scoped_git_commit_op_is_named_by_no_allow_leg():
     assert not hasattr(guard, "_extract_trampoline_scoped_git_commit_paths")
 
 
-def test_commit_v2_deleted_paths_are_scope_checked_too():
+def test_commit_v2_deleted_paths_are_scope_checked_too() -> None:
     """A deletion is as scope-bearing as a write: `deleted_paths` must reach
     the same LEG 3 checks as `paths`, not ride along unchecked. A commit
     carrying only deletions is a valid `ceremony.commit_v2` call and must
@@ -3217,7 +3217,7 @@ _DOOR_SPELLINGS = (
 )
 
 
-def test_coordinator_invoke_door_is_covered_by_the_deny_matcher(monkeypatch):
+def test_coordinator_invoke_door_is_covered_by_the_deny_matcher(monkeypatch: pytest.MonkeyPatch) -> None:
     """The `coordinator-invoke` door reaches the SAME
     `coordinator_core.invoke.__main__.main` as the `-m` module spelling, and
     it is the one that is actually on PATH. Until 2026-08-30 the deny
@@ -3236,7 +3236,7 @@ def test_coordinator_invoke_door_is_covered_by_the_deny_matcher(monkeypatch):
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny", op
 
 
-def test_coordinator_invoke_door_admits_memo_send_but_not_chained_commit(monkeypatch):
+def test_coordinator_invoke_door_admits_memo_send_but_not_chained_commit(monkeypatch: pytest.MonkeyPatch) -> None:
     _subagent(monkeypatch)
     send = "coordinator-invoke memo.send '{}'"
     assert guard._has_committing_op_invoke(send) is False
@@ -3247,7 +3247,7 @@ def test_coordinator_invoke_door_admits_memo_send_but_not_chained_commit(monkeyp
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_coordinator_invoke_door_matrix_predicate_denies_and_allows(monkeypatch):
+def test_coordinator_invoke_door_matrix_predicate_denies_and_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every door spelling in `_DOOR_SPELLINGS` -- bare, `.exe`, quoted
     Windows absolute path, POSIX absolute path, and flags on either side of
     the `<op>` positional -- must resolve THROUGH the same predicate,
@@ -3283,8 +3283,8 @@ def test_coordinator_invoke_door_matrix_predicate_denies_and_allows(monkeypatch)
 
 
 def test_coordinator_invoke_door_matrix_envelope_bare_spelling_allows_push_outstanding(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The allow-direction envelope, new alongside the matrix above: on the
     bare `coordinator-invoke` spelling, `guard.check()` returns `None`
     (ALLOW) for `push.outstanding`. The deny-direction envelope already
@@ -3303,7 +3303,7 @@ def test_coordinator_invoke_door_matrix_envelope_bare_spelling_allows_push_outst
     assert result is None, f"expected ALLOW for: {cmd!r}, got {result!r}"
 
 
-def test_both_invoke_spellings_resolve_the_same_op():
+def test_both_invoke_spellings_resolve_the_same_op() -> None:
     """One walk, two spellings -- `_invoke_op_token_indices` is shared by the
     deny matcher and the allow extractor precisely so a future head spelling
     cannot land on one side only.
@@ -3323,7 +3323,7 @@ def test_both_invoke_spellings_resolve_the_same_op():
         assert found == ["ceremony.commit_v2"], cmd
 
 
-def test_committing_op_names_is_the_single_source_of_truth(monkeypatch):
+def test_committing_op_names_is_the_single_source_of_truth(monkeypatch: pytest.MonkeyPatch) -> None:
     """C2 (docs/plans/2026-09-11-the-subagent-commit-guard-s-door-coverage-
     gets-pinned.md): the baton's AC-3 requires door-spelling recognition to
     route THROUGH ``_COMMITTING_OP_NAMES``, asserted behaviourally -- not by
@@ -3376,7 +3376,7 @@ def test_committing_op_names_is_the_single_source_of_truth(monkeypatch):
     assert result2 is None, f"expected ALLOW for: {cmd2!r}, got {result2!r}"
 
 
-def test_ownership_leg_summary_keeps_the_cause_when_the_path_is_long():
+def test_ownership_leg_summary_keeps_the_cause_when_the_path_is_long() -> None:
     """The parenthesised cause survives the cap; the path's middle is elided."""
     reason = (
         "path outside session s1 scope: "
@@ -3391,7 +3391,7 @@ def test_ownership_leg_summary_keeps_the_cause_when_the_path_is_long():
 
 
 @pytest.mark.parametrize("shape", ["python3 {f}", "python3 -u {f} x", "python3 < {f}", "cd {d} && python3 {n}"])
-def test_script_file_importing_the_commit_primitive_denies(tmp_path, shape):
+def test_script_file_importing_the_commit_primitive_denies(tmp_path: Path, shape) -> None:
     script = tmp_path / "land.py"
     script.write_text("from coordinator_core.git." "commit import commit_paths\ncommit_paths('s', ['a'])\n")
     cmd = shape.format(f=script.as_posix(), d=tmp_path.as_posix(), n=script.name)
@@ -3400,7 +3400,7 @@ def test_script_file_importing_the_commit_primitive_denies(tmp_path, shape):
     assert "script file" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_script_file_without_the_import_and_em_caller_allow(tmp_path):
+def test_script_file_without_the_import_and_em_caller_allow(tmp_path: Path) -> None:
     clean = tmp_path / "clean.py"
     clean.write_text("print('hi')\n")
     assert _enveloped(guard.check)(_payload("python3 %s" % clean)) is None
@@ -3420,28 +3420,28 @@ def test_script_file_without_the_import_and_em_caller_allow(tmp_path):
         ('git commit -m "fix" -- .', False),
     ],
 )
-def test_named_persona_commit_must_name_its_paths(monkeypatch, tmp_path, cmd, allowed):
+def test_named_persona_commit_must_name_its_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cmd, allowed) -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda _cwd: str(tmp_path))
     result = _enveloped(guard.check)(_payload(cmd, agent_type="coordinator:staff-eng"))
     assert (result is None) is allowed, result
 
 
-def test_plan_chain_run_subagent_denies(monkeypatch):
+def test_plan_chain_run_subagent_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(monkeypatch, "plan-chain-run --manifest x.json")
 
 
-def test_plan_chain_run_cmd_spelling_subagent_denies(monkeypatch):
+def test_plan_chain_run_cmd_spelling_subagent_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(monkeypatch, "plan-chain-run.cmd --manifest x.json")
 
 
-def test_plan_chain_run_windows_backslash_argv0_subagent_denies(monkeypatch):
+def test_plan_chain_run_windows_backslash_argv0_subagent_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(
         monkeypatch,
         r"C:\Users\x\.coordinator-claude-settings\bin\plan-chain-run --manifest x.json",
     )
 
 
-def test_plan_chain_run_main_loop_allows():
+def test_plan_chain_run_main_loop_allows() -> None:
     payload = _payload("plan-chain-run --manifest x.json", agent_id=None)
     assert _enveloped(guard.check)(payload) is None
 
@@ -3451,8 +3451,8 @@ _NEXT_ROUTE_PATH = "src/app/(ddct)/ddct/e/[type]/[id]/page.tsx"
 
 @pytest.mark.parametrize("spelling", [_NEXT_ROUTE_PATH, ":(literal)" + _NEXT_ROUTE_PATH])
 def test_literal_and_bare_spellings_reach_the_ownership_leg_as_the_same_key(
-    spelling, tmp_path
-):
+    spelling, tmp_path: Path
+) -> None:
     """The claim ledger keys on the bare repo-relative path, so a
     `:(literal)`-wrapped pathspec element must be unwrapped before the
     ownership leg or a path the session wrote is reported as claimed by none.
@@ -3474,13 +3474,13 @@ def test_literal_and_bare_spellings_reach_the_ownership_leg_as_the_same_key(
     assert seen == [[_NEXT_ROUTE_PATH]]
 
 
-def test_repo_relativize_pathspec_unwraps_literal_around_an_absolute_element():
+def test_repo_relativize_pathspec_unwraps_literal_around_an_absolute_element() -> None:
     assert guard._repo_relativize_pathspec(
         [":(literal)" + _FAKE_REPO_ROOT + "/src/foo.py"], _FAKE_REPO_ROOT
     ) == (["src/foo.py"], False)
 
 
-def test_dispatch_logs_a_subagent_commit_and_returns_no_denial_text(monkeypatch):
+def test_dispatch_logs_a_subagent_commit_and_returns_no_denial_text(monkeypatch: pytest.MonkeyPatch) -> None:
     import json
 
     from coordinator_core import guard_advisory_counter as counter

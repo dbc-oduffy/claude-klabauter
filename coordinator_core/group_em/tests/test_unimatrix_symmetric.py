@@ -18,6 +18,11 @@ from coordinator_core.group_em import (
     remote_roster,
     send_pass,
 )
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
 
 
 def _sess(sid: str) -> dict:
@@ -25,7 +30,7 @@ def _sess(sid: str) -> dict:
 
 
 @pytest.fixture
-def nodes(tmp_path):
+def nodes(tmp_path: Path):
     a = tmp_path / "roaming"
     b = tmp_path / "home"
     ids = {"a": box_registry.ensure_identity(a), "b": box_registry.ensure_identity(b)}
@@ -53,7 +58,7 @@ def _listing(nodes, viewer: str) -> set:
     }
 
 
-def test_each_node_lists_the_other_under_box_qualified_keys(nodes):
+def test_each_node_lists_the_other_under_box_qualified_keys(nodes) -> None:
     ia, ib = nodes["id"]["a"], nodes["id"]["b"]
     assert ia != ib
     assert _listing(nodes, "a") == {f"{ib}:sB1", f"{ib}:sB2"}
@@ -61,7 +66,7 @@ def test_each_node_lists_the_other_under_box_qualified_keys(nodes):
 
 
 @pytest.mark.parametrize("src,dst,from_sid,to_sid", [("a", "b", "sA1", "sB1"), ("b", "a", "sB2", "sA1")])
-def test_send_both_ways_rewrites_from_into_receiver_namespace(nodes, src, dst, from_sid, to_sid):
+def test_send_both_ways_rewrites_from_into_receiver_namespace(nodes, src, dst, from_sid, to_sid) -> None:
     ids = nodes["id"]
     reply = send_pass.send_to_peer(
         remote_identity.peer_key(ids[dst], to_sid),
@@ -76,13 +81,13 @@ def test_send_both_ways_rewrites_from_into_receiver_namespace(nodes, src, dst, f
     assert got[0]["from"] == f"{ids[src]}:{from_sid}"
 
 
-def test_receiver_local_sender_stays_bare(nodes):
+def test_receiver_local_sender_stays_bare(nodes) -> None:
     ids = nodes["id"]
     own = {"ts": 1.0, "from_box": ids["b"], "to_session": "sB2", "text": "y", "from_session": "sB1"}
     assert remote_identity.rewrite_from(own, ids["b"])["from"] == "sB1"
 
 
-def test_transport_choice_is_behind_the_seam(nodes, tmp_path):
+def test_transport_choice_is_behind_the_seam(nodes, tmp_path: Path) -> None:
     rows = box_registry.read_boxes(nodes["dir"]["a"])
     assert [node_transport.select(r).kind for r in rows] == ["fs"]
     ssh_row = {"box_id": "far", "root": str(tmp_path / "far"), "transport": {"kind": "ssh", "host": "192.0.2.2", "invoke": "/x"}}
@@ -94,7 +99,7 @@ def _far_runner(far_home, monkeypatch, seen):
     """A fake ssh runner that runs the far ``groupem.box_send`` op against ``far_home``."""
     from coordinator_core.ops import group_em_box_federation as op
 
-    def runner(argv, timeout):
+    def runner(argv, timeout) -> CompletedProcess[str]:
         _invoke, name, text = shlex.split(argv[-1])
         assert name == "groupem.box_send"
         params = json.loads(text)
@@ -122,7 +127,7 @@ def _ssh_pair(tmp_path, monkeypatch, pin: bool):
     return near, far, near_id, box
 
 
-def test_ssh_send_lands_with_from_equal_to_peer_key(tmp_path, monkeypatch):
+def test_ssh_send_lands_with_from_equal_to_peer_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     near, far, near_id, box = _ssh_pair(tmp_path, monkeypatch, pin=True)
     seen: list = []
     t = node_transport.select(
@@ -135,7 +140,7 @@ def test_ssh_send_lands_with_from_equal_to_peer_key(tmp_path, monkeypatch):
     assert line["from"] == remote_identity.peer_key(near_id, "sA1")
 
 
-def test_far_op_ignores_forged_from_box_without_a_matching_signature(tmp_path, monkeypatch):
+def test_far_op_ignores_forged_from_box_without_a_matching_signature(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     near, far, near_id, box = _ssh_pair(tmp_path, monkeypatch, pin=True)
     seen: list = []
     runner = _far_runner(far, monkeypatch, seen)
@@ -154,7 +159,7 @@ def test_far_op_ignores_forged_from_box_without_a_matching_signature(tmp_path, m
     assert "from" not in line and "from_session" not in line
 
 
-def test_far_op_ignores_sender_from_an_unpinned_box(tmp_path, monkeypatch):
+def test_far_op_ignores_sender_from_an_unpinned_box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     near, far, _, box = _ssh_pair(tmp_path, monkeypatch, pin=False)
     t = node_transport.select(
         box, directory=near / "state" / "group-em", runner=_far_runner(far, monkeypatch, [])
@@ -164,7 +169,7 @@ def test_far_op_ignores_sender_from_an_unpinned_box(tmp_path, monkeypatch):
     assert "from" not in line and "from_session" not in line
 
 
-def test_far_op_ignores_a_replayed_signed_claim_outside_the_freshness_window(tmp_path, monkeypatch):
+def test_far_op_ignores_a_replayed_signed_claim_outside_the_freshness_window(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     near, far, near_id, box = _ssh_pair(tmp_path, monkeypatch, pin=True)
     seen: list = []
     runner = _far_runner(far, monkeypatch, seen)

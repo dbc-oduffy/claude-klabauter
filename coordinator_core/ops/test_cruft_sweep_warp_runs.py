@@ -8,6 +8,8 @@ import time
 from coordinator_core.ops import cruft_sweep
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_OUTCOME_FILE
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
+import pytest
 
 DAY = 86400
 
@@ -24,11 +26,11 @@ def _run(root, name, *, outcome_age_days=None):
     return run
 
 
-def _sweep(root, dry_run=False):
+def _sweep(root, dry_run: bool = False) -> tuple[int, int]:
     return cruft_sweep.sweep_warp_runs(root, now=time.time(), dry_run=dry_run, quiet=True)
 
 
-def test_old_closed_uncited_run_deleted_open_and_fresh_kept(tmp_path):
+def test_old_closed_uncited_run_deleted_open_and_fresh_kept(tmp_path: Path) -> None:
     old = _run(tmp_path, "ask-20260101T000000-aaaaaa", outcome_age_days=8)
     fresh = _run(tmp_path, "ask-20260102T000000-bbbbbb", outcome_age_days=6)
     open_ = _run(tmp_path, "ask-20260103T000000-cccccc")
@@ -38,7 +40,7 @@ def test_old_closed_uncited_run_deleted_open_and_fresh_kept(tmp_path):
     assert fresh.exists() and open_.exists()
 
 
-def test_cited_run_kept_from_each_home_uncited_sibling_deleted(tmp_path):
+def test_cited_run_kept_from_each_home_uncited_sibling_deleted(tmp_path: Path) -> None:
     names = {
         ".coordinator-local/ledgers": "ask-20260101T000000-aaaaaa",
         "docs": "warp-2026-01-02-some-slug-aaaaaa-20260102T000000-bbbbbb",
@@ -56,7 +58,7 @@ def test_cited_run_kept_from_each_home_uncited_sibling_deleted(tmp_path):
     assert all(r.exists() for r in runs.values())
 
 
-def test_citation_in_unnamed_home_does_not_protect(tmp_path):
+def test_citation_in_unnamed_home_does_not_protect(tmp_path: Path) -> None:
     run = _run(tmp_path, "ask-20260101T000000-aaaaaa", outcome_age_days=30)
     (tmp_path / "scratch").mkdir()
     (tmp_path / "scratch" / "n.md").write_text("ask-20260101T000000-aaaaaa")
@@ -64,7 +66,7 @@ def test_citation_in_unnamed_home_does_not_protect(tmp_path):
     assert n == 1 and not run.exists()
 
 
-def test_tracked_run_dir_kept(tmp_path):
+def test_tracked_run_dir_kept(tmp_path: Path) -> None:
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     tracked =_run(tmp_path, "ask-20260101T000000-aaaaaa", outcome_age_days=30)
     loose = _run(tmp_path, "ask-20260102T000000-bbbbbb", outcome_age_days=30)
@@ -78,20 +80,20 @@ def test_tracked_run_dir_kept(tmp_path):
     assert tracked.exists() and not loose.exists()
 
 
-def test_git_failure_deletes_nothing(tmp_path, monkeypatch):
+def test_git_failure_deletes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run = _run(tmp_path, "ask-20260101T000000-aaaaaa", outcome_age_days=30)
     monkeypatch.setattr(cruft_sweep, "_tracked_warp_run_names", lambda root: None)
     assert _sweep(tmp_path) == (0, 0)
     assert run.exists()
 
 
-def test_dry_run_counts_without_deleting(tmp_path):
+def test_dry_run_counts_without_deleting(tmp_path: Path) -> None:
     run = _run(tmp_path, "ask-20260101T000000-aaaaaa", outcome_age_days=30)
     _, n = _sweep(tmp_path, dry_run=True)
     assert n == 1 and run.exists()
 
 
-def test_no_git_spawn_per_run(tmp_path, monkeypatch):
+def test_no_git_spawn_per_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for i in range(5):
         _run(tmp_path, f"ask-20260101T00000{i}-aaaaa{i}", outcome_age_days=30)
     calls = []
@@ -101,18 +103,18 @@ def test_no_git_spawn_per_run(tmp_path, monkeypatch):
     assert n == 5 and len(calls) <= 1
 
 
-def test_missing_warp_root_is_noop(tmp_path):
+def test_missing_warp_root_is_noop(tmp_path: Path) -> None:
     assert _sweep(tmp_path) == (0, 0)
 
 
-def test_expired_watchdog_deletes_nothing(tmp_path, monkeypatch):
+def test_expired_watchdog_deletes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run = _run(tmp_path, "ask-20260101T000000-aaaaaa", outcome_age_days=30)
     monkeypatch.setattr(cruft_sweep, "_cited_warp_run_ids", lambda *a, **k: None)
     assert _sweep(tmp_path) == (0, 0)
     assert run.exists()
 
 
-def test_citation_followed_by_hyphenated_word_still_protects(tmp_path):
+def test_citation_followed_by_hyphenated_word_still_protects(tmp_path: Path) -> None:
     run = _run(tmp_path, "ask-20260101T000000-aaaaaa", outcome_age_days=30)
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "n.md").write_text("see ask-20260101T000000-aaaaaa-notes here")

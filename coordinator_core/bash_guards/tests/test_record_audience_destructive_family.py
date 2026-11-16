@@ -36,7 +36,7 @@ _DESTRUCTIVE_DENIES = [
 
 
 @pytest.mark.parametrize("command", _DESTRUCTIVE_DENIES)
-def test_destructive_deny_is_a_record_with_a_route_and_no_override(command):
+def test_destructive_deny_is_a_record_with_a_route_and_no_override(command) -> None:
     record = destructive.check(_payload(command))
     assert isinstance(record, AlternativeRecord)
     assert record.verdict_kind == "deny"
@@ -45,30 +45,30 @@ def test_destructive_deny_is_a_record_with_a_route_and_no_override(command):
 
 
 @pytest.mark.parametrize("command", _DESTRUCTIVE_DENIES)
-def test_destructive_subagent_render_denies_with_the_route(command):
+def test_destructive_subagent_render_denies_with_the_route(command) -> None:
     envelope = render(destructive.check(_payload(command)), Audience.SUBAGENT)
     out = envelope["hookSpecificOutput"]
     assert out["permissionDecision"] == "deny"
     assert "needs authorizing" in out["permissionDecisionReason"]
 
 
-def test_git_mv_keeps_its_ready_command_rung():
+def test_git_mv_keeps_its_ready_command_rung() -> None:
     record = destructive.check(_payload("git mv state/a.yaml state/archive/a.yaml"))
     ready = [m for m in record.members if isinstance(m, ReadyCommand)]
     assert [m.rendered() for m in ready] == ["mv state/a.yaml state/archive/a.yaml"]
 
 
-def test_git_mv_with_unparseable_operands_keeps_an_adaptable_offer():
+def test_git_mv_with_unparseable_operands_keeps_an_adaptable_offer() -> None:
     record = destructive.check(_payload("git mv a.md"))
     assert any(isinstance(m, AdaptableOffer) for m in record.members)
     assert not any(isinstance(m, ReadyCommand) for m in record.members)
 
 
-def test_a_command_the_guard_allows_returns_none():
+def test_a_command_the_guard_allows_returns_none() -> None:
     assert destructive.check(_payload("rm state/scratch/one-file.txt")) is None
 
 
-def test_opaque_indirection_is_an_advisory_record_with_a_route():
+def test_opaque_indirection_is_an_advisory_record_with_a_route() -> None:
     record = destructive.check(_payload("bash -c \"$X\""))
     if record is None:
         pytest.skip("wrapper shape not flagged on this host")
@@ -77,7 +77,7 @@ def test_opaque_indirection_is_an_advisory_record_with_a_route():
     assert not any(isinstance(m, Override) for m in record.members)
 
 
-def test_stash_destruction_deny_keeps_em_text_and_a_typed_subagent_render():
+def test_stash_destruction_deny_keeps_em_text_and_a_typed_subagent_render() -> None:
     from coordinator_core.bash_guards import block_stash_destruction as destruction
 
     record = destruction.check({"tool_name": "Bash", "tool_input": {"command": "git stash drop"}})
@@ -88,7 +88,7 @@ def test_stash_destruction_deny_keeps_em_text_and_a_typed_subagent_render():
     assert "git stash show -p" in sub and "needs authorizing" in sub
 
 
-def test_stash_apply_advisory_keeps_em_text_and_stays_an_allow():
+def test_stash_apply_advisory_keeps_em_text_and_stays_an_allow() -> None:
     from coordinator_core.bash_guards import block_stash_destruction as destruction
 
     record = destruction.check_apply_advisory(
@@ -99,7 +99,7 @@ def test_stash_apply_advisory_keeps_em_text_and_stays_an_allow():
     assert env["permissionDecision"] == "allow" and env["additionalContext"] == record.em_text
 
 
-def test_stash_destruction_still_allows_a_harmless_stash_verb():
+def test_stash_destruction_still_allows_a_harmless_stash_verb() -> None:
     from coordinator_core.bash_guards import block_stash_destruction as destruction
 
     assert destruction.check({"tool_name": "Bash", "tool_input": {"command": "git stash list"}}) is None

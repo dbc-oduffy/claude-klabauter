@@ -179,5 +179,40 @@ class TestPlanTemplateEmitsLiveDispositionVocabulary(unittest.TestCase):
             self.assertEqual(row.get("disposition"), "open")
 
 
+def test_plan_out_is_written_verbatim_not_relocated_into_a_month_dir(tmp_path, monkeypatch):
+    import sys
+
+    flat = tmp_path / "docs" / "plans" / "2026-11-12-x.md"
+    monkeypatch.setattr(
+        sys, "argv", ["coordinator-doc-new", "--type", "plan", "--title", "X", "--no-sizing-object", "--out", str(flat)]
+    )
+    monkeypatch.chdir(tmp_path)
+    # Containment is not under test: the run's temp layout decides whether pytest's tmp_path is an allowed root.
+    monkeypatch.setattr(_MOD, "_safe_output_roots", lambda: [str(tmp_path)])
+    try:
+        code = int(_MOD.main() or 0)
+    except SystemExit as exc:
+        code = int(exc.code or 0)
+    assert code == 0
+    assert flat.is_file()
+    assert not (tmp_path / "docs" / "plans" / "2026-11").exists()
+
+
+def test_plan_default_path_still_shards_into_a_month_dir(tmp_path, monkeypatch):
+    import sys
+
+    monkeypatch.setattr(sys, "argv", ["coordinator-doc-new", "--type", "plan", "--title", "Y", "--no-sizing-object"])
+    monkeypatch.chdir(tmp_path)
+    # Containment is not under test: the run's temp layout decides whether pytest's tmp_path is an allowed root.
+    monkeypatch.setattr(_MOD, "_safe_output_roots", lambda: [str(tmp_path)])
+    try:
+        code = int(_MOD.main() or 0)
+    except SystemExit as exc:
+        code = int(exc.code or 0)
+    assert code == 0
+    written = [p for p in (tmp_path / "docs" / "plans").rglob("*.md")]
+    assert written and all(re.fullmatch(r"\d{4}-\d{2}", p.parent.name) for p in written)
+
+
 if __name__ == "__main__":
     unittest.main()

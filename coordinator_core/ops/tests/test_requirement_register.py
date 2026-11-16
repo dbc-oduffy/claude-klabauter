@@ -646,3 +646,15 @@ def test_apply_verdicts_repeat_for_the_same_sha_is_byte_identical():
 
 def test_coverage_gaps_short_turn_is_not_covered_by_a_longer_row_containing_it():
     assert rr._MIN_REVERSE_COVER_CHARS > len("ok")
+
+
+def test_write_register_text_is_byte_identical_under_the_c_and_the_pure_python_dumper(monkeypatch):
+    rows = [_row("R1", source_text="caf\u00e9: 'quoted' # not a comment\nsecond line", ruling="x: y")]
+    block = {"sources": [{"kind": "pm"}], "rows": rows}
+    now = datetime(2026, 11, 15, tzinfo=timezone.utc)
+    text = "schema: sizing-object\nstatus: routed\n"
+
+    default = rr.write_register_text(text, block, now)
+    monkeypatch.setattr(yaml, "CSafeDumper", yaml.SafeDumper, raising=False)
+
+    assert rr.write_register_text(text, block, now) == default

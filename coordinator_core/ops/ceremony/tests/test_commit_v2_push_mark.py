@@ -22,7 +22,7 @@ def _git(args, cwd: Path) -> None:
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path):
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], root)
@@ -43,7 +43,7 @@ def _commit(repo: Path, paths: list) -> dict:
     )
 
 
-def test_landed_commit_marks_the_repo_due_and_does_not_push(repo, monkeypatch):
+def test_landed_commit_marks_the_repo_due_and_does_not_push(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     pushed = []
     monkeypatch.setattr(push_cadence, "_sweep_one", lambda root: pushed.append(root))
     (repo / "a.txt").write_text("a\n", encoding="utf-8")
@@ -52,7 +52,7 @@ def test_landed_commit_marks_the_repo_due_and_does_not_push(repo, monkeypatch):
     assert pushed == []
 
 
-def test_refused_commit_marks_nothing(repo):
+def test_refused_commit_marks_nothing(repo) -> None:
     result = _commit(repo, ["missing.txt"])
     assert result["committed"] is False
     assert push_cadence._due_repos == set()

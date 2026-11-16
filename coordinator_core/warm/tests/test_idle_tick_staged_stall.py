@@ -12,6 +12,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import halted_run, staged_stall
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir, write_run_stage_at
 from coordinator_core.warm import breadcrumb, idle, lifecycle, server
+from pathlib import Path
 
 
 class _FakeVersionState:
@@ -25,14 +26,14 @@ class _FakeVersionState:
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     path = tmp_path / "served"
     path.mkdir()
     return path
 
 
 @pytest.fixture
-def ctx(tmp_path, repo, monkeypatch):
+def ctx(tmp_path: Path, repo, monkeypatch: pytest.MonkeyPatch):
     lifecycle.reset_shutdown_guard_for_test()
     idle.reset_idle_clock_for_test()
     monkeypatch.setattr(idle, "should_demote", lambda **kwargs: False)
@@ -47,7 +48,7 @@ def ctx(tmp_path, repo, monkeypatch):
 
 
 @pytest.fixture
-def seams(monkeypatch):
+def seams(monkeypatch: pytest.MonkeyPatch):
     """Index, agent-in-flight and notification seams; `index` is the live run ids, `sent` the notices."""
     state = {"index": set(), "inflight": False}
     sent: list = []
@@ -60,7 +61,7 @@ def seams(monkeypatch):
     return state
 
 
-def _run(repo, seams, run_id, *, stage="staged", idle_s=None, session="sess-1"):
+def _run(repo, seams, run_id, *, stage: str = "staged", idle_s=None, session: str | None = "sess-1") -> Path:
     rdir = record_dir(repo, run_id)
     rdir.mkdir(parents=True, exist_ok=True)
     write_run_stage_at(rdir, stage, session_id=session)
@@ -81,7 +82,7 @@ def _marker(rdir):
     return json.loads((rdir / halted_run.HALTED_FILE).read_text(encoding="utf-8"))
 
 
-def test_stalled_staged_run_is_halted_and_notified_once(ctx, repo, seams):
+def test_stalled_staged_run_is_halted_and_notified_once(ctx, repo, seams) -> None:
     rdir = _run(repo, seams, "run-stalled", idle_s=staged_stall.STAGED_STALL_BOUND_SECS + 300)
     ctx._idle_tick()
     marker = _marker(rdir)
@@ -94,14 +95,14 @@ def test_stalled_staged_run_is_halted_and_notified_once(ctx, repo, seams):
     assert len(seams["sent"]) == 1
 
 
-def test_fresh_staged_run_is_left_alone(ctx, repo, seams):
+def test_fresh_staged_run_is_left_alone(ctx, repo, seams) -> None:
     rdir = _run(repo, seams, "run-fresh", idle_s=staged_stall.STAGED_STALL_BOUND_SECS - 300)
     ctx._idle_tick()
     assert not (rdir / halted_run.HALTED_FILE).exists()
     assert seams["sent"] == []
 
 
-def test_run_with_an_agent_in_flight_is_not_halted(ctx, repo, seams):
+def test_run_with_an_agent_in_flight_is_not_halted(ctx, repo, seams) -> None:
     rdir = _run(repo, seams, "run-busy", idle_s=staged_stall.STAGED_STALL_BOUND_SECS + 300)
     seams["inflight"] = True
     ctx._idle_tick()
@@ -110,35 +111,35 @@ def test_run_with_an_agent_in_flight_is_not_halted(ctx, repo, seams):
 
 
 @pytest.mark.parametrize("stage", ["minted", "landed"])
-def test_run_not_at_staged_is_left_alone(ctx, repo, seams, stage):
+def test_run_not_at_staged_is_left_alone(ctx, repo, seams, stage) -> None:
     rdir = _run(repo, seams, "run-other", stage=stage, idle_s=staged_stall.STAGED_STALL_BOUND_SECS + 300)
     ctx._idle_tick()
     assert not (rdir / halted_run.HALTED_FILE).exists()
     assert seams["sent"] == []
 
 
-def test_run_idle_past_the_horizon_is_history_not_halted(ctx, repo, seams):
+def test_run_idle_past_the_horizon_is_history_not_halted(ctx, repo, seams) -> None:
     rdir = _run(repo, seams, "run-ancient", idle_s=staged_stall.STAGED_STALL_HORIZON_SECS + 3600)
     ctx._idle_tick()
     assert not (rdir / halted_run.HALTED_FILE).exists()
     assert seams["sent"] == []
 
 
-def test_run_outside_the_live_index_is_ignored(ctx, repo, seams):
+def test_run_outside_the_live_index_is_ignored(ctx, repo, seams) -> None:
     rdir = _run(repo, seams, "run-unindexed", idle_s=staged_stall.STAGED_STALL_BOUND_SECS + 300)
     seams["index"].clear()
     ctx._idle_tick()
     assert not (rdir / halted_run.HALTED_FILE).exists()
 
 
-def test_run_without_a_session_is_halted_without_a_notice(ctx, repo, seams):
+def test_run_without_a_session_is_halted_without_a_notice(ctx, repo, seams) -> None:
     rdir = _run(repo, seams, "run-nosess", idle_s=staged_stall.STAGED_STALL_BOUND_SECS + 300, session=None)
     ctx._idle_tick()
     assert (rdir / halted_run.HALTED_FILE).exists()
     assert seams["sent"] == []
 
 
-def test_scan_failure_never_escapes_the_tick(ctx, monkeypatch):
+def test_scan_failure_never_escapes_the_tick(ctx, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(root, ms, **kw):
         raise RuntimeError("index broke")
 

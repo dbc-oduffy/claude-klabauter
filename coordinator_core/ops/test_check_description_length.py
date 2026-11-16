@@ -13,15 +13,16 @@ import os
 import pytest
 
 from coordinator_core.ops.check_description_length import main
+from pathlib import Path
 
 
-def _write_skill(root, plugin, skill, body):
+def _write_skill(root, plugin, skill, body) -> None:
     d = root / ".claude" / "plugins" / plugin / "skills" / skill
     d.mkdir(parents=True, exist_ok=True)
     (d / "SKILL.md").write_text(body, encoding="utf-8")
 
 
-def test_missing_plugins_root_is_clean_pass(tmp_path, monkeypatch, capsys):
+def test_missing_plugins_root_is_clean_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     rc = main([])
     out = capsys.readouterr()
@@ -30,7 +31,7 @@ def test_missing_plugins_root_is_clean_pass(tmp_path, monkeypatch, capsys):
     assert out.err == ""
 
 
-def test_default_budget_pass(tmp_path, monkeypatch, capsys):
+def test_default_budget_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     _write_skill(
         tmp_path,
@@ -44,7 +45,7 @@ def test_default_budget_pass(tmp_path, monkeypatch, capsys):
     assert "\t27\t150\tpass" in out.out
 
 
-def test_pm_gated_uses_175_budget(tmp_path, monkeypatch, capsys):
+def test_pm_gated_uses_175_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     desc = "PM-GATED: this is a longer description that needs the 175 budget instead of default 150 chars long enough now"
     _write_skill(
@@ -59,7 +60,7 @@ def test_pm_gated_uses_175_budget(tmp_path, monkeypatch, capsys):
     assert f"\t{len(desc)}\t175\tpass" in out.out
 
 
-def test_explicit_description_budget_field_wins(tmp_path, monkeypatch, capsys):
+def test_explicit_description_budget_field_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     desc = (
         "This description would fail default 150 budget but has an explicit "
@@ -78,7 +79,7 @@ def test_explicit_description_budget_field_wins(tmp_path, monkeypatch, capsys):
     assert f"\t{len(desc)}\t500\tpass" in out.out
 
 
-def test_over_budget_fails_with_exit_1(tmp_path, monkeypatch, capsys):
+def test_over_budget_fails_with_exit_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     desc = (
         "This description is deliberately way too long to exceed the default "
@@ -98,7 +99,7 @@ def test_over_budget_fails_with_exit_1(tmp_path, monkeypatch, capsys):
     assert "ERROR: one or more SKILL descriptions exceed their budget" in out.err
 
 
-def test_cache_and_marketplaces_dirs_excluded(tmp_path, monkeypatch, capsys):
+def test_cache_and_marketplaces_dirs_excluded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     _write_skill(
         tmp_path,
@@ -120,7 +121,7 @@ def test_cache_and_marketplaces_dirs_excluded(tmp_path, monkeypatch, capsys):
     assert "skillmp" not in out.out
 
 
-def test_multiline_description_warns_and_skips(tmp_path, monkeypatch, capsys):
+def test_multiline_description_warns_and_skips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     _write_skill(
         tmp_path,

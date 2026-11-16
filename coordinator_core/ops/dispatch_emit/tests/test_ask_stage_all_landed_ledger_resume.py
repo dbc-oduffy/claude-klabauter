@@ -31,7 +31,7 @@ def _plan(tmp_path: Path) -> None:
     )
 
 
-def test_ledger_resume_stages_a_zero_row_whole_manifest(tmp_path):
+def test_ledger_resume_stages_a_zero_row_whole_manifest(tmp_path: Path) -> None:
     _plan(tmp_path)
     manifest = stage(tmp_path, run_id=RUN, plan_rel=PLAN_REL, ledger_resume=True)
     assert manifest.rows == ()
@@ -42,13 +42,13 @@ def test_ledger_resume_stages_a_zero_row_whole_manifest(tmp_path):
     assert (tmp_path / manifest.run_dir).is_dir()
 
 
-def test_handler_default_still_refuses_zero_dispatchable_rows(tmp_path):
+def test_handler_default_still_refuses_zero_dispatchable_rows(tmp_path: Path) -> None:
     _plan(tmp_path)
     reply = ask_stage._handler({"run_id": RUN, "plan_path": PLAN_REL}, repo_root=tmp_path)
     assert "the spine derives zero dispatchable rows" in reply["error"]
 
 
-def test_stage_default_raises_zero_dispatchable_rows(tmp_path):
+def test_stage_default_raises_zero_dispatchable_rows(tmp_path: Path) -> None:
     _plan(tmp_path)
     with pytest.raises(AskStageError, match="the spine derives zero dispatchable rows"):
         stage(tmp_path, run_id=RUN, plan_rel=PLAN_REL)

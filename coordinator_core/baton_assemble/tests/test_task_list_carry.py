@@ -13,6 +13,7 @@ import coordinator_core.baton_assemble as ba
 import coordinator_core.baton_assemble.apply as ba_apply
 from coordinator_core import task_carry
 from coordinator_core.test_baton_assemble import _FAKE_OPERATOR_CONFIG, _init_repo, _write_artifact
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -20,13 +21,13 @@ SID = "sid-task-carry"
 
 
 @pytest.fixture(autouse=True)
-def _env(monkeypatch, tmp_path):
+def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "claude-config"))
     monkeypatch.setenv("CLAUDE_SESSION_ID", SID)
 
 
-def _seed_task(tmp_path, n, **fields):
+def _seed_task(tmp_path, n, **fields) -> None:
     d = tmp_path / "claude-config" / "tasks" / SID
     d.mkdir(parents=True, exist_ok=True)
     data = {"id": str(n), "subject": f"s{n}", "description": f"d{n}", "status": "pending", "blockedBy": []}
@@ -42,7 +43,7 @@ def _mint(tmp_path):
     return repo, decision, d1t
 
 
-def test_ac1_open_tasks_section_lists_open_tasks_in_id_order(tmp_path):
+def test_ac1_open_tasks_section_lists_open_tasks_in_id_order(tmp_path: Path) -> None:
     _seed_task(tmp_path, 2, status="in_progress", blockedBy=["1", "3"])
     _seed_task(tmp_path, 1)
     _seed_task(tmp_path, 3, status="completed")
@@ -68,7 +69,7 @@ def test_ac1_open_tasks_section_lists_open_tasks_in_id_order(tmp_path):
     }
 
 
-def test_ac2_empty_store_leaves_baton_byte_identical(tmp_path):
+def test_ac2_empty_store_leaves_baton_byte_identical(tmp_path: Path) -> None:
     repo, _decision, d1t = _mint(tmp_path)
     assert d1t is not None
     out = d1t["args"][1]
@@ -79,7 +80,7 @@ def test_ac2_empty_store_leaves_baton_byte_identical(tmp_path):
     assert (repo / out).read_bytes() == before
 
 
-def test_ac3_rerun_is_idempotent_and_changed_list_replaces_section(tmp_path):
+def test_ac3_rerun_is_idempotent_and_changed_list_replaces_section(tmp_path: Path) -> None:
     _seed_task(tmp_path, 1)
     repo, _decision, d1t = _mint(tmp_path)
     out = d1t["args"][1]
@@ -97,7 +98,7 @@ def test_ac3_rerun_is_idempotent_and_changed_list_replaces_section(tmp_path):
     assert [t["id"] for t in task_carry.parse_tasks_block(text)] == ["1", "2"]
 
 
-def test_no_session_id_emits_no_directive(tmp_path, monkeypatch):
+def test_no_session_id_emits_no_directive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for key in ("COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
         monkeypatch.delenv(key, raising=False)
     monkeypatch.setattr(ba, "_resolve_current_session_id", lambda: None)

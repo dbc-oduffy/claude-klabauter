@@ -1,5 +1,5 @@
 """coordinator_core.bash_guards.block_topic_branch -- PreToolUse(Bash) advisory:
-remote-backed `main` commits and held pushes.
+remote-backed `main` commits.
 
 The guard is not in `deny_registry`, so `apply_guard_level` records its verdict to the
 advisory log and nothing reaches the caller; "denied" below names the verdict the guard
@@ -16,10 +16,8 @@ Override: `COORDINATOR_OVERRIDE_TOPIC_BRANCH=<non-empty reason>`, as an inline
 env prefix on the git segment or on the `sh -c` wrapper that holds it; the hook environment never overrides.
 An empty value never overrides.
 
-Push hold (`coordinator_core.push_hold`): a `git push` whose target branch is
-held (repo-wide or per-branch) is denied, and the override above never clears
-it, deletes included. A hold with an allowed SHA admits only an explicit refspec whose source
-resolves to that SHA. `--all`/`--mirror` are denied when any hold exists.
+A push to a held branch is `block-held-push`'s, a registered hard deny; this module
+keeps the git-argv and repo-resolution helpers it and its siblings share.
 
 Zero git spawns: pure token parsing, `.git/HEAD` and `.git/config` file reads.
 """
@@ -47,7 +45,6 @@ MAIN_COMMIT_OVERRIDE_KEY = "COORDINATOR_OVERRIDE_BRANCH"
 _PRE_FILTER_RE = re.compile(r"\bgit\b")
 _PUSH_OPT_WITH_ARG = frozenset({"-o", "--push-option", "--repo", "--receive-pack", "--exec"})
 _PUSH_DELETE_FLAGS = frozenset({"-d", "--delete"})
-_HEADS_PREFIX = "refs/heads/"
 
 
 def _git_argv(tokens: List[str]) -> Optional[tuple]:
@@ -150,101 +147,6 @@ def _cd_target(cwd: Optional[str], args: List[str]) -> Optional[str]:
     return target if os.path.isabs(target) else os.path.join(cwd or os.getcwd(), target)
 
 
-_HEX_RE = re.compile(r"^[0-9a-f]{7,40}$")
-
-
-def _resolve_sha(git_root: str, src: str) -> Optional[str]:
-    """`src` lowercased when hex (a prefix is matched against the allowed SHA by the
-    caller), else the SHA a loose/packed ref or HEAD names; None when unresolvable."""
-    low = src.lower()
-    if _HEX_RE.match(low):
-        return low
-    try:
-        from coordinator_core.git.git_dir import resolve_git_common_dir
-
-        gd = str(resolve_git_common_dir(git_root))
-        if src == "HEAD":
-            branch = _head_branch(git_root)
-            if branch is None:
-                with open(os.path.join(str(_git_dir(git_root)), "HEAD"), encoding="utf-8") as fh:
-                    return fh.read().strip().lower()
-            src = _HEADS_PREFIX + branch
-        full = src if src.startswith("refs/") else None
-        for cand in ([full] if full else [_HEADS_PREFIX + src, "refs/tags/" + src]):
-            path = os.path.join(gd, *cand.split("/"))
-            if os.path.isfile(path):
-                with open(path, encoding="utf-8") as fh:
-                    return fh.read().strip().lower()
-            with open(os.path.join(gd, "packed-refs"), encoding="utf-8") as fh:
-                for line in fh:
-                    parts = line.split()
-                    if len(parts) == 2 and parts[1] == cand:
-                        return parts[0].lower()
-    except Exception:  # noqa: BLE001 -- an unresolvable source is not the allowed SHA
-        return None
-    return None
-
-
-def _git_dir(git_root: str):
-    from coordinator_core.git.git_dir import resolve_git_dir
-
-    return resolve_git_dir(git_root)
-
-
-def _held_push(tokens: List[str], cwd: Optional[str]) -> Optional[str]:
-    """Deny reason when this `git push` targets a held branch not released by
-    its allowed SHA, else None."""
-    parsed = _git_argv(tokens)
-    if parsed is None or parsed[0] != "push":
-        return None
-    _, args, c_dirs = parsed
-    deleting = any(t in _PUSH_DELETE_FLAGS for t in args)
-    git_root = _git_root(cwd, c_dirs)
-    if not git_root:
-        return None
-    from coordinator_core import push_hold
-
-    positional = _push_positional(args)
-    if positional[1:2] == ["tag"]:
-        return None
-    if any(t in ("--all", "--mirror") for t in args):
-        holds = push_hold.list_holds(git_root)
-        note = holds["repo"] or next(iter(holds["branches"].values()), None)
-        return _hold_reason(None, note) if note else None
-    specs = positional[1:]
-    head = None
-    if not specs:
-        head = _head_branch(git_root)
-        pairs = [(None, head)] if head else []
-    else:
-        pairs = []
-        for spec in specs:
-            spec = spec.lstrip("+")
-            src, sep, dst = spec.partition(":")
-            ref = dst if sep else spec
-            if sep and not src:
-                deleting_ref = True
-            else:
-                deleting_ref = deleting
-            if ref == "HEAD":
-                ref = _head_branch(git_root)
-            if ref and ref.startswith(_HEADS_PREFIX):
-                ref = ref[len(_HEADS_PREFIX):]
-            elif ref and ref.startswith("refs/"):
-                continue
-            if ref:
-                pairs.append((None if deleting_ref or not sep else src, ref))
-    for src, branch in pairs:
-        note, allow = push_hold.read_hold_allow(git_root, branch)
-        if note is None:
-            continue
-        sha = _resolve_sha(git_root, src) if src and allow else None
-        if sha and allow.startswith(sha):
-            continue
-        return _hold_reason(branch, note)
-    return None
-
-
 def _main_commit(
     tokens: List[str], raw_tokens: List[str], cwd: Optional[str], inherited: str = ""
 ) -> Optional[str]:
@@ -271,23 +173,6 @@ def _main_commit(
         f"Commit on remote-backed main: {refusal} Alternative: commit to the day branch work/<machine>/<date>.",
         AdaptableOffer(template="commit to the day branch work/<machine>/<date>", what_to_adapt="the machine and date"),
         _escalation("the commit you need on main"),
-    )
-
-
-def _hold_reason(branch: Optional[str], note: str) -> Any:
-    from coordinator_core.guard_messages.alternative_record import AdaptableOffer, ReadyCommand
-
-    where = f"branch `{branch}`" if branch else "repo"
-    return _record(
-        f"Push hold on {where}: {note}.",
-        f"Push hold on {where}: {note}. "
-        "Alternative: `push-hold clear`, or push the hold's --allow-sha as an explicit "
-        "`<sha>:refs/heads/<branch>` refspec.",
-        ReadyCommand(text="push-hold clear"),
-        AdaptableOffer(
-            template="push the hold's --allow-sha as an explicit `<sha>:refs/heads/<branch>` refspec",
-            what_to_adapt="the sha and branch",
-        ),
     )
 
 
@@ -338,9 +223,6 @@ def check(payload: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         if follow_cd and resolved.depth == 0 and resolved.tokens[:1] == ["cd"]:
             cwd = _cd_target(cwd, resolved.tokens[1:])
             continue
-        held = _held_push(resolved.tokens, cwd)
-        if held is not None:
-            return held
         main_commit = _main_commit(resolved.tokens, resolved.raw_tokens, cwd, inherited)
         if main_commit is not None:
             return main_commit

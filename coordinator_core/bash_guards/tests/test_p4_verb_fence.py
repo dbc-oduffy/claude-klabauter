@@ -29,6 +29,7 @@ import pytest
 from coordinator_core.bash_guards import p4_verb_fence
 from coordinator_core.p4 import runner as p4_runner
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -51,12 +52,12 @@ def _payload(cmd: str, tool_name: str = "Bash", cwd: str = "/repo") -> dict:
 
 
 @pytest.fixture(autouse=True)
-def _p4_gated(monkeypatch):
+def _p4_gated(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(p4_verb_fence, "_is_p4_gated", lambda cwd: True)
 
 
 @pytest.fixture(autouse=True)
-def _no_spawns(monkeypatch):
+def _no_spawns(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def _spy(*args, **kwargs):
         raise AssertionError("p4_verb_fence.check() spawned a process via p4.runner.run")
@@ -76,174 +77,174 @@ def _allow(cmd: str, tool_name: str = "Bash") -> None:
 
 
 class TestSubmitDenied:
-    def test_bare_submit_denied(self):
+    def test_bare_submit_denied(self) -> None:
         env = _deny("p4 submit -d 'commit'")
         assert env["permissionDecision"] == "deny"
         assert "agents do not submit" in env["permissionDecisionReason"]
 
-    def test_flag_interposed_submit_denied(self):
+    def test_flag_interposed_submit_denied(self) -> None:
         env = _deny("p4.exe -p ssl:p4.example.com:1666 -u agent -c agent-ws submit -c 41")
         assert "agents do not submit" in env["permissionDecisionReason"]
 
 
 class TestUnparseable:
-    def test_dash_x_denied(self):
+    def test_dash_x_denied(self) -> None:
         _deny("p4 -x argfile.txt status")
 
-    def test_p4aliases_denied(self):
+    def test_p4aliases_denied(self) -> None:
         _deny("P4ALIASES=/tmp/aliases.txt p4 status")
 
-    def test_p4vc_denied(self):
+    def test_p4vc_denied(self) -> None:
         _deny("p4vc submit")
 
-    def test_git_p4_denied(self):
+    def test_git_p4_denied(self) -> None:
         _deny("git p4 sync")
 
 
 class TestReadOnlyStrip:
-    def test_attrib_minus_r_denied(self):
+    def test_attrib_minus_r_denied(self) -> None:
         _deny("attrib -r Config/DefaultEngine.ini")
 
-    def test_chmod_plus_w_denied(self):
+    def test_chmod_plus_w_denied(self) -> None:
         _deny("chmod +w Config/DefaultEngine.ini")
 
-    def test_chmod_without_plus_w_allowed(self):
+    def test_chmod_without_plus_w_allowed(self) -> None:
         _allow("chmod 644 Config/DefaultEngine.ini")
 
 
 class TestReconcileScoping:
-    def test_bare_reconcile_dash_n_denied(self):
+    def test_bare_reconcile_dash_n_denied(self) -> None:
         env = _deny("p4 reconcile -n")
         assert "scope it to paths" in env["permissionDecisionReason"]
 
-    def test_path_scoped_reconcile_dash_n_allowed(self):
+    def test_path_scoped_reconcile_dash_n_allowed(self) -> None:
         _allow("p4 reconcile -n -- Content/Maps/Foo.umap")
 
-    def test_unscoped_reconcile_without_n_denied(self):
+    def test_unscoped_reconcile_without_n_denied(self) -> None:
         _deny("p4 reconcile")
 
 
 class TestSessionClWrites:
-    def test_edit_with_cl_allowed(self):
+    def test_edit_with_cl_allowed(self) -> None:
         _allow("p4 edit -c 41 -- Content/Foo.uasset")
 
-    def test_edit_without_cl_denied(self):
+    def test_edit_without_cl_denied(self) -> None:
         _deny("p4 edit -- Content/Foo.uasset")
 
-    def test_revert_dash_a_allowed(self):
+    def test_revert_dash_a_allowed(self) -> None:
         _allow("p4 revert -a -c 41 -- Content/Foo.uasset")
 
-    def test_shelve_with_cl_allowed(self):
+    def test_shelve_with_cl_allowed(self) -> None:
         _allow("p4 shelve -c 41")
 
 
 class TestReadVerbsAllowed:
-    def test_status_allowed(self):
+    def test_status_allowed(self) -> None:
         _allow("p4 status")
 
-    def test_stream_o_allowed(self):
+    def test_stream_o_allowed(self) -> None:
         _allow("p4 stream -o")
 
-    def test_stream_without_o_denied(self):
+    def test_stream_without_o_denied(self) -> None:
         _deny("p4 stream -d //depot/UE5/main")
 
-    def test_set_no_args_allowed(self):
+    def test_set_no_args_allowed(self) -> None:
         _allow("p4 set")
 
-    def test_login_dash_s_allowed(self):
+    def test_login_dash_s_allowed(self) -> None:
         _allow("p4 login -s")
 
 
 class TestGitWorktreeRewriteDeny:
-    def test_checkout_paths_denied(self):
+    def test_checkout_paths_denied(self) -> None:
         _deny("git checkout -- Content/Foo.uasset")
 
-    def test_checkout_branch_denied(self):
+    def test_checkout_branch_denied(self) -> None:
         _deny("git checkout main")
 
-    def test_clean_fdx_denied(self):
+    def test_clean_fdx_denied(self) -> None:
         env = _deny("git clean -fdx")
         assert "git clean" in env["permissionDecisionReason"]
 
-    def test_reset_hard_denied(self):
+    def test_reset_hard_denied(self) -> None:
         _deny("git reset --hard HEAD~1")
 
-    def test_reset_mixed_allowed(self):
+    def test_reset_mixed_allowed(self) -> None:
         _allow("git reset --mixed HEAD~1")
 
-    def test_reset_soft_allowed(self):
+    def test_reset_soft_allowed(self) -> None:
         _allow("git reset --soft HEAD~1")
 
-    def test_reset_no_flag_allowed(self):
+    def test_reset_no_flag_allowed(self) -> None:
         _allow("git reset HEAD~1")
 
-    def test_stash_pop_denied(self):
+    def test_stash_pop_denied(self) -> None:
         _deny("git stash pop")
 
-    def test_submodule_update_denied(self):
+    def test_submodule_update_denied(self) -> None:
         _deny("git submodule update --init")
 
-    def test_submodule_status_allowed(self):
+    def test_submodule_status_allowed(self) -> None:
         _allow("git submodule status")
 
-    def test_sparse_checkout_denied(self):
+    def test_sparse_checkout_denied(self) -> None:
         _deny("git sparse-checkout set Content/")
 
-    def test_read_tree_dash_u_denied(self):
+    def test_read_tree_dash_u_denied(self) -> None:
         _deny("git read-tree -u HEAD")
 
-    def test_checkout_index_denied(self):
+    def test_checkout_index_denied(self) -> None:
         _deny("git checkout-index -a")
 
-    def test_bisect_denied(self):
+    def test_bisect_denied(self) -> None:
         _deny("git bisect start")
 
-    def test_status_allowed_through_the_git_leg(self):
+    def test_status_allowed_through_the_git_leg(self) -> None:
         _allow("git status")
 
 
 class TestChainedSegments:
-    def test_p4_ok_segment_then_git_deny_segment_denies(self):
+    def test_p4_ok_segment_then_git_deny_segment_denies(self) -> None:
         _deny("p4 status && git checkout -- Content/Foo.uasset")
 
-    def test_powershell_ampersand_p4_spelling(self):
+    def test_powershell_ampersand_p4_spelling(self) -> None:
         env = _deny("& p4 submit -d 'x'")
         assert "agents do not submit" in env["permissionDecisionReason"]
 
-    def test_cmd_c_p4_spelling(self):
+    def test_cmd_c_p4_spelling(self) -> None:
         env = _deny('cmd /c p4 submit -d "x"', tool_name="Bash")
         assert "agents do not submit" in env["permissionDecisionReason"]
 
 
 class TestPowerShellDialect:
-    def test_submit_denied_under_powershell_tool_name(self):
+    def test_submit_denied_under_powershell_tool_name(self) -> None:
         env = _deny("p4 submit -d 'x'", tool_name="PowerShell")
         assert "agents do not submit" in env["permissionDecisionReason"]
 
-    def test_status_allowed_under_powershell(self):
+    def test_status_allowed_under_powershell(self) -> None:
         _allow("p4 status", tool_name="PowerShell")
 
-    def test_git_checkout_denied_under_powershell(self):
+    def test_git_checkout_denied_under_powershell(self) -> None:
         _deny("git checkout -- Content/Foo.uasset", tool_name="PowerShell")
 
 
 class TestGitOnlyRepoPaysNothing:
-    def test_no_marker_allows_p4_submit_untouched(self, monkeypatch):
+    def test_no_marker_allows_p4_submit_untouched(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(p4_verb_fence, "_is_p4_gated", lambda cwd: False)
         _allow("p4 submit -d 'commit'")
 
-    def test_no_marker_allows_git_clean_fdx(self, monkeypatch):
+    def test_no_marker_allows_git_clean_fdx(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(p4_verb_fence, "_is_p4_gated", lambda cwd: False)
         _allow("git clean -fdx")
 
-    def test_marker_gate_is_a_real_filesystem_walk(self, tmp_path):
+    def test_marker_gate_is_a_real_filesystem_walk(self, tmp_path: Path) -> None:
         # Exercises `_find_repo_root_no_spawn` + `is_p4_repo` for real,
         # rather than through the autouse monkeypatch (see
         # `_REAL_IS_P4_GATED` above).
         result = _REAL_IS_P4_GATED(str(tmp_path))
         assert result is False
 
-    def test_marker_present_gates_true(self, tmp_path):
+    def test_marker_present_gates_true(self, tmp_path: Path) -> None:
         (tmp_path / "coordinator.local.md").write_text(
             "---\nvcs_mirror: p4\n---\n", encoding="utf-8"
         )
@@ -254,74 +255,74 @@ class TestGitOnlyRepoPaysNothing:
 
 class TestReopenAdoption:
 
-    def test_reopen_with_cl_and_path_allowed(self):
+    def test_reopen_with_cl_and_path_allowed(self) -> None:
         _allow("p4 reopen -c 101 -- Content/Foo.uasset")
 
-    def test_bare_reopen_denied(self):
+    def test_bare_reopen_denied(self) -> None:
         env = _deny("p4 reopen")
         assert "reopen" in env["permissionDecisionReason"]
 
-    def test_reopen_with_cl_but_no_path_denied(self):
+    def test_reopen_with_cl_but_no_path_denied(self) -> None:
         _deny("p4 reopen -c 101")
 
-    def test_reopen_with_cl_missing_value_denied(self):
+    def test_reopen_with_cl_missing_value_denied(self) -> None:
         _deny("p4 reopen -c")
 
 
 class TestNestedShellInterpreterDenied:
 
-    def test_bash_c_p4_submit_denied(self):
+    def test_bash_c_p4_submit_denied(self) -> None:
         _deny('bash -c "p4 submit -d x"')
 
-    def test_sh_c_p4_submit_denied(self):
+    def test_sh_c_p4_submit_denied(self) -> None:
         _deny('sh -c "p4 submit -d x"')
 
-    def test_pwsh_command_p4_submit_denied(self):
+    def test_pwsh_command_p4_submit_denied(self) -> None:
         _deny('pwsh -Command "p4 submit -d x"', tool_name="PowerShell")
 
-    def test_pwsh_c_p4_submit_denied(self):
+    def test_pwsh_c_p4_submit_denied(self) -> None:
         _deny('pwsh -c "p4 submit -d x"', tool_name="PowerShell")
 
-    def test_powershell_command_p4_submit_denied(self):
+    def test_powershell_command_p4_submit_denied(self) -> None:
         _deny('powershell -Command "p4 submit -d x"', tool_name="PowerShell")
 
-    def test_powershell_encodedcommand_p4_denied(self):
+    def test_powershell_encodedcommand_p4_denied(self) -> None:
         _deny('powershell -EncodedCommand "cAA0IHN1Ym1pdA=="', tool_name="PowerShell")
 
-    def test_bash_c_git_checkout_denied(self):
+    def test_bash_c_git_checkout_denied(self) -> None:
         _deny('bash -c "git checkout -- Content/Foo.uasset"')
 
-    def test_bash_c_non_p4_command_allowed(self):
+    def test_bash_c_non_p4_command_allowed(self) -> None:
         _allow('bash -c "ls"')
 
-    def test_sh_c_non_p4_command_allowed(self):
+    def test_sh_c_non_p4_command_allowed(self) -> None:
         _allow('sh -c "echo hi"')
 
 
 class TestChangeScoped:
 
-    def test_change_dash_o_allowed(self):
+    def test_change_dash_o_allowed(self) -> None:
         _allow("p4 change -o")
 
-    def test_change_dash_i_allowed(self):
+    def test_change_dash_i_allowed(self) -> None:
         _allow("p4 change -i")
 
-    def test_change_dash_d_denied(self):
+    def test_change_dash_d_denied(self) -> None:
         _deny("p4 change -d 41")
 
-    def test_change_dash_f_denied(self):
+    def test_change_dash_f_denied(self) -> None:
         _deny("p4 change -f -i")
 
-    def test_change_bare_denied(self):
+    def test_change_bare_denied(self) -> None:
         _deny("p4 change")
 
 
 class TestNonCommandToolNamesIgnored:
-    def test_non_matching_tool_name_returns_none(self):
+    def test_non_matching_tool_name_returns_none(self) -> None:
         result = _enveloped(p4_verb_fence.check)(
             {"tool_name": "Read", "tool_input": {"file_path": "x"}, "cwd": "/repo"}
         )
         assert result is None
 
-    def test_empty_command_returns_none(self):
+    def test_empty_command_returns_none(self) -> None:
         _allow("")

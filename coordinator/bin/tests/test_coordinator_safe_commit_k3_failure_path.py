@@ -23,6 +23,7 @@ import subprocess
 import sys
 
 import pytest
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -76,7 +77,7 @@ def _roll_back(repo: pathlib.Path) -> None:
     (repo / "state/n/a.md").write_text("v1\n", encoding="utf-8")
 
 
-def test_a_mixed_call_with_a_refused_process_half_leaves_no_dishonest_partial_landing(tmp_path):
+def test_a_mixed_call_with_a_refused_process_half_leaves_no_dishonest_partial_landing(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     base = _head(repo)
     _roll_back(repo)
@@ -90,7 +91,7 @@ def test_a_mixed_call_with_a_refused_process_half_leaves_no_dishonest_partial_la
         assert "state/n/a.md" in run.stderr and "partial" in run.stderr.lower(), run.stderr
 
 
-def test_b_every_printed_error_exits_non_zero(tmp_path):
+def test_b_every_printed_error_exits_non_zero(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _roll_back(repo)
 
@@ -100,7 +101,7 @@ def test_b_every_printed_error_exits_non_zero(tmp_path):
     assert run.returncode != 0, run.stderr
 
 
-def test_c_dry_run_refuses_what_the_real_run_refuses(tmp_path):
+def test_c_dry_run_refuses_what_the_real_run_refuses(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     base = _head(repo)
     _roll_back(repo)
@@ -114,7 +115,7 @@ def test_c_dry_run_refuses_what_the_real_run_refuses(tmp_path):
     assert _head(repo) == base
 
 
-def test_c_dry_run_still_previews_a_clean_call_and_commits_nothing(tmp_path):
+def test_c_dry_run_still_previews_a_clean_call_and_commits_nothing(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     base = _head(repo)
     (repo / "src/app.py").write_text("p\n", encoding="utf-8")
@@ -126,7 +127,7 @@ def test_c_dry_run_still_previews_a_clean_call_and_commits_nothing(tmp_path):
     assert _head(repo) == base
 
 
-def test_d_a_lock_with_no_holder_is_reaped_not_named_a_peer(tmp_path):
+def test_d_a_lock_with_no_holder_is_reaped_not_named_a_peer(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "src/app.py").write_text("p\n", encoding="utf-8")
     lock = repo / ".git" / "index.lock"

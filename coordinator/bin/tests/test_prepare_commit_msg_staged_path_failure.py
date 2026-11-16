@@ -17,6 +17,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -87,7 +91,7 @@ def _install_hook(root: Path) -> None:
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> tuple[Path, Path]:
     root = tmp_path / "repo"
     root.mkdir()
     assert _git(["init", "-q"], root).returncode == 0
@@ -122,7 +126,7 @@ def _commit(root: Path, shim: Path, message: str, mode: str):
 
 
 @pytest.mark.parametrize("mode", ["timeout", "nonzero"])
-def test_failed_derivation_in_a_dirty_repo_does_not_refuse_the_commit(repo, mode):
+def test_failed_derivation_in_a_dirty_repo_does_not_refuse_the_commit(repo, mode) -> None:
     root, shim = repo
     _install_hook(root)
     _dirty_worktree(root)
@@ -134,7 +138,7 @@ def test_failed_derivation_in_a_dirty_repo_does_not_refuse_the_commit(repo, mode
 
 
 @pytest.mark.parametrize("mode", ["timeout", "nonzero"])
-def test_failed_derivation_with_trailer_present_keeps_the_trailer(repo, mode):
+def test_failed_derivation_with_trailer_present_keeps_the_trailer(repo, mode) -> None:
     root, shim = repo
     _install_hook(root)
     proc, log = _commit(root, shim, "subject\n\nDeliverable-Id: some-plan\n", mode)
@@ -142,7 +146,7 @@ def test_failed_derivation_with_trailer_present_keeps_the_trailer(repo, mode):
     assert "Deliverable-Id: some-plan" in log
 
 
-def test_working_derivation_in_a_dirty_repo_commits_without_advisory(repo):
+def test_working_derivation_in_a_dirty_repo_commits_without_advisory(repo) -> None:
     root, shim = repo
     _install_hook(root)
     _dirty_worktree(root)
@@ -152,7 +156,7 @@ def test_working_derivation_in_a_dirty_repo_commits_without_advisory(repo):
     assert log.startswith("subject")
 
 
-def test_default_timeout_is_unchanged():
+def test_default_timeout_is_unchanged() -> None:
     spec = importlib.util.spec_from_file_location("pcm_staged_failure", _HOOK_PATH)
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
@@ -161,7 +165,7 @@ def test_default_timeout_is_unchanged():
     assert inspect.signature(mod._resolve_staged_paths).parameters["timeout"].default == 10.0
 
 
-def test_outside_a_worktree_is_an_empty_stage(tmp_path):
+def test_outside_a_worktree_is_an_empty_stage(tmp_path: Path) -> None:
     outside = tmp_path / "not-a-repo"
     outside.mkdir()
     msg = outside / "MSG"
@@ -180,7 +184,7 @@ def test_outside_a_worktree_is_an_empty_stage(tmp_path):
     assert "staged-path derivation failed" not in proc.stderr
 
 
-def _load_hook():
+def _load_hook() -> ModuleType:
     spec = importlib.util.spec_from_file_location("pcm_mirrored_ladder", _HOOK_PATH)
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     spec.loader.exec_module(mod)  # type: ignore[union-attr]
@@ -189,8 +193,8 @@ def _load_hook():
 
 @pytest.mark.parametrize("deliverable_id", ["", "some-plan"])
 def test_mirrored_ladder_never_refuses_on_a_lost_derivation(
-    monkeypatch, tmp_path, capsys, deliverable_id
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], deliverable_id
+) -> None:
     mod = _load_hook()
     msg = tmp_path / "MSG"
     msg.write_text("subject\n", encoding="utf-8")

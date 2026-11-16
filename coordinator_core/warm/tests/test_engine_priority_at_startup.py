@@ -6,15 +6,16 @@ import inspect
 from unittest import mock
 
 from coordinator_core.warm import server
+import pytest
 
 
-def test_boot_sequence_raises_priority_first():
+def test_boot_sequence_raises_priority_first() -> None:
     source = inspect.getsource(server._run_guarded)
     assert "_raise_engine_priority()" in source
     assert source.index("_raise_engine_priority()") < source.index("_engine_clone_root()")
 
 
-def test_windows_sets_high_priority_class_on_own_process(monkeypatch):
+def test_windows_sets_high_priority_class_on_own_process(monkeypatch: pytest.MonkeyPatch) -> None:
     kernel32 = mock.MagicMock()
     kernel32.SetPriorityClass.return_value = 1
     kernel32.GetCurrentProcess.return_value = 123
@@ -28,7 +29,7 @@ def test_windows_sets_high_priority_class_on_own_process(monkeypatch):
     kernel32.SetPriorityClass.assert_called_once_with(123, 0x80)
 
 
-def test_priority_failure_is_swallowed(monkeypatch):
+def test_priority_failure_is_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server.sys, "platform", "win32")
     fake_ctypes = mock.MagicMock()
     fake_ctypes.windll.kernel32.SetPriorityClass.side_effect = OSError
@@ -36,5 +37,5 @@ def test_priority_failure_is_swallowed(monkeypatch):
     assert server._raise_engine_priority() is False
 
 
-def test_pool_worker_init_never_raises_priority():
+def test_pool_worker_init_never_raises_priority() -> None:
     assert "_raise_engine_priority" not in inspect.getsource(server._worker_process_init)

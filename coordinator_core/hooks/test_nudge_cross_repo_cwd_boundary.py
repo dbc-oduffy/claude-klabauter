@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from coordinator_core.hooks import nudge_cross_repo_cwd_boundary as m
+import pytest
 
 
-def test_crossing_into_sibling_root_emits_advisory(monkeypatch):
+def test_crossing_into_sibling_root_emits_advisory(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         m, "coordinator_engine_root_with_class", lambda: ("/repo/claude-klabauter", "resolved_engine")
     )
@@ -12,14 +13,14 @@ def test_crossing_into_sibling_root_emits_advisory(monkeypatch):
     assert "cross-repo boundary" in result["hookSpecificOutput"]["additionalContext"]
 
 
-def test_unresolved_sibling_is_a_no_op(monkeypatch):
+def test_unresolved_sibling_is_a_no_op(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         m, "coordinator_engine_root_with_class", lambda: (None, "unresolved")
     )
     assert m._handler({"old_cwd": "/a", "new_cwd": "/b"}) == {}
 
 
-def test_non_crossing_move_is_a_no_op(monkeypatch):
+def test_non_crossing_move_is_a_no_op(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         m, "coordinator_engine_root_with_class", lambda: ("/repo/claude-klabauter", "resolved_engine")
     )

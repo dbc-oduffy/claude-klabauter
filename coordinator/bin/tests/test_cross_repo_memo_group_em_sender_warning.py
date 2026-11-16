@@ -6,11 +6,16 @@ import importlib.util
 import pathlib
 
 import pytest
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _load_cli_module():
+def _load_cli_module() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "cross_repo_memo_gem_sender_warning", str(_BIN_DIR / "cross-repo-memo.py")
     )
@@ -21,7 +26,7 @@ def _load_cli_module():
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     settings = tmp_path / "settings"
     reg = tmp_path / "registry"
     settings.mkdir()
@@ -33,7 +38,7 @@ def env(tmp_path, monkeypatch):
     return settings
 
 
-def test_home_root_prints_no_warning(env, capsys, monkeypatch):
+def test_home_root_prints_no_warning(env, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     home = env / "group-em"
     home.mkdir()
     mod = _load_cli_module()
@@ -43,7 +48,7 @@ def test_home_root_prints_no_warning(env, capsys, monkeypatch):
     assert "UNREGISTERED" not in capsys.readouterr().err
 
 
-def test_non_home_unregistered_still_warns(env, tmp_path, capsys, monkeypatch):
+def test_non_home_unregistered_still_warns(env, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     other = tmp_path / "fresh-clone"
     other.mkdir()
     mod = _load_cli_module()
@@ -53,7 +58,7 @@ def test_non_home_unregistered_still_warns(env, tmp_path, capsys, monkeypatch):
     assert "UNREGISTERED" in capsys.readouterr().err
 
 
-def test_pr_comment_alternative_only_for_delivery_failures(env):
+def test_pr_comment_alternative_only_for_delivery_failures(env) -> None:
     mod = _load_cli_module()
 
     class _Refusal(RuntimeError):

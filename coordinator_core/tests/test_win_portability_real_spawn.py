@@ -22,11 +22,12 @@ import sys
 import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _write_child_script(tmp_path, stdout_text="out-line\n", stderr_text="err-line\n", returncode=0):
+def _write_child_script(tmp_path, stdout_text: str = "out-line\n", stderr_text: str = "err-line\n", returncode: int = 0) -> str:
     script = tmp_path / "run_forwarding_child.py"
     script.write_text(
         "import sys\n"
@@ -37,7 +38,7 @@ def _write_child_script(tmp_path, stdout_text="out-line\n", stderr_text="err-lin
     return str(script)
 
 
-def test_bare_subprocess_run_reproduces_the_original_break(tmp_path):
+def test_bare_subprocess_run_reproduces_the_original_break(tmp_path: Path) -> None:
     child = _write_child_script(tmp_path)
     buf = io.StringIO()
     with pytest.raises(io.UnsupportedOperation):

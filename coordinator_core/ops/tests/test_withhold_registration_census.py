@@ -333,17 +333,17 @@ def _real_findings() -> List[Finding]:
     return list(_REAL_FINDINGS)
 
 
-def test_no_unregistered_withholds_over_the_real_tree():
+def test_no_unregistered_withholds_over_the_real_tree() -> None:
     result = run_census(_real_findings(), registered_knobs(), _WAIVERS)
     assert not result.unregistered, _census_report(result)
 
 
-def test_no_unclassified_haystacks_over_the_real_tree():
+def test_no_unclassified_haystacks_over_the_real_tree() -> None:
     result = run_census(_real_findings(), registered_knobs(), _WAIVERS)
     assert not result.unclassified, _census_report(result)
 
 
-def test_real_tree_census_is_fully_classified_and_reported():
+def test_real_tree_census_is_fully_classified_and_reported() -> None:
     """The exit-criterion #3 requirement stated as a test: every real-tree finding lands in
     exactly one class, none unclassified, and the classification is printed for eye-check."""
     result = run_census(_real_findings(), registered_knobs(), _WAIVERS)
@@ -383,7 +383,7 @@ def _write_probe(tmp_path: Path, setup: str, knob: str, haystack: str) -> None:
     p.write_text(body, encoding="utf-8")
 
 
-def test_probe_unregistered_withhold_on_covered_path_is_red(tmp_path):
+def test_probe_unregistered_withhold_on_covered_path_is_red(tmp_path: Path) -> None:
     """An agent-facing assertion for a knob absent from the registry, with no waiver, must
     fail as unregistered. This is the exact shape of the 2026-09-04 gap
     (`test_percolate_round_lock_denies_fast.py:111`) reproduced synthetically."""
@@ -395,7 +395,7 @@ def test_probe_unregistered_withhold_on_covered_path_is_red(tmp_path):
     assert not result.unclassified
 
 
-def test_probe_env_haystack_stays_green(tmp_path):
+def test_probe_env_haystack_stays_green(tmp_path: Path) -> None:
     """An assertion about the process environment is never a withhold, registered or not."""
     _write_probe(tmp_path, "", "COORDINATOR_NOT_REGISTERED_ANYWHERE", "os.environ")
     findings = scan_dir_for_findings(tmp_path, scan_dirs=("coordinator_core",))
@@ -405,7 +405,7 @@ def test_probe_env_haystack_stays_green(tmp_path):
     assert len(result.not_withheld) == 1
 
 
-def test_probe_waived_assertion_is_green_and_unwaiving_turns_it_red(tmp_path):
+def test_probe_waived_assertion_is_green_and_unwaiving_turns_it_red(tmp_path: Path) -> None:
     """A waived assertion is green; removing its waiver-table entry turns it red — proving
     the waiver is load-bearing rather than decorative."""
     _write_probe(tmp_path, 'reason = "refusal text"', "COORDINATOR_PROBE_WAIVED_KNOB", "reason")
@@ -419,7 +419,7 @@ def test_probe_waived_assertion_is_green_and_unwaiving_turns_it_red(tmp_path):
     assert len(unwaived_result.unregistered) == 1
 
 
-def test_probe_line_insertion_above_a_waiver_does_not_unwaive_it(tmp_path):
+def test_probe_line_insertion_above_a_waiver_does_not_unwaive_it(tmp_path: Path) -> None:
     """DEFECT 1 regression pin: the waiver table is keyed by (relpath, knob), not
     (relpath, lineno). Inserting lines above a waived assertion must not turn it red —
     proving the fix rather than merely asserting the new key shape in isolation."""
@@ -442,7 +442,7 @@ def test_probe_line_insertion_above_a_waiver_does_not_unwaive_it(tmp_path):
     assert len(result.waived) == 1
 
 
-def test_probe_unrecognised_haystack_is_reported_not_ignored(tmp_path):
+def test_probe_unrecognised_haystack_is_reported_not_ignored(tmp_path: Path) -> None:
     """A haystack the classifier has never seen must fail as unclassified, not decay to
     silent 'ignore' — the failure mode that kills this class of guard for good."""
     _write_probe(
@@ -466,7 +466,7 @@ def test_probe_unrecognised_haystack_is_reported_not_ignored(tmp_path):
     "haystack",
     ["err", "msg", "stderr", "reason", "note", "text", "ctx", "result", "str", "flag_note", "c1_ctx", 'briefs["C1"]'],
 )
-def test_classifier_recognises_agent_facing_haystacks(haystack):
+def test_classifier_recognises_agent_facing_haystacks(haystack) -> None:
     assert classify_haystack(haystack) == WITHHOLD
 
 
@@ -474,9 +474,9 @@ def test_classifier_recognises_agent_facing_haystacks(haystack):
     "haystack",
     ["os.environ", "env", "base_env", "hooks_text", "code", 'captured["env"]', "some_thing_env"],
 )
-def test_classifier_recognises_non_withhold_haystacks(haystack):
+def test_classifier_recognises_non_withhold_haystacks(haystack) -> None:
     assert classify_haystack(haystack) == NOT_WITHHOLD
 
 
-def test_classifier_reports_unknown_haystacks_as_unclassified():
+def test_classifier_reports_unknown_haystacks_as_unclassified() -> None:
     assert classify_haystack("some_brand_new_shape") == UNCLASSIFIED

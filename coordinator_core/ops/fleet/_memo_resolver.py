@@ -202,7 +202,7 @@ _LOG = logging.getLogger(__name__)
 
 class RegistryReadError(Exception):
 
-    def __init__(self, reason: str):
+    def __init__(self, reason: str) -> None:
         self.reason = reason
         super().__init__(reason)
 
@@ -214,7 +214,7 @@ class ExternalWorkspaceReceiverError(RegistryReadError):
     registry defect refuses this the same way.
     """
 
-    def __init__(self, receiver: str, workspace_key: str):
+    def __init__(self, receiver: str, workspace_key: str) -> None:
         self.receiver = receiver
         self.workspace_key = workspace_key
         super().__init__(
@@ -226,7 +226,7 @@ class ExternalWorkspaceReceiverError(RegistryReadError):
 
 class AmbiguousReceiverError(Exception):
 
-    def __init__(self, receiver_em_id: str, candidate_keys):
+    def __init__(self, receiver_em_id: str, candidate_keys) -> None:
         self.receiver_em_id = receiver_em_id
         self.candidate_keys = tuple(sorted(candidate_keys))
         super().__init__(

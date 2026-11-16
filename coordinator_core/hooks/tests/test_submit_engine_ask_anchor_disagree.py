@@ -7,10 +7,11 @@ import pytest
 from coordinator_core import warp_fire
 from coordinator_core.bash_guards import _write_bump_applicability as wba
 from coordinator_core.hooks import submit_engine_ask as mod
+from pathlib import Path
 
 
 class _Boom:
-    def __init__(self):
+    def __init__(self) -> None:
         self.calls = 0
 
     def __call__(self, *a, **k):
@@ -19,7 +20,7 @@ class _Boom:
 
 
 @pytest.fixture(autouse=True)
-def _env(monkeypatch):
+def _env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod, "_is_first_turn", lambda _p: True)
 
 
@@ -39,7 +40,7 @@ def _reason(out):
     return hso["permissionDecisionReason"]
 
 
-def test_disagreement_refused_naming_both_paths_without_emit(tmp_path, monkeypatch):
+def test_disagreement_refused_naming_both_paths_without_emit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wba, "launch_anchor_disagreement", lambda *a, **k: ("/anchor/clone", "/launch/real"))
     emit, fanout, launch = _Boom(), _Boom(), _Boom()
     out = mod.evaluate(_payload(tmp_path), emit=emit, fanout=fanout, launch=launch)
@@ -48,7 +49,7 @@ def test_disagreement_refused_naming_both_paths_without_emit(tmp_path, monkeypat
     assert emit.calls == fanout.calls == launch.calls == 0
 
 
-def test_absolute_repo_skips_the_disagreement_check(tmp_path, monkeypatch):
+def test_absolute_repo_skips_the_disagreement_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = _Boom()
     monkeypatch.setattr(wba, "launch_anchor_disagreement", seen)
     out = mod.evaluate(_payload(tmp_path, repo=str(tmp_path)), emit=_Boom(), fanout=_Boom(), launch=_Boom())
@@ -57,7 +58,7 @@ def test_absolute_repo_skips_the_disagreement_check(tmp_path, monkeypatch):
     assert "different repos" not in (hso.get("permissionDecisionReason") or "")
 
 
-def test_agreement_is_not_refused_for_disagreement(tmp_path, monkeypatch):
+def test_agreement_is_not_refused_for_disagreement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wba, "launch_anchor_disagreement", lambda *a, **k: None)
     out = mod.evaluate(_payload(tmp_path), emit=_Boom(), fanout=_Boom(), launch=_Boom())
     hso = out.get("hookSpecificOutput") or {}

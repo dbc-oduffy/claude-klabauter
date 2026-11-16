@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
+from pathlib import Path
 
 PLAN_REL = "docs/plans/2026-10-01-regrows.md"
 
@@ -21,7 +22,7 @@ def _stage(tmp_path, rows):
     return stage(tmp_path, run_id="r1", plan_rel=PLAN_REL)
 
 
-def test_only_the_declaring_row_carries_register_rows(tmp_path):
+def test_only_the_declaring_row_carries_register_rows(tmp_path: Path) -> None:
     m = _stage(tmp_path, [_row("C1", "  register_rows: [R1, R2]\n"), _row("C2")])
     by_id = {r.id: r for r in m.rows}
     assert by_id["C1"].register_rows == ("R1", "R2")

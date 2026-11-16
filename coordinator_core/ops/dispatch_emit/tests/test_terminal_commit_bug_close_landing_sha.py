@@ -14,6 +14,7 @@ from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_register_ship_in_run import (  # noqa: F401
     _PLAN, _SID, _SIZING, _git, _row, _sizing_text, repo,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -31,7 +32,7 @@ PARTIAL_PROSE = f"PARTIAL: X1\nNot done: close bug {BUG} with the landing sha\n<
 
 
 @pytest.fixture(autouse=True)
-def _no_review_write_source(monkeypatch):
+def _no_review_write_source(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import review_edits
 
     monkeypatch.setattr(review_edits, "review_writes", lambda *a, **k: {})
@@ -81,7 +82,7 @@ def _fire(repo, report: str, bug_text: str, *, incomplete=("X1",), ask: str = ""
     )
 
 
-def test_a_marked_partial_lands_and_the_row_closes_at_the_product_sha(repo):
+def test_a_marked_partial_lands_and_the_row_closes_at_the_product_sha(repo) -> None:
     out = _fire(repo, PARTIAL_MARKED, OPEN_ROW)
 
     assert out["committed"] is True and "coded_stamp_error" not in out, out
@@ -94,7 +95,7 @@ def test_a_marked_partial_lands_and_the_row_closes_at_the_product_sha(repo):
     assert "post_commit_owed" not in out
 
 
-def test_without_a_marker_the_row_stays_open_and_bug_close_is_owed(repo):
+def test_without_a_marker_the_row_stays_open_and_bug_close_is_owed(repo) -> None:
     out = _fire(repo, PARTIAL_PROSE, OPEN_ROW, incomplete=())
 
     assert out["committed"] is True, out
@@ -106,7 +107,7 @@ def test_without_a_marker_the_row_stays_open_and_bug_close_is_owed(repo):
 UNMARKED_DONE = "DONE: X1\n<exit-status>DONE</exit-status>\n"
 
 
-def test_a_bug_id_named_only_in_the_ask_closes_at_the_landing_sha(repo):
+def test_a_bug_id_named_only_in_the_ask_closes_at_the_landing_sha(repo) -> None:
     out = _fire(repo, UNMARKED_DONE, OPEN_ROW, incomplete=(), ask=f"Close bug row {BUG} at its fix")
 
     assert out["committed"] is True, out
@@ -116,7 +117,7 @@ def test_a_bug_id_named_only_in_the_ask_closes_at_the_landing_sha(repo):
     assert "post_commit_owed" not in out
 
 
-def test_a_bug_id_named_only_in_em_rationale_closes_at_the_landing_sha(repo):
+def test_a_bug_id_named_only_in_em_rationale_closes_at_the_landing_sha(repo) -> None:
     out = _fire(repo, UNMARKED_DONE, OPEN_ROW, incomplete=(), rationale=f"this run closes {BUG}")
 
     assert out["bugs_closed"] == {BUG: BUG_REL}
@@ -133,7 +134,7 @@ def test_a_bug_id_named_only_in_em_rationale_closes_at_the_landing_sha(repo):
         (f"do not close bug {BUG}", ""),
     ],
 )
-def test_a_mention_without_closure_intent_leaves_the_row_open(repo, ask, rationale):
+def test_a_mention_without_closure_intent_leaves_the_row_open(repo, ask, rationale) -> None:
     out = _fire(repo, UNMARKED_DONE, OPEN_ROW, incomplete=(), ask=ask, rationale=rationale)
 
     assert out["committed"] is True, out
@@ -141,14 +142,14 @@ def test_a_mention_without_closure_intent_leaves_the_row_open(repo, ask, rationa
     assert "status: open" in (repo / BUG_REL).read_text(encoding="utf-8")
 
 
-def test_an_id_naming_no_bug_row_closes_nothing(repo):
+def test_an_id_naming_no_bug_row_closes_nothing(repo) -> None:
     out = _fire(repo, UNMARKED_DONE, OPEN_ROW, incomplete=(), ask="Close bug row ffffffffffff")
 
     assert "bugs_closed" not in out
     assert "status: open" in (repo / BUG_REL).read_text(encoding="utf-8")
 
 
-def test_a_row_already_closed_elsewhere_is_left_byte_identical_and_discharges(repo):
+def test_a_row_already_closed_elsewhere_is_left_byte_identical_and_discharges(repo) -> None:
     out = _fire(repo, PARTIAL_MARKED, CLOSED_ELSEWHERE)
 
     assert out["committed"] is True, out
@@ -157,7 +158,7 @@ def test_a_row_already_closed_elsewhere_is_left_byte_identical_and_discharges(re
     assert "post_commit_owed" not in out
 
 
-def test_sole_run_review_writes_keeps_in_worktree_paths_and_drops_escapes(tmp_path, monkeypatch):
+def test_sole_run_review_writes_keeps_in_worktree_paths_and_drops_escapes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import review_edit_source
 
     monkeypatch.setattr(terminal_commit, "_review_since", lambda *a, **k: 1.0)
@@ -171,7 +172,7 @@ def test_sole_run_review_writes_keeps_in_worktree_paths_and_drops_escapes(tmp_pa
     assert got == frozenset({"docs/a.md"})
 
 
-def test_sole_run_review_writes_attributes_nothing_when_the_store_is_unreadable(tmp_path, monkeypatch):
+def test_sole_run_review_writes_attributes_nothing_when_the_store_is_unreadable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import review_edit_source
 
     def unreadable(*a, **k):

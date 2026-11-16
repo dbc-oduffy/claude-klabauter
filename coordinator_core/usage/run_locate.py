@@ -95,43 +95,67 @@ def _mtime(path: Path) -> float:
         return float("-inf")
 
 
+#: (wf_root, run_id, descriptions) -> the wf dir this process resolved. Process-local: a separate
+#: close-job process starts empty and scans once. Re-verified on every hit, never trusted.
+_FOUND: dict = {}
+
+
+def _names_run(wf: Path, needle: str, agent_descriptions: tuple) -> bool:
+    """True when `wf` holds an unsettled agent of a listed description whose transcript head names `needle`."""
+    for agent_id in sorted(_unsettled_agent_ids(wf / "journal.jsonl")):
+        if not isinstance(agent_id, str) or Path(agent_id).name != agent_id:
+            continue
+        try:
+            meta = json.loads((wf / f"agent-{agent_id}.meta.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(meta, dict) or meta.get("description") not in agent_descriptions:
+            continue
+        head = _head(wf / f"agent-{agent_id}.jsonl", _HEAD_BYTES).replace("\\\\", "/").replace("\\/", "/")
+        if needle in head:
+            return True
+    return False
+
+
 def locate_run_dir(
     session_dir: Path,
     run_id: str,
     *,
     agent_descriptions: tuple = DEFAULT_AGENT_DESCRIPTIONS,
+    wf_id: Optional[str] = None,
 ) -> Optional[Path]:
     """The wf_ dir whose unsettled agent (journal `started`, no `result`/`failed`) has a
     `description` in agent_descriptions and a transcript head naming
     `scratch/warp/<run_id>/terminal-commit-params.json`. None when absent or ambiguous.
-    The journal gates the reads: metas and transcripts are opened only for unsettled agents,
-    so a dir whose agents all settled costs one journal read. A run id carrying a timestamp also
-    skips, on a stat alone, every dir whose journal predates the run."""
+
+    A keyed lookup reads one journal and no other run's: `wf_id` (a `wf_` dir name the caller
+    recorded for the run; speculative: no caller passes it yet, the intended one is the close job) and, failing that, the dir this process already resolved for the run
+    are each verified in place and returned or refused, never widened to a scan. Without a key
+    the journal gates the reads (metas and transcripts open only for unsettled agents), and a run
+    id carrying a timestamp skips, on a stat alone, every dir whose journal predates the run."""
     if not run_id or Path(run_id).name != run_id:
         return None
     needle = f"scratch/warp/{run_id}/{_PARAMS_TAIL}"
     wf_root = Path(session_dir) / "subagents" / "workflows"
-    matches = []
+    memo_key = (str(wf_root), run_id, agent_descriptions)
+    if wf_id is not None:
+        keyed = wf_root / wf_id if wf_id.startswith("wf_") and Path(wf_id).name == wf_id else None
+        return keyed if keyed is not None and _names_run(keyed, needle, agent_descriptions) else None
+    known = _FOUND.get(memo_key)
+    if known is not None:
+        if _names_run(known, needle, agent_descriptions):
+            return known
+        _FOUND.pop(memo_key, None)
     try:
         wf_dirs = [Path(e.path) for e in os.scandir(wf_root) if e.name.startswith("wf_") and e.is_dir()]
     except OSError:
         return None
     floor = _run_floor(run_id)
-    for wf in wf_dirs:
-        if floor is not None and _mtime(wf / "journal.jsonl") < floor:
-            continue
-        unsettled = _unsettled_agent_ids(wf / "journal.jsonl")
-        for agent_id in sorted(unsettled):
-            if not isinstance(agent_id, str) or Path(agent_id).name != agent_id:
-                continue
-            meta_name = f"agent-{agent_id}.meta.json"
-            try:
-                meta = json.loads((wf / meta_name).read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if not isinstance(meta, dict) or meta.get("description") not in agent_descriptions:
-                continue
-            head = _head(wf / f"agent-{agent_id}.jsonl", _HEAD_BYTES).replace("\\\\", "/").replace("\\/", "/")
-            if needle in head:
-                matches.append(wf)
-    return matches[0] if len(matches) == 1 else None
+    matches = [
+        wf for wf in wf_dirs
+        if (floor is None or _mtime(wf / "journal.jsonl") >= floor) and _names_run(wf, needle, agent_descriptions)
+    ]
+    if len(matches) != 1:
+        return None
+    _FOUND[memo_key] = matches[0]
+    return matches[0]

@@ -8,18 +8,19 @@ from types import SimpleNamespace
 from coordinator_core.backlog import rag_reads
 from coordinator_core.backlog.rag_reads import changelog_resolve, doc_outline
 from coordinator_core.backlog.record_schema import FlaggedChange
+import pytest
 
 CHANGE = FlaggedChange("Landed", "2026-05-27", ("abc1234",), ("docs/a.md",))
 
 
-def test_missing_form_falls_back_with_gap_naming_form():
+def test_missing_form_falls_back_with_gap_naming_form() -> None:
     res = changelog_resolve(CHANGE, loader=lambda: SimpleNamespace())
     assert res.fallback is True
     assert res.gaps == ({"form": "changelog_resolve", "reason": "form not served by the read contract"},)
     assert res.change == CHANGE and res.outlines is None
 
 
-def test_import_error_is_the_form_missing_case():
+def test_import_error_is_the_form_missing_case() -> None:
     def boom():
         raise ImportError("no module")
 
@@ -28,7 +29,7 @@ def test_import_error_is_the_form_missing_case():
     assert res.gaps[0]["form"] == "doc_outline" and "not importable" in res.gaps[0]["reason"]
 
 
-def test_default_loader_without_example_retrieval_repo_module_falls_back(monkeypatch):
+def test_default_loader_without_example_retrieval_repo_module_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
     def refuse(name):
         raise ImportError(name)
 
@@ -37,7 +38,7 @@ def test_default_loader_without_example_retrieval_repo_module_falls_back(monkeyp
     assert res.fallback and res.gaps[0]["form"] == "changelog_resolve"
 
 
-def test_raising_form_is_a_gap_not_a_crash():
+def test_raising_form_is_a_gap_not_a_crash() -> None:
     def bad(**_):
         raise RuntimeError("store locked")
 
@@ -45,7 +46,7 @@ def test_raising_form_is_a_gap_not_a_crash():
     assert res.fallback and "RuntimeError" in res.gaps[0]["reason"]
 
 
-def test_present_changelog_resolve_maps_paths_and_outlines():
+def test_present_changelog_resolve_maps_paths_and_outlines() -> None:
     seen = {}
 
     def form(entry):
@@ -65,14 +66,14 @@ def test_present_changelog_resolve_maps_paths_and_outlines():
     assert CHANGE.cited_paths == ("docs/a.md",)
 
 
-def test_present_doc_outline_returns_outlines():
+def test_present_doc_outline_returns_outlines() -> None:
     form = lambda paths: [{"path": p, "outline": [f"# {p}"]} for p in paths]  # noqa: E731
     res = doc_outline(["x.md", "y.md"], loader=lambda: SimpleNamespace(doc_outline=form))
     assert res.fallback is False
     assert res.outlines == {"x.md": ("# x.md",), "y.md": ("# y.md",)}
 
 
-def test_no_subprocess_on_any_path(monkeypatch):
+def test_no_subprocess_on_any_path(monkeypatch: pytest.MonkeyPatch) -> None:
     def forbid(*a, **k):
         raise AssertionError("subprocess spawned")
 

@@ -18,6 +18,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_met_refire_lands_its_own_prod
     _git,
     _refire,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -37,7 +38,7 @@ def _resume(halt_sha: str, **extra) -> dict:
 
 
 @pytest.fixture
-def declared(tmp_path):
+def declared(tmp_path: Path):
     import subprocess
 
     from coordinator_core.win_portability import no_console_creationflags
@@ -64,20 +65,20 @@ def _check(declared, verdict, **extra):
     return land_run._unchanged_since_halt(root, _resume(halt, **extra), verdict, manifest, None, detail)
 
 
-def test_a_row_met_by_a_named_pre_halt_commit_owes_no_diff(declared):
+def test_a_row_met_by_a_named_pre_halt_commit_owes_no_diff(declared) -> None:
     assert _check(declared, _verdict([SHA]), revise_notes=[NOTE]) == []
 
 
-def test_the_same_row_without_a_revise_note_naming_the_commit_still_refuses(declared):
+def test_the_same_row_without_a_revise_note_naming_the_commit_still_refuses(declared) -> None:
     assert _check(declared, _verdict([SHA])) == REFUSED
     assert _check(declared, _verdict([SHA]), revise_notes=["re-ruled met; tests pass"]) == REFUSED
 
 
-def test_a_met_by_commit_nothing_names_still_refuses(declared):
+def test_a_met_by_commit_nothing_names_still_refuses(declared) -> None:
     assert _check(declared, _verdict(["abcdef1234"]), revise_notes=[NOTE]) == REFUSED
 
 
-def test_a_post_commit_row_gets_no_credit(declared):
+def test_a_post_commit_row_gets_no_credit(declared) -> None:
     verdict = {"items": [{"id": "R1", "status": "post_commit", "met_by": [SHA]}]}
     assert _check(declared, verdict, revise_notes=[NOTE]) == REFUSED
 
@@ -92,7 +93,7 @@ def _terminal(root, token, resume, verdict) -> dict:
     )
 
 
-def test_land_run_lands_the_close_with_no_declared_product_path_changed(halted):  # noqa: F811
+def test_land_run_lands_the_close_with_no_declared_product_path_changed(halted) -> None:  # noqa: F811
     resume = {**_composed(halted), "revise_notes": [NOTE]}
     refire = _refire(halted, edit=False)
 
@@ -104,7 +105,7 @@ def test_land_run_lands_the_close_with_no_declared_product_path_changed(halted):
     assert not landed & {"a.py", B}, landed
 
 
-def test_land_run_still_refuses_the_uncredited_refire_that_changed_nothing(halted):  # noqa: F811
+def test_land_run_still_refuses_the_uncredited_refire_that_changed_nothing(halted) -> None:  # noqa: F811
     resume = _composed(halted)
     refire = _refire(halted, edit=False)
     head = _git(halted, "rev-parse", "HEAD")

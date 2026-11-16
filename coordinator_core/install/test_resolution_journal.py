@@ -28,10 +28,11 @@ import pytest
 from coordinator_core.install import resolution_journal as target
 from coordinator_core.install.receipt import ClauseResolution
 from coordinator_core.install.write_surface import WriteSurfaceEntry
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _journal_env(tmp_path, monkeypatch):
+def _journal_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Every test gets its own run-scoped journal path via the env var —
     never the settings-home default (which would touch a real machine
     location) — and `COORDINATOR_DISABLE_MACHINE_MUTATION` explicitly
@@ -44,11 +45,11 @@ def _journal_env(tmp_path, monkeypatch):
     return journal_path
 
 
-def test_absent_journal_reads_empty():
+def test_absent_journal_reads_empty() -> None:
     assert target.read_journal() == {}
 
 
-def test_round_trip_single_entry():
+def test_round_trip_single_entry() -> None:
     entry = WriteSurfaceEntry(kind="git-config-key", key="gc.autoDetach")
     target.record_resolution("configure-git", 0, [entry])
 
@@ -57,7 +58,7 @@ def test_round_trip_single_entry():
     assert journal == {"configure-git": {0: ClauseResolution(entries=(entry,))}}
 
 
-def test_multi_writer_and_multi_clause_grouping():
+def test_multi_writer_and_multi_clause_grouping() -> None:
     entry_a = WriteSurfaceEntry(kind="git-config-key", key="gc.autoDetach")
     entry_b = WriteSurfaceEntry(kind="machine-local-key", key="repos.foo")
     entry_c = WriteSurfaceEntry(kind="file-path", path="/some/path")
@@ -77,7 +78,7 @@ def test_multi_writer_and_multi_clause_grouping():
     }
 
 
-def test_append_not_overwrite_across_separate_calls():
+def test_append_not_overwrite_across_separate_calls() -> None:
     entry_a = WriteSurfaceEntry(kind="git-config-key", key="a")
     entry_b = WriteSurfaceEntry(kind="git-config-key", key="b")
 
@@ -91,7 +92,7 @@ def test_append_not_overwrite_across_separate_calls():
     assert journal["writer-b"][0] == ClauseResolution(entries=(entry_b,))
 
 
-def test_rows_for_the_same_writer_and_clause_accumulate():
+def test_rows_for_the_same_writer_and_clause_accumulate() -> None:
     entry_first = WriteSurfaceEntry(kind="git-config-key", key="first")
     entry_second = WriteSurfaceEntry(kind="git-config-key", key="second")
 
@@ -105,7 +106,7 @@ def test_rows_for_the_same_writer_and_clause_accumulate():
     }
 
 
-def test_identical_entry_journalled_twice_is_not_doubled():
+def test_identical_entry_journalled_twice_is_not_doubled() -> None:
     entry = WriteSurfaceEntry(kind="git-config-key", key="same")
 
     target.record_resolution("writer-a", 0, [entry])
@@ -116,7 +117,7 @@ def test_identical_entry_journalled_twice_is_not_doubled():
     }
 
 
-def test_empty_row_marks_the_clause_reported_without_contributing_entries():
+def test_empty_row_marks_the_clause_reported_without_contributing_entries() -> None:
     target.record_resolution("writer-a", 0, [])
 
     journal = target.read_journal()
@@ -125,7 +126,7 @@ def test_empty_row_marks_the_clause_reported_without_contributing_entries():
     assert 0 in journal["writer-a"]
 
 
-def test_truncated_final_line_is_skipped(_journal_env):
+def test_truncated_final_line_is_skipped(_journal_env) -> None:
     entry = WriteSurfaceEntry(kind="git-config-key", key="ok")
     target.record_resolution("writer-a", 0, [entry])
 
@@ -138,7 +139,7 @@ def test_truncated_final_line_is_skipped(_journal_env):
     assert "writer-b" not in journal
 
 
-def test_malformed_json_row_is_skipped(_journal_env):
+def test_malformed_json_row_is_skipped(_journal_env) -> None:
     entry = WriteSurfaceEntry(kind="git-config-key", key="ok")
     target.record_resolution("writer-a", 0, [entry])
 
@@ -154,7 +155,7 @@ def test_malformed_json_row_is_skipped(_journal_env):
     assert len(journal) == 2
 
 
-def test_unparseable_entry_skips_whole_row_not_partial(_journal_env):
+def test_unparseable_entry_skips_whole_row_not_partial(_journal_env) -> None:
     good_entry = WriteSurfaceEntry(kind="git-config-key", key="ok")
     target.record_resolution("writer-a", 0, [good_entry])
 
@@ -179,7 +180,7 @@ def test_unparseable_entry_skips_whole_row_not_partial(_journal_env):
     assert "writer-bad" not in journal
 
 
-def test_row_missing_required_field_is_skipped(_journal_env):
+def test_row_missing_required_field_is_skipped(_journal_env) -> None:
     import json
 
     _journal_env.parent.mkdir(parents=True, exist_ok=True)
@@ -189,7 +190,7 @@ def test_row_missing_required_field_is_skipped(_journal_env):
     assert target.read_journal() == {}
 
 
-def test_disabled_guard_refuses_append_and_clear(monkeypatch, _journal_env):
+def test_disabled_guard_refuses_append_and_clear(monkeypatch: pytest.MonkeyPatch, _journal_env) -> None:
     monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
 
     entry = WriteSurfaceEntry(kind="git-config-key", key="x")
@@ -207,7 +208,7 @@ def test_disabled_guard_refuses_append_and_clear(monkeypatch, _journal_env):
     assert _journal_env.exists()
 
 
-def test_clear_journal_removes_file(_journal_env):
+def test_clear_journal_removes_file(_journal_env) -> None:
     entry = WriteSurfaceEntry(kind="git-config-key", key="x")
     target.record_resolution("writer-a", 0, [entry])
     assert _journal_env.exists()
@@ -218,11 +219,11 @@ def test_clear_journal_removes_file(_journal_env):
     assert target.read_journal() == {}
 
 
-def test_clear_journal_absent_file_is_noop():
+def test_clear_journal_absent_file_is_noop() -> None:
     target.clear_journal()
 
 
-def test_default_journal_path_uses_settings_home(monkeypatch, tmp_path):
+def test_default_journal_path_uses_settings_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv(target.RESOLUTION_JOURNAL_ENV_VAR, raising=False)
     fake_home = tmp_path / "home"
     fake_home.mkdir()
@@ -234,7 +235,7 @@ def test_default_journal_path_uses_settings_home(monkeypatch, tmp_path):
     assert path == fake_home / ".coordinator-claude-settings" / "install" / "resolution-journal.jsonl"
 
 
-def test_write_surface_declares_journal_file():
+def test_write_surface_declares_journal_file() -> None:
     assert target.WRITE_SURFACE.writer_id == "resolution-journal"
     assert target.WRITE_SURFACE.source_module == "coordinator_core.install.resolution_journal"
     assert len(target.WRITE_SURFACE.clauses) == 1

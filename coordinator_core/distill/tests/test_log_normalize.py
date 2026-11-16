@@ -47,6 +47,7 @@ Coordinator-content-repo/docs/contracts/distill-engine-scripts.md § 7 (binding 
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -130,11 +131,11 @@ DR053_FIXTURE = """\
 # ---------------------------------------------------------------------------
 
 
-def test_is_already_canonical_detects_header_marker():
+def test_is_already_canonical_detects_header_marker() -> None:
     assert is_already_canonical(ALREADY_CANONICAL_FIXTURE) is True
 
 
-def test_is_already_canonical_false_for_legacy_fixture():
+def test_is_already_canonical_false_for_legacy_fixture() -> None:
     assert is_already_canonical(LEGACY_FIXTURE) is False
 
 
@@ -143,7 +144,7 @@ def test_is_already_canonical_false_for_legacy_fixture():
 # ---------------------------------------------------------------------------
 
 
-def test_normalize_log_migrates_archived_and_deleted(tmp_path):
+def test_normalize_log_migrates_archived_and_deleted(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(LEGACY_FIXTURE, encoding="utf-8")
 
@@ -154,7 +155,7 @@ def test_normalize_log_migrates_archived_and_deleted(tmp_path):
     assert len(result.skipped) == 2
 
 
-def test_normalize_log_disposition_mapping_exact(tmp_path):
+def test_normalize_log_disposition_mapping_exact(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(LEGACY_FIXTURE, encoding="utf-8")
 
@@ -168,7 +169,7 @@ def test_normalize_log_disposition_mapping_exact(tmp_path):
     assert by_path["archive/specs/2026-03-09-second-batch.md"].disposition == "DISTILLED"
 
 
-def test_normalize_log_unrecognized_action_skipped_with_reason(tmp_path):
+def test_normalize_log_unrecognized_action_skipped_with_reason(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(LEGACY_FIXTURE, encoding="utf-8")
 
@@ -182,7 +183,7 @@ def test_normalize_log_unrecognized_action_skipped_with_reason(tmp_path):
     assert all(r.path != "archive/specs/2026-03-09-weird-row.md" for r in rows)
 
 
-def test_normalize_log_malformed_row_skipped_with_reason(tmp_path):
+def test_normalize_log_malformed_row_skipped_with_reason(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(LEGACY_FIXTURE, encoding="utf-8")
 
@@ -192,7 +193,7 @@ def test_normalize_log_malformed_row_skipped_with_reason(tmp_path):
     assert any("malformed" in r for r in reasons)
 
 
-def test_normalize_log_skipped_never_dropped_from_count(tmp_path):
+def test_normalize_log_skipped_never_dropped_from_count(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(LEGACY_FIXTURE, encoding="utf-8")
 
@@ -205,7 +206,7 @@ def test_normalize_log_skipped_never_dropped_from_count(tmp_path):
         assert skip.reason
 
 
-def test_normalize_log_run_id_grouped_by_legacy_date(tmp_path):
+def test_normalize_log_run_id_grouped_by_legacy_date(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(LEGACY_FIXTURE, encoding="utf-8")
 
@@ -219,7 +220,7 @@ def test_normalize_log_run_id_grouped_by_legacy_date(tmp_path):
     assert by_path["archive/specs/2026-03-09-second-batch.md"].run_id == "2026-05-07"
 
 
-def test_normalize_log_fate_from_legacy_reason(tmp_path):
+def test_normalize_log_fate_from_legacy_reason(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(LEGACY_FIXTURE, encoding="utf-8")
 
@@ -243,7 +244,7 @@ def test_normalize_log_fate_from_legacy_reason(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_normalize_log_creates_backup_before_write(tmp_path):
+def test_normalize_log_creates_backup_before_write(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(LEGACY_FIXTURE, encoding="utf-8")
 
@@ -256,7 +257,7 @@ def test_normalize_log_creates_backup_before_write(tmp_path):
     assert backup_path.read_text(encoding="utf-8") == LEGACY_FIXTURE
 
 
-def test_normalize_log_original_content_preserved_verbatim(tmp_path):
+def test_normalize_log_original_content_preserved_verbatim(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(LEGACY_FIXTURE, encoding="utf-8")
 
@@ -271,7 +272,7 @@ def test_normalize_log_original_content_preserved_verbatim(tmp_path):
     assert "| DELETED |" in backup_text
 
 
-def test_normalize_log_refuses_to_clobber_existing_backup(tmp_path):
+def test_normalize_log_refuses_to_clobber_existing_backup(tmp_path: Path) -> None:
     # A stale `.legacy-backup` sibling from a
     # prior attempt must never be silently overwritten by a second attempt; that
     # backup may be the only remaining copy of the true original. Fail loud instead.
@@ -291,7 +292,7 @@ def test_normalize_log_refuses_to_clobber_existing_backup(tmp_path):
     assert log_path.read_text(encoding="utf-8") == LEGACY_FIXTURE
 
 
-def test_normalize_log_write_is_atomic_no_tmp_leftover_on_success(tmp_path):
+def test_normalize_log_write_is_atomic_no_tmp_leftover_on_success(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(LEGACY_FIXTURE, encoding="utf-8")
 
@@ -301,7 +302,7 @@ def test_normalize_log_write_is_atomic_no_tmp_leftover_on_success(tmp_path):
     assert not tmp_sibling.exists()
 
 
-def test_normalize_log_raises_not_legacy_shaped_for_unrecognized_content(tmp_path):
+def test_normalize_log_raises_not_legacy_shaped_for_unrecognized_content(tmp_path: Path) -> None:
     # A file that is neither canonical nor
     # legacy-pipe-table-shaped (no pipe-delimited lines at all) must not silently
     # produce an empty canonical shell; it must raise instead.
@@ -315,7 +316,7 @@ def test_normalize_log_raises_not_legacy_shaped_for_unrecognized_content(tmp_pat
     assert not log_path.with_name(log_path.name + ".legacy-backup").exists()
 
 
-def test_normalize_log_output_is_no_longer_legacy_shaped(tmp_path):
+def test_normalize_log_output_is_no_longer_legacy_shaped(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(LEGACY_FIXTURE, encoding="utf-8")
 
@@ -330,7 +331,7 @@ def test_normalize_log_output_is_no_longer_legacy_shaped(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_normalize_log_refuses_rerun_against_canonical_header(tmp_path):
+def test_normalize_log_refuses_rerun_against_canonical_header(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(ALREADY_CANONICAL_FIXTURE, encoding="utf-8")
 
@@ -342,7 +343,7 @@ def test_normalize_log_refuses_rerun_against_canonical_header(tmp_path):
     assert not log_path.with_name(log_path.name + ".legacy-backup").exists()
 
 
-def test_normalize_log_refuses_rerun_against_parseable_canonical_without_marker(tmp_path):
+def test_normalize_log_refuses_rerun_against_parseable_canonical_without_marker(tmp_path: Path) -> None:
     # A canonical-shaped file that happens to lack the literal marker line but still
     # parses via parse_distillation_log must also be refused (contract §7's second
     # detection signal).
@@ -356,7 +357,7 @@ def test_normalize_log_refuses_rerun_against_parseable_canonical_without_marker(
     assert log_path.read_text(encoding="utf-8") == text
 
 
-def test_normalize_log_running_twice_does_not_corrupt(tmp_path):
+def test_normalize_log_running_twice_does_not_corrupt(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(LEGACY_FIXTURE, encoding="utf-8")
 
@@ -376,7 +377,7 @@ def test_normalize_log_running_twice_does_not_corrupt(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_normalize_log_every_migrated_row_round_trips(tmp_path):
+def test_normalize_log_every_migrated_row_round_trips(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(LEGACY_FIXTURE, encoding="utf-8")
 
@@ -392,7 +393,7 @@ def test_normalize_log_every_migrated_row_round_trips(tmp_path):
         assert row.run_id
 
 
-def test_normalize_log_canonical_rows_use_ascii_arrow(tmp_path):
+def test_normalize_log_canonical_rows_use_ascii_arrow(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(LEGACY_FIXTURE, encoding="utf-8")
 
@@ -403,7 +404,7 @@ def test_normalize_log_canonical_rows_use_ascii_arrow(tmp_path):
     assert "→" not in canonical_text
 
 
-def test_normalize_log_embedded_whitespace_path_is_skipped_not_migrated(tmp_path):
+def test_normalize_log_embedded_whitespace_path_is_skipped_not_migrated(tmp_path: Path) -> None:
     # A legacy row whose `path` cell contains
     # embedded whitespace cannot round-trip through parse_distillation_log's
     # \S+-anchored grammar. It must be skipped with a reason, never written-but-
@@ -431,7 +432,7 @@ def test_normalize_log_embedded_whitespace_path_is_skipped_not_migrated(tmp_path
 # ---------------------------------------------------------------------------
 
 
-def test_normalize_log_delete_maps_to_ephemeral(tmp_path):
+def test_normalize_log_delete_maps_to_ephemeral(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(DR053_FIXTURE, encoding="utf-8")
 
@@ -442,7 +443,7 @@ def test_normalize_log_delete_maps_to_ephemeral(tmp_path):
     assert by_path["archive/specs/2026-03-09-old-stub.md"].disposition == "EPHEMERAL"
 
 
-def test_normalize_log_distill_harvest_keys_on_belongs_to_spec_not_path(tmp_path):
+def test_normalize_log_distill_harvest_keys_on_belongs_to_spec_not_path(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(DR053_FIXTURE, encoding="utf-8")
 
@@ -462,7 +463,7 @@ def test_normalize_log_distill_harvest_keys_on_belongs_to_spec_not_path(tmp_path
     assert "docs/wiki/harvest-target.md" in harvested_row.fate
 
 
-def test_normalize_log_distill_harvest_row_round_trips(tmp_path):
+def test_normalize_log_distill_harvest_row_round_trips(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(DR053_FIXTURE, encoding="utf-8")
 
@@ -486,7 +487,7 @@ def test_normalize_log_distill_harvest_row_round_trips(tmp_path):
         "n/a",
     ],
 )
-def test_normalize_log_recognized_skip_actions_never_appear_as_rows(tmp_path, path_fragment):
+def test_normalize_log_recognized_skip_actions_never_appear_as_rows(tmp_path: Path, path_fragment) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(DR053_FIXTURE, encoding="utf-8")
 
@@ -496,7 +497,7 @@ def test_normalize_log_recognized_skip_actions_never_appear_as_rows(tmp_path, pa
     assert all(r.path != path_fragment for r in rows)
 
 
-def test_normalize_log_recognized_skip_actions_get_distinct_reason_not_unrecognized(tmp_path):
+def test_normalize_log_recognized_skip_actions_get_distinct_reason_not_unrecognized(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(DR053_FIXTURE, encoding="utf-8")
 
@@ -521,7 +522,7 @@ def test_normalize_log_recognized_skip_actions_get_distinct_reason_not_unrecogni
     assert sum("event row" in r for r in recognized_reasons) == 4
 
 
-def test_normalize_log_truly_unknown_action_still_unrecognized(tmp_path):
+def test_normalize_log_truly_unknown_action_still_unrecognized(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(DR053_FIXTURE, encoding="utf-8")
 
@@ -548,7 +549,7 @@ COCKPIT_BULK_GLOB_ROWS = [
 ]
 
 
-def _bulk_fixture(rows, extra_rows=()):
+def _bulk_fixture(rows, extra_rows=()) -> str:
     lines = [
         "# Distillation Log",
         "| date | action | path | last_sha | belongs_to_spec | reason |",
@@ -562,7 +563,7 @@ def _bulk_fixture(rows, extra_rows=()):
     return "\n".join(lines) + "\n"
 
 
-def test_normalize_log_cockpit_bulk_glob_rows_skipped_as_bulk_deletion_glob(tmp_path):
+def test_normalize_log_cockpit_bulk_glob_rows_skipped_as_bulk_deletion_glob(tmp_path: Path) -> None:
     keeper = "| 2026-07-10 | ARCHIVED | archive/specs/keep-me.md | abc12345 | | per-spec row |"
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(_bulk_fixture(COCKPIT_BULK_GLOB_ROWS, [keeper]), encoding="utf-8")
@@ -576,7 +577,7 @@ def test_normalize_log_cockpit_bulk_glob_rows_skipped_as_bulk_deletion_glob(tmp_
     assert [r.path for r in rows] == ["archive/specs/keep-me.md"]
 
 
-def test_normalize_log_bulk_glob_shape_applies_to_bare_glob_with_per_spec_token(tmp_path):
+def test_normalize_log_bulk_glob_shape_applies_to_bare_glob_with_per_spec_token(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(
         _bulk_fixture([("DELETED", "archive/specs/2026-*-batch-glob.md")]), encoding="utf-8"
@@ -588,7 +589,7 @@ def test_normalize_log_bulk_glob_shape_applies_to_bare_glob_with_per_spec_token(
     assert [s.reason for s in result.skipped] == [RECOGNIZED_SKIP_ACTIONS["DELETE-GROUP"]]
 
 
-def test_normalize_log_unrecognized_action_with_plain_path_still_fails_loud(tmp_path):
+def test_normalize_log_unrecognized_action_with_plain_path_still_fails_loud(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(
         _bulk_fixture(
@@ -606,7 +607,7 @@ def test_normalize_log_unrecognized_action_with_plain_path_still_fails_loud(tmp_
     assert result.rows_migrated == 1
 
 
-def test_normalize_log_bulk_glob_accounting_invariant_holds(tmp_path):
+def test_normalize_log_bulk_glob_accounting_invariant_holds(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     extra = [
         "| 2026-07-10 | ARCHIVED | archive/specs/keep-me.md | abc12345 | | per-spec row |",
@@ -622,7 +623,7 @@ def test_normalize_log_bulk_glob_accounting_invariant_holds(tmp_path):
     assert result.rows_migrated == 1
 
 
-def test_normalize_log_dr053_accounting_invariant_migrated_plus_skipped_equals_total(tmp_path):
+def test_normalize_log_dr053_accounting_invariant_migrated_plus_skipped_equals_total(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(DR053_FIXTURE, encoding="utf-8")
 
@@ -638,7 +639,7 @@ def test_normalize_log_dr053_accounting_invariant_migrated_plus_skipped_equals_t
     assert result.rows_skipped == 6
 
 
-def test_normalize_log_accounting_invariant_holds_on_original_legacy_fixture_too(tmp_path):
+def test_normalize_log_accounting_invariant_holds_on_original_legacy_fixture_too(tmp_path: Path) -> None:
     # sanity check against the original (pre-DR-053) fixture, which mixes a
     # malformed row in with recognized/unrecognized actions.
     log_path = tmp_path / "distillation-log.md"
@@ -655,7 +656,7 @@ def test_normalize_log_accounting_invariant_holds_on_original_legacy_fixture_too
 # ---------------------------------------------------------------------------
 
 
-def test_normalize_log_raises_on_missing_file(tmp_path):
+def test_normalize_log_raises_on_missing_file(tmp_path: Path) -> None:
     log_path = tmp_path / "does-not-exist.md"
     with pytest.raises(FileNotFoundError):
         normalize_log(log_path)
@@ -697,7 +698,7 @@ ARROW_DIALECT_FIXTURE_WITH_HEADER_DESCRIPTION = """\
 """
 
 
-def test_normalize_arrow_dialects_migrates_all_three_dialects(tmp_path):
+def test_normalize_arrow_dialects_migrates_all_three_dialects(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(ARROW_DIALECT_FIXTURE, encoding="utf-8")
 
@@ -716,7 +717,7 @@ def test_normalize_arrow_dialects_migrates_all_three_dialects(tmp_path):
     assert by_path["archive/specs/already-canonical.md"].disposition == "DISTILLED"
 
 
-def test_normalize_arrow_dialects_accounting_invariant(tmp_path):
+def test_normalize_arrow_dialects_accounting_invariant(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(ARROW_DIALECT_FIXTURE, encoding="utf-8")
 
@@ -728,7 +729,7 @@ def test_normalize_arrow_dialects_accounting_invariant(tmp_path):
     assert result.rows_skipped == 2  # orphan-before-header + unrecognized shape
 
 
-def test_normalize_arrow_dialects_unrecognized_row_skipped_not_dropped(tmp_path):
+def test_normalize_arrow_dialects_unrecognized_row_skipped_not_dropped(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(ARROW_DIALECT_FIXTURE, encoding="utf-8")
 
@@ -744,7 +745,7 @@ def test_normalize_arrow_dialects_unrecognized_row_skipped_not_dropped(tmp_path)
     assert "orphan/before-any-run-header.md" in text
 
 
-def test_normalize_arrow_dialects_preserves_run_header_description(tmp_path):
+def test_normalize_arrow_dialects_preserves_run_header_description(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(ARROW_DIALECT_FIXTURE_WITH_HEADER_DESCRIPTION, encoding="utf-8")
 
@@ -763,7 +764,7 @@ def test_normalize_arrow_dialects_preserves_run_header_description(tmp_path):
     assert "-> DISTILLED, harvested; folded into wiki guide (run: 2026-05-06)" in text
 
 
-def test_normalize_arrow_dialects_backup_preserves_original(tmp_path):
+def test_normalize_arrow_dialects_backup_preserves_original(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(ARROW_DIALECT_FIXTURE, encoding="utf-8")
 
@@ -775,7 +776,7 @@ def test_normalize_arrow_dialects_backup_preserves_original(tmp_path):
     assert backup_text == ARROW_DIALECT_FIXTURE
 
 
-def test_normalize_arrow_dialects_atomic_no_tmp_leftover(tmp_path):
+def test_normalize_arrow_dialects_atomic_no_tmp_leftover(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(ARROW_DIALECT_FIXTURE, encoding="utf-8")
 
@@ -784,7 +785,7 @@ def test_normalize_arrow_dialects_atomic_no_tmp_leftover(tmp_path):
     assert not log_path.with_name(log_path.name + ".tmp").exists()
 
 
-def test_normalize_arrow_dialects_refuses_when_no_run_headers(tmp_path):
+def test_normalize_arrow_dialects_refuses_when_no_run_headers(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text("no run headers here at all, just prose\n", encoding="utf-8")
 
@@ -792,7 +793,7 @@ def test_normalize_arrow_dialects_refuses_when_no_run_headers(tmp_path):
         normalize_arrow_dialects_log(log_path)
 
 
-def test_normalize_arrow_dialects_refuses_when_nothing_to_migrate(tmp_path):
+def test_normalize_arrow_dialects_refuses_when_nothing_to_migrate(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(
         "## Run 2026-05-06\n"
@@ -804,13 +805,13 @@ def test_normalize_arrow_dialects_refuses_when_nothing_to_migrate(tmp_path):
         normalize_arrow_dialects_log(log_path)
 
 
-def test_normalize_arrow_dialects_missing_file_raises(tmp_path):
+def test_normalize_arrow_dialects_missing_file_raises(tmp_path: Path) -> None:
     log_path = tmp_path / "does-not-exist.md"
     with pytest.raises(FileNotFoundError):
         normalize_arrow_dialects_log(log_path)
 
 
-def test_normalize_arrow_dialects_split_rewritten_and_already_canonical_counts(tmp_path):
+def test_normalize_arrow_dialects_split_rewritten_and_already_canonical_counts(tmp_path: Path) -> None:
     # rows_migrated conflates "rewritten from a
     # dialect" and "already canonical, left untouched" per the module docstring's
     # own admission. rows_rewritten / rows_already_canonical split the ledger so a
@@ -825,7 +826,7 @@ def test_normalize_arrow_dialects_split_rewritten_and_already_canonical_counts(t
     assert result.rows_rewritten + result.rows_already_canonical == result.rows_migrated
 
 
-def test_normalize_log_rows_rewritten_and_already_canonical_are_none():
+def test_normalize_log_rows_rewritten_and_already_canonical_are_none() -> None:
     # normalize_log (the legacy pipe-table normalizer) has no "already canonical,
     # left untouched" case at all — both split fields must stay None there, never
     # coerced to 0 (which would falsely imply the split was computed).
@@ -850,7 +851,7 @@ def test_normalize_log_rows_rewritten_and_already_canonical_are_none():
 # slot.
 # ---------------------------------------------------------------------------
 
-def test_normalize_arrow_dialects_all_rows_round_trip_failing_raises_no_arrow_dialect_rows(tmp_path):
+def test_normalize_arrow_dialects_all_rows_round_trip_failing_raises_no_arrow_dialect_rows(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     # a DELETED-dialect row whose `rest` is comma-only: `_arrow_dialect_fate`
     # strips the leading comma and any surrounding whitespace, leaving an empty
@@ -867,7 +868,7 @@ def test_normalize_arrow_dialects_all_rows_round_trip_failing_raises_no_arrow_di
     assert not log_path.with_name(log_path.name + ".arrow-dialect-backup").exists()
 
 
-def test_normalize_arrow_dialects_does_not_poison_backup_slot_on_round_trip_failure(tmp_path):
+def test_normalize_arrow_dialects_does_not_poison_backup_slot_on_round_trip_failure(tmp_path: Path) -> None:
     # The consequence chain named by the BLOCKED finding: refusing via
     # NoArrowDialectRowsError must leave the `.arrow-dialect-backup` slot free so
     # a later legitimate migration (once the offending row is fixed) can still
@@ -906,7 +907,7 @@ def test_normalize_arrow_dialects_does_not_poison_backup_slot_on_round_trip_fail
 # ---------------------------------------------------------------------------
 
 
-def test_normalize_arrow_dialects_distilled_trailing_text_after_paren_kept_unwrapped():
+def test_normalize_arrow_dialects_distilled_trailing_text_after_paren_kept_unwrapped() -> None:
     from coordinator_core.distill.log_normalize import _arrow_dialect_fate
 
     fate = _arrow_dialect_fate("DISTILLED", "(harvested; folded into wiki guide) extra note")
@@ -916,7 +917,7 @@ def test_normalize_arrow_dialects_distilled_trailing_text_after_paren_kept_unwra
     assert fate == "(harvested; folded into wiki guide) extra note"
 
 
-def test_normalize_arrow_dialects_refuses_to_clobber_existing_backup(tmp_path):
+def test_normalize_arrow_dialects_refuses_to_clobber_existing_backup(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(ARROW_DIALECT_FIXTURE, encoding="utf-8")
 
@@ -942,7 +943,7 @@ _TAILED_ROW = (
 )
 
 
-def test_normalize_arrow_dialects_skips_row_that_already_has_a_run_tail(tmp_path):
+def test_normalize_arrow_dialects_skips_row_that_already_has_a_run_tail(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(
         "## Run 2026-07-19-synth\n"
@@ -959,7 +960,7 @@ def test_normalize_arrow_dialects_skips_row_that_already_has_a_run_tail(tmp_path
     assert result.skipped[0].line == 2
 
 
-def test_normalize_arrow_dialects_leaves_run_tailed_row_byte_identical(tmp_path):
+def test_normalize_arrow_dialects_leaves_run_tailed_row_byte_identical(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(
         "## Run 2026-07-19-synth\n"
@@ -977,7 +978,7 @@ def test_normalize_arrow_dialects_leaves_run_tailed_row_byte_identical(tmp_path)
     assert "(run: 2026-07-19-synth (run: 2026-07-19-synth)" not in lines[1]
 
 
-def test_normalize_arrow_dialects_all_rows_run_tailed_refuses_to_write(tmp_path):
+def test_normalize_arrow_dialects_all_rows_run_tailed_refuses_to_write(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     original = f"## Run 2026-07-19-synth\n{_TAILED_ROW}\n"
     log_path.write_text(original, encoding="utf-8")
@@ -1011,7 +1012,7 @@ THREE_COL_FIXTURE = """\
 """
 
 
-def test_normalize_log_accepts_three_column_table_under_run_headers(tmp_path):
+def test_normalize_log_accepts_three_column_table_under_run_headers(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(THREE_COL_FIXTURE, encoding="utf-8")
     result = normalize_log(log_path)
@@ -1028,7 +1029,7 @@ def test_normalize_log_accepts_three_column_table_under_run_headers(tmp_path):
     assert (beta.run_id, beta.disposition) == ("2026-09-01-10h00", "EPHEMERAL")
 
 
-def test_three_column_row_before_any_run_header_is_skipped_not_dropped(tmp_path):
+def test_three_column_row_before_any_run_header_is_skipped_not_dropped(tmp_path: Path) -> None:
     log_path = tmp_path / "distillation-log.md"
     log_path.write_text(
         "| Artifact | Disposition | Target |\n|---|---|---|\n| a.md | DISTILLED | b.md |\n",

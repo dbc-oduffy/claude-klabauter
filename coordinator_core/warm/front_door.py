@@ -216,7 +216,7 @@ class ElectionLost(FrontDoorError):
     Defer to the existing holder; do not retry the bind.
     """
 
-    def __init__(self, port: int):
+    def __init__(self, port: int) -> None:
         self.port = port
         super().__init__(
             f"lost front-door election for port {port}: an existing holder "
@@ -236,7 +236,7 @@ class ForeignHolderError(FrontDoorError):
     squatted port from whatever caller needs to know about it (AC4).
     """
 
-    def __init__(self, port: int, detail: str):
+    def __init__(self, port: int, detail: str) -> None:
         self.port = port
         self.detail = detail
         super().__init__(
@@ -254,7 +254,7 @@ class UnstampedRootYield(FrontDoorError):
     not compete for the fixed port on its behalf.
     """
 
-    def __init__(self, engine_root: Path):
+    def __init__(self, engine_root: Path) -> None:
         self.engine_root = engine_root
         super().__init__(
             f"engine root {engine_root} is unstamped or absent; front door "

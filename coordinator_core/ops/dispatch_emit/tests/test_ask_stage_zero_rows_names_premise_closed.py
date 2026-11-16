@@ -10,6 +10,7 @@ from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 from coordinator_core.ops.plan_tasks_mutate import _handler as mutate_handler
 from coordinator_core.ops.tests.test_plan_tasks_mutate import _make_git_repo
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -56,7 +57,7 @@ created: 2026-10-27
 """
 
 
-def test_refusal_names_premise_false_and_transitively_held_rows(tmp_path):
+def test_refusal_names_premise_false_and_transitively_held_rows(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = repo / PLAN_REL
     plan.parent.mkdir(parents=True, exist_ok=True)

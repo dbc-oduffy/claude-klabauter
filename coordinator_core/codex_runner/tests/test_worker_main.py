@@ -8,26 +8,27 @@ import pytest
 from coordinator_core.codex_runner import __main__ as worker
 from coordinator_core.codex_runner import roster
 from coordinator_core.codex_runner.contract import STATUS_OK, RunRequest, RunResult
+from pathlib import Path
 
 
 @pytest.fixture
-def run_dir(tmp_path, monkeypatch):
+def run_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
     d = tmp_path / "codex-runs" / "review-abc"
     d.mkdir(parents=True)
     return d
 
 
-def _write_request(d, **kw):
+def _write_request(d, **kw) -> None:
     req = {"mode": "review", "repo_root": str(d.parent), "artifact": "a.md", **kw}
     (d / "request.json").write_text(json.dumps(req), encoding="utf-8")
 
 
-def test_success_writes_result_and_brackets_roster(run_dir, monkeypatch):
+def test_success_writes_result_and_brackets_roster(run_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_request(run_dir, parent_session_id="sess-1")
     seen = {}
 
-    def fake_run(req, d, on_spawn):
+    def fake_run(req, d, on_spawn) -> RunResult:
         on_spawn(4242)
         seen["during"] = (roster.roster_dir() / "4242.json").is_file()
         return RunResult(run_id=d.name, status=STATUS_OK, verdict="Ready", codex_pid=4242)
@@ -42,13 +43,13 @@ def test_success_writes_result_and_brackets_roster(run_dir, monkeypatch):
     assert not list(run_dir.glob("*.tmp"))
 
 
-def test_record_carries_request_fields(run_dir, monkeypatch):
+def test_record_carries_request_fields(run_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_request(run_dir, parent_session_id="sess-1")
     captured = {}
     monkeypatch.setattr(roster, "write_record", lambda *a: captured.setdefault("args", a))
     monkeypatch.setattr(roster, "remove_record", lambda pid: None)
 
-    def fake_run(req, d, on_spawn):
+    def fake_run(req, d, on_spawn) -> RunResult:
         on_spawn(7)
         return RunResult(run_id=d.name, status=STATUS_OK)
 
@@ -57,7 +58,7 @@ def test_record_carries_request_fields(run_dir, monkeypatch):
     assert captured["args"] == (7, "review-abc", "review", str(run_dir.parent), "sess-1")
 
 
-def test_mode_dispatch_by_request(run_dir, monkeypatch):
+def test_mode_dispatch_by_request(run_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     (run_dir / "request.json").write_text(
         json.dumps({"mode": "execute", "repo_root": str(run_dir.parent), "plan": "p.md", "chunk": "C1"}),
         encoding="utf-8",
@@ -73,7 +74,7 @@ def test_mode_dispatch_by_request(run_dir, monkeypatch):
     assert modes == ["execute"]
 
 
-def test_mode_run_resolves_each_mode_to_its_function():
+def test_mode_run_resolves_each_mode_to_its_function() -> None:
     from coordinator_core.codex_runner import agy, execute, grok, review
 
     assert worker._mode_run("review") is review.run
@@ -82,13 +83,13 @@ def test_mode_run_resolves_each_mode_to_its_function():
     assert worker._mode_run("grok-review") is grok.review_run
 
 
-def test_agy_review_roster_record_carries_mode(run_dir, monkeypatch):
+def test_agy_review_roster_record_carries_mode(run_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_request(run_dir, mode="agy-review", parent_session_id="sess-1")
     captured = {}
     monkeypatch.setattr(roster, "write_record", lambda *a: captured.setdefault("args", a))
     monkeypatch.setattr(roster, "remove_record", lambda pid: None)
 
-    def fake_run(req, d, on_spawn):
+    def fake_run(req, d, on_spawn) -> RunResult:
         on_spawn(8)
         return RunResult(run_id=d.name, status=STATUS_OK)
 
@@ -97,7 +98,7 @@ def test_agy_review_roster_record_carries_mode(run_dir, monkeypatch):
     assert captured["args"][2] == "agy-review"
 
 
-def test_raising_run_leaves_failed_result_and_removes_record(run_dir, monkeypatch):
+def test_raising_run_leaves_failed_result_and_removes_record(run_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_request(run_dir)
 
     def boom(req, d, on_spawn):
@@ -112,16 +113,16 @@ def test_raising_run_leaves_failed_result_and_removes_record(run_dir, monkeypatc
     assert not (roster.roster_dir() / "99.json").exists()
 
 
-def test_missing_request_leaves_failed_result(run_dir):
+def test_missing_request_leaves_failed_result(run_dir) -> None:
     worker.run_worker(run_dir)
     out = json.loads((run_dir / "result.json").read_text(encoding="utf-8"))
     assert out["status"] == "failed"
 
 
-def test_main_usage_error():
+def test_main_usage_error() -> None:
     assert worker.main([]) == 2
 
 
-def test_request_roundtrip_matches_contract():
+def test_request_roundtrip_matches_contract() -> None:
     req = RunRequest(mode="review", repo_root="/r", artifact="a")
     assert RunRequest.from_dict(req.to_dict()) == req

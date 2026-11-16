@@ -8,6 +8,10 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.commit_ledger import store
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import Popen
 
 
 def _init_git_repo(tmp_path: Path) -> Path:
@@ -28,7 +32,7 @@ def _write_handoff(path: Path, handoff_id: str, predecessor: str = "", predecess
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
-def test_append_and_read_roundtrip(tmp_path):
+def test_append_and_read_roundtrip(tmp_path: Path) -> None:
     repo = _init_git_repo(tmp_path)
     cwd = str(repo)
     assert store.append_entry("hnd-a", "sha1", "code", weight_basis={"loc": 5}, cwd=cwd)
@@ -39,7 +43,7 @@ def test_append_and_read_roundtrip(tmp_path):
     assert entries[0]["reviewed_by"] == []
 
 
-def test_duplicate_sha_deduped_on_read_first_wins(tmp_path):
+def test_duplicate_sha_deduped_on_read_first_wins(tmp_path: Path) -> None:
     repo = _init_git_repo(tmp_path)
     cwd = str(repo)
     store.append_entry("hnd-a", "sha1", "code", cwd=cwd)
@@ -49,12 +53,12 @@ def test_duplicate_sha_deduped_on_read_first_wins(tmp_path):
     assert entries[0]["kind"] == "code"
 
 
-def test_read_entries_empty_when_no_ledger(tmp_path):
+def test_read_entries_empty_when_no_ledger(tmp_path: Path) -> None:
     repo = _init_git_repo(tmp_path)
     assert store.read_entries("hnd-nonexistent", cwd=str(repo)) == []
 
 
-def test_append_skips_unlocked_when_lock_unavailable(tmp_path, monkeypatch, caplog):
+def test_append_skips_unlocked_when_lock_unavailable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     repo = _init_git_repo(tmp_path)
     cwd = str(repo)
 
@@ -71,7 +75,7 @@ def test_append_skips_unlocked_when_lock_unavailable(tmp_path, monkeypatch, capl
     assert any("sha-lost" in rec.message for rec in caplog.records)
 
 
-def test_mark_reviewed_after_entry_is_visible_on_read(tmp_path):
+def test_mark_reviewed_after_entry_is_visible_on_read(tmp_path: Path) -> None:
     repo = _init_git_repo(tmp_path)
     cwd = str(repo)
     store.append_entry("hnd-a", "sha1", "code", cwd=cwd)
@@ -82,7 +86,7 @@ def test_mark_reviewed_after_entry_is_visible_on_read(tmp_path):
     assert entries[0]["reviewed_by"] == ["reviewer-1"]
 
 
-def test_mark_reviewed_multiple_reviewers_union_dedup(tmp_path):
+def test_mark_reviewed_multiple_reviewers_union_dedup(tmp_path: Path) -> None:
     repo = _init_git_repo(tmp_path)
     cwd = str(repo)
     store.append_entry("hnd-a", "sha1", "code", cwd=cwd)
@@ -93,7 +97,7 @@ def test_mark_reviewed_multiple_reviewers_union_dedup(tmp_path):
     assert entries[0]["reviewed_by"] == ["reviewer-1", "reviewer-2"]
 
 
-def test_mark_reviewed_multiple_shas_marks_each(tmp_path):
+def test_mark_reviewed_multiple_shas_marks_each(tmp_path: Path) -> None:
     repo = _init_git_repo(tmp_path)
     cwd = str(repo)
     store.append_entry("hnd-a", "sha1", "code", cwd=cwd)
@@ -104,7 +108,7 @@ def test_mark_reviewed_multiple_shas_marks_each(tmp_path):
     assert entries["sha2"]["reviewed_by"] == ["reviewer-1"]
 
 
-def test_mark_reviewed_before_entry_still_unions_once_entry_lands(tmp_path):
+def test_mark_reviewed_before_entry_still_unions_once_entry_lands(tmp_path: Path) -> None:
     repo = _init_git_repo(tmp_path)
     cwd = str(repo)
     assert store.mark_reviewed("hnd-a", ["sha1"], "reviewer-1", cwd=cwd)
@@ -114,7 +118,7 @@ def test_mark_reviewed_before_entry_still_unions_once_entry_lands(tmp_path):
     assert entries[0]["reviewed_by"] == ["reviewer-1"]
 
 
-def test_mark_reviewed_empty_args_returns_false(tmp_path):
+def test_mark_reviewed_empty_args_returns_false(tmp_path: Path) -> None:
     repo = _init_git_repo(tmp_path)
     cwd = str(repo)
     assert store.mark_reviewed("", ["sha1"], "reviewer-1", cwd=cwd) is False
@@ -122,7 +126,7 @@ def test_mark_reviewed_empty_args_returns_false(tmp_path):
     assert store.mark_reviewed("hnd-a", ["sha1"], "", cwd=cwd) is False
 
 
-def test_read_chain_single_baton_no_ancestor(tmp_path):
+def test_read_chain_single_baton_no_ancestor(tmp_path: Path) -> None:
     repo = _init_git_repo(tmp_path)
     cwd = str(repo)
     store.append_entry("hnd-leaf", "sha1", "code", cwd=cwd)
@@ -130,7 +134,7 @@ def test_read_chain_single_baton_no_ancestor(tmp_path):
     assert [e["sha"] for e in chain] == ["sha1"]
 
 
-def test_read_chain_follows_pointer_across_archive(tmp_path):
+def test_read_chain_follows_pointer_across_archive(tmp_path: Path) -> None:
     repo = _init_git_repo(tmp_path)
     cwd = str(repo)
 
@@ -148,7 +152,7 @@ def test_read_chain_follows_pointer_across_archive(tmp_path):
     assert shas == {"sha-new", "sha-old"}
 
 
-def test_read_chain_pointer_by_path_form(tmp_path):
+def test_read_chain_pointer_by_path_form(tmp_path: Path) -> None:
     repo = _init_git_repo(tmp_path)
     cwd = str(repo)
     pred_path = repo / "archive" / "handoffs" / "2026-07" / "2026-07-02-predecessor.md"
@@ -164,7 +168,7 @@ def test_read_chain_pointer_by_path_form(tmp_path):
     assert {e["sha"] for e in chain} == {"sha-s", "sha-p"}
 
 
-def test_read_chain_legacy_fallback_no_pointer(tmp_path):
+def test_read_chain_legacy_fallback_no_pointer(tmp_path: Path) -> None:
     repo = _init_git_repo(tmp_path)
     cwd = str(repo)
 
@@ -178,7 +182,7 @@ def test_read_chain_legacy_fallback_no_pointer(tmp_path):
     assert {e["sha"] for e in chain} == {"sha-new", "sha-old"}
 
 
-def test_read_chain_legacy_hop_cap_stops_walk(tmp_path):
+def test_read_chain_legacy_hop_cap_stops_walk(tmp_path: Path) -> None:
     """A chain of 5 consecutive pointer-less (legacy) ancestors must be
     walked only up to `_MAX_LEGACY_FALLBACK_HOPS` (3) hops — AC18's bound
     stated by the docstring must actually stop the walk, and
@@ -205,7 +209,7 @@ def test_read_chain_legacy_hop_cap_stops_walk(tmp_path):
     assert len(shas) == store._MAX_LEGACY_FALLBACK_HOPS + 1
 
 
-def test_read_chain_terminates_on_cycle(tmp_path):
+def test_read_chain_terminates_on_cycle(tmp_path: Path) -> None:
     repo = _init_git_repo(tmp_path)
     cwd = str(repo)
     store.append_entry("hnd-x", "sha-x", "code", cwd=cwd)
@@ -221,7 +225,7 @@ def test_read_chain_terminates_on_cycle(tmp_path):
     assert {e["sha"] for e in chain} == {"sha-x", "sha-y"}
 
 
-def test_read_chain_deep_synthetic_depth(tmp_path):
+def test_read_chain_deep_synthetic_depth(tmp_path: Path) -> None:
     repo = _init_git_repo(tmp_path)
     cwd = str(repo)
 
@@ -240,7 +244,7 @@ def test_read_chain_deep_synthetic_depth(tmp_path):
     assert {e["sha"] for e in chain} == {f"sha-{i}" for i in range(depth)}
 
 
-def test_read_chain_ac9_zero_subprocess_zero_interpreter(tmp_path, monkeypatch):
+def test_read_chain_ac9_zero_subprocess_zero_interpreter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_git_repo(tmp_path)
     cwd = str(repo)
 
@@ -259,7 +263,7 @@ def test_read_chain_ac9_zero_subprocess_zero_interpreter(tmp_path, monkeypatch):
         calls["subprocess"] += 1
         return real_run(*args, **kwargs)
 
-    def _counting_popen(*args, **kwargs):
+    def _counting_popen(*args, **kwargs) -> Popen[str]:
         calls["popen"] += 1
         return real_popen(*args, **kwargs)
 
@@ -273,14 +277,14 @@ def test_read_chain_ac9_zero_subprocess_zero_interpreter(tmp_path, monkeypatch):
     assert calls["popen"] == 0
 
 
-def test_read_chain_empty_handoff_id(tmp_path):
+def test_read_chain_empty_handoff_id(tmp_path: Path) -> None:
     assert store.read_chain("", cwd=str(tmp_path)) == []
 
 
 @pytest.mark.parametrize(
     "alias_lines", [["handoff_id_aliases:", "  - hnd-old-aaaaaa"], ["handoff_id_aliases: [hnd-x-111111, 'hnd-old-aaaaaa']"]]
 )
-def test_frontmatter_id_search_resolves_alias(tmp_path, alias_lines):
+def test_frontmatter_id_search_resolves_alias(tmp_path: Path, alias_lines) -> None:
     new = tmp_path / "state" / "handoffs" / "2026-11-15-new.md"
     new.parent.mkdir(parents=True)
     new.write_text("\n".join(["---", "handoff_id: hnd-new-bbbbbb", *alias_lines, "---", "", "b"]), encoding="utf-8")
@@ -289,7 +293,7 @@ def test_frontmatter_id_search_resolves_alias(tmp_path, alias_lines):
     assert store._frontmatter_id_search(tmp_path, "hnd-none-cccccc") is None
 
 
-def test_frontmatter_id_search_live_id_outranks_alias(tmp_path):
+def test_frontmatter_id_search_live_id_outranks_alias(tmp_path: Path) -> None:
     aliased = tmp_path / "state" / "handoffs" / "a.md"
     holder = tmp_path / "archive" / "handoffs" / "2026-10" / "z.md"
     _write_handoff(holder, "hnd-old-aaaaaa")
@@ -298,7 +302,7 @@ def test_frontmatter_id_search_live_id_outranks_alias(tmp_path):
     assert store._frontmatter_id_search(tmp_path, "hnd-old-aaaaaa") == holder
 
 
-def test_record_predecessor_pointer_unresolvable_returns_false(tmp_path):
+def test_record_predecessor_pointer_unresolvable_returns_false(tmp_path: Path) -> None:
     repo = _init_git_repo(tmp_path)
     assert store.record_predecessor_pointer(
         "hnd-a", "hnd-does-not-exist-anywhere", repo_root=str(repo), cwd=str(repo)

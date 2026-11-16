@@ -11,6 +11,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.warp_fire import fire_command
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -19,7 +20,7 @@ def _stub_wrap(text):
     return "  async function planBlitz(args) {\n    return { ready: [] };\n  }", ["Size", "Plan"]
 
 
-def _compose(**over):
+def _compose(**over) -> str:
     kw = dict(
         repo_root="REPO", prompt="add a thing", sizing_rel=None, run_id="run-1", session_id=None,
         wrap_stage=_stub_wrap, plan_blitz_text="stub", **REVIEW_KW,
@@ -68,7 +69,7 @@ _HALT_MARK = "if (_assembleUnproven && !_sizingOnDisk)"
 _GATE_MARK = "if (_gate.halt || !_gate.arm)"
 
 
-def test_scout_not_run_check_is_composed_after_the_decision_parse():
+def test_scout_not_run_check_is_composed_after_the_decision_parse() -> None:
     script = _compose()
     assert script.index(_PARSE_MARK) < script.index(_ASSIGN_MARK) < script.index(_NOT_RUN_MARK) < script.index("const _pmExit")
     assert "sizing-assemble did not run" in script
@@ -76,7 +77,7 @@ def test_scout_not_run_check_is_composed_after_the_decision_parse():
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("stdout", ["not run", "", "[1, 2]", '{"no_route": true}'])
-def test_exit_zero_with_a_non_decision_stdout_halts_with_a_named_refusal(stdout, tmp_path):
+def test_exit_zero_with_a_non_decision_stdout_halts_with_a_named_refusal(stdout, tmp_path: Path) -> None:
     script = _compose()
     setup = (
         "let _halted = null; let _decision = null; const _runId = 'run-1';\n"
@@ -91,7 +92,7 @@ def test_exit_zero_with_a_non_decision_stdout_halts_with_a_named_refusal(stdout,
 
 
 @pytest.mark.spawns_process
-def test_a_paraphrased_stdout_with_the_sizing_on_disk_does_not_halt(tmp_path):
+def test_a_paraphrased_stdout_with_the_sizing_on_disk_does_not_halt(tmp_path: Path) -> None:
     """Run 6467a3: the scout wrote the sizing, then replied with a summary line, not the decision."""
     script = _compose()
     setup = (
@@ -102,7 +103,7 @@ def test_a_paraphrased_stdout_with_the_sizing_on_disk_does_not_halt(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_the_scout_failure_detail_leads_with_stdout_over_stderr(tmp_path):
+def test_the_scout_failure_detail_leads_with_stdout_over_stderr(tmp_path: Path) -> None:
     script = _compose()
     setup = (
         "let _halted = null; let _decision = null; const _runId = 'run-1';\n"
@@ -114,7 +115,7 @@ def test_the_scout_failure_detail_leads_with_stdout_over_stderr(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_exit_zero_with_a_real_decision_does_not_halt(tmp_path):
+def test_exit_zero_with_a_real_decision_does_not_halt(tmp_path: Path) -> None:
     script = _compose()
     decision = json.dumps({"route": "plan"}, indent=2) + "\nderived 1 row\n"
     setup = (
@@ -126,7 +127,7 @@ def test_exit_zero_with_a_real_decision_does_not_halt(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("gate", ["arm: 's', halt: null", "arm: null, halt: { kind: 'room' }"])
-def test_an_abridged_stdout_with_a_gate_reply_does_not_halt(gate, tmp_path):
+def test_an_abridged_stdout_with_a_gate_reply_does_not_halt(gate, tmp_path: Path) -> None:
     # The scout summarised assemble's stdout; the gate reply proves the sizing was on disk.
     script = _compose()
     setup = (
@@ -146,7 +147,7 @@ def test_an_abridged_stdout_with_a_gate_reply_does_not_halt(gate, tmp_path):
         ({"arm": None, "halt": {"kind": "room", "reason": "no room"}}, "no room"),
     ],
 )
-def test_every_gate_halt_carries_a_non_empty_reason(gate, expect, sized_in_run, tmp_path):
+def test_every_gate_halt_carries_a_non_empty_reason(gate, expect, sized_in_run, tmp_path: Path) -> None:
     script = _compose() if sized_in_run else _compose(prompt=None, sizing_rel="state/sizings/x.yaml")
     setup = (
         "let _halted = null; const _runId = 'run-1'; const _sizingRel = 's.yaml'; const _pmExit = null;\n"
@@ -161,17 +162,17 @@ def test_every_gate_halt_carries_a_non_empty_reason(gate, expect, sized_in_run, 
 _RERUN_CLAUSE = "run the same gate command once more and return that second reply in its place"
 
 
-def test_the_gate_rerun_is_the_scouts_closing_act_not_a_leg_of_its_own():
+def test_the_gate_rerun_is_the_scouts_closing_act_not_a_leg_of_its_own() -> None:
     script = _compose()
     assert "gate-recover" not in script and "_regate" not in script
     assert script.index("dispatch.ask_gate") < script.index(_RERUN_CLAUSE)
 
 
-def test_the_rerun_is_scouted_only_when_sized_in_run():
+def test_the_rerun_is_scouted_only_when_sized_in_run() -> None:
     assert _RERUN_CLAUSE not in _compose(prompt=None, sizing_rel="state/sizings/x.yaml")
 
 
-def test_an_empty_gate_reply_after_the_rerun_still_halts_as_a_refusal(tmp_path):
+def test_an_empty_gate_reply_after_the_rerun_still_halts_as_a_refusal(tmp_path: Path) -> None:
     if not shutil.which("node"):
         pytest.skip("node not installed")
     script = _compose()
@@ -185,7 +186,7 @@ def test_an_empty_gate_reply_after_the_rerun_still_halts_as_a_refusal(tmp_path):
     assert fire_command("s.yaml") in halted["reason"]
 
 
-def test_no_arm_reason_cites_the_scout_stdout_when_sized_in_run():
+def test_no_arm_reason_cites_the_scout_stdout_when_sized_in_run() -> None:
     assert "scout stdout:" in _line(_compose(), _GATE_MARK)
     assert "scout stdout:" not in _line(_compose(prompt=None, sizing_rel="state/sizings/x.yaml"), _GATE_MARK)
 
@@ -199,7 +200,7 @@ def test_no_arm_reason_cites_the_scout_stdout_when_sized_in_run():
         'note {x}\n{"route":"plan","write":{"status":"written"}}\nderived 1 row {done}\n',
     ],
 )
-def test_a_compact_one_line_decision_is_a_decision_not_a_scout_that_never_ran(stdout, tmp_path):
+def test_a_compact_one_line_decision_is_a_decision_not_a_scout_that_never_ran(stdout, tmp_path: Path) -> None:
     script = _compose()
     setup = (
         "let _halted = null; let _decision = null; const _runId = 'run-1';\n"
@@ -217,7 +218,7 @@ def test_a_compact_one_line_decision_is_a_decision_not_a_scout_that_never_ran(st
         ('{\n  "route": "plan"\n}\n{"note": "stderr"}\n', {"route": "plan"}),
     ],
 )
-def test_only_an_object_with_a_string_route_is_the_decision(stdout, expect, tmp_path):
+def test_only_an_object_with_a_string_route_is_the_decision(stdout, expect, tmp_path: Path) -> None:
     if not shutil.which("node"):
         pytest.skip("node not installed")
     script = _compose()

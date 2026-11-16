@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest import mock
 
 from coordinator_core.ops import query_completions
+import pytest
 
 
 def _write_completion(root: Path, month: str, name: str, frontmatter: str, body: str = "Body.\n") -> Path:
@@ -19,7 +20,7 @@ def _write_completion(root: Path, month: str, name: str, frontmatter: str, body:
     return f
 
 
-def test_help_first_arg_prints_wrapper_usage_and_exits_zero():
+def test_help_first_arg_prints_wrapper_usage_and_exits_zero() -> None:
     buf = io.StringIO()
     with redirect_stdout(buf):
         rc = query_completions.main(["--help"])
@@ -28,7 +29,7 @@ def test_help_first_arg_prints_wrapper_usage_and_exits_zero():
     assert "--type" not in buf.getvalue().split("\n")[0]
 
 
-def test_h_first_arg_also_triggers_help():
+def test_h_first_arg_also_triggers_help() -> None:
     buf = io.StringIO()
     with redirect_stdout(buf):
         rc = query_completions.main(["-h"])
@@ -36,7 +37,7 @@ def test_h_first_arg_also_triggers_help():
     assert "Native reader over completion-log entries" in buf.getvalue()
 
 
-def test_markdown_list_default_format_matches_type_display_completion(tmp_path: Path):
+def test_markdown_list_default_format_matches_type_display_completion(tmp_path: Path) -> None:
     _write_completion(
         tmp_path, "2026-07", "a",
         "title: Landed the thing\nnature: fix\nchain: c1\ncommits:\n  - abc123\n  - def456\n",
@@ -49,7 +50,7 @@ def test_markdown_list_default_format_matches_type_display_completion(tmp_path: 
     assert buf.getvalue() == "- **Landed the thing** [fix] (chain: c1) — abc123, def456\n"
 
 
-def test_markdown_list_falls_back_to_none_and_no_commit(tmp_path: Path):
+def test_markdown_list_falls_back_to_none_and_no_commit(tmp_path: Path) -> None:
     _write_completion(tmp_path, "2026-07", "b", "title: Bare entry\nnature: chore\n")
     with mock.patch.object(query_completions, "_detect_root", return_value=tmp_path):
         buf = io.StringIO()
@@ -59,7 +60,7 @@ def test_markdown_list_falls_back_to_none_and_no_commit(tmp_path: Path):
     assert buf.getvalue() == "- **Bare entry** [chore] (chain: none) — no-commit\n"
 
 
-def test_format_json_emits_bare_stringify_array(tmp_path: Path):
+def test_format_json_emits_bare_stringify_array(tmp_path: Path) -> None:
     _write_completion(tmp_path, "2026-07", "c", "title: Entry C\nnature: fix\n")
     with mock.patch.object(query_completions, "_detect_root", return_value=tmp_path):
         buf = io.StringIO()
@@ -80,7 +81,7 @@ def test_format_json_emits_bare_stringify_array(tmp_path: Path):
     ]
 
 
-def test_format_paths(tmp_path: Path):
+def test_format_paths(tmp_path: Path) -> None:
     _write_completion(tmp_path, "2026-07", "d", "title: Entry D\nnature: fix\n")
     with mock.patch.object(query_completions, "_detect_root", return_value=tmp_path):
         buf = io.StringIO()
@@ -90,7 +91,7 @@ def test_format_paths(tmp_path: Path):
     assert buf.getvalue() == "archive/completed/2026-07/d.md\n"
 
 
-def test_since_filters_by_created(tmp_path: Path):
+def test_since_filters_by_created(tmp_path: Path) -> None:
     _write_completion(tmp_path, "2026-07", "old", "title: Old\nnature: fix\ncreated: 2020-01-01\n")
     _write_completion(tmp_path, "2026-07", "new", "title: New\nnature: fix\ncreated: 2099-01-01\n")
     with mock.patch.object(query_completions, "_detect_root", return_value=tmp_path):
@@ -101,7 +102,7 @@ def test_since_filters_by_created(tmp_path: Path):
     assert buf.getvalue() == "archive/completed/2026-07/new.md\n"
 
 
-def test_where_filter(tmp_path: Path):
+def test_where_filter(tmp_path: Path) -> None:
     _write_completion(tmp_path, "2026-07", "keep", "title: Keep\nnature: fix\nstatus: pending-release\n")
     _write_completion(tmp_path, "2026-07", "drop", "title: Drop\nnature: fix\nstatus: shipped\n")
     with mock.patch.object(query_completions, "_detect_root", return_value=tmp_path):
@@ -112,7 +113,7 @@ def test_where_filter(tmp_path: Path):
     assert buf.getvalue() == "archive/completed/2026-07/keep.md\n"
 
 
-def test_limit_defaults_to_fifty_matching_oracle(tmp_path: Path):
+def test_limit_defaults_to_fifty_matching_oracle(tmp_path: Path) -> None:
     for i in range(60):
         _write_completion(tmp_path, "2026-07", f"e{i:02d}", f"title: Entry {i}\nnature: fix\n")
     with mock.patch.object(query_completions, "_detect_root", return_value=tmp_path):
@@ -123,7 +124,7 @@ def test_limit_defaults_to_fifty_matching_oracle(tmp_path: Path):
     assert len(buf.getvalue().splitlines()) == 50
 
 
-def test_limit_zero_means_unlimited(tmp_path: Path):
+def test_limit_zero_means_unlimited(tmp_path: Path) -> None:
     for i in range(60):
         _write_completion(tmp_path, "2026-07", f"f{i:02d}", f"title: Entry {i}\nnature: fix\n")
     with mock.patch.object(query_completions, "_detect_root", return_value=tmp_path):
@@ -134,7 +135,7 @@ def test_limit_zero_means_unlimited(tmp_path: Path):
     assert len(buf.getvalue().splitlines()) == 60
 
 
-def test_root_flag_overrides_detected_root(tmp_path: Path):
+def test_root_flag_overrides_detected_root(tmp_path: Path) -> None:
     _write_completion(tmp_path, "2026-07", "g", "title: Entry G\nnature: fix\n")
     buf = io.StringIO()
     with redirect_stdout(buf):
@@ -143,7 +144,7 @@ def test_root_flag_overrides_detected_root(tmp_path: Path):
     assert buf.getvalue() == "archive/completed/2026-07/g.md\n"
 
 
-def test_sort_created_descending_orders_newest_first(tmp_path: Path):
+def test_sort_created_descending_orders_newest_first(tmp_path: Path) -> None:
     _write_completion(tmp_path, "2026-07", "a", "title: A\nnature: fix\ncreated: 2026-01-01\n")
     _write_completion(tmp_path, "2026-07", "b", "title: B\nnature: fix\ncreated: 2026-03-01\n")
     _write_completion(tmp_path, "2026-07", "c", "title: C\nnature: fix\ncreated: 2026-02-01\n")
@@ -159,7 +160,7 @@ def test_sort_created_descending_orders_newest_first(tmp_path: Path):
     ]
 
 
-def test_sort_is_applied_before_limit(tmp_path: Path):
+def test_sort_is_applied_before_limit(tmp_path: Path) -> None:
     _write_completion(tmp_path, "2026-07", "a", "title: A\nnature: fix\ncreated: 2026-01-01\n")
     _write_completion(tmp_path, "2026-07", "b", "title: B\nnature: fix\ncreated: 2026-03-01\n")
     _write_completion(tmp_path, "2026-07", "c", "title: C\nnature: fix\ncreated: 2026-02-01\n")
@@ -171,38 +172,38 @@ def test_sort_is_applied_before_limit(tmp_path: Path):
     assert buf.getvalue() == "archive/completed/2026-07/b.md\n"
 
 
-def test_unsupported_flag_older_than_fails_loud():
+def test_unsupported_flag_older_than_fails_loud() -> None:
     with mock.patch.object(query_completions, "_detect_root", return_value=Path(".")):
         rc = query_completions.main(["--older-than", "7d"])
     assert rc == 1
 
 
-def test_unknown_flag_fails_loud():
+def test_unknown_flag_fails_loud() -> None:
     rc = query_completions.main(["--bogus-flag", "foo"])
     assert rc == 1
 
 
-def test_invalid_limit_fails_loud():
+def test_invalid_limit_fails_loud() -> None:
     rc = query_completions.main(["--limit", "not-a-number"])
     assert rc == 1
 
 
-def test_invalid_format_fails_loud():
+def test_invalid_format_fails_loud() -> None:
     rc = query_completions.main(["--format", "yaml"])
     assert rc == 1
 
 
-def test_invalid_since_propagates_systemexit_as_nonzero(tmp_path: Path):
+def test_invalid_since_propagates_systemexit_as_nonzero(tmp_path: Path) -> None:
     with mock.patch.object(query_completions, "_detect_root", return_value=tmp_path):
         rc = query_completions.main(["--since", "not-a-date"])
     assert rc == 1
 
 
-def test_detect_root_uses_root_flag_without_git(tmp_path: Path):
+def test_detect_root_uses_root_flag_without_git(tmp_path: Path) -> None:
     assert query_completions._detect_root(str(tmp_path)) == tmp_path.resolve()
 
 
-def test_detect_root_falls_back_to_cwd_when_git_fails(tmp_path: Path, monkeypatch):
+def test_detect_root_falls_back_to_cwd_when_git_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     with mock.patch("subprocess.run") as mock_run:
         mock_run.return_value = subprocess.CompletedProcess(args=[], returncode=1, stdout="")
@@ -220,29 +221,29 @@ def test_detect_root_falls_back_to_cwd_when_git_fails(tmp_path: Path, monkeypatc
 # ---------------------------------------------------------------------------
 
 
-def test_all_digit_short_sha_renders_instead_of_raising():
+def test_all_digit_short_sha_renders_instead_of_raising() -> None:
     assert query_completions._format_commits([1234567]) == "1234567"
 
 
-def test_mixed_int_and_str_shas_all_render():
+def test_mixed_int_and_str_shas_all_render() -> None:
     out = query_completions._format_commits([1234567, "abc1234"])
     assert out == "1234567, abc1234"
 
 
-def test_a_bare_string_is_not_iterated_character_by_character():
+def test_a_bare_string_is_not_iterated_character_by_character() -> None:
     assert query_completions._format_commits("abc1234") == "abc1234"
 
 
-def test_absent_and_empty_stay_no_commit():
+def test_absent_and_empty_stay_no_commit() -> None:
     for value in (None, [], ""):
         assert query_completions._format_commits(value) == "no-commit"
 
 
-def test_a_non_int_non_str_scalar_still_renders():
+def test_a_non_int_non_str_scalar_still_renders() -> None:
     assert query_completions._format_commits([True]) == "True"
 
 
-def test_the_formatter_survives_an_all_digit_sha_end_to_end(tmp_path: Path):
+def test_the_formatter_survives_an_all_digit_sha_end_to_end(tmp_path: Path) -> None:
     _write_completion(
         tmp_path,
         "2026-08",
@@ -272,20 +273,20 @@ def _paths(root: Path, *argv: str) -> list[str]:
     return buf.getvalue().splitlines()
 
 
-def test_unreleased_drops_listed_and_keeps_unlisted(tmp_path: Path):
+def test_unreleased_drops_listed_and_keeps_unlisted(tmp_path: Path) -> None:
     _write_completion(tmp_path, "2026-10", "shipped", "title: S\nnature: fix\n")
     _write_completion(tmp_path, "2026-10", "pending", "title: P\nnature: fix\n")
     _write_index(tmp_path, "v0.1.0", ["archive/completed/2026-10/shipped.md"])
     assert _paths(tmp_path, "--unreleased") == ["archive/completed/2026-10/pending.md"]
 
 
-def test_unreleased_joins_by_file_name_so_a_moved_entry_stays_released(tmp_path: Path):
+def test_unreleased_joins_by_file_name_so_a_moved_entry_stays_released(tmp_path: Path) -> None:
     _write_completion(tmp_path, "2026-11", "moved", "title: M\nnature: fix\n")
     _write_index(tmp_path, "v0.1.0", ["archive/completed/2026-10/moved.md"])
     assert _paths(tmp_path, "--unreleased") == []
 
 
-def test_unreleased_composes_with_since_and_where(tmp_path: Path):
+def test_unreleased_composes_with_since_and_where(tmp_path: Path) -> None:
     _write_completion(tmp_path, "2026-10", "a", "title: A\nnature: fix\ncreated: 2099-01-01\n")
     _write_completion(tmp_path, "2026-10", "b", "title: B\nnature: fix\ncreated: 2099-01-01\n")
     _write_completion(tmp_path, "2026-10", "c", "title: C\nnature: code\ncreated: 2099-01-01\n")
@@ -295,7 +296,7 @@ def test_unreleased_composes_with_since_and_where(tmp_path: Path):
     assert got == ["archive/completed/2026-10/b.md"]
 
 
-def test_unreleased_limit_applies_after_the_filter(tmp_path: Path):
+def test_unreleased_limit_applies_after_the_filter(tmp_path: Path) -> None:
     names = [f"e{i:02d}" for i in range(6)]
     for n in names:
         _write_completion(tmp_path, "2026-10", n, f"title: {n}\nnature: fix\n")
@@ -304,7 +305,7 @@ def test_unreleased_limit_applies_after_the_filter(tmp_path: Path):
     assert got == [f"archive/completed/2026-10/{n}.md" for n in names[4:]]
 
 
-def test_unreleased_without_release_dir_keeps_every_record(tmp_path: Path):
+def test_unreleased_without_release_dir_keeps_every_record(tmp_path: Path) -> None:
     _write_completion(tmp_path, "2026-10", "x", "title: X\nnature: fix\n")
     _write_completion(tmp_path, "2026-10", "y", "title: Y\nnature: fix\n")
     assert len(_paths(tmp_path, "--unreleased")) == 2

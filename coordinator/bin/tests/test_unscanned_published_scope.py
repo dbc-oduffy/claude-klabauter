@@ -40,11 +40,16 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
-def _load_publish_module():
+def _load_publish_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "publish_unscanned_published_scope_under_test", _BIN_DIR / "publish.py"
     )
@@ -58,7 +63,7 @@ def _load_publish_module():
 publish = _load_publish_module()
 
 
-def _target(tmp_path: Path, name="t", dest_subdir: str = "dst") -> "publish.ResolvedTarget":
+def _target(tmp_path: Path, name: str = "t", dest_subdir: str = "dst") -> "publish.ResolvedTarget":
     src = tmp_path / "src"
     src.mkdir(exist_ok=True)
     dst = tmp_path / dest_subdir
@@ -67,7 +72,7 @@ def _target(tmp_path: Path, name="t", dest_subdir: str = "dst") -> "publish.Reso
 
 
 class TestPublishedScopeFalsePositiveFix:
-    def test_published_but_unswept_file_still_fails(self, tmp_path, capsys):
+    def test_published_but_unswept_file_still_fails(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         target = _target(tmp_path)
         (target.dest_dir / "injected-after-sweep.py").write_text("print('x')\n", encoding="utf-8")
         section = {"file_surface": {}}
@@ -83,7 +88,7 @@ class TestPublishedScopeFalsePositiveFix:
         assert "injected-after-sweep.py" in captured.err
         assert "unscanned-published check FAILED" in captured.err
 
-    def test_unpublished_destination_file_does_not_fail(self, tmp_path, capsys):
+    def test_unpublished_destination_file_does_not_fail(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         target = _target(tmp_path)
         (target.dest_dir / "never-touched-this-run.py").write_text(
             "print('stale')\n", encoding="utf-8"
@@ -100,7 +105,7 @@ class TestPublishedScopeFalsePositiveFix:
         captured = capsys.readouterr()
         assert "never-touched-this-run.py" not in captured.err
 
-    def test_target_filtered_run_only_scopes_to_the_filtered_row(self, tmp_path, capsys):
+    def test_target_filtered_run_only_scopes_to_the_filtered_row(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         repo_root = tmp_path / "dest-repo"
         repo_root.mkdir()
         filtered_dest = repo_root / "sub-a"
@@ -124,7 +129,7 @@ class TestPublishedScopeFalsePositiveFix:
         captured = capsys.readouterr()
         assert "from-a-different-row.py" not in captured.err
 
-    def test_swept_then_renamed_file_does_not_fail(self, tmp_path):
+    def test_swept_then_renamed_file_does_not_fail(self, tmp_path: Path) -> None:
         """Direction 3 (§ module docstring) -- composes with the SEPARATE
         rename-reconciliation fix (engine.py commit e3fe55ea0): a visited id
         supplied here is already POST-rename (as `run_post_rsync` now
@@ -160,7 +165,7 @@ class TestDestAuthoredFilesAreNotPublished:
     never clear and every subsequent round fail-closed.
     """
 
-    def test_dest_authored_file_under_root_dest_dir_does_not_fail(self, tmp_path, capsys):
+    def test_dest_authored_file_under_root_dest_dir_does_not_fail(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         repo_root = tmp_path / "dest-repo"
         repo_root.mkdir()
         (repo_root / "docs" / "plans").mkdir(parents=True)
@@ -186,7 +191,7 @@ class TestDestAuthoredFilesAreNotPublished:
         captured = capsys.readouterr()
         assert "their-own-plan.md" not in captured.err
 
-    def test_the_same_file_still_fails_when_a_row_did_publish_it(self, tmp_path, capsys):
+    def test_the_same_file_still_fails_when_a_row_did_publish_it(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         repo_root = tmp_path / "dest-repo"
         repo_root.mkdir()
         (repo_root / "docs" / "plans").mkdir(parents=True)
@@ -211,7 +216,7 @@ class TestDestAuthoredFilesAreNotPublished:
         assert "we-shipped-this.md" in captured.err
         assert "unscanned-published check FAILED" in captured.err
 
-    def test_published_files_takes_precedence_over_dest_dirs(self, tmp_path, capsys):
+    def test_published_files_takes_precedence_over_dest_dirs(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         repo_root = tmp_path / "dest-repo"
         repo_root.mkdir()
         stray = repo_root / "not-ours.py"

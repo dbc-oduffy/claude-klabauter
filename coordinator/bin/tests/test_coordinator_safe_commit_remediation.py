@@ -50,11 +50,16 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import pathlib
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _load_cli_module():
+def _load_cli_module() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "coordinator_safe_commit", str(_BIN_DIR / "coordinator-safe-commit.py")
     )
@@ -64,7 +69,7 @@ def _load_cli_module():
     return mod
 
 
-def test_remediation_no_longer_imports_locator_axis_resolver():
+def test_remediation_no_longer_imports_locator_axis_resolver() -> None:
     """The LOCATOR-axis symbol must not even be on the module -- this is a
     DISPATCH command, and reintroducing the import is the exact regression
     this suite guards against."""
@@ -72,7 +77,7 @@ def test_remediation_no_longer_imports_locator_axis_resolver():
     assert not hasattr(mod, "resolve_engine_root")
 
 
-def test_retry_command_never_names_the_killed_op(monkeypatch):
+def test_retry_command_never_names_the_killed_op(monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_cli_module()
     monkeypatch.setattr(mod, "_current_dirty_files", lambda: ["a/b.py", "c/d.py"])
 
@@ -82,7 +87,7 @@ def test_retry_command_never_names_the_killed_op(monkeypatch):
     assert "--repo" not in suggestion
 
 
-def test_retry_command_reproduces_this_same_script_not_a_generated_artifact(monkeypatch):
+def test_retry_command_reproduces_this_same_script_not_a_generated_artifact(monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_cli_module()
     monkeypatch.setattr(mod, "_current_dirty_files", lambda: ["a/b.py", "c/d.py"])
 
@@ -97,7 +102,7 @@ def test_retry_command_reproduces_this_same_script_not_a_generated_artifact(monk
     assert '"paths"' not in suggestion
 
 
-def test_retry_command_resolves_no_engine_root_on_any_axis():
+def test_retry_command_resolves_no_engine_root_on_any_axis() -> None:
     """The suggestion carries no interpreter, no `PYTHONPATH`, and no engine
     root, so neither resolver seam is reachable from it. Pinned as the
     absence of the NAMES: a reintroduced resolution rung would land here
@@ -109,7 +114,7 @@ def test_retry_command_resolves_no_engine_root_on_any_axis():
     assert not hasattr(mod, "resolve_engine_root")
 
 
-def test_absent_attribution_signal_renders_as_unattributed_not_as_zero_foreign(monkeypatch):
+def test_absent_attribution_signal_renders_as_unattributed_not_as_zero_foreign(monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_cli_module()
     monkeypatch.setattr(mod, "_current_dirty_files", lambda: ["a/b.py", "c/d.py"])
     monkeypatch.setattr(mod, "_own_touched_paths_for_banner", lambda: (None, "no session id"))

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.telemetry import engine_report
+import pytest
 
 
 def _git_common_dir(tmp_path: Path) -> Path:
@@ -22,7 +23,7 @@ def _write_jsonl(path: Path, rows: list) -> None:
             fh.write(json.dumps(row) + "\n")
 
 
-def _patch_repo(monkeypatch, tmp_path: Path):
+def _patch_repo(monkeypatch, tmp_path: Path) -> Path:
     common_dir = _git_common_dir(tmp_path)
     monkeypatch.setattr(
         "coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir
@@ -30,7 +31,7 @@ def _patch_repo(monkeypatch, tmp_path: Path):
     return common_dir
 
 
-def test_latency_percentiles_and_per_op_over_synthetic_corpus(monkeypatch, tmp_path):
+def test_latency_percentiles_and_per_op_over_synthetic_corpus(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     common_dir = _patch_repo(monkeypatch, tmp_path)
     sink = hub_for_common(common_dir) / "logs" / "op-latency.jsonl"
     now = time.time()
@@ -61,7 +62,7 @@ def test_latency_percentiles_and_per_op_over_synthetic_corpus(monkeypatch, tmp_p
     assert "op.a" in per_op and "op.b" in per_op
 
 
-def test_iter_sink_entries_spans_rotated_generations(monkeypatch, tmp_path):
+def test_iter_sink_entries_spans_rotated_generations(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     common_dir = _patch_repo(monkeypatch, tmp_path)
     logs_dir = hub_for_common(common_dir) / "logs"
     now = time.time()
@@ -89,7 +90,7 @@ def test_iter_sink_entries_spans_rotated_generations(monkeypatch, tmp_path):
     assert per_op["op.live"]["n"] == 1
 
 
-def test_iter_sink_entries_never_raises_on_malformed_lines(monkeypatch, tmp_path):
+def test_iter_sink_entries_never_raises_on_malformed_lines(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     common_dir = _patch_repo(monkeypatch, tmp_path)
     sink = hub_for_common(common_dir) / "logs" / "op-latency.jsonl"
     sink.parent.mkdir(parents=True, exist_ok=True)
@@ -105,19 +106,19 @@ def test_iter_sink_entries_never_raises_on_malformed_lines(monkeypatch, tmp_path
     assert entries[0]["op"] == "ok.op"
 
 
-def test_iter_sink_entries_missing_sink_yields_nothing(monkeypatch, tmp_path):
+def test_iter_sink_entries_missing_sink_yields_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_repo(monkeypatch, tmp_path)
     entries = list(engine_report.iter_sink_entries(repo_root=tmp_path))
     assert entries == []
 
 
-def test_percentile_takes_fractions_not_percentiles():
+def test_percentile_takes_fractions_not_percentiles() -> None:
     vals = [float(i) for i in range(1, 101)]
     assert engine_report._percentile(vals, 0.50) == 51.0
     assert engine_report._percentile(vals, 95) == 100.0
 
 
-def test_route_distribution_unstamped_never_lands_in_by_route():
+def test_route_distribution_unstamped_never_lands_in_by_route() -> None:
     # DR-328: an unstamped row (route is None) is UNOBSERVABLE, NOT COLD.
     entries = [
         {"op": "op.a", "route": "warm_server", "kind": "complete"},
@@ -140,7 +141,7 @@ def test_route_distribution_unstamped_never_lands_in_by_route():
     assert result["verdict"] == "ok"
 
 
-def test_route_distribution_at_real_corpus_coverage_is_unknown():
+def test_route_distribution_at_real_corpus_coverage_is_unknown() -> None:
     complete_rows = [{"op": "op.a", "kind": "complete"} for _ in range(160_861 - 413)]
     routed_rows = [
         {"op": "op.a", "route": "warm_server", "kind": "complete"} for _ in range(413)
@@ -157,7 +158,7 @@ def test_route_distribution_at_real_corpus_coverage_is_unknown():
     assert "coverage" in result["verdict_reason"]
 
 
-def test_route_distribution_empty_corpus_is_unknown_not_crash():
+def test_route_distribution_empty_corpus_is_unknown_not_crash() -> None:
     result = engine_report.route_distribution([])
     assert result["complete"] == 0
     assert result["routed"] == 0
@@ -165,7 +166,7 @@ def test_route_distribution_empty_corpus_is_unknown_not_crash():
     assert result["verdict"] == "unknown"
 
 
-def test_route_distribution_default_min_complete_rows_is_back_compat():
+def test_route_distribution_default_min_complete_rows_is_back_compat() -> None:
     entries = [
         {"op": "op.a", "route": "warm_server", "kind": "complete"},
         {"op": "op.a", "route": "in_process", "kind": "complete"},
@@ -177,7 +178,7 @@ def test_route_distribution_default_min_complete_rows_is_back_compat():
     assert with_default == without_default
 
 
-def test_route_distribution_refuses_below_min_complete_rows():
+def test_route_distribution_refuses_below_min_complete_rows() -> None:
     entries = [
         {"op": "op.a", "route": "warm_server", "kind": "complete"},
         {"op": "op.a", "route": "in_process", "kind": "complete"},
@@ -192,7 +193,7 @@ def test_route_distribution_refuses_below_min_complete_rows():
     assert "50" in result["verdict_reason"]
 
 
-def test_route_distribution_passes_at_exactly_min_complete_rows():
+def test_route_distribution_passes_at_exactly_min_complete_rows() -> None:
     entries = [
         {"op": "op.a", "route": "warm_server", "kind": "complete"}
         for _ in range(3)
@@ -204,7 +205,7 @@ def test_route_distribution_passes_at_exactly_min_complete_rows():
     assert result["verdict"] == "ok"
 
 
-def test_route_distribution_row_count_and_coverage_reasons_are_distinguishable():
+def test_route_distribution_row_count_and_coverage_reasons_are_distinguishable() -> None:
     entries = [
         {"op": "op.a", "route": "warm_server", "kind": "complete"}
         for _ in range(3)
@@ -225,7 +226,7 @@ def test_route_distribution_row_count_and_coverage_reasons_are_distinguishable()
     assert "coverage" in below_coverage["verdict_reason"]
 
 
-def test_route_distribution_zero_rows_refuses_under_both_minimums():
+def test_route_distribution_zero_rows_refuses_under_both_minimums() -> None:
     result_default = engine_report.route_distribution(
         [], coverage_floor=0.05, min_complete_rows=0
     )
@@ -242,7 +243,7 @@ def test_route_distribution_zero_rows_refuses_under_both_minimums():
     assert "min_complete_rows" in result_with_floor["verdict_reason"]
 
 
-def test_process_fanout_overall_and_per_op():
+def test_process_fanout_overall_and_per_op() -> None:
     entries = [
         {"op": "op.a", "pid": 100, "kind": "complete"},
         {"op": "op.a", "pid": 100, "kind": "complete"},
@@ -261,12 +262,12 @@ def test_process_fanout_overall_and_per_op():
     assert "op.c" not in result["by_op"]
 
 
-def test_process_fanout_empty_corpus_is_zero_not_crash():
+def test_process_fanout_empty_corpus_is_zero_not_crash() -> None:
     result = engine_report.process_fanout([])
     assert result == {"ops": 0, "distinct_pids": 0, "ops_per_pid": 0.0, "by_op": {}}
 
 
-def test_outcome_split_unknown_outcome_lands_in_other():
+def test_outcome_split_unknown_outcome_lands_in_other() -> None:
     entries = [
         {"op": "op.a", "outcome": "ok", "kind": "complete"},
         {"op": "op.a", "outcome": "ok", "kind": "complete"},
@@ -283,7 +284,7 @@ def test_outcome_split_unknown_outcome_lands_in_other():
     assert "op.c" not in result["by_op"]
 
 
-def test_engine_telemetry_report_composes_every_section(monkeypatch, tmp_path):
+def test_engine_telemetry_report_composes_every_section(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     common_dir = _patch_repo(monkeypatch, tmp_path)
     sink = hub_for_common(common_dir) / "logs" / "op-latency.jsonl"
     now = time.time()
@@ -316,7 +317,7 @@ def test_engine_telemetry_report_composes_every_section(monkeypatch, tmp_path):
     assert report["pairing_summary"]["total"] == 0
 
 
-def test_warm_share_since_buckets_routed_rows_since_publish_stamp():
+def test_warm_share_since_buckets_routed_rows_since_publish_stamp() -> None:
     since_ts = 1000.0
     entries = [
         {"route": "warm_server", "t_start": 999.0, "kind": "complete"},

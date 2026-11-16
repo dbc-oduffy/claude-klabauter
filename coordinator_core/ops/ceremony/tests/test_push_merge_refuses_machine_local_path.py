@@ -8,6 +8,7 @@ from coordinator_core.ops.ceremony.tests.test_push_reject_landed_by_peer import 
     _git,
     _init_repo_with_upstream,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -34,7 +35,7 @@ def _local_commit(repo) -> None:
     _git(["commit", "-q", "-m", "ours"], repo)
 
 
-def test_merge_adding_a_machine_local_path_declines_touching_nothing(tmp_path):
+def test_merge_adding_a_machine_local_path_declines_touching_nothing(tmp_path: Path) -> None:
     repo = _init_repo_with_upstream(tmp_path)
     _remote_adds(tmp_path, f"{_SHARE}/s/report.md")
     _local_commit(repo)
@@ -54,7 +55,7 @@ def test_merge_adding_a_machine_local_path_declines_touching_nothing(tmp_path):
     assert not (repo / _SHARE).exists()
 
 
-def test_merge_without_machine_local_paths_still_lands(tmp_path):
+def test_merge_without_machine_local_paths_still_lands(tmp_path: Path) -> None:
     repo = _init_repo_with_upstream(tmp_path)
     _remote_adds(tmp_path, "docs/note.md")
     _local_commit(repo)

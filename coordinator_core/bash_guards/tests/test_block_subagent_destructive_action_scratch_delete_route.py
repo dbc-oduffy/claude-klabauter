@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from coordinator_core.bash_guards import block_subagent_destructive_action as guard
+from pathlib import Path
 
 RM = "r" + "m"
 ROUTE = "coordinator-invoke scratch.delete"
@@ -37,42 +38,42 @@ PINNED_NON_SCRATCH = (
 )
 
 
-def _reason(cmd):
+def _reason(cmd) -> str:
     return guard._build_reason("rm -r/-f (recursive or force)", "a1", "t", "X", cmd)
 
 
-def test_non_scratch_denial_text_is_byte_identical():
+def test_non_scratch_denial_text_is_byte_identical() -> None:
     assert _reason(f"{RM} -rf build/out") == PINNED_NON_SCRATCH
     assert _reason(f"{RM} -rf /tmp/scratchy/x") == PINNED_NON_SCRATCH
     assert _reason("") == PINNED_NON_SCRATCH
 
 
-def test_scratch_operand_names_the_route_before_safe_forward_paths():
+def test_scratch_operand_names_the_route_before_safe_forward_paths() -> None:
     text = _reason(f"{RM} -rf scratch/baseline-7fa01de")
     assert ROUTE in text
     assert text.index(ROUTE) < text.index("Safe forward paths:")
 
 
-def test_absolute_scratch_under_repo_root_names_the_route(tmp_path):
+def test_absolute_scratch_under_repo_root_names_the_route(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     assert ROUTE in _reason(f"{RM} -rf {tmp_path}/scratch/x")
     assert ROUTE not in _reason(f"{RM} -rf {tmp_path}/other/scratch/x")
 
 
-def test_partly_quoted_operand_with_space_in_repo_root_names_the_route(tmp_path):
+def test_partly_quoted_operand_with_space_in_repo_root_names_the_route(tmp_path: Path) -> None:
     repo = tmp_path / "My Repo"
     (repo / ".git").mkdir(parents=True)
     assert ROUTE in _reason(f'{RM} -rf "{repo}"/scratch/x')
     assert ROUTE in _reason(f'{RM} -rf "{repo}/scratch/x"')
 
 
-def test_backslash_windows_operand_names_the_route(tmp_path):
+def test_backslash_windows_operand_names_the_route(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     backslashed = str(tmp_path).replace("/", "\\") + "\\scratch\\x"
     assert ROUTE in _reason(f"{RM} -rf {backslashed}")
 
 
-def test_verdict_still_denies_through_check(tmp_path):
+def test_verdict_still_denies_through_check(tmp_path: Path) -> None:
     result = guard.check(
         {
             "tool_name": "Bash",

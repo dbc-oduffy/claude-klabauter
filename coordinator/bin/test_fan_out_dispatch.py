@@ -49,17 +49,17 @@ def run_helper(cwd, spec_file=None, stdin_text=None, extra_env=None, args=None):
     return r.returncode, r.stdout, r.stderr
 
 
-def write(path, text):
+def write(path, text) -> None:
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
 
 
 @pytest.fixture(scope="module")
-def root(tmp_path_factory):
+def root(tmp_path_factory: pytest.TempPathFactory) -> str:
     return str(tmp_path_factory.mktemp("fan-out-dispatch-test"))
 
 
-def test_file_overlap_detection(root):
+def test_file_overlap_detection(root) -> None:
     repo_a = os.path.join(root, "repo_a")
     make_git_repo(repo_a)
     spec_a = os.path.join(root, "spec_a.tsv")
@@ -72,7 +72,7 @@ def test_file_overlap_detection(root):
     assert "EXECUTOR DISPATCH BLOCK" not in so, "overlap must produce no partial output"
 
 
-def test_malformed_row_detection(root):
+def test_malformed_row_detection(root) -> None:
     repo_b = os.path.join(root, "repo_b")
     make_git_repo(repo_b)
 
@@ -132,7 +132,7 @@ def clean_spec_output(root):
     return code, so_c, se_c
 
 
-def test_clean_three_chunk_spec(clean_spec_output):
+def test_clean_three_chunk_spec(clean_spec_output) -> None:
     code, so_c, se_c = clean_spec_output
     assert code == 0, "clean spec must exit zero"
     assert so_c.count("EXECUTOR DISPATCH BLOCK") == 3, "exactly 3 dispatch blocks"
@@ -160,7 +160,7 @@ def test_clean_three_chunk_spec(clean_spec_output):
     assert so_c.count("### In-scope") == 3, "in-scope section header in all blocks"
 
 
-def test_no_commit_verb_in_blocks_reminders_on_stderr(clean_spec_output):
+def test_no_commit_verb_in_blocks_reminders_on_stderr(clean_spec_output) -> None:
     code, so_c, se_c = clean_spec_output
     assert "git commit" not in so_c, "no 'git commit' instruction in blocks"
     assert "git add --" not in so_c, "no 'git add --' instruction in stdout"
@@ -172,7 +172,7 @@ def test_no_commit_verb_in_blocks_reminders_on_stderr(clean_spec_output):
     assert "git add --" in se_c, "EM commit instruction on stderr"
 
 
-def test_large_wave_note_boundary(root):
+def test_large_wave_note_boundary(root) -> None:
     repo_e = os.path.join(root, "repo_e")
     make_git_repo(repo_e)
     spec_e_at = os.path.join(root, "spec_e_at.tsv")
@@ -192,7 +192,7 @@ def test_large_wave_note_boundary(root):
     assert "PM call" not in so
 
 
-def test_non_git_repo_clear_error(root):
+def test_non_git_repo_clear_error(root) -> None:
     nonrepo = os.path.join(root, "not_a_repo")
     os.makedirs(nonrepo, exist_ok=True)
     spec_f = os.path.join(root, "spec_f.tsv")
@@ -204,7 +204,7 @@ def test_non_git_repo_clear_error(root):
     assert "EXECUTOR DISPATCH BLOCK" not in so
 
 
-def test_at_file_brief_form(root):
+def test_at_file_brief_form(root) -> None:
     repo_g = os.path.join(root, "repo_g")
     make_git_repo(repo_g)
     brief_file = os.path.join(root, "brief_g.txt")
@@ -216,11 +216,11 @@ def test_at_file_brief_form(root):
     assert "longer brief read from a file" in so
 
 
-def test_threshold_resolution_order(root):
+def test_threshold_resolution_order(root) -> None:
     repo_h = os.path.join(root, "repo_h")
     make_git_repo(repo_h)
 
-    def n_chunk_spec(n, out):
+    def n_chunk_spec(n, out) -> None:
         write(out, "".join(f"chunk-{i}\tbrief {i}\tfile_{i}.py\n" for i in range(1, n + 1)))
 
     specs = {}
@@ -229,7 +229,7 @@ def test_threshold_resolution_order(root):
         n_chunk_spec(n, specs[n])
     NOTE = "large wave"
 
-    def clean_env(overrides):
+    def clean_env(overrides) -> dict[str, str]:
         env = {"LARGE_WAVE_THRESHOLD": "", "MACHINE_LOCAL_FAN_OUT_LARGE_WAVE_THRESHOLD": ""}
         env.update(overrides)
         return env
@@ -281,7 +281,7 @@ def test_threshold_resolution_order(root):
     assert NOTE not in out2, "env=3 -> no NOTE at 2 chunks"
 
 
-def test_pinned_interface_symbol_present_silent(root):
+def test_pinned_interface_symbol_present_silent(root) -> None:
     repo_i = os.path.join(root, "repo_i")
     make_git_repo(repo_i)
     producer_i = os.path.join(root, "producer_i.py")
@@ -296,7 +296,7 @@ def test_pinned_interface_symbol_present_silent(root):
     assert "does not exist" not in se
 
 
-def test_pinned_interface_symbol_absent_offers_note(root):
+def test_pinned_interface_symbol_absent_offers_note(root) -> None:
     repo_j = os.path.join(root, "repo_j")
     make_git_repo(repo_j)
     producer_j = os.path.join(root, "producer_j.py")
@@ -313,7 +313,7 @@ def test_pinned_interface_symbol_absent_offers_note(root):
     assert "serial predecessor" not in so, "NOTE goes to stderr, not stdout"
 
 
-def test_pinned_interface_producer_file_absent_offers_note(root):
+def test_pinned_interface_producer_file_absent_offers_note(root) -> None:
     repo_j2 = os.path.join(root, "repo_j2")
     make_git_repo(repo_j2)
     producer_j2 = os.path.join(root, "nonexistent_producer.py")
@@ -328,7 +328,7 @@ def test_pinned_interface_producer_file_absent_offers_note(root):
     assert "EXECUTOR DISPATCH BLOCK: chunk-consumer" in so
 
 
-def test_legacy_three_field_row_backward_compat(root):
+def test_legacy_three_field_row_backward_compat(root) -> None:
     repo_k = os.path.join(root, "repo_k")
     make_git_repo(repo_k)
     spec_k = os.path.join(root, "spec_k.tsv")
@@ -340,7 +340,7 @@ def test_legacy_three_field_row_backward_compat(root):
     assert "pinned interface" not in se
 
 
-def test_plan_doc_oos_block_injection_ordering(root):
+def test_plan_doc_oos_block_injection_ordering(root) -> None:
     repo_l = os.path.join(root, "repo_l")
     make_git_repo(repo_l)
     spec_l = os.path.join(root, "spec_l.tsv")
@@ -355,7 +355,7 @@ def test_plan_doc_oos_block_injection_ordering(root):
         f"plan-doc OOS must appear BEFORE Disk-first preamble: plan_idx={plan_idx} disk_idx={disk_idx}"
 
 
-def test_stdin_spec_path(root):
+def test_stdin_spec_path(root) -> None:
     repo_m = os.path.join(root, "repo_m")
     make_git_repo(repo_m)
     code, so, se = run_helper(repo_m, stdin_text="solo\tDo the thing\tsolo.py\n")
@@ -369,7 +369,7 @@ def test_stdin_spec_path(root):
 _REAL_CLAUDE_KLABAUTER_ROOT = os.path.dirname(os.path.dirname(SCRIPT_DIR))
 
 
-def test_wiki_append_row_gets_candidate_restatements_populated(root):
+def test_wiki_append_row_gets_candidate_restatements_populated(root) -> None:
     repo_n = os.path.join(root, "repo_n")
     make_git_repo(repo_n)
     target_wiki = os.path.join(repo_n, "target-wiki.md")
@@ -393,7 +393,7 @@ def test_wiki_append_row_gets_candidate_restatements_populated(root):
     assert "quick brown fox" in so, "the overlapping target passage is surfaced as an excerpt"
 
 
-def test_non_wiki_row_gets_no_candidate_restatements_field(root):
+def test_non_wiki_row_gets_no_candidate_restatements_field(root) -> None:
     repo_o = os.path.join(root, "repo_o")
     make_git_repo(repo_o)
     write(os.path.join(repo_o, "code.py"), "def f():\n    pass\n")
@@ -406,7 +406,7 @@ def test_non_wiki_row_gets_no_candidate_restatements_field(root):
     assert "candidate_restatements" not in so, "non-wiki change_kind must not get the field"
 
 
-def test_three_and_four_field_rows_get_no_candidate_restatements_field(root):
+def test_three_and_four_field_rows_get_no_candidate_restatements_field(root) -> None:
     repo_p = os.path.join(root, "repo_p")
     make_git_repo(repo_p)
     spec_p = os.path.join(root, "spec_p.tsv")
@@ -418,7 +418,7 @@ def test_three_and_four_field_rows_get_no_candidate_restatements_field(root):
     assert "candidate_restatements" not in so, "absent change_kind (3-field row) gets no field"
 
 
-def test_empty_pin_field_before_change_kind_fails_loud(root):
+def test_empty_pin_field_before_change_kind_fails_loud(root) -> None:
     repo_r = os.path.join(root, "repo_r")
     make_git_repo(repo_r)
     write(os.path.join(repo_r, "target-wiki.md"), "# Doctrine\nSome text.\n")
@@ -436,7 +436,7 @@ def test_empty_pin_field_before_change_kind_fails_loud(root):
     )
 
 
-def test_generator_failure_degrades_to_empty_list_not_a_raise(root):
+def test_generator_failure_degrades_to_empty_list_not_a_raise(root) -> None:
     repo_q = os.path.join(root, "repo_q")
     make_git_repo(repo_q)
     write(os.path.join(repo_q, "target-wiki.md"), "# Doctrine\nSome text.\n")

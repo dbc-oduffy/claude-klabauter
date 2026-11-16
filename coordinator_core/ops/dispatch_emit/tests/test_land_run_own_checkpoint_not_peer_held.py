@@ -135,6 +135,16 @@ def test_own_checkpointed_path_also_declared_by_an_unlanded_sibling_lands_with_c
     assert [(e["path"], e["reason"]) for e in out["provenance"]] == [(P, "peer-hunks-co-declared")]
 
 
+def test_unlanded_sibling_co_declared_path_without_an_own_checkpoint_stays_withheld(repo):
+    base, _ = _scenario(repo, checkpointed=(), declared_by_senior=(P, Q))
+
+    out = _land(repo, base)
+
+    assert out["committed"] is True, out
+    assert P not in _tree(repo)
+    assert out["withheld"][P]
+
+
 def test_incident_replay_own_checkpointed_path_lands_and_unchecked_declaration_still_holds(repo):
     base, _ = _scenario(repo, checkpointed=(P,), declared_by_senior=(Q,))
 

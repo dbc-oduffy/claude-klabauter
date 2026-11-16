@@ -4,6 +4,7 @@ import sys
 
 from coordinator_core.ops.review_mint.execute_review import _JUDGE_PREAMBLE, criterion_judge_brief
 from coordinator_core.ops.review_mint.tests.test_execute_review import _STAGE_SCHEMAS, _judge_review
+from pathlib import Path
 
 _SCHEMAS = {**_STAGE_SCHEMAS, "judge-result": {"type": "object"}}
 _FALLBACK = "falling back to `python`"
@@ -24,11 +25,11 @@ def _brief(plan_path):
     return prompt
 
 
-def test_preamble_no_longer_hard_codes_the_interpreter():
+def test_preamble_no_longer_hard_codes_the_interpreter() -> None:
     assert _FALLBACK not in _JUDGE_PREAMBLE
 
 
-def test_pinned_interpreter_reaches_the_judge_brief(tmp_path):
+def test_pinned_interpreter_reaches_the_judge_brief(tmp_path: Path) -> None:
     pin = sys.executable
     plan = _repo(tmp_path, f'targeted_test_python: "{pin}"')
     prompt = _brief(plan)
@@ -37,20 +38,20 @@ def test_pinned_interpreter_reaches_the_judge_brief(tmp_path):
     assert "bare `python` verbatim" in prompt
 
 
-def test_no_pin_keeps_the_portable_text(tmp_path):
+def test_no_pin_keeps_the_portable_text(tmp_path: Path) -> None:
     plan = _repo(tmp_path, "fast_test_cmd: python3 -m pytest")
     prompt = _brief(plan)
     assert "Run Python as `python3`, falling back to `python`" in prompt
 
 
-def test_unresolvable_pin_is_a_resolution_defect(tmp_path):
+def test_unresolvable_pin_is_a_resolution_defect(tmp_path: Path) -> None:
     plan = _repo(tmp_path, "targeted_test_python: no-such-interpreter-xyz")
     prompt = _brief(plan)
     assert "interpreter-resolution-defect:" in prompt
     assert _FALLBACK not in prompt
 
 
-def test_plan_outside_any_repo_keeps_the_portable_text(tmp_path):
+def test_plan_outside_any_repo_keeps_the_portable_text(tmp_path: Path) -> None:
     plan = tmp_path / "p.md"
     plan.write_text("# p\n", encoding="utf-8")
     assert "falling back to `python`" in _brief(plan)

@@ -31,6 +31,7 @@ from coordinator_core.bash_guards._override_doc import (
     OVERRIDE_KEYS_DOC_DISPLAY,
 )
 from coordinator_core.install.substrate import _install_claude_klabauter_seed_wiki_page
+from pathlib import Path
 
 #: The four foreign-repo-identity markers this plan's exit criterion names.
 #: Mirrors the disposition probe's own criterion set — any one of these
@@ -39,7 +40,7 @@ from coordinator_core.install.substrate import _install_claude_klabauter_seed_wi
 _CRITERION_MARKERS = ("claude-klabauter", "claude-klabauter", "coordinator-content-repo", "content-engine")
 
 
-def test_display_form_names_no_repo():
+def test_display_form_names_no_repo() -> None:
     for marker in _CRITERION_MARKERS:
         assert marker not in OVERRIDE_KEYS_DOC_DISPLAY, (
             f"OVERRIDE_KEYS_DOC_DISPLAY names {marker!r} — DR-290 form 2 must "
@@ -47,12 +48,12 @@ def test_display_form_names_no_repo():
         )
 
 
-def test_display_form_is_settings_root_literal():
+def test_display_form_is_settings_root_literal() -> None:
     assert OVERRIDE_KEYS_DOC_DISPLAY.startswith("~/.coordinator-claude-settings/")
     assert OVERRIDE_KEYS_DOC_DISPLAY.endswith("guard-override-keys.md")
 
 
-def test_display_form_is_never_expanded():
+def test_display_form_is_never_expanded() -> None:
     # A literal `~/...` string is inert until a reader expands it themselves.
     # Simply reading the already-imported constant must never trigger a
     # home-resolution call, on either resolver a wrongly "helpful" future
@@ -64,7 +65,7 @@ def test_display_form_is_never_expanded():
     assert value.startswith("~")
 
 
-def test_resolution_form_stays_split_from_display_form():
+def test_resolution_form_stays_split_from_display_form() -> None:
     # NEGATIVE SPEC: the file-resolution form a caller joins to a repo root
     # must stay a bare repo-relative path, never collapsed into the
     # settings-root display string.
@@ -72,7 +73,7 @@ def test_resolution_form_stays_split_from_display_form():
     assert OVERRIDE_KEYS_DOC != OVERRIDE_KEYS_DOC_DISPLAY
 
 
-def test_install_leg_lands_at_the_declared_destination(tmp_path):
+def test_install_leg_lands_at_the_declared_destination(tmp_path: Path) -> None:
     claude_klabauter_root = tmp_path / "claude_klabauter_root"
     settings_home = tmp_path / "settings_home"
     src = claude_klabauter_root / "docs" / "reference" / "guard-override-keys.md"

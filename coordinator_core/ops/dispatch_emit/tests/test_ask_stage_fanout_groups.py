@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
+from pathlib import Path
 
 PLAN_REL = "docs/plans/2026-10-01-fanout.md"
 
@@ -29,7 +30,7 @@ def _stage(tmp_path, rows):
     return stage(tmp_path, run_id="r1", plan_rel=PLAN_REL)
 
 
-def test_six_small_same_wave_rows_fall_into_three_groups(tmp_path):
+def test_six_small_same_wave_rows_fall_into_three_groups(tmp_path: Path) -> None:
     m = _stage(tmp_path, [_row(f"C{i}") for i in range(1, 7)])
     groups = {r.group for r in m.rows}
     assert len(groups) == 3 and "" not in groups
@@ -40,14 +41,14 @@ def test_six_small_same_wave_rows_fall_into_three_groups(tmp_path):
     assert sorted(len(g) for g in m.fanout["groups"]) == [2, 2, 2]
 
 
-def test_group_id_is_wave_and_first_member(tmp_path):
+def test_group_id_is_wave_and_first_member(tmp_path: Path) -> None:
     m = _stage(tmp_path, [_row(f"C{i}") for i in range(1, 7)])
     first = next(r for r in m.rows if r.id == "C1")
     assert first.group == "g0-C1"
     assert next(r for r in m.rows if r.id == "C2").group == "g0-C1"
 
 
-def test_needs_slot_and_large_rows_stay_solo(tmp_path):
+def test_needs_slot_and_large_rows_stay_solo(tmp_path: Path) -> None:
     rows = [
         _row("C1", "  needs_slot: true\n"),
         _row("C2").replace("title: row C2", "title: " + "w " * 6000),
@@ -63,7 +64,7 @@ def test_needs_slot_and_large_rows_stay_solo(tmp_path):
     assert m.fanout["expectedAgents"] == 4
 
 
-def test_rows_with_different_deps_or_waves_never_share_a_group(tmp_path):
+def test_rows_with_different_deps_or_waves_never_share_a_group(tmp_path: Path) -> None:
     rows = [
         _row("C1"),
         _row("C2"),
@@ -81,7 +82,7 @@ def test_rows_with_different_deps_or_waves_never_share_a_group(tmp_path):
         assert len({(r.wave, r.deps, r.agent_type, r.model) for r in members}) == 1
 
 
-def test_fewer_than_three_rows_get_no_group(tmp_path):
+def test_fewer_than_three_rows_get_no_group(tmp_path: Path) -> None:
     m = _stage(tmp_path, [_row("C1"), _row("C2")])
     assert all(r.group == "" for r in m.rows)
     assert m.fanout["expectedAgents"] == 2

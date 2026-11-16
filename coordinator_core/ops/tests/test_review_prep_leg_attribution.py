@@ -10,6 +10,8 @@ from coordinator_core import ipc
 from coordinator_core.ops import review_prep as rp
 from coordinator_core.ops import review_prep_legs
 from coordinator_core.telemetry import op_row_fields
+from pathlib import Path
+import pytest
 
 BASE = "a" * 40
 
@@ -20,7 +22,7 @@ def _spin(ms: float) -> None:
         pass
 
 
-def _stub(tmp_path, monkeypatch, foreign):
+def _stub(tmp_path, monkeypatch, foreign) -> None:
     def boom(*a, **k):
         raise AssertionError("spawn")
 
@@ -55,7 +57,7 @@ def _call(tmp_path, slice_prefix):
     return asyncio.run(go())
 
 
-def test_slow_leg_is_named_in_the_drained_row(tmp_path, monkeypatch):
+def test_slow_leg_is_named_in_the_drained_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def slow(*a, **k):
         _spin(120)
         return []
@@ -68,7 +70,7 @@ def test_slow_leg_is_named_in_the_drained_row(tmp_path, monkeypatch):
     assert fields["legs"][0]["ms"] >= 50.0
 
 
-def test_fast_call_carries_no_legs_and_same_reply(tmp_path, monkeypatch):
+def test_fast_call_carries_no_legs_and_same_reply(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub(tmp_path, monkeypatch, lambda *a, **k: [])
     reply, fields = _call(tmp_path, "legs-fast")
     assert "legs" not in fields

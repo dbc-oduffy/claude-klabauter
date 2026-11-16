@@ -484,6 +484,57 @@ def test_permission_error_someone_elses_pipe_never_spawns(monkeypatch: pytest.Mo
     assert spawns == []
 
 
+def _denied_winerror_5() -> PermissionError:
+    return PermissionError(13, "Access is denied", None, 5)
+
+
+def test_restricted_token_pipe_denial_names_the_cause_and_never_spawns(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _raise_denied(pipe):
+        raise _denied_winerror_5()
+
+    monkeypatch.setattr(client, "_open_pipe", _raise_denied)
+    monkeypatch.setattr(client, "_process_token_is_restricted", lambda: True)
+    spawns = []
+    monkeypatch.setattr(
+        client, "spawn_detached", lambda repo_root, script, args=None, **kwargs: spawns.append(1) or True
+    )
+    assert client.try_warm_dispatch(_MSG) is None
+    assert spawns == []
+    reason = client.last_cold_reason()
+    assert reason is not None
+    assert "restricted" in reason and "token" in reason
+    assert "winerror 5" in reason
+
+
+def test_unrestricted_winerror_5_denial_records_no_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _raise_denied(pipe):
+        raise _denied_winerror_5()
+
+    monkeypatch.setattr(client, "_open_pipe", _raise_denied)
+    monkeypatch.setattr(client, "_process_token_is_restricted", lambda: False)
+    assert client.try_warm_dispatch(_MSG) is None
+    assert client.last_cold_reason() is None
+
+
+def test_restricted_token_denial_never_overwrites_an_established_reason(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(client, "_cold_reason", "earlier permanent reason")
+    monkeypatch.setattr(client, "_process_token_is_restricted", lambda: True)
+    client._record_restricted_token_denial(_denied_winerror_5())
+    assert client.last_cold_reason() == "earlier permanent reason"
+
+
+def test_process_token_probe_is_false_off_windows_and_a_bool_on_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    assert isinstance(client._process_token_is_restricted(), bool)
+    monkeypatch.setattr(client.sys, "platform", "linux")
+    assert client._process_token_is_restricted() is False
+
+
 def test_broken_pipe_mid_request_reopens_once_then_succeeds(monkeypatch: pytest.MonkeyPatch) -> None:
     pipes = [
         _FakePipe(raise_on_write=BrokenPipeError()),

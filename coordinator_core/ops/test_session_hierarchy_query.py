@@ -6,6 +6,7 @@ import os
 import pytest
 
 from coordinator_core.ops.session_hierarchy_query import main
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -45,44 +46,44 @@ RECORDS = [
 
 
 @pytest.fixture()
-def shard_dir(tmp_path, monkeypatch):
+def shard_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     shard_file = tmp_path / "session-hierarchy.testmachine.json"
     shard_file.write_text(json.dumps(RECORDS), encoding="utf-8")
     monkeypatch.setenv("QUERY_SHARD_DIR", str(tmp_path))
     return tmp_path
 
 
-def test_help_flag_prints_usage_exit_0(capsys):
+def test_help_flag_prints_usage_exit_0(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--help"])
     assert rc == 0
     assert "USAGE" in capsys.readouterr().out
 
 
-def test_no_args_prints_usage_exit_0(capsys):
+def test_no_args_prints_usage_exit_0(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main([])
     assert rc == 0
     assert "USAGE" in capsys.readouterr().out
 
 
-def test_unknown_flag_exit_2(capsys):
+def test_unknown_flag_exit_2(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--bogus", "foo"])
     assert rc == 2
     assert "ERROR: unknown argument: --bogus" in capsys.readouterr().err
 
 
-def test_workstream_missing_arg_exit_2(capsys):
+def test_workstream_missing_arg_exit_2(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--workstream"])
     assert rc == 2
     assert "ERROR: --workstream requires a slug argument" in capsys.readouterr().err
 
 
-def test_session_missing_arg_exit_2(capsys):
+def test_session_missing_arg_exit_2(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--session"])
     assert rc == 2
     assert "ERROR: --session requires a session_id argument" in capsys.readouterr().err
 
 
-def test_workstream_query_excludes_container_node(shard_dir, capsys):
+def test_workstream_query_excludes_container_node(shard_dir, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--workstream", "test-ws-a"])
     assert rc == 0
     out = capsys.readouterr().out.strip().splitlines()
@@ -92,13 +93,13 @@ def test_workstream_query_excludes_container_node(shard_dir, capsys):
     ]
 
 
-def test_workstream_query_no_match_empty_output_exit_0(shard_dir, capsys):
+def test_workstream_query_no_match_empty_output_exit_0(shard_dir, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--workstream", "no-such-workstream"])
     assert rc == 0
     assert capsys.readouterr().out == ""
 
 
-def test_session_query_found(shard_dir, capsys):
+def test_session_query_found(shard_dir, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--session", "aaaa0000-0000-0000-0000-000000000002"])
     assert rc == 0
     result = json.loads(capsys.readouterr().out)
@@ -111,20 +112,20 @@ def test_session_query_found(shard_dir, capsys):
     }
 
 
-def test_session_query_not_found_exit_1(shard_dir, capsys):
+def test_session_query_not_found_exit_1(shard_dir, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--session", "does-not-exist"])
     assert rc == 1
     assert "ERROR: session_id not found in any shard: does-not-exist" in capsys.readouterr().err
 
 
-def test_no_shards_found_exit_1(tmp_path, monkeypatch, capsys):
+def test_no_shards_found_exit_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("QUERY_SHARD_DIR", str(tmp_path))
     rc = main(["--workstream", "anything"])
     assert rc == 1
     assert "ERROR: no session-hierarchy shards found" in capsys.readouterr().err
 
 
-def test_union_across_multiple_shards(tmp_path, monkeypatch, capsys):
+def test_union_across_multiple_shards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "session-hierarchy.machine-a.json").write_text(
         json.dumps([RECORDS[0]]), encoding="utf-8"
     )
@@ -141,7 +142,7 @@ def test_union_across_multiple_shards(tmp_path, monkeypatch, capsys):
     ]
 
 
-def test_argv_beyond_first_two_ignored(shard_dir, capsys):
+def test_argv_beyond_first_two_ignored(shard_dir, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--workstream", "test-ws-a", "extra", "args", "ignored"])
     assert rc == 0
     out = capsys.readouterr().out.strip().splitlines()
@@ -151,7 +152,7 @@ def test_argv_beyond_first_two_ignored(shard_dir, capsys):
     ]
 
 
-def test_malformed_shard_json_exit_1(tmp_path, monkeypatch, capsys):
+def test_malformed_shard_json_exit_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "session-hierarchy.bad.json").write_text("not json", encoding="utf-8")
     monkeypatch.setenv("QUERY_SHARD_DIR", str(tmp_path))
     rc = main(["--workstream", "anything"])

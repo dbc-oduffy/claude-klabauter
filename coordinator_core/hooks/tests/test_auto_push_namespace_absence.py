@@ -50,7 +50,7 @@ _GRAVESTONED_NAMES = (
 )
 
 
-def test_gravestoned_names_absent_from_auto_push_namespace():
+def test_gravestoned_names_absent_from_auto_push_namespace() -> None:
     present = sorted(name for name in _GRAVESTONED_NAMES if hasattr(auto_push, name))
     assert not present, (
         f"C8 gravestone list still present in coordinator_core.hooks.auto_push: "
@@ -59,5 +59,5 @@ def test_gravestoned_names_absent_from_auto_push_namespace():
     )
 
 
-def test_resolve_python_exe_survives_as_a_named_exception():
+def test_resolve_python_exe_survives_as_a_named_exception() -> None:
     assert hasattr(auto_push, "_resolve_python_exe")

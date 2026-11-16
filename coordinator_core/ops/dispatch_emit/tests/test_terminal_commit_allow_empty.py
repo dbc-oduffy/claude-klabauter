@@ -16,6 +16,7 @@ import pytest
 from coordinator_core.benchmarks import terminal_commit_full_path as driver
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -28,7 +29,7 @@ def _git(root, *args: str) -> str:
 
 
 @pytest.fixture
-def landed(tmp_path, monkeypatch):
+def landed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A run whose declared write (a.py) is already committed at HEAD; returns (repo, script, seen)."""
     repo, script = driver.build_fixture(tmp_path)
     _git(repo, "add", "a.py")
@@ -73,7 +74,7 @@ def _fire(repo, tmp_path, script, **extra) -> dict:
     )
 
 
-def test_params_file_allow_empty_closes_an_already_landed_run(landed, tmp_path):
+def test_params_file_allow_empty_closes_an_already_landed_run(landed, tmp_path: Path) -> None:
     repo, script, seen = landed
     head = _git(repo, "rev-parse", "HEAD")
     out = _fire(repo, tmp_path, script, allow_empty=True)
@@ -88,7 +89,7 @@ def test_params_file_allow_empty_closes_an_already_landed_run(landed, tmp_path):
     assert out.get("rows_coded") and any(out["rows_coded"].values()), json.dumps(out, default=str)
 
 
-def test_without_allow_empty_the_same_run_replies_nothing_to_commit(landed, tmp_path):
+def test_without_allow_empty_the_same_run_replies_nothing_to_commit(landed, tmp_path: Path) -> None:
     repo, script, seen = landed
     out = _fire(repo, tmp_path, script)
     assert "allow_empty" not in seen[0]
@@ -96,7 +97,7 @@ def test_without_allow_empty_the_same_run_replies_nothing_to_commit(landed, tmp_
     assert out.get("nothing_to_commit") is True
 
 
-def test_non_boolean_allow_empty_is_refused_before_any_write(landed, tmp_path):
+def test_non_boolean_allow_empty_is_refused_before_any_write(landed, tmp_path: Path) -> None:
     repo, script, seen = landed
     head = _git(repo, "rev-parse", "HEAD")
     out = _fire(repo, tmp_path, script, allow_empty="yes")

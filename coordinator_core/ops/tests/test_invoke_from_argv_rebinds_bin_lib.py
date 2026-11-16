@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 from coordinator_core.ops import invoke_from_argv as ifa
+import pytest
 
 _LIB_INIT = (
     "import os, sys\n"
@@ -42,7 +43,7 @@ def _bin(tmp_path: Path) -> Path:
     return bin_dir
 
 
-def test_cached_lib_with_its_dir_off_sys_path_still_resolves_its_modules(monkeypatch, tmp_path):
+def test_cached_lib_with_its_dir_off_sys_path_still_resolves_its_modules(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     bin_dir = _bin(tmp_path)
     monkeypatch.setattr(ifa, "_resolve_entrypoint_script", lambda _name: bin_dir / "rebind-probe.py")
     monkeypatch.delitem(sys.modules, "lib", raising=False)

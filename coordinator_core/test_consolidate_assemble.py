@@ -5,13 +5,14 @@ from types import SimpleNamespace
 
 from coordinator_core import consolidate_assemble
 from coordinator_core.consolidate_assemble import apply as consolidate_apply
+import pytest
 
 
-def _git(returncode=0, stdout="", stderr=""):
+def _git(returncode: int = 0, stdout: str = "", stderr: str = ""):
     return lambda args, cwd: SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
 
 
-def _refs(*shorts, email="me@x", operator=""):
+def _refs(*shorts, email: str = "me@x", operator: str = "") -> str:
     lines = []
     for short in shorts:
         refname = f"refs/remotes/{short}" if short.startswith("origin/") else f"refs/heads/{short}"
@@ -19,7 +20,7 @@ def _refs(*shorts, email="me@x", operator=""):
     return "".join(lines)
 
 
-def _show_stdout(shas):
+def _show_stdout(shas) -> str:
     blocks = [
         f"commit {sha}0000\nAuthor: me <me@x>\n\n    subject for {sha}\n\n f | 1 +\n" for sha in shas
     ]
@@ -67,23 +68,23 @@ def _dispatch(rules, unique=()):
 
 
 class TestCategorizeBranch:
-    def test_current_branch(self):
+    def test_current_branch(self) -> None:
         assert consolidate_assemble.categorize_branch("a", "a", "main", "x@y", "x@y") == "current"
 
-    def test_main_branch(self):
+    def test_main_branch(self) -> None:
         assert consolidate_assemble.categorize_branch("main", "cur", "main", "x@y", "x@y") == "main"
 
-    def test_mine_stale_when_owned(self):
+    def test_mine_stale_when_owned(self) -> None:
         assert (
             consolidate_assemble.categorize_branch("b", "cur", "main", "me@x", "me@x") == "mine-stale"
         )
 
-    def test_others_when_not_owned(self):
+    def test_others_when_not_owned(self) -> None:
         assert (
             consolidate_assemble.categorize_branch("b", "cur", "main", "other@x", "me@x") == "others"
         )
 
-    def test_cloud_session_when_tip_is_claude_noreply(self):
+    def test_cloud_session_when_tip_is_claude_noreply(self) -> None:
         assert (
             consolidate_assemble.categorize_branch("claude/x", "cur", "main", "noreply@anthropic.com", "me@x")
             == "cloud-session"
@@ -91,7 +92,7 @@ class TestCategorizeBranch:
 
 
 class TestListBranches:
-    def test_parses_local_and_remote_skips_head_alias(self):
+    def test_parses_local_and_remote_skips_head_alias(self) -> None:
         run_git = _git(
             stdout=_refs("work/a", "main", "origin/main", "origin/stale-remote")
             + "refs/remotes/origin/HEAD\torigin\t\n"
@@ -106,7 +107,7 @@ class TestListBranches:
 
 
 class TestListWorktrees:
-    def test_parses_porcelain_blocks(self):
+    def test_parses_porcelain_blocks(self) -> None:
         stdout = (
             "worktree /repo\n"
             "HEAD abc123\n"
@@ -128,7 +129,7 @@ class TestListWorktrees:
 
 class TestBrief:
     def _stub(
-        self, monkeypatch, *, branch_lines, worktree_stdout, unique_commits=None, tip_author="me@x", tip_operator=""
+        self, monkeypatch, *, branch_lines, worktree_stdout, unique_commits=None, tip_author: str = "me@x", tip_operator: str = ""
     ):
         unique_commits = unique_commits or []
 
@@ -168,7 +169,7 @@ class TestBrief:
         monkeypatch.setattr(consolidate_assemble, "default_run_git", run_git)
         return run_git
 
-    def test_decision_object_shape(self, monkeypatch, tmp_path):
+    def test_decision_object_shape(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         run_git = self._stub(
             monkeypatch,
             branch_lines="* current\n  main\n",
@@ -186,7 +187,7 @@ class TestBrief:
             "next_move",
         }
 
-    def test_zero_unique_commits_yields_delete_only_directive_no_judgment(self, monkeypatch, tmp_path):
+    def test_zero_unique_commits_yields_delete_only_directive_no_judgment(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         run_git = self._stub(
             monkeypatch,
             branch_lines="* current\n  main\n  stale\n",
@@ -197,7 +198,7 @@ class TestBrief:
         assert {d["cli"] for d in do["directives"]} >= {"delete-only", "fetch-prune"}
         assert not any(jp["id"].startswith("j-absorb-") for jp in do["judgment_points"])
 
-    def test_unique_commits_yield_absorb_judgment_point_recommendation_none(self, monkeypatch, tmp_path):
+    def test_unique_commits_yield_absorb_judgment_point_recommendation_none(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         run_git = self._stub(
             monkeypatch,
             branch_lines="* current\n  main\n  stale\n",
@@ -216,7 +217,7 @@ class TestBrief:
         assert skip["resolves"] == []
         assert do["directives"][0]["cli"] == "fetch-prune"
 
-    def test_inspection_gather_is_one_show_spawn_for_all_branches(self, monkeypatch, tmp_path):
+    def test_inspection_gather_is_one_show_spawn_for_all_branches(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """PINS: one `git show --stat` spawn TOTAL for the whole `brief()`
         call, regardless of stale-branch count -- not one per stale branch.
 
@@ -333,8 +334,8 @@ class TestBrief:
         assert absorb_b["args"] == ["stale-b", "origin/stale-b", "origin"]
 
     def test_tip_author_and_branch_reachable_spawns_do_not_grow_with_branch_or_worktree_count(
-        self, monkeypatch, tmp_path
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         calls: list[list[str]] = []
 
         def run_git(args, cwd):
@@ -392,13 +393,13 @@ class TestBrief:
         assert wt_categories["other-a"] == "stale-absorbed"
         assert wt_categories["other-b"] == "stale-absorbed"
 
-    def test_inspect_commits_on_empty_sha_list_spawns_nothing(self, tmp_path):
+    def test_inspect_commits_on_empty_sha_list_spawns_nothing(self, tmp_path: Path) -> None:
         def run_git(args, cwd):
             raise AssertionError(f"unexpected git call: {args}")
 
         assert consolidate_assemble.inspect_commits(run_git, tmp_path, []) == {}
 
-    def test_others_branch_with_commits_is_an_absorb_directive(self, monkeypatch, tmp_path):
+    def test_others_branch_with_commits_is_an_absorb_directive(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         run_git = self._stub(
             monkeypatch,
             branch_lines="* current\n  main\n  someone-elses\n  remotes/origin/box2\n",
@@ -413,11 +414,11 @@ class TestBrief:
             branch_report = next(b for b in do["gates"]["branches"] if b["name"] == name)
             assert branch_report["category"] == "others"
 
-    def test_preserve_refs_are_never_listed(self):
+    def test_preserve_refs_are_never_listed(self) -> None:
         run_git = _git(stdout="refs/preserve/x\tpreserve/x\ta@x\t\t1\n" + _refs("work/a"))
         assert [r[0] for r in consolidate_assemble.ref_rows(run_git, Path("/repo"))] == ["refs/heads/work/a"]
 
-    def test_cloud_session_branch_with_commits_is_gated_by_absorb_judgment(self, monkeypatch, tmp_path):
+    def test_cloud_session_branch_with_commits_is_gated_by_absorb_judgment(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         run_git = self._stub(
             monkeypatch,
             branch_lines="* current\n  main\n  claude/cloud\n",
@@ -433,7 +434,7 @@ class TestBrief:
         cloud = [d for d in do["directives"] if "claude/cloud" in d["args"]]
         assert cloud and all(d["depends_on"] == "j-absorb-claude/cloud" for d in cloud)
 
-    def test_cloud_session_branch_without_commits_is_never_deleted_unconditionally(self, monkeypatch, tmp_path):
+    def test_cloud_session_branch_without_commits_is_never_deleted_unconditionally(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         run_git = self._stub(
             monkeypatch,
             branch_lines="* current\n  main\n  claude/cloud\n",
@@ -446,7 +447,7 @@ class TestBrief:
         delete = next(d for d in do["directives"] if d["id"] == "d-delete-claude/cloud")
         assert delete["depends_on"] == "j-delete-claude/cloud"
 
-    def test_cloud_session_tip_stamped_with_my_operator_is_mine_stale(self, monkeypatch, tmp_path):
+    def test_cloud_session_tip_stamped_with_my_operator_is_mine_stale(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         run_git = self._stub(
             monkeypatch,
             branch_lines="* current\n  main\n  claude/cloud\n",
@@ -461,7 +462,7 @@ class TestBrief:
         delete = next(d for d in do["directives"] if d["id"] == "d-delete-claude/cloud")
         assert delete["depends_on"] is None
 
-    def test_cloud_session_tip_stamped_with_another_operator_stays_gated(self, monkeypatch, tmp_path):
+    def test_cloud_session_tip_stamped_with_another_operator_stays_gated(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         run_git = self._stub(
             monkeypatch,
             branch_lines="* current\n  main\n  claude/cloud\n",
@@ -474,7 +475,7 @@ class TestBrief:
         assert branch_report["category"] == "cloud-session"
         assert branch_report["operator"] == "someone-else@x"
 
-    def test_directives_are_well_formed_for_apply_base_ordering(self, monkeypatch, tmp_path):
+    def test_directives_are_well_formed_for_apply_base_ordering(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         run_git = self._stub(
             monkeypatch,
             branch_lines="* current\n  main\n  stale\n",
@@ -490,7 +491,7 @@ class TestBrief:
 
 
 class TestUniqueCommitsByRef:
-    def test_overlapping_branches_get_their_own_reachable_sets(self):
+    def test_overlapping_branches_get_their_own_reachable_sets(self) -> None:
         # shared tail "c3" is reachable from both tips; "b1" only from b.
         graph = {
             "a": ["a1 one", "c3 shared"],
@@ -506,8 +507,8 @@ class TestUniqueCommitsByRef:
         assert sorted(out["b"]) == ["a1 one", "b1 two", "c3 shared"]
         assert out["empty"] == []
 
-    def test_spawn_count_does_not_grow_with_branch_count(self):
-        def spawns(n):
+    def test_spawn_count_does_not_grow_with_branch_count(self) -> None:
+        def spawns(n) -> int:
             calls = []
 
             def run_git(args, cwd):
@@ -521,7 +522,7 @@ class TestUniqueCommitsByRef:
 
 
 class TestApplyDispatchTable:
-    def test_every_brief_directive_cli_resolves_in_the_closed_table(self, monkeypatch, tmp_path):
+    def test_every_brief_directive_cli_resolves_in_the_closed_table(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         run_git = _dispatch(
             {
                 ("config", "user.email"): SimpleNamespace(returncode=0, stdout="me@x\n", stderr=""),
@@ -547,7 +548,7 @@ class TestApplyDispatchTable:
         for d in do["directives"]:
             assert d["cli"] in consolidate_apply._CLI_DISPATCH
 
-    def test_no_session_id_is_transport_fail(self, monkeypatch, tmp_path):
+    def test_no_session_id_is_transport_fail(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
@@ -556,7 +557,7 @@ class TestApplyDispatchTable:
         assert exit_code == consolidate_apply.APPLY_EXIT_TRANSPORT_FAIL
         assert "error" in report
 
-    def test_apply_runs_end_to_end_with_stubbed_handlers(self, monkeypatch, tmp_path):
+    def test_apply_runs_end_to_end_with_stubbed_handlers(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "test-session")
 
         run_git = _dispatch(
@@ -587,7 +588,7 @@ class TestApplyDispatchTable:
         assert "d-fetch-prune" in report["landed"]
 
 
-def _no_live_holder(monkeypatch):
+def _no_live_holder(monkeypatch) -> None:
     from coordinator_core.consolidate_assemble import live_holders as lh
 
     monkeypatch.setattr(lh, "live_holders", lambda run_git, root, names: {n: [] for n in names})
@@ -598,7 +599,7 @@ class TestDeleteBranchLocalLeg:
     def _recorder(self, local_exists: bool):
         calls: list[list[str]] = []
 
-        def run_git(args, cwd):
+        def run_git(args, cwd) -> SimpleNamespace:
             calls.append(list(args))
             if args[0] == "show-ref":
                 return SimpleNamespace(returncode=0 if local_exists else 1, stdout="", stderr="")
@@ -608,7 +609,7 @@ class TestDeleteBranchLocalLeg:
 
         return calls, run_git
 
-    def test_remote_only_branch_skips_local_delete(self, monkeypatch, tmp_path):
+    def test_remote_only_branch_skips_local_delete(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         calls, run_git = self._recorder(local_exists=False)
         monkeypatch.setattr(consolidate_apply, "_run_git", run_git)
         _no_live_holder(monkeypatch)
@@ -620,7 +621,7 @@ class TestDeleteBranchLocalLeg:
         assert not any(c[0] == "branch" for c in calls)
         assert ["push", "origin", "--delete", "remote-only"] in calls
 
-    def test_local_branch_still_deletes_locally(self, monkeypatch, tmp_path):
+    def test_local_branch_still_deletes_locally(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         calls, run_git = self._recorder(local_exists=True)
         monkeypatch.setattr(consolidate_apply, "_run_git", run_git)
         _no_live_holder(monkeypatch)
@@ -633,7 +634,7 @@ class TestDeleteBranchLocalLeg:
 
 class TestMainBriefTransportFailure:
 
-    def test_transport_failure_leaves_stdout_empty(self, monkeypatch, capsys):
+    def test_transport_failure_leaves_stdout_empty(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         def _boom():
             raise RuntimeError("git binary not found")
 

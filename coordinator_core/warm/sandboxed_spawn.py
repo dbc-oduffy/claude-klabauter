@@ -95,17 +95,10 @@ def forward_spawn_to_warm(op: str, params: dict, repo: str) -> dict:
     error envelope raises `WarmServerError`; a delivered-but-unanswered mutation raises
     `SpawnIndeterminate` (a mutation, so never a refusal and never a cold re-run).
     """
-    from coordinator_core.ops.workflow_fire import headless
-
-    headless._install_no_spawn_seam(client)
-    headless._WARM_ATTEMPT.missed = False
-    try:
-        reply = client.try_warm_dispatch(
-            {"jsonrpc": JSONRPC_VERSION, "id": 1, "method": op, "params": params, "_origin_worktree": repo}
-        )
-        missed = headless._WARM_ATTEMPT.missed
-    finally:
-        headless._WARM_ATTEMPT.missed = None
+    reply = client.try_warm_dispatch_no_spawn(
+        {"jsonrpc": JSONRPC_VERSION, "id": 1, "method": op, "params": params, "_origin_worktree": repo}
+    )
+    missed = client.spawn_wanted()
     if reply is None:
         raise SandboxedSpawnRefused(
             "child would spawn inside the codex sandbox without network; "

@@ -6,16 +6,16 @@ from coordinator_core.prior_art_recall import benchmark as b
 from coordinator_core.prior_art_recall.tests.test_search_log import make_log, render
 
 
-def test_fixtures_cover_each_kind_once_and_plants_exist():
+def test_fixtures_cover_each_kind_once_and_plants_exist() -> None:
     assert b.self_check(b.load_cases()) == []
 
 
-def test_plans_never_name_the_planted_file():
+def test_plans_never_name_the_planted_file() -> None:
     for c in b.load_cases():
         assert Path(c.planted_file).stem not in c.plan_text
 
 
-def test_workdir_has_base_plant_and_plan(tmp_path):
+def test_workdir_has_base_plant_and_plan(tmp_path: Path) -> None:
     c = b.load_cases({"lesson-backup-window"})[0]
     b.build_workdir(c, tmp_path / "w")
     assert (tmp_path / "w" / "state/lessons/2026-10-02-compaction-collided-with-snapshot.yaml").is_file()
@@ -28,7 +28,7 @@ def _sidecar(section: str, cited: str) -> str:
     return f"{head}\n- {cited}\n\n### Silent areas\nnone\n\n" + render(make_log(1))
 
 
-def test_score_requires_conflict_section_citation():
+def test_score_requires_conflict_section_citation() -> None:
     c = b.load_cases({"decision-flat-file-queue"})[0]
     cited = "docs/decisions/DR-007-queue-is-flat-files.md"
     assert b.score_sidecar(c, _sidecar("conflicts", cited))["caught"] is True
@@ -36,18 +36,18 @@ def test_score_requires_conflict_section_citation():
     assert b.score_sidecar(c, "")["caught"] is False
 
 
-def _perfect(model, work, sidecar, brief):
+def _perfect(model, work, sidecar, brief) -> None:
     plan = (work / "plan.md").read_text(encoding="utf-8")
     case = next(c for c in b.load_cases() if c.plan_text == plan)
     sidecar.write_text(_sidecar("conflicts", case.planted_file), encoding="utf-8")
 
 
-def _blind(model, work, sidecar, brief):
+def _blind(model, work, sidecar, brief) -> None:
     sidecar.write_text("### Conflicts\nNo conflicts found.\n", encoding="utf-8")
 
 
-def test_runner_reports_rates_per_model(tmp_path):
-    def by_model(model, work, sidecar, brief):
+def test_runner_reports_rates_per_model(tmp_path: Path) -> None:
+    def by_model(model, work, sidecar, brief) -> None:
         (_perfect if model == "sonnet" else _blind)(model, work, sidecar, brief)
 
     cases = b.load_cases()
@@ -61,7 +61,7 @@ def test_runner_reports_rates_per_model(tmp_path):
     assert "sonnet: catch_rate=1.0000" in text and "haiku minus sonnet: -1.0000" in text
 
 
-def test_crashed_run_is_a_recorded_miss(tmp_path):
+def test_crashed_run_is_a_recorded_miss(tmp_path: Path) -> None:
     def boom(model, work, sidecar, brief):
         raise RuntimeError("cli died")
 
@@ -70,6 +70,6 @@ def test_crashed_run_is_a_recorded_miss(tmp_path):
     assert row["caught"] is False and "cli died" in row["error"]
 
 
-def test_log_valid_rate_tracks_validator(tmp_path):
+def test_log_valid_rate_tracks_validator(tmp_path: Path) -> None:
     report = b.run_benchmark(["m"], 1, _blind, tmp_path, b.load_cases({"wiki-retry-cap"}))
     assert report["models"]["m"]["log_valid_rate"] == 0.0

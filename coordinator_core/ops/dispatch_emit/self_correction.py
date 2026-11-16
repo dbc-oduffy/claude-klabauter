@@ -6,6 +6,7 @@ composed ask script; the parity test pins both to one table of cases.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Iterable, Mapping, NamedTuple
 
 from coordinator_core.ops.dispatch_emit.ask_contract import HALT_GAP_RULE
@@ -135,6 +136,43 @@ def _file_of(node_id: Any) -> str:
     return _posix(node_id).split("::", 1)[0]
 
 
+_FINDING_RE = re.compile(
+    r"(?<![A-Za-z0-9_./\\-])((?:[A-Za-z]:)?[A-Za-z0-9_./\\-]*[A-Za-z0-9_-]\.[A-Za-z][A-Za-z0-9]*):\d+"
+)
+
+
+_VERSION_STEM = re.compile(r"[0-9.]*")
+
+
+def finding_files(message: Any) -> tuple[str, ...]:
+    """Posix paths a failing_detail message names as `path:line`, in first-seen order, deduplicated.
+
+    A token whose basename stem is only digits and dots (`3.11.rc1:2`) is a version, not a file.
+
+    A bare basename is returned as written; `finding_owned` decides whether it is the run's.
+    """
+    seen: dict[str, None] = {}
+    for m in _FINDING_RE.finditer(str(message or "")):
+        p = _posix(m.group(1))
+        if not _VERSION_STEM.fullmatch(p.rsplit("/", 1)[-1].rsplit(".", 1)[0]):
+            seen.setdefault(p, None)
+    return tuple(seen)
+
+
+def finding_owned(path: str, own_paths: Iterable[str]) -> bool:
+    """True iff a `finding_files` path is one of `own_paths`.
+
+    Matches exactly, as a path suffix (an absolute path into the repo), or, for a bare filename,
+    by basename against any own path.
+    """
+    f = _posix(path)
+    for raw in own_paths or ():
+        o = _posix(raw)
+        if f == o or f.endswith("/" + o) or ("/" not in f and f == o.rsplit("/", 1)[-1]):
+            return True
+    return False
+
+
 class RedSplit(NamedTuple):
     owned: tuple
     foreign: tuple
@@ -152,6 +190,7 @@ def classify_reds(
     passed_at_base: Iterable[str] | None = None,
     diff_named: Iterable[str] | None = None,
     foreign_red: Iterable[str] | None = None,
+    detail: Mapping[str, str] | None = None,
 ) -> RedSplit:
     """Split failing node ids into the run's own and foreign reds.
 
@@ -165,7 +204,13 @@ def classify_reds(
     and not in `pre_existing` (its test names a symbol the run's diff changed). Everything else is
     foreign; `unverified` are the foreign ids that no list proves foreign. With `caused` and
     `reverted` both None only write-set membership counts.
+
+    `detail` maps node id to its failure message. For an id not in `pre_existing`, not in
+    `reverted[].tests`, whose message names files (`finding_files`): any file in `own_paths` makes it
+    owned, ahead of `passed_at_base`, `caused` and `diff_named`; all files outside makes it foreign, never
+    `unverified`. A message naming no file leaves the rules above untouched.
     """
+    detail_s = {_posix(k): v for k, v in (detail or {}).items()}
     base_s = {_posix(i) for i in passed_at_base or ()}
     diff_s = {_posix(i) for i in diff_named or ()}
     own = {_posix(p) for p in own_paths or ()}
@@ -180,6 +225,12 @@ def classify_reds(
         in_reverted = reverted_s is not None and nid in reverted_s
         if nid in fred_s and not in_reverted:
             foreign_out.add(nid)
+            continue
+        named = () if in_reverted or nid in pre_s else tuple(
+            f for f in finding_files(detail_s.get(nid)) if not finding_owned(f, [_file_of(nid)])
+        )
+        if named:
+            (owned if any(finding_owned(f, own) for f in named) else foreign_out).add(nid)
             continue
         # A test the run itself added never ran at base, so absence from passed_at_base proves
         # nothing for an own-path id; only an explicit pre_existing entry does.
@@ -244,9 +295,28 @@ def progressed(before: Iterable[str], after: Iterable[str]) -> bool:
 
 
 CLASSIFY_REDS_JS = r"""
+const findingFiles = (message) => {
+  const px = (p) => { let s = String(p).replace(/\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; };
+  const re = /(?<![A-Za-z0-9_./\\-])((?:[A-Za-z]:)?[A-Za-z0-9_./\\-]*[A-Za-z0-9_-]\.[A-Za-z][A-Za-z0-9]*):\d+/g;
+  const seen = new Set();
+  for (const m of String(message == null ? '' : message).matchAll(re)) {
+    const p = px(m[1]);
+    if (!/^[0-9.]*$/.test(p.split('/').pop().replace(/\.[^.]*$/, ''))) seen.add(p);
+  }
+  return [...seen];
+};
+const findingOwned = (path, ownPaths) => {
+  const px = (p) => { let s = String(p).replace(/\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; };
+  const f = px(path);
+  return (ownPaths || []).some((raw) => {
+    const o = px(raw);
+    return f === o || f.endsWith('/' + o) || (!f.includes('/') && f === o.split('/').pop());
+  });
+};
 const classifyReds = (failing, ownPaths, opts) => {
   const o = opts || {};
   const px = (p) => { let s = String(p).replace(/\\/g, '/'); while (s.startsWith('./')) s = s.slice(2); return s; };
+  const detailS = new Map((o.detail instanceof Map ? [...o.detail.entries()] : Object.entries(o.detail || {})).map(([k, v]) => [px(k), v]));
   const own = new Set((ownPaths || []).map(px));
   const causedS = o.caused == null ? null : new Set(o.caused.map(px));
   const foreignS = new Set((o.foreign || []).map(px));
@@ -260,6 +330,11 @@ const classifyReds = (failing, ownPaths, opts) => {
     const id = px(raw);
     const inRev = revertedS !== null && revertedS.has(id);
     if (fredS.has(id) && !inRev) { foreign.add(id); continue; }
+    const named = inRev || preS.has(id) ? [] : findingFiles(detailS.get(id)).filter((f) => !findingOwned(f, [id.split('::')[0]]));
+    if (named.length > 0) {
+      (named.some((f) => findingOwned(f, ownPaths)) ? owned : foreign).add(id);
+      continue;
+    }
     const redAtBase = !inRev && (preS.has(id) || (baseS.size > 0 && !baseS.has(id) && !diffS.has(id) && !own.has(id.split('::')[0])));
     if (redAtBase) {
       foreign.add(id);

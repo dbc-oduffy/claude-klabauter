@@ -34,6 +34,7 @@ from coordinator_core.install.substrate import (
     _percolation_and_path_steps,
     _resolve_directory_tracked_set,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -51,7 +52,7 @@ def _git(*args, cwd):
     return substrate._run(["git", *args], cwd=str(cwd), capture_output=True, text=True)
 
 
-def _init_tracking_repo(repo_dir, tracked_relpaths, content="tracked content\n"):
+def _init_tracking_repo(repo_dir, tracked_relpaths, content: str = "tracked content\n") -> None:
     """Create a real git repo at ``repo_dir`` with each of ``tracked_relpaths``
     committed (so ``git ls-files`` reports them TRACKED) — a stand-in for the
     PM-named "prime-v3... backed-up trove of documents" shape."""
@@ -81,7 +82,7 @@ def _make_src_tree(tmp_path, files):
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_directory_tracked_set_returns_tracked_relpaths(tmp_path):
+def test_resolve_directory_tracked_set_returns_tracked_relpaths(tmp_path: Path) -> None:
     dest = tmp_path / "setup"
     _init_tracking_repo(dest, ["publish_sync.py", "percolate-hooks/README.md"])
 
@@ -90,7 +91,7 @@ def test_resolve_directory_tracked_set_returns_tracked_relpaths(tmp_path):
     assert tracked == frozenset({"publish_sync.py", "percolate-hooks/README.md"})
 
 
-def test_resolve_directory_tracked_set_empty_when_not_a_repo(tmp_path):
+def test_resolve_directory_tracked_set_empty_when_not_a_repo(tmp_path: Path) -> None:
     # A dotfiles-managed HOME sitting inside a foreign repo but with nothing
     # tracked under THIS directory is correctly not-foreign (empty set, not
     # None) — here the directory isn't even inside a repo at all, the
@@ -113,8 +114,8 @@ def test_resolve_directory_tracked_set_empty_when_not_a_repo(tmp_path):
     ],
 )
 def test_resolve_directory_tracked_set_none_when_git_unavailable(
-    tmp_path, monkeypatch, unprobeable
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, unprobeable
+) -> None:
     """The degrade contract, asserted at the seam that now carries it.
 
     This used to patch `shutil.which` to None; `_resolve_directory_tracked_set`
@@ -132,14 +133,14 @@ def test_resolve_directory_tracked_set_none_when_git_unavailable(
     assert _resolve_directory_tracked_set(dest) is None
 
 
-def test_resolve_directory_tracked_set_one_spawn_per_directory(tmp_path, monkeypatch):
+def test_resolve_directory_tracked_set_one_spawn_per_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     dest = tmp_path / "setup"
     _init_tracking_repo(dest, ["publish_sync.py", "percolate-hooks/README.md"])
 
     calls = []
     real_run_git = substrate.run_git
 
-    def _counting_run_git(args, *rest, **kwargs):
+    def _counting_run_git(args, *rest, **kwargs) -> GitResult:
         calls.append(list(args))
         return real_run_git(args, *rest, **kwargs)
 
@@ -169,19 +170,19 @@ def test_resolve_directory_tracked_set_one_spawn_per_directory(tmp_path, monkeyp
         "percolate-hooks/not-a-real-hook-file.yaml",
     ],
 )
-def test_assert_careful_write_in_manifest_rejects_out_of_manifest_paths(relative_path):
+def test_assert_careful_write_in_manifest_rejects_out_of_manifest_paths(relative_path) -> None:
     manifest = frozenset(_SETUP_TEMPLATE_FILES + _SETUP_TEMPLATE_HOOK_FILES)
     with pytest.raises(SubstrateFatalError):
         _assert_careful_write_in_manifest(relative_path, manifest)
 
 
 @pytest.mark.parametrize("relative_path", _SETUP_TEMPLATE_FILES + _SETUP_TEMPLATE_HOOK_FILES)
-def test_assert_careful_write_in_manifest_accepts_manifest_paths(relative_path):
+def test_assert_careful_write_in_manifest_accepts_manifest_paths(relative_path) -> None:
     manifest = frozenset(_SETUP_TEMPLATE_FILES + _SETUP_TEMPLATE_HOOK_FILES)
     _assert_careful_write_in_manifest(relative_path, manifest)  # must not raise
 
 
-def test_careful_write_rejects_out_of_manifest_destination_end_to_end(tmp_path):
+def test_careful_write_rejects_out_of_manifest_destination_end_to_end(tmp_path: Path) -> None:
     """The careful-write MECHANISM itself (not just the standalone assert
     helper) refuses an out-of-manifest destination — AC19's "rejected or
     structurally unreachable" bar applied to the actual write function."""
@@ -210,7 +211,7 @@ def test_careful_write_rejects_out_of_manifest_destination_end_to_end(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_careful_write_backup_exists_before_replace(tmp_path, monkeypatch):
+def test_careful_write_backup_exists_before_replace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     install_base = tmp_path / "install_base"
     dst_dir = install_base / ".claude" / "setup"
     dst_dir.mkdir(parents=True)
@@ -255,7 +256,7 @@ def test_careful_write_backup_exists_before_replace(tmp_path, monkeypatch):
     assert backup_path.name.endswith(".bak")
 
 
-def test_careful_write_backup_failure_refuses_the_overwrite(tmp_path, monkeypatch):
+def test_careful_write_backup_failure_refuses_the_overwrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     install_base = tmp_path / "install_base"
     dst_dir = install_base / ".claude" / "setup"
     dst_dir.mkdir(parents=True)
@@ -286,7 +287,7 @@ def test_careful_write_backup_failure_refuses_the_overwrite(tmp_path, monkeypatc
 # ---------------------------------------------------------------------------
 
 
-def test_atomic_write_bytes_interrupted_replace_leaves_destination_untouched(tmp_path, monkeypatch):
+def test_atomic_write_bytes_interrupted_replace_leaves_destination_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "dst" / "publish_sync.py"
     target.parent.mkdir(parents=True)
     target.write_text("original content\n", encoding="utf-8")
@@ -305,7 +306,7 @@ def test_atomic_write_bytes_interrupted_replace_leaves_destination_untouched(tmp
     assert leftovers == []
 
 
-def test_careful_write_interrupted_replace_leaves_destination_untouched(tmp_path, monkeypatch):
+def test_careful_write_interrupted_replace_leaves_destination_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     install_base = tmp_path / "install_base"
     dst_dir = install_base / ".claude" / "setup"
     dst_dir.mkdir(parents=True)
@@ -339,7 +340,7 @@ def test_careful_write_interrupted_replace_leaves_destination_untouched(tmp_path
 # ---------------------------------------------------------------------------
 
 
-def test_install_one_careful_strategy_backs_up_then_replaces_and_reports(tmp_path, capsys):
+def test_install_one_careful_strategy_backs_up_then_replaces_and_reports(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     install_base = tmp_path / "install_base"
     dst_dir = install_base / ".claude" / "setup"
     dst_dir.mkdir(parents=True)
@@ -367,7 +368,7 @@ def test_install_one_careful_strategy_backs_up_then_replaces_and_reports(tmp_pat
     assert str(backups[0]) in out
 
 
-def test_install_one_cold_creation_always_forces_regardless_of_write_strategy(tmp_path):
+def test_install_one_cold_creation_always_forces_regardless_of_write_strategy(tmp_path: Path) -> None:
     """Cold creation of a destination that does not yet exist proceeds via
     the force mechanism unconditionally -- write_strategy="refuse" must NOT
     block a fresh install."""
@@ -382,7 +383,7 @@ def test_install_one_cold_creation_always_forces_regardless_of_write_strategy(tm
     assert dst.read_text(encoding="utf-8") == "new template\n"
 
 
-def test_install_one_refuse_strategy_preserves_destination_and_reports(tmp_path, capsys):
+def test_install_one_refuse_strategy_preserves_destination_and_reports(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     dst = tmp_path / "dst" / "publish_sync.py"
     dst.parent.mkdir(parents=True)
     dst.write_text("stale content\n", encoding="utf-8")
@@ -400,7 +401,7 @@ def test_install_one_refuse_strategy_preserves_destination_and_reports(tmp_path,
     assert "refusing to overwrite" in out
 
 
-def test_install_one_check_only_foreign_tracked_stale_reports_not_managed_here(tmp_path, capsys):
+def test_install_one_check_only_foreign_tracked_stale_reports_not_managed_here(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # A tracked non-code manifest entry (unlike publish_sync.py, a `.py` that
     # `_install_one`'s suffix classification always force-overwrites): the
     # live path's own verdict (`_install_one_live_would_rewrite`) is "would
@@ -425,7 +426,7 @@ def test_install_one_check_only_foreign_tracked_stale_reports_not_managed_here(t
     assert dst.read_text(encoding="utf-8") == "stale content\n"
 
 
-def test_install_one_check_only_still_raises_for_absent_destination(tmp_path):
+def test_install_one_check_only_still_raises_for_absent_destination(tmp_path: Path) -> None:
     """Regression guard: check_only's pre-existing "absent" hard-fail is
     untouched by the new careful/refuse branch -- verified on disk per the
     plan's own instruction to check this before changing behaviour."""
@@ -442,7 +443,7 @@ def test_install_one_check_only_still_raises_for_absent_destination(tmp_path):
         )
 
 
-def test_install_one_check_only_non_foreign_stale_still_raises(tmp_path):
+def test_install_one_check_only_non_foreign_stale_still_raises(tmp_path: Path) -> None:
     """A stale destination that is NOT foreign-tracked (write_strategy=
     "force") still hard-fails check -- the new "not managed here" leniency
     is scoped to careful/refuse only."""
@@ -462,7 +463,7 @@ def test_install_one_check_only_non_foreign_stale_still_raises(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _run_percolation(tmp_path, *, tracked_content=None, no_git=False, monkeypatch=None):
+def _run_percolation(tmp_path, *, tracked_content=None, no_git: bool = False, monkeypatch=None):
     """Shared fixture builder: a src tree with the full manifest, a
     destination `.claude/setup/` optionally pre-seeded as a foreign-tracked
     git repo (``tracked_content`` truthy) with ONE stale, differing file
@@ -489,7 +490,7 @@ def _run_percolation(tmp_path, *, tracked_content=None, no_git=False, monkeypatc
     return install_base, setup_dest
 
 
-def test_percolation_foreign_tracked_overwrite_goes_through_careful_path(tmp_path, capsys):
+def test_percolation_foreign_tracked_overwrite_goes_through_careful_path(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     install_base, setup_dest = _run_percolation(
         tmp_path, tracked_content="foreign-tracked stale content\n"
     )
@@ -503,7 +504,7 @@ def test_percolation_foreign_tracked_overwrite_goes_through_careful_path(tmp_pat
     assert "backup:" in out
 
 
-def test_percolation_git_identity_resolved_once_per_directory(tmp_path, monkeypatch):
+def test_percolation_git_identity_resolved_once_per_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     install_base = tmp_path / "install_base"
     setup_src = _make_src_tree(tmp_path, _SETUP_TEMPLATE_FILES + _SETUP_TEMPLATE_HOOK_FILES)
     setup_dest = install_base / ".claude" / "setup"
@@ -512,7 +513,7 @@ def test_percolation_git_identity_resolved_once_per_directory(tmp_path, monkeypa
     calls = []
     real_run_git = substrate.run_git
 
-    def _counting_run_git(args, **kwargs):
+    def _counting_run_git(args, **kwargs) -> GitResult:
         calls.append(list(args))
         return real_run_git(args, **kwargs)
 
@@ -528,7 +529,7 @@ def test_percolation_git_identity_resolved_once_per_directory(tmp_path, monkeypa
     assert len(ls_files_calls) == 1
 
 
-def test_percolation_cold_creation_uses_force_regardless_of_tracked_ness(tmp_path):
+def test_percolation_cold_creation_uses_force_regardless_of_tracked_ness(tmp_path: Path) -> None:
     """AC6/AC6a: a destination that does not exist yet installs unconditionally,
     even though its directory IS a foreign-tracked repo -- tracked-ness never
     blocks cold creation."""
@@ -552,7 +553,7 @@ def test_percolation_cold_creation_uses_force_regardless_of_tracked_ness(tmp_pat
     assert not (install_base / ".claude" / "setup-overwrite-backups").exists()
 
 
-def test_percolation_cold_install_no_git_on_path_delivers_full_manifest(tmp_path, monkeypatch):
+def test_percolation_cold_install_no_git_on_path_delivers_full_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC6a: a cold install with NO git on PATH at all still delivers every
     manifest entry -- the probe-unavailable degrade only affects the
     overwrite decision, never creation."""
@@ -572,7 +573,7 @@ def test_percolation_cold_install_no_git_on_path_delivers_full_manifest(tmp_path
         assert (setup_dest / rel).is_file(), f"{rel} missing -- full manifest must be delivered"
 
 
-def test_percolation_no_git_stale_overwrite_refuses_but_reports(tmp_path, monkeypatch, capsys):
+def test_percolation_no_git_stale_overwrite_refuses_but_reports(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """AC6a's degrade: with no git on PATH, a STALE (already-existing,
     differing) destination is refused (not clobbered blind) but reported --
     never a silent skip, and cold entries alongside it still deliver."""
@@ -607,7 +608,7 @@ def test_percolation_no_git_stale_overwrite_refuses_but_reports(tmp_path, monkey
     assert (setup_dest / ".percolate-identity.example").is_file()
 
 
-def test_percolation_dotfiles_home_with_nothing_tracked_under_setup_is_not_foreign(tmp_path):
+def test_percolation_dotfiles_home_with_nothing_tracked_under_setup_is_not_foreign(tmp_path: Path) -> None:
     """A directory merely sitting inside a foreign repo, with NOTHING
     tracked under it (a dotfiles-managed HOME), is correctly NOT foreign --
     a stale destination there gets force-overwritten like any other."""
@@ -632,7 +633,7 @@ def test_percolation_dotfiles_home_with_nothing_tracked_under_setup_is_not_forei
     assert not (install_base / ".claude" / "setup-overwrite-backups").exists()
 
 
-def test_ac7_guard_tracked_path_set_derives_from_manifest_module_not_hardcoded(tmp_path):
+def test_ac7_guard_tracked_path_set_derives_from_manifest_module_not_hardcoded(tmp_path: Path) -> None:
     """AC7: the guard's tracked-path set is derived from
     coordinator/lib/setup-templates-manifest.py's SETUP_TEMPLATE_FILES +
     SETUP_TEMPLATE_HOOK_FILES entries, not a hardcoded count. Load the real

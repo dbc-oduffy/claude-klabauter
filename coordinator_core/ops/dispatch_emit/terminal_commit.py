@@ -154,6 +154,7 @@ import glob as _glob
 import json
 import os
 import re
+import stat as _stat
 from pathlib import Path, PurePosixPath
 from typing import Optional, Sequence
 
@@ -171,7 +172,7 @@ from coordinator_core.warm.entry_seam import OpUnavailableError, reentrant_dispa
 from coordinator_core.ops.dispatch_emit import bug_close, cohold_refusal, credit_gate, gate_owed, halt_baseline, pre_halt_credit, process_artifact_policy, review_floor  # noqa: E402 -- sibling-package group
 from coordinator_core.ops.dispatch_emit.land_run import (  # noqa: E402
     _credit_absent_siblings, _em_discharged_rows, _halt_gap_lines, _leg_footprint_writes, _recovery_backing, _unclosed_halt_gaps,
-    foreign_halted_withheld, held_revision_refusal,
+    foreign_halted_withheld, held_revision_refusal, unexecuted_withholds,
 )
 from coordinator_core.ops.dispatch_emit.halted_run_route import halted_refusal, route_suffix  # noqa: E402
 from coordinator_core.ops.dispatch_emit.refire_inherited_scope import inherited_scope  # noqa: E402
@@ -276,6 +277,7 @@ from coordinator_core.ops.dispatch_emit.terminal_commit_closeout import (  # noq
     _dropped_part_rows,
     USAGE_FILE,
     _write_usage,
+    _stamp_usage_marker,
     _run_id_of,
     CLOSE_JOB_SCRIPT,
     _CLOSE_JOB_WINDOW_MINUTES,
@@ -1546,7 +1548,40 @@ def _outcome_keys_last(reply):
     return {**{k: v for k, v in reply.items() if k not in tail}, **tail}
 
 
+def _landing_impl() -> str:
+    """The landing path the settings-home key `run_landing.LANDING_IMPL_KEY` selects. A missing, empty,
+    unrecognised or unreadable value is `LANDING_IMPL_DEFAULT` (the old path): rollback is setting the
+    key to `old` or removing it, effective on the next call."""
+    from coordinator_core import machine_resolver
+    from coordinator_core.ops.dispatch_emit import run_landing
+
+    try:
+        value = machine_resolver.registry_get(run_landing.LANDING_IMPL_KEY)
+    except Exception:  # noqa: BLE001 -- an unreadable registry must never block a landing
+        return run_landing.LANDING_IMPL_DEFAULT
+    value = value.strip().lower() if isinstance(value, str) else ""
+    return value if value in run_landing.LANDING_IMPLS else run_landing.LANDING_IMPL_DEFAULT
+
+
+def _routes_to_land_run(params: object) -> bool:
+    """Only the product landing of a call carrying its own `script_path` goes to `land_run`; the
+    halted, fanout, grind, no-script and `task_output_path`-resolved calls stay on the old path."""
+    from coordinator_core.ops.dispatch_emit import run_landing
+
+    return (
+        isinstance(params, dict)
+        and isinstance(params.get("script_path"), str) and bool(params["script_path"])
+        and not any(params.get(k) for k in run_landing._MODE_KEYS)
+        and not params.get("task_output_path")
+        and _landing_impl() == run_landing.IMPL_NEW
+    )
+
+
 def _handler_body(params: dict, repo_root: Optional[Path] = None) -> dict:
+    if _routes_to_land_run(params):
+        from coordinator_core.ops.dispatch_emit import run_landing
+
+        return run_landing.land_run(params, repo_root)
     stranded: dict = {}
     scope: dict = {}
     withheld: dict = {}
@@ -2007,6 +2042,12 @@ def _terminal_commit_inner(
     close_ctx: Optional[dict],
     token_state: dict,
 ) -> dict:
+    from coordinator_core.ops.dispatch_emit import land_deadline
+
+    # Each `mark` names the span up to the next one, so work before the first `check` is attributed
+    # to its stage and not lumped into `land_deadline.scope_entry`.
+    stage = land_deadline.mark
+    stage("terminal_commit.params")
     if repo_root is None:
         return _error(
             "dispatch.terminal_commit requires a common_dir-keyed dispatch; "
@@ -2195,12 +2236,27 @@ def _terminal_commit_inner(
     if request is None:
         return {"committed": False, "nothing_to_commit": True}
     # A declared directory (`docs/plans`) is a scope, not a file: git's pathspec staging refuses it.
-    if any((worktree_root / p).is_dir() for c in request.chunks for p in c.paths):
+    stage("terminal_commit.declared_dirs")
+    root_str = str(worktree_root)
+    declared_dirs: set = set()
+    declared_present: set = set()  # Declared paths seen as files here; the absent-path pass reuses the stat.
+    for c in request.chunks:
+        for p in c.paths:
+            if p in declared_dirs or p in declared_present:
+                continue
+            try:
+                mode = os.stat(os.path.join(root_str, p)).st_mode
+            except (OSError, ValueError):
+                continue
+            (declared_dirs if _stat.S_ISDIR(mode) else declared_present).add(p)
+    if declared_dirs:
         request = dataclasses.replace(request, chunks=tuple(
-            dataclasses.replace(c, paths=tuple(p for p in c.paths if not (worktree_root / p).is_dir()))
+            dataclasses.replace(c, paths=tuple(p for p in c.paths if p not in declared_dirs))
             for c in request.chunks
         ))
     anchor_only = not request.chunks
+    stage("terminal_commit.prep")
+    param_withheld = {**param_withheld, **unexecuted_withholds(worktree_root, request, staged_rows)}
     from coordinator_core.ops.workflow_fire.finalizer import review_owner as _review_owner
     reviewed_bytes, reviewed_at, prep_from_disk = _reconcile_prep(
         worktree_root, _review_owner(session_id), _run_id_of(params, ask_run_dir, script_path_raw), request, inline_review
@@ -2271,6 +2327,7 @@ def _terminal_commit_inner(
             "Use the digest's `terminal_commit_cli` line verbatim",
             refused="unreviewed",
         )
+    stage("terminal_commit.review_floor")
     floor_code = review_floor.floor_code_paths(request, inline_review, prep_from_disk)
     not_run = _tests_not_run_refusal(worktree_root, params, request, inline_review)
     if not_run is not None:
@@ -2299,6 +2356,7 @@ def _terminal_commit_inner(
                     [c for c in request.chunks if c.id not in incomplete_chunks],
                 ))
             return no_op
+    stage("terminal_commit.ledger_gate")
     over_budget = _xs_over_budget_refusal(
         worktree_root, params, _run_id_of(params, ask_run_dir, script_path_raw), request
     )
@@ -2342,6 +2400,7 @@ def _terminal_commit_inner(
         close_ctx["ledger_met"] = ledger_met
     withheld_product: list = []
 
+    stage("terminal_commit.branch")
     observed_branch = head_branch(worktree_root)
     if observed_branch == "HEAD":
         return _error(
@@ -2406,6 +2465,7 @@ def _terminal_commit_inner(
     # reviews -- the only seam that can call it, since the emitted script has
     # no JS-callable "invoke a Python op" primitive
     # (review_mint/wave_bookkeeping.py's own module docstring).
+    stage("terminal_commit.bookkeeping")
     bookkeeping_record_path: Optional[str] = None
     review_record_error: Optional[str] = None
     own_evidence_write: Optional[tuple] = None
@@ -2503,6 +2563,7 @@ def _terminal_commit_inner(
             except (OSError, ValueError) as exc:
                 review_record_error = f"review rows not written: {exc}"
 
+    stage("terminal_commit.run_artifacts")
     companions: list = []
     cited_sizing: Optional[str] = None
     if not anchor_only:
@@ -2532,7 +2593,7 @@ def _terminal_commit_inner(
             ask_note_rel = candidate
             _write_note_verdicts(worktree_root / candidate, params.get("ledger_verdict"), inline_review, worktree_root)
     usage_reply: dict = (
-        _write_usage(worktree_root, session_id, ask_run_dir.name)
+        _stamp_usage_marker(worktree_root, ask_run_dir.name)
         if ask_run_dir is not None and not anchor_only else {}
     )
     from coordinator_core.ops.dispatch_emit import run_artifacts
@@ -2575,6 +2636,7 @@ def _terminal_commit_inner(
             process_artifact_policy.exclude_locally(worktree_root, proc_wh, proc_record_dirs if foreign_repo else ())
         return reply
 
+    stage("terminal_commit.review_writes")
     review_run_id = _run_id_of(params, ask_run_dir, script_path_raw)
     review_checked = not anchor_only and bool(session_id)
     review_writes: Optional[dict] = None
@@ -2607,6 +2669,7 @@ def _terminal_commit_inner(
     obliged_dirs = [p for p in commit_obliged if (worktree_root / p).is_dir()]
     obliged_files = [p for p in commit_obliged if p not in obliged_dirs]
 
+    stage("terminal_commit.snapshot")
     _prep = inline_review.get("prep") if isinstance(inline_review, dict) else None
     _slice = _prep.get("slice_files") if isinstance(_prep, dict) else None
     if isinstance(_slice, list):
@@ -2664,6 +2727,7 @@ def _terminal_commit_inner(
             ignored_excluded=art_landable.ignored_excluded,
         )
 
+    stage("terminal_commit.regrades")
     known_ids = {chunk.id for chunk in request.chunks}
     unsent_memos = _memo_rows_without_receipt(worktree_root, request)
     report_cache: dict = {}
@@ -2793,6 +2857,7 @@ def _terminal_commit_inner(
                 overlap=overlap,
             )
 
+    stage("terminal_commit.landing_set")
     all_paths: list = []
     prefix_files: list = []
 
@@ -2848,12 +2913,14 @@ def _terminal_commit_inner(
     # absent-at-HEAD); each sibling repo lands its own commit after the home one.
     from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import split_sibling_paths
 
+    stage("terminal_commit.sibling_split")
     all_paths, sibling_paths = split_sibling_paths(all_paths, worktree_root)
 
     # A case-variant of a tracked path would pass the existence check on a case-insensitive
     # filesystem and reach the landing allowlist unclassified; land git's own spelling instead.
     from coordinator_core.git.tracked_case import tracked_spelling
 
+    stage("terminal_commit.tracked_case")
     spelled = tracked_spelling(worktree_root, all_paths) if all_paths else {}
     case_map = {p: s for p, s in spelled.items() if s is not None and s != p}
     if case_map:
@@ -2942,7 +3009,8 @@ def _terminal_commit_inner(
         )
         declared_writes |= set(inherited_paths)
         all_paths.extend(p for p in inherited_paths if p not in all_paths and p not in held_paths)
-    absent = [p for p in all_paths if not (worktree_root / p).exists()]
+    stage("terminal_commit.absent")
+    absent = [p for p in all_paths if p not in declared_present and not (worktree_root / p).exists()]
     dropped_absent: list = []
     deleted_paths: list = []
     reverted_absent: list = []
@@ -2998,6 +3066,7 @@ def _terminal_commit_inner(
             close_ctx.clear()
         return _with_process_withheld(_with_siblings({"committed": False, "nothing_to_commit": not sibling_paths}))
 
+    stage("terminal_commit.run_owned")
     run_owned, owned_deletions = _run_owned_dirt(
         worktree_root, request, snapshot, session_id, all_paths, deleted_paths, touched,
         left_out=left_out_map,
@@ -3241,6 +3310,7 @@ def _terminal_commit_inner(
     # Unlike a hand commit, a run's product commit never absorbs a live peer's in-flight edit.
     from coordinator_core.ops.ceremony import commit_v2 as commit_v2_mod
 
+    stage("terminal_commit.changed")
     changed = _changed(snapshot, worktree_root, all_paths)
     if token_state.get("since_halt_close") is not None and changed is not None and not deleted_paths:
         run_artifact_paths = {
@@ -3253,6 +3323,7 @@ def _terminal_commit_inner(
             return _with_process_withheld(_with_siblings({"committed": False, "nothing_to_commit": not sibling_paths}))
     # Only a path this commit actually carries can absorb a peer's edit: a clean declared path a
     # peer holds is not contention, and refusing on it wedges every review-only close behind it.
+    stage("terminal_commit.peer_claims")
     carried = [p for p in all_paths if changed is None or p in changed] + list(deleted_paths)
     own_seniority = _own_run_seniority(worktree_root, params.get("run_id"), script_path_raw)
     peer_holds: list = []
@@ -3920,6 +3991,7 @@ def _terminal_commit_inner(
             **integrity_extra,
         )
 
+    closure_withheld: dict = {}
     if integrity_extra.get("supplied_blobs"):
         settled_supplied = integrity_extra.pop("supplied_blobs")
         from coordinator_core.ops.dispatch_emit.hunk_provenance import is_no_baseline_detail
@@ -3940,6 +4012,25 @@ def _terminal_commit_inner(
             commit_params["expected_content_sha256"] = {
                 p: h for p, h in commit_params["expected_content_sha256"].items() if p not in settled_supplied
             }
+        # Only a path withheld whole is `withheld`: a settled path still lands (HEAD + own hunks), and
+        # passing it would drop consumers of the run's own new definitions.
+        if foreign_excluded:
+            from coordinator_core.ops.dispatch_emit import own_hunk_candidate
+
+            closure_withheld = own_hunk_candidate.close_over(
+                worktree_root, list(all_paths), foreign_excluded, blobs=commit_params["supplied_blobs"],
+            )
+            if closure_withheld:
+                all_paths[:] = [p for p in all_paths if p not in closure_withheld]
+                commit_params["paths"] = all_paths
+                commit_params["supplied_blobs"] = {
+                    p: b for p, b in commit_params["supplied_blobs"].items() if p not in closure_withheld
+                }
+                if "expected_content_sha256" in commit_params:
+                    commit_params["expected_content_sha256"] = {
+                        p: h for p, h in commit_params["expected_content_sha256"].items()
+                        if p not in closure_withheld
+                    }
 
     landed_now = set(all_paths)
     unlanded = [p for p in obliged_changed if p not in landed_now]
@@ -4209,6 +4300,8 @@ def _terminal_commit_inner(
         reply["sibling_withheld"] = dict(sibling_withheld)
     if foreign_excluded:
         reply[_ls.FOREIGN_EXCLUDED_KEY] = foreign_excluded
+    if closure_withheld:
+        reply["own_hunk_closure_withheld"] = dict(sorted(closure_withheld.items()))
     if measured_supplied:
         reply["measured_blob_landed"] = sorted(measured_supplied)
     if reply.get("refused") == "blob-drift" and isinstance(reply.get("error"), str):
@@ -4638,7 +4731,7 @@ def _terminal_commit_inner(
     if reply.get("committed") and reply.get("sha"):
         residue = _commit_residue(
             worktree_root, request, snapshot, report_cache, session_id,
-            excluded=set(all_paths) | set(deleted_paths) | set(scope.get("landed", ())) | set(dropped_absent) | set(wh_map) | set(never_commit_dropped) | {p for ps in sibling_paths.values() for p in ps},
+            excluded=set(all_paths) | set(deleted_paths) | set(scope.get("landed", ())) | set(dropped_absent) | set(wh_map) | set(never_commit_dropped) | set(closure_withheld) | {p for ps in sibling_paths.values() for p in ps},
             unfinished=incomplete_chunks | held_ids,
             commit_v2_mod=commit_v2_mod,
         )
@@ -4660,7 +4753,7 @@ def _terminal_commit_inner(
                 declared_writes, snapshot.changed,
                 set(all_paths) | set(deleted_paths) | set(scope.get("landed", ())) | set(dropped_absent)
                 | set(wh_map) | set(never_commit_dropped) | set(held_paths) | set(sibling_withheld)
-                | set(_local) | {p for ps in sibling_paths.values() for p in ps},
+                | set(closure_withheld) | set(_local) | {p for ps in sibling_paths.values() for p in ps},
             )
             if product_residue:
                 reply["product_residue"] = product_residue
@@ -4672,7 +4765,9 @@ def _terminal_commit_inner(
                 set(all_paths) | set(deleted_paths) | set(scope.get("landed", ()))
                 | set(reply.get("archived") or ())
             )
-            withheld_art = {**(dict(art_landable.withheld) if art_landable is not None else {}), **wh_map}
+            withheld_art = {
+                **(dict(art_landable.withheld) if art_landable is not None else {}), **wh_map, **closure_withheld,
+            }
             if not foreign_repo:
                 fresh_art = run_artifacts.candidate_paths(
                     worktree_root, art_run_id, sizing_rel=cited_sizing, plan_rel=request.plan_path,
@@ -4704,8 +4799,8 @@ def _terminal_commit_inner(
                     + ", ".join(f"{p} ({cls})" for p, cls in art_residue.items())
                     + ". The run token is spent: commit them through ceremony.commit_v2"
                 )
-        elif wh_map:
-            reply["run_artifacts"] = {"landed": [], "withheld": dict(sorted(wh_map.items()))}
+        elif wh_map or closure_withheld:
+            reply["run_artifacts"] = {"landed": [], "withheld": dict(sorted({**wh_map, **closure_withheld}.items()))}
         if reread_artifacts:
             reply.setdefault("run_artifacts", {"landed": [], "withheld": {}})["reread"] = reread_artifacts
         if review_land:

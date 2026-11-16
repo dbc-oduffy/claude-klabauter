@@ -4,12 +4,16 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _REPO_ROOT = Path(__file__).parent.parent.parent.resolve()
 _SCRIPT = _REPO_ROOT / "bin" / "commit-path-budget-citations.py"
 
 
-def _load_module():
+def _load_module() -> ModuleType:
     key = "commit_path_budget_citations_unit"
     spec = importlib.util.spec_from_file_location(key, _SCRIPT)
     assert spec is not None and spec.loader is not None

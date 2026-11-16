@@ -9,25 +9,26 @@ import pytest
 
 from coordinator_core.ops import _app_session_browser as b
 from coordinator_core.ops._app_session_validate_contract import Route
+from pathlib import Path
 
 
 class FakeResponse:
-    def __init__(self, url, status):
+    def __init__(self, url, status) -> None:
         self.url = url
         self.status = status
 
 
 class FakePage:
-    def __init__(self, script):
+    def __init__(self, script) -> None:
         self.script = script
         self.handlers = {}
         self.shots = []
         self.main = None
 
-    def on(self, name, fn):
+    def on(self, name, fn) -> None:
         self.handlers[name] = fn
 
-    def goto(self, url, wait_until, timeout):
+    def goto(self, url, wait_until, timeout) -> FakeResponse:
         assert wait_until == "load"
         self.main = FakeResponse(url, self.script.get("status", 200))
         for kind, payload in self.script.get("events", []):
@@ -44,31 +45,31 @@ class FakePage:
             return self.script.get("broken", [])
         return self.script.get("overflow", {"px": 0, "culprit": None})
 
-    def screenshot(self, path, full_page):
+    def screenshot(self, path, full_page) -> None:
         assert full_page is True
         open(path, "wb").write(b"png")
         self.shots.append(path)
 
 
 class FakeContext:
-    def __init__(self, page):
+    def __init__(self, page) -> None:
         self.page = page
         self.closed = False
 
     def new_page(self):
         return self.page
 
-    def close(self):
+    def close(self) -> None:
         self.closed = True
 
 
 class FakeBrowser:
-    def __init__(self, script):
+    def __init__(self, script) -> None:
         self.script = script
         self.kwargs = None
         self.ctx = None
 
-    def new_context(self, **kw):
+    def new_context(self, **kw) -> FakeContext:
         self.kwargs = kw
         self.ctx = FakeContext(FakePage(self.script))
         return self.ctx
@@ -88,15 +89,15 @@ def _sweep(tmp_path, script, route=None):
     return drv, res
 
 
-def _console(text, url=None, typ="error"):
+def _console(text, url=None, typ: str = "error") -> SimpleNamespace:
     return SimpleNamespace(type=typ, text=text, location={"url": url})
 
 
-def _failed(url, failure):
+def _failed(url, failure) -> SimpleNamespace:
     return SimpleNamespace(url=url, failure=failure)
 
 
-def test_context_options_and_clean_result(tmp_path):
+def test_context_options_and_clean_result(tmp_path: Path) -> None:
     drv, res = _sweep(tmp_path, {"events": [("main", None)]})
     assert drv._browser.kwargs == {
         "viewport": {"width": 390, "height": 844},
@@ -109,7 +110,7 @@ def test_context_options_and_clean_result(tmp_path):
     assert drv._browser.ctx.closed
 
 
-def test_console_and_pageerror_collected_non_errors_ignored(tmp_path):
+def test_console_and_pageerror_collected_non_errors_ignored(tmp_path: Path) -> None:
     ev = [
         ("console", _console("boom")),
         ("console", _console("info", typ="log")),
@@ -119,7 +120,7 @@ def test_console_and_pageerror_collected_non_errors_ignored(tmp_path):
     assert res.console_errors == ["boom", "TypeError: x"]
 
 
-def test_main_document_never_failed_response_and_its_console_line_dropped(tmp_path):
+def test_main_document_never_failed_response_and_its_console_line_dropped(tmp_path: Path) -> None:
     url = "http://127.0.0.1:3000/missing"
     ev = [
         ("main", None),
@@ -134,7 +135,7 @@ def test_main_document_never_failed_response_and_its_console_line_dropped(tmp_pa
     assert res.console_errors == ["real error"]
 
 
-def test_subresource_400_is_failed_response_and_200_is_not(tmp_path):
+def test_subresource_400_is_failed_response_and_200_is_not(tmp_path: Path) -> None:
     ev = [
         ("main", None),
         ("response", FakeResponse("http://x/a.js", 500)),
@@ -144,7 +145,7 @@ def test_subresource_400_is_failed_response_and_200_is_not(tmp_path):
     assert res.failed_responses == [{"url": "http://x/a.js", "status": 500}]
 
 
-def test_rsc_abort_filtered_other_failures_recorded(tmp_path):
+def test_rsc_abort_filtered_other_failures_recorded(tmp_path: Path) -> None:
     ev = [
         ("requestfailed", _failed("http://x/p?_rsc=abc", "net::ERR_ABORTED")),
         ("requestfailed", _failed("http://x/p", "net::ERR_ABORTED")),
@@ -157,7 +158,7 @@ def test_rsc_abort_filtered_other_failures_recorded(tmp_path):
     ]
 
 
-def test_broken_images_and_overflow(tmp_path):
+def test_broken_images_and_overflow(tmp_path: Path) -> None:
     script = {
         "broken": ["http://x/nope.png"],
         "overflow": {"px": 218, "culprit": "body > div.wide"},
@@ -168,14 +169,14 @@ def test_broken_images_and_overflow(tmp_path):
     assert res.overflow_culprit == "body > div.wide"
 
 
-def test_navigation_timeout_becomes_error_not_exception(tmp_path):
+def test_navigation_timeout_becomes_error_not_exception(tmp_path: Path) -> None:
     drv, res = _sweep(tmp_path, {"timeout": True})
     assert res.error.startswith("Page.goto: Timeout")
     assert res.status is None and res.screenshot == ""
     assert drv._browser.ctx.closed
 
 
-def test_probe_import_none_spec_returns_hint(monkeypatch):
+def test_probe_import_none_spec_returns_hint(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(b.importlib.util, "find_spec", lambda name: None)
     for probe in (b.probe_import, b.probe_browser):
         avail = probe()
@@ -183,12 +184,12 @@ def test_probe_import_none_spec_returns_hint(monkeypatch):
         assert sys.executable in avail.install_hint
 
 
-def test_probe_import_ok_when_spec_present(monkeypatch):
+def test_probe_import_ok_when_spec_present(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(b.importlib.util, "find_spec", lambda name: object())
     assert b.probe_import().ok is True
 
 
-def test_probe_browser_checks_required_revision_dir(monkeypatch, tmp_path):
+def test_probe_browser_checks_required_revision_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(tmp_path))
     monkeypatch.setattr(b.importlib.util, "find_spec", lambda name: object())
     monkeypatch.setattr(b, "_required_revision", lambda: "1248")
@@ -200,7 +201,7 @@ def test_probe_browser_checks_required_revision_dir(monkeypatch, tmp_path):
     assert b.probe_browser().ok is True
 
 
-def test_probe_browser_falls_back_to_glob_without_revision(monkeypatch, tmp_path):
+def test_probe_browser_falls_back_to_glob_without_revision(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", str(tmp_path))
     monkeypatch.setattr(b.importlib.util, "find_spec", lambda name: object())
     monkeypatch.setattr(b, "_required_revision", lambda: None)
@@ -209,7 +210,7 @@ def test_probe_browser_falls_back_to_glob_without_revision(monkeypatch, tmp_path
     assert b.probe_browser().ok is True
 
 
-def test_module_import_does_not_import_playwright():
+def test_module_import_does_not_import_playwright() -> None:
     import importlib
 
     src = importlib.util.find_spec("coordinator_core.ops._app_session_browser")
@@ -221,18 +222,18 @@ def test_module_import_does_not_import_playwright():
 class _FakeManager:
     """Like sync_playwright(): start() returns the Playwright object, the manager has no stop()."""
 
-    def __init__(self, pw):
+    def __init__(self, pw) -> None:
         self._pw = pw
 
     def start(self):
         return self._pw
 
 
-def _install_fake_playwright(monkeypatch, launch_raises=False):
+def _install_fake_playwright(monkeypatch, launch_raises: bool = False):
     events = []
     browser = SimpleNamespace(close=lambda: events.append("browser.close"))
 
-    def launch(headless):
+    def launch(headless) -> SimpleNamespace:
         if launch_raises:
             raise RuntimeError("launch failed")
         return browser
@@ -246,14 +247,14 @@ def _install_fake_playwright(monkeypatch, launch_raises=False):
     return events
 
 
-def test_driver_stops_the_started_playwright_object(monkeypatch):
+def test_driver_stops_the_started_playwright_object(monkeypatch: pytest.MonkeyPatch) -> None:
     events = _install_fake_playwright(monkeypatch)
     with b.PlaywrightDriver():
         pass
     assert events == ["browser.close", "pw.stop"]
 
 
-def test_driver_stops_playwright_when_launch_fails(monkeypatch):
+def test_driver_stops_playwright_when_launch_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     events = _install_fake_playwright(monkeypatch, launch_raises=True)
     with pytest.raises(RuntimeError):
         with b.PlaywrightDriver():

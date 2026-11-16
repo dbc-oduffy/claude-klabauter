@@ -3,16 +3,17 @@ from pathlib import Path
 
 from coordinator_core.benchmarks import relay_tier_census as rtc
 from coordinator_core.distill.prompt_tier import LONG_PROMPT_TIER_TOKENS
+import pytest
 
 
-def test_row_flags_over_tier_on_both_sides():
+def test_row_flags_over_tier_on_both_sides() -> None:
     over = rtc._row({"load": 3}, LONG_PROMPT_TIER_TOKENS + 1)
     at = rtc._row({"load": 3}, LONG_PROMPT_TIER_TOKENS)
     assert over["over_tier"] is True and at["over_tier"] is False
     assert over["relays_total"] == 3
 
 
-def test_measure_reports_each_surface_and_isolates_a_failure(monkeypatch):
+def test_measure_reports_each_surface_and_isolates_a_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     fake = {s: (lambda repo, s=s: rtc._row({"p": 1}, 10)) for s in rtc.SURFACES}
 
     def boom(repo):
@@ -27,7 +28,7 @@ def test_measure_reports_each_surface_and_isolates_a_failure(monkeypatch):
         assert out[s]["relays_by_phase"] == {"p": 1} and out[s]["max_prompt_tokens"] == 10
 
 
-def test_atlas_census_on_default_gate_config_reports_estimate_analysis_tokens(tmp_path, monkeypatch):
+def test_atlas_census_on_default_gate_config_reports_estimate_analysis_tokens(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = tmp_path / rtc.ATLAS_GATE_CONFIG
     cfg.parent.mkdir(parents=True)
     cfg.write_text(json.dumps({"census_buckets": [{"bucketId": "a", "dirs": ["a"]}]}), encoding="utf-8")
@@ -40,7 +41,7 @@ def test_atlas_census_on_default_gate_config_reports_estimate_analysis_tokens(tm
     assert row["over_tier"] is False and row["label"] == "estimate"
 
 
-def test_atlas_census_reports_the_measured_largest_projected_prompt(tmp_path, monkeypatch):
+def test_atlas_census_reports_the_measured_largest_projected_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg = tmp_path / rtc.ATLAS_GATE_CONFIG
     cfg.parent.mkdir(parents=True)
     cfg.write_text(json.dumps({"census_buckets": [{"bucketId": "a", "dirs": ["a"]}]}), encoding="utf-8")
@@ -51,7 +52,7 @@ def test_atlas_census_reports_the_measured_largest_projected_prompt(tmp_path, mo
     assert rtc.census_atlas(tmp_path)["max_prompt_tokens"] == 30_000
 
 
-def test_distill_census_measures_the_inlined_path_and_keeps_the_shard_mode_count(tmp_path, monkeypatch):
+def test_distill_census_measures_the_inlined_path_and_keeps_the_shard_mode_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.benchmarks import distill_run_cost as drc
 
     (tmp_path / "a.md").write_bytes(b"x" * 400)

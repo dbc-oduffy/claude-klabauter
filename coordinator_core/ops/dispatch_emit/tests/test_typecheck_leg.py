@@ -6,20 +6,21 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import typecheck_leg as mod
 from coordinator_core.ops.dispatch_emit.typecheck_leg import typecheck_leg, typecheck_prompt_clause
+from pathlib import Path
 
 
-def _touch(root, rel):
+def _touch(root, rel) -> None:
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("{}\n", encoding="utf-8")
 
 
 @pytest.fixture(autouse=True)
-def _no_npx(monkeypatch):
+def _no_npx(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod.shutil, "which", lambda name: None)
 
 
-def test_one_tsconfig_resolves_the_repo_local_tsc(tmp_path):
+def test_one_tsconfig_resolves_the_repo_local_tsc(tmp_path: Path) -> None:
     _touch(tmp_path, "tsconfig.json")
     _touch(tmp_path, "node_modules/.bin/tsc")
     leg = typecheck_leg(["src/app/api/[entityId]/route.ts", "src/b.tsx"], tmp_path)
@@ -27,7 +28,7 @@ def test_one_tsconfig_resolves_the_repo_local_tsc(tmp_path):
     assert leg.not_run == ()
 
 
-def test_two_packages_get_one_command_each_with_a_hoisted_tsc(tmp_path):
+def test_two_packages_get_one_command_each_with_a_hoisted_tsc(tmp_path: Path) -> None:
     _touch(tmp_path, "node_modules/.bin/tsc.cmd")
     _touch(tmp_path, "packages/a/tsconfig.json")
     _touch(tmp_path, "packages/b/tsconfig.json")
@@ -40,14 +41,14 @@ def test_two_packages_get_one_command_each_with_a_hoisted_tsc(tmp_path):
     )
 
 
-def test_no_ts_files_or_no_governing_tsconfig_composes_no_leg(tmp_path):
+def test_no_ts_files_or_no_governing_tsconfig_composes_no_leg(tmp_path: Path) -> None:
     _touch(tmp_path, "tsconfig.json")
     assert typecheck_leg(["a.py", "docs/x.md", "web/app.js"], tmp_path) is None
     assert typecheck_leg(["x.ts"], tmp_path / "other") is None
     assert typecheck_leg(["x.ts"], None) is None
 
 
-def test_no_tsc_is_not_run_with_a_reason_never_a_pass(tmp_path):
+def test_no_tsc_is_not_run_with_a_reason_never_a_pass(tmp_path: Path) -> None:
     _touch(tmp_path, "tsconfig.json")
     leg = typecheck_leg(["x.ts"], tmp_path)
     assert leg.commands == ()
@@ -56,21 +57,21 @@ def test_no_tsc_is_not_run_with_a_reason_never_a_pass(tmp_path):
     assert "not_run" in clause and "build_clean null" in clause
 
 
-def test_npx_no_install_is_the_fallback_when_no_local_tsc(tmp_path, monkeypatch):
+def test_npx_no_install_is_the_fallback_when_no_local_tsc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod.shutil, "which", lambda name: "/usr/bin/npx")
     _touch(tmp_path, "app/tsconfig.json")
     leg = typecheck_leg(["app/x.ts"], tmp_path)
     assert leg.commands == ("npx --no-install tsc --noEmit -p app",)
 
 
-def test_clause_makes_a_nonzero_exit_fail_the_phase(tmp_path):
+def test_clause_makes_a_nonzero_exit_fail_the_phase(tmp_path: Path) -> None:
     _touch(tmp_path, "tsconfig.json")
     _touch(tmp_path, "node_modules/.bin/tsc")
     clause = typecheck_prompt_clause(typecheck_leg(["x.ts"], tmp_path))
     assert "status `fail`" in clause and "`node_modules/.bin/tsc --noEmit -p .`" in clause
 
 
-def test_criterion_commands_win_over_written_ts_files(tmp_path):
+def test_criterion_commands_win_over_written_ts_files(tmp_path: Path) -> None:
     _touch(tmp_path, "tsconfig.json")
     _touch(tmp_path, "node_modules/.bin/tsc")
     leg = mod.criterion_typecheck_leg(("npx tsc --noEmit -p web",), ["x.ts"], tmp_path)
@@ -78,14 +79,14 @@ def test_criterion_commands_win_over_written_ts_files(tmp_path):
     assert leg.not_run == ()
 
 
-def test_criterion_without_commands_uses_the_written_ts_leg(tmp_path):
+def test_criterion_without_commands_uses_the_written_ts_leg(tmp_path: Path) -> None:
     _touch(tmp_path, "tsconfig.json")
     _touch(tmp_path, "node_modules/.bin/tsc")
     leg = mod.criterion_typecheck_leg((), ["x.ts"], tmp_path)
     assert leg == typecheck_leg(["x.ts"], tmp_path)
 
 
-def test_criterion_falls_back_to_the_root_tsconfig(tmp_path):
+def test_criterion_falls_back_to_the_root_tsconfig(tmp_path: Path) -> None:
     _touch(tmp_path, "tsconfig.json")
     _touch(tmp_path, "node_modules/.bin/tsc")
     leg = mod.criterion_typecheck_leg((), ["a.py"], tmp_path)
@@ -93,7 +94,7 @@ def test_criterion_falls_back_to_the_root_tsconfig(tmp_path):
     assert leg.not_run == ()
 
 
-def test_criterion_with_nothing_resolvable_is_not_run_never_a_pass(tmp_path):
+def test_criterion_with_nothing_resolvable_is_not_run_never_a_pass(tmp_path: Path) -> None:
     leg = mod.criterion_typecheck_leg((), ["a.py"], tmp_path)
     assert leg.commands == ()
     assert leg.not_run[0][0] == "."
@@ -101,11 +102,11 @@ def test_criterion_with_nothing_resolvable_is_not_run_never_a_pass(tmp_path):
     assert "typecheck not_run (.):" in typecheck_prompt_clause(leg)
 
 
-def test_criterion_leg_without_a_repo_root_is_none():
+def test_criterion_leg_without_a_repo_root_is_none() -> None:
     assert mod.criterion_typecheck_leg(("tsc",), ["x.ts"], None) is None
 
 
-def test_compose_script_folds_the_leg_into_the_terminal_test_prompt(tmp_path):
+def test_compose_script_folds_the_leg_into_the_terminal_test_prompt(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.tests.test_emit import REVIEW_KW, _wave_row
     from coordinator_core.ops.dispatch_emit.emit import compose_script
 
@@ -117,7 +118,7 @@ def test_compose_script_folds_the_leg_into_the_terminal_test_prompt(tmp_path):
     assert "test:terminal" in script
 
 
-def test_row_build_gate_rows_are_skipped_by_the_default_tsc_leg(tmp_path, monkeypatch):
+def test_row_build_gate_rows_are_skipped_by_the_default_tsc_leg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit.emit import compose_script, derive_plan_context
     from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
     from coordinator_core.ops.dispatch_emit.tests.test_emit import REVIEW_KW, _wave_row
@@ -140,7 +141,7 @@ def test_row_build_gate_rows_are_skipped_by_the_default_tsc_leg(tmp_path, monkey
     by_glob = _wave_row("C2", ["web/g.ts"])
     open_row = _wave_row("C3", ["open.ts"])
 
-    def script(rows):
+    def script(rows) -> str:
         return compose_script(
             [rows], name="wf", description="ts", repo_root=tmp_path,
             plan_context=ctx, **REVIEW_KW,

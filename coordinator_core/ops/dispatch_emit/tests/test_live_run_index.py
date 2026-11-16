@@ -239,3 +239,17 @@ def test_release_returns_the_marker_count(tmp_path):
     assert idx.claim(root, "r1", ["a.py", "b.py"]) == {}
     assert idx.release(root, "r1") == 2
     assert idx.release(root, "r1") == 0
+
+
+def test_large_claim_skips_markers_yet_still_refuses_and_is_refused(tmp_path, monkeypatch):
+    from coordinator_core import warp_live
+
+    root = _root(tmp_path)
+    monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, m: False)
+    big = [f"f{i}.py" for i in range(idx.MARKER_CLAIM_MAX_PATHS + 1)]
+    _staged_run(root, "big", "s1")
+    assert idx.claim(root, "big", big) == {}
+    assert idx.release(root, "big") == 0
+    assert idx.claim(root, "small", ["f3.py"]) == {"big": ["f3.py"]}
+    assert idx.claim(root, "other", ["unrelated.py"]) == {}
+    assert idx.claim(root, "big2", big) == {"big": sorted(big)}

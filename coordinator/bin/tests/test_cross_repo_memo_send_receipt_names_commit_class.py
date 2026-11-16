@@ -22,8 +22,11 @@ def _load_cli_module():
     return mod
 
 
-def test_successful_send_receipt_names_the_commit_class(monkeypatch):
+def test_successful_send_receipt_names_the_commit_class(monkeypatch, tmp_path):
     mod = _load_cli_module()
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "state/memo-outbox/sent").mkdir(parents=True)
+    (tmp_path / "state/memo-outbox/sent/some-topic.md").write_text("x", encoding="utf-8")
 
     fake_cc_invoke = types.SimpleNamespace(
         route_mutation=lambda op, payload, sender_root, legacy: {
@@ -61,8 +64,11 @@ def test_successful_send_receipt_names_the_commit_class(monkeypatch):
     )
 
 
-def test_successful_send_names_the_receiver_path_and_no_pm_step(monkeypatch):
+def test_successful_send_names_the_receiver_path_and_no_pm_step(monkeypatch, tmp_path):
     mod = _load_cli_module()
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "state/memo-outbox/sent").mkdir(parents=True)
+    (tmp_path / "state/memo-outbox/sent/some-topic.md").write_text("x", encoding="utf-8")
 
     fake_cc_invoke = types.SimpleNamespace(
         route_mutation=lambda op, payload, sender_root, legacy: {
@@ -151,7 +157,7 @@ def test_successful_send_prints_no_recover_line(monkeypatch, capsys):
         types.SimpleNamespace(
             route_mutation=lambda op, payload, sender_root, legacy: {
                 "exit_code": 0,
-                "acted": [{"id": "x/some-topic.md", "sender_committed": True}],
+                "acted": [{"id": "x/some-topic.md", "sender_committed": True, "anchored": True}],
             }
         ),
     )

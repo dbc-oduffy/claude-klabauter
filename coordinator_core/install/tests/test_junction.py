@@ -16,16 +16,17 @@ import stat
 import pytest
 
 from coordinator_core.install import junction
+from pathlib import Path
 
 
-def _make_target(tmp_path, name="target", payload="hello"):
+def _make_target(tmp_path, name: str = "target", payload: str = "hello"):
     target = tmp_path / name
     target.mkdir()
     (target / "f.txt").write_text(payload, encoding="utf-8", newline="\n")
     return target
 
 
-def test_round_trip_create_detect_target_remove(tmp_path):
+def test_round_trip_create_detect_target_remove(tmp_path: Path) -> None:
     target = _make_target(tmp_path)
     link = tmp_path / "link"
 
@@ -42,30 +43,30 @@ def test_round_trip_create_detect_target_remove(tmp_path):
     assert (target / "f.txt").read_text(encoding="utf-8") == "hello"
 
 
-def test_is_junction_false_for_real_directory(tmp_path):
+def test_is_junction_false_for_real_directory(tmp_path: Path) -> None:
     real_dir = tmp_path / "real"
     real_dir.mkdir()
     assert junction.is_junction(real_dir) is False
 
 
-def test_is_junction_false_for_plain_file(tmp_path):
+def test_is_junction_false_for_plain_file(tmp_path: Path) -> None:
     f = tmp_path / "plain.txt"
     f.write_text("x", encoding="utf-8", newline="\n")
     assert junction.is_junction(f) is False
 
 
-def test_is_junction_false_for_nonexistent_path(tmp_path):
+def test_is_junction_false_for_nonexistent_path(tmp_path: Path) -> None:
     assert junction.is_junction(tmp_path / "does-not-exist") is False
 
 
-def test_junction_target_none_for_non_junction(tmp_path):
+def test_junction_target_none_for_non_junction(tmp_path: Path) -> None:
     real_dir = tmp_path / "real"
     real_dir.mkdir()
     assert junction.junction_target(real_dir) is None
     assert junction.junction_target(tmp_path / "missing") is None
 
 
-def test_remove_junction_leaves_target_payload_intact(tmp_path):
+def test_remove_junction_leaves_target_payload_intact(tmp_path: Path) -> None:
     target = _make_target(tmp_path)
     link = tmp_path / "link"
     junction.create_junction(link, target)
@@ -77,7 +78,7 @@ def test_remove_junction_leaves_target_payload_intact(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="junction semantics are nt-specific")
-def test_islink_trap_reads_false_on_a_junction(tmp_path):
+def test_islink_trap_reads_false_on_a_junction(tmp_path: Path) -> None:
     target = _make_target(tmp_path)
     link = tmp_path / "link"
     junction.create_junction(link, target)
@@ -88,7 +89,7 @@ def test_islink_trap_reads_false_on_a_junction(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="junction semantics are nt-specific")
-def test_shutil_rmtree_refuses_on_a_junction(tmp_path):
+def test_shutil_rmtree_refuses_on_a_junction(tmp_path: Path) -> None:
     target = _make_target(tmp_path)
     link = tmp_path / "link"
     junction.create_junction(link, target)
@@ -101,7 +102,7 @@ def test_shutil_rmtree_refuses_on_a_junction(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="junction semantics are nt-specific")
-def test_reparse_tag_discriminator_matches_mount_point(tmp_path):
+def test_reparse_tag_discriminator_matches_mount_point(tmp_path: Path) -> None:
     target = _make_target(tmp_path)
     link = tmp_path / "link"
     junction.create_junction(link, target)
@@ -111,7 +112,7 @@ def test_reparse_tag_discriminator_matches_mount_point(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="AC2 pins an nt-only private API")
-def test_create_junction_dependency_is_present_and_callable():
+def test_create_junction_dependency_is_present_and_callable() -> None:
     """AC2: fails loudly, never skips, if _winapi.CreateJunction disappears.
 
     A Python upgrade that drops this private API must show up here as a red
@@ -128,7 +129,7 @@ def test_create_junction_dependency_is_present_and_callable():
     assert callable(_winapi.CreateJunction)
 
 
-def test_create_junction_argument_order_is_target_then_link(tmp_path):
+def test_create_junction_argument_order_is_target_then_link(tmp_path: Path) -> None:
     """Locks the verified _winapi.CreateJunction(target, link) order via the
     public wrapper's observable behavior, so a swapped-argument regression
     in create_junction shows up as a wrong resolved target, not a crash.

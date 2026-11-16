@@ -7,16 +7,17 @@ from types import SimpleNamespace
 
 from coordinator_core.architecture_survey import mechanical_report as mr
 from coordinator_core.architecture_survey import render
+import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 ATLAS = "docs/architecture"
 
 
-def _need(payload, covered=True, reason=None):
+def _need(payload, covered: bool = True, reason=None):
     return {"covered": covered, "door": None, "calls": 0, "reason": reason, "payload": payload}
 
 
-def _structure(rows, edges, *, rows_covered=True, edges_covered=True):
+def _structure(rows, edges, *, rows_covered: bool = True, edges_covered: bool = True):
     return {
         "index": {"commit": "unstated", "commits_behind": 0, "state": "behind", "dropped_paths": 0, "unindexed": []},
         "systems": [],
@@ -44,7 +45,7 @@ ROWS = [("a/x.py", "alpha"), ("b/y.py", "beta"), ("c/z.py", "gamma")]
 EDGES = [("alpha", "beta", 2), ("beta", "gamma", 1)]
 
 
-def test_unchanged_atlas_lists_no_pages(tmp_path):
+def test_unchanged_atlas_lists_no_pages(tmp_path: Path) -> None:
     structure = _atlas(tmp_path, ROWS, EDGES)
     report = mr.build_report(tmp_path, structure, [])
     assert report["pages_changed"] == []
@@ -53,7 +54,7 @@ def test_unchanged_atlas_lists_no_pages(tmp_path):
     assert report["schema"] == "atlas-mechanical-layer" and report["schema_version"] == 1
 
 
-def test_file_added_flags_only_its_system_page(tmp_path):
+def test_file_added_flags_only_its_system_page(tmp_path: Path) -> None:
     _atlas(tmp_path, ROWS, EDGES)
     fresh = _structure(ROWS + [("b/new.py", "beta")], EDGES)
     report = mr.build_report(tmp_path, fresh, [])
@@ -62,21 +63,21 @@ def test_file_added_flags_only_its_system_page(tmp_path):
     assert report["page_briefs"][f"{ATLAS}/systems/beta.md"]["brief"] == mr.BRIEF_CLAUSE
 
 
-def test_file_removed_flags_its_system_page(tmp_path):
+def test_file_removed_flags_its_system_page(tmp_path: Path) -> None:
     _atlas(tmp_path, ROWS, EDGES)
     report = mr.build_report(tmp_path, _structure(ROWS[:2], EDGES), [])
     assert report["pages_changed"] == [f"{ATLAS}/systems/gamma.md"]
     assert report["file_index"]["removed"] == [["c/z.py", "gamma"]]
 
 
-def test_matrix_cell_change_flags_both_endpoint_pages_not_the_generated_matrix(tmp_path):
+def test_matrix_cell_change_flags_both_endpoint_pages_not_the_generated_matrix(tmp_path: Path) -> None:
     _atlas(tmp_path, ROWS, EDGES)
     report = mr.build_report(tmp_path, _structure(ROWS, [("alpha", "beta", 5), ("beta", "gamma", 1)]), [])
     assert report["pages_changed"] == [f"{ATLAS}/systems/alpha.md", f"{ATLAS}/systems/beta.md"]
     assert report["connectivity_matrix"]["changed_cells"] == [{"from": "alpha", "to": "beta", "before": 2, "after": 5}]
 
 
-def test_dead_path_flags_its_page_but_historical_and_generated_pages_do_not(tmp_path):
+def test_dead_path_flags_its_page_but_historical_and_generated_pages_do_not(tmp_path: Path) -> None:
     structure = _atlas(tmp_path, ROWS, EDGES)
     (tmp_path / ATLAS / "audit-records").mkdir()
     (tmp_path / ATLAS / "audit-records" / "old.md").write_text("old\n", encoding="utf-8")
@@ -91,7 +92,7 @@ def test_dead_path_flags_its_page_but_historical_and_generated_pages_do_not(tmp_
     assert len(report["dead_paths"]) == 4
 
 
-def test_no_baseline_means_no_delta_not_everything_added(tmp_path):
+def test_no_baseline_means_no_delta_not_everything_added(tmp_path: Path) -> None:
     atlas = tmp_path / ATLAS
     (atlas / "systems").mkdir(parents=True)
     (atlas / "systems" / "alpha.md").write_text("# a\n", encoding="utf-8")
@@ -103,7 +104,7 @@ def test_no_baseline_means_no_delta_not_everything_added(tmp_path):
     assert "no committed baseline" in report["legs"]["connectivity-matrix"]["detail"]
 
 
-def test_uncovered_needs_are_named_not_ran_and_drift_without_a_page_is_reported(tmp_path):
+def test_uncovered_needs_are_named_not_ran_and_drift_without_a_page_is_reported(tmp_path: Path) -> None:
     _atlas(tmp_path, ROWS, EDGES)
     report = mr.build_report(tmp_path, _structure(ROWS, EDGES, rows_covered=False, edges_covered=False), [])
     assert report["legs"]["file-index"]["status"] == "uncovered"
@@ -113,7 +114,7 @@ def test_uncovered_needs_are_named_not_ran_and_drift_without_a_page_is_reported(
     assert report["pages_changed"] == [] and report["systems_without_page"] == [f"{ATLAS}/systems/nopage.md"]
 
 
-def test_dead_path_rows_keep_only_dead_kinds_and_extract_the_cited_path():
+def test_dead_path_rows_keep_only_dead_kinds_and_extract_the_cited_path() -> None:
     f = SimpleNamespace
     check = f(findings=[
         f(kind="unresolved-file", page="p.md", line=4, detail="cited path does not resolve: `x/y.py`"),
@@ -123,7 +124,7 @@ def test_dead_path_rows_keep_only_dead_kinds_and_extract_the_cited_path():
         {"cls": "unresolved-file", "page": "p.md", "line": 4, "cited": "x/y.py", "target": None}]
 
 
-def test_rag_unavailable_fallback_names_the_real_reason_and_default_opts_edges_in(tmp_path, monkeypatch):
+def test_rag_unavailable_fallback_names_the_real_reason_and_default_opts_edges_in(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
     def fake_fetch(root, run_dir, pages, *, costs):
@@ -141,13 +142,13 @@ def test_rag_unavailable_fallback_names_the_real_reason_and_default_opts_edges_i
     assert "door-over-bar" not in structure["needs"]["edges"]["reason"]
 
 
-def test_fetch_structure_keeps_covered_edges_when_rag_answers(tmp_path, monkeypatch):
+def test_fetch_structure_keeps_covered_edges_when_rag_answers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     good = _structure(ROWS, EDGES)
     monkeypatch.setattr(mr.structure_mod, "fetch", lambda *a, **k: good)
     assert mr._fetch_structure(tmp_path, tmp_path / "run") is good
 
 
-def test_produce_writes_report_through_real_checker(tmp_path):
+def test_produce_writes_report_through_real_checker(tmp_path: Path) -> None:
     out = tmp_path / "report.json"
     report = mr.produce(REPO, out, structure=_structure([], [], rows_covered=True, edges_covered=True))
     on_disk = json.loads(out.read_text(encoding="utf-8"))
@@ -161,7 +162,7 @@ def _row(page, line, cited):
     return {"cls": "unresolved-file", "page": page, "line": line, "cited": cited, "target": None}
 
 
-def test_drifted_page_brief_carries_its_own_deltas_and_a_capped_preview_and_tokens_are_measured(tmp_path):
+def test_drifted_page_brief_carries_its_own_deltas_and_a_capped_preview_and_tokens_are_measured(tmp_path: Path) -> None:
     _atlas(tmp_path, ROWS, EDGES)
     beta = tmp_path / ATLAS / "systems" / "beta.md"
     beta.write_text("# beta\n" + "x" * (mr.PREVIEW_CAP_BYTES * 3), encoding="utf-8")
@@ -181,13 +182,13 @@ def test_drifted_page_brief_carries_its_own_deltas_and_a_capped_preview_and_toke
     assert tokens["bytes"] == len(json.dumps(report["page_briefs"], sort_keys=True, separators=(",", ":")).encode())
 
 
-def test_unchanged_atlas_has_no_briefs_and_zero_tokens(tmp_path):
+def test_unchanged_atlas_has_no_briefs_and_zero_tokens(tmp_path: Path) -> None:
     report = mr.build_report(tmp_path, _atlas(tmp_path, ROWS, EDGES), [])
     assert report["page_briefs"] == {}
     assert report["tokens"]["narrative_payload"] == mr.estimate_tokens(2)
 
 
-def test_other_repo_cite_is_not_a_dead_path_but_a_local_dead_path_still_is(tmp_path):
+def test_other_repo_cite_is_not_a_dead_path_but_a_local_dead_path_still_is(tmp_path: Path) -> None:
     structure = _atlas(tmp_path, ROWS, EDGES)
     page = tmp_path / ATLAS / "systems" / "alpha.md"
     page.write_text("# alpha\nthe DoE-side `setup/x.py` is not vendored\ntheir CLI `bin/gone.py` here\n", encoding="utf-8")

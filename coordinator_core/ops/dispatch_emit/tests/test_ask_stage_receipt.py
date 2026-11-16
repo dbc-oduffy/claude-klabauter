@@ -27,6 +27,17 @@ def test_match_returns_handle(tmp_path):
     assert raw.endswith(b"\n") and raw.isascii()
 
 
+def test_receipt_records_family_routes_only_when_present(tmp_path):
+    h = _stage(tmp_path)
+    r.write(tmp_path, "d1", h, family_report={"family_routes": {"C1": "codex"}, "warnings": ["w"]})
+    body = json.loads((tmp_path / r.RECEIPT_NAME).read_text())
+    assert body["family_routes"] == {"C1": "codex"} and body["warnings"] == ["w"]
+    assert r.landed(tmp_path, "d1") == h
+    r.write(tmp_path, "d1", h, family_report={})
+    body = json.loads((tmp_path / r.RECEIPT_NAME).read_text())
+    assert "family_routes" not in body and "warnings" not in body
+
+
 def test_digest_mismatch_is_none_and_not_partial(tmp_path):
     h = _stage(tmp_path)
     r.write(tmp_path, "d1", h)

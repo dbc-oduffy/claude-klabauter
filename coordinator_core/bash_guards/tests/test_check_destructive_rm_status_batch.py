@@ -9,6 +9,7 @@ import pytest
 from coordinator_core.bash_guards import _dc_rm
 from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -27,7 +28,7 @@ def _git(*args: str, cwd: str) -> None:
     )
 
 
-def _repo_with_dirty_files(tmp_path, count: int):
+def _repo_with_dirty_files(tmp_path, count: int) -> tuple[str, list[str]]:
     repo = tmp_path / "repo"
     repo.mkdir(parents=True)
     root = str(repo)
@@ -52,7 +53,7 @@ def _count_status_spawns(monkeypatch, root: str, targets: list[str]):
     original = dc._run_git
     status_calls: list[tuple] = []
 
-    def counting(args, *a, **k):
+    def counting(args, *a, **k) -> tuple[int, str]:
         if "status" in args:
             status_calls.append(tuple(args))
         return original(args, *a, **k)
@@ -65,7 +66,7 @@ def _count_status_spawns(monkeypatch, root: str, targets: list[str]):
     return verdict, status_calls
 
 
-def test_status_spawn_count_does_not_grow_with_target_count(tmp_path, monkeypatch):
+def test_status_spawn_count_does_not_grow_with_target_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, targets = _repo_with_dirty_files(tmp_path, 5)
     _verdict, calls = _count_status_spawns(monkeypatch, root, targets)
     assert len(calls) <= 1, (
@@ -74,7 +75,7 @@ def test_status_spawn_count_does_not_grow_with_target_count(tmp_path, monkeypatc
     )
 
 
-def test_one_target_and_many_targets_cost_the_same(tmp_path, monkeypatch):
+def test_one_target_and_many_targets_cost_the_same(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root_one, one = _repo_with_dirty_files(tmp_path / "a", 1)
     _v1, calls_one = _count_status_spawns(monkeypatch, root_one, one)
     root_many, many = _repo_with_dirty_files(tmp_path / "b", 8)
@@ -85,7 +86,7 @@ def test_one_target_and_many_targets_cost_the_same(tmp_path, monkeypatch):
     )
 
 
-def test_each_target_keeps_its_own_status(tmp_path):
+def test_each_target_keeps_its_own_status(tmp_path: Path) -> None:
     root, targets = _repo_with_dirty_files(tmp_path, 3)
     _git("add", os.path.relpath(targets[1], root).replace("\\", "/"), cwd=root)
     _git("commit", "-qm", "clean-one", cwd=root)
@@ -106,12 +107,12 @@ def test_each_target_keeps_its_own_status(tmp_path):
     assert table[key(targets[2])], "an uncommitted target must keep its own rows"
 
 
-def test_unparseable_shapes_decline_rather_than_report_clean():
+def test_unparseable_shapes_decline_rather_than_report_clean() -> None:
     assert dc._attribute_porcelain(' M "odd\\303\\251.py"\n', "/repo", ["/repo/odd.py"]) is None
     assert dc._attribute_porcelain("R  old.py -> new.py\n", "/repo", ["/repo/new.py"]) is None
 
 
-def test_relative_target_resolves_against_the_payload_cwd(tmp_path, monkeypatch):
+def test_relative_target_resolves_against_the_payload_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # The warm engine's process cwd is wherever it booted, never the session's: a relative
     # target must still be found, or uncommitted work under it is deleted unguarded.
     root, _targets = _repo_with_dirty_files(tmp_path, 2)

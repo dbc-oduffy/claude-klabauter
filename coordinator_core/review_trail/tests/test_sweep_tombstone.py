@@ -2,16 +2,17 @@ import os
 
 from coordinator_core.review_trail import sweep_tombstone as st
 from coordinator_core.session import machinery_paths as mp
+from pathlib import Path
 
 
-def test_tombstone_path_is_outside_both_share_roots(tmp_path):
+def test_tombstone_path_is_outside_both_share_roots(tmp_path: Path) -> None:
     p = mp.tombstone_path(str(tmp_path), "sid1")
     for root in mp.share_roots(str(tmp_path)):
         assert not p.startswith(root + os.sep)
     assert p.endswith(os.path.join("sweep-tombstones", "sid1.jsonl"))
 
 
-def test_round_trip(tmp_path):
+def test_round_trip(tmp_path: Path) -> None:
     root = str(tmp_path)
     abs_p = os.path.join(root, ".coordinator-local", "subagent-share", "s1", "r.md")
     st.record_swept(root, "s1", [abs_p, "state/subagent-share/s1/x.md"], "reap", 1.0)
@@ -25,7 +26,7 @@ def test_round_trip(tmp_path):
     assert recs[0]["reason"]
 
 
-def test_missing_and_unreadable_give_empty(tmp_path):
+def test_missing_and_unreadable_give_empty(tmp_path: Path) -> None:
     root = str(tmp_path)
     assert st.swept_sidecars(root, "nope") == ()
     target = mp.tombstone_path(root, "bad")
@@ -33,14 +34,14 @@ def test_missing_and_unreadable_give_empty(tmp_path):
     assert st.swept_sidecars(root, "bad") == ()
 
 
-def test_two_sweepers_both_read_back(tmp_path):
+def test_two_sweepers_both_read_back(tmp_path: Path) -> None:
     root = str(tmp_path)
     st.record_swept(root, "s", ["a.md"], "reap", 1.0)
     st.record_swept(root, "s", ["b.md"], "prune", 2.0)
     assert {r["sweeper"] for r in st.swept_sidecars(root, "s", now=3.0)} == {"reap", "prune"}
 
 
-def test_age_bound_drops_old_records_but_keeps_recent(tmp_path):
+def test_age_bound_drops_old_records_but_keeps_recent(tmp_path: Path) -> None:
     root = str(tmp_path)
     st.record_swept(root, "s", ["old.md"], "reap", 1000.0)
     st.record_swept(root, "s", ["new.md"], "reap", 1000.0 + st.MAX_AGE_SECONDS)
@@ -49,7 +50,7 @@ def test_age_bound_drops_old_records_but_keeps_recent(tmp_path):
     assert len(st.swept_sidecars(root, "s", now=1001.0)) == 2
 
 
-def test_session_reuse_bound_drops_prior_incarnation(tmp_path):
+def test_session_reuse_bound_drops_prior_incarnation(tmp_path: Path) -> None:
     root = str(tmp_path)
     st.record_swept(root, "s", ["prev.md"], "reap", 100.0)
     st.record_swept(root, "s", ["cur.md"], "reap", 500.0)
@@ -58,7 +59,7 @@ def test_session_reuse_bound_drops_prior_incarnation(tmp_path):
     assert len(st.swept_sidecars(root, "s", now=600.0)) == 2
 
 
-def test_expire_tombstones_removes_only_stale_files(tmp_path):
+def test_expire_tombstones_removes_only_stale_files(tmp_path: Path) -> None:
     root = str(tmp_path)
     st.record_swept(root, "old", ["a.md"], "reap", 1.0)
     st.record_swept(root, "fresh", ["b.md"], "reap", 1.0)
@@ -70,7 +71,7 @@ def test_expire_tombstones_removes_only_stale_files(tmp_path):
     assert st.expire_tombstones(str(tmp_path / "none"), 1.0) == 0
 
 
-def test_record_never_raises_and_refuses_unsafe_id(tmp_path):
+def test_record_never_raises_and_refuses_unsafe_id(tmp_path: Path) -> None:
     root = str(tmp_path)
     os.makedirs(mp.tombstone_path(root, "x"))
     st.record_swept(root, "x", ["a.md"], "reap", 1.0)

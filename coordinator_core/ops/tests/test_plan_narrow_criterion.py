@@ -12,6 +12,7 @@ from coordinator_core.frontmatter.schema_validate import compute_grouping_digest
 from coordinator_core.ops import plan_narrow_criterion as mod
 from coordinator_core.ops import review_stamp as rs
 from coordinator_core.ops.ceremony import git_native
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -51,16 +52,16 @@ grouping_approvals:
 """
 
 
-def _plan(statement=OLD, status="approved", utterance="yes spun off", digest=DIGEST, c6="spun_off", leg="n/a"):
+def _plan(statement=OLD, status: str = "approved", utterance: str = "yes spun off", digest: str = DIGEST, c6: str = "spun_off", leg: str = "n/a") -> str:
     return TEMPLATE.format(statement=statement, status=status, utterance=utterance, digest=digest, c6=c6, leg=leg)
 
 
-def _git(root, *a):
+def _git(root, *a) -> None:
     subprocess.run(["git", *a], cwd=root, check=True, capture_output=True, **no_console_creationflags())
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _git(tmp_path, "init", "-q")
     (tmp_path / "docs/plans").mkdir(parents=True)
     commits = []
@@ -74,12 +75,12 @@ def repo(tmp_path, monkeypatch):
     return tmp_path, commits
 
 
-def _run(root, text, statement=NEW, grouping="spun_off"):
+def _run(root, text, statement=NEW, grouping: str = "spun_off"):
     (root / "docs/plans/p.md").write_text(text)
     return mod._handler({"plan": "docs/plans/p.md", "grouping": grouping, "statement": statement}, root)
 
 
-def test_narrows_writes_narrowed_by_and_commits(repo):
+def test_narrows_writes_narrowed_by_and_commits(repo) -> None:
     root, commits = repo
     res = _run(root, _plan())
     assert res["committed"] and commits == ["docs/plans/p.md"]
@@ -101,14 +102,14 @@ def test_narrows_writes_narrowed_by_and_commits(repo):
         (_plan().replace("grouping_approvals:\n  spun_off:", "grouping_approvals:\n  defer:"), "not approved"),
     ],
 )
-def test_forged_or_missing_grouping_refuses(repo, text, match):
+def test_forged_or_missing_grouping_refuses(repo, text, match) -> None:
     root, commits = repo
     with pytest.raises(ValueError, match=match):
         _run(root, text)
     assert commits == [] and (root / "docs/plans/p.md").read_text() == text
 
 
-def test_other_grouping_refuses(repo):
+def test_other_grouping_refuses(repo) -> None:
     with pytest.raises(ValueError, match="only 'spun_off'"):
         _run(repo[0], _plan(), grouping="defer")
 
@@ -118,14 +119,14 @@ def _narrowed(repo):
     return (repo[0] / "docs/plans/p.md").read_text()
 
 
-def test_forged_narrowed_by_does_not_validate(repo):
+def test_forged_narrowed_by_does_not_validate(repo) -> None:
     text = _narrowed(repo)
     assert mod.narrowing_problem(_plan()) == "plan carries no structured narrowed_by"
     assert "digest" in mod.narrowing_problem(text.replace(DIGEST, "sha256:" + "1" * 64, 1))
     assert "grouping is missing" in mod.narrowing_problem(text.replace("grouping: \"spun_off\"", "grouping: 7"))
 
 
-def test_waiver_only_for_pre_narrowing_verdict(repo):
+def test_waiver_only_for_pre_narrowing_verdict(repo) -> None:
     text = _narrowed(repo)
     nat = text.split('narrowed_at: "')[1].split('"')[0]
     nm = {"status": "not_met", "observation": "fleet leg false"}
@@ -138,14 +139,14 @@ def test_waiver_only_for_pre_narrowing_verdict(repo):
     assert nat
 
 
-def test_hint_when_row_leg_names_prime_text():
+def test_hint_when_row_leg_names_prime_text() -> None:
     named = _plan(leg=OLD)
     assert "plan.narrow_criterion" in mod.narrow_call_hint(named, ["C3"])
     assert mod.narrow_call_hint(named, ["C6"]) is None
     assert mod.narrow_call_hint(_plan(), ["C3"]) is None
 
 
-def _mint(tmp_path, plan_text, criterion, delivery="PASS", tests="pass"):
+def _mint(tmp_path, plan_text, criterion, delivery: str = "PASS", tests: str = "pass"):
     repo = tmp_path / "mrepo"
     (repo / "docs/plans").mkdir(parents=True)
     _git(repo, "init", "-q")
@@ -171,7 +172,7 @@ def _mint(tmp_path, plan_text, criterion, delivery="PASS", tests="pass"):
 NM = {"status": "not_met", "observation": "fleet leg false", "sidecar": None}
 
 
-def test_mint_accepts_pre_narrowing_not_met(repo, tmp_path):
+def test_mint_accepts_pre_narrowing_not_met(repo, tmp_path: Path) -> None:
     stamp, plan = _mint(tmp_path, _narrowed(repo), NM)
     assert stamp["criterion"]["observation"] == "criterion narrowed by spun_off; judge verdict pre-dates the narrowing"
     assert stamp["criterion"]["status"] == "not_run"
@@ -185,11 +186,11 @@ def test_mint_accepts_pre_narrowing_not_met(repo, tmp_path):
         (NM, "PASS", "fail"),
     ],
 )
-def test_mint_still_refuses(repo, tmp_path, criterion, delivery, tests):
+def test_mint_still_refuses(repo, tmp_path: Path, criterion, delivery, tests) -> None:
     with pytest.raises(rs.MintRefusal):
         _mint(tmp_path, _narrowed(repo), criterion, delivery, tests)
 
 
-def test_mint_refuses_not_met_on_plan_without_narrowing(tmp_path):
+def test_mint_refuses_not_met_on_plan_without_narrowing(tmp_path: Path) -> None:
     with pytest.raises(rs.MintRefusal, match="exit criterion is not_met"):
         _mint(tmp_path, _plan(), NM)

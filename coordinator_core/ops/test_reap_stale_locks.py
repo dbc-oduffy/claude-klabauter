@@ -14,6 +14,7 @@ import pytest
 
 from coordinator_core.ops import reap_stale_locks as rsl
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+from pathlib import Path
 
 # Declared, not excused: this file spawns real git because `reap_stale_locks`'s own
 # port-parity contract (against reap-stale-locks.bats/test-coordinator-reap-stale-
@@ -34,7 +35,7 @@ def _init_repo(path):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     r = _init_repo(tmp_path / "repo")
     monkeypatch.chdir(r)
     return r
@@ -46,19 +47,19 @@ def _age_file(path, secs: int) -> None:
     os.utime(path, (new_time, new_time))
 
 
-def test_not_a_git_repo(tmp_path, monkeypatch, capsys):
+def test_not_a_git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.chdir(tmp_path)
     rc = rsl.main([])
     assert rc == 1
     assert "not a git repository" in capsys.readouterr().err
 
 
-def test_clean_repo_noop_idempotent(repo):
+def test_clean_repo_noop_idempotent(repo) -> None:
     assert rsl.main([]) == 0
     assert rsl.main([]) == 0
 
 
-def test_fresh_index_lock_preserved(repo, monkeypatch):
+def test_fresh_index_lock_preserved(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     lock = repo / ".git" / "index.lock"
     lock.write_text("live-commit-index")
     monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")
@@ -67,7 +68,7 @@ def test_fresh_index_lock_preserved(repo, monkeypatch):
     assert lock.exists()
 
 
-def test_aged_stable_index_lock_reaped(repo, monkeypatch):
+def test_aged_stable_index_lock_reaped(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     lock = repo / ".git" / "index.lock"
     lock.write_text("orphan-index-copy")
     _age_file(lock, 300)
@@ -78,7 +79,7 @@ def test_aged_stable_index_lock_reaped(repo, monkeypatch):
     assert not lock.exists()
 
 
-def test_reap_writes_log_entry(repo, monkeypatch):
+def test_reap_writes_log_entry(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     lock = repo / ".git" / "index.lock"
     lock.write_text("orphan")
     _age_file(lock, 300)
@@ -91,12 +92,12 @@ def test_reap_writes_log_entry(repo, monkeypatch):
     assert "reaped stale index.lock" in log.read_text()
 
 
-def test_aged_but_mutating_index_lock_preserved(repo, monkeypatch):
+def test_aged_but_mutating_index_lock_preserved(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     lock = repo / ".git" / "index.lock"
     lock.write_text("start")
     _age_file(lock, 300)
 
-    def mutate():
+    def mutate() -> None:
         with open(lock, "a", encoding="utf-8") as f:
             f.write("x")
 
@@ -113,12 +114,12 @@ def test_aged_but_mutating_index_lock_preserved(repo, monkeypatch):
     assert lock.exists()
 
 
-def test_aged_but_mtime_mutating_index_lock_preserved(repo):
+def test_aged_but_mtime_mutating_index_lock_preserved(repo) -> None:
     lock = repo / ".git" / "index.lock"
     lock.write_text("fixed")
     _age_file(lock, 300)
 
-    def touch_only():
+    def touch_only() -> None:
         os.utime(lock, None)
 
     rc = rsl.do_reap(
@@ -134,7 +135,7 @@ def test_aged_but_mtime_mutating_index_lock_preserved(repo):
     assert lock.exists()
 
 
-def test_next_index_lock_reaped(repo, monkeypatch):
+def test_next_index_lock_reaped(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     lock = repo / ".git" / "next-index-12345.lock"
     lock.write_text("orphan")
     _age_file(lock, 300)
@@ -145,7 +146,7 @@ def test_next_index_lock_reaped(repo, monkeypatch):
     assert not lock.exists()
 
 
-def test_fresh_maintenance_lock_preserved_even_with_zero_index_floor(repo, monkeypatch):
+def test_fresh_maintenance_lock_preserved_even_with_zero_index_floor(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     objects_dir = repo / ".git" / "objects"
     objects_dir.mkdir(parents=True, exist_ok=True)
     lock = objects_dir / "maintenance.lock"
@@ -157,7 +158,7 @@ def test_fresh_maintenance_lock_preserved_even_with_zero_index_floor(repo, monke
     assert lock.exists()
 
 
-def test_stale_maintenance_lock_reaped_under_its_own_floor(repo, monkeypatch):
+def test_stale_maintenance_lock_reaped_under_its_own_floor(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     objects_dir = repo / ".git" / "objects"
     objects_dir.mkdir(parents=True, exist_ok=True)
     lock = objects_dir / "maintenance.lock"
@@ -170,7 +171,7 @@ def test_stale_maintenance_lock_reaped_under_its_own_floor(repo, monkeypatch):
     assert not lock.exists()
 
 
-def test_maintenance_lock_younger_than_maint_floor_preserved(repo, monkeypatch):
+def test_maintenance_lock_younger_than_maint_floor_preserved(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     objects_dir = repo / ".git" / "objects"
     objects_dir.mkdir(parents=True, exist_ok=True)
     lock = objects_dir / "maintenance.lock"
@@ -188,7 +189,7 @@ def test_maintenance_lock_younger_than_maint_floor_preserved(repo, monkeypatch):
 # `git rev-parse --git-common-dir`, which differs from `--git-dir` inside a linked
 # worktree. Neither bash oracle nor the rest of this file exercised that branch;
 # this closes the gap the module's own docstring calls out (lines 41-43).
-def test_maintenance_lock_reaped_via_common_dir_from_linked_worktree(repo, monkeypatch, tmp_path):
+def test_maintenance_lock_reaped_via_common_dir_from_linked_worktree(repo, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # `repo` needs a commit before `git worktree add` can check out a branch into it.
     (repo / "seed.txt").write_text("seed")
     subprocess.run(["git", "add", "seed.txt"], cwd=str(repo), check=True, **no_console_passthrough_kwargs())
@@ -216,7 +217,7 @@ def test_maintenance_lock_reaped_via_common_dir_from_linked_worktree(repo, monke
     assert not maint_lock.exists()
 
 
-def test_rm_failure_returns_1(repo, monkeypatch):
+def test_rm_failure_returns_1(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     lock = repo / ".git" / "index.lock"
     lock.write_text("orphan")
     _age_file(lock, 300)
@@ -244,7 +245,7 @@ def _ref_lock(repo):
     return lock
 
 
-def test_aged_ref_lock_reaped(repo, monkeypatch):
+def test_aged_ref_lock_reaped(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     lock = _ref_lock(repo)
     _age_file(lock, 300)
     monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")
@@ -252,7 +253,7 @@ def test_aged_ref_lock_reaped(repo, monkeypatch):
     assert not lock.exists()
 
 
-def test_aged_ref_lock_reaped_via_relative_path(repo, monkeypatch):
+def test_aged_ref_lock_reaped_via_relative_path(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     lock = _ref_lock(repo)
     _age_file(lock, 300)
     monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")
@@ -260,18 +261,18 @@ def test_aged_ref_lock_reaped_via_relative_path(repo, monkeypatch):
     assert not lock.exists()
 
 
-def test_fresh_ref_lock_kept(repo, monkeypatch):
+def test_fresh_ref_lock_kept(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     lock = _ref_lock(repo)
     monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")
     assert rsl.reap_ref_lock(repo, lock) is False
     assert lock.exists()
 
 
-def test_changing_ref_lock_kept(repo, monkeypatch):
+def test_changing_ref_lock_kept(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     lock = _ref_lock(repo)
     _age_file(lock, 300)
 
-    def touch():
+    def touch() -> None:
         os.utime(lock, None)
 
     orig = rsl.stale_and_stable
@@ -280,7 +281,7 @@ def test_changing_ref_lock_kept(repo, monkeypatch):
     assert lock.exists()
 
 
-def test_lock_outside_refs_refused(repo, monkeypatch):
+def test_lock_outside_refs_refused(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")
     index_lock = repo / ".git" / "index.lock"
     index_lock.write_text("x")
@@ -292,7 +293,7 @@ def test_lock_outside_refs_refused(repo, monkeypatch):
     assert index_lock.exists()
 
 
-def test_non_lock_file_under_refs_refused(repo, monkeypatch):
+def test_non_lock_file_under_refs_refused(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")
     ref = _ref_lock(repo).with_name("branch")
     ref.write_text("deadbeef")

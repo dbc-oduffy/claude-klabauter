@@ -19,6 +19,7 @@ import subprocess
 import sys
 
 import pytest
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -39,7 +40,7 @@ sys.modules[_spec.name] = gate
 _spec.loader.exec_module(gate)  # type: ignore[union-attr]
 
 
-def write(path, content):
+def write(path, content) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(content)
@@ -82,13 +83,13 @@ python3 -m pytest coordinator_core
 """
 
 
-def _write_full_tree(root):
+def _write_full_tree(root) -> None:
     write(os.path.join(root, "INSTALL.md"), INSTALL_MD_TEMPLATE)
     write(os.path.join(root, "scripts", "setup.py"), "# setup\n")
     write(os.path.join(root, "bin", "claude-klabauter-doctor-probe.py"), "# probe\n")
 
 
-def test_original_p0_missing_installer_fails(tmp_path):
+def test_original_p0_missing_installer_fails(tmp_path: Path) -> None:
     root = str(tmp_path)
     write(os.path.join(root, "INSTALL.md"), INSTALL_MD_TEMPLATE)
     write(os.path.join(root, "bin", "claude-klabauter-doctor-probe.py"), "# probe\n")
@@ -104,7 +105,7 @@ def test_original_p0_missing_installer_fails(tmp_path):
     assert "scripts/setup.py" in err or "scripts/setup.py" in out
 
 
-def test_complete_tree_passes(tmp_path):
+def test_complete_tree_passes(tmp_path: Path) -> None:
     root = str(tmp_path)
     _write_full_tree(root)
 
@@ -116,7 +117,7 @@ def test_complete_tree_passes(tmp_path):
     assert "clean" in out
 
 
-def test_new_doc_reference_fails_until_file_present(tmp_path):
+def test_new_doc_reference_fails_until_file_present(tmp_path: Path) -> None:
     root = str(tmp_path)
     _write_full_tree(root)
 
@@ -135,7 +136,7 @@ def test_new_doc_reference_fails_until_file_present(tmp_path):
     assert findings_after == []
 
 
-def test_windows_twin_checked_independently(tmp_path):
+def test_windows_twin_checked_independently(tmp_path: Path) -> None:
     root = str(tmp_path)
     write(
         os.path.join(root, "INSTALL.md"),
@@ -153,7 +154,7 @@ def test_windows_twin_checked_independently(tmp_path):
     assert findings == []
 
 
-def test_windows_only_broken_twin_fails_independently(tmp_path):
+def test_windows_only_broken_twin_fails_independently(tmp_path: Path) -> None:
     root = str(tmp_path)
     write(
         os.path.join(root, "INSTALL.md"),
@@ -174,7 +175,7 @@ def test_windows_only_broken_twin_fails_independently(tmp_path):
     assert rc == 1
 
 
-def test_extract_script_paths_skips_module_and_inline_flags():
+def test_extract_script_paths_skips_module_and_inline_flags() -> None:
     assert gate.extract_script_paths("python3 -m pip install .") == []
     assert gate.extract_script_paths("python3 -m pytest coordinator_core") == []
     assert (
@@ -186,7 +187,7 @@ def test_extract_script_paths_skips_module_and_inline_flags():
     assert gate.extract_script_paths("python3 -m coordinator_core.invoke <op> '<json>'") == []
 
 
-def test_extract_script_paths_finds_real_targets():
+def test_extract_script_paths_finds_real_targets() -> None:
     assert gate.extract_script_paths("python3 scripts/setup.py --i-am-agent") == [
         "scripts/setup.py"
     ]
@@ -196,13 +197,13 @@ def test_extract_script_paths_finds_real_targets():
     ) == [".github/scripts/run-all-checks.py"]
 
 
-def test_inline_backtick_span_is_scanned():
+def test_inline_backtick_span_is_scanned() -> None:
     root_text = "Windows: `python scripts\\setup.py` with the same flags.\n"
     spans = list(gate._iter_code_spans(root_text))
     assert any("scripts\\setup.py" in snippet for _, snippet, _ in spans)
 
 
-def test_absolute_paths_are_not_flagged(tmp_path):
+def test_absolute_paths_are_not_flagged(tmp_path: Path) -> None:
     root = str(tmp_path)
     write(
         os.path.join(root, "INSTALL.md"),
@@ -212,7 +213,7 @@ def test_absolute_paths_are_not_flagged(tmp_path):
     assert findings == []
 
 
-def test_real_klabauter_toplevel_fixture_reproduces_p0():
+def test_real_klabauter_toplevel_fixture_reproduces_p0() -> None:
     """Sanity-check against the real dist/klabauter-toplevel tree (read-only) —
     at time of writing it genuinely reproduces the original P0 (INSTALL.md
     references scripts/setup.py; no scripts/ directory ships). Read-only:
@@ -238,7 +239,7 @@ def test_real_klabauter_toplevel_fixture_reproduces_p0():
 # ---------------------------------------------------------------------------
 
 
-def test_prose_link_to_missing_file_fails(tmp_path):
+def test_prose_link_to_missing_file_fails(tmp_path: Path) -> None:
     root = str(tmp_path)
     write(
         os.path.join(root, "INSTALL.md"),
@@ -256,7 +257,7 @@ def test_prose_link_to_missing_file_fails(tmp_path):
     assert "docs/reference/install-chain-walk.md" in err or "docs/reference/install-chain-walk.md" in out
 
 
-def test_link_to_present_file_passes(tmp_path):
+def test_link_to_present_file_passes(tmp_path: Path) -> None:
     root = str(tmp_path)
     write(
         os.path.join(root, "INSTALL.md"),
@@ -268,7 +269,7 @@ def test_link_to_present_file_passes(tmp_path):
     assert findings == []
 
 
-def test_link_to_directory_is_not_flagged(tmp_path):
+def test_link_to_directory_is_not_flagged(tmp_path: Path) -> None:
     root = str(tmp_path)
     write(os.path.join(root, "INSTALL.md"), "See [the docs dir](docs/reference/) for more.\n")
     os.makedirs(os.path.join(root, "docs", "reference"), exist_ok=True)
@@ -277,7 +278,7 @@ def test_link_to_directory_is_not_flagged(tmp_path):
     assert findings == []
 
 
-def test_external_url_and_anchor_and_mailto_not_flagged(tmp_path):
+def test_external_url_and_anchor_and_mailto_not_flagged(tmp_path: Path) -> None:
     root = str(tmp_path)
     write(
         os.path.join(root, "INSTALL.md"),
@@ -290,7 +291,7 @@ def test_external_url_and_anchor_and_mailto_not_flagged(tmp_path):
     assert findings == []
 
 
-def test_link_resolving_outside_tree_root_not_flagged(tmp_path):
+def test_link_resolving_outside_tree_root_not_flagged(tmp_path: Path) -> None:
     root = str(tmp_path / "sub")
     write(os.path.join(root, "INSTALL.md"), "[escape](../outside.md)\n")
     # "../outside.md" resolves outside `root` entirely -- out of scope for
@@ -300,7 +301,7 @@ def test_link_resolving_outside_tree_root_not_flagged(tmp_path):
     assert findings == []
 
 
-def test_link_with_fragment_checks_the_file_not_the_anchor(tmp_path):
+def test_link_with_fragment_checks_the_file_not_the_anchor(tmp_path: Path) -> None:
     root = str(tmp_path)
     write(
         os.path.join(root, "INSTALL.md"),
@@ -312,7 +313,7 @@ def test_link_with_fragment_checks_the_file_not_the_anchor(tmp_path):
     assert findings == []  # the file exists; the anchor's own validity is not checked
 
 
-def test_leading_slash_link_target_not_flagged(tmp_path):
+def test_leading_slash_link_target_not_flagged(tmp_path: Path) -> None:
     root = str(tmp_path)
     write(os.path.join(root, "INSTALL.md"), "[abs-style](/docs/reference/missing.md)\n")
     # Leading "/" is ambiguous (GitHub repo-root convention vs filesystem-
@@ -322,7 +323,7 @@ def test_leading_slash_link_target_not_flagged(tmp_path):
     assert findings == []
 
 
-def test_extract_relative_link_targets_filters_excluded_classes():
+def test_extract_relative_link_targets_filters_excluded_classes() -> None:
     text = (
         "[a](docs/x.md) [b](https://example.com) [c](#anchor) "
         "[d](/abs/path.md) [e](mailto:x@example.com)\n"
@@ -348,13 +349,13 @@ Run validation locally: `python .github/scripts/run-all-checks.py`
 """
 
 
-def _write_bare_name_tree(root):
+def _write_bare_name_tree(root) -> None:
     write(os.path.join(root, "CONTRIBUTING.md"), BARE_NAME_DOC)
     write(os.path.join(root, ".github", "scripts", "run-all-checks.py"), "# checks\n")
     write(os.path.join(root, ".github", "scripts", "validate-references.py"), "# refs\n")
 
 
-def test_bare_basename_resolves_in_demonstrated_script_home(tmp_path):
+def test_bare_basename_resolves_in_demonstrated_script_home(tmp_path: Path) -> None:
     root = str(tmp_path)
     _write_bare_name_tree(root)
 
@@ -366,7 +367,7 @@ def test_bare_basename_resolves_in_demonstrated_script_home(tmp_path):
     assert "clean" in out
 
 
-def test_bare_basename_absent_everywhere_still_fails(tmp_path):
+def test_bare_basename_absent_everywhere_still_fails(tmp_path: Path) -> None:
     """The regression that would be worse than the false positive: a
     genuinely retired filename must still be caught."""
     root = str(tmp_path)
@@ -383,7 +384,7 @@ def test_bare_basename_absent_everywhere_still_fails(tmp_path):
     assert "validate-references.py" in err
 
 
-def test_bare_basename_does_not_resolve_against_undemonstrated_directory(tmp_path):
+def test_bare_basename_does_not_resolve_against_undemonstrated_directory(tmp_path: Path) -> None:
     """A directory the doc set never references is not a script home, even
     though it exists and holds a same-named file — otherwise a retired
     pointer would resolve against an unrelated vendored copy."""
@@ -396,7 +397,7 @@ def test_bare_basename_does_not_resolve_against_undemonstrated_directory(tmp_pat
     assert [f.missing_path for f in findings] == ["validate-references.py"]
 
 
-def test_path_qualified_reference_is_not_searched_across_script_homes(tmp_path):
+def test_path_qualified_reference_is_not_searched_across_script_homes(tmp_path: Path) -> None:
     """Bare-name leniency must not leak into path-qualified references: a doc
     promising `scripts/setup.py` fails even though `setup.py` exists in a
     demonstrated home. This is the original P0's shape."""
@@ -412,7 +413,7 @@ def test_path_qualified_reference_is_not_searched_across_script_homes(tmp_path):
     assert [f.missing_path for f in findings] == ["scripts/setup.py"]
 
 
-def test_broken_path_qualified_reference_does_not_seed_a_script_home(tmp_path):
+def test_broken_path_qualified_reference_does_not_seed_a_script_home(tmp_path: Path) -> None:
     """A stale pointer cannot vouch for a directory it does not resolve in --
     otherwise a doc set could bootstrap a bogus home out of its own rot."""
     from pathlib import Path
@@ -426,7 +427,7 @@ def test_broken_path_qualified_reference_does_not_seed_a_script_home(tmp_path):
     assert homes == [Path(root)]
 
 
-def test_script_home_derived_from_one_doc_serves_a_bare_name_in_another(tmp_path):
+def test_script_home_derived_from_one_doc_serves_a_bare_name_in_another(tmp_path: Path) -> None:
     root = str(tmp_path)
     write(os.path.join(root, "INSTALL.md"), "```\npython3 .github/scripts/run-all-checks.py\n```\n")
     write(os.path.join(root, "CONTRIBUTING.md"), "See the `validate-references.py` script.\n")

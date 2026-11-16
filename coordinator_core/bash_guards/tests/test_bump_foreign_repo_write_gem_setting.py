@@ -27,6 +27,7 @@ from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
     _clean_bump_env,  # noqa: F401 -- reused fixture
 )
 from coordinator_core.group_em import nomination
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -56,7 +57,7 @@ def _run(repos, cmd, sid=GEM_SID, payload=None):
 
 
 @pytest.mark.parametrize("value", [None, "on"])
-def test_scoped_commit_allowed_when_on_or_unset(repos, monkeypatch, value):
+def test_scoped_commit_allowed_when_on_or_unset(repos, monkeypatch: pytest.MonkeyPatch, value) -> None:
     _set_anchor(monkeypatch, repos, GEM_SID)
     _live(monkeypatch)
     _setting(monkeypatch, value)
@@ -74,8 +75,8 @@ def test_scoped_commit_allowed_when_on_or_unset(repos, monkeypatch, value):
     ],
 )
 def test_live_gem_pathspec_from_file_is_allowed_on_and_refused_off(
-    repos, monkeypatch, tmp_path, sub  # noqa: F811
-):
+    repos, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sub  # noqa: F811
+) -> None:
     listing = tmp_path / "paths.txt"
     listing.write_text("f.txt\n", encoding="utf-8")
     cmd = "git -C %s %s" % (_posix(repos["foreign"]), sub % _posix(listing))
@@ -93,7 +94,7 @@ def test_live_gem_pathspec_from_file_is_allowed_on_and_refused_off(
 
 
 @pytest.mark.parametrize("sub", ["push", "add -A", "commit -a -m x"])
-def test_unscoped_write_keeps_ordinary_clearable_bump_when_on(repos, monkeypatch, sub):
+def test_unscoped_write_keeps_ordinary_clearable_bump_when_on(repos, monkeypatch: pytest.MonkeyPatch, sub) -> None:
     _set_anchor(monkeypatch, repos, GEM_SID)
     _live(monkeypatch)
     _setting(monkeypatch, "on")
@@ -103,7 +104,7 @@ def test_unscoped_write_keeps_ordinary_clearable_bump_when_on(repos, monkeypatch
     assert _run(repos, cmd) is None
 
 
-def test_off_refuses_with_gem_message_and_marker_does_not_clear(repos, monkeypatch):
+def test_off_refuses_with_gem_message_and_marker_does_not_clear(repos, monkeypatch: pytest.MonkeyPatch) -> None:
     _set_anchor(monkeypatch, repos, GEM_SID)
     _live(monkeypatch)
     _setting(monkeypatch, "off")
@@ -114,7 +115,7 @@ def test_off_refuses_with_gem_message_and_marker_does_not_clear(repos, monkeypat
     assert _run(repos, _scoped(repos)) is not None
 
 
-def test_off_returns_none_when_environment_stands_the_bump_down(repos, monkeypatch):
+def test_off_returns_none_when_environment_stands_the_bump_down(repos, monkeypatch: pytest.MonkeyPatch) -> None:
     _set_anchor(monkeypatch, repos, GEM_SID)
     _live(monkeypatch)
     _setting(monkeypatch, "off")
@@ -123,14 +124,14 @@ def test_off_returns_none_when_environment_stands_the_bump_down(repos, monkeypat
     assert _run(repos, _scoped(repos)) is None
 
 
-def _subagent(repos, monkeypatch):
+def _subagent(repos, monkeypatch) -> dict[str, str]:
     d = hub_for_common(repos["anchor"] / ".git") / ".agents" / "agent-1"
     d.mkdir(parents=True)
     (d / "em-session-id.txt").write_text(GEM_SID + "\n", encoding="utf-8")
     return {"agent_id": "agent-1"}
 
 
-def test_subagent_inherits_group_em_disposition(repos, monkeypatch):
+def test_subagent_inherits_group_em_disposition(repos, monkeypatch: pytest.MonkeyPatch) -> None:
     _set_anchor(monkeypatch, repos, "sess-sub-1")
     payload = _subagent(repos, monkeypatch)
     _live(monkeypatch)
@@ -141,7 +142,7 @@ def test_subagent_inherits_group_em_disposition(repos, monkeypatch):
 
 
 @pytest.mark.parametrize("value", ["on", "off"])
-def test_non_group_em_gets_ordinary_clearable_bump(repos, monkeypatch, value):
+def test_non_group_em_gets_ordinary_clearable_bump(repos, monkeypatch: pytest.MonkeyPatch, value) -> None:
     _set_anchor(monkeypatch, repos, "sess-plain")
     _live(monkeypatch, holder_sid="someone-else")
     _setting(monkeypatch, value)
@@ -150,7 +151,7 @@ def test_non_group_em_gets_ordinary_clearable_bump(repos, monkeypatch, value):
     assert _run(repos, _scoped(repos), sid="sess-plain") is None
 
 
-def test_plain_sink_is_ordinary_bump_even_for_live_group_em(repos, monkeypatch):
+def test_plain_sink_is_ordinary_bump_even_for_live_group_em(repos, monkeypatch: pytest.MonkeyPatch) -> None:
     _set_anchor(monkeypatch, repos, GEM_SID)
     _live(monkeypatch)
     _setting(monkeypatch, "on")
@@ -158,7 +159,7 @@ def test_plain_sink_is_ordinary_bump_even_for_live_group_em(repos, monkeypatch):
     assert _run(repos, cmd) is not None
 
 
-def test_standing_read_failure_fails_open_to_ordinary_bump(repos, monkeypatch):
+def test_standing_read_failure_fails_open_to_ordinary_bump(repos, monkeypatch: pytest.MonkeyPatch) -> None:
     _set_anchor(monkeypatch, repos, GEM_SID)
 
     def boom(root=None):
@@ -171,12 +172,12 @@ def test_standing_read_failure_fails_open_to_ordinary_bump(repos, monkeypatch):
     assert _run(repos, _scoped(repos)) is None
 
 
-def _count_spawns(monkeypatch):
+def _count_spawns(monkeypatch) -> dict[str, int]:
     counts = {"n": 0}
     real_popen = subprocess.Popen
 
     class CountingPopen(real_popen):
-        def __init__(self, *a, **k):
+        def __init__(self, *a, **k) -> None:
             counts["n"] += 1
             super().__init__(*a, **k)
 
@@ -197,7 +198,7 @@ def _sandbox_reset() -> None:
     engine.reset_resolve_git_root_cache()
 
 
-def test_group_em_paths_add_no_spawns_over_an_ordinary_bump(repos, monkeypatch):
+def test_group_em_paths_add_no_spawns_over_an_ordinary_bump(repos, monkeypatch: pytest.MonkeyPatch) -> None:
     _set_anchor(monkeypatch, repos, GEM_SID)
     cmd = _scoped(repos)
     _live(monkeypatch, holder_sid="someone-else")

@@ -7,6 +7,7 @@ from coordinator_core.ops.dispatch_emit.emit import _INDETERMINATE_RECONCILE_CLA
 from coordinator_core.ops.dispatch_emit.land_run_contract import OP_NAME, RECONCILE_CLAUSE
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
 from coordinator_core.ops.dispatch_emit.tests.test_invoke_prompts_carry_reconcile_clause import _prompts
+import pytest
 
 _TERMINAL = f"coordinator-invoke {OP_NAME} --params-file"
 
@@ -23,20 +24,20 @@ def _assert_terminal_clause_once(script: str) -> None:
         assert _INDETERMINATE_RECONCILE_CLAUSE not in prompt
 
 
-def test_raw_prompt_arm():
+def test_raw_prompt_arm() -> None:
     _assert_terminal_clause_once(_compose(in_run_commit=True))
 
 
-def test_sizing_arm(monkeypatch):
+def test_sizing_arm(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "xs")
     _assert_terminal_clause_once(_compose(prompt=None, sizing_rel="state/sizings/x.yaml", in_run_commit=True))
 
 
-def test_commit_schema_admits_already_landed():
+def test_commit_schema_admits_already_landed() -> None:
     assert ask_compose._COMMIT_SCHEMA["properties"]["already_landed"]["type"] == ["boolean", "null"]
 
 
-def test_commit_stage_returns_already_landed_and_the_halt_records_it():
+def test_commit_stage_returns_already_landed_and_the_halt_records_it() -> None:
     script = _compose(in_run_commit=True)
     for prompt in _commit_prompts(script):
         assert "already_landed" in prompt

@@ -35,10 +35,11 @@ import json
 from coordinator_core.contract.cockpit_schema import CONTRACT_VERSION, ENTITY_SCHEMAS
 from coordinator_core.contract.cockpit_schema.emit_schema import emit_schemas
 from coordinator_core.contract.cockpit_schema.tests.conftest import skip_no_schema
+from pathlib import Path
 
 
 @skip_no_schema
-def test_every_committed_schema_file_matches_fresh_emit(tmp_path, schema_dir):
+def test_every_committed_schema_file_matches_fresh_emit(tmp_path: Path, schema_dir) -> None:
     fresh_dir = tmp_path / "fresh-emit"
     emit_schemas(ENTITY_SCHEMAS, out_dir=fresh_dir)
 
@@ -67,6 +68,6 @@ def test_every_committed_schema_file_matches_fresh_emit(tmp_path, schema_dir):
 
 
 @skip_no_schema
-def test_committed_bundle_version_matches_contract_version(schema_dir):
+def test_committed_bundle_version_matches_contract_version(schema_dir) -> None:
     bundle = json.loads((schema_dir / "cockpit-contract.schema.json").read_text(encoding="utf-8"))
     assert bundle["version"] == CONTRACT_VERSION

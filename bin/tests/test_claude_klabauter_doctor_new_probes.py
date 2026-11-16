@@ -545,7 +545,7 @@ class _FakeProc:
         self.info = info
 
 
-def _make_fake_psutil(procs, alive_pids):
+def _make_fake_psutil(procs, alive_pids) -> ModuleType:
     import types
 
     fake = types.ModuleType("psutil")
@@ -691,7 +691,7 @@ class TestOrphanedExecnetGatewaysProbe:
         def _raise(pid):
             raise OSError("indeterminate liveness read")
 
-        fake_psutil.pid_exists = _raise
+        setattr(fake_psutil, "pid_exists", _raise)
         monkeypatch.setitem(sys.modules, "psutil", fake_psutil)
 
         result = mod._run_probe_orphaned_execnet_gateways()

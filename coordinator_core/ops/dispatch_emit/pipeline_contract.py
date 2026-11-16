@@ -226,7 +226,7 @@ def stage_phase(stage: Stage) -> str:
 class PipelineEmitRefused(ValueError):
     """An unemittable manifest or input; reasons holds every refusal, one line each."""
 
-    def __init__(self, reasons: list[str]):
+    def __init__(self, reasons: list[str]) -> None:
         super().__init__("\n".join(reasons))
         self.reasons = reasons
 

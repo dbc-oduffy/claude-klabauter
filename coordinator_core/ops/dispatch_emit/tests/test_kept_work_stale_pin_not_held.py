@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import kept_work
 from coordinator_core.ops.dispatch_emit.tests._kept_fixture import git, hold_kept
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -29,14 +30,14 @@ def _commit(root, data: bytes) -> None:
     git(root, "commit", "-q", "-m", "y")
 
 
-def test_pin_matching_neither_head_nor_working_is_not_held(tmp_path):
+def test_pin_matching_neither_head_nor_working_is_not_held(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     hold_kept(root, "run-a", [REL])
     _commit(root, b"moved on\n")
     assert kept_work.held_paths(root, [REL]) == {}
 
 
-def test_pin_matching_working_bytes_still_holds(tmp_path):
+def test_pin_matching_working_bytes_still_holds(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     hold_kept(root, "run-a", [REL])
     _commit(root, b"moved on\n")
@@ -44,14 +45,14 @@ def test_pin_matching_working_bytes_still_holds(tmp_path):
     assert kept_work.held_paths(root, [REL]) == {REL: "run-a"}
 
 
-def test_pin_matching_head_blob_still_holds(tmp_path):
+def test_pin_matching_head_blob_still_holds(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     hold_kept(root, "run-a", [REL])
     (root / REL).write_bytes(b"worktree drift\n")
     assert kept_work.held_paths(root, [REL]) == {REL: "run-a"}
 
 
-def test_stale_pin_of_one_run_does_not_hide_a_live_peer(tmp_path):
+def test_stale_pin_of_one_run_does_not_hide_a_live_peer(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     hold_kept(root, "run-a", [REL])
     _commit(root, b"moved on\n")

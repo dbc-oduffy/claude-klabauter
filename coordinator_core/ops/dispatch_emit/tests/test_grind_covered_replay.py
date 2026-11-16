@@ -2,6 +2,7 @@
 import json
 
 from coordinator_core.ops.dispatch_emit import grind_covered_replay as probe
+import pytest
 
 _LESSONS = {
     "triage": {
@@ -18,7 +19,7 @@ _LESSONS = {
 }
 
 
-def test_report_carries_the_four_measures_and_covers_exactly_the_three_covered_rows():
+def test_report_carries_the_four_measures_and_covers_exactly_the_three_covered_rows() -> None:
     report = probe.replay(_LESSONS)
     for key in ("agent_calls_total", "agent_calls_per_covered_row", "covered_row_verify_calls", "covered_row_handbacks"):
         assert key in report
@@ -26,13 +27,13 @@ def test_report_carries_the_four_measures_and_covers_exactly_the_three_covered_r
     assert sorted(report["covered_row_handbacks"]) == sorted(probe.COVERED_ROWS)
 
 
-def test_total_is_the_sum_of_the_per_kind_counts_and_every_covered_row_is_verified():
+def test_total_is_the_sum_of_the_per_kind_counts_and_every_covered_row_is_verified() -> None:
     report = probe.replay(_LESSONS)
     assert report["agent_calls_total"] == sum(report["agent_calls_by_kind"].values())
     assert all(n >= 1 for n in report["covered_row_verify_calls"].values())
 
 
-def test_the_six_ordinary_rows_always_land_and_each_covered_row_ends_closed_or_handed_back_once():
+def test_the_six_ordinary_rows_always_land_and_each_covered_row_ends_closed_or_handed_back_once() -> None:
     report = probe.replay(_LESSONS)
     assert report["agent_calls_by_kind"]["commit"] == 1
     for rid, types in report["covered_row_handbacks"].items():
@@ -40,14 +41,14 @@ def test_the_six_ordinary_rows_always_land_and_each_covered_row_ends_closed_or_h
         assert all(t == "rejected-after-retry" for t in types) or not types
 
 
-def test_a_covered_row_found_at_the_discard_node_is_not_reported_covered():
+def test_a_covered_row_found_at_the_discard_node_is_not_reported_covered() -> None:
     routing = {**_LESSONS, "triage": {**_LESSONS["triage"], "edges": {"script-edit": "verify-routing-discard", "discard": "verify-routing-discard"}}}
     reply = probe._verify_reply("r0", "verify-routing-discard", routing)
     assert reply == {"outcome": "pass"}
     assert probe._verify_reply("r0", "verify-routing-fix", _LESSONS)["covered_by"] == probe.COVERED_BY
 
 
-def test_a_post_fix_verify_of_the_fix_covered_row_reports_covered_with_an_undo_and_ordinary_rows_pass():
+def test_a_post_fix_verify_of_the_fix_covered_row_reports_covered_with_an_undo_and_ordinary_rows_pass() -> None:
     reply = probe._verify_reply("r2", "verify", _LESSONS)
     assert reply["outcome"] == "fail" and reply["covered_by"] == probe.COVERED_BY
     assert reply["undo"]["outcome"] == "undone"
@@ -55,7 +56,7 @@ def test_a_post_fix_verify_of_the_fix_covered_row_reports_covered_with_an_undo_a
     assert probe._verify_reply("r5", "verify-routing-fix", _LESSONS) == {"outcome": "pass"}
 
 
-def test_a_wiki_new_row_covered_at_verify_routing_closes_without_rejected_after_retry_in_two_calls():
+def test_a_wiki_new_row_covered_at_verify_routing_closes_without_rejected_after_retry_in_two_calls() -> None:
     """Live F10 sequence on the real lessons routing: triage wiki-new, verify-routing-fix fails with covered_by,
     the retire route's own verify also fails with covered_by. A covered flip is terminal."""
     routing = {**_LESSONS, "triage": {**_LESSONS["triage"], "edges": {**_LESSONS["triage"]["edges"], "wiki-new": "verify-routing-fix"}}}
@@ -66,7 +67,7 @@ def test_a_wiki_new_row_covered_at_verify_routing_closes_without_rejected_after_
     assert len(out["calls_after_triage"]) <= 2
 
 
-def test_a_discard_row_whose_routing_verify_agrees_it_is_covered_closes_in_exactly_one_verify_call():
+def test_a_discard_row_whose_routing_verify_agrees_it_is_covered_closes_in_exactly_one_verify_call() -> None:
     calls = []
 
     def agent(kind, unit):
@@ -87,7 +88,7 @@ def test_a_discard_row_whose_routing_verify_agrees_it_is_covered_closes_in_exact
     assert not [h for h in result["handed_back"] if h["row"] == "r0" and h["type"] != "commit-failed"]
 
 
-def test_main_prints_the_report_as_json_and_exits_zero(monkeypatch, capsys):
+def test_main_prints_the_report_as_json_and_exits_zero(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(probe, "lessons_routing", lambda: _LESSONS)
     assert probe.main() == 0
     printed = json.loads(capsys.readouterr().out)

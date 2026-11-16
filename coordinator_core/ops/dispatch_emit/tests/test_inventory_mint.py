@@ -13,6 +13,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import inventory_mint as im
 from coordinator_core.ops.dispatch_emit.emit import _BRIEF_PRECEDENCE_CLAUSE, emit_script
 from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -48,7 +49,7 @@ _LIVE_AND_CLOSED_INVENTORY = textwrap.dedent(
 )
 
 
-def test_live_dispositions_including_pending_are_minted_routed_out_is_dropped():
+def test_live_dispositions_including_pending_are_minted_routed_out_is_dropped() -> None:
     rows = im.parse_chunk_table(_LIVE_AND_CLOSED_INVENTORY)
     minted = im.mint_rows(rows)
     minted_ids = {row["id"] for row in minted}
@@ -56,7 +57,7 @@ def test_live_dispositions_including_pending_are_minted_routed_out_is_dropped():
     assert minted_ids == {"C1", "C2", "C3"}
 
 
-def test_pending_is_live_routed_out_is_classified_closed():
+def test_pending_is_live_routed_out_is_classified_closed() -> None:
     assert im._is_live_disposition("pending — not yet started") is True
     assert im._is_live_disposition("routed out — premise moved") is False
     assert im._is_live_disposition("in_progress") is True
@@ -82,13 +83,13 @@ _UNREADABLE_FOOTPRINT_INVENTORY = textwrap.dedent(
 )
 
 
-def test_unreadable_footprint_refuses():
+def test_unreadable_footprint_refuses() -> None:
     rows = im.parse_chunk_table(_UNREADABLE_FOOTPRINT_INVENTORY)
     with pytest.raises(im.FootprintUnreadableError):
         im.mint_rows(rows)
 
 
-def test_empty_footprint_on_a_live_row_refuses():
+def test_empty_footprint_on_a_live_row_refuses() -> None:
     rows = im.parse_chunk_table(_LIVE_AND_CLOSED_INVENTORY)
     # Flip C3 to LIVE with an empty footprint to exercise the empty-writes
     # refusal -- C3 carries a real footprint in the shared fixture now that
@@ -101,7 +102,7 @@ def test_empty_footprint_on_a_live_row_refuses():
         im.mint_rows(rows)
 
 
-def test_chunk_table_absent_raises():
+def test_chunk_table_absent_raises() -> None:
     with pytest.raises(im.ChunkTableAbsentError):
         im.parse_chunk_table("---\nrun_id: x\n---\n\nNo table here.\n")
 
@@ -126,7 +127,7 @@ _ESCAPED_PIPE_INVENTORY = textwrap.dedent(
 )
 
 
-def test_escaped_pipe_inside_a_cell_does_not_split_the_column():
+def test_escaped_pipe_inside_a_cell_does_not_split_the_column() -> None:
     rows = im.parse_chunk_table(_ESCAPED_PIPE_INVENTORY)
     assert len(rows) == 1
     assert rows[0]["summary"] == "a | b summary"
@@ -153,13 +154,13 @@ _ANNOTATED_FOOTPRINT_INVENTORY = textwrap.dedent(
 )
 
 
-def test_backticked_path_with_trailing_prose_is_kept_prose_discarded():
+def test_backticked_path_with_trailing_prose_is_kept_prose_discarded() -> None:
     rows = im.parse_chunk_table(_ANNOTATED_FOOTPRINT_INVENTORY)
     minted = im.mint_rows(rows)
     assert minted[0]["writes"] == ["coordinator_core/fixture_a.py"]
 
 
-def test_footprint_with_no_backticked_path_names_the_rule():
+def test_footprint_with_no_backticked_path_names_the_rule() -> None:
     rows = im.parse_chunk_table(_UNREADABLE_FOOTPRINT_INVENTORY)
     with pytest.raises(im.FootprintUnreadableError, match="backtick-quoted path"):
         im.mint_rows(rows)
@@ -185,7 +186,7 @@ _GLOB_FOOTPRINT_INVENTORY = textwrap.dedent(
 )
 
 
-def test_glob_footprint_refuses_at_mint_naming_the_rule():
+def test_glob_footprint_refuses_at_mint_naming_the_rule() -> None:
     rows = im.parse_chunk_table(_GLOB_FOOTPRINT_INVENTORY)
     with pytest.raises(im.GlobFootprintError, match="unbounded pathspec"):
         im.mint_rows(rows)
@@ -211,7 +212,7 @@ _APP_ROUTER_FOOTPRINT_INVENTORY = textwrap.dedent(
 )
 
 
-def test_app_router_footprint_is_literal_not_glob():
+def test_app_router_footprint_is_literal_not_glob() -> None:
     rows = im.parse_chunk_table(_APP_ROUTER_FOOTPRINT_INVENTORY)
     minted = im.mint_rows(rows)
     assert minted[0]["writes"] == [
@@ -229,7 +230,7 @@ def test_app_router_footprint_is_literal_not_glob():
         ":(literal)tests/**/*.py",
     ],
 )
-def test_is_glob_pathspec_accepts_app_router_and_literal_shapes(path):
+def test_is_glob_pathspec_accepts_app_router_and_literal_shapes(path) -> None:
     assert im.is_glob_pathspec(path) is False
 
 
@@ -244,21 +245,21 @@ def test_is_glob_pathspec_accepts_app_router_and_literal_shapes(path):
         "src/app/(main/page.tsx",
     ],
 )
-def test_is_glob_pathspec_still_refuses_real_globs(path):
+def test_is_glob_pathspec_still_refuses_real_globs(path) -> None:
     assert im.is_glob_pathspec(path) is True
 
 
-def test_as_git_pathspec_wraps_bracket_paths_in_literal_magic():
+def test_as_git_pathspec_wraps_bracket_paths_in_literal_magic() -> None:
     assert im.as_git_pathspec("src/app/(main)/players/[slug]/page.tsx") == (
         ":(literal)src/app/(main)/players/[slug]/page.tsx"
     )
 
 
-def test_as_git_pathspec_leaves_plain_paths_unchanged():
+def test_as_git_pathspec_leaves_plain_paths_unchanged() -> None:
     assert im.as_git_pathspec("coordinator_core/foo.py") == "coordinator_core/foo.py"
 
 
-def test_as_git_pathspec_is_idempotent_on_already_prefixed_paths():
+def test_as_git_pathspec_is_idempotent_on_already_prefixed_paths() -> None:
     already = ":(literal)src/app/(main)/page.tsx"
     assert im.as_git_pathspec(already) == already
 
@@ -283,7 +284,7 @@ _DIRECTORY_FOOTPRINT_INVENTORY = textwrap.dedent(
 )
 
 
-def test_directory_shaped_footprint_refuses_at_mint_naming_the_rule():
+def test_directory_shaped_footprint_refuses_at_mint_naming_the_rule() -> None:
     rows = im.parse_chunk_table(_DIRECTORY_FOOTPRINT_INVENTORY)
     with pytest.raises(
         im.DirectoryShapedFootprintError, match="directory pathspec"
@@ -313,7 +314,7 @@ _NO_TRAILING_SEP_EXISTING_DIRECTORY_INVENTORY = textwrap.dedent(
 )
 
 
-def test_directory_shaped_footprint_without_trailing_separator_refuses_at_mint():
+def test_directory_shaped_footprint_without_trailing_separator_refuses_at_mint() -> None:
     rows = im.parse_chunk_table(_NO_TRAILING_SEP_EXISTING_DIRECTORY_INVENTORY)
     with pytest.raises(
         im.DirectoryShapedFootprintError, match="directory pathspec"
@@ -336,7 +337,7 @@ _NOT_YET_EXISTING_PATH_INVENTORY = textwrap.dedent(
 )
 
 
-def test_not_yet_existing_path_is_not_refused_as_directory_shaped():
+def test_not_yet_existing_path_is_not_refused_as_directory_shaped() -> None:
     rows = im.parse_chunk_table(_NOT_YET_EXISTING_PATH_INVENTORY)
     minted = im.mint_rows(rows)
     assert minted[0]["surface"] == (
@@ -364,7 +365,7 @@ _DEP_ON_LANDED_INVENTORY = textwrap.dedent(
 )
 
 
-def test_dep_on_a_landed_row_is_satisfied_edge_dropped():
+def test_dep_on_a_landed_row_is_satisfied_edge_dropped() -> None:
     rows = im.parse_chunk_table(_DEP_ON_LANDED_INVENTORY)
     minted = im.mint_rows(rows)
     assert {row["id"] for row in minted} == {"C2"}
@@ -388,7 +389,7 @@ _DEP_ON_ROUTED_OUT_INVENTORY = textwrap.dedent(
 )
 
 
-def test_dep_on_a_routed_out_row_routes_the_dependent_out_transitively():
+def test_dep_on_a_routed_out_row_routes_the_dependent_out_transitively() -> None:
     rows = im.parse_chunk_table(_DEP_ON_ROUTED_OUT_INVENTORY)
     with pytest.warns(UserWarning, match="routed out"):
         minted = im.mint_rows(rows)
@@ -416,7 +417,7 @@ _WRITE_OVERLAP_INVENTORY = textwrap.dedent(
 )
 
 
-def test_write_overlap_edge_is_kept_alongside_non_overlapping_edge():
+def test_write_overlap_edge_is_kept_alongside_non_overlapping_edge() -> None:
     rows = im.parse_chunk_table(_WRITE_OVERLAP_INVENTORY)
     minted = im.mint_rows(rows)
     by_id = {row["id"]: row for row in minted}
@@ -453,7 +454,7 @@ _MIXED_CHANGE_KIND_INVENTORY = textwrap.dedent(
 )
 
 
-def test_change_kind_inferred_from_footprint_extension():
+def test_change_kind_inferred_from_footprint_extension() -> None:
     rows = im.parse_chunk_table(_MIXED_CHANGE_KIND_INVENTORY)
     minted = im.mint_rows(rows)
     by_id = {row["id"]: row for row in minted}
@@ -467,7 +468,7 @@ def test_change_kind_inferred_from_footprint_extension():
 # ---------------------------------------------------------------------------
 
 
-def test_mint_spine_writes_no_disk_returns_text_and_run_id_path(tmp_path):
+def test_mint_spine_writes_no_disk_returns_text_and_run_id_path(tmp_path: Path) -> None:
     inventory_path = _write_inventory(tmp_path, _LIVE_AND_CLOSED_INVENTORY)
 
     spine_text, spine_path = im.mint_spine(str(inventory_path))
@@ -482,7 +483,7 @@ def test_mint_spine_writes_no_disk_returns_text_and_run_id_path(tmp_path):
     assert "id: C4" not in spine_text  # closed (routed out)
 
 
-def test_mint_spine_inherits_deliverable_id_from_source_baton_never_mints(tmp_path):
+def test_mint_spine_inherits_deliverable_id_from_source_baton_never_mints(tmp_path: Path) -> None:
     baton_path = tmp_path / "baton.md"
     baton_path.write_text(
         "---\ndeliverable_id: dlv-fixture-baton-abc123\n---\n\nBaton.\n",
@@ -499,7 +500,7 @@ def test_mint_spine_inherits_deliverable_id_from_source_baton_never_mints(tmp_pa
     assert "deliverable_id: dlv-fixture-baton-abc123" in spine_text
 
 
-def test_mint_spine_omits_deliverable_id_when_no_source_baton(tmp_path):
+def test_mint_spine_omits_deliverable_id_when_no_source_baton(tmp_path: Path) -> None:
     inventory_path = _write_inventory(tmp_path, _LIVE_AND_CLOSED_INVENTORY)
 
     spine_text, _ = im.mint_spine(str(inventory_path))
@@ -514,7 +515,7 @@ def test_mint_spine_omits_deliverable_id_when_no_source_baton(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_minted_spine_round_trips_through_read_spine(tmp_path):
+def test_minted_spine_round_trips_through_read_spine(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.spine_read import read_spine
 
     inventory_path = _write_inventory(tmp_path, _WRITE_OVERLAP_INVENTORY)
@@ -525,7 +526,7 @@ def test_minted_spine_round_trips_through_read_spine(tmp_path):
     assert {row.id for row in emitter_rows} == {"C1", "C2", "C3"}
 
 
-def test_dispatch_emit_inventory_path_emits_prompts_leading_with_precedence_clause(tmp_path):
+def test_dispatch_emit_inventory_path_emits_prompts_leading_with_precedence_clause(tmp_path: Path) -> None:
     inventory_path = _write_inventory(tmp_path, _WRITE_OVERLAP_INVENTORY)
     output_path = tmp_path / "fixture.workflow.mjs"
 
@@ -609,7 +610,7 @@ def _write_plan_and_inventory(tmp_path, chunk_table_ids=("P144-C6", "P144-C7")):
     return inventory_path, plan_path
 
 
-def test_operator_row_carried_from_plan_onto_minted_row(tmp_path):
+def test_operator_row_carried_from_plan_onto_minted_row(tmp_path: Path) -> None:
     inventory_path, _ = _write_plan_and_inventory(tmp_path)
     rows = im.parse_chunk_table(inventory_path.read_text(encoding="utf-8"))
     minted = im.mint_rows(rows, inventory_path=inventory_path)
@@ -619,7 +620,7 @@ def test_operator_row_carried_from_plan_onto_minted_row(tmp_path):
     assert "execution_mode" not in by_id["P144-C7"]
 
 
-def test_non_operator_row_unaffected_by_the_plan_lookup(tmp_path):
+def test_non_operator_row_unaffected_by_the_plan_lookup(tmp_path: Path) -> None:
     inventory_path, _ = _write_plan_and_inventory(tmp_path)
     rows = im.parse_chunk_table(inventory_path.read_text(encoding="utf-8"))
     minted = im.mint_rows(rows, inventory_path=inventory_path)
@@ -629,7 +630,7 @@ def test_non_operator_row_unaffected_by_the_plan_lookup(tmp_path):
     assert "execution_mode" not in by_id["P144-C7"]
 
 
-def test_operator_row_then_excluded_by_read_spine_with_reason_operator(tmp_path):
+def test_operator_row_then_excluded_by_read_spine_with_reason_operator(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.spine_read import read_spine
 
     inventory_path, _ = _write_plan_and_inventory(tmp_path)
@@ -645,7 +646,7 @@ def test_operator_row_then_excluded_by_read_spine_with_reason_operator(tmp_path)
     assert operator_exclusions[0]["reason"] == "operator"
 
 
-def test_missing_plan_carries_nothing(tmp_path):
+def test_missing_plan_carries_nothing(tmp_path: Path) -> None:
     inv_dir = tmp_path / "state" / "mise-inventory"
     inv_dir.mkdir(parents=True)
     inventory_text = textwrap.dedent(
@@ -670,7 +671,7 @@ def test_missing_plan_carries_nothing(tmp_path):
     assert "execution_mode" not in minted[0]
 
 
-def test_no_inventory_path_carries_nothing_standalone_call_unaffected(tmp_path):
+def test_no_inventory_path_carries_nothing_standalone_call_unaffected(tmp_path: Path) -> None:
     inventory_path, _ = _write_plan_and_inventory(tmp_path)
     rows = im.parse_chunk_table(inventory_path.read_text(encoding="utf-8"))
     minted = im.mint_rows(rows)  # no inventory_path -- old call shape
@@ -679,7 +680,7 @@ def test_no_inventory_path_carries_nothing_standalone_call_unaffected(tmp_path):
     assert "execution_mode" not in by_id["P144-C6"]
 
 
-def test_dispatch_emit_rejects_both_plan_path_and_inventory_path(tmp_path):
+def test_dispatch_emit_rejects_both_plan_path_and_inventory_path(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.op import InventoryPathConflictError
 
     inventory_path = _write_inventory(tmp_path, _WRITE_OVERLAP_INVENTORY)
@@ -768,7 +769,7 @@ def _write_two_plan_inventory(tmp_path):
     return inventory_path
 
 
-def test_plan_sourced_inventory_row_expands_into_its_plan_chunk_dag(tmp_path):
+def test_plan_sourced_inventory_row_expands_into_its_plan_chunk_dag(tmp_path: Path) -> None:
     inventory_path = _write_two_plan_inventory(tmp_path)
     rows = im.parse_chunk_table(inventory_path.read_text(encoding="utf-8"))
     minted = im.mint_rows(rows, inventory_path=inventory_path)
@@ -790,7 +791,7 @@ def test_plan_sourced_inventory_row_expands_into_its_plan_chunk_dag(tmp_path):
     }
 
 
-def test_plan_sourced_expanded_rows_name_their_source_plan(tmp_path):
+def test_plan_sourced_expanded_rows_name_their_source_plan(tmp_path: Path) -> None:
     # emit's `_row_source_plan` keys `_rowPlan` on the body's leading
     # `Spec: <plan> (<id>)` line; an expanded row missing it turns a
     # plan-scoped stop rule into a whole-run halt.
@@ -855,7 +856,7 @@ def _mint_by_id(inventory_path):
     return {r["id"]: r for r in im.mint_rows(rows, inventory_path=inventory_path)}
 
 
-def test_fire_context_reaches_every_chunk_of_an_expanded_plan_row(tmp_path):
+def test_fire_context_reaches_every_chunk_of_an_expanded_plan_row(tmp_path: Path) -> None:
     ref = "G-CAPTURE/2026/j"
     by_id = _mint_by_id(_fire_context_inventory(tmp_path, ref))
     for row_id in ("P1.A1", "P1.A2"):
@@ -865,7 +866,7 @@ def test_fire_context_reaches_every_chunk_of_an_expanded_plan_row(tmp_path):
     assert "Fire context" not in by_id["P2.B1"]["body"]
 
 
-def test_fire_context_reaches_a_plain_single_row_mint(tmp_path):
+def test_fire_context_reaches_a_plain_single_row_mint(tmp_path: Path) -> None:
     inv = _write_inventory(
         tmp_path,
         textwrap.dedent(
@@ -884,13 +885,13 @@ def test_fire_context_reaches_a_plain_single_row_mint(tmp_path):
 
 
 @pytest.mark.parametrize("cell", [None, "—", "-", "  "])
-def test_absent_column_or_empty_fire_context_adds_nothing(tmp_path, cell):
+def test_absent_column_or_empty_fire_context_adds_nothing(tmp_path: Path, cell) -> None:
     by_id = _mint_by_id(_fire_context_inventory(tmp_path, cell))
     for row in by_id.values():
         assert "Fire context" not in row["body"]
 
 
-def test_plan_sourced_inventory_row_emits_one_script_with_ordered_waves(tmp_path):
+def test_plan_sourced_inventory_row_emits_one_script_with_ordered_waves(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.spine_read import read_spine
     from coordinator_core.ops.dispatch_emit.wave_map import build_waves
 
@@ -904,7 +905,7 @@ def test_plan_sourced_inventory_row_emits_one_script_with_ordered_waves(tmp_path
     assert wave_ids == [["P1.A1"], ["P1.A2"], ["P2.B1"]]
 
 
-def test_plain_row_spec_with_no_plan_tasks_spine_stays_a_single_executor(tmp_path):
+def test_plain_row_spec_with_no_plan_tasks_spine_stays_a_single_executor(tmp_path: Path) -> None:
     plan_dir = tmp_path / "docs" / "plans"
     plan_dir.mkdir(parents=True)
     (plan_dir / "fixture-plan-a.md").write_text(_TWO_CHUNK_PLAN_FIXTURE, encoding="utf-8")
@@ -946,7 +947,7 @@ _WRITES_UNDER_ONLY_INVENTORY = textwrap.dedent(
 )
 
 
-def test_writes_under_footprint_is_minted_onto_the_row():
+def test_writes_under_footprint_is_minted_onto_the_row() -> None:
     minted = {r["id"]: r for r in im.mint_rows(im.parse_chunk_table(_WRITES_UNDER_ONLY_INVENTORY))}
     assert minted["C1"]["writes"] == []
     assert minted["C1"]["writes_under"] == ["coordinator_core/fixture_dir/"]
@@ -981,7 +982,7 @@ _CONSUMES_PLAN_FIXTURE = textwrap.dedent(
 )
 
 
-def test_plan_sourced_rows_carry_consumes_and_writes_under(tmp_path):
+def test_plan_sourced_rows_carry_consumes_and_writes_under(tmp_path: Path) -> None:
     # Dropping `consumes` loses the derived C1 -> C2 edge, and dropping
     # `writes_under` narrows C2's footprint: a mise run once dispatched 11
     # consumers beside their producers this way.
@@ -1087,36 +1088,36 @@ def _mint(path):
     )
 
 
-def test_dotted_dep_yields_a_single_edge_onto_that_chunk(tmp_path):
+def test_dotted_dep_yields_a_single_edge_onto_that_chunk(tmp_path: Path) -> None:
     by_id = {r["id"]: r for r in _mint(_dotted_inventory(tmp_path, "P1.A2"))}
     assert by_id["P2.B1"]["depends_on"] == [
         {"chunk": "P1.A2", "gate_kind": "output-consumption-runtime"}
     ]
 
 
-def test_plain_dep_still_fans_out_to_every_minted_chunk(tmp_path):
+def test_plain_dep_still_fans_out_to_every_minted_chunk(tmp_path: Path) -> None:
     with pytest.warns(UserWarning):
         by_id = {r["id"]: r for r in _mint(_dotted_inventory(tmp_path, "P1"))}
     assert {e["chunk"] for e in by_id["P2.B1"]["depends_on"]} == {"P1.A1", "P1.A2", "P1.A3"}
 
 
-def test_dotted_dep_on_an_unknown_chunk_refuses(tmp_path):
+def test_dotted_dep_on_an_unknown_chunk_refuses(tmp_path: Path) -> None:
     with pytest.raises(im.DottedDependencyError, match="no chunk 'Z9'"):
         _mint(_dotted_inventory(tmp_path, "P1.Z9"))
 
 
-def test_dotted_dep_on_a_non_expanded_row_refuses(tmp_path):
+def test_dotted_dep_on_a_non_expanded_row_refuses(tmp_path: Path) -> None:
     with pytest.raises(im.DottedDependencyError, match="did not expand"):
         _mint(_dotted_inventory(tmp_path, "P3.C1"))
 
 
-def test_dotted_dep_on_a_later_row_refuses(tmp_path):
+def test_dotted_dep_on_a_later_row_refuses(tmp_path: Path) -> None:
     path = _dotted_inventory(tmp_path, "P4.X")
     with pytest.raises(im.DottedDependencyError, match="does not appear earlier"):
         _mint(path)
 
 
-def test_plain_dep_on_a_row_with_a_cross_plan_blocked_chunk_warns(tmp_path):
+def test_plain_dep_on_a_row_with_a_cross_plan_blocked_chunk_warns(tmp_path: Path) -> None:
     with pytest.warns(UserWarning) as record:
         _mint(_dotted_inventory(tmp_path, "P1"))
     text = "\n".join(str(w.message) for w in record)
@@ -1124,12 +1125,12 @@ def test_plain_dep_on_a_row_with_a_cross_plan_blocked_chunk_warns(tmp_path):
         assert needle in text
 
 
-def test_dotted_dep_does_not_warn_about_blocked_chunks(tmp_path, recwarn):
+def test_dotted_dep_does_not_warn_about_blocked_chunks(tmp_path: Path, recwarn: pytest.WarningsRecorder) -> None:
     _mint(_dotted_inventory(tmp_path, "P1.A1"))
     assert not [w for w in recwarn if "depends_on_plan" in str(w.message)]
 
 
-def _bound_row(rid, *targets, path="src/shared.py"):
+def _bound_row(rid, *targets, path: str = "src/shared.py"):
     return {
         "id": rid,
         "writes": [path],
@@ -1137,7 +1138,7 @@ def _bound_row(rid, *targets, path="src/shared.py"):
     }
 
 
-def test_bound_shared_path_group_takes_unblocked_members_in_order_and_defers_the_blocked_one():
+def test_bound_shared_path_group_takes_unblocked_members_in_order_and_defers_the_blocked_one() -> None:
     rows = [_bound_row("c.C0", "pred.P1"), _bound_row("b.B0", "a.A0"), _bound_row("a.A0")]
     taken, report = im.select_tranche(rows, ["c", "b", "a", "pred"], 10, bound={"b": {"a"}})
     assert sorted(r["id"] for r in taken) == ["a.A0", "b.B0"]
@@ -1154,7 +1155,7 @@ def test_bound_shared_path_group_takes_unblocked_members_in_order_and_defers_the
     assert order == ["a", "b"]
 
 
-def test_bound_shared_path_group_with_no_blocked_member_is_taken_whole_in_order():
+def test_bound_shared_path_group_with_no_blocked_member_is_taken_whole_in_order() -> None:
     rows = [_bound_row("b.B0", "a.A0"), _bound_row("a.A0"), _bound_row("c.C0")]
     taken, report = im.select_tranche(rows, ["b", "a", "c"], 10, bound={"b": {"a"}})
     assert sorted(r["id"] for r in taken) == ["a.A0", "b.B0", "c.C0"] and report["deferred"] == []
@@ -1162,7 +1163,7 @@ def test_bound_shared_path_group_with_no_blocked_member_is_taken_whole_in_order(
     assert [e["chunk"] for e in by_id["b.B0"]["depends_on"]] == ["a.A0"]
 
 
-def test_bound_group_member_whose_in_group_predecessor_is_blocked_defers_with_it():
+def test_bound_group_member_whose_in_group_predecessor_is_blocked_defers_with_it() -> None:
     rows = [
         _bound_row("a.A0", "pred.P1"),
         _bound_row("b.B0", "a.A0"),
@@ -1173,7 +1174,7 @@ def test_bound_group_member_whose_in_group_predecessor_is_blocked_defers_with_it
     assert sorted(d["plan"] for d in report["deferred"]) == ["a", "b"]
 
 
-def test_dotted_dep_on_a_closed_satisfied_parent_yields_no_edge(tmp_path):
+def test_dotted_dep_on_a_closed_satisfied_parent_yields_no_edge(tmp_path: Path) -> None:
     by_id = {r["id"]: r for r in _mint(_dotted_inventory(tmp_path, "P1.A2", "landed"))}
     assert "depends_on" not in by_id["P2.B1"]
 
@@ -1214,13 +1215,13 @@ def _plan_edge_vs_shared_write_inventory(tmp_path, early_plan_edge: bool):
     return path
 
 
-def test_declared_plan_edge_outranks_an_opposite_shared_write_edge(tmp_path):
+def test_declared_plan_edge_outranks_an_opposite_shared_write_edge(tmp_path: Path) -> None:
     by_id = {r["id"]: r for r in _mint(_plan_edge_vs_shared_write_inventory(tmp_path, True))}
     assert [e["chunk"] for e in by_id["PX.X1"]["depends_on"]] == ["PY.Y1"]
     assert "depends_on" not in by_id["PY.Y1"]
 
 
-def test_shared_write_edge_still_derived_without_a_plan_edge(tmp_path):
+def test_shared_write_edge_still_derived_without_a_plan_edge(tmp_path: Path) -> None:
     by_id = {r["id"]: r for r in _mint(_plan_edge_vs_shared_write_inventory(tmp_path, False))}
     assert "depends_on" not in by_id["PX.X1"]
     assert [e["chunk"] for e in by_id["PY.Y1"]["depends_on"]] == ["PX.X1"]

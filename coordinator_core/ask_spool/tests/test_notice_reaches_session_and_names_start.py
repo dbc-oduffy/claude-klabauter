@@ -14,12 +14,13 @@ import os
 from coordinator_core.ask_spool import notice
 from coordinator_core.hooks import postuse_advisory_dispatch as pad
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, RUN_STAGE_FILE, record_dir
+from pathlib import Path
 
 _SID = "sess-notice-probe"
 _RUN = "warp-2026-11-11-probe-20261111T043953-abc123"
 
 
-def _write_notice(root, **fields):
+def _write_notice(root, **fields) -> None:
     os.makedirs(notice.notices_dir(str(root)), exist_ok=True)
     with open(notice.notice_path(str(root), _SID), "a", encoding="utf-8") as fh:
         fh.write(json.dumps({"spool_id": "sp1", "run_id": _RUN, **fields}) + "\n")
@@ -32,7 +33,7 @@ def _repo(tmp_path):
     return root
 
 
-def _stage(root, stage):
+def _stage(root, stage) -> None:
     d = record_dir(root, _RUN)
     d.mkdir(parents=True, exist_ok=True)
     (d / RUN_STAGE_FILE).write_text(json.dumps({"stage": stage}), encoding="utf-8")
@@ -52,7 +53,7 @@ def _advise(cwd):
     return (out.get("hookSpecificOutput") or {}).get("additionalContext", "")
 
 
-def test_scope_none_dispatch_still_consumes_the_session_notice_from_cwd(tmp_path):
+def test_scope_none_dispatch_still_consumes_the_session_notice_from_cwd(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _write_notice(root, status="minted")
 
@@ -62,7 +63,7 @@ def test_scope_none_dispatch_still_consumes_the_session_notice_from_cwd(tmp_path
     assert not os.path.exists(notice.notice_path(str(root), _SID))
 
 
-def test_unstarted_mint_names_its_workflow_script(tmp_path):
+def test_unstarted_mint_names_its_workflow_script(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     script = _script(root)
     _stage(root, "minted")
@@ -74,7 +75,7 @@ def test_unstarted_mint_names_its_workflow_script(tmp_path):
     assert script.as_posix() in text.replace("\\\\", "/")
 
 
-def test_a_found_run_gets_no_start_pointer(tmp_path):
+def test_a_found_run_gets_no_start_pointer(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _script(root)
     _stage(root, "minted")
@@ -86,7 +87,7 @@ def test_a_found_run_gets_no_start_pointer(tmp_path):
     assert "Start it" not in text
 
 
-def test_a_backlog_notice_for_a_since_halted_run_offers_nothing_to_start(tmp_path):
+def test_a_backlog_notice_for_a_since_halted_run_offers_nothing_to_start(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _script(root)
     _stage(root, "halted")

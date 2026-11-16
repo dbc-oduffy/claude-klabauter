@@ -36,7 +36,7 @@ HANDBACK_DISPOSITIONS: frozenset[str] = frozenset({"surface_to_pm", "pm_reviews_
 NEVER_OFFERED_DISPOSITIONS: frozenset[str] = frozenset({"discard"})
 
 LEDGER_ROW_KEYS: tuple[str, ...] = (
-    "id", "status", "reason", "exit_code", "process_ms", "spawns", "stdout", "stderr",
+    "id", "status", "reason", "exit_code", "process_ms", "spawns", "wall_ms", "stdout", "stderr",
 )
 DECISIONS_FILE = "decisions.jsonl"
 
@@ -98,7 +98,8 @@ class StepResult:
 
     `reason` is empty for a plain run; otherwise `already-satisfied`, the gating step's id
     (halted-by-gate), `deadline`, the breached budget dial, an over-bar step's bug-backlog id,
-    or `resolved-by:<rule id>`.
+    or `resolved-by:<rule id>`. `wall_ms` is the dispatch's elapsed wall time, attribution only
+    (never a budget); None for a row whose step started no child.
     """
 
     id: str
@@ -107,6 +108,7 @@ class StepResult:
     exit_code: int | None = None
     process_ms: float | None = None
     spawns: int | None = None
+    wall_ms: float | None = None
     stdout: str = ""
     stderr: str = ""
 

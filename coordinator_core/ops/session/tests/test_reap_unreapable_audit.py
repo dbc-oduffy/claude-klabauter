@@ -10,6 +10,7 @@ import time
 from pathlib import Path
 
 from coordinator_core.ops.session import reap
+import pytest
 
 _COLD_AGE = reap._SESSION_STALE_SECONDS + 3600
 
@@ -38,7 +39,7 @@ def _hub_with_all_four_populations(tmp_path: Path) -> Path:
     return sessions
 
 
-def test_collect_names_exactly_the_gate_rejected_population(tmp_path):
+def test_collect_names_exactly_the_gate_rejected_population(tmp_path: Path) -> None:
     sessions = _hub_with_all_four_populations(tmp_path)
 
     rows = reap._collect_unreapable(sessions)
@@ -47,7 +48,7 @@ def test_collect_names_exactly_the_gate_rejected_population(tmp_path):
     assert all(row["age_days"] >= 1.0 for row in rows), rows
 
 
-def test_collect_agrees_with_what_the_reaper_actually_leaves(tmp_path):
+def test_collect_agrees_with_what_the_reaper_actually_leaves(tmp_path: Path) -> None:
     sessions = _hub_with_all_four_populations(tmp_path)
 
     reaped, _deferred, failed = reap._reap_stale_sessions(
@@ -64,11 +65,11 @@ def test_collect_agrees_with_what_the_reaper_actually_leaves(tmp_path):
     assert {row["name"] for row in reap._collect_unreapable(sessions)} == survivors_on_disk
 
 
-def test_absent_hub_reports_an_empty_population_not_an_error(tmp_path):
+def test_absent_hub_reports_an_empty_population_not_an_error(tmp_path: Path) -> None:
     assert reap._collect_unreapable(tmp_path / HUB_NAME) == []
 
 
-def test_op_handler_returns_names_and_count_and_mutates_nothing(tmp_path):
+def test_op_handler_returns_names_and_count_and_mutates_nothing(tmp_path: Path) -> None:
     sessions = _hub_with_all_four_populations(tmp_path)
     before = sorted(p.name for p in sessions.iterdir())
     before_mtimes = {p.name: p.stat().st_mtime for p in sessions.iterdir()}
@@ -89,7 +90,7 @@ def test_op_handler_returns_names_and_count_and_mutates_nothing(tmp_path):
     )
 
 
-def test_op_handler_reports_a_missing_repo_root_as_a_setup_error():
+def test_op_handler_reports_a_missing_repo_root_as_a_setup_error() -> None:
     result = asyncio.run(reap._handler_audit_unreapable({}, None))
 
     assert result["exit_code"] == 1
@@ -97,7 +98,7 @@ def test_op_handler_reports_a_missing_repo_root_as_a_setup_error():
     assert result["count"] == 0
 
 
-def test_fail_closed_loop_counts_gate_rejections_too(tmp_path, caplog):
+def test_fail_closed_loop_counts_gate_rejections_too(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     sessions = _hub_with_all_four_populations(tmp_path)
 
     with caplog.at_level(logging.DEBUG, logger=reap._LOG.name):
@@ -116,7 +117,7 @@ def test_fail_closed_loop_counts_gate_rejections_too(tmp_path, caplog):
     ), messages
 
 
-def test_reap_envelope_still_reports_no_names(tmp_path):
+def test_reap_envelope_still_reports_no_names(tmp_path: Path) -> None:
     sessions = _hub_with_all_four_populations(tmp_path)
 
     reaped, deferred, failed = reap._reap_stale_sessions(

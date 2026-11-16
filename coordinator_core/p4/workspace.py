@@ -16,7 +16,7 @@ _IDENTITY_FIELDS = ("port", "user", "client")
 
 class P4WorkspaceUnregistered(Exception):
 
-    def __init__(self, repo_key: str):
+    def __init__(self, repo_key: str) -> None:
         self.repo_key = repo_key
         super().__init__(f"p4 workspace unregistered for repo_key={repo_key!r}")
 

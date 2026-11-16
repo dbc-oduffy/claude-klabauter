@@ -7,6 +7,8 @@ import os
 
 from coordinator_core import launch_records
 from coordinator_core.hooks import postuse_advisory_dispatch as mod
+from pathlib import Path
+import pytest
 
 SID = "sess-1"
 
@@ -23,7 +25,7 @@ def _use(tool_use_id, script, args=None, resume=None):
     }
 
 
-def _launch(tool_use_id, task_id, run_id, tdir="runs\\x"):
+def _launch(tool_use_id, task_id, run_id, tdir: str = "runs\\x"):
     return {
         "type": "user",
         "message": {"content": [
@@ -45,13 +47,13 @@ def _error(tool_use_id):
     }
 
 
-def _transcript(tmp_path, entries):
+def _transcript(tmp_path, entries) -> str:
     path = tmp_path / "t.jsonl"
     path.write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
     return str(path)
 
 
-def _tmpdir(tmp_path):
+def _tmpdir(tmp_path) -> str:
     d = tmp_path / "tmp"
     d.mkdir(exist_ok=True)
     return str(d)
@@ -62,11 +64,11 @@ def _rec(tmpdir, name):
         return json.load(fh)
 
 
-def _exists(tmpdir, name):
+def _exists(tmpdir, name) -> bool:
     return os.path.exists(os.path.join(launch_records.session_dir(tmpdir, SID), f"{name}.json"))
 
 
-def test_previous_launch_is_not_attributed_to_the_newest_tool_use(tmp_path):
+def test_previous_launch_is_not_attributed_to_the_newest_tool_use(tmp_path: Path) -> None:
     tdir = _tmpdir(tmp_path)
     t = _transcript(tmp_path, [
         _use("toolu_A", "scriptA", {"k": "a"}),
@@ -82,7 +84,7 @@ def test_previous_launch_is_not_attributed_to_the_newest_tool_use(tmp_path):
     assert not _exists(tdir, "toolu_A")
 
 
-def test_pending_record_resolves_and_is_removed_on_a_later_pass(tmp_path):
+def test_pending_record_resolves_and_is_removed_on_a_later_pass(tmp_path: Path) -> None:
     tdir = _tmpdir(tmp_path)
     entries = [_use("toolu_B", "scriptB", {"k": "b"})]
     mod.resolve_workflow_run_records(SID, _transcript(tmp_path, entries), tdir)
@@ -94,7 +96,7 @@ def test_pending_record_resolves_and_is_removed_on_a_later_pass(tmp_path):
     assert not _exists(tdir, "toolu_B")
 
 
-def test_resolution_when_tool_use_fell_out_of_the_tail_uses_the_pending_record(tmp_path):
+def test_resolution_when_tool_use_fell_out_of_the_tail_uses_the_pending_record(tmp_path: Path) -> None:
     tdir = _tmpdir(tmp_path)
     mod.resolve_workflow_run_records(
         SID, _transcript(tmp_path, [_use("toolu_B", "scriptB", {"k": "b"})]), tdir
@@ -106,7 +108,7 @@ def test_resolution_when_tool_use_fell_out_of_the_tail_uses_the_pending_record(t
     assert not _exists(tdir, "toolu_B")
 
 
-def test_error_result_removes_the_pending_record_only(tmp_path):
+def test_error_result_removes_the_pending_record_only(tmp_path: Path) -> None:
     tdir = _tmpdir(tmp_path)
     mod.resolve_workflow_run_records(
         SID, _transcript(tmp_path, [_use("toolu_B", "scriptB")]), tdir
@@ -118,7 +120,7 @@ def test_error_result_removes_the_pending_record_only(tmp_path):
     assert launch_records.session_record_paths(tdir, SID) == []
 
 
-def test_two_parallel_calls_in_one_message_pair_by_id(tmp_path):
+def test_two_parallel_calls_in_one_message_pair_by_id(tmp_path: Path) -> None:
     tdir = _tmpdir(tmp_path)
     t = _transcript(tmp_path, [
         {"type": "assistant", "message": {"content": [
@@ -133,7 +135,7 @@ def test_two_parallel_calls_in_one_message_pair_by_id(tmp_path):
     assert (_rec(tdir, "tB")["scriptPath"], _rec(tdir, "tB")["run_id"]) == ("scriptB", "rB")
 
 
-def test_resume_call_records_the_reused_run_id_under_its_new_task_id(tmp_path):
+def test_resume_call_records_the_reused_run_id_under_its_new_task_id(tmp_path: Path) -> None:
     tdir = _tmpdir(tmp_path)
     t = _transcript(tmp_path, [
         _use("toolu_R", "scriptA", {"k": 1}, resume="rA"),
@@ -144,7 +146,7 @@ def test_resume_call_records_the_reused_run_id_under_its_new_task_id(tmp_path):
     assert r["run_id"] == "rA" and r["task_id"] == "tNew" and r["args"] == {"k": 1}
 
 
-def test_correct_record_replaces_a_skewed_legacy_one_idempotently(tmp_path):
+def test_correct_record_replaces_a_skewed_legacy_one_idempotently(tmp_path: Path) -> None:
     tdir = _tmpdir(tmp_path)
     legacy = launch_records.flat_record_path(tdir, SID, "tA")
     with open(legacy, "w", encoding="utf-8") as fh:
@@ -156,7 +158,7 @@ def test_correct_record_replaces_a_skewed_legacy_one_idempotently(tmp_path):
     assert not os.path.exists(legacy)
 
 
-def test_flat_record_named_in_the_tail_moves_under_the_session_dir(tmp_path):
+def test_flat_record_named_in_the_tail_moves_under_the_session_dir(tmp_path: Path) -> None:
     tdir = _tmpdir(tmp_path)
     flat = launch_records.flat_record_path(tdir, SID, "toolu_B")
     with open(flat, "w", encoding="utf-8") as fh:
@@ -170,7 +172,7 @@ def test_flat_record_named_in_the_tail_moves_under_the_session_dir(tmp_path):
     )
 
 
-def test_flat_record_absent_from_the_tail_is_left_alone(tmp_path):
+def test_flat_record_absent_from_the_tail_is_left_alone(tmp_path: Path) -> None:
     tdir = _tmpdir(tmp_path)
     flat = launch_records.flat_record_path(tdir, SID, "toolu_Z")
     with open(flat, "w", encoding="utf-8") as fh:
@@ -180,7 +182,7 @@ def test_flat_record_absent_from_the_tail_is_left_alone(tmp_path):
     assert not _exists(tdir, "toolu_Z")
 
 
-def test_reprocessing_a_launch_keeps_its_original_fired_at(tmp_path):
+def test_reprocessing_a_launch_keeps_its_original_fired_at(tmp_path: Path) -> None:
     tdir = _tmpdir(tmp_path)
     t = _transcript(tmp_path, [_use("toolu_A", "scriptA"), _launch("toolu_A", "tA", "rA")])
     mod.resolve_workflow_run_records(SID, t, tdir)
@@ -193,7 +195,7 @@ def test_reprocessing_a_launch_keeps_its_original_fired_at(tmp_path):
     assert _rec(tdir, "tA")["fired_at"] == 1000
 
 
-def test_unsafe_ids_never_reach_a_path(tmp_path):
+def test_unsafe_ids_never_reach_a_path(tmp_path: Path) -> None:
     tdir = _tmpdir(tmp_path)
     t = _transcript(tmp_path, [
         _use("toolu_A", "scriptA"), _launch("toolu_A", "../evil", "rA"),
@@ -205,7 +207,7 @@ def test_unsafe_ids_never_reach_a_path(tmp_path):
     assert not (tmp_path / "evil").exists()
 
 
-def test_capture_leg_gates_on_tool_name(tmp_path, monkeypatch):
+def test_capture_leg_gates_on_tool_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tdir = _tmpdir(tmp_path)
     monkeypatch.setattr(mod, "_managed_tmpdir", lambda: tdir)
     t = _transcript(tmp_path, [_use("toolu_A", "scriptA")])

@@ -9,6 +9,8 @@ import time
 
 from coordinator_core.ops.dispatch_emit import land_deadline
 from coordinator_core.warm import server
+from pathlib import Path
+import pytest
 
 
 # A read-only op that is neither hook-lane nor light: `ping` takes a reserved slot, so it never queues behind heavy holders.
@@ -16,7 +18,7 @@ _HEAVY_READ_OP = "records.query"
 
 
 class _ManualPool:
-    def __init__(self):
+    def __init__(self) -> None:
         self.submitted = []
         self.messages = []
 
@@ -41,7 +43,7 @@ def _msg(method):
     return {"jsonrpc": "2.0", "id": 1, "method": method, "params": {}}
 
 
-def _wait_for(pred, timeout=5.0):
+def _wait_for(pred, timeout: float = 5.0) -> bool:
     end = time.monotonic() + timeout
     while time.monotonic() < end:
         if pred():
@@ -50,12 +52,12 @@ def _wait_for(pred, timeout=5.0):
     return False
 
 
-def test_gate_serves_mutating_waiter_before_earlier_read_only_waiter():
+def test_gate_serves_mutating_waiter_before_earlier_read_only_waiter() -> None:
     gate = server._AdmissionGate(1)
     assert gate.acquire(False, 1.0) is not None
     order = []
 
-    def waiter(name, mutating):
+    def waiter(name, mutating) -> None:
         if gate.acquire(mutating, 5.0) is not None:
             order.append(name)
             gate.release()
@@ -72,7 +74,7 @@ def test_gate_serves_mutating_waiter_before_earlier_read_only_waiter():
     assert order == ["write", "read"]
 
 
-def test_gate_timeout_withdraws_the_waiter_and_a_free_slot_is_reusable():
+def test_gate_timeout_withdraws_the_waiter_and_a_free_slot_is_reusable() -> None:
     gate = server._AdmissionGate(1)
     assert gate.acquire(True, 1.0) == 0.0
     assert gate.acquire(True, 0.05) is None
@@ -80,14 +82,14 @@ def test_gate_timeout_withdraws_the_waiter_and_a_free_slot_is_reusable():
     assert gate.acquire(False, 0.05) == 0.0
 
 
-def test_hook_lane_never_holds_the_last_slot_and_a_mutating_waiter_takes_it():
+def test_hook_lane_never_holds_the_last_slot_and_a_mutating_waiter_takes_it() -> None:
     gate = server._AdmissionGate(2)
     assert gate.acquire(False, 1.0, True) == 0.0
     assert gate.acquire(False, 0.05, True) is None
     assert gate.acquire(True, 0.05) == 0.0
 
 
-def test_release_skips_hook_waiters_at_the_cap_and_serves_them_below_it():
+def test_release_skips_hook_waiters_at_the_cap_and_serves_them_below_it() -> None:
     gate = server._AdmissionGate(2)
     assert gate.acquire(False, 1.0, True) == 0.0
     assert gate.acquire(True, 1.0) == 0.0
@@ -103,7 +105,7 @@ def test_release_skips_hook_waiters_at_the_cap_and_serves_them_below_it():
     assert got and got[0] is not None
 
 
-def test_hook_methods_classify_as_hook_lane_and_mutators_do_not(monkeypatch):
+def test_hook_methods_classify_as_hook_lane_and_mutators_do_not(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "_op_may_mutate", lambda method: method == "session.commit")
     for method in ("hooks.pre_tool_use", "warm_guard.check", "bash_guards.check", "session.read"):
         assert server._is_hook_lane(method)
@@ -112,7 +114,7 @@ def test_hook_methods_classify_as_hook_lane_and_mutators_do_not(monkeypatch):
     assert not server._is_hook_lane(None)
 
 
-def test_withdrawal_deadline_is_strictly_inside_the_per_op_client_deadline(monkeypatch):
+def test_withdrawal_deadline_is_strictly_inside_the_per_op_client_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", 30.0)
     monkeypatch.setattr(server._ipc, "mutation_read_deadline_for", lambda method, msg=None: 10.0)
     assert 0.0 < server._withdrawal_deadline_secs("x") < 10.0
@@ -120,7 +122,7 @@ def test_withdrawal_deadline_is_strictly_inside_the_per_op_client_deadline(monke
     assert server._withdrawal_deadline_secs("x") < 30.0
 
 
-def test_pool_dispatch_admits_waiting_land_before_waiting_read_and_stamps_submit(tmp_path, monkeypatch):
+def test_pool_dispatch_admits_waiting_land_before_waiting_read_and_stamps_submit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "DISPATCH_PROCESS_POOL_SIZE", 1)
     monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", 5.0)
     pool = _ManualPool()
@@ -149,7 +151,7 @@ def test_pool_dispatch_admits_waiting_land_before_waiting_read_and_stamps_submit
         t.join(5)
 
 
-def test_a_request_held_at_the_deadline_is_never_submitted(tmp_path, monkeypatch):
+def test_a_request_held_at_the_deadline_is_never_submitted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "DISPATCH_PROCESS_POOL_SIZE", 1)
     monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", 0.2)
     pool = _ManualPool()
@@ -163,7 +165,7 @@ def test_a_request_held_at_the_deadline_is_never_submitted(tmp_path, monkeypatch
     gate.release()
 
 
-def test_worker_declares_bind_minus_submit_as_queue_wait(monkeypatch):
+def test_worker_declares_bind_minus_submit_as_queue_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
 
     def body(msg, caller):

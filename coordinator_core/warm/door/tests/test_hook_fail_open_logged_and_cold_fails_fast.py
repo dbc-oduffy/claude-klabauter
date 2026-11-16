@@ -51,6 +51,40 @@ def test_no_fail_open_return_in_the_cold_guard_path_skips_the_log(source):
     assert "door_log_fail_open(" in pass_fn[: pass_fn.index("\n}\n")]
 
 
+@pytest.mark.parametrize("source", [DOOR_WINDOWS_C, DOOR_POSIX_C], ids=lambda p: p.name)
+def test_an_unspooled_submit_ask_answers_a_static_allow_advisory_naming_the_remedy_never_a_deny(source):
+    text = source.read_text(encoding="utf-8")
+    assert "DOOR_SUBMIT_UNSPOOLED_DENY" not in text
+    block = text[text.index("#define DOOR_SUBMIT_UNSPOOLED_ADVISORY"):]
+    block = block[: block.index("\n\n")]
+    literal = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', block))
+    body = json.loads(json.loads('"' + literal.replace("\n", "") + '"'))
+    assert "permissionDecision" not in json.dumps(body)
+    for msg in (body["systemMessage"], body["hookSpecificOutput"]["additionalContext"]):
+        assert "could not be spooled" in msg and "nothing was minted" in msg
+        assert "re-submit" in msg and "state/warp" in msg
+    for fn in ("static int emit_hook_pass_loudly(", "static int emit_hook_post_delivery("):
+        body_text = text[text.index(fn):]
+        assert "emit_submit_unspooled_advisory();" in body_text[: body_text.index("\n}\n")]
+
+
+@pytest.mark.parametrize("source", [DOOR_WINDOWS_C, DOOR_POSIX_C], ids=lambda p: p.name)
+def test_a_spooled_submit_whose_envelope_fails_to_build_answers_a_static_allow_advisory(source):
+    text = source.read_text(encoding="utf-8")
+    block = text[text.index("#define DOOR_SUBMIT_SPOOLED_ADVISORY"):]
+    block = block[: block.index("\n\n")]
+    literal = "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', block))
+    body = json.loads(json.loads('"' + literal.replace("\n", "") + '"'))
+    assert "hookSpecificOutput" not in body
+    assert "do not re-submit" in body["systemMessage"]
+    assert "could not be spooled" not in body["systemMessage"]
+    for fn in ("static int emit_hook_pass_loudly(", "static int emit_hook_post_delivery("):
+        fn_text = text[text.index(fn):]
+        fn_text = fn_text[: fn_text.index("\n}\n")]
+        not_built = fn_text[fn_text.index("if (!built) {"):]
+        assert "if (spooled)" in not_built and "emit_submit_spooled_advisory();" in not_built
+
+
 # --- Python twin ---
 
 
@@ -67,6 +101,17 @@ def test_the_python_twin_appends_one_line_in_the_doors_shape(tmp_path, monkeypat
     assert re.match(r"ts=\d{4}-\d{2}-\d{2}T\S+Z deadline_ms=\d+ elapsed_ms=\d+ op=hooks\.submit_engine_ask ", first)
     assert first.endswith("cause=submit hook outran its answer deadline")
     assert second.endswith("cause=second")
+    assert re.search(r" leg=evaluate leg_ms=\d+ cause=", first)
+    assert "engine_pid=" not in first
+
+
+@pytest.mark.parametrize("source", [DOOR_WINDOWS_C, DOOR_POSIX_C], ids=lambda p: p.name)
+def test_the_door_log_line_names_the_leg_it_gave_up_in(source):
+    text = source.read_text(encoding="utf-8")
+    log_fn = text[text.index("static void door_log_fail_open("):]
+    log_fn = log_fn[: log_fn.index("\n}\n")]
+    assert "leg=%s leg_ms=" in log_fn and "engine_pid=-" not in log_fn
+    assert all(f'door_enter_leg("{leg}")' in text for leg in ("connect", "deliver", "read"))
 
 
 def test_the_python_twin_log_failure_never_raises(tmp_path, monkeypatch):
@@ -115,3 +160,4 @@ def test_no_engine_listening_fails_open_inside_the_bar_and_logs(posix_door, tmp_
     assert elapsed_ms < _BAR_MS
     (line,) = _log_lines(tmp_path / "settings")
     assert "cause=" in line and "op=hooks.preuse_bash_dispatch" in line and f"deadline_ms={_BAR_MS}" in line
+    assert re.search(r" leg=connect leg_ms=\d+ cause=", line)

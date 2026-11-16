@@ -5,9 +5,10 @@ from coordinator_core.ops.dispatch_emit.emit import _BRIEF_PRECEDENCE_CLAUSE, co
 from coordinator_core.ops.dispatch_emit.tests.test_emit_judge_engine_rows import _PLAN_CWD, _fragment
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 from coordinator_core.ops.review_mint.tests.test_execute_review import _STAGE_SCHEMAS
+from pathlib import Path
 
 
-def _script(tmp_path, repo_root):
+def _script(tmp_path, repo_root) -> str:
     plan = tmp_path / "plan.md"
     plan.write_text(_PLAN_CWD, encoding="utf-8")
     row = WaveRow(
@@ -29,11 +30,11 @@ def _judge_call(script):
     return script[script.rfind("agent(", 0, at):at]
 
 
-def test_judge_prompt_anchors_to_the_runtime_root(tmp_path):
+def test_judge_prompt_anchors_to_the_runtime_root(tmp_path: Path) -> None:
     call = _judge_call(_script(tmp_path, tmp_path))
     assert "Repo root: ' + _repoRoot + '" in call
     assert call.index("Repo root: ") > call.index(_BRIEF_PRECEDENCE_CLAUSE[:40])
 
 
-def test_judge_prompt_without_a_repo_root_declares_no_anchor(tmp_path):
+def test_judge_prompt_without_a_repo_root_declares_no_anchor(tmp_path: Path) -> None:
     assert "Repo root: " not in _judge_call(_script(tmp_path, None))

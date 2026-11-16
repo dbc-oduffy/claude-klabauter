@@ -39,7 +39,7 @@ def _research_errors(research: dict) -> list[dict]:
     return [e for e in errors if e["field"].startswith("research")]
 
 
-def test_vendored_versions():
+def test_vendored_versions() -> None:
     # plan-tasks pin is forward-only: claude-klabauter-authored bumps are live engine inputs, never re-vendored down.
     # 3.20 -> 3.21: pinned forward per PM ruling; no re-vendor of 3.20.0.
     # 3.21 -> 3.22: pinned forward per PM ruling.
@@ -47,7 +47,7 @@ def test_vendored_versions():
     # 3.23 -> 3.24: claude-klabauter-first bump adding optional `expect_partial`; pinned at 3.24.0.
     # test_register_rows_shape tracks 3.24.0 too (minItems dropped).
     # DoE re-sync is out of scope here.
-    assert _version(_SIZING) == "1.53.0"
+    assert _version(_SIZING) == "1.54.0"
     assert _version(_HANDOFF) == "11.7.1"
     assert _version(_PLAN_TASKS) == "3.24.0"
 
@@ -63,7 +63,7 @@ def _find_key(node, key):
             yield from _find_key(v, key)
 
 
-def test_register_rows_shape():
+def test_register_rows_shape() -> None:
     # 3.24.0 dropped minItems: an empty list declares a row resting on no register row.
     spec = json.loads(_PLAN_TASKS.read_text(encoding="utf-8"))["properties"]["register_rows"]
     assert "minItems" not in spec and spec["uniqueItems"] is True
@@ -72,7 +72,7 @@ def test_register_rows_shape():
     assert not any(pattern.fullmatch(s) for s in ("../x", "", "R1\n"))
 
 
-def test_sizing_unrelated_turns_and_visual_surface():
+def test_sizing_unrelated_turns_and_visual_surface() -> None:
     schema = json.loads(_SIZING.read_text(encoding="utf-8"))
     (turns,) = list(_find_key(schema, "unrelated_turns"))
     assert turns["items"]["additionalProperties"] is False
@@ -82,14 +82,14 @@ def test_sizing_unrelated_turns_and_visual_surface():
     assert surfaces and all("visual" in s["enum"] for s in surfaces)
 
 
-def test_research_block_accepts_repo_deep_target():
+def test_research_block_accepts_repo_deep_target() -> None:
     research = {"value_class": "unblock", "sources": ["repo"], "targets": [{"source": "repo", "ref": "claude-klabauter"}]}
     assert _research_errors(research) == []
 
 
-def test_research_block_accepts_spike_value_class():
+def test_research_block_accepts_spike_value_class() -> None:
     assert _research_errors({"value_class": "spike"}) == []
 
 
-def test_research_block_rejects_unknown_value_class():
+def test_research_block_rejects_unknown_value_class() -> None:
     assert _research_errors({"value_class": "bogus"})

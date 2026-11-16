@@ -57,10 +57,6 @@ def test_worker_threads_join_the_open_sizing_memo_scope_and_only_that_scope():
 
 def test_two_ask_submission_parses_each_slice_sizing_once_per_rewrite(repo, monkeypatch):
     """Both child emits and the hook's own reads share one parse of a slice sizing (18 parses before the shared scope)."""
-    import types
-
-    import yaml
-
     from coordinator_core.ops.dispatch_emit import sizing_fire
     from coordinator_core.hooks.tests import test_submit_engine_ask_two_ask_process_budget as two
 
@@ -70,9 +66,10 @@ def test_two_ask_submission_parses_each_slice_sizing_once_per_rewrite(repo, monk
 
     def counted(text):
         parses.append(text)
-        return yaml.safe_load(text)
+        return real_load(text)
 
-    monkeypatch.setattr(sizing_fire, "yaml", types.SimpleNamespace(safe_load=counted, YAMLError=yaml.YAMLError))
+    real_load = sizing_fire._yaml_safe_load
+    monkeypatch.setattr(sizing_fire, "_yaml_safe_load", counted)
     env = mod.evaluate(real._payload(repo, {"asks": two._two_asks()}))
     assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
     assert len(parses) <= 4, len(parses)

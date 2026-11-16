@@ -9,43 +9,44 @@ from coordinator_core.ops.docgen.dr_allocator import (
     allocate_dr_number,
     assert_dr_id_unique,
 )
+from pathlib import Path
 
 
-def _touch(directory, *names):
+def _touch(directory, *names) -> None:
     for name in names:
         (directory / name).write_text("", encoding="utf-8")
 
 
-def test_missing_dir_starts_at_001(tmp_path):
+def test_missing_dir_starts_at_001(tmp_path: Path) -> None:
     missing = tmp_path / "does-not-exist"
     assert allocate_dr_number(missing) == "DR-001"
 
 
-def test_empty_dir_starts_at_001(tmp_path):
+def test_empty_dir_starts_at_001(tmp_path: Path) -> None:
     assert allocate_dr_number(tmp_path) == "DR-001"
 
 
-def test_single_existing_dr_increments(tmp_path):
+def test_single_existing_dr_increments(tmp_path: Path) -> None:
     _touch(tmp_path, "DR-207-deliverable-spine.md")
     assert allocate_dr_number(tmp_path) == "DR-208"
 
 
-def test_gap_in_sequence_fills_max_plus_one_not_the_gap(tmp_path):
+def test_gap_in_sequence_fills_max_plus_one_not_the_gap(tmp_path: Path) -> None:
     _touch(tmp_path, "DR-001-a.md", "DR-003-b.md")
     assert allocate_dr_number(tmp_path) == "DR-004"
 
 
-def test_highest_number_wins_regardless_of_listing_order(tmp_path):
+def test_highest_number_wins_regardless_of_listing_order(tmp_path: Path) -> None:
     _touch(tmp_path, "DR-050-mid.md", "DR-005-low.md", "DR-223-high.md", "DR-099-other.md")
     assert allocate_dr_number(tmp_path) == "DR-224"
 
 
-def test_non_md_files_ignored(tmp_path):
+def test_non_md_files_ignored(tmp_path: Path) -> None:
     _touch(tmp_path, "DR-010-real.md", "DR-999-not-markdown.txt")
     assert allocate_dr_number(tmp_path) == "DR-011"
 
 
-def test_malformed_names_tolerated_not_rejected(tmp_path):
+def test_malformed_names_tolerated_not_rejected(tmp_path: Path) -> None:
     _touch(
         tmp_path,
         "DR-XXX-placeholder.md",
@@ -56,83 +57,83 @@ def test_malformed_names_tolerated_not_rejected(tmp_path):
     assert allocate_dr_number(tmp_path) == "DR-013"
 
 
-def test_mixed_prefixes_fall_back_to_unprefixed_namespace(tmp_path):
+def test_mixed_prefixes_fall_back_to_unprefixed_namespace(tmp_path: Path) -> None:
     _touch(tmp_path, "DR-ALPHA-005-a.md", "DR-RAG-010-b.md")
     assert allocate_dr_number(tmp_path) == "DR-001"
 
 
-def test_sole_shared_prefix_inferred_when_unambiguous(tmp_path):
+def test_sole_shared_prefix_inferred_when_unambiguous(tmp_path: Path) -> None:
     _touch(tmp_path, "DR-ALPHA-005-a.md", "DR-ALPHA-006-b.md")
     assert allocate_dr_number(tmp_path) == "DR-ALPHA-007"
 
 
-def test_explicit_prefix_overrides_disk_inference(tmp_path):
+def test_explicit_prefix_overrides_disk_inference(tmp_path: Path) -> None:
     _touch(tmp_path, "DR-010-unprefixed.md")
     assert allocate_dr_number(tmp_path, explicit_prefix="alpha") == "DR-ALPHA-001"
 
 
-def test_explicit_prefix_scopes_independently_of_other_namespaces(tmp_path):
+def test_explicit_prefix_scopes_independently_of_other_namespaces(tmp_path: Path) -> None:
     _touch(tmp_path, "DR-ALPHA-005-a.md", "DR-RAG-010-b.md")
     assert allocate_dr_number(tmp_path, explicit_prefix="ALPHA") == "DR-ALPHA-006"
 
 
-def test_explicit_prefix_lowercased_input_normalized_uppercase(tmp_path):
+def test_explicit_prefix_lowercased_input_normalized_uppercase(tmp_path: Path) -> None:
     assert allocate_dr_number(tmp_path, explicit_prefix="rag") == "DR-RAG-001"
 
 
 @pytest.mark.parametrize("bad_prefix", ["1RAG", "-RAG", "RAG!", " ", "RAG SPACE", ""])
-def test_invalid_explicit_prefix_rejected(tmp_path, bad_prefix):
+def test_invalid_explicit_prefix_rejected(tmp_path: Path, bad_prefix) -> None:
     with pytest.raises(DrAllocatorError):
         allocate_dr_number(tmp_path, explicit_prefix=bad_prefix)
 
 
-def test_width_padding_widens_to_widest_existing_in_namespace(tmp_path):
+def test_width_padding_widens_to_widest_existing_in_namespace(tmp_path: Path) -> None:
     _touch(tmp_path, "DR-0999-wide.md")
     assert allocate_dr_number(tmp_path) == "DR-1000"
 
 
-def test_width_floor_is_three_digits_even_for_small_numbers(tmp_path):
+def test_width_floor_is_three_digits_even_for_small_numbers(tmp_path: Path) -> None:
     _touch(tmp_path, "DR-7-single-digit.md")
     assert allocate_dr_number(tmp_path) == "DR-008"
 
 
-def test_width_padding_is_per_namespace_not_global(tmp_path):
+def test_width_padding_is_per_namespace_not_global(tmp_path: Path) -> None:
     _touch(tmp_path, "DR-0999-wide-unprefixed.md", "DR-ALPHA-005-a.md")
     assert allocate_dr_number(tmp_path, explicit_prefix="ALPHA") == "DR-ALPHA-006"
 
 
-def test_returns_bare_id_no_suffix(tmp_path):
+def test_returns_bare_id_no_suffix(tmp_path: Path) -> None:
     assert allocate_dr_number(tmp_path) == "DR-001"
 
 
-def test_assert_dr_id_unique_passes_for_unused_id(tmp_path):
+def test_assert_dr_id_unique_passes_for_unused_id(tmp_path: Path) -> None:
     _touch(tmp_path, "DR-001-existing.md")
     assert_dr_id_unique(tmp_path, "DR-002")
 
 
-def test_assert_dr_id_unique_rejects_exact_duplicate(tmp_path):
+def test_assert_dr_id_unique_rejects_exact_duplicate(tmp_path: Path) -> None:
     _touch(tmp_path, "DR-002-existing.md")
     with pytest.raises(DrCollisionError):
         assert_dr_id_unique(tmp_path, "DR-002")
 
 
-def test_assert_dr_id_unique_rejects_numeric_equivalence_wide_on_disk(tmp_path):
+def test_assert_dr_id_unique_rejects_numeric_equivalence_wide_on_disk(tmp_path: Path) -> None:
     _touch(tmp_path, "DR-0002-foo.md")
     with pytest.raises(DrCollisionError):
         assert_dr_id_unique(tmp_path, "DR-002")
 
 
-def test_assert_dr_id_unique_rejects_numeric_equivalence_narrow_on_disk(tmp_path):
+def test_assert_dr_id_unique_rejects_numeric_equivalence_narrow_on_disk(tmp_path: Path) -> None:
     _touch(tmp_path, "DR-002-foo.md")
     with pytest.raises(DrCollisionError):
         assert_dr_id_unique(tmp_path, "DR-0002")
 
 
-def _write_frontmatter_record(directory, filename, dr_id):
+def _write_frontmatter_record(directory, filename, dr_id) -> None:
     (directory / filename).write_text(f"---\nid: {dr_id}\ntitle: stub\n---\n")
 
 
-def test_frontmatter_carried_id_extends_max_past_filename_led_records(tmp_path):
+def test_frontmatter_carried_id_extends_max_past_filename_led_records(tmp_path: Path) -> None:
     for n in range(1, 8):
         _touch(tmp_path, f"DR-{n:03d}-decision.md")
     _write_frontmatter_record(
@@ -141,7 +142,7 @@ def test_frontmatter_carried_id_extends_max_past_filename_led_records(tmp_path):
     assert allocate_dr_number(tmp_path) == "DR-009"
 
 
-def test_assert_unique_raises_on_frontmatter_carried_id_collision(tmp_path):
+def test_assert_unique_raises_on_frontmatter_carried_id_collision(tmp_path: Path) -> None:
     for n in range(1, 8):
         _touch(tmp_path, f"DR-{n:03d}-decision.md")
     _write_frontmatter_record(
@@ -151,7 +152,7 @@ def test_assert_unique_raises_on_frontmatter_carried_id_collision(tmp_path):
         assert_dr_id_unique(tmp_path, "DR-008")
 
 
-def test_frontmatter_zero_padding_equivalence(tmp_path):
+def test_frontmatter_zero_padding_equivalence(tmp_path: Path) -> None:
     _write_frontmatter_record(
         tmp_path, "2026-07-29-frontmatter-carried-record.md", "DR-0008"
     )
@@ -159,7 +160,7 @@ def test_frontmatter_zero_padding_equivalence(tmp_path):
         assert_dr_id_unique(tmp_path, "DR-008")
 
 
-def test_frontmatter_prefixed_namespace_participates_in_inference(tmp_path):
+def test_frontmatter_prefixed_namespace_participates_in_inference(tmp_path: Path) -> None:
     _touch(tmp_path, "DR-COCKPIT-001-a.md", "DR-COCKPIT-002-b.md")
     _write_frontmatter_record(
         tmp_path, "2026-07-29-frontmatter-carried-record.md", "DR-COCKPIT-004"
@@ -167,7 +168,7 @@ def test_frontmatter_prefixed_namespace_participates_in_inference(tmp_path):
     assert allocate_dr_number(tmp_path) == "DR-COCKPIT-005"
 
 
-def test_date_named_record_with_no_id_frontmatter_ignored(tmp_path):
+def test_date_named_record_with_no_id_frontmatter_ignored(tmp_path: Path) -> None:
     _touch(tmp_path, "DR-001-first.md")
     (tmp_path / "2026-07-03-tri-plane-ownership-boundary.md").write_text(
         "---\ntitle: Tri-plane ownership boundary for fleet work-state\n"
@@ -176,7 +177,7 @@ def test_date_named_record_with_no_id_frontmatter_ignored(tmp_path):
     assert allocate_dr_number(tmp_path) == "DR-002"
 
 
-def test_frontmatter_scan_tolerates_malformed_or_unreadable_file(tmp_path):
+def test_frontmatter_scan_tolerates_malformed_or_unreadable_file(tmp_path: Path) -> None:
     _touch(tmp_path, "DR-001-first.md")
     (tmp_path / "2026-07-29-no-frontmatter.md").write_text("just body text\n")
     (tmp_path / "2026-07-29-bad-id-value.md").write_text("---\nid: not-a-dr-id\n---\n")

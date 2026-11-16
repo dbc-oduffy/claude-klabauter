@@ -25,6 +25,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from coordinator_core.ops.ceremony import housekeeping_liveness as hl
+import pytest
 
 
 def _git_root(tmp_path: Path) -> str:
@@ -339,7 +340,7 @@ def test_stamp_liveness_junk_root_raises_nothing() -> None:
     hl.stamp_liveness("relative/junk", hl.ARCHIVE_SWEEPS)
 
 
-def test_stamp_liveness_junk_root_logs_exactly_one_warning(tmp_path: Path, caplog) -> None:
+def test_stamp_liveness_junk_root_logs_exactly_one_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     junk_root = tmp_path / "not-a-repo"
     junk_root.mkdir()
 
@@ -383,11 +384,11 @@ def test_check_stale_detailed_junk_root_returns_empty_list_and_does_not_raise(
 # --------------------------------------------------------------------------
 
 
-def test_git_maintenance_is_a_known_class():
+def test_git_maintenance_is_a_known_class() -> None:
     assert hl.GIT_MAINTENANCE in hl.KNOWN_CLASSES
 
 
-def test_git_maintenance_is_the_first_class_with_a_real_remedy():
+def test_git_maintenance_is_the_first_class_with_a_real_remedy() -> None:
     """The module's negative-spec forbids INVENTING commands for classes with
     no CLI. This entry is legitimate because coordinator-git-maintenance is on
     disk before the entry names it -- the case that spec anticipates, not an
@@ -398,7 +399,7 @@ def test_git_maintenance_is_the_first_class_with_a_real_remedy():
             assert hl.REMEDY_COMMANDS[cls] == (), cls
 
 
-def test_git_maintenance_uses_the_ten_day_threshold_not_the_uniform_default():
+def test_git_maintenance_uses_the_ten_day_threshold_not_the_uniform_default() -> None:
     """7 days equals the weekly cadence exactly, so the class would read stale
     the instant it came due, every cycle -- a permanently-amber signal nobody
     reads."""
@@ -406,12 +407,12 @@ def test_git_maintenance_uses_the_ten_day_threshold_not_the_uniform_default():
     assert hl._threshold_for(hl.ARCHIVE_SWEEPS, None) == hl._DEFAULT_STALE_THRESHOLD_S
 
 
-def test_an_explicit_threshold_beats_the_per_class_map():
+def test_an_explicit_threshold_beats_the_per_class_map() -> None:
     """A caller that named a number meant it."""
     assert hl._threshold_for(hl.GIT_MAINTENANCE, 42.0) == 42.0
 
 
-def test_explicitly_passing_the_default_value_is_still_an_explicit_opt_out():
+def test_explicitly_passing_the_default_value_is_still_an_explicit_opt_out() -> None:
     """THE BUG THIS PINS, which a value comparison cannot express: every caller
     of check_stale/check_stale_detailed/liveness_status that passes the
     argument at all passes exactly 7*24*3600.0. Detecting "supplied" by
@@ -425,7 +426,7 @@ def test_explicitly_passing_the_default_value_is_still_an_explicit_opt_out():
     )
 
 
-def test_an_explicit_seven_day_threshold_reaches_both_accessors(tmp_path):
+def test_an_explicit_seven_day_threshold_reaches_both_accessors(tmp_path: Path) -> None:
     """The end-to-end shape of the same bug: a caller asking for 7 days must
     get 7 days from BOTH threshold-consuming accessors, not the 10-day
     per-class override."""
@@ -453,7 +454,7 @@ def test_an_explicit_seven_day_threshold_reaches_both_accessors(tmp_path):
     assert status[hl.GIT_MAINTENANCE] == hl.STATUS_STALE, status
 
 
-def test_both_accessors_agree_on_git_maintenance_at_day_eight(tmp_path):
+def test_both_accessors_agree_on_git_maintenance_at_day_eight(tmp_path: Path) -> None:
     """THE DIVERGENCE THIS GUARDS. Reaching only one threshold-consuming
     accessor would let check_stale_detailed and liveness_status report
     different statuses for the same class on the same day. At day 8 both must

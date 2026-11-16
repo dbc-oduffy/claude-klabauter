@@ -7,6 +7,7 @@ from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+import pytest
 
 SID = "f3dca0d5-7375-4313-83e8-a173943c2734"
 RUN = "ask-20261028T000000-abc123"
@@ -53,7 +54,7 @@ def _stage(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
     return root, manifest
 
 
-def test_usage_rows_carry_int_rag_calls_summed_per_row_and_manifest_is_untouched(tmp_path, monkeypatch):
+def test_usage_rows_carry_int_rag_calls_summed_per_row_and_manifest_is_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, manifest = _stage(tmp_path, monkeypatch)
     before = manifest.read_bytes()
     tc._write_usage(root, SID, RUN)
@@ -63,7 +64,7 @@ def test_usage_rows_carry_int_rag_calls_summed_per_row_and_manifest_is_untouched
     assert manifest.read_bytes() == before
 
 
-def test_non_work_agents_are_not_rows(tmp_path, monkeypatch):
+def test_non_work_agents_are_not_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _ = _stage(tmp_path, monkeypatch)
     tc._write_usage(root, SID, RUN)
     body = json.loads((root / RECORD_DIR_ROOT / RUN / "usage.json").read_text(encoding="utf-8"))

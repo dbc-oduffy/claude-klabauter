@@ -32,10 +32,11 @@ import os
 import pytest
 
 from coordinator_core.write_guards import block_dev_side_mirror_wiki as guard
+from pathlib import Path
 
 
 @pytest.fixture
-def _wiki_fixture(tmp_path, monkeypatch):
+def _wiki_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
     (home / ".claude" / "docs" / "wiki").mkdir(parents=True)
 
@@ -57,14 +58,14 @@ def _payload(file_path: str) -> dict:
     return {"tool_name": "Write", "tool_input": {"file_path": file_path}}
 
 
-def test_same_case_dev_wiki_write_denied(_wiki_fixture):
+def test_same_case_dev_wiki_write_denied(_wiki_fixture) -> None:
     home = _wiki_fixture
     result = guard.check(_payload(str(home / ".claude" / "docs" / "wiki" / "example.md")))
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_differently_cased_dev_wiki_write_now_denied(_wiki_fixture):
+def test_differently_cased_dev_wiki_write_now_denied(_wiki_fixture) -> None:
     home = _wiki_fixture
     differently_cased = str(home / ".Claude" / "Docs" / "WIKI" / "example.md")
     result = guard.check(_payload(differently_cased))
@@ -75,7 +76,7 @@ def test_differently_cased_dev_wiki_write_now_denied(_wiki_fixture):
     assert "example.md" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_unrelated_path_outside_dev_wiki_still_allowed(_wiki_fixture):
+def test_unrelated_path_outside_dev_wiki_still_allowed(_wiki_fixture) -> None:
     home = _wiki_fixture
     unrelated = str(home / "not-the-wiki" / "example.md")
     assert guard.check(_payload(unrelated)) is None

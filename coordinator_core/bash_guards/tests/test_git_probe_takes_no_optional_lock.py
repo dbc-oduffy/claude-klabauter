@@ -7,12 +7,17 @@ from __future__ import annotations
 import subprocess
 
 from coordinator_core.bash_guards import _dc_git_probe
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
 
 
 def _capture_env(monkeypatch):
     seen: dict = {}
 
-    def _fake_run(argv, **kwargs):
+    def _fake_run(argv, **kwargs) -> CompletedProcess[str]:
         seen["env"] = kwargs.get("env")
         return subprocess.CompletedProcess(argv, 0, stdout="", stderr="")
 
@@ -20,13 +25,13 @@ def _capture_env(monkeypatch):
     return seen
 
 
-def test_probe_child_runs_with_optional_locks_off(monkeypatch):
+def test_probe_child_runs_with_optional_locks_off(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = _capture_env(monkeypatch)
     _dc_git_probe._run_git(["diff", "--name-only"])
     assert seen["env"]["GIT_OPTIONAL_LOCKS"] == "0"
 
 
-def test_extra_env_still_applies_alongside(monkeypatch):
+def test_extra_env_still_applies_alongside(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = _capture_env(monkeypatch)
     monkeypatch.setenv("COORD_PROBE_DROP_ME", "x")
     _dc_git_probe._run_git(

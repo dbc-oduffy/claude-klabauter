@@ -33,6 +33,7 @@ import os
 import stat
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -81,7 +82,7 @@ def _make_src(tmp_path, filename: str, content: str = "template content\n"):
 
 
 @pytest.mark.parametrize("filename", _FORCE_OVERWRITE_CASES + _PRESERVE_CASES)
-def test_install_one_absent_dst_installs_for_every_class(tmp_path, filename):
+def test_install_one_absent_dst_installs_for_every_class(tmp_path: Path, filename) -> None:
     src = _make_src(tmp_path, filename)
     dst = tmp_path / "dst" / filename
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -94,7 +95,7 @@ def test_install_one_absent_dst_installs_for_every_class(tmp_path, filename):
 
 @_EXEC_BIT_SKIP
 @pytest.mark.parametrize("filename", _FORCE_OVERWRITE_CASES + _PRESERVE_CASES)
-def test_install_one_absent_dst_applies_exec_bit_when_requested(tmp_path, filename):
+def test_install_one_absent_dst_applies_exec_bit_when_requested(tmp_path: Path, filename) -> None:
     src = _make_src(tmp_path, filename)
     dst = tmp_path / "dst" / filename
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -111,7 +112,7 @@ def test_install_one_absent_dst_applies_exec_bit_when_requested(tmp_path, filena
 
 
 @pytest.mark.parametrize("filename", _FORCE_OVERWRITE_CASES + _PRESERVE_CASES)
-def test_install_one_identical_dst_is_a_noop_for_every_class(tmp_path, filename):
+def test_install_one_identical_dst_is_a_noop_for_every_class(tmp_path: Path, filename) -> None:
     src = _make_src(tmp_path, filename)
     dst = tmp_path / "dst" / filename
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -124,7 +125,7 @@ def test_install_one_identical_dst_is_a_noop_for_every_class(tmp_path, filename)
 
 @_EXEC_BIT_SKIP
 @pytest.mark.parametrize("filename", _FORCE_OVERWRITE_CASES + _PRESERVE_CASES)
-def test_install_one_identical_dst_still_applies_exec_bit(tmp_path, filename):
+def test_install_one_identical_dst_still_applies_exec_bit(tmp_path: Path, filename) -> None:
     # Both the identical-content preserve branch (substrate.py:236-238) and
     # the identical-content force-overwrite branch (substrate.py:230-235,
     # `elif exec_bit:` on the `filecmp.cmp` match) re-apply the exec bit even
@@ -156,8 +157,8 @@ def test_install_one_identical_dst_still_applies_exec_bit(tmp_path, filename):
 
 @pytest.mark.parametrize("filename", _FORCE_OVERWRITE_CASES)
 def test_install_one_diverging_dst_force_overwrites_code_and_wrapper_classes(
-    tmp_path, filename, capsys
-):
+    tmp_path: Path, filename, capsys: pytest.CaptureFixture[str]
+) -> None:
     src = _make_src(tmp_path, filename, content="new template content\n")
     dst = tmp_path / "dst" / filename
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -173,7 +174,7 @@ def test_install_one_diverging_dst_force_overwrites_code_and_wrapper_classes(
 
 @_EXEC_BIT_SKIP
 @pytest.mark.parametrize("filename", _FORCE_OVERWRITE_CASES)
-def test_install_one_diverging_dst_force_overwrite_applies_exec_bit(tmp_path, filename):
+def test_install_one_diverging_dst_force_overwrite_applies_exec_bit(tmp_path: Path, filename) -> None:
     src = _make_src(tmp_path, filename, content="new template content\n")
     dst = tmp_path / "dst" / filename
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -189,8 +190,8 @@ def test_install_one_diverging_dst_force_overwrite_applies_exec_bit(tmp_path, fi
 
 @pytest.mark.parametrize("filename", _PRESERVE_CASES)
 def test_install_one_diverging_dst_preserves_operator_surface_classes(
-    tmp_path, filename, capsys
-):
+    tmp_path: Path, filename, capsys: pytest.CaptureFixture[str]
+) -> None:
     src = _make_src(tmp_path, filename, content="new template content\n")
     dst = tmp_path / "dst" / filename
     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -206,8 +207,8 @@ def test_install_one_diverging_dst_preserves_operator_surface_classes(
 
 @pytest.mark.parametrize("filename", _PRESERVE_CASES)
 def test_install_one_diverging_dst_preserve_uses_claude_home_warning_variant(
-    tmp_path, filename, capsys
-):
+    tmp_path: Path, filename, capsys: pytest.CaptureFixture[str]
+) -> None:
     # warn_prefix is caller-supplied and independent of the src name/suffix
     # that drives force_overwrite — the "claude-home" cross-repo-contract
     # warning fires purely off warn_prefix == "claude-home".
@@ -239,8 +240,8 @@ _NON_ALLOWLISTED_EXTENSIONLESS_NAME = "coordinator-settings-home"
 
 
 def test_install_one_non_allowlisted_extensionless_diverging_default_is_preserved(
-    tmp_path, capsys
-):
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """Without a caller-forced force_overwrite, this name falls to
     preserve-on-diff like any other non-code file — `_install_one` alone
     never overwrote it, which is exactly the gap the C1 bug fell through."""
@@ -260,8 +261,8 @@ def test_install_one_non_allowlisted_extensionless_diverging_default_is_preserve
 
 
 def test_install_one_non_allowlisted_extensionless_diverging_force_overwrite_true_overwrites(
-    tmp_path, capsys
-):
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """The C1 regression cell: post-C1, the `coordinator-settings-home` call
     site passes `force_overwrite=True` — this is the cell that would have
     caught the pre-C1 bug (a stale destination surviving re-install)."""
@@ -290,8 +291,8 @@ def test_install_one_non_allowlisted_extensionless_diverging_force_overwrite_tru
 
 
 def test_install_one_ps1_exec_bit_false_by_construction_force_overwrite_true_overwrites(
-    tmp_path, capsys
-):
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """A `.ps1` has no POSIX exec bit to set — Windows resolves executability
     by extension, not the POSIX mode bit, so callers pass exec_bit=False for
     it by construction. `.ps1` is also not in `_install_one`'s suffix/name
@@ -316,8 +317,8 @@ def test_install_one_ps1_exec_bit_false_by_construction_force_overwrite_true_ove
 
 
 def test_install_one_identical_content_missing_mode_bit_is_not_reported_as_drift(
-    tmp_path, capsys
-):
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     """A destination byte-identical to source but missing its POSIX mode bit
     (e.g. 0644 where exec_bit=True expects 0755) must not be reported as
     content drift: `_install_one` compares bytes via

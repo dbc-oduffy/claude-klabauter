@@ -156,6 +156,32 @@ def _end_redirect(session: pytest.Session, exitstatus) -> None:
     _rmtree(redirect.root)
 
 
+def _enclosing_git_root(path: Path) -> "Path | None":
+    """Nearest ancestor of `path` (itself included) holding a `.git` dir or file."""
+    for parent in (path, *path.parents):
+        if (parent / ".git").exists():
+            return parent
+    return None
+
+
+def _refuse_in_repo_basetemp(config: pytest.Config) -> None:
+    """Usage error for an explicit `--basetemp` inside any git working tree.
+
+    Trap: a test that resolves its repo by walking up from cwd or basetemp finds the real repo
+    when the basetemp sits inside one, and commits into it.
+    """
+    try:
+        base = _resolve(config.option.basetemp)
+    except (OSError, RuntimeError):
+        return
+    repo = _enclosing_git_root(base)
+    if repo is not None:
+        raise pytest.UsageError(
+            f"--basetemp {config.option.basetemp} is inside the git working tree {repo}; "
+            f"omit it or use a dir under {_coordinator_temp() / config.rootpath.name / 'pytest'}"
+        )
+
+
 def _per_run_basetemp(rootpath: Path) -> Path:
     suffix = os.urandom(3).hex()
     return _coordinator_temp() / rootpath.name / "pytest" / f"{os.getpid()}-{suffix}"
@@ -195,9 +221,36 @@ def _counted_make_counted_dir(self, prefix: str) -> Path:
     return _counted_numbered_dir(self.getbasetemp(), prefix)
 
 
+def _refusing_getbasetemp(original):
+    def getbasetemp(self) -> Path:
+        """`TempPathFactory.getbasetemp` that refuses an explicit in-repo basetemp before `rm_rf` and `mkdir`.
+
+        The plugin's configure-time refusal never loads for a `coordinator_core/pytest.ini` run
+        (the repo-root conftest sits above confcutdir), so the package conftest's install of
+        this module reaches the same refusal here. Controller only; the minted per-run
+        basetemp is exempt.
+        """
+        given = getattr(self, "_given_basetemp", None)
+        if self._basetemp is None and given is not None and not os.environ.get("PYTEST_XDIST_WORKER") and given != _MINTED:
+            repo = _enclosing_git_root(_resolve(given))
+            if repo is not None:
+                raise pytest.UsageError(
+                    f"--basetemp {given} is inside the git working tree {repo}; "
+                    f"omit it or use a dir under {_coordinator_temp() / repo.name / 'pytest'}"
+                )
+        return original(self)
+
+    getbasetemp._refuses_in_repo = True  # type: ignore[attr-defined]
+    return getbasetemp
+
+
 def _install_counted_numbered_dir() -> None:
-    """Hook whichever numbered-dir maker the installed pytest's `mktemp` uses."""
+    """Hook whichever numbered-dir maker the installed pytest's `mktemp` uses; also guard `getbasetemp`."""
     import _pytest.tmpdir as tmpdir_mod
+
+    current = tmpdir_mod.TempPathFactory.getbasetemp
+    if not getattr(current, "_refuses_in_repo", False):
+        tmpdir_mod.TempPathFactory.getbasetemp = _refusing_getbasetemp(current)  # type: ignore[method-assign]
 
     if getattr(tmpdir_mod.TempPathFactory, "_make_counted_dir", None) is not None:
         tmpdir_mod.TempPathFactory._make_counted_dir = _counted_make_counted_dir  # type: ignore[method-assign]
@@ -242,6 +295,8 @@ def pytest_configure(config: pytest.Config) -> None:
     _MINTED = None
     _install_counted_numbered_dir()
     controller = not hasattr(config, "workerinput")
+    if config.option.basetemp is not None and controller:
+        _refuse_in_repo_basetemp(config)
     if config.option.basetemp is None and controller:
         basetemp = _per_run_basetemp(config.rootpath)
         basetemp.parent.mkdir(parents=True, exist_ok=True)

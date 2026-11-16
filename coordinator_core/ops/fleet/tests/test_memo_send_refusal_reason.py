@@ -13,6 +13,8 @@ from coordinator_core.ops.fleet.tests.test_memo_send import (
     _make_sender_git_repo,
     _write_draft,
 )
+from pathlib import Path
+import pytest
 
 
 def _send(tmp_path, monkeypatch, *, summary: str, dry_run: bool = False) -> dict:
@@ -22,7 +24,7 @@ def _send(tmp_path, monkeypatch, *, summary: str, dry_run: bool = False) -> dict
     return _memo_send({"dry_run": dry_run, "topic": "over-cap"}, repo_root=sender_repo)
 
 
-def test_over_cap_summary_refusal_names_the_reason_in_the_envelope(tmp_path, monkeypatch):
+def test_over_cap_summary_refusal_names_the_reason_in_the_envelope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     result = _send(tmp_path, monkeypatch, summary="x" * (_SUMMARY_MAX_CHARS + 17))
     assert result["exit_code"] == 1
     assert result["mode"] == _MODE
@@ -30,12 +32,12 @@ def test_over_cap_summary_refusal_names_the_reason_in_the_envelope(tmp_path, mon
     assert result["reason"].count("memo.send:") == 1
 
 
-def test_summary_at_the_cap_is_not_refused_for_length(tmp_path, monkeypatch):
+def test_summary_at_the_cap_is_not_refused_for_length(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     result = _send(tmp_path, monkeypatch, summary="x" * _SUMMARY_MAX_CHARS, dry_run=True)
     assert "cap is" not in result.get("reason", "")
 
 
-def test_param_and_setup_refusals_carry_reason(tmp_path):
+def test_param_and_setup_refusals_carry_reason(tmp_path: Path) -> None:
     result = _memo_send({"dry_run": True, "topic": "x"}, repo_root=None)
     assert result["exit_code"] == 1
     assert "no repo_root supplied" in result["reason"]
@@ -44,7 +46,7 @@ def test_param_and_setup_refusals_carry_reason(tmp_path):
     assert "dry_run must be bool" in bad["reason"]
 
 
-def test_refusal_keeps_the_frozen_envelope_fields(tmp_path, monkeypatch):
+def test_refusal_keeps_the_frozen_envelope_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     result = _send(tmp_path, monkeypatch, summary="x" * (_SUMMARY_MAX_CHARS + 1))
     assert result["candidates"] == [] and result["acted"] == []
     assert result["skipped"] == [] and result["failed"] == []

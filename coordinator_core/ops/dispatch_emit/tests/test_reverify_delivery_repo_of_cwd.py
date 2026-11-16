@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
+from pathlib import Path
+import pytest
 
 
-def test_subdirectory_cwd_resolves_the_enclosing_checkout(tmp_path, monkeypatch):
+def test_subdirectory_cwd_resolves_the_enclosing_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     sub = repo / "state" / "cross-repo" / "inbox"
     sub.mkdir(parents=True)
@@ -20,7 +22,7 @@ def test_subdirectory_cwd_resolves_the_enclosing_checkout(tmp_path, monkeypatch)
     assert rd._repo_of_record(tmp_path / "elsewhere" / "run.md") == repo.resolve()
 
 
-def test_cwd_outside_any_checkout_is_returned_unchanged(tmp_path, monkeypatch):
+def test_cwd_outside_any_checkout_is_returned_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(rd.Path, "exists", lambda self: False)
     assert rd._repo_of_cwd() == tmp_path.resolve()

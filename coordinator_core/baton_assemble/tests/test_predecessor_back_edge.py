@@ -35,17 +35,18 @@ from coordinator_core.test_baton_assemble import (
     _REPO_CLAUDE_KLABAUTER_BIN,
     _ReplayHarness,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 @pytest.fixture(autouse=True)
-def _stub_operator_config(monkeypatch):
+def _stub_operator_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
     monkeypatch.setattr(ba_apply, "_resolve_claude_klabauter_bin", lambda: _REPO_CLAUDE_KLABAUTER_BIN)
 
 
-def test_supersede_stamped_back_edge_is_read_by_wsc_leg_b_as_a_live_child(tmp_path, monkeypatch):
+def test_supersede_stamped_back_edge_is_read_by_wsc_leg_b_as_a_live_child(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     harness = _ReplayHarness(tmp_path, monkeypatch)
     exit_code, report = harness.run()
 
@@ -63,7 +64,7 @@ def test_supersede_stamped_back_edge_is_read_by_wsc_leg_b_as_a_live_child(tmp_pa
     assert result["referenced"] is True
 
 
-def test_a_never_superseded_predecessor_reads_as_no_children(tmp_path, monkeypatch):
+def test_a_never_superseded_predecessor_reads_as_no_children(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     harness = _ReplayHarness(tmp_path, monkeypatch)
 
     result = _dispatch_has_live_children(harness.repo, _PRED_REL)

@@ -17,12 +17,13 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e import 
     halted,
     repo,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 @pytest.fixture
-def s_repo(tmp_path, monkeypatch):
+def s_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
@@ -30,12 +31,12 @@ def s_repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _assert_ask_stage_accepts(root, run_id, plan_rel):
+def _assert_ask_stage_accepts(root, run_id, plan_rel) -> None:
     reply = ask_stage._handler({"run_id": run_id, "plan_path": plan_rel, "writes": ["a.py"]}, repo_root=root)
     assert "manifest_handle" in reply and "error" not in reply, reply
 
 
-def test_s_resume_gate_stage_then_ask_stage_is_not_refused(s_repo):
+def test_s_resume_gate_stage_then_ask_stage_is_not_refused(s_repo) -> None:
     _committed_s_plan(s_repo, [("A1", "coded"), ("A2", "open")])
     out = _handler({"sizing_path": REL, "run_id": "r1", "writes": ["a.py"]}, repo_root=s_repo)
     assert out["resume_plan"] == PLAN_REL and "manifest_handle" in out, out
@@ -43,7 +44,7 @@ def test_s_resume_gate_stage_then_ask_stage_is_not_refused(s_repo):
     _assert_ask_stage_accepts(s_repo, "r1", PLAN_REL)
 
 
-def test_ledger_resume_gate_stage_then_ask_stage_is_not_refused(halted):  # noqa: F811
+def test_ledger_resume_gate_stage_then_ask_stage_is_not_refused(halted) -> None:  # noqa: F811
     _met_out_of_band(halted)
     out = _handler({"sizing_path": SIZING, "run_id": "newrun", "writes": ["a.py"]}, repo_root=halted)
     assert out["resume_ledger"]["plan"] == PLAN and "manifest_handle" in out, out
@@ -51,7 +52,7 @@ def test_ledger_resume_gate_stage_then_ask_stage_is_not_refused(halted):  # noqa
     _assert_ask_stage_accepts(halted, "newrun", PLAN)
 
 
-def test_a_manifest_no_gate_wrote_is_still_refused(s_repo):
+def test_a_manifest_no_gate_wrote_is_still_refused(s_repo) -> None:
     _committed_s_plan(s_repo, [("A1", "coded"), ("A2", "open")])
     _handler({"sizing_path": REL, "run_id": "r1", "writes": ["a.py"]}, repo_root=s_repo)
     (record_dir(s_repo, "r1") / ask_stage_receipt.RECEIPT_NAME).unlink()

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from coordinator_core.ops import method_step
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 R2 = (
     "EM context (not the PM's words):\n"
@@ -22,13 +23,13 @@ R4 = "(b) we can use their agents as part of our workflows should we so choose'.
 STEP = "(a) capture the scan from the device"
 
 
-def test_38c2c8_r2_lettered_parts_mint_unmarked_relayed_rows():
+def test_38c2c8_r2_lettered_parts_mint_unmarked_relayed_rows() -> None:
     entries = rl._lettered_entries(R2)
     assert [t[:3] for t, _ in entries] == ["(a)", "(b)"]
     assert all(anchor == "relayed" for _, anchor in entries)
 
 
-def test_38c2c8_r3_r4_met_rows_pass_the_verdict_without_a_trace(tmp_path):
+def test_38c2c8_r3_r4_met_rows_pass_the_verdict_without_a_trace(tmp_path: Path) -> None:
     items = tuple(
         rl.Item(rid, text, "relayed", "", anchor, "")
         for rid, (text, anchor) in zip(("R3", "R4"), rl._lettered_entries(R2))
@@ -39,7 +40,7 @@ def test_38c2c8_r3_r4_met_rows_pass_the_verdict_without_a_trace(tmp_path):
     assert out["pass"], out
 
 
-def test_method_lead_sentence_still_marks_and_is_refused_without_a_trace(tmp_path):
+def test_method_lead_sentence_still_marks_and_is_refused_without_a_trace(tmp_path: Path) -> None:
     entries = rl._lettered_entries("Earlier remark. The method has two steps: " + STEP + " (b) bake")
     anchor = entries[0][1]
     assert method_step.is_method_step({"anchor": anchor})
@@ -49,11 +50,11 @@ def test_method_lead_sentence_still_marks_and_is_refused_without_a_trace(tmp_pat
     assert any("no mechanism trace" in f["reason"] for f in out["failures"])
 
 
-def test_method_lead_on_its_own_line_still_marks():
+def test_method_lead_on_its_own_line_still_marks() -> None:
     entries = rl._lettered_entries("Method steps:\n" + STEP + "\n(b) bake")
     assert entries and method_step.is_method_step({"anchor": entries[0][1]})
 
 
-def test_method_word_in_an_earlier_sentence_does_not_mark():
+def test_method_word_in_an_earlier_sentence_does_not_mark() -> None:
     entries = rl._lettered_entries("The old method failed. Please fix: (a) the logo (b) the footer")
     assert entries and all(anchor == "relayed" for _, anchor in entries)

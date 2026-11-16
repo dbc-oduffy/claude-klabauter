@@ -9,12 +9,13 @@ import pytest
 
 from coordinator_core import warp_live
 from coordinator_core.ops.dispatch_emit import live_run_index, live_run_writes, run_token
+from pathlib import Path
 
 SCRIPT = "scratch/warp/x.mjs"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     (root / ".git").mkdir(parents=True)
     managed = tmp_path / "managed"
@@ -31,13 +32,13 @@ def _index(root):
     return got
 
 
-def _submit(root, run_id):
+def _submit(root, run_id) -> None:
     warp_live.record_submission(
         root, run_id, session_id="s", transcript_path=None, script_path=SCRIPT, sizing_rel=None
     )
 
 
-def test_index_built_by_mint_stage_consume_matches_live_footprints(repo):
+def test_index_built_by_mint_stage_consume_matches_live_footprints(repo) -> None:
     for rid, rows in (("r1", [["a/x.py"]]), ("r2", [["b/y.py"], ["c/z.py"]]), ("r3", None)):
         run_token.mint(repo, rid, SCRIPT, session_id=None)
         if rows is not None:
@@ -56,14 +57,14 @@ def test_index_built_by_mint_stage_consume_matches_live_footprints(repo):
         )
 
 
-def test_remint_resets_a_staged_footprint(repo):
+def test_remint_resets_a_staged_footprint(repo) -> None:
     run_token.mint(repo, "r1", SCRIPT, session_id=None)
     live_run_writes.index_stage(repo, "r1", {"rows": [{"writes": ["a.py"]}]})
     run_token.mint(repo, "r1", SCRIPT, session_id=None)
     assert _index(repo) == {"r1": None}
 
 
-def test_unlaunched_entry_ages_out_launched_entry_stays(repo):
+def test_unlaunched_entry_ages_out_launched_entry_stays(repo) -> None:
     run_token.mint(repo, "unlaunched", SCRIPT, session_id=None)
     run_token.mint(repo, "launched", SCRIPT, session_id="s")
     _submit(repo, "launched")
@@ -75,7 +76,7 @@ def test_unlaunched_entry_ages_out_launched_entry_stays(repo):
     assert _index(repo) == {}
 
 
-def test_ended_marker_drops_a_launched_entry(repo):
+def test_ended_marker_drops_a_launched_entry(repo) -> None:
     run_token.mint(repo, "r1", SCRIPT, session_id="s")
     _submit(repo, "r1")
     marker = warp_live._ask_record_dir(repo, "r1")
@@ -84,14 +85,14 @@ def test_ended_marker_drops_a_launched_entry(repo):
     assert live_run_writes.prune_index(repo) == ["r1"]
 
 
-def _mark(root, run_id, status):
+def _mark(root, run_id, status) -> None:
     d = warp_live._ask_record_dir(root, run_id)
     d.mkdir(parents=True, exist_ok=True)
     (d / warp_live._HALTED_FILE).write_text(json.dumps({"status": status}), encoding="utf-8")
 
 
 @pytest.mark.parametrize("status", ["resumed", "superseded", "closed", "landed", "halted"])
-def test_prune_drops_a_launched_row_whose_marker_is_over(repo, status):
+def test_prune_drops_a_launched_row_whose_marker_is_over(repo, status) -> None:
     run_token.mint(repo, "r1", SCRIPT, session_id="s")
     _submit(repo, "r1")
     _mark(repo, "r1", status)
@@ -99,14 +100,14 @@ def test_prune_drops_a_launched_row_whose_marker_is_over(repo, status):
     assert _index(repo) == {}
 
 
-def test_prune_keeps_a_launched_row_with_an_unknown_marker_status(repo):
+def test_prune_keeps_a_launched_row_with_an_unknown_marker_status(repo) -> None:
     run_token.mint(repo, "r1", SCRIPT, session_id="s")
     _submit(repo, "r1")
     _mark(repo, "r1", "mystery")
     assert live_run_writes.prune_index(repo) == []
 
 
-def test_deep_prune_drops_a_resumed_row_without_the_transcript_walk(repo, monkeypatch):
+def test_deep_prune_drops_a_resumed_row_without_the_transcript_walk(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     run_token.mint(repo, "r1", SCRIPT, session_id="s")
     _submit(repo, "r1")
     _mark(repo, "r1", "resumed")
@@ -118,14 +119,14 @@ def test_deep_prune_drops_a_resumed_row_without_the_transcript_walk(repo, monkey
     assert live_run_writes.prune_index(repo, deep=True) == ["r1"]
 
 
-def test_footprints_and_deep_prune_read_records_only(repo, monkeypatch):
+def test_footprints_and_deep_prune_read_records_only(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     run_token.mint(repo, "r1", SCRIPT, session_id="s")
     _submit(repo, "r1")
     live_run_writes.index_stage(repo, "r1", {"rows": [{"writes": ["a.py"]}]})
     seen: list = []
     real = warp_live._record_live
 
-    def spy(*a, **k):
+    def spy(*a, **k) -> bool:
         seen.append(k.get("records_only"))
         return real(*a, **k)
 
@@ -135,7 +136,7 @@ def test_footprints_and_deep_prune_read_records_only(repo, monkeypatch):
     assert seen and all(v is True for v in seen)
 
 
-def test_resumed_run_holds_no_footprint_but_stays_live_to_session_readers(repo):
+def test_resumed_run_holds_no_footprint_but_stays_live_to_session_readers(repo) -> None:
     run_token.mint(repo, "r1", SCRIPT, session_id="s")
     _submit(repo, "r1")
     live_run_writes.index_stage(repo, "r1", {"rows": [{"writes": ["a.py"]}]})
@@ -144,7 +145,7 @@ def test_resumed_run_holds_no_footprint_but_stays_live_to_session_readers(repo):
     assert warp_live.live_run_for_session(repo, "s") == "r1"
 
 
-def test_halted_run_holds_no_footprint_and_keeps_its_record(repo):
+def test_halted_run_holds_no_footprint_and_keeps_its_record(repo) -> None:
     run_token.mint(repo, "h1", SCRIPT, session_id="s")
     run_token.mint(repo, "live", SCRIPT, session_id="s2")
     for rid in ("h1", "live"):
@@ -156,7 +157,7 @@ def test_halted_run_holds_no_footprint_and_keeps_its_record(repo):
     assert (warp_live._ask_record_dir(repo, "h1") / warp_live._HALTED_FILE).is_file()
 
 
-def test_prune_drops_a_launched_row_whose_owner_exited_and_keeps_a_live_owner(repo, monkeypatch):
+def test_prune_drops_a_launched_row_whose_owner_exited_and_keeps_a_live_owner(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     for rid, sid in (("dead", "gone"), ("alive", "here")):
         run_token.mint(repo, rid, SCRIPT, session_id=sid)
         _submit_as(repo, rid, sid)
@@ -165,13 +166,13 @@ def test_prune_drops_a_launched_row_whose_owner_exited_and_keeps_a_live_owner(re
     assert set(_index(repo)) == {"alive"}
 
 
-def _submit_as(root, run_id, session_id):
+def _submit_as(root, run_id, session_id) -> None:
     warp_live.record_submission(
         root, run_id, session_id=session_id, transcript_path=None, script_path=SCRIPT, sizing_rel=None
     )
 
 
-def test_dirless_ghost_row_ages_out(repo):
+def test_dirless_ghost_row_ages_out(repo) -> None:
     run_token.mint(repo, "ghost", SCRIPT, session_id="s")
     assert not warp_live._ask_record_dir(repo, "ghost").exists()
     past = time.time() + warp_live.UNLAUNCHED_GRACE_SECONDS + 60
@@ -179,7 +180,7 @@ def test_dirless_ghost_row_ages_out(repo):
 
 
 @pytest.mark.spawns_process
-def test_concurrent_mints_in_separate_processes_all_land(repo):
+def test_concurrent_mints_in_separate_processes_all_land(repo) -> None:
     import subprocess
     import sys
 
@@ -198,7 +199,69 @@ def test_concurrent_mints_in_separate_processes_all_land(repo):
     assert set(_index(repo)) == {f"p{n}_{i}" for n in range(4) for i in range(4)}
 
 
-def _stage(root, run_id, rows=(), declared=(), docs=()):
+def test_the_index_lock_sidecar_survives_a_prefixed_realpath_of_the_index(repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+
+    index = live_run_index.index_path(repo)
+    real = os.path.realpath
+
+    def sidecars() -> set[str]:
+        from coordinator_core import locked_write
+
+        return {p.name for p in locked_write._machine_lock_dir().glob("*.lock")}
+
+    def flaky(p, *a, **k):
+        out = real(p, *a, **k)
+        return "\\\\?\\" + out if os.path.normcase(str(p)) == os.path.normcase(str(index)) else out
+
+    with live_run_writes._index_lock(repo) as held:
+        assert held
+    before = sidecars()
+    monkeypatch.setattr(os.path, "realpath", flaky)
+    with live_run_writes._index_lock(repo) as held:
+        assert held
+    assert sidecars() == before
+    assert len(before) == 1
+
+
+def _lock_times_out_once(monkeypatch: pytest.MonkeyPatch) -> list[int]:
+    from coordinator_core import locked_write
+
+    real, calls = locked_write.held_lock, [0]
+
+    def held_lock(*args, **kwargs):
+        calls[0] += 1
+        if calls[0] == 1:
+            raise locked_write.LockTimeout("busy")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(locked_write, "held_lock", held_lock)
+    return calls
+
+
+def test_an_unlocked_mint_overwritten_by_a_peer_is_redone_under_the_lock(repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    run_token.mint(repo, "peer", SCRIPT, session_id=None)
+    real_add, adds = live_run_index.add, [0]
+
+    def add_lost_first(root, run_id, minted_at):
+        adds[0] += 1
+        return True if adds[0] == 1 else real_add(root, run_id, minted_at)
+
+    monkeypatch.setattr(live_run_index, "add", add_lost_first)
+    calls = _lock_times_out_once(monkeypatch)
+    live_run_writes.index_mint(repo, "mine", 1.0)
+    assert set(_index(repo)) == {"peer", "mine"}
+    assert calls[0] >= 2
+
+
+def test_an_unlocked_mint_that_landed_is_not_redone(repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = _lock_times_out_once(monkeypatch)
+    live_run_writes.index_mint(repo, "mine", 1.0)
+    assert set(_index(repo)) == {"mine"}
+    assert calls[0] == 1
+
+
+def _stage(root, run_id, rows=(), declared=(), docs=()) -> None:
     d = root / "scratch" / "warp" / run_id
     d.mkdir(parents=True)
     (d / "manifest.json").write_text(
@@ -213,7 +276,7 @@ def _stage(root, run_id, rows=(), declared=(), docs=()):
     )
 
 
-def test_staged_run_footprint_unions_rows_declared_and_docs(repo):
+def test_staged_run_footprint_unions_rows_declared_and_docs(repo) -> None:
     run_token.mint(repo, "r1", SCRIPT, session_id=None)
     _stage(repo, "r1", rows=[["a/x.py"], ["b/y.py"]], declared=["agents/z.md"], docs=["docs/d.md"])
     assert live_run_writes.live_footprints(repo, exclude_run_id=None) == {
@@ -221,19 +284,19 @@ def test_staged_run_footprint_unions_rows_declared_and_docs(repo):
     }
 
 
-def test_unstaged_run_is_none_and_exclude_drops_own_run(repo):
+def test_unstaged_run_is_none_and_exclude_drops_own_run(repo) -> None:
     run_token.mint(repo, "r1", SCRIPT, session_id=None)
     run_token.mint(repo, "r2", SCRIPT, session_id=None)
     assert live_run_writes.live_footprints(repo, exclude_run_id="r2") == {"r1": None}
 
 
-def test_one_call_lists_each_launch_dir_at_most_once(repo, monkeypatch):
+def test_one_call_lists_each_launch_dir_at_most_once(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     for i in range(4):
         run_token.mint(repo, f"r{i}", SCRIPT, session_id=f"s{i}")
     listed: list[str] = []
     real = warp_live.os.listdir
 
-    def spy(path="."):
+    def spy(path: str = ".") -> list[str]:
         listed.append(str(path))
         return real(path)
 
@@ -244,14 +307,14 @@ def test_one_call_lists_each_launch_dir_at_most_once(repo, monkeypatch):
     assert len(mine) == len(set(mine))
 
 
-def test_ended_run_is_absent(repo, monkeypatch):
+def test_ended_run_is_absent(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     run_token.mint(repo, "r1", SCRIPT, session_id=None)
     real = warp_live.time.time()
     monkeypatch.setattr(warp_live.time, "time", lambda: real + warp_live.UNLAUNCHED_GRACE_SECONDS + 60)
     assert live_run_writes.live_footprints(repo, exclude_run_id=None) == {}
 
 
-def test_overlaps_exact_dir_prefix_and_none():
+def test_overlaps_exact_dir_prefix_and_none() -> None:
     fp = {
         "r1": frozenset({"a/b/x.py"}),
         "r2": frozenset({"c/y.py"}),
@@ -264,7 +327,7 @@ def test_overlaps_exact_dir_prefix_and_none():
     assert live_run_writes.overlaps([], fp) == {}
 
 
-def test_deferred_emit_run_past_the_grace_loses_its_footprint_records_only(repo, monkeypatch):
+def test_deferred_emit_run_past_the_grace_loses_its_footprint_records_only(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """Accepted: records-only liveness cannot see a deferred-emit run's transcript-found launch,
     so once the unlaunched grace passes its footprint is dropped. Within the grace it is held."""
     run_token.mint(repo, "d1", SCRIPT, session_id="s")
@@ -276,7 +339,7 @@ def test_deferred_emit_run_past_the_grace_loses_its_footprint_records_only(repo,
     assert live_run_writes.live_footprints(repo, exclude_run_id=None) == {}
 
 
-def test_file_claims_drops_directories_and_root_but_keeps_files_and_unwritten_paths(repo):
+def test_file_claims_drops_directories_and_root_but_keeps_files_and_unwritten_paths(repo) -> None:
     (repo / "pkg").mkdir()
     (repo / "pkg" / "a.py").write_text("x", encoding="utf-8")
     got = live_run_writes.file_claims(repo, ["pkg", "pkg/a.py", "pkg/new.py", ".", "", "pkg\\a.py", "pkg\\"])

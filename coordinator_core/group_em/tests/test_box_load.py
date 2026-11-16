@@ -6,9 +6,11 @@ import subprocess
 from types import SimpleNamespace
 
 from coordinator_core.group_em import box_load
+from pathlib import Path
+import pytest
 
 
-def test_fires_once_after_n_ticks_and_rearms_below():
+def test_fires_once_after_n_ticks_and_rearms_below() -> None:
     state, fires = None, []
     for load in (9, 9, 9, 9, 9, 1, 9, 9, 9):
         state, fire = box_load.next_state(state, load, 4, n=3)
@@ -16,40 +18,40 @@ def test_fires_once_after_n_ticks_and_rearms_below():
     assert fires == [False, False, True, False, False, False, False, False, True]
 
 
-def test_equal_to_cores_does_not_count():
+def test_equal_to_cores_does_not_count() -> None:
     state, fire = box_load.next_state({"count": 2}, 4.0, 4, n=3)
     assert (state, fire) == ({"count": 0}, False)
 
 
-def test_none_load5_resets_without_firing():
+def test_none_load5_resets_without_firing() -> None:
     assert box_load.next_state({"count": 2}, None, 4) == ({"count": 0}, False)
 
 
-def test_malformed_prev_is_initial():
+def test_malformed_prev_is_initial() -> None:
     for bad in (None, "x", [], {"count": "2"}, {"count": True}, {"count": -1}, {}):
         state, fire = box_load.next_state(bad, 9, 4, n=3)
         assert state == {"count": 1} and fire is False
 
 
-def test_read_load5_degrades_without_getloadavg(monkeypatch):
+def test_read_load5_degrades_without_getloadavg(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delattr(box_load.os, "getloadavg", raising=False)
     assert box_load.read_load5() is None
 
 
-def test_read_load5_reads_middle_value(monkeypatch):
+def test_read_load5_reads_middle_value(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(box_load.os, "getloadavg", lambda: (1.0, 2.5, 3.0), raising=False)
     assert box_load.read_load5() == 2.5
 
 
-def test_core_count_floor(monkeypatch):
+def test_core_count_floor(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(box_load.os, "cpu_count", lambda: None)
     assert box_load.core_count() == 1
 
 
-def _ps(stdout, returncode=0):
+def _ps(stdout, returncode: int = 0):
     calls = []
 
-    def run(cmd, **kw):
+    def run(cmd, **kw) -> SimpleNamespace:
         calls.append((cmd, kw))
         return SimpleNamespace(stdout=stdout, returncode=returncode)
 
@@ -57,7 +59,7 @@ def _ps(stdout, returncode=0):
     return run
 
 
-def test_top_processes_parses_sorts_and_bounds(monkeypatch):
+def test_top_processes_parses_sorts_and_bounds(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(box_load, "_IS_WINDOWS", False)
     out = (
         "  10     1  1.5 /usr/bin/a\n"
@@ -73,7 +75,7 @@ def test_top_processes_parses_sorts_and_bounds(monkeypatch):
     assert len(run.calls) == 1 and run.calls[0][1]["timeout"] == 1
 
 
-def test_top_processes_failures_return_empty(monkeypatch):
+def test_top_processes_failures_return_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(box_load, "_IS_WINDOWS", False)
 
     def boom(*a, **k):
@@ -85,7 +87,7 @@ def test_top_processes_failures_return_empty(monkeypatch):
     assert box_load.top_processes(8, _ps("1 0 1.0 x")) == []
 
 
-def test_attribute_walks_ppid_to_session_and_maps_repo(tmp_path):
+def test_attribute_walks_ppid_to_session_and_maps_repo(tmp_path: Path) -> None:
     repo = tmp_path / "myrepo"
     (repo / ".git").mkdir(parents=True)
     sub = repo / "pkg"
@@ -97,7 +99,7 @@ def test_attribute_walks_ppid_to_session_and_maps_repo(tmp_path):
     assert (row["session"], row["repo"]) == ("abcdef12", "myrepo")
 
 
-def test_attribute_unattributed_kept_and_cycle_safe():
+def test_attribute_unattributed_kept_and_cycle_safe() -> None:
     procs = [
         {"pid": 5, "ppid": 6, "pcpu": 1.0, "comm": "a"},
         {"pid": 7, "ppid": 1, "pcpu": 1.0, "comm": "b"},
@@ -107,7 +109,7 @@ def test_attribute_unattributed_kept_and_cycle_safe():
     assert all((r["session"], r["repo"]) == ("?", "?") for r in rows)
 
 
-def test_alarm_line_shape():
+def test_alarm_line_shape() -> None:
     rows = [
         {"comm": "node", "pcpu": 80.0, "session": "abcdef12", "repo": "r"},
         {"comm": "x", "pcpu": 5.0, "session": "?", "repo": "?"},
@@ -116,7 +118,7 @@ def test_alarm_line_shape():
     assert line == "load-alarm: load5=9.00 cores=4 for 3 ticks; top: node(80.0%) abcdef12@r, x(5.0%) ?@?"
 
 
-def test_read_sessions_and_top_attributed(tmp_path, monkeypatch):
+def test_read_sessions_and_top_attributed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "sessions").mkdir()
     (tmp_path / "sessions" / "a.json").write_text(
         '{"pid": 10, "sessionId": "sess1234xyz", "cwd": "' + str(tmp_path).replace("\\", "/") + '"}',

@@ -21,7 +21,7 @@ _IDENTITY_VARS = ("COORDINATOR_SESSION_ID", "CODEX_THREAD_ID", "ANTIGRAVITY_CONV
 
 
 @pytest.fixture(autouse=True)
-def home(tmp_path, monkeypatch):
+def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     for name in _IDENTITY_VARS:
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv(g.SETTINGS_HOME_KEY, str(tmp_path / "settings"))
@@ -63,7 +63,7 @@ EXEC_FAMILIES = tuple(f for f in hel.FAMILIES if f != "claude")
 
 
 @pytest.mark.parametrize("family", EXEC_FAMILIES)
-def test_launched_em_passes_require_fire_authority(family, monkeypatch):
+def test_launched_em_passes_require_fire_authority(family, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, calls, env = _run(family, extra=["-m", "x"])
     assert rc == 0
     assert calls == [(f"/bin/{family}", [f"/bin/{family}", "-m", "x"])]
@@ -72,18 +72,18 @@ def test_launched_em_passes_require_fire_authority(family, monkeypatch):
     assert caller.session_id == env[hel.SESSION_ENV]
 
 
-def test_explicit_session_id_wins_over_env_and_is_granted(monkeypatch):
+def test_explicit_session_id_wins_over_env_and_is_granted(monkeypatch: pytest.MonkeyPatch) -> None:
     rc, _, env = _run(session_id="sess-explicit", env={hel.SESSION_ENV: "sess-env"})
     assert rc == 0 and env[hel.SESSION_ENV] == "sess-explicit"
     assert g.grant_path("sess-explicit").exists() and not g.grant_path("sess-env").exists()
 
 
-def test_env_session_id_is_used_when_no_flag():
+def test_env_session_id_is_used_when_no_flag() -> None:
     _, _, env = _run(env={hel.SESSION_ENV: "sess-env"})
     assert env[hel.SESSION_ENV] == "sess-env" and g.grant_path("sess-env").exists()
 
 
-def test_grant_for_other_session_does_not_admit(monkeypatch):
+def test_grant_for_other_session_does_not_admit(monkeypatch: pytest.MonkeyPatch) -> None:
     _, _, env = _run(session_id="sess-a")
     env = {**env, hel.SESSION_ENV: "sess-b"}
     with pytest.raises(ValueError):
@@ -91,36 +91,36 @@ def test_grant_for_other_session_does_not_admit(monkeypatch):
 
 
 @pytest.mark.parametrize("marker", [{"COORDINATOR_AGENT_WORKER": "1"}, {"COORDINATOR_AGENT_ROLE": "worker"}])
-def test_worker_env_cannot_mint_a_grant(marker, home):
+def test_worker_env_cannot_mint_a_grant(marker, home) -> None:
     rc, calls, env = _run(env=dict(marker))
     assert rc == hel.REFUSED and not calls
     assert g.HEADLESS_EM_TOKEN_ENV not in env and not (home / "state").exists()
 
 
-def test_worker_marker_in_child_env_still_refuses_fire(monkeypatch):
+def test_worker_marker_in_child_env_still_refuses_fire(monkeypatch: pytest.MonkeyPatch) -> None:
     _, _, env = _run()
     with pytest.raises(ValueError):
         _fire(monkeypatch, {**env, "COORDINATOR_AGENT_WORKER": "1"})
 
 
-def test_missing_cli_exits_127_and_writes_no_grant(home):
+def test_missing_cli_exits_127_and_writes_no_grant(home) -> None:
     calls, env = [], {}
     rc = hel.launch("codex", [], which=lambda n: None, spawn=lambda *a: calls.append(a), environ=env,
                     platform="linux")
     assert rc == 127 and not calls and not (home / "state").exists()
 
 
-def test_unknown_family_refused(home):
+def test_unknown_family_refused(home) -> None:
     rc, calls, _ = _run("gemini")
     assert rc == hel.REFUSED and not calls and not (home / "state").exists()
 
 
-def test_windows_exec_refused_without_grant(home):
+def test_windows_exec_refused_without_grant(home) -> None:
     rc, calls, env = _run(platform="win32")
     assert rc == hel.REFUSED and not calls and not env and not (home / "state").exists()
 
 
-def test_windows_prepare_emits_token_without_executing(capsys):
+def test_windows_prepare_emits_token_without_executing(capsys: pytest.CaptureFixture[str]) -> None:
     calls, env = [], {}
     rc = hel.launch("codex", [], which=lambda n: None, spawn=lambda *a: calls.append(a), environ=env,
                     platform="win32", prepare_only=True, native_executable="codex.exe")
@@ -137,13 +137,13 @@ def _win_prepare(family, which, capsys, **kw):
 
 
 @pytest.mark.parametrize("family", hel.FAMILIES)
-def test_windows_native_exe_on_path_used_as_is(family, capsys):
+def test_windows_native_exe_on_path_used_as_is(family, capsys: pytest.CaptureFixture[str]) -> None:
     rc, out = _win_prepare(family, lambda n: f"pathbin/{n}" if n.endswith(".exe") else None, capsys)
     tail = ["--bg"] if family == "claude" else []
     assert rc == 0 and json.loads(out.out)["argv"] == [f"pathbin/{family}.exe", *tail]
 
 
-def test_windows_codex_cmd_shim_maps_to_native_exe(tmp_path, capsys):
+def test_windows_codex_cmd_shim_maps_to_native_exe(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     shim = tmp_path / "codex.cmd"
     exe = (tmp_path / "node_modules" / "@openai" / "codex" / "vendor" / "x86_64-pc-windows-msvc" / "codex" / "codex.exe")
     exe.parent.mkdir(parents=True)
@@ -156,7 +156,7 @@ def test_windows_codex_cmd_shim_maps_to_native_exe(tmp_path, capsys):
 
 
 @pytest.mark.parametrize("family", hel.FAMILIES)
-def test_windows_shim_without_native_package_refused_naming_flag(family, tmp_path, capsys, home, monkeypatch):
+def test_windows_shim_without_native_package_refused_naming_flag(family, tmp_path: Path, capsys: pytest.CaptureFixture[str], home, monkeypatch: pytest.MonkeyPatch) -> None:
     # resolve_native_cli falls back to the real <home>/.<family>/bin exe; point home at an empty dir.
     for var in ("USERPROFILE", "HOME"):
         monkeypatch.setenv(var, str(tmp_path / "nohome"))
@@ -165,12 +165,12 @@ def test_windows_shim_without_native_package_refused_naming_flag(family, tmp_pat
     assert not (home / "state").exists()
 
 
-def test_windows_native_executable_flag_wins_over_path(capsys):
+def test_windows_native_executable_flag_wins_over_path(capsys: pytest.CaptureFixture[str]) -> None:
     rc, out = _win_prepare("agy", lambda n: "pathbin/agy.exe", capsys, native_executable="given/agy.exe")
     assert rc == 0 and json.loads(out.out)["argv"] == ["given/agy.exe"]
 
 
-def test_main_parses_family_session_and_passthrough(monkeypatch):
+def test_main_parses_family_session_and_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
     monkeypatch.setattr(hel, "launch", lambda family, extra, **k: seen.update(k, family=family, extra=extra) or 0)
     assert hel.main(["grok", "--session-id", "s1", "--prepare-only", "--", "-p", "hi"]) == 0
@@ -178,11 +178,11 @@ def test_main_parses_family_session_and_passthrough(monkeypatch):
     assert seen["extra"] == ["-p", "hi"]
 
 
-def test_main_without_args_refuses():
+def test_main_without_args_refuses() -> None:
     assert hel.main([]) == hel.REFUSED
 
 
-def _pwsh_env(tmp_path, *, real=True, path_key="Path"):
+def _pwsh_env(tmp_path, *, real: bool = True, path_key: str = "Path"):
     """A Windows-shaped caller env: WindowsApps alias dir first, real pwsh dir (when `real`) later."""
     alias = tmp_path / "WindowsApps"
     alias.mkdir()
@@ -205,7 +205,7 @@ def _prepare(env, capsys, family="codex", platform="win32"):
     return json.loads(capsys.readouterr().out)["environment"]
 
 
-def test_windows_codex_prepare_carries_shaped_path_real_pwsh_first_alias_dropped(tmp_path, capsys):
+def test_windows_codex_prepare_carries_shaped_path_real_pwsh_first_alias_dropped(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     env, inherited, alias, real_dir, bin_dir = _pwsh_env(tmp_path)
     shaped = _prepare(env, capsys)["PATH"].split(os.pathsep)
     assert shaped == [str(bin_dir), str(real_dir)]
@@ -213,39 +213,39 @@ def test_windows_codex_prepare_carries_shaped_path_real_pwsh_first_alias_dropped
 
 
 @pytest.mark.parametrize("path_key", ["Path", "PATH"])
-def test_windows_codex_prepare_reads_path_by_case_insensitive_key(tmp_path, capsys, path_key):
+def test_windows_codex_prepare_reads_path_by_case_insensitive_key(tmp_path: Path, capsys: pytest.CaptureFixture[str], path_key) -> None:
     env, *_ = _pwsh_env(tmp_path, path_key=path_key)
     assert "PATH" in _prepare(env, capsys)
 
 
-def test_windows_codex_prepare_without_real_pwsh_emits_no_path(tmp_path, capsys):
+def test_windows_codex_prepare_without_real_pwsh_emits_no_path(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     env, *_ = _pwsh_env(tmp_path, real=False)
     assert "PATH" not in _prepare(env, capsys)
 
 
-def test_windows_codex_prepare_with_no_caller_path_emits_no_path(tmp_path, capsys):
+def test_windows_codex_prepare_with_no_caller_path_emits_no_path(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     env, *_ = _pwsh_env(tmp_path)
     del env["Path"]
     assert "PATH" not in _prepare(env, capsys)
 
 
-def test_windows_codex_prepare_with_already_shaped_path_emits_no_path(tmp_path, capsys):
+def test_windows_codex_prepare_with_already_shaped_path_emits_no_path(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     env, _, _, real_dir, bin_dir = _pwsh_env(tmp_path)
     env["Path"] = os.pathsep.join([str(bin_dir), str(real_dir)])
     assert "PATH" not in _prepare(env, capsys)
 
 
 @pytest.mark.parametrize("family", ["codex", "grok", "agy", "claude"])
-def test_prepare_environment_carries_the_family_as_agent_provider(family, capsys):
+def test_prepare_environment_carries_the_family_as_agent_provider(family, capsys: pytest.CaptureFixture[str]) -> None:
     assert _prepare({"PATH": "x"}, capsys, family=family, platform="linux")["COORDINATOR_AGENT_PROVIDER"] == family
 
 
-def test_launch_child_env_carries_the_family_as_agent_provider():
+def test_launch_child_env_carries_the_family_as_agent_provider() -> None:
     rc, calls, env = _run("codex", env={"PATH": "x"})
     assert rc == 0 and env["COORDINATOR_AGENT_PROVIDER"] == "codex"
 
 
-def test_windows_grok_never_gets_a_path(tmp_path, capsys):
+def test_windows_grok_never_gets_a_path(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     env, *_ = _pwsh_env(tmp_path)
     assert "PATH" not in _prepare(env, capsys, family="grok")
 
@@ -260,7 +260,7 @@ def _fake_invoke(home):
 
 
 @pytest.mark.parametrize("platform", ["win32", "linux"])
-def test_agy_prepare_path_resolves_coordinator_invoke(platform, home, tmp_path, capsys):
+def test_agy_prepare_path_resolves_coordinator_invoke(platform, home, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     bin_dir, exe = _fake_invoke(home)
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
@@ -271,20 +271,20 @@ def test_agy_prepare_path_resolves_coordinator_invoke(platform, home, tmp_path, 
     assert Path(shutil.which("coordinator-invoke", path=child["PATH"])) == exe
 
 
-def test_agy_prepare_without_caller_path_still_carries_the_bin_dir(home, capsys):
+def test_agy_prepare_without_caller_path_still_carries_the_bin_dir(home, capsys: pytest.CaptureFixture[str]) -> None:
     bin_dir, _ = _fake_invoke(home)
     child = _prepare({g.SETTINGS_HOME_KEY: str(home)}, capsys, family="agy", platform="linux")
     assert child["PATH"].split(os.pathsep) == [str(bin_dir)]
 
 
-def test_agy_prepare_does_not_duplicate_a_bin_dir_already_on_path(home, capsys):
+def test_agy_prepare_does_not_duplicate_a_bin_dir_already_on_path(home, capsys: pytest.CaptureFixture[str]) -> None:
     bin_dir, _ = _fake_invoke(home)
     env = {"PATH": os.pathsep.join(["x", str(bin_dir)]), g.SETTINGS_HOME_KEY: str(home)}
     child = _prepare(env, capsys, family="agy", platform="linux")
     assert child["PATH"].split(os.pathsep).count(str(bin_dir)) == 1
 
 
-def test_agy_bin_dir_falls_back_to_default_settings_home_under_home(tmp_path, monkeypatch, capsys):
+def test_agy_bin_dir_falls_back_to_default_settings_home_under_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.delenv(g.SETTINGS_HOME_KEY, raising=False)
     monkeypatch.setattr(Path, "home", classmethod(lambda cls: tmp_path))
     child = _prepare({"PATH": "x"}, capsys, family="agy", platform="linux")
@@ -292,27 +292,27 @@ def test_agy_bin_dir_falls_back_to_default_settings_home_under_home(tmp_path, mo
 
 
 @pytest.mark.parametrize("family", ["codex", "grok", "claude"])
-def test_agy_path_shaping_never_touches_other_families(family, home, capsys):
+def test_agy_path_shaping_never_touches_other_families(family, home, capsys: pytest.CaptureFixture[str]) -> None:
     _fake_invoke(home)
     env = {"PATH": "x", g.SETTINGS_HOME_KEY: str(home)}
     assert "PATH" not in _prepare(env, capsys, family=family, platform="linux")
 
 
-def test_non_windows_codex_launch_leaves_the_env_without_a_path_change(tmp_path):
+def test_non_windows_codex_launch_leaves_the_env_without_a_path_change(tmp_path: Path) -> None:
     env, inherited, *_ = _pwsh_env(tmp_path)
     rc, calls, env = _run("codex", env=env)
     assert rc == 0 and env["Path"] == inherited and "PATH" not in env
 
 
 class _Done:
-    def __init__(self, stdout="", returncode=0, stderr=""):
+    def __init__(self, stdout: str = "", returncode: int = 0, stderr: str = "") -> None:
         self.stdout, self.returncode, self.stderr = stdout, returncode, stderr
 
 
-def _bg(platform, capsys, stdout="started 1a2b3c4d\n", returncode=0, **kw):
+def _bg(platform, capsys, stdout: str = "started 1a2b3c4d\n", returncode: int = 0, **kw):
     seen = []
 
-    def runner(argv, **k):
+    def runner(argv, **k) -> _Done:
         seen.append((argv, k))
         return _Done(stdout, returncode)
 
@@ -325,14 +325,14 @@ def _bg(platform, capsys, stdout="started 1a2b3c4d\n", returncode=0, **kw):
     return rc, seen, out
 
 
-def test_claude_grant_is_accepted():
+def test_claude_grant_is_accepted() -> None:
     """write_headless_em_grant accepts claude and the grant matches."""
     token = g.write_headless_em_grant("s1", "claude")
     assert g.headless_em_grant_matches({g.HEADLESS_EM_TOKEN_ENV: token}, "s1", "claude")
 
 
 @pytest.mark.parametrize("platform", ["win32", "linux"])
-def test_claude_launch_runs_bg_with_name_and_returns_printed_id(platform, capsys):
+def test_claude_launch_runs_bg_with_name_and_returns_printed_id(platform, capsys: pytest.CaptureFixture[str]) -> None:
     rc, seen, out = _bg(platform, capsys, name="fleet-a")
     (argv, kw), = seen
     assert rc == 0
@@ -343,35 +343,35 @@ def test_claude_launch_runs_bg_with_name_and_returns_printed_id(platform, capsys
 
 
 @pytest.mark.parametrize("platform", ["win32", "linux"])
-def test_claude_resume_runs_bg_resume_id(platform, capsys):
+def test_claude_resume_runs_bg_resume_id(platform, capsys: pytest.CaptureFixture[str]) -> None:
     rc, seen, out = _bg(platform, capsys, resume="1a2b3c4d")
     assert rc == 0 and seen[0][0][1:] == ["--bg", "--resume", "1a2b3c4d"]
     assert json.loads(out.out)["id"] == "1a2b3c4d"
 
 
-def test_claude_uuid_id_is_returned(capsys):
+def test_claude_uuid_id_is_returned(capsys: pytest.CaptureFixture[str]) -> None:
     uid = "0b6f8a52-1c3d-4e5f-8a9b-0c1d2e3f4a5b"
     rc, _, out = _bg("linux", capsys, stdout=f"session {uid}\n", name="n")
     assert rc == 0 and json.loads(out.out)["id"] == uid
 
 
 @pytest.mark.parametrize("kw", [{"stdout": "no id here\n"}, {"returncode": 1}])
-def test_claude_bg_failure_or_missing_id_is_refused(kw, capsys):
+def test_claude_bg_failure_or_missing_id_is_refused(kw, capsys: pytest.CaptureFixture[str]) -> None:
     rc, _, out = _bg("linux", capsys, name="n", **kw)
     assert rc == hel.REFUSED and out.out == ""
 
 
-def test_name_on_non_claude_family_refused(home):
+def test_name_on_non_claude_family_refused(home) -> None:
     rc, calls, _ = _run("codex", name="x")
     assert rc == hel.REFUSED and not calls and not (home / "state").exists()
 
 
-def test_windows_non_claude_exec_still_refused(home):
+def test_windows_non_claude_exec_still_refused(home) -> None:
     rc, calls, env = _run("grok", platform="win32")
     assert rc == hel.REFUSED and not calls and not (home / "state").exists()
 
 
-def test_main_forwards_name_resume_cwd(monkeypatch):
+def test_main_forwards_name_resume_cwd(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
     monkeypatch.setattr(hel, "launch", lambda family, extra, **k: seen.update(k, family=family) or 0)
     assert hel.main(["claude", "--name", "n1", "--cwd", "/r"]) == 0
@@ -430,6 +430,7 @@ def test_open_run_gate_reads_real_fire_records_for_the_launched_session(tmp_path
     assert rc == 0
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows has no signal deaths: SIGTERM is a plain exit code 15")
 def test_spawn_maps_a_signal_death_to_128_plus_signum():
     import sys
     code = hel._spawn([sys.executable, "-c", "import os, signal; os.kill(os.getpid(), signal.SIGTERM)"],

@@ -37,20 +37,20 @@ def _write_sizing(root: Path, name: str, *, tshirt: str, route: str, mode: str) 
     return rel
 
 
-def test_hands_on_s_without_statement_is_admitted_pending_acceptance(tmp_path):
+def test_hands_on_s_without_statement_is_admitted_pending_acceptance(tmp_path: Path) -> None:
     rel = _write_sizing(tmp_path, "s.yaml", tshirt="S", route="spec-dispatch", mode="hands-on")
     out = _gate_sizing_at_emit(tmp_path, rel, ["a.py"])
     assert out.get("accept_pending") is True
 
 
-def test_hands_on_xl_without_statement_still_refused(tmp_path):
+def test_hands_on_xl_without_statement_still_refused(tmp_path: Path) -> None:
     rel = _write_sizing(tmp_path, "xl.yaml", tshirt="XL", route="plan", mode="hands-on")
     with pytest.raises(SizingFireRefused):
         _gate_sizing_at_emit(tmp_path, rel, ["a.py"])
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
@@ -59,7 +59,7 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_fire_args_carries_run_token_and_stdout_record_does_not(repo, capsys):
+def test_fire_args_carries_run_token_and_stdout_record_does_not(repo, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 
     result = _dispatch_emit({"ask": "x", "repo_root": str(repo)}, repo_root=repo)

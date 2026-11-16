@@ -13,6 +13,7 @@ import pytest
 from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.session import core, scope
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -41,14 +42,14 @@ def _head(repo) -> str:
     return _git(["rev-parse", "HEAD"], repo).strip()
 
 
-def _falsifier(repo, sid):
+def _falsifier(repo, sid) -> None:
     """a.py imports new_fn from pkg.b, which defines it only in the uncommitted worktree."""
     (repo / "pkg" / "b.py").write_text("def old_fn():\n    pass\n\ndef new_fn():\n    pass\n")
     (repo / "pkg" / "a.py").write_text("from pkg.b import new_fn\n")
     scope.touch(sid, "pkg/a.py", cwd=str(repo))
 
 
-def test_falsifier_group_refused_with_gate_text(tmp_path):
+def test_falsifier_group_refused_with_gate_text(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     core.init("mine", cwd=str(repo))
     _falsifier(repo, "mine")
@@ -68,7 +69,7 @@ def test_falsifier_group_refused_with_gate_text(tmp_path):
     assert _head(repo) == before
 
 
-def test_refused_group_does_not_block_later_group(tmp_path):
+def test_refused_group_does_not_block_later_group(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     core.init("mine", cwd=str(repo))
     _falsifier(repo, "mine")

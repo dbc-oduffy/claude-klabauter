@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.backlog_grind_assemble import readers_mise
+import pytest
 
 _START_SHA = "a" * 40
 _RUN_ID = "run-unify"
@@ -55,8 +56,8 @@ def _write_todo(repo_root: Path, rel_path: str) -> None:
 
 class TestUnifiesOncePerRun:
     def test_three_inheritable_batons_yield_one_directive_with_all_as_fan_in_legs(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         state_root = tmp_path / "state"
         monkeypatch.setattr(readers_mise, "_resolve_state_root", lambda: str(state_root))
 
@@ -87,7 +88,7 @@ class TestUnifiesOncePerRun:
             ]
         )
 
-    def test_non_inheritable_artifact_is_not_inherited(self, tmp_path, monkeypatch):
+    def test_non_inheritable_artifact_is_not_inherited(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         state_root = tmp_path / "state"
         monkeypatch.setattr(readers_mise, "_resolve_state_root", lambda: str(state_root))
 
@@ -109,7 +110,7 @@ class TestUnifiesOncePerRun:
         directive = result.directives[0]
         assert directive["additional_predecessors"] == ["docs/plans/2026-08-19-work.md"]
 
-    def test_run_unifies_exactly_once_never_per_item(self, tmp_path, monkeypatch):
+    def test_run_unifies_exactly_once_never_per_item(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         state_root = tmp_path / "state"
         monkeypatch.setattr(readers_mise, "_resolve_state_root", lambda: str(state_root))
 
@@ -136,7 +137,7 @@ class TestUnifiesOncePerRun:
         assert len(unify_directives) == 1
         assert len(unify_directives[0]["additional_predecessors"]) == 3
 
-    def test_no_inheritable_batons_emits_no_directive(self, tmp_path, monkeypatch):
+    def test_no_inheritable_batons_emits_no_directive(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         state_root = tmp_path / "state"
         monkeypatch.setattr(readers_mise, "_resolve_state_root", lambda: str(state_root))
 
@@ -154,7 +155,7 @@ class TestUnifiesOncePerRun:
 
 
 class TestRoleAxisFallbackCounted:
-    def test_absent_axis_falls_back_to_heuristic_and_is_counted(self, tmp_path, monkeypatch):
+    def test_absent_axis_falls_back_to_heuristic_and_is_counted(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         state_root = tmp_path / "state"
         monkeypatch.setattr(readers_mise, "_resolve_state_root", lambda: str(state_root))
 
@@ -182,7 +183,7 @@ class TestRoleAxisFallbackCounted:
         )
         assert directive["role_axis_fallback_count"] == 1
 
-    def test_todo_leg_permanently_on_the_fallback_but_not_counted(self, tmp_path, monkeypatch):
+    def test_todo_leg_permanently_on_the_fallback_but_not_counted(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         state_root = tmp_path / "state"
         monkeypatch.setattr(readers_mise, "_resolve_state_root", lambda: str(state_root))
 
@@ -201,7 +202,7 @@ class TestRoleAxisFallbackCounted:
         assert directive["additional_predecessors"] == ["tasks/perm/todo.md"]
         assert directive["role_axis_fallback_count"] == 0
 
-    def test_zero_fallback_when_every_leg_is_stamped(self, tmp_path, monkeypatch):
+    def test_zero_fallback_when_every_leg_is_stamped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         state_root = tmp_path / "state"
         monkeypatch.setattr(readers_mise, "_resolve_state_root", lambda: str(state_root))
 
@@ -223,8 +224,8 @@ class TestRoleAxisFallbackCounted:
         assert directive["role_axis_fallback_count"] == 0
 
     def test_unrecognised_role_value_is_treated_as_unknown_not_as_work(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         state_root = tmp_path / "state"
         monkeypatch.setattr(readers_mise, "_resolve_state_root", lambda: str(state_root))
 
@@ -244,7 +245,7 @@ class TestRoleAxisFallbackCounted:
 
 
 class TestGating:
-    def test_absent_run_id_emits_no_directive(self, tmp_path, monkeypatch):
+    def test_absent_run_id_emits_no_directive(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         state_root = tmp_path / "state"
         monkeypatch.setattr(readers_mise, "_resolve_state_root", lambda: str(state_root))
         (state_root / "mise-inventory").mkdir(parents=True)
@@ -253,7 +254,7 @@ class TestGating:
 
         assert result.directives == []
 
-    def test_phase_0_absent_inventory_dir_emits_no_directive(self, tmp_path, monkeypatch):
+    def test_phase_0_absent_inventory_dir_emits_no_directive(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         state_root = tmp_path / "state"
         monkeypatch.setattr(readers_mise, "_resolve_state_root", lambda: str(state_root))
 
@@ -261,7 +262,7 @@ class TestGating:
 
         assert result.directives == []
 
-    def test_unresolvable_record_emits_no_directive(self, tmp_path, monkeypatch):
+    def test_unresolvable_record_emits_no_directive(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         state_root = tmp_path / "state"
         monkeypatch.setattr(readers_mise, "_resolve_state_root", lambda: str(state_root))
         (state_root / "mise-inventory").mkdir(parents=True)

@@ -12,15 +12,16 @@ from coordinator_core.ops.dispatch_emit import ask_compose, design_route
 from coordinator_core.ops.dispatch_emit.design_route import DESIGN_ROUTE_KEY
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 _CARRY = f"{DESIGN_ROUTE_KEY}: _gate?.{DESIGN_ROUTE_KEY} ?? null"
 
 
-def test_gate_schema_carries_the_key():
+def test_gate_schema_carries_the_key() -> None:
     assert ask_compose._GATE_SCHEMA["properties"][DESIGN_ROUTE_KEY] == {"type": ["object", "null"]}
 
 
-def test_pre_sized_script_names_the_key_on_prompts_and_both_returns():
+def test_pre_sized_script_names_the_key_on_prompts_and_both_returns() -> None:
     script = _compose(stop_after="plan")
     assert script.count("design_brief and design_route when present") >= 1
     # halted_by return + XS dispatch return; the parked-plan arm halts, it has no separate planned return.
@@ -33,7 +34,7 @@ def test_pre_sized_script_names_the_key_on_prompts_and_both_returns():
 _HALT_HEAD = "if (_manifest.error && /^(?:stage refused: )?design-review:/.test(String(_manifest.error))) { _halted = { "
 
 
-def test_stage_refusal_maps_to_a_design_review_halt_ahead_of_the_refusal_halt():
+def test_stage_refusal_maps_to_a_design_review_halt_ahead_of_the_refusal_halt() -> None:
     script = _compose(prompt=None, sizing_rel="state/sizings/s.yaml")
     at = script.index(_HALT_HEAD)
     halt = script[at : script.index("}; }", at)]
@@ -44,14 +45,14 @@ def test_stage_refusal_maps_to_a_design_review_halt_ahead_of_the_refusal_halt():
     assert at < script.index("else if (!_parked && (_manifest.error || (!(_manifest.rows ?? []).length")
 
 
-def test_manifest_error_quoting_the_prefix_mid_text_is_not_a_design_review_halt():
+def test_manifest_error_quoting_the_prefix_mid_text_is_not_a_design_review_halt() -> None:
     script = _compose(prompt=None, sizing_rel="state/sizings/s.yaml")
     assert "/^(?:stage refused: )?design-review:/.test(String(_manifest.error))" in script
     assert "String(_manifest.error).includes(\"design-review:\")" not in script
 
 
 @pytest.mark.spawns_process
-def test_design_review_check_matches_the_stage_refused_spelling_only_at_the_start():
+def test_design_review_check_matches_the_stage_refused_spelling_only_at_the_start() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
@@ -64,7 +65,7 @@ def test_design_review_check_matches_the_stage_refused_spelling_only_at_the_star
     assert json.loads(proc.stdout) == [True, True, False, False]
 
 
-def test_any_ready_op_error_but_the_did_not_run_sentinel_becomes_a_stage_refusal(monkeypatch):
+def test_any_ready_op_error_but_the_did_not_run_sentinel_becomes_a_stage_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
     # The plan-blitz arm (where _adoptReadyError is composed) exists only for the M+ and roadmap arms; repo_root="REPO" cannot read the sizing.
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: ask_compose.ARM_M_PLUS)
     monkeypatch.setattr(ask_compose, "_intake_sizing", lambda *_: None)
@@ -73,12 +74,12 @@ def test_any_ready_op_error_but_the_did_not_run_sentinel_becomes_a_stage_refusal
     assert "_re !== '' && !/did not run/.test(_re)) _stageRefusal = _re;" in script
 
 
-def test_ready_error_adoption_never_overrides_a_staged_manifest_or_prior_refusal():
+def test_ready_error_adoption_never_overrides_a_staged_manifest_or_prior_refusal() -> None:
     script = _compose(prompt=None, sizing_rel="state/sizings/s.yaml")
     assert "if (!_stagedManifest && !_stageRefusal && _re !== ''" in script
 
 
-def test_in_run_next_action_is_built_from_sizing_rel_and_agrees_with_the_python_text():
+def test_in_run_next_action_is_built_from_sizing_rel_and_agrees_with_the_python_text() -> None:
     script = _compose(prompt="do a thing", sizing_rel=None)
     expr = ask_compose._design_next_action_js(None)
     marker = "\u0000"
@@ -88,14 +89,14 @@ def test_in_run_next_action_is_built_from_sizing_rel_and_agrees_with_the_python_
     assert head + "state/sizings/s.yaml" + tail == design_route.next_action("state/sizings/s.yaml")
 
 
-def test_halt_kind_is_not_touchpoint_or_refusal():
+def test_halt_kind_is_not_touchpoint_or_refusal() -> None:
     assert ask_compose.HALT_DESIGN_REVIEW == "design-review"
     assert ask_compose.HALT_DESIGN_REVIEW not in (ask_compose.HALT_TOUCHPOINT, ask_compose.HALT_REFUSAL)
 
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("over", [{"prompt": None, "sizing_rel": "state/sizings/s.yaml"}, {"prompt": "do a thing", "sizing_rel": None}])
-def test_script_with_the_design_review_halt_parses_through_asyncfunction(over, tmp_path):
+def test_script_with_the_design_review_halt_parses_through_asyncfunction(over, tmp_path: Path) -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
@@ -111,7 +112,7 @@ def test_script_with_the_design_review_halt_parses_through_asyncfunction(over, t
     assert out.returncode == 0, out.stderr
 
 
-def test_in_run_sized_script_carries_reword_and_scout_hops():
+def test_in_run_sized_script_carries_reword_and_scout_hops() -> None:
     script = _compose(prompt="do a thing", sizing_rel=None)
     assert f"{DESIGN_ROUTE_KEY}: _reworded.{DESIGN_ROUTE_KEY} ?? null" in script
     assert f"{DESIGN_ROUTE_KEY}: _scouted.{DESIGN_ROUTE_KEY} ?? null" in script

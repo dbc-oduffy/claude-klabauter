@@ -177,7 +177,7 @@ def _round_trip(envelope: dict) -> dict:
 
 
 @pytest.mark.parametrize("prose", ["plain reason", _HOSTILE])
-def test_deny_envelope_is_valid_json_with_a_legal_decision(prose):
+def test_deny_envelope_is_valid_json_with_a_legal_decision(prose) -> None:
     """The deny path is the one that fails open, so it is checked first and
     with hostile prose: a reason is attacker-adjacent text (a command line,
     a path) interpolated into an envelope the harness parses."""
@@ -198,7 +198,7 @@ def test_deny_envelope_is_valid_json_with_a_legal_decision(prose):
 
 
 @pytest.mark.parametrize("event", ["Stop", "SubagentStop"])
-def test_stop_deny_is_the_top_level_block_shape(event):
+def test_stop_deny_is_the_top_level_block_shape(event) -> None:
     """Stop ignores permissionDecision; only top-level decision:block holds a stop."""
     envelope = _round_trip(deny(event, "STOP-REASON"))
     assert envelope["decision"] == "block"
@@ -206,7 +206,7 @@ def test_stop_deny_is_the_top_level_block_shape(event):
     assert "hookSpecificOutput" not in envelope
 
 
-def test_pretooluse_deny_shape_is_unchanged():
+def test_pretooluse_deny_shape_is_unchanged() -> None:
     envelope = _round_trip(deny("PreToolUse", "PRE-REASON"))
     assert "decision" not in envelope
     hso = envelope["hookSpecificOutput"]
@@ -216,7 +216,7 @@ def test_pretooluse_deny_shape_is_unchanged():
 
 
 @pytest.mark.parametrize("prose", ["plain advisory", _HOSTILE])
-def test_allow_advisory_envelope_is_valid_json(prose):
+def test_allow_advisory_envelope_is_valid_json(prose) -> None:
     envelope = allow_advisory("PreToolUse", prose)
     hso = _round_trip(envelope)["hookSpecificOutput"]
     assert hso.get("hookEventName") == "PreToolUse"
@@ -225,7 +225,7 @@ def test_allow_advisory_envelope_is_valid_json(prose):
 
 
 @pytest.mark.parametrize("prose", ["plain context", _HOSTILE])
-def test_context_only_envelope_is_valid_json(prose):
+def test_context_only_envelope_is_valid_json(prose) -> None:
     """The context-only path cannot fail open -- it has nothing to deny --
     but an unparseable object still reaches the model as raw text, which is
     how a hook's internals leak into a prompt."""
@@ -237,14 +237,14 @@ def test_context_only_envelope_is_valid_json(prose):
 
 
 @pytest.mark.parametrize("prose", ["plain post-advisory", _HOSTILE])
-def test_post_advisory_envelope_is_valid_json(prose):
+def test_post_advisory_envelope_is_valid_json(prose) -> None:
     envelope = post_advisory(prose)
     hso = _round_trip(envelope)["hookSpecificOutput"]
     assert hso.get("hookEventName") == "PostToolUse"
     assert isinstance(hso.get("additionalContext"), str)
 
 
-def test_rewrite_input_envelope_is_valid_json():
+def test_rewrite_input_envelope_is_valid_json() -> None:
     envelope = rewrite_input("PreToolUse", {"command": _HOSTILE}, context="rewritten")
     hso = _round_trip(envelope)["hookSpecificOutput"]
     assert hso.get("hookEventName") == "PreToolUse"
@@ -252,13 +252,13 @@ def test_rewrite_input_envelope_is_valid_json():
     assert "permissionDecision" not in hso, "a rewrite is orthogonal to allow/deny"
 
 
-def test_rewrite_input_omits_empty_context():
+def test_rewrite_input_omits_empty_context() -> None:
     envelope = rewrite_input("PreToolUse", {"command": "x"})
     hso = _round_trip(envelope)["hookSpecificOutput"]
     assert "additionalContext" not in hso
 
 
-def test_no_advisory_envelope_is_the_empty_dict():
+def test_no_advisory_envelope_is_the_empty_dict() -> None:
     """Shape (c): spike-verified as a clean no-advisory / suppression. Empty
     is legal here specifically -- it must not be confused with a truncated
     envelope, which is the failure mode the rest of this file guards
@@ -267,7 +267,7 @@ def test_no_advisory_envelope_is_the_empty_dict():
     assert _round_trip(envelope) == {}
 
 
-def test_every_builder_call_is_captured_and_round_trips():
+def test_every_builder_call_is_captured_and_round_trips() -> None:
     """Drives all six shapes through one `capture_session()` pass and
     confirms every captured envelope still round-trips -- the instrument
     this file leans on elsewhere is itself exercised end to end here."""
@@ -351,7 +351,7 @@ def _all_literal_problems() -> list[str]:
     return problems
 
 
-def test_every_resolvable_envelope_literal_is_legal():
+def test_every_resolvable_envelope_literal_is_legal() -> None:
     """Covers every `check()`/handler whose envelope is a dict literal built
     inline -- the census population DoE's file cannot reach because these
     sites live in claude-klabauter."""
@@ -362,7 +362,7 @@ def test_every_resolvable_envelope_literal_is_legal():
     )
 
 
-def test_the_literal_checker_can_actually_fail(tmp_path):
+def test_the_literal_checker_can_actually_fail(tmp_path: Path) -> None:
     """Arming shot. The check above returned zero problems across every
     scanned file on its first run -- exactly the uniform-clean result that
     means nothing until the checker is shown to reject something."""
@@ -397,7 +397,7 @@ def test_the_literal_checker_can_actually_fail(tmp_path):
     assert any("empty-string permissionDecisionReason" in p for p in problems)
 
 
-def test_at_least_one_real_literal_site_is_under_this_check():
+def test_at_least_one_real_literal_site_is_under_this_check() -> None:
     """A zero-length population passes every assertion above it. If the
     literal-construction population ever empties -- a refactor onto the
     shared builders repo-wide -- this file goes green while checking
@@ -476,7 +476,7 @@ def _hso_key_nodes(tree: ast.Module):
                 yield node.lineno, value
 
 
-def test_no_construction_site_is_unaccounted_for():
+def test_no_construction_site_is_unaccounted_for() -> None:
     """The census that makes the remaining gap non-silent.
 
     Every `"hookSpecificOutput"` dict-key site under the four scan roots
@@ -513,7 +513,7 @@ def test_no_construction_site_is_unaccounted_for():
     )
 
 
-def test_derived_safe_sites_still_exist():
+def test_derived_safe_sites_still_exist() -> None:
     """`DERIVED_SAFE_SITES` is a waiver list -- an entry for a site that has
     been deleted or renamed silently stops covering anything."""
     sites = set()
@@ -527,7 +527,7 @@ def test_derived_safe_sites_still_exist():
     assert not stale, f"waived site(s) no longer exist and cover nothing: {sorted(stale)}"
 
 
-def test_the_accounting_can_actually_fail(tmp_path):
+def test_the_accounting_can_actually_fail(tmp_path: Path) -> None:
     """Arming shot for the accounting census: a file that mentions
     `hookSpecificOutput` but constructs it via neither a literal nor a
     known builder call must be flagged, not waved through."""
@@ -548,7 +548,7 @@ def test_the_accounting_can_actually_fail(tmp_path):
     )
 
 
-def test_every_scanned_file_imports_or_defines_no_stray_builder_name():
+def test_every_scanned_file_imports_or_defines_no_stray_builder_name() -> None:
     """A construction-site count of zero for `deny`/`allow_advisory`/etc.
     calls in a file that never imports them from a known module would be a
     silent miscount (a local function coincidentally sharing a builder's
@@ -585,7 +585,7 @@ def test_every_scanned_file_imports_or_defines_no_stray_builder_name():
 # ---------------------------------------------------------------------------
 
 
-def test_no_stdout_emitter_prints_bare_text_beside_its_envelope():
+def test_no_stdout_emitter_prints_bare_text_beside_its_envelope() -> None:
     """A stray `print("debug")` beside `sys.stdout.write(json.dumps(...))`
     makes the WHOLE stdout unparseable -- measured to fail open on the deny
     path. Checked statically, at zero spawn cost, across every in-repo
@@ -625,7 +625,7 @@ def test_no_stdout_emitter_prints_bare_text_beside_its_envelope():
     )
 
 
-def test_the_bare_print_check_can_actually_fail(tmp_path):
+def test_the_bare_print_check_can_actually_fail(tmp_path: Path) -> None:
     """Arming shot for the check above."""
     bad = tmp_path / "arm_stray_print.py"
     bad.write_text(
@@ -654,7 +654,7 @@ def test_the_bare_print_check_can_actually_fail(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_the_three_doe_named_engine_built_sites_resolve_here():
+def test_the_three_doe_named_engine_built_sites_resolve_here() -> None:
     """DoE's `ENGINE_BUILT` frozenset waives `dispatch_from_hook`
     (`coordinator_core.ipc`), `evaluate_payload_json`
     (`coordinator_core.bash_guards.dispatch`) and `check`

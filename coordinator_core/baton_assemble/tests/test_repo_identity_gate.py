@@ -11,6 +11,7 @@ from coordinator_core.baton_assemble import TransportFailure
 from coordinator_core.baton_assemble import apply as ba_apply
 from coordinator_core.session import harness_registry as hr
 from coordinator_core.test_baton_assemble import _FAKE_OPERATOR_CONFIG, _write_artifact
+from pathlib import Path
 
 # `ba.brief`/`ba_apply.apply` (called below with `repo_root=None`) reach
 # `resolve_repo_root`, which shells out to real git to resolve the checkout
@@ -23,7 +24,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 @pytest.fixture(autouse=True)
-def _stub_operator_config(monkeypatch):
+def _stub_operator_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
 
 
@@ -50,7 +51,7 @@ def _make_repo(root) -> None:
     (root / ".git").mkdir(parents=True, exist_ok=True)
 
 
-def _patch_pid_env(monkeypatch, pid, create_time=0.0, hit=True):
+def _patch_pid_env(monkeypatch, pid, create_time: float = 0.0, hit: bool = True) -> None:
     if hit:
         monkeypatch.setattr(
             "coordinator_core.session.core._resolve_claude_pid_from_env",
@@ -63,7 +64,7 @@ def _patch_pid_env(monkeypatch, pid, create_time=0.0, hit=True):
         )
 
 
-def _rig_mismatch(tmp_path, monkeypatch, sid="sess-c3-mismatch", pid=9001):
+def _rig_mismatch(tmp_path, monkeypatch, sid: str = "sess-c3-mismatch", pid: int = 9001):
     repo_root = tmp_path / "repo"
     foreign_root = tmp_path / "foreign"
     _make_repo(repo_root)
@@ -79,7 +80,7 @@ def _rig_mismatch(tmp_path, monkeypatch, sid="sess-c3-mismatch", pid=9001):
     return repo_root
 
 
-def _rig_unresolved(tmp_path, monkeypatch, sid="sess-c3-unresolved", pid=9002):
+def _rig_unresolved(tmp_path, monkeypatch, sid: str = "sess-c3-unresolved", pid: int = 9002):
     """No registry record at all -- UNRESOLVED. Returns `repo_root`."""
     repo_root = tmp_path / "repo"
     _make_repo(repo_root)
@@ -90,7 +91,7 @@ def _rig_unresolved(tmp_path, monkeypatch, sid="sess-c3-unresolved", pid=9002):
     return repo_root
 
 
-def _handoff_artifact(tmp_path):
+def _handoff_artifact(tmp_path) -> Path:
     return _write_artifact(
         tmp_path / "state" / "handoffs" / "h1.md",
         ["deliverable_id: DEL-C3-1", "initiative: init-c3"],
@@ -98,7 +99,7 @@ def _handoff_artifact(tmp_path):
 
 
 class TestBriefMismatchCwdDerivedRefuses:
-    def test_mismatch_raises_transport_failure_when_repo_root_not_supplied(self, tmp_path, monkeypatch):
+    def test_mismatch_raises_transport_failure_when_repo_root_not_supplied(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo_root = _rig_mismatch(tmp_path, monkeypatch)
         artifact = _handoff_artifact(repo_root)
         monkeypatch.setattr(ba, "resolve_repo_root", lambda *a, **k: repo_root)
@@ -110,7 +111,7 @@ class TestBriefMismatchCwdDerivedRefuses:
 
 
 class TestBriefExplicitRepoRootNeverRefuses:
-    def test_mismatch_with_explicit_repo_root_does_not_refuse_but_records(self, tmp_path, monkeypatch):
+    def test_mismatch_with_explicit_repo_root_does_not_refuse_but_records(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo_root = _rig_mismatch(tmp_path, monkeypatch)
         artifact = _handoff_artifact(repo_root)
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-c3-mismatch")
@@ -120,7 +121,7 @@ class TestBriefExplicitRepoRootNeverRefuses:
 
 
 class TestBriefUnresolvedNeverRefuses:
-    def test_unresolved_does_not_refuse_and_records_verdict(self, tmp_path, monkeypatch):
+    def test_unresolved_does_not_refuse_and_records_verdict(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo_root = _rig_unresolved(tmp_path, monkeypatch)
         artifact = _handoff_artifact(repo_root)
         monkeypatch.setattr(ba, "resolve_repo_root", lambda *a, **k: repo_root)
@@ -131,7 +132,7 @@ class TestBriefUnresolvedNeverRefuses:
 
 
 class TestApplyMismatchCwdDerivedRefuses:
-    def test_apply_refuses_when_repo_root_not_supplied(self, tmp_path, monkeypatch):
+    def test_apply_refuses_when_repo_root_not_supplied(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo_root = _rig_mismatch(tmp_path, monkeypatch, sid="sess-c3-apply-mismatch")
         artifact = _handoff_artifact(repo_root)
         monkeypatch.setattr(ba, "resolve_repo_root", lambda *a, **k: repo_root)
@@ -147,7 +148,7 @@ class TestApplyMismatchCwdDerivedRefuses:
 
 
 class TestApplyExplicitRepoRootNeverRefuses:
-    def test_apply_with_explicit_repo_root_passes_the_mismatch_gate(self, tmp_path, monkeypatch):
+    def test_apply_with_explicit_repo_root_passes_the_mismatch_gate(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Never blocked at the C3 check for an explicit `repo_root` --
         proven by monkeypatching `brief` to raise a marker exception the
         instant control reaches it, which only happens if apply()'s own
@@ -170,7 +171,7 @@ class TestApplyExplicitRepoRootNeverRefuses:
 
 
 class TestApplyUnresolvedNeverRefuses:
-    def test_apply_unresolved_passes_the_mismatch_gate(self, tmp_path, monkeypatch):
+    def test_apply_unresolved_passes_the_mismatch_gate(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo_root = _rig_unresolved(tmp_path, monkeypatch, sid="sess-c3-apply-unresolved")
         artifact = _handoff_artifact(repo_root)
         monkeypatch.setattr(ba, "resolve_repo_root", lambda *a, **k: repo_root)

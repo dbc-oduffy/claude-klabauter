@@ -7,9 +7,10 @@ from pathlib import Path
 
 from coordinator_core.hooks import receiver_state_sensor as sensor
 from coordinator_core.session import receiver_state as rs
+import pytest
 
 
-def _fake_session_dir(monkeypatch, tmp_path: Path):
+def _fake_session_dir(monkeypatch, tmp_path: Path) -> None:
     from coordinator_core.session import core as session_core
 
     fake_base = tmp_path / "coordinator-sessions"
@@ -37,7 +38,7 @@ class TestHandlerReturnsNoAdvisory:
         result = asyncio.run(sensor._handler({}, repo_root=None))
         assert result == {}
 
-    def test_always_returns_no_advisory_shape(self, tmp_path: Path, monkeypatch) -> None:
+    def test_always_returns_no_advisory_shape(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _fake_session_dir(monkeypatch, tmp_path)
         transcript = _write_transcript(
             tmp_path, [json.dumps({"type": "system", "subtype": "away_summary", "timestamp": "2026-08-14T00:00:00Z"})]
@@ -52,7 +53,7 @@ class TestHandlerReturnsNoAdvisory:
 
 
 class TestHandlerWritesSiblingFile:
-    def test_writes_receiver_state_json(self, tmp_path: Path, monkeypatch) -> None:
+    def test_writes_receiver_state_json(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _fake_session_dir(monkeypatch, tmp_path)
         transcript = _write_transcript(
             tmp_path,
@@ -69,7 +70,7 @@ class TestHandlerWritesSiblingFile:
         assert record["verdict"] == "PAUSED"
         assert record["reason"] == "away"
 
-    def test_missing_transcript_path_writes_unknown(self, tmp_path: Path, monkeypatch) -> None:
+    def test_missing_transcript_path_writes_unknown(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _fake_session_dir(monkeypatch, tmp_path)
         asyncio.run(
             sensor._handler(
@@ -81,7 +82,7 @@ class TestHandlerWritesSiblingFile:
         assert record is not None
         assert record["verdict"] == "UNKNOWN"
 
-    def test_handler_never_raises_on_internal_failure(self, tmp_path: Path, monkeypatch) -> None:
+    def test_handler_never_raises_on_internal_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _fake_session_dir(monkeypatch, tmp_path)
 
         def _boom(*args, **kwargs):
@@ -127,7 +128,7 @@ class TestTranscriptClockIsNotFileMtime:
         )
 
     def test_a_stalled_tool_call_is_paused_even_when_mtime_was_rewritten_forward(
-        self, tmp_path: Path, monkeypatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         import os
         from datetime import datetime, timedelta, timezone
@@ -154,7 +155,7 @@ class TestTranscriptClockIsNotFileMtime:
         assert record["verdict"] == "PAUSED"
         assert record["reason"].startswith("tool-unanswered")
 
-    def test_a_live_tool_call_is_still_producing(self, tmp_path: Path, monkeypatch) -> None:
+    def test_a_live_tool_call_is_still_producing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from datetime import datetime, timedelta, timezone
 
         from coordinator_core.session import core as session_core
@@ -177,7 +178,7 @@ class TestTranscriptClockIsNotFileMtime:
         assert record["verdict"] == "PRODUCING"
 
     def test_mtime_is_still_the_fallback_when_no_line_carries_a_timestamp(
-        self, tmp_path: Path, monkeypatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """An upper bound is better than no age evidence at all -- refusing it
         would keep PRODUCING:tool-in-flight forever on such a tail."""

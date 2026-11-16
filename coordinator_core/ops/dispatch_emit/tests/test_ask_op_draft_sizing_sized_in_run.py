@@ -11,13 +11,14 @@ import yaml
 from coordinator_core.ops import sizing_intake_contract as contract
 from coordinator_core.ops.dispatch_emit import ask_compose, op
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+from pathlib import Path
 
 REL = "state/sizings/2026-10-14-intake.yaml"
 _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
@@ -41,7 +42,7 @@ def _emitted_scripts(repo):
     return [p.read_text(encoding="utf-8") for p in sorted((repo / RUN_DIR_ROOT).glob("*.workflow.mjs"))]
 
 
-def test_op_sizes_a_non_intake_draft_sizing_in_run(repo):
+def test_op_sizes_a_non_intake_draft_sizing_in_run(repo) -> None:
     doc = _put(repo, status="draft", intake_mark=False)
     assert contract.is_intake(doc) is False and contract.needs_size_stage(doc) is True
     out = op._dispatch_emit({"ask": None, "sizing_path": REL}, repo_root=repo)
@@ -50,7 +51,7 @@ def test_op_sizes_a_non_intake_draft_sizing_in_run(repo):
     assert "phase('size')" in script
 
 
-def test_op_gates_a_routed_sizing_instead_of_sizing_it_in_run(repo, monkeypatch):
+def test_op_gates_a_routed_sizing_instead_of_sizing_it_in_run(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     doc = _put(repo, status="routed", intake_mark=False)
     assert contract.needs_size_stage(doc) is False
     gated = []

@@ -33,9 +33,14 @@ import importlib.util
 from pathlib import Path
 
 from coordinator_core.bash_guards import _write_bump_applicability as applicability
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 
-def _load_git_hook_install():
+def _load_git_hook_install() -> ModuleType:
     root = Path(__file__).resolve().parents[3]
     path = root / "coordinator" / "bin" / "lib" / "git_hook_install.py"
     spec = importlib.util.spec_from_file_location("_ghi_for_container_keys", path)
@@ -45,7 +50,7 @@ def _load_git_hook_install():
     return module
 
 
-def test_container_registry_keys_agree_across_holders():
+def test_container_registry_keys_agree_across_holders() -> None:
     other = _load_git_hook_install()
     assert applicability._CONTAINER_REGISTRY_KEYS == other._CONTAINER_REGISTRY_KEYS, (
         "the two copies of _CONTAINER_REGISTRY_KEYS have drifted -- a key "
@@ -54,12 +59,12 @@ def test_container_registry_keys_agree_across_holders():
     )
 
 
-def test_every_container_key_carries_the_repos_prefix():
+def test_every_container_key_carries_the_repos_prefix() -> None:
     for key in applicability._CONTAINER_REGISTRY_KEYS:
         assert key.startswith(applicability._REGISTRY_REPOS_PREFIX), key
 
 
-def test_container_key_is_skipped_by_the_repo_root_enumeration(monkeypatch, tmp_path):
+def test_container_key_is_skipped_by_the_repo_root_enumeration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     registry = tmp_path / "registry.toml"
     fleet = tmp_path / "fleet"
     repo = fleet / "a-real-repo"
@@ -78,7 +83,7 @@ def test_container_key_is_skipped_by_the_repo_root_enumeration(monkeypatch, tmp_
     assert fleet.as_posix() not in roots
 
 
-def test_a_path_under_the_container_is_not_a_registered_repo(monkeypatch, tmp_path):
+def test_a_path_under_the_container_is_not_a_registered_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     registry = tmp_path / "registry.toml"
     fleet = tmp_path / "fleet"
     repo = fleet / "a-real-repo"

@@ -21,10 +21,11 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit.op import FiredDriftError
 from coordinator_core.ops.workflow_fire.op import _workflow_fire
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def verified_caller(monkeypatch):
+def verified_caller(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.workflow_fire import authority
     monkeypatch.setattr(authority, 'caller_principal', lambda *a: authority.Principal('verified-test-em', 'em', {}))
 
@@ -33,7 +34,7 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def test_fire_refuses_a_script_edited_after_emit(tmp_path):
+def test_fire_refuses_a_script_edited_after_emit(tmp_path: Path) -> None:
     """A peer (or the operator) overwrote the deterministic script path
     after this caller's emit returned but before it fired -- firing must
     refuse rather than run the bytes now on disk under this caller's
@@ -51,7 +52,7 @@ def test_fire_refuses_a_script_edited_after_emit(tmp_path):
         )
 
 
-def test_fire_with_expected_omitted_is_unverified_same_as_before(tmp_path, monkeypatch):
+def test_fire_with_expected_omitted_is_unverified_same_as_before(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """No ``expected`` param -- the guard never runs, and the call reaches
     ``fire.fire_workflow`` exactly as it did before this param existed."""
     script_path = tmp_path / "plan.workflow.mjs"
@@ -59,7 +60,7 @@ def test_fire_with_expected_omitted_is_unverified_same_as_before(tmp_path, monke
 
     called = {}
 
-    def _fake_fire_workflow(script_path_arg, **kwargs):
+    def _fake_fire_workflow(script_path_arg, **kwargs) -> dict[str, str]:
         called["script_path"] = script_path_arg
         return {"fire_id": "fake"}
 
@@ -73,7 +74,7 @@ def test_fire_with_expected_omitted_is_unverified_same_as_before(tmp_path, monke
     assert called["script_path"] == str(script_path)
 
 
-def test_fire_with_expected_matching_on_disk_bytes_proceeds(tmp_path, monkeypatch):
+def test_fire_with_expected_matching_on_disk_bytes_proceeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``expected`` equal to the on-disk bytes is the ordinary case: the
     guard is silent and the call still reaches ``fire.fire_workflow``."""
     script_path = tmp_path / "plan.workflow.mjs"
@@ -82,7 +83,7 @@ def test_fire_with_expected_matching_on_disk_bytes_proceeds(tmp_path, monkeypatc
 
     called = {}
 
-    def _fake_fire_workflow(script_path_arg, **kwargs):
+    def _fake_fire_workflow(script_path_arg, **kwargs) -> dict[str, str]:
         called["script_path"] = script_path_arg
         return {"fire_id": "fake"}
 

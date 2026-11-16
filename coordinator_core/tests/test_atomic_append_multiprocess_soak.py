@@ -6,6 +6,7 @@ import time
 import pytest
 
 from coordinator_core import atomic_append
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -21,7 +22,7 @@ def _wedge_sink(bad: str) -> None:
     """Block os.write on append writer threads for ``bad`` only (the blocked-sink fixture technique)."""
     gate = threading.Event()
 
-    def write(fd, data):
+    def write(fd, data) -> int:
         name = threading.current_thread().name
         if name.startswith("atomic-append-writer") and bad in name:
             gate.wait(_WEDGE_HOLD_SECS)
@@ -35,7 +36,7 @@ def _line(wid: int, i: int) -> bytes:
     return f"w{wid}:{i}\n".encode()
 
 
-def _worker(wid, sinks, forward_q, results):
+def _worker(wid, sinks, forward_q, results) -> None:
     try:
         _wedge_sink(sinks[0])
         if forward_q is not None:
@@ -51,7 +52,7 @@ def _worker(wid, sinks, forward_q, results):
         results.put((wid, 0.0, repr(exc)))
 
 
-def _holder(bad, ready, stop):
+def _holder(bad, ready, stop) -> None:
     """Holds ``bad`` wedged in its own process until told to stop."""
     _wedge_sink(bad)
     atomic_append.append_line_bounded(bad, b"held\n")
@@ -72,7 +73,7 @@ def _run_arm(tmp_path, forwarded):
     received = []
     drain = None
     if forwarded:
-        def _drain():
+        def _drain() -> None:
             while True:
                 item = forward_q.get()
                 if item is None:
@@ -98,14 +99,14 @@ def _run_arm(tmp_path, forwarded):
     return sinks, reports
 
 
-def _assert_no_waits(reports):
+def _assert_no_waits(reports) -> None:
     assert [r for r in reports if r[2]] == []
     slowest = max(r[1] for r in reports)
     assert slowest < _SLOWEST_CALL_SECS, f"slowest append_line_bounded call took {slowest:.3f}s"
 
 
 @pytest.mark.deliberate_wall_clock(reason="the soak measures per-call latency across live processes with one wedged sink")
-def test_soak_direct_no_append_waits_with_one_sink_wedged(tmp_path):
+def test_soak_direct_no_append_waits_with_one_sink_wedged(tmp_path: Path) -> None:
     t0 = time.perf_counter()
     _, reports = _run_arm(tmp_path, forwarded=False)
     _assert_no_waits(reports)
@@ -113,7 +114,7 @@ def test_soak_direct_no_append_waits_with_one_sink_wedged(tmp_path):
 
 
 @pytest.mark.deliberate_wall_clock(reason="the soak measures per-call latency across live processes with one wedged sink")
-def test_soak_forwarded_no_append_waits_and_healthy_sinks_get_every_line(tmp_path):
+def test_soak_forwarded_no_append_waits_and_healthy_sinks_get_every_line(tmp_path: Path) -> None:
     t0 = time.perf_counter()
     sinks, reports = _run_arm(tmp_path, forwarded=True)
     _assert_no_waits(reports)

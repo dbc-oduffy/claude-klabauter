@@ -12,11 +12,11 @@ def _payload(name, args, **extra):
     return {"cwd": "/work/repo", "hook_event_name": "PreToolUse", "tool_name": name, "tool_input": args, **extra}
 
 
-def test_conforms_to_adapter_protocol():
+def test_conforms_to_adapter_protocol() -> None:
     assert isinstance(GrokAdapter(), Adapter)
 
 
-def test_served_events_match_hook_http():
+def test_served_events_match_hook_http() -> None:
     assert SERVED_EVENTS == hook_http.SERVED_EVENTS
 
 
@@ -24,7 +24,7 @@ def test_served_events_match_hook_http():
     ("edit_file", "Edit"), ("Edit", "Edit"), ("MultiEdit", "MultiEdit"),
     ("write_file", "Write"), ("Write", "Write"), ("NotebookEdit", "NotebookEdit"),
 ])
-def test_edit_tools_map_to_write_guard_names(name, expected):
+def test_edit_tools_map_to_write_guard_names(name, expected) -> None:
     ev = GrokAdapter().adapt_event(_payload(name, {"file_path": "/a/b.py", "content": "x"}))
     assert ev.tool_name == expected
     assert ev.tool_input["file_path"] == "/a/b.py"
@@ -33,39 +33,39 @@ def test_edit_tools_map_to_write_guard_names(name, expected):
 
 
 @pytest.mark.parametrize("key", ["file_path", "path", "Path"])
-def test_path_read_from_each_contract_key(key):
+def test_path_read_from_each_contract_key(key) -> None:
     ev = GrokAdapter().adapt_event(_payload("write_file", {key: "/a/b.py"}))
     assert ev.tool_input["file_path"] == "/a/b.py"
 
 
-def test_file_path_wins_over_path_and_empty_when_absent():
+def test_file_path_wins_over_path_and_empty_when_absent() -> None:
     ev = GrokAdapter().adapt_event(_payload("edit_file", {"path": "/p", "file_path": "/f"}))
     assert ev.tool_input["file_path"] == "/f"
     assert GrokAdapter().adapt_event(_payload("edit_file", {})).tool_input["file_path"] == ""
 
 
 @pytest.mark.parametrize("name", ["Bash", "bash", "shell", "run_command", "run_shell_command"])
-def test_shell_tools_map_to_bash_with_command(name):
+def test_shell_tools_map_to_bash_with_command(name) -> None:
     ev = GrokAdapter().adapt_event(_payload(name, {"command": "git push origin main"}))
     assert (ev.tool_name, ev.tool_input["command"]) == ("Bash", "git push origin main")
 
 
-def test_shell_command_falls_back_to_cmd_key():
+def test_shell_command_falls_back_to_cmd_key() -> None:
     ev = GrokAdapter().adapt_event(_payload("shell", {"cmd": "ls"}))
     assert ev.tool_input["command"] == "ls"
 
 
-def test_unknown_tool_passes_through_unchanged():
+def test_unknown_tool_passes_through_unchanged() -> None:
     ev = GrokAdapter().adapt_event(_payload("view_file", {"path": "/a"}))
     assert (ev.tool_name, ev.tool_input) == ("view_file", {"path": "/a"})
 
 
-def test_session_id_is_optional_and_taken_from_payload():
+def test_session_id_is_optional_and_taken_from_payload() -> None:
     assert GrokAdapter().adapt_event(_payload("Bash", {"command": "ls"})).session_id == ""
     assert GrokAdapter().adapt_event(_payload("Bash", {"command": "ls"}, session_id="g-1")).session_id == "g-1"
 
 
-def test_engine_event_is_claude_shaped_for_edit_and_shell():
+def test_engine_event_is_claude_shaped_for_edit_and_shell() -> None:
     a = GrokAdapter()
     edit = a.engine_event(a.adapt_event(_payload("edit_file", {"path": "/a/b.py"})))
     assert edit["tool_name"] == "Edit" and edit["tool_input"]["file_path"] == "/a/b.py"
@@ -74,20 +74,20 @@ def test_engine_event_is_claude_shaped_for_edit_and_shell():
     assert shell["hook_event_name"] == "PreToolUse"
 
 
-def test_engine_event_stamps_the_grok_host_for_edit_and_shell():
+def test_engine_event_stamps_the_grok_host_for_edit_and_shell() -> None:
     a = GrokAdapter()
     for name, args in (("edit_file", {"path": "/a/b.py"}), ("shell", {"command": "ls"})):
         assert a.engine_event(a.adapt_event(_payload(name, args)))["host"] == "grok"
 
 
-def test_unserved_event_has_no_engine_event_and_renders_neutral():
+def test_unserved_event_has_no_engine_event_and_renders_neutral() -> None:
     a = GrokAdapter()
     ev = a.adapt_event({**_payload("Bash", {"command": "ls"}), "hook_event_name": "PostToolUse"})
     assert a.engine_event(ev) is None
     assert a.render(ev, {"permissionDecision": "deny"}) == neutral_fallback("grok") == {}
 
 
-def test_render_deny_ask_and_default():
+def test_render_deny_ask_and_default() -> None:
     a = GrokAdapter()
     ev = a.adapt_event(_payload("Bash", {"command": "ls"}))
     deny = a.render(ev, {"permissionDecision": "deny", "permissionDecisionReason": "no"})
@@ -100,7 +100,7 @@ def test_render_deny_ask_and_default():
     assert a.render(ev, {"permissionDecision": "allow"}) == {}
 
 
-def test_render_allow_with_advisory_carries_additional_context_and_bare_allow_stays_neutral():
+def test_render_allow_with_advisory_carries_additional_context_and_bare_allow_stays_neutral() -> None:
     a = GrokAdapter()
     ev = a.adapt_event(_payload("Bash", {"command": "ls"}))
     flat = a.render(ev, {"permissionDecision": "allow", "additionalContext": "nag"})
@@ -120,25 +120,25 @@ _CONTRACT_EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit", "edit_file
 
 
 @pytest.mark.parametrize("tool", _CONTRACT_EDIT_TOOLS)
-def test_every_pinned_edit_tool_yields_an_edit_event_with_file_path(tool):
+def test_every_pinned_edit_tool_yields_an_edit_event_with_file_path(tool) -> None:
     ev = GrokAdapter().adapt_event(_payload(tool, {"path": "/a/b.py"}))
     assert ev.tool_name in {"Edit", "Write", "MultiEdit", "NotebookEdit"}
     assert ev.tool_input["file_path"] == "/a/b.py"
 
 
-def test_file_path_key_outranks_path_keys_and_session_id_is_optional():
+def test_file_path_key_outranks_path_keys_and_session_id_is_optional() -> None:
     ev = GrokAdapter().adapt_event(_payload("edit_file", {"file_path": "/first", "path": "/second", "Path": "/third"}))
     assert ev.tool_input["file_path"] == "/first"
     ev = GrokAdapter().adapt_event(_payload("edit_file", {"file_path": "/x"}, session_id="s1"))
     assert ev.tool_input["file_path"] == "/x"
 
 
-def test_non_edit_unknown_tool_is_not_mapped_to_an_edit_name():
+def test_non_edit_unknown_tool_is_not_mapped_to_an_edit_name() -> None:
     ev = GrokAdapter().adapt_event(_payload("web_search", {"query": "q"}))
     assert ev.tool_name == "web_search"
 
 
-def test_subagent_type_maps_to_agent_type_and_child_session_id_to_agent_id():
+def test_subagent_type_maps_to_agent_type_and_child_session_id_to_agent_id() -> None:
     ev = GrokAdapter().adapt_event(_payload("read_file", {"path": "/x"}, session_id="child-1", subagentType="explore"))
     assert ev.metadata["agent_type"] == "explore"
     assert ev.metadata["agent_id"] == "child-1"
@@ -146,12 +146,12 @@ def test_subagent_type_maps_to_agent_type_and_child_session_id_to_agent_id():
     assert out["agent_id"] == "child-1" and out["agent_type"] == "explore"
 
 
-def test_payload_without_subagent_type_stays_em_even_with_a_subagent_type_tool_arg():
+def test_payload_without_subagent_type_stays_em_even_with_a_subagent_type_tool_arg() -> None:
     ev = GrokAdapter().adapt_event(
         _payload("spawn_subagent", {"subagent_type": "explore", "prompt": "p"}, session_id="em-1"))
     assert "agent_id" not in ev.metadata and "agent_type" not in ev.metadata
 
 
-def test_subagent_type_without_session_id_does_not_invent_an_agent_id():
+def test_subagent_type_without_session_id_does_not_invent_an_agent_id() -> None:
     ev = GrokAdapter().adapt_event(_payload("read_file", {"path": "/x"}, subagentType="explore"))
     assert "agent_id" not in ev.metadata

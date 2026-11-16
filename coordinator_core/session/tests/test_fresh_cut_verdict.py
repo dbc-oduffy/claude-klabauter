@@ -9,6 +9,7 @@ from coordinator_core.session.tests.test_worktree_safety import (  # noqa: F401
     _make_repo,
     _write_session,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -27,7 +28,7 @@ def _repo_with_live_peer(tmp_path):
 
 
 class TestNarrowedFreshCut:
-    def test_ok_under_live_peers_on_main(self, tmp_path):
+    def test_ok_under_live_peers_on_main(self, tmp_path: Path) -> None:
         repo = _repo_with_live_peer(tmp_path)
         v = worktree_safety.branch_mutation_verdict(
             cwd=str(repo),
@@ -40,7 +41,7 @@ class TestNarrowedFreshCut:
         assert v.peers == (("peer-sid", "work/peer/2026-01-01"),)
 
     @pytest.mark.parametrize("current_branch", [None, "", "work/machine-a/2026-08-18"])
-    def test_refuses_off_main(self, tmp_path, current_branch):
+    def test_refuses_off_main(self, tmp_path: Path, current_branch) -> None:
         repo = _repo_with_live_peer(tmp_path)
         v = worktree_safety.branch_mutation_verdict(
             cwd=str(repo),
@@ -50,7 +51,7 @@ class TestNarrowedFreshCut:
         )
         assert v.outcome == "refused"
 
-    def test_unknown_is_not_relaxed_by_the_narrowing(self, tmp_path, monkeypatch):
+    def test_unknown_is_not_relaxed_by_the_narrowing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = _make_repo(tmp_path)
 
         def _boom(cwd=None):
@@ -65,7 +66,7 @@ class TestNarrowedFreshCut:
         )
         assert v.outcome == "unknown"
 
-    def test_unresolvable_self_on_main_is_still_unknown(self, tmp_path, monkeypatch):
+    def test_unresolvable_self_on_main_is_still_unknown(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = _make_repo(tmp_path)
         _write_session(repo, "peer-sid", _live_meta())
         for var in ("CLAUDE_CODE_SESSION_ID", "COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID"):
@@ -82,7 +83,7 @@ class TestNarrowedFreshCut:
 class TestHazardousKindsStillRefuse:
 
     @pytest.mark.parametrize("operation", _HAZARDOUS)
-    def test_refused_under_peers_even_on_main(self, tmp_path, operation):
+    def test_refused_under_peers_even_on_main(self, tmp_path: Path, operation) -> None:
         repo = _repo_with_live_peer(tmp_path)
         v = worktree_safety.branch_mutation_verdict(
             cwd=str(repo),
@@ -98,14 +99,14 @@ class TestHazardousKindsStillRefuse:
 
 
 class TestOperationAxisIsRequired:
-    def test_omitting_operation_is_a_type_error(self, tmp_path):
+    def test_omitting_operation_is_a_type_error(self, tmp_path: Path) -> None:
         """REQUIRED and keyword-only, so no caller inherits a permissive
         default by omission."""
         repo = _make_repo(tmp_path)
         with pytest.raises(TypeError):
             worktree_safety.branch_mutation_verdict(cwd=str(repo))  # type: ignore[call-arg]
 
-    def test_unknown_operation_raises(self, tmp_path):
+    def test_unknown_operation_raises(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
         with pytest.raises(ValueError):
             worktree_safety.branch_mutation_verdict(cwd=str(repo), operation="FRESH_CUT")

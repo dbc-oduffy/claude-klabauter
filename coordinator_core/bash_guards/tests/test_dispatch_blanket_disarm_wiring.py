@@ -39,10 +39,11 @@ from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
 from coordinator_core.guard_messages.alternative_record import AlternativeRecord, ReadyCommand
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _isolated_marker(tmp_path, monkeypatch):
+def _isolated_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(bd, "settings_home", lambda: tmp_path)
     bd._cache.clear()
     yield
@@ -57,7 +58,7 @@ def _iso(dt: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
 
 
-def _payload(session_id="sess-wire-1", agent_id=None, agent_type=None, cmd="echo probe"):
+def _payload(session_id: str = "sess-wire-1", agent_id=None, agent_type=None, cmd: str = "echo probe"):
     d = {
         "tool_name": "Bash",
         "tool_input": {"command": cmd},
@@ -79,7 +80,7 @@ def _run(payload):
     return dispatch.evaluate_payload_json(json.dumps(payload))
 
 
-def _marker_record(kind, tag):
+def _marker_record(kind, tag) -> AlternativeRecord:
     return AlternativeRecord(kind, tag, (ReadyCommand("true"),), "fake-" + tag, em_text=tag)
 
 
@@ -104,13 +105,13 @@ _FAKE_CHAIN = [
 
 class TestControlledBandSuppression:
     @pytest.fixture(autouse=True)
-    def _fake_guard_chain(self, monkeypatch):
+    def _fake_guard_chain(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: list(_FAKE_CHAIN))
 
-    def test_no_marker_runs_every_guard_first_non_none_wins(self):
+    def test_no_marker_runs_every_guard_first_non_none_wins(self) -> None:
         assert _run(EM_PAYLOAD) == _ADV_ENV
 
-    def test_advisory_rewrite_suppressed_falls_through_to_platform(self, tmp_path):
+    def test_advisory_rewrite_suppressed_falls_through_to_platform(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -118,7 +119,7 @@ class TestControlledBandSuppression:
         )
         assert _deny_reason(_run(EM_PAYLOAD)).startswith("platform")
 
-    def test_both_suppressible_bands_suppressed_yields_none(self, tmp_path):
+    def test_both_suppressible_bands_suppressed_yields_none(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -128,7 +129,7 @@ class TestControlledBandSuppression:
         )
         assert _run(EM_PAYLOAD) is None
 
-    def test_confinement_deny_band_cannot_be_named_marker_rejected_whole(self, tmp_path):
+    def test_confinement_deny_band_cannot_be_named_marker_rejected_whole(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -142,7 +143,7 @@ class TestControlledBandSuppression:
         # this at the dispatcher level: fake-advisory still fires.
         assert _run(EM_PAYLOAD) == _ADV_ENV
 
-    def test_confinement_deny_never_suppressed_even_if_fake_confinement_denied(self, monkeypatch, tmp_path):
+    def test_confinement_deny_never_suppressed_even_if_fake_confinement_denied(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """Belt-and-suspenders: even if a CONFINEMENT_DENY guard actually
         DENIES (rather than this suite's fake always-None one), a marker
         naming every band (rejected whole for naming confinement-deny)
@@ -161,7 +162,7 @@ class TestControlledBandSuppression:
         )
         assert _deny_reason(_run(EM_PAYLOAD)).startswith("confinement-deny-fired")
 
-    def test_confinement_deny_advisory_is_held_and_a_later_hard_deny_still_fires(self, monkeypatch):
+    def test_confinement_deny_advisory_is_held_and_a_later_hard_deny_still_fires(self, monkeypatch: pytest.MonkeyPatch) -> None:
         chain = [
             GuardEntry("block-worktree-creation", lambda: _marker_record("advisory", "held-advisory"), True, GuardBand.CONFINEMENT_DENY),
             GuardEntry("block-stash-destruction", lambda: _PLAT_REC, True, GuardBand.PLATFORM_CONDITIONED_DENY),
@@ -169,7 +170,7 @@ class TestControlledBandSuppression:
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: list(chain))
         assert _deny_reason(_run(EM_PAYLOAD)).startswith("platform")
 
-    def test_session_scope_does_not_leak_to_dispatched_subagent(self, tmp_path):
+    def test_session_scope_does_not_leak_to_dispatched_subagent(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -180,7 +181,7 @@ class TestControlledBandSuppression:
         assert _run(EM_PAYLOAD) is None
         assert _run(SUBAGENT_PAYLOAD) == _ADV_ENV
 
-    def test_machine_total_scope_never_disarms_a_subagent(self, tmp_path):
+    def test_machine_total_scope_never_disarms_a_subagent(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -190,14 +191,14 @@ class TestControlledBandSuppression:
         assert _run(EM_PAYLOAD) is None
         assert _run(SUBAGENT_PAYLOAD) == _ADV_ENV
 
-    def test_absent_marker_stays_fully_armed(self):
+    def test_absent_marker_stays_fully_armed(self) -> None:
         assert _run(EM_PAYLOAD) == _ADV_ENV
 
-    def test_malformed_marker_stays_fully_armed(self, tmp_path):
+    def test_malformed_marker_stays_fully_armed(self, tmp_path: Path) -> None:
         _write_marker(tmp_path, "this is garbage, not Key: value shaped \x00")
         assert _run(EM_PAYLOAD) == _ADV_ENV
 
-    def test_expired_marker_stays_fully_armed(self, tmp_path):
+    def test_expired_marker_stays_fully_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -210,7 +211,7 @@ class TestControlledBandSuppression:
 
 class TestRealGuardSuppression:
 
-    def test_sed_range_read_advise_suppressed_by_machine_total_marker(self, tmp_path):
+    def test_sed_range_read_advise_suppressed_by_machine_total_marker(self, tmp_path: Path) -> None:
         payload = _payload(cmd="sed -n '10,20p' path/to/file.py")
 
         baseline = _run(payload)

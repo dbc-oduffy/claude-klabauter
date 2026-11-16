@@ -15,6 +15,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_land_run_product import (  # 
     _record_dir,
     repo,
 )
+from pathlib import Path
 
 SESSION = "09000527-8268-46ff-82e8-3f7022eb3b00"
 FIRST = "ask-20261023T043854-eeb376"
@@ -34,19 +35,19 @@ def _block(tmp_path, run_id: str, script: str) -> dict:
     return _close_block(ctx, {"committed": False, "nothing_to_commit": True})
 
 
-def test_two_runs_sharing_a_session_each_close_under_their_own_id(tmp_path):
+def test_two_runs_sharing_a_session_each_close_under_their_own_id(tmp_path: Path) -> None:
     first = _block(tmp_path, FIRST, f"scratch/warp/{FIRST}.workflow.js")
     refire = _block(tmp_path, REFIRE, f"scratch/warp/{FIRST}.workflow.js")
     assert first["run_id"] == f"{FIRST}.workflow"
     assert refire["run_id"] == f"{REFIRE}.workflow"
 
 
-def test_refire_passing_the_other_runs_script_is_rekeyed_to_its_own_run():
+def test_refire_passing_the_other_runs_script_is_rekeyed_to_its_own_run() -> None:
     assert run_close.own_close_key(REFIRE, f"{FIRST}.workflow") == f"{REFIRE}.workflow"
     assert run_close.own_close_key(f"{REFIRE}.workflow", f"{FIRST}.workflow") == f"{REFIRE}.workflow"
 
 
-def test_matching_or_non_workflow_stem_is_left_alone():
+def test_matching_or_non_workflow_stem_is_left_alone() -> None:
     assert run_close.own_close_key(FIRST, f"{FIRST}.workflow") == f"{FIRST}.workflow"
     assert run_close.own_close_key("r1", "plain-script") == "plain-script"
     assert run_close.own_close_key("", f"{FIRST}.workflow") == f"{FIRST}.workflow"
@@ -54,7 +55,7 @@ def test_matching_or_non_workflow_stem_is_left_alone():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_land_run_handler_keys_the_close_to_its_own_run_not_the_stale_script(repo):  # noqa: F811
+def test_land_run_handler_keys_the_close_to_its_own_run_not_the_stale_script(repo) -> None:  # noqa: F811
     _author(repo, "src/a.py", "a = 1\n")
     _declare(repo, "src/a.py")
     _record_dir(repo)

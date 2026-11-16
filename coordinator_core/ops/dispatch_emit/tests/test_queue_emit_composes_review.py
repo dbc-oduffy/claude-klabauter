@@ -7,9 +7,10 @@ from coordinator_core.ops.dispatch_emit.emit import NoReviewStageError
 
 from .conftest import _V5_ROSTER_FRAGMENT
 from .test_queue_emit import _emit
+from pathlib import Path
 
 
-def test_queue_emitter_composes_execute_review(tmp_path):
+def test_queue_emitter_composes_execute_review(tmp_path: Path) -> None:
     script = _emit(tmp_path).script
     grind_at = script.index("await runGrind();")
     prep_at = script.index("const _reviewPrep = ")
@@ -30,12 +31,12 @@ def test_queue_emitter_composes_execute_review(tmp_path):
     ],
     ids=["no-fragment", "no-schemas", "v4-fragment"],
 )
-def test_queue_emitter_refuses_without_review_inputs(tmp_path, overrides):
+def test_queue_emitter_refuses_without_review_inputs(tmp_path: Path, overrides) -> None:
     with pytest.raises(NoReviewStageError):
         _emit(tmp_path, **overrides)
 
 
-def test_queue_review_prep_freezes_from_the_emit_time_head(tmp_path, monkeypatch):
+def test_queue_review_prep_freezes_from_the_emit_time_head(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import queue_emit
 
     monkeypatch.setattr(queue_emit, "head_sha", lambda _repo: "c" * 40)

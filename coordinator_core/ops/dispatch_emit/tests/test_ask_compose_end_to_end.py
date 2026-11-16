@@ -17,6 +17,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _JUDGE_KW, _NO_FOLD, _compose
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import stage_root  # noqa: F401  # fold_manifest writes its sidecar under it
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -29,13 +30,13 @@ def _agent_opts(script: str, label: str) -> str:
     return m.group(0)
 
 
-def test_s_plan_author_is_opus_pinned_type_at_low_effort():
+def test_s_plan_author_is_opus_pinned_type_at_low_effort() -> None:
     opts = _agent_opts(_compose(), "plan")
     assert "agentType: 'coordinator:plan-author'" in opts
     assert "model: 'opus'" in opts and "effort: 'low'" in opts
 
 
-def _existing_sizing_compose(tmp_path, **over):
+def _existing_sizing_compose(tmp_path, **over) -> str:
     """A compose over an already-written sizing: the only path that still spawns a gate agent."""
     rel = "state/sizings/2026-10-12-existing.yaml"
     (tmp_path / "state/sizings").mkdir(parents=True, exist_ok=True)
@@ -45,18 +46,18 @@ def _existing_sizing_compose(tmp_path, **over):
     return _compose(repo_root=str(tmp_path), prompt=None, sizing_rel=rel, **over)
 
 
-def test_gate_runs_haiku_at_low_effort(tmp_path):
+def test_gate_runs_haiku_at_low_effort(tmp_path: Path) -> None:
     opts = _agent_opts(_existing_sizing_compose(tmp_path), "gate")
     assert "model: 'haiku'" in opts and "effort: 'low'" in opts
 
 
-def test_no_standalone_stage_agent_is_composed():
+def test_no_standalone_stage_agent_is_composed() -> None:
     script = _compose()
     assert "label: 'stage'" not in script and "phase('stage')" not in script
     assert _NO_FOLD in script
 
 
-def test_review_prep_is_the_first_act_of_each_wave_agent_and_no_prep_agent_spawns():
+def test_review_prep_is_the_first_act_of_each_wave_agent_and_no_prep_agent_spawns() -> None:
     script = _compose()
     assert "label: 'review:coordinator:review-prep'" not in script and "phase('Review prep')" not in script
     assert "'Review prep'" not in script.split("phases: [", 1)[1].split("]", 1)[0]
@@ -65,7 +66,7 @@ def test_review_prep_is_the_first_act_of_each_wave_agent_and_no_prep_agent_spawn
     assert script.count('coordinator-invoke" review.prep') == 1
 
 
-def test_no_record_agent_is_composed():
+def test_no_record_agent_is_composed() -> None:
     script = _compose(roadmap_blitz_text=_RB_TEXT)
     for text in ("accept-record", "xl-exit-record", "sizing.accept_exit_criterion", "sizing.record_xl_exit"):
         assert text not in script
@@ -73,12 +74,12 @@ def test_no_record_agent_is_composed():
     assert "accept-record" not in labels and "xl-exit-record" not in labels
 
 
-def test_size_stays_on_the_cheap_executor():
+def test_size_stays_on_the_cheap_executor() -> None:
     assert "model: 'sonnet'" in _agent_opts(_compose(), "size")
 
 
 @pytest.mark.parametrize("em_brief", [False, True])
-def test_every_composed_agent_call_is_modeled(em_brief):
+def test_every_composed_agent_call_is_modeled(em_brief) -> None:
     from coordinator_core.hooks.block_workflow_unmodeled_agent import _count_agent_modeled_with_types
     from coordinator_core.ops.dispatch_emit.ask_brief import EmBrief
 
@@ -94,7 +95,7 @@ def test_every_composed_agent_call_is_modeled(em_brief):
     assert agent_n > 0 and modeled_n == agent_n
 
 
-def test_every_objective_leg_agent_call_is_modeled():
+def test_every_objective_leg_agent_call_is_modeled() -> None:
     from coordinator_core.hooks.block_workflow_unmodeled_agent import _count_agent_modeled_with_types
 
     js = ask_compose._objective_js(
@@ -106,20 +107,20 @@ def test_every_objective_leg_agent_call_is_modeled():
     assert agent_n > 0 and modeled_n == agent_n
 
 
-def test_retest_invariant_call_carries_the_test_runner_pin():
+def test_retest_invariant_call_carries_the_test_runner_pin() -> None:
     from coordinator_core.ops.dispatch_emit import emit as _emit
 
     call = ask_compose._invariant_retest_call(head="H", anchor="A", repo_root="REPO", run_id="run-1")
     assert _emit._model_opt(_emit._TEST_AGENT_TYPE) in call
 
 
-def test_no_in_run_commit_leaves_the_commit_to_the_em():
+def test_no_in_run_commit_leaves_the_commit_to_the_em() -> None:
     script = _compose()
     assert "phase('commit')" not in script and "label: 'docs'" not in script
     assert "_docsWanted" not in script and "Write no docs on this run" in script
 
 
-def test_in_run_commit_composes_docs_in_the_verify_agent_then_commit_before_the_one_return():
+def test_in_run_commit_composes_docs_in_the_verify_agent_then_commit_before_the_one_return() -> None:
     script = _compose(in_run_commit=True, script_path="scratch/warp/a.workflow.mjs")
     docs, commit, ret = (
         script.index("label: 'verify'"),
@@ -153,7 +154,7 @@ def _verdict_def(script: str) -> str:
     return script[start : script.index("\n", start)]
 
 
-def test_the_tail_is_one_verify_agent_of_tests_docs_and_the_judged_ledger():
+def test_the_tail_is_one_verify_agent_of_tests_docs_and_the_judged_ledger() -> None:
     script = _compose(in_run_commit=True, **_JUDGE_KW)
     call, after = _tail(script)
     call += _verdict_def(script)
@@ -169,14 +170,14 @@ def test_the_tail_is_one_verify_agent_of_tests_docs_and_the_judged_ledger():
     assert "_ledgerBlocking" in after and "halted: 'ledger-check'" in after
 
 
-def test_the_verdict_is_ruled_after_the_tests_inside_the_one_prompt():
+def test_the_verdict_is_ruled_after_the_tests_inside_the_one_prompt() -> None:
     call, _ = _tail(_compose(in_run_commit=True, **_JUDGE_KW))
     assert call.index("(1) TESTS.") < call.index("(2) DOCS.") < call.index("(3) VERDICT.")
     assert "The scoped tests already ran in a separate test-runner leg; run nothing" in call
     assert "Once the test result is in, read it before you rule" in call
 
 
-def test_a_judged_run_projects_the_ledger_from_the_verify_reply_and_fails_closed():
+def test_a_judged_run_projects_the_ledger_from_the_verify_reply_and_fails_closed() -> None:
     script = _compose(in_run_commit=True, **_JUDGE_KW)
     call, after = _tail(script)
     proj = call[call.index("    _ledger = ") :].split("\n", 1)[0]
@@ -186,20 +187,20 @@ def test_a_judged_run_projects_the_ledger_from_the_verify_reply_and_fails_closed
     assert "_ledger = await" not in script
 
 
-def test_an_unjudged_run_folds_the_ledger_check_into_the_verify_agent():
+def test_an_unjudged_run_folds_the_ledger_check_into_the_verify_agent() -> None:
     script = _compose(in_run_commit=True)
     assert script.count("label: 'verify'") == 1 and "label: 'ledger-check'" not in script
     assert "_ledger = (_verify && Array.isArray(_verify.items))" in script
     assert "Ledger check, folded" not in script and "_falsifierResult" not in script
 
 
-def test_the_tail_without_a_judge_or_commit_carries_neither_judge_nor_docs_instructions():
+def test_the_tail_without_a_judge_or_commit_carries_neither_judge_nor_docs_instructions() -> None:
     call, _ = _tail(_compose())
     assert "label: 'verify'" in call and "const _docsWanted" not in call
     assert "coordinator:criterion-judge" not in call and "TIER 1" not in call
 
 
-def test_the_verify_prompt_binds_its_write_set_to_the_declared_docs_and_the_note():
+def test_the_verify_prompt_binds_its_write_set_to_the_declared_docs_and_the_note() -> None:
     script = _compose(in_run_commit=True, **_JUDGE_KW)
     call = (_tail(script)[0] + _verdict_def(script)).replace("\\'", "'")
     assert "JSON.stringify(_manifest.doc_writes ?? [])" in call
@@ -208,14 +209,14 @@ def test_the_verify_prompt_binds_its_write_set_to_the_declared_docs_and_the_note
     assert "doc_writes" not in _tail(_compose(**_JUDGE_KW))[0]
 
 
-def test_docs_instructions_sit_under_the_pre_tail_guard_and_carry_no_tail_result():
+def test_docs_instructions_sit_under_the_pre_tail_guard_and_carry_no_tail_result() -> None:
     call, _ = _tail(_compose(in_run_commit=True, **_JUDGE_KW))
     assert f"const _docsWanted = !!({ask_compose._DOCS_PRE_TAIL_GUARD});" in call
     docs = call[call.index("_docsWanted ? (") : call.index("(3) VERDICT.")]
     assert "_ledger" not in docs and "_testResult" not in docs and "_falsifier" not in docs.lower()
 
 
-def test_raw_ask_composes_the_ceo_xl_exit_and_regates():
+def test_raw_ask_composes_the_ceo_xl_exit_and_regates() -> None:
     script = _compose(roadmap_blitz_text=_RB_TEXT)
     loop = script[script.index("for (let _round = 0;"):]
     assert "_gate.halt.apm_xl_exit === true" in loop
@@ -233,7 +234,7 @@ def test_raw_ask_composes_the_ceo_xl_exit_and_regates():
     assert "if (!_progressed) break;" in loop
 
 
-def test_raw_ask_roadmap_pick_chains_into_the_sizing_script_and_skips_the_row_phases():
+def test_raw_ask_roadmap_pick_chains_into_the_sizing_script_and_skips_the_row_phases() -> None:
     script = _compose(roadmap_blitz_text=_RB_TEXT)
     assert "phase('roadmap-blitz')" not in script
     assert "which this script does not embed" not in script
@@ -245,21 +246,21 @@ def test_raw_ask_roadmap_pick_chains_into_the_sizing_script_and_skips_the_row_ph
     assert "phase('workstream-complete')" not in gated and "phase('execute')" not in gated
 
 
-def test_raw_ask_roadmap_chain_failure_halts_with_the_filled_refire_not_the_not_embedded_text():
+def test_raw_ask_roadmap_chain_failure_halts_with_the_filled_refire_not_the_not_embedded_text() -> None:
     script = _compose(roadmap_blitz_text=_RB_TEXT)
     gated = script[script.index("_gate.arm === 'roadmap'") : script.index("  if (!_viaRoadmap) {")]
     assert "(_viaRoadmap ? 'the roadmap arm' : 'M+') + ' and the chained run did not start ('" in gated
     assert "resubmit Workflow({name:" in gated
 
 
-def test_raw_ask_roadmap_chain_is_taken_without_a_loadable_roadmap_stage():
+def test_raw_ask_roadmap_chain_is_taken_without_a_loadable_roadmap_stage() -> None:
     script = _compose()
     assert "async function roadmapBlitz(" not in script
     assert "await _chain_start(_chainPath, " in script[script.index("_gate.arm === 'roadmap'") :]
     assert "which this script does not embed" not in script
 
 
-def test_launcher_child_roadmap_pick_returns_the_chain_hand_off():
+def test_launcher_child_roadmap_pick_returns_the_chain_hand_off() -> None:
     from coordinator_core.ops.dispatch_emit.nested_run_contract import CHAIN_HANDOFF_KEY
 
     script = _compose(roadmap_blitz_text=_RB_TEXT, launcher_child=True)
@@ -268,7 +269,7 @@ def test_launcher_child_roadmap_pick_returns_the_chain_hand_off():
     assert "workflow(" not in gated
 
 
-def test_existing_s_sizing_composes_no_xl_or_roadmap(tmp_path):
+def test_existing_s_sizing_composes_no_xl_or_roadmap(tmp_path: Path) -> None:
     sizings = tmp_path / "state" / "sizings"
     sizings.mkdir(parents=True)
     (sizings / "s.yaml").write_text(
@@ -278,7 +279,7 @@ def test_existing_s_sizing_composes_no_xl_or_roadmap(tmp_path):
     assert "phase('xl-exit')" not in script and "_gate.arm === 'roadmap'" not in script
 
 
-def test_the_run_token_is_read_from_args_never_written_into_the_script():
+def test_the_run_token_is_read_from_args_never_written_into_the_script() -> None:
     script = _compose(in_run_commit=True, script_path="scratch/warp/a.workflow.mjs")
     assert "a.runToken" in script and "typeof args === 'string'" in script
     assert not re.search(r"_RUN_TOKEN = '[0-9a-f]{32}'", script)
@@ -288,7 +289,7 @@ def test_the_run_token_is_read_from_args_never_written_into_the_script():
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @pytest.mark.parametrize("over", [{}, {"in_run_commit": True, "roadmap_blitz_text": _RB_TEXT}])
-def test_script_is_valid_and_parses(over, tmp_path):
+def test_script_is_valid_and_parses(over, tmp_path: Path) -> None:
     script = _compose(**over)
     assert not [f for f in run_checks(script) if f.severity == Severity.ERROR]
     node = shutil.which("node")
@@ -308,7 +309,7 @@ def test_script_is_valid_and_parses(over, tmp_path):
     assert out.returncode == 0, out.stderr
 
 
-def test_the_verify_leg_rules_the_ledger_at_every_size_and_gates_the_commit():
+def test_the_verify_leg_rules_the_ledger_at_every_size_and_gates_the_commit() -> None:
     script = _compose(in_run_commit=True)
     check = script.index("label: 'verify'")
     assert script.index("phase('Review wave')") < check < script.index("phase('commit')")
@@ -323,7 +324,7 @@ def test_the_verify_leg_rules_the_ledger_at_every_size_and_gates_the_commit():
     assert "ledger: _ledger, docs: _docs" in script
 
 
-def test_ledger_check_admits_post_commit_items():
+def test_ledger_check_admits_post_commit_items() -> None:
     script = _compose(in_run_commit=True)
     opts = script[script.index("label: 'verify'"):]
     opts = opts[: opts.index("\n")]
@@ -337,7 +338,7 @@ def test_ledger_check_admits_post_commit_items():
     assert "post_commit_acts: i.post_commit_acts" in script
 
 
-def test_ledger_verdict_carries_root_read_per_item():
+def test_ledger_verdict_carries_root_read_per_item() -> None:
     script = _compose(in_run_commit=True)
     start = script.index("_nextAction.params.ledger_verdict = ")
     mapped = script[start : script.index("\n", start)]
@@ -345,7 +346,7 @@ def test_ledger_verdict_carries_root_read_per_item():
     assert "i.root_read != null" in mapped
 
 
-def test_ledger_verdict_carries_original_read_fields_per_item():
+def test_ledger_verdict_carries_original_read_fields_per_item() -> None:
     script = _compose(in_run_commit=True)
     start = script.index("_nextAction.params.ledger_verdict = ")
     mapped = script[start : script.index("\n", start)]
@@ -354,7 +355,7 @@ def test_ledger_verdict_carries_original_read_fields_per_item():
         assert f'"{field}"' in script
 
 
-def test_every_judgment_stage_reads_the_ledger_at_its_start(m_plus_known_arm):
+def test_every_judgment_stage_reads_the_ledger_at_its_start(m_plus_known_arm) -> None:
     script = _compose()
     view = f"{RECORD_DIR_ROOT}/run-1/requirements.md"
     for label in ("size", "accept", "xl-exit", "plan", "verify"):
@@ -372,7 +373,7 @@ def test_every_judgment_stage_reads_the_ledger_at_its_start(m_plus_known_arm):
     assert script.index("const _LEDGER_PREFIX = ") < script.index("const planBlitz = (() => {")
 
 
-def test_the_ledger_never_stands_in_for_the_verifier_judge_or_falsifier():
+def test_the_ledger_never_stands_in_for_the_verifier_judge_or_falsifier() -> None:
     script = _compose(in_run_commit=True)
     assert "_ledgerCloses" not in script
     wave = script[script.index("phase('Review wave')"):script.rindex("phase('Verify')")].replace(_verdict_def(script), "")
@@ -382,7 +383,7 @@ def test_the_ledger_never_stands_in_for_the_verifier_judge_or_falsifier():
     assert "delivery: _deliveryVerdict" in script
 
 
-def test_every_prompt_reads_an_agent_definition_the_run_edited_from_disk(tmp_path):
+def test_every_prompt_reads_an_agent_definition_the_run_edited_from_disk(tmp_path: Path) -> None:
     script = _compose(in_run_commit=True)
     assert "function _agentDefsClause()" in script
     assert "agents\\/[^/]+\\.md$" in script
@@ -397,18 +398,18 @@ def test_every_prompt_reads_an_agent_definition_the_run_edited_from_disk(tmp_pat
     assert "_agentDefsClause()" in rows[: rows.index("stallMs")]
 
 
-def test_the_gate_binds_the_run_to_its_sizing():
+def test_the_gate_binds_the_run_to_its_sizing() -> None:
     assert "JSON.stringify({ sizing_path: _sizingRel, run_id: _runId, writes: _writes" in _compose()
 
 
-def test_a_spine_with_no_test_target_reads_degraded_never_passed():
+def test_a_spine_with_no_test_target_reads_degraded_never_passed() -> None:
     script = _compose()
     assert "(_manifest.test_targets ?? []).length" in script
     assert "(_manifest.test_targets ?? []).join(', ')" in script
     assert "_manifest.no_test_target) {" in script and "status: 'degraded'" in script
 
 
-def test_reviewers_and_judge_read_the_pm_intent_and_apm_keeps_the_ask():
+def test_reviewers_and_judge_read_the_pm_intent_and_apm_keeps_the_ask() -> None:
     script = _compose()
     assert script.count(f"{RECORD_DIR_ROOT}/run-1/pm-intent.md") >= 3
     assert "scratch/warp/run-1/pm-intent.md" not in script
@@ -419,7 +420,7 @@ def test_reviewers_and_judge_read_the_pm_intent_and_apm_keeps_the_ask():
         assert "Where they conflict, keep the ask and name the conflict in your ruling." in call
 
 
-def test_plan_rows_are_outcomes_not_code():
+def test_plan_rows_are_outcomes_not_code() -> None:
     script = _compose()
     plan = script[script.index("Author the plan for the sizing at") :]
     assert "Each row states an outcome" in plan and "never write the code, a diff" in plan
@@ -440,7 +441,7 @@ def _tiered_roster() -> dict:
     return roster
 
 
-def test_the_execute_wave_is_tier_filtered_by_the_fire_time_size_from_the_one_map():
+def test_the_execute_wave_is_tier_filtered_by_the_fire_time_size_from_the_one_map() -> None:
     import json
 
     from coordinator_core.ops.dispatch_emit import emit
@@ -453,7 +454,7 @@ def test_the_execute_wave_is_tier_filtered_by_the_fire_time_size_from_the_one_ma
     assert script.count(".includes(") >= 1 and "_deliveryVerdict = _reviewWave[" in script
 
 
-def test_the_ask_script_predeclares_and_assigns_the_delivery_not_run_reason():
+def test_the_ask_script_predeclares_and_assigns_the_delivery_not_run_reason() -> None:
     script = _compose(review_roster_fragment=_tiered_roster())
     assert script.count("let _deliveryNotRun = null;") == 1
     assert "const _deliveryNotRun" not in script
@@ -461,7 +462,7 @@ def test_the_ask_script_predeclares_and_assigns_the_delivery_not_run_reason():
     assert "excludes coordinator:delivery-verifier" in script
 
 
-def test_a_roster_without_tiers_composes_an_ungated_wave():
+def test_a_roster_without_tiers_composes_an_ungated_wave() -> None:
     assert '.includes((' not in _compose().split("phase('Review wave')")[1].split("phase('Review integration')")[0]
 
 
@@ -472,7 +473,7 @@ def test_a_roster_without_tiers_composes_an_ungated_wave():
     [("XS", "lightweight"), ("S", "lightweight"), ("M", "standard"), ("L", "standard"), ("XL", "full"),
      (None, "full"), ("bogus", "full")],
 )
-def test_the_fire_time_tier_expression_maps_every_size_and_defaults_to_full(tshirt, tier):
+def test_the_fire_time_tier_expression_maps_every_size_and_defaults_to_full(tshirt, tier) -> None:
     import json
 
     node = shutil.which("node")
@@ -483,7 +484,7 @@ def test_the_fire_time_tier_expression_maps_every_size_and_defaults_to_full(tshi
     assert out.stdout.strip() == tier, out.stderr
 
 
-def test_m_plus_adopts_the_ready_op_reply_as_the_staged_manifest_behind_a_rows_guard(m_plus_known_arm):
+def test_m_plus_adopts_the_ready_op_reply_as_the_staged_manifest_behind_a_rows_guard(m_plus_known_arm) -> None:
     script = _compose()
     assert "readyOp:" in script
     for entry in ("_ready", "_reready"):
@@ -510,7 +511,7 @@ _WHOLE_ROW = {
         ([{"id": "C1", "wave": 0}], "stage manifest relay is not whole: rows[0].brief_path"),
     ],
 )
-def test_a_relayed_manifest_whose_rows_lack_brief_path_halts_instead_of_briefing_undefined(rows, error):
+def test_a_relayed_manifest_whose_rows_lack_brief_path_halts_instead_of_briefing_undefined(rows, error) -> None:
     from coordinator_core.ops.dispatch_emit.tests.test_ask_fold_reads_disk_manifest_e2e import fold_manifest
 
     relay = {"rows": rows, "review_declared_paths": [], "test_targets": [], "head_sha": "a" * 40}
@@ -521,7 +522,7 @@ def test_a_relayed_manifest_whose_rows_lack_brief_path_halts_instead_of_briefing
         assert error in out["manifest"]["error"]
 
 
-def test_the_ready_op_carries_the_stage_reply_schema_so_the_relay_is_typed(m_plus_known_arm):
+def test_the_ready_op_carries_the_stage_reply_schema_so_the_relay_is_typed(m_plus_known_arm) -> None:
     script = _compose()
     ready = script.split("readyOp: {", 1)[1].split("} } : {})", 1)[0]
     schema = json.loads(ready.split("schema:", 1)[1])

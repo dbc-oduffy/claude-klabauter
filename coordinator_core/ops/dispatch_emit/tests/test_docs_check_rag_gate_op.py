@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import inspect
 import json
 
 import pytest
@@ -9,6 +11,9 @@ import pytest
 from coordinator_core.ops.dispatch_emit import docs_check_gate_op as gate
 from coordinator_core.ops.dispatch_emit import rag_use
 
+# Assembled: the publish scrub rewrites the whole-word literal, so a test literal would drift.
+REAL = "-".join(("project", "rag"))
+PLACEHOLDER = "example-retrieval-repo"
 SESSION = "sess-gate"
 RUN_ID = "ask-20261106T000000-abc123"
 LABEL = "plan-docs-check"
@@ -34,6 +39,24 @@ def _text(msg_id, text):
 def _tool_error(msg_id):
     return json.dumps({"message": {"role": "user", "content": [
         {"type": "tool_result", "tool_use_id": f"t-{msg_id}", "is_error": True, "content": "x"}]}})
+
+
+PROBE_OK = json.dumps({"state": "ok", "per_source": {"engine": "ok"}})
+PROBE_DOWN = json.dumps({"state": "down", "per_source": {}})
+
+
+@pytest.fixture(autouse=True)
+def probe(monkeypatch):
+    """Default: the probe CLI is absent and backoff does not sleep; tests set `probe.out`."""
+    state = {"out": None, "calls": 0}
+
+    def runner(argv):
+        state["calls"] += 1
+        return state["out"]
+
+    monkeypatch.setattr(gate, "_probe_runner", runner)
+    monkeypatch.setattr(gate, "_sleep", lambda _s: None)
+    return state
 
 
 @pytest.fixture
@@ -101,7 +124,7 @@ def test_engine_queryable_false_is_rag_corpus_down_despite_successful_call(env):
     transcript([_tool_use("m1", "mcp__project-rag__project_symbol")])
     out = call(engine_queryable=False)
     assert out["verdict"] == rag_use.HALT_RAG_CORPUS_DOWN
-    assert out["message"] == rag_use.RESTORE_MESSAGE
+    assert REAL in out["message"]
 
 
 def test_engine_queryable_true_or_absent_does_not_down_a_working_corpus(env):
@@ -149,7 +172,7 @@ def test_refused_connection_stays_rag_corpus_down(env):
     out = call()
     assert out["verdict"] == "rag_corpus_down"
     assert out["branch"] == "all_calls_refused"
-    assert out["message"] == rag_use.RESTORE_MESSAGE
+    assert REAL in out["message"]
 
 
 def test_unreadable_transcript_is_transcript_unreadable_never_down(env):
@@ -264,3 +287,84 @@ def test_fresh_index_queues_nothing_and_not_applicable_carries_no_field(env, tmp
     out = call(repo_root=str(plain))
     assert out == {"verdict": "not_applicable"}
     assert spawned == []
+def _refused(transcript):
+    transcript([
+        _tool_use("m1", "mcp__project-rag__project_symbol"), _tool_error_kind("m1", "connection refused"),
+    ])
+
+
+def test_down_message_names_real_corpus_probe_raw_output_and_restorer(env, probe):
+    _repo, transcript, call = env
+    _refused(transcript)
+    probe["out"] = PROBE_DOWN
+    out = call()
+    assert out["verdict"] == "rag_corpus_down"
+    msg = out["message"]
+    assert REAL in msg and PLACEHOLDER not in msg
+    assert "owner session" in msg and "probe-reachability" in msg
+    assert '"state": "down"' in msg
+    transcript([_tool_use("m1", "Read")])
+    queryable_false = call(engine_queryable=False)["message"]
+    assert "engine_queryable=false" in queryable_false and REAL in queryable_false
+
+
+def test_serving_corpus_on_reprobe_never_yields_rag_corpus_down(env, probe):
+    _repo, transcript, call = env
+    probe["out"] = PROBE_OK
+    _refused(transcript)
+    out = call()
+    assert out["verdict"] == "degraded"
+    assert out["branch"] == "reprobe_recovered"
+    assert "message" not in out
+    transcript([_tool_use("m1", "mcp__project-rag__project_symbol")])
+    out = call(engine_queryable=False)
+    assert (out["verdict"], out["branch"]) == ("degraded", "reprobe_recovered")
+    out = call(label="no-such-leg", engine_queryable=False)
+    assert out["verdict"] == "degraded"
+
+
+def test_recovered_reprobe_still_runs_the_citation_check(env, probe):
+    _repo, transcript, call = env
+    probe["out"] = PROBE_OK
+    transcript([
+        _tool_use("m1", "mcp__project-rag__project_symbol"), _tool_error_kind("m1", "connection refused"),
+        _text("m2", "[live: inspect L_Main]"),
+    ])
+    assert call()["verdict"] == "citation_unbacked"
+
+
+def test_reprobe_retries_with_backoff_before_halting(env, probe, monkeypatch):
+    _repo, transcript, call = env
+    _refused(transcript)
+    sleeps = []
+    monkeypatch.setattr(gate, "_sleep", sleeps.append)
+    monkeypatch.setattr(gate, "_probe_runner", lambda _argv: PROBE_OK)
+    assert call()["verdict"] == "degraded"
+    assert sleeps == [0.1]
+    assert sum(gate._REPROBE_BACKOFF_S) + gate._PROBE_TIMEOUT_S * len(gate._REPROBE_BACKOFF_S) <= 0.5
+    probe["out"] = None
+    monkeypatch.setattr(gate, "_probe_runner", lambda _argv: None)
+    assert call()["verdict"] == "rag_corpus_down"
+
+
+def test_down_probe_state_or_garbage_keeps_the_halt(env, probe):
+    _repo, transcript, call = env
+    _refused(transcript)
+    for raw in (PROBE_DOWN, "not json", json.dumps({"state": "weird"}), None):
+        probe["out"] = raw
+        assert call()["verdict"] == "rag_corpus_down"
+
+
+def test_gate_corpus_name_is_real_and_not_a_scrubbable_literal():
+    assert gate._CORPUS == REAL
+    tree = ast.parse(inspect.getsource(gate))
+    docstrings = {
+        id(n.body[0].value) for n in ast.walk(tree)
+        if isinstance(n, (ast.Module, ast.FunctionDef, ast.ClassDef)) and n.body
+        and isinstance(n.body[0], ast.Expr) and isinstance(n.body[0].value, ast.Constant)
+    }
+    literals = [
+        n.value for n in ast.walk(tree)
+        if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docstrings
+    ]
+    assert not [s for s in literals if REAL in s or PLACEHOLDER in s]

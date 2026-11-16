@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import co_declared_settle, halt_product_gates, peer_hunk_gate
+from pathlib import Path
+import pytest
 
 RUN = "ask-20261027T000000-aaaaaa"
 SIB = "ask-20261027T000000-bbbbbb"
@@ -24,7 +26,7 @@ def _gate(tmp_path, monkeypatch, holds, settle):
     return out, seen, provenance
 
 
-def test_settle_receives_the_gate_pairs_and_a_staged_path_clears(tmp_path, monkeypatch):
+def test_settle_receives_the_gate_pairs_and_a_staged_path_clears(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     holds = [("DELIVERY.md", SIB)]
     out, seen, provenance = _gate(tmp_path, monkeypatch, holds, lambda pairs: ({"DELIVERY.md": []}, []))
     assert seen == [holds]
@@ -32,7 +34,7 @@ def test_settle_receives_the_gate_pairs_and_a_staged_path_clears(tmp_path, monke
     assert provenance == []
 
 
-def test_only_still_held_paths_are_recorded_as_co_declared_provenance(tmp_path, monkeypatch):
+def test_only_still_held_paths_are_recorded_as_co_declared_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     holds = [("DELIVERY.md", SIB), ("src/a.py", SIB)]
     out, _, provenance = _gate(
         tmp_path, monkeypatch, holds, lambda pairs: ({"DELIVERY.md": []}, [("src/a.py", SIB)]),
@@ -41,7 +43,7 @@ def test_only_still_held_paths_are_recorded_as_co_declared_provenance(tmp_path, 
     assert provenance == [("src/a.py", peer_hunk_gate.PEER_HUNKS_CO_DECLARED, SIB)]
 
 
-def test_real_settle_records_unreadable_claims_as_co_declared_provenance(tmp_path, monkeypatch):
+def test_real_settle_records_unreadable_claims_as_co_declared_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         peer_hunk_gate, "co_declared_peer_holds",
         lambda root, run, paths, declared, **kw: [("DELIVERY.md", peer_hunk_gate.UNREADABLE_PEER_CLAIMS)],

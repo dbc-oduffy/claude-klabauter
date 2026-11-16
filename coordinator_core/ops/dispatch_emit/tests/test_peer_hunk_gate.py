@@ -23,7 +23,7 @@ def _stamped(tag: str) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     subprocess.run(  # a real repo: the halted-hold release parses the index and HEAD, and fails closed on a bare `.git` dir
@@ -54,7 +54,7 @@ def _halt(rdir: Path) -> None:
     (rdir / "halted.json").write_text(json.dumps({"status": "halted"}), encoding="utf-8")
 
 
-def test_co_declared_path_is_held_and_names_the_sibling(repo):
+def test_co_declared_path_is_held_and_names_the_sibling(repo) -> None:
     _declare(repo, "run-b", PATH)
     run_token.mint(repo, "run-b", "b.mjs", session_id=SELF)
     holds = peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH, "src/a.py"], [PATH, "src/a.py"])
@@ -62,7 +62,7 @@ def test_co_declared_path_is_held_and_names_the_sibling(repo):
     assert "run-b" in peer_hunk_gate.refusal_message(holds, OWN)
 
 
-def test_every_co_declaring_sibling_is_named_not_just_the_first(repo):
+def test_every_co_declaring_sibling_is_named_not_just_the_first(repo) -> None:
     for run_id in ("run-b", "run-c", "run-d"):
         _declare(repo, run_id, PATH)
         run_token.mint(repo, run_id, "b.mjs", session_id=SELF)
@@ -72,7 +72,7 @@ def test_every_co_declaring_sibling_is_named_not_just_the_first(repo):
     assert all(run_id in message for run_id in ("run-b", "run-c", "run-d"))
 
 
-def test_sibling_not_declaring_the_path_is_not_added_to_the_holders(repo):
+def test_sibling_not_declaring_the_path_is_not_added_to_the_holders(repo) -> None:
     for run_id, declared in (("run-b", PATH), ("run-c", PATH), ("run-d", "other/d.py")):
         _declare(repo, run_id, declared)
         run_token.mint(repo, run_id, "b.mjs", session_id=SELF)
@@ -80,7 +80,7 @@ def test_sibling_not_declaring_the_path_is_not_added_to_the_holders(repo):
     assert holds == [(PATH, "run-b"), (PATH, "run-c")]
 
 
-def _release_fixture(repo: Path, status: str = "open", plan: str | None = None):
+def _release_fixture(repo: Path, status: str = "open", plan: str | None = None) -> str:
     (repo / "state/sizings").mkdir(parents=True, exist_ok=True)
     (repo / "state/sizings/s.yaml").write_text(f"status: {status}\n", encoding="utf-8")
     halted = f"ask-{time.strftime('%Y%m%dT%H%M%S', time.gmtime(time.time() - 300))}-aaaaaa"
@@ -94,7 +94,7 @@ def _release_fixture(repo: Path, status: str = "open", plan: str | None = None):
     return halted
 
 
-def test_halted_holder_withholds_nothing_and_a_synthetic_hold_names_both_release_calls(repo):
+def test_halted_holder_withholds_nothing_and_a_synthetic_hold_names_both_release_calls(repo) -> None:
     halted = _release_fixture(repo)
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH]) == []
     holds = [(PATH, halted)]
@@ -107,7 +107,7 @@ def test_halted_holder_withholds_nothing_and_a_synthetic_hold_names_both_release
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH]) == []
 
 
-def test_halted_holder_never_withholds_for_any_landing_plan_and_a_live_holder_message_is_unchanged(repo):
+def test_halted_holder_never_withholds_for_any_landing_plan_and_a_live_holder_message_is_unchanged(repo) -> None:
     _release_fixture(repo, plan="docs/plans/p.md")
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH], own_plan="docs/plans/p.md") == []
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH], own_plan="docs/plans/q.md") == []
@@ -117,7 +117,7 @@ def test_halted_holder_never_withholds_for_any_landing_plan_and_a_live_holder_me
     assert peer_hunk_gate.refusal_message(holds, OWN, repo) == peer_hunk_gate.refusal_message(holds, OWN)
 
 
-def test_junior_fresh_token_sibling_holds_nothing_against_a_senior_committer(repo):
+def test_junior_fresh_token_sibling_holds_nothing_against_a_senior_committer(repo) -> None:
     _declare(repo, "run-b", PATH)
     run_token.mint(repo, "run-b", "b.mjs", session_id=SELF)
     senior = (0.0, OWN)
@@ -127,19 +127,19 @@ def test_junior_fresh_token_sibling_holds_nothing_against_a_senior_committer(rep
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH]) == [(PATH, "run-b")]
 
 
-def test_seniority_does_not_change_a_halted_holder_that_never_withholds(repo):
+def test_seniority_does_not_change_a_halted_holder_that_never_withholds(repo) -> None:
     _release_fixture(repo)
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH], minted_before=(0.0, OWN)) == []
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH], minted_before=(time.time() + 600, OWN)) == []
 
 
-def test_own_only_path_is_not_held(repo):
+def test_own_only_path_is_not_held(repo) -> None:
     _declare(repo, "run-b", "other/b.py")
     run_token.mint(repo, "run-b", "b.mjs", session_id=SELF)
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH]) == []
 
 
-def test_peer_claimed_path_the_run_does_not_declare_is_not_a_co_declared_hold(repo):
+def test_peer_claimed_path_the_run_does_not_declare_is_not_a_co_declared_hold(repo) -> None:
     _declare(repo, "run-b", PATH)
     run_token.mint(repo, "run-b", "b.mjs", session_id=SELF)
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], ["src/a.py"]) == []
@@ -158,14 +158,14 @@ def _spine_sibling(repo: Path, run_id: str) -> Path:
     return rdir
 
 
-def test_live_sibling_declaring_only_in_plan_spine_is_held(repo):
+def test_live_sibling_declaring_only_in_plan_spine_is_held(repo) -> None:
     run_id = _stamped("7cc61e")
     _spine_sibling(repo, run_id)
     run_token.mint(repo, run_id, "b.mjs", session_id=SELF)
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH]) == [(PATH, run_id)]
 
 
-def test_siblings_sharing_one_plan_parse_it_once_and_hold_as_before(repo, monkeypatch):
+def test_siblings_sharing_one_plan_parse_it_once_and_hold_as_before(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     run_ids = [_stamped(f"7cc6{n:02d}") for n in range(4)]
     for run_id in run_ids:
         _spine_sibling(repo, run_id)
@@ -178,7 +178,7 @@ def test_siblings_sharing_one_plan_parse_it_once_and_hold_as_before(repo, monkey
     assert parses == ["docs/plans/b.md"]
 
 
-def test_read_batch_returns_small_objects_and_drops_oversize_and_non_object_files(tmp_path):
+def test_read_batch_returns_small_objects_and_drops_oversize_and_non_object_files(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.halt_resume_record import JSON_READ_MAX_BYTES
 
     small, big, listy = tmp_path / "s.json", tmp_path / "b.json", tmp_path / "l.json"
@@ -189,7 +189,7 @@ def test_read_batch_returns_small_objects_and_drops_oversize_and_non_object_file
     assert got == {str(small): {"a": 1}}
 
 
-def test_one_co_declared_call_resolves_the_record_home_once_not_per_sibling(repo, monkeypatch):
+def test_one_co_declared_call_resolves_the_record_home_once_not_per_sibling(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     run_ids = [_stamped(f"7cc7{n:02d}") for n in range(6)]
     for run_id in run_ids:
         _declare(repo, run_id, PATH)
@@ -203,7 +203,7 @@ def test_one_co_declared_call_resolves_the_record_home_once_not_per_sibling(repo
     assert "_record_path" not in homes
 
 
-def test_sibling_spines_returns_the_exception_for_an_unparseable_plan_and_sets_otherwise(repo):
+def test_sibling_spines_returns_the_exception_for_an_unparseable_plan_and_sets_otherwise(repo) -> None:
     bad, good = _stamped("7cc6aa"), _stamped("7cc6bb")
     _spine_sibling(repo, bad)
     (repo / "docs" / "plans" / "b.md").write_text(
@@ -215,7 +215,7 @@ def test_sibling_spines_returns_the_exception_for_an_unparseable_plan_and_sets_o
     assert spines[good] == set()
 
 
-def test_sibling_spines_inside_release_scope_parse_each_plan_once_across_calls(repo, monkeypatch):
+def test_sibling_spines_inside_release_scope_parse_each_plan_once_across_calls(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import halted_hold_release
 
     run_id = _stamped("7cc6cc")
@@ -231,7 +231,7 @@ def test_sibling_spines_inside_release_scope_parse_each_plan_once_across_calls(r
     assert len(parses) == 2
 
 
-def test_many_siblings_share_one_sizing_read_and_one_deadline_check(repo, monkeypatch):
+def test_many_siblings_share_one_sizing_read_and_one_deadline_check(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     run_ids = [_stamped(f"7cc8{n:02d}") for n in range(40)]
     for run_id in run_ids:
         _spine_sibling(repo, run_id)
@@ -251,14 +251,14 @@ def test_many_siblings_share_one_sizing_read_and_one_deadline_check(repo, monkey
     assert checks == []
 
 
-def test_halted_sibling_declaring_but_not_withholding_holds_nothing(repo):
+def test_halted_sibling_declaring_but_not_withholding_holds_nothing(repo) -> None:
     run_id = _stamped("7cc61e")
     _halt(_spine_sibling(repo, run_id))
     _declare(repo, run_id, PATH)
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH]) == []
 
 
-def test_halted_sibling_withholding_the_path_holds_nothing(repo):
+def test_halted_sibling_withholding_the_path_holds_nothing(repo) -> None:
     run_id = _stamped("7cc61e")
     rdir = _declare(repo, run_id, PATH)
     (rdir / "halted.json").write_text(
@@ -267,7 +267,7 @@ def test_halted_sibling_withholding_the_path_holds_nothing(repo):
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH]) == []
 
 
-def test_live_sibling_with_missing_sizing_file_claims_nothing_and_does_not_raise(repo):
+def test_live_sibling_with_missing_sizing_file_claims_nothing_and_does_not_raise(repo) -> None:
     run_id = _stamped("7cc61e")
     rdir = _run_dir(repo, run_id)
     (rdir / "run.json").write_text(json.dumps({"sizing_rel": "state/sizings/gone.yaml"}), encoding="utf-8")
@@ -276,7 +276,7 @@ def test_live_sibling_with_missing_sizing_file_claims_nothing_and_does_not_raise
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH]) == []
 
 
-def test_unreadable_peer_spine_holds_the_wanted_paths(repo):
+def test_unreadable_peer_spine_holds_the_wanted_paths(repo) -> None:
     run_id = _stamped("7cc61e")
     _spine_sibling(repo, run_id)
     (repo / "docs" / "plans" / "b.md").write_text(
@@ -291,7 +291,7 @@ def test_unreadable_peer_spine_holds_the_wanted_paths(repo):
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], ["src/other.py"]) == []
 
 
-def test_malformed_peer_spine_block_holds_the_wanted_paths(repo):
+def test_malformed_peer_spine_block_holds_the_wanted_paths(repo) -> None:
     run_id = _stamped("7cc61e")
     _spine_sibling(repo, run_id)
     block = "```yaml plan-tasks\n- id: C0\n  writes:\n    - other.py\n```\n"
@@ -300,7 +300,7 @@ def test_malformed_peer_spine_block_holds_the_wanted_paths(repo):
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], [PATH]) == [(PATH, run_id)]
 
 
-def test_unreadable_record_gives_no_holds(repo):
+def test_unreadable_record_gives_no_holds(repo) -> None:
     run_id = _stamped("badbad")
     rdir = _run_dir(repo, run_id)
     (rdir / "manifest.json").write_text("{not json", encoding="utf-8")
@@ -333,14 +333,14 @@ def _record(repo: Path, run_id: str, *stems: str) -> None:
 FINDING = "Out-of-ask hunks: failing_detail changes in execute_review.py belong to another run."
 
 
-def test_out_of_ask_finding_naming_a_basename_is_held(repo):
+def test_out_of_ask_finding_naming_a_basename_is_held(repo) -> None:
     _record(repo, OWN, "rev-1")
     _sidecar(repo, "rev-1", FINDING, None)
     holds = peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, [PATH, "pkg/other.py"])
     assert holds == [(PATH, "rev-1", FINDING)]
 
 
-def test_basename_shared_by_two_landing_paths_is_not_matched(repo):
+def test_basename_shared_by_two_landing_paths_is_not_matched(repo) -> None:
     _record(repo, OWN, "rev-1")
     _sidecar(repo, "rev-1", FINDING, None)
     path = repo / ".coordinator-local" / "subagent-share" / SELF / "rev-1.md"
@@ -349,32 +349,32 @@ def test_basename_shared_by_two_landing_paths_is_not_matched(repo):
 
 
 @pytest.mark.parametrize("status", ["applied", "em-rejected"])
-def test_resolved_finding_is_not_held(repo, status):
+def test_resolved_finding_is_not_held(repo, status) -> None:
     _record(repo, OWN, "rev-1")
     _sidecar(repo, "rev-1", FINDING, status)
     assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, [PATH]) == []
 
 
-def test_unmarked_row_is_not_held_even_when_prose_says_out_of_ask(repo):
+def test_unmarked_row_is_not_held_even_when_prose_says_out_of_ask(repo) -> None:
     _record(repo, OWN, "rev-1")
     _sidecar(repo, "rev-1", FINDING, None, marked=False)
     assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, [PATH]) == []
 
 
 @pytest.mark.parametrize("prose", ["No out-of-ask hunks in execute_review.py.", "These hunks are not out-of-ask."])
-def test_prose_negation_does_not_refuse_a_clean_landing(repo, prose):
+def test_prose_negation_does_not_refuse_a_clean_landing(repo, prose) -> None:
     _record(repo, OWN, "rev-1")
     _sidecar(repo, "rev-1", prose, None, marked=False)
     assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, [PATH]) == []
 
 
-def test_marked_row_holds_regardless_of_prose(repo):
+def test_marked_row_holds_regardless_of_prose(repo) -> None:
     _record(repo, OWN, "rev-1")
     _sidecar(repo, "rev-1", "No out-of-ask hunks.", None)
     assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, [PATH]) == [(PATH, "rev-1", FINDING)]
 
 
-def test_marked_row_naming_another_file_is_not_held(repo):
+def test_marked_row_naming_another_file_is_not_held(repo) -> None:
     _record(repo, OWN, "rev-1")
     _sidecar(repo, "rev-1", "x", None)
     assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, ["pkg/other.py"]) == []
@@ -387,7 +387,7 @@ def _conformance_sidecar(repo: Path, stem: str, row: dict, prose: str = "") -> N
     )
 
 
-def test_unmet_brief_conformance_row_naming_the_path_is_held(repo):
+def test_unmet_brief_conformance_row_naming_the_path_is_held(repo) -> None:
     _record(repo, OWN, "rev-1")
     _conformance_sidecar(repo, "rev-1", {"item": "stay inside the ask", "status": "partial", "evidence": f"{PATH}: hunks"})
     assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, [PATH, "pkg/other.py"]) == [
@@ -395,13 +395,13 @@ def test_unmet_brief_conformance_row_naming_the_path_is_held(repo):
     ]
 
 
-def test_unmet_reviewer_schema_row_naming_the_path_in_file_line_is_held(repo):
+def test_unmet_reviewer_schema_row_naming_the_path_in_file_line_is_held(repo) -> None:
     _record(repo, OWN, "rev-1")
     _conformance_sidecar(repo, "rev-1", {"brief_item": "stay inside the ask", "status": "unmet", "file_line": f"{PATH}:12"})
     assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, [PATH]) == [(PATH, "rev-1", "stay inside the ask")]
 
 
-def test_met_or_unnamed_brief_conformance_row_is_not_held(repo):
+def test_met_or_unnamed_brief_conformance_row_is_not_held(repo) -> None:
     _record(repo, OWN, "rev-1")
     _conformance_sidecar(repo, "rev-1", {"item": "i", "status": "met", "evidence": f"{PATH}: ok"})
     assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, [PATH]) == []
@@ -409,7 +409,7 @@ def test_met_or_unnamed_brief_conformance_row_is_not_held(repo):
     assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, [PATH]) == []
 
 
-def test_a_claim_read_that_raises_holds_every_declared_wanted_path(repo, monkeypatch):
+def test_a_claim_read_that_raises_holds_every_declared_wanted_path(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import sibling_claims
 
     def boom(*_a, **_k):
@@ -424,7 +424,7 @@ def test_a_claim_read_that_raises_holds_every_declared_wanted_path(repo, monkeyp
     assert peer_hunk_gate.co_declared_peer_holds(repo, OWN, [PATH], ["src/other.py"]) == []
 
 
-def test_refusal_message_names_the_overlapping_run_and_header():
+def test_refusal_message_names_the_overlapping_run_and_header() -> None:
     text = peer_hunk_gate.refusal_message(
         [(PATH, "run-b")], OWN, None, {PATH: [("run-b", "@@ -60,1 +60,1 @@")]},
     )
@@ -432,7 +432,7 @@ def test_refusal_message_names_the_overlapping_run_and_header():
     assert "Overlap" not in peer_hunk_gate.refusal_message([(PATH, "run-b")], OWN)
 
 
-def test_constants_and_no_spawn(repo, monkeypatch):
+def test_constants_and_no_spawn(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*_a, **_k):
         raise AssertionError("spawn")
 
@@ -454,7 +454,7 @@ def _halt_withholding(repo: Path, run_id: str, paths: list) -> Path:
     return rdir
 
 
-def test_withheld_clean_walks_the_index_once_for_all_prefetched_runs(repo, monkeypatch):
+def test_withheld_clean_walks_the_index_once_for_all_prefetched_runs(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.ceremony import commit_companion
     from coordinator_core.ops.dispatch_emit import halted_hold_release as hr
 
@@ -462,7 +462,7 @@ def test_withheld_clean_walks_the_index_once_for_all_prefetched_runs(repo, monke
     records = [(_halt_withholding(repo, rid, [p]), {"status": "halted"}) for rid, p in runs]
     seen: list = []
 
-    def fake_left_behind(root, held_by, sid, pathspec, contested=()):
+    def fake_left_behind(root, held_by, sid, pathspec, contested=()) -> list[str]:
         seen.append(sorted(held_by[sid]))
         return ["b.py"]
 
@@ -474,7 +474,7 @@ def test_withheld_clean_walks_the_index_once_for_all_prefetched_runs(repo, monke
     assert seen == [["a.py", "b.py", "c.py"]]
 
 
-def test_withheld_clean_outside_a_prefetch_tests_the_run_alone(repo, monkeypatch):
+def test_withheld_clean_outside_a_prefetch_tests_the_run_alone(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.ceremony import commit_companion
     from coordinator_core.ops.dispatch_emit import halted_hold_release as hr
 
@@ -500,38 +500,38 @@ def _landing(repo: Path, paths: list, declared: list) -> dict:
     return peer_hunk_gate.landing_holds(repo, SELF, OWN, None, paths, [], declared, declared, None)
 
 
-def test_a_live_foreign_hunk_no_sibling_declares_is_held_under_the_unknown_owner(repo, monkeypatch):
+def test_a_live_foreign_hunk_no_sibling_declares_is_held_under_the_unknown_owner(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_unproduced(monkeypatch, {PATH: "committed lines 3-4 were not produced by run ask-own; probable owner unknown"})
     assert peer_hunk_gate._live_sibling_holds(repo, OWN, None, [PATH], [PATH], None) == {PATH: "unknown"}
 
 
-def test_a_foreign_hunk_attributed_to_a_halted_owner_is_not_a_live_hold(repo, monkeypatch):
+def test_a_foreign_hunk_attributed_to_a_halted_owner_is_not_a_live_hold(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _declare(repo, "run-b", PATH)
     _halt(repo / "state" / "warp" / "run-b")
     _stub_unproduced(monkeypatch, {PATH: "committed lines 3 were not produced by run ask-own; probable owner run-b"})
     assert peer_hunk_gate._live_sibling_holds(repo, OWN, None, [PATH], [PATH], None) == {}
 
 
-def test_unreadable_provenance_and_a_clean_path_hold_nothing_live(repo, monkeypatch):
+def test_unreadable_provenance_and_a_clean_path_hold_nothing_live(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_unproduced(monkeypatch, {PATH: "provenance unreadable: NoWriteBaseline: run has no write_baseline for the path"})
     assert peer_hunk_gate._live_sibling_holds(repo, OWN, None, [PATH, "src/a.py"], [PATH], None) == {}
 
 
-def test_an_out_of_ask_path_no_peer_declares_is_held_under_the_reviewer_stem(repo, monkeypatch):
+def test_an_out_of_ask_path_no_peer_declares_is_held_under_the_reviewer_stem(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _record(repo, OWN, "rev-1")
     _sidecar(repo, "rev-1", FINDING, None)
     _stub_unproduced(monkeypatch, {})
     assert _landing(repo, [PATH], [PATH]) == {PATH: "rev-1"}
 
 
-def test_an_out_of_ask_path_with_an_attributed_owner_is_held_under_that_owner(repo, monkeypatch):
+def test_an_out_of_ask_path_with_an_attributed_owner_is_held_under_that_owner(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _record(repo, OWN, "rev-1")
     _sidecar(repo, "rev-1", FINDING, None)
     _stub_unproduced(monkeypatch, {PATH: "committed lines 3 were not produced by run ask-own; probable owner run-z"})
     assert peer_hunk_gate._attributed_owners(repo, OWN, None, [PATH]) == {PATH: "run-z"}
 
 
-def test_a_resolved_out_of_ask_row_and_a_clean_path_hold_nothing(repo, monkeypatch):
+def test_a_resolved_out_of_ask_row_and_a_clean_path_hold_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _record(repo, OWN, "rev-1")
     _sidecar(repo, "rev-1", FINDING, "applied")
     _stub_unproduced(monkeypatch, {})

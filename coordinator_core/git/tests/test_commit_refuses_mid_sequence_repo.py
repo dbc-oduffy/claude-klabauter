@@ -26,6 +26,7 @@ import subprocess
 import pytest
 
 from coordinator_core.git.commit import CommitRefused, commit_paths
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -33,7 +34,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
-def _git(repo, *args, check=True):
+def _git(repo, *args, check: bool = True):
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True,
         check=check, **_NOWIN
@@ -41,7 +42,7 @@ def _git(repo, *args, check=True):
 
 
 @pytest.fixture()
-def conflicted(tmp_path):
+def conflicted(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "base")
@@ -67,7 +68,7 @@ def conflicted(tmp_path):
     return r
 
 
-def test_commit_paths_refuses_a_mid_merge_repo(conflicted):
+def test_commit_paths_refuses_a_mid_merge_repo(conflicted) -> None:
     head_before = _git(conflicted, "rev-parse", "HEAD").stdout.strip()
     (conflicted / "bystander.txt").write_text("two\n", encoding="utf-8", newline="\n")
 
@@ -83,7 +84,7 @@ def test_commit_paths_refuses_a_mid_merge_repo(conflicted):
     assert (conflicted / ".git" / "MERGE_HEAD").exists()
 
 
-def test_commit_paths_commits_once_the_merge_is_finished(conflicted):
+def test_commit_paths_commits_once_the_merge_is_finished(conflicted) -> None:
     (conflicted / "shared.txt").write_text("resolved\n", encoding="utf-8", newline="\n")
     _git(conflicted, "add", "shared.txt")
     _git(conflicted, "commit", "-q", "--no-edit")
@@ -97,7 +98,7 @@ def test_commit_paths_commits_once_the_merge_is_finished(conflicted):
     assert subject == "lands cleanly", subject
 
 
-def test_commit_paths_refuses_a_mid_rebase_repo(conflicted):
+def test_commit_paths_refuses_a_mid_rebase_repo(conflicted) -> None:
     _git(conflicted, "merge", "--abort")
     (conflicted / ".git" / "rebase-merge").mkdir()
     head_before = _git(conflicted, "rev-parse", "HEAD").stdout.strip()
@@ -111,7 +112,7 @@ def test_commit_paths_refuses_a_mid_rebase_repo(conflicted):
 
 
 @pytest.mark.parametrize("seq", ["CHERRY_PICK_HEAD", "REVERT_HEAD"])
-def test_finish_merge_still_refuses_other_sequencer_files(conflicted, seq):
+def test_finish_merge_still_refuses_other_sequencer_files(conflicted, seq) -> None:
     _git(conflicted, "merge", "--abort")
     head = _git(conflicted, "rev-parse", "HEAD").stdout.strip()
     (conflicted / ".git" / seq).write_text(head + "\n")
@@ -131,7 +132,7 @@ def test_finish_merge_still_refuses_other_sequencer_files(conflicted, seq):
         "state/mise-workflows/a.mjs.emitted.json",
     ],
 )
-def test_commit_paths_refuses_emitted_workflow_output(tmp_path, rel):
+def test_commit_paths_refuses_emitted_workflow_output(tmp_path: Path, rel) -> None:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q")

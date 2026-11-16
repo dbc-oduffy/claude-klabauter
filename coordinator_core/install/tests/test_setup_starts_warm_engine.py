@@ -149,7 +149,9 @@ def _drive_offer_warm_opt_in(monkeypatch, setup, tmp_path):
     monkeypatch.setattr(setup, "_resolve_coordinator_claude_root", lambda r, a: (tmp_path, None))
     monkeypatch.setattr(setup, "_resolve_plugin_root_for_machine_local", lambda c: None)
     monkeypatch.setattr(_shared, "resolve_machine_local_cli", lambda p: ["machine-local"])
-    monkeypatch.setattr(setup.subprocess, "run", lambda cmd, **kw: SimpleNamespace(returncode=0, stdout="", stderr=""))
+    monkeypatch.setattr(
+        setup.machine_local_spawn, "run_bounded", lambda cmd, **kw: SimpleNamespace(returncode=0, stdout="", stderr="")
+    )
     started: list = []
     monkeypatch.setattr(setup, "start_warm_engine", lambda repo_root: started.append(repo_root))
     setup.offer_warm_opt_in(tmp_path, SimpleNamespace(agent_mode=True, warm=None))

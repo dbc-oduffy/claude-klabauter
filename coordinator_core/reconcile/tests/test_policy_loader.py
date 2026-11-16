@@ -18,6 +18,7 @@ from pathlib import Path
 import yaml
 
 from coordinator_core.reconcile.policy_loader import load_policy, policy_report_fields
+import pytest
 
 _VALID_POLICY = {
     "three_signal": {},
@@ -185,7 +186,7 @@ def test_policy_report_fields_covers_all_three_source_values(tmp_path: Path) -> 
 
 
 def test_policy_report_fields_absent_with_no_resolvable_candidate_is_none_path(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """When resolution finds no candidate at all (no explicit path, no env
     var, `CLAUDE_PLUGIN_ROOT` unset/unresolvable) -- as opposed to a resolved
@@ -242,7 +243,7 @@ def _clear_policy_env(monkeypatch) -> None:
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
 
 
-def test_overlay_route_precedence_below_explicit_path(tmp_path: Path, monkeypatch) -> None:
+def test_overlay_route_precedence_below_explicit_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC1: explicit `policy_path` wins over a discovered overlay."""
     repo = _make_repo(tmp_path)
     monkeypatch.chdir(repo)
@@ -260,7 +261,7 @@ def test_overlay_route_precedence_below_explicit_path(tmp_path: Path, monkeypatc
     assert result.source == "loaded"
 
 
-def test_overlay_route_precedence_below_env_var(tmp_path: Path, monkeypatch) -> None:
+def test_overlay_route_precedence_below_env_var(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC1: `AUTO_RECONCILE_POLICY` env var wins over a discovered overlay."""
     repo = _make_repo(tmp_path)
     monkeypatch.chdir(repo)
@@ -279,7 +280,7 @@ def test_overlay_route_precedence_below_env_var(tmp_path: Path, monkeypatch) -> 
     assert result.source == "loaded"
 
 
-def test_overlay_route_precedence_above_plugin_root_default(tmp_path: Path, monkeypatch) -> None:
+def test_overlay_route_precedence_above_plugin_root_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC1: a discovered overlay wins over the `CLAUDE_PLUGIN_ROOT` floor default."""
     repo = _make_repo(tmp_path)
     monkeypatch.chdir(repo)
@@ -300,7 +301,7 @@ def test_overlay_route_precedence_above_plugin_root_default(tmp_path: Path, monk
     assert result.source == "loaded"
 
 
-def test_overlay_absent_falls_through_to_plugin_root_default(tmp_path: Path, monkeypatch) -> None:
+def test_overlay_absent_falls_through_to_plugin_root_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC1/AC3: no overlay present -> route 4 (`CLAUDE_PLUGIN_ROOT` default) resolves,
     byte-unchanged from today's behaviour."""
     repo = _make_repo(tmp_path)
@@ -319,7 +320,7 @@ def test_overlay_absent_falls_through_to_plugin_root_default(tmp_path: Path, mon
     assert result.source == "loaded"
 
 
-def test_repo_root_resolves_from_nested_cwd(tmp_path: Path, monkeypatch) -> None:
+def test_repo_root_resolves_from_nested_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC2: repo identity resolves via a `.git` walk-up from a nested cwd
     inside the fixture repo, with no `git` subprocess involved."""
     repo = _make_repo(tmp_path)
@@ -348,7 +349,7 @@ def test_no_subprocess_import_in_policy_loader() -> None:
     assert "import subprocess" not in source
 
 
-def test_overlay_partial_merges_over_floor_key_by_key(tmp_path: Path, monkeypatch) -> None:
+def test_overlay_partial_merges_over_floor_key_by_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC4: floor with all four keys + overlay restating only `dry_run` ->
     merged carries the floor's other three keys unchanged."""
     repo = _make_repo(tmp_path)
@@ -372,7 +373,7 @@ def test_overlay_partial_merges_over_floor_key_by_key(tmp_path: Path, monkeypatc
     assert result.policy["dry_run"] is False
 
 
-def test_overlay_dry_run_only_merges_as_loaded_not_malformed(tmp_path: Path, monkeypatch) -> None:
+def test_overlay_dry_run_only_merges_as_loaded_not_malformed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC5: the `dry_run`-only overlay merges validly and loads as
     `source == "loaded"`, not `malformed`, because validation runs against
     the merged result."""
@@ -395,7 +396,7 @@ def test_overlay_dry_run_only_merges_as_loaded_not_malformed(tmp_path: Path, mon
     assert result.warning is None
 
 
-def test_merged_result_still_missing_required_key_is_malformed(tmp_path: Path, monkeypatch) -> None:
+def test_merged_result_still_missing_required_key_is_malformed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC5: a floor-plus-overlay pair still missing a required key after
     merge is `malformed`."""
     repo = _make_repo(tmp_path)
@@ -421,7 +422,7 @@ def test_merged_result_still_missing_required_key_is_malformed(tmp_path: Path, m
     assert "mechanical_commit_denylist" in result.warning
 
 
-def test_overlay_cannot_arm_auto_ship_by_omission(tmp_path: Path, monkeypatch) -> None:
+def test_overlay_cannot_arm_auto_ship_by_omission(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC6: overlay `{dry_run: false}` over a floor that never mentions
     `auto_ship_enabled` -- `auto_ship_enabled` stays `False`, fail-closed."""
     repo = _make_repo(tmp_path)
@@ -442,7 +443,7 @@ def test_overlay_cannot_arm_auto_ship_by_omission(tmp_path: Path, monkeypatch) -
     assert result.policy["auto_ship_enabled"] is False
 
 
-def test_overlay_resolved_path_and_source_reported(tmp_path: Path, monkeypatch) -> None:
+def test_overlay_resolved_path_and_source_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC7: `resolved_path` names the overlay when one was discovered, and
     `source` is `loaded`."""
     repo = _make_repo(tmp_path)
@@ -464,7 +465,7 @@ def test_overlay_resolved_path_and_source_reported(tmp_path: Path, monkeypatch) 
     assert result.source == "loaded"
 
 
-def test_overlay_with_malformed_floor_is_fail_closed_loud(tmp_path: Path, monkeypatch) -> None:
+def test_overlay_with_malformed_floor_is_fail_closed_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A floor that exists but fails to parse must NOT be silently treated as
     absent (merged over `{}`) -- that would risk the merged-plus-overlay
     result passing grammar validation on the overlay's own keys alone and
@@ -492,7 +493,7 @@ def test_overlay_with_malformed_floor_is_fail_closed_loud(tmp_path: Path, monkey
     assert result.policy["auto_ship_enabled"] is False
 
 
-def test_overlay_with_non_mapping_floor_is_fail_closed_loud(tmp_path: Path, monkeypatch) -> None:
+def test_overlay_with_non_mapping_floor_is_fail_closed_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A floor file whose parsed root isn't a mapping is malformed, not
     silently absorbed as an absent-equivalent empty floor."""
     repo = _make_repo(tmp_path)
@@ -515,7 +516,7 @@ def test_overlay_with_non_mapping_floor_is_fail_closed_loud(tmp_path: Path, monk
     assert result.policy["auto_ship_enabled"] is False
 
 
-def test_overlay_absent_floor_still_falls_closed_silent(tmp_path: Path, monkeypatch) -> None:
+def test_overlay_absent_floor_still_falls_closed_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Sanity check the absent-floor fix didn't regress the genuinely
     absent-floor case with a FULL overlay: no floor file present at
     `CLAUDE_PLUGIN_ROOT`, overlay names every required key itself -- merges
@@ -539,7 +540,7 @@ def test_overlay_absent_floor_still_falls_closed_silent(tmp_path: Path, monkeypa
 
 
 def test_overlay_with_unresolvable_plugin_root_still_arms_from_partial_overlay(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Regression pin: with `CLAUDE_PLUGIN_ROOT` unset (deleted, not merely
     unset-by-default) and a repo root carrying a PARTIAL overlay naming only
@@ -566,7 +567,7 @@ def test_overlay_with_unresolvable_plugin_root_still_arms_from_partial_overlay(
 
 
 def test_overlay_with_unresolvable_plugin_root_keeps_unnamed_keys_conservative(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Companion to the regression pin above: keys the partial overlay does
     NOT name must still resolve to `_conservative_policy()`'s fail-closed
@@ -589,7 +590,7 @@ def test_overlay_with_unresolvable_plugin_root_keeps_unnamed_keys_conservative(
 
 
 def test_overlay_with_malformed_floor_not_treated_as_absent_even_unset(
-    tmp_path: Path, monkeypatch,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Pins the branch this fix must NOT disturb: a floor path that DOES
     resolve (via `CLAUDE_PLUGIN_ROOT`) but fails to parse still reports
@@ -626,7 +627,7 @@ def test_overlay_with_malformed_floor_not_treated_as_absent_even_unset(
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_a_different_repo_root_does_not_come_back_armed(tmp_path: Path, monkeypatch) -> None:
+def test_a_different_repo_root_does_not_come_back_armed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC5: a sibling repo root with no overlay of its own still falls
     through to the floor -- this repo's overlay cannot leak sideways."""
     other_repo = tmp_path / "other-repo"
@@ -641,7 +642,7 @@ def test_a_different_repo_root_does_not_come_back_armed(tmp_path: Path, monkeypa
     assert result.policy["auto_ship_enabled"] is False
 
 
-def test_overlay_absent_no_git_root_falls_through(tmp_path: Path, monkeypatch) -> None:
+def test_overlay_absent_no_git_root_falls_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC3: no `.git` ancestor at all (unresolvable repo root) falls
     straight through to the existing default, no overlay route taken."""
     no_repo = tmp_path / "no_repo"

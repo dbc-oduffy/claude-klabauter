@@ -9,6 +9,7 @@ from coordinator_core.ops.session.legacy_touch_corpus_drain_check import (
     check_drain,
     main,
 )
+import pytest
 
 
 def _write(path: Path, text: str) -> None:
@@ -16,7 +17,7 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
-def test_empty_sessions_base_reports_zero(tmp_path):
+def test_empty_sessions_base_reports_zero(tmp_path: Path) -> None:
     sessions_base = tmp_path / HUB_NAME
 
     report = check_drain(sessions_base)
@@ -26,7 +27,7 @@ def test_empty_sessions_base_reports_zero(tmp_path):
     assert report.drained_count == 0
 
 
-def test_missing_sessions_base_reports_zero(tmp_path):
+def test_missing_sessions_base_reports_zero(tmp_path: Path) -> None:
     sessions_base = tmp_path / "does-not-exist"
 
     report = check_drain(sessions_base)
@@ -35,7 +36,7 @@ def test_missing_sessions_base_reports_zero(tmp_path):
     assert report.undrained_count == 0
 
 
-def test_touched_only_dir_counts_as_undrained(tmp_path):
+def test_touched_only_dir_counts_as_undrained(tmp_path: Path) -> None:
     sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / "sid-1" / "touched.txt", "a/b.py\n")
 
@@ -47,7 +48,7 @@ def test_touched_only_dir_counts_as_undrained(tmp_path):
     assert sessions_base / "sid-1" / "touched.txt" in report.undrained
 
 
-def test_dir_with_sibling_record_counts_as_drained(tmp_path):
+def test_dir_with_sibling_record_counts_as_drained(tmp_path: Path) -> None:
     sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / "sid-1" / "touched.txt", "a/b.py\n")
     _write(sessions_base / "sid-1" / "touch-record.jsonl", '{"v":1,"verb":"T","ts":1.0,"sid":"sid-1","agent":null,"path":"a/b.py"}\n')
@@ -59,7 +60,7 @@ def test_dir_with_sibling_record_counts_as_drained(tmp_path):
     assert report.drained_count == 1
 
 
-def test_agent_keyed_dirs_are_scanned(tmp_path):
+def test_agent_keyed_dirs_are_scanned(tmp_path: Path) -> None:
     sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / ".agents" / "aid-1" / "touched.txt", "a/b.py\n")
 
@@ -69,7 +70,7 @@ def test_agent_keyed_dirs_are_scanned(tmp_path):
     assert report.undrained_count == 1
 
 
-def test_archive_component_is_excluded(tmp_path):
+def test_archive_component_is_excluded(tmp_path: Path) -> None:
     sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / ".archive" / "sid-old" / "touched.txt", "a/b.py\n")
 
@@ -79,7 +80,7 @@ def test_archive_component_is_excluded(tmp_path):
     assert report.undrained_count == 0
 
 
-def test_mixed_corpus_reports_correct_count(tmp_path):
+def test_mixed_corpus_reports_correct_count(tmp_path: Path) -> None:
     sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / "sid-1" / "touched.txt", "a/b.py\n")
     _write(sessions_base / "sid-2" / "touched.txt", "c/d.py\n")
@@ -95,7 +96,7 @@ def test_mixed_corpus_reports_correct_count(tmp_path):
     assert undrained_names == {"sid-1", "aid-1"}
 
 
-def test_main_exits_nonzero_when_undrained(tmp_path, capsys):
+def test_main_exits_nonzero_when_undrained(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / "sid-1" / "touched.txt", "a/b.py\n")
 
@@ -106,7 +107,7 @@ def test_main_exits_nonzero_when_undrained(tmp_path, capsys):
     assert "undrained (touched.txt only, no sibling): 1" in out
 
 
-def test_main_exits_zero_when_fully_drained(tmp_path, capsys):
+def test_main_exits_zero_when_fully_drained(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     sessions_base = tmp_path / HUB_NAME
     _write(sessions_base / "sid-1" / "touched.txt", "a/b.py\n")
     _write(sessions_base / "sid-1" / "touch-record.jsonl", '{"v":1,"verb":"T","ts":1.0,"sid":"sid-1","agent":null,"path":"a/b.py"}\n')
@@ -118,7 +119,7 @@ def test_main_exits_zero_when_fully_drained(tmp_path, capsys):
     assert "undrained (touched.txt only, no sibling): 0" in out
 
 
-def test_empty_sibling_over_real_claims_is_undrained(tmp_path):
+def test_empty_sibling_over_real_claims_is_undrained(tmp_path: Path) -> None:
     """An EMPTY touch-record.jsonl beside a touched.txt that still holds
     claims is UNDRAINED, not drained.
 

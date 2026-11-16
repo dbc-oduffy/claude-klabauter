@@ -47,7 +47,7 @@ def _write(root: Path, rel: str, text: str) -> None:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], root)
@@ -111,7 +111,7 @@ def _dirty(root: Path) -> set:
     return {ln[3:] for ln in _git(["status", "--porcelain", "-uall"], root).splitlines()}
 
 
-def test_lands_a_declared_write_and_the_record_dir_in_one_commit(repo):
+def test_lands_a_declared_write_and_the_record_dir_in_one_commit(repo) -> None:
     _author(repo, "src/a.py", "a = 1\n")
     _declare(repo, "src/a.py")
     record = _record_dir(repo)
@@ -129,7 +129,7 @@ def test_lands_a_declared_write_and_the_record_dir_in_one_commit(repo):
     assert out["sizing_shipped"] is None
 
 
-def test_a_call_carrying_only_task_output_path_lands_like_inline_params(repo, tmp_path):
+def test_a_call_carrying_only_task_output_path_lands_like_inline_params(repo, tmp_path: Path) -> None:
     _author(repo, "src/a.py", "a = 1\n")
     _declare(repo, "src/a.py")
     record = _record_dir(repo)
@@ -147,7 +147,7 @@ def test_a_call_carrying_only_task_output_path_lands_like_inline_params(repo, tm
     assert _tree(repo) == sorted(["src/a.py", *record])
 
 
-def test_the_run_token_admits_one_landing_and_a_repeat_answers_already_landed(repo):
+def test_the_run_token_admits_one_landing_and_a_repeat_answers_already_landed(repo) -> None:
     _author(repo, "src/a.py", "a = 1\n")
     _declare(repo, "src/a.py")
     _record_dir(repo)
@@ -174,7 +174,7 @@ def _ask_script(root: Path, *paths: str) -> None:
     _write(root, SCRIPT, f"{ASK_MANIFEST_MARKER}{RECORD_DIR_ROOT}/{RUN}/manifest.json\n")
 
 
-def test_an_unmet_ledger_refuses_before_any_write_and_leaves_the_token_redeemable(repo, monkeypatch):
+def test_an_unmet_ledger_refuses_before_any_write_and_leaves_the_token_redeemable(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _author(repo, "src/a.py", "a = 1\n")
     _ask_script(repo, "src/a.py")
     token = run_token.mint(repo, RUN, SCRIPT, session_id=SELF)
@@ -190,7 +190,7 @@ def test_an_unmet_ledger_refuses_before_any_write_and_leaves_the_token_redeemabl
     assert run_token.admits(repo, RUN, token, SCRIPT)
 
 
-def test_an_ask_run_stamps_usage_as_the_landed_marker_and_lands_its_plan(repo, monkeypatch):
+def test_an_ask_run_stamps_usage_as_the_landed_marker_and_lands_its_plan(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _author(repo, "src/a.py", "a = 1\n")
     _ask_script(repo, "src/a.py")
     _write(repo, PLAN, "---\ntitle: p\n---\nbody edited\n")
@@ -205,7 +205,7 @@ def test_an_ask_run_stamps_usage_as_the_landed_marker_and_lands_its_plan(repo, m
     assert PLAN in _tree(repo)
 
 
-def test_blob_drift_refuses_and_leaves_the_token_redeemable(repo):
+def test_blob_drift_refuses_and_leaves_the_token_redeemable(repo) -> None:
     _author(repo, "src/a.py", "a = 1\n")
     _declare(repo, "src/a.py")
     _record_dir(repo)
@@ -220,7 +220,7 @@ def test_blob_drift_refuses_and_leaves_the_token_redeemable(repo):
     assert run_token.admits(repo, RUN, token, SCRIPT)
 
 
-def test_a_refused_call_leaves_the_token_redeemable(repo):
+def test_a_refused_call_leaves_the_token_redeemable(repo) -> None:
     _declare(repo, "src/a.py")
     token = run_token.mint(repo, RUN, SCRIPT, session_id=SELF)
 
@@ -231,13 +231,13 @@ def test_a_refused_call_leaves_the_token_redeemable(repo):
     assert run_token.admits(repo, RUN, token, SCRIPT)
 
 
-def test_missing_run_outcome_names_every_absent_param(repo):
+def test_missing_run_outcome_names_every_absent_param(repo) -> None:
     out = land_run._handler({"script_path": SCRIPT}, repo_root=repo / ".git")
     assert out["refused"] == "missing-run-outcome"
     assert out["missing"] == ["incomplete_chunks", "inline_review"]
 
 
-def test_undeclared_dirt_is_never_staged_and_surfaces_in_neither_list(repo):
+def test_undeclared_dirt_is_never_staged_and_surfaces_in_neither_list(repo) -> None:
     _author(repo, "src/a.py", "a = 1\n")
     _author(repo, "src/claimed_but_undeclared.py", "x = 1\n")
     _declare(repo, "src/a.py")
@@ -252,7 +252,7 @@ def test_undeclared_dirt_is_never_staged_and_surfaces_in_neither_list(repo):
     assert out["stranded"] == {}
 
 
-def test_a_peer_held_declared_path_is_withheld_whole_not_a_run_wide_refusal(repo):
+def test_a_peer_held_declared_path_is_withheld_whole_not_a_run_wide_refusal(repo) -> None:
     _write(repo, "state/warp/run-b/manifest.json", json.dumps({"rows": [{"id": "C1", "writes": ["src/a.py"]}]}))
     run_token.mint(repo, "run-b", "b.mjs", session_id=SELF)
     _author(repo, "src/a.py", "a = 1\n")
@@ -269,7 +269,7 @@ def test_a_peer_held_declared_path_is_withheld_whole_not_a_run_wide_refusal(repo
     assert "Lands-Chunks" not in _message(repo)
 
 
-def test_the_close_job_is_written_and_launched_once_with_the_landed_sha(repo):
+def test_the_close_job_is_written_and_launched_once_with_the_landed_sha(repo) -> None:
     _author(repo, "src/a.py", "a = 1\n")
     _declare(repo, "src/a.py")
     _record_dir(repo)
@@ -285,7 +285,7 @@ def test_the_close_job_is_written_and_launched_once_with_the_landed_sha(repo):
     assert out["close"]["legs"]["review-stamp"]["status"] == "queued"
 
 
-def test_scratch_is_never_committed_and_is_named(repo):
+def test_scratch_is_never_committed_and_is_named(repo) -> None:
     _author(repo, "src/a.py", "a = 1\n")
     _author(repo, "scratch/tmp.txt", "x\n")
     _declare(repo, "src/a.py", "scratch/tmp.txt")
@@ -298,7 +298,7 @@ def test_scratch_is_never_committed_and_is_named(repo):
     assert "Row-Unlanded: C1 scratch/tmp.txt never-commit" in _message(repo)
 
 
-def test_an_undeclared_deletion_of_a_tracked_prefix_claim_refuses_the_whole_commit(repo):
+def test_an_undeclared_deletion_of_a_tracked_prefix_claim_refuses_the_whole_commit(repo) -> None:
     _write(repo, "pre/keep.py", "k\n")
     _git(["add", "."], repo)
     _git(["commit", "-q", "-m", "pre"], repo)
@@ -316,7 +316,7 @@ def test_an_undeclared_deletion_of_a_tracked_prefix_claim_refuses_the_whole_comm
     assert "undeclared deletion" in out["error"]
 
 
-def test_a_declared_deletion_lands_as_a_removal(repo):
+def test_a_declared_deletion_lands_as_a_removal(repo) -> None:
     _write(repo, "src/old.py", "o\n")
     _git(["add", "."], repo)
     _git(["commit", "-q", "-m", "old"], repo)
@@ -342,7 +342,7 @@ def _declare_two(root: Path) -> None:
     _write(root, SCRIPT, "// emitted\n" + render_marker(request) + "\n")
 
 
-def test_a_held_chunk_is_stranded_and_its_writes_stay_dirty(repo):
+def test_a_held_chunk_is_stranded_and_its_writes_stay_dirty(repo) -> None:
     _author(repo, "src/a.py", "a = 1\n")
     _author(repo, "src/b.py", "b = 1\n")
     _declare_two(repo)
@@ -358,7 +358,7 @@ def test_a_held_chunk_is_stranded_and_its_writes_stay_dirty(repo):
     assert "Lands-Chunks: C2" in _message(repo)
 
 
-def test_nothing_credited_landing_refuses_and_names_the_stranded_work(repo):
+def test_nothing_credited_landing_refuses_and_names_the_stranded_work(repo) -> None:
     _author(repo, "src/a.py", "a = 1\n")
     _declare(repo, "src/a.py")
     _record_dir(repo)
@@ -370,7 +370,7 @@ def test_nothing_credited_landing_refuses_and_names_the_stranded_work(repo):
     assert _git(["rev-parse", "HEAD"], repo).strip() == head
 
 
-def test_no_credited_landing_halt_names_credit_chunks_before_finish_or_land(repo):
+def test_no_credited_landing_halt_names_credit_chunks_before_finish_or_land(repo) -> None:
     _author(repo, "src/a.py", "a = 1\n")
     _declare(repo, "src/a.py")
     _record_dir(repo)
@@ -382,14 +382,14 @@ def test_no_credited_landing_halt_names_credit_chunks_before_finish_or_land(repo
     assert msg.index("credit_chunks") < msg.index("finish or land")
 
 
-def test_mode_ambiguous_params_are_refused(repo):
+def test_mode_ambiguous_params_are_refused(repo) -> None:
     out = land_run._handler(
         {"halted_by": {"halted": "x"}, "grind": {"rows": []}}, repo_root=repo / ".git"
     )
     assert out["refused"] == "mode-ambiguous"
 
 
-def _halt_fixture(root: Path):
+def _halt_fixture(root: Path) -> str:
     _write(root, "prod.py", "x = 1\n")
     _git(["add", "."], root)
     _git(["commit", "-q", "-m", "base"], root)
@@ -412,7 +412,7 @@ def _verdict() -> dict:
     return {"items": [{"id": "R1", "status": "met"}]}
 
 
-def test_since_halt_with_no_declared_paths_refuses_the_met_row(repo):
+def test_since_halt_with_no_declared_paths_refuses_the_met_row(repo) -> None:
     halt = _halt_fixture(repo)
     detail: dict = {}
 
@@ -422,7 +422,7 @@ def test_since_halt_with_no_declared_paths_refuses_the_met_row(repo):
     assert detail["outcome"] == "no-declared-paths"
 
 
-def test_since_halt_reads_the_declared_paths_from_the_manifest(repo):
+def test_since_halt_reads_the_declared_paths_from_the_manifest(repo) -> None:
     halt = _halt_fixture(repo)
     manifest = repo / "manifest.json"
     manifest.write_text(json.dumps({"rows": [{"id": "R1", "writes": ["prod.py"]}]}), encoding="utf-8")
@@ -441,7 +441,7 @@ def test_since_halt_reads_the_declared_paths_from_the_manifest(repo):
     assert changed == []
 
 
-def test_since_halt_exemptions_owe_no_diff(repo):
+def test_since_halt_exemptions_owe_no_diff(repo) -> None:
     halt = _halt_fixture(repo)
     manifest = repo / "manifest.json"
     manifest.write_text(json.dumps({"rows": [{"id": "R1", "writes": ["prod.py"]}]}), encoding="utf-8")
@@ -477,7 +477,7 @@ def _recovery_blocked_run(root: Path, remnant: dict | None) -> None:
     _write(root, f"{RECORD_DIR_ROOT}/{RUN}/recovery.json", json.dumps(record))
 
 
-def test_a_recovery_blocked_chunk_a_fixed_remnant_covers_is_credited_and_lands(repo, monkeypatch):
+def test_a_recovery_blocked_chunk_a_fixed_remnant_covers_is_credited_and_lands(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _author(repo, "src/a.py", "a = 1\n")
     _author(repo, "src/b.py", "b = 1\n")
     _recovery_blocked_run(repo, _FIXED_REMNANT)
@@ -490,7 +490,7 @@ def test_a_recovery_blocked_chunk_a_fixed_remnant_covers_is_credited_and_lands(r
     assert {"src/a.py", "src/b.py"} <= set(_tree(repo))
 
 
-def test_a_recovery_blocked_chunk_with_no_fixed_remnant_stays_stranded_and_refuses(repo, monkeypatch):
+def test_a_recovery_blocked_chunk_with_no_fixed_remnant_stays_stranded_and_refuses(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _author(repo, "src/a.py", "a = 1\n")
     _author(repo, "src/b.py", "b = 1\n")
     _recovery_blocked_run(repo, None)

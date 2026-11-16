@@ -24,7 +24,7 @@ def _git(args, cwd: Path) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], root)
@@ -48,7 +48,7 @@ def _row(row_id, paths):
     return {"row_id": row_id, "outcome": "fixed", "paths": list(paths), "deleted_paths": []}
 
 
-def test_row_with_dropped_path_is_not_reported_committed(repo):
+def test_row_with_dropped_path_is_not_reported_committed(repo) -> None:
     (repo / "gone.py").unlink()
     out = _call(repo, [_row("r1", ["a.py", "gone.py"]), _row("r2", ["b.py"])])
     assert out["committed"] is True
@@ -61,7 +61,7 @@ def test_row_with_dropped_path_is_not_reported_committed(repo):
     assert set(_git(["show", "--name-only", "--format=", "HEAD"], repo).split()) == {"b.py"}
 
 
-def test_fully_landed_rows_carry_no_unlanded_entry(repo):
+def test_fully_landed_rows_carry_no_unlanded_entry(repo) -> None:
     out = _call(repo, [_row("r1", ["a.py"]), _row("r2", ["b.py"])])
     assert [r["row_id"] for r in out["rows"]] == ["r1", "r2"]
     assert "Row-Unlanded" not in _git(["log", "-1", "--format=%B"], repo)
@@ -72,7 +72,7 @@ PIN_EDIT = PIN_BASE.replace("l2 = 2\n", "l2 = 'x'\n")
 
 
 @pytest.fixture
-def pinned_repo(tmp_path):
+def pinned_repo(tmp_path: Path) -> Path:
     """A `text=auto` repo whose tracked file is LF in HEAD and CRLF in the worktree after the row's edit."""
     root = tmp_path / "pinned"
     root.mkdir()
@@ -104,7 +104,7 @@ def _record_images(root: Path, pre: bytes, post: bytes) -> None:
     f.write_text(json.dumps({"pre": {"p.ps1": _blob(root, pre)}, "post": {"p.ps1": _blob(root, post)}}), encoding="utf-8")
 
 
-def test_solely_owned_crlf_row_under_a_text_pin_lands(pinned_repo):
+def test_solely_owned_crlf_row_under_a_text_pin_lands(pinned_repo) -> None:
     crlf = lambda s: s.replace("\n", "\r\n").encode()  # noqa: E731
     _record_images(pinned_repo, crlf(PIN_BASE), crlf(PIN_EDIT))
     (pinned_repo / "p.ps1").write_bytes(crlf(PIN_EDIT))
@@ -115,7 +115,7 @@ def test_solely_owned_crlf_row_under_a_text_pin_lands(pinned_repo):
     assert _git(["show", "HEAD:p.ps1"], pinned_repo) == PIN_EDIT
 
 
-def test_lone_cr_image_under_a_text_pin_still_holds_the_row(pinned_repo):
+def test_lone_cr_image_under_a_text_pin_still_holds_the_row(pinned_repo) -> None:
     lone = PIN_EDIT.replace("l2 = 'x'\n", "l2 = 'x'\r").encode()
     _record_images(pinned_repo, PIN_BASE.encode(), lone)
     (pinned_repo / "p.ps1").write_bytes(lone)

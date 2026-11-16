@@ -8,6 +8,7 @@ from coordinator_core.hooks import block_unenumerated_agent_type as bua
 from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, stage
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import build_waves
+from pathlib import Path
 
 UE = "example-game-repo-control:ue-editor"
 UE_TRIAGE = "example-game-repo-control:ue-triage"
@@ -15,11 +16,11 @@ MCP = "mcp__example_game_repo-control__"
 PLAN_REL = "docs/plans/2026-10-01-routing-fixture.md"
 
 
-def _agent_md(name, tools, model="sonnet"):
+def _agent_md(name, tools, model: str = "sonnet") -> str:
     return f"---\nname: {name}\nmodel: {model}\ntools: {tools}\n---\nbody\n"
 
 
-def _plan(second_extra=""):
+def _plan(second_extra: str = "") -> str:
     return f"""---
 deliverable_id: dlv-fixture-abc123
 ---
@@ -65,7 +66,7 @@ def _table(**cls_over):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     content = tmp_path / "content"
     (content / "agents").mkdir(parents=True)
     (content / "agents" / "executor.md").write_text(_agent_md("executor", "Read, Edit, Write"), encoding="utf-8")
@@ -83,7 +84,7 @@ def repo(tmp_path, monkeypatch):
     return root
 
 
-def _write_table(root, table):
+def _write_table(root, table) -> None:
     (root / ".claude").mkdir(exist_ok=True)
     (root / ".claude" / "route-table.json").write_text(json.dumps(table), encoding="utf-8")
 
@@ -92,7 +93,7 @@ def _by_id(manifest):
     return {r.id: r for r in manifest.rows}
 
 
-def test_routed_row_carries_class_agent_type_model_and_route(repo):
+def test_routed_row_carries_class_agent_type_model_and_route(repo) -> None:
     _write_table(repo, _table())
     rows = _by_id(stage(repo, run_id="r1", plan_rel=PLAN_REL))
     c1, c2 = rows["C1"], rows["C2"]
@@ -104,7 +105,7 @@ def test_routed_row_carries_class_agent_type_model_and_route(repo):
     assert c2.route is None and c2.agent_type == "coordinator:executor"
 
 
-def test_wave_shape_is_unchanged_by_routing(repo):
+def test_wave_shape_is_unchanged_by_routing(repo) -> None:
     plain = {r.id: (r.wave, r.deps) for r in stage(repo, run_id="r0", plan_rel=PLAN_REL).rows}
     _write_table(repo, _table())
     routed = {r.id: (r.wave, r.deps) for r in stage(repo, run_id="r1", plan_rel=PLAN_REL).rows}
@@ -113,13 +114,13 @@ def test_wave_shape_is_unchanged_by_routing(repo):
     assert shape == [["C1"], ["C2"]]
 
 
-def test_no_table_manifest_is_identical_to_unrouted(repo):
+def test_no_table_manifest_is_identical_to_unrouted(repo) -> None:
     m = stage(repo, run_id="r1", plan_rel=PLAN_REL)
     assert all(r.route is None and "route" not in r.to_json() for r in m.rows)
     assert all(r.agent_type == "coordinator:executor" for r in m.rows)
 
 
-def test_mismatched_explicit_row_is_refused_naming_row_and_class(repo):
+def test_mismatched_explicit_row_is_refused_naming_row_and_class(repo) -> None:
     _write_table(repo, _table())
     plan = (repo / PLAN_REL).read_text(encoding="utf-8").replace(
         "  surface: Content/A.uasset\n", "  surface: Content/A.uasset\n  agent_type: coordinator:executor\n  agent_model: sonnet\n"
@@ -131,7 +132,7 @@ def test_mismatched_explicit_row_is_refused_naming_row_and_class(repo):
     assert msg.startswith("route: ") and "C1" in msg and "ue-editor" in msg
 
 
-def test_mismatched_explicit_row_is_redirected_under_redirect(repo):
+def test_mismatched_explicit_row_is_redirected_under_redirect(repo) -> None:
     _write_table(repo, _table(on_mismatch="redirect"))
     plan = (repo / PLAN_REL).read_text(encoding="utf-8").replace(
         "  surface: Content/A.uasset\n", "  surface: Content/A.uasset\n  agent_type: coordinator:executor\n  agent_model: sonnet\n"
@@ -141,7 +142,7 @@ def test_mismatched_explicit_row_is_redirected_under_redirect(repo):
     assert c1.agent_type == UE and c1.route["work_class"] == "ue-editor"
 
 
-def test_malformed_table_is_an_ask_stage_refusal(repo):
+def test_malformed_table_is_an_ask_stage_refusal(repo) -> None:
     _write_table(repo, {"schema_version": 2})
     with pytest.raises(AskStageError, match="^route: .*schema_version"):
         stage(repo, run_id="r1", plan_rel=PLAN_REL)

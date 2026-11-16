@@ -25,11 +25,12 @@ from coordinator_core.ops.dispatch_emit.tests.test_halted_marker_records_blockin
     RUN,
     repo,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def test_ledger_halt_records_remaining_and_evidence_and_reads_back(repo):
+def test_ledger_halt_records_remaining_and_evidence_and_reads_back(repo) -> None:
     items = [
         {"id": "R1", "remaining": ["wire the gate", 7, "pin it"], "evidence": "falsifier still fails", "extra": "x"},
         {"id": "R2"},
@@ -46,7 +47,7 @@ def test_ledger_halt_records_remaining_and_evidence_and_reads_back(repo):
     assert record.remaining["R2"] == {"remaining": [], "evidence": ""}
 
 
-def test_evidence_is_capped_in_bytes(repo):
+def test_evidence_is_capped_in_bytes(repo) -> None:
     marker = _land(
         repo,
         {"halted": "ledger-check", "reason": "r", HALT_PLAN_FIELD: PLAN,
@@ -56,12 +57,12 @@ def test_evidence_is_capped_in_bytes(repo):
     assert 0 < len(kept.encode("utf-8")) <= _EVIDENCE_CAP_BYTES
 
 
-def test_non_ledger_halt_carries_no_items_key(repo):
+def test_non_ledger_halt_carries_no_items_key(repo) -> None:
     marker = _land(repo, {"halted": "refusal", "reason": "r", HALT_PLAN_FIELD: PLAN, "items": [{"id": "R1", "remaining": ["x"]}]})
     assert HALT_BLOCKING_ITEMS_FIELD not in marker
 
 
-def _spine(repo, name):
+def _spine(repo, name) -> str:
     rec = repo / RECORD_DIR_ROOT / RUN
     (rec / name).write_text("spine\n", encoding="utf-8")
     return f"{RECORD_DIR_ROOT}/{RUN}/{name}"
@@ -82,7 +83,7 @@ def _land(repo, halted):
     ).stdout)
 
 
-def test_xs_ledger_halt_without_plan_records_spine_and_items(repo):
+def test_xs_ledger_halt_without_plan_records_spine_and_items(repo) -> None:
     spine = _spine(repo, "x.spine.md")
     marker = _land(
         repo,
@@ -93,7 +94,7 @@ def test_xs_ledger_halt_without_plan_records_spine_and_items(repo):
     assert marker[HALT_BLOCKING_ITEMS_FIELD] == [{"id": "R1", "remaining": ["pin it"], "evidence": "e"}]
 
 
-def test_xs_ledger_halt_keeps_old_behaviour_without_exactly_one_spine(repo):
+def test_xs_ledger_halt_keeps_old_behaviour_without_exactly_one_spine(repo) -> None:
     marker = _land(repo, {"halted": "ledger-check", "reason": "r", "items": [{"id": "R1"}]})
     assert HALT_PLAN_FIELD not in marker
     _spine(repo, "a.spine.md")
@@ -102,13 +103,13 @@ def test_xs_ledger_halt_keeps_old_behaviour_without_exactly_one_spine(repo):
     assert HALT_PLAN_FIELD not in marker
 
 
-def test_non_ledger_halt_ignores_spine(repo):
+def test_non_ledger_halt_ignores_spine(repo) -> None:
     _spine(repo, "x.spine.md")
     marker = _land(repo, {"halted": "refusal", "reason": "r", "items": [{"id": "R1"}]})
     assert HALT_PLAN_FIELD not in marker
 
 
-def test_marker_writes_items_only_when_given(tmp_path):
+def test_marker_writes_items_only_when_given(tmp_path: Path) -> None:
     bare = write_halt_marker(tmp_path / "a", halted="ledger-check", sizing_rel="state/sizings/x.yaml")
     assert HALT_BLOCKING_ITEMS_FIELD not in json.loads(bare.read_text(encoding="utf-8"))
     given = write_halt_marker(

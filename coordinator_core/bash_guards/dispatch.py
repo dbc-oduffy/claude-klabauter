@@ -393,11 +393,11 @@ _CRASH_TRIGGER_SUBSTRINGS: Dict[str, Tuple[str, ...]] = {
     "block-approval-sentinel-creation": ("doctrine-edit-approved", "doctrine_edit_gate", "guard_level", "machine_local_coordinator_", "xargs", "sh", "python"),
     "block-worktree-sentinel-creation": ("override-worktree-guard", "xargs", "sh", "python"),
     "block-stash-destruction": ("stash",),
-    "block-topic-branch": ("checkout", "switch", "branch", "push"),
     "block-perforce-submit": ("p4", "submit", "shelve"),
     "block-external-workspace-vcs-write": ("git",),
     "block-push-pr-non-owned-remote": ("push", "pr"),
     "block-empty-source-push": ("push",),
+    "block-held-push": ("push",),
     "block-whole-filesystem-scan": ("find", "rg", "grep", "egrep", "fgrep", "fd", "fdfind"),
     "guard-uncapped-pytest-plugin": ("pytest", "py.test"),
     "block-editor-kill-by-name": ("taskkill", "stop-process", "spps", "pkill", "killall", "kill"),
@@ -456,6 +456,10 @@ basename``, ``SentinelCreationDetector._is_target``).
 
 
 _CRASH_DENY_EXEMPT: Tuple[Tuple[str, str], ...] = (
+    (
+        "block-topic-branch",
+        "advisory only, never denies; the held-branch push deny is block-held-push",
+    ),
     (
         "block-noncanonical-branch-creation",
         "denies only inside a hazard repo resolved at call time, so no command text alone proves a crash-path deny",
@@ -1331,6 +1335,9 @@ def _any_declared_matchers() -> "frozenset[str]":
         from coordinator_core.bash_guards.block_empty_source_push import (
             MATCHERS as _matchers_empty_source_push,
         )
+        from coordinator_core.bash_guards.block_held_push import (
+            MATCHERS as _matchers_held_push,
+        )
         from coordinator_core.bash_guards.guard_deploy_dirty_tree import (
             MATCHERS as _matchers_deploy_dirty_tree,
         )
@@ -1374,6 +1381,7 @@ def _any_declared_matchers() -> "frozenset[str]":
             _matchers_external_workspace_vcs_write,
             _matchers_push_pr_non_owned_remote,
             _matchers_empty_source_push,
+            _matchers_held_push,
             _matchers_deploy_dirty_tree,
             _matchers_editor_kill_by_name,
             _matchers_whole_filesystem_scan,
@@ -2473,6 +2481,10 @@ def _build_guard_chain(
         check as _check_empty_source_push,
         MATCHERS as _matchers_empty_source_push,
     )
+    from coordinator_core.bash_guards.block_held_push import (
+        check as _check_held_push,
+        MATCHERS as _matchers_held_push,
+    )
     from coordinator_core.bash_guards.guard_deploy_dirty_tree import (
         check as _check_deploy_dirty_tree,
         MATCHERS as _matchers_deploy_dirty_tree,
@@ -2818,6 +2830,15 @@ def _build_guard_chain(
             GuardBand.CONFINEMENT_DENY,
             AdvisoryValue.NOT_COST_ARGUED,
             matchers=tuple(_matchers_empty_source_push),
+        ),
+        # A held branch is not pushed: a plain push, or a source that is not the allow-sha, is refused.
+        GuardEntry(
+            "block-held-push",
+            lambda: _check_held_push(payload),
+            True,
+            GuardBand.CONFINEMENT_DENY,
+            AdvisoryValue.NOT_COST_ARGUED,
+            matchers=tuple(_matchers_held_push),
         ),
         # A deploy builds the working tree: uncommitted peer edits ship. Fail-open.
         GuardEntry(

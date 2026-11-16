@@ -9,38 +9,39 @@ import pytest
 
 from coordinator_core import conftest as _cc
 from coordinator_core.session_hub_path import hub_for_common
+from pathlib import Path
 
 _UUID = str(uuid.uuid4())
 
 
 @pytest.fixture
-def hub(tmp_path):
+def hub(tmp_path: Path) -> Path:
     hub = hub_for_common(tmp_path)
     (hub / "test-session").mkdir(parents=True)
     (hub / _UUID).mkdir()
     return hub
 
 
-def test_write_into_existing_non_uuid_entry_is_flagged(hub):
+def test_write_into_existing_non_uuid_entry_is_flagged(hub) -> None:
     target = hub / "test-session" / "repo-identity-gate.log"
     assert _cc._writes_into_hub_entries([str(target)], str(hub)) == [
         os.path.normcase(os.path.join("test-session", "repo-identity-gate.log"))
     ]
 
 
-def test_write_into_uuid_entry_is_ignored(hub):
+def test_write_into_uuid_entry_is_ignored(hub) -> None:
     assert _cc._writes_into_hub_entries([str(hub / _UUID / "meta.json")], str(hub)) == []
 
 
-def test_write_outside_the_hub_and_to_the_hub_root_is_ignored(hub, tmp_path):
+def test_write_outside_the_hub_and_to_the_hub_root_is_ignored(hub, tmp_path: Path) -> None:
     assert _cc._writes_into_hub_entries([str(tmp_path / "x.log"), str(hub)], str(hub)) == []
 
 
-def test_top_level_plain_file_counts_as_an_entry(hub):
+def test_top_level_plain_file_counts_as_an_entry(hub) -> None:
     assert _cc._writes_into_hub_entries([str(hub / "x.lock")], str(hub)) == ["x.lock"]
 
 
-def test_audit_hook_records_writes_only_while_armed(hub, monkeypatch):
+def test_audit_hook_records_writes_only_while_armed(hub, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_cc, "_hub_written", set())
     target = str(hub / "test-session" / "a.log")
     flags = os.O_WRONLY | os.O_CREAT

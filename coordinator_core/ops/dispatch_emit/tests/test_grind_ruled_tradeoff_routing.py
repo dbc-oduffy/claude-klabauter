@@ -28,17 +28,17 @@ def _routing():
 
 
 class _Budget:
-    def __init__(self):
+    def __init__(self) -> None:
         self._spent = 0
         self.total = None
 
-    def spend(self, amount):
+    def spend(self, amount) -> None:
         self._spent += amount
 
     def spent(self):
         return self._spent
 
-    def remaining(self):
+    def remaining(self) -> None:
         return None
 
 
@@ -86,22 +86,22 @@ def _tradeoff_triage(on_tradeoff):
         (_RULING, "bogus", ("handback", "repeat-refused")),
     ],
 )
-def test_route_after_triage_four_way_rule(ruling, on_tradeoff, expected):
+def test_route_after_triage_four_way_rule(ruling, on_tradeoff, expected) -> None:
     assert gc.route_after_triage(_routing(), "triage", "confirmed-bug", "S", "a corner", ruling, on_tradeoff) == expected
 
 
-def test_route_after_triage_without_tradeoff_ignores_the_ruling():
+def test_route_after_triage_without_tradeoff_ignores_the_ruling() -> None:
     assert gc.route_after_triage(_routing(), "triage", "confirmed-bug", "S", "", _RULING, "rejects") == ("node", "fix")
 
 
-def test_ruled_and_accepted_tradeoff_at_triage_exit_reaches_fix():
+def test_ruled_and_accepted_tradeoff_at_triage_exit_reaches_fix() -> None:
     result = _run(_tradeoff_triage("accepts"))
     assert ("fix", "r0") in result["call_log"]
     assert "needs-judgment" not in _types(result) and "repeat-refused" not in _types(result)
     assert result["by_triage_check"]["ruled_tradeoff"] == 1
 
 
-def test_ruled_and_accepted_tradeoff_at_fix_exit_proceeds_to_verify_without_a_hand_back():
+def test_ruled_and_accepted_tradeoff_at_fix_exit_proceeds_to_verify_without_a_hand_back() -> None:
     result = _run(
         {"has_tradeoff": False, "ruling_on_tradeoff": "no-ruling"},
         {"outcome": "done", "has_tradeoff": True, "tradeoff": "late", "ruling_on_tradeoff": "accepts",
@@ -113,7 +113,7 @@ def test_ruled_and_accepted_tradeoff_at_fix_exit_proceeds_to_verify_without_a_ha
     assert result["by_triage_check"]["fix_late_tradeoff"] == 0
 
 
-def test_repeat_hand_back_on_a_rejected_ruling_is_refused_naming_the_ruling():
+def test_repeat_hand_back_on_a_rejected_ruling_is_refused_naming_the_ruling() -> None:
     result = _run(_tradeoff_triage("rejects"))
     (hand,) = result["handed_back"]
     assert hand["type"] == "repeat-refused"
@@ -124,7 +124,7 @@ def test_repeat_hand_back_on_a_rejected_ruling_is_refused_naming_the_ruling():
     assert ("fix", "r0") not in result["call_log"]
 
 
-def test_repeat_hand_back_at_fix_exit_is_refused_naming_the_ruling():
+def test_repeat_hand_back_at_fix_exit_is_refused_naming_the_ruling() -> None:
     result = _run(
         {"has_tradeoff": False, "ruling_on_tradeoff": "no-ruling"},
         {"outcome": "done", "has_tradeoff": True, "tradeoff": "late", "ruling_on_tradeoff": "rejects"},
@@ -134,20 +134,20 @@ def test_repeat_hand_back_at_fix_exit_is_refused_naming_the_ruling():
     assert result["by_triage_check"]["repeat_refused"] == 1
 
 
-def test_unruled_tradeoff_row_still_routes_to_needs_judgment():
+def test_unruled_tradeoff_row_still_routes_to_needs_judgment() -> None:
     result = _run(_tradeoff_triage("no-ruling"), pm_ruling="")
     (hand,) = result["handed_back"]
     assert hand["type"] == "needs-judgment" and "pm_ruling" not in hand and "ruling" not in hand
 
 
-def test_agent_claim_of_accepts_without_an_engine_read_ruling_stays_needs_judgment():
+def test_agent_claim_of_accepts_without_an_engine_read_ruling_stays_needs_judgment() -> None:
     result = _run(_tradeoff_triage("accepts"), pm_ruling="")
     (hand,) = result["handed_back"]
     assert hand["type"] == "needs-judgment"
     assert ("fix", "r0") not in result["call_log"]
 
 
-def test_unruled_fix_exit_tradeoff_still_routes_to_needs_judgment():
+def test_unruled_fix_exit_tradeoff_still_routes_to_needs_judgment() -> None:
     result = _run(
         {"has_tradeoff": False},
         {"outcome": "done", "has_tradeoff": True, "tradeoff": "late", "ruling_on_tradeoff": "accepts"},
@@ -157,12 +157,12 @@ def test_unruled_fix_exit_tradeoff_still_routes_to_needs_judgment():
     assert result["by_triage_check"]["fix_late_tradeoff"] == 1
 
 
-def test_silent_ruling_routes_to_needs_judgment():
+def test_silent_ruling_routes_to_needs_judgment() -> None:
     result = _run(_tradeoff_triage("silent"))
     assert _types(result) == {"needs-judgment"}
 
 
-def test_cross_repo_hand_back_on_a_ruled_row_is_still_needs_judgment():
+def test_cross_repo_hand_back_on_a_ruled_row_is_still_needs_judgment() -> None:
     result = _run(
         {"has_tradeoff": False},
         {"outcome": "done", "has_tradeoff": False, "touched_files": ["../other-repo/x.py"]},
@@ -171,7 +171,7 @@ def test_cross_repo_hand_back_on_a_ruled_row_is_still_needs_judgment():
     assert hand["type"] == "needs-judgment" and "outside repo_root" in hand["reason"]
 
 
-def test_emitted_script_carries_the_four_way_rule():
+def test_emitted_script_carries_the_four_way_rule() -> None:
     golden = _GOLDEN.read_text(encoding="utf-8")
     assert "function _tradeoffDisposition(tradeoff, pmRuling, onTradeoff)" in golden
     assert "function routeAfterTriage(verdict, size, tradeoff, pmRuling, onTradeoff)" in golden
@@ -182,5 +182,5 @@ def test_emitted_script_carries_the_four_way_rule():
     assert gc._REPEAT_REFUSED_HEAD in golden
 
 
-def test_repeat_refused_is_not_pm_bound():
+def test_repeat_refused_is_not_pm_bound() -> None:
     assert "repeat-refused" not in pm_adjudication.PM_BOUND_HANDBACK_TYPES

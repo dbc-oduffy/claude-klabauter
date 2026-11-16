@@ -29,13 +29,14 @@ from __future__ import annotations
 from coordinator_core.bash_guards import _verdict
 from coordinator_core.bash_guards import block_subagent_plan_body_bash_write as guard
 from coordinator_core.guard_messages.testing import envelope_of
+import pytest
 
 
 def _enveloped(check):
     return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
-def _payload(command, agent_id="deadbeef0123", session_id="sess1", cwd="/repo"):
+def _payload(command, agent_id: str | None = "deadbeef0123", session_id: str = "sess1", cwd: str = "/repo"):
     p = {
         "tool_name": "Bash",
         "tool_input": {"command": command},
@@ -50,7 +51,7 @@ def _payload(command, agent_id="deadbeef0123", session_id="sess1", cwd="/repo"):
 _WRITE_CMD = 'echo "in progress" >> docs/plans/2026-07-30-x.md'
 
 
-def _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type=""):
+def _stub(monkeypatch, resolved_agent_id: str = "deadbeef0123", subagent_type: str = "") -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(
         guard, "_resolve_subagent_identity", lambda raw, session: resolved_agent_id
@@ -61,7 +62,7 @@ def _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type=""):
     monkeypatch.setattr(guard, "_write_block_log", lambda *a, **kw: None)
 
 
-def test_em_caller_no_agent_id_allowed_and_silent(monkeypatch, capsys):
+def test_em_caller_no_agent_id_allowed_and_silent(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """No agent_id at all -> EM main-loop -> always allow, and the
     instrumentation signal (about SUBAGENT kind-resolution failures
     specifically) must not fire for a non-subagent caller.
@@ -72,7 +73,7 @@ def test_em_caller_no_agent_id_allowed_and_silent(monkeypatch, capsys):
     assert capsys.readouterr().err == ""
 
 
-def test_unresolvable_kind_still_allows(monkeypatch, capsys):
+def test_unresolvable_kind_still_allows(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="")
     payload = _payload(_WRITE_CMD)
     assert _enveloped(guard.check)(payload) is None
@@ -81,13 +82,13 @@ def test_unresolvable_kind_still_allows(monkeypatch, capsys):
     assert "ALLOWS" in err
 
 
-def test_unparseable_agent_id_still_allows(monkeypatch):
+def test_unparseable_agent_id_still_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub(monkeypatch, resolved_agent_id="", subagent_type="")
     payload = _payload(_WRITE_CMD)
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_resolvable_non_executor_kind_allowed_and_silent(monkeypatch, capsys):
+def test_resolvable_non_executor_kind_allowed_and_silent(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """A resolvable kind that isn't coordinator:executor allows, and does
     not trip the kind-UNRESOLVED instrumentation (its kind resolved fine --
     it just isn't executor).
@@ -98,7 +99,7 @@ def test_resolvable_non_executor_kind_allowed_and_silent(monkeypatch, capsys):
     assert capsys.readouterr().err == ""
 
 
-def test_resolvable_executor_kind_still_fires(monkeypatch):
+def test_resolvable_executor_kind_still_fires(monkeypatch: pytest.MonkeyPatch) -> None:
     """A resolved coordinator:executor kind still fires the guard, as
     a deny.
     """
@@ -112,7 +113,7 @@ def test_resolvable_executor_kind_still_fires(monkeypatch):
     assert "run-report sidecar" in reason
 
 
-def test_resolvable_ambiguous_kind_still_fires_unconditionally(monkeypatch):
+def test_resolvable_ambiguous_kind_still_fires_unconditionally(monkeypatch: pytest.MonkeyPatch) -> None:
     """AMBIGUOUS collision sentinel keeps its own unconditional fire branch,
     independent of the lookup-fail-is-allow default.
     """
@@ -123,7 +124,7 @@ def test_resolvable_ambiguous_kind_still_fires_unconditionally(monkeypatch):
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_non_write_command_allows_even_with_unresolved_kind(monkeypatch):
+def test_non_write_command_allows_even_with_unresolved_kind(monkeypatch: pytest.MonkeyPatch) -> None:
     """TARGET-DETECTION axis is independent of identity: an unresolved kind
     still allows through a command with no unambiguous write idiom (a plain
     read), matching the guard's own "any doubt -> allow" contract.
@@ -139,7 +140,7 @@ def _ps_payload(command, **kw):
     return p
 
 
-def test_powershell_redirect_idiom_still_fires_dialect_neutral(monkeypatch):
+def test_powershell_redirect_idiom_still_fires_dialect_neutral(monkeypatch: pytest.MonkeyPatch) -> None:
     """`>`/`>>` is the SAME operator in PowerShell as POSIX -- idiom (1)
     needs no PowerShell-specific matcher and keeps ruling correctly, still
     as the ADVISORY_REWRITE allow+additionalContext shape.
@@ -151,7 +152,7 @@ def test_powershell_redirect_idiom_still_fires_dialect_neutral(monkeypatch):
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_powershell_cmdlet_write_records_silent_not_clean(monkeypatch):
+def test_powershell_cmdlet_write_records_silent_not_clean(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="coordinator:executor")
     payload = _ps_payload("Set-Content docs/plans/2026-07-30-x.md -Value 'x'")
     with _verdict.collecting() as silences:
@@ -160,7 +161,7 @@ def test_powershell_cmdlet_write_records_silent_not_clean(monkeypatch):
     assert _verdict.was_silent("block_subagent_plan_body_bash_write", silences)
 
 
-def test_unenumerated_type_falls_through_to_deny(monkeypatch):
+def test_unenumerated_type_falls_through_to_deny(monkeypatch: pytest.MonkeyPatch) -> None:
     """AC6/C3 -- the SAME identity gate's Case 2 (kind resolves CLEANLY to
     something absent from C1's roster) no longer exits as allow; it falls
     through to the SAME target-detection axis coordinator:executor reaches,
@@ -178,7 +179,7 @@ def test_unenumerated_type_falls_through_to_deny(monkeypatch):
     assert "permissionDecisionReason" in result["hookSpecificOutput"]
 
 
-def test_enumerated_non_executor_type_still_allows_silently(monkeypatch):
+def test_enumerated_non_executor_type_still_allows_silently(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="coordinator:enricher")
     monkeypatch.setattr(
         guard, "resolve_roster", lambda: (frozenset({"coordinator:enricher"}), None)
@@ -187,14 +188,14 @@ def test_enumerated_non_executor_type_still_allows_silently(monkeypatch):
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_roster_load_error_falls_back_to_allow(monkeypatch):
+def test_roster_load_error_falls_back_to_allow(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="hookprobe-named")
     monkeypatch.setattr(guard, "resolve_roster", lambda: (None, "roster unresolved"))
     payload = _payload(_WRITE_CMD)
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_powershell_non_executor_kind_no_silent_no_deep_scan(monkeypatch):
+def test_powershell_non_executor_kind_no_silent_no_deep_scan(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub(monkeypatch, resolved_agent_id="deadbeef0123", subagent_type="coordinator:enricher")
     payload = _ps_payload("Set-Content docs/plans/2026-07-30-x.md -Value 'x'")
     with _verdict.collecting() as silences:

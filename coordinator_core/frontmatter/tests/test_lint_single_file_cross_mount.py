@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from coordinator_core.frontmatter import schema_validate
+from pathlib import Path
 
 _HANDOFF_FM = """---
 title: "Cross mount probe"
@@ -40,7 +41,7 @@ def _other_mount_dir(tmp_path) -> str | None:
     return None
 
 
-def test_single_file_check_relpath_valueerror_reports_instead_of_raising(tmp_path, capsys, monkeypatch):
+def test_single_file_check_relpath_valueerror_reports_instead_of_raising(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "cross-mount-handoff.md"
     target.write_text(_HANDOFF_FM, encoding="utf-8")
 
@@ -57,7 +58,7 @@ def test_single_file_check_relpath_valueerror_reports_instead_of_raising(tmp_pat
     assert "valid" in out, out
 
 
-def test_relpath_valueerror_missing_file_still_reports_not_found(tmp_path, capsys, monkeypatch):
+def test_relpath_valueerror_missing_file_still_reports_not_found(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
 
     def _raising_relpath(path, start):
         raise ValueError("path is on mount 'C:', start on mount 'X:'")
@@ -73,7 +74,7 @@ def test_relpath_valueerror_missing_file_still_reports_not_found(tmp_path, capsy
 
 
 @pytest.mark.skipif(os.name != "nt", reason="relpath only raises across mounts on Windows")
-def test_single_file_check_on_a_different_mount_reports_instead_of_raising(tmp_path, capsys):
+def test_single_file_check_on_a_different_mount_reports_instead_of_raising(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo_root = _other_mount_dir(tmp_path)
     if repo_root is None:
         pytest.skip("no second drive available on this box to build a cross-mount pair")
@@ -90,7 +91,7 @@ def test_single_file_check_on_a_different_mount_reports_instead_of_raising(tmp_p
 
 
 @pytest.mark.skipif(os.name != "nt", reason="relpath only raises across mounts on Windows")
-def test_cross_mount_missing_file_still_reports_not_found(tmp_path, capsys):
+def test_cross_mount_missing_file_still_reports_not_found(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo_root = _other_mount_dir(tmp_path)
     if repo_root is None:
         pytest.skip("no second drive available on this box to build a cross-mount pair")

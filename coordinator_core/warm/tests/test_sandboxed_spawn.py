@@ -16,15 +16,13 @@ def _isolate(monkeypatch):
     return spawned
 
 
-def _dispatch(monkeypatch, reply, seen=None, spawn_attempt=False):
+def _dispatch(monkeypatch, reply, seen=None):
     def fake(msg, **kw):
         if seen is not None:
             seen.append(msg)
-        if spawn_attempt:
-            client._spawn_once()
         return reply
 
-    monkeypatch.setattr(client, "try_warm_dispatch", fake)
+    monkeypatch.setattr(client, "try_warm_dispatch_no_spawn", fake)
 
 
 @pytest.mark.parametrize("restricted", [True, False])
@@ -43,12 +41,26 @@ def test_served_result_returned(monkeypatch):
 
 
 def test_miss_refused_names_sandbox_and_reason_and_never_spawns_server(monkeypatch, _isolate):
-    _dispatch(monkeypatch, None, spawn_attempt=True)
+    def no_server(msg, read_deadline_secs=None, hook_path=False):
+        client._spawn_wanted = True
+
+    monkeypatch.setattr(client, "_try_warm_dispatch_inner", no_server)
+    monkeypatch.setattr(client, "_record_cold_fallback", lambda op=None: None)
     with pytest.raises(ss.SandboxedSpawnRefused) as exc:
         ss.forward_spawn_to_warm("workflow.fire", {}, "r")
     text = str(exc.value)
     assert "sandbox" in text and "no_server" in text and "publish/restart the warm engine" in text
     assert _isolate == []
+
+
+def test_dispatching_door_spawns_on_the_same_miss(monkeypatch, _isolate):
+    def no_server(msg, read_deadline_secs=None, hook_path=False):
+        client._spawn_wanted = True
+
+    monkeypatch.setattr(client, "_try_warm_dispatch_inner", no_server)
+    monkeypatch.setattr(client, "_record_cold_fallback", lambda op=None: None)
+    assert client.try_warm_dispatch({"method": "x"}) is None
+    assert _isolate == [1]
 
 
 def test_miss_prefers_permanent_cold_reason(monkeypatch):

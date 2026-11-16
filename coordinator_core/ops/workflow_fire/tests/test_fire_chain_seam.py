@@ -10,6 +10,7 @@ import sys
 import pytest
 
 from coordinator_core.ops.workflow_fire import fire
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -30,11 +31,11 @@ _PINNED_ARGV = [
 ]
 
 
-def test_default_argv_is_pinned():
+def test_default_argv_is_pinned() -> None:
     assert fire.build_fire_command("/s/wf.js", "/plug") == _PINNED_ARGV
 
 
-def test_prompt_and_session_id_appear_once():
+def test_prompt_and_session_id_appear_once() -> None:
     argv = fire.build_fire_command(
         "/s/wf.js", "/plug", prompt="PROMPT-X", session_id="sid-123"
     )
@@ -75,7 +76,7 @@ def _repo_with_script(tmp_path):
     return repo, script
 
 
-def test_wait_returns_exited_record_with_classified_outcome(tmp_path, monkeypatch):
+def test_wait_returns_exited_record_with_classified_outcome(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fire, "resolve_plugin_dir", lambda: str(tmp_path))
     repo, script = _repo_with_script(tmp_path)
     stub = _stub_claude(tmp_path)
@@ -100,7 +101,7 @@ def test_wait_returns_exited_record_with_classified_outcome(tmp_path, monkeypatc
     assert on_disk["state"] == "exited" and on_disk["exit_code"] == 3
 
 
-def test_spawn_failure_with_session_id_raises_and_discards(tmp_path, monkeypatch):
+def test_spawn_failure_with_session_id_raises_and_discards(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fire, "resolve_plugin_dir", lambda: str(tmp_path))
     repo, script = _repo_with_script(tmp_path)
     with pytest.raises(fire.ChildSpawnFailedError):
@@ -112,7 +113,7 @@ def test_spawn_failure_with_session_id_raises_and_discards(tmp_path, monkeypatch
     assert not [p for p in reg.glob("*.json")]
 
 
-def test_prompt_never_inlines_json_and_forward_slashes_windows_paths():
+def test_prompt_never_inlines_json_and_forward_slashes_windows_paths() -> None:
     prompt = fire.render_prompt(r"E:\coordinator-content-repo\scratch\wf.js")
     assert "\\" not in prompt
     assert "'<json>'" not in prompt

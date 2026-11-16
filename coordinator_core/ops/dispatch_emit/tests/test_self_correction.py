@@ -32,17 +32,17 @@ def _py(case):
     return {"owned": list(r.owned), "foreign": list(r.foreign), "unverified": list(r.unverified)}
 
 
-def test_cap_is_the_recovery_cap():
+def test_cap_is_the_recovery_cap() -> None:
     assert sc.SELF_CORRECTION_CAP == RECOVERY_ATTEMPT_CAP == 2
 
 
-def test_c04f17_shape_is_all_foreign():
+def test_c04f17_shape_is_all_foreign() -> None:
     r = sc.classify_reds(_CASES[0]["failing"], _WS, reverted=[])
     assert r.owned == ()
     assert r.foreign == tuple(sorted(_CASES[0]["failing"]))
 
 
-def test_write_set_file_pre_existing_red_is_foreign_unless_reverted():
+def test_write_set_file_pre_existing_red_is_foreign_unless_reverted() -> None:
     nid = "coordinator/bin/tests/test_with_tier_t_slot.py::t"
     r = sc.classify_reds([nid], _WS, pre_existing=[nid])
     assert r.owned == () and r.foreign == (nid,)
@@ -50,31 +50,31 @@ def test_write_set_file_pre_existing_red_is_foreign_unless_reverted():
     assert r.owned == (nid,) and r.foreign == ()
 
 
-def test_caused_and_foreign_is_foreign_and_reverted_is_owned():
+def test_caused_and_foreign_is_foreign_and_reverted_is_owned() -> None:
     r = sc.classify_reds(["a/t.py::1", "b/t.py::2"], [], caused=["a/t.py::1"], foreign=["a/t.py::1"], reverted=[{"tests": ["b/t.py::2"]}])
     assert r.owned == ("b/t.py::2",) and r.foreign == ("a/t.py::1",)
     assert r.unverified == ()
 
 
-def test_caused_not_foreign_is_owned():
+def test_caused_not_foreign_is_owned() -> None:
     r = sc.classify_reds(["a/t.py::1"], [], caused=["a/t.py::1"])
     assert r.owned == ("a/t.py::1",)
 
 
-def test_unverified_outside_write_set_is_foreign_and_listed():
+def test_unverified_outside_write_set_is_foreign_and_listed() -> None:
     r = sc.classify_reds(["u/t.py::1", "p/t.py::2"], [], caused=[], pre_existing=["p/t.py::2"])
     assert r.foreign == ("p/t.py::2", "u/t.py::1")
     assert r.unverified == ("u/t.py::1",)
 
 
-def test_foreign_red_outranks_passed_at_base_owned_and_is_never_unverified():
+def test_foreign_red_outranks_passed_at_base_owned_and_is_never_unverified() -> None:
     nid = "g/t.py::1"
     assert sc.classify_reds([nid], [], passed_at_base=[nid]).owned == (nid,)
     r = sc.classify_reds([nid], [], passed_at_base=[nid], foreign_red={nid: ["x.py"]})
     assert r.owned == () and r.foreign == (nid,) and r.unverified == ()
 
 
-def test_foreign_red_does_not_outrank_a_reverted_red_or_claim_other_ids():
+def test_foreign_red_does_not_outrank_a_reverted_red_or_claim_other_ids() -> None:
     r = sc.classify_reds(["a/t.py::1", "b/t.py::2"], [], passed_at_base=["a/t.py::1", "b/t.py::2"],
                          foreign_red=["a/t.py::1", "b/t.py::2"], reverted=[{"tests": ["a/t.py::1"]}])
     assert r.owned == ("a/t.py::1",) and r.foreign == ("b/t.py::2",)
@@ -82,7 +82,7 @@ def test_foreign_red_does_not_outrank_a_reverted_red_or_claim_other_ids():
     assert r.owned == ("o/t.py::2",)
 
 
-def test_separators_and_dot_slash_normalise_and_output_is_sorted_unique():
+def test_separators_and_dot_slash_normalise_and_output_is_sorted_unique() -> None:
     r = sc.classify_reds(["z\\t.py::1", "./z/t.py::1", "a/t.py::2"], ["z/t.py"])
     assert r.owned == ("z/t.py::1",)
     assert r.foreign == ("a/t.py::2",)
@@ -92,11 +92,11 @@ def test_separators_and_dot_slash_normalise_and_output_is_sorted_unique():
     "before,after,expected",
     [({"a", "b"}, {"b"}, True), ({"a"}, {"a"}, False), ({"a"}, {"b"}, True), ({"a"}, {"a", "b"}, False), (set(), {"a"}, False)],
 )
-def test_progressed(before, after, expected):
+def test_progressed(before, after, expected) -> None:
     assert sc.progressed(before, after) is expected
 
 
-def test_halt_fix_prompt_carries_scope_never_delete_and_notes_path():
+def test_halt_fix_prompt_carries_scope_never_delete_and_notes_path() -> None:
     p = sc.halt_fix_prompt("gaps", "slices", "fp", "state/warp/r/notes.jsonl")
     assert "${gaps}" in p and "${slices}" in p and "${fp}" in p
     assert "SCOPE" in p and "needs_paths" in p
@@ -105,7 +105,7 @@ def test_halt_fix_prompt_carries_scope_never_delete_and_notes_path():
     assert "Commit nothing" in p
 
 
-def test_notes_sentence_is_shared_by_both_fix_prompts():
+def test_notes_sentence_is_shared_by_both_fix_prompts() -> None:
     from coordinator_core.ops.dispatch_emit import ledger_recovery
 
     path = "state/warp/r/notes.jsonl"
@@ -115,14 +115,14 @@ def test_notes_sentence_is_shared_by_both_fix_prompts():
     assert sentence in sc.halt_fix_prompt("g", "s", "fp", path)
 
 
-def test_schemas_are_closed():
+def test_schemas_are_closed() -> None:
     assert sc.HALT_FIX_SCHEMA["additionalProperties"] is False
     assert sc.HALT_FIX_SCHEMA["properties"]["status"]["enum"] == ["DONE", "BLOCKED", "SCOPE"]
     assert sc.HALT_REVERIFY_SCHEMA["additionalProperties"] is False
     assert set(sc.HALT_REVERIFY_SCHEMA["properties"]) == {"test", "slices"}
 
 
-def _node():
+def _node() -> str:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
@@ -130,7 +130,7 @@ def _node():
 
 
 @pytest.mark.spawns_process
-def test_js_mirrors_match_python_reference():
+def test_js_mirrors_match_python_reference() -> None:
     node = _node()
     prog_cases = [[["a", "b"], ["b"]], [["a"], ["a"]], [["a"], ["b"]], [["a"], ["a", "b"]], [[], ["a"]]]
     program = (

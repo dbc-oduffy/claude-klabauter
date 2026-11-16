@@ -15,6 +15,7 @@ from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops import sizing_record_register as srr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.session_baton import store
+from pathlib import Path
 
 RUN = "ask-20261014T000000-def456"
 REL = "state/sizings/2026-10-14-multi-turn.yaml"
@@ -25,7 +26,7 @@ FOLLOW_UP = "also log every retry attempt with the failure reason at warning lev
 TURNS = (EARLY_A, EARLY_B, OWN_ASK, FOLLOW_UP)
 
 
-def _write(repo, rows=(), unrelated=()):
+def _write(repo, rows=(), unrelated=()) -> None:
     doc = {
         "schema": "sizing-object", "intent": "Uploader retry", "estimate": {"tshirt": "S", "provisional": True},
         "route": "dispatch", "detents": [], "fork": None, "xl_exit": None, "status": "sized",
@@ -54,7 +55,7 @@ def _write(repo, rows=(), unrelated=()):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     sdir = session_dir_for(tmp_path / ".git", "sid-mt")
@@ -75,7 +76,7 @@ def _texts(repo):
     return [r["source_text"] for r in _register(repo).rows]
 
 
-def test_turns_listed_unrelated_are_not_seeded_and_binding_twice_adds_nothing(repo):
+def test_turns_listed_unrelated_are_not_seeded_and_binding_twice_adds_nothing(repo) -> None:
     _write(repo, rows=[("X1", "placeholder", "ask")], unrelated=[0, 1])
     rl.bind(repo, RUN, REL)
     first = _texts(repo)
@@ -84,14 +85,14 @@ def test_turns_listed_unrelated_are_not_seeded_and_binding_twice_adds_nothing(re
     assert _texts(repo) == first
 
 
-def test_a_turn_covered_by_a_derived_clause_row_is_not_reseeded_whole(repo):
+def test_a_turn_covered_by_a_derived_clause_row_is_not_reseeded_whole(repo) -> None:
     clause = "add retry with backoff to the uploader"
     _write(repo, rows=[("C1", clause, "pm_verbatims turn 2")], unrelated=[0, 1, 3])
     rl.bind(repo, RUN, REL)
     assert _texts(repo) == [clause]
 
 
-def test_earlier_foreign_turns_are_proven_and_dropped_a_later_follow_up_is_kept(repo):
+def test_earlier_foreign_turns_are_proven_and_dropped_a_later_follow_up_is_kept(repo) -> None:
     _write(repo, rows=[
         ("T0", EARLY_A, "pm_verbatims turn 0"), ("T1", EARLY_B, "pm_verbatims"),
         ("T2", OWN_ASK, "pm_verbatims turn 2"), ("T3", FOLLOW_UP, "pm_verbatims turn 3"),
@@ -103,14 +104,14 @@ def test_earlier_foreign_turns_are_proven_and_dropped_a_later_follow_up_is_kept(
     assert all(e["reason"] == rl.FOREIGN_TURN_REASON for e in reg.raw[rr.UNRELATED_TURNS_KEY])
 
 
-def test_an_ask_no_session_turn_quotes_proves_nothing_foreign(repo):
+def test_an_ask_no_session_turn_quotes_proves_nothing_foreign(repo) -> None:
     _write(repo)
     rl.bind(repo, RUN, REL, ask_text="a paraphrase nobody typed into the session")
     assert _texts(repo) == [*TURNS, "a paraphrase nobody typed into the session"]
     assert rr.UNRELATED_TURNS_KEY not in _register(repo).raw
 
 
-def test_an_amended_swept_sizing_stays_clean_after_rebind_and_ships(repo):
+def test_an_amended_swept_sizing_stays_clean_after_rebind_and_ships(repo) -> None:
     _write(repo)
     rl.bind(repo, RUN, REL)
     swept = [r["id"] for r in _register(repo).rows if r["source_text"] in (EARLY_A, EARLY_B)]

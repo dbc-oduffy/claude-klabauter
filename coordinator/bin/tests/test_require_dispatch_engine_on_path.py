@@ -6,12 +6,17 @@ import pathlib
 import sys
 
 import pytest
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _LIB = pathlib.Path(__file__).resolve().parent.parent / "lib"
 
 
 @pytest.fixture(scope="module")
-def cc():
+def cc() -> ModuleType:
     spec = importlib.util.spec_from_file_location("cc_invoke_under_test", _LIB / "cc_invoke.py")
     assert spec and spec.loader
     mod = importlib.util.module_from_spec(spec)
@@ -26,7 +31,7 @@ def _inline_preamble(resolve) -> str:
     return claude_klabauter_root
 
 
-def test_returns_the_dispatch_ladders_answer(cc, monkeypatch, tmp_path):
+def test_returns_the_dispatch_ladders_answer(cc, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     sentinel = str(tmp_path / "published-engine")
     monkeypatch.setattr(cc, "_resolve_claude_klabauter_root", lambda: sentinel)
     monkeypatch.setattr(sys, "path", list(sys.path))
@@ -34,7 +39,7 @@ def test_returns_the_dispatch_ladders_answer(cc, monkeypatch, tmp_path):
     assert cc.require_dispatch_engine_on_path() == sentinel
 
 
-def test_matches_the_inline_body_it_replaces(cc, monkeypatch, tmp_path):
+def test_matches_the_inline_body_it_replaces(cc, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     sentinel = str(tmp_path / "published-engine")
     monkeypatch.setattr(cc, "_resolve_claude_klabauter_root", lambda: sentinel)
 
@@ -50,7 +55,7 @@ def test_matches_the_inline_body_it_replaces(cc, monkeypatch, tmp_path):
     assert seam_path == inline_path
 
 
-def test_inserts_at_the_front(cc, monkeypatch, tmp_path):
+def test_inserts_at_the_front(cc, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     sentinel = str(tmp_path / "published-engine")
     monkeypatch.setattr(cc, "_resolve_claude_klabauter_root", lambda: sentinel)
     monkeypatch.setattr(sys, "path", ["/some/ambient/site-packages"])
@@ -59,7 +64,7 @@ def test_inserts_at_the_front(cc, monkeypatch, tmp_path):
     assert sys.path[0] == sentinel
 
 
-def test_is_idempotent(cc, monkeypatch, tmp_path):
+def test_is_idempotent(cc, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     sentinel = str(tmp_path / "published-engine")
     monkeypatch.setattr(cc, "_resolve_claude_klabauter_root", lambda: sentinel)
     monkeypatch.setattr(sys, "path", list(sys.path))
@@ -69,7 +74,7 @@ def test_is_idempotent(cc, monkeypatch, tmp_path):
     assert sys.path.count(sentinel) == 1
 
 
-def test_propagates_runtime_error_like_the_inline_body(cc, monkeypatch):
+def test_propagates_runtime_error_like_the_inline_body(cc, monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom():
         raise RuntimeError("every rung missed")
 
@@ -78,7 +83,7 @@ def test_propagates_runtime_error_like_the_inline_body(cc, monkeypatch):
         cc.require_dispatch_engine_on_path()
 
 
-def test_takes_no_script_file_argument(cc):
+def test_takes_no_script_file_argument(cc) -> None:
     import inspect
 
     params = inspect.signature(cc.require_dispatch_engine_on_path).parameters
@@ -91,7 +96,7 @@ def test_takes_no_script_file_argument(cc):
         )
 
 
-def test_require_dispatch_module_hot_path_never_touches_the_diff(cc, monkeypatch, tmp_path):
+def test_require_dispatch_module_hot_path_never_touches_the_diff(cc, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """LOAD-BEARING: the failure-path diff (`_dotted_module_names_under`, two
     `rglob` walks -- DR-362's cost shape) must not run when the import
     succeeds. Asserts the hot path stayed clean, not that it merely returned
@@ -114,7 +119,7 @@ def test_require_dispatch_module_hot_path_never_touches_the_diff(cc, monkeypatch
     assert result is not None
 
 
-def test_require_dispatch_module_success_returns_the_imported_module(cc, monkeypatch, tmp_path):
+def test_require_dispatch_module_success_returns_the_imported_module(cc, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     sentinel = str(tmp_path / "published-engine")
     monkeypatch.setattr(cc, "_resolve_claude_klabauter_root", lambda: sentinel)
     monkeypatch.setattr(sys, "path", list(sys.path))
@@ -122,7 +127,7 @@ def test_require_dispatch_module_success_returns_the_imported_module(cc, monkeyp
     assert cc.require_dispatch_module("os") is __import__("os")
 
 
-def test_require_dispatch_module_reports_stale_mirror_cause_and_remedy(cc, monkeypatch, tmp_path):
+def test_require_dispatch_module_reports_stale_mirror_cause_and_remedy(cc, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     source_root = tmp_path / "source"
     dispatch_root = tmp_path / "dispatch"
     (source_root / "coordinator_core" / "session").mkdir(parents=True)
@@ -151,7 +156,7 @@ def test_require_dispatch_module_reports_stale_mirror_cause_and_remedy(cc, monke
     assert excinfo.value.dotted_name == "coordinator_core.session.name_ladder"
 
 
-def test_require_dispatch_module_reports_not_in_source_either(cc, monkeypatch, tmp_path):
+def test_require_dispatch_module_reports_not_in_source_either(cc, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     source_root = tmp_path / "source"
     dispatch_root = tmp_path / "dispatch"
     (source_root / "coordinator_core").mkdir(parents=True)
@@ -176,7 +181,7 @@ def test_require_dispatch_module_reports_not_in_source_either(cc, monkeypatch, t
     assert "publish" not in message.lower()
 
 
-def test_require_dispatch_module_reuses_the_dispatch_seam_unchanged(cc, monkeypatch, tmp_path):
+def test_require_dispatch_module_reuses_the_dispatch_seam_unchanged(cc, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     sentinel = str(tmp_path / "published-engine")
     calls = []
     real = cc.require_dispatch_engine_on_path
@@ -194,7 +199,7 @@ def test_require_dispatch_module_reuses_the_dispatch_seam_unchanged(cc, monkeypa
     assert calls == [1]
 
 
-def test_the_two_axes_are_not_the_same_function(cc):
+def test_the_two_axes_are_not_the_same_function(cc) -> None:
     assert cc.require_dispatch_engine_on_path is not cc.require_engine_on_path
     dispatch_src = cc.require_dispatch_engine_on_path.__code__.co_names
     assert "_resolve_claude_klabauter_root" in dispatch_src, (

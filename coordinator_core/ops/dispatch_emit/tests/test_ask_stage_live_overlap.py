@@ -10,12 +10,13 @@ from coordinator_core import warp_live
 from coordinator_core.ops.dispatch_emit import run_token, stage_wait
 from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, StageWaiting, stage
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import PLAN, PLAN_REL
+from pathlib import Path
 
 SCRIPT = "scratch/warp/x.mjs"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / PLAN_REL).write_text(PLAN, encoding="utf-8", newline="\n")
@@ -29,14 +30,14 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _mint_peer(root, run_id, *, tokenless, session_id=None, sizing_rel=None):
+def _mint_peer(root, run_id, *, tokenless, session_id=None, sizing_rel=None) -> None:
     """Mint a peer's token. `tokenless=True` mints nothing: the peer is an index entry no engine run
     backs (stale or foreign), so an overlap with it refuses instead of parking."""
     if not tokenless:
         run_token.mint(root, run_id, SCRIPT, session_id=session_id, sizing_rel=sizing_rel)
 
 
-def _live_peer(root, run_id, writes, *, indexed=True, tokenless=False):
+def _live_peer(root, run_id, writes, *, indexed: bool = True, tokenless: bool = False) -> None:
     from coordinator_core.ops.dispatch_emit import live_run_writes
 
     _mint_peer(root, run_id, tokenless=tokenless)
@@ -48,11 +49,11 @@ def _live_peer(root, run_id, writes, *, indexed=True, tokenless=False):
         live_run_writes.index_stage(root, run_id, manifest)
 
 
-def _live(root, run_id):
+def _live(root, run_id) -> bool:
     return any(r["run_id"] == run_id for r in run_token.live_records(root))
 
 
-def test_overlap_refused_naming_run_and_paths_and_token_released(repo):
+def test_overlap_refused_naming_run_and_paths_and_token_released(repo) -> None:
     _live_peer(repo, "peer", ["pkg/b.py"], tokenless=True)
     run_token.mint(repo, "mine", SCRIPT, session_id=None)
     with pytest.raises(AskStageError, match=r"live-run-write-overlap.*peer: pkg/b\.py"):
@@ -61,7 +62,7 @@ def test_overlap_refused_naming_run_and_paths_and_token_released(repo):
     assert not (repo / "scratch" / "warp" / "mine" / "commit-request.txt").exists()
 
 
-def test_stalled_footprint_read_degrades_and_stages(repo, monkeypatch, caplog):
+def test_stalled_footprint_read_degrades_and_stages(repo, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
     import threading
 
     from coordinator_core.ops.dispatch_emit import ask_stage, live_run_index, live_run_writes
@@ -79,7 +80,7 @@ def test_stalled_footprint_read_degrades_and_stages(repo, monkeypatch, caplog):
     assert "check skipped" in caplog.text
 
 
-def test_fast_footprint_read_still_refuses_under_deadline(repo, monkeypatch):
+def test_fast_footprint_read_still_refuses_under_deadline(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import ask_stage
 
     _live_peer(repo, "peer", ["pkg/b.py"], tokenless=True)
@@ -89,18 +90,18 @@ def test_fast_footprint_read_still_refuses_under_deadline(repo, monkeypatch):
         stage(repo, run_id="mine", plan_rel=PLAN_REL)
 
 
-def test_disjoint_peer_stages(repo):
+def test_disjoint_peer_stages(repo) -> None:
     _live_peer(repo, "peer", ["other/z.py"])
     assert sorted(r.id for r in stage(repo, run_id="mine", plan_rel=PLAN_REL).rows) == ["C1", "C2", "C3"]
 
 
-def test_own_run_footprint_never_counts(repo):
+def test_own_run_footprint_never_counts(repo) -> None:
     _live_peer(repo, "mine", ["pkg/a.py"])
     assert stage(repo, run_id="mine", plan_rel=PLAN_REL).rows
     assert _live(repo, "mine")
 
 
-def test_claim_is_the_default_path_and_records_this_runs_footprint(repo, monkeypatch):
+def test_claim_is_the_default_path_and_records_this_runs_footprint(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import live_run_index
 
     seen = []
@@ -110,7 +111,7 @@ def test_claim_is_the_default_path_and_records_this_runs_footprint(repo, monkeyp
     assert seen == ["mine"]
 
 
-def test_claimed_but_unstaged_peer_blocks(repo):
+def test_claimed_but_unstaged_peer_blocks(repo) -> None:
     from coordinator_core.ops.dispatch_emit import live_run_index
 
     _live_peer(repo, "peer", ["other/z.py"], indexed=False, tokenless=True)
@@ -121,7 +122,7 @@ def test_claimed_but_unstaged_peer_blocks(repo):
     assert not _live(repo, "mine")
 
 
-def _idle_peer(root, run_id, writes, *, days, indexed=True, tokenless=False):
+def _idle_peer(root, run_id, writes, *, days, indexed: bool = True, tokenless: bool = False) -> None:
     """A staged peer whose owner session `dead-sess` last showed activity `days` days ago."""
     import time
     from datetime import datetime, timezone
@@ -146,7 +147,7 @@ def _idle_peer(root, run_id, writes, *, days, indexed=True, tokenless=False):
 
 
 @pytest.mark.parametrize("peer", ["ask-20261107T023814-8161a4", "ask-20261106T020647-5e9552"])
-def test_staged_run_days_idle_with_dead_owner_does_not_block(repo, monkeypatch, peer):
+def test_staged_run_days_idle_with_dead_owner_does_not_block(repo, monkeypatch: pytest.MonkeyPatch, peer) -> None:
     from coordinator_core.ops.dispatch_emit import live_run_index
 
     monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, minted: sid == "dead-sess")
@@ -155,7 +156,7 @@ def test_staged_run_days_idle_with_dead_owner_does_not_block(repo, monkeypatch, 
     assert stage(repo, run_id="mine", plan_rel=PLAN_REL).rows
 
 
-def test_idle_run_with_live_owner_is_refused_naming_the_release_op(repo, monkeypatch):
+def test_idle_run_with_live_owner_is_refused_naming_the_release_op(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, minted: False)
     _idle_peer(repo, "peer", ["pkg/b.py"], days=3, tokenless=True)
     run_token.mint(repo, "mine", SCRIPT, session_id=None)
@@ -163,14 +164,14 @@ def test_idle_run_with_live_owner_is_refused_naming_the_release_op(repo, monkeyp
         stage(repo, run_id="mine", plan_rel=PLAN_REL)
 
 
-def test_recently_active_staged_run_with_dead_owner_does_not_block(repo, monkeypatch):
+def test_recently_active_staged_run_with_dead_owner_does_not_block(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, minted: True)
     _idle_peer(repo, "peer", ["pkg/b.py"], days=0)
     run_token.mint(repo, "mine", SCRIPT, session_id=None)
     assert stage(repo, run_id="mine", plan_rel=PLAN_REL).rows
 
 
-def test_recently_active_staged_run_with_live_owner_is_refused(repo, monkeypatch):
+def test_recently_active_staged_run_with_live_owner_is_refused(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, minted: False)
     _idle_peer(repo, "peer", ["pkg/b.py"], days=0, tokenless=True)
     run_token.mint(repo, "mine", SCRIPT, session_id=None)
@@ -178,7 +179,7 @@ def test_recently_active_staged_run_with_live_owner_is_refused(repo, monkeypatch
         stage(repo, run_id="mine", plan_rel=PLAN_REL)
 
 
-def test_halted_peer_with_dead_owner_is_not_treated_as_abandoned(repo, monkeypatch):
+def test_halted_peer_with_dead_owner_is_not_treated_as_abandoned(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, minted: True)
     _idle_peer(repo, "peer", ["pkg/b.py"], days=0)
     (warp_live._ask_record_dir(repo, "peer") / "halted.json").write_text('{"status": "paused"}', encoding="utf-8")
@@ -187,7 +188,7 @@ def test_halted_peer_with_dead_owner_is_not_treated_as_abandoned(repo, monkeypat
     assert not live_run_index.run_is_abandoned(repo, "peer")
 
 
-def test_stale_peer_does_not_block_the_readonly_fallback(repo, monkeypatch):
+def test_stale_peer_does_not_block_the_readonly_fallback(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import live_run_index
 
     monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, minted: True)
@@ -196,7 +197,7 @@ def test_stale_peer_does_not_block_the_readonly_fallback(repo, monkeypatch):
     assert stage(repo, run_id="mine", plan_rel=PLAN_REL).rows
 
 
-def test_release_op_clears_the_blocking_claim_markers(repo, monkeypatch):
+def test_release_op_clears_the_blocking_claim_markers(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import live_run_index, release_run_token
 
     monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, minted: False)
@@ -215,7 +216,7 @@ PEER_STAMPED = "warp-2026-11-04-peer-a70f48-20261104T150507-3bf668"
 PEER_MISSTAMPED = "warp-2026-11-04-peer-a70f48-20261109T150507-3bf668"
 
 
-def test_refusal_prints_the_recorded_run_id_not_a_misstamped_one(repo, monkeypatch):
+def test_refusal_prints_the_recorded_run_id_not_a_misstamped_one(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import live_run_index
 
     _live_peer(repo, PEER_STAMPED, ["pkg/b.py"])
@@ -234,7 +235,7 @@ def test_refusal_prints_the_recorded_run_id_not_a_misstamped_one(repo, monkeypat
     assert f'dispatch.release_run_token {{"run_id": "{PEER_STAMPED}"}}' in str(err.value)
 
 
-def test_refusal_keeps_an_unrecorded_hit_id_as_given(repo, monkeypatch):
+def test_refusal_keeps_an_unrecorded_hit_id_as_given(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import live_run_index
 
     run_token.mint(repo, "mine", SCRIPT, session_id=None)
@@ -243,7 +244,7 @@ def test_refusal_keeps_an_unrecorded_hit_id_as_given(repo, monkeypatch):
         stage(repo, run_id="mine", plan_rel=PLAN_REL)
 
 
-def test_unclaimed_falls_back_to_readonly_check_and_still_refuses(repo, monkeypatch):
+def test_unclaimed_falls_back_to_readonly_check_and_still_refuses(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import live_run_index
 
     _live_peer(repo, "peer", ["pkg/b.py"], indexed=False)
@@ -254,12 +255,12 @@ def test_unclaimed_falls_back_to_readonly_check_and_still_refuses(repo, monkeypa
         stage(repo, run_id="mine", plan_rel=PLAN_REL)
 
 
-def _waits(root):
+def _waits(root) -> list[str]:
     home = stage_wait._wait_dir(root)
     return sorted(p.name for p in home.glob("*.json")) if home is not None and home.is_dir() else []
 
 
-def test_overlap_with_only_live_engine_runs_parks_and_keeps_the_token(repo):
+def test_overlap_with_only_live_engine_runs_parks_and_keeps_the_token(repo) -> None:
     _live_peer(repo, "peer", ["pkg/b.py"])
     run_token.mint(repo, "mine", SCRIPT, session_id="sess-1")
     with pytest.raises(StageWaiting, match=r"stage-wait.*peer") as parked:
@@ -273,7 +274,7 @@ def test_overlap_with_only_live_engine_runs_parks_and_keeps_the_token(repo):
     assert not (repo / "scratch" / "warp" / "mine" / "commit-request.txt").exists()
 
 
-def test_handler_replies_parked_not_error_and_keeps_the_token(repo):
+def test_handler_replies_parked_not_error_and_keeps_the_token(repo) -> None:
     from coordinator_core.ops.dispatch_emit import ask_stage
 
     _live_peer(repo, "peer", ["pkg/b.py"])
@@ -286,7 +287,7 @@ def test_handler_replies_parked_not_error_and_keeps_the_token(repo):
     assert _live(repo, "mine")
 
 
-def test_repeat_attempt_keeps_one_record_and_the_first_deadline(repo):
+def test_repeat_attempt_keeps_one_record_and_the_first_deadline(repo) -> None:
     _live_peer(repo, "peer", ["pkg/b.py"])
     run_token.mint(repo, "mine", SCRIPT, session_id=None)
     with pytest.raises(StageWaiting):
@@ -298,7 +299,7 @@ def test_repeat_attempt_keeps_one_record_and_the_first_deadline(repo):
     assert stage_wait.read(repo, "mine")["deadline"] == first
 
 
-def test_any_non_engine_blocker_among_the_hits_refuses_and_consumes(repo):
+def test_any_non_engine_blocker_among_the_hits_refuses_and_consumes(repo) -> None:
     _live_peer(repo, "peer", ["pkg/b.py"])
     _live_peer(repo, "ghost", ["pkg/b.py"], tokenless=True)
     run_token.mint(repo, "mine", SCRIPT, session_id=None)
@@ -309,7 +310,7 @@ def test_any_non_engine_blocker_among_the_hits_refuses_and_consumes(repo):
     assert _waits(repo) == []
 
 
-def test_expired_wait_refuses_consumes_and_clears_the_record(repo):
+def test_expired_wait_refuses_consumes_and_clears_the_record(repo) -> None:
     _live_peer(repo, "peer", ["pkg/b.py"])
     run_token.mint(repo, "mine", SCRIPT, session_id=None)
     stage_wait.park(repo, "mine", ["peer"], [], now=1.0)
@@ -320,7 +321,7 @@ def test_expired_wait_refuses_consumes_and_clears_the_record(repo):
     assert _waits(repo) == []
 
 
-def test_blocker_lapsed_by_ttl_refuses_at_the_next_attempt(repo, monkeypatch):
+def test_blocker_lapsed_by_ttl_refuses_at_the_next_attempt(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _live_peer(repo, "peer", ["pkg/b.py"])
     run_token.mint(repo, "mine", SCRIPT, session_id=None)
     with pytest.raises(StageWaiting):
@@ -332,7 +333,7 @@ def test_blocker_lapsed_by_ttl_refuses_at_the_next_attempt(repo, monkeypatch):
     assert _waits(repo) == []
 
 
-def test_attempt_after_the_blocker_ended_stages_and_drops_the_wait(repo):
+def test_attempt_after_the_blocker_ended_stages_and_drops_the_wait(repo) -> None:
     _live_peer(repo, "peer", ["pkg/b.py"])
     run_token.mint(repo, "mine", SCRIPT, session_id=None)
     with pytest.raises(StageWaiting):
@@ -345,7 +346,7 @@ def test_attempt_after_the_blocker_ended_stages_and_drops_the_wait(repo):
     assert _live(repo, "mine")
 
 
-def test_repark_after_a_started_wait_can_be_woken_again(repo):
+def test_repark_after_a_started_wait_can_be_woken_again(repo) -> None:
     _live_peer(repo, "peer", ["pkg/b.py"])
     run_token.mint(repo, "mine", SCRIPT, session_id=None)
     with pytest.raises(StageWaiting):
@@ -357,7 +358,7 @@ def test_repark_after_a_started_wait_can_be_woken_again(repo):
     assert [w["run_id"] for w in stage_wait.wake_on_end(repo, "peer")] == ["mine"]
 
 
-def _spend(root, run_id):
+def _spend(root, run_id) -> None:
     """Write the sentinel a spent-token gate refusal leaves, without dropping the run's claims."""
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 
@@ -366,7 +367,7 @@ def _spend(root, run_id):
     (d / "token-spent.json").write_text("{}\n", encoding="utf-8")
 
 
-def test_spent_token_peer_with_claims_does_not_block_a_sibling(repo, monkeypatch):
+def test_spent_token_peer_with_claims_does_not_block_a_sibling(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import live_run_index
 
     monkeypatch.setattr(warp_live, "_owner_exited", lambda sid, minted: False)
@@ -383,21 +384,21 @@ def test_spent_token_peer_with_claims_does_not_block_a_sibling(repo, monkeypatch
 SIZING = "state/sizings/2026-11/chain-a.yaml"
 
 
-def _claiming_run(root, run_id, sizing, path="pkg/b.py", *, tokenless=False):
+def _claiming_run(root, run_id, sizing, path: str = "pkg/b.py", *, tokenless: bool = False) -> None:
     from coordinator_core.ops.dispatch_emit import live_run_index
 
     _mint_peer(root, run_id, tokenless=tokenless, sizing_rel=sizing)
     assert live_run_index.claim(root, run_id, [path]) == {}
 
 
-def test_chained_run_is_not_refused_by_its_ancestors_claims(repo):
+def test_chained_run_is_not_refused_by_its_ancestors_claims(repo) -> None:
     _claiming_run(repo, "ask-20261110T020544-281faa", SIZING)
     run_token.mint(repo, "mine", SCRIPT, session_id=None, sizing_rel=SIZING)
     assert stage(repo, run_id="mine", plan_rel=PLAN_REL).rows
     assert _live(repo, "mine")
 
 
-def test_unrelated_sizing_peer_still_refuses_a_chained_run(repo):
+def test_unrelated_sizing_peer_still_refuses_a_chained_run(repo) -> None:
     _claiming_run(repo, "ask-20261110T020544-281faa", SIZING, path="pkg/a.py")
     _claiming_run(repo, "peer", "state/sizings/2026-11/other.yaml", tokenless=True)
     run_token.mint(repo, "mine", SCRIPT, session_id=None, sizing_rel=SIZING)
@@ -406,21 +407,21 @@ def test_unrelated_sizing_peer_still_refuses_a_chained_run(repo):
     assert "281faa" not in str(err.value)
 
 
-def test_record_under_own_id_plus_suffix_is_kin_not_a_peer(repo):
+def test_record_under_own_id_plus_suffix_is_kin_not_a_peer(repo) -> None:
     _live_peer(repo, "mine-DUMMY", ["pkg/b.py"], tokenless=True)
     run_token.mint(repo, "mine", SCRIPT, session_id=None)
     assert stage(repo, run_id="mine", plan_rel=PLAN_REL).rows
     assert _live(repo, "mine")
 
 
-def test_id_sharing_only_a_stem_without_the_dash_boundary_still_refuses(repo):
+def test_id_sharing_only_a_stem_without_the_dash_boundary_still_refuses(repo) -> None:
     _live_peer(repo, "mineral", ["pkg/b.py"], tokenless=True)
     run_token.mint(repo, "mine", SCRIPT, session_id=None)
     with pytest.raises(AskStageError, match=r"live-run-write-overlap.*mineral: pkg/b\.py"):
         stage(repo, run_id="mine", plan_rel=PLAN_REL)
 
 
-def test_marking_a_token_spent_drops_the_runs_index_entry_and_claims(repo):
+def test_marking_a_token_spent_drops_the_runs_index_entry_and_claims(repo) -> None:
     from coordinator_core.ops.dispatch_emit import ask_gate, live_run_index
 
     _live_peer(repo, "peer", ["pkg/b.py"], indexed=False)
@@ -432,19 +433,19 @@ def test_marking_a_token_spent_drops_the_runs_index_entry_and_claims(repo):
     assert stage(repo, run_id="mine", plan_rel=PLAN_REL).rows
 
 
-def _plan_with_dir_write(repo):
+def _plan_with_dir_write(repo) -> None:
     (repo / "tools" / "proto").mkdir(parents=True)
     plan = PLAN.replace("    - pkg/c.py\n", "    - pkg/c.py\n    - tools/proto\n")
     (repo / PLAN_REL).write_text(plan, encoding="utf-8", newline="\n")
 
 
-def test_declared_directory_does_not_claim_a_peers_files_under_it(repo):
+def test_declared_directory_does_not_claim_a_peers_files_under_it(repo) -> None:
     _plan_with_dir_write(repo)
     _live_peer(repo, "peer", ["tools/proto/launcher.py"])
     assert sorted(r.id for r in stage(repo, run_id="mine", plan_rel=PLAN_REL).rows) == ["C1", "C2", "C3"]
 
 
-def test_run_declaring_a_directory_still_refuses_on_a_shared_file(repo):
+def test_run_declaring_a_directory_still_refuses_on_a_shared_file(repo) -> None:
     _plan_with_dir_write(repo)
     _live_peer(repo, "peer", ["tools/proto/launcher.py", "pkg/c.py"], tokenless=True)
     run_token.mint(repo, "mine", SCRIPT, session_id=None)

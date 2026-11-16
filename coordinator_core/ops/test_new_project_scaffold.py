@@ -550,7 +550,7 @@ def _run_register_with_spy(monkeypatch, target):
         return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr(new_project_scaffold, "_resolve_machine_local", lambda: "machine-local")
-    monkeypatch.setattr(new_project_scaffold.subprocess, "run", _spy)
+    monkeypatch.setattr(new_project_scaffold.machine_local_spawn, "run_bounded", _spy)
     return _REAL_REGISTER_REPO("probe", str(target)), calls
 
 
@@ -597,15 +597,12 @@ def test_main_scaffold_into_temp_parent_writes_no_registry_key(tmp_path, monkeyp
     calls = []
     monkeypatch.setattr(new_project_scaffold, "_register_repo", _REAL_REGISTER_REPO)
     monkeypatch.setattr(new_project_scaffold, "_resolve_machine_local", lambda: "machine-local")
-    real_run = _sp.run
 
     def _spy(cmd, **kwargs):
-        if cmd and cmd[0] == "machine-local":
-            calls.append(cmd)
-            return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
-        return real_run(cmd, **kwargs)
+        calls.append(cmd)
+        return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(new_project_scaffold.subprocess, "run", _spy)
+    monkeypatch.setattr(new_project_scaffold.machine_local_spawn, "run_bounded", _spy)
     monkeypatch.setattr(new_project_scaffold.tempfile, "gettempdir", lambda: str(tmp_path))
     parent = tmp_path / "p"
     parent.mkdir()
@@ -678,7 +675,7 @@ def test_register_repo_verify_mismatch_fails(tmp_path, monkeypatch, _not_scratch
             return _sp.CompletedProcess(cmd, 0, stdout="/some/other/path\n", stderr="")
         return _sp.CompletedProcess(cmd, 0, stdout="", stderr="")
 
-    monkeypatch.setattr(new_project_scaffold.subprocess, "run", _fake_run)
+    monkeypatch.setattr(new_project_scaffold.machine_local_spawn, "run_bounded", _fake_run)
 
     rc = _REAL_REGISTER_REPO("app", str(target))
 

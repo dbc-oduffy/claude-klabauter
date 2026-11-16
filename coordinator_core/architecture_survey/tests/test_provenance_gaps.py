@@ -28,7 +28,7 @@ def _repo(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_gaps_are_commit_dates_without_daily_entry(tmp_path):
+def test_gaps_are_commit_dates_without_daily_entry(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     daily = repo / "archive" / "daily-summaries"
     daily.mkdir(parents=True)
@@ -39,7 +39,7 @@ def test_gaps_are_commit_dates_without_daily_entry(tmp_path):
     assert gaps[0]["missing"] == "archive/daily-summaries/2026-11-10.md"
 
 
-def test_suffixed_daily_filenames_count_as_present(tmp_path):
+def test_suffixed_daily_filenames_count_as_present(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     daily = repo / "archive" / "daily-summaries"
     daily.mkdir(parents=True)
@@ -49,12 +49,12 @@ def test_suffixed_daily_filenames_count_as_present(tmp_path):
     assert [g["date"] for g in pg.provenance_gaps(repo, "--since=2026-01-01")] == ["2026-11-12"]
 
 
-def test_no_daily_dir_means_every_date_is_a_gap(tmp_path):
+def test_no_daily_dir_means_every_date_is_a_gap(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     assert [g["date"] for g in pg.provenance_gaps(repo, "--since=2026-01-01")] == ["2026-11-10", "2026-11-11", "2026-11-12"]
 
 
-def test_all_dates_covered_yields_no_gaps(tmp_path):
+def test_all_dates_covered_yields_no_gaps(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     daily = repo / "archive" / "daily-summaries"
     daily.mkdir(parents=True)
@@ -63,13 +63,13 @@ def test_all_dates_covered_yields_no_gaps(tmp_path):
     assert pg.provenance_gaps(repo, "--since=2026-01-01") == []
 
 
-def test_read_set_equals_pages_changed_and_nothing_else():
+def test_read_set_equals_pages_changed_and_nothing_else() -> None:
     report = {"pages_changed": ["b.md", "a.md"], "dead_paths": [{"page": "z.md"}], "systems_without_page": ["q"]}
     assert pg.read_set(report) == ["a.md", "b.md"]
     assert pg.read_set({}) == []
 
 
-def test_one_git_spawn(tmp_path, monkeypatch):
+def test_one_git_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     calls = []
     real = pg.run_git
@@ -83,7 +83,7 @@ def test_one_git_spawn(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
-def test_window_that_is_not_a_date_bound_is_refused_before_git_runs(tmp_path):
+def test_window_that_is_not_a_date_bound_is_refused_before_git_runs(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     for bad in ("--output=leak.txt", "--all", "-n1"):
         with pytest.raises(ValueError):
@@ -91,7 +91,7 @@ def test_window_that_is_not_a_date_bound_is_refused_before_git_runs(tmp_path):
     assert not (repo / "leak.txt").exists()
 
 
-def test_main_prints_json_and_refuses_without_report(tmp_path, capsys):
+def test_main_prints_json_and_refuses_without_report(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _repo(tmp_path)
     assert pg.main(["--repo-root", str(repo), "--report", str(repo / "nope.json")]) == 2
     rep = repo / "r.json"

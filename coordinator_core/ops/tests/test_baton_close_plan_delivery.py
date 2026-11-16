@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 from coordinator_core.ops.baton_close_plan_delivery import PlanDeliveryCache, plan_delivery
+from pathlib import Path
 
 SHA1 = "a" * 40
 SHA2 = "b" * 40
 
 
-def _row(rid, disposition="open", ref=None, deferred=False):
+def _row(rid, disposition: str = "open", ref=None, deferred: bool = False) -> str:
     s = f"- id: {rid}\n  title: t\n  disposition: {disposition}\n"
     if ref:
         s += f"  disposition_ref: {ref}\n"
@@ -17,54 +18,54 @@ def _row(rid, disposition="open", ref=None, deferred=False):
     return s
 
 
-def _plan(status, rows):
+def _plan(status, rows) -> str:
     body = "".join(rows or [])
     spine = f"## Tasks\n\n```yaml plan-tasks\n{body}```\n" if rows is not None else "no spine\n"
     return f"---\ntitle: x\nstatus: {status}\n---\n\n{spine}"
 
 
-def test_delivered_plan_takes_last_coded_ref():
+def test_delivered_plan_takes_last_coded_ref() -> None:
     d = plan_delivery(_plan("implemented", [_row("C1", "coded", SHA1), _row("C2", "coded", SHA2)]))
     assert d.delivered and d.open_rows == () and d.ship_ref == SHA2
 
 
-def test_open_row_blocks_delivery():
+def test_open_row_blocks_delivery() -> None:
     d = plan_delivery(_plan("implemented", [_row("C1", "coded", SHA1), _row("C2")]))
     assert not d.delivered and d.open_rows == ("C2",)
 
 
-def test_deferred_open_row_does_not_block():
+def test_deferred_open_row_does_not_block() -> None:
     d = plan_delivery(_plan("implemented", [_row("C1", "coded", SHA1), _row("C2", deferred=True)]))
     assert d.delivered and d.open_rows == ()
 
 
-def test_done_alias_folds_to_coded():
+def test_done_alias_folds_to_coded() -> None:
     d = plan_delivery(_plan("complete", [_row("C1", "done", SHA1)]))
     assert d.delivered and d.ship_ref == SHA1
 
 
-def test_reviewed_plan_not_delivered():
+def test_reviewed_plan_not_delivered() -> None:
     d = plan_delivery(_plan("reviewed", [_row("C1", "coded", SHA1)]))
     assert not d.delivered and d.status == "reviewed"
 
 
-def test_malformed_spine_not_delivered():
+def test_malformed_spine_not_delivered() -> None:
     text = "---\nstatus: implemented\n---\n\n```yaml plan-tasks\n- id: [unclosed\n```\n"
     d = plan_delivery(text)
     assert not d.delivered
 
 
-def test_absent_spine_implemented_delivered_without_ship_ref():
+def test_absent_spine_implemented_delivered_without_ship_ref() -> None:
     d = plan_delivery(_plan("implemented", None))
     assert d.delivered and d.ship_ref is None
 
 
-def test_non_sha_ref_ignored():
+def test_non_sha_ref_ignored() -> None:
     d = plan_delivery(_plan("implemented", [_row("C1", "coded", "abc123")]))
     assert d.delivered and d.ship_ref is None
 
 
-def test_cache_resolves_live_then_archive_and_none(tmp_path):
+def test_cache_resolves_live_then_archive_and_none(tmp_path: Path) -> None:
     live = tmp_path / "docs" / "plans"
     live.mkdir(parents=True)
     (live / "p.md").write_text(_plan("implemented", [_row("C1", "coded", SHA1)]), encoding="utf-8")

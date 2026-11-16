@@ -42,6 +42,7 @@ Anti-scope this file enforces (mirrors the plan's own Anti-scope section):
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -99,7 +100,7 @@ def _result(files=None, diagnostics=None, languages=None):
 # ---------------------------------------------------------------------------
 
 
-def test_dependency_absent_is_its_own_loud_state(monkeypatch):
+def test_dependency_absent_is_its_own_loud_state(monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.ops.foreign_symbols as mod
 
     def _raise_import_error():
@@ -122,7 +123,7 @@ def test_dependency_absent_is_its_own_loud_state(monkeypatch):
     assert not any(f["state"] == "parse_failure" for f in findings)
 
 
-def test_dependency_absent_never_folded_into_corpus_fact(monkeypatch):
+def test_dependency_absent_never_folded_into_corpus_fact(monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.ops.foreign_symbols as mod
 
     def _raise_import_error():
@@ -138,7 +139,7 @@ def test_dependency_absent_never_folded_into_corpus_fact(monkeypatch):
 
 
 @pytest.mark.parametrize("extension", [".cts", ".jsx", ".cjs"])
-def test_zero_census_extension_is_corpus_fact_not_missing_grammar(extension):
+def test_zero_census_extension_is_corpus_fact_not_missing_grammar(extension) -> None:
     result = _result(files=[], diagnostics=[])
     findings = classify_foreign_symbol_coverage(result, census=_COCKPIT_CENSUS)
 
@@ -147,7 +148,7 @@ def test_zero_census_extension_is_corpus_fact_not_missing_grammar(extension):
     assert this_ext[0]["state"] == "corpus_fact"
 
 
-def test_live_extension_with_symbols_produces_no_zero_state_finding():
+def test_live_extension_with_symbols_produces_no_zero_state_finding() -> None:
     result = _result(
         files=[{"path": "src/app.ts", "functions": [{"name": "main", "lineno": 1}]}],
         diagnostics=[],
@@ -162,7 +163,7 @@ def test_live_extension_with_symbols_produces_no_zero_state_finding():
     assert ts_zero_state == []
 
 
-def test_missing_grammar_uses_real_diagnostic_text_shape():
+def test_missing_grammar_uses_real_diagnostic_text_shape() -> None:
     diagnostic = {
         "level": "error",
         "message": (
@@ -192,7 +193,7 @@ def test_missing_grammar_uses_real_diagnostic_text_shape():
 # ---------------------------------------------------------------------------
 
 
-def test_symbols_present_with_language_diagnostic_is_partial_coverage_not_silent():
+def test_symbols_present_with_language_diagnostic_is_partial_coverage_not_silent() -> None:
     diagnostic = {
         "level": "error",
         "message": (
@@ -218,7 +219,7 @@ def test_symbols_present_with_language_diagnostic_is_partial_coverage_not_silent
     assert "skipped" in ts_findings[0]["detail"]
 
 
-def test_healthy_extension_with_no_diagnostic_yields_no_partial_coverage_finding():
+def test_healthy_extension_with_no_diagnostic_yields_no_partial_coverage_finding() -> None:
     result = _result(
         files=[{"path": "src/app.ts", "functions": [{"name": "main", "lineno": 1}]}],
         diagnostics=[],
@@ -228,7 +229,7 @@ def test_healthy_extension_with_no_diagnostic_yields_no_partial_coverage_finding
     assert not any(f["extension"] == ".ts" and f["state"] == "partial_coverage" for f in findings)
 
 
-def test_aggregate_symbol_count_does_not_mask_per_extension_gap():
+def test_aggregate_symbol_count_does_not_mask_per_extension_gap() -> None:
     javascript_grammar_missing = {
         "level": "error",
         "message": (
@@ -253,7 +254,7 @@ def test_aggregate_symbol_count_does_not_mask_per_extension_gap():
     assert all(f["state"] not in ("missing_grammar", "corpus_fact") for f in ts_findings)
 
 
-def test_healthy_language_total_does_not_excuse_a_silently_dropped_file():
+def test_healthy_language_total_does_not_excuse_a_silently_dropped_file() -> None:
     diagnostic = {
         "level": "error",
         "message": "parse error in src/broken.ts: unexpected token",
@@ -298,10 +299,10 @@ class _FakeSymbol:
         name,
         kind,
         decl_text=None,
-        range_start_line=1,
+        range_start_line: int = 1,
         container_name=None,
         detail=None,
-    ):
+    ) -> None:
         self.name = name
         self.kind = kind
         self.decl_text = decl_text
@@ -310,7 +311,7 @@ class _FakeSymbol:
         self.detail = detail
 
 
-def test_function_signature_prefers_detail_over_decl_text_body():
+def test_function_signature_prefers_detail_over_decl_text_body() -> None:
     entry, _ = _envelope_for_file(
         "src/app.ts",
         [
@@ -329,7 +330,7 @@ def test_function_signature_prefers_detail_over_decl_text_body():
     ]
 
 
-def test_function_signature_falls_back_to_decl_text_when_no_detail():
+def test_function_signature_falls_back_to_decl_text_when_no_detail() -> None:
     entry, _ = _envelope_for_file(
         "src/app.rb",
         [_FakeSymbol("main", "function", decl_text="def main", range_start_line=2)],
@@ -340,7 +341,7 @@ def test_function_signature_falls_back_to_decl_text_when_no_detail():
     ]
 
 
-def test_method_signature_prefers_detail_over_decl_text_body():
+def test_method_signature_prefers_detail_over_decl_text_body() -> None:
     entry, _ = _envelope_for_file(
         "src/app.ts",
         [
@@ -361,7 +362,7 @@ def test_method_signature_prefers_detail_over_decl_text_body():
     ]
 
 
-def test_other_symbols_signature_prefers_detail_over_decl_text():
+def test_other_symbols_signature_prefers_detail_over_decl_text() -> None:
     entry, unmapped = _envelope_for_file(
         "src/app.ts",
         [
@@ -386,7 +387,7 @@ def test_other_symbols_signature_prefers_detail_over_decl_text():
     ]
 
 
-def test_constant_kind_lands_in_constants_with_none_value():
+def test_constant_kind_lands_in_constants_with_none_value() -> None:
     entry, unmapped = _envelope_for_file(
         "src/consts.ts", [_FakeSymbol("MAX", "constant", range_start_line=3)]
     )
@@ -395,7 +396,7 @@ def test_constant_kind_lands_in_constants_with_none_value():
     assert unmapped == {}
 
 
-def test_type_alias_kind_gets_its_own_key_with_decl_text_as_signature():
+def test_type_alias_kind_gets_its_own_key_with_decl_text_as_signature() -> None:
     entry, unmapped = _envelope_for_file(
         "src/types.ts",
         [_FakeSymbol("Id", "type_alias", decl_text="type Id = string", range_start_line=7)],
@@ -407,7 +408,7 @@ def test_type_alias_kind_gets_its_own_key_with_decl_text_as_signature():
     assert unmapped == {}
 
 
-def test_type_aliases_key_absent_when_no_type_alias_symbols():
+def test_type_aliases_key_absent_when_no_type_alias_symbols() -> None:
     entry, unmapped = _envelope_for_file(
         "src/app.ts", [_FakeSymbol("main", "function", decl_text="function main()")]
     )
@@ -416,7 +417,7 @@ def test_type_aliases_key_absent_when_no_type_alias_symbols():
     assert unmapped == {}
 
 
-def test_unmapped_kind_is_counted_not_swallowed():
+def test_unmapped_kind_is_counted_not_swallowed() -> None:
     entry, unmapped = _envelope_for_file(
         "src/enum.ts", [_FakeSymbol("A", "enum_member", range_start_line=2)]
     )
@@ -428,7 +429,7 @@ def test_unmapped_kind_is_counted_not_swallowed():
     assert "type_aliases" not in entry
 
 
-def test_nothing_dropped_yields_empty_unmapped_kinds():
+def test_nothing_dropped_yields_empty_unmapped_kinds() -> None:
     entry, unmapped = _envelope_for_file(
         "src/app.ts",
         [
@@ -440,7 +441,7 @@ def test_nothing_dropped_yields_empty_unmapped_kinds():
     assert unmapped == {}
 
 
-def test_build_foreign_symbols_surfaces_unmapped_kinds_in_completeness(monkeypatch, tmp_path):
+def test_build_foreign_symbols_surfaces_unmapped_kinds_in_completeness(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import coordinator_core.ops.foreign_symbols as mod
 
     target = tmp_path / "src.ts"
@@ -457,7 +458,7 @@ def test_build_foreign_symbols_surfaces_unmapped_kinds_in_completeness(monkeypat
             return _FakeExtractionResult()
 
         @staticmethod
-        def language_for_extension(extension):
+        def language_for_extension(extension) -> str:
             return "typescript"
 
     monkeypatch.setattr(mod, "_import_symbol_extract", lambda: _FakeSymbolExtract)
@@ -467,7 +468,7 @@ def test_build_foreign_symbols_surfaces_unmapped_kinds_in_completeness(monkeypat
     assert result["completeness"]["unmapped_kinds"] == {"enum_member": 1}
 
 
-def test_build_foreign_symbols_omits_unmapped_kinds_when_nothing_dropped(monkeypatch, tmp_path):
+def test_build_foreign_symbols_omits_unmapped_kinds_when_nothing_dropped(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import coordinator_core.ops.foreign_symbols as mod
 
     target = tmp_path / "src.ts"
@@ -484,7 +485,7 @@ def test_build_foreign_symbols_omits_unmapped_kinds_when_nothing_dropped(monkeyp
             return _FakeExtractionResult()
 
         @staticmethod
-        def language_for_extension(extension):
+        def language_for_extension(extension) -> str:
             return "typescript"
 
     monkeypatch.setattr(mod, "_import_symbol_extract", lambda: _FakeSymbolExtract)
@@ -494,7 +495,7 @@ def test_build_foreign_symbols_omits_unmapped_kinds_when_nothing_dropped(monkeyp
     assert "unmapped_kinds" not in result["completeness"]
 
 
-def test_constants_only_extension_is_not_reported_as_zero_symbols():
+def test_constants_only_extension_is_not_reported_as_zero_symbols() -> None:
     from coordinator_core.ops.foreign_symbols import classify_foreign_symbol_coverage
 
     result = {
@@ -522,7 +523,7 @@ def test_constants_only_extension_is_not_reported_as_zero_symbols():
     assert not corpus, f"constants-only file misreported as yielding nothing: {corpus}"
 
 
-def test_type_aliases_only_extension_is_not_reported_as_zero_symbols():
+def test_type_aliases_only_extension_is_not_reported_as_zero_symbols() -> None:
     from coordinator_core.ops.foreign_symbols import classify_foreign_symbol_coverage
 
     result = {
@@ -545,7 +546,7 @@ def test_type_aliases_only_extension_is_not_reported_as_zero_symbols():
     assert not [f for f in findings if f["state"] == "corpus_fact"]
 
 
-def test_healthy_extension_yields_explicit_covered_finding_not_silence():
+def test_healthy_extension_yields_explicit_covered_finding_not_silence() -> None:
     result = _result(
         files=[{"path": "src/app.ts", "functions": [{"name": "main", "lineno": 1}]}],
         diagnostics=[],
@@ -557,7 +558,7 @@ def test_healthy_extension_yields_explicit_covered_finding_not_silence():
     assert ts_findings[0]["state"] == "covered"
 
 
-def test_unknown_kind_symbols_land_in_other_symbols_and_are_counted():
+def test_unknown_kind_symbols_land_in_other_symbols_and_are_counted() -> None:
     entry, unmapped = _envelope_for_file(
         "README.md",
         [
@@ -578,7 +579,7 @@ def test_unknown_kind_symbols_land_in_other_symbols_and_are_counted():
     assert unmapped == {"unknown": 2}
 
 
-def test_markdown_all_unknown_kind_file_does_not_classify_as_corpus_fact():
+def test_markdown_all_unknown_kind_file_does_not_classify_as_corpus_fact() -> None:
     from coordinator_core.ops.foreign_symbols import _count_symbols
 
     entry, unmapped = _envelope_for_file(
@@ -606,7 +607,7 @@ def test_markdown_all_unknown_kind_file_does_not_classify_as_corpus_fact():
     assert md_findings[0]["state"] != "corpus_fact"
 
 
-def test_other_symbols_key_absent_when_nothing_unmapped():
+def test_other_symbols_key_absent_when_nothing_unmapped() -> None:
     entry, unmapped = _envelope_for_file(
         "src/app.ts", [_FakeSymbol("main", "function", decl_text="function main()")]
     )
@@ -615,7 +616,7 @@ def test_other_symbols_key_absent_when_nothing_unmapped():
     assert unmapped == {}
 
 
-def test_other_symbols_signature_key_absent_when_decl_text_falsy():
+def test_other_symbols_signature_key_absent_when_decl_text_falsy() -> None:
     entry, unmapped = _envelope_for_file(
         "README.md", [_FakeSymbol("Heading", "unknown", decl_text=None, range_start_line=1)]
     )
@@ -624,7 +625,7 @@ def test_other_symbols_signature_key_absent_when_decl_text_falsy():
     assert "signature" not in entry["other_symbols"][0]
 
 
-def test_unattributable_error_diagnostic_produces_loud_finding_not_corpus_fact():
+def test_unattributable_error_diagnostic_produces_loud_finding_not_corpus_fact() -> None:
     diagnostic = {
         "level": "error",
         "message": "grammar unavailable for rust: No module named 'tree_sitter_rust'",
@@ -645,7 +646,7 @@ def test_unattributable_error_diagnostic_produces_loud_finding_not_corpus_fact()
 
 
 @pytest.mark.parametrize("extension", [".ts", ".tsx", ".js", ".mjs", ".mts", ".cts", ".jsx", ".cjs"])
-def test_every_js_ts_extension_gets_its_own_asserted_finding(extension):
+def test_every_js_ts_extension_gets_its_own_asserted_finding(extension) -> None:
     result = _result(files=[], diagnostics=[])
     findings = classify_foreign_symbol_coverage(result, census=_COCKPIT_CENSUS)
 
@@ -654,7 +655,7 @@ def test_every_js_ts_extension_gets_its_own_asserted_finding(extension):
     assert this_ext[0]["state"] == "corpus_fact"
 
 
-def test_language_field_present_and_matching_wins_over_prose_naming_other_language():
+def test_language_field_present_and_matching_wins_over_prose_naming_other_language() -> None:
     diagnostic = {
         "level": "error",
         "message": "grammar unavailable for javascript: file(s) skipped",
@@ -670,7 +671,7 @@ def test_language_field_present_and_matching_wins_over_prose_naming_other_langua
     assert ts_findings[0]["state"] == "missing_grammar"
 
 
-def test_language_field_present_and_not_matching_overrides_prose_substring_match():
+def test_language_field_present_and_not_matching_overrides_prose_substring_match() -> None:
     diagnostic = {
         "level": "error",
         "message": "grammar unavailable for typescript: file(s) skipped",
@@ -690,7 +691,7 @@ def test_language_field_present_and_not_matching_overrides_prose_substring_match
     assert js_findings[0]["state"] == "missing_grammar"
 
 
-def test_language_field_absent_attributes_to_nothing_and_is_unattributed():
+def test_language_field_absent_attributes_to_nothing_and_is_unattributed() -> None:
     diagnostic = {
         "level": "error",
         "message": "grammar unavailable for typescript: file(s) skipped",
@@ -710,7 +711,7 @@ def test_language_field_absent_attributes_to_nothing_and_is_unattributed():
     assert unattributed[0]["detail"] == diagnostic["message"]
 
 
-def test_language_field_names_language_absent_from_census_is_unattributed():
+def test_language_field_names_language_absent_from_census_is_unattributed() -> None:
     diagnostic = {
         "level": "error",
         "message": "grammar unavailable for typescript: file(s) skipped",
@@ -728,7 +729,7 @@ def test_language_field_names_language_absent_from_census_is_unattributed():
     assert not any(f["state"] == "missing_grammar" for f in findings)
 
 
-def test_code_field_symbol_name_invariant_is_a_drop_not_a_parse_failure():
+def test_code_field_symbol_name_invariant_is_a_drop_not_a_parse_failure() -> None:
     diagnostic = {
         "level": "error",
         "message": "symbol name invariant violated — name contains a line terminator",
@@ -749,7 +750,7 @@ def test_code_field_symbol_name_invariant_is_a_drop_not_a_parse_failure():
     assert not any(f["state"] == "parse_failure" for f in findings)
 
 
-def test_code_field_other_value_with_prefix_matching_prose_stays_parse_failure():
+def test_code_field_other_value_with_prefix_matching_prose_stays_parse_failure() -> None:
     # Precedence test: `code` is populated but names a DIFFERENT diagnostic
     # class, even though the prose WOULD prefix-match the drop message —
     # the field must win and this must stay a parse_failure.
@@ -771,7 +772,7 @@ def test_code_field_other_value_with_prefix_matching_prose_stays_parse_failure()
     assert len(parse_failures) == 1
 
 
-def test_code_none_with_documented_prefix_is_not_a_drop_stays_parse_failure():
+def test_code_none_with_documented_prefix_is_not_a_drop_stays_parse_failure() -> None:
     diagnostic = {
         "level": "error",
         "message": "symbol name invariant violated — name exceeds 1024 chars",
@@ -790,7 +791,7 @@ def test_code_none_with_documented_prefix_is_not_a_drop_stays_parse_failure():
     assert len(parse_failures) == 1
 
 
-def test_code_none_ordinary_parse_error_stays_parse_failure():
+def test_code_none_ordinary_parse_error_stays_parse_failure() -> None:
     diagnostic = {
         "level": "error",
         "message": "parse error in src/broken.ts: unexpected token",
@@ -809,7 +810,7 @@ def test_code_none_ordinary_parse_error_stays_parse_failure():
     assert len(parse_failures) == 1
 
 
-def test_build_foreign_symbols_routes_name_invariant_drop_to_its_own_key(monkeypatch, tmp_path):
+def test_build_foreign_symbols_routes_name_invariant_drop_to_its_own_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import coordinator_core.ops.foreign_symbols as mod
 
     clean_target = tmp_path / "clean.md"
@@ -844,7 +845,7 @@ def test_build_foreign_symbols_routes_name_invariant_drop_to_its_own_key(monkeyp
             return _FakeExtractionResult()
 
         @staticmethod
-        def language_for_extension(extension):
+        def language_for_extension(extension) -> str:
             return "markdown"
 
     monkeypatch.setattr(mod, "_import_symbol_extract", lambda: _FakeSymbolExtract)
@@ -869,7 +870,7 @@ def test_build_foreign_symbols_routes_name_invariant_drop_to_its_own_key(monkeyp
     assert "name_invariant_drops" not in clean_entry
 
 
-def test_extraction_diagnostic_carries_code_and_language_on_real_wheel():
+def test_extraction_diagnostic_carries_code_and_language_on_real_wheel() -> None:
     pytest.importorskip(
         "symbol_extract",
         reason="the optional [symbols] extra is not installed in this environment",

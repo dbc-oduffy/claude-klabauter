@@ -6,12 +6,13 @@ import yaml
 
 from coordinator_core.ops.dispatch_emit import land_run, terminal_commit_closeout as tcc
 from coordinator_core.ops.dispatch_emit.run_close_parts import close_from_sizing_text, ledger_met_ids
+from pathlib import Path
 
 _SIZING = "state/sizings/2026-10-27-x.yaml"
 _PLAN = "docs/plans/p.md"
 
 
-def _sizing_text(status="open"):
+def _sizing_text(status: str = "open"):
     head = (
         "schema: sizing-object\nintent: x\nestimate:\n  tshirt: S\n  provisional: true\n"
         "route: spec-dispatch\ndetents: []\nfork: null\nxl_exit: null\nstatus: routed\n"
@@ -38,28 +39,28 @@ def _close(root, ledger_met):
     return tcc._close_block(ctx, {"committed": True, "sha": "a" * 40})
 
 
-def test_terminal_commit_close_reads_ledger_met_row(tmp_path):
+def test_terminal_commit_close_reads_ledger_met_row(tmp_path: Path) -> None:
     block = _close(_root(tmp_path), "ledger-met: R1")
     assert (block["kind"], block["outcome"], block["open_parts"]) == ("xs-s-run", "done", [])
 
 
-def test_terminal_commit_close_without_ledger_met_stays_partial(tmp_path):
+def test_terminal_commit_close_without_ledger_met_stays_partial(tmp_path: Path) -> None:
     block = _close(_root(tmp_path), None)
     assert (block["outcome"], block["open_parts"]) == ("partial", ["R1"])
 
 
-def test_ledger_met_for_another_row_leaves_r1_open(tmp_path):
+def test_ledger_met_for_another_row_leaves_r1_open(tmp_path: Path) -> None:
     block = _close(_root(tmp_path), "ledger-met: R2")
     assert (block["outcome"], block["open_parts"]) == ("partial", ["R1"])
 
 
-def test_land_run_close_parts_read_ledger_met_row():
+def test_land_run_close_parts_read_ledger_met_row() -> None:
     assert land_run._close_parts_of(_sizing_text(), "ledger-met: R1").outcome == "done"
     close = land_run._close_parts_of(_sizing_text(), None)
     assert (close.outcome, close.open_parts) == ("partial", ("R1",))
 
 
-def test_ledger_met_ids_parse():
+def test_ledger_met_ids_parse() -> None:
     assert ledger_met_ids("ledger-met: R1, R2") == {"R1", "R2"}
     assert ledger_met_ids(None) == set()
     assert close_from_sizing_text(_sizing_text(), ledger_met="ledger-met: R1").open_parts == ()

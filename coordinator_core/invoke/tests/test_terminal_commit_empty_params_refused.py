@@ -13,6 +13,7 @@ import json
 import pytest
 
 from coordinator_core.invoke.__main__ import _dispatch_argv
+from pathlib import Path
 
 _RUN_ID = "ask-20261021T130141-d21c45"
 _CANONICAL = f"scratch/warp/{_RUN_ID}/terminal-commit-params.json"
@@ -33,7 +34,7 @@ def _assert_refused(stdout: str, stderr: str, exit_code: int) -> str:
 
 
 @pytest.mark.parametrize("content", ["", "  \n\t\n"])
-def test_empty_or_whitespace_params_file_refused(tmp_path, content):
+def test_empty_or_whitespace_params_file_refused(tmp_path: Path, content) -> None:
     path = tmp_path / "params.json"
     path.write_text(content, encoding="utf-8")
     out = _dispatch_argv(
@@ -45,7 +46,7 @@ def test_empty_or_whitespace_params_file_refused(tmp_path, content):
     assert "params file" not in message
 
 
-def test_canonical_params_path_names_the_empty_file(tmp_path):
+def test_canonical_params_path_names_the_empty_file(tmp_path: Path) -> None:
     path = tmp_path / _CANONICAL
     path.parent.mkdir(parents=True)
     path.write_text("", encoding="utf-8")
@@ -58,7 +59,7 @@ def test_canonical_params_path_names_the_empty_file(tmp_path):
     assert f"params file {_CANONICAL} is empty." in message
 
 
-def test_empty_stdin_refused(monkeypatch, tmp_path):
+def test_empty_stdin_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     class _Stdin:
         buffer = io.BytesIO(b"")
 
@@ -71,14 +72,14 @@ def test_empty_stdin_refused(monkeypatch, tmp_path):
     _assert_refused(*out)
 
 
-def test_empty_positional_refused(tmp_path):
+def test_empty_positional_refused(tmp_path: Path) -> None:
     out = _dispatch_argv(
         ["dispatch.terminal_commit", "  "], str(tmp_path), allow_warm=False
     )
     _assert_refused(*out)
 
 
-def test_other_ops_keep_the_json_parse_failure(tmp_path):
+def test_other_ops_keep_the_json_parse_failure(tmp_path: Path) -> None:
     path = tmp_path / "params.json"
     path.write_text("", encoding="utf-8")
     _, stderr, exit_code = _dispatch_argv(
@@ -88,18 +89,18 @@ def test_other_ops_keep_the_json_parse_failure(tmp_path):
     assert "Invalid params_json" in _message(stderr)
 
 
-def test_empty_object_and_no_params_refused(tmp_path):
+def test_empty_object_and_no_params_refused(tmp_path: Path) -> None:
     for argv in (["dispatch.terminal_commit", "{}"], ["dispatch.terminal_commit"]):
         _assert_refused(*_dispatch_argv(argv, str(tmp_path), allow_warm=False))
 
 
-def test_land_run_empty_params_refused(tmp_path):
+def test_land_run_empty_params_refused(tmp_path: Path) -> None:
     for argv in (["dispatch.land_run", "{}"], ["dispatch.land_run"], ["dispatch.land_run", "  "]):
         message = _assert_refused(*_dispatch_argv(argv, str(tmp_path), allow_warm=False))
         assert "dispatch.land_run params are empty" in message
 
 
-def test_non_empty_params_pass_the_refusal(tmp_path):
+def test_non_empty_params_pass_the_refusal(tmp_path: Path) -> None:
     path = tmp_path / "params.json"
     path.write_text('{"unrelated": 1}', encoding="utf-8")
     _, stderr, _ = _dispatch_argv(

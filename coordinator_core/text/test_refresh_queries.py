@@ -690,6 +690,39 @@ def test_walk_md_in_a_git_worktree_is_one_ls_files_spawn(tmp_path, monkeypatch):
     assert len(calls) == 1 and "ls-files" in calls[0]
 
 
+def test_walk_md_in_a_git_worktree_stats_no_listed_file_individually(tmp_path, monkeypatch):
+    import subprocess
+
+    _git_init(tmp_path)
+    (tmp_path / "sub").mkdir()
+    for i in range(5):
+        _write(tmp_path / "sub" / f"f{i}.md", "x" * i)
+    _write(tmp_path / "gone.md", "x")
+    subprocess.run(["git", "-C", str(tmp_path), "add", "gone.md"], check=True)
+    (tmp_path / "gone.md").unlink()
+
+    real = os.lstat
+    md_lstats = []
+
+    def _counting(path, *a, **kw):
+        if str(path).endswith(".md"):
+            md_lstats.append(str(path))
+        return real(path, *a, **kw)
+
+    stamps: dict = {}
+    with monkeypatch.context() as scoped:
+        scoped.setattr(os, "lstat", _counting)
+        found = walk_md(str(tmp_path), stamps=stamps)
+
+    names = sorted(os.path.relpath(p, tmp_path) for p in found)
+    assert names == [os.path.join("sub", f"f{i}.md") for i in range(5)]  # tracked-but-deleted file absent
+    for p in found:
+        st = os.lstat(p)
+        assert stamps[p] == (st.st_size, st.st_mtime_ns)
+    # Only the vanished entry may cost an individual stat.
+    assert [m for m in md_lstats if not m.endswith("gone.md")] == []
+
+
 def test_walk_md_falls_back_to_scan_when_not_a_git_worktree(tmp_path):
     (tmp_path / "sub").mkdir()
     _write(tmp_path / "sub" / "a.md", "x")

@@ -47,7 +47,7 @@ def repo(_bare_repo):
     return _bare_repo
 
 
-def _planned(repo, block=BLOCK, harvested=True):  # noqa: F811
+def _planned(repo, block=BLOCK, harvested: bool = True) -> None:  # noqa: F811
     _put(repo, tshirt="S", route="spec-dispatch", name="canvas-fixture", design_route=block, plan=PLAN_REL)
     (repo / "docs" / "plans").mkdir(parents=True, exist_ok=True)
     (repo / PLAN_REL).write_text(PLAN, encoding="utf-8", newline="\n")
@@ -67,7 +67,7 @@ def _block(repo):  # noqa: F811
     return yaml.safe_load((repo / REL).read_text(encoding="utf-8"))["design_route"]
 
 
-def test_halt_record_refire_stages_the_planned_rows(repo):  # noqa: F811
+def test_halt_record_refire_stages_the_planned_rows(repo) -> None:  # noqa: F811
     _planned(repo)
     with pytest.raises(AskStageError) as err:
         stage(repo, run_id="canvas-a", plan_rel=PLAN_REL)
@@ -86,14 +86,14 @@ def test_halt_record_refire_stages_the_planned_rows(repo):  # noqa: F811
     assert [r.id for r in stage(repo, run_id="canvas-b", plan_rel=PLAN_REL).rows] == ["C1"]
 
 
-def test_a_bare_string_block_is_upgraded_to_the_full_block(repo):  # noqa: F811
+def test_a_bare_string_block_is_upgraded_to_the_full_block(repo) -> None:  # noqa: F811
     _planned(repo, block="canvas")
     assert _call(repo, record=RECORD)["recorded"]["ok"] is True
     block = _block(repo)
     assert set(block) == {"route", "authority", "board_url", "approval"} and block["route"] == "canvas"
 
 
-def test_next_action_names_the_record_shape_the_gate_accepts(repo):  # noqa: F811
+def test_next_action_names_the_record_shape_the_gate_accepts(repo) -> None:  # noqa: F811
     text = design_route.next_action(REL) + design_route.approval_touchpoint(REL)
     assert f"kind: {design_route.RECORD_KIND}" in text
     for name in ("board_url", "pm_ruling", "ruling_ref"):
@@ -106,7 +106,7 @@ def test_next_action_names_the_record_shape_the_gate_accepts(repo):  # noqa: F81
 
 @pytest.mark.parametrize("name", ["pm_ruling", "ruling_ref", "board_url"])
 @pytest.mark.parametrize("empty", [True, False])
-def test_missing_or_empty_testimony_is_refused_and_writes_nothing(repo, name, empty):  # noqa: F811
+def test_missing_or_empty_testimony_is_refused_and_writes_nothing(repo, name, empty) -> None:  # noqa: F811
     _planned(repo)
     before = (repo / REL).read_bytes()
     record = {**RECORD, name: " "} if empty else {k: v for k, v in RECORD.items() if k != name}
@@ -114,14 +114,14 @@ def test_missing_or_empty_testimony_is_refused_and_writes_nothing(repo, name, em
     assert (repo / REL).read_bytes() == before
 
 
-def test_a_record_carrying_apm_ruling_is_refused(repo):  # noqa: F811
+def test_a_record_carrying_apm_ruling_is_refused(repo) -> None:  # noqa: F811
     _planned(repo)
     before = (repo / REL).read_bytes()
     assert "apm_ruling" in _call(repo, record={**RECORD, "apm_ruling": "approved"})["error"]
     assert (repo / REL).read_bytes() == before
 
 
-def _refused(repo, record=RECORD):  # noqa: F811
+def _refused(repo, record: dict[str, str] = RECORD):  # noqa: F811
     before = (repo / REL).read_bytes()
     reply = _call(repo, record=record)
     assert reply["recorded"]["ok"] is False and reply["recorded"]["error"]
@@ -139,28 +139,28 @@ def _refused(repo, record=RECORD):  # noqa: F811
         "claude.ai/artifact/fixture-canvas-001",
     ],
 )
-def test_a_non_artifact_url_is_refused(repo, url):  # noqa: F811
+def test_a_non_artifact_url_is_refused(repo, url) -> None:  # noqa: F811
     _planned(repo)
     assert "artifact" in _refused(repo, {**RECORD, "board_url": url})
 
 
 @pytest.mark.parametrize("route", ["reviewer", "none"])
-def test_a_non_canvas_route_is_refused(repo, route):  # noqa: F811
+def test_a_non_canvas_route_is_refused(repo, route) -> None:  # noqa: F811
     _planned(repo, block={**BLOCK, "route": route})
     assert "canvas" in _refused(repo)
 
 
-def test_an_absent_block_is_refused(repo):  # noqa: F811
+def test_an_absent_block_is_refused(repo) -> None:  # noqa: F811
     _put(repo, tshirt="S", route="spec-dispatch", name="canvas-fixture")
     assert "design_route" in _refused(repo)
 
 
-def test_an_already_approved_canvas_is_refused(repo):  # noqa: F811
+def test_an_already_approved_canvas_is_refused(repo) -> None:  # noqa: F811
     _planned(repo)
     assert _call(repo, record=RECORD)["recorded"]["ok"] is True
     assert "already approved" in _refused(repo)
 
 
-def test_a_missing_harvest_is_refused(repo):  # noqa: F811
+def test_a_missing_harvest_is_refused(repo) -> None:  # noqa: F811
     _planned(repo, harvested=False)
     assert "harvest.json" in _refused(repo)

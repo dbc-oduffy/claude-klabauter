@@ -13,6 +13,7 @@ from coordinator_core.git.commit_trailers import _resolve_deliverable_id_from_pa
 from coordinator_core.ops.deliverable_carry import resolve_deliverable_and_initiative
 from coordinator_core.ops.read_frontmatter_field import read_frontmatter_field
 from coordinator_core.session import claimed_plan
+import pytest
 
 DRAFT_ID = "dlv-abandoned-draft-000000"
 DRAFT_REL = "docs/plans/2026-09-30-abandoned-draft.md"
@@ -52,19 +53,19 @@ def _carry_only_mint(*, deliverable_id=None, slug=None):
     return deliverable_id, "carry"
 
 
-def test_no_claim_is_held(tmp_path, monkeypatch):
+def test_no_claim_is_held(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _setup(tmp_path, monkeypatch)
     assert claimed_plan.list_held_plan_claims(str(repo)) == []
     assert claimed_plan.resolve_claimed_plan_path(str(repo)) is None
 
 
-def test_commit_trailer_carries_draft_id_without_claim(tmp_path, monkeypatch):
+def test_commit_trailer_carries_draft_id_without_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _setup(tmp_path, monkeypatch)
     assert claimed_plan.list_held_plan_claims(str(repo)) == []
     assert _resolve_deliverable_id_from_paths([DRAFT_REL], repo) == DRAFT_ID
 
 
-def test_handoff_cascade_carries_draft_id_without_claim(tmp_path, monkeypatch):
+def test_handoff_cascade_carries_draft_id_without_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _setup(tmp_path, monkeypatch)
     assert claimed_plan.list_held_plan_claims(str(repo)) == []
     deliverable_id, _initiative = resolve_deliverable_and_initiative(

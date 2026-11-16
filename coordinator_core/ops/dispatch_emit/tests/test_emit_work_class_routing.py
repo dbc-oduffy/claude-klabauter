@@ -14,13 +14,14 @@ from coordinator_core.ops.dispatch_emit.agent_route import RouteAdmissionError
 from coordinator_core.ops.dispatch_emit.emit import assert_zero_errors, emit_script
 
 from .conftest import REVIEW_KW
+from pathlib import Path
 
 UE = "example-game-repo-control:ue-editor"
 UE_TRIAGE = "example-game-repo-control:ue-triage"
 MCP = "mcp__example_game_repo-control__"
 
 
-def _agent_md(name, tools=None, model="sonnet"):
+def _agent_md(name, tools=None, model: str = "sonnet") -> str:
     lines = ["---", f"name: {name}", f"model: {model}"]
     if tools is not None:
         lines.append(f"tools: {tools}")
@@ -28,7 +29,7 @@ def _agent_md(name, tools=None, model="sonnet"):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     content = tmp_path / "content"
     (content / "agents").mkdir(parents=True)
     (content / "agents" / "executor.md").write_text(
@@ -45,7 +46,7 @@ def repo(tmp_path, monkeypatch):
     return root
 
 
-def _table(on_mismatch="refuse", triage=None):
+def _table(on_mismatch: str = "refuse", triage=None):
     cls = {
         "id": "ue-editor",
         "match": {"paths": ["Content/*"]},
@@ -58,7 +59,7 @@ def _table(on_mismatch="refuse", triage=None):
     return {"schema_version": 1, "default_agent_type": "coordinator:executor", "work_classes": [cls]}
 
 
-def _write_table(root, table):
+def _write_table(root, table) -> None:
     (root / ".claude" / "route-table.json").write_text(json.dumps(table), encoding="utf-8")
 
 
@@ -80,11 +81,11 @@ def _plan(root, *, agent_type=None) -> object:
     return path
 
 
-def _emit(root, **kw):
+def _emit(root, **kw) -> str:
     return emit_script(_plan(root, **kw), repo_root=root, **REVIEW_KW)
 
 
-def test_matching_row_is_dispatched_with_class_agent_and_frontmatter_model(repo):
+def test_matching_row_is_dispatched_with_class_agent_and_frontmatter_model(repo) -> None:
     _write_table(repo, _table())
     script = _emit(repo)
 
@@ -95,7 +96,7 @@ def test_matching_row_is_dispatched_with_class_agent_and_frontmatter_model(repo)
     assert_zero_errors(script)
 
 
-def test_unmatched_row_keeps_its_plain_executor_call(repo):
+def test_unmatched_row_keeps_its_plain_executor_call(repo) -> None:
     _write_table(repo, _table())
     script = _emit(repo)
 
@@ -103,7 +104,7 @@ def test_unmatched_row_keeps_its_plain_executor_call(repo):
     assert "_routedRun(" not in script.split("_rows['C2']")[1].split("_rows['C", 1)[0]
 
 
-def test_triage_class_dispatches_triage_literal_first(repo):
+def test_triage_class_dispatches_triage_literal_first(repo) -> None:
     _write_table(repo, _table(triage=UE_TRIAGE))
     script = _emit(repo)
 
@@ -114,7 +115,7 @@ def test_triage_class_dispatches_triage_literal_first(repo):
 
 
 @pytest.mark.parametrize("on_mismatch", ["refuse", "redirect"])
-def test_explicit_executor_row_on_class_is_neither_refused_nor_redirected(repo, on_mismatch):
+def test_explicit_executor_row_on_class_is_neither_refused_nor_redirected(repo, on_mismatch) -> None:
     _write_table(repo, _table(on_mismatch))
     script = _emit(repo, agent_type="coordinator:executor")
 
@@ -127,7 +128,7 @@ def _spawns(monkeypatch):
     real = subprocess.Popen
 
     class Spy(real):
-        def __init__(self, *a, **k):
+        def __init__(self, *a, **k) -> None:
             calls.append(a)
             super().__init__(*a, **k)
 
@@ -135,7 +136,7 @@ def _spawns(monkeypatch):
     return calls
 
 
-def test_no_table_script_equals_script_with_routing_bypassed(repo, monkeypatch):
+def test_no_table_script_equals_script_with_routing_bypassed(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     plain = _emit(repo)
     monkeypatch.setattr(agent_route, "route_rows", lambda rows, root: (rows, {}, []))
     bypassed = _emit(repo)
@@ -144,7 +145,7 @@ def test_no_table_script_equals_script_with_routing_bypassed(repo, monkeypatch):
     assert "_routedRun" not in plain
 
 
-def test_routing_adds_no_subprocess_spawn(repo, monkeypatch):
+def test_routing_adds_no_subprocess_spawn(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_table(repo, _table(triage=UE_TRIAGE))
     calls = _spawns(monkeypatch)
     _emit(repo)

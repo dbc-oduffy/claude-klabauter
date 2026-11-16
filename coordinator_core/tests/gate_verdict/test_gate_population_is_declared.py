@@ -57,7 +57,7 @@ def _claims() -> dict[str, list[str]]:
     return claims
 
 
-def test_population_is_exactly_the_dispatchable_verbs_plus_named_keys():
+def test_population_is_exactly_the_dispatchable_verbs_plus_named_keys() -> None:
     expected = _dispatchable_verbs() | _NAMED_KEYS
     actual = set(POPULATION)
     missing = sorted(expected - actual)
@@ -70,7 +70,7 @@ def test_population_is_exactly_the_dispatchable_verbs_plus_named_keys():
     )
 
 
-def test_every_replay_entry_has_exactly_one_claiming_test_and_vice_versa():
+def test_every_replay_entry_has_exactly_one_claiming_test_and_vice_versa() -> None:
     claims = _claims()
     replay = {k for k, v in POPULATION.items() if v[0] == "replay"}
     for key in sorted(replay):
@@ -86,7 +86,7 @@ def test_every_replay_entry_has_exactly_one_claiming_test_and_vice_versa():
         )
 
 
-def test_every_covered_by_resolves_to_a_defined_test():
+def test_every_covered_by_resolves_to_a_defined_test() -> None:
     for key, (kind, detail) in sorted(POPULATION.items()):
         if kind != "covered_by":
             continue
@@ -105,7 +105,7 @@ def test_every_covered_by_resolves_to_a_defined_test():
         )
 
 
-def test_pending_count_equals_ceiling_exactly():
+def test_pending_count_equals_ceiling_exactly() -> None:
     pending = sorted(k for k, v in POPULATION.items() if v[0] == "pending_replay")
     assert len(pending) == PENDING_REPLAY_CEILING, (
         f"{len(pending)} pending_replay entries vs PENDING_REPLAY_CEILING={PENDING_REPLAY_CEILING}; "

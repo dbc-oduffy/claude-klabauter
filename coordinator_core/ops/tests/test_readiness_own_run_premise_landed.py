@@ -21,21 +21,21 @@ def _run(root: Path, status: str, kept: dict | None = None, run: str = RUN) -> N
         (record / "kept.json").write_text(json.dumps(kept), encoding="utf-8")
 
 
-def test_landed_run_kept_path_row_is_not_a_pull(tmp_path):
+def test_landed_run_kept_path_row_is_not_a_pull(tmp_path: Path) -> None:
     common = _repo(tmp_path)
     _run(tmp_path, "landed", {"chunks": {"C1": {"paths": {"src/x.py": "a" * 40}}}})
     reply = _reply(common, [_row("src/x.py")])
     assert reply["verdict"] == "ready" and reply["blocking_findings"] == 0
 
 
-def test_resumed_run_post_checkpoint_path_row_is_not_a_pull(tmp_path):
+def test_resumed_run_post_checkpoint_path_row_is_not_a_pull(tmp_path: Path) -> None:
     common = _repo(tmp_path)
     _run(tmp_path, "resumed", {"post_checkpoint": {"src/x.py": "a" * 40}})
     reply = _reply(common, [_row("src/x.py")])
     assert reply["verdict"] == "ready"
 
 
-def test_path_the_run_did_not_write_still_pulls(tmp_path):
+def test_path_the_run_did_not_write_still_pulls(tmp_path: Path) -> None:
     common = _repo(tmp_path)
     _run(tmp_path, "landed", {"chunks": {"C1": {"paths": {"src/x.py": "a" * 40}}}})
     reply = _reply(common, [_row("src/y.py")])
@@ -55,7 +55,7 @@ def _rearmed_refusal_run(root: Path, run: str = RUN, sizing: str = SIZING) -> No
     )
 
 
-def test_rearmed_refusal_run_landed_path_row_is_not_a_pull(tmp_path):
+def test_rearmed_refusal_run_landed_path_row_is_not_a_pull(tmp_path: Path) -> None:
     common = _repo(tmp_path)
     _rearmed_refusal_run(tmp_path)
     reply = _reply(common, [_row("src/x.py")])
@@ -63,19 +63,19 @@ def test_rearmed_refusal_run_landed_path_row_is_not_a_pull(tmp_path):
     assert _own_run_premise.own_run_paths(tmp_path, SIZING) == {"src/x.py": RUN}
 
 
-def test_rearmed_refusal_run_other_path_still_pulls(tmp_path):
+def test_rearmed_refusal_run_other_path_still_pulls(tmp_path: Path) -> None:
     common = _repo(tmp_path)
     _rearmed_refusal_run(tmp_path)
     reply = _reply(common, [_row("src/y.py")])
     assert reply["verdict"] == "judgment" and reply["blocking_findings"] == 1
 
 
-def test_rearmed_refusal_run_of_another_sizing_does_not_own_the_path(tmp_path):
+def test_rearmed_refusal_run_of_another_sizing_does_not_own_the_path(tmp_path: Path) -> None:
     _rearmed_refusal_run(tmp_path, sizing="state/sizings/2026-10-28-other-bbbbbb.yaml")
     assert _own_run_premise.own_run_paths(tmp_path, SIZING) == {}
 
 
-def test_own_run_paths_stamps_run_id_and_ignores_other_sizing(tmp_path):
+def test_own_run_paths_stamps_run_id_and_ignores_other_sizing(tmp_path: Path) -> None:
     _run(tmp_path, "landed", {"chunks": {"C1": {"paths": {"./src/x.py": "a" * 40}}}})
     assert _own_run_premise.own_run_paths(tmp_path, SIZING) == {"src/x.py": RUN}
     assert _own_run_premise.own_run_paths(tmp_path, "state/sizings/2026-10-28-other-bbbbbb.yaml") == {}

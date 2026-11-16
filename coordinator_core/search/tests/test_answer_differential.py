@@ -21,6 +21,7 @@ import pytest
 
 from coordinator_core.search.answer import answer
 from coordinator_core.search.tests._posix_shell import requires_posix_shell, run_real
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -99,7 +100,7 @@ CASES = [
 
 
 @pytest.fixture()
-def tree(tmp_path):
+def tree(tmp_path: Path) -> Path:
     for relative, content in FIXTURE_FILES.items():
         path = tmp_path / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -124,7 +125,7 @@ def _answered_body(cmd: str, cwd) -> list[str] | None:
 
 @pytest.mark.parametrize("cmd,recursive", CASES)
 @requires_posix_shell
-def test_answer_matches_real_command(cmd, recursive, tree):
+def test_answer_matches_real_command(cmd, recursive, tree) -> None:
     ours = _answered_body(cmd, tree)
     if ours is None:
         pytest.skip("declined -- the real command runs unchanged, which is correct")
@@ -152,7 +153,7 @@ def test_answer_matches_real_command(cmd, recursive, tree):
 
 
 @requires_posix_shell
-def test_wc_count_agrees_but_padding_deliberately_diverges(tree):
+def test_wc_count_agrees_but_padding_deliberately_diverges(tree) -> None:
     ours = _answered_body("grep -rn alpha . | wc -l", tree)
     assert ours is not None
     _rc, theirs = _real("grep -rn alpha . | wc -l", tree)
@@ -160,36 +161,36 @@ def test_wc_count_agrees_but_padding_deliberately_diverges(tree):
     assert ours == [ours[0].strip()], "our own output must never be padded"
 
 
-def test_declines_when_grep_is_fed_by_upstream(tree):
+def test_declines_when_grep_is_fed_by_upstream(tree) -> None:
     assert answer("curl https://example.com | grep alpha", cwd=str(tree)) is None
 
 
-def test_declines_on_semicolon_compound(tree):
+def test_declines_on_semicolon_compound(tree) -> None:
     assert answer("grep -n alpha notes.md ; echo done", cwd=str(tree)) is None
 
 
-def test_declines_on_unabsorbable_downstream_stage(tree):
+def test_declines_on_unabsorbable_downstream_stage(tree) -> None:
     assert answer("grep -rn alpha . | xargs wc -l", cwd=str(tree)) is None
 
 
-def test_declines_on_pcre(tree):
+def test_declines_on_pcre(tree) -> None:
     assert answer("grep -Pn '\\d+' notes.md", cwd=str(tree)) is None
 
 
-def test_declines_bare_wc_no_flags(tree):
+def test_declines_bare_wc_no_flags(tree) -> None:
     assert answer("grep -rn alpha . | wc", cwd=str(tree)) is None
 
 
-def test_declines_downstream_grep_context_flags(tree):
+def test_declines_downstream_grep_context_flags(tree) -> None:
     assert answer("grep -n alpha notes.md | grep -A1 nested", cwd=str(tree)) is None
 
 
-def test_declines_include_on_explicitly_named_target(tree):
+def test_declines_include_on_explicitly_named_target(tree) -> None:
     assert answer("grep --include=*.py -n alpha notes.md", cwd=str(tree)) is None
 
 
 @requires_posix_shell
-def test_multi_path_glob_is_not_a_silent_empty_answer(tree):
+def test_multi_path_glob_is_not_a_silent_empty_answer(tree) -> None:
     text = answer("grep -n alpha *.py", cwd=str(tree))
     if text is None:
         pytest.fail("declining is legal in general, but this shape must stay answerable")
@@ -201,15 +202,15 @@ def test_multi_path_glob_is_not_a_silent_empty_answer(tree):
     assert all(line.startswith(("alpha.py:", "beta.py:")) for line in theirs)
 
 
-def test_declines_on_glob_matching_nothing(tree):
+def test_declines_on_glob_matching_nothing(tree) -> None:
     assert answer("grep -n alpha *.rs", cwd=str(tree)) is None
 
 
-def test_declines_on_nonexistent_target(tree):
+def test_declines_on_nonexistent_target(tree) -> None:
     assert answer("grep -n alpha does_not_exist.py", cwd=str(tree)) is None
 
 
-def test_prunes_dot_git_by_default(tree):
+def test_prunes_dot_git_by_default(tree) -> None:
     """Pruning is a capability win, and it is deliberately a DIVERGENCE from grep."""
     git_dir = tree / ".git"
     git_dir.mkdir()
@@ -219,34 +220,34 @@ def test_prunes_dot_git_by_default(tree):
     assert not any(".git" in line for line in ours)
 
 
-def test_declines_empty_answer_when_default_pruned_dir_could_hold_the_match(tree):
+def test_declines_empty_answer_when_default_pruned_dir_could_hold_the_match(tree) -> None:
     node_modules = tree / "node_modules"
     node_modules.mkdir()
     (node_modules / "pkg.js").write_text("needle only lives here\n")
     assert answer("grep -rn needle .", cwd=str(tree)) is None
 
 
-def test_answers_empty_when_no_default_prune_dir_present(tree):
+def test_answers_empty_when_no_default_prune_dir_present(tree) -> None:
     text = answer("grep -rn zzzznosuchneedle .", cwd=str(tree))
     assert text is not None
     assert text.startswith("(no matches)")
 
 
-def test_downstream_grep_filter_declines_on_truncated_upstream(tree, monkeypatch):
+def test_downstream_grep_filter_declines_on_truncated_upstream(tree, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.search import engine
 
     monkeypatch.setattr(engine, "MAX_MATCH_LINES", 1)
     assert answer("grep -rn alpha . | grep check", cwd=str(tree)) is None
 
 
-def test_truncation_forces_refusal_for_aggregate_stage(tree, monkeypatch):
+def test_truncation_forces_refusal_for_aggregate_stage(tree, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.search import engine
 
     monkeypatch.setattr(engine, "MAX_MATCH_LINES", 1)
     assert answer("grep -rn alpha . | wc -l", cwd=str(tree)) is None
 
 
-def test_truncation_is_tolerated_for_head(tree, monkeypatch):
+def test_truncation_is_tolerated_for_head(tree, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.search import engine
 
     monkeypatch.setattr(engine, "MAX_MATCH_LINES", 50)

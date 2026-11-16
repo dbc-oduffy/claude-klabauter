@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit.emit import compose_script
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
 from .conftest import REVIEW_KW
+from pathlib import Path
 
 # `_repo` builds a real git repo for the check-ignore probe.
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -27,7 +28,7 @@ def _repo(tmp_path):
     return tmp_path
 
 
-def _row(prefix):
+def _row(prefix) -> WaveRow:
     return WaveRow(
         id="P1",
         title="prefix row",
@@ -39,7 +40,7 @@ def _row(prefix):
     )
 
 
-def _compose(tmp_path, prefix):
+def _compose(tmp_path, prefix) -> str:
     return compose_script(
         [[_row(prefix)]],
         name="wf",
@@ -58,7 +59,7 @@ def _marker_prefixes(script):
     return line
 
 
-def test_ignored_prefix_is_dropped_and_narrated(tmp_path):
+def test_ignored_prefix_is_dropped_and_narrated(tmp_path: Path) -> None:
     script = _compose(tmp_path, "out/")
     marker = _marker_prefixes(script)
     assert marker is None or '"out/"' not in marker
@@ -66,14 +67,14 @@ def test_ignored_prefix_is_dropped_and_narrated(tmp_path):
     assert "row P1: out/" in script
 
 
-def test_unignored_prefix_stays_in_the_marker(tmp_path):
+def test_unignored_prefix_stays_in_the_marker(tmp_path: Path) -> None:
     script = _compose(tmp_path, "state/audits/")
     marker = _marker_prefixes(script)
     assert marker is not None and "state/audits/" in marker
     assert "GITIGNORED writes_under" not in script
 
 
-def test_degraded_filter_drops_nothing(tmp_path, monkeypatch):
+def test_degraded_filter_drops_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         emit,
         "_gitignored_paths",
@@ -85,7 +86,7 @@ def test_degraded_filter_drops_nothing(tmp_path, monkeypatch):
     assert "out/" in _marker_prefixes(script)
 
 
-def test_probe_normalises_terminators():
+def test_probe_normalises_terminators() -> None:
     assert emit._prefix_probe("a/b") == "a/b/.coordinator-ignore-probe"
     assert emit._prefix_probe("a/b//") == "a/b/.coordinator-ignore-probe"
     assert emit._prefix_probe("a\\b\\") == "a/b/.coordinator-ignore-probe"

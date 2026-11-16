@@ -63,6 +63,10 @@ from coordinator_core.bash_guards._heavy_admission_contract import (
 )
 from coordinator_core.bash_guards._heavy_command_class import classify, runs_python_only
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 CLASS = "hard-deny"
 MATCHERS = COMMAND_TOOL_NAMES
@@ -148,7 +152,7 @@ def _working_set_mb(pid: int) -> Optional[int]:
     return working_set_mb(pid)
 
 
-def _deny_log_path():
+def _deny_log_path() -> Path:
     from coordinator_core._settings_home import settings_home
 
     return settings_home() / "heavy-admission" / "would-deny.jsonl"

@@ -7,9 +7,10 @@ import json
 import pytest
 
 from coordinator_core.ops.review_mint import supersede
+from pathlib import Path
 
 
-def test_inline_json_and_file_path_resolve_alike(tmp_path):
+def test_inline_json_and_file_path_resolve_alike(tmp_path: Path) -> None:
     payload = {"prep": {"slice_files": ["a.txt"]}}
     path = tmp_path / "returns.json"
     path.write_text(json.dumps(payload), encoding="utf-8")
@@ -20,7 +21,7 @@ def test_inline_json_and_file_path_resolve_alike(tmp_path):
 
 
 @pytest.mark.parametrize("flag", ["--stage-returns-json", "--judge-result"])
-def test_unreadable_path_exits_2_naming_the_flag(tmp_path, capsys, flag):
+def test_unreadable_path_exits_2_naming_the_flag(tmp_path: Path, capsys: pytest.CaptureFixture[str], flag) -> None:
     rc = supersede.main([
         "--plan", "p.md", "--session-id", "s", "--base", "a", "--head", "b",
         flag, str(tmp_path / "missing.json"), "--repo-root", str(tmp_path),

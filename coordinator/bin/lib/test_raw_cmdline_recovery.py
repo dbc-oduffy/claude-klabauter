@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
@@ -47,11 +48,11 @@ def _write_capture(tmp_path, text, monkeypatch):
     return capture
 
 
-def _patch_windows(monkeypatch):
+def _patch_windows(monkeypatch) -> None:
     monkeypatch.setattr(_mod, "_host_is_nt", lambda: True)
 
 
-def test_non_windows_returns_argv_unchanged(monkeypatch, tmp_path):
+def test_non_windows_returns_argv_unchanged(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(_mod, "_host_is_nt", lambda: False)
     _write_capture(tmp_path, 'cmd /c "scoped-git-commit.cmd -m "hi^!" -- a.txt"', monkeypatch)
     assert recover_windows_argv(["-m", "hi", "--", "a.txt"], _LAUNCHER) == [
@@ -59,13 +60,13 @@ def test_non_windows_returns_argv_unchanged(monkeypatch, tmp_path):
     ]
 
 
-def test_windows_missing_env_var_returns_argv_unchanged(monkeypatch):
+def test_windows_missing_env_var_returns_argv_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_windows(monkeypatch)
     monkeypatch.delenv(RAW_CMDLINE_FILE_ENV, raising=False)
     assert recover_windows_argv(["-m", "hi"], _LAUNCHER) == ["-m", "hi"]
 
 
-def test_windows_recovers_caret_from_raw_capture(monkeypatch, tmp_path):
+def test_windows_recovers_caret_from_raw_capture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_windows(monkeypatch)
     capture = _write_capture(
         tmp_path,
@@ -78,7 +79,7 @@ def test_windows_recovers_caret_from_raw_capture(monkeypatch, tmp_path):
     assert not capture.exists()
 
 
-def test_windows_token_count_mismatch_falls_back_to_argv(monkeypatch, tmp_path):
+def test_windows_token_count_mismatch_falls_back_to_argv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_windows(monkeypatch)
     _write_capture(
         tmp_path,
@@ -89,28 +90,28 @@ def test_windows_token_count_mismatch_falls_back_to_argv(monkeypatch, tmp_path):
     assert recover_windows_argv(mangled, _LAUNCHER) == mangled
 
 
-def test_windows_launcher_name_absent_falls_back_to_argv(monkeypatch, tmp_path):
+def test_windows_launcher_name_absent_falls_back_to_argv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_windows(monkeypatch)
     _write_capture(tmp_path, 'cmd /c "some-other-launcher.cmd -m hi"', monkeypatch)
     mangled = ["-m", "hi"]
     assert recover_windows_argv(mangled, _LAUNCHER) == mangled
 
 
-def test_windows_empty_capture_falls_back_to_argv(monkeypatch, tmp_path):
+def test_windows_empty_capture_falls_back_to_argv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_windows(monkeypatch)
     _write_capture(tmp_path, "", monkeypatch)
     mangled = ["-m", "hi"]
     assert recover_windows_argv(mangled, _LAUNCHER) == mangled
 
 
-def test_windows_unreadable_capture_falls_back_to_argv(monkeypatch, tmp_path):
+def test_windows_unreadable_capture_falls_back_to_argv(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_windows(monkeypatch)
     monkeypatch.setenv(RAW_CMDLINE_FILE_ENV, str(tmp_path / "does-not-exist.tmp"))
     mangled = ["-m", "hi"]
     assert recover_windows_argv(mangled, _LAUNCHER) == mangled
 
 
-def test_classify_shape_e_outer_quoted_unquoted_exe_is_sound():
+def test_classify_shape_e_outer_quoted_unquoted_exe_is_sound() -> None:
     # cmd.exe /c "<exe> --r e9^..e9" — outer-quoted, exe path unquoted.
     # Single quote after /c; caret SURVIVES. Must not be a false refusal.
     raw = 'cmd.exe /c "scoped-git-commit.cmd --r e9^..e9"'
@@ -119,14 +120,14 @@ def test_classify_shape_e_outer_quoted_unquoted_exe_is_sound():
     )
 
 
-def test_classify_shape_h_slash_s_slash_c_outer_quoted_is_sound():
+def test_classify_shape_h_slash_s_slash_c_outer_quoted_is_sound() -> None:
     raw = '/s /c "scoped-git-commit.cmd --r e9^..e9"'
     assert _classify_raw_cmdline_transport(raw) == (
         "SOUND", '"scoped-git-commit.cmd --r e9^..e9"',
     )
 
 
-def test_classify_shape_f_slash_d_slash_s_no_cmd_c_substring_is_sound():
+def test_classify_shape_f_slash_d_slash_s_no_cmd_c_substring_is_sound() -> None:
     raw = 'cmd.exe /d /s /c ""scoped-git-commit.cmd" --r e9^..e9"'
     assert "cmd.exe /c " not in raw
     status, remainder = _classify_raw_cmdline_transport(raw)
@@ -134,32 +135,32 @@ def test_classify_shape_f_slash_d_slash_s_no_cmd_c_substring_is_sound():
     assert remainder == '""scoped-git-commit.cmd" --r e9^..e9"'
 
 
-def test_classify_list_form_not_outer_quoted_is_unsound():
+def test_classify_list_form_not_outer_quoted_is_unsound() -> None:
     raw = "cmd.exe /c scoped-git-commit.cmd --r e9..e9"
     status, remainder = _classify_raw_cmdline_transport(raw)
     assert status == "UNSOUND"
     assert remainder == "scoped-git-commit.cmd --r e9..e9"
 
 
-def test_classify_no_switch_token_is_unknown():
+def test_classify_no_switch_token_is_unknown() -> None:
     raw = 'set "_X=scoped-git-commit.cmd --r e9^..e9"'
     assert _classify_raw_cmdline_transport(raw) == ("UNKNOWN", None)
 
 
-def test_classify_quoted_comspec_path_then_slash_c_is_sound():
+def test_classify_quoted_comspec_path_then_slash_c_is_sound() -> None:
     raw = r'"C:\Windows\System32\cmd.exe" /c "scoped-git-commit.cmd --r e9^..e9"'
     status, remainder = _classify_raw_cmdline_transport(raw)
     assert status == "SOUND"
     assert remainder == '"scoped-git-commit.cmd --r e9^..e9"'
 
 
-def test_classify_does_not_infer_from_caret_presence():
+def test_classify_does_not_infer_from_caret_presence() -> None:
     raw = "cmd.exe /c scoped-git-commit.cmd --message plain-no-metachar"
     status, _ = _classify_raw_cmdline_transport(raw)
     assert status == "UNSOUND"
 
 
-def test_windows_sound_outer_quoted_unquoted_exe_recovers_caret(monkeypatch, tmp_path):
+def test_windows_sound_outer_quoted_unquoted_exe_recovers_caret(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_windows(monkeypatch)
     _write_capture(
         tmp_path,
@@ -171,7 +172,7 @@ def test_windows_sound_outer_quoted_unquoted_exe_recovers_caret(monkeypatch, tmp
     assert recovered == ["--sha-range", "abc123^..def456"]
 
 
-def test_windows_unsound_list_form_raises(monkeypatch, tmp_path):
+def test_windows_unsound_list_form_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_windows(monkeypatch)
     _write_capture(
         tmp_path,
@@ -183,7 +184,7 @@ def test_windows_unsound_list_form_raises(monkeypatch, tmp_path):
         recover_windows_argv(mangled, _LAUNCHER)
 
 
-def test_windows_unknown_no_switch_token_raises(monkeypatch, tmp_path):
+def test_windows_unknown_no_switch_token_raises(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _patch_windows(monkeypatch)
     _write_capture(
         tmp_path,
@@ -195,14 +196,14 @@ def test_windows_unknown_no_switch_token_raises(monkeypatch, tmp_path):
         recover_windows_argv(mangled, _LAUNCHER)
 
 
-def test_classify_comspec_with_escaped_quote_then_slash_c_is_sound():
+def test_classify_comspec_with_escaped_quote_then_slash_c_is_sound() -> None:
     raw = r'"quoted\path\he said \"hi\"\cmd.exe" /c "scoped-git-commit.cmd --r e9^..e9"'
     status, remainder = _classify_raw_cmdline_transport(raw)
     assert status == "SOUND"
     assert remainder == '"scoped-git-commit.cmd --r e9^..e9"'
 
 
-def test_spawn_shape_prefix_omits_remainder_payload():
+def test_spawn_shape_prefix_omits_remainder_payload() -> None:
     raw = 'cmd.exe /c "scoped-git-commit.cmd --note super-secret-value"'
     prefix = spawn_shape_prefix(raw)
     assert prefix == "cmd.exe /c"
@@ -210,14 +211,14 @@ def test_spawn_shape_prefix_omits_remainder_payload():
     assert "scoped-git-commit.cmd" not in prefix
 
 
-def test_spawn_shape_prefix_unknown_shape_is_capped():
+def test_spawn_shape_prefix_unknown_shape_is_capped() -> None:
     raw = 'set "_X=scoped-git-commit.cmd --note super-secret-value-that-is-long"'
     prefix = spawn_shape_prefix(raw)
     assert len(prefix) <= 40
     assert "super-secret-value-that-is-long" not in prefix
 
 
-def test_windows_missing_env_var_never_raises_even_when_shape_would_be_unsound(monkeypatch):
+def test_windows_missing_env_var_never_raises_even_when_shape_would_be_unsound(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_windows(monkeypatch)
     monkeypatch.delenv(RAW_CMDLINE_FILE_ENV, raising=False)
     assert recover_windows_argv(["-m", "hi"], _LAUNCHER) == ["-m", "hi"]

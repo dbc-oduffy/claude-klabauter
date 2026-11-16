@@ -8,21 +8,23 @@ from coordinator_core.group_em import nomination
 from coordinator_core.op_scopes import OP_KEY_SCOPE
 from coordinator_core.ops import _registry_map
 from coordinator_core.ops import group_em_standing as ops_standing
+from pathlib import Path
+import pytest
 
 
-def test_registered_on_every_surface():
+def test_registered_on_every_surface() -> None:
     assert _registry_map.OP_MODULE_MAP["groupem.standing"] == "coordinator_core.ops.group_em_standing"
     assert OP_KEY_SCOPE["groupem.standing"] == "none"
     assert OP_CLASSIFICATION["groupem.standing"] is OpClass.COMPUTE_ONLY
     assert ipc._REGISTRY.get("groupem.standing") is not None
 
 
-def test_no_record_reports_none(tmp_path, monkeypatch):
+def test_no_record_reports_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(nomination, "read_record", lambda root, directory=None: None)
     assert ops_standing._groupem_standing({"repo_root": str(tmp_path)})["nomination"] is None
 
 
-def _patch_holder(monkeypatch, *, live):
+def _patch_holder(monkeypatch, *, live) -> None:
     monkeypatch.setattr(
         nomination, "read_record", lambda root, directory=None: {"session_id": "sid-1", "repo_root": root}
     )
@@ -36,28 +38,28 @@ def _patch_holder(monkeypatch, *, live):
     monkeypatch.setattr(nomination.session_registry, "read_rows", lambda: [row])
 
 
-def test_who_annotates_liveness_without_peer(tmp_path, monkeypatch):
+def test_who_annotates_liveness_without_peer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_holder(monkeypatch, live=True)
     record = ops_standing._groupem_standing({"repo_root": str(tmp_path)})["nomination"]
     assert record["live"] is True
     assert "standing" not in record
 
 
-def test_standing_live_by_name_and_by_id(tmp_path, monkeypatch):
+def test_standing_live_by_name_and_by_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_holder(monkeypatch, live=True)
     for peer in ("crown", "sid-1"):
         result = ops_standing._groupem_standing({"repo_root": str(tmp_path), "peer": peer})
         assert result["nomination"]["standing"] == "live"
 
 
-def test_standing_not_live_and_no_match(tmp_path, monkeypatch):
+def test_standing_not_live_and_no_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_holder(monkeypatch, live=False)
     for peer, expected in (("crown", "not_live"), ("other", "no_match")):
         result = ops_standing._groupem_standing({"repo_root": str(tmp_path), "peer": peer})
         assert result["nomination"]["standing"] == expected
 
 
-def test_op_never_writes(tmp_path, monkeypatch):
+def test_op_never_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_holder(monkeypatch, live=True)
     before = sorted(p.name for p in tmp_path.rglob("*"))
     ops_standing._groupem_standing({"repo_root": str(tmp_path), "peer": "crown"})

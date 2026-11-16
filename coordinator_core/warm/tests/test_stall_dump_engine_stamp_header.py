@@ -5,13 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.warm import hang_restart, server, skew
+import pytest
 
 
 def _lines(path):
     return path.read_text(encoding="utf-8").splitlines()
 
 
-def test_full_and_stub_dumps_carry_stamp_and_sha(tmp_path, monkeypatch):
+def test_full_and_stub_dumps_carry_stamp_and_sha(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stall_dir = tmp_path / "svc" / "stall-dumps"
     monkeypatch.setattr(hang_restart, "maybe_restart", lambda *a, **k: None)
     monkeypatch.setattr(server, "_ENGINE_STAMP_LINES", "engine-stamp: sha:abc123\nsource-sha: abc123\n")
@@ -25,7 +26,7 @@ def test_full_and_stub_dumps_carry_stamp_and_sha(tmp_path, monkeypatch):
     assert stub_lines[1:3] == ["engine-stamp: sha:abc123", "source-sha: abc123"]
 
 
-def test_stall_class_still_leads_the_header(tmp_path, monkeypatch):
+def test_stall_class_still_leads_the_header(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stall_dir = tmp_path / "svc" / "stall-dumps"
     monkeypatch.setattr(hang_restart, "maybe_restart", lambda *a, **k: None)
     monkeypatch.setattr(server, "_ENGINE_STAMP_LINES", "engine-stamp: s\nsource-sha: x\n")
@@ -33,7 +34,7 @@ def test_stall_class_still_leads_the_header(tmp_path, monkeypatch):
     assert _lines(full)[:3] == ["stall-class: io-wait", "engine-stamp: s", "source-sha: x"]
 
 
-def test_reads_stamp_and_strips_dirty_suffix_from_sha(tmp_path, monkeypatch):
+def test_reads_stamp_and_strips_dirty_suffix_from_sha(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     skew.write_engine_stamp(tmp_path, "sha:deadbeef+dirty-1234")
     monkeypatch.setattr(server, "_engine_clone_root", lambda: Path(tmp_path))
     assert server._read_engine_stamp_lines() == (
@@ -41,6 +42,6 @@ def test_reads_stamp_and_strips_dirty_suffix_from_sha(tmp_path, monkeypatch):
     )
 
 
-def test_unstamped_tree_says_so(tmp_path, monkeypatch):
+def test_unstamped_tree_says_so(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "_engine_clone_root", lambda: Path(tmp_path))
     assert server._read_engine_stamp_lines() == "engine-stamp: unstamped\nsource-sha: unknown\n"

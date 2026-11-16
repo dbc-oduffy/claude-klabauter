@@ -39,7 +39,7 @@ def _sha(text: str) -> str:
 
 
 @pytest.fixture
-def root(tmp_path) -> Path:
+def root(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     (repo / "src").mkdir(parents=True)
     _git(repo, "init", "-q")
@@ -90,14 +90,14 @@ def _held(root: Path, run_id: str = HALTED, landing: str | None = LANDING, **kw)
     return hha.reader(root, landing, **kw)(run_id, [PATH])
 
 
-def test_rule1_path_missing_from_the_halted_baseline_holds(root):
+def test_rule1_path_missing_from_the_halted_baseline_holds(root) -> None:
     _tree(root, "tree\n")
     _run(root, HALTED, baseline={"other.py": None}, stage="halted")
     _landing(root, _sha("x\n"))
     assert _held(root) == {PATH}
 
 
-def test_rule1_unreadable_manifest_holds(root):
+def test_rule1_unreadable_manifest_holds(root) -> None:
     _tree(root, "tree\n")
     rdir = root / "state" / "warp" / HALTED
     rdir.mkdir(parents=True)
@@ -105,44 +105,44 @@ def test_rule1_unreadable_manifest_holds(root):
     assert _held(root) == {PATH}
 
 
-def test_rule1_manifest_without_write_baseline_holds(root):
+def test_rule1_manifest_without_write_baseline_holds(root) -> None:
     _tree(root, "tree\n")
     _run(root, HALTED, baseline=None, stage="halted")
     assert _held(root) == {PATH}
 
 
-def test_rule2_tree_still_equals_the_halted_baseline_releases_even_with_no_landing_run(root):
+def test_rule2_tree_still_equals_the_halted_baseline_releases_even_with_no_landing_run(root) -> None:
     _tree(root, "same\n")
     _halted_run(root, _sha("same\n"))
     assert _held(root, landing=None) == set()
 
 
-def test_rule2_absent_tree_and_none_baseline_releases(root):
+def test_rule2_absent_tree_and_none_baseline_releases(root) -> None:
     _halted_run(root, None)
     assert _held(root, landing=None) == set()
 
 
-def test_rule3_no_landing_run_holds_when_the_tree_differs(root):
+def test_rule3_no_landing_run_holds_when_the_tree_differs(root) -> None:
     _tree(root, "tree\n")
     _halted_run(root, _sha("old\n"))
     assert _held(root, landing=None) == {PATH}
 
 
-def test_rule3_path_missing_from_the_landing_baseline_holds(root):
+def test_rule3_path_missing_from_the_landing_baseline_holds(root) -> None:
     _tree(root, "tree\n")
     _halted_run(root, _sha("old\n"))
     _run(root, LANDING, baseline={"other.py": None})
     assert _held(root) == {PATH}
 
 
-def test_rule3_halt_after_the_landing_start_holds(root):
+def test_rule3_halt_after_the_landing_start_holds(root) -> None:
     _tree(root, "tree\n")
     _halted_run(root, _sha("old\n"), halt_at="2026-10-24T03:00:00Z")
     _landing(root, _sha("old\n"))
     assert _held(root) == {PATH}
 
 
-def test_rule3_halt_epoch_falls_back_to_the_halted_json_mtime_and_a_later_mtime_holds(root):
+def test_rule3_halt_epoch_falls_back_to_the_halted_json_mtime_and_a_later_mtime_holds(root) -> None:
     _tree(root, "tree\n")
     _halted_run(root, _sha("old\n"))
     rdir = root / "state" / "warp" / HALTED
@@ -154,7 +154,7 @@ def test_rule3_halt_epoch_falls_back_to_the_halted_json_mtime_and_a_later_mtime_
     assert _held(root) == set()
 
 
-def test_rule3_unknown_landing_start_holds(root):
+def test_rule3_unknown_landing_start_holds(root) -> None:
     _tree(root, "tree\n")
     _halted_run(root, _sha("old\n"))
     _run(root, "plain-run", baseline={PATH: _sha("old\n")})
@@ -162,14 +162,14 @@ def test_rule3_unknown_landing_start_holds(root):
     assert _held(root, landing="plain-run") == {PATH}
 
 
-def test_rule4_landing_baseline_equal_to_the_halted_baseline_releases(root):
+def test_rule4_landing_baseline_equal_to_the_halted_baseline_releases(root) -> None:
     _tree(root, "landing wrote this\n")
     _halted_run(root, _sha("old\n"))
     _landing(root, _sha("old\n"))
     assert _held(root) == set()
 
 
-def test_rule5_index_equal_to_the_landing_baseline_releases(root):
+def test_rule5_index_equal_to_the_landing_baseline_releases(root) -> None:
     _stage_index(root, "committed between stages\n")
     _tree(root, "landing wrote this\n")
     _halted_run(root, _sha("old\n"))
@@ -177,14 +177,14 @@ def test_rule5_index_equal_to_the_landing_baseline_releases(root):
     assert _held(root) == set()
 
 
-def test_rule6_checkpoint_landed_path_releases_and_otherwise_holds(root, monkeypatch):
+def test_rule6_checkpoint_landed_path_releases_and_otherwise_holds(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _stage_index(root, "index\n")
     _tree(root, "tree\n")
     _halted_run(root, _sha("old\n"))
     _landing(root, _sha("landing baseline\n"), head_sha="a" * 40)
     calls: list = []
 
-    def fake(root_, plan, base, paths):
+    def fake(root_, plan, base, paths) -> frozenset[str]:
         calls.append((plan, base, list(paths)))
         return frozenset({PATH})
 
@@ -196,7 +196,7 @@ def test_rule6_checkpoint_landed_path_releases_and_otherwise_holds(root, monkeyp
     assert _held(root) == {PATH}
 
 
-def test_rule7_foreign_dirt_present_at_the_landing_stage_holds(root):
+def test_rule7_foreign_dirt_present_at_the_landing_stage_holds(root) -> None:
     _stage_index(root, "committed\n")
     _tree(root, "halted run left this\n")
     _halted_run(root, _sha("old\n"))
@@ -204,7 +204,7 @@ def test_rule7_foreign_dirt_present_at_the_landing_stage_holds(root):
     assert _held(root) == {PATH}
 
 
-def test_reader_answers_every_case_with_run_git_and_popen_forbidden(root, monkeypatch):
+def test_reader_answers_every_case_with_run_git_and_popen_forbidden(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _stage_index(root, "committed\n")
     _tree(root, "landing wrote this\n")
     _halted_run(root, _sha("old\n"))
@@ -220,7 +220,7 @@ def test_reader_answers_every_case_with_run_git_and_popen_forbidden(root, monkey
     assert _held(root, run_id="no-such-run") == {PATH}
 
 
-def test_the_index_is_parsed_once_across_two_halted_runs_on_one_reader(root, monkeypatch):
+def test_the_index_is_parsed_once_across_two_halted_runs_on_one_reader(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _stage_index(root, "committed\n")
     _tree(root, "landing wrote this\n")
     other = "ask-20261024T000500-cccccc"
@@ -237,7 +237,7 @@ def test_the_index_is_parsed_once_across_two_halted_runs_on_one_reader(root, mon
 
 
 @pytest.mark.parametrize("eol", ["\n", "\r\n"])
-def test_index_blob_equal_to_the_landing_baseline_releases_for_lf_and_crlf_alike(root, eol):
+def test_index_blob_equal_to_the_landing_baseline_releases_for_lf_and_crlf_alike(root, eol) -> None:
     _git(root, "config", "core.autocrlf", "true")
     _stage_index(root, "line one\nline two\n")
     _tree(root, f"line one{eol}line two{eol}")
@@ -246,7 +246,7 @@ def test_index_blob_equal_to_the_landing_baseline_releases_for_lf_and_crlf_alike
     assert _held(root) == set()
 
 
-def test_crlf_converted_landing_baseline_never_releases_through_the_index(root):
+def test_crlf_converted_landing_baseline_never_releases_through_the_index(root) -> None:
     _git(root, "config", "core.autocrlf", "true")
     _stage_index(root, "line one\nline two\n")
     _tree(root, "line one\r\nline two\r\nplus\r\n")

@@ -187,6 +187,180 @@ def tests_exercising_withheld_code(
         return {}
 
 
+def declared_sibling_split(
+    root: Path, message: str, committed: Sequence[str], withheld: Sequence[str],
+) -> list[dict]:
+    """`[{row, committed, withheld}]` for each checkpoint row whose declared writes straddle the
+    committed set and the withheld set: a row lands whole or waits. Rows come from the message
+    subject, their `writes` from the `Checkpoint-Plan:` spine. Zero git spawns; an unreadable plan
+    returns `[]`. Never raises."""
+    try:
+        from coordinator_core.git.checkpoint_guard import checkpoint_row_ids
+        from coordinator_core.ops.dispatch_emit.spine_read import load_rows_memo
+
+        plan, ids = _message_plan(message), set(checkpoint_row_ids((message or "").split("\n", 1)[0]))
+        if not plan or not ids or not withheld or not committed:
+            return []
+        rows = getattr(load_rows_memo((Path(root) / plan).read_text(encoding="utf-8")), "rows", None) or []
+        landed, held = {_norm(p) for p in committed}, {_norm(p) for p in withheld}
+        out: list[dict] = []
+        for row in rows:
+            writes = row.get("writes") if isinstance(row, dict) else None
+            if str(row.get("id") if isinstance(row, dict) else "") not in ids or not isinstance(writes, list):
+                continue
+            norm = [_norm(w) for w in writes if isinstance(w, str)]
+            in_commit, in_held = [w for w in norm if w in landed], [w for w in norm if w in held]
+            if in_commit and in_held:
+                out.append({"row": str(row["id"]), "committed": in_commit, "withheld": in_held})
+        return out
+    except Exception:  # noqa: BLE001 -- unreadable plan: no split is named
+        return []
+
+
+def _definitions(source: Optional[str]) -> tuple[set[str], dict[str, set[str]]]:
+    """`(top-level def/class names, {function name: parameter names})` of `source`; empty when it
+    is absent or does not parse."""
+    import ast
+
+    if not source:
+        return set(), {}
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return set(), {}
+    names: set[str] = set()
+    params: dict[str, set[str]] = {}
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            a = node.args
+            params.setdefault(node.name, set()).update(
+                x.arg for x in [*a.posonlyargs, *a.args, *a.kwonlyargs]
+            )
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            names.add(node.name)
+        elif isinstance(node, ast.Assign):
+            names.update(t.id for t in node.targets if isinstance(t, ast.Name))
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            names.add(node.target.id)
+    return names, params
+
+
+def _new_definitions(live: Optional[str], head: Optional[str]) -> tuple[set[str], dict[str, set[str]]]:
+    """Names and per-function parameters present in `live` and absent from `head`."""
+    live_names, live_params = _definitions(live)
+    head_names, head_params = _definitions(head)
+    new_params = {
+        fn: ps - head_params.get(fn, set()) for fn, ps in live_params.items()
+        if ps - head_params.get(fn, set())
+    }
+    return live_names - head_names, new_params
+
+
+def _uses_new_definition(
+    source: str, module: str, new_names: set[str], new_params: dict[str, set[str]],
+) -> Optional[str]:
+    """What `source` uses from `module`'s new definitions, or None. A consumer must import `module`
+    (dotted) by `import m`, `from m import x` or `from parent import leaf`. Relative imports
+    (`from . import x`) are not resolved, so such a consumer is not held; an attribute or keyword
+    match is by name alone, so an unrelated same-named attribute over-holds (the safe side)."""
+    import ast
+
+    try:
+        tree = ast.parse(source)
+    except (SyntaxError, ValueError):
+        return None
+    parent, _, leaf = module.rpartition(".")
+    imported = False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level == 0:
+            if node.module == module:
+                imported = True
+                for alias in node.names:
+                    if alias.name in new_names:
+                        return f"imports {module}.{alias.name}"
+            elif node.module == parent and any(a.name == leaf for a in node.names):
+                imported = True
+        elif isinstance(node, ast.Import) and any(a.name == module for a in node.names):
+            imported = True
+    if not imported:
+        return None
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Attribute) and node.attr in new_names:
+            return f"uses {module}.{node.attr}"
+        if isinstance(node, ast.Call):
+            fn = node.func
+            callee = fn.id if isinstance(fn, ast.Name) else fn.attr if isinstance(fn, ast.Attribute) else None
+            fresh = new_params.get(callee or "", set())
+            for kw in node.keywords:
+                if kw.arg and kw.arg in fresh:
+                    return f"calls {callee}(..., {kw.arg}=...)"
+    return None
+
+
+def consumers_of_withheld_definitions(
+    root: Path, paths: Sequence[str], withheld: Sequence[str], blobs: Optional[dict] = None,
+) -> dict[str, str]:
+    """`{path: why}` for each staged `.py` in `paths` that imports a withheld `.py` and uses a
+    name or keyword that exists only in that withheld path's worktree content (absent from HEAD).
+    A withheld consumer is itself a producer for the next pass, so the result is a fixpoint. Reads
+    objects in-process, zero git spawns; never raises, and an unreadable path judges nothing."""
+    try:
+        from coordinator_core.git.git_objects import read_object
+        from coordinator_core.git.git_dir import resolve_git_common_dir
+        from coordinator_core.git.git_state import head_blobs
+
+        root = Path(root)
+        common = resolve_git_common_dir(root)
+        blobs = {_norm(k): v for k, v in (blobs or {}).items()}
+        held = {_norm(p) for p in withheld if _norm(p).endswith(".py")}
+        staged = [_norm(p) for p in paths if _norm(p).endswith(".py") and _norm(p) not in held]
+        if not held or not staged:
+            return {}
+
+        def text(blob: Optional[str]) -> Optional[str]:
+            got = read_object(common, blob) if blob else None
+            return got[1].decode("utf-8", "replace") if got else None
+
+        heads = head_blobs(root, sorted(held | set(staged)))
+
+        def live(path: str) -> Optional[str]:
+            try:
+                return (root / path).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                return None
+
+        def producer(path: str) -> tuple[set[str], dict[str, set[str]]]:
+            return _new_definitions(live(path), text(heads[path][1]) if path in heads else None)
+
+        sources = {
+            p: (text(blobs[p]) if p in blobs else live(p)) for p in staged
+        }
+        found: dict[str, str] = {}
+        grew = True
+        while grew:
+            grew = False
+            for prod in sorted(held):
+                names, params = producer(prod)
+                if not names and not params:
+                    continue
+                module = prod[:-3].replace("/", ".")
+                if module.endswith(".__init__"):
+                    module = module[: -len(".__init__")]
+                for path in staged:
+                    src = sources.get(path)
+                    if path in found or not src:
+                        continue
+                    why = _uses_new_definition(src, module, names, params)
+                    if why:
+                        found[path] = f"{why}, defined only in withheld {prod}"
+                        held.add(path)
+                        grew = True
+        return found
+    except Exception:  # noqa: BLE001 -- unjudgeable: nothing extra is withheld
+        return {}
+
+
 NO_PRINT_REASON = "no write-time print of this run: the run's own write of this path was not recorded"
 
 
@@ -235,14 +409,53 @@ def withhold_head_equal(
     return {p: s for p, s in blobs.items() if p not in same}, same
 
 
+def _apply_peer_recorded(
+    root: Path, run_id: str, paths: Sequence[str], blobs: dict[str, str], withheld: list[str],
+    why: dict[str, str],
+) -> None:
+    """For each `paths` entry the write-print split calls wholly the run's own, `checkpoint_candidates`
+    judges the same bytes by what runs recorded: a hunk a named peer run recorded is left out of the
+    path's blob (it stays dirty in the worktree), and a path whose every hunk lacks the run's record
+    while a peer's is named is withheld naming lines and owner. A hunk owned by `unknown` changes
+    nothing: write-print attribution stands. Never raises; an unwritable blob withholds."""
+    if not paths:
+        return
+    try:
+        from coordinator_core.git.git_dir import resolve_git_common_dir
+        from coordinator_core.git.git_objects import write_object
+        from coordinator_core.ops.dispatch_emit.own_hunk_candidate import UNKNOWN_OWNER
+        from coordinator_core.ops.dispatch_emit.terminal_commit_checkpoints import checkpoint_candidates
+    except ImportError:  # candidate reader not landed with this module: write-print attribution stands
+        return
+
+    def named(entries: object) -> list[dict]:
+        return [e for e in entries or [] if isinstance(e, dict) and e.get("owner") not in (None, UNKNOWN_OWNER)]
+
+    for path, res in checkpoint_candidates(root, run_id, paths).items():
+        if "refused" in res:
+            peers = named(res.get("foreign"))
+            if peers:
+                withheld.append(path)
+                why[path] = "hunk a peer run recorded: " + ", ".join(
+                    f"lines {e['lines']} of run {e['owner']}" for e in peers
+                )
+        elif named(res.get("excluded")):
+            try:
+                blobs[path] = write_object(resolve_git_common_dir(root), b"blob", res["bytes"])
+            except OSError:
+                withheld.append(path)
+                why[path] = "candidate blob unwritable"
+
+
 def checkpoint_own_blobs(
     root: Path, run_id: Optional[str], paths: Sequence[str], message: str = "",
     reasons: Optional[dict[str, str]] = None,
 ) -> tuple[dict[str, str], list[str]]:
     """`(supplied_blobs, withheld)`: `{path: blob sha}` for each tracked path whose worktree carries
     foreign hunks beside the run's own (the blob is HEAD plus the own hunks only), and the paths
-    held whole off the commit. A path with no diff, absent from HEAD, or wholly the run's own
-    appears in neither. A diffed path the run has no write-time print for (`run_write_prints`) is
+    held whole off the commit. A path with no diff or absent from HEAD appears in neither; a path
+    wholly the run's own by write-print appears in neither unless `checkpoint_candidates` names a
+    peer-recorded hunk in it (blob without that hunk, or withheld). A diffed path the run has no write-time print for (`run_write_prints`) is
     withheld whole and named: its hunks cannot be told from a peer's, unless a chunk credited for the
     run declares the path (an earlier pass wrote it; claims alone attribute it). `message` supplies the
     `Checkpoint-Plan:` value that scopes the peer-hold read. A `reasons` dict, when given, receives
@@ -284,6 +497,7 @@ def checkpoint_own_blobs(
         holders: dict[str, dict[str, bool]] = {}
         for path, sibling in pairs:
             holders.setdefault(_norm(path), {})[sibling] = True
+        whole: list[str] = []
         for path in dict.fromkeys(pending):
             diff = diffs[path]
             hunks = list(diff.hunks)
@@ -295,6 +509,10 @@ def checkpoint_own_blobs(
                 if split.nonrun:
                     why[path] = _nonrun_reason(split.nonrun)
                 blobs[path] = own_hunk_stage.own_blob(root, path, diff.head_bytes, split.own)
+            else:
+                whole.append(path)
+        _apply_peer_recorded(root, run_id, whole, blobs, withheld, why)
     except Exception:  # noqa: BLE001 -- unknown holds
+        why.update({p: "attribution read failed" for p in wanted if p not in why})
         return {}, sorted(set(wanted))
     return blobs, sorted(set(withheld))

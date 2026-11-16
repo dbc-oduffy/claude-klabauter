@@ -9,6 +9,7 @@ import psutil
 import pytest
 
 from coordinator_core.ops.workflow_fire import fire, headless, notify
+from pathlib import Path
 
 
 def record(**extra):
@@ -19,12 +20,12 @@ def record(**extra):
 
 
 @pytest.fixture(autouse=True)
-def preserve_headless_semantics(monkeypatch):
+def preserve_headless_semantics(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fire, "_refresh_record_state", lambda *a: pytest.fail("Claude log classification"))
     monkeypatch.setattr(fire, "_write_record", lambda *a: pytest.fail("Claude annotation on write"))
 
 
-def test_live_writer_defers_shared_delivery_without_record_changes(tmp_path, monkeypatch):
+def test_live_writer_defers_shared_delivery_without_record_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "fire.json"
     value = record(pid=os.getpid(), pid_birth=psutil.Process().create_time())
     headless._save(path, value)
@@ -34,7 +35,7 @@ def test_live_writer_defers_shared_delivery_without_record_changes(tmp_path, mon
     assert path.read_bytes() == before
 
 
-def test_released_writer_uses_existing_stable_id_and_preserves_landing(tmp_path, monkeypatch):
+def test_released_writer_uses_existing_stable_id_and_preserves_landing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "fire.json"
     value = record(notify_owner_pid=os.getpid(), notify_owner_released=True)
     headless._save(path, value)
@@ -49,7 +50,7 @@ def test_released_writer_uses_existing_stable_id_and_preserves_landing(tmp_path,
     assert len(delivered) == 1
 
 
-def test_post_owner_read_keeps_final_checkpoint_written_during_death_probe(tmp_path, monkeypatch):
+def test_post_owner_read_keeps_final_checkpoint_written_during_death_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "fire.json"
     stale = record(state="running", pid=123)
     final = record(notified_at="accepted", notify_status="queued", landing={"sha": "final-sha"})
@@ -63,7 +64,7 @@ def test_post_owner_read_keeps_final_checkpoint_written_during_death_probe(tmp_p
     assert fire._read_record(path) == final
 
 
-def test_dead_before_terminal_write_reports_incomplete_without_claude_envelope(tmp_path, monkeypatch):
+def test_dead_before_terminal_write_reports_incomplete_without_claude_envelope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "fire.json"
     value = record(state="running")
     headless._save(path, value)
@@ -75,13 +76,13 @@ def test_dead_before_terminal_write_reports_incomplete_without_claude_envelope(t
     assert "Workflow incomplete" in delivered[0].content and "driver-done" not in delivered[0].content
 
 
-def test_shared_kernel_claim_serializes_owner_and_recovery_actors(tmp_path, monkeypatch):
+def test_shared_kernel_claim_serializes_owner_and_recovery_actors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path / "fire.json"
     value = record(notify_owner_released=True)
     headless._save(path, value)
     entered, release = threading.Event(), threading.Event()
     deliveries = []
-    def deliver(message):
+    def deliver(message) -> SimpleNamespace:
         deliveries.append(message)
         entered.set()
         assert release.wait(2)
@@ -98,7 +99,7 @@ def test_shared_kernel_claim_serializes_owner_and_recovery_actors(tmp_path, monk
         assert first.result(timeout=2)["notified_at"]
 
 
-def test_pid_reuse_rejects_old_birth_and_unreadable_identity_defers(monkeypatch):
+def test_pid_reuse_rejects_old_birth_and_unreadable_identity_defers(monkeypatch: pytest.MonkeyPatch) -> None:
     process = SimpleNamespace(create_time=lambda: 20, is_running=lambda: True, status=lambda: "running")
     monkeypatch.setattr(psutil, "Process", lambda pid: process)
     assert not notify._headless_owner_live(record(pid=123, pid_birth=10))
@@ -109,7 +110,7 @@ def test_pid_reuse_rejects_old_birth_and_unreadable_identity_defers(monkeypatch)
     assert notify._headless_owner_live(record(pid=123))
 
 
-def test_unaddressed_headless_history_avoids_legacy_fastpath_classification(tmp_path):
+def test_unaddressed_headless_history_avoids_legacy_fastpath_classification(tmp_path: Path) -> None:
     path = tmp_path / "fire.json"
     value = record(notify_to=None)
     headless._save(path, value)

@@ -17,6 +17,7 @@ import pytest
 
 from coordinator_core.ops.fleet._outbox_frontmatter_rules import OUTBOX_REQUIRED_FIELDS
 from coordinator_core.write_guards import nudge_outbox_draft_frontmatter_shape as guard
+from pathlib import Path
 
 _VALID_DRAFT = (
     "---\n"
@@ -57,7 +58,7 @@ def _outbox_dir(tmp_path):
 
 
 class TestFires:
-    def test_fires_on_write_with_status_open(self, tmp_path):
+    def test_fires_on_write_with_status_open(self, tmp_path: Path) -> None:
         d = _outbox_dir(tmp_path)
         target = d / "some-topic.md"
         result = guard.check(
@@ -66,7 +67,7 @@ class TestFires:
         text = _advisory_text(result)
         assert "status must be 'draft'" in text
 
-    def test_fires_on_edit_flipping_status_to_open(self, tmp_path):
+    def test_fires_on_edit_flipping_status_to_open(self, tmp_path: Path) -> None:
         d = _outbox_dir(tmp_path)
         target = d / "some-topic.md"
         target.write_text(_VALID_DRAFT)
@@ -83,7 +84,7 @@ class TestFires:
         text = _advisory_text(result)
         assert "status must be 'draft'" in text
 
-    def test_fires_on_multiedit_flipping_status_to_open(self, tmp_path):
+    def test_fires_on_multiedit_flipping_status_to_open(self, tmp_path: Path) -> None:
         d = _outbox_dir(tmp_path)
         target = d / "some-topic.md"
         target.write_text(_VALID_DRAFT)
@@ -102,7 +103,7 @@ class TestFires:
         assert "status must be 'draft'" in text
 
     @pytest.mark.parametrize("field", OUTBOX_REQUIRED_FIELDS)
-    def test_fires_on_missing_required_field(self, tmp_path, field):
+    def test_fires_on_missing_required_field(self, tmp_path: Path, field) -> None:
         d = _outbox_dir(tmp_path)
         target = d / "some-topic.md"
         line = next(
@@ -117,7 +118,7 @@ class TestFires:
 
 
 class TestSilent:
-    def test_silent_on_valid_draft(self, tmp_path):
+    def test_silent_on_valid_draft(self, tmp_path: Path) -> None:
         d = _outbox_dir(tmp_path)
         target = d / "some-topic.md"
         result = guard.check(
@@ -125,7 +126,7 @@ class TestSilent:
         )
         assert result is None
 
-    def test_silent_on_sent_archive_copy(self, tmp_path):
+    def test_silent_on_sent_archive_copy(self, tmp_path: Path) -> None:
         sent_dir = tmp_path / "state" / "memo-outbox" / "sent"
         sent_dir.mkdir(parents=True)
         target = sent_dir / "some-topic.md"
@@ -135,7 +136,7 @@ class TestSilent:
         )
         assert result is None
 
-    def test_silent_on_path_outside_repo_that_merely_contains_the_shape(self, tmp_path):
+    def test_silent_on_path_outside_repo_that_merely_contains_the_shape(self, tmp_path: Path) -> None:
         repo = tmp_path / "repo"
         (repo / ".git").mkdir(parents=True)
         outside = tmp_path / "elsewhere" / "state" / "memo-outbox"
@@ -150,7 +151,7 @@ class TestSilent:
         )
         assert result is None
 
-    def test_silent_on_non_outbox_path(self, tmp_path):
+    def test_silent_on_non_outbox_path(self, tmp_path: Path) -> None:
         d = tmp_path / "cross-repo" / "inbox"
         d.mkdir(parents=True)
         target = d / "2026-08-07-some-topic.md"
@@ -159,7 +160,7 @@ class TestSilent:
         )
         assert result is None
 
-    def test_silent_when_no_frontmatter_block_yet(self, tmp_path):
+    def test_silent_when_no_frontmatter_block_yet(self, tmp_path: Path) -> None:
         d = _outbox_dir(tmp_path)
         target = d / "some-topic.md"
         result = guard.check(
@@ -169,10 +170,10 @@ class TestSilent:
 
 
 class TestFailOpen:
-    def test_non_write_tool_returns_none(self):
+    def test_non_write_tool_returns_none(self) -> None:
         assert (
             guard.check(_payload("Read", {"file_path": "state/memo-outbox/x.md"})) is None
         )
 
-    def test_missing_file_path_returns_none(self):
+    def test_missing_file_path_returns_none(self) -> None:
         assert guard.check(_payload("Write", {"content": _OPEN_STATUS_DRAFT})) is None

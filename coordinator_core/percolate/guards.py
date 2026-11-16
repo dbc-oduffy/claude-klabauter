@@ -167,6 +167,10 @@ from coordinator_core.percolate.protect import mask_protected_literals
 from coordinator_core.percolate.rewrite_basename import RenameManifest
 from coordinator_core.percolate.surface import STRUCTURAL_NEVER_PUBLISHED_PREFIXES, iter_surface_files
 from coordinator_core.wire_paths import rel_id
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from typing import Iterator
 
 # `.git`/`.fleet-env` are destination-repo plumbing and a dest-local virtualenv,
 # never publish-owned content -- the SAME structural fact
@@ -1253,7 +1257,7 @@ def check_bin_script_self_name_matches_basename(target_root: str | Path, params:
     return GuardResult(kind='bin-script-self-name-matches-basename', ok=True)
 
 
-def _walk_for_guard(root: Path, params: dict):
+def _walk_for_guard(root: Path, params: dict) -> Iterator[Path]:
     """Shared single-discovery-routine walk for checks that scan the target tree.
 
     Delegates entirely to `iter_surface_files` (§ module docstring, one discovery

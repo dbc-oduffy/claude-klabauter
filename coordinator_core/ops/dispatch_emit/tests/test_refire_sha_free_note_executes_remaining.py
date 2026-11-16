@@ -27,8 +27,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 HALTED = "ask-halted"
 FRESH = "warp-fresh-refire"
 REGISTER = {"rows": [{"id": "R1", "source_text": "do the thing", "surface": "internal", "status": "open"}]}
-WRITES = ["pkg/mod.py", "pkg/other.py"]
-WRITES = [*WRITES, "pkg/tests/test_mod.py", "pkg/tests/test_other.py"]
+WRITES = ["pkg/mod.py", "pkg/other.py", "pkg/tests/test_mod.py", "pkg/tests/test_other.py"]
 
 
 def _setup(repo, note, claims="register_claims:\n  rows: [R1]\n"):  # noqa: F811

@@ -57,7 +57,7 @@ def _head_files(root: Path) -> set:
 
 
 @pytest.fixture
-def run(tmp_path, monkeypatch):
+def run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, str]:
     """A repo after a lessons row's fix: declared and undeclared edits, row archived, peer dirt beside."""
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -129,7 +129,7 @@ def _assert_one_commit_holding_the_fix(repo: Path, archived: str, before: int) -
     assert PEER_DIRT in status
 
 
-def test_commit_stage_lands_the_undeclared_fix_and_the_archive_in_one_commit(run):
+def test_commit_stage_lands_the_undeclared_fix_and_the_archive_in_one_commit(run) -> None:
     repo, _profiles, archived = run
     before = int(_git(["rev-list", "--count", "HEAD"], repo))
     target = chan.params_path(repo, RUN)
@@ -141,7 +141,7 @@ def test_commit_stage_lands_the_undeclared_fix_and_the_archive_in_one_commit(run
     _assert_one_commit_holding_the_fix(repo, archived, before)
 
 
-def test_composed_grind_script_calls_the_prewrite_before_the_land_op():
+def test_composed_grind_script_calls_the_prewrite_before_the_land_op() -> None:
     script = _compose()
     start = script.index("async function _terminalCommitCall")
     call = script[start: script.index("function _counts()", start)]
@@ -150,8 +150,8 @@ def test_composed_grind_script_calls_the_prewrite_before_the_land_op():
 
 @pytest.mark.parametrize("params_file_survives", [True, False], ids=["params-file", "evidence"])
 def test_settle_run_without_rows_file_lands_the_undeclared_fix_and_the_archive(
-    run, capsys, params_file_survives
-):
+    run, capsys: pytest.CaptureFixture[str], params_file_survives
+) -> None:
     repo, profiles, archived = run
     before = int(_git(["rev-list", "--count", "HEAD"], repo))
     assert _prewrite(repo) == grind_rows.EXIT_OK
@@ -165,7 +165,7 @@ def test_settle_run_without_rows_file_lands_the_undeclared_fix_and_the_archive(
     _assert_one_commit_holding_the_fix(repo, archived, before)
 
 
-def test_settle_run_never_stages_a_path_no_row_names(run, capsys):
+def test_settle_run_never_stages_a_path_no_row_names(run, capsys: pytest.CaptureFixture[str]) -> None:
     repo, profiles, _archived = run
     assert _prewrite(repo) == grind_rows.EXIT_OK
     chan.params_path(repo, RUN).unlink()
@@ -177,7 +177,7 @@ def test_settle_run_never_stages_a_path_no_row_names(run, capsys):
     assert PEER_DIRT in plan["unclaimed_dirty"] and PEER_DIRT not in plan["rows"][0]["paths"]
 
 
-def test_without_a_fix_paths_record_the_undeclared_fix_stays_unclaimed(run, capsys):
+def test_without_a_fix_paths_record_the_undeclared_fix_stays_unclaimed(run, capsys: pytest.CaptureFixture[str]) -> None:
     repo, profiles, _archived = run
     assert _prewrite(repo) == grind_rows.EXIT_OK
     chan.params_path(repo, RUN).unlink()

@@ -38,6 +38,7 @@ from coordinator_core.bash_guards.dispatch_checks import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -70,26 +71,26 @@ def _make_repo(path: str) -> str:
 
 
 class TestLeadingCdPrefixCwd:
-    def test_no_leading_cd_returns_none(self):
+    def test_no_leading_cd_returns_none(self) -> None:
         assert _bt_leading_cd_prefix_cwd("git commit -m x", "/somewhere") is None
 
-    def test_absolute_leading_cd_resolves(self, tmp_path):
+    def test_absolute_leading_cd_resolves(self, tmp_path: Path) -> None:
         target = str(tmp_path / "fixture")
         assert _bt_leading_cd_prefix_cwd(
             f"cd {target} && git checkout -q .", "/elsewhere"
         ) == os.path.normpath(target)
 
-    def test_glob_target_stays_unresolved(self):
+    def test_glob_target_stays_unresolved(self) -> None:
         assert _bt_leading_cd_prefix_cwd("cd fixture* && git status", "/x") is None
 
-    def test_unexpanded_var_target_stays_unresolved(self):
+    def test_unexpanded_var_target_stays_unresolved(self) -> None:
         assert _bt_leading_cd_prefix_cwd("cd $FIXTURE && git status", "/x") is None
 
 
 class TestCommitScopeFollowsLeadingCd:
     def test_clean_fixture_repo_produces_no_warning_from_the_outer_repo(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         outer = _make_repo(str(tmp_path / "outer"))
         with open(os.path.join(outer, "outer_only.txt"), "w", encoding="utf-8") as fh:
             fh.write("outer staged\n")
@@ -118,7 +119,7 @@ class TestDestructiveGitOrphanRelativeCDirResolvesAgainstPayloadCwd:
     """
 
     @pytest.fixture()
-    def _outer_and_nested_ahead_repo(self, tmp_path):
+    def _outer_and_nested_ahead_repo(self, tmp_path: Path) -> tuple[str, str]:
         outer = _make_repo(str(tmp_path / "outer"))
         _git("branch", "-M", "main", cwd=outer)
 
@@ -133,8 +134,8 @@ class TestDestructiveGitOrphanRelativeCDirResolvesAgainstPayloadCwd:
 
     @pytest.mark.parametrize("c_dir_form", ["reset", "./reset"])
     def test_relative_c_dir_denies_same_as_absolute(
-        self, _outer_and_nested_ahead_repo, monkeypatch, c_dir_form
-    ):
+        self, _outer_and_nested_ahead_repo, monkeypatch: pytest.MonkeyPatch, c_dir_form
+    ) -> None:
         outer, nested = _outer_and_nested_ahead_repo
 
         monkeypatch.chdir(os.path.dirname(outer))
@@ -155,8 +156,8 @@ class TestDestructiveGitOrphanRelativeCDirResolvesAgainstPayloadCwd:
         assert rel_result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
     def test_relative_c_dir_falls_back_to_git_root_when_payload_cwd_absent(
-        self, _outer_and_nested_ahead_repo, monkeypatch
-    ):
+        self, _outer_and_nested_ahead_repo, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         outer, nested = _outer_and_nested_ahead_repo
         monkeypatch.chdir(os.path.dirname(outer))
 
@@ -169,7 +170,7 @@ class TestDestructiveGitOrphanRelativeCDirResolvesAgainstPayloadCwd:
         )
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_relative_c_dir_without_any_base_stays_unresolved(self):
+    def test_relative_c_dir_without_any_base_stays_unresolved(self) -> None:
         from coordinator_core.bash_guards.dispatch_checks import _orphan_c_cwd
 
         assert _orphan_c_cwd("reset", None) == "reset"
@@ -177,8 +178,8 @@ class TestDestructiveGitOrphanRelativeCDirResolvesAgainstPayloadCwd:
 
 class TestDestructiveRevertFollowsLeadingCd:
     def test_clean_fixture_checkout_not_blocked_by_outer_repos_dirt(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         outer = _make_repo(str(tmp_path / "outer"))
         with open(os.path.join(outer, "dirty.txt"), "w", encoding="utf-8") as fh:
             fh.write("uncommitted in the OUTER repo\n")
@@ -196,11 +197,11 @@ class TestDestructiveRevertFollowsLeadingCd:
 
 class TestBtCdChainCwdBefore:
 
-    def test_no_prior_cd_segment_returns_none(self):
+    def test_no_prior_cd_segment_returns_none(self) -> None:
         segments = ["rm -rf x", "git reset --hard main"]
         assert _bt_cd_chain_cwd_before(segments, 1, "/base") is None
 
-    def test_single_leading_cd_resolves(self, tmp_path):
+    def test_single_leading_cd_resolves(self, tmp_path: Path) -> None:
         target = str(tmp_path / "fixture")
         segments = [f"cd {target} ", " git reset --hard main"]
         assert _bt_cd_chain_cwd_before(segments, 1, "/elsewhere") == os.path.normpath(
@@ -208,8 +209,8 @@ class TestBtCdChainCwdBefore:
         )
 
     def test_chain_with_intervening_non_cd_command_resolves_the_inner_cd(
-        self, tmp_path
-    ):
+        self, tmp_path: Path
+    ) -> None:
         outer = str(tmp_path / "scratch")
         segments = [
             f"cd {outer} ",
@@ -222,7 +223,7 @@ class TestBtCdChainCwdBefore:
             segments, 4, "/elsewhere"
         ) == os.path.normpath(os.path.join(outer, "sub"))
 
-    def test_unresolvable_outer_cd_abandons_the_whole_chain(self, tmp_path):
+    def test_unresolvable_outer_cd_abandons_the_whole_chain(self, tmp_path: Path) -> None:
         segments = [
             "cd $TEMP ",
             " cd sub",
@@ -230,7 +231,7 @@ class TestBtCdChainCwdBefore:
         ]
         assert _bt_cd_chain_cwd_before(segments, 2, "/elsewhere") is None
 
-    def test_glob_target_abandons_the_whole_chain(self, tmp_path):
+    def test_glob_target_abandons_the_whole_chain(self, tmp_path: Path) -> None:
         segments = ["cd fixture* ", " git status"]
         assert _bt_cd_chain_cwd_before(segments, 1, "/elsewhere") is None
 
@@ -245,8 +246,8 @@ class TestDestructiveGitOrphanFollowsCdChain:
     in."""
 
     def test_orphaning_reset_in_target_repo_is_not_judged_against_engine_tree(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         engine = _make_repo(str(tmp_path / "engine"))
         _git("branch", "-M", "main", cwd=engine)
         _git("checkout", "-qb", "candidate", cwd=engine)
@@ -272,8 +273,8 @@ class TestDestructiveGitOrphanFollowsCdChain:
         )
 
     def test_orphaning_reset_in_target_repo_is_still_denied_when_engine_tree_is_clean(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         engine = _make_repo(str(tmp_path / "engine"))
 
         scratch = str(tmp_path / "scratch")

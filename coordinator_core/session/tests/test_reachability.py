@@ -5,9 +5,11 @@ import hashlib
 
 from coordinator_core.session import harness_registry as hr
 from coordinator_core.session import reachability
+from pathlib import Path
+import pytest
 
 
-def _record(name, socket, cwd="/repo", pid=1, start_epoch=1000.0):
+def _record(name, socket, cwd: str | None = "/repo", pid: int = 1, start_epoch: float = 1000.0):
     return hr.RegistryRecord(
         pid=pid,
         start_epoch=start_epoch,
@@ -22,7 +24,7 @@ def _full12(socket: str) -> str:
 
 
 class TestReachableOutcome:
-    def test_unique_name_still_resolves_with_ref_qualified_address(self, monkeypatch):
+    def test_unique_name_still_resolves_with_ref_qualified_address(self, monkeypatch: pytest.MonkeyPatch) -> None:
         socket = "/tmp/cc-socks/57557.sock"
         snap = {
             "sid-a": _record("claude-klabauter-57", socket),
@@ -36,7 +38,7 @@ class TestReachableOutcome:
         expected_ref = _full12(socket)[:6]
         assert result.address == f"claude-klabauter-57 [{expected_ref}]"
 
-    def test_shared_name_appends_widened_ref(self, monkeypatch):
+    def test_shared_name_appends_widened_ref(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-89", "/tmp/cc-socks/aaa.sock"),
             "sid-b": _record("claude-klabauter-89", "/tmp/cc-socks/bbb.sock"),
@@ -61,7 +63,7 @@ class TestReachableOutcome:
 
 
 class TestRefWideningLoop:
-    def test_widens_past_six_hex_chars_on_prefix_collision(self, monkeypatch):
+    def test_widens_past_six_hex_chars_on_prefix_collision(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Replaces a probe-and-`pytest.skip`
         # search for a real sha256 collision with a monkeypatched
         # `_full_hash12` carrying a HARDCODED 6-hex-prefix collision, so the
@@ -86,7 +88,7 @@ class TestRefWideningLoop:
 
 
 class TestNotReachable:
-    def test_no_matching_record_is_not_reachable(self, monkeypatch):
+    def test_no_matching_record_is_not_reachable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(hr, "snapshot", lambda: {})
         monkeypatch.setattr(hr, "self_record", lambda: None)
 
@@ -94,13 +96,13 @@ class TestNotReachable:
         assert result.outcome == "not_reachable"
         assert result.address is None
 
-    def test_empty_owner_id_is_not_reachable(self, monkeypatch):
+    def test_empty_owner_id_is_not_reachable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(hr, "snapshot", lambda: {})
         monkeypatch.setattr(hr, "self_record", lambda: None)
 
         assert reachability.resolve_address("").outcome == "not_reachable"
 
-    def test_record_missing_name_or_socket_degrades_not_reachable(self, monkeypatch):
+    def test_record_missing_name_or_socket_degrades_not_reachable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {"sid-a": _record(None, None)}
         monkeypatch.setattr(hr, "snapshot", lambda: snap)
         monkeypatch.setattr(hr, "self_record", lambda: None)
@@ -111,7 +113,7 @@ class TestNotReachable:
 
 class TestAmbiguousContractShape:
 
-    def test_unresolvable_candidate_address_is_none_not_the_raw_uuid(self, monkeypatch):
+    def test_unresolvable_candidate_address_is_none_not_the_raw_uuid(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "5d3d5763-aaaa": _record("claude-klabauter-a1", "/sock/a.sock"),
             "5d3d5763-bbbb": _record(None, None),
@@ -129,8 +131,8 @@ class TestAmbiguousContractShape:
         assert by_id["5d3d5763-aaaa"].address == f"claude-klabauter-a1 [{expected_ref}]"
 
     def test_unresolvable_candidate_name_and_ref_are_empty_string_not_none(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         snap = {
             "5d3d5763-aaaa": _record("claude-klabauter-a1", "/sock/a.sock"),
             "5d3d5763-bbbb": _record(None, None),
@@ -149,7 +151,7 @@ class TestAmbiguousContractShape:
 
 
 class TestPrefixRemoved:
-    def test_short_prefix_no_longer_matches_is_not_reachable(self, monkeypatch):
+    def test_short_prefix_no_longer_matches_is_not_reachable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "5d3d5763-aaaa": _record("claude-klabauter-a1", "/sock/a.sock"),
         }
@@ -160,7 +162,7 @@ class TestPrefixRemoved:
         assert result.outcome == "not_reachable"
         assert result.address is None
 
-    def test_exact_full_uuid_match_still_resolves(self, monkeypatch):
+    def test_exact_full_uuid_match_still_resolves(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "abc123": _record("claude-klabauter-e1", "/sock/e.sock"),
             "abc123-longer-id": _record("claude-klabauter-e2", "/sock/f.sock"),
@@ -174,7 +176,7 @@ class TestPrefixRemoved:
 
 
 class TestOwnSession:
-    def test_own_session_id_is_distinguished_from_not_reachable(self, monkeypatch):
+    def test_own_session_id_is_distinguished_from_not_reachable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "self-sid": _record("claude-klabauter-84", "/sock/self.sock"),
         }
@@ -187,8 +189,8 @@ class TestOwnSession:
         assert result.address is None
 
     def test_socket_env_match_classifies_own_session_when_self_record_declines(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # Regression test for the measured defect: self_record() declines
         # (e.g. CLAUDE_PID env-miss:name-mismatch on a correct pid) but the
         # socket env var matches the resolved record's own socket -- must
@@ -205,7 +207,7 @@ class TestOwnSession:
         assert result.session_id == "self-sid"
         assert result.address is None
 
-    def test_socket_env_unset_and_self_record_none_stays_reachable(self, monkeypatch):
+    def test_socket_env_unset_and_self_record_none_stays_reachable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-57", "/sock/a.sock"),
         }
@@ -217,7 +219,7 @@ class TestOwnSession:
         assert result.outcome == "reachable"
         assert result.session_id == "sid-a"
 
-    def test_none_socket_record_and_unset_env_never_match(self, monkeypatch):
+    def test_none_socket_record_and_unset_env_never_match(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-57", None),
         }
@@ -228,7 +230,7 @@ class TestOwnSession:
         result = reachability.resolve_address("sid-a")
         assert result.outcome == "not_reachable"
 
-    def test_socket_env_set_but_differs_stays_reachable(self, monkeypatch):
+    def test_socket_env_set_but_differs_stays_reachable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-57", "/sock/a.sock"),
         }
@@ -242,7 +244,7 @@ class TestOwnSession:
 
 
 class TestDegradedRegistrySources:
-    def test_missing_sessions_dir_degrades_not_reachable(self, monkeypatch, tmp_path):
+    def test_missing_sessions_dir_degrades_not_reachable(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         missing = tmp_path / "does-not-exist"
         monkeypatch.setattr(hr, "registry_dir", lambda: missing)
         monkeypatch.setattr(
@@ -253,7 +255,7 @@ class TestDegradedRegistrySources:
         result = reachability.resolve_address("anything")
         assert result.outcome == "not_reachable"
 
-    def test_unreadable_and_malformed_records_are_skipped_not_fatal(self, monkeypatch, tmp_path):
+    def test_unreadable_and_malformed_records_are_skipped_not_fatal(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         import json
         import time
 
@@ -283,7 +285,7 @@ class TestDegradedRegistrySources:
 
 class TestResolveCandidates:
 
-    def test_resolves_every_live_session_in_the_snapshot(self, monkeypatch):
+    def test_resolves_every_live_session_in_the_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-57", "/sock/a.sock"),
             "sid-b": _record("claude-klabauter-89", "/sock/b.sock"),
@@ -293,7 +295,7 @@ class TestResolveCandidates:
         candidates = reachability.resolve_candidates(snap)
         assert {c.session_id for c in candidates} == {"sid-a", "sid-b"}
 
-    def test_omits_a_session_lacking_usable_name_or_socket(self, monkeypatch):
+    def test_omits_a_session_lacking_usable_name_or_socket(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-57", "/sock/a.sock"),
             "sid-b": _record(None, None),
@@ -303,7 +305,7 @@ class TestResolveCandidates:
         candidates = reachability.resolve_candidates(snap)
         assert {c.session_id for c in candidates} == {"sid-a"}
 
-    def test_matches_resolve_address_for_the_same_session(self, monkeypatch):
+    def test_matches_resolve_address_for_the_same_session(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-89", "/sock/aaa.sock"),
             "sid-b": _record("claude-klabauter-89", "/sock/bbb.sock"),
@@ -320,7 +322,7 @@ class TestResolveCandidates:
 
 class TestResolveAdvisoryAddress:
 
-    def test_reachable_returns_bare_address(self, monkeypatch):
+    def test_reachable_returns_bare_address(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {"sid-a": _record("claude-klabauter-57", "/sock/a.sock")}
         monkeypatch.setattr(hr, "snapshot", lambda: snap)
         monkeypatch.setattr(hr, "self_record", lambda: None)
@@ -330,20 +332,20 @@ class TestResolveAdvisoryAddress:
             f"claude-klabauter-57 [{expected_ref}]"
         )
 
-    def test_own_session_returns_marker_string(self, monkeypatch):
+    def test_own_session_returns_marker_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {"self-sid": _record("claude-klabauter-84", "/sock/self.sock")}
         monkeypatch.setattr(hr, "snapshot", lambda: snap)
         monkeypatch.setattr(hr, "self_record", lambda: ("self-sid", snap["self-sid"]))
 
         assert reachability.resolve_advisory_address("self-sid") == "<this session>"
 
-    def test_not_reachable_returns_empty_string(self, monkeypatch):
+    def test_not_reachable_returns_empty_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(hr, "snapshot", lambda: {})
         monkeypatch.setattr(hr, "self_record", lambda: None)
 
         assert reachability.resolve_advisory_address("no-such-session") == ""
 
-    def test_falsy_session_id_returns_empty_string_without_a_lookup(self, monkeypatch):
+    def test_falsy_session_id_returns_empty_string_without_a_lookup(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _boom():
             raise AssertionError("must not query the registry for a falsy id")
 
@@ -354,7 +356,7 @@ class TestResolveAdvisoryAddress:
 
 class TestResolveAddressesBulk:
 
-    def test_resolves_every_id_off_one_snapshot_call(self, monkeypatch):
+    def test_resolves_every_id_off_one_snapshot_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-57", "/sock/a.sock"),
             "sid-b": _record("claude-klabauter-89", "/sock/b.sock"),
@@ -374,7 +376,7 @@ class TestResolveAddressesBulk:
         expected_b = f"claude-klabauter-89 [{_full12('/sock/b.sock')[:6]}]"
         assert result == {"sid-a": expected_a, "sid-b": expected_b}
 
-    def test_unresolvable_and_absent_ids_map_to_empty_string(self, monkeypatch):
+    def test_unresolvable_and_absent_ids_map_to_empty_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {"sid-a": _record("claude-klabauter-57", "/sock/a.sock")}
         monkeypatch.setattr(hr, "snapshot", lambda: snap)
         monkeypatch.setattr(hr, "self_record", lambda: None)
@@ -382,7 +384,7 @@ class TestResolveAddressesBulk:
         result = reachability.resolve_addresses_bulk(["sid-a", "sid-missing"])
         assert result["sid-missing"] == ""
 
-    def test_self_session_id_maps_to_marker_string(self, monkeypatch):
+    def test_self_session_id_maps_to_marker_string(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {"self-sid": _record("claude-klabauter-84", "/sock/self.sock")}
         monkeypatch.setattr(hr, "snapshot", lambda: snap)
         monkeypatch.setattr(hr, "self_record", lambda: ("self-sid", snap["self-sid"]))
@@ -390,7 +392,7 @@ class TestResolveAddressesBulk:
         result = reachability.resolve_addresses_bulk(["self-sid"])
         assert result["self-sid"] == "<this session>"
 
-    def test_empty_input_list_returns_empty_dict(self, monkeypatch):
+    def test_empty_input_list_returns_empty_dict(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(hr, "snapshot", lambda: {})
         monkeypatch.setattr(hr, "self_record", lambda: None)
 
@@ -399,7 +401,7 @@ class TestResolveAddressesBulk:
 
 class TestReplayTodayCase:
 
-    def test_claimed_by_uuid_resolves_to_one_address(self, monkeypatch):
+    def test_claimed_by_uuid_resolves_to_one_address(self, monkeypatch: pytest.MonkeyPatch) -> None:
         claimed_by = "5739c815-7df8-4798-baab-5caa9c19a2d5"
         snap = {
             claimed_by: _record("claude-klabauter-d8", "/sock/d8.sock"),
@@ -417,8 +419,8 @@ class TestReplayTodayCase:
 class TestNotReachableReasonIsNamed:
 
     def test_live_record_without_socket_reports_messaging_unavailable(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         snap = {
             "sid-live": _record("claude-klabauter-11", None),
             "sid-other": _record("claude-klabauter-22", None),
@@ -431,7 +433,7 @@ class TestNotReachableReasonIsNamed:
         assert result.address is None
         assert result.reason == reachability.NotReachableReason.MESSAGING_UNAVAILABLE
 
-    def test_absent_record_reports_no_live_record(self, monkeypatch):
+    def test_absent_record_reports_no_live_record(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {"sid-live": _record("claude-klabauter-11", "/sock/a.sock")}
         monkeypatch.setattr(hr, "snapshot", lambda: snap)
         monkeypatch.setattr(hr, "self_record", lambda: None)
@@ -440,7 +442,7 @@ class TestNotReachableReasonIsNamed:
         assert result.outcome == "not_reachable"
         assert result.reason == reachability.NotReachableReason.NO_LIVE_RECORD
 
-    def test_socketless_peer_among_socketed_peers_is_a_peer_fact(self, monkeypatch):
+    def test_socketless_peer_among_socketed_peers_is_a_peer_fact(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-bound": _record("claude-klabauter-11", "/sock/a.sock"),
             "sid-unbound": _record("claude-klabauter-22", None),
@@ -453,8 +455,8 @@ class TestNotReachableReasonIsNamed:
         assert result.reason == reachability.NotReachableReason.PEER_INBOX_ABSENT
 
     def test_named_record_with_socket_but_no_name_reports_no_peer_name(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         snap = {"sid-nameless": _record(None, "/sock/a.sock")}
         monkeypatch.setattr(hr, "snapshot", lambda: snap)
         monkeypatch.setattr(hr, "self_record", lambda: None)
@@ -463,7 +465,7 @@ class TestNotReachableReasonIsNamed:
         assert result.outcome == "not_reachable"
         assert result.reason == reachability.NotReachableReason.NO_PEER_NAME
 
-    def test_empty_owner_id_reason_says_nothing_about_the_registry(self, monkeypatch):
+    def test_empty_owner_id_reason_says_nothing_about_the_registry(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _explode():
             raise AssertionError("snapshot() must not be read for a falsy owner id")
 
@@ -474,7 +476,7 @@ class TestNotReachableReasonIsNamed:
         assert result.outcome == "not_reachable"
         assert result.reason == reachability.NotReachableReason.NO_OWNER_ID
 
-    def test_reachable_and_own_session_carry_no_reason(self, monkeypatch):
+    def test_reachable_and_own_session_carry_no_reason(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-self": _record("claude-klabauter-11", "/sock/self.sock"),
             "sid-peer": _record("claude-klabauter-22", "/sock/peer.sock"),
@@ -498,7 +500,7 @@ class TestFallbackChannel:
     messaging-unavailable.md`'s EM Response, Finding 1's correction.
     """
 
-    def test_same_working_tree_target_gets_peer_notice(self, monkeypatch, tmp_path):
+    def test_same_working_tree_target_gets_peer_notice(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         this_repo = tmp_path / "this-repo"
         (this_repo / "subdir").mkdir(parents=True)
         snap = {
@@ -512,7 +514,7 @@ class TestFallbackChannel:
         assert result.reason == reachability.NotReachableReason.MESSAGING_UNAVAILABLE
         assert result.fallback_channel == reachability.FallbackChannel.PEER_NOTICE
 
-    def test_cross_repo_target_gets_memo_channel(self, monkeypatch, tmp_path):
+    def test_cross_repo_target_gets_memo_channel(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         this_repo = tmp_path / "this-repo"
         other_repo = tmp_path / "other-repo"
         this_repo.mkdir()
@@ -529,8 +531,8 @@ class TestFallbackChannel:
         assert result.fallback_channel == reachability.FallbackChannel.CROSS_REPO_MEMO
 
     def test_absent_cwd_never_crashes_and_defaults_to_memo_channel(
-        self, monkeypatch, tmp_path
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         # An unconfirmed location must not be read as "same tree" -- a
         # wrong PEER_NOTICE pointer sends the reader down a channel that
         # structurally cannot deliver, worse than the collapsed-reason
@@ -549,8 +551,8 @@ class TestFallbackChannel:
         assert result.fallback_channel == reachability.FallbackChannel.CROSS_REPO_MEMO
 
     def test_missing_registry_record_never_crashes_and_carries_no_channel(
-        self, monkeypatch, tmp_path
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         # NO_LIVE_RECORD: there is no target to compare a working tree
         # against at all -- not this field's arm, no fallback_channel.
         snap = {"sid-live": _record("claude-klabauter-11", "/sock/a.sock")}
@@ -561,7 +563,7 @@ class TestFallbackChannel:
         assert result.reason == reachability.NotReachableReason.NO_LIVE_RECORD
         assert result.fallback_channel is None
 
-    def test_peer_inbox_absent_carries_no_fallback_channel(self, monkeypatch, tmp_path):
+    def test_peer_inbox_absent_carries_no_fallback_channel(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         snap = {
             "sid-bound": _record("claude-klabauter-11", "/sock/a.sock"),
             "sid-unbound": _record("claude-klabauter-22", None),
@@ -573,7 +575,7 @@ class TestFallbackChannel:
         assert result.reason == reachability.NotReachableReason.PEER_INBOX_ABSENT
         assert result.fallback_channel is None
 
-    def test_no_peer_name_carries_no_fallback_channel(self, monkeypatch, tmp_path):
+    def test_no_peer_name_carries_no_fallback_channel(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         snap = {"sid-nameless": _record(None, "/sock/a.sock")}
         monkeypatch.setattr(hr, "snapshot", lambda: snap)
         monkeypatch.setattr(hr, "self_record", lambda: None)
@@ -582,7 +584,7 @@ class TestFallbackChannel:
         assert result.reason == reachability.NotReachableReason.NO_PEER_NAME
         assert result.fallback_channel is None
 
-    def test_no_owner_id_carries_no_fallback_channel(self, monkeypatch):
+    def test_no_owner_id_carries_no_fallback_channel(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _explode():
             raise AssertionError("snapshot() must not be read for a falsy owner id")
 
@@ -595,27 +597,27 @@ class TestFallbackChannel:
 
 
 class TestMessagingAvailablePredicate:
-    def test_false_when_no_record_carries_a_socket(self):
+    def test_false_when_no_record_carries_a_socket(self) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-11", None),
             "sid-b": _record("claude-klabauter-22", None),
         }
         assert reachability.messaging_available(snap) is False
 
-    def test_true_when_any_record_carries_a_socket(self):
+    def test_true_when_any_record_carries_a_socket(self) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-11", None),
             "sid-b": _record("claude-klabauter-22", "/sock/b.sock"),
         }
         assert reachability.messaging_available(snap) is True
 
-    def test_empty_snapshot_is_unavailable(self):
+    def test_empty_snapshot_is_unavailable(self) -> None:
         assert reachability.messaging_available({}) is False
 
 
 class TestNoSubstituteRefWhenSocketAbsent:
 
-    def test_socketless_record_is_omitted_from_resolve_candidates(self):
+    def test_socketless_record_is_omitted_from_resolve_candidates(self) -> None:
         snap = {
             "sid-bound": _record("claude-klabauter-11", "/sock/a.sock"),
             "sid-unbound": _record("claude-klabauter-22", None),
@@ -623,7 +625,7 @@ class TestNoSubstituteRefWhenSocketAbsent:
         resolved = {c.session_id for c in reachability.resolve_candidates(snap)}
         assert resolved == {"sid-bound"}
 
-    def test_no_address_string_embeds_the_session_id(self, monkeypatch):
+    def test_no_address_string_embeds_the_session_id(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {"sid-unbound": _record("claude-klabauter-22", None)}
         monkeypatch.setattr(hr, "snapshot", lambda: snap)
         monkeypatch.setattr(hr, "self_record", lambda: None)
@@ -638,7 +640,7 @@ class TestNoSubstituteRefWhenSocketAbsent:
 
 class TestWarmServedOwnSession:
 
-    def test_resolve_address_own_session_follows_carried_identity(self, monkeypatch):
+    def test_resolve_address_own_session_follows_carried_identity(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.session import core as session_core
 
         caller_sid = "11111111-1111-1111-1111-111111111111"
@@ -661,7 +663,7 @@ class TestWarmServedOwnSession:
         assert caller_result.outcome == "own_session"
         assert spawner_result.outcome == "reachable"
 
-    def test_resolve_addresses_bulk_marker_follows_carried_identity(self, monkeypatch):
+    def test_resolve_addresses_bulk_marker_follows_carried_identity(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.session import core as session_core
 
         caller_sid = "11111111-1111-1111-1111-111111111111"

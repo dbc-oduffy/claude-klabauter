@@ -15,6 +15,7 @@ from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.ops import roadmap_blitz_stage
 from coordinator_core.roadmap.tests.test_blitz_stage import CLUSTERS, RECON
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -31,7 +32,7 @@ def _budget() -> dict:
 
 
 @pytest.mark.parametrize("approved", [False, True])
-def test_staging_a_roadmap_commits_stubs_and_report_with_the_budgeted_spawns(tmp_path, monkeypatch, approved):
+def test_staging_a_roadmap_commits_stubs_and_report_with_the_budgeted_spawns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, approved) -> None:
     _git(tmp_path, "init", "-q", "-b", "main")
     (tmp_path / "f").write_text("1")
     _git(tmp_path, "add", "f")

@@ -69,6 +69,25 @@ def test_fresh_landed_files_do_not_stat_match_an_index_that_lacks_them(small_lan
     assert stat == {"landed": 40, "in_index": 0, "stat_match": 0}
 
 
+def test_counts_emit_every_key_and_are_restored(small_landing):
+    import pathlib
+
+    from coordinator_core.ops.dispatch_emit import hunk_provenance, run_artifact_ownership
+
+    before = (pathlib.Path.read_text, run_artifact_ownership.own_artifact_paths, hunk_provenance.unproduced_hunks)
+    repo, params = small_landing
+    counts: dict[str, int] = {}
+    out, _timer, stat = shape.run_phases(repo, params, counts)
+
+    assert out.get("committed") is True
+    assert set(counts) == set(shape.COUNT_KEYS)
+    assert counts["_checkin_bytes"] >= stat["landed"]
+    assert counts["Path.read_text"] > 0
+    line = shape.format_counts(counts, stat["landed"])
+    assert all(f"{k}=" in line for k in shape.COUNT_KEYS)
+    assert (pathlib.Path.read_text, run_artifact_ownership.own_artifact_paths, hunk_provenance.unproduced_hunks) == before
+
+
 def test_probes_are_removed_after_the_run(small_landing):
     from coordinator_core.git import commit as git_commit
     from coordinator_core.ops.ceremony import commit_v2_phases

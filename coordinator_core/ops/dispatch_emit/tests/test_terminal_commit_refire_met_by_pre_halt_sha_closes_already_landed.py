@@ -10,6 +10,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 from coordinator_core.ops.dispatch_emit.ask_contract import UNCHANGED_SINCE_HALT_REASON
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -22,7 +23,7 @@ def _git(root, *a):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path):
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@t.example")
     _git(tmp_path, "config", "user.name", "t")
@@ -48,7 +49,7 @@ def _verdict(**met_by):
     return {"items": [{"id": k, "status": "met", "wired": True, "met_by": [v]} for k, v in met_by.items()]}
 
 
-def test_pre_halt_ancestor_is_cited_and_stands_as_the_landing(repo):
+def test_pre_halt_ancestor_is_cited_and_stands_as_the_landing(repo) -> None:
     root, manifest, sh = repo
     detail: dict = {}
     got = tc._unchanged_since_halt_failures(
@@ -60,7 +61,7 @@ def test_pre_halt_ancestor_is_cited_and_stands_as_the_landing(repo):
     assert detail["landed_paths"] == ["prod.py"]
 
 
-def test_rows_citing_different_commits_land_at_the_base(repo):
+def test_rows_citing_different_commits_land_at_the_base(repo) -> None:
     root, manifest, sh = repo
     detail: dict = {}
     tc._unchanged_since_halt_failures(
@@ -71,7 +72,7 @@ def test_rows_citing_different_commits_land_at_the_base(repo):
     assert detail["landed_sha"] == sh["halt"]
 
 
-def test_post_commit_row_citing_an_ancestor_is_refused_and_never_cited(repo):
+def test_post_commit_row_citing_an_ancestor_is_refused_and_never_cited(repo) -> None:
     root, manifest, sh = repo
     detail: dict = {}
     verdict = {"items": [{"id": "R1", "status": "post_commit", "met_by": [sh["A"][:10]]}]}
@@ -81,7 +82,7 @@ def test_post_commit_row_citing_an_ancestor_is_refused_and_never_cited(repo):
     assert "landed_sha" not in detail
 
 
-def test_post_halt_citation_is_not_cited(repo):
+def test_post_halt_citation_is_not_cited(repo) -> None:
     root, manifest, sh = repo
     detail: dict = {}
     got = tc._unchanged_since_halt_failures(
@@ -92,7 +93,7 @@ def test_post_halt_citation_is_not_cited(repo):
     assert "landed_sha" not in detail
 
 
-def test_partial_coverage_falls_back_to_landed_before_halt(repo):
+def test_partial_coverage_falls_back_to_landed_before_halt(repo) -> None:
     root, manifest, sh = repo
     detail: dict = {}
     tc._unchanged_since_halt_failures(
@@ -129,7 +130,7 @@ def _stale(*ids):
     return [{"id": i, "reason": UNCHANGED_SINCE_HALT_REASON} for i in ids]
 
 
-def test_gate_closes_already_landed_when_every_refused_row_is_cited(tmp_path, monkeypatch):
+def test_gate_closes_already_landed_when_every_refused_row_is_cited(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     refusal, _, _ = _gate(
         tmp_path, monkeypatch,
         {"landed_sha": "a" * 40, "landed_paths": ["p"], tc.CITED_DETAIL_KEY: {"R1": "a" * 40}},
@@ -138,7 +139,7 @@ def test_gate_closes_already_landed_when_every_refused_row_is_cited(tmp_path, mo
     assert refusal["already_landed"] is True and refusal["sha"] == "a" * 40
 
 
-def test_gate_refuses_a_refused_row_the_ancestry_did_not_vouch_for(tmp_path, monkeypatch):
+def test_gate_refuses_a_refused_row_the_ancestry_did_not_vouch_for(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     refusal, _, _ = _gate(
         tmp_path, monkeypatch,
         {"landed_sha": "a" * 40, "landed_paths": ["p"], tc.CITED_DETAIL_KEY: {"R1": "a" * 40}},

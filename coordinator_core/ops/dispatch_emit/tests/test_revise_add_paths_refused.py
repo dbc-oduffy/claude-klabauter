@@ -9,6 +9,7 @@ import json
 import pytest
 
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 RUN = "warp-2026-10-26-x-c826e4-20261026T030349-c826e4"
 INSIDE = "pkg/inside.py"
@@ -16,7 +17,7 @@ OUTSIDE = "pkg/outside.py"
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     for rel in (INSIDE, OUTSIDE):
         f = tmp_path / rel
         f.parent.mkdir(parents=True, exist_ok=True)
@@ -25,7 +26,7 @@ def repo(tmp_path):
     return tmp_path
 
 
-def _stage(repo):
+def _stage(repo) -> None:
     manifest = {"doc_writes": [], "rows": [{"id": "X1", "writes": [INSIDE], "writes_under": []}]}
     (rl.run_dir(repo, RUN) / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
@@ -34,7 +35,7 @@ def _assert_both_routes(msg: str, path: str) -> None:
     assert path in msg and "new ask" in msg and "resize the sizing" in msg
 
 
-def test_add_paths_outside_is_refused_naming_both_routes(repo):
+def test_add_paths_outside_is_refused_naming_both_routes(repo) -> None:
     _stage(repo)
     with pytest.raises(rl.LedgerRefused) as exc:
         rl.revise(repo, RUN, add_paths=[OUTSIDE], note="also edit it")
@@ -42,26 +43,26 @@ def test_add_paths_outside_is_refused_naming_both_routes(repo):
     assert rl.read_notes(rl.run_dir(repo, RUN)) == []
 
 
-def test_add_paths_outside_is_refused_on_an_unstaged_run(repo):
+def test_add_paths_outside_is_refused_on_an_unstaged_run(repo) -> None:
     with pytest.raises(rl.LedgerRefused) as exc:
         rl.revise(repo, RUN, add_paths=[{"path": OUTSIDE}], note="n")
     _assert_both_routes(str(exc.value), OUTSIDE)
 
 
-def test_add_paths_outside_through_the_op_replies_an_error(repo):
+def test_add_paths_outside_through_the_op_replies_an_error(repo) -> None:
     _stage(repo)
     (repo / ".git").mkdir()
     reply = rl._handler({"run_id": RUN, "add_paths": [OUTSIDE]}, repo)
     assert OUTSIDE in reply["error"] and "new ask" in reply["error"]
 
 
-def test_note_naming_an_outside_file_to_run_is_accepted_on_a_staged_run(repo):
+def test_note_naming_an_outside_file_to_run_is_accepted_on_a_staged_run(repo) -> None:
     _stage(repo)
     rl.revise(repo, RUN, note=f"run `{OUTSIDE}` to regenerate the export")
     assert len(rl.read_notes(rl.run_dir(repo, RUN))) == 1
 
 
-def test_edit_verb_note_naming_an_outside_file_is_not_stored_and_does_not_raise(repo):
+def test_edit_verb_note_naming_an_outside_file_is_not_stored_and_does_not_raise(repo) -> None:
     _stage(repo)
     outcome: dict = {}
     rl.revise(repo, RUN, note=f"also fix `{OUTSIDE}`", outcome=outcome)
@@ -69,25 +70,25 @@ def test_edit_verb_note_naming_an_outside_file_is_not_stored_and_does_not_raise(
     assert outcome["note_refused"]["paths"] == [OUTSIDE]
 
 
-def test_note_citing_an_inside_file_is_accepted(repo):
+def test_note_citing_an_inside_file_is_accepted(repo) -> None:
     _stage(repo)
     rl.revise(repo, RUN, note=f"also fix `{INSIDE}`")
     assert len(rl.read_notes(rl.run_dir(repo, RUN))) == 1
 
 
-def test_note_without_a_path_is_accepted(repo):
+def test_note_without_a_path_is_accepted(repo) -> None:
     _stage(repo)
     rl.revise(repo, RUN, note="tighten the wording")
     assert len(rl.read_notes(rl.run_dir(repo, RUN))) == 1
 
 
-def test_withhold_inside_is_unaffected(repo):
+def test_withhold_inside_is_unaffected(repo) -> None:
     _stage(repo)
     rl.revise(repo, RUN, withhold_paths=[{"path": INSIDE, "reason": "peer hunks"}])
     assert (rl.run_dir(repo, RUN) / "withhold.jsonl").is_file()
 
 
-def test_credit_chunks_is_unaffected(repo):
+def test_credit_chunks_is_unaffected(repo) -> None:
     _stage(repo)
     rl.revise(repo, RUN, credit_chunks=[{"chunk": "X1", "evidence": "landed"}])
     assert (rl.run_dir(repo, RUN) / "credit.jsonl").is_file()

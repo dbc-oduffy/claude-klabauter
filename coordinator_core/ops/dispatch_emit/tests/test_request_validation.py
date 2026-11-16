@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit.request_validation import Field, validate_params
+from pathlib import Path
 
 SPEC = (
     Field("sizing_path", "nonempty_str", True),
@@ -59,7 +60,7 @@ def test_default_stays_lenient_and_strict_accepts_known_keys() -> None:
     assert validate_params("dispatch.x", {"sizing_path": "a"}, SPEC, strict=True) is None
 
 
-def test_emit_refuses_unknown_top_level_key_and_writes_nothing(tmp_path) -> None:
+def test_emit_refuses_unknown_top_level_key_and_writes_nothing(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 
     out = tmp_path / "x.workflow.mjs"

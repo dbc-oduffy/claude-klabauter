@@ -14,12 +14,16 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 TURN_TIMEOUT = 600
 NO_REPLY = "[unimatrix-peer-grok] no reply before timeout"
 
 
-def grok_home():
+def grok_home() -> Path:
     """Grok state dir: $GROK_HOME, else ~/.grok."""
     return Path(os.environ.get("GROK_HOME") or Path.home() / ".grok")
 
@@ -44,7 +48,7 @@ def _default_pid_alive(pid):
     return roster.pid_alive(pid)
 
 
-def _contract():
+def _contract() -> "ModuleType":
     """The peer contract module (box_id), loaded from the sibling script."""
     spec = importlib.util.spec_from_file_location(
         "unimatrix_peer_contract", Path(__file__).resolve().with_name("unimatrix-peer-contract.py"))
@@ -53,11 +57,11 @@ def _contract():
     return mod
 
 
-def _clean(value):
+def _clean(value) -> str:
     return re.sub(r"[^A-Za-z0-9_-]+", "-", str(value)).strip("-")
 
 
-def peer_name(session_id, cwd):
+def peer_name(session_id, cwd) -> str:
     """grok-<repo>-<first 8 of session id>-on-<box>; repo is the enclosing git root's name, else the cwd's."""
     base = str(cwd).replace("\\", "/").rstrip("/").rsplit("/", 1)[-1]
     path = Path(cwd)
@@ -151,7 +155,7 @@ def _parent_pid_windows(pid):
     return None
 
 
-def own_session(home=None, pid_alive=None, parent_of=None, start=None, max_depth=16):
+def own_session(home=None, pid_alive=None, parent_of=None, start=None, max_depth: int = 16):
     """Which Grok session is this shell? The live registry peer whose pid is an ancestor of `start`
     (default this process), else None. An empty registry skips the process walk."""
     try:
@@ -214,7 +218,7 @@ async def grok_turn(session_id, cwd, text, timeout=TURN_TIMEOUT, binary=None, ru
     return reply if reply else NO_REPLY
 
 
-def main(argv=None):
+def main(argv=None) -> int:
     """`unimatrix-peer-grok.py <session-id> <cwd> <text>`: one turn into the session; prints the reply."""
     argv = sys.argv[1:] if argv is None else list(argv)
     if len(argv) != 3:

@@ -7,6 +7,7 @@ import uuid
 from pathlib import Path
 
 from coordinator_core.ops import cruft_sweep
+import pytest
 
 HOUR = 3600
 LIMIT = 1000  # bytes; stands in for 250 MB, the boundary logic is identical
@@ -21,7 +22,7 @@ def _file(path: Path, size: int, age_secs: int) -> Path:
     return path
 
 
-def _sweep(projects: Path, tmp: Path, live, *, apply=True, blocklist=()):
+def _sweep(projects: Path, tmp: Path, live, *, apply: bool = True, blocklist=()) -> tuple[int, int]:
     return cruft_sweep.sweep_harness(
         projects, tmp / "fh", 14, blocklist,
         apply=apply, json_mode=False, quiet=True,
@@ -31,7 +32,7 @@ def _sweep(projects: Path, tmp: Path, live, *, apply=True, blocklist=()):
     )
 
 
-def test_ended_oversize_transcript_deleted_and_boundary_kept(tmp_path):
+def test_ended_oversize_transcript_deleted_and_boundary_kept(tmp_path: Path) -> None:
     repo = tmp_path / "projects" / "r"
     big, ok = str(uuid.uuid4()), str(uuid.uuid4())
     f_big = _file(repo / f"{big}.jsonl", LIMIT + 1, 60)
@@ -41,7 +42,7 @@ def test_ended_oversize_transcript_deleted_and_boundary_kept(tmp_path):
     assert f_ok.exists()
 
 
-def test_ended_old_subagent_transcript_deleted_young_kept(tmp_path):
+def test_ended_old_subagent_transcript_deleted_young_kept(tmp_path: Path) -> None:
     repo = tmp_path / "projects" / "r"
     sid = str(uuid.uuid4())
     old = _file(repo / sid / "subagents" / "agent-old.jsonl", 10, 49 * HOUR)
@@ -51,7 +52,7 @@ def test_ended_old_subagent_transcript_deleted_young_kept(tmp_path):
     assert young.exists()
 
 
-def test_live_session_files_kept_including_subagents(tmp_path):
+def test_live_session_files_kept_including_subagents(tmp_path: Path) -> None:
     repo = tmp_path / "projects" / "r"
     sid = str(uuid.uuid4())
     main = _file(repo / f"{sid}.jsonl", LIMIT * 300, 100 * HOUR)
@@ -61,7 +62,7 @@ def test_live_session_files_kept_including_subagents(tmp_path):
     assert sub.exists()
 
 
-def test_unresolved_liveness_keeps_everything(tmp_path):
+def test_unresolved_liveness_keeps_everything(tmp_path: Path) -> None:
     repo = tmp_path / "projects" / "r"
     sid = str(uuid.uuid4())
     f = _file(repo / f"{sid}.jsonl", LIMIT * 5, 100 * HOUR)
@@ -72,7 +73,7 @@ def test_unresolved_liveness_keeps_everything(tmp_path):
     assert f.exists()
 
 
-def test_box_live_session_ids_exception_returns_none(monkeypatch):
+def test_box_live_session_ids_exception_returns_none(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import liveness
 
     def boom(*a, **k):
@@ -82,7 +83,7 @@ def test_box_live_session_ids_exception_returns_none(monkeypatch):
     assert cruft_sweep.box_live_session_ids() is None
 
 
-def test_predecessor_blocklist_does_not_exempt(tmp_path):
+def test_predecessor_blocklist_does_not_exempt(tmp_path: Path) -> None:
     repo = tmp_path / "projects" / "r"
     sid = str(uuid.uuid4())
     f = _file(repo / f"{sid}.jsonl", LIMIT + 1, 1 * HOUR)
@@ -90,7 +91,7 @@ def test_predecessor_blocklist_does_not_exempt(tmp_path):
     assert not f.exists()
 
 
-def test_dry_run_deletes_nothing(tmp_path):
+def test_dry_run_deletes_nothing(tmp_path: Path) -> None:
     repo = tmp_path / "projects" / "r"
     sid = str(uuid.uuid4())
     f = _file(repo / f"{sid}.jsonl", LIMIT + 1, 1 * HOUR)
@@ -98,6 +99,6 @@ def test_dry_run_deletes_nothing(tmp_path):
     assert f.exists()
 
 
-def test_defaults_are_250mb_and_48h():
+def test_defaults_are_250mb_and_48h() -> None:
     assert cruft_sweep._TRANSCRIPT_MAX_BYTES_DEFAULT == 250 * 1024**2
     assert cruft_sweep._TRANSCRIPT_MAX_AGE_SECS_DEFAULT == 48 * 3600

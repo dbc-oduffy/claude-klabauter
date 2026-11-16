@@ -17,6 +17,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_uncodeclared_peer_hunks_incident import (  # noqa: F401
     OWN_MARK, P, PEER_MARK, RUN_OWN, RUN_PEER, SELF, _body, _build, _declare, _git,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -67,8 +68,8 @@ def _fire_with(root, **extra) -> dict:
 
 @pytest.mark.parametrize("peer_declares", [True, False])
 def test_a_critical_finding_on_a_path_with_a_live_peer_hunk_never_lands_the_peer_hunk(
-    tmp_path, monkeypatch, peer_declares,
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, peer_declares,
+) -> None:
     root = _build(tmp_path, monkeypatch, peer_hunk=True, peer_declares=peer_declares)
     _flag_critical(root)
     seed_blob = _git(["show", f"HEAD:{P}"], root)
@@ -80,8 +81,8 @@ def test_a_critical_finding_on_a_path_with_a_live_peer_hunk_never_lands_the_peer
 
 @pytest.mark.parametrize("peer_declares", [True, False])
 def test_a_ledger_conflict_naming_a_path_with_a_live_peer_hunk_never_lands_the_peer_hunk(
-    tmp_path, monkeypatch, peer_declares,
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, peer_declares,
+) -> None:
     root = _build(tmp_path, monkeypatch, peer_hunk=True, peer_declares=peer_declares)
     seed_blob = _git(["show", f"HEAD:{P}"], root)
 
@@ -90,7 +91,7 @@ def test_a_ledger_conflict_naming_a_path_with_a_live_peer_hunk_never_lands_the_p
     _assert_no_peer_hunk_landed(root, seed_blob, out)
 
 
-def test_a_halted_owner_with_a_live_refire_declaring_the_path_never_lands_the_peer_hunk(tmp_path, monkeypatch):
+def test_a_halted_owner_with_a_live_refire_declaring_the_path_never_lands_the_peer_hunk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _build(tmp_path, monkeypatch, peer_hunk=True, peer_declares=True)
     (root / "state" / "warp" / RUN_PEER / "halted.json").write_text(json.dumps({"status": "halted"}), encoding="utf-8")
     _declare(root, RUN_REFIRE, None)
@@ -102,7 +103,7 @@ def test_a_halted_owner_with_a_live_refire_declaring_the_path_never_lands_the_pe
     _assert_no_peer_hunk_landed(root, seed_blob, out)
 
 
-def test_a_ledger_conflict_naming_an_own_only_path_still_lands_it_whole(tmp_path, monkeypatch):
+def test_a_ledger_conflict_naming_an_own_only_path_still_lands_it_whole(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _build(tmp_path, monkeypatch, peer_hunk=False)
 
     out = _fire_with(root, ledger_verdict={"items": [], "conflicts": [CONFLICT]})
@@ -111,7 +112,7 @@ def test_a_ledger_conflict_naming_an_own_only_path_still_lands_it_whole(tmp_path
     assert _git(["show", f"HEAD:{P}"], root) == _body(own=True).strip()
 
 
-def test_the_composed_script_hands_the_ledger_conflicts_to_the_terminal_commit():
+def test_the_composed_script_hands_the_ledger_conflicts_to_the_terminal_commit() -> None:
     script = _compose()
     assert (
         "_nextAction.params.ledger_verdict = { "
@@ -119,7 +120,7 @@ def test_the_composed_script_hands_the_ledger_conflicts_to_the_terminal_commit()
     ) in script
 
 
-def test_the_ledger_conflict_strings_are_read_defensively():
+def test_the_ledger_conflict_strings_are_read_defensively() -> None:
     f = terminal_commit._ledger_conflict_strings
     assert f({"conflicts": ["a", 3, "b"]}) == ("a", "b")
     assert f({"conflicts": "abc"}) == () and f({}) == () and f(None) == ()

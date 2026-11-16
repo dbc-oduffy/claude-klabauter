@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.canvas_harvest import lift as lift_mod
 from coordinator_core.canvas_harvest import model
+from pathlib import Path
 
 AID = "Qz7LmPx2NcVt9RkHdYw3Fe"
 OTHER = "Zz0OtherArtifactId0000"
@@ -13,15 +14,15 @@ URL = f"https://claude.ai/artifact/{AID}"
 
 
 class T:
-    def __init__(self, tmp_path, name="t.jsonl"):
+    def __init__(self, tmp_path, name: str = "t.jsonl") -> None:
         self.path = tmp_path / name
         self.n = 0
         self.lines = []
 
-    def _add(self, obj):
+    def _add(self, obj) -> None:
         self.lines.append(json.dumps(obj))
 
-    def call(self, name, inp, tid, side=False):
+    def call(self, name, inp, tid, side: bool = False) -> None:
         self.n += 1
         self._add({
             "type": "assistant", "isSidechain": side, "sessionId": "sess-1",
@@ -29,7 +30,7 @@ class T:
             "message": {"content": [{"type": "tool_use", "id": tid, "name": name, "input": inp}]},
         })
 
-    def result(self, tid, payload, text="rendered", error=False, side=False):
+    def result(self, tid, payload, text: str = "rendered", error: bool = False, side: bool = False) -> None:
         self.n += 1
         block = {"type": "tool_result", "tool_use_id": tid, "content": text}
         if error:
@@ -53,12 +54,12 @@ def frame(path):
     return {"path": path, "saved_to": f"frames/{path}", "sha256": "ab" * 32}
 
 
-def files_read(ver="v1", paths=("project/index.html",), url=URL):
+def files_read(ver: str = "v1", paths=("project/index.html",), url=URL):
     return {"files_read": {"url": url, "title": "Doc", "ver": ver, "files": [frame(p) for p in paths],
                            "type": {"url": "", "title": "plain"}}}
 
 
-def file_list(ver="v1", paths=("project/index.html",), kind="dashboard"):
+def file_list(ver: str = "v1", paths=("project/index.html",), kind: str = "dashboard"):
     return {"file_list": {"url": URL, "ver": ver, "files": [{"path": p} for p in paths],
                           "type": {"url": "", "title": kind}}}
 
@@ -67,12 +68,12 @@ def thread(tid):
     return {"id": tid, "comments": [{"id": tid + "c", "created_at": "2026-10-01T00:00:00Z", "text": "body " + tid}]}
 
 
-def read_artifact(t, tid="r1", **kw):
+def read_artifact(t, tid: str = "r1", **kw) -> None:
     t.call("Artifact", {"action": "read", "url": URL, "paths": ["index.html"]}, tid)
     t.result(tid, files_read(**kw))
 
 
-def test_whole_read(tmp_path):
+def test_whole_read(tmp_path: Path) -> None:
     t = T(tmp_path)
     read_artifact(t, paths=("project/index.html", "project/b.html"))
     t.call("ArtifactComments", {"action": "read", "artifact_id": AID}, "c1")
@@ -88,7 +89,7 @@ def test_whole_read(tmp_path):
     assert got.transcript_dir == tmp_path and got.session_id == "sess-1"
 
 
-def test_file_read_and_listing_type(tmp_path):
+def test_file_read_and_listing_type(tmp_path: Path) -> None:
     t = T(tmp_path)
     t.call("Artifact", {"action": "list", "url": URL}, "l1")
     t.result("l1", file_list(paths=("project/index.html",)))
@@ -99,7 +100,7 @@ def test_file_read_and_listing_type(tmp_path):
     assert [f.path for f in got.artifact_read.frames] == ["project/index.html"]
 
 
-def test_unread_runtime_files_do_not_make_listing_incomplete(tmp_path):
+def test_unread_runtime_files_do_not_make_listing_incomplete(tmp_path: Path) -> None:
     t = T(tmp_path)
     read_artifact(t, paths=("project/index.html", "app.js", "reference/x.md"))
     t.call("Artifact", {"action": "list", "url": URL}, "l1")
@@ -108,7 +109,7 @@ def test_unread_runtime_files_do_not_make_listing_incomplete(tmp_path):
     assert [f.path for f in got.artifact_read.frames] == ["project/index.html"]
 
 
-def test_unread_project_file_still_incomplete_beside_runtime_files(tmp_path):
+def test_unread_project_file_still_incomplete_beside_runtime_files(tmp_path: Path) -> None:
     t = T(tmp_path)
     read_artifact(t, paths=("app.js",))
     t.call("Artifact", {"action": "list", "url": URL}, "l1")
@@ -118,7 +119,7 @@ def test_unread_project_file_still_incomplete_beside_runtime_files(tmp_path):
     assert err.value.reason == model.FRAMES_READ_INCOMPLETE
 
 
-def test_listing_not_covered_is_incomplete(tmp_path):
+def test_listing_not_covered_is_incomplete(tmp_path: Path) -> None:
     t = T(tmp_path)
     read_artifact(t)
     t.call("Artifact", {"action": "list", "url": URL}, "l1")
@@ -128,7 +129,7 @@ def test_listing_not_covered_is_incomplete(tmp_path):
     assert err.value.reason == model.FRAMES_READ_INCOMPLETE
 
 
-def _listing_and_comments(t, comments=True):
+def _listing_and_comments(t, comments: bool = True) -> None:
     t.call("Artifact", {"action": "list", "url": URL}, "l1")
     t.result("l1", file_list(paths=("project/a.html", "project/b.html")))
     if comments:
@@ -136,7 +137,7 @@ def _listing_and_comments(t, comments=True):
         t.result("c1", {"threads": [thread("t1")]}, text="THREADS")
 
 
-def test_listing_without_frame_reads_lifts_version_and_comments_when_frames_not_required(tmp_path):
+def test_listing_without_frame_reads_lifts_version_and_comments_when_frames_not_required(tmp_path: Path) -> None:
     t = T(tmp_path)
     _listing_and_comments(t)
     path = t.write()
@@ -148,7 +149,7 @@ def test_listing_without_frame_reads_lifts_version_and_comments_when_frames_not_
     assert err.value.reason == model.FRAMES_READ_INCOMPLETE
 
 
-def test_frames_not_required_still_refuses_incomplete_comments(tmp_path):
+def test_frames_not_required_still_refuses_incomplete_comments(tmp_path: Path) -> None:
     t = T(tmp_path)
     _listing_and_comments(t, comments=False)
     t.call("ArtifactComments", {"action": "read", "artifact_id": AID}, "c1")
@@ -158,7 +159,7 @@ def test_frames_not_required_still_refuses_incomplete_comments(tmp_path):
     assert err.value.reason == model.COMMENTS_READ_INCOMPLETE
 
 
-def test_api_probe_lifts_without_frames_and_harvest_requires_them(tmp_path, monkeypatch):
+def test_api_probe_lifts_without_frames_and_harvest_requires_them(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.canvas_harvest import api
 
     seen = []
@@ -180,12 +181,12 @@ def test_api_probe_lifts_without_frames_and_harvest_requires_them(tmp_path, monk
     assert seen[1].get("require_frames", True) is True
 
 
-def test_api_probe_hands_stamp_the_version_and_comments_of_a_frameless_transcript(tmp_path, monkeypatch):
+def test_api_probe_hands_stamp_the_version_and_comments_of_a_frameless_transcript(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.canvas_harvest import api, probe_stamp
 
     seen = []
 
-    def fake_stamp(lifted, out_dir, session_id, now, *, artifact_id=None):
+    def fake_stamp(lifted, out_dir, session_id, now, *, artifact_id=None) -> Path:
         seen.append(lifted)
         return tmp_path / "harvest.json"
 
@@ -196,7 +197,7 @@ def test_api_probe_hands_stamp_the_version_and_comments_of_a_frameless_transcrip
     assert seen[0].version.version == "v1" and model.thread_ids(seen[0].comments.threads) == ["t1"]
 
 
-def test_newer_version_drops_older_reads(tmp_path):
+def test_newer_version_drops_older_reads(tmp_path: Path) -> None:
     t = T(tmp_path)
     read_artifact(t, ver="v1")
     t.call("Artifact", {"action": "list", "url": URL}, "l1")
@@ -206,7 +207,7 @@ def test_newer_version_drops_older_reads(tmp_path):
     assert err.value.reason == model.FRAMES_READ_INCOMPLETE
 
 
-def test_cursor_chain_of_two_pages(tmp_path):
+def test_cursor_chain_of_two_pages(tmp_path: Path) -> None:
     t = T(tmp_path)
     t.call("ArtifactComments", {"action": "read", "url": URL}, "c1")
     t.result("c1", {"threads": [thread("t1")], "cursor": "CUR1"}, text="P1")
@@ -218,7 +219,7 @@ def test_cursor_chain_of_two_pages(tmp_path):
     assert got.artifact_read is None
 
 
-def test_unterminated_chain(tmp_path):
+def test_unterminated_chain(tmp_path: Path) -> None:
     t = T(tmp_path)
     t.call("ArtifactComments", {"action": "read", "url": URL}, "c1")
     t.result("c1", {"threads": [thread("t1")], "cursor": "CUR1"})
@@ -227,7 +228,7 @@ def test_unterminated_chain(tmp_path):
     assert err.value.reason == model.COMMENTS_READ_INCOMPLETE
 
 
-def test_thread_id_read_is_not_whole(tmp_path):
+def test_thread_id_read_is_not_whole(tmp_path: Path) -> None:
     t = T(tmp_path)
     t.call("ArtifactComments", {"action": "read", "url": URL, "thread_id": "t1"}, "c1")
     t.result("c1", {"threads": [thread("t1")], "thread_filter": "t1"})
@@ -236,7 +237,7 @@ def test_thread_id_read_is_not_whole(tmp_path):
     assert err.value.reason == model.COMMENTS_READ_INCOMPLETE
 
 
-def test_thread_id_read_after_whole_read_is_ignored(tmp_path):
+def test_thread_id_read_after_whole_read_is_ignored(tmp_path: Path) -> None:
     t = T(tmp_path)
     t.call("ArtifactComments", {"action": "read", "url": URL}, "c1")
     t.result("c1", {"threads": [thread("t1"), thread("t2")]}, text="WHOLE")
@@ -255,7 +256,7 @@ def test_thread_id_read_after_whole_read_is_ignored(tmp_path):
         ("Something else broke\nsecond line", None),
     ],
 )
-def test_error_result_kinds(tmp_path, text, kind):
+def test_error_result_kinds(tmp_path: Path, text, kind) -> None:
     t = T(tmp_path)
     read_artifact(t)
     t.call("ArtifactComments", {"action": "read", "artifact_id": AID}, "c1")
@@ -266,7 +267,7 @@ def test_error_result_kinds(tmp_path, text, kind):
     assert got.error.at == "2026-10-13T10:00:04Z"
 
 
-def test_success_after_error_clears_it(tmp_path):
+def test_success_after_error_clears_it(tmp_path: Path) -> None:
     t = T(tmp_path)
     t.call("ArtifactComments", {"action": "read", "artifact_id": AID}, "c1")
     t.result("c1", "Error: artifact not found", text="artifact not found", error=True)
@@ -274,7 +275,7 @@ def test_success_after_error_clears_it(tmp_path):
     assert lift_mod.lift([t.write()], AID).error is None
 
 
-def test_failed_write_is_skipped(tmp_path):
+def test_failed_write_is_skipped(tmp_path: Path) -> None:
     t = T(tmp_path)
     read_artifact(t)
     t.call("Artifact", {"action": "write", "artifact_id": AID, "files": []}, "w1")
@@ -282,7 +283,7 @@ def test_failed_write_is_skipped(tmp_path):
     assert lift_mod.lift([t.write()], AID).error is None
 
 
-def test_second_artifact_ignored(tmp_path):
+def test_second_artifact_ignored(tmp_path: Path) -> None:
     t = T(tmp_path)
     t.call("Artifact", {"action": "read", "url": f"https://claude.ai/artifact/{OTHER}", "paths": ["x"]}, "r9")
     t.result("r9", files_read(ver="v9", url=f"https://claude.ai/artifact/{OTHER}"))
@@ -297,7 +298,7 @@ def test_second_artifact_ignored(tmp_path):
     assert err.value.reason == model.NO_MAIN_LOOP_READ
 
 
-def test_sidechain_ignored(tmp_path):
+def test_sidechain_ignored(tmp_path: Path) -> None:
     t = T(tmp_path)
     t.call("Artifact", {"action": "read", "url": URL, "paths": ["index.html"]}, "r1", side=True)
     t.result("r1", files_read(), side=True)
@@ -306,7 +307,7 @@ def test_sidechain_ignored(tmp_path):
     assert err.value.reason == model.NO_MAIN_LOOP_READ
 
 
-def test_binding_by_url_artifact_id_and_result_url(tmp_path):
+def test_binding_by_url_artifact_id_and_result_url(tmp_path: Path) -> None:
     t = T(tmp_path)
     t.call("ArtifactComments", {"action": "read", "artifact_id": AID}, "c1")
     t.result("c1", {"threads": [thread("a")]})
@@ -320,7 +321,7 @@ def test_binding_by_url_artifact_id_and_result_url(tmp_path):
     assert lift_mod.lift([t2.write()], AID).artifact_read.version == "v1"
 
 
-def test_no_call_at_all(tmp_path):
+def test_no_call_at_all(tmp_path: Path) -> None:
     p = tmp_path / "t.jsonl"
     p.write_text(json.dumps({"type": "user", "message": {"content": "hi"}}) + "\n")
     with pytest.raises(model.HarvestError) as err:
@@ -328,13 +329,13 @@ def test_no_call_at_all(tmp_path):
     assert err.value.reason == model.NO_MAIN_LOOP_READ
 
 
-def test_no_transcript(tmp_path):
+def test_no_transcript(tmp_path: Path) -> None:
     with pytest.raises(model.HarvestError) as err:
         lift_mod.lift([tmp_path / "absent.jsonl"], AID)
     assert err.value.reason == model.NO_TRANSCRIPT
 
 
-def test_torn_final_line_skipped(tmp_path):
+def test_torn_final_line_skipped(tmp_path: Path) -> None:
     t = T(tmp_path)
     read_artifact(t)
     torn = '{"type": "assistant", "message": {"content": [{"type": "tool_use", "name": "ArtifactComments"'
@@ -342,7 +343,7 @@ def test_torn_final_line_skipped(tmp_path):
     assert got.artifact_read.version == "v1" and got.comments is None
 
 
-def side_call(t, agent, name, inp, tid):
+def side_call(t, agent, name, inp, tid) -> None:
     t.n += 1
     t._add({
         "type": "assistant", "isSidechain": True, "agentId": agent, "sessionId": "sess-1",
@@ -351,7 +352,7 @@ def side_call(t, agent, name, inp, tid):
     })
 
 
-def side_result(t, agent, tid, payload, text="rendered"):
+def side_result(t, agent, tid, payload, text: str = "rendered") -> None:
     t.n += 1
     t._add({
         "type": "user", "isSidechain": True, "agentId": agent, "sessionId": "sess-1",
@@ -361,7 +362,7 @@ def side_result(t, agent, tid, payload, text="rendered"):
     })
 
 
-def test_named_reader_sidechain_lifts(tmp_path):
+def test_named_reader_sidechain_lifts(tmp_path: Path) -> None:
     t = T(tmp_path)
     side_call(t, "aX", "Artifact", {"action": "read", "url": URL, "paths": ["index.html"]}, "r1")
     side_result(t, "aX", "r1", files_read())
@@ -369,7 +370,7 @@ def test_named_reader_sidechain_lifts(tmp_path):
     assert [f.path for f in got.artifact_read.frames] == ["project/index.html"]
 
 
-def test_other_sidechain_ignored_beside_named_reader(tmp_path):
+def test_other_sidechain_ignored_beside_named_reader(tmp_path: Path) -> None:
     t = T(tmp_path)
     side_call(t, "aY", "Artifact", {"action": "read", "url": URL, "paths": ["b.html"]}, "r0")
     side_result(t, "aY", "r0", files_read(paths=("project/other.html",)))
@@ -379,7 +380,7 @@ def test_other_sidechain_ignored_beside_named_reader(tmp_path):
     assert [f.path for f in got.artifact_read.frames] == ["project/index.html"]
 
 
-def test_default_none_over_all_sidechain_refuses(tmp_path):
+def test_default_none_over_all_sidechain_refuses(tmp_path: Path) -> None:
     t = T(tmp_path)
     side_call(t, "aX", "Artifact", {"action": "read", "url": URL, "paths": ["index.html"]}, "r1")
     side_result(t, "aX", "r1", files_read())
@@ -388,7 +389,7 @@ def test_default_none_over_all_sidechain_refuses(tmp_path):
     assert err.value.reason == model.NO_MAIN_LOOP_READ
 
 
-def test_named_reader_cursor_chain_and_toolsearch(tmp_path):
+def test_named_reader_cursor_chain_and_toolsearch(tmp_path: Path) -> None:
     t = T(tmp_path)
     side_call(t, "aX", "ToolSearch", {"query": "select:Artifact"}, "ts1")
     side_call(t, "aX", "ArtifactComments", {"action": "read", "url": URL}, "c1")
@@ -400,7 +401,7 @@ def test_named_reader_cursor_chain_and_toolsearch(tmp_path):
     assert model.thread_ids(got.comments.threads) == ["t1", "t2"]
 
 
-def test_named_reader_absent_refuses_whole(tmp_path):
+def test_named_reader_absent_refuses_whole(tmp_path: Path) -> None:
     t = T(tmp_path)
     side_call(t, "aY", "Artifact", {"action": "read", "url": URL, "paths": ["index.html"]}, "r1")
     side_result(t, "aY", "r1", files_read())
@@ -409,7 +410,7 @@ def test_named_reader_absent_refuses_whole(tmp_path):
     assert err.value.reason == model.NO_MAIN_LOOP_READ
 
 
-def test_named_reader_relative_saved_to_resolves_in_transcript_dir(tmp_path):
+def test_named_reader_relative_saved_to_resolves_in_transcript_dir(tmp_path: Path) -> None:
     sub = tmp_path / "subagents"
     sub.mkdir()
     t = T(sub, "agent-aX.jsonl")

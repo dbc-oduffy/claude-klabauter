@@ -30,6 +30,7 @@ import pytest
 
 from coordinator_core.ops.discover_working_repos import _gate_and_dedup
 from coordinator_core.path_identity import dir_identity, same_dir
+from pathlib import Path
 
 
 def _make_repo(path: str) -> None:
@@ -46,7 +47,7 @@ def _fs_is_case_insensitive(variant: str) -> bool:
 
 
 @pytest.fixture()
-def repo_and_variant(tmp_path):
+def repo_and_variant(tmp_path: Path) -> tuple[str, str]:
     repo = str(tmp_path / "coordinator-claude")
     _make_repo(repo)
     variant = _case_variant(repo)
@@ -54,7 +55,7 @@ def repo_and_variant(tmp_path):
     return repo, variant
 
 
-def test_two_spellings_of_one_directory_yield_one_repo(repo_and_variant):
+def test_two_spellings_of_one_directory_yield_one_repo(repo_and_variant) -> None:
     repo, variant = repo_and_variant
     if not _fs_is_case_insensitive(variant):
         pytest.skip("case-sensitive filesystem: the two spellings are two directories")
@@ -66,7 +67,7 @@ def test_two_spellings_of_one_directory_yield_one_repo(repo_and_variant):
     )
 
 
-def test_two_genuinely_distinct_directories_both_survive(repo_and_variant):
+def test_two_genuinely_distinct_directories_both_survive(repo_and_variant) -> None:
     repo, variant = repo_and_variant
     if _fs_is_case_insensitive(variant):
         pytest.skip("case-insensitive filesystem: the variant is not a distinct directory")
@@ -79,7 +80,7 @@ def test_two_genuinely_distinct_directories_both_survive(repo_and_variant):
     )
 
 
-def test_publish_mirror_is_excluded_under_a_second_spelling(repo_and_variant):
+def test_publish_mirror_is_excluded_under_a_second_spelling(repo_and_variant) -> None:
     repo, variant = repo_and_variant
     if not _fs_is_case_insensitive(variant):
         pytest.skip("case-sensitive filesystem: the two spellings are two directories")
@@ -91,7 +92,7 @@ def test_publish_mirror_is_excluded_under_a_second_spelling(repo_and_variant):
     assert emitted == [], f"mirror reached under a second spelling was not excluded: {emitted}"
 
 
-def test_dir_identity_collapses_spellings_and_separates_directories(tmp_path):
+def test_dir_identity_collapses_spellings_and_separates_directories(tmp_path: Path) -> None:
     a = str(tmp_path / "one")
     b = str(tmp_path / "two")
     os.makedirs(a)
@@ -106,7 +107,7 @@ def test_dir_identity_collapses_spellings_and_separates_directories(tmp_path):
         assert same_dir(variant, a)
 
 
-def test_dir_identity_falls_back_for_a_path_that_cannot_be_stat(tmp_path):
+def test_dir_identity_falls_back_for_a_path_that_cannot_be_stat(tmp_path: Path) -> None:
     missing = str(tmp_path / "not-here")
 
     assert dir_identity(missing, fallback="sentinel-key") == "sentinel-key"

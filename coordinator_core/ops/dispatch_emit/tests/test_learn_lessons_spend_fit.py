@@ -111,7 +111,7 @@ def _emit(repo: Path, queue: Path, pdir: Path):
     )
 
 
-def test_receipt_cap_is_the_admitted_share_of_the_whole_backlog_bar_and_spend_fits_it(tmp_path):
+def test_receipt_cap_is_the_admitted_share_of_the_whole_backlog_bar_and_spend_fits_it(tmp_path: Path) -> None:
     repo, queue, pdir = _repo(tmp_path, batch_size=8)
 
     emission = _emit(repo, queue, pdir)
@@ -128,7 +128,7 @@ def test_receipt_cap_is_the_admitted_share_of_the_whole_backlog_bar_and_spend_fi
     assert not [d for d in extras["declined"] if d]
 
 
-def test_a_share_too_small_for_one_batch_still_admits_the_first_row_and_reports_over(tmp_path):
+def test_a_share_too_small_for_one_batch_still_admits_the_first_row_and_reports_over(tmp_path: Path) -> None:
     repo, queue, pdir = _repo(tmp_path, batch_size=4)
 
     emission = _emit(repo, queue, pdir)

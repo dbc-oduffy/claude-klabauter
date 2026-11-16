@@ -13,6 +13,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import launcher_staged_twin as twin
 from coordinator_core.ops.dispatch_emit import nested_run_contract as nrc
+from pathlib import Path
 
 _MEMO = "2026-11-06-example-game-repo-em-engine-refire-staged-script-missing.md"
 RUN = "run1"
@@ -31,14 +32,14 @@ def _stage(root, raw: bytes) -> str:
 
 
 @pytest.fixture
-def root(tmp_path):
+def root(tmp_path: Path) -> Path:
     script = tmp_path / "scratch" / "warp" / f"{RUN}.workflow.mjs"
     script.parent.mkdir(parents=True)
     script.write_text(SCRIPT, encoding="utf-8")
     return tmp_path
 
 
-def test_the_twin_a_pending_refire_names_survives_a_recompose_under_a_revise(root):
+def test_the_twin_a_pending_refire_names_survives_a_recompose_under_a_revise(root) -> None:
     named_by_refire = _stage(root, RAW_BEFORE)
 
     _stage(root, RAW_REVISED)
@@ -46,7 +47,7 @@ def test_the_twin_a_pending_refire_names_survives_a_recompose_under_a_revise(roo
     assert (root / named_by_refire).is_file()
 
 
-def test_the_twin_of_the_current_manifest_exists_after_the_recompose(root):
+def test_the_twin_of_the_current_manifest_exists_after_the_recompose(root) -> None:
     _stage(root, RAW_BEFORE)
 
     current = _stage(root, RAW_REVISED)
@@ -54,7 +55,7 @@ def test_the_twin_of_the_current_manifest_exists_after_the_recompose(root):
     assert (root / current).is_file()
 
 
-def test_twins_of_a_run_stay_bounded_across_many_recomposes(root):
+def test_twins_of_a_run_stay_bounded_across_many_recomposes(root) -> None:
     for n in range(8):
         _stage(root, b'{"rows":[{"id":"C%d"}]}' % n)
 

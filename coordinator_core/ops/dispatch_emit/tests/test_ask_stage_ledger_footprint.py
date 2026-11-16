@@ -6,11 +6,12 @@ import pytest
 import yaml
 
 from coordinator_core.ops.dispatch_emit.ask_stage import AskStageError, stage
+from pathlib import Path
 
 SIZING_REL = "state/sizings/2026-10-22-ledger-fixture.yaml"
 
 
-def _repo(root, text="strip docs/plans/p.md and edit CLAUDE.md"):
+def _repo(root, text: str = "strip docs/plans/p.md and edit CLAUDE.md") -> None:
     for rel in ("docs/plans/p.md", "CLAUDE.md", "pkg/a.py"):
         f = root / rel
         f.parent.mkdir(parents=True, exist_ok=True)
@@ -27,7 +28,7 @@ def _repo(root, text="strip docs/plans/p.md and edit CLAUDE.md"):
     (root / SIZING_REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
 
 
-def test_mixed_set_declares_plan_body_and_owes_e1(tmp_path):
+def test_mixed_set_declares_plan_body_and_owes_e1(tmp_path: Path) -> None:
     _repo(tmp_path)
     m = stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
     declared = {w for r in m.rows for w in r.writes}
@@ -36,7 +37,7 @@ def test_mixed_set_declares_plan_body_and_owes_e1(tmp_path):
     assert [(o.id, o.reason) for o in m.owed] == [("E1", "em-performed")]
 
 
-def test_claude_md_only_set_raises_with_owed_em_ids(tmp_path):
+def test_claude_md_only_set_raises_with_owed_em_ids(tmp_path: Path) -> None:
     _repo(tmp_path, "edit CLAUDE.md")
     with pytest.raises(AskStageError) as exc:
         stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["CLAUDE.md"])

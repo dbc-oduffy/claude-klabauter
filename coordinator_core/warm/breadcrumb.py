@@ -1203,6 +1203,12 @@ WARM_OP_PROBE_PARAMS = {
 }
 
 
+#: The unanswered probe of the `wait_for_successor_answer` running on this thread, if any. A probe
+#: that missed its deadline is still queued on the successor's guard pool; sending another every
+#: poll stacks guard evaluations behind each other until a fresh one can never reply in time.
+_PROBE_FLIGHT = threading.local()
+
+
 def endpoint_answers_request(
     endpoint: str,
     token: str,
@@ -1221,6 +1227,9 @@ def endpoint_answers_request(
     The exchange thread owns the handle and closes it: a buffered `close()` from this thread would
     take the lock `readline` holds and block until the server replies, defeating `deadline_secs`.
     """
+    flight = getattr(_PROBE_FLIGHT, "slot", None)
+    if flight and flight[0].is_alive():
+        return False
     try:
         from coordinator_core.warm import client
 
@@ -1245,6 +1254,8 @@ def endpoint_answers_request(
 
     worker = threading.Thread(target=_exchange, name="successor-probe", daemon=True)
     worker.start()
+    if flight is not None:
+        flight[:] = [worker]
     worker.join(max(0.0, deadline_secs))
     if worker.is_alive():
         return False
@@ -1300,7 +1311,11 @@ def wait_for_successor_answer(
         found.update(record)
         return True
 
-    wait_for_new_pair_ready(engine_root, max_secs, ping=_probe, sleep=sleep, clock=clock)
+    _PROBE_FLIGHT.slot = []
+    try:
+        wait_for_new_pair_ready(engine_root, max_secs, ping=_probe, sleep=sleep, clock=clock)
+    finally:
+        _PROBE_FLIGHT.slot = None
     return dict(found) or None
 
 

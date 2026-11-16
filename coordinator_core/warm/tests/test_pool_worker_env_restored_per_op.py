@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 
 from coordinator_core.warm import server
+import pytest
 
 _FORBID = "_COORDINATOR_TEST_FORBID_REAL_SETTINGS_HOME"
 
@@ -35,7 +36,7 @@ def _msg(i, mode):
     return {"jsonrpc": "2.0", "id": i, "method": "ping", "params": {"mode": mode}}
 
 
-def test_next_op_sees_pristine_environ(monkeypatch):
+def test_next_op_sees_pristine_environ(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("coordinator_core.ipc.dispatch_message", _mutating_then_reporting)
     monkeypatch.delenv(_FORBID, raising=False)
     monkeypatch.delenv("LEAK_PROBE_NEW", raising=False)
@@ -50,7 +51,7 @@ def test_next_op_sees_pristine_environ(monkeypatch):
     assert out["existing"] == "pristine"
 
 
-def test_restore_resets_changed_and_pops_added_keys(monkeypatch):
+def test_restore_resets_changed_and_pops_added_keys(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LEAK_PROBE_EXISTING", "pristine")
     monkeypatch.delenv("LEAK_PROBE_NEW", raising=False)
     monkeypatch.setattr(server, "_worker_pristine_environ", dict(os.environ))
@@ -64,7 +65,7 @@ def test_restore_resets_changed_and_pops_added_keys(monkeypatch):
     assert dict(os.environ) == server._worker_pristine_environ
 
 
-def test_uncaptured_worker_is_untouched(monkeypatch):
+def test_uncaptured_worker_is_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "_worker_pristine_environ", None)
     monkeypatch.setenv("LEAK_PROBE_NEW", "kept")
 

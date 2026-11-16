@@ -37,7 +37,7 @@ status: ready
 """
 
 
-def _plan(tmp_path: Path):
+def _plan(tmp_path: Path) -> tuple[Path, Path]:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "p.md", "")
     plan.write_text(_PLAN, encoding="utf-8", newline="")
@@ -56,7 +56,7 @@ def _call(repo: Path, plan: Path, **extra) -> dict:
     return asyncio.run(_handler(params, repo_root=repo / ".git"))
 
 
-def test_record_round_trips_through_reader_and_leaves_plan(tmp_path):
+def test_record_round_trips_through_reader_and_leaves_plan(tmp_path: Path) -> None:
     repo, plan = _plan(tmp_path)
     before = plan.read_bytes()
     result = _call(repo, plan)
@@ -69,7 +69,7 @@ def test_record_round_trips_through_reader_and_leaves_plan(tmp_path):
     assert plan.read_bytes() == before
 
 
-def test_yes_and_replace(tmp_path):
+def test_yes_and_replace(tmp_path: Path) -> None:
     repo, plan = _plan(tmp_path)
     assert _call(repo, plan, verdict="no")["exit_code"] == 0
     assert _call(repo, plan, verdict="Yes", ref="abc123")["exit_code"] == 0
@@ -77,7 +77,7 @@ def test_yes_and_replace(tmp_path):
     assert (got["verdict"], got["ref"]) == ("yes", "abc123")
 
 
-def test_widened_records_added_scope_and_requires_it(tmp_path):
+def test_widened_records_added_scope_and_requires_it(tmp_path: Path) -> None:
     repo, plan = _plan(tmp_path)
     refused = _call(repo, plan, verdict="widened")
     assert refused["exit_code"] == 1 and "added_scope" in refused["error"]
@@ -88,7 +88,7 @@ def test_widened_records_added_scope_and_requires_it(tmp_path):
 
 
 @pytest.mark.parametrize("bad", ["maybe", "", None, True])
-def test_bad_verdict_refused_without_write(tmp_path, bad):
+def test_bad_verdict_refused_without_write(tmp_path: Path, bad) -> None:
     repo, plan = _plan(tmp_path)
     result = _call(repo, plan, verdict=bad)
     assert result["exit_code"] == 1
@@ -96,14 +96,14 @@ def test_bad_verdict_refused_without_write(tmp_path, bad):
     assert not evidence_sidecar_path(plan).exists()
 
 
-def test_unknown_id_and_missing_ref_refused(tmp_path):
+def test_unknown_id_and_missing_ref_refused(tmp_path: Path) -> None:
     repo, plan = _plan(tmp_path)
     assert "not found" in _call(repo, plan, id="ZZ")["error"]
     assert "ref" in _call(repo, plan, ref="  ")["error"]
     assert not evidence_sidecar_path(plan).exists()
 
 
-def test_preserves_other_sidecar_keys_and_bad_yaml_aborts(tmp_path):
+def test_preserves_other_sidecar_keys_and_bad_yaml_aborts(tmp_path: Path) -> None:
     repo, plan = _plan(tmp_path)
     sidecar = evidence_sidecar_path(plan)
     sidecar.write_text("rows:\n  C1:\n  - {recorded_at: t, text: hi}\n", encoding="utf-8")

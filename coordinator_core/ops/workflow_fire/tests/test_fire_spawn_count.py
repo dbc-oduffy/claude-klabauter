@@ -14,6 +14,7 @@ import pytest
 
 from coordinator_core.benchmarks.budget import load_manifest
 from coordinator_core.ops.workflow_fire import fire
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -32,19 +33,19 @@ class _StubProcess:
     returncode = 0
     args: tuple = ()
 
-    def __init__(self, stdout: str = ""):
+    def __init__(self, stdout: str = "") -> None:
         self._stdout = stdout
 
     def __enter__(self):
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc) -> bool:
         return False
 
     def poll(self):
         return None if self._stdout == "" else 0
 
-    def wait(self, timeout=None):
+    def wait(self, timeout=None) -> int:
         return 0
 
     def communicate(self, input=None, timeout=None):
@@ -55,7 +56,7 @@ class _StubProcess:
 
 
 @pytest.fixture
-def fire_target(tmp_path):
+def fire_target(tmp_path: Path) -> tuple[Path, Path]:
     cnw = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -88,7 +89,7 @@ def _fire(monkeypatch, fire_target, *, native_dir):
     return record, started
 
 
-def test_native_plugin_dir_path_spawns_only_the_child(monkeypatch, fire_target):
+def test_native_plugin_dir_path_spawns_only_the_child(monkeypatch: pytest.MonkeyPatch, fire_target) -> None:
     record, started = _fire(monkeypatch, fire_target, native_dir=str(fire_target[0]))
 
     assert record["state"] == "running", record
@@ -96,7 +97,7 @@ def test_native_plugin_dir_path_spawns_only_the_child(monkeypatch, fire_target):
     assert len(started) == _row()["spawn_count_budget"]["plugin_dir_resolved"], started
 
 
-def test_shim_fallback_path_adds_exactly_the_shim_spawn(monkeypatch, fire_target):
+def test_shim_fallback_path_adds_exactly_the_shim_spawn(monkeypatch: pytest.MonkeyPatch, fire_target) -> None:
     record, started = _fire(monkeypatch, fire_target, native_dir=None)
 
     assert record["state"] == "running", record
@@ -104,7 +105,7 @@ def test_shim_fallback_path_adds_exactly_the_shim_spawn(monkeypatch, fire_target
     assert len(started) == _row()["spawn_count_budget"]["plugin_dir_shim_fallback"], started
 
 
-def test_op_process_time_holds_the_row_target(monkeypatch, fire_target):
+def test_op_process_time_holds_the_row_target(monkeypatch: pytest.MonkeyPatch, fire_target) -> None:
     row = _row()
     start = time.process_time()
     _fire(monkeypatch, fire_target, native_dir=str(fire_target[0]))

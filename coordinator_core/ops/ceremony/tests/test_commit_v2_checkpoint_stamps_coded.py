@@ -8,6 +8,7 @@ import pytest
 import yaml
 
 from coordinator_core.ops.ceremony import commit_v2
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -22,7 +23,7 @@ def _git(repo, *args):
     ).stdout.strip()
 
 
-def _w(path, text):
+def _w(path, text) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
 
@@ -42,7 +43,7 @@ def _rows(repo) -> dict:
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/p")
@@ -56,7 +57,7 @@ def repo(tmp_path):
     return r
 
 
-def _checkpoint(repo, subject="checkpoint(wave 0): 1 rows — C1", extra=""):
+def _checkpoint(repo, subject: str = "checkpoint(wave 0): 1 rows — C1", extra: str = ""):
     base = _git(repo, "rev-parse", "HEAD")
     _w(repo / _ROW_FILE, "row\n")
     message = f"{subject}\n\nCheckpoint-Plan: {_PLAN}\nCheckpoint-Base: {base}\n{extra}"
@@ -65,7 +66,7 @@ def _checkpoint(repo, subject="checkpoint(wave 0): 1 rows — C1", extra=""):
     )
 
 
-def test_a_checkpoint_stamps_its_row_coded_at_its_own_sha(repo):
+def test_a_checkpoint_stamps_its_row_coded_at_its_own_sha(repo) -> None:
     c2_before = _rows(repo)["C2"]
 
     out = _checkpoint(repo)
@@ -83,7 +84,7 @@ def test_a_checkpoint_stamps_its_row_coded_at_its_own_sha(repo):
     assert _git(repo, "status", "--porcelain", "--", _PLAN) == ""
 
 
-def test_a_gate_owed_row_is_not_stamped(repo):
+def test_a_gate_owed_row_is_not_stamped(repo) -> None:
     out = _checkpoint(repo, extra="Checkpoint-Gate-Owed: C1\n")
 
     assert out["committed"] is True, out
@@ -91,7 +92,7 @@ def test_a_gate_owed_row_is_not_stamped(repo):
     assert "checkpoint_stamp" not in out
 
 
-def test_a_stamp_failure_never_fails_the_landed_checkpoint(repo, monkeypatch):
+def test_a_stamp_failure_never_fails_the_landed_checkpoint(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import checkpoint_stamp
 
     def boom(*a, **k):
@@ -105,13 +106,13 @@ def test_a_stamp_failure_never_fails_the_landed_checkpoint(repo, monkeypatch):
     assert "boom" in out["checkpoint_stamp"]["stamp_error"]
 
 
-def test_a_non_checkpoint_commit_carries_no_checkpoint_stamp_key(repo):
+def test_a_non_checkpoint_commit_carries_no_checkpoint_stamp_key(repo) -> None:
     _w(repo / _ROW_FILE, "row\n")
     out = commit_v2._handler({"paths": [_ROW_FILE], "message": "edit"}, repo_root=repo / ".git")
     assert out["committed"] is True and "checkpoint_stamp" not in out
 
 
-def test_a_checkpoint_call_spawns_exactly_what_a_plain_call_does(repo, monkeypatch):
+def test_a_checkpoint_call_spawns_exactly_what_a_plain_call_does(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list = []
     real = commit_v2.run_git
 

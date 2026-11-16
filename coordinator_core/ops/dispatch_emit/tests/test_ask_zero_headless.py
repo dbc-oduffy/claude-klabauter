@@ -11,6 +11,11 @@ from coordinator_core.ops.dispatch_emit import ask_compose, cli
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import Popen
 
 REL = "state/sizings/2026-10-01-zero.yaml"
 _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n"
@@ -25,7 +30,7 @@ def _boom(*_a, **_k):
 _REAL_POPEN = subprocess.Popen
 
 
-def _popen_but_git(args, *a, **k):
+def _popen_but_git(args, *a, **k) -> Popen[str]:
     # The accepted-M gate mints a baton, which reads the branch via git; any other child is headless.
     argv = args if isinstance(args, (list, tuple)) else [args]
     if str(argv[0]) != "git":
@@ -34,7 +39,7 @@ def _popen_but_git(args, *a, **k):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
@@ -45,7 +50,7 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _put(repo, tshirt):
+def _put(repo, tshirt) -> None:
     doc = {
         "schema": "sizing-object",
         "name": "zero fixture",
@@ -69,7 +74,7 @@ def _emit(repo, capsys, *argv):
     return rc, capsys.readouterr().out
 
 
-def test_raw_ask_emits_without_spawning_or_naming_fire(repo, capsys):
+def test_raw_ask_emits_without_spawning_or_naming_fire(repo, capsys: pytest.CaptureFixture[str]) -> None:
     rc, out = _emit(repo, capsys, "--ask", "add a thing")
     assert rc == 0
     assert "--fire" not in out
@@ -78,7 +83,7 @@ def test_raw_ask_emits_without_spawning_or_naming_fire(repo, capsys):
 @pytest.mark.cadence
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("tshirt", ["XS", "S", "M"])
-def test_ask_sizing_emits_without_spawning_or_naming_fire(repo, capsys, tshirt):
+def test_ask_sizing_emits_without_spawning_or_naming_fire(repo, capsys: pytest.CaptureFixture[str], tshirt) -> None:
     _put(repo, tshirt)
     if tshirt == "M":  # C5: emit runs the gate, which mints the M baton and reads the branch
         subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
@@ -90,14 +95,14 @@ def test_ask_sizing_emits_without_spawning_or_naming_fire(repo, capsys, tshirt):
 @pytest.mark.cadence
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("tshirt", ["XS", "S", "M"])
-def test_gate_spawns_nothing(repo, tshirt):
+def test_gate_spawns_nothing(repo, tshirt) -> None:
     _put(repo, tshirt)
     if tshirt == "M":
         subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
     assert gate(repo, REL, writes=["a.py"]).halt is None
 
 
-def test_stage_spawns_nothing(repo):
+def test_stage_spawns_nothing(repo) -> None:
     _put(repo, "XS")
     m = stage(repo, run_id="zero1", sizing_rel=REL, writes=["pkg/a.py"])
     assert [r.id for r in m.rows] == ["X1"]
@@ -107,14 +112,14 @@ def test_stage_spawns_nothing(repo):
     "argv",
     [["--sizing", REL, "--fire"], ["--ask", "x", "--fire"], ["--ask", "--sizing", REL, "--fire"]],
 )
-def test_fire_with_an_ask_verb_is_refused_before_any_emit(repo, capsys, argv, monkeypatch):
+def test_fire_with_an_ask_verb_is_refused_before_any_emit(repo, capsys: pytest.CaptureFixture[str], argv, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cli, "_dispatch_emit", _boom)
     rc, out = _emit(repo, capsys, *argv)
     assert rc == cli.EXIT_USAGE
     assert out == ""
 
 
-def test_raw_ask_creates_a_missing_out_directory(repo, capsys):
+def test_raw_ask_creates_a_missing_out_directory(repo, capsys: pytest.CaptureFixture[str]) -> None:
     out = repo / "state" / "scratch" / "warp" / "fresh" / "ask.workflow.mjs"
     rc, _ = _emit(repo, capsys, "--ask", "add a thing", "--out", str(out))
     assert rc == 0

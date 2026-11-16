@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -18,7 +19,7 @@ ROW = {"id": "F1", "file": OWN, "before": "    return 1\n", "after": "    return
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Repo:
     return Repo(tmp_path, monkeypatch)
 
 
@@ -34,7 +35,7 @@ def _world(repo: Repo) -> str:
     return base
 
 
-def test_foreign_uncommitted_edit_survives_while_own_edit_is_reverted_and_stashed(repo):
+def test_foreign_uncommitted_edit_survives_while_own_edit_is_reverted_and_stashed(repo) -> None:
     base = _world(repo)
     out = repo.revert(base, [f"{FOREIGN}::test_f", "tests/test_rs.py::test_x"], [ROW])
     assert out["error"] is None
@@ -46,7 +47,7 @@ def test_foreign_uncommitted_edit_survives_while_own_edit_is_reverted_and_stashe
     assert stash.read_bytes() == OWN_APPLIED
 
 
-def test_no_sidecars_leaves_foreign_created_tracked_dirt_untouched_and_unattributed(repo):
+def test_no_sidecars_leaves_foreign_created_tracked_dirt_untouched_and_unattributed(repo) -> None:
     base = _world(repo)
     out = repo.revert(base, [f"{FOREIGN}::test_f"])
     assert out["error"] is None
@@ -56,7 +57,7 @@ def test_no_sidecars_leaves_foreign_created_tracked_dirt_untouched_and_unattribu
     assert [k["path"] for k in out["kept"]] == [FOREIGN]
 
 
-def test_run_finding_naming_a_created_tracked_path_still_restores_it_with_a_stash(repo):
+def test_run_finding_naming_a_created_tracked_path_still_restores_it_with_a_stash(repo) -> None:
     base = _world(repo)
     row = {"id": "F2", "file": FOREIGN, "before": "assert True", "after": "assert False"}
     out = repo.revert(base, [f"{FOREIGN}::test_f"], [row])
@@ -65,7 +66,7 @@ def test_run_finding_naming_a_created_tracked_path_still_restores_it_with_a_stas
     assert (repo.root / out["reverted"][0]["kept_at"]).read_bytes() == FOREIGN_DIRT
 
 
-def test_probe_open_without_sidecars_leaves_foreign_created_tracked_dirt_untouched(repo):
+def test_probe_open_without_sidecars_leaves_foreign_created_tracked_dirt_untouched(repo) -> None:
     base = _world(repo)
     out = review_reverify(
         repo.root, base=base, slice_prefix=PREFIX, session_id=SESSION,

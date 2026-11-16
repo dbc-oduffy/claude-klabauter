@@ -16,6 +16,7 @@ import os
 import sys
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -33,16 +34,16 @@ from coordinator_core.ops.ensure_python3_exe_shim import (
 )
 
 
-def _write(path, data=b"payload"):
+def _write(path, data: bytes = b"payload") -> None:
     path.write_bytes(data)
 
 
-def test_main_noop_on_non_windows(monkeypatch):
+def test_main_noop_on_non_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod, "_is_windows", lambda: False)
     assert main([]) == 0
 
 
-def test_main_delegates_when_windows(monkeypatch, capsys):
+def test_main_delegates_when_windows(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(mod, "_is_windows", lambda: True)
     monkeypatch.setattr(mod, "_resolve_python_bin", lambda: "")
     rc = main([])
@@ -51,7 +52,7 @@ def test_main_delegates_when_windows(monkeypatch, capsys):
     assert "no Python interpreter resolved" in captured.err
 
 
-def test_main_reads_check_only_env(monkeypatch, tmp_path, capsys):
+def test_main_reads_check_only_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write(tmp_path / "python.exe", b"aaa")
     _write(tmp_path / "python3.exe", b"bbb")
     monkeypatch.setattr(mod, "_is_windows", lambda: True)
@@ -64,7 +65,7 @@ def test_main_reads_check_only_env(monkeypatch, tmp_path, capsys):
     assert (tmp_path / "python3.exe").read_bytes() == b"bbb"
 
 
-def test_resolve_python_bin_returns_resolved_value(monkeypatch):
+def test_resolve_python_bin_returns_resolved_value(monkeypatch: pytest.MonkeyPatch) -> None:
     captured = {}
 
     def _fake_resolve(**kwargs):
@@ -76,7 +77,7 @@ def test_resolve_python_bin_returns_resolved_value(monkeypatch):
     assert captured == {"prefer_windowless": False}
 
 
-def test_resolve_python_bin_falls_back_on_invalid_pin(monkeypatch):
+def test_resolve_python_bin_falls_back_on_invalid_pin(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.pyresolve import PythonPinInvalid
 
     captured = {}
@@ -90,7 +91,7 @@ def test_resolve_python_bin_falls_back_on_invalid_pin(monkeypatch):
     assert captured == {"prefer_windowless": False}
 
 
-def test_resolve_python_bin_requests_console_interpreter(monkeypatch):
+def test_resolve_python_bin_requests_console_interpreter(monkeypatch: pytest.MonkeyPatch) -> None:
     captured = {}
 
     def _fake_resolve(**kwargs):
@@ -102,7 +103,7 @@ def test_resolve_python_bin_requests_console_interpreter(monkeypatch):
     assert captured == {"prefer_windowless": False}
 
 
-def test_resolve_python_bin_never_returns_a_windowless_path(monkeypatch):
+def test_resolve_python_bin_never_returns_a_windowless_path(monkeypatch: pytest.MonkeyPatch) -> None:
     windowless = r"C:\Program Files\Python313\pythonw.exe"
     monkeypatch.setattr(
         "coordinator_core.pyresolve.resolve_python_bin", lambda **_: (windowless, [])
@@ -111,7 +112,7 @@ def test_resolve_python_bin_never_returns_a_windowless_path(monkeypatch):
     assert _resolve_python_bin() == ""
 
 
-def test_resolve_python_bin_prefers_console_sibling_when_present(monkeypatch):
+def test_resolve_python_bin_prefers_console_sibling_when_present(monkeypatch: pytest.MonkeyPatch) -> None:
     import ntpath
 
     windowless = r"C:\Program Files\Python313\pythonw.exe"
@@ -124,8 +125,8 @@ def test_resolve_python_bin_prefers_console_sibling_when_present(monkeypatch):
 
 
 def test_resolve_python_bin_windowless_with_no_console_sibling_warns_and_returns_empty(
-    monkeypatch, capsys
-):
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     windowless = r"C:\Program Files\Python313\pythonw.exe"
     monkeypatch.setattr(
         "coordinator_core.pyresolve.resolve_python_bin", lambda **_: (windowless, [])
@@ -138,8 +139,8 @@ def test_resolve_python_bin_windowless_with_no_console_sibling_warns_and_returns
 
 
 def test_resolve_python_bin_pythonpininvalid_fallback_rejects_windowless_sys_executable(
-    monkeypatch, capsys
-):
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     from coordinator_core.pyresolve import PythonPinInvalid
 
     def _raise(**_):
@@ -160,7 +161,7 @@ def test_resolve_python_bin_pythonpininvalid_fallback_rejects_windowless_sys_exe
 # ---------------------------------------------------------------------------
 
 
-def test_install_shim_no_interpreter_resolved(capsys):
+def test_install_shim_no_interpreter_resolved(capsys: pytest.CaptureFixture[str]) -> None:
     rc = _install_shim("", check_only=False)
     assert rc == 0
     captured = capsys.readouterr()
@@ -169,7 +170,7 @@ def test_install_shim_no_interpreter_resolved(capsys):
 
 
 @pytest.mark.parametrize("launcher", ["py", "pyw"])
-def test_install_shim_launcher_skip(launcher, capsys):
+def test_install_shim_launcher_skip(launcher, capsys: pytest.CaptureFixture[str]) -> None:
     rc = _install_shim(launcher, check_only=False)
     assert rc == 0
     captured = capsys.readouterr()
@@ -177,7 +178,7 @@ def test_install_shim_launcher_skip(launcher, capsys):
     assert launcher in captured.err
 
 
-def test_install_shim_source_missing(tmp_path, capsys):
+def test_install_shim_source_missing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     missing = tmp_path / "nonexistent" / "python.exe"
     rc = _install_shim(str(missing), check_only=False)
     assert rc == 0
@@ -185,7 +186,7 @@ def test_install_shim_source_missing(tmp_path, capsys):
     assert "not found" in captured.err
 
 
-def test_install_shim_appx_stub_fails_loud(tmp_path, capsys):
+def test_install_shim_appx_stub_fails_loud(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write(tmp_path / "python.exe")
     (tmp_path / "python3.exe").mkdir()
     rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
@@ -195,7 +196,7 @@ def test_install_shim_appx_stub_fails_loud(tmp_path, capsys):
     assert "install-substrate" in captured.err
 
 
-def test_install_shim_exe_basename_pth_trap_fails_loud(tmp_path, capsys):
+def test_install_shim_exe_basename_pth_trap_fails_loud(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write(tmp_path / "python.exe")
     _write(tmp_path / "python._pth", b"python312.zip\n.\n")
     rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
@@ -206,7 +207,7 @@ def test_install_shim_exe_basename_pth_trap_fails_loud(tmp_path, capsys):
     assert not (tmp_path / "python3.exe").exists()
 
 
-def test_install_shim_dll_named_pth_does_not_trip_trap(tmp_path, capsys):
+def test_install_shim_dll_named_pth_does_not_trip_trap(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write(tmp_path / "python.exe", b"fresh-bytes")
     _write(tmp_path / "python312._pth", b"python312.zip\n.\n")
     rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
@@ -215,7 +216,7 @@ def test_install_shim_dll_named_pth_does_not_trip_trap(tmp_path, capsys):
     assert (tmp_path / "python3.exe").read_bytes() == b"fresh-bytes"
 
 
-def test_install_shim_python3_only_pth_does_not_trip_trap(tmp_path, capsys):
+def test_install_shim_python3_only_pth_does_not_trip_trap(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write(tmp_path / "python.exe", b"fresh-bytes")
     _write(tmp_path / "python3._pth", b"python3.zip\n.\n")
     rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
@@ -224,7 +225,7 @@ def test_install_shim_python3_only_pth_does_not_trip_trap(tmp_path, capsys):
     assert (tmp_path / "python3.exe").read_bytes() == b"fresh-bytes"
 
 
-def test_install_shim_unrelated_basename_pth_does_not_trip_trap(tmp_path, capsys):
+def test_install_shim_unrelated_basename_pth_does_not_trip_trap(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write(tmp_path / "python.exe", b"fresh-bytes")
     _write(tmp_path / "other._pth", b"other.zip\n.\n")
     rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
@@ -234,7 +235,7 @@ def test_install_shim_unrelated_basename_pth_does_not_trip_trap(tmp_path, capsys
 
 
 @pytest.fixture
-def case_insensitive_fs(tmp_path):
+def case_insensitive_fs(tmp_path: Path) -> None:
     # The trap models NTFS, where "Python._pth" IS "python._pth"; on a
     # case-sensitive FS they are distinct files and no trap exists to trip.
     probe = tmp_path / "CaseProbe"
@@ -243,7 +244,7 @@ def case_insensitive_fs(tmp_path):
         pytest.skip("case-sensitive filesystem: mixed-case ._pth is a different file")
 
 
-def test_install_shim_pth_trap_case_insensitive_lower(tmp_path, capsys, case_insensitive_fs):
+def test_install_shim_pth_trap_case_insensitive_lower(tmp_path: Path, capsys: pytest.CaptureFixture[str], case_insensitive_fs) -> None:
     _write(tmp_path / "python.exe")
     _write(tmp_path / "Python._pth", b"python312.zip\n.\n")
     rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
@@ -251,7 +252,7 @@ def test_install_shim_pth_trap_case_insensitive_lower(tmp_path, capsys, case_ins
     assert not (tmp_path / "python3.exe").exists()
 
 
-def test_install_shim_pth_trap_case_insensitive_upper(tmp_path, capsys, case_insensitive_fs):
+def test_install_shim_pth_trap_case_insensitive_upper(tmp_path: Path, capsys: pytest.CaptureFixture[str], case_insensitive_fs) -> None:
     _write(tmp_path / "python.exe")
     _write(tmp_path / "PYTHON._PTH", b"python312.zip\n.\n")
     rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
@@ -259,7 +260,7 @@ def test_install_shim_pth_trap_case_insensitive_upper(tmp_path, capsys, case_ins
     assert not (tmp_path / "python3.exe").exists()
 
 
-def test_install_shim_already_valid_noop(tmp_path, capsys):
+def test_install_shim_already_valid_noop(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write(tmp_path / "python.exe", b"same-bytes")
     os.link(tmp_path / "python.exe", tmp_path / "python3.exe")
     rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
@@ -274,7 +275,7 @@ def test_install_shim_already_valid_noop(tmp_path, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_install_shim_check_only_stale_no_mutation(tmp_path, capsys):
+def test_install_shim_check_only_stale_no_mutation(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write(tmp_path / "python.exe", b"new-bytes")
     _write(tmp_path / "python3.exe", b"old-bytes")
     rc = _install_shim(str(tmp_path / "python.exe"), check_only=True)
@@ -284,7 +285,7 @@ def test_install_shim_check_only_stale_no_mutation(tmp_path, capsys):
     assert (tmp_path / "python3.exe").read_bytes() == b"old-bytes"
 
 
-def test_install_shim_stale_reshimmed_via_hardlink(tmp_path, capsys):
+def test_install_shim_stale_reshimmed_via_hardlink(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write(tmp_path / "python.exe", b"new-bytes")
     _write(tmp_path / "python3.exe", b"old-bytes")
     rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
@@ -295,7 +296,7 @@ def test_install_shim_stale_reshimmed_via_hardlink(tmp_path, capsys):
     assert (tmp_path / "python.exe").stat().st_ino == (tmp_path / "python3.exe").stat().st_ino
 
 
-def test_install_shim_fresh_hardlink(tmp_path, capsys):
+def test_install_shim_fresh_hardlink(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write(tmp_path / "python.exe", b"fresh-bytes")
     rc = _install_shim(str(tmp_path / "python.exe"), check_only=False)
     assert rc == 0
@@ -303,7 +304,7 @@ def test_install_shim_fresh_hardlink(tmp_path, capsys):
     assert (tmp_path / "python3.exe").read_bytes() == b"fresh-bytes"
 
 
-def test_install_shim_hardlink_fails_falls_back_to_copy(tmp_path, monkeypatch, capsys):
+def test_install_shim_hardlink_fails_falls_back_to_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _write(tmp_path / "python.exe", b"copy-me")
 
     def _raise_link(src, dst):
@@ -317,7 +318,7 @@ def test_install_shim_hardlink_fails_falls_back_to_copy(tmp_path, monkeypatch, c
     assert (tmp_path / "python3.exe").read_bytes() == b"copy-me"
 
 
-def test_install_shim_hardlink_and_copy_both_fail(tmp_path, monkeypatch, capsys):
+def test_install_shim_hardlink_and_copy_both_fail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _write(tmp_path / "python.exe", b"unreachable")
 
     def _raise_link(src, dst):
@@ -332,28 +333,28 @@ def test_install_shim_hardlink_and_copy_both_fail(tmp_path, monkeypatch, capsys)
     assert rc == 1
 
 
-def test_is_appx_stub_false_for_nonexistent_path(tmp_path):
+def test_is_appx_stub_false_for_nonexistent_path(tmp_path: Path) -> None:
     assert _is_appx_stub(tmp_path / "nope.exe") is False
 
 
-def test_is_appx_stub_false_for_regular_file(tmp_path):
+def test_is_appx_stub_false_for_regular_file(tmp_path: Path) -> None:
     target = tmp_path / "python.exe"
     _write(target)
     assert _is_appx_stub(target) is False
 
 
-def test_is_appx_stub_true_for_exists_not_file(tmp_path):
+def test_is_appx_stub_true_for_exists_not_file(tmp_path: Path) -> None:
     target = tmp_path / "python3.exe"
     target.mkdir()
     assert _is_appx_stub(target) is True
 
 
-def test_classify_python3_not_found(monkeypatch):
+def test_classify_python3_not_found(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod.shutil, "which", lambda name: None)
     assert _classify_python3() == {"classification": "not_found", "path": None}
 
 
-def test_classify_python3_stub_via_appx_probe(monkeypatch, tmp_path):
+def test_classify_python3_stub_via_appx_probe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     stub = tmp_path / "python3"
     stub.mkdir()
     monkeypatch.setattr(mod.shutil, "which", lambda name: str(stub))
@@ -366,7 +367,7 @@ def test_classify_python3_stub_via_appx_probe(monkeypatch, tmp_path):
     assert result == {"classification": "stub", "path": str(stub)}
 
 
-def test_classify_python3_stub_via_failed_version_probe(monkeypatch, tmp_path):
+def test_classify_python3_stub_via_failed_version_probe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fake = tmp_path / "python3"
     _write(fake)
     monkeypatch.setattr(mod.shutil, "which", lambda name: str(fake))
@@ -379,7 +380,7 @@ def test_classify_python3_stub_via_failed_version_probe(monkeypatch, tmp_path):
     assert result == {"classification": "stub", "path": str(fake)}
 
 
-def test_classify_python3_stub_on_oserror(monkeypatch, tmp_path):
+def test_classify_python3_stub_on_oserror(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fake = tmp_path / "python3"
     _write(fake)
     monkeypatch.setattr(mod.shutil, "which", lambda name: str(fake))
@@ -392,7 +393,7 @@ def test_classify_python3_stub_on_oserror(monkeypatch, tmp_path):
     assert result == {"classification": "stub", "path": str(fake)}
 
 
-def test_classify_python3_stub_on_timeout(monkeypatch, tmp_path):
+def test_classify_python3_stub_on_timeout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fake = tmp_path / "python3"
     _write(fake)
     monkeypatch.setattr(mod.shutil, "which", lambda name: str(fake))
@@ -405,7 +406,7 @@ def test_classify_python3_stub_on_timeout(monkeypatch, tmp_path):
     assert result == {"classification": "stub", "path": str(fake)}
 
 
-def test_classify_python3_ready(monkeypatch, tmp_path):
+def test_classify_python3_ready(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     real = tmp_path / "python3"
     _write(real)
     monkeypatch.setattr(mod.shutil, "which", lambda name: str(real))
@@ -418,7 +419,7 @@ def test_classify_python3_ready(monkeypatch, tmp_path):
     assert result == {"classification": "ready", "path": str(real)}
 
 
-def test_classify_python3_idempotent_double_invocation(monkeypatch, tmp_path):
+def test_classify_python3_idempotent_double_invocation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     real = tmp_path / "python3"
     _write(real)
     monkeypatch.setattr(mod.shutil, "which", lambda name: str(real))
@@ -432,26 +433,26 @@ def test_classify_python3_idempotent_double_invocation(monkeypatch, tmp_path):
     assert first == second == {"classification": "ready", "path": str(real)}
 
 
-def test_classify_python3_real_machine_does_not_crash():
+def test_classify_python3_real_machine_does_not_crash() -> None:
     result = _classify_python3()
     assert result["classification"] in {"not_found", "ready", "stub"}
     if sys.platform not in ("win32", "cygwin"):
         assert result["classification"] != "stub"
 
 
-def test_op_registered_under_install_key():
+def test_op_registered_under_install_key() -> None:
     from coordinator_core.ipc import _REGISTRY
 
     assert "install.detect_python3_appx_stub" in _REGISTRY
 
 
-def test_detect_python3_appx_stub_handler_ignores_params_and_repo_root(monkeypatch, tmp_path):
+def test_detect_python3_appx_stub_handler_ignores_params_and_repo_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(mod.shutil, "which", lambda name: None)
     result = asyncio.run(_detect_python3_appx_stub({"unexpected": "value"}, repo_root=tmp_path))
     assert result == {"classification": "not_found", "path": None}
 
 
-def test_detect_python3_appx_stub_handler_default_repo_root(monkeypatch):
+def test_detect_python3_appx_stub_handler_default_repo_root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod.shutil, "which", lambda name: None)
     result = asyncio.run(_detect_python3_appx_stub({}))
     assert result == {"classification": "not_found", "path": None}

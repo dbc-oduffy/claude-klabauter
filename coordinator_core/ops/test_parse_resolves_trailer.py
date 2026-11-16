@@ -10,6 +10,7 @@ from coordinator_core.win_portability import (
     no_console_creationflags,
     no_console_passthrough_kwargs,
 )
+from pathlib import Path
 
 # Declared, not excused: this file spawns real git because the property under test
 # is `Resolves:` trailer parsing off REAL commit metadata (`git log`/`git show`
@@ -23,7 +24,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 @pytest.fixture()
-def git_repo(tmp_path):
+def git_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(
@@ -67,7 +68,7 @@ def _commit(repo, message: str) -> str:
     return result.stdout.strip()
 
 
-def test_zero_trailers_empty_output_exit_0(git_repo, monkeypatch):
+def test_zero_trailers_empty_output_exit_0(git_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(git_repo)
     sha = _commit(git_repo, "no trailer commit")
     lines, rc = run(sha)
@@ -75,7 +76,7 @@ def test_zero_trailers_empty_output_exit_0(git_repo, monkeypatch):
     assert rc == 0
 
 
-def test_one_trailer_extracted(git_repo, monkeypatch):
+def test_one_trailer_extracted(git_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(git_repo)
     sha = _commit(git_repo, "one trailer commit\n\nResolves: hnd-2026-07-08-abc123\n")
     lines, rc = run(sha)
@@ -83,7 +84,7 @@ def test_one_trailer_extracted(git_repo, monkeypatch):
     assert rc == 0
 
 
-def test_multiple_trailers_all_extracted(git_repo, monkeypatch):
+def test_multiple_trailers_all_extracted(git_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(git_repo)
     sha = _commit(
         git_repo,
@@ -95,21 +96,21 @@ def test_multiple_trailers_all_extracted(git_repo, monkeypatch):
     assert rc == 0
 
 
-def test_invalid_commit_nonzero_exit(git_repo, monkeypatch):
+def test_invalid_commit_nonzero_exit(git_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(git_repo)
     lines, rc = run("not-a-real-commit-sha")
     assert lines == []
     assert rc == 2
 
 
-def test_not_a_git_repo(tmp_path, monkeypatch):
+def test_not_a_git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     lines, rc = run("HEAD")
     assert lines == []
     assert rc == 2
 
 
-def test_fallback_case_insensitive_trailer(git_repo, monkeypatch):
+def test_fallback_case_insensitive_trailer(git_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(git_repo)
     sha = _commit(git_repo, "mixed case\n\nresolves: low-case-id\n")
     lines, rc = run(sha)
@@ -117,7 +118,7 @@ def test_fallback_case_insensitive_trailer(git_repo, monkeypatch):
     assert rc == 0
 
 
-def test_fallback_tool_failure_diagnosed_not_silently_zero(git_repo, monkeypatch, capsys):
+def test_fallback_tool_failure_diagnosed_not_silently_zero(git_repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.chdir(git_repo)
     sha = _commit(git_repo, "no resolves trailer here at all")
     real_run = subprocess.run
@@ -139,21 +140,21 @@ def test_fallback_tool_failure_diagnosed_not_silently_zero(git_repo, monkeypatch
     assert "fatal: boom" in captured.err
 
 
-def test_cli_no_args_usage_exit_1(capsys):
+def test_cli_no_args_usage_exit_1(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main([])
     captured = capsys.readouterr()
     assert rc == 1
     assert "Usage: parse-resolves-trailer.sh <commit>" in captured.err
 
 
-def test_cli_help_exit_0(capsys):
+def test_cli_help_exit_0(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--help"])
     captured = capsys.readouterr()
     assert rc == 0
     assert "Usage: parse-resolves-trailer.sh <commit>" in captured.out
 
 
-def test_cli_prints_artifact_ids(git_repo, monkeypatch, capsys):
+def test_cli_prints_artifact_ids(git_repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.chdir(git_repo)
     sha = _commit(git_repo, "one trailer\n\nResolves: hnd-xyz\n")
     rc = main([sha])

@@ -123,6 +123,8 @@ from __future__ import annotations
 
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.session import guard_unlock_sentinel as gus
+from pathlib import Path
+import pytest
 
 _OVERRIDE_NOTE_LEAD = "See "
 
@@ -133,13 +135,13 @@ _RETIRED_DISCLAIMER = "Bypass options for a human operator, not this agent:"
 
 class TestOperatorOverrideNoteDisclaimer:
 
-    def test_doc_pointer_statement_present(self):
+    def test_doc_pointer_statement_present(self) -> None:
         note = operator_override_note(
             "COORDINATOR_OVERRIDE_SOME_GUARD", payload={"session_id": "sess-c1d-em"}
         )
         assert _OVERRIDE_NOTE_LEAD in note
 
-    def test_doc_pointer_statement_leads(self):
+    def test_doc_pointer_statement_leads(self) -> None:
         note = operator_override_note(
             "COORDINATOR_OVERRIDE_SOME_GUARD", payload={"session_id": "sess-c1d-em"}
         )
@@ -148,7 +150,7 @@ class TestOperatorOverrideNoteDisclaimer:
             "statement -- got: %r" % note
         )
 
-    def test_doc_pointer_statement_leads_with_reason_placeholder_variant(self):
+    def test_doc_pointer_statement_leads_with_reason_placeholder_variant(self) -> None:
         default_note = operator_override_note(
             "COORDINATOR_QUEUE_PUNT", payload={"session_id": "sess-c1d-em"}
         )
@@ -160,7 +162,7 @@ class TestOperatorOverrideNoteDisclaimer:
         assert note.startswith(_OVERRIDE_NOTE_LEAD)
         assert note == default_note
 
-    def test_retired_disclaimer_register_does_not_reappear(self):
+    def test_retired_disclaimer_register_does_not_reappear(self) -> None:
         note = operator_override_note(
             "COORDINATOR_OVERRIDE_SOME_GUARD", payload={"session_id": "sess-c1d-em"}
         )
@@ -192,12 +194,12 @@ class TestAnnotateDenyDisclaimer:
             doc_display="claude-klabauter docs/reference/guard-override-keys.md",
         )
 
-    def test_unlock_statement_no_longer_present(self, tmp_path, monkeypatch):
+    def test_unlock_statement_no_longer_present(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         out = self._fire(tmp_path, monkeypatch)
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
         assert _UNLOCK_BLOCK_LEAD not in reason
 
-    def test_reason_leads_the_whole_payload(self, tmp_path, monkeypatch):
+    def test_reason_leads_the_whole_payload(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         out = self._fire(tmp_path, monkeypatch)
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
         assert reason.startswith("BLOCKED: some guard fired."), (
@@ -205,7 +207,7 @@ class TestAnnotateDenyDisclaimer:
             "operator-unlock block -- got: %r" % reason
         )
 
-    def test_no_second_block_is_appended(self, tmp_path, monkeypatch):
+    def test_no_second_block_is_appended(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         out = self._fire(tmp_path, monkeypatch)
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
         head, sep, tail = reason.partition("\n\n")
@@ -215,12 +217,12 @@ class TestAnnotateDenyDisclaimer:
             "-- got: %r" % tail
         )
 
-    def test_original_reason_still_present_unchanged(self, tmp_path, monkeypatch):
+    def test_original_reason_still_present_unchanged(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         out = self._fire(tmp_path, monkeypatch)
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
         assert reason.startswith("BLOCKED: some guard fired.")
 
-    def test_retired_disclaimer_register_does_not_reappear(self, tmp_path, monkeypatch):
+    def test_retired_disclaimer_register_does_not_reappear(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         out = self._fire(tmp_path, monkeypatch)
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
         assert _RETIRED_DISCLAIMER not in reason, (
@@ -228,7 +230,7 @@ class TestAnnotateDenyDisclaimer:
             "it was itself the injection tell the 2026-08-11 reshape removed"
         )
 
-    def test_payload_does_not_read_as_agent_directed_instruction(self, tmp_path, monkeypatch):
+    def test_payload_does_not_read_as_agent_directed_instruction(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         out = self._fire(tmp_path, monkeypatch)
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
         assert "create " not in reason.split("BLOCKED: some guard fired.", 1)[-1], (
@@ -240,7 +242,7 @@ class TestAnnotateDenyDisclaimer:
         assert "outside this session" not in reason
         assert "doctrine violation" not in reason
 
-    def test_no_resolved_sentinel_path_or_recipe(self, tmp_path, monkeypatch):
+    def test_no_resolved_sentinel_path_or_recipe(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """PM ruling, 2026-08-11 (this dispatch): "a guard's block message
         must STOP carrying its own unlock recipe." The prior fix (item 2,
         above) only fixed the ORDER and register of the block -- it still
@@ -301,7 +303,7 @@ class TestAnnotateDenyDisclaimer:
             "the in-band route unusable -- got: %r" % reason
         )
 
-    def test_missing_session_id_skips_the_line_entirely(self, tmp_path, monkeypatch):
+    def test_missing_session_id_skips_the_line_entirely(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Documented negative case: a missing session_id must not render a
         sentinel path keyed to an empty session.
 
@@ -339,7 +341,7 @@ class TestAnnotateDenyAgentIdSuppression:
     malformed/unresolvable/exception now degrade to terse instead of
     emitting."""
 
-    def _fire(self, tmp_path, monkeypatch, *, agent_id=""):
+    def _fire(self, tmp_path, monkeypatch, *, agent_id: str = ""):
         import tempfile
 
         monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
@@ -357,7 +359,7 @@ class TestAnnotateDenyAgentIdSuppression:
             agent_id=agent_id,
         )
 
-    def test_resolved_subagent_agent_id_suppresses_the_block(self, tmp_path, monkeypatch):
+    def test_resolved_subagent_agent_id_suppresses_the_block(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         out = self._fire(tmp_path, monkeypatch, agent_id="abcdef012345")
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
         assert _UNLOCK_BLOCK_LEAD not in reason
@@ -366,13 +368,13 @@ class TestAnnotateDenyAgentIdSuppression:
             "unlock block, no affordance it could act on -- got: %r" % reason
         )
 
-    def test_absent_agent_id_resolved_em_still_renders_nothing(self, tmp_path, monkeypatch):
+    def test_absent_agent_id_resolved_em_still_renders_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         out = self._fire(tmp_path, monkeypatch, agent_id="")
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
         assert _UNLOCK_BLOCK_LEAD not in reason
         assert reason == "BLOCKED: some guard fired." + TAIL
 
-    def test_malformed_agent_id_degrades_to_terse(self, tmp_path, monkeypatch):
+    def test_malformed_agent_id_degrades_to_terse(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         out = self._fire(tmp_path, monkeypatch, agent_id="not-a-recognised-shape")
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
         assert _UNLOCK_BLOCK_LEAD not in reason

@@ -9,12 +9,13 @@ from coordinator_core.bash_guards import block_subagent_destructive_action as gu
 from coordinator_core.ops.dispatch_emit import grind_stages
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
+import pytest
 
 PLAN_REL = "docs/plans/p.md"
 RUN = "r7"
 
 
-def test_execute_plan_executor_briefs_carry_the_clause(tmp_path: Path, monkeypatch) -> None:
+def test_execute_plan_executor_briefs_carry_the_clause(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "_DECLARED_DELETE_CHANNEL_LIVE", True)
     (tmp_path / ".git").mkdir()
     rows = "".join(
@@ -34,7 +35,7 @@ def test_execute_plan_executor_briefs_carry_the_clause(tmp_path: Path, monkeypat
         assert _declared_delete_license.brief_clause(RUN, rid) in text
 
 
-def test_bug_blitz_fix_stage_prompt_carries_the_clause(monkeypatch) -> None:
+def test_bug_blitz_fix_stage_prompt_carries_the_clause(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "_DECLARED_DELETE_CHANNEL_LIVE", True)
     call = grind_stages.compose_fix_call(
         label="fix", phase_title="Grind", row_id_js="row.id", locked_files_js="files", run_id_js="RUN_ID"
@@ -43,7 +44,7 @@ def test_bug_blitz_fix_stage_prompt_carries_the_clause(monkeypatch) -> None:
     assert "COORDINATOR_DISPATCH_ROW=' + (RUN_ID) + '/' + (row.id)" in call
 
 
-def test_bug_blitz_fix_stage_prompt_is_clause_free_while_the_channel_is_dormant(monkeypatch) -> None:
+def test_bug_blitz_fix_stage_prompt_is_clause_free_while_the_channel_is_dormant(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "_DECLARED_DELETE_CHANNEL_LIVE", False)
     call = grind_stages.compose_fix_call(
         label="fix", phase_title="Grind", row_id_js="row.id", locked_files_js="files", run_id_js="RUN_ID"
@@ -51,7 +52,7 @@ def test_bug_blitz_fix_stage_prompt_is_clause_free_while_the_channel_is_dormant(
     assert _declared_delete_license.MARKER_VAR not in call
 
 
-def test_memo_draft_executor_brief_carries_the_clause(tmp_path: Path, monkeypatch) -> None:
+def test_memo_draft_executor_brief_carries_the_clause(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit.ask_stage import OwedRow, _memo_draft_steps
 
     monkeypatch.setattr(guard, "_DECLARED_DELETE_CHANNEL_LIVE", True)
@@ -66,7 +67,7 @@ def test_memo_draft_executor_brief_carries_the_clause(tmp_path: Path, monkeypatc
     assert _declared_delete_license.brief_clause(RUN, "M1-memo-draft") in text
 
 
-def test_memo_draft_executor_brief_is_clause_free_while_the_channel_is_dormant(tmp_path: Path, monkeypatch) -> None:
+def test_memo_draft_executor_brief_is_clause_free_while_the_channel_is_dormant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit.ask_stage import OwedRow, _memo_draft_steps
 
     monkeypatch.setattr(guard, "_DECLARED_DELETE_CHANNEL_LIVE", False)

@@ -29,6 +29,10 @@ from coordinator_core.benchmarks import headless_fire_ask_gate_route as bench
 from coordinator_core.ops.workflow_fire import headless as real_headless
 from coordinator_core.temp_layout import mkdtemp_in
 from coordinator_core.warm import breadcrumb, client, election, engine_root as engine_root_mod, skew
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = pytest.mark.cadence
 
@@ -87,14 +91,14 @@ else:
 '''
 
 
-def test_route_is_cold_only_when_cold_operation_is_spawned():
+def test_route_is_cold_only_when_cold_operation_is_spawned() -> None:
     cold = [["python", "-m", bench.COLD_MODULE, "req.json", "resp.json"]]
     assert bench.classify_route(cold) == "cold"
     assert bench.classify_route([]) == "warm"
     assert bench.classify_route([["git", "status"]]) == "warm"
 
 
-def test_error_codes():
+def test_error_codes() -> None:
     assert bench.error_code_of(None) is None
     assert bench.error_code_of(subprocess.TimeoutExpired("x", 1)) == "timeout"
     assert bench.error_code_of(RuntimeError(json.dumps({"code": -32004, "message": "hung"}))) == -32004
@@ -102,13 +106,13 @@ def test_error_codes():
     assert bench.error_code_of(ValueError("v")) == "ValueError"
 
 
-def test_unstamped_refusal_code_is_the_engine_constant():
+def test_unstamped_refusal_code_is_the_engine_constant() -> None:
     from coordinator_core import ipc
 
     assert bench.UNSTAMPED_ENGINE_ROOT_CODE == ipc.UNSTAMPED_ENGINE_ROOT_ERROR == -32005
 
 
-def test_route_note_is_read_and_absent_note_is_empty(tmp_path):
+def test_route_note_is_read_and_absent_note_is_empty(tmp_path: Path) -> None:
     assert bench.read_route_note(tmp_path) == {}
     (tmp_path / "warm_route.json").write_text("not json", encoding="utf-8")
     assert bench.read_route_note(tmp_path) == {}
@@ -116,7 +120,7 @@ def test_route_note_is_read_and_absent_note_is_empty(tmp_path):
     assert bench.read_route_note(tmp_path) == {"route": "cold", "reason": "unstamped_root"}
 
 
-def test_bounded_call_reports_timeout_on_cold_route(tmp_path, monkeypatch):
+def test_bounded_call_reports_timeout_on_cold_route(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("COORDINATOR_WARM", "0")
     report = bench.measure(timeout=0.05)
@@ -141,7 +145,7 @@ def _stamped_root(base: Path, name: str, stamp: str) -> Path:
     return root
 
 
-def _load_headless_at(root: Path):
+def _load_headless_at(root: Path) -> ModuleType:
     path = root / "coordinator_core" / "ops" / "workflow_fire" / "headless.py"
     spec = importlib.util.spec_from_file_location(f"headless_at_{root.name}", path)
     module = importlib.util.module_from_spec(spec)
@@ -163,7 +167,7 @@ def _run_as_interpreter_at(monkeypatch, root: Path) -> None:
 
 
 @pytest.fixture()
-def warm_world(tmp_path, monkeypatch):
+def warm_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Real-client env on a short runtime base, a `_spawn_once` the client cannot use to start servers, and teardown."""
     rt = mkdtemp_in("hf-", None if os.name == "nt" else "/tmp")
     monkeypatch.setenv("COORDINATOR_WARM", "1")
@@ -207,7 +211,7 @@ def _no_cold(module, monkeypatch) -> list:
     return ran
 
 
-def test_real_warm_server_at_executor_root_serves_ask_gate_warm_inside_the_bar(tmp_path, monkeypatch, warm_world):
+def test_real_warm_server_at_executor_root_serves_ask_gate_warm_inside_the_bar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_world) -> None:
     root = _stamped_root(tmp_path, "executor", "sha:" + "a" * 40 + "\n")
     _run_as_interpreter_at(monkeypatch, root)
     headless = _load_headless_at(root)
@@ -227,7 +231,7 @@ def test_real_warm_server_at_executor_root_serves_ask_gate_warm_inside_the_bar(t
     assert bench.read_route_note(tmp_path / "op")["route"] == "warm"
 
 
-def test_server_at_a_different_stamp_is_never_reached_and_the_fallthrough_is_recorded(tmp_path, monkeypatch, warm_world, capsys):
+def test_server_at_a_different_stamp_is_never_reached_and_the_fallthrough_is_recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_world, capsys: pytest.CaptureFixture[str]) -> None:
     server_root = _stamped_root(tmp_path, "server", "sha:" + "b" * 40 + "\n")
     _run_as_interpreter_at(monkeypatch, server_root)
     _boot_server(server_root, warm_world)
@@ -245,7 +249,7 @@ def test_server_at_a_different_stamp_is_never_reached_and_the_fallthrough_is_rec
     assert "routed cold: no_server" in capsys.readouterr().err
 
 
-def test_private_engine_root_with_the_shared_stamp_still_falls_through_cold(tmp_path, monkeypatch, warm_world):
+def test_private_engine_root_with_the_shared_stamp_still_falls_through_cold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_world) -> None:
     stamp = "sha:" + "d" * 40 + "\n"
     shared = _stamped_root(tmp_path, "shared", stamp)
     _run_as_interpreter_at(monkeypatch, shared)

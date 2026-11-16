@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import foreign_hunks as fh
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
@@ -24,13 +25,13 @@ def _git(root, *args):
     ).stdout.strip()
 
 
-def _write(root, lines):
+def _write(root, lines) -> None:
     p = root / PATH
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes("".join(lines).encode())
 
 
-def _edit(lines, at_line, n=1):
+def _edit(lines, at_line, n: int = 1):
     out = list(lines)
     for k in range(n):
         out[at_line - 1 + 4 * k] = f"edited {at_line + 4 * k}\n"
@@ -38,7 +39,7 @@ def _edit(lines, at_line, n=1):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@t")
     _git(tmp_path, "config", "user.name", "t")
@@ -49,7 +50,7 @@ def repo(tmp_path):
     return tmp_path
 
 
-def _holder(root, kept_lines, *, kept_blob=None):
+def _holder(root, kept_lines, *, kept_blob=None) -> None:
     base = _git(root, "rev-parse", "HEAD")
     kept_file = root / "scratch_kept.txt"
     kept_file.write_bytes("".join(kept_lines).encode())
@@ -63,14 +64,14 @@ def _holder(root, kept_lines, *, kept_blob=None):
     )
 
 
-def _no_spawn(monkeypatch):
+def _no_spawn(monkeypatch) -> None:
     def boom(*a, **k):
         raise AssertionError("subprocess spawned")
 
     monkeypatch.setattr(subprocess, "Popen", boom)
 
 
-def test_attributed_names_the_holders_edit_range(repo, monkeypatch):
+def test_attributed_names_the_holders_edit_range(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(repo, _edit(BASE_LINES, 5))
     _write(repo, _edit(_edit(BASE_LINES, 5), 30))
     _no_spawn(monkeypatch)
@@ -81,7 +82,7 @@ def test_attributed_names_the_holders_edit_range(repo, monkeypatch):
     assert headers == ["@@ -5,1 +5,1 @@"]
 
 
-def test_unattributed_fallback_reads_head_against_worktree(repo, monkeypatch):
+def test_unattributed_fallback_reads_head_against_worktree(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(repo, _edit(BASE_LINES, 12))
     _no_spawn(monkeypatch)
 
@@ -92,7 +93,7 @@ def test_unattributed_fallback_reads_head_against_worktree(repo, monkeypatch):
     assert headers == ["@@ -12,1 +12,1 @@"]
 
 
-def test_unreadable_kept_blob_falls_back_without_raising(repo):
+def test_unreadable_kept_blob_falls_back_without_raising(repo) -> None:
     _holder(repo, BASE_LINES, kept_blob="0" * 40)
     _write(repo, _edit(BASE_LINES, 9))
 
@@ -102,11 +103,11 @@ def test_unreadable_kept_blob_falls_back_without_raising(repo):
     assert headers == ["@@ -9,1 +9,1 @@"]
 
 
-def test_clean_path_and_missing_file_yield_nothing(repo):
+def test_clean_path_and_missing_file_yield_nothing(repo) -> None:
     assert fh.foreign_hunks(repo, [(PATH, HOLDER), ("absent.py", HOLDER)]) == []
 
 
-def test_cap_limits_headers_and_total_keeps_the_count(repo):
+def test_cap_limits_headers_and_total_keeps_the_count(repo) -> None:
     kept = _edit(BASE_LINES, 2, n=6)
     _holder(repo, kept)
 
@@ -135,7 +136,7 @@ def _autocrlf_repo(root, value):
     return root
 
 
-def _raw_holder(root, raw):
+def _raw_holder(root, raw) -> None:
     from coordinator_core.git.git_dir import resolve_git_common_dir
     from coordinator_core.git.git_objects import write_object
 
@@ -150,7 +151,7 @@ def _raw_holder(root, raw):
     )
 
 
-def test_crlf_kept_blob_against_lf_base_names_only_the_changed_line(tmp_path):
+def test_crlf_kept_blob_against_lf_base_names_only_the_changed_line(tmp_path: Path) -> None:
     root = _autocrlf_repo(tmp_path, "true")
     _raw_holder(root, _crlf(_edit(BASE_LINES[:20], 5)))
 
@@ -160,7 +161,7 @@ def test_crlf_kept_blob_against_lf_base_names_only_the_changed_line(tmp_path):
     assert headers == ["@@ -5,1 +5,1 @@"]
 
 
-def test_crlf_worktree_against_lf_head_names_only_the_changed_line(tmp_path):
+def test_crlf_worktree_against_lf_head_names_only_the_changed_line(tmp_path: Path) -> None:
     root = _autocrlf_repo(tmp_path, "true")
     (root / PATH).write_bytes(_crlf(_edit(BASE_LINES[:20], 5)))
 
@@ -170,7 +171,7 @@ def test_crlf_worktree_against_lf_head_names_only_the_changed_line(tmp_path):
     assert headers == ["@@ -5,1 +5,1 @@"]
 
 
-def test_refused_lift_contributes_nothing_and_does_not_raise(tmp_path):
+def test_refused_lift_contributes_nothing_and_does_not_raise(tmp_path: Path) -> None:
     root = _autocrlf_repo(tmp_path, "false")
     raw = _crlf(_edit(BASE_LINES[:20], 5))
     _raw_holder(root, raw)
@@ -180,7 +181,7 @@ def test_refused_lift_contributes_nothing_and_does_not_raise(tmp_path):
 
 
 @pytest.mark.parametrize("n", [1, 10])
-def test_zero_spawns_whatever_the_hunk_count(repo, monkeypatch, n):
+def test_zero_spawns_whatever_the_hunk_count(repo, monkeypatch: pytest.MonkeyPatch, n) -> None:
     _holder(repo, _edit(BASE_LINES, 1, n=n))
     _write(repo, _edit(BASE_LINES, 1, n=n))
     _no_spawn(monkeypatch)

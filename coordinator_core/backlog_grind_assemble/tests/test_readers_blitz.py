@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.backlog_grind_assemble import readers_blitz
+import pytest
 
 
 def _collect_bug_blitz(tmp_path: Path, monkeypatch) -> object:
@@ -25,7 +26,7 @@ def _grant_check_directive(result) -> dict:
     raise AssertionError("grant check directive not found")
 
 
-def test_grant_flow_present_for_bug_blitz_cadence(tmp_path: Path, monkeypatch) -> None:
+def test_grant_flow_present_for_bug_blitz_cadence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     result = _collect_bug_blitz(tmp_path, monkeypatch)
     write_directive = _grant_write_directive(result)
     check_directive = _grant_check_directive(result)
@@ -38,7 +39,7 @@ def test_grant_flow_present_for_bug_blitz_cadence(tmp_path: Path, monkeypatch) -
     assert "j-bug-blitz-tier-u-grant" in jp_ids
 
 
-def test_grant_flow_absent_for_every_other_cadence(tmp_path: Path, monkeypatch) -> None:
+def test_grant_flow_absent_for_every_other_cadence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(readers_blitz, "_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr(readers_blitz, "load_family_records", lambda *a, **k: [])
     for cadence in ("mise-en-place", "bug-sweep", "debt-triage", "dogfood"):
@@ -48,7 +49,7 @@ def test_grant_flow_absent_for_every_other_cadence(tmp_path: Path, monkeypatch) 
 
 
 def test_confirm_green_check_depends_on_the_grant_write_directive(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     result = _collect_bug_blitz(tmp_path, monkeypatch)
     write_directive = _grant_write_directive(result)
@@ -57,7 +58,7 @@ def test_confirm_green_check_depends_on_the_grant_write_directive(
 
 
 def test_confirm_green_check_carries_no_second_judgment_point(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     result = _collect_bug_blitz(tmp_path, monkeypatch)
     grant_jp_ids = [
@@ -70,7 +71,7 @@ def test_confirm_green_check_carries_no_second_judgment_point(
 
 
 def test_confirm_green_check_carries_no_already_satisfied(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     result = _collect_bug_blitz(tmp_path, monkeypatch)
     check_directive = _grant_check_directive(result)

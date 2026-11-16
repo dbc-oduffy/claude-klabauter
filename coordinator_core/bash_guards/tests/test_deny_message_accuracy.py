@@ -78,13 +78,14 @@ from coordinator_core.bash_guards import guard_offer_git_c
 from coordinator_core.bash_guards import guard_plumbing_and_loops
 from coordinator_core.bash_guards._shape_classifier import Shape, classify_command
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
     return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
-def _payload(command, session_id="sess-bx12"):
+def _payload(command, session_id: str = "sess-bx12"):
     return {
         "tool_name": "Bash",
         "tool_input": {"command": command},
@@ -109,7 +110,7 @@ def _advisory_text(hso):
     return hso["additionalContext"]
 
 
-def _assert_only_label_echo_advisory(result):
+def _assert_only_label_echo_advisory(result) -> None:
     """The plumbing guard's head-tail/loop legs stay silent on a banner-led
     command; its membership-keyed LABEL_OR_EXIT_ECHO leg still speaks for the
     banner echo, and names only that shape."""
@@ -127,7 +128,7 @@ def _rewrite_command(hso):
 
 class TestGrepViaBashMessageAccuracy:
 
-    def test_substitutable_residue_never_fires_on_either_host(self):
+    def test_substitutable_residue_never_fires_on_either_host(self) -> None:
         # (i) OBSOLETE, not repointed: this command used to trip a
         # Windows-only deny / macOS-only advisory (the two tests this one
         # replaces, `test_substitutable_residue_deny_names_grep_shape_and_
@@ -142,7 +143,7 @@ class TestGrepViaBashMessageAccuracy:
         assert _enveloped(guard_grep_via_bash.check)(_payload(cmd), host_is_windows=True) is None
         assert _enveloped(guard_grep_via_bash.check)(_payload(cmd), host_is_windows=False) is None
 
-    def test_composed_pipeline_with_only_portable_flags_stays_silent(self):
+    def test_composed_pipeline_with_only_portable_flags_stays_silent(self) -> None:
         # (i) OBSOLETE, not repointed: this command used to name "runs as
         # part of a larger shell chain" in a ~2.2KB composed advisory.
         # H11(b)/(c) narrowed the composed-advisory path to only a real
@@ -156,7 +157,7 @@ class TestGrepViaBashMessageAccuracy:
         cmd = 'grep -rn "TODO" src/ ; echo done'
         assert _enveloped(guard_grep_via_bash.check)(_payload(cmd), host_is_windows=True) is None
 
-    def test_two_segment_pipe_stays_silent_no_partial_rewrite_offer(self):
+    def test_two_segment_pipe_stays_silent_no_partial_rewrite_offer(self) -> None:
         # The partial-pipe rewrite offer is deleted: a portable two-segment
         # `grep | downstream` pipe gets neither that offer nor the old
         # composed-chain prose, on either host.
@@ -164,7 +165,7 @@ class TestGrepViaBashMessageAccuracy:
         assert _enveloped(guard_grep_via_bash.check)(_payload(cmd), host_is_windows=True) is None
         assert _enveloped(guard_grep_via_bash.check)(_payload(cmd), host_is_windows=False) is None
 
-    def test_gnu_only_construct_advisory_names_the_command_and_divergence(self):
+    def test_gnu_only_construct_advisory_names_the_command_and_divergence(self) -> None:
         # (ii) STILL MEANINGFUL, repointed: replaces `test_untranslatable_
         # flag_advisory_names_flag_not_chained`, whose original trigger
         # (`grep -C 3 ...`) no longer fires at all -- `-C` is untranslatable
@@ -181,7 +182,7 @@ class TestGrepViaBashMessageAccuracy:
         assert cmd.replace('"', "") in advisory or "grep -Pn TODO src/" in advisory
         assert "BSD grep (macOS)" in advisory
 
-    def test_untranslatable_but_portable_flag_stays_silent(self):
+    def test_untranslatable_but_portable_flag_stays_silent(self) -> None:
         # (i) OBSOLETE, not repointed: the old blanket composed advisory
         # fired for ANY untranslatable flag and named "a flag" as the
         # reason. `-C` (context lines) is untranslatable by BX-16's rewrite
@@ -192,7 +193,7 @@ class TestGrepViaBashMessageAccuracy:
         cmd = 'grep -C 3 "TODO" src/file.py'
         assert _enveloped(guard_grep_via_bash.check)(_payload(cmd), host_is_windows=True) is None
 
-    def test_gnu_only_advisory_does_not_claim_in_process_or_zero_fork(self):
+    def test_gnu_only_advisory_does_not_claim_in_process_or_zero_fork(self) -> None:
         # `python3 -c` is a genuine subprocess, so no surviving grep-guard
         # message may claim an in-process or no-fork replacement.
         cmd = 'grep -Pn "TODO" src/'
@@ -204,7 +205,7 @@ class TestGrepViaBashMessageAccuracy:
         assert "zero-fork replacement" not in advisory
         assert "in-process" not in advisory
 
-    def test_rewrite_advisory_does_not_claim_harness_can_do_it_in_process(self):
+    def test_rewrite_advisory_does_not_claim_harness_can_do_it_in_process(self) -> None:
         # (ii) UNCHANGED -- this test exercises `dispatch_checks.check_
         # grep_via_bash_rewrite` (BX-16's own seam), not `guard_grep_via_
         # bash`, and H11 does not touch that function at all.
@@ -214,7 +215,7 @@ class TestGrepViaBashMessageAccuracy:
         assert hso["permissionDecision"] == "allow"
         assert "harness can do in-process" not in hso.get("additionalContext", "")
 
-    def test_gnu_only_advisory_names_subagent_dispatch_as_fallback(self):
+    def test_gnu_only_advisory_names_subagent_dispatch_as_fallback(self) -> None:
         # The surviving advisory (GNU-only construct) still names the
         # subagent-dispatch fallback the reader can actually take.
         cmd = 'grep -Pn "TODO" src/'
@@ -229,7 +230,7 @@ class TestMultiProbeBannerMessageAccuracy:
 
     _BANNER_CMD = 'echo "=== SESSION FACTS ==="; git rev-parse --abbrev-ref HEAD; pwd'
 
-    def test_advisory_names_multiprobe_shape_and_evidence_banner(self):
+    def test_advisory_names_multiprobe_shape_and_evidence_banner(self) -> None:
         # RETARGETED (DR-280, 2026-08-07): this guard's own deny branch was
         # retired as structurally unreachable -- it gated on the same seam
         # confirmation an earlier-registered `ADVISORY_REWRITE` chain entry
@@ -246,7 +247,7 @@ class TestMultiProbeBannerMessageAccuracy:
         assert "multi-probe-banner" in advisory
         assert "SESSION FACTS" in advisory
 
-    def test_outlet_example_is_the_real_seam_rewrite_not_a_static_illustration(self):
+    def test_outlet_example_is_the_real_seam_rewrite_not_a_static_illustration(self) -> None:
         # RETARGETED (DR-280, 2026-08-07): was reading `_deny_text`; this
         # guard's deny branch is retired, but the advisory template's own
         # Example field carries the identical rewritten command, so the
@@ -260,13 +261,13 @@ class TestMultiProbeBannerMessageAccuracy:
         real_cmd = _rewrite_command(_hso(real_rewrite))
         assert real_cmd in advisory
 
-    def test_non_banner_command_returns_none(self):
+    def test_non_banner_command_returns_none(self) -> None:
         assert _enveloped(guard_multiprobe_banner.check)(_payload("git status"), host_is_windows=True) is None
 
 
 class TestPlumbingAndLoopsMessageAccuracy:
 
-    def test_head_tail_plumbing_advisory_names_that_shape_not_for_loop(self):
+    def test_head_tail_plumbing_advisory_names_that_shape_not_for_loop(self) -> None:
         # RETARGETED (DR-280, 2026-08-07): mirrors the multi-probe-banner
         # retargeting above -- this guard's own deny branch was retired as
         # structurally unreachable. Was
@@ -281,7 +282,7 @@ class TestPlumbingAndLoopsMessageAccuracy:
         assert "head-tail-plumbing" in advisory
         assert "for-loop" not in advisory
 
-    def test_unconfirmed_seam_outlet_degrades_to_generic_advisory_not_a_deny(self):
+    def test_unconfirmed_seam_outlet_degrades_to_generic_advisory_not_a_deny(self) -> None:
         """`xargs -n1 stat | head` -- classifier matches HEAD_TAIL_PLUMBING,
         but the seam recognizes no upstream generator for `xargs`, so
         `_seam_confirmed_rewrite` must be False and this must NOT deny
@@ -296,7 +297,7 @@ class TestPlumbingAndLoopsMessageAccuracy:
         assert "auto-rewritten single-process equivalent" not in advisory
         assert "xargs -n1 stat | head -n 20" in advisory
 
-    def test_single_process_upstream_never_offers_the_costlier_python_alternative(self):
+    def test_single_process_upstream_never_offers_the_costlier_python_alternative(self) -> None:
         """`docker ps | head` is 2 spawns; every python3 offer is 3 plus an
         interpreter start, so the guard says nothing."""
         cmd = "docker ps | head -n 20"
@@ -305,7 +306,7 @@ class TestPlumbingAndLoopsMessageAccuracy:
             is None
         )
 
-    def test_while_read_advisory_names_that_shape_not_for_loop(self):
+    def test_while_read_advisory_names_that_shape_not_for_loop(self) -> None:
         cmd = 'cat items.txt | while read x; do echo "$x"; done'
         advisory = _advisory_text(
             _hso(_enveloped(guard_plumbing_and_loops.check)(_payload(cmd), host_is_windows=True))
@@ -324,7 +325,7 @@ class TestPlumbingAndLoopsMessageAccuracy:
 
 
 class TestShapeOverlapPrecedenceInMessages:
-    def test_two_shape_overlap_banner_plus_grep_names_grep_not_banner(self):
+    def test_two_shape_overlap_banner_plus_grep_names_grep_not_banner(self) -> None:
         # Simultaneously a multi-probe banner (>=3 segments, banner-marked
         # echo) AND grep-via-bash (a segment invoking grep). Per
         # SHAPE_PRECEDENCE, GREP_VIA_BASH outranks MULTI_PROBE_BANNER.
@@ -371,7 +372,7 @@ class TestShapeOverlapPrecedenceInMessages:
         # it only speaks when MULTI_PROBE_BANNER is the precedence winner.
         assert _enveloped(guard_multiprobe_banner.check)(_payload(cmd), host_is_windows=True) is None
 
-    def test_multiprobe_rewrite_seam_agrees_with_guard_on_grep_primary_command(self):
+    def test_multiprobe_rewrite_seam_agrees_with_guard_on_grep_primary_command(self) -> None:
         # `check_multiprobe_banner_rewrite` (dispatch_checks.py) previously
         # gated on plain `has_shape(MULTI_PROBE_BANNER)` membership, while
         # its sibling `guard_multiprobe_banner.check` correctly gates on
@@ -386,7 +387,7 @@ class TestShapeOverlapPrecedenceInMessages:
         assert _enveloped(guard_multiprobe_banner.check)(_payload(cmd), host_is_windows=True) is None
         assert _enveloped(dispatch_checks.check_multiprobe_banner_rewrite)(cmd, "sess-bx12") is None
 
-    def test_three_shape_overlap_names_the_single_highest_precedence_winner(self):
+    def test_three_shape_overlap_names_the_single_highest_precedence_winner(self) -> None:
         # banner-marked echo (MULTI_PROBE_BANNER) + a grep segment
         # (GREP_VIA_BASH) + a piped head (HEAD_TAIL_PLUMBING), all in one
         # command, >=3 segments. GREP_VIA_BASH must win.
@@ -419,7 +420,7 @@ class TestShapeOverlapPrecedenceInMessages:
         grep_result = _enveloped(guard_grep_via_bash.check)(_payload(cmd), host_is_windows=True)
         assert grep_result is not None
 
-    def test_banner_plus_headtail_no_grep_names_banner_not_headtail(self):
+    def test_banner_plus_headtail_no_grep_names_banner_not_headtail(self) -> None:
         # MULTI_PROBE_BANNER (>=3 segments, banner echo) + HEAD_TAIL_PLUMBING
         # (a piped head), no grep anywhere. MULTI_PROBE_BANNER outranks
         # HEAD_TAIL_PLUMBING. The piped `pwd | head -n 1` segment is a
@@ -453,7 +454,7 @@ class TestShapeOverlapPrecedenceInMessages:
 
 
 class TestFindExecRewriteMessageAccuracy:
-    def test_single_segment_find_exec_names_verb_and_actually_rewrites(self):
+    def test_single_segment_find_exec_names_verb_and_actually_rewrites(self) -> None:
         cmd = 'find . -name "*.log" -exec rm {} \\;'
         result = _enveloped(dispatch_checks.check_find_exec_rewrite)(cmd, "sess-bx12")
         hso = _hso(result)
@@ -461,7 +462,7 @@ class TestFindExecRewriteMessageAccuracy:
         assert "updatedInput" in hso
         assert "rm" in hso["additionalContext"]
 
-    def test_multi_segment_find_exec_never_silently_drops_the_other_work(self):
+    def test_multi_segment_find_exec_never_silently_drops_the_other_work(self) -> None:
         """KNOWN DEFECT #1 (fixed by this dispatch, same file/function --
         see the `LATENT-BUG FIX (BX-12 audit, same day)` comment inline in
         `check_find_exec_rewrite`). Before the fix, ANY command containing a
@@ -492,7 +493,7 @@ class TestFindExecRewriteMessageAccuracy:
         assert "find . -name *.log -exec rm {}" in hso["additionalContext"]
         assert "runs alongside OTHER work" in hso["additionalContext"]
 
-    def test_for_loop_wrapping_a_trailing_find_exec_names_the_segment_correctly(self):
+    def test_for_loop_wrapping_a_trailing_find_exec_names_the_segment_correctly(self) -> None:
         cmd = 'for x in 1 2 3; do echo "$x"; done; find . -name "*.log" -exec rm {} \\;'
         result = _enveloped(dispatch_checks.check_find_exec_rewrite)(cmd, "sess-bx12")
         hso = _hso(result)
@@ -512,7 +513,7 @@ class TestFindExecRewriteMessageAccuracy:
         assert "BASH-SPAWN ADVISORY" in guard_hso["additionalContext"]
         assert "auto-rewritten single-process equivalent" not in guard_hso["additionalContext"]
 
-    def test_a_verb_with_no_python_translation_is_offered_the_posix_plus_form(self):
+    def test_a_verb_with_no_python_translation_is_offered_the_posix_plus_form(self) -> None:
         """SUPERSEDED PREMISE, corrected 2026-08-31. This row asserted that an
         untranslatable verb gets prose and no runnable command -- true until C2
         (`e8a0043e66`) added `_FIND_EXEC_BATCH_EQUIVALENT_VERBS`. `chmod` has no
@@ -527,7 +528,7 @@ class TestFindExecRewriteMessageAccuracy:
         assert hso["updatedInput"]["command"] == "find . -name '*.bak' -exec chmod 644 '{}' +"
         assert "chmod" in hso["additionalContext"]
 
-    def test_a_verb_on_neither_list_still_gets_prose_and_names_itself(self):
+    def test_a_verb_on_neither_list_still_gets_prose_and_names_itself(self) -> None:
         cmd = 'find . -name "*.bak" -exec frobnicate {} \\;'
         result = _enveloped(dispatch_checks.check_find_exec_rewrite)(cmd, "sess-bx12")
         hso = _hso(result)
@@ -536,7 +537,7 @@ class TestFindExecRewriteMessageAccuracy:
 
 
 class TestGrepViaBashRewriteMessageAccuracy:
-    def test_rewrite_uses_resolved_interpreter_not_a_bare_python3_literal(self):
+    def test_rewrite_uses_resolved_interpreter_not_a_bare_python3_literal(self) -> None:
         """KNOWN DEFECT #2 (interpreter/quoting fix), verified: today's
         `_bt_python3_invocation` resolves through `coordinator_core.pyresolve`
         (falling back to the literal `"python3"` only on resolution failure)
@@ -555,19 +556,19 @@ class TestGrepViaBashRewriteMessageAccuracy:
 
 
 class TestSedRangeReadAdviseMessageAccuracy:
-    def test_advisory_names_the_read_tool_and_the_exact_range(self):
+    def test_advisory_names_the_read_tool_and_the_exact_range(self) -> None:
         cmd = "sed -n '10,20p' path/to/file.py"
         advisory = _advisory_text(
             _hso(_enveloped(dispatch_checks.check_sed_range_read_advise)(cmd, "sess-bx12"))
         )
         assert "Read(path/to/file.py, offset=10, limit=11)" in advisory
 
-    def test_non_range_sed_returns_none(self):
+    def test_non_range_sed_returns_none(self) -> None:
         assert _enveloped(dispatch_checks.check_sed_range_read_advise)("sed 's/a/b/' f.txt", "s") is None
 
 
 class TestCatHeredocWriteAdviseMessageAccuracy:
-    def test_advisory_names_the_exact_target_and_what_is_recorded(self):
+    def test_advisory_names_the_exact_target_and_what_is_recorded(self) -> None:
         cmd = "cat > out.txt <<'EOF'\nhello\nEOF"
         advisory = _advisory_text(
             _hso(_enveloped(dispatch_checks.check_cat_heredoc_write_advise)(cmd, "sess-bx12"))
@@ -575,7 +576,7 @@ class TestCatHeredocWriteAdviseMessageAccuracy:
         assert "out.txt" in advisory
         assert "DR-258" in advisory
 
-    def test_advisory_does_not_name_a_tool_to_prefer(self):
+    def test_advisory_does_not_name_a_tool_to_prefer(self) -> None:
         cmd = "cat > out.txt <<'EOF'\nhello\nEOF"
         advisory = _advisory_text(
             _hso(_enveloped(dispatch_checks.check_cat_heredoc_write_advise)(cmd, "sess-bx12"))
@@ -584,7 +585,7 @@ class TestCatHeredocWriteAdviseMessageAccuracy:
 
 
 class TestHeredocRepoWriteAdviseMessageAccuracy:
-    def test_advisory_names_the_exact_target_and_what_is_recorded(self, tmp_path, monkeypatch):
+    def test_advisory_names_the_exact_target_and_what_is_recorded(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("TEMP", raising=False)
         monkeypatch.delenv("TMP", raising=False)
         cmd = (
@@ -614,7 +615,7 @@ class TestHeredocRepoWriteAdviseMessageAccuracy:
         assert "does not name" in advisory
         assert "Write tool" not in advisory
 
-    def test_no_git_root_returns_none(self):
+    def test_no_git_root_returns_none(self) -> None:
         cmd = (
             "python3 - <<'PY'\n"
             "import pathlib\n"
@@ -637,7 +638,7 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
     """
 
     @pytest.fixture(autouse=True)
-    def _empty_index(self, monkeypatch):
+    def _empty_index(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """This class's remit is advisory MESSAGE text, not index-probe
         behavior (that's `test_git_commit_safe_commit_deny_escalation.py`'s
         job, C7 + its 2026-08-15 solo-bare-commit sibling). None of the
@@ -665,15 +666,15 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
         'git commit -m "subject" --',
     ]
 
-    def test_explicit_pathspec_suppresses_the_advisory(self):
+    def test_explicit_pathspec_suppresses_the_advisory(self) -> None:
         for cmd in self.SCOPED_FORMS:
             assert _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-bx12") is None, cmd
 
-    def test_unscoped_forms_still_fire(self):
+    def test_unscoped_forms_still_fire(self) -> None:
         for cmd in self.UNSCOPED_FORMS:
             assert _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-bx12") is not None, cmd
 
-    def test_every_suggested_commit_command_carries_a_scope(self):
+    def test_every_suggested_commit_command_carries_a_scope(self) -> None:
         for cmd in self.UNSCOPED_FORMS:
             advisory = _advisory_text(
                 _hso(_enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-bx12"))
@@ -688,20 +689,20 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
                 commit_tail = line.split("git commit", 1)[1]
                 assert " -- " in commit_tail, "unscoped suggestion %r for %r" % (line, cmd)
 
-    def test_advisory_does_not_offer_the_deprecated_raw_helper_form(self):
+    def test_advisory_does_not_offer_the_deprecated_raw_helper_form(self) -> None:
         advisory = _advisory_text(
             _hso(_enveloped(dispatch_checks.check_git_commit_safe_commit_advise)('git commit -m "s"', "sess-bx12"))
         )
         assert "coordinator-safe-commit" not in advisory
 
-    def test_advisory_names_the_divergence_case_surface_and_carries_the_subject(self):
+    def test_advisory_names_the_divergence_case_surface_and_carries_the_subject(self) -> None:
         advisory = _advisory_text(
             _hso(_enveloped(dispatch_checks.check_git_commit_safe_commit_advise)('git commit -m "fix the thing"', "s"))
         )
         assert "git add" in advisory
         assert "fix the thing" in advisory
 
-    def test_the_divergence_case_surface_it_names_is_actually_invocable(self):
+    def test_the_divergence_case_surface_it_names_is_actually_invocable(self) -> None:
         advisory = _advisory_text(
             _hso(_enveloped(dispatch_checks.check_git_commit_safe_commit_advise)('git commit -m "s"', "s"))
         )
@@ -709,16 +710,16 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
         assert "scoped-git-commit" not in advisory
         assert "ceremony.scoped_git_commit" not in advisory
 
-    def test_bundled_short_flag_subject_is_carried(self):
+    def test_bundled_short_flag_subject_is_carried(self) -> None:
         advisory = _advisory_text(
             _hso(_enveloped(dispatch_checks.check_git_commit_safe_commit_advise)("git commit -am 'fix the thing'", "s"))
         )
         assert "fix the thing" in advisory
 
-    def test_non_commit_git_subcommand_returns_none(self):
+    def test_non_commit_git_subcommand_returns_none(self) -> None:
         assert _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)("git status", "s") is None
 
-    def test_non_amend_advisory_text_is_unchanged_by_the_amend_fix(self):
+    def test_non_amend_advisory_text_is_unchanged_by_the_amend_fix(self) -> None:
         advisory = _advisory_text(
             _hso(_enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(
                 'git commit -m "fix the thing"', "s"
@@ -729,7 +730,7 @@ class TestGitCommitSafeCommitAdviseMessageAccuracy:
         assert "git add -- <paths> && git commit -m" in advisory
 
 class TestMultiprobeBannerRewriteMessageAccuracy:
-    def test_recognized_probes_rewrite_and_advisory_names_the_facts_batched(self):
+    def test_recognized_probes_rewrite_and_advisory_names_the_facts_batched(self) -> None:
         cmd = 'echo "=== SESSION FACTS ==="; pwd; whoami; git status --short'
         result = _enveloped(dispatch_checks.check_multiprobe_banner_rewrite)(cmd, "sess-bx12")
         hso = _hso(result)
@@ -738,35 +739,35 @@ class TestMultiprobeBannerRewriteMessageAccuracy:
         assert rewrite_cmd.startswith(dispatch_checks._bt_python3_invocation())
         assert "batching every git fact into ONE status call" in hso["additionalContext"]
 
-    def test_unrecognized_probe_emits_nothing_not_a_generic_advisory(self):
+    def test_unrecognized_probe_emits_nothing_not_a_generic_advisory(self) -> None:
         cmd = 'echo "=== SESSION FACTS ==="; pwd; docker ps'
         result = _enveloped(dispatch_checks.check_multiprobe_banner_rewrite)(cmd, "sess-bx12")
         assert result is None
 
 
 class TestHeadTailPlumbingRewriteMessageAccuracy:
-    def test_two_segment_find_pipe_head_rewrites_with_resolved_interpreter(self):
+    def test_two_segment_find_pipe_head_rewrites_with_resolved_interpreter(self) -> None:
         cmd = "find . -name '*.py' | head -n 5"
         result = _enveloped(guard_head_tail_rewrite.check_head_tail_plumbing_rewrite)(cmd, "sess-bx12")
         hso = _hso(result)
         rewrite_cmd = hso["updatedInput"]["command"]
         assert rewrite_cmd.startswith(dispatch_checks._bt_python3_invocation())
 
-    def test_longer_chain_silent_not_advised(self):
+    def test_longer_chain_silent_not_advised(self) -> None:
         cmd = "cd /tmp && grep -n foo file.py | head -100"
         assert (
             _enveloped(guard_head_tail_rewrite.check_head_tail_plumbing_rewrite)(cmd, "sess-bx12")
             is None
         )
 
-    def test_unrecognized_upstream_generator_silent_not_advised(self):
+    def test_unrecognized_upstream_generator_silent_not_advised(self) -> None:
         cmd = "docker ps | head -n 20"
         assert (
             _enveloped(guard_head_tail_rewrite.check_head_tail_plumbing_rewrite)(cmd, "sess-bx12")
             is None
         )
 
-    def test_unrecognized_count_form_advisory_names_the_actual_arguments(self):
+    def test_unrecognized_count_form_advisory_names_the_actual_arguments(self) -> None:
         cmd = "find . -name '*.py' | head -c 100"
         advisory = _advisory_text(
             _hso(_enveloped(guard_head_tail_rewrite.check_head_tail_plumbing_rewrite)(cmd, "sess-bx12"))
@@ -776,7 +777,7 @@ class TestHeadTailPlumbingRewriteMessageAccuracy:
 
 class TestSampledPreexistingGuardsMessageAccuracy:
 
-    def test_offer_git_c_rewrite_names_the_actual_cd_and_git_subcommand(self):
+    def test_offer_git_c_rewrite_names_the_actual_cd_and_git_subcommand(self) -> None:
         cmd = "cd /tmp/repo && git status"
         result = _enveloped(guard_offer_git_c.check_offer_git_c)(cmd, "sess-bx12", "")
         hso = _hso(result)
@@ -799,16 +800,16 @@ class TestSampledPreexistingGuardsMessageAccuracy:
 
 
 class TestCrashDenyMessageAccuracy:
-    def test_does_not_claim_every_command_in_session_is_denied(self):
+    def test_does_not_claim_every_command_in_session_is_denied(self) -> None:
         deny = _deny_text(_hso(dispatch._crash_deny("some-guard", ValueError("boom"))))
         assert "every Bash command in this session is now denied" not in deny
 
-    def test_does_not_claim_it_cannot_be_addressed_in_session(self):
+    def test_does_not_claim_it_cannot_be_addressed_in_session(self) -> None:
         deny = _deny_text(_hso(dispatch._crash_deny("some-guard", ValueError("boom"))))
         assert "CANNOT be fixed from inside this session" not in deny
         assert "there is no in-session override" not in deny
 
-    def test_positively_states_the_two_facts_the_old_wording_denied(self):
+    def test_positively_states_the_two_facts_the_old_wording_denied(self) -> None:
         deny = _deny_text(_hso(dispatch._crash_deny("some-guard", ValueError("boom"))))
         assert "shape" in deny, (
             "message must convey that the crash may be shape-conditioned "
@@ -819,7 +820,7 @@ class TestCrashDenyMessageAccuracy:
             f"very tool being denied, got: {deny}"
         )
 
-    def test_still_names_the_guard_and_exception_and_points_at_the_source(self):
+    def test_still_names_the_guard_and_exception_and_points_at_the_source(self) -> None:
         deny = _deny_text(_hso(dispatch._crash_deny("some-guard", ValueError("boom"))))
         assert "some-guard" in deny
         assert "ValueError" in deny
@@ -829,14 +830,14 @@ class TestCrashDenyMessageAccuracy:
 
 
 class TestCatHeredocWriteAdviseOutOfRepo:
-    def test_target_whose_git_root_is_home_gets_no_advisory(self, tmp_path, monkeypatch):
+    def test_target_whose_git_root_is_home_gets_no_advisory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         (tmp_path / ".git").mkdir()
         monkeypatch.setenv("HOME", str(tmp_path))
         monkeypatch.setenv("USERPROFILE", str(tmp_path))
         cmd = "cat > %s/log.md <<'EOF'\nx\nEOF" % tmp_path.as_posix()
         assert _enveloped(dispatch_checks.check_cat_heredoc_write_advise)(cmd, "s") is None
 
-    def test_target_in_a_non_home_repo_gets_conditional_wording(self, tmp_path, monkeypatch):
+    def test_target_in_a_non_home_repo_gets_conditional_wording(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         home = tmp_path / "home"
         repo = home / "proj"
         (repo / ".git").mkdir(parents=True)

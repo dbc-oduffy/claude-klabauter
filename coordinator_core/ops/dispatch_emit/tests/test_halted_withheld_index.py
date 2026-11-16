@@ -6,9 +6,10 @@ import os
 import pytest
 
 from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
+from pathlib import Path
 
 
-def _marker(root, run, status, withheld=None):
+def _marker(root, run, status, withheld=None) -> None:
     d = root / "state" / "warp" / run
     d.mkdir(parents=True)
     body = {"status": status}
@@ -17,7 +18,7 @@ def _marker(root, run, status, withheld=None):
     (d / "halted.json").write_text(json.dumps(body), encoding="utf-8")
 
 
-def test_add_read_remove(tmp_path):
+def test_add_read_remove(tmp_path: Path) -> None:
     idx.rebuild(tmp_path)
     idx.add_run(tmp_path, "run-a", ["a.py", ".\\sub\\b.py"])
     assert idx.withheld_by_path(tmp_path) == {"a.py": "run-a", "sub/b.py": "run-a"}
@@ -26,7 +27,7 @@ def test_add_read_remove(tmp_path):
     idx.remove_run(tmp_path, "run-a")
 
 
-def test_entries_and_fresh_entry_share_one_parse_per_run_file_within_a_scope(tmp_path, monkeypatch):
+def test_entries_and_fresh_entry_share_one_parse_per_run_file_within_a_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import call_io_scope
 
     _marker(tmp_path, "run-a", "halted", {"a.py": "x"})
@@ -41,7 +42,7 @@ def test_entries_and_fresh_entry_share_one_parse_per_run_file_within_a_scope(tmp
     assert len(parses) == 1
 
 
-def test_fresh_entry_is_decided_once_per_scope_until_a_marker_or_entry_is_rewritten(tmp_path, monkeypatch):
+def test_fresh_entry_is_decided_once_per_scope_until_a_marker_or_entry_is_rewritten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import call_io_scope
     from coordinator_core.ops.dispatch_emit import halted_run
 
@@ -63,7 +64,7 @@ def test_fresh_entry_is_decided_once_per_scope_until_a_marker_or_entry_is_rewrit
     assert idx.fresh_entry(tmp_path, "run-a") is None and len(decided) == 4  # outside a scope nothing is held
 
 
-def test_second_listing_reads_no_run_file_and_a_rewrite_rereads_exactly_that_file(tmp_path, monkeypatch):
+def test_second_listing_reads_no_run_file_and_a_rewrite_rereads_exactly_that_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     idx.rebuild(tmp_path)
     for i in range(20):
         idx.add_run(tmp_path, f"run-{i:02d}", [f"f{i}.py"])
@@ -90,7 +91,7 @@ def test_second_listing_reads_no_run_file_and_a_rewrite_rereads_exactly_that_fil
     assert "run-07" not in idx.entries(tmp_path)
 
 
-def test_out_of_band_deleted_run_file_is_evicted_from_the_stat_cache(tmp_path):
+def test_out_of_band_deleted_run_file_is_evicted_from_the_stat_cache(tmp_path: Path) -> None:
     idx.rebuild(tmp_path)
     idx.add_run(tmp_path, "run-a", ["a.py"])
     idx.add_run(tmp_path, "run-b", ["b.py"])
@@ -102,7 +103,7 @@ def test_out_of_band_deleted_run_file_is_evicted_from_the_stat_cache(tmp_path):
     assert gone not in idx._STAT_CACHE
 
 
-def test_add_replaces_and_empty_removes(tmp_path):
+def test_add_replaces_and_empty_removes(tmp_path: Path) -> None:
     idx.rebuild(tmp_path)
     idx.add_run(tmp_path, "r", ["old.py"])
     idx.add_run(tmp_path, "r", ["new.py"])
@@ -111,7 +112,7 @@ def test_add_replaces_and_empty_removes(tmp_path):
     assert idx.withheld_by_path(tmp_path) == {}
 
 
-def test_two_runs_are_separate_files(tmp_path):
+def test_two_runs_are_separate_files(tmp_path: Path) -> None:
     idx.rebuild(tmp_path)
     idx.add_run(tmp_path, "r1", ["a.py"])
     idx.add_run(tmp_path, "r2", ["b.py"])
@@ -119,19 +120,19 @@ def test_two_runs_are_separate_files(tmp_path):
     assert idx.withheld_by_path(tmp_path) == {"b.py": "r2"}
 
 
-def test_malformed_run_file_reads_empty(tmp_path):
+def test_malformed_run_file_reads_empty(tmp_path: Path) -> None:
     idx.rebuild(tmp_path)
     idx.add_run(tmp_path, "good", ["g.py"])
     (tmp_path / idx.INDEX_DIR / "bad.json").write_text("{nope", encoding="utf-8")
     assert idx.withheld_by_path(tmp_path) == {"g.py": "good"}
 
 
-def test_unsafe_run_id_refused(tmp_path):
+def test_unsafe_run_id_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         idx.add_run(tmp_path, "../x", ["a.py"])
 
 
-def test_sentinel_absent_triggers_rebuild_once(tmp_path):
+def test_sentinel_absent_triggers_rebuild_once(tmp_path: Path) -> None:
     _marker(tmp_path, "h1", "halted", {"a.py": "targeted-tests-failed"})
     _marker(tmp_path, "h2", "halted", None)
     _marker(tmp_path, "r1", "resumed", {"z.py": "x"})
@@ -144,12 +145,12 @@ def test_sentinel_absent_triggers_rebuild_once(tmp_path):
     assert idx.withheld_by_path(tmp_path) == {"a.py": "h1"}
 
 
-def test_rebuild_without_warp_dir(tmp_path):
+def test_rebuild_without_warp_dir(tmp_path: Path) -> None:
     idx.rebuild(tmp_path)
     assert idx.withheld_by_path(tmp_path) == {}
 
 
-def test_add_run_records_fields_and_entries_reads_them(tmp_path):
+def test_add_run_records_fields_and_entries_reads_them(tmp_path: Path) -> None:
     idx.rebuild(tmp_path)
     idx.add_run(
         tmp_path, "r", ["a.py", "b.py"],
@@ -160,7 +161,7 @@ def test_add_run_records_fields_and_entries_reads_them(tmp_path):
     assert idx.withheld_by_path(tmp_path) == {"a.py": "r", "b.py": "r"}
 
 
-def test_add_run_without_fields_keeps_them_and_replaces_paths(tmp_path):
+def test_add_run_without_fields_keeps_them_and_replaces_paths(tmp_path: Path) -> None:
     idx.rebuild(tmp_path)
     idx.add_run(tmp_path, "r", ["a.py"], sizing_rel="s.yaml", prints={"a.py": "1"}, declared=["d.py"])
     idx.add_run(tmp_path, "r", ["b.py"])
@@ -168,7 +169,7 @@ def test_add_run_without_fields_keeps_them_and_replaces_paths(tmp_path):
     assert (entry.paths, entry.sizing_rel, entry.prints, entry.declared) == (("b.py",), "s.yaml", {}, ("d.py",))
 
 
-def test_declared_only_entry_is_not_a_withheld_run(tmp_path):
+def test_declared_only_entry_is_not_a_withheld_run(tmp_path: Path) -> None:
     idx.rebuild(tmp_path)
     idx.record_declared(tmp_path, "live", ["x.py"], sizing_rel="s.yaml")
     idx.add_run(tmp_path, "held", ["h.py"])
@@ -179,7 +180,7 @@ def test_declared_only_entry_is_not_a_withheld_run(tmp_path):
     assert "live" not in idx.entries(tmp_path)
 
 
-def test_record_declared_keeps_paths_and_prints(tmp_path):
+def test_record_declared_keeps_paths_and_prints(tmp_path: Path) -> None:
     idx.rebuild(tmp_path)
     idx.add_run(tmp_path, "r", ["a.py"], prints={"a.py": "1"})
     idx.record_declared(tmp_path, "r", ["d.py"])
@@ -191,7 +192,7 @@ def test_record_declared_keeps_paths_and_prints(tmp_path):
     assert idx.entries(tmp_path) == {}
 
 
-def test_rebuild_backfills_sizing_prints_and_declared(tmp_path):
+def test_rebuild_backfills_sizing_prints_and_declared(tmp_path: Path) -> None:
     _marker(tmp_path, "h1", "halted", {"a.py": "x"})
     rec = tmp_path / "state" / "warp" / "h1"
     body = json.loads((rec / "halted.json").read_text(encoding="utf-8"))
@@ -214,7 +215,7 @@ def test_rebuild_backfills_sizing_prints_and_declared(tmp_path):
     assert idx.withheld_by_path(tmp_path) == {"a.py": "h1"}
 
 
-def test_record_withheld_mirrors_sizing_and_prints_into_index(tmp_path):
+def test_record_withheld_mirrors_sizing_and_prints_into_index(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import halted_run
 
     (tmp_path / "a.py").write_text("print(1)\n", encoding="utf-8")

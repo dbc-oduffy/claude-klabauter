@@ -34,6 +34,7 @@ from __future__ import annotations
 import os
 
 from coordinator_core.dag import GitHistoryCache, resolve_target
+from pathlib import Path
 
 _NAME = '2026-07-21_194404_6ffb9c2d-2568-4f12-b1fc-4c727912053f.md'
 
@@ -42,7 +43,7 @@ def _cache(*paths: str) -> GitHistoryCache:
     return GitHistoryCache(set(paths), complete=True)
 
 
-def test_target_tracked_only_under_state_resolves_from_archive_referrer(tmp_path):
+def test_target_tracked_only_under_state_resolves_from_archive_referrer(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     handoff_dir = os.path.join(repo_root, 'archive', 'handoffs', '2026-07')
 
@@ -53,7 +54,7 @@ def test_target_tracked_only_under_state_resolves_from_archive_referrer(tmp_path
     assert resolved == 'git-history'
 
 
-def test_target_tracked_only_under_month_foldered_archive_resolves(tmp_path):
+def test_target_tracked_only_under_month_foldered_archive_resolves(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     handoff_dir = os.path.join(repo_root, 'state', 'handoffs')
 
@@ -64,7 +65,7 @@ def test_target_tracked_only_under_month_foldered_archive_resolves(tmp_path):
     assert resolved == 'git-history'
 
 
-def test_never_tracked_target_still_unresolvable(tmp_path):
+def test_never_tracked_target_still_unresolvable(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     handoff_dir = os.path.join(repo_root, 'state', 'handoffs')
 

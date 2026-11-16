@@ -27,6 +27,10 @@ import sys
 import time
 from pathlib import Path
 from typing import Optional
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -128,7 +132,7 @@ def stage_image(image: Path, run_dir: Path) -> Path:
     return staged
 
 
-def load_census(path: Path):
+def load_census(path: Path) -> ModuleType:
     """Import DoE's census module from `path` and extend its door selection to the staged exec form."""
     spec = importlib.util.spec_from_file_location("door_spawn_census", path)
     if spec is None or spec.loader is None:

@@ -32,7 +32,7 @@ def _compose(**over) -> str:
     )
 
 
-def test_stage_records_the_body_and_returns_the_pointer_literal():
+def test_stage_records_the_body_and_returns_the_pointer_literal() -> None:
     sink: dict[str, str] = {}
     pointer = stage("verify", "BODY", sink, record_dir="state/warp/run-1")
     assert sink == {"verify": "BODY"}
@@ -41,7 +41,7 @@ def test_stage_records_the_body_and_returns_the_pointer_literal():
     )
 
 
-def test_stage_refuses_a_name_recorded_with_other_text_and_accepts_the_same_text():
+def test_stage_refuses_a_name_recorded_with_other_text_and_accepts_the_same_text() -> None:
     sink: dict[str, str] = {}
     stage("x", "one", sink, record_dir="r")
     stage("x", "one", sink, record_dir="r")
@@ -49,7 +49,7 @@ def test_stage_refuses_a_name_recorded_with_other_text_and_accepts_the_same_text
         stage("x", "two", sink, record_dir="r")
 
 
-def test_a_large_run_is_staged_and_a_small_one_stays():
+def test_a_large_run_is_staged_and_a_small_one_stays() -> None:
     sink: dict[str, str] = {}
     js = f"({_js_string_literal(_BIG)} + dyn + 'small') + {_js_string_literal(_BIG + 'tail')}"
     out = stage_literal_runs(js, "p", _stager(sink))
@@ -57,7 +57,7 @@ def test_a_large_run_is_staged_and_a_small_one_stays():
     assert "dyn + 'small'" in out and _BIG[:30] not in out
 
 
-def test_adjacent_literals_join_into_one_staged_run_with_escapes_decoded():
+def test_adjacent_literals_join_into_one_staged_run_with_escapes_decoded() -> None:
     half = "it's a line\n" * 30
     sink: dict[str, str] = {}
     js = _js_string_literal(half) + " + " + _js_string_literal(half)
@@ -66,7 +66,7 @@ def test_adjacent_literals_join_into_one_staged_run_with_escapes_decoded():
     assert out.count("prompts/p.md") == 1
 
 
-def test_double_quoted_literals_and_runs_below_the_floor_are_never_staged():
+def test_double_quoted_literals_and_runs_below_the_floor_are_never_staged() -> None:
     sink: dict[str, str] = {}
     schema_like = '"' + "d" * (MIN_STAGE_BYTES + 10) + '"'
     short = _js_string_literal("s" * (MIN_STAGE_BYTES - 1))
@@ -75,14 +75,14 @@ def test_double_quoted_literals_and_runs_below_the_floor_are_never_staged():
     assert sink == {}
 
 
-def test_a_run_with_an_undecoded_escape_stays_inline():
+def test_a_run_with_an_undecoded_escape_stays_inline() -> None:
     sink: dict[str, str] = {}
     js = "'" + "x" * MIN_STAGE_BYTES + "\\u00e9'"
     assert stage_literal_runs(js, "p", _stager(sink)) == js
     assert sink == {}
 
 
-def test_a_composed_bare_ask_names_every_staged_pointer(monkeypatch):
+def test_a_composed_bare_ask_names_every_staged_pointer(monkeypatch: pytest.MonkeyPatch) -> None:
     sink: dict[str, str] = {}
     script = _compose(staged_out=sink)
     for name in _STAGED_NAMES:
@@ -91,20 +91,20 @@ def test_a_composed_bare_ask_names_every_staged_pointer(monkeypatch):
     assert len(_compose().encode()) > len(script.encode())
 
 
-def test_the_pointer_and_the_ask_text_path_are_anchored_to_the_repo_root():
+def test_the_pointer_and_the_ask_text_path_are_anchored_to_the_repo_root() -> None:
     script = _compose(staged_out={})
     assert f"REPO/{RECORD_DIR_ROOT}/{_RUN}/pm-intent.md" in script
     assert f"Read REPO/{RECORD_DIR_ROOT}/{_RUN}/prompts/verify.md" in script
     assert f"Read {RECORD_DIR_ROOT}/{_RUN}/prompts/" not in script
 
 
-def test_without_staged_out_every_body_stays_inline():
+def test_without_staged_out_every_body_stays_inline() -> None:
     script = _compose()
     assert "/prompts/" not in script
     assert "You are the run's one closing agent" in script.replace("\\'", "'")
 
 
-def test_pointer_replaced_text_equals_the_inline_script(monkeypatch):
+def test_pointer_replaced_text_equals_the_inline_script(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", False)
     sink: dict[str, str] = {}
     staged = _compose(staged_out=sink)
@@ -118,7 +118,7 @@ def test_pointer_replaced_text_equals_the_inline_script(monkeypatch):
     assert prompt_fragments.fold_literals(staged) == prompt_fragments.fold_literals(inline)
 
 
-def test_emit_writes_each_staged_body_beside_the_ask_text(tmp_path, monkeypatch):
+def test_emit_writes_each_staged_body_beside_the_ask_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")

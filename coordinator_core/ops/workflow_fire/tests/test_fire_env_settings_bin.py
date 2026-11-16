@@ -33,6 +33,7 @@ import os
 import pytest
 
 from coordinator_core.ops.workflow_fire import fire
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -42,7 +43,7 @@ def _settings_bin(monkeypatch, tmp_path) -> str:
     return str(tmp_path / "settings-home" / "bin")
 
 
-def test_settings_bin_prepended_onto_existing_path(monkeypatch, tmp_path):
+def test_settings_bin_prepended_onto_existing_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     settings_bin = _settings_bin(monkeypatch, tmp_path)
 
     env = fire.build_fire_env({"PATH": "/usr/bin"})
@@ -50,7 +51,7 @@ def test_settings_bin_prepended_onto_existing_path(monkeypatch, tmp_path):
     assert env["PATH"] == os.pathsep.join([settings_bin, "/usr/bin"])
 
 
-def test_settings_bin_added_when_path_absent(monkeypatch, tmp_path):
+def test_settings_bin_added_when_path_absent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     settings_bin = _settings_bin(monkeypatch, tmp_path)
 
     env = fire.build_fire_env({})
@@ -58,7 +59,7 @@ def test_settings_bin_added_when_path_absent(monkeypatch, tmp_path):
     assert env["PATH"] == settings_bin
 
 
-def test_settings_bin_added_when_path_empty(monkeypatch, tmp_path):
+def test_settings_bin_added_when_path_empty(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     settings_bin = _settings_bin(monkeypatch, tmp_path)
 
     env = fire.build_fire_env({"PATH": ""})
@@ -66,7 +67,7 @@ def test_settings_bin_added_when_path_empty(monkeypatch, tmp_path):
     assert env["PATH"] == settings_bin
 
 
-def test_settings_bin_not_duplicated_when_already_present(monkeypatch, tmp_path):
+def test_settings_bin_not_duplicated_when_already_present(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     settings_bin = _settings_bin(monkeypatch, tmp_path)
 
     env = fire.build_fire_env({"PATH": os.pathsep.join(["/usr/bin", settings_bin])})
@@ -74,7 +75,7 @@ def test_settings_bin_not_duplicated_when_already_present(monkeypatch, tmp_path)
     assert env["PATH"] == os.pathsep.join(["/usr/bin", settings_bin])
 
 
-def test_settings_bin_does_not_spawn_a_subprocess(monkeypatch, tmp_path):
+def test_settings_bin_does_not_spawn_a_subprocess(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _settings_bin(monkeypatch, tmp_path)
 
     def _boom(*_args, **_kwargs):

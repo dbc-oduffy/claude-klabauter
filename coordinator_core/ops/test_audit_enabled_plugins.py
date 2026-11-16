@@ -8,6 +8,7 @@ import os
 import pytest
 
 from coordinator_core.ops.audit_enabled_plugins import _is_justified, _parse_stack_tags, main
+from pathlib import Path
 
 
 def _write(path: str, content: str) -> None:
@@ -17,18 +18,18 @@ def _write(path: str, content: str) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _isolated_claude_home(tmp_path_factory, monkeypatch):
+def _isolated_claude_home(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path_factory.mktemp("cfg")))
 
 
-def _flagged_repo(tmp_path):
+def _flagged_repo(tmp_path) -> None:
     _write(
         str(tmp_path / ".claude/settings.json"),
         json.dumps({"enabledPlugins": {"web-dev@mkt": True}}),
     )
 
 
-def test_bound_session_lines_precede_step3(tmp_path, capsys, monkeypatch):
+def test_bound_session_lines_precede_step3(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.install import plugin_cache_sessions as pcs
 
     _flagged_repo(tmp_path)
@@ -43,7 +44,7 @@ def test_bound_session_lines_precede_step3(tmp_path, capsys, monkeypatch):
     assert "only once no session above remains" in out
 
 
-def test_no_bound_sessions_output_unchanged(tmp_path, capsys, monkeypatch):
+def test_no_bound_sessions_output_unchanged(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.install import plugin_cache_sessions as pcs
 
     _flagged_repo(tmp_path)
@@ -54,7 +55,7 @@ def test_no_bound_sessions_output_unchanged(tmp_path, capsys, monkeypatch):
     assert out.endswith("/cache/<marketplace>/<plugin>/.\n")
 
 
-def test_no_findings_never_calls_detector(tmp_path, capsys, monkeypatch):
+def test_no_findings_never_calls_detector(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.install import plugin_cache_sessions as pcs
 
     def boom(*a, **k):
@@ -69,20 +70,20 @@ def test_no_findings_never_calls_detector(tmp_path, capsys, monkeypatch):
     assert capsys.readouterr().out == ""
 
 
-def test_no_settings_json_is_silent_noop(tmp_path, capsys):
+def test_no_settings_json_is_silent_noop(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main([str(tmp_path)])
     assert rc == 0
     assert capsys.readouterr().out == ""
 
 
-def test_settings_json_no_enabled_plugins_is_silent_noop(tmp_path, capsys):
+def test_settings_json_no_enabled_plugins_is_silent_noop(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write(str(tmp_path / ".claude/settings.json"), json.dumps({"enabledPlugins": {}}))
     rc = main([str(tmp_path)])
     assert rc == 0
     assert capsys.readouterr().out == ""
 
 
-def test_all_justified_no_drift(tmp_path, capsys):
+def test_all_justified_no_drift(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write(
         str(tmp_path / ".claude/settings.json"),
         json.dumps({"enabledPlugins": {"coordinator@marketplace": True, "web-dev@marketplace": True}}),
@@ -96,7 +97,7 @@ def test_all_justified_no_drift(tmp_path, capsys):
     assert capsys.readouterr().out == ""
 
 
-def test_drift_flags_unjustified_plugins(tmp_path, capsys):
+def test_drift_flags_unjustified_plugins(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write(
         str(tmp_path / ".claude/settings.json"),
         json.dumps(
@@ -125,7 +126,7 @@ def test_drift_flags_unjustified_plugins(tmp_path, capsys):
     assert "Full uninstall = " in out
 
 
-def test_missing_frontmatter_treated_as_unset(tmp_path, capsys):
+def test_missing_frontmatter_treated_as_unset(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write(
         str(tmp_path / ".claude/settings.json"),
         json.dumps({"enabledPlugins": {"plugin-dev@marketplace": True}}),
@@ -136,7 +137,7 @@ def test_missing_frontmatter_treated_as_unset(tmp_path, capsys):
     assert "project_type='unset' stack_tags='unset'" in out
 
 
-def test_meta_short_circuit_always_justified(tmp_path, capsys):
+def test_meta_short_circuit_always_justified(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write(
         str(tmp_path / ".claude/settings.json"),
         json.dumps({"enabledPlugins": {"totally-unknown-plugin@marketplace": True}}),
@@ -147,7 +148,7 @@ def test_meta_short_circuit_always_justified(tmp_path, capsys):
     assert capsys.readouterr().out == ""
 
 
-def test_default_repo_root_is_cwd(tmp_path, capsys, monkeypatch):
+def test_default_repo_root_is_cwd(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     _write(str(tmp_path / ".claude/settings.json"), json.dumps({"enabledPlugins": {}}))
     monkeypatch.chdir(tmp_path)
     rc = main([])
@@ -177,18 +178,18 @@ def test_default_repo_root_is_cwd(tmp_path, capsys, monkeypatch):
         ("nonexistent-plugin", "web", "web", False),
     ],
 )
-def test_is_justified_matrix(plugin, pt, tags, expected):
+def test_is_justified_matrix(plugin, pt, tags, expected) -> None:
     if plugin == "plugin-dev" and pt == "meta":
         assert _is_justified(plugin, pt, tags) is True
         return
     assert _is_justified(plugin, pt, tags) is expected
 
 
-def test_parse_stack_tags_inline_list():
+def test_parse_stack_tags_inline_list() -> None:
     fm = "project_type: game\nstack_tags: [unreal-engine, game]"
     assert _parse_stack_tags(fm).split() == ["unreal-engine", "game"]
 
 
-def test_parse_stack_tags_block_list():
+def test_parse_stack_tags_block_list() -> None:
     fm = "project_type: web\nstack_tags:\n  - web\n  - typescript\nother_key: x"
     assert _parse_stack_tags(fm) == " web typescript "

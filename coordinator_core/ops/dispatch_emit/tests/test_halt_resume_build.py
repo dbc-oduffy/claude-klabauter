@@ -10,6 +10,7 @@ import yaml
 from coordinator_core.git.git_objects import PackReadDeadline, PackReadStalled
 from coordinator_core.ops.dispatch_emit import ask_compose, halt_resume_build as hrb, halt_resume_record as hrr, halted_run, op
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+from pathlib import Path
 
 REL = "state/sizings/2026-10-16-refire-c2.yaml"
 RUN = "warp-2026-10-16-refire-c2-20260101T000000-aaaaaa"
@@ -18,7 +19,7 @@ BASE = "a" * 40
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
@@ -35,19 +36,19 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _halt(repo, monkeypatch):
+def _halt(repo, monkeypatch) -> None:
     monkeypatch.setattr(halted_run, "_RESUME_SPAWNER", lambda root, run_id: None)
     halted_run.write_halt_marker(record_dir(repo, RUN), halted="criterion", sizing_rel=REL, run_base_sha=BASE)
 
 
-def test_write_halt_marker_schedules_the_producer_through_the_spawner_seam(repo, monkeypatch):
+def test_write_halt_marker_schedules_the_producer_through_the_spawner_seam(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(halted_run, "_RESUME_SPAWNER", lambda root, run_id: calls.append((root, run_id)))
     halted_run.write_halt_marker(record_dir(repo, RUN), halted="criterion", sizing_rel=REL)
     assert calls == [(repo, RUN)]
 
 
-def test_the_stored_script_is_a_top_level_run_that_keeps_its_stage_reader(repo, monkeypatch):
+def test_the_stored_script_is_a_top_level_run_that_keeps_its_stage_reader(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """The hook returns the stored script as the emit result (a top-level start), never as a launcher child, so it
     keeps the one-level `workflow()` stage reader a launcher child must not hold."""
     _halt(repo, monkeypatch)
@@ -56,14 +57,14 @@ def test_the_stored_script_is_a_top_level_run_that_keeps_its_stage_reader(repo, 
     assert "workflow({ scriptPath: reader })" in script
 
 
-def test_a_halt_without_a_sizing_schedules_nothing(repo, monkeypatch):
+def test_a_halt_without_a_sizing_schedules_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(halted_run, "_RESUME_SPAWNER", lambda root, run_id: calls.append(run_id))
     halted_run.write_halt_marker(record_dir(repo, RUN), halted="criterion", sizing_rel=None)
     assert calls == []
 
 
-def test_build_writes_a_record_whose_script_and_verdict_equal_the_inline_path(repo, monkeypatch):
+def test_build_writes_a_record_whose_script_and_verdict_equal_the_inline_path(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _halt(repo, monkeypatch)
     rd = record_dir(repo, RUN)
     record = hrb.build(repo, RUN)
@@ -80,7 +81,7 @@ def test_build_writes_a_record_whose_script_and_verdict_equal_the_inline_path(re
     assert stored["retry_not_before"] is None
 
 
-def test_build_records_a_gate_refusal_without_a_script(repo, monkeypatch):
+def test_build_records_a_gate_refusal_without_a_script(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _halt(repo, monkeypatch)
     doc = yaml.safe_load((repo / REL).read_text(encoding="utf-8"))
     doc["exit_criterion"] = {"statement": "done", "accepted": None}
@@ -100,7 +101,7 @@ def test_build_records_a_gate_refusal_without_a_script(repo, monkeypatch):
     assert hrr.matches(hrr.read(rd, 1000), current)
 
 
-def test_build_ignores_a_run_that_is_not_halted(repo, monkeypatch):
+def test_build_ignores_a_run_that_is_not_halted(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _halt(repo, monkeypatch)
     halted_run.mark_resumed(record_dir(repo, RUN))
     assert hrb.build(repo, RUN) is None
@@ -110,13 +111,13 @@ def test_build_ignores_a_run_that_is_not_halted(repo, monkeypatch):
 SID = "7f8efcbc-1111-4222-8333-444455556666"
 
 
-def _stage(repo, session_id):
+def _stage(repo, session_id) -> None:
     rd = record_dir(repo, RUN)
     rd.mkdir(parents=True, exist_ok=True)
     (rd / "run-stage.json").write_text(json.dumps({"session_id": session_id, "stage": "halted"}), encoding="utf-8")
 
 
-def test_build_threads_the_run_records_canonical_session_id_into_script_and_receipt(repo, monkeypatch):
+def test_build_threads_the_run_records_canonical_session_id_into_script_and_receipt(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _halt(repo, monkeypatch)
     _stage(repo, SID)
     record = hrb.build(repo, RUN)
@@ -128,7 +129,7 @@ def test_build_threads_the_run_records_canonical_session_id_into_script_and_rece
 
 
 @pytest.mark.parametrize("bad", [None, "", "not-a-uuid"])
-def test_build_omits_an_absent_or_non_canonical_session_id(repo, monkeypatch, bad):
+def test_build_omits_an_absent_or_non_canonical_session_id(repo, monkeypatch: pytest.MonkeyPatch, bad) -> None:
     _halt(repo, monkeypatch)
     _stage(repo, bad)
     record = hrb.build(repo, RUN)
@@ -147,7 +148,7 @@ def _spy_compose(monkeypatch):
     return seen
 
 
-def test_build_composes_with_the_lineage_stop_after_and_records_it(repo, monkeypatch):
+def test_build_composes_with_the_lineage_stop_after_and_records_it(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN, write_stop_after_marker
 
     parent = record_dir(repo, "ask-parent")
@@ -165,14 +166,14 @@ def test_build_composes_with_the_lineage_stop_after_and_records_it(repo, monkeyp
     assert "parked after plan: stop_after=plan" in script
 
 
-def test_build_without_a_parked_lineage_composes_with_no_stop_after(repo, monkeypatch):
+def test_build_without_a_parked_lineage_composes_with_no_stop_after(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = _spy_compose(monkeypatch)
     _halt(repo, monkeypatch)
     record = hrb.build(repo, RUN)
     assert seen == [None] and record["stop_after"] is None
 
 
-def test_a_deliberate_resume_of_a_parked_run_stages(repo, monkeypatch):
+def test_a_deliberate_resume_of_a_parked_run_stages(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit.ask_contract import HALT_PARKED, STOP_AFTER_PLAN, write_stop_after_marker
 
     rd = record_dir(repo, RUN)
@@ -185,11 +186,11 @@ def test_a_deliberate_resume_of_a_parked_run_stages(repo, monkeypatch):
     assert seen == [None] and record["stop_after"] is None
 
 
-def test_main_rejects_a_wrong_argument_count():
+def test_main_rejects_a_wrong_argument_count() -> None:
     assert hrb.main(["only-one"]) == 2
 
 
-def test_build_writes_a_receipt_the_fire_guards_accept_and_a_bare_script_is_still_refused(repo, monkeypatch):
+def test_build_writes_a_receipt_the_fire_guards_accept_and_a_bare_script_is_still_refused(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     import hashlib
 
     from coordinator_core.hooks import allow_emitted_workflow_fire as allow
@@ -211,7 +212,7 @@ def test_build_writes_a_receipt_the_fire_guards_accept_and_a_bare_script_is_stil
 
 
 @pytest.mark.twin_needs_script
-def test_recompose_script_runs_the_real_build_and_ensure_twin_stages_from_it(repo, monkeypatch):
+def test_recompose_script_runs_the_real_build_and_ensure_twin_stages_from_it(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     import hashlib
 
     from coordinator_core.ops.dispatch_emit import launcher_staged_twin as twin
@@ -227,21 +228,21 @@ def test_recompose_script_runs_the_real_build_and_ensure_twin_stages_from_it(rep
     assert (record_dir(repo, RUN) / hrb.COMPOSED_SCRIPT_FILE).is_file()
 
 
-def _kept_script_run(repo, monkeypatch, engine):
+def _kept_script_run(repo, monkeypatch, engine) -> Path:
     monkeypatch.setattr(hrr, "engine_sha", lambda: engine)
     _halt(repo, monkeypatch)
     hrb.build(repo, RUN)
     return record_dir(repo, RUN) / hrb.COMPOSED_SCRIPT_FILE
 
 
-def test_recompose_script_serves_a_kept_script_composed_by_the_running_engine(repo, monkeypatch):
+def test_recompose_script_serves_a_kept_script_composed_by_the_running_engine(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     kept = _kept_script_run(repo, monkeypatch, "e" * 40)
     kept.write_text("// kept", encoding="utf-8")
     monkeypatch.setattr(hrb, "build", lambda *a: pytest.fail("rebuilt a current script"))
     assert hrb.recompose_script(repo, RUN) == ("// kept", "")
 
 
-def test_recompose_script_rebuilds_a_kept_script_composed_by_another_engine(repo, monkeypatch):
+def test_recompose_script_rebuilds_a_kept_script_composed_by_another_engine(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     kept = _kept_script_run(repo, monkeypatch, "e" * 40)
     kept.write_text("// old engine", encoding="utf-8")
     monkeypatch.setattr(hrr, "engine_sha", lambda: "f" * 40)
@@ -250,7 +251,7 @@ def test_recompose_script_rebuilds_a_kept_script_composed_by_another_engine(repo
     assert hrr.read(record_dir(repo, RUN), 1000)["fingerprint"]["engine_sha"] == "f" * 40
 
 
-def test_recompose_script_rebuilds_a_kept_script_with_no_record(repo, monkeypatch):
+def test_recompose_script_rebuilds_a_kept_script_with_no_record(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     kept = _kept_script_run(repo, monkeypatch, "e" * 40)
     kept.write_text("// orphan", encoding="utf-8")
     (record_dir(repo, RUN) / hrr.RESUME_FILE).unlink()
@@ -258,7 +259,7 @@ def test_recompose_script_rebuilds_a_kept_script_with_no_record(repo, monkeypatc
     assert why == "" and text != "// orphan"
 
 
-def test_recompose_script_names_a_run_with_no_halt_marker(repo):
+def test_recompose_script_names_a_run_with_no_halt_marker(repo) -> None:
     text, why = hrb.recompose_script(repo, RUN)
     assert text is None and why
 
@@ -280,14 +281,14 @@ def _fail_reads(monkeypatch, excs):
 
 
 @pytest.mark.parametrize("exc", [PackReadDeadline("wall"), PackReadStalled("stalled")])
-def test_recompose_script_retries_one_pack_read_stall(repo, monkeypatch, exc):
+def test_recompose_script_retries_one_pack_read_stall(repo, monkeypatch: pytest.MonkeyPatch, exc) -> None:
     _halt(repo, monkeypatch)
     calls = _fail_reads(monkeypatch, [exc])
     text, why = hrb.recompose_script(repo, RUN)
     assert why == "" and text and len(calls) >= 2  # the sizing load is also read inside the gate
 
 
-def test_recompose_script_reports_a_persistent_stall_as_retryable_not_a_refusal(repo, monkeypatch):
+def test_recompose_script_reports_a_persistent_stall_as_retryable_not_a_refusal(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _halt(repo, monkeypatch)
     _fail_reads(monkeypatch, [PackReadStalled("a"), PackReadStalled("b")])
     text, why = hrb.recompose_script(repo, RUN)

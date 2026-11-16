@@ -7,6 +7,7 @@ import yaml
 
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
 from coordinator_core.ops.dispatch_emit.emit import MixedAgentTypeRowError
+from pathlib import Path
 
 SIZING_REL = "state/sizings/2026-10-14-xs-evidence.yaml"
 PLAN_BODY = "docs/plans/2026-10-14-p.md"
@@ -15,7 +16,7 @@ PROBLEM_BODY = "docs/problems/2026-10-14-q.md"
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     for d in ("docs/plans", "docs/problems", "state/sizings", "src"):
         (tmp_path / d).mkdir(parents=True)
     (tmp_path / PLAN_BODY).write_text("# P\n", encoding="utf-8", newline="\n")
@@ -29,7 +30,7 @@ def repo(tmp_path):
     return tmp_path
 
 
-def test_plan_body_beside_code_routes_to_the_evidence_sidecar(repo):
+def test_plan_body_beside_code_routes_to_the_evidence_sidecar(repo) -> None:
     m = stage(repo, run_id="xe1", sizing_rel=SIZING_REL, writes=["src/x.py", PLAN_BODY])
     (row,) = m.rows
     assert row.id == "X1"
@@ -42,12 +43,12 @@ def test_plan_body_beside_code_routes_to_the_evidence_sidecar(repo):
     assert PLAN_SIDECAR in brief
 
 
-def test_problems_body_beside_code_still_refuses(repo):
+def test_problems_body_beside_code_still_refuses(repo) -> None:
     with pytest.raises(MixedAgentTypeRowError):
         stage(repo, run_id="xe2", sizing_rel=SIZING_REL, writes=["src/x.py", PROBLEM_BODY])
 
 
-def test_plan_body_alone_is_left_as_declared(repo):
+def test_plan_body_alone_is_left_as_declared(repo) -> None:
     m = stage(repo, run_id="xe3", sizing_rel=SIZING_REL, writes=[PLAN_BODY])
     (row,) = m.rows
     assert list(row.writes) == [PLAN_BODY]

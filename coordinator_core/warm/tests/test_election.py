@@ -28,7 +28,7 @@ def _unique_pipe_name() -> str:
     return election.pipe_name(uuid.uuid4().hex, user_sid="S-1-5-21-1-2-3-1001")
 
 
-def test_pipe_name_shape():
+def test_pipe_name_shape() -> None:
     name = election.pipe_name("tok1", engine_clone=".", user_sid="S-1-5-21-1-2-3-1001")
     assert name.startswith(r"\\.\pipe\coordinator-core.")
     parts = name[len(r"\\.\pipe\coordinator-core."):].split(".")
@@ -37,43 +37,43 @@ def test_pipe_name_shape():
     assert parts[2] == "tok1"
 
 
-def test_pipe_name_changes_with_engine_token():
+def test_pipe_name_changes_with_engine_token() -> None:
     a = election.pipe_name("tok1", engine_clone=".", user_sid="S-1-5-21-1-2-3-1001")
     b = election.pipe_name("tok2", engine_clone=".", user_sid="S-1-5-21-1-2-3-1001")
     assert a != b
 
 
-def test_pipe_name_changes_with_clone_path():
+def test_pipe_name_changes_with_clone_path() -> None:
     a = election.pipe_name("tok1", engine_clone=".", user_sid="S-1-5-21-1-2-3-1001")
     b = election.pipe_name("tok1", engine_clone="..", user_sid="S-1-5-21-1-2-3-1001")
     assert a != b
 
 
-def test_pipe_name_changes_with_sid():
+def test_pipe_name_changes_with_sid() -> None:
     a = election.pipe_name("tok1", engine_clone=".", user_sid="S-1-5-21-1-2-3-1001")
     b = election.pipe_name("tok1", engine_clone=".", user_sid="S-1-5-21-1-2-3-1002")
     assert a != b
 
 
-def test_pipe_name_deterministic_for_same_inputs():
+def test_pipe_name_deterministic_for_same_inputs() -> None:
     a = election.pipe_name("tok1", engine_clone=".", user_sid="S-1-5-21-1-2-3-1001")
     b = election.pipe_name("tok1", engine_clone=".", user_sid="S-1-5-21-1-2-3-1001")
     assert a == b
 
 
-def test_pipe_name_defaults_engine_clone_to_repo_root_and_resolves_own_sid():
+def test_pipe_name_defaults_engine_clone_to_repo_root_and_resolves_own_sid() -> None:
     name = election.pipe_name("tok1")
     assert name.startswith(r"\\.\pipe\coordinator-core.")
     parts = name[len(r"\\.\pipe\coordinator-core."):].split(".")
     assert parts[0] == election.current_user_sid()
 
 
-def test_current_user_sid_shape():
+def test_current_user_sid_shape() -> None:
     sid = election.current_user_sid()
     assert re.fullmatch(r"S-1-5-21-\d+-\d+-\d+-\d+", sid)
 
 
-def test_elect_wins_first_instance():
+def test_elect_wins_first_instance() -> None:
     name = _unique_pipe_name()
     handle = election.elect(name)
     try:
@@ -84,7 +84,7 @@ def test_elect_wins_first_instance():
         _winapi.CloseHandle(handle)
 
 
-def test_elect_loses_to_a_live_first_instance():
+def test_elect_loses_to_a_live_first_instance() -> None:
     import _winapi
 
     name = _unique_pipe_name()
@@ -97,7 +97,7 @@ def test_elect_loses_to_a_live_first_instance():
         _winapi.CloseHandle(winner)
 
 
-def test_elect_reelectable_after_winner_closes_handle():
+def test_elect_reelectable_after_winner_closes_handle() -> None:
     import _winapi
 
     name = _unique_pipe_name()
@@ -111,7 +111,7 @@ def test_elect_reelectable_after_winner_closes_handle():
         _winapi.CloseHandle(second)
 
 
-def test_elect_and_current_user_sid_are_windows_gated():
+def test_elect_and_current_user_sid_are_windows_gated() -> None:
     real_is_windows = election._is_windows
     election._is_windows = lambda: False
     try:
@@ -123,7 +123,7 @@ def test_elect_and_current_user_sid_are_windows_gated():
         election._is_windows = real_is_windows
 
 
-def test_pipe_sddl_grants_only_the_server_logon_sid_read_write():
+def test_pipe_sddl_grants_only_the_server_logon_sid_read_write() -> None:
     sddl = election._pipe_sddl("S-1-5-21-1-2-3-1001", "S-1-5-5-0-342518")
     assert sddl == (
         "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;S-1-5-21-1-2-3-1001)"
@@ -132,13 +132,13 @@ def test_pipe_sddl_grants_only_the_server_logon_sid_read_write():
     assert not re.search(r";(WD|AU|BU|IU|RC|WR);|S-1-1-0", sddl)
 
 
-def test_pipe_sddl_without_a_logon_sid_adds_no_extra_ace():
+def test_pipe_sddl_without_a_logon_sid_adds_no_extra_ace() -> None:
     assert election._pipe_sddl("S-1-5-21-1-2-3-1001", None) == (
         "D:P(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;S-1-5-21-1-2-3-1001)"
     )
 
 
-def test_current_logon_sid_reads_the_process_token_and_feeds_the_pipe_dacl(monkeypatch):
+def test_current_logon_sid_reads_the_process_token_and_feeds_the_pipe_dacl(monkeypatch: pytest.MonkeyPatch) -> None:
     logon = election.current_logon_sid()
     assert logon is not None and re.fullmatch(r"S-1-5-5-\d+-\d+", logon)
     seen = []
@@ -213,7 +213,7 @@ def _open_pipe_as_restricted_token(name: str, restricting_sids: list) -> bool:
             kernel32.CloseHandle(h)
 
 
-def test_restricted_token_with_logon_sid_reaches_the_elected_pipe(monkeypatch):
+def test_restricted_token_with_logon_sid_reaches_the_elected_pipe(monkeypatch: pytest.MonkeyPatch) -> None:
     import _winapi
 
     logon = election.current_logon_sid()
@@ -226,7 +226,7 @@ def test_restricted_token_with_logon_sid_reaches_the_elected_pipe(monkeypatch):
         _winapi.CloseHandle(handle)
 
 
-def test_restricted_token_is_refused_when_the_pipe_has_no_logon_sid_ace(monkeypatch):
+def test_restricted_token_is_refused_when_the_pipe_has_no_logon_sid_ace(monkeypatch: pytest.MonkeyPatch) -> None:
     import _winapi
 
     logon = election.current_logon_sid()
@@ -240,7 +240,7 @@ def test_restricted_token_is_refused_when_the_pipe_has_no_logon_sid_ace(monkeypa
         _winapi.CloseHandle(handle)
 
 
-def test_pipe_client_path_reads_no_credential_file():
+def test_pipe_client_path_reads_no_credential_file() -> None:
     """The restricted-token client reaches the engine over the pipe alone: the
     cookie and door-key files (whose directory ACL names no logon SID) are
     server-side and hook-env concerns, never read by the dispatch client, so
@@ -262,5 +262,5 @@ def test_pipe_client_path_reads_no_credential_file():
         assert not {n.rsplit(".", 1)[-1] for n in imported} & {"cookie", "door_credential"}, module.__name__
 
 
-def test_election_lost_is_an_election_error():
+def test_election_lost_is_an_election_error() -> None:
     assert issubclass(election.ElectionLost, election.ElectionError)

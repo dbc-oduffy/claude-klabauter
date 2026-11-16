@@ -61,7 +61,7 @@ class _FakeIO:
     -- same `.readline()` / `.write()` / `.close()` surface, backed by an
     in-memory queue instead of a real pipe handle."""
 
-    def __init__(self, lines):
+    def __init__(self, lines) -> None:
         self._lines = list(lines)
         self.written: list[bytes] = []
         self.closed = False
@@ -82,7 +82,7 @@ class _FakeIO:
 
 
 class _FakeVersionState:
-    def __init__(self, *, skewed: bool = False, server_sha: str = "deadbeef"):
+    def __init__(self, *, skewed: bool = False, server_sha: str = "deadbeef") -> None:
         self._skewed = skewed
         self.server_sha = server_sha
 
@@ -93,7 +93,7 @@ class _FakeVersionState:
         return self.is_skewed(client_token)
 
 
-def _frame(*, id_, method="noop", extra=None, token="client-token") -> bytes:
+def _frame(*, id_, method: str = "noop", extra=None, token: str | None = "client-token") -> bytes:
     """A frame from a TRUSTED caller by default.
 
     `_engine_token` is stamped here because a request that omits the
@@ -115,7 +115,7 @@ def _written_responses(io_obj: _FakeIO) -> list[dict]:
     return [json.loads(line) for line in io_obj.written]
 
 
-def test_overlapping_dispatch_keeps_distinct_identities():
+def test_overlapping_dispatch_keeps_distinct_identities() -> None:
     """Two connections dispatched concurrently on their own threads must
     not observe each other's declared-writes state -- the multi-op
     isolation property the whole warm-engine premise rests on
@@ -124,7 +124,7 @@ def test_overlapping_dispatch_keeps_distinct_identities():
     seen: dict[int, list[str]] = {}
     barrier = threading.Barrier(2)
 
-    def _dispatch(msg: dict, *, caller=None, isolated=False) -> dict:
+    def _dispatch(msg: dict, *, caller=None, isolated: bool = False) -> dict:
         declared_writes.declare_write(f"path-{msg['id']}.txt")
         barrier.wait(timeout=5)
         seen[msg["id"]] = list(declared_writes.active_declarations() or [])
@@ -156,14 +156,14 @@ def test_overlapping_dispatch_keeps_distinct_identities():
     assert _written_responses(ios[1])[0]["result"] == "ok"
 
 
-def test_wedged_op_does_not_stall_the_next():
+def test_wedged_op_does_not_stall_the_next() -> None:
     """A hung dispatch on one connection's thread must not block a fresh
     dispatch on another (test_warm_tier.py::test_wedged_op_does_not_stall_the_next)."""
     wedge_released = threading.Event()
     order: list[str] = []
     order_lock = threading.Lock()
 
-    def _dispatch(msg: dict, *, caller=None, isolated=False) -> dict:
+    def _dispatch(msg: dict, *, caller=None, isolated: bool = False) -> dict:
         if msg["id"] == "wedged":
             wedge_released.wait(timeout=5)
         with order_lock:
@@ -201,7 +201,7 @@ def test_wedged_op_does_not_stall_the_next():
     assert _written_responses(io_wedged)[0]["result"] == "ok"
 
 
-def test_shutdown_trigger_mid_request_completes_in_flight_before_exit():
+def test_shutdown_trigger_mid_request_completes_in_flight_before_exit() -> None:
     """A skew-detected shutdown mid-request must write the request's own
     response BEFORE the drain sequence runs `exit_fn`, and the request's
     own in-flight slot must already be released by the time the drain wait
@@ -242,7 +242,7 @@ def test_shutdown_trigger_mid_request_completes_in_flight_before_exit():
     assert response["error"]["data"]["server_sha"] == "abc123"
 
 
-def test_shutdown_trigger_waits_for_a_separate_in_flight_request_before_exit():
+def test_shutdown_trigger_waits_for_a_separate_in_flight_request_before_exit() -> None:
     """The drain wait must genuinely block on an OTHER request that is
     still in flight on a different connection when a shutdown trigger
     fires -- not merely observe its own (already-released) slot and
@@ -257,7 +257,7 @@ def test_shutdown_trigger_waits_for_a_separate_in_flight_request_before_exit():
     other_done = threading.Event()
     exit_calls: list[int] = []
 
-    def dispatch_a(msg: dict, *, caller=None, isolated=False) -> dict:
+    def dispatch_a(msg: dict, *, caller=None, isolated: bool = False) -> dict:
         hold.wait(timeout=5)
         other_done.set()
         return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
@@ -318,7 +318,7 @@ def test_shutdown_trigger_waits_for_a_separate_in_flight_request_before_exit():
     assert json.loads(io_a.written[0])["result"] == "ok"
 
 
-def test_malformed_frame_does_not_kill_the_loop():
+def test_malformed_frame_does_not_kill_the_loop() -> None:
     """A frame that is not valid UTF-8/JSON/an-object must produce a
     well-formed error response on its own connection, never an unhandled
     exception (test_warm_tier.py's "cold fallback under every warm
@@ -342,7 +342,7 @@ def test_malformed_frame_does_not_kill_the_loop():
         assert io_obj.closed
 
 
-def test_pooled_connection_read_failure_still_answers_rather_than_bare_close():
+def test_pooled_connection_read_failure_still_answers_rather_than_bare_close() -> None:
     """A connection that reached `_handle_connection` via the bounded worker
     pool (`already_entered=True`) already holds an `in_flight` slot, so a
     live caller is presumed still waiting on the far end. Before this fix, a
@@ -377,7 +377,7 @@ def test_pooled_connection_read_failure_still_answers_rather_than_bare_close():
         assert in_flight() == 0
 
 
-def test_direct_call_read_failure_stays_silent_as_before():
+def test_direct_call_read_failure_stays_silent_as_before() -> None:
     """The pre-existing, non-pooled contract (`already_entered=False`,
     every direct caller's default) is unchanged: a read failure on a
     connection this function did not itself enter as in-flight is still a
@@ -402,7 +402,7 @@ def test_direct_call_read_failure_stays_silent_as_before():
     assert in_flight() == 0
 
 
-def test_ordinary_dispatch_exception_still_surfaces_as_internal_error():
+def test_ordinary_dispatch_exception_still_surfaces_as_internal_error() -> None:
     """An op-level bug (any exception `dispatch` raises other than the
     `BrokenProcessPool` recovery `_pool_dispatch` already handles) must keep
     reaching the caller as an ordinary INTERNAL_ERROR envelope, unchanged --
@@ -412,7 +412,7 @@ def test_ordinary_dispatch_exception_still_surfaces_as_internal_error():
     in_flight = server.InFlightCounter()
     io_obj = _FakeIO([_frame(id_=1)])
 
-    def _raising_dispatch(msg, *, caller=None, isolated=False):
+    def _raising_dispatch(msg, *, caller=None, isolated: bool = False):
         raise ValueError("some ordinary op bug")
 
     server._handle_connection(
@@ -429,7 +429,7 @@ def test_ordinary_dispatch_exception_still_surfaces_as_internal_error():
     assert "some ordinary op bug" in response["error"]["message"]
 
 
-def test_run_dispatch_opens_per_request_state(monkeypatch):
+def test_run_dispatch_opens_per_request_state(monkeypatch: pytest.MonkeyPatch) -> None:
     """`_run_dispatch` must open `entry_seam.per_request_state()` around
     every call into `coordinator_core.ipc.dispatch_message` -- a fresh,
     empty declared-writes collection per call, closed again on return."""
@@ -450,7 +450,7 @@ def test_run_dispatch_opens_per_request_state(monkeypatch):
     assert declared_writes.active_declarations() is None
 
 
-def test_run_dispatch_captures_handler_stdout_into_stderr_field(monkeypatch):
+def test_run_dispatch_captures_handler_stdout_into_stderr_field(monkeypatch: pytest.MonkeyPatch) -> None:
     """W9: a handler `print()` served warm must not be silently discarded --
     `_run_dispatch` must capture it and fold it into the `_stderr` sibling
     field `warm.client` already pops and relays, the same field the
@@ -468,7 +468,7 @@ def test_run_dispatch_captures_handler_stdout_into_stderr_field(monkeypatch):
     assert "handler stdout line" in result["_stderr"]
 
 
-def test_pool_dispatch_worker_captures_handler_stdout_into_stderr_field(monkeypatch):
+def test_pool_dispatch_worker_captures_handler_stdout_into_stderr_field(monkeypatch: pytest.MonkeyPatch) -> None:
     """Same contract as `_run_dispatch`, for the process-pool worker target
     -- the worker binds stdout to `os.devnull`
     (`_bind_null_std_streams`/`_suppress_pool_worker_consoles`), so this is
@@ -487,7 +487,7 @@ def test_pool_dispatch_worker_captures_handler_stdout_into_stderr_field(monkeypa
     assert "pool worker stdout line" in result["_stderr"]
 
 
-def test_run_dispatch_captures_raw_handler_stderr_write_into_stderr_field(monkeypatch):
+def test_run_dispatch_captures_raw_handler_stderr_write_into_stderr_field(monkeypatch: pytest.MonkeyPatch) -> None:
     """A REFUSING op's own diagnostic sentence, written directly to
     `sys.stderr` (not via `emit_diagnostic`) -- the shape of the other 1512
     call sites -- must still arrive in the `_stderr` sibling field warm
@@ -507,7 +507,7 @@ def test_run_dispatch_captures_raw_handler_stderr_write_into_stderr_field(monkey
     assert "scoped_to.sha does not resolve" in result["_stderr"]
 
 
-def test_pool_dispatch_worker_captures_raw_handler_stderr_write_into_stderr_field(monkeypatch):
+def test_pool_dispatch_worker_captures_raw_handler_stderr_write_into_stderr_field(monkeypatch: pytest.MonkeyPatch) -> None:
     """Same contract as `_run_dispatch`, for the process-pool worker target."""
 
     async def fake_dispatch_message(msg: dict, *, caller: str | None = None, corr_id: str | None = None) -> dict:
@@ -526,7 +526,7 @@ def test_pool_dispatch_worker_captures_raw_handler_stderr_write_into_stderr_fiel
     assert "receiver unresolvable" in result["_stderr"]
 
 
-def test_captured_stderr_sentence_reaches_route_mutation_error_op_stderr(monkeypatch):
+def test_captured_stderr_sentence_reaches_route_mutation_error_op_stderr(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ties the bridge to root cause 1: `cc_invoke.route_mutation` builds
     `RouteMutationError.op_stderr` from the child's captured stderr text, and
     a warm-served refusal's `_stderr` frame field is exactly that text once
@@ -566,14 +566,14 @@ def test_captured_stderr_sentence_reaches_route_mutation_error_op_stderr(monkeyp
     assert "the receiver is not registered" in exc.op_stderr
 
 
-def test_boot_pool_starts_one_accept_chain_per_pending_instance(monkeypatch):
+def test_boot_pool_starts_one_accept_chain_per_pending_instance(monkeypatch: pytest.MonkeyPatch) -> None:
     """`_start_pending_listener_pool` must start exactly `pool_size` accept
     chains -- one bound to the caller-supplied `first_handle` (election's
     own instance) and `pool_size - 1` bound to freshly created instances --
     each on its own thread, never serialized behind one another."""
     created_handles: list[int] = []
 
-    def _fake_create(name, sid):
+    def _fake_create(name, sid) -> int:
         created_handles.append(len(created_handles) + 100)
         return created_handles[-1]
 
@@ -583,7 +583,7 @@ def test_boot_pool_starts_one_accept_chain_per_pending_instance(monkeypatch):
     started_lock = threading.Lock()
     release = threading.Event()
 
-    def _fake_accept_and_replenish(self, handle):
+    def _fake_accept_and_replenish(self, handle) -> None:
         with started_lock:
             started_with.append(handle)
         release.wait(timeout=5)
@@ -603,7 +603,7 @@ def test_boot_pool_starts_one_accept_chain_per_pending_instance(monkeypatch):
     assert len(set(started_with)) == 5  # five DISTINCT chains, not one replayed
 
 
-def test_boot_pool_creation_failure_shrinks_the_pool_without_raising(monkeypatch):
+def test_boot_pool_creation_failure_shrinks_the_pool_without_raising(monkeypatch: pytest.MonkeyPatch) -> None:
     """A `_create_pipe_instance` failure partway through boot must not
     raise past `_start_pending_listener_pool` -- a smaller-than-intended
     pool degrades toward today's one-listener behaviour rather than
@@ -611,7 +611,7 @@ def test_boot_pool_creation_failure_shrinks_the_pool_without_raising(monkeypatch
     best-effort contract for this step)."""
     calls = {"n": 0}
 
-    def _fake_create(name, sid):
+    def _fake_create(name, sid) -> int:
         calls["n"] += 1
         if calls["n"] == 2:
             raise OSError("simulated CreateNamedPipe failure")
@@ -622,7 +622,7 @@ def test_boot_pool_creation_failure_shrinks_the_pool_without_raising(monkeypatch
     started_with: list[int] = []
     release = threading.Event()
 
-    def _fake_accept_and_replenish(self, handle):
+    def _fake_accept_and_replenish(self, handle) -> None:
         started_with.append(handle)
         release.wait(timeout=5)
 
@@ -640,7 +640,7 @@ def test_boot_pool_creation_failure_shrinks_the_pool_without_raising(monkeypatch
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="named pipes are Windows-only")
-def test_pool_serves_more_than_one_simultaneous_connection(monkeypatch, tmp_path):
+def test_pool_serves_more_than_one_simultaneous_connection(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The refutation criterion problem 3 names directly: showing MORE THAN
     ONE instance outstanding in steady state. Runs a real `_ServerContext`
     against real Windows named pipes (own pipe name, isolated from any live
@@ -674,7 +674,7 @@ def test_pool_serves_more_than_one_simultaneous_connection(monkeypatch, tmp_path
     assert len(opened) == 2
 
 
-def test_idle_watchdog_demotes_a_zero_invocation_server(monkeypatch):
+def test_idle_watchdog_demotes_a_zero_invocation_server(monkeypatch: pytest.MonkeyPatch) -> None:
     """The idle watchdog thread must fire `idle.demote_if_idle` -- with a
     served-count of zero -- on its own, with NO connection ever having
     arrived on the accept loop. This is the leak the EM measured live: a
@@ -690,7 +690,7 @@ def test_idle_watchdog_demotes_a_zero_invocation_server(monkeypatch):
     """
     calls: list[int] = []
 
-    def _fake_demote_if_idle(*, served_count, close_listener, in_flight_count, ctx_shutdown, **_kw):
+    def _fake_demote_if_idle(*, served_count, close_listener, in_flight_count, ctx_shutdown, **_kw) -> bool:
         calls.append(served_count())
         close_listener()
         return True
@@ -712,7 +712,7 @@ def test_idle_watchdog_demotes_a_zero_invocation_server(monkeypatch):
     assert ctx._is_listening() is False
 
 
-def test_breadcrumb_exists_while_serving_and_gone_after_shutdown(tmp_path):
+def test_breadcrumb_exists_while_serving_and_gone_after_shutdown(tmp_path: Path) -> None:
     """`_ctx_shutdown` must unlink the breadcrumb for THIS server's own
     `engine_root` -- the operator stop hatch (`warm-engine-stop.py`)
     otherwise reports "nothing to stop" for a server that is, in fact,
@@ -744,7 +744,7 @@ def test_breadcrumb_exists_while_serving_and_gone_after_shutdown(tmp_path):
     assert breadcrumb.read_breadcrumb(tmp_path) is None
 
 
-def test_ctx_shutdown_does_not_clear_a_successors_breadcrumb(tmp_path):
+def test_ctx_shutdown_does_not_clear_a_successors_breadcrumb(tmp_path: Path) -> None:
     """The other side of the same contract, at the wiring level rather than
     the primitive's: a SUPERSEDED generation running `_ctx_shutdown` must
     leave the live successor's breadcrumb alone. Before the ownership check
@@ -768,7 +768,7 @@ def test_ctx_shutdown_does_not_clear_a_successors_breadcrumb(tmp_path):
     assert surviving["engine_sha"] == "successor"
 
 
-def test_idle_demotion_survives_token_rotation_after_serving(tmp_path):
+def test_idle_demotion_survives_token_rotation_after_serving(tmp_path: Path) -> None:
     """Composed regression for the leak's actual field shape (EM's
     addendum, example-retrieval-repo-f7's finding): rotation MINTS an orphan (a new
     engine-stamp fingerprint -> a new `compute_client_token` -> a new pipe
@@ -843,13 +843,13 @@ def test_idle_demotion_survives_token_rotation_after_serving(tmp_path):
     assert elapsed >= 1.0
 
 
-def _engine_clone_root_for_test():
+def _engine_clone_root_for_test() -> Path:
     from pathlib import Path
 
     return Path(server.__file__).resolve().parents[2]
 
 
-def test_serve_line_resolves_the_caller_identity_carried_on_the_request(monkeypatch):
+def test_serve_line_resolves_the_caller_identity_carried_on_the_request(monkeypatch: pytest.MonkeyPatch) -> None:
     """The decisive case: a server whose OWN environment carries session id
     A, serving a request from a client whose environment carried session id
     B (relayed as the request's `_session_id` field), must resolve B for
@@ -870,7 +870,7 @@ def test_serve_line_resolves_the_caller_identity_carried_on_the_request(monkeypa
 
     observed: list[str] = []
 
-    def _dispatch(msg: dict, *, caller=None, isolated=False) -> dict:
+    def _dispatch(msg: dict, *, caller=None, isolated: bool = False) -> dict:
         with per_request_state(session_id=caller.session_id if caller else None, isolated=True):
             observed.append(session_core.resolve_session_id())
         return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
@@ -891,7 +891,7 @@ def test_serve_line_resolves_the_caller_identity_carried_on_the_request(monkeypa
     assert "_caller" not in json.loads(io_obj.written[0])
 
 
-def test_run_dispatch_itself_binds_the_given_session_id(monkeypatch):
+def test_run_dispatch_itself_binds_the_given_session_id(monkeypatch: pytest.MonkeyPatch) -> None:
     """Exercises the REAL `server._run_dispatch` (the production dispatch
     seam every connection actually calls, not a hand-rolled stand-in) --
     only its leaf `ipc.dispatch_message` call is replaced, so the
@@ -921,7 +921,7 @@ def test_run_dispatch_itself_binds_the_given_session_id(monkeypatch):
     assert session_core.resolve_session_id() != session_b
 
 
-def test_run_dispatch_itself_binds_the_carried_caller_pid(monkeypatch):
+def test_run_dispatch_itself_binds_the_carried_caller_pid(monkeypatch: pytest.MonkeyPatch) -> None:
     """The wire-to-seam leg the pid axis needs, and the one that was missing:
     C1b put `CallerContext.pid` on the wire and C3 built the env borrow, but
     no test crossed both, so the seam popped `CLAUDE_PID` and never set it
@@ -952,7 +952,7 @@ def test_run_dispatch_itself_binds_the_carried_caller_pid(monkeypatch):
     assert _os.environ["CLAUDE_PID"] == "424242"
 
 
-def test_pool_dispatch_worker_binds_the_carried_caller_pid(monkeypatch):
+def test_pool_dispatch_worker_binds_the_carried_caller_pid(monkeypatch: pytest.MonkeyPatch) -> None:
     """Same contract at the OTHER production dispatch site -- the pool worker
     target, which is where every real warm request lands
     (`_ServerContext._pool_dispatch`). `harness_registry.self_record()` reads
@@ -980,7 +980,7 @@ def test_pool_dispatch_worker_binds_the_carried_caller_pid(monkeypatch):
     assert _os.environ["CLAUDE_PID"] == "424242"
 
 
-def test_serve_line_with_no_carried_identity_strips_rather_than_falls_back(monkeypatch):
+def test_serve_line_with_no_carried_identity_strips_rather_than_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
     """No-identity, isolated (C3 supersedes this test's pre-C3 fall-back
     expectation): a request that carries no `_caller` at all (older
     client, or a caller `resolve_session_id()` could not identify) must
@@ -998,7 +998,7 @@ def test_serve_line_with_no_carried_identity_strips_rather_than_falls_back(monke
 
     observed: list[str] = []
 
-    def _dispatch(msg: dict, *, caller=None, isolated=False) -> dict:
+    def _dispatch(msg: dict, *, caller=None, isolated: bool = False) -> dict:
         with per_request_state(session_id=caller.session_id if caller else None, isolated=True):
             observed.append(session_core.resolve_session_id())
         return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
@@ -1018,7 +1018,7 @@ def test_serve_line_with_no_carried_identity_strips_rather_than_falls_back(monke
     assert session_core.resolve_session_id() == session_a
 
 
-def test_serve_line_with_no_carried_pid_never_hands_on_the_servers_own(monkeypatch):
+def test_serve_line_with_no_carried_pid_never_hands_on_the_servers_own(monkeypatch: pytest.MonkeyPatch) -> None:
     """Sibling of the no-carried-IDENTITY test above, on the axis that has a
     fallback rung where the other two do not.
 
@@ -1042,7 +1042,7 @@ def test_serve_line_with_no_carried_pid_never_hands_on_the_servers_own(monkeypat
 
     seen: list = []
 
-    def _dispatch(msg: dict, *, caller=None, isolated=False) -> dict:
+    def _dispatch(msg: dict, *, caller=None, isolated: bool = False) -> dict:
         seen.append(caller.pid if caller is not None else "<no caller>")
         return {"jsonrpc": "2.0", "id": msg["id"], "result": "ok"}
 
@@ -1071,7 +1071,7 @@ def test_serve_line_with_no_carried_pid_never_hands_on_the_servers_own(monkeypat
 # ---------------------------------------------------------------------------
 
 
-def test_enqueue_connection_counts_in_flight_before_a_worker_ever_runs():
+def test_enqueue_connection_counts_in_flight_before_a_worker_ever_runs() -> None:
     """`_enqueue_connection`'s own claim (module docstring's DRAIN
     SEMANTICS): the in-flight slot is taken at enqueue time, before any
     worker thread has even been started -- a request sitting in the queue
@@ -1083,7 +1083,7 @@ def test_enqueue_connection_counts_in_flight_before_a_worker_ever_runs():
     assert ctx._queue.get_nowait() == "io-obj"
 
 
-def test_worker_pool_bounds_concurrent_dispatch(monkeypatch):
+def test_worker_pool_bounds_concurrent_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     """The refutation criterion AC7 names directly: dispatch concurrency
     must be capped at `WORKER_POOL_SIZE` (here a small test pool) rather
     than growing one handler thread per accepted connection -- five
@@ -1094,7 +1094,7 @@ def test_worker_pool_bounds_concurrent_dispatch(monkeypatch):
     lock = threading.Lock()
     release = threading.Event()
 
-    def _fake_handle_connection(io, **kwargs):
+    def _fake_handle_connection(io, **kwargs) -> None:
         with lock:
             running.append(io)
             max_running[0] = max(max_running[0], len(running))
@@ -1124,7 +1124,7 @@ def test_worker_pool_bounds_concurrent_dispatch(monkeypatch):
     assert max_running[0] == 2
 
 
-def test_worker_loop_survives_an_unhandled_exception_from_handle_connection(monkeypatch):
+def test_worker_loop_survives_an_unhandled_exception_from_handle_connection(monkeypatch: pytest.MonkeyPatch) -> None:
     """A worker thread must outlive a single connection's failure -- the
     defect this closes: `_write_and_release`'s `io.write(...)` (a common
     case under load, per `warm.client`'s own comment: a caller that hit its
@@ -1137,7 +1137,7 @@ def test_worker_loop_survives_an_unhandled_exception_from_handle_connection(monk
     connection and goes on to serve the next queued item."""
     calls: list[str] = []
 
-    def _fake_handle_connection(io, **kwargs):
+    def _fake_handle_connection(io, **kwargs) -> None:
         calls.append(io)
         if io == "boom":
             raise OSError("simulated write to an abandoned connection")
@@ -1157,7 +1157,7 @@ def test_worker_loop_survives_an_unhandled_exception_from_handle_connection(monk
     assert calls == ["boom", "after"]
 
 
-def test_drain_waits_for_queued_but_not_yet_dispatched_work():
+def test_drain_waits_for_queued_but_not_yet_dispatched_work() -> None:
     """AC8's own refutation criterion: a request queued behind a busy
     worker must not be dropped at shutdown -- `drain_and_exit` must block
     until the queued item is actually dispatched and released, not merely
@@ -1166,7 +1166,7 @@ def test_drain_waits_for_queued_but_not_yet_dispatched_work():
     hold_first = threading.Event()
     dispatched_second = threading.Event()
 
-    def _fake_handle_connection(io, *, in_flight, **kwargs):
+    def _fake_handle_connection(io, *, in_flight, **kwargs) -> None:
         if io == "first":
             started_first.set()
             hold_first.wait(timeout=5)
@@ -1210,7 +1210,7 @@ def test_drain_waits_for_queued_but_not_yet_dispatched_work():
         server._handle_connection = orig_handle_connection
 
 
-def test_token_is_stale_flips_when_a_publish_rewrites_the_engine_stamp(tmp_path):
+def test_token_is_stale_flips_when_a_publish_rewrites_the_engine_stamp(tmp_path: Path) -> None:
     """The defect's actual trigger, reproduced through the real publish
     seam rather than a synthetic token: `skew.write_engine_stamp` is what
     a publish round calls, and rewriting it is what rotates the generation
@@ -1240,7 +1240,7 @@ def test_token_is_stale_flips_when_a_publish_rewrites_the_engine_stamp(tmp_path)
     )
 
 
-def test_idle_tick_retires_a_superseded_server_that_has_served_requests(tmp_path):
+def test_idle_tick_retires_a_superseded_server_that_has_served_requests(tmp_path: Path) -> None:
     """AC: a server whose served count is NONZERO and whose token is stale
     -- the population today's two mechanisms both miss -- retires without
     receiving a request, and is recorded as SUPERSEDED, not idle-demoted.
@@ -1265,7 +1265,7 @@ def test_idle_tick_retires_a_superseded_server_that_has_served_requests(tmp_path
     calls = []
     monkey_target = idle.demote_if_idle
 
-    def _capture(**kwargs):
+    def _capture(**kwargs) -> bool:
         calls.append(kwargs)
         return True
 
@@ -1281,7 +1281,7 @@ def test_idle_tick_retires_a_superseded_server_that_has_served_requests(tmp_path
     assert ctx.telemetry.snapshot()["exit_reason"] == telemetry.EXIT_REASON_SUPERSEDED
 
 
-def test_idle_tick_does_not_retire_on_a_bare_source_edit(tmp_path):
+def test_idle_tick_does_not_retire_on_a_bare_source_edit(tmp_path: Path) -> None:
     """Axis 2 is request-driven (DR-315 section 4): a bare on-disk source
     edit that never rewrites the engine stamp leaves the idle watchdog's
     verdict at not-stale; the next request retires the server instead."""
@@ -1303,7 +1303,7 @@ def test_idle_tick_does_not_retire_on_a_bare_source_edit(tmp_path):
     calls = []
     monkey_target = idle.demote_if_idle
 
-    def _capture(**kwargs):
+    def _capture(**kwargs) -> bool:
         calls.append(kwargs)
         return True
 
@@ -1318,7 +1318,7 @@ def test_idle_tick_does_not_retire_on_a_bare_source_edit(tmp_path):
     assert ctx.telemetry.snapshot()["exit_reason"] != telemetry.EXIT_REASON_SUPERSEDED
 
 
-def test_healthy_server_is_not_retired_by_the_superseded_arm(tmp_path):
+def test_healthy_server_is_not_retired_by_the_superseded_arm(tmp_path: Path) -> None:
     """The other half of the AC: a current generation with a fresh idle
     clock keeps running. A predicate that retires healthy servers would
     destroy warm serving entirely, so this is pinned alongside the
@@ -1347,7 +1347,7 @@ def test_healthy_server_is_not_retired_by_the_superseded_arm(tmp_path):
     )
 
 
-def test_token_staleness_read_failure_is_not_a_retirement_verdict(tmp_path):
+def test_token_staleness_read_failure_is_not_a_retirement_verdict(tmp_path: Path) -> None:
     """Never raises, and an unreadable token reads as NOT stale -- the
     watchdog runs this every poll while a publish round may be mid-write,
     and a transient failure must degrade to today's behaviour (wait out
@@ -1372,7 +1372,7 @@ def test_token_staleness_read_failure_is_not_a_retirement_verdict(tmp_path):
         skew.compute_client_token = original
 
 
-def test_context_without_a_boot_token_disables_the_superseded_arm(tmp_path):
+def test_context_without_a_boot_token_disables_the_superseded_arm(tmp_path: Path) -> None:
     """Every pre-existing `_ServerContext(...)` construction omits
     `boot_token`; those must keep exactly their old two-arm behaviour."""
     ctx = server._ServerContext(
@@ -1382,7 +1382,7 @@ def test_context_without_a_boot_token_disables_the_superseded_arm(tmp_path):
     assert ctx._token_is_stale() is False
 
 
-def test_boot_binds_the_pipes_own_token_as_the_boot_token():
+def test_boot_binds_the_pipes_own_token_as_the_boot_token() -> None:
     """The predicate must compare against the token actually EMBEDDED in
     the pipe name this server owns. Pinned by source inspection because
     the boot path binds a real pipe and does not return before serving
@@ -1408,14 +1408,14 @@ def test_boot_binds_the_pipes_own_token_as_the_boot_token():
     assert boot.count("compute_client_token") == 1
 
 
-def test_evict_on_skew_drain_ordering_is_untouched_by_this_path():
+def test_evict_on_skew_drain_ordering_is_untouched_by_this_path() -> None:
     """Anti-scope pin: the superseded retirement adds a path, it does not
     reorder or weaken C16's respond -> close_listener -> drain sequence."""
     body = inspect.getsource(skew.evict_on_skew)
     assert body.index("respond(") < body.index("close_listener()") < body.index("drain()")
 
 
-def test_record_accept_ready_is_a_noop_without_a_stamped_spawn(tmp_path):
+def test_record_accept_ready_is_a_noop_without_a_stamped_spawn(tmp_path: Path) -> None:
     """AC4: `spawn_epoch=None` (the shape every pre-existing construction
     gets, including every `_ServerContext(...)` above) must never write a
     row -- matching `_record_own_boot`'s own guard."""
@@ -1430,7 +1430,7 @@ def test_record_accept_ready_is_a_noop_without_a_stamped_spawn(tmp_path):
     assert telemetry.server_boot_samples(tmp_path) == []
 
 
-def test_record_accept_ready_writes_a_second_row_distinct_from_the_first(tmp_path):
+def test_record_accept_ready_writes_a_second_row_distinct_from_the_first(tmp_path: Path) -> None:
     """AC4: a stamped spawn writes a SECOND `server-boot.jsonl` row via the
     existing `record_server_boot` two-field signature (this row's footprint
     never touches `warm/telemetry.py`) -- `listener_secs` carried unchanged,
@@ -1467,7 +1467,7 @@ def test_record_accept_ready_writes_a_second_row_distinct_from_the_first(tmp_pat
     assert second["ready_secs"] > 4.0
 
 
-def test_record_accept_ready_never_raises_on_a_telemetry_failure(tmp_path, monkeypatch):
+def test_record_accept_ready_never_raises_on_a_telemetry_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Best-effort, matching `_record_own_boot`: an instrument must never be
     why a server fails to boot."""
     ctx = server._ServerContext(
@@ -1486,7 +1486,7 @@ def test_record_accept_ready_never_raises_on_a_telemetry_failure(tmp_path, monke
     ctx._record_accept_ready()
 
 
-def test_serve_forever_variants_call_record_accept_ready_before_blocking():
+def test_serve_forever_variants_call_record_accept_ready_before_blocking() -> None:
     """Source pin: both accept-loop entry points must call
     `_record_accept_ready` after starting their accept layer and idle
     watchdog, and before the blocking `_stopped.wait()` tail -- the
@@ -1508,7 +1508,7 @@ def _admitting_ctx(monkeypatch):
     return ctx, closed
 
 
-def test_acceptor_wrap_failure_releases_the_admitted_slot(monkeypatch):
+def test_acceptor_wrap_failure_releases_the_admitted_slot(monkeypatch: pytest.MonkeyPatch) -> None:
     ctx, closed = _admitting_ctx(monkeypatch)
 
     def _no_pipe(name, sid):
@@ -1524,7 +1524,7 @@ def test_acceptor_wrap_failure_releases_the_admitted_slot(monkeypatch):
     assert ctx.in_flight() == 0
 
 
-def test_replenish_thread_start_failure_releases_the_admitted_slot(monkeypatch):
+def test_replenish_thread_start_failure_releases_the_admitted_slot(monkeypatch: pytest.MonkeyPatch) -> None:
     ctx, closed = _admitting_ctx(monkeypatch)
     monkeypatch.setattr(server, "_create_pipe_instance", lambda name, sid: 9)
 
@@ -1541,7 +1541,7 @@ def test_replenish_thread_start_failure_releases_the_admitted_slot(monkeypatch):
     assert 1 in closed and 9 in closed
 
 
-def test_refused_after_close_listener_leaves_in_flight_at_zero(monkeypatch):
+def test_refused_after_close_listener_leaves_in_flight_at_zero(monkeypatch: pytest.MonkeyPatch) -> None:
     ctx, closed = _admitting_ctx(monkeypatch)
     ctx.close_listener()
     ctx._accept_and_replenish(1)

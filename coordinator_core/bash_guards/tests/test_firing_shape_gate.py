@@ -42,6 +42,7 @@ from coordinator_core.guard_messages.alternative_record import (
     Override,
     ReadyCommand,
 )
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -78,14 +79,14 @@ def _item1_pre_fix_hso(joined_tokens: str) -> dict:
 
 
 class TestItem1MultiprobeBannerFiringShape:
-    def test_pre_fix_fixture_is_flagged(self):
+    def test_pre_fix_fixture_is_flagged(self) -> None:
         legacy = _item1_pre_fix_hso("sed -n 1,5p a.py")
         spec = fs.REGISTRY["check_multiprobe_banner_rewrite"]
         ev = fs.evaluate_ask(legacy, alternative_required=spec.alternative_required)
         assert ev.fired
         assert ev.violated, "pre-fix prose-only multi-probe-banner advisory was not flagged"
 
-    def test_post_fix_unrecognized_segment_emits_nothing_not_a_violation(self):
+    def test_post_fix_unrecognized_segment_emits_nothing_not_a_violation(self) -> None:
         result = _dc.check_multiprobe_banner_rewrite(
             "sed -n 1,5p a.py; echo ===; sed -n 6,9p b.py", "firing-shape-gate-test"
         )
@@ -95,7 +96,7 @@ class TestItem1MultiprobeBannerFiringShape:
         assert not ev.fired
         assert not ev.violated
 
-    def test_post_fix_recognized_segment_still_names_a_real_alternative(self):
+    def test_post_fix_recognized_segment_still_names_a_real_alternative(self) -> None:
         result = _dc.check_multiprobe_banner_rewrite(
             'echo "=== SESSION FACTS ==="; pwd; whoami; git status --short', "firing-shape-gate-test"
         )
@@ -118,14 +119,14 @@ def _item2_pre_fix_footer_text() -> str:
 
 
 class TestItem2InProcessSearchFiringShape:
-    def test_pre_fix_fixture_repeats_and_is_flagged(self):
+    def test_pre_fix_fixture_repeats_and_is_flagged(self) -> None:
         first = _item2_pre_fix_footer_text()
         second = _item2_pre_fix_footer_text()
         violated, reason = fs.evaluate_report_repetition(first, second)
         assert violated, "pre-fix unlatched footer repetition was not flagged"
         assert reason
 
-    def test_post_fix_session_latch_breaks_the_repeat(self, tmp_path, monkeypatch):
+    def test_post_fix_session_latch_breaks_the_repeat(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = tmp_path / "repo"
         (repo / ".git").mkdir(parents=True)
         monkeypatch.setenv(_gis._SESSION_ID_ENV_VAR, "firing-shape-gate-test-session")
@@ -137,7 +138,7 @@ class TestItem2InProcessSearchFiringShape:
         assert not violated, "post-fix footer still repeats byte-identical text on the 2nd call"
         assert second == _gis._ANSWERED_MARKER
 
-    def test_post_fix_first_call_still_carries_the_full_explanatory_paragraph(self, tmp_path, monkeypatch):
+    def test_post_fix_first_call_still_carries_the_full_explanatory_paragraph(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = tmp_path / "repo"
         (repo / ".git").mkdir(parents=True)
         monkeypatch.setenv(_gis._SESSION_ID_ENV_VAR, "firing-shape-gate-test-session-2")
@@ -165,12 +166,12 @@ def _item3_pre_fix_brief_text(file_path: str, executor_type: str) -> str:
 
 
 class TestItem3NudgeDispatchBriefFiringShape:
-    def test_pre_fix_fixture_is_flagged(self):
+    def test_pre_fix_fixture_is_flagged(self) -> None:
         text = _item3_pre_fix_brief_text("some/file.py", "generic-executor")
         ev = fs.evaluate_ask_text(text, alternative_required=True)
         assert ev.violated, "pre-fix TODO-placeholder dispatch brief was not flagged"
 
-    def test_post_fix_brief_names_no_placeholder(self):
+    def test_post_fix_brief_names_no_placeholder(self) -> None:
         edit_description = _nudge._describe_edit(
             {"tool_name": "Edit", "tool_input": {"old_string": "a", "new_string": "b"}}
         )
@@ -179,7 +180,7 @@ class TestItem3NudgeDispatchBriefFiringShape:
         assert not ev.violated, ev.reasons
         assert "[TODO" not in text
 
-    def test_post_fix_brief_still_names_a_concrete_task_line(self):
+    def test_post_fix_brief_still_names_a_concrete_task_line(self) -> None:
         edit_description = _nudge._describe_edit(
             {"tool_name": "Write", "tool_input": {"content": "..."}}
         )
@@ -189,7 +190,7 @@ class TestItem3NudgeDispatchBriefFiringShape:
 
 class TestSentinelGuardsZeroAlternativeIsLegal:
     @pytest.mark.parametrize("guard", ["block_worktree_sentinel_creation", "block_approval_sentinel_creation"])
-    def test_sentinel_guard_names_no_alternative_and_still_passes(self, guard):
+    def test_sentinel_guard_names_no_alternative_and_still_passes(self, guard) -> None:
         result = altlive.LIVE_TRIGGERS[guard]()
         assert result is not None, "%s's registered trigger did not fire" % guard
         spec = fs.REGISTRY[guard]
@@ -197,7 +198,7 @@ class TestSentinelGuardsZeroAlternativeIsLegal:
         ev = fs.evaluate_ask(result, alternative_required=spec.alternative_required)
         assert not ev.violated, ev.reasons
 
-    def test_zero_alternative_record_WOULD_fail_if_alternative_were_required(self):
+    def test_zero_alternative_record_WOULD_fail_if_alternative_were_required(self) -> None:
         record = AlternativeRecord(
             verdict_kind="deny",
             summary="BLOCKED: policy deny with no substitute.",
@@ -209,7 +210,7 @@ class TestSentinelGuardsZeroAlternativeIsLegal:
 
 
 class TestAxisBOverrideIsOrthogonal:
-    def test_override_only_signal_does_not_satisfy_axis_a(self):
+    def test_override_only_signal_does_not_satisfy_axis_a(self) -> None:
         record = AlternativeRecord(
             verdict_kind="deny",
             summary="BLOCKED: fake finding, no alternative named.",
@@ -219,7 +220,7 @@ class TestAxisBOverrideIsOrthogonal:
         ev = fs.evaluate_ask(record, alternative_required=True)
         assert ev.violated, "an override-only signal wrongly satisfied Axis A's alternative obligation"
 
-    def test_missing_override_is_never_itself_a_violation(self):
+    def test_missing_override_is_never_itself_a_violation(self) -> None:
         record = AlternativeRecord(
             verdict_kind="deny",
             summary="BLOCKED: fake finding.",
@@ -230,17 +231,17 @@ class TestAxisBOverrideIsOrthogonal:
         assert not ev.violated
 
 
-def test_every_registry_row_has_a_live_violation_check():
+def test_every_registry_row_has_a_live_violation_check() -> None:
     missing = set(fs.REGISTRY) - set(fs.LIVE_VIOLATION_CHECKS)
     assert not missing, "REGISTRY row(s) added without a LIVE_VIOLATION_CHECKS entry: %s" % sorted(missing)
 
 
-def test_every_live_violation_check_has_a_registry_row():
+def test_every_live_violation_check_has_a_registry_row() -> None:
     orphaned = set(fs.LIVE_VIOLATION_CHECKS) - set(fs.REGISTRY)
     assert not orphaned, "LIVE_VIOLATION_CHECKS entry with no REGISTRY row: %s" % sorted(orphaned)
 
 
-def test_known_violations_is_a_frozen_set_with_a_pinned_count():
+def test_known_violations_is_a_frozen_set_with_a_pinned_count() -> None:
     assert isinstance(fs.KNOWN_VIOLATIONS, frozenset)
     assert len(fs.KNOWN_VIOLATIONS) == 0
 
@@ -253,7 +254,7 @@ def _known_violations_loop(known_violations, live_violation_checks) -> None:
         )
 
 
-def test_known_violations_still_violate():
+def test_known_violations_still_violate() -> None:
     """Gap (a): a LISTED emitter must still evaluate as violating -- a fixed
     emitter fails this test until delisted, rather than staying silently
     green forever. Vacuously satisfied while KNOWN_VIOLATIONS is empty;
@@ -263,7 +264,7 @@ def test_known_violations_still_violate():
     _known_violations_loop(fs.KNOWN_VIOLATIONS, fs.LIVE_VIOLATION_CHECKS)
 
 
-def test_known_violations_ratchet_loop_against_a_populated_set(monkeypatch):
+def test_known_violations_ratchet_loop_against_a_populated_set(monkeypatch: pytest.MonkeyPatch) -> None:
     """`test_known_violations_still_violate`'s
     loop body never actually runs while KNOWN_VIOLATIONS is empty by
     construction. This exercises the REAL loop path
@@ -289,7 +290,7 @@ def test_known_violations_ratchet_loop_against_a_populated_set(monkeypatch):
         _known_violations_loop(frozenset({"fake_fixed_but_listed"}), fs.LIVE_VIOLATION_CHECKS)
 
 
-def test_known_violations_ratchet_mechanism_can_actually_detect_a_violation():
+def test_known_violations_ratchet_mechanism_can_actually_detect_a_violation() -> None:
     """Meta-test, mirroring test_alternative_liveness_gate.py's own
     TestMetaGateProvenToFail: proves LIVE_VIOLATION_CHECKS's plumbing is
     capable of returning True, so an all-green KNOWN_VIOLATIONS assertion
@@ -340,7 +341,7 @@ def _run_all_live_violation_checks_in_fresh_subprocess() -> dict:
     return json.loads(completed.stdout)
 
 
-def test_live_violation_checks_are_deterministic_across_n_runs():
+def test_live_violation_checks_are_deterministic_across_n_runs() -> None:
     runs = [_run_all_live_violation_checks_in_fresh_subprocess() for _ in range(5)]
     first = runs[0]
     for i, run in enumerate(runs[1:], start=2):
@@ -357,6 +358,6 @@ def test_live_violation_checks_are_deterministic_across_n_runs():
 
 
 @pytest.mark.parametrize("name", sorted(fs.LIVE_VIOLATION_CHECKS))
-def test_live_violation_check_runs_without_raising(name):
+def test_live_violation_check_runs_without_raising(name) -> None:
     result = fs.LIVE_VIOLATION_CHECKS[name]()
     assert isinstance(result, bool)

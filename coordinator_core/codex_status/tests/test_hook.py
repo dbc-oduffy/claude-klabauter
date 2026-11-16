@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 
 from coordinator_core.codex_status import hook
+import pytest
 
 SID = "01a1b63c-040a-76f2-a9b9-929d9a0d0098"
 
@@ -15,7 +16,7 @@ def value():
             "warnings": [], "unpriced_events": 0}
 
 
-def test_metadata_title_write_requires_loaded_namespace_and_preserved_task(tmp_path, monkeypatch):
+def test_metadata_title_write_requires_loaded_namespace_and_preserved_task(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     class Connection:
         def request(self, method, params, deadline):
@@ -37,10 +38,10 @@ def test_metadata_title_write_requires_loaded_namespace_and_preserved_task(tmp_p
     assert calls[-1][1] == {"threadId": SID, "name": "actual-route · ~$1.23"}
 
 
-def test_other_namespace_never_renames_or_starts_a_thread(tmp_path, monkeypatch):
+def test_other_namespace_never_renames_or_starts_a_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     class Connection:
-        def request(self, method, params, deadline):
+        def request(self, method, params, deadline) -> dict[str, list[str]]:
             calls.append(method)
             return {"data": ["some-other-thread"]}
     monkeypatch.setattr(hook.codex_app_server, "_connect", lambda *a, **kw: contextlib.nullcontext(Connection()))
@@ -50,7 +51,7 @@ def test_other_namespace_never_renames_or_starts_a_thread(tmp_path, monkeypatch)
     assert calls == ["thread/loaded/list"]
 
 
-def test_unknown_alias_does_not_spawn_a_metadata_client(tmp_path, monkeypatch):
+def test_unknown_alias_does_not_spawn_a_metadata_client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(hook, "snapshot", lambda p: {**value(), "alias": None})
     def forbidden(*a, **kw):
         raise AssertionError("must not connect without a routing identity")
@@ -60,7 +61,7 @@ def test_unknown_alias_does_not_spawn_a_metadata_client(tmp_path, monkeypatch):
     assert result["reason"] == "no exact registered route alias"
 
 
-def test_status_event_is_fail_open_and_never_ends_a_session(tmp_path, monkeypatch):
+def test_status_event_is_fail_open_and_never_ends_a_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def broken(*a, **kw):
         raise OSError("temporarily unavailable")
     monkeypatch.setattr(hook, "snapshot", broken)
@@ -68,7 +69,7 @@ def test_status_event_is_fail_open_and_never_ends_a_session(tmp_path, monkeypatc
     assert hook.handle({"session_id": SID, "cwd": str(tmp_path)}, "SessionEnd")["reason"] == "not a status refresh event"
 
 
-def test_subagent_stop_binds_actual_child_metadata_and_preserves_fork_dedup(tmp_path, monkeypatch):
+def test_subagent_stop_binds_actual_child_metadata_and_preserves_fork_dedup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.codex_status.__main__ import snapshot
     child = "01a1b63c-040a-76f2-a9b9-929d9a0d0099"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
@@ -98,7 +99,7 @@ def test_subagent_stop_binds_actual_child_metadata_and_preserves_fork_dedup(tmp_
     assert first["subagent_stop_ownership"]["parent_session_id"] == SID
 
 
-def test_subagent_stop_never_substitutes_parent_uuid_for_child(tmp_path):
+def test_subagent_stop_never_substitutes_parent_uuid_for_child(tmp_path: Path) -> None:
     import pytest
     from coordinator_core.codex_status.collect import bind_subagent_stop
     from coordinator_core.codex_status.model import empty

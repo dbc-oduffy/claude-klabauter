@@ -10,6 +10,7 @@ from coordinator_core.ops.dispatch_emit import ask_compose, stage_family, stage_
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW, write_run_scripts
 from coordinator_core.ops.emit import doe_drift
+from pathlib import Path
 
 PLAN_REL = "docs/plans/2026-11-12-binding-acceptance.md"
 SIZING_REL = "state/sizings/2026-11-12-binding-acceptance.yaml"
@@ -62,7 +63,7 @@ Rows with scout, research and review roles.
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     write_run_scripts(tmp_path, "r1", "x1run")
@@ -70,7 +71,7 @@ def repo(tmp_path):
 
 
 @pytest.fixture
-def content_root(tmp_path_factory, monkeypatch):
+def content_root(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path_factory.mktemp("doe")
     (root / "coordinator" / "pipelines").mkdir(parents=True)
     (root / "coordinator" / "pipelines" / "stage-family-binding.yaml").write_text(
@@ -103,7 +104,7 @@ def _script(monkeypatch, opted_in: bool) -> str:
     )
 
 
-def test_opted_in_run_dispatches_scout_to_grok_review_to_codex_research_to_agy(repo, content_root):
+def test_opted_in_run_dispatches_scout_to_grok_review_to_codex_research_to_agy(repo, content_root) -> None:
     by_id = {r.id: r for r in _stage(repo, opted_in=True).rows}
     for rid, family, role in (("C1", "grok", "scout"), ("C2", "agy", "research"), ("C3", "codex", "review")):
         row = by_id[rid]
@@ -115,7 +116,7 @@ def test_opted_in_run_dispatches_scout_to_grok_review_to_codex_research_to_agy(r
         assert row.fallback_agent_type == "coordinator:executor"
 
 
-def test_failed_agy_research_attempt_is_recorded_then_the_claude_fallback():
+def test_failed_agy_research_attempt_is_recorded_then_the_claude_fallback() -> None:
     agy = {
         "family": "agy", "stage": "research", "exit_code": 1, "output_path": "scratch/r.md",
         "verdict": "FAILED", "blocked_reason": "agy: out of credits",
@@ -130,21 +131,21 @@ def test_failed_agy_research_attempt_is_recorded_then_the_claude_fallback():
     assert rec["reported_family"] == "claude"
 
 
-def test_failed_family_without_a_blocked_reason_is_refused():
+def test_failed_family_without_a_blocked_reason_is_refused() -> None:
     agy = {"family": "agy", "stage": "research", "exit_code": 1, "output_path": "", "verdict": "FAILED"}
     claude = {"family": "claude", "stage": "research", "exit_code": 0, "output_path": "", "verdict": "OK"}
     with pytest.raises(ValueError):
         stage_family.stage_record("research", agy, claude)
 
 
-def test_opted_in_emitted_script_carries_the_fallback_arm(monkeypatch):
+def test_opted_in_emitted_script_carries_the_fallback_arm(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch, opted_in=True)
     assert "r.family ? _familyRun(r) : " in script
     assert "async function _familyRun(r)" in script
     assert "fallback_for: _fam.family" in script
 
 
-def test_non_opted_in_run_routes_unchanged(repo, monkeypatch):
+def test_non_opted_in_run_routes_unchanged(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("binding read without opt-in")
 
@@ -158,6 +159,6 @@ def test_non_opted_in_run_routes_unchanged(repo, monkeypatch):
         assert not (repo / r.brief_path).with_name(f"{r.id}.fallback.md").exists()
 
 
-def test_non_opted_in_emitted_script_carries_no_family_arm(monkeypatch):
+def test_non_opted_in_emitted_script_carries_no_family_arm(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch, opted_in=False)
     assert "_familyRun" not in script and "_FAMILY_RESULT_SCHEMA" not in script

@@ -36,6 +36,7 @@ from coordinator_core.search import sources_listdir as sl
 from coordinator_core.search.answer import answer
 from coordinator_core.search.engine import Unanswerable
 from coordinator_core.search.tests._posix_shell import requires_posix_shell, run_real
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -48,7 +49,7 @@ def _write_bytes(path, data: bytes) -> None:
 
 
 @pytest.fixture()
-def tree(tmp_path):
+def tree(tmp_path: Path) -> Path:
     _write_bytes(tmp_path / "notrail.txt", b"one\ntwo\nthree")
     _write_bytes(tmp_path / "empty.txt", b"")
     _write_bytes(tmp_path / "blanklast.txt", b"one\ntwo\n\n")
@@ -82,41 +83,41 @@ def _assert_matches_real(cmd: str, cwd) -> None:
 
 
 @requires_posix_shell
-def test_cat_no_trailing_newline(tree):
+def test_cat_no_trailing_newline(tree) -> None:
     _assert_matches_real("cat notrail.txt", tree)
 
 
 @requires_posix_shell
-def test_cat_empty_file(tree):
+def test_cat_empty_file(tree) -> None:
     _assert_matches_real("cat empty.txt", tree)
 
 
 @requires_posix_shell
-def test_cat_blank_last_line(tree):
+def test_cat_blank_last_line(tree) -> None:
     _assert_matches_real("cat blanklast.txt", tree)
 
 
 @requires_posix_shell
-def test_cat_crlf_content(tree):
+def test_cat_crlf_content(tree) -> None:
     _assert_matches_real("cat crlf.txt", tree)
 
 
 @requires_posix_shell
-def test_cat_astral_utf8_character(tree):
+def test_cat_astral_utf8_character(tree) -> None:
     _assert_matches_real("cat astral.txt", tree)
 
 
 @requires_posix_shell
-def test_head_n_zero(tree):
+def test_head_n_zero(tree) -> None:
     _assert_matches_real("head -n 0 many.txt", tree)
 
 
 @requires_posix_shell
-def test_tail_one_on_single_line_file(tree):
+def test_tail_one_on_single_line_file(tree) -> None:
     _assert_matches_real("tail -1 oneline.txt", tree)
 
 
-def test_sed_range_past_eof_declines(tree):
+def test_sed_range_past_eof_declines(tree) -> None:
     assert answer("sed -n '5,10p' oneline.txt", cwd=str(tree)) is None
 
 
@@ -150,17 +151,17 @@ def _assert_stage_output_matches_real(cmd: str, cwd) -> None:
 
 
 @requires_posix_shell
-def test_composed_cat_pipe_wc_l(tree):
+def test_composed_cat_pipe_wc_l(tree) -> None:
     _assert_stage_output_matches_real("cat plain.txt | wc -l", tree)
 
 
 @requires_posix_shell
-def test_composed_sed_range_pipe_head(tree):
+def test_composed_sed_range_pipe_head(tree) -> None:
     _assert_stage_output_matches_real("sed -n '5,20p' many.txt | head -3", tree)
 
 
 @pytest.fixture()
-def lsdir(tmp_path):
+def lsdir(tmp_path: Path) -> Path:
     d = tmp_path / "lsdir"
     d.mkdir()
     (d / ".hidden").write_text("dot\n")
@@ -178,7 +179,7 @@ def _ls_ours(tokens, cwd) -> list[str] | None:
 
 
 @requires_posix_shell
-def test_ls_dotfile_and_locale_collation(lsdir, monkeypatch):
+def test_ls_dotfile_and_locale_collation(lsdir, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LC_ALL", "en_US.UTF-8")
     ours = _ls_ours(["ls", "lsdir"], lsdir)
     if ours is None:
@@ -195,7 +196,7 @@ def test_ls_dotfile_and_locale_collation(lsdir, monkeypatch):
 
 
 @requires_posix_shell
-def test_composed_ls_pipe_wc_l(lsdir):
+def test_composed_ls_pipe_wc_l(lsdir) -> None:
     ours = _ls_ours(["ls", "lsdir"], lsdir)
     assert ours is not None
     _rc, theirs = run_real("ls lsdir | wc -l", lsdir)

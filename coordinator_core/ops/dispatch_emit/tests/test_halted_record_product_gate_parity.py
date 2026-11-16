@@ -12,6 +12,7 @@ import pytest
 from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit import halt_product_gates, halted_run, peer_hunk_gate, run_token, terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM, RECORD_DIR_ROOT
+from coordinator_core.ops.dispatch_emit.run_artifacts import outcome_rel
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record import (  # noqa: F401 -- fixtures
     LEDGER,
     PASSING,
@@ -68,11 +69,11 @@ def test_a_product_a_sibling_run_co_declares_is_only_halt_record_only_and_artifa
     out = _call(repo, LEDGER, **PASSING)
 
     assert out["committed"] is True, out
-    assert out["withheld"] == {"done.py": "halt-record-only"}
+    assert out["withheld"] == {"done.py": "foreign-hunk-unproduced"}
     assert peer_hunk_gate.PEER_HUNKS_CO_DECLARED not in json.dumps(out["withheld"])
     names = _landed(repo, out, "--name-only")
     assert "done.py" not in names
-    assert f"{RECORD_DIR_ROOT}/{RUN}/ask.md" in names
+    assert outcome_rel(RUN) in names
     assert "Lands-Chunks" not in _message(repo)
 
 
@@ -93,7 +94,7 @@ def test_b_product_whose_bytes_drifted_from_the_recorded_write_is_withheld(sessi
     assert out["committed"] is True, out
     names = _landed(repo, out, "--name-only")
     assert "done.py" not in names
-    assert f"{RECORD_DIR_ROOT}/{RUN}/ask.md" in names
+    assert outcome_rel(RUN) in names
     assert "done.py" in out["withheld"]
     assert "Lands-Chunks" not in _message(repo)
 
@@ -125,7 +126,7 @@ def test_d_scratch_export_copy_declared_by_a_chunk_is_never_committed(repo):
     assert out["committed"] is True, out
     names = _landed(repo, out, "--name-only")
     assert not [n for n in names if n == "scratch" or n.startswith("scratch/")], names
-    assert f"{RECORD_DIR_ROOT}/{RUN}/ask.md" in names
+    assert outcome_rel(RUN) in names
 
 
 def test_d_scratch_sizing_named_by_the_run_record_is_never_committed(repo):
@@ -141,7 +142,7 @@ def test_d_scratch_sizing_named_by_the_run_record_is_never_committed(repo):
     assert not [n for n in names if n == "scratch" or n.startswith("scratch/")], names
 
 
-def test_e_product_clearing_every_gate_is_still_halt_record_only(session):
+def test_e_product_with_no_write_baseline_is_held_by_hunk_provenance(session):
     repo = session
     _write_record(repo, RUN)
     _product(repo)
@@ -152,7 +153,7 @@ def test_e_product_clearing_every_gate_is_still_halt_record_only(session):
     assert out["committed"] is True, out
     assert "done.py" not in _landed(repo, out, "--name-only")
     assert "Lands-Chunks" not in _message(repo)
-    assert out["withheld"] == {"done.py": "halt-record-only"}
+    assert out["withheld"] == {"done.py": "foreign-hunk-unproduced"}
 
 
 @pytest.mark.parametrize(

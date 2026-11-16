@@ -64,7 +64,7 @@ def _author(root: Path, rel: str, text: str, eol: str = "\n") -> None:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(root, "init", "-q")
@@ -145,7 +145,7 @@ def _stage(root: Path, *, baseline=None, eol: str = "\n") -> str:
     return _declare(root, base)
 
 
-def test_six_shared_files_stage_only_the_runs_own_hunks(repo):
+def test_six_shared_files_stage_only_the_runs_own_hunks(repo) -> None:
     token = _stage(repo)
 
     out = _land(repo, token)
@@ -156,7 +156,7 @@ def test_six_shared_files_stage_only_the_runs_own_hunks(repo):
         assert (repo / t).read_text(encoding="utf-8") == BOTH
 
 
-def test_a_repeat_fire_lands_the_same_set(repo):
+def test_a_repeat_fire_lands_the_same_set(repo) -> None:
     token = _stage(repo)
     first = _land(repo, token)
     assert first.get("committed") is True, first
@@ -196,7 +196,7 @@ def _resumed_stage(root: Path) -> None:
     _declare(root, wb.capture(root, TARGETS))
 
 
-def test_a_same_sizing_predecessors_kept_blob_attributes_a_baseline_held_hunk_to_the_run(repo):
+def test_a_same_sizing_predecessors_kept_blob_attributes_a_baseline_held_hunk_to_the_run(repo) -> None:
     _resumed_stage(repo)
     _predecessor(repo, PRED, SIZING, {t: blob_sha((repo / t).read_bytes()) for t in TARGETS})
 
@@ -205,7 +205,7 @@ def test_a_same_sizing_predecessors_kept_blob_attributes_a_baseline_held_hunk_to
     assert found == [] and split == ({}, {}), (found, split)
 
 
-def test_a_baseline_held_hunk_no_run_of_the_sizing_kept_stays_unattributed(repo):
+def test_a_baseline_held_hunk_no_run_of_the_sizing_kept_stays_unattributed(repo) -> None:
     _resumed_stage(repo)
     kept = {t: blob_sha((repo / t).read_bytes()) for t in TARGETS[1:]}
     _predecessor(repo, PRED, SIZING, kept)
@@ -231,7 +231,7 @@ def _record_measured(root: Path, blobs: dict) -> None:
     )
 
 
-def test_a_baseline_blob_lost_from_the_store_lands_the_measured_files(repo):
+def test_a_baseline_blob_lost_from_the_store_lands_the_measured_files(repo) -> None:
     token = _stage(repo, baseline=_lost)
     _record_measured(repo, {t: checkin_blob_sha(repo, t) for t in TARGETS})
 
@@ -242,7 +242,7 @@ def test_a_baseline_blob_lost_from_the_store_lands_the_measured_files(repo):
         assert _git(repo, "show", f"HEAD:{t}") == BOTH
 
 
-def test_a_lost_baseline_blob_with_no_measured_record_still_refuses_each_fire(repo):
+def test_a_lost_baseline_blob_with_no_measured_record_still_refuses_each_fire(repo) -> None:
     head = _git(repo, "rev-parse", "HEAD").strip()
     token = _stage(repo, baseline=_lost)
 
@@ -253,7 +253,7 @@ def test_a_lost_baseline_blob_with_no_measured_record_still_refuses_each_fire(re
     assert _git(repo, "rev-parse", "HEAD").strip() == head
 
 
-def test_a_lost_baseline_blob_whose_file_drifted_from_the_measured_blob_still_refuses(repo):
+def test_a_lost_baseline_blob_whose_file_drifted_from_the_measured_blob_still_refuses(repo) -> None:
     token = _stage(repo, baseline=_lost)
     _record_measured(repo, {t: "1" * 40 for t in TARGETS})
 

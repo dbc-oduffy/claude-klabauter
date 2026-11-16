@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -25,7 +26,7 @@ def _edit_payload(file_path: str, old: str, new: str, replace_all: bool = False)
 
 
 @pytest.fixture
-def memory_dir(monkeypatch, tmp_path):
+def memory_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     home = tmp_path / "home"
     mem = home / ".claude" / "projects" / "-Some-project" / "memory"
     mem.mkdir(parents=True)
@@ -40,7 +41,7 @@ _LEVEL_ENV = "MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL_GUARD-MEMORY-STORE-CAP"
 
 
 @pytest.fixture(autouse=True)
-def _warn_level_and_isolated_lessons(monkeypatch, tmp_path):
+def _warn_level_and_isolated_lessons(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Guard level pinned to warn; the lessons root is pinned so no test can write into the real repo."""
     monkeypatch.setenv(_LEVEL_ENV, "warn")
     monkeypatch.setenv("QUEUE_APPEND_OUTPUT_ROOT", str(tmp_path / "lessons-root"))
@@ -60,32 +61,32 @@ def _ram_only(result) -> bool:
 
 
 class TestUnrelatedPathPassesUntouched:
-    def test_unrelated_write_allowed(self, tmp_path):
+    def test_unrelated_write_allowed(self, tmp_path: Path) -> None:
         target = str(tmp_path / "some" / "other" / "file.py")
         result = guard.check(_write_payload(target, "print(1)\n"))
         assert result is None
 
-    def test_config_write_under_home_claude_is_allowed(self, memory_dir):
+    def test_config_write_under_home_claude_is_allowed(self, memory_dir) -> None:
         home_claude = memory_dir.parent.parent.parent
         target = str(home_claude / "settings.json")
         result = guard.check(_write_payload(target, "{}"))
         assert result is None
 
-    def test_non_intercepted_tool_allowed(self, memory_dir):
+    def test_non_intercepted_tool_allowed(self, memory_dir) -> None:
         target = str(memory_dir / "MEMORY.md")
         result = guard.check({"tool_name": "Read", "tool_input": {"file_path": target}})
         assert result is None
 
 
 class TestBytesLimit:
-    def test_over_1000_bytes_denied(self, memory_dir):
+    def test_over_1000_bytes_denied(self, memory_dir) -> None:
         target = str(memory_dir / "MEMORY.md")
         content = "# Memory Index\n\n" + ("x" * 2100)
         result = guard.check(_write_payload(target, content))
         assert result is not None
         assert "cap" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
-    def test_at_or_under_1000_bytes_passes(self, memory_dir):
+    def test_at_or_under_1000_bytes_passes(self, memory_dir) -> None:
         target = str(memory_dir / "MEMORY.md")
         content = "# Memory Index\n\n" + _rows(5)
         assert len(content.encode("utf-8")) <= guard.MAX_MEMORY_MD_BYTES
@@ -94,14 +95,14 @@ class TestBytesLimit:
 
 
 class TestRowCountLimit:
-    def test_6_rows_denied(self, memory_dir):
+    def test_6_rows_denied(self, memory_dir) -> None:
         target = str(memory_dir / "MEMORY.md")
         content = "# Memory Index\n\n" + _rows(6)
         result = guard.check(_write_payload(target, content))
         assert result is not None
         assert "rows" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
-    def test_5_rows_passes(self, memory_dir):
+    def test_5_rows_passes(self, memory_dir) -> None:
         target = str(memory_dir / "MEMORY.md")
         content = "# Memory Index\n\n" + _rows(5)
         result = guard.check(_write_payload(target, content))
@@ -109,7 +110,7 @@ class TestRowCountLimit:
 
 
 class TestRowLengthLimit:
-    def test_row_over_100_chars_denied(self, memory_dir):
+    def test_row_over_100_chars_denied(self, memory_dir) -> None:
         target = str(memory_dir / "MEMORY.md")
         long_row = "- [" + ("a" * 90) + "](x.md) padding padding"
         assert len(long_row) > guard.MAX_ROW_CHARS
@@ -118,7 +119,7 @@ class TestRowLengthLimit:
         assert result is not None
         assert "chars" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
-    def test_row_at_100_chars_passes(self, memory_dir):
+    def test_row_at_100_chars_passes(self, memory_dir) -> None:
         target = str(memory_dir / "MEMORY.md")
         row = "- " + ("a" * 98)
         assert len(row) == guard.MAX_ROW_CHARS
@@ -128,14 +129,14 @@ class TestRowLengthLimit:
 
 
 class TestBodyFileLimit:
-    def test_body_file_over_800_bytes_denied(self, memory_dir):
+    def test_body_file_over_800_bytes_denied(self, memory_dir) -> None:
         target = str(memory_dir / "some-lesson.md")
         content = "x" * 900
         result = guard.check(_write_payload(target, content))
         assert result is not None
         assert "800" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
-    def test_body_file_at_800_bytes_passes(self, memory_dir):
+    def test_body_file_at_800_bytes_passes(self, memory_dir) -> None:
         target = str(memory_dir / "some-lesson.md")
         content = "x" * 800
         result = guard.check(_write_payload(target, content))
@@ -143,7 +144,7 @@ class TestBodyFileLimit:
 
 
 class TestShrinkTowardComplianceCarveOut:
-    def test_shrinking_edit_on_over_cap_file_permitted(self, memory_dir):
+    def test_shrinking_edit_on_over_cap_file_permitted(self, memory_dir) -> None:
         target = memory_dir / "MEMORY.md"
         over_cap_content = "# Memory Index\n\n" + ("y" * 3000)
         target.write_text(over_cap_content, encoding="utf-8")
@@ -158,7 +159,7 @@ class TestShrinkTowardComplianceCarveOut:
         )
         assert _ram_only(result)
 
-    def test_growing_edit_on_over_cap_file_still_denied(self, memory_dir):
+    def test_growing_edit_on_over_cap_file_still_denied(self, memory_dir) -> None:
         target = memory_dir / "MEMORY.md"
         over_cap_content = "# Memory Index\n\n" + ("y" * 2100)
         target.write_text(over_cap_content, encoding="utf-8")
@@ -178,7 +179,7 @@ class TestShrinkTowardComplianceCarveOut:
 
 class TestCaseVariedTargetDenied:
 
-    def test_case_varied_memory_md_denied(self, memory_dir):
+    def test_case_varied_memory_md_denied(self, memory_dir) -> None:
         home = memory_dir.parent.parent.parent.parent
         target = str(
             home / ".Claude" / "Projects" / "-Some-project" / "Memory" / "MEMORY.md"
@@ -189,7 +190,7 @@ class TestCaseVariedTargetDenied:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "permissionDecisionReason" in result["hookSpecificOutput"]
 
-    def test_case_varied_body_file_denied(self, memory_dir):
+    def test_case_varied_body_file_denied(self, memory_dir) -> None:
         home = memory_dir.parent.parent.parent.parent
         target = str(
             home / ".Claude" / "Projects" / "-Some-project" / "Memory" / "some-lesson.md"
@@ -203,7 +204,7 @@ class TestCaseVariedTargetDenied:
 
 class TestDenyMessageNamesDisambiguatingSlug:
 
-    def test_memory_md_deny_names_project_slug(self, memory_dir):
+    def test_memory_md_deny_names_project_slug(self, memory_dir) -> None:
         target = str(memory_dir / "MEMORY.md")
         content = "# Memory Index\n\n" + ("x" * 2100)
         result = guard.check(_write_payload(target, content))
@@ -211,7 +212,7 @@ class TestDenyMessageNamesDisambiguatingSlug:
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "-Some-project/memory/MEMORY.md" in reason
 
-    def test_body_file_deny_names_project_slug(self, memory_dir):
+    def test_body_file_deny_names_project_slug(self, memory_dir) -> None:
         target = str(memory_dir / "some-lesson.md")
         content = "x" * 900
         result = guard.check(_write_payload(target, content))
@@ -219,7 +220,7 @@ class TestDenyMessageNamesDisambiguatingSlug:
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "-Some-project/memory/some-lesson.md" in reason
 
-    def test_same_filename_in_different_project_slugs_is_distinguished(self, monkeypatch, tmp_path):
+    def test_same_filename_in_different_project_slugs_is_distinguished(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         home = tmp_path / "home"
         mem_a = home / ".claude" / "projects" / "-project-a" / "memory"
         mem_b = home / ".claude" / "projects" / "-project-b" / "memory"
@@ -242,7 +243,7 @@ class TestDenyMessageNamesDisambiguatingSlug:
 
 class TestExtendedLengthPrefixAsymmetry:
 
-    def test_over_cap_write_still_denied_under_prefix_asymmetry(self, monkeypatch, memory_dir):
+    def test_over_cap_write_still_denied_under_prefix_asymmetry(self, monkeypatch: pytest.MonkeyPatch, memory_dir) -> None:
         from pathlib import Path
 
         target_path = memory_dir / "MEMORY.md"
@@ -266,7 +267,7 @@ class TestExtendedLengthPrefixAsymmetry:
 
 
 class TestDenyMessageShape:
-    def test_row_count_deny_names_eviction(self, memory_dir):
+    def test_row_count_deny_names_eviction(self, memory_dir) -> None:
         target = str(memory_dir / "MEMORY.md")
         content = "# Memory Index\n\n" + _rows(6)
         result = guard.check(_write_payload(target, content))
@@ -275,7 +276,7 @@ class TestDenyMessageShape:
         assert "evict" in reason.lower()
         assert "state/lessons/" not in reason
 
-    def test_file_count_failed_eviction_deny_names_the_oldest_and_one_instruction(self):
+    def test_file_count_failed_eviction_deny_names_the_oldest_and_one_instruction(self) -> None:
         reason = guard._deny_reason_file_count("slug/memory/", 5, "mem-00.md")
         assert "mem-00.md" in reason
         assert reason.count("then retry") == 1
@@ -300,14 +301,14 @@ class TestFileCountCap:
             stamp = now - (n - i) * 10
             os.utime(p, (stamp, stamp))
 
-    def test_at_cap_plus_new_filename_allowed_and_oldest_evicted(self, memory_dir):
+    def test_at_cap_plus_new_filename_allowed_and_oldest_evicted(self, memory_dir) -> None:
         self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
         target = str(memory_dir / "new-one.md")
         assert _ram_only(guard.check(_write_payload(target, "y")))
         assert not (memory_dir / "body-0.md").exists()
         assert (memory_dir / "body-1.md").exists()
 
-    def test_sixth_save_lands_oldest_content_as_a_lesson(self, memory_dir, tmp_path):
+    def test_sixth_save_lands_oldest_content_as_a_lesson(self, memory_dir, tmp_path: Path) -> None:
         self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
         (memory_dir / "body-0.md").write_text("OLDEST-CONTENT-MARKER", encoding="utf-8")
         import os
@@ -322,14 +323,14 @@ class TestFileCountCap:
         text = lessons[0].read_text(encoding="utf-8")
         assert "OLDEST-CONTENT-MARKER" in text and "evicted-from-memory" in text
 
-    def test_oversize_new_body_at_cap_still_evicts_and_denies_the_size(self, memory_dir):
+    def test_oversize_new_body_at_cap_still_evicts_and_denies_the_size(self, memory_dir) -> None:
         self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
         result = guard.check(_write_payload(str(memory_dir / "fat.md"), "z" * 900))
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "800" in result["hookSpecificOutput"]["permissionDecisionReason"]
         assert not (memory_dir / "body-0.md").exists()
 
-    def test_failed_lesson_write_keeps_the_memory_and_denies(self, memory_dir, monkeypatch):
+    def test_failed_lesson_write_keeps_the_memory_and_denies(self, memory_dir, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.write_guards import _memory_evict
 
         self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
@@ -342,14 +343,14 @@ class TestFileCountCap:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert (memory_dir / "body-0.md").exists()
 
-    def test_bash_verdict_evicts_and_returns_none(self, memory_dir):
+    def test_bash_verdict_evicts_and_returns_none(self, memory_dir) -> None:
         self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
         assert guard.memory_cap_verdict(memory_dir, "new-one.md") is None
         assert not (memory_dir / "body-0.md").exists()
         log = memory_dir.parent / "memory-evictions.jsonl"
         assert log.read_text(encoding="utf-8").count("\n") == 1
 
-    def test_eviction_oserror_is_a_deny_naming_the_oldest(self, memory_dir, monkeypatch):
+    def test_eviction_oserror_is_a_deny_naming_the_oldest(self, memory_dir, monkeypatch: pytest.MonkeyPatch) -> None:
         self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
 
         def boom(_d, **_kw):
@@ -361,20 +362,20 @@ class TestFileCountCap:
         result = guard.check(_write_payload(str(memory_dir / "new-one.md"), "y"))
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_20_existing_plus_existing_filename_allowed(self, memory_dir):
+    def test_20_existing_plus_existing_filename_allowed(self, memory_dir) -> None:
         self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES)
         target = str(memory_dir / "body-0.md")
         result = guard.check(_write_payload(target, "y" * 5))
         assert _ram_only(result)
 
-    def test_19_existing_plus_new_filename_allowed(self, memory_dir):
+    def test_19_existing_plus_new_filename_allowed(self, memory_dir) -> None:
         self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES - 1)
         target = str(memory_dir / "new-one.md")
         result = guard.check(_write_payload(target, "y"))
         assert _ram_only(result)
         assert (memory_dir / "body-0.md").exists()
 
-    def test_memory_md_never_counted_as_body_file(self, memory_dir):
+    def test_memory_md_never_counted_as_body_file(self, memory_dir) -> None:
         (memory_dir / "MEMORY.md").write_text("# Memory Index\n", encoding="utf-8")
         self._seed_body_files(memory_dir, guard.MAX_MEMORY_FILES - 1)
         target = str(memory_dir / "new-one.md")
@@ -383,10 +384,10 @@ class TestFileCountCap:
 
 
 class TestRamWarning:
-    def test_warning_names_ram_and_misplaced(self):
+    def test_warning_names_ram_and_misplaced(self) -> None:
         assert "RAM" in guard.RAM_WARNING and "misplaced" in guard.RAM_WARNING
 
-    def test_warning_merges_after_an_existing_advisory(self, memory_dir):
+    def test_warning_merges_after_an_existing_advisory(self, memory_dir) -> None:
         target = memory_dir / "fat.md"
         target.write_text("y" * 1000, encoding="utf-8")
         result = guard.check(_edit_payload(str(target), old="y" * 10, new="z" * 10))
@@ -394,36 +395,36 @@ class TestRamWarning:
         assert ctx.startswith("[memory cap] ") and "200B over" in ctx
         assert ctx.endswith(guard.RAM_WARNING)
 
-    def test_a_deny_carries_no_warning(self, memory_dir):
+    def test_a_deny_carries_no_warning(self, memory_dir) -> None:
         result = guard.check(_write_payload(str(memory_dir / "x.md"), "x" * 900))
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "additionalContext" not in result["hookSpecificOutput"]
 
-    def test_unrelated_path_carries_no_warning(self, tmp_path):
+    def test_unrelated_path_carries_no_warning(self, tmp_path: Path) -> None:
         assert guard.check(_write_payload(str(tmp_path / "f.py"), "1")) is None
 
 
 class TestRowLengthDenyNamesWhatItCounted:
 
-    def test_the_deny_says_the_count_covers_pre_existing_rows(self):
+    def test_the_deny_says_the_count_covers_pre_existing_rows(self) -> None:
         reason = guard._deny_reason_row_length("repo", ["- " + "x" * 120])
 
         assert "pre-existing ones included" in reason
         assert "before any write lands" in reason
 
-    def test_the_deny_quotes_a_row_to_start_from(self):
+    def test_the_deny_quotes_a_row_to_start_from(self) -> None:
         row = "- [A memory with a very long title indeed](f.md) — " + "y" * 90
         reason = guard._deny_reason_row_length("repo", [row])
 
         assert "- [A memory with a very long" in reason
         assert row not in reason, "the whole row would blow the prose budget"
 
-    def test_the_deny_stays_inside_the_prose_budget(self):
+    def test_the_deny_stays_inside_the_prose_budget(self) -> None:
         rows = ["- [" + "z" * 200 + "](f.md)"] * 9
 
         assert len(guard._deny_reason_row_length("claude-klabauter", rows).encode()) <= 220
 
-    def test_a_short_row_is_quoted_whole(self):
+    def test_a_short_row_is_quoted_whole(self) -> None:
         row = "- [Short](f.md) — hook"
 
         assert row in guard._deny_reason_row_length("repo", [row])
@@ -439,7 +440,7 @@ class TestByteDenyNamesWhereTheBytesAre:
     instead — the right move, and not the one the message asked for.
     """
 
-    def test_a_preamble_heavy_file_is_told_to_trim_prose_first(self):
+    def test_a_preamble_heavy_file_is_told_to_trim_prose_first(self) -> None:
         rows = ["- [A](a.md) — hook"] * 9
 
         reason = guard._deny_reason_bytes("example-store-repo", 2149, rows)
@@ -447,7 +448,7 @@ class TestByteDenyNamesWhereTheBytesAre:
         assert "NOT rows" in reason
         assert reason.index("Trim the prose") < reason.index("evict a row")
 
-    def test_a_row_heavy_file_still_gets_the_eviction_ladder_alone(self):
+    def test_a_row_heavy_file_still_gets_the_eviction_ladder_alone(self) -> None:
         rows = ["- " + "x" * 90] * 20
 
         reason = guard._deny_reason_bytes("repo", 2100, rows)
@@ -455,7 +456,7 @@ class TestByteDenyNamesWhereTheBytesAre:
         assert "NOT rows" not in reason
         assert "Evict a row yourself" in reason
 
-    def test_both_shapes_state_the_ladder(self):
+    def test_both_shapes_state_the_ladder(self) -> None:
         for rows, size in ((["- [A](a.md) — hook"] * 9, 2149), (["- " + "x" * 90] * 20, 2100)):
             reason = guard._deny_reason_bytes("repo", size, rows)
             assert "stale fact, then doctrine dup, then oldest" in reason
@@ -479,21 +480,21 @@ class TestClaudeHomeConventionA:
         mem.mkdir(parents=True)
         return guard.check(_write_payload(str(mem / "MEMORY.md"), "x" * 2500))
 
-    def test_claude_home_governs_dot_claude_projects(self, monkeypatch, tmp_path):
+    def test_claude_home_governs_dot_claude_projects(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         self._isolate(monkeypatch, tmp_path)
         parent = tmp_path / "ch"
         parent.mkdir()
         monkeypatch.setenv("CLAUDE_HOME", str(parent))
         assert self._big(parent / ".claude") is not None
 
-    def test_claude_home_direct_projects_not_governed(self, monkeypatch, tmp_path):
+    def test_claude_home_direct_projects_not_governed(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         self._isolate(monkeypatch, tmp_path)
         parent = tmp_path / "ch"
         parent.mkdir()
         monkeypatch.setenv("CLAUDE_HOME", str(parent))
         assert self._big(parent) is None
 
-    def test_claude_config_dir_governs_projects(self, monkeypatch, tmp_path):
+    def test_claude_config_dir_governs_projects(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         self._isolate(monkeypatch, tmp_path)
         cfg = tmp_path / "cfg"
         cfg.mkdir()
@@ -501,7 +502,7 @@ class TestClaudeHomeConventionA:
         assert self._big(cfg) is not None
 
     @pytest.mark.parametrize("bad", ["relative/dir", "SUFFIX"])
-    def test_bad_claude_home_does_not_raise_and_keeps_home_roots(self, monkeypatch, tmp_path, bad):
+    def test_bad_claude_home_does_not_raise_and_keeps_home_roots(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, bad) -> None:
         home = self._isolate(monkeypatch, tmp_path)
         value = str(tmp_path / "x" / ".claude") if bad == "SUFFIX" else bad
         monkeypatch.setenv("CLAUDE_HOME", value)
@@ -511,13 +512,13 @@ class TestClaudeHomeConventionA:
 
 
 class TestOverCapStoreCanShrink:
-    def test_deleting_down_to_a_smaller_index_passes_while_over_cap(self, memory_dir):
+    def test_deleting_down_to_a_smaller_index_passes_while_over_cap(self, memory_dir) -> None:
         target = memory_dir / "MEMORY.md"
         target.write_text("# Memory Index\n\n" + _rows(9), encoding="utf-8")
         smaller = "# Memory Index\n\n" + _rows(8)
         assert _ram_only(guard.check(_write_payload(str(target), smaller)))
 
-    def test_growing_an_over_cap_index_is_still_denied(self, memory_dir):
+    def test_growing_an_over_cap_index_is_still_denied(self, memory_dir) -> None:
         target = memory_dir / "MEMORY.md"
         target.write_text("# Memory Index\n\n" + _rows(8), encoding="utf-8")
         result = guard.check(_write_payload(str(target), "# Memory Index\n\n" + _rows(9)))
@@ -525,7 +526,7 @@ class TestOverCapStoreCanShrink:
 
 
 class TestOverCapNonGrowingEditLandsWithAdvisory:
-    def test_same_size_edit_of_overcap_body_lands_with_advisory(self, memory_dir):
+    def test_same_size_edit_of_overcap_body_lands_with_advisory(self, memory_dir) -> None:
         target = memory_dir / "fat.md"
         target.write_text("y" * 1000, encoding="utf-8")
         result = guard.check(_edit_payload(str(target), old="y" * 10, new="z" * 10))
@@ -534,7 +535,7 @@ class TestOverCapNonGrowingEditLandsWithAdvisory:
         ctx = out["additionalContext"]
         assert "1000B" in ctx and "800B" in ctx and "200B over" in ctx
 
-    def test_same_size_edit_of_overcap_index_lands_with_advisory(self, memory_dir):
+    def test_same_size_edit_of_overcap_index_lands_with_advisory(self, memory_dir) -> None:
         target = memory_dir / "MEMORY.md"
         target.write_bytes(("# Memory Index\n\n" + _rows(8)).encode("utf-8"))
         size = target.stat().st_size
@@ -543,7 +544,7 @@ class TestOverCapNonGrowingEditLandsWithAdvisory:
         assert "permissionDecision" not in out
         assert f"{size}B" in out["additionalContext"] and "1000B" in out["additionalContext"]
 
-    def test_growing_overcap_body_is_a_plain_shorten_deny(self, memory_dir, tmp_path):
+    def test_growing_overcap_body_is_a_plain_shorten_deny(self, memory_dir, tmp_path: Path) -> None:
         target = memory_dir / "fat.md"
         target.write_text("y" * 1000, encoding="utf-8")
         result = guard.check(_edit_payload(str(target), old="y" * 10, new="y" * 11))
@@ -574,7 +575,7 @@ class TestMemoryMdBreachEvictsOldest:
         index.write_text("\n".join(rows) + "\n", encoding="utf-8")
         return index
 
-    def test_edit_adding_a_sixth_row_evicts_oldest_and_lands(self, memory_dir):
+    def test_edit_adding_a_sixth_row_evicts_oldest_and_lands(self, memory_dir) -> None:
         index = self._seed(memory_dir)
         result = guard.check(
             _edit_index_payload(index, "- [b4](b4.md) note\n", "- [b4](b4.md) note\n- [n](n.md) new\n")
@@ -584,7 +585,7 @@ class TestMemoryMdBreachEvictsOldest:
         assert "b0.md" not in index.read_text(encoding="utf-8")
         assert (memory_dir.parent / "memory-evictions.jsonl").exists()
 
-    def test_multiedit_over_byte_cap_evicts_until_it_fits(self, memory_dir):
+    def test_multiedit_over_byte_cap_evicts_until_it_fits(self, memory_dir) -> None:
         index = self._seed(memory_dir)
         text = index.read_text(encoding="utf-8").replace(" note", " " + "n" * 75)
         index.write_text(text, encoding="utf-8")
@@ -600,14 +601,14 @@ class TestMemoryMdBreachEvictsOldest:
         assert (memory_dir / "b1.md").exists()
         assert len(index.read_bytes()) <= guard.MAX_MEMORY_MD_BYTES
 
-    def test_write_of_memory_md_over_row_cap_stays_a_plain_deny(self, memory_dir):
+    def test_write_of_memory_md_over_row_cap_stays_a_plain_deny(self, memory_dir) -> None:
         index = self._seed(memory_dir)
         result = guard.check(_write_payload(str(index), "# Memory Index\n\n" + _rows(6)))
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert (memory_dir / "b0.md").exists()
         assert not (memory_dir.parent / "memory-evictions.jsonl").exists()
 
-    def test_edit_producing_an_overlong_row_stays_a_plain_deny(self, memory_dir):
+    def test_edit_producing_an_overlong_row_stays_a_plain_deny(self, memory_dir) -> None:
         index = self._seed(memory_dir)
         result = guard.check(
             _edit_index_payload(index, "- [b4](b4.md) note", "- [b4](b4.md) " + "q" * 120)
@@ -619,7 +620,7 @@ class TestMemoryMdBreachEvictsOldest:
 
     def test_edit_whose_old_string_sits_in_the_evicted_row_is_denied_and_evicts_nothing(
         self, memory_dir
-    ):
+    ) -> None:
         index = self._seed(memory_dir)
         result = guard.check(
             _edit_index_payload(
@@ -631,7 +632,7 @@ class TestMemoryMdBreachEvictsOldest:
         assert "b0.md" in index.read_text(encoding="utf-8")
         assert not (memory_dir.parent / "memory-evictions.jsonl").exists()
 
-    def test_edit_over_cap_with_nothing_to_evict_is_a_deny(self, memory_dir):
+    def test_edit_over_cap_with_nothing_to_evict_is_a_deny(self, memory_dir) -> None:
         index = memory_dir / "MEMORY.md"
         index.write_text(_rows(5), encoding="utf-8")
         result = guard.check(_edit_index_payload(index, "short", "short" + "s" * 300))

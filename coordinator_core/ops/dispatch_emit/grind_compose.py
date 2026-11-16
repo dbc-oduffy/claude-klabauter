@@ -100,6 +100,7 @@ Spec backlink: docs/plans/2026-09-21-bug-blitz-emitter-engine-leg.md
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import dataclasses
 import io
 import json
@@ -107,7 +108,7 @@ import posixpath
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Mapping, Optional, Sequence
+from typing import Any, Callable, Iterator, Mapping, Optional, Sequence
 
 from coordinator_core.backlog_grind_assemble.grind_split import MAX_SPLIT_ITEMS
 from coordinator_core.contract import grind_vocab as vocab
@@ -1565,6 +1566,21 @@ TRIAGE_CLOSED_BY = {"flake": "flake", "not_reproduced": "already-green"}
 
 _RUN_STAMP_RE = re.compile(r"\d{8}T\d{6}Z?")
 
+_ISOLATION_TRIAGE_SKIPPED: contextvars.ContextVar[bool] = contextvars.ContextVar(
+    "grind_compose_isolation_triage_skipped", default=False
+)
+
+
+@contextlib.contextmanager
+def isolation_triage_skipped() -> Iterator[None]:
+    """Within the block `compose_grind_script` runs no `triage_manifest`: its isolation pytest child is
+    seconds of process time, which a synchronous submit cannot pay."""
+    token = _ISOLATION_TRIAGE_SKIPPED.set(True)
+    try:
+        yield
+    finally:
+        _ISOLATION_TRIAGE_SKIPPED.reset(token)
+
 
 @dataclass(frozen=True)
 class TriageOutcome:
@@ -2478,7 +2494,7 @@ def compose_grind_script(
     triaged: tuple[dict[str, Any], ...] = ()
     triage_error = ""
     clusters: Mapping[str, int] = {}
-    if repo_root is not None:
+    if repo_root is not None and not _ISOLATION_TRIAGE_SKIPPED.get():
         outcome = triage_manifest(manifest, repo_root, profile.name)
         triaged = close_triaged_rows(
             outcome, manifest, profile, repo_root, run_key=run_key, run_stamp=run_stamp

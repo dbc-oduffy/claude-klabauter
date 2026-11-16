@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
+from pathlib import Path
 
 PLAN_REL = "docs/plans/2026-10-02-xrepo.md"
 
@@ -28,7 +29,7 @@ PLAN = """# Fixture
 """
 
 
-def test_escaping_row_refused_before_anything_is_staged(tmp_path):
+def test_escaping_row_refused_before_anything_is_staged(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / PLAN_REL).write_text(PLAN, encoding="utf-8", newline="\n")

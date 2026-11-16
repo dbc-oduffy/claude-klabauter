@@ -8,6 +8,7 @@ from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_contract import GAPS_CLOSED_FIELD, HALT_GAP_RULE
 from coordinator_core.ops.dispatch_emit.ask_compose import _LEDGER_CHECK_SCHEMA, compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+import pytest
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _OLD_LEAD = "Work still owed, by row: "
@@ -30,7 +31,7 @@ def _script(monkeypatch) -> str:
     )
 
 
-def test_judge_clause_carries_halt_gap_lines_and_the_gaps_closed_instruction():
+def test_judge_clause_carries_halt_gap_lines_and_the_gaps_closed_instruction() -> None:
     clause = ask_compose._RESUME_LEDGER_CLAUSE_JS
     assert "Halt gap lines, by row: " in clause
     assert "JSON.stringify(_gate.resume_ledger.remaining ?? {})" in clause
@@ -41,7 +42,7 @@ def test_judge_clause_carries_halt_gap_lines_and_the_gaps_closed_instruction():
     assert clause.index("Halt gap lines, by row: ") < clause.index("No requirement row is left to judge")
 
 
-def test_refire_legs_say_gaps_still_open_and_carry_the_rule(monkeypatch):
+def test_refire_legs_say_gaps_still_open_and_carry_the_rule(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert _OLD_LEAD not in script
     # The re-plan, late-rows and remaining-work legs each lead with it.
@@ -51,12 +52,12 @@ def test_refire_legs_say_gaps_still_open_and_carry_the_rule(monkeypatch):
     assert HALT_GAP_RULE in script
 
 
-def test_the_next_action_ledger_verdict_forwards_gaps_closed(monkeypatch):
+def test_the_next_action_ledger_verdict_forwards_gaps_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert f"...(i.{GAPS_CLOSED_FIELD} ? {{ {GAPS_CLOSED_FIELD}: i.{GAPS_CLOSED_FIELD} }} : {{}})" in script
 
 
-def test_the_ledger_verdict_item_schema_accepts_gaps_closed():
+def test_the_ledger_verdict_item_schema_accepts_gaps_closed() -> None:
     item = _LEDGER_CHECK_SCHEMA["properties"]["items"]["items"]["properties"][GAPS_CLOSED_FIELD]
     assert item["type"] == "array"
     assert item["items"]["required"] == ["gap", "how"]

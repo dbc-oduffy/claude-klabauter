@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.bash_guards import block_editor_kill_by_name as guard
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -33,7 +34,7 @@ def _payload(cmd: str, tool: str = "Bash", **extra) -> dict:
     ],
 )
 @pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
-def test_name_based_kills_denied(cmd, tool):
+def test_name_based_kills_denied(cmd, tool) -> None:
     out = _enveloped(guard.check)(_payload(cmd, tool))
     assert out is not None
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
@@ -51,11 +52,11 @@ def test_name_based_kills_denied(cmd, tool):
         'echo "taskkill /IM UnrealEditor.exe"',
     ],
 )
-def test_pid_and_unrelated_allowed(cmd):
+def test_pid_and_unrelated_allowed(cmd) -> None:
     assert _enveloped(guard.check)(_payload(cmd)) is None
 
 
-def test_denied_for_subagents_too():
+def test_denied_for_subagents_too() -> None:
     out = _enveloped(guard.check)(_payload("taskkill /F /IM UnrealEditor.exe", agent_id="a1"))
     assert out is not None
 
@@ -68,23 +69,23 @@ def test_denied_for_subagents_too():
         ("w.sh", "pkill -f ShaderCompileWorker\n", "nohup sh {p} &"),
     ],
 )
-def test_name_kill_inside_a_launched_script_denied(tmp_path, name, body, launch):
+def test_name_kill_inside_a_launched_script_denied(tmp_path: Path, name, body, launch) -> None:
     script = tmp_path / name
     script.write_text(body, encoding="utf-8", newline="\n")
     out = _enveloped(guard.check)(_payload(launch.format(p=script.as_posix())))
     assert out is not None
 
 
-def test_relative_script_resolves_against_cwd(tmp_path):
+def test_relative_script_resolves_against_cwd(tmp_path: Path) -> None:
     (tmp_path / "w.sh").write_text("taskkill /F /IM UnrealEditor.exe\n", encoding="utf-8")
     assert _enveloped(guard.check)(_payload("bash w.sh", cwd=str(tmp_path))) is not None
 
 
-def test_script_with_pid_kill_allowed(tmp_path):
+def test_script_with_pid_kill_allowed(tmp_path: Path) -> None:
     script = tmp_path / "w.sh"
     script.write_text("taskkill /F /PID $(cat editor.pid)\n", encoding="utf-8")
     assert _enveloped(guard.check)(_payload(f"bash {script.as_posix()}")) is None
 
 
-def test_missing_script_allowed():
+def test_missing_script_allowed() -> None:
     assert _enveloped(guard.check)(_payload("bash /nonexistent/w.sh")) is None

@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit import grind_stages as stages
 from coordinator_core.ops.dispatch_emit import grind_profile as gp
 
 from .test_grind_verify_mode import _FIXTURE_PROFILE_DIR, _routing_profile, _script
+from pathlib import Path
 
 _ROUTING = {
     "triage": {"kind": "triage", "edges": {"bug": "verify-routing", "dedupe": "verify-close"}, "on_fail": None},
@@ -30,10 +31,10 @@ class _Budget:
     def spent(self):
         return self._s
 
-    def remaining(self):
+    def remaining(self) -> None:
         return None
 
-    def spend(self, n):
+    def spend(self, n) -> None:
         self._s += n
 
 
@@ -56,7 +57,7 @@ def _run(verify_replies, routing=_ROUTING):
     return calls, result
 
 
-def test_covered_by_flips_to_dedupe_and_passes_over_the_close_verify_instead_of_the_retry():
+def test_covered_by_flips_to_dedupe_and_passes_over_the_close_verify_instead_of_the_retry() -> None:
     calls, result = _run([
         {"outcome": "fail", "reason": "covered", "covered_by": "wiki/x.md:12"},
     ])
@@ -64,7 +65,7 @@ def test_covered_by_flips_to_dedupe_and_passes_over_the_close_verify_instead_of_
     assert "rejected-after-retry" not in [h["type"] for h in result["handed_back"] if h["row"] == "r0"]
 
 
-def test_the_flip_is_terminal_the_close_verify_never_re_judges_a_covered_row():
+def test_the_flip_is_terminal_the_close_verify_never_re_judges_a_covered_row() -> None:
     calls, result = _run([
         {"outcome": "fail", "covered_by": "wiki/x.md:12"},
         {"outcome": "fail", "covered_by": "wiki/x.md:12"},
@@ -73,13 +74,13 @@ def test_the_flip_is_terminal_the_close_verify_never_re_judges_a_covered_row():
     assert "rejected-after-retry" not in [h["type"] for h in result["handed_back"] if h["row"] == "r0"]
 
 
-def test_a_fail_without_covered_by_still_retries_once():
+def test_a_fail_without_covered_by_still_retries_once() -> None:
     calls, result = _run([{"outcome": "fail"}, {"outcome": "fail"}])
     assert calls.count("verify") == 2 and "fix" not in calls
     assert [h["type"] for h in result["handed_back"] if h["row"] == "r0"] == ["rejected-after-retry"]
 
 
-def test_a_profile_without_a_dedupe_edge_does_not_flip():
+def test_a_profile_without_a_dedupe_edge_does_not_flip() -> None:
     routing = {**_ROUTING, "triage": {"kind": "triage", "edges": {"bug": "verify-routing"}, "on_fail": None}}
     calls, result = _run([{"outcome": "fail", "covered_by": "a:1"}, {"outcome": "fail"}], routing)
     assert [h["type"] for h in result["handed_back"] if h["row"] == "r0"] == ["rejected-after-retry"]
@@ -105,7 +106,7 @@ def _routing_block(script):
     return block[: block.index("\n  }\n")]
 
 
-def test_emitted_script_runs_hand_back_edges_on_haiku_and_fix_discard_on_sonnet(tmp_path):
+def test_emitted_script_runs_hand_back_edges_on_haiku_and_fix_discard_on_sonnet(tmp_path: Path) -> None:
     script = _script(_per_edge_profile(tmp_path))
     hand_back = sorted(stages.ROUTING_VERIFY_HAND_BACK_NODES)
     assert "const VERIFY_HAND_BACK = " + json.dumps(hand_back) + ";" in script
@@ -119,14 +120,14 @@ def test_emitted_script_runs_hand_back_edges_on_haiku_and_fix_discard_on_sonnet(
         assert f"agentType: '{stages.ROUTING_VERIFY_AGENT_TYPE}'" in part
 
 
-def test_script_without_hand_back_nodes_emits_one_sonnet_routing_call(tmp_path):
+def test_script_without_hand_back_nodes_emits_one_sonnet_routing_call(tmp_path: Path) -> None:
     script = _script(_routing_profile(tmp_path))
     assert "const VERIFY_HAND_BACK = [];" in script
     assert "VERIFY_HAND_BACK.includes" not in script
     assert "model: 'haiku'" not in _routing_block(script)
 
 
-def test_hand_back_model_is_haiku_and_premise_checker_pin_stays_sonnet():
+def test_hand_back_model_is_haiku_and_premise_checker_pin_stays_sonnet() -> None:
     kw = dict(label="v", phase_title="Grind", routing=True, profile="lessons",
               digest_js="row.digest", run_id_js="RUN_ID")
     hand_back = stages.compose_verify_agent_call(hand_back=True, **kw)
@@ -138,13 +139,13 @@ def test_hand_back_model_is_haiku_and_premise_checker_pin_stays_sonnet():
     assert stages.ROUTING_VERIFY_HAND_BACK_NODES.isdisjoint({"verify-routing-fix", "verify-routing-discard"})
 
 
-def test_carve_out_still_refuses_a_run_override_of_the_pinned_type():
+def test_carve_out_still_refuses_a_run_override_of_the_pinned_type() -> None:
     with pytest.raises(emit.MalformedAgentOverrideError):
         stages.compose_verify_agent_call(label="v", phase_title="Grind", routing=True, hand_back=True,
                                          models={"verify-routing": "opus"})
 
 
-def test_emitted_script_flips_once_on_covered_by(tmp_path):
+def test_emitted_script_flips_once_on_covered_by(tmp_path: Path) -> None:
     script = _script(_routing_profile(tmp_path))
     stage = script[script.index("async function _verifyStage"):script.index("async function _commitStage")]
     assert "result.covered_by && VERIFY_PRE_FIX.includes(row.node) && !row.dedupeFlipped" in stage
@@ -154,7 +155,7 @@ def test_emitted_script_flips_once_on_covered_by(tmp_path):
     assert '"covered_by": {"type": "string"}' in script
 
 
-def test_routing_verify_pins_a_judging_agent_type_not_the_test_runner():
+def test_routing_verify_pins_a_judging_agent_type_not_the_test_runner() -> None:
     call = stages.compose_verify_agent_call(label="v", phase_title="Grind", routing=True, profile="lessons",
                                             digest_js="row.digest", run_id_js="RUN_ID")
     assert stages.ROUTING_VERIFY_AGENT_TYPE == "coordinator:premise-checker"
@@ -212,7 +213,7 @@ console.log(JSON.stringify({ routingCalls, record }));
 """
 
 
-def test_a_six_row_batch_issues_at_most_three_routing_verify_calls_and_applies_each_verdict(tmp_path):
+def test_a_six_row_batch_issues_at_most_three_routing_verify_calls_and_applies_each_verdict(tmp_path: Path) -> None:
     import shutil
     import subprocess
 
@@ -257,7 +258,7 @@ def test_a_six_row_batch_issues_at_most_three_routing_verify_calls_and_applies_e
                 and "verify-routing" in h["reason"]], handed
 
 
-def test_post_fix_verify_stays_on_the_test_runner(tmp_path):
+def test_post_fix_verify_stays_on_the_test_runner(tmp_path: Path) -> None:
     script = _script(_routing_profile(tmp_path))
     stage = script[script.index("async function _verifyCall"):script.index("async function _verifyStage")]
     routing_call, post_fix = stage.split("if (VERIFY_PRE_FIX.includes(row.node)) {")[1].split("\n  }\n", 1)

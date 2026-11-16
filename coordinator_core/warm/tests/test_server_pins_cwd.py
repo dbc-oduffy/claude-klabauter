@@ -10,10 +10,11 @@ import sys
 import pytest
 
 from coordinator_core.warm import server
+from pathlib import Path
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="Windows cannot remove the process cwd")
-def test_pin_cwd_moves_off_a_deleted_spawner_dir(tmp_path, monkeypatch):
+def test_pin_cwd_moves_off_a_deleted_spawner_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     engine_root = tmp_path / "engine"
     engine_root.mkdir()
     spawner = tmp_path / "session-tmp"
@@ -26,7 +27,7 @@ def test_pin_cwd_moves_off_a_deleted_spawner_dir(tmp_path, monkeypatch):
     assert os.getcwd() == str(engine_root)
 
 
-def test_pin_cwd_failure_is_reported_not_raised(tmp_path, monkeypatch, capsys):
+def test_pin_cwd_failure_is_reported_not_raised(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.chdir(tmp_path)
 
     server._pin_cwd(tmp_path / "missing")
@@ -35,7 +36,7 @@ def test_pin_cwd_failure_is_reported_not_raised(tmp_path, monkeypatch, capsys):
     assert "could not pin cwd" in capsys.readouterr().err
 
 
-def test_boot_pins_cwd_after_winning_the_election():
+def test_boot_pins_cwd_after_winning_the_election() -> None:
     boot = inspect.getsource(server._run_guarded)
     assert "_pin_cwd(repo_root)" in boot
     # Boot no longer preloads the op registry (6cbfcca093); the pool-console step is the next boot call.

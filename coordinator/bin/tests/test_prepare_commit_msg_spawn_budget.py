@@ -35,6 +35,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -44,7 +48,7 @@ _HOOK_PATH = _BIN_DIR / "coordinator-prepare-commit-msg.py"
 _NO_WINDOW = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
-def _load_module():
+def _load_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "coordinator_prepare_commit_msg_c1", _HOOK_PATH
     )
@@ -81,7 +85,7 @@ def _resolved(path_str: str, cwd) -> str:
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], cwd=root)
@@ -98,7 +102,7 @@ def repo(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_deliverable_carry_import_not_reintroduced():
+def test_deliverable_carry_import_not_reintroduced() -> None:
     text = _HOOK_PATH.read_text(encoding="utf-8")
     for line in text.splitlines():
         stripped = line.strip()
@@ -108,7 +112,7 @@ def test_deliverable_carry_import_not_reintroduced():
             pytest.fail(f"dead-weight coordinator_core.ops import reintroduced: {line!r}")
 
 
-def test_divergent_deliverable_id_error_not_a_live_import():
+def test_divergent_deliverable_id_error_not_a_live_import() -> None:
     """The identifier is allowed to survive in prose (module docstring and
     the DR-406 history note on `_resolve_deliverable_id_from_paths`) — it
     must not appear as an actual `ImportFrom` name anywhere in the file."""
@@ -126,7 +130,7 @@ def test_divergent_deliverable_id_error_not_a_live_import():
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_git_dir_no_subprocess_call(repo, monkeypatch):
+def test_resolve_git_dir_no_subprocess_call(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_module()
     monkeypatch.chdir(repo)
     monkeypatch.delenv("GIT_DIR", raising=False)
@@ -142,7 +146,7 @@ def test_resolve_git_dir_no_subprocess_call(repo, monkeypatch):
     assert calls == []
 
 
-def test_ordinary_repo_matches_rev_parse(repo, monkeypatch):
+def test_ordinary_repo_matches_rev_parse(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_module()
     monkeypatch.chdir(repo)
     monkeypatch.delenv("GIT_DIR", raising=False)
@@ -151,7 +155,7 @@ def test_ordinary_repo_matches_rev_parse(repo, monkeypatch):
     assert _resolved(got, repo) == _resolved(want, repo)
 
 
-def test_explicit_git_dir_env_honoured(repo, monkeypatch, tmp_path):
+def test_explicit_git_dir_env_honoured(repo, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     mod = _load_module()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("GIT_DIR", str(repo / ".git"))
@@ -159,7 +163,7 @@ def test_explicit_git_dir_env_honoured(repo, monkeypatch, tmp_path):
     assert got == str(repo / ".git")
 
 
-def test_linked_worktree_matches_rev_parse_per_worktree(repo, monkeypatch, tmp_path):
+def test_linked_worktree_matches_rev_parse_per_worktree(repo, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     wt = tmp_path / "wt"
     _git(["worktree", "add", "-q", str(wt), "-b", "wt-branch"], cwd=repo)
     mod = _load_module()
@@ -172,7 +176,7 @@ def test_linked_worktree_matches_rev_parse_per_worktree(repo, monkeypatch, tmp_p
     assert "worktrees" in _resolved(got, wt).replace("\\", "/")
 
 
-def test_submodule_matches_rev_parse(repo, monkeypatch, tmp_path):
+def test_submodule_matches_rev_parse(repo, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     sub_upstream = tmp_path / "sub_upstream"
     sub_upstream.mkdir()
     _git(["init", "-q"], cwd=sub_upstream)
@@ -203,7 +207,7 @@ def test_submodule_matches_rev_parse(repo, monkeypatch, tmp_path):
     assert _resolved(got, sub_dir) == _resolved(want, sub_dir)
 
 
-def test_not_a_repo_returns_empty(tmp_path, monkeypatch):
+def test_not_a_repo_returns_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     empty = tmp_path / "not_a_repo"
     empty.mkdir()
     mod = _load_module()
@@ -217,7 +221,7 @@ def test_not_a_repo_returns_empty(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_staged_path_derivation_is_one_index_only_spawn(repo, monkeypatch):
+def test_staged_path_derivation_is_one_index_only_spawn(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks import commit_resolution as cr
 
     for i in range(40):
@@ -236,7 +240,7 @@ def test_staged_path_derivation_is_one_index_only_spawn(repo, monkeypatch):
     spawned = []
     real = cr._run_git
 
-    def _spy(args, timeout):
+    def _spy(args, timeout) -> bytes:
         spawned.append(list(args))
         return real(args, timeout)
 
@@ -252,7 +256,7 @@ def test_staged_path_derivation_is_one_index_only_spawn(repo, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_prepare_commit_msg_fail_safe_gate_spawns_no_git(repo):
+def test_prepare_commit_msg_fail_safe_gate_spawns_no_git(repo) -> None:
     """A non-UUID session id trips main()'s fail-safe gate right after
     `_resolve_git_dir()`/`_resolve_session_id()`, before `diff --cached` or
     `interpret-trailers` are ever reached — isolating `_resolve_git_dir`'s

@@ -12,6 +12,7 @@ from coordinator_core.ops import sizing_intake_contract as contract
 from coordinator_core.ops.dispatch_emit import ask_compose, cli
 from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+from pathlib import Path
 
 REL = "state/sizings/2026-10-14-intake.yaml"
 CTX = "docs/a.md"
@@ -20,7 +21,7 @@ _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: 
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / "docs").mkdir()
@@ -32,7 +33,7 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _put(repo, *, brief=None, paths=None):
+def _put(repo, *, brief=None, paths=None) -> None:
     doc = contract.intake_record(name="intake", turn={"text": "ship it", "turn": 4}, today="2026-10-14")
     if brief:
         doc["em_analysis"][contract.EM_BRIEF_KEY] = brief
@@ -47,21 +48,21 @@ def _script(repo, *extra):
     return path.read_text(encoding="utf-8")
 
 
-def test_slice_brief_and_context_paths_declare_the_em_brief(repo):
+def test_slice_brief_and_context_paths_declare_the_em_brief(repo) -> None:
     _put(repo, brief=BRIEF, paths=CTX)
     script = _script(repo)
     assert EM_BRIEF_VAR in script and BRIEF in script
     assert f"Read each context file first: {CTX}" in script
 
 
-def test_slice_with_paths_but_no_brief_still_declares_an_em_brief(repo):
+def test_slice_with_paths_but_no_brief_still_declares_an_em_brief(repo) -> None:
     _put(repo, paths=CTX)
     script = _script(repo)
     assert f"const {EM_BRIEF_VAR} =" in script
     assert CTX in script
 
 
-def test_a_missing_context_path_is_refused(repo, capsys):
+def test_a_missing_context_path_is_refused(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _put(repo, brief=BRIEF, paths="docs/gone.md")
     code = cli.main(["--ask", "--sizing", REL, "--repo-root", str(repo)])
     assert code != 0
@@ -69,6 +70,6 @@ def test_a_missing_context_path_is_refused(repo, capsys):
     assert not list((repo / RUN_DIR_ROOT).glob("*.workflow.mjs"))
 
 
-def test_slice_without_the_keys_emits_no_em_brief(repo):
+def test_slice_without_the_keys_emits_no_em_brief(repo) -> None:
     _put(repo)
     assert f"const {EM_BRIEF_VAR} =" not in _script(repo)

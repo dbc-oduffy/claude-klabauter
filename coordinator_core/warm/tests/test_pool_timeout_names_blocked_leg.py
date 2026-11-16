@@ -22,7 +22,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 _WAIT = 90.0
 
 
-def _wait_for(predicate, timeout=_WAIT):
+def _wait_for(predicate, timeout=_WAIT) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
@@ -31,7 +31,7 @@ def _wait_for(predicate, timeout=_WAIT):
     return False
 
 
-def _the_blocking_leg(release):
+def _the_blocking_leg(release) -> None:
     deadline = time.monotonic() + 60
     while not Path(release).exists() and time.monotonic() < deadline:
         time.sleep(0.05)
@@ -46,18 +46,18 @@ def _noop_body(msg, caller):
     return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {}}
 
 
-def _worker_blocking(msg, caller, dispatch_key=None, claim_dir=None, stall_secs=10.0):
+def _worker_blocking(msg, caller, dispatch_key=None, claim_dir=None, stall_secs: float = 10.0):
     server._pool_dispatch_worker_body = _block_in_a_named_leg
     return server._pool_dispatch_worker(msg, caller, dispatch_key, claim_dir, stall_secs)
 
 
-def _worker_noop(msg, caller, dispatch_key=None, claim_dir=None, stall_secs=10.0):
+def _worker_noop(msg, caller, dispatch_key=None, claim_dir=None, stall_secs: float = 10.0):
     server._pool_dispatch_worker_body = _noop_body
     return server._pool_dispatch_worker(msg, caller, dispatch_key, claim_dir, stall_secs)
 
 
 @pytest.fixture
-def rig(tmp_path, monkeypatch):
+def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     stderr_dir = tmp_path / "pool-worker-stderr"
     claim_dir = tmp_path / "dispatch-claims"
     claim_dir.mkdir()
@@ -81,7 +81,7 @@ def rig(tmp_path, monkeypatch):
     inner.shutdown(wait=True)
 
 
-def _msg(tmp_path, method="ceremony.commit_v2"):
+def _msg(tmp_path, method: str = "ceremony.commit_v2"):
     return {
         "jsonrpc": "2.0",
         "id": 7,
@@ -90,7 +90,7 @@ def _msg(tmp_path, method="ceremony.commit_v2"):
     }
 
 
-def test_a_default_mutating_op_past_its_deadline_names_its_blocked_leg(rig, monkeypatch):
+def test_a_default_mutating_op_past_its_deadline_names_its_blocked_leg(rig, monkeypatch: pytest.MonkeyPatch) -> None:
     ctx, pool, tmp_path, claim_dir, release = rig
     monkeypatch.setattr(server, "_pool_dispatch_worker", _worker_blocking)
     rows = []
@@ -123,7 +123,7 @@ def test_a_default_mutating_op_past_its_deadline_names_its_blocked_leg(rig, monk
     assert _wait_for(lambda: not list(claim_dir.iterdir()))
 
 
-def test_the_leg_is_written_without_a_stderr_file_and_only_with_a_claim(tmp_path, monkeypatch):
+def test_the_leg_is_written_without_a_stderr_file_and_only_with_a_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "_WORKER_STDERR_FILE", None)
 
     claim = tmp_path / "k"
@@ -144,7 +144,7 @@ def test_the_leg_is_written_without_a_stderr_file_and_only_with_a_claim(tmp_path
     assert list(tmp_path.iterdir()) == []
 
 
-def test_a_disarmed_arm_writes_no_leg(tmp_path, monkeypatch):
+def test_a_disarmed_arm_writes_no_leg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "_WORKER_STDERR_FILE", None)
     claim = tmp_path / "k"
     claim.write_text("1")
@@ -153,7 +153,7 @@ def test_a_disarmed_arm_writes_no_leg(tmp_path, monkeypatch):
     assert not server._leg_path(claim).exists()
 
 
-def test_a_missing_or_torn_leg_leaves_the_diagnosis_without_one(tmp_path):
+def test_a_missing_or_torn_leg_leaves_the_diagnosis_without_one(tmp_path: Path) -> None:
     claim = tmp_path / "k"
     claim.write_text("4242")
     assert "blocked_leg" not in server._running_phase_diagnosis(claim, None)

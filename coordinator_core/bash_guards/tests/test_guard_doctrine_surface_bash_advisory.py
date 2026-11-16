@@ -9,6 +9,7 @@ import pytest
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write as guard
 from coordinator_core.write_guards._doctrine_edit_sentinel import DENY_REASON, SENTINEL_BASENAME
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -29,7 +30,7 @@ HEREDOC = (
 
 
 @pytest.fixture(autouse=True)
-def _gate_default(monkeypatch):
+def _gate_default(monkeypatch: pytest.MonkeyPatch):
     from coordinator_core import machine_profile
 
     monkeypatch.delenv("MACHINE_LOCAL_COORDINATOR_FEATURE_DOCTRINE_EDIT_GATE", raising=False)
@@ -39,12 +40,12 @@ def _gate_default(monkeypatch):
 
 
 @pytest.fixture()
-def cwd(tmp_path):
+def cwd(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     return tmp_path
 
 
-def _run(command, tool="Bash", cwd=None):
+def _run(command, tool: str = "Bash", cwd=None):
     payload = {"tool_name": tool, "tool_input": {"command": command}}
     if cwd is not None:
         payload["cwd"] = str(cwd)
@@ -66,7 +67,7 @@ def _denied(result):
         "echo x >> ~/.claude/rules/context7.md",
     ],
 )
-def test_bash_write_to_a_doctrine_surface_is_denied(command, cwd):
+def test_bash_write_to_a_doctrine_surface_is_denied(command, cwd) -> None:
     assert DENY_REASON in _denied(_run(command, cwd=cwd))
 
 
@@ -78,12 +79,12 @@ def test_bash_write_to_a_doctrine_surface_is_denied(command, cwd):
         HEREDOC,
     ],
 )
-def test_fresh_sentinel_admits_the_write(command, cwd):
+def test_fresh_sentinel_admits_the_write(command, cwd) -> None:
     (cwd / ".git" / SENTINEL_BASENAME).write_text("")
     assert _run(command, cwd=cwd) is None
 
 
-def test_stale_sentinel_still_denies(cwd):
+def test_stale_sentinel_still_denies(cwd) -> None:
     import os
     import time
 
@@ -94,13 +95,13 @@ def test_stale_sentinel_still_denies(cwd):
     assert DENY_REASON in _denied(_run("echo x >> ~/.claude/rules/context7.md", cwd=cwd))
 
 
-def test_deny_names_the_sentinel_and_offers_no_edit_tool(cwd):
+def test_deny_names_the_sentinel_and_offers_no_edit_tool(cwd) -> None:
     reason = _denied(_run("echo x >> ~/.claude/rules/context7.md", cwd=cwd))
     assert SENTINEL_BASENAME in reason
     assert "the Edit tool" not in reason
 
 
-def test_powershell_dialect_denies(cwd):
+def test_powershell_dialect_denies(cwd) -> None:
     assert _run("Set-Content global-doctrine/CLAUDE.md 'x'", tool="PowerShell", cwd=cwd) is not None
 
 
@@ -113,11 +114,11 @@ def test_powershell_dialect_denies(cwd):
         "echo x > coordinator.local.md",
     ],
 )
-def test_reads_and_unrelated_writes_pass_silently(command):
+def test_reads_and_unrelated_writes_pass_silently(command) -> None:
     assert _run(command) is None
 
 
-def test_gate_on_denies_and_a_fresh_sentinel_admits(monkeypatch, cwd):
+def test_gate_on_denies_and_a_fresh_sentinel_admits(monkeypatch: pytest.MonkeyPatch, cwd) -> None:
     from coordinator_core import machine_profile
 
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_FEATURE_DOCTRINE_EDIT_GATE", "on")
@@ -127,13 +128,13 @@ def test_gate_on_denies_and_a_fresh_sentinel_admits(monkeypatch, cwd):
     assert _run(HEREDOC, cwd=cwd) is None
 
 
-def test_any_repos_existing_claude_md_is_denied(tmp_path, cwd):
+def test_any_repos_existing_claude_md_is_denied(tmp_path: Path, cwd) -> None:
     target = tmp_path / "CLAUDE.md"
     target.write_text("x")
     assert DENY_REASON in _denied(_run(f"echo x >> {target}", cwd=cwd))
 
 
-def test_gate_off_leaves_the_write_quiet(monkeypatch, cwd):
+def test_gate_off_leaves_the_write_quiet(monkeypatch: pytest.MonkeyPatch, cwd) -> None:
     from coordinator_core import machine_profile
 
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_FEATURE_DOCTRINE_EDIT_GATE", "off")
@@ -141,7 +142,7 @@ def test_gate_off_leaves_the_write_quiet(monkeypatch, cwd):
     assert _run(HEREDOC, cwd=cwd) is None
 
 
-def test_governed_surface_outside_the_class_stays_advisory_and_ignores_the_sentinel(cwd):
+def test_governed_surface_outside_the_class_stays_advisory_and_ignores_the_sentinel(cwd) -> None:
     command = "tee coordinator/snippets/em-operating-doctrine.md < /tmp/x"
     hso = _run(command, cwd=cwd)["hookSpecificOutput"]
     assert hso.get("permissionDecision") != "deny"
@@ -149,7 +150,7 @@ def test_governed_surface_outside_the_class_stays_advisory_and_ignores_the_senti
     assert SENTINEL_BASENAME not in hso["additionalContext"]
 
 
-def test_dispatched_caller_stays_denied_with_a_fresh_sentinel_and_is_not_told_of_it(cwd):
+def test_dispatched_caller_stays_denied_with_a_fresh_sentinel_and_is_not_told_of_it(cwd) -> None:
     (cwd / ".git" / SENTINEL_BASENAME).write_text("")
     payload = {
         "tool_name": "Bash",

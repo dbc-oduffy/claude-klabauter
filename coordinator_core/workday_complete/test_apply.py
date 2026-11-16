@@ -35,10 +35,11 @@ import pytest
 from coordinator_core.ceremony_common.cli_rejection import CliExitClass
 from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.workday_complete import apply as wc_apply
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _isolated_apply_checkpoint(tmp_path, monkeypatch):
+def _isolated_apply_checkpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`apply()` opens a day-keyed checkpoint under the git common dir; keep it under tmp_path."""
     (tmp_path / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
@@ -565,7 +566,7 @@ def test_apply_default_call_threads_none_and_false_into_brief(
 ) -> None:
     captured: dict[str, Any] = {}
 
-    def _fake_brief(*, decisions=None, env=None, for_date=None, only_mode=False):
+    def _fake_brief(*, decisions=None, env=None, for_date=None, only_mode: bool = False):
         captured["for_date"] = for_date
         captured["only_mode"] = only_mode
         return 0, _empty_envelope()
@@ -583,7 +584,7 @@ def test_apply_for_date_alone_threads_for_date_into_brief(
 ) -> None:
     captured: dict[str, Any] = {}
 
-    def _fake_brief(*, decisions=None, env=None, for_date=None, only_mode=False):
+    def _fake_brief(*, decisions=None, env=None, for_date=None, only_mode: bool = False):
         captured["for_date"] = for_date
         captured["only_mode"] = only_mode
         return 0, _empty_envelope()
@@ -599,7 +600,7 @@ def test_apply_for_date_and_only_mode_threads_both_into_brief(
 ) -> None:
     captured: dict[str, Any] = {}
 
-    def _fake_brief(*, decisions=None, env=None, for_date=None, only_mode=False):
+    def _fake_brief(*, decisions=None, env=None, for_date=None, only_mode: bool = False):
         captured["for_date"] = for_date
         captured["only_mode"] = only_mode
         return 0, _empty_envelope()
@@ -615,7 +616,7 @@ def test_apply_only_mode_without_for_date_is_a_noop_at_the_brief_seam(
 ) -> None:
     captured: dict[str, Any] = {}
 
-    def _fake_brief(*, decisions=None, env=None, for_date=None, only_mode=False):
+    def _fake_brief(*, decisions=None, env=None, for_date=None, only_mode: bool = False):
         captured["for_date"] = for_date
         captured["only_mode"] = only_mode
         return 0, _empty_envelope()
@@ -635,7 +636,7 @@ def test_apply_propagates_brief_usage_error_as_transport_fail(
     map it to `WorkdayApplyExitCode.TRANSPORT_FAIL` carrying that same
     message, exactly as it already does for any other brief-side failure."""
 
-    def _fake_brief(*, decisions=None, env=None, for_date=None, only_mode=False):
+    def _fake_brief(*, decisions=None, env=None, for_date=None, only_mode: bool = False):
         return 2, {"error": f"--for-date must be YYYY-MM-DD (got '{for_date}')"}
 
     monkeypatch.setattr(wc_apply, "brief", _fake_brief)
@@ -651,7 +652,7 @@ def test_main_threads_for_date_and_only_flags_into_apply(
 ) -> None:
     captured: dict[str, Any] = {}
 
-    def _fake_apply(*, decisions=None, for_date=None, only_mode=False):
+    def _fake_apply(*, decisions=None, for_date=None, only_mode: bool = False):
         captured["decisions"] = decisions
         captured["for_date"] = for_date
         captured["only_mode"] = only_mode
@@ -670,7 +671,7 @@ def test_main_no_flags_calls_apply_with_defaults(
 ) -> None:
     captured: dict[str, Any] = {}
 
-    def _fake_apply(*, decisions=None, for_date=None, only_mode=False):
+    def _fake_apply(*, decisions=None, for_date=None, only_mode: bool = False):
         captured["decisions"] = decisions
         captured["for_date"] = for_date
         captured["only_mode"] = only_mode

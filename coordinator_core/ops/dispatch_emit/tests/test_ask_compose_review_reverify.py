@@ -12,13 +12,14 @@ from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
 _TARGETED_TESTS = ask_compose._TARGETED_TESTS_JS
 
 
-def _compose(**over):
+def _compose(**over) -> str:
     kw = dict(
         repo_root="REPO",
         prompt="add a thing",
@@ -40,7 +41,7 @@ def _titles(script):
     return re.findall(r"'([^']*)'", block)
 
 
-def test_reverify_phase_sits_after_the_review_wave_and_before_verify():
+def test_reverify_phase_sits_after_the_review_wave_and_before_verify() -> None:
     titles = _titles(_compose())
     assert "Review re-verify" in titles
     assert titles.index("Review wave") < titles.index("Review re-verify") < titles.index("Verify")
@@ -48,12 +49,12 @@ def test_reverify_phase_sits_after_the_review_wave_and_before_verify():
         assert titles.index("Review integration") < titles.index("Review re-verify")
 
 
-def test_review_recover_and_blocker_js_exclude_renamed_nodes():
+def test_review_recover_and_blocker_js_exclude_renamed_nodes() -> None:
     assert "?.renamed_node ?? []" in ask_compose._test_blockers_js("_r", "_t")
     assert "rv?.renamed_node ?? []" in ask_compose._REVIEW_RECOVER_JS
 
 
-def test_reverify_phase_names_the_op_and_the_test_runner():
+def test_reverify_phase_names_the_op_and_the_test_runner() -> None:
     script = _compose()
     assert "review.reverify" in script
     assert "coordinator:test-runner" in script
@@ -61,7 +62,7 @@ def test_reverify_phase_names_the_op_and_the_test_runner():
     assert "let _reviewReverify = null;" in script
 
 
-def test_composed_reverify_prompt_selects_node_tests_and_never_passes_on_nothing_run():
+def test_composed_reverify_prompt_selects_node_tests_and_never_passes_on_nothing_run() -> None:
     script = _compose()
     assert "node --test <that file>" in script
     assert 'status_before \\"not_run\\"' in script or 'status_before "not_run"' in script
@@ -69,11 +70,11 @@ def test_composed_reverify_prompt_selects_node_tests_and_never_passes_on_nothing
     assert "status_before pass" not in script
 
 
-def test_return_carries_reverify_under_review():
+def test_return_carries_reverify_under_review() -> None:
     assert "reverify: _reviewReverify, receipt:" in _compose()
 
 
-def test_staged_review_reverify_body_leaves_the_script_and_lands_in_the_sink():
+def test_staged_review_reverify_body_leaves_the_script_and_lands_in_the_sink() -> None:
     sink: dict[str, str] = {}
     script = _compose(staged_out=sink)
     assert "prompts/review-reverify.md in full" in script
@@ -82,13 +83,13 @@ def test_staged_review_reverify_body_leaves_the_script_and_lands_in_the_sink():
     assert "Re-verify the edits this run" in _compose()
 
 
-def test_every_commit_params_block_carries_targeted_tests_verbatim():
+def test_every_commit_params_block_carries_targeted_tests_verbatim() -> None:
     script = _compose(in_run_commit=True, script_path="scratch/warp/a.workflow.mjs")
     # commit stage, its post-retest re-commit, and the halt record
     assert script.count(_TARGETED_TESTS) == 3
 
 
-def test_halt_block_carries_targeted_tests_outside_the_terminal_commit_conditional():
+def test_halt_block_carries_targeted_tests_outside_the_terminal_commit_conditional() -> None:
     script = _compose(in_run_commit=True, script_path="scratch/warp/a.workflow.mjs")
     halt = script.split("async function _commitHaltRecord()", 1)[1].split("_terminalCommitParamsBlock(", 1)[1]
     assert halt.index("targeted_tests:") < halt.index("_nextAction.kind === 'terminal_commit'")
@@ -96,7 +97,7 @@ def test_halt_block_carries_targeted_tests_outside_the_terminal_commit_condition
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_composed_script_parses_as_an_async_function_body(tmp_path):
+def test_composed_script_parses_as_an_async_function_body(tmp_path: Path) -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
@@ -114,7 +115,7 @@ def test_composed_script_parses_as_an_async_function_body(tmp_path):
     assert out.returncode == 0, out.stderr
 
 
-def test_reverify_joins_before_self_correction_reads_it():
+def test_reverify_joins_before_self_correction_reads_it() -> None:
     # Halted-run self-correction reads the re-verify result, so its join precedes the review-blocked
     # halt; the verify phase's join then resolves the same settled promise.
     script = _compose()
@@ -157,7 +158,7 @@ def _run_halt(reverify, declared) -> dict:
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_foreign_only_red_does_not_halt_and_lands_out_of_ask():
+def test_foreign_only_red_does_not_halt_and_lands_out_of_ask() -> None:
     out = _run_halt({"failing": [_FOREIGN_NODE]}, [_OWN])
 
     assert out["halted"] is None
@@ -166,7 +167,7 @@ def test_foreign_only_red_does_not_halt_and_lands_out_of_ask():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_own_red_still_halts_and_foreign_red_rides_out_of_ask():
+def test_own_red_still_halts_and_foreign_red_rides_out_of_ask() -> None:
     out = _run_halt({"failing": [_OWN_NODE, _FOREIGN_NODE]}, [_OWN])
 
     assert out["halted"]["halted"] == ask_compose.HALT_REVIEW_BLOCKED
@@ -176,7 +177,7 @@ def test_own_red_still_halts_and_foreign_red_rides_out_of_ask():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_base_green_red_outside_the_footprint_halts_as_owned_red():
+def test_base_green_red_outside_the_footprint_halts_as_owned_red() -> None:
     out = _run_halt(
         {"failing": [_FOREIGN_NODE, _OWN_NODE], "passed_at_base": [_FOREIGN_NODE], "pre_existing": []}, [_OWN]
     )
@@ -188,7 +189,7 @@ def test_base_green_red_outside_the_footprint_halts_as_owned_red():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_base_green_red_that_is_pre_existing_stays_foreign():
+def test_base_green_red_that_is_pre_existing_stays_foreign() -> None:
     out = _run_halt(
         {"failing": [_FOREIGN_NODE], "passed_at_base": [_FOREIGN_NODE], "pre_existing": [_FOREIGN_NODE]}, [_OWN]
     )
@@ -198,14 +199,14 @@ def test_base_green_red_that_is_pre_existing_stays_foreign():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_no_declared_footprint_keeps_every_red_a_blocker():
+def test_no_declared_footprint_keeps_every_red_a_blocker() -> None:
     out = _run_halt({"failing": [_FOREIGN_NODE]}, None)
 
     assert out["halted"]["halted"] == ask_compose.HALT_REVIEW_BLOCKED
     assert "out_of_ask" not in out["reverify"]
 
 
-def _reconcile(wave, reverify, reused=False) -> dict:
+def _reconcile(wave, reverify, reused: bool = False) -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
@@ -225,7 +226,7 @@ def _reconcile(wave, reverify, reused=False) -> dict:
 _CLAIMED = {"slice_id": "s1", "verdict": "BLOCKED", "findings": 2, "applied": 2, "sidecar_path": "rev/s1.md"}
 
 
-def test_reconcile_runs_between_the_reverify_join_and_self_correction():
+def test_reconcile_runs_between_the_reverify_join_and_self_correction() -> None:
     script = _compose()
     join = script.index("if (!_reverifyJoined) { _reviewReverify = await")
     assert join < script.index(ask_compose._WAVE_DIFF_RECONCILE_JS) < script.index("const _reviewRecover = async")
@@ -233,7 +234,7 @@ def test_reconcile_runs_between_the_reverify_join_and_self_correction():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_claimed_applied_with_an_empty_run_diff_reports_applied_below_findings():
+def test_claimed_applied_with_an_empty_run_diff_reports_applied_below_findings() -> None:
     wave = _reconcile([_CLAIMED], {"edited": [], "created": []})
 
     assert wave[0]["applied"] == 0 and wave[0]["applied_claimed"] == 2
@@ -253,11 +254,11 @@ def test_claimed_applied_with_an_empty_run_diff_reports_applied_below_findings()
         ({"edited": [], "created": []}, True),
     ],
 )
-def test_recorded_edits_an_absent_diff_or_a_reused_wave_leave_applied_standing(reverify, reused):
+def test_recorded_edits_an_absent_diff_or_a_reused_wave_leave_applied_standing(reverify, reused) -> None:
     assert _reconcile([_CLAIMED], reverify, reused)[0]["applied"] == 2
 
 
-def test_unapplied_reverify_reruns_verify_once():
+def test_unapplied_reverify_reruns_verify_once() -> None:
     script = _compose()
     assert "_reviewReverify.unapplied.length) || (Array.isArray(_reviewReverify.failing) && _reviewReverify.failing.length))) { _verify = await _runVerify(); }" in script
 
@@ -280,7 +281,7 @@ def _r1_red(**kw) -> dict:
     return rec
 
 
-def test_halt_reverify_prompt_asks_for_diff_named():
+def test_halt_reverify_prompt_asks_for_diff_named() -> None:
     js = ask_compose._review_recover_js(
         head="H", anchor="A", session_tail="", record_dir="state/warp/r1", run_id="r1"
     )
@@ -289,7 +290,7 @@ def test_halt_reverify_prompt_asks_for_diff_named():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_diff_named_reds_are_owned_and_not_foreign_unverified():
+def test_diff_named_reds_are_owned_and_not_foreign_unverified() -> None:
     out = _recover_drive(_r1_red(diff_named=list(_R1_IDS)))
 
     assert "foreign_unverified" not in out["reverify"]
@@ -300,7 +301,7 @@ def test_diff_named_reds_are_owned_and_not_foreign_unverified():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_without_diff_named_the_same_reds_stay_foreign_unverified():
+def test_without_diff_named_the_same_reds_stay_foreign_unverified() -> None:
     out = _recover_drive(_r1_red())
 
     assert sorted(out["reverify"]["foreign_unverified"]) == sorted(_R1_IDS)
@@ -309,8 +310,79 @@ def test_without_diff_named_the_same_reds_stay_foreign_unverified():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_diff_named_id_that_is_pre_existing_stays_foreign():
+def test_a_diff_named_id_that_is_pre_existing_stays_foreign() -> None:
     out = _recover_drive(_r1_red(diff_named=list(_R1_IDS), pre_existing=list(_R1_IDS)))
 
     assert "foreign_unverified" not in out["reverify"]
     assert not [c for c in out["calls"] if c["label"] == ask_compose.HALT_FIX_LABEL]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_fix_outside_declared_writes_keeps_the_wave_entry_applied():
+    wave = _reconcile(
+        [{**_CLAIMED, "slice_id": "s1"}],
+        {"edited": [], "created": [], "outside_declared": ["test/contracts.test.ts"]},
+    )
+
+    assert wave[0]["applied"] == 2 and "unapplied_reason" not in wave[0]
+
+
+def _tests_not_run(reverify, manifest, code_owed=True, reused=False) -> dict:
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not on PATH")
+    source = (
+        f"let _halted = null; const _runId = 'r'; let _reviewReused = {json.dumps(reused)}; "
+        f"const _codeReviewOwed = {json.dumps(code_owed)}; const _manifest = {json.dumps(manifest)}; "
+        f"let _reviewReverify = {json.dumps(reverify)};\n"
+        + ask_compose._TESTS_NOT_RUN_JS
+        + "\nconsole.log(JSON.stringify({ halted: _halted, rv: _reviewReverify }));\n"
+    )
+    proc = subprocess.run(
+        [node, "-"], input=source, capture_output=True, text=True, timeout=30, **no_console_creationflags()
+    )
+    assert proc.returncode == 0, proc.stderr
+    return json.loads(proc.stdout)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_empty_test_selection_on_a_code_run_halts_tests_not_run():
+    out = _tests_not_run({"edited": ["src/x.ts"], "status_after": None}, {"test_targets": []})
+
+    assert out["halted"]["halted"] == ask_compose.HALT_TESTS_NOT_RUN
+    assert out["rv"]["tests_not_run"] is True
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.parametrize(
+    "status_after, halts",
+    [(None, True), ("indeterminate", False), ("pass", False), ("fail", False)],
+)
+def test_indeterminate_reverify_with_empty_selection_is_not_tests_not_run(status_after, halts):
+    out = _tests_not_run({"edited": ["src/x.ts"], "status_after": status_after}, {"test_targets": []})
+
+    assert (out["halted"] is not None) is halts
+    assert out["rv"].get("tests_not_run", False) is halts
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.parametrize(
+    "reverify, manifest, code_owed",
+    [
+        ({"status_after": "pass"}, {"test_targets": []}, True),
+        ({"status_after": None}, {"test_targets": ["test/x.test.ts"]}, True),
+        ({"status_after": None}, {"test_targets": [], "no_test_target": {"reason": "r"}}, True),
+        ({"status_after": None}, {"test_targets": []}, False),
+    ],
+)
+def test_a_selected_or_explained_or_non_code_run_is_not_halted(reverify, manifest, code_owed):
+    assert _tests_not_run(reverify, manifest, code_owed)["halted"] is None
+
+
+def test_tests_not_run_check_follows_the_reconcile_in_the_script():
+    script = _compose()
+    assert script.index(ask_compose._WAVE_DIFF_RECONCILE_JS) < script.index(ask_compose._TESTS_NOT_RUN_JS)

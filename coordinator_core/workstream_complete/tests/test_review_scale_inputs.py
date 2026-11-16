@@ -10,6 +10,7 @@ from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import review_scale_inputs as rsi
 from coordinator_core.workstream_complete import session_history as sh
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -25,7 +26,7 @@ def _git(root, *args):
     return out.stdout.strip()
 
 
-def _commit(root, rel, text, sid=None, extra=""):
+def _commit(root, rel, text, sid=None, extra: str = ""):
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text, encoding="utf-8")
@@ -38,14 +39,14 @@ def _commit(root, rel, text, sid=None, extra=""):
     return _git(root, "rev-parse", "HEAD")
 
 
-def _floor(root, value, sid=SID):
+def _floor(root, value, sid=SID) -> None:
     d = hub_for_common(root / ".git") / sid
     d.mkdir(parents=True, exist_ok=True)
     (d / "head_at_start").write_text(value + "\n", encoding="utf-8")
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "r"
     root.mkdir()
     _git(root, "init", "-q", "-b", "main")
@@ -56,12 +57,12 @@ def repo(tmp_path):
 
 
 @pytest.fixture
-def spawns(monkeypatch):
+def spawns(monkeypatch: pytest.MonkeyPatch):
     calls = []
     real = subprocess.Popen
 
     class Counting(real):
-        def __init__(self, args, *a, **k):
+        def __init__(self, args, *a, **k) -> None:
             calls.append(args)
             super().__init__(args, *a, **k)
 
@@ -73,7 +74,7 @@ def _measure(root, stage_paths, **kw):
     return rsi.measure_review_scale_inputs(root, sh.read_session_history(root, SID), stage_paths, **kw)
 
 
-def test_shared_branch_measures_only_own_commits_and_named_uncommitted_paths(repo):
+def test_shared_branch_measures_only_own_commits_and_named_uncommitted_paths(repo) -> None:
     a = _commit(repo, "a.py", "x = 1\ny = 2\n", SID)
     _commit(repo, "peer.py", "\n".join(f"p{i} = 1" for i in range(30)) + "\n", PEER)
     b = _commit(repo, "b.py", "z = 1\n", SID)
@@ -90,7 +91,7 @@ def test_shared_branch_measures_only_own_commits_and_named_uncommitted_paths(rep
     assert result.zero_diff_commit_count == 1
 
 
-def test_merge_is_excluded_from_the_count(repo):
+def test_merge_is_excluded_from_the_count(repo) -> None:
     _git(repo, "checkout", "-q", "-b", "side")
     _commit(repo, "side.py", "s = 1\n", SID)
     _git(repo, "checkout", "-q", "main")
@@ -104,7 +105,7 @@ def test_merge_is_excluded_from_the_count(repo):
     assert len(result.commit_slices) == 2
 
 
-def test_unresolved_history_gives_the_unresolved_quadruple(repo):
+def test_unresolved_history_gives_the_unresolved_quadruple(repo) -> None:
     _commit(repo, "a.py", "x = 1\n", SID)
     unresolved = sh.read_session_history(repo, "00000000-0000-0000-0000-000000000000")
     assert not unresolved.resolved
@@ -115,7 +116,7 @@ def test_unresolved_history_gives_the_unresolved_quadruple(repo):
     assert result.unattributed_shas is None
 
 
-def test_empty_stage_paths_spawn_nothing(repo, spawns):
+def test_empty_stage_paths_spawn_nothing(repo, spawns) -> None:
     _commit(repo, "a.py", "x = 1\n", SID)
     history = sh.read_session_history(repo, SID)
     spawns.clear()
@@ -124,7 +125,7 @@ def test_empty_stage_paths_spawn_nothing(repo, spawns):
     assert result.quadruple == (1, 1, 1, 1)
 
 
-def test_named_tracked_path_spawns_exactly_one_git_process(repo, spawns):
+def test_named_tracked_path_spawns_exactly_one_git_process(repo, spawns) -> None:
     _commit(repo, "a.py", "x = 1\n", SID)
     (repo / "a.py").write_text("x = 1\ny = 2\n", encoding="utf-8")
     history = sh.read_session_history(repo, SID)
@@ -135,7 +136,7 @@ def test_named_tracked_path_spawns_exactly_one_git_process(repo, spawns):
     assert result.gross_loc == 2 and result.commit_count == 1
 
 
-def test_untracked_only_stage_paths_spawn_nothing(repo, spawns):
+def test_untracked_only_stage_paths_spawn_nothing(repo, spawns) -> None:
     (repo / "new.py").write_text("n = 1\n", encoding="utf-8")
     history = sh.read_session_history(repo, SID)
     spawns.clear()
@@ -144,11 +145,11 @@ def test_untracked_only_stage_paths_spawn_nothing(repo, spawns):
     assert result.quadruple == (1, 1, 0, 1)
 
 
-def test_unreadable_untracked_path_is_unresolved_not_zero(repo):
+def test_unreadable_untracked_path_is_unresolved_not_zero(repo) -> None:
     assert _measure(repo, ["ghost.py"]).quadruple == (None, None, None, None)
 
 
-def test_dispatched_chunk_recovery_folds_untrailered_and_surfaces_foreign(repo):
+def test_dispatched_chunk_recovery_folds_untrailered_and_surfaces_foreign(repo) -> None:
     _commit(repo, "own.py", "o = 1\n", SID)
     bare = _commit(repo, "chunk.py", "c = 1\nc2 = 2\nc3 = 3\n")
     foreign = _commit(repo, "theirs.py", "t = 1\n", PEER)
@@ -168,7 +169,7 @@ def test_dispatched_chunk_recovery_folds_untrailered_and_surfaces_foreign(repo):
     assert result.unattributed_shas == ()
 
 
-def test_unattributed_shas_lists_window_commits_with_no_session_id(repo):
+def test_unattributed_shas_lists_window_commits_with_no_session_id(repo) -> None:
     bare = _commit(repo, "x.py", "x = 1\n")
     _commit(repo, "y.py", "y = 1\n", PEER)
     assert _measure(repo, []).unattributed_shas == (bare,)

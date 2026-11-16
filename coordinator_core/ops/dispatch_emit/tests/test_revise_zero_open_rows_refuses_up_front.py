@@ -8,13 +8,15 @@ import yaml
 
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.warp_fire import fire_command
+from pathlib import Path
+import pytest
 
 RUN = "ask-20261110T000000-abc123"
 REL = "state/sizings/2026-11-10-revise-idle.yaml"
 PLAN = "docs/plans/2026-11-10-revise-idle.md"
 
 
-def _repo(tmp_path, *, omitted_status, wired=True):
+def _repo(tmp_path, *, omitted_status, wired: bool = True):
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / "docs" / "plans").mkdir(parents=True)
@@ -45,7 +47,7 @@ def _revise_note(root):
     return rl._handler({"run_id": RUN, "note": "keep the reply short"}, repo_root=root)
 
 
-def test_no_open_row_offers_no_refire_and_states_the_reason_once(tmp_path):
+def test_no_open_row_offers_no_refire_and_states_the_reason_once(tmp_path: Path) -> None:
     out = _revise_note(_repo(tmp_path, omitted_status="met"))
     assert "next" not in out
     assert "re-plan" in out["note"] and "R1" in out["note"]
@@ -54,29 +56,29 @@ def test_no_open_row_offers_no_refire_and_states_the_reason_once(tmp_path):
     assert json.dumps(out).count("no register row is open") == 1
 
 
-def test_a_waived_row_is_not_open_either(tmp_path):
+def test_a_waived_row_is_not_open_either(tmp_path: Path) -> None:
     out = _revise_note(_repo(tmp_path, omitted_status="waived", wired=False))
     assert "next" not in out and "no register row is open" in out["note"]
 
 
-def test_an_open_row_keeps_the_refire_with_replans(tmp_path):
+def test_an_open_row_keeps_the_refire_with_replans(tmp_path: Path) -> None:
     out = _revise_note(_repo(tmp_path, omitted_status="open"))
     assert out["next"] == {"kind": "refire", "call": fire_command(REL), "replans": {"plan": PLAN, "rows": ["R1"]}}
     assert "ledger re-plan leg adds rows" in out["note"]
 
 
-def test_a_met_row_not_wired_keeps_the_refire(tmp_path):
+def test_a_met_row_not_wired_keeps_the_refire(tmp_path: Path) -> None:
     out = _revise_note(_repo(tmp_path, omitted_status="met", wired=False))
     assert out["next"]["kind"] == "refire" and out["next"]["replans"]["rows"] == ["R1"]
 
 
-def test_a_deferred_row_is_not_open_either(tmp_path):
+def test_a_deferred_row_is_not_open_either(tmp_path: Path) -> None:
     root = _repo(tmp_path, omitted_status="deferred", wired=False)
     out = _revise_note(root)
     assert "next" not in out and "no register row is open" in out["note"]
 
 
-def test_a_halted_run_words_the_refusal_halted_and_offers_no_refire(tmp_path):
+def test_a_halted_run_words_the_refusal_halted_and_offers_no_refire(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import halted_run
 
     root = _repo(tmp_path, omitted_status="met")
@@ -86,7 +88,7 @@ def test_a_halted_run_words_the_refusal_halted_and_offers_no_refire(tmp_path):
     assert out["note"].startswith("run halted: no refire offered, no register row is open")
 
 
-def test_an_unreadable_register_still_owes_work(tmp_path, monkeypatch):
+def test_an_unreadable_register_still_owes_work(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path, omitted_status="met")
 
     def unreadable(_text):

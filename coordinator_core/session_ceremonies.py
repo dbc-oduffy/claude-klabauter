@@ -20,7 +20,7 @@ _pending_scan = None
 _pending_active = {}
 
 
-def _write_json(path: Path, value: dict):
+def _write_json(path: Path, value: dict) -> None:
     atomic_write_bytes(path, json.dumps(value, indent=2).encode("utf-8"))
 
 
@@ -260,7 +260,7 @@ def run(run_dir: Path) -> dict:
             release_spawn(request["admission_key"], os.getpid())
 
 
-def _notify(run_dir: Path, target: str, marker: Path):
+def _notify(run_dir: Path, target: str, marker: Path) -> None:
     import psutil
 
     claim = run_dir / "notify.lock"
@@ -292,7 +292,7 @@ def _notify(run_dir: Path, target: str, marker: Path):
         claim.unlink(missing_ok=True)
 
 
-def _notify_claimed(run_dir: Path, target: str, marker: Path):
+def _notify_claimed(run_dir: Path, target: str, marker: Path) -> None:
     path = run_dir / "result.json"
     if not path.is_file():
         from coordinator_core.ops.session_ceremonies import result as read_result

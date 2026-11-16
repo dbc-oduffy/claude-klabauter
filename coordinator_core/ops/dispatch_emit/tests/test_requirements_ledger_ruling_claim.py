@@ -10,6 +10,7 @@ from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import (
     CLAIM_PARAM, LedgerHalt, ledger_halt_path, read_ledger_halt, write_ledger_halt,
 )
+from pathlib import Path
 
 RUN = "ask-20261022T000000-abc123"
 REL = "state/sizings/2026-10-22-ruling.yaml"
@@ -17,7 +18,7 @@ PLAN = "docs/plans/2026-10-22-ruling.md"
 RULING = "G-EM: also cover the Windows path"
 
 
-def _repo(tmp_path, *, plan_edge=True, claims_sizing=REL, crlf=False, halt=True, bind=True):
+def _repo(tmp_path, *, plan_edge: bool = True, claims_sizing=REL, crlf: bool = False, halt: bool = True, bind: bool = True):
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / "docs" / "plans").mkdir(parents=True)
@@ -54,7 +55,7 @@ def _bytes(root):
     return (root / REL).read_bytes(), (root / PLAN).read_bytes()
 
 
-def test_claim_mints_claims_pins_and_rules_in_one_call(tmp_path):
+def test_claim_mints_claims_pins_and_rules_in_one_call(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     out = _claim(root)
     assert out["ok"] is True and out["item"] == "R2" and out["claimed"] == ["R2"]
@@ -72,20 +73,20 @@ def test_claim_mints_claims_pins_and_rules_in_one_call(tmp_path):
     assert halt.ruled == ("R2",) and halt.blocking == ("R1",)
 
 
-def test_claim_keeps_crlf_in_the_plan(tmp_path):
+def test_claim_keeps_crlf_in_the_plan(tmp_path: Path) -> None:
     root = _repo(tmp_path, crlf=True)
     assert _claim(root)["claimed"] == ["R2"]
     raw = (root / PLAN).read_bytes()
     assert b"\r\n" in raw and b"\n" not in raw.replace(b"\r\n", b"")
 
 
-def test_claim_without_a_halt_pointer_writes_none(tmp_path):
+def test_claim_without_a_halt_pointer_writes_none(tmp_path: Path) -> None:
     root = _repo(tmp_path, halt=False)
     assert _claim(root)["claimed"] == ["R2"]
     assert not ledger_halt_path(root, PLAN).exists()
 
 
-def test_two_claims_accumulate_on_the_pointer(tmp_path):
+def test_two_claims_accumulate_on_the_pointer(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _claim(root)
     rl._handler({"run_id": RUN, "verbatim": "second ruling", CLAIM_PARAM: True}, repo_root=root)
@@ -106,32 +107,32 @@ def _refused_writes_nothing(root, **extra):
     return out
 
 
-def test_claim_without_verbatim_is_refused(tmp_path):
+def test_claim_without_verbatim_is_refused(tmp_path: Path) -> None:
     out = _refused_writes_nothing(_repo(tmp_path), verbatim=None, note="n")
     assert "verbatim" in out["error"]
 
 
-def test_claim_on_an_unbound_run_is_refused(tmp_path):
+def test_claim_on_an_unbound_run_is_refused(tmp_path: Path) -> None:
     out = _refused_writes_nothing(_repo(tmp_path, bind=False))
     assert "bound" in out["error"]
 
 
-def test_claim_with_no_plan_edge_is_refused(tmp_path):
+def test_claim_with_no_plan_edge_is_refused(tmp_path: Path) -> None:
     out = _refused_writes_nothing(_repo(tmp_path, plan_edge=False))
     assert "plan" in out["error"]
 
 
-def test_claim_when_the_plan_claims_another_sizing_is_refused(tmp_path):
+def test_claim_when_the_plan_claims_another_sizing_is_refused(tmp_path: Path) -> None:
     out = _refused_writes_nothing(_repo(tmp_path, claims_sizing="state/sizings/other.yaml"))
     assert "register_claims" in out["error"]
 
 
-def test_claim_with_out_of_scope_is_refused(tmp_path):
+def test_claim_with_out_of_scope_is_refused(tmp_path: Path) -> None:
     out = _refused_writes_nothing(_repo(tmp_path), out_of_scope=["R1"])
     assert "out_of_scope" in out["error"]
 
 
-def test_without_claim_the_row_stays_unclaimed(tmp_path):
+def test_without_claim_the_row_stays_unclaimed(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     out = rl._handler({"run_id": RUN, "verbatim": RULING}, repo_root=root)
     assert out["unclaimed_rows"] == ["R2"] and "claimed" not in out

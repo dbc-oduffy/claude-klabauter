@@ -580,6 +580,17 @@ def test_max_runtime_zero_is_unbounded_and_a_normal_child_is_untouched(tmp_path)
     assert not _lock_dir(tmp_path).exists()
 
 
+def test_acquire_states_the_active_ceiling_on_stderr(tmp_path):
+    env = _base_env(tmp_path)
+    explicit = _run(["--max-runtime", "123", "--", sys.executable, "-c", "pass"], env=env)
+    assert explicit.returncode == 0
+    assert "max-runtime ceiling 123s" in explicit.stderr
+    default = _run(["--", sys.executable, "-c", "pass"], env=env)
+    assert "max-runtime ceiling 2700s" in default.stderr
+    unbounded = _run(["--max-runtime", "0", "--", sys.executable, "-c", "pass"], env=env)
+    assert "ceiling disabled" in unbounded.stderr
+
+
 def test_max_runtime_rejects_a_non_numeric_value(tmp_path):
     env = _base_env(tmp_path)
     result = _run(

@@ -6,6 +6,7 @@ import json
 import os
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 import yaml
@@ -21,7 +22,7 @@ VERBATIM = "split these two jobs please, they are unrelated"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "hub" / SID).mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
@@ -42,7 +43,7 @@ def _snapshot(repo):
 
 
 @pytest.mark.parametrize("trip_after", list(range(9)))
-def test_abort_mid_write_removes_every_file_the_call_created(repo, trip_after):
+def test_abort_mid_write_removes_every_file_the_call_created(repo, trip_after) -> None:
     before = _snapshot(repo)
     polls = iter(range(100))
     out = mod.fanout(
@@ -55,14 +56,14 @@ def test_abort_mid_write_removes_every_file_the_call_created(repo, trip_after):
     assert not list(repo.glob("scratch/warp/ask-parent-*"))
 
 
-def test_rollback_while_a_stage_write_is_blocked_leaves_nothing_in_the_record_homes(repo, monkeypatch):
+def test_rollback_while_a_stage_write_is_blocked_leaves_nothing_in_the_record_homes(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     import threading
 
     ledger = mod.FanoutLedger()
     entered, release = threading.Event(), threading.Event()
     real_write = os.write
 
-    def blocked(fd, data):
+    def blocked(fd, data) -> int:
         entered.set()
         release.wait(10)
         return real_write(fd, data)
@@ -82,7 +83,7 @@ def test_rollback_while_a_stage_write_is_blocked_leaves_nothing_in_the_record_ho
     assert not list((repo / "state").rglob("*.yaml")) and not list(repo.rglob(".coordinator-local/**/*.yaml"))
 
 
-def test_ledger_rollback_removes_claimed_files_and_a_late_write(tmp_path):
+def test_ledger_rollback_removes_claimed_files_and_a_late_write(tmp_path: Path) -> None:
     ledger = mod.FanoutLedger()
     early, late = tmp_path / "a.yaml", tmp_path / "b.yaml"
     early.write_text("x")
@@ -98,7 +99,7 @@ def test_ledger_rollback_removes_claimed_files_and_a_late_write(tmp_path):
         ledger.claim(tmp_path / "c.yaml")
 
 
-def test_committed_ledger_rolls_back_nothing(tmp_path):
+def test_committed_ledger_rolls_back_nothing(tmp_path: Path) -> None:
     ledger = mod.FanoutLedger()
     kept = tmp_path / "a.yaml"
     kept.write_text("x")
@@ -108,7 +109,7 @@ def test_committed_ledger_rolls_back_nothing(tmp_path):
     assert kept.exists()
 
 
-def test_abort_never_firing_writes_as_before(repo):
+def test_abort_never_firing_writes_as_before(repo) -> None:
     out = mod.fanout(
         {"session_id": SID, "asks": [{"ask": "fix a", "label": "a", "writes": ["pkg/a.py"]}]}, repo, lambda: False
     )
@@ -116,7 +117,7 @@ def test_abort_never_firing_writes_as_before(repo):
 
 
 @pytest.mark.parametrize("trip_after", list(range(10)))
-def test_aborted_fanout_leaves_no_digest_entry_and_no_digest_dir(repo, trip_after):
+def test_aborted_fanout_leaves_no_digest_entry_and_no_digest_dir(repo, trip_after) -> None:
     polls = iter(range(100))
     out = mod.fanout(
         {"session_id": SID, "asks": [{"ask": f"fix {n}", "label": n, "writes": [f"pkg/{n}.py"]} for n in "abc"]},
@@ -127,7 +128,7 @@ def test_aborted_fanout_leaves_no_digest_entry_and_no_digest_dir(repo, trip_afte
     assert not (repo / "scratch" / "warp" / "ask-digest").exists()
 
 
-def test_fanout_indexes_the_parent_by_digest_and_a_second_identical_submission_replaces_the_entry(repo):
+def test_fanout_indexes_the_parent_by_digest_and_a_second_identical_submission_replaces_the_entry(repo) -> None:
     params = {"asks": [{"ask": "fix a", "writes": ["pkg/a.py"]}, {"ask": "fix b", "writes": ["pkg/b.py"]}]}
     first, second = _go(repo, params), _go(repo, params)
     assert first["exit_code"] == 0 and second["exit_code"] == 0, second
@@ -136,13 +137,13 @@ def test_fanout_indexes_the_parent_by_digest_and_a_second_identical_submission_r
     assert json.loads(entries[0].read_text(encoding="utf-8"))["parent_id"] == second["parent_id"]
 
 
-def test_sizings_arm_and_refused_submissions_write_no_digest_entry(repo):
+def test_sizings_arm_and_refused_submissions_write_no_digest_entry(repo) -> None:
     out = _go(repo, {"asks": [{"ask": "x", "after": ["nobody"]}]})
     assert out["exit_code"] == 1
     assert not (repo / "scratch" / "warp" / "ask-digest").exists()
 
 
-def test_disjoint_pair_is_two_ready_runs_with_the_frozen_reply(repo):
+def test_disjoint_pair_is_two_ready_runs_with_the_frozen_reply(repo) -> None:
     out = _go(repo, {"asks": [
         {"ask": "fix a", "label": "a", "writes": ["pkg/a.py"]},
         {"ask": "fix b", "label": "b", "writes": ["pkg/b.py"]},
@@ -156,7 +157,7 @@ def test_disjoint_pair_is_two_ready_runs_with_the_frozen_reply(repo):
     assert all(rel in call for call, rel in zip(out["fire"], (r["sizing"] for r in out["ready"])))
 
 
-def test_slice_sizing_carries_verbatim_intent_and_parent_marker(repo):
+def test_slice_sizing_carries_verbatim_intent_and_parent_marker(repo) -> None:
     for text in ("fix a", "fix b"):
         assert PT.append_turn(text, session_id=SID)["ok"]
     out = _go(repo, {"asks": [{"ask": "fix a", "source": "pm", "writes": ["a"]}, {"ask": "fix b", "source": "pm", "writes": ["b"]}]})
@@ -168,7 +169,7 @@ def test_slice_sizing_carries_verbatim_intent_and_parent_marker(repo):
         assert "parent_id" not in doc
 
 
-def test_context_path_under_the_repo_root_is_written_repo_relative(repo):
+def test_context_path_under_the_repo_root_is_written_repo_relative(repo) -> None:
     absolute = (repo / "docs" / "a.md").as_posix()
     out = _go(repo, {"asks": [{"ask": "fix a", "writes": ["a.py"], "context": [absolute]}]})
     assert out["exit_code"] == 0, out
@@ -176,7 +177,7 @@ def test_context_path_under_the_repo_root_is_written_repo_relative(repo):
     assert paths == "docs/a.md"
 
 
-def test_mixed_sources_stamp_only_the_relayed_slice(repo):
+def test_mixed_sources_stamp_only_the_relayed_slice(repo) -> None:
     assert PT.append_turn("fix b", session_id=SID)["ok"]
     out = _go(repo, {"asks": [
         {"ask": "fix a", "source": "relayed", "writes": ["a"]},
@@ -196,7 +197,7 @@ def test_mixed_sources_stamp_only_the_relayed_slice(repo):
     assert c.slice_ask_source(docs[2]) == "relayed" and "pm_verbatims" not in docs[2]
 
 
-def test_overlapping_declared_slices_are_sequenced_and_undeclared_runs_parallel(repo):
+def test_overlapping_declared_slices_are_sequenced_and_undeclared_runs_parallel(repo) -> None:
     out = _go(repo, {"asks": [
         {"ask": "one", "writes": ["pkg"]},
         {"ask": "two", "writes": ["pkg/x.py"]},
@@ -209,7 +210,7 @@ def test_overlapping_declared_slices_are_sequenced_and_undeclared_runs_parallel(
     assert [r["run_id"] for r in out["ready"]] == [first["run_id"], third["run_id"]]
 
 
-def test_declared_after_holds_the_run_on_the_named_sibling_by_label_and_index(repo):
+def test_declared_after_holds_the_run_on_the_named_sibling_by_label_and_index(repo) -> None:
     out = _go(repo, {"asks": [
         {"ask": "one", "label": "first"},
         {"ask": "two", "after": ["first"]},
@@ -225,14 +226,14 @@ def test_declared_after_holds_the_run_on_the_named_sibling_by_label_and_index(re
 
 
 @pytest.mark.parametrize("after", [["nope"], ["slice-2"], [1], [0]])
-def test_after_naming_no_earlier_sibling_is_refused_by_key_and_writes_nothing(repo, after):
+def test_after_naming_no_earlier_sibling_is_refused_by_key_and_writes_nothing(repo, after) -> None:
     before = _snapshot(repo)
     out = _go(repo, {"asks": [{"ask": "one", "after": after}, {"ask": "two"}]})
     assert out["exit_code"] == 1 and "asks[0].after" in out["error"]
     assert _snapshot(repo) == before
 
 
-def test_three_undeclared_asks_are_sibling_runs_with_no_after_edges(repo, monkeypatch):
+def test_three_undeclared_asks_are_sibling_runs_with_no_after_edges(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _go(repo, {"asks": [{"ask": f"job {i}"} for i in range(3)]})
     assert out["exit_code"] == 0, out
     assert len(out["runs"]) == 3
@@ -240,7 +241,7 @@ def test_three_undeclared_asks_are_sibling_runs_with_no_after_edges(repo, monkey
     assert len(out["ready"]) == 3
 
 
-def test_many_disjoint_asks_are_all_ready_in_submission_order(repo):
+def test_many_disjoint_asks_are_all_ready_in_submission_order(repo) -> None:
     n = (os.cpu_count() or 1) * 2 + 1
     out = _go(repo, {"asks": [{"ask": f"job {i}", "writes": [f"d{i}"]} for i in range(n)]})
     assert out["exit_code"] == 0
@@ -250,7 +251,7 @@ def test_many_disjoint_asks_are_all_ready_in_submission_order(repo):
     assert c.ParentRecord.from_json(parent).parent_id == out["parent_id"]
 
 
-def test_parent_record_is_write_once_and_runtime_only(repo):
+def test_parent_record_is_write_once_and_runtime_only(repo) -> None:
     out = _go(repo, {"asks": [{"ask": "x", "writes": ["a"]}, {"ask": "y", "writes": ["b"]}]})
     rel = c.parent_record_rel(out["parent_id"])
     assert rel.startswith("scratch/") and (repo / rel).is_file()
@@ -275,7 +276,7 @@ def _parent_sizing(repo, rows):
     return rel
 
 
-def test_slices_arm_copies_each_slices_rows_byte_for_byte(repo):
+def test_slices_arm_copies_each_slices_rows_byte_for_byte(repo) -> None:
     parent = _parent_sizing(repo, ["R1", "R2", "R3"])
     out = _go(repo, {"parent_sizing": parent, "slices": [
         {"label": "a", "ask": "do a", "rows": ["R1", "R3"], "writes": ["a"]},
@@ -290,7 +291,7 @@ def test_slices_arm_copies_each_slices_rows_byte_for_byte(repo):
             assert row == parent_rows[row["id"]]
 
 
-def test_doubled_and_unclaimed_rows_refuse_before_any_write(repo):
+def test_doubled_and_unclaimed_rows_refuse_before_any_write(repo) -> None:
     parent = _parent_sizing(repo, ["R1", "R2", "R3"])
     before = _snapshot(repo)
     out = _go(repo, {"parent_sizing": parent, "slices": [
@@ -312,14 +313,14 @@ def test_doubled_and_unclaimed_rows_refuse_before_any_write(repo):
     {"asks": [{"ask": "x"}], "confirm_split": "yes"},
     {"slices": [{"ask": "y", "rows": ["R1"]}]},
 ])
-def test_malformed_submissions_refuse_without_writing(repo, params):
+def test_malformed_submissions_refuse_without_writing(repo, params) -> None:
     before = _snapshot(repo)
     out = _go(repo, params)
     assert out["exit_code"] == 1 and out["applied"] is False
     assert _snapshot(repo) == before
 
 
-def test_no_recorded_pm_turn_proceeds_stamped_relayed(tmp_path, monkeypatch):
+def test_no_recorded_pm_turn_proceeds_stamped_relayed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / "hub" / SID).mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
@@ -333,7 +334,7 @@ def test_no_recorded_pm_turn_proceeds_stamped_relayed(tmp_path, monkeypatch):
     assert doc["em_analysis"][mod.RELAYED_FROM_KEY] == "peer-a"
 
 
-def test_relayed_source_with_a_pm_turn_carries_text_and_sender_not_the_pm_turn(repo):
+def test_relayed_source_with_a_pm_turn_carries_text_and_sender_not_the_pm_turn(repo) -> None:
     assert PT.append_turn("fix b", session_id=SID)["ok"]
     out = _go(repo, {"sender": "peer-b", "asks": [
         {"ask": "fix a", "source": "relayed", "relayed_text": "peer said: fix a", "writes": ["a"]},
@@ -348,12 +349,12 @@ def test_relayed_source_with_a_pm_turn_carries_text_and_sender_not_the_pm_turn(r
     assert c.slice_ask_source(pm) is None
 
 
-def test_blank_sender_refuses(repo):
+def test_blank_sender_refuses(repo) -> None:
     out = _go(repo, {"asks": [{"ask": "x", "sender": " "}]})
     assert out["exit_code"] == 1
 
 
-def test_route_preference_stamps_only_the_carrying_slice(repo):
+def test_route_preference_stamps_only_the_carrying_slice(repo) -> None:
     out = _go(repo, {"asks": [
         {"ask": "fix a", "route_preference": " roadmap ", "em_rationale": "spans two workstreams", "writes": ["a"]},
         {"ask": "fix b", "source": "relayed", "route_preference": "goal", "writes": ["b"]},
@@ -375,7 +376,7 @@ def test_route_preference_stamps_only_the_carrying_slice(repo):
     ({"ask": "y", "em_rationale": "x" * 2001}, "asks[1].em_rationale"),
     ({"ask": "y", "em_rationale": " "}, "asks[1].em_rationale"),
 ])
-def test_invalid_route_preference_refuses_before_any_write(repo, item, named):
+def test_invalid_route_preference_refuses_before_any_write(repo, item, named) -> None:
     before = _snapshot(repo)
     out = _go(repo, {"asks": [{"ask": "x", "route_preference": "plan"}, item]})
     assert out["exit_code"] == 1 and out["applied"] is False
@@ -383,7 +384,7 @@ def test_invalid_route_preference_refuses_before_any_write(repo, item, named):
     assert _snapshot(repo) == before
 
 
-def test_sized_through_turn_moves_once_after_the_last_slice(repo):
+def test_sized_through_turn_moves_once_after_the_last_slice(repo) -> None:
     for text in ("x", "y"):
         assert PT.append_turn(text, session_id=SID)["ok"]
     out = _go(repo, {"asks": [
@@ -393,20 +394,20 @@ def test_sized_through_turn_moves_once_after_the_last_slice(repo):
     assert store.read_baton(SID, str(repo)).get("sized_through_turn") == 2
 
 
-def test_all_relayed_submission_does_not_move_the_sized_through_mark(repo):
+def test_all_relayed_submission_does_not_move_the_sized_through_mark(repo) -> None:
     out = _go(repo, {"asks": [{"ask": "x", "writes": ["a"]}, {"ask": "y", "source": "relayed", "writes": ["b"]}]})
     assert out["exit_code"] == 0
     assert store.read_baton(SID, str(repo)).get("sized_through_turn") != 0
 
 
-def test_unmarked_item_matching_a_recorded_turn_is_relayed_without_pm_verbatims(repo):
+def test_unmarked_item_matching_a_recorded_turn_is_relayed_without_pm_verbatims(repo) -> None:
     out = _go(repo, {"asks": [{"ask": VERBATIM.upper(), "writes": ["a"]}]})
     doc = _sizing(repo, out["ready"][0]["sizing"])
     assert "pm_verbatims" not in doc
     assert c.slice_ask_source(doc) == "relayed"
 
 
-def test_unmarked_and_relayed_items_never_read_the_turn_log(repo, monkeypatch):
+def test_unmarked_and_relayed_items_never_read_the_turn_log(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("turn log read")
 
@@ -416,7 +417,7 @@ def test_unmarked_and_relayed_items_never_read_the_turn_log(repo, monkeypatch):
     assert out["exit_code"] == 0, out
 
 
-def test_pm_item_with_no_recorded_turn_refuses_before_any_write(tmp_path, monkeypatch):
+def test_pm_item_with_no_recorded_turn_refuses_before_any_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / "hub" / SID).mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
@@ -427,7 +428,7 @@ def test_pm_item_with_no_recorded_turn_refuses_before_any_write(tmp_path, monkey
     assert _snapshot(tmp_path) == before
 
 
-def test_unmarked_item_matching_no_turn_is_relayed_without_pm_verbatims(repo):
+def test_unmarked_item_matching_no_turn_is_relayed_without_pm_verbatims(repo) -> None:
     out = _go(repo, {"asks": [{"ask": "fix a", "writes": ["a"]}, {"ask": f"EM says: {VERBATIM}", "writes": ["b"]}]})
     assert out["exit_code"] == 0, out
     for ready in out["ready"]:
@@ -451,7 +452,7 @@ def _planned_sizing(repo, name, plan_rel, writes):
     return planned(repo, name, plan_rel)
 
 
-def test_sizings_arm_undeclared_items_with_shared_plan_writes_are_sequenced(repo):
+def test_sizings_arm_undeclared_items_with_shared_plan_writes_are_sequenced(repo) -> None:
     a = _planned_sizing(repo, "a", "docs/plans/2026-10-16-a.md", ["pkg/x.py"])
     b = _planned_sizing(repo, "b", "docs/plans/2026-10-16-b.md", ["pkg/x.py"])
     out = _go(repo, {"sizings": [{"sizing": a, "label": "a"}, {"sizing": b, "label": "b"}]})
@@ -460,14 +461,14 @@ def test_sizings_arm_undeclared_items_with_shared_plan_writes_are_sequenced(repo
     assert second["after"] == [first["run_id"]]
 
 
-def test_sizings_arm_undeclared_items_with_disjoint_plan_writes_stay_parallel(repo):
+def test_sizings_arm_undeclared_items_with_disjoint_plan_writes_stay_parallel(repo) -> None:
     a = _planned_sizing(repo, "a", "docs/plans/2026-10-16-a.md", ["pkg/x.py"])
     b = _planned_sizing(repo, "b", "docs/plans/2026-10-16-b.md", ["pkg/y.py"])
     out = _go(repo, {"sizings": [{"sizing": a, "label": "a"}, {"sizing": b, "label": "b"}]})
     assert all("after" not in r for r in out["runs"])
 
 
-def test_sizings_arm_declared_writes_win_over_inference(repo):
+def test_sizings_arm_declared_writes_win_over_inference(repo) -> None:
     a = _planned_sizing(repo, "a", "docs/plans/2026-10-16-a.md", ["pkg/x.py"])
     b = _planned_sizing(repo, "b", "docs/plans/2026-10-16-b.md", ["pkg/x.py"])
     out = _go(repo, {"sizings": [
@@ -477,7 +478,7 @@ def test_sizings_arm_declared_writes_win_over_inference(repo):
     assert all("after" not in r for r in out["runs"])
 
 
-def test_sizings_arm_planless_sizing_infers_nothing_and_overlaps_nothing(repo):
+def test_sizings_arm_planless_sizing_infers_nothing_and_overlaps_nothing(repo) -> None:
     from coordinator_core.ops.dispatch_emit.tests.test_ask_fanout_sizings_arm import _sizing as planned
 
     a = _planned_sizing(repo, "a", "docs/plans/2026-10-16-a.md", ["pkg/x.py"])

@@ -99,7 +99,7 @@ def _composed(root, *, null_halt_sha: bool = False) -> dict:
 @pytest.mark.parametrize("null_halt_sha", [False, True])
 def test_met_refire_lands_its_declared_product_and_withholds_nothing_as_halt_record_only(
     halted, null_halt_sha  # noqa: F811
-):
+) -> None:
     resume = _composed(halted, null_halt_sha=null_halt_sha)
     refire = _refire(halted)
     out = _terminal(halted, refire["token"], resume)
@@ -114,7 +114,7 @@ def test_met_refire_lands_its_declared_product_and_withholds_nothing_as_halt_rec
     assert _git(halted, "status", "--porcelain", "--", "a.py", B) == ""
 
 
-def test_met_refire_that_changed_nothing_is_still_refused_and_names_the_since_halt_base(halted):  # noqa: F811
+def test_met_refire_that_changed_nothing_is_still_refused_and_names_the_since_halt_base(halted) -> None:  # noqa: F811
     resume = _composed(halted)
     refire = _refire(halted, edit=False)
     head = _git(halted, "rev-parse", "HEAD")
@@ -128,7 +128,7 @@ def test_met_refire_that_changed_nothing_is_still_refused_and_names_the_since_ha
     assert _git(halted, "rev-parse", "HEAD") == head
 
 
-def test_bare_met_unchanged_refire_closes_as_already_landed(halted):  # noqa: F811
+def test_bare_met_unchanged_refire_closes_as_already_landed(halted) -> None:  # noqa: F811
     resume = _composed(halted)
     refire = _refire(halted, edit=False)
 

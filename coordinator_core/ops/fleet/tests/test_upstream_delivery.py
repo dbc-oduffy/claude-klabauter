@@ -39,7 +39,7 @@ def _commit_file(repo: Path, name: str, text: str) -> str:
 
 
 @pytest.fixture
-def receiver(tmp_path: Path, monkeypatch) -> dict:
+def receiver(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict:
     """Branch BRANCH one commit behind refs/remotes/origin/BRANCH, with a dirty tree."""
     monkeypatch.setenv("COORDINATOR_MACHINE", "testbox")
     repo = real_git_repo(tmp_path)
@@ -78,7 +78,7 @@ def _no_spawn(monkeypatch) -> None:
     monkeypatch.setattr(subprocess, "Popen", _boom)
 
 
-def test_delivers_onto_tracking_tip_and_touches_nothing(receiver, monkeypatch) -> None:
+def test_delivers_onto_tracking_tip_and_touches_nothing(receiver, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = receiver["repo"]
     before = _snapshot(repo)
     _no_spawn(monkeypatch)

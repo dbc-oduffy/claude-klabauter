@@ -25,15 +25,16 @@ from coordinator_core.install import door_install
 from coordinator_core.install import door_install_posix_build
 from coordinator_core.install import substrate
 from coordinator_core.warm.door import build as door_build
+from pathlib import Path
 
 
-def _stamp_engine_root(root):
+def _stamp_engine_root(root) -> None:
     stamp_dir = root / "coordinator_core"
     stamp_dir.mkdir(parents=True, exist_ok=True)
     (stamp_dir / "_engine_stamp").write_text("sha:deadbeef\n", encoding="utf-8")
 
 
-def test_install_door_off_windows_never_calls_windows_build(tmp_path, monkeypatch):
+def test_install_door_off_windows_never_calls_windows_build(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
 
     def _fail_if_called(*args, **kwargs):
@@ -64,7 +65,7 @@ def test_install_door_off_windows_never_calls_windows_build(tmp_path, monkeypatc
     assert dest.read_bytes() == b"fake-door-binary"
 
 
-def test_install_door_off_windows_raises_doorinstallerror_on_missing_toolchain(tmp_path, monkeypatch):
+def test_install_door_off_windows_raises_doorinstallerror_on_missing_toolchain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
 
     def _fake_build_or_advise(engine_root, *, python_bin=None, compiler=None, output=None):
@@ -84,7 +85,7 @@ def test_install_door_off_windows_raises_doorinstallerror_on_missing_toolchain(t
     assert not (bin_dst / door_install.DOOR_INSTALLED_NAME).exists()
 
 
-def test_install_door_off_windows_propagates_compile_failure(tmp_path, monkeypatch):
+def test_install_door_off_windows_propagates_compile_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
 
     def _raise_systemexit(engine_root, *, python_bin=None, compiler=None, output=None):
@@ -100,7 +101,7 @@ def test_install_door_off_windows_propagates_compile_failure(tmp_path, monkeypat
         door_install.install_door(bin_dst, engine_root)
 
 
-def test_install_door_on_windows_route_unchanged(tmp_path, monkeypatch):
+def test_install_door_on_windows_route_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
 
     def _fail_if_called(*args, **kwargs):
@@ -127,7 +128,7 @@ def test_install_door_on_windows_route_unchanged(tmp_path, monkeypatch):
     assert dest == bin_dst / door_install.DOOR_INSTALLED_NAME
 
 
-def test_write_native_door_forwarder_degrades_on_doorinstallerror(tmp_path, monkeypatch):
+def test_write_native_door_forwarder_degrades_on_doorinstallerror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     engine_root = tmp_path / "engine"
     _stamp_engine_root(engine_root)
     bin_dst = tmp_path / "bin"
@@ -151,7 +152,7 @@ def test_write_native_door_forwarder_degrades_on_doorinstallerror(tmp_path, monk
     assert result is None
 
 
-def test_write_native_door_forwarder_degrades_on_systemexit(tmp_path, monkeypatch):
+def test_write_native_door_forwarder_degrades_on_systemexit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     engine_root = tmp_path / "engine"
     _stamp_engine_root(engine_root)
     bin_dst = tmp_path / "bin"
@@ -175,7 +176,7 @@ def test_write_native_door_forwarder_degrades_on_systemexit(tmp_path, monkeypatc
     assert result is None
 
 
-def test_write_agent_helper_forwarders_continues_past_a_build_failure(tmp_path, monkeypatch):
+def test_write_agent_helper_forwarders_continues_past_a_build_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The per-name loop must not abort the whole run when one name's
     cutover raises `OSError` -- every later name must still be attempted and
     the run still fails loud. `_cut_over_to_native_door` is monkeypatched to
@@ -192,7 +193,7 @@ def test_write_agent_helper_forwarders_continues_past_a_build_failure(tmp_path, 
 
     written_py = []
 
-    def _fake_write_agent_forwarder(f, py_dst, check_only, *, target, resolver_module):
+    def _fake_write_agent_forwarder(f, py_dst, check_only, *, target, resolver_module) -> None:
         written_py.append(f)
 
     monkeypatch.setattr(substrate, "_write_agent_forwarder", _fake_write_agent_forwarder)
@@ -207,7 +208,7 @@ def test_write_agent_helper_forwarders_continues_past_a_build_failure(tmp_path, 
     assert written_py == []
 
 
-def test_write_agent_helper_forwarders_writes_python_fallback_on_real_build_failure(tmp_path, monkeypatch):
+def test_write_agent_helper_forwarders_writes_python_fallback_on_real_build_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     engine_root = tmp_path / "engine"
     _stamp_engine_root(engine_root)
     bin_dst = tmp_path / "bin"

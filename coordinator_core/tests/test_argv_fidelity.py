@@ -8,6 +8,11 @@ from coordinator_core.argv_fidelity import (
     resolve_body,
     resolve_optional_prose,
 )
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 
 #: The three cases below load a `coordinator/bin` CLI IN-PROCESS via
@@ -38,7 +43,7 @@ def bin_cli_loader():
     for entry in added:
         sys.path.insert(0, entry)
 
-    def _load(filename: str, module_name: str):
+    def _load(filename: str, module_name: str) -> ModuleType:
         loader = importlib.machinery.SourceFileLoader(
             module_name, str(bin_dir / filename)
         )
@@ -55,12 +60,12 @@ def bin_cli_loader():
                 sys.path.remove(entry)
 
 
-def test_resolve_body_mutually_exclusive():
+def test_resolve_body_mutually_exclusive() -> None:
     with pytest.raises(ArgvFidelityError, match="mutually exclusive"):
         resolve_body("inline body", "some/path.txt")
 
 
-def test_resolve_body_neither_given_names_both_flags():
+def test_resolve_body_neither_given_names_both_flags() -> None:
     with pytest.raises(ArgvFidelityError) as exc_info:
         resolve_body(None, None)
     message = str(exc_info.value)
@@ -68,7 +73,7 @@ def test_resolve_body_neither_given_names_both_flags():
     assert "--body-file" in message
 
 
-def test_resolve_body_stdin_sentinel(monkeypatch):
+def test_resolve_body_stdin_sentinel(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "sys.stdin", __import__("io").StringIO("body from stdin\nsecond line\n")
     )
@@ -76,42 +81,42 @@ def test_resolve_body_stdin_sentinel(monkeypatch):
     assert result == "body from stdin\nsecond line\n"
 
 
-def test_resolve_body_file_path(tmp_path):
+def test_resolve_body_file_path(tmp_path: Path) -> None:
     body_path = tmp_path / "body.txt"
     body_path.write_text("line one\nline two\nline three\n", encoding="utf-8")
     result = resolve_body(None, str(body_path))
     assert result == "line one\nline two\nline three\n"
 
 
-def test_resolve_body_unreadable_path_fails_loud(tmp_path):
+def test_resolve_body_unreadable_path_fails_loud(tmp_path: Path) -> None:
     missing_path = tmp_path / "does-not-exist.txt"
     with pytest.raises(ArgvFidelityError, match="unreadable"):
         resolve_body(None, str(missing_path))
 
 
-def test_resolve_body_empty_file_fails_loud(tmp_path):
+def test_resolve_body_empty_file_fails_loud(tmp_path: Path) -> None:
     body_path = tmp_path / "empty.txt"
     body_path.write_text("   \n", encoding="utf-8")
     with pytest.raises(ArgvFidelityError, match="empty"):
         resolve_body(None, str(body_path))
 
 
-def test_resolve_body_empty_argv_body_fails_loud():
+def test_resolve_body_empty_argv_body_fails_loud() -> None:
     with pytest.raises(ArgvFidelityError, match="empty"):
         resolve_body("   ", None)
 
 
-def test_resolve_body_clean_argv_pass_through():
+def test_resolve_body_clean_argv_pass_through() -> None:
     assert resolve_body("a plain one-line body", None) == "a plain one-line body"
 
 
-def test_resolve_body_clean_file_pass_through(tmp_path):
+def test_resolve_body_clean_file_pass_through(tmp_path: Path) -> None:
     body_path = tmp_path / "body.txt"
     body_path.write_text("content", encoding="utf-8")
     assert resolve_body(None, str(body_path)) == "content"
 
 
-def test_resolve_body_custom_flag_name_in_messages():
+def test_resolve_body_custom_flag_name_in_messages() -> None:
     with pytest.raises(ArgvFidelityError) as exc_info:
         resolve_body(None, None, flag_name="--summary")
     message = str(exc_info.value)
@@ -119,13 +124,13 @@ def test_resolve_body_custom_flag_name_in_messages():
     assert "--summary-file" in message
 
 
-def test_refuse_newline_argv_default_message_names_the_file_sibling():
+def test_refuse_newline_argv_default_message_names_the_file_sibling() -> None:
     with pytest.raises(ArgvFidelityError) as exc:
         refuse_newline_argv("a\nb", flag_name="--body")
     assert "pass --body-file instead." in str(exc.value)
 
 
-def test_refuse_newline_argv_remedy_replaces_the_file_sibling_suggestion():
+def test_refuse_newline_argv_remedy_replaces_the_file_sibling_suggestion() -> None:
     with pytest.raises(ArgvFidelityError) as exc:
         refuse_newline_argv(
             "a\nb", flag_name="--title", remedy="pass a single-line --title."
@@ -135,7 +140,7 @@ def test_refuse_newline_argv_remedy_replaces_the_file_sibling_suggestion():
     assert "--title-file" not in msg
 
 
-def test_refuse_newline_argv_remedy_is_inert_on_a_clean_value():
+def test_refuse_newline_argv_remedy_is_inert_on_a_clean_value() -> None:
     assert refuse_newline_argv(
         "one line", flag_name="--title", remedy="pass a single-line --title."
     ) is None
@@ -144,16 +149,16 @@ def test_refuse_newline_argv_remedy_is_inert_on_a_clean_value():
     ) is None
 
 
-def test_resolve_optional_prose_both_absent_returns_none():
+def test_resolve_optional_prose_both_absent_returns_none() -> None:
     assert resolve_optional_prose(None, None, flag_name="--summary") is None
 
 
-def test_resolve_optional_prose_inline_only():
+def test_resolve_optional_prose_inline_only() -> None:
     result = resolve_optional_prose("a plain value", None, flag_name="--summary")
     assert result == "a plain value"
 
 
-def test_resolve_optional_prose_file_only(tmp_path):
+def test_resolve_optional_prose_file_only(tmp_path: Path) -> None:
     body_path = tmp_path / "summary.txt"
     body_path.write_text("line one\nline two\n", encoding="utf-8")
     result = resolve_optional_prose(
@@ -162,21 +167,21 @@ def test_resolve_optional_prose_file_only(tmp_path):
     assert result == "line one\nline two\n"
 
 
-def test_resolve_optional_prose_both_supplied_is_usage_error():
+def test_resolve_optional_prose_both_supplied_is_usage_error() -> None:
     with pytest.raises(ArgvFidelityError, match="mutually exclusive"):
         resolve_optional_prose(
             "inline value", "some/path.txt", flag_name="--summary"
         )
 
 
-def test_resolve_optional_prose_newline_inline_refused_names_file_flag():
+def test_resolve_optional_prose_newline_inline_refused_names_file_flag() -> None:
     with pytest.raises(ArgvFidelityError, match="--summary-file"):
         resolve_optional_prose(
             "line one\nline two", None, flag_name="--summary"
         )
 
 
-def test_resolve_optional_prose_unreadable_file_refuses(tmp_path):
+def test_resolve_optional_prose_unreadable_file_refuses(tmp_path: Path) -> None:
     missing_path = tmp_path / "does-not-exist.txt"
     with pytest.raises(ArgvFidelityError, match="unreadable"):
         resolve_optional_prose(
@@ -184,26 +189,26 @@ def test_resolve_optional_prose_unreadable_file_refuses(tmp_path):
         )
 
 
-def test_resolve_optional_prose_stdin_sentinel_already_eof_raises(monkeypatch):
+def test_resolve_optional_prose_stdin_sentinel_already_eof_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("sys.stdin", __import__("io").StringIO(""))
     with pytest.raises(ArgvFidelityError, match="empty"):
         resolve_optional_prose(None, "-", flag_name="--summary")
 
 
-def test_refuse_newline_argv_refuses_embedded_newline():
+def test_refuse_newline_argv_refuses_embedded_newline() -> None:
     with pytest.raises(ArgvFidelityError, match="--body-file"):
         refuse_newline_argv("line one\nline two", flag_name="--body")
 
 
-def test_refuse_newline_argv_passes_clean_value():
+def test_refuse_newline_argv_passes_clean_value() -> None:
     refuse_newline_argv("a plain one-line value", flag_name="--body")
 
 
-def test_refuse_newline_argv_passes_none():
+def test_refuse_newline_argv_passes_none() -> None:
     refuse_newline_argv(None, flag_name="--body")
 
 
-def test_refuse_newline_argv_names_the_flag():
+def test_refuse_newline_argv_names_the_flag() -> None:
     with pytest.raises(ArgvFidelityError) as exc_info:
         refuse_newline_argv("a\nb", flag_name="--summary")
     message = str(exc_info.value)
@@ -211,7 +216,7 @@ def test_refuse_newline_argv_names_the_flag():
     assert "--summary-file" in message
 
 
-def test_coordinator_lesson_add_refuses_newline_body(capsys, bin_cli_loader):
+def test_coordinator_lesson_add_refuses_newline_body(capsys: pytest.CaptureFixture[str], bin_cli_loader) -> None:
     import importlib.machinery
     import importlib.util
     import unittest.mock
@@ -233,8 +238,8 @@ def test_coordinator_lesson_add_refuses_newline_body(capsys, bin_cli_loader):
 
 
 def test_coordinator_lesson_promote_refuses_newline_body(
-    capsys, bin_cli_loader, monkeypatch
-):
+    capsys: pytest.CaptureFixture[str], bin_cli_loader, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # This CLI's lazy bootstrap resolves the claude-klabauter root before argparse ever
     # runs, and the suite-root home quarantine leaves the machine-local
     # registry empty by design -- so the refusal under test is unreachable
@@ -273,7 +278,7 @@ def test_coordinator_lesson_promote_refuses_newline_body(
     assert "--body-file" in capsys.readouterr().err
 
 
-def test_queue_triage_scaffold_baton_body_flag(monkeypatch, tmp_path, capsys, bin_cli_loader):
+def test_queue_triage_scaffold_baton_body_flag(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], bin_cli_loader) -> None:
     import importlib.machinery
     import importlib.util
     from pathlib import Path
@@ -294,7 +299,7 @@ def test_queue_triage_scaffold_baton_body_flag(monkeypatch, tmp_path, capsys, bi
 
     seen = {}
 
-    def _fake_route_mutation(op, params, repo_root, legacy_fn):
+    def _fake_route_mutation(op, params, repo_root, legacy_fn) -> dict[str, str]:
         seen["params"] = params
         return {"status": "ok"}
 

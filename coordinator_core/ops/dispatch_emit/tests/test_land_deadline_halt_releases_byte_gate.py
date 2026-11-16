@@ -2,15 +2,16 @@
 
 Reproduces run ask-20261113T234117-5fab03: its halt-commit was refused `queued` because the gate was
 held by the run's own label. One case per candidate path through `land_run._dispatch`; "red" means the
-halt-commit is refused `queued` at HEAD (the `pending_fix` cases, which C3 turns green):
+halt-commit is refused `queued` at HEAD (cases a and d; C3 fixed a, and d is not a defect):
 
-  (a) halted params carrying the run id only under `halted_by` admit with an empty label: RED.
+  (a) halted params carrying the run id only under `halted_by` admitted with an empty label: RED at HEAD, fixed.
       A top-level `run_id` (the digest shape) is admitted: green.
   (b) the first call's thread still inside the gate (abandoned dispatcher) when the halt-commit of
       the same run id arrives on another thread: green, the gate re-enters on the same label.
   (c) `_deadline_halt` running inside the gate: the gate is held for its span (pinned), and the
       same-run halt-commit is admitted meanwhile: green. After `_dispatch` returns the gate is free.
-  (d) a halt-commit whose run id differs in form from the holder's label (warp id vs ask id) queues: RED.
+  (d) a halt-commit whose run id carries another stamp than the holder's label (warp id vs ask id) is
+      another run: it queues, since no id relation makes two stamps one run.
 
 A different run's label queues in every holder state, so none of these passes by an open gate.
 """
@@ -226,7 +227,6 @@ def test_c_a_different_run_queues_while_deadline_halt_holds_the_gate(repo, monke
     assert "error" not in out
 
 
-@pytest.mark.pending_fix
 def test_a_halted_params_carrying_the_run_id_only_under_halted_by_are_admitted(repo, monkeypatch, window):
     calls = _Calls(monkeypatch)
     calls.block_before_deadline = True
@@ -241,15 +241,14 @@ def test_a_halted_params_carrying_the_run_id_only_under_halted_by_are_admitted(r
     assert "error" not in out
 
 
-@pytest.mark.pending_fix
-def test_d_halt_commit_run_id_in_another_form_than_the_holder_label_is_admitted(repo, monkeypatch, window):
+def test_d_halt_commit_of_a_run_with_another_stamp_is_another_run_and_queues(repo, monkeypatch, window):
     calls = _Calls(monkeypatch)
     calls.block_before_deadline = True
     thread, out = _in_thread(calls.product, repo, ASK_ID)
     try:
         assert calls.inside.wait(JOIN_SECS)
         reply = calls.halt_commit(repo, WARP_ID)
-        assert not _queued(reply)
+        assert _queued(reply) and not calls.halted_ran
     finally:
         calls.release.set()
         thread.join(JOIN_SECS)

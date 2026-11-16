@@ -10,12 +10,13 @@ import pytest
 
 from coordinator_core.session.core import _win_create_time_epoch
 from coordinator_core.warm import breadcrumb, front_door, server, supervisor
+from pathlib import Path
 
 PAST_GATE = "past the marker gate"
 
 
 @pytest.fixture
-def root(tmp_path, monkeypatch):
+def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path / "rt"))
     monkeypatch.delenv(breadcrumb.PUBLISH_HOLDER_TOKEN_ENV, raising=False)
     eng = tmp_path / "engine"
@@ -23,7 +24,7 @@ def root(tmp_path, monkeypatch):
     return eng
 
 
-def _foreign_marker(root, token="tok-held"):
+def _foreign_marker(root, token: str = "tok-held") -> Path:
     """A live marker held by another process (this test's parent), as a peer's publish writes it."""
     pid = os.getppid()
     epoch = _win_create_time_epoch(pid)
@@ -87,7 +88,7 @@ GATES = pytest.mark.parametrize("arm", [_arm_server, _arm_supervisor, _arm_front
 
 
 @GATES
-def test_boot_refuses_while_held_and_proceeds_after(arm, root, monkeypatch, capsys):
+def test_boot_refuses_while_held_and_proceeds_after(arm, root, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     reached, boot = arm(root, monkeypatch)
     path = _foreign_marker(root)
     assert boot() == 0
@@ -100,7 +101,7 @@ def test_boot_refuses_while_held_and_proceeds_after(arm, root, monkeypatch, caps
 
 
 @GATES
-def test_boot_refuses_a_wrong_or_missing_holder_token(arm, root, monkeypatch):
+def test_boot_refuses_a_wrong_or_missing_holder_token(arm, root, monkeypatch: pytest.MonkeyPatch) -> None:
     reached, boot = arm(root, monkeypatch)
     _foreign_marker(root, token="tok-held")
     monkeypatch.setenv(breadcrumb.PUBLISH_HOLDER_TOKEN_ENV, "tok-of-an-earlier-hold")
@@ -109,7 +110,7 @@ def test_boot_refuses_a_wrong_or_missing_holder_token(arm, root, monkeypatch):
 
 
 @GATES
-def test_boot_carrying_the_holders_token_proceeds_under_the_marker(arm, root, monkeypatch):
+def test_boot_carrying_the_holders_token_proceeds_under_the_marker(arm, root, monkeypatch: pytest.MonkeyPatch) -> None:
     reached, boot = arm(root, monkeypatch)
     _foreign_marker(root, token="tok-held")
     monkeypatch.setenv(breadcrumb.PUBLISH_HOLDER_TOKEN_ENV, "tok-held")
@@ -119,7 +120,7 @@ def test_boot_carrying_the_holders_token_proceeds_under_the_marker(arm, root, mo
 
 
 @GATES
-def test_the_holder_proceeds_only_inside_its_successor_spawn_scope(arm, root, monkeypatch):
+def test_the_holder_proceeds_only_inside_its_successor_spawn_scope(arm, root, monkeypatch: pytest.MonkeyPatch) -> None:
     reached, boot = arm(root, monkeypatch)
     with breadcrumb.hold_publish_marker(root, holder="t"):
         assert boot() == 0
@@ -131,7 +132,7 @@ def test_the_holder_proceeds_only_inside_its_successor_spawn_scope(arm, root, mo
     assert reached == [1]
 
 
-def test_holder_successor_may_spawn_beside_a_live_old_pair_and_nobody_else_may(root):
+def test_holder_successor_may_spawn_beside_a_live_old_pair_and_nobody_else_may(root) -> None:
     """Make-before-break: the old pair's breadcrumb is live while the successor boots."""
     breadcrumb.write_breadcrumb(
         pipe="old-pipe",
@@ -148,7 +149,7 @@ def test_holder_successor_may_spawn_beside_a_live_old_pair_and_nobody_else_may(r
         assert breadcrumb.should_spawn(root) is False
 
 
-def test_holder_env_is_empty_for_a_non_holder_and_carries_the_token_for_the_holder(root):
+def test_holder_env_is_empty_for_a_non_holder_and_carries_the_token_for_the_holder(root) -> None:
     assert breadcrumb.publish_holder_env(root) == {}
     _foreign_marker(root)
     with breadcrumb.holder_successor_spawn():

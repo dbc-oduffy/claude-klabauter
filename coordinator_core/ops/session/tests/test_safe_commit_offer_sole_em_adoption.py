@@ -14,6 +14,7 @@ from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.session import core
 from coordinator_core.tests.git_seed import seeded_repo
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -30,7 +31,7 @@ def _git(repo, *args):
     ).stdout
 
 
-def _fixture(tmp_path, monkeypatch, live):
+def _fixture(tmp_path, monkeypatch, live) -> Path:
     repo = seeded_repo(tmp_path, readme="x")
     (repo / "state" / "warp" / "old-run").mkdir(parents=True)
     (repo / "state" / "warp" / "old-run" / "a.md").write_text("old")
@@ -50,7 +51,7 @@ def _tracked(repo):
     return set(_git(repo, "ls-files").split())
 
 
-def test_sole_em_commits_tracked_class_dirt_at_default_params(tmp_path, monkeypatch):
+def test_sole_em_commits_tracked_class_dirt_at_default_params(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _fixture(tmp_path, monkeypatch, {SID})
 
     out = safe_commit_offer._handler({"session_id": SID, "cwd": str(repo)})
@@ -63,7 +64,7 @@ def test_sole_em_commits_tracked_class_dirt_at_default_params(tmp_path, monkeypa
     assert out["outcome"]["status"] == "committed"
 
 
-def test_sole_em_never_commits_a_class_without_a_tracked_sibling(tmp_path, monkeypatch):
+def test_sole_em_never_commits_a_class_without_a_tracked_sibling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _fixture(tmp_path, monkeypatch, {SID})
 
     out = safe_commit_offer._handler({"session_id": SID, "cwd": str(repo)})
@@ -75,7 +76,7 @@ def test_sole_em_never_commits_a_class_without_a_tracked_sibling(tmp_path, monke
     assert "Sole-EM residue" in out["rendered"]
 
 
-def test_second_live_session_commits_nothing_and_returns_passable_groups(tmp_path, monkeypatch):
+def test_second_live_session_commits_nothing_and_returns_passable_groups(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _fixture(tmp_path, monkeypatch, {SID, "peer"})
 
     out = safe_commit_offer._handler({"session_id": SID, "cwd": str(repo)})
@@ -95,7 +96,7 @@ def test_second_live_session_commits_nothing_and_returns_passable_groups(tmp_pat
     assert "scratchy/deep/junk.log" not in _tracked(repo)
 
 
-def test_passed_back_group_cannot_carry_a_gitignore_candidate(tmp_path, monkeypatch):
+def test_passed_back_group_cannot_carry_a_gitignore_candidate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _fixture(tmp_path, monkeypatch, {SID, "peer"})
     smuggled = [{"paths": ["scratchy/deep/junk.log"], "message": "smuggle"}]
 
@@ -106,7 +107,7 @@ def test_passed_back_group_cannot_carry_a_gitignore_candidate(tmp_path, monkeypa
 
 
 @pytest.mark.parametrize("live", [set(), {"someone-else"}])
-def test_empty_or_foreign_live_set_never_adopts(tmp_path, monkeypatch, live):
+def test_empty_or_foreign_live_set_never_adopts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, live) -> None:
     repo = _fixture(tmp_path, monkeypatch, live)
 
     out = safe_commit_offer._handler({"session_id": SID, "cwd": str(repo)})
@@ -116,7 +117,7 @@ def test_empty_or_foreign_live_set_never_adopts(tmp_path, monkeypatch, live):
     assert out["sole_em_residue"] == []
 
 
-def test_liveness_error_never_adopts(tmp_path, monkeypatch):
+def test_liveness_error_never_adopts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _fixture(tmp_path, monkeypatch, {SID})
 
     def _boom(cwd=None):
@@ -130,7 +131,7 @@ def test_liveness_error_never_adopts(tmp_path, monkeypatch):
     assert "state/warp/new-run/x.md" not in _tracked(repo)
 
 
-def test_dry_run_reports_adoption_without_committing(tmp_path, monkeypatch):
+def test_dry_run_reports_adoption_without_committing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _fixture(tmp_path, monkeypatch, {SID})
 
     out = safe_commit_offer._handler({"session_id": SID, "cwd": str(repo), "dry_run": True})
@@ -142,7 +143,7 @@ def test_dry_run_reports_adoption_without_committing(tmp_path, monkeypatch):
     assert "state/warp/new-run/x.md" not in _tracked(repo)
 
 
-def test_clean_unclaimed_set_spawns_no_ls_files(tmp_path, monkeypatch):
+def test_clean_unclaimed_set_spawns_no_ls_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = seeded_repo(tmp_path, readme="x")
     core.init(SID, cwd=str(repo))
     monkeypatch.setattr(safe_commit_offer, "live_session_ids", lambda cwd=None: frozenset({SID}))
@@ -160,7 +161,7 @@ def test_clean_unclaimed_set_spawns_no_ls_files(tmp_path, monkeypatch):
     assert not [a for a in seen if "ls-files" in a]
 
 
-def test_dirty_unclaimed_set_adds_exactly_one_ls_files_spawn(tmp_path, monkeypatch):
+def test_dirty_unclaimed_set_adds_exactly_one_ls_files_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _fixture(tmp_path, monkeypatch, {SID, "peer"})
     seen = []
     real = safe_commit_offer.run_git
@@ -176,7 +177,7 @@ def test_dirty_unclaimed_set_adds_exactly_one_ls_files_spawn(tmp_path, monkeypat
     assert len([a for a in seen if "ls-files" in a]) == 1
 
 
-def test_real_call_adds_exactly_one_ls_files_spawn(tmp_path, monkeypatch):
+def test_real_call_adds_exactly_one_ls_files_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _fixture(tmp_path, monkeypatch, {SID})
     seen = []
     real = safe_commit_offer.run_git

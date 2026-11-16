@@ -5,34 +5,35 @@ import re
 import pytest
 
 from coordinator_core.guard_routes import keys
+from pathlib import Path
 
 
-def test_route_key_shape():
+def test_route_key_shape() -> None:
     assert keys.route_key("check-blanket-git-add") == "gr:check-blanket-git-add"
     assert re.fullmatch(keys.ROUTE_KEY_PATTERN, keys.route_key("a1-b2"))
 
 
 @pytest.mark.parametrize("bad", ["", "Has_Under", "UPPER", "-lead", "trail-", "a--b", "a b"])
-def test_route_key_refuses_non_kebab(bad):
+def test_route_key_refuses_non_kebab(bad) -> None:
     with pytest.raises(ValueError):
         keys.route_key(bad)
 
 
-def test_route_line_has_no_backtick_and_names_key_and_folder():
+def test_route_line_has_no_backtick_and_names_key_and_folder() -> None:
     line = keys.route_line("some-guard")
     assert "`" not in line
     assert "gr:some-guard" in line
     assert keys.ROUTES_DIR_DISPLAY in line
 
 
-def test_reachability_false_on_absent_home(tmp_path, monkeypatch):
+def test_reachability_false_on_absent_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     assert keys.routes_index_reachable() is False
 
 
-def test_reachability_true_when_index_present(tmp_path, monkeypatch):
+def test_reachability_true_when_index_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -42,7 +43,7 @@ def test_reachability_true_when_index_present(tmp_path, monkeypatch):
     assert keys.routes_index_reachable() is True
 
 
-def test_reachability_probes_settings_home_override(tmp_path, monkeypatch):
+def test_reachability_probes_settings_home_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = tmp_path / "elsewhere"
     d = home / "coordinator-claude" / "docs" / "wiki" / "guard-routes"
     d.mkdir(parents=True)
@@ -55,7 +56,7 @@ def test_reachability_probes_settings_home_override(tmp_path, monkeypatch):
     assert keys.routes_index_reachable() is False
 
 
-def test_reachability_true_when_settings_home_override_equals_displayed_home(tmp_path, monkeypatch):
+def test_reachability_true_when_settings_home_override_equals_displayed_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
     home = tmp_path / ".coordinator-claude-settings"
@@ -66,7 +67,7 @@ def test_reachability_true_when_settings_home_override_equals_displayed_home(tmp
     assert keys.routes_index_reachable() is True
 
 
-def test_reachability_false_on_exception(monkeypatch):
+def test_reachability_false_on_exception(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(self):
         raise RuntimeError("no home")
 

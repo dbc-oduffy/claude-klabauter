@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 
 from coordinator_core.workflow_watch import stall
+import pytest
 
 FIXTURE = json.loads(
     (Path(__file__).parent / "fixtures" / "usage_limit_hit.json").read_text(encoding="utf-8"))
@@ -26,7 +27,7 @@ NORMAL_TURN = {"type": "assistant", "timestamp": "2026-10-06T15:09:00Z",
                "message": {"content": [{"type": "text", "text": "running tests"}]}}
 
 
-def _run(tmp_path, events, transcripts, subdir=""):
+def _run(tmp_path, events, transcripts, subdir: str = "") -> str:
     run_dir = tmp_path / "wf_e039085a-f70"
     run_dir.mkdir()
     (run_dir / "journal.jsonl").write_text(
@@ -39,11 +40,11 @@ def _run(tmp_path, events, transcripts, subdir=""):
     return str(run_dir / "journal.jsonl")
 
 
-def _started(agent_id, label="test:terminal"):
+def _started(agent_id, label: str = "test:terminal"):
     return {"type": "started", "agentId": agent_id, "label": label, "key": f"v2:{agent_id}"}
 
 
-def test_stalled_agent_with_rate_limit_tail_yields_halt(tmp_path):
+def test_stalled_agent_with_rate_limit_tail_yields_halt(tmp_path: Path) -> None:
     journal = _run(tmp_path, [_started("a99c")], {"a99c": [NORMAL_TURN, RATE_LIMIT_TURN]})
     began = time.process_time()
     halt = stall.scan_for_usage_limit(journal, NOW)
@@ -60,29 +61,29 @@ def test_stalled_agent_with_rate_limit_tail_yields_halt(tmp_path):
     assert halt.line("wf.js").startswith("halted: ")
 
 
-def test_transcript_under_subagents_dir_is_found(tmp_path):
+def test_transcript_under_subagents_dir_is_found(tmp_path: Path) -> None:
     journal = _run(tmp_path, [_started("a99c")], {"a99c": [RATE_LIMIT_TURN]}, subdir="subagents")
     assert stall.scan_for_usage_limit(journal, NOW) is not None
 
 
-def test_slow_agent_without_error_yields_no_halt(tmp_path):
+def test_slow_agent_without_error_yields_no_halt(tmp_path: Path) -> None:
     journal = _run(tmp_path, [_started("a99c")], {"a99c": [NORMAL_TURN]})
     assert stall.scan_for_usage_limit(journal, NOW) is None
 
 
-def test_completed_agent_is_ignored(tmp_path):
+def test_completed_agent_is_ignored(tmp_path: Path) -> None:
     events = [_started("a99c"), {"type": "result", "agentId": "a99c", "key": "v2:a99c",
                                  "result": "ok"}]
     journal = _run(tmp_path, events, {"a99c": [RATE_LIMIT_TURN]})
     assert stall.scan_for_usage_limit(journal, NOW) is None
 
 
-def test_lifted_limit_is_ignored(tmp_path):
+def test_lifted_limit_is_ignored(tmp_path: Path) -> None:
     journal = _run(tmp_path, [_started("a99c")], {"a99c": [RATE_LIMIT_TURN]})
     assert stall.scan_for_usage_limit(journal, RESETS_AT + 1) is None
 
 
-def test_resumed_key_with_result_settles_the_old_agent(tmp_path):
+def test_resumed_key_with_result_settles_the_old_agent(tmp_path: Path) -> None:
     old = _started("a99c")
     new = {"type": "started", "agentId": "ad71", "label": "test:terminal", "key": "v2:a99c"}
     done = {"type": "result", "agentId": "ad71", "key": "v2:a99c", "result": "pass"}
@@ -90,7 +91,7 @@ def test_resumed_key_with_result_settles_the_old_agent(tmp_path):
     assert stall.scan_for_usage_limit(journal, NOW) is None
 
 
-def test_watch_exits_halted_with_runnable_resume_line(tmp_path, capsys, monkeypatch):
+def test_watch_exits_halted_with_runnable_resume_line(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     import types
 
     from coordinator_core import workflow_watch
@@ -111,7 +112,7 @@ def test_watch_exits_halted_with_runnable_resume_line(tmp_path, capsys, monkeypa
     assert 'scriptPath: "wf.js"' in record["resume"]
 
 
-def test_journal_tail_cap_scans_inside_and_skips_outside(tmp_path):
+def test_journal_tail_cap_scans_inside_and_skips_outside(tmp_path: Path) -> None:
     pad = {"type": "note", "pad": "x" * 1000}
     padding = [pad] * ((stall.JOURNAL_TAIL_BYTES // 1000) + 50)
     inside = _run(tmp_path, padding + [_started("a99c")], {"a99c": [RATE_LIMIT_TURN]})
@@ -122,7 +123,7 @@ def test_journal_tail_cap_scans_inside_and_skips_outside(tmp_path):
     assert stall.scan_for_usage_limit(outside, NOW) is None
 
 
-def test_rejected_quota_without_rate_limit_error_does_not_halt(tmp_path):
+def test_rejected_quota_without_rate_limit_error_does_not_halt(tmp_path: Path) -> None:
     no_error = {k: v for k, v in RATE_LIMIT_TURN.items() if k not in ("error", "apiErrorStatus")}
     journal = _run(tmp_path, [_started("a99c")], {"a99c": [no_error]})
     assert stall.scan_for_usage_limit(journal, NOW) is None

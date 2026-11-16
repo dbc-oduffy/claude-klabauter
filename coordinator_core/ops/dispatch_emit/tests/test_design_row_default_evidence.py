@@ -9,6 +9,7 @@ from coordinator_core.ops.dispatch_emit import design_conformance as dc
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+from pathlib import Path
 
 
 def _ledger_gate(root, run_dir, verdict, *, plan_text=None, inline_review=None):
@@ -22,7 +23,7 @@ SIDECAR = "state/reviews/wave-sfe.md"
 NOTED = "state/reviews/noted-sfe.md"
 
 
-def _shot(root):
+def _shot(root) -> str:
     """A real side-by-side image under `root`, returned as the `Side-by-side:` record line."""
     (root / "shots").mkdir(exist_ok=True)
     (root / "shots" / "sbs.png").write_bytes(b"\x89PNG\r\n")
@@ -30,7 +31,7 @@ def _shot(root):
 
 
 @pytest.fixture
-def run(tmp_path):
+def run(tmp_path: Path) -> tuple[Path, Path, dict[str, list[dict[str, str]]]]:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / "state" / "reviews").mkdir(parents=True)
@@ -50,14 +51,14 @@ def run(tmp_path):
     return tmp_path, tmp_path / RECORD_DIR_ROOT / RUN, {"items": items}
 
 
-def test_case1_wave_sidecar_meets_the_row(run):
+def test_case1_wave_sidecar_meets_the_row(run) -> None:
     root, run_dir, verdict = run
     (root / SIDECAR).write_text(f"Board: {BOARD}\n{_shot(root)}", encoding="utf-8")
     ir = {"wave_reviews": [{"agent_type": "coordinator:senior-front-end", "sidecar_path": SIDECAR, "verdict": "APPROVED"}]}
     assert _ledger_gate(root, run_dir, verdict, inline_review=ir)[0] is None
 
 
-def test_case2_revise_noted_review_meets_the_row(run):
+def test_case2_revise_noted_review_meets_the_row(run) -> None:
     root, run_dir, verdict = run
     (root / NOTED).write_text(
         f"---\nagent_type: coordinator:senior-front-end\nverdict: APPROVED\n---\nBoard: {BOARD}\n{_shot(root)}",
@@ -67,7 +68,7 @@ def test_case2_revise_noted_review_meets_the_row(run):
     assert _ledger_gate(root, run_dir, verdict, inline_review={})[0] is None
 
 
-def test_case3_neither_still_refuses(run):
+def test_case3_neither_still_refuses(run) -> None:
     root, run_dir, verdict = run
     out = _ledger_gate(root, run_dir, verdict, inline_review={"wave_reviews": ["junk"]})[0]
     assert out is not None and out["refused"] == "ledger-unmet"

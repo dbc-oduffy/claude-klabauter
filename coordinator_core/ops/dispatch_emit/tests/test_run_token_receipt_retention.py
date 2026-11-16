@@ -9,6 +9,7 @@ import time
 import pytest
 
 from coordinator_core.ops.dispatch_emit import launcher_staged_twin, run_token
+from pathlib import Path
 
 _DAY = 24 * 3600
 
@@ -25,7 +26,7 @@ def _write(path, age_seconds, now):
     return path
 
 
-def test_default_twin_sweep_unlinks_only_receipts_past_retention(tmp_path):
+def test_default_twin_sweep_unlinks_only_receipts_past_retention(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     now = time.time()
     old = {k: _write(run_token._record_path(repo, f"old-{k}", **{k: True}), 8 * _DAY, now)
@@ -45,7 +46,7 @@ def test_default_twin_sweep_unlinks_only_receipts_past_retention(tmp_path):
     assert live.exists() and claimed.exists() and escrow.exists() and index.exists()
 
 
-def test_receipt_age_is_mtime_not_minted_at(tmp_path):
+def test_receipt_age_is_mtime_not_minted_at(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     now = time.time()
     path = run_token._record_path(repo, "late-settle", spent=True)
@@ -56,7 +57,7 @@ def test_receipt_age_is_mtime_not_minted_at(tmp_path):
     assert path.exists()
 
 
-def test_sweep_counts_removed_and_tolerates_absent_home(tmp_path):
+def test_sweep_counts_removed_and_tolerates_absent_home(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     now = time.time()
     _write(run_token._record_path(repo, "a", spent=True), 9 * _DAY, now)
@@ -66,7 +67,7 @@ def test_sweep_counts_removed_and_tolerates_absent_home(tmp_path):
 
 
 @pytest.mark.parametrize("age_days,expected", [(6, True), (8, False)])
-def test_retention_boundary_is_seven_days(tmp_path, age_days, expected):
+def test_retention_boundary_is_seven_days(tmp_path: Path, age_days, expected) -> None:
     repo = _repo(tmp_path)
     now = time.time()
     path = _write(run_token._record_path(repo, "edge", spent=True), age_days * _DAY, now)

@@ -9,13 +9,15 @@ from types import SimpleNamespace
 from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 from coordinator_core.ops.dispatch_emit import write_baseline as wb
 from coordinator_core.ops.dispatch_emit.ask_contract import ManifestRow, StageManifest
+from pathlib import Path
+import pytest
 
 LEDGER = SimpleNamespace(items=(1,), all_of_pm_ask=False)
 VERDICT = {"items": [{"id": "R1", "status": "met"}]}
 PLAN = "docs/plans/p.md"
 
 
-def _manifest(root, names):
+def _manifest(root, names) -> StageManifest:
     for n in names:
         if n != "absent.py":
             (root / n).write_text("x\n")
@@ -29,17 +31,17 @@ def _manifest(root, names):
     )
 
 
-def _own(monkeypatch, owned):
+def _own(monkeypatch, owned) -> None:
     monkeypatch.setattr(tc, "_plan_checkpoint_touched", lambda root, plan, paths: frozenset(owned))
 
 
-def test_absent_and_own_checkpointed_paths_are_not_dirt(tmp_path, monkeypatch):
+def test_absent_and_own_checkpointed_paths_are_not_dirt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     m = _manifest(tmp_path, ["own.py", "absent.py"])
     _own(monkeypatch, {"own.py"})
     assert tc._pre_existing_dirt_refusal(tmp_path, m, VERDICT, LEDGER, PLAN) is None
 
 
-def test_foreign_dirt_is_still_refused_beside_absent_and_own(tmp_path, monkeypatch):
+def test_foreign_dirt_is_still_refused_beside_absent_and_own(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     m = _manifest(tmp_path, ["own.py", "absent.py", "foreign.py"])
     _own(monkeypatch, {"own.py"})
     out = tc._pre_existing_dirt_refusal(tmp_path, m, VERDICT, LEDGER, PLAN)
@@ -47,7 +49,7 @@ def test_foreign_dirt_is_still_refused_beside_absent_and_own(tmp_path, monkeypat
     assert out["ledger_failures"][0]["reason"] == "pre-existing-dirt: foreign.py"
 
 
-def test_without_checkpoint_evidence_the_path_is_dirt(tmp_path, monkeypatch):
+def test_without_checkpoint_evidence_the_path_is_dirt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     m = _manifest(tmp_path, ["own.py"])
     _own(monkeypatch, set())
     out = tc._pre_existing_dirt_refusal(tmp_path, m, VERDICT, LEDGER, PLAN)
@@ -63,7 +65,7 @@ def _prior_record(tmp_path, slice_files):
     return run_dir
 
 
-def test_path_an_earlier_pass_recorded_as_written_is_not_dirt(tmp_path, monkeypatch):
+def test_path_an_earlier_pass_recorded_as_written_is_not_dirt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     m = _manifest(tmp_path, ["prior.py"])
     _own(monkeypatch, set())
     run_dir = _prior_record(tmp_path, ["prior.py"])
@@ -85,7 +87,7 @@ def _commit_halted_pair(root):
     return cur
 
 
-def test_edit_of_a_commit_halted_earlier_pass_is_not_dirt_but_foreign_still_is(tmp_path, monkeypatch):
+def test_edit_of_a_commit_halted_earlier_pass_is_not_dirt_but_foreign_still_is(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     m = _manifest(tmp_path, ["edited.py", "foreign.py"])
     _own(monkeypatch, set())
     cur = _commit_halted_pair(tmp_path)
@@ -93,7 +95,7 @@ def test_edit_of_a_commit_halted_earlier_pass_is_not_dirt_but_foreign_still_is(t
     assert out["ledger_failures"][0]["reason"] == "pre-existing-dirt: foreign.py"
 
 
-def test_foreign_dirt_beside_a_prior_pass_path_still_refuses(tmp_path, monkeypatch):
+def test_foreign_dirt_beside_a_prior_pass_path_still_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     m = _manifest(tmp_path, ["prior.py", "foreign.py"])
     _own(monkeypatch, set())
     run_dir = _prior_record(tmp_path, ["prior.py"])
@@ -104,7 +106,7 @@ def test_foreign_dirt_beside_a_prior_pass_path_still_refuses(tmp_path, monkeypat
 SIZING = "state/sizings/2026-10-25-338db0-x.yaml"
 
 
-def _bound_plan(root):
+def _bound_plan(root) -> str:
     (root / "state" / "sizings").mkdir(parents=True)
     (root / SIZING).write_text("id: x\n")
     plan = root / "docs" / "plans" / "p.md"
@@ -113,7 +115,7 @@ def _bound_plan(root):
     return "docs/plans/p.md"
 
 
-def _halted(root, name, sizing, withheld, prints=True):
+def _halted(root, name, sizing, withheld, prints: bool = True):
     d = root / "state" / "warp" / name
     d.mkdir(parents=True)
     (d / "halted.json").write_text(json.dumps(
@@ -126,7 +128,7 @@ def _halted(root, name, sizing, withheld, prints=True):
     return d
 
 
-def test_predecessor_run_withheld_edit_of_the_same_sizing_is_not_dirt(tmp_path, monkeypatch):
+def test_predecessor_run_withheld_edit_of_the_same_sizing_is_not_dirt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     m = _manifest(tmp_path, ["pred.py"])
     _own(monkeypatch, set())
     plan = _bound_plan(tmp_path)
@@ -136,7 +138,7 @@ def test_predecessor_run_withheld_edit_of_the_same_sizing_is_not_dirt(tmp_path, 
     assert tc._pre_existing_dirt_refusal(tmp_path, m, VERDICT, LEDGER, plan, cur) is None
 
 
-def test_predecessor_withheld_without_prints_is_still_dirt(tmp_path, monkeypatch):
+def test_predecessor_withheld_without_prints_is_still_dirt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     m = _manifest(tmp_path, ["pred.py"])
     _own(monkeypatch, set())
     plan = _bound_plan(tmp_path)
@@ -147,7 +149,7 @@ def test_predecessor_withheld_without_prints_is_still_dirt(tmp_path, monkeypatch
     assert out["ledger_failures"][0]["reason"] == "pre-existing-dirt: pred.py"
 
 
-def test_predecessor_withheld_edited_after_the_halt_is_still_dirt(tmp_path, monkeypatch):
+def test_predecessor_withheld_edited_after_the_halt_is_still_dirt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _own(monkeypatch, set())
     plan = _bound_plan(tmp_path)
     (tmp_path / "pred.py").write_text("bytes at the halt\n")
@@ -159,7 +161,7 @@ def test_predecessor_withheld_edited_after_the_halt_is_still_dirt(tmp_path, monk
     assert out["ledger_failures"][0]["reason"] == "pre-existing-dirt: pred.py"
 
 
-def _head(monkeypatch, root, clean):
+def _head(monkeypatch, root, clean) -> None:
     from coordinator_core.git import git_state
 
     monkeypatch.setattr(
@@ -168,14 +170,14 @@ def _head(monkeypatch, root, clean):
     )
 
 
-def test_path_clean_at_head_and_unchanged_since_baseline_is_not_dirt(tmp_path, monkeypatch):
+def test_path_clean_at_head_and_unchanged_since_baseline_is_not_dirt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     m = _manifest(tmp_path, ["committed.py"])
     _own(monkeypatch, set())
     _head(monkeypatch, tmp_path, {"committed.py"})
     assert tc._pre_existing_dirt_refusal(tmp_path, m, VERDICT, LEDGER, PLAN) is None
 
 
-def test_dirty_unchanged_foreign_path_beside_a_head_clean_path_still_refuses(tmp_path, monkeypatch):
+def test_dirty_unchanged_foreign_path_beside_a_head_clean_path_still_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     m = _manifest(tmp_path, ["committed.py", "foreign.py"])
     _own(monkeypatch, set())
     _head(monkeypatch, tmp_path, {"committed.py"})
@@ -183,7 +185,7 @@ def test_dirty_unchanged_foreign_path_beside_a_head_clean_path_still_refuses(tmp
     assert out["ledger_failures"][0]["reason"] == "pre-existing-dirt: foreign.py"
 
 
-def test_other_sizings_withheld_and_foreign_dirt_still_refuse(tmp_path, monkeypatch):
+def test_other_sizings_withheld_and_foreign_dirt_still_refuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     m = _manifest(tmp_path, ["pred.py", "other.py", "foreign.py"])
     _own(monkeypatch, set())
     plan = _bound_plan(tmp_path)
@@ -195,7 +197,7 @@ def test_other_sizings_withheld_and_foreign_dirt_still_refuse(tmp_path, monkeypa
     assert out["ledger_failures"][0]["reason"] == "pre-existing-dirt: foreign.py, other.py"
 
 
-def test_own_plan_residue_is_not_dirt_and_foreign_beside_it_still_refuses(tmp_path, monkeypatch):
+def test_own_plan_residue_is_not_dirt_and_foreign_beside_it_still_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import plan_residue
 
     m = _manifest(tmp_path, ["residue.py", "foreign.py"])

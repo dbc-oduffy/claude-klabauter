@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from coordinator_core.warm import breadcrumb, client
+from pathlib import Path
+import pytest
 
 
 def _point_stall_dir(monkeypatch, tmp_path):
@@ -21,7 +23,7 @@ def _envelope(key):
     )
 
 
-def test_matching_dump_is_named_in_text_and_data(tmp_path, monkeypatch):
+def test_matching_dump_is_named_in_text_and_data(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     dump_dir = _point_stall_dir(monkeypatch, tmp_path)
     older = dump_dir / "20261102T192628Z-1-overdue-key-abc.txt"
     newer = dump_dir / "20261102T192725Z-1-overdue-key-abc.txt"
@@ -34,7 +36,7 @@ def test_matching_dump_is_named_in_text_and_data(tmp_path, monkeypatch):
     assert "stall_dump_absent_reason" not in error["data"]
 
 
-def test_no_matching_dump_says_why_and_names_the_directory(tmp_path, monkeypatch):
+def test_no_matching_dump_says_why_and_names_the_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     dump_dir = _point_stall_dir(monkeypatch, tmp_path)
     (dump_dir / "20261102T192900Z-1-overdue-key-zzz.txt").write_text("x", encoding="utf-8")
     error = _envelope("key-abc")["error"]
@@ -44,7 +46,7 @@ def test_no_matching_dump_says_why_and_names_the_directory(tmp_path, monkeypatch
     assert error["data"]["stall_dump_absent_reason"]
 
 
-def test_text_names_how_to_tell_whether_the_commit_landed(tmp_path, monkeypatch):
+def test_text_names_how_to_tell_whether_the_commit_landed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _point_stall_dir(monkeypatch, tmp_path)
     message = _envelope("key-abc")["error"]["message"]
     assert "may never have started" in message
@@ -54,7 +56,7 @@ def test_text_names_how_to_tell_whether_the_commit_landed(tmp_path, monkeypatch)
     assert "warm.request_status" in message.split("Reconcile:", 1)[1]
 
 
-def test_unsafe_key_never_globs(tmp_path, monkeypatch):
+def test_unsafe_key_never_globs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     dump_dir = _point_stall_dir(monkeypatch, tmp_path)
     (dump_dir / "20261102T192900Z-1-overdue-a.txt").write_text("x", encoding="utf-8")
     error = _envelope("*")["error"]

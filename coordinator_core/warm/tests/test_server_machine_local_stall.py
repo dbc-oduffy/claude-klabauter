@@ -7,10 +7,11 @@ import threading
 
 from coordinator_core.warm import server
 from coordinator_core.warm.client import WARM_DISPATCH_INDETERMINATE
+import pytest
 
 
 class _Future:
-    def __init__(self, *, cancellable: bool):
+    def __init__(self, *, cancellable: bool) -> None:
         self._cancellable = cancellable
         self.result_timeout = "not called"
 
@@ -18,7 +19,7 @@ class _Future:
         self.result_timeout = timeout
         raise concurrent.futures.TimeoutError()
 
-    def cancel(self):
+    def cancel(self) -> bool:
         return self._cancellable
 
     def add_done_callback(self, fn):
@@ -26,7 +27,7 @@ class _Future:
 
 
 class _Pool:
-    def __init__(self, future):
+    def __init__(self, future) -> None:
         self.future = future
 
     def submit(self, *_a, **_k):
@@ -51,7 +52,7 @@ def _msg(entrypoint, verb):
     }
 
 
-def test_started_machine_local_get_answers_exit_4_result_never_32004(monkeypatch):
+def test_started_machine_local_get_answers_exit_4_result_never_32004(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MACHINE_LOCAL_DEADLINE_S", "2")
     fut = _Future(cancellable=False)
     out = _ctx(fut, monkeypatch)._pool_dispatch(_msg("machine-local", "get"))
@@ -63,7 +64,7 @@ def test_started_machine_local_get_answers_exit_4_result_never_32004(monkeypatch
     assert fut.result_timeout <= 2.0
 
 
-def test_queued_machine_local_get_is_still_the_determinate_not_started(monkeypatch):
+def test_queued_machine_local_get_is_still_the_determinate_not_started(monkeypatch: pytest.MonkeyPatch) -> None:
     fut = _Future(cancellable=True)
     out = _ctx(fut, monkeypatch)._pool_dispatch(_msg("machine-local", "get"))
 
@@ -71,13 +72,13 @@ def test_queued_machine_local_get_is_still_the_determinate_not_started(monkeypat
     assert "not started" in out["error"]["message"]
 
 
-def test_machine_local_write_verb_keeps_the_indeterminate_arm(monkeypatch):
+def test_machine_local_write_verb_keeps_the_indeterminate_arm(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _ctx(_Future(cancellable=False), monkeypatch)._pool_dispatch(_msg("machine-local", "set"))
 
     assert out["error"]["code"] == WARM_DISPATCH_INDETERMINATE
 
 
-def test_other_entrypoint_keeps_the_indeterminate_arm(monkeypatch):
+def test_other_entrypoint_keeps_the_indeterminate_arm(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _ctx(_Future(cancellable=False), monkeypatch)._pool_dispatch(_msg("queue-ops", "get"))
 
     assert "result" not in out

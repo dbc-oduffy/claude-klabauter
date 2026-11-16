@@ -69,7 +69,7 @@ def _init_repo(tmp_path: Path) -> str:
 
 
 class TestCheckSchemaVersionBump:
-    def test_canonical_changed_without_version_bump_fires(self, tmp_path, monkeypatch):
+    def test_canonical_changed_without_version_bump_fires(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = _init_repo(tmp_path)
         (tmp_path / "canonical-structure.yaml").write_text("a: 1\n", encoding="utf-8")
         (tmp_path / "coordinator-schema-version").write_text("3\n", encoding="utf-8")
@@ -86,7 +86,7 @@ class TestCheckSchemaVersionBump:
         assert "VIOLATION" in result
         assert "coordinator-schema-version" in result
 
-    def test_canonical_changed_with_version_bump_clean(self, tmp_path, monkeypatch):
+    def test_canonical_changed_with_version_bump_clean(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = _init_repo(tmp_path)
         (tmp_path / "canonical-structure.yaml").write_text("a: 1\n", encoding="utf-8")
         (tmp_path / "coordinator-schema-version").write_text("3\n", encoding="utf-8")
@@ -101,7 +101,7 @@ class TestCheckSchemaVersionBump:
 
         assert commit_tripwires.check_schema_version_bump() is None
 
-    def test_canonical_not_staged_clean(self, tmp_path, monkeypatch):
+    def test_canonical_not_staged_clean(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = _init_repo(tmp_path)
         (tmp_path / "other.txt").write_text("x\n", encoding="utf-8")
         _git(root, "add", "other.txt")
@@ -110,7 +110,7 @@ class TestCheckSchemaVersionBump:
 
         assert commit_tripwires.check_schema_version_bump() is None
 
-    def test_content_root_unresolvable_fails_open(self, monkeypatch):
+    def test_content_root_unresolvable_fails_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(commit_tripwires, "_resolve_plugin_content_root", lambda: None)
         assert commit_tripwires.check_schema_version_bump() is None
 
@@ -132,7 +132,7 @@ def _write_polyglot(path: Path, *, shebang: str) -> None:
 
 
 class TestCheckBinShPolyglot:
-    def test_missing_sh_shebang_fires(self, tmp_path, monkeypatch):
+    def test_missing_sh_shebang_fires(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = _init_repo(tmp_path)
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
@@ -146,7 +146,7 @@ class TestCheckBinShPolyglot:
         assert "BIN-SH-POLYGLOT-INVARIANT" in result
         assert "some-tool" in result
 
-    def test_correct_sh_shebang_clean(self, tmp_path, monkeypatch):
+    def test_correct_sh_shebang_clean(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = _init_repo(tmp_path)
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
@@ -157,7 +157,7 @@ class TestCheckBinShPolyglot:
 
         assert commit_tripwires.check_bin_sh_polyglot() is None
 
-    def test_non_polyglot_file_no_trampoline_clean(self, tmp_path, monkeypatch):
+    def test_non_polyglot_file_no_trampoline_clean(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = _init_repo(tmp_path)
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
@@ -168,7 +168,7 @@ class TestCheckBinShPolyglot:
 
         assert commit_tripwires.check_bin_sh_polyglot() is None
 
-    def test_self_file_skipped_even_when_offending(self, tmp_path, monkeypatch):
+    def test_self_file_skipped_even_when_offending(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = _init_repo(tmp_path)
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
@@ -179,7 +179,7 @@ class TestCheckBinShPolyglot:
 
         assert commit_tripwires.check_bin_sh_polyglot() is None
 
-    def test_sibling_guard_skipped_even_when_offending(self, tmp_path, monkeypatch):
+    def test_sibling_guard_skipped_even_when_offending(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The repo-wide sibling guard (check-sh-suffix-polyglot.py) quotes the
         trampoline in its module docstring, inside the 20-line header window,
         under a `#!/usr/bin/env python3` shebang -- exactly the shape this check
@@ -198,11 +198,11 @@ class TestCheckBinShPolyglot:
 
         assert commit_tripwires.check_bin_sh_polyglot() is None
 
-    def test_content_root_unresolvable_fails_open(self, monkeypatch):
+    def test_content_root_unresolvable_fails_open(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(commit_tripwires, "_resolve_plugin_content_root", lambda: None)
         assert commit_tripwires.check_bin_sh_polyglot() is None
 
-    def test_no_bin_dir_fails_open(self, tmp_path, monkeypatch):
+    def test_no_bin_dir_fails_open(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = _init_repo(tmp_path)
         monkeypatch.setattr(commit_tripwires, "_resolve_plugin_content_root", lambda: root)
         assert commit_tripwires.check_bin_sh_polyglot() is None
@@ -268,7 +268,7 @@ def _live_basenames(entries: Iterable[str]) -> Set[str]:
 
 
 class TestLoadInvariantModuleRestoresSysPath:
-    def test_sys_path_mutation_is_undone_after_use(self):
+    def test_sys_path_mutation_is_undone_after_use(self) -> None:
         """`_load_invariant_module` used to `sys.path.insert` with no
         teardown -- a raw, permanent global-state mutation in the same test
         file whose own predecessor bug was import-machinery fragility. Using
@@ -312,7 +312,7 @@ class TestGuardSelfSkipCrossSetAgreement:
             commit_tripwires._SELF_SKIP_BASENAMES,
         )
 
-    def test_three_exemption_sets_agree_on_live_file_subset(self, monkeypatch):
+    def test_three_exemption_sets_agree_on_live_file_subset(self, monkeypatch: pytest.MonkeyPatch) -> None:
         cli_set, invariant_set, tripwire_set = self._sets(monkeypatch)
 
         cli_live = _live_basenames(cli_set)
@@ -337,7 +337,7 @@ class TestGuardSelfSkipCrossSetAgreement:
             )
         )
 
-    def test_entries_absent_from_the_live_subset_are_dead_on_disk(self, monkeypatch):
+    def test_entries_absent_from_the_live_subset_are_dead_on_disk(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The live-subset filter is a licence to retain a dead name, not a
         licence to hide a live disagreement: every entry the filter drops must
         genuinely name no file on disk."""
@@ -361,7 +361,7 @@ class TestGuardSelfSkipCrossSetAgreement:
 
 
 class TestCheckMachinePathLeak:
-    def test_machine_abs_path_leaf_fires(self, tmp_path):
+    def test_machine_abs_path_leaf_fires(self, tmp_path: Path) -> None:
         root = _init_repo(tmp_path)
         settings = {"mcpServers": {"foo": {"cwd": "/Users/alice/repo"}}}
         import json
@@ -374,7 +374,7 @@ class TestCheckMachinePathLeak:
         assert "VIOLATION" in result
         assert "/Users/alice/repo" in result
 
-    def test_clean_settings_no_machine_path(self, tmp_path):
+    def test_clean_settings_no_machine_path(self, tmp_path: Path) -> None:
         root = _init_repo(tmp_path)
         import json
 
@@ -385,13 +385,13 @@ class TestCheckMachinePathLeak:
 
         assert commit_tripwires.check_machine_path_leak("settings.json", root) is None
 
-    def test_unreadable_settings_fails_open(self, tmp_path):
+    def test_unreadable_settings_fails_open(self, tmp_path: Path) -> None:
         root = _init_repo(tmp_path)
         # settings.json neither on disk nor in the git index -- e.g. a stale
         # staged-file name from a rename/race.
         assert commit_tripwires.check_machine_path_leak("settings.json", root) is None
 
-    def test_malformed_json_reports_parse_error(self, tmp_path):
+    def test_malformed_json_reports_parse_error(self, tmp_path: Path) -> None:
         root = _init_repo(tmp_path)
         (tmp_path / "settings.json").write_text("{not valid json", encoding="utf-8")
         _git(root, "add", "settings.json")
@@ -452,7 +452,7 @@ class TestCheckRegistrationQuadCompleteness:
     """Check 12 judges the committing repo's own index bytes, so every case here
     runs with ``coordinator_core`` imported from a tree other than the tmp repo."""
 
-    def test_incomplete_registration_under_a_foreign_engine_root_denies(self, tmp_path):
+    def test_incomplete_registration_under_a_foreign_engine_root_denies(self, tmp_path: Path) -> None:
         root = _init_repo(tmp_path)
         _seed_quad_tree(root)
         _stage_op_file(root, "coordinator_core/ops/fake_new_op.py", "fake.new_op")
@@ -463,14 +463,14 @@ class TestCheckRegistrationQuadCompleteness:
         assert "fake.new_op" in result
         assert "coordinator_core/authz/classification.py" in result
 
-    def test_complete_registration_stays_silent(self, tmp_path):
+    def test_complete_registration_stays_silent(self, tmp_path: Path) -> None:
         root = _init_repo(tmp_path)
         _seed_quad_tree(root, ("fake.complete_op",))
         _stage_op_file(root, "coordinator_core/ops/fake_complete_op.py", "fake.complete_op")
 
         assert commit_tripwires.check_registration_quad_completeness(root) is None
 
-    def test_table_edit_staged_with_the_op_is_judged_post_commit(self, tmp_path):
+    def test_table_edit_staged_with_the_op_is_judged_post_commit(self, tmp_path: Path) -> None:
         root = _init_repo(tmp_path)
         _seed_quad_tree(root)
         _stage_op_file(root, "coordinator_core/ops/fake_new_op.py", "fake.new_op")
@@ -485,7 +485,7 @@ class TestCheckRegistrationQuadCompleteness:
 
         assert commit_tripwires.check_registration_quad_completeness(root) is None
 
-    def test_unstaged_table_edit_does_not_count(self, tmp_path):
+    def test_unstaged_table_edit_does_not_count(self, tmp_path: Path) -> None:
         root = _init_repo(tmp_path)
         _seed_quad_tree(root)
         _stage_op_file(root, "coordinator_core/ops/fake_new_op.py", "fake.new_op")
@@ -496,7 +496,7 @@ class TestCheckRegistrationQuadCompleteness:
         result = commit_tripwires.check_registration_quad_completeness(root)
         assert result is not None and "fake.new_op" in result
 
-    def test_no_registration_path_staged_spawns_nothing(self, tmp_path, monkeypatch):
+    def test_no_registration_path_staged_spawns_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = _init_repo(tmp_path)
         (tmp_path / "README.md").write_text("unrelated change\n", encoding="utf-8")
         _git(root, "add", "README.md")
@@ -508,7 +508,7 @@ class TestCheckRegistrationQuadCompleteness:
 
         assert commit_tripwires.check_registration_quad_completeness(root, ["README.md"]) is None
 
-    def test_staged_list_is_reused_and_one_batched_spawn_runs(self, tmp_path, monkeypatch):
+    def test_staged_list_is_reused_and_one_batched_spawn_runs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = _init_repo(tmp_path)
         _seed_quad_tree(root, ("fake.ok",))
         for i in range(8):
@@ -532,13 +532,13 @@ class TestCheckRegistrationQuadCompleteness:
         assert commit_tripwires.check_registration_quad_completeness(root, staged) is None
         assert calls == [["cat-file", "--batch"]]
 
-    def test_surface_files_absent_fails_open(self, tmp_path):
+    def test_surface_files_absent_fails_open(self, tmp_path: Path) -> None:
         root = _init_repo(tmp_path)
         _stage_op_file(root, "coordinator_core/ops/fake_new_op.py", "fake.new_op")
 
         assert commit_tripwires.check_registration_quad_completeness(root) is None
 
-    def test_unparseable_surface_fails_open(self, tmp_path):
+    def test_unparseable_surface_fails_open(self, tmp_path: Path) -> None:
         root = _init_repo(tmp_path)
         _seed_quad_tree(root)
         (Path(root) / "coordinator_core/op_scopes.py").write_text("_OP_KEY_SCOPE = {", encoding="utf-8")
@@ -553,7 +553,7 @@ class TestRegistrationQuadOverrideAtCallSite:
     call site), not commit_tripwires itself -- see commit_tripwires' own
     module docstring. Covered here per the C4 test-surface spec (AC18)."""
 
-    def test_override_token_downgrades_deny_to_advisory(self, tmp_path, monkeypatch):
+    def test_override_token_downgrades_deny_to_advisory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.bash_guards import dispatch_checks
 
         root = _init_repo(tmp_path)
@@ -612,11 +612,11 @@ class TestRegistrationQuadBaselinePruning:
             missing_surface_files=tuple((s, paths[s]) for s in missing),
         )
 
-    def test_baselined_op_missing_only_classification_is_pruned(self):
+    def test_baselined_op_missing_only_classification_is_pruned(self) -> None:
         v = self._violation("cartography.stack", ["OP_CLASSIFICATION"])
         assert _filter([v], frozenset({"cartography.stack"})) == []
 
-    def test_baselined_op_still_reports_other_missing_surfaces(self):
+    def test_baselined_op_still_reports_other_missing_surfaces(self) -> None:
         """The baseline covers OP_CLASSIFICATION only — a baselined op missing its
         module-map entry is still a live defect and must survive pruning."""
         v = self._violation("cartography.stack", ["OP_CLASSIFICATION", "OP_MODULE_MAP"])
@@ -628,7 +628,7 @@ class TestRegistrationQuadBaselinePruning:
             ("OP_MODULE_MAP", "coordinator_core/ops/_registry_map.py"),
         )
 
-    def test_non_baselined_op_is_untouched(self):
+    def test_non_baselined_op_is_untouched(self) -> None:
         v = self._violation("brand.new_op", ["OP_CLASSIFICATION"])
         assert _filter([v], frozenset()) == [v]
 
@@ -642,7 +642,7 @@ class TestRegistrationQuadBaselinePruning:
 
 
 class TestCheckStagedPathspecDivergence:
-    def test_diverging_path_offer_fires(self, tmp_path):
+    def test_diverging_path_offer_fires(self, tmp_path: Path) -> None:
         root = _init_repo(tmp_path)
         (tmp_path / "shared.txt").write_text("line1\n", encoding="utf-8")
         _git(root, "add", "shared.txt")
@@ -682,7 +682,7 @@ class TestCheckStagedPathspecDivergence:
         assert "guard-override-keys.md" in result
         assert "COORDINATOR_OVERRIDE_PATHSPEC_DIVERGENCE" not in result
 
-    def test_unreadable_index_says_so_instead_of_going_silent(self, tmp_path, monkeypatch):
+    def test_unreadable_index_says_so_instead_of_going_silent(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """DEMONSTRATED-RED before the `fail_loud=True` fix.
 
         The guard used to take `diverging_paths`' default `fail_loud=False`, so
@@ -733,7 +733,7 @@ class TestCheckStagedPathspecDivergence:
         assert "and the STAGED content there differs" not in result
         assert "could NOT be determined" in result
 
-    def test_offer_to_a_non_em_audience_carries_no_override_pointer(self, tmp_path):
+    def test_offer_to_a_non_em_audience_carries_no_override_pointer(self, tmp_path: Path) -> None:
         """The other half of the audience gate, so the inversion above cannot
         silently flip back: with no envelope to resolve, the offer still fires
         (it is the load-bearing warning) but carries no override pointer."""
@@ -753,7 +753,7 @@ class TestCheckStagedPathspecDivergence:
         assert result.startswith("OFFER:")
         assert "guard-override-keys.md" not in result
 
-    def test_index_matches_worktree_silent_pass(self, tmp_path):
+    def test_index_matches_worktree_silent_pass(self, tmp_path: Path) -> None:
         root = _init_repo(tmp_path)
         (tmp_path / "shared.txt").write_text("line1\n", encoding="utf-8")
         _git(root, "add", "shared.txt")
@@ -768,7 +768,7 @@ class TestCheckStagedPathspecDivergence:
         )
         assert result is None
 
-    def test_no_trailing_pathspec_not_applicable(self, tmp_path):
+    def test_no_trailing_pathspec_not_applicable(self, tmp_path: Path) -> None:
         root = _init_repo(tmp_path)
         (tmp_path / "shared.txt").write_text("line1\n", encoding="utf-8")
         _git(root, "add", "shared.txt")
@@ -783,7 +783,7 @@ class TestCheckStagedPathspecDivergence:
         )
         assert result is None
 
-    def test_override_bypasses_and_logs(self, tmp_path, monkeypatch):
+    def test_override_bypasses_and_logs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = _init_repo(tmp_path)
         (tmp_path / "shared.txt").write_text("line1\n", encoding="utf-8")
         _git(root, "add", "shared.txt")
@@ -815,8 +815,8 @@ class TestCheckStagedPathspecDivergence:
         assert "test-session" in contents
 
     def test_override_of_an_unknown_session_still_records_the_audit_line(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The override audit trail must survive even when the session has no
         hub directory -- it records a deliberately-bypassed safety check, so
         dropping the line to avoid minting a phantom session would trade a
@@ -842,7 +842,7 @@ class TestCheckStagedPathspecDivergence:
         assert "OVERRIDE-PATHSPEC-DIVERGENCE" in contents
         assert "sess-no-such-dir" in contents
 
-    def test_multi_segment_command_line_parsed(self, tmp_path):
+    def test_multi_segment_command_line_parsed(self, tmp_path: Path) -> None:
         root = _init_repo(tmp_path)
         (tmp_path / "shared.txt").write_text("line1\n", encoding="utf-8")
         _git(root, "add", "shared.txt")
@@ -858,7 +858,7 @@ class TestCheckStagedPathspecDivergence:
         assert result is not None
         assert "shared.txt" in result
 
-    def test_empty_trailing_pathspec_means_whole_index_not_nothing(self, tmp_path):
+    def test_empty_trailing_pathspec_means_whole_index_not_nothing(self, tmp_path: Path) -> None:
         """`git commit -- ` (nothing after the `--`) is git's own
         "no pathspec given" form -- same semantics as no `--` at all, NOT a
         zero-path scoped commit. Must not crash and must not fire (there is
@@ -878,17 +878,17 @@ class TestCheckStagedPathspecDivergence:
         )
         assert result is None
 
-    def test_no_git_commit_at_all_not_applicable(self, tmp_path):
+    def test_no_git_commit_at_all_not_applicable(self, tmp_path: Path) -> None:
         root = _init_repo(tmp_path)
         result = commit_tripwires.check_staged_pathspec_divergence(
             "git status -- shared.txt", root
         )
         assert result is None
 
-    def test_empty_command_not_applicable(self):
+    def test_empty_command_not_applicable(self) -> None:
         assert commit_tripwires.check_staged_pathspec_divergence("", "/tmp") is None
 
-    def test_index_only_removal_fires_and_offers_reset(self, tmp_path):
+    def test_index_only_removal_fires_and_offers_reset(self, tmp_path: Path) -> None:
         """`git rm --cached tracked.txt` untracks the file but leaves it on
         disk. A trailing-pathspec `git commit -- tracked.txt` would re-`add`
         that worktree copy back into the index, silently reverting the
@@ -918,7 +918,7 @@ class TestCheckStagedPathspecDivergence:
         assert "git ls-files --error-unmatch -- tracked.txt" in result
         assert "NOT the fix" not in result
 
-    def test_index_only_removal_mixed_with_divergence_keeps_generic_offer(self, tmp_path):
+    def test_index_only_removal_mixed_with_divergence_keeps_generic_offer(self, tmp_path: Path) -> None:
         """A genuine staged-vs-worktree divergence alongside the untrack keeps
         the generic text (bare commit is NOT the fix on a shared index, plus
         the `git reset` remedy)."""
@@ -944,7 +944,7 @@ class TestCheckStagedPathspecDivergence:
         assert "private GIT_INDEX_FILE" in result
         assert "NOT the fix" not in result
 
-    def test_index_only_removal_of_deleted_file_not_flagged(self, tmp_path):
+    def test_index_only_removal_of_deleted_file_not_flagged(self, tmp_path: Path) -> None:
         """A `D` staged-removal whose worktree copy is ALSO gone (an ordinary
         tracked deletion, not an untrack) must not be misread as this
         branch -- `os.path.exists` gates on the worktree copy still being
@@ -974,7 +974,7 @@ class TestCheckStagedPathspecDivergence:
 
 
 class TestDivergingPathsHelper:
-    def test_diverging_path_detected(self, tmp_path):
+    def test_diverging_path_detected(self, tmp_path: Path) -> None:
         from coordinator_core.git.divergence import diverging_paths
 
         root = _init_repo(tmp_path)
@@ -988,7 +988,7 @@ class TestDivergingPathsHelper:
 
         assert diverging_paths(["shared.txt"], root) == ["shared.txt"]
 
-    def test_index_matches_worktree_is_clean(self, tmp_path):
+    def test_index_matches_worktree_is_clean(self, tmp_path: Path) -> None:
         from coordinator_core.git.divergence import diverging_paths
 
         root = _init_repo(tmp_path)
@@ -1001,7 +1001,7 @@ class TestDivergingPathsHelper:
 
         assert diverging_paths(["shared.txt"], root) == []
 
-    def test_only_diverging_subset_returned(self, tmp_path):
+    def test_only_diverging_subset_returned(self, tmp_path: Path) -> None:
         from coordinator_core.git.divergence import diverging_paths
 
         root = _init_repo(tmp_path)
@@ -1020,13 +1020,13 @@ class TestDivergingPathsHelper:
 
         assert diverging_paths(["shared.txt", "clean.txt"], root) == ["shared.txt"]
 
-    def test_empty_paths_returns_empty(self, tmp_path):
+    def test_empty_paths_returns_empty(self, tmp_path: Path) -> None:
         from coordinator_core.git.divergence import diverging_paths
 
         root = _init_repo(tmp_path)
         assert diverging_paths([], root) == []
 
-    def test_git_diff_failure_default_fail_loud_false_collapses_to_empty(self, tmp_path, monkeypatch):
+    def test_git_diff_failure_default_fail_loud_false_collapses_to_empty(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Check 13's own posture, unchanged: a `git diff` failure (rc != 0)
         collapses to `[]` -- "nothing to report" -- when `fail_loud` is left
         at its default `False`. This is the exact call shape
@@ -1036,14 +1036,14 @@ class TestDivergingPathsHelper:
 
         root = _init_repo(tmp_path)
 
-        def _boom(args, cwd=None, timeout=2.0):
+        def _boom(args, cwd=None, timeout: float = 2.0):
             return 128, ""
 
         monkeypatch.setattr(divergence, "_run_git", _boom)
 
         assert diverging_paths(["shared.txt"], root) == []
 
-    def test_git_diff_failure_fail_loud_true_raises(self, tmp_path, monkeypatch):
+    def test_git_diff_failure_fail_loud_true_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The commit-mechanism-selector posture (`git_native.commit_scoped`,
         `commit_pipeline.explicit_stage`): the identical `git diff` failure
         must NOT collapse to `[]` when `fail_loud=True` -- it raises
@@ -1066,7 +1066,7 @@ class TestDivergingPathsHelper:
         _git(root, "add", "shared.txt")
         (tmp_path / "shared.txt").write_text("line1\nMINE\nPEER\n", encoding="utf-8")
 
-        def _boom(args, cwd=None, timeout=2.0):
+        def _boom(args, cwd=None, timeout: float = 2.0):
             return 128, ""
 
         monkeypatch.setattr(divergence, "content_matches_index_sha", lambda *_a: None)
@@ -1075,7 +1075,7 @@ class TestDivergingPathsHelper:
         with pytest.raises(DivergenceCheckFailed):
             diverging_paths(["shared.txt"], root, fail_loud=True)
 
-    def test_git_diff_failure_on_second_call_fail_loud_true_raises(self, tmp_path, monkeypatch):
+    def test_git_diff_failure_on_second_call_fail_loud_true_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """`_spawn_diverging_subset`'s single `git status --porcelain=v2`
         fallback call (C3e retired the old sequential `git diff --cached`
         / `git diff` pair this test's name and docstring described) must
@@ -1097,7 +1097,7 @@ class TestDivergingPathsHelper:
         _git(root, "add", "shared.txt")
         (tmp_path / "shared.txt").write_text("line1\nMINE\nPEER\n", encoding="utf-8")
 
-        def _fail_second(args, cwd=None, timeout=2.0):
+        def _fail_second(args, cwd=None, timeout: float = 2.0):
             if "--cached" in args:
                 return 0, ""
             return 128, ""
@@ -1115,7 +1115,7 @@ class TestCheckStagedPathspecDivergenceCallSiteIntegration:
     the hook's `allow` + `additionalContext` shape, mirroring
     TestRegistrationQuadOverrideAtCallSite's call-site-level coverage."""
 
-    def test_diverging_commit_surfaces_as_advisory_never_deny(self, tmp_path):
+    def test_diverging_commit_surfaces_as_advisory_never_deny(self, tmp_path: Path) -> None:
         from coordinator_core.bash_guards import dispatch_checks
 
         root = _init_repo(tmp_path)
@@ -1140,14 +1140,14 @@ class TestProbesServedInProcess:
     """The tripwire probes read the repo in-process; `_run_git` runs only on a None fact."""
 
     @staticmethod
-    def _forbid_probe(monkeypatch):
+    def _forbid_probe(monkeypatch) -> None:
         def _boom(*a, **kw):
             raise AssertionError("git probe spawned: %r" % (a,))
 
         monkeypatch.setattr(commit_tripwires, "_run_git", _boom)
         monkeypatch.setattr(commit_tripwires, "run_git", _boom)
 
-    def test_helpers_answer_without_probe(self, tmp_path, monkeypatch):
+    def test_helpers_answer_without_probe(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = _init_repo(tmp_path)
         (tmp_path / "sub").mkdir()
         (tmp_path / "sub" / "a.txt").write_text("a\n", encoding="utf-8")
@@ -1158,7 +1158,7 @@ class TestProbesServedInProcess:
         assert commit_tripwires._show_prefix(sub) == "sub/"
         assert commit_tripwires._staged_names(root) == ["sub/a.txt"]
 
-    def test_add_plus_delete_staged_set_falls_back_to_probe(self, tmp_path, monkeypatch):
+    def test_add_plus_delete_staged_set_falls_back_to_probe(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = _init_repo(tmp_path)
         (tmp_path / "new.txt").write_text("n\n", encoding="utf-8")
         _git(root, "add", "new.txt")
@@ -1166,7 +1166,7 @@ class TestProbesServedInProcess:
         calls = []
         real = commit_tripwires._run_git
 
-        def _spy(args, *a, **kw):
+        def _spy(args, *a, **kw) -> tuple[int, str]:
             calls.append(args)
             return real(args, *a, **kw)
 
@@ -1174,14 +1174,14 @@ class TestProbesServedInProcess:
         assert sorted(commit_tripwires._staged_names(root)) == ["README.md", "new.txt"]
         assert ["diff", "--cached", "--name-only"] in calls
 
-    def test_index_only_removal_served_without_probe(self, tmp_path, monkeypatch):
+    def test_index_only_removal_served_without_probe(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = _init_repo(tmp_path)
         _git(root, "rm", "--cached", "-q", "README.md")
         self._forbid_probe(monkeypatch)
         assert commit_tripwires._index_only_removed_paths(["README.md"], root) == ["README.md"]
         assert commit_tripwires._index_only_removed_paths(["other.txt"], root) == []
 
-    def test_directory_or_glob_pathspec_still_probes(self, tmp_path, monkeypatch):
+    def test_directory_or_glob_pathspec_still_probes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = _init_repo(tmp_path)
         (tmp_path / "d").mkdir()
         (tmp_path / "d" / "x.txt").write_text("x\n", encoding="utf-8")
@@ -1192,7 +1192,7 @@ class TestProbesServedInProcess:
             assert commit_tripwires._removed_from_facts([spec], root) is None
         assert commit_tripwires._index_only_removed_paths(["d"], root) == ["d/x.txt"]
 
-    def test_schema_bump_and_quad_checks_spawn_nothing(self, tmp_path, monkeypatch):
+    def test_schema_bump_and_quad_checks_spawn_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = _init_repo(tmp_path)
         (tmp_path / "canonical-structure.yaml").write_text("v: 1\n", encoding="utf-8")
         (tmp_path / "coordinator-schema-version").write_text("1\n", encoding="utf-8")
@@ -1208,7 +1208,7 @@ class TestDivergenceOnOversizedIndex:
     """Over the in-process index bound Check 13 never parses the index: same verdict, scoped git reads."""
 
     @staticmethod
-    def _seed(tmp_path):
+    def _seed(tmp_path) -> str:
         root = _init_repo(tmp_path)
         (tmp_path / "shared.txt").write_text("line1\n", encoding="utf-8")
         _git(root, "add", "shared.txt")
@@ -1218,7 +1218,7 @@ class TestDivergenceOnOversizedIndex:
         return root
 
     @staticmethod
-    def _forbid_parse(monkeypatch):
+    def _forbid_parse(monkeypatch) -> None:
         from coordinator_core.git import git_state
 
         def _boom(*a, **k):
@@ -1227,7 +1227,7 @@ class TestDivergenceOnOversizedIndex:
         monkeypatch.setattr(git_state, "read_index", _boom)
         monkeypatch.setattr(commit_tripwires, "_diverging_paths", _boom)
 
-    def test_diverged_and_clean_verdicts_match(self, tmp_path, monkeypatch):
+    def test_diverged_and_clean_verdicts_match(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.bash_guards import _git_tree_facts
 
         root = self._seed(tmp_path)
@@ -1243,7 +1243,7 @@ class TestDivergenceOnOversizedIndex:
         _git_tree_facts.reset()
         assert commit_tripwires.check_staged_pathspec_divergence(cmd, root) is None
 
-    def test_spent_budget_says_indeterminate_not_silent(self, tmp_path, monkeypatch):
+    def test_spent_budget_says_indeterminate_not_silent(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.bash_guards import _dc_git_probe, _git_tree_facts
 
         root = self._seed(tmp_path)
@@ -1260,7 +1260,7 @@ class TestDivergenceOnOversizedIndex:
 class TestRunGitHonoursDispatchDeadline:
     """`_run_git` declines unspawned once the armed probe budget is spent, and still spawns before."""
 
-    def test_spent_budget_declines_with_spent_rc(self, tmp_path, monkeypatch):
+    def test_spent_budget_declines_with_spent_rc(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.bash_guards import _dc_git_probe
 
         root = _init_repo(tmp_path)
@@ -1276,7 +1276,7 @@ class TestRunGitHonoursDispatchDeadline:
         )
         assert _dc_git_probe._git_probe_last_failure.get()
 
-    def test_unspent_budget_still_runs_through_the_shared_runner(self, tmp_path, monkeypatch):
+    def test_unspent_budget_still_runs_through_the_shared_runner(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.bash_guards import _dc_git_probe
 
         root = _init_repo(tmp_path)
@@ -1287,7 +1287,7 @@ class TestRunGitHonoursDispatchDeadline:
         rc, out = commit_tripwires._run_git(["rev-parse", "--show-toplevel"], cwd=root)
         assert rc == 0 and out.strip() and len(seen) == 1
 
-    def test_spent_budget_means_callers_fail_open(self, tmp_path, monkeypatch):
+    def test_spent_budget_means_callers_fail_open(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.bash_guards import _dc_git_probe
 
         root = _init_repo(tmp_path)

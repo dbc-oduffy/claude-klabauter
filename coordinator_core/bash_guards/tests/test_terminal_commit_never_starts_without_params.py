@@ -24,6 +24,7 @@ from coordinator_core.bash_guards import dispatch
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -39,7 +40,7 @@ _SHAPES = ["bare", "cd_and", "cd_semi", "mkdir_and", "mkdir_semi", "cat_redirect
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: str(tmp_path))
     monkeypatch.setattr(guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123")
@@ -127,7 +128,7 @@ def _reasons(out) -> list[str]:
 
 @pytest.mark.parametrize("shape", _SHAPES)
 @pytest.mark.parametrize("level", _LEVELS)
-def test_a_non_deny_verdict_leaves_the_params_file_on_disk(repo, monkeypatch, level, shape):
+def test_a_non_deny_verdict_leaves_the_params_file_on_disk(repo, monkeypatch: pytest.MonkeyPatch, level, shape) -> None:
     token = run_token.mint(repo, _RUN, _SCRIPT)
     params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "incomplete_chunks": []}
     out = _verdict(repo, _command(repo, shape), _transcript(repo, params), level, monkeypatch)
@@ -139,7 +140,7 @@ def test_a_non_deny_verdict_leaves_the_params_file_on_disk(repo, monkeypatch, le
 
 
 @pytest.mark.parametrize("shape", ["cat_redirect", "tee_pipe"])
-def test_a_command_writing_the_params_file_is_denied_naming_the_shape(repo, monkeypatch, shape):
+def test_a_command_writing_the_params_file_is_denied_naming_the_shape(repo, monkeypatch: pytest.MonkeyPatch, shape) -> None:
     """Incident run ask-20261021T115244-e3701d: the agent's own `cat >` truncated the params file.
     The shell's truncation emptying the file is the case C2's empty-params refusal backstops."""
     token = run_token.mint(repo, _RUN, _SCRIPT)
@@ -152,7 +153,7 @@ def test_a_command_writing_the_params_file_is_denied_naming_the_shape(repo, monk
     assert "writes the run's params file" in "\n".join(_reasons(own))
 
 
-def test_a_redirect_to_another_file_is_not_the_params_write_leg(repo, monkeypatch):
+def test_a_redirect_to_another_file_is_not_the_params_write_leg(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     token = run_token.mint(repo, _RUN, _SCRIPT)
     params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "incomplete_chunks": []}
     argv = f"coordinator-invoke dispatch.terminal_commit --params-file {chan.params_path(repo, _RUN).as_posix()}"
@@ -164,7 +165,7 @@ def test_a_redirect_to_another_file_is_not_the_params_write_leg(repo, monkeypatc
 
 @pytest.mark.parametrize("shape", _SHAPES)
 @pytest.mark.parametrize("level", _LEVELS)
-def test_no_params_block_never_fabricates_the_file(repo, monkeypatch, level, shape):
+def test_no_params_block_never_fabricates_the_file(repo, monkeypatch: pytest.MonkeyPatch, level, shape) -> None:
     """Residual named in the plan's Out of scope / Open question 1: with no params block the
     refusal is demoted at warn and off, the command runs, and no file exists. The main
     invariant is deliberately not asserted here; only that nothing is fabricated.
@@ -176,7 +177,7 @@ def test_no_params_block_never_fabricates_the_file(repo, monkeypatch, level, sha
 
 @pytest.mark.parametrize("shape", _SHAPES)
 @pytest.mark.parametrize("level", _LEVELS)
-def test_land_run_non_deny_verdict_leaves_the_params_file_on_disk(repo, monkeypatch, level, shape):
+def test_land_run_non_deny_verdict_leaves_the_params_file_on_disk(repo, monkeypatch: pytest.MonkeyPatch, level, shape) -> None:
     token = run_token.mint(repo, _RUN, _SCRIPT)
     params = {"script_path": _SCRIPT, "run_id": _RUN, "run_token": token, "incomplete_chunks": []}
     cmd = _command(repo, shape).replace("dispatch.terminal_commit", "dispatch.land_run")

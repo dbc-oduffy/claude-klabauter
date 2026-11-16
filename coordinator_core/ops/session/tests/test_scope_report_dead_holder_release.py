@@ -5,6 +5,7 @@ from __future__ import annotations
 from coordinator_core.ops.session import scope_report
 from coordinator_core.ops.session.scope_report import assert_paths_in_session_scope
 from coordinator_core.session import claim_index as ci
+import pytest
 
 
 def _install(monkeypatch, clear_result, after):
@@ -26,7 +27,7 @@ def _install(monkeypatch, clear_result, after):
             complete=True,
         )
 
-    def _clear(class_, basename, baton_repo_root="", cwd=None):
+    def _clear(class_, basename, baton_repo_root: str = "", cwd=None) -> bool:
         assert class_ == "artifact"
         if clear_result(basename):
             state["cleared"].append(basename)
@@ -38,7 +39,7 @@ def _install(monkeypatch, clear_result, after):
     return state
 
 
-def test_dead_holder_claim_released_then_path_is_mine(monkeypatch):
+def test_dead_holder_claim_released_then_path_is_mine(monkeypatch: pytest.MonkeyPatch) -> None:
     state = _install(monkeypatch, lambda p: True, ci.OWNERSHIP_MINE)
     ok, reason = assert_paths_in_session_scope("me", ["a.py"], cwd=".")
     assert ok is True, reason
@@ -46,7 +47,7 @@ def test_dead_holder_claim_released_then_path_is_mine(monkeypatch):
     assert state["classify_calls"][1] == ["a.py"]
 
 
-def test_live_holder_still_denies_and_names_holder(monkeypatch):
+def test_live_holder_still_denies_and_names_holder(monkeypatch: pytest.MonkeyPatch) -> None:
     state = _install(monkeypatch, lambda p: False, ci.OWNERSHIP_MINE)
     ok, reason = assert_paths_in_session_scope("me", ["a.py"], cwd=".")
     assert ok is False
@@ -54,13 +55,13 @@ def test_live_holder_still_denies_and_names_holder(monkeypatch):
     assert len(state["classify_calls"]) == 1
 
 
-def test_released_path_is_not_admitted_as_orphan_without_adoption(monkeypatch):
+def test_released_path_is_not_admitted_as_orphan_without_adoption(monkeypatch: pytest.MonkeyPatch) -> None:
     _install(monkeypatch, lambda p: True, ci.OWNERSHIP_UNCLAIMED)
     ok, _ = assert_paths_in_session_scope("me", ["a.py"], cwd=".")
     assert ok is False
 
 
-def test_mixed_pathspec_releases_only_dead_and_denies_live(monkeypatch):
+def test_mixed_pathspec_releases_only_dead_and_denies_live(monkeypatch: pytest.MonkeyPatch) -> None:
     state = _install(monkeypatch, lambda p: p == "dead.py", ci.OWNERSHIP_MINE)
     ok, reason = assert_paths_in_session_scope("me", ["dead.py", "live.py"], cwd=".")
     assert ok is False
@@ -69,7 +70,7 @@ def test_mixed_pathspec_releases_only_dead_and_denies_live(monkeypatch):
     assert state["classify_calls"][1] == ["dead.py"]
 
 
-def test_clear_raising_leaves_denial_standing(monkeypatch):
+def test_clear_raising_leaves_denial_standing(monkeypatch: pytest.MonkeyPatch) -> None:
     _install(monkeypatch, lambda p: True, ci.OWNERSHIP_MINE)
 
     def _boom(*a, **k):

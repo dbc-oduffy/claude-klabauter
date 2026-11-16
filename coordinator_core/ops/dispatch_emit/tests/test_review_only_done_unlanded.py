@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_inventory_mint_done_unlanded 
     _report,
 )
 from coordinator_core.ops.dispatch_emit.tests.test_review_close_routes import _drive
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -21,7 +22,7 @@ def _ids(rows) -> set:
     return {r["id"] for r in rows}
 
 
-def test_done_unlanded_chunk_is_not_minted_without_a_review_request(tmp_path):
+def test_done_unlanded_chunk_is_not_minted_without_a_review_request(tmp_path: Path) -> None:
     inv = _fixture(tmp_path)
     for mid in ("A.C3", "B"):
         _report(tmp_path, mid)
@@ -29,7 +30,7 @@ def test_done_unlanded_chunk_is_not_minted_without_a_review_request(tmp_path):
     assert not {"A.C3", "A.C4"} & _ids(_mint(inv))
 
 
-def test_review_request_mints_the_named_done_unlanded_chunk_and_its_held_dependent(tmp_path):
+def test_review_request_mints_the_named_done_unlanded_chunk_and_its_held_dependent(tmp_path: Path) -> None:
     inv = _fixture(tmp_path)
     for mid in ("A.C3", "B"):
         _report(tmp_path, mid)
@@ -41,7 +42,7 @@ def test_review_request_mints_the_named_done_unlanded_chunk_and_its_held_depende
     assert [e["chunk"] for e in c4["depends_on"]] == ["A.C3"]
 
 
-def test_review_request_leaves_an_unnamed_done_unlanded_chunk_out(tmp_path):
+def test_review_request_leaves_an_unnamed_done_unlanded_chunk_out(tmp_path: Path) -> None:
     inv = _fixture(tmp_path)
     for mid in ("A.C1", "A.C3"):
         _report(tmp_path, mid)
@@ -52,20 +53,20 @@ def test_review_request_leaves_an_unnamed_done_unlanded_chunk_out(tmp_path):
     assert "A.C1" not in _ids(rows)
 
 
-def test_rows_flag_repeats_and_splits_on_commas(tmp_path, monkeypatch):
+def test_rows_flag_repeats_and_splits_on_commas(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     params = _drive(tmp_path, monkeypatch, ["--review-only", "--rows", "C1", "--rows", "C2,C3"])
 
     assert params["review_only_rows"] == ["C1", "C2", "C3"]
 
 
 @pytest.mark.parametrize("root", [None, "repo"])
-def test_test_runner_clause_names_paths_literally(tmp_path, root):
+def test_test_runner_clause_names_paths_literally(tmp_path: Path, root) -> None:
     clause = _test_runner_clause(tmp_path if root else None)
 
     assert "literally" in clause and "never through a shell variable" in clause
 
 
-def test_resolution_defect_clause_runs_no_tests_and_adds_no_path_rule(tmp_path):
+def test_resolution_defect_clause_runs_no_tests_and_adds_no_path_rule(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         '---\ntargeted_test_python: "mypy3.99"\n---\n', encoding="utf-8"
     )

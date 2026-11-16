@@ -1,4 +1,10 @@
 from __future__ import annotations
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
+
 """
 test_workday_complete_backfill_dispatch_timeout.py — regression test for
 workday-complete-close.py's cmd_backfill_dispatch_rows / _dispatch_step9_row.
@@ -48,7 +54,7 @@ _BIN_DIR = os.path.dirname(_THIS_DIR)
 _WORKDAY_CLOSE_CLI = os.path.join(_BIN_DIR, "workday-complete-close.py")
 
 
-def _load_module():
+def _load_module() -> ModuleType:
     if _BIN_DIR not in sys.path:
         sys.path.insert(0, _BIN_DIR)
     loader = SourceFileLoader("workday_complete_close_module_spawn_test", _WORKDAY_CLOSE_CLI)
@@ -62,7 +68,7 @@ def _load_module():
 
 
 class _Args:
-    def __init__(self, **kw):
+    def __init__(self, **kw) -> None:
         self.for_date = None
         self.only_mode = False
         self.scope_summary = None
@@ -79,7 +85,7 @@ def _fake_stdin_rows(n: int) -> str:
     return "\n".join(lines) + "\n"
 
 
-def test_backfill_dispatch_rows_every_dispatch_carries_a_timeout(monkeypatch) -> None:
+def test_backfill_dispatch_rows_every_dispatch_carries_a_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     module = _load_module()
 
     calls = {"n": 0}
@@ -102,7 +108,7 @@ def test_backfill_dispatch_rows_every_dispatch_carries_a_timeout(monkeypatch) ->
     assert rc == 0
 
 
-def test_backfill_dispatch_rows_duplicate_date_dispatches_once(monkeypatch) -> None:
+def test_backfill_dispatch_rows_duplicate_date_dispatches_once(monkeypatch: pytest.MonkeyPatch) -> None:
     module = _load_module()
 
     calls: list[str] = []
@@ -128,7 +134,7 @@ def test_backfill_dispatch_rows_duplicate_date_dispatches_once(monkeypatch) -> N
     assert rc == 0
 
 
-def test_one_row_timeout_does_not_abort_the_rest_of_the_backfill(monkeypatch) -> None:
+def test_one_row_timeout_does_not_abort_the_rest_of_the_backfill(monkeypatch: pytest.MonkeyPatch) -> None:
     module = _load_module()
 
     calls = {"n": 0}
@@ -153,7 +159,7 @@ def test_one_row_timeout_does_not_abort_the_rest_of_the_backfill(monkeypatch) ->
 
 
 class _StdinStub:
-    def __init__(self, text: str):
+    def __init__(self, text: str) -> None:
         self._text = text
 
     def read(self) -> str:

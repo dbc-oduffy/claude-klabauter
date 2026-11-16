@@ -39,11 +39,12 @@ from coordinator_core.bash_guards import _platform_verdict, dispatch
 from coordinator_core.bash_guards._advisory_value import AdvisoryValue, suppress_advisory
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
 from coordinator_core.guard_messages.alternative_record import AlternativeRecord, ReadyCommand
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _payload(cmd, session_id="h6-probe", cwd="/tmp"):
+def _payload(cmd, session_id: str = "h6-probe", cwd: str = "/tmp"):
     return {
         "tool_name": "Bash",
         "tool_input": {"command": cmd},
@@ -52,7 +53,7 @@ def _payload(cmd, session_id="h6-probe", cwd="/tmp"):
     }
 
 
-def _entry_for(name, cmd, session_id, host_is_windows, cwd="/tmp"):
+def _entry_for(name, cmd, session_id, host_is_windows, cwd: str = "/tmp"):
     """Build the REAL chain with `host_is_windows` baked in identically to
     how `evaluate_payload_json` itself builds it (line: `guard_chain =
     _build_guard_chain(cmd, session_id, cwd, payload, policy_file,
@@ -74,13 +75,13 @@ def _entry_for(name, cmd, session_id, host_is_windows, cwd="/tmp"):
     raise AssertionError("guard %r not found in the real registered chain" % name)
 
 
-def _run_isolated(name, cmd, host_is_windows, session_id, monkeypatch, cwd="/tmp"):
+def _run_isolated(name, cmd, host_is_windows, session_id, monkeypatch, cwd: str = "/tmp"):
     entry, payload = _entry_for(name, cmd, session_id, host_is_windows, cwd=cwd)
     monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
     return dispatch.evaluate_payload_json(json.dumps(payload), host_is_windows=host_is_windows)
 
 
-def _cwd_for(name, tmp_path, monkeypatch):
+def _cwd_for(name, tmp_path, monkeypatch) -> str:
     return "/tmp"
 
 
@@ -148,7 +149,7 @@ _EXPECTED_VALUE = {
 
 
 @pytest.fixture(autouse=True)
-def _isolated_tempdir(tmp_path, monkeypatch):
+def _isolated_tempdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A couple of guards live in `tempfile.gettempdir()`-scoped files keyed
     by session id -- point that at a fresh per-test dir so cells never
     interact with a prior run's leftover state (same discipline
@@ -161,7 +162,7 @@ def _isolated_tempdir(tmp_path, monkeypatch):
     yield
 
 
-def _trigger(name, tmp_path):
+def _trigger(name, tmp_path) -> str:
     """The trigger with its `/tmp/` files repointed under `tmp_path`: a guard that
     stats the path finds it, and nothing is written outside the test's own dir.
     `cat-heredoc-write-advise` is silent for a target outside every repo, so its
@@ -176,7 +177,7 @@ _MATRIX_NAMES = [name for name, cmd in _TRIGGERS.items() if cmd is not None]
 
 
 @pytest.mark.parametrize("name", _MATRIX_NAMES)
-def test_windows_true_always_shows(name, monkeypatch, capsys, tmp_path):
+def test_windows_true_always_shows(name, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     cmd = _trigger(name, tmp_path)
     cwd = _cwd_for(name, tmp_path, monkeypatch)
     out = _run_isolated(name, cmd, True, "h6-%s-true" % name, monkeypatch, cwd=cwd)
@@ -189,7 +190,7 @@ def test_windows_true_always_shows(name, monkeypatch, capsys, tmp_path):
 
 
 @pytest.mark.parametrize("name", _MATRIX_NAMES)
-def test_non_windows_host_default(name, monkeypatch, capsys, tmp_path):
+def test_non_windows_host_default(name, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     """On a non-Windows host: a windows_cost_only guard is suppressed (fully,
     or leg-scoped down to just its rewrite); host_independent and
     not_cost_argued guards are UNCHANGED -- they still show."""
@@ -214,7 +215,7 @@ def test_non_windows_host_default(name, monkeypatch, capsys, tmp_path):
         )
 
 
-def test_validate_commit_predicate_never_suppresses_not_cost_argued():
+def test_validate_commit_predicate_never_suppresses_not_cost_argued() -> None:
     envelope = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -235,13 +236,13 @@ def test_validate_commit_predicate_never_suppresses_not_cost_argued():
 
 class _FakeOs:
 
-    def __init__(self, name):
+    def __init__(self, name) -> None:
         self.name = name
 
 
 class _FakeSys:
 
-    def __init__(self, platform):
+    def __init__(self, platform) -> None:
         self.platform = platform
 
 
@@ -249,7 +250,7 @@ _PAIRED_SYS_PLATFORM = {"nt": "win32", "posix": "linux"}
 
 
 @pytest.mark.parametrize("os_name,expect_suppressed", [("nt", False), ("posix", True)])
-def test_none_path_resolves_to_real_host_not_falsy(os_name, expect_suppressed, monkeypatch, capsys):
+def test_none_path_resolves_to_real_host_not_falsy(os_name, expect_suppressed, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     # EM-found defect (2026-08-07) -- `_resolve_host_is_windows` resolves
     # in THREE steps: (1) the `host_is_windows` kwarg (omitted here, the point of
     # this test), (2) a declared value in the machine-local registry
@@ -291,7 +292,7 @@ def test_none_path_resolves_to_real_host_not_falsy(os_name, expect_suppressed, m
 # ---------------------------------------------------------------------------
 
 
-def test_leg_scoped_suppression_preserves_rewrite_drops_advisory(monkeypatch):
+def test_leg_scoped_suppression_preserves_rewrite_drops_advisory(monkeypatch: pytest.MonkeyPatch) -> None:
     cmd = "find . -exec rm {} \\;"
     out_windows = _run_isolated("find-exec-rewrite", cmd, True, "h6-leg-true", monkeypatch)
     out_macos = _run_isolated("find-exec-rewrite", cmd, False, "h6-leg-false", monkeypatch)
@@ -322,7 +323,7 @@ def test_leg_scoped_suppression_preserves_rewrite_drops_advisory(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_shadowing_previously_shadowed_guard_may_now_surface(monkeypatch, capsys):
+def test_shadowing_previously_shadowed_guard_may_now_surface(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     cmd = "find . -exec rm {} \\;"
     out_true = dispatch.evaluate_payload_json(
         json.dumps(_payload(cmd, session_id="h6-shadow-true")), host_is_windows=True
@@ -336,7 +337,7 @@ def test_shadowing_previously_shadowed_guard_may_now_surface(monkeypatch, capsys
 
 
 @pytest.mark.parametrize("advisory_value", list(AdvisoryValue))
-def test_deny_envelope_never_suppressed_for_any_advisory_value(advisory_value):
+def test_deny_envelope_never_suppressed_for_any_advisory_value(advisory_value) -> None:
     deny_envelope = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
@@ -364,7 +365,7 @@ def test_deny_envelope_never_suppressed_for_any_advisory_value(advisory_value):
 # ---------------------------------------------------------------------------
 
 
-def test_suppressed_advisory_then_later_deny_still_fires(monkeypatch):
+def test_suppressed_advisory_then_later_deny_still_fires(monkeypatch: pytest.MonkeyPatch) -> None:
     suppressible_allow = {
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",

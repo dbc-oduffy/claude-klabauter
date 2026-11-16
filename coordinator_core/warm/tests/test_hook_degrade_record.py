@@ -6,6 +6,7 @@ import urllib.error
 import urllib.request
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -24,7 +25,7 @@ def _post(port: int, payload: dict, timeout: float = 5.0):
         return resp.status, resp.read()
 
 
-def test_record_degrade_writes_a_row_with_kind_and_cause(tmp_path):
+def test_record_degrade_writes_a_row_with_kind_and_cause(tmp_path: Path) -> None:
     telemetry.record_degrade(
         kind=telemetry.KIND_COLD_RUN, cause="something ran cold", engine_root=tmp_path
     )
@@ -36,7 +37,7 @@ def test_record_degrade_writes_a_row_with_kind_and_cause(tmp_path):
     assert "ts" in rows[0]
 
 
-def test_record_degrade_accepts_hook_timeout_kind(tmp_path):
+def test_record_degrade_accepts_hook_timeout_kind(tmp_path: Path) -> None:
     telemetry.record_degrade(
         kind=telemetry.KIND_HOOK_TIMEOUT, cause="took too long", engine_root=tmp_path
     )
@@ -45,18 +46,18 @@ def test_record_degrade_accepts_hook_timeout_kind(tmp_path):
     assert rows[0]["kind"] == telemetry.KIND_HOOK_TIMEOUT
 
 
-def test_record_degrade_rejects_an_unknown_kind(tmp_path):
+def test_record_degrade_rejects_an_unknown_kind(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         telemetry.record_degrade(kind="something-else", cause="x", engine_root=tmp_path)
 
     assert telemetry.degrade_samples(tmp_path) == []
 
 
-def test_absent_file_reads_as_no_degrades(tmp_path):
+def test_absent_file_reads_as_no_degrades(tmp_path: Path) -> None:
     assert telemetry.degrade_samples(tmp_path) == []
 
 
-def test_recorder_never_raises_past_a_locking_failure(tmp_path, monkeypatch):
+def test_recorder_never_raises_past_a_locking_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*args, **kwargs):
         raise OSError("disk full")
 
@@ -66,7 +67,7 @@ def test_recorder_never_raises_past_a_locking_failure(tmp_path, monkeypatch):
     )
 
 
-def test_multiple_rows_append_rather_than_overwrite(tmp_path):
+def test_multiple_rows_append_rather_than_overwrite(tmp_path: Path) -> None:
     telemetry.record_degrade(kind=telemetry.KIND_COLD_RUN, cause="a", engine_root=tmp_path)
     telemetry.record_degrade(kind=telemetry.KIND_HOOK_TIMEOUT, cause="b", engine_root=tmp_path)
 
@@ -74,7 +75,7 @@ def test_multiple_rows_append_rather_than_overwrite(tmp_path):
     assert [r["kind"] for r in rows] == [telemetry.KIND_COLD_RUN, telemetry.KIND_HOOK_TIMEOUT]
 
 
-def test_dispatch_failure_records_a_cold_run(monkeypatch):
+def test_dispatch_failure_records_a_cold_run(monkeypatch: pytest.MonkeyPatch) -> None:
     recorded = []
     monkeypatch.setattr(
         telemetry, "record_degrade", lambda **kw: recorded.append(kw)
@@ -96,13 +97,13 @@ def test_dispatch_failure_records_a_cold_run(monkeypatch):
     assert "do_POST" in recorded[0]["cause"]
 
 
-def test_fast_dispatch_records_nothing(monkeypatch):
+def test_fast_dispatch_records_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     recorded = []
     monkeypatch.setattr(
         telemetry, "record_degrade", lambda **kw: recorded.append(kw)
     )
 
-    def fake_serve_line(raw, *, write, **kwargs):
+    def fake_serve_line(raw, *, write, **kwargs) -> None:
         write(b'{"ok":true}')
 
     srv, port, _t = http_listener.start(lambda: (fake_serve_line, {}))
@@ -115,7 +116,7 @@ def test_fast_dispatch_records_nothing(monkeypatch):
     assert recorded == []
 
 
-def test_slow_dispatch_records_a_hook_timeout(monkeypatch):
+def test_slow_dispatch_records_a_hook_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
     """A dispatch that clears `HOOK_BUDGET_SECS` is still answered normally
     (200), but the overrun is recorded before the caller-side harness
     timeout would ever fire."""
@@ -125,7 +126,7 @@ def test_slow_dispatch_records_a_hook_timeout(monkeypatch):
     )
     monkeypatch.setattr(http_listener, "HOOK_BUDGET_SECS", 0.0)
 
-    def fake_serve_line(raw, *, write, **kwargs):
+    def fake_serve_line(raw, *, write, **kwargs) -> None:
         write(b'{"ok":true}')
 
     srv, port, _t = http_listener.start(lambda: (fake_serve_line, {}))

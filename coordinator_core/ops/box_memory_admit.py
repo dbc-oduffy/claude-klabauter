@@ -81,7 +81,7 @@ def admit(params, repo_root=None):
 
 
 @register_op("box_memory.register", params_schema=_REGISTER_SCHEMA)
-def register(params, repo_root=None):
+def register(params, repo_root=None) -> dict[str, bool]:
     """Write the headroom reservation for (key, pid) into the admission file; `ok` is false on a write failure."""
     p = _checked("box_memory.register", params, _REGISTER_SCHEMA)
     from coordinator_core.bash_guards import _heavy_command_class as hcc
@@ -96,7 +96,7 @@ def register(params, repo_root=None):
 
 
 @register_op("box_memory.release", params_schema=_RELEASE_SCHEMA)
-def release(params, repo_root=None):
+def release(params, repo_root=None) -> dict[str, bool]:
     """Free the reservation for (key, pid); a missing row or unwritable file still reports ok."""
     p = _checked("box_memory.release", params, _RELEASE_SCHEMA)
     from coordinator_core.bash_guards import _heavy_command_class as hcc

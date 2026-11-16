@@ -4,6 +4,7 @@ row is withheld until the named row carries `disposition: coded`."""
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -59,7 +60,7 @@ _DEPENDENT = """\
 """
 
 
-def test_unlanded_predecessor_withholds_row_and_its_dependents(tmp_path):
+def test_unlanded_predecessor_withholds_row_and_its_dependents(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _predecessor(repo, "open")
     dep = _plan(repo / "docs" / "plans" / "dep.md", _DEPENDENT)
@@ -74,7 +75,7 @@ def test_unlanded_predecessor_withholds_row_and_its_dependents(tmp_path):
     assert by_id["D2"]["reason"] == "withheld_by_held_dependency"
 
 
-def test_coded_predecessor_releases_the_row(tmp_path):
+def test_coded_predecessor_releases_the_row(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _predecessor(repo, "coded")
     dep = _plan(repo / "docs" / "plans" / "dep.md", _DEPENDENT)
@@ -83,7 +84,7 @@ def test_coded_predecessor_releases_the_row(tmp_path):
 
 
 @pytest.mark.parametrize("disposition", ["wont_do", "backlogged", "spun_off"])
-def test_terminal_non_coded_predecessor_is_dangling(tmp_path, disposition):
+def test_terminal_non_coded_predecessor_is_dangling(tmp_path: Path, disposition) -> None:
     repo = _repo(tmp_path)
     _predecessor(repo, disposition)
     dep = _plan(repo / "docs" / "plans" / "dep.md", _DEPENDENT)
@@ -92,7 +93,7 @@ def test_terminal_non_coded_predecessor_is_dangling(tmp_path, disposition):
         read_spine(dep)
 
 
-def test_missing_predecessor_plan_is_dangling(tmp_path):
+def test_missing_predecessor_plan_is_dangling(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     dep = _plan(repo / "docs" / "plans" / "dep.md", _DEPENDENT)
 
@@ -100,7 +101,7 @@ def test_missing_predecessor_plan_is_dangling(tmp_path):
         read_spine(dep)
 
 
-def test_unknown_predecessor_chunk_is_dangling(tmp_path):
+def test_unknown_predecessor_chunk_is_dangling(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _plan(repo / "docs" / "plans" / "pred.md", "- id: OTHER\n  title: x\n  surface: a.py\n  writes: [a.py]\n")
     dep = _plan(repo / "docs" / "plans" / "dep.md", _DEPENDENT)
@@ -109,7 +110,7 @@ def test_unknown_predecessor_chunk_is_dangling(tmp_path):
         read_spine(dep)
 
 
-def test_parent_traversal_is_refused(tmp_path):
+def test_parent_traversal_is_refused(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     dep = _plan(
         repo / "docs" / "plans" / "dep.md",
@@ -122,7 +123,7 @@ def test_parent_traversal_is_refused(tmp_path):
         read_spine(dep)
 
 
-def test_no_git_ancestor_withholds_rather_than_dispatches(tmp_path):
+def test_no_git_ancestor_withholds_rather_than_dispatches(tmp_path: Path) -> None:
     dep = _plan(tmp_path / "docs" / "plans" / "dep.md", _DEPENDENT)
     exclusions: list = []
 
@@ -132,7 +133,7 @@ def test_no_git_ancestor_withholds_rather_than_dispatches(tmp_path):
     assert {e["id"]: e["reason"] for e in exclusions}["D1"] == "depends_on_plan"
 
 
-def test_done_spelling_reads_as_coded_for_the_row_and_for_a_predecessor(tmp_path):
+def test_done_spelling_reads_as_coded_for_the_row_and_for_a_predecessor(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _predecessor(repo, "done")
     dep = _plan(
@@ -151,7 +152,7 @@ def test_done_spelling_reads_as_coded_for_the_row_and_for_a_predecessor(tmp_path
 _EDGE = {"plan": "docs/plans/pred.md", "chunk": "P1", "gate_kind": "output-consumption-runtime"}
 
 
-def test_resolve_chunk_edge_to_open_row_returns_row_and_hold(tmp_path):
+def test_resolve_chunk_edge_to_open_row_returns_row_and_hold(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _predecessor(repo, "open")
 
@@ -161,7 +162,7 @@ def test_resolve_chunk_edge_to_open_row_returns_row_and_hold(tmp_path):
     assert res.hold is not None and "not yet coded" in res.hold
 
 
-def test_resolve_chunk_edge_to_done_row_is_coded_and_unheld(tmp_path):
+def test_resolve_chunk_edge_to_done_row_is_coded_and_unheld(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _predecessor(repo, "done")
 
@@ -171,7 +172,7 @@ def test_resolve_chunk_edge_to_done_row_is_coded_and_unheld(tmp_path):
     assert res.hold is None
 
 
-def test_resolve_status_edge_has_no_named_row(tmp_path):
+def test_resolve_status_edge_has_no_named_row(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _predecessor(repo, "open")
     edge = {"plan": "docs/plans/pred.md", "status": "approved", "gate_kind": "epistemic-premise"}
@@ -181,7 +182,7 @@ def test_resolve_status_edge_has_no_named_row(tmp_path):
     assert res.named_row is None
 
 
-def test_resolve_backslash_plan_reads_as_slash(tmp_path):
+def test_resolve_backslash_plan_reads_as_slash(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _predecessor(repo, "open")
 
@@ -190,14 +191,14 @@ def test_resolve_backslash_plan_reads_as_slash(tmp_path):
     assert res.named_row["id"] == "P1"
 
 
-def test_resolve_absent_plan_is_dangling(tmp_path):
+def test_resolve_absent_plan_is_dangling(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
 
     with pytest.raises(DanglingPlanDependencyError):
         resolve_plan_edge("row 'D1'", _EDGE, repo, {})
 
 
-def test_held_first_edge_does_not_stop_a_later_dangling_edge_raising(tmp_path):
+def test_held_first_edge_does_not_stop_a_later_dangling_edge_raising(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _predecessor(repo, "open")
     absent = {**_EDGE, "plan": "docs/plans/absent.md"}
@@ -206,7 +207,7 @@ def test_held_first_edge_does_not_stop_a_later_dangling_edge_raising(tmp_path):
         unlanded_plan_edges("row 'D1'", [_EDGE, absent], repo, {})
 
 
-def _archive(repo, name="pred.md", status="implemented"):
+def _archive(repo, name: str = "pred.md", status: str = "implemented") -> None:
     src = repo / "docs" / "plans" / name
     dest = repo / "archive" / "specs" / "2026-10" / name
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -214,7 +215,7 @@ def _archive(repo, name="pred.md", status="implemented"):
     dest.write_text(f"---\nstatus: {status}\n---\n" + dest.read_text(encoding="utf-8"), encoding="utf-8")
 
 
-def test_chunk_edge_to_archived_plan_is_satisfied(tmp_path):
+def test_chunk_edge_to_archived_plan_is_satisfied(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _predecessor(repo, "open")
     _archive(repo)
@@ -226,7 +227,7 @@ def test_chunk_edge_to_archived_plan_is_satisfied(tmp_path):
     assert [r.id for r in read_spine(dep)] == ["D1", "D2", "D3"]
 
 
-def test_status_edge_to_archived_plan_is_satisfied(tmp_path):
+def test_status_edge_to_archived_plan_is_satisfied(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _predecessor(repo, "open")
     _archive(repo)
@@ -236,7 +237,7 @@ def test_status_edge_to_archived_plan_is_satisfied(tmp_path):
 
 
 @pytest.mark.parametrize("status", ["abandoned", "superseded"])
-def test_archived_dead_plan_is_still_dangling(tmp_path, status):
+def test_archived_dead_plan_is_still_dangling(tmp_path: Path, status) -> None:
     repo = _repo(tmp_path)
     _predecessor(repo, "open")
     _archive(repo, status=status)
@@ -245,7 +246,7 @@ def test_archived_dead_plan_is_still_dangling(tmp_path, status):
         resolve_plan_edge("row 'D1'", _EDGE, repo, {})
 
 
-def test_plan_absent_everywhere_stays_dangling(tmp_path):
+def test_plan_absent_everywhere_stays_dangling(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "archive" / "specs" / "2026-10").mkdir(parents=True)
 
@@ -278,14 +279,14 @@ def _git_repo(tmp_path):
     return tmp_path
 
 
-def _checkpoint(repo, trailers: str = ""):
+def _checkpoint(repo, trailers: str = "") -> None:
     from coordinator_core.ops.dispatch_emit.tests.test_checkpoint_rows_landed import _commit
 
     _commit(repo, "checkpoint(wave 0): 1 rows — P1", f"Checkpoint-Plan: {_PRED}{trailers}")
 
 
 @pytest.mark.spawns_process
-def test_open_predecessor_landed_by_checkpoint_is_unheld(tmp_path):
+def test_open_predecessor_landed_by_checkpoint_is_unheld(tmp_path: Path) -> None:
     repo = _git_repo(tmp_path)
     _checkpoint(repo)
 
@@ -297,7 +298,7 @@ def test_open_predecessor_landed_by_checkpoint_is_unheld(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("trailer", ["Checkpoint-Gate-Owed: P1", "Checkpoint-Stop-Rule: P1"])
-def test_gate_owed_or_stop_rule_checkpoint_still_holds(tmp_path, trailer):
+def test_gate_owed_or_stop_rule_checkpoint_still_holds(tmp_path: Path, trailer) -> None:
     repo = _git_repo(tmp_path)
     _checkpoint(repo, "\n" + trailer)
 
@@ -305,14 +306,14 @@ def test_gate_owed_or_stop_rule_checkpoint_still_holds(tmp_path, trailer):
 
 
 @pytest.mark.spawns_process
-def test_open_predecessor_in_no_checkpoint_still_holds(tmp_path):
+def test_open_predecessor_in_no_checkpoint_still_holds(tmp_path: Path) -> None:
     repo = _git_repo(tmp_path)
 
     assert "not yet coded" in resolve_plan_edge("row 'D1'", _EDGE, repo, {}).hold
 
 
 @pytest.mark.spawns_process
-def test_checkpoint_walk_runs_once_per_predecessor_plan(tmp_path, monkeypatch):
+def test_checkpoint_walk_runs_once_per_predecessor_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import checkpoint_stamp as cs
 
     repo = _git_repo(tmp_path)
@@ -328,7 +329,7 @@ def test_checkpoint_walk_runs_once_per_predecessor_plan(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
-def test_coded_predecessor_pays_no_walk(tmp_path, monkeypatch):
+def test_coded_predecessor_pays_no_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import checkpoint_stamp as cs
 
     repo = _repo(tmp_path)

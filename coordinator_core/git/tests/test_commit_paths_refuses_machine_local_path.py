@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.git import commit as gcommit
 from coordinator_core.git.commit import CommitRefused
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -20,7 +21,7 @@ def _git(repo, *args):
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/p")
@@ -33,13 +34,13 @@ def repo(tmp_path):
     return r
 
 
-def _write_share(repo, name="r.md"):
+def _write_share(repo, name: str = "r.md") -> None:
     p = repo / ".coordinator-local/subagent-share" / name
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("x\n", encoding="utf-8")
 
 
-def test_an_added_share_path_is_refused_and_head_holds(repo):
+def test_an_added_share_path_is_refused_and_head_holds(repo) -> None:
     _write_share(repo)
     head = _git(repo, "rev-parse", "HEAD")
     with pytest.raises(CommitRefused, match="machine-local") as exc:
@@ -48,7 +49,7 @@ def test_an_added_share_path_is_refused_and_head_holds(repo):
     assert _git(repo, "rev-parse", "HEAD") == head
 
 
-def test_a_mixed_case_share_path_is_refused(repo):
+def test_a_mixed_case_share_path_is_refused(repo) -> None:
     rel = ".Coordinator-Local/Subagent-Share/r.md"
     p = repo / rel
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -57,7 +58,7 @@ def test_a_mixed_case_share_path_is_refused(repo):
         gcommit.commit_paths(repo, [rel], "m")
 
 
-def test_a_share_path_in_deleted_paths_is_never_refused(repo):
+def test_a_share_path_in_deleted_paths_is_never_refused(repo) -> None:
     _write_share(repo)
     _git(repo, "add", "-f", _SHARE)
     _git(repo, "commit", "-q", "-m", "tracked by an older merge")
@@ -66,7 +67,7 @@ def test_a_share_path_in_deleted_paths_is_never_refused(repo):
     assert _SHARE not in _git(repo, "ls-tree", "-r", "--name-only", "HEAD").split()
 
 
-def test_a_share_path_in_untracked_paths_is_never_refused(repo):
+def test_a_share_path_in_untracked_paths_is_never_refused(repo) -> None:
     _write_share(repo)
     _git(repo, "add", "-f", _SHARE)
     _git(repo, "commit", "-q", "-m", "tracked by an older merge")

@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from coordinator_core.ops.ceremony import commit_v2
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -39,7 +40,7 @@ def _dispositions(path) -> list:
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/p")
@@ -69,7 +70,7 @@ def _commit(repo, marker: str):
     )
 
 
-def test_a_marked_checkpoint_leaves_plan_bytes_and_dispositions_unchanged(repo):
+def test_a_marked_checkpoint_leaves_plan_bytes_and_dispositions_unchanged(repo) -> None:
     before = (repo / _PLAN).read_bytes()
     out = _commit(repo, "\nCheckpoint-Not-Landed: run-open")
     assert out["committed"] is True, out
@@ -78,7 +79,7 @@ def test_a_marked_checkpoint_leaves_plan_bytes_and_dispositions_unchanged(repo):
     assert _dispositions(repo / _PLAN) == ["open", "open"]
 
 
-def test_a_legacy_checkpoint_without_the_marker_still_flips_coded(repo):
+def test_a_legacy_checkpoint_without_the_marker_still_flips_coded(repo) -> None:
     out = _commit(repo, "")
     assert out["committed"] is True, out
     assert "stamp_deferred" not in out["checkpoint_stamp"], out["checkpoint_stamp"]

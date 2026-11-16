@@ -10,6 +10,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Optional
 
+from coordinator_core.bash_guards._dc_shell_text import _strip_shell_comments_for_prose_scan
 from coordinator_core.bash_guards._rewrite_support import (
     _advisory_record,
     _crlf_strip,
@@ -60,7 +61,7 @@ def _ends_in_job_ampersand(cmd: str) -> bool:
         if m and "<<<" not in line:
             hd_strip = m.group(1) == "-"
             hd_word = m.group(2) or m.group(3) or m.group(4)
-    text = "\n".join(kept).rstrip()
+    text = _strip_shell_comments_for_prose_scan("\n".join(kept)).rstrip()
     if not text.endswith("&"):
         return False
 

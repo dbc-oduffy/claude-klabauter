@@ -51,7 +51,7 @@ def _payload(root: Path) -> dict:
 
 
 @pytest.fixture
-def seams(monkeypatch):
+def seams(monkeypatch: pytest.MonkeyPatch):
     """No emit, no compose, a recording recompose spawner."""
     spawned: list = []
     monkeypatch.setattr(mod, "_spawn_recompose", lambda root, run_id: spawned.append(run_id) or True)
@@ -76,7 +76,7 @@ def _hso(env: dict) -> dict:
     return env["hookSpecificOutput"]
 
 
-def test_matching_fingerprint_emits_the_stored_script(tmp_path, seams):
+def test_matching_fingerprint_emits_the_stored_script(tmp_path: Path, seams) -> None:
     spawned, emitted, emit = seams
     root = _repo(tmp_path)
     env = mod.evaluate(_payload(root), emit=emit)
@@ -87,7 +87,7 @@ def test_matching_fingerprint_emits_the_stored_script(tmp_path, seams):
 
 
 @pytest.mark.parametrize("changed", ["sizing", "plan", "head"])
-def test_stale_fingerprint_spawns_recompose_and_starts_via_launcher(tmp_path, seams, changed):
+def test_stale_fingerprint_spawns_recompose_and_starts_via_launcher(tmp_path: Path, seams, changed) -> None:
     spawned, emitted, emit = seams
     root = _repo(tmp_path)
     if changed == "sizing":
@@ -104,7 +104,7 @@ def test_stale_fingerprint_spawns_recompose_and_starts_via_launcher(tmp_path, se
     assert spawned == [HALTED_ID] and emitted == []
 
 
-def test_missing_record_spawns_recompose_and_starts_via_launcher(tmp_path, seams):
+def test_missing_record_spawns_recompose_and_starts_via_launcher(tmp_path: Path, seams) -> None:
     spawned, emitted, emit = seams
     root = _repo(tmp_path, record=False)
     env = mod.evaluate(_payload(root), emit=emit)
@@ -114,12 +114,12 @@ def test_missing_record_spawns_recompose_and_starts_via_launcher(tmp_path, seams
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds the hook deadline against a stalled record read; blocked time burns no CPU")
-def test_stalled_record_read_starts_the_run_within_the_deadline(tmp_path, seams, monkeypatch):
+def test_stalled_record_read_starts_the_run_within_the_deadline(tmp_path: Path, seams, monkeypatch: pytest.MonkeyPatch) -> None:
     spawned, emitted, emit = seams
     root = _repo(tmp_path)
     real = hrr._read_file
 
-    def slow(path):
+    def slow(path) -> bytes:
         if Path(path).name == hrr.RESUME_FILE:
             time.sleep(1.5)
         return real(path)
@@ -134,7 +134,7 @@ def test_stalled_record_read_starts_the_run_within_the_deadline(tmp_path, seams,
     assert spawned == [HALTED_ID] and emitted == []
 
 
-def test_stored_gate_halt_is_a_named_refusal(tmp_path, seams):
+def test_stored_gate_halt_is_a_named_refusal(tmp_path: Path, seams) -> None:
     spawned, emitted, emit = seams
     root = _repo(tmp_path, verdict={"halt": {"kind": "touchpoint", "reason": "needs the PM"}})
     env = mod.evaluate(_payload(root), emit=emit)
@@ -158,7 +158,7 @@ def _refused_repo(tmp_path: Path, retry_not_before) -> Path:
     return root
 
 
-def test_refused_record_inside_backoff_is_a_refusal_with_no_recompose(tmp_path, seams):
+def test_refused_record_inside_backoff_is_a_refusal_with_no_recompose(tmp_path: Path, seams) -> None:
     spawned, emitted, emit = seams
     root = _refused_repo(tmp_path, time.time() + 600)
     env = mod.evaluate(_payload(root), emit=emit)
@@ -167,7 +167,7 @@ def test_refused_record_inside_backoff_is_a_refusal_with_no_recompose(tmp_path, 
     assert spawned == [] and emitted == []
 
 
-def test_refused_record_past_backoff_recomposes_through_the_launcher(tmp_path, seams):
+def test_refused_record_past_backoff_recomposes_through_the_launcher(tmp_path: Path, seams) -> None:
     spawned, emitted, emit = seams
     root = _refused_repo(tmp_path, time.time() - 1)
     env = mod.evaluate(_payload(root), emit=emit)
@@ -175,7 +175,7 @@ def test_refused_record_past_backoff_recomposes_through_the_launcher(tmp_path, s
     assert spawned == [HALTED_ID] and emitted == []
 
 
-def test_no_halted_run_takes_the_plain_emit(tmp_path, seams):
+def test_no_halted_run_takes_the_plain_emit(tmp_path: Path, seams) -> None:
     spawned, emitted, emit = seams
     (tmp_path / ".git").mkdir()
     (tmp_path / SIZING_REL).parent.mkdir(parents=True)
@@ -185,13 +185,13 @@ def test_no_halted_run_takes_the_plain_emit(tmp_path, seams):
     assert len(emitted) == 1 and spawned == []
 
 
-def test_hook_source_names_none_of_the_killed_resume_calls():
+def test_hook_source_names_none_of_the_killed_resume_calls() -> None:
     text = Path(mod.__file__).read_text(encoding="utf-8")
     for needle in ("resumable_plan", "compose_ask_script", "live_footprints", "resume_landed_state"):
         assert needle not in text, needle
 
 
-def test_a_halted_ask_run_resumes_from_its_record(tmp_path, seams):
+def test_a_halted_ask_run_resumes_from_its_record(tmp_path: Path, seams) -> None:
     """An `ask-<stamp>` halt is found the way the emit body finds it, so its record is read."""
     spawned, emitted, emit = seams
     ask_id = "ask-20261029T010101-abc123"
@@ -204,7 +204,7 @@ def test_a_halted_ask_run_resumes_from_its_record(tmp_path, seams):
 
 
 @pytest.mark.parametrize("reserved", [HALTED_ID, "ask-20261029T020202-ffffff"])
-def test_a_halted_sizing_resumes_whatever_run_id_the_slice_reserved(tmp_path, seams, reserved):
+def test_a_halted_sizing_resumes_whatever_run_id_the_slice_reserved(tmp_path: Path, seams, reserved) -> None:
     """A halted marker for the sizing wins over a fan-out slice's reserved run id: the halted run
     resumes from its record whether the slice reserved that id or another."""
     root = _repo(tmp_path)
@@ -212,7 +212,7 @@ def test_a_halted_sizing_resumes_whatever_run_id_the_slice_reserved(tmp_path, se
     assert env is not None or result is not None
 
 
-def test_a_refire_carrying_its_own_params_is_not_served_the_halt_time_script(tmp_path, seams):
+def test_a_refire_carrying_its_own_params_is_not_served_the_halt_time_script(tmp_path: Path, seams) -> None:
     """The stored script was composed with halt-time params; a call naming its own (stop_after here)
     starts through the launcher with them, and a matching record is not recomposed."""
     spawned, _, _ = seams
@@ -230,7 +230,7 @@ def test_a_refire_carrying_its_own_params_is_not_served_the_halt_time_script(tmp
 
 
 def _sleeping(calls: list, label: str, seconds: float = 1.5):
-    def slow(*a, **k):
+    def slow(*a, **k) -> None:
         calls.append(label)
         time.sleep(seconds)
         return None
@@ -239,7 +239,7 @@ def _sleeping(calls: list, label: str, seconds: float = 1.5):
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds the spent hook budget across sleeping reads; sleep burns no CPU")
-def test_a_spent_budget_short_circuits_every_later_read(tmp_path, seams, monkeypatch):
+def test_a_spent_budget_short_circuits_every_later_read(tmp_path: Path, seams, monkeypatch: pytest.MonkeyPatch) -> None:
     """The record read returns a real record but spends the whole hook budget doing so; the fingerprint
     read, which a returned record would otherwise trigger, then never starts, and the run still starts
     through the launcher without an inline compose."""
@@ -265,7 +265,7 @@ def test_a_spent_budget_short_circuits_every_later_read(tmp_path, seams, monkeyp
     assert spawned == [HALTED_ID] and emitted == []
 
 
-def test_distinct_keys_stalling_after_the_sizing_read_share_one_budget(tmp_path, seams, monkeypatch):
+def test_distinct_keys_stalling_after_the_sizing_read_share_one_budget(tmp_path: Path, seams, monkeypatch: pytest.MonkeyPatch) -> None:
     """The sizing read returns at once; the halted lookup and the record read each eat part of the
     budget and the fingerprint read stalls past it. No read starts after the budget is spent, the
     hook call total stays inside it, and the run still starts through the launcher."""
@@ -300,7 +300,7 @@ def test_distinct_keys_stalling_after_the_sizing_read_share_one_budget(tmp_path,
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds the hook deadline across stalled reads; blocked time burns no CPU")
-def test_every_read_stalled_never_composes_inline_and_stays_under_the_bar(tmp_path, seams, monkeypatch):
+def test_every_read_stalled_never_composes_inline_and_stays_under_the_bar(tmp_path: Path, seams, monkeypatch: pytest.MonkeyPatch) -> None:
     spawned, emitted, emit = seams
     root = _repo(tmp_path)
     calls: list = []
@@ -320,7 +320,7 @@ def test_every_read_stalled_never_composes_inline_and_stays_under_the_bar(tmp_pa
     assert emitted == [] and spawned == []
 
 
-def test_a_stalled_sizing_read_keeps_the_marker_and_retires_nothing(tmp_path, seams, monkeypatch):
+def test_a_stalled_sizing_read_keeps_the_marker_and_retires_nothing(tmp_path: Path, seams, monkeypatch: pytest.MonkeyPatch) -> None:
     """`{}` for a stalled sizing would drop the ask_parent marker, mint a fresh run and retire the halt."""
     spawned, emitted, emit = seams
     root = _repo(tmp_path)
@@ -336,7 +336,7 @@ def test_a_stalled_sizing_read_keeps_the_marker_and_retires_nothing(tmp_path, se
     assert retired == [] and emitted == [] and spawned == []
 
 
-def test_a_stalled_halted_lookup_defers_instead_of_refusing_or_composing_inline(tmp_path, seams, monkeypatch):
+def test_a_stalled_halted_lookup_defers_instead_of_refusing_or_composing_inline(tmp_path: Path, seams, monkeypatch: pytest.MonkeyPatch) -> None:
     spawned, emitted, emit = seams
     root = _repo(tmp_path)
     monkeypatch.setattr("coordinator_core.ops.dispatch_emit.halted_run.halted_run_to_resume", _sleeping([], "halted"))
@@ -350,7 +350,7 @@ def test_a_stalled_halted_lookup_defers_instead_of_refusing_or_composing_inline(
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds the hook deadline while a lookup is in flight; blocked time burns no CPU")
-def test_a_lookup_already_in_flight_defers_not_the_plain_emit(tmp_path, seams, monkeypatch):
+def test_a_lookup_already_in_flight_defers_not_the_plain_emit(tmp_path: Path, seams, monkeypatch: pytest.MonkeyPatch) -> None:
     """A second hook call while the first's lookup is still stuck returns STALLED at once."""
     spawned, emitted, emit = seams
     root = _repo(tmp_path)
@@ -364,7 +364,7 @@ def test_a_lookup_already_in_flight_defers_not_the_plain_emit(tmp_path, seams, m
     assert emitted == []
 
 
-def test_a_record_naming_another_resume_plan_is_not_served(tmp_path, seams):
+def test_a_record_naming_another_resume_plan_is_not_served(tmp_path: Path, seams) -> None:
     """The reader resolves the plan from the sizing and halt marker, not from the record's own field."""
     spawned, emitted, emit = seams
     root = _repo(tmp_path)
@@ -384,7 +384,7 @@ def test_a_record_naming_another_resume_plan_is_not_served(tmp_path, seams):
     assert spawned == [HALTED_ID]
 
 
-def test_a_resolution_change_from_the_sizing_bytes_is_not_served_the_old_record(tmp_path, seams):
+def test_a_resolution_change_from_the_sizing_bytes_is_not_served_the_old_record(tmp_path: Path, seams) -> None:
     """Halt base unchanged, record intact; the sizing now names another plan, so the current
     resolution differs from the one the record was fingerprinted under."""
     spawned, emitted, emit = seams
@@ -397,7 +397,7 @@ def test_a_resolution_change_from_the_sizing_bytes_is_not_served_the_old_record(
     assert spawned == [HALTED_ID]
 
 
-def test_a_second_refire_does_not_stack_a_recompose(tmp_path, monkeypatch):
+def test_a_second_refire_does_not_stack_a_recompose(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path, record=False)
     spawns: list = []
     monkeypatch.setattr("coordinator_core.ops.ceremony.detached_spawn.spawn_detached", lambda *a, **k: spawns.append(a) or True)
@@ -410,7 +410,7 @@ def test_a_second_refire_does_not_stack_a_recompose(tmp_path, monkeypatch):
     assert len(spawns) == 2
 
 
-def _stall_every_read_but_the_hint(monkeypatch, calls):
+def _stall_every_read_but_the_hint(monkeypatch, calls) -> None:
     real = hrr._read_file
     sleeper = _sleeping(calls, "hrr")
 
@@ -428,7 +428,7 @@ def _stall_every_read_but_the_hint(monkeypatch, calls):
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds the hook deadline across stalled reads with a halt hint; blocked time burns no CPU")
-def test_every_read_stalled_with_a_halt_hint_resumes_through_the_launcher(tmp_path, seams, monkeypatch):
+def test_every_read_stalled_with_a_halt_hint_resumes_through_the_launcher(tmp_path: Path, seams, monkeypatch: pytest.MonkeyPatch) -> None:
     spawned, emitted, emit = seams
     root = _repo(tmp_path)
     hrr.write_hint(root, SIZING_REL, HALTED_ID)
@@ -440,7 +440,7 @@ def test_every_read_stalled_with_a_halt_hint_resumes_through_the_launcher(tmp_pa
     assert emitted == [] and spawned == [HALTED_ID]
 
 
-def test_a_halt_hint_for_another_sizing_does_not_resume(tmp_path, seams, monkeypatch):
+def test_a_halt_hint_for_another_sizing_does_not_resume(tmp_path: Path, seams, monkeypatch: pytest.MonkeyPatch) -> None:
     spawned, emitted, emit = seams
     root = _repo(tmp_path)
     hrr.write_hint(root, "state/sizings/other.yaml", HALTED_ID)

@@ -12,11 +12,12 @@ from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.session import record_homes
+import pytest
 
 REL = Path(record_homes.record_path("", "sizings", "2026-10-01-gate.yaml")).as_posix()
 
 
-def test_size_prompt_names_no_mode_and_relays_the_returned_one():
+def test_size_prompt_names_no_mode_and_relays_the_returned_one() -> None:
     script = compose_ask_script(
         repo_root="REPO",
         prompt="add a thing",
@@ -33,7 +34,7 @@ def test_size_prompt_names_no_mode_and_relays_the_returned_one():
     assert not re.search(r"\b(hands-on|ceo)\b", cmd)
 
 
-def test_gate_honours_the_sizings_recorded_mode_over_the_fleet(tmp_path, monkeypatch):
+def test_gate_honours_the_sizings_recorded_mode_over_the_fleet(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = tmp_path / "settings"
     home.mkdir()
     (home / "fleet-mode.json").write_text(json.dumps({"interaction_mode": "ceo"}), encoding="utf-8")

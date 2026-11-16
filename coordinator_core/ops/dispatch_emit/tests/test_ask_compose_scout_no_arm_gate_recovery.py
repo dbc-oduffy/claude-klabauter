@@ -12,6 +12,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -23,7 +24,7 @@ def _stub_wrap(text):
     return "  async function planBlitz(args) {\n    return { ready: [] };\n  }", ["Size", "Plan"]
 
 
-def _compose(**over):
+def _compose(**over) -> str:
     kw = dict(
         repo_root="REPO", prompt="add a thing", sizing_rel=None, run_id="run-1", session_id=None,
         wrap_stage=_stub_wrap, plan_blitz_text="stub", **REVIEW_KW,
@@ -95,7 +96,7 @@ def _scout_of(route: str, tshirt: str) -> dict:
     return {**_CLEAN_SCOUT, "stdout": json.dumps({"route": route}), "route": route, "tshirt": tshirt}
 
 
-def test_the_recovery_is_composed_only_when_sized_in_run():
+def test_the_recovery_is_composed_only_when_sized_in_run() -> None:
     assert _RECOVERY_MARK in _compose()
     assert _RECOVERY_MARK not in _compose(prompt=None, sizing_rel="state/sizings/x.yaml")
 
@@ -105,8 +106,8 @@ def test_the_recovery_is_composed_only_when_sized_in_run():
     [("dispatch", "XS", "xs", ["a.py"]), ("spec-dispatch", "S", "s", [])],
 )
 def test_a_clean_scout_with_no_arm_and_no_halt_derives_the_arm_the_real_gate_answers(
-    route, tshirt, arm, writes, tmp_path
-):
+    route, tshirt, arm, writes, tmp_path: Path
+) -> None:
     """The derived arm skips the gate agent (its baton falls back to the static one; its stage fold
     declines into the stage's own leg) and equals the arm the real gate op answers for that sizing."""
     sizing = _write_sizing(tmp_path, route, tshirt)
@@ -121,7 +122,7 @@ def test_a_clean_scout_with_no_arm_and_no_halt_derives_the_arm_the_real_gate_ans
     assert real["halt"] is None and real["arm"] == result["gate"]["arm"]
 
 
-def test_an_xs_scout_with_no_footprint_still_runs_the_agent(tmp_path):
+def test_an_xs_scout_with_no_footprint_still_runs_the_agent(tmp_path: Path) -> None:
     sizing = _write_sizing(tmp_path, "dispatch", "XS")
     reply = {"arm": "xs", "halt": None, "tshirt": "XS", "route": "dispatch", "stage_reply": {"rows": []}}
     result = _run(_compose(), tmp_path, sizing_path=sizing, scouted=_scout_of("dispatch", "XS"), agent_reply=reply)
@@ -130,7 +131,7 @@ def test_an_xs_scout_with_no_footprint_still_runs_the_agent(tmp_path):
 
 
 @pytest.mark.parametrize("route, tshirt", _UNMAPPED)
-def test_an_unmapped_route_still_adopts_the_gate_agents_arm(route, tshirt, tmp_path):
+def test_an_unmapped_route_still_adopts_the_gate_agents_arm(route, tshirt, tmp_path: Path) -> None:
     sizing = _write_sizing(tmp_path, route, tshirt)
     reply = {"arm": "M_PLUS", "halt": None, "tshirt": tshirt, "route": route}
     result = _run(
@@ -142,7 +143,7 @@ def test_an_unmapped_route_still_adopts_the_gate_agents_arm(route, tshirt, tmp_p
 
 
 @pytest.mark.parametrize("route, tshirt", _UNMAPPED)
-def test_a_clean_scout_with_the_gate_agent_halting_adopts_the_named_halt(route, tshirt, tmp_path):
+def test_a_clean_scout_with_the_gate_agent_halting_adopts_the_named_halt(route, tshirt, tmp_path: Path) -> None:
     sizing = _write_sizing(tmp_path, route, tshirt)
     reply = {"arm": None, "halt": {"kind": "room", "reason": "no room"}, "tshirt": tshirt, "route": route}
     result = _run(_compose(), tmp_path, sizing_path=sizing, scouted=_scout_of(route, tshirt), agent_reply=reply)
@@ -152,7 +153,7 @@ def test_a_clean_scout_with_the_gate_agent_halting_adopts_the_named_halt(route, 
 
 @pytest.mark.parametrize("route, tshirt", _UNMAPPED)
 @pytest.mark.parametrize("reply", [None, {"arm": None, "halt": None}])
-def test_a_gate_agent_that_also_answers_nothing_halts_without_a_refire_into_the_scout(route, tshirt, reply, tmp_path):
+def test_a_gate_agent_that_also_answers_nothing_halts_without_a_refire_into_the_scout(route, tshirt, reply, tmp_path: Path) -> None:
     sizing = _write_sizing(tmp_path, route, tshirt)
     result = _run(_compose(), tmp_path, sizing_path=sizing, scouted=_scout_of(route, tshirt), agent_reply=reply)
     assert result["calls"] == 1
@@ -171,14 +172,14 @@ def test_a_gate_agent_that_also_answers_nothing_halts_without_a_refire_into_the_
         {"exit_code": 1, "stdout": "boom", "stderr": "E"},
     ],
 )
-def test_the_gate_agent_does_not_run_when_the_scout_answered_or_failed(scouted, tmp_path):
+def test_the_gate_agent_does_not_run_when_the_scout_answered_or_failed(scouted, tmp_path: Path) -> None:
     sizing = _write_sizing(tmp_path, "dispatch", "XS")
     reply = {"arm": "s", "halt": None}
     result = _run(_compose(), tmp_path, sizing_path=sizing, scouted=scouted, agent_reply=reply, writes=["a.py"])
     assert result["calls"] == 0
 
 
-def test_the_unrecovered_reason_still_refires_when_the_gate_was_never_recovered():
+def test_the_unrecovered_reason_still_refires_when_the_gate_was_never_recovered() -> None:
     line = _gate_line(_compose())
     assert "refire to re-run the gate" in line and "_gate.recovered" in line
 
@@ -210,13 +211,13 @@ def _gate_reply(tmp_path, route: str, tshirt: str, **params) -> dict:
     ("dispatch", "XS", {"writes": ["a.py"]}, "xs"),
     ("spec-dispatch", "S", {}, "s"),
 ])
-def test_the_real_gate_answers_an_arm_for_each_dispatch_route(route, tshirt, params, arm, tmp_path):
+def test_the_real_gate_answers_an_arm_for_each_dispatch_route(route, tshirt, params, arm, tmp_path: Path) -> None:
     out = _gate_reply(tmp_path, route, tshirt, **params)
     assert out["halt"] is None, out
     assert out["arm"] == arm
 
 
-def test_the_real_gate_names_the_missing_footprint_on_xs_instead_of_answering_nothing(tmp_path):
+def test_the_real_gate_names_the_missing_footprint_on_xs_instead_of_answering_nothing(tmp_path: Path) -> None:
     out = _gate_reply(tmp_path, "dispatch", "XS")
     assert out["arm"] is None
     assert out["halt"]["kind"] == "refusal" and "XS needs `writes`" in out["halt"]["reason"]

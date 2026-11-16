@@ -12,7 +12,7 @@ from coordinator_core.benchmarks.gate import (
 from coordinator_core.benchmarks.record import Tolerance
 
 
-def test_advisory_when_sample_count_below_min_gating_sample_count():
+def test_advisory_when_sample_count_below_min_gating_sample_count() -> None:
     tolerance = Tolerance(kind="relative", value=0.2)
     verdict = evaluate(
         observed_statistic=10.0,
@@ -24,7 +24,7 @@ def test_advisory_when_sample_count_below_min_gating_sample_count():
     assert verdict == VERDICT_ADVISORY
 
 
-def test_advisory_at_sample_count_equal_to_min_is_not_advisory():
+def test_advisory_at_sample_count_equal_to_min_is_not_advisory() -> None:
     tolerance = Tolerance(kind="relative", value=0.2)
     verdict = evaluate(
         observed_statistic=50.0,
@@ -36,7 +36,7 @@ def test_advisory_at_sample_count_equal_to_min_is_not_advisory():
     assert verdict == VERDICT_PASS
 
 
-def test_relative_tolerance_band_pass_at_boundary():
+def test_relative_tolerance_band_pass_at_boundary() -> None:
     tolerance = Tolerance(kind="relative", value=0.2)
     verdict = evaluate(
         observed_statistic=120.0,
@@ -48,7 +48,7 @@ def test_relative_tolerance_band_pass_at_boundary():
     assert verdict == VERDICT_PASS
 
 
-def test_relative_tolerance_band_fail_just_above_boundary():
+def test_relative_tolerance_band_fail_just_above_boundary() -> None:
     tolerance = Tolerance(kind="relative", value=0.2)
     verdict = evaluate(
         observed_statistic=120.01,
@@ -60,7 +60,7 @@ def test_relative_tolerance_band_fail_just_above_boundary():
     assert verdict == VERDICT_FAIL
 
 
-def test_absolute_tolerance_band_pass_at_boundary():
+def test_absolute_tolerance_band_pass_at_boundary() -> None:
     tolerance = Tolerance(kind="absolute", value=25.0)
     verdict = evaluate(
         observed_statistic=125.0,
@@ -72,7 +72,7 @@ def test_absolute_tolerance_band_pass_at_boundary():
     assert verdict == VERDICT_PASS
 
 
-def test_absolute_tolerance_band_fail_just_above_boundary():
+def test_absolute_tolerance_band_fail_just_above_boundary() -> None:
     tolerance = Tolerance(kind="absolute", value=25.0)
     verdict = evaluate(
         observed_statistic=125.01,
@@ -84,7 +84,7 @@ def test_absolute_tolerance_band_fail_just_above_boundary():
     assert verdict == VERDICT_FAIL
 
 
-def test_min_vs_target_pass_well_under_band():
+def test_min_vs_target_pass_well_under_band() -> None:
     tolerance = Tolerance(kind="relative", value=0.5)
     verdict = evaluate(
         observed_statistic=10.0,
@@ -96,7 +96,7 @@ def test_min_vs_target_pass_well_under_band():
     assert verdict == VERDICT_PASS
 
 
-def test_min_vs_target_fail_well_over_band():
+def test_min_vs_target_fail_well_over_band() -> None:
     tolerance = Tolerance(kind="relative", value=0.1)
     verdict = evaluate(
         observed_statistic=500.0,
@@ -108,7 +108,7 @@ def test_min_vs_target_fail_well_over_band():
     assert verdict == VERDICT_FAIL
 
 
-def test_tolerance_accepts_dict_shape_not_only_dataclass():
+def test_tolerance_accepts_dict_shape_not_only_dataclass() -> None:
     tolerance = {"kind": "relative", "value": 0.2}
     verdict = evaluate(
         observed_statistic=100.0,
@@ -120,7 +120,7 @@ def test_tolerance_accepts_dict_shape_not_only_dataclass():
     assert verdict == VERDICT_PASS
 
 
-def test_unknown_tolerance_kind_raises():
+def test_unknown_tolerance_kind_raises() -> None:
     tolerance = Tolerance(kind="quadratic", value=0.2)
     try:
         evaluate(
@@ -136,7 +136,7 @@ def test_unknown_tolerance_kind_raises():
         raise AssertionError("expected ValueError for unknown tolerance.kind")
 
 
-def test_negative_floor_delta_never_changes_verdict():
+def test_negative_floor_delta_never_changes_verdict() -> None:
     """gate.evaluate() takes no floor_delta parameter at all -- floor
     subtraction is categorically out of scope for this module (see gate.py's
     module docstring: "There is no floor subtraction anywhere in this

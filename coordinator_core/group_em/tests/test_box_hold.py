@@ -8,9 +8,10 @@ import sys
 import pytest
 
 from coordinator_core.group_em import box_hold
+from pathlib import Path
 
 
-def test_round_trip(tmp_path):
+def test_round_trip(tmp_path: Path) -> None:
     h = box_hold.set_hold("s1", "swap", 60, directory=tmp_path, now=1000.0)
     got = box_hold.read_hold(now=1010.0, directory=tmp_path)
     assert got == h
@@ -18,29 +19,29 @@ def test_round_trip(tmp_path):
     assert got.expires_at == 1060.0
 
 
-def test_denial_text_names_barred_allows_edits_and_batches_visual_checks():
+def test_denial_text_names_barred_allows_edits_and_batches_visual_checks() -> None:
     hold = box_hold.Hold("s1", "swap", 0.0, 60.0)
     fact, alt = box_hold.denial_text(hold, "00:01:00Z")
     assert "s1" in fact and "swap" in fact and "barred" in fact and "builds" in fact
     assert "Edits stay allowed" in alt and "batch visual checks" in alt
 
 
-def test_absent_reads_none(tmp_path):
+def test_absent_reads_none(tmp_path: Path) -> None:
     assert box_hold.read_hold(directory=tmp_path) is None
 
 
-def test_expiry(tmp_path):
+def test_expiry(tmp_path: Path) -> None:
     box_hold.set_hold("s1", "r", 60, directory=tmp_path, now=1000.0)
     assert box_hold.read_hold(now=1059.0, directory=tmp_path) is not None
     assert box_hold.read_hold(now=1060.0, directory=tmp_path) is None
 
 
-def test_ttl_clamped(tmp_path):
+def test_ttl_clamped(tmp_path: Path) -> None:
     h = box_hold.set_hold("s1", "r", 10**9, directory=tmp_path, now=0.0)
     assert h.expires_at == box_hold.MAX_HOLD_TTL_S
 
 
-def test_malformed_reads_none(tmp_path):
+def test_malformed_reads_none(tmp_path: Path) -> None:
     p = tmp_path / "box" / "hold.json"
     p.parent.mkdir(parents=True)
     for body in ("{not json", "[]", '{"set_by_session": "s"}',
@@ -49,7 +50,7 @@ def test_malformed_reads_none(tmp_path):
         assert box_hold.read_hold(now=1.0, directory=tmp_path) is None
 
 
-def test_hand_written_record_ttl_capped_on_read(tmp_path):
+def test_hand_written_record_ttl_capped_on_read(tmp_path: Path) -> None:
     p = tmp_path / "box" / "hold.json"
     p.parent.mkdir(parents=True)
     p.write_text('{"set_by_session": "s", "reason": "r", "set_at": 0, "expires_at": 1e18}',
@@ -57,20 +58,20 @@ def test_hand_written_record_ttl_capped_on_read(tmp_path):
     assert box_hold.read_hold(now=box_hold.MAX_HOLD_TTL_S + 1, directory=tmp_path) is None
 
 
-def test_non_utf8_record_reads_none(tmp_path):
+def test_non_utf8_record_reads_none(tmp_path: Path) -> None:
     p = tmp_path / "box" / "hold.json"
     p.parent.mkdir(parents=True)
     p.write_bytes(b"\xff\xfe\x00")
     assert box_hold.read_hold(now=1.0, directory=tmp_path) is None
 
 
-def test_clear_other_sessions_live_hold_refused(tmp_path):
+def test_clear_other_sessions_live_hold_refused(tmp_path: Path) -> None:
     box_hold.set_hold("s1", "r", 600, directory=tmp_path)
     assert box_hold.clear_hold("s2", directory=tmp_path) is False
     assert box_hold.read_hold(directory=tmp_path) is not None
 
 
-def test_clear_by_holder_and_operator(tmp_path):
+def test_clear_by_holder_and_operator(tmp_path: Path) -> None:
     box_hold.set_hold("s1", "r", 600, directory=tmp_path)
     assert box_hold.clear_hold("s1", directory=tmp_path) is True
     assert box_hold.read_hold(directory=tmp_path) is None
@@ -79,12 +80,12 @@ def test_clear_by_holder_and_operator(tmp_path):
     assert box_hold.clear_hold(None, directory=tmp_path) is False
 
 
-def test_expired_hold_clearable_by_anyone(tmp_path):
+def test_expired_hold_clearable_by_anyone(tmp_path: Path) -> None:
     box_hold.set_hold("s1", "r", 1, directory=tmp_path, now=0.0)
     assert box_hold.clear_hold("s2", directory=tmp_path) is True
 
 
-def test_hold_stamps_box_id_and_parse_tolerates_its_absence(tmp_path):
+def test_hold_stamps_box_id_and_parse_tolerates_its_absence(tmp_path: Path) -> None:
     d = tmp_path / "state" / "group-em"
     d.mkdir(parents=True)
     (d / "box.json").write_text('{"box_id": "box-abc12345"}', encoding="utf-8")
@@ -99,7 +100,7 @@ def test_hold_stamps_box_id_and_parse_tolerates_its_absence(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_import_closure_is_leaf():
+def test_import_closure_is_leaf() -> None:
     code = (
         "import sys; import coordinator_core.group_em.box_hold; "
         "bad=[m for m in ('subprocess','coordinator_core.group_em.nomination',"

@@ -2,25 +2,26 @@
 from datetime import date, timedelta
 
 from coordinator_core.workday_start.recheck_due import recheck_due
+from pathlib import Path
 
 TODAY = date(2026, 10, 15)
 
 
-def _mark(root, sub, stamp, stem="x-recheck-due-"):
+def _mark(root, sub, stamp, stem: str = "x-recheck-due-") -> None:
     d = root / sub
     d.mkdir(exist_ok=True)
     (d / f"{stem}{stamp}.md").write_text("body", encoding="utf-8")
 
 
-def _off(n):
+def _off(n) -> str:
     return (TODAY + timedelta(days=n)).isoformat()
 
 
-def test_no_directories(tmp_path):
+def test_no_directories(tmp_path: Path) -> None:
     assert recheck_due(tmp_path, TODAY) == (0, "")
 
 
-def test_today_and_window_edge_included_next_day_omitted(tmp_path):
+def test_today_and_window_edge_included_next_day_omitted(tmp_path: Path) -> None:
     for n in (0, 7, 8):
         _mark(tmp_path, "state", _off(n))
     code, text = recheck_due(tmp_path, TODAY)
@@ -31,7 +32,7 @@ def test_today_and_window_edge_included_next_day_omitted(tmp_path):
     ]
 
 
-def test_overdue_sorted_first_across_both_dirs(tmp_path):
+def test_overdue_sorted_first_across_both_dirs(tmp_path: Path) -> None:
     _mark(tmp_path, "state", _off(2))
     _mark(tmp_path, "tasks", _off(-3))
     lines = recheck_due(tmp_path, TODAY)[1].splitlines()
@@ -39,7 +40,7 @@ def test_overdue_sorted_first_across_both_dirs(tmp_path):
     assert lines[1].endswith("due in 2d")
 
 
-def test_undated_and_impossible_date_reported_after_dated(tmp_path):
+def test_undated_and_impossible_date_reported_after_dated(tmp_path: Path) -> None:
     _mark(tmp_path, "state", "nodate")
     _mark(tmp_path, "state", "2026-13-45")
     _mark(tmp_path, "state", _off(1))
@@ -51,7 +52,7 @@ def test_undated_and_impossible_date_reported_after_dated(tmp_path):
     ]
 
 
-def test_non_markers_ignored(tmp_path):
+def test_non_markers_ignored(tmp_path: Path) -> None:
     _mark(tmp_path, "state", _off(0), stem="other-")
     (tmp_path / "state" / f"a-recheck-due-{_off(0)}.txt").write_text("x")
     assert recheck_due(tmp_path, TODAY) == (0, "")

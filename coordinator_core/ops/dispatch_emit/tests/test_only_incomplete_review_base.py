@@ -10,6 +10,7 @@ from coordinator_core.ops.dispatch_emit.emit import emit_script
 from coordinator_core.win_portability import no_console_creationflags
 
 from .conftest import REVIEW_KW
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -79,12 +80,12 @@ def _repo(tmp_path, *, trailers):
     return root, plan, base
 
 
-def _emit(root, plan):
+def _emit(root, plan) -> str:
     return emit_script(plan, repo_root=root, landed_rows=frozenset(), **REVIEW_KW)
 
 
 @pytest.mark.spawns_process
-def test_reemit_reviews_from_the_halted_runs_base_and_surface(tmp_path):
+def test_reemit_reviews_from_the_halted_runs_base_and_surface(tmp_path: Path) -> None:
     root, plan, base = _repo(tmp_path, trailers=True)
     script = _emit(root, plan)
 
@@ -98,7 +99,7 @@ def test_reemit_reviews_from_the_halted_runs_base_and_surface(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_a_second_reemit_keeps_the_original_base_from_the_review_trailer(tmp_path):
+def test_a_second_reemit_keeps_the_original_base_from_the_review_trailer(tmp_path: Path) -> None:
     root, plan, base = _repo(tmp_path, trailers=True)
     (root / "x0.txt").write_text("x0", encoding="utf-8")
     _git(root, "add", "--", "x0.txt")
@@ -113,7 +114,7 @@ def test_a_second_reemit_keeps_the_original_base_from_the_review_trailer(tmp_pat
 
 
 @pytest.mark.spawns_process
-def test_no_checkpoint_commit_leaves_the_run_base_marker_and_no_review_trailer(tmp_path):
+def test_no_checkpoint_commit_leaves_the_run_base_marker_and_no_review_trailer(tmp_path: Path) -> None:
     root, plan, _ = _repo(tmp_path, trailers=False)
     script = _emit(root, plan)
 

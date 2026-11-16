@@ -4,12 +4,17 @@ import importlib.util
 import os
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 _QUEUE_APPEND_CLI = _BIN_DIR / "coordinator-queue-append.py"
 
 
-def _load_module(name: str):
+def _load_module(name: str) -> ModuleType:
     loader = SourceFileLoader(name, str(_QUEUE_APPEND_CLI))
     spec = importlib.util.spec_from_loader(name, loader)
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
@@ -56,7 +61,7 @@ def _run_central_scope_legacy(monkeypatch, tmp_path, claude_klabauter_root) -> t
     return rc, out_buf.getvalue(), err_buf.getvalue()
 
 
-def test_central_scope_refused_no_file_written_posix_shaped_root(monkeypatch, tmp_path) -> None:
+def test_central_scope_refused_no_file_written_posix_shaped_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     claude_klabauter_root = str(tmp_path / "mirror-shaped-root")
     os.makedirs(claude_klabauter_root, exist_ok=True)
 
@@ -74,7 +79,7 @@ def test_central_scope_refused_no_file_written_posix_shaped_root(monkeypatch, tm
     )
 
 
-def test_central_scope_refused_no_file_written_windows_shaped_root(monkeypatch, tmp_path) -> None:
+def test_central_scope_refused_no_file_written_windows_shaped_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     claude_klabauter_root = r"C:\Users\test\mirror-shaped-root"
 
     rc, stdout, stderr = _run_central_scope_legacy(monkeypatch, tmp_path, claude_klabauter_root)

@@ -12,11 +12,15 @@ import os
 from pathlib import Path
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 BIN = Path(__file__).resolve().parents[1]
 
 
-def _load(filename, modname):
+def _load(filename, modname) -> "ModuleType":
     spec = importlib.util.spec_from_file_location(modname, BIN / filename)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -35,11 +39,11 @@ ENDPOINT_STYLES = {
 
 
 @pytest.fixture(params=sorted(ENDPOINT_STYLES))
-def far(request):
+def far(request: pytest.FixtureRequest) -> dict[str, str]:
     return ENDPOINT_STYLES[request.param]
 
 
-def mirror(sessions, filename, name, mirror_socket, far_endpoint, far_pid):
+def mirror(sessions, filename, name, mirror_socket, far_endpoint, far_pid) -> None:
     sessions.mkdir(parents=True, exist_ok=True)
     (sessions / filename).write_text(json.dumps({
         "pid": os.getpid(), "name": name, "unimatrixFarName": name, "messagingSocketPath": mirror_socket,
@@ -61,10 +65,10 @@ def make_router(tmp_path, sessions):
 def capture(r, monkeypatch):
     sent = []
 
-    async def deliver(peer, endpoint, frame):
+    async def deliver(peer, endpoint, frame) -> None:
         sent.append(endpoint)
 
-    async def face(source, destination):
+    async def face(source, destination) -> str:
         return "transport-face"
     monkeypatch.setattr(r, "_deliver_as_peer", deliver)
     monkeypatch.setattr(r, "_transport_face", face)
@@ -75,7 +79,7 @@ def dispatch(r, to):
     return asyncio.run(r._dispatch({"op": "send", "as": "cli", "to": to, "text": "hello"}))
 
 
-def test_bare_name_delivers_to_the_named_machine_a_mirror_only(tmp_path, far, monkeypatch):
+def test_bare_name_delivers_to_the_named_machine_a_mirror_only(tmp_path: Path, far, monkeypatch: pytest.MonkeyPatch) -> None:
     r = make_router(tmp_path, machine_a_roster(tmp_path, far))
     sent = capture(r, monkeypatch)
     assert dispatch(r, TARGET)["ok"]
@@ -83,7 +87,7 @@ def test_bare_name_delivers_to_the_named_machine_a_mirror_only(tmp_path, far, mo
 
 
 @pytest.mark.parametrize("to", [f"{TARGET} {REF}", f"{DECOY} {REF}", f"{TARGET}{REF}"])
-def test_name_plus_ref_is_refused_naming_the_address_and_never_reaches_the_decoy(tmp_path, far, monkeypatch, to):
+def test_name_plus_ref_is_refused_naming_the_address_and_never_reaches_the_decoy(tmp_path: Path, far, monkeypatch: pytest.MonkeyPatch, to) -> None:
     r = make_router(tmp_path, machine_a_roster(tmp_path, far))
     sent = capture(r, monkeypatch)
     response = dispatch(r, to)
@@ -94,7 +98,7 @@ def test_name_plus_ref_is_refused_naming_the_address_and_never_reaches_the_decoy
 class RouterOverDispatch:
     """The router module as unimatrix-send.py sees it, with request_line answered by an in-process router."""
 
-    def __init__(self, r):
+    def __init__(self, r) -> None:
         self._r = r
 
     def __getattr__(self, attr):
@@ -105,7 +109,7 @@ class RouterOverDispatch:
 
 
 @pytest.mark.parametrize("to", [f"{TARGET} {REF}", f"{DECOY} {REF}"])
-def test_send_cli_with_a_ref_exits_nonzero_naming_the_address_and_delivers_nothing(tmp_path, far, monkeypatch, capsys, to):
+def test_send_cli_with_a_ref_exits_nonzero_naming_the_address_and_delivers_nothing(tmp_path: Path, far, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], to) -> None:
     r = make_router(tmp_path, machine_a_roster(tmp_path, far))
     sent = capture(r, monkeypatch)
     monkeypatch.setattr(send_cli, "_router", lambda: RouterOverDispatch(r))

@@ -32,13 +32,14 @@ from coordinator_core.warm.entry_seam import (
     emit_diagnostic,
     per_request_state,
 )
+import pytest
 
 
 # ---------------------------------------------------------------------------
 # Link 1 — the producer
 # ---------------------------------------------------------------------------
 
-def test_emit_diagnostic_is_a_noop_with_no_sink_bound():
+def test_emit_diagnostic_is_a_noop_with_no_sink_bound() -> None:
     """The cold path binds nothing; emitting must not raise or accumulate."""
     emit_diagnostic("no sink is bound")  # must not raise
     with collecting_diagnostics() as sink:
@@ -46,7 +47,7 @@ def test_emit_diagnostic_is_a_noop_with_no_sink_bound():
     assert sink == []
 
 
-def test_setup_error_reason_reaches_a_bound_sink():
+def test_setup_error_reason_reaches_a_bound_sink() -> None:
     with collecting_diagnostics() as sink:
         envelope = build_setup_error_result("send", False, "the receiver is not registered")
     assert len(sink) == 1
@@ -58,7 +59,7 @@ def test_setup_error_reason_reaches_a_bound_sink():
     assert "_stderr" not in envelope
 
 
-def test_setup_error_still_writes_stderr_when_a_sink_is_bound(capsys):
+def test_setup_error_still_writes_stderr_when_a_sink_is_bound(capsys: pytest.CaptureFixture[str]) -> None:
     """The warm sink is ADDITIVE. A producer that emitted only to the sink
     would go silent on the cold path, which is the majority of invocations."""
     with collecting_diagnostics():
@@ -67,7 +68,7 @@ def test_setup_error_still_writes_stderr_when_a_sink_is_bound(capsys):
     assert "fleet op setup error: receiver unresolvable" in captured.err
 
 
-def test_sink_is_token_reset_scoped_and_does_not_leak():
+def test_sink_is_token_reset_scoped_and_does_not_leak() -> None:
     with collecting_diagnostics() as outer:
         emit_diagnostic("outer-before")
         with collecting_diagnostics() as inner:
@@ -80,7 +81,7 @@ def test_sink_is_token_reset_scoped_and_does_not_leak():
     assert outer == ["outer-before", "outer-after"]
 
 
-def test_per_request_state_binds_the_sink_only_when_asked():
+def test_per_request_state_binds_the_sink_only_when_asked() -> None:
     collected: list = []
     with per_request_state(diagnostics=collected, isolated=False):
         emit_diagnostic("bound")
@@ -108,7 +109,7 @@ def _run_dispatch_with(monkeypatch, fake_dispatch):
     return server._run_dispatch({"jsonrpc": "2.0", "id": 1, "method": "memo.send"})
 
 
-def test_server_attaches_collected_diagnostics_to_the_frame(monkeypatch):
+def test_server_attaches_collected_diagnostics_to_the_frame(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_dispatch(msg, *, caller=None, corr_id=None):
         emit_diagnostic("fleet op setup error: scoped_to.sha does not resolve")
         return {"jsonrpc": "2.0", "id": 1, "result": {"exit_code": 1, "mode": "send"}}
@@ -121,7 +122,7 @@ def test_server_attaches_collected_diagnostics_to_the_frame(monkeypatch):
     assert response["result"] == {"exit_code": 1, "mode": "send"}
 
 
-def test_server_adds_no_key_when_the_op_emitted_nothing(monkeypatch):
+def test_server_adds_no_key_when_the_op_emitted_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     async def fake_dispatch(msg, *, caller=None, corr_id=None):
         return {"jsonrpc": "2.0", "id": 1, "result": {"exit_code": 0, "mode": "send"}}
 
@@ -129,7 +130,7 @@ def test_server_adds_no_key_when_the_op_emitted_nothing(monkeypatch):
     assert "_stderr" not in response
 
 
-def test_server_does_not_leak_one_requests_diagnostics_into_the_next(monkeypatch):
+def test_server_does_not_leak_one_requests_diagnostics_into_the_next(monkeypatch: pytest.MonkeyPatch) -> None:
     """Connections are served on their own threads against one long-lived
     process — the reason this is a per-request ContextVar and not a capture of
     the process-global `sys.stderr`."""
@@ -151,7 +152,7 @@ def test_server_does_not_leak_one_requests_diagnostics_into_the_next(monkeypatch
 # Link 3 — the client re-emits on the caller's own stderr, and POPS
 # ---------------------------------------------------------------------------
 
-def test_client_pops_and_reemits_rather_than_passing_the_key_through():
+def test_client_pops_and_reemits_rather_than_passing_the_key_through() -> None:
     """The response a warm caller receives must have the same SHAPE as a cold
     one — `_stderr` is a transport detail no consumer may observe.
 

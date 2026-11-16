@@ -27,7 +27,7 @@ def _sha(data: bytes) -> str:
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A tmp repo with a hand-built P3 snapshot of pkg/mod.py and tests/test_mod.py."""
     original = {
         "pkg/mod.py": b"VALUE = 1\n",
@@ -76,11 +76,11 @@ def _list(root):
     return rr.review_reverify(root, base=BASE, slice_prefix=PREFIX, session_id=SESSION)
 
 
-def _manifest_path(root):
+def _manifest_path(root) -> Path:
     return Path(share_dir(str(root), SESSION)) / f"{PREFIX}.pre-review" / "manifest.json"
 
 
-def _set_base(root, base):
+def _set_base(root, base) -> None:
     path = _manifest_path(root)
     data = json.loads(path.read_text(encoding="utf-8"))
     data["base"] = base
@@ -91,7 +91,7 @@ def _revert(root, failing, **kw):
     return rr.review_reverify(root, base=BASE, slice_prefix=PREFIX, session_id=SESSION, failing=failing, **kw)
 
 
-def test_list_mode_reports_modified_deleted_and_created(world, monkeypatch):
+def test_list_mode_reports_modified_deleted_and_created(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _ = world
     (root / "pkg/mod.py").write_text("VALUE = 2\n", encoding="utf-8")
     (root / "pkg/other.py").unlink()
@@ -104,7 +104,7 @@ def test_list_mode_reports_modified_deleted_and_created(world, monkeypatch):
     assert out["snapshot"].endswith(f"{PREFIX}.pre-review/manifest.json")
 
 
-def _ledger(monkeypatch, *rows):
+def _ledger(monkeypatch, *rows) -> list[str]:
     """Patch the findings ledger to ``rows`` (applied rows) and return the sidecars param."""
     monkeypatch.setattr(review_findings_ledger, "read_ledger", lambda _p: (True, list(rows)))
     return ["review.md"]
@@ -114,7 +114,7 @@ def _row(fid, file, before, after):
     return {"id": fid, "file": file, "before": before, "after": after}
 
 
-def test_failing_id_in_edited_test_file_inverts_the_finding_byte_for_byte(world, monkeypatch):
+def test_failing_id_in_edited_test_file_inverts_the_finding_byte_for_byte(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, orig, declared = world
     (root / "tests/test_plain.py").write_bytes(b"def test_p():\n    assert undefined_local\n")
     sidecars = _ledger(monkeypatch, _row("F1", "tests/test_plain.py", "    assert True\n", "    assert undefined_local\n"))
@@ -128,7 +128,7 @@ def test_failing_id_in_edited_test_file_inverts_the_finding_byte_for_byte(world,
     assert declared.count((root / "tests/test_plain.py").as_posix()) == 1
 
 
-def test_failing_test_importing_an_edited_module_inverts_that_modules_finding(world, monkeypatch):
+def test_failing_test_importing_an_edited_module_inverts_that_modules_finding(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, orig, _ = world
     (root / "pkg/mod.py").write_bytes(b"VALUE = 99\n")
     sidecars = _ledger(monkeypatch, _row("F1", "pkg/mod.py", "VALUE = 1\n", "VALUE = 99\n"))
@@ -137,7 +137,7 @@ def test_failing_test_importing_an_edited_module_inverts_that_modules_finding(wo
     assert (root / "pkg/mod.py").read_bytes() == orig["pkg/mod.py"]
 
 
-def test_created_test_file_named_by_failing_id_is_removed(world, monkeypatch):
+def test_created_test_file_named_by_failing_id_is_removed(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _ = world
     new = root / "tests/test_new.py"
     new.write_text("def test_n():\n    assert False\n", encoding="utf-8")
@@ -150,7 +150,7 @@ def test_created_test_file_named_by_failing_id_is_removed(world, monkeypatch):
     assert "removed" in kept.parts
 
 
-def test_untracked_file_of_an_agent_that_wrote_a_foreign_path_is_foreign_and_untouched(world, monkeypatch):
+def test_untracked_file_of_an_agent_that_wrote_a_foreign_path_is_foreign_and_untouched(world, monkeypatch: pytest.MonkeyPatch) -> None:
     """A sibling run's agent wrote a declared path and an undeclared untracked one; neither is this run's."""
     root, _orig, _ = world
     declared = root / "docs/plans/sib.md"
@@ -172,7 +172,7 @@ def test_untracked_file_of_an_agent_that_wrote_a_foreign_path_is_foreign_and_unt
     assert declared.exists() and undeclared.exists()
 
 
-def test_id_implicating_nothing_is_unattributed(world):
+def test_id_implicating_nothing_is_unattributed(world) -> None:
     root, _orig, _ = world
     (root / "pkg/other.py").write_text("OTHER = 2\n", encoding="utf-8")
     out = _revert(root, ["tests/test_plain.py::test_p"])
@@ -181,14 +181,14 @@ def test_id_implicating_nothing_is_unattributed(world):
     assert (root / "pkg/other.py").read_text(encoding="utf-8") == "OTHER = 2\n"
 
 
-def _export(root, name, *, red=(), export="ok", exit_code=1):
+def _export(root, name, *, red=(), export: str = "ok", exit_code: int = 1):
     tail = json.dumps({"baseline_export": {"export": export, "runner_exit": exit_code}})
     body = "".join(f"FAILED {i} - AssertionError\n" for i in red) + tail + "\n"
     (root / name).write_text(body, encoding="utf-8")
     return name
 
 
-def test_base_export_red_ids_are_pre_existing(world):
+def test_base_export_red_ids_are_pre_existing(world) -> None:
     root, _orig, _ = world
     (root / "pkg/other.py").write_text("OTHER = 2\n", encoding="utf-8")
     path = _export(root, "base.txt", red=["tests/test_plain.py::test_p"])
@@ -199,7 +199,7 @@ def test_base_export_red_ids_are_pre_existing(world):
 
 
 @pytest.mark.parametrize("export,code", [("fail", 1), ("ok", 2), ("ok", 3)])
-def test_base_export_invalid_tail_moves_unattributed_to_unmeasured(world, export, code):
+def test_base_export_invalid_tail_moves_unattributed_to_unmeasured(world, export, code) -> None:
     root, _orig, _ = world
     (root / "pkg/other.py").write_text("OTHER = 2\n", encoding="utf-8")
     path = _export(root, "base.txt", red=["tests/test_plain.py::test_p"], export=export, exit_code=code)
@@ -209,7 +209,7 @@ def test_base_export_invalid_tail_moves_unattributed_to_unmeasured(world, export
     assert out["unmeasured"] == ["tests/test_plain.py::test_p"]
 
 
-def test_base_export_missing_or_non_json_file_is_unmeasured(world):
+def test_base_export_missing_or_non_json_file_is_unmeasured(world) -> None:
     root, _orig, _ = world
     (root / "pkg/other.py").write_text("OTHER = 2\n", encoding="utf-8")
     (root / "junk.txt").write_text("FAILED x::y\nnot json\n", encoding="utf-8")
@@ -219,20 +219,20 @@ def test_base_export_missing_or_non_json_file_is_unmeasured(world):
         assert out["unmeasured"] == ["tests/test_plain.py::test_p"]
 
 
-def test_without_base_export_path_the_response_has_no_unmeasured_keys(world):
+def test_without_base_export_path_the_response_has_no_unmeasured_keys(world) -> None:
     root, _orig, _ = world
     out = _revert(root, ["tests/test_plain.py::test_p"])
     assert "unmeasured" not in out and "base_unmeasured" not in out
 
 
-def test_handler_rejects_a_non_string_base_export_path(world):
+def test_handler_rejects_a_non_string_base_export_path(world) -> None:
     root, _orig, _ = world
     out = rr._handler({"failing": ["a::b"], "base_export_path": 5, "base": BASE,
                        "slice_prefix": PREFIX, "session_id": SESSION}, repo_root=root)
     assert out["error"] and "base_export_path" in out["error"]
 
 
-def test_second_identical_revert_reverts_nothing_and_keeps_the_record(world, monkeypatch):
+def test_second_identical_revert_reverts_nothing_and_keeps_the_record(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _ = world
     (root / "tests/test_plain.py").write_text("def test_p():\n    assert nope\n", encoding="utf-8")
     sidecars = _ledger(monkeypatch, _row("F1", "tests/test_plain.py", "    assert True\n", "    assert nope\n"))
@@ -245,7 +245,7 @@ def test_second_identical_revert_reverts_nothing_and_keeps_the_record(world, mon
     assert [e["path"] for e in record["reverted"]] == ["tests/test_plain.py"]
 
 
-def test_revert_returns_finding_ids_for_the_reverted_path_only(world, monkeypatch):
+def test_revert_returns_finding_ids_for_the_reverted_path_only(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _ = world
     (root / "tests/test_plain.py").write_text("def test_p():\n    assert nope\n", encoding="utf-8")
     sidecars = _ledger(
@@ -257,7 +257,7 @@ def test_revert_returns_finding_ids_for_the_reverted_path_only(world, monkeypatc
     assert out["reverted"][0]["findings"] == [{"sidecar": "review.md", "id": "F1"}]
 
 
-def test_edited_path_with_no_applied_finding_is_kept_and_untouched(world):
+def test_edited_path_with_no_applied_finding_is_kept_and_untouched(world) -> None:
     root, _orig, _ = world
     edit = "def test_p():\n    assert nope\n"
     (root / "tests/test_plain.py").write_text(edit, encoding="utf-8")
@@ -271,7 +271,7 @@ def test_edited_path_with_no_applied_finding_is_kept_and_untouched(world):
     assert (root / "tests/test_plain.py").read_text(encoding="utf-8") == edit
 
 
-def test_handler_validates_probe_and_failing_before(world):
+def test_handler_validates_probe_and_failing_before(world) -> None:
     root, _orig, _ = world
     base = {"base": BASE, "slice_prefix": PREFIX, "session_id": SESSION}
     assert "probe" in rr._handler({**base, "probe": "sideways"}, root)["error"]
@@ -279,7 +279,7 @@ def test_handler_validates_probe_and_failing_before(world):
     assert "failing_before" in rr._handler({**base, "failing": [], "failing_before": "x"}, root)["error"]
 
 
-def test_revert_refuses_while_a_probe_is_open(world, monkeypatch):
+def test_revert_refuses_while_a_probe_is_open(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _ = world
     (root / "tests/test_plain.py").write_bytes(b"def test_p():\n    assert nope\n")
     sidecars = _ledger(monkeypatch, _row("F1", "tests/test_plain.py", "    assert True\n", "    assert nope\n"))
@@ -298,20 +298,20 @@ def test_revert_refuses_while_a_probe_is_open(world, monkeypatch):
     assert (root / "tests/test_plain.py").read_text(encoding="utf-8") == "def test_p():\n    assert nope\n"
 
 
-def test_no_manifest_is_an_error(world):
+def test_no_manifest_is_an_error(world) -> None:
     root, _orig, _ = world
     out = rr.review_reverify(root, base=BASE, slice_prefix="missing", session_id=SESSION)
     assert out["error"] and out["edited"] == []
 
 
 @pytest.mark.parametrize("prefix", ["../x", "a/b", "a\\b", ".."])
-def test_path_shaped_slice_prefix_is_refused(world, prefix):
+def test_path_shaped_slice_prefix_is_refused(world, prefix) -> None:
     root, _orig, _ = world
     out = rr.review_reverify(root, base=BASE, slice_prefix=prefix, session_id=SESSION)
     assert "bare name" in out["error"]
 
 
-def test_path_escaping_the_root_is_an_error(world):
+def test_path_escaping_the_root_is_an_error(world) -> None:
     root, _orig, _ = world
     manifest = Path(share_dir(str(root), SESSION)) / f"{PREFIX}.pre-review" / "manifest.json"
     data = json.loads(manifest.read_text(encoding="utf-8"))
@@ -321,14 +321,14 @@ def test_path_escaping_the_root_is_an_error(world):
     assert out["error"] and out["reverted"] == []
 
 
-def test_handler_requires_repo_root_and_dispatches(world):
+def test_handler_requires_repo_root_and_dispatches(world) -> None:
     root, _orig, _ = world
     assert rr._handler({"base": BASE, "slice_prefix": PREFIX}, None)["error"]
     out = rr._handler({"base": BASE, "slice_prefix": PREFIX, "session_id": SESSION}, root)
     assert out["error"] is None and out["edited"] == []
 
 
-def test_concurrent_run_dirty_file_is_foreign_and_never_reverted(world, monkeypatch):
+def test_concurrent_run_dirty_file_is_foreign_and_never_reverted(world, monkeypatch: pytest.MonkeyPatch) -> None:
     """Two runs share a session: run B's declared file and a pre-snapshot dirty file sit in the
     tree beside run A's own created file. Reverify of A leaves B's bytes untouched."""
     root, _orig, _ = world
@@ -359,7 +359,7 @@ def test_concurrent_run_dirty_file_is_foreign_and_never_reverted(world, monkeypa
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_tracked_at_base_undeclared_foreign_file_is_not_removed(world, monkeypatch):
+def test_tracked_at_base_undeclared_foreign_file_is_not_removed(world, monkeypatch: pytest.MonkeyPatch) -> None:
     """A path tracked in the snapshot's base commit cannot be review-created, even when no sibling
     declared it and its mtime is after the snapshot."""
     root, _orig, _ = world
@@ -392,13 +392,87 @@ def test_tracked_at_base_undeclared_foreign_file_is_not_removed(world, monkeypat
     assert tracked.read_bytes() == before
 
 
+def _commit_tracked(root, monkeypatch, rels):
+    """Commit ``rels`` as the run base and re-point the manifest at it."""
+    import os
+
+    monkeypatch.setattr(subprocess, "Popen", _REAL_POPEN)
+    env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t",
+           "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t"}
+    for argv in (["init", "-q"], ["add", *rels], ["commit", "-q", "-m", "base"]):
+        subprocess.run(["git", "-C", str(root), *argv], check=True, env=env, capture_output=True, creationflags=_NOWIN)
+    base = subprocess.run(
+        ["git", "-C", str(root), "rev-parse", "HEAD"], check=True, capture_output=True, text=True, creationflags=_NOWIN,
+    ).stdout.strip()
+    _set_base(root, base)
+    monkeypatch.setattr(subprocess, "Popen", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("spawn")))
+    return base
+
+
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_removed_created_path_leaves_no_intent_to_add_entry(world, monkeypatch):
+def test_list_mode_outside_declared_reports_tracked_review_fix_not_in_manifest(world, monkeypatch):
+    root, _orig, _ = world
+    own = root / "tests/test_contracts.py"
+    sib = root / "tests/test_sibling_declared.py"
+    other = root / "tests/test_other_agent.py"
+    for f in (own, sib, other):
+        f.write_bytes(b"def test_x():\n    assert True\n")
+    base = _commit_tracked(root, monkeypatch, ["tests/test_contracts.py", "tests/test_sibling_declared.py", "tests/test_other_agent.py"])
+    for f in (own, sib, other):
+        f.write_bytes(b"def test_x():\n    assert False\n")
+    writes = {"tests/test_contracts.py": "a1", "tests/test_sibling_declared.py": "a1", "tests/test_other_agent.py": "stranger"}
+    monkeypatch.setattr(review_edits, "review_writes", lambda *_a, **_k: dict(writes))
+    monkeypatch.setattr(review_edits, "live_sibling_declared", lambda *_a, **_k: {"tests/test_sibling_declared.py": "run-b"})
+    monkeypatch.setattr(
+        review_edit_source, "session_agent_writes",
+        lambda *_a, **_k: {"a1": {f".coordinator-local/x/{PREFIX}/note.md"}},
+    )
+    out = rr.review_reverify(root, base=base, slice_prefix=PREFIX, session_id=SESSION)
+    assert out["error"] is None
+    assert out["outside_declared"] == ["tests/test_contracts.py"]
+    # No review-written path is the run's own, so `created` is the run-diff derivation over the manifest, never the outside path.
+    assert out["derived_from"] == "run_diff"
+    assert "tests/test_contracts.py" not in out["created"]
+    assert out["foreign"] == ["tests/test_other_agent.py", "tests/test_sibling_declared.py"]
+    assert "tests/test_contracts.py" not in out["edited"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_outside_declared_path_is_foreign_in_revert_mode_and_untouched(world, monkeypatch):
+    root, _orig, _ = world
+    tracked = root / "tests/test_contracts.py"
+    tracked.write_bytes(b"def test_x():\n    assert True\n")
+    base = _commit_tracked(root, monkeypatch, ["tests/test_contracts.py"])
+    tracked.write_bytes(b"def test_x():\n    assert False\n")
+    before = tracked.read_bytes()
+    monkeypatch.setattr(review_edits, "review_writes", lambda *_a, **_k: {"tests/test_contracts.py": "a1"})
+    monkeypatch.setattr(review_edits, "live_sibling_declared", lambda *_a, **_k: {})
+    monkeypatch.setattr(
+        review_edit_source, "session_agent_writes",
+        lambda *_a, **_k: {"a1": {f".coordinator-local/x/{PREFIX}/note.md"}},
+    )
+    out = rr.review_reverify(
+        root, base=base, slice_prefix=PREFIX, session_id=SESSION, failing=["tests/test_contracts.py::test_x"]
+    )
+    assert out["reverted"] == []
+    assert out["foreign"] == ["tests/test_contracts.py::test_x"]
+    assert tracked.read_bytes() == before
+
+
+def test_list_mode_without_a_write_record_has_empty_outside_declared(world):
+    root, _orig, _ = world
+    assert _list(root)["outside_declared"] == []
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_removed_created_path_leaves_no_intent_to_add_entry(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _ = world
     monkeypatch.setattr(subprocess, "Popen", _REAL_POPEN)
 
-    def git(*args):
+    def git(*args) -> str:
         return subprocess.run(
             ["git", *args], cwd=str(root), capture_output=True, text=True, check=True, creationflags=_NOWIN
         ).stdout
@@ -427,21 +501,21 @@ def test_removed_created_path_leaves_no_intent_to_add_entry(world, monkeypatch):
     assert git("diff", "--cached", "--name-only").split() == ["pkg/other.py"]
 
 
-def _add_tripwire(root):
+def _add_tripwire(root) -> None:
     (root / "tests/test_tripwire.py").write_text(
         'def test_t():\n    assert open("pkg/mod.py")\n', encoding="utf-8"
     )
     stage(root, ["tests/test_tripwire.py"])
 
 
-def test_tripwire_list_mode_returns_test_naming_an_edited_file(world):
+def test_tripwire_list_mode_returns_test_naming_an_edited_file(world) -> None:
     root, _orig, _ = world
     _add_tripwire(root)
     (root / "pkg/mod.py").write_text("VALUE = 2\n", encoding="utf-8")
     assert _list(root)["tripwires"] == ["tests/test_tripwire.py"]
 
 
-def test_tripwire_list_mode_created_file_selects_own_dir_walker_not_shallow_walkers(world, monkeypatch):
+def test_tripwire_list_mode_created_file_selects_own_dir_walker_not_shallow_walkers(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _ = world
     walk = 'from pathlib import Path\nfor p in Path("{}").rglob("*.py"):\n    pass\n'
     (root / "tests/test_walk_root.py").write_text(walk.format("pkg"), encoding="utf-8")
@@ -456,7 +530,7 @@ def test_tripwire_list_mode_created_file_selects_own_dir_walker_not_shallow_walk
     assert out["tripwires"] == ["tests/test_names_mod.py", "tests/test_walk_own.py"]
 
 
-def test_tripwire_list_mode_ignores_unrelated_edit_and_empty_edit_set(world):
+def test_tripwire_list_mode_ignores_unrelated_edit_and_empty_edit_set(world) -> None:
     root, _orig, _ = world
     _add_tripwire(root)
     assert _list(root)["tripwires"] == []
@@ -464,7 +538,7 @@ def test_tripwire_list_mode_ignores_unrelated_edit_and_empty_edit_set(world):
     assert _list(root)["tripwires"] == []
 
 
-def test_tripwire_edited_test_file_naming_another_edit_stays_in_edited_only(world):
+def test_tripwire_edited_test_file_naming_another_edit_stays_in_edited_only(world) -> None:
     root, _orig, _ = world
     (root / "tests/test_plain.py").write_text('X = "pkg/mod.py"\n', encoding="utf-8")
     stage(root, ["tests/test_plain.py"])
@@ -474,7 +548,7 @@ def test_tripwire_edited_test_file_naming_another_edit_stays_in_edited_only(worl
     assert out["tripwires"] == []
 
 
-def test_tripwire_failing_node_inverts_the_finding_in_the_file_it_names(world, monkeypatch):
+def test_tripwire_failing_node_inverts_the_finding_in_the_file_it_names(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, orig, _ = world
     _add_tripwire(root)
     (root / "pkg/mod.py").write_bytes(b"VALUE = 2\n")
@@ -487,7 +561,7 @@ def test_tripwire_failing_node_inverts_the_finding_in_the_file_it_names(world, m
     assert (root / "pkg/mod.py").read_bytes() == orig["pkg/mod.py"]
 
 
-def test_tripwire_failing_node_naming_only_unedited_file_is_unattributed(world):
+def test_tripwire_failing_node_naming_only_unedited_file_is_unattributed(world) -> None:
     root, _orig, _ = world
     _add_tripwire(root)
     (root / "pkg/other.py").write_text("OTHER = 2\n", encoding="utf-8")
@@ -515,12 +589,12 @@ def _untracked_peer(root, monkeypatch, *, text_paths):
     return {_PEER_NODE: "AmpSite(path='" + "', path='".join(text_paths) + "')"}
 
 
-def _sha1(path):
+def _sha1(path) -> str:
     data = path.read_bytes()
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
-def test_base_green_red_raised_only_by_an_untracked_out_of_footprint_file_is_foreign_red(world, monkeypatch):
+def test_base_green_red_raised_only_by_an_untracked_out_of_footprint_file_is_foreign_red(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _ = world
     out_text = _untracked_peer(root, monkeypatch, text_paths=[_PEER_FILE])
     out = _revert(root, [_PEER_NODE], failing_at_base=[], run_id="me", failing_output=out_text)
@@ -529,7 +603,7 @@ def test_base_green_red_raised_only_by_an_untracked_out_of_footprint_file_is_for
     assert _PEER_NODE not in out["passed_at_base"]
 
 
-def test_base_green_red_whose_cause_is_in_the_declared_writes_stays_owned(world, monkeypatch):
+def test_base_green_red_whose_cause_is_in_the_declared_writes_stays_owned(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _ = world
     out_text = _untracked_peer(root, monkeypatch, text_paths=[_PEER_FILE, "pkg/other.py"])
     (root / "pkg/other.py").write_bytes(b"OTHER = 2\n")
@@ -552,7 +626,7 @@ def _base_tree(monkeypatch, root, base_bytes):
     return sha
 
 
-def test_list_mode_derives_edited_and_created_from_the_run_diff_when_review_changed_nothing(world, monkeypatch):
+def test_list_mode_derives_edited_and_created_from_the_run_diff_when_review_changed_nothing(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, orig, _ = world
     path = _manifest_path(root)
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -569,7 +643,7 @@ def test_list_mode_derives_edited_and_created_from_the_run_diff_when_review_chan
     assert out["derived_from"] == "run_diff"
 
 
-def test_list_mode_keeps_review_edits_and_does_not_derive_when_review_changed_something(world, monkeypatch):
+def test_list_mode_keeps_review_edits_and_does_not_derive_when_review_changed_something(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, orig, _ = world
     (root / "pkg/other.py").write_bytes(b"OTHER = 9\n")
     sha = _base_tree(monkeypatch, root, {**orig, "pkg/mod.py": b"VALUE = 0\n"})
@@ -578,7 +652,7 @@ def test_list_mode_keeps_review_edits_and_does_not_derive_when_review_changed_so
     assert "derived_from" not in out
 
 
-def test_list_mode_run_diff_is_empty_when_files_match_base(world, monkeypatch):
+def test_list_mode_run_diff_is_empty_when_files_match_base(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, orig, _ = world
     sha = _base_tree(monkeypatch, root, orig)
     out = rr.review_reverify(root, base=sha, slice_prefix=PREFIX, session_id=SESSION)

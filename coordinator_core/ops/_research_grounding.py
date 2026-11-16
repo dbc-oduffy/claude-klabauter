@@ -46,10 +46,15 @@ REOPEN_NOTE = (
     "Re-open every cited source before grading a claim ungrounded or contradicted. A downgrade "
     "must rest on what the re-opened source says; \"not re-opened\" is not a reason and is refused.\n"
 )
+OPEN_NOTE = (
+    "A question or absence the digest itself declares open (\"not found\", \"unknown\", \"no source "
+    "says\") is not a claim to grade: list it as a line under \"## Open questions\", never "
+    "ungrounded.\n"
+)
 # The first-generation grader is DoE's template, which the engine cannot version: a report with
-# no recorded version is always stale. Both brief notes feed the version so a changed grading
+# no recorded version is always stale. Every brief note feeds the version so a changed grading
 # instruction stales the grades made under the old one.
-GRADER_VERSION = hashlib.sha256((REOPEN_NOTE + RULING_NOTE).encode("utf-8")).hexdigest()[:12]
+GRADER_VERSION = hashlib.sha256((REOPEN_NOTE + OPEN_NOTE + RULING_NOTE).encode("utf-8")).hexdigest()[:12]
 _NOT_REOPENED_RE = re.compile(r"not[\s-]+re-?opened", re.IGNORECASE)
 
 _VERDICT_RE = re.compile(r"^-\s+\*\*(" + "|".join(CLAIM_VERDICTS + RULINGS) + r")\*\*", re.IGNORECASE)

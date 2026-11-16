@@ -1,7 +1,7 @@
-"""Prime-tenant background priority: lower this process and its children on a box that serves example-retrieval-repo first.
+"""Prime-tenant background priority: lower batch legs on a box that serves example-retrieval-repo first.
 
 Prime tenancy is the machine-local key `example_retrieval_repo_prime_tenant` (truthy string); absent or
-unreadable means not prime. Off-prime boxes, win32 and serve-lineage argv are never touched.
+unreadable means not prime. Off-prime boxes, win32 and serve-lineage argv are never touched; the engine itself is never lowered.
 Module-top imports stay stdlib-only; cold CLI callers import this.
 """
 
@@ -53,38 +53,15 @@ def is_prime_tenant() -> bool:
     return _PRIME
 
 
+def _text_names_serve(text) -> bool:
+    return any(marker in str(text).replace("\\", "/") for marker in SERVE_LINEAGE_MARKERS)
+
+
 def _names_serve(argv) -> bool:
     try:
-        for arg in argv or ():
-            text = str(arg).replace("\\", "/")
-            if text.endswith(SERVE_LINEAGE_MARKERS):
-                return True
+        return any(_text_names_serve(arg) for arg in argv or ())
     except Exception:
-        pass
-    return False
-
-
-def apply_to_self() -> dict:
-    """For a batch/example-game-repo process lowering itself to PRIME_TENANT_NICE (darwin: plus background QoS); never an engine entry point. Never raises.
-
-    No-ops, returning {"prime": False}, off-prime, on win32, or when sys.argv names a serve marker.
-    """
-    try:
-        if sys.platform == "win32" or _names_serve(sys.argv) or not is_prime_tenant():
-            return {"prime": False}
-        nice = os.getpriority(os.PRIO_PROCESS, 0)
-        if nice < PRIME_TENANT_NICE:
-            try:
-                os.setpriority(os.PRIO_PROCESS, 0, PRIME_TENANT_NICE)
-                nice = PRIME_TENANT_NICE
-            except OSError:
-                pass
-        bg = False
-        if _DARWIN_SETPRIORITY is not None:
-            bg = _DARWIN_SETPRIORITY(_PRIO_DARWIN_PROCESS, 0, _PRIO_DARWIN_BG) == 0
-        return {"prime": True, "nice": nice, "bg": bg}
-    except Exception:
-        return {"prime": False}
+        return False
 
 
 def _lower_child() -> None:
@@ -103,10 +80,11 @@ def _lower_child() -> None:
 def popen_kwargs(argv=None) -> dict:
     """Popen kwargs that lower a batch leg to nice 15 on a prime box, whatever the parent's nice; {} off-prime, on win32, or for a serve-lineage argv.
 
+    A spawner whose own sys.argv names a serve marker (the serve's descendants) is never lowered.
     A caller with its own preexec_fn chains it: call the returned one first, then its own.
     """
     try:
-        if sys.platform == "win32" or _names_serve(argv) or not is_prime_tenant():
+        if sys.platform == "win32" or _names_serve(argv) or _names_serve(sys.argv) or not is_prime_tenant():
             return {}
         return {"preexec_fn": _lower_child}
     except Exception:
@@ -116,8 +94,7 @@ def popen_kwargs(argv=None) -> dict:
 def is_serve_lineage(cmdline) -> bool:
     """True when a process cmdline (string or argv sequence) names a example-retrieval-repo serve marker; the bounce selector excludes these and their descendants."""
     if isinstance(cmdline, str):
-        text = cmdline.replace("\\", "/")
-        return any(marker in text for marker in SERVE_LINEAGE_MARKERS)
+        return _text_names_serve(cmdline)
     return _names_serve(cmdline)
 
 

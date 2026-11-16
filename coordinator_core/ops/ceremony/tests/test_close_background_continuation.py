@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 from coordinator_core.ops.ceremony import close_background as cb
 from coordinator_core.ops.dispatch_emit import run_close
 from coordinator_core.ops.dispatch_emit.run_close import LegResult
+from pathlib import Path
 
 RUN = "run-c"
 LEGS = ("baton-drain", "orientation-refresh", "post-close")
@@ -17,7 +18,7 @@ def _ctx(root):
     return cb.JobContext(root, root / ".git", RUN, (), None)
 
 
-def _setup(root):
+def _setup(root) -> None:
     run_close.write_close_job(root, RUN, LEGS, datetime.now().astimezone() + timedelta(minutes=10))
 
 
@@ -29,7 +30,7 @@ def _runners():
     return {name: (lambda ctx: LegResult("ran")) for name in cb.BACKGROUND_LEGS}
 
 
-def test_deferred_legs_launch_one_continuation_and_the_next_job_pays_them(tmp_path):
+def test_deferred_legs_launch_one_continuation_and_the_next_job_pays_them(tmp_path: Path) -> None:
     _setup(tmp_path)
     launches = []
     clock = iter([0.0, 10.0, 500.0, 500.0])
@@ -48,7 +49,7 @@ def test_deferred_legs_launch_one_continuation_and_the_next_job_pays_them(tmp_pa
     assert {leg["status"] for leg in _legs(tmp_path).values()} == {"ran"}
 
 
-def test_a_leg_deferred_twice_with_no_progress_is_failed_and_nothing_relaunches(tmp_path):
+def test_a_leg_deferred_twice_with_no_progress_is_failed_and_nothing_relaunches(tmp_path: Path) -> None:
     _setup(tmp_path)
     launches = []
     for _ in range(2):
@@ -63,7 +64,7 @@ def test_a_leg_deferred_twice_with_no_progress_is_failed_and_nothing_relaunches(
     assert "no progress" in legs["post-close"]["detail"]
 
 
-def test_a_continuation_that_does_not_start_fails_the_deferred_legs(tmp_path):
+def test_a_continuation_that_does_not_start_fails_the_deferred_legs(tmp_path: Path) -> None:
     _setup(tmp_path)
     clock = iter([0.0, 10.0, 500.0, 500.0])
     cb.run_and_continue(

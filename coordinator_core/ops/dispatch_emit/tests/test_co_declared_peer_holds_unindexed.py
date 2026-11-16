@@ -2,9 +2,11 @@
 
 from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
 from coordinator_core.ops.dispatch_emit import peer_hunk_gate
+from pathlib import Path
+import pytest
 
 
-def test_live_unindexed_sibling_with_manifest_gets_indexed(tmp_path, monkeypatch):
+def test_live_unindexed_sibling_with_manifest_gets_indexed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     idx.rebuild(tmp_path)
     from coordinator_core.ops import warp_run_deliverable
     from coordinator_core.ops.dispatch_emit import sibling_claims
@@ -20,7 +22,7 @@ def test_live_unindexed_sibling_with_manifest_gets_indexed(tmp_path, monkeypatch
     assert idx.entries(tmp_path)["live-run"].declared == ("a.py", "b.py")
 
 
-def test_sibling_with_prefixes_or_unreadable_manifest_is_not_indexed(tmp_path, monkeypatch):
+def test_sibling_with_prefixes_or_unreadable_manifest_is_not_indexed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     idx.rebuild(tmp_path)
     from coordinator_core.ops import warp_run_deliverable
     from coordinator_core.ops.dispatch_emit import sibling_claims
@@ -41,7 +43,7 @@ def test_sibling_with_prefixes_or_unreadable_manifest_is_not_indexed(tmp_path, m
 def _expired(monkeypatch, leg_name):
     from coordinator_core.ops.dispatch_emit import land_deadline
 
-    def check(leg):
+    def check(leg) -> None:
         if leg == leg_name:
             raise land_deadline.LandDeadlineExceeded(leg, [], 0.0)
 
@@ -49,7 +51,7 @@ def _expired(monkeypatch, leg_name):
     return land_deadline
 
 
-def test_without_released_paths_checks_the_deadline_before_reading(tmp_path, monkeypatch):
+def test_without_released_paths_checks_the_deadline_before_reading(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import pytest
 
     from coordinator_core.ops.dispatch_emit import halted_hold_release
@@ -61,7 +63,7 @@ def test_without_released_paths_checks_the_deadline_before_reading(tmp_path, mon
     assert halted_hold_release.without_released_paths(tmp_path, [("a.py", "r1")]) == [("a.py", "r1")]
 
 
-def test_merge_ancestry_release_propagates_the_deadline_not_swallows_it(tmp_path, monkeypatch):
+def test_merge_ancestry_release_propagates_the_deadline_not_swallows_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import pytest
 
     from coordinator_core.ops.dispatch_emit import merge_ancestry_release

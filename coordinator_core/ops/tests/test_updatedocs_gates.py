@@ -71,7 +71,7 @@ def _write_fake_cli(path: Path, exit_code: int, stdout: str = "", stderr: str = 
 # ---------------------------------------------------------------------------
 
 
-def test_op_registered():
+def test_op_registered() -> None:
     assert "updatedocs.gates" in _REGISTRY
 
 
@@ -80,20 +80,20 @@ def test_op_registered():
 # ---------------------------------------------------------------------------
 
 
-def test_lens_orthogonality_unavailable_when_cli_missing(tmp_path):
+def test_lens_orthogonality_unavailable_when_cli_missing(tmp_path: Path) -> None:
     result = udg._gate_lens_orthogonality(tmp_path, tmp_path / "no-such-settings-home", {})
     assert result.verdict == udg.GateVerdict.UNAVAILABLE
     assert result.severity is None
 
 
-def test_lens_orthogonality_clean_when_cli_exits_zero(tmp_path):
+def test_lens_orthogonality_clean_when_cli_exits_zero(tmp_path: Path) -> None:
     cli = tmp_path / "verify-parallel-review-lens-orthogonality"
     _write_fake_cli(cli, 0)
     result = udg._gate_lens_orthogonality(tmp_path, tmp_path, {"cli": str(cli)})
     assert result.verdict == udg.GateVerdict.CLEAN
 
 
-def test_lens_orthogonality_finding_when_cli_exits_nonzero(tmp_path):
+def test_lens_orthogonality_finding_when_cli_exits_nonzero(tmp_path: Path) -> None:
     cli = tmp_path / "verify-parallel-review-lens-orthogonality"
     _write_fake_cli(cli, 1)
     result = udg._gate_lens_orthogonality(tmp_path, tmp_path, {"cli": str(cli)})
@@ -106,7 +106,7 @@ def test_lens_orthogonality_finding_when_cli_exits_nonzero(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_plugin_wiki_contradiction_on_clean_exit_with_warnings(tmp_path):
+def test_plugin_wiki_contradiction_on_clean_exit_with_warnings(tmp_path: Path) -> None:
     cli = tmp_path / "sync-plugin-wiki"
     _write_fake_cli(cli, 0, stdout="clean (161 validated, 31 missing-bundled warnings)\n")
     result = udg._gate_plugin_wiki(tmp_path, tmp_path, {"cli": str(cli)})
@@ -115,14 +115,14 @@ def test_plugin_wiki_contradiction_on_clean_exit_with_warnings(tmp_path):
     assert result.detail["validated"] == 161
 
 
-def test_plugin_wiki_clean_when_no_warnings(tmp_path):
+def test_plugin_wiki_clean_when_no_warnings(tmp_path: Path) -> None:
     cli = tmp_path / "sync-plugin-wiki"
     _write_fake_cli(cli, 0, stdout="clean (161 validated)\n")
     result = udg._gate_plugin_wiki(tmp_path, tmp_path, {"cli": str(cli)})
     assert result.verdict == udg.GateVerdict.CLEAN
 
 
-def test_plugin_wiki_dev_mirror_exit_5_is_blocking_finding(tmp_path):
+def test_plugin_wiki_dev_mirror_exit_5_is_blocking_finding(tmp_path: Path) -> None:
     cli = tmp_path / "sync-plugin-wiki"
     _write_fake_cli(cli, 5, stdout="dev mirror found\n")
     result = udg._gate_plugin_wiki(tmp_path, tmp_path, {"cli": str(cli)})
@@ -130,7 +130,7 @@ def test_plugin_wiki_dev_mirror_exit_5_is_blocking_finding(tmp_path):
     assert result.severity == udg.Severity.BLOCKING
 
 
-def test_plugin_wiki_exit_3_is_finding_carrying_missing_page_output(tmp_path):
+def test_plugin_wiki_exit_3_is_finding_carrying_missing_page_output(tmp_path: Path) -> None:
     cli = tmp_path / "sync-plugin-wiki"
     _write_fake_cli(cli, 3, stdout="WARN: foo.md referenced by plugin file but absent from bundled wiki (/x/foo.md)\nFAIL: 1 cited wiki page(s) missing\n")
     result = udg._gate_plugin_wiki(tmp_path, tmp_path, {"cli": str(cli)})
@@ -139,7 +139,7 @@ def test_plugin_wiki_exit_3_is_finding_carrying_missing_page_output(tmp_path):
     assert "foo.md" in result.detail["stdout"]
 
 
-def test_plugin_wiki_other_nonzero_exit_stays_unavailable(tmp_path):
+def test_plugin_wiki_other_nonzero_exit_stays_unavailable(tmp_path: Path) -> None:
     cli = tmp_path / "sync-plugin-wiki"
     _write_fake_cli(cli, 1, stdout="")
     result = udg._gate_plugin_wiki(tmp_path, tmp_path, {"cli": str(cli)})
@@ -151,7 +151,7 @@ def test_plugin_wiki_other_nonzero_exit_stays_unavailable(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_skill_anchor_links_exit1_is_blocking_finding_not_unavailable(tmp_path):
+def test_skill_anchor_links_exit1_is_blocking_finding_not_unavailable(tmp_path: Path) -> None:
     cli = tmp_path / "verify-skill-anchor-links"
     _write_fake_cli(cli, 1, stdout="dead anchor found\n")
     result = udg._gate_skill_anchor_links(tmp_path, tmp_path, {"cli": str(cli)})
@@ -159,7 +159,7 @@ def test_skill_anchor_links_exit1_is_blocking_finding_not_unavailable(tmp_path):
     assert result.severity == udg.Severity.BLOCKING
 
 
-def test_skill_anchor_links_exit2_is_unavailable_not_clean(tmp_path):
+def test_skill_anchor_links_exit2_is_unavailable_not_clean(tmp_path: Path) -> None:
     cli = tmp_path / "verify-skill-anchor-links"
     _write_fake_cli(cli, 2, stderr="doctrine-surfaces.json unresolvable\n")
     result = udg._gate_skill_anchor_links(tmp_path, tmp_path, {"cli": str(cli)})
@@ -167,7 +167,7 @@ def test_skill_anchor_links_exit2_is_unavailable_not_clean(tmp_path):
     assert result.severity is None
 
 
-def test_skill_anchor_links_exit0_with_unresolved_is_finding_not_clean(tmp_path):
+def test_skill_anchor_links_exit0_with_unresolved_is_finding_not_clean(tmp_path: Path) -> None:
     cli = tmp_path / "verify-skill-anchor-links"
     _write_fake_cli(cli, 0, stdout="clean (40 total, 38 qualified, 2 unresolved)\n")
     result = udg._gate_skill_anchor_links(tmp_path, tmp_path, {"cli": str(cli)})
@@ -175,7 +175,7 @@ def test_skill_anchor_links_exit0_with_unresolved_is_finding_not_clean(tmp_path)
     assert result.severity == udg.Severity.INFORMATIONAL
 
 
-def test_skill_anchor_links_exit0_clean(tmp_path):
+def test_skill_anchor_links_exit0_clean(tmp_path: Path) -> None:
     cli = tmp_path / "verify-skill-anchor-links"
     _write_fake_cli(cli, 0, stdout="clean (40 total, 40 qualified, 0 unresolved)\n")
     result = udg._gate_skill_anchor_links(tmp_path, tmp_path, {"cli": str(cli)})
@@ -187,7 +187,7 @@ def test_skill_anchor_links_exit0_clean(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_rollup_halts_on_any_blocking_finding():
+def test_rollup_halts_on_any_blocking_finding() -> None:
     results = [
         udg.GateResult("g1", udg.GateVerdict.CLEAN, "clean"),
         udg.GateResult("g2", udg.GateVerdict.FINDING, "bad", severity=udg.Severity.BLOCKING),
@@ -201,7 +201,7 @@ def test_rollup_halts_on_any_blocking_finding():
     assert r["gate_count"] == 3
 
 
-def test_rollup_no_halt_when_only_informational():
+def test_rollup_no_halt_when_only_informational() -> None:
     results = [
         udg.GateResult("g1", udg.GateVerdict.FINDING, "meh", severity=udg.Severity.INFORMATIONAL),
     ]
@@ -209,7 +209,7 @@ def test_rollup_no_halt_when_only_informational():
     assert r["halt"] is False
 
 
-def test_rollup_tracks_unavailable_and_contradiction_separately():
+def test_rollup_tracks_unavailable_and_contradiction_separately() -> None:
     results = [
         udg.GateResult("g1", udg.GateVerdict.UNAVAILABLE, "no cli"),
         udg.GateResult("g2", udg.GateVerdict.CONTRADICTION, "clean but warnings", severity=udg.Severity.INFORMATIONAL),
@@ -225,26 +225,26 @@ def test_rollup_tracks_unavailable_and_contradiction_separately():
 # ---------------------------------------------------------------------------
 
 
-def test_fresh_scaffold_probe_fires_on_all_three_axes(tmp_path):
+def test_fresh_scaffold_probe_fires_on_all_three_axes(tmp_path: Path) -> None:
     (tmp_path / "CLAUDE.md").write_text("x")
     result = udg._gate_fresh_scaffold_probe(tmp_path, tmp_path, {})
     assert result.verdict == udg.GateVerdict.FINDING
     assert result.severity == udg.Severity.INFORMATIONAL
 
 
-def test_fresh_scaffold_probe_clean_when_content_present(tmp_path):
+def test_fresh_scaffold_probe_clean_when_content_present(tmp_path: Path) -> None:
     (tmp_path / "CLAUDE.md").write_text("x")
     (tmp_path / "DIRECTORY.md").write_text("x")
     result = udg._gate_fresh_scaffold_probe(tmp_path, tmp_path, {})
     assert result.verdict == udg.GateVerdict.CLEAN
 
 
-def test_fresh_scaffold_probe_unavailable_outside_repo_root(tmp_path):
+def test_fresh_scaffold_probe_unavailable_outside_repo_root(tmp_path: Path) -> None:
     result = udg._gate_fresh_scaffold_probe(tmp_path, tmp_path, {})
     assert result.verdict == udg.GateVerdict.UNAVAILABLE
 
 
-def test_fresh_scaffold_probe_spawns_nothing_when_an_index_exists(tmp_path, monkeypatch):
+def test_fresh_scaffold_probe_spawns_nothing_when_an_index_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "CLAUDE.md").write_text("x")
     (tmp_path / "DIRECTORY.md").write_text("x")
     (tmp_path / "tasks").mkdir()
@@ -255,7 +255,7 @@ def test_fresh_scaffold_probe_spawns_nothing_when_an_index_exists(tmp_path, monk
     assert calls == []
 
 
-def _git_repo_with_tasks(tmp_path, files, ignore_tasks=False):
+def _git_repo_with_tasks(tmp_path, files, ignore_tasks: bool = False):
     import subprocess
 
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True)
@@ -268,7 +268,7 @@ def _git_repo_with_tasks(tmp_path, files, ignore_tasks=False):
     return tmp_path / "tasks"
 
 
-def test_tasks_markdown_found_when_untracked_nested_one_spawn(tmp_path, monkeypatch):
+def test_tasks_markdown_found_when_untracked_nested_one_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tasks = _git_repo_with_tasks(tmp_path, ["tasks/a/b/note.md"])
     calls = []
     real = udg.run_git
@@ -282,17 +282,17 @@ def test_tasks_markdown_found_when_untracked_nested_one_spawn(tmp_path, monkeypa
     assert len(calls) == 1 and "ls-files" in calls[0]
 
 
-def test_tasks_markdown_found_when_gitignored(tmp_path):
+def test_tasks_markdown_found_when_gitignored(tmp_path: Path) -> None:
     tasks = _git_repo_with_tasks(tmp_path, ["tasks/note.md"], ignore_tasks=True)
     assert udg._tasks_holds_markdown(tmp_path, tasks) is True
 
 
-def test_tasks_markdown_absent_when_only_other_files(tmp_path):
+def test_tasks_markdown_absent_when_only_other_files(tmp_path: Path) -> None:
     tasks = _git_repo_with_tasks(tmp_path, ["tasks/a/log.txt", "tasks/b/data.json"])
     assert udg._tasks_holds_markdown(tmp_path, tasks) is False
 
 
-def test_tasks_markdown_falls_back_to_disk_walk_outside_git(tmp_path):
+def test_tasks_markdown_falls_back_to_disk_walk_outside_git(tmp_path: Path) -> None:
     (tmp_path / "tasks" / "x").mkdir(parents=True)
     (tmp_path / "tasks" / "x" / "n.md").write_text("x")
     assert udg._tasks_holds_markdown(tmp_path, tmp_path / "tasks") is True
@@ -308,14 +308,14 @@ def test_tasks_markdown_falls_back_to_disk_walk_outside_git(tmp_path):
 _ADMISSIBLE_BODY = "weighty body\n" * 1000
 
 
-def _cite_in_daily_log(root, paths):
+def _cite_in_daily_log(root, paths) -> None:
     """An unharvested daily log naming ``paths``: the citation that admits a plan."""
     log = root / "archive" / "daily-summaries" / "2026-11-02.md"
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text("".join(f"- shipped {p}\n" for p in paths), encoding="utf-8")
 
 
-def _implemented_plans(root, n, *, status="implemented"):
+def _implemented_plans(root, n, *, status: str = "implemented") -> None:
     """``n`` plans heavy enough to clear the weight floor, all cited by a daily log."""
     plans = root / "docs" / "plans"
     plans.mkdir(parents=True, exist_ok=True)
@@ -327,13 +327,13 @@ def _implemented_plans(root, n, *, status="implemented"):
         _cite_in_daily_log(root, [f"docs/plans/2026-11-01-p{i}.md" for i in range(n)])
 
 
-def _empty_log(root):
+def _empty_log(root) -> None:
     log = root / "state" / "distillation-log.md"
     log.parent.mkdir(parents=True, exist_ok=True)
     log.write_text("# Columns: run | path | disposition | fate\n", encoding="utf-8")
 
 
-def test_distill_threshold_fires_at_50_plus(tmp_path):
+def test_distill_threshold_fires_at_50_plus(tmp_path: Path) -> None:
     _empty_log(tmp_path)
     _implemented_plans(tmp_path, 50)
     result = udg._gate_distill_threshold(tmp_path, tmp_path, {})
@@ -341,13 +341,13 @@ def test_distill_threshold_fires_at_50_plus(tmp_path):
     assert result.detail["total"] == 50  # 50 plans plus the citing log, clamped at the threshold cap
 
 
-def test_distill_threshold_clean_below_threshold(tmp_path):
+def test_distill_threshold_clean_below_threshold(tmp_path: Path) -> None:
     _empty_log(tmp_path)
     result = udg._gate_distill_threshold(tmp_path, tmp_path, {})
     assert result.verdict == udg.GateVerdict.CLEAN
 
 
-def test_distill_threshold_does_not_count_unripe_plans(tmp_path):
+def test_distill_threshold_does_not_count_unripe_plans(tmp_path: Path) -> None:
     """The old glob counted every docs/plans/*.md; only implemented plans are scannable."""
     _empty_log(tmp_path)
     _implemented_plans(tmp_path, 60, status="draft")
@@ -356,7 +356,7 @@ def test_distill_threshold_does_not_count_unripe_plans(tmp_path):
     assert result.verdict == udg.GateVerdict.CLEAN
 
 
-def test_distill_threshold_missing_log_counts_against_an_empty_baseline(tmp_path):
+def test_distill_threshold_missing_log_counts_against_an_empty_baseline(tmp_path: Path) -> None:
     """An absent log is distill.scope's empty baseline (dd57eaf5f8), so a fresh repo's backlog fires."""
     _implemented_plans(tmp_path, 60)
     result = udg._gate_distill_threshold(tmp_path, tmp_path, {})
@@ -364,7 +364,7 @@ def test_distill_threshold_missing_log_counts_against_an_empty_baseline(tmp_path
     assert result.detail["days_ago"] is None and result.detail["total"] >= 20
 
 
-def test_distill_threshold_total_equals_compute_scope_scannable(tmp_path):
+def test_distill_threshold_total_equals_compute_scope_scannable(tmp_path: Path) -> None:
     from coordinator_core.ops.distill_scope import PM_RULING_2026_08_06_COHORT_SPECS, compute_scope
 
     _empty_log(tmp_path)
@@ -387,7 +387,7 @@ def test_distill_threshold_total_equals_compute_scope_scannable(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_op_end_to_end_runs_requested_subset(tmp_path):
+def test_op_end_to_end_runs_requested_subset(tmp_path: Path) -> None:
     (tmp_path / "CLAUDE.md").write_text("x")
     (tmp_path / "DIRECTORY.md").write_text("x")
     _empty_log(tmp_path)
@@ -403,7 +403,7 @@ def test_op_end_to_end_runs_requested_subset(tmp_path):
     assert all(g["verdict"] == "clean" for g in reply["gates"])
 
 
-def test_op_crashing_gate_is_unavailable_and_siblings_keep_their_verdicts(tmp_path, monkeypatch):
+def test_op_crashing_gate_is_unavailable_and_siblings_keep_their_verdicts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "CLAUDE.md").write_text("x")
     (tmp_path / "DIRECTORY.md").write_text("x")
     _empty_log(tmp_path)
@@ -425,7 +425,7 @@ def test_op_crashing_gate_is_unavailable_and_siblings_keep_their_verdicts(tmp_pa
     assert reply["rollup"]["gate_count"] == 2
 
 
-def test_default_invocation_envelope_carries_result_through_a_pipe(tmp_path, monkeypatch):
+def test_default_invocation_envelope_carries_result_through_a_pipe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Default (no `gates` param) dispatch, serialised and read back as a piped
     consumer would: the envelope has `result` even when a gate crashes."""
     import json
@@ -457,7 +457,7 @@ def test_default_invocation_envelope_carries_result_through_a_pipe(tmp_path, mon
     assert by_id["fresh-scaffold-probe"] == "unavailable"
 
 
-def test_op_unknown_gate_raises_value_error(tmp_path):
+def test_op_unknown_gate_raises_value_error(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         _run(udg._updatedocs_gates({"repo_root": str(tmp_path), "gates": ["not-a-real-gate"]}, repo_root=None))
 
@@ -470,7 +470,7 @@ def test_op_unknown_gate_raises_value_error(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_run_execs_py_cli_via_sys_executable_even_without_exec_bit(tmp_path):
+def test_run_execs_py_cli_via_sys_executable_even_without_exec_bit(tmp_path: Path) -> None:
     cli = tmp_path / "check-rag-state.py"
     cli.write_text("import sys\nsys.stdout.write('ran')\nsys.exit(0)\n", encoding="utf-8")
     # Deliberately no chmod +x — a shell-exec-direct branch would fail to
@@ -481,7 +481,7 @@ def test_run_execs_py_cli_via_sys_executable_even_without_exec_bit(tmp_path):
     assert proc.stdout == "ran"
 
 
-def test_run_non_py_cli_execs_directly_not_via_interpreter(tmp_path):
+def test_run_non_py_cli_execs_directly_not_via_interpreter(tmp_path: Path) -> None:
     cli = tmp_path / "verify-something"
     _write_fake_cli(cli, 0, stdout="ok")
     proc = udg._run(cli, [])
@@ -495,21 +495,21 @@ def test_run_non_py_cli_execs_directly_not_via_interpreter(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_run_timeout_returns_none_not_raise(tmp_path):
+def test_run_timeout_returns_none_not_raise(tmp_path: Path) -> None:
     cli = tmp_path / "hangs.py"
     cli.write_text("import time\ntime.sleep(5)\n", encoding="utf-8")
     proc = udg._run(cli, [], timeout=0.05)
     assert proc is None
 
 
-def test_default_cli_timeout_is_tight_and_never_above_registry_bound():
+def test_default_cli_timeout_is_tight_and_never_above_registry_bound() -> None:
     from coordinator_core.external_tool_budget import bound_for
 
     assert udg._DEFAULT_CLI_TIMEOUT_SECONDS <= 10.0
     assert udg._DEFAULT_CLI_TIMEOUT_SECONDS <= bound_for(udg._CLI_SITE)
 
 
-def test_lens_orthogonality_unavailable_not_clean_on_timeout(tmp_path):
+def test_lens_orthogonality_unavailable_not_clean_on_timeout(tmp_path: Path) -> None:
     cli = tmp_path / "verify-parallel-review-lens-orthogonality"
     cli.write_text("#!/usr/bin/env python3\nimport time\ntime.sleep(5)\n", encoding="utf-8")
     cli.chmod(cli.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
@@ -532,7 +532,7 @@ def test_lens_orthogonality_unavailable_not_clean_on_timeout(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_plugin_wiki_unavailable_when_validated_count_does_not_parse(tmp_path):
+def test_plugin_wiki_unavailable_when_validated_count_does_not_parse(tmp_path: Path) -> None:
     cli = tmp_path / "sync-plugin-wiki"
     _write_fake_cli(cli, 0, stdout="all good, nothing to report\n")
     result = udg._gate_plugin_wiki(tmp_path, tmp_path, {"cli": str(cli)})
@@ -540,7 +540,7 @@ def test_plugin_wiki_unavailable_when_validated_count_does_not_parse(tmp_path):
     assert result.verdict != udg.GateVerdict.CLEAN
 
 
-def test_skill_anchor_links_unavailable_when_unresolved_word_present_but_uncounted(tmp_path):
+def test_skill_anchor_links_unavailable_when_unresolved_word_present_but_uncounted(tmp_path: Path) -> None:
     cli = tmp_path / "verify-skill-anchor-links"
     _write_fake_cli(cli, 0, stdout="clean, some unresolved somewhere\n")
     result = udg._gate_skill_anchor_links(tmp_path, tmp_path, {"cli": str(cli)})
@@ -558,7 +558,7 @@ def test_skill_anchor_links_unavailable_when_unresolved_word_present_but_uncount
 # ---------------------------------------------------------------------------
 
 
-def test_windows_exec_argv_cmd_sibling_wins_over_bare_extensionless_file(tmp_path):
+def test_windows_exec_argv_cmd_sibling_wins_over_bare_extensionless_file(tmp_path: Path) -> None:
     cli = tmp_path / "verify-something"
     _write_fake_cli(cli, 0)  # bare file with a python shebang — must lose to .cmd
     cmd_sibling = tmp_path / "verify-something.cmd"
@@ -567,7 +567,7 @@ def test_windows_exec_argv_cmd_sibling_wins_over_bare_extensionless_file(tmp_pat
     assert argv == [str(cmd_sibling), "--flag"]
 
 
-def test_windows_exec_argv_ps1_sibling_used_when_no_cmd_sibling(tmp_path):
+def test_windows_exec_argv_ps1_sibling_used_when_no_cmd_sibling(tmp_path: Path) -> None:
     cli = tmp_path / "verify-something"
     ps1_sibling = tmp_path / "verify-something.ps1"
     ps1_sibling.write_text("exit 0\n", encoding="utf-8")
@@ -577,7 +577,7 @@ def test_windows_exec_argv_ps1_sibling_used_when_no_cmd_sibling(tmp_path):
     assert argv[-2:] == [str(ps1_sibling), "x"]
 
 
-def test_windows_exec_argv_py_sibling_used_when_no_cmd_or_ps1(tmp_path):
+def test_windows_exec_argv_py_sibling_used_when_no_cmd_or_ps1(tmp_path: Path) -> None:
     cli = tmp_path / "verify-something"
     py_sibling = tmp_path / "verify-something.py"
     py_sibling.write_text("import sys\nsys.exit(0)\n", encoding="utf-8")
@@ -585,21 +585,21 @@ def test_windows_exec_argv_py_sibling_used_when_no_cmd_or_ps1(tmp_path):
     assert argv == [sys.executable, str(py_sibling)]
 
 
-def test_windows_exec_argv_python_shebang_falls_back_to_sys_executable(tmp_path):
+def test_windows_exec_argv_python_shebang_falls_back_to_sys_executable(tmp_path: Path) -> None:
     cli = tmp_path / "verify-something"
     _write_fake_cli(cli, 0)  # no .cmd/.ps1/.py sibling — only the shebang read remains
     argv = udg._windows_exec_argv(cli, [])
     assert argv == [sys.executable, str(cli)]
 
 
-def test_windows_exec_argv_non_python_shebang_stays_unavailable(tmp_path):
+def test_windows_exec_argv_non_python_shebang_stays_unavailable(tmp_path: Path) -> None:
     cli = tmp_path / "verify-something"
     cli.write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
     argv = udg._windows_exec_argv(cli, [])
     assert argv is None
 
 
-def test_run_non_python_shebang_extensionless_cli_is_unavailable_on_windows(tmp_path, monkeypatch):
+def test_run_non_python_shebang_extensionless_cli_is_unavailable_on_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(udg.sys, "platform", "win32")
     cli = tmp_path / "verify-something"
     cli.write_text("#!/bin/sh\necho hi\n", encoding="utf-8")
@@ -607,7 +607,7 @@ def test_run_non_python_shebang_extensionless_cli_is_unavailable_on_windows(tmp_
     assert proc is None
 
 
-def test_run_posix_argv_unchanged_by_the_windows_branch(tmp_path, monkeypatch):
+def test_run_posix_argv_unchanged_by_the_windows_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """POSIX behaviour must stay byte-identical: the extensionless CLI is
     still handed to subprocess.run() directly, with no launcher-shim
     resolution in between — regardless of which OS actually runs this test."""
@@ -651,7 +651,7 @@ _BUCKET2_GATES = (
 
 
 @pytest.mark.parametrize("gate_id", _BUCKET2_GATES)
-def test_bucket2_gate_is_unavailable_not_clean_when_target_absent(gate_id, tmp_path):
+def test_bucket2_gate_is_unavailable_not_clean_when_target_absent(gate_id, tmp_path: Path) -> None:
     """An absent corpus is UNAVAILABLE, never CLEAN.
 
     tmp_path is an empty directory: every one of these gates' targets is
@@ -666,7 +666,7 @@ def test_bucket2_gate_is_unavailable_not_clean_when_target_absent(gate_id, tmp_p
 
 
 @pytest.mark.parametrize("gate_id", _BUCKET2_GATES)
-def test_bucket2_gate_is_registered(gate_id):
+def test_bucket2_gate_is_registered(gate_id) -> None:
     assert gate_id in udg._GATES
 
 
@@ -686,7 +686,7 @@ def _run_directory_md_gate(root, overrides=None):
     return udg._GATES["directory-md-staleness"](root, root, overrides or {})
 
 
-def test_directory_md_gate_finds_a_root_level_index(tmp_path):
+def test_directory_md_gate_finds_a_root_level_index(tmp_path: Path) -> None:
     """coordinator-content-repo's shape: the index is `./DIRECTORY.md`."""
     (tmp_path / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
 
@@ -696,7 +696,7 @@ def test_directory_md_gate_finds_a_root_level_index(tmp_path):
     assert result.detail["directory_md"] == "DIRECTORY.md"
 
 
-def test_directory_md_gate_finds_a_package_level_index(tmp_path):
+def test_directory_md_gate_finds_a_package_level_index(tmp_path: Path) -> None:
     """claude-klabauter's shape: the index is under a top-level package dir."""
     pkg = tmp_path / "coordinator_core"
     pkg.mkdir()
@@ -708,7 +708,7 @@ def test_directory_md_gate_finds_a_package_level_index(tmp_path):
     assert result.detail["directory_md"] == "coordinator_core/DIRECTORY.md"
 
 
-def test_directory_md_gate_prefers_the_root_index_over_a_package_one(tmp_path):
+def test_directory_md_gate_prefers_the_root_index_over_a_package_one(tmp_path: Path) -> None:
     (tmp_path / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
     pkg = tmp_path / "coordinator_core"
     pkg.mkdir()
@@ -717,7 +717,7 @@ def test_directory_md_gate_prefers_the_root_index_over_a_package_one(tmp_path):
     assert _run_directory_md_gate(tmp_path).detail["directory_md"] == "DIRECTORY.md"
 
 
-def test_directory_md_gate_honours_an_explicit_override(tmp_path):
+def test_directory_md_gate_honours_an_explicit_override(tmp_path: Path) -> None:
     (tmp_path / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
     nested = tmp_path / "engine"
     nested.mkdir()
@@ -728,7 +728,7 @@ def test_directory_md_gate_honours_an_explicit_override(tmp_path):
     assert result.detail["directory_md"] == "engine/DIRECTORY.md"
 
 
-def test_directory_md_gate_with_date_but_no_count_is_a_hinted_finding_not_clean(tmp_path):
+def test_directory_md_gate_with_date_but_no_count_is_a_hinted_finding_not_clean(tmp_path: Path) -> None:
     (tmp_path / "DIRECTORY.md").write_text(_INDEX_BODY, encoding="utf-8")
 
     result = _run_directory_md_gate(tmp_path)
@@ -738,7 +738,7 @@ def test_directory_md_gate_with_date_but_no_count_is_a_hinted_finding_not_clean(
     assert result.detail["format_hint"]
 
 
-def test_directory_md_gate_without_date_carries_the_date_hint(tmp_path):
+def test_directory_md_gate_without_date_carries_the_date_hint(tmp_path: Path) -> None:
     (tmp_path / "DIRECTORY.md").write_text("# DIRECTORY\n\n1 `*.py` files\n", encoding="utf-8")
 
     result = _run_directory_md_gate(tmp_path)
@@ -747,7 +747,7 @@ def test_directory_md_gate_without_date_carries_the_date_hint(tmp_path):
     assert result.detail["date_format_hint"] == udg.DATE_FORMAT_HINT
 
 
-def test_directory_md_gate_bold_date_and_mismatched_count_is_a_finding(tmp_path):
+def test_directory_md_gate_bold_date_and_mismatched_count_is_a_finding(tmp_path: Path) -> None:
     for i in range(3):
         (tmp_path / f"m{i}.py").write_text("", encoding="utf-8")
     (tmp_path / "DIRECTORY.md").write_text(
@@ -762,7 +762,7 @@ def test_directory_md_gate_bold_date_and_mismatched_count_is_a_finding(tmp_path)
     assert "no readable" not in result.summary
 
 
-def test_directory_md_gate_matching_count_with_date_is_clean(tmp_path):
+def test_directory_md_gate_matching_count_with_date_is_clean(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("", encoding="utf-8")
     (tmp_path / "DIRECTORY.md").write_text(
         "Last updated: 2026-10-12\n1 `*.py` files\n", encoding="utf-8"
@@ -771,7 +771,7 @@ def test_directory_md_gate_matching_count_with_date_is_clean(tmp_path):
     assert _run_directory_md_gate(tmp_path).verdict is udg.GateVerdict.CLEAN
 
 
-def test_directory_md_discovery_does_not_recurse(tmp_path):
+def test_directory_md_discovery_does_not_recurse(tmp_path: Path) -> None:
     """Two levels down is not discovery — it is a walk this gate must not do."""
     deep = tmp_path / "a" / "b"
     deep.mkdir(parents=True)
@@ -780,7 +780,7 @@ def test_directory_md_discovery_does_not_recurse(tmp_path):
     assert udg._discover_directory_md(tmp_path) is None
 
 
-def test_bucket2_gates_are_informational_never_blocking(tmp_path):
+def test_bucket2_gates_are_informational_never_blocking(tmp_path: Path) -> None:
     """None of the four may halt /update-docs.
 
     Doc-index drift is not a reason to stop the ceremony. This is the concrete
@@ -804,13 +804,13 @@ def test_bucket2_gates_are_informational_never_blocking(tmp_path):
     assert rolled["blocking"] == []
 
 
-def test_bucket2_gate_ids_do_not_bypass_the_unknown_id_guard():
+def test_bucket2_gate_ids_do_not_bypass_the_unknown_id_guard() -> None:
     """Adding four gates must not weaken the no-silent-skip contract."""
     with pytest.raises(ValueError):
         udg._updatedocs_gates({"gates": ["docs-readme-index-drift", "not-a-real-gate"]})
 
 
-def test_memo_prune_gate_survives_an_actual_prune_candidate(tmp_path):
+def test_memo_prune_gate_survives_an_actual_prune_candidate(tmp_path: Path) -> None:
     """Regression: the gate raised AttributeError the moment a memo qualified.
 
     It iterated `c.path` over MemoPruneResult's `list[str]`, copied from the
@@ -835,7 +835,7 @@ def test_memo_prune_gate_survives_an_actual_prune_candidate(tmp_path):
     assert result.detail["prunable"] == ["cross-repo/archive/old.md"]
 
 
-def test_gates_resolve_corpora_under_the_worktree_not_the_git_dir(tmp_path):
+def test_gates_resolve_corpora_under_the_worktree_not_the_git_dir(tmp_path: Path) -> None:
     """A corpus must never be joined onto the injected common dir.
 
     Regression for the defect coordinator-content-repo found on 2026-09-02: `updatedocs.gates`
@@ -876,7 +876,7 @@ def test_gates_resolve_corpora_under_the_worktree_not_the_git_dir(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_cli_finds_the_pathext_executable_when_the_bare_name_is_absent(tmp_path, monkeypatch):
+def test_resolve_cli_finds_the_pathext_executable_when_the_bare_name_is_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(udg.sys, "platform", "win32")
     monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
     forwarder = tmp_path / "verify-skill-anchor-links.exe"
@@ -884,7 +884,7 @@ def test_resolve_cli_finds_the_pathext_executable_when_the_bare_name_is_absent(t
     assert udg._resolve_cli(tmp_path, "verify-skill-anchor-links") == forwarder
 
 
-def test_resolve_cli_prefers_the_executable_over_a_co_located_extensionless_script(tmp_path, monkeypatch):
+def test_resolve_cli_prefers_the_executable_over_a_co_located_extensionless_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """On Windows an extensionless file cannot be exec'd at all.
 
     A settings tree that carries both forms for one entrypoint must resolve to
@@ -899,7 +899,7 @@ def test_resolve_cli_prefers_the_executable_over_a_co_located_extensionless_scri
     assert udg._resolve_cli(tmp_path, "sync-plugin-wiki") == forwarder
 
 
-def test_resolve_cli_maps_a_py_name_onto_the_forwarder_that_replaced_it(tmp_path, monkeypatch):
+def test_resolve_cli_maps_a_py_name_onto_the_forwarder_that_replaced_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(udg.sys, "platform", "win32")
     monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
     forwarder = tmp_path / "check-rag-state.exe"
@@ -907,26 +907,26 @@ def test_resolve_cli_maps_a_py_name_onto_the_forwarder_that_replaced_it(tmp_path
     assert udg._resolve_cli(tmp_path, "check-rag-state.py") == forwarder
 
 
-def test_resolve_cli_never_invents_a_windows_extension_on_posix(tmp_path, monkeypatch):
+def test_resolve_cli_never_invents_a_windows_extension_on_posix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`.exe` beside a POSIX CLI is not that CLI."""
     monkeypatch.setattr(udg.sys, "platform", "linux")
     (tmp_path / "sync-plugin-wiki.exe").write_bytes(b"MZ")
     assert udg._resolve_cli(tmp_path, "sync-plugin-wiki") == tmp_path / "sync-plugin-wiki"
 
 
-def test_resolve_cli_keeps_the_name_as_written_when_it_exists_on_posix(tmp_path, monkeypatch):
+def test_resolve_cli_keeps_the_name_as_written_when_it_exists_on_posix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(udg.sys, "platform", "linux")
     cli = tmp_path / "sync-plugin-wiki"
     cli.write_text("#!/usr/bin/env python3\n", encoding="utf-8")
     assert udg._resolve_cli(tmp_path, "sync-plugin-wiki") == cli
 
 
-def test_resolve_cli_returns_the_canonical_path_when_nothing_resolves(tmp_path):
+def test_resolve_cli_returns_the_canonical_path_when_nothing_resolves(tmp_path: Path) -> None:
     """UNAVAILABLE must still name the path the gate looked for."""
     assert udg._resolve_cli(tmp_path, "sync-plugin-wiki") == tmp_path / "sync-plugin-wiki"
 
 
-def test_windows_exec_argv_execs_a_pathext_binary_directly(tmp_path, monkeypatch):
+def test_windows_exec_argv_execs_a_pathext_binary_directly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("PATHEXT", ".COM;.EXE;.BAT;.CMD")
     forwarder = tmp_path / "reap-stale-subagent-sidecars.exe"
     forwarder.write_bytes(b"MZ")
@@ -942,7 +942,7 @@ def _no_spawn(*args, **kwargs):
     raise AssertionError(f"default route must not spawn: {args}")
 
 
-def test_repomap_gate_default_route_reads_check_rag_state_in_process(tmp_path, monkeypatch):
+def test_repomap_gate_default_route_reads_check_rag_state_in_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import check_rag_state
 
     monkeypatch.setattr(udg, "_run", _no_spawn)
@@ -953,7 +953,7 @@ def test_repomap_gate_default_route_reads_check_rag_state_in_process(tmp_path, m
     assert "RAG present + fresh" in result.summary
 
 
-def test_repomap_gate_default_route_nonzero_check_rag_state_reads_unknown(tmp_path, monkeypatch):
+def test_repomap_gate_default_route_nonzero_check_rag_state_reads_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import check_rag_state
 
     monkeypatch.setattr(check_rag_state, "main", lambda argv: (print("fresh"), 1)[1])
@@ -973,7 +973,7 @@ def _repomap_gate(tmp_path, script):
     return udg._gate_repomap(tmp_path, tmp_path, {"rag_state": "absent", "generate_repomap_cli": str(cli)})
 
 
-def test_repomap_gate_timeout_names_timeout_and_ceiling(tmp_path, monkeypatch):
+def test_repomap_gate_timeout_names_timeout_and_ceiling(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(udg, "_DEFAULT_CLI_TIMEOUT_SECONDS", 0.25)
     result = _repomap_gate(tmp_path, "import time\ntime.sleep(5)\n")
     assert result.verdict == udg.GateVerdict.UNAVAILABLE
@@ -981,7 +981,7 @@ def test_repomap_gate_timeout_names_timeout_and_ceiling(tmp_path, monkeypatch):
     assert "could not be spawned" not in result.summary
 
 
-def test_repomap_gate_spawn_oserror_names_spawn_error(tmp_path, monkeypatch):
+def test_repomap_gate_spawn_oserror_names_spawn_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*args, **kwargs):
         raise OSError("exec format error")
 
@@ -992,13 +992,13 @@ def test_repomap_gate_spawn_oserror_names_spawn_error(tmp_path, monkeypatch):
     assert "timed out" not in result.summary
 
 
-def test_repomap_gate_nonzero_exit_stays_a_finding(tmp_path):
+def test_repomap_gate_nonzero_exit_stays_a_finding(tmp_path: Path) -> None:
     result = _repomap_gate(tmp_path, "import sys\nsys.exit(3)\n")
     assert result.verdict == udg.GateVerdict.FINDING
     assert "repomap regeneration failed (exit 3)" in result.summary
 
 
-def test_run_reporting_distinguishes_timeout_from_spawn_error(tmp_path, monkeypatch):
+def test_run_reporting_distinguishes_timeout_from_spawn_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cli = tmp_path / "hangs.py"
     cli.write_text("import time\ntime.sleep(5)\n", encoding="utf-8")
     proc, why = udg._run_reporting(cli, [], timeout=0.05)
@@ -1013,7 +1013,7 @@ def test_run_reporting_distinguishes_timeout_from_spawn_error(tmp_path, monkeypa
 # ---------------------------------------------------------------------------
 
 
-def _big_decisions_repo(tmp_path, n=400):
+def _big_decisions_repo(tmp_path, n: int = 400):
     docs = tmp_path / "docs"
     (docs / "decisions").mkdir(parents=True)
     for i in range(n):
@@ -1022,7 +1022,7 @@ def _big_decisions_repo(tmp_path, n=400):
     return tmp_path
 
 
-def test_default_reply_is_a_bounded_summary_with_counts(tmp_path):
+def test_default_reply_is_a_bounded_summary_with_counts(tmp_path: Path) -> None:
     root = _big_decisions_repo(tmp_path)
     params = {"repo_root": str(root), "gates": ["docs-readme-index-drift"]}
     full = udg._updatedocs_gates({**params, "full_detail": True})
@@ -1039,7 +1039,7 @@ def test_default_reply_is_a_bounded_summary_with_counts(tmp_path):
     assert reply["rollup"] == full["rollup"]
 
 
-def test_reply_over_the_cap_elides_the_largest_detail_not_the_verdict(tmp_path, monkeypatch):
+def test_reply_over_the_cap_elides_the_largest_detail_not_the_verdict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _big_decisions_repo(tmp_path)
     monkeypatch.setattr(udg, "_REPLY_BYTE_CAP", 1500)
     reply = udg._updatedocs_gates({"repo_root": str(root), "gates": ["docs-readme-index-drift"]})
@@ -1048,7 +1048,7 @@ def test_reply_over_the_cap_elides_the_largest_detail_not_the_verdict(tmp_path, 
     assert gate["verdict"] == "finding" and gate["summary"]
 
 
-def test_a_cut_summary_is_marked_and_a_short_one_is_not(monkeypatch):
+def test_a_cut_summary_is_marked_and_a_short_one_is_not(monkeypatch: pytest.MonkeyPatch) -> None:
     long_text, short_text = "x" * 900, "short"
     results = [
         udg.GateResult("a-gate", udg.GateVerdict.CLEAN, long_text),
@@ -1060,7 +1060,7 @@ def test_a_cut_summary_is_marked_and_a_short_one_is_not(monkeypatch):
     assert b["summary"] == short_text and "summary_truncated" not in b
 
 
-def test_short_detail_lists_pass_through_unbounded(tmp_path):
+def test_short_detail_lists_pass_through_unbounded(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     (docs / "decisions").mkdir(parents=True)
     for i in range(3):
@@ -1072,7 +1072,7 @@ def test_short_detail_lists_pass_through_unbounded(tmp_path):
     assert "missing_count" not in section
 
 
-def test_plans_prune_gate_never_lints_a_plan_sidecar_as_a_plan(tmp_path):
+def test_plans_prune_gate_never_lints_a_plan_sidecar_as_a_plan(tmp_path: Path) -> None:
     plans = tmp_path / "docs" / "plans"
     plans.mkdir(parents=True)
     (plans / "2026-01-01-a.md").write_text("---\nstatus: executing\n---\n# A\n", encoding="utf-8")
@@ -1083,7 +1083,7 @@ def test_plans_prune_gate_never_lints_a_plan_sidecar_as_a_plan(tmp_path):
     assert result.detail["retained_count"] == 1
 
 
-def test_plans_prune_gate_still_reports_a_real_plan_without_status(tmp_path):
+def test_plans_prune_gate_still_reports_a_real_plan_without_status(tmp_path: Path) -> None:
     plans = tmp_path / "docs" / "plans"
     plans.mkdir(parents=True)
     (plans / "2026-01-01-b.md").write_text("no frontmatter\n", encoding="utf-8")
@@ -1098,7 +1098,7 @@ def _handoff(path: Path, **fm) -> None:
     path.write_text(f"---\n{body}---\nbody\n")
 
 
-def test_blocked_by_batch_answers_every_candidate_in_one_reply(tmp_path):
+def test_blocked_by_batch_answers_every_candidate_in_one_reply(tmp_path: Path) -> None:
     (tmp_path / "CLAUDE.md").write_text("x")
     _handoff(tmp_path / "archive/handoffs/a.md", stub_id="stub-a", kind="session-handoff", status="consumed")
     _handoff(tmp_path / "archive/handoffs/b.md", stub_id="stub-b", kind="session-handoff", status="consumed")
@@ -1122,7 +1122,7 @@ def test_blocked_by_batch_answers_every_candidate_in_one_reply(tmp_path):
     assert states["archive/handoffs/b.md"] == "none"
 
 
-def test_blocked_by_absent_leaves_reply_unchanged(tmp_path):
+def test_blocked_by_absent_leaves_reply_unchanged(tmp_path: Path) -> None:
     (tmp_path / "CLAUDE.md").write_text("x")
     reply = _run(
         udg._updatedocs_gates(

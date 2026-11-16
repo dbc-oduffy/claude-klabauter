@@ -6,6 +6,8 @@ import json
 
 from coordinator_core.roadmap import prep_gate as pg
 from coordinator_core.roadmap.tests.test_prep_gate_four_legs import _CLEAN_FM, _write_plan
+from pathlib import Path
+import pytest
 
 _ROW = """- id: C1
   title: merge row
@@ -27,13 +29,13 @@ def _verdict(tmp_path, owner: str, slug: str) -> str:
     return json.dumps(pg.gate_plan(tmp_path, plan))
 
 
-def test_agent_type_em_is_refused_naming_performer_em(tmp_path):
+def test_agent_type_em_is_refused_naming_performer_em(tmp_path: Path) -> None:
     out = _verdict(tmp_path, "agent_type: em", "2026-10-23-agent-em.md")
     assert "performer: em" in out
     assert "agent_type 'em'" in out
 
 
-def test_unresolvable_agent_type_is_refused_with_emitter_message(tmp_path, monkeypatch):
+def test_unresolvable_agent_type_is_refused_with_emitter_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks import block_unenumerated_agent_type as bua
 
     monkeypatch.setattr(bua, "plugin_agent_model", lambda agent_type, **kw: (None, None))
@@ -42,13 +44,13 @@ def test_unresolvable_agent_type_is_refused_with_emitter_message(tmp_path, monke
     assert "no entry in _AGENT_MODELS" in out
 
 
-def test_agent_type_with_model_pin_still_passes(tmp_path):
+def test_agent_type_with_model_pin_still_passes(tmp_path: Path) -> None:
     out = _verdict(tmp_path, "agent_type: coordinator:executor", "2026-10-27-resolvable.md")
     assert "MalformedAgentOverrideError" not in out
     assert "no entry in _AGENT_MODELS" not in out
 
 
-def test_em_owned_agent_type_is_not_refused_as_unroutable(tmp_path, monkeypatch):
+def test_em_owned_agent_type_is_not_refused_as_unroutable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks import block_unenumerated_agent_type as bua
 
     monkeypatch.setattr(bua, "plugin_agent_model", lambda agent_type, **kw: (None, None))
@@ -57,6 +59,6 @@ def test_em_owned_agent_type_is_not_refused_as_unroutable(tmp_path, monkeypatch)
     assert "no entry in _AGENT_MODELS" not in out
 
 
-def test_performer_em_is_not_refused_for_agent_type(tmp_path):
+def test_performer_em_is_not_refused_for_agent_type(tmp_path: Path) -> None:
     out = _verdict(tmp_path, "performer: em", "2026-10-23-performer-em.md")
     assert "agent_type 'em'" not in out

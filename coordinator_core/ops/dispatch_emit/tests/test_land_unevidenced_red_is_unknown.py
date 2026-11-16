@@ -56,6 +56,14 @@ def test_landing_gate_still_refuses_a_caused_id(tmp_path):
     assert check == "failed" and findings[0].reason == li.TARGETED_TESTS_FAILED
 
 
+COLD_PERF = "coordinator_core/tests/test_raw_writes_have_a_disposition.py::test_scan_cost_is_at_or_below_the_budget"
+
+
+def test_cold_only_perf_red_with_no_base_evidence_lands(tmp_path):
+    findings, check = _gate(tmp_path, {"caused": [], "foreign": [COLD_PERF], "evidence": []})
+    assert check == li.UNKNOWN_ONLY and list(findings) == [] and findings.unknown_ids == [COLD_PERF]
+
+
 def test_landing_gate_carried_failed_tests_without_baseline_is_unknown(tmp_path):
     params = {"targeted_tests": {"status": "fail", "status_before": "fail"}, "failed_tests": [A]}
     findings, check = li.landing_test_gate(tmp_path, params, "run1")

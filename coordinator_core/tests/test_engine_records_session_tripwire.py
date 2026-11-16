@@ -3,23 +3,25 @@
 import json
 
 from coordinator_core.conftest import diff_engine_records, is_fixture_run_id, snapshot_engine_records
+from pathlib import Path
+import pytest
 
 
-def _write(home, key, runs):
+def _write(home, key, runs) -> None:
     d = home / "machine-local" / "engine-records" / key
     d.mkdir(parents=True, exist_ok=True)
     payload = {"runs": {r: {"footprint": None, "minted_at": 1.0} for r in runs}, "schema": "live-run-index/1"}
     (d / "coordinator-warp-live-run-index.json").write_text(json.dumps(payload), encoding="utf-8")
 
 
-def test_fixture_predicate():
+def test_fixture_predicate() -> None:
     for rid in ("ask-20261013T000000-abcdef", "run1", "run2", "ask-20990101T000000-d41e00",
                 "plan-20261104T010101-x", "ask-20261101T173854-fresh1", "ask-20261101T173854-ghost1", "warp-2026-11-01-submit-budget-bench-ab"):
         assert is_fixture_run_id(rid)
     assert not is_fixture_run_id("ask-20261108T221038-7bdd4e")
 
 
-def test_added_dir_and_fixture_id_reported(tmp_path):
+def test_added_dir_and_fixture_id_reported(tmp_path: Path) -> None:
     _write(tmp_path, "aaa", ["ask-20261108T000000-111111"])
     before = snapshot_engine_records(str(tmp_path))
     _write(tmp_path, "aaa", ["ask-20261108T000000-111111", "run1"])
@@ -30,7 +32,7 @@ def test_added_dir_and_fixture_id_reported(tmp_path):
     assert other == []
 
 
-def test_non_fixture_addition_is_warning_only(tmp_path):
+def test_non_fixture_addition_is_warning_only(tmp_path: Path) -> None:
     _write(tmp_path, "aaa", [])
     before = snapshot_engine_records(str(tmp_path))
     _write(tmp_path, "aaa", ["ask-20261108T000000-222222"])
@@ -38,7 +40,7 @@ def test_non_fixture_addition_is_warning_only(tmp_path):
     assert fixture == [] and other == [("aaa", "ask-20261108T000000-222222")]
 
 
-def test_removals_ignored_and_absent_dir_is_empty(tmp_path):
+def test_removals_ignored_and_absent_dir_is_empty(tmp_path: Path) -> None:
     assert snapshot_engine_records(str(tmp_path)) == {}
     _write(tmp_path, "aaa", ["run1"])
     before = snapshot_engine_records(str(tmp_path))
@@ -46,7 +48,7 @@ def test_removals_ignored_and_absent_dir_is_empty(tmp_path):
     assert diff_engine_records(before, snapshot_engine_records(str(tmp_path))) == ([], [], [])
 
 
-def test_a_body_time_monkeypatch_undo_keeps_the_home_quarantined(monkeypatch):
+def test_a_body_time_monkeypatch_undo_keeps_the_home_quarantined(monkeypatch: pytest.MonkeyPatch) -> None:
     import os
 
     pinned = {k: os.environ.get(k) for k in ("HOME", "USERPROFILE", "COORDINATOR_SETTINGS_HOME")}

@@ -595,3 +595,19 @@ def test_write_object_stalled_peer_in_same_fanout_dir_does_not_fail_this_object(
             write_object(gitdir, b"blob", slow)
     finally:
         release.set()
+
+
+def test_opening_a_store_records_it_only_under_the_isolated_settings_home(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coordinator_core._settings_home import settings_home
+    from coordinator_core.git import git_objects
+
+    monkeypatch.setattr(git_objects, "_RECORDED_READ_STORES", set())
+    common = tmp_path / "r" / ".git"
+    (common / "objects" / "pack").mkdir(parents=True)
+    git_objects._iter_pack_files(common)
+    registry = git_objects.read_store_registry_dir()
+    assert registry.parent == settings_home()
+    assert "home-quarantine" in str(registry)
+    assert [p.read_text(encoding="utf-8").strip() for p in registry.iterdir()] == [str(common)]

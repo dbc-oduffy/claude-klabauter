@@ -2,6 +2,7 @@
 
 from coordinator_core.roadmap import prep_gate as pg
 from coordinator_core.roadmap.tests.test_prep_gate_four_legs import _CLEAN_FM, _write_plan
+from pathlib import Path
 
 _COMMIT_ROW = """- id: C2
   title: Write then commit
@@ -40,7 +41,7 @@ def _gate(tmp_path, spine):
     return pg.gate_plan(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
 
 
-def test_commit_row_is_a_defect_naming_the_split(tmp_path):
+def test_commit_row_is_a_defect_naming_the_split(tmp_path: Path) -> None:
     result = _gate(tmp_path, _COMMIT_ROW)
     cls = result["classes"]["EXECUTOR_COMMIT"]
     assert result["verdict"] == pg.NOT_PREPPED
@@ -51,24 +52,24 @@ def test_commit_row_is_a_defect_naming_the_split(tmp_path):
     assert "performer: em" in cls["detail"]
 
 
-def test_split_into_em_row_passes(tmp_path):
+def test_split_into_em_row_passes(tmp_path: Path) -> None:
     result = _gate(tmp_path, _SPLIT_ROWS)
     assert result["classes"]["EXECUTOR_COMMIT"]["status"] == "PASS"
 
 
-def test_wont_do_row_passes(tmp_path):
+def test_wont_do_row_passes(tmp_path: Path) -> None:
     spine = _COMMIT_ROW.replace("disposition: open", "disposition: wont_do")
     assert _gate(tmp_path, spine)["classes"]["EXECUTOR_COMMIT"]["status"] == "PASS"
 
 
-def test_prose_mention_passes(tmp_path):
+def test_prose_mention_passes(tmp_path: Path) -> None:
     spine = _COMMIT_ROW.replace(
         "run `git commit -m x` and `pnpm deploy:hosting`", "commit and deploy afterwards"
     )
     assert _gate(tmp_path, spine)["classes"]["EXECUTOR_COMMIT"]["status"] == "PASS"
 
 
-def test_message_omits_converter_when_only_failing_class(tmp_path):
+def test_message_omits_converter_when_only_failing_class(tmp_path: Path) -> None:
     result = _gate(tmp_path, _COMMIT_ROW)
     failing = [k for k, v in result["classes"].items() if v["status"] != "PASS"]
     assert failing == ["EXECUTOR_COMMIT"]
@@ -76,7 +77,7 @@ def test_message_omits_converter_when_only_failing_class(tmp_path):
     assert "EM-owned commit boundary" in result["message"]
 
 
-def test_class_order(tmp_path):
+def test_class_order(tmp_path: Path) -> None:
     result = _gate(tmp_path, _COMMIT_ROW)
     assert tuple(result["classes"]) == pg.CLASS_ORDER
     assert pg.CLASS_ORDER[-1] == "DONE_CLAUSE"

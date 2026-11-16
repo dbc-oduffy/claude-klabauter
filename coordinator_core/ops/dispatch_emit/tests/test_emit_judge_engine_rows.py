@@ -8,6 +8,8 @@ from coordinator_core.ops.dispatch_emit import engine_owned_rows
 from coordinator_core.ops.dispatch_emit.emit import _falsifier_schema_literal, compose_script
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 from coordinator_core.ops.review_mint.tests.test_execute_review import _STAGE_SCHEMAS, _v5_fragment
+from pathlib import Path
+import pytest
 
 _ENGINE_ROOT = "/engine/root"
 
@@ -62,7 +64,7 @@ def _fragment():
     return fragment
 
 
-def _script(tmp_path, plan_text):
+def _script(tmp_path, plan_text) -> str:
     plan = tmp_path / "plan.md"
     plan.write_text(plan_text, encoding="utf-8")
     row = WaveRow(
@@ -81,19 +83,19 @@ def _script(tmp_path, plan_text):
     )
 
 
-def test_engine_row_names_engine_root_in_the_judge_prompt(tmp_path, monkeypatch):
+def test_engine_row_names_engine_root_in_the_judge_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(engine_owned_rows, "resolve_engine_root", lambda: (_ENGINE_ROOT, "resolved-engine"))
     script = _script(tmp_path, _PLAN_ENGINE)
     assert f"T1: engine-plane row, engine root {_ENGINE_ROOT} (resolved-engine)" in script
     assert "T2: engine-plane row" not in script
 
 
-def test_dispatched_rows_writing_coordinator_core_are_not_engine_rows(tmp_path, monkeypatch):
+def test_dispatched_rows_writing_coordinator_core_are_not_engine_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(engine_owned_rows, "resolve_engine_root", lambda: (_ENGINE_ROOT, "resolved-engine"))
     assert "Engine-plane rows" not in _script(tmp_path, _PLAN_PATHS_ONLY)
 
 
-def test_plan_without_engine_rows_renders_no_clause(tmp_path, monkeypatch):
+def test_plan_without_engine_rows_renders_no_clause(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom():
         raise AssertionError("resolver called for a plan with no engine row")
 
@@ -101,13 +103,13 @@ def test_plan_without_engine_rows_renders_no_clause(tmp_path, monkeypatch):
     assert "Engine-plane rows" not in _script(tmp_path, _PLAN_CWD)
 
 
-def test_unresolved_engine_renders_the_absent_text(tmp_path, monkeypatch):
+def test_unresolved_engine_renders_the_absent_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(engine_owned_rows, "resolve_engine_root", lambda: ("", "unresolved"))
     script = _script(tmp_path, _PLAN_ENGINE)
     assert "T1: owner claude-klabauter is not on this machine" in script
 
 
-def test_judge_and_falsifier_schemas_share_the_unbounded_clause_shape():
+def test_judge_and_falsifier_schemas_share_the_unbounded_clause_shape() -> None:
     from coordinator_core.ops.review_mint.execute_review import _widen_judge_schema
 
     judge = json.loads(_widen_judge_schema(json.dumps({"type": "object", "properties": {}})))
@@ -116,7 +118,7 @@ def test_judge_and_falsifier_schemas_share_the_unbounded_clause_shape():
     assert "maxLength" not in judge["properties"]["clauses"]["items"]["properties"]["clause"]
 
 
-def test_judge_and_falsifier_schemas_share_roots_read():
+def test_judge_and_falsifier_schemas_share_roots_read() -> None:
     schema = json.loads(_falsifier_schema_literal())
     item = schema["properties"]["roots_read"]["items"]
     assert set(item["required"]) == {"id", "root"}

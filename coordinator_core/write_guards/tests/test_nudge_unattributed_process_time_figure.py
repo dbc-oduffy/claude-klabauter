@@ -4,10 +4,11 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.write_guards import nudge_unattributed_process_time_figure as guard
+from pathlib import Path
 
 
 @pytest.fixture
-def _repo(tmp_path, monkeypatch):
+def _repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     repo_root = tmp_path / "repo"
     (repo_root / "state" / "bug-backlog").mkdir(parents=True)
     (repo_root / "docs" / "research").mkdir(parents=True)
@@ -53,7 +54,7 @@ def _multiedit_payload(file_path: str, edits, cwd: str) -> dict:
     }
 
 
-def test_fires_on_unattributed_figure_in_bug_backlog(_repo):
+def test_fires_on_unattributed_figure_in_bug_backlog(_repo) -> None:
     target = str(_repo / "state" / "bug-backlog" / "2026-09-23-slow-op.md")
     payload = _write_payload(
         target, "The process time of 143ms is over budget.", str(_repo)
@@ -66,7 +67,7 @@ def test_fires_on_unattributed_figure_in_bug_backlog(_repo):
     assert "benchmarks.measure" in out["additionalContext"]
 
 
-def test_attributed_figure_passes_silently(_repo):
+def test_attributed_figure_passes_silently(_repo) -> None:
     target = str(_repo / "state" / "bug-backlog" / "2026-09-23-slow-op.md")
     content = (
         "process time of 143ms via batched_process_time_ms, well under budget."
@@ -75,13 +76,13 @@ def test_attributed_figure_passes_silently(_repo):
     assert guard.check(payload) is None
 
 
-def test_bar_citation_does_not_fire(_repo):
+def test_bar_citation_does_not_fire(_repo) -> None:
     target = str(_repo / "state" / "bug-backlog" / "2026-09-23-slow-op.md")
     payload = _write_payload(target, "Stays under the 500ms bar.", str(_repo))
     assert guard.check(payload) is None
 
 
-def test_path_outside_scoped_prefixes_does_not_fire(_repo):
+def test_path_outside_scoped_prefixes_does_not_fire(_repo) -> None:
     target = str(_repo / "docs" / "plans" / "2026-09-23-some-plan.md")
     payload = _write_payload(
         target, "The process time of 143ms is over budget.", str(_repo)
@@ -89,7 +90,7 @@ def test_path_outside_scoped_prefixes_does_not_fire(_repo):
     assert guard.check(payload) is None
 
 
-def test_subagent_payload_behaves_identically(_repo):
+def test_subagent_payload_behaves_identically(_repo) -> None:
     target = str(_repo / "docs" / "research" / "2026-09-23-figure.md")
     content = "The process time of 143ms is over budget."
     main_result = guard.check(_write_payload(target, content, str(_repo)))
@@ -104,7 +105,7 @@ def test_subagent_payload_behaves_identically(_repo):
     )
 
 
-def test_edit_reconstructs_resulting_text_from_pre_image(_repo):
+def test_edit_reconstructs_resulting_text_from_pre_image(_repo) -> None:
     target = _repo / "state" / "bug-backlog" / "2026-09-23-slow-op.md"
     target.write_text("Baseline notes. old text here.", encoding="utf-8")
     payload = _edit_payload(
@@ -117,7 +118,7 @@ def test_edit_reconstructs_resulting_text_from_pre_image(_repo):
     assert result is not None
 
 
-def test_edit_no_fire_when_pre_image_already_attributed(_repo):
+def test_edit_no_fire_when_pre_image_already_attributed(_repo) -> None:
     target = _repo / "state" / "bug-backlog" / "2026-09-23-slow-op.md"
     target.write_text(
         "Measured via batched_process_time_ms already. old text here.",
@@ -132,7 +133,7 @@ def test_edit_no_fire_when_pre_image_already_attributed(_repo):
     assert guard.check(payload) is None
 
 
-def test_multiedit_scans_reconstructed_body(_repo):
+def test_multiedit_scans_reconstructed_body(_repo) -> None:
     target = _repo / "docs" / "research" / "2026-09-23-figure.md"
     target.write_text("first old. second old.", encoding="utf-8")
     payload = _multiedit_payload(
@@ -144,7 +145,7 @@ def test_multiedit_scans_reconstructed_body(_repo):
     assert result is not None
 
 
-def test_edit_stale_old_string_fails_open(_repo):
+def test_edit_stale_old_string_fails_open(_repo) -> None:
     target = _repo / "state" / "bug-backlog" / "2026-09-23-slow-op.md"
     target.write_text("Baseline notes.", encoding="utf-8")
     payload = _edit_payload(
@@ -156,7 +157,7 @@ def test_edit_stale_old_string_fails_open(_repo):
     assert guard.check(payload) is None
 
 
-def test_fails_open_when_repo_root_unresolvable(tmp_path):
+def test_fails_open_when_repo_root_unresolvable(tmp_path: Path) -> None:
     unresolvable = tmp_path / "no-repo" / "state" / "bug-backlog" / "x.md"
     payload = _write_payload(
         str(unresolvable),
@@ -166,13 +167,13 @@ def test_fails_open_when_repo_root_unresolvable(tmp_path):
     assert guard.check(payload) is None
 
 
-def test_malformed_payload_fails_open():
+def test_malformed_payload_fails_open() -> None:
     assert guard.check({}) is None
     assert guard.check({"tool_input": "not-a-dict"}) is None
     assert guard.check({"tool_name": "Write", "tool_input": {}}) is None
 
 
-def test_never_raises_on_unexpected_shapes():
+def test_never_raises_on_unexpected_shapes() -> None:
     assert guard.check({"tool_name": "Write", "tool_input": {"file_path": 5}}) is None
     assert guard.check(
         {"tool_name": "MultiEdit", "tool_input": {"file_path": "x", "edits": "bad"}}

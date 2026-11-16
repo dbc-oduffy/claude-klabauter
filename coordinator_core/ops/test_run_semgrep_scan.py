@@ -11,6 +11,7 @@ import coordinator_core.ops.run_semgrep_scan  # noqa: F401 — fires @register_o
 
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.run_semgrep_scan import _run_semgrep_scan
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -36,26 +37,26 @@ def _semgrep_result(payload: dict, returncode: int = 0) -> subprocess.CompletedP
     )
 
 
-def test_registered_under_exact_op_key():
+def test_registered_under_exact_op_key() -> None:
     assert _OP_NAME in _REGISTRY
 
 
-def test_missing_repo_root_raises(tmp_path):
+def test_missing_repo_root_raises(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="repo_root is None"):
         _run_semgrep_scan({"diff_base": "main"}, repo_root=None)
 
 
-def test_missing_diff_base_raises(tmp_path):
+def test_missing_diff_base_raises(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="diff_base"):
         _run_semgrep_scan({}, repo_root=tmp_path)
 
 
-def test_blank_diff_base_raises(tmp_path):
+def test_blank_diff_base_raises(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="diff_base"):
         _run_semgrep_scan({"diff_base": "   "}, repo_root=tmp_path)
 
 
-def test_empty_diff_scope_skips_semgrep(tmp_path):
+def test_empty_diff_scope_skips_semgrep(tmp_path: Path) -> None:
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = _git_diff_result(stdout="")
         result = _run_semgrep_scan({"diff_base": "main"}, repo_root=tmp_path)
@@ -65,7 +66,7 @@ def test_empty_diff_scope_skips_semgrep(tmp_path):
     assert mock_run.call_args[0][0][0] == "git"
 
 
-def test_semgrep_unavailable_falls_back(tmp_path):
+def test_semgrep_unavailable_falls_back(tmp_path: Path) -> None:
     changed = tmp_path / "changed.py"
     changed.write_text("x = 1\n")
 
@@ -79,7 +80,7 @@ def test_semgrep_unavailable_falls_back(tmp_path):
     assert mock_run.call_count == 1
 
 
-def test_happy_path_maps_findings_and_severity_counts(tmp_path):
+def test_happy_path_maps_findings_and_severity_counts(tmp_path: Path) -> None:
     changed = tmp_path / "changed.py"
     changed.write_text("x = 1\n")
 
@@ -124,7 +125,7 @@ def test_happy_path_maps_findings_and_severity_counts(tmp_path):
     assert "--json" in semgrep_call_args
 
 
-def test_default_config_is_auto(tmp_path):
+def test_default_config_is_auto(tmp_path: Path) -> None:
     changed = tmp_path / "changed.py"
     changed.write_text("x = 1\n")
 
@@ -141,7 +142,7 @@ def test_default_config_is_auto(tmp_path):
     assert "--config=auto" in semgrep_call_args
 
 
-def test_unresolvable_diff_base_raises(tmp_path):
+def test_unresolvable_diff_base_raises(tmp_path: Path) -> None:
     with patch("subprocess.run") as mock_run:
         mock_run.return_value = _git_diff_result(
             stdout="", returncode=128
@@ -150,7 +151,7 @@ def test_unresolvable_diff_base_raises(tmp_path):
             _run_semgrep_scan({"diff_base": "not-a-real-ref"}, repo_root=tmp_path)
 
 
-def test_semgrep_genuine_error_raises(tmp_path):
+def test_semgrep_genuine_error_raises(tmp_path: Path) -> None:
     changed = tmp_path / "changed.py"
     changed.write_text("x = 1\n")
 
@@ -167,7 +168,7 @@ def test_semgrep_genuine_error_raises(tmp_path):
             _run_semgrep_scan({"diff_base": "main"}, repo_root=tmp_path)
 
 
-def test_git_diff_and_semgrep_calls_carry_timeout(tmp_path):
+def test_git_diff_and_semgrep_calls_carry_timeout(tmp_path: Path) -> None:
     changed = tmp_path / "changed.py"
     changed.write_text("x = 1\n")
 
@@ -186,19 +187,19 @@ def test_git_diff_and_semgrep_calls_carry_timeout(tmp_path):
     assert semgrep_kwargs.get("timeout")
 
 
-def test_git_diff_timeout_raises_value_error(tmp_path):
+def test_git_diff_timeout_raises_value_error(tmp_path: Path) -> None:
     with patch("subprocess.run") as mock_run:
         mock_run.side_effect = subprocess.TimeoutExpired(cmd=["git", "diff"], timeout=30)
         with pytest.raises(ValueError, match="timed out"):
             _run_semgrep_scan({"diff_base": "main"}, repo_root=tmp_path)
 
 
-def test_diff_base_leading_dash_rejected(tmp_path):
+def test_diff_base_leading_dash_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="looks like a git option"):
         _run_semgrep_scan({"diff_base": "-x"}, repo_root=tmp_path)
 
 
-def test_idempotent_double_invocation(tmp_path):
+def test_idempotent_double_invocation(tmp_path: Path) -> None:
     changed = tmp_path / "changed.py"
     changed.write_text("x = 1\n")
 

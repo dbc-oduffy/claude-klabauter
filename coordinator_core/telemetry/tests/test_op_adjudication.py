@@ -15,9 +15,10 @@ from __future__ import annotations
 import json
 
 from coordinator_core.telemetry import op_adjudication as adj
+from pathlib import Path
 
 
-def _row(op, process_ms, *, route="warm_server", origin="production", spawns=..., t_start=1_700_000_000.0):
+def _row(op, process_ms, *, route: str = "warm_server", origin: str | None = "production", spawns=..., t_start: float = 1_700_000_000.0):
     entry = {
         "op": op,
         "t_start": t_start,
@@ -39,13 +40,13 @@ def _write(tmp_path, name, rows):
     return path
 
 
-def test_confidence_labels_are_mutually_exclusive():
+def test_confidence_labels_are_mutually_exclusive() -> None:
     assert adj._confidence(0) == adj.CONFIDENCE_EXACT
     assert adj._confidence(3) == adj.CONFIDENCE_FLOOR
     assert adj._confidence(None) == adj.CONFIDENCE_SPAWNS_UNKNOWN
 
 
-def test_exact_and_spawns_unknown_never_share_a_bucket(tmp_path):
+def test_exact_and_spawns_unknown_never_share_a_bucket(tmp_path: Path) -> None:
     rows = [_row("queue.append", 10.0, spawns=0)] * 5 + [_row("queue.append", 20.0, spawns=...)] * 5
     path = _write(tmp_path, "op-latency.jsonl", rows)
 
@@ -55,7 +56,7 @@ def test_exact_and_spawns_unknown_never_share_a_bucket(tmp_path):
     assert len(figures) == 2
 
 
-def test_benchmark_and_test_origin_rows_are_excluded(tmp_path):
+def test_benchmark_and_test_origin_rows_are_excluded(tmp_path: Path) -> None:
     rows = [
         _row("ceremony.commit", 999.0, origin="benchmark", spawns=0),
         _row("ceremony.commit", 999.0, origin="test", spawns=0),
@@ -69,7 +70,7 @@ def test_benchmark_and_test_origin_rows_are_excluded(tmp_path):
     assert figures[0]["p95_ms"] == 5.0
 
 
-def test_named_fixture_ops_are_excluded_by_name_not_value(tmp_path):
+def test_named_fixture_ops_are_excluded_by_name_not_value(tmp_path: Path) -> None:
     rows = [
         _row("ping", 1.0, spawns=0),
         _row("meter.selftest", 1.0, spawns=0),
@@ -83,7 +84,7 @@ def test_named_fixture_ops_are_excluded_by_name_not_value(tmp_path):
     assert ops_seen == {"records.query"}
 
 
-def test_null_origin_rows_are_counted_not_dropped(tmp_path):
+def test_null_origin_rows_are_counted_not_dropped(tmp_path: Path) -> None:
     rows = [_row("roadmap.serve", 5.0, origin=None, spawns=0)] * 3
     path = _write(tmp_path, "op-latency.jsonl", rows)
 
@@ -93,7 +94,7 @@ def test_null_origin_rows_are_counted_not_dropped(tmp_path):
     assert figures[0]["null_origin_rows"] == 3
 
 
-def test_zero_rows_are_counted(tmp_path):
+def test_zero_rows_are_counted(tmp_path: Path) -> None:
     rows = [_row("op.a", 0.0, spawns=0), _row("op.a", 10.0, spawns=0)]
     path = _write(tmp_path, "op-latency.jsonl", rows)
 
@@ -101,7 +102,7 @@ def test_zero_rows_are_counted(tmp_path):
     assert figures[0]["zero_rows"] == 1
 
 
-def test_below_min_n_is_unadjudicated_but_still_reports_a_figure(tmp_path):
+def test_below_min_n_is_unadjudicated_but_still_reports_a_figure(tmp_path: Path) -> None:
     rows = [_row("op.rare", 42.0, spawns=0)] * 5
     path = _write(tmp_path, "op-latency.jsonl", rows)
 
@@ -111,7 +112,7 @@ def test_below_min_n_is_unadjudicated_but_still_reports_a_figure(tmp_path):
     assert figures[0]["p95_ms"] == 42.0
 
 
-def test_window_bounds_are_applied_per_row(tmp_path):
+def test_window_bounds_are_applied_per_row(tmp_path: Path) -> None:
     rows = [
         _row("op.windowed", 5.0, spawns=0, t_start=100.0),
         _row("op.windowed", 500.0, spawns=0, t_start=200.0),
@@ -126,7 +127,7 @@ def test_window_bounds_are_applied_per_row(tmp_path):
     assert figures[0]["t_start_max"] == 200.0
 
 
-def test_unrouted_rows_bucket_separately(tmp_path):
+def test_unrouted_rows_bucket_separately(tmp_path: Path) -> None:
     rows = [_row("op.b", 5.0, route="not_a_real_route", spawns=0)]
     path = _write(tmp_path, "op-latency.jsonl", rows)
 
@@ -134,7 +135,7 @@ def test_unrouted_rows_bucket_separately(tmp_path):
     assert figures[0]["route"] == adj.UNROUTED
 
 
-def test_candidate_shards_skips_shards_older_than_window_start(tmp_path):
+def test_candidate_shards_skips_shards_older_than_window_start(tmp_path: Path) -> None:
     old = tmp_path / "op-latency.1.jsonl"
     old.write_text("{}\n", encoding="utf-8")
     import os
@@ -153,7 +154,7 @@ def test_candidate_shards_skips_shards_older_than_window_start(tmp_path):
     assert kept == [new]
 
 
-def test_routes_are_never_collapsed_into_one_figure(tmp_path):
+def test_routes_are_never_collapsed_into_one_figure(tmp_path: Path) -> None:
     n = adj.MIN_N
     rows = (
         [_row("dual.op", 50.0, route="warm_server", spawns=0)] * n
@@ -169,7 +170,7 @@ def test_routes_are_never_collapsed_into_one_figure(tmp_path):
     assert all(f["verdict"] == "adjudicated" for f in by_route.values())
 
 
-def test_spawns_unknown_figure_keeps_its_label_and_p95(tmp_path):
+def test_spawns_unknown_figure_keeps_its_label_and_p95(tmp_path: Path) -> None:
     n = adj.MIN_N
     rows = [_row("unknown.op", 900.0, route="warm_server", spawns=...)] * n
     path = _write(tmp_path, "op-latency.jsonl", rows)
@@ -180,7 +181,7 @@ def test_spawns_unknown_figure_keeps_its_label_and_p95(tmp_path):
     assert figures[0]["p95_ms"] == 900.0
 
 
-def test_adjudicate_requires_repo_root_or_sink_paths():
+def test_adjudicate_requires_repo_root_or_sink_paths() -> None:
     try:
         adj.adjudicate()
     except ValueError:
@@ -189,7 +190,7 @@ def test_adjudicate_requires_repo_root_or_sink_paths():
         raise AssertionError("expected ValueError")
 
 
-def test_malformed_lines_are_skipped(tmp_path):
+def test_malformed_lines_are_skipped(tmp_path: Path) -> None:
     path = tmp_path / "op-latency.jsonl"
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("not json\n")

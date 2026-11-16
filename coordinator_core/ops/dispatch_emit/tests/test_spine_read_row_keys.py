@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     InvalidFieldTypeError,
     read_spine,
 )
+from pathlib import Path
 
 PLAN_REL = "docs/plans/2026-10-01-keys.md"
 
@@ -32,35 +33,35 @@ def _plan(tmp_path, extra: str, rid: str = "C1", agent_type: str = "coordinator:
     return path
 
 
-def test_model_alias_reaches_the_emitter_row(tmp_path):
+def test_model_alias_reaches_the_emitter_row(tmp_path: Path) -> None:
     _plan(tmp_path, "  model: opus\n  effort: high\n")
     assert read_spine(tmp_path / PLAN_REL)[0].agent_model == "opus"
 
 
-def test_model_alias_stages_opus_row_for_unpinned_type(tmp_path):
+def test_model_alias_stages_opus_row_for_unpinned_type(tmp_path: Path) -> None:
     _plan(tmp_path, "  model: opus\n  effort: high\n", agent_type="coordinator:workflow-maker")
     m = stage(tmp_path, run_id="r1", plan_rel=PLAN_REL)
     assert m.rows[0].model == "opus"
 
 
-def test_untagged_row_keeps_default(tmp_path):
+def test_untagged_row_keeps_default(tmp_path: Path) -> None:
     _plan(tmp_path, "")
     assert read_spine(tmp_path / PLAN_REL)[0].agent_model is None
 
 
-def test_unknown_model_refused_naming_row(tmp_path):
+def test_unknown_model_refused_naming_row(tmp_path: Path) -> None:
     _plan(tmp_path, "  model: gpt5\n")
     with pytest.raises(InvalidFieldTypeError, match="C1"):
         read_spine(tmp_path / PLAN_REL)
 
 
-def test_conflicting_model_tags_refused(tmp_path):
+def test_conflicting_model_tags_refused(tmp_path: Path) -> None:
     _plan(tmp_path, "  model: opus\n  agent_model: sonnet\n")
     with pytest.raises(InvalidFieldTypeError, match="C1"):
         read_spine(tmp_path / PLAN_REL)
 
 
-def test_unknown_key_stages_with_warning_naming_key_and_row(tmp_path, caplog):
+def test_unknown_key_stages_with_warning_naming_key_and_row(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     _plan(tmp_path, "  mystery_knob: 1\n")
     with caplog.at_level(logging.WARNING):
         rows = read_spine(tmp_path / PLAN_REL)
@@ -68,14 +69,14 @@ def test_unknown_key_stages_with_warning_naming_key_and_row(tmp_path, caplog):
     assert any("mystery_knob" in r.getMessage() and "'C1'" in r.getMessage() for r in caplog.records)
 
 
-def test_known_key_does_not_warn(tmp_path, caplog):
+def test_known_key_does_not_warn(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     _plan(tmp_path, "  model: opus\n")
     with caplog.at_level(logging.WARNING):
         read_spine(tmp_path / PLAN_REL)
     assert not any("does not read" in r.getMessage() for r in caplog.records)
 
 
-def test_disjoint_parallel_true_reaches_the_emitter_row_without_warning(tmp_path, caplog):
+def test_disjoint_parallel_true_reaches_the_emitter_row_without_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     _plan(tmp_path, "  disjoint_parallel: true\n")
     with caplog.at_level(logging.WARNING):
         rows = read_spine(tmp_path / PLAN_REL)
@@ -83,12 +84,12 @@ def test_disjoint_parallel_true_reaches_the_emitter_row_without_warning(tmp_path
     assert not any("does not read" in r.getMessage() for r in caplog.records)
 
 
-def test_disjoint_parallel_absent_defaults_false(tmp_path):
+def test_disjoint_parallel_absent_defaults_false(tmp_path: Path) -> None:
     _plan(tmp_path, "")
     assert read_spine(tmp_path / PLAN_REL)[0].disjoint_parallel is False
 
 
-def test_em_run_with_needs_slot_is_a_known_key_and_reads_without_warning(tmp_path, caplog):
+def test_em_run_with_needs_slot_is_a_known_key_and_reads_without_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     # em_run withholds only a non-code row; a code deliverable routes to an executor regardless.
     path = _plan(tmp_path, "  em_run: true\n  needs_slot: true\n")
     path.write_text(
@@ -101,7 +102,7 @@ def test_em_run_with_needs_slot_is_a_known_key_and_reads_without_warning(tmp_pat
     assert not any("em_run" in r.getMessage() for r in caplog.records)
 
 
-def test_em_run_passes_the_mise_prep_spine_check():
+def test_em_run_passes_the_mise_prep_spine_check() -> None:
     from coordinator_core.ops.dispatch_emit import spine_read
 
     plan = (
@@ -115,7 +116,7 @@ def test_em_run_passes_the_mise_prep_spine_check():
     assert "em_run" in KNOWN_ROW_KEYS
 
 
-def test_stage_role_is_a_known_key_and_does_not_warn(tmp_path, caplog):
+def test_stage_role_is_a_known_key_and_does_not_warn(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     _plan(tmp_path, "  stage_role: scout\n")
     with caplog.at_level(logging.WARNING):
         rows = read_spine(tmp_path / PLAN_REL)
@@ -123,6 +124,6 @@ def test_stage_role_is_a_known_key_and_does_not_warn(tmp_path, caplog):
     assert not any("does not read" in r.getMessage() for r in caplog.records)
 
 
-def test_exports_for_readiness_consumers():
+def test_exports_for_readiness_consumers() -> None:
     assert ROW_KEY_ALIASES["model"] == "agent_model"
     assert {"model", "agent_model", "effort"} <= KNOWN_ROW_KEYS

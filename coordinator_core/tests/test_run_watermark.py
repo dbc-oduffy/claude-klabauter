@@ -13,7 +13,7 @@ from coordinator_core import run_watermark as rw
 
 
 @pytest.fixture
-def spawns(monkeypatch):
+def spawns(monkeypatch: pytest.MonkeyPatch) -> list[list[str]]:
     calls: list[list[str]] = []
     real = rw.git_out
 
@@ -25,7 +25,7 @@ def spawns(monkeypatch):
     return calls
 
 
-def _db(path: Path, rows, generation=7) -> str:
+def _db(path: Path, rows, generation: int = 7) -> str:
     conn = sqlite3.connect(path)
     conn.execute(
         "CREATE TABLE doc_files (path TEXT, content_hash TEXT, indexed_commit TEXT,"
@@ -45,7 +45,7 @@ def _git(repo: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def test_rag_path_reads_generation_without_spawn(tmp_path, monkeypatch, spawns):
+def test_rag_path_reads_generation_without_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spawns) -> None:
     db = _db(
         tmp_path / "rag.db",
         [("docs/a.md", "c1", 3), ("docs/b.md", "c1", 9), ("other/c.md", "c1", 9)],
@@ -58,7 +58,7 @@ def test_rag_path_reads_generation_without_spawn(tmp_path, monkeypatch, spawns):
     assert spawns == []
 
 
-def test_rag_path_commit_compare_when_no_generation(tmp_path, monkeypatch, spawns):
+def test_rag_path_commit_compare_when_no_generation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spawns) -> None:
     db = _db(tmp_path / "rag.db", [("docs/a.md", "old", 1), ("docs/b.md", "new", 1)])
     monkeypatch.setattr(rw, "registry_get", lambda key: db)
     changed = rw.changed_since(tmp_path, rw.Watermark("distill", "new"), scope_dirs=["docs"])
@@ -66,20 +66,20 @@ def test_rag_path_commit_compare_when_no_generation(tmp_path, monkeypatch, spawn
     assert spawns == []
 
 
-def test_rag_path_commit_compare_counts_null_commit_rows(tmp_path, monkeypatch, spawns):
+def test_rag_path_commit_compare_counts_null_commit_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spawns) -> None:
     db = _db(tmp_path / "rag.db", [("docs/a.md", None, 1), ("docs/b.md", "new", 1)])
     monkeypatch.setattr(rw, "registry_get", lambda key: db)
     changed = rw.changed_since(tmp_path, rw.Watermark("distill", "new"), scope_dirs=["docs"])
     assert set(changed) == {"docs/a.md"}
 
 
-def test_first_run_is_empty_and_spawns_nothing(tmp_path, monkeypatch, spawns):
+def test_first_run_is_empty_and_spawns_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spawns) -> None:
     monkeypatch.setattr(rw, "registry_get", lambda key: None)
     changed = rw.changed_since(tmp_path, None, scope_dirs=["docs"])
     assert set(changed) == set() and spawns == []
 
 
-def test_git_fallback_one_spawn_counts_uncommitted_edit(tmp_path, monkeypatch, spawns):
+def test_git_fallback_one_spawn_counts_uncommitted_edit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spawns) -> None:
     monkeypatch.setattr(rw, "registry_get", lambda key: None)
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@t")
@@ -98,13 +98,13 @@ def test_git_fallback_one_spawn_counts_uncommitted_edit(tmp_path, monkeypatch, s
     assert len(spawns) == 1
 
 
-def test_git_failure_raises(tmp_path, monkeypatch):
+def test_git_failure_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(rw, "registry_get", lambda key: None)
     with pytest.raises(rw.ChangedSinceError):
         rw.changed_since(tmp_path, rw.Watermark("distill", "deadbeef"), scope_dirs=["docs"])
 
 
-def test_select_first_run_pins_base_and_advances_cursor():
+def test_select_first_run_pins_base_and_advances_cursor() -> None:
     cands = ["a", "b", "c", "d"]
     changed = rw.ChangedSet()
     changed.generation = 4
@@ -113,7 +113,7 @@ def test_select_first_run_pins_base_and_advances_cursor():
     assert proposed == rw.Watermark("distill", "H1", 4, "b", False)
 
 
-def test_select_mid_pass_keeps_base_and_adds_changed():
+def test_select_mid_pass_keeps_base_and_adds_changed() -> None:
     wm = rw.Watermark("distill", "H1", 4, "b", False)
     changed = rw.ChangedSet({"a", "zzz"})
     scoped, proposed = rw.select(["a", "b", "c", "d", "e"], wm, changed, 2, head_sha="H2")
@@ -121,7 +121,7 @@ def test_select_mid_pass_keeps_base_and_adds_changed():
     assert proposed.base_sha == "H1" and proposed.cursor == "d" and not proposed.pass_complete
 
 
-def test_select_pass_completion_moves_base_to_head():
+def test_select_pass_completion_moves_base_to_head() -> None:
     wm = rw.Watermark("distill", "H1", 4, "c", False)
     changed = rw.ChangedSet()
     changed.generation = 9
@@ -130,7 +130,7 @@ def test_select_pass_completion_moves_base_to_head():
     assert proposed == rw.Watermark("distill", "H2", 9, "d", True)
 
 
-def test_select_completed_pass_is_pure_delta():
+def test_select_completed_pass_is_pure_delta() -> None:
     wm = rw.Watermark("distill", "H1", 4, "d", True)
     changed = rw.ChangedSet({"b"})
     scoped, proposed = rw.select(["a", "b", "c", "d"], wm, changed, 5, head_sha="H2")
@@ -138,7 +138,7 @@ def test_select_completed_pass_is_pure_delta():
     assert proposed.base_sha == "H2" and proposed.cursor == "d" and proposed.pass_complete
 
 
-def test_stage_then_promote_writes_state_only_on_promote(tmp_path):
+def test_stage_then_promote_writes_state_only_on_promote(tmp_path: Path) -> None:
     repo, run_dir = tmp_path / "repo", tmp_path / "run"
     proposed = rw.Watermark("distill", "H1", None, "b", False)
     rw.stage(run_dir, proposed)
@@ -149,13 +149,13 @@ def test_stage_then_promote_writes_state_only_on_promote(tmp_path):
     assert rw.load(repo, "distill") == proposed
 
 
-def test_promote_without_pending_writes_nothing(tmp_path):
+def test_promote_without_pending_writes_nothing(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     assert rw.promote(repo, tmp_path / "run", "distill") is None
     assert not (repo / "state").exists()
 
 
-def test_load_rejects_malformed(tmp_path):
+def test_load_rejects_malformed(tmp_path: Path) -> None:
     p = rw.watermark_path(tmp_path, "distill")
     p.parent.mkdir(parents=True)
     p.write_text("{not json")

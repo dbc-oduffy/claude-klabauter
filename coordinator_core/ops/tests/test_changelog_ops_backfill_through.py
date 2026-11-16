@@ -7,10 +7,11 @@ import asyncio
 import pytest
 
 from coordinator_core.ops import changelog_ops
+from pathlib import Path
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     """A fake common_dir whose worktree holds a HEADER.md anchored 2026-03-02."""
     git_dir = tmp_path / "repo" / ".git"
     git_dir.mkdir(parents=True)
@@ -26,7 +27,7 @@ def _dates(result: dict) -> list[str]:
     return sorted(p.rsplit("2026-", 1)[1][:5] for p in result["backfilled"])
 
 
-def test_through_stops_the_loop_at_that_day(repo):
+def test_through_stops_the_loop_at_that_day(repo) -> None:
     git_dir, _ = repo
     result = changelog_ops.backfill_gaps(
         repo_root=git_dir, host="h", today_override="2026-03-06", through="2026-03-04"
@@ -34,7 +35,7 @@ def test_through_stops_the_loop_at_that_day(repo):
     assert _dates(result) == ["03-02", "03-03", "03-04"]
 
 
-def test_through_after_today_is_bounded_by_today(repo):
+def test_through_after_today_is_bounded_by_today(repo) -> None:
     git_dir, _ = repo
     result = changelog_ops.backfill_gaps(
         repo_root=git_dir, host="h", today_override="2026-03-03", through="2026-03-09"
@@ -42,13 +43,13 @@ def test_through_after_today_is_bounded_by_today(repo):
     assert _dates(result) == ["03-02", "03-03"]
 
 
-def test_no_through_keeps_today_bound(repo):
+def test_no_through_keeps_today_bound(repo) -> None:
     git_dir, _ = repo
     result = changelog_ops.backfill_gaps(repo_root=git_dir, host="h", today_override="2026-03-04")
     assert _dates(result) == ["03-02", "03-03", "03-04"]
 
 
-def test_default_today_is_the_coordinator_local_day_not_utc(repo, monkeypatch):
+def test_default_today_is_the_coordinator_local_day_not_utc(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     git_dir, _ = repo
     monkeypatch.setattr(changelog_ops, "local_day", lambda root=None: "2026-03-03")
     monkeypatch.setattr(changelog_ops, "_today_utc", lambda: "2026-03-30")
@@ -57,7 +58,7 @@ def test_default_today_is_the_coordinator_local_day_not_utc(repo, monkeypatch):
 
 
 @pytest.mark.parametrize("bad", ["2026-3-4", "9999-99-99", "../x", "2026-02-30"])
-def test_handler_refuses_malformed_through(repo, bad):
+def test_handler_refuses_malformed_through(repo, bad) -> None:
     git_dir, wc = repo
     result = asyncio.run(
         changelog_ops._backfill_gaps_handler({"host": "h", "through": bad}, repo_root=git_dir)
@@ -66,7 +67,7 @@ def test_handler_refuses_malformed_through(repo, bad):
     assert not list(wc.glob("*-backfill.md"))
 
 
-def test_handler_passes_through(repo):
+def test_handler_passes_through(repo) -> None:
     git_dir, _ = repo
     result = asyncio.run(
         changelog_ops._backfill_gaps_handler(
@@ -76,7 +77,7 @@ def test_handler_passes_through(repo):
     assert _dates(result) == ["03-02", "03-03"]
 
 
-def test_cli_malformed_through_exits_2_without_running(monkeypatch, capsys):
+def test_cli_malformed_through_exits_2_without_running(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     called = []
     monkeypatch.setattr(changelog_ops, "backfill_gaps", lambda **kw: called.append(kw))
     assert changelog_ops.main(["--through", "nope"]) == 2
@@ -85,7 +86,7 @@ def test_cli_malformed_through_exits_2_without_running(monkeypatch, capsys):
 
 
 @pytest.mark.parametrize("argv", [["--through", "2026-03-03"], ["--through=2026-03-03"]])
-def test_cli_forwards_through(monkeypatch, argv, tmp_path):
+def test_cli_forwards_through(monkeypatch: pytest.MonkeyPatch, argv, tmp_path: Path) -> None:
     seen = {}
     monkeypatch.setattr(changelog_ops, "git_common_dir", lambda cwd: str(tmp_path / ".git"))
     monkeypatch.setattr(changelog_ops, "compute_machine", lambda: "h")
@@ -96,7 +97,7 @@ def test_cli_forwards_through(monkeypatch, argv, tmp_path):
     assert seen["through"] == "2026-03-03"
 
 
-def test_archived_day_is_not_regenerated(repo):
+def test_archived_day_is_not_regenerated(repo) -> None:
     git_dir, wc = repo
     arch = wc.parent.parent / "archive" / "week-changelogs" / "2026-03-02"
     arch.mkdir(parents=True)
@@ -106,7 +107,7 @@ def test_archived_day_is_not_regenerated(repo):
     assert "2026-03-03" in result["skipped"]
 
 
-def test_unset_anchor_starts_at_earliest_live_dated_file(repo):
+def test_unset_anchor_starts_at_earliest_live_dated_file(repo) -> None:
     git_dir, wc = repo
     (wc / "HEADER.md").write_text("no anchor\n", encoding="utf-8")
     (wc / "2026-03-03.md").write_text("x", encoding="utf-8")
@@ -114,7 +115,7 @@ def test_unset_anchor_starts_at_earliest_live_dated_file(repo):
     assert _dates(result) == ["03-04", "03-05"]
 
 
-def test_unset_anchor_without_dated_files_is_a_noop(repo):
+def test_unset_anchor_without_dated_files_is_a_noop(repo) -> None:
     git_dir, wc = repo
     (wc / "HEADER.md").unlink()
     result = changelog_ops.backfill_gaps(repo_root=git_dir, host="h", today_override="2026-03-05")

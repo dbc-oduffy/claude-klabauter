@@ -4,6 +4,11 @@ import importlib.util
 import io
 import sys
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).parent.parent
 _REPO_ROOT = _BIN_DIR.parent.parent
@@ -13,7 +18,7 @@ if str(_REPO_ROOT) not in sys.path:
 from coordinator_core.distill import delete_guard as _delete_guard  # noqa: E402
 
 
-def _load_module():
+def _load_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "distill_delete_guard_cli",
         _BIN_DIR / "distill-delete-guard.py",
@@ -57,7 +62,7 @@ def test_sha_shaped_realized_by_values_skips_inline_and_path_shaped(tmp_path: Pa
     assert shas == set()
 
 
-def test_main_calls_git_objects_exist_once_not_per_candidate(tmp_path: Path, monkeypatch) -> None:
+def test_main_calls_git_objects_exist_once_not_per_candidate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     full = "c" * 40
     short = "d812d89"
     p1 = _make_candidate(tmp_path, "c1.md", full)
@@ -70,7 +75,7 @@ def test_main_calls_git_objects_exist_once_not_per_candidate(tmp_path: Path, mon
         batch_calls.append(list(shas))
         return {sha: True for sha in shas}
 
-    def fake_scalar(sha, repo_root):
+    def fake_scalar(sha, repo_root) -> bool:
         scalar_calls.append(sha)
         return True
 
@@ -86,7 +91,7 @@ def test_main_calls_git_objects_exist_once_not_per_candidate(tmp_path: Path, mon
     assert scalar_calls == []
 
 
-def test_main_no_sha_shaped_candidates_still_calls_batch_with_empty_list(tmp_path: Path, monkeypatch) -> None:
+def test_main_no_sha_shaped_candidates_still_calls_batch_with_empty_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     p1 = _make_candidate(tmp_path, "c1.md", "inline")
 
     batch_calls: list[list[str]] = []
@@ -104,11 +109,11 @@ def test_main_no_sha_shaped_candidates_still_calls_batch_with_empty_list(tmp_pat
     assert batch_calls == [[]]
 
 
-def test_resolve_realized_by_absent_map_unchanged_behavior(tmp_path: Path, monkeypatch) -> None:
+def test_resolve_realized_by_absent_map_unchanged_behavior(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sha = "e" * 40
     calls: list[str] = []
 
-    def fake_scalar(s, repo_root):
+    def fake_scalar(s, repo_root) -> bool:
         calls.append(s)
         return True
 
@@ -118,11 +123,11 @@ def test_resolve_realized_by_absent_map_unchanged_behavior(tmp_path: Path, monke
     assert calls == [sha]
 
 
-def test_resolve_realized_by_map_hit_used_without_scalar_spawn(tmp_path: Path, monkeypatch) -> None:
+def test_resolve_realized_by_map_hit_used_without_scalar_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sha = "f" * 40
     calls: list[str] = []
 
-    def fake_scalar(s, repo_root):
+    def fake_scalar(s, repo_root) -> bool:
         calls.append(s)
         return False
 
@@ -133,13 +138,13 @@ def test_resolve_realized_by_map_hit_used_without_scalar_spawn(tmp_path: Path, m
 
 
 def test_resolve_realized_by_map_miss_falls_through_to_scalar_not_treated_as_absent(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     sha_in_map = "1" * 40
     sha_missing_from_map = "2" * 40
     calls: list[str] = []
 
-    def fake_scalar(s, repo_root):
+    def fake_scalar(s, repo_root) -> bool:
         calls.append(s)
         return True
 

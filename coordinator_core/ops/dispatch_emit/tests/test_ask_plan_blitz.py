@@ -3,6 +3,7 @@
 import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_plan_blitz as apb
+from pathlib import Path
 
 STUB = """/* header { not meta } */
 export const meta = {
@@ -19,7 +20,7 @@ return { ok: parsedArgs.n }
 """
 
 
-def test_wrap_defines_one_function_and_returns_phases():
+def test_wrap_defines_one_function_and_returns_phases() -> None:
     text, phases = apb.wrap_stage(STUB)
     assert phases == ["Size", "Plan"]
     assert text.startswith("async function planBlitz(args) {")
@@ -33,27 +34,27 @@ def test_wrap_defines_one_function_and_returns_phases():
 SHADOW = "const agent = (p, o) => _askAgent(_EM_BRIEF + p, o);"
 
 
-def test_without_kwarg_output_is_unchanged():
+def test_without_kwarg_output_is_unchanged() -> None:
     text, _ = apb.wrap_stage(STUB)
     assert "_askAgent" not in text
     assert text == apb.wrap_stage(STUB, agent_prefix_var=None)[0]
 
 
-def test_shadow_is_first_statement():
+def test_shadow_is_first_statement() -> None:
     text, phases = apb.wrap_stage(STUB, agent_prefix_var="_EM_BRIEF")
     assert phases == ["Size", "Plan"]
     first = text.split("\n", 2)[1]
     assert first == SHADOW
 
 
-def test_top_level_agent_binding_refuses():
+def test_top_level_agent_binding_refuses() -> None:
     for decl in ("const agent = 1", "let agent", "function agent() {}", "async function agent() {}"):
         with pytest.raises(apb.AskPlanBlitzRefused, match="agent"):
             apb.wrap_stage(STUB + decl + "\n", agent_prefix_var="_EM_BRIEF")
     apb.wrap_stage(STUB + "const agentType = 1\n  const agent = 2\n", agent_prefix_var="_EM_BRIEF")
 
 
-def test_real_plan_blitz_shadow():
+def test_real_plan_blitz_shadow() -> None:
     try:
         text = apb.load_plan_blitz_text()
     except apb.AskPlanBlitzRefused:
@@ -63,25 +64,25 @@ def test_real_plan_blitz_shadow():
     assert wrapped.count("async function planBlitz") == 1 and wrapped.rstrip().endswith("}")
 
 
-def test_no_meta_refuses():
+def test_no_meta_refuses() -> None:
     with pytest.raises(apb.AskPlanBlitzRefused):
         apb.wrap_stage("const x = 1\n")
 
 
-def test_load_refuses_by_name_when_missing(tmp_path):
+def test_load_refuses_by_name_when_missing(tmp_path: Path) -> None:
     with pytest.raises(apb.AskPlanBlitzRefused, match="plan-blitz.mjs"):
         apb.load_plan_blitz_text(str(tmp_path))
     with pytest.raises(apb.AskPlanBlitzRefused, match="did not resolve"):
         apb.load_plan_blitz_text("")
 
 
-def test_load_reads_stub(tmp_path):
+def test_load_reads_stub(tmp_path: Path) -> None:
     (tmp_path / "workflows").mkdir()
     (tmp_path / "workflows" / "plan-blitz.mjs").write_text(STUB, encoding="utf-8")
     assert apb.load_plan_blitz_text(str(tmp_path)) == STUB
 
 
-def test_real_plan_blitz_wraps_when_resolvable():
+def test_real_plan_blitz_wraps_when_resolvable() -> None:
     try:
         text = apb.load_plan_blitz_text()
     except apb.AskPlanBlitzRefused:
@@ -90,7 +91,7 @@ def test_real_plan_blitz_wraps_when_resolvable():
     assert phases[0] == "Size" and len(phases) >= 5
 
 
-def test_strip_comment_lines_drops_only_whole_comment_lines():
+def test_strip_comment_lines_drops_only_whole_comment_lines() -> None:
     js = (
         "// head\n"
         "const a = 1; // trailing stays\n"
@@ -110,7 +111,7 @@ def test_strip_comment_lines_drops_only_whole_comment_lines():
     )
 
 
-def test_wrap_roadmap_stage_strips_comment_lines():
+def test_wrap_roadmap_stage_strips_comment_lines() -> None:
     from coordinator_core.ops.dispatch_emit import ask_roadmap
 
     text = (

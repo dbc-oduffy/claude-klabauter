@@ -43,7 +43,7 @@ def _record(root):
     return json.loads(measured_rev_record_path(root, RUN2).read_text(encoding="utf-8"))
 
 
-def _head(root):
+def _head(root) -> str:
     return _git(root, "rev-parse", "HEAD").strip()
 
 
@@ -52,14 +52,15 @@ def _ls_blob(root, rev, path):
     return out[2] if len(out) >= 3 else None
 
 
-def test_fixture_the_record_omits_is_absent_from_the_export_and_refuses_the_land(halted):  # noqa: F811
+def test_fixture_edited_after_the_measurement_refuses_the_land(halted):  # noqa: F811
     resume, token = _stage(halted)
     mr.measured_rev(RUN2, [C3_PATH, C4_PATH], repo_root=halted)
     record = _record(halted)
-    head = _git(halted, "rev-parse", "HEAD")
 
-    assert C3_PATH in record["blobs"]
-    assert FIXTURE not in record["blobs"] and LANE not in record["blobs"]
+    # The record unions the run's manifest-declared writes, so the fixture is measured even when `paths` omits it.
+    assert C3_PATH in record["blobs"] and FIXTURE in record["blobs"] and LANE in record["blobs"]
+    (halted / FIXTURE).write_text("def test_lane():\n    assert True\n", encoding="utf-8")
+    head = _git(halted, "rev-parse", "HEAD")
 
     out = _terminal_with(halted, token, resume, _VERDICT)
 
@@ -68,7 +69,7 @@ def test_fixture_the_record_omits_is_absent_from_the_export_and_refuses_the_land
     assert _git(halted, "rev-parse", "HEAD") == head
 
 
-def test_fixture_the_record_carries_lands_disclosed_and_the_export_equals_the_record_tree(halted):  # noqa: F811
+def test_fixture_the_record_carries_lands_disclosed_and_the_export_equals_the_record_tree(halted) -> None:  # noqa: F811
     resume, token = _stage(halted)
     mr.measured_rev(RUN2, [C3_PATH, C4_PATH, LANE, FIXTURE], repo_root=halted)
     record = _record(halted)
@@ -90,7 +91,7 @@ def test_fixture_the_record_carries_lands_disclosed_and_the_export_equals_the_re
     assert not (halted / "scratch" / "measured-rev" / RUN2).exists()
 
 
-def test_a_process_artifact_landing_alongside_does_not_trip_the_product_compare(halted):  # noqa: F811
+def test_a_process_artifact_landing_alongside_does_not_trip_the_product_compare(halted) -> None:  # noqa: F811
     resume, token = _stage(halted)
     mr.measured_rev(RUN2, [C3_PATH, C4_PATH, LANE, FIXTURE], repo_root=halted)
     record = _record(halted)

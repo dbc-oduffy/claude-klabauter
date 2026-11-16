@@ -9,6 +9,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit.emit import checkpoint_landed_state, resume_landed_state
 from coordinator_core.ops.dispatch_emit.tests.test_stop_rule_row_not_landed import PLAN, _LINE, _SUBJECT
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -17,7 +18,7 @@ def _repo(tmp_path):
     r = tmp_path / "repo"
     r.mkdir()
 
-    def git(*a):
+    def git(*a) -> None:
         subprocess.run(["git", *a], cwd=str(r), check=True, capture_output=True, **no_console_creationflags())
 
     git("init", "-q")
@@ -26,13 +27,13 @@ def _repo(tmp_path):
     return r, git
 
 
-def _commit(r, git, name, subject, *trailers):
+def _commit(r, git, name, subject, *trailers) -> None:
     (r / name).write_text(name, encoding="utf-8")
     git("add", "--", name)
     git("commit", "-q", "-m", subject, "-m", "\n".join(trailers))
 
 
-def test_checkpoint_landed_state_omits_the_stopped_row(tmp_path):
+def test_checkpoint_landed_state_omits_the_stopped_row(tmp_path: Path) -> None:
     r, git = _repo(tmp_path)
     _commit(r, git, "a", _SUBJECT, f"Checkpoint-Plan: {PLAN}", _LINE)
     landed, owed, _ = checkpoint_landed_state(r, PLAN)
@@ -40,7 +41,7 @@ def test_checkpoint_landed_state_omits_the_stopped_row(tmp_path):
     assert owed == frozenset()
 
 
-def test_a_newer_bare_checkpoint_lands_the_stopped_row(tmp_path):
+def test_a_newer_bare_checkpoint_lands_the_stopped_row(tmp_path: Path) -> None:
     r, git = _repo(tmp_path)
     _commit(r, git, "a", _SUBJECT, f"Checkpoint-Plan: {PLAN}", _LINE)
     _commit(r, git, "b", "checkpoint(wave 0): 1 rows — L7", f"Checkpoint-Plan: {PLAN}")
@@ -48,7 +49,7 @@ def test_a_newer_bare_checkpoint_lands_the_stopped_row(tmp_path):
     assert resume_landed_state(r, PLAN).rows == {"L6", "L7"}
 
 
-def test_resume_landed_state_omits_the_stopped_row(tmp_path):
+def test_resume_landed_state_omits_the_stopped_row(tmp_path: Path) -> None:
     r, git = _repo(tmp_path)
     _commit(r, git, "a", _SUBJECT, f"Checkpoint-Plan: {PLAN}", _LINE)
     state = resume_landed_state(r, PLAN)
@@ -56,7 +57,7 @@ def test_resume_landed_state_omits_the_stopped_row(tmp_path):
     assert "L7" not in state.row_shas
 
 
-def test_resume_landed_state_stays_one_spawn(tmp_path, monkeypatch):
+def test_resume_landed_state_stays_one_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.git.run as git_run
 
     r, git = _repo(tmp_path)

@@ -10,20 +10,21 @@ import os
 import pytest
 
 from coordinator_core.warm.door import build as door_build
+from pathlib import Path
 
 
 def _sidecar(tmp_path):
     return tmp_path / door_build.SIDECAR_FILENAME
 
 
-def test_writes_the_resolved_root_as_one_line(tmp_path):
+def test_writes_the_resolved_root_as_one_line(tmp_path: Path) -> None:
     exe = tmp_path / "door.exe"
     door_build.write_sidecar(exe, tmp_path)
     assert _sidecar(tmp_path).read_bytes() == (str(tmp_path.resolve()) + "\n").encode("utf-8")
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
-def test_a_symlink_engine_root_is_recorded_literally_not_resolved(tmp_path):
+def test_a_symlink_engine_root_is_recorded_literally_not_resolved(tmp_path: Path) -> None:
     """A cloud session's `/root/engine-current`-shaped symlink must be
     recorded UNRESOLVED, so a later repoint of the link (see
     `coordinator_core.hooks.repin_cloud_engine_root`) is followed by the
@@ -42,7 +43,7 @@ def test_a_symlink_engine_root_is_recorded_literally_not_resolved(tmp_path):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX symlink semantics")
-def test_a_repointed_symlink_root_changes_what_a_fresh_sidecar_write_would_record(tmp_path):
+def test_a_repointed_symlink_root_changes_what_a_fresh_sidecar_write_would_record(tmp_path: Path) -> None:
     """Companion to the above: repointing the link changes the LITERAL
     string written verbatim -- proving the recorded value tracks the link
     identity, not a frozen resolution of whichever target it had at write
@@ -68,7 +69,7 @@ def test_a_repointed_symlink_root_changes_what_a_fresh_sidecar_write_would_recor
     assert os.path.realpath(link) == str(second_target.resolve())
 
 
-def test_an_unchanged_sidecar_is_not_rewritten(tmp_path, monkeypatch):
+def test_an_unchanged_sidecar_is_not_rewritten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     exe = tmp_path / "door.exe"
     door_build.write_sidecar(exe, tmp_path)
 
@@ -79,12 +80,12 @@ def test_an_unchanged_sidecar_is_not_rewritten(tmp_path, monkeypatch):
     door_build.write_sidecar(exe, tmp_path)
 
 
-def test_a_transient_sharing_violation_is_retried(tmp_path, monkeypatch):
+def test_a_transient_sharing_violation_is_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     exe = tmp_path / "door.exe"
     real_replace = os.replace
     calls = []
 
-    def flaky_replace(src, dst):
+    def flaky_replace(src, dst) -> None:
         calls.append(dst)
         if len(calls) < 3:
             raise PermissionError(13, "Permission denied")
@@ -98,7 +99,7 @@ def test_a_transient_sharing_violation_is_retried(tmp_path, monkeypatch):
     assert _sidecar(tmp_path).read_bytes() == (str(tmp_path.resolve()) + "\n").encode("utf-8")
 
 
-def test_a_persistent_hold_raises_and_leaves_no_temp(tmp_path, monkeypatch):
+def test_a_persistent_hold_raises_and_leaves_no_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     exe = tmp_path / "door.exe"
 
     def held(*_a, **_k):
@@ -112,7 +113,7 @@ def test_a_persistent_hold_raises_and_leaves_no_temp(tmp_path, monkeypatch):
     assert [p.name for p in tmp_path.iterdir()] == []
 
 
-def test_a_non_sharing_failure_raises_at_once_and_leaves_no_temp(tmp_path, monkeypatch):
+def test_a_non_sharing_failure_raises_at_once_and_leaves_no_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     exe = tmp_path / "door.exe"
     calls = []
 

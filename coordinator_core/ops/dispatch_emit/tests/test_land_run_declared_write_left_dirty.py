@@ -57,7 +57,7 @@ def _author(root: Path, rel: str, text: str) -> None:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(root, "init", "-q")
@@ -131,7 +131,7 @@ def _dirty(root: Path, rel: str) -> bool:
     return bool(_git(root, "status", "--porcelain", "--", rel).strip())
 
 
-def test_a_file_hand_committed_between_base_and_landing_lands_or_is_withheld_with_a_reason(repo):
+def test_a_file_hand_committed_between_base_and_landing_lands_or_is_withheld_with_a_reason(repo) -> None:
     out = _land(repo, hand_commit=True)
 
     assert out["committed"] is True, out
@@ -143,7 +143,7 @@ def test_a_file_hand_committed_between_base_and_landing_lands_or_is_withheld_wit
     assert not (landed and CODE in withheld), out
 
 
-def test_a_declared_write_left_dirty_after_the_commit_is_withheld_and_demotes_the_criterion(repo, monkeypatch):
+def test_a_declared_write_left_dirty_after_the_commit_is_withheld_and_demotes_the_criterion(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     real = land_run._dirty_among
     seen: list = []
 
@@ -164,7 +164,7 @@ def test_a_declared_write_left_dirty_after_the_commit_is_withheld_and_demotes_th
     assert any(CODE in p for p in seen[-1:])
 
 
-def test_declared_writes_that_land_leave_no_withheld_entry_and_keep_the_criterion_met(repo):
+def test_declared_writes_that_land_leave_no_withheld_entry_and_keep_the_criterion_met(repo) -> None:
     out = _land(repo, hand_commit=False)
 
     assert out["committed"] is True, out

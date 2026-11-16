@@ -41,6 +41,7 @@ from coordinator_core.coverage import (
     _parse_handoff_claimed_by,
     _parse_handoff_deliverable_id,
 )
+from pathlib import Path
 
 EOLS = pytest.mark.parametrize("eol", ["\n", "\r\n"], ids=["lf", "crlf"])
 
@@ -52,7 +53,7 @@ def _write_handoff(tmp_path, lines: list[str], eol: str) -> str:
 
 
 @EOLS
-def test_empty_claimed_by_does_not_return_the_next_line(tmp_path, eol):
+def test_empty_claimed_by_does_not_return_the_next_line(tmp_path: Path, eol) -> None:
     path = _write_handoff(
         tmp_path,
         [
@@ -79,7 +80,7 @@ def test_empty_claimed_by_does_not_return_the_next_line(tmp_path, eol):
 
 
 @EOLS
-def test_empty_claimed_by_with_no_fallback_yields_no_holder(tmp_path, eol):
+def test_empty_claimed_by_with_no_fallback_yields_no_holder(tmp_path: Path, eol) -> None:
     """The attribution consequence, isolated from the ``consumed_by``
     fallback: an empty ``claimed_by:`` means UNCLAIMED, and the neighbouring
     line's value must not be conscripted into standing in for a holder.
@@ -98,7 +99,7 @@ def test_empty_claimed_by_with_no_fallback_yields_no_holder(tmp_path, eol):
 
 
 @EOLS
-def test_empty_claimed_by_does_not_capture_a_live_session_id(tmp_path, eol):
+def test_empty_claimed_by_does_not_capture_a_live_session_id(tmp_path: Path, eol) -> None:
     """Liveness-facing shape of the same bug: the line after an empty
     ``claimed_by:`` holds a REAL session id, so the pre-fix reader returned a
     string that merely CONTAINS a live session id
@@ -120,7 +121,7 @@ def test_empty_claimed_by_does_not_capture_a_live_session_id(tmp_path, eol):
 
 
 @EOLS
-def test_claimed_by_wins_over_consumed_by_when_both_present(tmp_path, eol):
+def test_claimed_by_wins_over_consumed_by_when_both_present(tmp_path: Path, eol) -> None:
     path = _write_handoff(
         tmp_path,
         [
@@ -149,14 +150,14 @@ def test_claimed_by_wins_over_consumed_by_when_both_present(tmp_path, eol):
     ],
     ids=["plain", "single-quoted", "double-quoted", "padded", "null", "none"],
 )
-def test_ordinary_values_survive_the_pad_change(tmp_path, line, expected, eol):
+def test_ordinary_values_survive_the_pad_change(tmp_path: Path, line, expected, eol) -> None:
     path = _write_handoff(tmp_path, ["---", "id: h-3", line, "---", ""], eol)
 
     assert _parse_handoff_claimed_by(path) == expected
 
 
 @EOLS
-def test_claimed_by_is_not_matched_by_a_longer_key(tmp_path, eol):
+def test_claimed_by_is_not_matched_by_a_longer_key(tmp_path: Path, eol) -> None:
     path = _write_handoff(
         tmp_path,
         ["---", "claimed_by_proxy: proxy-session", "---", ""],
@@ -175,7 +176,7 @@ def test_claimed_by_is_not_matched_by_a_longer_key(tmp_path, eol):
 # ---------------------------------------------------------------------------
 
 @EOLS
-def test_empty_deliverable_id_does_not_return_the_next_line(tmp_path, eol):
+def test_empty_deliverable_id_does_not_return_the_next_line(tmp_path: Path, eol) -> None:
     path = _write_handoff(
         tmp_path,
         ["---", "id: h-4", "deliverable_id:", "status: open", "---", "", "body"],
@@ -192,7 +193,7 @@ def test_empty_deliverable_id_does_not_return_the_next_line(tmp_path, eol):
 
 
 @EOLS
-def test_empty_deliverable_id_does_not_capture_a_neighbouring_deliverable(tmp_path, eol):
+def test_empty_deliverable_id_does_not_capture_a_neighbouring_deliverable(tmp_path: Path, eol) -> None:
     """Cross-attribution shape: the line after an empty ``deliverable_id:``
     names a DIFFERENT deliverable, so the pre-fix reader attributed this
     node's commits to a deliverable it has nothing to do with."""
@@ -216,14 +217,14 @@ def test_empty_deliverable_id_does_not_capture_a_neighbouring_deliverable(tmp_pa
     ],
     ids=["plain", "quoted", "null", "tilde"],
 )
-def test_deliverable_id_ordinary_values_survive(tmp_path, line, expected, eol):
+def test_deliverable_id_ordinary_values_survive(tmp_path: Path, line, expected, eol) -> None:
     path = _write_handoff(tmp_path, ["---", line, "---", ""], eol)
 
     assert _parse_handoff_deliverable_id(path) == expected
 
 
 @EOLS
-def test_deliverable_id_is_not_matched_by_a_longer_key(tmp_path, eol):
+def test_deliverable_id_is_not_matched_by_a_longer_key(tmp_path: Path, eol) -> None:
     path = _write_handoff(
         tmp_path,
         ["---", "deliverable_id_source: dlv-wrong", "---", ""],
@@ -233,5 +234,5 @@ def test_deliverable_id_is_not_matched_by_a_longer_key(tmp_path, eol):
     assert _parse_handoff_deliverable_id(path) is None
 
 
-def test_deliverable_id_missing_file_is_conservative_none(tmp_path):
+def test_deliverable_id_missing_file_is_conservative_none(tmp_path: Path) -> None:
     assert _parse_handoff_deliverable_id(str(tmp_path / "nope.md")) is None

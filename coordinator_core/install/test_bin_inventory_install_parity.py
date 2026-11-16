@@ -51,6 +51,7 @@ from coordinator_core.install.substrate import (
 )
 from coordinator_core.plugin_health import bin_inventory_gate as big
 from coordinator_core.plugin_health import relocation_ledger as rl
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 
@@ -60,7 +61,7 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
-def test_every_live_bin_inventory_entry_lands_in_a_real_install(monkeypatch, tmp_path):
+def test_every_live_bin_inventory_entry_lands_in_a_real_install(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     ml_bin = tmp_path / "ml_bin"
     ch_bin = tmp_path / "ch_bin"
     bin_dst = tmp_path / "bin_dst"

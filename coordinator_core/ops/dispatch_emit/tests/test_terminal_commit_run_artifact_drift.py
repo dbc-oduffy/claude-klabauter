@@ -17,6 +17,7 @@ from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.session import touch_record
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -26,7 +27,7 @@ OWN = "state/sizings/own.yaml"
 OTHER = "state/sizings/other.yaml"
 
 
-def _git(args, cwd):
+def _git(args, cwd) -> None:
     subprocess.run(
         ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
         **no_console_creationflags(),
@@ -37,7 +38,7 @@ def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _write(repo, rel, text):
+def _write(repo, rel, text) -> None:
     path = repo / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="")
@@ -122,14 +123,14 @@ def _fire(tmp_path, monkeypatch, *, drift: set) -> tuple:
     return out, seen
 
 
-def test_a_rewrite_of_the_runs_own_sizing_is_reread_and_lands(tmp_path, monkeypatch):
+def test_a_rewrite_of_the_runs_own_sizing_is_reread_and_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out, seen = _fire(tmp_path, monkeypatch, drift={OWN})
     assert out["committed"] is True, out
     assert OWN not in seen[0].get("expected_content_sha256", {})
     assert out["run_artifacts"]["reread"] == [OWN]
 
 
-def test_reread_is_reported_beside_the_runs_landed_artifacts(tmp_path, monkeypatch):
+def test_reread_is_reported_beside_the_runs_landed_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out, _ = _fire(tmp_path, monkeypatch, drift={OWN})
     assert out["committed"] is True, out
     assert out["run_artifacts"] == {
@@ -138,7 +139,7 @@ def test_reread_is_reported_beside_the_runs_landed_artifacts(tmp_path, monkeypat
     }, out
 
 
-def test_reread_is_reported_when_the_run_declares_no_run_artifacts(tmp_path, monkeypatch):
+def test_reread_is_reported_when_the_run_declares_no_run_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import halted_record_request
 
     monkeypatch.setattr(halted_record_request, "within_handoffs_home", lambda *a, **k: None)
@@ -147,14 +148,14 @@ def test_reread_is_reported_when_the_run_declares_no_run_artifacts(tmp_path, mon
     assert out["run_artifacts"] == {"landed": [], "withheld": {}, "reread": [OWN]}, out
 
 
-def test_a_product_path_drift_still_refuses(tmp_path, monkeypatch):
+def test_a_product_path_drift_still_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out, _ = _fire(tmp_path, monkeypatch, drift={"foo.py", OWN})
     assert out["committed"] is False, out
     assert out["refused"] == "blob-drift"
     assert [d["path"] for d in out["blob_drift"]] == ["foo.py"]
 
 
-def test_a_sizing_the_runs_record_does_not_name_keeps_its_expectation(tmp_path, monkeypatch):
+def test_a_sizing_the_runs_record_does_not_name_keeps_its_expectation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out, seen = _fire(tmp_path, monkeypatch, drift={OTHER})
     assert out["committed"] is False, out
     assert out["refused"] == "blob-drift"

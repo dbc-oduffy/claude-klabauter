@@ -94,7 +94,7 @@ def _setup_repo(tmp_path: Path, plan_id: str = "pln-example-abc123") -> Path:
     return repo
 
 
-def _mint_success_fixture(repo: Path, plan_id: str = "pln-example-abc123"):
+def _mint_success_fixture(repo: Path, plan_id: str = "pln-example-abc123") -> tuple[str, Path]:
     share = repo / ".coordinator-local" / "subagent-share" / "sess1"
     prep = share / "2026-09-27-prep.md"
     _write_sidecar(
@@ -134,7 +134,7 @@ def _mint_success_fixture(repo: Path, plan_id: str = "pln-example-abc123"):
     return terminal_sha, build_test
 
 
-def test_mint_success(tmp_path):
+def test_mint_success(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     terminal_sha, build_test = _mint_success_fixture(repo)
     plan_path = repo / "docs" / "plans" / "example.md"
@@ -146,7 +146,7 @@ def test_mint_success(tmp_path):
     assert "review_stamp:" in plan_path.read_text(encoding="utf-8")
 
 
-def test_mint_finds_an_inline_review_line_outside_the_trailer_block(tmp_path):
+def test_mint_finds_an_inline_review_line_outside_the_trailer_block(tmp_path: Path) -> None:
     # Shape of commits landed before terminal_commit split the removal line out:
     # the anchor shares a paragraph with a non-trailer line, and a later trailer
     # block follows, so git's trailer parser does not report it.
@@ -164,7 +164,7 @@ def test_mint_finds_an_inline_review_line_outside_the_trailer_block(tmp_path):
     assert sidecar.name == "2026-09-27-integration.md"
 
 
-def test_mint_falls_back_to_receipt_session_id_when_sidecar_has_no_plan_id(tmp_path):
+def test_mint_falls_back_to_receipt_session_id_when_sidecar_has_no_plan_id(tmp_path: Path) -> None:
     """example-retrieval-repo cc6525cf0 repair path: a commit landed by the pre-fix
     engine carries an integration sidecar with NO `plan_id` at all. `mint`
     still resolves it via the plan's own `<stem>.workflow.mjs.emitted.json`
@@ -214,7 +214,7 @@ def test_mint_falls_back_to_receipt_session_id_when_sidecar_has_no_plan_id(tmp_p
     assert stamp["terminal_commit_sha"] == terminal_sha
 
 
-def test_mint_fallback_never_matches_a_mismatched_plan_id(tmp_path):
+def test_mint_fallback_never_matches_a_mismatched_plan_id(tmp_path: Path) -> None:
     """The receipt/session_id fallback only fires when the sidecar's
     plan_id is ABSENT -- it must never override a sidecar that carries a
     real, different plan_id."""
@@ -263,7 +263,7 @@ def test_mint_fallback_never_matches_a_mismatched_plan_id(tmp_path):
         m.mint(plan_path, repo, build_test_path=str(build_test))
 
 
-def test_mint_picks_right_terminal_commit_for_two_plans(tmp_path):
+def test_mint_picks_right_terminal_commit_for_two_plans(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git_init(repo)
@@ -288,7 +288,7 @@ def test_mint_picks_right_terminal_commit_for_two_plans(tmp_path):
         )
     _commit(repo, "init")
 
-    def mint_for(slug: str, plan_id: str, session: str):
+    def mint_for(slug: str, plan_id: str, session: str) -> tuple[str, Path]:
         share = repo / ".coordinator-local" / "subagent-share" / session
         prep = share / f"2026-09-27-prep-{slug}.md"
         _write_sidecar(
@@ -333,7 +333,7 @@ def test_mint_picks_right_terminal_commit_for_two_plans(tmp_path):
     assert stamp_b["terminal_commit_sha"] == sha_b
 
 
-def test_mint_refuses_no_build_test(tmp_path):
+def test_mint_refuses_no_build_test(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     _mint_success_fixture(repo)
     plan_path = repo / "docs" / "plans" / "example.md"
@@ -341,7 +341,7 @@ def test_mint_refuses_no_build_test(tmp_path):
         m.mint(plan_path, repo, build_test_path=None)
 
 
-def test_check_refuses_no_stamp(tmp_path):
+def test_check_refuses_no_stamp(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     plan_path = repo / "docs" / "plans" / "example.md"
     reason = m.check(plan_path, repo, supersession=False)
@@ -349,7 +349,7 @@ def test_check_refuses_no_stamp(tmp_path):
     assert "no review_stamp" in reason
 
 
-def test_check_refuses_superseding_commit_on_declared_write(tmp_path):
+def test_check_refuses_superseding_commit_on_declared_write(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     terminal_sha, build_test = _mint_success_fixture(repo)
     plan_path = repo / "docs" / "plans" / "example.md"
@@ -366,7 +366,7 @@ def test_check_refuses_superseding_commit_on_declared_write(tmp_path):
     assert "later commit" in reason
 
 
-def test_superseding_refusal_routes_review_only_from_the_terminal_commit(tmp_path, monkeypatch):
+def test_superseding_refusal_routes_review_only_from_the_terminal_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The original run base collides with that run's frozen slice; the late delta starts at the terminal."""
     repo = _setup_repo(tmp_path)
     terminal_sha, build_test = _mint_success_fixture(repo)
@@ -384,7 +384,7 @@ def test_superseding_refusal_routes_review_only_from_the_terminal_commit(tmp_pat
     assert seen == [terminal_sha]
 
 
-def test_review_only_route_names_the_coded_rows(tmp_path):
+def test_review_only_route_names_the_coded_rows(tmp_path: Path) -> None:
     plan = tmp_path / "p.md"
     plan.write_text(
         "---\nplan_id: pln-x\n---\n\n## Tasks\n\n```yaml plan-tasks\n"
@@ -397,7 +397,7 @@ def test_review_only_route_names_the_coded_rows(tmp_path):
     assert m._review_only_route(tmp_path / "missing.md", "abc1234") == ""
 
 
-def test_check_supersession_ignores_the_plans_own_close_out(tmp_path):
+def test_check_supersession_ignores_the_plans_own_close_out(tmp_path: Path) -> None:
     """The close-out writes the falsifier and exit_criterion_met into the plan,
     which is in its own scope; that edit is not a later change to reviewed work."""
     repo = _setup_repo(tmp_path)
@@ -410,7 +410,7 @@ def test_check_supersession_ignores_the_plans_own_close_out(tmp_path):
     assert m.check(plan_path, repo, supersession=True) is None
 
 
-def test_check_ignores_supersession_when_not_asked(tmp_path):
+def test_check_ignores_supersession_when_not_asked(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     terminal_sha, build_test = _mint_success_fixture(repo)
     plan_path = repo / "docs" / "plans" / "example.md"
@@ -426,7 +426,7 @@ def test_check_ignores_supersession_when_not_asked(tmp_path):
     assert reason is None
 
 
-def test_check_refuses_rebased_terminal_not_ancestor_of_head(tmp_path):
+def test_check_refuses_rebased_terminal_not_ancestor_of_head(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     terminal_sha, build_test = _mint_success_fixture(repo)
     plan_path = repo / "docs" / "plans" / "example.md"
@@ -446,7 +446,7 @@ def test_check_refuses_rebased_terminal_not_ancestor_of_head(tmp_path):
     assert reason is not None
 
 
-def test_check_ancestry_ref_resolution_failure_is_distinct_from_not_ancestor(tmp_path, monkeypatch):
+def test_check_ancestry_ref_resolution_failure_is_distinct_from_not_ancestor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`merge-base --is-ancestor` exit 1 ("genuinely not an ancestor") and any other
     non-zero exit (a ref that failed to resolve, e.g. a rewritten/garbage-collected sha)
     are two different failure modes -- the refusal message must say which one fired."""
@@ -457,7 +457,7 @@ def test_check_ancestry_ref_resolution_failure_is_distinct_from_not_ancestor(tmp
 
     real_run_git = m.run_git
 
-    def _fake_run_git(args, *a, **kw):
+    def _fake_run_git(args, *a, **kw) -> GitResult:
         if "merge-base" in args:
             return GitResult(
                 returncode=128, stdout="", stderr="fatal: not a valid object name", timed_out=False
@@ -471,7 +471,7 @@ def test_check_ancestry_ref_resolution_failure_is_distinct_from_not_ancestor(tmp
     assert "is not an ancestor" not in reason
 
 
-def test_mint_refuses_on_delivery_fail(tmp_path):
+def test_mint_refuses_on_delivery_fail(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     terminal_sha, build_test = _mint_success_fixture(repo)
     # Overwrite the delivery sidecar with a FAIL verdict and re-point at it
@@ -503,7 +503,7 @@ def test_mint_refuses_on_delivery_fail(tmp_path):
         m.mint(plan_path, repo, build_test_path=str(build_test))
 
 
-def test_mint_refuses_on_unresolved(tmp_path):
+def test_mint_refuses_on_unresolved(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     share = repo / ".coordinator-local" / "subagent-share" / "sess1"
     _write_sidecar(share / "2026-09-27-delivery.md", {"verdict": "PASS"})
@@ -536,7 +536,7 @@ def test_mint_refuses_on_unresolved(tmp_path):
         m.mint(plan_path, repo, build_test_path=str(build_test))
 
 
-def test_override_reason_does_not_bypass_check():
+def test_override_reason_does_not_bypass_check() -> None:
     """`check`'s signature carries no override parameter at all -- the
     refusal has no escape hatch to bypass, unlike `_refuse_if_live_foreign_
     holder`'s own standing. Pinned structurally: `check` accepts only
@@ -547,7 +547,7 @@ def test_override_reason_does_not_bypass_check():
     assert "override" not in "".join(sig.parameters.keys()).lower()
 
 
-def test_subject_plan_cutoff_and_slate_exemption():
+def test_subject_plan_cutoff_and_slate_exemption() -> None:
     assert m.is_subject_plan({"execution_authorized_at": "2026-12-01T00:00:00Z"}) is True
     assert m.is_subject_plan({"execution_authorized_at": "2020-01-01T00:00:00Z"}) is False
     assert m.is_subject_plan({"created": "2026-12-01"}) is True
@@ -563,7 +563,7 @@ def test_subject_plan_cutoff_and_slate_exemption():
     )
 
 
-def test_check_process_time_bounded(tmp_path):
+def test_check_process_time_bounded(tmp_path: Path) -> None:
     import time
 
     repo = _setup_repo(tmp_path)
@@ -578,7 +578,7 @@ def test_check_process_time_bounded(tmp_path):
     assert elapsed_ms <= 200, f"review_stamp.check took {elapsed_ms:.1f}ms, budget is 200ms"
 
 
-def test_mint_refuses_when_integration_sidecar_lacks_prep_sidecar(tmp_path):
+def test_mint_refuses_when_integration_sidecar_lacks_prep_sidecar(tmp_path: Path) -> None:
     """One-stage path, today's failure (2026-09-28 PM order fixture ask): an
     integration sidecar the terminal commit's trailer names that carries no
     `prep_sidecar` field refuses mint with a clear, named reason -- unchanged
@@ -607,7 +607,7 @@ def test_mint_refuses_when_integration_sidecar_lacks_prep_sidecar(tmp_path):
         m.mint(plan_path, repo, build_test_path=str(build_test))
 
 
-def test_mint_repair_builds_record_when_resolved_sidecar_lacks_prep_sidecar(tmp_path):
+def test_mint_repair_builds_record_when_resolved_sidecar_lacks_prep_sidecar(tmp_path: Path) -> None:
     """claude-klabauter-shaped case (docs/plans/2026-09-28-batch-discharge-landed-
     batons.md, terminal e7c93434ca): the trailer resolves a real sidecar via
     the existing plan_id/session fallback, but that sidecar predates
@@ -684,7 +684,7 @@ def test_mint_repair_builds_record_when_resolved_sidecar_lacks_prep_sidecar(tmp_
     assert stamp["unresolved"] == []
 
 
-def test_mint_repair_without_a_prep_sidecar_names_its_producer(tmp_path):
+def test_mint_repair_without_a_prep_sidecar_names_its_producer(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     plan_path = repo / "docs" / "plans" / "example.md"
     session_id = "sess1"
@@ -705,7 +705,7 @@ def test_mint_repair_without_a_prep_sidecar_names_its_producer(tmp_path):
         m.mint(plan_path, repo, build_test_path=str(build_test), repair=True)
 
 
-def test_mint_repair_builds_record_when_no_sidecar_resolves_at_all(tmp_path):
+def test_mint_repair_builds_record_when_no_sidecar_resolves_at_all(tmp_path: Path) -> None:
     """example-retrieval-repo-shaped case (cc6525cf0, trailer `applies None`): no
     sidecar resolves for the stem at all. `--repair` falls back to the
     plan's own emit-receipt session_id to find the terminal commit, then
@@ -765,7 +765,7 @@ def test_mint_repair_builds_record_when_no_sidecar_resolves_at_all(tmp_path):
     assert stamp["fixes_applied"] == 1
 
 
-def test_mint_repair_never_fires_when_flag_is_unset(tmp_path):
+def test_mint_repair_never_fires_when_flag_is_unset(tmp_path: Path) -> None:
     """`repair` defaults False -- an ordinary caller (no flag) gets the
     unchanged refusal even though a repairable shape exists."""
     repo = _setup_repo(tmp_path)
@@ -775,7 +775,7 @@ def test_mint_repair_never_fires_when_flag_is_unset(tmp_path):
     assert stamp["terminal_commit_sha"] == terminal_sha
 
 
-def test_mint_succeeds_against_a_zero_integration_stage_bookkeeping_record(tmp_path):
+def test_mint_succeeds_against_a_zero_integration_stage_bookkeeping_record(tmp_path: Path) -> None:
     """End-to-end, zero-integration-stage path (2026-09-28 PM order step b'):
     `review_stamp.mint` reads the mechanical bookkeeping record
     (`review_mint.wave_bookkeeping.bookkeep_wave`'s one write) exactly as it
@@ -886,7 +886,7 @@ def _stage_record_fixture(repo: Path, *, tests: dict, criterion: dict, plan_id: 
 _NOT_RUN = {"status": "not_run", "run": None, "failed": None, "sidecar": None}
 
 
-def test_mint_reads_stage_returns_and_takes_a_met_criterion_for_a_prose_spine(tmp_path):
+def test_mint_reads_stage_returns_and_takes_a_met_criterion_for_a_prose_spine(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     sha, _, _ = _stage_record_fixture(
         repo, tests=_NOT_RUN, criterion={"status": "met", "observation": "13 lessons", "sidecar": None}
@@ -898,7 +898,7 @@ def test_mint_reads_stage_returns_and_takes_a_met_criterion_for_a_prose_spine(tm
     assert stamp["criterion"]["status"] == "met"
 
 
-def test_mint_refuses_a_prose_spine_whose_criterion_was_never_judged(tmp_path):
+def test_mint_refuses_a_prose_spine_whose_criterion_was_never_judged(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     _stage_record_fixture(repo, tests=_NOT_RUN, criterion={"status": "not_run", "observation": None, "sidecar": None})
     with pytest.raises(m.MintRefusal, match="build/test verdict is 'not_run'"):
@@ -906,7 +906,7 @@ def test_mint_refuses_a_prose_spine_whose_criterion_was_never_judged(tmp_path):
 
 
 @pytest.mark.parametrize("status", ["not_met", "indeterminate"])
-def test_mint_refuses_an_unmet_criterion_even_with_passing_tests(tmp_path, status):
+def test_mint_refuses_an_unmet_criterion_even_with_passing_tests(tmp_path: Path, status) -> None:
     repo = _setup_repo(tmp_path)
     _stage_record_fixture(
         repo,
@@ -917,7 +917,7 @@ def test_mint_refuses_an_unmet_criterion_even_with_passing_tests(tmp_path, statu
         m.mint(repo / "docs" / "plans" / "example.md", repo, build_test_path=None)
 
 
-def test_mint_with_resolved_skips_the_trailer_walk(tmp_path):
+def test_mint_with_resolved_skips_the_trailer_walk(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     sha, record, data = _stage_record_fixture(
         repo, tests=_NOT_RUN, criterion={"status": "met", "observation": "o", "sidecar": None}
@@ -929,7 +929,7 @@ def test_mint_with_resolved_skips_the_trailer_walk(tmp_path):
     assert stamp["terminal_commit_sha"] == sha
 
 
-def _set_prep(repo: Path, **fields):
+def _set_prep(repo: Path, **fields) -> None:
     prep = repo / ".coordinator-local" / "subagent-share" / "sess1" / "2026-09-27-prep.md"
     data = {
         "run_base_sha": "deadbeef",
@@ -941,7 +941,7 @@ def _set_prep(repo: Path, **fields):
     _write_sidecar(prep, data)
 
 
-def test_mint_ignores_peer_claims_outside_the_reviewed_footprint(tmp_path):
+def test_mint_ignores_peer_claims_outside_the_reviewed_footprint(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     _, build_test = _mint_success_fixture(repo)
     _set_prep(repo, slice_files=["coordinator_core/foo.py"],
@@ -950,7 +950,7 @@ def test_mint_ignores_peer_claims_outside_the_reviewed_footprint(tmp_path):
     assert m.mint(plan_path, repo, build_test_path=str(build_test))["unresolved"] == []
 
 
-def _live_claims(monkeypatch, held):
+def _live_claims(monkeypatch, held) -> None:
     from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
 
     monkeypatch.setattr(
@@ -958,7 +958,7 @@ def _live_claims(monkeypatch, held):
     )
 
 
-def test_mint_refuses_a_peer_claim_inside_the_reviewed_footprint(tmp_path, monkeypatch):
+def test_mint_refuses_a_peer_claim_inside_the_reviewed_footprint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _live_claims(monkeypatch, {"coordinator_core/foo.py", "peer/a.py"})
     repo = _setup_repo(tmp_path)
     _, build_test = _mint_success_fixture(repo)
@@ -969,7 +969,7 @@ def test_mint_refuses_a_peer_claim_inside_the_reviewed_footprint(tmp_path, monke
         m.mint(plan_path, repo, build_test_path=str(build_test))
 
 
-def test_mint_counts_every_claim_when_no_footprint_is_recorded(tmp_path, monkeypatch):
+def test_mint_counts_every_claim_when_no_footprint_is_recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _live_claims(monkeypatch, {"peer/a.py"})
     repo = _setup_repo(tmp_path)
     _, build_test = _mint_success_fixture(repo)
@@ -979,7 +979,7 @@ def test_mint_counts_every_claim_when_no_footprint_is_recorded(tmp_path, monkeyp
         m.mint(plan_path, repo, build_test_path=str(build_test))
 
 
-def test_mint_ignores_a_frozen_claim_no_longer_live(tmp_path, monkeypatch):
+def test_mint_ignores_a_frozen_claim_no_longer_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _live_claims(monkeypatch, set())
     repo = _setup_repo(tmp_path)
     _, build_test = _mint_success_fixture(repo)
@@ -988,7 +988,7 @@ def test_mint_ignores_a_frozen_claim_no_longer_live(tmp_path, monkeypatch):
     assert m.mint(plan_path, repo, build_test_path=str(build_test))["unresolved"] == []
 
 
-def test_mint_refusal_names_the_claims_still_live(tmp_path, monkeypatch):
+def test_mint_refusal_names_the_claims_still_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _live_claims(monkeypatch, {"coordinator_core/foo.py"})
     repo = _setup_repo(tmp_path)
     _, build_test = _mint_success_fixture(repo)
@@ -1000,7 +1000,7 @@ def test_mint_refusal_names_the_claims_still_live(tmp_path, monkeypatch):
     assert "bar.py" not in str(exc.value)
 
 
-def test_live_read_failure_keeps_the_frozen_refusal(tmp_path, monkeypatch):
+def test_live_read_failure_keeps_the_frozen_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import claim_index
 
     def boom(*a, **k):
@@ -1015,7 +1015,7 @@ def test_live_read_failure_keeps_the_frozen_refusal(tmp_path, monkeypatch):
         m.mint(plan_path, repo, build_test_path=str(build_test))
 
 
-def test_live_held_claims_batches_one_lookup_over_all_paths(tmp_path, monkeypatch):
+def test_live_held_claims_batches_one_lookup_over_all_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
     from coordinator_core.session import claim_index, liveness, touch_record
 
@@ -1070,7 +1070,7 @@ def _operator_plan(repo: Path, *, declared: bool = True, verdict: str = "pass",
     )
 
 
-def test_mint_takes_an_operator_attested_indeterminate_criterion_as_met(tmp_path):
+def test_mint_takes_an_operator_attested_indeterminate_criterion_as_met(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     _operator_plan(repo)
     stamp = m.mint(repo / "docs" / "plans" / "example.md", repo, build_test_path=None)
@@ -1078,28 +1078,28 @@ def test_mint_takes_an_operator_attested_indeterminate_criterion_as_met(tmp_path
     assert "operator-attested by sess-operator" in stamp["criterion"]["observation"]
 
 
-def test_mint_refuses_indeterminate_when_operator_mode_is_undeclared(tmp_path):
+def test_mint_refuses_indeterminate_when_operator_mode_is_undeclared(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     _operator_plan(repo, declared=False)
     with pytest.raises(m.MintRefusal, match="exit criterion is indeterminate; a re-judge clears this"):
         m.mint(repo / "docs" / "plans" / "example.md", repo, build_test_path=None)
 
 
-def test_mint_refuses_operator_attestation_whose_artifact_is_not_committed(tmp_path):
+def test_mint_refuses_operator_attestation_whose_artifact_is_not_committed(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     _operator_plan(repo, commit_artifact=False)
     with pytest.raises(m.MintRefusal, match="artifact state/audits/smoke.md is not committed"):
         m.mint(repo / "docs" / "plans" / "example.md", repo, build_test_path=None)
 
 
-def test_mint_refuses_operator_attestation_with_a_fail_verdict(tmp_path):
+def test_mint_refuses_operator_attestation_with_a_fail_verdict(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     _operator_plan(repo, verdict="fail")
     with pytest.raises(m.MintRefusal, match="verdict is 'fail', not pass"):
         m.mint(repo / "docs" / "plans" / "example.md", repo, build_test_path=None)
 
 
-def test_mint_refuses_operator_attestation_whose_ran_against_is_not_a_commit(tmp_path):
+def test_mint_refuses_operator_attestation_whose_ran_against_is_not_a_commit(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     _operator_plan(repo, ran_against="0123456789abcdef0123456789abcdef01234567")
     with pytest.raises(m.MintRefusal, match="ran_against 0123456789abcdef0123456789abcdef01234567 does not resolve"):
@@ -1127,7 +1127,7 @@ def _add_evidence_only_trailer(repo: Path, plan_id: str = "pln-example-abc123") 
     return _commit(repo, "evidence only\n\nInline-Review: applies 2026-09-28-integration -- execute-review: 1 slices")
 
 
-def test_resolve_skips_a_newer_zero_file_trailer_for_the_one_that_reviewed_files(tmp_path):
+def test_resolve_skips_a_newer_zero_file_trailer_for_the_one_that_reviewed_files(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     terminal_sha, _ = _mint_success_fixture(repo)
     _add_evidence_only_trailer(repo)
@@ -1138,7 +1138,7 @@ def test_resolve_skips_a_newer_zero_file_trailer_for_the_one_that_reviewed_files
     assert sidecar.name == "2026-09-27-integration.md"
 
 
-def test_resolve_still_returns_a_lone_zero_file_trailer_so_mint_refuses_honestly(tmp_path):
+def test_resolve_still_returns_a_lone_zero_file_trailer_so_mint_refuses_honestly(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     evidence_sha = _add_evidence_only_trailer(repo)
 
@@ -1148,7 +1148,7 @@ def test_resolve_still_returns_a_lone_zero_file_trailer_so_mint_refuses_honestly
     assert sidecar.name == "2026-09-28-integration.md"
 
 
-def test_superseding_refusal_names_the_real_record_sharing_the_stem(tmp_path):
+def test_superseding_refusal_names_the_real_record_sharing_the_stem(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     plan_path = repo / "docs" / "plans" / "example.md"
     stem = "2026-10-01-super-rec"
@@ -1163,7 +1163,7 @@ def test_superseding_refusal_names_the_real_record_sharing_the_stem(tmp_path):
     assert f"state/superseding-reviews/2026-10/{stem}.md" in str(exc.value)
 
 
-def test_whitespace_only_commit_is_not_late_delta(tmp_path):
+def test_whitespace_only_commit_is_not_late_delta(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     _, build_test = _mint_success_fixture(repo)
     plan_path = repo / "docs" / "plans" / "example.md"
@@ -1173,7 +1173,7 @@ def test_whitespace_only_commit_is_not_late_delta(tmp_path):
     assert m.check(plan_path, repo, supersession=True) is None
 
 
-def test_content_change_still_blocks_late_delta(tmp_path):
+def test_content_change_still_blocks_late_delta(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     _, build_test = _mint_success_fixture(repo)
     plan_path = repo / "docs" / "plans" / "example.md"
@@ -1194,42 +1194,42 @@ def _later_edit_with_anchor(repo: Path, plan_id_of_sidecar, stem: str) -> None:
     _commit(repo, "later edit" + trailer)
 
 
-def _stamped(repo: Path):
+def _stamped(repo: Path) -> Path:
     _, build_test = _mint_success_fixture(repo)
     plan_path = repo / "docs" / "plans" / "example.md"
     m.mint(plan_path, repo, build_test_path=str(build_test))
     return plan_path
 
 
-def test_late_delta_ignores_commit_attributed_to_another_plan(tmp_path):
+def test_late_delta_ignores_commit_attributed_to_another_plan(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     plan_path = _stamped(repo)
     _later_edit_with_anchor(repo, "pln-other-000001", "2026-10-01-integration-other")
     assert m.check(plan_path, repo, supersession=True) is None
 
 
-def test_late_delta_still_blocks_commit_attributed_to_this_plan(tmp_path):
+def test_late_delta_still_blocks_commit_attributed_to_this_plan(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     plan_path = _stamped(repo)
     _later_edit_with_anchor(repo, "pln-example-abc123", "2026-10-01-integration-own")
     assert "later commit" in m.check(plan_path, repo, supersession=True)
 
 
-def test_late_delta_still_blocks_unattributed_commit(tmp_path):
+def test_late_delta_still_blocks_unattributed_commit(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     plan_path = _stamped(repo)
     _later_edit_with_anchor(repo, None, "")
     assert "later commit" in m.check(plan_path, repo, supersession=True)
 
 
-def test_late_delta_blocks_when_anchor_sidecar_is_missing(tmp_path):
+def test_late_delta_blocks_when_anchor_sidecar_is_missing(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     plan_path = _stamped(repo)
     _later_edit_with_anchor(repo, None, "2026-10-01-integration-gone")
     assert "later commit" in m.check(plan_path, repo, supersession=True)
 
 
-def test_late_delta_blocks_when_one_of_several_commits_is_not_foreign(tmp_path):
+def test_late_delta_blocks_when_one_of_several_commits_is_not_foreign(tmp_path: Path) -> None:
     repo = _setup_repo(tmp_path)
     plan_path = _stamped(repo)
     _later_edit_with_anchor(repo, "pln-other-000001", "2026-10-01-integration-other")
@@ -1238,7 +1238,7 @@ def test_late_delta_blocks_when_one_of_several_commits_is_not_foreign(tmp_path):
     assert "later commit" in m.check(plan_path, repo, supersession=True)
 
 
-def test_repair_discovers_a_prep_whose_product_files_is_only_in_the_body(tmp_path):
+def test_repair_discovers_a_prep_whose_product_files_is_only_in_the_body(tmp_path: Path) -> None:
     share = tmp_path / "share"
     share.mkdir()
     (share / "wave.md").write_text("---\nagent_type: coordinator:code-reviewer\n---\n", encoding="utf-8")
@@ -1253,7 +1253,7 @@ def test_repair_discovers_a_prep_whose_product_files_is_only_in_the_body(tmp_pat
     assert "product_files" not in m._load_sidecar(prep)
 
 
-def test_repair_ignores_a_sidecar_with_no_product_files_anywhere(tmp_path):
+def test_repair_ignores_a_sidecar_with_no_product_files_anywhere(tmp_path: Path) -> None:
     (tmp_path / "t.md").write_text(
         "---\nagent_type: coordinator:test-runner\n---\nnote: `product_files: 3` mid-line\n", encoding="utf-8"
     )
@@ -1266,7 +1266,7 @@ _BODY_PREP = (
 )
 
 
-def test_load_sidecar_prep_lifts_a_body_form_run_base_sha(tmp_path):
+def test_load_sidecar_prep_lifts_a_body_form_run_base_sha(tmp_path: Path) -> None:
     prep = tmp_path / "prep.md"
     prep.write_text(_BODY_PREP, encoding="utf-8")
     data = m._load_sidecar(prep, prep=True)
@@ -1275,13 +1275,13 @@ def test_load_sidecar_prep_lifts_a_body_form_run_base_sha(tmp_path):
     assert "run_base_sha" not in m._load_sidecar(prep)
 
 
-def test_frontmatter_run_base_sha_wins_over_the_body(tmp_path):
+def test_frontmatter_run_base_sha_wins_over_the_body(tmp_path: Path) -> None:
     prep = tmp_path / "prep.md"
     prep.write_text(_BODY_PREP.replace("status: complete", "status: complete\nrun_base_sha: fff0000"), encoding="utf-8")
     assert m._load_sidecar(prep, prep=True)["run_base_sha"] == "fff0000"
 
 
-def test_midline_or_non_sha_run_base_sha_is_not_the_report(tmp_path):
+def test_midline_or_non_sha_run_base_sha_is_not_the_report(tmp_path: Path) -> None:
     prep = tmp_path / "prep.md"
     prep.write_text(
         "---\nagent_type: coordinator:test-runner\n---\n"
@@ -1292,7 +1292,7 @@ def test_midline_or_non_sha_run_base_sha_is_not_the_report(tmp_path):
 
 
 @pytest.mark.parametrize("verdict, expect_key", [(None, False), ("PASS", True)])
-def test_assemble_stamp_omits_delivery_block_when_verdict_is_none(tmp_path, verdict, expect_key):
+def test_assemble_stamp_omits_delivery_block_when_verdict_is_none(tmp_path: Path, verdict, expect_key) -> None:
     """A stamp built with no delivery verdict carries no `delivery` key."""
     integration = tmp_path / "state" / "i.md"
     stamp = m._assemble_stamp(

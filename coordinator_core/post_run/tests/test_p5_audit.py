@@ -6,6 +6,7 @@ import json
 
 from coordinator_core.ops import post_run_finish
 from coordinator_core.post_run import p5_audit
+from pathlib import Path
 
 _A = "docs" + "/wiki/a.md"
 _B = "docs" + "/wiki/b.md"
@@ -31,7 +32,7 @@ RESULT = {
 LOGS = ["phase-3d: ok", "unrelated noise", "BLOCKED nothing"]
 
 
-def test_counts_and_log_lines(tmp_path):
+def test_counts_and_log_lines(tmp_path: Path) -> None:
     out = p5_audit.run({"result": RESULT, "logs": LOGS}, [], repo_root=tmp_path)
     rep = out["report"]
     assert rep["promoted_files"] == 2 and rep["distillation_log_rows"] == 2
@@ -45,7 +46,7 @@ def test_counts_and_log_lines(tmp_path):
     assert (rep["delete_md"], rep["delete_non_md"]) == (1, 1)
 
 
-def test_unexplained_both_sides(tmp_path):
+def test_unexplained_both_sides(tmp_path: Path) -> None:
     porcelain = [
         f" M {_A}",
         "?? docs/decisions/DR-1.md",
@@ -60,7 +61,7 @@ def test_unexplained_both_sides(tmp_path):
     assert p5_audit.run(RESULT, porcelain[:4], repo_root=tmp_path)["unexplained"] == []
 
 
-def test_evidence_files(tmp_path):
+def test_evidence_files(tmp_path: Path) -> None:
     out = p5_audit.run(RESULT, [], repo_root=tmp_path)
     assert out["evidence"] == [
         "state/post-run/r-1/p5-delete-md.txt",
@@ -74,18 +75,18 @@ def test_evidence_files(tmp_path):
     ]
 
 
-def test_empty_result_writes_nothing(tmp_path):
+def test_empty_result_writes_nothing(tmp_path: Path) -> None:
     out = p5_audit.run({}, [" M a.md"], repo_root=tmp_path)
     assert out["evidence"] == [] and out["unexplained"] == ["a.md"]
     assert not (tmp_path / "state").exists()
 
 
-def test_run_id_cannot_escape_evidence_dir(tmp_path):
+def test_run_id_cannot_escape_evidence_dir(tmp_path: Path) -> None:
     out = p5_audit.run({"run_id": "../../x", "distillation_log_rows": [{"path": "p"}]}, [], repo_root=tmp_path)
     assert all(e.startswith("state/post-run/") and ".." not in e for e in out["evidence"])
 
 
-def test_finish_audit_consumes_run_output(tmp_path):
+def test_finish_audit_consumes_run_output(tmp_path: Path) -> None:
     unexplained, evidence = post_run_finish._audit(
         "distill", {"result": RESULT, "porcelain": [" M src/stray.py"]}, tmp_path)
     assert unexplained == ["src/stray.py"] and len(evidence) == 2

@@ -214,3 +214,62 @@ def test_hook_class_waiters_leave_a_slot_for_a_mutating_request(tmp_path, monkey
         assert _wait_for(lambda: any(m["method"] == MUTATING for m in pool.messages), 1.0)
     finally:
         _drain(pool, hooks + [mutator])
+
+
+class _NoopPool:
+    def __init__(self):
+        self.submitted = []
+
+    def submit(self, fn):
+        fut = concurrent.futures.Future()
+        self.submitted.append(fut)
+        return fut
+
+
+def _prewarm_ctx(tmp_path):
+    """A context whose pool builders hand out recording pools."""
+    ctx = _ctx(tmp_path, None)
+    pools = {"dispatch": _NoopPool(), "guard": _NoopPool()}
+    ctx._ensure_dispatch_pool = lambda: pools["dispatch"]
+    ctx._ensure_guard_pool = lambda: pools["guard"]
+    return ctx, pools
+
+
+def test_boot_prewarm_starts_workers_in_both_pools_off_the_calling_thread(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "_HEAL_PREWARM_WAIT_SECS", 0.05)
+    ctx, pools = _prewarm_ctx(tmp_path)
+
+    thread = ctx.start_boot_prewarm()
+
+    assert thread is not threading.current_thread()
+    assert _wait_for(lambda: len(pools["guard"].submitted) == server._HEAL_PREWARM_WORKERS)
+    assert _wait_for(lambda: len(pools["dispatch"].submitted) == 1)
+    thread.join(2)
+    assert not thread.is_alive()
+
+
+def test_boot_prewarm_returns_before_the_pools_finish_warming(tmp_path, monkeypatch):
+    monkeypatch.setattr(server, "_HEAL_PREWARM_WAIT_SECS", 5.0)
+    ctx, pools = _prewarm_ctx(tmp_path)
+
+    t0 = time.monotonic()
+    thread = ctx.start_boot_prewarm()
+    returned_in = time.monotonic() - t0
+
+    assert _wait_for(lambda: len(pools["dispatch"].submitted) == 1)
+    assert thread.is_alive()
+    assert returned_in < 0.5
+    for fut in pools["guard"].submitted + pools["dispatch"].submitted:
+        fut.set_result(None)
+    thread.join(2)
+    assert not thread.is_alive()
+
+
+def test_boot_prewarm_swallows_a_pool_build_failure(tmp_path, monkeypatch):
+    ctx, _pools = _prewarm_ctx(tmp_path)
+
+    def _boom():
+        raise RuntimeError("no pool")
+
+    ctx._ensure_guard_pool = _boom
+    ctx.start_boot_prewarm().join(2)

@@ -13,14 +13,15 @@ from coordinator_core.ops.check_machine_local_regeneratability import (
     main,
 )
 from coordinator_core.testing.fake_machine_local import write_fake_machine_local
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _isolated_settings_home(tmp_path, monkeypatch):
+def _isolated_settings_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
 
 
-def test_ladder_snapshot_dumps_via_kernel_when_present_else_forwarder(tmp_path, monkeypatch):
+def test_ladder_snapshot_dumps_via_kernel_when_present_else_forwarder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import machine_local_spawn
     from coordinator_core.ops.check_machine_local_regeneratability import _ladder_snapshot
 
@@ -50,7 +51,7 @@ def _run(claude_dir, capsys, argv=None, monkeypatch=None, ml_dir=None):
     return rc, captured.out, captured.err
 
 
-def test_clean_state_silent_exit_zero(tmp_path, capsys, monkeypatch):
+def test_clean_state_silent_exit_zero(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
         """
@@ -97,7 +98,7 @@ schema = 1
     assert "install-surface-completeness defect" not in err
 
 
-def test_gap_gitignored_only_flags_finding(tmp_path, capsys, monkeypatch):
+def test_gap_gitignored_only_flags_finding(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
         """
@@ -145,7 +146,7 @@ schema = 1
     assert "'repos.dronesim'" not in err
 
 
-def test_full_coverage_no_unclassified_warning(tmp_path, capsys, monkeypatch):
+def test_full_coverage_no_unclassified_warning(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
         """
@@ -175,7 +176,7 @@ schema = 1
     assert "absent from [regeneratability]" not in err
 
 
-def test_missing_key_flags_unclassified_warning(tmp_path, capsys, monkeypatch):
+def test_missing_key_flags_unclassified_warning(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
         """
@@ -219,7 +220,7 @@ schema = 1
     assert "plugin.mirrors" in err
 
 
-def test_plugin_mirrors_namespace_prefix_satisfies_check1(tmp_path, capsys, monkeypatch):
+def test_plugin_mirrors_namespace_prefix_satisfies_check1(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
         """
@@ -248,7 +249,7 @@ schema = 1
     assert "'plugin.mirrors'" not in err
 
 
-def test_repos_key_ladder_resolved_suppresses_finding(tmp_path, capsys, monkeypatch):
+def test_repos_key_ladder_resolved_suppresses_finding(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
         """
@@ -276,7 +277,7 @@ schema = 1
     assert "repos.dronesim" not in err
 
 
-def test_repos_key_ladder_snapshot_missing_key_falls_through(tmp_path, capsys, monkeypatch):
+def test_repos_key_ladder_snapshot_missing_key_falls_through(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
         """
@@ -300,7 +301,7 @@ schema = 1
     assert "repos.dronesim" in err
 
 
-def test_repos_key_missing_ladder_binary_falls_through_safely(tmp_path, capsys, monkeypatch):
+def test_repos_key_missing_ladder_binary_falls_through_safely(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
         """
@@ -324,7 +325,7 @@ schema = 1
 # ---------------------------------------------------------------------------
 # Missing HOME/CLAUDE_HOME/USERPROFILE — offer-shaped, exit 0, one stderr line
 # ---------------------------------------------------------------------------
-def test_unresolvable_home_exits_zero(capsys, monkeypatch):
+def test_unresolvable_home_exits_zero(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.delenv("HOME", raising=False)
     monkeypatch.delenv("USERPROFILE", raising=False)
@@ -338,14 +339,14 @@ def test_unresolvable_home_exits_zero(capsys, monkeypatch):
     assert "CLAUDE_DIR is empty" in captured.err
 
 
-def test_missing_machine_local_dir_no_crash(tmp_path, capsys, monkeypatch):
+def test_missing_machine_local_dir_no_crash(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     claude_dir = tmp_path / ".claude"
     ml_dir = tmp_path / ".claude" / "machine-local"
     rc, out, err = _run(claude_dir, capsys, monkeypatch=monkeypatch, ml_dir=ml_dir)
     assert rc == 0
 
 
-def test_malformed_toml_emits_parse_error_and_exits_zero(tmp_path, capsys, monkeypatch):
+def test_malformed_toml_emits_parse_error_and_exits_zero(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text("this is not [valid toml\n")
 
@@ -355,7 +356,7 @@ def test_malformed_toml_emits_parse_error_and_exits_zero(tmp_path, capsys, monke
     assert "Failed to parse" in err
 
 
-def test_registry_resolves_via_settings_home_ladder(tmp_path, capsys, monkeypatch):
+def test_registry_resolves_via_settings_home_ladder(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MACHINE_LOCAL_REGISTRY_DIR", raising=False)
     settings_home = tmp_path / "settings-home"
     ml_dir = settings_home / "machine-local"
@@ -392,7 +393,7 @@ schema = 1
     assert "absent from [regeneratability]" not in err
 
 
-def test_help_flag_prints_usage(capsys):
+def test_help_flag_prints_usage(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--help"])
     captured = capsys.readouterr()
     assert rc == 0
@@ -403,7 +404,7 @@ def test_help_flag_prints_usage(capsys):
 # AC8 (docs/plans/2026-08-07-two-tier-engine-root-adopt-dr132.md, chunk C6b):
 # repos.claude_klabauter joins COORDINATOR_OWNED_KEYS + the family-prefix arm.
 # ---------------------------------------------------------------------------
-def test_claude_klabauter_classified_no_warning(tmp_path, capsys, monkeypatch):
+def test_claude_klabauter_classified_no_warning(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
         """
@@ -433,7 +434,7 @@ schema = 1
     assert "absent from [regeneratability]" not in err
 
 
-def test_claude_klabauter_unclassified_warns(tmp_path, capsys, monkeypatch):
+def test_claude_klabauter_unclassified_warns(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     claude_dir, ml_dir = _make_claude_dir(tmp_path)
     (ml_dir / "registry.toml").write_text(
         """
@@ -479,22 +480,22 @@ schema = 1
     assert "repos.claude_klabauter" in err
 
 
-def test_family_prefix_arm_resolves_dotted_key_against_bare_family_entry():
+def test_family_prefix_arm_resolves_dotted_key_against_bare_family_entry() -> None:
     assert _key_matches_regen_entry("engine.working_repos.content_root", "engine.working_repos")
 
 
-def test_family_prefix_arm_rejects_leading_substring_without_dotted_boundary():
+def test_family_prefix_arm_rejects_leading_substring_without_dotted_boundary() -> None:
     assert not _key_matches_regen_entry("engine.working_repositories", "engine.working_repos")
     assert not _key_matches_regen_entry("engine.working_repos", "engine.working_repositories")
 
 
-def test_external_workspaces_family_arm_classifies_dotted_keys():
+def test_external_workspaces_family_arm_classifies_dotted_keys() -> None:
     assert _key_matches_regen_entry("external_workspaces.x.path", "external_workspaces")
     assert _key_matches_regen_entry("external_workspaces.p4_x.p4_client", "external_workspaces")
     assert not _key_matches_regen_entry("external_workspacesx.x.path", "external_workspaces")
     assert not _key_matches_regen_entry("external_workspaces.x.path", "external_workspaces2")
 
 
-def test_plugin_mirrors_family_prefix_arm_still_works_via_helper():
+def test_plugin_mirrors_family_prefix_arm_still_works_via_helper() -> None:
     assert _key_matches_regen_entry("plugin.mirrors", "plugin.mirrors.coordinator-claude")
     assert not _key_matches_regen_entry("plugin.mirrors", "plugin.mirrorsx")

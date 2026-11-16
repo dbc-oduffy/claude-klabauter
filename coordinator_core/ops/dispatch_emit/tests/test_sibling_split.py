@@ -16,9 +16,10 @@ from coordinator_core.ops.dispatch_emit.spine_read import EmitterRow
 from coordinator_core.ops.dispatch_emit.wave_map import build_dag
 
 from .conftest import REVIEW_KW
+from pathlib import Path
 
 
-def _row(id_, writes=None, deps=()):
+def _row(id_, writes=None, deps=()) -> EmitterRow:
     return EmitterRow(
         id=id_,
         title=f"t-{id_}",
@@ -53,11 +54,11 @@ def _plan_file(tmp_path, rows):
     return path
 
 
-def test_runtime_cap_formula():
+def test_runtime_cap_formula() -> None:
     assert [ss.runtime_cap(n) for n in (1, 2, 4, 8, 18, 64)] == [2, 2, 2, 6, 16, 16]
 
 
-def test_independent_branches_form_one_stage_of_packed_siblings():
+def test_independent_branches_form_one_stage_of_packed_siblings() -> None:
     dag = build_dag([_row(f"C{i}") for i in range(1, 7)])
     split = ss.plan_split(dag, 2)
     assert [s.rows for s in split.siblings] == [("C1", "C2"), ("C3", "C4"), ("C5", "C6")]
@@ -65,18 +66,18 @@ def test_independent_branches_form_one_stage_of_packed_siblings():
     assert split.achieved_width == 6 and split.plan_width == 6
 
 
-def test_below_cap_dag_is_not_split():
+def test_below_cap_dag_is_not_split() -> None:
     assert ss.plan_split(build_dag([_row("C1"), _row("C2")]), 2) is None
 
 
-def test_cross_branch_dependency_is_level_segmented():
+def test_cross_branch_dependency_is_level_segmented() -> None:
     rows = [_row("A"), _row("B"), _row("C"), _row("D", deps=("A", "B", "C"))]
     split = ss.plan_split(build_dag(rows), 2)
     assert [(s.stage, s.rows) for s in split.siblings] == [(1, ("A", "B")), (1, ("C",)), (2, ("D",))]
     assert [s.carrier for s in split.siblings] == [False, False, True]
 
 
-def test_every_row_lands_in_exactly_one_sibling():
+def test_every_row_lands_in_exactly_one_sibling() -> None:
     rows = [_row(f"R{i}") for i in range(5)] + [_row("J", deps=("R0", "R1", "R2")), _row("K", deps=("J",))]
     split = ss.plan_split(build_dag(rows), 2)
     flat = [r for s in split.siblings for r in s.rows]
@@ -84,7 +85,7 @@ def test_every_row_lands_in_exactly_one_sibling():
     assert all(s.width <= 2 for s in split.siblings)
 
 
-def test_manifest_states_firing_order_and_commit_carrier():
+def test_manifest_states_firing_order_and_commit_carrier() -> None:
     rows = [_row("A"), _row("B"), _row("C"), _row("D", deps=("A", "B", "C"))]
     split = ss.plan_split(build_dag(rows), 2)
     m = ss.build_manifest(split, plan_path="p.md", script_paths={s.index: f"s{s.index}.mjs" for s in split.siblings})
@@ -98,21 +99,21 @@ def test_manifest_states_firing_order_and_commit_carrier():
 
 
 @pytest.fixture
-def cap2(monkeypatch):
+def cap2(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ss, "runtime_cap", lambda cpus=None: 2)
 
 
 ROWS = [("C1", ()), ("C2", ()), ("C3", ()), ("C4", ()), ("C5", ("C1",))]
 
 
-def test_below_cap_emit_is_byte_identical_with_and_without_auto_split(tmp_path, monkeypatch):
+def test_below_cap_emit_is_byte_identical_with_and_without_auto_split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plan = _plan_file(tmp_path, ROWS)
     plain = emit_script(plan, repo_root=tmp_path, **REVIEW_KW)
     monkeypatch.setattr(ss, "runtime_cap", lambda cpus=None: 16)
     assert emit_script(plan, repo_root=tmp_path, auto_split=True, **REVIEW_KW) == plain
 
 
-def test_wide_plan_raises_with_split_only_under_auto_split(tmp_path, cap2):
+def test_wide_plan_raises_with_split_only_under_auto_split(tmp_path: Path, cap2) -> None:
     plan = _plan_file(tmp_path, ROWS)
     emit_script(plan, repo_root=tmp_path, **REVIEW_KW)
     with pytest.raises(ss.WidthOverCapError) as exc:
@@ -139,7 +140,7 @@ def _sibling_scripts(tmp_path, split):
     return out
 
 
-def test_only_the_carrier_commits_and_its_marker_covers_every_row(tmp_path, cap2):
+def test_only_the_carrier_commits_and_its_marker_covers_every_row(tmp_path: Path, cap2) -> None:
     plan = _plan_file(tmp_path, ROWS)
     with pytest.raises(ss.WidthOverCapError) as exc:
         emit_script(plan, repo_root=tmp_path, auto_split=True, **REVIEW_KW)
@@ -188,7 +189,7 @@ def _manifest():
     return ss.build_manifest(split, plan_path="p.md", script_paths={})
 
 
-def test_merge_digests_is_schema_valid_and_aggregates():
+def test_merge_digests_is_schema_valid_and_aggregates() -> None:
     m = _manifest()
     carrier_params = {"incomplete_chunks": ["D"], "inline_review": None, "held": []}
     digests = {
@@ -224,12 +225,12 @@ def test_merge_digests_is_schema_valid_and_aggregates():
     assert merged["width"]["rows"] == 4
 
 
-def test_merge_requires_every_sibling_digest():
+def test_merge_requires_every_sibling_digest() -> None:
     with pytest.raises(ValueError, match="sib3"):
         ss.merge_digests({"sib1": _digest(["A"]), "sib2": _digest(["B"])}, _manifest())
 
 
-def test_cli_emit_siblings_passes_scope_and_prints_manifest(tmp_path, monkeypatch, capsys):
+def test_cli_emit_siblings_passes_scope_and_prints_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     rows = [_row("A"), _row("B"), _row("C"), _row("D", deps=("A", "B", "C"))]
     split = ss.plan_split(build_dag(rows), 2)
     seen = []

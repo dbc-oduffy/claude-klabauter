@@ -7,6 +7,7 @@ from pathlib import Path
 from coordinator_core.benchmarks.distill_run_cost import build_fates, disposal_manifest_for
 from coordinator_core.distill import manifest_schema as schema
 from coordinator_core.distill.run_cost import project_run_cost, scoped_files_sha256
+import pytest
 
 _G1 = "docs" + "/wiki/g1.md"
 _G2 = "docs" + "/wiki/g2.md"
@@ -35,7 +36,7 @@ def _payload(batches: list[list[str]], guides: dict[str, str], batch_extra: dict
     }
 
 
-def test_dispatches_and_bytes_default_lists_every_guide_to_every_agent(tmp_path):
+def test_dispatches_and_bytes_default_lists_every_guide_to_every_agent(tmp_path: Path) -> None:
     for name, size in (("a.md", 100), ("b.md", 200), ("c.md", 300)):
         _write(tmp_path, name, size)
     _write(tmp_path, _G1, 1000)
@@ -53,7 +54,7 @@ def test_dispatches_and_bytes_default_lists_every_guide_to_every_agent(tmp_path)
     assert cost["unreadable_files"] == []
 
 
-def test_digests_and_relevant_guides_shrink_scan_bytes_but_not_the_scoped_set(tmp_path):
+def test_digests_and_relevant_guides_shrink_scan_bytes_but_not_the_scoped_set(tmp_path: Path) -> None:
     _write(tmp_path, "a.md", 5000)
     _write(tmp_path, "d/a.digest", 50)
     _write(tmp_path, _G1, 1000)
@@ -70,7 +71,7 @@ def test_digests_and_relevant_guides_shrink_scan_bytes_but_not_the_scoped_set(tm
     assert after["scoped_files_sha256"] == before["scoped_files_sha256"]
 
 
-def test_relevant_guides_as_emitted_entry_dicts_are_costed_by_path(tmp_path):
+def test_relevant_guides_as_emitted_entry_dicts_are_costed_by_path(tmp_path: Path) -> None:
     _write(tmp_path, "a.md", 10)
     _write(tmp_path, _G1, 1000)
     guides = {"g1": _G1}
@@ -79,7 +80,7 @@ def test_relevant_guides_as_emitted_entry_dicts_are_costed_by_path(tmp_path):
     assert cost["scan_bytes_split"]["guides"] == 1000
 
 
-def test_scan_prompt_tokens_are_per_batch_files_plus_guides(tmp_path):
+def test_scan_prompt_tokens_are_per_batch_files_plus_guides(tmp_path: Path) -> None:
     _write(tmp_path, "a.md", 40_000)
     _write(tmp_path, "b.md", 80_000)
     _write(tmp_path, _G1, 4_000)
@@ -91,7 +92,7 @@ def test_scan_prompt_tokens_are_per_batch_files_plus_guides(tmp_path):
     assert cost["max_scan_prompt_tokens"] == 21_000
 
 
-def test_scan_prompt_tokens_price_the_digest_not_the_file(tmp_path):
+def test_scan_prompt_tokens_price_the_digest_not_the_file(tmp_path: Path) -> None:
     _write(tmp_path, "a.md", 800_000)
     _write(tmp_path, "d/a.digest", 4_000)
     payload = _payload([["a.md"]], {}, {1: {"digests": {"a.md": "d/a.digest"}}})
@@ -99,14 +100,14 @@ def test_scan_prompt_tokens_price_the_digest_not_the_file(tmp_path):
     assert project_run_cost(_payload([["a.md"]], {}), tmp_path)["max_scan_prompt_tokens"] == 200_000
 
 
-def test_slug_shards_add_load_dispatches(tmp_path):
+def test_slug_shards_add_load_dispatches(tmp_path: Path) -> None:
     guides = {f"slug-{i:04d}": f"docs/wiki/{'p' * 200}-{i}.md" for i in range(200)}
     cost = project_run_cost(_payload([["a.md"]], guides), tmp_path)
     shards = cost["dispatches_by_phase"]["load"] - 1 - 1
     assert shards > 1
 
 
-def test_synthesis_phase_is_priced_from_topics(tmp_path):
+def test_synthesis_phase_is_priced_from_topics(tmp_path: Path) -> None:
     from coordinator_core.ops.distill_scope import projected_topics, synthesis_cost
 
     one = project_run_cost(_payload([["a.md"]], {}), tmp_path)
@@ -141,7 +142,7 @@ def test_projection_is_the_shared_scope_projection_over_the_measured_shape(tmp_p
     assert cost["projected"]["agents"] >= sum(cost["dispatches_by_phase"].values())
 
 
-def test_bench_bar_counts_synthesis_tokens_and_minutes(tmp_path, monkeypatch):
+def test_bench_bar_counts_synthesis_tokens_and_minutes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.benchmarks import distill_run_cost as bench
 
     payload = _payload([[f"f{i}.md" for i in range(44)]], {})
@@ -162,19 +163,19 @@ def test_bench_bar_counts_synthesis_tokens_and_minutes(tmp_path, monkeypatch):
     assert bench.measure(tmp_path)["bar"]["met"] is False
 
 
-def test_missing_file_is_listed_not_silently_zero(tmp_path):
+def test_missing_file_is_listed_not_silently_zero(tmp_path: Path) -> None:
     cost = project_run_cost(_payload([["gone.md"]], {}), tmp_path)
     assert cost["unreadable_files"] == ["gone.md"]
 
 
-def test_scoped_files_sha_ignores_batch_layout():
+def test_scoped_files_sha_ignores_batch_layout() -> None:
     one = _payload([["b.md", "a.md", "c.md"]], {})
     two = _payload([["c.md"], ["a.md"], ["b.md"]], {})
     assert scoped_files_sha256(one) == scoped_files_sha256(two)
     assert scoped_files_sha256(one) != scoped_files_sha256(_payload([["a.md", "b.md"]], {}))
 
 
-def test_fates_fixture_gives_every_file_exactly_one_fate_and_is_deterministic():
+def test_fates_fixture_gives_every_file_exactly_one_fate_and_is_deterministic() -> None:
     files = [f"archive/handoffs/h-{i}.md" for i in range(10)]
     fates = build_fates(files)
     assert sorted(fates) == sorted(files)
@@ -182,7 +183,7 @@ def test_fates_fixture_gives_every_file_exactly_one_fate_and_is_deterministic():
     assert set(fates.values()) <= {"NEW_GUIDE", "ALREADY_CAPTURED", "EPHEMERAL"}
 
 
-def test_bar_verdict_pins_both_sides_of_every_axis():
+def test_bar_verdict_pins_both_sides_of_every_axis() -> None:
     from coordinator_core.benchmarks.distill_run_cost import bar_verdict
     from coordinator_core.contract import run_budget
 
@@ -196,7 +197,7 @@ def test_bar_verdict_pins_both_sides_of_every_axis():
     assert bar_verdict(1, 1_000, 1)["within"] == {"agents": True, "tokens": True, "minutes": True}
 
 
-def test_before_after_reports_each_axis_against_the_cap_from_either_report_shape():
+def test_before_after_reports_each_axis_against_the_cap_from_either_report_shape() -> None:
     from coordinator_core.benchmarks.distill_run_cost import before_after, modeled_minutes
 
     old = {"dispatches_total": 15, "input_tokens_est_total": 577_000, "batch_count": 6}
@@ -210,7 +211,7 @@ def test_before_after_reports_each_axis_against_the_cap_from_either_report_shape
     assert got["minutes"] == {"before": modeled_minutes(6), "after": modeled_minutes(1), "cap": 15}
 
 
-def test_disposal_manifest_is_schema_valid_and_byte_stable():
+def test_disposal_manifest_is_schema_valid_and_byte_stable() -> None:
     fates = build_fates([f"archive/handoffs/h-{i}.md" for i in range(9)])
     manifest = disposal_manifest_for(fates)
     assert schema.validate_disposal_manifest(manifest) == []
@@ -218,7 +219,7 @@ def test_disposal_manifest_is_schema_valid_and_byte_stable():
     assert schema.canonical_manifest_bytes(manifest) == schema.canonical_manifest_bytes(disposal_manifest_for(dict(fates)))
 
 
-def test_inlined_args_need_no_load_relay_and_shard_mode_still_counts_them(tmp_path):
+def test_inlined_args_need_no_load_relay_and_shard_mode_still_counts_them(tmp_path: Path) -> None:
     from coordinator_core.distill import launch_args
 
     for name in ("a.md", "b.md"):
@@ -236,7 +237,7 @@ def test_inlined_args_need_no_load_relay_and_shard_mode_still_counts_them(tmp_pa
     assert inlined["scoped_files_sha256"] == shard_mode["scoped_files_sha256"]
 
 
-def test_chunked_inlined_args_are_priced_like_the_unchunked_input(tmp_path):
+def test_chunked_inlined_args_are_priced_like_the_unchunked_input(tmp_path: Path) -> None:
     from coordinator_core.distill import launch_args
 
     count = launch_args.MAX_ARRAY_ENTRIES + 3

@@ -5,10 +5,11 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.hooks import _em_write_budget as leaf
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _tmp_elsewhere(monkeypatch, tmp_path):
+def _tmp_elsewhere(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # tmp_path lives under the system temp dir, which is itself exempt; point the temp dir elsewhere.
     other = tmp_path / "_systmp"
     other.mkdir()
@@ -21,34 +22,34 @@ def _repo(base):
     return repo
 
 
-def test_repo_scratch_is_exempt(tmp_path):
+def test_repo_scratch_is_exempt(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     assert leaf._is_scratch_or_tmp(str(repo / "scratch" / "x"))
     assert leaf._is_scratch_or_tmp(str(repo / "src" / "scratch" / "x.py"))
 
 
-def test_scratch_above_repo_root_is_not_exempt(tmp_path):
+def test_scratch_above_repo_root_is_not_exempt(tmp_path: Path) -> None:
     repo = _repo(tmp_path / "scratch" / "fam-1a")
     assert not leaf._is_scratch_or_tmp(str(repo / "src" / "x.py"))
 
 
-def test_scratch_above_repo_root_still_exempts_repo_scratch(tmp_path):
+def test_scratch_above_repo_root_still_exempts_repo_scratch(tmp_path: Path) -> None:
     repo = _repo(tmp_path / "scratch" / "fam-1a")
     assert leaf._is_scratch_or_tmp(str(repo / "scratch" / "x"))
 
 
-def test_no_repo_falls_back_to_absolute_path(tmp_path):
+def test_no_repo_falls_back_to_absolute_path(tmp_path: Path) -> None:
     assert leaf._is_scratch_or_tmp(str(tmp_path / "scratch" / "x"))
     assert not leaf._is_scratch_or_tmp(str(tmp_path / "other" / "x"))
 
 
-def test_tmp_exemption_unchanged(tmp_path, monkeypatch):
+def test_tmp_exemption_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sys_tmp = tmp_path / "_systmp"
     repo = _repo(sys_tmp)
     assert leaf._is_scratch_or_tmp(str(repo / "src" / "x.py"))
 
 
-def test_no_process_spawn(tmp_path, monkeypatch):
+def test_no_process_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     def _boom(*a, **k):

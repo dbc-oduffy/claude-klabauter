@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.hooks import scratch_size_probe as probe
 from coordinator_core.hooks.scratch_size_probe import ScratchRead, read_scratch
+from pathlib import Path
 
 
 class FakeClock:
@@ -23,7 +24,7 @@ class FakeClock:
         return 0.0 if self.calls < self.past_on else 1000.0
 
 
-def _tree(base, files=3, sub="sub"):
+def _tree(base, files: int = 3, sub: str = "sub") -> tuple[int, int]:
     base.mkdir(parents=True, exist_ok=True)
     total = 0
     n = 0
@@ -48,16 +49,16 @@ def _can_symlink(tmp_path) -> bool:
     return True
 
 
-def test_small_tree_finishes_with_own_totals(tmp_path):
+def test_small_tree_finishes_with_own_totals(tmp_path: Path) -> None:
     entries, size = _tree(tmp_path / "a")
     assert read_scratch([tmp_path / "a"]) == ScratchRead(True, entries, size)
 
 
-def test_missing_root_is_empty_finished(tmp_path):
+def test_missing_root_is_empty_finished(tmp_path: Path) -> None:
     assert read_scratch([tmp_path / "nope"]) == ScratchRead(True, 0, 0)
 
 
-def test_two_roots_sum_and_missing_between(tmp_path):
+def test_two_roots_sum_and_missing_between(tmp_path: Path) -> None:
     e1, s1 = _tree(tmp_path / "a")
     e2, s2 = _tree(tmp_path / "b", files=2)
     want = ScratchRead(True, e1 + e2, s1 + s2)
@@ -65,7 +66,7 @@ def test_two_roots_sum_and_missing_between(tmp_path):
     assert read_scratch([tmp_path / "a", tmp_path / "missing", tmp_path / "b"]) == want
 
 
-def test_deadline_between_roots_keeps_first_only(tmp_path):
+def test_deadline_between_roots_keeps_first_only(tmp_path: Path) -> None:
     e1, s1 = _tree(tmp_path / "a")
     _tree(tmp_path / "b")
     # Calls: 1 entry; 2 and 3 before root a's two directories; 4 before root b's directory.
@@ -73,7 +74,7 @@ def test_deadline_between_roots_keeps_first_only(tmp_path):
     assert got == ScratchRead(False, e1, s1)
 
 
-def test_deadline_after_first_directory_is_partial(tmp_path):
+def test_deadline_after_first_directory_is_partial(tmp_path: Path) -> None:
     entries, size = _tree(tmp_path / "a")
     got = read_scratch([tmp_path / "a"], clock=FakeClock(3))
     assert got.finished is False
@@ -81,7 +82,7 @@ def test_deadline_after_first_directory_is_partial(tmp_path):
     assert got.bytes < size
 
 
-def test_in_directory_deadline_stops_flat_directory(tmp_path, monkeypatch):
+def test_in_directory_deadline_stops_flat_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     flat = tmp_path / "flat"
     flat.mkdir()
     for i in range(20):
@@ -92,12 +93,12 @@ def test_in_directory_deadline_stops_flat_directory(tmp_path, monkeypatch):
     assert 0 < got.entries < 20
 
 
-def test_clock_already_past_on_second_call_reads_nothing(tmp_path):
+def test_clock_already_past_on_second_call_reads_nothing(tmp_path: Path) -> None:
     _tree(tmp_path / "a")
     assert read_scratch([tmp_path / "a"], clock=FakeClock(2)) == ScratchRead(False, 0, 0)
 
 
-def test_symlink_to_outside_directory_adds_nothing(tmp_path):
+def test_symlink_to_outside_directory_adds_nothing(tmp_path: Path) -> None:
     if not _can_symlink(tmp_path):
         pytest.skip("host cannot create symlinks")
     outside = tmp_path / "outside"
@@ -109,7 +110,7 @@ def test_symlink_to_outside_directory_adds_nothing(tmp_path):
     assert read_scratch([root]) == ScratchRead(True, 1, 5)
 
 
-def test_root_symlink_is_read_through(tmp_path):
+def test_root_symlink_is_read_through(tmp_path: Path) -> None:
     if not _can_symlink(tmp_path):
         pytest.skip("host cannot create symlinks")
     entries, size = _tree(tmp_path / "real")
@@ -117,20 +118,20 @@ def test_root_symlink_is_read_through(tmp_path):
     assert read_scratch([tmp_path / "rootlink"]) == ScratchRead(True, entries, size)
 
 
-def _flat(base, n):
+def _flat(base, n) -> None:
     base.mkdir(parents=True, exist_ok=True)
     for i in range(n):
         (base / f"f{i}").write_bytes(b"ab")
 
 
-def test_tree_of_exactly_the_limit_finishes(tmp_path, monkeypatch):
+def test_tree_of_exactly_the_limit_finishes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(probe, "WALK_ENTRY_LIMIT", 10)
     _flat(tmp_path / "a", 10)
     got = read_scratch([tmp_path / "a"])
     assert got.finished is True and got.over_entries is False and got.entries == 10
 
 
-def test_tree_one_past_the_limit_stops_on_count(tmp_path, monkeypatch):
+def test_tree_one_past_the_limit_stops_on_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(probe, "WALK_ENTRY_LIMIT", 10)
     _flat(tmp_path / "a", 11)
     got = read_scratch([tmp_path / "a"])
@@ -138,13 +139,13 @@ def test_tree_one_past_the_limit_stops_on_count(tmp_path, monkeypatch):
     assert got.bytes <= 22
 
 
-def test_over_limit_tree_read_twice_is_equal(tmp_path, monkeypatch):
+def test_over_limit_tree_read_twice_is_equal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(probe, "WALK_ENTRY_LIMIT", 10)
     _flat(tmp_path / "a", 25)
     assert read_scratch([tmp_path / "a"]) == read_scratch([tmp_path / "a"])
 
 
-def test_limit_is_one_count_across_roots(tmp_path, monkeypatch):
+def test_limit_is_one_count_across_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(probe, "WALK_ENTRY_LIMIT", 10)
     _flat(tmp_path / "a", 6)
     _flat(tmp_path / "b", 6)
@@ -152,7 +153,7 @@ def test_limit_is_one_count_across_roots(tmp_path, monkeypatch):
     assert got.finished is False and got.over_entries is True and got.entries == 10
 
 
-def test_deadline_before_limit_is_not_over_entries(tmp_path, monkeypatch):
+def test_deadline_before_limit_is_not_over_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(probe, "WALK_ENTRY_LIMIT", 1000)
     monkeypatch.setattr(probe, "DEADLINE_STRIDE_ENTRIES", 4)
     _flat(tmp_path / "a", 50)
@@ -160,18 +161,18 @@ def test_deadline_before_limit_is_not_over_entries(tmp_path, monkeypatch):
     assert got.finished is False and got.over_entries is False
 
 
-def test_default_clock_is_thread_time_and_source_has_no_monotonic():
+def test_default_clock_is_thread_time_and_source_has_no_monotonic() -> None:
     import time
 
     assert inspect.signature(read_scratch).parameters["clock"].default is time.thread_time
     assert "monotonic" not in inspect.getsource(probe)
 
 
-def test_entry_limit_constant_is_the_plans_number():
+def test_entry_limit_constant_is_the_plans_number() -> None:
     assert probe.WALK_ENTRY_LIMIT == 4000
 
 
-def test_module_source_spawns_nothing():
+def test_module_source_spawns_nothing() -> None:
     src = inspect.getsource(probe)
     for token in ("subprocess", "os.system", "os.popen", "os.spawn"):
         assert token not in src

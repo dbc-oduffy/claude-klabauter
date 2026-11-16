@@ -58,7 +58,7 @@ def _author(root: Path, rel: str, text: str) -> None:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], root)
@@ -106,7 +106,7 @@ def _dirty(root: Path) -> set:
     return {ln[3:] for ln in _git(["status", "--porcelain", "-uall"], root).splitlines()}
 
 
-def test_overlap_refusal_prints_a_release_line_that_lands(repo):
+def test_overlap_refusal_prints_a_release_line_that_lands(repo) -> None:
     _author(repo, "a.py", "a\n")
     _author(repo, "b.py", "b\n")
     _declare(repo, [("C1", ["a.py"]), ("C2", ["b.py", "a.py"])])
@@ -123,7 +123,7 @@ def test_overlap_refusal_prints_a_release_line_that_lands(repo):
     assert "a.py" in _tree(repo)
 
 
-def test_ledgerless_blob_drift_prints_no_revise_target_and_a_withhold_line_that_lands(repo):
+def test_ledgerless_blob_drift_prints_no_revise_target_and_a_withhold_line_that_lands(repo) -> None:
     _author(repo, "a.py", "a = 1\n")
     _author(repo, "b.py", "b = 1\n")
     _declare(repo, [("C1", ["a.py"]), ("C2", ["b.py"])])
@@ -142,7 +142,7 @@ def test_ledgerless_blob_drift_prints_no_revise_target_and_a_withhold_line_that_
     assert "a.py" in _dirty(repo)
 
 
-def test_a_ledger_bearing_blob_drift_keeps_the_revise_remedy(repo):
+def test_a_ledger_bearing_blob_drift_keeps_the_revise_remedy(repo) -> None:
     _author(repo, "a.py", "a = 1\n")
     _declare(repo, [("C1", ["a.py"])])
     _write(repo, f"{RECORD_DIR_ROOT}/{RUN}/run.json", json.dumps({"run_id": RUN}))
@@ -154,7 +154,7 @@ def test_a_ledger_bearing_blob_drift_keeps_the_revise_remedy(repo):
     assert f"workflow.revise run_id={RUN}" in refused["error"]
 
 
-def test_direct_withhold_paths_param_keeps_the_path_out_without_a_record_dir(repo):
+def test_direct_withhold_paths_param_keeps_the_path_out_without_a_record_dir(repo) -> None:
     _author(repo, "a.py", "a = 1\n")
     _author(repo, "b.py", "b = 1\n")
     _declare(repo, [("C1", ["a.py"]), ("C2", ["b.py"])])
@@ -166,7 +166,7 @@ def test_direct_withhold_paths_param_keeps_the_path_out_without_a_record_dir(rep
     assert "a.py" in _dirty(repo)
 
 
-def test_a_malformed_withhold_paths_refuses_before_any_write(repo):
+def test_a_malformed_withhold_paths_refuses_before_any_write(repo) -> None:
     _author(repo, "a.py", "a = 1\n")
     _declare(repo, [("C1", ["a.py"])])
     head = _git(["rev-parse", "HEAD"], repo).strip()
@@ -177,7 +177,7 @@ def test_a_malformed_withhold_paths_refuses_before_any_write(repo):
     assert _git(["rev-parse", "HEAD"], repo).strip() == head
 
 
-def test_a_landing_trailer_and_reply_name_the_run_deleted_targets(repo):
+def test_a_landing_trailer_and_reply_name_the_run_deleted_targets(repo) -> None:
     from coordinator_core.ops.dispatch_emit import landing_integrity
     from coordinator_core.ops.dispatch_emit import landing_retest
 
@@ -217,14 +217,14 @@ def _review_only_fixture(repo: Path, *, edited_after_review: bool) -> dict:
     return _land(repo, inline_review=review)
 
 
-def test_review_only_landing_refreshes_the_expected_blob(repo):
+def test_review_only_landing_refreshes_the_expected_blob(repo) -> None:
     out = _review_only_fixture(repo, edited_after_review=False)
 
     assert out["committed"] is True, out
     assert "a.py" in _tree(repo)
 
 
-def test_review_only_landing_still_refuses_a_rewrite_after_the_review(repo):
+def test_review_only_landing_still_refuses_a_rewrite_after_the_review(repo) -> None:
     out = _review_only_fixture(repo, edited_after_review=True)
 
     assert out["committed"] is False and out["refused"] == "blob-drift", out
@@ -252,11 +252,11 @@ class TestTimedOutOverlay:
     Class-local ``repo``/``halted`` shadow this module's plain-git ``repo`` with the product-commit one."""
 
     @pytest.fixture
-    def repo(self, tmp_path, monkeypatch):
+    def repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         return _product_repo.__wrapped__(tmp_path, monkeypatch)
 
     @pytest.fixture
-    def halted(self, repo, monkeypatch):
+    def halted(self, repo, monkeypatch: pytest.MonkeyPatch):
         return _halted.__wrapped__(repo, monkeypatch)
 
     def _land(self, halted, monkeypatch, **review):
@@ -281,7 +281,7 @@ class TestTimedOutOverlay:
             repo_root=halted / ".git",
         )
 
-    def test_lands_with_an_advisory_naming_the_timeout_when_the_reverify_passed(self, halted, monkeypatch):
+    def test_lands_with_an_advisory_naming_the_timeout_when_the_reverify_passed(self, halted, monkeypatch: pytest.MonkeyPatch) -> None:
         result = self._land(halted, monkeypatch, reverify=_PASS)
 
         assert result["committed"] is True, result
@@ -292,7 +292,7 @@ class TestTimedOutOverlay:
         "review",
         [{}, {"reverify": {"status_after": "fail"}}, {"reverify": {"status_after": "pass", "failing": ["t"]}}],
     )
-    def test_still_refuses_when_the_reverify_did_not_pass(self, halted, monkeypatch, review):
+    def test_still_refuses_when_the_reverify_did_not_pass(self, halted, monkeypatch: pytest.MonkeyPatch, review) -> None:
         result = self._land(halted, monkeypatch, **review)
 
         assert result["committed"] is False and result["refused"] == "verify-overlay-unverified", result

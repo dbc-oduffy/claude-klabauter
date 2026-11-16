@@ -10,6 +10,7 @@ from coordinator_core.ops.dispatch_emit.emit import compose_script
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
 from .conftest import REVIEW_KW
+from pathlib import Path
 
 _FLAG = "_terminalTestsWanted"
 _EMIT_PUSH = "label: 'verify:' + id"
@@ -33,14 +34,14 @@ def _emit_script(tmp_path, *, with_test: bool) -> str:
     return compose_script([[row]], name="wf", description="d", repo_root=tmp_path, **REVIEW_KW)
 
 
-def test_ask_wave_gate_returns_before_its_agent_call_when_the_terminal_tests_run():
+def test_ask_wave_gate_returns_before_its_agent_call_when_the_terminal_tests_run() -> None:
     body = _wave_gate_body(_ask_script())
 
     assert f"if ({_FLAG}) return true;" in body
     assert body.index(f"if ({_FLAG}) return true;") < body.index("agent(")
 
 
-def test_ask_terminal_tests_flag_is_a_top_level_binding_the_wave_gate_can_read():
+def test_ask_terminal_tests_flag_is_a_top_level_binding_the_wave_gate_can_read() -> None:
     script = _ask_script()
     decl = f"\n  let {_FLAG} = false;"
 
@@ -50,7 +51,7 @@ def test_ask_terminal_tests_flag_is_a_top_level_binding_the_wave_gate_can_read()
     assert re.search(rf"const _rowVerifyWanted = [^;]*{_FLAG}", script)
 
 
-def test_ask_flag_stays_false_on_the_xs_arm_and_on_empty_test_targets_so_the_wave_leg_still_dispatches():
+def test_ask_flag_stays_false_on_the_xs_arm_and_on_empty_test_targets_so_the_wave_leg_still_dispatches() -> None:
     script = _ask_script()
     assign = re.search(rf"[\n;{{]\s*{_FLAG} = ([^;]*);", script)
 
@@ -64,7 +65,7 @@ def test_ask_flag_stays_false_on_the_xs_arm_and_on_empty_test_targets_so_the_wav
     assert body.index("if (!scope.length) return true;") < body.index("agent(")
 
 
-def test_emit_composes_the_per_row_verify_push_only_when_no_terminal_test_leg_composes(tmp_path):
+def test_emit_composes_the_per_row_verify_push_only_when_no_terminal_test_leg_composes(tmp_path: Path) -> None:
     with_terminal = _emit_script(tmp_path / "a", with_test=True)
     without_terminal = _emit_script(tmp_path / "b", with_test=False)
 
@@ -74,7 +75,7 @@ def test_emit_composes_the_per_row_verify_push_only_when_no_terminal_test_leg_co
     assert _EMIT_PUSH in without_terminal
 
 
-def test_grind_has_no_terminal_test_leg_so_its_verify_node_is_not_redundant():
+def test_grind_has_no_terminal_test_leg_so_its_verify_node_is_not_redundant() -> None:
     script = _grind_script()
 
     assert "label: 'verify-op'" in script

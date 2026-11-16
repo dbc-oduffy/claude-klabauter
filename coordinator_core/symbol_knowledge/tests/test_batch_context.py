@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 
 from coordinator_core.symbol_knowledge import batch_context as bc
+from pathlib import Path
 
 SRC = '''import os
 from pkg.util import helper as h, other
@@ -37,11 +38,11 @@ def _repo(tmp_path):
     return tmp_path
 
 
-def _t(name, path="pkg/m.py"):
+def _t(name, path: str = "pkg/m.py"):
     return {"qualified_name": name, "path": path}
 
 
-def test_span_hash_imports_and_neighbours(tmp_path):
+def test_span_hash_imports_and_neighbours(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     ctx = bc.resolve(root, [_t("pkg.m.beta"), _t("pkg.m.Box.open")])["pkg/m.py"]
     span = ctx.spans["pkg.m.beta"]
@@ -54,26 +55,26 @@ def test_span_hash_imports_and_neighbours(tmp_path):
     assert not any("def open" in n for n in ctx.neighbours)
 
 
-def test_scip_style_name_finds_the_span(tmp_path):
+def test_scip_style_name_finds_the_span(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     ctx = bc.resolve(root, [_t("scip-python python pkg 0.1 `pkg.m`/alpha().")])["pkg/m.py"]
     assert next(iter(ctx.spans.values())).source.startswith("def alpha(x):")
 
 
-def test_each_file_is_resolved_once_for_many_targets(tmp_path):
+def test_each_file_is_resolved_once_for_many_targets(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     out = bc.resolve(root, [_t("pkg.m.alpha"), _t("pkg.m.beta"), _t("pkg.m.Box")])
     assert list(out) == ["pkg/m.py"] and len(out["pkg/m.py"].spans) == 3
 
 
-def test_missing_file_gives_empty_context_and_target_stays(tmp_path):
+def test_missing_file_gives_empty_context_and_target_stays(tmp_path: Path) -> None:
     ctx = bc.resolve(tmp_path, [_t("x.y", "nope.py")])["nope.py"]
     assert ctx.spans == {} and ctx.imports == []
     kept, deferred = bc.fit([_t("x.y", "nope.py")], {"nope.py": ctx})
     assert len(kept) == 1 and deferred == []
 
 
-def test_fit_defers_oversize_symbol_whole_never_truncates(tmp_path):
+def test_fit_defers_oversize_symbol_whole_never_truncates(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     ctxs = bc.resolve(root, [_t("pkg.m.alpha"), _t("pkg.m.beta")])
     big = ctxs["pkg/m.py"].spans["pkg.m.alpha"]
@@ -83,7 +84,7 @@ def test_fit_defers_oversize_symbol_whole_never_truncates(tmp_path):
     assert [s["qualified_name"] for s in deferred] == ["pkg.m.alpha"]
 
 
-def test_fit_defers_overflow_past_batch_budget(tmp_path):
+def test_fit_defers_overflow_past_batch_budget(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     syms = [_t("pkg.m.alpha"), _t("pkg.m.beta")]
     ctxs = bc.resolve(root, syms)
@@ -93,7 +94,7 @@ def test_fit_defers_overflow_past_batch_budget(tmp_path):
     assert [s["qualified_name"] for s in deferred] == ["pkg.m.beta"]
 
 
-def test_render_block_states_neighbour_overflow(tmp_path):
+def test_render_block_states_neighbour_overflow(tmp_path: Path) -> None:
     ctx = bc.FileContext("a.py", neighbours=[f"def f{i}()" for i in range(bc.NEIGHBOUR_LIMIT + 3)])
     block = bc.render_block(ctx, ["a.f"])
     assert "(+3 more neighbours not shown)" in block and "source of a.f: unavailable" in block

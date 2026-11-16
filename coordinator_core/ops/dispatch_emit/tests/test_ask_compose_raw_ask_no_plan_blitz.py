@@ -6,6 +6,7 @@ from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.nested_run_contract import CHAIN_HANDOFF_KEY
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+import pytest
 
 ARM_M_PLUS = ask_compose.ARM_M_PLUS
 
@@ -14,7 +15,7 @@ _DEFINES_BLITZ = "async function planBlitz("
 _REFIRE = 'resubmit Workflow({name: "coordinator:engine-ask", args: {sizing: "'
 
 
-def _compose(**over):
+def _compose(**over) -> str:
     kw = dict(
         repo_root="REPO",
         prompt="add a thing",
@@ -29,22 +30,22 @@ def _compose(**over):
     return compose_ask_script(**kw)
 
 
-def test_raw_ask_embeds_no_plan_blitz():
+def test_raw_ask_embeds_no_plan_blitz() -> None:
     assert _DEFINES_BLITZ not in _compose()
 
 
-def test_intake_sizing_ask_embeds_no_plan_blitz(monkeypatch):
+def test_intake_sizing_ask_embeds_no_plan_blitz(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "_intake_sizing", lambda repo_root, rel: {"estimate": None})
     assert _DEFINES_BLITZ not in _compose(prompt=None, sizing_rel="state/sizings/x.yaml")
 
 
-def test_m_plus_sizing_ask_embeds_plan_blitz(monkeypatch):
+def test_m_plus_sizing_ask_embeds_plan_blitz(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "_intake_sizing", lambda repo_root, rel: None)
     monkeypatch.setattr(ask_compose, "_known_arm", lambda repo_root, rel: ARM_M_PLUS)
     assert _DEFINES_BLITZ in _compose(prompt=None, sizing_rel="state/sizings/x.yaml")
 
 
-def test_raw_ask_m_plus_leg_emits_and_starts_the_sizing_script_instead_of_halting():
+def test_raw_ask_m_plus_leg_emits_and_starts_the_sizing_script_instead_of_halting() -> None:
     script = _compose()
     assert "await workflow({ scriptPath: _chainPath })" in script
     assert "dispatch.emit" in script
@@ -55,7 +56,7 @@ def test_raw_ask_m_plus_leg_emits_and_starts_the_sizing_script_instead_of_haltin
     assert _REFIRE in script
 
 
-def test_launcher_child_m_plus_leg_returns_a_chain_hand_off_and_starts_no_workflow():
+def test_launcher_child_m_plus_leg_returns_a_chain_hand_off_and_starts_no_workflow() -> None:
     script = _compose(launcher_child=True)
     assert script.count("does not embed the plan-blitz stage") == 0
     assert f"return {{ {CHAIN_HANDOFF_KEY}: {{ ask: true, sizing_path: _sizingRel" in script

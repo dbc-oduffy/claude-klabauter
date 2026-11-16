@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core.authoring_leaks import HeadView, call_signature, import_closure, leak_gate
 from coordinator_core.authoring_leaks.tests._git_fixture import git as _git, write as _write
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -16,7 +17,7 @@ _DIRTY_B = "def f(a, withheld=None):\n    return a\n"
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     _git(tmp_path, "init", "-q")
     _write(tmp_path, "pkg/__init__.py", "")
     _write(tmp_path, "pkg/b.py", _HEAD_B)
@@ -30,11 +31,11 @@ def _gate(root, paths, **kw):
     return leak_gate(root, paths, detectors=[call_signature], **kw)
 
 
-def _dirty(repo):
+def _dirty(repo) -> None:
     _write(repo, "pkg/b.py", _DIRTY_B)
 
 
-def test_keyword_leak_refuses_and_names_callee(repo):
+def test_keyword_leak_refuses_and_names_callee(repo) -> None:
     _dirty(repo)
     _write(repo, "pkg/a.py", "import pkg.b as b\n\nb.f(1, withheld=2)\n")
     out = _gate(repo, ["pkg/a.py"])
@@ -45,7 +46,7 @@ def test_keyword_leak_refuses_and_names_callee(repo):
     assert "pkg/a.py:3" in out.diagnostics[0]
 
 
-def test_arity_leak_refuses(repo):
+def test_arity_leak_refuses(repo) -> None:
     _dirty(repo)
     _write(repo, "pkg/a.py", "import pkg.b as b\n\nb.f(1, 2)\n")
     out = _gate(repo, ["pkg/a.py"])
@@ -53,7 +54,7 @@ def test_arity_leak_refuses(repo):
     assert "too many positional arguments" in out.diagnostics[0]
 
 
-def test_callee_in_gate_paths_gives_no_finding(repo):
+def test_callee_in_gate_paths_gives_no_finding(repo) -> None:
     _dirty(repo)
     _write(repo, "pkg/a.py", "import pkg.b as b\n\nb.f(1, withheld=2)\n")
     texts = {"pkg/a.py": "import pkg.b as b\n\nb.f(1, withheld=2)\n", "pkg/b.py": _DIRTY_B}
@@ -61,20 +62,20 @@ def test_callee_in_gate_paths_gives_no_finding(repo):
     assert _gate(repo, ["pkg/a.py", "pkg/b.py"]).passed
 
 
-def test_landed_text_replaces_the_worktree_read(repo):
+def test_landed_text_replaces_the_worktree_read(repo) -> None:
     _dirty(repo)
     _write(repo, "pkg/a.py", "x = 1\n")
     texts = {"pkg/a.py": "import pkg.b as b\n\nb.f(1, withheld=2)\n"}
     assert not _gate(repo, ["pkg/a.py"], landed_text=texts.get).passed
 
 
-def test_call_failing_against_both_texts_gives_no_finding(repo):
+def test_call_failing_against_both_texts_gives_no_finding(repo) -> None:
     _dirty(repo)
     _write(repo, "pkg/a.py", "import pkg.b as b\n\nb.f(1, nope=2)\n")
     assert _gate(repo, ["pkg/a.py"]).passed
 
 
-def test_clean_callee_never_parses_the_landing_file(repo, monkeypatch):
+def test_clean_callee_never_parses_the_landing_file(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(repo, "pkg/a.py", "import pkg.b as b\n\nb.f(1, withheld=2)\n")
     parses = []
     real = ast.parse
@@ -83,7 +84,7 @@ def test_clean_callee_never_parses_the_landing_file(repo, monkeypatch):
     assert parses == []
 
 
-def test_relative_import_is_resolved(repo):
+def test_relative_import_is_resolved(repo) -> None:
     _dirty(repo)
     _write(repo, "pkg/a.py", "from . import b\n\nb.f(1, withheld=2)\n")
     out = _gate(repo, ["pkg/a.py"])
@@ -91,7 +92,7 @@ def test_relative_import_is_resolved(repo):
     assert "add pkg/b.py" in out.diagnostics[0]
 
 
-def test_parenthesised_bare_name_import_is_refused(repo):
+def test_parenthesised_bare_name_import_is_refused(repo) -> None:
     _dirty(repo)
     _write(repo, "pkg/a.py", "from pkg.b import (\n    f,\n)\n\n\ndef g():\n    return f(1, withheld=2)\n")
     out = _gate(repo, ["pkg/a.py"])
@@ -100,13 +101,13 @@ def test_parenthesised_bare_name_import_is_refused(repo):
     assert "pkg/a.py:7" in out.diagnostics[0]
 
 
-def test_call_accepted_at_head_gives_no_finding(repo):
+def test_call_accepted_at_head_gives_no_finding(repo) -> None:
     _dirty(repo)
     _write(repo, "pkg/a.py", "import pkg.b as b\n\nb.f(1)\n")
     assert _gate(repo, ["pkg/a.py"]).passed
 
 
-def test_splat_typeerror_decorated_and_new_function_abstain(repo):
+def test_splat_typeerror_decorated_and_new_function_abstain(repo) -> None:
     _write(repo, "pkg/b.py", "import functools\n\n\ndef f(a):\n    return a\n\n\n@functools.cache\ndef d(a):\n    return a\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "more")
@@ -124,7 +125,7 @@ def test_splat_typeerror_decorated_and_new_function_abstain(repo):
     assert _gate(repo, ["pkg/a.py"]).passed
 
 
-def test_aliased_from_import_and_multiline_call_leak(repo):
+def test_aliased_from_import_and_multiline_call_leak(repo) -> None:
     _dirty(repo)
     _write(repo, "pkg/a.py", "from pkg.b import f as g\n\n\ndef run():\n    return g(\n        1,\n        withheld=(2),\n    )\n")
     out = _gate(repo, ["pkg/a.py"])
@@ -132,13 +133,13 @@ def test_aliased_from_import_and_multiline_call_leak(repo):
     assert "pkg/a.py:5" in out.diagnostics[0]
 
 
-def test_calls_that_bind_at_head_pass_with_a_changed_signature(repo):
+def test_calls_that_bind_at_head_pass_with_a_changed_signature(repo) -> None:
     _dirty(repo)
     _write(repo, "pkg/a.py", "from pkg.b import f\n\n\ndef run():\n    return f(1) + f(a=2)\n")
     assert _gate(repo, ["pkg/a.py"]).passed
 
 
-def test_default_leak_gate_path_sees_the_dirty_callee(repo):
+def test_default_leak_gate_path_sees_the_dirty_callee(repo) -> None:
     """The shared HeadView holds no callee path, so detect must build its own."""
     _dirty(repo)
     _write(repo, "pkg/a.py", "import pkg.b as b\n\nb.f(1, withheld=2)\n")
@@ -147,7 +148,7 @@ def test_default_leak_gate_path_sees_the_dirty_callee(repo):
     assert any("call_signature" in d for d in out.diagnostics)
 
 
-def test_keyword_line_added_to_an_existing_multiline_call_leaks(repo):
+def test_keyword_line_added_to_an_existing_multiline_call_leaks(repo) -> None:
     head_a = "from pkg.b import f\n\n\ndef run():\n    return f(\n        1,\n    )\n"
     _write(repo, "pkg/a.py", head_a)
     _git(repo, "add", "-A")
@@ -159,7 +160,7 @@ def test_keyword_line_added_to_an_existing_multiline_call_leaks(repo):
     assert "add pkg/b.py to this commit" in out.diagnostics[0]
 
 
-def test_landing_lines_the_commit_does_not_touch_are_not_judged(repo):
+def test_landing_lines_the_commit_does_not_touch_are_not_judged(repo) -> None:
     head_a = "from pkg.b import f\n\n\ndef run():\n    return f(1, withheld=2)\n"
     _write(repo, "pkg/a.py", head_a)
     _git(repo, "add", "-A")
@@ -170,7 +171,7 @@ def test_landing_lines_the_commit_does_not_touch_are_not_judged(repo):
     assert _gate(repo, ["pkg/a.py"]).passed
 
 
-def test_crlf_checkout_of_an_unedited_callee_is_not_dirty_but_an_edit_is(repo):
+def test_crlf_checkout_of_an_unedited_callee_is_not_dirty_but_an_edit_is(repo) -> None:
     view = HeadView(repo, ["pkg/b.py"])
     _write(repo, "pkg/b.py", _HEAD_B.replace("\n", "\r\n"))
     assert call_signature._dirty_text(view, "pkg/b.py") is None

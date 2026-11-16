@@ -12,6 +12,7 @@ import json
 import pytest
 
 from coordinator_core.group_em import box_hold, nomination, session_registry, standing, suite_grant
+from pathlib import Path
 
 HOLDER, PEER, OTHER = "sid-holder", "sid-peer", "sid-other"
 NOW = 1_800_000_000.0
@@ -40,7 +41,7 @@ def _row(sid, name, cwd):
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     records = tmp_path / "state" / "group-em"
@@ -76,7 +77,7 @@ def _read(path):
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def test_nomination_and_box_holder_records_share_one_key_set(env):
+def test_nomination_and_box_holder_records_share_one_key_set(env) -> None:
     _claim(env, HOLDER)
     repo_record = _read(nomination._record_path(env["repo"], env["dir"]))
     box_record = _read(env["dir"] / "box" / "holder.json")
@@ -85,7 +86,7 @@ def test_nomination_and_box_holder_records_share_one_key_set(env):
     assert set(repo_record["entry_evidence"]) == ENTRY_EVIDENCE_PENDING_KEYS
 
 
-def test_displacing_claim_adds_displaced_keys_and_a_dead_incumbent_adds_replaced_keys(env, monkeypatch):
+def test_displacing_claim_adds_displaced_keys_and_a_dead_incumbent_adds_replaced_keys(env, monkeypatch: pytest.MonkeyPatch) -> None:
     _claim(env, HOLDER)
     _claim(env, PEER)
     live_displaced = _read(nomination._record_path(env["repo"], env["dir"]))
@@ -99,13 +100,13 @@ def test_displacing_claim_adds_displaced_keys_and_a_dead_incumbent_adds_replaced
     assert set(replaced) == NOMINATION_KEYS | DISPLACED_EXTRA_KEYS | REPLACED_EXTRA_KEYS
 
 
-def test_who_json_keys_are_the_record_plus_liveness_annotation(env):
+def test_who_json_keys_are_the_record_plus_liveness_annotation(env) -> None:
     _claim(env, HOLDER)
     assert set(standing.who(env["repo"])) == NOMINATION_KEYS | WHO_EXTRA_KEYS
     assert standing.who(str(env["tmp"] / "no-such-repo")) is None
 
 
-def test_standing_json_keys_add_the_standing_verdict(env):
+def test_standing_json_keys_add_the_standing_verdict(env) -> None:
     _claim(env, HOLDER)
     held = standing.standing(env["repo"], HOLDER)
     assert set(held) == NOMINATION_KEYS | WHO_EXTRA_KEYS | STANDING_EXTRA_KEYS
@@ -113,12 +114,12 @@ def test_standing_json_keys_add_the_standing_verdict(env):
     assert standing.standing(env["repo"], "someone-else")["standing"] == "no_match"
 
 
-def test_box_hold_record_key_set(env):
+def test_box_hold_record_key_set(env) -> None:
     box_hold.set_hold(HOLDER, "reindex", 60, directory=env["dir"], now=NOW)
     assert set(_read(env["dir"] / "box" / "hold.json")) == HOLD_KEYS
 
 
-def test_suite_grant_record_key_set_and_path(env):
+def test_suite_grant_record_key_set_and_path(env) -> None:
     _claim(env, HOLDER)
     result = suite_grant.issue_suite_grant(
         PEER, "ruled: one broad run", directory=env["dir"], now=NOW

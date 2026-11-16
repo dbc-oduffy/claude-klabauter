@@ -54,7 +54,7 @@ title: Host Plan Title
 
 
 @pytest.fixture(autouse=True)
-def _rubric(tmp_path_factory, monkeypatch):
+def _rubric(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
     path = tmp_path_factory.mktemp("rubric") / "falsifier-integrity-reviewer.md"
     path.write_text("rubric A\n", encoding="utf-8")
     monkeypatch.setattr(fip, "_reviewer_rubric_path", lambda: path)
@@ -74,7 +74,7 @@ def _brief(tmp_path: Path, manifest) -> bytes:
     return (tmp_path / manifest.rows[0].brief_path).read_bytes()
 
 
-def test_reviewer_row_brief_is_the_phase_spec_prompt(tmp_path):
+def test_reviewer_row_brief_is_the_phase_spec_prompt(tmp_path: Path) -> None:
     _repo(tmp_path, _host())
     manifest = stage(tmp_path, run_id="r1", plan_rel=PLAN_REL)
     report_dir = Path(manifest.run_dir) / "can-report-red"
@@ -89,7 +89,7 @@ def test_reviewer_row_brief_is_the_phase_spec_prompt(tmp_path):
     assert (tmp_path / report_dir / "2026-10-02-reviewed-secret-title.json").is_file()
 
 
-def test_reviewer_row_brief_carries_no_intent_context_or_plan_text(tmp_path):
+def test_reviewer_row_brief_carries_no_intent_context_or_plan_text(tmp_path: Path) -> None:
     _repo(tmp_path, _host())
     sizing = tmp_path / "state" / "sizings" / "s.yaml"
     sizing.parent.mkdir(parents=True)
@@ -117,13 +117,13 @@ def test_reviewer_row_brief_carries_no_intent_context_or_plan_text(tmp_path):
     ],
     ids=["missing-key", "path-escapes-repo", "no-falsifier-block", "non-empty-writes"],
 )
-def test_reviewer_row_refusals(tmp_path, host, reviewed):
+def test_reviewer_row_refusals(tmp_path: Path, host, reviewed) -> None:
     _repo(tmp_path, host, reviewed)
     with pytest.raises(AskStageError):
         stage(tmp_path, run_id="r1", plan_rel=PLAN_REL)
 
 
-def test_reviewer_row_verdict_persists_at_report_path():
+def test_reviewer_row_verdict_persists_at_report_path() -> None:
     script = _compose()
     branch = script.split("r.agent_type === 'coordinator:falsifier-integrity-reviewer'", 1)[1].split("else _rows", 1)[0]
     assert "dispatch-reports/" in branch and "+ r.id + '.md'" in branch

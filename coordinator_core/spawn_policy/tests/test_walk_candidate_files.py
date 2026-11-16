@@ -11,9 +11,10 @@ from coordinator_core.spawn_policy.detect import (
     discover_source_files,
     walk_candidate_files,
 )
+from pathlib import Path
 
 
-def _reference_discover(root: pathlib.Path, exclude=DEFAULT_EXCLUDE):
+def _reference_discover(root: pathlib.Path, exclude: tuple[str, ...] = DEFAULT_EXCLUDE) -> tuple[list[tuple[str, Path]], ExcludedReport]:
     discovered = []
     excluded_dirs: set[str] = set()
     suppressed = 0
@@ -65,18 +66,18 @@ def _build(root: pathlib.Path) -> None:
     (root / "empty" / "venv").mkdir(parents=True)
 
 
-def test_discover_matches_rglob_reference(tmp_path):
+def test_discover_matches_rglob_reference(tmp_path: Path) -> None:
     _build(tmp_path)
     assert discover_source_files(tmp_path) == _reference_discover(tmp_path)
 
 
-def test_discover_matches_reference_custom_exclude(tmp_path):
+def test_discover_matches_reference_custom_exclude(tmp_path: Path) -> None:
     _build(tmp_path)
     ex = ("Zed", "bin")
     assert discover_source_files(tmp_path, exclude=ex) == _reference_discover(tmp_path, ex)
 
 
-def test_pruning_walk_omits_excluded_and_reports_none(tmp_path):
+def test_pruning_walk_omits_excluded_and_reports_none(tmp_path: Path) -> None:
     _build(tmp_path)
     candidates, report = walk_candidate_files(tmp_path)
     assert report is None
@@ -86,7 +87,7 @@ def test_pruning_walk_omits_excluded_and_reports_none(tmp_path):
     assert rels == [c.rel_posix for c in counted]
 
 
-def test_candidates_carry_stat(tmp_path):
+def test_candidates_carry_stat(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("x = 1\n", encoding="utf-8")
     (candidate,), _ = walk_candidate_files(tmp_path)
     st = (tmp_path / "a.py").stat()

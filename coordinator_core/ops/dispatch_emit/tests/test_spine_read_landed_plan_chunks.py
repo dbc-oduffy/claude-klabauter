@@ -4,6 +4,7 @@ landed `depends_on_plan` target does not hold its dependent."""
 from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
+from pathlib import Path
 
 _OWN = """\
 - id: C1
@@ -50,7 +51,7 @@ def _repo(tmp_path):
     return tmp_path
 
 
-def test_landed_own_row_is_excluded_and_does_not_hold_dependent(tmp_path):
+def test_landed_own_row_is_excluded_and_does_not_hold_dependent(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     plan = _plan(repo / "docs" / "plans" / "own.md", _OWN)
     ex: list = []
@@ -64,7 +65,7 @@ def test_landed_own_row_is_excluded_and_does_not_hold_dependent(tmp_path):
     assert "C2" not in by_id
 
 
-def test_default_is_identical_to_empty_mapping(tmp_path):
+def test_default_is_identical_to_empty_mapping(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     plan = _plan(repo / "docs" / "plans" / "own.md", _OWN)
     ex_default: list = []
@@ -77,7 +78,7 @@ def test_default_is_identical_to_empty_mapping(tmp_path):
     assert ex_default == ex_empty == []
 
 
-def test_key_for_another_plan_does_not_exclude(tmp_path):
+def test_key_for_another_plan_does_not_exclude(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     plan = _plan(repo / "docs" / "plans" / "own.md", _OWN)
 
@@ -86,7 +87,7 @@ def test_key_for_another_plan_does_not_exclude(tmp_path):
     assert [r.id for r in rows] == ["C1", "C2", "C3"]
 
 
-def test_landed_edge_target_does_not_hold(tmp_path):
+def test_landed_edge_target_does_not_hold(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _plan(repo / "docs" / "plans" / "pred.md", _PRED)
     dep = _plan(repo / "docs" / "plans" / "dep.md", _EDGE)
@@ -99,7 +100,7 @@ def test_landed_edge_target_does_not_hold(tmp_path):
     assert [r.id for r in rows] == ["D1"]
 
 
-def test_landed_row_that_is_not_open_is_not_relabelled(tmp_path):
+def test_landed_row_that_is_not_open_is_not_relabelled(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     plan = _plan(repo / "docs" / "plans" / "own.md", _OWN + "  disposition: coded\n")
     ex: list = []

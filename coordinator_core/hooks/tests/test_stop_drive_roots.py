@@ -5,29 +5,30 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.hooks import stop_dispatch as sd
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _env(tmp_path, monkeypatch):
+def _env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_DRIVE_ROOTS", raising=False)
     monkeypatch.delenv("COORDINATOR_ALLOW_DRIVE_ROOT_NEW_DIR", raising=False)
     monkeypatch.setenv("COORDINATOR_DRIVE_ROOT_BASELINE", str(tmp_path / "baseline.json"))
 
 
-def test_drive_roots_include_every_fixed_drive(monkeypatch, tmp_path):
+def test_drive_roots_include_every_fixed_drive(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     other = tmp_path / "other-drive"
     monkeypatch.setattr(sd, "_fixed_drive_roots", lambda: [str(other)])
     assert str(other) in sd._drive_roots(str(tmp_path), None)
 
 
-def test_override_env_still_wins(monkeypatch, tmp_path):
+def test_override_env_still_wins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     only = tmp_path / "only"
     monkeypatch.setenv("COORDINATOR_DRIVE_ROOTS", str(only))
     monkeypatch.setattr(sd, "_fixed_drive_roots", lambda: ["Z:\\"])
     assert sd._drive_roots(str(tmp_path), None) == [str(only)]
 
 
-def test_new_dir_on_a_non_cwd_drive_fires(monkeypatch, tmp_path):
+def test_new_dir_on_a_non_cwd_drive_fires(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     other = tmp_path / "other-drive"
     other.mkdir()
     (other / "old").mkdir()

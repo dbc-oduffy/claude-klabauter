@@ -17,17 +17,17 @@ from coordinator_core.session import claim_index, touch_record
 pytestmark = pytest.mark.complete
 
 
-def _write(path, content):
+def _write(path, content) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(content)
 
 
-def _touch_line(verb, path, when="2026-08-08T10:00:00.000000Z"):
+def _touch_line(verb, path, when: str = "2026-08-08T10:00:00.000000Z") -> str:
     return f"{verb} {when} {path}"
 
 
-def _append_fixture_line(sink, session_id, agent_id, line):
+def _append_fixture_line(sink, session_id, agent_id, line) -> None:
     verb, ts_str, path = line.split(None, 2)
     ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
     touch_record.append_event(
@@ -35,13 +35,13 @@ def _append_fixture_line(sink, session_id, agent_id, line):
     )
 
 
-def _session_touched(base, sid, lines):
+def _session_touched(base, sid, lines) -> None:
     sink = os.path.join(str(base), sid, "touch-record.jsonl")
     for line in lines:
         _append_fixture_line(sink, sid, None, line)
 
 
-def _append_named_fixture_line(sink, session_id, agent_id, line, name):
+def _append_named_fixture_line(sink, session_id, agent_id, line, name) -> None:
     verb, ts_str, path = line.split(None, 2)
     ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00")).timestamp()
     touch_record.append_event(
@@ -55,13 +55,13 @@ def _append_named_fixture_line(sink, session_id, agent_id, line, name):
     )
 
 
-def _session_touched_named(base, sid, lines_and_names):
+def _session_touched_named(base, sid, lines_and_names) -> None:
     sink = os.path.join(str(base), sid, "touch-record.jsonl")
     for line, name in lines_and_names:
         _append_named_fixture_line(sink, sid, None, line, name)
 
 
-def _agent_touched(base, agent_id, owner_sid, lines):
+def _agent_touched(base, agent_id, owner_sid, lines) -> None:
     agent_dir = os.path.join(str(base), ".agents", agent_id)
     sink = os.path.join(agent_dir, "touch-record.jsonl")
     for line in lines:
@@ -69,7 +69,7 @@ def _agent_touched(base, agent_id, owner_sid, lines):
     _write(os.path.join(agent_dir, "em-session-id.txt"), owner_sid + "\n")
 
 
-def test_round_trip_claimed_path(tmp_path):
+def test_round_trip_claimed_path(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "foo/bar.py")])
 
@@ -80,7 +80,7 @@ def test_round_trip_claimed_path(tmp_path):
     assert result_again == {"foo/bar.py": ["sess-a"]}
 
 
-def test_round_trip_unclaimed_path(tmp_path):
+def test_round_trip_unclaimed_path(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "foo/bar.py")])
 
@@ -89,7 +89,7 @@ def test_round_trip_unclaimed_path(tmp_path):
     assert result == {"never/touched.py": []}
 
 
-def test_rebuild_returns_in_memory_state_only(tmp_path):
+def test_rebuild_returns_in_memory_state_only(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
 
@@ -101,7 +101,7 @@ def test_rebuild_returns_in_memory_state_only(tmp_path):
         assert ".index" not in dirs
 
 
-def test_torn_trailing_line_in_touch_record_is_discarded(tmp_path):
+def test_torn_trailing_line_in_touch_record_is_discarded(tmp_path: Path) -> None:
     base = str(tmp_path)
     complete_line = touch_record.encode_line(
         session_id="sess-a", agent_id=None, verb="T", path="complete.py",
@@ -126,7 +126,7 @@ def test_torn_trailing_line_in_touch_record_is_discarded(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_lookup_sees_second_claim_appended_to_existing_session(tmp_path):
+def test_lookup_sees_second_claim_appended_to_existing_session(tmp_path: Path) -> None:
     """C1b regression: appending a 2nd claim to an ALREADY-EXISTING
     session's touched.txt (what ``scope.py::touch`` does on every call
     after a session's first) changes that file's mtime, not any
@@ -152,13 +152,13 @@ def test_lookup_sees_second_claim_appended_to_existing_session(tmp_path):
     assert second == {"other.py": ["sess-a"]}
 
 
-def test_lookup_unresolvable_sessions_dir_is_unanswerable(tmp_path):
+def test_lookup_unresolvable_sessions_dir_is_unanswerable(tmp_path: Path) -> None:
     result = claim_index.lookup(["foo.py"], sessions_dir="")
     assert result == {"foo.py": [claim_index.UNANSWERABLE]}
     assert result.abort_cause == claim_index.ABORT_CAUSE_EMPTY_BASE
 
 
-def test_lookup_missing_sessions_dir_on_disk_is_unclaimed_not_unanswerable(tmp_path):
+def test_lookup_missing_sessions_dir_on_disk_is_unclaimed_not_unanswerable(tmp_path: Path) -> None:
     missing = os.path.join(str(tmp_path), "does-not-exist-yet")
     result = claim_index.lookup(["foo.py"], sessions_dir=missing)
     assert result == {"foo.py": []}
@@ -175,8 +175,8 @@ def test_lookup_missing_sessions_dir_on_disk_is_unclaimed_not_unanswerable(tmp_p
 
 
 def test_lookup_permission_error_scanning_sessions_dir_is_unanswerable(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
 
@@ -196,8 +196,8 @@ def test_lookup_permission_error_scanning_sessions_dir_is_unanswerable(
 
 
 def test_lookup_permission_error_scanning_agents_subdir_is_unanswerable(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
     agents_base = os.path.join(base, claim_index._AGENTS_SUBDIR)
@@ -219,8 +219,8 @@ def test_lookup_permission_error_scanning_agents_subdir_is_unanswerable(
 
 
 def test_lookup_permission_error_reading_agent_backpointer_is_unanswerable(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     base = str(tmp_path)
     _agent_touched(base, "agent-1", "sess-owner", [_touch_line("T", "x.py")])
     backptr = os.path.join(base, ".agents", "agent-1", "em-session-id.txt")
@@ -241,8 +241,8 @@ def test_lookup_permission_error_reading_agent_backpointer_is_unanswerable(
 
 
 def test_lookup_permission_error_reading_touch_record_body_is_unanswerable(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Bug backlog
     2026-08-11-an-io-error-reading-a-touched-txt-body-i-18abf7c6f3be (P3):
     an OSError raised while reading a claimant's record CONTENT (as opposed
@@ -263,7 +263,7 @@ def test_lookup_permission_error_reading_touch_record_body_is_unanswerable(
 
     real_read_bytes = Path.read_bytes
 
-    def fake_read_bytes(self):
+    def fake_read_bytes(self) -> bytes:
         if os.path.abspath(str(self)) == os.path.abspath(touched_path):
             raise PermissionError("simulated I/O error reading body")
         return real_read_bytes(self)
@@ -277,7 +277,7 @@ def test_lookup_permission_error_reading_touch_record_body_is_unanswerable(
     assert result.abort_cause == claim_index.ABORT_CAUSE_IO_ERROR
 
 
-def test_torn_tail_content_read_still_reports_complete(tmp_path):
+def test_torn_tail_content_read_still_reports_complete(tmp_path: Path) -> None:
     base = str(tmp_path)
     complete_line = touch_record.encode_line(
         session_id="sess-a", agent_id=None, verb="T", path="complete.py",
@@ -296,7 +296,7 @@ def test_torn_tail_content_read_still_reports_complete(tmp_path):
     assert state.abort_cause is None
 
 
-def test_empty_touch_record_still_reports_complete(tmp_path):
+def test_empty_touch_record_still_reports_complete(tmp_path: Path) -> None:
     base = str(tmp_path)
     _write(os.path.join(base, "sess-a", "touch-record.jsonl"), "")
 
@@ -307,7 +307,7 @@ def test_empty_touch_record_still_reports_complete(tmp_path):
     assert state.claims == {}
 
 
-def test_missing_touch_record_still_reports_complete(tmp_path):
+def test_missing_touch_record_still_reports_complete(tmp_path: Path) -> None:
     base = str(tmp_path)
     os.makedirs(os.path.join(base, "sess-a"), exist_ok=True)
     touched_path = os.path.join(base, "sess-a", "touch-record.jsonl")
@@ -320,7 +320,7 @@ def test_missing_touch_record_still_reports_complete(tmp_path):
     assert read_ok is True
 
 
-def test_enumeration_io_error_wins_over_later_content_read_error(tmp_path, monkeypatch):
+def test_enumeration_io_error_wins_over_later_content_read_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = str(tmp_path)
     _agent_touched(base, "agent-1", "sess-owner", [_touch_line("T", "x.py")])
     backptr = os.path.join(base, ".agents", "agent-1", "em-session-id.txt")
@@ -341,7 +341,7 @@ def test_enumeration_io_error_wins_over_later_content_read_error(tmp_path, monke
 
     real_read_bytes = Path.read_bytes
 
-    def fake_read_bytes(self):
+    def fake_read_bytes(self) -> bytes:
         if os.path.abspath(str(self)) == os.path.abspath(content_path):
             raise PermissionError("simulated content-read I/O error")
         return real_read_bytes(self)
@@ -354,7 +354,7 @@ def test_enumeration_io_error_wins_over_later_content_read_error(tmp_path, monke
     assert state.abort_cause == claim_index.ABORT_CAUSE_IO_ERROR
 
 
-def test_rebuild_cap_exceeded_mid_walk_marks_incomplete(tmp_path, monkeypatch):
+def test_rebuild_cap_exceeded_mid_walk_marks_incomplete(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
 
@@ -366,7 +366,7 @@ def test_rebuild_cap_exceeded_mid_walk_marks_incomplete(tmp_path, monkeypatch):
     assert state.abort_cause == claim_index.ABORT_CAUSE_CAP_EXCEEDED
 
 
-def test_lookup_cap_exceeded_resolves_unanswerable_not_unclaimed(tmp_path, monkeypatch):
+def test_lookup_cap_exceeded_resolves_unanswerable_not_unclaimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
 
@@ -379,8 +379,8 @@ def test_lookup_cap_exceeded_resolves_unanswerable_not_unclaimed(tmp_path, monke
 
 
 def test_rebuild_cap_exceeded_after_one_file_reports_cap_exceeded_not_empty_base(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Drives the cap-exceeded abort by patching ``time.process_time`` (per the
     worked construction in
     ``state/subagent-share/31106a01-e326-4ab8-a033-b4aa5d757cbd/
@@ -404,7 +404,7 @@ def test_rebuild_cap_exceeded_after_one_file_reports_cap_exceeded_not_empty_base
     assert state.claims == {"foo.py": ["sess-a"]}
 
 
-def test_agent_dir_claim_attributed_to_owner_session(tmp_path):
+def test_agent_dir_claim_attributed_to_owner_session(tmp_path: Path) -> None:
     base = str(tmp_path)
     _agent_touched(
         base, "agent-123", "sess-owner", [_touch_line("T", "engine/core.py")]
@@ -415,7 +415,7 @@ def test_agent_dir_claim_attributed_to_owner_session(tmp_path):
     assert result == {"engine/core.py": ["sess-owner"]}
 
 
-def test_session_dir_and_agent_dir_claims_both_read_in_one_rebuild(tmp_path):
+def test_session_dir_and_agent_dir_claims_both_read_in_one_rebuild(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "session_owned.py")])
     _agent_touched(base, "agent-1", "sess-b", [_touch_line("T", "agent_owned.py")])
@@ -430,7 +430,7 @@ def test_session_dir_and_agent_dir_claims_both_read_in_one_rebuild(tmp_path):
     }
 
 
-def test_older_release_in_later_agent_sink_does_not_drop_newer_claim(tmp_path):
+def test_older_release_in_later_agent_sink_does_not_drop_newer_claim(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(
         base, "sess-a", [_touch_line("T", "hot.py", "2026-08-08T12:00:00.000000Z")]
@@ -446,7 +446,7 @@ def test_older_release_in_later_agent_sink_does_not_drop_newer_claim(tmp_path):
     assert claim_index.rebuild(sessions_dir=base).claims == {"hot.py": ["sess-a"]}
 
 
-def test_newer_release_in_later_agent_sink_still_drops_older_claim(tmp_path):
+def test_newer_release_in_later_agent_sink_still_drops_older_claim(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(
         base, "sess-a", [_touch_line("T", "hot.py", "2026-08-08T09:00:00.000000Z")]
@@ -458,7 +458,7 @@ def test_newer_release_in_later_agent_sink_still_drops_older_claim(tmp_path):
     assert claim_index.lookup(["hot.py"], sessions_dir=base) == {"hot.py": []}
 
 
-def test_equal_ts_release_in_later_agent_sink_does_not_drop_touch(tmp_path):
+def test_equal_ts_release_in_later_agent_sink_does_not_drop_touch(tmp_path: Path) -> None:
     base = str(tmp_path)
     ts = "2026-08-08T12:00:00.000000Z"
     _session_touched(base, "sess-a", [_touch_line("T", "hot.py", ts)])
@@ -467,7 +467,7 @@ def test_equal_ts_release_in_later_agent_sink_does_not_drop_touch(tmp_path):
     assert claim_index.lookup(["hot.py"], sessions_dir=base) == {"hot.py": ["sess-a"]}
 
 
-def test_workflow_agent_session_dir_folds_to_dispatching_session(tmp_path):
+def test_workflow_agent_session_dir_folds_to_dispatching_session(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(base, "agent-sess", [_touch_line("T", "wf.py")])
     _write(os.path.join(base, "agent-sess", "em-session-id.txt"), "sess-em\n")
@@ -482,7 +482,7 @@ def test_workflow_agent_session_dir_folds_to_dispatching_session(tmp_path):
     assert other.by_path["wf.py"].peers == ["sess-em"]
 
 
-def test_session_dir_without_backpointer_is_still_a_peer(tmp_path):
+def test_session_dir_without_backpointer_is_still_a_peer(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(base, "peer-sess", [_touch_line("T", "p.py")])
 
@@ -492,7 +492,7 @@ def test_session_dir_without_backpointer_is_still_a_peer(tmp_path):
     assert answer.by_path["p.py"].peers == ["peer-sess"]
 
 
-def test_agent_dir_with_no_backpointer_contributes_no_claims(tmp_path):
+def test_agent_dir_with_no_backpointer_contributes_no_claims(tmp_path: Path) -> None:
     base = str(tmp_path)
     agent_dir = os.path.join(base, ".agents", "orphan-agent")
     _write(
@@ -504,7 +504,7 @@ def test_agent_dir_with_no_backpointer_contributes_no_claims(tmp_path):
     assert result == {"orphan.py": []}
 
 
-def test_claim_then_release_resolves_unclaimed(tmp_path):
+def test_claim_then_release_resolves_unclaimed(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(
         base,
@@ -520,7 +520,7 @@ def test_claim_then_release_resolves_unclaimed(tmp_path):
     assert result == {"doc.md": []}
 
 
-def test_claim_release_reclaim_resolves_to_reclaimant(tmp_path):
+def test_claim_release_reclaim_resolves_to_reclaimant(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(
         base,
@@ -541,7 +541,7 @@ def test_claim_release_reclaim_resolves_to_reclaimant(tmp_path):
     assert result == {"doc.md": ["sess-b"]}
 
 
-def test_same_session_reclaims_after_releasing(tmp_path):
+def test_same_session_reclaims_after_releasing(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(
         base,
@@ -558,7 +558,7 @@ def test_same_session_reclaims_after_releasing(tmp_path):
     assert result == {"doc.md": ["sess-a"]}
 
 
-def test_lookup_backslashed_input_resolves_claimed_posix_key(tmp_path):
+def test_lookup_backslashed_input_resolves_claimed_posix_key(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "a/b/c.py")])
 
@@ -567,7 +567,7 @@ def test_lookup_backslashed_input_resolves_claimed_posix_key(tmp_path):
     assert result == {"a\\b\\c.py": ["sess-a"]}
 
 
-def test_lookup_forward_slashed_input_resolves_backslashed_key(tmp_path):
+def test_lookup_forward_slashed_input_resolves_backslashed_key(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "a\\b\\c.py")])
 
@@ -576,7 +576,7 @@ def test_lookup_forward_slashed_input_resolves_backslashed_key(tmp_path):
     assert result == {"a/b/c.py": ["sess-a"]}
 
 
-def test_lookup_mixed_separator_input_resolves_claimed(tmp_path):
+def test_lookup_mixed_separator_input_resolves_claimed(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "a/b/c.py")])
 
@@ -585,7 +585,7 @@ def test_lookup_mixed_separator_input_resolves_claimed(tmp_path):
     assert result == {"a\\b/c.py": ["sess-a"]}
 
 
-def test_lookup_dot_dot_normalizing_input_resolves_claimed(tmp_path):
+def test_lookup_dot_dot_normalizing_input_resolves_claimed(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "a/b/c.py")])
 
@@ -594,7 +594,7 @@ def test_lookup_dot_dot_normalizing_input_resolves_claimed(tmp_path):
     assert result == {"a/x/../b/./c.py": ["sess-a"]}
 
 
-def test_lookup_edit_ts_carries_last_t_timestamp_for_claimant(tmp_path):
+def test_lookup_edit_ts_carries_last_t_timestamp_for_claimant(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(
         base, "sess-a", [_touch_line("T", "foo.py", when="2026-08-13T10:00:00.000000Z")]
@@ -609,7 +609,7 @@ def test_lookup_edit_ts_carries_last_t_timestamp_for_claimant(tmp_path):
     }
 
 
-def test_lookup_edit_ts_absent_for_unclaimed_path(tmp_path):
+def test_lookup_edit_ts_absent_for_unclaimed_path(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
 
@@ -618,7 +618,7 @@ def test_lookup_edit_ts_absent_for_unclaimed_path(tmp_path):
     assert result.edit_ts.get("never/touched.py") is None
 
 
-def test_lookup_edit_ts_removed_on_release(tmp_path):
+def test_lookup_edit_ts_removed_on_release(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(
         base,
@@ -635,7 +635,7 @@ def test_lookup_edit_ts_removed_on_release(tmp_path):
     assert result.edit_ts.get("foo.py") is None
 
 
-def test_lookup_value_shape_is_byte_compatible_plain_dict_of_lists(tmp_path):
+def test_lookup_value_shape_is_byte_compatible_plain_dict_of_lists(tmp_path: Path) -> None:
     """The `.recorded_name` widening is ADDITIVE-ATTRIBUTE-ONLY -- it must
     never reshape `lookup()`'s own `{path: [sid, ...]}` value list into
     tuples or any other shape. `session.claims` (`claim_index.lookup([path],
@@ -652,7 +652,7 @@ def test_lookup_value_shape_is_byte_compatible_plain_dict_of_lists(tmp_path):
     assert all(isinstance(sid, str) for sid in result["foo.py"])
 
 
-def test_lookup_recorded_name_carries_name_for_claimant(tmp_path):
+def test_lookup_recorded_name_carries_name_for_claimant(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched_named(
         base, "sess-a", [(_touch_line("T", "foo.py"), "claude-klabauter-57")]
@@ -663,7 +663,7 @@ def test_lookup_recorded_name_carries_name_for_claimant(tmp_path):
     assert result.recorded_name["foo.py"] == {"sess-a": "claude-klabauter-57"}
 
 
-def test_lookup_recorded_name_absent_when_event_carries_no_name(tmp_path):
+def test_lookup_recorded_name_absent_when_event_carries_no_name(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
 
@@ -673,7 +673,7 @@ def test_lookup_recorded_name_absent_when_event_carries_no_name(tmp_path):
     assert result.recorded_name.get("foo.py") is None
 
 
-def test_lookup_recorded_name_absent_for_unclaimed_path(tmp_path):
+def test_lookup_recorded_name_absent_for_unclaimed_path(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched_named(
         base, "sess-a", [(_touch_line("T", "foo.py"), "claude-klabauter-57")]
@@ -684,7 +684,7 @@ def test_lookup_recorded_name_absent_for_unclaimed_path(tmp_path):
     assert result.recorded_name.get("never/touched.py") is None
 
 
-def test_lookup_recorded_name_removed_on_release(tmp_path):
+def test_lookup_recorded_name_removed_on_release(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched_named(
         base,
@@ -701,7 +701,7 @@ def test_lookup_recorded_name_removed_on_release(tmp_path):
     assert result.recorded_name.get("foo.py") is None
 
 
-def test_lookup_recorded_name_survives_reclaim_after_release_by_new_name(tmp_path):
+def test_lookup_recorded_name_survives_reclaim_after_release_by_new_name(tmp_path: Path) -> None:
     base = str(tmp_path)
     _session_touched_named(
         base,
@@ -719,7 +719,7 @@ def test_lookup_recorded_name_survives_reclaim_after_release_by_new_name(tmp_pat
     assert result.recorded_name["foo.py"] == {"sess-a": "claude-klabauter-99"}
 
 
-def test_lookup_recorded_name_no_extra_io_no_git_spawn(tmp_path, monkeypatch):
+def test_lookup_recorded_name_no_extra_io_no_git_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     def _forbid_spawn(*args, **kwargs):
@@ -742,7 +742,7 @@ if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-q"]))
 
 
-def test_commit_set_returns_this_sessions_outstanding_paths(tmp_path):
+def test_commit_set_returns_this_sessions_outstanding_paths(tmp_path: Path) -> None:
     _session_touched(tmp_path, "sid-mine", [_touch_line("T", "a.py"), _touch_line("T", "b.py")])
     _session_touched(tmp_path, "sid-peer", [_touch_line("T", "c.py")])
 
@@ -753,7 +753,7 @@ def test_commit_set_returns_this_sessions_outstanding_paths(tmp_path):
     assert result.contested == {}
 
 
-def test_commit_set_excludes_a_released_path(tmp_path):
+def test_commit_set_excludes_a_released_path(tmp_path: Path) -> None:
     _session_touched(
         tmp_path,
         "sid-mine",
@@ -769,7 +769,7 @@ def test_commit_set_excludes_a_released_path(tmp_path):
     assert result.paths == ["kept.py"]
 
 
-def test_commit_set_withholds_a_contested_path_but_names_it(tmp_path):
+def test_commit_set_withholds_a_contested_path_but_names_it(tmp_path: Path) -> None:
     _session_touched(tmp_path, "sid-mine", [_touch_line("T", "shared.py"), _touch_line("T", "solo.py")])
     _session_touched(tmp_path, "sid-peer", [_touch_line("T", "shared.py")])
 
@@ -779,7 +779,7 @@ def test_commit_set_withholds_a_contested_path_but_names_it(tmp_path):
     assert result.contested == {"shared.py": ["sid-peer"]}
 
 
-def test_commit_set_includes_paths_an_agent_touched_for_this_session(tmp_path):
+def test_commit_set_includes_paths_an_agent_touched_for_this_session(tmp_path: Path) -> None:
     """INVERTED (C3, docs/plans/2026-08-27-safe-commit-offer-excludes-a-
     live-agent.md): this test used to assert that a path claimed SOLELY
     through a dispatched agent's own touch record joined ``paths`` alongside
@@ -798,7 +798,7 @@ def test_commit_set_includes_paths_an_agent_touched_for_this_session(tmp_path):
     assert result.in_flight_agent_claims == {"worker.py": ["agent-1"]}
 
 
-def test_commit_set_spawns_no_subprocess(tmp_path, monkeypatch):
+def test_commit_set_spawns_no_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     def _explode(*args, **kwargs):  # pragma: no cover - must never run
@@ -813,7 +813,7 @@ def test_commit_set_spawns_no_subprocess(tmp_path, monkeypatch):
     assert claim_index.commit_set("sid-mine", sessions_dir=str(tmp_path)).paths == ["a.py"]
 
 
-def test_commit_set_propagates_an_unresolvable_base_as_incomplete(monkeypatch):
+def test_commit_set_propagates_an_unresolvable_base_as_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(claim_index, "_resolve_base", lambda *a, **k: "")
 
     result = claim_index.commit_set("sid-mine", sessions_dir="/irrelevant")
@@ -823,7 +823,7 @@ def test_commit_set_propagates_an_unresolvable_base_as_incomplete(monkeypatch):
     assert result.paths == []
 
 
-def test_commit_set_offers_a_live_agents_inflight_claim_as_the_ems_own(tmp_path):
+def test_commit_set_offers_a_live_agents_inflight_claim_as_the_ems_own(tmp_path: Path) -> None:
     """INVERTED (C3, docs/plans/2026-08-27-safe-commit-offer-excludes-a-
     live-agent.md): observed shape, that plan's Problem section -- during
     docs/plans/2026-08-27-the-fact-layer-is-measured-on-the-one-hot-path.md
@@ -858,8 +858,8 @@ def test_commit_set_offers_a_live_agents_inflight_claim_as_the_ems_own(tmp_path)
 
 
 def test_commit_set_reports_attribution_only_no_liveness_verdict_for_an_agent_claim(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     base = str(tmp_path)
     _agent_touched(
         base, "agent-1", "sess-em", [_touch_line("T", "docs/research/orphaned.md")]
@@ -873,7 +873,7 @@ def test_commit_set_reports_attribution_only_no_liveness_verdict_for_an_agent_cl
     assert result.peers == {}
 
 
-def test_classify_paths_separates_mine_from_peer_from_unclaimed(tmp_path):
+def test_classify_paths_separates_mine_from_peer_from_unclaimed(tmp_path: Path) -> None:
     _session_touched(tmp_path, "sid-mine", [_touch_line("T", "mine.py")])
     _session_touched(tmp_path, "sid-peer", [_touch_line("T", "theirs.py")])
 
@@ -888,7 +888,7 @@ def test_classify_paths_separates_mine_from_peer_from_unclaimed(tmp_path):
     assert answer.complete is True
 
 
-def test_classify_paths_denies_a_path_a_peer_also_holds(tmp_path):
+def test_classify_paths_denies_a_path_a_peer_also_holds(tmp_path: Path) -> None:
     _session_touched(tmp_path, "sid-mine", [_touch_line("T", "shared.py")])
     _session_touched(tmp_path, "sid-peer", [_touch_line("T", "shared.py")])
 
@@ -900,7 +900,7 @@ def test_classify_paths_denies_a_path_a_peer_also_holds(tmp_path):
     assert answer.by_path["shared.py"].peers == ["sid-peer"]
 
 
-def _session_touched_kind(base, sid, path, kind):
+def _session_touched_kind(base, sid, path, kind) -> None:
     sink = os.path.join(str(base), sid, "touch-record.jsonl")
     touch_record.append_event(
         sink,
@@ -913,7 +913,7 @@ def _session_touched_kind(base, sid, path, kind):
     )
 
 
-def _touch_kind_at(base, sid, path, kind, timestamp):
+def _touch_kind_at(base, sid, path, kind, timestamp) -> None:
     sink = os.path.join(str(base), sid, "touch-record.jsonl")
     touch_record.append_event(
         sink,
@@ -926,7 +926,7 @@ def _touch_kind_at(base, sid, path, kind, timestamp):
     )
 
 
-def test_lookup_held_by_keeps_a_path_written_then_read_without_release(tmp_path):
+def test_lookup_held_by_keeps_a_path_written_then_read_without_release(tmp_path: Path) -> None:
     _touch_kind_at(tmp_path, "sid-a", "wr.py", touch_record.KIND_WRITE, 1.0)
     _touch_kind_at(tmp_path, "sid-a", "wr.py", touch_record.KIND_READ, 2.0)
     _touch_kind_at(tmp_path, "sid-a", "ro.py", touch_record.KIND_READ, 1.0)
@@ -937,7 +937,7 @@ def test_lookup_held_by_keeps_a_path_written_then_read_without_release(tmp_path)
     assert result.held_by == {"sid-a": ["wr.py"]}
 
 
-def test_classify_paths_admits_a_path_whose_only_foreign_claim_is_a_read(tmp_path):
+def test_classify_paths_admits_a_path_whose_only_foreign_claim_is_a_read(tmp_path: Path) -> None:
     _session_touched_kind(tmp_path, "sid-mine", "r.py", touch_record.KIND_WRITE)
     _session_touched_kind(tmp_path, "sid-peer", "r.py", touch_record.KIND_READ)
     _session_touched_kind(tmp_path, "sid-peer", "only-read.py", touch_record.KIND_READ)
@@ -950,7 +950,7 @@ def test_classify_paths_admits_a_path_whose_only_foreign_claim_is_a_read(tmp_pat
     assert answer.by_path["only-read.py"].verdict == claim_index.OWNERSHIP_UNCLAIMED
 
 
-def test_classify_paths_denies_a_path_a_peer_holds_for_write(tmp_path):
+def test_classify_paths_denies_a_path_a_peer_holds_for_write(tmp_path: Path) -> None:
     _session_touched_kind(tmp_path, "sid-mine", "w.py", touch_record.KIND_WRITE)
     _session_touched_kind(tmp_path, "sid-peer", "w.py", touch_record.KIND_WRITE)
 
@@ -960,7 +960,7 @@ def test_classify_paths_denies_a_path_a_peer_holds_for_write(tmp_path):
     assert answer.by_path["w.py"].peers == ["sid-peer"]
 
 
-def test_classify_paths_denies_a_path_a_peer_holds_kindless(tmp_path):
+def test_classify_paths_denies_a_path_a_peer_holds_kindless(tmp_path: Path) -> None:
     _session_touched_kind(tmp_path, "sid-mine", "k.py", touch_record.KIND_WRITE)
     _session_touched_kind(tmp_path, "sid-peer", "k.py", None)
 
@@ -971,8 +971,8 @@ def test_classify_paths_denies_a_path_a_peer_holds_kindless(tmp_path):
 
 
 def test_classify_paths_never_answers_mine_or_unclaimed_on_an_aborted_walk(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _session_touched(tmp_path, "sid-mine", [_touch_line("T", "mine.py")])
     real_rebuild = claim_index.rebuild
 
@@ -993,7 +993,7 @@ def test_classify_paths_never_answers_mine_or_unclaimed_on_an_aborted_walk(
     assert answer.abort_cause == claim_index.ABORT_CAUSE_CAP_EXCEEDED
 
 
-def test_classify_paths_still_names_a_peer_found_before_the_abort(tmp_path, monkeypatch):
+def test_classify_paths_still_names_a_peer_found_before_the_abort(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session_touched(tmp_path, "sid-peer", [_touch_line("T", "theirs.py")])
     real_rebuild = claim_index.rebuild
 
@@ -1012,7 +1012,7 @@ def test_classify_paths_still_names_a_peer_found_before_the_abort(tmp_path, monk
     assert answer.by_path["theirs.py"].verdict == claim_index.OWNERSHIP_PEER
 
 
-def test_classify_paths_credits_this_sessions_agent(tmp_path):
+def test_classify_paths_credits_this_sessions_agent(tmp_path: Path) -> None:
     _agent_touched(tmp_path, "agent-1", "sid-mine", [_touch_line("T", "worker.py")])
 
     answer = claim_index.classify_paths(
@@ -1022,7 +1022,7 @@ def test_classify_paths_credits_this_sessions_agent(tmp_path):
     assert answer.by_path["worker.py"].verdict == claim_index.OWNERSHIP_MINE
 
 
-def test_classify_paths_normalizes_the_callers_path_dialect(tmp_path):
+def test_classify_paths_normalizes_the_callers_path_dialect(tmp_path: Path) -> None:
     _session_touched(tmp_path, "sid-mine", [_touch_line("T", "pkg/mod.py")])
 
     answer = claim_index.classify_paths(
@@ -1032,7 +1032,7 @@ def test_classify_paths_normalizes_the_callers_path_dialect(tmp_path):
     assert answer.by_path[r"pkg\mod.py"].verdict == claim_index.OWNERSHIP_MINE
 
 
-def test_classify_paths_spawns_no_subprocess(tmp_path, monkeypatch):
+def test_classify_paths_spawns_no_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     def _explode(*args, **kwargs):  # pragma: no cover - must never run
@@ -1051,7 +1051,7 @@ def test_classify_paths_spawns_no_subprocess(tmp_path, monkeypatch):
     assert answer.by_path["a.py"].verdict == claim_index.OWNERSHIP_MINE
 
 
-def test_commit_set_names_peer_only_claims_separately_from_contested(tmp_path):
+def test_commit_set_names_peer_only_claims_separately_from_contested(tmp_path: Path) -> None:
     _session_touched(tmp_path, "sid-mine", [_touch_line("T", "mine.py"), _touch_line("T", "shared.py")])
     _session_touched(tmp_path, "sid-peer", [_touch_line("T", "shared.py"), _touch_line("T", "theirs.py")])
 
@@ -1062,7 +1062,7 @@ def test_commit_set_names_peer_only_claims_separately_from_contested(tmp_path):
     assert result.peers == {"theirs.py": ["sid-peer"]}
 
 
-def test_commit_set_peers_excludes_a_path_nobody_holds(tmp_path):
+def test_commit_set_peers_excludes_a_path_nobody_holds(tmp_path: Path) -> None:
     _session_touched(tmp_path, "sid-mine", [_touch_line("T", "mine.py")])
 
     result = claim_index.commit_set("sid-mine", sessions_dir=str(tmp_path))
@@ -1070,7 +1070,7 @@ def test_commit_set_peers_excludes_a_path_nobody_holds(tmp_path):
     assert result.peers == {}
 
 
-def test_commit_set_peers_drops_a_released_peer_claim(tmp_path):
+def test_commit_set_peers_drops_a_released_peer_claim(tmp_path: Path) -> None:
     _session_touched(
         tmp_path,
         "sid-peer",
@@ -1085,7 +1085,7 @@ def test_commit_set_peers_drops_a_released_peer_claim(tmp_path):
     assert result.peers == {}
 
 
-def test_ac18_rebuild_cap_is_immune_to_time_monotonic(tmp_path, monkeypatch):
+def test_ac18_rebuild_cap_is_immune_to_time_monotonic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC18's second half, pin (not redo): confirm
     ``REBUILD_PROCESS_TIME_CAP_SECS`` is read against ``time.process_time()``,
     never ``time.monotonic()``. Freezes ``time.monotonic`` at a value that
@@ -1108,7 +1108,7 @@ def test_ac18_rebuild_cap_is_immune_to_time_monotonic(tmp_path, monkeypatch):
     assert state.claims == {"foo.py": ["sess-a"], "bar.py": ["sess-b"]}
 
 
-def test_ac18_lookup_cap_withheld_returns_unanswerable_never_empty(tmp_path, monkeypatch):
+def test_ac18_lookup_cap_withheld_returns_unanswerable_never_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC18's second half, other direction: a cap that withholds returns
     C3's typed ``UNANSWERABLE`` signal, never a silent empty set. Already
     exercised via ``REBUILD_PROCESS_TIME_CAP_SECS=-1.0`` above
@@ -1305,7 +1305,7 @@ _BRIGHTLINE_MS = 500.0
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac18_rebuild_at_projected_corpus_width_process_time_and_spawn_count(tmp_path):
+def test_ac18_rebuild_at_projected_corpus_width_process_time_and_spawn_count(tmp_path: Path) -> None:
     """AC18's gate: `claim_index.rebuild()` at ONE YEAR of the corpus growth
     this box actually exhibits, as process time and spawn count via
     `batched_process_time_ms`, never wall clock.
@@ -1490,12 +1490,12 @@ def _count_walks(monkeypatch):
     return walks
 
 
-def _bystanders(base, count=6):
+def _bystanders(base, count: int = 6) -> None:
     for i in range(count):
         _session_touched(base, f"bystander-{i}", [_touch_line("T", f"other{i}.py")])
 
 
-def test_indexed_lookup_reads_only_the_found_claimants_sinks(tmp_path, monkeypatch):
+def test_indexed_lookup_reads_only_the_found_claimants_sinks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = str(tmp_path / "sessions")
     _bystanders(base)
     _session_touched(base, "peer", [_touch_line("T", "a.py")])
@@ -1510,7 +1510,7 @@ def test_indexed_lookup_reads_only_the_found_claimants_sinks(tmp_path, monkeypat
     assert walks == []
 
 
-def test_indexed_lookup_drops_a_released_claim_and_sees_a_later_one(tmp_path):
+def test_indexed_lookup_drops_a_released_claim_and_sees_a_later_one(tmp_path: Path) -> None:
     base = str(tmp_path / "sessions")
     _session_touched(base, "peer", [_touch_line("T", "a.py")])
     assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": ["peer"]}
@@ -1522,7 +1522,7 @@ def test_indexed_lookup_drops_a_released_claim_and_sees_a_later_one(tmp_path):
     assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": ["late"]}
 
 
-def test_indexed_held_by_comes_from_the_found_claimants_sinks(tmp_path, monkeypatch):
+def test_indexed_held_by_comes_from_the_found_claimants_sinks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = str(tmp_path / "sessions")
     _bystanders(base)
     _session_touched(base, "peer", [_touch_line("T", "a.py"), _touch_line("T", "b.py")])
@@ -1541,7 +1541,7 @@ def test_indexed_held_by_comes_from_the_found_claimants_sinks(tmp_path, monkeypa
     }
 
 
-def test_missing_index_stamp_rebuilds_once_then_serves(tmp_path, monkeypatch):
+def test_missing_index_stamp_rebuilds_once_then_serves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = str(tmp_path / "sessions")
     _session_touched(base, "peer", [_touch_line("T", "a.py")])
     claim_index.lookup(["a.py"], sessions_dir=base)
@@ -1555,7 +1555,7 @@ def test_missing_index_stamp_rebuilds_once_then_serves(tmp_path, monkeypatch):
     assert len(walks) == 1
 
 
-def test_a_format_version_change_rebuilds_once_then_serves(tmp_path, monkeypatch):
+def test_a_format_version_change_rebuilds_once_then_serves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = str(tmp_path / "sessions")
     _session_touched(base, "peer", [_touch_line("T", "a.py")])
     claim_index.lookup(["a.py"], sessions_dir=base)
@@ -1568,7 +1568,7 @@ def test_a_format_version_change_rebuilds_once_then_serves(tmp_path, monkeypatch
     assert len(walks) == 1
 
 
-def test_an_unreadable_path_stream_rebuilds_once_then_serves(tmp_path, monkeypatch):
+def test_an_unreadable_path_stream_rebuilds_once_then_serves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = str(tmp_path / "sessions")
     _session_touched(base, "peer", [_touch_line("T", "a.py")])
     claim_index.lookup(["a.py"], sessions_dir=base)
@@ -1584,8 +1584,8 @@ def test_an_unreadable_path_stream_rebuilds_once_then_serves(tmp_path, monkeypat
 
 
 def test_a_failed_index_append_leaves_the_claim_written_and_the_next_lookup_correct(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     base = str(tmp_path / "sessions")
     _session_touched(base, "early", [_touch_line("T", "a.py")])
     claim_index.lookup(["a.py"], sessions_dir=base)
@@ -1614,7 +1614,7 @@ def test_a_failed_index_append_leaves_the_claim_written_and_the_next_lookup_corr
     assert len(walks) == 1 and os.path.exists(stamp)
 
 
-def test_an_incomplete_build_leaves_no_stamp_and_builds_again(tmp_path, monkeypatch):
+def test_an_incomplete_build_leaves_no_stamp_and_builds_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = str(tmp_path / "sessions")
     _session_touched(base, "peer", [_touch_line("T", "a.py")])
     real = claim_index._read_stream_claims
@@ -1637,7 +1637,7 @@ def test_an_incomplete_build_leaves_no_stamp_and_builds_again(tmp_path, monkeypa
     assert os.path.exists(stamp)
 
 
-def test_a_claim_in_an_agent_sink_without_a_backpointer_is_found_once_one_appears(tmp_path):
+def test_a_claim_in_an_agent_sink_without_a_backpointer_is_found_once_one_appears(tmp_path: Path) -> None:
     base = str(tmp_path / "sessions")
     agent_dir = os.path.join(base, ".agents", "agent1")
     sink = os.path.join(agent_dir, "touch-record.jsonl")
@@ -1650,7 +1650,7 @@ def test_a_claim_in_an_agent_sink_without_a_backpointer_is_found_once_one_appear
     assert claim_index.lookup(["a.py"], sessions_dir=base) == {"a.py": ["owner"]}
 
 
-def test_indexed_lookup_past_the_process_time_cap_is_unanswerable_not_negative(tmp_path, monkeypatch):
+def test_indexed_lookup_past_the_process_time_cap_is_unanswerable_not_negative(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = str(tmp_path / "sessions")
     _session_touched(base, "peer", [_touch_line("T", "a.py")])
     claim_index.lookup(["a.py"], sessions_dir=base)
@@ -1664,8 +1664,8 @@ def test_indexed_lookup_past_the_process_time_cap_is_unanswerable_not_negative(t
 
 
 def test_a_build_whose_directory_was_reset_by_a_concurrent_build_is_not_stamped_complete(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     base = str(tmp_path / "sessions")
     _session_touched(base, "peer", [_touch_line("T", "a.py")])
     index_dir = touch_record.claim_index_dir(base)
@@ -1683,7 +1683,7 @@ def test_a_build_whose_directory_was_reset_by_a_concurrent_build_is_not_stamped_
     assert not os.path.exists(os.path.join(index_dir, touch_record.CLAIM_INDEX_COMPLETE))
 
 
-def test_an_uninterrupted_build_is_stamped_complete(tmp_path):
+def test_an_uninterrupted_build_is_stamped_complete(tmp_path: Path) -> None:
     base = str(tmp_path / "sessions")
     _session_touched(base, "peer", [_touch_line("T", "a.py")])
 
@@ -1693,7 +1693,7 @@ def test_an_uninterrupted_build_is_stamped_complete(tmp_path):
     assert os.path.isfile(os.path.join(index_dir, touch_record.CLAIM_INDEX_COMPLETE))
 
 
-def test_a_claim_is_reindexed_after_another_process_reset_erased_its_memoised_stream(tmp_path):
+def test_a_claim_is_reindexed_after_another_process_reset_erased_its_memoised_stream(tmp_path: Path) -> None:
     base = str(tmp_path / "sessions")
     _session_touched(base, "peer", [_touch_line("T", "a.py")])
     claim_index.lookup(["a.py"], sessions_dir=base)
@@ -1705,7 +1705,7 @@ def test_a_claim_is_reindexed_after_another_process_reset_erased_its_memoised_st
     assert os.path.isfile(stream)
 
 
-def test_index_names_unchanged_file_is_not_reread_and_change_is_seen(tmp_path, monkeypatch):
+def test_index_names_unchanged_file_is_not_reread_and_change_is_seen(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import builtins
 
     claim_index._INDEX_NAMES_CACHE.clear()
@@ -1744,7 +1744,7 @@ def _count_decodes(monkeypatch):
     return decoded
 
 
-def test_a_sink_that_only_grew_is_folded_from_its_previous_offset(tmp_path, monkeypatch):
+def test_a_sink_that_only_grew_is_folded_from_its_previous_offset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = str(tmp_path / "sessions")
     _session_touched(
         base,
@@ -1773,7 +1773,7 @@ def test_a_sink_that_only_grew_is_folded_from_its_previous_offset(tmp_path, monk
     assert len(decoded) == 2
 
 
-def test_a_grown_sink_with_a_torn_tail_folds_only_complete_lines_then_the_rest(tmp_path, monkeypatch):
+def test_a_grown_sink_with_a_torn_tail_folds_only_complete_lines_then_the_rest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = str(tmp_path / "sessions")
     _session_touched(base, "peer", [_touch_line("T", "a.py")])
     sink = os.path.join(base, "peer", "touch-record.jsonl")
@@ -1792,7 +1792,7 @@ def test_a_grown_sink_with_a_torn_tail_folds_only_complete_lines_then_the_rest(t
     assert claim_index.lookup(["a.py"], sessions_dir=base)["a.py"] == []
 
 
-def test_a_sink_rewritten_larger_than_its_folded_prefix_is_read_whole(tmp_path):
+def test_a_sink_rewritten_larger_than_its_folded_prefix_is_read_whole(tmp_path: Path) -> None:
     base = str(tmp_path / "sessions")
     _session_touched(base, "peer", [_touch_line("T", "a.py")])
     sink = os.path.join(base, "peer", "touch-record.jsonl")
@@ -1811,7 +1811,7 @@ def test_a_sink_rewritten_larger_than_its_folded_prefix_is_read_whole(tmp_path):
     }
 
 
-def test_held_by_is_folded_on_first_read_not_by_the_lookup(tmp_path, monkeypatch):
+def test_held_by_is_folded_on_first_read_not_by_the_lookup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = str(tmp_path / "sessions")
     _session_touched(base, "peer", [_touch_line("T", "a.py")])
     agent_dir = os.path.join(base, ".agents", "ag1")
@@ -1839,7 +1839,7 @@ def test_held_by_is_folded_on_first_read_not_by_the_lookup(tmp_path, monkeypatch
     assert result.held_by == {"peer": ["a.py", "other.py"]}
 
 
-def test_concurrent_cold_lookups_fold_each_sink_once(tmp_path, monkeypatch):
+def test_concurrent_cold_lookups_fold_each_sink_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = str(tmp_path / "sessions")
     for i in range(4):
         _session_touched(base, f"s{i}", [_touch_line("T", "hot.py")])
@@ -1849,7 +1849,7 @@ def test_concurrent_cold_lookups_fold_each_sink_once(tmp_path, monkeypatch):
     reads = []
     real_read = Path.read_bytes
 
-    def slow(self):
+    def slow(self) -> bytes:
         if self.name == "touch-record.jsonl":
             reads.append(str(self))
             time.sleep(0.05)
@@ -1859,7 +1859,7 @@ def test_concurrent_cold_lookups_fold_each_sink_once(tmp_path, monkeypatch):
     barrier = threading.Barrier(8)
     answers = []
 
-    def run():
+    def run() -> None:
         barrier.wait()
         answers.append(claim_index.lookup(["hot.py"], sessions_dir=base)["hot.py"])
 
@@ -1873,7 +1873,7 @@ def test_concurrent_cold_lookups_fold_each_sink_once(tmp_path, monkeypatch):
     assert len(reads) == 4 and len(set(reads)) == 4
 
 
-def test_read_index_names_cache_serves_crlf_file(tmp_path):
+def test_read_index_names_cache_serves_crlf_file(tmp_path: Path) -> None:
     index = tmp_path / "idx.txt"
     index.write_bytes(b"a/touch-record.jsonl\r\nb/touch-record.jsonl\r\n")
     claim_index._INDEX_NAMES_CACHE.clear()
@@ -1883,7 +1883,7 @@ def test_read_index_names_cache_serves_crlf_file(tmp_path):
     assert claim_index._read_index_names(str(index)) == first
 
 
-def test_dir_claim_listing_distinguishes_live_only_from_rotated(tmp_path):
+def test_dir_claim_listing_distinguishes_live_only_from_rotated(tmp_path: Path) -> None:
     live = tmp_path / "live"
     live.mkdir()
     (live / "touch-record.jsonl").write_bytes(b"")
@@ -1899,7 +1899,7 @@ def test_dir_claim_listing_distinguishes_live_only_from_rotated(tmp_path):
     assert touch_record.dir_claim_listing(str(tmp_path / "missing")) == (False, False, False)
 
 
-def test_served_lookup_cap_exceeded_in_key_loop_is_unanswerable_not_unclaimed(tmp_path, monkeypatch):
+def test_served_lookup_cap_exceeded_in_key_loop_is_unanswerable_not_unclaimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = str(tmp_path)
     _session_touched(base, "sess-a", [_touch_line("T", "foo.py")])
     assert claim_index.lookup(["foo.py"], sessions_dir=base) == {"foo.py": ["sess-a"]}

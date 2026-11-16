@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.benchmarks import submit_hook_resume_emit as bench
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -27,21 +28,21 @@ def measured() -> dict:
     return bench.measure(commits=COMMITS, top=5)
 
 
-def test_the_resume_takes_the_halted_run_from_its_record(measured):
+def test_the_resume_takes_the_halted_run_from_its_record(measured) -> None:
     assert measured["resumes_halted_run"], (measured["decision"], measured["reason"])
     assert measured["record_hit"], measured["reason"]
 
 
-def test_the_resume_hook_spawns_no_git(measured):
+def test_the_resume_hook_spawns_no_git(measured) -> None:
     assert measured["hook_git_spawns"] <= SPAWN_CEILING, measured["git_spawn_argv"]
     assert measured["git_spawns"] <= SPAWN_CEILING, measured["git_spawn_argv"]
 
 
-def test_the_resume_hook_reads_no_commits(measured):
+def test_the_resume_hook_reads_no_commits(measured) -> None:
     assert measured["commit_meta_calls"] <= META_CEILING, measured["commit_meta_calls"]
 
 
-def test_the_warm_resume_stays_under_the_ruling_bar(measured):
+def test_the_warm_resume_stays_under_the_ruling_bar(measured) -> None:
     assert measured["warm_process_ms"] is not None
     assert measured["warm_process_ms"] < RESUME_BAR_MS, measured["warm_process_ms"]
 
@@ -55,7 +56,7 @@ def production_sized() -> dict:
     return bench.measure(commits=PRODUCTION_COMMITS, top=1)
 
 
-def test_a_production_sized_history_keeps_the_warm_resume_under_the_bar(production_sized):
+def test_a_production_sized_history_keeps_the_warm_resume_under_the_bar(production_sized) -> None:
     assert production_sized["record_hit"], production_sized["reason"]
     assert production_sized["warm_process_ms"] is not None
     assert production_sized["warm_process_ms"] < RESUME_BAR_MS, production_sized["warm_process_ms"]
@@ -63,7 +64,7 @@ def test_a_production_sized_history_keeps_the_warm_resume_under_the_bar(producti
     assert production_sized["commit_meta_calls"] <= META_CEILING, production_sized["commit_meta_calls"]
 
 
-def test_the_repo_replay_drives_evaluate_on_a_halted_sizing_in_a_real_tree(tmp_path):
+def test_the_repo_replay_drives_evaluate_on_a_halted_sizing_in_a_real_tree(tmp_path: Path) -> None:
     """`--repo` mode: the halted sizing is found in the tree and `evaluate` is driven, launch stubbed."""
     bench.build_fixture(tmp_path, 8)
     assert bench.halted_sizings(tmp_path) == [bench.SIZING_REL]
@@ -76,7 +77,7 @@ def test_the_repo_replay_drives_evaluate_on_a_halted_sizing_in_a_real_tree(tmp_p
     assert result["resumes_halted_run"]
 
 
-def test_a_missing_record_starts_the_run_through_the_launcher_without_composing(tmp_path, monkeypatch):
+def test_a_missing_record_starts_the_run_through_the_launcher_without_composing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The miss side of the decision: no `resume.json` -> the recompose is scheduled and the run still starts."""
     from coordinator_core.hooks import submit_engine_ask as hook
     from coordinator_core.ops.dispatch_emit import ask_compose
@@ -92,13 +93,13 @@ def test_a_missing_record_starts_the_run_through_the_launcher_without_composing(
     assert result["resumes_halted_run"]
 
 
-def test_the_repo_replay_finds_no_halted_run_in_an_empty_tree(tmp_path):
+def test_the_repo_replay_finds_no_halted_run_in_an_empty_tree(tmp_path: Path) -> None:
     assert bench.halted_sizings(tmp_path) == []
     with pytest.raises(SystemExit):
         bench.replay(tmp_path)
 
 
-def test_the_submit_hook_is_a_resident_engine_op_on_the_warm_blocking_transport():
+def test_the_submit_hook_is_a_resident_engine_op_on_the_warm_blocking_transport() -> None:
     """The hook the benchmark measures is reached as a registered engine op over PreToolUse (no interpreter start)."""
     import coordinator_core.hooks.submit_engine_ask  # noqa: F401 -- registers the op
     from coordinator_core.ipc import get_op_handler

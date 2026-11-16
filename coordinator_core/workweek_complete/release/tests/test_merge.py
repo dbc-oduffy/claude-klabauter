@@ -9,12 +9,13 @@ import pytest
 
 from coordinator_core.workweek_complete.release import contract, merge
 from coordinator_core.workweek_complete.release.merge import ARGV, Child, MergeRefused, merge_pinned
+from pathlib import Path
 
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _git(cwd, *args):
+def _git(cwd, *args) -> str:
     return subprocess.run(
         ["git", *args], cwd=cwd, capture_output=True, text=True, check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -22,7 +23,7 @@ def _git(cwd, *args):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> tuple[Path, Path, str]:
     origin = tmp_path / "origin.git"
     work = tmp_path / "work"
     _git(tmp_path, "init", "--bare", "-b", "main", str(origin))
@@ -40,14 +41,14 @@ def repo(tmp_path):
 class Recorder:
     """Real git for the push, scripted answers for gh; records every argv."""
 
-    def __init__(self, prs=None, merge_rc=0, view=None, create_out="https://github.com/o/r/pull/7\n"):
+    def __init__(self, prs=None, merge_rc: int = 0, view=None, create_out: str = "https://github.com/o/r/pull/7\n") -> None:
         self.calls = []
         self.prs = prs or []
         self.merge_rc = merge_rc
         self.view = view
         self.create_out = create_out
 
-    def __call__(self, argv, cwd):
+    def __call__(self, argv, cwd) -> Child:
         self.calls.append(argv)
         if argv[0] == "git":
             return merge._default_run(argv, cwd)
@@ -78,7 +79,7 @@ def _call(repo, rec, tmp_path, **kw):
     )
 
 
-def test_already_merged_head_starts_one_child(repo, tmp_path):
+def test_already_merged_head_starts_one_child(repo, tmp_path: Path) -> None:
     _o, _w, cand = repo
     rec = Recorder(prs=[{"number": 3, "state": "MERGED", "headRefOid": cand, "mergeCommit": {"oid": "f" * 40}}])
     res = _call(repo, rec, tmp_path)
@@ -86,7 +87,7 @@ def test_already_merged_head_starts_one_child(repo, tmp_path):
     assert len(rec.calls) == 1
 
 
-def test_open_pull_request_is_reused(repo, tmp_path):
+def test_open_pull_request_is_reused(repo, tmp_path: Path) -> None:
     _o, _w, cand = repo
     rec = Recorder(prs=[{"number": 5, "state": "OPEN", "headRefOid": "0" * 40}], view=_merged_view(cand))
     res = _call(repo, rec, tmp_path)
@@ -94,7 +95,7 @@ def test_open_pull_request_is_reused(repo, tmp_path):
     assert not any(c[1:3] == ("pr", "create") for c in rec.calls)
 
 
-def test_merge_argv_pins_the_candidate_with_a_merge_commit(repo, tmp_path):
+def test_merge_argv_pins_the_candidate_with_a_merge_commit(repo, tmp_path: Path) -> None:
     _o, _w, cand = repo
     rec = Recorder(view=_merged_view(cand))
     res = _call(repo, rec, tmp_path)
@@ -106,7 +107,7 @@ def test_merge_argv_pins_the_candidate_with_a_merge_commit(repo, tmp_path):
     assert (tmp_path / "run" / create[create.index("--body-file") + 1].rsplit("\\", 1)[-1].rsplit("/", 1)[-1]).read_text() == "b"
 
 
-def test_rejected_push_raises_before_any_gh_write(repo, tmp_path):
+def test_rejected_push_raises_before_any_gh_write(repo, tmp_path: Path) -> None:
     origin, work, cand = repo
     _git(work, "push", "origin", "HEAD:refs/heads/release/x")
     (work / "b.txt").write_text("b")
@@ -122,7 +123,7 @@ def test_rejected_push_raises_before_any_gh_write(repo, tmp_path):
     assert _git(origin, "rev-parse", "refs/heads/release/x") == later
 
 
-def test_unconfirmed_merge_raises(repo, tmp_path):
+def test_unconfirmed_merge_raises(repo, tmp_path: Path) -> None:
     _o, _w, cand = repo
     rec = Recorder(view={"state": "OPEN", "headRefOid": cand, "mergeCommit": None})
     with pytest.raises(MergeRefused) as exc:
@@ -130,21 +131,21 @@ def test_unconfirmed_merge_raises(repo, tmp_path):
     assert exc.value.reason == "merge-not-confirmed"
 
 
-def test_view_of_another_head_is_not_confirmed(repo, tmp_path):
+def test_view_of_another_head_is_not_confirmed(repo, tmp_path: Path) -> None:
     rec = Recorder(view=_merged_view("9" * 40))
     with pytest.raises(MergeRefused) as exc:
         _call(repo, rec, tmp_path)
     assert exc.value.reason == "merge-not-confirmed"
 
 
-def test_merge_refusal_carries_gh_stderr(repo, tmp_path):
+def test_merge_refusal_carries_gh_stderr(repo, tmp_path: Path) -> None:
     rec = Recorder(merge_rc=1)
     with pytest.raises(MergeRefused) as exc:
         _call(repo, rec, tmp_path)
     assert exc.value.reason == "merge-refused" and "refused by gh" in exc.value.detail
 
 
-def test_local_branch_past_the_candidate_sends_only_the_candidate(repo, tmp_path):
+def test_local_branch_past_the_candidate_sends_only_the_candidate(repo, tmp_path: Path) -> None:
     origin, work, cand = repo
     for name in ("b", "c"):
         (work / f"{name}.txt").write_text(name)
@@ -155,7 +156,7 @@ def test_local_branch_past_the_candidate_sends_only_the_candidate(repo, tmp_path
     assert _git(origin, "rev-parse", "refs/heads/release/x") == cand
 
 
-def test_origin_branch_past_the_candidate_is_rejected_and_unchanged(repo, tmp_path):
+def test_origin_branch_past_the_candidate_is_rejected_and_unchanged(repo, tmp_path: Path) -> None:
     origin, work, cand = repo
     (work / "b.txt").write_text("b")
     _git(work, "add", "b.txt")
@@ -169,7 +170,7 @@ def test_origin_branch_past_the_candidate_is_rejected_and_unchanged(repo, tmp_pa
     assert _git(origin, "rev-parse", "refs/heads/release/x") == later
 
 
-def test_no_forbidden_token_force_refspec_or_main_destination(repo, tmp_path):
+def test_no_forbidden_token_force_refspec_or_main_destination(repo, tmp_path: Path) -> None:
     _o, _w, cand = repo
     rec = Recorder(view=_merged_view(cand))
     _call(repo, rec, tmp_path)

@@ -16,6 +16,7 @@ import pytest
 
 from coordinator_core.warm import breadcrumb, client, hang_restart
 from coordinator_core.warm.engine_root import current_engine_clone
+from pathlib import Path
 
 _PID = 424242
 _TOKEN = "faketoken"
@@ -42,7 +43,7 @@ class _AnsweringPipe(_StuckPipe):
 
 
 @pytest.fixture()
-def engine(monkeypatch: pytest.MonkeyPatch, tmp_path):
+def engine(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("COORDINATOR_WARM_RUNTIME_BASE", str(tmp_path))
     monkeypatch.setattr(client, "is_warm_enabled", lambda: True)
     monkeypatch.setattr(client, "engine_token", lambda: _TOKEN)
@@ -89,7 +90,7 @@ def test_counter_sits_beside_the_discovery_record() -> None:
     assert client._unanswered_path().parent == breadcrumb.svc_dir(current_engine_clone())
 
 
-def test_k_minus_one_unanswered_connects_request_no_decision(engine, monkeypatch) -> None:
+def test_k_minus_one_unanswered_connects_request_no_decision(engine, monkeypatch: pytest.MonkeyPatch) -> None:
     _svc, killed, decided = engine
     _refuse_connect(monkeypatch)
     for _ in range(client.UNANSWERED_RESTART_K - 1):
@@ -98,7 +99,7 @@ def test_k_minus_one_unanswered_connects_request_no_decision(engine, monkeypatch
     assert killed == []
 
 
-def test_k_unanswered_connects_decide_once_and_end_the_engine(engine, monkeypatch) -> None:
+def test_k_unanswered_connects_decide_once_and_end_the_engine(engine, monkeypatch: pytest.MonkeyPatch) -> None:
     svc, killed, decided = engine
     _refuse_connect(monkeypatch)
     for _ in range(client.UNANSWERED_RESTART_K):
@@ -109,7 +110,7 @@ def test_k_unanswered_connects_decide_once_and_end_the_engine(engine, monkeypatc
     assert not client._unanswered_path().exists()
 
 
-def test_replay_safe_frame_replays_cold_once_after_the_restart(engine, monkeypatch) -> None:
+def test_replay_safe_frame_replays_cold_once_after_the_restart(engine, monkeypatch: pytest.MonkeyPatch) -> None:
     _svc, killed, decided = engine
     _preseed(client.UNANSWERED_RESTART_K - 1)
     monkeypatch.setattr(client, "_open_pipe", lambda name: _StuckPipe())
@@ -119,7 +120,7 @@ def test_replay_safe_frame_replays_cold_once_after_the_restart(engine, monkeypat
     assert len(decided) == 1
 
 
-def test_non_replay_safe_frame_keeps_the_envelope_and_names_the_restart(engine, monkeypatch) -> None:
+def test_non_replay_safe_frame_keeps_the_envelope_and_names_the_restart(engine, monkeypatch: pytest.MonkeyPatch) -> None:
     _svc, killed, _decided = engine
     _preseed(client.UNANSWERED_RESTART_K - 1)
     monkeypatch.setattr(client, "_open_pipe", lambda name: _StuckPipe())
@@ -129,7 +130,7 @@ def test_non_replay_safe_frame_keeps_the_envelope_and_names_the_restart(engine, 
     assert killed == [_PID]
 
 
-def test_suppressed_decision_keeps_the_envelope_and_adds_the_backoff_remaining(engine, monkeypatch) -> None:
+def test_suppressed_decision_keeps_the_envelope_and_adds_the_backoff_remaining(engine, monkeypatch: pytest.MonkeyPatch) -> None:
     svc, killed, decided = engine
     stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     (svc / hang_restart.HANG_RESTART_LOG_FILENAME).write_text(
@@ -145,7 +146,7 @@ def test_suppressed_decision_keeps_the_envelope_and_adds_the_backoff_remaining(e
     assert killed == []
 
 
-def test_a_dead_pid_requests_no_decision(engine, monkeypatch) -> None:
+def test_a_dead_pid_requests_no_decision(engine, monkeypatch: pytest.MonkeyPatch) -> None:
     _svc, killed, decided = engine
     monkeypatch.setattr(breadcrumb, "stable_pid_alive", lambda *a, **k: False)
     _preseed(client.UNANSWERED_RESTART_K - 1)
@@ -154,14 +155,14 @@ def test_a_dead_pid_requests_no_decision(engine, monkeypatch) -> None:
     assert decided == [] and killed == []
 
 
-def test_an_answered_call_ends_the_run(engine, monkeypatch) -> None:
+def test_an_answered_call_ends_the_run(engine, monkeypatch: pytest.MonkeyPatch) -> None:
     _preseed(client.UNANSWERED_RESTART_K - 1)
     monkeypatch.setattr(client, "_open_pipe", lambda name: _AnsweringPipe())
     assert client.try_warm_dispatch(_msg("review.prep")) == {"jsonrpc": "2.0", "id": 1, "result": {}}
     assert not client._unanswered_path().exists()
 
 
-def test_a_counter_write_failure_is_no_decision_not_an_error(engine, monkeypatch) -> None:
+def test_a_counter_write_failure_is_no_decision_not_an_error(engine, monkeypatch: pytest.MonkeyPatch) -> None:
     _svc, killed, decided = engine
 
     def _boom(token, now):
@@ -173,7 +174,7 @@ def test_a_counter_write_failure_is_no_decision_not_an_error(engine, monkeypatch
     assert decided == [] and killed == []
 
 
-def test_a_counter_write_that_overruns_its_deadline_is_no_decision(engine, monkeypatch) -> None:
+def test_a_counter_write_that_overruns_its_deadline_is_no_decision(engine, monkeypatch: pytest.MonkeyPatch) -> None:
     _svc, killed, decided = engine
     monkeypatch.setattr(client, "_UNANSWERED_DEADLINE_SECS", 0.05)
     monkeypatch.setattr(client, "_count_unanswered", lambda token, now: time.sleep(0.5) or 99)

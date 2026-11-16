@@ -17,6 +17,12 @@ from __future__ import annotations
 import ast
 import os
 import sys
+from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ast import Module
 
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _BIN_DIR = os.path.dirname(_TESTS_DIR)
@@ -71,7 +77,7 @@ def _seed_registry_dir(tmp_path, registry_text=None, registry_local_text=None):
     return reg_dir
 
 
-def _reset_env(monkeypatch):
+def _reset_env(monkeypatch) -> None:
     for k in list(os.environ):
         if k.startswith("MACHINE_LOCAL_"):
             monkeypatch.delenv(k, raising=False)
@@ -93,19 +99,19 @@ def _parity_case(monkeypatch, tmp_path, key):
     return mine
 
 
-def test_parity_nested_table_key(monkeypatch, tmp_path):
+def test_parity_nested_table_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert _parity_case(monkeypatch, tmp_path, "coordinator.machine_slug") == "local-machine"
 
 
-def test_parity_flat_quoted_dotted_key(monkeypatch, tmp_path):
+def test_parity_flat_quoted_dotted_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert _parity_case(monkeypatch, tmp_path, "flat.dotted.key") == "local-value"
 
 
-def test_parity_list_valued_key(monkeypatch, tmp_path):
+def test_parity_list_valued_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert _parity_case(monkeypatch, tmp_path, "flat_list_key") == "a\nb\nc"
 
 
-def test_parity_explicitly_empty_key(monkeypatch, tmp_path):
+def test_parity_explicitly_empty_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _reset_env(monkeypatch)
     reg_dir = _seed_registry_dir(tmp_path, 'empty_key = ""\n')
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
@@ -115,23 +121,23 @@ def test_parity_explicitly_empty_key(monkeypatch, tmp_path):
     assert theirs is None
 
 
-def test_parity_local_over_tracked_shadowed_key(monkeypatch, tmp_path):
+def test_parity_local_over_tracked_shadowed_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert _parity_case(monkeypatch, tmp_path, "shadowed_key") == "local-wins"
 
 
-def test_parity_concerns_prefixed_table_key_absent(monkeypatch, tmp_path):
+def test_parity_concerns_prefixed_table_key_absent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert _parity_case(monkeypatch, tmp_path, "concerns.leaked.should_be_absent") is None
 
 
-def test_parity_schema_prefixed_table_key_absent(monkeypatch, tmp_path):
+def test_parity_schema_prefixed_table_key_absent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert _parity_case(monkeypatch, tmp_path, "schema.leaked.should_be_absent") is None
 
 
-def test_parity_absent_key(monkeypatch, tmp_path):
+def test_parity_absent_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert _parity_case(monkeypatch, tmp_path, "does.not.exist") is None
 
 
-def test_parity_env_override(monkeypatch, tmp_path):
+def test_parity_env_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _reset_env(monkeypatch)
     reg_dir = _seed_registry_dir(tmp_path, REGISTRY_TOML, REGISTRY_LOCAL_TOML)
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg_dir))
@@ -146,7 +152,7 @@ def test_parity_env_override(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_parity_via_settings_home_not_registry_dir_override(monkeypatch, tmp_path):
+def test_parity_via_settings_home_not_registry_dir_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _reset_env(monkeypatch)
     settings_home_root = tmp_path / "settings-home"
     settings_home_root.mkdir()
@@ -158,7 +164,7 @@ def test_parity_via_settings_home_not_registry_dir_override(monkeypatch, tmp_pat
     assert mine == theirs == "local-machine"
 
 
-def test_parity_repos_key_normalizes_backslash_form(monkeypatch, tmp_path):
+def test_parity_repos_key_normalizes_backslash_form(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _reset_env(monkeypatch)
     reg_dir = _seed_registry_dir(
         tmp_path,
@@ -170,7 +176,7 @@ def test_parity_repos_key_normalizes_backslash_form(monkeypatch, tmp_path):
     assert mine == theirs
 
 
-def test_registry_get_repairs_msys_mount_form_for_repos_key(monkeypatch, tmp_path):
+def test_registry_get_repairs_msys_mount_form_for_repos_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     if os.name != "nt":
         import pytest
 
@@ -314,14 +320,14 @@ def test_parity_key_not_listed_in_concerns_ignores_concern_file(monkeypatch, tmp
     assert machine_resolver.registry_get("example_retrieval_repo.python") is None
 
 
-def _load_module_ast():
+def _load_module_ast() -> Module:
     module_path = os.path.join(_LIB_DIR, "machine_local_impl_resolve.py")
     with open(module_path, "r", encoding="utf-8") as f:
         source = f.read()
     return ast.parse(source, filename=module_path)
 
 
-def test_module_imports_no_coordinator_core():
+def test_module_imports_no_coordinator_core() -> None:
     tree = _load_module_ast()
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -353,7 +359,7 @@ def _reachable_helper_names(entry_name, funcs, seen=None):
     return seen
 
 
-def _has_subprocess_call(node):
+def _has_subprocess_call(node) -> bool:
     for sub in ast.walk(node):
         if isinstance(sub, ast.Call):
             func = sub.func
@@ -363,7 +369,7 @@ def _has_subprocess_call(node):
     return False
 
 
-def test_registry_get_and_registry_dir_never_reach_a_subprocess_call():
+def test_registry_get_and_registry_dir_never_reach_a_subprocess_call() -> None:
     tree = _load_module_ast()
     funcs = _function_defs_by_name(tree)
     for entry in ("registry_get", "registry_dir"):

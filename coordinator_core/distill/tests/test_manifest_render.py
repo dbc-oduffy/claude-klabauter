@@ -25,9 +25,10 @@ from __future__ import annotations
 
 from coordinator_core.distill import manifest_schema as _schema
 from coordinator_core.distill.manifest_render import render_disposal_manifest
+from pathlib import Path
 
 
-def _manifest(rows, mass_throttle=False, run_id="2026-07-23-01h00"):
+def _manifest(rows, mass_throttle: bool = False, run_id: str = "2026-07-23-01h00"):
     total = len(rows)
     eligible = sum(1 for r in rows if r["eligible"])
     return _schema.make_disposal_manifest(
@@ -38,7 +39,7 @@ def _manifest(rows, mass_throttle=False, run_id="2026-07-23-01h00"):
     )
 
 
-def test_render_eligible_and_retained_rows():
+def test_render_eligible_and_retained_rows() -> None:
     eligible_row = _schema.make_disposal_row(
         path="archive/handoffs/a.md",
         artifact_class="handoff",
@@ -69,7 +70,7 @@ def test_render_eligible_and_retained_rows():
     assert "realized_by" not in rendered.split("archive/handoffs/b.md", 1)[1].split("\n")[0]
 
 
-def test_render_multiline_evidence_does_not_break_table():
+def test_render_multiline_evidence_does_not_break_table() -> None:
     row = _schema.make_disposal_row(
         path="archive/handoffs/c.md",
         artifact_class="handoff",
@@ -96,7 +97,7 @@ def test_render_multiline_evidence_does_not_break_table():
     assert "(second detail line)" in table_lines[0]
 
 
-def test_render_mass_throttle_banner_present_when_set():
+def test_render_mass_throttle_banner_present_when_set() -> None:
     row = _schema.make_disposal_row(
         path="archive/handoffs/a.md",
         artifact_class="handoff",
@@ -111,7 +112,7 @@ def test_render_mass_throttle_banner_present_when_set():
     assert "MASS THROTTLE ENGAGED" not in quiet
 
 
-def test_render_counts_line_reflects_scan_stats():
+def test_render_counts_line_reflects_scan_stats() -> None:
     eligible_row = _schema.make_disposal_row(
         path="archive/handoffs/a.md",
         artifact_class="handoff",
@@ -133,7 +134,7 @@ def test_render_counts_line_reflects_scan_stats():
     assert "**Retained:** 1" in rendered
 
 
-def test_render_synthetic_blocker_falls_back_to_retention_reason():
+def test_render_synthetic_blocker_falls_back_to_retention_reason() -> None:
     row = _schema.make_disposal_row(
         path="archive/specs/mystery.md",
         artifact_class="unresolved",
@@ -149,14 +150,14 @@ def test_render_synthetic_blocker_falls_back_to_retention_reason():
     assert "artifact-class-unresolved" in rendered
 
 
-def test_render_empty_rows_no_crash():
+def test_render_empty_rows_no_crash() -> None:
     manifest = _manifest([])
     rendered = render_disposal_manifest(manifest)
     assert "No candidates scanned" in rendered
     assert "**Scanned:** 0" in rendered
 
 
-def test_render_row_symbols_carry_sym_tag_only_when_resolved():
+def test_render_row_symbols_carry_sym_tag_only_when_resolved() -> None:
     row = _schema.make_disposal_row(
         path="archive/handoffs/a.md", artifact_class="handoff", guards_run=[], eligible=True, log_row="x"
     )
@@ -169,7 +170,7 @@ def test_render_row_symbols_carry_sym_tag_only_when_resolved():
     assert "pkg.mod.gone |" in rendered and "pkg.mod.gone [sym" not in rendered
 
 
-def test_anchor_manifest_attaches_resolved_symbols_to_py_rows_only(tmp_path):
+def test_anchor_manifest_attaches_resolved_symbols_to_py_rows_only(tmp_path: Path) -> None:
     from coordinator_core.distill.manifest_render import anchor_manifest
     from coordinator_core.symbol_knowledge.tests.test_anchors import _store
 

@@ -18,7 +18,7 @@ STAMP = (
 )
 
 
-def _row(rid, status="met", wired=True):
+def _row(rid, status: str = "met", wired: bool = True):
     return {
         "id": rid, "source_text": f"text {rid}", "anchor": "§1", "surface": "internal",
         "status": status, "claimed_by": [], "wired": wired, "met_by": [],
@@ -26,7 +26,7 @@ def _row(rid, status="met", wired=True):
     }
 
 
-def _plan(tmp_path: Path, rows=None, *, stamp=True, claims=True) -> Path:
+def _plan(tmp_path: Path, rows=None, *, stamp: bool = True, claims: bool = True) -> Path:
     if rows is not None:
         (tmp_path / "state/sizings").mkdir(parents=True)
         (tmp_path / SIZING_REL).write_text(
@@ -44,12 +44,12 @@ def _plan(tmp_path: Path, rows=None, *, stamp=True, claims=True) -> Path:
     return plan
 
 
-def test_resolve_is_empty_resolved(tmp_path):
+def test_resolve_is_empty_resolved(tmp_path: Path) -> None:
     plan = _plan(tmp_path, stamp=False)
     assert m.resolve(plan, {}, tmp_path) == Resolved({})
 
 
-def test_missing_stamp_calls_mint_with_repair(tmp_path, monkeypatch):
+def test_missing_stamp_calls_mint_with_repair(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plan = _plan(tmp_path, stamp=False)
     seen = {}
 
@@ -62,7 +62,7 @@ def test_missing_stamp_calls_mint_with_repair(tmp_path, monkeypatch):
     assert seen == {"path": plan, "root": tmp_path, "build_test_path": None, "repair": True}
 
 
-def test_mint_refusal_is_review_run_absent(tmp_path, monkeypatch):
+def test_mint_refusal_is_review_run_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plan = _plan(tmp_path, stamp=False)
 
     def boom(*a, **k):
@@ -75,7 +75,7 @@ def test_mint_refusal_is_review_run_absent(tmp_path, monkeypatch):
     assert plan.read_bytes() == before
 
 
-def test_register_written_then_unchanged(tmp_path):
+def test_register_written_then_unchanged(tmp_path: Path) -> None:
     plan = _plan(tmp_path, [_row("A")])
     assert m.write(plan, tmp_path) == Resolved({})
     reg = yaml.safe_load(plan.read_text(encoding="utf-8").split("---\n")[1])["review_stamp"]["register"]
@@ -85,7 +85,7 @@ def test_register_written_then_unchanged(tmp_path):
     assert plan.read_bytes() == after
 
 
-def test_register_absent_refuses(tmp_path):
+def test_register_absent_refuses(tmp_path: Path) -> None:
     plan = _plan(tmp_path, claims=False)
     before = plan.read_bytes()
     res = m.write(plan, tmp_path)
@@ -93,7 +93,7 @@ def test_register_absent_refuses(tmp_path):
     assert plan.read_bytes() == before
 
 
-def test_register_unsettled_refuses(tmp_path):
+def test_register_unsettled_refuses(tmp_path: Path) -> None:
     plan = _plan(tmp_path, [_row("A", "open", False)])
     before = plan.read_bytes()
     res = m.write(plan, tmp_path)
@@ -101,12 +101,12 @@ def test_register_unsettled_refuses(tmp_path):
     assert plan.read_bytes() == before
 
 
-def test_register_no_stamp_mapping():
+def test_register_no_stamp_mapping() -> None:
     r = m._register_refusal("review-stamp: p.md has no review_stamp; run review-stamp mint")
     assert r.reason == "register-no-stamp"
 
 
-def test_stamp_required_before_register(tmp_path, monkeypatch):
+def test_stamp_required_before_register(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plan = _plan(tmp_path, [_row("A")], stamp=False)
     calls = []
     monkeypatch.setattr(review_stamp, "mint", lambda *a, **k: calls.append("mint"))

@@ -63,7 +63,7 @@ class _RecordingTransition:
     """Stand-in for _call_transition — records params, returns a
     canned result or raises a canned exception."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.calls: list[dict] = []
         self.result: dict = {}
         self.exc: Exception | None = None
@@ -76,7 +76,7 @@ class _RecordingTransition:
 
 
 class _StubHarness(unittest.TestCase):
-    def setUp(self):
+    def setUp(self) -> None:
         self._orig_transition = _cli._call_transition
         self._orig_repo_root = _cli._resolve_repo_root
         self.addCleanup(self._restore)
@@ -89,7 +89,7 @@ class _StubHarness(unittest.TestCase):
         self._tmp.close()
         self.handoff_path = self._tmp.name
 
-    def _restore(self):
+    def _restore(self) -> None:
         _cli._call_transition = self._orig_transition
         _cli._resolve_repo_root = self._orig_repo_root
         try:
@@ -97,7 +97,7 @@ class _StubHarness(unittest.TestCase):
         except OSError:
             pass
 
-    def _seed_claimed_frontmatter(self):
+    def _seed_claimed_frontmatter(self) -> None:
         """Write minimal frontmatter satisfying DR-242's `claimed_or_shipped`
         predicate (coordinator_core/archival.py) onto self.handoff_path, so a
         supersede-path test exercises a legitimate successor rather than the
@@ -111,7 +111,7 @@ class _StubHarness(unittest.TestCase):
                 "body\n"
             )
 
-    def _seed_landed_chain_frontmatter(self, shipped_in: str):
+    def _seed_landed_chain_frontmatter(self, shipped_in: str) -> None:
         """The on-disk shape AFTER a real `handoff.archive_transition`
         mode='stamp_shipped' call has landed — `deployment_state: shipped`
         with a populated `shipped_in`. Used by `cmd_chain`'s self-
@@ -126,7 +126,7 @@ class _StubHarness(unittest.TestCase):
                 "body\n"
             )
 
-    def _seed_landed_supersede_frontmatter(self, continued_into: str):
+    def _seed_landed_supersede_frontmatter(self, continued_into: str) -> None:
         """Extends `_seed_claimed_frontmatter`'s shape (still satisfies DR-242)
         with `deployment_state: continued` + `continued_into: <continued_into>`
         already present — the on-disk shape AFTER a real
@@ -153,7 +153,7 @@ class _StubHarness(unittest.TestCase):
 
 
 class ChainSubcommandTest(_StubHarness):
-    def test_missing_predecessor_fails_loud(self):
+    def test_missing_predecessor_fails_loud(self) -> None:
         """C1/AC1: a missing predecessor file is NOT a verified prior
         archival — it is indistinguishable on-disk from a bad path or a
         race, so cmd_chain refuses (rc 1) rather than silently claiming the
@@ -163,19 +163,19 @@ class ChainSubcommandTest(_StubHarness):
         self.assertEqual(rc, 1)
         self.assertEqual(self.transition.calls, [])
 
-    def test_chain_selects_stamp_shipped(self):
+    def test_chain_selects_stamp_shipped(self) -> None:
         self.transition.result = {"moved": True}
         rc = _cli.cmd_chain(self.handoff_path, [])
         self.assertEqual(rc, 0)
         self.assertEqual(len(self.transition.calls), 1)
         self.assertEqual(self.transition.calls[0]["params"]["mode"], "stamp_shipped")
 
-    def test_op_retained_envelope_returns_0(self):
+    def test_op_retained_envelope_returns_0(self) -> None:
         self.transition.result = {"moved": False, "retained": True, "retain_reason": "live children"}
         rc = _cli.cmd_chain(self.handoff_path, [])
         self.assertEqual(rc, 0)
 
-    def test_exclude_forwarded(self):
+    def test_exclude_forwarded(self) -> None:
         self.transition.result = {"moved": True}
         rc = _cli.cmd_chain(self.handoff_path, ["state/handoffs/x.md", "state/handoffs/y.md"])
         self.assertEqual(rc, 0)
@@ -184,7 +184,7 @@ class ChainSubcommandTest(_StubHarness):
             ["state/handoffs/x.md", "state/handoffs/y.md"],
         )
 
-    def test_archive_transition_refusal_returns_1(self):
+    def test_archive_transition_refusal_returns_1(self) -> None:
         """C1/AC1: an op-level refusal (_TransitionRefused) is now a hard
         failure, not opportunistic-swallowed success — the mutation this
         call promised did not land, so rc must say so (plan § S5, site 4)."""
@@ -196,12 +196,12 @@ class ChainSubcommandTest(_StubHarness):
     # RuntimeError transport/engine failure -> rc 1) had zero test coverage;
     # a _TransitionRefused is a RuntimeError subclass, so the sibling test
     # above alone did not exercise the new `except RuntimeError` branch.
-    def test_archive_transition_transport_failure_returns_1(self):
+    def test_archive_transition_transport_failure_returns_1(self) -> None:
         self.transition.exc = RuntimeError("transport down")
         rc = _cli.cmd_chain(self.handoff_path, [])
         self.assertEqual(rc, 1)
 
-    def test_unresolved_repo_root_fails_loud(self):
+    def test_unresolved_repo_root_fails_loud(self) -> None:
         """C1/AC1: an unresolvable repo root means no mutation was
         attempted, not a clean pass-through — cmd_chain refuses (rc 1)
         rather than reporting the same 0 a genuine archive would (plan
@@ -211,7 +211,7 @@ class ChainSubcommandTest(_StubHarness):
         self.assertEqual(rc, 1)
         self.assertEqual(self.transition.calls, [])
 
-    def test_archive_deferred_ambiguous_fails_loud(self):
+    def test_archive_deferred_ambiguous_fails_loud(self) -> None:
         """C1 negative-spec (Finding 3): a 'stamp_shipped'
         dispatch whose op envelope reports no landing (`moved` falsy) AND
         whose on-disk re-read also shows no landing (the untouched empty
@@ -232,7 +232,7 @@ class ChainSubcommandTest(_StubHarness):
             stderr.getvalue(),
         )
 
-    def test_moved_false_but_disk_confirms_landing_returns_0(self):
+    def test_moved_false_but_disk_confirms_landing_returns_0(self) -> None:
         """Defect 1 regression (`cross-repo/inbox/2026-08-04-market-
         intelligence-em-baton-lifecycle-three-defects.md`): a 'stamp_shipped'
         dispatch whose op envelope reports no landing (`moved` falsy — the
@@ -253,7 +253,7 @@ class ChainSubcommandTest(_StubHarness):
         )
         self.assertIn("confirmed landed via on-disk re-read", stderr.getvalue())
 
-    def test_true_failure_still_fails_loud_after_reread(self):
+    def test_true_failure_still_fails_loud_after_reread(self) -> None:
         """The re-read is a rescue for a misreported success, never a
         blanket amnesty — a genuinely failed/deferred transition (envelope
         AND disk both show no landing) still fails loud, unchanged from
@@ -271,7 +271,7 @@ class ChainSubcommandTest(_StubHarness):
             stderr.getvalue(),
         )
 
-    def test_sha_forwarded_when_supplied(self):
+    def test_sha_forwarded_when_supplied(self) -> None:
         """C3/AC5: `--sha` (threaded here as cmd_chain's `sha` param) must
         land in params["sha"] verbatim."""
         self.transition.result = {"moved": True}
@@ -279,7 +279,7 @@ class ChainSubcommandTest(_StubHarness):
         self.assertEqual(rc, 0)
         self.assertEqual(self.transition.calls[0]["params"]["sha"], "deadbeef")
 
-    def test_force_forwarded_when_supplied(self):
+    def test_force_forwarded_when_supplied(self) -> None:
         """C3/AC5: `--force` (threaded here as cmd_chain's `force` param)
         must land in params["force"] truthy."""
         self.transition.result = {"moved": True}
@@ -287,7 +287,7 @@ class ChainSubcommandTest(_StubHarness):
         self.assertEqual(rc, 0)
         self.assertIs(self.transition.calls[0]["params"]["force"], True)
 
-    def test_omitting_sha_and_force_adds_neither_key(self):
+    def test_omitting_sha_and_force_adds_neither_key(self) -> None:
         """C3/AC5 negative-spec: omitting both `--sha` and `--force` must
         leave `params` byte-identical to pre-chunk resolution — neither key
         is added at all, not merely falsy-valued. Pins the docstring's
@@ -301,17 +301,17 @@ class ChainSubcommandTest(_StubHarness):
 
 
 class SupersedeSubcommandTest(_StubHarness):
-    def test_missing_continued_into_is_usage_error(self):
+    def test_missing_continued_into_is_usage_error(self) -> None:
         rc = _cli.cmd_supersede(self.handoff_path, None, [])
         self.assertEqual(rc, 2)
         self.assertEqual(self.transition.calls, [])
 
-    def test_blank_continued_into_is_usage_error(self):
+    def test_blank_continued_into_is_usage_error(self) -> None:
         rc = _cli.cmd_supersede(self.handoff_path, "   ", [])
         self.assertEqual(rc, 2)
         self.assertEqual(self.transition.calls, [])
 
-    def test_success_dispatches_supersede_mode(self):
+    def test_success_dispatches_supersede_mode(self) -> None:
         self._seed_landed_supersede_frontmatter("state/handoffs/successor.md")
         self.transition.result = {"superseded": True}
         rc = _cli.cmd_supersede(self.handoff_path, "state/handoffs/successor.md", [])
@@ -322,7 +322,7 @@ class SupersedeSubcommandTest(_StubHarness):
         self.assertEqual(params["continued_into"], "state/handoffs/successor.md")
         self.assertEqual(params["handoff_path"], self.handoff_path)
 
-    def test_exclude_forwarded(self):
+    def test_exclude_forwarded(self) -> None:
         self._seed_landed_supersede_frontmatter("state/handoffs/successor.md")
         self.transition.result = {"superseded": True}
         rc = _cli.cmd_supersede(
@@ -333,7 +333,7 @@ class SupersedeSubcommandTest(_StubHarness):
             self.transition.calls[0]["params"]["exclude"], ["state/handoffs/x.md"]
         )
 
-    def test_landed_frontmatter_matching_successor_returns_0(self):
+    def test_landed_frontmatter_matching_successor_returns_0(self) -> None:
         """AC3/AC4 positive case: a successful supersede that ACTUALLY left
         `deployment_state: continued` + `continued_into: <successor>` on disk
         returns 0 — the re-read confirms what the op claimed."""
@@ -347,7 +347,7 @@ class SupersedeSubcommandTest(_StubHarness):
         self.assertEqual(landed_fields["deployment_state"], "continued")
         self.assertEqual(landed_fields["continued_into"], "state/handoffs/successor.md")
 
-    def test_op_reports_success_but_frontmatter_unchanged_fails_loud(self):
+    def test_op_reports_success_but_frontmatter_unchanged_fails_loud(self) -> None:
         """AC4 regression guard for the reported incident
         (state/improvement-queue/2026-07-25-archive-stamp-cli-supersede-
         archive-hand-6b71b547b70a.yaml): the op reports `superseded: True`
@@ -364,7 +364,7 @@ class SupersedeSubcommandTest(_StubHarness):
         self.assertEqual(rc, 1)
         self.assertIn("status flip did not land", stderr.getvalue())
 
-    def test_landed_but_mismatched_continued_into_fails_loud(self):
+    def test_landed_but_mismatched_continued_into_fails_loud(self) -> None:
         """AC3: a landed `deployment_state: continued` paired with a
         DIFFERENT `continued_into` than the one this call supplied is also
         not a match — the re-read compares both fields, not just the
@@ -374,7 +374,7 @@ class SupersedeSubcommandTest(_StubHarness):
         rc = _cli.cmd_supersede(self.handoff_path, "state/handoffs/successor.md", [])
         self.assertEqual(rc, 1)
 
-    def test_guard_retained_supersede_with_landed_flip_still_returns_0(self):
+    def test_guard_retained_supersede_with_landed_flip_still_returns_0(self) -> None:
         """AC3 negative-spec (retention is NOT failure): a guard-retained
         supersede (`retained: True` — live children found, or indeterminate/
         fail-closed) still returns 0 PROVIDED the status flip landed on
@@ -390,13 +390,13 @@ class SupersedeSubcommandTest(_StubHarness):
         rc = _cli.cmd_supersede(self.handoff_path, "state/handoffs/successor.md", [])
         self.assertEqual(rc, 0)
 
-    def test_route_mutation_error_is_hard_failure(self):
+    def test_route_mutation_error_is_hard_failure(self) -> None:
         self._seed_claimed_frontmatter()
         self.transition.exc = _cli._TransitionRefused("refused")
         rc = _cli.cmd_supersede(self.handoff_path, "state/handoffs/successor.md", [])
         self.assertEqual(rc, 1)
 
-    def test_superseded_false_is_not_reported_as_success(self):
+    def test_superseded_false_is_not_reported_as_success(self) -> None:
         """Regression for the silent-no-op bug (2026-07-27): route_mutation
         only raises on a non-zero op-level exit_code, so an exit_code:0
         result whose `superseded` key is falsy/absent must still be treated
@@ -406,13 +406,13 @@ class SupersedeSubcommandTest(_StubHarness):
         rc = _cli.cmd_supersede(self.handoff_path, "state/handoffs/successor.md", [])
         self.assertEqual(rc, 1)
 
-    def test_unresolved_repo_root_is_hard_failure(self):
+    def test_unresolved_repo_root_is_hard_failure(self) -> None:
         _cli._resolve_repo_root = lambda path: None
         rc = _cli.cmd_supersede(self.handoff_path, "state/handoffs/successor.md", [])
         self.assertEqual(rc, 1)
         self.assertEqual(self.transition.calls, [])
 
-    def test_never_claimed_parent_is_refused_dr242(self):
+    def test_never_claimed_parent_is_refused_dr242(self) -> None:
         """DR-242 (docs/decisions/DR-242-successor-named-child-is-not-
         evidence-of-succ.md): a bare, never-claimed-or-shipped parent is
         refused outright — a successor-named child is not evidence of
@@ -429,12 +429,12 @@ class SupersedeSubcommandTest(_StubHarness):
 
 
 class MainArgvTest(_StubHarness):
-    def test_chain_argv_dispatch(self):
+    def test_chain_argv_dispatch(self) -> None:
         self.transition.result = {"moved": True}
         rc = _cli.main(["chain", self.handoff_path])
         self.assertEqual(rc, 0)
 
-    def test_supersede_argv_dispatch(self):
+    def test_supersede_argv_dispatch(self) -> None:
         self._seed_landed_supersede_frontmatter("state/handoffs/s.md")
         self.transition.result = {"superseded": True}
         rc = _cli.main(
@@ -445,11 +445,11 @@ class MainArgvTest(_StubHarness):
             self.transition.calls[0]["params"]["continued_into"], "state/handoffs/s.md"
         )
 
-    def test_no_subcommand_is_usage_error(self):
+    def test_no_subcommand_is_usage_error(self) -> None:
         rc = _cli.main([])
         self.assertEqual(rc, 2)
 
-    def test_chain_argv_sha_and_force_wired_through(self):
+    def test_chain_argv_sha_and_force_wired_through(self) -> None:
         """C3/AC5: drives argv parsing (not just cmd_chain's signature) to
         confirm --sha/--force actually wire from the CLI through to the
         dispatched params — the argparse layer is untested by the
@@ -477,7 +477,7 @@ class CallTransitionDoorTest(unittest.TestCase):
         self.assertEqual(rm.call_count, 0)
         return out, door
 
-    def test_success_goes_through_library_door_with_mode_params(self):
+    def test_success_goes_through_library_door_with_mode_params(self) -> None:
         out, door = self._run(
             {"exit_code": 0, "moved": True},
             lambda: _cli._call_transition({"handoff_path": "h.md", "mode": "stamp_shipped"}),
@@ -485,7 +485,7 @@ class CallTransitionDoorTest(unittest.TestCase):
         self.assertEqual(out["moved"], True)
         door.assert_called_once_with("h.md", {"mode": "stamp_shipped"})
 
-    def test_nonzero_exit_code_is_refusal(self):
+    def test_nonzero_exit_code_is_refusal(self) -> None:
         with self.assertRaises(_cli._TransitionRefused):
             self._run(
                 {"exit_code": 1, "error": "nope"},
@@ -496,7 +496,7 @@ class CallTransitionDoorTest(unittest.TestCase):
 class CallTransitionRealDoorTest(unittest.TestCase):
     """Unmocked: the live library door answers a missing handoff with a refusal."""
 
-    def test_missing_handoff_is_refused_by_the_real_door(self):
+    def test_missing_handoff_is_refused_by_the_real_door(self) -> None:
         with self.assertRaises(_cli._TransitionRefused):
             _cli._call_transition({"handoff_path": "/nonexistent/none.md", "mode": "supersede"})
 
@@ -512,7 +512,7 @@ class ClosedTargetSupersedeChokePointTest(unittest.TestCase):
     on-disk worktree (`.git` marker + `state/handoffs/`) and calls `_handler`
     directly instead."""
 
-    def setUp(self):
+    def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.worktree = Path(self._tmp.name).resolve()
@@ -523,7 +523,7 @@ class ClosedTargetSupersedeChokePointTest(unittest.TestCase):
     def _run(self, coro):
         return asyncio.run(coro)
 
-    def _seed_closed_frontmatter(self, closed_reason: str):
+    def _seed_closed_frontmatter(self, closed_reason: str) -> None:
         self.handoff_path.write_text(
             "---\n"
             "status: claimed\n"
@@ -536,7 +536,7 @@ class ClosedTargetSupersedeChokePointTest(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def test_supersede_against_closed_target_refuses(self):
+    def test_supersede_against_closed_target_refuses(self) -> None:
         """AC4: mode='supersede' against a `deployment_state: closed` target
         returns `superseded: False` with the closed-target refusal, and the
         target file is byte-unchanged."""
@@ -583,7 +583,7 @@ class RoadmapBatonGateOrderingTest(unittest.TestCase):
     gate's message", the same fixture proving there is exactly one gate
     left to fire, not zero."""
 
-    def setUp(self):
+    def setUp(self) -> None:
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self._tmp.cleanup)
         self.worktree = Path(self._tmp.name).resolve()
@@ -606,7 +606,7 @@ class RoadmapBatonGateOrderingTest(unittest.TestCase):
     def _run(self, coro):
         return asyncio.run(coro)
 
-    def test_closed_baton_gate_fires_now_the_roadmap_baton_gate_is_retired(self):
+    def test_closed_baton_gate_fires_now_the_roadmap_baton_gate_is_retired(self) -> None:
         from coordinator_core.ops.handoff_archive_transition import _handler
 
         before = self.handoff_path.read_text(encoding="utf-8")

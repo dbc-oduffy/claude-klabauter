@@ -6,9 +6,11 @@ from coordinator_core.install.substrate import (
     _union_native_forwarder_manifest,
     _write_native_forwarder_manifest,
 )
+from pathlib import Path
+import pytest
 
 
-def test_union_adds_new_name_and_keeps_existing_record(tmp_path):
+def test_union_adds_new_name_and_keeps_existing_record(tmp_path: Path) -> None:
     _write_native_forwarder_manifest(tmp_path, {"already-recorded-cli"})
 
     _union_native_forwarder_manifest(tmp_path, {"newly-healed-cli"})
@@ -19,7 +21,7 @@ def test_union_adds_new_name_and_keeps_existing_record(tmp_path):
     }
 
 
-def test_union_with_empty_written_names_is_a_noop(tmp_path):
+def test_union_with_empty_written_names_is_a_noop(tmp_path: Path) -> None:
     _write_native_forwarder_manifest(tmp_path, {"already-recorded-cli"})
 
     _union_native_forwarder_manifest(tmp_path, set())
@@ -27,13 +29,13 @@ def test_union_with_empty_written_names_is_a_noop(tmp_path):
     assert _read_native_forwarder_manifest(tmp_path) == {"already-recorded-cli"}
 
 
-def test_union_against_absent_manifest_writes_only_the_new_names(tmp_path):
+def test_union_against_absent_manifest_writes_only_the_new_names(tmp_path: Path) -> None:
     _union_native_forwarder_manifest(tmp_path, {"first-ever-native-cli"})
 
     assert _read_native_forwarder_manifest(tmp_path) == {"first-ever-native-cli"}
 
 
-def test_self_heal_inner_unions_into_a_stale_nonempty_manifest(monkeypatch, tmp_path):
+def test_self_heal_inner_unions_into_a_stale_nonempty_manifest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.install import forwarder_self_heal
 
     agent_bin = tmp_path / "coordinator" / "bin"

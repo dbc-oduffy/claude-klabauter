@@ -11,21 +11,21 @@ pytestmark = pytest.mark.complete
 
 
 @pytest.fixture(scope="module")
-def rows(tmp_path_factory):
+def rows(tmp_path_factory: pytest.TempPathFactory):
     workdir = tmp_path_factory.mktemp("lriw")
     return {r.condition: r for r in prof.run_idle_wait(workdir, tracked=5, chain=2, attribute=False)}
 
 
-def test_one_row_per_condition(rows):
+def test_one_row_per_condition(rows) -> None:
     assert tuple(rows) == prof.IDLE_CONDITIONS
     assert all(r.axis == prof.IDLE_AXIS for r in rows.values())
 
 
-def test_concurrent_landings_runs_three_calls(rows):
+def test_concurrent_landings_runs_three_calls(rows) -> None:
     assert rows["concurrent-landings"].outcome.count(";") == prof.CONCURRENT_LANDINGS - 1
 
 
-def test_held_index_lock_charges_the_splice_backoff_without_sleeping(rows):
+def test_held_index_lock_charges_the_splice_backoff_without_sleeping(rows) -> None:
     row = rows["held-index-lock"]
     from coordinator_core.git import commit
 
@@ -35,14 +35,14 @@ def test_held_index_lock_charges_the_splice_backoff_without_sleeping(rows):
     assert row.process_time_ms < prof.BAR_MS
 
 
-def test_stalled_sink_names_a_leg_for_the_job_wait(rows):
+def test_stalled_sink_names_a_leg_for_the_job_wait(rows) -> None:
     row = rows["stalled-sink"]
     assert row.sync_points.get("atomic_append_job_wait", 0.0) > 0.0
     assert row.longest_wait_ms > 0.0
     assert row.longest_wait_leg.startswith("coordinator_core/")
 
 
-def test_seams_are_restored_after_a_run(rows):
+def test_seams_are_restored_after_a_run(rows) -> None:
     from coordinator_core import atomic_append
     from coordinator_core.git import commit
 
@@ -52,7 +52,7 @@ def test_seams_are_restored_after_a_run(rows):
     assert not atomic_append.stalled_sinks()
 
 
-def test_wait_meter_reports_the_longest_event():
+def test_wait_meter_reports_the_longest_event() -> None:
     meter = prof.WaitMeter()
     meter.add("a", 5.0, "x")
     meter.add("b", 20.0, "y")
@@ -62,7 +62,7 @@ def test_wait_meter_reports_the_longest_event():
     assert meter.longest == (20.0, "y")
 
 
-def test_concurrent_landings_process_time_is_per_landing(rows):
+def test_concurrent_landings_process_time_is_per_landing(rows) -> None:
     row = rows["concurrent-landings"]
     assert row.outcome.count("committed") == prof.CONCURRENT_LANDINGS
     assert row.process_time_ms < prof.BAR_MS

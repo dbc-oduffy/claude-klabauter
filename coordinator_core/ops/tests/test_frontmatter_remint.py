@@ -52,7 +52,7 @@ def _run(repo: Path, **params) -> dict:
     return remint._handler(params, repo_root=repo)
 
 
-def test_contract_reasons_and_result_types():
+def test_contract_reasons_and_result_types() -> None:
     assert contract.REASONS == {
         "resolver-unbuilt", "handoff-id-underivable", "handoff-id-referenced",
         "handoff-id-collision", "no-governing-plan", "plan-unauthorized",
@@ -63,7 +63,7 @@ def test_contract_reasons_and_result_types():
         contract.Refused("made-up-reason")
 
 
-def test_unknown_family_refuses_resolver_unbuilt(repo):
+def test_unknown_family_refuses_resolver_unbuilt(repo) -> None:
     p = _write(repo, GOOD_ID)
     before = p.read_bytes()
     out = _run(repo, paths=["state/handoffs/h.md"], fields=["bogus"])
@@ -72,7 +72,7 @@ def test_unknown_family_refuses_resolver_unbuilt(repo):
     assert p.read_bytes() == before
 
 
-def test_unimportable_resolver_refuses_resolver_unbuilt(repo, monkeypatch):
+def test_unimportable_resolver_refuses_resolver_unbuilt(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     p = _write(repo, BAD_ID)
     before = p.read_bytes()
     monkeypatch.setitem(remint._RESOLVERS, "handoff_id", "coordinator_core.ops.frontmatter_remint.no_such_mod")
@@ -82,7 +82,7 @@ def test_unimportable_resolver_refuses_resolver_unbuilt(repo, monkeypatch):
     assert p.read_bytes() == before
 
 
-def test_refusal_leaves_file_byte_identical(repo, monkeypatch):
+def test_refusal_leaves_file_byte_identical(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     p = _write(repo, BAD_ID)
     before = p.read_bytes()
     _fake_family(
@@ -96,7 +96,7 @@ def test_refusal_leaves_file_byte_identical(repo, monkeypatch):
     assert p.read_bytes() == before
 
 
-def test_resolved_value_is_written(repo, monkeypatch):
+def test_resolved_value_is_written(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     p = _write(repo, BAD_ID)
     _fake_family(
         monkeypatch, "handoff_id",
@@ -110,7 +110,7 @@ def test_resolved_value_is_written(repo, monkeypatch):
     assert again["results"][0]["fields"] == []
 
 
-def test_already_valid_field_is_skipped(repo, monkeypatch):
+def test_already_valid_field_is_skipped(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     p = _write(repo, GOOD_ID)
     before = p.read_bytes()
     called = []
@@ -124,7 +124,7 @@ def test_already_valid_field_is_skipped(repo, monkeypatch):
     assert called == [] and p.read_bytes() == before
 
 
-def test_writer_owning_family_is_called_after_resolve(repo, monkeypatch):
+def test_writer_owning_family_is_called_after_resolve(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(repo, BAD_ID)
     calls = []
     _fake_family(
@@ -138,7 +138,7 @@ def test_writer_owning_family_is_called_after_resolve(repo, monkeypatch):
     assert (field["outcome"], field["reason"]) == ("refused", "review-run-absent")
 
 
-def test_cited_handoff_remints_with_alias_and_old_id_resolves(repo):
+def test_cited_handoff_remints_with_alias_and_old_id_resolves(repo) -> None:
     from coordinator_core.dag import build_handoff_id_index
 
     p = _write(repo, BAD_ID)
@@ -153,7 +153,7 @@ def test_cited_handoff_remints_with_alias_and_old_id_resolves(repo):
     assert _run(repo, paths=["state/handoffs/h.md"])["results"][0]["fields"] == []
 
 
-def test_usage_and_path_errors(repo):
+def test_usage_and_path_errors(repo) -> None:
     assert _run(repo)["exit_code"] == 2
     out = _run(repo, paths=["../escape.md", "state/handoffs/missing.md", "README.md"])
     assert out["exit_code"] == 0

@@ -25,6 +25,10 @@ import uuid
 from typing import Any, Callable, Optional
 
 from coordinator_core._settings_home import settings_home
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 Popen = Callable[..., Any]
 
@@ -32,15 +36,15 @@ HANDLE_TTL_S = 3600.0
 DRAIN_BATCH = 2
 
 
-def requests_dir():
+def requests_dir() -> Path:
     return settings_home() / "state" / "remote-engine" / "requests"
 
 
-def _handle_path(key: str):
+def _handle_path(key: str) -> Path:
     return requests_dir() / f"{key}.json"
 
 
-def _params_path(key: str):
+def _params_path(key: str) -> Path:
     return requests_dir() / f"{key}.params"
 
 

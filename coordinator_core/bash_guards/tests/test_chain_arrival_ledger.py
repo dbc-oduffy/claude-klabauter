@@ -27,6 +27,7 @@ from coordinator_core.bash_guards import chain_arrival_ledger as cal
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards._advisory_value import AdvisoryValue
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
+from pathlib import Path
 
 _LEDGER_NAME = "chain-arrival-ledger.jsonl"
 
@@ -40,7 +41,7 @@ def _ledger_path(home, session_id):
 
 
 class TestRecordChainArrivalUnit:
-    def test_one_record_appended_with_expected_shape(self, tmp_path, monkeypatch):
+    def test_one_record_appended_with_expected_shape(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(cal, "settings_home", lambda: tmp_path)
 
         cal.record_chain_arrival("sess-1", True, cwd=str(tmp_path))
@@ -53,7 +54,7 @@ class TestRecordChainArrivalUnit:
         assert record["session_id"] == "sess-1"
         assert record["has_agent_id"] is True
 
-    def test_has_agent_id_reflects_raw_presence_not_truthiness_of_kind(self, tmp_path, monkeypatch):
+    def test_has_agent_id_reflects_raw_presence_not_truthiness_of_kind(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(cal, "settings_home", lambda: tmp_path)
 
         cal.record_chain_arrival("sess-2", False, cwd=str(tmp_path))
@@ -61,14 +62,14 @@ class TestRecordChainArrivalUnit:
         record = json.loads(_ledger_path(tmp_path, "sess-2").read_text(encoding="utf-8").strip())
         assert record["has_agent_id"] is False
 
-    def test_no_record_when_session_id_empty(self, tmp_path, monkeypatch):
+    def test_no_record_when_session_id_empty(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(cal, "settings_home", lambda: tmp_path)
 
         cal.record_chain_arrival("", True, cwd=str(tmp_path))
 
         assert not (tmp_path / "state" / "chain-arrival-ledger").exists()
 
-    def test_write_failure_never_raises(self, tmp_path, monkeypatch):
+    def test_write_failure_never_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(cal, "settings_home", lambda: tmp_path)
 
         def _boom(*a, **k):
@@ -80,7 +81,7 @@ class TestRecordChainArrivalUnit:
 
 
 class TestRotation:
-    def test_rotation_bounds_generations_and_caps_live_file(self, tmp_path, monkeypatch):
+    def test_rotation_bounds_generations_and_caps_live_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(cal, "settings_home", lambda: tmp_path)
         monkeypatch.setattr(cal, "_ROTATE_MAX_BYTES", 200)
         monkeypatch.setattr(cal, "_ROTATE_GENERATIONS", 2)
@@ -102,7 +103,7 @@ class TestRotation:
 
 
 class TestDispatchWiring:
-    def _payload(self, session_id="sess-wire", agent_id=None, cwd="/tmp"):
+    def _payload(self, session_id: str = "sess-wire", agent_id=None, cwd: str = "/tmp"):
         payload = {
             "tool_name": "Bash",
             "tool_input": {"command": "echo probe"},
@@ -113,7 +114,7 @@ class TestDispatchWiring:
             payload["agent_id"] = agent_id
         return payload
 
-    def _fake_allow_entry(self):
+    def _fake_allow_entry(self) -> GuardEntry:
         return GuardEntry(
             "fake-allow-guard",
             lambda: None,
@@ -122,7 +123,7 @@ class TestDispatchWiring:
             AdvisoryValue.HOST_INDEPENDENT,
         )
 
-    def _fake_deny_entry(self):
+    def _fake_deny_entry(self) -> GuardEntry:
         return GuardEntry(
             "fake-deny-guard",
             lambda: {
@@ -136,7 +137,7 @@ class TestDispatchWiring:
             AdvisoryValue.NOT_COST_ARGUED,
         )
 
-    def test_arrival_recorded_regardless_of_eventual_deny(self, tmp_path, monkeypatch):
+    def test_arrival_recorded_regardless_of_eventual_deny(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         entry = self._fake_deny_entry()
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
         monkeypatch.setattr(
@@ -156,7 +157,7 @@ class TestDispatchWiring:
         record = json.loads(lines[0])
         assert record["has_agent_id"] is True
 
-    def test_arrival_records_em_caller_as_no_agent_id(self, tmp_path, monkeypatch):
+    def test_arrival_records_em_caller_as_no_agent_id(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         entry = self._fake_allow_entry()
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
         monkeypatch.setattr(cal, "settings_home", lambda: tmp_path)
@@ -167,7 +168,7 @@ class TestDispatchWiring:
         record = json.loads(_ledger_path(tmp_path, "sess-wire-em").read_text(encoding="utf-8").strip())
         assert record["has_agent_id"] is False
 
-    def test_no_record_for_non_command_tool_name(self, tmp_path, monkeypatch):
+    def test_no_record_for_non_command_tool_name(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(cal, "settings_home", lambda: tmp_path)
 
         payload = {
@@ -181,7 +182,7 @@ class TestDispatchWiring:
         assert out is None
         assert not (tmp_path / "state" / "chain-arrival-ledger").exists()
 
-    def test_recorder_write_failure_never_alters_dispatch_verdict(self, tmp_path, monkeypatch):
+    def test_recorder_write_failure_never_alters_dispatch_verdict(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         entry = self._fake_allow_entry()
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: [entry])
 

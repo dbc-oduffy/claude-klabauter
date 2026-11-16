@@ -25,6 +25,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_land_run_product import (  # 
     _tree,
     repo,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -33,7 +34,7 @@ _FIRES = {"land_run.script_read": 2, "land_run.integrity": 1, "land_run.commit":
 
 
 @pytest.fixture
-def queue(tmp_path, monkeypatch):
+def queue(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     qdir = tmp_path / "land-resume-queue"
     monkeypatch.setattr(land_resume, "queue_dir", lambda root=None: qdir)
     return qdir
@@ -42,7 +43,7 @@ def queue(tmp_path, monkeypatch):
 def _stall_at(monkeypatch, leg: str, times: int) -> None:
     real, left = land_deadline.check, [times]
 
-    def check(name):
+    def check(name) -> None:
         if name == leg and left[0] > 0:
             left[0] -= 1
             raise land_deadline.LandDeadlineExceeded(leg, [], land_deadline.BOUND_BUDGET)
@@ -59,7 +60,7 @@ def _prepare(repo):
 
 
 @pytest.mark.parametrize("leg", sorted(_FIRES))
-def test_a_deadline_before_the_commit_queues_and_the_resume_lands_exactly_once(repo, queue, monkeypatch, leg):
+def test_a_deadline_before_the_commit_queues_and_the_resume_lands_exactly_once(repo, queue, monkeypatch: pytest.MonkeyPatch, leg) -> None:
     record, head = _prepare(repo)
     _stall_at(monkeypatch, leg, _FIRES[leg])
 
@@ -84,7 +85,7 @@ def test_a_deadline_before_the_commit_queues_and_the_resume_lands_exactly_once(r
     assert not [p for p in _dirty(repo) if "receipt" in p]
 
 
-def test_a_deadline_after_the_commit_phase_began_enqueues_nothing(repo, queue, monkeypatch):
+def test_a_deadline_after_the_commit_phase_began_enqueues_nothing(repo, queue, monkeypatch: pytest.MonkeyPatch) -> None:
     def committing(mode, root, repo_root, params):
         land_intent._held = (None, "k", {"phase": land_intent.PHASE_COMMITTING})
         raise land_deadline.LandDeadlineExceeded("land_run.commit", [], land_deadline.BOUND_BUDGET)
@@ -99,7 +100,7 @@ def test_a_deadline_after_the_commit_phase_began_enqueues_nothing(repo, queue, m
     assert land_resume.load(None, RUN) is None
 
 
-def test_an_expired_entry_halts_as_before(repo, queue, monkeypatch):
+def test_an_expired_entry_halts_as_before(repo, queue, monkeypatch: pytest.MonkeyPatch) -> None:
     _prepare(repo)
     assert land_resume.enqueue(None, RUN, {"run_id": RUN}, "land_run.commit")
     entry = land_resume.load(None, RUN)
@@ -112,7 +113,7 @@ def test_an_expired_entry_halts_as_before(repo, queue, monkeypatch):
     assert "queued_for_resume" not in out
 
 
-def test_a_halted_mode_deadline_enqueues_nothing(repo, queue, monkeypatch):
+def test_a_halted_mode_deadline_enqueues_nothing(repo, queue, monkeypatch: pytest.MonkeyPatch) -> None:
     def deadline(mode, root, repo_root, params):
         raise land_deadline.LandDeadlineExceeded("land_run_halt._land.commit", [], land_deadline.BOUND_BUDGET)
 

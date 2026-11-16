@@ -8,51 +8,52 @@ from coordinator_core.bash_guards import _taskstop_launch_store as store
 from coordinator_core.bash_guards._heavy_admission_contract import ProcRow
 from coordinator_core.bash_guards._taskstop_contract import FILETIME_UNIX_EPOCH, LaunchRecord
 from coordinator_core.hooks import agent_stop_reaper as reaper
+from pathlib import Path
 
 MARK = FILETIME_UNIX_EPOCH + 10**15
 S = 10_000_000
 
 
 class StubKill:
-    def __init__(self, fail=(), cmd="grep passed"):
+    def __init__(self, fail=(), cmd: str = "grep passed") -> None:
         self.killed = []
         self.fail = set(fail)
         self.cmd = cmd
 
-    def terminate_verified(self, pid, ctime):
+    def terminate_verified(self, pid, ctime) -> bool:
         if pid in self.fail:
             return False
         self.killed.append((pid, ctime))
         return True
 
-    def command_line(self, pid, ctime):
+    def command_line(self, pid, ctime) -> str:
         # Only the grep stand-in (pid 101) corroborates; the shell root reads as a bare bash.
         return self.cmd if pid == 101 else "bash.exe"
 
 
 @pytest.fixture(autouse=True)
-def _home(tmp_path, monkeypatch):
+def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     monkeypatch.setattr(reaper.sys, "platform", "win32")
     return tmp_path
 
 
-def _rec(task_id="to1", mark=MARK, session="s1", agent="a1", timed_out=True, command="pytest | grep passed"):
+def _rec(task_id: str = "to1", mark=MARK, session: str = "s1", agent: str = "a1", timed_out: bool = True, command: str = "pytest | grep passed") -> LaunchRecord:
     r = LaunchRecord(task_id, session, "tu", command, mark, agent_id=agent, timed_out=timed_out)
     store.write_record(r, now_s=(mark - FILETIME_UNIX_EPOCH) / 1e7)
     return r
 
 
-def _payload(session="s1", agent="a1"):
+def _payload(session: str = "s1", agent: str = "a1") -> dict[str, dict[str, str]]:
     return {"payload": {"hook_event_name": "SubagentStop", "session_id": session, "agent_id": agent}}
 
 
-def _orphan(base=MARK):
+def _orphan(base=MARK) -> list[ProcRow]:
     """Killed bash parent (ppid 1 = gone) with a live grep stand-in child."""
     return [ProcRow(100, 1, base, "bash.exe"), ProcRow(101, 100, base + 1, "grep.exe")]
 
 
-def _install(monkeypatch, kill, *snaps):
+def _install(monkeypatch, kill, *snaps) -> None:
     seq = list(snaps)
     monkeypatch.setattr(reaper, "_kill", kill)
     monkeypatch.setattr(reaper, "_snapshot", lambda: seq.pop(0) if len(seq) > 1 else seq[0])
@@ -63,7 +64,7 @@ def _log(tmp_path):
     return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
 
 
-def test_orphan_pipeline_reaped(monkeypatch, tmp_path):
+def test_orphan_pipeline_reaped(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _rec()
     k = StubKill()
     _install(monkeypatch, k, _orphan())
@@ -74,7 +75,7 @@ def test_orphan_pipeline_reaped(monkeypatch, tmp_path):
     assert store.records_for_agent("s1", "a1") == []
 
 
-def test_live_parent_tree_untouched(monkeypatch, tmp_path):
+def test_live_parent_tree_untouched(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _rec()
     k = StubKill()
     live = [ProcRow(50, 1, MARK - 3600 * S, "claude.exe")] + [
@@ -87,7 +88,7 @@ def test_live_parent_tree_untouched(monkeypatch, tmp_path):
     assert _log(tmp_path)[0]["outcome"] == "no-candidate"
 
 
-def test_other_agent_and_session_untouched(monkeypatch, tmp_path):
+def test_other_agent_and_session_untouched(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _rec("other_agent", agent="a2")
     _rec("other_session", mark=MARK + 60 * S, session="s2")
     k = StubKill()
@@ -98,7 +99,7 @@ def test_other_agent_and_session_untouched(monkeypatch, tmp_path):
     assert store.read_record("other_session") is not None
 
 
-def test_background_record_untouched(monkeypatch, tmp_path):
+def test_background_record_untouched(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _rec("bg1", timed_out=False)
     k = StubKill()
     _install(monkeypatch, k, _orphan())
@@ -107,7 +108,7 @@ def test_background_record_untouched(monkeypatch, tmp_path):
     assert store.read_record("bg1") is not None
 
 
-def test_refused_verified_kill_is_incomplete_and_drops_record(monkeypatch, tmp_path):
+def test_refused_verified_kill_is_incomplete_and_drops_record(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _rec()
     k = StubKill(fail={100})
     _install(monkeypatch, k, _orphan())
@@ -117,7 +118,7 @@ def test_refused_verified_kill_is_incomplete_and_drops_record(monkeypatch, tmp_p
     assert store.read_record("to1") is None
 
 
-def test_ctime_mismatch_kills_nothing_else(monkeypatch, tmp_path):
+def test_ctime_mismatch_kills_nothing_else(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _rec()
     k = StubKill(fail={100, 101})
     _install(monkeypatch, k, _orphan() + [ProcRow(900, 1, MARK - 3600 * S, "other.exe")])
@@ -126,7 +127,7 @@ def test_ctime_mismatch_kills_nothing_else(monkeypatch, tmp_path):
     assert _log(tmp_path)[0]["outcome"] == "incomplete"
 
 
-def test_ambiguous_keeps_record_and_kills_nothing(monkeypatch, tmp_path):
+def test_ambiguous_keeps_record_and_kills_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _rec("to1")
     _rec("to2", mark=MARK + S // 10)
     k = StubKill()
@@ -137,7 +138,7 @@ def test_ambiguous_keeps_record_and_kills_nothing(monkeypatch, tmp_path):
     assert store.read_record("to1") is not None and store.read_record("to2") is not None
 
 
-def test_no_candidate_drops_record(monkeypatch, tmp_path):
+def test_no_candidate_drops_record(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _rec()
     k = StubKill(cmd="something else")
     _install(monkeypatch, k, _orphan())
@@ -151,7 +152,7 @@ def test_no_candidate_drops_record(monkeypatch, tmp_path):
     {}, {"payload": {}}, {"payload": {"session_id": "s1"}}, {"payload": {"agent_id": "a1"}},
     {"payload": {"session_id": 7, "agent_id": ["a1"]}},
 ])
-def test_missing_or_malformed_ids_are_noops(monkeypatch, tmp_path, payload):
+def test_missing_or_malformed_ids_are_noops(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, payload) -> None:
     _rec()
     k = StubKill()
     _install(monkeypatch, k, _orphan())
@@ -159,7 +160,7 @@ def test_missing_or_malformed_ids_are_noops(monkeypatch, tmp_path, payload):
     assert not k.killed and _log(tmp_path) == []
 
 
-def test_non_windows_is_a_noop(monkeypatch, tmp_path):
+def test_non_windows_is_a_noop(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _rec()
     k = StubKill()
     _install(monkeypatch, k, _orphan())
@@ -169,7 +170,7 @@ def test_non_windows_is_a_noop(monkeypatch, tmp_path):
     assert store.read_record("to1") is not None
 
 
-def test_raising_seam_yields_no_advisory_and_no_kill(monkeypatch):
+def test_raising_seam_yields_no_advisory_and_no_kill(monkeypatch: pytest.MonkeyPatch) -> None:
     _rec()
     k = StubKill()
     monkeypatch.setattr(reaper, "_kill", k)
@@ -182,14 +183,14 @@ def test_raising_seam_yields_no_advisory_and_no_kill(monkeypatch):
     assert not k.killed
 
 
-def test_one_failing_record_does_not_stop_the_rest(monkeypatch, tmp_path):
+def test_one_failing_record_does_not_stop_the_rest(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _rec("to1")
     _rec("to2", mark=MARK + 60 * S)
     k = StubKill()
     calls = []
     real = reaper._reap_one
 
-    def flaky(rec):
+    def flaky(rec) -> None:
         calls.append(rec.task_id)
         if rec.task_id == "to1":
             raise RuntimeError("x")

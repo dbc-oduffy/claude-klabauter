@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.contract import emit_op_catalog
 from coordinator_core.ops.dispatch_emit.tests.test_landing_parity import _fire, _git, _head, _landed_names, _repo
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -79,7 +80,7 @@ def write(root, rel: str, text: str) -> None:
     path.write_bytes(text.encode("utf-8"))
 
 
-def seed_op_repo(tmp_path, monkeypatch, extra_ops: int = 0, op_text: str | None = None):
+def seed_op_repo(tmp_path, monkeypatch, extra_ops: int = 0, op_text: str | None = None) -> Path:
     """A git repo at HEAD holding the registry map, one op module and the catalog rendered for them."""
     root = _repo(tmp_path, monkeypatch)
     write(root, REGISTRY_MAP, registry_map_source(extra_ops))
@@ -97,11 +98,11 @@ def blob(root, rel: str) -> str:
 
 
 @pytest.fixture
-def op_repo(tmp_path, monkeypatch):
+def op_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return seed_op_repo(tmp_path, monkeypatch)
 
 
-def test_a_docstring_edit_lands_the_three_regenerated_files_in_the_same_commit(op_repo):
+def test_a_docstring_edit_lands_the_three_regenerated_files_in_the_same_commit(op_repo) -> None:
     write(op_repo, OP_MODULE, op_source(NEW_DOC))
 
     out = _fire("new", op_repo, {"C1": [OP_MODULE]})
@@ -113,7 +114,7 @@ def test_a_docstring_edit_lands_the_three_regenerated_files_in_the_same_commit(o
     assert "edited" in blob(op_repo, CATALOG)
 
 
-def test_a_docstring_edit_lands_the_files_through_the_commit_paths_fallback_too(op_repo):
+def test_a_docstring_edit_lands_the_files_through_the_commit_paths_fallback_too(op_repo) -> None:
     write(op_repo, OP_MODULE, op_source(NEW_DOC))
 
     with mock.patch("coordinator_core.git.commit._gpgsign_enabled", return_value=True):
@@ -125,7 +126,7 @@ def test_a_docstring_edit_lands_the_files_through_the_commit_paths_fallback_too(
         assert blob(op_repo, rel) == text, rel
 
 
-def test_an_unparsable_op_module_refuses_naming_the_file_and_commits_nothing(op_repo):
+def test_an_unparsable_op_module_refuses_naming_the_file_and_commits_nothing(op_repo) -> None:
     write(op_repo, OP_MODULE, "def broken(:\n")
     head = _head(op_repo)
 
@@ -137,7 +138,7 @@ def test_an_unparsable_op_module_refuses_naming_the_file_and_commits_nothing(op_
     assert _head(op_repo) == head
 
 
-def test_a_registry_map_edit_without_the_generated_files_refuses_naming_the_write_command(op_repo):
+def test_a_registry_map_edit_without_the_generated_files_refuses_naming_the_write_command(op_repo) -> None:
     write(op_repo, REGISTRY_MAP, registry_map_source() + '# a new op would be added here\n')
     head = _head(op_repo)
 
@@ -149,7 +150,7 @@ def test_a_registry_map_edit_without_the_generated_files_refuses_naming_the_writ
     assert _head(op_repo) == head
 
 
-def test_a_registry_map_edit_lands_when_the_run_regenerated_all_three_files(op_repo):
+def test_a_registry_map_edit_lands_when_the_run_regenerated_all_three_files(op_repo) -> None:
     write(op_repo, REGISTRY_MAP, registry_map_source() + '# annotated\n')
     write(op_repo, OP_MODULE, op_source(NEW_DOC))
     regenerated = render(contracts_for(NEW_DOC))
@@ -164,7 +165,7 @@ def test_a_registry_map_edit_lands_when_the_run_regenerated_all_three_files(op_r
         assert blob(op_repo, rel) == text, rel
 
 
-def test_a_landing_with_no_op_module_path_adds_no_generated_file(op_repo):
+def test_a_landing_with_no_op_module_path_adds_no_generated_file(op_repo) -> None:
     write(op_repo, "notes/a.py", "a = 1\n")
 
     out = _fire("new", op_repo, {"C1": ["notes/a.py"]})
@@ -175,7 +176,7 @@ def test_a_landing_with_no_op_module_path_adds_no_generated_file(op_repo):
         assert blob(op_repo, rel) == text, rel
 
 
-def test_a_landing_that_does_not_commit_puts_the_generated_files_back(op_repo):
+def test_a_landing_that_does_not_commit_puts_the_generated_files_back(op_repo) -> None:
     write(op_repo, OP_MODULE, op_source(NEW_DOC))
     before = {rel: (op_repo / rel).read_bytes() for rel in GENERATED}
     head = _head(op_repo)
@@ -189,7 +190,7 @@ def test_a_landing_that_does_not_commit_puts_the_generated_files_back(op_repo):
     assert {rel: (op_repo / rel).read_bytes() for rel in GENERATED} == before
 
 
-def test_a_landing_that_commits_leaves_the_generated_files_rendered_on_disk(op_repo):
+def test_a_landing_that_commits_leaves_the_generated_files_rendered_on_disk(op_repo) -> None:
     write(op_repo, OP_MODULE, op_source(NEW_DOC))
 
     out = _fire("new", op_repo, {"C1": [OP_MODULE]})

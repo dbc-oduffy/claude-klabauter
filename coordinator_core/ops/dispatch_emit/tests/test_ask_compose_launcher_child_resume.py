@@ -33,13 +33,13 @@ def _label_index(script: str, label: str) -> list[int]:
 
 
 @pytest.mark.parametrize("raw", [True, False])
-def test_a_standalone_emit_holds_no_resume_guard(monkeypatch, raw):
+def test_a_standalone_emit_holds_no_resume_guard(monkeypatch: pytest.MonkeyPatch, raw) -> None:
     script = _script(monkeypatch, launcher_child=False, raw=raw)
     assert "_STAGED_RESUME" not in script
 
 
 @pytest.mark.parametrize("raw", [True, False])
-def test_a_launcher_child_emit_declares_the_resume_once_from_the_inline_slot(monkeypatch, raw):
+def test_a_launcher_child_emit_declares_the_resume_once_from_the_inline_slot(monkeypatch: pytest.MonkeyPatch, raw) -> None:
     script = _script(monkeypatch, launcher_child=True, raw=raw)
     assert script.count("const _STAGED_RESUME = ") == 1
     decl = script.index("const _STAGED_RESUME = ")
@@ -49,7 +49,7 @@ def test_a_launcher_child_emit_declares_the_resume_once_from_the_inline_slot(mon
     assert "_STAGED_RESUME" not in script[: script.index("const _STAGED_INLINE = ")]
 
 
-def test_the_raw_ask_size_block_and_every_size_leg_sit_inside_the_resume_guard(monkeypatch):
+def test_the_raw_ask_size_block_and_every_size_leg_sit_inside_the_resume_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch, launcher_child=True, raw=True)
     assert script.count(_GUARD_OPEN) == 1
     start = script.index(_GUARD_OPEN)
@@ -65,7 +65,7 @@ def test_the_raw_ask_size_block_and_every_size_leg_sit_inside_the_resume_guard(m
     assert "let _scouted = null;" in script[:start]
 
 
-def test_the_gate_is_seeded_from_the_resume_block_and_its_leg_never_runs_on_resume(monkeypatch):
+def test_the_gate_is_seeded_from_the_resume_block_and_its_leg_never_runs_on_resume(monkeypatch: pytest.MonkeyPatch) -> None:
     raw = _script(monkeypatch, launcher_child=True, raw=True)
     assert "let _gate = _STAGED_RESUME ? { arm: _STAGED_RESUME.arm, halt: null," in raw
     sizing = _script(monkeypatch, launcher_child=True, raw=False)
@@ -76,7 +76,7 @@ def test_the_gate_is_seeded_from_the_resume_block_and_its_leg_never_runs_on_resu
 
 
 @pytest.mark.parametrize("raw", [True, False])
-def test_every_later_pre_stage_leg_is_gated_on_the_resume(monkeypatch, raw):
+def test_every_later_pre_stage_leg_is_gated_on_the_resume(monkeypatch: pytest.MonkeyPatch, raw) -> None:
     script = _script(monkeypatch, launcher_child=True, raw=raw, arm="m_plus")
     assert "if (!_halted && !_STAGED_RESUME && _gate.arm === 's') {" in script
     assert "if (!_halted && !_STAGED_RESUME && _gate.arm === 'm_plus') {" in script
@@ -89,7 +89,7 @@ def test_every_later_pre_stage_leg_is_gated_on_the_resume(monkeypatch, raw):
             assert guard != -1, label
 
 
-def test_the_resume_seeds_the_manifest_through_the_existing_adopt_so_a_failed_verify_halts_by_name(monkeypatch):
+def test_the_resume_seeds_the_manifest_through_the_existing_adopt_so_a_failed_verify_halts_by_name(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch, launcher_child=True, raw=True)
     seed_call = "await _adoptStageReply({ manifest_handle: _STAGED_INLINE.full_handle ?? _STAGED_INLINE.handle });"
     assert seed_call in script
@@ -100,14 +100,14 @@ def test_the_resume_seeds_the_manifest_through_the_existing_adopt_so_a_failed_ve
         assert field in script
 
 
-def test_the_guard_keys_on_the_resume_block_never_on_the_arm(monkeypatch):
+def test_the_guard_keys_on_the_resume_block_never_on_the_arm(monkeypatch: pytest.MonkeyPatch) -> None:
     for arm in ("xs", "s", "m_plus"):
         script = _script(monkeypatch, launcher_child=True, raw=True, arm=arm)
         assert script.count(_GUARD_OPEN) == 1
         assert not re.search(r"_STAGED_RESUME\.arm\s*===\s*'(?:xs|s|m_plus)'\s*\)\s*\{\s*phase\('size'", script)
 
 
-def test_only_a_launcher_child_holds_the_slim_manifest_halt(monkeypatch):
+def test_only_a_launcher_child_holds_the_slim_manifest_halt(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "staged twin is slim" in _script(monkeypatch, launcher_child=True, raw=True)
     assert "staged twin is slim" not in _script(monkeypatch, launcher_child=False, raw=True)
 
@@ -143,7 +143,7 @@ def _slim_inline():
     return {"handle": own, "full_handle": full, "spill": "scratch/warp/r.staged-" + "f" * 64 + ".spill.json", "text": text}, full
 
 
-def test_adopt_accepts_the_slim_text_against_the_full_handle_and_marks_the_spill():
+def test_adopt_accepts_the_slim_text_against_the_full_handle_and_marks_the_spill() -> None:
     inline, full = _slim_inline()
     got = _adopt_with_node(inline, full)
     assert got["manifest"]["spill"] == inline["spill"]
@@ -151,18 +151,18 @@ def test_adopt_accepts_the_slim_text_against_the_full_handle_and_marks_the_spill
     assert got["manifest"]["rows"][0]["writes_count"] == 400
 
 
-def test_adopt_refuses_a_slim_text_whose_bytes_do_not_match_its_own_handle():
+def test_adopt_refuses_a_slim_text_whose_bytes_do_not_match_its_own_handle() -> None:
     inline, full = _slim_inline()
     inline["text"] = inline["text"].replace("C1", "C2")
     assert "fail" in _adopt_with_node(inline, full)
 
 
-def test_adopt_returns_null_when_the_handle_is_not_the_full_handle():
+def test_adopt_returns_null_when_the_handle_is_not_the_full_handle() -> None:
     inline, full = _slim_inline()
     assert _adopt_with_node(inline, inline["handle"]) is None
 
 
-def test_adopt_of_a_whole_inline_carries_no_spill_mark():
+def test_adopt_of_a_whole_inline_carries_no_spill_mark() -> None:
     import hashlib
     import json
 
@@ -197,14 +197,14 @@ def _run_chain_loop(pending: dict, chain_path: str = "/r/scratch/warp/ask-r1.wor
     return json.loads(out.stdout)
 
 
-def test_a_restaged_twin_named_by_the_reply_is_started_not_the_stale_handle_twin():
+def test_a_restaged_twin_named_by_the_reply_is_started_not_the_stale_handle_twin() -> None:
     from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
 
     got = _run_chain_loop({"handle": {"sha256": "3c" * 32}, "twin_path": staged_twin_rel("ask-r1", "2d" * 32)})
     assert got["why"] is None and got["calls"] == ["/r/" + staged_twin_rel("ask-r1", "2d" * 32)]
 
 
-def test_a_reply_that_names_no_twin_still_resumes_from_the_handle_sha():
+def test_a_reply_that_names_no_twin_still_resumes_from_the_handle_sha() -> None:
     from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
 
     got = _run_chain_loop({"handle": {"sha256": "ab" * 32}})
@@ -246,7 +246,7 @@ _H_OLD = {"path": "state/warp/r/manifest.json", "sha256": "6f" * 32, "bytes": 10
 _H_NEW = {"path": "state/warp/r/manifest.json", "sha256": "89" * 32, "bytes": 11}
 
 
-def test_a_replayed_reply_without_a_twin_path_takes_the_twin_from_a_fresh_stage_op_reply():
+def test_a_replayed_reply_without_a_twin_path_takes_the_twin_from_a_fresh_stage_op_reply() -> None:
     from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
 
     twin = staged_twin_rel("ask-r1", "89" * 32)
@@ -254,7 +254,7 @@ def test_a_replayed_reply_without_a_twin_path_takes_the_twin_from_a_fresh_stage_
     assert got["pending"] == {"handle": _H_NEW, "twin_path": twin} and got["calls"] == 1
 
 
-def test_a_reply_that_names_its_twin_path_is_still_replaced_by_the_fresh_stage_op_twin():
+def test_a_reply_that_names_its_twin_path_is_still_replaced_by_the_fresh_stage_op_twin() -> None:
     from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
 
     old = staged_twin_rel("ask-r1", "6f" * 32)
@@ -263,12 +263,12 @@ def test_a_reply_that_names_its_twin_path_is_still_replaced_by_the_fresh_stage_o
     assert got["pending"] == {"handle": _H_NEW, "twin_path": new} and got["calls"] == 1
 
 
-def test_a_recover_reply_that_names_no_twin_leaves_the_replayed_handle():
+def test_a_recover_reply_that_names_no_twin_leaves_the_replayed_handle() -> None:
     got = _adopt_launcher_reply({"manifest_handle": _H_OLD}, {"manifest_handle": _H_NEW})
     assert got["pending"] == {"handle": _H_OLD} and got["calls"] == 1
 
 
-def test_a_refire_twin_staged_under_an_earlier_stamp_is_started_and_another_warp_run_is_refused():
+def test_a_refire_twin_staged_under_an_earlier_stamp_is_started_and_another_warp_run_is_refused() -> None:
     from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
 
     path = "/r/scratch/warp/warp-plan-20261031T120809-5a6216.workflow.mjs"
@@ -280,7 +280,7 @@ def test_a_refire_twin_staged_under_an_earlier_stamp_is_started_and_another_warp
     assert "twin_path is not a staged twin of this run" in got["why"] and got["calls"] == []
 
 
-def test_a_named_twin_of_another_run_is_refused_and_nothing_starts():
+def test_a_named_twin_of_another_run_is_refused_and_nothing_starts() -> None:
     from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
 
     got = _run_chain_loop({"handle": {"sha256": "2d" * 32}, "twin_path": staged_twin_rel("ask-other", "2d" * 32)})

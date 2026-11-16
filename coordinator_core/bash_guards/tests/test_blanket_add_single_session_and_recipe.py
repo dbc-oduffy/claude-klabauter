@@ -13,6 +13,7 @@ from coordinator_core.bash_guards import dispatch_checks as guard
 from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
 from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -30,16 +31,16 @@ def _git(repo, *args):
 
 
 @pytest.fixture
-def fresh_repo(tmp_path):
+def fresh_repo(tmp_path: Path) -> Path:
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_passthrough_kwargs())
     return tmp_path
 
 
-def test_fresh_repo_has_no_peer(fresh_repo):
+def test_fresh_repo_has_no_peer(fresh_repo) -> None:
     assert guard._bt_no_peer_can_share_the_index(str(fresh_repo), "s1")
 
 
-def test_committed_repo_with_only_own_session_has_no_peer(fresh_repo):
+def test_committed_repo_with_only_own_session_has_no_peer(fresh_repo) -> None:
     (fresh_repo / "a.txt").write_text("a")
     _git(fresh_repo, "add", "a.txt")
     _git(fresh_repo, "commit", "-qm", "init")
@@ -47,7 +48,7 @@ def test_committed_repo_with_only_own_session_has_no_peer(fresh_repo):
     assert guard._bt_no_peer_can_share_the_index(str(fresh_repo), "s1")
 
 
-def test_a_second_session_dir_means_a_peer_may_share_the_index(fresh_repo):
+def test_a_second_session_dir_means_a_peer_may_share_the_index(fresh_repo) -> None:
     (fresh_repo / "a.txt").write_text("a")
     _git(fresh_repo, "add", "a.txt")
     _git(fresh_repo, "commit", "-qm", "init")
@@ -57,7 +58,7 @@ def test_a_second_session_dir_means_a_peer_may_share_the_index(fresh_repo):
     assert not guard._bt_no_peer_can_share_the_index(str(fresh_repo), "s1")
 
 
-def test_subtree_foreign_paths_empty_in_a_fresh_repo(fresh_repo):
+def test_subtree_foreign_paths_empty_in_a_fresh_repo(fresh_repo) -> None:
     (fresh_repo / "docs").mkdir()
     (fresh_repo / "docs" / "x.md").write_text("x")
     assert guard._bt_add_subtree_foreign_paths(
@@ -65,7 +66,7 @@ def test_subtree_foreign_paths_empty_in_a_fresh_repo(fresh_repo):
     ) == []
 
 
-def test_many_files_recipe_runs_and_the_guard_allows_it(fresh_repo, monkeypatch):
+def test_many_files_recipe_runs_and_the_guard_allows_it(fresh_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_dc_git_shared, "_is_hazard_repo", lambda root: True)
     (fresh_repo / "docs").mkdir()
     for n in range(3):

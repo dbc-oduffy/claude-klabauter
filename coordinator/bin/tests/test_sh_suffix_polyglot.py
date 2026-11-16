@@ -40,6 +40,7 @@ import sys
 import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -63,13 +64,13 @@ PLAIN_BASH_BODY = (
 )
 
 
-def write(path, content):
+def write(path, content) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(content)
 
 
-def _git(args, cwd):
+def _git(args, cwd) -> None:
     subprocess.run(
         ["git"] + args, cwd=cwd, capture_output=True, text=True,
         **no_console_creationflags(), check=True,
@@ -92,7 +93,7 @@ def _fresh_repo(root, name):
     return d, guard_dir
 
 
-def _commit_all(repo_dir):
+def _commit_all(repo_dir) -> None:
     _git(["add", "-A"], cwd=repo_dir)
     _git(["commit", "-q", "-m", "fixture"], cwd=repo_dir)
 
@@ -106,7 +107,7 @@ def _run_guard(guard_dir, args=None):
     return r
 
 
-def test_new_unbaselined_polyglot_sh_file_is_violation(tmp_path):
+def test_new_unbaselined_polyglot_sh_file_is_violation(tmp_path: Path) -> None:
     root = str(tmp_path)
     d_a, gd_a = _fresh_repo(root, "a")
     write(os.path.join(gd_a, "sh-suffix-polyglot-baseline.txt"), "# empty baseline\n")
@@ -118,7 +119,7 @@ def test_new_unbaselined_polyglot_sh_file_is_violation(tmp_path):
     assert "coordinator/lib/new-tool.sh" in r.stderr
 
 
-def test_baselined_polyglot_sh_file_is_ok(tmp_path):
+def test_baselined_polyglot_sh_file_is_ok(tmp_path: Path) -> None:
     root = str(tmp_path)
     d_b, gd_b = _fresh_repo(root, "b")
     write(
@@ -132,7 +133,7 @@ def test_baselined_polyglot_sh_file_is_ok(tmp_path):
     assert "OK" in r.stdout
 
 
-def test_genuine_bash_sh_file_is_not_flagged(tmp_path):
+def test_genuine_bash_sh_file_is_not_flagged(tmp_path: Path) -> None:
     root = str(tmp_path)
     d_c, gd_c = _fresh_repo(root, "c")
     write(os.path.join(gd_c, "sh-suffix-polyglot-baseline.txt"), "# empty baseline\n")
@@ -142,7 +143,7 @@ def test_genuine_bash_sh_file_is_not_flagged(tmp_path):
     assert r.returncode == 0, f"expected exit 0, got {r.returncode}"
 
 
-def test_missing_baseline_file_fails_loud(tmp_path):
+def test_missing_baseline_file_fails_loud(tmp_path: Path) -> None:
     root = str(tmp_path)
     d_d, gd_d = _fresh_repo(root, "d")
     write(os.path.join(d_d, "coordinator", "lib", "some-tool.sh"), TRAMPOLINE_BODY)
@@ -152,7 +153,7 @@ def test_missing_baseline_file_fails_loud(tmp_path):
     assert "ERROR" in r.stderr
 
 
-def test_list_baseline_candidates_emits_repo_relative_trampoline_paths(tmp_path):
+def test_list_baseline_candidates_emits_repo_relative_trampoline_paths(tmp_path: Path) -> None:
     root = str(tmp_path)
     d_e, gd_e = _fresh_repo(root, "e")
     write(os.path.join(gd_e, "sh-suffix-polyglot-baseline.txt"), "# empty baseline\n")
@@ -167,7 +168,7 @@ def test_list_baseline_candidates_emits_repo_relative_trampoline_paths(tmp_path)
     assert listed == expected, f"expected {expected} got {listed}"
 
 
-def test_clean_repo_with_no_sh_files_is_ok(tmp_path):
+def test_clean_repo_with_no_sh_files_is_ok(tmp_path: Path) -> None:
     root = str(tmp_path)
     d_f, gd_f = _fresh_repo(root, "f")
     write(os.path.join(gd_f, "sh-suffix-polyglot-baseline.txt"), "# empty baseline\n")
@@ -177,7 +178,7 @@ def test_clean_repo_with_no_sh_files_is_ok(tmp_path):
     assert "OK" in r.stdout
 
 
-def test_same_basename_different_dir_hazard(tmp_path):
+def test_same_basename_different_dir_hazard(tmp_path: Path) -> None:
     root = str(tmp_path)
     d_g, gd_g = _fresh_repo(root, "g")
     write(

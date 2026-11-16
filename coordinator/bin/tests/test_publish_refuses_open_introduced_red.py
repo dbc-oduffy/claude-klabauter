@@ -15,11 +15,16 @@ from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import checkpoint_reds
 from coordinator_core.ops.dispatch_emit.bug_close import BUG_HOME
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
-def _load_publish_module():
+def _load_publish_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location("publish_open_red_under_test", _BIN_DIR / "publish.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -64,14 +69,14 @@ def _mint(shadow: Path, status: str = "open") -> str:
     return row.name
 
 
-def test_mirrored_names_equal_checkpoint_reds_constants():
+def test_mirrored_names_equal_checkpoint_reds_constants() -> None:
     assert publish._INTRODUCED_RED_HOME == BUG_HOME
     assert publish._INTRODUCED_RED_NAME_MARK == checkpoint_reds._NAME_MARK
     assert publish._INTRODUCED_RED_KEY == "introduced_red"
     assert publish._INTRODUCED_RED_STATUS_KEY == "status"
 
 
-def test_open_row_refuses_naming_the_row_and_closing_it_clears(monkeypatch, tmp_path):
+def test_open_row_refuses_naming_the_row_and_closing_it_clears(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     shadow = tmp_path / "shadow"
     shadow.mkdir()
     name = _mint(shadow)
@@ -85,14 +90,14 @@ def test_open_row_refuses_naming_the_row_and_closing_it_clears(monkeypatch, tmp_
     assert "introduced-red" not in err
 
 
-def test_absent_bug_backlog_does_not_refuse(monkeypatch, tmp_path):
+def test_absent_bug_backlog_does_not_refuse(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     shadow = tmp_path / "shadow"
     shadow.mkdir()
     result, _ = _gates(monkeypatch, tmp_path, shadow)
     assert result.proceed is True
 
 
-def test_ordinary_open_bug_row_does_not_refuse(monkeypatch, tmp_path):
+def test_ordinary_open_bug_row_does_not_refuse(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     shadow = tmp_path / "shadow"
     (shadow / BUG_HOME).mkdir(parents=True)
     (shadow / BUG_HOME / "2026-11-10-plain-bug.yaml").write_text("status: open\n", encoding="utf-8")

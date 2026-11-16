@@ -20,6 +20,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_land_run_met_over_footprint_b
 from coordinator_core.ops.dispatch_emit.tests.test_ledger_remaining_leg_footprint_fence import _terminal_with
 from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e import RUN2, halted  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_reverify_measures_landing_tree_e2e import _stage
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -56,7 +57,7 @@ def _hold(monkeypatch) -> None:
     )
 
 
-def test_an_unheld_dirty_fixture_in_the_lane_tests_reach_lands_as_unattributed_advisory(halted):  # noqa: F811
+def test_an_unheld_dirty_fixture_in_the_lane_tests_reach_lands_as_unattributed_advisory(halted) -> None:  # noqa: F811
     _track_fixture(halted)
     resume, token = _stage(halted)
     _write(halted, FIXTURE, '{"a": 2, "dirty": true}\n')
@@ -69,7 +70,7 @@ def test_an_unheld_dirty_fixture_in_the_lane_tests_reach_lands_as_unattributed_a
     assert FIXTURE in _git(halted, "status", "--porcelain", "--", FIXTURE)
 
 
-def test_a_fixture_a_live_peer_run_holds_lands_with_the_advisory(halted, monkeypatch):  # noqa: F811
+def test_a_fixture_a_live_peer_run_holds_lands_with_the_advisory(halted, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _track_fixture(halted)
     resume, token = _stage(halted)
     _measure(halted)
@@ -83,7 +84,7 @@ def test_a_fixture_a_live_peer_run_holds_lands_with_the_advisory(halted, monkeyp
     assert FIXTURE in _git(halted, "status", "--porcelain", "--", FIXTURE)
 
 
-def test_a_clean_fixture_in_reach_lands(halted):  # noqa: F811
+def test_a_clean_fixture_in_reach_lands(halted) -> None:  # noqa: F811
     _track_fixture(halted)
     resume, token = _stage(halted)
     _measure(halted)
@@ -93,7 +94,7 @@ def test_a_clean_fixture_in_reach_lands(halted):  # noqa: F811
     assert out["committed"] is True, out
 
 
-def test_one_peer_held_and_one_unheld_fixture_each_keep_their_own_holder(halted, monkeypatch):  # noqa: F811
+def test_one_peer_held_and_one_unheld_fixture_each_keep_their_own_holder(halted, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _track_fixture(halted, FIXTURE, FIXTURE2)
     resume, token = _stage(halted)
     _measure(halted)
@@ -121,7 +122,7 @@ def _lane_test_reads_the_fixture(root) -> None:
     _write(root, LANE_TEST, _READER_TEST)
 
 
-def test_a_landing_whose_test_would_fail_on_the_peer_dirt_lands_green_in_the_clean_overlay(halted):  # noqa: F811
+def test_a_landing_whose_test_would_fail_on_the_peer_dirt_lands_green_in_the_clean_overlay(halted) -> None:  # noqa: F811
     _track_fixture(halted)
     resume, token = _stage(halted)
     _lane_test_reads_the_fixture(halted)
@@ -142,7 +143,7 @@ def test_a_landing_whose_test_would_fail_on_the_peer_dirt_lands_green_in_the_cle
     assert FIXTURE in _git(halted, "status", "--porcelain", "--", FIXTURE)
 
 
-def test_peer_dirt_in_reach_with_no_overlay_verdict_lands_with_an_advisory(halted):  # noqa: F811
+def test_peer_dirt_in_reach_with_no_overlay_verdict_lands_with_an_advisory(halted) -> None:  # noqa: F811
     """A verdict the engine never produced lands with an `Overlay: missing` trailer and leaves the dirt."""
     _track_fixture(halted)
     resume, token = _stage(halted)
@@ -161,7 +162,7 @@ def test_peer_dirt_in_reach_with_no_overlay_verdict_lands_with_an_advisory(halte
     assert (halted / FIXTURE).read_text(encoding="utf-8") == _DIRT
 
 
-def test_the_same_test_fails_against_the_peer_dirt_in_the_worktree(halted):  # noqa: F811
+def test_the_same_test_fails_against_the_peer_dirt_in_the_worktree(halted) -> None:  # noqa: F811
     """Control: the dirt is real, so the green above comes from the overlay's isolation."""
     import subprocess
     import sys
@@ -179,7 +180,7 @@ def test_the_same_test_fails_against_the_peer_dirt_in_the_worktree(halted):  # n
     assert ran.returncode == 1, ran.stdout + ran.stderr
 
 
-def test_overlay_setup_process_time_and_spawn_count_are_recorded(halted, tmp_path):  # noqa: F811
+def test_overlay_setup_process_time_and_spawn_count_are_recorded(halted, tmp_path: Path) -> None:  # noqa: F811
     """Records clone + detached checkout cost (the overlay's setup legs); asserts spawn count only, no time bound."""
     resource = pytest.importorskip("resource")
     import json

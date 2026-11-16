@@ -8,6 +8,7 @@ from coordinator_core.ops.verify_parallel_review_lens_orthogonality import (
     run,
     static_check,
 )
+import pytest
 
 _GOOD_SKILL_MD = """\
 # parallel-code-review
@@ -40,7 +41,7 @@ def _make_repo(tmp_path: Path, skill_md: str = _GOOD_SKILL_MD) -> Path:
     return tmp_path
 
 
-def test_static_check_passes_with_four_orthogonal_lenses(tmp_path):
+def test_static_check_passes_with_four_orthogonal_lenses(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     skill_file = repo / "coordinator" / "skills" / "parallel-code-review" / "SKILL.md"
     lines, passed = static_check(skill_file, repo / "coordinator")
@@ -48,7 +49,7 @@ def test_static_check_passes_with_four_orthogonal_lenses(tmp_path):
     assert any(line.startswith("OK (static): 4 orthogonal lenses") for line in lines)
 
 
-def test_static_check_fails_on_missing_skill_file(tmp_path):
+def test_static_check_fails_on_missing_skill_file(tmp_path: Path) -> None:
     lines, passed = static_check(tmp_path / "nope" / "SKILL.md", tmp_path)
     assert passed is False
     assert any("Skill file not found" in line for line in lines)
@@ -60,7 +61,7 @@ _BIN_ROW_SKILL_MD = _GOOD_SKILL_MD.replace(
 )
 
 
-def test_static_check_passes_bin_reviewer_row_when_file_exists(tmp_path):
+def test_static_check_passes_bin_reviewer_row_when_file_exists(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path, _BIN_ROW_SKILL_MD)
     bin_dir = repo / "coordinator" / "bin"
     bin_dir.mkdir()
@@ -71,7 +72,7 @@ def test_static_check_passes_bin_reviewer_row_when_file_exists(tmp_path):
     assert not any("Could not parse" in line for line in lines)
 
 
-def test_static_check_fails_bin_reviewer_row_when_file_missing(tmp_path):
+def test_static_check_fails_bin_reviewer_row_when_file_missing(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path, _BIN_ROW_SKILL_MD)
     skill_file = repo / "coordinator" / "skills" / "parallel-code-review" / "SKILL.md"
     lines, passed = static_check(skill_file, repo / "coordinator")
@@ -80,7 +81,7 @@ def test_static_check_fails_bin_reviewer_row_when_file_missing(tmp_path):
     assert any(line.strip() == f"Expected: {repo / 'coordinator' / 'bin' / 'weekly-gate-tests.py'}" for line in lines)
 
 
-def test_static_check_fails_on_missing_agent_file(tmp_path):
+def test_static_check_fails_on_missing_agent_file(tmp_path: Path) -> None:
     skill_md = _GOOD_SKILL_MD.replace(
         "| the Staff Engineer (`agents/staff-eng.md`) | code-semantics | ... |",
         "| the Staff Engineer (`agents/does-not-exist.md`) | code-semantics | ... |",
@@ -92,7 +93,7 @@ def test_static_check_fails_on_missing_agent_file(tmp_path):
     assert any("file missing" in line for line in lines)
 
 
-def test_static_check_fails_on_lens_domain_collision(tmp_path):
+def test_static_check_fails_on_lens_domain_collision(tmp_path: Path) -> None:
     skill_md = _GOOD_SKILL_MD.replace(
         "| security-audit-worker (`agents/security-audit-worker.md`) | security | ... |",
         "| security-audit-worker (`agents/security-audit-worker.md`) | code-semantics | ... |",
@@ -104,7 +105,7 @@ def test_static_check_fails_on_lens_domain_collision(tmp_path):
     assert any("Lens-domain collision" in line for line in lines)
 
 
-def test_static_check_fails_below_minimum_reviewer_count(tmp_path):
+def test_static_check_fails_below_minimum_reviewer_count(tmp_path: Path) -> None:
     skill_md = """\
 ## Lens-Domain Manifest
 
@@ -121,7 +122,7 @@ def test_static_check_fails_below_minimum_reviewer_count(tmp_path):
     assert any("Expected at least 4 orthogonal-lens rows" in line for line in lines)
 
 
-def test_static_check_fails_on_unparseable_reviewer_cell(tmp_path):
+def test_static_check_fails_on_unparseable_reviewer_cell(tmp_path: Path) -> None:
     skill_md = _GOOD_SKILL_MD.replace(
         "| the Staff Engineer (`agents/staff-eng.md`) | code-semantics | ... |",
         "| the Staff Engineer (no backtick path) | code-semantics | ... |",
@@ -133,7 +134,7 @@ def test_static_check_fails_on_unparseable_reviewer_cell(tmp_path):
     assert any("Could not parse reviewer path" in line for line in lines)
 
 
-def test_chunk_check_passes_on_disjoint_partitions(tmp_path):
+def test_chunk_check_passes_on_disjoint_partitions(tmp_path: Path) -> None:
     manifest = tmp_path / "chunks.tsv"
     manifest.write_text("chunk-1\tfoo.py\nchunk-1\tbar.py\nchunk-2\tbaz.py\n", encoding="utf-8")
     lines, passed = chunk_check(manifest)
@@ -141,7 +142,7 @@ def test_chunk_check_passes_on_disjoint_partitions(tmp_path):
     assert any("OK (chunks): 2 chunks over 3 distinct files" in line for line in lines)
 
 
-def test_chunk_check_fails_on_file_claimed_by_two_chunks(tmp_path):
+def test_chunk_check_fails_on_file_claimed_by_two_chunks(tmp_path: Path) -> None:
     manifest = tmp_path / "chunks.tsv"
     manifest.write_text("chunk-1\tfoo.py\nchunk-2\tfoo.py\n", encoding="utf-8")
     lines, passed = chunk_check(manifest)
@@ -149,20 +150,20 @@ def test_chunk_check_fails_on_file_claimed_by_two_chunks(tmp_path):
     assert any("chunk partitions not disjoint" in line for line in lines)
 
 
-def test_chunk_check_same_file_same_chunk_twice_is_harmless(tmp_path):
+def test_chunk_check_same_file_same_chunk_twice_is_harmless(tmp_path: Path) -> None:
     manifest = tmp_path / "chunks.tsv"
     manifest.write_text("chunk-1\tfoo.py\nchunk-1\tfoo.py\n", encoding="utf-8")
     lines, passed = chunk_check(manifest)
     assert passed is True
 
 
-def test_chunk_check_fails_on_missing_manifest(tmp_path):
+def test_chunk_check_fails_on_missing_manifest(tmp_path: Path) -> None:
     lines, passed = chunk_check(tmp_path / "nope.tsv")
     assert passed is False
     assert any("chunk manifest not found" in line for line in lines)
 
 
-def test_chunk_check_fails_on_empty_manifest(tmp_path):
+def test_chunk_check_fails_on_empty_manifest(tmp_path: Path) -> None:
     manifest = tmp_path / "empty.tsv"
     manifest.write_text("", encoding="utf-8")
     lines, passed = chunk_check(manifest)
@@ -170,14 +171,14 @@ def test_chunk_check_fails_on_empty_manifest(tmp_path):
     assert any("contained no chunk/file rows" in line for line in lines)
 
 
-def test_chunk_check_skips_comment_and_blank_lines(tmp_path):
+def test_chunk_check_skips_comment_and_blank_lines(tmp_path: Path) -> None:
     manifest = tmp_path / "chunks.tsv"
     manifest.write_text("# comment\n\nchunk-1\tfoo.py\n", encoding="utf-8")
     lines, passed = chunk_check(manifest)
     assert passed is True
 
 
-def test_run_no_args_runs_static_only(tmp_path):
+def test_run_no_args_runs_static_only(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     stdout, stderr, rc = run([], content_root=str(repo))
     assert rc == 0
@@ -185,7 +186,7 @@ def test_run_no_args_runs_static_only(tmp_path):
     assert any("OK (static)" in line for line in stdout)
 
 
-def test_run_chunk_manifest_runs_static_then_chunk(tmp_path):
+def test_run_chunk_manifest_runs_static_then_chunk(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     manifest = tmp_path / "chunks.tsv"
     manifest.write_text("chunk-1\tfoo.py\n", encoding="utf-8")
@@ -195,7 +196,7 @@ def test_run_chunk_manifest_runs_static_then_chunk(tmp_path):
     assert any("OK (chunks)" in line for line in stdout)
 
 
-def test_run_static_fail_short_circuits_before_chunk_check(tmp_path):
+def test_run_static_fail_short_circuits_before_chunk_check(tmp_path: Path) -> None:
     lines, passed = static_check(tmp_path / "nope" / "SKILL.md", tmp_path)
     assert passed is False
     stdout, stderr, rc = run(
@@ -205,27 +206,27 @@ def test_run_static_fail_short_circuits_before_chunk_check(tmp_path):
     assert not any("chunk" in line.lower() for line in stdout if "Skill" not in line and "manifest" not in line.lower())
 
 
-def test_run_unknown_arg_goes_to_stderr(tmp_path):
+def test_run_unknown_arg_goes_to_stderr(tmp_path: Path) -> None:
     stdout, stderr, rc = run(["--bogus"], content_root=str(tmp_path))
     assert rc == 1
     assert stdout == []
     assert any("unknown argument" in line for line in stderr)
 
 
-def test_run_missing_chunk_manifest_value_goes_to_stderr(tmp_path):
+def test_run_missing_chunk_manifest_value_goes_to_stderr(tmp_path: Path) -> None:
     stdout, stderr, rc = run(["--chunk-manifest"], content_root=str(tmp_path))
     assert rc == 1
     assert stdout == []
     assert any("requires a path argument" in line for line in stderr)
 
 
-def test_run_unresolvable_content_root_fails_with_business_code(tmp_path):
+def test_run_unresolvable_content_root_fails_with_business_code(tmp_path: Path) -> None:
     stdout, stderr, rc = run([], content_root="")
     assert rc == 1
     assert any("could not resolve the content root" in line for line in stdout)
 
 
-def test_main_prints_stdout_to_stdout_and_returns_rc(tmp_path, monkeypatch, capsys):
+def test_main_prints_stdout_to_stdout_and_returns_rc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     import coordinator_core.ops.verify_parallel_review_lens_orthogonality as mod
 
@@ -237,7 +238,7 @@ def test_main_prints_stdout_to_stdout_and_returns_rc(tmp_path, monkeypatch, caps
     assert captured.err == ""
 
 
-def test_main_prints_usage_error_to_stderr(monkeypatch, capsys):
+def test_main_prints_usage_error_to_stderr(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--bogus"])
     captured = capsys.readouterr()
     assert rc == 1

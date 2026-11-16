@@ -11,9 +11,10 @@ import time
 import pytest
 
 from coordinator_core.ops import shim_usage_census
+from pathlib import Path
 
 
-def test_record_invocation_appends_one_line_and_census_reports_it(tmp_path):
+def test_record_invocation_appends_one_line_and_census_reports_it(tmp_path: Path) -> None:
     now = time.time()
     shim_usage_census.record_invocation("baton-assemble", repo_root=tmp_path, now=now)
 
@@ -32,7 +33,7 @@ def test_record_invocation_appends_one_line_and_census_reports_it(tmp_path):
     assert report["never-called"]["count"] == 0
 
 
-def test_record_invocation_never_truncates_across_calls(tmp_path):
+def test_record_invocation_never_truncates_across_calls(tmp_path: Path) -> None:
     for i in range(5):
         shim_usage_census.record_invocation("baton-assemble", repo_root=tmp_path, now=float(i))
 
@@ -46,7 +47,7 @@ def test_record_invocation_never_truncates_across_calls(tmp_path):
     assert report["baton-assemble"]["last_ts"] == 4.0
 
 
-def test_census_never_invoked_target_reports_false_without_series_file(tmp_path):
+def test_census_never_invoked_target_reports_false_without_series_file(tmp_path: Path) -> None:
     # No series file on disk must
     # be distinguishable from a series that affirmatively shows zero rows;
     # series_present=False is the "we have not been watching yet" signal.
@@ -60,7 +61,7 @@ def test_census_never_invoked_target_reports_false_without_series_file(tmp_path)
     }
 
 
-def test_census_distinguishes_no_series_from_empty_series(tmp_path):
+def test_census_distinguishes_no_series_from_empty_series(tmp_path: Path) -> None:
     # A series file that exists
     # but has no rows for this name must report series_present=True while
     # invoked stays False -- distinct from the no-file-at-all case above.
@@ -73,7 +74,7 @@ def test_census_distinguishes_no_series_from_empty_series(tmp_path):
     assert report["baton-assemble"]["series_present"] is True
 
 
-def test_census_ignores_malformed_lines_and_unknown_names(tmp_path):
+def test_census_ignores_malformed_lines_and_unknown_names(tmp_path: Path) -> None:
     series_path = tmp_path / ".coordinator-local" / "shim-usage-census.jsonl"
     series_path.parent.mkdir(parents=True, exist_ok=True)
     series_path.write_text(
@@ -89,7 +90,7 @@ def test_census_ignores_malformed_lines_and_unknown_names(tmp_path):
     assert report["sizing-assemble"]["count"] == 1
 
 
-def test_record_invocation_never_raises_when_series_path_unwritable(tmp_path, monkeypatch):
+def test_record_invocation_never_raises_when_series_path_unwritable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*args, **kwargs):
         raise OSError("disk full")
 
@@ -100,13 +101,13 @@ def test_record_invocation_never_raises_when_series_path_unwritable(tmp_path, mo
     shim_usage_census.record_invocation("baton-assemble", repo_root=tmp_path)
 
 
-def test_record_invocation_is_droppable_telemetry_never_an_unbounded_write(tmp_path, monkeypatch):
+def test_record_invocation_is_droppable_telemetry_never_an_unbounded_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A stalled disk drops the census line instead of holding the shim it observes."""
     from coordinator_core import atomic_append
 
     seen = {}
 
-    def _append(sink, encoded, droppable=False):
+    def _append(sink, encoded, droppable: bool = False) -> None:
         seen.update(encoded=encoded, droppable=droppable)
 
     monkeypatch.setattr(atomic_append, "append_line", _append)
@@ -115,14 +116,14 @@ def test_record_invocation_is_droppable_telemetry_never_an_unbounded_write(tmp_p
     assert json.loads(seen["encoded"]) == {"name": "sizing-assemble", "ts": 1.0}
 
 
-def test_record_invocation_never_raises_when_repo_root_unresolvable(monkeypatch):
+def test_record_invocation_never_raises_when_repo_root_unresolvable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(shim_usage_census, "show_toplevel", lambda: None)
     # No repo_root passed -- falls through to _resolve_repo_root(), which
     # must degrade to "not recorded" rather than raising.
     shim_usage_census.record_invocation("baton-assemble")
 
 
-def test_record_invocation_never_raises_on_non_serializable_name(tmp_path):
+def test_record_invocation_never_raises_on_non_serializable_name(tmp_path: Path) -> None:
     # nit, malformed `name` was named
     # in the dispatch brief's risk list but not exercised. json.dumps
     # raises on a non-serializable object; the outer except Exception must
@@ -133,7 +134,7 @@ def test_record_invocation_never_raises_on_non_serializable_name(tmp_path):
     assert not series_path.exists()
 
 
-def test_record_invocation_write_cost_is_far_below_a_rev_parse_spawn(tmp_path):
+def test_record_invocation_write_cost_is_far_below_a_rev_parse_spawn(tmp_path: Path) -> None:
     """C7's measured floor: a `git rev-parse` spawn costs ~13.6ms; the
     in-process seam this plan replaces it with resolves in 0.14ms. A
     census write on the same hot path must be far below that 13.6ms spawn
@@ -156,7 +157,7 @@ def test_record_invocation_write_cost_is_far_below_a_rev_parse_spawn(tmp_path):
     assert per_call_ms < 5.0, f"per-invocation census write cost {per_call_ms:.4f}ms too high"
 
 
-def test_census_reads_targets_written_by_multiple_simulated_callers(tmp_path):
+def test_census_reads_targets_written_by_multiple_simulated_callers(tmp_path: Path) -> None:
     # Simulate several "sessions" each recording their own invocation of
     # the same shim, interleaved -- append-only means every one lands as
     # its own complete line with no interleaving corruption.

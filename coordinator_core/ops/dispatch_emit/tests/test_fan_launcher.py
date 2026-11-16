@@ -51,12 +51,12 @@ def _literal(script: str, name: str):
     return json.loads(line[len(f"const {name} = "):].rstrip(";"))
 
 
-def test_meta_is_the_first_statement(tmp_path):
+def test_meta_is_the_first_statement(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     assert script.startswith("export const meta = {")
 
 
-def test_every_run_id_appears_once_in_children_and_the_replies_ride_in_order(tmp_path):
+def test_every_run_id_appears_once_in_children_and_the_replies_ride_in_order(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     for run_id in ("ask-r1", "ask-r2"):
         assert script.count(f'{{"run_id": {json.dumps(run_id)}, ') == 1
@@ -64,19 +64,19 @@ def test_every_run_id_appears_once_in_children_and_the_replies_ride_in_order(tmp
     assert "emit_params" not in script and "ask_compose" not in script
 
 
-def test_emitted_must_be_one_reply_per_child(tmp_path):
+def test_emitted_must_be_one_reply_per_child(tmp_path: Path) -> None:
     for bad in (_replies("ask-r1"), _replies("ask-r1", "ask-r2", "ask-r3")):
         with pytest.raises(ValueError, match="emitted replies"):
             fl.write_launcher(tmp_path, "ask-parent", _children("ask-r1", "ask-r2"), None, bad)
     assert not (tmp_path / fl.launcher_rel("ask-parent")).exists()
 
 
-def test_emitted_is_required(tmp_path):
+def test_emitted_is_required(tmp_path: Path) -> None:
     with pytest.raises(TypeError):
         fl.write_launcher(tmp_path, "ask-parent", _children("ask-r1"), None)
 
 
-def test_the_run_token_never_reaches_the_script(tmp_path):
+def test_the_run_token_never_reaches_the_script(tmp_path: Path) -> None:
     token = "ab" * 16
     reply = {"path": "scratch/warp/ask-r1.workflow.mjs", "run_id": "ask-r1", "fire_args": {"runToken": token, "repoRoot": "/r"}}
     path = fl.write_launcher(tmp_path, "ask-parent", _children("ask-r1"), None, [reply])
@@ -86,42 +86,42 @@ def test_the_run_token_never_reaches_the_script(tmp_path):
     assert reply["fire_args"]["runToken"] == token
 
 
-def test_a_refused_emit_reply_rides_through_as_that_childs_entry(tmp_path):
+def test_a_refused_emit_reply_rides_through_as_that_childs_entry(tmp_path: Path) -> None:
     failed = {"path": "", "run_id": "", "fire_args": {}, "error": "SizingFireRefused: not found"}
     path = fl.write_launcher(tmp_path, "ask-parent", _children("ask-r1", "ask-r2"), None, [failed, _replies("ask-r2")[0]])
     assert _literal(path.read_text(encoding="utf-8"), "EMITTED")[0] == failed
 
 
-def test_zero_children_refused(tmp_path):
+def test_zero_children_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="no children"):
         fl.write_launcher(tmp_path, "ask-parent", [], None, [])
     assert not (tmp_path / fl.launcher_rel("ask-parent")).exists()
 
 
-def test_duplicate_run_ids_refused(tmp_path):
+def test_duplicate_run_ids_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="duplicate run_id"):
         fl.write_launcher(tmp_path, "ask-parent", _children("ask-r1", "ask-r1"), None, _replies("ask-r1", "ask-r1"))
 
 
 @pytest.mark.parametrize("parent", ["", "../escape", "a/b", "a\\b"])
-def test_unsafe_parent_id_refused(tmp_path, parent):
+def test_unsafe_parent_id_refused(tmp_path: Path, parent) -> None:
     with pytest.raises(ValueError, match="parent_id"):
         fl.write_launcher(tmp_path, parent, _children("ask-r1"), None, _replies("ask-r1"))
 
 
-def test_repo_root_is_a_posix_literal(tmp_path):
+def test_repo_root_is_a_posix_literal(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     assert f"const REPO_ROOT = {json.dumps(tmp_path.as_posix())};" in script
     root_line = next(ln for ln in script.splitlines() if ln.startswith("const REPO_ROOT"))
     assert "\\" not in root_line
 
 
-def test_no_run_token_literal_in_the_script(tmp_path):
+def test_no_run_token_literal_in_the_script(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     assert not re.search(r"(?<![0-9a-f])[0-9a-f]{32}(?![0-9a-f])", script)
 
 
-def test_every_start_passes_script_path_only(tmp_path):
+def test_every_start_passes_script_path_only(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     assert script.count("workflow({ scriptPath: scriptPath })") == 1  # one start site, run for every child
     assert script.count("workflow(") == 1
@@ -130,20 +130,20 @@ def test_every_start_passes_script_path_only(tmp_path):
     assert STAGE_PENDING_KEY in script
 
 
-def test_children_run_under_parallel_with_isolated_failure(tmp_path):
+def test_children_run_under_parallel_with_isolated_failure(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     assert "return parallel(CHILDREN.map(" in script
     assert "_runChild(child, EMITTED[i])" in script
     assert "status: 'emit_refused'" in script  # a refused emit is that child's entry, never a throw
 
 
-def test_no_emit_batch_leg_is_rendered(tmp_path):
+def test_no_emit_batch_leg_is_rendered(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     assert "_emitAll" not in script and "emit-batch" not in script and "BATCH_PARAMS_FILE" not in script
     assert "--params-file" not in script
 
 
-def test_emit_leg_contract(tmp_path):
+def test_emit_leg_contract(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     assert "model: 'haiku'" in script
     assert "dispatch.emit" in script
@@ -185,7 +185,7 @@ def _strip_reemit(why):
 
 
 @pytest.mark.spawns_process
-def test_failed_emit_surfaces_the_op_error_not_a_run_id_mismatch(tmp_path):
+def test_failed_emit_surfaces_the_op_error_not_a_run_id_mismatch(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     assert "error: { type: 'string' }" in script
     failed = {"path": "", "run_id": "", "fire_args": {}, "error": "SizingFireRefused: sizing-object not found on disk"}
@@ -195,7 +195,7 @@ def test_failed_emit_surfaces_the_op_error_not_a_run_id_mismatch(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_genuine_run_id_mismatch_still_refused(tmp_path):
+def test_genuine_run_id_mismatch_still_refused(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     ok_shape = {"path": "/r/scratch/warp/x/s.js", "run_id": "ask-other", "fire_args": {}}
     assert _refusal(script, "ask-r1", ok_shape) == "emit reply run_id ask-other is not ask-r1"
@@ -223,7 +223,7 @@ def _chain_refusal(script: str, child_id: str, reply: dict):
 
 
 @pytest.mark.spawns_process
-def test_chain_emit_path_with_empty_run_id_is_a_named_refusal(tmp_path):
+def test_chain_emit_path_with_empty_run_id_is_a_named_refusal(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     base = {"run_id": "", "fire_args": {}}
     empty = dict(base, path="/r/scratch/warp/x/not-a-run-script.js")
@@ -235,7 +235,7 @@ def test_chain_emit_path_with_empty_run_id_is_a_named_refusal(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_doubled_separator_path_in_tree_accepted_outside_still_refused(tmp_path):
+def test_doubled_separator_path_in_tree_accepted_outside_still_refused(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     base = {"run_id": "ask-r1", "fire_args": {}}
     doubled = dict(base, path="/r//scratch//warp//ask-r1.workflow.mjs")
@@ -249,7 +249,7 @@ def test_doubled_separator_path_in_tree_accepted_outside_still_refused(tmp_path)
 
 
 @pytest.mark.spawns_process
-def test_repo_relative_emit_path_resolves_under_the_root(tmp_path):
+def test_repo_relative_emit_path_resolves_under_the_root(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     base = {"run_id": "ask-r1", "fire_args": {}}
     assert _refusal(script, "ask-r1", dict(base, path="scratch/warp/ask-r1.workflow.mjs")) is None
@@ -259,14 +259,14 @@ def test_repo_relative_emit_path_resolves_under_the_root(tmp_path):
     )
 
 
-def test_every_start_site_normalizes_the_emitted_path(tmp_path):
+def test_every_start_site_normalizes_the_emitted_path(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     assert script.count("_normEmitPath(emitted.path)") == 2
     assert "emitted.path.replace" not in script
 
 
 @pytest.mark.spawns_process
-def test_own_redirect_run_id_accepted_foreign_still_refused(tmp_path):
+def test_own_redirect_run_id_accepted_foreign_still_refused(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY
 
     _, script = _write(tmp_path)
@@ -280,7 +280,7 @@ def test_own_redirect_run_id_accepted_foreign_still_refused(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_stale_record_recomposed_refire_id_accepted_foreign_still_refused(tmp_path):
+def test_stale_record_recomposed_refire_id_accepted_foreign_still_refused(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     sizing = "state/sizings/2026-10-29-recomposed-refire-id-multi-ask-launcher-cec55b.yaml"
     stem = "2026-10-29-recomposed-refire-id-multi-ask-launcher-cec55b"
@@ -295,7 +295,7 @@ def test_stale_record_recomposed_refire_id_accepted_foreign_still_refused(tmp_pa
 
 
 @pytest.mark.spawns_process
-def test_launcher_starts_the_redirected_run_id(tmp_path):
+def test_launcher_starts_the_redirected_run_id(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.ask_contract import OUTPUT_PATH_REDIRECT_KEY
 
     _, script = _write(tmp_path, ids=("ask-r1",))
@@ -308,7 +308,7 @@ def test_launcher_starts_the_redirected_run_id(tmp_path):
     assert calls[1] == {"scriptPath": f"{tmp_path.as_posix()}/{staged_twin_rel('warp-new', sha)}"}
 
 
-def test_chain_hop_renders_one_hop_on_the_one_start_site(tmp_path):
+def test_chain_hop_renders_one_hop_on_the_one_start_site(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     assert f"result.{CHAIN_HANDOFF_KEY}" in script
     assert f"{LAUNCHER_CHILD_EMIT_PARAM}: true" in script
@@ -319,7 +319,7 @@ def test_chain_hop_renders_one_hop_on_the_one_start_site(tmp_path):
     assert script.count("workflow(") == 1
 
 
-def test_launcher_no_longer_reads_the_sidecar(tmp_path):
+def test_launcher_no_longer_reads_the_sidecar(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     assert READ_STAGE_SIDECAR_JS not in script and VERIFY_REPLY_JS not in script
     assert "_readStageSidecar" not in script and "_makeStageReader" not in script
@@ -327,7 +327,7 @@ def test_launcher_no_longer_reads_the_sidecar(tmp_path):
     assert "stage_pending repeated for a handle already supplied" in script
 
 
-def _run_child_stage(script: str, sha, fire_args=None, repeat=False, emit_extra=None, emit_run_id="ask-r1", emit_stem=None, twin_path=None) -> list:
+def _run_child_stage(script: str, sha, fire_args=None, repeat: bool = False, emit_extra=None, emit_run_id: str = "ask-r1", emit_stem=None, twin_path=None) -> list:
     """Run _runChild in node with stubs; returns [result, paths workflow() was started with]."""
     import shutil
     import subprocess
@@ -382,7 +382,7 @@ def _run_chain_hop(script: str, handoff: dict, chain_path: str):
 
 
 @pytest.mark.spawns_process
-def test_a_chain_hop_emits_under_the_child_run_id_as_chain_parent_and_starts_the_fresh_run(tmp_path):
+def test_a_chain_hop_emits_under_the_child_run_id_as_chain_parent_and_starts_the_fresh_run(tmp_path: Path) -> None:
     _, script = _write(tmp_path, ids=("ask-r1",))
     fresh = "/scratch/warp/warp-sizing-20261115T200000-abcdef.workflow.mjs"
     result, prompts, calls = _run_chain_hop(script, {"sizing_path": "state/sizings/ask-r1.yaml", "ask": True}, fresh)
@@ -392,7 +392,7 @@ def test_a_chain_hop_emits_under_the_child_run_id_as_chain_parent_and_starts_the
 
 
 @pytest.mark.spawns_process
-def test_a_chain_hop_still_refuses_an_emit_reply_under_the_child_own_run_id(tmp_path):
+def test_a_chain_hop_still_refuses_an_emit_reply_under_the_child_own_run_id(tmp_path: Path) -> None:
     _, script = _write(tmp_path, ids=("ask-r1",))
     result, _, calls = _run_chain_hop(script, {"sizing_path": "state/sizings/ask-r1.yaml"}, "/scratch/warp/ask-r1.workflow.mjs")
     assert result["status"] == "failed" and "is not a fresh run id" in result["error"]
@@ -400,7 +400,7 @@ def test_a_chain_hop_still_refuses_an_emit_reply_under_the_child_own_run_id(tmp_
 
 
 @pytest.mark.spawns_process
-def test_a_hand_off_chain_parent_is_kept_over_the_child_run_id(tmp_path):
+def test_a_hand_off_chain_parent_is_kept_over_the_child_run_id(tmp_path: Path) -> None:
     _, script = _write(tmp_path, ids=("ask-r1",))
     fresh = "/scratch/warp/warp-sizing-20261115T200000-abcdef.workflow.mjs"
     _, prompts, _ = _run_chain_hop(script, {"sizing_path": "state/sizings/ask-r1.yaml", "chain_parent": "ask-own"}, fresh)
@@ -408,7 +408,7 @@ def test_a_hand_off_chain_parent_is_kept_over_the_child_run_id(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_stage_pending_with_a_good_handle_starts_the_twin_path(tmp_path):
+def test_stage_pending_with_a_good_handle_starts_the_twin_path(tmp_path: Path) -> None:
     _, script = _write(tmp_path, ids=("ask-r1",))
     sha = "ab" * 32
     result, calls, _ = _run_child_stage(script, sha)
@@ -419,7 +419,7 @@ def test_stage_pending_with_a_good_handle_starts_the_twin_path(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_a_restaged_twin_named_by_the_reply_is_started_not_the_stale_handle_twin(tmp_path):
+def test_a_restaged_twin_named_by_the_reply_is_started_not_the_stale_handle_twin(tmp_path: Path) -> None:
     _, script = _write(tmp_path, ids=("ask-r1",))
     stale, fresh = "3c" * 32, "2d" * 32
     result, calls, _ = _run_child_stage(script, stale, twin_path=staged_twin_rel("ask-r1", fresh))
@@ -429,7 +429,7 @@ def test_a_restaged_twin_named_by_the_reply_is_started_not_the_stale_handle_twin
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("bad", ["scratch/warp/ask-other.staged-" + "2d" * 32 + ".workflow.mjs", "scratch/warp/../x", 7])
-def test_a_named_twin_of_another_run_or_shape_is_refused_by_name(tmp_path, bad):
+def test_a_named_twin_of_another_run_or_shape_is_refused_by_name(tmp_path: Path, bad) -> None:
     _, script = _write(tmp_path, ids=("ask-r1",))
     result, calls, _ = _run_child_stage(script, "2d" * 32, twin_path=bad)
     assert result["status"] == "failed" and "twin_path is not a staged twin of this run" in result["error"]
@@ -437,7 +437,7 @@ def test_a_named_twin_of_another_run_or_shape_is_refused_by_name(tmp_path, bad):
 
 
 @pytest.mark.spawns_process
-def test_a_refire_resumes_the_twin_the_halted_run_staged_under_an_earlier_stamp(tmp_path):
+def test_a_refire_resumes_the_twin_the_halted_run_staged_under_an_earlier_stamp(tmp_path: Path) -> None:
     _, script = _write(tmp_path, ids=("ask-r1",))
     halted = staged_twin_rel("warp-plan-20261030T010101-aaaaaa", "2d" * 32)
     result, calls, _ = _run_child_stage(script, "ab" * 32, emit_stem="warp-plan-20261031T120809-5a6216", twin_path=halted)
@@ -446,7 +446,7 @@ def test_a_refire_resumes_the_twin_the_halted_run_staged_under_an_earlier_stamp(
 
 
 @pytest.mark.spawns_process
-def test_a_twin_of_another_warp_run_is_refused_on_a_refire(tmp_path):
+def test_a_twin_of_another_warp_run_is_refused_on_a_refire(tmp_path: Path) -> None:
     _, script = _write(tmp_path, ids=("ask-r1",))
     other = staged_twin_rel("warp-other-20261030T010101-aaaaaa", "2d" * 32)
     result, calls, _ = _run_child_stage(script, "ab" * 32, emit_stem="warp-plan-20261031T120809-5a6216", twin_path=other)
@@ -455,7 +455,7 @@ def test_a_twin_of_another_warp_run_is_refused_on_a_refire(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_the_twin_is_named_from_the_started_script_stem_not_the_reply_run_id(tmp_path):
+def test_the_twin_is_named_from_the_started_script_stem_not_the_reply_run_id(tmp_path: Path) -> None:
     _, script = _write(tmp_path, ids=("ask-r1",))
     sha = "ab" * 32
     result, calls, _ = _run_child_stage(script, sha, emit_stem="warp-plan-20261031T120809-5a6216")
@@ -464,7 +464,7 @@ def test_the_twin_is_named_from_the_started_script_stem_not_the_reply_run_id(tmp
 
 
 @pytest.mark.spawns_process
-def test_a_started_path_with_no_run_script_stem_halts_by_name_never_the_reply_run_id(tmp_path):
+def test_a_started_path_with_no_run_script_stem_halts_by_name_never_the_reply_run_id(tmp_path: Path) -> None:
     _, script = _write(tmp_path, ids=("ask-r1",))
     result, calls, _ = _run_child_stage(script, "ab" * 32, emit_stem="x.staged-" + "ab" * 32)
     assert result["status"] == "failed" and "stage resume path is not a run script" in result["error"]
@@ -473,7 +473,7 @@ def test_a_started_path_with_no_run_script_stem_halts_by_name_never_the_reply_ru
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("sha", ["AB" * 32, "ab" * 31, None, "../" + "a" * 61])
-def test_malformed_sha_refuses_by_name(tmp_path, sha):
+def test_malformed_sha_refuses_by_name(tmp_path: Path, sha) -> None:
     _, script = _write(tmp_path, ids=("ask-r1",))
     result, calls, _ = _run_child_stage(script, sha)
     assert result["status"] == "failed"
@@ -481,7 +481,7 @@ def test_malformed_sha_refuses_by_name(tmp_path, sha):
     assert len(calls) == 1
 
 
-def test_placeholder_shaped_emitted_text_stays_literal(tmp_path):
+def test_placeholder_shaped_emitted_text_stays_literal(tmp_path: Path) -> None:
     child = fl.LaunchChild("ask-r1", "s.yaml", {})
     reply = {"path": "", "run_id": "", "fire_args": {}, "error": "__REPO_ROOT__ __CHILDREN__"}
     script = fl.write_launcher(tmp_path, "ask-parent", [child], None, [reply]).read_text(encoding="utf-8")
@@ -489,7 +489,7 @@ def test_placeholder_shaped_emitted_text_stays_literal(tmp_path):
     assert script.count("__REPO_ROOT__") == 1 and script.count("__CHILDREN__") == 1
 
 
-def test_receipt_sha_matches_the_file(tmp_path):
+def test_receipt_sha_matches_the_file(tmp_path: Path) -> None:
     path, _ = _write(tmp_path)
     receipt = json.loads(emission_receipt_path(path).read_text(encoding="utf-8"))
     assert receipt["sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
@@ -497,14 +497,14 @@ def test_receipt_sha_matches_the_file(tmp_path):
     assert path == tmp_path / fl.launcher_rel("ask-parent")
 
 
-def test_second_write_for_the_same_parent_is_refused(tmp_path):
+def test_second_write_for_the_same_parent_is_refused(tmp_path: Path) -> None:
     path, script = _write(tmp_path)
     with pytest.raises(FileExistsError):
         fl.write_launcher(tmp_path, "ask-parent", _children("ask-r3"), "sess-1", _replies("ask-r3"))
     assert path.read_text(encoding="utf-8") == script
 
 
-def test_the_launcher_is_the_only_file_written_and_a_failed_write_retries(tmp_path, monkeypatch):
+def test_the_launcher_is_the_only_file_written_and_a_failed_write_retries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def fail(path, text, *a, **k):
         raise OSError("launcher write failed")
 
@@ -521,7 +521,7 @@ _TOKEN = "cd" * 16
 
 
 @pytest.mark.spawns_process
-def test_a_runtoken_child_starts_the_twin_with_no_agent_leg_of_its_own(tmp_path):
+def test_a_runtoken_child_starts_the_twin_with_no_agent_leg_of_its_own(tmp_path: Path) -> None:
     _, script = _write(tmp_path, ids=("ask-r1",))
     sha = "ab" * 32
     result, calls, labels = _run_child_stage(script, sha, {"runToken": _TOKEN})
@@ -530,13 +530,13 @@ def test_a_runtoken_child_starts_the_twin_with_no_agent_leg_of_its_own(tmp_path)
     assert calls[1] == {"scriptPath": f"{tmp_path.as_posix()}/{staged_twin_rel('ask-r1', sha)}"}
 
 
-def test_no_twin_token_leg_remains_in_the_script(tmp_path):
+def test_no_twin_token_leg_remains_in_the_script(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     assert "stage_twin_token" not in script and "_twinTokenLeg" not in script and "twin-token-" not in script
 
 
 @pytest.mark.spawns_process
-def test_a_repeated_handle_still_fails_by_name(tmp_path):
+def test_a_repeated_handle_still_fails_by_name(tmp_path: Path) -> None:
     _, script = _write(tmp_path, ids=("ask-r1",))
     result, calls, _ = _run_child_stage(script, "ab" * 32, repeat=True)
     assert result["status"] == "failed"
@@ -572,7 +572,7 @@ def _envelope(tmp_path: Path, *digests: dict) -> Path:
     return out
 
 
-def test_a_two_child_xs_launcher_envelope_commits_each_child_past_the_review_gate(tmp_path):
+def test_a_two_child_xs_launcher_envelope_commits_each_child_past_the_review_gate(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 
     out = _envelope(tmp_path, _xs_digest("ask-r1"), _xs_digest("ask-r2"))
@@ -587,7 +587,7 @@ def test_a_two_child_xs_launcher_envelope_commits_each_child_past_the_review_gat
         assert f"{run_id}.workflow.mjs" in reply["error"], "the envelope's params must reach the script read"
 
 
-def test_launcher_envelope_refuses_an_unselected_or_unknown_run(tmp_path):
+def test_launcher_envelope_refuses_an_unselected_or_unknown_run(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 
     out = _envelope(tmp_path, _xs_digest("ask-r1"), _xs_digest("ask-r2"))
@@ -597,7 +597,7 @@ def test_launcher_envelope_refuses_an_unselected_or_unknown_run(tmp_path):
         terminal_commit_refusals._params_from_task_output(str(out), "ask-zz")
 
 
-def test_a_non_xs_digest_with_null_inline_review_stays_unreviewed(tmp_path):
+def test_a_non_xs_digest_with_null_inline_review_stays_unreviewed(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 
     out = _envelope(tmp_path, _xs_digest("ask-r1", arm="s"))
@@ -614,7 +614,7 @@ def _halted_digest(run_id: str) -> dict:
     return d
 
 
-def test_a_child_halted_at_commit_yields_its_own_commit_params(tmp_path):
+def test_a_child_halted_at_commit_yields_its_own_commit_params(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 
     out = _envelope(tmp_path, _halted_digest("ask-r1"), _halted_digest("ask-r2"))
@@ -627,7 +627,7 @@ def test_a_child_halted_at_commit_yields_its_own_commit_params(tmp_path):
     ]
 
 
-def test_a_non_commit_halt_keeps_the_revise_params(tmp_path):
+def test_a_non_commit_halt_keeps_the_revise_params(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 
     d = _halted_digest("ask-r1")
@@ -638,7 +638,7 @@ def test_a_non_commit_halt_keeps_the_revise_params(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_declared_directory_path_does_not_stop_the_commit(tmp_path, monkeypatch):
+def test_a_declared_directory_path_does_not_stop_the_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import copy
 
     from coordinator_core.benchmarks import terminal_commit_full_path as driver
@@ -661,7 +661,7 @@ def test_a_declared_directory_path_does_not_stop_the_commit(tmp_path, monkeypatc
 
 
 @pytest.mark.spawns_process
-def test_a_failed_start_of_the_redirected_run_abandons_it_and_a_good_start_does_not(tmp_path):
+def test_a_failed_start_of_the_redirected_run_abandons_it_and_a_good_start_does_not(tmp_path: Path) -> None:
     import shutil
     import subprocess
 
@@ -702,7 +702,7 @@ _DECLINE = "The user's request takes precedence, so I did not invoke coordinator
 
 
 @pytest.mark.spawns_process
-def test_a_refused_emitted_reply_starts_nothing_and_carries_the_reason(tmp_path):
+def test_a_refused_emitted_reply_starts_nothing_and_carries_the_reason(tmp_path: Path) -> None:
     import shutil
     import subprocess
 
@@ -731,7 +731,7 @@ def test_a_refused_emitted_reply_starts_nothing_and_carries_the_reason(tmp_path)
 
 
 @pytest.mark.spawns_process
-def test_a_rerun_launcher_never_re_emits_a_refused_baked_reply_and_leaves_an_ok_child_alone(tmp_path):
+def test_a_rerun_launcher_never_re_emits_a_refused_baked_reply_and_leaves_an_ok_child_alone(tmp_path: Path) -> None:
     import shutil
     import subprocess
 
@@ -794,7 +794,7 @@ def test_the_hook_retries_a_refused_deferred_write_once_before_baking_the_reply(
 
 
 @pytest.mark.spawns_process
-def test_start_all_starts_each_child_from_its_own_emitted_reply(tmp_path):
+def test_start_all_starts_each_child_from_its_own_emitted_reply(tmp_path: Path) -> None:
     import shutil
     import subprocess
 
@@ -822,7 +822,7 @@ def test_start_all_starts_each_child_from_its_own_emitted_reply(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_multi_ask_child_ask_id_and_recomposed_warp_id_pair(tmp_path):
+def test_multi_ask_child_ask_id_and_recomposed_warp_id_pair(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     stem = "2026-10-30-7a2866-2-next-runtime-batch-build"
     sizing = f"state/sizings/{stem}.yaml"
@@ -837,7 +837,7 @@ def test_multi_ask_child_ask_id_and_recomposed_warp_id_pair(tmp_path):
     assert _refusal(script, warp_id, dict(reply, run_id=ask_id), sizing) is None
 
 
-def test_a_24_child_launcher_renders_no_emit_agent_leg_and_carries_every_reply(tmp_path):
+def test_a_24_child_launcher_renders_no_emit_agent_leg_and_carries_every_reply(tmp_path: Path) -> None:
     ids = tuple(f"ask-r{i}" for i in range(24))
     _, script = _write(tmp_path, ids=ids)
     assert "emit-batch" not in script and script.count("'emit-' + ") == 0
@@ -846,7 +846,7 @@ def test_a_24_child_launcher_renders_no_emit_agent_leg_and_carries_every_reply(t
 
 
 @pytest.mark.spawns_process
-def test_abandons_of_several_children_batch_into_one_leg(tmp_path):
+def test_abandons_of_several_children_batch_into_one_leg(tmp_path: Path) -> None:
     import shutil
     import subprocess
 
@@ -874,14 +874,14 @@ def test_abandons_of_several_children_batch_into_one_leg(tmp_path):
     assert '"abandon_run":"warp-ask-r1"' in legs[0][2] and '"abandon_run":"warp-ask-r2"' in legs[0][2]
 
 
-def test_emit_leg_prompt_carries_the_shared_no_veto_sentence(tmp_path):
+def test_emit_leg_prompt_carries_the_shared_no_veto_sentence(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     assert json.dumps(fl.EMIT_RELAY_AUTHORITY, ensure_ascii=True) in script
     assert "__RELAY_AUTHORITY__" not in script
     assert "No session chat, user turns included" in fl.EMIT_RELAY_AUTHORITY
 
 
-def _run_start_loop_under_node(tmp_path, workflow_results, parent="ask-parent"):
+def _run_start_loop_under_node(tmp_path, workflow_results, parent: str = "ask-parent"):
     """Cut the launcher's start loop from the rendered script and run it under node with a scripted `workflow`.
 
     Returns (loop result, scriptPaths started in order)."""
@@ -908,19 +908,19 @@ def _run_start_loop_under_node(tmp_path, workflow_results, parent="ask-parent"):
     return json.loads(out.stdout)
 
 
-def _deferred(tmp_path, name="ask-r1", run_id="ask-r1"):
+def _deferred(tmp_path, name: str = "ask-r1", run_id: str = "ask-r1"):
     return {fl.DEFERRED_EMIT_KEY: {"path": f"{tmp_path.as_posix()}/scratch/warp/{name}.workflow.mjs", "run_id": run_id, "fire_args": {}}}
 
 
 @pytest.mark.spawns_process
-def test_the_start_loop_starts_a_handed_back_deferred_emit_without_spending_a_stage_round(tmp_path):
+def test_the_start_loop_starts_a_handed_back_deferred_emit_without_spending_a_stage_round(tmp_path: Path) -> None:
     out, started = _run_start_loop_under_node(tmp_path, [_deferred(tmp_path, "ask-r1-b"), {"done": True}])
     assert out["status"] == "ok" and out["result"] == {"done": True}
     assert [s.rsplit("/", 1)[-1] for s in started] == ["ask-r1.workflow.mjs", "ask-r1-b.workflow.mjs"]
 
 
 @pytest.mark.spawns_process
-def test_the_start_loop_refuses_a_second_deferred_emit_and_an_out_of_tree_one(tmp_path):
+def test_the_start_loop_refuses_a_second_deferred_emit_and_an_out_of_tree_one(tmp_path: Path) -> None:
     out, started = _run_start_loop_under_node(tmp_path, [_deferred(tmp_path, "a"), _deferred(tmp_path, "b")], "ask-p1")
     assert out["status"] == "failed" and "second deferred emit" in out["error"] and len(started) == 2
     bad = {fl.DEFERRED_EMIT_KEY: {"path": "/elsewhere/x.workflow.mjs", "run_id": "ask-r1", "fire_args": {}}}
@@ -936,7 +936,7 @@ def _mark_parked(root: Path, run_id: str) -> None:
     write_stop_after_marker(d, STOP_AFTER_PLAN)
 
 
-def test_child_emit_params_carry_the_parents_stop_after_and_nothing_otherwise(tmp_path):
+def test_child_emit_params_carry_the_parents_stop_after_and_nothing_otherwise(tmp_path: Path) -> None:
     base = {"ask": True, "sizing_path": "s.yaml"}
     assert fl.child_emit_params(tmp_path, "ask-parent", base) == base
     _mark_parked(tmp_path, "ask-parent")
@@ -944,7 +944,7 @@ def test_child_emit_params_carry_the_parents_stop_after_and_nothing_otherwise(tm
     assert "stop_after" not in base
 
 
-def test_write_launcher_refuses_children_emitted_without_the_parents_stop_after(tmp_path):
+def test_write_launcher_refuses_children_emitted_without_the_parents_stop_after(tmp_path: Path) -> None:
     _mark_parked(tmp_path, "ask-parent")
     with pytest.raises(ValueError, match="stop_after"):
         _write(tmp_path)
@@ -956,12 +956,12 @@ def test_write_launcher_refuses_children_emitted_without_the_parents_stop_after(
     assert path.exists()
 
 
-def test_write_launcher_without_a_parked_lineage_is_unchanged(tmp_path):
+def test_write_launcher_without_a_parked_lineage_is_unchanged(tmp_path: Path) -> None:
     path, script = _write(tmp_path)
     assert path.exists() and "stop_after" not in script
 
 
-def test_emit_leg_reconciles_a_32004_before_any_reply_is_judged(tmp_path):
+def test_emit_leg_reconciles_a_32004_before_any_reply_is_judged(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.fan_launcher import EMIT_RECONCILE_CLAUSE
 
     _, script = _write(tmp_path)
@@ -974,7 +974,7 @@ def test_emit_leg_reconciles_a_32004_before_any_reply_is_judged(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_unreconciled_32004_emit_reply_is_an_emit_failure_never_an_empty_run_id(tmp_path):
+def test_unreconciled_32004_emit_reply_is_an_emit_failure_never_an_empty_run_id(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     indeterminate = {"path": "", "run_id": "", "fire_args": {}, "error": "-32004 warm dispatch indeterminate"}
     got = _chain_refusal(script, "ask-r1", indeterminate)
@@ -1008,7 +1008,7 @@ _ROOTS = [
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("prefix,mk", _ROOTS)
-def test_own_state_warp_run_dir_reply_is_accepted_and_resolves_to_the_run_script(tmp_path, prefix, mk):
+def test_own_state_warp_run_dir_reply_is_accepted_and_resolves_to_the_run_script(tmp_path: Path, prefix, mk) -> None:
     _, script = _write(tmp_path)
     child = '{run_id:"ask-r1",sizing_rel:""}'
     base = {"run_id": "ask-r1", "fire_args": {}}
@@ -1021,7 +1021,7 @@ def test_own_state_warp_run_dir_reply_is_accepted_and_resolves_to_the_run_script
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("prefix,mk", _ROOTS)
-def test_foreign_state_warp_paths_are_still_refused(tmp_path, prefix, mk):
+def test_foreign_state_warp_paths_are_still_refused(tmp_path: Path, prefix, mk) -> None:
     _, script = _write(tmp_path)
     child = '{run_id:"ask-r1",sizing_rel:""}'
     base = {"run_id": "ask-r1", "fire_args": {}}
@@ -1041,7 +1041,7 @@ def test_foreign_state_warp_paths_are_still_refused(tmp_path, prefix, mk):
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("prefix,mk", _ROOTS)
-def test_chained_handoffs_reply_resolves_to_the_run_id_the_size_step_returned(tmp_path, prefix, mk):
+def test_chained_handoffs_reply_resolves_to_the_run_id_the_size_step_returned(tmp_path: Path, prefix, mk) -> None:
     _, script = _write(tmp_path)
     child = '{run_id:"ask-r1",sizing_rel:""}'
     handoff = mk("/r/state/handoffs/2026-11/2026-11-07-917a58-4-fleet-state-response-shape.md")
@@ -1058,7 +1058,7 @@ def test_chained_handoffs_reply_resolves_to_the_run_id_the_size_step_returned(tm
 
 
 @pytest.mark.spawns_process
-def test_chained_handoffs_reply_stays_refused_without_a_fresh_run_id_or_outside_handoffs(tmp_path):
+def test_chained_handoffs_reply_stays_refused_without_a_fresh_run_id_or_outside_handoffs(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     prefix = "/r/scratch/warp/"
     child = '{run_id:"ask-r1",sizing_rel:""}'
@@ -1084,7 +1084,7 @@ def test_chained_handoffs_reply_stays_refused_without_a_fresh_run_id_or_outside_
     assert "yields an empty run id" in refusal(traversal)
 
 
-def test_chain_hop_keeps_the_hand_off_run_id_when_its_path_is_not_a_run_script(tmp_path):
+def test_chain_hop_keeps_the_hand_off_run_id_when_its_path_is_not_a_run_script(tmp_path: Path) -> None:
     _, script = _write(tmp_path)
     assert "_pathRunId(_rp) || (named(_rr) ? _rr : '')" in script
     assert "emitted = _handoffScript(emitted);" in script
@@ -1102,7 +1102,7 @@ def _chain_emit(repo, sizing_rel, chain_parent=None):
     return _dispatch_emit({**params, "chain_parent": chain_parent} if chain_parent else params)
 
 
-def test_a_chain_emit_for_a_halted_entry_run_mints_a_fresh_run_the_launcher_accepts(tmp_path, monkeypatch):
+def test_a_chain_emit_for_a_halted_entry_run_mints_a_fresh_run_the_launcher_accepts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import halted_run
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
     from coordinator_core.ops.dispatch_emit.tests.test_stop_after_survives_chained_runs_e2e import REL, _SIZING_DOC, _BASE, _BLITZ

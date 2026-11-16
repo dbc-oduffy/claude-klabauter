@@ -62,6 +62,7 @@ from coordinator_core.composition_budget import CompositionBudget
 from coordinator_core.contract import apply_base
 from coordinator_core.telemetry.composition_record import make_fleet_budget
 from coordinator_core.workday_complete import apply as workday_complete_apply
+from pathlib import Path
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
@@ -248,7 +249,7 @@ def _assert_equivalent_reports(
     assert report_with_budget == report_without_budget
 
 
-def test_apply_base_lineage_arming_is_outcome_neutral(tmp_path) -> None:
+def test_apply_base_lineage_arming_is_outcome_neutral(tmp_path: Path) -> None:
     """Fails today for the same reason as (1): the fleet ceilings are
     `None`, so `make_fleet_budget` builds a pure recorder whose ceiling
     values below are `None` rather than the armed positive values C5

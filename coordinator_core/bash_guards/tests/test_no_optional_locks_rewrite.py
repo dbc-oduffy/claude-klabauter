@@ -3,6 +3,8 @@ from __future__ import annotations
 
 from coordinator_core.bash_guards import guard_no_optional_locks as guard
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
+import pytest
 
 
 def _enveloped(check):
@@ -27,32 +29,32 @@ def _check(cmd: str):
 
 
 class TestPlainRewrite:
-    def test_git_status_rewritten(self):
+    def test_git_status_rewritten(self) -> None:
         out = _check("git status")
         assert _rewritten_command(out) == "git --no-optional-locks status"
 
-    def test_git_diff_bare_rewritten(self):
+    def test_git_diff_bare_rewritten(self) -> None:
         out = _check("git diff")
         assert _rewritten_command(out) == "git --no-optional-locks diff"
 
-    def test_git_diff_name_only_rewritten(self):
+    def test_git_diff_name_only_rewritten(self) -> None:
         out = _check("git diff --name-only")
         assert _rewritten_command(out) == "git --no-optional-locks diff --name-only"
 
-    def test_git_status_with_args_rewritten(self):
+    def test_git_status_with_args_rewritten(self) -> None:
         out = _check("git status --short")
         assert _rewritten_command(out) == "git --no-optional-locks status --short"
 
 
 class TestDashCForm:
-    def test_dash_c_status_rewritten(self):
+    def test_dash_c_status_rewritten(self) -> None:
         out = _check("git -C /repo status")
         assert (
             _rewritten_command(out)
             == "git -C /repo --no-optional-locks status"
         )
 
-    def test_dash_c_diff_rewritten(self):
+    def test_dash_c_diff_rewritten(self) -> None:
         out = _check("git -C /repo diff")
         assert (
             _rewritten_command(out)
@@ -62,7 +64,7 @@ class TestDashCForm:
 
 class TestFlagLandsPreSubcommand:
 
-    def test_flag_precedes_subcommand_not_follows(self):
+    def test_flag_precedes_subcommand_not_follows(self) -> None:
         out = _check("git status")
         rewritten = _rewritten_command(out)
         tokens = rewritten.split()
@@ -72,7 +74,7 @@ class TestFlagLandsPreSubcommand:
             "got: %r" % rewritten
         )
 
-    def test_flag_precedes_subcommand_with_dash_c(self):
+    def test_flag_precedes_subcommand_with_dash_c(self) -> None:
         out = _check("git -C /repo status")
         rewritten = _rewritten_command(out)
         tokens = rewritten.split()
@@ -80,46 +82,46 @@ class TestFlagLandsPreSubcommand:
 
 
 class TestIdempotence:
-    def test_already_flagged_status_passes_through_untouched(self):
+    def test_already_flagged_status_passes_through_untouched(self) -> None:
         assert _check("git --no-optional-locks status") is None
 
-    def test_already_flagged_diff_passes_through_untouched(self):
+    def test_already_flagged_diff_passes_through_untouched(self) -> None:
         assert _check("git --no-optional-locks diff") is None
 
-    def test_already_flagged_dash_c_status_passes_through_untouched(self):
+    def test_already_flagged_dash_c_status_passes_through_untouched(self) -> None:
         assert _check("git -C /repo --no-optional-locks status") is None
 
 
 class TestDiffCachedNotRewritten:
-    def test_diff_cached_not_rewritten(self):
+    def test_diff_cached_not_rewritten(self) -> None:
         assert _check("git diff --cached") is None
 
-    def test_diff_staged_not_rewritten(self):
+    def test_diff_staged_not_rewritten(self) -> None:
         assert _check("git diff --staged") is None
 
 
 class TestLsFilesNotRewritten:
-    def test_ls_files_m_not_rewritten(self):
+    def test_ls_files_m_not_rewritten(self) -> None:
         assert _check("git ls-files -m") is None
 
 
 class TestRefToRefDiffNotRewritten:
-    def test_ref_colon_path_diff_not_rewritten(self):
+    def test_ref_colon_path_diff_not_rewritten(self) -> None:
         assert _check("git diff HEAD:file.py stash@{0}:file.py") is None
 
-    def test_sha_range_diff_not_rewritten(self):
+    def test_sha_range_diff_not_rewritten(self) -> None:
         assert _check("git diff abc123..HEAD") is None
 
 
 class TestChainedCommands:
-    def test_two_git_calls_both_rewritten(self):
+    def test_two_git_calls_both_rewritten(self) -> None:
         out = _check("git status && git diff")
         assert (
             _rewritten_command(out)
             == "git --no-optional-locks status && git --no-optional-locks diff"
         )
 
-    def test_one_rewritten_one_excluded_in_chain(self):
+    def test_one_rewritten_one_excluded_in_chain(self) -> None:
         out = _check("git status && git diff --cached")
         assert (
             _rewritten_command(out)
@@ -128,27 +130,27 @@ class TestChainedCommands:
 
 
 class TestQuotedTextNotRewritten:
-    def test_git_like_text_inside_quotes_untouched(self):
+    def test_git_like_text_inside_quotes_untouched(self) -> None:
         assert _check('echo "git status"') is None
 
-    def test_commit_message_mentioning_git_status_untouched(self):
+    def test_commit_message_mentioning_git_status_untouched(self) -> None:
         assert _check('git commit -m "run git status first"') is None
 
 
 class TestUnaffectedCommands:
-    def test_no_git_in_command(self):
+    def test_no_git_in_command(self) -> None:
         assert _check("echo hello") is None
 
-    def test_git_log_not_a_target_subcommand(self):
+    def test_git_log_not_a_target_subcommand(self) -> None:
         assert _check("git log -1") is None
 
-    def test_empty_command(self):
+    def test_empty_command(self) -> None:
         assert _check("") is None
 
 
 class TestSurgicalInsertionDoesNotCorruptUntouchedSegments:
 
-    def test_live_repro_redirect_and_dollar_expansion_survive(self):
+    def test_live_repro_redirect_and_dollar_expansion_survive(self) -> None:
         cmd = (
             "git -C /path status --porcelain | sed 's/^...//' "
             "> /tmp/out.txt; echo \"RC=$?\""
@@ -163,24 +165,24 @@ class TestSurgicalInsertionDoesNotCorruptUntouchedSegments:
         assert "> /tmp/out.txt" in rewritten
         assert '"RC=$?"' in rewritten
 
-    def test_redirect_target_untouched_in_rewritten_segment(self):
+    def test_redirect_target_untouched_in_rewritten_segment(self) -> None:
         out = _check("git status --porcelain > /tmp/out.txt")
         rewritten = _rewritten_command(out)
         assert rewritten == (
             "git --no-optional-locks status --porcelain > /tmp/out.txt"
         )
 
-    def test_dollar_expansion_in_trailing_segment_untouched(self):
+    def test_dollar_expansion_in_trailing_segment_untouched(self) -> None:
         out = _check('git status; echo "$HOME"')
         rewritten = _rewritten_command(out)
         assert rewritten == 'git --no-optional-locks status; echo "$HOME"'
 
-    def test_command_substitution_in_trailing_segment_untouched(self):
+    def test_command_substitution_in_trailing_segment_untouched(self) -> None:
         out = _check("git status; echo $(pwd)")
         rewritten = _rewritten_command(out)
         assert rewritten == "git --no-optional-locks status; echo $(pwd)"
 
-    def test_fd_dup_redirect_after_rewritten_subcommand_untouched(self):
+    def test_fd_dup_redirect_after_rewritten_subcommand_untouched(self) -> None:
         out = _check("git status 2>&1")
         rewritten = _rewritten_command(out)
         assert rewritten == "git --no-optional-locks status 2>&1"
@@ -188,7 +190,7 @@ class TestSurgicalInsertionDoesNotCorruptUntouchedSegments:
 
 class TestMultiLineBailsRatherThanMisplace:
 
-    def test_multiline_command_not_rewritten(self):
+    def test_multiline_command_not_rewritten(self) -> None:
         assert _check("git status\necho done") is None
 
 
@@ -221,7 +223,7 @@ def test_status_is_unaffected_by_the_diff_only_exclusion() -> None:
     assert _rewrites("git status") is True
 
 
-def test_rewrite_note_is_command_independent_so_session_dedupe_can_silence_it():
+def test_rewrite_note_is_command_independent_so_session_dedupe_can_silence_it() -> None:
     a = _enveloped(guard.check_git_no_optional_locks)("git status -sb")
     b = _enveloped(guard.check_git_no_optional_locks)("git log --oneline -3 && git diff --stat")
     ctx_a = a["hookSpecificOutput"]["additionalContext"]
@@ -229,7 +231,7 @@ def test_rewrite_note_is_command_independent_so_session_dedupe_can_silence_it():
     assert ctx_a == ctx_b
 
 
-def test_rewrite_note_fires_once_per_session_even_without_a_gitdir(tmp_path, monkeypatch):
+def test_rewrite_note_fires_once_per_session_even_without_a_gitdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import tempfile
 
     from coordinator_core.bash_guards import dispatch

@@ -22,6 +22,8 @@ import threading
 import time
 
 from coordinator_core.warm import hang_restart, server, telemetry
+from pathlib import Path
+import pytest
 
 _GUARD_OP = "hooks.preuse_write_dispatch"
 _HEAVY_OP = "dispatch.ask_stage"
@@ -47,7 +49,7 @@ class _VersionState:
 
 
 class _FakeIO:
-    def __init__(self, method: str, request_id: int):
+    def __init__(self, method: str, request_id: int) -> None:
         frame = {"jsonrpc": "2.0", "id": request_id, "method": method, "params": {}, "_engine_token": "client-token"}
         self._lines = [(json.dumps(frame) + "\n").encode("utf-8")]
         self.written: list = []
@@ -80,7 +82,7 @@ class _DiskStall:
     _PATH_METHODS = ("exists", "stat", "mkdir", "glob", "iterdir", "write_text", "read_text", "unlink")
     _FUNCS = ((os, "open"), (os, "replace"), (os, "unlink"), (os, "stat"), (os, "scandir"), (os, "mkdir"))
 
-    def __init__(self, root: pathlib.Path):
+    def __init__(self, root: pathlib.Path) -> None:
         self._root = str(root)
         self.release = threading.Event()
         self.engaged = threading.Event()
@@ -142,7 +144,7 @@ class _DiskStall:
         return call
 
 
-def test_ping_and_guard_answer_and_gate_waits_are_not_restart_evidence_while_the_svc_dir_stalls_under_peer_load(tmp_path, monkeypatch):
+def test_ping_and_guard_answer_and_gate_waits_are_not_restart_evidence_while_the_svc_dir_stalls_under_peer_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     svc = tmp_path / "svc"
     stall_dir = svc / "stall-dumps"
     stall_dir.mkdir(parents=True)

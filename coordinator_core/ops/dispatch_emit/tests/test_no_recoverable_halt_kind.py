@@ -15,6 +15,7 @@ from coordinator_core.ops.dispatch_emit.landing_targeted_tests import (
     TARGETED_TESTS_FAILED,
     ZERO_FAIL_UNATTRIBUTED,
 )
+import pytest
 
 #: The debt only shrinks: lowering this is the only edit a conversion makes here.
 RECOVERABLE_DEBT_CEILING = 0
@@ -51,7 +52,7 @@ def _bucket(kind: str) -> list[str]:
     return registry
 
 
-def test_every_halt_kind_is_in_exactly_one_bucket():
+def test_every_halt_kind_is_in_exactly_one_bucket() -> None:
     kinds = _emitted_kinds() | set(hrc.HALT_REMEDY)
     bad = {k: _bucket(k) for k in sorted(kinds) if len(_bucket(k)) != 1}
     assert not bad, (
@@ -60,14 +61,14 @@ def test_every_halt_kind_is_in_exactly_one_bucket():
     )
 
 
-def test_irreversible_and_keeper_entries_cite_their_reason():
+def test_irreversible_and_keeper_entries_cite_their_reason() -> None:
     assert not [k for k, why in hrc.IRREVERSIBLE_KINDS.items() if not why.strip()]
     assert set(hrc.PM_RULED_KEEPER) == PM_RULED_KEEPER_KINDS
     assert all("PM" in cite and ".md" in cite for cite in hrc.PM_RULED_KEEPER.values())
     assert hrc.IRREVERSIBLE == "irreversible"
 
 
-def test_recoverable_debt_only_shrinks():
+def test_recoverable_debt_only_shrinks() -> None:
     assert len(hrc.RECOVERABLE_DEBT) <= RECOVERABLE_DEBT_CEILING, (
         "RECOVERABLE_DEBT grew: a new recoverable halt kind must be MECHANICAL with a remedy, not new debt"
     )
@@ -76,11 +77,11 @@ def test_recoverable_debt_only_shrinks():
     assert all(m.endswith(".py") for m in hrc.RECOVERABLE_DEBT.values())
 
 
-def test_a_new_unclassified_kind_is_refused(monkeypatch):
+def test_a_new_unclassified_kind_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(hrc.HALT_REMEDY, "brand-new-halt", (hrc.DECISION, None))
     assert _bucket("brand-new-halt") == []
 
 
-def test_recoverable_debt_holds_no_ask_warp_landing_chain_kind():
+def test_recoverable_debt_holds_no_ask_warp_landing_chain_kind() -> None:
     chain = {k: m for k, m in hrc.RECOVERABLE_DEBT.items() if m.startswith(_CHAIN_PREFIXES)}
     assert not chain, f"recoverable halt kinds still unconverted in the ask/warp/landing chain: {chain}"

@@ -6,6 +6,7 @@ import yaml
 
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 RUN = "ask-20261027T000000-abc123"
 REL = "state/sizings/2026-10-27-shipped.yaml"
@@ -39,7 +40,7 @@ def _rows(repo):
     return rr.read_register((repo / REL).read_text(encoding="utf-8")).rows
 
 
-def test_revise_on_shipped_sizing_with_unwired_open_row_is_accepted(tmp_path):
+def test_revise_on_shipped_sizing_with_unwired_open_row_is_accepted(tmp_path: Path) -> None:
     repo = _make(tmp_path, "shipped")
     reply = rl._handler({"run_id": RUN, "verbatim": "a later requirement"}, repo_root=repo)
     assert reply["ok"] is True
@@ -47,7 +48,7 @@ def test_revise_on_shipped_sizing_with_unwired_open_row_is_accepted(tmp_path):
     assert (last["source_text"], last["status"], "wired" in last) == ("a later requirement", "open", False)
 
 
-def test_shipped_sizing_still_refuses_an_unanchored_open_row(tmp_path):
+def test_shipped_sizing_still_refuses_an_unanchored_open_row(tmp_path: Path) -> None:
     from coordinator_core.frontmatter.schema_validate import validate_frontmatter
 
     repo = _make(tmp_path, "shipped")
@@ -58,7 +59,7 @@ def test_shipped_sizing_still_refuses_an_unanchored_open_row(tmp_path):
     assert validate_frontmatter(doc, rl._SIZING_SCHEMA)
 
 
-def test_shipped_sizing_still_refuses_met_without_wired(tmp_path):
+def test_shipped_sizing_still_refuses_met_without_wired(tmp_path: Path) -> None:
     from coordinator_core.frontmatter.schema_validate import validate_frontmatter
 
     repo = _make(tmp_path, "shipped")

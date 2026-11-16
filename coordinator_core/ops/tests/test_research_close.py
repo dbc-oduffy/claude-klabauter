@@ -816,6 +816,20 @@ def test_ungrounded_line_outside_open_questions_still_refuses_with_open_count(re
     assert out["grounding"]["ungrounded"] == 1 and out["grounding"]["open"] == 1
 
 
+_ABSENCE = "- **ungrounded** digest-a.md declares the retry limit not found in any source\n"
+
+
+def test_digest_declared_absence_under_open_questions_passes_close(repo, scratch):
+    _report(scratch, _GOOD + "## Open questions\n" + _ABSENCE)
+    out = _close(repo, scratch, "scouts")
+    assert out["exit_code"] == 0 and out["open"] == 1, out
+
+
+def test_same_absence_line_outside_open_questions_refuses(repo, scratch):
+    _report(scratch, "## digest-a.md\n" + _ABSENCE + "## digest-b.md\n- **grounded** b holds\n")
+    assert _refused(repo, scratch)["grounding"]["ungrounded"] == 1
+
+
 def test_close_without_open_questions_omits_open(repo, scratch):
     _report(scratch, _GOOD)
     assert "open" not in _close(repo, scratch, "scouts")

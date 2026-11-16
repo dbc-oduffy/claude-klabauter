@@ -4,17 +4,18 @@ import queue
 import pytest
 
 from coordinator_core import atomic_append
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _reset(monkeypatch):
+def _reset(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(atomic_append, "_forwarder", None)
     monkeypatch.setattr(atomic_append, "_forwarded_drops", 0)
     yield
     atomic_append.set_forwarder(None)
 
 
-def test_bounded_forwards_instead_of_opening_sink(tmp_path):
+def test_bounded_forwards_instead_of_opening_sink(tmp_path: Path) -> None:
     got = []
     atomic_append.set_forwarder(lambda s, e, r: got.append((s, e, r)))
     sink = tmp_path / "s.jsonl"
@@ -23,7 +24,7 @@ def test_bounded_forwards_instead_of_opening_sink(tmp_path):
     assert not sink.exists()
 
 
-def test_forwarded_line_never_reaches_in_process_queue(tmp_path, monkeypatch):
+def test_forwarded_line_never_reaches_in_process_queue(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     got = []
     atomic_append.set_forwarder(lambda s, e, r: got.append((s, e, r)))
     monkeypatch.setattr(atomic_append, "_force_async", True)
@@ -33,7 +34,7 @@ def test_forwarded_line_never_reaches_in_process_queue(tmp_path, monkeypatch):
     assert atomic_append._queue is None
 
 
-def test_droppable_append_line_forwards_hold_as_retain(tmp_path):
+def test_droppable_append_line_forwards_hold_as_retain(tmp_path: Path) -> None:
     got = []
     atomic_append.set_forwarder(lambda s, e, r: got.append(r))
     sink = tmp_path / "s.jsonl"
@@ -43,7 +44,7 @@ def test_droppable_append_line_forwards_hold_as_retain(tmp_path):
     assert not sink.exists()
 
 
-def test_non_droppable_append_line_ignores_forwarder(tmp_path):
+def test_non_droppable_append_line_ignores_forwarder(tmp_path: Path) -> None:
     got = []
     atomic_append.set_forwarder(lambda s, e, r: got.append(e))
     sink = tmp_path / "s.jsonl"
@@ -52,7 +53,7 @@ def test_non_droppable_append_line_ignores_forwarder(tmp_path):
     assert sink.read_bytes() == b"rec\n"
 
 
-def test_put_failure_drops_counts_and_never_raises(tmp_path):
+def test_put_failure_drops_counts_and_never_raises(tmp_path: Path) -> None:
     q = queue.Queue(maxsize=1)
     atomic_append.set_forwarder(lambda s, e, r: q.put_nowait((s, e, r)))
     sink = tmp_path / "s.jsonl"
@@ -67,7 +68,7 @@ def test_put_failure_drops_counts_and_never_raises(tmp_path):
     assert not sink.exists()
 
 
-def test_clearing_forwarder_restores_in_process_write(tmp_path):
+def test_clearing_forwarder_restores_in_process_write(tmp_path: Path) -> None:
     atomic_append.set_forwarder(lambda s, e, r: None)
     atomic_append.set_forwarder(None)
     sink = tmp_path / "s.jsonl"

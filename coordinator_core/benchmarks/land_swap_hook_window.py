@@ -7,11 +7,17 @@ against a tmp engine root while a 0.1s pinger issues modelled hook requests. The
 fake (a timer that starts answering `boot_secs` after a spawn); the hook request is a model of the
 hook path, selected by `hook_path`, because the real door is a native binary.
 
-A request counts as answered iff it returned an answer within `DRAIN_WAIT_SECS` (+ scheduler slack).
+A request counts as answered iff it returned a verdict, however long it took: wall clock under peer
+load is a diagnostic, never a gate.
 `max_unanswered_secs` is the longest run of consecutive unanswered requests, first start to last end.
-`slow_answers` counts requests that outlasted the budget whatever their outcome.
-`unevaluated_guard_count` counts requests that got no evaluated answer in budget: each one is a
-guard that failed open or was blocked on the real box.
+`slow_answers` counts requests that outlasted `DRAIN_WAIT_SECS` (+ slack): diagnostic only.
+`unevaluated_guard_count` counts requests that got no verdict: each one is a
+guard that failed open or was blocked on the real box. `swap_window_fail_open_count` is the subset
+that began or ended while the publish marker was held.
+`handover_gap_process_ms` (production arm) is the successor server's CPU process time accrued
+between the old pair's last evaluated answer and the successor's first; 0 when the old pair
+answered until the successor did. It is not spawn-to-first-answer
+(`warm_pair_boot_process_time`'s `server_process_ms_to_first_answer`).
 
 Two arms. `production` (default) boots a real warm server from a tmp engine root and drives the
 production handover order (pre-stop, `hold_publish_marker`, marked stop, tree rewrite, then
@@ -30,7 +36,8 @@ exits 1 when nonzero). `--hold-scope auto` reads the shape of `publish.py::_run_
 
 Usage: python coordinator_core/benchmarks/land_swap_hook_window.py [--arm model] [--respawn
 pre-release] [--hook-path bounded] [--spike] [--assert-budget]. Exit 1 only under --assert-budget
-when the window, the slow count or the unevaluated count exceeds the budget.
+when the window, the unevaluated count, the swap-window fail-open count or the
+handover gap exceeds the budget.
 """
 
 from __future__ import annotations
@@ -46,7 +53,10 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field, replace
 from pathlib import Path
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -74,6 +84,9 @@ DEFAULT_TAIL_SECS = 0.5
 READY_MAX_SECS = 30.0
 #: The brightline: no stretch longer than this may pass with no pair answering a guard.
 UNANSWERED_BUDGET_SECS = 0.5
+#: The brightline in process time: successor CPU between the old pair's last answer and its own first.
+HANDOVER_GAP_PROCESS_MS_BUDGET = 500
+CPU_SAMPLE_INTERVAL_SECS = 0.01
 #: A real ping that has not returned by now reads as unanswered, so a booting server costs a
 #: pinger tick this much and not a client's whole read deadline.
 PING_TIMEOUT_SECS = 0.25
@@ -95,9 +108,14 @@ _HOOK_SPAWN_CODE = (
 
 @dataclass(frozen=True)
 class Sample:
+    """One pinger request. `marker_held`: the publish marker was held at its start or end.
+    `generation`: the token of the pair that evaluated it (None when unanswered or not tracked)."""
+
     started: float
     elapsed: float
     answered: bool
+    marker_held: bool = False
+    generation: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -108,14 +126,19 @@ class WindowReport:
     respawn: str
     hook_path: str
     unevaluated_guard_count: int = 0
+    swap_window_fail_open_count: int = 0
+    #: None when not measured (model arm) or the successor never answered a ping.
+    handover_gap_process_ms: Optional[float] = None
     successor_answered_before_release: Optional[bool] = None
     phase_secs: dict = field(default_factory=dict)
 
     def within_budget(self) -> bool:
+        gap = self.handover_gap_process_ms
         return (
             self.max_unanswered_secs <= UNANSWERED_BUDGET_SECS
-            and self.slow_answers == 0
             and self.unevaluated_guard_count == 0
+            and self.swap_window_fail_open_count == 0
+            and (gap is None or gap <= HANDOVER_GAP_PROCESS_MS_BUDGET)
         )
 
 
@@ -200,7 +223,7 @@ def summarize(samples: list[Sample], *, respawn: str = "", hook_path: str = "") 
     run_start: Optional[float] = None
     run_end = 0.0
     for s in samples:
-        if s.answered and s.elapsed <= budget:
+        if _evaluated(s):
             if run_start is not None:
                 longest = max(longest, run_end - run_start)
                 run_start = None
@@ -210,14 +233,99 @@ def summarize(samples: list[Sample], *, respawn: str = "", hook_path: str = "") 
         run_end = s.started + s.elapsed
     if run_start is not None:
         longest = max(longest, run_end - run_start)
+    unevaluated = [s for s in samples if not _evaluated(s)]
     return WindowReport(
         max_unanswered_secs=round(longest, 3),
         slow_answers=slow,
         requests=len(samples),
         respawn=respawn,
         hook_path=hook_path,
-        unevaluated_guard_count=sum(1 for s in samples if not (s.answered and s.elapsed <= budget)),
+        unevaluated_guard_count=len(unevaluated),
+        swap_window_fail_open_count=sum(1 for s in unevaluated if s.marker_held),
     )
+
+
+def _evaluated(sample: Sample) -> bool:
+    """A guard was evaluated iff a verdict came back, however long it took."""
+    return sample.answered
+
+
+def _cpu_at(trace: list[tuple[float, float]], at: float) -> float:
+    """The successor's cumulative CPU ms at `at`: the last trace point not after it, 0 before any."""
+    value = 0.0
+    for when, cpu_ms in trace:
+        if when > at:
+            break
+        value = cpu_ms
+    return value
+
+
+def handover_gap_process_ms(
+    samples: list[Sample], old_generation: str, cpu_trace: list[tuple[float, float]]
+) -> Optional[float]:
+    """Successor CPU ms accrued between the old pair's last evaluated answer and the successor's first.
+
+    `old_generation` is the old pair's token; `cpu_trace` is the successor's cumulative
+    `(seconds-from-origin, cpu_ms)` series on the samples' clock. 0.0 when the old pair evaluated until
+    the successor did; None when the successor never evaluated a request.
+    """
+    old_ends = [s.started + s.elapsed for s in samples if _evaluated(s) and s.generation == old_generation]
+    new_ends = [
+        s.started + s.elapsed
+        for s in samples
+        if _evaluated(s) and s.generation is not None and s.generation != old_generation
+    ]
+    if not new_ends:
+        return None
+    first_new = min(new_ends)
+    last_old = max(old_ends, default=0.0)
+    if first_new <= last_old:
+        return 0.0
+    return round(max(0.0, _cpu_at(cpu_trace, first_new) - _cpu_at(cpu_trace, last_old)), 1)
+
+
+class SuccessorCpuSampler(threading.Thread):
+    """Samples the cumulative CPU of whichever server the breadcrumb names that is not `old_pid`.
+
+    `read_pid` and `read_cpu_ms` are injectable; the defaults read the breadcrumb and psutil. A process
+    that vanished between the two reads is skipped."""
+
+    def __init__(
+        self,
+        engine_root: Path,
+        old_pid: Optional[int],
+        origin: float,
+        stop: threading.Event,
+        *,
+        read_pid: Optional[Callable[[], Optional[int]]] = None,
+        read_cpu_ms: Optional[Callable[[int], Optional[float]]] = None,
+    ) -> None:
+        super().__init__(daemon=True)
+        self._old_pid = old_pid
+        self._origin = origin
+        self._stop_event = stop
+        self._read_pid = read_pid or (lambda: (breadcrumb.read_breadcrumb(engine_root) or {}).get("pid"))
+        self._read_cpu_ms = read_cpu_ms or _process_cpu_ms
+        self.trace: list[tuple[float, float]] = []
+
+    def run(self) -> None:
+        while not self._stop_event.is_set():
+            pid = self._read_pid()
+            if pid is not None and pid != self._old_pid:
+                cpu_ms = self._read_cpu_ms(pid)
+                if cpu_ms is not None:
+                    self.trace.append((time.monotonic() - self._origin, cpu_ms))
+            self._stop_event.wait(CPU_SAMPLE_INTERVAL_SECS)
+
+
+def _process_cpu_ms(pid: int) -> Optional[float]:
+    import psutil
+
+    try:
+        times = psutil.Process(pid).cpu_times()
+    except psutil.Error:
+        return None
+    return (times.user + times.system) * 1000.0
 
 
 def _pinger(
@@ -227,13 +335,26 @@ def _pinger(
     interval: float,
     stop: threading.Event,
     out: list[Sample],
+    origin: Optional[float] = None,
 ) -> None:
-    origin = time.monotonic()
+    origin = time.monotonic() if origin is None else origin
+    svc = breadcrumb.svc_dir(engine_root)
     while not stop.is_set():
+        held = breadcrumb.publish_marker_held(svc)
         began = time.monotonic()
         answered = hook_request(pair, engine_root, hook_path)
         elapsed = time.monotonic() - began
-        out.append(Sample(started=began - origin, elapsed=elapsed, answered=answered))
+        held = held or breadcrumb.publish_marker_held(svc)
+        generation = getattr(pair, "last_generation", None) if answered else None
+        out.append(
+            Sample(
+                started=began - origin,
+                elapsed=elapsed,
+                answered=answered,
+                marker_held=held,
+                generation=generation,
+            )
+        )
         stop.wait(max(0.0, interval - elapsed))
 
 
@@ -325,13 +446,20 @@ class RealPair:
     def __init__(self, engine_root: Path) -> None:
         self._root = engine_root
         self._sid: Optional[str] = None
+        self._seen = threading.local()
         if sys.platform == "win32":
             from coordinator_core.warm import election
 
             self._sid = election.current_user_sid()
 
+    @property
+    def last_generation(self) -> Optional[str]:
+        """The token of the pair that evaluated the calling thread's last ping; None if it went unanswered."""
+        return getattr(self._seen, "token", None)
+
     def ping(self) -> Optional[dict]:
         """The server's reply to one ping, or None when nothing answered within the timeout."""
+        self._seen.token = None
         try:
             token = skew.compute_client_token(self._root)
             probe = boot.Probe(endpoint_for(self._root, token, self._sid), boot.PING_METHOD, token)
@@ -339,7 +467,10 @@ class RealPair:
             return None
         probe.start()
         probe.done.wait(PING_TIMEOUT_SECS)
-        return probe.response if probe.done.is_set() else None
+        reply = probe.response if probe.done.is_set() else None
+        if _is_answer(reply):
+            self._seen.token = token
+        return reply
 
     @property
     def answering(self) -> bool:
@@ -463,13 +594,19 @@ def run_production_swap(
                 raise RuntimeError("old pair never answered a ping")
             samples: list[Sample] = []
             stop_ping = threading.Event()
+            origin = time.monotonic()
+            old_generation = skew.compute_client_token(root)
+            old_pid = (breadcrumb.read_breadcrumb(root) or {}).get("pid")
             thread = threading.Thread(
-                target=_pinger, args=(pair, root, hook_path, ping_interval, stop_ping, samples), daemon=True
+                target=_pinger,
+                args=(pair, root, hook_path, ping_interval, stop_ping, samples, origin),
+                daemon=True,
             )
+            cpu = SuccessorCpuSampler(root, old_pid, origin, stop_ping)
             released_answering: Optional[bool] = None
             marks: dict = {}
-            origin = time.monotonic()
             try:
+                cpu.start()
                 thread.start()
                 time.sleep(pre_roll_secs)
                 released_answering = production_handover(root, copy_secs=copy_secs, marks=marks)
@@ -479,9 +616,11 @@ def run_production_swap(
             finally:
                 stop_ping.set()
                 thread.join(timeout=BOOT_WAIT_SECS + 2.0)
+                cpu.join(timeout=2.0)
             report = summarize(list(samples), respawn="production", hook_path=hook_path)
             return replace(
                 report,
+                handover_gap_process_ms=handover_gap_process_ms(list(samples), old_generation, cpu.trace),
                 successor_answered_before_release=released_answering,
                 phase_secs={k: round(v - origin, 2) for k, v in marks.items()},
             )
@@ -895,7 +1034,7 @@ def run_modelled_round(
     stamp("exit_done")
 
 
-def _load_publish_module():
+def _load_publish_module() -> ModuleType:
     import importlib.util
 
     from coordinator_core.bin_lib_binding import exec_module_bin_bound
@@ -1168,6 +1307,8 @@ def main(argv: Optional[list[str]] = None) -> int:
         )
     print(f"max_unanswered_secs={report.max_unanswered_secs}")
     print(f"unevaluated_guard_count={report.unevaluated_guard_count}")
+    print(f"swap_window_fail_open_count={report.swap_window_fail_open_count}")
+    print(f"handover_gap_process_ms={report.handover_gap_process_ms}")
     print(f"slow_answers={report.slow_answers}")
     print(json.dumps(asdict(report), sort_keys=True))
     if args.assert_budget and not report.within_budget():

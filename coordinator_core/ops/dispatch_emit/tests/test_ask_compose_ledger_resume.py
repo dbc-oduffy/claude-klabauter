@@ -6,6 +6,7 @@ from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import _GATE_SCHEMA, compose_ask_script
 from coordinator_core.ops.dispatch_emit.land_run_contract import RECONCILE_CLAUSE
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+import pytest
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
@@ -26,11 +27,11 @@ def _script(monkeypatch) -> str:
     )
 
 
-def test_the_gate_schema_carries_resume_ledger():
+def test_the_gate_schema_carries_resume_ledger() -> None:
     assert _GATE_SCHEMA["properties"]["resume_ledger"] == {"type": ["object", "null"]}
 
 
-def test_resume_binds_the_plan_and_takes_the_xs_tail_before_any_plan_or_executor_call(monkeypatch):
+def test_resume_binds_the_plan_and_takes_the_xs_tail_before_any_plan_or_executor_call(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     bind = script.index("const _resumeLedger = !_halted && !!_gate.resume_ledger;")
     assert (
@@ -49,11 +50,11 @@ _BEFORE_STATE = "_planRel = _gate.resume_ledger.plan; _gate = { ..._gate, arm: '
 
 # The substring tests below pin the composed JS shape only; dispatch of the added rows is proven by
 # test_refire_replan_added_rows_dispatch_e2e.py.
-def test_before_state_unconditional_xs_is_gone(monkeypatch):
+def test_before_state_unconditional_xs_is_gone(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _BEFORE_STATE not in _script(monkeypatch)
 
 
-def test_a_work_owing_m_plus_resume_keeps_its_arm_and_replans_with_the_owed_work(monkeypatch):
+def test_a_work_owing_m_plus_resume_keeps_its_arm_and_replans_with_the_owed_work(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     owes = script.index("const _ledgerOwes = (_resumeLedger && ((_gate.arm === 'm_plus' &&")
     assert ".remaining ?? []).length > 0" in script[owes : owes + 400]
@@ -71,7 +72,7 @@ def test_a_work_owing_m_plus_resume_keeps_its_arm_and_replans_with_the_owed_work
     assert script.index("const _ledgerOwes") < leg < script.index("label: 'verify'")
 
 
-def test_the_re_plan_adds_rows_that_are_staged_by_id_and_dispatched(monkeypatch):
+def test_the_re_plan_adds_rows_that_are_staged_by_id_and_dispatched(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     leg = script.index("label: 'ledger-replan'")
     prompt = script[leg - 4200 : leg]
@@ -86,7 +87,7 @@ def test_the_re_plan_adds_rows_that_are_staged_by_id_and_dispatched(monkeypatch)
     assert "if (_resumeLedger && !_ledgerExec && ((_gate.resume_ledger.blocking ?? []).length || _reviseNoted)) {" in script
 
 
-def test_a_re_judge_only_resume_keeps_the_xs_tail(monkeypatch):
+def test_a_re_judge_only_resume_keeps_the_xs_tail(monkeypatch: pytest.MonkeyPatch) -> None:
     # _ledgerOwes is false unless the arm is m_plus AND a blocking id has non-empty remaining; with
     # no unlanded or derived row either, the xs tail and the remaining-work leg both stay (AC5).
     script = _script(monkeypatch)
@@ -95,7 +96,7 @@ def test_a_re_judge_only_resume_keeps_the_xs_tail(monkeypatch):
     assert script.count("label: 'ledger-remaining'") == 1
 
 
-def test_unlanded_rows_set_ledger_exec_without_forcing_xs(monkeypatch):
+def test_unlanded_rows_set_ledger_exec_without_forcing_xs(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert (
         "const _ledgerUnlanded = _resumeLedger ? (_gate.resume_ledger.unlanded ?? []) : [];"
@@ -105,14 +106,14 @@ def test_unlanded_rows_set_ledger_exec_without_forcing_xs(monkeypatch):
     assert script.index("const _ledgerUnlanded") < script.index("const _ledgerOwes")
 
 
-def test_the_ledger_resume_block_never_reassigns_the_gate_arm(monkeypatch):
+def test_the_ledger_resume_block_never_reassigns_the_gate_arm(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     block = script[script.index("const _resumeLedger = "):script.index("const _allLandedResume")]
     assert "arm:" not in block
     assert "arm: 'xs'" not in script
 
 
-def test_resume_composes_no_review_or_test_call_before_verify(monkeypatch):
+def test_resume_composes_no_review_or_test_call_before_verify(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     # e312728c2c gated the review block on `!_reviewReused` (phase reuse).
     review = script.index(
@@ -122,14 +123,14 @@ def test_resume_composes_no_review_or_test_call_before_verify(monkeypatch):
     assert "if (!_halted && !_codeReviewOwed && (_gate.arm === 'xs' || _xsTail)) { _reviewWave = []; }" in script
 
 
-def test_the_verify_prompt_names_exactly_the_blocking_ids(monkeypatch):
+def test_the_verify_prompt_names_exactly_the_blocking_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert "(_gate.resume_ledger.blocking ?? []).join(', ')" in script
     assert "Return an item for each of them and no other item." in script
     assert script.index("(_gate.resume_ledger.blocking ?? []).join") < script.index("label: 'verify'")
 
 
-def test_the_clause_demands_work_changed_since_the_halt_and_lists_the_notes(monkeypatch):
+def test_the_clause_demands_work_changed_since_the_halt_and_lists_the_notes(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     ledger = script.replace(ask_compose._lit(" " + RECONCILE_CLAUSE), "")
     assert ledger != script
@@ -138,7 +139,7 @@ def test_the_clause_demands_work_changed_since_the_halt_and_lists_the_notes(monk
     assert "JSON.stringify(_gate.resume_ledger.revise_notes ?? [])" in script
 
 
-def test_a_remaining_work_leg_runs_for_blocking_rows_before_the_verify(monkeypatch):
+def test_a_remaining_work_leg_runs_for_blocking_rows_before_the_verify(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     guard = "if (_resumeLedger && !_ledgerExec && ((_gate.resume_ledger.blocking ?? []).length || _reviseNoted)) {"
     assert script.count("label: 'ledger-remaining'") == 1
@@ -152,7 +153,7 @@ def test_a_remaining_work_leg_runs_for_blocking_rows_before_the_verify(monkeypat
     assert "agentType: 'coordinator:executor'" in script[script.index("label: 'ledger-remaining'"):][:200]
 
 
-def test_a_revise_note_runs_the_remaining_leg_even_when_no_row_blocks(monkeypatch):
+def test_a_revise_note_runs_the_remaining_leg_even_when_no_row_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
     # Blocking [] with a note used to skip the executor leg: the note was read by nothing that wrote.
     script = _script(monkeypatch)
     guard = "if (_resumeLedger && !_ledgerExec && ((_gate.resume_ledger.blocking ?? []).length || _reviseNoted)) {"
@@ -163,7 +164,7 @@ def test_a_revise_note_runs_the_remaining_leg_even_when_no_row_blocks(monkeypatc
     assert "if (!_allLandedResume || _reviseNoted || _revisedRows) { try {" in script
 
 
-def test_revised_rows_bind_before_the_guard_and_reach_the_prompt(monkeypatch):
+def test_revised_rows_bind_before_the_guard_and_reach_the_prompt(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     bind = "const _revisedRows = _resumeLedger && (_gate.resume_ledger.revised ?? []).length > 0;"
     assert bind in script
@@ -173,7 +174,7 @@ def test_revised_rows_bind_before_the_guard_and_reach_the_prompt(monkeypatch):
     assert "JSON.stringify(_gate.resume_ledger.revised ?? [])" in leg
 
 
-def test_the_terminal_commit_params_carry_the_resume_block(monkeypatch):
+def test_the_terminal_commit_params_carry_the_resume_block(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert (
         "_nextAction.params.resume_ledger = { run_id: _runId, halt_sha: _gate.resume_ledger.halt_sha ?? null, "
@@ -182,7 +183,7 @@ def test_the_terminal_commit_params_carry_the_resume_block(monkeypatch):
     ) in script
 
 
-def test_a_skip_leg_re_ruling_only_resume_does_not_owe_the_replan(monkeypatch):
+def test_a_skip_leg_re_ruling_only_resume_does_not_owe_the_replan(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     owes = script[script.index("const _ledgerOwes"):][:700]
     blocking = owes[:owes.index("|| (_gate.resume_ledger.unclaimed")]
@@ -192,20 +193,20 @@ def test_a_skip_leg_re_ruling_only_resume_does_not_owe_the_replan(monkeypatch):
     assert "else if (!_ledgerOwes) { _xsTail = true; }" in script
 
 
-def test_the_ledger_halt_next_action_no_longer_asks_for_an_out_of_band_fix(monkeypatch):
+def test_the_ledger_halt_next_action_no_longer_asks_for_an_out_of_band_fix(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert "met out of band" not in script
     assert "executes the remaining work of the rows it keeps" in script
 
 
-def test_the_clause_names_em_discharged_rows_from_the_pinned_key(monkeypatch):
+def test_the_clause_names_em_discharged_rows_from_the_pinned_key(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert "EM-discharged rows (performed by the EM, recorded via em-discharge): " in script
     assert "_gate.resume_ledger.em_discharged" in script
     assert script.count("em_discharged") == script.count("_gate.resume_ledger.em_discharged")
 
 
-def test_the_discharge_clause_is_gated_on_a_non_empty_em_discharged_map():
+def test_the_discharge_clause_is_gated_on_a_non_empty_em_discharged_map() -> None:
     clause = ask_compose._RESUME_LEDGER_CLAUSE_JS
     gate = "Object.keys(_gate.resume_ledger.em_discharged ?? {}).length ? "
     assert gate in clause
@@ -214,11 +215,11 @@ def test_the_discharge_clause_is_gated_on_a_non_empty_em_discharged_map():
     assert clause.endswith(": '') : '')")
 
 
-def test_the_ledger_halt_still_precedes_the_commit_on_the_resume_path(monkeypatch):
+def test_the_ledger_halt_still_precedes_the_commit_on_the_resume_path(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     halt = script.index("halted: 'ledger-check'")
     assert script.index("label: 'verify'") < halt < script.index("phase('commit')")
 
 
-def test_the_gate_reply_prompts_name_resume_ledger(monkeypatch):
+def test_the_gate_reply_prompts_name_resume_ledger(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "resume_rows, resume_ledger, pending_rulings and spine_plan" in _script(monkeypatch)

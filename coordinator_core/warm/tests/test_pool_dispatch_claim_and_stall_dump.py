@@ -432,10 +432,12 @@ def test_repo_drive_probe_is_unavailable_without_a_root_and_error_for_a_missing_
     assert server._repo_drive_probe_ms(tmp_path / "missing").startswith("error:")
 
 
-def test_stall_record_without_a_repo_root_marks_the_probe_unavailable(tmp_path):
+def test_stall_record_without_a_repo_root_probes_the_engine_root(tmp_path):
     stall_dir = tmp_path / "stall-dumps"
     record = server._write_stall_record(stall_dir, None, key="k", leg="x")
-    assert _header(record)["repo-drive-probe-ms"] == "unavailable"
+    header = _header(record)
+    assert float(header["repo-drive-probe-ms"]) >= 0
+    assert header["repo-drive-probe-root"].startswith("engine-root ")
 
 
 def test_accept_side_stall_record_probes_the_repo_root(tmp_path):

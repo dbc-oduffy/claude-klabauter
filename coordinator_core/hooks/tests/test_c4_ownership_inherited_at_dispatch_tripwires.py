@@ -151,7 +151,7 @@ class TestAC11NoWriteTimeAttributionNewCallers:
     ("Do not add callers to claims.self_claim.").
     """
 
-    def test_self_claim_caller_set_is_exactly_the_enumerated_set(self):
+    def test_self_claim_caller_set_is_exactly_the_enumerated_set(self) -> None:
         found = _find_self_claim_call_files()
         assert found == set(_KNOWN_SELF_CLAIM_CALLERS), (
             "self_claim's caller set changed since this tripwire was written "
@@ -164,7 +164,7 @@ class TestAC11NoWriteTimeAttributionNewCallers:
             "here deliberately, with a decision record."
         )
 
-    def test_known_caller_files_still_exist_and_still_call_self_claim(self):
+    def test_known_caller_files_still_exist_and_still_call_self_claim(self) -> None:
         # Guards the census itself against silent staleness in the OTHER
         # direction (a caller removed without updating the enumerated set
         # would otherwise make the exact-set assertion above pass vacuously
@@ -225,14 +225,14 @@ class TestAC6DR258MatcherBehavioural:
     permanent-limit.md (verified present at that path, § below).
     """
 
-    def test_dr_258_decision_record_exists(self):
+    def test_dr_258_decision_record_exists(self) -> None:
         assert _DR_258_PATH.is_file(), (
             f"DR-258 decision record missing at {_DR_258_PATH} — the plan "
             "cites this path as existing; if it moved, update this pin "
             "deliberately, do not silently skip"
         )
 
-    def test_bash_tool_shaped_payload_records_no_claim(self, tmp_path):
+    def test_bash_tool_shaped_payload_records_no_claim(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
         (repo / "src").mkdir()
         target = repo / "src" / "bash_written.py"
@@ -256,7 +256,7 @@ class TestAC6DR258MatcherBehavioural:
         )
 
     @pytest.mark.parametrize("tool_name", ["Write", "Edit", "MultiEdit", "NotebookEdit"])
-    def test_edit_tool_shaped_payload_records_a_claim(self, tmp_path, tool_name):
+    def test_edit_tool_shaped_payload_records_a_claim(self, tmp_path: Path, tool_name) -> None:
         repo = _make_repo(tmp_path)
         (repo / "src").mkdir()
         target = repo / "src" / f"{tool_name.lower()}_written.py"
@@ -283,7 +283,7 @@ class TestAC6DR258MatcherSourceGrepSecondLayer:
     grep confirming the matcher's tool-name tuple is unchanged. Kept in
     addition to, never instead of, the behavioural class above."""
 
-    def test_handler_matcher_tuple_unchanged(self):
+    def test_handler_matcher_tuple_unchanged(self) -> None:
         text = _TRACK_TOUCHED_FILES_PATH.read_text(encoding="utf-8")
         assert 'if tool_name not in ("Write", "Edit", "MultiEdit", "NotebookEdit"):' in text, (
             "track_touched_files._handler's DR-258 matcher tuple changed — "
@@ -457,7 +457,7 @@ class TestAC5AllowOrphansDoesNotWiden:
     § AC5.
     """
 
-    def test_allow_orphans_default_is_false_and_keyword_only(self):
+    def test_allow_orphans_default_is_false_and_keyword_only(self) -> None:
         params = inspect.signature(assert_paths_in_session_scope).parameters
         assert "allow_orphans" in params, (
             "assert_paths_in_session_scope lost its `allow_orphans` parameter — "
@@ -475,7 +475,7 @@ class TestAC5AllowOrphansDoesNotWiden:
             "adoption must stay opt-in per call, never the ambient default"
         )
 
-    def test_call_site_inventory_is_exactly_the_enumerated_set(self):
+    def test_call_site_inventory_is_exactly_the_enumerated_set(self) -> None:
         calls, _imports = _census_scope_helper_sites(_REPO_ROOT)
         assert calls == set(_EXPECTED_SCOPE_HELPER_CALL_SITES), (
             "assert_paths_in_session_scope's call-site inventory changed — "
@@ -511,7 +511,7 @@ class TestAC5AllowOrphansDoesNotWiden:
             ),
         }, "sanity check on the pinned set itself failed — see comment above"
 
-    def test_import_seam_inventory_is_exactly_the_enumerated_set(self):
+    def test_import_seam_inventory_is_exactly_the_enumerated_set(self) -> None:
         _calls, imports = _census_scope_helper_sites(_REPO_ROOT)
         assert imports == set(_EXPECTED_SCOPE_HELPER_IMPORT_SITES), (
             "assert_paths_in_session_scope's import seam changed — "
@@ -521,7 +521,7 @@ class TestAC5AllowOrphansDoesNotWiden:
             "prospective new caller."
         )
 
-    def test_census_detects_an_added_and_a_removed_call_site(self, tmp_path):
+    def test_census_detects_an_added_and_a_removed_call_site(self, tmp_path: Path) -> None:
         """The census's own detection power, on synthetic sources: it must not
         be possible for this pin to be green because the extractor found
         nothing. Runs the same extractor against a throwaway tree containing
@@ -893,7 +893,7 @@ class TestClaimIndexLookupCallSitesDoNotWiden:
     § C7.
     """
 
-    def test_lookup_call_site_inventory_is_exactly_the_enumerated_set(self):
+    def test_lookup_call_site_inventory_is_exactly_the_enumerated_set(self) -> None:
         found = _census_claim_index_lookup_call_sites(_REPO_ROOT)
         assert found == set(_EXPECTED_CLAIM_INDEX_LOOKUP_CALL_SITES), (
             "claim_index.lookup()'s call-site inventory changed — "
@@ -908,7 +908,7 @@ class TestClaimIndexLookupCallSitesDoNotWiden:
             "this pin."
         )
 
-    def test_answer_surface_call_site_inventory_is_exactly_the_enumerated_set(self):
+    def test_answer_surface_call_site_inventory_is_exactly_the_enumerated_set(self) -> None:
         found = set()
         for attr in ("commit_set", "classify_paths"):
             for rel, qualname in _census_claim_index_call_sites(_REPO_ROOT, attr):

@@ -7,6 +7,7 @@ from coordinator_core.ops.check_surface_inline_budget import (
     count_inline_mechanism_signals,
     main,
 )
+import pytest
 
 _CLEAN_SURFACE = """# Fake converted skill (test fixture)
 
@@ -129,7 +130,7 @@ def test_check_glob_sums_across_files(tmp_path: Path) -> None:
     assert "OK:" in message
 
 
-def test_main_prints_and_returns_rc(tmp_path: Path, capsys) -> None:
+def test_main_prints_and_returns_rc(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     surface = tmp_path / "SKILL.md"
     surface.write_text(_OVER_BUDGET_SURFACE, encoding="utf-8")
     baseline = tmp_path / "baseline"
@@ -142,7 +143,7 @@ def test_main_prints_and_returns_rc(tmp_path: Path, capsys) -> None:
     assert "WARN:" in captured.out
 
 
-def test_main_missing_argv_returns_2(capsys) -> None:
+def test_main_missing_argv_returns_2(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main([])
     assert rc == 2
     captured = capsys.readouterr()

@@ -8,6 +8,8 @@ import time
 
 from coordinator_core.ops.fleet.scratch_hygiene import run_hygiene
 from coordinator_core.ops.fleet.scratch_hygiene_plan import plan_purge
+from pathlib import Path
+import pytest
 
 _OLD = time.time() - 30 * 86400
 
@@ -27,13 +29,13 @@ def _repo(tmp_path, monkeypatch):
     return repo
 
 
-def test_marker_entry_is_skipped_hold_pending_and_others_planned(tmp_path, monkeypatch):
+def test_marker_entry_is_skipped_hold_pending_and_others_planned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path, monkeypatch)
     actions = {r["path"]: r["action"] for r in plan_purge(repo, registry_dir=tmp_path / "no-sessions")}
     assert actions == {"scratch/parked": "skipped-hold-pending", "scratch/junk": "would-delete"}
 
 
-def test_marker_entry_is_nagged_with_first_line_and_capability_advertised(tmp_path, monkeypatch):
+def test_marker_entry_is_nagged_with_first_line_and_capability_advertised(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path, monkeypatch)
     out = run_hygiene({"repo_root": str(repo), "cadence": "workweek_start"})
     nag = [r for r in out["records"] if r.get("kind") == "hold-nag"]
@@ -54,7 +56,7 @@ def test_marker_entry_is_nagged_with_first_line_and_capability_advertised(tmp_pa
     assert out["contract_exit"] == 1
 
 
-def test_apply_never_deletes_a_parked_entry(tmp_path, monkeypatch):
+def test_apply_never_deletes_a_parked_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path, monkeypatch)
     run_hygiene({"repo_root": str(repo), "cadence": "workday_start", "apply": True})
     assert (repo / "scratch" / "parked" / "data.bin").exists()

@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from pathlib import Path
 
 pytestmark = pytest.mark.usefixtures("m_plus_known_arm")
 
@@ -30,7 +31,7 @@ def _script() -> str:
     )
 
 
-def test_pull_halt_carries_plan_rulings_and_rule_and_refire():
+def test_pull_halt_carries_plan_rulings_and_rule_and_refire() -> None:
     script = _script()
     start = script.index("else if (_pullPlan && !_halted.next_action)")
     clause = script[start : script.index("\n", start)]
@@ -39,14 +40,14 @@ def test_pull_halt_carries_plan_rulings_and_rule_and_refire():
     assert "revise:" in clause and "refire:" in clause
 
 
-def test_revise_leg_returns_the_readiness_judgment_fields():
+def test_revise_leg_returns_the_readiness_judgment_fields() -> None:
     script = _script()
     assert "split_recommended" in script
     assert "_pullRulings = Array.isArray(_revised?.rulings)" in script
     assert "typeof _revised?.blocking_findings === 'number'" in script
 
 
-def test_split_recommended_pull_reaches_the_split_stage():
+def test_split_recommended_pull_reaches_the_split_stage() -> None:
     script = _script()
     assert "_revised?.split_recommended === true && _splitSlices == null" in script
     assert "label: 'pull-split'" in script
@@ -59,7 +60,7 @@ def test_split_recommended_pull_reaches_the_split_stage():
 _RULED_GUARD = "if (_gate.resume_plan && (_gate.pending_rulings == null || _gate.pending_rulings.length > 0))"
 
 
-def test_apply_rulings_and_pull_split_run_on_general_purpose_sonnet():
+def test_apply_rulings_and_pull_split_run_on_general_purpose_sonnet() -> None:
     script = _script()
     for label in ("apply-rulings", "pull-split"):
         i = script.index(f"label: '{label}'")
@@ -68,7 +69,7 @@ def test_apply_rulings_and_pull_split_run_on_general_purpose_sonnet():
         assert "coordinator:plan-author" not in opts
 
 
-def test_resume_plan_runs_the_apply_rulings_leg_before_the_blitz():
+def test_resume_plan_runs_the_apply_rulings_leg_before_the_blitz() -> None:
     script = _script()
     leg = script.index(_RULED_GUARD + " { const _ruled = await agent(")
     blitz = script.index("const _blitz = await ", leg)
@@ -77,7 +78,7 @@ def test_resume_plan_runs_the_apply_rulings_leg_before_the_blitz():
     assert "names a ruling id `J<n>`" in script
 
 
-def test_resume_leg_is_only_for_a_resumed_plan_and_reads_the_ledger_at_run_time():
+def test_resume_leg_is_only_for_a_resumed_plan_and_reads_the_ledger_at_run_time() -> None:
     script = _script()
     assert script.count("label: 'apply-rulings'") == 1
     leg = script[script.index(_RULED_GUARD + " { const _ruled"):]
@@ -89,7 +90,7 @@ def test_resume_leg_is_only_for_a_resumed_plan_and_reads_the_ledger_at_run_time(
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @pytest.mark.skipif(shutil.which("node") is None, reason="node not on PATH")
-def test_composed_script_parses(tmp_path):
+def test_composed_script_parses(tmp_path: Path) -> None:
     path = tmp_path / "ask.mjs"
     body = _script().replace("export const meta", "const meta", 1)
     path.write_text(body, encoding="utf-8")

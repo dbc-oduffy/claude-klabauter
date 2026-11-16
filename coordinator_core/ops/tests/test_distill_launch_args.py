@@ -50,7 +50,7 @@ def _write_curated(tmp_path, rel: str | None = None, data=CURATED) -> None:
     target.write_text(data if isinstance(data, str) else json.dumps(data, indent=2), encoding="utf-8")
 
 
-def test_default_call_inlines_batches_slugs_and_curated_tags_and_digest_verifies(tmp_path):
+def test_default_call_inlines_batches_slugs_and_curated_tags_and_digest_verifies(tmp_path: Path) -> None:
     _write_curated(tmp_path)
 
     out = dla._handler(_params(tmp_path))
@@ -71,31 +71,31 @@ def test_default_call_inlines_batches_slugs_and_curated_tags_and_digest_verifies
     assert validate_workflow_input(args) == []
 
 
-def test_dead_curated_file_constants_are_gone():
+def test_dead_curated_file_constants_are_gone() -> None:
     assert not hasattr(dla, "CURATED_FILE_KEY") and not hasattr(dla, "CURATED_SHA_KEY")
 
 
-def test_curated_file_override_is_inlined(tmp_path):
+def test_curated_file_override_is_inlined(tmp_path: Path) -> None:
     rel = "state/scratch/elsewhere/curated.json"
     _write_curated(tmp_path, rel)
     args = dla._handler(_params(tmp_path, curated_file=rel))["args"]
     assert args["curatedTags"] == CURATED["verdicts"]
 
 
-def test_absent_curated_file_adds_no_curated_keys_and_still_builds(tmp_path):
+def test_absent_curated_file_adds_no_curated_keys_and_still_builds(tmp_path: Path) -> None:
     out = dla._handler(_params(tmp_path))
     assert "curatedTags" not in out["args"] and "threshold_applied" not in out["args"]
     assert hashlib.sha256(open(out["path"], "rb").read()).hexdigest() == out["sha256"]
 
 
 @pytest.mark.parametrize("data", ["{not json", "[1, 2]", json.dumps({"counts": {}}), json.dumps({"verdicts": "x"})])
-def test_malformed_curated_file_raises_naming_it(tmp_path, data):
+def test_malformed_curated_file_raises_naming_it(tmp_path: Path, data) -> None:
     _write_curated(tmp_path, data=data)
     with pytest.raises(ValueError, match=r"curated\.json.*distill\.write_curated_clusters"):
         dla._handler(_params(tmp_path))
 
 
-def test_realistic_64kb_curated_payload_inlines_whole(tmp_path):
+def test_realistic_64kb_curated_payload_inlines_whole(tmp_path: Path) -> None:
     verdicts = [{"tag": f"tag-{i:05d}", "verdict": "keep", "count": i % 17 + 1} for i in range(1400)]
     data = {**CURATED, "verdicts": verdicts}
     _write_curated(tmp_path, data=data)
@@ -189,12 +189,12 @@ def test_prepared_path_outside_scratch_or_not_a_string_is_refused(tmp_path, rel)
 
 
 @pytest.mark.parametrize("rel", ["../outside.json", "docs/curated.json", "state/scratch", "/abs/elsewhere.json"])
-def test_curated_file_outside_scratch_is_refused(tmp_path, rel):
+def test_curated_file_outside_scratch_is_refused(tmp_path: Path, rel) -> None:
     with pytest.raises(ValueError, match="state/scratch"):
         dla._handler(_params(tmp_path, curated_file=rel))
 
 
-def test_missing_manifest_and_repo_root_raise(tmp_path):
+def test_missing_manifest_and_repo_root_raise(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match=r"distill\.launch_args requires a 'manifest'.*distill\.scope") as ei:
         dla._handler({"repo_root": str(tmp_path)})
     assert "distill.workflow_input" not in str(ei.value)
@@ -210,14 +210,14 @@ def _scope_result(tmp_path) -> dict:
     return {"run_id": RUN_ID, "input_json_path": rel, "counts": {}}
 
 
-def test_scope_result_as_manifest_loads_input_json(tmp_path):
+def test_scope_result_as_manifest_loads_input_json(tmp_path: Path) -> None:
     out = dla._handler({"manifest": _scope_result(tmp_path), "repo_root": str(tmp_path)})
 
     assert out["args"]["wikiSlugs"] == {"foo": _WIKI + "foo.md"}
     assert validate_workflow_input(out["args"]) == []
 
 
-def test_run_id_alone_loads_that_runs_input_json(tmp_path):
+def test_run_id_alone_loads_that_runs_input_json(tmp_path: Path) -> None:
     _scope_result(tmp_path)
     out = dla._handler({"run_id": RUN_ID, "repo_root": str(tmp_path)})
 
@@ -225,12 +225,12 @@ def test_run_id_alone_loads_that_runs_input_json(tmp_path):
 
 
 @pytest.mark.parametrize("bad", [{"run_id": RUN_ID}, {"run_id": RUN_ID, "batches": []}, {}])
-def test_unknown_manifest_shape_raises_valueerror_naming_wanted_keys(tmp_path, bad):
+def test_unknown_manifest_shape_raises_valueerror_naming_wanted_keys(tmp_path: Path, bad) -> None:
     with pytest.raises(ValueError, match="wiki_slugs"):
         dla._handler({"manifest": bad, "repo_root": str(tmp_path)})
 
 
-def test_scope_result_pointing_outside_scratch_or_missing_is_refused(tmp_path):
+def test_scope_result_pointing_outside_scratch_or_missing_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="state/scratch"):
         dla._handler({"manifest": {"input_json_path": "../x.json"}, "repo_root": str(tmp_path)})
     with pytest.raises(ValueError, match="unreadable"):
@@ -239,7 +239,7 @@ def test_scope_result_pointing_outside_scratch_or_missing_is_refused(tmp_path):
         )
 
 
-def test_spawns_no_process(tmp_path, monkeypatch):
+def test_spawns_no_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("subprocess spawned")
 

@@ -21,7 +21,7 @@ def install() -> bool:
         return False
     original = subprocess.Popen.__init__
 
-    def _windowless_init(self, *args, **kwargs):
+    def _windowless_init(self, *args, **kwargs) -> None:
         # creationflags is Popen's 14th positional parameter; a caller passing it positionally keeps it.
         if len(args) < 14 and not kwargs.get("creationflags"):
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW

@@ -41,7 +41,9 @@ as ``pre_review_manifest`` (outside ``_STORED_KEYS``, like ``reviewed_sha256``).
 
 With ``run_id`` the handler also adds ``undeclared_edits``: paths dirty now with bytes the run's
 ``stage-dirt.json`` (``stage_dirt_snapshot``) did not hold, covered by no declared path and held by no
-live peer. They join ``paths``, and the reply and sidecar list them as ``undeclared_edits``.
+live peer. They join ``paths``, and the reply and sidecar list them as ``undeclared_edits``. A run
+whose every declared path is an indexed file with no worktree change made no edit of its own, so it
+adopts none: dirt elsewhere is a peer's.
 
 Optional ``group_index`` / ``group_count`` (both or neither) narrow the reply's ``slices`` to the
 one contiguous balanced group at ``group_index`` of ``min(slices, group_count)`` groups, the split
@@ -88,6 +90,7 @@ import yaml
 
 from coordinator_core.atomic_replace import atomic_write_bytes
 from coordinator_core.frontmatter.primitives import split_frontmatter
+from coordinator_core.frontmatter.yaml_load import safe_load as _safe_load
 from coordinator_core.git import git_state
 from coordinator_core.git.content_hash import eol_folded_sha256
 from coordinator_core.git.literal_pathspec import git_pathspec, is_magic_pathspec
@@ -150,16 +153,34 @@ def _fail(message: str) -> dict:
     }
 
 
+#: ``(path, mtime_ns, size) -> parsed frontmatter`` of the last plan read: ``_plan_id`` and the peer-bases
+#: lookup read the same plan within one prep. Keyed on the file's stat, so an edited plan is re-read.
+#: Holds one entry, so a warm engine never accumulates plans.
+_PLAN_DOC: Dict[tuple, object] = {}
+
+
+def _plan_doc(plan_file: Path) -> object:
+    """The plan's parsed frontmatter (any YAML value, ``None`` when absent or unreadable)."""
+    try:
+        st = plan_file.stat()
+        key = (str(plan_file), st.st_mtime_ns, st.st_size)
+        if key in _PLAN_DOC:
+            return _PLAN_DOC[key]
+        split = split_frontmatter(plan_file.read_text(encoding="utf-8", errors="replace"))
+        doc = _safe_load(split.fm_text) if split else None
+    except (OSError, yaml.YAMLError):
+        return None
+    _PLAN_DOC.clear()
+    _PLAN_DOC[key] = doc
+    return doc
+
+
 def _plan_frontmatter_str(repo_root: Path, plan_path: str, key: str) -> Optional[str]:
     """The plan's frontmatter string ``key``, or ``None`` when absent, blank or unreadable."""
     plan_file = Path(plan_path)
     if not plan_file.is_absolute():
         plan_file = repo_root / plan_file
-    try:
-        split = split_frontmatter(plan_file.read_text(encoding="utf-8", errors="replace"))
-        doc = yaml.safe_load(split.fm_text) if split else None
-    except (OSError, yaml.YAMLError):
-        doc = None
+    doc = _plan_doc(plan_file)
     value = doc.get(key) if isinstance(doc, dict) else None
     return value.strip() if isinstance(value, str) and value.strip() else None
 
@@ -215,11 +236,12 @@ def _specs_by_base(paths: List[str], base: str, path_bases: dict) -> List[tuple]
     """``(pathspec, effective base)`` per declared path, in declared order. Peer bases are keyed by
     file, so a declared directory holding keyed files stays on the run base minus those files
     (``:(exclude)`` entries) and each keyed file follows it on its own peer base."""
-    from coordinator_core.ops.review_partition_slices import _effective_base
+    from coordinator_core.ops.review_partition_slices import base_resolver
 
+    effective_base = base_resolver(base, path_bases)
     out: List[tuple] = []
     for p in paths:
-        eb = _effective_base(p, base, path_bases)
+        eb = effective_base(p)
         out.append((p, eb))
         if eb != base:
             continue
@@ -228,6 +250,63 @@ def _specs_by_base(paths: List[str], base: str, path_bases: dict) -> List[tuple]
         out.extend((f":(exclude){k}", eb) for k in inner)
         out.extend((k, path_bases[k]) for k in inner)
     return out
+
+
+def _plain_paths_by_base(repo_root: Path, specs: List[tuple]) -> Optional[Dict[str, List[str]]]:
+    """``{effective base: [path]}`` when every spec is a plain file path, else None (magic, glob, directory)."""
+    by_base: Dict[str, List[str]] = {}
+    for p, eb in specs:
+        if is_magic_pathspec(p) or p.endswith("/") or any(c in p for c in "*?") or (repo_root / p).is_dir():
+            return None
+        by_base.setdefault(eb, []).append(p)
+    return by_base
+
+
+def _merged_base(repo_root: Path, specs: List[tuple]) -> Optional[str]:
+    """One rev whose worktree diff over every spec equals the per-base diffs, or None: the caller
+    diffs per base. Either a base the other bases' paths are unchanged at (nothing written), else
+    ``_sparse_base_tree``."""
+    from coordinator_core.git.ref_cas_retry import paths_unchanged_between
+
+    by_base = _plain_paths_by_base(repo_root, specs)
+    if by_base is None:
+        return None
+    for cand in by_base:
+        if all(
+            paths_unchanged_between(repo_root, eb, cand, group) is True
+            for eb, group in by_base.items()
+            if eb != cand
+        ):
+            return cand
+    return _sparse_base_tree(repo_root, by_base)
+
+
+def _sparse_base_tree(repo_root: Path, by_base: Dict[str, List[str]]) -> Optional[str]:
+    """Sha of a tree holding each path's blob at its own base (``by_base``), written in process (no
+    spawn); ``git diff <tree> -- <paths>`` then diffs every path from its own base. None when a
+    base tree is unreadable or a path is a gitlink or directory at its base."""
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import build_tree
+    from coordinator_core.git.ref_cas_retry import _root_tree
+
+    entries: dict = {}
+    for eb, group in by_base.items():
+        tree = _root_tree(repo_root, eb)
+        spine = git_state.read_tree_spine(repo_root, group, root_tree_sha=tree) if tree else None
+        if spine is None:
+            return None
+        for p in group:
+            parent, _, name = p.rpartition("/")
+            entry = spine.get(parent, {}).get(name)
+            if entry is None:
+                continue
+            if entry[0] in (0o40000, 0o160000):
+                return None
+            entries[p] = entry
+    try:
+        return build_tree(resolve_git_common_dir(repo_root), entries)
+    except (OSError, TimeoutError):
+        return None
 
 
 def _freeze_whole_by_base(
@@ -247,16 +326,42 @@ def _freeze_whole_by_base(
     One ``freeze_diff`` per distinct base under ids ``<slice_prefix>-g<n>-prep`` (distinct paths
     cannot share a ``freeze_diffs_batch`` call, and worktree mode never batches), concatenated in
     declared-path order. A path with nothing left after its peer base (peer-only work) drops out of
-    its group; a path on the run base keeps ``freeze_diff``'s own refusals."""
+    its group; a path on the run base keeps ``freeze_diff``'s own refusals.
+
+    Worktree mode over plain file paths with several bases is one ``freeze_diff`` (one ``git diff``)
+    under ``<slice_prefix>-g1-prep`` against ``_merged_base``; the stanzas equal the per-base diffs."""
     from coordinator_core.ops.review_freeze_diff import _is_run_keyed_prep_id, _shelve_prior_attempt
 
     groups: dict = {}
     wt_set = set(worktree_paths or [])
-    for spec, eb in _specs_by_base(paths, base, path_bases):
+    specs = _specs_by_base(paths, base, path_bases)
+    for spec, eb in specs:
         # `worktree_paths` carry uncommitted bytes on top of a range delta: frozen base..worktree.
         groups.setdefault((eb, spec in wt_set), []).append(spec)
     texts: List[str] = []
     head_sha: Optional[str] = None
+    if not head and not fallback and len(groups) > 1:
+        merged_base = _merged_base(repo_root, specs)
+        if merged_base:
+            peer_keyed = {p for p, eb in specs if eb != base}
+            merged_paths = list(paths)
+            while True:
+                try:
+                    frozen = _heavy("freeze_diff")(repo_root, merged_base, f"{slice_prefix}-g1-prep", merged_paths, worktree=True)
+                except ValueError:
+                    frozen = {"error": "sparse base diff failed"}
+                # A peer-base path with no delta left is uncovered: drop it, as the per-base loop does.
+                drop = [p for p in (frozen.get("uncovered_paths") or []) if p in peer_keyed]
+                if not frozen.get("error") or not drop:
+                    break
+                merged_paths = [p for p in merged_paths if p not in drop]
+                if not merged_paths:
+                    frozen = {"error": "no delta left"}
+                    break
+            if not frozen.get("error"):
+                groups = {}
+                head_sha = f"{base} worktree"
+                texts.append(Path(frozen["diff_path"]).read_text(encoding="utf-8"))
     for n, ((eb, in_wt), group) in enumerate(groups.items(), 1):
         slice_id = f"{slice_prefix}-g{n}-prep"
         while group:
@@ -410,14 +515,17 @@ _LOCK_STALE_SECS = 10.0
 _LOCK_POLL_SECS = 0.05
 
 
-def _declared_hashes(repo_root: Path, paths: List[str]) -> Optional[dict]:
+def _declared_hashes(repo_root: Path, paths: List[str], known: Optional[dict] = None) -> Optional[dict]:
     """Declared path -> content hash (``None`` when absent), or ``None`` when any entry is a magic
-    pathspec or a directory: such a declaration cannot be proven unmoved, so it is never served."""
+    pathspec or a directory: such a declaration cannot be proven unmoved, so it is never served.
+    ``known`` maps paths already hashed with ``eol_folded_sha256`` (same function as
+    ``compute_content_hash``) to that hash; those files are not read again."""
     out: dict = {}
     for entry in paths:
         if is_magic_pathspec(entry) or entry.endswith("/") or (repo_root / entry).is_dir():
             return None
-        out[entry.replace("\\", "/")] = compute_content_hash(repo_root / entry)
+        key = entry.replace("\\", "/")
+        out[key] = (known or {}).get(key) or compute_content_hash(repo_root / entry)
     return out
 
 
@@ -444,7 +552,7 @@ def _stored_reply(
     returns now: a peer commit can land without moving the declared bytes."""
     try:
         split = split_frontmatter(sidecar.read_text(encoding="utf-8"))
-        fm = yaml.safe_load(split.fm_text) if split else None
+        fm = _safe_load(split.fm_text) if split else None
     except (OSError, yaml.YAMLError):
         return None
     if not isinstance(fm, dict) or any(k not in fm for k in _STORED_KEYS):
@@ -544,6 +652,17 @@ def _write_pointers(share: Path, sidecar: Path, base: str, slice_prefix: str, pl
         atomic_write_bytes(path, json.dumps({"sidecar": sidecar.name, "ambiguous": ambiguous}).encode("utf-8"))
 
 
+def _covered_or_not_owed(wanted: set, stored: Sequence[str]) -> bool:
+    """True when every ``wanted`` path is in ``stored`` or is not review-owed by the floor's own
+    classifier: a landing's extra bookkeeping or doc path never voids a reply that read the code."""
+    missing = wanted.difference(stored)
+    if not missing:
+        return True
+    from coordinator_core.ops.dispatch_emit import review_floor
+
+    return not review_floor.review_owed_paths(missing)
+
+
 def stored_reply_for_run(
     repo_root: Path,
     session_id: str,
@@ -590,7 +709,7 @@ def stored_reply_for_run(
     for sidecar in candidates:
         try:
             split = split_frontmatter(sidecar.read_text(encoding="utf-8"))
-            fm = yaml.safe_load(split.fm_text) if split else None
+            fm = _safe_load(split.fm_text) if split else None
         except (OSError, yaml.YAMLError):
             return None
         if not isinstance(fm, dict) or any(k not in fm for k in _STORED_KEYS):
@@ -602,7 +721,7 @@ def stored_reply_for_run(
             if not isinstance(paths, list):
                 continue
             if covering:
-                if not allowed.issubset(paths):
+                if not _covered_or_not_owed(allowed, paths):
                     continue
             elif not all(p in allowed for p in paths):
                 continue
@@ -964,7 +1083,7 @@ def _compute(
         with review_prep_legs.leg("range_blob_bytes"):
             contents = _range_blob_bytes(repo_root, head, contents)
     else:
-        out["declared_sha256"] = _declared_hashes(repo_root, paths)
+        out["declared_sha256"] = _declared_hashes(repo_root, paths, out["reviewed_sha256"])
     with review_prep_legs.leg("hash_contents"):
         hashes = {rel: None if data is None else hashlib.sha256(data).hexdigest() for rel, data in contents.items()}
     with review_prep_legs.leg("pre_review_snapshot"):
@@ -1012,7 +1131,8 @@ def _compute(
                 f"product delta with no ---/+++ lines: {', '.join(unsliced[:5])}"
             )
     out[VERDICT_JUDGED_KEY] = slice_pins(out.get("reviewed_sha256") or {}, sliced)
-    sliced_index = _cover_index(sliced)
+    # A declared path the frozen diff holds a product delta for is never `no-delta`, sliced or not.
+    sliced_index = _cover_index([*sliced, *product])
     out["excluded"].extend(
         {"path": p, "reason": "no-delta"}
         for p in paths
@@ -1055,7 +1175,7 @@ def _covers(declared: str, files: "Sequence[str] | frozenset") -> bool:
 def _header_only_product_paths(diff_path: Path) -> List[str]:
     """Non-bookkeeping paths a frozen diff names in `diff --git` headers: a mode-only, rename-only or
     binary stanza carries no ---/+++ lines, so `product_files` never sees it."""
-    from coordinator_core.ops.review_stamp import PRODUCT_FILE_EXCLUDED_PREFIXES
+    from coordinator_core.ops.review_stamp import is_product_path
 
     data = _read_or_none(diff_path)
     if not data:
@@ -1064,7 +1184,7 @@ def _header_only_product_paths(diff_path: Path) -> List[str]:
     for line in data.decode("utf-8", errors="replace").splitlines():
         if line.startswith("diff --git a/") and " b/" in line:
             path = line.rsplit(" b/", 1)[1]
-            if path not in found and not path.startswith(PRODUCT_FILE_EXCLUDED_PREFIXES):
+            if path not in found and is_product_path(path):
                 found.append(path)
     return found
 
@@ -1188,28 +1308,42 @@ def _write_sidecar(sidecar: Path, result: dict, session: str, paths: List[str], 
     declare_write(sidecar)
 
 
-def _read_json_object(path: Path) -> Optional[dict]:
-    from coordinator_core.ops.dispatch_emit.halt_resume_record import bounded_json_object
+#: Deadline of the one re-read after a stalled run-record read; it also waits out the in-flight read.
+RUN_RECORD_REREAD_DEADLINE_MS = 500.0
 
-    return bounded_json_object(path)
+
+def _read_run_record(path: Path) -> Tuple[Optional[dict], str]:
+    """``(record, "")``, or ``(None, cause)`` with cause ``absent``, ``malformed`` or ``stalled <N> ms``.
+    A stalled first read is retried once, bounded by ``RUN_RECORD_REREAD_DEADLINE_MS``."""
+    from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
+
+    t0 = time.monotonic()
+    got = hrr.bounded_json_state(path, hrr.JSON_READ_DEADLINE_MS)
+    if got is hrr.STALLED:
+        got = hrr.bounded_json_state(path, RUN_RECORD_REREAD_DEADLINE_MS, await_inflight=True)
+    if isinstance(got, dict):
+        return got, ""
+    if got is hrr.STALLED:
+        return None, f"stalled {round((time.monotonic() - t0) * 1000)} ms"
+    return None, "absent" if got is hrr.MISSING else "malformed"
 
 
 MANIFEST_WAIT_S = 0.4
 MANIFEST_POLL_S = 0.02
 
 
-def _read_manifest(base: Path) -> Optional[dict]:
-    """`manifest.json` of the run record dir `base`. While a recompose claim stands there the read
-    retries, capped at `MANIFEST_WAIT_S`; with none it is a single read. The claim is sampled before
-    each read, so a None read with no claim standing is final."""
+def _read_manifest(base: Path) -> Tuple[Optional[dict], str]:
+    """``(manifest, cause)`` of the run record dir `base` (``_read_run_record``). While a recompose claim
+    stands there the read retries, capped at `MANIFEST_WAIT_S`; with none it is a single read. The claim
+    is sampled before each read, so a None read with no claim standing is final."""
     from coordinator_core.ops.dispatch_emit.halt_resume_record import recompose_in_flight
 
     deadline = time.monotonic() + MANIFEST_WAIT_S
     while True:
         in_flight = recompose_in_flight(base, time.time())
-        manifest = _read_json_object(base / "manifest.json")
+        manifest, cause = _read_run_record(base / "manifest.json")
         if manifest is not None or not in_flight or time.monotonic() >= deadline:
-            return manifest
+            return manifest, cause
         time.sleep(MANIFEST_POLL_S)
 
 
@@ -1227,17 +1361,20 @@ def declared_paths_and_held(
     from coordinator_core.ops.dispatch_emit.run_write_set import run_write_set_full
 
     base = record_dir(repo_root, run_id)
-    manifest = _read_manifest(base)
+    manifest, cause = _read_manifest(base)
     if manifest is None:
-        raise ValueError(f"no readable manifest for run {run_id!r}")
+        raise ValueError(f"no readable manifest for run {run_id!r}: {cause}")
     declared = manifest.get("review_declared_paths")
     if not isinstance(declared, list) or not all(isinstance(p, str) for p in declared):
         raise ValueError(f"manifest review_declared_paths for run {run_id!r} is not a list of str")
     if leg:
-        footprint = _read_json_object(base / LEG_FOOTPRINT_FILE)
+        footprint, cause = _read_run_record(base / LEG_FOOTPRINT_FILE)
         writes = footprint.get("writes") if footprint is not None else None
         if not isinstance(writes, list) or not all(isinstance(p, str) for p in writes):
-            raise ValueError(f"no readable leg footprint writes list for run {run_id!r}")
+            raise ValueError(
+                f"no readable leg footprint writes list for run {run_id!r}: "
+                + (cause or "writes is not a list of str")
+            )
     ordered, held = run_write_set_full(repo_root, run_id, own_session)
     if not ordered:
         raise ValueError(f"run {run_id!r} has no reviewable paths (none declared, or all scratch)")
@@ -1258,10 +1395,39 @@ def declared_paths_for_run(repo_root: Path, run_id: str, *, leg: bool = False, o
     return resolved
 
 
+def _declared_provably_clean(repo_root: Path, declared: Sequence[str]) -> bool:
+    """True when every ``declared`` entry is an indexed file whose worktree stat matches the index:
+    the run left no edit on its own paths. A directory, an untracked or deleted path, or an
+    unreadable index is not proof, so it answers False. No git spawn. A staged edit matches the index
+    and so reads as clean: the proof is worktree-vs-index, never index-vs-HEAD."""
+    from coordinator_core.ops.dispatch_emit import stage_dirt_snapshot
+
+    if not declared:
+        return False
+    scanned = stage_dirt_snapshot._stat_dirty(repo_root)
+    if scanned is None:
+        return False
+    dirty, entries = scanned
+    for entry in declared:
+        rel = entry.replace("\\", "/")
+        # `_stat_dirty` never stats non-product prefixes, so absence from `dirty` proves nothing there.
+        if rel.startswith(stage_dirt_snapshot._NON_PRODUCT_PREFIXES) or rel not in entries or rel in dirty:
+            return False
+    return True
+
+
+#: Most stray edits one run adopts. Past it the candidates are shared-tree dirt (hundreds of files
+#: edited by peers since the stage marker), which the run cannot be told apart from: it adopts none.
+MAX_ADOPTED_UNDECLARED = 16
+
+
 def undeclared_edits_for_run(repo_root: Path, run_id: str, declared: Sequence[str], session_id: str = "") -> List[str]:
     """Paths changed since the run's stage dirt snapshot that none of ``declared`` covers and no live
-    peer holds (``run_write_set._without_peer_held``). Empty without a snapshot; spawns no git
-    unless a candidate survives to the peer-hold check."""
+    peer holds (``run_write_set._without_peer_held``) and that a self session positively claimed
+    (``_without_foreign_claimed``). Empty without a snapshot, and empty when every declared path is clean
+    (``_declared_provably_clean``): a run with no edit of its own adopts no foreign dirt. Empty too when
+    more than ``MAX_ADOPTED_UNDECLARED`` survive: the frozen diff stays the declared footprint. Spawns no
+    git unless a candidate survives to the peer-hold check."""
     from coordinator_core.ops.dispatch_emit import stage_dirt_snapshot
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
     from coordinator_core.ops.dispatch_emit.run_write_set import _without_peer_held
@@ -1271,9 +1437,11 @@ def undeclared_edits_for_run(repo_root: Path, run_id: str, declared: Sequence[st
     except ValueError:
         return []
     found = stage_dirt_snapshot.undeclared_edits(repo_root, record, declared)
-    if found:
-        found = _without_foreign_claimed(repo_root, found, session_id, run_id)
-    return list(_without_peer_held(repo_root, found, session_id, run_id)) if found else []
+    if not found or _declared_provably_clean(repo_root, declared):
+        return []
+    found = _without_foreign_claimed(repo_root, found, session_id, run_id)
+    kept = list(_without_peer_held(repo_root, found, session_id, run_id)) if found else []
+    return kept if len(kept) <= MAX_ADOPTED_UNDECLARED else []
 
 
 def _without_foreign_claimed(
@@ -1345,15 +1513,19 @@ def _handle(params: dict, repo_root: Optional[Path]) -> dict:
             return _fail("review.prep run_id must be a non-empty string")
         if leg is not None and not isinstance(leg, bool):
             return _fail("review.prep leg must be a boolean")
-        try:
-            with review_prep_legs.leg("handler.declared_paths"):
-                paths, held_by_peer = declared_paths_and_held(
-                    repo_root, run_id, leg=bool(leg), own_session=str(params.get("session_id") or "")
-                )
-        except ValueError as exc:
-            return _fail(str(exc))
-        with review_prep_legs.leg("handler.undeclared_edits"):
-            undeclared = undeclared_edits_for_run(repo_root, run_id, paths, str(params.get("session_id") or ""))
+        from coordinator_core.git.call_io_scope import call_io_scope
+
+        # One scope over both legs: `record_dir` and the manifest reads are answered once, not per declared path.
+        with call_io_scope():
+            try:
+                with review_prep_legs.leg("handler.declared_paths"):
+                    paths, held_by_peer = declared_paths_and_held(
+                        repo_root, run_id, leg=bool(leg), own_session=str(params.get("session_id") or "")
+                    )
+            except ValueError as exc:
+                return _fail(str(exc))
+            with review_prep_legs.leg("handler.undeclared_edits"):
+                undeclared = undeclared_edits_for_run(repo_root, run_id, paths, str(params.get("session_id") or ""))
         paths = [*paths, *undeclared]
     else:
         undeclared = []

@@ -200,17 +200,17 @@ class _FsRecorder:
         orig_exists, orig_isdir, orig_listdir = os.path.exists, os.path.isdir, os.listdir
         self._orig = (orig_exists, orig_isdir, orig_listdir)
 
-        def exists(p):
+        def exists(p) -> bool:
             v = orig_exists(p)
             self._note('e', p, v)
             return v
 
-        def isdir(p):
+        def isdir(p) -> bool:
             v = orig_isdir(p)
             self._note('d', p, v)
             return v
 
-        def listdir(p='.'):
+        def listdir(p: str = '.') -> list[str]:
             try:
                 result = orig_listdir(p)
             except OSError:

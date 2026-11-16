@@ -2,16 +2,17 @@
 import pytest
 
 from coordinator_core.index_distribution import newer_index_marker as m
+from pathlib import Path
 
 
-def test_roundtrip_and_path(tmp_path):
+def test_roundtrip_and_path(tmp_path: Path) -> None:
     p = m.write_marker(tmp_path, {"kind": "structural", "checked_at": 100.0, "newer_available": True})
     assert p == tmp_path / ".coordinator-local" / "newer-index-marker.json"
     got = m.read_marker(tmp_path)
     assert got["kind"] == "structural" and m.newer_available(got) is True
 
 
-def test_absent_and_malformed_read_none(tmp_path):
+def test_absent_and_malformed_read_none(tmp_path: Path) -> None:
     assert m.read_marker(tmp_path) is None
     p = tmp_path / m.MARKER_RELPATH
     p.parent.mkdir(parents=True)
@@ -21,14 +22,14 @@ def test_absent_and_malformed_read_none(tmp_path):
         assert m.read_marker(tmp_path) is None
 
 
-def test_write_rejects_bad_marker(tmp_path):
+def test_write_rejects_bad_marker(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         m.write_marker(tmp_path, {"kind": "x", "checked_at": 1})
     with pytest.raises(ValueError):
         m.write_marker(tmp_path, {"kind": "semantic"})
 
 
-def test_is_fresh_both_sides():
+def test_is_fresh_both_sides() -> None:
     mk = {"kind": "semantic", "checked_at": 1000.0}
     assert m.is_fresh(mk, 1000.0 + m.TTL_SECONDS - 1) is True
     assert m.is_fresh(mk, 1000.0 + m.TTL_SECONDS) is False
@@ -36,7 +37,7 @@ def test_is_fresh_both_sides():
     assert m.is_fresh({"kind": "semantic"}, 5.0) is False
 
 
-def test_newer_available_only_on_explicit_true():
+def test_newer_available_only_on_explicit_true() -> None:
     assert m.newer_available(None) is False
     assert m.newer_available({"kind": "structural", "checked_at": 1}) is False
     assert m.newer_available({"newer_available": "yes"}) is False

@@ -6,11 +6,12 @@ from pathlib import Path
 
 from coordinator_core.roadmap.tests.test_mise_prep_residue_workflow import SOURCE
 from coordinator_core.session.declared_writes import collecting
+import pytest
 
 _PLAN = "---\nstatus: open\ntitle: t\n---\n\nbody\n"
 
 
-def test_rulings_handler_declares_exactly_the_applied_plans(tmp_path, monkeypatch):
+def test_rulings_handler_declares_exactly_the_applied_plans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import plan_record_residue_rulings as op
 
     (tmp_path / "docs" / "plans").mkdir(parents=True)
@@ -30,21 +31,21 @@ def test_rulings_handler_declares_exactly_the_applied_plans(tmp_path, monkeypatc
     assert [Path(p).resolve() for p in got] == [ok.resolve()]
 
 
-def test_source_lands_through_commit_v2_only():
+def test_source_lands_through_commit_v2_only() -> None:
     text = SOURCE.read_text(encoding="utf-8")
     assert "ceremony.commit_v2" in text
     assert '["commit"' not in text and "'commit'," not in text
     assert "landPaths.length > 0" in text
 
 
-def test_land_paths_never_include_seam_refs():
+def test_land_paths_never_include_seam_refs() -> None:
     text = SOURCE.read_text(encoding="utf-8")
     assert "addLandPath(p.seamRef)" not in text
     assert "addLandPath" in text
     assert "p.seamRef + ' -- read that file" in text
 
 
-def test_land_leg_runs_as_the_commit_agent_the_guard_admits():
+def test_land_leg_runs_as_the_commit_agent_the_guard_admits() -> None:
     text = SOURCE.read_text(encoding="utf-8")
     land = text[text.index("label: 'land-residue'"):]
     land = land[:land.index("schema:")]

@@ -13,28 +13,29 @@ from coordinator_core.ops.measure_token_envelope import (
     measure_surface,
     measure_surfaces,
 )
+from pathlib import Path
 
 
-def test_estimate_tokens_empty_is_zero():
+def test_estimate_tokens_empty_is_zero() -> None:
     assert estimate_tokens("") == 0
 
 
-def test_estimate_tokens_rounds_up():
+def test_estimate_tokens_rounds_up() -> None:
     assert estimate_tokens("abcde") == 2
 
 
-def test_estimate_tokens_exact_boundary():
+def test_estimate_tokens_exact_boundary() -> None:
     assert estimate_tokens("abcd") == 1
     assert estimate_tokens("abcdefgh") == 2
 
 
-def test_measure_surface_missing_file_degrades_gracefully(tmp_path):
+def test_measure_surface_missing_file_degrades_gracefully(tmp_path: Path) -> None:
     missing = tmp_path / "does-not-exist.md"
     result = measure_surface(missing)
     assert result == {"path": str(missing), "bytes": 0, "tokens": 0, "exists": False}
 
 
-def test_measure_surface_existing_file(tmp_path):
+def test_measure_surface_existing_file(tmp_path: Path) -> None:
     f = tmp_path / "CLAUDE.md"
     f.write_text("abcdefgh", encoding="utf-8")
     result = measure_surface(f)
@@ -44,7 +45,7 @@ def test_measure_surface_existing_file(tmp_path):
     assert result["path"] == str(f)
 
 
-def test_measure_surfaces_totals_and_order(tmp_path):
+def test_measure_surfaces_totals_and_order(tmp_path: Path) -> None:
     a = tmp_path / "a.md"
     b = tmp_path / "b.md"
     a.write_text("abcd", encoding="utf-8")
@@ -58,7 +59,7 @@ def test_measure_surfaces_totals_and_order(tmp_path):
     assert result["total_tokens"] == 3
 
 
-def test_measure_surfaces_missing_contributes_zero_not_skewed(tmp_path):
+def test_measure_surfaces_missing_contributes_zero_not_skewed(tmp_path: Path) -> None:
     missing = tmp_path / "missing.md"
     result = measure_surfaces([missing])
     assert result["total_bytes"] == 0
@@ -66,14 +67,14 @@ def test_measure_surfaces_missing_contributes_zero_not_skewed(tmp_path):
     assert result["surfaces"][0]["exists"] is False
 
 
-def test_main_no_args_is_usage_error(capsys):
+def test_main_no_args_is_usage_error(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main([])
     err = capsys.readouterr().err
     assert rc == 2
     assert "usage:" in err
 
 
-def test_main_prints_json_report(tmp_path, capsys):
+def test_main_prints_json_report(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     f = tmp_path / "CLAUDE.md"
     f.write_text("abcd", encoding="utf-8")
 

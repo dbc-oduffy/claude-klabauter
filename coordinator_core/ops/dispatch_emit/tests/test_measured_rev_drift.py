@@ -6,6 +6,8 @@ import subprocess
 from coordinator_core.git import commit
 from coordinator_core.ops.dispatch_emit import measured_rev as mr
 from coordinator_core.ops.dispatch_emit.ask_contract import MEASURED_REV_RECORD
+from pathlib import Path
+import pytest
 
 
 def _repo(tmp_path):
@@ -16,19 +18,19 @@ def _repo(tmp_path):
     return run_dir
 
 
-def _record(run_dir, repo, removed=()):
+def _record(run_dir, repo, removed=()) -> None:
     blobs = {"a.txt": commit.checkin_blob_sha(repo, "a.txt")}
     (run_dir / MEASURED_REV_RECORD).write_text(
         json.dumps({"sha": "s", "base_sha": "b", "paths": ["a.txt"], "removed": list(removed), "blobs": blobs})
     )
 
 
-def test_no_record(tmp_path):
+def test_no_record(tmp_path: Path) -> None:
     run_dir = _repo(tmp_path)
     assert mr.measured_rev_drift(run_dir, tmp_path) == []
 
 
-def test_match_edit_and_recreated(tmp_path, monkeypatch):
+def test_match_edit_and_recreated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run_dir = _repo(tmp_path)
     _record(run_dir, tmp_path, removed=["gone.txt"])
 
@@ -44,7 +46,7 @@ def test_match_edit_and_recreated(tmp_path, monkeypatch):
     assert mr.measured_rev_drift(run_dir, tmp_path) == ["gone.txt"]
 
 
-def test_deleted_recorded_path_drifts(tmp_path):
+def test_deleted_recorded_path_drifts(tmp_path: Path) -> None:
     run_dir = _repo(tmp_path)
     _record(run_dir, tmp_path)
     (tmp_path / "a.txt").unlink()

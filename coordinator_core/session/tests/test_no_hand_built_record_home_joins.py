@@ -287,7 +287,7 @@ def _holds_counted_literal(text: str) -> bool:
 
 
 @lru_cache(maxsize=1)
-def _sites_with_literal():
+def _sites_with_literal() -> frozenset[str]:
     hits = set()
     for fpath in _iter_py_files():
         try:
@@ -301,7 +301,7 @@ def _sites_with_literal():
     return frozenset(hits)
 
 
-def test_no_new_hand_built_record_home_joins():
+def test_no_new_hand_built_record_home_joins() -> None:
     """A literal at a file NOT in `_KNOWN_LITERAL_SITES` fails -- a new
     hand-built `state/<kind>` join landing anywhere in production code under
     `coordinator_core/` (outside `record_homes.py`) is exactly what this guard
@@ -315,7 +315,7 @@ def test_no_new_hand_built_record_home_joins():
     )
 
 
-def test_seeded_sites_still_carry_a_literal():
+def test_seeded_sites_still_carry_a_literal() -> None:
     hits = _sites_with_literal()
     stale = _KNOWN_LITERAL_SITES - hits
     assert not stale, (
@@ -324,7 +324,7 @@ def test_seeded_sites_still_carry_a_literal():
     )
 
 
-def test_declaration_rule_counts_only_joins_outside_column_0_declarations():
+def test_declaration_rule_counts_only_joins_outside_column_0_declarations() -> None:
     single = 'MUTATES = ["state/handoffs/*.md"]\n'
     spanning = 'GENERATES = [\n    "x",\n    "state/sizings/*.yaml",\n]\n'
     annotated = 'MUTATES: list = ["state/goals/*.yaml"]\n'

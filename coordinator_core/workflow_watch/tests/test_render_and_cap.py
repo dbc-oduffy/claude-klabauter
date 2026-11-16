@@ -7,31 +7,32 @@ from coordinator_core.workflow_watch.render import (
     RESULT_TRUNCATE_BYTES,
     JournalRenderer,
 )
+from pathlib import Path
 
 
-def _write(path, text):
+def _write(path, text) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _append(path, text):
+def _append(path, text) -> None:
     with open(path, "a", encoding="utf-8") as handle:
         handle.write(text)
 
 
-def _write_meta(run_dir, agent_id, agent_type="general-purpose", model="claude-sonnet-5"):
+def _write_meta(run_dir, agent_id, agent_type: str = "general-purpose", model: str = "claude-sonnet-5") -> None:
     meta_path = run_dir / f"agent-{agent_id}.meta.json"
     meta_path.write_text(
         json.dumps({"agentType": agent_type, "model": model}), encoding="utf-8"
     )
 
 
-def _event(agent_id, event_type, **extra):
+def _event(agent_id, event_type, **extra) -> str:
     payload = {"agentId": agent_id, "type": event_type}
     payload.update(extra)
     return json.dumps(payload)
 
 
-def test_one_line_per_event(tmp_path):
+def test_one_line_per_event(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     _write_meta(tmp_path, "a1")
     _write(journal, _event("a1", "started") + "\n")
@@ -41,7 +42,7 @@ def test_one_line_per_event(tmp_path):
     assert len(lines) == 1
 
 
-def test_repolling_unchanged_journal_never_reemits(tmp_path):
+def test_repolling_unchanged_journal_never_reemits(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     _write_meta(tmp_path, "a1")
     _write(journal, _event("a1", "started") + "\n")
@@ -54,7 +55,7 @@ def test_repolling_unchanged_journal_never_reemits(tmp_path):
     assert second == []
 
 
-def test_growth_only_emits_the_new_event(tmp_path):
+def test_growth_only_emits_the_new_event(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     _write_meta(tmp_path, "a1")
     _write(journal, _event("a1", "started") + "\n")
@@ -69,7 +70,7 @@ def test_growth_only_emits_the_new_event(tmp_path):
     assert "result" in second[0]
 
 
-def test_started_line_names_agent_type_and_model(tmp_path):
+def test_started_line_names_agent_type_and_model(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     _write_meta(tmp_path, "a1", agent_type="executor", model="claude-opus-5")
     _write(journal, _event("a1", "started") + "\n")
@@ -81,7 +82,7 @@ def test_started_line_names_agent_type_and_model(tmp_path):
     assert "claude-opus-5" in lines[0]
 
 
-def test_started_line_falls_back_to_agent_id_when_meta_absent(tmp_path):
+def test_started_line_falls_back_to_agent_id_when_meta_absent(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     _write(journal, _event("a1", "started") + "\n")
 
@@ -92,7 +93,7 @@ def test_started_line_falls_back_to_agent_id_when_meta_absent(tmp_path):
     assert "unknown-model" in lines[0]
 
 
-def test_started_line_falls_back_to_agent_id_when_meta_malformed(tmp_path):
+def test_started_line_falls_back_to_agent_id_when_meta_malformed(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     meta_path = tmp_path / "agent-a1.meta.json"
     meta_path.write_text("{not valid json", encoding="utf-8")
@@ -105,7 +106,7 @@ def test_started_line_falls_back_to_agent_id_when_meta_malformed(tmp_path):
     assert "unknown-model" in lines[0]
 
 
-def test_started_line_prefers_label_over_agent_id_when_meta_absent(tmp_path):
+def test_started_line_prefers_label_over_agent_id_when_meta_absent(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     _write(journal, _event("a1", "started", label="reviewer-slice-3") + "\n")
 
@@ -116,7 +117,7 @@ def test_started_line_prefers_label_over_agent_id_when_meta_absent(tmp_path):
     assert lines[0].count("a1") == 0
 
 
-def test_started_line_prefers_meta_agent_type_over_label(tmp_path):
+def test_started_line_prefers_meta_agent_type_over_label(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     _write_meta(tmp_path, "a1", agent_type="executor")
     _write(journal, _event("a1", "started", label="reviewer-slice-3") + "\n")
@@ -128,7 +129,7 @@ def test_started_line_prefers_meta_agent_type_over_label(tmp_path):
     assert "reviewer-slice-3" not in lines[0]
 
 
-def test_failed_line_is_unmistakably_marked(tmp_path):
+def test_failed_line_is_unmistakably_marked(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     _write_meta(tmp_path, "a1")
     _write(journal, _event("a1", "failed") + "\n")
@@ -139,7 +140,7 @@ def test_failed_line_is_unmistakably_marked(tmp_path):
     assert "FAILED" in lines[0]
 
 
-def test_result_is_truncated_to_documented_cap(tmp_path):
+def test_result_is_truncated_to_documented_cap(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     _write_meta(tmp_path, "a1")
     huge_result = "x" * (RESULT_TRUNCATE_BYTES * 4)
@@ -156,7 +157,7 @@ def test_result_is_truncated_to_documented_cap(tmp_path):
     assert huge_result not in line
 
 
-def test_small_result_is_not_truncated(tmp_path):
+def test_small_result_is_not_truncated(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     _write_meta(tmp_path, "a1")
     _write(journal, _event("a1", "result", result="short and sweet") + "\n")
@@ -168,7 +169,7 @@ def test_small_result_is_not_truncated(tmp_path):
     assert "…[truncated]" not in lines[0]
 
 
-def test_no_raw_journal_line_ever_emitted(tmp_path):
+def test_no_raw_journal_line_ever_emitted(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     _write_meta(tmp_path, "a1")
     raw_line = _event("a1", "started")
@@ -183,7 +184,7 @@ def test_no_raw_journal_line_ever_emitted(tmp_path):
     assert "}" not in lines[0]
 
 
-def test_unrecognised_event_type_never_falls_back_to_raw_json(tmp_path):
+def test_unrecognised_event_type_never_falls_back_to_raw_json(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     _write_meta(tmp_path, "a1")
     _write(journal, _event("a1", "some-future-event-type") + "\n")
@@ -193,7 +194,7 @@ def test_unrecognised_event_type_never_falls_back_to_raw_json(tmp_path):
     assert lines == []
 
 
-def test_malformed_json_line_never_leaks_into_output(tmp_path):
+def test_malformed_json_line_never_leaks_into_output(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     _write_meta(tmp_path, "a1")
     _write(journal, "{not valid json\n" + _event("a1", "started") + "\n")
@@ -204,7 +205,7 @@ def test_malformed_json_line_never_leaks_into_output(tmp_path):
     assert "not valid json" not in lines[0]
 
 
-def test_journal_shrink_does_not_reemit_already_rendered_event(tmp_path):
+def test_journal_shrink_does_not_reemit_already_rendered_event(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     _write_meta(tmp_path, "a1")
     _write_meta(tmp_path, "a2")
@@ -224,7 +225,7 @@ def test_journal_shrink_does_not_reemit_already_rendered_event(tmp_path):
     assert len(combined) == 2
 
 
-def test_journal_shrink_to_empty_then_regrowth_does_not_duplicate(tmp_path):
+def test_journal_shrink_to_empty_then_regrowth_does_not_duplicate(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     _write_meta(tmp_path, "a1")
     _write(journal, _event("a1", "started") + "\n")
@@ -239,7 +240,7 @@ def test_journal_shrink_to_empty_then_regrowth_does_not_duplicate(tmp_path):
     assert renderer.poll() == []
 
 
-def test_poll_lines_returns_only_the_delta(tmp_path):
+def test_poll_lines_returns_only_the_delta(tmp_path: Path) -> None:
     from coordinator_core.workflow_watch.tail import TailReader
 
     journal = tmp_path / "j.jsonl"
@@ -255,7 +256,7 @@ def test_poll_lines_returns_only_the_delta(tmp_path):
     assert reader.poll_lines() == []
 
 
-def test_poll_lines_holds_a_partial_line_until_its_newline(tmp_path):
+def test_poll_lines_holds_a_partial_line_until_its_newline(tmp_path: Path) -> None:
     from coordinator_core.workflow_watch.tail import TailReader
 
     journal = tmp_path / "j.jsonl"
@@ -268,7 +269,7 @@ def test_poll_lines_holds_a_partial_line_until_its_newline(tmp_path):
     assert reader.poll_lines() == ['{"partial":true}']
 
 
-def test_renderer_does_not_re_render_a_quiet_journal(tmp_path):
+def test_renderer_does_not_re_render_a_quiet_journal(tmp_path: Path) -> None:
     from coordinator_core.workflow_watch.render import JournalRenderer
 
     journal = tmp_path / "journal.jsonl"
@@ -282,7 +283,7 @@ def test_renderer_does_not_re_render_a_quiet_journal(tmp_path):
         assert renderer.poll() == []
 
 
-def test_multibyte_character_split_across_a_read_boundary_survives(tmp_path):
+def test_multibyte_character_split_across_a_read_boundary_survives(tmp_path: Path) -> None:
     from coordinator_core.workflow_watch.tail import TailReader
 
     journal = tmp_path / "j.jsonl"
@@ -298,7 +299,7 @@ def test_multibyte_character_split_across_a_read_boundary_survives(tmp_path):
     assert reader.poll_lines() == ['{"a":"\u00e9\U0001f600"}']
 
 
-def test_buffered_reader_also_survives_a_split_multibyte_character(tmp_path):
+def test_buffered_reader_also_survives_a_split_multibyte_character(tmp_path: Path) -> None:
     from coordinator_core.workflow_watch.tail import TailReader
 
     transcript = tmp_path / "t.jsonl"

@@ -60,13 +60,14 @@ from coordinator_core.bash_guards import dispatch_checks as guard
 from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
 from coordinator_core.bash_guards._message_size import MESSAGE_PROSE_CAP_BYTES, measure_envelope
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
     return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
-def _set_fake_home(monkeypatch, home_path):
+def _set_fake_home(monkeypatch, home_path) -> None:
     """Redirects ``os.path.expanduser("~")`` (what ``_meta_repo_root`` uses)
     to ``home_path`` on every platform. ``HOME`` alone only works on POSIX --
     CPython's ``ntpath.expanduser`` prefers ``USERPROFILE`` over ``HOME`` on
@@ -79,20 +80,20 @@ def _set_fake_home(monkeypatch, home_path):
     monkeypatch.setenv("USERPROFILE", str(home_path))
 
 
-def _wire_git_root(monkeypatch, root):
+def _wire_git_root(monkeypatch, root) -> None:
 
-    def _fake_run_git(args, cwd=None, timeout=2.0, extra_env=None):
+    def _fake_run_git(args, cwd=None, timeout: float = 2.0, extra_env=None):
         assert args == ["rev-parse", "--show-toplevel"]
         return 0, root + "\n"
 
     monkeypatch.setattr(_dc_git_probe, "_run_git", _fake_run_git)
 
 
-def _wire_hazard(monkeypatch, *, is_hazard):
+def _wire_hazard(monkeypatch, *, is_hazard) -> None:
     monkeypatch.setattr(_dc_git_shared, "_is_hazard_repo", lambda root: is_hazard)
 
 
-def _check(monkeypatch, tmp_path, cmd, *, hazard, session_id="sess1"):
+def _check(monkeypatch, tmp_path, cmd, *, hazard, session_id: str = "sess1"):
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
@@ -109,103 +110,103 @@ def _denies(monkeypatch, tmp_path, cmd, **kw):
     return result
 
 
-def _allows_in_hazard_repo(monkeypatch, tmp_path, cmd, **kw):
+def _allows_in_hazard_repo(monkeypatch, tmp_path, cmd, **kw) -> None:
     result = _check(monkeypatch, tmp_path, cmd, hazard=True, **kw)
     assert result is None, f"expected ALLOW for: {cmd!r}, got {result!r}"
 
 
-def test_blanket_add_dash_a_denies_in_hazard_repo(monkeypatch, tmp_path):
+def test_blanket_add_dash_a_denies_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _denies(monkeypatch, tmp_path, "git add -A")
 
 
-def test_blanket_add_dot_denies_in_hazard_repo(monkeypatch, tmp_path):
+def test_blanket_add_dot_denies_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _denies(monkeypatch, tmp_path, "git add .")
 
 
-def test_blanket_add_dash_dash_all_denies_in_hazard_repo(monkeypatch, tmp_path):
+def test_blanket_add_dash_dash_all_denies_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _denies(monkeypatch, tmp_path, "git add --all")
 
 
-def test_blanket_add_dash_u_denies_in_hazard_repo(monkeypatch, tmp_path):
+def test_blanket_add_dash_u_denies_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _denies(monkeypatch, tmp_path, "git add -u")
 
 
-def test_blanket_add_dash_dash_update_denies_in_hazard_repo(monkeypatch, tmp_path):
+def test_blanket_add_dash_dash_update_denies_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _denies(monkeypatch, tmp_path, "git add --update")
 
 
-def test_bundled_short_flags_dash_f_a_denies_in_hazard_repo(monkeypatch, tmp_path):
+def test_bundled_short_flags_dash_f_a_denies_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _denies(monkeypatch, tmp_path, "git add -fA")
 
 
-def test_bundled_short_flags_dash_a_u_denies_in_hazard_repo(monkeypatch, tmp_path):
+def test_bundled_short_flags_dash_a_u_denies_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _denies(monkeypatch, tmp_path, "git add -Au")
 
 
-def test_blanket_add_dash_a_allows_without_hazard_marker(monkeypatch, tmp_path):
+def test_blanket_add_dash_a_allows_without_hazard_marker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     result = _check(monkeypatch, tmp_path, "git add -A", hazard=False)
     assert result is None
 
 
-def test_blanket_add_dot_allows_without_hazard_marker(monkeypatch, tmp_path):
+def test_blanket_add_dot_allows_without_hazard_marker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     result = _check(monkeypatch, tmp_path, "git add .", hazard=False)
     assert result is None
 
 
-def test_blanket_add_dash_dash_all_allows_without_hazard_marker(monkeypatch, tmp_path):
+def test_blanket_add_dash_dash_all_allows_without_hazard_marker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     result = _check(monkeypatch, tmp_path, "git add --all", hazard=False)
     assert result is None
 
 
-def test_bundled_short_flags_allows_without_hazard_marker(monkeypatch, tmp_path):
+def test_bundled_short_flags_allows_without_hazard_marker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     result = _check(monkeypatch, tmp_path, "git add -fA", hazard=False)
     assert result is None
 
 
-def test_chained_command_blanket_add_allows_without_hazard_marker(monkeypatch, tmp_path):
+def test_chained_command_blanket_add_allows_without_hazard_marker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     result = _check(
         monkeypatch, tmp_path, "git status && git add -A && git commit -m x", hazard=False
     )
     assert result is None
 
 
-def test_sh_c_wrapper_allows_without_hazard_marker(monkeypatch, tmp_path):
+def test_sh_c_wrapper_allows_without_hazard_marker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     result = _check(monkeypatch, tmp_path, "sh -c 'git add -A'", hazard=False)
     assert result is None
 
 
-def test_chained_command_blanket_add_denies_in_hazard_repo(monkeypatch, tmp_path):
+def test_chained_command_blanket_add_denies_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _denies(monkeypatch, tmp_path, "git status && git add -A && git commit -m x")
 
 
-def test_sh_c_wrapper_denies_in_hazard_repo(monkeypatch, tmp_path):
+def test_sh_c_wrapper_denies_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _denies(monkeypatch, tmp_path, "sh -c 'git add -A'")
 
 
-def test_env_wrapper_denies_in_hazard_repo(monkeypatch, tmp_path):
+def test_env_wrapper_denies_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _denies(monkeypatch, tmp_path, "env git add -A")
 
 
-def test_dash_c_global_option_dash_a_denies_in_hazard_repo(monkeypatch, tmp_path):
+def test_dash_c_global_option_dash_a_denies_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _denies(monkeypatch, tmp_path, "git -C /some/dir add -A")
 
 
-def test_dash_c_global_option_dot_denies_in_hazard_repo(monkeypatch, tmp_path):
+def test_dash_c_global_option_dot_denies_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _denies(monkeypatch, tmp_path, "git -C /some/dir add .")
 
 
-def test_git_dir_global_option_denies_in_hazard_repo(monkeypatch, tmp_path):
+def test_git_dir_global_option_denies_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _denies(monkeypatch, tmp_path, "git --git-dir=/some/dir/.git add -A")
 
 
-def test_dash_c_global_option_scoped_add_allows_in_hazard_repo(monkeypatch, tmp_path):
+def test_dash_c_global_option_scoped_add_allows_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _allows_in_hazard_repo(monkeypatch, tmp_path, "git -C /some/dir add -- path/to/file")
 
 
-def test_dash_c_value_used_to_resolve_git_root_cwd(monkeypatch, tmp_path):
+def test_dash_c_value_used_to_resolve_git_root_cwd(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen_cwd = {}
 
-    def _fake_run_git(args, cwd=None, timeout=2.0, extra_env=None):
+    def _fake_run_git(args, cwd=None, timeout: float = 2.0, extra_env=None):
         seen_cwd["cwd"] = cwd
         return 0, str(tmp_path / "repo") + "\n"
 
@@ -218,15 +219,15 @@ def test_dash_c_value_used_to_resolve_git_root_cwd(monkeypatch, tmp_path):
     assert seen_cwd["cwd"] == explicit_target
 
 
-def test_magic_pathspec_colon_slash_denies_in_hazard_repo(monkeypatch, tmp_path):
+def test_magic_pathspec_colon_slash_denies_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _denies(monkeypatch, tmp_path, "git add :/")
 
 
-def test_magic_pathspec_colon_slash_dot_denies_in_hazard_repo(monkeypatch, tmp_path):
+def test_magic_pathspec_colon_slash_dot_denies_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _denies(monkeypatch, tmp_path, "git add :/.")
 
 
-def test_absolute_pathspec_equal_to_repo_root_denies_in_hazard_repo(monkeypatch, tmp_path):
+def test_absolute_pathspec_equal_to_repo_root_denies_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
@@ -237,8 +238,8 @@ def test_absolute_pathspec_equal_to_repo_root_denies_in_hazard_repo(monkeypatch,
 
 
 def test_absolute_pathspec_trailing_slash_equal_to_repo_root_denies_in_hazard_repo(
-    monkeypatch, tmp_path
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
@@ -248,7 +249,7 @@ def test_absolute_pathspec_trailing_slash_equal_to_repo_root_denies_in_hazard_re
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_absolute_pathspec_denies_in_the_backslash_spelling(monkeypatch, tmp_path):
+def test_absolute_pathspec_denies_in_the_backslash_spelling(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
@@ -259,7 +260,7 @@ def test_absolute_pathspec_denies_in_the_backslash_spelling(monkeypatch, tmp_pat
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_both_separator_spellings_reach_the_same_verdict(monkeypatch, tmp_path):
+def test_both_separator_spellings_reach_the_same_verdict(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
@@ -269,7 +270,7 @@ def test_both_separator_spellings_reach_the_same_verdict(monkeypatch, tmp_path):
     assert (fwd is None) == (back is None)
 
 
-def test_a_scoped_subtree_in_the_backslash_spelling_still_passes(monkeypatch, tmp_path):
+def test_a_scoped_subtree_in_the_backslash_spelling_still_passes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "repo"
     (root / "sub").mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
@@ -278,7 +279,7 @@ def test_a_scoped_subtree_in_the_backslash_spelling_still_passes(monkeypatch, tm
     assert _enveloped(guard.check_blanket_git_add)("git add %s" % sub, "sess1") is None
 
 
-def test_absolute_pathspec_subdirectory_allows_in_hazard_repo(monkeypatch, tmp_path):
+def test_absolute_pathspec_subdirectory_allows_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
     _wire_git_root(monkeypatch, str(root))
@@ -288,8 +289,8 @@ def test_absolute_pathspec_subdirectory_allows_in_hazard_repo(monkeypatch, tmp_p
 
 
 def test_explicit_pathspec_separator_at_repo_root_still_denies_in_hazard_repo(
-    monkeypatch, tmp_path
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """SUPERSEDES the prior `..._allows_in_hazard_repo` ratification of this
     same scenario. That version asserted ALLOW on the theory that an
     explicit `--` pathspec is inherently the "deliberate, scoped form" and
@@ -316,34 +317,34 @@ def test_explicit_pathspec_separator_at_repo_root_still_denies_in_hazard_repo(
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_scoped_add_allows_in_hazard_repo(monkeypatch, tmp_path):
+def test_scoped_add_allows_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _allows_in_hazard_repo(monkeypatch, tmp_path, "git add -- path/to/file1 path/to/file2")
 
 
-def test_scoped_add_allows_without_hazard_marker(monkeypatch, tmp_path):
+def test_scoped_add_allows_without_hazard_marker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     result = _check(monkeypatch, tmp_path, "git add -- path/to/file1 path/to/file2", hazard=False)
     assert result is None
 
 
-def test_dry_run_long_flag_allows_in_hazard_repo(monkeypatch, tmp_path):
+def test_dry_run_long_flag_allows_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _allows_in_hazard_repo(monkeypatch, tmp_path, "git add -A --dry-run")
 
 
-def test_dry_run_short_flag_allows_in_hazard_repo(monkeypatch, tmp_path):
+def test_dry_run_short_flag_allows_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _allows_in_hazard_repo(monkeypatch, tmp_path, "git add -A -n")
 
 
-def test_no_git_add_at_all_allows_in_hazard_repo(monkeypatch, tmp_path):
+def test_no_git_add_at_all_allows_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _allows_in_hazard_repo(monkeypatch, tmp_path, "git status")
 
 
-def test_empty_command_allows(monkeypatch, tmp_path):
+def test_empty_command_allows(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     result = _check(monkeypatch, tmp_path, "", hazard=True)
     assert result is None
 
 
 @pytest.mark.parametrize("cmd", ["git add -A", "git add .", "git add -u"])
-def test_blanket_add_deny_offers_scoped_git_commit(monkeypatch, tmp_path, cmd):
+def test_blanket_add_deny_offers_scoped_git_commit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cmd) -> None:
     result = _denies(monkeypatch, tmp_path, cmd)
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "git add -- path/to/file" not in reason
@@ -354,7 +355,7 @@ def test_blanket_add_deny_offers_scoped_git_commit(monkeypatch, tmp_path, cmd):
 
 
 @pytest.mark.parametrize("cmd", ["git add -A", "git add .", "git add -u"])
-def test_blanket_add_deny_stays_within_prose_cap(monkeypatch, tmp_path, cmd):
+def test_blanket_add_deny_stays_within_prose_cap(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cmd) -> None:
     result = _denies(monkeypatch, tmp_path, cmd)
     measurement = measure_envelope(result)
     assert measurement.prose_bytes <= MESSAGE_PROSE_CAP_BYTES, (
@@ -363,22 +364,22 @@ def test_blanket_add_deny_stays_within_prose_cap(monkeypatch, tmp_path, cmd):
     )
 
 
-def test_scoped_add_still_allows_after_offer_change(monkeypatch, tmp_path):
+def test_scoped_add_still_allows_after_offer_change(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _allows_in_hazard_repo(monkeypatch, tmp_path, "git add -- path/to/file")
 
 
-def test_override_env_var_allows_in_hazard_repo(monkeypatch, tmp_path):
+def test_override_env_var_allows_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("COORDINATOR_OVERRIDE_BLANKET_ADD", "1")
     _allows_in_hazard_repo(monkeypatch, tmp_path, "git add -A")
 
 
-def test_safe_commit_internal_blanket_marker_allows_in_hazard_repo(monkeypatch, tmp_path):
+def test_safe_commit_internal_blanket_marker_allows_in_hazard_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("_COORDINATOR_SAFE_COMMIT_INTERNAL_BLANKET", "1")
     _allows_in_hazard_repo(monkeypatch, tmp_path, "git add -A")
 
 
-def test_unresolvable_git_root_allows(monkeypatch, tmp_path):
-    def _fake_run_git(args, cwd=None, timeout=2.0, extra_env=None):
+def test_unresolvable_git_root_allows(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def _fake_run_git(args, cwd=None, timeout: float = 2.0, extra_env=None):
         return 128, ""
 
     monkeypatch.setattr(_dc_git_probe, "_run_git", _fake_run_git)
@@ -386,7 +387,7 @@ def test_unresolvable_git_root_allows(monkeypatch, tmp_path):
     assert result is None
 
 
-def test_is_hazard_repo_true_for_meta_repo(monkeypatch, tmp_path):
+def test_is_hazard_repo_true_for_meta_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fake_home = tmp_path / "home"
     meta_root = fake_home / ".claude"
     meta_root.mkdir(parents=True)
@@ -396,7 +397,7 @@ def test_is_hazard_repo_true_for_meta_repo(monkeypatch, tmp_path):
     assert guard._is_hazard_repo(str(meta_root)) is True
 
 
-def test_is_hazard_repo_true_for_registered_fleet_sibling(monkeypatch, tmp_path):
+def test_is_hazard_repo_true_for_registered_fleet_sibling(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fake_home = tmp_path / "home-unrelated"
     fake_home.mkdir(parents=True)
     _set_fake_home(monkeypatch, fake_home)
@@ -409,7 +410,7 @@ def test_is_hazard_repo_true_for_registered_fleet_sibling(monkeypatch, tmp_path)
     assert guard._is_hazard_repo(str(sibling_root)) is True
 
 
-def test_is_hazard_repo_false_without_marker(monkeypatch, tmp_path):
+def test_is_hazard_repo_false_without_marker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fake_home = tmp_path / "home-unrelated"
     fake_home.mkdir(parents=True)
     _set_fake_home(monkeypatch, fake_home)
@@ -420,7 +421,7 @@ def test_is_hazard_repo_false_without_marker(monkeypatch, tmp_path):
     assert guard._is_hazard_repo(str(oss_repo)) is False
 
 
-def test_is_hazard_repo_fails_open_on_registry_exception(monkeypatch, tmp_path):
+def test_is_hazard_repo_fails_open_on_registry_exception(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
 
     def _boom():
         raise RuntimeError("settings home unreadable")
@@ -435,12 +436,12 @@ def test_is_hazard_repo_fails_open_on_registry_exception(monkeypatch, tmp_path):
     assert guard._is_hazard_repo(str(some_repo)) is False
 
 
-def test_check_blanket_git_add_allows_when_discriminator_unresolvable(monkeypatch, tmp_path):
+def test_check_blanket_git_add_allows_when_discriminator_unresolvable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     result = _check(monkeypatch, tmp_path, "git add -A", hazard=False)
     assert result is None
 
 
-def test_hazard_registry_repo_roots_reads_repos_star_keys(monkeypatch, tmp_path):
+def test_hazard_registry_repo_roots_reads_repos_star_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     reg_dir = tmp_path / "registry"
     reg_dir.mkdir()
     fake_sibling = tmp_path / "some-fleet-sibling-checkout"
@@ -458,7 +459,7 @@ def test_hazard_registry_repo_roots_reads_repos_star_keys(monkeypatch, tmp_path)
     assert "" not in roots
 
 
-def test_hazard_registry_repo_roots_empty_when_registry_missing(monkeypatch, tmp_path):
+def test_hazard_registry_repo_roots_empty_when_registry_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     empty_dir = tmp_path / "no-registry-here"
     empty_dir.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(empty_dir))
@@ -494,7 +495,7 @@ def test_hazard_registry_repo_roots_empty_when_registry_missing(monkeypatch, tmp
         "git add -u --pathspec-file-nul",
     ],
 )
-def test_dash_u_with_a_pathspec_allows(monkeypatch, tmp_path, cmd):
+def test_dash_u_with_a_pathspec_allows(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cmd) -> None:
     _allows_in_hazard_repo(monkeypatch, tmp_path, cmd)
 
 
@@ -511,7 +512,7 @@ def test_dash_u_with_a_pathspec_allows(monkeypatch, tmp_path, cmd):
         "git add -Au -- registry/schema.sql",
     ],
 )
-def test_dash_u_relaxation_does_not_reach_these(monkeypatch, tmp_path, cmd):
+def test_dash_u_relaxation_does_not_reach_these(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cmd) -> None:
     _denies(monkeypatch, tmp_path, cmd)
 
 
@@ -528,5 +529,5 @@ def test_dash_u_relaxation_does_not_reach_these(monkeypatch, tmp_path, cmd):
         ("-A", False),
     ],
 )
-def test_add_has_narrowing_pathspec(after, expected):
+def test_add_has_narrowing_pathspec(after, expected) -> None:
     assert guard._add_has_narrowing_pathspec(after) is expected

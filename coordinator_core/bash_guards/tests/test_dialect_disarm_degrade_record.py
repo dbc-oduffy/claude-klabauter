@@ -16,13 +16,14 @@ import pytest
 
 from coordinator_core.bash_guards import _dialect
 from coordinator_core.warm import telemetry
+from pathlib import Path
 
 
 def _reset_once_per_process_gate(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_dialect, "_LOGGED_PARSER_UNAVAILABLE_GUARDS", set())
 
 
-def test_disarm_writes_a_kind_cold_failed_row_naming_the_guard(monkeypatch, tmp_path):
+def test_disarm_writes_a_kind_cold_failed_row_naming_the_guard(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _reset_once_per_process_gate(monkeypatch)
     monkeypatch.setattr(_dialect, "_dialect_parser_unavailable_log_path", lambda: tmp_path / "log.txt")
 
@@ -47,7 +48,7 @@ def test_disarm_writes_a_kind_cold_failed_row_naming_the_guard(monkeypatch, tmp_
     assert rows[0]["kind"] == telemetry.KIND_COLD_FAILED
 
 
-def test_settings_home_log_write_failure_does_not_suppress_record_degrade(monkeypatch, tmp_path):
+def test_settings_home_log_write_failure_does_not_suppress_record_degrade(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _reset_once_per_process_gate(monkeypatch)
 
     def _boom():
@@ -70,7 +71,7 @@ def test_settings_home_log_write_failure_does_not_suppress_record_degrade(monkey
     assert calls[0]["kind"] == telemetry.KIND_COLD_FAILED
 
 
-def test_a_second_DIFFERENT_guard_in_the_same_process_still_gets_attributed(monkeypatch, tmp_path):
+def test_a_second_DIFFERENT_guard_in_the_same_process_still_gets_attributed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _reset_once_per_process_gate(monkeypatch)
     monkeypatch.setattr(_dialect, "_dialect_parser_unavailable_log_path", lambda: tmp_path / "log.txt")
 
@@ -98,7 +99,7 @@ def test_a_second_DIFFERENT_guard_in_the_same_process_still_gets_attributed(monk
     assert len(rows) == 2
 
 
-def test_the_SAME_guard_called_twice_in_one_process_is_still_deduped(monkeypatch, tmp_path):
+def test_the_SAME_guard_called_twice_in_one_process_is_still_deduped(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _reset_once_per_process_gate(monkeypatch)
     monkeypatch.setattr(_dialect, "_dialect_parser_unavailable_log_path", lambda: tmp_path / "log.txt")
 
@@ -117,7 +118,7 @@ def test_the_SAME_guard_called_twice_in_one_process_is_still_deduped(monkeypatch
     assert len(calls) == 1, "same guard, same process: still once, not once-per-call"
 
 
-def test_probe_armed_survives_non_utf8_probe_output(tmp_path):
+def test_probe_armed_survives_non_utf8_probe_output(tmp_path: Path) -> None:
     """A probe child emitting bytes the locale codec cannot decode must yield
     a (False, reason) verdict, not an escaping UnicodeDecodeError."""
     import sys
@@ -137,7 +138,7 @@ def test_probe_armed_survives_non_utf8_probe_output(tmp_path):
     assert "bad" in reason
 
 
-def _site_less_interpreter(tmp_path):
+def _site_less_interpreter(tmp_path) -> str:
     """A POSIX wrapper running the current interpreter with `-S`, so the parser
     packages are importable only from an engine-site on the probe child's path."""
     import importlib.util
@@ -156,7 +157,7 @@ def _site_less_interpreter(tmp_path):
     return str(wrapper)
 
 
-def _stamped_engine_site_with_parser(home):
+def _stamped_engine_site_with_parser(home) -> None:
     import importlib.util
     import shutil
     import sys
@@ -171,7 +172,7 @@ def _stamped_engine_site_with_parser(home):
     )
 
 
-def test_probe_armed_sees_a_parser_present_only_in_engine_site(tmp_path, monkeypatch):
+def test_probe_armed_sees_a_parser_present_only_in_engine_site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.bash_guards._dialect import probe_armed
 
     interpreter = _site_less_interpreter(tmp_path)
@@ -183,7 +184,7 @@ def test_probe_armed_sees_a_parser_present_only_in_engine_site(tmp_path, monkeyp
     assert armed is True, detail
 
 
-def test_probe_armed_without_engine_site_still_reports_missing_package(tmp_path, monkeypatch):
+def test_probe_armed_without_engine_site_still_reports_missing_package(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.bash_guards._dialect import probe_armed
 
     interpreter = _site_less_interpreter(tmp_path)

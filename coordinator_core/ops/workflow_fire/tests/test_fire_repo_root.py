@@ -4,13 +4,14 @@ from __future__ import annotations
 import subprocess
 
 import pytest
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 from coordinator_core.ops.workflow_fire import fire
 
 
-def _git_init(repo_dir):
+def _git_init(repo_dir) -> None:
     cnw = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     subprocess.run(["git", "init", "-q", str(repo_dir)], check=True, creationflags=cnw)
     subprocess.run(
@@ -26,7 +27,7 @@ def _git_init(repo_dir):
 
 
 @pytest.fixture
-def wrong_repo(tmp_path):
+def wrong_repo(tmp_path: Path) -> Path:
     wrong_dir = tmp_path / "wrong-repo"
     wrong_dir.mkdir()
     _git_init(wrong_dir)
@@ -34,7 +35,7 @@ def wrong_repo(tmp_path):
 
 
 @pytest.fixture
-def target_repo(tmp_path):
+def target_repo(tmp_path: Path) -> Path:
     target_dir = tmp_path / "target-repo"
     target_dir.mkdir()
     _git_init(target_dir)
@@ -59,18 +60,18 @@ class _ScriptOutsideRepoRootError_direct_unit_check:
     pass
 
 
-def test_assert_script_under_repo_root_passes_when_script_is_under_root(script, target_repo):
+def test_assert_script_under_repo_root_passes_when_script_is_under_root(script, target_repo) -> None:
     fire._assert_script_under_repo_root(script, str(target_repo))
 
 
-def test_assert_script_under_repo_root_refuses_when_script_lives_elsewhere(script, wrong_repo):
+def test_assert_script_under_repo_root_refuses_when_script_lives_elsewhere(script, wrong_repo) -> None:
     with pytest.raises(fire.ScriptOutsideRepoRootError):
         fire._assert_script_under_repo_root(script, str(wrong_repo))
 
 
 def test_fire_workflow_refuses_before_spawn_when_explicit_cwd_is_wrong_tree(
-    monkeypatch, script, wrong_repo
-):
+    monkeypatch: pytest.MonkeyPatch, script, wrong_repo
+) -> None:
     monkeypatch.setattr(fire, "resolve_plugin_dir", lambda claude_bin="claude": "/plugins/coordinator")
     monkeypatch.setattr(fire.subprocess, "Popen", _fail_if_spawned)
 
@@ -78,21 +79,21 @@ def test_fire_workflow_refuses_before_spawn_when_explicit_cwd_is_wrong_tree(
         fire.fire_workflow(str(script), cwd=str(wrong_repo))
 
 
-def _fake_spawn(monkeypatch):
+def _fake_spawn(monkeypatch) -> None:
     monkeypatch.setattr(fire, "resolve_plugin_dir", lambda claude_bin="claude": "/plugins/coordinator")
 
     class _FakePopen:
-        def __init__(self, *a, **k):
+        def __init__(self, *a, **k) -> None:
             self.pid = 4242
 
-        def poll(self):
+        def poll(self) -> None:
             return None
 
     monkeypatch.setattr(fire.subprocess, "Popen", _FakePopen)
     monkeypatch.setattr(fire.time, "sleep", lambda *_: None)
 
 
-def test_fire_workflow_with_dotgit_cwd_fires_against_worktree_root(monkeypatch, script, target_repo):
+def test_fire_workflow_with_dotgit_cwd_fires_against_worktree_root(monkeypatch: pytest.MonkeyPatch, script, target_repo) -> None:
     import os
 
     _fake_spawn(monkeypatch)
@@ -100,7 +101,7 @@ def test_fire_workflow_with_dotgit_cwd_fires_against_worktree_root(monkeypatch, 
     assert os.path.realpath(record["repo_root"]) == os.path.realpath(str(target_repo))
 
 
-def test_fire_workflow_dotgit_of_unrelated_repo_still_refused(monkeypatch, script, wrong_repo):
+def test_fire_workflow_dotgit_of_unrelated_repo_still_refused(monkeypatch: pytest.MonkeyPatch, script, wrong_repo) -> None:
     monkeypatch.setattr(fire.subprocess, "Popen", _fail_if_spawned)
     # a .git cwd is discarded, not trusted: the root comes from the script's own tree
     record_root = fire._resolve_target_repo(script, str(wrong_repo / ".git"))
@@ -110,19 +111,19 @@ def test_fire_workflow_dotgit_of_unrelated_repo_still_refused(monkeypatch, scrip
 
 
 def test_fired_child_cwd_is_the_resolved_repo_root_and_relative_paths_resolve_under_it(
-    monkeypatch, script, target_repo, tmp_path
-):
+    monkeypatch: pytest.MonkeyPatch, script, target_repo, tmp_path: Path
+) -> None:
     import os
 
     monkeypatch.setattr(fire, "resolve_plugin_dir", lambda claude_bin="claude": "/plugins/coordinator")
     seen = {}
 
     class _CapturePopen:
-        def __init__(self, command, **kwargs):
+        def __init__(self, command, **kwargs) -> None:
             seen.update(kwargs)
             self.pid = 4242
 
-        def poll(self):
+        def poll(self) -> None:
             return None
 
     monkeypatch.setattr(fire.subprocess, "Popen", _CapturePopen)
@@ -140,14 +141,14 @@ def test_fired_child_cwd_is_the_resolved_repo_root_and_relative_paths_resolve_un
     )
 
 
-def test_fire_workflow_records_resolved_repo_root_on_success(monkeypatch, script, target_repo):
+def test_fire_workflow_records_resolved_repo_root_on_success(monkeypatch: pytest.MonkeyPatch, script, target_repo) -> None:
     monkeypatch.setattr(fire, "resolve_plugin_dir", lambda claude_bin="claude": "/plugins/coordinator")
 
     class _FakePopen:
-        def __init__(self, *a, **k):
+        def __init__(self, *a, **k) -> None:
             self.pid = 4242
 
-        def poll(self):
+        def poll(self) -> None:
             return None
 
     monkeypatch.setattr(fire.subprocess, "Popen", _FakePopen)

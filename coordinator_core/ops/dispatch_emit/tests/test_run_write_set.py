@@ -9,6 +9,7 @@ from coordinator_core.ops.dispatch_emit import run_write_set as rws
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 from coordinator_core.ops import warp_run_deliverable
 from coordinator_core.session import claim_index, liveness
+from pathlib import Path
 
 RUN = "warp-2026-10-26-sample-aaaaaa-20261026T000000-bbbbbb"
 PLAN = """# p
@@ -28,7 +29,7 @@ PLAN = """# p
 """
 
 
-def _record(tmp_path, *, credit=True, declared=()):
+def _record(tmp_path, *, credit: bool = True, declared=()) -> Path:
     (tmp_path / "docs/plans").mkdir(parents=True)
     (tmp_path / "docs/plans/p.md").write_text(PLAN, encoding="utf-8")
     (tmp_path / "state/sizings").mkdir(parents=True)
@@ -50,9 +51,9 @@ class _Found(dict):
     recorded_kind = None
 
 
-def _claims(monkeypatch, table, dead=()):
+def _claims(monkeypatch, table, dead=()) -> None:
     """Stub the claim lookup; every claim is a write hold, sessions in `dead` are not live."""
-    def lookup(paths, **kw):
+    def lookup(paths, **kw) -> _Found:
         found = _Found({p: table.get(p, []) for p in paths})
         found.recorded_kind = {p: {s: "write" for s in table.get(p, [])} for p in paths}
         return found
@@ -63,21 +64,21 @@ def _claims(monkeypatch, table, dead=()):
     monkeypatch.setattr(warp_run_deliverable, "live_run_write_claims", lambda *a, **kw: {})
 
 
-def test_union_in_order_deduped_without_scratch(tmp_path, monkeypatch):
+def test_union_in_order_deduped_without_scratch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _record(tmp_path, declared=["pkg/d.py"])
     _claims(monkeypatch, {})
     assert rws.run_write_set(tmp_path, RUN, "me") == (
         "pkg/d.py", "pkg/f.py", "pkg/a.py", "pkg/tests/test_a.py", "pkg/w.py")
 
 
-def test_uncredited_chunk_writes_absent(tmp_path, monkeypatch):
+def test_uncredited_chunk_writes_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _record(tmp_path, credit=False)
     _claims(monkeypatch, {})
     got = rws.run_write_set(tmp_path, RUN, "me")
     assert "pkg/tests/test_a.py" not in got and "pkg/b.py" not in got
 
 
-def test_live_peer_claim_excluded_own_and_unanswerable_kept(tmp_path, monkeypatch):
+def test_live_peer_claim_excluded_own_and_unanswerable_kept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _record(tmp_path)
     _claims(monkeypatch, {
         "pkg/f.py": ["other"], "pkg/a.py": ["me"], "pkg/w.py": [claim_index.UNANSWERABLE]})
@@ -87,7 +88,7 @@ def test_live_peer_claim_excluded_own_and_unanswerable_kept(tmp_path, monkeypatc
 
 
 @pytest.mark.parametrize("n_declared", [3, 400])
-def test_peer_held_is_one_claim_lookup_over_the_whole_set(tmp_path, monkeypatch, n_declared):
+def test_peer_held_is_one_claim_lookup_over_the_whole_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, n_declared) -> None:
     declared = [f"pkg/d{i}.py" for i in range(n_declared)]
     _record(tmp_path, declared=declared)
     _claims(monkeypatch, {"pkg/d1.py": ["other"]})
@@ -105,14 +106,14 @@ def test_peer_held_is_one_claim_lookup_over_the_whole_set(tmp_path, monkeypatch,
     assert set(declared) <= set(calls[0])
 
 
-def test_dead_session_leftover_claim_keeps_path(tmp_path, monkeypatch):
+def test_dead_session_leftover_claim_keeps_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _record(tmp_path)
     _claims(monkeypatch, {"pkg/f.py": ["gone"], "pkg/a.py": ["live"]}, dead=("gone",))
     got = rws.run_write_set(tmp_path, RUN, "me")
     assert "pkg/f.py" in got and "pkg/a.py" not in got
 
 
-def test_withhold_jsonl_path_included_without_halted_artifacts(tmp_path, monkeypatch):
+def test_withhold_jsonl_path_included_without_halted_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = _record(tmp_path)
     (base / "halted.json").write_text(json.dumps({"status": "halted"}), encoding="utf-8")
     (base / "withhold.jsonl").write_text(
@@ -122,7 +123,7 @@ def test_withhold_jsonl_path_included_without_halted_artifacts(tmp_path, monkeyp
     assert "pkg/j.py" in got and "pkg/w.py" not in got
 
 
-def test_peer_declaration_keeps_path_own_checkpoint_landed_touch_claim_still_drops(tmp_path, monkeypatch):
+def test_peer_declaration_keeps_path_own_checkpoint_landed_touch_claim_still_drops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import own_checkpoint_paths
 
     _record(tmp_path, declared=["pkg/d.py", "pkg/e.py"])
@@ -144,19 +145,19 @@ def test_peer_declaration_keeps_path_own_checkpoint_landed_touch_claim_still_dro
     assert "pkg/e.py" not in got  # live touch claim drops even a landed path
 
 
-def test_missing_manifest_is_empty(tmp_path, monkeypatch):
+def test_missing_manifest_is_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _claims(monkeypatch, {})
     assert rws.run_write_set(tmp_path, RUN, "me") == ()
 
 
-def _git(tmp_path, *args):
+def _git(tmp_path, *args) -> None:
     subprocess.run(["git", "-C", str(tmp_path), *args], check=True, capture_output=True,
                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_unclaimed_dirty_modified_untracked_and_foreign(tmp_path, monkeypatch):
+def test_unclaimed_dirty_modified_untracked_and_foreign(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@t")
     _git(tmp_path, "config", "user.name", "t")
@@ -175,7 +176,7 @@ def test_unclaimed_dirty_modified_untracked_and_foreign(tmp_path, monkeypatch):
     assert rws.unclaimed_dirty(tmp_path, [], "me") == ()
 
 
-def test_split_names_each_peer_held_path_with_its_holders_and_keeps_the_rest(tmp_path, monkeypatch):
+def test_split_names_each_peer_held_path_with_its_holders_and_keeps_the_rest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _record(tmp_path)
     _claims(monkeypatch, {"pkg/f.py": ["other", "another"], "pkg/a.py": ["me"]})
     kept, held = rws.run_write_set_split(tmp_path, RUN, "me")
@@ -184,18 +185,18 @@ def test_split_names_each_peer_held_path_with_its_holders_and_keeps_the_rest(tmp
     assert kept == rws.run_write_set(tmp_path, RUN, "me")
 
 
-def test_split_without_a_peer_hold_has_an_empty_held_map(tmp_path, monkeypatch):
+def test_split_without_a_peer_hold_has_an_empty_held_map(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _record(tmp_path)
     _claims(monkeypatch, {"pkg/a.py": ["me"]})
     assert rws.run_write_set_split(tmp_path, RUN, "me")[1] == {}
 
 
-def test_split_with_missing_manifest_is_empty_pair(tmp_path, monkeypatch):
+def test_split_with_missing_manifest_is_empty_pair(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _claims(monkeypatch, {})
     assert rws.run_write_set_split(tmp_path, RUN, "me") == ((), {})
 
 
-def test_norm_is_stable_across_cached_calls():
+def test_norm_is_stable_across_cached_calls() -> None:
     assert rws._norm(" pkg\\b.py ") == "pkg/b.py"
     assert rws._norm(" pkg\\b.py ") == "pkg/b.py"
     assert rws._norm("pkg/./b.py") == "pkg/b.py"

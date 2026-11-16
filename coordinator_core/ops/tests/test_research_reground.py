@@ -272,7 +272,7 @@ def test_brief_states_the_ruling_vocabulary(repo, scratch):
 def test_brief_requires_reopening_sources_before_downgrade(repo, scratch):
     _reground(repo)
     brief = (scratch / "reground-1.md").read_text(encoding="utf-8")
-    assert rg.REOPEN_NOTE in brief
+    assert rg.REOPEN_NOTE in brief and rg.OPEN_NOTE in brief and "## Open questions" in rg.OPEN_NOTE
 
 
 def test_carry_unchanged_digests_is_a_noop_with_zero_fresh(repo, scratch):

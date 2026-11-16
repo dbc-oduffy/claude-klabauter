@@ -2,6 +2,7 @@ from pathlib import Path
 
 from coordinator_core import _settings_home
 from coordinator_core.ops.dispatch_emit import engine_record_home as erh
+import pytest
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -10,12 +11,12 @@ def _repo(tmp_path: Path) -> Path:
     return root
 
 
-def test_none_when_no_common_dir(tmp_path):
+def test_none_when_no_common_dir(tmp_path: Path) -> None:
     assert erh.engine_record_dir(tmp_path) is None
     assert erh.legacy_record_dir(tmp_path) is None
 
 
-def test_under_machine_local_and_not_created(tmp_path, monkeypatch):
+def test_under_machine_local_and_not_created(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = tmp_path / "home"
     monkeypatch.setattr(_settings_home, "machine_local_dir", lambda: home / "machine-local")
     root = _repo(tmp_path)
@@ -26,7 +27,7 @@ def test_under_machine_local_and_not_created(tmp_path, monkeypatch):
     assert not got.exists() and not home.exists()
 
 
-def test_legacy_is_git_dir_and_distinct_repos_differ(tmp_path, monkeypatch):
+def test_legacy_is_git_dir_and_distinct_repos_differ(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_settings_home, "machine_local_dir", lambda: tmp_path / "ml")
     a = _repo(tmp_path)
     b = tmp_path / "other"
@@ -36,7 +37,7 @@ def test_legacy_is_git_dir_and_distinct_repos_differ(tmp_path, monkeypatch):
     assert erh.engine_record_dir(a) == erh.engine_record_dir(a)
 
 
-def test_linked_worktree_shares_main_key(tmp_path, monkeypatch):
+def test_linked_worktree_shares_main_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_settings_home, "machine_local_dir", lambda: tmp_path / "ml")
     main = _repo(tmp_path)
     wt_git = main / ".git" / "worktrees" / "w1"

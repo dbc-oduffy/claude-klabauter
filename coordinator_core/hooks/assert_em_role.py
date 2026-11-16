@@ -218,6 +218,14 @@ def _gem_display_name(repo_root, session_id: str, nominated_name) -> str:
                 return holder_name
     except Exception:
         pass  # absent/malformed watch file is the cold-start case
+    try:
+        from coordinator_core.hooks.peer_identity import roster_name
+
+        roster = roster_name(session_id)
+        if roster:
+            return roster
+    except Exception:
+        pass  # roster unreadable: fall through to the literal
     return "name unrecorded"
 
 

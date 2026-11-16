@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     LedgerHalt,
 )
 from coordinator_core.ops.dispatch_emit.ask_gate import _resume_ledger
+from pathlib import Path
 
 PLAN = "docs/plans/p.md"
 SIZING = {
@@ -25,27 +26,27 @@ SIZING = {
 }
 
 
-def _halt(blocking):
+def _halt(blocking) -> LedgerHalt:
     return LedgerHalt(run_id="run-1", plan_rel=PLAN, sizing_rel="state/sizings/s.yaml", blocking=tuple(blocking))
 
 
-def _sidecar(tmp_path, body):
+def _sidecar(tmp_path, body) -> None:
     path = tmp_path / "docs/plans/p.evidence.yaml"
     path.parent.mkdir(parents=True)
     path.write_text(yaml.safe_dump(body), encoding="utf-8")
 
 
-def test_none_halt_yields_none(tmp_path):
+def test_none_halt_yields_none(tmp_path: Path) -> None:
     assert _resume_ledger(SIZING, None, tmp_path) is None
 
 
-def test_recorded_blocking_is_kept_and_widened_to_unmet_rows(tmp_path):
+def test_recorded_blocking_is_kept_and_widened_to_unmet_rows(tmp_path: Path) -> None:
     out = _resume_ledger(SIZING, _halt(["R2"]), tmp_path)
     assert out["blocking"] == ["R2", "R3"]
     assert out["rulable_ids"] == ["R2", "R3"]
 
 
-def test_rows_appended_after_the_halt_are_judged_with_its_blocking_ids(tmp_path):
+def test_rows_appended_after_the_halt_are_judged_with_its_blocking_ids(tmp_path: Path) -> None:
     rows = [{"id": i, "status": "open"} for i in ("T9", "R2", "R3", "R4", "R5")]
     rows.insert(0, {"id": "R1", "status": "met"})
     sizing = {"requirement_register": {"rows": rows}}
@@ -53,18 +54,18 @@ def test_rows_appended_after_the_halt_are_judged_with_its_blocking_ids(tmp_path)
     assert out["blocking"] == ["T9", "R2", "R3", "R4", "R5"]
 
 
-def test_met_and_waived_rows_are_not_rejudged(tmp_path):
+def test_met_and_waived_rows_are_not_rejudged(tmp_path: Path) -> None:
     sizing = {"requirement_register": {"rows": [
         {"id": "R1", "status": "met"}, {"id": "R2", "status": "open"}, {"id": "R3", "status": "waived"},
     ]}}
     assert _resume_ledger(sizing, _halt(["R2"]), tmp_path)["blocking"] == ["R2"]
 
 
-def test_empty_blocking_judges_every_rulable_row(tmp_path):
+def test_empty_blocking_judges_every_rulable_row(tmp_path: Path) -> None:
     assert _resume_ledger(SIZING, _halt([]), tmp_path)["blocking"] == ["R2", "R3"]
 
 
-def test_em_discharged_projects_text(tmp_path):
+def test_em_discharged_projects_text(tmp_path: Path) -> None:
     _sidecar(
         tmp_path,
         {
@@ -79,7 +80,7 @@ def test_em_discharged_projects_text(tmp_path):
     assert out[RESUME_LEDGER_EM_DISCHARGED_FIELD] == {"V1": "checked by hand"}
 
 
-def test_halt_sha_remaining_and_notes_ride_the_verdict_and_ruled_out_rows_carry_nothing(tmp_path):
+def test_halt_sha_remaining_and_notes_ride_the_verdict_and_ruled_out_rows_carry_nothing(tmp_path: Path) -> None:
     sizing = {"requirement_register": {"rows": [
         {"id": "R1", "status": "not_met"},
         {"id": "R2", "status": "deferred", "ruling": {"ref": "workflow.revise:run-1:out_of_scope"}},
@@ -100,9 +101,9 @@ def test_halt_sha_remaining_and_notes_ride_the_verdict_and_ruled_out_rows_carry_
     assert "R2" not in out["blocking"]
 
 
-def test_no_notes_file_gives_empty_notes(tmp_path):
+def test_no_notes_file_gives_empty_notes(tmp_path: Path) -> None:
     assert _resume_ledger(SIZING, _halt(["R2"]), tmp_path)[RESUME_LEDGER_NOTES_FIELD] == []
 
 
-def test_no_sidecar_gives_empty_discharges(tmp_path):
+def test_no_sidecar_gives_empty_discharges(tmp_path: Path) -> None:
     assert _resume_ledger(SIZING, _halt(["R2"]), tmp_path)[RESUME_LEDGER_EM_DISCHARGED_FIELD] == {}

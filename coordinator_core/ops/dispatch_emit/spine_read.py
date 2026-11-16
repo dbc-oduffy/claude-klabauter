@@ -1469,7 +1469,7 @@ def read_spine(
 
     if cleared_gate_owners:
 
-        def keep(g):
+        def keep(g) -> bool:
             return not (isinstance(g, dict) and g.get("owner_repo") in cleared_gate_owners)
 
         raw_rows = [

@@ -5,6 +5,7 @@ import pytest
 
 from coordinator_core.bash_guards import check_test_suite_invocation as guard
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -14,7 +15,7 @@ def _enveloped(check):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "pyproject.toml").write_text(
         "[tool.pytest.ini_options]\n"
         'testpaths = ["coordinator_core"]\n',
@@ -31,13 +32,13 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_classify_command_no_match_on_scoped_invocation(repo):
+def test_classify_command_no_match_on_scoped_invocation(repo) -> None:
     assert guard.classify_command(
         "pytest coordinator_core/frontmatter/tests/test_x.py", cwd=str(repo)
     ) == []
 
 
-def test_classify_command_single_match(repo):
+def test_classify_command_single_match(repo) -> None:
     matches = guard.classify_command("pytest", cwd=str(repo))
     assert len(matches) == 1
     m = matches[0]
@@ -49,7 +50,7 @@ def test_classify_command_single_match(repo):
     assert "Scope this" in m.remediation
 
 
-def test_classify_command_multi_segment_all_classified_not_short_circuited(repo):
+def test_classify_command_multi_segment_all_classified_not_short_circuited(repo) -> None:
     cmd = "pytest && npm test"
     matches = guard.classify_command(cmd, cwd=str(repo))
     detected = {m.detected for m in matches}
@@ -57,14 +58,14 @@ def test_classify_command_multi_segment_all_classified_not_short_circuited(repo)
     assert len(matches) == 2
 
 
-def test_classify_command_semicolon_and_pipe_segments(repo):
+def test_classify_command_semicolon_and_pipe_segments(repo) -> None:
     cmd = "pytest ; go test ./... | tee /tmp/log"
     matches = guard.classify_command(cmd, cwd=str(repo))
     detected = {m.detected for m in matches}
     assert detected == {"pytest", "go test ./..."}
 
 
-def test_classify_command_spans_point_at_matched_text(repo):
+def test_classify_command_spans_point_at_matched_text(repo) -> None:
     cmd = "cd /repo && pytest"
     matches = guard.classify_command(cmd, cwd=str(repo))
     assert len(matches) == 1
@@ -72,18 +73,18 @@ def test_classify_command_spans_point_at_matched_text(repo):
     assert cmd[start:end] == "pytest"
 
 
-def test_classify_command_quoted_semicolon_not_a_segment_boundary(repo):
+def test_classify_command_quoted_semicolon_not_a_segment_boundary(repo) -> None:
     cmd = 'git commit -m "note: never run pytest; pytest is important"'
     assert guard.classify_command(cmd, cwd=str(repo)) == []
 
 
-def test_classify_command_quoted_pipe_and_ampersand_not_segment_boundaries(repo):
+def test_classify_command_quoted_pipe_and_ampersand_not_segment_boundaries(repo) -> None:
     cmd = 'echo "a | pytest & pytest" && echo done'
     matches = guard.classify_command(cmd, cwd=str(repo))
     assert matches == []
 
 
-def test_classify_command_quoted_semicolon_preserves_real_match_span(repo):
+def test_classify_command_quoted_semicolon_preserves_real_match_span(repo) -> None:
     """A quoted separator earlier in the command must not shift the SPAN
     reported for a genuine match later in the same command -- spans are
     offsets into the ORIGINAL string, and a wrong split would desync them
@@ -95,7 +96,7 @@ def test_classify_command_quoted_semicolon_preserves_real_match_span(repo):
     assert cmd[start:end] == "pytest"
 
 
-def test_classify_command_tier_f_on_configured_fast_cmd(repo, monkeypatch):
+def test_classify_command_tier_f_on_configured_fast_cmd(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """A configured fast_test_cmd that is genuinely SCOPED (a real
     descendant of testpaths, not the testpaths root itself) classifies
     Tier F. Updated 2026-07-25 (R1 fix, cross-repo/inbox/2026-07-25-doe-
@@ -122,7 +123,7 @@ def test_classify_command_tier_f_on_configured_fast_cmd(repo, monkeypatch):
     assert "fast_test_cmd" in matches[0].remediation
 
 
-def test_classify_command_unscoped_fast_cmd_match_now_tier_u(repo, monkeypatch):
+def test_classify_command_unscoped_fast_cmd_match_now_tier_u(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         guard, "_configured_test_cmds",
         lambda root: [guard.ConfiguredCmd(
@@ -134,7 +135,7 @@ def test_classify_command_unscoped_fast_cmd_match_now_tier_u(repo, monkeypatch):
     assert matches[0].tier == "U"
 
 
-def test_classify_command_scoped_full_cmd_match_alone_is_tier_f(repo, monkeypatch):
+def test_classify_command_scoped_full_cmd_match_alone_is_tier_f(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     scoped_cmd = "pytest coordinator_core/frontmatter/tests"
     monkeypatch.setattr(
         guard, "_configured_test_cmds",
@@ -146,7 +147,7 @@ def test_classify_command_scoped_full_cmd_match_alone_is_tier_f(repo, monkeypatc
     assert "full_test_cmd" in matches[0].remediation
 
 
-def test_classify_command_unscoped_full_cmd_match_is_tier_u(repo, monkeypatch):
+def test_classify_command_unscoped_full_cmd_match_is_tier_u(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         guard, "_configured_test_cmds",
         lambda root: [guard.ConfiguredCmd(
@@ -160,8 +161,8 @@ def test_classify_command_unscoped_full_cmd_match_is_tier_u(repo, monkeypatch):
 
 @pytest.mark.parametrize("inert_cmd", ["true", "exit 3", "echo hello"])
 def test_classify_command_inert_full_cmd_match_is_tier_f_not_u(
-    repo, monkeypatch, inert_cmd
-):
+    repo, monkeypatch: pytest.MonkeyPatch, inert_cmd
+) -> None:
     """``_runner_recognized``'s ``False`` covers two structurally different
     commands, and the ``full_test_cmd`` leg's fail-closed Tier-U default was
     applied to both: the opaque wrapper whose breadth is unknowable (kept
@@ -192,8 +193,8 @@ def test_classify_command_inert_full_cmd_match_is_tier_f_not_u(
     ["bash scripts/run-tests.sh --tier fast", "bash run-suite.sh", "python dev.py test"],
 )
 def test_classify_command_opaque_wrapper_full_cmd_match_stays_tier_u(
-    repo, monkeypatch, wrapper_cmd
-):
+    repo, monkeypatch: pytest.MonkeyPatch, wrapper_cmd
+) -> None:
     monkeypatch.setattr(
         guard, "_configured_test_cmds",
         lambda root: [
@@ -205,13 +206,13 @@ def test_classify_command_opaque_wrapper_full_cmd_match_stays_tier_u(
     assert [m.tier for m in matches] == ["U"]
 
 
-def test_classify_command_tier_u_default_for_unrelated_suite_shape(repo):
+def test_classify_command_tier_u_default_for_unrelated_suite_shape(repo) -> None:
     matches = guard.classify_command("cargo test", cwd=str(repo))
     assert len(matches) == 1
     assert matches[0].tier == "U"
 
 
-def test_classify_command_prefers_tier_u_when_fast_and_full_coincide(repo, monkeypatch):
+def test_classify_command_prefers_tier_u_when_fast_and_full_coincide(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """When fast_test_cmd and full_test_cmd resolve to the identical string,
     the whole-suite invocation must classify Tier U, not Tier F.
     First-match-wins on insertion order would force Tier F here and silently
@@ -239,8 +240,8 @@ def test_classify_command_prefers_tier_u_when_fast_and_full_coincide(repo, monke
 
 
 def test_classify_command_identical_scoped_string_under_both_keys_now_classifies_tier_f(
-    repo, monkeypatch
-):
+    repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """RECONCILED 2026-07-30: this test formerly pinned an OBSERVED
     divergence from the ruling memo's own worked example
     (cross-repo/inbox/2026-07-25-coordinator-content-repo-em-validate-tier-u-shape-
@@ -276,12 +277,12 @@ def test_classify_command_identical_scoped_string_under_both_keys_now_classifies
     assert matches[0].tier == "F"
 
 
-def test_classify_command_empty_and_non_string_input(repo):
+def test_classify_command_empty_and_non_string_input(repo) -> None:
     assert guard.classify_command("", cwd=str(repo)) == []
     assert guard.classify_command(None, cwd=str(repo)) == []  # type: ignore[arg-type]
 
 
-def test_suite_match_as_dict(repo):
+def test_suite_match_as_dict(repo) -> None:
     m = guard.classify_command("pytest", cwd=str(repo))[0]
     d = m.as_dict()
     assert d["tier"] == "U"
@@ -290,12 +291,12 @@ def test_suite_match_as_dict(repo):
     assert d["position"] == "imperative"
 
 
-def test_classify_text_zero_match_prose(repo):
+def test_classify_text_zero_match_prose(repo) -> None:
     text = "This is a normal status update with no test commands in it at all."
     assert guard.classify_text(text, cwd=str(repo)) == []
 
 
-def test_classify_text_plain_prose_no_markdown_still_works(repo):
+def test_classify_text_plain_prose_no_markdown_still_works(repo) -> None:
     text = "Run pytest to check your work before you report back."
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
@@ -303,7 +304,7 @@ def test_classify_text_plain_prose_no_markdown_still_works(repo):
     assert matches[0].position == "imperative"
 
 
-def test_classify_text_single_match_in_fence(repo):
+def test_classify_text_single_match_in_fence(repo) -> None:
     text = "Run this:\n\n```\npytest\n```\n"
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
@@ -312,7 +313,7 @@ def test_classify_text_single_match_in_fence(repo):
     assert text[start:end] == "pytest"
 
 
-def test_classify_text_multi_match(repo):
+def test_classify_text_multi_match(repo) -> None:
     text = (
         "Wave 1: run `pytest` on your chunk.\n\n"
         "Wave 2, after that:\n```\nnpm test\n```\n"
@@ -322,28 +323,28 @@ def test_classify_text_multi_match(repo):
     assert detected == ["npm test", "pytest"]
 
 
-def test_position_inline_code(repo):
+def test_position_inline_code(repo) -> None:
     text = "For reference, our fast tier runs `pytest` under the hood."
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
     assert matches[0].position == "inline_code"
 
 
-def test_position_negated_inline(repo):
+def test_position_negated_inline(repo) -> None:
     text = "Do NOT run `pytest -v` from a dispatched chunk."
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
     assert matches[0].position == "negated"
 
 
-def test_position_negated_inline_preceding_line(repo):
+def test_position_negated_inline_preceding_line(repo) -> None:
     text = "Do not run this:\n`pytest`"
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
     assert matches[0].position == "negated"
 
 
-def test_position_imperative_inline_no_negation_anywhere(repo):
+def test_position_imperative_inline_no_negation_anywhere(repo) -> None:
     text = "For reference, our fast tier runs `pytest` under the hood."
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
@@ -351,34 +352,34 @@ def test_position_imperative_inline_no_negation_anywhere(repo):
 
 
 @pytest.mark.parametrize("prefix", ["NOT", "Not", "never", "NEVER", "don't", "DON'T", "do not"])
-def test_position_negated_verbless_prohibition_before_runner(repo, prefix):
+def test_position_negated_verbless_prohibition_before_runner(repo, prefix) -> None:
     text = f"Run the scoped tests only, {prefix} pnpm test."
     matches = guard.classify_text(text, cwd=str(repo))
     assert matches
     assert all(m.position == "negated" for m in matches)
 
 
-def test_position_negated_verbless_prohibition_after_runner_prose(repo):
+def test_position_negated_verbless_prohibition_after_runner_prose(repo) -> None:
     matches = guard.classify_text("run tests but NOT pytest", cwd=str(repo))
     assert matches
     assert all(m.position == "negated" for m in matches)
 
 
-def test_position_verbless_negation_does_not_swallow_ordinary_prose(repo):
+def test_position_verbless_negation_does_not_swallow_ordinary_prose(repo) -> None:
     text = "Do not go overboard.\nBefore you report back, run pytest across your changes."
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
     assert matches[0].position == "imperative"
 
 
-def test_position_negated_beats_fenced(repo):
+def test_position_negated_beats_fenced(repo) -> None:
     text = "Never run this:\n\n```\npytest -v\n```\n"
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
     assert matches[0].position == "negated"
 
 
-def test_position_imperative_bare_line(repo):
+def test_position_imperative_bare_line(repo) -> None:
     text = "Before you report back, run pytest across your changes."
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
@@ -386,7 +387,7 @@ def test_position_imperative_bare_line(repo):
     assert matches[0].detected == "pytest"
 
 
-def test_position_negated_bare_line_multi_line(repo):
+def test_position_negated_bare_line_multi_line(repo) -> None:
     """P1 regression: a negation marker on the PRECEDING line of plain prose
     (no backticks, no fence) must still flip the bare-line match to
     "negated" -- previously the bare-line pass's window was confined to the
@@ -397,21 +398,21 @@ def test_position_negated_bare_line_multi_line(repo):
     assert matches[0].position == "negated"
 
 
-def test_position_negated_bare_line_same_line(repo):
+def test_position_negated_bare_line_same_line(repo) -> None:
     text = "Do not run pytest against the whole suite from a chunk."
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
     assert matches[0].position == "negated"
 
 
-def test_position_imperative_bare_line_no_negation_anywhere(repo):
+def test_position_imperative_bare_line_no_negation_anywhere(repo) -> None:
     text = "Before you report back, run pytest across your changes."
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
     assert matches[0].position == "imperative"
 
 
-def test_position_imperative_bare_line_negation_too_far_above(repo):
+def test_position_imperative_bare_line_negation_too_far_above(repo) -> None:
     padding = "x" * 400
     text = f"Do not delete the config file.\n{padding}\nRun pytest across your changes."
     matches = guard.classify_text(text, cwd=str(repo))
@@ -419,14 +420,14 @@ def test_position_imperative_bare_line_negation_too_far_above(repo):
     assert matches[0].position == "imperative"
 
 
-def test_position_unknown_on_unterminated_fence(repo):
+def test_position_unknown_on_unterminated_fence(repo) -> None:
     text = "Truncated brief, fence never closes:\n\n```\npytest\nnpm test\n"
     matches = guard.classify_text(text, cwd=str(repo))
     assert matches, "expected the dangling-fence content to still be scanned"
     assert all(m.position == "unknown" for m in matches)
 
 
-def test_position_load_bearing_denylist_deletion_brief(repo):
+def test_position_load_bearing_denylist_deletion_brief(repo) -> None:
     text = (
         "Delete this deny-list from the agent body -- it is stale copy:\n\n"
         "```\n"
@@ -442,7 +443,7 @@ def test_position_load_bearing_denylist_deletion_brief(repo):
     assert all(m.position != "imperative" for m in matches)
 
 
-def test_classify_text_no_match_narrative_testpaths_mention(repo):
+def test_classify_text_no_match_narrative_testpaths_mention(repo) -> None:
     text = (
         "`coordinator/bin/tests` is in pytest `testpaths` and\n"
         '`python_files = ["test_*.py"]`, so hyphenated names are never '
@@ -451,12 +452,12 @@ def test_classify_text_no_match_narrative_testpaths_mention(repo):
     assert guard.classify_text(text, cwd=str(repo)) == []
 
 
-def test_classify_text_no_match_narrative_adjective_mention(repo):
+def test_classify_text_no_match_narrative_adjective_mention(repo) -> None:
     text = "# Task — re-port the loader as a pytest oracle"
     assert guard.classify_text(text, cwd=str(repo)) == []
 
 
-def test_classify_text_no_match_narrative_noun_phrase_mention(repo):
+def test_classify_text_no_match_narrative_noun_phrase_mention(repo) -> None:
     text = (
         "The gate can only accept a confirmation backed by a re-runnable "
         "pytest node id. So we need genuine standing coverage that pins "
@@ -465,7 +466,7 @@ def test_classify_text_no_match_narrative_noun_phrase_mention(repo):
     assert guard.classify_text(text, cwd=str(repo)) == []
 
 
-def test_classify_text_still_blocks_unscoped_run_instruction(repo):
+def test_classify_text_still_blocks_unscoped_run_instruction(repo) -> None:
     text = "Then run python3 -m pytest to check everything still works."
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
@@ -474,7 +475,7 @@ def test_classify_text_still_blocks_unscoped_run_instruction(repo):
     assert matches[0].position == "imperative"
 
 
-def test_classify_text_still_blocks_unscoped_verify_instruction(repo):
+def test_classify_text_still_blocks_unscoped_verify_instruction(repo) -> None:
     text = "Verify with pytest coordinator_core/ before reporting back."
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
@@ -482,7 +483,7 @@ def test_classify_text_still_blocks_unscoped_verify_instruction(repo):
     assert matches[0].position == "imperative"
 
 
-def test_bare_line_is_command_shaped_direct_cases():
+def test_bare_line_is_command_shaped_direct_cases() -> None:
     assert guard._bare_line_is_command_shaped("Run ") is True
     assert guard._bare_line_is_command_shaped("Before you report back, run ") is True
     assert guard._bare_line_is_command_shaped("then run python3 -m ") is True
@@ -496,7 +497,7 @@ def test_bare_line_is_command_shaped_direct_cases():
     ) is False
 
 
-def test_bare_line_is_command_shaped_interpreter_module_lead():
+def test_bare_line_is_command_shaped_interpreter_module_lead() -> None:
     assert guard._bare_line_is_command_shaped("python -m ") is True
     assert guard._bare_line_is_command_shaped("$ python3 -B -m ") is True
     assert guard._bare_line_is_command_shaped("2. py -3.11 -m ") is True
@@ -505,13 +506,13 @@ def test_bare_line_is_command_shaped_interpreter_module_lead():
     assert guard._bare_line_is_command_shaped("python ") is False
 
 
-def test_classify_text_bare_python_m_pytest_line_is_imperative(repo):
+def test_classify_text_bare_python_m_pytest_line_is_imperative(repo) -> None:
     matches = guard.classify_text("python -m pytest\n", cwd=str(repo))
     assert len(matches) == 1
     assert matches[0].position == "imperative"
 
 
-def test_bare_line_is_command_shaped_colon_headed_cue(repo):
+def test_bare_line_is_command_shaped_colon_headed_cue(repo) -> None:
     assert guard._bare_line_is_command_shaped("Run: ") is True
     assert guard._bare_line_is_command_shaped("Verify: ") is True
     assert guard._bare_line_is_command_shaped("Command: ") is False
@@ -520,56 +521,56 @@ def test_bare_line_is_command_shaped_colon_headed_cue(repo):
     assert matches[0].position == "imperative"
 
 
-def test_bare_line_is_command_shaped_broadened_cue_vocabulary():
+def test_bare_line_is_command_shaped_broadened_cue_vocabulary() -> None:
     assert guard._bare_line_is_command_shaped("please ") is True
     assert guard._bare_line_is_command_shaped("just do ") is True
     assert guard._bare_line_is_command_shaped("kick off ") is True
     assert guard._bare_line_is_command_shaped("start ") is True
 
 
-def test_bare_line_is_command_shaped_lettered_list_marker():
+def test_bare_line_is_command_shaped_lettered_list_marker() -> None:
     assert guard._bare_line_is_command_shaped("a. ") is True
     assert guard._bare_line_is_command_shaped("b) ") is True
     assert guard._bare_line_is_command_shaped("Reference ") is False
 
 
-def test_bare_line_is_command_shaped_markdown_markers_not_command():
+def test_bare_line_is_command_shaped_markdown_markers_not_command() -> None:
     assert guard._bare_line_is_command_shaped("# ") is False
     assert guard._bare_line_is_command_shaped("> ") is False
 
 
-def test_classify_text_no_match_bare_markdown_heading_names_runner(repo):
+def test_classify_text_no_match_bare_markdown_heading_names_runner(repo) -> None:
     text = "# pytest configuration notes"
     assert guard.classify_text(text, cwd=str(repo)) == []
 
 
-def test_classify_text_no_match_bare_blockquote_names_runner(repo):
+def test_classify_text_no_match_bare_blockquote_names_runner(repo) -> None:
     text = "> pytest already covers this."
     assert guard.classify_text(text, cwd=str(repo)) == []
 
 
-def test_classify_text_still_blocks_colon_headed_instruction(repo):
+def test_classify_text_still_blocks_colon_headed_instruction(repo) -> None:
     text = "Verify: pytest coordinator_core/ before reporting back."
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
     assert matches[0].position == "imperative"
 
 
-def test_classify_text_still_blocks_non_closed_set_imperative(repo):
+def test_classify_text_still_blocks_non_closed_set_imperative(repo) -> None:
     text = "Please pytest the whole tree before you report back."
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
     assert matches[0].position == "imperative"
 
 
-def test_classify_text_still_blocks_lettered_list_command(repo):
+def test_classify_text_still_blocks_lettered_list_command(repo) -> None:
     text = "a. Scope your tests.\nb. pytest\nc. Report back."
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
     assert matches[0].position == "imperative"
 
 
-def test_bare_line_is_command_shaped_cue_not_scoped_across_clause():
+def test_bare_line_is_command_shaped_cue_not_scoped_across_clause() -> None:
     """Direct unit pin for defect A's root cause: a ``run`` cue that belongs
     to an EARLIER clause/sentence (itself part of a prohibition) must not
     license a runner mention in a LATER, unrelated clause on the same
@@ -581,7 +582,7 @@ def test_bare_line_is_command_shaped_cue_not_scoped_across_clause():
     assert guard._bare_line_is_command_shaped(prefix) is False
 
 
-def test_classify_text_no_match_imperative_cue_in_earlier_unrelated_clause(repo):
+def test_classify_text_no_match_imperative_cue_in_earlier_unrelated_clause(repo) -> None:
     text = (
         "Neither consumer may run the test tier or block the ceremony. "
         "A start ceremony that invokes pytest is a several-minute stall on "
@@ -590,26 +591,26 @@ def test_classify_text_no_match_imperative_cue_in_earlier_unrelated_clause(repo)
     assert guard.classify_text(text, cwd=str(repo)) == []
 
 
-def test_classify_command_make_test_matches(repo):
+def test_classify_command_make_test_matches(repo) -> None:
     matches = guard.classify_command("make test", cwd=str(repo))
     assert len(matches) == 1
     assert matches[0].detected == "make test"
     assert matches[0].tier == "U"
 
 
-def test_classify_command_make_parallel_flag_test_matches(repo):
+def test_classify_command_make_parallel_flag_test_matches(repo) -> None:
     matches = guard.classify_command("make -j4 test", cwd=str(repo))
     assert len(matches) == 1
     assert matches[0].detected == "make test"
 
 
-def test_classify_command_make_assignment_check_matches(repo):
+def test_classify_command_make_assignment_check_matches(repo) -> None:
     matches = guard.classify_command("make CC=gcc check", cwd=str(repo))
     assert len(matches) == 1
     assert matches[0].detected == "make check"
 
 
-def test_classify_text_still_blocks_make_test_instruction(repo):
+def test_classify_text_still_blocks_make_test_instruction(repo) -> None:
     text = "Run make test before reporting back."
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
@@ -617,20 +618,20 @@ def test_classify_text_still_blocks_make_test_instruction(repo):
     assert matches[0].tier == "U"
 
 
-def test_classify_command_make_ordinary_verb_usage_no_match(repo):
+def test_classify_command_make_ordinary_verb_usage_no_match(repo) -> None:
     assert guard.classify_command(
         "make the exemplar useless: something about which branch the test covers.",
         cwd=str(repo),
     ) == []
 
 
-def test_classify_command_make_change_and_add_a_test_no_match(repo):
+def test_classify_command_make_change_and_add_a_test_no_match(repo) -> None:
     assert guard.classify_command(
         "make the change and add a test.", cwd=str(repo)
     ) == []
 
 
-def test_classify_make_direct_adjacency_unit_cases():
+def test_classify_make_direct_adjacency_unit_cases() -> None:
     assert guard._classify_make(["test"]) == "make test"
     assert guard._classify_make(["-j4", "test"]) == "make test"
     assert guard._classify_make(["CC=gcc", "check"]) == "make check"
@@ -646,22 +647,22 @@ def test_classify_make_direct_adjacency_unit_cases():
 # dispatch was itself blocked by the defect on its first attempt.
 # ---------------------------------------------------------------------------
 
-def test_bare_line_is_command_shaped_do_not_non_run_verb_no_match():
+def test_bare_line_is_command_shaped_do_not_non_run_verb_no_match() -> None:
     prefix = "do not weaken the guard to "
     assert guard._bare_line_is_command_shaped(prefix) is False
 
 
-def test_classify_text_no_match_do_not_weaken_guard_repro(repo):
+def test_classify_text_no_match_do_not_weaken_guard_repro(repo) -> None:
     text = "do not weaken the guard to make tests pass"
     assert guard.classify_text(text, cwd=str(repo)) == []
 
 
-def test_bare_line_is_command_shaped_do_not_run_still_matches():
+def test_bare_line_is_command_shaped_do_not_run_still_matches() -> None:
     prefix = "do not run "
     assert guard._bare_line_is_command_shaped(prefix) is True
 
 
-def test_classify_text_still_blocks_do_pytest_instruction(repo):
+def test_classify_text_still_blocks_do_pytest_instruction(repo) -> None:
     text = "please do pytest the whole tree"
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
@@ -670,7 +671,7 @@ def test_classify_text_still_blocks_do_pytest_instruction(repo):
     assert guard._classify_make(["the", "change", "and", "add", "a", "test"]) is None
 
 
-def test_classify_text_pipe_delimited_prose_enum_not_shredded_into_bare_runner(repo):
+def test_classify_text_pipe_delimited_prose_enum_not_shredded_into_bare_runner(repo) -> None:
     text = (
         "The dispatch brief pins a contract enum "
         "`runner: pytest | node-test | bats | unknown` for this wave."
@@ -678,7 +679,7 @@ def test_classify_text_pipe_delimited_prose_enum_not_shredded_into_bare_runner(r
     assert guard.classify_text(text, cwd=str(repo)) == []
 
 
-def test_classify_text_tier_f_vs_u(repo, monkeypatch):
+def test_classify_text_tier_f_vs_u(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     scoped_cmd = "pytest coordinator_core/frontmatter/tests/test_x.py"
     monkeypatch.setattr(
         guard, "_configured_test_cmds",
@@ -694,19 +695,19 @@ def test_classify_text_tier_f_vs_u(repo, monkeypatch):
     assert by_span_text[scoped_cmd] == "F"
 
 
-def test_classify_text_undeterminable_defaults_to_tier_u(repo, monkeypatch):
+def test_classify_text_undeterminable_defaults_to_tier_u(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "_configured_test_cmds", lambda root: [])
     matches = guard.classify_text("`pytest`", cwd=str(repo))
     assert len(matches) == 1
     assert matches[0].tier == "U"
 
 
-def test_classify_text_scoped_invocation_no_match(repo):
+def test_classify_text_scoped_invocation_no_match(repo) -> None:
     text = "Run `pytest coordinator_core/frontmatter/tests/test_x.py` for your chunk."
     assert guard.classify_text(text, cwd=str(repo)) == []
 
 
-def test_classify_command_scoped_node_id_no_match(repo):
+def test_classify_command_scoped_node_id_no_match(repo) -> None:
     assert guard.classify_command(
         "pytest coordinator_core/frontmatter/tests/test_x.py::test_case", cwd=str(repo)
     ) == []
@@ -724,7 +725,7 @@ def _payload(command, cwd, agent_id=None):
     return p
 
 
-def test_check_still_allows_scoped_subagent_command(repo, monkeypatch):
+def test_check_still_allows_scoped_subagent_command(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """Since the Tier-T CONCURRENCY leg (0.5) this is an ALLOW carrying a
     slot-wrapper rewrite rather than a bare None. The property under test --
     a dispatched caller's scoped run is permitted -- is unchanged; only the
@@ -740,7 +741,7 @@ def test_check_still_allows_scoped_subagent_command(repo, monkeypatch):
         )
 
 
-def test_check_still_denies_unscoped_subagent_command(repo, monkeypatch):
+def test_check_still_denies_unscoped_subagent_command(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "_mutex_holder", lambda: None)
     out = _enveloped(guard.check)(_payload("pytest", repo, agent_id="a0123456789abcdef"))
     assert out is not None
@@ -766,7 +767,7 @@ def test_check_still_denies_unscoped_subagent_command(repo, monkeypatch):
 # consumer (DoE's block-dispatch-suite-invocation.py) has nothing to see.
 # ---------------------------------------------------------------------------
 
-def test_classify_text_no_match_re_verify_settled_claims_repro(repo):
+def test_classify_text_no_match_re_verify_settled_claims_repro(repo) -> None:
     text = (
         "Do NOT re-verify claims your prior pass already confirmed clean "
         "(769 lines, grep→0, apply_base's 4 consumers, the pytest "
@@ -775,7 +776,7 @@ def test_classify_text_no_match_re_verify_settled_claims_repro(repo):
     assert guard.classify_text(text, cwd=str(repo)) == []
 
 
-def test_bare_line_is_command_shaped_re_verify_prefix_not_command_shaped():
+def test_bare_line_is_command_shaped_re_verify_prefix_not_command_shaped() -> None:
     prefix = (
         "Do NOT re-verify claims your prior pass already confirmed clean "
         "(769 lines, grep→0, apply_base's 4 consumers, the "
@@ -783,17 +784,17 @@ def test_bare_line_is_command_shaped_re_verify_prefix_not_command_shaped():
     assert guard._bare_line_is_command_shaped(prefix) is False
 
 
-def test_imperative_cue_re_does_not_match_re_verify():
+def test_imperative_cue_re_does_not_match_re_verify() -> None:
     assert guard._IMPERATIVE_CUE_RE.search("re-verify") is None
     assert guard._IMPERATIVE_CUE_RE.search("re-verifying") is None
 
 
-def test_classify_text_no_match_re_verify_short_form(repo):
+def test_classify_text_no_match_re_verify_short_form(repo) -> None:
     text = "Do not re-verify the pytest result, it is already settled."
     assert guard.classify_text(text, cwd=str(repo)) == []
 
 
-def test_classify_text_still_blocks_bare_pytest_instruction(repo):
+def test_classify_text_still_blocks_bare_pytest_instruction(repo) -> None:
     text = "Once your change lands, run pytest to confirm nothing broke."
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
@@ -802,7 +803,7 @@ def test_classify_text_still_blocks_bare_pytest_instruction(repo):
     assert matches[0].position == "imperative"
 
 
-def test_classify_text_still_blocks_python_module_pytest_instruction(repo):
+def test_classify_text_still_blocks_python_module_pytest_instruction(repo) -> None:
     text = "Please run python -m pytest coordinator_core/ before you report back."
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
@@ -810,7 +811,7 @@ def test_classify_text_still_blocks_python_module_pytest_instruction(repo):
     assert matches[0].position == "imperative"
 
 
-def test_classify_text_still_blocks_npm_test_instruction(repo):
+def test_classify_text_still_blocks_npm_test_instruction(repo) -> None:
     text = "Kick off npm test once the build finishes."
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
@@ -819,7 +820,7 @@ def test_classify_text_still_blocks_npm_test_instruction(repo):
     assert matches[0].position == "imperative"
 
 
-def test_classify_text_still_blocks_fenced_multiline_suite_command(repo):
+def test_classify_text_still_blocks_fenced_multiline_suite_command(repo) -> None:
     text = (
         "Run this before you report back:\n\n"
         "```\n"
@@ -834,7 +835,7 @@ def test_classify_text_still_blocks_fenced_multiline_suite_command(repo):
     assert pytest_matches[0].position == "fenced_code"
 
 
-def test_classify_text_still_blocks_re_run_pytest_instruction(repo):
+def test_classify_text_still_blocks_re_run_pytest_instruction(repo) -> None:
     text = "Please re-run pytest to confirm the flake is gone."
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
@@ -843,7 +844,7 @@ def test_classify_text_still_blocks_re_run_pytest_instruction(repo):
     assert matches[0].position == "imperative"
 
 
-def test_classify_text_negation_on_preceding_line_still_flips_position(repo):
+def test_classify_text_negation_on_preceding_line_still_flips_position(repo) -> None:
     text = "Do not run this:\npytest -v"
     matches = guard.classify_text(text, cwd=str(repo))
     assert len(matches) == 1
@@ -865,7 +866,7 @@ def test_classify_text_negation_on_preceding_line_still_flips_position(repo):
 # has ``position == "imperative"``, so this false positive blocked
 # legitimate Agent dispatches.
 
-def test_classify_text_reported_speech_field_report_repro(repo):
+def test_classify_text_reported_speech_field_report_repro(repo) -> None:
     text = "They stated plainly they could not run pytest to confirm."
     matches = guard.classify_text(text, cwd=str(repo))
     assert matches, "expected the reported-speech pytest mention to still be a match"
@@ -888,7 +889,7 @@ def test_classify_text_reported_speech_field_report_repro(repo):
     "The team have not run pytest since the rename.",
     "They never ran `pytest` against that branch.",
 ])
-def test_classify_text_reported_modal_capability_negation_variants(repo, phrase):
+def test_classify_text_reported_modal_capability_negation_variants(repo, phrase) -> None:
     matches = guard.classify_text(phrase, cwd=str(repo))
     assert matches, f"expected a pytest match in: {phrase!r}"
     assert all(m.position == "reported" for m in matches), phrase
@@ -901,13 +902,13 @@ def test_classify_text_reported_modal_capability_negation_variants(repo, phrase)
     "The QA lead noted that `pytest` never ran in CI.",
     "Reported that `pytest` never ran during the outage.",
 ])
-def test_classify_text_reported_speech_framing_variants(repo, phrase):
+def test_classify_text_reported_speech_framing_variants(repo, phrase) -> None:
     matches = guard.classify_text(phrase, cwd=str(repo))
     assert matches, f"expected a pytest match in: {phrase!r}"
     assert all(m.position == "reported" for m in matches), phrase
 
 
-def test_classify_text_reported_speech_precedence_negated_wins(repo):
+def test_classify_text_reported_speech_precedence_negated_wins(repo) -> None:
     """If ``_NEGATION_RE`` ALSO matches (e.g. "never run", already a
     recognized negation marker), existing "negated" behavior wins -- the new
     "reported" value must never override an already-correct classification."""
@@ -917,7 +918,7 @@ def test_classify_text_reported_speech_precedence_negated_wins(repo):
     assert matches[0].position == "negated"
 
 
-def test_classify_text_reported_speech_does_not_suppress_later_imperative(repo):
+def test_classify_text_reported_speech_does_not_suppress_later_imperative(repo) -> None:
     """NON-NEGOTIABLE recall guard: a reported-speech cue in an earlier,
     unrelated clause must NOT bleed forward and suppress a genuinely
     imperative command later in the same text. This is the exact shape
@@ -948,7 +949,7 @@ def test_classify_text_reported_speech_does_not_suppress_later_imperative(repo):
                for m in matches if m.span[0] >= second_command_start)
 
 
-def test_classify_text_reported_speech_later_imperative_still_denies(repo):
+def test_classify_text_reported_speech_later_imperative_still_denies(repo) -> None:
     """The recall guard above, pinned at the position value the deny gate
     actually reads. Its backticked instruction classifies "inline_code",
     which never satisfies the consumer's ``position == "imperative"`` gate
@@ -963,7 +964,7 @@ def test_classify_text_reported_speech_later_imperative_still_denies(repo):
     assert positions == ["reported", "imperative"]
 
 
-def test_classify_text_reported_speech_true_positives_still_block(repo):
+def test_classify_text_reported_speech_true_positives_still_block(repo) -> None:
     cases = [
         "Run pytest across your changes.",
         "Run python -m pytest across your changes.",
@@ -981,7 +982,7 @@ def test_classify_text_reported_speech_true_positives_still_block(repo):
     assert all(m.position == "fenced_code" for m in fenced_matches)
 
 
-def test_classify_text_reported_speech_word_boundary_hyphen_compound_no_false_positive(repo):
+def test_classify_text_reported_speech_word_boundary_hyphen_compound_no_false_positive(repo) -> None:
     """Word-boundary discipline: a new reported-speech cue token embedded in
     an unrelated hyphenated compound word must NOT fire, and must NOT
     suppress a genuinely imperative command later in the same clause. Repo
@@ -1049,7 +1050,7 @@ _CLAUSE_HEAD_CASES = [
 
 
 @pytest.mark.parametrize("clause,expected", _CLAUSE_HEAD_CASES)
-def test_cue_is_clause_head_direct_cases(clause, expected):
+def test_cue_is_clause_head_direct_cases(clause, expected) -> None:
     assert guard._cue_is_clause_head(clause) is expected, clause
 
 
@@ -1066,14 +1067,14 @@ _FALSE_POSITIVE_DENIAL_REPROS = [
 @pytest.mark.parametrize("text", _FALSE_POSITIVE_DENIAL_REPROS)
 def test_classify_text_subject_modal_or_copula_governed_mention_is_descriptive(
     text, repo,
-):
+) -> None:
     matches = guard.classify_text(text, cwd=str(repo))
     assert matches, f"expected a match to still be returned for: {text!r}"
     assert all(m.position == "descriptive" for m in matches), text
     assert all(m.position != "imperative" for m in matches), text
 
 
-def test_classify_text_modal_capability_negation_still_reported_not_descriptive(repo):
+def test_classify_text_modal_capability_negation_still_reported_not_descriptive(repo) -> None:
     """A modal-capability-negation shape ("could not run") is caught by the
     PRE-EXISTING ``_REPORTED_SPEECH_RE`` relabeling before the new
     structural check ever runs -- reported-speech precedence (already pinned
@@ -1097,7 +1098,7 @@ _TRUE_POSITIVE_CLAUSE_HEAD_SHAPES = [
 
 
 @pytest.mark.parametrize("text", _TRUE_POSITIVE_CLAUSE_HEAD_SHAPES)
-def test_classify_text_clause_head_shapes_still_imperative(text, repo):
+def test_classify_text_clause_head_shapes_still_imperative(text, repo) -> None:
     matches = guard.classify_text(text, cwd=str(repo))
     assert matches, f"expected a match for: {text!r}"
     assert any(m.position == "imperative" for m in matches), text
@@ -1115,7 +1116,7 @@ _SENTENCE_FINAL_PUNCTUATION_RECALL = [
 
 
 @pytest.mark.parametrize("text", _SENTENCE_FINAL_PUNCTUATION_RECALL)
-def test_classify_text_still_blocks_across_sentence_final_punctuation(repo, text):
+def test_classify_text_still_blocks_across_sentence_final_punctuation(repo, text) -> None:
     matches = guard.classify_text(text, cwd=str(repo))
     assert matches, f"expected a match for: {text!r}"
     assert any(m.position == "imperative" for m in matches), text
@@ -1125,12 +1126,12 @@ def test_classify_text_still_blocks_across_sentence_final_punctuation(repo, text
     "run pytest tests/test_foo.py.",
     "run pytest tests/test_foo.py::test_bar.",
 ])
-def test_sentence_punctuation_strip_preserves_path_scoping(repo, text):
+def test_sentence_punctuation_strip_preserves_path_scoping(repo, text) -> None:
     matches = guard.classify_text(text, cwd=str(repo))
     assert not matches, f"scoped invocation should not be reported: {text!r}"
 
 
-def test_sentence_punctuation_strip_preserves_span_offsets(repo):
+def test_sentence_punctuation_strip_preserves_span_offsets(repo) -> None:
     """The normalization replaces rather than deletes, because every reported
     span is an offset into the ORIGINAL text -- a length-changing strip would
     slide every subsequent match off its real position."""
@@ -1165,7 +1166,7 @@ def test_sentence_punctuation_strip_preserves_span_offsets(repo):
     "we run it as a pytest oracle",
     "you can run that, backed by a re-runnable pytest node id",
 ])
-def test_prose_negative_gate_survives_a_clause_initial_cue(repo, text):
+def test_prose_negative_gate_survives_a_clause_initial_cue(repo, text) -> None:
     matches = guard.classify_text(text, cwd=str(repo))
     assert all(m.position != "imperative" for m in matches), (
         f"{text!r} classified imperative -- _PROSE_NEGATIVE_RE regressed"
@@ -1183,7 +1184,7 @@ def test_prose_negative_gate_survives_a_clause_initial_cue(repo, text):
 # soft-wrapped line.
 # ---------------------------------------------------------------------------
 
-def test_classify_text_reported_speech_survives_line_break_before_cue(repo):
+def test_classify_text_reported_speech_survives_line_break_before_cue(repo) -> None:
     text = (
         "They said they could not\n"
         "run pytest to confirm the regression is fixed."
@@ -1194,7 +1195,7 @@ def test_classify_text_reported_speech_survives_line_break_before_cue(repo):
     assert all(m.position != "imperative" for m in matches)
 
 
-def test_position_imperative_bare_line_negation_too_far_above_still_holds(repo):
+def test_position_imperative_bare_line_negation_too_far_above_still_holds(repo) -> None:
     """Re-pin the fixture the ``\\n`` boundary was originally added to fix,
     now that the boundary lives in ``_cue_is_clause_head`` instead of the
     shared ``_CLAUSE_BOUNDARY_RE``: 400 characters of unrelated padding on a
@@ -1207,7 +1208,7 @@ def test_position_imperative_bare_line_negation_too_far_above_still_holds(repo):
     assert matches[0].position == "imperative"
 
 
-def test_strip_sentence_punctuation_preserves_quoted_internal_punctuation(repo):
+def test_strip_sentence_punctuation_preserves_quoted_internal_punctuation(repo) -> None:
     text = "run pytest -m 'not slow: fast'."
     matches = guard.classify_text(text, cwd=str(repo))
     assert matches, "expected a match"
@@ -1229,7 +1230,7 @@ def test_strip_sentence_punctuation_preserves_quoted_internal_punctuation(repo):
 # exists to eliminate. Do NOT "fix" this by stripping fronted adverbials.
 # ---------------------------------------------------------------------------
 
-def test_position_fronted_adverbial_without_comma_stays_descriptive_deliberate_gap(repo):
+def test_position_fronted_adverbial_without_comma_stays_descriptive_deliberate_gap(repo) -> None:
     text = "After merging your change run pytest to confirm."
     matches = guard.classify_text(text, cwd=str(repo))
     assert matches, "expected the pytest mention to still be a match"
@@ -1243,7 +1244,7 @@ def precision_repo(repo):
     return repo
 
 
-def test_classify_command_precision_directory_scoped_pytest_one_match(precision_repo):
+def test_classify_command_precision_directory_scoped_pytest_one_match(precision_repo) -> None:
     matches = guard.classify_command_precision(
         "pytest coordinator_core/frontmatter/tests/sub", cwd=str(precision_repo)
     )
@@ -1254,21 +1255,21 @@ def test_classify_command_precision_directory_scoped_pytest_one_match(precision_
     assert m.position == "imperative"
 
 
-def test_classify_command_precision_node_id_scoped_no_match(precision_repo):
+def test_classify_command_precision_node_id_scoped_no_match(precision_repo) -> None:
     assert guard.classify_command_precision(
         "pytest coordinator_core/frontmatter/tests/sub/test_x.py::test_case",
         cwd=str(precision_repo),
     ) == []
 
 
-def test_classify_command_precision_file_scoped_no_match(precision_repo):
+def test_classify_command_precision_file_scoped_no_match(precision_repo) -> None:
     assert guard.classify_command_precision(
         "pytest coordinator_core/frontmatter/tests/sub/test_x.py",
         cwd=str(precision_repo),
     ) == []
 
 
-def test_classify_command_precision_suite_shaped_is_not_this_apis_business(precision_repo):
+def test_classify_command_precision_suite_shaped_is_not_this_apis_business(precision_repo) -> None:
     assert guard.classify_command(
         "pytest coordinator_core/", cwd=str(precision_repo)
     ) != []
@@ -1277,19 +1278,19 @@ def test_classify_command_precision_suite_shaped_is_not_this_apis_business(preci
     ) == []
 
 
-def test_classify_command_precision_no_cwd_fails_open(precision_repo):
+def test_classify_command_precision_no_cwd_fails_open(precision_repo) -> None:
     assert guard.classify_command_precision(
         "pytest coordinator_core/frontmatter/tests/sub"
     ) == []
 
 
-def test_classify_text_precision_no_cwd_bare_word_and_file_still_no_match():
+def test_classify_text_precision_no_cwd_bare_word_and_file_still_no_match() -> None:
     assert guard.classify_text_precision("Run pytest across the whole tree.") == []
     assert guard.classify_text_precision("Run pytest tests/test_x.py to confirm.") == []
     assert guard.classify_text_precision("Run pytest tests/test_x.py::test_a.") == []
 
 
-def test_classify_text_precision_prose_slash_alternation_no_match():
+def test_classify_text_precision_prose_slash_alternation_no_match() -> None:
     assert guard.classify_text_precision("Run pytest and/or unittest here.") == []
     assert guard.classify_text_precision("pytest either/or unittest") == []
     assert guard.classify_text_precision("Run pytest coordinator/tests/ here.") != []
@@ -1303,7 +1304,7 @@ _MEMO_FORMS = [
 
 @pytest.mark.parametrize("form", _MEMO_FORMS)
 @pytest.mark.parametrize("use_cwd", [False, True])
-def test_classify_text_precision_memo_forms_match(form, use_cwd, precision_repo):
+def test_classify_text_precision_memo_forms_match(form, use_cwd, precision_repo) -> None:
     cwd = str(precision_repo) if use_cwd else None
     matches = guard.classify_text_precision(form, cwd=cwd)
     assert matches
@@ -1313,18 +1314,18 @@ def test_classify_text_precision_memo_forms_match(form, use_cwd, precision_repo)
 
 @pytest.mark.parametrize("form", _MEMO_FORMS)
 @pytest.mark.parametrize("use_cwd", [False, True])
-def test_precision_deny_envelope_fires_on_memo_forms(form, use_cwd, tmp_path):
+def test_precision_deny_envelope_fires_on_memo_forms(form, use_cwd, tmp_path: Path) -> None:
     from coordinator_core.hooks import block_dispatch_suite_invocation as hook
 
     cwd = str(tmp_path) if use_cwd else None
     assert hook._precision_deny_envelope(f"Run:\n{form}\n", cwd) is not None
 
 
-def test_classify_command_precision_no_cwd_directory_shaped_still_fails_open():
+def test_classify_command_precision_no_cwd_directory_shaped_still_fails_open() -> None:
     assert guard.classify_command_precision("pytest coordinator/tests/") == []
 
 
-def test_classify_text_precision_fenced_directory_scoped_pytest(precision_repo):
+def test_classify_text_precision_fenced_directory_scoped_pytest(precision_repo) -> None:
     text = (
         "Run this:\n"
         "```\n"
@@ -1339,32 +1340,32 @@ def test_classify_text_precision_fenced_directory_scoped_pytest(precision_repo):
     assert text[start:end] == "pytest coordinator_core/frontmatter/tests/sub"
 
 
-def test_classify_text_precision_negated_mention_still_classified(precision_repo):
+def test_classify_text_precision_negated_mention_still_classified(precision_repo) -> None:
     text = "Do not run `pytest coordinator_core/frontmatter/tests/sub` yourself."
     matches = guard.classify_text_precision(text, cwd=str(precision_repo))
     assert len(matches) == 1
     assert matches[0].position == "negated"
 
 
-def test_classify_text_precision_descriptive_mention_still_classified(precision_repo):
+def test_classify_text_precision_descriptive_mention_still_classified(precision_repo) -> None:
     text = "Peer sessions run pytest coordinator_core/frontmatter/tests/sub on a shared worktree."
     matches = guard.classify_text_precision(text, cwd=str(precision_repo))
     assert len(matches) == 1
     assert matches[0].position == "descriptive"
 
 
-def test_classify_text_precision_suite_shaped_no_match(precision_repo):
+def test_classify_text_precision_suite_shaped_no_match(precision_repo) -> None:
     text = "Run pytest across the whole tree to confirm nothing regressed."
     assert guard.classify_text(text, cwd=str(precision_repo)) != []
     assert guard.classify_text_precision(text, cwd=str(precision_repo)) == []
 
 
-def test_classify_text_precision_node_id_no_match(precision_repo):
+def test_classify_text_precision_node_id_no_match(precision_repo) -> None:
     text = "Run `pytest coordinator_core/frontmatter/tests/sub/test_x.py::test_case` to confirm."
     assert guard.classify_text_precision(text, cwd=str(precision_repo)) == []
 
 
-def test_precision_match_as_dict_shape(precision_repo):
+def test_precision_match_as_dict_shape(precision_repo) -> None:
     matches = guard.classify_command_precision(
         "pytest coordinator_core/frontmatter/tests/sub", cwd=str(precision_repo)
     )

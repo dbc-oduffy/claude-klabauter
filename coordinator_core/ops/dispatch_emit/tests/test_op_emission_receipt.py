@@ -216,15 +216,14 @@ def test_emit_succeeds_with_the_same_verdict_when_the_receipt_cannot_be_written(
 
 
 def test_a_monkeypatched_receipt_failure_never_fails_the_emit(tmp_path, capsys):
-    def _explode(script_path):
+    def _explode(receipt_path, data):
         raise OSError("simulated digest failure")
 
     plan_path = _write_fixture_plan(tmp_path)
     output_path = tmp_path / "emitted.mjs"
 
     with pytest.MonkeyPatch.context() as mp:
-        mp.setattr(op_module, "_script_sha256", _explode)
-        mp.setattr(emission_receipt_module, "_script_sha256", _explode)
+        mp.setattr(emission_receipt_module, "atomic_write_bytes", _explode)
         result = _dispatch_emit(
             {"plan_path": str(plan_path), "output_path": str(output_path)}
         )

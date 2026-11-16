@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 import pytest
+from pathlib import Path
 
 _LIB = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lib")
 if _LIB not in sys.path:
@@ -18,7 +19,7 @@ RELPATH = "deep-research/notebooklm/stub.py"
 
 
 @pytest.fixture
-def tree(tmp_path, monkeypatch):
+def tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "pipelines"
     (root / "deep-research" / "notebooklm").mkdir(parents=True)
     monkeypatch.setattr(coordinator_data_root, "data_root", lambda _n: root)
@@ -32,7 +33,7 @@ def _write_stub(root, code):
     return stub
 
 
-def test_runs_stub_with_argv_and_propagates_exit_code(tree, monkeypatch):
+def test_runs_stub_with_argv_and_propagates_exit_code(tree, monkeypatch: pytest.MonkeyPatch) -> None:
     stub = _write_stub(
         tree,
         "import sys\nprint('ARGV', sys.argv[0], *sys.argv[1:])\nsys.exit(7)\n",
@@ -44,7 +45,7 @@ def test_runs_stub_with_argv_and_propagates_exit_code(tree, monkeypatch):
     assert sys.argv[0] == str(stub.resolve())
 
 
-def test_stub_stdout_reaches_caller(tree, monkeypatch, capsys):
+def test_stub_stdout_reaches_caller(tree, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _write_stub(tree, "print('{\"ok\": true}')\n")
     monkeypatch.setattr(sys, "argv", ["nlm-x"])
     with pytest.raises(SystemExit) as exc:
@@ -54,7 +55,7 @@ def test_stub_stdout_reaches_caller(tree, monkeypatch, capsys):
 
 
 @pytest.mark.parametrize("flag", ["--help", "-h"])
-def test_help_answers_locally_without_resolving(flag, monkeypatch, capsys):
+def test_help_answers_locally_without_resolving(flag, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     def boom(_n):
         raise AssertionError("resolved the root on --help")
 
@@ -67,7 +68,7 @@ def test_help_answers_locally_without_resolving(flag, monkeypatch, capsys):
     assert "nlm-x" in out and RELPATH in out
 
 
-def test_unresolvable_root_exits_127_one_line(monkeypatch, capsys):
+def test_unresolvable_root_exits_127_one_line(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     def fail(_n):
         raise RuntimeError("no root")
 
@@ -80,7 +81,7 @@ def test_unresolvable_root_exits_127_one_line(monkeypatch, capsys):
     assert len(err.strip().splitlines()) == 1 and "Traceback" not in err
 
 
-def test_missing_target_exits_127(tree, monkeypatch, capsys):
+def test_missing_target_exits_127(tree, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(sys, "argv", ["nlm-x"])
     with pytest.raises(SystemExit) as exc:
         doe_pipeline_forward.forward(RELPATH, "nlm-x")
@@ -89,7 +90,7 @@ def test_missing_target_exits_127(tree, monkeypatch, capsys):
     assert "stub.py" in err and len(err.strip().splitlines()) == 1
 
 
-def test_relpath_escaping_root_exits_127(tree, monkeypatch, capsys):
+def test_relpath_escaping_root_exits_127(tree, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     outside = tree.parent / "outside.py"
     outside.write_text("raise SystemExit(0)\n", encoding="utf-8")
     monkeypatch.setattr(sys, "argv", ["nlm-x"])
@@ -99,7 +100,7 @@ def test_relpath_escaping_root_exits_127(tree, monkeypatch, capsys):
     assert "escapes" in capsys.readouterr().err
 
 
-def test_forward_spawns_no_subprocess(tree, monkeypatch):
+def test_forward_spawns_no_subprocess(tree, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_stub(tree, "raise SystemExit(3)\n")
 
     def no_spawn(*_a, **_k):

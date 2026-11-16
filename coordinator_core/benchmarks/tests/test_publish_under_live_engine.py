@@ -66,6 +66,58 @@ def test_harness_wall_overrides_the_driver_figure():
     assert out.splitlines()[0].startswith("minus_32004=0 fail_open=0 round_wall_s=99.000")
 
 
+def _first(probe, reply=None, ms=None, src=None):
+    return json.dumps({"probe": probe, "reply": reply, "process_ms": ms, "source_path": src})
+
+
+_BOOT = json.dumps({"probe": "boot", "listener_secs": 2.5, "ready_secs": 3.0})
+
+
+def test_post_swap_summary_reads_process_ms_and_counts_32004():
+    recs = h.parse_post_swap_stream([
+        _first("first_health", _OK_HEALTH, 12.0, "accept_thread"),
+        _first("first_guard", _OK_GUARD, 40.5, "pool_worker"),
+        _first("first_emit", _IND, None),
+        json.dumps({"probe": "health", "reply": _IND}),
+    ])
+    s = h.post_swap_summary(recs)
+    assert (s["first_health_ms"], s["first_guard_ms"]) == (12.0, 40.5)
+    assert math.isnan(s["first_emit_ms"])
+    assert s["post_swap_minus_32004"] == 1
+
+
+def test_post_swap_legs_attribute_pool_import_and_flip():
+    recs = h.parse_post_swap_stream([
+        _first("first_health", _OK_HEALTH, 12.0, "accept_thread"),
+        _first("first_guard", _OK_GUARD, 40.5, "pool_worker"),
+        _BOOT,
+    ])
+    legs = h.post_swap_legs(recs, "  [timing] successor token flip: 0.250s\n")
+    assert legs == {"pool_worker_ready": 40.5, "first_import": 2500.0, "token_flip": 250.0}
+    empty = h.post_swap_legs([])
+    assert all(math.isnan(v) for v in empty.values())
+
+
+def test_report_pins_the_post_swap_contract_line():
+    post = h.parse_post_swap_stream([
+        _first("first_health", _OK_HEALTH, 12.0), _first("first_guard", _OK_GUARD, 40.5),
+        _first("first_emit", _OK_HEALTH, 90.25), _BOOT,
+    ])
+    out = h.render_report([], _PUBLISH_OUT, post_swap=post).splitlines()
+    assert out[1] == "first_health_ms=12.0 first_guard_ms=40.5 first_emit_ms=90.2 post_swap_minus_32004=0"
+    assert [l.split("=")[0] for l in out[2:5]] == ["leg pool_worker_ready", "leg first_import", "leg token_flip"]
+
+
+def test_post_swap_parser_skips_pre_swap_probes_and_junk():
+    lines = [_first("first_emit", _IND), "junk", json.dumps({"probe": "guard", "reply": None})]
+    assert len(h.parse_post_swap_stream(lines)) == 1
+
+
+def test_first_request_messages_use_the_pinned_ops(tmp_path):
+    ops = [h.first_request_message(k, tmp_path)["method"] for k in h.FIRST_PROBES]
+    assert ops == [h.HEALTH_OP, h.GUARD_OP, h.EMIT_OP]
+
+
 def test_missing_timing_lines_read_as_nan():
     assert math.isnan(h.parse_round_cpu_s("no timing here"))
     assert math.isnan(h.parse_round_wall_s("no timing here"))

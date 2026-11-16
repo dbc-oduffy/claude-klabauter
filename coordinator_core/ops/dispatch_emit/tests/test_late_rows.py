@@ -9,6 +9,8 @@ import yaml
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import LATE_ROWS_FIELD, OP_LATE_ROWS, record_dir
+from pathlib import Path
+import pytest
 
 RUN = "ask-20261015T000000-abc123"
 REL = "state/sizings/2026-10-15-late.yaml"
@@ -34,17 +36,17 @@ def _revise(root, monkeypatch, text):
     return rl._handler({"run_id": RUN, "verbatim": text}, repo_root=root)["item"]
 
 
-def _stage_manifest(root, ids):
+def _stage_manifest(root, ids) -> None:
     (record_dir(root, RUN) / "manifest.json").write_text(json.dumps({"ledger_item_ids": list(ids)}), encoding="utf-8")
 
 
-def test_no_manifest_returns_empty(tmp_path, monkeypatch):
+def test_no_manifest_returns_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _revise(root, monkeypatch, "first")
     assert rl.late_rows(root, RUN) == []
 
 
-def test_row_revised_after_staging_is_late_in_arrival_order(tmp_path, monkeypatch):
+def test_row_revised_after_staging_is_late_in_arrival_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     first = _revise(root, monkeypatch, "first")
     _stage_manifest(root, [i.id for i in rl.read_ledger(root, record_dir(root, RUN)).items])
@@ -55,7 +57,7 @@ def test_row_revised_after_staging_is_late_in_arrival_order(tmp_path, monkeypatc
     assert late == [second, third]
 
 
-def test_op_replies_late_rows_and_refuses_unsafe_id(tmp_path, monkeypatch):
+def test_op_replies_late_rows_and_refuses_unsafe_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     first = _revise(root, monkeypatch, "first")
     _stage_manifest(root, [])
@@ -66,13 +68,13 @@ def test_op_replies_late_rows_and_refuses_unsafe_id(tmp_path, monkeypatch):
     assert OP_LATE_ROWS == "workflow.late_rows"
 
 
-def test_late_rows_op_declares_a_repo_scope():
+def test_late_rows_op_declares_a_repo_scope() -> None:
     from coordinator_core.op_scopes import OP_KEY_SCOPE
 
     assert OP_KEY_SCOPE.get(OP_LATE_ROWS) == "common_dir"
 
 
-def test_verify_staged_follows_the_verify_leg_read_not_the_prompt_files(tmp_path, monkeypatch):
+def test_verify_staged_follows_the_verify_leg_read_not_the_prompt_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     dir_ = record_dir(root, RUN)
     (dir_ / "prompts").mkdir(parents=True, exist_ok=True)
@@ -84,7 +86,7 @@ def test_verify_staged_follows_the_verify_leg_read_not_the_prompt_files(tmp_path
     assert rl.verify_staged(dir_) is True
 
 
-def test_late_rows_op_is_classified_mutating():
+def test_late_rows_op_is_classified_mutating() -> None:
     from coordinator_core.authz.classification import OpClass, OP_CLASSIFICATION
 
     assert OP_CLASSIFICATION[OP_LATE_ROWS] is OpClass.MUTATING

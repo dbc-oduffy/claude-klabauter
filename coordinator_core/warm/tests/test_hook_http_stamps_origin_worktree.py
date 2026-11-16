@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core import ipc
 from coordinator_core.warm import hook_http
+from pathlib import Path
 
 _EVENTS = [
     ("hooks.subagent_zero_tool_use_detect",
@@ -23,7 +24,7 @@ _EVENTS = [
 
 
 @pytest.mark.parametrize("op,event", _EVENTS, ids=[e[0] for e in _EVENTS])
-def test_envelope_carries_origin_worktree_and_is_not_invalid_params(op, event, tmp_path):
+def test_envelope_carries_origin_worktree_and_is_not_invalid_params(op, event, tmp_path: Path) -> None:
     repo = str(tmp_path / "repo")
     (tmp_path / "repo" / ".git").mkdir(parents=True)
     req = json.loads(hook_http.build_request({**event, "cwd": repo}, op))
@@ -33,6 +34,6 @@ def test_envelope_carries_origin_worktree_and_is_not_invalid_params(op, event, t
     assert resp.get("error", {}).get("code") != ipc.INVALID_PARAMS, resp
 
 
-def test_no_cwd_stamps_nothing():
+def test_no_cwd_stamps_nothing() -> None:
     req = json.loads(hook_http.build_request({"hook_event_name": "Stop"}, "hooks.x"))
     assert "_origin_worktree" not in req

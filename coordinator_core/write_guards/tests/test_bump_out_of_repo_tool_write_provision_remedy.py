@@ -15,6 +15,7 @@ from coordinator_core.testing.home_sandbox import sandbox_home
 from coordinator_core.tests.git_seed import seeded_repo
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.write_guards import bump_out_of_repo_tool_write as guard
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -22,7 +23,7 @@ _SESSION = "sess-tool-remedy"
 
 
 @pytest.fixture()
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     root = tmp_path.resolve()
     sandbox_home(monkeypatch, root / "home")
     own = seeded_repo(root / "work" / "own", name="Test")
@@ -48,14 +49,14 @@ def _reason(result) -> str:
     return result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_write_into_provisioned_target_denies_and_names_route(world):
+def test_write_into_provisioned_target_denies_and_names_route(world) -> None:
     result = guard.check(_payload(world["provisioned"] / "a.txt", world["own"]))
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert _reason(result).endswith(ROUTE_REMEDY)
 
 
-def test_write_into_absent_sibling_names_route_when_it_denies(world):
+def test_write_into_absent_sibling_names_route_when_it_denies(world) -> None:
     from coordinator_core.ops.sibling_repo_provision_contract import remedy_applies
 
     assert remedy_applies(world["absent"] / "a.txt", world["own"]) is True
@@ -65,20 +66,20 @@ def test_write_into_absent_sibling_names_route_when_it_denies(world):
         assert _reason(result).endswith(ROUTE_REMEDY)
 
 
-def test_write_into_unmarked_sibling_repo_has_no_route(world):
+def test_write_into_unmarked_sibling_repo_has_no_route(world) -> None:
     result = guard.check(_payload(world["plain"] / "a.txt", world["own"]))
     assert result is not None
     assert ROUTE_REMEDY not in _reason(result)
 
 
-def test_write_outside_parent_has_no_route(world):
+def test_write_outside_parent_has_no_route(world) -> None:
     world["elsewhere"].mkdir()
     result = guard.check(_payload(world["elsewhere"] / "a.txt", world["own"]))
     if result is not None:
         assert ROUTE_REMEDY not in _reason(result)
 
 
-def test_remedy_is_text_only_verdict_matches_unremedied(world, monkeypatch):
+def test_remedy_is_text_only_verdict_matches_unremedied(world, monkeypatch: pytest.MonkeyPatch) -> None:
     payload = _payload(world["provisioned"] / "a.txt", world["own"])
     with_remedy = guard.check(payload)
     monkeypatch.setattr(

@@ -7,6 +7,7 @@ import pytest
 
 from coordinator_core.git import commit as gcommit
 from coordinator_core.git.commit import CommitDeniedByActionGuard, CommitRefused
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -24,7 +25,7 @@ def _head(repo):
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/z")
@@ -37,7 +38,7 @@ def repo(tmp_path):
     return r
 
 
-def test_a_genuine_deletion_with_no_deletion_verb_is_refused_and_head_is_unmoved(repo):
+def test_a_genuine_deletion_with_no_deletion_verb_is_refused_and_head_is_unmoved(repo) -> None:
     before = _head(repo)
     (repo / "gone.txt").unlink()
 
@@ -54,7 +55,7 @@ def test_a_genuine_deletion_with_no_deletion_verb_is_refused_and_head_is_unmoved
     assert _head(repo) == before
 
 
-def test_the_deny_is_also_caught_by_except_commit_refused(repo):
+def test_the_deny_is_also_caught_by_except_commit_refused(repo) -> None:
     (repo / "gone.txt").unlink()
 
     with pytest.raises(CommitRefused):
@@ -63,7 +64,7 @@ def test_the_deny_is_also_caught_by_except_commit_refused(repo):
         )
 
 
-def test_a_genuine_deletion_whose_message_names_it_still_commits(repo):
+def test_a_genuine_deletion_whose_message_names_it_still_commits(repo) -> None:
     (repo / "gone.txt").unlink()
 
     out = gcommit.commit_paths(
@@ -75,7 +76,7 @@ def test_a_genuine_deletion_whose_message_names_it_still_commits(repo):
     assert "gone.txt" not in tracked
 
 
-def test_a_phantom_declared_deletion_is_not_reached_by_this_guard(repo):
+def test_a_phantom_declared_deletion_is_not_reached_by_this_guard(repo) -> None:
     with pytest.raises(CommitRefused) as excinfo:
         gcommit.commit_paths(
             repo, ["keep.txt"], "no verb here at all", deleted_paths=["gone.txt"]
@@ -84,7 +85,7 @@ def test_a_phantom_declared_deletion_is_not_reached_by_this_guard(repo):
     assert "still present in the worktree" in str(excinfo.value)
 
 
-def test_an_ordinary_commit_with_no_declared_deletion_is_unaffected(repo):
+def test_an_ordinary_commit_with_no_declared_deletion_is_unaffected(repo) -> None:
     (repo / "keep.txt").write_text("edited\n", encoding="utf-8", newline="\n")
 
     out = gcommit.commit_paths(repo, ["keep.txt"], "ordinary edit, no verb")
@@ -93,7 +94,7 @@ def test_an_ordinary_commit_with_no_declared_deletion_is_unaffected(repo):
     assert (repo / "gone.txt").exists()
 
 
-def test_zero_new_process_spawns_for_the_refused_call(repo, monkeypatch):
+def test_zero_new_process_spawns_for_the_refused_call(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "gone.txt").unlink()
     spawned = []
     real_run = subprocess.run
@@ -116,7 +117,7 @@ def test_zero_new_process_spawns_for_the_refused_call(repo, monkeypatch):
     )
 
 
-def test_an_untrack_with_no_deletion_verb_is_refused_and_head_is_unmoved(repo):
+def test_an_untrack_with_no_deletion_verb_is_refused_and_head_is_unmoved(repo) -> None:
     before = _head(repo)
 
     with pytest.raises(CommitDeniedByActionGuard) as excinfo:
@@ -128,7 +129,7 @@ def test_an_untrack_with_no_deletion_verb_is_refused_and_head_is_unmoved(repo):
     assert _head(repo) == before
 
 
-def test_an_untrack_whose_message_names_it_commits(repo):
+def test_an_untrack_whose_message_names_it_commits(repo) -> None:
     out = gcommit.commit_paths(
         repo, [], "untrack gone.txt, keep it on disk", untracked_paths=["gone.txt"]
     )

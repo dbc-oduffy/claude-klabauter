@@ -22,6 +22,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_queue_emit import (
     _FIXTURE_PROFILE_DIR,
     _setup_repo,
 )
+from pathlib import Path
 
 _PLAN = (
     "---\n---\n\n# Plan\n\n## Tasks\n\n"
@@ -36,7 +37,7 @@ _PLAN = (
 )
 
 
-def _patch_loaders(monkeypatch, fragment):
+def _patch_loaders(monkeypatch, fragment) -> None:
     def _load_fragment():
         if isinstance(fragment, Exception):
             raise fragment
@@ -96,7 +97,7 @@ def _queue_params(tmp_path):
     )
 
 
-def test_plan_route_composes_execute_review(tmp_path, monkeypatch):
+def test_plan_route_composes_execute_review(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_loaders(monkeypatch, _V5_FRAGMENT)
     params, output_path = _plan_params(tmp_path)
 
@@ -140,8 +141,8 @@ def _sized_plan_params(tmp_path, tshirt):
     ("tshirt", "verifier_present"), [("XS", False), ("M", True)]
 )
 def test_plan_route_scales_the_execute_wave_by_size(
-    tmp_path, monkeypatch, tshirt, verifier_present
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tshirt, verifier_present
+) -> None:
     _patch_loaders(monkeypatch, _tiered_fragment())
     params, output_path = _sized_plan_params(tmp_path, tshirt)
 
@@ -153,7 +154,7 @@ def test_plan_route_scales_the_execute_wave_by_size(
     assert ("acting as the delivery-verifier reviewer" in script) is verifier_present
 
 
-def test_inventory_route_composes_execute_review(tmp_path, monkeypatch):
+def test_inventory_route_composes_execute_review(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_loaders(monkeypatch, _V5_FRAGMENT)
     params, output_path = _inventory_params(tmp_path)
 
@@ -165,7 +166,7 @@ def test_inventory_route_composes_execute_review(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("make_fragment", _REFUSAL_FRAGMENTS)
-def test_plan_route_refuses_without_review(tmp_path, monkeypatch, make_fragment):
+def test_plan_route_refuses_without_review(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, make_fragment) -> None:
     _patch_loaders(monkeypatch, make_fragment("plan"))
     params, output_path = _plan_params(tmp_path)
 
@@ -176,7 +177,7 @@ def test_plan_route_refuses_without_review(tmp_path, monkeypatch, make_fragment)
 
 
 @pytest.mark.parametrize("make_fragment", _REFUSAL_FRAGMENTS)
-def test_inventory_route_refuses_without_review(tmp_path, monkeypatch, make_fragment):
+def test_inventory_route_refuses_without_review(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, make_fragment) -> None:
     _patch_loaders(monkeypatch, make_fragment("inventory"))
     params, output_path = _inventory_params(tmp_path)
 
@@ -187,7 +188,7 @@ def test_inventory_route_refuses_without_review(tmp_path, monkeypatch, make_frag
 
 
 @pytest.mark.parametrize("make_fragment", _REFUSAL_FRAGMENTS)
-def test_queue_route_refuses_without_review(tmp_path, monkeypatch, make_fragment):
+def test_queue_route_refuses_without_review(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, make_fragment) -> None:
     _patch_loaders(monkeypatch, make_fragment("queue"))
     params, output_path, repo_root = _queue_params(tmp_path)
 

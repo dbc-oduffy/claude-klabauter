@@ -8,22 +8,22 @@ from coordinator_core.diagnostics import contained_run
 
 
 @pytest.fixture(autouse=True)
-def _far_future_clock(monkeypatch):
+def _far_future_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.box_memory import pressure
 
     monkeypatch.setattr(pressure, "now_ctime", lambda: 10**15)
 
 
 class _FakeProc:
-    def __init__(self, pid):
+    def __init__(self, pid) -> None:
         self.pid = pid
         self.killed = False
 
-    def kill(self):
+    def kill(self) -> None:
         self.killed = True
 
 
-def test_contained_run_kill_child_refuses_self_and_ancestor(monkeypatch):
+def test_contained_run_kill_child_refuses_self_and_ancestor(monkeypatch: pytest.MonkeyPatch) -> None:
     import os
 
     monkeypatch.setattr(orphan_reap, "protected_pids", lambda self_pid=None: frozenset({os.getpid(), 7}))
@@ -33,14 +33,14 @@ def test_contained_run_kill_child_refuses_self_and_ancestor(monkeypatch):
         assert proc.killed is False
 
 
-def test_contained_run_kill_child_kills_unrelated_pid(monkeypatch):
+def test_contained_run_kill_child_kills_unrelated_pid(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(orphan_reap, "protected_pids", lambda self_pid=None: frozenset({1}))
     proc = _FakeProc(987654)
     assert contained_run._kill_child(proc) is True
     assert proc.killed is True
 
 
-def test_contained_run_killpg_refuses_self_and_ancestor_before_any_signal(monkeypatch):
+def test_contained_run_killpg_refuses_self_and_ancestor_before_any_signal(monkeypatch: pytest.MonkeyPatch) -> None:
     import os
 
     import signal
@@ -58,11 +58,11 @@ def test_contained_run_killpg_refuses_self_and_ancestor_before_any_signal(monkey
 
 
 class FakePrims:
-    def __init__(self, rows, ctimes=None):
+    def __init__(self, rows, ctimes=None) -> None:
         self.rows = rows
         self.ctimes = ctimes if ctimes is not None else {r.pid: r.ctime for r in rows}
 
-    def alive(self, pid):
+    def alive(self, pid) -> bool:
         return pid in self.ctimes
 
     def creation_time(self, pid):
@@ -72,7 +72,7 @@ class FakePrims:
         return self.rows
 
 
-def test_dead_parent_grep_selected_live_parent_not():
+def test_dead_parent_grep_selected_live_parent_not() -> None:
     rows = [
         ProcRow(10, 1, 100, "bash.exe"),
         ProcRow(11, 10, 200, "grep.exe"),
@@ -82,24 +82,24 @@ def test_dead_parent_grep_selected_live_parent_not():
     assert got == [12]
 
 
-def test_reused_pid_parent_is_dead():
+def test_reused_pid_parent_is_dead() -> None:
     rows = [ProcRow(10, 1, 500, "bash"), ProcRow(11, 10, 200, "grep")]
     assert [r.pid for r in orphan_reap.select(rows, FakePrims(rows))] == [11]
 
 
-def test_unreadable_census_and_unknown_ctime_read_alive():
+def test_unreadable_census_and_unknown_ctime_read_alive() -> None:
     assert orphan_reap.select([], FakePrims([])) == []
     assert orphan_reap.select(None, FakePrims([])) == []
     rows = [ProcRow(10, 1, 500, "bash"), ProcRow(11, 10, 0, "grep")]
     assert orphan_reap.select(rows, FakePrims(rows)) == []
 
 
-def test_non_search_orphan_is_left_alone():
+def test_non_search_orphan_is_left_alone() -> None:
     rows = [ProcRow(20, 999, 100, "cargo.exe")]
     assert orphan_reap.select(rows, FakePrims(rows)) == []
 
 
-def test_reap_returns_pids_and_skips_reused_child():
+def test_reap_returns_pids_and_skips_reused_child() -> None:
     rows = [ProcRow(12, 999, 200, "grep"), ProcRow(13, 998, 300, "find")]
     prims = FakePrims(rows, ctimes={12: 200, 13: 999})
     killed = []
@@ -107,25 +107,25 @@ def test_reap_returns_pids_and_skips_reused_child():
     assert killed == [12]
 
 
-def test_reap_never_kills_self_and_survives_terminate_failure():
+def test_reap_never_kills_self_and_survives_terminate_failure() -> None:
     rows = [ProcRow(12, 999, 200, "grep"), ProcRow(13, 998, 300, "grep")]
 
-    def boom(pid):
+    def boom(pid) -> None:
         if pid == 13:
             raise PermissionError
 
     assert orphan_reap.reap(FakePrims(rows), terminate=boom, self_pid=12) == []
 
 
-def test_reap_with_unreadable_snapshot_is_empty():
+def test_reap_with_unreadable_snapshot_is_empty() -> None:
     class Dead(FakePrims):
-        def snapshot(self):
+        def snapshot(self) -> None:
             return None
 
     assert orphan_reap.reap(Dead([]), terminate=lambda p: None) == []
 
 
-def test_parent_missing_from_census_but_alive_is_not_orphaned():
+def test_parent_missing_from_census_but_alive_is_not_orphaned() -> None:
     rows = [ProcRow(12, 999, 200, "grep")]
     prims = FakePrims(rows, ctimes={12: 200, 999: 50})
     assert orphan_reap.select(rows, prims) == []
@@ -136,13 +136,13 @@ _UNIT = 10_000_000
 _NOW = 10_000 * _UNIT
 
 
-def _units(monkeypatch):
+def _units(monkeypatch) -> None:
     from coordinator_core.bash_guards import _host_probe
 
     monkeypatch.setattr(_host_probe, "ctime_units_per_second", lambda: _UNIT)
 
 
-def test_young_dead_parent_search_is_neither_selected_nor_reaped(monkeypatch):
+def test_young_dead_parent_search_is_neither_selected_nor_reaped(monkeypatch: pytest.MonkeyPatch) -> None:
     _units(monkeypatch)
     rows = [ProcRow(12, 999, _NOW - 60 * _UNIT, "grep")]
     prims = FakePrims(rows)
@@ -151,7 +151,7 @@ def test_young_dead_parent_search_is_neither_selected_nor_reaped(monkeypatch):
                             self_pid=-1, now=_NOW) == []
 
 
-def test_aged_dead_parent_search_is_selected_and_reaped_at_the_floor(monkeypatch):
+def test_aged_dead_parent_search_is_selected_and_reaped_at_the_floor(monkeypatch: pytest.MonkeyPatch) -> None:
     _units(monkeypatch)
     edge = _NOW - 30 * 60 * _UNIT
     rows = [ProcRow(12, 999, edge, "grep"), ProcRow(13, 999, edge + 1, "grep")]
@@ -161,14 +161,14 @@ def test_aged_dead_parent_search_is_selected_and_reaped_at_the_floor(monkeypatch
     assert killed == [12]
 
 
-def test_aged_search_with_live_parent_or_zero_ctime_is_left_alone(monkeypatch):
+def test_aged_search_with_live_parent_or_zero_ctime_is_left_alone(monkeypatch: pytest.MonkeyPatch) -> None:
     _units(monkeypatch)
     old = _NOW - 7200 * _UNIT
     rows = [ProcRow(10, 1, old - 1, "bash"), ProcRow(11, 10, old, "grep"), ProcRow(12, 999, 0, "grep")]
     assert orphan_reap.select(rows, FakePrims(rows), now=_NOW) == []
 
 
-def test_reap_refuses_aged_row_whose_pid_was_reused(monkeypatch):
+def test_reap_refuses_aged_row_whose_pid_was_reused(monkeypatch: pytest.MonkeyPatch) -> None:
     _units(monkeypatch)
     rows = [ProcRow(12, 999, _NOW - 7200 * _UNIT, "grep")]
     prims = FakePrims(rows, ctimes={12: _NOW - 5 * _UNIT})
@@ -176,7 +176,7 @@ def test_reap_refuses_aged_row_whose_pid_was_reused(monkeypatch):
                             self_pid=-1, now=_NOW) == []
 
 
-def test_real_live_pipeline_with_dead_parent_is_not_reaped_until_aged(monkeypatch):
+def test_real_live_pipeline_with_dead_parent_is_not_reaped_until_aged(monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
     import sys
 
@@ -205,7 +205,7 @@ def test_real_live_pipeline_with_dead_parent_is_not_reaped_until_aged(monkeypatc
             return None if pid == real.ppid else HostPrimitives.creation_time(pid)
 
         @staticmethod
-        def snapshot():
+        def snapshot() -> list[ProcRow]:
             return [row]
 
     per_s = _host_probe.ctime_units_per_second()
@@ -217,7 +217,7 @@ def test_real_live_pipeline_with_dead_parent_is_not_reaped_until_aged(monkeypatc
     assert orphan_reap.reap(Prims, terminate=killed.append, self_pid=-1, now=aged) == [child_pid]
 
 
-def test_protected_pids_include_self_and_ancestors():
+def test_protected_pids_include_self_and_ancestors() -> None:
     import os
 
     import psutil
@@ -227,7 +227,7 @@ def test_protected_pids_include_self_and_ancestors():
     assert all(p.pid in got for p in psutil.Process().parents())
 
 
-def test_terminate_refuses_self_and_ancestor(monkeypatch):
+def test_terminate_refuses_self_and_ancestor(monkeypatch: pytest.MonkeyPatch) -> None:
     sent = []
     monkeypatch.setattr(orphan_reap.os, "kill", lambda pid, sig: sent.append(pid))
     monkeypatch.setattr(orphan_reap, "protected_pids", lambda self_pid=None: frozenset({5, 6}))
@@ -238,7 +238,7 @@ def test_terminate_refuses_self_and_ancestor(monkeypatch):
     assert sent == [7]
 
 
-def test_reap_skips_ancestor_of_self(monkeypatch):
+def test_reap_skips_ancestor_of_self(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(orphan_reap, "protected_pids", lambda self_pid=None: frozenset({12}))
     rows = [ProcRow(12, 999, 200, "grep"), ProcRow(13, 998, 300, "grep")]
     killed = []

@@ -12,18 +12,28 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import pytest
 
 from coordinator_core.ops import setup_rag_decision as srd
 
-_SENTINEL = "coordinator-rag-tripwire: un-indexed"
+_SENTINEL = "coordinator-rag-tripwire"
+_BODY = "# Test CLAUDE.md\n"
 
 
 def _write_claude_md(tmp_path):
     claude_md = tmp_path / "CLAUDE.md"
-    claude_md.write_text("# Test CLAUDE.md\n", encoding="utf-8")
+    claude_md.write_bytes(_BODY.encode("utf-8"))
     return claude_md
+
+
+def _assert_no_block(claude_md, expected_bytes):
+    data = claude_md.read_bytes()
+    assert data == expected_bytes
+    text = data.decode("utf-8")
+    assert "## RAG Index" not in text
+    assert _SENTINEL not in text
 
 
 # ---------------------------------------------------------------------------
@@ -42,142 +52,88 @@ def test_T1_ue_daemon_present_offer_no_tripwire(tmp_path, monkeypatch, capsys):
     assert rc == 0
     out = capsys.readouterr().out
     assert "branch 1" in out or "offer" in out.lower()
-    assert _SENTINEL not in claude_md.read_text(encoding="utf-8")
+    _assert_no_block(claude_md, _BODY.encode("utf-8"))
 
 
 # ---------------------------------------------------------------------------
-# T2 / T2b: non-UE repo -> tripwire written regardless of daemon state
+# T2-T8: branches 2/3 print their decision and never touch CLAUDE.md, with or
+# without a seeded file, with or without an index on disk, dry-run or not.
 # ---------------------------------------------------------------------------
 
 
-def test_T2_nonue_daemon_present_tripwire_written(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "is_ue,probe,branch",
+    [
+        ("0", "true", "branch 2"),
+        ("0", "false", "branch 2"),
+        ("1", "false", "branch 3"),
+    ],
+)
+@pytest.mark.parametrize("dry_run", [False, True])
+@pytest.mark.parametrize("index_on_disk", [False, True])
+def test_T2_T8_branches_2_3_leave_claude_md_byte_identical(
+    tmp_path, monkeypatch, capsys, is_ue, probe, branch, dry_run, index_on_disk
+):
     claude_md = _write_claude_md(tmp_path)
-    monkeypatch.setenv("SETUP_RAG_IS_UE_REPO", "0")
-    monkeypatch.setenv("SETUP_RAG_DAEMON_PROBE", "true")
+    if index_on_disk:
+        (tmp_path / ".project-rag").mkdir()
+        (tmp_path / ".project-rag" / "graph.db").write_bytes(b"")
+    monkeypatch.setenv("SETUP_RAG_IS_UE_REPO", is_ue)
+    monkeypatch.setenv("SETUP_RAG_DAEMON_PROBE", probe)
     monkeypatch.setenv("SETUP_RAG_TARGET_ROOT", str(tmp_path))
 
-    rc = srd.main([])
+    rc = srd.main(["--dry-run"] if dry_run else [])
 
     assert rc == 0
-    assert _SENTINEL in claude_md.read_text(encoding="utf-8")
+    assert branch in capsys.readouterr().out
+    _assert_no_block(claude_md, _BODY.encode("utf-8"))
 
 
-def test_T2c_nonue_with_index_on_disk_no_tripwire(tmp_path, monkeypatch):
+@pytest.mark.parametrize("is_ue,probe", [("0", "false"), ("1", "false")])
+def test_T4_T5_rerun_still_byte_identical(tmp_path, monkeypatch, is_ue, probe):
     claude_md = _write_claude_md(tmp_path)
-    (tmp_path / ".project-rag").mkdir()
-    (tmp_path / ".project-rag" / "graph.db").write_bytes(b"")
-    monkeypatch.setenv("SETUP_RAG_IS_UE_REPO", "0")
-    monkeypatch.setenv("SETUP_RAG_DAEMON_PROBE", "true")
-    monkeypatch.setenv("SETUP_RAG_TARGET_ROOT", str(tmp_path))
-
-    rc = srd.main([])
-
-    assert rc == 0
-    assert _SENTINEL not in claude_md.read_text(encoding="utf-8")
-
-
-def test_T2b_nonue_daemon_absent_still_tripwire(tmp_path, monkeypatch):
-    claude_md = _write_claude_md(tmp_path)
-    monkeypatch.setenv("SETUP_RAG_IS_UE_REPO", "0")
-    monkeypatch.setenv("SETUP_RAG_DAEMON_PROBE", "false")
-    monkeypatch.setenv("SETUP_RAG_TARGET_ROOT", str(tmp_path))
-
-    rc = srd.main([])
-
-    assert rc == 0
-    assert _SENTINEL in claude_md.read_text(encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
-# T3: UE repo + no daemon -> tripwire
-# ---------------------------------------------------------------------------
-
-
-def test_T3_ue_no_daemon_tripwire_written(tmp_path, monkeypatch):
-    claude_md = _write_claude_md(tmp_path)
-    monkeypatch.setenv("SETUP_RAG_IS_UE_REPO", "1")
-    monkeypatch.setenv("SETUP_RAG_DAEMON_PROBE", "false")
-    monkeypatch.setenv("SETUP_RAG_TARGET_ROOT", str(tmp_path))
-
-    rc = srd.main([])
-
-    assert rc == 0
-    assert _SENTINEL in claude_md.read_text(encoding="utf-8")
-
-
-# ---------------------------------------------------------------------------
-# T4 / T5: idempotency -- re-run does not duplicate the tripwire block
-# ---------------------------------------------------------------------------
-
-
-def test_T4_rerun_branch2_no_duplicate(tmp_path, monkeypatch):
-    claude_md = _write_claude_md(tmp_path)
-    monkeypatch.setenv("SETUP_RAG_IS_UE_REPO", "0")
-    monkeypatch.setenv("SETUP_RAG_DAEMON_PROBE", "false")
+    monkeypatch.setenv("SETUP_RAG_IS_UE_REPO", is_ue)
+    monkeypatch.setenv("SETUP_RAG_DAEMON_PROBE", probe)
     monkeypatch.setenv("SETUP_RAG_TARGET_ROOT", str(tmp_path))
 
     assert srd.main([]) == 0
     assert srd.main([]) == 0
 
-    assert claude_md.read_text(encoding="utf-8").count(_SENTINEL) == 1
+    _assert_no_block(claude_md, _BODY.encode("utf-8"))
 
 
-def test_T5_rerun_branch3_no_duplicate(tmp_path, monkeypatch):
-    claude_md = _write_claude_md(tmp_path)
-    monkeypatch.setenv("SETUP_RAG_IS_UE_REPO", "1")
-    monkeypatch.setenv("SETUP_RAG_DAEMON_PROBE", "false")
-    monkeypatch.setenv("SETUP_RAG_TARGET_ROOT", str(tmp_path))
-
-    assert srd.main([]) == 0
-    assert srd.main([]) == 0
-
-    assert claude_md.read_text(encoding="utf-8").count(_SENTINEL) == 1
-
-
-# ---------------------------------------------------------------------------
-# T6: tripwire block content sanity
-# ---------------------------------------------------------------------------
-
-
-def test_T6_tripwire_contains_tier3_guidance(tmp_path, monkeypatch):
-    claude_md = _write_claude_md(tmp_path)
+def test_T2_absent_claude_md_is_not_created(tmp_path, monkeypatch):
     monkeypatch.setenv("SETUP_RAG_IS_UE_REPO", "0")
     monkeypatch.setenv("SETUP_RAG_DAEMON_PROBE", "false")
     monkeypatch.setenv("SETUP_RAG_TARGET_ROOT", str(tmp_path))
 
     assert srd.main([]) == 0
-    assert "Tier-3" in claude_md.read_text(encoding="utf-8")
+
+    assert not (tmp_path / "CLAUDE.md").exists()
 
 
-# ---------------------------------------------------------------------------
-# T7 / T8: --dry-run does not mutate CLAUDE.md
-# ---------------------------------------------------------------------------
-
-
-def test_T7_dryrun_branch2_no_mutation(tmp_path, monkeypatch):
-    claude_md = _write_claude_md(tmp_path)
-    before = claude_md.read_text(encoding="utf-8")
+def test_T6_existing_block_is_left_untouched(tmp_path, monkeypatch):
+    legacy = (
+        "# t\n<!-- coordinator-rag-tripwire: un-indexed -->\n## RAG Index\n"
+        "<!-- end coordinator-rag-tripwire -->\n"
+    ).encode("utf-8")
+    claude_md = tmp_path / "CLAUDE.md"
+    claude_md.write_bytes(legacy)
     monkeypatch.setenv("SETUP_RAG_IS_UE_REPO", "0")
     monkeypatch.setenv("SETUP_RAG_DAEMON_PROBE", "false")
     monkeypatch.setenv("SETUP_RAG_TARGET_ROOT", str(tmp_path))
 
-    rc = srd.main(["--dry-run"])
+    assert srd.main([]) == 0
 
-    assert rc == 0
-    assert claude_md.read_text(encoding="utf-8") == before
+    assert claude_md.read_bytes() == legacy
 
 
-def test_T8_dryrun_branch3_no_mutation(tmp_path, monkeypatch):
-    claude_md = _write_claude_md(tmp_path)
-    before = claude_md.read_text(encoding="utf-8")
-    monkeypatch.setenv("SETUP_RAG_IS_UE_REPO", "1")
-    monkeypatch.setenv("SETUP_RAG_DAEMON_PROBE", "false")
-    monkeypatch.setenv("SETUP_RAG_TARGET_ROOT", str(tmp_path))
-
-    rc = srd.main(["--dry-run"])
-
-    assert rc == 0
-    assert claude_md.read_text(encoding="utf-8") == before
+def test_module_has_no_claude_md_write_path():
+    assert not hasattr(srd, "_write_tripwire")
+    assert not hasattr(srd, "_TRIPWIRE_BLOCK")
+    src = Path(srd.__file__).read_text(encoding="utf-8")
+    assert "## RAG Index" not in src
+    assert "CLAUDE.md" not in src.split('"""', 2)[2]
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +164,7 @@ def test_T10_root_flag_branch2_via_nonue(tmp_path, monkeypatch):
     rc = srd.main(["--root", str(tmp_path)])
 
     assert rc == 0
-    assert _SENTINEL in claude_md.read_text(encoding="utf-8")
+    _assert_no_block(claude_md, _BODY.encode("utf-8"))
 
 
 # ---------------------------------------------------------------------------

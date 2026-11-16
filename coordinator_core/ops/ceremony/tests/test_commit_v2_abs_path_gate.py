@@ -65,7 +65,7 @@ def _commit(repo: Path, rel: str) -> dict:
         ("state/warp/w/briefs/C1.md", _POSIX),
     ],
 )
-def test_added_absolute_path_is_refused_with_a_one_line_fix(repo, rel, literal):
+def test_added_absolute_path_is_refused_with_a_one_line_fix(repo, rel, literal) -> None:
     _write(repo, rel, (repo / rel).read_text(encoding="utf-8") + f"see {literal}\n")
     before = _head(repo)
 
@@ -78,7 +78,7 @@ def test_added_absolute_path_is_refused_with_a_one_line_fix(repo, rel, literal):
     assert _head(repo) == before
 
 
-def test_preexisting_path_not_reflagged_but_a_new_duplicate_is(repo):
+def test_preexisting_path_not_reflagged_but_a_new_duplicate_is(repo) -> None:
     _write(repo, "docs/plans/p.md", f"old {_POSIX}\n")
     _git(["add", "-A"], repo)
     _git(["commit", "-q", "-m", "had it"], repo)
@@ -93,7 +93,7 @@ def test_preexisting_path_not_reflagged_but_a_new_duplicate_is(repo):
     assert _head(repo) == before
 
 
-def test_marked_line_and_ungated_path_pass(repo):
+def test_marked_line_and_ungated_path_pass(repo) -> None:
     _write(repo, "docs/plans/p.md", f"quoted {_POSIX} abs-path-ok: documenting the refusal\n")
     assert _commit(repo, "docs/plans/p.md")["committed"] is True
 
@@ -101,7 +101,7 @@ def test_marked_line_and_ungated_path_pass(repo):
     assert _commit(repo, "src/code.md")["committed"] is True
 
 
-def test_gate_spawns_nothing_and_skips_unrelated_paths_without_reading(repo, monkeypatch):
+def test_gate_spawns_nothing_and_skips_unrelated_paths_without_reading(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     reads = []
 
     def read_source(rel):
@@ -122,7 +122,7 @@ def test_gate_spawns_nothing_and_skips_unrelated_paths_without_reading(repo, mon
     assert out.diagnostics[0].startswith("docs/plans/p.md:1 ")
 
 
-def test_url_text_is_not_hot_but_forward_slash_drive_path_is():
+def test_url_text_is_not_hot_but_forward_slash_drive_path_is() -> None:
     marked = commit_gates._ABS_PATH_DRIVE_FWD_RE
     assert not marked.search("see https://example.com/x and ftp://h/y")
     assert marked.search("path " + "C" + ":/" + "Users/x")

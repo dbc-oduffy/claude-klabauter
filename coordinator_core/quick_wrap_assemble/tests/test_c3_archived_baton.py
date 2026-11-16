@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Any
 
 from coordinator_core.quick_wrap_assemble import _c3_ancestry, _closed_pickup_kind
+import pytest
 
 _ROOT_BODY = (
     "---\n"
@@ -40,7 +41,7 @@ def _pickup(*, classification: str = "handoff", basename: str | None, artifact_p
     }
 
 
-def test_archived_chain_root_baton_now_passes(tmp_path: Path):
+def test_archived_chain_root_baton_now_passes(tmp_path: Path) -> None:
     _write(tmp_path, "archive/handoffs/2026-09/2026-09-01-baton.md", _ROOT_BODY)
     pickup = _pickup(basename="2026-09-01-baton.md")
     ok, reason = _c3_ancestry(pickup, tmp_path)
@@ -48,7 +49,7 @@ def test_archived_chain_root_baton_now_passes(tmp_path: Path):
     assert "chain root" in reason
 
 
-def test_archived_non_root_baton_still_fails_condition_3(tmp_path: Path):
+def test_archived_non_root_baton_still_fails_condition_3(tmp_path: Path) -> None:
     _write(tmp_path, "archive/handoffs/2026-09/2026-09-01-baton.md", _NON_ROOT_BODY)
     pickup = _pickup(basename="2026-09-01-baton.md")
     ok, reason = _c3_ancestry(pickup, tmp_path)
@@ -56,7 +57,7 @@ def test_archived_non_root_baton_still_fails_condition_3(tmp_path: Path):
     assert "carries ancestry" in reason
 
 
-def test_degraded_classification_still_fails_closed(tmp_path: Path):
+def test_degraded_classification_still_fails_closed(tmp_path: Path) -> None:
     _write(tmp_path, "archive/handoffs/2026-09/2026-09-01-baton.md", _ROOT_BODY)
     pickup = _closed_pickup_kind()
     assert pickup["classification"] == "degraded"
@@ -66,7 +67,7 @@ def test_degraded_classification_still_fails_closed(tmp_path: Path):
     assert "degraded" in reason
 
 
-def test_zero_archive_matches_fails_closed(tmp_path: Path):
+def test_zero_archive_matches_fails_closed(tmp_path: Path) -> None:
     (tmp_path / "archive" / "handoffs" / "2026-09").mkdir(parents=True)
     pickup = _pickup(basename="2026-09-01-nowhere.md")
     ok, reason = _c3_ancestry(pickup, tmp_path)
@@ -74,7 +75,7 @@ def test_zero_archive_matches_fails_closed(tmp_path: Path):
     assert "no artifact_path resolved" in reason
 
 
-def test_ambiguous_archive_match_fails_closed(tmp_path: Path):
+def test_ambiguous_archive_match_fails_closed(tmp_path: Path) -> None:
     for month in ("2026-07", "2026-09"):
         _write(tmp_path, f"archive/handoffs/{month}/2026-09-01-baton.md", _ROOT_BODY)
     pickup = _pickup(basename="2026-09-01-baton.md")
@@ -83,7 +84,7 @@ def test_ambiguous_archive_match_fails_closed(tmp_path: Path):
     assert "ambiguous" in reason
 
 
-def test_traversal_basename_fails_closed_and_does_not_escape(tmp_path: Path):
+def test_traversal_basename_fails_closed_and_does_not_escape(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     outside = tmp_path / "outside"
@@ -94,13 +95,13 @@ def test_traversal_basename_fails_closed_and_does_not_escape(tmp_path: Path):
     assert "no artifact_path resolved" in reason
 
 
-def test_no_basename_fails_closed(tmp_path: Path):
+def test_no_basename_fails_closed(tmp_path: Path) -> None:
     pickup = _pickup(basename=None)
     ok, reason = _c3_ancestry(pickup, tmp_path)
     assert ok is False
 
 
-def test_resolved_archived_file_that_cannot_be_read_fails_closed(tmp_path: Path):
+def test_resolved_archived_file_that_cannot_be_read_fails_closed(tmp_path: Path) -> None:
     archived_dir = tmp_path / "archive" / "handoffs" / "2026-09"
     archived_dir.mkdir(parents=True)
     (archived_dir / "2026-09-01-baton.md").mkdir()
@@ -109,7 +110,7 @@ def test_resolved_archived_file_that_cannot_be_read_fails_closed(tmp_path: Path)
     assert ok is False
 
 
-def test_live_unarchived_path_still_passes(tmp_path: Path):
+def test_live_unarchived_path_still_passes(tmp_path: Path) -> None:
     _write(tmp_path, "state/handoffs/2026-09-01-baton.md", _ROOT_BODY)
     pickup = _pickup(
         basename="2026-09-01-baton.md",
@@ -120,7 +121,7 @@ def test_live_unarchived_path_still_passes(tmp_path: Path):
     assert "chain root" in reason
 
 
-def test_relative_worktree_root_resolves_instead_of_raising(tmp_path: Path, monkeypatch):
+def test_relative_worktree_root_resolves_instead_of_raising(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A relative `worktree_root` must still fail-or-pass, never raise.
 
     `_archive_handoffs_fallback` returns `contained_path`'s output, which is

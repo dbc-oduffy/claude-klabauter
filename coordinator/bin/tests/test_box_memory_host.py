@@ -21,7 +21,7 @@ GIB = host.GIB
 
 
 @pytest.fixture(autouse=True)
-def _roomy_cpu_budget(monkeypatch):
+def _roomy_cpu_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep memory-axis tests independent of the runner's core count."""
     monkeypatch.setattr(host, "default_cpu_budget", lambda: 64)
 
@@ -30,17 +30,17 @@ def _status(avail=100 * GIB, total=128 * GIB, used=10 * GIB, limit=200 * GIB):
     return host.MemoryStatus(avail, total, used, limit)
 
 
-def test_constants():
+def test_constants() -> None:
     assert host.GIB == 1024**3
     assert host.UNSUPPORTED_HOST_EXIT == 6
 
 
-def test_cannot_detach_exit_is_free_family_code():
+def test_cannot_detach_exit_is_free_family_code() -> None:
     assert host.CANNOT_DETACH_EXIT == 5
     assert host.CANNOT_DETACH_EXIT not in (0, 1, 2, 3, 4, host.UNSUPPORTED_HOST_EXIT)
 
 
-def test_admit_cap_binds_for_large_peak():
+def test_admit_cap_binds_for_large_peak() -> None:
     peak = 64 * GIB  # 25% = 16 GiB, capped at 8 GiB
     v = host.admit(peak, _status(avail=peak + 8 * GIB))
     assert v.need_avail == peak + 8 * GIB
@@ -49,7 +49,7 @@ def test_admit_cap_binds_for_large_peak():
     assert not v2.avail_ok and not v2.admit
 
 
-def test_admit_pct_binds_for_small_peak():
+def test_admit_pct_binds_for_small_peak() -> None:
     peak = 4 * GIB  # 25% = 1 GiB < cap
     v = host.admit(peak, _status(avail=5 * GIB))
     assert v.need_avail == 5 * GIB
@@ -57,29 +57,29 @@ def test_admit_pct_binds_for_small_peak():
     assert not host.admit(peak, _status(avail=5 * GIB - 1)).avail_ok
 
 
-def test_admit_commit_fails_alone():
+def test_admit_commit_fails_alone() -> None:
     st = _status(avail=100 * GIB, used=195 * GIB, limit=200 * GIB)
     v = host.admit(10 * GIB, st)
     assert v.avail_ok and not v.commit_ok and not v.admit
 
 
-def test_admit_avail_fails_alone():
+def test_admit_avail_fails_alone() -> None:
     st = _status(avail=1 * GIB, used=0, limit=200 * GIB)
     v = host.admit(10 * GIB, st)
     assert not v.avail_ok and v.commit_ok and not v.admit
 
 
-def test_admit_cushion_cap_parameter():
+def test_admit_cushion_cap_parameter() -> None:
     v = host.admit(64 * GIB, _status(), cushion_cap=2 * GIB)
     assert v.need_avail == 66 * GIB
 
 
-def test_admit_commit_limit_override():
+def test_admit_commit_limit_override() -> None:
     st = _status(used=10 * GIB, limit=200 * GIB)
     assert not host.admit(10 * GIB, st, commit_limit=15 * GIB).commit_ok
 
 
-def test_unsupported_output_shape(capsys):
+def test_unsupported_output_shape(capsys: pytest.CaptureFixture[str]) -> None:
     rc = host.unsupported("prog", "linux", "needs Windows")
     out = capsys.readouterr()
     assert rc == 6
@@ -87,19 +87,19 @@ def test_unsupported_output_shape(capsys):
     assert out.err == "prog: unsupported host (linux): needs Windows\n"
 
 
-def test_require_psutil_missing(monkeypatch, capsys):
+def test_require_psutil_missing(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setitem(sys.modules, "psutil", None)
     assert host.require_psutil("prog") == 1
     err = capsys.readouterr().err
     assert err.count("\n") == 1 and err.startswith("prog:")
 
 
-def test_require_psutil_present(monkeypatch):
+def test_require_psutil_present(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(sys.modules, "psutil", object())
     assert host.require_psutil("prog") is None
 
 
-def test_load_governor_fake_path(tmp_path):
+def test_load_governor_fake_path(tmp_path: Path) -> None:
     fake = tmp_path / "group-em-memory-governor.py"
     fake.write_text(
         "def descendants(): return 'd'\n"
@@ -114,10 +114,10 @@ def test_load_governor_fake_path(tmp_path):
             ("descendants", "list_procs", "signal_tree", "is_protected", "footprints")] == list("dlspf")
 
 
-def test_load_governor_default_is_sibling_path(monkeypatch):
+def test_load_governor_default_is_sibling_path(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
 
-    def fake_spec(name, path):
+    def fake_spec(name, path) -> None:
         seen["path"] = Path(path)
         return None
 
@@ -127,7 +127,7 @@ def test_load_governor_default_is_sibling_path(monkeypatch):
     assert seen["path"] == _HOST.parents[1] / "group-em-memory-governor.py"
 
 
-def test_memory_status_darwin_from_injected_readers():
+def test_memory_status_darwin_from_injected_readers() -> None:
     st = host.memory_status_darwin(
         avail_mb_fn=lambda: (8192, 16384),
         vm_fn=lambda: 16 * GIB,
@@ -137,14 +137,14 @@ def test_memory_status_darwin_from_injected_readers():
     assert st.commit_used == 9 * GIB and st.commit_limit == 20 * GIB
 
 
-def test_memory_status_darwin_unreadable_available_raises():
+def test_memory_status_darwin_unreadable_available_raises() -> None:
     with pytest.raises(OSError):
         host.memory_status_darwin(
             avail_mb_fn=lambda: (None, None), vm_fn=lambda: GIB, swap_fn=lambda: (0, 0)
         )
 
 
-def _without_coordinator_core(monkeypatch):
+def _without_coordinator_core(monkeypatch) -> None:
     # setitem-then-delitem makes undo delete a key absent at the start, so a module imported from a
     # fake tree never outlives the test.
     for name in ("coordinator_core", "coordinator_core.telemetry", "coordinator_core.telemetry.host_sampler"):
@@ -158,7 +158,7 @@ def _without_coordinator_core(monkeypatch):
     sys.path_importer_cache.clear()
 
 
-def test_host_sampler_bootstraps_the_checkout_root(monkeypatch, tmp_path):
+def test_host_sampler_bootstraps_the_checkout_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     pkg = tmp_path / "coordinator_core" / "telemetry"
     pkg.mkdir(parents=True)
     (tmp_path / "coordinator_core" / "__init__.py").write_text("")
@@ -169,13 +169,13 @@ def test_host_sampler_bootstraps_the_checkout_root(monkeypatch, tmp_path):
     assert str(tmp_path) in sys.path
 
 
-def test_host_sampler_names_the_missing_module(monkeypatch, tmp_path):
+def test_host_sampler_names_the_missing_module(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _without_coordinator_core(monkeypatch)
     with pytest.raises(OSError, match="coordinator_core.telemetry.host_sampler"):
         host._host_sampler(tmp_path)
 
 
-def test_memory_status_darwin_default_reader_names_missing_module(monkeypatch, tmp_path):
+def test_memory_status_darwin_default_reader_names_missing_module(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _without_coordinator_core(monkeypatch)
     real = host._host_sampler
     monkeypatch.setattr(host, "_host_sampler", lambda: real(tmp_path))
@@ -184,18 +184,18 @@ def test_memory_status_darwin_default_reader_names_missing_module(monkeypatch, t
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Win32 only")
-def test_read_memory_status_win32():
+def test_read_memory_status_win32() -> None:
     st = host.read_memory_status()
     assert st.commit_used <= st.commit_limit
     assert st.avail_phys <= st.total_phys
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Win32 only")
-def test_nonpaged_pool_bytes_win32():
+def test_nonpaged_pool_bytes_win32() -> None:
     assert host.nonpaged_pool_bytes() > 0
 
 
-def _spi_entry(next_off, pid, ppid, create, ws, private, name_ptr=0, name_len=0):
+def _spi_entry(next_off, pid, ppid, create, ws, private, name_ptr: int = 0, name_len: int = 0) -> bytes:
     import struct
 
     raw = bytearray(256)
@@ -208,7 +208,7 @@ def _spi_entry(next_off, pid, ppid, create, ws, private, name_ptr=0, name_len=0)
     return bytes(raw)
 
 
-def test_parse_process_information_two_entries_and_terminator():
+def test_parse_process_information_two_entries_and_terminator() -> None:
     name = "a.exe".encode("utf-16-le")
     ft = (1_700_000_000 + 11644473600) * 10_000_000
     first = _spi_entry(256, 10, 4, ft, 111, 222, name_ptr=1000 + 512, name_len=len(name))
@@ -220,13 +220,13 @@ def test_parse_process_information_two_entries_and_terminator():
     assert (rows[1].ppid, rows[1].create_time, rows[1].private_bytes, rows[1].image) == (10, 0.0, 444, "")
 
 
-def test_parse_process_information_no_base_leaves_image_empty():
+def test_parse_process_information_no_base_leaves_image_empty() -> None:
     name = "a.exe".encode("utf-16-le")
     buf = _spi_entry(0, 1, 0, 0, 1, 2, name_ptr=1256, name_len=len(name)) + name
     assert host.parse_process_information(buf)[0].image == ""
 
 
-def test_parse_process_information_truncated_and_empty():
+def test_parse_process_information_truncated_and_empty() -> None:
     assert host.parse_process_information(b"") == []
     full = _spi_entry(256, 1, 0, 0, 1, 2)
     assert [r.pid for r in host.parse_process_information(full)] == [1]
@@ -234,7 +234,7 @@ def test_parse_process_information_truncated_and_empty():
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Win32 only")
-def test_proc_table_contains_self_with_true_parent():
+def test_proc_table_contains_self_with_true_parent() -> None:
     import os
 
     rows = {r.pid: r for r in host.proc_table()}
@@ -243,12 +243,12 @@ def test_proc_table_contains_self_with_true_parent():
     assert me.private_bytes > 0 and me.image.lower().startswith("python")
 
 
-def test_proc_cmdline_nonexistent_pid_is_empty():
+def test_proc_cmdline_nonexistent_pid_is_empty() -> None:
     pytest.importorskip("psutil")
     assert host.proc_cmdline(2**22 + 1) == ""
 
 
-def _denied_process(monkeypatch, attr_error):
+def _denied_process(monkeypatch, attr_error) -> None:
     psutil = pytest.importorskip("psutil")
 
     def _process(pid):
@@ -258,31 +258,31 @@ def _denied_process(monkeypatch, attr_error):
 
 
 @pytest.mark.parametrize("exc", [PermissionError(5, "denied"), OSError(13, "denied")])
-def test_proc_cmdline_os_error_is_empty(monkeypatch, exc):
+def test_proc_cmdline_os_error_is_empty(monkeypatch: pytest.MonkeyPatch, exc) -> None:
     _denied_process(monkeypatch, exc)
     assert host.proc_cmdline(1234) == ""
 
 
-def test_proc_cmdline_access_denied_is_empty(monkeypatch):
+def test_proc_cmdline_access_denied_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     psutil = pytest.importorskip("psutil")
     _denied_process(monkeypatch, psutil.AccessDenied(1234))
     assert host.proc_cmdline(1234) == ""
 
 
-def test_pid_create_time_and_image_permission_denied_are_none(monkeypatch):
+def test_pid_create_time_and_image_permission_denied_are_none(monkeypatch: pytest.MonkeyPatch) -> None:
     _denied_process(monkeypatch, PermissionError(5, "denied"))
     assert host.pid_create_time(1234) is None
     assert host.pid_image(1234) is None
 
 
 @pytest.mark.parametrize("handle, trim_result", [(0, 1), (77, 0)])
-def test_empty_working_set_denied_is_a_noop(monkeypatch, handle, trim_result):
+def test_empty_working_set_denied_is_a_noop(monkeypatch: pytest.MonkeyPatch, handle, trim_result) -> None:
     import ctypes
 
     closed = []
 
     class _Fn:
-        def __init__(self, fn):
+        def __init__(self, fn) -> None:
             self._fn = fn
             self.argtypes = None
             self.restype = None
@@ -301,7 +301,7 @@ def test_empty_working_set_denied_is_a_noop(monkeypatch, handle, trim_result):
     assert closed == ([77] if handle else [])
 
 
-def test_reserved_bytes_permission_denied_peer_checks_reserve_nothing(tmp_path):
+def test_reserved_bytes_permission_denied_peer_checks_reserve_nothing(tmp_path: Path) -> None:
     adm = tmp_path / "admission.jsonl"
     host.register_command(adm, "k", 5, 4.0)
 
@@ -320,20 +320,20 @@ def test_reserved_bytes_permission_denied_peer_checks_reserve_nothing(tmp_path):
     "peak_gib, need_gib",
     [(2, 2.5), (12.3, 15.375), (32, 40), (40, 48), (100, 108)],
 )
-def test_admit_need_is_peak_plus_cushion_capped_at_8_gib(peak_gib, need_gib):
+def test_admit_need_is_peak_plus_cushion_capped_at_8_gib(peak_gib, need_gib) -> None:
     status = host.MemoryStatus(200 * host.GIB, 256 * host.GIB, 0, 1000 * host.GIB)
     verdict = host.admit(int(peak_gib * host.GIB), status)
     assert verdict.need_avail == pytest.approx(need_gib * host.GIB, rel=1e-9)
 
 
-def test_admit_has_no_floor_term():
+def test_admit_has_no_floor_term() -> None:
     status = host.MemoryStatus(3 * host.GIB, 64 * host.GIB, 0, 100 * host.GIB)
     assert host.admit(2 * host.GIB, status).admit
     assert not host.admit(2.5 * host.GIB, status).admit
     assert not hasattr(host, "guard_floor_bytes")
 
 
-def test_admit_and_register_subtracts_live_reservation(tmp_path):
+def test_admit_and_register_subtracts_live_reservation(tmp_path: Path) -> None:
     adm = tmp_path / "admission.jsonl"
     host.register_command(adm, "other", 5, 4.0)
     status = host.MemoryStatus(10 * host.GIB, 64 * host.GIB, 0, 100 * host.GIB)
@@ -347,7 +347,7 @@ def test_admit_and_register_subtracts_live_reservation(tmp_path):
     assert not verdict.admit
 
 
-def test_peak_store_keeps_largest(tmp_path):
+def test_peak_store_keeps_largest(tmp_path: Path) -> None:
     adm = tmp_path / "admission.jsonl"
     assert host.read_recorded_peak(adm, "k") is None
     host.record_peak(adm, "k", 2.0)
@@ -355,7 +355,7 @@ def test_peak_store_keeps_largest(tmp_path):
     assert host.read_recorded_peak(adm, "k") == 2.0
 
 
-def test_register_and_release_drive_reserved(tmp_path):
+def test_register_and_release_drive_reserved(tmp_path: Path) -> None:
     adm = tmp_path / "admission.jsonl"
     host.register_command(adm, "k", 5, 4.0)
     kw = dict(rss_fn=lambda p: 1024.0, alive_fn=lambda p: True, image_fn=lambda p: "python.exe")
@@ -378,11 +378,11 @@ def _ledger(tmp_path, *rows):
     return adm
 
 
-def _start(run, pid=5, **extra):
+def _start(run, pid: int = 5, **extra):
     return {"phase": "START", "session_id": "s", "run": run, "pids": [pid], "declared_peak_mb": 4096, **extra}
 
 
-def test_register_stamps_create_time_and_ts(tmp_path):
+def test_register_stamps_create_time_and_ts(tmp_path: Path) -> None:
     import json
 
     adm = tmp_path / "admission.jsonl"
@@ -391,7 +391,7 @@ def test_register_stamps_create_time_and_ts(tmp_path):
     assert line["create_time"] == 1234.5 and isinstance(line["ts"], float)
 
 
-def test_matching_create_time_reserves_and_recycled_pid_does_not(tmp_path):
+def test_matching_create_time_reserves_and_recycled_pid_does_not(tmp_path: Path) -> None:
     adm = tmp_path / "admission.jsonl"
     host.register_command(adm, "k", 5, 4.0, create_time_fn=lambda p: 1000.0)
     assert host.reserved_bytes(adm, create_time_fn=lambda p: 1000.0, **_kw()) == 4 * host.GIB
@@ -400,7 +400,7 @@ def test_matching_create_time_reserves_and_recycled_pid_does_not(tmp_path):
     assert host.reserved_bytes(adm, create_time_fn=lambda p: None, **_kw()) == 0
 
 
-def test_legacy_start_with_ts_keeps_only_while_create_time_not_after_ts(tmp_path):
+def test_legacy_start_with_ts_keeps_only_while_create_time_not_after_ts(tmp_path: Path) -> None:
     adm = _ledger(tmp_path, _start("a", ts=1000.0))
     assert host.reserved_bytes(adm, create_time_fn=lambda p: 900.0, **_kw()) == 4 * host.GIB
     assert host.reserved_bytes(adm, create_time_fn=lambda p: 1000.0, **_kw()) == 4 * host.GIB
@@ -408,19 +408,19 @@ def test_legacy_start_with_ts_keeps_only_while_create_time_not_after_ts(tmp_path
     assert host.reserved_bytes(adm, create_time_fn=lambda p: 1001.1, **_kw()) == 0
 
 
-def test_legacy_start_without_ts_or_create_time_never_reserves(tmp_path):
+def test_legacy_start_without_ts_or_create_time_never_reserves(tmp_path: Path) -> None:
     adm = _ledger(tmp_path, _start("a"))
     assert host.reserved_bytes(adm, create_time_fn=lambda p: 5e9, **_kw()) == 0
 
 
-def test_unstamped_start_reserves_only_within_bounded_age(tmp_path):
+def test_unstamped_start_reserves_only_within_bounded_age(tmp_path: Path) -> None:
     adm = _ledger(tmp_path, _start("a", ts=1000.0))
     ok = host.reserved_bytes(adm, create_time_fn=lambda p: 900.0, **_kw(now_fn=lambda: 1000.0 + 3600))
     stale = host.reserved_bytes(adm, create_time_fn=lambda p: 900.0, **_kw(now_fn=lambda: 1000.0 + 7 * 3600))
     assert ok == 4 * host.GIB and stale == 0
 
 
-def test_image_not_the_declared_command_does_not_hold(tmp_path):
+def test_image_not_the_declared_command_does_not_hold(tmp_path: Path) -> None:
     adm = _ledger(tmp_path, _start("test-runner-pytest:5", ts=1000.0))
     ct = lambda p: 900.0
     assert host.reserved_bytes(adm, create_time_fn=ct, **_kw(image_fn=lambda p: "conhost.exe")) == 0
@@ -429,7 +429,7 @@ def test_image_not_the_declared_command_does_not_hold(tmp_path):
     assert host.reserved_bytes(adm, create_time_fn=ct, **_kw(image_fn=lambda p: "python.exe")) == 4 * host.GIB
 
 
-def test_forty_recycled_pid_legacy_starts_reserve_zero(tmp_path):
+def test_forty_recycled_pid_legacy_starts_reserve_zero(tmp_path: Path) -> None:
     rows = [
         {"phase": "START", "session_id": "box-memory-snapshot", "run": f"test-runner-pytest:{1000 + i}",
          "pids": [1000 + i], "declared_peak_mb": 1024}
@@ -441,7 +441,7 @@ def test_forty_recycled_pid_legacy_starts_reserve_zero(tmp_path):
     assert host.reserved_bytes(adm, create_time_fn=lambda p: 5e9, **_kw(image_fn=lambda p: "python.exe")) == 0
 
 
-def test_top_holders_names_session_run_pid_image_largest_first(tmp_path):
+def test_top_holders_names_session_run_pid_image_largest_first(tmp_path: Path) -> None:
     adm = _ledger(
         tmp_path,
         _start("small", pid=1, create_time=10.0, declared_peak_mb=1024),
@@ -451,7 +451,7 @@ def test_top_holders_names_session_run_pid_image_largest_first(tmp_path):
     assert rows == [{"session_id": "s", "run": "big", "pid": 2, "image": "python.exe", "bytes": 8 * host.GIB}]
 
 
-def test_compaction_drops_dead_and_recycled_and_closed_and_backfills_legacy(tmp_path):
+def test_compaction_drops_dead_and_recycled_and_closed_and_backfills_legacy(tmp_path: Path) -> None:
     import json
 
     end = {"phase": "END", "session_id": "s", "run": "closed", "pids": []}
@@ -482,7 +482,7 @@ def test_compaction_drops_dead_and_recycled_and_closed_and_backfills_legacy(tmp_
     assert host.compact_admission(adm, alive_fn=lambda p: True, **liveness) == 0
 
 
-def test_after_compaction_backfilled_legacy_row_is_recycle_safe(tmp_path):
+def test_after_compaction_backfilled_legacy_row_is_recycle_safe(tmp_path: Path) -> None:
     adm = _ledger(tmp_path, _start("legacy", pid=8, ts=300.0))
     host.compact_admission(
         adm, alive_fn=lambda p: True, create_time_fn=lambda p: 250.0,
@@ -492,7 +492,7 @@ def test_after_compaction_backfilled_legacy_row_is_recycle_safe(tmp_path):
     assert host.reserved_bytes(adm, create_time_fn=lambda p: 9999.0, **_kw()) == 0
 
 
-def test_admit_and_register_compacts_dead_rows(tmp_path):
+def test_admit_and_register_compacts_dead_rows(tmp_path: Path) -> None:
     adm = _ledger(tmp_path, _start("dead", pid=1, create_time=10.0))
     status = host.MemoryStatus(avail_phys=100 * host.GIB, total_phys=128 * host.GIB, commit_used=0, commit_limit=200 * host.GIB)
     kw = dict(rss_fn=lambda p: 0.0, alive_fn=lambda p: p != 1, create_time_fn=lambda p: 7.0)
@@ -501,7 +501,7 @@ def test_admit_and_register_compacts_dead_rows(tmp_path):
     assert '"dead"' not in adm.read_text(encoding="utf-8")
 
 
-def test_concurrent_admits_serialize_check_and_reserve(tmp_path):
+def test_concurrent_admits_serialize_check_and_reserve(tmp_path: Path) -> None:
     import threading
 
     adm = tmp_path / "admission.jsonl"
@@ -509,7 +509,7 @@ def test_concurrent_admits_serialize_check_and_reserve(tmp_path):
     results = []
     barrier = threading.Barrier(8)
 
-    def worker(pid):
+    def worker(pid) -> None:
         barrier.wait()
         verdict, _ = host.admit_and_register(
             adm, "k", pid, 4.0, status, cushion_pct=0.0,
@@ -525,7 +525,7 @@ def test_concurrent_admits_serialize_check_and_reserve(tmp_path):
     assert sorted(results) == [False] * 6 + [True] * 2
 
 
-def test_admit_and_register_holds_without_writing_a_reservation(tmp_path):
+def test_admit_and_register_holds_without_writing_a_reservation(tmp_path: Path) -> None:
     adm = tmp_path / "admission.jsonl"
     status = host.MemoryStatus(3 * GIB, 64 * GIB, 1 * GIB, 100 * GIB)
     verdict, _ = host.admit_and_register(adm, "k", 7, 4.0, status, cushion_pct=0.0)
@@ -533,11 +533,11 @@ def test_admit_and_register_holds_without_writing_a_reservation(tmp_path):
     assert not adm.exists()
 
 
-def _grant(tmp_path, grantee="g", run="reseal", peak_mb=19 * 1024, issued=500.0, expires=2000.0, **extra):
+def _grant(tmp_path, grantee: str = "g", run: str = "reseal", peak_mb=19 * 1024, issued: float = 500.0, expires: float = 2000.0, **extra):
     import json
     from datetime import datetime, timezone
 
-    def iso(t):
+    def iso(t) -> str:
         return datetime.fromtimestamp(t, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     gdir = tmp_path / "state" / "group-em" / "slot-grants" / "issuer"
@@ -548,14 +548,14 @@ def _grant(tmp_path, grantee="g", run="reseal", peak_mb=19 * 1024, issued=500.0,
     return tmp_path / "state" / "group-em" / "box" / "admission.jsonl"
 
 
-def test_live_grant_with_no_ledger_reserves_declared_peak(tmp_path):
+def test_live_grant_with_no_ledger_reserves_declared_peak(tmp_path: Path) -> None:
     adm = _grant(tmp_path)
     assert host.reserved_bytes(adm, now_fn=lambda: 1000.0) == 19 * GIB
     rows = host.top_holders(adm, now_fn=lambda: 1000.0)
     assert rows[0]["session_id"] == "g" and rows[0]["pid"] is None
 
 
-def test_expired_or_not_yet_issued_or_malformed_grant_reserves_nothing(tmp_path):
+def test_expired_or_not_yet_issued_or_malformed_grant_reserves_nothing(tmp_path: Path) -> None:
     adm = _grant(tmp_path)
     assert host.reserved_bytes(adm, now_fn=lambda: 2000.0) == 0
     assert host.reserved_bytes(adm, now_fn=lambda: 499.0) == 0
@@ -564,7 +564,7 @@ def test_expired_or_not_yet_issued_or_malformed_grant_reserves_nothing(tmp_path)
     assert host.reserved_bytes(_grant(tmp_path, run="ttl", expires=500.0 + 241 * 60, peak_mb=99999), now_fn=lambda: 1000.0) == 19 * GIB
 
 
-def test_registered_start_and_its_grant_count_once(tmp_path):
+def test_registered_start_and_its_grant_count_once(tmp_path: Path) -> None:
     import json
 
     adm = _grant(tmp_path)
@@ -581,7 +581,7 @@ def test_registered_start_and_its_grant_count_once(tmp_path):
     assert host.reserved_bytes(adm, **kw) == 0
 
 
-def test_grant_is_added_to_other_registered_reservation(tmp_path):
+def test_grant_is_added_to_other_registered_reservation(tmp_path: Path) -> None:
     import json
 
     adm = _grant(tmp_path)
@@ -595,7 +595,7 @@ def test_grant_is_added_to_other_registered_reservation(tmp_path):
     assert host.reserved_bytes(adm, **kw) == 21 * GIB
 
 
-def test_admit_and_register_holds_on_unregistered_grant(tmp_path):
+def test_admit_and_register_holds_on_unregistered_grant(tmp_path: Path) -> None:
     adm = _grant(tmp_path)
     status = host.MemoryStatus(40 * GIB, 64 * GIB, 50 * GIB, 100 * GIB)
     verdict, reserved = host.admit_and_register(adm, "k", 7, 20.0, status, now_fn=lambda: 1000.0)
@@ -603,7 +603,7 @@ def test_admit_and_register_holds_on_unregistered_grant(tmp_path):
     assert not adm.exists()
 
 
-def test_trim_file_cache_is_windows_only_and_reuses_the_governor_fire(monkeypatch):
+def test_trim_file_cache_is_windows_only_and_reuses_the_governor_fire(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(host.sys, "platform", "darwin")
     assert host.trim_file_cache() is None
     monkeypatch.setattr(host.sys, "platform", "win32")
@@ -628,7 +628,7 @@ def _cpu_ledger(tmp_path, *cores):
     return adm
 
 
-def test_register_records_declared_cores_and_absent_counts_one(tmp_path):
+def test_register_records_declared_cores_and_absent_counts_one(tmp_path: Path) -> None:
     import json
 
     adm = _cpu_ledger(tmp_path, 3, None)
@@ -637,13 +637,13 @@ def test_register_records_declared_cores_and_absent_counts_one(tmp_path):
     assert host.reserved_cores(adm, **{k: v for k, v in _CPU_KW.items() if k != "rss_fn"}) == 4
 
 
-def test_row_without_declared_cores_counts_one(tmp_path):
+def test_row_without_declared_cores_counts_one(tmp_path: Path) -> None:
     adm = _ledger(tmp_path, *(_start(r, p, ts=999.0, **extra) for r, p, extra in (
         ("a", 5, {}), ("b", 6, {"declared_cores": 0}), ("c", 7, {"declared_cores": True}))))
     assert host.reserved_cores(adm, **_LEGACY_KW) == 3
 
 
-def test_reserved_cores_skips_ended_dead_and_unreserving_rows(tmp_path):
+def test_reserved_cores_skips_ended_dead_and_unreserving_rows(tmp_path: Path) -> None:
     adm = _ledger(
         tmp_path,
         _start("a", 5, declared_cores=4, ts=999.0),
@@ -656,7 +656,7 @@ def test_reserved_cores_skips_ended_dead_and_unreserving_rows(tmp_path):
     assert host.reserved_cores(adm, **kw) == 2
 
 
-def test_cpu_axis_holds_when_declared_plus_reserved_exceeds_budget(tmp_path):
+def test_cpu_axis_holds_when_declared_plus_reserved_exceeds_budget(tmp_path: Path) -> None:
     adm = _cpu_ledger(tmp_path, 3)  # budget 4, reserved 3
     verdict, _ = host.admit_and_register(adm, "k", 99, 1.0, _ROOMY, cores=2, cpu_budget=4, **_CPU_KW)
     assert not verdict.admit and verdict.avail_ok and verdict.commit_ok and not verdict.cpu_ok
@@ -666,7 +666,7 @@ def test_cpu_axis_holds_when_declared_plus_reserved_exceeds_budget(tmp_path):
     assert len(adm.read_text(encoding="utf-8").splitlines()) == 1  # a HOLD writes no reservation
 
 
-def test_cpu_axis_admits_exactly_at_budget_and_default_leg_is_one_core(tmp_path):
+def test_cpu_axis_admits_exactly_at_budget_and_default_leg_is_one_core(tmp_path: Path) -> None:
     adm = _cpu_ledger(tmp_path, 3)
     verdict, _ = host.admit_and_register(adm, "k", 99, 1.0, _ROOMY, cpu_budget=4, **_CPU_KW)
     assert verdict.admit and verdict.hold_reason == "" and verdict.declared_cores == 1
@@ -674,26 +674,26 @@ def test_cpu_axis_admits_exactly_at_budget_and_default_leg_is_one_core(tmp_path)
     assert not over.admit and "cpu:" in over.hold_reason
 
 
-def test_admitted_leg_records_its_cores_for_the_next_admit(tmp_path):
+def test_admitted_leg_records_its_cores_for_the_next_admit(tmp_path: Path) -> None:
     adm = tmp_path / "admission.jsonl"
     first, _ = host.admit_and_register(adm, "a", 1, 1.0, _ROOMY, cores=3, cpu_budget=4, **_CPU_KW)
     second, _ = host.admit_and_register(adm, "b", 2, 1.0, _ROOMY, cores=2, cpu_budget=4, **_CPU_KW)
     assert first.admit and not second.admit and second.reserved_cores == 3
 
 
-def test_lone_leg_wider_than_budget_still_admits(tmp_path):
+def test_lone_leg_wider_than_budget_still_admits(tmp_path: Path) -> None:
     verdict, _ = host.admit_and_register(tmp_path / "admission.jsonl", "k", 1, 1.0, _ROOMY, cores=30, cpu_budget=4, **_CPU_KW)
     assert verdict.admit and verdict.cpu_ok
 
 
-def test_memory_hold_and_cpu_hold_both_named(tmp_path):
+def test_memory_hold_and_cpu_hold_both_named(tmp_path: Path) -> None:
     adm = _cpu_ledger(tmp_path, 3)
     tight = host.MemoryStatus(1 * GIB, 128 * GIB, 0, 200 * GIB)
     verdict, _ = host.admit_and_register(adm, "k", 99, 4.0, tight, cores=2, cpu_budget=4, **_CPU_KW)
     assert not verdict.admit and "memory:" in verdict.hold_reason and "cpu:" in verdict.hold_reason
 
 
-def test_selected_reservation_holds_on_cpu_axis_and_excludes_own_row(tmp_path):
+def test_selected_reservation_holds_on_cpu_axis_and_excludes_own_row(tmp_path: Path) -> None:
     adm = _cpu_ledger(tmp_path, 3)
     sel = lambda: {"kind": "own-grant", "session_id": "g", "run": "r",  # noqa: E731
                    "grant": {"grantee_session_id": "g", "run": "r", "issuer_session_id": "i", "declared_peak_mb": 1024}}
@@ -703,7 +703,7 @@ def test_selected_reservation_holds_on_cpu_axis_and_excludes_own_row(tmp_path):
     assert ok.admit
 
 
-def test_default_cpu_budget_is_physical_minus_reserve_floor_one(monkeypatch):
+def test_default_cpu_budget_is_physical_minus_reserve_floor_one(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.undo()  # drop the autouse roomy budget
     monkeypatch.delenv(host._CORE_RESERVE_ENV, raising=False)
     monkeypatch.setattr(host, "physical_cores", lambda: 24)
@@ -714,5 +714,5 @@ def test_default_cpu_budget_is_physical_minus_reserve_floor_one(monkeypatch):
     assert host.default_cpu_budget() == 1
 
 
-def test_physical_cores_is_positive():
+def test_physical_cores_is_positive() -> None:
     assert host.physical_cores() >= 1

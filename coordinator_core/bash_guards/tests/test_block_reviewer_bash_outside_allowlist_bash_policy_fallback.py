@@ -36,6 +36,8 @@ from coordinator_core.bash_guards import (
     block_reviewer_bash_outside_allowlist as guard,
 )
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
+import pytest
 
 
 def _enveloped(check):
@@ -73,7 +75,7 @@ def _assert_denied(result):
     return result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_bash_policy_path_absent_still_denies_git_commit(tmp_path, monkeypatch):
+def test_bash_policy_path_absent_still_denies_git_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _confine(monkeypatch)
     missing_path = tmp_path / "does-not-exist.yaml"
     payload = _payload('git commit -m "x"')
@@ -81,7 +83,7 @@ def test_bash_policy_path_absent_still_denies_git_commit(tmp_path, monkeypatch):
     assert "coordinator-doc-new" in reason
 
 
-def test_bash_policy_file_unreadable_still_denies_git_commit(tmp_path, monkeypatch):
+def test_bash_policy_file_unreadable_still_denies_git_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _confine(monkeypatch)
     unreadable = tmp_path / "policy-is-a-directory"
     unreadable.mkdir()
@@ -90,7 +92,7 @@ def test_bash_policy_file_unreadable_still_denies_git_commit(tmp_path, monkeypat
     assert "coordinator-doc-new" in reason
 
 
-def test_bash_policy_malformed_top_level_still_denies_git_commit(tmp_path, monkeypatch):
+def test_bash_policy_malformed_top_level_still_denies_git_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _confine(monkeypatch)
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text("- not\n- a\n- mapping\n", encoding="utf-8")
@@ -99,7 +101,7 @@ def test_bash_policy_malformed_top_level_still_denies_git_commit(tmp_path, monke
     assert "coordinator-doc-new" in reason
 
 
-def test_bash_policy_entry_missing_keys_still_denies_git_commit(tmp_path, monkeypatch):
+def test_bash_policy_entry_missing_keys_still_denies_git_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # NOTE (review finding 3, 2026-07-27): this fixture is intentionally a
     # single-key dict, so it exercises _validate_ruleset's `except (KeyError,
     # TypeError)` MISSING-KEY path, not the isinstance/_is_str_list
@@ -124,7 +126,7 @@ def test_bash_policy_entry_missing_keys_still_denies_git_commit(tmp_path, monkey
     assert "coordinator-doc-new" in reason
 
 
-def test_bash_policy_entry_missing_keys_still_denies_unlisted_command(tmp_path, monkeypatch):
+def test_bash_policy_entry_missing_keys_still_denies_unlisted_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _confine(monkeypatch)
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(
@@ -174,7 +176,7 @@ def _well_formed_ruleset_with_override(**overrides: Any) -> str:
     return yaml.safe_dump({"bash_policy": {_CONFINED_TYPE: ruleset}}, sort_keys=False)
 
 
-def test_bash_policy_non_str_list_element_still_denies_git_commit(tmp_path, monkeypatch):
+def test_bash_policy_non_str_list_element_still_denies_git_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _confine(monkeypatch)
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(
@@ -186,7 +188,7 @@ def test_bash_policy_non_str_list_element_still_denies_git_commit(tmp_path, monk
     assert "coordinator-doc-new" in reason
 
 
-def test_bash_policy_non_str_list_element_still_denies_unlisted_command(tmp_path, monkeypatch):
+def test_bash_policy_non_str_list_element_still_denies_unlisted_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _confine(monkeypatch)
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(
@@ -198,7 +200,7 @@ def test_bash_policy_non_str_list_element_still_denies_unlisted_command(tmp_path
     assert "coordinator-doc-new" in reason
 
 
-def test_bash_policy_empty_scaffolder_field_still_denies_git_commit(tmp_path, monkeypatch):
+def test_bash_policy_empty_scaffolder_field_still_denies_git_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _confine(monkeypatch)
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(
@@ -210,7 +212,7 @@ def test_bash_policy_empty_scaffolder_field_still_denies_git_commit(tmp_path, mo
     assert "coordinator-doc-new" in reason
 
 
-def test_bash_policy_empty_scaffolder_field_still_denies_unlisted_command(tmp_path, monkeypatch):
+def test_bash_policy_empty_scaffolder_field_still_denies_unlisted_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _confine(monkeypatch)
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(
@@ -222,7 +224,7 @@ def test_bash_policy_empty_scaffolder_field_still_denies_unlisted_command(tmp_pa
     assert "coordinator-doc-new" in reason
 
 
-def test_bash_policy_non_dict_git_global_options_still_denies_git_commit(tmp_path, monkeypatch):
+def test_bash_policy_non_dict_git_global_options_still_denies_git_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _confine(monkeypatch)
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(
@@ -234,7 +236,7 @@ def test_bash_policy_non_dict_git_global_options_still_denies_git_commit(tmp_pat
     assert "coordinator-doc-new" in reason
 
 
-def test_bash_policy_non_dict_git_global_options_still_denies_unlisted_command(tmp_path, monkeypatch):
+def test_bash_policy_non_dict_git_global_options_still_denies_unlisted_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _confine(monkeypatch)
     policy_file = tmp_path / "policy.yaml"
     policy_file.write_text(
@@ -281,8 +283,8 @@ def _well_formed_policy_yaml(readonly_fs_binaries) -> str:
 
 
 def test_well_formed_policy_ruleset_does_not_grant_a_binary_the_hardcoded_fallback_denies(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _confine(monkeypatch)
     payload = _payload("sed -n 1p some-file.txt")
 
@@ -300,8 +302,8 @@ def test_well_formed_policy_ruleset_does_not_grant_a_binary_the_hardcoded_fallba
 
 
 def test_well_formed_policy_ruleset_does_not_narrow_git_subcommands_relative_to_fallback(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _confine(monkeypatch)
     payload = _payload("git log")
 
@@ -327,8 +329,8 @@ def test_well_formed_policy_ruleset_does_not_narrow_git_subcommands_relative_to_
 
 
 def test_preexisting_policy_entry_does_not_shadow_newer_interpreter_override(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _confine(monkeypatch)
     payload = _payload("python3 -m pytest -q")
 

@@ -22,6 +22,8 @@ import os
 import time
 
 from coordinator_core.group_em import watch_spool
+from pathlib import Path
+import pytest
 
 
 def _records(repo_root):
@@ -42,13 +44,13 @@ def _records(repo_root):
     return out
 
 
-def _raw_contents(repo_root):
+def _raw_contents(repo_root) -> str:
     path = watch_spool.spool_path(str(repo_root))
     with open(path, encoding="utf-8") as fh:
         return fh.read()
 
 
-def _write_lines(repo_root, lines):
+def _write_lines(repo_root, lines) -> None:
     os.makedirs(os.path.join(str(repo_root), "state"), exist_ok=True)
     with open(watch_spool.spool_path(str(repo_root)), "w", encoding="utf-8") as fh:
         for line in lines:
@@ -56,25 +58,25 @@ def _write_lines(repo_root, lines):
             fh.write("\n")
 
 
-def _stamp(epoch):
+def _stamp(epoch) -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(epoch))
 
 
-def _record(epoch, session_id="s1"):
+def _record(epoch, session_id: str = "s1") -> str:
     return json.dumps(
         {"session_id": session_id, "state": "PAUSED:idle", "at": _stamp(epoch),
          "writer": "receiver-state-sensor"}
     )
 
 
-def test_absent_spool_is_not_an_error(tmp_path):
+def test_absent_spool_is_not_an_error(tmp_path: Path) -> None:
     (tmp_path / "state").mkdir()
     assert _records(tmp_path) == []
     assert watch_spool.prune(str(tmp_path)) is True
     assert not os.path.exists(watch_spool.spool_path(str(tmp_path)))
 
 
-def test_a_record_inside_the_retain_window_survives_a_triggered_prune(tmp_path):
+def test_a_record_inside_the_retain_window_survives_a_triggered_prune(tmp_path: Path) -> None:
     """A young record plus an old one (past the trigger) forces a rewrite;
     the young one -- inside `RETAIN_SECONDS` -- must still be there after."""
     now = time.time()
@@ -87,7 +89,7 @@ def test_a_record_inside_the_retain_window_survives_a_triggered_prune(tmp_path):
     assert kept_ids == {"young"}
 
 
-def test_a_record_past_the_retain_window_is_dropped_by_a_triggered_prune(tmp_path):
+def test_a_record_past_the_retain_window_is_dropped_by_a_triggered_prune(tmp_path: Path) -> None:
     """A record between RETAIN and the trigger window is dropped once the
     prune actually runs -- retention is `RETAIN_SECONDS`, not the trigger."""
     now = time.time()
@@ -101,7 +103,7 @@ def test_a_record_past_the_retain_window_is_dropped_by_a_triggered_prune(tmp_pat
     assert kept_ids == {"fresh"}
 
 
-def test_prune_is_a_no_op_and_byte_identical_when_the_oldest_record_is_inside_the_trigger(tmp_path):
+def test_prune_is_a_no_op_and_byte_identical_when_the_oldest_record_is_inside_the_trigger(tmp_path: Path) -> None:
     """THE LAZINESS ITSELF. An oldest record inside `PRUNE_TRIGGER_SECONDS`
     (even if outside `RETAIN_SECONDS`) must not cause a rewrite at all --
     the file is left byte-for-byte untouched."""
@@ -116,7 +118,7 @@ def test_prune_is_a_no_op_and_byte_identical_when_the_oldest_record_is_inside_th
     assert _raw_contents(tmp_path) == before
 
 
-def test_the_count_cap_triggers_a_prune_even_when_every_record_is_fresh(tmp_path):
+def test_the_count_cap_triggers_a_prune_even_when_every_record_is_fresh(tmp_path: Path) -> None:
     """A burst well inside `PRUNE_TRIGGER_SECONDS` must still be capped --
     the count trigger fires independently of age."""
     now = time.time()
@@ -132,7 +134,7 @@ def test_the_count_cap_triggers_a_prune_even_when_every_record_is_fresh(tmp_path
     assert f"s{watch_spool.MAX_RECORDS + 4}" in kept_ids
 
 
-def test_an_unparseable_oldest_record_triggers_a_rewrite_that_drops_it(tmp_path):
+def test_an_unparseable_oldest_record_triggers_a_rewrite_that_drops_it(tmp_path: Path) -> None:
     now = time.time()
     torn = '{"session_id": "s2", "state": "PAUSED:i'
     fresh = _record(now - 1, "fresh")
@@ -143,7 +145,7 @@ def test_an_unparseable_oldest_record_triggers_a_rewrite_that_drops_it(tmp_path)
     assert kept_ids == {"fresh"}
 
 
-def test_prune_returns_false_and_leaves_the_spool_untouched_on_a_write_failure(tmp_path, monkeypatch):
+def test_prune_returns_false_and_leaves_the_spool_untouched_on_a_write_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     now = time.time()
     old_line = _record(now - watch_spool.PRUNE_TRIGGER_SECONDS - 60, "old")
     _write_lines(tmp_path, [old_line])

@@ -13,6 +13,7 @@ import pytest
 
 from coordinator_core import dispatch_abandon
 from coordinator_core.ops.dispatch_emit import land_deadline, land_run
+from pathlib import Path
 
 LAND_BUDGET = land_deadline.LAND_BUDGET_SECS
 STALL = LAND_BUDGET + land_deadline.RESERVE_SECS + 1.0
@@ -28,14 +29,14 @@ class FakeClock:
 
 
 @pytest.fixture
-def run(tmp_path, monkeypatch):
+def run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     clock = FakeClock()
     monkeypatch.setattr(land_deadline, "_now", clock)
     monkeypatch.setattr(dispatch_abandon, "time", types.SimpleNamespace(monotonic=clock))
     monkeypatch.setattr("coordinator_core.lifecycle.main_worktree_root", lambda common: tmp_path)
     calls = []
 
-    def go(attempt, window=WINDOW, mode="product"):
+    def go(attempt, window=WINDOW, mode: str = "product"):
         def fake_mode(mode_, root, repo_root, params):
             calls.append(clock.now)
             return attempt(clock, len(calls))
@@ -52,7 +53,7 @@ def run(tmp_path, monkeypatch):
     return go
 
 
-def _landing(stalls_before_script_read, later_stall=0.0):
+def _landing(stalls_before_script_read, later_stall: float = 0.0):
     def attempt(clock, n):
         if n <= stalls_before_script_read:
             clock.now += STALL
@@ -64,13 +65,13 @@ def _landing(stalls_before_script_read, later_stall=0.0):
     return attempt
 
 
-def test_a_first_attempt_stall_before_script_read_is_retried_and_lands(run):
+def test_a_first_attempt_stall_before_script_read_is_retried_and_lands(run) -> None:
     reply = run(_landing(1))
     assert reply == {"committed": True, "sha": "abc"}
     assert len(run.calls) == 2
 
 
-def test_a_repeated_script_read_stall_halts_after_one_retry(run):
+def test_a_repeated_script_read_stall_halts_after_one_retry(run) -> None:
     reply = run(_landing(2))
     assert reply["refused"] == land_deadline.REFUSED
     assert reply["leg"] == "land_run.script_read"
@@ -78,26 +79,26 @@ def test_a_repeated_script_read_stall_halts_after_one_retry(run):
     assert len(run.calls) == 2
 
 
-def test_a_halt_on_a_later_leg_is_not_retried(run):
+def test_a_halt_on_a_later_leg_is_not_retried(run) -> None:
     reply = run(_landing(0, later_stall=STALL))
     assert reply["refused"] == land_deadline.REFUSED
     assert reply["leg"] == "land_run.integrity"
     assert len(run.calls) == 1
 
 
-def test_a_dispatcher_window_without_a_full_budget_left_halts_without_retry(run):
+def test_a_dispatcher_window_without_a_full_budget_left_halts_without_retry(run) -> None:
     reply = run(_landing(1), window=STALL + 1.0)
     assert reply["refused"] == land_deadline.REFUSED
     assert len(run.calls) == 1
 
 
-def test_a_halted_mode_call_is_never_retried(run):
+def test_a_halted_mode_call_is_never_retried(run) -> None:
     reply = run(_landing(0), mode="halted")
     assert reply == {"committed": True, "sha": "abc"}
     assert len(run.calls) == 1
 
 
-def test_an_unbound_dispatcher_window_still_retries_once(run):
+def test_an_unbound_dispatcher_window_still_retries_once(run) -> None:
     reply = run(_landing(1), window=None)
     assert reply == {"committed": True, "sha": "abc"}
     assert len(run.calls) == 2

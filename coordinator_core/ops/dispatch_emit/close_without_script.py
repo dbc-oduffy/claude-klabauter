@@ -31,7 +31,7 @@ class Verdict(NamedTuple):
 class CloseRefusal(Exception):
     """A named refusal; the caller turns it into ``_error(message, refused=reason)``."""
 
-    def __init__(self, reason: str, message: str):
+    def __init__(self, reason: str, message: str) -> None:
         super().__init__(message)
         self.reason = reason
         self.message = message

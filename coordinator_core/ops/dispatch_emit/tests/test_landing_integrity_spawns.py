@@ -108,6 +108,47 @@ def _git_repo(tmp_path):
     return tmp_path, git
 
 
+def _unrun_gate(tmp_path, monkeypatch, nodes):
+    from coordinator_core.ops.dispatch_emit import retest_targeted
+    from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import params_path
+
+    calls: list = []
+    monkeypatch.setattr(retest_targeted, "spawn_detached", lambda *a, **k: calls.append(a) or True)
+    path = params_path(tmp_path, "r1")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"run_id": "r1", "script_path": ""}), encoding="utf-8")
+    tested = li.GateFindings()
+    tested.unrun_owed = nodes
+    return li.run_unrun_owed(tmp_path, {}, "r1", tested), calls
+
+
+def test_unrun_owed_nodes_spawn_exactly_one_retest_child(tmp_path, monkeypatch):
+    out, calls = _unrun_gate(tmp_path, monkeypatch, ["t/test_a.py::x", "t/test_b.py::y"])
+
+    assert len(calls) == 1 and calls[0][2].count("--tests") == 2
+    assert [type(f) for f in out] == [li.RetestAwait, li.RetestAwait] and out.unrun_owed == ()
+
+
+def test_no_unrun_owed_node_spawns_nothing(tmp_path, monkeypatch):
+    out, calls = _unrun_gate(tmp_path, monkeypatch, [])
+
+    assert calls == [] and list(out) == []
+
+
+def test_unrun_owed_without_a_params_source_is_a_refusal_not_a_launch(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import retest_targeted
+
+    calls: list = []
+    monkeypatch.setattr(retest_targeted, "spawn_detached", lambda *a, **k: calls.append(a) or True)
+    tested = li.GateFindings()
+    tested.unrun_owed = ["t/test_a.py::x"]
+
+    out = li.run_unrun_owed(tmp_path, {}, "r1", tested)
+
+    assert calls == [] and [f.reason for f in out] == [li.TARGETED_TESTS_FAILED]
+    assert not isinstance(out[0], li.RetestAwait)
+
+
 def test_gate_receipt_names_run_deleted_targets_and_stays_no_verdict(tmp_path):
     from coordinator_core.ops.dispatch_emit import terminal_commit
 
@@ -128,3 +169,27 @@ def test_gate_receipt_names_run_deleted_targets_and_stays_no_verdict(tmp_path):
     out = terminal_commit._landing_integrity_gate(root, ["mod.py"], [], None, params, "r1")
     assert out["targeted_tests_check"] == "no-verdict"
     assert "test_gone.py" in out["targeted_tests_note"]
+
+
+def _carried(head_red=None):
+    baseline = {"caused": [], "pre_existing": ["t_a.py::t0"], "foreign": [], "evidence": []}
+    if head_red is not None:
+        baseline["head_red"] = head_red
+    return {"targeted_tests": {"status": "fail", "tests_failed": 1, "baseline": baseline}}
+
+
+def test_a_carried_verdict_with_no_head_measurement_hands_its_ids_to_the_run_not_to_a_pass(tmp_path):
+    held, check = li.landing_test_gate(tmp_path, _carried(), None, collect_unrun=True)
+    assert list(held) == [] and list(held.unrun_owed) == ["t_a.py::t0"] and check == li.UNRUN_OWED
+
+    refused, check = li.landing_test_gate(tmp_path, _carried(), None)
+    assert check == "failed" and [f.reason for f in refused] == [li.TARGETED_TESTS_FAILED]
+    assert "t_a.py::t0" in refused[0].detail and not refused.unrun_owed
+
+
+def test_a_carried_verdict_measured_green_at_head_refuses_and_red_at_head_lands(tmp_path):
+    caused, check = li.landing_test_gate(tmp_path, _carried(head_red=[]), None, collect_unrun=True)
+    assert check == "failed" and [f.path for f in caused] == ["t_a.py"] and not caused.unrun_owed
+
+    base_red, check = li.landing_test_gate(tmp_path, _carried(head_red=["t_a.py::t0"]), None, collect_unrun=True)
+    assert list(base_red) == [] and check == "pre-existing-only"

@@ -11,8 +11,8 @@ blocker's op. `wake_on_end` only flips the record, sends the start notice and re
 `engine-ask {"sizing": <rel>, "resume_run_id": <waiter run_id>}` payload, with
 `ask_spool.record.spool_ask`; `ask_spool.drain.run` mints it through `submit_engine_ask.evaluate`,
 whose resume branch (`_resume_run_id`, `halted_run_to_resume`) re-stages the run. No new op-catalog op.
-`run_token._wake_stage_waiters` starts a background drain (`_kick_spool_drain`) after spooling, since
-`warm/server.py :: _DrainTrigger.maybe_drain` drains only once per served repo.
+`run_token._wake_stage_waiters` only spools; it starts no drain (a spawn on the blocker's op), so the
+refire waits for the warm server's own drain (`warm/server.py :: _DrainTrigger.maybe_drain`).
 Trap: `ask_spool.drain._live_token_run` treats a `run:<id>` entry whose run still holds a live token as
   already minted (coalesced), so the parked stager's token must be gone before its refire drains.
 """

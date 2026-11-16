@@ -13,6 +13,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.ceremony import commit_v2
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -25,13 +26,13 @@ def _git(repo, *args):
     ).stdout
 
 
-def _w(path, text="x\n"):
+def _w(path, text: str = "x\n") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/p")
@@ -57,7 +58,7 @@ def _tracked(repo):
     return _git(repo, "ls-tree", "-r", "--name-only", "HEAD").split()
 
 
-def test_an_ignored_untracked_path_is_refused_and_nothing_lands(repo):
+def test_an_ignored_untracked_path_is_refused_and_nothing_lands(repo) -> None:
     _w(repo / "secret.env", "k=v\n")
     head = _git(repo, "rev-parse", "HEAD")
     out = _call(repo, paths=["secret.env", "keep.txt"], message="add secret")
@@ -66,7 +67,7 @@ def test_an_ignored_untracked_path_is_refused_and_nothing_lands(repo):
     assert _git(repo, "rev-parse", "HEAD") == head
 
 
-def test_a_force_added_ignored_path_still_commits(repo):
+def test_a_force_added_ignored_path_still_commits(repo) -> None:
     _w(repo / "secret.env", "k=v\n")
     _git(repo, "add", "-f", "secret.env")
     out = _call(repo, paths=["secret.env"], message="deliberate")
@@ -74,14 +75,14 @@ def test_a_force_added_ignored_path_still_commits(repo):
     assert "secret.env" in _tracked(repo)
 
 
-def test_a_path_named_in_force_ignored_commits(repo):
+def test_a_path_named_in_force_ignored_commits(repo) -> None:
     _w(repo / ".local/share/new-record.md")
     out = _call(repo, paths=[".local/share/new-record.md"], force_ignored=[".local/share/new-record.md"], message="record")
     assert out["committed"] is True, out
     assert ".local/share/new-record.md" in _tracked(repo)
 
 
-def test_force_ignored_exempts_only_the_paths_it_names(repo):
+def test_force_ignored_exempts_only_the_paths_it_names(repo) -> None:
     _w(repo / ".local/share/new-record.md")
     _w(repo / "secret.env", "k=v\n")
     out = _call(repo, paths=[".local/share/new-record.md", "secret.env"], force_ignored=[".local/share/new-record.md"], message="m")
@@ -89,13 +90,13 @@ def test_force_ignored_exempts_only_the_paths_it_names(repo):
     assert "secret.env" in out["error"] and "new-record" not in out["error"]
 
 
-def test_an_already_tracked_ignored_path_still_commits_its_edit(repo):
+def test_an_already_tracked_ignored_path_still_commits_its_edit(repo) -> None:
     _w(repo / ".local/share/a.md", "edited\n")
     out = _call(repo, paths=[".local/share/a.md"], message="edit tracked")
     assert out["committed"] is True, out
 
 
-def test_untracking_an_ignored_directory_commits_every_removal(repo):
+def test_untracking_an_ignored_directory_commits_every_removal(repo) -> None:
     _git(repo, "rm", "-r", "-q", "--cached", ".local")
     out = _call(repo, untracked_paths=[".local"], message="untrack ignored tree")
     assert out["committed"] is True, out
@@ -106,7 +107,7 @@ def test_untracking_an_ignored_directory_commits_every_removal(repo):
     assert _git(repo, "diff", "--cached", "--name-only").strip() == ""
 
 
-def test_index_deletions_of_ignored_files_named_in_paths_land(repo):
+def test_index_deletions_of_ignored_files_named_in_paths_land(repo) -> None:
     _git(repo, "rm", "-r", "-q", "--cached", ".local")
     out = _call(repo, paths=[".local/share/a.md", ".local/share/sub/b.md"], message="untrack by file")
     assert out["committed"] is True, out
@@ -114,7 +115,7 @@ def test_index_deletions_of_ignored_files_named_in_paths_land(repo):
     assert (repo / ".local/share/a.md").exists()
 
 
-def test_untracking_without_prior_git_rm_also_lands(repo):
+def test_untracking_without_prior_git_rm_also_lands(repo) -> None:
     out = _call(repo, untracked_paths=[".local/"], message="untrack ignored tree")
     assert out["committed"] is True, out
     assert not [p for p in _tracked(repo) if p.startswith(".local/")]

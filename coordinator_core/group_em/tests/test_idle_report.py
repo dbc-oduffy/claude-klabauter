@@ -23,6 +23,7 @@ import time
 import pytest
 
 from coordinator_core.group_em import idle_report
+from pathlib import Path
 
 
 pytestmark = pytest.mark.complete
@@ -56,7 +57,7 @@ def now():
 
 
 @pytest.fixture
-def projects_dir(tmp_path):
+def projects_dir(tmp_path: Path) -> Path:
     directory = tmp_path / "projects"
     directory.mkdir()
     return directory
@@ -84,7 +85,7 @@ def _row(report, prefix):
     return next(row for row in report["peers"] if row["session"].startswith(prefix))
 
 
-def test_content_clock_is_the_max_timestamp_not_the_last_line(tmp_path, projects_dir, now):
+def test_content_clock_is_the_max_timestamp_not_the_last_line(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "aaaa1111-x", [
         _record(120, now),
         _record(1, now),
@@ -95,7 +96,7 @@ def test_content_clock_is_the_max_timestamp_not_the_last_line(tmp_path, projects
     assert row["verdict"] == idle_report.VERDICT_BETWEEN_TURNS
 
 
-def test_records_without_a_timestamp_are_skipped_not_unreadable(tmp_path, projects_dir, now):
+def test_records_without_a_timestamp_are_skipped_not_unreadable(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "bbbb2222-x", [
         {"type": "last-prompt", "prompt": "go"},
         {"type": "ai-title", "title": "t"},
@@ -110,8 +111,8 @@ def test_records_without_a_timestamp_are_skipped_not_unreadable(tmp_path, projec
 
 
 def test_a_file_with_no_parseable_clock_is_unknown_with_a_closed_reason_key(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     _write(projects_dir, "cccc3333-x", [{"type": "mode"}], mtime_minutes_ago=2, now=now)
     row = _row(_report(tmp_path, projects_dir, now, names={"cccc3333-x": "p"}), "cccc3333")
     assert row["verdict"] == idle_report.VERDICT_UNKNOWN
@@ -119,7 +120,7 @@ def test_a_file_with_no_parseable_clock_is_unknown_with_a_closed_reason_key(
     assert row["reason"] in idle_report.UNKNOWN_REASONS
 
 
-def test_an_empty_transcript_is_unknown_no_records(tmp_path, projects_dir, now):
+def test_an_empty_transcript_is_unknown_no_records(tmp_path: Path, projects_dir, now) -> None:
     path = projects_dir / "dddd4444-x.jsonl"
     path.write_text("", encoding="utf-8")
     import os
@@ -130,8 +131,8 @@ def test_an_empty_transcript_is_unknown_no_records(tmp_path, projects_dir, now):
 
 
 def test_mtime_divergence_is_flagged_without_changing_the_verdict(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     _write(projects_dir, "eeee5555-x", [_record(10, now)], mtime_minutes_ago=1, now=now)
     row = _row(_report(tmp_path, projects_dir, now, names={"eeee5555-x": "p"}), "eeee5555")
     assert row["verdict"] == idle_report.VERDICT_WATCH
@@ -141,14 +142,14 @@ def test_mtime_divergence_is_flagged_without_changing_the_verdict(
 
 
 def test_a_single_invocation_never_labels_divergence_fixed_or_growing(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     _write(projects_dir, "ffff6666-x", [_record(40, now)], mtime_minutes_ago=1, now=now)
     row = _row(_report(tmp_path, projects_dir, now, names={"ffff6666-x": "p"}), "ffff6666")
     assert row["divergence"] not in (idle_report.DIVERGENCE_FIXED, idle_report.DIVERGENCE_GROWING)
 
 
-def test_a_small_gap_is_no_divergence(tmp_path, projects_dir, now):
+def test_a_small_gap_is_no_divergence(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "1111aaaa-x", [_record(10, now)], mtime_minutes_ago=9, now=now)
     row = _row(_report(tmp_path, projects_dir, now, names={"1111aaaa-x": "p"}), "1111aaaa")
     assert row["divergence"] == idle_report.DIVERGENCE_NONE
@@ -161,14 +162,14 @@ def test_a_small_gap_is_no_divergence(tmp_path, projects_dir, now):
     (30.1, idle_report.VERDICT_ESCALATE),
 ])
 def test_the_floor_and_threshold_are_applied_by_the_script(
-    tmp_path, projects_dir, now, age, expected
-):
+    tmp_path: Path, projects_dir, now, age, expected
+) -> None:
     _write(projects_dir, "2222bbbb-x", [_record(age, now)], mtime_minutes_ago=age, now=now)
     row = _row(_report(tmp_path, projects_dir, now, names={"2222bbbb-x": "p"}), "2222bbbb")
     assert row["verdict"] == expected
 
 
-def test_a_transcript_off_the_live_roster_is_not_listed_at_all(tmp_path, projects_dir, now):
+def test_a_transcript_off_the_live_roster_is_not_listed_at_all(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "3333cccc-x", [_record(45, now)], mtime_minutes_ago=45, now=now)
     report = _report(tmp_path, projects_dir, now, names={"other": "p"})
     assert [row["session"] for row in report["peers"]] == ["other"]
@@ -176,8 +177,8 @@ def test_a_transcript_off_the_live_roster_is_not_listed_at_all(tmp_path, project
 
 
 def test_a_rostered_peer_with_no_transcript_is_unknown_never_exited(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     report = _report(tmp_path, projects_dir, now, names={"4444dddd-x": "p"})
     row = _row(report, "4444dddd")
     assert row["verdict"] == idle_report.VERDICT_UNKNOWN
@@ -188,8 +189,8 @@ def test_a_rostered_peer_with_no_transcript_is_unknown_never_exited(
 
 
 def test_an_unreadable_live_roster_fails_the_report_rather_than_reading_quiet(
-    tmp_path, monkeypatch, capsys
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     def boom(*a, **k):
         raise RuntimeError("registry unreadable")
 
@@ -199,8 +200,8 @@ def test_an_unreadable_live_roster_fails_the_report_rather_than_reading_quiet(
 
 
 def test_default_cli_lists_live_roster_peers_and_marks_unresolvable_ones_unknown(
-    tmp_path, monkeypatch, now
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, now
+) -> None:
     """A live peer whose transcript sits outside `projects_dir_for` is listed; a stale
     jsonl with no registry row is not; a rostered peer with no transcript is unknown."""
     import os
@@ -231,15 +232,15 @@ def test_default_cli_lists_live_roster_peers_and_marks_unresolvable_ones_unknown
     assert rows["gone2222-x"]["reason"] == idle_report.REASON_TRANSCRIPT_UNREADABLE
 
 
-def test_a_rostered_peer_below_the_threshold_is_not_an_exit(tmp_path, projects_dir, now):
+def test_a_rostered_peer_below_the_threshold_is_not_an_exit(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "5555eeee-x", [_record(6, now)], mtime_minutes_ago=6, now=now)
     row = _row(_report(tmp_path, projects_dir, now, names={"5555eeee-x": "p"}), "5555eeee")
     assert row["verdict"] == idle_report.VERDICT_WATCH
 
 
 def test_an_exited_row_dates_itself_and_carries_no_nudge_content(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     _write(projects_dir, "6666ffff-x", [
         _said("I'll now run the suite.", 45, now)
     ], mtime_minutes_ago=45, now=now)
@@ -250,15 +251,15 @@ def test_an_exited_row_dates_itself_and_carries_no_nudge_content(
     assert row["last-said"] is None and row["named-next-move"] is None
 
 
-def _nomination(monkeypatch, holder):
+def _nomination(monkeypatch, holder) -> None:
     from coordinator_core.group_em import nomination
     monkeypatch.setattr(nomination, "read_authoritative",
                         lambda *a, **k: None if holder is None else {"session_id": holder})
 
 
 def test_a_group_em_that_no_longer_holds_the_nomination_is_moved(
-    tmp_path, projects_dir, now, monkeypatch
-):
+    tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _nomination(monkeypatch, "somebody-else")
     report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
     assert report["group-em-moved"] is True
@@ -268,16 +269,16 @@ def test_a_group_em_that_no_longer_holds_the_nomination_is_moved(
 
 
 def test_a_group_em_still_holding_the_nomination_is_not_moved(
-    tmp_path, projects_dir, now, monkeypatch
-):
+    tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _nomination(monkeypatch, "7777aaaa-x")
     report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
     assert report["group-em-moved"] is False and report["verdict"] is None
 
 
 def test_a_missing_nomination_record_is_not_evidence_the_group_em_moved(
-    tmp_path, projects_dir, now, monkeypatch
-):
+    tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Stopping every tick on a missing file is the same false-tidy failure as
     reporting a live peer dead. GROUP-EM-MOVED needs positive evidence."""
     _nomination(monkeypatch, None)
@@ -285,7 +286,7 @@ def test_a_missing_nomination_record_is_not_evidence_the_group_em_moved(
     assert report["group-em-moved"] is False
 
 
-def _liveness(monkeypatch, live, reason):
+def _liveness(monkeypatch, live, reason) -> None:
     from coordinator_core.group_em import nomination
     monkeypatch.setattr(
         nomination, "is_live",
@@ -294,8 +295,8 @@ def _liveness(monkeypatch, live, reason):
 
 
 def test_a_nominated_but_dead_holder_is_reported_dead(
-    tmp_path, projects_dir, now, monkeypatch
-):
+    tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """AC6: the baseline probe, inverted. A holder still nominated (so
     `group_em_moved` says nothing) whose PROCESS IS CONFIRMED GONE reads dead.
 
@@ -312,8 +313,8 @@ def test_a_nominated_but_dead_holder_is_reported_dead(
 
 
 def test_registry_absence_is_unresolved_never_dead(
-    tmp_path, projects_dir, now, monkeypatch
-):
+    tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """AC7: a holder absent from THIS box's registry is not dead.
 
     Registry absence is box-scoped -- a Group EM alive on another machine, or
@@ -331,8 +332,8 @@ def test_registry_absence_is_unresolved_never_dead(
 
 
 def test_confirmed_dead_holder_raises_the_suppression_basis_flag_and_renders(
-    tmp_path, projects_dir, now, monkeypatch
-):
+    tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _nomination(monkeypatch, "7777aaaa-x")
     _liveness(monkeypatch, False, "pid_not_running")
     report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
@@ -343,8 +344,8 @@ def test_confirmed_dead_holder_raises_the_suppression_basis_flag_and_renders(
 
 
 def test_unresolved_holder_never_raises_the_basis_flag(
-    tmp_path, projects_dir, now, monkeypatch
-):
+    tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _nomination(monkeypatch, "7777aaaa-x")
     _liveness(monkeypatch, False, "no_registry_record")
     report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
@@ -354,8 +355,8 @@ def test_unresolved_holder_never_raises_the_basis_flag(
 
 
 def test_live_holder_never_raises_the_basis_flag(
-    tmp_path, projects_dir, now, monkeypatch
-):
+    tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _nomination(monkeypatch, "7777aaaa-x")
     _liveness(monkeypatch, True, "live")
     report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
@@ -363,7 +364,7 @@ def test_live_holder_never_raises_the_basis_flag(
     assert "HOLDER-NOT-LIVE" not in idle_report.render(report)
 
 
-def test_a_nominated_live_holder_reports_live(tmp_path, projects_dir, now, monkeypatch):
+def test_a_nominated_live_holder_reports_live(tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch) -> None:
     _nomination(monkeypatch, "7777aaaa-x")
     _liveness(monkeypatch, True, "live")
     report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
@@ -371,8 +372,8 @@ def test_a_nominated_live_holder_reports_live(tmp_path, projects_dir, now, monke
 
 
 def test_no_group_em_session_id_never_derives_holder_liveness(
-    tmp_path, projects_dir, now, monkeypatch
-):
+    tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _nomination(monkeypatch, "7777aaaa-x")
     _liveness(monkeypatch, False, "no_registry_record")
     report = _report(tmp_path, projects_dir, now)
@@ -380,16 +381,16 @@ def test_no_group_em_session_id_never_derives_holder_liveness(
 
 
 def test_an_unreadable_nomination_record_does_not_derive_holder_liveness(
-    tmp_path, projects_dir, now, monkeypatch
-):
+    tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _nomination(monkeypatch, None)
     report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
     assert report["holder-liveness"] is None
 
 
 def test_a_record_naming_a_different_holder_does_not_derive_holder_liveness(
-    tmp_path, projects_dir, now, monkeypatch
-):
+    tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _nomination(monkeypatch, "somebody-else")
     report = _report(tmp_path, projects_dir, now, group_em_session_id="7777aaaa-x")
     assert report["group-em-moved"] is True
@@ -397,8 +398,8 @@ def test_a_record_naming_a_different_holder_does_not_derive_holder_liveness(
 
 
 def test_is_live_is_called_with_the_record_never_a_bare_session_id(
-    tmp_path, projects_dir, now, monkeypatch
-):
+    tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from coordinator_core.group_em import nomination
 
     captured = {}
@@ -414,7 +415,7 @@ def test_is_live_is_called_with_the_record_never_a_bare_session_id(
     assert report["holder-liveness"] == {"live": False, "reason": "pid_not_running"}
 
 
-def test_the_verdict_vocabulary_is_closed(tmp_path, projects_dir, now):
+def test_the_verdict_vocabulary_is_closed(tmp_path: Path, projects_dir, now) -> None:
     assert {
         idle_report.VERDICT_BETWEEN_TURNS, idle_report.VERDICT_WATCH,
         idle_report.VERDICT_ESCALATE, idle_report.VERDICT_OUT_OF_WORK,
@@ -427,8 +428,8 @@ def test_the_verdict_vocabulary_is_closed(tmp_path, projects_dir, now):
 
 
 def test_the_registry_resolves_the_address_when_it_has_the_session(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     _write(projects_dir, "8888aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
     row = _row(_report(tmp_path, projects_dir, now,
                        names={"8888aaaa-x": "claude-klabauter-a9"}), "8888aaaa")
@@ -437,8 +438,8 @@ def test_the_registry_resolves_the_address_when_it_has_the_session(
 
 
 def test_a_self_id_in_the_transcript_resolves_when_the_registry_cannot(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     _write(projects_dir, "9999aaaa-x", [
         _said("claude-klabauter-a9 [9999aaaa] is next up.", 40, now)
     ], mtime_minutes_ago=40, now=now)
@@ -446,7 +447,7 @@ def test_a_self_id_in_the_transcript_resolves_when_the_registry_cannot(
     assert row["address"] == "claude-klabauter-a9 [9999aaaa]"
 
 
-def test_unaddressable_when_nothing_states_the_name(tmp_path, projects_dir, now):
+def test_unaddressable_when_nothing_states_the_name(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "aaaa9999-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
     row = _row(_report(tmp_path, projects_dir, now, names={"aaaa9999-x": None}), "aaaa9999")
     assert row["address"] == idle_report.UNADDRESSABLE
@@ -455,7 +456,7 @@ def test_unaddressable_when_nothing_states_the_name(tmp_path, projects_dir, now)
     assert row["report-to-group-em"] is True
 
 
-def test_a_name_is_never_inferred_from_the_session_id_prefix(tmp_path, projects_dir, now):
+def test_a_name_is_never_inferred_from_the_session_id_prefix(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "bbbb9999-x", [
         _said("claude-klabauter-c7 [06b64587] is handling that.", 40, now)
     ], mtime_minutes_ago=40, now=now)
@@ -463,7 +464,7 @@ def test_a_name_is_never_inferred_from_the_session_id_prefix(tmp_path, projects_
     assert row["address"] == idle_report.UNADDRESSABLE
 
 
-def test_push_needs_a_named_move_and_no_named_reason(tmp_path, projects_dir, now):
+def test_push_needs_a_named_move_and_no_named_reason(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "cccc9999-x", [
         _said("I'll now run the coverage sweep.", 40, now)
     ], mtime_minutes_ago=40, now=now)
@@ -474,8 +475,8 @@ def test_push_needs_a_named_move_and_no_named_reason(tmp_path, projects_dir, now
 
 
 def test_a_named_move_behind_a_named_reason_holds_rather_than_pushes(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     _write(projects_dir, "dddd9999-x", [
         _said("Next I'll merge, but I'm blocked on the PM's ruling.", 40, now)
     ], mtime_minutes_ago=40, now=now)
@@ -484,7 +485,7 @@ def test_a_named_move_behind_a_named_reason_holds_rather_than_pushes(
     assert row["nudge-shape"] == idle_report.SHAPE_HOLD
 
 
-def test_no_named_move_asks_which_it_is(tmp_path, projects_dir, now):
+def test_no_named_move_asks_which_it_is(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "eeee9999-x", [
         _said("Done with the refactor.", 40, now)
     ], mtime_minutes_ago=40, now=now)
@@ -493,7 +494,7 @@ def test_no_named_move_asks_which_it_is(tmp_path, projects_dir, now):
     assert row["nudge-shape"] == idle_report.SHAPE_ASK
 
 
-def test_a_non_matching_phrase_is_unresolved_not_none(tmp_path, projects_dir, now):
+def test_a_non_matching_phrase_is_unresolved_not_none(tmp_path: Path, projects_dir, now) -> None:
     """coordinator-content-repo bc5b1ba18: a whitelist predicate can almost never emit
     `none` -- matching a phrase establishes presence, failing to match
     establishes nothing (the space of ways to name a next move is open). So
@@ -510,7 +511,7 @@ def test_a_non_matching_phrase_is_unresolved_not_none(tmp_path, projects_dir, no
     assert row["nudge-shape"] == idle_report.SHAPE_ASK
 
 
-def test_peer_blocked_wait_holds_not_asks(tmp_path, projects_dir, now):
+def test_peer_blocked_wait_holds_not_asks(tmp_path: Path, projects_dir, now) -> None:
     """C3(a): `_NAMED_REASON`'s vocabulary was entirely PM-centric, so a session
     blocked on a PEER scored `named_reason=False` and `_nudge_shape` degraded it
     to `ask` instead of `hold`. This is the real 2026-09-01 sentence that missed
@@ -529,7 +530,7 @@ def test_peer_blocked_wait_holds_not_asks(tmp_path, projects_dir, now):
     assert row["nudge-shape"] == idle_report.SHAPE_HOLD
 
 
-def test_present_participle_next_move_is_found(tmp_path, projects_dir, now):
+def test_present_participle_next_move_is_found(tmp_path: Path, projects_dir, now) -> None:
     """C3(b): `_NEXT_MOVE`'s six-alternative whitelist missed the two most
     ordinary phrasings. Verified 2026-09-01: "Checking the rule next" (the
     present-participle statement) matched nothing before this arm."""
@@ -542,7 +543,7 @@ def test_present_participle_next_move_is_found(tmp_path, projects_dir, now):
     assert row["nudge-shape"] == idle_report.SHAPE_PUSH
 
 
-def test_plain_modal_contraction_next_move_is_found(tmp_path, projects_dir, now):
+def test_plain_modal_contraction_next_move_is_found(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "7777aaaa-x", [
         _said("I'll check the rule.", 40, now)
     ], mtime_minutes_ago=40, now=now)
@@ -552,7 +553,7 @@ def test_plain_modal_contraction_next_move_is_found(tmp_path, projects_dir, now)
     assert row["nudge-shape"] == idle_report.SHAPE_PUSH
 
 
-def test_a_relayed_peer_quote_is_not_the_relayers_next_move(tmp_path, projects_dir, now):
+def test_a_relayed_peer_quote_is_not_the_relayers_next_move(tmp_path: Path, projects_dir, now) -> None:
     """Provenance: a blockquote or quoted span carrying a peer's next move is
     not the speaker's own."""
     _write(projects_dir, "5555aaaa-x", [
@@ -563,12 +564,12 @@ def test_a_relayed_peer_quote_is_not_the_relayers_next_move(tmp_path, projects_d
     assert row["named-next-move"] == idle_report.NEXT_MOVE_UNRESOLVED
 
 
-def test_own_voice_drops_blockquote_and_fence_keeps_own_sentence():
+def test_own_voice_drops_blockquote_and_fence_keeps_own_sentence() -> None:
     text = "> I'll dispatch now\n```\nnext is X\n```\nI'll run the check."
     assert idle_report._own_voice(text) == "I'll run the check."
 
 
-def test_last_said_is_capped_at_the_emitting_end(tmp_path, projects_dir, now):
+def test_last_said_is_capped_at_the_emitting_end(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "ffff9999-x", [
         _said("x" * 5000, 40, now)
     ], mtime_minutes_ago=40, now=now)
@@ -578,8 +579,8 @@ def test_last_said_is_capped_at_the_emitting_end(tmp_path, projects_dir, now):
 
 
 def test_a_completion_ceremony_is_out_of_work_and_assigned_not_nudged(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     """A session that has run out needs work from the Group-EM; no nudge fixes it.
     Collapsing this into ESCALATE loses the only distinction that changes who
     acts."""
@@ -593,7 +594,7 @@ def test_a_completion_ceremony_is_out_of_work_and_assigned_not_nudged(
     assert row["nudge-shape"] == idle_report.SHAPE_ASSIGN
 
 
-def test_merely_talking_about_the_ceremony_is_not_out_of_work(tmp_path, projects_dir, now):
+def test_merely_talking_about_the_ceremony_is_not_out_of_work(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "1313aaaa-x", [
         _said("I should probably run workstream-complete soon.", 40, now)
     ], mtime_minutes_ago=40, now=now)
@@ -602,7 +603,7 @@ def test_merely_talking_about_the_ceremony_is_not_out_of_work(tmp_path, projects
     assert row["verdict"] == idle_report.VERDICT_ESCALATE
 
 
-def test_the_group_em_is_excluded_from_its_own_roster(tmp_path, projects_dir, now):
+def test_the_group_em_is_excluded_from_its_own_roster(tmp_path: Path, projects_dir, now) -> None:
     group_em = "1414aaaa-bbbb-cccc"
     _write(projects_dir, group_em, [_record(40, now)], mtime_minutes_ago=40, now=now)
     _write(projects_dir, "1515aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
@@ -612,7 +613,7 @@ def test_the_group_em_is_excluded_from_its_own_roster(tmp_path, projects_dir, no
     assert [row["session"] for row in report["peers"]] == ["1515aaaa-x"]
 
 
-def test_the_polling_caller_is_excluded_too(tmp_path, projects_dir, now):
+def test_the_polling_caller_is_excluded_too(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "1616aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
     report = _report(tmp_path, projects_dir, now,
                      names={"1616aaaa-x": "p", "group-em-1": "Group-EM"},
@@ -620,7 +621,7 @@ def test_the_polling_caller_is_excluded_too(tmp_path, projects_dir, now):
     assert report["peers"] == []
 
 
-def test_peer_filters_to_one_session(tmp_path, projects_dir, now):
+def test_peer_filters_to_one_session(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "1717aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
     _write(projects_dir, "1818aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
     report = _report(tmp_path, projects_dir, now,
@@ -629,8 +630,8 @@ def test_peer_filters_to_one_session(tmp_path, projects_dir, now):
 
 
 def test_the_summary_line_carries_every_parameter_the_report_used(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     line = idle_report.summary_line(
         _report(tmp_path, projects_dir, now, group_em_session_id="group-em-1"))
     for token in ("peers=", "escalate=", "out-of-work=", "exited=", "unknown=",
@@ -639,8 +640,8 @@ def test_the_summary_line_carries_every_parameter_the_report_used(
 
 
 def test_the_summary_line_matches_the_amended_fixed_form_exactly(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     report = _report(tmp_path, projects_dir, now, group_em_session_id="group-em-1")
     line = idle_report.summary_line(report)
     assert line == (
@@ -653,8 +654,8 @@ def test_the_summary_line_matches_the_amended_fixed_form_exactly(
 
 
 def test_the_report_dict_carries_the_instant_its_counts_were_struck(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     """C5 falsifier leg 1, `report_has_when`. The heartbeat's `last_tick_at`
     answers when the watcher ran, not when THIS report's `counts` block was
     taken -- `as_of` is `now`, spelled the way the falsifier's `_WHEN_TOKEN`
@@ -668,13 +669,13 @@ def test_the_report_dict_carries_the_instant_its_counts_were_struck(
 
 
 def test_an_empty_roster_is_a_legible_statement_not_an_absence(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     rendered = idle_report.render(_report(tmp_path, projects_dir, now))
     assert rendered.splitlines()[-1].startswith("peers=0 ")
 
 
-def test_the_json_arm_carries_the_same_fields(tmp_path, projects_dir, now, monkeypatch):
+def test_the_json_arm_carries_the_same_fields(tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(projects_dir, "1919aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
     monkeypatch.setattr(idle_report, "projects_dir_for", lambda *a, **k: str(projects_dir))
     monkeypatch.setattr(idle_report.read_pass, "live_peers", _live({"1919aaaa-x": "peer-1"}))
@@ -690,7 +691,7 @@ def test_the_json_arm_carries_the_same_fields(tmp_path, projects_dir, now, monke
         assert field in row
 
 
-def test_between_turns_peers_are_counted_but_not_printed(tmp_path, projects_dir, now):
+def test_between_turns_peers_are_counted_but_not_printed(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "2020aaaa-x", [_record(1, now)], mtime_minutes_ago=1, now=now)
     report = _report(tmp_path, projects_dir, now, names={"2020aaaa-x": "p"})
     rendered = idle_report.render(report)
@@ -698,7 +699,7 @@ def test_between_turns_peers_are_counted_but_not_printed(tmp_path, projects_dir,
     assert rendered.startswith("peers=1 ")
 
 
-def test_a_watch_band_transcript_off_the_roster_is_not_a_peer(tmp_path, projects_dir, now):
+def test_a_watch_band_transcript_off_the_roster_is_not_a_peer(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "9a44b41a-x", [_record(16.7, now)], mtime_minutes_ago=16.7, now=now)
     report = _report(tmp_path, projects_dir, now, names={})
     assert report["peers"] == []
@@ -706,8 +707,8 @@ def test_a_watch_band_transcript_off_the_roster_is_not_a_peer(tmp_path, projects
 
 
 def test_watch_verdict_renders_with_a_disambiguating_label_not_a_bare_role_word(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     """P103-C5: a peer EM read a bare rendered `watch` row as a role ("this peer
     is running the watch") and filed a false bug report. The WIRE value stays
     `VERDICT_WATCH` == "watch" (contract, unchanged) but the human-facing render
@@ -721,8 +722,8 @@ def test_watch_verdict_renders_with_a_disambiguating_label_not_a_bare_role_word(
 
 
 def test_watch_peer_with_an_unreadable_registry_stays_counted_and_unmarked(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     """`in_registry is None` (unreadable) is not `in_registry is False` (read
     and absent). An unreadable registry answers nothing, so this peer must not
     be excluded or marked -- only a SUCCESSFUL read that says "absent" counts."""
@@ -735,8 +736,8 @@ def test_watch_peer_with_an_unreadable_registry_stays_counted_and_unmarked(
 
 
 def test_between_turns_peer_absent_from_registry_is_still_counted(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     _write(projects_dir, "9a44b41c-x", [_record(0.5, now)], mtime_minutes_ago=0.5, now=now)
     report = _report(tmp_path, projects_dir, now, names={"9a44b41c-x": "p"})
     row = _row(report, "9a44b41c")
@@ -746,8 +747,8 @@ def test_between_turns_peer_absent_from_registry_is_still_counted(
 
 
 def test_no_row_rendered_as_a_live_verdict_is_absent_from_a_read_registry(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     """Property, not a fixture: build a small roster against a registry
     snapshot and assert the invariant this whole chunk exists to restore --
     any row NOT marked `registry: absent` and not `EXITED`, over a
@@ -771,8 +772,8 @@ def test_no_row_rendered_as_a_live_verdict_is_absent_from_a_read_registry(
 
 
 def test_live_count_excludes_exited_rows_the_same_way_peers_excludes_registry_absent(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     """The 2026-09-01 measurement: `counts["peers"]` still conflated live
     sessions with EXITED ones even after C11 stopped it conflating them with
     registry-absent WATCH rows, because `registry_absent` is only ever struck
@@ -795,7 +796,7 @@ def test_live_count_excludes_exited_rows_the_same_way_peers_excludes_registry_ab
     assert report["counts"]["live"] == 1
 
 
-def test_peers_count_excludes_exited_rows(tmp_path, projects_dir, now):
+def test_peers_count_excludes_exited_rows(tmp_path: Path, projects_dir, now) -> None:
     names = {"6060aaaa-x": "live-peer", "6161bbbb-x": "p"}
     _write(projects_dir, "6060aaaa-x", [_record(2, now)], mtime_minutes_ago=2, now=now)
     _write(projects_dir, "6161bbbb-x", [_record(45, now)], mtime_minutes_ago=45, now=now)
@@ -809,8 +810,8 @@ def test_peers_count_excludes_exited_rows(tmp_path, projects_dir, now):
 
 
 def test_peers_splits_into_quiet_actionable_and_exited_with_no_remainder(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     """`counts["peers"]` merges three populations a crown cannot tell apart
     from one number: quiet (BETWEEN-TURNS/WATCH), actionable (ESCALATE/
     OUT-OF-WORK/UNKNOWN), and exited (EXITED). Each must land in exactly one
@@ -839,20 +840,20 @@ def test_peers_splits_into_quiet_actionable_and_exited_with_no_remainder(
     assert counts["quiet"] + counts["actionable"] == counts["peers"]
 
 
-def test_the_projects_directory_is_derived_from_the_repo_root(tmp_path):
+def test_the_projects_directory_is_derived_from_the_repo_root(tmp_path: Path) -> None:
     resolved = idle_report.projects_dir_for("C:/some-repo", home=str(tmp_path))
     assert resolved.endswith("X--some-repo")
     assert idle_report.projects_dir_for("C:\\some-repo", home=str(tmp_path)) == resolved
 
 
-def test_an_observed_exit_outranks_every_inference(tmp_path, projects_dir, now):
+def test_an_observed_exit_outranks_every_inference(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "2121aaaa-x", [_record(1, now)], mtime_minutes_ago=1, now=now)
     row = _row(_report(tmp_path, projects_dir, now, names={"2121aaaa-x": "peer-1"},
                        observed_exits=frozenset({"2121aaaa-x"})), "2121aaaa")
     assert row["verdict"] == idle_report.VERDICT_EXITED
 
 
-def test_the_clocks_contribute_nothing_to_the_exit_derivation(tmp_path, projects_dir, now):
+def test_the_clocks_contribute_nothing_to_the_exit_derivation(tmp_path: Path, projects_dir, now) -> None:
     """A stalled content clock establishes idleness, never death. Registry-present
     and 45 minutes silent is ESCALATE, not EXITED."""
     _write(projects_dir, "2222cccc-x", [_record(45, now)], mtime_minutes_ago=45, now=now)
@@ -861,7 +862,7 @@ def test_the_clocks_contribute_nothing_to_the_exit_derivation(tmp_path, projects
     assert row["verdict"] == idle_report.VERDICT_ESCALATE
 
 
-def test_divergence_never_moves_a_verdict_in_either_direction(tmp_path, projects_dir, now):
+def test_divergence_never_moves_a_verdict_in_either_direction(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "2323aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
     _write(projects_dir, "2424aaaa-x", [_record(40, now)], mtime_minutes_ago=1, now=now)
     report = _report(tmp_path, projects_dir, now,
@@ -872,7 +873,7 @@ def test_divergence_never_moves_a_verdict_in_either_direction(tmp_path, projects
     assert quiet["verdict"] == diverging["verdict"] == idle_report.VERDICT_ESCALATE
 
 
-def test_the_unknown_reason_set_admits_no_confidence_claim(tmp_path, projects_dir, now):
+def test_the_unknown_reason_set_admits_no_confidence_claim(tmp_path: Path, projects_dir, now) -> None:
     assert idle_report.UNKNOWN_REASONS == frozenset({
         "liveness-unresolved", "transcript-unreadable", "no-records", "clock-unparseable",
         "out-of-work-undetected", "suppression-unavailable",
@@ -881,8 +882,8 @@ def test_the_unknown_reason_set_admits_no_confidence_claim(tmp_path, projects_di
 
 
 def test_a_missing_offer_log_downgrades_to_reporting_not_to_sending(
-    tmp_path, projects_dir, now, monkeypatch
-):
+    tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _write(projects_dir, "2525aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
     monkeypatch.setattr(idle_report, "_read_group_em_log", lambda *a, **k: ([], False))
     row = _row(_report(tmp_path, projects_dir, now,
@@ -893,7 +894,7 @@ def test_a_missing_offer_log_downgrades_to_reporting_not_to_sending(
     assert row["nudge-shape"] == idle_report.SHAPE_HOLD
 
 
-def test_an_empty_offer_log_is_an_answer_not_a_failure(tmp_path, projects_dir, now):
+def test_an_empty_offer_log_is_an_answer_not_a_failure(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "2626aaaa-x", [_said("I'll now merge.", 40, now)],
            mtime_minutes_ago=40, now=now)
     row = _row(_report(tmp_path, projects_dir, now,
@@ -903,7 +904,7 @@ def test_an_empty_offer_log_is_an_answer_not_a_failure(tmp_path, projects_dir, n
     assert row["nudge-shape"] == idle_report.SHAPE_PUSH
 
 
-def test_group_em_moved_emits_no_peer_rows_at_all(tmp_path, projects_dir, now, monkeypatch):
+def test_group_em_moved_emits_no_peer_rows_at_all(tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(projects_dir, "2727aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
     _nomination(monkeypatch, "somebody-else")
     report = _report(tmp_path, projects_dir, now, group_em_session_id="2828aaaa-x")
@@ -911,11 +912,11 @@ def test_group_em_moved_emits_no_peer_rows_at_all(tmp_path, projects_dir, now, m
     assert report["verdict"] == idle_report.VERDICT_GROUP_EM_MOVED
 
 
-def test_the_nudge_shape_set_is_closed(tmp_path, projects_dir, now):
+def test_the_nudge_shape_set_is_closed(tmp_path: Path, projects_dir, now) -> None:
     assert idle_report.NUDGE_SHAPES == {"push", "ask-which-it-is", "assign", "hold"}
 
 
-def test_every_emitted_shape_and_verdict_is_in_its_closed_set(tmp_path, projects_dir, now):
+def test_every_emitted_shape_and_verdict_is_in_its_closed_set(tmp_path: Path, projects_dir, now) -> None:
     for age in (1, 6, 40):
         _write(projects_dir, "29%02daaaa-x" % age, [_said("I'll now merge.", age, now)],
                mtime_minutes_ago=age, now=now)
@@ -942,7 +943,7 @@ def test_every_emitted_shape_and_verdict_is_in_its_closed_set(tmp_path, projects
 # the discriminator, not the suppression.
 
 
-def _refusal(minutes_ago, now, resets_in_minutes=180):
+def _refusal(minutes_ago, now, resets_in_minutes: int = 180):
     record = _said("You've hit your session limit \u00b7 resets 7:30pm (Europe/London)",
                    minutes_ago, now)
     record["quotaLimits"] = {
@@ -955,7 +956,7 @@ def _refusal(minutes_ago, now, resets_in_minutes=180):
     return record
 
 
-def test_a_refused_peer_is_unknown_and_never_escalate(tmp_path, projects_dir, now):
+def test_a_refused_peer_is_unknown_and_never_escalate(tmp_path: Path, projects_dir, now) -> None:
     _write(projects_dir, "3030aaaa-x", [_record(90, now), _refusal(45, now)],
            mtime_minutes_ago=45, now=now)
     row = _row(_report(tmp_path, projects_dir, now, names={"3030aaaa-x": "p"}), "3030aaaa")
@@ -966,7 +967,7 @@ def test_a_refused_peer_is_unknown_and_never_escalate(tmp_path, projects_dir, no
     assert row["nudge-shape"] == idle_report.SHAPE_HOLD
 
 
-def test_a_real_stall_in_the_same_band_still_escalates(tmp_path, projects_dir, now):
+def test_a_real_stall_in_the_same_band_still_escalates(tmp_path: Path, projects_dir, now) -> None:
     """THE DISCRIMINATOR. `c7`'s shape from the 2026-09-01 tick: 88 minutes, a
     closed quick-wrap, a named next move, and no refusal anywhere. Five
     suppressed, this one surviving -- a fix that quiets this has made the
@@ -987,8 +988,8 @@ def test_a_real_stall_in_the_same_band_still_escalates(tmp_path, projects_dir, n
 
 
 def test_a_lifted_window_escalates_again_without_anything_lifting_it(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     _write(projects_dir, "3333aaaa-x", [_refusal(45, now, resets_in_minutes=-10)],
            mtime_minutes_ago=45, now=now)
     row = _row(_report(tmp_path, projects_dir, now, names={"3333aaaa-x": "p"}), "3333aaaa")
@@ -996,8 +997,8 @@ def test_a_lifted_window_escalates_again_without_anything_lifting_it(
 
 
 def test_a_refusal_the_session_has_moved_past_does_not_suppress(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     _write(projects_dir, "3434aaaa-x", [
         _refusal(100, now, resets_in_minutes=180),
         _said("Back in. I'll now run the scoped tests.", 40, now),
@@ -1007,8 +1008,8 @@ def test_a_refusal_the_session_has_moved_past_does_not_suppress(
 
 
 def test_talking_about_a_rate_limit_is_not_being_rate_limited(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     _write(projects_dir, "3535aaaa-x", [
         _said("Three peers had a last-said reading \"You've hit your session limit "
               "\u00b7 resets 7:30pm (Europe/London)\" and quotaLimits status rejected.",
@@ -1019,15 +1020,15 @@ def test_talking_about_a_rate_limit_is_not_being_rate_limited(
 
 
 def test_a_refused_peer_with_an_observed_exit_is_still_exited(
-    tmp_path, projects_dir, now
-):
+    tmp_path: Path, projects_dir, now
+) -> None:
     _write(projects_dir, "3636aaaa-x", [_refusal(45, now)], mtime_minutes_ago=45, now=now)
     row = _row(_report(tmp_path, projects_dir, now, names={"3636aaaa-x": "p"},
                        observed_exits=frozenset({"3636aaaa-x"})), "3636aaaa")
     assert row["verdict"] == idle_report.VERDICT_EXITED
 
 
-def test_a_refused_peer_below_the_threshold_is_untouched(tmp_path, projects_dir, now):
+def test_a_refused_peer_below_the_threshold_is_untouched(tmp_path: Path, projects_dir, now) -> None:
     """The check sits over `ESCALATE` alone. A peer refused two minutes ago is
     between turns, exactly as it was before -- the refusal changes no verdict
     the watcher was never going to act on."""
@@ -1037,7 +1038,7 @@ def test_a_refused_peer_below_the_threshold_is_untouched(tmp_path, projects_dir,
     assert row["reason"] is None
 
 
-def test_group_em_answer_ac8_delegated_row_suppresses_but_does_not_attribute(now):
+def test_group_em_answer_ac8_delegated_row_suppresses_but_does_not_attribute(now) -> None:
     from coordinator_core.group_em import send_pass
 
     key = send_pass.offer_key("group-em-1", "peer-1")
@@ -1050,8 +1051,8 @@ def test_group_em_answer_ac8_delegated_row_suppresses_but_does_not_attribute(now
 
 
 def test_delegated_only_suppression_renders_its_reason_beside_hold(
-    tmp_path, projects_dir, now, monkeypatch
-):
+    tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from coordinator_core.group_em import send_pass
 
     _write(projects_dir, "4040aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
@@ -1066,7 +1067,7 @@ def test_delegated_only_suppression_renders_its_reason_beside_hold(
     assert "answered-by-group-em: no (delegated offer within cooldown)" in idle_report.render(report)
 
 
-def test_unsuppressed_peer_still_renders_plain_no(tmp_path, projects_dir, now, monkeypatch):
+def test_unsuppressed_peer_still_renders_plain_no(tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(projects_dir, "4141aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
     monkeypatch.setattr(idle_report, "_read_group_em_log", lambda *a, **k: ([], True))
     row = _row(_report(tmp_path, projects_dir, now, names={"4141aaaa-x": "p"},
@@ -1074,7 +1075,7 @@ def test_unsuppressed_peer_still_renders_plain_no(tmp_path, projects_dir, now, m
     assert row["answered-by-group-em"] == "no"
 
 
-def test_group_em_answer_ac9_unattributed_row_is_byte_identical(now):
+def test_group_em_answer_ac9_unattributed_row_is_byte_identical(now) -> None:
     from coordinator_core.group_em import send_pass
 
     key = send_pass.offer_key("group-em-2", "peer-2")
@@ -1086,13 +1087,13 @@ def test_group_em_answer_ac9_unattributed_row_is_byte_identical(now):
     assert answered is not None
 
 
-def test_record_offer_requires_both_ids(tmp_path, projects_dir, capsys):
+def test_record_offer_requires_both_ids(tmp_path: Path, projects_dir, capsys: pytest.CaptureFixture[str]) -> None:
     assert idle_report._cli(
         ["--repo-root", str(tmp_path), "--record-offer", "3838aaaa-x"]) == 2
     assert "--record-offer requires" in capsys.readouterr().err
 
 
-def test_record_offer_requires_caller_session_id_too(tmp_path, projects_dir, capsys):
+def test_record_offer_requires_caller_session_id_too(tmp_path: Path, projects_dir, capsys: pytest.CaptureFixture[str]) -> None:
     assert idle_report._cli([
         "--repo-root", str(tmp_path), "--group-em-session-id", "group-em-1",
         "--record-offer", "3838aaaa-x",
@@ -1101,8 +1102,8 @@ def test_record_offer_requires_caller_session_id_too(tmp_path, projects_dir, cap
 
 
 def test_record_offer_suppresses_the_same_tick_it_recorded_in(
-    tmp_path, projects_dir, now, monkeypatch
-):
+    tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _write(projects_dir, "3838aaaa-x", [_record(40, now)], mtime_minutes_ago=40, now=now)
     monkeypatch.setattr(idle_report, "projects_dir_for", lambda *a, **k: str(projects_dir))
     monkeypatch.setattr(idle_report.read_pass, "live_peers", _live({"3838aaaa-x": "peer-1"}))
@@ -1119,7 +1120,7 @@ def test_record_offer_suppresses_the_same_tick_it_recorded_in(
     assert row["answered-by-group-em"] == "no"
 
 
-def test_record_offer_is_one_call_for_n_peers(tmp_path, projects_dir, now, monkeypatch):
+def test_record_offer_is_one_call_for_n_peers(tmp_path: Path, projects_dir, now, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.group_em import send_pass
 
     calls = []

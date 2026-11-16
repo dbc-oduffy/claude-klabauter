@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, _put, re
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL as GATE_PLAN_REL, _plan
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import PLAN, PLAN_REL
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -56,14 +57,14 @@ def _status_on_disk(repo, rel: str) -> str:
 
 
 @pytest.fixture
-def tree(tmp_path):
+def tree(tmp_path: Path) -> Path:
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     write_run_scripts(tmp_path, "r1")
     return tmp_path
 
 
 @pytest.mark.parametrize("status", ["draft", "reviewed", "approved"])
-def test_ask_stage_handler_flips_the_plan_executing_without_a_commit(tree, status):
+def test_ask_stage_handler_flips_the_plan_executing_without_a_commit(tree, status) -> None:
     _put_plan(tree, status)
     _init(tree)
     head = _git(tree, "rev-parse", "HEAD")
@@ -77,7 +78,7 @@ def test_ask_stage_handler_flips_the_plan_executing_without_a_commit(tree, statu
 
 
 @pytest.mark.parametrize("status", ["draft", "reviewed", "approved"])
-def test_ask_gate_s_resume_flips_the_plan_executing_without_a_commit(repo, status):  # noqa: F811
+def test_ask_gate_s_resume_flips_the_plan_executing_without_a_commit(repo, status) -> None:  # noqa: F811
     _put(repo, tshirt="S", route="spec-dispatch")
     _plan(repo, rows=[("A1", "open"), ("A2", "open")])
     plan = repo / GATE_PLAN_REL
@@ -95,7 +96,7 @@ def test_ask_gate_s_resume_flips_the_plan_executing_without_a_commit(repo, statu
 
 
 @pytest.mark.parametrize("status", ["executing", "landed", "implemented", "superseded"])
-def test_a_plan_past_approval_is_left_byte_identical(tree, status):
+def test_a_plan_past_approval_is_left_byte_identical(tree, status) -> None:
     before = _put_plan(tree, status)
     _init(tree)
     head = _git(tree, "rev-parse", "HEAD")
@@ -108,7 +109,7 @@ def test_a_plan_past_approval_is_left_byte_identical(tree, status):
     assert _git(tree, "rev-parse", "HEAD") == head
 
 
-def test_a_minted_spine_is_never_stamped(tree):
+def test_a_minted_spine_is_never_stamped(tree) -> None:
     rel = "state/run/x.spine.md"
     before = _put_plan(tree, "reviewed", rel=rel)
 
@@ -116,7 +117,7 @@ def test_a_minted_spine_is_never_stamped(tree):
     assert (tree / rel).read_bytes() == before
 
 
-def test_a_plan_dirty_against_head_is_flipped_and_its_edits_kept(tree):
+def test_a_plan_dirty_against_head_is_flipped_and_its_edits_kept(tree) -> None:
     _put_plan(tree, "reviewed")
     _init(tree)
     path = tree / PLAN_REL
@@ -128,7 +129,7 @@ def test_a_plan_dirty_against_head_is_flipped_and_its_edits_kept(tree):
     assert _git(tree, "rev-parse", "HEAD") == head
 
 
-def test_an_untracked_plan_is_flipped(tree):
+def test_an_untracked_plan_is_flipped(tree) -> None:
     _put_plan(tree, "reviewed", rel="docs/plans/other.md")
     (tree / "keep.txt").write_text("x\n", encoding="utf-8")
     _init(tree)
@@ -138,7 +139,7 @@ def test_an_untracked_plan_is_flipped(tree):
     assert b"status: executing" in (tree / PLAN_REL).read_bytes()
 
 
-def test_a_crlf_plan_keeps_crlf(tree):
+def test_a_crlf_plan_keeps_crlf(tree) -> None:
     _put_plan(tree, "reviewed", newline="\r\n")
     _init(tree)
 
@@ -148,7 +149,7 @@ def test_a_crlf_plan_keeps_crlf(tree):
     assert raw.count(b"\n") == raw.count(b"\r\n")
 
 
-def test_a_failed_stamp_does_not_abort_the_stage(tree, monkeypatch):
+def test_a_failed_stamp_does_not_abort_the_stage(tree, monkeypatch: pytest.MonkeyPatch) -> None:
     _put_plan(tree, "reviewed")
     _init(tree)
 
@@ -164,7 +165,7 @@ def test_a_failed_stamp_does_not_abort_the_stage(tree, monkeypatch):
     assert "manifest_handle" in reply and "error" not in reply
 
 
-def test_the_stamp_spawns_nothing_and_stays_under_50ms(tree, monkeypatch):
+def test_the_stamp_spawns_nothing_and_stays_under_50ms(tree, monkeypatch: pytest.MonkeyPatch) -> None:
     _put_plan(tree, "reviewed")
     _init(tree)
 

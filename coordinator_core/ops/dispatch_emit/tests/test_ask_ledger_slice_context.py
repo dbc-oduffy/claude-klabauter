@@ -9,17 +9,18 @@ from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as fc
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.sizing_intake_contract import EM_BRIEF_KEY, EM_CONTEXT_PATHS_KEY
+from pathlib import Path
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
 
-def _slice(repo, name, source, **analysis_extra):
+def _slice(repo, name, source, **analysis_extra) -> tuple[str, Path]:
     rel = f"state/sizings/2026-10-01-{name}.yaml"
     analysis = {"ask_parent": fc.ask_parent_marker("ask-parent-x", name), **analysis_extra}
     if source:
@@ -41,7 +42,7 @@ def _rows(repo, rel):
     return rr.read_register((repo / rel).read_text(encoding="utf-8")).rows
 
 
-def test_a_relayed_slice_with_context_seeds_intent_and_context_rows(repo):
+def test_a_relayed_slice_with_context_seeds_intent_and_context_rows(repo) -> None:
     rel, run_dir = _slice(
         repo, "rel-ctx", "relayed",
         **{EM_BRIEF_KEY: "concrete host bug: X", EM_CONTEXT_PATHS_KEY: "docs/a.md\nb/c.md"},
@@ -54,24 +55,24 @@ def test_a_relayed_slice_with_context_seeds_intent_and_context_rows(repo):
     assert "## R2 (relayed)" in view and "> concrete host bug: X" in view
 
 
-def test_a_pm_slice_with_context_gets_an_ask_row_and_a_relayed_row(repo):
+def test_a_pm_slice_with_context_gets_an_ask_row_and_a_relayed_row(repo) -> None:
     rel, _ = _slice(repo, "pm-ctx", "pm", **{EM_BRIEF_KEY: "host bug: Y"})
     assert [(r["source_text"], r["anchor"]) for r in _rows(repo, rel)] == [
         ("intent of pm-ctx", "ask"), ("host bug: Y", "relayed"),
     ]
 
 
-def test_paths_alone_seed_a_context_row(repo):
+def test_paths_alone_seed_a_context_row(repo) -> None:
     rel, _ = _slice(repo, "paths-only", "pm", **{EM_CONTEXT_PATHS_KEY: "docs/a.md"})
     assert [r["source_text"] for r in _rows(repo, rel)] == ["intent of paths-only", "Context files: docs/a.md"]
 
 
-def test_a_slice_without_context_seeds_one_row(repo):
+def test_a_slice_without_context_seeds_one_row(repo) -> None:
     rel, _ = _slice(repo, "plain", "relayed")
     assert [(r["source_text"], r["anchor"]) for r in _rows(repo, rel)] == [("intent of plain", "relayed")]
 
 
-def test_a_slice_holding_assigned_rows_seeds_no_context_row(repo):
+def test_a_slice_holding_assigned_rows_seeds_no_context_row(repo) -> None:
     sizing = {
         "intent": "i",
         "em_analysis": {EM_BRIEF_KEY: "ctx"},

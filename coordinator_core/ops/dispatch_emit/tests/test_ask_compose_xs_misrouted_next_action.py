@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
+import pytest
 
 
 def _halt_next_action(monkeypatch, *, in_run_commit: bool) -> str:
@@ -13,7 +14,7 @@ def _halt_next_action(monkeypatch, *, in_run_commit: bool) -> str:
     return line.split("_halted.next_action : ", 1)[1]
 
 
-def test_misrouted_halt_names_the_plan_path_stage_and_other_halts_keep_revise(monkeypatch):
+def test_misrouted_halt_names_the_plan_path_stage_and_other_halts_keep_revise(monkeypatch: pytest.MonkeyPatch) -> None:
     tail = _halt_next_action(monkeypatch, in_run_commit=True)
     cond, rest = tail.split(" ? ", 1)
     assert "XS-MINT-MISROUTED" in cond
@@ -26,6 +27,6 @@ def test_misrouted_halt_names_the_plan_path_stage_and_other_halts_keep_revise(mo
     assert other.endswith(ask_compose.REVISE_NEXT_ACTION_JS + ");")
 
 
-def test_a_run_without_in_run_commit_still_records_none(monkeypatch):
+def test_a_run_without_in_run_commit_still_records_none(monkeypatch: pytest.MonkeyPatch) -> None:
     tail = _halt_next_action(monkeypatch, in_run_commit=False)
     assert tail.startswith("{ kind: 'none'") and "XS-MINT-MISROUTED" not in tail

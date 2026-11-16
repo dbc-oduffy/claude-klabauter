@@ -904,7 +904,7 @@ class ServerVersionState:
         repo_root: Optional[Path] = None,
         *,
         clock: Callable[[], float] = time.monotonic,
-    ):
+    ) -> None:
         from coordinator_core import engine_version, lifecycle
 
         self._root = Path(repo_root) if repo_root is not None else _default_engine_clone()

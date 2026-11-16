@@ -2,11 +2,16 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).parent.parent
 
 
-def _load_module():
+def _load_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "refresh_plugin_live_install_checkout_batching",
         _BIN_DIR / "refresh-plugin-live-install.py",
@@ -19,7 +24,7 @@ def _load_module():
 _mod = _load_module()
 
 
-def test_checkout_approved_files_makes_one_call_for_many_files(monkeypatch, tmp_path):
+def test_checkout_approved_files_makes_one_call_for_many_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls = []
 
     def fake_git(args, cwd):
@@ -43,7 +48,7 @@ def test_checkout_approved_files_makes_one_call_for_many_files(monkeypatch, tmp_
     assert cwd == tmp_path
 
 
-def test_checkout_approved_files_single_file_still_one_call(monkeypatch, tmp_path):
+def test_checkout_approved_files_single_file_still_one_call(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls = []
 
     def fake_git(args, cwd):
@@ -62,7 +67,7 @@ def test_checkout_approved_files_single_file_still_one_call(monkeypatch, tmp_pat
     assert calls[0] == ["checkout", "origin/main", "--", "only.md"]
 
 
-def test_checkout_approved_files_propagates_failure(monkeypatch, tmp_path):
+def test_checkout_approved_files_propagates_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     def fake_git(args, cwd):
         class _Result:
             returncode = 1

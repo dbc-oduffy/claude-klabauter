@@ -32,13 +32,13 @@ def _store_reaching_scripts() -> dict[str, bool]:
     return out
 
 
-def test_every_store_reaching_benchmark_script_scopes_its_settings_home():
+def test_every_store_reaching_benchmark_script_scopes_its_settings_home() -> None:
     unscoped = {name for name, scoped in _store_reaching_scripts().items() if not scoped}
     new = sorted(unscoped - _UNSCOPED_PENDING)
     assert not new, f"benchmark scripts reach the engine-record store unscoped; wrap main in fixture_settings_home: {new}"
 
 
-def test_the_unscoped_ratchet_names_only_live_unscoped_scripts():
+def test_the_unscoped_ratchet_names_only_live_unscoped_scripts() -> None:
     scripts = _store_reaching_scripts()
     stale = sorted(name for name in _UNSCOPED_PENDING if scripts.get(name, True))
     assert not stale, f"scoped or gone; remove from _UNSCOPED_PENDING: {stale}"

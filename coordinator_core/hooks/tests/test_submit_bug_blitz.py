@@ -32,7 +32,7 @@ def _budget() -> int:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     for name in ("CLAUDE_CODE_REMOTE", "CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_CONTAINER_ID",
                  "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_PLUGIN_ROOT", "DELIVERABLE_ID"):
         monkeypatch.delenv(name, raising=False)
@@ -92,7 +92,7 @@ def _no_grant_records(root: Path) -> None:
     assert not [p for p in root.rglob("*") if p.is_file() and "tier-u" in p.name.lower()]
 
 
-def test_targets_submission_emits_the_grind_and_rewrites_the_call(repo, monkeypatch):
+def test_targets_submission_emits_the_grind_and_rewrites_the_call(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     with _count_spawns_attributed(monkeypatch) as spawns:
         env = _call(repo, {"targets": "red-set"})
 
@@ -124,7 +124,7 @@ def _git(root: Path, *args: str) -> str:
 
 
 @pytest.fixture
-def real_repo(tmp_path, monkeypatch):
+def real_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A real git repo on a work branch, with the bug profile in place."""
     for name in ("CLAUDE_CODE_REMOTE", "CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_CONTAINER_ID",
                  "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_PLUGIN_ROOT", "DELIVERABLE_ID", "QUEUE_APPEND_OUTPUT_ROOT"):
@@ -150,7 +150,7 @@ def _porcelain_state(root: Path) -> list[str]:
     return [ln for ln in _git(root, "status", "--porcelain", "--", "state/bug-backlog").splitlines() if ln]
 
 
-def test_default_mint_lands_every_minted_row_in_one_commit_naming_the_run(real_repo, monkeypatch):
+def test_default_mint_lands_every_minted_row_in_one_commit_naming_the_run(real_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     before = int(_git(real_repo, "rev-list", "--count", "HEAD").strip())
     with _count_spawns_attributed(monkeypatch) as spawns:
         env = _call(real_repo, {"targets": "red-set"}, mint=None)
@@ -177,7 +177,7 @@ _SIX = (
 )
 
 
-def test_default_path_six_targets_in_three_files_mint_six_rows_and_six_accounts(real_repo):
+def test_default_path_six_targets_in_three_files_mint_six_rows_and_six_accounts(real_repo) -> None:
     env = _call(real_repo, {"targets": "red-set"}, mint=None, parse=lambda spec: ParseResult(tests=_SIX))
     assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
     assert len(list((real_repo / "state" / "bug-backlog").glob("*.yaml"))) == 6
@@ -191,7 +191,7 @@ def test_default_path_six_targets_in_three_files_mint_six_rows_and_six_accounts(
     assert _porcelain_state(real_repo) == []
 
 
-def test_second_run_reusing_rows_commits_their_new_tag(real_repo):
+def test_second_run_reusing_rows_commits_their_new_tag(real_repo) -> None:
     _call(real_repo, {"targets": "red-set"}, mint=None)
     _call(real_repo, {"targets": "red-set"}, mint=None, run_id="20261015T130000Z")
 
@@ -200,7 +200,7 @@ def test_second_run_reusing_rows_commits_their_new_tag(real_repo):
     assert "20261015T130000Z" in _git(real_repo, "log", "-1", "--format=%s")
 
 
-def test_a_refused_mint_commit_reaps_the_new_rows_and_denies(real_repo, monkeypatch):
+def test_a_refused_mint_commit_reaps_the_new_rows_and_denies(real_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import commit as commit_mod
 
     def _refuse(*a, **k):
@@ -239,7 +239,7 @@ def _seed_busy_box(root: Path, *, rows: int, agents: int, events: int) -> None:
         (agent_dir / "touch-record.jsonl").write_bytes(lines)
 
 
-def test_submission_on_a_busy_box_stays_inside_the_hook_process_budget(repo, monkeypatch):
+def test_submission_on_a_busy_box_stays_inside_the_hook_process_budget(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     import time
 
     _seed_busy_box(repo, rows=235, agents=3200, events=4)
@@ -259,7 +259,142 @@ def test_submission_on_a_busy_box_stays_inside_the_hook_process_budget(repo, mon
     assert elapsed_ms < target_ms, f"{elapsed_ms:.0f}ms process time"
 
 
-def test_rewritten_args_carry_a_run_token_that_admits(repo):
+BRIGHTLINE_MS = 500
+_SHARED_DIR = "pkg/with/a/long/shared/path/prefix/for/the/slug/tests"
+
+
+def _seed_archived_rows(root: Path, *, count: int) -> None:
+    """Closed `tf` rows in the archive whose capped title slug all share one prefix, as a long-lived box's do."""
+    from coordinator_core.bug_blitz.mint import _slug_from_title
+
+    month = root / "archive" / "bug-backlog" / "2026-09"
+    month.mkdir(parents=True)
+    for i in range(count):
+        title = f"TF: {_SHARED_DIR}/test_old{i}.py::test_one"
+        (month / f"2026-09-01-{_slug_from_title(title)}-{i:012x}.yaml").write_text(
+            f'created: 2026-09-01\ntitle: "{title}"\nbody: |-\n  Failing test and first message line:\n'
+            f"  - {_SHARED_DIR}/test_old{i}.py::test_one\nstatus: closed-fixed\nsurface: {_SHARED_DIR}/test_old{i}.py\n"
+            "severity: P1\nfrom_repo: box\ntags:\n  - tf\n  - bug-blitz-20260901T000000Z\n",
+            encoding="utf-8",
+        )
+
+
+def test_default_submission_over_five_targets_stays_inside_the_brightline(real_repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    _seed_archived_rows(real_repo, count=800)
+    (real_repo / "warm.txt").write_text("warm/test_w.py::test_w\n", encoding="utf-8")
+    (real_repo / "red.txt").write_text(
+        "".join(f"{_SHARED_DIR}/test_new{i}.py::test_one\n" for i in range(5)), encoding="utf-8"
+    )
+    _call(real_repo, {"targets": "warm.txt"}, mint=None, parse=None, resolve=None, run_id="20261015T110000Z")  # imports paid once, as a warm engine has them
+
+    with _count_spawns_attributed(monkeypatch) as spawns:
+        started = time.process_time()
+        env = _call(real_repo, {"targets": "red.txt"}, mint=None, parse=None, resolve=None)
+        elapsed_ms = (time.process_time() - started) * 1000
+
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    script = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
+    assert script.is_file() and script.with_name(script.name + ".emitted.json").is_file()
+    decisions = json.loads((script.parent / mod.DECISIONS_FILE).read_text(encoding="utf-8"))
+    assert len(decisions["minted"]) == 5
+    assert _porcelain_state(real_repo) == []
+    assert not [s.argv for s in spawns]
+    assert elapsed_ms < BRIGHTLINE_MS, f"{elapsed_ms:.0f}ms process time"
+
+
+def _seed_full_backlog(root: Path, *, rows: int) -> None:
+    """Open `tf` rows of a long-lived box's size, each a few KB, named as the appender names them."""
+    body = "\n".join(f"  line {k} of a long evidence block with some words in it" for k in range(40))
+    queue = root / "state" / "bug-backlog"
+    for i in range(rows):
+        (queue / f"2026-0{1 + i % 9}-01-tf-pkg-mod-{i}-py-test-a-{i:012x}.yaml").write_text(
+            f'created: 2026-01-01\ntitle: "TF: pkg/mod_{i}.py::test_a"\nbody: |-\n{body}\nstatus: open\n'
+            f"severity: P1\nfrom_repo: box\ntags:\n  - tf\n  - bug-blitz-2026010{i % 9}T000000Z\n"
+            f"surface: pkg/mod_{i}.py\nevidence: state/x.txt\nrepro_steps: targeted-test-run --row pkg/mod_{i}.py\n",
+            encoding="utf-8",
+        )
+
+
+def test_default_submission_over_a_full_backlog_reads_only_the_rows_its_targets_name(real_repo, monkeypatch: pytest.MonkeyPatch) -> None:
+    import time
+
+    _seed_full_backlog(real_repo, rows=900)
+    _seed_archived_rows(real_repo, count=800)
+    _git(real_repo, "add", "-A")
+    _git(real_repo, "commit", "-q", "-m", "box state")
+    (real_repo / "warm.txt").write_text("warm/test_w.py::test_w\n", encoding="utf-8")
+    (real_repo / "red.txt").write_text(
+        "".join(f"{_SHARED_DIR}/test_new{i}.py::test_one\n" for i in range(5)), encoding="utf-8"
+    )
+    _call(real_repo, {"targets": "warm.txt"}, mint=None, parse=None, resolve=None, run_id="20261015T110000Z")
+
+    from coordinator_core.ops import queue_family
+
+    walks: list[str] = []
+    real_mint = mod._default_mint
+
+    def watched_mint(*a, **k):
+        def whole_queue_walk(*qa, **qk):
+            walks.append("query_records")
+            raise AssertionError("the mint walked the whole queue")
+
+        monkeypatch.setattr(queue_family, "query_records", whole_queue_walk)
+        return real_mint(*a, **k)
+
+    monkeypatch.setattr(mod, "_default_mint", watched_mint)
+    with _count_spawns_attributed(monkeypatch) as spawns:
+        started = time.process_time()
+        env = _call(real_repo, {"targets": "red.txt"}, mint=None, parse=None, resolve=None)
+        elapsed_ms = (time.process_time() - started) * 1000
+
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    script = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
+    assert script.is_file() and script.with_name(script.name + ".emitted.json").is_file()
+    assert not [s.argv for s in spawns]
+    assert not walks
+    assert elapsed_ms < BRIGHTLINE_MS, f"{elapsed_ms:.0f}ms process time"
+
+
+def _cpu_ms() -> float:
+    """Process time of this process plus its reaped children, in ms (os.times children are zero on Windows)."""
+    import os
+
+    t = os.times()
+    return (t.user + t.system + t.children_user + t.children_system) * 1000
+
+
+def test_default_submission_of_a_failing_tests_file_spawns_no_pytest_and_stays_inside_the_brightline(
+    real_repo, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (real_repo / "pkg").mkdir()
+    (real_repo / "pkg" / "test_red.py").write_text(
+        "def test_one():\n    assert False\n\n\ndef test_two():\n    assert False\n", encoding="utf-8"
+    )
+    _git(real_repo, "add", "pkg")
+    _git(real_repo, "commit", "-q", "-m", "red tests")
+    (real_repo / "warm.txt").write_text("warm/test_w.py::test_w\n", encoding="utf-8")
+    (real_repo / "red.txt").write_text("pkg/test_red.py::test_one\npkg/test_red.py::test_two\n", encoding="utf-8")
+    _call(real_repo, {"targets": "warm.txt"}, mint=None, parse=None, resolve=None, run_id="20261015T110000Z")  # imports paid once, as a warm engine has them
+
+    with _count_spawns_attributed(monkeypatch) as spawns:
+        before = _cpu_ms()
+        env = _call(real_repo, {"targets": "red.txt"}, mint=None, parse=None, resolve=None)
+        cpu_ms = _cpu_ms() - before
+
+    assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
+    script = Path(env["hookSpecificOutput"]["updatedInput"]["scriptPath"])
+    decisions = json.loads((script.parent / mod.DECISIONS_FILE).read_text(encoding="utf-8"))
+    assert len(decisions["minted"]) == 2
+    pytest_children = [s.argv for s in spawns if any("pytest" in a for a in s.argv)]
+    assert not pytest_children, (
+        f"{len(pytest_children)} pytest children of {len(spawns)} spawns, {cpu_ms:.0f}ms process time: {pytest_children}"
+    )
+    assert cpu_ms < BRIGHTLINE_MS, f"{cpu_ms:.0f}ms process time, {len(spawns)} spawns"
+
+
+def test_rewritten_args_carry_a_run_token_that_admits(repo) -> None:
     from coordinator_core.ops.dispatch_emit import run_token
 
     env = _call(repo, {"targets": "red-set"})
@@ -269,7 +404,7 @@ def test_rewritten_args_carry_a_run_token_that_admits(repo):
     assert run_token.admits(repo, RUN_ID, token, updated["args"]["script_path"])
 
 
-def test_mint_failure_submits_without_a_token(repo, monkeypatch):
+def test_mint_failure_submits_without_a_token(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import run_token
 
     def _boom(*_a, **_k):
@@ -289,7 +424,7 @@ _FIVE = (
 )
 
 
-def test_declined_target_is_accounted_named_in_the_reason_and_token_is_grind_kind(repo):
+def test_declined_target_is_accounted_named_in_the_reason_and_token_is_grind_kind(repo) -> None:
     from coordinator_core.ops.dispatch_emit import run_token
 
     def emit(params: dict, root: Path) -> dict:
@@ -329,7 +464,7 @@ def test_declined_target_is_accounted_named_in_the_reason_and_token_is_grind_kin
     assert [r["kind"] for r in run_token.live_records(repo) if r["run_id"] == RUN_ID] == ["grind"]
 
 
-def test_backlog_submission_writes_empty_targets(repo):
+def test_backlog_submission_writes_empty_targets(repo) -> None:
     def emit(params: dict, root: Path) -> dict:
         script = Path(params["output_path"])
         script.parent.mkdir(parents=True, exist_ok=True)
@@ -343,7 +478,7 @@ def test_backlog_submission_writes_empty_targets(repo):
     assert "not run" not in _reason(env)
 
 
-def test_emit_params_carry_run_tag_where_and_sweep_appetite(repo):
+def test_emit_params_carry_run_tag_where_and_sweep_appetite(repo) -> None:
     seen: dict = {}
 
     def emit(params: dict, root: Path) -> dict:
@@ -372,16 +507,16 @@ def _seen_overrides(repo, args) -> dict:
     return seen.get("overrides", {})
 
 
-def test_submission_without_budget_tokens_carries_no_ceiling(repo):
+def test_submission_without_budget_tokens_carries_no_ceiling(repo) -> None:
     assert "budget_tokens" not in _seen_overrides(repo, {"targets": "red-set"})
     assert "budget_tokens" not in _seen_overrides(repo, {"targets": "backlog"})
 
 
-def test_caller_budget_tokens_is_forwarded(repo):
+def test_caller_budget_tokens_is_forwarded(repo) -> None:
     assert _seen_overrides(repo, {"targets": "red-set", "budget_tokens": 5_000_000})["budget_tokens"] == 5_000_000
 
 
-def test_backlog_target_neither_parses_nor_mints_and_keeps_the_profile_where(repo):
+def test_backlog_target_neither_parses_nor_mints_and_keeps_the_profile_where(repo) -> None:
     seen: dict = {}
 
     def emit(params: dict, root: Path) -> dict:
@@ -396,7 +531,7 @@ def test_backlog_target_neither_parses_nor_mints_and_keeps_the_profile_where(rep
     assert "overrides" not in seen
 
 
-def test_backlog_dir_target_grinds_existing_rows_without_parsing(repo):
+def test_backlog_dir_target_grinds_existing_rows_without_parsing(repo) -> None:
     (repo / "state" / "bug-backlog" / "row-a.md").write_text(
         "---\nid: row-a\nstatus: open\nseverity: P1\npm_ruling: fix it\n---\nbody\n", encoding="utf-8"
     )
@@ -416,7 +551,7 @@ def test_backlog_dir_target_grinds_existing_rows_without_parsing(repo):
     assert "overrides" not in seen
 
 
-def test_backlog_dir_target_allows_through_the_real_emit(repo):
+def test_backlog_dir_target_allows_through_the_real_emit(repo) -> None:
     (repo / "state" / "bug-backlog" / "row-a.md").write_text(
         "---\nid: row-a\nstatus: open\nseverity: P1\npm_ruling: fix it\n---\nbody\n", encoding="utf-8"
     )
@@ -424,7 +559,7 @@ def test_backlog_dir_target_allows_through_the_real_emit(repo):
     assert env["hookSpecificOutput"]["permissionDecision"] == "allow", env
 
 
-def test_backlog_submission_without_a_reap_record_declines_every_tf_row(repo):
+def test_backlog_submission_without_a_reap_record_declines_every_tf_row(repo) -> None:
     (repo / "live.py").write_text("X = 1\n", encoding="utf-8")
     (repo / "state" / "bug-backlog" / "tf-a.yaml").write_text(
         "created: 2026-11-12\ntitle: TF a\nbody: b\nstatus: open\nsurface: live.py\nseverity: P1\n"
@@ -440,7 +575,7 @@ def test_backlog_submission_without_a_reap_record_declines_every_tf_row(repo):
     assert reasons == ["reap record absent; run bug-backlog-reap"]
 
 
-def test_decisions_record_the_fire_time_claim_baseline(repo, monkeypatch):
+def test_decisions_record_the_fire_time_claim_baseline(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import scope
 
     claims = [
@@ -451,7 +586,7 @@ def test_decisions_record_the_fire_time_claim_baseline(repo, monkeypatch):
     ]
     seen_sid: list = []
 
-    def fake_claims(sid, cwd=None):
+    def fake_claims(sid, cwd=None) -> list[str]:
         seen_sid.append(sid)
         return claims
 
@@ -464,28 +599,28 @@ def test_decisions_record_the_fire_time_claim_baseline(repo, monkeypatch):
 
 
 @pytest.mark.parametrize("branch", ["work/machine-b/2026-10-29b", "work/box/feature-x"])
-def test_any_work_branch_is_admitted(repo, branch):
+def test_any_work_branch_is_admitted(repo, branch) -> None:
     _head(repo, branch)
     env = _call(repo, {"targets": "red-set"})
     assert env["hookSpecificOutput"]["permissionDecision"] != "deny"
 
 
 @pytest.mark.parametrize("branch", ["main", "feature/foo"])
-def test_denies_off_a_work_branch(repo, branch):
+def test_denies_off_a_work_branch(repo, branch) -> None:
     _head(repo, branch)
     env = _call(repo, {"targets": "red-set"})
     assert env["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "Check out a work/* branch" in _reason(env)[:60]
 
 
-def test_denies_a_detached_head(repo):
+def test_denies_a_detached_head(repo) -> None:
     (repo / ".git" / "HEAD").write_text("0123456789abcdef0123456789abcdef01234567\n", encoding="utf-8")
     env = _call(repo, {"targets": "red-set"})
     assert env["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "detached" in _reason(env)
 
 
-def test_denies_an_unparseable_target_and_mints_nothing(repo):
+def test_denies_an_unparseable_target_and_mints_nothing(repo) -> None:
     def parse(spec):
         raise ValueError("no failing tests parsed from red-set")
 
@@ -501,35 +636,35 @@ def test_denies_an_unparseable_target_and_mints_nothing(repo):
     "args",
     [{}, {"targets": ""}, {"targets": "x", "suite": "full"}, {"targets": "x", "limit": 0}, {"targets": "x", "limit": "3"}, 7],
 )
-def test_denies_a_malformed_args_shape(repo, args):
+def test_denies_a_malformed_args_shape(repo, args) -> None:
     env = _call(repo, args)
     assert env["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "Submit shape" in _reason(env)
 
 
-def test_a_subagent_submission_is_denied(repo):
+def test_a_subagent_submission_is_denied(repo) -> None:
     payload = _payload(repo, {"targets": "x"})
     payload["agent_id"] = "agent-1"
     assert mod.evaluate(payload)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 @pytest.mark.parametrize("name", ["coordinator:engine-ask", "bug-blitz-extra", "other:bug-blitzer"])
-def test_other_workflow_names_are_a_no_op(repo, name):
+def test_other_workflow_names_are_a_no_op(repo, name) -> None:
     assert mod.evaluate(_payload(repo, {"targets": "x"}, name=name)) == mod.no_advisory()
 
 
 @pytest.mark.parametrize("name", ["bug-blitz", "coordinator:bug-blitz"])
-def test_stub_name_matches_bare_and_namespaced(repo, name):
+def test_stub_name_matches_bare_and_namespaced(repo, name) -> None:
     assert mod.is_submission(_payload(repo, {}, name=name))
 
 
-def test_non_workflow_tool_is_a_no_op(repo):
+def test_non_workflow_tool_is_a_no_op(repo) -> None:
     payload = _payload(repo, {"targets": "x"})
     payload["tool_name"] = "Bash"
     assert mod.evaluate(payload) == mod.no_advisory()
 
 
-def test_a_long_refusal_leads_with_cause_and_log_path_and_logs_the_whole_reason(repo):
+def test_a_long_refusal_leads_with_cause_and_log_path_and_logs_the_whole_reason(repo) -> None:
     from coordinator_core.hooks.submit_engine_ask import REFUSAL_LOG_REL
 
     cause = "no failing tests parsed from red-set " + "x" * 400
@@ -547,7 +682,7 @@ def test_a_long_refusal_leads_with_cause_and_log_path_and_logs_the_whole_reason(
     assert "Submit shape" in logged[-1]["refusal"]
 
 
-def test_a_short_refusal_is_unchanged_and_still_logged(repo):
+def test_a_short_refusal_is_unchanged_and_still_logged(repo) -> None:
     from coordinator_core.hooks.submit_engine_ask import REFUSAL_LOG_REL
 
     env = _call(repo, {})
@@ -556,13 +691,13 @@ def test_a_short_refusal_is_unchanged_and_still_logged(repo):
     assert (repo / REFUSAL_LOG_REL).is_file()
 
 
-def test_pytest_node_id_targets_file_is_accepted_at_default_args(repo):
+def test_pytest_node_id_targets_file_is_accepted_at_default_args(repo) -> None:
     (repo / "red.txt").write_text(
         "tests/test_x.py::test_a\ntests/test_x.py::test_b[a b]\n", encoding="utf-8"
     )
     minted: list = []
 
-    def mint(root, run_id, tests, *, target_ref):
+    def mint(root, run_id, tests, *, target_ref) -> list[str]:
         minted.extend(tests)
         return ["TF-0"]
 
@@ -571,7 +706,7 @@ def test_pytest_node_id_targets_file_is_accepted_at_default_args(repo):
     assert {(t.file, t.name) for t in minted} >= {("tests/test_x.py", "test_a"), ("tests/test_x.py", "test_b[a b]")}, minted
 
 
-def test_real_parser_mints_a_bare_test_file_target_as_a_file_level_row(repo):
+def test_real_parser_mints_a_bare_test_file_target_as_a_file_level_row(repo) -> None:
     (repo / "red.txt").write_text(
         "FAILED pkg/tests/test_a.py::test_one - AssertionError\npkg/tests/test_b.py\n", encoding="utf-8"
     )
@@ -584,7 +719,7 @@ def test_real_parser_mints_a_bare_test_file_target_as_a_file_level_row(repo):
     _call(repo, {"targets": "red.txt"}, resolve=None, parse=None, mint=mint)
     assert ("pkg/tests/test_b.py", "") in {(t.file, t.name) for t in minted}, minted
 
-def test_a_target_refusal_leads_with_its_cause_not_the_target_path(repo):
+def test_a_target_refusal_leads_with_its_cause_not_the_target_path(repo) -> None:
     """The harness shows ~80 chars of a deny; a long targets path ahead of the cause hid it."""
     def parse(spec):
         raise ValueError("2 target(s) could not be parsed")

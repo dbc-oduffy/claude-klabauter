@@ -20,6 +20,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_R
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import SIZING_REL, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_refire_replans_register_and_token import _ROWS, _stage_repo
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process]
 
@@ -36,7 +37,7 @@ def _compose(monkeypatch, arm) -> str:
 
 
 @pytest.mark.parametrize("tshirt", ["S", "M"])
-def test_live_revise_adding_a_row_is_neither_refused_nor_told_to_resize(repo, monkeypatch, tshirt):  # noqa: F811
+def test_live_revise_adding_a_row_is_neither_refused_nor_told_to_resize(repo, monkeypatch: pytest.MonkeyPatch, tshirt) -> None:  # noqa: F811
     doc = {
         "schema": "sizing-object", "name": "fixture", "intent": "Fix the thing",
         "estimate": {"tshirt": tshirt, "provisional": True}, "route": "spec-dispatch",
@@ -57,7 +58,7 @@ def test_live_revise_adding_a_row_is_neither_refused_nor_told_to_resize(repo, mo
 
 
 @pytest.mark.parametrize("arm", ["s", "xs", "m_plus"])
-def test_the_replan_leg_runs_on_unclaimed_rows_on_every_arm_and_is_bounded(monkeypatch, arm):
+def test_the_replan_leg_runs_on_unclaimed_rows_on_every_arm_and_is_bounded(monkeypatch: pytest.MonkeyPatch, arm) -> None:
     script = _compose(monkeypatch, arm)
     owes = script.index("const _ledgerOwes")
     owes_expr = script[owes:script.index(";", owes)]
@@ -70,17 +71,17 @@ def test_the_replan_leg_runs_on_unclaimed_rows_on_every_arm_and_is_bounded(monke
     assert REGISTER_ROWS_UNCLAIMED_REFUSAL in script
 
 
-def _fm_with_sizing_object(root):
+def _fm_with_sizing_object(root) -> str:
     path = root / PLAN_REL
     path.write_text(path.read_text(encoding="utf-8").replace("---\n", f"---\nsizing_object: {REL}\n", 1), encoding="utf-8", newline="\n")
     return split_frontmatter(path.read_text(encoding="utf-8")).fm_text
 
 
-def _run_sizing():
+def _run_sizing() -> dict[str, dict[str, list[dict[str, str]]]]:
     return {"requirement_register": {"sources": [{"kind": "pm"}], "rows": _ROWS}}
 
 
-def test_stage_claims_the_omitted_rows_in_run_instead_of_refusing(tmp_path):
+def test_stage_claims_the_omitted_rows_in_run_instead_of_refusing(tmp_path: Path) -> None:
     root = _stage_repo(tmp_path)
     plan = root / PLAN_REL
     fm = _fm_with_sizing_object(root)
@@ -89,7 +90,7 @@ def test_stage_claims_the_omitted_rows_in_run_instead_of_refusing(tmp_path):
     assert rr.plan_claims(split_frontmatter(plan.read_text(encoding="utf-8")).fm_text)[1] == {"R1", "R2", "R3"}
 
 
-def test_stage_halts_register_rows_unclaimed_only_once_the_attempts_are_spent(tmp_path, monkeypatch):
+def test_stage_halts_register_rows_unclaimed_only_once_the_attempts_are_spent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _stage_repo(tmp_path)
     calls = []
     monkeypatch.setattr(ask_stage, "_claim_register_rows", lambda *_a: calls.append(1))
@@ -105,7 +106,7 @@ def _gate(register_class):
             "classes": {"REGISTER": register_class}}
 
 
-def test_readiness_routes_unclaimed_register_rows_to_the_in_run_replan_not_a_judgment_pull():
+def test_readiness_routes_unclaimed_register_rows_to_the_in_run_replan_not_a_judgment_pull() -> None:
     from coordinator_core.ops.plan_readiness_verdict import readiness_verdict
 
     out = readiness_verdict(_gate({
@@ -117,14 +118,14 @@ def test_readiness_routes_unclaimed_register_rows_to_the_in_run_replan_not_a_jud
     assert "R2, R3" in out["mechanical_repairs"][0]["instruction"]
 
 
-def test_readiness_still_pulls_other_register_defects_for_judgment():
+def test_readiness_still_pulls_other_register_defects_for_judgment() -> None:
     from coordinator_core.ops.plan_readiness_verdict import readiness_verdict
 
     out = readiness_verdict(_gate({"status": "FAIL", "kind": "register-pin-drift", "mechanical": False, "repair": None}), None, [])
     assert out["pull_class"] == "substantive" and "needs judgment" in out["reason"]
 
 
-def test_readiness_repairs_a_missing_register_pin_mechanically():
+def test_readiness_repairs_a_missing_register_pin_mechanically() -> None:
     from coordinator_core.ops.plan_readiness_verdict import readiness_verdict
 
     out = readiness_verdict(_gate({"status": "FAIL", "kind": "register-pin-missing", "mechanical": False, "repair": None}), None, [])
@@ -164,20 +165,20 @@ def _stage_default(tmp_path, spine_registers, claimed):
     return reply
 
 
-def test_stage_leaves_rows_it_claimed_without_a_serving_row_to_the_in_run_late_leg(tmp_path):
+def test_stage_leaves_rows_it_claimed_without_a_serving_row_to_the_in_run_late_leg(tmp_path: Path) -> None:
     reply = _stage_default(tmp_path, "[R1]", "[R1]")
     assert reply["ledger_item_ids"] == ["R1"] and set(reply["rulable_ids"]) == {"R1", "R2", "R3"}
     assert rr.plan_claims(split_frontmatter((tmp_path / _STAGE_PLAN_REL).read_text(encoding="utf-8")).fm_text)[1] == {"R1", "R2", "R3"}
     assert rl.late_rows(tmp_path, _STAGE_RUN) == ["R2", "R3"]
 
 
-def test_stage_keeps_an_omitted_row_a_plan_row_serves_through_register_rows(tmp_path):
+def test_stage_keeps_an_omitted_row_a_plan_row_serves_through_register_rows(tmp_path: Path) -> None:
     reply = _stage_default(tmp_path, "[R1, R2, R3]", "[R1]")
     assert reply["ledger_item_ids"] == ["R1", "R2", "R3"]
     assert rl.late_rows(tmp_path, _STAGE_RUN) == []
 
 
-def test_stage_keeps_every_row_of_a_plan_whose_claims_omitted_nothing(tmp_path):
+def test_stage_keeps_every_row_of_a_plan_whose_claims_omitted_nothing(tmp_path: Path) -> None:
     reply = _stage_default(tmp_path, "", "[R1, R2, R3]")
     assert reply["ledger_item_ids"] == ["R1", "R2", "R3"]
     assert rl.late_rows(tmp_path, _STAGE_RUN) == []

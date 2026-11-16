@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from coordinator_core.authz import registration_quad_static as rqs
 from coordinator_core.authz.registration_quad_static import registration_violations
+import pytest
 
 CLS = "coordinator_core/authz/classification.py"
 SCOPE = "coordinator_core/op_scopes.py"
@@ -41,7 +42,7 @@ def _with_op(files: dict[str, bytes], key: str) -> dict[str, bytes]:
     return out
 
 
-def test_r1_new_op_without_table_entries_refuses():
+def test_r1_new_op_without_table_entries_refuses() -> None:
     files = _with_op(_tree(), "x.y")
     v = registration_violations(_reader(files), [OPFILE])
     assert v.outcome == "refuse"
@@ -49,7 +50,7 @@ def test_r1_new_op_without_table_entries_refuses():
     assert "x.y" in v.reason and CLS in v.reason
 
 
-def test_r2_table_edits_left_out_of_paths_refuses():
+def test_r2_table_edits_left_out_of_paths_refuses() -> None:
     stale_head = _tree()
     files = _with_op(stale_head, "x.y")
     v = registration_violations(_reader(files), [OPFILE])
@@ -61,7 +62,7 @@ def test_r2_table_edits_left_out_of_paths_refuses():
     )
 
 
-def test_r5_broken_surface_refuses_fail_closed():
+def test_r5_broken_surface_refuses_fail_closed() -> None:
     files = _with_op(_tree(("x.y",)), "x.y")
     files[SCOPE] = b"_OP_KEY_SCOPE = {"
     v = registration_violations(_reader(files), [OPFILE, SCOPE])
@@ -69,43 +70,43 @@ def test_r5_broken_surface_refuses_fail_closed():
     assert SCOPE in v.reason
 
 
-def test_non_literal_surface_refuses():
+def test_non_literal_surface_refuses() -> None:
     files = _with_op(_tree(("x.y",)), "x.y")
     files[MAP] = b"OP_MODULE_MAP = build()\n"
     assert registration_violations(_reader(files), [OPFILE]).outcome == "refuse"
 
 
-def test_name_bound_twice_refuses():
+def test_name_bound_twice_refuses() -> None:
     files = _with_op(_tree(("x.y",)), "x.y")
     files[SCOPE] = files[SCOPE] + files[SCOPE]
     v = registration_violations(_reader(files), [OPFILE])
     assert v.outcome == "refuse" and "more than once" in v.reason
 
 
-def test_partially_present_surfaces_refuse():
+def test_partially_present_surfaces_refuse() -> None:
     files = _with_op(_tree(("x.y",)), "x.y")
     del files[EAGER]
     v = registration_violations(_reader(files), [OPFILE])
     assert v.outcome == "refuse" and EAGER in v.reason
 
 
-def test_p1_complete_op_passes():
+def test_p1_complete_op_passes() -> None:
     files = _with_op(_tree(("x.y",)), "x.y")
     v = registration_violations(_reader(files), [OPFILE])
     assert v.outcome == "pass" and v.violations == ()
 
 
-def test_p2_no_coordinator_core_skips():
+def test_p2_no_coordinator_core_skips() -> None:
     files = {"tools/x.py": b'@register_op("x.y")\n'}
     assert registration_violations(_reader(files), ["tools/x.py"]).outcome == "skip"
 
 
-def test_no_surfaces_in_tree_skips():
+def test_no_surfaces_in_tree_skips() -> None:
     files = {OPFILE: b'@register_op("x.y")\n'}
     assert registration_violations(_reader(files), [OPFILE]).outcome == "skip"
 
 
-def test_no_keys_and_no_surface_path_skips_without_reading_surfaces():
+def test_no_keys_and_no_surface_path_skips_without_reading_surfaces() -> None:
     seen: list[str] = []
 
     def read(p):
@@ -116,14 +117,14 @@ def test_no_keys_and_no_surface_path_skips_without_reading_surfaces():
     assert seen == ["coordinator_core/util.py"]
 
 
-def test_p3_baselined_op_restaged_passes():
+def test_p3_baselined_op_restaged_passes() -> None:
     files = _with_op(_tree(debt=("x.y",)), "x.y")
     files[SCOPE] = _tree(("x.y",))[SCOPE]
     files[MAP] = _tree(("x.y",))[MAP]
     assert registration_violations(_reader(files), [OPFILE]).outcome == "pass"
 
 
-def test_baseline_forgives_only_recorded_surface():
+def test_baseline_forgives_only_recorded_surface() -> None:
     files = _tree(incomplete={"x.y": ("OP_MODULE_MAP",)})
     files[CLS] = _tree(("x.y",))[CLS]
     files = _with_op(files, "x.y")
@@ -132,24 +133,24 @@ def test_baseline_forgives_only_recorded_surface():
     assert v.violations[0].surfaces_missing == ("_OP_KEY_SCOPE",)
 
 
-def test_surface_edit_without_register_op_key_passes():
+def test_surface_edit_without_register_op_key_passes() -> None:
     files = _tree(("a.b",))
     assert registration_violations(_reader(files), [CLS]).outcome == "pass"
 
 
-def test_backslash_paths_are_normalised():
+def test_backslash_paths_are_normalised() -> None:
     files = _with_op(_tree(("x.y",)), "x.y")
     assert registration_violations(_reader(files), [OPFILE.replace("/", "\\")]).outcome == "pass"
 
 
-def test_module_not_in_eager_list_refuses():
+def test_module_not_in_eager_list_refuses() -> None:
     files = _with_op(_tree(("x.y",)), "x.y")
     files[EAGER] = b'_EAGER_OP_MODULES = [("other.mod", "n")]\n'
     v = registration_violations(_reader(files), [OPFILE])
     assert v.violations[0].surfaces_missing == ("_EAGER_OP_MODULES",)
 
 
-def test_verdict_ignores_importing_packages_own_tables(monkeypatch):
+def test_verdict_ignores_importing_packages_own_tables(monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.authz.classification as live
 
     files = _with_op(_tree(("x.y",)), "x.y")
@@ -159,7 +160,7 @@ def test_verdict_ignores_importing_packages_own_tables(monkeypatch):
     assert before.outcome == "pass"
 
 
-def test_module_spawns_nothing():
+def test_module_spawns_nothing() -> None:
     import ast
 
     tree = ast.parse(open(rqs.__file__, encoding="utf-8").read())
@@ -172,7 +173,7 @@ def test_module_spawns_nothing():
     assert "subprocess" not in imported
 
 
-def test_docstring_placeholder_is_not_an_op_key():
+def test_docstring_placeholder_is_not_an_op_key() -> None:
     from coordinator_core.bash_guards.commit_tripwires import _REGISTER_OP_KEY_RE
 
     assert _REGISTER_OP_KEY_RE.match('@register_op("...") async def _handler(params)') is None
@@ -194,45 +195,45 @@ def _registry_tree(**extra) -> dict[str, bytes]:
     return files
 
 
-def test_registry_module_absences_pass_when_modules_present():
+def test_registry_module_absences_pass_when_modules_present() -> None:
     assert rqs.registry_module_absences(_reader(_registry_tree())) == []
 
 
-def test_registry_module_absences_package_init_counts():
+def test_registry_module_absences_package_init_counts() -> None:
     files = _registry_tree()
     del files[PKG_MOD]
     files["pkg/mod/__init__.py"] = b""
     assert rqs.registry_module_absences(_reader(files)) == []
 
 
-def test_untracked_registered_module_refuses():
+def test_untracked_registered_module_refuses() -> None:
     files = _registry_tree()
     del files[PKG_MOD]
     assert rqs.registry_module_absences(_reader(files)) == ["pkg.mod"]
 
 
-def test_unparseable_registered_module_is_reported():
+def test_unparseable_registered_module_is_reported() -> None:
     files = _registry_tree(**{PKG_MOD: b"def (:\n"})
     assert rqs.registry_module_absences(_reader(files), [PKG_MOD]) == ["pkg.mod: does not parse"]
     assert rqs.registry_module_absences(_reader(files)) == []
 
 
-def test_catalog_key_without_module_map_entry_is_reported():
+def test_catalog_key_without_module_map_entry_is_reported() -> None:
     files = _registry_tree(**{CATALOG: b'{"ops": [{"name": "x.y"}, {"name": "q.r"}]}'})
     assert rqs.registry_module_absences(_reader(files)) == ["q.r: no OP_MODULE_MAP entry"]
 
 
-def test_mcp_tool_name_maps_back_to_op_key():
+def test_mcp_tool_name_maps_back_to_op_key() -> None:
     files = _registry_tree(**{MCP: b'{"tools": [{"name": "q__r"}]}'})
     assert rqs.registry_module_absences(_reader(files)) == ["q.r: no OP_MODULE_MAP entry"]
 
 
-def test_registry_module_absences_defer_to_quad_on_broken_surface():
+def test_registry_module_absences_defer_to_quad_on_broken_surface() -> None:
     files = _registry_tree()
     files[MAP] = b"OP_MODULE_MAP = build()\n"
     assert rqs.registry_module_absences(_reader(files)) == []
 
 
-def test_unparseable_contract_json_is_reported():
+def test_unparseable_contract_json_is_reported() -> None:
     files = _registry_tree(**{CATALOG: b"{not json"})
     assert rqs.registry_module_absences(_reader(files)) == [f"{CATALOG}: does not parse"]

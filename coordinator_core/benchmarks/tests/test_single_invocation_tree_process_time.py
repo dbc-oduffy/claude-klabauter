@@ -23,6 +23,7 @@ from coordinator_core.benchmarks.process_time import (
     single_invocation_tree_process_time,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.skipif(
@@ -59,7 +60,7 @@ def _write_child(tmp_path) -> str:
     return str(path)
 
 
-def test_descendant_cpu_is_attributed_not_dropped(tmp_path):
+def test_descendant_cpu_is_attributed_not_dropped(tmp_path: Path) -> None:
     """The whole point: a tree that spawns must cost more than one that does not.
 
     Asserted as a RATIO between two runs of the same script rather than
@@ -87,7 +88,7 @@ def test_descendant_cpu_is_attributed_not_dropped(tmp_path):
     )
 
 
-def test_procs_counts_the_root_and_every_descendant(tmp_path):
+def test_procs_counts_the_root_and_every_descendant(tmp_path: Path) -> None:
     """`procs` includes the root, so N spawns report N+1.
 
     Pinned because the difference between "the ceremony spawned 47" and
@@ -107,7 +108,7 @@ def test_procs_counts_the_root_and_every_descendant(tmp_path):
     assert result["k"] == 1
 
 
-def test_stdout_is_captured_to_the_named_path(tmp_path):
+def test_stdout_is_captured_to_the_named_path(tmp_path: Path) -> None:
     """For a once-only invocation the output IS the evidence, so it must
     reach disk rather than the batched path's DEVNULL."""
     out = tmp_path / "captured.out"
@@ -121,7 +122,7 @@ def test_stdout_is_captured_to_the_named_path(tmp_path):
     assert out.read_text(encoding="utf-8").strip() == "evidence"
 
 
-def test_a_failing_command_reports_its_rc_rather_than_raising(tmp_path):
+def test_a_failing_command_reports_its_rc_rather_than_raising(tmp_path: Path) -> None:
     """A ceremony that exits non-zero is still a measured ceremony -- the
     primitive's job is the timing, not process health (same division of
     labour `batched_process_time_ms` states for its own `rc`)."""
@@ -135,7 +136,7 @@ def test_a_failing_command_reports_its_rc_rather_than_raising(tmp_path):
     assert result["process_time_ms"] >= 0.0
 
 
-def test_the_floor_this_primitive_replaces_still_reads_zero_on_windows(tmp_path):
+def test_the_floor_this_primitive_replaces_still_reads_zero_on_windows(tmp_path: Path) -> None:
     """Not a test of our code -- a live pin on the PLATFORM fact that
     justifies this module existing.
 
@@ -176,7 +177,7 @@ def test_the_floor_this_primitive_replaces_still_reads_zero_on_windows(tmp_path)
     )
 
 
-def test_absent_stdio_paths_are_reported_as_none():
+def test_absent_stdio_paths_are_reported_as_none() -> None:
     """Inheritance is the documented default, and the returned dict says so
     -- a caller reading `stdout_path: None` must not conclude the output was
     discarded."""

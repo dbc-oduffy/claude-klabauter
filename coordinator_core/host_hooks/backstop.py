@@ -19,6 +19,7 @@ from coordinator_core.host_hooks.contract import HostEvent
 GUARD_MODULES = {
     "block-push-pr-non-owned-remote": "coordinator_core.bash_guards.block_push_pr_non_owned_remote",
     "block-empty-source-push": "coordinator_core.bash_guards.block_empty_source_push",
+    "block-held-push": "coordinator_core.bash_guards.block_held_push",
     "block-perforce-submit": "coordinator_core.bash_guards.block_perforce_submit",
     "p4-verb-fence": "coordinator_core.bash_guards.p4_verb_fence",
 }

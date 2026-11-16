@@ -5,6 +5,8 @@ import ast
 import inspect
 import textwrap
 
+import pytest
+
 from coordinator_core.warm import server, telemetry
 
 
@@ -241,3 +243,34 @@ def test_boot_defers_the_http_listener_behind_the_first_answer_and_hashes_no_sou
     assert boot.count("_after_first_pool_answer(") == 1
     assert "settle_boot_hash" not in boot
     assert "threading.Thread(target=_ensure_http_listener" not in boot
+
+
+@pytest.mark.spawns_process
+def test_a_cold_guard_op_resolves_within_the_process_time_budget_and_imports_no_whole_op_tree() -> None:
+    """A fresh process answers its first guard op without the whole-package import that stalled a
+    fresh engine for 27s; budget is process time, never wall clock (500ms)."""
+    import subprocess
+    import sys
+
+    probe = (
+        "import sys,time;from coordinator_core import ipc;"
+        "h=ipc.get_op_handler('hooks.guard_host_subagent_bash_ban');"
+        "print(h is not None, time.process_time(),"
+        " 'coordinator_core.ops.post_run_finish' in sys.modules)"
+    )
+    out = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True, timeout=120)
+    assert out.returncode == 0, out.stderr
+    resolved, process_s, whole_tree = out.stdout.split()
+    assert resolved == "True"
+    assert whole_tree == "False", "a guard op lookup must not import the whole op tree"
+    assert float(process_s) < 0.5
+
+
+def test_warm_server_boot_never_calls_the_whole_op_tree_preload() -> None:
+    """The server serves guard ops before (and without) a whole-registry import: no boot path may
+    call `_preload_op_registry` or `_eager_import_all` on the ops package."""
+    import re
+
+    src = inspect.getsource(server)
+    assert len(re.findall(r"_preload_op_registry\(", src)) == 1, "only its definition"
+    assert len(re.findall(r"_ops_pkg\._eager_import_all\(", src)) == 1, "only inside the preload def"

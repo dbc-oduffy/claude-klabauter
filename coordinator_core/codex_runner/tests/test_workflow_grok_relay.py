@@ -10,6 +10,11 @@ import sys
 import pytest
 
 from coordinator_core.codex_runner import workflow
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import Popen
 
 _STUB = """\
 import json, os, sys
@@ -20,12 +25,12 @@ _SCHEMA = {"type": "object", "properties": {"a": {"type": "integer"}}, "required
 
 
 @pytest.fixture
-def stub(tmp_path, monkeypatch):
+def stub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     script = tmp_path / "stub_grok.py"
     script.write_text(_STUB, encoding="utf-8")
     seen = []
 
-    def spawn(argv, prompt, *, env, repo_root, stdout, stderr, **_kw):
+    def spawn(argv, prompt, *, env, repo_root, stdout, stderr, **_kw) -> "Popen[bytes]":
         seen.append(list(argv))
         child = subprocess.Popen([sys.executable, str(script)], env={**env, **_ENV_BOX}, stdout=stdout,
                                  stderr=stderr, cwd=repo_root)
@@ -48,7 +53,7 @@ def _allow(argv):
     return argv[argv.index("--allow") + 1]
 
 
-def test_relay_child_gets_only_the_coordinator_invoke_allow_rule(tmp_path, stub):
+def test_relay_child_gets_only_the_coordinator_invoke_allow_rule(tmp_path: Path, stub) -> None:
     seen, box = stub
     box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
     assert _run(tmp_path, "coordinator:op-relay") == {"a": 1}
@@ -69,7 +74,7 @@ _WINDOWS_FULL_PATH_CALL = ('& "C:\\Users\\x\\.coordinator-claude-settings\\bin\\
                            "dispatch.land_run --params-file C:/x/p.json")
 
 
-def test_commit_stage_child_gets_only_the_coordinator_invoke_allow_rule(tmp_path, stub):
+def test_commit_stage_child_gets_only_the_coordinator_invoke_allow_rule(tmp_path: Path, stub) -> None:
     seen, box = stub
     box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
     assert _run(tmp_path, "coordinator:git-commit-agent") == {"a": 1}
@@ -79,7 +84,7 @@ def test_commit_stage_child_gets_only_the_coordinator_invoke_allow_rule(tmp_path
     assert not {"--always-approve", "--dangerously-skip-permissions", "--yolo"} & set(argv)
 
 
-def test_the_rule_admits_the_bare_command_the_commit_prompt_emits_and_nothing_wider():
+def test_the_rule_admits_the_bare_command_the_commit_prompt_emits_and_nothing_wider() -> None:
     from coordinator_core.ops.dispatch_emit import ask_compose
 
     call = ask_compose._commit_stage_call(head="h", anchor="a", repo_root="C:/x", run_id="ask-20261110T075901-ebd02d")
@@ -93,7 +98,7 @@ def test_the_rule_admits_the_bare_command_the_commit_prompt_emits_and_nothing_wi
     assert not _rule_matches(workflow._RELAY_ALLOW, "coordinator-invoke-evil x")
 
 
-def test_windows_preamble_emits_the_bare_form_the_rule_matches(tmp_path, stub, monkeypatch):
+def test_windows_preamble_emits_the_bare_form_the_rule_matches(tmp_path: Path, stub, monkeypatch: pytest.MonkeyPatch) -> None:
     _, box = stub
     box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
     real_os = workflow.os
@@ -111,7 +116,7 @@ def test_windows_preamble_emits_the_bare_form_the_rule_matches(tmp_path, stub, m
     assert "run no cd or Set-Location" in prompt
 
 
-def test_grok_child_path_leads_with_the_settings_home_bin(tmp_path, stub, monkeypatch):
+def test_grok_child_path_leads_with_the_settings_home_bin(tmp_path: Path, stub, monkeypatch: pytest.MonkeyPatch) -> None:
     _, box = stub
     box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
     seen_env = []
@@ -127,7 +132,7 @@ def test_grok_child_path_leads_with_the_settings_home_bin(tmp_path, stub, monkey
 
 
 @pytest.mark.parametrize("git_on_path", [True, False])
-def test_grok_child_path_gains_git_dir_only_when_engine_path_lacks_git(tmp_path, monkeypatch, git_on_path):
+def test_grok_child_path_gains_git_dir_only_when_engine_path_lacks_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, git_on_path) -> None:
     program_files = tmp_path / "pf"
     (program_files / "Git" / "cmd").mkdir(parents=True)
     (program_files / "Git" / "cmd" / "git.exe").write_text("", encoding="utf-8")
@@ -142,7 +147,7 @@ def test_grok_child_path_gains_git_dir_only_when_engine_path_lacks_git(tmp_path,
 
 @pytest.mark.parametrize("git_on_path", [True, False])
 def test_run_agent_hands_the_grok_child_a_path_with_git_only_when_the_engine_lacks_it(
-        tmp_path, stub, monkeypatch, git_on_path):
+        tmp_path: Path, stub, monkeypatch: pytest.MonkeyPatch, git_on_path) -> None:
     _, box = stub
     box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
     program_files = tmp_path / "pf"
@@ -167,14 +172,14 @@ def test_run_agent_hands_the_grok_child_a_path_with_git_only_when_the_engine_lac
     assert (str(program_files / "Git" / "cmd") in parts) is (not git_on_path)
 
 
-def test_other_grok_stages_keep_the_incumbent_allow(tmp_path, stub):
+def test_other_grok_stages_keep_the_incumbent_allow(tmp_path: Path, stub) -> None:
     seen, box = stub
     box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
     assert _run(tmp_path, "coordinator:executor") == {"a": 1}
     assert _allow(seen[0]) == "Bash"
 
 
-def test_cancelled_stop_reason_fails_with_named_error_carrying_stderr(tmp_path, stub):
+def test_cancelled_stop_reason_fails_with_named_error_carrying_stderr(tmp_path: Path, stub) -> None:
     _, box = stub
     box.update(STUB_ENVELOPE=json.dumps({"text": "", "stopReason": "cancelled"}),
                STUB_STDERR="permission required: Execute 'Set-Location x' was not run")
@@ -185,14 +190,14 @@ def test_cancelled_stop_reason_fails_with_named_error_carrying_stderr(tmp_path, 
     assert "no schema-valid result" not in message
 
 
-def test_cancelled_without_stderr_still_names_cancellation(tmp_path, stub):
+def test_cancelled_without_stderr_still_names_cancellation(tmp_path: Path, stub) -> None:
     _, box = stub
     box.update(STUB_ENVELOPE=json.dumps({"text": "", "stopReason": "cancelled"}))
     with pytest.raises(workflow.AgentFailed, match="cancelled.*no stderr reason"):
         _run(tmp_path, "coordinator:op-relay")
 
 
-def test_empty_text_with_other_stop_reason_keeps_the_schema_error(tmp_path, stub):
+def test_empty_text_with_other_stop_reason_keeps_the_schema_error(tmp_path: Path, stub) -> None:
     _, box = stub
     box.update(STUB_ENVELOPE=json.dumps({"text": "", "stopReason": "end_turn"}))
     with pytest.raises(workflow.AgentFailed, match="no schema-valid result"):
@@ -200,7 +205,7 @@ def test_empty_text_with_other_stop_reason_keeps_the_schema_error(tmp_path, stub
 
 
 @pytest.mark.parametrize("os_name,plain", [("nt", True), ("posix", False)])
-def test_windows_preamble_demands_one_plain_command(tmp_path, stub, monkeypatch, os_name, plain):
+def test_windows_preamble_demands_one_plain_command(tmp_path: Path, stub, monkeypatch: pytest.MonkeyPatch, os_name, plain) -> None:
     _, box = stub
     box.update(STUB_ENVELOPE=json.dumps({"text": '{"a": 1}', "stopReason": "end_turn"}))
     real_os = workflow.os

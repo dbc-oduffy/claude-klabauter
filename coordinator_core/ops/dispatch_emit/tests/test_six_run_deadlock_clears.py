@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit import landing_integrity as li
 from coordinator_core.ops.dispatch_emit.tests import test_halted_hold_release as fx
 from coordinator_core.ops.dispatch_emit.tests import test_land_run_product as prod
 from coordinator_core.ops.dispatch_emit.tests.test_land_run_product import repo  # noqa: F401
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -50,7 +51,7 @@ def _waivers(root) -> list:
     return sorted(p.name for p in base.rglob("*")) if base.is_dir() else []
 
 
-def test_six_ring_withheld_halted_runs_all_land_with_no_waiver(repo):  # noqa: F811
+def test_six_ring_withheld_halted_runs_all_land_with_no_waiver(repo) -> None:  # noqa: F811
     ids = [_run_id(i) for i in range(N)]
     for i, rid in enumerate(ids):
         _halted_green_run(repo, i, rid)
@@ -77,7 +78,7 @@ def test_six_ring_withheld_halted_runs_all_land_with_no_waiver(repo):  # noqa: F
     assert all(p in tree for p in PATHS)
 
 
-def test_a_live_holder_in_the_ring_still_refuses(repo):  # noqa: F811
+def test_a_live_holder_in_the_ring_still_refuses(repo) -> None:  # noqa: F811
     ids = [_run_id(i) for i in range(2)]
     _halted_green_run(repo, 0, ids[0])
     _halted_green_run(repo, 1, ids[1])
@@ -96,7 +97,7 @@ def test_a_live_holder_in_the_ring_still_refuses(repo):  # noqa: F811
     assert _status(repo, ids[0]) == "halted"
 
 
-def test_a_halted_peers_broken_py_fails_nobody_elses_invariants(tmp_path):
+def test_a_halted_peers_broken_py_fails_nobody_elses_invariants(tmp_path: Path) -> None:
     root = fx._root(tmp_path)
     me, peer = fx._auto_land_fixture(root)
     broken = "coordinator_core/halted_peer_broken.py"

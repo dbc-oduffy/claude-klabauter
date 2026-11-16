@@ -19,6 +19,7 @@ from coordinator_core.benchmarks.process_time import (
     IS_LINUX,
     single_invocation_tree_process_time,
 )
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.skipif(not IS_LINUX, reason="this arm is Linux-only"),
@@ -51,7 +52,7 @@ def _script(tmp_path, name: str, body: str) -> str:
     return str(path)
 
 
-def test_descendant_cpu_is_attributed_not_dropped(tmp_path):
+def test_descendant_cpu_is_attributed_not_dropped(tmp_path: Path) -> None:
     script = _script(tmp_path, "spawner.py", _SPAWNER)
     none = single_invocation_tree_process_time(
         [sys.executable, script, "0"], stdout_path=str(tmp_path / "a.out")
@@ -66,7 +67,7 @@ def test_descendant_cpu_is_attributed_not_dropped(tmp_path):
     )
 
 
-def test_procs_counts_the_root_and_every_descendant(tmp_path):
+def test_procs_counts_the_root_and_every_descendant(tmp_path: Path) -> None:
     script = _script(tmp_path, "spawner.py", _SPAWNER)
     result = single_invocation_tree_process_time(
         [sys.executable, script, "5"], stdout_path=str(tmp_path / "c.out")
@@ -75,7 +76,7 @@ def test_procs_counts_the_root_and_every_descendant(tmp_path):
     assert result["k"] == 1
 
 
-def test_non_python_root_tree_is_counted(tmp_path):
+def test_non_python_root_tree_is_counted(tmp_path: Path) -> None:
     """A shell root that forks twice: invisible to an audit hook, counted here."""
     result = single_invocation_tree_process_time(
         ["sh", "-c", "true; /bin/true; /bin/true"], stdout_path=str(tmp_path / "d.out")
@@ -84,7 +85,7 @@ def test_non_python_root_tree_is_counted(tmp_path):
     assert result["procs"] >= 3, result
 
 
-def test_orphaned_descendant_cpu_and_count_are_included(tmp_path):
+def test_orphaned_descendant_cpu_and_count_are_included(tmp_path: Path) -> None:
     script = _script(tmp_path, "orphaner.py", _ORPHANER)
     baseline = single_invocation_tree_process_time(
         [sys.executable, "-c", "pass"], stdout_path=str(tmp_path / "e0.out")
@@ -99,7 +100,7 @@ def test_orphaned_descendant_cpu_and_count_are_included(tmp_path):
     )
 
 
-def test_stdout_is_captured_and_rc_is_reported(tmp_path):
+def test_stdout_is_captured_and_rc_is_reported(tmp_path: Path) -> None:
     out = tmp_path / "captured.out"
     err = tmp_path / "captured.err"
     result = single_invocation_tree_process_time(
@@ -113,7 +114,7 @@ def test_stdout_is_captured_and_rc_is_reported(tmp_path):
     assert result["stdout_path"] == str(out)
 
 
-def test_cwd_and_env_reach_the_child(tmp_path):
+def test_cwd_and_env_reach_the_child(tmp_path: Path) -> None:
     out = tmp_path / "ce.out"
     single_invocation_tree_process_time(
         [sys.executable, "-c", "import os; print(os.getcwd(), os.environ['TREE_PROBE'])"],
@@ -124,12 +125,12 @@ def test_cwd_and_env_reach_the_child(tmp_path):
     assert out.read_text(encoding="utf-8").split() == [os.path.realpath(tmp_path), "yes"]
 
 
-def test_missing_executable_raises_rather_than_reporting_a_figure():
+def test_missing_executable_raises_rather_than_reporting_a_figure() -> None:
     with pytest.raises(FileNotFoundError):
         single_invocation_tree_process_time(["/nonexistent/definitely-not-here"])
 
 
-def test_sigchld_ignore_refuses_to_under_report():
+def test_sigchld_ignore_refuses_to_under_report() -> None:
     saved = signal.signal(signal.SIGCHLD, signal.SIG_IGN)
     try:
         with pytest.raises(RuntimeError, match="SIGCHLD"):
@@ -138,7 +139,7 @@ def test_sigchld_ignore_refuses_to_under_report():
         signal.signal(signal.SIGCHLD, saved)
 
 
-def test_caller_is_not_made_a_subreaper_or_tracer(tmp_path):
+def test_caller_is_not_made_a_subreaper_or_tracer(tmp_path: Path) -> None:
     """The subreaper/ptrace state lives in the supervisor, not the caller."""
     single_invocation_tree_process_time(
         [sys.executable, "-c", "pass"], stdout_path=str(tmp_path / "f.out")

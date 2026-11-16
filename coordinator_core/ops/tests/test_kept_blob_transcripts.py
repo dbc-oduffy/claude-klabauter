@@ -7,6 +7,7 @@ from pathlib import Path
 from coordinator_core.ops import kept_blob_transcripts as kbt
 from coordinator_core.ops.kept_blob_transcripts import collect_edits
 from coordinator_core.ops.tests._kept_blob_fixture import write_transcript
+import pytest
 
 REPO = Path("D:/w/proj")  # abs-path-ok: synthetic root, never touched on disk
 REL = "pkg/mod.py"
@@ -16,7 +17,7 @@ def _use(tid, name, fp, ts, **extra):
     return ("use", tid, name, {"file_path": fp, **extra}, ts)
 
 
-def test_all_three_tools_collected(tmp_path):
+def test_all_three_tools_collected(tmp_path: Path) -> None:
     write_transcript(tmp_path / "s" / "a.jsonl", [
         _use("1", "Write", "D:/w/proj/pkg/mod.py", "2026-01-01T00:00:01Z", content="x"),
         _use("2", "Edit", "D:/w/proj/pkg/mod.py", "2026-01-01T00:00:02Z", old_string="x", new_string="y"),
@@ -29,7 +30,7 @@ def test_all_three_tools_collected(tmp_path):
     assert got[REL][0].src == "s/a.jsonl"
 
 
-def test_errored_result_drops_call(tmp_path):
+def test_errored_result_drops_call(tmp_path: Path) -> None:
     write_transcript(tmp_path / "a.jsonl", [
         _use("bad", "Edit", "D:/w/proj/pkg/mod.py", "2026-01-01T00:00:01Z"),
         _use("ok", "Edit", "D:/w/proj/pkg/mod.py", "2026-01-01T00:00:02Z"),
@@ -39,7 +40,7 @@ def test_errored_result_drops_call(tmp_path):
     assert [e.tool_use_id for e in collect_edits(REPO, [REL], [tmp_path])[REL]] == ["ok"]
 
 
-def test_duplicate_id_keeps_first_timestamped(tmp_path):
+def test_duplicate_id_keeps_first_timestamped(tmp_path: Path) -> None:
     write_transcript(tmp_path / "a.jsonl", [
         ("raw", {"message": {"content": [{"type": "tool_use", "id": "d", "name": "Write",
                                           "input": {"file_path": "D:/w/proj/pkg/mod.py", "content": "none"}}]}}),
@@ -52,7 +53,7 @@ def test_duplicate_id_keeps_first_timestamped(tmp_path):
     assert got[0].input["content"] == "first"
 
 
-def test_ordered_by_timestamp_across_sibling_sessions(tmp_path):
+def test_ordered_by_timestamp_across_sibling_sessions(tmp_path: Path) -> None:
     write_transcript(tmp_path / "s1" / "a.jsonl", [
         _use("a1", "Write", "D:/w/proj/pkg/mod.py", "2026-01-01T00:00:10Z"),
         _use("a2", "Write", "D:/w/proj/pkg/mod.py", "2026-01-01T00:00:30Z"),
@@ -65,7 +66,7 @@ def test_ordered_by_timestamp_across_sibling_sessions(tmp_path):
     assert [e.src for e in got] == ["s1/a.jsonl", "s2/b.jsonl", "s1/a.jsonl"]
 
 
-def test_same_rel_under_other_repo_not_collected(tmp_path):
+def test_same_rel_under_other_repo_not_collected(tmp_path: Path) -> None:
     write_transcript(tmp_path / "a.jsonl", [
         _use("other", "Write", "D:/w/other/pkg/mod.py", "2026-01-01T00:00:01Z"),
         _use("nested", "Write", "D:/w/proj/sub/pkg/mod.py", "2026-01-01T00:00:02Z"),
@@ -74,7 +75,7 @@ def test_same_rel_under_other_repo_not_collected(tmp_path):
     assert [e.tool_use_id for e in collect_edits(REPO, [REL], [tmp_path])[REL]] == ["mine"]
 
 
-def test_path_forms_each_match_their_repo(tmp_path):
+def test_path_forms_each_match_their_repo(tmp_path: Path) -> None:
     write_transcript(tmp_path / "a.jsonl", [
         _use("win", "Write", "D:\\w\\proj\\pkg\\mod.py", "2026-01-01T00:00:01Z"),  # abs-path-ok: fixture
         _use("low", "Write", "d:/w/proj/pkg/mod.py", "2026-01-01T00:00:02Z"),
@@ -86,7 +87,7 @@ def test_path_forms_each_match_their_repo(tmp_path):
     assert [e.tool_use_id for e in got[REL]] == ["posix"]
 
 
-def test_posix_root_matches_on_a_path_boundary_only(tmp_path):
+def test_posix_root_matches_on_a_path_boundary_only(tmp_path: Path) -> None:
     write_transcript(tmp_path / "b.jsonl", [
         _use("sibling", "Write", "/home/u/projX/pkg/mod.py", "2026-01-01T00:00:01Z"),  # abs-path-ok: fixture
         _use("mine", "Write", "/home/u/proj/pkg/mod.py", "2026-01-01T00:00:02Z"),  # abs-path-ok: fixture
@@ -95,7 +96,7 @@ def test_posix_root_matches_on_a_path_boundary_only(tmp_path):
     assert [e.tool_use_id for e in got[REL]] == ["mine"]
 
 
-def test_file_without_needle_never_parsed(tmp_path, monkeypatch):
+def test_file_without_needle_never_parsed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     write_transcript(tmp_path / "none.jsonl", [_use("n", "Write", "D:/w/proj/pkg/other.py", "2026-01-01T00:00:01Z")])
     write_transcript(tmp_path / "has.jsonl", [_use("h", "Write", "D:/w/proj/pkg/mod.py", "2026-01-01T00:00:01Z")])
     parsed = []
@@ -106,7 +107,7 @@ def test_file_without_needle_never_parsed(tmp_path, monkeypatch):
     assert parsed and all(b"mod.py" in p for p in parsed)
 
 
-def test_every_rel_is_a_key_and_malformed_lines_ignored(tmp_path):
+def test_every_rel_is_a_key_and_malformed_lines_ignored(tmp_path: Path) -> None:
     p = write_transcript(tmp_path / "a.jsonl", [_use("1", "Write", "D:/w/proj/pkg/mod.py", "2026-01-01T00:00:01Z")])
     with p.open("a", encoding="utf-8") as fh:
         fh.write('{"tool_use" mod.py broken\n')

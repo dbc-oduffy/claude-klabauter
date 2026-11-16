@@ -13,13 +13,14 @@ from coordinator_core.hooks.tests.test_submit_engine_ask_spent_token_refire impo
 )
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit.halted_run import halted_run_for, write_halt_marker
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
 WRITES = ["a/one.py", "a/two.py"]
 
 
-def test_sizing_plus_writes_refire_of_a_spent_halt_mints_fresh_and_forwards_writes(tmp_path):
+def test_sizing_plus_writes_refire_of_a_spent_halt_mints_fresh_and_forwards_writes(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     write_halt_marker(root / "state" / "warp" / DEAD_RUN, halted="refusal", sizing_rel=SIZING)
     _strand_claim(root, DEAD_RUN)
@@ -41,7 +42,7 @@ def _launch(root, parent_id, children, session_id):
     return script
 
 
-def test_writes_refire_whose_halted_run_cannot_hold_a_live_token_mints_a_fresh_run(tmp_path, monkeypatch):
+def test_writes_refire_whose_halted_run_cannot_hold_a_live_token_mints_a_fresh_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     write_halt_marker(root / "state" / "warp" / DEAD_RUN, halted="refusal", sizing_rel=SIZING)
     monkeypatch.setattr(mod, "_ensure_launcher_run_token", lambda *a, **k: None)
@@ -56,7 +57,7 @@ def test_writes_refire_whose_halted_run_cannot_hold_a_live_token_mints_a_fresh_r
     assert params["writes"] == WRITES
 
 
-def test_writes_refire_whose_halted_run_holds_a_live_token_resumes_it(tmp_path):
+def test_writes_refire_whose_halted_run_holds_a_live_token_resumes_it(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     write_halt_marker(root / "state" / "warp" / DEAD_RUN, halted="refusal", sizing_rel=SIZING)
     emit = _Emit()
@@ -68,7 +69,7 @@ def test_writes_refire_whose_halted_run_holds_a_live_token_resumes_it(tmp_path):
     assert run_token.is_live(root, DEAD_RUN)
 
 
-def test_sizing_plus_writes_refire_of_an_unspent_halt_still_resumes(tmp_path):
+def test_sizing_plus_writes_refire_of_an_unspent_halt_still_resumes(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     write_halt_marker(root / "state" / "warp" / DEAD_RUN, halted="refusal", sizing_rel=SIZING)
 

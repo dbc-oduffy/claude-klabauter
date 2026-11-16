@@ -30,7 +30,7 @@ def _lines(*items: str) -> bytes:
 
 
 @pytest.fixture
-def repo(tmp_path: Path, monkeypatch) -> Path:
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("GIT_CEILING_DIRECTORIES", str(tmp_path))
     r = tmp_path / "repo"
     r.mkdir()
@@ -41,7 +41,7 @@ def repo(tmp_path: Path, monkeypatch) -> Path:
     return r
 
 
-def _entry(repo: Path, data: bytes, mode: int = 0o100644):
+def _entry(repo: Path, data: bytes, mode: int = 0o100644) -> tuple[int, str]:
     return (mode, _git(repo, "hash-object", "-w", "--stdin", data=data))
 
 
@@ -168,7 +168,7 @@ def test_unreadable_blob_is_refused(repo: Path) -> None:
     assert (repo / "a.txt").read_bytes() == PEER
 
 
-def test_edit_between_read_and_replace_is_never_overwritten(repo: Path, monkeypatch) -> None:
+def test_edit_between_read_and_replace_is_never_overwritten(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import worktree_sync
 
     (repo / "a.txt").write_bytes(PEER)
@@ -180,7 +180,7 @@ def test_edit_between_read_and_replace_is_never_overwritten(repo: Path, monkeypa
 
     orig_write = Path.write_bytes
 
-    def write_then_race(self, data):
+    def write_then_race(self, data) -> int:
         n = orig_write(self, data)
         if self.name.endswith(".sync.tmp"):
             orig_write(repo / "a.txt", racing)
@@ -195,13 +195,13 @@ def test_edit_between_read_and_replace_is_never_overwritten(repo: Path, monkeypa
     assert not list(repo.glob(".*.sync.tmp"))
 
 
-def test_zero_git_spawns(repo: Path, monkeypatch) -> None:
+def test_zero_git_spawns(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "a.txt").write_bytes(PEER)
     plan = {"a.txt": (_entry(repo, BASE), _entry(repo, THEIRS))}
     spawned: list = []
     real = subprocess.Popen.__init__
 
-    def counting(self, *a, **k):
+    def counting(self, *a, **k) -> None:
         spawned.append(a)
         real(self, *a, **k)
 

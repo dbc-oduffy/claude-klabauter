@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 RUN = "warp-2026-11-06-x-75f803-20261106T101437-1e48f4"
 SIZING_REL = "state/sizings/2026-11/2026-11-06-x.yaml"
@@ -64,33 +65,33 @@ def _call(repo, **params):
     return rl._handler({"run_id": RUN, **params}, repo)
 
 
-def test_stale_edge_resolves_to_the_plan_that_names_the_sizing(tmp_path):
+def test_stale_edge_resolves_to_the_plan_that_names_the_sizing(tmp_path: Path) -> None:
     repo = _make(tmp_path)
     assert rl._sizing_plan(repo, SIZING_REL)[0] == REAL_PLAN
 
 
-def test_add_task_row_on_the_real_plan_covers_the_note_despite_a_stale_edge(tmp_path):
+def test_add_task_row_on_the_real_plan_covers_the_note_despite_a_stale_edge(tmp_path: Path) -> None:
     repo = _make(tmp_path, plan_text=_PLAN.format(extra=_C7))
     reply = _call(repo, note=f"add a constant to {ADDED}")
     assert reply["ok"] is True and "note" in reply["applied"]
     assert "footprint_widened" not in reply["applied"] and reply["refused"] == []
 
 
-def test_stale_edge_note_is_widened_through_the_real_plan(tmp_path):
+def test_stale_edge_note_is_widened_through_the_real_plan(tmp_path: Path) -> None:
     repo = _make(tmp_path)
     reply = _call(repo, note=f"add a constant to {ADDED}")
     assert "note" in reply["applied"] and "footprint_widened" in reply["applied"]
     assert "Engine-written by workflow.revise" in (repo / REAL_PLAN).read_text(encoding="utf-8")
 
 
-def test_a_plan_that_does_not_name_the_sizing_is_not_adopted(tmp_path):
+def test_a_plan_that_does_not_name_the_sizing_is_not_adopted(tmp_path: Path) -> None:
     repo = _make(tmp_path, plan_text=_PLAN.format(extra=_C7).replace("2026-11-06-x.yaml", "other.yaml"))
     assert rl._sizing_plan(repo, SIZING_REL)[0] is None
     reply = _call(repo, note=f"add a constant to {ADDED}")
     assert reply["ok"] is False and "note" not in reply["applied"]
 
 
-def test_refusal_reports_that_it_read_no_plan(tmp_path):
+def test_refusal_reports_that_it_read_no_plan(tmp_path: Path) -> None:
     repo = _make(tmp_path)
     (repo / REAL_PLAN).unlink()
     reply = _call(repo, note=f"add a constant to {ADDED}")
@@ -98,7 +99,7 @@ def test_refusal_reports_that_it_read_no_plan(tmp_path):
     assert "it read no plan" in entry["reason"]
 
 
-def test_refusal_names_the_plan_file_it_read_when_the_row_is_refused(tmp_path, monkeypatch):
+def test_refusal_names_the_plan_file_it_read_when_the_row_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _make(tmp_path)
     from coordinator_core.ops import plan_tasks_mutate
 

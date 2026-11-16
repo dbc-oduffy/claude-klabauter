@@ -14,17 +14,17 @@ import sys
 import time
 
 
-def _send(obj):
+def _send(obj) -> None:
     sys.stdout.write(json.dumps(obj) + "\n")
     sys.stdout.flush()
 
 
-def _chunk(sid, text):
+def _chunk(sid, text) -> None:
     _send({"jsonrpc": "2.0", "method": "session/update", "params": {
         "sessionId": sid, "update": {"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": text}}}})
 
 
-def main():
+def main() -> None:
     log = os.environ.get("FAKE_ACP_LOG")
     sessions = 0
     pending = None

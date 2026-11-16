@@ -16,6 +16,7 @@ import os
 import pytest
 
 from coordinator_core.write_guards import block_hand_authored_sidecar_creation as guard
+from pathlib import Path
 
 
 _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_HAND_SIDECAR_WRITE"
@@ -50,8 +51,8 @@ commits: []
 
 
 def _payload(
-    tmp_path, *, filename="2026-08-16-repaired-sidecar.md", content,
-    existing=False, root="state",
+    tmp_path, *, filename: str = "2026-08-16-repaired-sidecar.md", content,
+    existing: bool = False, root: str = "state",
 ):
     sidecar_dir = tmp_path / root / "subagent-share" / "sess-1"
     sidecar_dir.mkdir(parents=True, exist_ok=True)
@@ -66,11 +67,11 @@ def _payload(
 
 
 @pytest.fixture(autouse=True)
-def _clear_override(monkeypatch):
+def _clear_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(_OVERRIDE_ENV, raising=False)
 
 
-def test_denies_new_sidecar_with_no_frontmatter(tmp_path):
+def test_denies_new_sidecar_with_no_frontmatter(tmp_path: Path) -> None:
     payload = _payload(tmp_path, content=_HAND_AUTHORED_NO_FRONTMATTER)
     result = guard.check(payload)
     assert result is not None
@@ -78,19 +79,19 @@ def test_denies_new_sidecar_with_no_frontmatter(tmp_path):
     assert "agent_type" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_denies_new_sidecar_missing_agent_type(tmp_path):
+def test_denies_new_sidecar_missing_agent_type(tmp_path: Path) -> None:
     payload = _payload(tmp_path, content=_HAND_AUTHORED_MISSING_AGENT_TYPE)
     result = guard.check(payload)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_allows_new_sidecar_carrying_real_agent_type(tmp_path):
+def test_allows_new_sidecar_carrying_real_agent_type(tmp_path: Path) -> None:
     payload = _payload(tmp_path, content=_PROVISIONED_SHAPE)
     assert guard.check(payload) is None
 
 
-def test_allows_edit_of_existing_sidecar_missing_agent_type(tmp_path):
+def test_allows_edit_of_existing_sidecar_missing_agent_type(tmp_path: Path) -> None:
     # Not matched at all -- MATCHERS is Write-only, and this simulates an
     # in-flight body edit to an already-existing (however malformed) file.
     payload = _payload(tmp_path, content=_HAND_AUTHORED_MISSING_AGENT_TYPE, existing=True)
@@ -103,14 +104,14 @@ def test_allows_edit_of_existing_sidecar_missing_agent_type(tmp_path):
     assert guard.check(payload) is None
 
 
-def test_allows_overwrite_of_already_existing_file(tmp_path):
+def test_allows_overwrite_of_already_existing_file(tmp_path: Path) -> None:
     # New-file gate: this path already has a file on disk, so this Write is
     # not the CREATION event -- out of this guard's scope.
     payload = _payload(tmp_path, content=_HAND_AUTHORED_MISSING_AGENT_TYPE, existing=True)
     assert guard.check(payload) is None
 
 
-def test_allows_path_outside_subagent_share(tmp_path):
+def test_allows_path_outside_subagent_share(tmp_path: Path) -> None:
     other = tmp_path / "docs" / "plans" / "some-plan.md"
     other.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -121,19 +122,19 @@ def test_allows_path_outside_subagent_share(tmp_path):
     assert guard.check(payload) is None
 
 
-def test_override_env_bypasses_deny(tmp_path, monkeypatch):
+def test_override_env_bypasses_deny(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(_OVERRIDE_ENV, "1")
     payload = _payload(tmp_path, content=_HAND_AUTHORED_MISSING_AGENT_TYPE)
     assert guard.check(payload) is None
 
 
-def test_non_write_tool_not_matched(tmp_path):
+def test_non_write_tool_not_matched(tmp_path: Path) -> None:
     payload = _payload(tmp_path, content=_HAND_AUTHORED_MISSING_AGENT_TYPE)
     payload["tool_name"] = "Read"
     assert guard.check(payload) is None
 
 
-def test_allows_overwrite_when_file_path_relative_to_payload_cwd(tmp_path):
+def test_allows_overwrite_when_file_path_relative_to_payload_cwd(tmp_path: Path) -> None:
     # os.path.exists(file_path) must resolve a relative
     # Write file_path against payload['cwd'] (mirrors
     # block_fleet_delegation_write._resolve_candidate), not the guard
@@ -157,7 +158,7 @@ def test_allows_overwrite_when_file_path_relative_to_payload_cwd(tmp_path):
 
 
 @pytest.mark.parametrize("root", ["state", ".coordinator-local"])
-def test_denies_hand_authored_under_live_sidecar_root(tmp_path, root):
+def test_denies_hand_authored_under_live_sidecar_root(tmp_path: Path, root) -> None:
     """Both sidecar roots reach the deny path.
 
     Every other fixture here spells `state/`, the PRE-relocation root.
@@ -173,7 +174,7 @@ def test_denies_hand_authored_under_live_sidecar_root(tmp_path, root):
 
 
 @pytest.mark.parametrize("root", ["state", ".coordinator-local"])
-def test_provisioned_shape_allowed_under_both_roots(tmp_path, root):
+def test_provisioned_shape_allowed_under_both_roots(tmp_path: Path, root) -> None:
     """Widening the gate must not deny a properly provisioned sidecar.
 
     A NEW-file write deliberately (no `existing=True`): an existing file is
@@ -185,7 +186,7 @@ def test_provisioned_shape_allowed_under_both_roots(tmp_path, root):
     assert guard.check(payload) is None
 
 
-def test_uppercase_md_leaf_is_not_a_way_past_the_gate(tmp_path):
+def test_uppercase_md_leaf_is_not_a_way_past_the_gate(tmp_path: Path) -> None:
     """`.MD` names the same file on NTFS and default APFS.
 
     The prior `\\.md$` regex was case-sensitive, so this fell through to
@@ -203,7 +204,7 @@ def test_uppercase_md_leaf_is_not_a_way_past_the_gate(tmp_path):
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def _keyed_payload(tmp_path, *, written_sid, session_id, root=".coordinator-local",
+def _keyed_payload(tmp_path, *, written_sid, session_id, root: str = ".coordinator-local",
                    content=_PROVISIONED_SHAPE):
     sidecar_dir = tmp_path / root / "subagent-share" / written_sid
     sidecar_dir.mkdir(parents=True, exist_ok=True)
@@ -233,7 +234,7 @@ class TestSelfScaffoldedSidecarLandsUnderTheDispatchsOwnKey:
     session-keyed directory the engine would have provisioned into.
     """
 
-    def test_a_foreign_session_key_is_denied_even_with_valid_frontmatter(self, tmp_path):
+    def test_a_foreign_session_key_is_denied_even_with_valid_frontmatter(self, tmp_path: Path) -> None:
         payload = _keyed_payload(
             tmp_path,
             written_sid="session_01JLEDRBXHfhCyotHoiEUdGX",
@@ -243,7 +244,7 @@ class TestSelfScaffoldedSidecarLandsUnderTheDispatchsOwnKey:
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_the_denial_names_the_joinable_path(self, tmp_path):
+    def test_the_denial_names_the_joinable_path(self, tmp_path: Path) -> None:
         payload = _keyed_payload(
             tmp_path,
             written_sid="session_01JLEDRBXHfhCyotHoiEUdGX",
@@ -257,7 +258,7 @@ class TestSelfScaffoldedSidecarLandsUnderTheDispatchsOwnKey:
         )
         assert expected in reason.replace("\\", "/")
 
-    def test_the_retired_root_is_never_named_back_to_the_caller(self, tmp_path):
+    def test_the_retired_root_is_never_named_back_to_the_caller(self, tmp_path: Path) -> None:
         # A compliant retry must land under the CURRENT root even when the
         # refused write named the retired one: `state/subagent-share` is
         # read-only (machinery_paths.legacy_share_dir).
@@ -273,13 +274,13 @@ class TestSelfScaffoldedSidecarLandsUnderTheDispatchsOwnKey:
         assert "/.coordinator-local/subagent-share/sess-live/" in tail
 
     @pytest.mark.parametrize("root", ["state", ".coordinator-local"])
-    def test_this_sessions_own_key_is_untouched(self, tmp_path, root):
+    def test_this_sessions_own_key_is_untouched(self, tmp_path: Path, root) -> None:
         payload = _keyed_payload(
             tmp_path, written_sid="sess-live", session_id="sess-live", root=root
         )
         assert guard.check(payload) is None
 
-    def test_no_session_id_on_the_payload_changes_nothing(self, tmp_path):
+    def test_no_session_id_on_the_payload_changes_nothing(self, tmp_path: Path) -> None:
         # The EM repair case and every pre-existing caller: this arm needs the
         # dispatch's own key to say anything, and says nothing without it.
         payload = _keyed_payload(
@@ -287,13 +288,13 @@ class TestSelfScaffoldedSidecarLandsUnderTheDispatchsOwnKey:
         )
         assert guard.check(payload) is None
 
-    def test_an_unsafe_session_id_is_never_joined_into_a_path(self, tmp_path):
+    def test_an_unsafe_session_id_is_never_joined_into_a_path(self, tmp_path: Path) -> None:
         payload = _keyed_payload(
             tmp_path, written_sid="session_01JLE", session_id="../../etc"
         )
         assert guard.check(payload) is None
 
-    def test_the_override_still_bypasses_this_arm(self, tmp_path, monkeypatch):
+    def test_the_override_still_bypasses_this_arm(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(_OVERRIDE_ENV, "1")
         payload = _keyed_payload(
             tmp_path, written_sid="session_01JLE", session_id="sess-live"

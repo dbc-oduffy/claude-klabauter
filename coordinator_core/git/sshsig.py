@@ -20,6 +20,10 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import List, Optional, Tuple
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ctypes import WinDLL
 
 WINDOWS_PIPE_PREFIX = "\\\\.\\pipe\\"
 WINDOWS_PIPE = WINDOWS_PIPE_PREFIX + "openssh-ssh-agent"
@@ -153,7 +157,7 @@ _PIPE_BUSY_ATTEMPTS = 50
 _k32 = None
 
 
-def _kernel32():
+def _kernel32() -> WinDLL:
     global _k32
     if _k32 is None:
         import ctypes

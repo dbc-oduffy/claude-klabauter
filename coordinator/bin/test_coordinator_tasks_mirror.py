@@ -9,6 +9,11 @@ import sys
 
 import pytest
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -39,7 +44,7 @@ def _fail(label: str, detail: str = "") -> None:
 
 
 @pytest.fixture(scope="module")
-def mod():
+def mod() -> ModuleType:
     spec = importlib.util.spec_from_file_location("coordinator_tasks_mirror_under_test", SUBJECT)
     module = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -47,7 +52,7 @@ def mod():
     return module
 
 
-def test_mirror_write(mod, tmp_path) -> None:
+def test_mirror_write(mod, tmp_path: Path) -> None:
     tmp_root = str(tmp_path)
     print("--- mirror-write: yaml lands at state/tasks/<sid>/ with correct items")
     repo = os.path.join(tmp_root, "write")
@@ -95,7 +100,7 @@ def test_mirror_write(mod, tmp_path) -> None:
         _fail("sid field matches")
 
 
-def test_resumption_survival(mod, tmp_path) -> None:
+def test_resumption_survival(mod, tmp_path: Path) -> None:
     tmp_root = str(tmp_path)
     print("--- resumption-survival: mirror readable across a fresh module load")
     repo = os.path.join(tmp_root, "resume")
@@ -128,7 +133,7 @@ def test_resumption_survival(mod, tmp_path) -> None:
         _fail("item2 present in fresh-read")
 
 
-def test_update_state(mod, tmp_path) -> None:
+def test_update_state(mod, tmp_path: Path) -> None:
     tmp_root = str(tmp_path)
     print("--- update: flips item state open->done without touching sibling item")
     repo = os.path.join(tmp_root, "update")
@@ -158,7 +163,7 @@ def test_update_state(mod, tmp_path) -> None:
         _fail("1 open item (sibling untouched)", f"got {open_count}")
 
 
-def test_init_required_before_update(mod, tmp_path) -> None:
+def test_init_required_before_update(mod, tmp_path: Path) -> None:
     tmp_root = str(tmp_path)
     print("--- init required before update: missing mirror returns non-zero")
     repo = os.path.join(tmp_root, "gate")
@@ -171,7 +176,7 @@ def test_init_required_before_update(mod, tmp_path) -> None:
         _fail("update on missing mirror returns non-zero", f"got rc={rc}")
 
 
-def test_update_missing_title(mod, tmp_path) -> None:
+def test_update_missing_title(mod, tmp_path: Path) -> None:
     tmp_root = str(tmp_path)
     print("--- update on unknown title returns non-zero (F2 parity)")
     repo = os.path.join(tmp_root, "missing-title")
@@ -185,7 +190,7 @@ def test_update_missing_title(mod, tmp_path) -> None:
         _fail("update on unknown title returns non-zero", f"got rc={rc}")
 
 
-def test_slug_sanitize(mod, tmp_path) -> None:
+def test_slug_sanitize(mod, tmp_path: Path) -> None:
     tmp_root = str(tmp_path)
     print("--- slug sanitize: special-char name produces safe filename")
     repo = os.path.join(tmp_root, "slug")
@@ -224,7 +229,7 @@ def test_cli_usage_error() -> None:
         _fail("CLI usage message on stderr", result.stderr)
 
 
-def test_repo_root_flag_reaches_explicit_resolver(mod, monkeypatch) -> None:
+def test_repo_root_flag_reaches_explicit_resolver(mod, monkeypatch: pytest.MonkeyPatch) -> None:
     print("--- --repo-root threads through to resolve_checked_repo_root as explicit_root")
     seen = {}
 
@@ -323,7 +328,7 @@ def test_repo_root_missing_value_errors(mod) -> None:
         _fail("CLI: usage error names --repo-root", result.stderr)
 
 
-def test_cli_end_to_end(mod, tmp_path) -> None:
+def test_cli_end_to_end(mod, tmp_path: Path) -> None:
     tmp_root = str(tmp_path)
     print("--- CLI: end-to-end init via subprocess in a real git repo")
     if not shutil.which("git"):
@@ -372,7 +377,7 @@ def test_cli_end_to_end(mod, tmp_path) -> None:
         _fail("CLI init wrote the mirror file", mirror_file)
 
 
-def test_sid_resolution_ignores_cwd(tmp_path) -> None:
+def test_sid_resolution_ignores_cwd(tmp_path: Path) -> None:
     from coordinator_core.session.core import resolve_session_id
 
     print("--- sid-resolution: cwd is never a resolution input")
@@ -402,7 +407,7 @@ def test_sid_resolution_ignores_cwd(tmp_path) -> None:
                 os.environ[var] = val
 
 
-def test_empty_sid_refuses_rather_than_guessing(tmp_path) -> None:
+def test_empty_sid_refuses_rather_than_guessing(tmp_path: Path) -> None:
     print("--- empty-sid: CLI refuses when the whole env ladder is empty")
     repo = tmp_path / "no-sid"
     repo.mkdir()

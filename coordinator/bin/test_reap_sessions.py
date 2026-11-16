@@ -7,6 +7,7 @@ import os
 import sys
 
 import pytest
+from pathlib import Path
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -51,7 +52,7 @@ def _run_main_capturing(mod, argv=None, fake_route=None):
     return rc, out.getvalue(), err.getvalue()
 
 
-def test_dispatches_session_reap_empty_params_no_force(tmp_path):
+def test_dispatches_session_reap_empty_params_no_force(tmp_path: Path) -> None:
     mod = _load_module()
     seen = {}
     fake_repo_root = str(tmp_path)
@@ -90,7 +91,7 @@ def test_dispatches_session_reap_empty_params_no_force(tmp_path):
         _fail("dispatch shape: repo_root forwarded from argv", f"got {seen.get('repo_root')!r}")
 
 
-def test_no_stdout_on_success(tmp_path):
+def test_no_stdout_on_success(tmp_path: Path) -> None:
     mod = _load_module()
 
     def fake_route(op, params, repo_root, legacy_fn):
@@ -114,7 +115,7 @@ def test_no_stdout_on_success(tmp_path):
         _fail("no-stdout-on-success: stderr is empty", f"got {err!r}")
 
 
-def test_transport_failure_exits_zero_warns_no_stdout(tmp_path):
+def test_transport_failure_exits_zero_warns_no_stdout(tmp_path: Path) -> None:
     mod = _load_module()
 
     def fake_route(op, params, repo_root, legacy_fn):
@@ -138,7 +139,7 @@ def test_transport_failure_exits_zero_warns_no_stdout(tmp_path):
         _fail("transport failure: stderr mentions session.reap failed (best-effort)", f"got {err!r}")
 
 
-def test_unresolvable_repo_root_exits_zero_no_dispatch():
+def test_unresolvable_repo_root_exits_zero_no_dispatch() -> None:
     mod = _load_module()
     called = {"n": 0}
 
@@ -166,7 +167,7 @@ def test_unresolvable_repo_root_exits_zero_no_dispatch():
         _fail("unresolvable repo_root: stderr explains the failure", f"got {err!r}")
 
 
-def test_repo_flag_resolves_to_value(tmp_path):
+def test_repo_flag_resolves_to_value(tmp_path: Path) -> None:
     mod = _load_module()
     seen = {}
     fake_repo_root = str(tmp_path)
@@ -193,7 +194,7 @@ def test_repo_flag_resolves_to_value(tmp_path):
         )
 
 
-def test_bare_positional_still_resolves(tmp_path):
+def test_bare_positional_still_resolves(tmp_path: Path) -> None:
     mod = _load_module()
     seen = {}
     fake_repo_root = str(tmp_path)
@@ -215,7 +216,7 @@ def test_bare_positional_still_resolves(tmp_path):
         _fail("bare positional: still resolves (back-compat)", f"got {seen.get('repo_root')!r}")
 
 
-def test_empty_argv_falls_back_to_show_toplevel():
+def test_empty_argv_falls_back_to_show_toplevel() -> None:
     mod = _load_module()
 
     mod._resolve_repo_root = lambda argv: "resolved-via-show-toplevel"
@@ -241,7 +242,7 @@ def test_empty_argv_falls_back_to_show_toplevel():
         )
 
 
-def test_unresolvable_root_returns_zero_and_writes_stderr():
+def test_unresolvable_root_returns_zero_and_writes_stderr() -> None:
     mod = _load_module()
     called = {"n": 0}
 
@@ -269,7 +270,7 @@ def test_unresolvable_root_returns_zero_and_writes_stderr():
         _fail("unresolvable root via --repo: stderr explains the failure", f"got {err!r}")
 
 
-def test_posix_and_windows_style_paths_resolve_unchanged():
+def test_posix_and_windows_style_paths_resolve_unchanged() -> None:
     mod = _load_module()
 
     posix_path = "/opt/some-repo"
@@ -308,7 +309,7 @@ def test_posix_and_windows_style_paths_resolve_unchanged():
         )
 
 
-def test_repo_flag_alone_no_value_falls_through_exits_zero():
+def test_repo_flag_alone_no_value_falls_through_exits_zero() -> None:
     mod = _load_module()
 
     mod._resolve_repo_root_orig = mod._resolve_repo_root
@@ -334,7 +335,7 @@ def test_repo_flag_alone_no_value_falls_through_exits_zero():
         _fail("'--repo' alone: main() returns 0, never a non-zero exit", f"got rc={rc}")
 
 
-def test_unrecognised_flag_returns_zero_without_raising():
+def test_unrecognised_flag_returns_zero_without_raising() -> None:
     mod = _load_module()
 
     result = mod._resolve_repo_root(["--nope"])
@@ -360,7 +361,7 @@ def test_unrecognised_flag_returns_zero_without_raising():
 
 
 
-def test_cadence_gated_run_reports_skip_on_stderr(tmp_path):
+def test_cadence_gated_run_reports_skip_on_stderr(tmp_path: Path) -> None:
     mod = _load_module()
 
     def fake_route(op, params, repo_root, legacy_fn):
@@ -371,7 +372,7 @@ def test_cadence_gated_run_reports_skip_on_stderr(tmp_path):
     assert "cadence gate" in err and "--force" in err
 
 
-def test_force_flag_passes_force_param_and_keeps_repo_resolution(tmp_path):
+def test_force_flag_passes_force_param_and_keeps_repo_resolution(tmp_path: Path) -> None:
     mod = _load_module()
     seen = {}
 

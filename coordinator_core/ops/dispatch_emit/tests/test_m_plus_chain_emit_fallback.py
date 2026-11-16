@@ -17,6 +17,7 @@ from coordinator_core.ops.dispatch_emit.nested_run_contract import CHAIN_HANDOFF
 from coordinator_core.ops.dispatch_emit.tests import test_launcher_child_chain_carries_path as carry
 from coordinator_core.ops.dispatch_emit.tests import test_launcher_child_m_plus_chains_incident as launcher
 from coordinator_core.ops.dispatch_emit.tests import test_size_then_plan_e2e as e2e
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -36,7 +37,7 @@ def _drive_handoff(script, handoff, chain_emit):
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("relay", [None, _NOT_RUN, {"error": "denied", "path": "", "run_id": ""}], ids=["null", "not-run", "denied"])
-def test_launcher_child_hand_off_retries_a_missing_or_errored_relay_so_the_launcher_does_not_emit(tmp_path, relay):
+def test_launcher_child_hand_off_retries_a_missing_or_errored_relay_so_the_launcher_does_not_emit(tmp_path: Path, relay) -> None:
     script = launcher._script(tmp_path)
     for leg in carry.handoff_legs():
         handoff, calls = carry.run_leg(leg, relay, launcher._good_chain(tmp_path))
@@ -48,7 +49,7 @@ def test_launcher_child_hand_off_retries_a_missing_or_errored_relay_so_the_launc
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("relay", [None, _NOT_RUN], ids=["null", "not-run"])
-def test_launcher_child_hand_off_with_a_failed_retry_lets_the_launcher_emit(tmp_path, relay):
+def test_launcher_child_hand_off_with_a_failed_retry_lets_the_launcher_emit(tmp_path: Path, relay) -> None:
     script = launcher._script(tmp_path)
     for leg in carry.handoff_legs():
         handoff, calls = carry.run_leg(leg, relay, {"path": "", "run_id": "", "error": "denied"})
@@ -59,14 +60,14 @@ def test_launcher_child_hand_off_with_a_failed_retry_lets_the_launcher_emit(tmp_
 
 
 @pytest.mark.spawns_process
-def test_launcher_child_hand_off_drops_an_array_relay():
+def test_launcher_child_hand_off_drops_an_array_relay() -> None:
     for leg in carry.handoff_legs():
         handoff, _ = carry.run_leg(leg, ["a", "b"], None)
         assert "0" not in handoff and "1" not in handoff
 
 
 @pytest.mark.spawns_process
-def test_launcher_child_hand_off_keeps_a_valid_relay_so_the_launcher_does_not_emit_again(tmp_path):
+def test_launcher_child_hand_off_keeps_a_valid_relay_so_the_launcher_does_not_emit_again(tmp_path: Path) -> None:
     relay = launcher._good_chain(tmp_path)
     script = launcher._script(tmp_path)
     for leg in carry.handoff_legs():
@@ -85,7 +86,7 @@ def test_launcher_child_hand_off_keeps_a_valid_relay_so_the_launcher_does_not_em
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @pytest.mark.parametrize("relay", [None, _NOT_RUN], ids=["null", "not-run"])
-def test_in_run_m_plus_leg_runs_the_engine_emit_agent_when_the_relay_is_missing_or_errored(tmp_path, monkeypatch, capsys, relay):
+def test_in_run_m_plus_leg_runs_the_engine_emit_agent_when_the_relay_is_missing_or_errored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], relay) -> None:
     scout, decision, verdict, _rel = e2e._fixture(tmp_path, monkeypatch, capsys, "M", "ceo", [])
     assert verdict["halt"] is None and verdict["arm"] == "m_plus", verdict
     stub = e2e._chain_stub(scout, decision, verdict, relay)
@@ -98,7 +99,7 @@ def test_in_run_m_plus_leg_runs_the_engine_emit_agent_when_the_relay_is_missing_
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_in_run_m_plus_leg_does_not_rerun_the_emit_when_the_relay_already_carries_a_valid_path(tmp_path, monkeypatch, capsys):
+def test_in_run_m_plus_leg_does_not_rerun_the_emit_when_the_relay_already_carries_a_valid_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     scout, decision, verdict, _rel = e2e._fixture(tmp_path, monkeypatch, capsys, "M", "ceo", [])
     stub = e2e._chain_stub(scout, decision, verdict, {"path": _GOOD_PATH, "run_id": "run-2"})
     out = e2e._run_script(e2e._script(), stub)

@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit import wake_digest as wd
 from coordinator_core.win_portability import no_console_creationflags
 
 from .conftest import REVIEW_KW
+from pathlib import Path
 
 
 def _plan(rows) -> str:
@@ -38,7 +39,7 @@ def _plan(rows) -> str:
 
 
 @pytest.fixture
-def plan(tmp_path):
+def plan(tmp_path: Path) -> Path:
     path = tmp_path / "p.md"
     path.write_text(
         _plan([("C1", None), ("C8", None), ("C9", "C8"), ("C10", "C9"), ("C11", None)]),
@@ -60,7 +61,7 @@ def _registered(script: str) -> set:
     return set(re.findall(r"_rows\['(\w+)'\] = _runRow\(", script))
 
 
-def test_held_row_and_its_transitive_dependents_are_absent_from_the_waves(plan, tmp_path):
+def test_held_row_and_its_transitive_dependents_are_absent_from_the_waves(plan, tmp_path: Path) -> None:
     script, held = _emit(plan, tmp_path)
 
     assert _registered(script) == {"C1", "C11"}
@@ -69,7 +70,7 @@ def test_held_row_and_its_transitive_dependents_are_absent_from_the_waves(plan, 
     assert held["reason"] == "peer deploy lane"
 
 
-def test_plan_bytes_are_unchanged(plan, tmp_path):
+def test_plan_bytes_are_unchanged(plan, tmp_path: Path) -> None:
     before = hashlib.sha256(plan.read_bytes()).hexdigest()
 
     _emit(plan, tmp_path)
@@ -103,7 +104,7 @@ def _run_digest(script: str, tmp_path) -> dict:
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_digest_lists_held_rows_incomplete_with_the_reason(plan, tmp_path):
+def test_digest_lists_held_rows_incomplete_with_the_reason(plan, tmp_path: Path) -> None:
     script, _ = _emit(plan, tmp_path)
 
     digest = _run_digest(script, tmp_path)
@@ -119,7 +120,7 @@ def test_digest_lists_held_rows_incomplete_with_the_reason(plan, tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_row_its_plans_seam_halt_kept_out_reads_held_with_the_finding(plan, tmp_path):
+def test_a_row_its_plans_seam_halt_kept_out_reads_held_with_the_finding(plan, tmp_path: Path) -> None:
     script, _ = _emit(plan, tmp_path)
     assert "_planHeld[id] = 'plan halted by ' + _haltedPlanReasons.get(plan);" in script
     seam_hold = "plan halted by seam drift at wave 1: writes-collision at src/hub.ts"
@@ -139,26 +140,26 @@ def test_a_row_its_plans_seam_halt_kept_out_reads_held_with_the_finding(plan, tm
     assert wd.validate_digest(digest) == []
 
 
-def test_unknown_hold_id_is_refused(plan, tmp_path):
+def test_unknown_hold_id_is_refused(plan, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="not dispatchable"):
         emit_script(
             plan, repo_root=tmp_path, hold_rows=frozenset({"C99"}), hold_reason="x", **REVIEW_KW
         )
 
 
-def test_hold_without_a_reason_is_refused(plan, tmp_path):
+def test_hold_without_a_reason_is_refused(plan, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="hold_reason"):
         emit_script(plan, repo_root=tmp_path, hold_rows=frozenset({"C8"}), hold_reason=" ", **REVIEW_KW)
 
 
-def test_holding_every_row_is_refused(tmp_path):
+def test_holding_every_row_is_refused(tmp_path: Path) -> None:
     path = tmp_path / "p.md"
     path.write_text(_plan([("C1", None)]), encoding="utf-8")
     with pytest.raises(ValueError, match="every dispatchable row is held"):
         emit_script(path, repo_root=tmp_path, hold_rows=frozenset({"C1"}), hold_reason="x", **REVIEW_KW)
 
 
-def test_receipt_records_rows_reason_who_and_when_and_plan_stays_put(plan, tmp_path):
+def test_receipt_records_rows_reason_who_and_when_and_plan_stays_put(plan, tmp_path: Path) -> None:
     before = plan.read_bytes()
     out = tmp_path / "held.mjs"
 
@@ -179,7 +180,7 @@ def test_receipt_records_rows_reason_who_and_when_and_plan_stays_put(plan, tmp_p
     assert plan.read_bytes() == before
 
 
-def test_only_incomplete_reemit_picks_the_held_rows_up_once_the_hold_clears(plan, tmp_path):
+def test_only_incomplete_reemit_picks_the_held_rows_up_once_the_hold_clears(plan, tmp_path: Path) -> None:
     first = tmp_path / "first.mjs"
     _dispatch_emit(
         {"plan_path": str(plan), "output_path": str(first), "hold_rows": ["C8"], "hold_reason": "lane busy"}
@@ -196,13 +197,13 @@ def test_only_incomplete_reemit_picks_the_held_rows_up_once_the_hold_clears(plan
     assert "hold" not in json.loads((tmp_path / "second.mjs.emitted.json").read_text(encoding="utf-8"))
 
 
-def test_no_hold_leaves_the_script_free_of_hold_machinery(plan, tmp_path):
+def test_no_hold_leaves_the_script_free_of_hold_machinery(plan, tmp_path: Path) -> None:
     script = emit_script(plan, repo_root=tmp_path, **REVIEW_KW)
 
     assert "_heldRows" not in script
 
 
-def test_hold_params_need_the_plan_route(plan, tmp_path):
+def test_hold_params_need_the_plan_route(plan, tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="hold_reason requires hold_rows"):
         _dispatch_emit(
             {"plan_path": str(plan), "output_path": str(tmp_path / "x.mjs"), "hold_reason": "r"}
@@ -218,7 +219,7 @@ def _cli_repo(plan, tmp_path):
     return repo, target
 
 
-def test_cli_hold_reports_dependents_on_stderr_and_leaves_the_plan_alone(plan, tmp_path, monkeypatch, capsys):
+def test_cli_hold_reports_dependents_on_stderr_and_leaves_the_plan_alone(plan, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.ops.dispatch_emit import cli
 
     repo, target = _cli_repo(plan, tmp_path)
@@ -236,7 +237,7 @@ def test_cli_hold_reports_dependents_on_stderr_and_leaves_the_plan_alone(plan, t
     assert target.read_bytes() == before
 
 
-def test_cli_hold_requires_a_reason_and_the_plan_route(plan, tmp_path, monkeypatch, capsys):
+def test_cli_hold_requires_a_reason_and_the_plan_route(plan, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.ops.dispatch_emit import cli
 
     repo, target = _cli_repo(plan, tmp_path)
@@ -248,7 +249,7 @@ def test_cli_hold_requires_a_reason_and_the_plan_route(plan, tmp_path, monkeypat
     assert cli.main(["--plan", str(target), "--hold-reason", "r"]) == cli.EXIT_USAGE
 
 
-def test_only_incomplete_given_run_text_instead_of_a_path_names_the_file_contract(plan, tmp_path, capsys):
+def test_only_incomplete_given_run_text_instead_of_a_path_names_the_file_contract(plan, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.ops.dispatch_emit import cli
 
     rc = cli.main([

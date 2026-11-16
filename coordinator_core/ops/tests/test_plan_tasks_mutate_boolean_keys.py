@@ -17,6 +17,7 @@ from coordinator_core.ops.tests.test_plan_tasks_mutate import (
     _seed_plan,
     _valid_task,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -67,7 +68,7 @@ def _call(repo, payload):
     return asyncio.run(_handler(payload, repo_root=repo / ".git"))
 
 
-def test_add_task_keeps_on_key_in_authorization_as_string(tmp_path):
+def test_add_task_keeps_on_key_in_authorization_as_string(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "bk-add.md", _PLAN)
     task = _valid_task("C2")
@@ -83,7 +84,7 @@ def test_add_task_keeps_on_key_in_authorization_as_string(tmp_path):
     assert rows["C2"]["authorization"]["on"] == "2026-10-23"
 
 
-def test_preseeded_unquoted_on_key_is_not_rewritten_to_true(tmp_path):
+def test_preseeded_unquoted_on_key_is_not_rewritten_to_true(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "bk-seed.md", _PLAN)
 
@@ -96,7 +97,7 @@ def test_preseeded_unquoted_on_key_is_not_rewritten_to_true(tmp_path):
     assert rows["C1"]["authorization"]["source"] == "em-inferred"
 
 
-def test_stamp_over_preseeded_on_key_keeps_string_key(tmp_path):
+def test_stamp_over_preseeded_on_key_keeps_string_key(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "bk-stamp.md", _PLAN)
 
@@ -111,7 +112,7 @@ def test_stamp_over_preseeded_on_key_keeps_string_key(tmp_path):
     assert "on" in rows[0]["authorization"]
 
 
-def test_add_task_with_in_process_boolean_key_is_refused_naming_key(tmp_path):
+def test_add_task_with_in_process_boolean_key_is_refused_naming_key(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "bk-refuse.md", _PLAN)
     before = plan.read_text(encoding="utf-8")
@@ -128,7 +129,7 @@ def test_add_task_with_in_process_boolean_key_is_refused_naming_key(tmp_path):
     assert plan.read_text(encoding="utf-8") == before
 
 
-def test_patch_row_chunk_keeps_on_key_as_string():
+def test_patch_row_chunk_keeps_on_key_as_string() -> None:
     from coordinator_core.ops.plan_tasks_mutate import _StringKeyLoader, _patch_row_chunk
 
     chunk = (

@@ -7,6 +7,7 @@ import pytest
 
 from coordinator_core.git.run import run_git
 from coordinator_core.install import merge_driver_config as mdc
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -32,18 +33,18 @@ def _get(repo):
     return _git(repo, "config", "--local", "--get", mdc.KEY).stdout.strip() or None
 
 
-def test_wanted_is_the_literal_requested_command():
+def test_wanted_is_the_literal_requested_command() -> None:
     assert mdc.WANTED == REQUIRED
 
 
-def test_sets_when_absent(tmp_path):
+def test_sets_when_absent(tmp_path: Path) -> None:
     repo = _repo(tmp_path, doe=True)
     lines = mdc.apply(repo)
     assert lines[0].startswith("set     "), lines
     assert _get(repo) == REQUIRED
 
 
-def test_second_run_is_already_set(tmp_path):
+def test_second_run_is_already_set(tmp_path: Path) -> None:
     repo = _repo(tmp_path, doe=True)
     mdc.apply(repo)
     lines = mdc.apply(repo)
@@ -51,7 +52,7 @@ def test_second_run_is_already_set(tmp_path):
     assert _get(repo) == REQUIRED
 
 
-def test_differing_value_reported_and_untouched(tmp_path):
+def test_differing_value_reported_and_untouched(tmp_path: Path) -> None:
     repo = _repo(tmp_path, doe=True)
     _git(repo, "config", "--local", mdc.KEY, "custom %A")
     lines = mdc.apply(repo)
@@ -59,21 +60,21 @@ def test_differing_value_reported_and_untouched(tmp_path):
     assert _get(repo) == "custom %A"
 
 
-def test_non_doe_repo_not_given_key(tmp_path):
+def test_non_doe_repo_not_given_key(tmp_path: Path) -> None:
     repo = _repo(tmp_path, doe=False)
     lines = mdc.apply(repo)
     assert lines[0].startswith("skip    "), lines
     assert _get(repo) is None
 
 
-def test_unreadable_config_is_skipped_not_overwritten(tmp_path):
+def test_unreadable_config_is_skipped_not_overwritten(tmp_path: Path) -> None:
     repo = _repo(tmp_path, doe=True)
     (repo / ".git" / "config").write_text("[broken\n", encoding="utf-8")
     lines = mdc.apply(repo)
     assert lines[0].startswith("skip    "), lines
 
 
-def test_dry_run_writes_nothing(tmp_path):
+def test_dry_run_writes_nothing(tmp_path: Path) -> None:
     repo = _repo(tmp_path, doe=True)
     lines = mdc.apply(repo, dry_run=True)
     assert lines[0].startswith("would   "), lines

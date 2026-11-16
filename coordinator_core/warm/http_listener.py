@@ -224,7 +224,7 @@ class _Server(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, addr, handler, serve_binding):
+    def __init__(self, addr, handler, serve_binding) -> None:
         super().__init__(addr, handler)
         self.serve_binding = serve_binding
         self._in_flight = 0

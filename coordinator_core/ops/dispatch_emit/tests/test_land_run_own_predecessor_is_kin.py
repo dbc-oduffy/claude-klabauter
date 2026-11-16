@@ -7,19 +7,20 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_withheld_index, land_run, peer_hunk_gate
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 SIZING = "state/sizings/2026-11/a.yaml"
 TARGET = "coordinator_core/mod.py"
 
 
-def _bind(root, rid, **fields):
+def _bind(root, rid, **fields) -> None:
     d = rl.run_dir(root, rid)
     d.mkdir(parents=True, exist_ok=True)
     (d / rl.RUN_FILE).write_text(json.dumps(fields), encoding="utf-8")
 
 
 @pytest.fixture
-def split(tmp_path, monkeypatch):
+def split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     def run(halted_by: str, **kw):
         monkeypatch.setattr(halted_withheld_index, "withheld_by_path", lambda root: {TARGET: halted_by})
         monkeypatch.setattr(halted_hold_release, "still_held_by_index", lambda root, holders, *a, **k: dict(holders))
@@ -33,30 +34,30 @@ def split(tmp_path, monkeypatch):
     return run
 
 
-def test_same_sizing_predecessor_is_kin(tmp_path, split):
+def test_same_sizing_predecessor_is_kin(tmp_path: Path, split) -> None:
     _bind(tmp_path, "r-new", sizing_rel=SIZING)
     _bind(tmp_path, "r-old", sizing_rel=SIZING)
     assert split("r-old") == ([TARGET], {})
 
 
-def test_resumed_from_predecessor_is_kin(tmp_path, split):
+def test_resumed_from_predecessor_is_kin(tmp_path: Path, split) -> None:
     _bind(tmp_path, "r-new", resumed_from="r-old")
     _bind(tmp_path, "r-old")
     assert split("r-old") == ([TARGET], {})
 
 
-def test_unrelated_sizing_still_holds(tmp_path, split):
+def test_unrelated_sizing_still_holds(tmp_path: Path, split) -> None:
     _bind(tmp_path, "r-new", sizing_rel=SIZING)
     _bind(tmp_path, "r-other", sizing_rel="state/sizings/2026-11/b.yaml")
     assert split("r-other") == ([], {TARGET: "r-other"})
 
 
-def test_unbound_halted_run_still_holds(tmp_path, split):
+def test_unbound_halted_run_still_holds(tmp_path: Path, split) -> None:
     _bind(tmp_path, "r-new", sizing_rel=SIZING)
     assert split("r-ghost") == ([], {TARGET: "r-ghost"})
 
 
-def test_kin_is_not_advisory_but_unrelated_is(tmp_path, split):
+def test_kin_is_not_advisory_but_unrelated_is(tmp_path: Path, split) -> None:
     _bind(tmp_path, "r-new", sizing_rel=SIZING)
     _bind(tmp_path, "r-other", sizing_rel="state/sizings/2026-11/b.yaml")
     advisory: dict = {}

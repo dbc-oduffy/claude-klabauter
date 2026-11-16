@@ -29,6 +29,8 @@ from coordinator_core.telemetry.op_latency import (
     record_op_latency,
     record_op_started,
 )
+from pathlib import Path
+import pytest
 
 
 def _fake_common_dir(tmp_path):
@@ -37,11 +39,11 @@ def _fake_common_dir(tmp_path):
     return fake_common_dir
 
 
-def _sink_for(fake_common_dir):
+def _sink_for(fake_common_dir) -> Path:
     return hub_for_common(fake_common_dir) / "logs" / "op-latency.jsonl"
 
 
-def test_record_op_started_with_no_repo_root_still_writes_a_row(tmp_path, monkeypatch):
+def test_record_op_started_with_no_repo_root_still_writes_a_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # repo_root=None must fall back to Path.cwd() and resolve the sink from
     # there — never silently drop the row. Chdir into tmp_path so the cwd
     # fallback resolves to a repo this test controls, not the real tree.
@@ -61,7 +63,7 @@ def test_record_op_started_with_no_repo_root_still_writes_a_row(tmp_path, monkey
     assert lines[0]["repo_key_source"] == "cwd"
 
 
-def test_record_op_latency_with_no_repo_root_still_writes_a_row(tmp_path, monkeypatch):
+def test_record_op_latency_with_no_repo_root_still_writes_a_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_common_dir = _fake_common_dir(tmp_path)
     monkeypatch.setattr(
         "coordinator_core.lifecycle.git_common_dir", lambda repo_root: fake_common_dir
@@ -79,7 +81,7 @@ def test_record_op_latency_with_no_repo_root_still_writes_a_row(tmp_path, monkey
     assert lines[0]["repo_key_source"] == "cwd"
 
 
-def test_repo_key_source_is_envelope_when_repo_root_is_explicit(tmp_path, monkeypatch):
+def test_repo_key_source_is_envelope_when_repo_root_is_explicit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_common_dir = _fake_common_dir(tmp_path)
     monkeypatch.setattr(
         "coordinator_core.lifecycle.git_common_dir", lambda repo_root: fake_common_dir
@@ -95,7 +97,7 @@ def test_repo_key_source_is_envelope_when_repo_root_is_explicit(tmp_path, monkey
     assert lines[0]["repo_key_source"] == "envelope"
 
 
-def test_cwd_fallback_never_raises_when_sink_is_unwritable(tmp_path, monkeypatch):
+def test_cwd_fallback_never_raises_when_sink_is_unwritable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Same "never breaks dispatch" contract as the explicit-repo_root path:
     # an unwritable resolved common dir must not raise, even on the cwd
     # fallback branch.

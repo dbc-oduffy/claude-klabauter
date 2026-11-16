@@ -129,7 +129,9 @@ def test_true_departure_gone(boxes):
     (parked, _d, notes, _i), _ = _poll()
     assert f"{FAR_ID}:far-sess-9" in parked
     _publish_and_refresh(boxes, [_far_session("far-sess-9", "stays")])
-    (parked2, _d2, _n2, _i2), emitted = _poll(prev_parked=parked, prev_names=notes)
+    (parked1, _d1, notes1, _i1), emitted1 = _poll(prev_parked=parked, prev_names=notes)
+    assert _gone(emitted1) == [] and KEY in parked1
+    (parked2, _d2, _n2, _i2), emitted = _poll(prev_parked=parked1, prev_names=notes1)
     gone = _gone(emitted)
     assert len(gone) == 1 and f"[{KEY}]" in gone[0]
     assert KEY not in parked2

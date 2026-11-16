@@ -7,6 +7,8 @@ import hashlib
 
 from coordinator_core.git import rollback_check, since_base_overlap
 from coordinator_core.git.rollback_check import ABSENT
+from pathlib import Path
+import pytest
 
 
 def _tree(entries):
@@ -26,7 +28,7 @@ def _fake_read(trees):
     return read
 
 
-def test_tree_entry_matches_full_parse_and_reports_absent(monkeypatch, tmp_path):
+def test_tree_entry_matches_full_parse_and_reports_absent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     entries = [(b"100644", b"a.py", _sha("a")), (b"40000", b"sub", _sha("sub")),
                (b"100755", b"z.sh", _sha("z")), (b"120000", b"link", _sha("l"))]
     trees = {"t1": _tree(entries)}
@@ -40,7 +42,7 @@ def test_tree_entry_matches_full_parse_and_reports_absent(monkeypatch, tmp_path)
     assert rollback_check._tree_entry(tmp_path, "nope", "a.py") is None
 
 
-def test_tree_entry_ignores_a_needle_inside_sha_bytes(monkeypatch, tmp_path):
+def test_tree_entry_ignores_a_needle_inside_sha_bytes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     name = b"ab"
     fake_sha = (b"xx100644 ab\0" + b"y" * 8).hex()  # 20 bytes embedding " ab\0" after a mode
     trees = {"t": _tree([(b"100644", b"real", fake_sha)])}
@@ -51,7 +53,7 @@ def test_tree_entry_ignores_a_needle_inside_sha_bytes(monkeypatch, tmp_path):
     assert rollback_check._tree_entry(tmp_path, "t", "real") == (0o100644, fake_sha)
 
 
-def test_tree_entry_resolves_name_embedding_a_mode_exactly(monkeypatch, tmp_path):
+def test_tree_entry_resolves_name_embedding_a_mode_exactly(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     entries = [(b"100644", b"100644 foo", _sha("evil")), (b"100644", b"foo", _sha("good"))]
     trees = {"t": _tree(entries)}
     monkeypatch.setattr(rollback_check, "read_object", _fake_read(trees))
@@ -60,7 +62,7 @@ def test_tree_entry_resolves_name_embedding_a_mode_exactly(monkeypatch, tmp_path
     assert rollback_check._tree_entry(tmp_path, "t", "100644 foo") == (0o100644, _sha("evil"))
 
 
-def test_ancestors_not_read_when_no_stamped_base(monkeypatch):
+def test_ancestors_not_read_when_no_stamped_base(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(since_base_overlap, "_base_ancestors", lambda *a: calls.append(a) or [])
     plan = "docs/plans/p.md"
@@ -69,7 +71,7 @@ def test_ancestors_not_read_when_no_stamped_base(monkeypatch):
     assert not calls
 
 
-def test_check_reads_ancestors_only_for_a_stamped_base_miss(monkeypatch, tmp_path):
+def test_check_reads_ancestors_only_for_a_stamped_base_miss(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     plan = "docs/plans/p.md"
     metas = {
         "h1": {"parents": ["b0"], "message": f"s\n\nCheckpoint-Plan: {plan}\n", "tree": "t"},

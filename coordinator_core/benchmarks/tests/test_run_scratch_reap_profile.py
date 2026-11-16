@@ -5,9 +5,10 @@ import os
 import subprocess
 
 from coordinator_core.benchmarks import run_scratch_reap_profile as prof
+from pathlib import Path
 
 
-def test_base_removes_nothing_end_reaps_under_bar(tmp_path):
+def test_base_removes_nothing_end_reaps_under_bar(tmp_path: Path) -> None:
     rows = {r.label: r for r in prof.run(tmp_path)}
     base, end = rows["base"], rows["end"]
     assert base.removed == 0
@@ -20,7 +21,7 @@ def test_base_removes_nothing_end_reaps_under_bar(tmp_path):
     assert not prof.over_bar(list(rows.values()))
 
 
-def test_meter_counts_spawns_and_listings_and_restores(tmp_path):
+def test_meter_counts_spawns_and_listings_and_restores(tmp_path: Path) -> None:
     real_init, real_scandir = subprocess.Popen.__init__, os.scandir
     with prof._Meter() as meter:
         os.listdir(tmp_path)
@@ -32,7 +33,7 @@ def test_meter_counts_spawns_and_listings_and_restores(tmp_path):
     assert os.scandir is real_scandir
 
 
-def test_over_bar_flags_a_spawn_a_listing_and_a_slow_end_row():
+def test_over_bar_flags_a_spawn_a_listing_and_a_slow_end_row() -> None:
     ok = prof.ReapRow("end", 1, 0, 1.0, 0, 0)
     assert not prof.over_bar([ok])
     assert prof.over_bar([prof.ReapRow("end", 1, 0, 1.0, 1, 0)])
@@ -41,7 +42,7 @@ def test_over_bar_flags_a_spawn_a_listing_and_a_slow_end_row():
     assert not prof.over_bar([prof.ReapRow("base", 0, 0, 900.0, 3, 3)])
 
 
-def test_render_prints_base_and_end_rows():
+def test_render_prints_base_and_end_rows() -> None:
     text = prof.render([prof.ReapRow("base", 0, 0, 0.0, 0, 0), prof.ReapRow("end", 226, 25, 12.5, 0, 0)])
     assert text.splitlines()[1].startswith("base")
     assert text.splitlines()[2].startswith("end")

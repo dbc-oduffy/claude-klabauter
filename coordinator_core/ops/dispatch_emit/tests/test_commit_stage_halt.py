@@ -18,17 +18,18 @@ from coordinator_core.ops.dispatch_emit.commit_stage_halt import (
     halt_run_on_commit_stage_end,
     halt_run_on_unrecorded_end,
 )
+from pathlib import Path
 
 SIZING = "state/sizings/2026-11/x.yaml"
 RUN_ID = "ask-20261110T071829-ab7f5a"
 SCRIPT = "scripts/wf.js"
 
 
-def _started(label, agent="a1", key="k1"):
+def _started(label, agent: str = "a1", key: str = "k1"):
     return {"type": "started", "agentId": agent, "label": label, "key": key}
 
 
-def _journal(tmp_path, events):
+def _journal(tmp_path, events) -> str:
     run_dir = tmp_path / "runs" / "wf_abc"
     run_dir.mkdir(parents=True, exist_ok=True)
     journal = run_dir / "journal.jsonl"
@@ -36,7 +37,7 @@ def _journal(tmp_path, events):
     return str(journal)
 
 
-def _record_dir(tmp_path):
+def _record_dir(tmp_path) -> Path:
     record_dir = ask_contract.record_dir(tmp_path, RUN_ID)
     record_dir.mkdir(parents=True, exist_ok=True)
     submitted = tmp_path / "scratch" / "warp" / RUN_ID
@@ -47,13 +48,13 @@ def _record_dir(tmp_path):
     return record_dir
 
 
-def _land(record_dir, journal, status="failed", launched_at=1.0):
+def _land(record_dir, journal, status: str = "failed", launched_at: float = 1.0):
     return halt_run_on_commit_stage_end(
         record_dir, journal, terminal_status=status, sizing_rel=SIZING, launched_at=launched_at,
     )
 
 
-def test_unsettled_commit_leg_on_a_failed_task_halts_at_commit(tmp_path):
+def test_unsettled_commit_leg_on_a_failed_task_halts_at_commit(tmp_path: Path) -> None:
     record_dir = _record_dir(tmp_path)
     journal = _journal(tmp_path, [_started("commit")])
     assert _land(record_dir, journal) is not None
@@ -63,7 +64,7 @@ def test_unsettled_commit_leg_on_a_failed_task_halts_at_commit(tmp_path):
     assert "commit leg unsettled" in marker["reason"] and "failed" in marker["reason"]
 
 
-def test_failed_commit_leg_carries_its_error_in_the_reason(tmp_path):
+def test_failed_commit_leg_carries_its_error_in_the_reason(tmp_path: Path) -> None:
     record_dir = _record_dir(tmp_path)
     journal = _journal(tmp_path, [
         _started("halt-commit"), {"type": "failed", "agentId": "a1", "key": "k1", "error": "approval prompt cancelled"},
@@ -72,7 +73,7 @@ def test_failed_commit_leg_carries_its_error_in_the_reason(tmp_path):
     assert "approval prompt cancelled" in halted_run.read_strict(record_dir)["reason"]
 
 
-def test_committed_reply_writes_no_marker(tmp_path):
+def test_committed_reply_writes_no_marker(tmp_path: Path) -> None:
     record_dir = _record_dir(tmp_path)
     journal = _journal(tmp_path, [
         _started("commit"), {"type": "result", "agentId": "a1", "key": "k1", "result": {"committed": True, "sha": "abc"}},
@@ -81,7 +82,7 @@ def test_committed_reply_writes_no_marker(tmp_path):
     assert not (record_dir / "halted.json").exists()
 
 
-def test_already_landed_json_text_reply_writes_no_marker(tmp_path):
+def test_already_landed_json_text_reply_writes_no_marker(tmp_path: Path) -> None:
     record_dir = _record_dir(tmp_path)
     journal = _journal(tmp_path, [
         _started("commit"),
@@ -90,7 +91,7 @@ def test_already_landed_json_text_reply_writes_no_marker(tmp_path):
     assert _land(record_dir, journal) is None
 
 
-def test_uncommitted_reply_halts_only_when_the_task_did_not_complete(tmp_path):
+def test_uncommitted_reply_halts_only_when_the_task_did_not_complete(tmp_path: Path) -> None:
     record_dir = _record_dir(tmp_path)
     journal = _journal(tmp_path, [
         _started("commit"), {"type": "result", "agentId": "a1", "key": "k1", "result": {"committed": False}},
@@ -100,7 +101,7 @@ def test_uncommitted_reply_halts_only_when_the_task_did_not_complete(tmp_path):
 
 
 @pytest.mark.parametrize("as_text", [False, True])
-def test_uncommitted_reply_carries_refused_and_error_in_the_reason(tmp_path, as_text):
+def test_uncommitted_reply_carries_refused_and_error_in_the_reason(tmp_path: Path, as_text) -> None:
     record_dir = _record_dir(tmp_path)
     result = {"committed": False, "refused": "verify-overlay-unverified", "error": "overlay verdict none"}
     journal = _journal(tmp_path, [
@@ -113,7 +114,7 @@ def test_uncommitted_reply_carries_refused_and_error_in_the_reason(tmp_path, as_
     assert "verify-overlay-unverified: overlay verdict none" in reason
 
 
-def test_uncommitted_reply_without_refusal_keeps_the_bare_reason(tmp_path):
+def test_uncommitted_reply_without_refusal_keeps_the_bare_reason(tmp_path: Path) -> None:
     record_dir = _record_dir(tmp_path)
     journal = _journal(tmp_path, [
         _started("commit"), {"type": "result", "agentId": "a1", "key": "k1", "result": {"committed": False}},
@@ -122,14 +123,14 @@ def test_uncommitted_reply_without_refusal_keeps_the_bare_reason(tmp_path):
     assert halted_run.read_strict(record_dir)["reason"] == "commit stage: commit leg uncommitted, task killed"
 
 
-def test_run_with_no_commit_stage_leg_writes_no_marker(tmp_path):
+def test_run_with_no_commit_stage_leg_writes_no_marker(tmp_path: Path) -> None:
     record_dir = _record_dir(tmp_path)
     journal = _journal(tmp_path, [_started("commit:wave-1"), _started("review", agent="a2", key="k2")])
     assert _land(record_dir, journal) is None
     assert not (record_dir / "halted.json").exists()
 
 
-def test_a_retried_commit_leg_that_landed_wins_over_its_cancelled_first_try(tmp_path):
+def test_a_retried_commit_leg_that_landed_wins_over_its_cancelled_first_try(tmp_path: Path) -> None:
     journal = _journal(tmp_path, [
         _started("commit", agent="a1", key="k1"), {"type": "failed", "agentId": "a1", "key": "k1"},
         _started("commit", agent="a2", key="k2"),
@@ -138,7 +139,7 @@ def test_a_retried_commit_leg_that_landed_wins_over_its_cancelled_first_try(tmp_
     assert commit_leg_outcome(open(journal, encoding="utf-8").read())[1] == "committed"
 
 
-def test_existing_fresh_marker_is_not_overwritten(tmp_path):
+def test_existing_fresh_marker_is_not_overwritten(tmp_path: Path) -> None:
     record_dir = _record_dir(tmp_path)
     halted_run.write_halt_marker(record_dir, halted="split", sizing_rel=SIZING)
     journal = _journal(tmp_path, [_started("commit")])
@@ -146,7 +147,7 @@ def test_existing_fresh_marker_is_not_overwritten(tmp_path):
     assert halted_run.read_strict(record_dir)["halted"] == "split"
 
 
-def test_stale_marker_from_before_the_launch_is_replaced(tmp_path):
+def test_stale_marker_from_before_the_launch_is_replaced(tmp_path: Path) -> None:
     record_dir = _record_dir(tmp_path)
     halted_run.write_halt_marker(record_dir, halted="split", sizing_rel=SIZING)
     old = os.stat(record_dir / "halted.json").st_mtime - 100
@@ -156,7 +157,7 @@ def test_stale_marker_from_before_the_launch_is_replaced(tmp_path):
     assert halted_run.read_strict(record_dir)["halted"] == HALT_COMMIT_STAGE
 
 
-def test_landed_marker_is_never_rewritten(tmp_path):
+def test_landed_marker_is_never_rewritten(tmp_path: Path) -> None:
     record_dir = _record_dir(tmp_path)
     halted_run.write_halt_marker(record_dir, halted="split", sizing_rel=SIZING)
     assert halted_run.mark_landed(record_dir, "a" * 40)
@@ -167,7 +168,7 @@ def test_landed_marker_is_never_rewritten(tmp_path):
     assert halted_run.read_strict(record_dir)["status"] == halted_run.STATUS_LANDED
 
 
-def test_writer_never_raises(tmp_path, monkeypatch):
+def test_writer_never_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     record_dir = _record_dir(tmp_path)
     journal = _journal(tmp_path, [_started("commit")])
     monkeypatch.setattr(halted_run, "write_halt_marker", lambda *a, **k: 1 / 0)
@@ -214,7 +215,7 @@ def _harness(stage: str, *, token: str, kind: str = "terminal_commit", halted: s
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("stage", [_in_run_lines, _roadmap_lines], ids=["in_run", "roadmap"])
-def test_a_terminal_commit_run_with_no_run_token_halts_by_name_with_no_commit(stage):
+def test_a_terminal_commit_run_with_no_run_token_halts_by_name_with_no_commit(stage) -> None:
     out = _run_node(_harness(stage(), token="null"))
     assert out["commit"] is None
     assert out["halted"]["halted"] == "commit"
@@ -223,7 +224,7 @@ def test_a_terminal_commit_run_with_no_run_token_halts_by_name_with_no_commit(st
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("stage", [_in_run_lines, _roadmap_lines], ids=["in_run", "roadmap"])
-def test_the_skip_halt_never_fires_for_other_next_actions_or_an_existing_halt(stage):
+def test_the_skip_halt_never_fires_for_other_next_actions_or_an_existing_halt(stage) -> None:
     other = _run_node(_harness(stage(), token="null", kind="close_job"))
     assert other["halted"] is None
     kept = _run_node(_harness(stage(), token="null", halted="{ halted: 'split' }"))
@@ -231,14 +232,14 @@ def test_the_skip_halt_never_fires_for_other_next_actions_or_an_existing_halt(st
 
 
 @pytest.mark.parametrize("stage", [_in_run_lines, _roadmap_lines], ids=["in_run", "roadmap"])
-def test_a_run_token_keeps_the_live_commit_branch_and_no_skip_halt_condition(stage):
+def test_a_run_token_keeps_the_live_commit_branch_and_no_skip_halt_condition(stage) -> None:
     text = stage()
     assert "_RUN_TOKEN) {" in text and "&& _RUN_TOKEN" in text
     assert text.count(ask_compose.NO_RUN_TOKEN_COMMIT_REASON) == 1
 
 
 @pytest.mark.parametrize("status", ["failed", "killed", "stopped"])
-def test_watch_at_default_arguments_leaves_a_marker_the_halted_close_accepts(tmp_path, monkeypatch, status):
+def test_watch_at_default_arguments_leaves_a_marker_the_halted_close_accepts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status) -> None:
     record_dir = _record_dir(tmp_path)
     journal = _journal(tmp_path, [_started("commit")])
     transcript = tmp_path / "t.jsonl"
@@ -254,7 +255,7 @@ def test_watch_at_default_arguments_leaves_a_marker_the_halted_close_accepts(tmp
     assert "never ran" not in json.dumps(out)
 
 
-def test_run_ended_with_no_halt_record_writes_run_ended_unrecorded(tmp_path):
+def test_run_ended_with_no_halt_record_writes_run_ended_unrecorded(tmp_path: Path) -> None:
     record_dir = _record_dir(tmp_path)
     assert halt_run_on_unrecorded_end(record_dir, terminal_status="failed", sizing_rel=SIZING) is not None
     marker = halted_run.read_strict(record_dir)
@@ -263,14 +264,14 @@ def test_run_ended_with_no_halt_record_writes_run_ended_unrecorded(tmp_path):
     assert marker["reason"] == "run ended failed with no halt record"
 
 
-def test_unrecorded_end_never_marks_a_completed_run_halted(tmp_path):
+def test_unrecorded_end_never_marks_a_completed_run_halted(tmp_path: Path) -> None:
     record_dir = _record_dir(tmp_path)
     assert halt_run_on_unrecorded_end(record_dir, terminal_status="completed", sizing_rel=SIZING) is None
     assert not (record_dir / halted_run.HALTED_FILE).exists()
 
 
 @pytest.mark.parametrize("status", [halted_run.STATUS_LANDED, halted_run.STATUS_HALTED])
-def test_unrecorded_end_never_overwrites_an_existing_marker(tmp_path, status):
+def test_unrecorded_end_never_overwrites_an_existing_marker(tmp_path: Path, status) -> None:
     record_dir = _record_dir(tmp_path)
     (record_dir / halted_run.HALTED_FILE).write_text(json.dumps({"status": status, "halted": "x"}), encoding="utf-8")
     before = (record_dir / halted_run.HALTED_FILE).read_text(encoding="utf-8")
@@ -278,7 +279,7 @@ def test_unrecorded_end_never_overwrites_an_existing_marker(tmp_path, status):
     assert (record_dir / halted_run.HALTED_FILE).read_text(encoding="utf-8") == before
 
 
-def test_unrecorded_end_never_raises(tmp_path, monkeypatch):
+def test_unrecorded_end_never_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*_a, **_k):
         raise OSError("disk")
 
@@ -286,7 +287,7 @@ def test_unrecorded_end_never_raises(tmp_path, monkeypatch):
     assert halt_run_on_unrecorded_end(_record_dir(tmp_path), terminal_status="failed", sizing_rel=SIZING) is None
 
 
-def test_watch_on_a_run_with_no_commit_leg_and_no_marker_lands_run_ended_unrecorded(tmp_path, monkeypatch):
+def test_watch_on_a_run_with_no_commit_leg_and_no_marker_lands_run_ended_unrecorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     record_dir = _record_dir(tmp_path)
     journal = _journal(tmp_path, [])
     transcript = tmp_path / "t.jsonl"

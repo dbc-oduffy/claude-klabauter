@@ -33,7 +33,7 @@ _SHA = re.compile(r"^[0-9a-fA-F]{4,64}$")
 def _atomic_write(path: Path, data: dict) -> None:
     fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=path.name + ".")
     try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as fh:
             json.dump(data, fh, indent=2)
         os.replace(tmp, path)
     except BaseException:
@@ -188,7 +188,7 @@ def calibrate(params: dict, repo_root: Path) -> dict:
         reason=verdict,
     ).to_json()
     line["calibration"] = cal.to_json()
-    with (run_dir / oc.LOOP_FILE).open("a", encoding="utf-8") as fh:
+    with (run_dir / oc.LOOP_FILE).open("a", encoding="utf-8", newline="\n") as fh:
         fh.write(json.dumps(line) + "\n")
 
     out = {"calibrated": True, "verdict": verdict, "pinned": pinned, "problems": problems,

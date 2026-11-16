@@ -5,6 +5,7 @@ from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.bash_guards import (
     block_reviewer_bash_outside_allowlist as guard,
 )
+import pytest
 
 _EXECUTOR_TYPE = "coordinator:executor"
 _REVIEWER_TYPE = "coordinator:code-reviewer"
@@ -15,7 +16,7 @@ _GIT_COMMIT_AGENT_TYPE = "coordinator:git-commit-agent"
 _ENUMERATED_TYPES_WITH_COMMIT_AGENT = _ENUMERATED_TYPES | {_GIT_COMMIT_AGENT_TYPE}
 
 
-def _payload(command, agent_id="deadbeef0123", agent_type=None, session_id="sess1"):
+def _payload(command, agent_id: str = "deadbeef0123", agent_type=None, session_id: str = "sess1"):
     p: dict = {
         "tool_name": "Bash",
         "tool_input": {"command": command},
@@ -29,7 +30,7 @@ def _payload(command, agent_id="deadbeef0123", agent_type=None, session_id="sess
     return p
 
 
-def _wire_named_dispatch(monkeypatch, subagent_type):
+def _wire_named_dispatch(monkeypatch, subagent_type) -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(
         guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123"
@@ -53,29 +54,29 @@ def _assert_denied(result):
     return result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def _assert_allowed(result):
+def _assert_allowed(result) -> None:
     assert result is None
 
 
-def test_named_executor_resolves_effective_type_to_executor(monkeypatch):
+def test_named_executor_resolves_effective_type_to_executor(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire_named_dispatch(monkeypatch, subagent_type=_EXECUTOR_TYPE)
     resolved = guard._resolve_effective_type(_TEAMMATE_NAME, _EXECUTOR_TYPE, policy=None)
     assert resolved == _EXECUTOR_TYPE
 
 
-def test_named_executor_pytest_allowed(monkeypatch):
+def test_named_executor_pytest_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire_named_dispatch(monkeypatch, subagent_type=_EXECUTOR_TYPE)
     payload = _payload("python3 -m pytest -q", agent_type=_TEAMMATE_NAME)
     _assert_allowed(guard.check(payload))
 
 
-def test_named_executor_pytest_with_stderr_redirect_allowed(monkeypatch):
+def test_named_executor_pytest_with_stderr_redirect_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire_named_dispatch(monkeypatch, subagent_type=_EXECUTOR_TYPE)
     payload = _payload("python3 -m pytest -q 2>&1", agent_type=_TEAMMATE_NAME)
     _assert_allowed(guard.check(payload))
 
 
-def test_named_executor_curl_allowed_because_executor_is_not_confined(monkeypatch):
+def test_named_executor_curl_allowed_because_executor_is_not_confined(monkeypatch: pytest.MonkeyPatch) -> None:
     """(Divergence 18, 2026-08-14 correction) This test previously asserted
     curl was denied for a named coordinator:executor -- that assertion only
     held because the pre-Divergence-18 unconditional OR manufactured
@@ -93,7 +94,7 @@ def test_named_executor_curl_allowed_because_executor_is_not_confined(monkeypatc
     _assert_allowed(guard.check(payload))
 
 
-def test_unnamed_executor_pytest_still_allowed(monkeypatch):
+def test_unnamed_executor_pytest_still_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(
         guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123"
@@ -106,7 +107,7 @@ def test_unnamed_executor_pytest_still_allowed(monkeypatch):
     _assert_allowed(guard.check(payload))
 
 
-def test_reviewer_unnamed_behaviour_unchanged(monkeypatch):
+def test_reviewer_unnamed_behaviour_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(
         guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123"
@@ -120,20 +121,20 @@ def test_reviewer_unnamed_behaviour_unchanged(monkeypatch):
     assert "coordinator-doc-new" in reason
 
 
-def test_named_reviewer_resolves_effective_type_to_reviewer_and_denies_commit(monkeypatch):
+def test_named_reviewer_resolves_effective_type_to_reviewer_and_denies_commit(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire_named_dispatch(monkeypatch, subagent_type=_REVIEWER_TYPE)
     payload = _payload('git commit -m "x"', agent_type=_TEAMMATE_NAME)
     reason = _assert_denied(guard.check(payload))
     assert "coordinator-doc-new" in reason
 
 
-def test_named_reviewer_pytest_still_allowed_via_amendment_2(monkeypatch):
+def test_named_reviewer_pytest_still_allowed_via_amendment_2(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire_named_dispatch(monkeypatch, subagent_type=_REVIEWER_TYPE)
     payload = _payload("python3 -m pytest -q", agent_type=_TEAMMATE_NAME)
     _assert_allowed(guard.check(payload))
 
 
-def test_unnamed_invented_type_still_confined_and_denied(monkeypatch):
+def test_unnamed_invented_type_still_confined_and_denied(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(
         guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123"
@@ -148,49 +149,49 @@ def test_unnamed_invented_type_still_confined_and_denied(monkeypatch):
     _assert_denied(guard.check(payload))
 
 
-def test_named_invented_type_still_confined_and_denied(monkeypatch):
+def test_named_invented_type_still_confined_and_denied(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire_named_dispatch(monkeypatch, subagent_type=_INVENTED_TYPE)
     payload = _payload("python3 -m pytest -q", agent_type=_TEAMMATE_NAME)
     _assert_denied(guard.check(payload))
 
 
-def test_disagreeing_known_agent_type_loses_to_subagent_type(monkeypatch):
+def test_disagreeing_known_agent_type_loses_to_subagent_type(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire_named_dispatch(monkeypatch, subagent_type=_REVIEWER_TYPE)
     resolved = guard._resolve_effective_type(_EXECUTOR_TYPE, _REVIEWER_TYPE, policy=None)
     assert resolved == _REVIEWER_TYPE
 
 
-def test_disagreeing_known_agent_type_denied_executor_only_surface(monkeypatch):
+def test_disagreeing_known_agent_type_denied_executor_only_surface(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire_named_dispatch(monkeypatch, subagent_type=_REVIEWER_TYPE)
     payload = _payload("python3 /tmp/some_script.py", agent_type=_EXECUTOR_TYPE)
     _assert_denied(guard.check(payload))
 
 
-def test_bullet1_named_free_text_agent_type_resolves_to_real_subagent_type(monkeypatch):
+def test_bullet1_named_free_text_agent_type_resolves_to_real_subagent_type(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire_named_dispatch(monkeypatch, subagent_type=_EXECUTOR_TYPE)
     resolved = guard._resolve_effective_type(_TEAMMATE_NAME, _EXECUTOR_TYPE, policy=None)
     assert resolved == _EXECUTOR_TYPE
 
 
-def test_bullet2_disagreeing_known_types_resolves_to_subagent_type(monkeypatch):
+def test_bullet2_disagreeing_known_types_resolves_to_subagent_type(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire_named_dispatch(monkeypatch, subagent_type=_REVIEWER_TYPE)
     resolved = guard._resolve_effective_type(_EXECUTOR_TYPE, _REVIEWER_TYPE, policy=None)
     assert resolved == _REVIEWER_TYPE
 
 
-def test_bullet3_unnamed_dispatch_resolves_to_agent_type(monkeypatch):
+def test_bullet3_unnamed_dispatch_resolves_to_agent_type(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "is_confined_by_roster_absence", lambda t: bool(t) and t not in _ENUMERATED_TYPES)
     resolved = guard._resolve_effective_type(_EXECUTOR_TYPE, "", policy=None)
     assert resolved == _EXECUTOR_TYPE
 
 
-def test_bullet4_both_legs_unknown_degrades_to_original_selection(monkeypatch):
+def test_bullet4_both_legs_unknown_degrades_to_original_selection(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "is_confined_by_roster_absence", lambda t: bool(t) and t not in _ENUMERATED_TYPES)
     resolved = guard._resolve_effective_type(_TEAMMATE_NAME, _INVENTED_TYPE, policy=None)
     assert resolved == _TEAMMATE_NAME
 
 
-def _wire_named_dispatch_enumerated(monkeypatch, subagent_type):
+def _wire_named_dispatch_enumerated(monkeypatch, subagent_type) -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(
         guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123"
@@ -207,7 +208,7 @@ def _wire_named_dispatch_enumerated(monkeypatch, subagent_type):
     )
 
 
-def test_named_git_commit_agent_scoped_git_commit_allowed(monkeypatch):
+def test_named_git_commit_agent_scoped_git_commit_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire_named_dispatch_enumerated(monkeypatch, subagent_type=_GIT_COMMIT_AGENT_TYPE)
     payload = _payload(
         "scoped-git-commit --pathspec foo.py -m x", agent_type=_TEAMMATE_NAME
@@ -215,7 +216,7 @@ def test_named_git_commit_agent_scoped_git_commit_allowed(monkeypatch):
     _assert_allowed(guard.check(payload))
 
 
-def test_named_unnamed_parity_for_non_confined_type(monkeypatch):
+def test_named_unnamed_parity_for_non_confined_type(monkeypatch: pytest.MonkeyPatch) -> None:
     command = "scoped-git-commit --pathspec foo.py -m x"
 
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
@@ -242,7 +243,7 @@ def test_named_unnamed_parity_for_non_confined_type(monkeypatch):
     assert unnamed_result == named_result
 
 
-def test_named_dispatch_unresolvable_subagent_type_still_fail_closed(monkeypatch):
+def test_named_dispatch_unresolvable_subagent_type_still_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(
         guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123"
@@ -261,7 +262,7 @@ def test_named_dispatch_unresolvable_subagent_type_still_fail_closed(monkeypatch
     _assert_denied(guard.check(payload))
 
 
-def test_named_confined_subagent_type_still_denied(monkeypatch):
+def test_named_confined_subagent_type_still_denied(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire_named_dispatch(monkeypatch, subagent_type=_REVIEWER_TYPE)
     payload = _payload(
         "scoped-git-commit --pathspec foo.py -m x", agent_type=_TEAMMATE_NAME
@@ -269,7 +270,7 @@ def test_named_confined_subagent_type_still_denied(monkeypatch):
     _assert_denied(guard.check(payload))
 
 
-def test_backpointer_expected_session_id_forwarded_from_payload(monkeypatch):
+def test_backpointer_expected_session_id_forwarded_from_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(
@@ -289,7 +290,7 @@ def test_backpointer_expected_session_id_forwarded_from_payload(monkeypatch):
     assert seen.get("expected_em_session_id") == "sess-real"
 
 
-def test_known_confined_agent_type_not_laundered_by_nonconfined_subagent_type(monkeypatch):
+def test_known_confined_agent_type_not_laundered_by_nonconfined_subagent_type(monkeypatch: pytest.MonkeyPatch) -> None:
     """Staff-eng review (2026-08-14, finding 0/major): a KNOWN, non-confined
     subagent_type must never clear confinement a KNOWN, genuinely-confined
     agent_type (coordinator:code-reviewer) imposes -- a stale or

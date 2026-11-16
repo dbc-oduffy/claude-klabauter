@@ -116,22 +116,22 @@ def _measure(
 
 
 @pytest.fixture(scope="module")
-def full_path_measurement(tmp_path_factory):
+def full_path_measurement(tmp_path_factory: pytest.TempPathFactory):
     return _measure(tmp_path_factory.mktemp("land_run_budget"))
 
 
 @pytest.fixture(scope="module")
-def mise_full_path_measurement(tmp_path_factory):
+def mise_full_path_measurement(tmp_path_factory: pytest.TempPathFactory):
     return _measure(tmp_path_factory.mktemp("land_run_budget_mise"), "--kind", "mise")
 
 
 @pytest.fixture(scope="module")
-def ask_full_path_measurement(tmp_path_factory):
+def ask_full_path_measurement(tmp_path_factory: pytest.TempPathFactory):
     return _measure(tmp_path_factory.mktemp("land_run_budget_ask"), "--kind", "ask")
 
 
 @pytest.fixture(scope="module")
-def reclose_measurement(tmp_path_factory):
+def reclose_measurement(tmp_path_factory: pytest.TempPathFactory):
     """Trap: the landing the reclose re-closes is paid in `--build-only`, never in a measured
     process; its fixture git and detached launch spawn conhost.exe children Windows counts
     nondeterministically, which read as a 2.1 net against the 2.0 ceiling."""
@@ -217,29 +217,29 @@ def _real_shape_measure(root, kind: str) -> dict:
 
 
 @pytest.fixture(scope="module")
-def real_shape_measurement(tmp_path_factory):
+def real_shape_measurement(tmp_path_factory: pytest.TempPathFactory):
     return _real_shape_measure(tmp_path_factory.mktemp("land_run_budget_real_shape"), "ask")
 
 
 @pytest.fixture(scope="module")
-def fanout_measurement(tmp_path_factory):
+def fanout_measurement(tmp_path_factory: pytest.TempPathFactory):
     return _real_shape_measure(tmp_path_factory.mktemp("land_run_budget_fanout"), "fanout")
 
 
 @pytest.fixture(scope="module")
-def halted_record_measurement(tmp_path_factory):
+def halted_record_measurement(tmp_path_factory: pytest.TempPathFactory):
     return _measure(tmp_path_factory.mktemp("land_run_budget_halted"), driver=_HALTED_DRIVER)
 
 
 @pytest.fixture(scope="module")
-def halted_incident_measurement(tmp_path_factory):
+def halted_incident_measurement(tmp_path_factory: pytest.TempPathFactory):
     return _measure(
         tmp_path_factory.mktemp("land_run_budget_halted_incident"), "--incident-shape", driver=_HALTED_DRIVER
     )
 
 
 @pytest.fixture(scope="module")
-def halted_refire_measurement(tmp_path_factory):
+def halted_refire_measurement(tmp_path_factory: pytest.TempPathFactory):
     return _measure(
         tmp_path_factory.mktemp("land_run_budget_halted_refire"),
         "--refire-withheld",
@@ -250,7 +250,7 @@ def halted_refire_measurement(tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
-def grind_measurement(tmp_path_factory):
+def grind_measurement(tmp_path_factory: pytest.TempPathFactory):
     return _measure(tmp_path_factory.mktemp("land_run_budget_grind"), driver=_GRIND_DRIVER)
 
 
@@ -262,45 +262,45 @@ def _assert_under_bar(m: dict, procs_ceiling: float) -> None:
     assert m["net_procs"] <= procs_ceiling, f"spawn count over the {procs_ceiling} ceiling: {m['detail']}"
 
 
-def test_land_run_full_path_is_under_the_500ms_bar(full_path_measurement):
+def test_land_run_full_path_is_under_the_500ms_bar(full_path_measurement) -> None:
     _assert_under_bar(full_path_measurement, PROCS_CEILING_PLAN)
 
 
-def test_land_run_reclose_is_under_the_500ms_bar(reclose_measurement):
+def test_land_run_reclose_is_under_the_500ms_bar(reclose_measurement) -> None:
     _assert_under_bar(reclose_measurement, PROCS_CEILING_RECLOSE)
     print(f"LAND-RUN-RECLOSE {reclose_measurement['detail']}")
 
 
-def test_land_run_mise_full_path_is_under_the_500ms_bar(mise_full_path_measurement):
+def test_land_run_mise_full_path_is_under_the_500ms_bar(mise_full_path_measurement) -> None:
     _assert_under_bar(mise_full_path_measurement, PROCS_CEILING_MISE)
 
 
-def test_land_run_halted_record_is_under_the_500ms_bar(halted_record_measurement):
+def test_land_run_halted_record_is_under_the_500ms_bar(halted_record_measurement) -> None:
     _assert_under_bar(halted_record_measurement, PROCS_CEILING_HALTED)
     print(f"LAND-RUN-HALTED {halted_record_measurement['detail']}")
 
 
-def test_land_run_halted_incident_shape_is_under_the_500ms_bar(halted_incident_measurement):
+def test_land_run_halted_incident_shape_is_under_the_500ms_bar(halted_incident_measurement) -> None:
     _assert_under_bar(halted_incident_measurement, PROCS_CEILING_HALTED_INCIDENT)
     print(f"LAND-RUN-HALTED-INCIDENT {halted_incident_measurement['detail']}")
 
 
-def test_land_run_halted_refire_lands_withheld_product_under_the_500ms_bar(halted_refire_measurement):
+def test_land_run_halted_refire_lands_withheld_product_under_the_500ms_bar(halted_refire_measurement) -> None:
     _assert_under_bar(halted_refire_measurement, PROCS_CEILING_HALTED_REFIRE)
     print(f"LAND-RUN-HALTED-REFIRE {halted_refire_measurement['detail']}")
 
 
-def test_land_run_grind_mode_is_under_the_500ms_bar(grind_measurement):
+def test_land_run_grind_mode_is_under_the_500ms_bar(grind_measurement) -> None:
     _assert_under_bar(grind_measurement, PROCS_CEILING_GRIND)
     print(f"LAND-RUN-GRIND {grind_measurement['detail']}")
 
 
-def test_land_run_ask_full_path_is_under_the_500ms_bar(ask_full_path_measurement):
+def test_land_run_ask_full_path_is_under_the_500ms_bar(ask_full_path_measurement) -> None:
     _assert_under_bar(ask_full_path_measurement, PROCS_CEILING_ASK)
     print(f"LAND-RUN-ASK {ask_full_path_measurement['detail']}")
 
 
-def test_land_run_ask_real_shape_is_under_the_500ms_bar(real_shape_measurement):
+def test_land_run_ask_real_shape_is_under_the_500ms_bar(real_shape_measurement) -> None:
     """The incident shape: tracked tree, sizing/delivery corpus, stopped-run corpus over a large
     transcript, populated launch dir, a live run token."""
     _assert_under_bar(real_shape_measurement, PROCS_CEILING_ASK_REAL_SHAPE)
@@ -310,7 +310,7 @@ def test_land_run_ask_real_shape_is_under_the_500ms_bar(real_shape_measurement):
     print(f"LAND-RUN-REAL-SHAPE {real_shape_measurement['detail']}")
 
 
-def test_land_run_fanout_at_real_shape_is_under_the_500ms_bar(fanout_measurement):
+def test_land_run_fanout_at_real_shape_is_under_the_500ms_bar(fanout_measurement) -> None:
     _assert_under_bar(fanout_measurement, PROCS_CEILING_FANOUT)
     assert fanout_measurement["handler_ms"] < BUDGET_MS, (
         f"handler parent process time over the {BUDGET_MS}ms bar: {fanout_measurement['detail']}"

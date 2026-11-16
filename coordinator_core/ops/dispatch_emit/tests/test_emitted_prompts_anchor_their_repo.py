@@ -10,6 +10,8 @@ from coordinator_core.ops.dispatch_emit.emit import (
     derive_plan_context,
 )
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
+from pathlib import Path
+import pytest
 
 
 def _row() -> WaveRow:
@@ -23,7 +25,7 @@ def _row() -> WaveRow:
     )
 
 
-def _context(root):
+def _context(root) -> PlanContext:
     return PlanContext(
         title="A plan", goal=None, problem_excerpt=None, repo_root=root
     )
@@ -32,7 +34,7 @@ def _context(root):
 _ROOT_EXPR = "\x01_repoRoot\x01"
 
 
-def test_the_executor_prompt_anchors_to_the_runtime_root_never_a_literal():
+def test_the_executor_prompt_anchors_to_the_runtime_root_never_a_literal() -> None:
     prompt = _row_prompt(_row(), "docs/plans/p.md", _context("/home/user/claude-klabauter"))
     assert f"Repo root: {_ROOT_EXPR}" in prompt
     assert "NOT necessarily the directory you start in" in prompt
@@ -40,31 +42,31 @@ def test_the_executor_prompt_anchors_to_the_runtime_root_never_a_literal():
     assert "/home/user" not in prompt
 
 
-def test_the_anchor_cd_yields_where_the_platform_forbids_cd():
+def test_the_anchor_cd_yields_where_the_platform_forbids_cd() -> None:
     from coordinator_core.ops.dispatch_emit import ask_compose
 
     clause = ask_compose._ANCHOR_CLAUSE.format(root="/r")
     assert "unless your working directory already is it or the platform note forbids cd" in clause
 
 
-def test_the_anchor_leads_the_preamble():
+def test_the_anchor_leads_the_preamble() -> None:
     preamble = _plan_context_preamble(_context("/repo"))
     assert preamble.splitlines()[0].startswith(f"Repo root: {_ROOT_EXPR}")
 
 
-def test_no_repo_root_declares_no_anchor_rather_than_inventing_one():
+def test_no_repo_root_declares_no_anchor_rather_than_inventing_one() -> None:
     prompt = _row_prompt(_row(), "docs/plans/p.md", _context(None))
     assert "Repo root:" not in prompt
     assert "Plan: A plan" in prompt
 
 
-def test_derive_plan_context_carries_the_root_through():
+def test_derive_plan_context_carries_the_root_through() -> None:
     context = derive_plan_context("# t\n", fallback_title="t", repo_root="/repo")
     assert context.repo_root == "/repo"
     assert derive_plan_context("# t\n", fallback_title="t").repo_root is None
 
 
-def test_an_off_path_claude_is_flagged_without_naming_its_directory(monkeypatch, tmp_path):
+def test_an_off_path_claude_is_flagged_without_naming_its_directory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import emit
 
     binary = tmp_path / ("claude.exe" if sys.platform == "win32" else "claude")
@@ -80,7 +82,7 @@ def test_an_off_path_claude_is_flagged_without_naming_its_directory(monkeypatch,
     assert emit._claude_is_off_default_path() is True
 
 
-def test_a_claude_on_a_system_path_or_absent_adds_no_line(monkeypatch):
+def test_a_claude_on_a_system_path_or_absent_adds_no_line(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import emit
 
     monkeypatch.setattr(emit.shutil, "which", lambda *a, **k: "/usr/local/bin/claude")

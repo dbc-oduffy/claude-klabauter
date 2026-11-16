@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -40,7 +41,7 @@ from coordinator_core.daily_branch import (
         ("v1.2.3", "v1-2-3"),
     ],
 )
-def test_sanitize_slug(raw, expected):
+def test_sanitize_slug(raw, expected) -> None:
     assert sanitize_slug(raw) == expected
 
 
@@ -62,7 +63,7 @@ def test_sanitize_slug(raw, expected):
         (None, False),
     ],
 )
-def test_is_work_branch(name, expected):
+def test_is_work_branch(name, expected) -> None:
     assert is_work_branch(name) is expected
 
 
@@ -84,46 +85,46 @@ def test_is_work_branch(name, expected):
         (None, False),
     ],
 )
-def test_has_remote_prefix(name, expected):
+def test_has_remote_prefix(name, expected) -> None:
     assert has_remote_prefix(name) is expected
 
 
-def test_parse_single_day():
+def test_parse_single_day() -> None:
     assert parse_branch_span("work/machine-a/2026-05-06") == (
         "2026-05-06",
         "2026-05-06",
     )
 
 
-def test_parse_span_same_month():
+def test_parse_span_same_month() -> None:
     assert parse_branch_span("work/machine-a/2026-05-06to09") == (
         "2026-05-06",
         "2026-05-09",
     )
 
 
-def test_parse_span_month_roll():
+def test_parse_span_month_roll() -> None:
     assert parse_branch_span("work/machine-a/2026-05-28to03") == (
         "2026-05-28",
         "2026-06-03",
     )
 
 
-def test_parse_span_year_roll():
+def test_parse_span_year_roll() -> None:
     assert parse_branch_span("work/machine-a/2026-12-30to02") == (
         "2026-12-30",
         "2027-01-02",
     )
 
 
-def test_parse_case_insensitive():
+def test_parse_case_insensitive() -> None:
     assert parse_branch_span("WORK/MACHINE-A/2026-05-06") == (
         "2026-05-06",
         "2026-05-06",
     )
 
 
-def test_parse_end_equal_start_dd():
+def test_parse_end_equal_start_dd() -> None:
     assert parse_branch_span("work/m/2026-05-06to06") == ("2026-05-06", "2026-05-06")
 
 
@@ -144,11 +145,11 @@ def test_parse_end_equal_start_dd():
         "",
     ],
 )
-def test_parse_rejects(name):
+def test_parse_rejects(name) -> None:
     assert parse_branch_span(name) is None
 
 
-def test_parse_none_input():
+def test_parse_none_input() -> None:
     assert parse_branch_span(None) is None
 
 
@@ -162,7 +163,7 @@ def test_parse_none_input():
         "work/machine-a/2026-05-06to09",
     ],
 )
-def test_is_allowed_true(name):
+def test_is_allowed_true(name) -> None:
     assert is_allowed_branch(name) is True
 
 
@@ -176,112 +177,112 @@ def test_is_allowed_true(name):
         "",
     ],
 )
-def test_is_allowed_false(name):
+def test_is_allowed_false(name) -> None:
     assert is_allowed_branch(name) is False
 
 
-def test_canonical_accepts_lowercase():
+def test_canonical_accepts_lowercase() -> None:
     assert is_canonical_branch("work/machine-a/2026-05-06") is True
     assert is_canonical_branch("main") is True
 
 
-def test_canonical_rejects_mixed_case():
+def test_canonical_rejects_mixed_case() -> None:
     assert is_allowed_branch("work/MACHINE-A/2026-05-06") is True
     assert is_canonical_branch("work/MACHINE-A/2026-05-06") is False
     assert is_canonical_branch("MAIN") is False
 
 
-def test_canonical_rejects_disallowed():
+def test_canonical_rejects_disallowed() -> None:
     assert is_canonical_branch("feature/foo") is False
 
 
-def test_format_span_suffix_same_day():
+def test_format_span_suffix_same_day() -> None:
     assert format_span_suffix("2026-05-06", "2026-05-06") == "2026-05-06"
 
 
-def test_format_span_suffix_span():
+def test_format_span_suffix_span() -> None:
     assert format_span_suffix("2026-05-06", "2026-05-09") == "2026-05-06to09"
 
 
-def test_rename_target_zero_ahead_is_today_only():
+def test_rename_target_zero_ahead_is_today_only() -> None:
     assert rename_target("machine-a", "2026-05-06", "2026-05-09", 0) == (
         "work/machine-a/2026-05-09"
     )
 
 
-def test_rename_target_ahead_keeps_span():
+def test_rename_target_ahead_keeps_span() -> None:
     assert rename_target("machine-a", "2026-05-06", "2026-05-09", 3) == (
         "work/machine-a/2026-05-06to09"
     )
 
 
-def test_rename_target_ahead_same_day_collapses():
+def test_rename_target_ahead_same_day_collapses() -> None:
     assert rename_target("machine-a", "2026-05-09", "2026-05-09", 3) == (
         "work/machine-a/2026-05-09"
     )
 
 
-def test_rename_target_accepts_numeric_string():
+def test_rename_target_accepts_numeric_string() -> None:
     assert rename_target("m", "2026-05-06", "2026-05-09", "0") == "work/m/2026-05-09"
     assert rename_target("m", "2026-05-06", "2026-05-09", "2") == "work/m/2026-05-06to09"
 
 
 @pytest.mark.parametrize("bad", ["", "abc", "-1", "1.5", None])
-def test_rename_target_rejects_non_integer(bad):
+def test_rename_target_rejects_non_integer(bad) -> None:
     with pytest.raises(ValueError):
         rename_target("m", "2026-05-06", "2026-05-09", bad)
 
 
-def test_should_prompt_active_not_in_span():
+def test_should_prompt_active_not_in_span() -> None:
     now = 1_000_000.0
     assert should_prompt_rename(
         "work/machine-a/2026-05-06", "2026-05-09", now - 3600, now_epoch=now
     ) is True
 
 
-def test_should_not_prompt_already_covers_today():
+def test_should_not_prompt_already_covers_today() -> None:
     now = 1_000_000.0
     assert should_prompt_rename(
         "work/machine-a/2026-05-09", "2026-05-09", now - 3600, now_epoch=now
     ) is False
 
 
-def test_should_not_prompt_stale_commit():
+def test_should_not_prompt_stale_commit() -> None:
     now = 1_000_000.0
     assert should_prompt_rename(
         "work/machine-a/2026-05-06", "2026-05-09", now - 72 * 3600, now_epoch=now
     ) is False
 
 
-def test_should_not_prompt_unparseable_branch():
+def test_should_not_prompt_unparseable_branch() -> None:
     now = 1_000_000.0
     assert should_prompt_rename("feature/foo", "2026-05-09", now, now_epoch=now) is False
 
 
-def test_should_prompt_span_branch_not_covering_today():
+def test_should_prompt_span_branch_not_covering_today() -> None:
     now = 1_000_000.0
     assert should_prompt_rename(
         "work/machine-a/2026-05-06to09", "2026-05-12", now - 3600, now_epoch=now
     ) is True
 
 
-def test_is_allowed_accepts_designated_branch_any_shape():
+def test_is_allowed_accepts_designated_branch_any_shape() -> None:
     assert is_allowed_branch("claude/compassionate-pascal-98ncw7", "claude/compassionate-pascal-98ncw7") is True
 
 
-def test_is_allowed_rejects_non_matching_when_designated():
+def test_is_allowed_rejects_non_matching_when_designated() -> None:
     assert is_allowed_branch("feature/foo", "claude/compassionate-pascal-98ncw7") is False
 
 
-def test_is_allowed_unaffected_when_no_designation():
+def test_is_allowed_unaffected_when_no_designation() -> None:
     assert is_allowed_branch("work/machine-a/2026-05-06", None) is True
 
 
-def test_is_canonical_accepts_designated_branch_verbatim_case():
+def test_is_canonical_accepts_designated_branch_verbatim_case() -> None:
     assert is_canonical_branch("Claude/Mixed-Case", "Claude/Mixed-Case") is True
 
 
-def test_is_canonical_still_rejects_mixed_case_work_branch_when_designation_absent():
+def test_is_canonical_still_rejects_mixed_case_work_branch_when_designation_absent() -> None:
     assert is_canonical_branch("Work/Machine-A/2026-05-06", None) is False
 
 
@@ -292,23 +293,23 @@ def _init_bare_gitdir(tmp_path):
     return tmp_path
 
 
-def test_read_configured_day_branch_absent(tmp_path):
+def test_read_configured_day_branch_absent(tmp_path: Path) -> None:
     repo = _init_bare_gitdir(tmp_path)
     assert read_configured_day_branch(repo) is None
 
 
-def test_record_then_read_configured_day_branch(tmp_path):
+def test_record_then_read_configured_day_branch(tmp_path: Path) -> None:
     repo = _init_bare_gitdir(tmp_path)
     assert record_day_branch_designation(repo, "claude/compassionate-pascal-98ncw7") is True
     assert read_configured_day_branch(repo) == "claude/compassionate-pascal-98ncw7"
 
 
-def test_record_is_idempotent(tmp_path):
+def test_record_is_idempotent(tmp_path: Path) -> None:
     repo = _init_bare_gitdir(tmp_path)
     assert record_day_branch_designation(repo, "claude/foo") is True
     assert record_day_branch_designation(repo, "claude/foo") is True
     assert read_configured_day_branch(repo) == "claude/foo"
 
 
-def test_read_configured_day_branch_no_git_dir(tmp_path):
+def test_read_configured_day_branch_no_git_dir(tmp_path: Path) -> None:
     assert read_configured_day_branch(tmp_path) is None

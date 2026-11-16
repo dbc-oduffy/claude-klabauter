@@ -21,6 +21,7 @@ from datetime import datetime, timedelta, timezone
 from unittest import mock
 
 from coordinator_core.group_em import watch
+from pathlib import Path
 
 
 pytestmark = pytest.mark.complete
@@ -29,12 +30,12 @@ REPO_ROOT = "/repo/root"
 
 
 @pytest.fixture(autouse=True)
-def _no_real_remote_snapshot(monkeypatch):
+def _no_real_remote_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(watch.read_pass, "read_remote_snapshot", lambda directory=None: {})
 
 
 @pytest.fixture(autouse=True)
-def _quiet_host_memory(monkeypatch):
+def _quiet_host_memory(monkeypatch: pytest.MonkeyPatch) -> None:
     """A tick never reads this host's RAM or process table; memory cases patch these seams."""
     monkeypatch.setattr(watch, "_memory_floor_mb", lambda: None)
     monkeypatch.setattr(watch, "_process_census", lambda: None)
@@ -45,12 +46,12 @@ def _quiet_host_memory(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _no_real_goal_board(monkeypatch):
+def _no_real_goal_board(monkeypatch: pytest.MonkeyPatch) -> None:
     """A tick never reads this box's goal board; the DRIFT cases below patch the board home themselves."""
     monkeypatch.setattr(watch, "_goal_board_flags", lambda now: None)
 
 
-def test_armed_line_names_the_watched_repo_not_a_literal(tmp_path):
+def test_armed_line_names_the_watched_repo_not_a_literal(tmp_path: Path) -> None:
     """The ARMED label tracks --repo-root, and a hardcoded repo name is the defect.
 
     Regression for a live miss measured against the PUBLISHED engine 2026-08-31 by
@@ -75,7 +76,7 @@ def test_armed_line_names_the_watched_repo_not_a_literal(tmp_path):
         lines: list[str] = []
 
         class _Stream:
-            def write(self, text):
+            def write(self, text) -> None:
                 if text.strip():
                     lines.append(text.strip())
 
@@ -104,31 +105,31 @@ def test_armed_line_names_the_watched_repo_not_a_literal(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_not_parked_to_parked_transitions():
+def test_not_parked_to_parked_transitions() -> None:
     prev = {"peer-1": False}
     cur = {"peer-1": True}
     assert watch.transitions(prev, cur) == ["peer-1"]
 
 
-def test_parked_to_parked_emits_nothing():
+def test_parked_to_parked_emits_nothing() -> None:
     prev = {"peer-1": True}
     cur = {"peer-1": True}
     assert watch.transitions(prev, cur) == []
 
 
-def test_not_parked_to_not_parked_emits_nothing():
+def test_not_parked_to_not_parked_emits_nothing() -> None:
     prev = {"peer-1": False}
     cur = {"peer-1": False}
     assert watch.transitions(prev, cur) == []
 
 
-def test_spawn_already_parked_emits_nothing():
+def test_spawn_already_parked_emits_nothing() -> None:
     prev: dict[str, bool] = {}
     cur = {"peer-1": True}
     assert watch.transitions(prev, cur) == []
 
 
-def test_exit_is_not_a_parked_transition():
+def test_exit_is_not_a_parked_transition() -> None:
     """An exit is `gone`'s event, never `transitions`'.
 
     The two predicates must not both fire on one departure: a peer that was
@@ -142,13 +143,13 @@ def test_exit_is_not_a_parked_transition():
     assert watch.gone(prev, cur) == ["peer-1"]
 
 
-def test_multiple_peers_only_the_transitioning_one_is_named():
+def test_multiple_peers_only_the_transitioning_one_is_named() -> None:
     prev = {"peer-1": False, "peer-2": True, "peer-3": False}
     cur = {"peer-1": True, "peer-2": True, "peer-3": False}
     assert watch.transitions(prev, cur) == ["peer-1"]
 
 
-def test_transitions_result_is_sorted():
+def test_transitions_result_is_sorted() -> None:
     prev = {"peer-b": False, "peer-a": False}
     cur = {"peer-b": True, "peer-a": True}
     assert watch.transitions(prev, cur) == ["peer-a", "peer-b"]
@@ -159,23 +160,23 @@ def test_transitions_result_is_sorted():
 # ---------------------------------------------------------------------------
 
 
-def test_obligation_summary_no_ledger():
+def test_obligation_summary_no_ledger() -> None:
     with mock.patch.object(watch.obligations, "for_peer", return_value=None):
         assert watch._obligation_summary(REPO_ROOT, "peer-1") == "no ledger"
 
 
-def test_obligation_summary_empty_ledger():
+def test_obligation_summary_empty_ledger() -> None:
     with mock.patch.object(watch.obligations, "for_peer", return_value=[]):
         assert watch._obligation_summary(REPO_ROOT, "peer-1") == "none"
 
 
-def test_obligation_summary_names_records():
+def test_obligation_summary_names_records() -> None:
     records = [{"obligation_id": "ob-1"}, {"obligation_id": "ob-2"}]
     with mock.patch.object(watch.obligations, "for_peer", return_value=records):
         assert watch._obligation_summary(REPO_ROOT, "peer-1") == "ob-1,ob-2"
 
 
-def test_obligation_summary_falls_back_to_next_action():
+def test_obligation_summary_falls_back_to_next_action() -> None:
     records = [{"next_action": "ping peer-4a"}]
     with mock.patch.object(watch.obligations, "for_peer", return_value=records):
         assert watch._obligation_summary(REPO_ROOT, "peer-1") == "ping peer-4a"
@@ -186,11 +187,11 @@ def test_obligation_summary_falls_back_to_next_action():
 # ---------------------------------------------------------------------------
 
 
-def _agent(session_id="peer-1", status="idle", cwd=REPO_ROOT, name=None):
+def _agent(session_id: str = "peer-1", status: str = "idle", cwd=REPO_ROOT, name=None):
     return {"sessionId": session_id, "status": status, "cwd": cwd, "name": name}
 
 
-def test_poll_once_emits_parked_line_on_transition():
+def test_poll_once_emits_parked_line_on_transition() -> None:
     now = datetime(2026, 8, 31, 12, 0, 0, tzinfo=timezone.utc)
     emitted = []
 
@@ -223,7 +224,7 @@ def test_poll_once_emits_parked_line_on_transition():
     assert "obligations=no ledger" in line
 
 
-def test_poll_once_stays_silent_on_first_sighting():
+def test_poll_once_stays_silent_on_first_sighting() -> None:
     now = datetime(2026, 8, 31, 12, 0, 0, tzinfo=timezone.utc)
     emitted = []
 
@@ -242,7 +243,7 @@ def test_poll_once_stays_silent_on_first_sighting():
     assert emitted == []
 
 
-def test_poll_once_suppresses_when_cooldown_active():
+def test_poll_once_suppresses_when_cooldown_active() -> None:
     now = datetime(2026, 8, 31, 12, 0, 0, tzinfo=timezone.utc)
     emitted = []
 
@@ -263,7 +264,7 @@ def test_poll_once_suppresses_when_cooldown_active():
     assert emitted == []
 
 
-def test_poll_once_steady_state_emits_nothing():
+def test_poll_once_steady_state_emits_nothing() -> None:
     now = datetime(2026, 8, 31, 12, 0, 0, tzinfo=timezone.utc)
     emitted = []
 
@@ -282,14 +283,14 @@ def test_poll_once_steady_state_emits_nothing():
     assert emitted == []
 
 
-def test_cooldown_active_reads_send_pass_log():
+def test_cooldown_active_reads_send_pass_log() -> None:
     records = [{"offer_key": watch.send_pass.offer_key("caller-1", "peer-1"), "offered_at": 1000.0}]
     with mock.patch.object(watch.send_pass, "read_send_log", return_value=records):
         active = watch._cooldown_active(REPO_ROOT, "caller-1", "peer-1", now=1000.0 + 60.0)
     assert active is True
 
 
-def test_cooldown_inactive_when_no_offer_recorded():
+def test_cooldown_inactive_when_no_offer_recorded() -> None:
     with mock.patch.object(watch.send_pass, "read_send_log", return_value=[]):
         active = watch._cooldown_active(REPO_ROOT, "caller-1", "peer-1", now=1000.0)
     assert active is False
@@ -300,14 +301,14 @@ def test_cooldown_inactive_when_no_offer_recorded():
 # ---------------------------------------------------------------------------
 
 
-def test_main_emits_poll_error_and_continues(tmp_path):
+def test_main_emits_poll_error_and_continues(tmp_path: Path) -> None:
     """The repo root is a tmp_path, not the module-level `REPO_ROOT` sentinel:
     `main` now writes this repo's heartbeat every tick, so a test driving it
     against `/repo/root` creates that directory on the real filesystem."""
     stream_lines = []
 
     class _Stream:
-        def write(self, text):
+        def write(self, text) -> None:
             if text.strip():
                 stream_lines.append(text.strip())
 
@@ -331,11 +332,11 @@ def test_main_emits_poll_error_and_continues(tmp_path):
     assert sum(1 for line in stream_lines if line.startswith("POLL-ERROR")) == 2
 
 
-def test_main_arms_and_reports_measured_interval(tmp_path):
+def test_main_arms_and_reports_measured_interval(tmp_path: Path) -> None:
     stream_lines = []
 
     class _Stream:
-        def write(self, text):
+        def write(self, text) -> None:
             if text.strip():
                 stream_lines.append(text.strip())
 
@@ -364,7 +365,7 @@ def test_main_arms_and_reports_measured_interval(tmp_path):
     assert "interval=5.0s" in armed_line
 
 
-def test_armed_line_names_its_population_and_the_instant_it_was_struck(tmp_path):
+def test_armed_line_names_its_population_and_the_instant_it_was_struck(tmp_path: Path) -> None:
     """C5 falsifier leg 1: `peer_count` includes the caller (`_current_agents`'s
     docstring), the OPPOSITE population from the heartbeat's `subscribed_peers`
     -- one word, two definitions, is the gap this line closes. The ARMED line
@@ -373,7 +374,7 @@ def test_armed_line_names_its_population_and_the_instant_it_was_struck(tmp_path)
     stream_lines = []
 
     class _Stream:
-        def write(self, text):
+        def write(self, text) -> None:
             if text.strip():
                 stream_lines.append(text.strip())
 
@@ -402,22 +403,22 @@ def test_armed_line_names_its_population_and_the_instant_it_was_struck(tmp_path)
 # ---------------------------------------------------------------------------
 
 
-def test_poll_interval_floors_at_5_seconds_for_a_fast_snapshot():
+def test_poll_interval_floors_at_5_seconds_for_a_fast_snapshot() -> None:
     assert watch._poll_interval_seconds(0.1) == 5.0
 
 
-def test_poll_interval_scales_with_measured_cost_above_the_floor():
+def test_poll_interval_scales_with_measured_cost_above_the_floor() -> None:
     # 1000x multiplier: 10ms measured -> 10s interval.
     assert watch._poll_interval_seconds(10.0) == 10.0
 
 
-def test_poll_interval_ceilings_a_transient_arm_time_spike():
+def test_poll_interval_ceilings_a_transient_arm_time_spike() -> None:
     # A single bad arm-time sample (e.g. 2000ms) must not commit the watch
     # to a ~33-minute cadence for the whole session.
     assert watch._poll_interval_seconds(2000.0) == watch._POLL_INTERVAL_CEILING_SECONDS
 
 
-def test_poll_interval_ceiling_is_well_above_a_normal_measurement():
+def test_poll_interval_ceiling_is_well_above_a_normal_measurement() -> None:
     assert watch._POLL_INTERVAL_CEILING_SECONDS > 30.0
 
 
@@ -427,7 +428,7 @@ def test_poll_interval_ceiling_is_well_above_a_normal_measurement():
 # ---------------------------------------------------------------------------
 
 
-def test_module_has_a_command_line_entrypoint():
+def test_module_has_a_command_line_entrypoint() -> None:
     """`Monitor` takes a COMMAND, so a module with only an importable `main()`
     cannot be armed. This test exists because that is exactly how this module
     first shipped: fully tested, fully inert."""
@@ -438,7 +439,7 @@ def test_module_has_a_command_line_entrypoint():
     assert '__name__ == "__main__"' in source
 
 
-def test_cli_requires_repo_root_rather_than_guessing_cwd(capsys):
+def test_cli_requires_repo_root_rather_than_guessing_cwd(capsys: pytest.CaptureFixture[str]) -> None:
     """The watch runs under a harness tool whose working directory is not ours,
     so a cwd default would silently watch the wrong tree."""
     with pytest.raises(SystemExit) as excinfo:
@@ -447,7 +448,7 @@ def test_cli_requires_repo_root_rather_than_guessing_cwd(capsys):
     assert "--repo-root" in capsys.readouterr().err
 
 
-def test_cli_runs_a_bounded_watch_and_emits_armed(tmp_path, monkeypatch, capsys):
+def test_cli_runs_a_bounded_watch_and_emits_armed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """End to end through the entrypoint an operator would actually type."""
     monkeypatch.setattr(watch, "_measure_snapshot_ms", lambda repo_root, **_kw: (4.6, [{"sessionId": f"p{i}"} for i in range(3)]))
     monkeypatch.setattr(watch, "_current_agents", lambda repo_root, sid: [])
@@ -466,7 +467,7 @@ def test_cli_runs_a_bounded_watch_and_emits_armed(tmp_path, monkeypatch, capsys)
 # ---------------------------------------------------------------------------
 
 
-def test_roster_excludes_both_the_watcher_and_the_group_em():
+def test_roster_excludes_both_the_watcher_and_the_group_em() -> None:
     """A teammate sitting in a `Monitor` poll presents exactly like a parked
     peer, and the Group-EM is the recipient of every line -- neither belongs in
     the watched set."""
@@ -480,7 +481,7 @@ def test_roster_excludes_both_the_watcher_and_the_group_em():
     assert [p["sessionId"] for p in peers] == ["peer-1"]
 
 
-def test_cooldown_is_read_off_the_group_ems_send_log_not_the_watchers():
+def test_cooldown_is_read_off_the_group_ems_send_log_not_the_watchers() -> None:
     """The offer log is per-session on disk, so a watcher reading its own
     empty log would re-flag every peer the Group-EM already answered."""
     seen = {}
@@ -511,7 +512,7 @@ def test_cooldown_is_read_off_the_group_ems_send_log_not_the_watchers():
     assert seen["caller"] == "group-em-1"
 
 
-def test_group_em_session_id_defaults_to_the_calling_session():
+def test_group_em_session_id_defaults_to_the_calling_session() -> None:
     """The ordinary case -- the Group-EM holds the poller itself -- keeps
     working with one id, unchanged."""
     seen = {}
@@ -542,7 +543,7 @@ def test_group_em_session_id_defaults_to_the_calling_session():
 # ---------------------------------------------------------------------------
 
 
-def test_declinations_record_the_gate_that_stopped_each_peer():
+def test_declinations_record_the_gate_that_stopped_each_peer() -> None:
     agents = [
         {"sessionId": "parked-1", "status": "idle", "cwd": REPO_ROOT},
         {"sessionId": "busy-1", "status": "busy", "cwd": REPO_ROOT},
@@ -572,7 +573,7 @@ def test_declinations_record_the_gate_that_stopped_each_peer():
     assert all(row["name"] is None for row in declinations)
 
 
-def test_main_stamps_the_watch_presence_record_every_tick(tmp_path):
+def test_main_stamps_the_watch_presence_record_every_tick(tmp_path: Path) -> None:
     """A Group-EM that arms this runnable and stops hand-stamping must not read
     to the rest of the fleet as a repo nobody is watching."""
     with mock.patch.object(
@@ -625,7 +626,7 @@ def _injecting_sleep(repo_root, record):
 
     fired = []
 
-    def _sleep(_seconds):
+    def _sleep(_seconds) -> None:
         if fired:
             return
         fired.append(True)
@@ -661,7 +662,7 @@ def _rival_record(
     }
 
 
-def test_main_tears_down_and_stops_when_a_successor_takes_the_record(tmp_path):
+def test_main_tears_down_and_stops_when_a_successor_takes_the_record(tmp_path: Path) -> None:
     from coordinator_core.group_em import watch_heartbeat
 
     # A successor enters and stamps its own takeover BETWEEN this watch's
@@ -703,7 +704,7 @@ def test_main_tears_down_and_stops_when_a_successor_takes_the_record(tmp_path):
     assert record["holder_session_id"] == "successor-em"
 
 
-def test_main_teardown_line_names_the_successor(tmp_path):
+def test_main_teardown_line_names_the_successor(tmp_path: Path) -> None:
     from coordinator_core.group_em import watch_heartbeat
 
     sleep_fn = _injecting_sleep(
@@ -738,7 +739,7 @@ def test_main_teardown_line_names_the_successor(tmp_path):
     assert "successor-em" in displaced[0]
 
 
-def test_main_does_not_tear_down_on_a_same_holder_writer_only_decline(tmp_path):
+def test_main_does_not_tear_down_on_a_same_holder_writer_only_decline(tmp_path: Path) -> None:
     """The measured cron-vs-monitor case (`watch_heartbeat`'s own C1 note):
     same holder, different writer/tick_source -- the same crown's other
     instrument, not a displacement. The loop must keep running."""
@@ -783,7 +784,7 @@ def test_main_does_not_tear_down_on_a_same_holder_writer_only_decline(tmp_path):
     assert record["writer_session_id"] == "cron-writer"
 
 
-def test_displacement_record_is_none_when_nothing_declined(tmp_path):
+def test_displacement_record_is_none_when_nothing_declined(tmp_path: Path) -> None:
     from coordinator_core.group_em import watch_heartbeat
 
     assert (
@@ -792,7 +793,7 @@ def test_displacement_record_is_none_when_nothing_declined(tmp_path):
     )
 
 
-def test_displacement_record_is_none_on_a_same_holder_decline(tmp_path):
+def test_displacement_record_is_none_on_a_same_holder_decline(tmp_path: Path) -> None:
     from coordinator_core.group_em import watch_heartbeat
 
     watch_heartbeat.stamp(
@@ -806,7 +807,7 @@ def test_displacement_record_is_none_on_a_same_holder_decline(tmp_path):
     )
 
 
-def test_displacement_record_names_the_new_holder_on_a_foreign_decline(tmp_path):
+def test_displacement_record_names_the_new_holder_on_a_foreign_decline(tmp_path: Path) -> None:
     from coordinator_core.group_em import watch_heartbeat
 
     watch_heartbeat.stamp(
@@ -820,7 +821,7 @@ def test_displacement_record_names_the_new_holder_on_a_foreign_decline(tmp_path)
     assert record["holder_name"] == "the-successor"
 
 
-def test_parked_line_reuses_the_verdicts_epoch_and_reads_no_second_time():
+def test_parked_line_reuses_the_verdicts_epoch_and_reads_no_second_time() -> None:
     """The transcript was already reduced once by `classify_peer` this tick;
     re-deriving the same number here was a duplicate seek-from-EOF read
     (coordinator:code-reviewer, P2)."""
@@ -844,7 +845,7 @@ def test_parked_line_reuses_the_verdicts_epoch_and_reads_no_second_time():
     assert "transcript_idle=300s" in line
 
 
-def test_parked_line_still_reads_when_the_verdict_carries_no_epoch():
+def test_parked_line_still_reads_when_the_verdict_carries_no_epoch() -> None:
     """The reader leg reduces no tail, so there is nothing to reuse -- paying
     one read there is a first read, not a second."""
     now = datetime(2026, 8, 31, 16, 0, 0, tzinfo=timezone.utc)
@@ -864,7 +865,7 @@ def test_parked_line_still_reads_when_the_verdict_carries_no_epoch():
     assert "transcript_idle=120s" in line
 
 
-def test_parked_line_carries_a_wall_clock_stamp():
+def test_parked_line_carries_a_wall_clock_stamp() -> None:
     """The stamp is the pipe's delivery instrument: a reader compares it to
     now to tell a silent pipe from a quiet fleet."""
     now = datetime(2026, 8, 31, 16, 0, 0, tzinfo=timezone.utc)
@@ -887,7 +888,7 @@ def test_parked_line_carries_a_wall_clock_stamp():
 # wake has to earn: the prior tick to diff against.
 
 
-def _parked_once(repo_root, prev_on_disk, candidate, emitted, now=None):
+def _parked_once(repo_root, prev_on_disk, candidate, emitted, now=None) -> int:
     """Drive one `tick_once` over a single peer with a fixed verdict.
 
     The prior map is stamped with the tick's OWN `now`, never the wall clock:
@@ -926,7 +927,7 @@ def _parked_once(repo_root, prev_on_disk, candidate, emitted, now=None):
     return rc
 
 
-def test_tick_once_carries_the_prior_tick_across_two_separate_wakes(tmp_path):
+def test_tick_once_carries_the_prior_tick_across_two_separate_wakes(tmp_path: Path) -> None:
     """Two processes, no shared memory, one transition -- reported once.
 
     This is the whole contract. Wake one sees an unparked peer and says
@@ -942,14 +943,14 @@ def test_tick_once_carries_the_prior_tick_across_two_separate_wakes(tmp_path):
     assert emitted[0].startswith("PARKED session=peer-1")
 
 
-def test_tick_once_is_silent_when_the_peer_was_already_parked_last_wake(tmp_path):
+def test_tick_once_is_silent_when_the_peer_was_already_parked_last_wake(tmp_path: Path) -> None:
     """Steady state emits nothing -- the firehose that gets a watch muted."""
     emitted: list[str] = []
     _parked_once(tmp_path, {"peer-1": True}, candidate=True, emitted=emitted)
     assert emitted == []
 
 
-def test_tick_once_stamps_the_presence_record_with_the_cron_word(tmp_path):
+def test_tick_once_stamps_the_presence_record_with_the_cron_word(tmp_path: Path) -> None:
     """A reader must be able to tell a wake-driven watch from a held poller:
     what happens next if nobody fires again is a different question for each."""
     _parked_once(tmp_path, {}, candidate=False, emitted=[])
@@ -959,7 +960,7 @@ def test_tick_once_stamps_the_presence_record_with_the_cron_word(tmp_path):
     assert record["holder_session_id"] == "group-em-1"
 
 
-def test_tick_once_deadline_follows_the_callers_cadence_not_the_poll_interval(tmp_path):
+def test_tick_once_deadline_follows_the_callers_cadence_not_the_poll_interval(tmp_path: Path) -> None:
     """A wake that stamped the poll loop's few-second interval would read STALE
     within the minute -- the watch reporting itself absent while working."""
     with mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
@@ -986,7 +987,7 @@ def _load_ticks(tmp_path, load5, n, monkeypatch):
     return lines
 
 
-def test_tick_once_load_alarm_fires_once_at_n_ticks_and_keeps_parked(tmp_path, monkeypatch):
+def test_tick_once_load_alarm_fires_once_at_n_ticks_and_keeps_parked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert _load_ticks(tmp_path, 9.0, 2, monkeypatch) == []
     assert len(_load_ticks(tmp_path, 9.0, 1, monkeypatch)) == 1
     assert _load_ticks(tmp_path, 9.0, 2, monkeypatch) == []
@@ -994,13 +995,13 @@ def test_tick_once_load_alarm_fires_once_at_n_ticks_and_keeps_parked(tmp_path, m
     assert watch.load_prev_peers(str(tmp_path)) == {"p": {}}
 
 
-def test_tick_once_load_alarm_rearms_below_cores(tmp_path, monkeypatch):
+def test_tick_once_load_alarm_rearms_below_cores(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(_load_ticks(tmp_path, 9.0, 3, monkeypatch)) == 1
     assert _load_ticks(tmp_path, 1.0, 1, monkeypatch) == []
     assert len(_load_ticks(tmp_path, 9.0, 3, monkeypatch)) == 1
 
 
-def test_tick_once_load_unavailable_is_silent_and_never_raises(tmp_path, monkeypatch):
+def test_tick_once_load_unavailable_is_silent_and_never_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert _load_ticks(tmp_path, None, 5, monkeypatch) == []
     monkeypatch.setattr(watch.box_load, "read_load5", mock.Mock(side_effect=RuntimeError("x")))
     with mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
@@ -1008,7 +1009,7 @@ def test_tick_once_load_unavailable_is_silent_and_never_raises(tmp_path, monkeyp
 
 
 class _Reading:
-    def __init__(self, avail_mb, trusted=True):
+    def __init__(self, avail_mb, trusted: bool = True) -> None:
         self.avail_mb = avail_mb
         self.trusted = trusted
 
@@ -1020,7 +1021,7 @@ _YOUNG_CTIME = _NOW - 60 * _UNIT
 
 
 class _Proc:
-    def __init__(self, name, ctime=_AGED_CTIME):
+    def __init__(self, name, ctime=_AGED_CTIME) -> None:
         self.name = name
         self.pid = id(self) % 1_000_000 + 10
         self.ppid = 999_999_999
@@ -1029,12 +1030,12 @@ class _Proc:
 
 class _DeadHost:
     @staticmethod
-    def creation_time(pid):
+    def creation_time(pid) -> None:
         return None
 
 
-def _memory_tick_lines(tmp_path, monkeypatch, avail_mb=None, floor=4096, procs=(), reaped=(), trusted=True,
-                       ctime=_AGED_CTIME):
+def _memory_tick_lines(tmp_path, monkeypatch, avail_mb=None, floor: int | None = 4096, procs=(), reaped=(), trusted: bool = True,
+                       ctime=_AGED_CTIME) -> list[str]:
     from coordinator_core.bash_guards import _host_probe
     from coordinator_core.box_memory import pressure
 
@@ -1051,35 +1052,35 @@ def _memory_tick_lines(tmp_path, monkeypatch, avail_mb=None, floor=4096, procs=(
     return [l for l in stream.getvalue().splitlines() if l.startswith("MEMORY")]
 
 
-def test_tick_once_below_floor_emits_memory_line_naming_the_trim(tmp_path, monkeypatch):
+def test_tick_once_below_floor_emits_memory_line_naming_the_trim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lines = _memory_tick_lines(tmp_path, monkeypatch, avail_mb=1000)
     assert len(lines) == 1
     assert lines[0].startswith("MEMORY low-memory")
     assert "trim-file-cache.py" in lines[0] and "--apply" in lines[0]
 
 
-def test_tick_once_above_floor_emits_no_memory_line(tmp_path, monkeypatch):
+def test_tick_once_above_floor_emits_no_memory_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert _memory_tick_lines(tmp_path, monkeypatch, avail_mb=9000) == []
 
 
-def test_tick_once_memory_line_fires_once_per_transition_and_rearms(tmp_path, monkeypatch):
+def test_tick_once_memory_line_fires_once_per_transition_and_rearms(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(_memory_tick_lines(tmp_path, monkeypatch, avail_mb=1000)) == 1
     assert _memory_tick_lines(tmp_path, monkeypatch, avail_mb=900) == []
     assert _memory_tick_lines(tmp_path, monkeypatch, avail_mb=9000) == []
     assert len(_memory_tick_lines(tmp_path, monkeypatch, avail_mb=1000)) == 1
 
 
-def test_tick_once_untrusted_reading_neither_fires_nor_clears(tmp_path, monkeypatch):
+def test_tick_once_untrusted_reading_neither_fires_nor_clears(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert len(_memory_tick_lines(tmp_path, monkeypatch, avail_mb=1000)) == 1
     assert _memory_tick_lines(tmp_path, monkeypatch, avail_mb=None, trusted=False) == []
     assert _memory_tick_lines(tmp_path, monkeypatch, avail_mb=1000) == []
 
 
-def test_tick_once_unconfigured_floor_is_silent(tmp_path, monkeypatch):
+def test_tick_once_unconfigured_floor_is_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert _memory_tick_lines(tmp_path, monkeypatch, avail_mb=1, floor=None) == []
 
 
-def test_tick_once_storm_emits_grep_storm_line_naming_the_reap(tmp_path, monkeypatch):
+def test_tick_once_storm_emits_grep_storm_line_naming_the_reap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lines = _memory_tick_lines(tmp_path, monkeypatch, avail_mb=9000, procs=["grep.exe"] * 9 + ["python.exe"])
     assert len(lines) == 1
     assert lines[0].startswith("MEMORY grep-storm")
@@ -1087,22 +1088,22 @@ def test_tick_once_storm_emits_grep_storm_line_naming_the_reap(tmp_path, monkeyp
     assert "30 min" in lines[0]
 
 
-def test_tick_once_young_dead_parent_searches_do_not_storm(tmp_path, monkeypatch):
+def test_tick_once_young_dead_parent_searches_do_not_storm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert _memory_tick_lines(tmp_path, monkeypatch, avail_mb=9000, procs=["grep.exe"] * 9,
                               ctime=_YOUNG_CTIME) == []
 
 
-def test_tick_once_below_storm_threshold_stays_quiet(tmp_path, monkeypatch):
+def test_tick_once_below_storm_threshold_stays_quiet(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert _memory_tick_lines(tmp_path, monkeypatch, avail_mb=9000, procs=["grep.exe"] * 2) == []
 
 
-def test_tick_once_low_with_storm_names_both_remedies_in_one_line(tmp_path, monkeypatch):
+def test_tick_once_low_with_storm_names_both_remedies_in_one_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lines = _memory_tick_lines(tmp_path, monkeypatch, avail_mb=1000, procs=["find.exe"] * 9)
     low = [l for l in lines if l.startswith("MEMORY low-memory")]
     assert len(low) == 1 and "--apply" in low[0] and "orphan_reap" in low[0]
 
 
-def test_tick_once_reports_reaped_pids_while_pressured_only(tmp_path, monkeypatch):
+def test_tick_once_reports_reaped_pids_while_pressured_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lines = _memory_tick_lines(tmp_path, monkeypatch, avail_mb=1000, reaped=[11, 12])
     assert any(l == "MEMORY reaped orphaned grep/find pids=11,12" for l in lines)
     calm = tmp_path / "calm"
@@ -1115,7 +1116,7 @@ def test_tick_once_reports_reaped_pids_while_pressured_only(tmp_path, monkeypatc
     assert called == []
 
 
-def test_tick_once_memory_probe_failure_never_fails_the_wake(tmp_path, monkeypatch):
+def test_tick_once_memory_probe_failure_never_fails_the_wake(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(watch, "_read_memory", mock.Mock(side_effect=RuntimeError("probe")))
     monkeypatch.setattr(watch, "_memory_floor_mb", lambda: 4096)
     with mock.patch.object(watch, "poll_once", return_value=({"p": True}, [], {}, 0)):
@@ -1123,7 +1124,7 @@ def test_tick_once_memory_probe_failure_never_fails_the_wake(tmp_path, monkeypat
     assert watch.load_prev_parked(str(tmp_path)) == {"p": True}
 
 
-def test_tick_once_exits_nonzero_and_loud_when_the_poll_raises(tmp_path):
+def test_tick_once_exits_nonzero_and_loud_when_the_poll_raises(tmp_path: Path) -> None:
     """No loop to carry on into: a wake that failed must not exit 0. A silent
     zero here rebuilds the exact indistinguishability this mode removes."""
     stream = io.StringIO()
@@ -1133,7 +1134,7 @@ def test_tick_once_exits_nonzero_and_loud_when_the_poll_raises(tmp_path):
     assert "POLL-ERROR" in stream.getvalue()
 
 
-def test_load_prev_parked_answers_empty_for_absent_and_malformed_state(tmp_path):
+def test_load_prev_parked_answers_empty_for_absent_and_malformed_state(tmp_path: Path) -> None:
     """An unreadable prior map must read as a first tick, never as a roster to
     flag wholesale."""
     assert watch.load_prev_parked(str(tmp_path)) == {}
@@ -1158,23 +1159,23 @@ def test_load_prev_parked_answers_empty_for_absent_and_malformed_state(tmp_path)
 # ---------------------------------------------------------------------------
 
 
-def test_gone_names_only_peers_that_left():
+def test_gone_names_only_peers_that_left() -> None:
     prev = {"peer-a": False, "peer-b": True, "peer-c": False}
     cur = {"peer-a": False, "peer-c": True}
     assert watch.gone(prev, cur) == ["peer-b"]
 
 
-def test_gone_is_sorted_and_ignores_the_prior_parked_value():
+def test_gone_is_sorted_and_ignores_the_prior_parked_value() -> None:
     """Parked-when-last-seen is not part of the predicate: a peer that was
     working when it left has left exactly as much as one that was parked."""
     assert watch.gone({"peer-b": False, "peer-a": True}, {}) == ["peer-a", "peer-b"]
 
 
-def test_gone_says_nothing_about_a_spawn():
+def test_gone_says_nothing_about_a_spawn() -> None:
     assert watch.gone({}, {"peer-1": True}) == []
 
 
-def test_gone_line_carries_the_name_and_the_gap():
+def test_gone_line_carries_the_name_and_the_gap() -> None:
     """The name is the one field a reader cannot recover afterwards -- the
     roster row that held it is gone by the time this fires, and `SendMessage`
     takes a name, not a uuid."""
@@ -1193,7 +1194,7 @@ def test_gone_line_carries_the_name_and_the_gap():
     assert "do not send" in line
 
 
-def test_gone_line_says_unknown_rather_than_inventing_a_last_seen():
+def test_gone_line_says_unknown_rather_than_inventing_a_last_seen() -> None:
     """A record written before `last_seen` existed must not render as a fresh
     exit -- `now` here would be a default wearing a measurement's clothes."""
     now = datetime(2026, 9, 1, 12, 5, 0, tzinfo=timezone.utc)
@@ -1228,7 +1229,7 @@ def _gone_poll(prev_parked, agents, prev_names=None, emitted=None, **kwargs):
     return result, emitted
 
 
-def test_poll_once_reports_a_departed_peer_by_name():
+def test_poll_once_reports_a_departed_peer_by_name() -> None:
     last_seen = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
     (_parked, _decl, notes, _inbox_open), emitted = _gone_poll(
         prev_parked={"peer-1": False, "peer-gone": False},
@@ -1257,7 +1258,7 @@ SANDBOX_ID = "16ebfad5-0000-4000-8000-000000000001"
         "exp/w-774f66365f5e",
     ],
 )
-def test_eval_sandbox_session_is_never_a_peer(cwd):
+def test_eval_sandbox_session_is_never_a_peer(cwd) -> None:
     flapping = _agent(SANDBOX_ID, cwd=cwd, name="w-774f66365f5e-9e")
     (parked, decl, notes, _io), emitted = _gone_poll(
         prev_parked={"peer-1": False}, agents=[_agent("peer-1"), flapping]
@@ -1268,12 +1269,12 @@ def test_eval_sandbox_session_is_never_a_peer(cwd):
     assert all(SANDBOX_ID not in l for l in emitted)
 
 
-def test_non_sandbox_lookalike_dirs_stay_peers():
+def test_non_sandbox_lookalike_dirs_stay_peers() -> None:
     for cwd in (REPO_ROOT, REPO_ROOT + "/w-774f66365f5", REPO_ROOT + "/w-774f66365f5e0", REPO_ROOT + "/xw-774f66365f5e"):
         assert not watch.read_pass.is_eval_sandbox_peer(_agent("p", cwd=cwd))
 
 
-def test_gone_fires_once_per_session_id_across_a_name_flip():
+def test_gone_fires_once_per_session_id_across_a_name_flip() -> None:
     """Replay of w-774f66365f5e-9e -> w-774f66365f5e-84 on one session id."""
     t0 = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc).timestamp()
     prev_names = {SANDBOX_ID: {"name": "w-774f66365f5e-9e", "last_seen": t0, "absent_ticks": 1}}
@@ -1295,7 +1296,7 @@ def test_gone_fires_once_per_session_id_across_a_name_flip():
     assert emitted == []
 
 
-def test_a_different_real_peer_leaving_still_fires_one_gone():
+def test_a_different_real_peer_leaving_still_fires_one_gone() -> None:
     (parked, _d, notes, _io), emitted = _gone_poll(
         prev_parked={SANDBOX_ID: False, "peer-2": False},
         agents=[],
@@ -1307,7 +1308,7 @@ def test_a_different_real_peer_leaving_still_fires_one_gone():
     assert len(emitted) == 1 and "peer-2" in emitted[0]
 
 
-def test_one_tick_absence_emits_no_gone_and_carries_the_session():
+def test_one_tick_absence_emits_no_gone_and_carries_the_session() -> None:
     (parked, _d, notes, _io), emitted = _gone_poll(
         prev_parked={"peer-1": False, "peer-x": False},
         agents=[_agent("peer-1")],
@@ -1318,7 +1319,7 @@ def test_one_tick_absence_emits_no_gone_and_carries_the_session():
     assert notes["peer-x"]["absent_ticks"] == 1 and notes["peer-x"]["name"] == "claude-klabauter-x"
 
 
-def test_a_session_back_after_one_absent_tick_resets_and_a_later_blip_is_silent_again():
+def test_a_session_back_after_one_absent_tick_resets_and_a_later_blip_is_silent_again() -> None:
     (parked, _d, notes, _io), emitted = _gone_poll(
         prev_parked={"peer-x": False}, agents=[], prev_names={}
     )
@@ -1331,7 +1332,7 @@ def test_a_session_back_after_one_absent_tick_resets_and_a_later_blip_is_silent_
     assert emitted == []
 
 
-def test_two_consecutive_absent_ticks_emit_exactly_one_gone():
+def test_two_consecutive_absent_ticks_emit_exactly_one_gone() -> None:
     (parked, _d, notes, _io), emitted = _gone_poll(prev_parked={"peer-x": False}, agents=[], prev_names={})
     assert emitted == []
     (parked, _d, notes, _io), emitted = _gone_poll(prev_parked=parked, agents=[], prev_names=notes)
@@ -1341,7 +1342,7 @@ def test_two_consecutive_absent_ticks_emit_exactly_one_gone():
 
 
 @pytest.mark.parametrize("key", ["peer-codex-codex-01a1b601-38da-71791", "box-b:peer-codex-codex-01a1b601-38da-71791"])
-def test_transient_codex_peer_departure_emits_no_gone(key):
+def test_transient_codex_peer_departure_emits_no_gone(key) -> None:
     (_p, _d, _n, _io), emitted = _gone_poll(
         prev_parked={key: False},
         agents=[],
@@ -1350,7 +1351,7 @@ def test_transient_codex_peer_departure_emits_no_gone(key):
     assert emitted == []
 
 
-def test_named_session_departure_still_emits_gone_beside_a_transient_codex_peer():
+def test_named_session_departure_still_emits_gone_beside_a_transient_codex_peer() -> None:
     (_p, _d, _n, _io), emitted = _gone_poll(
         prev_parked={"peer-codex-codex-x-1": False, "peer-gone": False},
         agents=[],
@@ -1359,7 +1360,7 @@ def test_named_session_departure_still_emits_gone_beside_a_transient_codex_peer(
     assert len(emitted) == 1 and "[peer-gone]" in emitted[0]
 
 
-def test_poll_once_still_reports_a_departure_it_cannot_name():
+def test_poll_once_still_reports_a_departure_it_cannot_name() -> None:
     """An unnameable departure is still worth a line -- silence was the defect,
     and the uuid at least tells a reader which roster row to drop."""
     (_p, _d, _n, _io), emitted = _gone_poll(
@@ -1370,7 +1371,7 @@ def test_poll_once_still_reports_a_departure_it_cannot_name():
     assert "last_seen=unknown" in emitted[0]
 
 
-def test_poll_once_never_reports_the_watcher_or_the_group_em_as_gone():
+def test_poll_once_never_reports_the_watcher_or_the_group_em_as_gone() -> None:
     """Both are excluded from every roster this module builds, so neither can
     legitimately appear -- but a wake handed a DIFFERENT --group-em-session-id
     than the last one changes the exclusion set, and reporting the Group-EM as
@@ -1384,7 +1385,7 @@ def test_poll_once_never_reports_the_watcher_or_the_group_em_as_gone():
     assert "peer-1" in emitted[0]
 
 
-def test_an_unreadable_registry_raises_rather_than_reporting_the_fleet_gone():
+def test_an_unreadable_registry_raises_rather_than_reporting_the_fleet_gone() -> None:
     """THE worst false positive this line can produce, and it fires exactly
     when the box is least healthy: `fetch_live_agents` degrades an unreadable
     registry to `[]`, which a differ reads as a simultaneous mass exit. The
@@ -1408,7 +1409,7 @@ def test_an_unreadable_registry_raises_rather_than_reporting_the_fleet_gone():
     assert emitted == []
 
 
-def test_an_empty_box_wide_snapshot_raises_rather_than_reading_as_a_drained_fleet():
+def test_an_empty_box_wide_snapshot_raises_rather_than_reading_as_a_drained_fleet() -> None:
     """THE FAILURE THAT ACTUALLY FIRES, and the first version of this guard
     missed it.
 
@@ -1433,7 +1434,7 @@ def test_an_empty_box_wide_snapshot_raises_rather_than_reading_as_a_drained_flee
     assert emitted == []
 
 
-def test_an_empty_snapshot_is_still_a_quiet_empty_list_for_everyone_else():
+def test_an_empty_snapshot_is_still_a_quiet_empty_list_for_everyone_else() -> None:
     """The refusal is opt-in and box-wide-only. Every existing caller keeps
     the degrade-to-`[]` contract, and a repo with no peers is not an outage."""
     with mock.patch.object(
@@ -1443,7 +1444,7 @@ def test_an_empty_snapshot_is_still_a_quiet_empty_list_for_everyone_else():
         assert watch.read_pass.fetch_live_agents(REPO_ROOT) == []
 
 
-def test_a_blind_tick_stamps_no_heartbeat_and_keeps_the_last_good_prior(tmp_path):
+def test_a_blind_tick_stamps_no_heartbeat_and_keeps_the_last_good_prior(tmp_path: Path) -> None:
     """A FAILED READ MUST NOT BE PUBLISHED AS A COVERAGE FIGURE.
 
     The same defect one level up, and the more dangerous half: a heartbeat
@@ -1483,7 +1484,7 @@ def test_a_blind_tick_stamps_no_heartbeat_and_keeps_the_last_good_prior(tmp_path
     assert watch.load_prev_parked(str(tmp_path)) == {"peer-1": False, "peer-2": False}
 
 
-def test_no_spawn_event_exists_so_a_mass_arrival_cannot_be_reported():
+def test_no_spawn_event_exists_so_a_mass_arrival_cannot_be_reported() -> None:
     """The mirror of a mass exit is a mass spawn -- an empty `prev` meeting a
     recovered `cur` -- and it is the worse alarm, because a fleet that just
     got busy reads as healthy and nobody looks.
@@ -1499,7 +1500,7 @@ def test_no_spawn_event_exists_so_a_mass_arrival_cannot_be_reported():
     assert emitted == []
 
 
-def test_a_genuinely_empty_repo_still_reports_its_departures():
+def test_a_genuinely_empty_repo_still_reports_its_departures() -> None:
     """The flag must separate "unreadable" from "empty", not collapse both into
     a raise -- a fleet that really did drain is exactly what GONE is for."""
     (_p, _d, _n, _io), emitted = _gone_poll(
@@ -1509,7 +1510,7 @@ def test_a_genuinely_empty_repo_still_reports_its_departures():
     assert "peer-1" in emitted[0]
 
 
-def test_the_carried_state_round_trips_names(tmp_path):
+def test_the_carried_state_round_trips_names(tmp_path: Path) -> None:
     watch.save_prev_parked(
         str(tmp_path),
         {"peer-1": True},
@@ -1519,7 +1520,7 @@ def test_the_carried_state_round_trips_names(tmp_path):
     assert watch.load_prev_peers(str(tmp_path))["peer-1"]["name"] == "claude-klabauter-01"
 
 
-def test_a_pre_2026_09_01_record_degrades_to_no_names_not_to_no_gone(tmp_path):
+def test_a_pre_2026_09_01_record_degrades_to_no_names_not_to_no_gone(tmp_path: Path) -> None:
     """The parked map alone is a sufficient prior peer SET. A record without
     `peers` must still yield its departures, unnamed."""
     state = pathlib.Path(watch.parked_state_path(str(tmp_path)))
@@ -1529,7 +1530,7 @@ def test_a_pre_2026_09_01_record_degrades_to_no_names_not_to_no_gone(tmp_path):
     assert watch.load_prev_peers(str(tmp_path)) == {}
 
 
-def _gone_tick(repo_root, agents, emitted, now, tick_interval_seconds=None):
+def _gone_tick(repo_root, agents, emitted, now, tick_interval_seconds=None) -> int:
     """Drive one `tick_once` over a fixed roster, everything not-parked."""
     kwargs = {} if tick_interval_seconds is None else {"tick_interval_seconds": tick_interval_seconds}
     with mock.patch.object(
@@ -1554,7 +1555,7 @@ def _gone_tick(repo_root, agents, emitted, now, tick_interval_seconds=None):
     return rc
 
 
-def test_two_stateless_wakes_report_a_departure_by_the_name_the_first_one_saw():
+def test_two_stateless_wakes_report_a_departure_by_the_name_the_first_one_saw() -> None:
     """The end-to-end contract, across two processes with no shared memory.
 
     This is the case the fleet actually runs: wake one sees a peer and writes
@@ -1579,7 +1580,7 @@ def test_two_stateless_wakes_report_a_departure_by_the_name_the_first_one_saw():
         assert "gap=600s" in emitted[0]
 
 
-def test_a_wake_diffing_against_a_long_dead_watchs_map_reports_every_departure():
+def test_a_wake_diffing_against_a_long_dead_watchs_map_reports_every_departure() -> None:
     """A watch restarted after an outage diffs against a map from before it --
     every peer that turned over in the gap is a real, truthful departure.
 
@@ -1613,7 +1614,7 @@ def test_a_wake_diffing_against_a_long_dead_watchs_map_reports_every_departure()
         assert emitted == []
 
 
-def test_a_departure_across_two_wakes_is_reported_whatever_the_cadence():
+def test_a_departure_across_two_wakes_is_reported_whatever_the_cadence() -> None:
     """Renamed when STALE-PRIOR was deleted (overengineering review, finding 1).
 
     It was `..._inside_its_own_cadence_is_not_stale`, naming a staleness gate
@@ -1638,7 +1639,7 @@ def test_a_departure_across_two_wakes_is_reported_whatever_the_cadence():
         assert emitted[0].startswith("GONE session=sid-1")
 
 
-def test_gone_emits_even_when_persistence_raises(tmp_path):
+def test_gone_emits_even_when_persistence_raises(tmp_path: Path) -> None:
     """Pins
     the emit-then-persist ordering as deliberate, not incidental.
 
@@ -1676,7 +1677,7 @@ def test_gone_emits_even_when_persistence_raises(tmp_path):
     assert "GONE session=peer-1" in stream.getvalue()
 
 
-def test_cli_once_runs_one_tick_and_returns_its_code(tmp_path):
+def test_cli_once_runs_one_tick_and_returns_its_code(tmp_path: Path) -> None:
     """`--once` must not fall through into the held loop -- the flag IS the mode."""
     with mock.patch.object(watch, "tick_once", return_value=0) as ticker, mock.patch.object(
         watch, "main", side_effect=AssertionError("--once must not arm the poll loop")
@@ -1689,7 +1690,7 @@ def test_cli_once_runs_one_tick_and_returns_its_code(tmp_path):
 # --- what the heartbeat says about itself ----------------------------------
 
 
-def test_the_record_names_the_holder_and_the_coverage_it_actually_had(tmp_path):
+def test_the_record_names_the_holder_and_the_coverage_it_actually_had(tmp_path: Path) -> None:
     """Two facts a reader could not get from the record before.
 
     `holder_name` was hardcoded null, so a reader that could not reach this
@@ -1721,7 +1722,7 @@ def test_the_record_names_the_holder_and_the_coverage_it_actually_had(tmp_path):
     assert record["subscribed_peers"] == 3
 
 
-def test_the_holder_name_is_resolved_once_at_arm_not_per_tick(tmp_path):
+def test_the_holder_name_is_resolved_once_at_arm_not_per_tick(tmp_path: Path) -> None:
     """A name on a heartbeat is self-description, not an address. Paying a
     registry read every tick to keep a string fresh puts the load norm's cost
     on the cheapest thing the watch does."""
@@ -1740,7 +1741,7 @@ def test_the_holder_name_is_resolved_once_at_arm_not_per_tick(tmp_path):
     assert measured.call_count == 1
 
 
-def test_a_nameless_wake_carries_the_armed_pollers_name_rather_than_blanking_it(tmp_path):
+def test_a_nameless_wake_carries_the_armed_pollers_name_rather_than_blanking_it(tmp_path: Path) -> None:
     """`--once` makes no enumeration, so it has no name to write. Writing null
     would make the record oscillate between describing itself and not,
     depending on which clock last fired."""
@@ -1763,7 +1764,7 @@ def test_a_nameless_wake_carries_the_armed_pollers_name_rather_than_blanking_it(
     assert record["tick_source"] == "cron"
 
 
-def test_a_new_holders_stamp_does_not_inherit_the_old_holders_name(tmp_path):
+def test_a_new_holders_stamp_does_not_inherit_the_old_holders_name(tmp_path: Path) -> None:
     """A stale name beside a new id is worse than no name: it is an address
     that resolves to the wrong session."""
     watch.watch_heartbeat.stamp(
@@ -1785,7 +1786,7 @@ def test_a_new_holders_stamp_does_not_inherit_the_old_holders_name(tmp_path):
     assert record["holder_name"] is None
 
 
-def test_the_parked_line_names_the_peer_and_frames_the_name_as_provenance():
+def test_the_parked_line_names_the_peer_and_frames_the_name_as_provenance() -> None:
     """A reader cannot act on a session uuid -- `SendMessage` takes a name --
     so a line carrying only the uuid asks the Group-EM to resolve one from a
     registry this tick already read. The name goes on, framed as how the peer
@@ -1823,7 +1824,7 @@ def test_the_parked_line_names_the_peer_and_frames_the_name_as_provenance():
     assert "re-resolve" not in line
 
 
-def test_a_nameless_peer_still_gets_a_line():
+def test_a_nameless_peer_still_gets_a_line() -> None:
     """A missing name degrades to the bare id -- never to silence, and never
     to an invented address."""
     now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -1856,7 +1857,7 @@ def test_a_nameless_peer_still_gets_a_line():
 # --- the root the process stands on ----------------------------------------
 
 
-def test_the_cli_refuses_a_root_that_does_not_exist(capsys, tmp_path):
+def test_the_cli_refuses_a_root_that_does_not_exist(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     """`peer_count=0` is what a quiet repo and an unreadable one both printed,
     and the run exited 0. A watcher reported `armed and standing by` four times
     across fifty minutes while watching nothing, through nine live peer
@@ -1868,7 +1869,7 @@ def test_the_cli_refuses_a_root_that_does_not_exist(capsys, tmp_path):
     assert "no-such-repo-anywhere" in err
 
 
-def test_the_cli_refuses_a_drive_relative_root(capsys):
+def test_the_cli_refuses_a_drive_relative_root(capsys: pytest.CaptureFixture[str]) -> None:
     """The mangling that actually happened: a Windows backslash path through a
     shell loses its separators, leaving `X:name` -- drive-relative, so it binds
     to wherever the process was standing. A type check cannot see it; only
@@ -1884,7 +1885,7 @@ def test_the_cli_refuses_a_drive_relative_root(capsys):
 @pytest.mark.skipif(
     sys.platform != "win32", reason="a rooted, driveless path is absolute off Windows"
 )
-def test_the_cli_refuses_a_driveless_rooted_posix_style_path(capsys):
+def test_the_cli_refuses_a_driveless_rooted_posix_style_path(capsys: pytest.CaptureFixture[str]) -> None:
     """`ntpath.isabs('/foo/bar')` is True with no drive component -- `abspath`
     then resolves it against the process's CURRENT DRIVE, the same "binds to
     wherever the process happens to be standing" hazard as the drive-relative
@@ -1896,14 +1897,14 @@ def test_the_cli_refuses_a_driveless_rooted_posix_style_path(capsys):
     assert "not an absolute, drive-anchored path" in err
 
 
-def test_the_armed_line_names_the_resolved_path_not_only_the_repo_name(tmp_path):
+def test_the_armed_line_names_the_resolved_path_not_only_the_repo_name(tmp_path: Path) -> None:
     """The display name SURVIVES the mangling -- it is the tail of the mangled
     path too -- so the name alone made a broken arm look healthy. The resolved
     path is what makes the line self-diagnosing."""
     lines: list[str] = []
 
     class _Stream:
-        def write(self, text):
+        def write(self, text) -> None:
             if text.strip():
                 lines.append(text.strip())
 
@@ -1926,7 +1927,7 @@ def test_the_armed_line_names_the_resolved_path_not_only_the_repo_name(tmp_path)
     assert str(pathlib.Path(tmp_path).resolve()) in armed
 
 
-def test_cli_status_answers_alive_for_a_fresh_record_and_exits_zero(tmp_path, capsys):
+def test_cli_status_answers_alive_for_a_fresh_record_and_exits_zero(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.group_em import watch_heartbeat
 
     watch_heartbeat.stamp(
@@ -1940,8 +1941,8 @@ def test_cli_status_answers_alive_for_a_fresh_record_and_exits_zero(tmp_path, ca
 
 
 def test_cli_status_reports_unwatched_box_sessions_with_zero_repo_peers(
-    tmp_path, monkeypatch, capsys
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     from coordinator_core.group_em import watch_heartbeat
 
     repo = tmp_path / "repo"
@@ -1969,7 +1970,7 @@ def test_cli_status_reports_unwatched_box_sessions_with_zero_repo_peers(
     assert box["unwatched"] == 3 and box["other_repos"] == {"a": 2, "b": 1}
 
 
-def test_cli_status_exits_two_when_the_process_cannot_be_confirmed_running(tmp_path, capsys):
+def test_cli_status_exits_two_when_the_process_cannot_be_confirmed_running(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Item 2 (2026-09-19 memo): staleness arithmetic alone must not read
     ALIVE. A fresh, well-formed record whose writer process is CONFIRMED
     gone (not merely unknown) reads UNKNOWN, never ALIVE -- exit 2, not 0."""
@@ -1990,7 +1991,7 @@ def test_cli_status_exits_two_when_the_process_cannot_be_confirmed_running(tmp_p
     assert "cannot be confirmed running" in out  # ...but the exit code is not 0
 
 
-def test_cli_status_exits_two_when_the_process_cannot_be_confirmed_either_way(tmp_path, capsys):
+def test_cli_status_exits_two_when_the_process_cannot_be_confirmed_either_way(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A fresh record recorded before this fix shipped (or one whose pid
     could not be captured) carries no usable pid witness --
     `process_confirmed_alive` answers `None`, and `None` must not be
@@ -2009,7 +2010,7 @@ def test_cli_status_exits_two_when_the_process_cannot_be_confirmed_either_way(tm
     assert rc == 2
 
 
-def test_cli_status_alive_without_unknown_for_a_fresh_cron_stamp(tmp_path, capsys):
+def test_cli_status_alive_without_unknown_for_a_fresh_cron_stamp(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.group_em import watch_heartbeat
 
     watch_heartbeat.stamp(
@@ -2026,7 +2027,7 @@ def test_cli_status_alive_without_unknown_for_a_fresh_cron_stamp(tmp_path, capsy
     assert "UNKNOWN" not in out and "cannot be confirmed" not in out
 
 
-def test_cli_status_reports_stale_for_an_overdue_cron_stamp(tmp_path, capsys):
+def test_cli_status_reports_stale_for_an_overdue_cron_stamp(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     import time as _time
 
     from coordinator_core.group_em import watch_heartbeat
@@ -2040,7 +2041,7 @@ def test_cli_status_reports_stale_for_an_overdue_cron_stamp(tmp_path, capsys):
     assert capsys.readouterr().out.startswith("NOT RUNNING")
 
 
-def test_cli_status_after_tick_once_is_alive_exit_zero(tmp_path, capsys):
+def test_cli_status_after_tick_once_is_alive_exit_zero(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     with mock.patch.object(
         watch, "_measure_snapshot_ms", return_value=(2.0, [])
     ), mock.patch.object(watch, "poll_once", return_value=({}, [], {}, 0)):
@@ -2053,7 +2054,7 @@ def test_cli_status_after_tick_once_is_alive_exit_zero(tmp_path, capsys):
     assert "UNKNOWN" not in capsys.readouterr().out
 
 
-def test_cli_status_exits_two_on_a_repo_no_watch_ever_covered(tmp_path, capsys):
+def test_cli_status_exits_two_on_a_repo_no_watch_ever_covered(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # UNKNOWN gets its own code: a caller that reads 0 as "fine" must not read
     # "nobody ever looked" as fine, which is the collapse this flag exists for.
     rc = watch._cli(["--repo-root", str(tmp_path), "--status"])
@@ -2061,7 +2062,7 @@ def test_cli_status_exits_two_on_a_repo_no_watch_ever_covered(tmp_path, capsys):
     assert capsys.readouterr().out.startswith("UNKNOWN")
 
 
-def test_cli_status_exits_one_when_the_watch_stopped_ticking(tmp_path, capsys):
+def test_cli_status_exits_one_when_the_watch_stopped_ticking(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     import time as _time
 
     from coordinator_core.group_em import watch_heartbeat
@@ -2085,7 +2086,7 @@ def test_cli_status_exits_one_when_the_watch_stopped_ticking(tmp_path, capsys):
 # running; this stops the second ARM from ever starting.
 
 
-def _stamp_holder(tmp_path, holder_session_id, writer_session_id, now_epoch, interval_seconds=30.0):
+def _stamp_holder(tmp_path, holder_session_id, writer_session_id, now_epoch, interval_seconds: float = 30.0) -> None:
     from coordinator_core.group_em import watch_heartbeat
 
     watch_heartbeat.stamp(
@@ -2098,7 +2099,7 @@ def _stamp_holder(tmp_path, holder_session_id, writer_session_id, now_epoch, int
     )
 
 
-def test_arming_refuses_against_a_fresh_foreign_holder(tmp_path):
+def test_arming_refuses_against_a_fresh_foreign_holder(tmp_path: Path) -> None:
     now = 1_000_000.0
     _stamp_holder(tmp_path, "foreign-holder", "foreign-writer", now_epoch=now)
 
@@ -2118,7 +2119,7 @@ def test_arming_refuses_against_a_fresh_foreign_holder(tmp_path):
     assert "foreign-holder" in str(excinfo.value)
 
 
-def test_arming_names_the_holders_display_name_when_carried(tmp_path):
+def test_arming_names_the_holders_display_name_when_carried(tmp_path: Path) -> None:
     from coordinator_core.group_em import watch_heartbeat
 
     now = 1_000_000.0
@@ -2148,7 +2149,7 @@ def test_arming_names_the_holders_display_name_when_carried(tmp_path):
     assert "claude-klabauter-65" in str(excinfo.value)
 
 
-def test_arming_proceeds_against_a_stale_foreign_holder(tmp_path):
+def test_arming_proceeds_against_a_stale_foreign_holder(tmp_path: Path) -> None:
     """The previous watcher is gone -- this is the case that must not be
     blocked, or a dead watch could never be replaced."""
     now = 1_000_000.0
@@ -2157,7 +2158,7 @@ def test_arming_proceeds_against_a_stale_foreign_holder(tmp_path):
     armed_lines = []
 
     class _Stream:
-        def write(self, text):
+        def write(self, text) -> None:
             if text.strip():
                 armed_lines.append(text.strip())
 
@@ -2181,7 +2182,7 @@ def test_arming_proceeds_against_a_stale_foreign_holder(tmp_path):
     assert any(line.startswith("ARMED") for line in armed_lines)
 
 
-def test_arming_proceeds_against_its_own_holder(tmp_path):
+def test_arming_proceeds_against_its_own_holder(tmp_path: Path) -> None:
     """A tick this same crown wrote is not a foreign holder -- re-arming over
     its own record must not be blocked."""
     now = 1_000_000.0
@@ -2190,7 +2191,7 @@ def test_arming_proceeds_against_its_own_holder(tmp_path):
     armed_lines = []
 
     class _Stream:
-        def write(self, text):
+        def write(self, text) -> None:
             if text.strip():
                 armed_lines.append(text.strip())
 
@@ -2212,11 +2213,11 @@ def test_arming_proceeds_against_its_own_holder(tmp_path):
     assert any(line.startswith("ARMED") for line in armed_lines)
 
 
-def test_arming_proceeds_against_no_record_at_all(tmp_path):
+def test_arming_proceeds_against_no_record_at_all(tmp_path: Path) -> None:
     armed_lines = []
 
     class _Stream:
-        def write(self, text):
+        def write(self, text) -> None:
             if text.strip():
                 armed_lines.append(text.strip())
 
@@ -2246,7 +2247,7 @@ def test_arming_proceeds_against_no_record_at_all(tmp_path):
 # driven at the 18s/~80s and 23min cadences the plan row names.
 
 
-def test_arm_time_refusal_self_holder_never_locked_out_at_measured_cadences(tmp_path):
+def test_arm_time_refusal_self_holder_never_locked_out_at_measured_cadences(tmp_path: Path) -> None:
     """No self-lockout: a same-holder/same-writer record, restamped at the
     18s, ~80s, and 23min cadences the row names, must never trip
     `_refuse_if_already_armed` for its own holder."""
@@ -2265,7 +2266,7 @@ def test_arm_time_refusal_self_holder_never_locked_out_at_measured_cadences(tmp_
         watch._refuse_if_already_armed(str(tmp_path), "me", "me", now_epoch=now + 1.0)
 
 
-def test_arm_time_refusal_peer_lockout_never_exceeds_the_declared_grace(tmp_path):
+def test_arm_time_refusal_peer_lockout_never_exceeds_the_declared_grace(tmp_path: Path) -> None:
     """A peer crown's lockout window, sized off the MEASURED cadence, must
     never outlast what the DECLARED interval's own grace would have
     produced -- the capped basis is the fix; an uncapped one would run the
@@ -2313,7 +2314,7 @@ def test_arm_time_refusal_peer_lockout_never_exceeds_the_declared_grace(tmp_path
         os.remove(watch_heartbeat.watch_path(str(tmp_path)))
 
 
-def test_cli_exits_nonzero_and_names_the_holder_on_a_refused_arm(tmp_path, capsys):
+def test_cli_exits_nonzero_and_names_the_holder_on_a_refused_arm(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Refusal is a non-zero exit with the holder named, not a silent no-op --
     an arm that quietly does nothing is indistinguishable from one that
     worked."""
@@ -2339,7 +2340,7 @@ def test_cli_exits_nonzero_and_names_the_holder_on_a_refused_arm(tmp_path, capsy
     assert "group-em-watch:" in err
 
 
-def test_cli_once_is_not_gated_by_the_arm_time_refusal(tmp_path):
+def test_cli_once_is_not_gated_by_the_arm_time_refusal(tmp_path: Path) -> None:
     """`--once` is a stateless wake, never a second poller -- `watch_heartbeat.stamp`
     (C1) already declines its WRITE on a fresh foreign holder; this arm-time
     refusal is `main`'s alone and must not block a `--once` wake from running
@@ -2360,7 +2361,7 @@ def test_cli_once_is_not_gated_by_the_arm_time_refusal(tmp_path):
     assert rc == 0
 
 
-def test_cli_status_watches_nothing_and_reads_no_roster(tmp_path, monkeypatch, capsys):
+def test_cli_status_watches_nothing_and_reads_no_roster(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     # STATUS IS A READ. If it polled, asking "is my watch alive?" would cost the
     # box a roster enumeration per ask -- and a poll from a status call would
     # also stamp, making every ask answer ALIVE.
@@ -2385,7 +2386,7 @@ def _write_inbox_memo(inbox_dir: pathlib.Path, name: str, status: str) -> None:
     )
 
 
-def test_inbox_counts_reads_status_off_the_frontmatter_head(tmp_path):
+def test_inbox_counts_reads_status_off_the_frontmatter_head(tmp_path: Path) -> None:
     inbox_dir = tmp_path / "cross-repo" / "inbox"
     _write_inbox_memo(inbox_dir, "a.md", "open")
     _write_inbox_memo(inbox_dir, "b.md", "open")
@@ -2402,7 +2403,7 @@ def test_inbox_counts_reads_status_off_the_frontmatter_head(tmp_path):
 # degrade to None per the function's own contract, not raise UnicodeDecodeError
 # uncaught through _inbox_counts's per-entry loop. Real invalid UTF-8 bytes, not a
 # monkeypatched exception, so this pins the behaviour rather than a mock.
-def test_inbox_frontmatter_status_degrades_to_none_on_undecodable_memo(tmp_path):
+def test_inbox_frontmatter_status_degrades_to_none_on_undecodable_memo(tmp_path: Path) -> None:
     inbox_dir = tmp_path / "cross-repo" / "inbox"
     inbox_dir.mkdir(parents=True, exist_ok=True)
     bad_path = inbox_dir / "bad.md"
@@ -2411,14 +2412,14 @@ def test_inbox_frontmatter_status_degrades_to_none_on_undecodable_memo(tmp_path)
     assert watch._inbox_frontmatter_status(str(bad_path)) is None
 
 
-def test_inbox_counts_answers_zero_for_an_absent_inbox(tmp_path):
+def test_inbox_counts_answers_zero_for_an_absent_inbox(tmp_path: Path) -> None:
     open_count, total_count, taken_at = watch._inbox_counts(str(tmp_path))
 
     assert (open_count, total_count) == (0, 0)
     assert isinstance(taken_at, float)
 
 
-def test_inbox_line_carries_c5s_struck_instant_spelling():
+def test_inbox_line_carries_c5s_struck_instant_spelling() -> None:
     line = watch._inbox_line(2, 3, 1_000_000.0)
 
     assert line.startswith("INBOX ")
@@ -2438,7 +2439,7 @@ def _inbox_poll(repo_root, prev_inbox_open, emitted):
     )
 
 
-def test_poll_once_stays_silent_on_the_first_inbox_tick(tmp_path):
+def test_poll_once_stays_silent_on_the_first_inbox_tick(tmp_path: Path) -> None:
     """No prior to compare against -- the honest first-tick answer is silence,
     same posture as PARKED's own first-sighting behaviour."""
     _write_inbox_memo(tmp_path / "cross-repo" / "inbox", "a.md", "open")
@@ -2451,7 +2452,7 @@ def test_poll_once_stays_silent_on_the_first_inbox_tick(tmp_path):
     assert emitted == []
 
 
-def test_poll_once_emits_inbox_line_only_when_the_open_count_rises(tmp_path):
+def test_poll_once_emits_inbox_line_only_when_the_open_count_rises(tmp_path: Path) -> None:
     """Two ticks: a rise from 1 to 2 open memos emits one INBOX line; a
     steady tick at the new depth emits nothing (the transition discipline
     C6 pins against PARKED's own re-report firehose)."""
@@ -2473,7 +2474,7 @@ def test_poll_once_emits_inbox_line_only_when_the_open_count_rises(tmp_path):
     assert "of 2 total" in emitted[0]
 
 
-def test_poll_once_stays_silent_when_the_open_count_holds_or_falls(tmp_path):
+def test_poll_once_stays_silent_when_the_open_count_holds_or_falls(tmp_path: Path) -> None:
     inbox_dir = tmp_path / "cross-repo" / "inbox"
     _write_inbox_memo(inbox_dir, "a.md", "open")
     _write_inbox_memo(inbox_dir, "b.md", "open")
@@ -2510,26 +2511,26 @@ def test_poll_once_stays_silent_when_the_open_count_holds_or_falls(tmp_path):
 # triggered and observable from each entry point, never a blind clear.
 
 
-def _spool_line(at, session_id="peer-1"):
+def _spool_line(at, session_id: str = "peer-1") -> str:
     return json.dumps(
         {"session_id": session_id, "state": "PAUSED:turn-ended", "at": at,
          "writer": "receiver-state-sensor"}
     )
 
 
-def _write_spool(repo_root, lines):
+def _write_spool(repo_root, lines) -> None:
     (repo_root / "state").mkdir(exist_ok=True)
     with open(watch.watch_spool.spool_path(str(repo_root)), "w", encoding="utf-8") as fh:
         for line in lines:
             fh.write(line + "\n")
 
 
-def _spool_contents(repo_root):
+def _spool_contents(repo_root) -> list[str]:
     with open(watch.watch_spool.spool_path(str(repo_root)), encoding="utf-8") as fh:
         return [l for l in fh.read().splitlines() if l.strip()]
 
 
-def test_tick_once_prunes_the_spool_it_has_classified_against(tmp_path):
+def test_tick_once_prunes_the_spool_it_has_classified_against(tmp_path: Path) -> None:
     """The `--once` wake bounds the spool once it has classified this tick --
     a record old enough to clear `PRUNE_TRIGGER_SECONDS` is gone afterward."""
     now = datetime(2026, 9, 1, 12, 0, 0, tzinfo=timezone.utc)
@@ -2541,7 +2542,7 @@ def test_tick_once_prunes_the_spool_it_has_classified_against(tmp_path):
     assert _spool_contents(tmp_path) == []
 
 
-def test_the_held_poller_prunes_the_spool_too(tmp_path):
+def test_the_held_poller_prunes_the_spool_too(tmp_path: Path) -> None:
     """The held `Monitor` loop prunes as well, and this is the case the
     sibling plane asked about: a repo watched by a healthy held poller with
     no cron firing at all would otherwise spool into a file nothing ever
@@ -2561,7 +2562,7 @@ def test_the_held_poller_prunes_the_spool_too(tmp_path):
     assert _spool_contents(tmp_path) == []
 
 
-def test_box_wide_roster_reads_peers_outside_repo_root(tmp_path, monkeypatch):
+def test_box_wide_roster_reads_peers_outside_repo_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import harness_registry, peer_roster
 
     repo = tmp_path / "repo"
@@ -2584,7 +2585,7 @@ def test_box_wide_roster_reads_peers_outside_repo_root(tmp_path, monkeypatch):
     assert scoped == {"in"} and wide == {"in", "out"}
 
 
-def test_poll_once_box_wide_classifies_each_peer_against_its_own_repo(tmp_path):
+def test_poll_once_box_wide_classifies_each_peer_against_its_own_repo(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     other = tmp_path / "other"
     for d in (repo, other):
@@ -2601,7 +2602,7 @@ def test_poll_once_box_wide_classifies_each_peer_against_its_own_repo(tmp_path):
 
     kwargs_seen = []
 
-    def _fetch(root, **kw):
+    def _fetch(root, **kw) -> list[dict[str, str]]:
         kwargs_seen.append(kw)
         return agents
 
@@ -2615,7 +2616,7 @@ def test_poll_once_box_wide_classifies_each_peer_against_its_own_repo(tmp_path):
     assert seen == [str(other)]
 
 
-def test_cli_defaults_to_box_scope_and_repo_flag_narrows(tmp_path):
+def test_cli_defaults_to_box_scope_and_repo_flag_narrows(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     for argv, expected in (([], True), (["--scope", "repo"], False)):
@@ -2629,14 +2630,14 @@ def test_cli_defaults_to_box_scope_and_repo_flag_narrows(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _transcript_ending_on(tmp_path, text):
+def _transcript_ending_on(tmp_path, text) -> str:
     path = tmp_path / "peer.jsonl"
     record = {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
     path.write_text(json.dumps(record) + "\n", encoding="utf-8")
     return str(path)
 
 
-def _line_for(transcript_path):
+def _line_for(transcript_path) -> str:
     now = datetime(2026, 8, 31, 12, 0, 0, tzinfo=timezone.utc)
     with mock.patch.object(
         watch.read_pass, "_transcript_path_for", return_value=transcript_path
@@ -2652,7 +2653,7 @@ def _line_for(transcript_path):
         )
 
 
-def test_a_turn_ended_waiting_on_the_group_em_for_a_slot_leads_waiting(tmp_path):
+def test_a_turn_ended_waiting_on_the_group_em_for_a_slot_leads_waiting(tmp_path: Path) -> None:
     line = _line_for(_transcript_ending_on(
         tmp_path, "Plan is ready. Waiting on coordinator-content-repo-65 for a slot before I fire it."
     ))
@@ -2661,7 +2662,7 @@ def test_a_turn_ended_waiting_on_the_group_em_for_a_slot_leads_waiting(tmp_path)
     assert "obligations=none" in line
 
 
-def test_a_turn_ended_on_a_completed_close_stays_parked(tmp_path):
+def test_a_turn_ended_on_a_completed_close_stays_parked(tmp_path: Path) -> None:
     line = _line_for(_transcript_ending_on(
         tmp_path, "Landed 1bea01094; quick-wrap done, nothing left open."
     ))
@@ -2669,7 +2670,7 @@ def test_a_turn_ended_on_a_completed_close_stays_parked(tmp_path):
     assert 'waiting_on="none"' in line
 
 
-def test_a_missing_transcript_is_parked_with_waiting_on_unknown(tmp_path):
+def test_a_missing_transcript_is_parked_with_waiting_on_unknown(tmp_path: Path) -> None:
     line = _line_for(str(tmp_path / "absent.jsonl"))
     assert line.startswith("PARKED session=peer-1 ")
     assert 'waiting_on="unknown"' in line
@@ -2680,13 +2681,13 @@ def test_a_missing_transcript_is_parked_with_waiting_on_unknown(tmp_path):
     "Landed it; I'm not blocked on anyone.",
     "Shipped. There's no longer anything awaiting the PM.",
 ])
-def test_a_negated_wait_names_no_wait(tmp_path, said):
+def test_a_negated_wait_names_no_wait(tmp_path: Path, said) -> None:
     line = _line_for(_transcript_ending_on(tmp_path, said))
     assert line.startswith("PARKED session=peer-1 ")
     assert 'waiting_on="none"' in line
 
 
-def test_a_real_wait_after_a_negated_one_still_counts(tmp_path):
+def test_a_real_wait_after_a_negated_one_still_counts(tmp_path: Path) -> None:
     line = _line_for(_transcript_ending_on(
         tmp_path, "Nothing is waiting on you. Waiting on coordinator-content-repo-65 for a slot."
     ))
@@ -2694,7 +2695,7 @@ def test_a_real_wait_after_a_negated_one_still_counts(tmp_path):
     assert 'waiting_on="Waiting on coordinator-content-repo-65' in line
 
 
-def test_a_gated_wait_names_answering_the_gate(tmp_path):
+def test_a_gated_wait_names_answering_the_gate(tmp_path: Path) -> None:
     line = _line_for(_transcript_ending_on(
         tmp_path, "Plan is ready. Waiting on coordinator-content-repo-65 for a slot before I fire it."
     ))
@@ -2702,7 +2703,7 @@ def test_a_gated_wait_names_answering_the_gate(tmp_path):
     assert 'next="answer the gate it names"' in line
 
 
-def test_a_named_non_gate_wait_names_the_unrelated_blocker_remedy(tmp_path):
+def test_a_named_non_gate_wait_names_the_unrelated_blocker_remedy(tmp_path: Path) -> None:
     line = _line_for(_transcript_ending_on(
         tmp_path, "Blocked: waiting on the CI build to finish."
     ))
@@ -2713,7 +2714,7 @@ def test_a_named_non_gate_wait_names_the_unrelated_blocker_remedy(tmp_path):
     )
 
 
-def test_an_unnamed_or_unknown_wait_names_asking(tmp_path):
+def test_an_unnamed_or_unknown_wait_names_asking(tmp_path: Path) -> None:
     done = _line_for(_transcript_ending_on(tmp_path, "Landed; nothing left open."))
     unknown = _line_for(str(tmp_path / "absent.jsonl"))
     for line in (done, unknown):
@@ -2724,7 +2725,7 @@ def test_an_unnamed_or_unknown_wait_names_asking(tmp_path):
 # --- `--until-event` -------------------------------------------------------
 
 
-def _until_event(repo_root, candidates, max_iterations=5):
+def _until_event(repo_root, candidates, max_iterations: int = 5) -> tuple[int, list[str], list[float]]:
     """Run `until_event` over one peer whose parked verdict follows `candidates` tick by tick."""
     sleeps: list[float] = []
     stream = io.StringIO()
@@ -2761,14 +2762,14 @@ def _until_event(repo_root, candidates, max_iterations=5):
     return rc, lines, sleeps
 
 
-def test_until_event_keeps_looping_on_silent_ticks_and_exits_0_on_the_first_line(tmp_path):
+def test_until_event_keeps_looping_on_silent_ticks_and_exits_0_on_the_first_line(tmp_path: Path) -> None:
     rc, lines, sleeps = _until_event(tmp_path, [False, False, True, True])
     assert rc == 0
     assert len(lines) == 1 and lines[0].startswith("PARKED session=peer-1")
     assert sleeps == [30.0, 30.0]
 
 
-def test_until_event_carries_state_across_restarts_and_does_not_re_emit(tmp_path):
+def test_until_event_carries_state_across_restarts_and_does_not_re_emit(tmp_path: Path) -> None:
     _until_event(tmp_path, [False, True])
     assert watch.load_prev_parked(str(tmp_path)) == {"peer-1": True}
     rc, lines, _sleeps = _until_event(tmp_path, [True, True], max_iterations=2)
@@ -2776,7 +2777,7 @@ def test_until_event_carries_state_across_restarts_and_does_not_re_emit(tmp_path
     assert lines == []
 
 
-def test_until_event_stamps_the_cron_word_with_its_own_cadence(tmp_path):
+def test_until_event_stamps_the_cron_word_with_its_own_cadence(tmp_path: Path) -> None:
     _until_event(tmp_path, [False], max_iterations=1)
     with open(watch.watch_heartbeat.watch_path(str(tmp_path)), encoding="utf-8") as fh:
         record = json.load(fh)
@@ -2786,7 +2787,7 @@ def test_until_event_stamps_the_cron_word_with_its_own_cadence(tmp_path):
     assert (nxt - last).total_seconds() < watch._CRON_FLOOR_INTERVAL_SECONDS
 
 
-def test_until_event_exits_0_on_a_poll_error_line(tmp_path):
+def test_until_event_exits_0_on_a_poll_error_line(tmp_path: Path) -> None:
     stream = io.StringIO()
     with mock.patch.object(watch, "poll_once", side_effect=RuntimeError("registry gone")):
         rc = watch.until_event(
@@ -2801,7 +2802,7 @@ def test_until_event_exits_0_on_a_poll_error_line(tmp_path):
     assert stream.getvalue().startswith("POLL-ERROR")
 
 
-def test_cli_until_event_dispatches_to_until_event(tmp_path):
+def test_cli_until_event_dispatches_to_until_event(tmp_path: Path) -> None:
     with mock.patch.object(watch, "until_event", return_value=0) as ue:
         rc = watch._cli(["--repo-root", str(tmp_path), "--until-event", "--tick-interval-seconds", "30"])
     assert rc == 0
@@ -2837,7 +2838,7 @@ def _park_cycle(prev_parked, prev_names, waiting):
     return emitted, decl, notes
 
 
-def test_reparked_peer_with_unchanged_waiting_on_and_next_is_not_re_emitted():
+def test_reparked_peer_with_unchanged_waiting_on_and_next_is_not_re_emitted() -> None:
     emitted, _d, notes = _park_cycle({"peer-1": False}, None, "none")
     assert len(emitted) == 1 and notes["peer-1"]["parked_sig"]
 
@@ -2856,7 +2857,7 @@ def test_reparked_peer_with_unchanged_waiting_on_and_next_is_not_re_emitted():
 # --- recent contact suppression and batch mode -----------------------------
 
 
-def test_recent_contact_suppresses_a_park_and_leaves_a_declination():
+def test_recent_contact_suppresses_a_park_and_leaves_a_declination() -> None:
     with mock.patch.object(watch, "_recent_contact", return_value=True):
         emitted, decl, notes = _park_cycle({"peer-1": False}, None, "none")
     assert emitted == []
@@ -2864,18 +2865,18 @@ def test_recent_contact_suppresses_a_park_and_leaves_a_declination():
     assert "parked_sig" not in notes["peer-1"]
 
 
-def _transcript(path, stamp, to):
+def _transcript(path, stamp, to) -> None:
     rec = {"type": "assistant", "timestamp": stamp,
            "message": {"content": [{"type": "tool_use", "name": "SendMessage", "input": {"to": to}}]}}
     path.write_text(json.dumps(rec) + "\n", encoding="utf-8")
 
 
-def test_recent_contact_reads_both_transcripts_and_honours_the_window(tmp_path):
+def test_recent_contact_reads_both_transcripts_and_honours_the_window(tmp_path: Path) -> None:
     now = datetime(2026, 10, 20, 12, 0, 0, tzinfo=timezone.utc)
     gem, peer = tmp_path / "gem.jsonl", tmp_path / "peer.jsonl"
     paths = {"gem-1": str(gem), "peer-1": str(peer)}
 
-    def call():
+    def call() -> bool:
         with mock.patch.object(watch.read_pass, "_transcript_path_for", side_effect=lambda sid, cwd: paths[sid]):
             return watch._recent_contact(
                 str(tmp_path), "gem-1", "gem-name", "peer-1", "peer-name", str(tmp_path), now.timestamp()
@@ -2894,17 +2895,17 @@ def test_recent_contact_reads_both_transcripts_and_honours_the_window(tmp_path):
     assert call() is False
 
 
-def test_recent_contact_unreadable_transcript_is_not_suppression(tmp_path):
+def test_recent_contact_unreadable_transcript_is_not_suppression(tmp_path: Path) -> None:
     with mock.patch.object(watch.read_pass, "_transcript_path_for", return_value=str(tmp_path / "nope")):
         assert watch._recent_contact(str(tmp_path), "g", "gn", "p", "pn", str(tmp_path), 0.0) is False
 
 
-def test_batch_seconds_keeps_polling_then_emits_one_batch(tmp_path):
+def test_batch_seconds_keeps_polling_then_emits_one_batch(tmp_path: Path) -> None:
     ticks = iter(["PARKED a", "", "GONE b", "", ""])
     stream = io.StringIO()
     sleeps: list[float] = []
 
-    def fake_tick(*_a, stream=None, **_k):
+    def fake_tick(*_a, stream=None, **_k) -> int:
         line = next(ticks)
         if line:
             stream.write(line + "\n")
@@ -2920,13 +2921,13 @@ def test_batch_seconds_keeps_polling_then_emits_one_batch(tmp_path):
     assert sleeps == [30.0, 30.0]
 
 
-def test_cli_batch_seconds_reaches_until_event(tmp_path):
+def test_cli_batch_seconds_reaches_until_event(tmp_path: Path) -> None:
     with mock.patch.object(watch, "until_event", return_value=0) as ue:
         watch._cli(["--repo-root", str(tmp_path), "--until-event", "--batch-seconds", "45"])
     assert ue.call_args.kwargs["batch_seconds"] == 45.0
 
 
-def _remote_box(tmp_path, name, *, beat=True, lines=()):
+def _remote_box(tmp_path, name, *, beat: bool = True, lines=()):
     """Register a loopback remote box under tmp_path/primary; returns the primary registry dir."""
     from coordinator_core.group_em import box_heartbeat, box_registry
 
@@ -2942,7 +2943,7 @@ def _remote_box(tmp_path, name, *, beat=True, lines=()):
     return primary
 
 
-def test_remote_box_rows_open_runs_are_start_without_end(tmp_path):
+def test_remote_box_rows_open_runs_are_start_without_end(tmp_path: Path) -> None:
     primary = _remote_box(
         tmp_path,
         "b2",
@@ -2956,7 +2957,7 @@ def test_remote_box_rows_open_runs_are_start_without_end(tmp_path):
     assert [(r["session_id"], r["run"], r["live"]) for r in rows] == [("s2", "r2", True)]
 
 
-def test_remote_box_rows_unreachable_box_renders_unreachable_not_gone(tmp_path):
+def test_remote_box_rows_unreachable_box_renders_unreachable_not_gone(tmp_path: Path) -> None:
     primary = _remote_box(tmp_path, "b3", beat=False)
     rows = watch.remote_box_rows(primary)
     assert len(rows) == 1 and rows[0]["reachable"] is False
@@ -2967,7 +2968,7 @@ def test_remote_box_rows_unreachable_box_renders_unreachable_not_gone(tmp_path):
     assert f"box {rows[0]['box_id']}: unreachable" in watch.box_line(census)
 
 
-def test_remote_box_rows_bounded_tail_drops_partial_first_line(tmp_path):
+def test_remote_box_rows_bounded_tail_drops_partial_first_line(tmp_path: Path) -> None:
     pad = {"phase": "START", "session_id": "old", "run": "x" * 200}
     lines = [pad] * 400 + [{"phase": "START", "session_id": "new", "run": "r"}]
     primary = _remote_box(tmp_path, "b4", lines=lines)
@@ -2975,7 +2976,7 @@ def test_remote_box_rows_bounded_tail_drops_partial_first_line(tmp_path):
     assert any(r["session_id"] == "new" for r in rows)
 
 
-def test_box_line_unchanged_without_remote_boxes():
+def test_box_line_unchanged_without_remote_boxes() -> None:
     census = {"live": 1, "repo_live": 1, "repo_subscribed": 1, "other_repos": {}, "unwatched": 0}
     assert "\n" not in watch.box_line(census)
 
@@ -3020,7 +3021,7 @@ def _xbox_poll(prev_parked, snapshot, prev_names=None, local=("peer-1",)):
     return result, emitted
 
 
-def test_remote_session_is_keyed_box_colon_session():
+def test_remote_session_is_keyed_box_colon_session() -> None:
     (parked, decl, notes, _io), emitted = _xbox_poll({}, _xbox_snapshot(boxB=(True, [("s9", 11)])))
     assert parked == {"peer-1": False, "boxB:s9": False}
     assert notes["boxB:s9"]["name"] == "n-s9"
@@ -3028,7 +3029,7 @@ def test_remote_session_is_keyed_box_colon_session():
     assert emitted == []
 
 
-def test_unreachable_box_emits_no_gone_and_carries_its_sessions_forward():
+def test_unreachable_box_emits_no_gone_and_carries_its_sessions_forward() -> None:
     prior_note = {"name": "n-s9", "last_seen": 1.0}
     (parked, _d, notes, _io), emitted = _xbox_poll(
         {"peer-1": False, "boxB:s9": False},
@@ -3040,13 +3041,13 @@ def test_unreachable_box_emits_no_gone_and_carries_its_sessions_forward():
     assert notes["boxB:s9"] == prior_note
 
 
-def test_box_with_no_snapshot_file_emits_no_gone():
+def test_box_with_no_snapshot_file_emits_no_gone() -> None:
     (parked, _d, _n, _io), emitted = _xbox_poll({"peer-1": False, "boxB:s9": False}, {})
     assert emitted == []
     assert "boxB:s9" in parked
 
 
-def test_session_gone_from_a_readable_box_is_reported_by_key():
+def test_session_gone_from_a_readable_box_is_reported_by_key() -> None:
     (parked, _d, _n, _io), emitted = _xbox_poll(
         {"peer-1": False, "boxB:s9": False},
         _xbox_snapshot(boxB=(True, [("s2", 5)])),
@@ -3058,7 +3059,7 @@ def test_session_gone_from_a_readable_box_is_reported_by_key():
     assert len(emitted) == 1 and emitted[0].startswith("GONE session=n-s9 [boxB:s9]")
 
 
-def test_same_key_with_a_changed_pid_emits_no_gone():
+def test_same_key_with_a_changed_pid_emits_no_gone() -> None:
     before = _xbox_snapshot(boxB=(True, [("s9", 111)]))
     after = _xbox_snapshot(boxB=(True, [("s9", 222)]))
     (parked, _d, notes, _io), _e = _xbox_poll({}, before)
@@ -3068,19 +3069,19 @@ def test_same_key_with_a_changed_pid_emits_no_gone():
 
 
 @pytest.mark.parametrize("persisted_key", ["peer-1", "boxA:peer-1"])
-def test_persisted_prior_state_reads_as_the_local_box(persisted_key):
+def test_persisted_prior_state_reads_as_the_local_box(persisted_key) -> None:
     (parked, _d, _n, _io), emitted = _xbox_poll({persisted_key: False}, {})
     assert emitted == []
     assert parked == {"peer-1": False}
 
 
-def test_gone_spares_only_the_held_boxes_keys():
+def test_gone_spares_only_the_held_boxes_keys() -> None:
     prev = {"a": False, "boxB:s1": False, "boxC:s2": False}
     assert watch.gone(prev, {}, frozenset({"boxB"}), "boxA") == ["a", "boxC:s2"]
     assert watch.gone(prev, {}) == ["a", "boxB:s1", "boxC:s2"]
 
 
-def test_remote_parked_line_reads_no_local_state():
+def test_remote_parked_line_reads_no_local_state() -> None:
     with mock.patch.object(watch, "_waiting_on", side_effect=AssertionError("transcript")), mock.patch.object(
         watch, "_stamped_age_seconds", side_effect=AssertionError("receiver state")
     ), mock.patch.object(watch, "_obligation_summary", side_effect=AssertionError("ledger")):
@@ -3090,7 +3091,7 @@ def test_remote_parked_line_reads_no_local_state():
     assert line.startswith("PARKED session=n-s9 [boxB:s9]")
 
 
-def test_kick_remote_refresh_runs_refresh_when_due_and_never_inline(monkeypatch):
+def test_kick_remote_refresh_runs_refresh_when_due_and_never_inline(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(watch.remote_roster, "refresh_due", lambda d: calls.append(("due", d)) or True, raising=False)
     monkeypatch.setattr(watch.remote_roster, "refresh", lambda d: calls.append(("refresh", d)), raising=False)
@@ -3100,7 +3101,7 @@ def test_kick_remote_refresh_runs_refresh_when_due_and_never_inline(monkeypatch)
     assert calls == [("due", "dir"), ("refresh", "dir")]
 
 
-def test_kick_remote_refresh_skips_refresh_when_not_due_and_survives_failure(monkeypatch):
+def test_kick_remote_refresh_skips_refresh_when_not_due_and_survives_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(watch, "_refresh_thread", None)
     monkeypatch.setattr(watch.remote_roster, "refresh_due", lambda d: False, raising=False)
@@ -3112,7 +3113,7 @@ def test_kick_remote_refresh_skips_refresh_when_not_due_and_survives_failure(mon
     watch.kick_remote_refresh("dir").join(5)
 
 
-def test_kick_remote_refresh_is_a_noop_without_refresh_support(monkeypatch):
+def test_kick_remote_refresh_is_a_noop_without_refresh_support(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(watch, "_refresh_thread", None)
     monkeypatch.delattr(watch.remote_roster, "refresh", raising=False)
     assert watch.kick_remote_refresh("dir") is None
@@ -3124,7 +3125,7 @@ _REAL_GOAL_BOARD_FLAGS = watch._goal_board_flags
 
 
 @pytest.fixture
-def board_home(tmp_path, monkeypatch):
+def board_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A tmp group-EM home with the real board reader live and every owner live."""
     from coordinator_core.group_em import gem_home, goal_board
 
@@ -3136,14 +3137,14 @@ def board_home(tmp_path, monkeypatch):
     return home
 
 
-def _write_board(home, mutate=None):
+def _write_board(home, mutate=None) -> None:
     board = json.loads(_SEED_BOARD.read_text(encoding="utf-8"))
     if mutate:
         mutate(board)
     (home / "fleet-goal-board.json").write_text(json.dumps(board), encoding="utf-8")
 
 
-def _drift_tick(prev_names, now=_BOARD_NOW):
+def _drift_tick(prev_names, now: datetime = _BOARD_NOW):
     emitted: list[str] = []
     with mock.patch.object(watch, "_current_agents", return_value=[]), mock.patch.object(
         watch, "_classify_all", return_value={}
@@ -3154,8 +3155,8 @@ def _drift_tick(prev_names, now=_BOARD_NOW):
     return [line for line in emitted if line.startswith("DRIFT ")], notes
 
 
-def test_drift_emits_one_line_per_flag_then_none_when_unchanged(board_home):
-    def mutate(board):
+def test_drift_emits_one_line_per_flag_then_none_when_unchanged(board_home) -> None:
+    def mutate(board) -> None:
         board["goals"][0]["last_updated"] = "2026-11-01T00:00:00Z"
         board["task_map"] = [{"em": "e1", "task_id": "t1", "goal": None}]
 
@@ -3167,7 +3168,7 @@ def test_drift_emits_one_line_per_flag_then_none_when_unchanged(board_home):
     assert notes2["goal-board"] == notes["goal-board"]
 
 
-def test_drift_emits_only_the_new_flag_and_a_cleared_flag_can_return(board_home):
+def test_drift_emits_only_the_new_flag_and_a_cleared_flag_can_return(board_home) -> None:
     _write_board(board_home)
     lines, notes = _drift_tick(None)
     assert lines == []
@@ -3182,7 +3183,7 @@ def test_drift_emits_only_the_new_flag_and_a_cleared_flag_can_return(board_home)
     assert lines == ["DRIFT goal-board unmapped-task e1/t9"]
 
 
-def test_drift_never_writes_the_board(board_home):
+def test_drift_never_writes_the_board(board_home) -> None:
     _write_board(board_home, lambda b: b["goals"][0].update(last_updated="2026-11-01T00:00:00Z"))
     path = board_home / "fleet-goal-board.json"
     before = path.read_bytes()
@@ -3191,7 +3192,7 @@ def test_drift_never_writes_the_board(board_home):
     assert [p.name for p in board_home.iterdir()] == ["fleet-goal-board.json"]
 
 
-def test_unreadable_or_invalid_board_is_no_news_and_carries_the_prior_set(board_home):
+def test_unreadable_or_invalid_board_is_no_news_and_carries_the_prior_set(board_home) -> None:
     prior = {"goal-board": {"flags": ["stale 1a"]}}
     lines, notes = _drift_tick(prior)  # board absent
     assert lines == [] and notes["goal-board"] == prior["goal-board"]
@@ -3203,12 +3204,12 @@ def test_unreadable_or_invalid_board_is_no_news_and_carries_the_prior_set(board_
     assert lines == [] and notes["goal-board"] == prior["goal-board"]
 
 
-def test_no_board_and_no_prior_adds_no_note(board_home):
+def test_no_board_and_no_prior_adds_no_note(board_home) -> None:
     lines, notes = _drift_tick(None)
     assert lines == [] and "goal-board" not in notes
 
 
-def test_home_refused_is_no_news(monkeypatch, board_home):
+def test_home_refused_is_no_news(monkeypatch: pytest.MonkeyPatch, board_home) -> None:
     from coordinator_core.group_em import gem_home
 
     def refuse():

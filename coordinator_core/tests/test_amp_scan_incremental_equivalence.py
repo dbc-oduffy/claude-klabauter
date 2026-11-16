@@ -17,6 +17,7 @@ import pytest
 from coordinator_core.tests import _amp_scan_incremental as inc
 from coordinator_core.tests import test_no_unbatched_per_item_git_spawn as gate
 from coordinator_core.tests._amp_scan_incremental import scan_incremental
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -128,7 +129,7 @@ _CORPUS: dict[str, str] = {
 }
 
 
-def _swap_registers():
+def _swap_registers() -> tuple[frozenset[tuple[str, str, str, int]], dict[tuple[str, str, str, int], tuple[str, str]]]:
     saved = (gate._EXEMPT_SITES, gate._ORACLE_CLAIMS)
     gate._EXEMPT_SITES, gate._ORACLE_CLAIMS = frozenset(), {}
     return saved
@@ -167,7 +168,7 @@ def _assert_equal(root: pathlib.Path, cache_dir: pathlib.Path | None):
 
 
 @pytest.fixture
-def tree(tmp_path):
+def tree(tmp_path: Path):
     root = tmp_path / "tree"
     root.mkdir()
     files: dict[str, str | None] = dict(_CORPUS)
@@ -175,13 +176,13 @@ def tree(tmp_path):
     return root, files, tmp_path / "cache"
 
 
-def test_oracle_is_not_vacuous(tree):
+def test_oracle_is_not_vacuous(tree) -> None:
     root, _, _ = tree
     routes = {site.route for site in _uncached((root,))}
     assert _ALL_ROUTES <= routes, sorted(_ALL_ROUTES - routes)
 
 
-def test_cold_then_warm_equal_the_uncached_scan(tree):
+def test_cold_then_warm_equal_the_uncached_scan(tree) -> None:
     root, _, cache = tree
     cold = _assert_equal(root, cache)
     assert not cold.tree_hit
@@ -189,7 +190,7 @@ def test_cold_then_warm_equal_the_uncached_scan(tree):
     assert warm.tree_hit and warm.reanalysed == () and warm.summarised == ()
 
 
-def test_cache_dir_none_equals_uncached_and_writes_nothing(tree):
+def test_cache_dir_none_equals_uncached_and_writes_nothing(tree) -> None:
     root, _, cache = tree
     stats = _assert_equal(root, None)
     assert not stats.tree_hit
@@ -221,7 +222,7 @@ _EDITS = {
 
 @pytest.mark.parametrize("kind", sorted(_EDITS))
 @pytest.mark.parametrize("rel", sorted(_CORPUS))
-def test_single_file_edit_sweep(tree, rel, kind):
+def test_single_file_edit_sweep(tree, rel, kind) -> None:
     root, files, cache = tree
     _assert_equal(root, cache)
     edited = _EDITS[kind](files[rel])
@@ -233,53 +234,53 @@ def test_single_file_edit_sweep(tree, rel, kind):
     _assert_equal(root, cache)
 
 
-def _mut_add_file(files):
+def _mut_add_file(files) -> None:
     files["extra_spawn.py"] = (
         "import subprocess\n\ndef sweep(items):\n    for i in items:\n"
         "        subprocess.run(['git', 'add', i])\n"
     )
 
 
-def _mut_delete_file(files):
+def _mut_delete_file(files) -> None:
     files["helper_mod.py"] = None
 
 
-def _mut_syntax_error(files):
+def _mut_syntax_error(files) -> None:
     files["helper_mod.py"] = "def (:\n"
 
 
-def _mut_first_writer_flip(files):
+def _mut_first_writer_flip(files) -> None:
     files["aaa_early.py"] = (
         "import subprocess\n\ndef _run(argv):\n    return subprocess.Popen(argv)\n"
     )
 
 
-def _mut_star_target(files):
+def _mut_star_target(files) -> None:
     files["pkg/real.py"] = files["pkg/real.py"].replace("real_spawn", "real_spawn2")
 
 
-def _mut_decorator(files):
+def _mut_decorator(files) -> None:
     files["route_b.py"] = files["route_b.py"].replace(
         "def _git_add", "@some_decorator\ndef _git_add"
     )
 
 
-def _mut_param_default(files):
+def _mut_param_default(files) -> None:
     files["seam.py"] = files["seam.py"].replace("run_git=_update_index_with_retry", "run_git=None")
 
 
-def _mut_cross_prefilter_in(files):
+def _mut_cross_prefilter_in(files) -> None:
     files["plain.py"] = (
         "import subprocess\n\ndef helper_plain(items):\n    for p in items:\n"
         "        subprocess.run(['git', 'add', p])\n"
     )
 
 
-def _mut_cross_prefilter_out(files):
+def _mut_cross_prefilter_out(files) -> None:
     files["prefilter.py"] = files["prefilter.py"].replace("import subprocess\n", "", 1)
 
 
-def _mut_same_size_rename(files):
+def _mut_same_size_rename(files) -> None:
     files["caller.py"] = files["caller.py"].replace("commit_one", "commit_two")
     files["helper_mod.py"] = files["helper_mod.py"].replace("commit_one", "commit_two")
 
@@ -299,7 +300,7 @@ _MUTATIONS = {
 
 
 @pytest.mark.parametrize("name", sorted(_MUTATIONS))
-def test_cross_file_mutations_stay_equal(tree, name):
+def test_cross_file_mutations_stay_equal(tree, name) -> None:
     root, files, cache = tree
     _assert_equal(root, cache)
     _MUTATIONS[name](files)
@@ -326,7 +327,7 @@ _EXACT: dict[str, str] = {
 
 
 @pytest.fixture
-def exact(tmp_path):
+def exact(tmp_path: Path) -> tuple[Path, dict[str, str], Path]:
     root = tmp_path / "exact"
     root.mkdir()
     _sync(root, dict(_EXACT))
@@ -342,17 +343,17 @@ def _edit_and_scan(root, files, cache, rel, old, new):
     return _assert_equal(root, cache)
 
 
-def test_helper_body_edit_reanalyses_dependant_and_owner(exact):
+def test_helper_body_edit_reanalyses_dependant_and_owner(exact) -> None:
     stats = _edit_and_scan(*exact, "b.py", "'git', 'add'", "'git', 'rm'")
     assert _names(stats.reanalysed) == {"a.py", "b.py"}
 
 
-def test_unrelated_function_edit_reanalyses_owner_only(exact):
+def test_unrelated_function_edit_reanalyses_owner_only(exact) -> None:
     stats = _edit_and_scan(*exact, "b.py", "return 1", "return 2")
     assert _names(stats.reanalysed) == {"b.py"}
 
 
-def test_loop_free_module_text_edit_touches_only_its_file(exact):
+def test_loop_free_module_text_edit_touches_only_its_file(exact) -> None:
     root, files, cache = exact
     files["c.py"] += "CONST = 2\n"
     _sync(root, files)
@@ -361,18 +362,18 @@ def test_loop_free_module_text_edit_touches_only_its_file(exact):
     assert _names(stats.summarised) == {"c.py"}
 
 
-def test_line_inserted_above_helper_reanalyses_dependant(exact):
+def test_line_inserted_above_helper_reanalyses_dependant(exact) -> None:
     stats = _edit_and_scan(*exact, "b.py", "import subprocess\n", "import subprocess\n\n")
     assert _names(stats.reanalysed) == {"a.py", "b.py"}
 
 
-def test_untouched_rerun_is_a_tree_hit(exact):
+def test_untouched_rerun_is_a_tree_hit(exact) -> None:
     root, _, cache = exact
     stats = _assert_equal(root, cache)
     assert stats.tree_hit and stats.reanalysed == ()
 
 
-def test_corrupt_head_blob_reads_as_a_cold_cache(tree):
+def test_corrupt_head_blob_reads_as_a_cold_cache(tree) -> None:
     root, _, cache = tree
     _assert_equal(root, cache)
     blobs = [p for p in cache.rglob("*") if p.is_file()]
@@ -384,7 +385,7 @@ def test_corrupt_head_blob_reads_as_a_cold_cache(tree):
     assert not stats.tree_hit
 
 
-def test_cacheprovider_disabled_yields_repo_local_cache_dir(pytester, tree):
+def test_cacheprovider_disabled_yields_repo_local_cache_dir(pytester, tree) -> None:
     root, _, _ = tree
     expected = (gate._REPO_ROOT / ".coordinator-local" / "amp-scan").resolve()
     pytester.makepyfile(
@@ -464,7 +465,7 @@ def _import_closure(start: pathlib.Path) -> set[pathlib.Path]:
     return seen
 
 
-def test_import_time_nodes_keep_module_level_imports_and_drop_function_bodies():
+def test_import_time_nodes_keep_module_level_imports_and_drop_function_bodies() -> None:
     tree = ast.parse(
         "import top_level_dep\n"
         "if True:\n    import guarded_dep\n"
@@ -479,7 +480,7 @@ def test_import_time_nodes_keep_module_level_imports_and_drop_function_bodies():
     assert imported == {"top_level_dep", "guarded_dep"}
 
 
-def test_analyzer_sources_cover_the_gate_import_closure():
+def test_analyzer_sources_cover_the_gate_import_closure() -> None:
     declared = set()
     for entry in _analyzer_sources():
         path = pathlib.Path(entry)
@@ -491,7 +492,7 @@ def test_analyzer_sources_cover_the_gate_import_closure():
 
 
 @pytest.mark.cadence
-def test_live_scope_cold_warm_and_per_edit_equal_uncached(tmp_path):
+def test_live_scope_cold_warm_and_per_edit_equal_uncached(tmp_path: Path) -> None:
     cache = tmp_path / "live-cache"
     roots = gate._gate_scope_paths()
     oracle = _uncached(roots)

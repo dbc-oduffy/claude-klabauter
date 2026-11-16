@@ -10,6 +10,11 @@ import os
 import sys
 
 import pytest
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = pytest.mark.complete
 
@@ -26,7 +31,7 @@ SEARCH_ARGV = ["hook-run", "--advisory", "hooks.preuse_search_dispatch"]
 BASH_ARGV = ["hook-run", "hooks.preuse_bash_dispatch"]
 
 
-def _load_hook_run():
+def _load_hook_run() -> ModuleType:
     spec = importlib.util.spec_from_file_location("_hook_run_prefire_door", HOOK_RUN_PATH)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -59,7 +64,7 @@ _INPUTS = {"Read": _read_input, "Bash": _bash_input}
 
 
 class Door:
-    def __init__(self, tmp_path, role_marker: bool = True):
+    def __init__(self, tmp_path, role_marker: bool = True) -> None:
         self.repo = tmp_path / "repo"
         (self.repo / ".git").mkdir(parents=True)
         if role_marker:
@@ -71,10 +76,10 @@ class Door:
         self.lines = [_user()]
         self.flush()
 
-    def flush(self):
+    def flush(self) -> None:
         self.transcript.write_text("".join(self.lines), encoding="utf-8")
 
-    def history(self, n: int, name: str):
+    def history(self, n: int, name: str) -> None:
         for i in range(n):
             self.lines.append(_use(f"h{i}", name, _INPUTS[name](i)))
         self.flush()
@@ -115,7 +120,7 @@ def _stamped_engine_twin(tmp_path) -> str:
 
 
 @pytest.fixture
-def door_env(tmp_path, monkeypatch):
+def door_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ipc import allow_unstamped_dispatch
 
     allow_unstamped_dispatch()
@@ -135,18 +140,18 @@ def door_env(tmp_path, monkeypatch):
     monkeypatch.setattr(ers, "session_route_phase", lambda *a, **k: ers.RoutePhase(ers.PHASE_UNFIRED))
 
 @pytest.fixture
-def door(door_env, tmp_path):
+def door(door_env, tmp_path: Path) -> Door:
     return Door(tmp_path)
 
 
 @pytest.fixture
-def cell_door(door_env, tmp_path):
+def cell_door(door_env, tmp_path: Path) -> Door:
     """A ladder-cell EM session: the ask is the first prompt; SessionStart wrote the role marker."""
     return Door(tmp_path)
 
 
 @pytest.fixture
-def markerless_door(door_env, tmp_path):
+def markerless_door(door_env, tmp_path: Path) -> Door:
     """A non-EM session (G-EM, DoE, experiments): no role marker."""
     return Door(tmp_path, role_marker=False)
 
@@ -168,7 +173,7 @@ def _reason(body: dict) -> str:
 
 
 @pytest.mark.parametrize("name", ["Read", "Bash"])
-def test_ninth_call_advises_through_the_door_with_fire_step_and_is_allowed(door, monkeypatch, capsys, name, tmp_path):
+def test_ninth_call_advises_through_the_door_with_fire_step_and_is_allowed(door, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], name, tmp_path: Path) -> None:
     # The nag counter is per session and process-wide: point it at this test's dir so the first
     # nag is deterministically the full text and the next one the terse counted repeat.
     real_bump = warp_fire._bump
@@ -185,20 +190,20 @@ def test_ninth_call_advises_through_the_door_with_fire_step_and_is_allowed(door,
 
 
 @pytest.mark.parametrize("name", ["Read", "Bash"])
-def test_eighth_call_allows_through_the_door(door, monkeypatch, capsys, name):
+def test_eighth_call_allows_through_the_door(door, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], name) -> None:
     door.history(7, name)
     rc, body = door.run(monkeypatch, capsys, name)
     assert rc == 0
     assert _decision(body) != "deny"
 
 
-def test_exempt_path_is_not_counted(door, monkeypatch, capsys):
+def test_exempt_path_is_not_counted(door, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     door.history(8, "Read")
     rc, body = door.run(monkeypatch, capsys, "Read", {"file_path": "/r/state/warp/x/requirements.md"})
     assert rc == 0 and _decision(body) != "deny"
 
 
-def test_fire_disarms(door, monkeypatch, capsys):
+def test_fire_disarms(door, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     door.history(8, "Read")
     door.lines.append(_use("fire", "Workflow", {"name": warp_fire.SUBMIT_STUB_NAME}))
     door.flush()
@@ -221,7 +226,7 @@ def _command_opening(name: str) -> str:
 @pytest.mark.parametrize("skill", ["consolidate-git", "merging-to-main"])
 @pytest.mark.parametrize("via", ["skill", "command"])
 @pytest.mark.parametrize("name", ["Read", "Bash"])
-def test_ceremony_window_never_nags_across_repeated_calls(door, monkeypatch, capsys, skill, via, name):
+def test_ceremony_window_never_nags_across_repeated_calls(door, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], skill, via, name) -> None:
     if via == "command":
         door.lines[0] = _command_opening(skill)
     else:
@@ -234,7 +239,7 @@ def test_ceremony_window_never_nags_across_repeated_calls(door, monkeypatch, cap
         assert rc == 0 and not _nudged(body) and _decision(body) != "deny"
 
 
-def test_ordinary_ask_after_a_ceremony_window_still_nags(door, monkeypatch, capsys):
+def test_ordinary_ask_after_a_ceremony_window_still_nags(door, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     door.lines[0] = _command_opening("consolidate-git")
     door.lines.append(_user())
     door.history(8, "Read")
@@ -242,7 +247,7 @@ def test_ordinary_ask_after_a_ceremony_window_still_nags(door, monkeypatch, caps
     assert rc == 0 and _nudged(body)
 
 
-def test_open_xs_lane_does_not_exempt(door, monkeypatch, capsys):
+def test_open_xs_lane_does_not_exempt(door, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     door.history(8, "Read")
     assert xs_lane_budget.open_xs_lane(door.repo, SID, "abc")
     rc, body = door.run(monkeypatch, capsys, "Read")
@@ -250,14 +255,14 @@ def test_open_xs_lane_does_not_exempt(door, monkeypatch, capsys):
 
 
 @pytest.mark.parametrize("name", ["Read", "Bash"])
-def test_markerless_session_is_never_denied(markerless_door, monkeypatch, capsys, name):
+def test_markerless_session_is_never_denied(markerless_door, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], name) -> None:
     markerless_door.history(12, name)
     rc, body = markerless_door.run(monkeypatch, capsys, name)
     assert rc == 0 and _decision(body) != "deny"
 
 
 @pytest.mark.parametrize("name", ["Read", "Bash"])
-def test_cell_session_ninth_call_advises_with_role_marker(cell_door, monkeypatch, capsys, name):
+def test_cell_session_ninth_call_advises_with_role_marker(cell_door, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], name) -> None:
     cell_door.history(8, name)
     rc, body = cell_door.run(monkeypatch, capsys, name)
     assert rc == 0
@@ -266,13 +271,13 @@ def test_cell_session_ninth_call_advises_with_role_marker(cell_door, monkeypatch
 
 
 @pytest.mark.parametrize("name", ["Read", "Bash"])
-def test_cell_session_eighth_call_allows(cell_door, monkeypatch, capsys, name):
+def test_cell_session_eighth_call_allows(cell_door, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], name) -> None:
     cell_door.history(7, name)
     rc, body = cell_door.run(monkeypatch, capsys, name)
     assert rc == 0 and _decision(body) != "deny"
 
 
-def test_cell_session_worker_is_never_denied(cell_door, monkeypatch, capsys):
+def test_cell_session_worker_is_never_denied(cell_door, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     cell_door.history(8, "Read")
     event = cell_door.event("Read")
     event["agent_id"] = "worker-1"
@@ -282,7 +287,7 @@ def test_cell_session_worker_is_never_denied(cell_door, monkeypatch, capsys):
     assert rc == 0 and _decision(json.loads(out) if out.strip() else {}) != "deny"
 
 
-def test_phase_unknown_allows(door, monkeypatch, capsys):
+def test_phase_unknown_allows(door, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(ers, "session_route_phase", lambda *a, **k: ers.RoutePhase(ers.PHASE_UNKNOWN))
     door.history(10, "Read")
     rc, body = door.run(monkeypatch, capsys, "Read")

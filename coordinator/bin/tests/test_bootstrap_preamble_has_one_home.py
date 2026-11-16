@@ -187,7 +187,7 @@ def try_variant_offenders():
     return found
 
 
-def test_no_cli_carries_a_collapsible_try_wrapped_preamble(try_variant_offenders):
+def test_no_cli_carries_a_collapsible_try_wrapped_preamble(try_variant_offenders) -> None:
     """Shape 2: a try/except whose handler cannot fall through, then the canonical
     insert. Provably equivalent to the seam, so there is no reason to keep one."""
     assert not try_variant_offenders, (
@@ -214,7 +214,7 @@ def offenders():
     return found
 
 
-def test_the_scan_reaches_real_files():
+def test_the_scan_reaches_real_files() -> None:
     """Non-vacuity: a guard that scans nothing passes for the wrong reason."""
     adopters = [
         rel
@@ -227,7 +227,7 @@ def test_the_scan_reaches_real_files():
     )
 
 
-def test_no_cli_carries_its_own_copy_of_the_preamble(offenders):
+def test_no_cli_carries_its_own_copy_of_the_preamble(offenders) -> None:
     """The collapse target, restated as an invariant.
 
     Fix by calling `require_dispatch_engine_on_path()` — NOT by adopting
@@ -240,14 +240,14 @@ def test_no_cli_carries_its_own_copy_of_the_preamble(offenders):
     )
 
 
-def test_the_seam_module_still_owns_the_idiom():
+def test_the_seam_module_still_owns_the_idiom() -> None:
     """The one permitted home actually contains the insert primitive."""
     text = (_REPO_ROOT / _SEAM_MODULE).read_text(encoding="utf-8", errors="replace")
     assert "def _front_insert_on_path" in text
     assert "def require_dispatch_engine_on_path" in text
 
 
-def test_known_divergent_entries_are_real_and_reasoned():
+def test_known_divergent_entries_are_real_and_reasoned() -> None:
     """A tail entry must name an existing file and say why it is exempt."""
     for rel, reason in _KNOWN_DIVERGENT.items():
         assert (_REPO_ROOT / rel).exists(), f"{rel} is exempted but does not exist"

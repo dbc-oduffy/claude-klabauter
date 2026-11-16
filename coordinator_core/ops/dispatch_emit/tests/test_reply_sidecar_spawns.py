@@ -11,6 +11,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import reply_sidecar as rs
 from coordinator_core.ops.dispatch_emit.tests.test_reply_sidecar import _manifest, _reader_file, sidecar  # noqa: F401
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -56,7 +57,7 @@ def _read_with(tmp_path, handle: dict, workflow_js: str):
     return _node_json(tmp_path, src)
 
 
-def test_reindented_manifest_verifies_and_changed_value_refuses(sidecar, tmp_path):
+def test_reindented_manifest_verifies_and_changed_value_refuses(sidecar, tmp_path: Path) -> None:
     root, path, handle = sidecar
     text = rs.read_text(root, handle)
     reindented = json.dumps(json.loads(text), indent=4)
@@ -72,7 +73,7 @@ def test_reindented_manifest_verifies_and_changed_value_refuses(sidecar, tmp_pat
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
-def test_verify_reply_js_accepts_sidecar_and_refuses_damage(sidecar, tmp_path):
+def test_verify_reply_js_accepts_sidecar_and_refuses_damage(sidecar, tmp_path: Path) -> None:
     root, _, handle = sidecar
     text = rs.read_text(root, handle)
     assert _verify_js(tmp_path, text, handle) is None
@@ -87,7 +88,7 @@ def test_verify_reply_js_accepts_sidecar_and_refuses_damage(sidecar, tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
-def test_reader_script_returns_the_sidecar_text(sidecar, tmp_path):
+def test_reader_script_returns_the_sidecar_text(sidecar, tmp_path: Path) -> None:
     root = tmp_path / "big"
     path = root / "state" / "warp" / "run1" / "big.json"
     handle = rs.write_reply(root, path, _manifest(150))
@@ -102,7 +103,7 @@ def test_reader_script_returns_the_sidecar_text(sidecar, tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
-def test_read_stage_sidecar_js_adopts_and_refuses_damage(sidecar, tmp_path):
+def test_read_stage_sidecar_js_adopts_and_refuses_damage(sidecar, tmp_path: Path) -> None:
     root, path, handle = sidecar
     body = json.dumps(_reader_file(root, handle).read_text("ascii")[len(rs.READER_META):])
     runner = (

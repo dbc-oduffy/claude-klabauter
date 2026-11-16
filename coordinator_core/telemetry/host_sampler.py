@@ -270,6 +270,11 @@ import sys
 import time
 from pathlib import Path
 from typing import Optional
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from logging import Logger
+    from types import ModuleType
 
 # Sibling dependencies are loaded by FILE PATH (never `from coordinator_core
 # import ...` / `from coordinator_core.telemetry import ...`) -- see module
@@ -284,7 +289,7 @@ from typing import Optional
 _THIS_DIR = Path(__file__).resolve().parent
 
 
-def _load_sibling(modname: str, relpath: str):
+def _load_sibling(modname: str, relpath: str) -> ModuleType:
     existing = sys.modules.get(modname)
     if existing is not None:
         return existing
@@ -376,7 +381,7 @@ _IS_WINDOWS = os.name == "nt"
 _logger = None
 
 
-def _log():
+def _log() -> Logger:
     global _logger
     if _logger is None:
         import logging

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from coordinator_core.write_guards import block_dev_repo_sentinel_write as guard
+import pytest
 
 
 SENTINEL = ".coordinator-dev-repo"
@@ -19,52 +20,52 @@ def _deny_reason(out):
 
 
 class TestAdvisesEachMatcher:
-    def test_write_advises(self):
+    def test_write_advises(self) -> None:
         _deny_reason(guard.check(_payload("Write", "/repo/%s" % SENTINEL)))
 
-    def test_edit_advises(self):
+    def test_edit_advises(self) -> None:
         _deny_reason(guard.check(_payload("Edit", "/repo/%s" % SENTINEL)))
 
-    def test_multiedit_advises(self):
+    def test_multiedit_advises(self) -> None:
         _deny_reason(guard.check(_payload("MultiEdit", "/repo/%s" % SENTINEL)))
 
-    def test_notebookedit_advises(self):
+    def test_notebookedit_advises(self) -> None:
         payload = {"tool_name": "NotebookEdit", "tool_input": {"notebook_path": "/repo/%s" % SENTINEL}}
         _deny_reason(guard.check(payload))
 
-    def test_case_varied_basename_advises(self):
+    def test_case_varied_basename_advises(self) -> None:
         _deny_reason(guard.check(_payload("Write", "/repo/.COORDINATOR-DEV-REPO")))
 
 
 class TestPassSet:
-    def test_ordinary_repo_root_file_allows(self):
+    def test_ordinary_repo_root_file_allows(self) -> None:
         assert guard.check(_payload("Write", "/repo/README.md")) is None
 
-    def test_non_matcher_tool_allows(self):
+    def test_non_matcher_tool_allows(self) -> None:
         assert guard.check({"tool_name": "Bash", "tool_input": {"command": "rm x"}}) is None
 
-    def test_malformed_tool_input_allows(self):
+    def test_malformed_tool_input_allows(self) -> None:
         assert guard.check({"tool_name": "Write", "tool_input": "not-a-dict"}) is None
 
-    def test_missing_path_allows(self):
+    def test_missing_path_allows(self) -> None:
         assert guard.check({"tool_name": "Write", "tool_input": {}}) is None
 
-    def test_near_miss_filename_allows(self):
+    def test_near_miss_filename_allows(self) -> None:
         assert guard.check(_payload("Write", "/repo/%s-typo" % SENTINEL)) is None
 
 
 class TestOverrideEnvVar:
-    def test_override_allows(self, monkeypatch):
+    def test_override_allows(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COORDINATOR_OVERRIDE_DEV_REPO_SENTINEL", "1")
         assert guard.check(_payload("Write", "/repo/%s" % SENTINEL)) is None
 
 
 class TestDenyMessageDiscipline:
-    def test_deny_reason_never_names_the_sentinel(self):
+    def test_deny_reason_never_names_the_sentinel(self) -> None:
         reason = _deny_reason(guard.check(_payload("Write", "/repo/%s" % SENTINEL)))
         assert SENTINEL not in reason
 
-    def test_deny_reason_never_names_override_assignment_form(self):
+    def test_deny_reason_never_names_override_assignment_form(self) -> None:
         """`operator_override_note`'s 2026-08-11 NEGATIVE SPEC 4 (and the
         same-day second reshape, docs/plans/2026-08-11-guard-messages-point-
         to-docs-never-name.md) forbid a pasteable `KEY=1`/`KEY="..."` literal

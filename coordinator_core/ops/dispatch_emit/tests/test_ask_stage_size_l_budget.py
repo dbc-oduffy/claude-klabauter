@@ -5,11 +5,13 @@ from __future__ import annotations
 from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.ops.dispatch_emit import ask_stage, live_run_writes
 from coordinator_core.ops.dispatch_emit.tests._size_l_plan import build_size_l_plan, isolate_launch_dirs
+from pathlib import Path
+import pytest
 
 BAR_MS = 500.0
 
 
-def test_size_l_stage_under_the_brightline(tmp_path, monkeypatch):
+def test_size_l_stage_under_the_brightline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     isolate_launch_dirs(monkeypatch, tmp_path)
     root = tmp_path / "repo"
     root.mkdir()
@@ -23,7 +25,7 @@ def test_size_l_stage_under_the_brightline(tmp_path, monkeypatch):
     assert ms < BAR_MS, f"size-L stage took {ms}ms process time"
 
 
-def test_overlap_scan_over_large_footprints_stays_under_the_bar(tmp_path):
+def test_overlap_scan_over_large_footprints_stays_under_the_bar(tmp_path: Path) -> None:
     writes = [f"pkg/mod_{i}.py" for i in range(40)]
     footprints = {f"peer-{k}": frozenset(f"peer{k}/mod_{j}.py" for j in range(200)) for k in range(50)}
     footprints["hit"] = frozenset({"pkg/mod_3.py", "pkg", "pkg/mod_3.py/sub.py", "other/x.py"})

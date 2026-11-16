@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 from coordinator_core.git import git_objects
+import pytest
 
 _PACKS = 200
 
@@ -61,7 +62,7 @@ def _owner(common: Path, sha: str) -> Path:
     return indexes.pack_path(pos)
 
 
-def test_many_lookups_parse_each_idx_at_most_once(tmp_path, monkeypatch):
+def test_many_lookups_parse_each_idx_at_most_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     common, shas = _repo(tmp_path)
     parsed = _count_parses(monkeypatch)
     for i, sha in enumerate(shas):
@@ -70,7 +71,7 @@ def test_many_lookups_parse_each_idx_at_most_once(tmp_path, monkeypatch):
     assert len(parsed) <= _PACKS
 
 
-def test_adding_a_pack_parses_only_that_idx_and_keeps_existing_segments(tmp_path, monkeypatch):
+def test_adding_a_pack_parses_only_that_idx_and_keeps_existing_segments(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     common, shas = _repo(tmp_path)
     git_objects.read_object(common, shas[0])
     before = _merged(common)
@@ -92,7 +93,7 @@ def test_adding_a_pack_parses_only_that_idx_and_keeps_existing_segments(tmp_path
     assert len(parsed) == 1
 
 
-def test_newest_pack_wins_a_sha_held_by_several_after_carry(tmp_path):
+def test_newest_pack_wins_a_sha_held_by_several_after_carry(tmp_path: Path) -> None:
     common, shas = _repo(tmp_path)
     git_objects.read_object(common, shas[0])
     _merged(common)
@@ -111,7 +112,7 @@ def test_newest_pack_wins_a_sha_held_by_several_after_carry(tmp_path):
     assert mtimes[newest] >= mtimes[first]
 
 
-def test_older_added_pack_does_not_shadow_a_newer_one(tmp_path):
+def test_older_added_pack_does_not_shadow_a_newer_one(tmp_path: Path) -> None:
     common, _ = _repo(tmp_path)
     git_objects.read_object(common, _sha(b"obj-0"))
     _merged(common)
@@ -130,7 +131,7 @@ def test_older_added_pack_does_not_shadow_a_newer_one(tmp_path):
     assert git_objects.read_object(common, shared) == ("blob", b"shared")
 
 
-def test_removed_pack_is_dropped_and_the_rest_still_resolve(tmp_path):
+def test_removed_pack_is_dropped_and_the_rest_still_resolve(tmp_path: Path) -> None:
     common, shas = _repo(tmp_path)
     git_objects.read_object(common, shas[0])
     _merged(common)

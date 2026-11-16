@@ -5,6 +5,7 @@ from __future__ import annotations
 import yaml
 
 from coordinator_core.ops.dispatch_emit import inventory_mint as im
+from pathlib import Path
 
 _HEAD = (
     "---\nrun_id: 20261019T000000-rev\n---\n\n## Chunk table\n\n"
@@ -35,11 +36,11 @@ def _ids(text):
     return [r["id"] for r in yaml.safe_load(text.split("```yaml plan-tasks\n", 1)[1].split("```", 1)[0]) or []]
 
 
-def test_coded_chunk_is_absent_without_a_review_request(tmp_path):
+def test_coded_chunk_is_absent_without_a_review_request(tmp_path: Path) -> None:
     text, _ = im.mint_spine(str(_inventory(tmp_path)))
     assert _ids(text) == ["eet-06.C2"]
 
 
-def test_review_request_keeps_the_named_coded_chunk(tmp_path):
+def test_review_request_keeps_the_named_coded_chunk(tmp_path: Path) -> None:
     text, _ = im.mint_spine(str(_inventory(tmp_path)), review_rows=frozenset({"eet-06.C1"}))
     assert "eet-06.C1" in _ids(text)

@@ -185,6 +185,21 @@ def _checkpoint_attribution(worktree_root: Path, terminal_sha: str, plan_path: O
     return out
 
 
+def checkpoint_candidates(worktree_root: Path, run_id: str, paths: Sequence[str]) -> dict:
+    """``{path: own_hunk_candidate.candidate}`` for each of ``paths`` the worktree can read: the checkpoint
+    blob is ``["bytes"]`` (HEAD plus only the run's own hunks; sibling hunks stay in the worktree), a
+    ``["refused"]`` entry names ``lines`` and ``owner`` and the path stays off the checkpoint. A path
+    unreadable in the worktree is absent."""
+    from coordinator_core.ops.dispatch_emit.halted_record_commit import _candidate_for
+
+    out: dict = {}
+    for path in dict.fromkeys(p.replace("\\", "/") for p in paths if isinstance(p, str) and p):
+        res = _candidate_for(Path(worktree_root), run_id, path, declared=None)
+        if res:
+            out[path] = res
+    return out
+
+
 def _open_row_ids(worktree_root: Path, plan_rel: str) -> set:
     """Ids of the plan spine rows whose disposition is ``open`` on disk now."""
     import yaml

@@ -143,3 +143,37 @@ def test_prefilter_skips_commands_that_cannot_name_home(home, tmp_path, monkeypa
 
     monkeypatch.setattr(guard, "resolve_command_positions", boom)
     assert _enveloped(guard.check)(_payload("echo hello > out.txt", cwd=tmp_path)) is None
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        r"pytest x > $HOME\rv.log",
+        r"pytest x 2>&1 > $HOME\rv.log",
+        r"pytest x *> $HOME\rv.log",
+        r"pytest x >> $env:USERPROFILE\rv.log",
+        "pytest x > ~/rv.log",
+        r"pytest x | Tee-Object -FilePath $HOME\scratch-x.log",
+    ],
+)
+def test_powershell_redirect_and_tee_log_capture_to_home_is_denied(home, tmp_path, cmd):
+    assert _denied(_enveloped(guard.check)(_payload(cmd, tool="PowerShell", cwd=tmp_path)))
+
+
+@pytest.mark.parametrize(
+    "cmd",
+    [
+        "python -m pytest x > ~/rv.log 2>&1",
+        "pip freeze > ~/prefreeze.txt",
+        "git diff > $HOME/scratch-docs-check.diff",
+        "python -m pytest x 2>&1 | tee $HOME/alone.log",
+    ],
+)
+def test_bash_log_capture_to_home_is_denied(home, tmp_path, cmd):
+    assert _denied(_enveloped(guard.check)(_payload(cmd, cwd=tmp_path)))
+
+
+def test_powershell_redirect_to_home_subdir_or_dollar_null_is_allowed(home, tmp_path):
+    check = _enveloped(guard.check)
+    assert check(_payload(r"pytest x > $HOME\X\scratch\rv.log", tool="PowerShell", cwd=tmp_path)) is None
+    assert check(_payload("pytest x > $null", tool="PowerShell", cwd=tmp_path)) is None

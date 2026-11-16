@@ -6,6 +6,8 @@ import json
 from coordinator_core.ops.dispatch_emit import cli as cli_module
 from coordinator_core.ops.dispatch_emit import research_emit as re_
 from coordinator_core.ops.dispatch_emit.tests.test_cli_research_route import _write_sizing, repo  # noqa: F401
+from pathlib import Path
+import pytest
 
 
 def _emit(repo, capsys):
@@ -15,7 +17,7 @@ def _emit(repo, capsys):
     return code, json.loads(capsys.readouterr().out)
 
 
-def _launch(repo, name, *, halted=False):
+def _launch(repo, name, *, halted: bool = False) -> None:
     run = repo / "scratch" / "warp" / name
     run.mkdir(parents=True)
     (run / re_.SUBMISSION_FILE).write_text("{}", encoding="utf-8")
@@ -23,7 +25,7 @@ def _launch(repo, name, *, halted=False):
         (run / re_.HALTED_FILE).write_text("{}", encoding="utf-8")
 
 
-def test_a_live_sibling_run_puts_the_shared_budget_warning_in_the_reply(repo, capsys):
+def test_a_live_sibling_run_puts_the_shared_budget_warning_in_the_reply(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _launch(repo, "pipeline-research-20260101T000000-abc123")
     code, reply = _emit(repo, capsys)
     assert code == cli_module.EXIT_OK and reply["ok"]
@@ -32,7 +34,7 @@ def test_a_live_sibling_run_puts_the_shared_budget_warning_in_the_reply(repo, ca
     assert "pipeline-research-20260101T000000-abc123" in warning
 
 
-def test_no_live_sibling_adds_nothing(repo, capsys):
+def test_no_live_sibling_adds_nothing(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _launch(repo, "pipeline-research-20260101T000000-abc123", halted=True)
     _launch(repo, "pipeline-other-20260101T000000-def456")
     code, reply = _emit(repo, capsys)
@@ -40,7 +42,7 @@ def test_no_live_sibling_adds_nothing(repo, capsys):
     assert "websearch_budget_warning" not in reply
 
 
-def test_a_submission_older_than_the_window_is_not_live(tmp_path):
+def test_a_submission_older_than_the_window_is_not_live(tmp_path: Path) -> None:
     _launch(tmp_path, "pipeline-research-old-abc123")
     now = (tmp_path / "scratch/warp/pipeline-research-old-abc123" / re_.SUBMISSION_FILE).stat().st_mtime
     args = (tmp_path, "scratch/warp", "pipeline-research-", "own")

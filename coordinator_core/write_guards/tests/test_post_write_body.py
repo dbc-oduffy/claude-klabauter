@@ -1,12 +1,13 @@
 from coordinator_core.write_guards import _post_write_body as m
+from pathlib import Path
 
 
-def test_write_returns_content_or_none():
+def test_write_returns_content_or_none() -> None:
     assert m.post_write_body("Write", {"content": "x"}, None) == "x"
     assert m.post_write_body("Write", {}, None) is None
 
 
-def test_edit_first_vs_replace_all():
+def test_edit_first_vs_replace_all() -> None:
     ti = {"old_string": "a", "new_string": "b"}
     assert m.post_write_body("Edit", ti, "aaa") == "baa"
     assert m.post_write_body("Edit", {**ti, "replace_all": True}, "aaa") == "bbb"
@@ -14,7 +15,7 @@ def test_edit_first_vs_replace_all():
     assert m.post_write_body("Edit", ti, None) is None
 
 
-def test_multiedit_sequential_and_stale_modes():
+def test_multiedit_sequential_and_stale_modes() -> None:
     edits = [
         {"old_string": "a", "new_string": "b"},
         {"old_string": "gone", "new_string": "x"},
@@ -25,7 +26,7 @@ def test_multiedit_sequential_and_stale_modes():
     assert m.post_write_body("MultiEdit", {"edits": []}, "a") is None
 
 
-def test_read_pre_image_cap_and_missing(tmp_path):
+def test_read_pre_image_cap_and_missing(tmp_path: Path) -> None:
     ok = tmp_path / "ok.md"
     ok.write_text("hi")
     assert m.read_pre_image(ok) == "hi"

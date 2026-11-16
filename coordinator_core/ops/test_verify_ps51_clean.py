@@ -14,6 +14,7 @@ from contextlib import redirect_stderr, redirect_stdout
 import pytest
 
 from coordinator_core.ops import verify_ps51_clean as vps
+from pathlib import Path
 
 
 CLEAN_PS1 = """# Clean PowerShell 5.1 script
@@ -60,20 +61,20 @@ def _write(tmp_path, name: str, content: str) -> str:
     return str(p)
 
 
-def _run_main(argv, monkeypatch=None):
+def _run_main(argv, monkeypatch=None) -> tuple[int, str, str]:
     out, err = io.StringIO(), io.StringIO()
     with redirect_stdout(out), redirect_stderr(err):
         rc = vps.main(argv)
     return rc, out.getvalue(), err.getvalue()
 
 
-def test_no_args_usage_error():
+def test_no_args_usage_error() -> None:
     rc, out, err = _run_main([])
     assert rc == 2
     assert "Usage:" in err
 
 
-def test_skip_when_engine_absent(tmp_path, monkeypatch):
+def test_skip_when_engine_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(vps, "find_ps51_exe", lambda: None)
     ps1 = _write(tmp_path, "clean.ps1", CLEAN_PS1)
     rc, out, err = _run_main([ps1])
@@ -81,14 +82,14 @@ def test_skip_when_engine_absent(tmp_path, monkeypatch):
     assert out.startswith("SKIP:")
 
 
-def test_collect_ps1_files_single_file(tmp_path):
+def test_collect_ps1_files_single_file(tmp_path: Path) -> None:
     ps1 = _write(tmp_path, "a.ps1", CLEAN_PS1)
     files, warnings = vps.collect_ps1_files([ps1])
     assert files == [ps1]
     assert warnings == []
 
 
-def test_collect_ps1_files_missing_path_warns(tmp_path):
+def test_collect_ps1_files_missing_path_warns(tmp_path: Path) -> None:
     missing = str(tmp_path / "does-not-exist.ps1")
     files, warnings = vps.collect_ps1_files([missing])
     assert files == []
@@ -96,7 +97,7 @@ def test_collect_ps1_files_missing_path_warns(tmp_path):
     assert "WARN: path not found" in warnings[0]
 
 
-def test_collect_ps1_files_directory_recurses_and_filters(tmp_path):
+def test_collect_ps1_files_directory_recurses_and_filters(tmp_path: Path) -> None:
     d = tmp_path / "scripts"
     d.mkdir()
     (d / "good.ps1").write_text(CLEAN_PS1, encoding="utf-8")
@@ -112,25 +113,25 @@ def test_collect_ps1_files_directory_recurses_and_filters(tmp_path):
     assert warnings == []
 
 
-def test_detect_ps7_floor_version_with_minor():
+def test_detect_ps7_floor_version_with_minor() -> None:
     is_floored, version = vps.detect_ps7_floor(PS7_FLOORED_PS1)
     assert is_floored is True
     assert version == "7.0"
 
 
-def test_detect_ps7_floor_version_no_minor():
+def test_detect_ps7_floor_version_no_minor() -> None:
     is_floored, version = vps.detect_ps7_floor(PS7_NO_MINOR_PS1)
     assert is_floored is True
     assert version == "7"
 
 
-def test_detect_ps7_floor_major_below_7_not_floored():
+def test_detect_ps7_floor_major_below_7_not_floored() -> None:
     is_floored, version = vps.detect_ps7_floor(PS6_FLOORED_PS1)
     assert is_floored is False
     assert version is None
 
 
-def test_detect_ps7_floor_bom_does_not_mask_requires():
+def test_detect_ps7_floor_bom_does_not_mask_requires() -> None:
     # Regression test: PORTER-BRIEF-ADDENDUM rule 6 — the fixture's edge (a
     # leading BOM immediately before #requires) is exercised, not glossed over.
     is_floored, version = vps.detect_ps7_floor(BOM_FLOORED_PS1)
@@ -138,34 +139,34 @@ def test_detect_ps7_floor_bom_does_not_mask_requires():
     assert version == "7.0"
 
 
-def test_detect_ps7_floor_no_requires_line():
+def test_detect_ps7_floor_no_requires_line() -> None:
     is_floored, version = vps.detect_ps7_floor(CLEAN_PS1)
     assert is_floored is False
     assert version is None
 
 
-def test_static_scan_flags_double_pipe_in_string():
+def test_static_scan_flags_double_pipe_in_string() -> None:
     warnings = vps.static_scan_warnings(WARN_PS1)
     assert any("&&/||" in w for w in warnings)
 
 
-def test_static_scan_flags_null_coalescing():
+def test_static_scan_flags_null_coalescing() -> None:
     warnings = vps.static_scan_warnings('$result = $Value ?? "default"\n')
     assert any(w.startswith("?? @line") for w in warnings)
 
 
-def test_static_scan_null_coalescing_assign_not_double_counted():
+def test_static_scan_null_coalescing_assign_not_double_counted() -> None:
     warnings = vps.static_scan_warnings("$x ??= 1\n")
     tokens_on_line_1 = [w for w in warnings if "@line 1" in w and w.startswith("??")]
     assert len(tokens_on_line_1) == 1
     assert tokens_on_line_1[0].startswith("??=")
 
 
-def test_static_scan_clean_script_no_warnings():
+def test_static_scan_clean_script_no_warnings() -> None:
     assert vps.static_scan_warnings(CLEAN_PS1) == []
 
 
-def test_main_clean_file_ok(tmp_path, monkeypatch):
+def test_main_clean_file_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(vps, "find_ps51_exe", lambda: "/fake/powershell.exe")
     monkeypatch.setattr(vps, "parse_with_ps51", lambda exe, path: (0, ""))
     ps1 = _write(tmp_path, "clean.ps1", CLEAN_PS1)
@@ -175,7 +176,7 @@ def test_main_clean_file_ok(tmp_path, monkeypatch):
     assert "1/1 parse-clean (incl. 0 with advisory warnings), 0 failed, 0 expected-ps7" in out
 
 
-def test_main_parse_error_without_ps7_floor_is_fail(tmp_path, monkeypatch):
+def test_main_parse_error_without_ps7_floor_is_fail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(vps, "find_ps51_exe", lambda: "/fake/powershell.exe")
     monkeypatch.setattr(
         vps, "parse_with_ps51", lambda exe, path: (1, "Missing closing '}' @line 5")
@@ -188,7 +189,7 @@ def test_main_parse_error_without_ps7_floor_is_fail(tmp_path, monkeypatch):
     assert "1 failed" in out
 
 
-def test_main_parse_error_with_ps7_floor_is_expected_ps7(tmp_path, monkeypatch):
+def test_main_parse_error_with_ps7_floor_is_expected_ps7(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(vps, "find_ps51_exe", lambda: "/fake/powershell.exe")
     monkeypatch.setattr(vps, "parse_with_ps51", lambda exe, path: (1, "Unexpected token '??'"))
     ps1 = _write(tmp_path, "ps7.ps1", PS7_FLOORED_PS1)
@@ -198,7 +199,7 @@ def test_main_parse_error_with_ps7_floor_is_expected_ps7(tmp_path, monkeypatch):
     assert "1 expected-ps7 (PS7-floored)" in out
 
 
-def test_main_parse_clean_with_advisory_warn_still_ok(tmp_path, monkeypatch):
+def test_main_parse_clean_with_advisory_warn_still_ok(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(vps, "find_ps51_exe", lambda: "/fake/powershell.exe")
     monkeypatch.setattr(vps, "parse_with_ps51", lambda exe, path: (0, ""))
     ps1 = _write(tmp_path, "warn.ps1", WARN_PS1)
@@ -209,7 +210,7 @@ def test_main_parse_clean_with_advisory_warn_still_ok(tmp_path, monkeypatch):
     assert "1/1 parse-clean (incl. 1 with advisory warnings), 0 failed" in out
 
 
-def test_main_directory_with_multiple_files(tmp_path, monkeypatch):
+def test_main_directory_with_multiple_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(vps, "find_ps51_exe", lambda: "/fake/powershell.exe")
     monkeypatch.setattr(vps, "parse_with_ps51", lambda exe, path: (0, ""))
     d = tmp_path / "scripts"
@@ -221,7 +222,7 @@ def test_main_directory_with_multiple_files(tmp_path, monkeypatch):
     assert "2/2 parse-clean" in out
 
 
-def test_main_missing_path_warns_but_does_not_crash(tmp_path, monkeypatch):
+def test_main_missing_path_warns_but_does_not_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(vps, "find_ps51_exe", lambda: "/fake/powershell.exe")
     monkeypatch.setattr(vps, "parse_with_ps51", lambda exe, path: (0, ""))
     ps1 = _write(tmp_path, "clean.ps1", CLEAN_PS1)
@@ -231,7 +232,7 @@ def test_main_missing_path_warns_but_does_not_crash(tmp_path, monkeypatch):
     assert "WARN: path not found" in err
 
 
-def test_main_empty_directory_no_ps1_files(tmp_path, monkeypatch):
+def test_main_empty_directory_no_ps1_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(vps, "find_ps51_exe", lambda: "/fake/powershell.exe")
     d = tmp_path / "empty"
     d.mkdir()
@@ -242,7 +243,7 @@ def test_main_empty_directory_no_ps1_files(tmp_path, monkeypatch):
     assert "0/0 parse-clean" in out
 
 
-def test_main_version_6_floor_below_7_is_fail_not_expected(tmp_path, monkeypatch):
+def test_main_version_6_floor_below_7_is_fail_not_expected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(vps, "find_ps51_exe", lambda: "/fake/powershell.exe")
     monkeypatch.setattr(vps, "parse_with_ps51", lambda exe, path: (1, "Unexpected token '??'"))
     ps1 = _write(tmp_path, "ps6.ps1", PS6_FLOORED_PS1)
@@ -252,7 +253,7 @@ def test_main_version_6_floor_below_7_is_fail_not_expected(tmp_path, monkeypatch
     assert "EXPECTED-PS7" not in out
 
 
-def test_parse_with_ps51_nonzero_exit_is_one_parse_error(monkeypatch, tmp_path):
+def test_parse_with_ps51_nonzero_exit_is_one_parse_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     class _FakeResult:
         returncode = 1
         stdout = ""
@@ -267,7 +268,7 @@ def test_parse_with_ps51_nonzero_exit_is_one_parse_error(monkeypatch, tmp_path):
     assert "invocation failed" in msg
 
 
-def test_parse_with_ps51_timeout_is_one_parse_error(monkeypatch, tmp_path):
+def test_parse_with_ps51_timeout_is_one_parse_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import subprocess as real_subprocess
 
     def _fake_run(*args, **kwargs):
@@ -280,7 +281,7 @@ def test_parse_with_ps51_timeout_is_one_parse_error(monkeypatch, tmp_path):
     assert "invocation failed" in msg
 
 
-def test_parse_with_ps51_passes_timeout_and_stdin_devnull(monkeypatch, tmp_path):
+def test_parse_with_ps51_passes_timeout_and_stdin_devnull(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     captured = {}
 
     class _FakeResult:

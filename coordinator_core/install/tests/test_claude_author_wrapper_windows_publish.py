@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from coordinator_core.install import maximalist
+from pathlib import Path
 
 
 @pytest.fixture
@@ -15,7 +16,7 @@ def orch():
 
 
 @pytest.fixture(autouse=True)
-def _allow_machine_mutation(monkeypatch):
+def _allow_machine_mutation(monkeypatch: pytest.MonkeyPatch) -> None:
     # The suite-wide conftest sets COORDINATOR_DISABLE_MACHINE_MUTATION=1, which
     # makes the installer return before the publish path under test; every
     # destination here is under tmp_path.
@@ -36,17 +37,17 @@ class _NtOs:
         return getattr(os, attr)
 
 
-def _pretend_windows(monkeypatch):
+def _pretend_windows(monkeypatch) -> None:
     monkeypatch.setattr(maximalist, "os", _NtOs())
 
 
-def _make_wrapper_src(tmp_path):
+def _make_wrapper_src(tmp_path) -> str:
     src = tmp_path / "claude-author.py"
     src.write_text("#!/usr/bin/env python3\nprint('claude-author')\n")
     return str(src)
 
 
-def test_windows_install_never_copy2s_onto_the_live_destination(tmp_path, orch, monkeypatch):
+def test_windows_install_never_copy2s_onto_the_live_destination(tmp_path: Path, orch, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     _pretend_windows(monkeypatch)
 
@@ -115,7 +116,7 @@ def test_windows_install_never_copy2s_onto_the_live_destination(tmp_path, orch, 
     assert not leftover_tmp, f"temp publish file(s) left behind: {leftover_tmp}"
 
 
-def test_windows_install_cleans_up_temp_on_copy_failure(tmp_path, orch, monkeypatch):
+def test_windows_install_cleans_up_temp_on_copy_failure(tmp_path: Path, orch, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     _pretend_windows(monkeypatch)
 

@@ -51,7 +51,7 @@ def _write(root: Path, rel: str, text: str) -> None:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], root)
@@ -106,7 +106,7 @@ def _dirty(root: Path) -> set:
     }
 
 
-def test_an_ask_run_lands_sidecar_baton_slice_and_superseded_record(repo):
+def test_an_ask_run_lands_sidecar_baton_slice_and_superseded_record(repo) -> None:
     _stage_graph(repo)
 
     out = _fire(repo)
@@ -128,7 +128,7 @@ def test_an_ask_run_lands_sidecar_baton_slice_and_superseded_record(repo):
     assert {f"{RECORD_DIR_ROOT}/{RUN}/run.json", f"{RECORD_DIR_ROOT}/{OLD_RUN}/ask.md"} <= named
 
 
-def test_a_peer_held_candidate_is_withheld_and_named(repo, monkeypatch):
+def test_a_peer_held_candidate_is_withheld_and_named(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import scope
 
     _stage_graph(repo)
@@ -146,7 +146,7 @@ def test_a_peer_held_candidate_is_withheld_and_named(repo, monkeypatch):
     assert _git(["show", "--name-only", "--format=", "HEAD"], repo).find(BATON) == -1
 
 
-def test_a_gitignored_plan_stays_out(repo):
+def test_a_gitignored_plan_stays_out(repo) -> None:
     _write(repo, ".gitignore", "scratch/\n")
     _git(["add", ".gitignore"], repo)
     _git(["commit", "-q", "-m", "ignore"], repo)
@@ -174,7 +174,7 @@ def test_a_gitignored_plan_stays_out(repo):
     assert "run_artifact_residue" not in out
 
 
-def test_an_ignored_run_prompt_is_named_in_the_reply_and_the_landing_still_succeeds(repo):
+def test_an_ignored_run_prompt_is_named_in_the_reply_and_the_landing_still_succeeds(repo) -> None:
     _write(repo, ".gitignore", f"{RECORD_DIR_ROOT}/\n")
     _git(["add", ".gitignore"], repo)
     _git(["commit", "-q", "-m", "ignore"], repo)
@@ -191,7 +191,7 @@ def test_an_ignored_run_prompt_is_named_in_the_reply_and_the_landing_still_succe
     assert "run_artifact_residue" not in out
 
 
-def test_a_tracked_legacy_run_record_edit_is_named_not_committed(repo):
+def test_a_tracked_legacy_run_record_edit_is_named_not_committed(repo) -> None:
     _write(repo, ".gitignore", f"{RECORD_DIR_ROOT}/\n")
     legacy = f"{RECORD_DIR_ROOT}/{OLD_RUN}/ask.md"
     _write(repo, legacy, "old\n")
@@ -209,7 +209,7 @@ def test_a_tracked_legacy_run_record_edit_is_named_not_committed(repo):
     assert "run_artifact_residue" not in out
 
 
-def test_a_candidate_left_dirty_is_run_artifact_residue(repo, monkeypatch):
+def test_a_candidate_left_dirty_is_run_artifact_residue(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _stage_graph(repo)
     monkeypatch.setattr(run_artifacts, "landable", lambda *a, **k: run_artifacts.Landable())
     monkeypatch.setattr(terminal_commit, "_reland_late_artifacts", lambda *a, **k: [])
@@ -222,7 +222,7 @@ def test_a_candidate_left_dirty_is_run_artifact_residue(repo, monkeypatch):
     assert EVIDENCE in out["error"]
 
 
-def test_a_candidate_another_run_claims_is_not_this_runs_residue(repo, monkeypatch):
+def test_a_candidate_another_run_claims_is_not_this_runs_residue(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import sibling_claims
 
     _stage_graph(repo)
@@ -254,7 +254,7 @@ def _fire_stranded(root: Path, **extra) -> dict:
 
 
 @pytest.mark.parametrize("claimed", [True, False])
-def test_stranded_residue_omits_a_path_another_run_claims(repo, monkeypatch, claimed):
+def test_stranded_residue_omits_a_path_another_run_claims(repo, monkeypatch: pytest.MonkeyPatch, claimed) -> None:
     from coordinator_core.ops.dispatch_emit import sibling_claims
     from coordinator_core.session import core as session_core
 
@@ -280,7 +280,7 @@ def test_stranded_residue_omits_a_path_another_run_claims(repo, monkeypatch, cla
     assert ("op.py" in out.get("stranded_residue", {}).get("C2", [])) is (not claimed), out
 
 
-def test_an_undone_chunks_path_is_not_own_declared_for_sibling_filtering(repo, monkeypatch):
+def test_an_undone_chunks_path_is_not_own_declared_for_sibling_filtering(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import sibling_claims
     from coordinator_core.session import core as session_core
 
@@ -327,7 +327,7 @@ def _warp_dirty(root: Path) -> set:
     }
 
 
-def test_a_terminal_run_commits_no_ask_dir_file_and_reports_push(repo):
+def test_a_terminal_run_commits_no_ask_dir_file_and_reports_push(repo) -> None:
     _stage_ask_dir(repo)
 
     out = _fire(repo)
@@ -341,7 +341,7 @@ def test_a_terminal_run_commits_no_ask_dir_file_and_reports_push(repo):
     assert out["push"]["reason"]
 
 
-def test_a_run_state_file_written_after_the_landing_is_never_relanded(repo, monkeypatch):
+def test_a_run_state_file_written_after_the_landing_is_never_relanded(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _stage_ask_dir(repo)
     late = f"{RECORD_DIR_ROOT}/{ASK}/notes/late.md"
     real = terminal_commit._commit_residue
@@ -361,7 +361,7 @@ def test_a_run_state_file_written_after_the_landing_is_never_relanded(repo, monk
     assert late in _warp_dirty(repo)
 
 
-def test_a_late_file_a_live_peer_holds_is_not_swept(repo, monkeypatch):
+def test_a_late_file_a_live_peer_holds_is_not_swept(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import scope
 
     _stage_ask_dir(repo)
@@ -385,7 +385,7 @@ def test_a_late_file_a_live_peer_holds_is_not_swept(repo, monkeypatch):
     assert late not in (out.get("late_reland") or {}).get("paths", [])
 
 
-def test_the_push_nudge_is_called_after_a_landed_commit(repo, monkeypatch):
+def test_the_push_nudge_is_called_after_a_landed_commit(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import run_push
 
     _stage_graph(repo)

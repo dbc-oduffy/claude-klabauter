@@ -78,6 +78,10 @@ from percolate.interrupted_op import (
     peer_merge_message,
 )
 from percolate.peer_merge_regen import resolve_derived_after_merge
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _SOURCE_HEAD_STAMP = re.compile(r"\[source-head ([0-9a-f]{7,40})\]")
 
@@ -131,7 +135,7 @@ def _last_line(text: str, fallback: str) -> str:
 _FETCH_FAILURE_MODULE = None
 
 
-def _fetch_failure_module():
+def _fetch_failure_module() -> ModuleType:
     """`coordinator/bin/lib/git_fetch_failure.py`, loaded by path: lib/ has no import route to bin/lib."""
     global _FETCH_FAILURE_MODULE
     if _FETCH_FAILURE_MODULE is None:

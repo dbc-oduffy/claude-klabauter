@@ -42,13 +42,14 @@ from coordinator_core.ops.dod_floor_ratchet import (
     register_measurer,
     write_floor,
 )
+from pathlib import Path
 
 
 def _measurement(value: float, sha: str = "deadbeef", via: str = "test-stub") -> FloorMeasurement:
     return FloorMeasurement(value=value, head_sha=sha, measured_via=via)
 
 
-def test_first_write_always_succeeds(tmp_path):
+def test_first_write_always_succeeds(tmp_path: Path) -> None:
     result = write_floor("widgets", _measurement(50.0), repo_root=tmp_path)
     assert result == floor_path("widgets", tmp_path)
     record = json.loads(result.read_text(encoding="utf-8"))
@@ -58,14 +59,14 @@ def test_first_write_always_succeeds(tmp_path):
     assert "ratchet_rule" in record and "_purpose" in record
 
 
-def test_raise_accepted(tmp_path):
+def test_raise_accepted(tmp_path: Path) -> None:
     write_floor("widgets", _measurement(50.0), repo_root=tmp_path)
     result = write_floor("widgets", _measurement(60.0), repo_root=tmp_path)
     assert result == floor_path("widgets", tmp_path)
     assert read_floor("widgets", tmp_path)["fail_under"] == 60.0
 
 
-def test_lower_refused_and_file_unchanged(tmp_path):
+def test_lower_refused_and_file_unchanged(tmp_path: Path) -> None:
     write_floor("widgets", _measurement(50.0), repo_root=tmp_path)
     before = floor_path("widgets", tmp_path).read_text(encoding="utf-8")
 
@@ -78,7 +79,7 @@ def test_lower_refused_and_file_unchanged(tmp_path):
     assert before == after
 
 
-def test_equal_is_a_noop(tmp_path):
+def test_equal_is_a_noop(tmp_path: Path) -> None:
     write_floor("widgets", _measurement(50.0), repo_root=tmp_path)
     before = floor_path("widgets", tmp_path).read_text(encoding="utf-8")
 
@@ -89,7 +90,7 @@ def test_equal_is_a_noop(tmp_path):
     assert before == after
 
 
-def test_missing_floor_file_reads_as_none(tmp_path):
+def test_missing_floor_file_reads_as_none(tmp_path: Path) -> None:
     assert read_floor("nonexistent-dim", tmp_path) is None
 
 
@@ -103,7 +104,7 @@ def test_missing_floor_file_reads_as_none(tmp_path):
         json.dumps({"fail_under": None}),
     ],
 )
-def test_malformed_stored_floor_refuses_write(tmp_path, payload):
+def test_malformed_stored_floor_refuses_write(tmp_path: Path, payload) -> None:
     """This was `test_malformed_stored_floor_treated_as_absent`, asserting
     that a malformed stored floor is silently treated as "no floor yet" and
     freely overwritten. That was the bug: a corrupt/truncated floor file is
@@ -125,7 +126,7 @@ def test_malformed_stored_floor_refuses_write(tmp_path, payload):
     assert path.read_bytes() == before
 
 
-def test_malformed_stored_floor_cannot_be_overwritten_by_a_lower_value(tmp_path):
+def test_malformed_stored_floor_cannot_be_overwritten_by_a_lower_value(tmp_path: Path) -> None:
     """The regression this chunk closes: a malformed stored floor must not
     be silently overwritable by a *lower* value either -- it is refused
     outright, not ratchet-compared."""
@@ -139,12 +140,12 @@ def test_malformed_stored_floor_cannot_be_overwritten_by_a_lower_value(tmp_path)
     assert path.read_bytes() == before
 
 
-def test_docstrings_uses_the_landed_filename_unchanged(tmp_path):
+def test_docstrings_uses_the_landed_filename_unchanged(tmp_path: Path) -> None:
     path = floor_path("docstrings", tmp_path)
     assert path == tmp_path / ".github" / "docstring-coverage-floor.json"
 
 
-def test_existing_docstrings_consumer_still_reads_a_written_floor(tmp_path):
+def test_existing_docstrings_consumer_still_reads_a_written_floor(tmp_path: Path) -> None:
     """The committed consumer, `gate_dimension_docstrings._load_fail_under`,
     reads `.github/docstring-coverage-floor.json` via `json.loads(...)
     ["fail_under"]` verbatim -- reproduced here (not imported) so this test
@@ -158,10 +159,10 @@ def test_existing_docstrings_consumer_still_reads_a_written_floor(tmp_path):
     assert fail_under == 91.0
 
 
-def test_raise_floor_uses_registered_measurer(tmp_path, monkeypatch):
+def test_raise_floor_uses_registered_measurer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
-    def fake_measurer(repo_root):
+    def fake_measurer(repo_root) -> FloorMeasurement:
         calls.append(repo_root)
         return _measurement(77.0, sha="feedface", via="fake-measurer")
 
@@ -178,13 +179,13 @@ def test_raise_floor_uses_registered_measurer(tmp_path, monkeypatch):
     assert record["measured_via"] == "fake-measurer"
 
 
-def test_raise_floor_refuses_unregistered_dimension(tmp_path):
+def test_raise_floor_refuses_unregistered_dimension(tmp_path: Path) -> None:
     assert "totally-unregistered-dimension" not in MEASURERS
     with pytest.raises(ValueError, match="no measurer registered"):
         raise_floor("totally-unregistered-dimension", repo_root=tmp_path)
 
 
-def test_docstrings_measurer_is_registered_at_import_time():
+def test_docstrings_measurer_is_registered_at_import_time() -> None:
     assert "docstrings" in MEASURERS
 
 
@@ -193,10 +194,10 @@ def test_docstrings_measurer_is_registered_at_import_time():
 # exercised. `main()` reads `repo_root=None` internally (cwd-relative), so
 # these tests chdir into `tmp_path` via monkeypatch rather than passing
 # `repo_root` through argv (there is no such flag, by design).
-def test_main_raises_and_prints_wrote(tmp_path, monkeypatch, capsys):
+def test_main_raises_and_prints_wrote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.chdir(tmp_path)
 
-    def fake_measurer(repo_root):
+    def fake_measurer(repo_root) -> FloorMeasurement:
         return _measurement(88.0, sha="cliface", via="cli-fake-measurer")
 
     register_measurer("cli-fake-dimension", fake_measurer)
@@ -211,11 +212,11 @@ def test_main_raises_and_prints_wrote(tmp_path, monkeypatch, capsys):
     assert read_floor("cli-fake-dimension", tmp_path)["fail_under"] == 88.0
 
 
-def test_main_noop_prints_no_change(tmp_path, monkeypatch, capsys):
+def test_main_noop_prints_no_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.chdir(tmp_path)
     write_floor("cli-noop-dimension", _measurement(50.0), repo_root=tmp_path)
 
-    def fake_measurer(repo_root):
+    def fake_measurer(repo_root) -> FloorMeasurement:
         return _measurement(50.0, sha="cliface", via="cli-fake-measurer")
 
     register_measurer("cli-noop-dimension", fake_measurer)
@@ -229,7 +230,7 @@ def test_main_noop_prints_no_change(tmp_path, monkeypatch, capsys):
     assert "no change" in out
 
 
-def test_main_unregistered_dimension_prints_error_and_returns_1(capsys):
+def test_main_unregistered_dimension_prints_error_and_returns_1(capsys: pytest.CaptureFixture[str]) -> None:
     assert "totally-unregistered-dimension" not in MEASURERS
     rc = main(["totally-unregistered-dimension"])
 
@@ -238,11 +239,11 @@ def test_main_unregistered_dimension_prints_error_and_returns_1(capsys):
     assert "no measurer registered" in err
 
 
-def test_main_lower_measurement_refused_prints_error_and_returns_1(tmp_path, monkeypatch, capsys):
+def test_main_lower_measurement_refused_prints_error_and_returns_1(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.chdir(tmp_path)
     write_floor("cli-refuse-dimension", _measurement(50.0), repo_root=tmp_path)
 
-    def fake_measurer(repo_root):
+    def fake_measurer(repo_root) -> FloorMeasurement:
         return _measurement(10.0, sha="cliface", via="cli-fake-measurer")
 
     register_measurer("cli-refuse-dimension", fake_measurer)

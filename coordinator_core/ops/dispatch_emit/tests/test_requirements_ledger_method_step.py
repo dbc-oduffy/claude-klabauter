@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.ops import method_step
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 SLUG = "likeness-method"
 ITEMS = (
@@ -26,7 +27,7 @@ def _verdict(**extra):
     return {"items": [{"id": rid, "status": "met", **extra.get(rid, {})} for rid, _ in ITEMS]}
 
 
-def _fence(row, mechanism, at, deviation=""):
+def _fence(row, mechanism, at, deviation: str = "") -> str:
     return (
         f"```yaml method-trace\nrow: {row}\nmechanism: {mechanism}\n"
         f"at: {{path: impl.py, contains: {at}}}\n{deviation}```\n"
@@ -34,7 +35,7 @@ def _fence(row, mechanism, at, deviation=""):
 
 
 @pytest.fixture
-def root(tmp_path):
+def root(tmp_path: Path) -> Path:
     (tmp_path / "impl.py").write_text("def map_expected_value_space(): pass\n", encoding="utf-8")
     return tmp_path
 
@@ -47,25 +48,25 @@ def _reasons(out, rid):
     return [f["reason"] for f in out["failures"] if f["id"] == rid]
 
 
-def test_traced_steps_pass(root):
+def test_traced_steps_pass(root) -> None:
     out = rl.judge(_ledger(), _verdict(), repo_root=root, plan_text=GOOD_R1 + GOOD_R2)
     assert out["pass"], out
 
 
-def test_step_without_trace_is_refused(root):
+def test_step_without_trace_is_refused(root) -> None:
     out = rl.judge(_ledger(), _verdict(), repo_root=root, plan_text=GOOD_R1)
     assert not out["pass"]
     assert any("no mechanism trace" in r for r in _reasons(out, "R2"))
     assert not _reasons(out, "R1")
 
 
-def test_name_only_mechanism_is_refused(root):
+def test_name_only_mechanism_is_refused(root) -> None:
     plan = GOOD_R1 + _fence("R2", "the likeness method step b", "map_expected_value_space")
     out = rl.judge(_ledger(), _verdict(), repo_root=root, plan_text=plan)
     assert any("names the step" in r for r in _reasons(out, "R2"))
 
 
-def test_different_mechanism_without_deviation_is_refused_and_with_ratified_deviation_passes(root):
+def test_different_mechanism_without_deviation_is_refused_and_with_ratified_deviation_passes(root) -> None:
     swapped = _fence("R2", "conform scan values onto the mesh", "map_expected_value_space")
     out = rl.judge(_ledger(), _verdict(), repo_root=root, plan_text=GOOD_R1 + swapped)
     assert any("under half" in r for r in _reasons(out, "R2"))
@@ -75,19 +76,19 @@ def test_different_mechanism_without_deviation_is_refused_and_with_ratified_devi
     assert rl.judge(_ledger(), _verdict(), repo_root=root, plan_text=GOOD_R1 + ok)["pass"]
 
 
-def test_mechanism_absent_from_tree_fails_even_when_item_is_met(root):
+def test_mechanism_absent_from_tree_fails_even_when_item_is_met(root) -> None:
     absent = _fence("R2", "map values into the MetaHuman expected-value space table", "no_such_symbol")
     out = rl.judge(_ledger(), _verdict(), repo_root=root, plan_text=GOOD_R1 + absent)
     assert any("absent" in r for r in _reasons(out, "R2"))
 
 
-def test_unmarked_row_carries_no_trace_burden(root):
+def test_unmarked_row_carries_no_trace_burden(root) -> None:
     ledger = rl.Ledger((rl.Item("R1", "(a) plain", "relayed", "", "relayed", ""),), False, "x", ())
     out = rl.judge(ledger, {"items": [{"id": "R1", "status": "met"}]}, repo_root=root, plan_text="")
     assert out["pass"], out
 
 
-def test_method_lead_in_marks_every_lettered_part():
+def test_method_lead_in_marks_every_lettered_part() -> None:
     entries = rl._lettered_entries("Use a three-step likeness method: (a) capture the scan (b) map values (c) bake")
     assert [e[0][:3] for e in entries] == ["(a)", "(b)", "(c)"]
     for _, anchor in entries:
@@ -95,16 +96,16 @@ def test_method_lead_in_marks_every_lettered_part():
         assert anchor != "relayed"
 
 
-def test_plain_lettered_list_mints_unmarked_rows():
+def test_plain_lettered_list_mints_unmarked_rows() -> None:
     entries = rl._lettered_entries("Please fix: (a) the logo (b) the footer")
     assert entries and all(anchor == "relayed" for _, anchor in entries)
 
 
-def test_marked_anchor_still_reads_as_relayed_origin():
+def test_marked_anchor_still_reads_as_relayed_origin() -> None:
     anchor = method_step.mark_anchor("relayed", SLUG, "a")
     assert rl._origin(anchor) == ("relayed", "")
 
 
-def test_no_repo_root_refuses_a_met_step(root):
+def test_no_repo_root_refuses_a_met_step(root) -> None:
     out = rl.judge(_ledger(), _verdict(), plan_text=GOOD_R1 + GOOD_R2)
     assert any("no repo root" in r for r in _reasons(out, "R1"))

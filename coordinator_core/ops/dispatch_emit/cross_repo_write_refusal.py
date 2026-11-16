@@ -266,6 +266,25 @@ def _absent_sibling_name(raw: str, repo_root: Path) -> Optional[str]:
     return None if (repo_root.parent / segment).exists() else segment
 
 
+AUDIT_FIELD = "cross_repo_audit_writes"
+
+
+def _audit_paths(row, raw: Optional[Mapping] = None) -> list[str]:
+    """The paths a row's ``cross_repo_audit_writes`` brief field declares: EM-authorized writes an
+    agent makes into a sibling checkout that no commit lands (an audit's findings file). They feed
+    the run's grant ledger like ``writes:`` but need no approval touchpoint. Declared paths are
+    returned unfiltered; the caller skips any path in the run's own repo. The row object's
+    attribute wins; else the parsed plan/ask row mapping ``raw`` supplies the field."""
+    declared = getattr(row, AUDIT_FIELD, ()) or ()
+    if not declared and isinstance(raw, Mapping):
+        declared = raw.get(AUDIT_FIELD) or ()
+        if isinstance(declared, str) or not isinstance(declared, (list, tuple)):
+            raise CrossRepoWriteError(
+                f"{AUDIT_FIELD}: {getattr(row, 'id', '?')} declares {declared!r}, not a list of paths."
+            )
+    return [p for p in declared if isinstance(p, str) and p]
+
+
 def check_cross_repo_writes(
     rows,
     repo_root: Optional[Path],
@@ -273,6 +292,7 @@ def check_cross_repo_writes(
     approved: bool = False,
     env: Optional[Mapping[str, str]] = None,
     session_id: Optional[str] = None,
+    raw_by_id: Optional[Mapping[str, Mapping]] = None,
 ) -> list[str]:
     """Classify every row's ``writes:`` / ``writes_under:`` outside
     ``repo_root``. Returns the sibling-repo names the run will write.
@@ -280,8 +300,10 @@ def check_cross_repo_writes(
     Raises ``CrossRepoWriteError`` naming any write outside every checkout,
     and ``CrossRepoApprovalNeeded`` when sibling writes exist on a non-remote
     venue without ``approved``. No-op when ``repo_root`` is ``None``. With
-    ``session_id``, the sibling paths of a passing check are recorded as the
-    run's cross-repo grant (``record_grants``)."""
+    ``session_id``, the sibling paths of a passing check, and every path a row's
+    ``cross_repo_audit_writes`` declares, are recorded as the run's cross-repo grant
+    (``record_grants``). ``raw_by_id`` is the parsed plan/ask rows by id, the source of
+    ``cross_repo_audit_writes`` for row objects that do not carry the field."""
     if repo_root is None:
         return []
     repo_root = Path(repo_root)
@@ -297,6 +319,17 @@ def check_cross_repo_writes(
         if writes is not UNDECLARED and isinstance(writes, list):
             candidates.extend(p for p in writes if isinstance(p, str) and p)
         candidates.extend(getattr(row, "writes_under", ()) or ())
+        for p in _audit_paths(row, (raw_by_id or {}).get(row.id)):
+            if not paths_outside_repo_root([p], repo_root):
+                continue
+            hit = sibling_write(p, repo_root)
+            if hit is None or provisioned_target_of(hit[0] / hit[1], repo_root) is not None:
+                raise CrossRepoWriteError(
+                    f"{AUDIT_FIELD}: {row.id} ({p!r}) is not a path under a git checkout beside "
+                    f"repoRoot ({repo_root}), or lands inside a provisioned local sibling "
+                    f"(a publish target). Name an absolute path under the owning repo's checkout."
+                )
+            granted.append(_posix(str(hit[0] / hit[1])))
         for p in paths_outside_repo_root(candidates, repo_root):
             hit = sibling_write(p, repo_root)
             if hit is None:

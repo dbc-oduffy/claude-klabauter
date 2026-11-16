@@ -37,6 +37,7 @@ GUARD_CLASSES = frozenset({BOX_DEGRADING, IRREVERSIBLE_EXTERNAL, DISRUPTIVE})
 GUARD_DENY_CLASS: Dict[str, str] = {
     "block-push-pr-non-owned-remote": IRREVERSIBLE_EXTERNAL,
     "block-empty-source-push": IRREVERSIBLE_EXTERNAL,
+    "block-held-push": IRREVERSIBLE_EXTERNAL,
     "block-perforce-submit": IRREVERSIBLE_EXTERNAL,
     "p4-verb-fence": IRREVERSIBLE_EXTERNAL,
     "destructive-git-orphan": BOX_DEGRADING,

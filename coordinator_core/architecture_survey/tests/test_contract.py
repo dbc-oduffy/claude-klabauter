@@ -53,7 +53,7 @@ def _results() -> dict:
     }
 
 
-def test_digest_validates_and_rejects_bad():
+def test_digest_validates_and_rejects_bad() -> None:
     assert c.validate_digest(_digest()) == []
     bad = _digest()
     bad["state"] = "waiting"
@@ -63,7 +63,7 @@ def test_digest_validates_and_rejects_bad():
     assert c.validate_digest(bad)
 
 
-def test_build_digest_raises_on_invalid():
+def test_build_digest_raises_on_invalid() -> None:
     with pytest.raises(ValueError):
         c.build_digest(**{"run_id": "nope", "repo_root": "/r", "state": "ran",
                           "mode": "refresh", "system": None, "scratch_dir": "s", "finish_argv": [],
@@ -71,7 +71,7 @@ def test_build_digest_raises_on_invalid():
                           "predicate": {}, "structure_path": None, "refresh_set": [], "consume_gate": None})
 
 
-def test_structure_validates_and_requires_every_need():
+def test_structure_validates_and_requires_every_need() -> None:
     assert c.validate_structure(_structure()) == []
     bad = _structure()
     del bad["needs"]["last-touch"]
@@ -81,7 +81,7 @@ def test_structure_validates_and_requires_every_need():
     assert c.validate_structure(bad)
 
 
-def test_agent_results_validate_and_scope_only_on_cartography():
+def test_agent_results_validate_and_scope_only_on_cartography() -> None:
     assert c.validate_agent_results(_results(), "rag") == []
     assert c.validate_agent_results(_results(), "cartography")
     obj = copy.deepcopy(_results())
@@ -91,7 +91,7 @@ def test_agent_results_validate_and_scope_only_on_cartography():
     assert c.validate_agent_results(obj)
 
 
-def test_agents_tally_optional():
+def test_agents_tally_optional() -> None:
     obj = _results()
     obj["agents"] = {"count": 2, "tokens": 100}
     assert c.validate_agent_results(obj) == []
@@ -99,13 +99,13 @@ def test_agents_tally_optional():
     assert c.validate_agent_results(obj)
 
 
-def test_stage_tuples_disjoint_and_unique():
+def test_stage_tuples_disjoint_and_unique() -> None:
     assert not set(c.LAUNCH_STAGES) & set(c.FINISH_STAGES)
     assert len(set(c.LAUNCH_STAGES)) == len(c.LAUNCH_STAGES)
     assert len(set(c.FINISH_STAGES)) == len(c.FINISH_STAGES)
 
 
-def test_owed_decisions_per_mode_and_source():
+def test_owed_decisions_per_mode_and_source() -> None:
     assert c.owed_decisions("refresh", "rag") == c.DECISION_IDS
     assert "refresh-set" not in c.owed_decisions("bootstrap", "rag")
     assert "ledger-stamp" not in c.owed_decisions("targeted", "rag")
@@ -116,6 +116,6 @@ def test_owed_decisions_per_mode_and_source():
         c.owed_decisions("x", "rag")
 
 
-def test_exit_codes_and_names():
+def test_exit_codes_and_names() -> None:
     assert (c.EXIT_OK, c.EXIT_USAGE, c.EXIT_IN_FLIGHT, c.EXIT_TEMPLATE_MISSING, c.EXIT_RUN_FAILED) == (0, 2, 3, 4, 5)
     assert set(c.REQUIRED_NEEDS) <= set(c.NEEDS)

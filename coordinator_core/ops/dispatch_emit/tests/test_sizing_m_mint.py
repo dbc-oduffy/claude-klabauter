@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit.sizing_m_mint import concrete_acceptance, mint_m_spine
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
+from pathlib import Path
 
 SIZING_REL = "state/sizings/2026-10-01-m-thing.yaml"
 
@@ -29,7 +30,7 @@ def _sizing(rows=None) -> dict:
     }
 
 
-def test_concrete_three_rows_mint_three_rows_with_writes_and_check(tmp_path):
+def test_concrete_three_rows_mint_three_rows_with_writes_and_check(tmp_path: Path) -> None:
     sizing = _sizing()
     rows = concrete_acceptance(sizing)
     assert rows == _rows()
@@ -60,13 +61,13 @@ def test_concrete_three_rows_mint_three_rows_with_writes_and_check(tmp_path):
         lambda r: r.append("not a mapping"),
     ],
 )
-def test_any_non_concrete_row_returns_none(mutate):
+def test_any_non_concrete_row_returns_none(mutate) -> None:
     rows = copy.deepcopy(_rows())
     mutate(rows)
     assert concrete_acceptance(_sizing(rows)) is None
 
 
-def test_empty_list_and_absent_key_return_none():
+def test_empty_list_and_absent_key_return_none() -> None:
     assert concrete_acceptance(_sizing([])) is None
     sizing = _sizing()
     del sizing["acceptance_rows"]
@@ -74,7 +75,7 @@ def test_empty_list_and_absent_key_return_none():
     assert concrete_acceptance({"acceptance": _rows()}) is None
 
 
-def test_mint_refuses_glob_and_empty_rows():
+def test_mint_refuses_glob_and_empty_rows() -> None:
     from coordinator_core.ops.dispatch_emit.inventory_mint import GlobFootprintError
 
     bad = _rows()
@@ -85,13 +86,13 @@ def test_mint_refuses_glob_and_empty_rows():
         mint_m_spine(_sizing(), sizing_rel=SIZING_REL, rows=[])
 
 
-def test_plan_body_beside_code_routes_to_sidecar():
+def test_plan_body_beside_code_routes_to_sidecar() -> None:
     rows = [{"statement": "s", "writes": ["src/x.py", "docs/plans/2026-10-14-p.md"], "check": "c"}]
     text, _ = mint_m_spine(_sizing(rows), sizing_rel=SIZING_REL, rows=rows)
     assert "docs/plans/2026-10-14-p.evidence.yaml" in text
 
 
-def test_repo_root_refuses_an_existing_directory_write(tmp_path):
+def test_repo_root_refuses_an_existing_directory_write(tmp_path: Path) -> None:
     import pytest
     from coordinator_core.ops.dispatch_emit.inventory_mint import DirectoryShapedFootprintError
     from coordinator_core.ops.dispatch_emit.sizing_m_mint import mint_m_spine
@@ -103,7 +104,7 @@ def test_repo_root_refuses_an_existing_directory_write(tmp_path):
     mint_m_spine({}, sizing_rel="state/sizings/x.yaml", rows=rows)
 
 
-def test_spine_mismatch_names_changed_rows_and_flags_unreadable():
+def test_spine_mismatch_names_changed_rows_and_flags_unreadable() -> None:
     from coordinator_core.ops.dispatch_emit.sizing_m_mint import mint_m_spine, spine_mismatch
 
     mk = lambda c: mint_m_spine({}, sizing_rel="state/sizings/x.yaml", rows=[{"statement": "s", "writes": ["a.py"], "check": c}])[0]

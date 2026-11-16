@@ -21,6 +21,7 @@ Spec backlink: pln-message-text-stops-naming-a-re-5c92dd, chunk C5b.
 from __future__ import annotations
 
 from coordinator_core.hooks import ue_knowledge_distrust as mod
+from pathlib import Path
 
 _FORBIDDEN_SUBSTRINGS = (
     "coordinator-content-repo",
@@ -44,7 +45,7 @@ def _assert_clean(banner: str) -> None:
         assert hit.lower() not in lowered, f"banner names a repo codename/placeholder: {hit!r} in {banner!r}"
 
 
-def test_banner_names_no_repo(tmp_path):
+def test_banner_names_no_repo(tmp_path: Path) -> None:
     (tmp_path / "MyGame.uproject").write_text("{}")
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / "settings.json").write_text("{}")
@@ -56,7 +57,7 @@ def test_banner_names_no_repo(tmp_path):
     _assert_clean(result.banner)
 
 
-def test_banner_drops_named_adjacency_hazard_string(tmp_path):
+def test_banner_drops_named_adjacency_hazard_string(tmp_path: Path) -> None:
     (tmp_path / "MyGame.uproject").write_text("{}")
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / "settings.json").write_text("{}")
@@ -67,7 +68,7 @@ def test_banner_drops_named_adjacency_hazard_string(tmp_path):
     assert "example-game-repo-docs" not in result.banner
 
 
-def test_banner_fits_prose_cap_and_names_live_alternative(tmp_path):
+def test_banner_fits_prose_cap_and_names_live_alternative(tmp_path: Path) -> None:
     (tmp_path / "MyGame.uproject").write_text("{}")
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / "settings.json").write_text("{}")

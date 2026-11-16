@@ -12,6 +12,8 @@ from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 
 from .conftest import REVIEW_KW
 from .test_emit_script_opens_plan_once import _write_plan
+from pathlib import Path
+import pytest
 
 _HOST_PATH = re.compile(r"(?:^|[\s'\"`(=:])(?:[A-Za-z]:[\\/]|/(?:home|Users|root|opt|tmp|var|mnt)/)")
 
@@ -31,7 +33,7 @@ def _emit(tmp_path, monkeypatch):
     return script, repo, claude_dir
 
 
-def test_no_host_path_in_emitted_text(tmp_path, monkeypatch):
+def test_no_host_path_in_emitted_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     script, repo, claude_dir = _emit(tmp_path, monkeypatch)
     assert "claude CLI:" in script
     assert repo.as_posix() not in script
@@ -40,14 +42,14 @@ def test_no_host_path_in_emitted_text(tmp_path, monkeypatch):
     assert not _HOST_PATH.search(script), _HOST_PATH.search(script)
 
 
-def test_the_script_reads_its_root_from_args_at_run_time(tmp_path, monkeypatch):
+def test_the_script_reads_its_root_from_args_at_run_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     script, _, _ = _emit(tmp_path, monkeypatch)
     assert "args.repoRoot" in script
     assert script.index("const _repoRoot") < script.index("const _shared")
     assert "cd ${_repoRoot}" in script
 
 
-def test_the_commit_marker_carries_no_root(tmp_path, monkeypatch):
+def test_the_commit_marker_carries_no_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     script, _, _ = _emit(tmp_path, monkeypatch)
     request = parse_marker(script)
     assert request is not None and request.repo_root is None

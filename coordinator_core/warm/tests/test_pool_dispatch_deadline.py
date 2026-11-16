@@ -11,7 +11,7 @@ from coordinator_core.warm import server
 
 class _Future:
 
-    def __init__(self, *, cancellable: bool):
+    def __init__(self, *, cancellable: bool) -> None:
         self._cancellable = cancellable
         self.cancel_called = False
         self.result_timeout = "not called"
@@ -20,7 +20,7 @@ class _Future:
         self.result_timeout = timeout
         raise concurrent.futures.TimeoutError()
 
-    def cancel(self):
+    def cancel(self) -> bool:
         self.cancel_called = True
         return self._cancellable
 
@@ -29,7 +29,7 @@ class _Future:
 
 
 class _Pool:
-    def __init__(self, future):
+    def __init__(self, future) -> None:
         self.future = future
 
     def submit(self, *_a, **_k):
@@ -48,7 +48,7 @@ def _msg(method):
     return {"jsonrpc": "2.0", "id": 7, "method": method, "params": {}}
 
 
-def test_the_wait_is_bounded_at_the_clients_mutation_deadline(monkeypatch):
+def test_the_wait_is_bounded_at_the_clients_mutation_deadline(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm.client import MUTATION_READ_DEADLINE_SECS
 
     fut = _Future(cancellable=True)
@@ -59,7 +59,7 @@ def test_the_wait_is_bounded_at_the_clients_mutation_deadline(monkeypatch):
     assert server._POOL_RESULT_DEADLINE_SECS == MUTATION_READ_DEADLINE_SECS
 
 
-def test_a_task_that_never_started_is_a_determinate_safe_to_rerun(monkeypatch):
+def test_a_task_that_never_started_is_a_determinate_safe_to_rerun(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm.client import WARM_DISPATCH_INDETERMINATE
 
     fut = _Future(cancellable=True)
@@ -73,7 +73,7 @@ def test_a_task_that_never_started_is_a_determinate_safe_to_rerun(monkeypatch):
     assert "not started" in out["error"]["message"]
 
 
-def test_a_compute_only_task_that_never_started_is_the_same_determinate(monkeypatch):
+def test_a_compute_only_task_that_never_started_is_the_same_determinate(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm.client import WARM_DISPATCH_INDETERMINATE, _op_may_mutate
 
     assert not _op_may_mutate("ping")
@@ -84,7 +84,7 @@ def test_a_compute_only_task_that_never_started_is_the_same_determinate(monkeypa
     assert "safe to re-run" in out["error"]["message"]
 
 
-def test_a_started_mutation_is_indeterminate(monkeypatch):
+def test_a_started_mutation_is_indeterminate(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm.client import WARM_DISPATCH_INDETERMINATE
 
     fut = _Future(cancellable=False)
@@ -95,7 +95,7 @@ def test_a_started_mutation_is_indeterminate(monkeypatch):
     assert "safe to re-run" not in out["error"]["message"]
 
 
-def test_a_started_read_is_a_plain_error_not_an_indeterminate(monkeypatch):
+def test_a_started_read_is_a_plain_error_not_an_indeterminate(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm.client import WARM_DISPATCH_INDETERMINATE, _op_may_mutate
 
     assert not _op_may_mutate("ping"), "premise: ping must classify as compute-only"
@@ -106,7 +106,7 @@ def test_a_started_read_is_a_plain_error_not_an_indeterminate(monkeypatch):
     assert out["error"]["code"] != WARM_DISPATCH_INDETERMINATE
 
 
-def test_the_started_split_is_the_engines_own_not_a_copy(monkeypatch):
+def test_the_started_split_is_the_engines_own_not_a_copy(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
 
     def _spy(method, op_timeout, id_):
@@ -127,7 +127,7 @@ def test_the_started_split_is_the_engines_own_not_a_copy(monkeypatch):
 
 
 @pytest.mark.parametrize("method", ["ceremony.commit_v2", "queue.append", "ping"])
-def test_a_started_task_is_never_rerun_in_process(monkeypatch, method):
+def test_a_started_task_is_never_rerun_in_process(monkeypatch: pytest.MonkeyPatch, method) -> None:
 
     def _must_not_run(*_a, **_k):  # pragma: no cover -- the assertion is that it never runs
         raise AssertionError("_run_dispatch reached on a deadline expiry")
@@ -138,7 +138,7 @@ def test_a_started_task_is_never_rerun_in_process(monkeypatch, method):
     _ctx_with(fut, monkeypatch)._pool_dispatch(_msg(method))
 
 
-def test_a_result_inside_the_deadline_is_returned_untouched(monkeypatch):
+def test_a_result_inside_the_deadline_is_returned_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Fast:
         def result(self, timeout=None):
             return {"jsonrpc": "2.0", "id": 7, "result": {"pong": True}}
@@ -162,7 +162,7 @@ def _real_pool_ctx(monkeypatch, pool):
     return ctx
 
 
-def test_real_future_queued_behind_a_busy_worker_is_not_started(monkeypatch):
+def test_real_future_queued_behind_a_busy_worker_is_not_started(monkeypatch: pytest.MonkeyPatch) -> None:
     import threading
 
     release = threading.Event()
@@ -178,14 +178,14 @@ def test_real_future_queued_behind_a_busy_worker_is_not_started(monkeypatch):
     assert "not started" in out["error"]["message"]
 
 
-def test_real_future_already_running_is_indeterminate_for_a_mutation(monkeypatch):
+def test_real_future_already_running_is_indeterminate_for_a_mutation(monkeypatch: pytest.MonkeyPatch) -> None:
     import threading
 
     from coordinator_core.warm.client import WARM_DISPATCH_INDETERMINATE
 
     started, release = threading.Event(), threading.Event()
 
-    def _slow_worker(*_a):
+    def _slow_worker(*_a) -> dict[str, str]:
         started.set()
         release.wait()
         return {"result": "ran"}
@@ -203,7 +203,7 @@ def test_real_future_already_running_is_indeterminate_for_a_mutation(monkeypatch
     assert out["error"]["code"] == WARM_DISPATCH_INDETERMINATE
 
 
-def test_an_over_budget_handler_finishes_inside_its_callers_identity(monkeypatch):
+def test_an_over_budget_handler_finishes_inside_its_callers_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio.constants
     import os
     import time

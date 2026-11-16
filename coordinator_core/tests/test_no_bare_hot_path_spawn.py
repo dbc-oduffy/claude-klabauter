@@ -167,6 +167,7 @@ from coordinator_core.spawn_policy.detect import DEFAULT_EXCLUDE, discover_sourc
 from coordinator_core.spawn_policy.spawn_names import (
     SPAWN_NAMES_BY_MODULE as _SPAWN_NAMES_BY_MODULE,
 )
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -761,7 +762,7 @@ def _format_violation(site: BareSpawnSite) -> str:
     )
 
 
-def test_no_bare_hot_path_spawn():
+def test_no_bare_hot_path_spawn() -> None:
     """Standing gate (AC5), stage 1: no `subprocess` spawn under
     `_GATE_SCOPE_DIRS` may be bare/unsuppressed, except an explicit
     `# popup-intentional-last-resort`-tagged site or a narrow, dated
@@ -779,7 +780,7 @@ def test_no_bare_hot_path_spawn():
     assert violations == [], "\n\n".join(_format_violation(site) for site in violations)
 
 
-def test_no_bare_hot_path_spawn_in_publish_py():
+def test_no_bare_hot_path_spawn_in_publish_py() -> None:
     """`coordinator/bin/publish.py`-scoped regression for
     state/bug-backlog/2026-08-08-all-11-subprocess-sites-in-publish-py-la-c5108b1585b6.yaml:
     no `coordinator/bin/` site was ever in `_GATE_SCOPE_DIRS`'s reach (the
@@ -877,7 +878,7 @@ def find_double_console_suppressions(
     return sites
 
 
-def test_no_double_console_suppression():
+def test_no_double_console_suppression() -> None:
     """Two suppression sources on one call is a runtime `TypeError`, not
     redundancy -- see `find_double_console_suppressions`. Remove the added
     splat; the pre-existing local mapping was already correct."""
@@ -892,7 +893,7 @@ def test_no_double_console_suppression():
     )
 
 
-def test_no_bare_test_tree_spawn():
+def test_no_bare_test_tree_spawn() -> None:
     """STAGE 3 standing gate: no `subprocess` spawn inside the test tree
     (`is_test_tree_site`) may be bare/unsuppressed either, except an explicit
     `# popup-intentional-last-resort`-tagged site or an explicit
@@ -908,7 +909,7 @@ def test_no_bare_test_tree_spawn():
     assert violations == [], "\n\n".join(_format_violation(site) for site in violations)
 
 
-def test_widened_spawn_families_surface_known_preexisting_sites():
+def test_widened_spawn_families_surface_known_preexisting_sites() -> None:
     """Standing gate over every spawn family (`subprocess`, `os.system`/
     `os.popen`, `asyncio.create_subprocess_*`): no bare, unsuppressed site
     under `coordinator_core`. The burn-down of the audit's worklist
@@ -918,7 +919,7 @@ def test_widened_spawn_families_surface_known_preexisting_sites():
     assert violations == [], "\n\n".join(_format_violation(site) for site in violations)
 
 
-def test_gate_detects_a_planted_bare_hot_path_spawn(tmp_path):
+def test_gate_detects_a_planted_bare_hot_path_spawn(tmp_path: Path) -> None:
     """Proves the gate has teeth: without this test, a permanently-clean
     hot-path tree would make the gate's soundness pass-by-absence rather
     than by verification."""
@@ -942,7 +943,7 @@ def test_gate_detects_a_planted_bare_hot_path_spawn(tmp_path):
     assert site.enclosing == "check"
 
 
-def test_gate_ignores_a_suppressed_spawn(tmp_path):
+def test_gate_ignores_a_suppressed_spawn(tmp_path: Path) -> None:
     """Negative control: a `creationflags=` kwarg must not be flagged."""
     scope_dir = tmp_path / "write_guards"
     scope_dir.mkdir()
@@ -960,7 +961,7 @@ def test_gate_ignores_a_suppressed_spawn(tmp_path):
     assert violations == []
 
 
-def test_gate_ignores_a_primitive_splat_spawn(tmp_path):
+def test_gate_ignores_a_primitive_splat_spawn(tmp_path: Path) -> None:
     """Negative control: the `**no_console_creationflags()` splat shape (the
     primitive's own call convention) must not be flagged."""
     scope_dir = tmp_path / "hooks"
@@ -980,7 +981,7 @@ def test_gate_ignores_a_primitive_splat_spawn(tmp_path):
     assert violations == []
 
 
-def test_gate_honours_the_last_resort_exemption_tag(tmp_path):
+def test_gate_honours_the_last_resort_exemption_tag(tmp_path: Path) -> None:
     """Negative control: a `# popup-intentional-last-resort`-tagged bare
     call is compliant-by-exemption, matching `nudge_windows_subprocess_popup`'s
     own accepted escape hatch."""
@@ -1003,13 +1004,13 @@ def test_gate_honours_the_last_resort_exemption_tag(tmp_path):
     assert violations == []
 
 
-def test_invoke_spawn_wrapper_is_matched_exactly_not_by_prefix():
+def test_invoke_spawn_wrapper_is_matched_exactly_not_by_prefix() -> None:
     assert _is_no_console_shaped("_invoke_spawn_kw")
     assert not _is_no_console_shaped("_invoke_spawn_kw_maybe")
     assert not _is_no_console_shaped("invoke_spawn")
 
 
-def test_gate_ignores_out_of_scope_directories(tmp_path):
+def test_gate_ignores_out_of_scope_directories(tmp_path: Path) -> None:
     """Negative control: an explicit narrower `scope_dirs` argument still
     excludes a bare spawn outside it -- proves the scope list, not the
     detection logic, is what bounds this gate. (Stage 1 exercised this via
@@ -1031,7 +1032,7 @@ def test_gate_ignores_out_of_scope_directories(tmp_path):
     assert violations == []
 
 
-def test_gate_ignores_an_unrelated_dot_run_call(tmp_path):
+def test_gate_ignores_an_unrelated_dot_run_call(tmp_path: Path) -> None:
     """Negative control: an unrelated `.run(...)` method call (not resolvable
     to the `subprocess` module) must not be flagged -- the precedent adjustment
     named in the module docstring."""
@@ -1144,7 +1145,7 @@ _UNWALKED_ROOT_BASELINE: dict[str, int] = {
 _REPO_ROOT_PY_FILES: frozenset[str] = frozenset({"conftest.py", "drive_root_write_guard.py"})
 
 
-def test_top_level_py_files_have_no_bare_spawn():
+def test_top_level_py_files_have_no_bare_spawn() -> None:
     """Content check for the pinned population itself -- catches a bare spawn
     landing in an EXISTING root file (`conftest.py` gaining one later), which
     the population pin above cannot: it only checks the filename set, not
@@ -1160,7 +1161,7 @@ def test_top_level_py_files_have_no_bare_spawn():
     assert violations == [], "\n\n".join(_format_violation(site) for site in violations)
 
 
-def test_bare_spawn_outside_coordinator_core_only_ever_shrinks():
+def test_bare_spawn_outside_coordinator_core_only_ever_shrinks() -> None:
     """Ratchet over the live source roots the standing gate does not walk.
 
     Fails in both directions on purpose. A rise is a new bare spawn landing in

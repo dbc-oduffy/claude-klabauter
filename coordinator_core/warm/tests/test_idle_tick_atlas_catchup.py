@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.cartography import atlas_catchup
 from coordinator_core.warm import idle, lifecycle, server
+from pathlib import Path
 
 
 class _FakeVersionState:
@@ -19,7 +20,7 @@ class _FakeVersionState:
 
 
 @pytest.fixture
-def ctx(tmp_path, monkeypatch):
+def ctx(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     lifecycle.reset_shutdown_guard_for_test()
     idle.reset_idle_clock_for_test()
     monkeypatch.setattr(idle, "should_demote", lambda **kwargs: False)
@@ -39,7 +40,7 @@ def _ran(ran: bool) -> atlas_catchup.CatchUpResult:
     return atlas_catchup.CatchUpResult(ran=ran, spawns=0, facts=0, pending=0, reason="t")
 
 
-def test_two_ticks_within_interval_run_catch_up_once(ctx, monkeypatch):
+def test_two_ticks_within_interval_run_catch_up_once(ctx, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list = []
     monkeypatch.setattr(atlas_catchup, "catch_up", lambda repo: calls.append(repo) or _ran(True))
     ctx._idle_tick()
@@ -47,7 +48,7 @@ def test_two_ticks_within_interval_run_catch_up_once(ctx, monkeypatch):
     assert len(calls) == 1
 
 
-def test_raising_catch_up_leaves_tick_intact(ctx, monkeypatch):
+def test_raising_catch_up_leaves_tick_intact(ctx, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(repo):
         raise RuntimeError("catch-up broke")
 
@@ -55,7 +56,7 @@ def test_raising_catch_up_leaves_tick_intact(ctx, monkeypatch):
     ctx._idle_tick()
 
 
-def test_import_failure_leaves_tick_intact(ctx, monkeypatch):
+def test_import_failure_leaves_tick_intact(ctx, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(repos):
         raise RuntimeError("tick broke")
 

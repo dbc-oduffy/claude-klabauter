@@ -10,6 +10,7 @@ import pytest
 from coordinator_core import deny_registry, machine_profile
 from coordinator_core.bash_guards import block_subagent_destructive_action as guard
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 _ENV = {
     **os.environ,
@@ -20,7 +21,7 @@ _ENV = {
 }
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> str:
     out = subprocess.run(
         ["git", "-C", str(repo), *args],
         capture_output=True,
@@ -33,7 +34,7 @@ def _git(repo, *args):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> tuple[Path, str, str, str]:
     root = tmp_path / "repo"
     root.mkdir()
     _git(root, "init", "-q", "-b", "main")
@@ -69,7 +70,7 @@ def _reason(env):
     return env["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def _round_four(a, b, tree="$T"):
+def _round_four(a, b, tree: str = "$T") -> str:
     return (
         f"T=$(git write-tree); M=$(git commit-tree {tree} -p {a} -p {b} -m merge); "
         f"git update-ref refs/heads/main $M {a}"
@@ -77,7 +78,7 @@ def _round_four(a, b, tree="$T"):
 
 
 @pytest.mark.parametrize("subagent", [False, True], ids=["em", "subagent"])
-def test_round_four_merge_is_refused_and_names_the_engine_route(repo, subagent):
+def test_round_four_merge_is_refused_and_names_the_engine_route(repo, subagent) -> None:
     root, a, b, _merge = repo
     env = _run(_round_four(a, b), root, subagent)
     assert env is not None
@@ -86,13 +87,13 @@ def test_round_four_merge_is_refused_and_names_the_engine_route(repo, subagent):
 
 
 @pytest.mark.parametrize("subagent", [False, True], ids=["em", "subagent"])
-def test_literal_merge_commit_is_refused_through_head_or_branch_ref(repo, subagent):
+def test_literal_merge_commit_is_refused_through_head_or_branch_ref(repo, subagent) -> None:
     root, a, _b, merge = repo
     for ref in ("refs/heads/main", "HEAD"):
         assert _run(f"git update-ref {ref} {merge} {a}", root, subagent) is not None, ref
 
 
-def test_em_refusal_survives_the_guard_level_policy(repo, monkeypatch):
+def test_em_refusal_survives_the_guard_level_policy(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, a, b, _merge = repo
     env = _run(_round_four(a, b), root, False)
     assert deny_registry.guard_deny_class("block-subagent-destructive-action") == deny_registry.BOX_DEGRADING
@@ -104,7 +105,7 @@ def test_em_refusal_survives_the_guard_level_policy(repo, monkeypatch):
 
 @pytest.mark.parametrize("subagent", [False, True], ids=["em", "subagent"])
 @pytest.mark.parametrize("sync", ["git read-tree -m -u {a} {m}", "git read-tree -mu {a} {m}"])
-def test_read_tree_sync_earlier_in_the_command_is_allowed(repo, subagent, sync):
+def test_read_tree_sync_earlier_in_the_command_is_allowed(repo, subagent, sync) -> None:
     root, a, _b, merge = repo
     sync_cmd = sync.format(a=a, m=merge)
     env = _run(f"{sync_cmd} && git update-ref refs/heads/main {merge} {a}", root, subagent)
@@ -113,7 +114,7 @@ def test_read_tree_sync_earlier_in_the_command_is_allowed(repo, subagent, sync):
     assert env is None or subagent
 
 
-def test_read_tree_after_the_update_ref_does_not_count(repo):
+def test_read_tree_after_the_update_ref_does_not_count(repo) -> None:
     root, a, _b, merge = repo
     env = _run(f"git update-ref refs/heads/main {merge} {a} && git read-tree -m -u {a} {merge}", root, False)
     assert env is not None
@@ -121,7 +122,7 @@ def test_read_tree_after_the_update_ref_does_not_count(repo):
 
 
 @pytest.mark.parametrize("subagent", [False, True], ids=["em", "subagent"])
-def test_single_parent_update_ref_of_the_checked_out_branch_is_allowed(repo, subagent):
+def test_single_parent_update_ref_of_the_checked_out_branch_is_allowed(repo, subagent) -> None:
     root, a, _b, _merge = repo
     parent = _git(root, "rev-parse", f"{a}^")
     assert _run(f"git update-ref refs/heads/main {parent} {a}", root, subagent) is None
@@ -130,7 +131,7 @@ def test_single_parent_update_ref_of_the_checked_out_branch_is_allowed(repo, sub
 
 
 @pytest.mark.parametrize("subagent", [False, True], ids=["em", "subagent"])
-def test_merge_update_ref_of_a_branch_not_checked_out_is_allowed(repo, subagent):
+def test_merge_update_ref_of_a_branch_not_checked_out_is_allowed(repo, subagent) -> None:
     root, a, b, merge = repo
     assert _run(f"git update-ref refs/heads/other {merge} {b}", root, subagent) is None
     built = _round_four(a, b).replace("refs/heads/main", "refs/heads/other").replace(f"$M {a}", f"$M {b}")
@@ -138,7 +139,7 @@ def test_merge_update_ref_of_a_branch_not_checked_out_is_allowed(repo, subagent)
 
 
 @pytest.mark.parametrize("subagent", [False, True], ids=["em", "subagent"])
-def test_engine_commit_merge_route_is_allowed(repo, subagent):
+def test_engine_commit_merge_route_is_allowed(repo, subagent) -> None:
     root, _a, _b, _merge = repo
     command = (
         f"coordinator-invoke dispatch.commit_merge --repo {root} "
@@ -147,7 +148,7 @@ def test_engine_commit_merge_route_is_allowed(repo, subagent):
     assert _run(command, root, subagent) is None
 
 
-def test_non_checked_out_branch_costs_no_git_spawn(repo, monkeypatch):
+def test_non_checked_out_branch_costs_no_git_spawn(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, a, _b, merge = repo
     import coordinator_core.git.run as git_run
 

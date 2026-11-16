@@ -10,6 +10,7 @@ from coordinator_core import dispatch_abandon
 from coordinator_core.telemetry import op_latency
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -33,10 +34,10 @@ def _dispatch(monkeypatch, handler, route, op=_OP, origin=None):
     return asyncio.run(ipc._dispatch_message_impl(msg)), overruns
 
 
-def test_cold_mutating_returns_handler_result(monkeypatch):
+def test_cold_mutating_returns_handler_result(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
 
-    def slow(params, ctx=None, repo_root=None):
+    def slow(params, ctx=None, repo_root=None) -> dict[str, bool]:
         seen["remaining"] = dispatch_abandon.remaining()
         seen["active_set_at_start"] = dispatch_abandon.ACTIVE.get().is_set()
         time.sleep(0.3)
@@ -56,7 +57,7 @@ def test_cold_mutating_returns_handler_result(monkeypatch):
     assert len(overruns) == 1
 
 
-def test_cold_mutating_handler_error_is_its_own_error(monkeypatch):
+def test_cold_mutating_handler_error_is_its_own_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(params, ctx=None, repo_root=None):
         time.sleep(0.3)
         raise RuntimeError("deliberate")
@@ -67,8 +68,8 @@ def test_cold_mutating_handler_error_is_its_own_error(monkeypatch):
     assert env["error"]["data"]["diagnosis"]["case"] == "completed_after_backstop"
 
 
-def test_cold_mutating_hung_past_ceiling_reports_may_have_completed(monkeypatch):
-    def hung(params, ctx=None, repo_root=None):
+def test_cold_mutating_hung_past_ceiling_reports_may_have_completed(monkeypatch: pytest.MonkeyPatch) -> None:
+    def hung(params, ctx=None, repo_root=None) -> dict[str, bool]:
         time.sleep(0.9)
         return {"ok": True}
 
@@ -84,8 +85,8 @@ def test_cold_mutating_hung_past_ceiling_reports_may_have_completed(monkeypatch)
     assert 0.1 < diag["waited_secs"] < 0.9
 
 
-def test_cold_ask_gate_hung_fails_at_backstop_not_ceiling(monkeypatch, tmp_path):
-    def hung(params, ctx=None, repo_root=None):
+def test_cold_ask_gate_hung_fails_at_backstop_not_ceiling(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def hung(params, ctx=None, repo_root=None) -> dict[str, bool]:
         time.sleep(0.45)
         return {"ok": True}
 
@@ -103,16 +104,16 @@ def test_cold_ask_gate_hung_fails_at_backstop_not_ceiling(monkeypatch, tmp_path)
     assert ipc._COLD_AWAIT_CEILING_FACTOR == 5.0
 
 
-def test_cold_ask_gate_inside_backstop_still_succeeds(monkeypatch, tmp_path):
-    def quick(params, ctx=None, repo_root=None):
+def test_cold_ask_gate_inside_backstop_still_succeeds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def quick(params, ctx=None, repo_root=None) -> dict[str, bool]:
         return {"ok": True}
 
     env, _ = _dispatch(monkeypatch, quick, op_latency.IN_PROCESS, op="dispatch.ask_gate", origin=tmp_path)
     assert env["result"] == {"ok": True}
 
 
-def test_cold_ask_gate_past_backstop_but_done_in_ceiling_is_not_awaited(monkeypatch, tmp_path):
-    def slow(params, ctx=None, repo_root=None):
+def test_cold_ask_gate_past_backstop_but_done_in_ceiling_is_not_awaited(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    def slow(params, ctx=None, repo_root=None) -> dict[str, bool]:
         time.sleep(0.25)
         return {"ok": True}
 
@@ -120,8 +121,8 @@ def test_cold_ask_gate_past_backstop_but_done_in_ceiling_is_not_awaited(monkeypa
     assert env["error"]["data"]["diagnosis"]["case"] == "hung_past_ceiling"
 
 
-def test_warm_route_still_reports_indeterminate(monkeypatch):
-    def slow(params, ctx=None, repo_root=None):
+def test_warm_route_still_reports_indeterminate(monkeypatch: pytest.MonkeyPatch) -> None:
+    def slow(params, ctx=None, repo_root=None) -> dict[str, bool]:
         time.sleep(0.3)
         return {"ok": True}
 

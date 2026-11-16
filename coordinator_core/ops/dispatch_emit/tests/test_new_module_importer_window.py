@@ -8,6 +8,7 @@ from coordinator_core.ops.dispatch_emit.emit import emit_script
 from coordinator_core.ops.dispatch_emit.tests.test_emit import _plan_with_row
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 from coordinator_core.ops._workflow_contract import Severity
+from pathlib import Path
 
 _CLAUSE = "before editing any file that imports them"
 
@@ -26,12 +27,12 @@ def _spine(*writes: str, kind: str = "code-edit") -> str:
     )
 
 
-def _tree(tmp_path):
+def _tree(tmp_path) -> None:
     (tmp_path / "pkg").mkdir()
     (tmp_path / "pkg" / "existing.py").write_text("x = 1\n", encoding="utf-8")
 
 
-def test_new_module_plus_existing_py_warns(tmp_path):
+def test_new_module_plus_existing_py_warns(tmp_path: Path) -> None:
     _tree(tmp_path)
     findings = emit.find_new_module_with_importer(
         [_row(["pkg/new.py", "pkg/existing.py"])], tmp_path
@@ -42,7 +43,7 @@ def test_new_module_plus_existing_py_warns(tmp_path):
     assert "pkg/new.py" in findings[0].message
 
 
-def test_no_finding_for_other_shapes(tmp_path):
+def test_no_finding_for_other_shapes(tmp_path: Path) -> None:
     _tree(tmp_path)
     for writes in (
         ["pkg/new.py"],
@@ -53,14 +54,14 @@ def test_no_finding_for_other_shapes(tmp_path):
         assert emit.find_new_module_with_importer([_row(writes)], tmp_path) == []
 
 
-def test_new_test_file_beside_existing_module_is_not_a_new_module(tmp_path):
+def test_new_test_file_beside_existing_module_is_not_a_new_module(tmp_path: Path) -> None:
     _tree(tmp_path)
     assert emit.find_new_module_with_importer(
         [_row(["pkg/existing.py", "pkg/tests/test_new.py"])], tmp_path
     ) == []
 
 
-def test_prompt_clause_only_on_matching_rows(tmp_path):
+def test_prompt_clause_only_on_matching_rows(tmp_path: Path) -> None:
     _tree(tmp_path)
     plan = _plan_with_row(tmp_path, _spine("pkg/new.py", "pkg/existing.py"))
     out: list = []

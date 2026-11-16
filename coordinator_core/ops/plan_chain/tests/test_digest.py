@@ -7,14 +7,15 @@ from coordinator_core.ops.plan_chain import digest as D
 from coordinator_core.ops.plan_chain.contract import (
     HALTS, STAGE_RELATIVE, STAGES, ChainManifest, ChainState, halt,
 )
+from pathlib import Path
 
 
-def _manifest():
+def _manifest() -> ChainManifest:
     return ChainManifest("s.yaml", "b.md", "D1", "pm", ".", "trail", {}, "x")
 
 
 @pytest.mark.parametrize("halt_id", sorted(HALTS))
-def test_halt_digest_validates(halt_id):
+def test_halt_digest_validates(halt_id) -> None:
     h = halt(halt_id, "why " * 200, running_stage="execute")
     state = ChainState(stages_run=list(STAGES[: STAGES.index(h.halted_at)]), halt=h, plan_path="p.md")
     d = D.assemble_final_digest(state, _manifest(), plan_digest=None, execute_digest=None)
@@ -27,14 +28,14 @@ def test_halt_digest_validates(halt_id):
     assert len(d["chain"]["halt_reason"]) <= 300
 
 
-def test_plan_halt_keeps_plan_outcome():
+def test_plan_halt_keeps_plan_outcome() -> None:
     state = ChainState(halt=halt("ready-gate-not-ready", "r"))
     d = D.assemble_final_digest(state, _manifest(), plan_digest={"outcome": "replan"}, execute_digest=None)
     D.validate_final_digest(d)
     assert d["outcome"] == "replan"
 
 
-def test_completed_chain():
+def test_completed_chain() -> None:
     state = ChainState(stages_run=list(STAGES), commit={"sha": "abc", "receipt_path": "r.json"}, plan_path="p.md")
     ex = {
         "criterion": {"status": "met", "observation": "ok", "sidecar": None},
@@ -51,7 +52,7 @@ def test_completed_chain():
     assert d["counts"]["reviewers"] == 2 and d["counts"]["findings_applied"] == 3
 
 
-def test_execute_deviation_reason_renders_in_line_and_absence_leaves_it_unchanged():
+def test_execute_deviation_reason_renders_in_line_and_absence_leaves_it_unchanged() -> None:
     state = ChainState(stages_run=list(STAGES), commit={"sha": "abc", "receipt_path": "r.json"}, plan_path="p.md")
     ex = {
         "criterion": {"status": "met", "observation": "ok", "sidecar": None},
@@ -67,7 +68,7 @@ def test_execute_deviation_reason_renders_in_line_and_absence_leaves_it_unchange
     assert lines == ["C1: blocked — no pnpm on host", "C2: partial", "C3: partial"]
 
 
-def test_a_demoted_criterion_reason_reaches_the_final_digest_capped():
+def test_a_demoted_criterion_reason_reaches_the_final_digest_capped() -> None:
     state = ChainState(stages_run=list(STAGES), commit={"sha": "abc", "receipt_path": "r.json"}, plan_path="p.md")
     ex = {"criterion": {"status": "indeterminate", "observation": "o", "sidecar": None, "reason": "r" * 500}}
     d = D.assemble_final_digest(state, _manifest(), plan_digest=None, execute_digest=ex)
@@ -77,7 +78,7 @@ def test_a_demoted_criterion_reason_reaches_the_final_digest_capped():
     assert len(d["criterion"]["reason"]) == 200
 
 
-def test_legacy_indeterminate_without_reason_maps_to_not_met_with_a_reason():
+def test_legacy_indeterminate_without_reason_maps_to_not_met_with_a_reason() -> None:
     state = ChainState(stages_run=list(STAGES), commit={"sha": "abc", "receipt_path": "r.json"}, plan_path="p.md")
     ex = {"criterion": {"status": "indeterminate", "observation": "o", "sidecar": None}}
     d = D.assemble_final_digest(state, _manifest(), plan_digest=None, execute_digest=ex)
@@ -85,11 +86,11 @@ def test_legacy_indeterminate_without_reason_maps_to_not_met_with_a_reason():
     assert d["criterion"]["reason"] == D._LEGACY_INDETERMINATE_REASON
 
 
-def test_criterion_status_sets_are_pinned():
+def test_criterion_status_sets_are_pinned() -> None:
     assert D._CRITERION_STATUSES == ("met", "not_met", "not_run", "unstructured")
 
 
-def test_invalid_digest_raises_and_is_not_written(tmp_path):
+def test_invalid_digest_raises_and_is_not_written(tmp_path: Path) -> None:
     state = ChainState(stages_run=list(STAGES), commit={"sha": "a", "receipt_path": "r"})
     d = D.assemble_final_digest(state, _manifest(), plan_digest=None, execute_digest=None)
     d["kind"] = "bogus"
@@ -98,7 +99,7 @@ def test_invalid_digest_raises_and_is_not_written(tmp_path):
     assert not list(tmp_path.iterdir())
 
 
-def test_write_final_digest(tmp_path):
+def test_write_final_digest(tmp_path: Path) -> None:
     state = ChainState(stages_run=list(STAGES), commit={"sha": "a", "receipt_path": "r"})
     d = D.assemble_final_digest(state, _manifest(), plan_digest=None, execute_digest=None)
     p = D.write_final_digest(d, tmp_path / "trail", "c1")
@@ -107,7 +108,7 @@ def test_write_final_digest(tmp_path):
 
 
 @pytest.mark.parametrize("operation", ["dispatch.terminal_commit", "dispatch.land_run"])
-def test_terminal_resume_accepts_both_authored_commit_operations(operation):
+def test_terminal_resume_accepts_both_authored_commit_operations(operation) -> None:
     state = ChainState(halt=halt("terminal-commit-refused", "resume required"), plan_path="p.md")
     doc = D.assemble_final_digest(state, _manifest(), plan_digest=None, execute_digest=None)
     doc["next_action"] = {
@@ -117,7 +118,7 @@ def test_terminal_resume_accepts_both_authored_commit_operations(operation):
     D.validate_final_digest(doc)
 
 
-def test_terminal_resume_rejects_unrelated_operation():
+def test_terminal_resume_rejects_unrelated_operation() -> None:
     state = ChainState(halt=halt("terminal-commit-refused", "resume required"), plan_path="p.md")
     doc = D.assemble_final_digest(state, _manifest(), plan_digest=None, execute_digest=None)
     doc["next_action"] = {

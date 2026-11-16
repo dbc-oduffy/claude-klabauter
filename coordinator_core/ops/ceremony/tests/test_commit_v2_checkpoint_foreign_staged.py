@@ -9,6 +9,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.ceremony import commit_v2
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -24,13 +25,13 @@ def _git(repo, *args):
     ).stdout
 
 
-def _w(path, text="x\n"):
+def _w(path, text: str = "x\n") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/p")
@@ -44,7 +45,7 @@ def repo(tmp_path):
     return r
 
 
-def test_a_checkpoint_commits_only_its_rows_and_leaves_a_foreign_staged_record(repo):
+def test_a_checkpoint_commits_only_its_rows_and_leaves_a_foreign_staged_record(repo) -> None:
     base = _git(repo, "rev-parse", "HEAD").strip()
     _w(repo / _RECORD, '{"kind": "fire"}\n')
     _git(repo, "add", _RECORD)

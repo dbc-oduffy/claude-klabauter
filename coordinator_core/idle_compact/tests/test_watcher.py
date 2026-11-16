@@ -9,10 +9,11 @@ from types import SimpleNamespace
 import pytest
 
 from coordinator_core.idle_compact import contract, eligibility, watcher
+from pathlib import Path
 
 
 class Recorder:
-    def __init__(self, ok=True, reason="injected"):
+    def __init__(self, ok: bool = True, reason: str = "injected") -> None:
         self.pids = []
         self._result = contract.InjectResult(ok, reason)
 
@@ -22,7 +23,7 @@ class Recorder:
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
     transcript = tmp_path / "t.jsonl"
     transcript.write_bytes(b"x" * 10)
@@ -47,7 +48,7 @@ def _lines(e):
     return [json.loads(x) for x in e.log.read_text().splitlines()]
 
 
-def test_inject_logs_run_id_pid_action_and_arms(env):
+def test_inject_logs_run_id_pid_action_and_arms(env) -> None:
     env.verdicts["s1"] = eligibility.Decision("inject", "eligible")
     inj, armed = Recorder(), {}
     _tick(env, inj, armed)
@@ -60,7 +61,7 @@ def test_inject_logs_run_id_pid_action_and_arms(env):
     assert armed["s1"] == {"size": 10}
 
 
-def test_unchanged_skip_logged_once_but_changed_reason_logged(env):
+def test_unchanged_skip_logged_once_but_changed_reason_logged(env) -> None:
     inj, last = Recorder(), {}
     _tick(env, inj, last=last)
     _tick(env, inj, last=last)
@@ -72,7 +73,7 @@ def test_unchanged_skip_logged_once_but_changed_reason_logged(env):
     assert inj.pids == []
 
 
-def test_failed_injection_is_a_logged_skip_and_still_arms(env):
+def test_failed_injection_is_a_logged_skip_and_still_arms(env) -> None:
     env.verdicts["s1"] = eligibility.Decision("inject", "eligible")
     armed = {}
     _tick(env, Recorder(False, "injector-unavailable"), armed)
@@ -81,7 +82,7 @@ def test_failed_injection_is_a_logged_skip_and_still_arms(env):
     assert "s1" in armed
 
 
-def test_tick_with_no_injection_spawns_nothing(env, monkeypatch):
+def test_tick_with_no_injection_spawns_nothing(env, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("spawned a process")
 
@@ -91,19 +92,19 @@ def test_tick_with_no_injection_spawns_nothing(env, monkeypatch):
     assert len(_lines(env)) == 2
 
 
-def test_session_without_int_pid_is_ignored(env):
+def test_session_without_int_pid_is_ignored(env) -> None:
     env.sessions["s3"] = SimpleNamespace(pid=None, cwd="c")
     _tick(env, Recorder())
     assert "s3" not in {x["session_id"] for x in _lines(env)}
 
 
-def test_armed_ledger_roundtrips_and_missing_is_empty(env):
+def test_armed_ledger_roundtrips_and_missing_is_empty(env) -> None:
     assert watcher.load_armed() == {}
     watcher.save_armed({"s1": {"size": 5}})
     assert watcher.load_armed() == {"s1": {"size": 5}}
 
 
-def test_loop_survives_a_failing_tick_and_persists_armed(env, monkeypatch):
+def test_loop_survives_a_failing_tick_and_persists_armed(env, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = {"n": 0}
 
     def flaky(*a, **k):

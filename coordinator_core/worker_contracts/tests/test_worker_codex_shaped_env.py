@@ -6,18 +6,19 @@ import pytest
 
 from coordinator_core.codex_runner import sandbox_preflight
 from coordinator_core.worker_contracts import worker
+from pathlib import Path
 
 PARENT = "00000000-0000-4000-8000-000000000001"
 
 
-def _pwsh_dir(root, *parts):
+def _pwsh_dir(root, *parts) -> str:
     d = root.joinpath(*parts)
     d.mkdir(parents=True)
     (d / "pwsh.exe").write_text("")
     return str(d)
 
 
-def _wire(monkeypatch, base):
+def _wire(monkeypatch, base) -> None:
     monkeypatch.setattr(worker, "_child_env", lambda requested: base)
     monkeypatch.setattr(worker, "settings_home_child_env", lambda env: env)
     monkeypatch.setattr(sandbox_preflight, "_is_windows", lambda: True)
@@ -38,13 +39,13 @@ class _Process:
         return ("", "")
 
 
-def _supervise(repo, popen, provider="codex"):
+def _supervise(repo, popen, provider: str = "codex") -> int:
     assignment = {"session_id": PARENT, "run": "assigned", "declared_peak_mb": 1024}
     return worker.supervise(repo, "task", assignment, [provider, "exec", "-"],
                             provider=provider, mode="worker", popen=popen)
 
 
-def test_codex_worker_spawns_with_ps7_ahead_of_windowsapps_and_writable_temp(tmp_path, monkeypatch):
+def test_codex_worker_spawns_with_ps7_ahead_of_windowsapps_and_writable_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     apps = _pwsh_dir(tmp_path, "WindowsApps")
     ps7 = _pwsh_dir(tmp_path, "ProgramFiles", "PowerShell", "7")
     monkeypatch.setenv("ProgramFiles", str(tmp_path / "ProgramFiles"))
@@ -53,7 +54,7 @@ def test_codex_worker_spawns_with_ps7_ahead_of_windowsapps_and_writable_temp(tmp
     repo.mkdir()
     seen = {}
 
-    def popen(argv, **kwargs):
+    def popen(argv, **kwargs) -> _Process:
         seen.update(kwargs["env"])
         return _Process()
 
@@ -65,7 +66,7 @@ def test_codex_worker_spawns_with_ps7_ahead_of_windowsapps_and_writable_temp(tmp
     assert (repo / "scratch" / "codex-tmp").is_dir()
 
 
-def test_codex_worker_refused_before_popen_on_windowsapps_only_path(tmp_path, monkeypatch):
+def test_codex_worker_refused_before_popen_on_windowsapps_only_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     apps = _pwsh_dir(tmp_path, "WindowsApps")
     monkeypatch.setenv("ProgramFiles", str(tmp_path / "ProgramFiles"))
     _wire(monkeypatch, {"PATH": apps})
@@ -80,13 +81,13 @@ def test_codex_worker_refused_before_popen_on_windowsapps_only_path(tmp_path, mo
     assert released
 
 
-def test_non_codex_worker_env_is_not_shaped(tmp_path, monkeypatch):
+def test_non_codex_worker_env_is_not_shaped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     apps = _pwsh_dir(tmp_path, "WindowsApps")
     monkeypatch.setenv("ProgramFiles", str(tmp_path / "ProgramFiles"))
     _wire(monkeypatch, {"PATH": apps})
     seen = {}
 
-    def popen(argv, **kwargs):
+    def popen(argv, **kwargs) -> _Process:
         seen.update(kwargs["env"])
         return _Process()
 

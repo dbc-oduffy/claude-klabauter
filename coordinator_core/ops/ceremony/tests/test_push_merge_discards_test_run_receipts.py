@@ -8,6 +8,7 @@ from coordinator_core.ops.ceremony.tests.test_push_reject_landed_by_peer import 
     _git,
     _init_repo_with_upstream,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -22,7 +23,7 @@ def _commit_file(repo, rel: str, text: str, msg: str) -> None:
     _git(["commit", "-q", "-m", msg], repo)
 
 
-def _setup(tmp_path, tracked: str = _RECEIPT, upstream_edits: str = _RECEIPT):
+def _setup(tmp_path, tracked: str = _RECEIPT, upstream_edits: str = _RECEIPT) -> Path:
     repo = _init_repo_with_upstream(tmp_path)
     _commit_file(repo, tracked, "v1", "tracked")
     _git(["push", "-q", "origin", "work/x"], repo)
@@ -38,7 +39,7 @@ def _setup(tmp_path, tracked: str = _RECEIPT, upstream_edits: str = _RECEIPT):
     return repo
 
 
-def test_dirty_receipt_the_merge_changes_no_longer_blocks_the_merge(tmp_path):
+def test_dirty_receipt_the_merge_changes_no_longer_blocks_the_merge(tmp_path: Path) -> None:
     repo = _setup(tmp_path)
     (repo / _RECEIPT).write_text("local rewrite", encoding="utf-8")
 
@@ -49,7 +50,7 @@ def test_dirty_receipt_the_merge_changes_no_longer_blocks_the_merge(tmp_path):
     assert _git(["status", "--porcelain"], repo).strip() == ""
 
 
-def test_dirty_non_receipt_path_the_merge_changes_still_declines(tmp_path):
+def test_dirty_non_receipt_path_the_merge_changes_still_declines(tmp_path: Path) -> None:
     repo = _setup(tmp_path, "docs/note.md", "docs/note.md")
     (repo / "docs/note.md").write_text("local edit", encoding="utf-8")
     head_before = _git(["rev-parse", "HEAD"], repo).strip()
@@ -62,7 +63,7 @@ def test_dirty_non_receipt_path_the_merge_changes_still_declines(tmp_path):
     assert (repo / "docs/note.md").read_text(encoding="utf-8") == "local edit"
 
 
-def test_dirty_receipt_upstream_did_not_change_is_left_alone(tmp_path):
+def test_dirty_receipt_upstream_did_not_change_is_left_alone(tmp_path: Path) -> None:
     repo = _setup(tmp_path, _RECEIPT, "docs/n.md")
     (repo / _RECEIPT).write_text("local rewrite", encoding="utf-8")
 

@@ -6,6 +6,11 @@ import pytest
 
 from coordinator_core.git import commit as gcommit
 from coordinator_core.git.commit import CommitRefused
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -28,13 +33,13 @@ _DECLARATIONS = (
 )
 
 
-def _git(repo, *args, check=True):
+def _git(repo, *args, check: bool = True):
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **_NOWIN
     )
 
 
-def _field7(repo, ref="HEAD"):
+def _field7(repo, ref: str = "HEAD"):
     return _git(repo, "show", f"{ref}:setup/publish-targets.portable").stdout
 
 
@@ -43,7 +48,7 @@ def _head(repo):
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/p")
@@ -69,7 +74,7 @@ def repo(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac2_undeclared_coordinator_core_name_lands_with_regenerated_field7(repo):
+def test_ac2_undeclared_coordinator_core_name_lands_with_regenerated_field7(repo) -> None:
     (repo / "coordinator_core" / "new_module.py").write_text(
         "x = 1\n", encoding="utf-8", newline="\n"
     )
@@ -84,7 +89,7 @@ def test_ac2_undeclared_coordinator_core_name_lands_with_regenerated_field7(repo
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac3_undeclared_coordinator_bin_name_lands_with_regenerated_field7(repo):
+def test_ac3_undeclared_coordinator_bin_name_lands_with_regenerated_field7(repo) -> None:
     (repo / "coordinator" / "bin").mkdir(parents=True)
     (repo / "coordinator" / "bin" / "new_cli.py").write_text(
         "x = 1\n", encoding="utf-8", newline="\n"
@@ -99,7 +104,7 @@ def test_ac3_undeclared_coordinator_bin_name_lands_with_regenerated_field7(repo)
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac4_regenerated_field7_in_pathspec_commits_and_denied_name_commits(repo):
+def test_ac4_regenerated_field7_in_pathspec_commits_and_denied_name_commits(repo) -> None:
     (repo / "coordinator_core" / "new_module.py").write_text(
         "x = 1\n", encoding="utf-8", newline="\n"
     )
@@ -137,7 +142,7 @@ def test_ac4_regenerated_field7_in_pathspec_commits_and_denied_name_commits(repo
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac5_dirty_worktree_portable_outside_pathspec_lands_regenerated_head_bytes(repo):
+def test_ac5_dirty_worktree_portable_outside_pathspec_lands_regenerated_head_bytes(repo) -> None:
     (repo / "coordinator" / "bin").mkdir(parents=True)
     (repo / "coordinator" / "bin" / "unimatrix-file.py").write_text(
         "x = 1\n", encoding="utf-8", newline="\n"
@@ -161,7 +166,7 @@ def test_ac5_dirty_worktree_portable_outside_pathspec_lands_regenerated_head_byt
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac5_carried_new_package_lands_with_regenerated_field7(repo):
+def test_ac5_carried_new_package_lands_with_regenerated_field7(repo) -> None:
     pkg = repo / "coordinator_core" / "new_pkg"
     pkg.mkdir()
     (pkg / "__init__.py").write_text("x = 1\n", encoding="utf-8", newline="\n")
@@ -178,7 +183,7 @@ def test_ac5_carried_new_package_lands_with_regenerated_field7(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac5_carried_new_bin_file_lands_with_regenerated_field7(repo):
+def test_ac5_carried_new_bin_file_lands_with_regenerated_field7(repo) -> None:
     (repo / "coordinator" / "bin").mkdir(parents=True)
     (repo / "coordinator" / "bin" / "new_cli.py").write_text(
         "x = 1\n", encoding="utf-8", newline="\n"
@@ -191,7 +196,7 @@ def test_ac5_carried_new_bin_file_lands_with_regenerated_field7(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac6_existing_top_level_name_commits_normally_and_deny_yaml_unread(repo, monkeypatch):
+def test_ac6_existing_top_level_name_commits_normally_and_deny_yaml_unread(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "coordinator_core" / "ops" / "another.py").write_text(
         "x = 2\n", encoding="utf-8", newline="\n"
     )
@@ -215,7 +220,7 @@ def test_ac6_existing_top_level_name_commits_normally_and_deny_yaml_unread(repo,
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac7_no_published_tree_paths_reads_nothing_for_this_check(repo, monkeypatch):
+def test_ac7_no_published_tree_paths_reads_nothing_for_this_check(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import published_tree_classification as ptc
 
     def _fail_unclassified(*a, **k):
@@ -230,7 +235,7 @@ def test_ac7_no_published_tree_paths_reads_nothing_for_this_check(repo, monkeypa
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac7_deletion_only_published_tree_path_is_not_classified(repo, monkeypatch):
+def test_ac7_deletion_only_published_tree_path_is_not_classified(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import published_tree_classification as ptc
 
     def _fail_unclassified(*a, **k):
@@ -247,7 +252,7 @@ def test_ac7_deletion_only_published_tree_path_is_not_classified(repo, monkeypat
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac7_repo_without_declarations_yaml_is_never_refused(tmp_path):
+def test_ac7_repo_without_declarations_yaml_is_never_refused(tmp_path: Path) -> None:
     r = tmp_path / "mirror"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/m")
@@ -269,7 +274,7 @@ def test_ac7_repo_without_declarations_yaml_is_never_refused(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac7_portable_present_declarations_missing_is_never_refused(repo):
+def test_ac7_portable_present_declarations_missing_is_never_refused(repo) -> None:
     (repo / "setup" / "publish-allowlist-declarations.yaml").unlink()
     (repo / "coordinator_core" / "new_module.py").write_text(
         "x = 1\n", encoding="utf-8", newline="\n"
@@ -285,7 +290,7 @@ def test_ac7_portable_present_declarations_missing_is_never_refused(repo):
 
 class _SpawnCounter:
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.argvs = []
 
     def __enter__(self):
@@ -298,7 +303,7 @@ class _SpawnCounter:
             return counter._run(*a, **k)
 
         class PopenSpy(counter._popen):  # type: ignore[misc,valid-type]
-            def __init__(self, *a, **k):
+            def __init__(self, *a, **k) -> None:
                 if a:
                     counter.argvs.append(a[0])
                 super().__init__(*a, **k)
@@ -306,14 +311,14 @@ class _SpawnCounter:
         subprocess.run, subprocess.Popen = run_spy, PopenSpy
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc) -> bool:
         subprocess.run, subprocess.Popen = self._run, self._popen
         return False
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac8_zero_spawns_on_the_regeneration_path(repo):
+def test_ac8_zero_spawns_on_the_regeneration_path(repo) -> None:
     (repo / "coordinator_core" / "new_module.py").write_text(
         "x = 1\n", encoding="utf-8", newline="\n"
     )
@@ -327,7 +332,7 @@ def test_ac8_zero_spawns_on_the_regeneration_path(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ac8_zero_spawns_on_the_passing_and_deny_paths(repo):
+def test_ac8_zero_spawns_on_the_passing_and_deny_paths(repo) -> None:
     (repo / "coordinator_core" / "denied_name.py").write_text(
         "x = 1\n", encoding="utf-8", newline="\n"
     )
@@ -339,7 +344,7 @@ def test_ac8_zero_spawns_on_the_passing_and_deny_paths(repo):
     assert counter.argvs == [], f"expected zero spawns, got {counter.argvs}"
 
 
-def _load_generator():
+def _load_generator() -> "ModuleType":
     import importlib.util
     from pathlib import Path
 
@@ -352,7 +357,7 @@ def _load_generator():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_c6_new_bin_cli_lands_in_one_commit_via_pending(repo):
+def test_c6_new_bin_cli_lands_in_one_commit_via_pending(repo) -> None:
     (repo / "coordinator_core" / "denied_name.py").write_text(
         "x = 1\n", encoding="utf-8", newline="\n"
     )

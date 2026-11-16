@@ -22,15 +22,16 @@ import pytest
 
 from coordinator_core.install import ensure_venv as mod
 from coordinator_core.install.ensure_venv import EnsureVenvError, ensure_coordinator_venv
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _trust_any_root(monkeypatch):
+def _trust_any_root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_PLUGIN_ROOT_TRUSTED", "1")
 
 
 @pytest.fixture
-def _journal_env(tmp_path, monkeypatch):
+def _journal_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from coordinator_core.install import resolution_journal as journal_mod
 
     journal_path = tmp_path / "journal" / "resolution-journal.jsonl"
@@ -44,7 +45,7 @@ def _resolved(journal_mod):
     return journal.get("ensure-venv", {}).get(mod._VENV_TREE_CLAUSE_INDEX)
 
 
-def test_journal_records_already_healthy_venv(tmp_path, _journal_env, monkeypatch):
+def test_journal_records_already_healthy_venv(tmp_path: Path, _journal_env, monkeypatch: pytest.MonkeyPatch) -> None:
     plugin_root = tmp_path / "plugin-root"
     settings_home_path = tmp_path / "settings-home"
     plugin_root.mkdir()
@@ -64,7 +65,7 @@ def test_journal_records_already_healthy_venv(tmp_path, _journal_env, monkeypatc
     assert resolution.entries[0].kind == "file-path"
 
 
-def test_journal_records_successful_rebuild(tmp_path, _journal_env, monkeypatch):
+def test_journal_records_successful_rebuild(tmp_path: Path, _journal_env, monkeypatch: pytest.MonkeyPatch) -> None:
     plugin_root = tmp_path / "plugin-root"
     settings_home_path = tmp_path / "settings-home"
     plugin_root.mkdir()
@@ -92,7 +93,7 @@ def test_journal_records_successful_rebuild(tmp_path, _journal_env, monkeypatch)
     assert [e.path for e in resolution.entries] == [str(venv_dir)]
 
 
-def test_rebuild_not_swapped_when_build_fails_health_probe(tmp_path, _journal_env, monkeypatch):
+def test_rebuild_not_swapped_when_build_fails_health_probe(tmp_path: Path, _journal_env, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC (fix #1): a build whose `_create_venv`/`_install_deps` both exit
     zero but whose resulting tree fails `_venv_healthy` must NOT be
     swapped in -- a pre-existing `venv_dir` survives untouched, and the
@@ -147,7 +148,7 @@ def test_rebuild_not_swapped_when_build_fails_health_probe(tmp_path, _journal_en
     assert [e.path for e in resolution.entries] == [str(venv_dir)]
 
 
-def test_journal_empty_entries_on_failed_rebuild(tmp_path, _journal_env, monkeypatch):
+def test_journal_empty_entries_on_failed_rebuild(tmp_path: Path, _journal_env, monkeypatch: pytest.MonkeyPatch) -> None:
     """A rebuild that fails removes the (partial) venv tree — the tree
     genuinely resolved to nothing this run, distinct from never having
     reached this clause at all (see `ensure_coordinator_venv`'s own comment
@@ -174,7 +175,7 @@ def test_journal_empty_entries_on_failed_rebuild(tmp_path, _journal_env, monkeyp
     assert resolution.entries == ()
 
 
-def test_journal_unreported_on_check_only(tmp_path, _journal_env, monkeypatch):
+def test_journal_unreported_on_check_only(tmp_path: Path, _journal_env, monkeypatch: pytest.MonkeyPatch) -> None:
     """check_only never reaches a mutation decision at all for this
     clause — genuinely "never got there", distinct from the empty-tuple
     "resolved to nothing" case above."""
@@ -192,7 +193,7 @@ def test_journal_unreported_on_check_only(tmp_path, _journal_env, monkeypatch):
     assert _resolved(_journal_env) is None
 
 
-def test_journal_omits_entry_when_mutation_disabled(tmp_path, _journal_env, monkeypatch):
+def test_journal_omits_entry_when_mutation_disabled(tmp_path: Path, _journal_env, monkeypatch: pytest.MonkeyPatch) -> None:
     """`ensure_venv.py` itself does not gate its own venv mutation on
     `COORDINATOR_DISABLE_MACHINE_MUTATION` (unlike e.g. shell_rc_guard.py) —
     the journal's OWN append does, via `resolution_journal.record_resolution`'s
@@ -261,7 +262,7 @@ _NON_THIRD_PARTY_HOOK_IMPORTS = frozenset(
 
 
 @pytest.mark.real_home
-def test_venv_import_probes_cover_every_hook_scripts_top_level_import():
+def test_venv_import_probes_cover_every_hook_scripts_top_level_import() -> None:
     """A test that does NOT re-assert `_VENV_IMPORT_PROBES` against itself
     (the thing that lied): it independently derives "what the hook path
     actually needs importable" by scanning coordinator-claude's real

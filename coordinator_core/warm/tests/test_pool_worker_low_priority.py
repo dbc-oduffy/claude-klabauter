@@ -36,6 +36,7 @@ def test_worker_init_lowers_priority_and_preloads_nothing(monkeypatch) -> None:
     from coordinator_core.warm import polite_io
 
     monkeypatch.setattr(polite_io, "lower_own_priority", lambda: calls.append("lower") or {})
+    monkeypatch.setattr(server, "_raise_worker_priority", lambda *a: True)
     monkeypatch.setattr(server, "_bind_null_std_streams", lambda: None)
     monkeypatch.setattr(server, "_bind_worker_stderr_log", lambda d: None)
     monkeypatch.setattr(server, "_preload_op_registry", lambda: calls.append("preload"))

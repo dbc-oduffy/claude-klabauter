@@ -6,6 +6,7 @@ import datetime
 import hashlib
 import json
 import re
+import threading
 from pathlib import Path
 
 import pytest
@@ -482,6 +483,31 @@ def test_no_output_carries_parked_for_you(box):
     outputs = [box.launch()[1]]
     outputs.append(box.go(["finish", "--run-id", box.digest_run_id(outputs[0])])[1])
     assert all("### Parked for you" not in o for o in outputs)
+
+
+def test_the_default_launch_runs_the_sentinels_concurrently_and_ledgers_them_in_manifest_order(box):
+    waiters = {"sentinel-check-plugin-drift", "sentinel-engine-drift"}
+    barrier = threading.Barrier(2)
+    inner = box.table()
+
+    def gated(step, **kw):
+        if step.id in waiters:
+            try:
+                barrier.wait(timeout=10)
+            except threading.BrokenBarrierError:
+                return ChildOutcome(exit_code=9, process_ms=1.0, spawns=1, stderr="serial")
+        return inner["cli"](step, **kw)
+
+    box.table = lambda: {**inner, "cli": gated}
+    code, _, _ = box.launch()
+    expected = [
+        s.id for s in manifest.steps_for(["sentinels"], repo_root=box.root, today=datetime.date(2026, 10, 12))
+        if s.cost_class != "over-bar"
+    ]
+    rows = [r for r in box.rows() if r["id"] in expected]
+    assert code == 0 and waiters <= set(expected)
+    assert [r["id"] for r in rows] == expected
+    assert all(r["status"] == "ran" for r in rows)
 
 
 @pytest.mark.parametrize("name", ["runner.py", "ledger.py", "single_flight.py", "emit.py", "decide.py"])

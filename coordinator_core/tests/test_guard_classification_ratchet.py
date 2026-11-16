@@ -14,6 +14,7 @@ from pathlib import Path
 
 from coordinator_core import deny_registry as dr
 from coordinator_core import guard_census as gc
+import pytest
 
 _ROOT = Path(dr.__file__).resolve().parent
 _CALL = re.compile(r"(def\s+\w+\s*\(\s*|\b)apply_guard_level\(\s*(?:[\"']([a-z0-9-]+)[\"']|(\w+))")
@@ -57,36 +58,36 @@ def _classified() -> set[str]:
     )
 
 
-def test_census_finds_the_guards():
+def test_census_finds_the_guards() -> None:
     static = _static_names()
     assert len(static) >= 25
     assert {"block-worktree-tool", "submit-engine-ask", "guard-turn-intent"} <= set(static)
     assert "destructive-rm" in _table_names()
 
 
-def test_every_guard_reaching_apply_guard_level_is_classified():
+def test_every_guard_reaching_apply_guard_level_is_classified() -> None:
     reaching = set(_static_names()) | _table_names()
     assert sorted(reaching - _classified()) == []
 
 
-def test_removing_an_advisory_ruling_fails_naming_the_guard(monkeypatch):
+def test_removing_an_advisory_ruling_fails_naming_the_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delitem(dr.ADVISORY_BY_RULING, "guard-turn-intent")
     assert sorted((set(_static_names()) | _table_names()) - _classified()) == ["guard-turn-intent"]
 
 
-def test_the_two_registered_guards_deny_with_their_class():
+def test_the_two_registered_guards_deny_with_their_class() -> None:
     assert dr.GUARD_DENY_CLASS["runaway-find"] == dr.BOX_DEGRADING
     assert dr.GUARD_DENY_CLASS["block-worktree-tool"] == dr.BOX_DEGRADING
     assert dr.GUARD_DENY_CLASS["block-workflow-foreign-emission"] == dr.DISRUPTIVE
 
 
-def test_a_guard_has_one_classification():
+def test_a_guard_has_one_classification() -> None:
     registered = set(dr.GUARD_DENY_CLASS) | set(dr.SUBAGENT_DENY_CLASS)
     advisory = set(dr.ADVISORY_BY_RULING)
     assert not registered & advisory
 
 
-def test_rulings_names_are_real_and_reasons_are_one_line():
+def test_rulings_names_are_real_and_reasons_are_one_line() -> None:
     reaching = set(_static_names()) | _table_names()
     ruled = set(dr.ADVISORY_BY_RULING)
     assert sorted(ruled - reaching) == []

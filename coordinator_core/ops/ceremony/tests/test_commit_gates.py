@@ -65,19 +65,19 @@ def _make_conflicted_repo(tmp_path: Path) -> Path:
     return repo
 
 
-def test_parse_cli_args_normalises_backslashes_to_forward_slashes_on_windows(monkeypatch):
+def test_parse_cli_args_normalises_backslashes_to_forward_slashes_on_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_cg.os, "name", "nt")
     parsed = _cg._parse_cli_args(["msg.txt", "--", "a\\b\\c.md", "already/posix.md"])
     assert parsed == ("msg.txt", ["a/b/c.md", "already/posix.md"])
 
 
-def test_parse_cli_args_leaves_backslashes_untouched_on_posix(monkeypatch):
+def test_parse_cli_args_leaves_backslashes_untouched_on_posix(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_cg.os, "name", "posix")
     parsed = _cg._parse_cli_args(["msg.txt", "--", "weird\\name.md"])
     assert parsed == ("msg.txt", ["weird\\name.md"])
 
 
-def test_parse_blocks_deleted_and_kept():
+def test_parse_blocks_deleted_and_kept() -> None:
     msg = (
         "subject\n"
         "\n"
@@ -98,7 +98,7 @@ def test_parse_blocks_deleted_and_kept():
     assert has_step267_block(msg) is True
 
 
-def test_parse_blocks_blank_line_inside_block_does_not_terminate():
+def test_parse_blocks_blank_line_inside_block_does_not_terminate() -> None:
     msg = (
         "subject\n"
         "\n"
@@ -112,7 +112,7 @@ def test_parse_blocks_blank_line_inside_block_does_not_terminate():
     assert parsed.deleted_claimed == ["a/one.md", "a/two.md"]
 
 
-def test_parse_blocks_malformed_kept_line_flagged():
+def test_parse_blocks_malformed_kept_line_flagged() -> None:
     msg = (
         "subject\n"
         "\n"
@@ -125,11 +125,11 @@ def test_parse_blocks_malformed_kept_line_flagged():
     assert parsed.kept_malformed == ["a/no-separator.md"]
 
 
-def test_has_step267_block_false_on_plain_message():
+def test_has_step267_block_false_on_plain_message() -> None:
     assert has_step267_block("subject\n\nprose only\n") is False
 
 
-def test_deletion_gate_assertion_c_passes_well_formed_no_staged_deletions(tmp_path):
+def test_deletion_gate_assertion_c_passes_well_formed_no_staged_deletions(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _seed_file(repo, "tasks/my-feature/todo.md", "content")
     _git(["add", "--", "tasks/my-feature/todo.md"], repo)
@@ -150,7 +150,7 @@ def test_deletion_gate_assertion_c_passes_well_formed_no_staged_deletions(tmp_pa
     assert outcome.diagnostics == []
 
 
-def test_deletion_gate_assertion_c2_fails_unstaged_deleted_claim(tmp_path):
+def test_deletion_gate_assertion_c2_fails_unstaged_deleted_claim(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _seed_file(repo, "tasks/my-feature/todo.md", "content")
     _git(["add", "--", "tasks/my-feature/todo.md"], repo)
@@ -170,7 +170,7 @@ def test_deletion_gate_assertion_c2_fails_unstaged_deleted_claim(tmp_path):
     assert any("NOT staged for deletion" in d for d in outcome.diagnostics)
 
 
-def test_deletion_gate_assertion_1_recognizes_staged_rename_source(tmp_path):
+def test_deletion_gate_assertion_1_recognizes_staged_rename_source(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     content = "content block\n" * 40
     _seed_file(repo, "week-changelog/2026-07-20.md", content)
@@ -212,7 +212,7 @@ def test_deletion_gate_assertion_1_recognizes_staged_rename_source(tmp_path):
     assert outcome.diagnostics == []
 
 
-def test_deletion_gate_assertion_3_unrelated_rename_still_needs_no_block(tmp_path):
+def test_deletion_gate_assertion_3_unrelated_rename_still_needs_no_block(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     content = "content block\n" * 40
     _seed_file(repo, "a.md", content)
@@ -229,7 +229,7 @@ def test_deletion_gate_assertion_3_unrelated_rename_still_needs_no_block(tmp_pat
     assert outcome.diagnostics == []
 
 
-def test_deletion_gate_assertion_e_sibling_deletion_outside_scope_not_tripped(tmp_path):
+def test_deletion_gate_assertion_e_sibling_deletion_outside_scope_not_tripped(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     sibling_del_file = "tasks/sibling-session/scratch.md"
     e_commit_file = "state/lessons/e-fixture.yaml"
@@ -250,7 +250,7 @@ def test_deletion_gate_assertion_e_sibling_deletion_outside_scope_not_tripped(tm
     assert outcome.diagnostics == []
 
 
-def test_deletion_gate_skip_when_empty_gate_paths_and_no_block(tmp_path):
+def test_deletion_gate_skip_when_empty_gate_paths_and_no_block(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "x")
     _git(["add", "--", "README.md"], repo)
@@ -261,7 +261,7 @@ def test_deletion_gate_skip_when_empty_gate_paths_and_no_block(tmp_path):
     assert outcome.skipped is True
 
 
-def test_deletion_gate_kept_claim_missing_is_mismatch(tmp_path):
+def test_deletion_gate_kept_claim_missing_is_mismatch(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "x")
     _git(["add", "--", "README.md"], repo)
@@ -279,7 +279,7 @@ def test_deletion_gate_kept_claim_missing_is_mismatch(tmp_path):
     assert any("does not exist at HEAD or in staged set" in d for d in outcome.diagnostics)
 
 
-def test_deletion_gate_malformed_kept_line_is_mismatch(tmp_path):
+def test_deletion_gate_malformed_kept_line_is_mismatch(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _seed_file(repo, "README.md", "x")
     _git(["add", "--", "README.md"], repo)
@@ -297,7 +297,7 @@ def test_deletion_gate_malformed_kept_line_is_mismatch(tmp_path):
     assert any("no em-dash separator" in d for d in outcome.diagnostics)
 
 
-def test_deletion_gate_f3_inverse_check_trips_on_own_unblocked_deletion(tmp_path):
+def test_deletion_gate_f3_inverse_check_trips_on_own_unblocked_deletion(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _seed_file(repo, "a/gone.md", "x")
     _git(["add", "--", "a/gone.md"], repo)
@@ -309,7 +309,7 @@ def test_deletion_gate_f3_inverse_check_trips_on_own_unblocked_deletion(tmp_path
     assert any("no Step 2.67 block" in d for d in outcome.diagnostics)
 
 
-def test_deletion_gate_unmerged_index_entry_refuses_not_crashes(tmp_path):
+def test_deletion_gate_unmerged_index_entry_refuses_not_crashes(tmp_path: Path) -> None:
     repo = _make_conflicted_repo(tmp_path)
 
     msg = (
@@ -332,19 +332,19 @@ def _seed_handoff(repo: Path, rel_path: str, frontmatter_body: str) -> None:
     )
 
 
-def test_carry_gate_skips_when_no_handoff_in_gate_paths(tmp_path):
+def test_carry_gate_skips_when_no_handoff_in_gate_paths(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     outcome = carry_gate(repo, gate_paths=["a/one.md", "state/other/x.md"])
     assert outcome == GateOutcome(passed=True, skipped=True, diagnostics=[])
 
 
-def test_carry_gate_empty_gate_paths_skips(tmp_path):
+def test_carry_gate_empty_gate_paths_skips(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     outcome = carry_gate(repo, gate_paths=[])
     assert outcome == GateOutcome(passed=True, skipped=True, diagnostics=[])
 
 
-def test_carry_gate_well_formed_carried_items_passes(tmp_path):
+def test_carry_gate_well_formed_carried_items_passes(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _seed_handoff(
         repo,
@@ -362,14 +362,14 @@ def test_carry_gate_well_formed_carried_items_passes(tmp_path):
     assert outcome == GateOutcome(passed=True, skipped=False, diagnostics=[])
 
 
-def test_carry_gate_absent_carried_items_key_passes(tmp_path):
+def test_carry_gate_absent_carried_items_key_passes(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _seed_handoff(repo, "state/handoffs/2026-08-10-y.md", "")
     outcome = carry_gate(repo, gate_paths=["state/handoffs/2026-08-10-y.md"])
     assert outcome == GateOutcome(passed=True, skipped=False, diagnostics=[])
 
 
-def test_carry_gate_terminal_disposition_missing_detail_refuses(tmp_path):
+def test_carry_gate_terminal_disposition_missing_detail_refuses(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _seed_handoff(
         repo,
@@ -385,7 +385,7 @@ def test_carry_gate_terminal_disposition_missing_detail_refuses(tmp_path):
     assert any("disposition_detail" in line for line in outcome.diagnostics)
 
 
-def test_carry_gate_missing_carry_id_refuses(tmp_path):
+def test_carry_gate_missing_carry_id_refuses(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _seed_handoff(
         repo,
@@ -399,7 +399,7 @@ def test_carry_gate_missing_carry_id_refuses(tmp_path):
     assert any("carry_id" in line for line in outcome.diagnostics)
 
 
-def test_carry_gate_unrecognized_disposition_refuses(tmp_path):
+def test_carry_gate_unrecognized_disposition_refuses(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _seed_handoff(
         repo,
@@ -414,7 +414,7 @@ def test_carry_gate_unrecognized_disposition_refuses(tmp_path):
     assert any("not_a_real_disposition" in line for line in outcome.diagnostics)
 
 
-def test_carry_gate_preserves_violation_lines_verbatim(tmp_path):
+def test_carry_gate_preserves_violation_lines_verbatim(tmp_path: Path) -> None:
     from coordinator_core.ops.handoff_carry_gate import evaluate_gate
 
     items = [{"description": "no id", "disposition": "carried"}]
@@ -432,7 +432,7 @@ def test_carry_gate_preserves_violation_lines_verbatim(tmp_path):
     assert f"state/handoffs/2026-08-10-c.md: {expected_violation}" in outcome.diagnostics
 
 
-def test_carry_gate_refusal_includes_restage_hint(tmp_path):
+def test_carry_gate_refusal_includes_restage_hint(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _seed_handoff(
         repo,
@@ -446,14 +446,14 @@ def test_carry_gate_refusal_includes_restage_hint(tmp_path):
     assert any("unstaged" in line.lower() for line in outcome.diagnostics)
 
 
-def test_carry_gate_pass_has_no_restage_hint(tmp_path):
+def test_carry_gate_pass_has_no_restage_hint(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _seed_handoff(repo, "state/handoffs/2026-08-10-e.md", "")
     outcome = carry_gate(repo, gate_paths=["state/handoffs/2026-08-10-e.md"])
     assert outcome.diagnostics == []
 
 
-def test_carry_gate_unreadable_handoff_refuses(tmp_path):
+def test_carry_gate_unreadable_handoff_refuses(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     handoff_as_dir = repo / "state" / "handoffs" / "2026-08-10-unreadable.md"
     handoff_as_dir.mkdir(parents=True)
@@ -463,7 +463,7 @@ def test_carry_gate_unreadable_handoff_refuses(tmp_path):
     assert any("could not read handoff" in line for line in outcome.diagnostics)
 
 
-def test_carry_gate_staged_deletion_path_absent_from_worktree_passes(tmp_path):
+def test_carry_gate_staged_deletion_path_absent_from_worktree_passes(tmp_path: Path) -> None:
     """AC8: a `gate_paths` entry ABSENT from the worktree is the staged-
     deletion signal, not a generic missing-file case -- `compute_gate_paths`
     (`commit_message.py`) returns `[*commit_paths, *deleted_paths]`, so an
@@ -483,7 +483,7 @@ def test_carry_gate_staged_deletion_path_absent_from_worktree_passes(tmp_path):
     assert outcome.diagnostics == []
 
 
-def test_carry_gate_unparseable_frontmatter_refuses(tmp_path):
+def test_carry_gate_unparseable_frontmatter_refuses(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _seed_file(repo, "state/handoffs/2026-08-10-f.md", "no frontmatter here\n")
     outcome = carry_gate(repo, gate_paths=["state/handoffs/2026-08-10-f.md"])
@@ -491,7 +491,7 @@ def test_carry_gate_unparseable_frontmatter_refuses(tmp_path):
     assert any("unparseable carried_items" in line for line in outcome.diagnostics)
 
 
-def test_carry_gate_only_filters_handoff_paths(tmp_path):
+def test_carry_gate_only_filters_handoff_paths(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _seed_handoff(repo, "state/handoffs/2026-08-10-g.md", "")
     outcome = carry_gate(
@@ -535,13 +535,13 @@ def _seed_op_scopes(repo: Path, op_scope_pairs, *, valid: bool = True) -> None:
         p.write_text("SOME_OTHER_NAME = {}\n", encoding="utf-8")
 
 
-def test_op_scope_gate_skips_when_registry_map_not_staged(tmp_path):
+def test_op_scope_gate_skips_when_registry_map_not_staged(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     outcome = op_scope_coverage_gate(repo, gate_paths=["some/other/file.py"])
     assert outcome == GateOutcome(passed=True, skipped=True, diagnostics=[])
 
 
-def test_op_scope_gate_refuses_unclassified_op(tmp_path):
+def test_op_scope_gate_refuses_unclassified_op(tmp_path: Path) -> None:
     """Refuse: an op registered in OP_MODULE_MAP with no _OP_KEY_SCOPE entry."""
     repo = _init_repo(tmp_path)
     _seed_registry_map(repo, ["known.op", "unclassified.op"])
@@ -553,7 +553,7 @@ def test_op_scope_gate_refuses_unclassified_op(tmp_path):
     assert not any("known.op" in line for line in outcome.diagnostics)
 
 
-def test_op_scope_gate_passes_when_all_classified(tmp_path):
+def test_op_scope_gate_passes_when_all_classified(tmp_path: Path) -> None:
     """Pass: every registered op has an _OP_KEY_SCOPE entry -- a scope-table
     entry with no registry counterpart (legacy/test-only) does not trip the
     gate; direction is one-way."""
@@ -567,13 +567,13 @@ def test_op_scope_gate_passes_when_all_classified(tmp_path):
     assert outcome == GateOutcome(passed=True, skipped=False, diagnostics=[])
 
 
-def test_op_scope_gate_absence_class_registry_map_deleted_skips(tmp_path):
+def test_op_scope_gate_absence_class_registry_map_deleted_skips(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     outcome = op_scope_coverage_gate(repo, gate_paths=[_REGISTRY_RELPATH])
     assert outcome == GateOutcome(passed=True, skipped=True, diagnostics=[])
 
 
-def test_op_scope_gate_absence_class_op_scopes_missing_refuses(tmp_path):
+def test_op_scope_gate_absence_class_op_scopes_missing_refuses(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _seed_registry_map(repo, ["op.a"])
     outcome = op_scope_coverage_gate(repo, gate_paths=[_REGISTRY_RELPATH])
@@ -582,7 +582,7 @@ def test_op_scope_gate_absence_class_op_scopes_missing_refuses(tmp_path):
     assert any(_OP_SCOPES_RELPATH in line for line in outcome.diagnostics)
 
 
-def test_op_scope_gate_absence_class_dict_not_found_in_registry_refuses(tmp_path):
+def test_op_scope_gate_absence_class_dict_not_found_in_registry_refuses(tmp_path: Path) -> None:
     """Absence class 3a: OP_MODULE_MAP not found by the AST walk (renamed/
     restructured) -> refuse, naming which dict was not found -- a parse
     failure must never read as 'no violations'."""
@@ -595,7 +595,7 @@ def test_op_scope_gate_absence_class_dict_not_found_in_registry_refuses(tmp_path
     assert any("OP_MODULE_MAP" in line for line in outcome.diagnostics)
 
 
-def test_op_scope_gate_absence_class_dict_not_found_in_scopes_refuses(tmp_path):
+def test_op_scope_gate_absence_class_dict_not_found_in_scopes_refuses(tmp_path: Path) -> None:
     """Absence class 3b: _OP_KEY_SCOPE not found by the AST walk -> refuse,
     naming which dict was not found."""
     repo = _init_repo(tmp_path)
@@ -607,7 +607,7 @@ def test_op_scope_gate_absence_class_dict_not_found_in_scopes_refuses(tmp_path):
     assert any("_OP_KEY_SCOPE" in line for line in outcome.diagnostics)
 
 
-def test_op_scope_gate_refuses_on_double_module_level_rebind(tmp_path):
+def test_op_scope_gate_refuses_on_double_module_level_rebind(tmp_path: Path) -> None:
     """P2 hardening: two module-level rebinds of OP_MODULE_MAP (e.g. a
     placeholder `= {}` followed by a later genuine `= {...}` rebind) -> the
     gate cannot know which binding is authoritative and must refuse, naming
@@ -629,7 +629,7 @@ def test_op_scope_gate_refuses_on_double_module_level_rebind(tmp_path):
     assert any("OP_MODULE_MAP" in line and "more than once" in line for line in outcome.diagnostics)
 
 
-def test_op_scope_gate_same_named_local_does_not_count_as_second_binding(tmp_path):
+def test_op_scope_gate_same_named_local_does_not_count_as_second_binding(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     p = repo / _REGISTRY_RELPATH
     p.parent.mkdir(parents=True, exist_ok=True)
@@ -646,14 +646,14 @@ def test_op_scope_gate_same_named_local_does_not_count_as_second_binding(tmp_pat
     assert outcome == GateOutcome(passed=True, skipped=False, diagnostics=[])
 
 
-def test_op_scope_gate_op_scopes_present_but_unreadable_refuses(tmp_path, monkeypatch):
+def test_op_scope_gate_op_scopes_present_but_unreadable_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     _seed_registry_map(repo, ["op.a"])
     _seed_op_scopes(repo, [("op.a", "none")])
 
     real_read_text = Path.read_text
 
-    def _flaky_read_text(self, *args, **kwargs):
+    def _flaky_read_text(self, *args, **kwargs) -> str:
         if self == repo / _OP_SCOPES_RELPATH:
             raise OSError("simulated unreadable file")
         return real_read_text(self, *args, **kwargs)
@@ -669,13 +669,13 @@ def test_op_scope_gate_op_scopes_present_but_unreadable_refuses(tmp_path, monkey
     )
 
 
-def test_op_scope_gate_registry_map_present_but_unreadable_refuses(tmp_path, monkeypatch):
+def test_op_scope_gate_registry_map_present_but_unreadable_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     _seed_registry_map(repo, ["op.a"])
 
     real_read_text = Path.read_text
 
-    def _flaky_read_text(self, *args, **kwargs):
+    def _flaky_read_text(self, *args, **kwargs) -> str:
         if self == repo / _REGISTRY_RELPATH:
             raise OSError("simulated unreadable file")
         return real_read_text(self, *args, **kwargs)
@@ -765,7 +765,7 @@ def _git_stdout(args, cwd) -> str:
     ).stdout.strip()
 
 
-def _shape_clean(tmp_path):
+def _shape_clean(tmp_path) -> Path:
     repo = _init_repo(tmp_path)
     _seed_file(repo, "clean.txt", "unchanged\n")
     _git(["add", "--", "clean.txt"], repo)
@@ -773,7 +773,7 @@ def _shape_clean(tmp_path):
     return repo
 
 
-def _shape_space_path(tmp_path):
+def _shape_space_path(tmp_path) -> Path:
     repo = _init_repo(tmp_path)
     _seed_file(repo, "a dir/has space.txt", "base\n")
     _git(["add", "--", "a dir/has space.txt"], repo)
@@ -782,7 +782,7 @@ def _shape_space_path(tmp_path):
     return repo
 
 
-def _shape_nonascii_path(tmp_path):
+def _shape_nonascii_path(tmp_path) -> Path:
     repo = _init_repo(tmp_path)
     _seed_file(repo, "café-résumé.txt", "base\n")
     _git(["add", "--", "café-résumé.txt"], repo)
@@ -791,7 +791,7 @@ def _shape_nonascii_path(tmp_path):
     return repo
 
 
-def _shape_symlink(tmp_path):
+def _shape_symlink(tmp_path) -> Path:
     """A symlink (mode 120000) tracked at HEAD, SYNTHESISED via a direct
     index write -- this repo runs core.symlinks=false, so a worktree
     symlink would never round-trip through git as one."""
@@ -810,7 +810,7 @@ def _shape_symlink(tmp_path):
     return repo
 
 
-def _shape_gitlink(tmp_path):
+def _shape_gitlink(tmp_path) -> Path:
     """A submodule gitlink (mode 160000) tracked at HEAD, SYNTHESISED via a
     direct index write -- this repo's own index contains no 160000 entry at
     all to build a fixture from. The pointed-to sha need not be a real
@@ -845,7 +845,7 @@ def _kept_claim_message(path: str) -> str:
         pytest.param(_shape_gitlink, "vendor/sub", id="gitlink_160000"),
     ],
 )
-def test_deletion_gate_kept_claim_matches_pre_c3_oracle(tmp_path, shape, path):
+def test_deletion_gate_kept_claim_matches_pre_c3_oracle(tmp_path: Path, shape, path) -> None:
     """AC (undischarged by C3): `deletion_block_gate`'s Assertion-2
     (Kept-claim) re-pointed HEAD-membership leg (`head_blobs`) returns a
     SET-IDENTICAL answer to the pre-re-point (unscoped `git ls-tree -r HEAD
@@ -892,7 +892,7 @@ def test_deletion_gate_kept_claim_matches_pre_c3_oracle(tmp_path, shape, path):
     assert live.diagnostics == oracle.diagnostics
 
 
-def test_deletion_gates_match_a_backslash_spelled_path(tmp_path):
+def test_deletion_gates_match_a_backslash_spelled_path(tmp_path: Path) -> None:
     """Both deletion gates normalize caller paths to the index's forward-slash
     keys, so a Windows-spelled path still matches its own staged deletion."""
     repo = _init_repo(tmp_path)
@@ -929,19 +929,19 @@ def _reader(files):
     return lambda p: files[p].encode("utf-8") if p in files else None
 
 
-def test_registration_quad_gate_skips_unrelated_paths():
+def test_registration_quad_gate_skips_unrelated_paths() -> None:
     outcome = _cg.registration_quad_gate("/unused", ["docs/readme.md"], _reader({}))
     assert outcome.passed and outcome.skipped
 
 
-def test_registration_quad_gate_passes_complete_op():
+def test_registration_quad_gate_passes_complete_op() -> None:
     files = dict(_QUAD_FILES)
     files["coordinator_core/ops/ab.py"] = '@register_op("a.b")\ndef h(p):\n    pass\n'
     outcome = _cg.registration_quad_gate("/unused", ["coordinator_core/ops/ab.py"], _reader(files))
     assert outcome.passed and not outcome.skipped
 
 
-def test_registration_quad_gate_refuses_op_missing_from_tables():
+def test_registration_quad_gate_refuses_op_missing_from_tables() -> None:
     files = dict(_QUAD_FILES)
     files["coordinator_core/ops/xy.py"] = '@register_op("x.y")\ndef h(p):\n    pass\n'
     outcome = _cg.registration_quad_gate("/unused", ["coordinator_core/ops/xy.py"], _reader(files))
@@ -949,7 +949,7 @@ def test_registration_quad_gate_refuses_op_missing_from_tables():
     assert "x.y" in outcome.diagnostics[0]
 
 
-def test_registration_quad_gate_refuses_unparseable_surface():
+def test_registration_quad_gate_refuses_unparseable_surface() -> None:
     files = dict(_QUAD_FILES)
     files["coordinator_core/authz/classification.py"] = "OP_CLASSIFICATION = ({\n"
     outcome = _cg.registration_quad_gate(
@@ -958,19 +958,19 @@ def test_registration_quad_gate_refuses_unparseable_surface():
     assert not outcome.passed
 
 
-def test_claude_md_budget_gate_skips_non_markdown():
+def test_claude_md_budget_gate_skips_non_markdown() -> None:
     outcome = _cg.claude_md_budget_gate("/unused", ["a.py"], _reader({}))
     assert outcome.passed and outcome.skipped
 
 
-def test_claude_md_budget_gate_passes_small_governed_file(tmp_path):
+def test_claude_md_budget_gate_passes_small_governed_file(tmp_path: Path) -> None:
     (tmp_path / ".coordinator-dev-repo").write_text("", encoding="utf-8")
     files = {"coordinator/CLAUDE.md": "small\n"}
     outcome = _cg.claude_md_budget_gate(tmp_path, ["coordinator/CLAUDE.md"], _reader(files))
     assert outcome.passed and not outcome.skipped
 
 
-def test_claude_md_budget_gate_refuses_over_hard_limit(tmp_path):
+def test_claude_md_budget_gate_refuses_over_hard_limit(tmp_path: Path) -> None:
     from coordinator_core.claude_md_budget import HARD_LIMIT_BYTES
 
     (tmp_path / ".coordinator-dev-repo").write_text("", encoding="utf-8")
@@ -980,33 +980,33 @@ def test_claude_md_budget_gate_refuses_over_hard_limit(tmp_path):
     assert "coordinator/CLAUDE.md" in outcome.diagnostics[0]
 
 
-def test_machine_path_leak_gate_skips_other_files():
+def test_machine_path_leak_gate_skips_other_files() -> None:
     outcome = _cg.machine_path_leak_gate("/unused", ["a.json"], _reader({}))
     assert outcome.passed and outcome.skipped
 
 
-def test_machine_path_leak_gate_refuses_machine_path():
+def test_machine_path_leak_gate_refuses_machine_path() -> None:
     files = {".claude/settings.json": '{"k": "/home/someone/x"}'}
     outcome = _cg.machine_path_leak_gate("/unused", [".claude/settings.json"], _reader(files))
     assert not outcome.passed
     assert "/home/someone/x" in outcome.diagnostics[0]
 
 
-def test_machine_path_leak_gate_passes_clean_and_deleted():
+def test_machine_path_leak_gate_passes_clean_and_deleted() -> None:
     files = {".claude/settings.json": '{"k": "relative/x"}'}
     paths = [".claude/settings.json", "gone/settings.json"]
     outcome = _cg.machine_path_leak_gate("/unused", paths, _reader(files))
     assert outcome.passed and not outcome.skipped
 
 
-def test_machine_path_leak_gate_fixture_exempts_only_unparseable():
+def test_machine_path_leak_gate_fixture_exempts_only_unparseable() -> None:
     broken = {"tests/fixtures/settings.json": "{"}
     assert _cg.machine_path_leak_gate("/unused", list(broken), _reader(broken)).passed
     leaked = {"tests/fixtures/settings.json": '{"k": "/Users/me/x"}'}
     assert not _cg.machine_path_leak_gate("/unused", list(leaked), _reader(leaked)).passed
 
 
-def test_op_scope_gate_refuses_when_scope_edit_is_left_out_of_paths():
+def test_op_scope_gate_refuses_when_scope_edit_is_left_out_of_paths() -> None:
     """The registry edit commits; the `_OP_KEY_SCOPE` edit is not in paths, so HEAD's scopes are judged."""
     files = {
         "coordinator_core/ops/_registry_map.py": 'OP_MODULE_MAP = {\n    "a.b": "m",\n    "x.y": "m2",\n}\n',
@@ -1019,7 +1019,7 @@ def test_op_scope_gate_refuses_when_scope_edit_is_left_out_of_paths():
     assert "x.y" in "\n".join(outcome.diagnostics)
 
 
-def test_op_scope_gate_read_source_absence_classes():
+def test_op_scope_gate_read_source_absence_classes() -> None:
     registry = {"coordinator_core/ops/_registry_map.py": 'OP_MODULE_MAP = {\n    "a.b": "m",\n}\n'}
     refused = op_scope_coverage_gate("/unused", [_REGISTRY_RELPATH], read_source=_reader(registry))
     assert not refused.passed

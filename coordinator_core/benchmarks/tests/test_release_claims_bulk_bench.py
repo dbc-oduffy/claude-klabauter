@@ -5,11 +5,13 @@ import json
 
 from coordinator_core import benchmarks
 from coordinator_core.benchmarks import release_claims_bulk_bench as bench
+from pathlib import Path
+import pytest
 
 ROW_KEYS = {"process_ms", "spawn_count"}
 
 
-def test_json_carries_process_ms_and_spawn_count_for_every_axis(tmp_path, monkeypatch, capsys):
+def test_json_carries_process_ms_and_spawn_count_for_every_axis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(benchmarks, "declare_benchmark_origin", lambda: None)
     bench.main(["--claims", "50", "--json", "--scratch-dir", str(tmp_path)])
     doc = json.loads(capsys.readouterr().out)
@@ -19,7 +21,7 @@ def test_json_carries_process_ms_and_spawn_count_for_every_axis(tmp_path, monkey
     assert doc["per_path_remedy"]["calls"] == 50
 
 
-def test_full_release_retains_no_own_claim_absolute_agent_sink_entries_included(tmp_path):
+def test_full_release_retains_no_own_claim_absolute_agent_sink_entries_included(tmp_path: Path) -> None:
     for kwargs in ({}, {"absolute": False}, {"ineligible": True}):
         row = bench.measure_full_release(60, str(tmp_path), **kwargs)
         assert row["error"] is None, kwargs
@@ -27,13 +29,13 @@ def test_full_release_retains_no_own_claim_absolute_agent_sink_entries_included(
         assert row["retained_after"] == 0, kwargs
 
 
-def test_full_release_spawn_count_does_not_grow_with_claims(tmp_path):
+def test_full_release_spawn_count_does_not_grow_with_claims(tmp_path: Path) -> None:
     small = bench.measure_full_release(40, str(tmp_path))
     large = bench.measure_full_release(400, str(tmp_path))
     assert large["spawn_count"] <= small["spawn_count"]
 
 
-def test_ended_owner_claims_never_contest_and_spawns_do_not_grow(tmp_path):
+def test_ended_owner_claims_never_contest_and_spawns_do_not_grow(tmp_path: Path) -> None:
     counts = {n: bench.measure_dead_owner_blocking(n, str(tmp_path)) for n in (20, 400)}
     for n, row in counts.items():
         assert row["blocking_paths"] == 0, n

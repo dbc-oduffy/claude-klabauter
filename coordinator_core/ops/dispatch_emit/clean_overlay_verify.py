@@ -44,6 +44,8 @@ MIRROR_POLL_S = 0.25
 SETUP_TIMEOUT_S = 60
 TEST_TIMEOUT_S = 120
 PYTEST_STALL_S = 120
+STALL_RETRY_SCALE_MIN = 2.0
+STALL_RETRY_SCALE_MAX = 8.0
 # Silence allowed before pytest's first byte: a cold start (imports, conftest, collection) prints nothing, and its
 # length tracks interpreter start under peer load, not test progress, so it is never measured against the stall window.
 PYTEST_STARTUP_S = 120
@@ -90,6 +92,22 @@ class PytestStalled(subprocess.TimeoutExpired):
 
     def __str__(self) -> str:
         return self._text
+
+    def after(self, first: "PytestStalled") -> "PytestStalled":
+        """This stall as the retry of `first`: the text names both attempts."""
+        self._text = f"pytest stalled on both attempts: attempt 1: {first}; attempt 2 (retry): {self._text}"
+        return self
+
+
+def stall_retry_window() -> float:
+    """The no-output window of the one retry after a stall: `PYTEST_STALL_S` times the 1-minute load per core,
+    clamped to `[STALL_RETRY_SCALE_MIN, STALL_RETRY_SCALE_MAX]`. `os.getloadavg` is POSIX-only, so a host
+    without it (Windows) gets the minimum scale. Never below `PYTEST_STALL_S`."""
+    try:
+        per_core = os.getloadavg()[0] / (os.cpu_count() or 1)
+    except (AttributeError, OSError):
+        per_core = 0.0
+    return PYTEST_STALL_S * min(STALL_RETRY_SCALE_MAX, max(STALL_RETRY_SCALE_MIN, per_core))
 
 
 _RESULT_LINE_RE = re.compile(r"^[.FEsxX]+(?:\s+\[\s*\d+%\])?$")
@@ -781,6 +799,18 @@ def _base_failing_body(
     return frozenset(failing_ids(ran.stdout + ran.stderr)) & frozenset(ids)
 
 
+def _run_pytest_retrying(argv: list, dest: Path, env: dict) -> subprocess.CompletedProcess:
+    """Run a watched pytest; a stall is inconclusive, not a verdict, so it is re-run exactly once under
+    `stall_retry_window()`. A second stall raises `PytestStalled` naming both attempts."""
+    try:
+        return _run(argv, dest, None, env=env, stall_s=PYTEST_STALL_S)
+    except PytestStalled as first:
+        try:
+            return _run(argv, dest, None, env=env, stall_s=stall_retry_window())
+        except PytestStalled as second:
+            raise second.after(first) from None
+
+
 def _pytest_argv(root: Path, dest: Path, basetemp: Path, targets: Sequence[str]) -> list:
     """`--rootdir` is the symlink-resolved mirror: pytest roots node ids at the realpath of each test file, so a
     rootdir behind a symlink (macOS /var -> /private/var) loses the prefix match and every id becomes a file-less
@@ -798,9 +828,10 @@ def verify(
     """Advance `root`'s persistent mirror to `candidate_sha`, run pytest over `seeds` there with `coordinator_core`
     resolved from the mirror, then a second pytest over the test files that mention a `touched` module (the
     importer shard), and hold the mirror lock across pytest and the base re-run. Each pytest run has no total
-    wall: it continues while its output advances and ends after `PYTEST_STALL_S` of silence. An importer shard
-    that stalls or does not complete is a note on the seeds' verdict; a seeds stall is "inconclusive" with
-    `timed_out` and a detail naming the last progress point. A red whose
+    wall: it continues while its output advances and ends after `PYTEST_STALL_S` of silence, then is re-run
+    once under `stall_retry_window()`. An importer shard that stalls twice or does not complete is a note on the
+    seeds' verdict; a seeds that stall twice are "inconclusive" with `timed_out` and a detail naming both
+    attempts and the last progress point. A red whose
     every failing node id (both shards) also fails at `base_sha` (re-run in the same mirror, those ids only) is
     "pre_existing": the run did not cause it. A test file that fails to collect is red. Never raises: a setup
     failure, a busy mirror, a timeout or a run that collected nothing is "inconclusive". `leg(name)` is a
@@ -830,12 +861,12 @@ def verify(
             shard: Optional[subprocess.CompletedProcess] = None
             with leg("pytest"):
                 in_seeds = True
-                ran = _run(_pytest_argv(root, dest, basetemp, seeds), dest, None, env=env, stall_s=PYTEST_STALL_S)
+                ran = _run_pytest_retrying(_pytest_argv(root, dest, basetemp, seeds), dest, env)
                 in_seeds = False
                 if extras:
                     shard_note = f"importer shard timed out: {len(extras)} file(s) unverified"
                     try:
-                        shard = _run(_pytest_argv(root, dest, basetemp, extras), dest, None, env=env, stall_s=PYTEST_STALL_S)
+                        shard = _run_pytest_retrying(_pytest_argv(root, dest, basetemp, extras), dest, env)
                         shard_note = ""
                     except PytestStalled as exc:
                         shard_note = f"importer shard stalled: {len(extras)} file(s) unverified ({exc})"

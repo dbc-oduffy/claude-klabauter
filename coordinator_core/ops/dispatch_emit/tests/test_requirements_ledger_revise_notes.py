@@ -7,13 +7,14 @@ import yaml
 
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 REL = "state/sizings/2026-10-01-notes.yaml"
 RUN = "ask-20261001T000000-bbbbbb"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
@@ -36,14 +37,14 @@ def _texts(repo):
     return [r["source_text"] for r in rr.read_register((repo / REL).read_text(encoding="utf-8")).rows]
 
 
-def test_lettered_note_mints_no_row_and_is_stored(repo):
+def test_lettered_note_mints_no_row_and_is_stored(repo) -> None:
     before = _texts(repo)
     rl.revise(repo, RUN, note="(e) scout-reply parse; (f) twin scan fixed by hand.")
     assert _texts(repo) == before
     assert rl.read_notes(rl.run_dir(repo, RUN)) == ["(e) scout-reply parse; (f) twin scan fixed by hand."]
 
 
-def test_verbatim_still_mints_a_row(repo):
+def test_verbatim_still_mints_a_row(repo) -> None:
     before = _texts(repo)
     rl.revise(repo, RUN, verbatim="do the other thing")
     assert len(_texts(repo)) == len(before) + 1

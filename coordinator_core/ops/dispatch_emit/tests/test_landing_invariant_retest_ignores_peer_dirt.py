@@ -17,18 +17,19 @@ from coordinator_core.ops.dispatch_emit.tests.test_land_run_invariant_retest_in_
     repo,
 )
 from coordinator_core.ops.dispatch_emit.tests import test_retest_isolated_export as iso
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def test_the_emitted_retest_command_is_isolated_and_its_poll_inherits_the_flag(tmp_path):
+def test_the_emitted_retest_command_is_isolated_and_its_poll_inherits_the_flag(tmp_path: Path) -> None:
     call = ask_compose._invariant_retest_call(head="h", anchor="a", repo_root=str(tmp_path), run_id=RUN)
 
     assert "retest_targeted --isolated-export --params-file " in call
     assert "--poll" in call
 
 
-def test_a_peer_dirty_file_breaking_the_invariant_leaves_the_retest_green(tmp_path, monkeypatch):
+def test_a_peer_dirty_file_breaking_the_invariant_leaves_the_retest_green(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "pytest -q")
     root = iso._repo(tmp_path)  # mod.py is a peer's uncommitted edit that reds the test in the live tree
     out = iso._task_output(tmp_path, root, manifest=True)
@@ -41,7 +42,7 @@ def test_a_peer_dirty_file_breaking_the_invariant_leaves_the_retest_green(tmp_pa
     assert "mod.py" not in record["isolated_export"]["write_set"]
 
 
-def test_the_run_own_path_breaking_the_invariant_still_fails_the_retest(tmp_path, monkeypatch):
+def test_the_run_own_path_breaking_the_invariant_still_fails_the_retest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "pytest -q")
     root = iso._repo(tmp_path)
     (root / "test_a.py").write_text("def test_value():\n    assert False\n", encoding="utf-8")
@@ -53,7 +54,7 @@ def test_the_run_own_path_breaking_the_invariant_still_fails_the_retest(tmp_path
     assert rc == 1 and record["status"] == "fail" and record["export"]["status"] == "fail", record
 
 
-def test_the_landing_commits_on_an_export_pass_while_a_peer_dirty_file_reds_the_live_tree(owed):
+def test_the_landing_commits_on_an_export_pass_while_a_peer_dirty_file_reds_the_live_tree(owed) -> None:
     head = _git(["rev-parse", "HEAD"], owed).strip()
     record = {
         "run_id": RUN, "head": head, "status": "pass", "tests": [INV.split("::")[0]], "tests_run": 1,

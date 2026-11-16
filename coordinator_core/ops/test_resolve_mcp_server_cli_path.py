@@ -6,6 +6,7 @@ from coordinator_core.ops.resolve_mcp_server_cli_path import (
     _handler,
     resolve_cli_path_and_root,
 )
+from pathlib import Path
 
 
 def _write_claude_json(tmp_path, servers: dict):
@@ -14,7 +15,7 @@ def _write_claude_json(tmp_path, servers: dict):
     return path
 
 
-def test_resolves_cli_path_and_project_root(tmp_path):
+def test_resolves_cli_path_and_project_root(tmp_path: Path) -> None:
     path = _write_claude_json(
         tmp_path,
         {
@@ -33,7 +34,7 @@ def test_resolves_cli_path_and_project_root(tmp_path):
     }
 
 
-def test_resolves_cli_suffixed_arg_without_py_extension(tmp_path):
+def test_resolves_cli_suffixed_arg_without_py_extension(tmp_path: Path) -> None:
     path = _write_claude_json(
         tmp_path,
         {"my-server": {"args": ["/usr/local/bin/my-server-cli", "/repos/other"]}},
@@ -47,7 +48,7 @@ def test_resolves_cli_suffixed_arg_without_py_extension(tmp_path):
     }
 
 
-def test_missing_claude_json_file_reports_error(tmp_path):
+def test_missing_claude_json_file_reports_error(tmp_path: Path) -> None:
     result = resolve_cli_path_and_root(tmp_path / "nope" / ".claude.json", "project-rag")
 
     assert result["cli_path"] is None
@@ -55,7 +56,7 @@ def test_missing_claude_json_file_reports_error(tmp_path):
     assert "not found" in result["error"]
 
 
-def test_malformed_json_reports_error(tmp_path):
+def test_malformed_json_reports_error(tmp_path: Path) -> None:
     path = tmp_path / ".claude.json"
     path.write_text("{not valid json", encoding="utf-8")
 
@@ -65,7 +66,7 @@ def test_malformed_json_reports_error(tmp_path):
     assert "error" in result
 
 
-def test_missing_server_reports_error(tmp_path):
+def test_missing_server_reports_error(tmp_path: Path) -> None:
     path = _write_claude_json(tmp_path, {"other-server": {"args": ["/a.py", "/b"]}})
 
     result = resolve_cli_path_and_root(path, "project-rag")
@@ -74,7 +75,7 @@ def test_missing_server_reports_error(tmp_path):
     assert "mcpServers" in result["error"]
 
 
-def test_missing_args_reports_error(tmp_path):
+def test_missing_args_reports_error(tmp_path: Path) -> None:
     path = _write_claude_json(tmp_path, {"project-rag": {"command": "python3"}})
 
     result = resolve_cli_path_and_root(path, "project-rag")
@@ -83,7 +84,7 @@ def test_missing_args_reports_error(tmp_path):
     assert "args" in result["error"]
 
 
-def test_empty_args_reports_error(tmp_path):
+def test_empty_args_reports_error(tmp_path: Path) -> None:
     path = _write_claude_json(tmp_path, {"project-rag": {"args": []}})
 
     result = resolve_cli_path_and_root(path, "project-rag")
@@ -92,7 +93,7 @@ def test_empty_args_reports_error(tmp_path):
     assert "args" in result["error"]
 
 
-def test_no_py_or_cli_suffixed_arg_reports_error(tmp_path):
+def test_no_py_or_cli_suffixed_arg_reports_error(tmp_path: Path) -> None:
     path = _write_claude_json(tmp_path, {"project-rag": {"args": ["--flag", "/repos/x"]}})
 
     result = resolve_cli_path_and_root(path, "project-rag")
@@ -102,7 +103,7 @@ def test_no_py_or_cli_suffixed_arg_reports_error(tmp_path):
     assert "error" in result
 
 
-def test_handler_success_via_claude_json_path_override(tmp_path):
+def test_handler_success_via_claude_json_path_override(tmp_path: Path) -> None:
     path = _write_claude_json(
         tmp_path,
         {"project-rag": {"args": ["/opt/pr/cli.py", "/repos/x"]}},
@@ -113,14 +114,14 @@ def test_handler_success_via_claude_json_path_override(tmp_path):
     assert result == {"cli_path": "/opt/pr/cli.py", "project_root": "/repos/x"}
 
 
-def test_handler_missing_server_name_is_a_usage_error():
+def test_handler_missing_server_name_is_a_usage_error() -> None:
     result = _handler({})
 
     assert result["cli_path"] is None
     assert "server_name" in result["error"]
 
 
-def test_double_invocation_is_idempotent_no_op(tmp_path):
+def test_double_invocation_is_idempotent_no_op(tmp_path: Path) -> None:
     path = _write_claude_json(
         tmp_path,
         {"project-rag": {"args": ["/opt/pr/cli.py", "/repos/x"]}},

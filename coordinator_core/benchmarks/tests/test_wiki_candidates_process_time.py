@@ -29,7 +29,7 @@ def _write(repo: Path, rel: str, text: str) -> None:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_PATHS_UPDATE_DOCS_WORKLIST_CACHE", str(tmp_path / "cache"))
@@ -53,11 +53,11 @@ def repo(tmp_path, monkeypatch):
     (("python3", "x.py"), "python3"),
     ((), "?"),
 ])
-def test_spawn_kind_names_the_git_subcommand(argv, kind):
+def test_spawn_kind_names_the_git_subcommand(argv, kind) -> None:
     assert bench.spawn_kind(argv) == kind
 
 
-def test_op_suffix_refuses_a_non_ceremony_op():
+def test_op_suffix_refuses_a_non_ceremony_op() -> None:
     assert bench.op_suffix("ceremony.wiki_candidates") == "wiki_candidates"
     for bad in ("wiki_candidates", "plan.status", "ceremony."):
         with pytest.raises(ValueError):
@@ -65,14 +65,14 @@ def test_op_suffix_refuses_a_non_ceremony_op():
 
 
 
-def test_unknown_sha_is_refused(repo):
+def test_unknown_sha_is_refused(repo) -> None:
     with pytest.raises(RuntimeError):
         bench.load_op_module(repo, _OP, "0" * 40)
 
 
 
 
-def test_exit_codes_over_under_and_unmeasured():
+def test_exit_codes_over_under_and_unmeasured() -> None:
     assert bench.exit_code({"pass": True, "unmeasured": False}) == 0
     assert bench.exit_code({"pass": False, "unmeasured": False}) == 1
     assert bench.exit_code({"pass": False, "unmeasured": True}) == 2

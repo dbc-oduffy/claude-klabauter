@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import types
 from pathlib import Path
+import pytest
 
 SCRIPT = Path(__file__).resolve().parents[1] / "structural-index-refresh.py"
 _CODENAME = "project" "_rag"
@@ -17,13 +18,13 @@ def _load_published_form() -> types.ModuleType:
     return module
 
 
-def test_published_transform_form_still_yields_the_real_key():
+def test_published_transform_form_still_yields_the_real_key() -> None:
     module = _load_published_form()
     assert module.REGISTRY_KEY == f"repos.{_CODENAME}"
     assert module.ENSURE_SCRIPT.parts[0] == f"{_CODENAME}_scripts"
 
 
-def test_published_form_resolves_the_index_repo(tmp_path, monkeypatch):
+def test_published_form_resolves_the_index_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "idx"
     (repo / f"{_CODENAME}_scripts").mkdir(parents=True)
     (repo / f"{_CODENAME}_scripts" / "structural_index_refresh.py").write_text("", encoding="utf-8")

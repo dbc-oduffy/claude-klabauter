@@ -7,6 +7,8 @@ import json
 import os
 
 from coordinator_core.ops.verify_coverage import main
+from pathlib import Path
+import pytest
 
 
 def _write(path, content: str) -> None:
@@ -24,7 +26,7 @@ def _sweep(tmp_path, page: str, capsys):
     return code, capsys.readouterr().out
 
 
-def test_glob_placeholder_and_bare_prefix_refs_are_not_orphans(tmp_path, capsys):
+def test_glob_placeholder_and_bare_prefix_refs_are_not_orphans(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     code, out = _sweep(
         tmp_path,
         "# Page\n\nThe `coordinator:staff-*` family, `coordinator:<sibling>` placeholders,\n"
@@ -38,7 +40,7 @@ def test_glob_placeholder_and_bare_prefix_refs_are_not_orphans(tmp_path, capsys)
     assert "ORPHANED" not in out
 
 
-def test_literal_unresolved_qualified_and_subagent_refs_still_flagged(tmp_path, capsys):
+def test_literal_unresolved_qualified_and_subagent_refs_still_flagged(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     code, out = _sweep(
         tmp_path,
         "# Page\n\nUse `coordinator:no-such-skill` and\nsubagent_type: coordinator:no-such-agent\n",
@@ -50,7 +52,7 @@ def test_literal_unresolved_qualified_and_subagent_refs_still_flagged(tmp_path, 
     assert "coordinator:no-such-agent" in out
 
 
-def test_measurement_record_quoting_test_evidence_parser_is_clean(tmp_path, capsys):
+def test_measurement_record_quoting_test_evidence_parser_is_clean(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     code, out = _sweep(
         tmp_path,
         "# Record\n\nMeasured: `coordinator:test-evidence-parser` ran 4 times at 12k tokens.\n",

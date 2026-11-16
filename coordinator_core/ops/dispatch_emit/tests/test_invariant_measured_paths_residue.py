@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import halted_hold_release as hhr
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
+from pathlib import Path
+import pytest
 
 NODE = "coordinator_core/tests/test_raw_writes_have_a_disposition.py"
 RESIDUE = "coordinator_core/halted_peer.py"
@@ -17,31 +19,31 @@ def _root(tmp_path):
     return tmp_path
 
 
-def _residue(monkeypatch, paths):
+def _residue(monkeypatch, paths) -> None:
     monkeypatch.setattr(hhr, "residue_paths", lambda root, run_id, **_kw: frozenset(paths))
 
 
-def test_a_halted_peers_path_selects_no_invariant(tmp_path, monkeypatch):
+def test_a_halted_peers_path_selects_no_invariant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path)
     _residue(monkeypatch, [RESIDUE])
     assert li.invariant_findings(root, [RESIDUE], "run-a", {}) == []
 
 
-def test_the_runs_own_path_still_selects_the_invariant(tmp_path, monkeypatch):
+def test_the_runs_own_path_still_selects_the_invariant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path)
     _residue(monkeypatch, [RESIDUE])
     found = li.invariant_findings(root, [RESIDUE, OWN], "run-a", {})
     assert [f.path for f in found] == [NODE]
 
 
-def test_empty_residue_reproduces_the_unfiltered_result(tmp_path, monkeypatch):
+def test_empty_residue_reproduces_the_unfiltered_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path)
     _residue(monkeypatch, [])
     found = li.invariant_findings(root, [RESIDUE], "run-a", {})
     assert [f.path for f in found] == [NODE]
 
 
-def test_no_run_id_skips_residue(tmp_path, monkeypatch):
+def test_no_run_id_skips_residue(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path)
     _residue(monkeypatch, [RESIDUE])
     assert [f.path for f in li.invariant_findings(root, [RESIDUE], None, {})] == [NODE]

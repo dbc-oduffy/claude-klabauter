@@ -19,6 +19,7 @@ from coordinator_core.session.declared_writes import declare_write
 __all__ = [
     "REVISIONS_MARKER", "FINISHED_REL", "emitted_pipeline_run", "run_name", "revisions_rel", "finished_rel",
     "pipeline_run_state", "reads_revisions", "append_revision", "asks_peer_relay", "executing_run",
+    "stage_mailboxes", "mail_revision",
 ]
 
 #: The preamble sentence an emitted pipeline script carries when its stages read the revisions file.
@@ -132,3 +133,41 @@ def append_revision(root: Path, run_id: str, text: str, sender: str, kind: str) 
     append_line(path, block.encode("utf-8"))
     declare_write(path)
     return path
+
+
+#: The run's upward mailbox; a revision is never mailed to it.
+_EM_MAILBOX = "_em.jsonl"
+
+
+def stage_mailboxes(root: Path, run_id: str) -> Optional[list[Path]]:
+    """Mailbox files of the stages dispatched so far (``<run dir>/mail/*.jsonl`` minus the EM's), sorted.
+
+    None when the run has no ``mail`` directory: the stages cannot be enumerated from run state.
+    """
+    mail = Path(root) / RUN_DIR_ROOT / run_id / "mail"
+    try:
+        return sorted(p for p in mail.glob("*.jsonl") if p.name != _EM_MAILBOX and p.is_file())
+    except OSError:
+        return None
+
+
+def mail_revision(root: Path, run_id: str, text: str, sender: str, kind: str) -> tuple[list[str], list[str]]:
+    """Append the revision as one ``{"from","text"}`` line to every dispatched stage's mailbox.
+
+    Returns ``(delivered, unreached)`` stage names; ``unreached`` holds each mailbox the write failed on,
+    or the single entry ``"<stages not enumerable: no mail directory>"`` when the run has none.
+    """
+    boxes = stage_mailboxes(root, run_id)
+    if not (Path(root) / RUN_DIR_ROOT / run_id / "mail").is_dir() or boxes is None:
+        return [], ["<stages not enumerable: no mail directory>"]
+    line = json.dumps({"from": sender, "text": f"REVISION ({kind}): {text}"}, ensure_ascii=False) + "\n"
+    delivered: list[str] = []
+    unreached: list[str] = []
+    for box in boxes:
+        try:
+            append_line(box, line.encode("utf-8"))
+            declare_write(box)
+            delivered.append(box.stem)
+        except OSError:
+            unreached.append(box.stem)
+    return delivered, unreached

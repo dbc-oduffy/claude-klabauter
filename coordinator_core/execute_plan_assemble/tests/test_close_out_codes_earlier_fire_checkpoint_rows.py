@@ -55,7 +55,7 @@ def _commit(root: Path, subject: str, trailers: str = "") -> str:
     return _git(root, "rev-parse", "HEAD")
 
 
-def _cp(root, ids, plan=PLAN, base="", owed="", process=False, wave=0) -> str:
+def _cp(root, ids, plan=PLAN, base: str = "", owed: str = "", process: bool = False, wave: int = 0) -> str:
     subject = f"checkpoint(wave {wave}): {len(ids)} rows — {', '.join(ids)}"
     if process:
         subject += " (process files)"
@@ -130,7 +130,7 @@ def _run(monkeypatch, root: Path, dry_run: bool = False):
     return coas.close_out_and_stamp(PLAN, repo_root=root, dry_run=dry_run)
 
 
-def test_close_out_codes_eight_rows_at_their_checkpoints_and_stamps_implemented(tmp_path, monkeypatch):
+def test_close_out_codes_eight_rows_at_their_checkpoints_and_stamps_implemented(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     s = _example_game_repo_shape(tmp_path)
     pre = _git(tmp_path, "rev-parse", "HEAD")
     code, result = _run(monkeypatch, tmp_path)
@@ -160,7 +160,7 @@ def test_close_out_codes_eight_rows_at_their_checkpoints_and_stamps_implemented(
     assert "close-out" in subjects[1] or "stamp status" in subjects[1]
 
 
-def test_dry_run_reports_the_same_verdict_and_leaves_the_plan_bytes_alone(tmp_path, monkeypatch):
+def test_dry_run_reports_the_same_verdict_and_leaves_the_plan_bytes_alone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     s = _example_game_repo_shape(tmp_path)
     before = (tmp_path / PLAN).read_bytes()
     head = _git(tmp_path, "rev-parse", "HEAD")
@@ -173,7 +173,7 @@ def test_dry_run_reports_the_same_verdict_and_leaves_the_plan_bytes_alone(tmp_pa
     assert _git(tmp_path, "rev-parse", "HEAD") == head
 
 
-def test_a_gate_owed_only_landing_stays_missing_and_is_named(tmp_path, monkeypatch):
+def test_a_gate_owed_only_landing_stays_missing_and_is_named(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _seed(tmp_path, ["A1", "Z1"], [])
     a1 = _cp(tmp_path, ["A1", "Z1"], owed="Z1")
     _commit(tmp_path, "terminal")
@@ -187,7 +187,7 @@ def test_a_gate_owed_only_landing_stays_missing_and_is_named(tmp_path, monkeypat
     assert _rows(tmp_path)["Z1"]["disposition"] == "open"
 
 
-def test_no_checkpoints_leaves_the_partial_path_untouched(tmp_path, monkeypatch):
+def test_no_checkpoints_leaves_the_partial_path_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _seed(tmp_path, ["A1", "Z1"], [])
     _commit(tmp_path, "unrelated")
     spine_before = locate_fenced_block((tmp_path / PLAN).read_text(encoding="utf-8")).body
@@ -200,7 +200,7 @@ def test_no_checkpoints_leaves_the_partial_path_untouched(tmp_path, monkeypatch)
     assert locate_fenced_block((tmp_path / PLAN).read_text(encoding="utf-8")).body == spine_before
 
 
-def test_the_checkpoint_step_spawns_no_process(tmp_path, monkeypatch, record_property):
+def test_the_checkpoint_step_spawns_no_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, record_property) -> None:
     import time
 
     s = _example_game_repo_shape(tmp_path)

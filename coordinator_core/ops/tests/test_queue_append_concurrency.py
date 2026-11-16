@@ -23,6 +23,7 @@ import coordinator_core.ops  # noqa: F401 — kept so an import failure surfaces
 
 from coordinator_core.ipc import _REGISTRY  # noqa: F401 — retained for per-test reads
 from coordinator_core.ops._registry_map import resolves
+from pathlib import Path
 
 assert resolves("queue.append"), (
     "dispatchability guard failed: 'queue.append' not in _REGISTRY — "
@@ -78,7 +79,7 @@ def _base_kwargs() -> dict:
 class TestDistinctEntriesSurvive:
     """Two DISTINCT entries (different bodies), same forced date+slug → two files (AC1)."""
 
-    def test_two_distinct_bodies_yield_two_files_both_present(self, tmp_path, monkeypatch):
+    def test_two_distinct_bodies_yield_two_files_both_present(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("QUEUE_APPEND_OUTPUT_ROOT", str(tmp_path))
         monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
 
@@ -132,7 +133,7 @@ class TestDistinctEntriesSurvive:
 class TestIdenticalReRunDedups:
     """An IDENTICAL entry submitted twice → exactly ONE file (AC3, idempotency preserved)."""
 
-    def test_identical_entry_twice_yields_one_file(self, tmp_path, monkeypatch):
+    def test_identical_entry_twice_yields_one_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("QUEUE_APPEND_OUTPUT_ROOT", str(tmp_path))
         monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
 
@@ -169,8 +170,8 @@ class TestDigestNormalizationOrder:
     """
 
     def test_literal_backslash_n_and_real_newline_normalize_to_same_digest(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("QUEUE_APPEND_OUTPUT_ROOT", str(tmp_path))
         monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
 

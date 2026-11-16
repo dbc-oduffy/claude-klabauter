@@ -22,7 +22,7 @@ SESSION = "11111111-2222-3333-4444-555555555555"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / REL).write_text(yaml.safe_dump(_SIZING_DOC, sort_keys=False), encoding="utf-8", newline="\n")
@@ -56,19 +56,19 @@ def _assert_fresh(reply: dict, ask_id: str) -> None:
     assert name.startswith("warp-") and name != f"{ask_id}.workflow.mjs", reply
 
 
-def test_chain_emit_mints_a_warp_run(repo):
+def test_chain_emit_mints_a_warp_run(repo) -> None:
     ask_id = _ask_run(repo)
     _assert_fresh(_chain_emit(repo, ask_id), ask_id)
 
 
-def test_chain_emit_repeated_stays_fresh_each_time(repo):
+def test_chain_emit_repeated_stays_fresh_each_time(repo) -> None:
     ask_id = _ask_run(repo)
     first, second = _chain_emit(repo, ask_id), _chain_emit(repo, ask_id)
     _assert_fresh(first, ask_id)
     _assert_fresh(second, ask_id)
 
 
-def test_chain_emit_ignores_a_reserved_run_id_naming_the_ask(repo):
+def test_chain_emit_ignores_a_reserved_run_id_naming_the_ask(repo) -> None:
     """A reservation that names the ask run reuses its id at base; a chain hop takes none."""
     ask_id = _ask_run(repo)
     sizing = repo / REL
@@ -78,7 +78,7 @@ def test_chain_emit_ignores_a_reserved_run_id_naming_the_ask(repo):
     _assert_fresh(_chain_emit(repo, ask_id, reserved_run_id=ask_id), ask_id)
 
 
-def test_chain_emit_after_the_ask_halts_mints_a_warp_run(repo):
+def test_chain_emit_after_the_ask_halts_mints_a_warp_run(repo) -> None:
     ask_id = _ask_run(repo)
     halted_run.write_halt_marker(record_dir(repo, ask_id), halted="refusal", sizing_rel=REL)
     _assert_fresh(_chain_emit(repo, ask_id), ask_id)

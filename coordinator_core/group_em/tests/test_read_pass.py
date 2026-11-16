@@ -16,6 +16,7 @@ import types
 import json
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 from datetime import datetime, timedelta, timezone
@@ -29,12 +30,12 @@ REPO_ROOT = "/repo/root"
 _REAL_READ_REMOTE_SNAPSHOT = read_pass.read_remote_snapshot
 
 
-def _agent(session_id="peer-1", status="idle", cwd=REPO_ROOT):
+def _agent(session_id: str = "peer-1", status: str = "idle", cwd=REPO_ROOT):
     return {"sessionId": session_id, "status": status, "cwd": cwd}
 
 
 @pytest.fixture(autouse=True)
-def _no_real_remote_snapshot(monkeypatch):
+def _no_real_remote_snapshot(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(read_pass, "read_remote_snapshot", lambda directory=None: {})
 
 
@@ -60,7 +61,7 @@ def _live_peers(snapshot, local_agents=None, **kwargs):
         return read_pass.live_peers(REPO_ROOT, snapshot=snapshot, **kwargs)
 
 
-def test_live_peers_merges_remote_rows_keyed_by_box_and_session():
+def test_live_peers_merges_remote_rows_keyed_by_box_and_session() -> None:
     peers = _live_peers(_snapshot(boxB=(True, [("s9", "busy")])))
     by_key = {p["peerKey"]: p for p in peers}
     assert set(by_key) == {"boxA:peer-1", "boxB:s9"}
@@ -70,18 +71,18 @@ def test_live_peers_merges_remote_rows_keyed_by_box_and_session():
     assert remote["address"] == "n-s9"
 
 
-def test_live_peers_can_leave_remote_rows_out():
+def test_live_peers_can_leave_remote_rows_out() -> None:
     peers = _live_peers(_snapshot(boxB=(True, [("s9", "busy")])), include_remote=False)
     assert [p["peerKey"] for p in peers] == ["boxA:peer-1"]
 
 
-def test_unreachable_box_contributes_no_rows_and_is_named_unreachable():
+def test_unreachable_box_contributes_no_rows_and_is_named_unreachable() -> None:
     snap = _snapshot(boxB=(False, []), boxC=(True, [("c1", "idle")]))
     assert {p["peerKey"] for p in _live_peers(snap)} == {"boxA:peer-1", "boxC:c1"}
     assert read_pass.unreachable_boxes(snap) == frozenset({"boxB"})
 
 
-def test_same_name_on_two_boxes_gets_distinct_box_labelled_names():
+def test_same_name_on_two_boxes_gets_distinct_box_labelled_names() -> None:
     snap = {
         box: {
             "reachable": True,
@@ -95,7 +96,7 @@ def test_same_name_on_two_boxes_gets_distinct_box_labelled_names():
     assert sorted(r["nameAtBox"] for r in remote) == ["example-game-repo-7e@machine-b", "example-game-repo-7e@mac"]
 
 
-def test_local_row_is_box_labelled_beside_a_same_name_remote_row():
+def test_local_row_is_box_labelled_beside_a_same_name_remote_row() -> None:
     snap = {"mac": {"reachable": True, "sessions": [{"session_id": "56c6a5", "name": "example-game-repo-7e", "status": "idle"}]}}
     rows = _live_peers(snap, local_agents=[{"sessionId": "loc1", "name": "example-game-repo-7e", "cwd": "/r", "status": "idle"}])
     local = [r for r in rows if not r.get("remote")]
@@ -104,23 +105,23 @@ def test_local_row_is_box_labelled_beside_a_same_name_remote_row():
     assert local[0]["nameAtBox"] != remote[0]["nameAtBox"] == "example-game-repo-7e@mac"
 
 
-def test_nameless_local_row_has_no_box_labelled_name():
+def test_nameless_local_row_has_no_box_labelled_name() -> None:
     (row,) = _live_peers({}, local_agents=[{"sessionId": "loc1", "cwd": "/r", "status": "idle"}])
     assert row["nameAtBox"] is None
 
 
-def test_nameless_remote_session_has_no_box_labelled_name():
+def test_nameless_remote_session_has_no_box_labelled_name() -> None:
     snap = {"boxB": {"reachable": True, "sessions": [{"session_id": "s1", "status": "idle"}]}}
     (row,) = read_pass.remote_peer_rows(snap)
     assert row["name"] is None and row["nameAtBox"] is None
 
 
-def test_remote_row_without_a_session_id_is_skipped():
+def test_remote_row_without_a_session_id_is_skipped() -> None:
     snap = {"boxB": {"reachable": True, "sessions": [{"session_id": "", "status": "busy"}, {"status": "busy"}]}}
     assert read_pass.remote_peer_rows(snap) == []
 
 
-def test_classify_remote_uses_snapshot_status_and_reads_no_local_state():
+def test_classify_remote_uses_snapshot_status_and_reads_no_local_state() -> None:
     rows = {r["sessionId"]: r for r in read_pass.remote_peer_rows(_snapshot(boxB=(True, [("b1", "busy"), ("i1", "idle"), ("w1", "weird")])))}
     with mock.patch.object(read_pass, "read_receiver_state", side_effect=AssertionError("local read")), mock.patch.object(
         read_pass, "reduce_transcript_tail", side_effect=AssertionError("local transcript")
@@ -133,12 +134,12 @@ def test_classify_remote_uses_snapshot_status_and_reads_no_local_state():
     assert odd["reason"] == "unrecognized-status:weird" and odd["candidate"] is False
 
 
-def test_read_remote_snapshot_degrades_to_empty_on_failure(tmp_path):
+def test_read_remote_snapshot_degrades_to_empty_on_failure(tmp_path: Path) -> None:
     with mock.patch.object(read_pass.remote_roster, "read_snapshot", side_effect=RuntimeError("x")):
         assert _REAL_READ_REMOTE_SNAPSHOT(tmp_path) == {}
 
 
-def test_read_remote_snapshot_reads_the_directory_it_is_given(tmp_path):
+def test_read_remote_snapshot_reads_the_directory_it_is_given(tmp_path: Path) -> None:
     (tmp_path / "remote-roster").mkdir()
     (tmp_path / "remote-roster" / "boxB.json").write_text(
         json.dumps({"box_id": "boxB", "fetched_at": 1000.0, "ok": True, "sessions": [{"session_id": "s1"}]}),
@@ -152,7 +153,7 @@ def test_read_remote_snapshot_reads_the_directory_it_is_given(tmp_path):
     assert snap["boxB"]["sessions"][0]["session_id"] == "s1"
 
 
-def test_reader_leg_used_when_record_present():
+def test_reader_leg_used_when_record_present() -> None:
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     with mock.patch.object(
         read_pass,
@@ -169,7 +170,7 @@ def test_reader_leg_used_when_record_present():
     assert verdict["candidate"] is True
 
 
-def test_fallback_leg_used_when_reader_returns_none():
+def test_fallback_leg_used_when_reader_returns_none() -> None:
     with mock.patch.object(read_pass, "read_receiver_state", return_value=None):
         verdict = read_pass.classify_peer(
             REPO_ROOT,
@@ -180,7 +181,7 @@ def test_fallback_leg_used_when_reader_returns_none():
     assert verdict["candidate"] is False
 
 
-def test_reader_paused_contradicted_by_live_busy_status():
+def test_reader_paused_contradicted_by_live_busy_status() -> None:
     with mock.patch.object(
         read_pass,
         "read_receiver_state",
@@ -192,7 +193,7 @@ def test_reader_paused_contradicted_by_live_busy_status():
     assert verdict["candidate"] is False
 
 
-def test_stale_paused_snapshot_with_idle_status_not_a_candidate():
+def test_stale_paused_snapshot_with_idle_status_not_a_candidate() -> None:
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     stamped_at = (now - timedelta(seconds=210)).isoformat().replace("+00:00", "Z")
     with mock.patch.object(
@@ -206,7 +207,7 @@ def test_stale_paused_snapshot_with_idle_status_not_a_candidate():
     assert verdict["candidate"] is False
 
 
-def test_fresh_paused_snapshot_with_idle_status_is_still_a_candidate():
+def test_fresh_paused_snapshot_with_idle_status_is_still_a_candidate() -> None:
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     stamped_at = (now - timedelta(seconds=10)).isoformat().replace("+00:00", "Z")
     with mock.patch.object(
@@ -219,7 +220,7 @@ def test_fresh_paused_snapshot_with_idle_status_is_still_a_candidate():
     assert verdict["reason"] == "turn-ended"
 
 
-def test_stale_snapshot_but_transcript_still_reinstates_the_candidate():
+def test_stale_snapshot_but_transcript_still_reinstates_the_candidate() -> None:
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     stamped_at = (now - timedelta(seconds=3600)).isoformat().replace("+00:00", "Z")
     with mock.patch.object(
@@ -232,7 +233,7 @@ def test_stale_snapshot_but_transcript_still_reinstates_the_candidate():
     assert verdict["reason"] == "turn-ended"
 
 
-def test_stale_snapshot_with_moved_transcript_stays_out_defect_b_preserved():
+def test_stale_snapshot_with_moved_transcript_stays_out_defect_b_preserved() -> None:
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     stamped_at = (now - timedelta(seconds=210)).isoformat().replace("+00:00", "Z")
     with mock.patch.object(
@@ -245,7 +246,7 @@ def test_stale_snapshot_with_moved_transcript_stays_out_defect_b_preserved():
     assert verdict["reason"] == "stale-snapshot-contradicts-paused"
 
 
-def test_unreadable_transcript_leaves_the_age_verdict_standing():
+def test_unreadable_transcript_leaves_the_age_verdict_standing() -> None:
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     stamped_at = (now - timedelta(seconds=210)).isoformat().replace("+00:00", "Z")
     with mock.patch.object(
@@ -257,7 +258,7 @@ def test_unreadable_transcript_leaves_the_age_verdict_standing():
     assert verdict["candidate"] is False
 
 
-def test_indeterminate_staleness_fails_closed_not_a_candidate():
+def test_indeterminate_staleness_fails_closed_not_a_candidate() -> None:
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     with mock.patch.object(
         read_pass,
@@ -269,7 +270,7 @@ def test_indeterminate_staleness_fails_closed_not_a_candidate():
     assert verdict["candidate"] is False
 
 
-def test_missing_stamped_at_fails_closed_not_a_candidate():
+def test_missing_stamped_at_fails_closed_not_a_candidate() -> None:
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     with mock.patch.object(
         read_pass,
@@ -288,7 +289,7 @@ def test_missing_stamped_at_fails_closed_not_a_candidate():
 # ---------------------------------------------------------------------------
 
 
-def test_stale_producing_snapshot_resolves_unknown_and_unclassifiable():
+def test_stale_producing_snapshot_resolves_unknown_and_unclassifiable() -> None:
     """`write_receiver_state` has one writer (the Stop hook); a session that
     never takes another turn leaves this verdict frozen. Transcript growth
     after `stamped_at` is positive evidence the frozen PRODUCING verdict no
@@ -313,7 +314,7 @@ def test_stale_producing_snapshot_resolves_unknown_and_unclassifiable():
     assert "stale-producing" in verdict["reason"]
 
 
-def test_stale_producing_snapshot_reaches_the_roster_payload_though_not_a_candidate():
+def test_stale_producing_snapshot_reaches_the_roster_payload_though_not_a_candidate() -> None:
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     stamped_at = (now - timedelta(seconds=3600)).isoformat().replace("+00:00", "Z")
     with mock.patch.object(
@@ -336,7 +337,7 @@ def test_stale_producing_snapshot_reaches_the_roster_payload_though_not_a_candid
     assert roster[0]["candidate"] is False
 
 
-def test_producing_snapshot_not_moved_since_stays_producing_not_unclassifiable():
+def test_producing_snapshot_not_moved_since_stays_producing_not_unclassifiable() -> None:
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     stamped_at = (now - timedelta(seconds=3600)).isoformat().replace("+00:00", "Z")
     with mock.patch.object(
@@ -354,7 +355,7 @@ def test_producing_snapshot_not_moved_since_stays_producing_not_unclassifiable()
     assert verdict["candidate"] is False
 
 
-def test_producing_snapshot_indeterminate_movement_stays_producing_not_unclassifiable():
+def test_producing_snapshot_indeterminate_movement_stays_producing_not_unclassifiable() -> None:
     now = datetime(2026, 8, 30, 18, 39, 22, tzinfo=timezone.utc)
     with mock.patch.object(
         read_pass,
@@ -370,7 +371,7 @@ def test_producing_snapshot_indeterminate_movement_stays_producing_not_unclassif
     assert verdict["unclassifiable"] is False
 
 
-def _write_transcript(tmp_path, records):
+def _write_transcript(tmp_path, records) -> str:
     path = tmp_path / "transcript.jsonl"
     path.write_text(
         "\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8"
@@ -384,7 +385,7 @@ def _reduced_lines_for(tmp_path, records):
     return reduced
 
 
-def test_classify_fallback_status_unknown_on_unrecognised_type_only(tmp_path):
+def test_classify_fallback_status_unknown_on_unrecognised_type_only(tmp_path: Path) -> None:
     reduced = _reduced_lines_for(tmp_path, [{"type": "atis-latch", "atis": ""}])
     state, _reason = read_pass.classify_fallback_status(
         "idle", reduced, now_epoch=0.0
@@ -392,12 +393,12 @@ def test_classify_fallback_status_unknown_on_unrecognised_type_only(tmp_path):
     assert state == read_pass.STATE_UNKNOWN
 
 
-def test_classify_fallback_status_unknown_on_empty(tmp_path):
+def test_classify_fallback_status_unknown_on_empty(tmp_path: Path) -> None:
     state, _reason = read_pass.classify_fallback_status("idle", [], now_epoch=0.0)
     assert state == read_pass.STATE_UNKNOWN
 
 
-def test_classify_fallback_status_atis_latch_burst_does_not_mask_real_line(tmp_path):
+def test_classify_fallback_status_atis_latch_burst_does_not_mask_real_line(tmp_path: Path) -> None:
     records = [{"type": "system", "subtype": "turn_duration"}]
     records += [{"type": "atis-latch", "atis": ""} for _ in range(35)]
     reduced = _reduced_lines_for(tmp_path, records)
@@ -406,7 +407,7 @@ def test_classify_fallback_status_atis_latch_burst_does_not_mask_real_line(tmp_p
     assert "turn-ended" in reason
 
 
-def test_classify_fallback_status_end_turn_is_paused_without_system_line(tmp_path):
+def test_classify_fallback_status_end_turn_is_paused_without_system_line(tmp_path: Path) -> None:
     reduced = _reduced_lines_for(
         tmp_path, [{"type": "assistant", "message": {"stop_reason": "end_turn"}}]
     )
@@ -414,7 +415,7 @@ def test_classify_fallback_status_end_turn_is_paused_without_system_line(tmp_pat
     assert state == read_pass.STATE_PAUSED
 
 
-def test_classify_fallback_status_tool_use_stop_reason_still_producing(tmp_path):
+def test_classify_fallback_status_tool_use_stop_reason_still_producing(tmp_path: Path) -> None:
     reduced = _reduced_lines_for(
         tmp_path, [{"type": "assistant", "message": {"stop_reason": "tool_use"}}]
     )
@@ -424,7 +425,7 @@ def test_classify_fallback_status_tool_use_stop_reason_still_producing(tmp_path)
     assert state == read_pass.STATE_PRODUCING
 
 
-def test_classify_fallback_status_user_line_still_producing(tmp_path):
+def test_classify_fallback_status_user_line_still_producing(tmp_path: Path) -> None:
     reduced = _reduced_lines_for(tmp_path, [{"type": "user"}])
     state, _reason = read_pass.classify_fallback_status("idle", reduced, now_epoch=0.0)
     assert state == read_pass.STATE_PRODUCING
@@ -435,7 +436,7 @@ def test_classify_fallback_status_user_line_still_producing(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_producing_peer_excluded_on_reader_leg():
+def test_producing_peer_excluded_on_reader_leg() -> None:
     with mock.patch.object(
         read_pass,
         "read_receiver_state",
@@ -449,7 +450,7 @@ def test_producing_peer_excluded_on_reader_leg():
     assert roster == []
 
 
-def test_producing_peer_excluded_on_fallback_leg_via_busy_status():
+def test_producing_peer_excluded_on_fallback_leg_via_busy_status() -> None:
     with mock.patch.object(read_pass, "read_receiver_state", return_value=None):
         roster = read_pass.build_candidate_roster(
             REPO_ROOT,
@@ -459,7 +460,7 @@ def test_producing_peer_excluded_on_fallback_leg_via_busy_status():
     assert roster == []
 
 
-def test_producing_peer_excluded_on_fallback_leg_via_live_tail(tmp_path):
+def test_producing_peer_excluded_on_fallback_leg_via_live_tail(tmp_path: Path) -> None:
     reduced = _reduced_lines_for(tmp_path, [{"type": "assistant"}])
 
     def fake_read_tail(session_id, cwd):
@@ -475,7 +476,7 @@ def test_producing_peer_excluded_on_fallback_leg_via_live_tail(tmp_path):
     assert roster == []
 
 
-def test_paused_fallback_peer_is_a_candidate(tmp_path):
+def test_paused_fallback_peer_is_a_candidate(tmp_path: Path) -> None:
     reduced = _reduced_lines_for(tmp_path, [{"type": "system", "subtype": "turn_duration"}])
 
     def fake_read_tail(session_id, cwd):
@@ -493,7 +494,7 @@ def test_paused_fallback_peer_is_a_candidate(tmp_path):
     assert roster[0]["candidate"] is True
 
 
-def test_caller_excluded_from_own_roster():
+def test_caller_excluded_from_own_roster() -> None:
     with mock.patch.object(
         read_pass,
         "read_receiver_state",
@@ -507,7 +508,7 @@ def test_caller_excluded_from_own_roster():
     assert roster == []
 
 
-def _peer_row(session_id="peer-1", status="idle", cwd=REPO_ROOT, is_self=False):
+def _peer_row(session_id: str = "peer-1", status: str = "idle", cwd=REPO_ROOT, is_self: bool = False):
     from coordinator_core.session.peer_roster import PeerRow
 
     return PeerRow(
@@ -524,7 +525,7 @@ def _peer_row(session_id="peer-1", status="idle", cwd=REPO_ROOT, is_self=False):
     )
 
 
-def test_fetch_live_agents_sources_peer_roster_not_a_subprocess():
+def test_fetch_live_agents_sources_peer_roster_not_a_subprocess() -> None:
     with mock.patch.object(
         read_pass.peer_roster,
         "build_roster",
@@ -547,12 +548,12 @@ def test_fetch_live_agents_sources_peer_roster_not_a_subprocess():
     ]
 
 
-def test_fetch_live_agents_empty_when_build_roster_empty():
+def test_fetch_live_agents_empty_when_build_roster_empty() -> None:
     with mock.patch.object(read_pass.peer_roster, "build_roster", return_value=[]):
         assert read_pass.fetch_live_agents(REPO_ROOT) == []
 
 
-def test_build_candidate_roster_uses_fetch_live_agents_when_agents_omitted():
+def test_build_candidate_roster_uses_fetch_live_agents_when_agents_omitted() -> None:
     with mock.patch.object(
         read_pass, "fetch_live_agents", return_value=[]
     ) as fake_fetch:
@@ -563,7 +564,7 @@ def test_build_candidate_roster_uses_fetch_live_agents_when_agents_omitted():
     assert roster == []
 
 
-def test_module_imports_no_subprocess_and_defines_no_command_constant():
+def test_module_imports_no_subprocess_and_defines_no_command_constant() -> None:
     import sys
 
     assert "subprocess" not in vars(read_pass)
@@ -572,7 +573,7 @@ def test_module_imports_no_subprocess_and_defines_no_command_constant():
     assert "subprocess" not in getattr(module, "__dict__", {})
 
 
-def _write_clock_transcript(tmp_path, session_id, cwd, records, mtime_epoch=None):
+def _write_clock_transcript(tmp_path, session_id, cwd, records, mtime_epoch=None) -> str:
     import os
 
     projects = tmp_path / "projects" / read_pass._PATH_SEP_RE.sub("-", cwd)
@@ -586,7 +587,7 @@ def _write_clock_transcript(tmp_path, session_id, cwd, records, mtime_epoch=None
     return str(path)
 
 
-def _patch_transcript_root(monkeypatch, tmp_path):
+def _patch_transcript_root(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(
         read_pass,
         "_transcript_path_for",
@@ -596,7 +597,7 @@ def _patch_transcript_root(monkeypatch, tmp_path):
     )
 
 
-def test_activity_epoch_ignores_an_mtime_pushed_forward_by_bookkeeping(tmp_path, monkeypatch):
+def test_activity_epoch_ignores_an_mtime_pushed_forward_by_bookkeeping(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_transcript_root(monkeypatch, tmp_path)
     last_real = datetime(2026, 8, 31, 15, 40, 48, tzinfo=timezone.utc)
     _write_clock_transcript(
@@ -619,8 +620,8 @@ def test_activity_epoch_ignores_an_mtime_pushed_forward_by_bookkeeping(tmp_path,
 
 
 def test_activity_epoch_falls_back_to_mtime_untrusted_when_nothing_is_timestamped(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _patch_transcript_root(monkeypatch, tmp_path)
     _write_clock_transcript(
         tmp_path, "peer-no-stamps", REPO_ROOT, [{"type": "cost-state"}], mtime_epoch=1000.0
@@ -632,12 +633,12 @@ def test_activity_epoch_falls_back_to_mtime_untrusted_when_nothing_is_timestampe
     assert epoch == 1000.0
 
 
-def test_activity_epoch_is_none_when_the_transcript_is_absent(tmp_path, monkeypatch):
+def test_activity_epoch_is_none_when_the_transcript_is_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_transcript_root(monkeypatch, tmp_path)
     assert read_pass.transcript_activity_epoch("peer-missing", REPO_ROOT) == (None, False)
 
 
-def test_moved_since_is_not_answered_from_an_untrusted_clock(tmp_path, monkeypatch):
+def test_moved_since_is_not_answered_from_an_untrusted_clock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_transcript_root(monkeypatch, tmp_path)
     stamp = datetime(2026, 8, 31, 15, 0, 0, tzinfo=timezone.utc)
     _write_clock_transcript(
@@ -651,7 +652,7 @@ def test_moved_since_is_not_answered_from_an_untrusted_clock(tmp_path, monkeypat
     assert read_pass._transcript_moved_since("peer-bookkeeping-only", REPO_ROOT, stamp) is None
 
 
-def test_moved_since_still_answers_true_on_a_real_later_record(tmp_path, monkeypatch):
+def test_moved_since_still_answers_true_on_a_real_later_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_transcript_root(monkeypatch, tmp_path)
     stamp = datetime(2026, 8, 31, 15, 0, 0, tzinfo=timezone.utc)
     later = (stamp + timedelta(seconds=90)).isoformat().replace("+00:00", "Z")
@@ -663,8 +664,8 @@ def test_moved_since_still_answers_true_on_a_real_later_record(tmp_path, monkeyp
 
 
 def test_moved_since_answers_false_from_an_untrusted_clock_that_never_passed_the_stamp(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _patch_transcript_root(monkeypatch, tmp_path)
     stamp = datetime(2026, 8, 31, 15, 0, 0, tzinfo=timezone.utc)
     _write_clock_transcript(
@@ -678,7 +679,7 @@ def test_moved_since_answers_false_from_an_untrusted_clock_that_never_passed_the
     assert read_pass._transcript_moved_since("peer-still", REPO_ROOT, stamp) is False
 
 
-def test_classify_peer_threads_its_activity_epoch_onto_the_verdict(tmp_path, monkeypatch):
+def test_classify_peer_threads_its_activity_epoch_onto_the_verdict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_transcript_root(monkeypatch, tmp_path)
     last_real = datetime(2026, 8, 31, 15, 40, 48, tzinfo=timezone.utc)
     _write_clock_transcript(
@@ -700,7 +701,7 @@ def test_classify_peer_threads_its_activity_epoch_onto_the_verdict(tmp_path, mon
     assert verdict["activity_epoch"] == last_real.timestamp()
 
 
-def test_the_projection_carries_the_peer_name_it_used_to_drop(monkeypatch):
+def test_the_projection_carries_the_peer_name_it_used_to_drop(monkeypatch: pytest.MonkeyPatch) -> None:
     row = types.SimpleNamespace(
         session_id="peer-1", status="idle", cwd=REPO_ROOT, name="claude-klabauter-65"
     )
@@ -713,11 +714,11 @@ def test_the_projection_carries_the_peer_name_it_used_to_drop(monkeypatch):
     ]
 
 
-def test_build_roster_is_exported_under_the_name_the_doctrine_plane_calls():
+def test_build_roster_is_exported_under_the_name_the_doctrine_plane_calls() -> None:
     assert callable(getattr(read_pass, "build_roster", None))
 
 
-def test_the_candidate_shortlist_is_a_subset_of_the_full_roster(monkeypatch):
+def test_the_candidate_shortlist_is_a_subset_of_the_full_roster(monkeypatch: pytest.MonkeyPatch) -> None:
     agents = [
         {"sessionId": "caller", "cwd": "/repo", "name": "self", "status": "busy"},
         {"sessionId": "peer-a", "cwd": "/repo", "name": "a", "status": "idle"},
@@ -736,23 +737,23 @@ def test_the_candidate_shortlist_is_a_subset_of_the_full_roster(monkeypatch):
 
 class TestIsAdmitted:
 
-    def test_candidate_is_admitted(self):
+    def test_candidate_is_admitted(self) -> None:
         verdict = {"candidate": True, "unclassifiable": False, "contradicted": False}
         assert read_pass.is_admitted(verdict) is True
 
-    def test_unclassifiable_is_admitted(self):
+    def test_unclassifiable_is_admitted(self) -> None:
         verdict = {"candidate": False, "unclassifiable": True, "contradicted": False}
         assert read_pass.is_admitted(verdict) is True
 
-    def test_contradicted_is_admitted(self):
+    def test_contradicted_is_admitted(self) -> None:
         verdict = {"candidate": False, "unclassifiable": False, "contradicted": True}
         assert read_pass.is_admitted(verdict) is True
 
-    def test_none_of_the_three_is_not_admitted(self):
+    def test_none_of_the_three_is_not_admitted(self) -> None:
         verdict = {"candidate": False, "unclassifiable": False, "contradicted": False}
         assert read_pass.is_admitted(verdict) is False
 
-    def test_build_candidate_roster_calls_through_is_admitted(self, monkeypatch):
+    def test_build_candidate_roster_calls_through_is_admitted(self, monkeypatch: pytest.MonkeyPatch) -> None:
         agents = [{"sessionId": "peer-a", "cwd": "/repo", "status": "idle"}]
         monkeypatch.setattr(read_pass, "is_admitted", lambda verdict: True)
         admitted_all = read_pass.build_candidate_roster(
@@ -769,20 +770,20 @@ class TestIsAdmitted:
 class TestFallbackStatusFallThroughNamesWhatItSaw:
 
     @pytest.mark.parametrize("status", [None, ""], ids=["none", "empty"])
-    def test_absent_status_says_absent(self, status):
+    def test_absent_status_says_absent(self, status) -> None:
         state, reason = read_pass.classify_fallback_status(status, reduced_lines=[])
         assert (state, reason) == (read_pass.STATE_UNKNOWN, "status-absent")
 
-    def test_unrecognized_status_names_the_value_it_could_not_map(self):
+    def test_unrecognized_status_names_the_value_it_could_not_map(self) -> None:
         state, reason = read_pass.classify_fallback_status("wedged", reduced_lines=[])
         assert state == read_pass.STATE_UNKNOWN
         assert reason == "unrecognized-status:wedged"
 
-    def test_case_variant_of_a_known_status_is_not_silently_absent(self):
+    def test_case_variant_of_a_known_status_is_not_silently_absent(self) -> None:
         state, reason = read_pass.classify_fallback_status("BUSY", reduced_lines=[])
         assert (state, reason) == (read_pass.STATE_UNKNOWN, "unrecognized-status:BUSY")
 
-    def test_known_arms_are_untouched(self):
+    def test_known_arms_are_untouched(self) -> None:
         assert read_pass.classify_fallback_status("busy", reduced_lines=[]) == (
             read_pass.STATE_PRODUCING,
             "status-busy",
@@ -791,26 +792,26 @@ class TestFallbackStatusFallThroughNamesWhatItSaw:
 
 class TestShellIsAnExecutingStatus:
 
-    def test_shell_classifies_as_producing_and_names_itself(self):
+    def test_shell_classifies_as_producing_and_names_itself(self) -> None:
         assert read_pass.classify_fallback_status("shell", reduced_lines=[]) == (
             read_pass.STATE_PRODUCING,
             "status-shell",
         )
 
-    def test_the_reason_still_distinguishes_which_executing_status_it_saw(self):
+    def test_the_reason_still_distinguishes_which_executing_status_it_saw(self) -> None:
         _, busy = read_pass.classify_fallback_status("busy", reduced_lines=[])
         _, shell = read_pass.classify_fallback_status("shell", reduced_lines=[])
         assert busy != shell
 
-    def test_an_unknown_status_is_still_unrecognized_not_swept_into_executing(self):
+    def test_an_unknown_status_is_still_unrecognized_not_swept_into_executing(self) -> None:
         assert read_pass.classify_fallback_status("wedged", reduced_lines=[]) == (
             read_pass.STATE_UNKNOWN,
             "unrecognized-status:wedged",
         )
 
     def test_a_live_shell_contradicts_a_stored_paused_verdict_as_busy_does(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(
             read_pass,
             "read_receiver_state",
@@ -832,7 +833,7 @@ class TestShellIsAnExecutingStatus:
         assert verdicts["shell"]["candidate"] == verdicts["busy"]["candidate"]
 
 
-def test_live_peers_refuses_unreadable_reads_drops_sandboxes_and_excluded_ids():
+def test_live_peers_refuses_unreadable_reads_drops_sandboxes_and_excluded_ids() -> None:
     agents = [
         {"sessionId": "a", "cwd": "/r"},
         {"sessionId": "b", "cwd": "/r"},

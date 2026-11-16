@@ -27,7 +27,7 @@ def _row(plan: str, at: str, sha: str = "a" * 40) -> dict:
     return led.make_row(plan, "landed", at, sha, b"plan bytes", "M", ["src/a.py"])
 
 
-def test_blob_id_equals_git_hash_object(tmp_path):
+def test_blob_id_equals_git_hash_object(tmp_path: Path) -> None:
     _git(tmp_path, "init", "-q")
     for data in (b"", b"x\n", "café\r\nline\n".encode("utf-8"), bytes(range(256))):
         f = tmp_path / "f.bin"
@@ -35,7 +35,7 @@ def test_blob_id_equals_git_hash_object(tmp_path):
         assert led.blob_id(data) == _git(tmp_path, "hash-object", "f.bin")
 
 
-def test_append_writes_lf_one_object_per_line_forward_slashes(tmp_path):
+def test_append_writes_lf_one_object_per_line_forward_slashes(tmp_path: Path) -> None:
     led.append_row(tmp_path, _row("docs\\plans\\a.md", "2026-11-14T10:00:00Z"))
     led.append_row(tmp_path, _row("docs/plans/b.md", "2026-11-14T11:00:00Z"))
     raw = (tmp_path / led.LEDGER).read_bytes()
@@ -46,7 +46,7 @@ def test_append_writes_lf_one_object_per_line_forward_slashes(tmp_path):
     assert parsed[0]["plan_blob"] == led.blob_id(b"plan bytes")
 
 
-def test_append_refuses_an_incomplete_or_foreign_row(tmp_path):
+def test_append_refuses_an_incomplete_or_foreign_row(tmp_path: Path) -> None:
     bad = _row("p.md", "2026-11-14T10:00:00Z")
     del bad["plan_blob"]
     with pytest.raises(ValueError):
@@ -58,7 +58,7 @@ def test_append_refuses_an_incomplete_or_foreign_row(tmp_path):
     assert not (tmp_path / led.LEDGER).exists()
 
 
-def test_read_window_admits_inside_and_refuses_outside_both_sides(tmp_path):
+def test_read_window_admits_inside_and_refuses_outside_both_sides(tmp_path: Path) -> None:
     led.append_row(tmp_path, _row("old.md", "2026-11-01T00:00:00Z"))
     led.append_row(tmp_path, _row("edge.md", "2026-11-07T12:00:00Z"))
     led.append_row(tmp_path, _row("new.md", "2026-11-14T08:00:00+00:00"))
@@ -70,7 +70,7 @@ def test_read_window_admits_inside_and_refuses_outside_both_sides(tmp_path):
     assert got == ["old.md", "edge.md", "new.md"]
 
 
-def test_read_window_missing_ledger_and_malformed_lines(tmp_path):
+def test_read_window_missing_ledger_and_malformed_lines(tmp_path: Path) -> None:
     assert led.read_window(tmp_path, None, now=_NOW) == []
     led.append_row(tmp_path, _row("ok.md", "2026-11-14T08:00:00Z"))
     with open(tmp_path / led.LEDGER, "a", encoding="utf-8", newline="\n") as fh:
@@ -80,7 +80,7 @@ def test_read_window_missing_ledger_and_malformed_lines(tmp_path):
         led.read_window(tmp_path, "yesterday-ish", now=_NOW)
 
 
-def test_spine_writes_block_list_and_inline_forms_in_order_deduped():
+def test_spine_writes_block_list_and_inline_forms_in_order_deduped() -> None:
     text = (
         "# plan\n\n```yaml plan-tasks\n"
         "- id: C0\n  writes:\n    - src\\a.py\n    - ./src/b.py\n  body: y\n"
@@ -91,7 +91,7 @@ def test_spine_writes_block_list_and_inline_forms_in_order_deduped():
     assert led.spine_writes("no spine here") == []
 
 
-def test_tshirt_reads_estimate_block_and_refuses_unknown_or_missing(tmp_path):
+def test_tshirt_reads_estimate_block_and_refuses_unknown_or_missing(tmp_path: Path) -> None:
     (tmp_path / "s.yaml").write_text("id: x\nestimate:\n  tshirt: 'l'\nother:\n  tshirt: XL\n", encoding="utf-8")
     assert led.tshirt(tmp_path, 'title: t\nsizing_object: "s.yaml"\n') == "L"
     (tmp_path / "bad.yaml").write_text("estimate:\n  tshirt: HUGE\n", encoding="utf-8")
@@ -101,21 +101,21 @@ def test_tshirt_reads_estimate_block_and_refuses_unknown_or_missing(tmp_path):
     assert led.tshirt(tmp_path, "title: t\n") is None
 
 
-def test_frontmatter_and_body_split():
+def test_frontmatter_and_body_split() -> None:
     text = "---\nstatus: landed\n---\n\n# H\n"
     assert led.frontmatter(text).strip() == "status: landed"
     assert led.body(text) == "# H\n"
     assert led.frontmatter("# H\n") == "" and led.body("# H\n") == "# H\n"
 
 
-def test_completed_statuses_are_members_of_the_plan_schema_status_enum():
+def test_completed_statuses_are_members_of_the_plan_schema_status_enum() -> None:
     schema_path = Path(led.__file__).parent / "frontmatter" / "schemas" / "plan.schema.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     assert led.COMPLETED_STATUSES <= set(schema["properties"]["status"]["enum"])
     assert "complete" not in led.COMPLETED_STATUSES
 
 
-def test_commit_authored_content_and_new_file_surface_the_commit_sha(tmp_path):
+def test_commit_authored_content_and_new_file_surface_the_commit_sha(tmp_path: Path) -> None:
     from coordinator_core.ops.ceremony import git_native
 
     _git(tmp_path, "init", "-q", "-b", "main")

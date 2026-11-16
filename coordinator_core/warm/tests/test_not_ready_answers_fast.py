@@ -9,6 +9,7 @@ import time
 import pytest
 
 from coordinator_core.warm import server
+from pathlib import Path
 
 pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="unix-socket boot window")
 
@@ -31,7 +32,7 @@ def _ask(path, frame):
 
 
 @pytest.mark.deliberate_wall_clock(reason="deadline bound: a not-ready engine answers a connection instead of leaving it waiting")
-def test_not_ready_connection_gets_determinate_answer_fast(tmp_path):
+def test_not_ready_connection_gets_determinate_answer_fast(tmp_path: Path) -> None:
     sock, path = _listener(tmp_path)
     answerer = server._NotReadyAnswerer(sock, server_sha="a" * 40)
     answerer.start()
@@ -47,7 +48,7 @@ def test_not_ready_connection_gets_determinate_answer_fast(tmp_path):
     assert elapsed < 1.0
 
 
-def test_after_stop_the_answerer_takes_no_connection(tmp_path):
+def test_after_stop_the_answerer_takes_no_connection(tmp_path: Path) -> None:
     sock, path = _listener(tmp_path)
     answerer = server._NotReadyAnswerer(sock, server_sha="a" * 40)
     answerer.start()

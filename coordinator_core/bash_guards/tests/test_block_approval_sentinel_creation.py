@@ -10,6 +10,7 @@ from coordinator_core.bash_guards import block_approval_sentinel_creation as gua
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards._alternative_liveness import _BACKTICK_RE
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -22,7 +23,7 @@ _REAL_APPLY_GUARD_LEVEL = guard.apply_guard_level
 
 
 @pytest.fixture(autouse=True)
-def _detection_unclamped(monkeypatch):
+def _detection_unclamped(monkeypatch: pytest.MonkeyPatch) -> None:
     """The suite pins what the guard detects; the policy clamp is pinned in TestClampedToLog."""
     monkeypatch.setattr(guard, "apply_guard_level", lambda name, envelope, **kw: envelope)
 
@@ -30,7 +31,7 @@ def _detection_unclamped(monkeypatch):
 SENTINEL = ".coordinator-doctrine-edit-approved"
 
 
-def _payload(command, agent_id=None, agent_type=None, cwd="/repo"):
+def _payload(command, agent_id=None, agent_type=None, cwd: str = "/repo"):
     p = {
         "tool_name": "Bash",
         "tool_input": {"command": command},
@@ -52,211 +53,211 @@ def _reason(out):
 
 
 class TestNonBashOrEmpty:
-    def test_non_bash_tool_allows(self):
+    def test_non_bash_tool_allows(self) -> None:
         payload = {"tool_name": "Edit", "tool_input": {"file_path": "x"}}
         assert _enveloped(guard.check)(payload) is None
 
-    def test_empty_command_allows(self):
+    def test_empty_command_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("")) is None
 
-    def test_malformed_tool_input_allows(self):
+    def test_malformed_tool_input_allows(self) -> None:
         payload = {"tool_name": "Bash", "tool_input": "not-a-dict"}
         assert _enveloped(guard.check)(payload) is None
 
-    def test_no_sentinel_mention_allows(self):
+    def test_no_sentinel_mention_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("git status && ls -la")) is None
 
 
 class TestDenyRedirection:
-    def test_bare_gt_redirect_denies(self):
+    def test_bare_gt_redirect_denies(self) -> None:
         out = _enveloped(guard.check)(_payload("echo ok > %s" % SENTINEL))
         _reason(out)
 
-    def test_attached_gt_redirect_denies(self):
+    def test_attached_gt_redirect_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("echo ok >%s" % SENTINEL)))
 
-    def test_double_gt_append_redirect_denies(self):
+    def test_double_gt_append_redirect_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("echo ok >> %s" % SENTINEL)))
 
-    def test_fd_prefixed_redirect_denies(self):
+    def test_fd_prefixed_redirect_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("some-cmd 2> %s" % SENTINEL)))
 
-    def test_redirect_with_path_prefix_denies(self):
+    def test_redirect_with_path_prefix_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("echo ok > /some/dir/%s" % SENTINEL)))
 
-    def test_heredoc_via_cat_redirect_denies(self):
+    def test_heredoc_via_cat_redirect_denies(self) -> None:
         cmd = "cat > %s <<'EOF'\nhello\nEOF" % SENTINEL
         _reason(_enveloped(guard.check)(_payload(cmd)))
 
 
 class TestDenyFileArgCommands:
-    def test_touch_denies(self):
+    def test_touch_denies(self) -> None:
         out = _enveloped(guard.check)(_payload("touch %s" % SENTINEL))
         _reason(out)
 
-    def test_touch_with_path_denies(self):
+    def test_touch_with_path_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("touch /repo/%s" % SENTINEL)))
 
-    def test_cp_denies(self):
+    def test_cp_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("cp somefile %s" % SENTINEL)))
 
-    def test_cp_source_position_denies(self):
+    def test_cp_source_position_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("cp %s /tmp/copy" % SENTINEL)))
 
-    def test_mv_denies(self):
+    def test_mv_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("mv somefile %s" % SENTINEL)))
 
-    def test_install_denies(self):
+    def test_install_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("install -m 644 src %s" % SENTINEL)))
 
-    def test_ln_denies(self):
+    def test_ln_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("ln -s /tmp/x %s" % SENTINEL)))
 
-    def test_tee_denies(self):
+    def test_tee_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("echo ok | tee %s" % SENTINEL)))
 
-    def test_tee_append_flag_denies(self):
+    def test_tee_append_flag_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("echo ok | tee -a %s" % SENTINEL)))
 
 
 class TestDenySedInPlace:
-    def test_sed_dash_i_denies(self):
+    def test_sed_dash_i_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("sed -i 's/a/b/' %s" % SENTINEL)))
 
-    def test_sed_dash_i_attached_suffix_denies(self):
+    def test_sed_dash_i_attached_suffix_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("sed -i.bak 's/a/b/' %s" % SENTINEL)))
 
-    def test_sed_long_form_in_place_denies(self):
+    def test_sed_long_form_in_place_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("sed --in-place 's/a/b/' %s" % SENTINEL)))
 
-    def test_sed_without_inplace_flag_now_denies_under_default_deny_posture(self):
+    def test_sed_without_inplace_flag_now_denies_under_default_deny_posture(self) -> None:
         _reason(_enveloped(guard.check)(_payload("sed 's/a/b/' %s" % SENTINEL)))
 
 
 class TestDenyPythonDashC:
-    def test_python3_dash_c_open_write_denies(self):
+    def test_python3_dash_c_open_write_denies(self) -> None:
         code = "open('%s', 'w').write('x')" % SENTINEL
         out = _enveloped(guard.check)(_payload("python3 -c \"%s\"" % code))
         _reason(out)
 
-    def test_python_dash_c_denies(self):
+    def test_python_dash_c_denies(self) -> None:
         code = "open('%s', 'w').close()" % SENTINEL
         _reason(_enveloped(guard.check)(_payload("python -c \"%s\"" % code)))
 
-    def test_python_attached_dash_c_denies(self):
+    def test_python_attached_dash_c_denies(self) -> None:
         code = "open('%s','w')" % SENTINEL
         _reason(_enveloped(guard.check)(_payload('python3 -c"%s"' % code)))
 
-    def test_python_versioned_binary_denies(self):
+    def test_python_versioned_binary_denies(self) -> None:
         code = "open('%s', 'w')" % SENTINEL
         _reason(_enveloped(guard.check)(_payload("python3.11 -c \"%s\"" % code)))
 
-    def test_python_dash_c_unrelated_payload_allows(self):
+    def test_python_dash_c_unrelated_payload_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("python3 -c \"print('hello world')\"")) is None
 
 
 class TestQuotedAndPartiallyQuotedSpellings:
-    def test_fully_single_quoted_denies(self):
+    def test_fully_single_quoted_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("touch '%s'" % SENTINEL)))
 
-    def test_fully_double_quoted_denies(self):
+    def test_fully_double_quoted_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload('touch "%s"' % SENTINEL)))
 
-    def test_adjacent_quote_concatenation_denies(self):
+    def test_adjacent_quote_concatenation_denies(self) -> None:
         cmd = "touch '.coordinator-doctrine-edit'\"-approved\""
         _reason(_enveloped(guard.check)(_payload(cmd)))
 
 
 class TestChainedAndEnvPrefixedShapes:
-    def test_semicolon_chained_denies(self):
+    def test_semicolon_chained_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("cd /tmp; touch %s" % SENTINEL)))
 
-    def test_and_chained_denies(self):
+    def test_and_chained_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("cd /tmp && touch %s" % SENTINEL)))
 
-    def test_piped_denies(self):
+    def test_piped_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("echo ok | tee %s" % SENTINEL)))
 
-    def test_leading_env_assignment_still_denies(self):
+    def test_leading_env_assignment_still_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("FOO=bar touch %s" % SENTINEL)))
 
-    def test_second_command_in_chain_denies(self):
+    def test_second_command_in_chain_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("ls -la && touch %s" % SENTINEL)))
 
 
 class TestAllowReadsAndRemoval:
-    def test_rm_allows(self):
+    def test_rm_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("rm %s" % SENTINEL)) is None
 
-    def test_cat_allows(self):
+    def test_cat_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("cat %s" % SENTINEL)) is None
 
-    def test_ls_allows(self):
+    def test_ls_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("ls -la %s" % SENTINEL)) is None
 
-    def test_stat_allows(self):
+    def test_stat_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("stat %s" % SENTINEL)) is None
 
-    def test_test_dash_f_allows(self):
+    def test_test_dash_f_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("test -f %s" % SENTINEL)) is None
 
-    def test_test_and_rm_allows(self):
+    def test_test_and_rm_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("test -f %s && rm %s" % (SENTINEL, SENTINEL))) is None
 
-    def test_unrelated_touch_allows(self):
+    def test_unrelated_touch_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("touch somefile.txt")) is None
 
 
 class TestAllowNameAsDataToOtherTarget:
-    def test_echo_ignore_rule_append_allows(self):
+    def test_echo_ignore_rule_append_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("echo '/%s' >> .gitignore" % SENTINEL)) is None
 
-    def test_printf_ignore_rule_append_allows(self):
+    def test_printf_ignore_rule_append_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("printf '%%s\\n' %s >> .gitignore" % SENTINEL)) is None
 
-    def test_grep_name_allows(self):
+    def test_grep_name_allows(self) -> None:
         assert _enveloped(guard.check)(
             _payload("grep -n coordinator-doctrine-edit-approved .gitignore")
         ) is None
 
-    def test_data_append_then_touch_still_denies(self):
+    def test_data_append_then_touch_still_denies(self) -> None:
         _reason(
             _enveloped(guard.check)(
                 _payload("echo %s >> .gitignore && touch %s" % (SENTINEL, SENTINEL))
             )
         )
 
-    def test_git_rm_cached_allows(self):
+    def test_git_rm_cached_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("git rm --cached %s" % SENTINEL)) is None
 
-    def test_git_rm_cached_dashdash_path_allows(self):
+    def test_git_rm_cached_dashdash_path_allows(self) -> None:
         assert _enveloped(guard.check)(
             _payload("git rm --cached -- path/to/%s" % SENTINEL)
         ) is None
 
-    def test_git_rm_plain_allows(self):
+    def test_git_rm_plain_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("git rm %s" % SENTINEL)) is None
 
-    def test_git_checkout_still_denies(self):
+    def test_git_checkout_still_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("git checkout HEAD -- %s" % SENTINEL)))
 
-    def test_git_restore_still_denies(self):
+    def test_git_restore_still_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("git restore %s" % SENTINEL)))
 
-    def test_git_show_redirect_still_denies(self):
+    def test_git_show_redirect_still_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("git show HEAD:%s > %s" % (SENTINEL, SENTINEL))))
 
-    def test_printf_redirect_into_sentinel_still_denies(self):
+    def test_printf_redirect_into_sentinel_still_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("printf x > %s" % SENTINEL)))
 
-    def test_git_commit_recording_the_untrack_allows(self):
+    def test_git_commit_recording_the_untrack_allows(self) -> None:
         assert _enveloped(guard.check)(_payload('git commit -m "disarm" -- %s' % SENTINEL)) is None
 
-    def test_mv_sentinel_to_a_new_name_allows(self, tmp_path):
+    def test_mv_sentinel_to_a_new_name_allows(self, tmp_path: Path) -> None:
         out = _enveloped(guard.check)(_payload("mv %s scratch/old-approval" % SENTINEL, cwd=str(tmp_path)))
         assert out is None
 
-    def test_mv_sentinel_into_a_directory_still_denies(self, tmp_path):
+    def test_mv_sentinel_into_a_directory_still_denies(self, tmp_path: Path) -> None:
         (tmp_path / "scratch").mkdir()
         _reason(_enveloped(guard.check)(_payload("mv %s scratch" % SENTINEL, cwd=str(tmp_path))))
 
@@ -265,16 +266,16 @@ class TestAllowNameAsDataToOtherTarget:
         "mv scratch/%s ." % SENTINEL,
         "mv -t . scratch/%s" % SENTINEL,
     ])
-    def test_mv_that_can_land_a_sentinel_still_denies(self, cmd, tmp_path):
+    def test_mv_that_can_land_a_sentinel_still_denies(self, cmd, tmp_path: Path) -> None:
         _reason(_enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))))
 
 
 class TestNotIdentityGated:
-    def test_denies_without_any_identity_fields(self):
+    def test_denies_without_any_identity_fields(self) -> None:
         out = _enveloped(guard.check)(_payload("touch %s" % SENTINEL))
         _reason(out)
 
-    def test_denies_with_subagent_identity(self):
+    def test_denies_with_subagent_identity(self) -> None:
         out = _enveloped(guard.check)(
             _payload(
                 "touch %s" % SENTINEL,
@@ -284,7 +285,7 @@ class TestNotIdentityGated:
         )
         _reason(out)
 
-    def test_denies_with_em_shaped_payload_no_identity(self):
+    def test_denies_with_em_shaped_payload_no_identity(self) -> None:
         # Main-loop EM calls carry no agent_id/agent_type at all -- this
         # guard must still fire (see module docstring "NOT IDENTITY-GATED").
         out = _enveloped(guard.check)(_payload("touch %s" % SENTINEL))
@@ -292,7 +293,7 @@ class TestNotIdentityGated:
 
 
 class TestNoOverride:
-    def test_env_var_shaped_override_does_not_allow(self, monkeypatch):
+    def test_env_var_shaped_override_does_not_allow(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COORDINATOR_OVERRIDE_APPROVAL_SENTINEL", "1")
         out = _enveloped(guard.check)(_payload("touch %s" % SENTINEL))
         _reason(out)
@@ -300,12 +301,12 @@ class TestNoOverride:
 
 class TestDenyMessageDiscipline:
 
-    def test_deny_reason_never_names_the_sentinel(self):
+    def test_deny_reason_never_names_the_sentinel(self) -> None:
         out = _enveloped(guard.check)(_payload("touch %s" % SENTINEL))
         reason = _reason(out)
         assert SENTINEL not in reason
 
-    def test_deny_reason_names_commit_v2_and_not_pathspec_from_file(self):
+    def test_deny_reason_names_commit_v2_and_not_pathspec_from_file(self) -> None:
         out = _enveloped(guard.check)(_payload("touch %s" % SENTINEL))
         assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
         reason = _reason(out)
@@ -313,7 +314,7 @@ class TestDenyMessageDiscipline:
         assert "--pathspec-from-file" not in reason
         assert SENTINEL not in reason
 
-    def test_deny_reason_does_not_echo_the_command(self):
+    def test_deny_reason_does_not_echo_the_command(self) -> None:
         code = "open('%s', 'w').close()" % SENTINEL
         cmd = "python3 -c \"%s\"" % code
         out = _enveloped(guard.check)(_payload(cmd))
@@ -324,14 +325,14 @@ class TestDenyMessageDiscipline:
 
 class TestReasonClassSpecificMessages:
 
-    def test_direct_deny_message_unchanged(self):
+    def test_direct_deny_message_unchanged(self) -> None:
         out = _enveloped(guard.check)(_payload("touch %s" % SENTINEL))
         reason = _reason(out)
         assert "creates/modifies the doctrine-edit approval sentinel" in reason
         assert "PM" not in reason
         assert SENTINEL not in reason
 
-    def test_indirection_deny_does_not_assert_creation(self):
+    def test_indirection_deny_does_not_assert_creation(self) -> None:
         out = _enveloped(guard.check)(_payload("bash bin/install-git-hooks.sh"))
         reason = _reason(out)
         assert "creates/modifies the doctrine-edit approval sentinel" not in reason
@@ -339,13 +340,13 @@ class TestReasonClassSpecificMessages:
         assert "approval-sentinel guard" in reason
         assert SENTINEL not in reason
 
-    def test_indirection_deny_surfaces_the_shape(self):
+    def test_indirection_deny_surfaces_the_shape(self) -> None:
         out = _enveloped(guard.check)(_payload("bash bin/install-git-hooks.sh"))
         reason = _reason(out)
         assert "interpreter-invoked script" in reason
         assert "indirection wrapper" in reason
 
-    def test_indirection_deny_names_the_guard_and_offers_a_path_forward(self):
+    def test_indirection_deny_names_the_guard_and_offers_a_path_forward(self) -> None:
         out = _enveloped(guard.check)(_payload("bash bin/install-git-hooks.sh"))
         reason = _reason(out)
         assert "approval-sentinel guard" in reason
@@ -355,7 +356,7 @@ class TestReasonClassSpecificMessages:
         assert "literal path" in reason
         assert recommended.startswith("python3 /")
 
-    def test_unresolved_var_script_deny_remedy_works_without_shebang(self, tmp_path):
+    def test_unresolved_var_script_deny_remedy_works_without_shebang(self, tmp_path: Path) -> None:
         script = tmp_path / "noshebang.py"
         script.write_text("print('ok')\n", encoding="utf-8")
         out = _enveloped(guard.check)(_payload('python3 "$W1A_UNSET_P/noshebang.py"'))
@@ -369,14 +370,14 @@ class TestReasonClassSpecificMessages:
         assert _enveloped(guard.check)(_payload('python3 "${W1A_UNSET_P}/noshebang.py"')) is not None
 
     @pytest.mark.parametrize("spelling", ["native", "forward"])
-    def test_abs_path_spellings_of_a_clean_script_are_admitted(self, tmp_path, spelling):
+    def test_abs_path_spellings_of_a_clean_script_are_admitted(self, tmp_path: Path, spelling) -> None:
         script = tmp_path / "clean.py"
         script.write_text("print('ok')\n", encoding="utf-8")
         path = str(script) if spelling == "native" else str(script).replace("\\", "/")
         assert _enveloped(guard.check)(_payload("python3 " + path)) is None
 
     @pytest.mark.parametrize("spelling", ["native", "forward"])
-    def test_abs_path_spellings_of_a_mentioning_writer_are_denied(self, tmp_path, spelling):
+    def test_abs_path_spellings_of_a_mentioning_writer_are_denied(self, tmp_path: Path, spelling) -> None:
         script = tmp_path / "bad.py"
         script.write_text("open('%s', 'w').write('x')\n" % SENTINEL, encoding="utf-8")
         path = str(script) if spelling == "native" else str(script).replace("\\", "/")
@@ -393,7 +394,7 @@ class TestReasonClassSpecificMessages:
             ("cd {d} && cd .. && python3 -I s.py a", True, "literal"),
         ],
     )
-    def test_remedy_matches_the_deny_reason(self, tmp_path, template, denied, remedy):
+    def test_remedy_matches_the_deny_reason(self, tmp_path: Path, template, denied, remedy) -> None:
         (tmp_path / "s.py").write_text("print('ok')\n", encoding="utf-8")
         cmd = template.format(d=str(tmp_path).replace("\\", "/"))
         out = guard.check(_payload(cmd))
@@ -408,13 +409,13 @@ class TestReasonClassSpecificMessages:
             assert "literal path" in reason
             assert "separate Bash calls" not in reason
 
-    def test_native_path_to_a_missing_file_is_denied(self, tmp_path):
+    def test_native_path_to_a_missing_file_is_denied(self, tmp_path: Path) -> None:
         assert _enveloped(guard.check)(_payload("python3 " + str(tmp_path / "missing.py"))) is not None
 
-    def test_the_direct_invocation_the_message_recommends_is_actually_allowed(self):
+    def test_the_direct_invocation_the_message_recommends_is_actually_allowed(self) -> None:
         assert _enveloped(guard.check)(_payload("./bin/install-git-hooks.sh")) is None
 
-    def test_recursive_indirection_deny_still_redacts_the_sentinel(self):
+    def test_recursive_indirection_deny_still_redacts_the_sentinel(self) -> None:
         out = _enveloped(guard.check)(_payload('bash -c "touch %s"' % SENTINEL))
         reason = _reason(out)
         assert SENTINEL not in reason
@@ -423,57 +424,57 @@ class TestReasonClassSpecificMessages:
 
 class TestIndirectionWrapperShapesDeny:
 
-    def test_bash_dash_c_denies(self):
+    def test_bash_dash_c_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload('bash -c "touch %s"' % SENTINEL)))
 
-    def test_sh_dash_c_denies(self):
+    def test_sh_dash_c_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload('sh -c "touch %s"' % SENTINEL)))
 
-    def test_zsh_dash_c_denies(self):
+    def test_zsh_dash_c_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload('zsh -c "touch %s"' % SENTINEL)))
 
-    def test_env_sh_dash_c_denies(self):
+    def test_env_sh_dash_c_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload('env sh -c "touch %s"' % SENTINEL)))
 
-    def test_env_var_prefixed_cmd_denies(self):
+    def test_env_var_prefixed_cmd_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("env FOO=1 touch %s" % SENTINEL)))
 
-    def test_bare_var_prefixed_indirection_denies(self):
+    def test_bare_var_prefixed_indirection_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload('FOO=1 sh -c "touch %s"' % SENTINEL)))
 
-    def test_xargs_denies(self):
+    def test_xargs_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("echo %s | xargs touch" % SENTINEL)))
 
-    def test_dd_of_denies(self):
+    def test_dd_of_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("dd if=/dev/null of=%s" % SENTINEL)))
 
-    def test_dd_of_with_conv_denies(self):
+    def test_dd_of_with_conv_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("dd if=/dev/null of=%s conv=notrunc" % SENTINEL)))
 
-    def test_heredoc_fed_bash_denies(self):
+    def test_heredoc_fed_bash_denies(self) -> None:
         cmd = "bash <<'EOF'\ntouch %s\nEOF" % SENTINEL
         _reason(_enveloped(guard.check)(_payload(cmd)))
 
-    def test_heredoc_fed_sh_denies(self):
+    def test_heredoc_fed_sh_denies(self) -> None:
         cmd = "sh <<'EOF'\ntouch %s\nEOF" % SENTINEL
         _reason(_enveloped(guard.check)(_payload(cmd)))
 
-    def test_bash_bare_file_denies(self):
+    def test_bash_bare_file_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("bash /tmp/some-script.sh")))
 
-    def test_python_dash_c_nested_in_sh_dash_c_denies(self):
+    def test_python_dash_c_nested_in_sh_dash_c_denies(self) -> None:
         code = "open('%s', 'w').close()" % SENTINEL
         inner = 'python3 -c "%s"' % code
         cmd = "sh -c '%s'" % inner
         _reason(_enveloped(guard.check)(_payload(cmd)))
 
-    def test_unrelated_bash_dash_c_allows(self):
+    def test_unrelated_bash_dash_c_allows(self) -> None:
         assert _enveloped(guard.check)(_payload('bash -c "echo hello"')) is None
 
-    def test_xargs_read_only_head_allows(self):
+    def test_xargs_read_only_head_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("echo hello | xargs cat")) is None
 
-    def test_grep_into_xargs_grep_allows(self):
+    def test_grep_into_xargs_grep_allows(self) -> None:
         cmd = 'grep -rln "def main" coordinator/bin | xargs grep -ln "doc-new\\|doc_new"'
         assert _enveloped(guard.check)(_payload(cmd)) is None
 
@@ -487,7 +488,7 @@ class TestIndirectionWrapperShapesDeny:
             "ls | env xargs grep x",
         ],
     )
-    def test_xargs_read_only_head_with_options_allows(self, cmd):
+    def test_xargs_read_only_head_with_options_allows(self, cmd) -> None:
         assert _enveloped(guard.check)(_payload(cmd)) is None
 
     @pytest.mark.parametrize(
@@ -504,16 +505,16 @@ class TestIndirectionWrapperShapesDeny:
             "echo hello | xargs -n",
         ],
     )
-    def test_xargs_other_heads_still_denied(self, cmd):
+    def test_xargs_other_heads_still_denied(self, cmd) -> None:
         _reason(_enveloped(guard.check)(_payload(cmd)))
 
-    def test_xargs_read_only_head_redirect_to_sentinel_denies(self):
+    def test_xargs_read_only_head_redirect_to_sentinel_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("echo hello | xargs cat > %s" % SENTINEL)))
 
-    def test_xargs_read_only_head_inside_sh_dash_c_allows(self):
+    def test_xargs_read_only_head_inside_sh_dash_c_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("sh -c 'ls | xargs grep x'")) is None
 
-    def test_xargs_echo_verb_allows(self):
+    def test_xargs_echo_verb_allows(self) -> None:
         assert _enveloped(guard.check)(_payload('echo "a b c" | xargs -n1 echo')) is None
 
     @pytest.mark.parametrize(
@@ -526,10 +527,10 @@ class TestIndirectionWrapperShapesDeny:
             "echo hello | xargs",
         ],
     )
-    def test_xargs_bypass_shapes_still_denied(self, cmd):
+    def test_xargs_bypass_shapes_still_denied(self, cmd) -> None:
         _reason(_enveloped(guard.check)(_payload(cmd)))
 
-    def test_python_dash_m_allows(self):
+    def test_python_dash_m_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("python3 -m pytest")) is None
 
 
@@ -541,47 +542,47 @@ class TestIndirectionWrapperShapesDenyEndToEnd:
         )
         return "deny" if (out and '"deny"' in json.dumps(out)) else "allow"
 
-    def test_bash_dash_c_logged_never_denied_end_to_end(self):
+    def test_bash_dash_c_logged_never_denied_end_to_end(self) -> None:
         assert self._decision('bash -c "touch %s"' % SENTINEL) == "allow"
 
-    def test_env_sh_dash_c_logged_never_denied_end_to_end(self):
+    def test_env_sh_dash_c_logged_never_denied_end_to_end(self) -> None:
         assert self._decision('env sh -c "touch %s"' % SENTINEL) == "allow"
 
-    def test_dd_of_logged_never_denied_end_to_end(self):
+    def test_dd_of_logged_never_denied_end_to_end(self) -> None:
         assert self._decision("dd if=/dev/null of=%s" % SENTINEL) == "allow"
 
-    def test_heredoc_fed_bash_logged_never_denied_end_to_end(self):
+    def test_heredoc_fed_bash_logged_never_denied_end_to_end(self) -> None:
         cmd = "bash <<'EOF'\ntouch %s\nEOF" % SENTINEL
         assert self._decision(cmd) == "allow"
 
 
 class TestFormerlyAllowedCreationShapesNowDeny:
 
-    def test_mkdir_denies(self):
+    def test_mkdir_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("mkdir %s" % SENTINEL)))
 
-    def test_mkdir_dash_p_denies(self):
+    def test_mkdir_dash_p_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("mkdir -p %s" % SENTINEL)))
 
-    def test_mkdir_dash_pv_dot_slash_prefixed_denies(self):
+    def test_mkdir_dash_pv_dot_slash_prefixed_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("mkdir -pv ./%s" % SENTINEL)))
 
-    def test_curl_dash_o_denies(self):
+    def test_curl_dash_o_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("curl -o %s https://example.com/x" % SENTINEL)))
 
-    def test_wget_dash_o_denies(self):
+    def test_wget_dash_o_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("wget -O %s https://example.com/x" % SENTINEL)))
 
-    def test_rsync_denies(self):
+    def test_rsync_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("rsync /tmp/src %s" % SENTINEL)))
 
-    def test_git_checkout_head_dash_dash_denies(self):
+    def test_git_checkout_head_dash_dash_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("git checkout HEAD -- %s" % SENTINEL)))
 
-    def test_unzip_dash_d_denies(self):
+    def test_unzip_dash_d_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("unzip archive.zip -d %s" % SENTINEL)))
 
-    def test_mkdir_logged_never_denied_end_to_end(self):
+    def test_mkdir_logged_never_denied_end_to_end(self) -> None:
         out = dispatch.evaluate_payload_json(
             json.dumps({"tool_name": "Bash", "tool_input": {"command": "mkdir %s" % SENTINEL}})
         )
@@ -590,7 +591,7 @@ class TestFormerlyAllowedCreationShapesNowDeny:
 
 class TestSafeArgv0AllowlistStillWorks:
 
-    def test_rm_of_sentinel_allows(self):
+    def test_rm_of_sentinel_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("rm %s" % SENTINEL)) is None
 
     @pytest.mark.parametrize(
@@ -607,14 +608,14 @@ class TestSafeArgv0AllowlistStillWorks:
             "grep foo %s",
         ],
     )
-    def test_read_only_inspection_commands_allow(self, cmd_tmpl):
+    def test_read_only_inspection_commands_allow(self, cmd_tmpl) -> None:
         assert _enveloped(guard.check)(_payload(cmd_tmpl % SENTINEL)) is None
 
     @pytest.mark.parametrize("sub", sorted(guard._ApprovalSentinelDetector._SAFE_GIT_SUBCOMMANDS))
-    def test_read_only_git_subcommands_allow(self, sub):
+    def test_read_only_git_subcommands_allow(self, sub) -> None:
         assert _enveloped(guard.check)(_payload("git %s %s" % (sub, SENTINEL))) is None
 
-    def test_check_ignore_on_the_sentinel_allows(self):
+    def test_check_ignore_on_the_sentinel_allows(self) -> None:
         """The command that VERIFIES the sentinel is gitignored must not be
         denied as a write. A tracked sentinel arrives with a fresh mtime on
         every checkout, which the read-side guard honours as a live approval
@@ -624,7 +625,7 @@ class TestSafeArgv0AllowlistStillWorks:
         assert _enveloped(guard.check)(_payload("git check-ignore -q %s" % SENTINEL)) is None
         assert _enveloped(guard.check)(_payload("git check-ignore -v %s" % SENTINEL)) is None
 
-    def test_deny_message_enumerates_every_allowlisted_git_subcommand(self):
+    def test_deny_message_enumerates_every_allowlisted_git_subcommand(self) -> None:
         """The deny message used to say "or a read-only `git` subcommand",
         which names a CATEGORY while the code enforces an allowlist -- a
         reader following the message hits a deny the message told them would
@@ -643,37 +644,37 @@ class TestSafeArgv0AllowlistStillWorks:
                 "deny message does not name allowlisted git subcommand %r" % sub
             )
 
-    def test_git_checkout_denies(self):
+    def test_git_checkout_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("git checkout %s" % SENTINEL)))
 
-    def test_git_restore_denies(self):
+    def test_git_restore_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("git restore %s" % SENTINEL)))
 
-    def test_git_stash_pop_denies(self):
+    def test_git_stash_pop_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("git stash pop %s" % SENTINEL)))
 
-    def test_test_dash_f_and_rm_chain_still_allows(self):
+    def test_test_dash_f_and_rm_chain_still_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("test -f %s && rm %s" % (SENTINEL, SENTINEL))) is None
 
-    def test_cat_of_unrelated_file_allows(self):
+    def test_cat_of_unrelated_file_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("cat somefile.txt")) is None
 
-    def test_redirect_into_sentinel_denies_even_from_safe_argv0(self):
+    def test_redirect_into_sentinel_denies_even_from_safe_argv0(self) -> None:
         _reason(_enveloped(guard.check)(_payload("cat /etc/hostname > %s" % SENTINEL)))
 
 
 class TestIndirectionStillCaughtAfterInversion:
 
-    def test_sh_dash_c_mkdir_denies(self):
+    def test_sh_dash_c_mkdir_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload('sh -c "mkdir %s"' % SENTINEL)))
 
-    def test_env_mkdir_denies(self):
+    def test_env_mkdir_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("env mkdir %s" % SENTINEL)))
 
-    def test_xargs_mkdir_denies(self):
+    def test_xargs_mkdir_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("echo %s | xargs mkdir" % SENTINEL)))
 
-    def test_sh_dash_c_mkdir_logged_never_denied_end_to_end(self):
+    def test_sh_dash_c_mkdir_logged_never_denied_end_to_end(self) -> None:
         out = dispatch.evaluate_payload_json(
             json.dumps(
                 {"tool_name": "Bash", "tool_input": {"command": 'sh -c "mkdir %s"' % SENTINEL}}
@@ -684,28 +685,28 @@ class TestIndirectionStillCaughtAfterInversion:
 
 class TestVariableTaintClosesRoundTwoForge:
 
-    def test_assign_then_mkdir_denies(self):
+    def test_assign_then_mkdir_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("S=%s; mkdir $S" % SENTINEL)))
 
-    def test_assign_then_touch_denies(self):
+    def test_assign_then_touch_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("S=%s; touch $S" % SENTINEL)))
 
-    def test_assign_then_ln_denies(self):
+    def test_assign_then_ln_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("L=%s; ln -s /tmp/x $L" % SENTINEL)))
 
-    def test_assign_then_redirect_through_safe_head_denies(self):
+    def test_assign_then_redirect_through_safe_head_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("S=%s; cat /etc/hostname > $S" % SENTINEL)))
 
-    def test_brace_form_dereference_denies(self):
+    def test_brace_form_dereference_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("S=%s; mkdir ${S}" % SENTINEL)))
 
-    def test_double_quoted_dereference_denies(self):
+    def test_double_quoted_dereference_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload('S=%s; mkdir "$S"' % SENTINEL)))
 
-    def test_taint_through_export_denies(self):
+    def test_taint_through_export_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("export S=%s; mkdir $S" % SENTINEL)))
 
-    def test_taint_survives_two_intervening_segments(self):
+    def test_taint_survives_two_intervening_segments(self) -> None:
         _reason(
             _enveloped(guard.check)(
                 _payload(
@@ -714,10 +715,10 @@ class TestVariableTaintClosesRoundTwoForge:
             )
         )
 
-    def test_untainted_variable_dereference_still_allows(self):
+    def test_untainted_variable_dereference_still_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("FOO=bar; mkdir $FOO")) is None
 
-    def test_assign_then_mkdir_logged_never_denied_end_to_end(self):
+    def test_assign_then_mkdir_logged_never_denied_end_to_end(self) -> None:
         out = dispatch.evaluate_payload_json(
             json.dumps(
                 {
@@ -728,7 +729,7 @@ class TestVariableTaintClosesRoundTwoForge:
         )
         assert not out or '"deny"' not in json.dumps(out)
 
-    def test_known_open_gap_glob_near_miss_still_allows(self):
+    def test_known_open_gap_glob_near_miss_still_allows(self) -> None:
         # Documented in the module docstring's "KNOWN OPEN GAP -- DYNAMIC
         # STRING CONSTRUCTION AND GLOB-SHAPED NEAR-MISSES" block: a purely
         # lexical matcher cannot statically evaluate a shell glob, so a
@@ -736,7 +737,7 @@ class TestVariableTaintClosesRoundTwoForge:
         # detected -- pinned here as a KNOWN gap, not an untested oversight.
         assert _enveloped(guard.check)(_payload("touch .coordinator-doctrine-edit-approv?d")) is None
 
-    def test_previously_denied_forms_still_deny(self):
+    def test_previously_denied_forms_still_deny(self) -> None:
         for cmd in (
             "mkdir %s" % SENTINEL,
             "S=%s mkdir $S" % SENTINEL,
@@ -744,7 +745,7 @@ class TestVariableTaintClosesRoundTwoForge:
         ):
             _reason(_enveloped(guard.check)(_payload(cmd)))
 
-    def test_safe_set_allows_still_hold(self):
+    def test_safe_set_allows_still_hold(self) -> None:
         assert _enveloped(guard.check)(_payload("rm %s" % SENTINEL)) is None
         assert _enveloped(guard.check)(_payload("cat %s" % SENTINEL)) is None
         assert _enveloped(guard.check)(_payload("touch somefile.txt")) is None
@@ -763,21 +764,21 @@ class TestTransitiveTaintClosesRoundThreeForge:
     different class of gap and is pinned here as knowingly-ALLOWED per the
     module docstring's "KNOWN OPEN GAP" block, not chased into a fix."""
 
-    def test_single_hop_chain_denies(self):
+    def test_single_hop_chain_denies(self) -> None:
         _reason(
             _enveloped(guard.check)(
                 _payload("A=%s; B=$A; mkdir $B" % SENTINEL)
             )
         )
 
-    def test_two_hop_chain_denies(self):
+    def test_two_hop_chain_denies(self) -> None:
         _reason(
             _enveloped(guard.check)(
                 _payload("A=%s; B=$A; C=$B; mkdir $C" % SENTINEL)
             )
         )
 
-    def test_longer_chain_denies(self):
+    def test_longer_chain_denies(self) -> None:
         _reason(
             _enveloped(guard.check)(
                 _payload(
@@ -786,7 +787,7 @@ class TestTransitiveTaintClosesRoundThreeForge:
             )
         )
 
-    def test_chain_crossing_unrelated_intervening_segment_denies(self):
+    def test_chain_crossing_unrelated_intervening_segment_denies(self) -> None:
         _reason(
             _enveloped(guard.check)(
                 _payload(
@@ -795,7 +796,7 @@ class TestTransitiveTaintClosesRoundThreeForge:
             )
         )
 
-    def test_string_construction_near_miss_is_knowingly_allowed(self):
+    def test_string_construction_near_miss_is_knowingly_allowed(self) -> None:
         # Documented in the module docstring's "KNOWN OPEN GAP -- DYNAMIC
         # STRING CONSTRUCTION AND GLOB-SHAPED NEAR-MISSES" block, under
         # "VARIABLE-ASSEMBLED BASENAMES": neither `S` nor `S2` is ever
@@ -808,7 +809,7 @@ class TestTransitiveTaintClosesRoundThreeForge:
         cmd = 'S=".coordinator-doctrine-edit-"; S2="${S}approved"; mkdir $S2'
         assert _enveloped(guard.check)(_payload(cmd)) is None
 
-    def test_previously_denied_taint_forms_still_deny(self):
+    def test_previously_denied_taint_forms_still_deny(self) -> None:
         for cmd in (
             "S=%s; mkdir $S" % SENTINEL,
             "S=%s; touch $S" % SENTINEL,
@@ -820,7 +821,7 @@ class TestTransitiveTaintClosesRoundThreeForge:
         ):
             _reason(_enveloped(guard.check)(_payload(cmd)))
 
-    def test_safe_set_allows_still_hold(self):
+    def test_safe_set_allows_still_hold(self) -> None:
         assert _enveloped(guard.check)(_payload("rm %s" % SENTINEL)) is None
         assert _enveloped(guard.check)(_payload("cat %s" % SENTINEL)) is None
         assert _enveloped(guard.check)(_payload("touch somefile.txt")) is None
@@ -835,29 +836,29 @@ class TestReachableThroughTheDispatchChain:
         )
         return "deny" if (out and '"deny"' in json.dumps(out)) else "allow"
 
-    def test_bare_touch_logged_never_denied_end_to_end(self):
+    def test_bare_touch_logged_never_denied_end_to_end(self) -> None:
         assert self._decision("touch %s" % SENTINEL) == "allow"
 
-    def test_cd_prefixed_touch_logged_never_denied_end_to_end(self):
+    def test_cd_prefixed_touch_logged_never_denied_end_to_end(self) -> None:
         assert self._decision("cd /tmp && touch %s" % SENTINEL) == "allow"
 
-    def test_semicolon_chained_touch_logged_never_denied_end_to_end(self):
+    def test_semicolon_chained_touch_logged_never_denied_end_to_end(self) -> None:
         assert self._decision("cd /tmp; touch %s" % SENTINEL) == "allow"
 
-    def test_redirect_logged_never_denied_end_to_end(self):
+    def test_redirect_logged_never_denied_end_to_end(self) -> None:
         assert self._decision("echo ok > %s" % SENTINEL) == "allow"
 
-    def test_python_dash_c_logged_never_denied_end_to_end(self):
+    def test_python_dash_c_logged_never_denied_end_to_end(self) -> None:
         code = "open('%s', 'w')" % SENTINEL
         assert self._decision("python3 -c \"%s\"" % code) == "allow"
 
-    def test_rm_allowed_end_to_end(self):
+    def test_rm_allowed_end_to_end(self) -> None:
         assert self._decision("rm %s" % SENTINEL) == "allow"
 
-    def test_cat_allowed_end_to_end(self):
+    def test_cat_allowed_end_to_end(self) -> None:
         assert self._decision("cat %s" % SENTINEL) == "allow"
 
-    def test_unrelated_touch_allowed_end_to_end(self):
+    def test_unrelated_touch_allowed_end_to_end(self) -> None:
         assert self._decision("touch somefile.txt") == "allow"
 
 
@@ -881,23 +882,23 @@ class TestPowerShellDialect:
             "cwd": "/repo",
         }
 
-    def test_set_content_cmdlet_denies(self):
+    def test_set_content_cmdlet_denies(self) -> None:
         out = _enveloped(guard.check)(self._ps_payload("Set-Content %s" % SENTINEL))
         assert out is not None
         assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_redirect_denies(self):
+    def test_redirect_denies(self) -> None:
         out = _enveloped(guard.check)(self._ps_payload("echo ok > %s" % SENTINEL))
         assert out is not None
 
-    def test_default_deny_posture_still_applies_unsafe_head(self):
+    def test_default_deny_posture_still_applies_unsafe_head(self) -> None:
         """`Copy-Item` is not in `_SAFE_ARGV0` -- mentioning the sentinel
         anywhere in its tokens denies, same default-deny inversion as the
         bash leg."""
         out = _enveloped(guard.check)(self._ps_payload("Copy-Item %s C:\\tmp\\x" % SENTINEL))
         assert out is not None
 
-    def test_safe_git_status_allows_with_no_silence(self):
+    def test_safe_git_status_allows_with_no_silence(self) -> None:
         from coordinator_core.bash_guards import _verdict
 
         with _verdict.collecting() as silences:
@@ -905,7 +906,7 @@ class TestPowerShellDialect:
         assert out is None
         assert silences == []
 
-    def test_grammar_gap_shape_records_silent_not_clean(self):
+    def test_grammar_gap_shape_records_silent_not_clean(self) -> None:
         from coordinator_core.bash_guards import _verdict
 
         with _verdict.collecting() as silences:
@@ -915,11 +916,11 @@ class TestPowerShellDialect:
             s.guard_name == "block_approval_sentinel_creation" for s in silences
         )
 
-    def test_non_bash_non_powershell_tool_allows(self):
+    def test_non_bash_non_powershell_tool_allows(self) -> None:
         payload = {"tool_name": "Edit", "tool_input": {"file_path": "x"}}
         assert _enveloped(guard.check)(payload) is None
 
-    def test_stale_taint_state_not_leaked_from_prior_bash_call(self):
+    def test_stale_taint_state_not_leaked_from_prior_bash_call(self) -> None:
         bash_payload = _payload("S=%s; touch $S" % SENTINEL)
         assert _enveloped(guard.check)(bash_payload) is not None
 
@@ -939,32 +940,32 @@ class TestItem33ReadableScriptOverride:
         path.write_text(content)
         return path
 
-    def test_clean_script_allows(self, tmp_path):
+    def test_clean_script_allows(self, tmp_path: Path) -> None:
         self._write(tmp_path, "forwarder.sh", "#!/bin/bash\nexec python3 \"$@\"\n")
         out = _enveloped(guard.check)(_payload("bash forwarder.sh", cwd=str(tmp_path)))
         assert out is None
 
-    def test_clean_script_allows_for_sh(self, tmp_path):
+    def test_clean_script_allows_for_sh(self, tmp_path: Path) -> None:
         self._write(tmp_path, "forwarder.sh", "echo hello\n")
         out = _enveloped(guard.check)(_payload("sh forwarder.sh", cwd=str(tmp_path)))
         assert out is None
 
-    def test_clean_script_allows_for_python3(self, tmp_path):
+    def test_clean_script_allows_for_python3(self, tmp_path: Path) -> None:
         self._write(tmp_path, "forwarder.py", "print('hello world')\n")
         out = _enveloped(guard.check)(_payload("python3 forwarder.py", cwd=str(tmp_path)))
         assert out is None
 
-    def test_script_mentioning_basename_denies(self, tmp_path):
+    def test_script_mentioning_basename_denies(self, tmp_path: Path) -> None:
         self._write(tmp_path, "evil.sh", "touch %s\n" % SENTINEL)
         out = _enveloped(guard.check)(_payload("bash evil.sh", cwd=str(tmp_path)))
         _reason(out)
 
-    def test_script_mentioning_basename_via_python3_denies(self, tmp_path):
+    def test_script_mentioning_basename_via_python3_denies(self, tmp_path: Path) -> None:
         self._write(tmp_path, "evil.py", "open('%s', 'w').close()\n" % SENTINEL)
         out = _enveloped(guard.check)(_payload("python3 evil.py", cwd=str(tmp_path)))
         _reason(out)
 
-    def test_chained_script_mentioning_basename_denies(self, tmp_path):
+    def test_chained_script_mentioning_basename_denies(self, tmp_path: Path) -> None:
         self._write(
             tmp_path,
             "chain.sh",
@@ -973,7 +974,7 @@ class TestItem33ReadableScriptOverride:
         out = _enveloped(guard.check)(_payload("bash chain.sh", cwd=str(tmp_path)))
         _reason(out)
 
-    def test_script_written_earlier_in_same_command_still_denies(self, tmp_path):
+    def test_script_written_earlier_in_same_command_still_denies(self, tmp_path: Path) -> None:
         # Content itself is clean, but it was just written by an EARLIER
         # segment of the SAME command -- the guard cannot trust that
         # content is what actually runs (class docstring "ITEM 33
@@ -982,26 +983,26 @@ class TestItem33ReadableScriptOverride:
         out = _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path)))
         _reason(out)
 
-    def test_redirect_written_script_still_denies(self, tmp_path):
+    def test_redirect_written_script_still_denies(self, tmp_path: Path) -> None:
         cmd = "echo 'echo hello' > w.sh && bash w.sh"
         out = _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path)))
         _reason(out)
 
-    def test_backgrounded_earlier_segment_still_denies(self, tmp_path):
+    def test_backgrounded_earlier_segment_still_denies(self, tmp_path: Path) -> None:
         self._write(tmp_path, "writer.sh", "echo write\n")
         self._write(tmp_path, "s.sh", "echo clean\n")
         cmd = "bash writer.sh & bash s.sh"
         out = _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path)))
         _reason(out)
 
-    def test_symlink_to_clean_script_still_denies(self, tmp_path):
+    def test_symlink_to_clean_script_still_denies(self, tmp_path: Path) -> None:
         target = self._write(tmp_path, "real.sh", "echo clean\n")
         link = tmp_path / "link.sh"
         os.symlink(target, link)
         out = _enveloped(guard.check)(_payload("bash link.sh", cwd=str(tmp_path)))
         _reason(out)
 
-    def test_oversize_script_still_denies(self, tmp_path):
+    def test_oversize_script_still_denies(self, tmp_path: Path) -> None:
         self._write(
             tmp_path,
             "big.sh",
@@ -1010,16 +1011,16 @@ class TestItem33ReadableScriptOverride:
         out = _enveloped(guard.check)(_payload("bash big.sh", cwd=str(tmp_path)))
         _reason(out)
 
-    def test_missing_script_still_denies(self, tmp_path):
+    def test_missing_script_still_denies(self, tmp_path: Path) -> None:
         out = _enveloped(guard.check)(_payload("bash nowhere.sh", cwd=str(tmp_path)))
         _reason(out)
 
-    def test_heredoc_fed_bash_still_denies(self, tmp_path):
+    def test_heredoc_fed_bash_still_denies(self, tmp_path: Path) -> None:
         cmd = "bash <<'EOF'\necho hello\nEOF"
         out = _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path)))
         _reason(out)
 
-    def test_nested_dash_c_script_file_not_read_stays_denied(self, tmp_path):
+    def test_nested_dash_c_script_file_not_read_stays_denied(self, tmp_path: Path) -> None:
         # ONE level deep only: a `bash <path>` nested inside a `-c` payload
         # is a different depth and keeps the inherited unconditional deny
         # (class docstring "ITEM 33 NARROWING": "ONE level deep").
@@ -1028,7 +1029,7 @@ class TestItem33ReadableScriptOverride:
         out = _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path)))
         _reason(out)
 
-    def test_zsh_bare_file_stays_denied_regardless_of_content(self, tmp_path):
+    def test_zsh_bare_file_stays_denied_regardless_of_content(self, tmp_path: Path) -> None:
         # zsh is intentionally excluded from `_READABLE_SCRIPT_INTERPRETERS`
         # -- item 33 names only `bash|sh|python3`.
         self._write(tmp_path, "clean.sh", "echo hello\n")
@@ -1036,8 +1037,8 @@ class TestItem33ReadableScriptOverride:
         _reason(out)
 
     def test_python_dash_m_still_allows_with_readable_script_override_present(
-        self, tmp_path
-    ):
+        self, tmp_path: Path
+    ) -> None:
         # Regression pin alongside the pre-existing
         # `test_python_dash_m_allows` -- `-m <module>` must never be
         # misread as a script PATH by the new override.
@@ -1045,8 +1046,8 @@ class TestItem33ReadableScriptOverride:
         assert out is None
 
     def test_guard_level_clean_script_allows_regardless_of_cwd_spelling(
-        self, tmp_path
-    ):
+        self, tmp_path: Path
+    ) -> None:
         # Same clean-script case as `test_clean_script_allows`, pinned at
         # this guard's own `check()` (not the full dispatch chain, which
         # has its own, unrelated sibling guards over the same bare-file
@@ -1055,7 +1056,7 @@ class TestItem33ReadableScriptOverride:
         out = _enveloped(guard.check)(_payload("bash forwarder.sh", cwd=str(tmp_path)))
         assert out is None
 
-    def test_clean_dash_stdin_heredoc_allows(self, tmp_path):
+    def test_clean_dash_stdin_heredoc_allows(self, tmp_path: Path) -> None:
         # F3 (GH #71): `<interp> - <<EOF ... EOF` -- script fed via stdin
         # heredoc, not a named file. A clean payload must not deny purely
         # on the interpreter/stdin shape.
@@ -1063,14 +1064,14 @@ class TestItem33ReadableScriptOverride:
         out = _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path)))
         assert out is None
 
-    def test_dash_stdin_heredoc_mentioning_basename_denies(self, tmp_path):
+    def test_dash_stdin_heredoc_mentioning_basename_denies(self, tmp_path: Path) -> None:
         cmd = "bash - <<'EOF'\ntouch %s\nEOF" % SENTINEL
         out = _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path)))
         _reason(out)
 
     def test_dash_stdin_heredoc_backgrounded_earlier_segment_still_denies(
-        self, tmp_path
-    ):
+        self, tmp_path: Path
+    ) -> None:
         self._write(tmp_path, "writer.sh", "echo write\n")
         cmd = "bash writer.sh & python3 - <<'EOF'\nprint('clean')\nEOF"
         out = _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path)))
@@ -1087,14 +1088,14 @@ class TestArgv0ResolutionAndStdinRedirect:
         bad.write_text("open('%s', 'w')\n" % SENTINEL)
         return clean.as_posix(), bad.as_posix()
 
-    def test_default_expansion_argv0_reads_the_script(self, tmp_path, monkeypatch):
+    def test_default_expansion_argv0_reads_the_script(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("COORDINATOR_PYTHON", raising=False)
         clean, bad = self._files(tmp_path)
         cmd = '"${COORDINATOR_PYTHON:-python3}" %s'
         assert _enveloped(guard.check)(_payload(cmd % clean)) is None
         assert _enveloped(guard.check)(_payload(cmd % bad)) is not None
 
-    def test_env_set_expansion_argv0_uses_the_env_value(self, tmp_path, monkeypatch):
+    def test_env_set_expansion_argv0_uses_the_env_value(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COORDINATOR_PYTHON", "python3")
         clean, bad = self._files(tmp_path)
         cmd = '"${COORDINATOR_PYTHON:-python3}" %s'
@@ -1102,7 +1103,7 @@ class TestArgv0ResolutionAndStdinRedirect:
         assert _enveloped(guard.check)(_payload(cmd % bad)) is not None
 
 
-    def test_stdin_redirect_on_bare_interpreter_is_a_file_read(self, tmp_path):
+    def test_stdin_redirect_on_bare_interpreter_is_a_file_read(self, tmp_path: Path) -> None:
         clean, bad = self._files(tmp_path)
         assert _enveloped(guard.check)(_payload("python3 < %s" % clean)) is None
         assert _enveloped(guard.check)(_payload("python3 - < %s" % clean)) is None
@@ -1110,33 +1111,33 @@ class TestArgv0ResolutionAndStdinRedirect:
         assert _enveloped(guard.check)(_payload("python3 < %s" % bad)) is not None
         assert _enveloped(guard.check)(_payload("bash < %s" % bad)) is not None
 
-    def test_stdin_redirect_from_missing_file_is_denied(self, tmp_path):
+    def test_stdin_redirect_from_missing_file_is_denied(self, tmp_path: Path) -> None:
         assert _enveloped(guard.check)(_payload("python3 < %s/nope.py" % tmp_path)) is not None
 
-    def test_env_expanded_script_path_is_read(self, tmp_path, monkeypatch):
+    def test_env_expanded_script_path_is_read(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         clean, _bad = self._files(tmp_path)
         monkeypatch.setenv("W1A_ROOT", str(tmp_path))
         assert _enveloped(guard.check)(_payload('python3 "$W1A_ROOT/clean.py"')) is None
         assert _enveloped(guard.check)(_payload('python3 "$W1A_UNSET_ROOT/clean.py"')) is not None
 
-    def test_path_variable_assigned_in_the_same_command_is_not_trusted(self, tmp_path, monkeypatch):
+    def test_path_variable_assigned_in_the_same_command_is_not_trusted(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         clean, _bad = self._files(tmp_path)
         monkeypatch.setenv("W1A_ROOT", str(tmp_path))
         assert _enveloped(guard.check)(_payload('W1A_ROOT=/elsewhere; python3 "$W1A_ROOT/clean.py"')) is not None
 
-    def test_redirect_forms_that_are_not_file_reads_are_not_misparsed(self):
+    def test_redirect_forms_that_are_not_file_reads_are_not_misparsed(self) -> None:
         assert _enveloped(guard.check)(_payload("python3 -m pytest 2>&1")) is None
 
 
 class TestGuardLevel:
 
-    def _consumer(self, monkeypatch):
+    def _consumer(self, monkeypatch) -> None:
         from coordinator_core import machine_profile
 
         monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "warn")
         machine_profile.reset_cache()
 
-    def test_consumer_default_still_denies_floor_guard(self, monkeypatch):
+    def test_consumer_default_still_denies_floor_guard(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """FLOOR_GUARDS member (PM ruling 2026-10-05): deny at every level."""
         self._consumer(monkeypatch)
         hso = _enveloped(guard.check)(_payload("touch %s" % SENTINEL))["hookSpecificOutput"]
@@ -1144,20 +1145,20 @@ class TestGuardLevel:
         assert "guard_level" not in hso["permissionDecisionReason"]
         assert SENTINEL not in hso["permissionDecisionReason"]
 
-    def test_deny_text_is_constant_per_reason_class(self, monkeypatch):
+    def test_deny_text_is_constant_per_reason_class(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._consumer(monkeypatch)
         a = _enveloped(guard.check)(_payload("touch %s" % SENTINEL))
         b = _enveloped(guard.check)(_payload("cp x %s" % SENTINEL))
         assert a == b
 
-    def test_indirection_deny_names_the_unreadable_payload_at_warn(self, monkeypatch):
+    def test_indirection_deny_names_the_unreadable_payload_at_warn(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Floor ruling: the indirection deny survives guard_level warn."""
         self._consumer(monkeypatch)
         out = _enveloped(guard.check)(_payload("bash bin/install-git-hooks.sh"))["hookSpecificOutput"]
         assert out["permissionDecision"] == "deny"
         assert "unreadable payload" in out["permissionDecisionReason"]
 
-    def test_per_guard_off_does_not_silence_floor_guard(self, monkeypatch):
+    def test_per_guard_off_does_not_silence_floor_guard(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Floor ruling: a per-guard `off` cannot demote this guard."""
         self._consumer(monkeypatch)
         monkeypatch.setenv(
@@ -1166,7 +1167,7 @@ class TestGuardLevel:
         out = _enveloped(guard.check)(_payload("touch %s" % SENTINEL))
         assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_strict_override_on_a_consumer_box_still_denies(self, monkeypatch):
+    def test_strict_override_on_a_consumer_box_still_denies(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._consumer(monkeypatch)
         monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")
         out = _enveloped(guard.check)(_payload("touch %s" % SENTINEL))
@@ -1175,22 +1176,22 @@ class TestGuardLevel:
 
 class TestNamedScriptFileIsReadNotRefused:
 
-    def test_relative_script_resolves_against_payload_cwd(self, tmp_path):
+    def test_relative_script_resolves_against_payload_cwd(self, tmp_path: Path) -> None:
         (tmp_path / "lib").mkdir()
         (tmp_path / "lib" / "gen.py").write_text("print('regen')\n")
         cmd = "python3 lib/gen.py --regenerate"
         assert _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))) is None
         assert _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path / "elsewhere"))) is not None
 
-    def test_relative_bash_script_is_read(self, tmp_path):
+    def test_relative_bash_script_is_read(self, tmp_path: Path) -> None:
         (tmp_path / "pcommit.sh").write_text("echo ok\n")
         assert _enveloped(guard.check)(_payload("bash pcommit.sh", cwd=str(tmp_path))) is None
 
-    def test_script_that_names_the_sentinel_is_denied(self, tmp_path):
+    def test_script_that_names_the_sentinel_is_denied(self, tmp_path: Path) -> None:
         (tmp_path / "bad.sh").write_text("touch %s\n" % SENTINEL)
         assert _enveloped(guard.check)(_payload("bash bad.sh", cwd=str(tmp_path))) is not None
 
-    def test_preceding_cd_moves_the_script_lookup(self, tmp_path):
+    def test_preceding_cd_moves_the_script_lookup(self, tmp_path: Path) -> None:
         sub = tmp_path / "sub"
         sub.mkdir()
         (sub / "gen.py").write_text("print('ok')\n")
@@ -1202,14 +1203,14 @@ class TestNamedScriptFileIsReadNotRefused:
         assert _enveloped(guard.check)(_payload("cd sub && python3 bad.py", cwd=str(tmp_path))) is not None
 
     @pytest.mark.skipif(os.name != "nt", reason="MSYS drive-mount spelling is Windows-only")
-    def test_msys_spelled_cd_and_script_path_resolve(self, tmp_path):
+    def test_msys_spelled_cd_and_script_path_resolve(self, tmp_path: Path) -> None:
         (tmp_path / "gen.py").write_text("print('ok')\n")
         drive, rest = os.path.splitdrive(str(tmp_path))
         msys = "/" + drive[0].lower() + rest.replace("\\", "/")
         assert _enveloped(guard.check)(_payload("cd %s; python3 gen.py" % msys, cwd="C:/")) is None
         assert _enveloped(guard.check)(_payload("python3 %s/gen.py" % msys, cwd="C:/")) is None
 
-    def test_unresolvable_cd_target_fails_closed(self, tmp_path):
+    def test_unresolvable_cd_target_fails_closed(self, tmp_path: Path) -> None:
         (tmp_path / "gen.py").write_text("print('ok')\n")
         cmd = "cd $W1A_UNSET_DIR && python3 gen.py"
         assert _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))) is not None
@@ -1219,21 +1220,21 @@ class TestReadOnlyProbeFalsePositives:
     """example-game-repo wf_cd02d380-9d5: an exit-criterion judge's read-only probe
     runs were denied as unexamined indirection."""
 
-    def test_which_names_an_interpreter_without_running_it(self):
+    def test_which_names_an_interpreter_without_running_it(self) -> None:
         assert _enveloped(guard.check)(_payload("which python3 python")) is None
         assert _enveloped(guard.check)(_payload("type python3 foo")) is None
 
-    def test_clean_script_over_256kb_is_read_not_denied(self, tmp_path):
+    def test_clean_script_over_256kb_is_read_not_denied(self, tmp_path: Path) -> None:
         (tmp_path / "probe.py").write_text("x = 1\n" * 100_000, encoding="utf-8")
         cmd = 'python3 probe.py --focus k; echo "exit=$?"'
         assert _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))) is None
 
-    def test_large_script_that_writes_the_sentinel_still_denies(self, tmp_path):
+    def test_large_script_that_writes_the_sentinel_still_denies(self, tmp_path: Path) -> None:
         body = "x = 1\n" * 100_000 + "open(%r, 'w')\n" % SENTINEL
         (tmp_path / "probe.py").write_text(body, encoding="utf-8")
         assert _enveloped(guard.check)(_payload("python3 probe.py", cwd=str(tmp_path))) is not None
 
-    def test_script_over_the_read_cap_still_fails_closed(self, tmp_path, monkeypatch):
+    def test_script_over_the_read_cap_still_fails_closed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(guard, "_MAX_SCRIPT_READ_BYTES", 1024)
         (tmp_path / "probe.py").write_text("x = 1\n" * 1000, encoding="utf-8")
         assert _enveloped(guard.check)(_payload("python3 probe.py", cwd=str(tmp_path))) is not None
@@ -1241,15 +1242,15 @@ class TestReadOnlyProbeFalsePositives:
 
 class TestPythonOptionValueIsNotTheScript:
     @pytest.mark.parametrize("opts", ["-W ignore", "-X utf8", "-u -W error"])
-    def test_clean_script_with_value_taking_option_allows(self, tmp_path, opts):
+    def test_clean_script_with_value_taking_option_allows(self, tmp_path: Path, opts) -> None:
         (tmp_path / "ok.py").write_text("print(1)\n", encoding="utf-8")
         assert _enveloped(guard.check)(_payload(f"python3 {opts} ok.py --flag", cwd=str(tmp_path))) is None
 
-    def test_script_mentioning_the_sentinel_still_denies(self, tmp_path):
+    def test_script_mentioning_the_sentinel_still_denies(self, tmp_path: Path) -> None:
         (tmp_path / "bad.py").write_text(f"open('{SENTINEL}', 'w')\n", encoding="utf-8")
         _reason(_enveloped(guard.check)(_payload("python3 -W ignore bad.py", cwd=str(tmp_path))))
 
-    def test_missing_script_still_denies(self, tmp_path):
+    def test_missing_script_still_denies(self, tmp_path: Path) -> None:
         _reason(_enveloped(guard.check)(_payload("python3 -W ignore nope.py", cwd=str(tmp_path))))
 
 
@@ -1259,7 +1260,7 @@ class TestIsolatedModePythonIsReadAsAScript:
     the DR-260 one-shot reason line in front of it is not a sentinel write."""
 
     @staticmethod
-    def _nudge_path():
+    def _nudge_path() -> str:
         import tempfile
 
         return "%s/coordinator/_fleet/coordinator-dispatch-nudge-ok-sess1" % (
@@ -1267,13 +1268,13 @@ class TestIsolatedModePythonIsReadAsAScript:
         )
 
     @pytest.mark.parametrize("flags", ["-I", "-E", "-s", "-S", "-B", "-u", "-O", "-P", "-I -B -u"])
-    def test_clean_script_with_value_less_flags_allows(self, tmp_path, flags):
+    def test_clean_script_with_value_less_flags_allows(self, tmp_path: Path, flags) -> None:
         script = tmp_path / "legs.py"
         script.write_text("import json\nprint(json.dumps({}))\n", encoding="utf-8")
         cmd = "python3 %s %s" % (flags, script.as_posix())
         assert _enveloped(guard.check)(_payload(cmd, cwd="/repo")) is None
 
-    def test_reason_line_then_isolated_literal_script_allows(self, tmp_path):
+    def test_reason_line_then_isolated_literal_script_allows(self, tmp_path: Path) -> None:
         script = tmp_path / "legs.py"
         script.write_text("print('transcript token audit')\n", encoding="utf-8")
         cmd = 'echo "read-only audit" > %s && python3 -I %s' % (
@@ -1282,21 +1283,21 @@ class TestIsolatedModePythonIsReadAsAScript:
         )
         assert _enveloped(guard.check)(_payload(cmd, cwd="/repo")) is None
 
-    def test_isolated_script_that_writes_the_sentinel_denies(self, tmp_path):
+    def test_isolated_script_that_writes_the_sentinel_denies(self, tmp_path: Path) -> None:
         script = tmp_path / "bad.py"
         script.write_text("open(%r, 'w').close()\n" % SENTINEL, encoding="utf-8")
         _reason(_enveloped(guard.check)(_payload("python3 -I %s" % script.as_posix(), cwd="/repo")))
         cmd = 'echo "r" > %s && python3 -I %s' % (self._nudge_path(), script.as_posix())
         _reason(_enveloped(guard.check)(_payload(cmd, cwd="/repo")))
 
-    def test_isolated_dash_c_payload_writing_the_sentinel_denies(self):
+    def test_isolated_dash_c_payload_writing_the_sentinel_denies(self) -> None:
         cmd = "python3 -I -c \"open('%s', 'w')\"" % SENTINEL
         _reason(_enveloped(guard.check)(_payload(cmd, cwd="/repo")))
 
-    def test_isolated_unreadable_script_still_denies(self, tmp_path):
+    def test_isolated_unreadable_script_still_denies(self, tmp_path: Path) -> None:
         _reason(_enveloped(guard.check)(_payload("python3 -I %s/nope.py" % tmp_path.as_posix(), cwd="/repo")))
 
-    def test_reason_line_alone_stays_reachable(self):
+    def test_reason_line_alone_stays_reachable(self) -> None:
         cmd = 'echo "a documented one-shot reason" > %s' % self._nudge_path()
         assert _enveloped(guard.check)(_payload(cmd, cwd="/repo")) is None
 
@@ -1312,7 +1313,7 @@ class TestReadOnlyPythonProbeMentioningSentinel:
         (tmp_path / "sub").mkdir(exist_ok=True)
         return _enveloped(guard.check)(_payload("python3 sub/../probe.py", cwd=str(tmp_path)))
 
-    def test_inspect_only_probe_allows(self, tmp_path):
+    def test_inspect_only_probe_allows(self, tmp_path: Path) -> None:
         body = "import os\nprint(os.path.exists(%r))\n" % SENTINEL
         assert self._run(tmp_path, body) is None
 
@@ -1326,10 +1327,10 @@ class TestReadOnlyPythonProbeMentioningSentinel:
             "exec('open(%r)')\n",
         ],
     )
-    def test_probe_with_write_shape_denies(self, tmp_path, body):
+    def test_probe_with_write_shape_denies(self, tmp_path: Path, body) -> None:
         _reason(self._run(tmp_path, body % SENTINEL))
 
-    def test_bash_script_mentioning_sentinel_still_denies(self, tmp_path):
+    def test_bash_script_mentioning_sentinel_still_denies(self, tmp_path: Path) -> None:
         (tmp_path / "probe.sh").write_text("test -f %s\n" % SENTINEL, encoding="utf-8")
         _reason(_enveloped(guard.check)(_payload("bash probe.sh", cwd=str(tmp_path))))
 
@@ -1340,52 +1341,52 @@ class TestHeredocWrittenProbeRuns:
     is the text that runs, so it is judged in place of the file."""
 
     @staticmethod
-    def _cmd(body, path, run="python3 {p}", delim="'EOF'"):
+    def _cmd(body, path, run: str = "python3 {p}", delim: str = "'EOF'") -> str:
         return "cat > {p} <<{d}\n{b}\nEOF\n{r}".format(
             p=path, d=delim, b=body, r=run.format(p=path)
         )
 
-    def test_clean_probe_written_and_run_in_one_call_allows(self, tmp_path):
+    def test_clean_probe_written_and_run_in_one_call_allows(self, tmp_path: Path) -> None:
         path = (tmp_path / "probe.py").as_posix()
         cmd = self._cmd("print('measure')", path)
         assert _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))) is None
 
-    def test_relative_path_probe_allows(self, tmp_path):
+    def test_relative_path_probe_allows(self, tmp_path: Path) -> None:
         cmd = self._cmd("print('measure')", "scratch/probe.py")
         assert _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))) is None
 
-    def test_shell_variable_path_written_then_run_allows(self, tmp_path):
+    def test_shell_variable_path_written_then_run_allows(self, tmp_path: Path) -> None:
         path = (tmp_path / "probe.py").as_posix()
         cmd = "P=%s\n%s" % (path, self._cmd("print('measure')", "$P"))
         assert _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))) is None
 
-    def test_unquoted_delimiter_probe_allows(self, tmp_path):
+    def test_unquoted_delimiter_probe_allows(self, tmp_path: Path) -> None:
         path = (tmp_path / "probe.py").as_posix()
         cmd = self._cmd("print('measure')", path, delim="EOF")
         assert _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))) is None
 
-    def test_probe_body_creating_the_sentinel_denies(self, tmp_path):
+    def test_probe_body_creating_the_sentinel_denies(self, tmp_path: Path) -> None:
         path = (tmp_path / "probe.py").as_posix()
         cmd = self._cmd("open(%r, 'w').close()" % SENTINEL, path)
         _reason(_enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))))
 
-    def test_probe_body_inspecting_the_sentinel_allows(self, tmp_path):
+    def test_probe_body_inspecting_the_sentinel_allows(self, tmp_path: Path) -> None:
         path = (tmp_path / "probe.py").as_posix()
         body = "import os\nprint(os.path.exists(%r))" % SENTINEL
         cmd = self._cmd(body, path)
         assert _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))) is None
 
-    def test_bash_probe_body_mentioning_the_sentinel_denies(self, tmp_path):
+    def test_bash_probe_body_mentioning_the_sentinel_denies(self, tmp_path: Path) -> None:
         path = (tmp_path / "probe.sh").as_posix()
         cmd = self._cmd("touch %s" % SENTINEL, path, run="bash {p}")
         _reason(_enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))))
 
-    def test_append_writer_keeps_the_deny(self, tmp_path):
+    def test_append_writer_keeps_the_deny(self, tmp_path: Path) -> None:
         path = (tmp_path / "probe.py").as_posix()
         cmd = "cat >> %s <<'EOF'\nprint(1)\nEOF\npython3 %s" % (path, path)
         _reason(_enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))))
 
-    def test_second_writer_of_the_same_path_keeps_the_deny(self, tmp_path):
+    def test_second_writer_of_the_same_path_keeps_the_deny(self, tmp_path: Path) -> None:
         path = (tmp_path / "probe.py").as_posix()
         cmd = "%s\necho x >> %s\npython3 %s" % (
             self._cmd("print(1)", path, run="true"),
@@ -1394,17 +1395,17 @@ class TestHeredocWrittenProbeRuns:
         )
         _reason(_enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))))
 
-    def test_non_cat_writer_keeps_the_deny(self, tmp_path):
+    def test_non_cat_writer_keeps_the_deny(self, tmp_path: Path) -> None:
         path = (tmp_path / "probe.py").as_posix()
         cmd = "cp /elsewhere/x.py %s && python3 %s" % (path, path)
         _reason(_enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))))
 
-    def test_backgrounded_earlier_segment_keeps_the_deny(self, tmp_path):
+    def test_backgrounded_earlier_segment_keeps_the_deny(self, tmp_path: Path) -> None:
         path = (tmp_path / "probe.py").as_posix()
         cmd = "sleep 1 &\n" + self._cmd("print(1)", path)
         _reason(_enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))))
 
-    def test_stdin_heredoc_after_a_file_heredoc_judges_its_own_body(self, tmp_path):
+    def test_stdin_heredoc_after_a_file_heredoc_judges_its_own_body(self, tmp_path: Path) -> None:
         path = (tmp_path / "w.txt").as_posix()
         clean_first = "cat > %s <<'A'\ntouch %s\nA\n" % (path, SENTINEL)
         cmd = clean_first + "python3 - <<'B'\nprint(1)\nB"
@@ -1426,26 +1427,26 @@ class TestHeredocWriterContextMustBeProvablyUnchanged:
         return other.as_posix()
 
     @staticmethod
-    def _writer(path="p.py"):
+    def _writer(path: str = "p.py") -> str:
         return "cat > %s <<'EOF'\nprint(1)\nEOF\n" % path
 
     @pytest.mark.parametrize("move", ["cd {o}", "pushd {o}", "cd {o} && true", "(cd {o} && true)"])
-    def test_directory_change_between_writer_and_run_denies(self, tmp_path, move):
+    def test_directory_change_between_writer_and_run_denies(self, tmp_path: Path, move) -> None:
         other = self._other_dir_with_sentinel_script(tmp_path)
         cmd = self._writer() + move.format(o=other) + "\npython3 p.py"
         _reason(_enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))))
 
-    def test_subshell_cd_run_denies(self, tmp_path):
+    def test_subshell_cd_run_denies(self, tmp_path: Path) -> None:
         other = self._other_dir_with_sentinel_script(tmp_path)
         cmd = self._writer() + "(cd %s && python3 p.py)" % other
         _reason(_enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))))
 
-    def test_reassigned_variable_between_writer_and_run_denies(self, tmp_path):
+    def test_reassigned_variable_between_writer_and_run_denies(self, tmp_path: Path) -> None:
         other = self._other_dir_with_sentinel_script(tmp_path)
         cmd = "P=%s/a.py\ncat > $P <<'EOF'\nprint(1)\nEOF\nP=%s/b.py\npython3 $P" % (other, other)
         _reason(_enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))))
 
-    def test_variable_assigned_after_an_environment_writer_denies(self, tmp_path):
+    def test_variable_assigned_after_an_environment_writer_denies(self, tmp_path: Path) -> None:
         other = self._other_dir_with_sentinel_script(tmp_path)
         cmd = "cat > $P <<'EOF'\nprint(1)\nEOF\nP=%s/b.py\npython3 $P" % other
         _reason(_enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))))
@@ -1463,45 +1464,45 @@ class TestHeredocWriterContextMustBeProvablyUnchanged:
             "git stash",
         ],
     )
-    def test_other_possible_writer_between_writer_and_run_denies(self, tmp_path, between):
+    def test_other_possible_writer_between_writer_and_run_denies(self, tmp_path: Path, between) -> None:
         cmd = self._writer() + between + "\npython3 p.py"
         _reason(_enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))))
 
-    def test_harmless_builtin_between_writer_and_run_still_allows(self, tmp_path):
+    def test_harmless_builtin_between_writer_and_run_still_allows(self, tmp_path: Path) -> None:
         cmd = self._writer() + "echo running\npython3 p.py"
         assert _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))) is None
 
-    def test_cd_before_the_writer_still_allows(self, tmp_path):
+    def test_cd_before_the_writer_still_allows(self, tmp_path: Path) -> None:
         other = self._other_dir_with_sentinel_script(tmp_path)
         cmd = "cd %s\n" % other + self._writer("q.py") + "python3 q.py"
         assert _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))) is None
 
-    def test_single_assignment_variable_before_the_writer_still_allows(self, tmp_path):
+    def test_single_assignment_variable_before_the_writer_still_allows(self, tmp_path: Path) -> None:
         path = (tmp_path / "probe.py").as_posix()
         cmd = "P=%s\n" % path + self._writer("$P") + "python3 $P"
         assert _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))) is None
 
 
 class TestLiteralVariableScriptPath:
-    def test_single_assignment_path_to_clean_script_allows(self, tmp_path):
+    def test_single_assignment_path_to_clean_script_allows(self, tmp_path: Path) -> None:
         script = tmp_path / "probe.py"
         script.write_text("print('ok')\n", encoding="utf-8")
         cmd = "P=%s\npython3 $P" % script.as_posix()
         assert _enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))) is None
 
-    def test_single_assignment_path_to_sentinel_script_denies(self, tmp_path):
+    def test_single_assignment_path_to_sentinel_script_denies(self, tmp_path: Path) -> None:
         script = tmp_path / "probe.py"
         script.write_text("open(%r, 'w')\n" % SENTINEL, encoding="utf-8")
         cmd = "P=%s\npython3 $P" % script.as_posix()
         _reason(_enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))))
 
-    def test_reassigned_variable_stays_denied(self, tmp_path):
+    def test_reassigned_variable_stays_denied(self, tmp_path: Path) -> None:
         script = tmp_path / "probe.py"
         script.write_text("print('ok')\n", encoding="utf-8")
         cmd = "P=%s\nP=/other.py\npython3 $P" % script.as_posix()
         _reason(_enveloped(guard.check)(_payload(cmd, cwd=str(tmp_path))))
 
-    def test_unassigned_variable_stays_denied(self, tmp_path):
+    def test_unassigned_variable_stays_denied(self, tmp_path: Path) -> None:
         _reason(_enveloped(guard.check)(_payload("python3 $UNSET_PROBE_PATH_VAR", cwd=str(tmp_path))))
 
 
@@ -1519,30 +1520,30 @@ class TestGitInitIntoScratch:
         return _enveloped(sub.check)(p)
 
     @pytest.fixture
-    def tree(self, tmp_path):
+    def tree(self, tmp_path: Path) -> Path:
         main = tmp_path / "repo"
         (main / ".git").mkdir(parents=True)
         (main / "scratch").mkdir()
         return main
 
-    def test_init_into_scratch_subdir_allows(self, tree):
+    def test_init_into_scratch_subdir_allows(self, tree) -> None:
         assert self._at("git init scratch/fixture", tree) is None
         assert self._at("git init -q -b main scratch/fixture", tree) is None
         assert self._at("git init %s" % (tree / "scratch" / "f").as_posix(), tree) is None
 
-    def test_bare_init_inside_scratch_subdir_allows(self, tree):
+    def test_bare_init_inside_scratch_subdir_allows(self, tree) -> None:
         sub = tree / "scratch" / "fixture"
         sub.mkdir()
         assert self._at("git init", sub) is None
         assert self._at("git init -q", sub) is None
 
-    def test_init_of_the_repo_or_outside_scratch_denies(self, tree):
+    def test_init_of_the_repo_or_outside_scratch_denies(self, tree) -> None:
         assert self._at("git init", tree) is not None
         assert self._at("git init elsewhere", tree) is not None
         assert self._at("git init ../escape", tree / "scratch") is not None
         assert self._at("git init scratch", tree) is not None
 
-    def test_init_with_hook_vector_denies(self, tree):
+    def test_init_with_hook_vector_denies(self, tree) -> None:
         assert self._at("git init --template=/t scratch/x", tree) is not None
         assert self._at("git init --separate-git-dir=/g scratch/x", tree) is not None
 
@@ -1552,13 +1553,13 @@ class TestBracketedScriptPaths:
     resolves to the literal file; every remaining fallback deny names its trigger."""
 
     @pytest.fixture
-    def bracketed(self, tmp_path):
+    def bracketed(self, tmp_path: Path) -> tuple[Path, Path]:
         d = tmp_path / "[general-work]" / "scratch"
         d.mkdir(parents=True)
         return tmp_path, d
 
     @staticmethod
-    def _spellings(path):
+    def _spellings(path) -> dict[str, str]:
         posix = str(path).replace("\\", "/")
         return {
             "escaped": posix.replace("[", "\\[").replace("]", "\\]"),
@@ -1568,7 +1569,7 @@ class TestBracketedScriptPaths:
         }
 
     @pytest.mark.parametrize("spelling", ["escaped", "single-quoted", "double-quoted", "bare"])
-    def test_clean_script_allows_under_cd_and_pipe(self, bracketed, spelling):
+    def test_clean_script_allows_under_cd_and_pipe(self, bracketed, spelling) -> None:
         root, d = bracketed
         script = d / "clean.py"
         script.write_text("print('ok')\n", encoding="utf-8")
@@ -1579,7 +1580,7 @@ class TestBracketedScriptPaths:
         assert _enveloped(guard.check)(_payload(cmd, cwd=str(root))) is None
 
     @pytest.mark.parametrize("spelling", ["escaped", "single-quoted", "double-quoted"])
-    def test_sentinel_creating_script_still_denies(self, bracketed, spelling):
+    def test_sentinel_creating_script_still_denies(self, bracketed, spelling) -> None:
         root, d = bracketed
         script = d / "bad.py"
         script.write_text("open('%s', 'w').write('x')\n" % SENTINEL, encoding="utf-8")
@@ -1587,21 +1588,21 @@ class TestBracketedScriptPaths:
         cmd = "cd %s && python3 %s" % (str(root).replace("\\", "/"), arg)
         assert _enveloped(guard.check)(_payload(cmd, cwd=str(root))) is not None
 
-    def test_missing_bracketed_script_denies_naming_the_condition(self, bracketed):
+    def test_missing_bracketed_script_denies_naming_the_condition(self, bracketed) -> None:
         root, d = bracketed
         arg = self._spellings(d / "missing.py")["escaped"]
         reason = _reason(_enveloped(guard.check)(_payload("python3 " + arg, cwd=str(root))))
         assert "not a readable regular file" in reason
 
-    def test_unresolved_variable_denial_names_the_variable(self, tmp_path):
+    def test_unresolved_variable_denial_names_the_variable(self, tmp_path: Path) -> None:
         reason = _reason(_enveloped(guard.check)(_payload('python3 "$W1A_UNSET_P/x.py"', cwd=str(tmp_path))))
         assert "unresolved $VAR" in reason
 
-    def test_unresolvable_cd_denial_names_the_cd(self, tmp_path):
+    def test_unresolvable_cd_denial_names_the_cd(self, tmp_path: Path) -> None:
         reason = _reason(_enveloped(guard.check)(_payload("cd $W1A_UNSET_D && python3 x.py", cwd=str(tmp_path))))
         assert "preceding cd target" in reason
 
-    def test_backgrounded_prior_segment_denial_names_it(self, bracketed):
+    def test_backgrounded_prior_segment_denial_names_it(self, bracketed) -> None:
         root, d = bracketed
         script = d / "clean.py"
         script.write_text("print('ok')\n", encoding="utf-8")
@@ -1609,7 +1610,7 @@ class TestBracketedScriptPaths:
         reason = _reason(_enveloped(guard.check)(_payload("sleep 1 & python3 %s" % posix, cwd=str(root))))
         assert "backgrounded" in reason
 
-    def test_oversize_script_denial_names_the_cap(self, bracketed, monkeypatch):
+    def test_oversize_script_denial_names_the_cap(self, bracketed, monkeypatch: pytest.MonkeyPatch) -> None:
         root, d = bracketed
         script = d / "big.py"
         script.write_text("print('ok')\n" * 10, encoding="utf-8")
@@ -1630,13 +1631,13 @@ class TestReadOnlyPipelinesPass:
             "grep -rl x . | xargs sha256sum",
         ],
     )
-    def test_xargs_over_read_only_head_allows(self, cmd):
+    def test_xargs_over_read_only_head_allows(self, cmd) -> None:
         assert _enveloped(guard.check)(_payload(cmd + " && ls " + SENTINEL)) is None
 
-    def test_xargs_over_read_only_head_that_redirects_into_the_sentinel_is_still_detected(self):
+    def test_xargs_over_read_only_head_that_redirects_into_the_sentinel_is_still_detected(self) -> None:
         _reason(_enveloped(guard.check)(_payload("ls | xargs basename > %s" % SENTINEL)))
 
-    def test_cat_heredoc_without_sentinel_write_allows(self):
+    def test_cat_heredoc_without_sentinel_write_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("cat <<'EOF'\nhello\nEOF\nls %s" % SENTINEL)) is None
 
 
@@ -1644,7 +1645,7 @@ class TestClampedToLog:
     """Unregistered, the guard's deny is clamped to an advisory allow at guardLevel log."""
 
     @pytest.fixture(autouse=True)
-    def _real_clamp(self, monkeypatch):
+    def _real_clamp(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(guard, "apply_guard_level", _REAL_APPLY_GUARD_LEVEL)
 
     @pytest.mark.parametrize(
@@ -1655,7 +1656,7 @@ class TestClampedToLog:
             "S=%s; mkdir $S" % SENTINEL,
         ],
     )
-    def test_detected_creation_or_unreadable_payload_returns_advisory_allow(self, cmd):
+    def test_detected_creation_or_unreadable_payload_returns_advisory_allow(self, cmd) -> None:
         out = guard.check_ungated(_payload(cmd))
         assert out["guardLevel"] == "log"
         assert out["hookSpecificOutput"]["permissionDecision"] == "allow"

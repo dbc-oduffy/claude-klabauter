@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.halted_record_commit import _ledger_halt_plan_and_blocking
 from coordinator_core.ops.review_test_blocker import TEST_BLOCKER
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 _SIZING = "state/sizings/x.yaml"
 _PLAN = "docs/plans/p.md"
@@ -51,7 +52,7 @@ def _reverify(**kw) -> dict:
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_failing_test_blocker_halts_naming_the_executor_fix_leg():
+def test_failing_test_blocker_halts_naming_the_executor_fix_leg() -> None:
     halted = _run([], _reverify())
 
     assert halted["halted"] == ask_compose.HALT_REVIEW_BLOCKED
@@ -68,7 +69,7 @@ def test_failing_test_blocker_halts_naming_the_executor_fix_leg():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_criterion_not_met_sibling_emitter_names_the_failing_test_in_remaining():
+def test_criterion_not_met_sibling_emitter_names_the_failing_test_in_remaining() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
@@ -101,7 +102,7 @@ def test_criterion_not_met_sibling_emitter_names_the_failing_test_in_remaining()
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_halt_record_reads_plan_and_items_for_the_ledger_pointer(tmp_path):
+def test_halt_record_reads_plan_and_items_for_the_ledger_pointer(tmp_path: Path) -> None:
     halted = _run([], _reverify())
     (tmp_path / "docs/plans").mkdir(parents=True)
     (tmp_path / _PLAN).write_text("x")
@@ -115,7 +116,7 @@ def test_halt_record_reads_plan_and_items_for_the_ledger_pointer(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_blocked_slices_ride_along_with_the_test_blocker():
+def test_blocked_slices_ride_along_with_the_test_blocker() -> None:
     wave = [{"slice_id": "s1", "verdict": "BLOCKED", "findings": 2, "applied": 0, "sidecar_path": "s1.md"}]
     halted = _run(wave, _reverify())
 
@@ -126,7 +127,7 @@ def test_blocked_slices_ride_along_with_the_test_blocker():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_only_pre_existing_or_kept_failures_keep_the_findings_text():
+def test_only_pre_existing_or_kept_failures_keep_the_findings_text() -> None:
     wave = [{"slice_id": "s1", "verdict": "BLOCKED", "findings": 2, "applied": 0, "sidecar_path": "s1.md"}]
     halted = _run(wave, {"failing": ["a.py::old", "a.py::kept"], "pre_existing": ["a.py::old"], "kept": ["a.py::kept"]})
 
@@ -137,5 +138,5 @@ def test_only_pre_existing_or_kept_failures_keep_the_findings_text():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_no_failing_nodes_and_no_blocked_slice_does_not_halt():
+def test_no_failing_nodes_and_no_blocked_slice_does_not_halt() -> None:
     assert _run([], {"failing": [], "pre_existing": [], "kept": []}) is None

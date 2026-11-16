@@ -13,10 +13,11 @@ import pytest
 
 from coordinator_core.group_em import admission_post, box_heartbeat, box_registry, watch
 from coordinator_core.ops import group_em_box_federation as op
+from pathlib import Path
 
 
 @pytest.fixture()
-def loopback(tmp_path, monkeypatch):
+def loopback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     a, b = tmp_path / "a", tmp_path / "b"
     a.mkdir()
     b.mkdir()
@@ -34,7 +35,7 @@ def loopback(tmp_path, monkeypatch):
     return a, b, monkeypatch
 
 
-def test_run_placed_on_loopback_box_reaches_primary_roster(loopback):
+def test_run_placed_on_loopback_box_reaches_primary_roster(loopback) -> None:
     a, b, monkeypatch = loopback
 
     reg = op._groupem_box_register({"root": str(b)})
@@ -65,7 +66,7 @@ def test_run_placed_on_loopback_box_reaches_primary_roster(loopback):
     assert f"box {box_id}: live, 1 open run(s): em-b r1" in line
 
 
-def test_unstamped_loopback_box_is_unreachable_not_gone(loopback):
+def test_unstamped_loopback_box_is_unreachable_not_gone(loopback) -> None:
     a, b, _ = loopback
     box_id = op._groupem_box_register({"root": str(b)})["box"]["box_id"]
 

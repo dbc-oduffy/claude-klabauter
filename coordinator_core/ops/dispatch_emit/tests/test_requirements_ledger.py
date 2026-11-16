@@ -605,3 +605,44 @@ def test_workflow_revise_leaves_the_session_owning_a_current_requirements_md(run
     assert mine[-1].verb == touch_record.VERB_TOUCH and mine[-1].session_id == sid
     assert mine[-1].content_hash in (None, touch_record.compute_content_hash(d / "requirements.md"))
     assert len(mine) > 1
+
+
+def _spine_plan(body: str) -> str:
+    return f"---\ntitle: t\n---\n\n## Tasks\n\n```yaml plan-tasks\n{body}\n```\n"
+
+
+def test_spine_rows_reads_a_clean_spine_through_the_process_memo_not_a_fresh_parse(monkeypatch):
+    def _refuse(*_a, **_k):
+        raise AssertionError("fresh yaml parse of a clean spine")
+
+    monkeypatch.setattr(yaml, "safe_load", _refuse)
+    plan = _spine_plan("- id: M1\n  writes:\n  - a/b.py\n- id: M2\n  writes:\n  - c/d.py\n")
+
+    rows = rl._spine_rows(plan)
+
+    assert [r["id"] for r in rows] == ["M1", "M2"]
+    assert rl._spine_rows(plan) is rl._spine_rows(plan)
+
+
+def test_spine_rows_keeps_its_historic_result_for_absent_empty_and_malformed_spines():
+    assert rl._spine_rows("# no spine here\n") is None
+    assert rl._spine_rows(_spine_plan("")) is None
+    assert rl._spine_rows(_spine_plan("title: [unclosed")) is None
+    assert rl._spine_rows(_spine_plan("key: value")) is None
+    mixed = rl._spine_rows(_spine_plan("- id: X1\n- just a string\n"))
+    assert mixed == [{"id": "X1"}, "just a string"]
+
+
+def test_plan_row_writes_unions_every_row_through_the_shared_spine_read(repo):
+    plan_rel = "docs/plans/2026-10-13-p.md"
+    (repo / "docs" / "plans").mkdir(parents=True)
+    (repo / plan_rel).write_text(
+        _spine_plan("- id: P1\n  writes:\n  - a\\b.py\n  writes_under:\n  - out/\n- id: P2\n  writes:\n  - c.py\n"),
+        encoding="utf-8",
+    )
+    (repo / REL).write_text(yaml.safe_dump(_sizing(plan=plan_rel), sort_keys=False), encoding="utf-8")
+
+    files, dirs = rl._plan_row_writes(repo, REL)
+
+    assert files == {"a/b.py", "c.py"}
+    assert dirs == ["out"]

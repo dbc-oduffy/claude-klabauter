@@ -11,6 +11,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _JUDGE_KW, _compose
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 _FAILING = "coordinator_core/tests/test_x.py::test_probe"
 _NORMALISE_FLIP = "else { _reconciled.push(i.id); i.status = 'met'; delete i.remaining; }"
@@ -35,36 +36,36 @@ def _run_latest_test(ledger, pm_ids) -> dict:
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_latest_test_reconcile_refuses_while_a_pm_verbatim_row_is_not_met():
+def test_latest_test_reconcile_refuses_while_a_pm_verbatim_row_is_not_met() -> None:
     ledger = {"items": [{"id": "R1", "status": "not_met"}, {"id": "R2", "status": "met"}]}
     assert _run_latest_test(ledger, ["R1"])["status"] == "not_met"
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_latest_test_reconcile_still_flips_when_no_pm_verbatim_row_is_open():
+def test_latest_test_reconcile_still_flips_when_no_pm_verbatim_row_is_open() -> None:
     ledger = {"items": [{"id": "R1", "status": "met"}, {"id": "R2", "status": "not_met"}]}
     assert _run_latest_test(ledger, ["R1"])["status"] == "met"
     assert _run_latest_test(None, [])["status"] == "met"
 
 
-def test_emitted_script_declares_pm_verbatim_ids_from_the_register(monkeypatch):
+def test_emitted_script_declares_pm_verbatim_ids_from_the_register(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "_pm_verbatim_row_ids", lambda *_: ["R1", "R2"])
     script = _compose(in_run_commit=True)
     assert 'const _pmVerbatimIds = ["R1", "R2"];' in script
 
 
-def test_normalise_ledger_keeps_a_pm_verbatim_row_not_met():
+def test_normalise_ledger_keeps_a_pm_verbatim_row_not_met() -> None:
     script = _compose(in_run_commit=True)
     assert "else if (_pmVerbatimIds.includes(i.id)) continue; " + _NORMALISE_FLIP in script
 
 
-def test_reconcile_judged_refuses_a_pm_verbatim_row_reconciled_to_met():
+def test_reconcile_judged_refuses_a_pm_verbatim_row_reconciled_to_met() -> None:
     script = _compose(in_run_commit=True, **_JUDGE_KW)
     assert "!_reconciled.some((id) => _pmVerbatimIds.includes(id))" in script
 
 
-def test_pm_verbatim_row_ids_selects_only_pm_verbatim_anchors(monkeypatch, tmp_path):
+def test_pm_verbatim_row_ids_selects_only_pm_verbatim_anchors(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     rows = [
         {"id": "R1", "anchor": "pm_verbatims"},
         {"id": "R2", "anchor": "ask"},

@@ -37,7 +37,7 @@ def _commit(repo: Path, msg: str = "c") -> str:
     return _git(repo, "rev-parse", "HEAD")
 
 
-def _plan(repo: Path, name: str, *, writes=("src/a.py",), tshirt=None, body="body") -> str:
+def _plan(repo: Path, name: str, *, writes=("src/a.py",), tshirt=None, body: str = "body") -> str:
     """Write and commit one plan, append its ledger row; returns the plan path."""
     rel = f"docs/plans/2026-11/{name}.md"
     sizing = ""
@@ -59,7 +59,7 @@ def _plan(repo: Path, name: str, *, writes=("src/a.py",), tshirt=None, body="bod
     return rel
 
 
-def _row(repo, rel, text, sha, *, tshirt=None, writes=(), status="landed", at=None) -> None:
+def _row(repo, rel, text, sha, *, tshirt=None, writes=(), status: str = "landed", at=None) -> None:
     row = ledger.make_row(
         rel, status, (at or _NOW).strftime("%Y-%m-%dT%H:%M:%SZ"), sha, text.encode("utf-8"),
         tshirt, list(writes),
@@ -75,7 +75,7 @@ def _wiki(repo: Path, name: str, cites: str) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(root, "init", "-q", "-b", "main")
@@ -89,11 +89,11 @@ def _run(repo: Path, params=None) -> dict:
     return wc._ceremony_wiki_candidates(params or {}, repo_root=repo / ".git")
 
 
-def test_op_registered():
+def test_op_registered() -> None:
     assert _OP in _REGISTRY
 
 
-def test_default_window_selects_ledger_plan_and_citing_page(repo):
+def test_default_window_selects_ledger_plan_and_citing_page(repo) -> None:
     _wiki(repo, "alpha", "src/a.py")
     _wiki(repo, "beta", "src/unrelated.py")
     plan = _plan(repo, "p1", tshirt="L")
@@ -109,7 +109,7 @@ def test_default_window_selects_ledger_plan_and_citing_page(repo):
     assert out["truncated"] == {"pages": 0, "plans": 0}
 
 
-def test_uncited_plan_and_non_completed_row_are_refused(repo):
+def test_uncited_plan_and_non_completed_row_are_refused(repo) -> None:
     _wiki(repo, "alpha", "src/a.py")
     _plan(repo, "other", writes=("src/zzz.py",))
     text = "---\nstatus: blocked\n---\n\nx\n"
@@ -118,14 +118,14 @@ def test_uncited_plan_and_non_completed_row_are_refused(repo):
     assert _run(repo)["pages"] == []
 
 
-def test_completed_statuses_are_members_of_the_plan_schema_status_enum():
+def test_completed_statuses_are_members_of_the_plan_schema_status_enum() -> None:
     schema_path = Path(wc.__file__).parents[2] / "frontmatter" / "schemas" / "plan.schema.json"
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     assert wc.COMPLETED_STATUSES <= set(schema["properties"]["status"]["enum"])
     assert "complete" not in wc.COMPLETED_STATUSES
 
 
-def test_hub_path_cited_by_many_pages_is_dropped_and_a_narrow_path_still_matches(repo):
+def test_hub_path_cited_by_many_pages_is_dropped_and_a_narrow_path_still_matches(repo) -> None:
     for i in range(wc.HUB_CITING_PAGES + 1):
         _wiki(repo, f"hub{i}", "src/hub.py")
     _wiki(repo, "narrow", "src/narrow.py")
@@ -136,14 +136,14 @@ def test_hub_path_cited_by_many_pages_is_dropped_and_a_narrow_path_still_matches
     assert [pl["path"] for pl in pages[0]["plans"]] == ["docs/plans/2026-11/pn.md"]
 
 
-def test_path_cited_by_exactly_the_threshold_still_matches(repo):
+def test_path_cited_by_exactly_the_threshold_still_matches(repo) -> None:
     for i in range(wc.HUB_CITING_PAGES):
         _wiki(repo, f"pg{i}", "src/a.py")
     _plan(repo, "p1")
     assert len(_run(repo)["pages"]) == wc.HUB_CITING_PAGES
 
 
-def test_reopened_plan_uses_its_latest_ledger_row(repo):
+def test_reopened_plan_uses_its_latest_ledger_row(repo) -> None:
     _wiki(repo, "alpha", "src/a.py")
     _plan(repo, "p1", body="first-body")
     rel = _plan(repo, "p1", body="second-body")
@@ -153,7 +153,7 @@ def test_reopened_plan_uses_its_latest_ledger_row(repo):
     assert "second-body" in entry[0]["preview"]
 
 
-def test_deleted_plan_still_previews_from_its_blob(repo):
+def test_deleted_plan_still_previews_from_its_blob(repo) -> None:
     _wiki(repo, "alpha", "src/a.py")
     plan = _plan(repo, "gone", body="distinctive-body")
     sha = _git(repo, "rev-parse", "HEAD")
@@ -163,7 +163,7 @@ def test_deleted_plan_still_previews_from_its_blob(repo):
     assert entry["commit_sha"] == sha and "distinctive-body" in entry["preview"]
 
 
-def test_ranking_by_highest_tshirt_then_plan_count_then_page(repo):
+def test_ranking_by_highest_tshirt_then_plan_count_then_page(repo) -> None:
     _wiki(repo, "small", "src/s.py")
     _wiki(repo, "big", "src/b.py")
     _wiki(repo, "many-a", "src/m.py")
@@ -179,7 +179,7 @@ def test_ranking_by_highest_tshirt_then_plan_count_then_page(repo):
     assert [pl["tshirt"] for pl in pages[1]["plans"]] == ["S", None]
 
 
-def test_caps_cut_from_the_bottom_and_are_counted(repo, monkeypatch):
+def test_caps_cut_from_the_bottom_and_are_counted(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wc, "PAGES_CAP", 2)
     monkeypatch.setattr(wc, "PLANS_CAP", 3)
     for i in range(4):
@@ -194,14 +194,14 @@ def test_caps_cut_from_the_bottom_and_are_counted(repo, monkeypatch):
     assert out["preview_chars_total"] == sum(len(pl["preview"]) for pg in out["pages"] for pl in pg["plans"])
 
 
-def test_preview_is_cut_at_preview_chars(repo, monkeypatch):
+def test_preview_is_cut_at_preview_chars(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wc, "PREVIEW_CHARS", 50)
     _wiki(repo, "alpha", "src/a.py")
     _plan(repo, "p1", body="x" * 500)
     assert len(_run(repo)["pages"][0]["plans"][0]["preview"]) == 50
 
 
-def test_window_is_by_completed_at_default_seven_days(repo):
+def test_window_is_by_completed_at_default_seven_days(repo) -> None:
     _wiki(repo, "alpha", "src/a.py")
     text = "---\nstatus: landed\n---\n\n# old\n"
     old = _NOW - timedelta(days=30)
@@ -211,7 +211,7 @@ def test_window_is_by_completed_at_default_seven_days(repo):
     assert len(_run(repo, {"since": old.strftime("%Y-%m-%d")})["pages"]) == 1
 
 
-def test_since_ledger_sha_selects_rows_after_it(repo):
+def test_since_ledger_sha_selects_rows_after_it(repo) -> None:
     _wiki(repo, "alpha", "src/a.py")
     _plan(repo, "old")
     base = _git(repo, "rev-parse", "HEAD")
@@ -221,7 +221,7 @@ def test_since_ledger_sha_selects_rows_after_it(repo):
     assert [pl["path"] for pl in out["pages"][0]["plans"]] == ["docs/plans/2026-11/new.md"]
 
 
-def test_unknown_since_sha_and_garbage_fall_back_to_default_window(repo):
+def test_unknown_since_sha_and_garbage_fall_back_to_default_window(repo) -> None:
     _wiki(repo, "alpha", "src/a.py")
     _plan(repo, "p1")
     for bad in ("deadbeef" * 5, "not-a-date"):
@@ -230,7 +230,7 @@ def test_unknown_since_sha_and_garbage_fall_back_to_default_window(repo):
         assert len(out["pages"]) == 1
 
 
-def test_ack_head_mapped_to_its_ledger_row_is_the_default_window_and_is_not_advanced(repo, tmp_path):
+def test_ack_head_mapped_to_its_ledger_row_is_the_default_window_and_is_not_advanced(repo, tmp_path: Path) -> None:
     _wiki(repo, "alpha", "src/a.py")
     _plan(repo, "old")
     ack = _git(repo, "rev-parse", "HEAD")
@@ -245,7 +245,7 @@ def test_ack_head_mapped_to_its_ledger_row_is_the_default_window_and_is_not_adva
     assert cache.read_bytes() == before
 
 
-def test_ack_head_absent_from_the_ledger_falls_back_to_default_window(repo, tmp_path):
+def test_ack_head_absent_from_the_ledger_falls_back_to_default_window(repo, tmp_path: Path) -> None:
     _wiki(repo, "alpha", "src/a.py")
     _plan(repo, "p1")
     cache = tmp_path / "cache" / "update-docs-worklist" / "state.json"
@@ -255,7 +255,7 @@ def test_ack_head_absent_from_the_ledger_falls_back_to_default_window(repo, tmp_
     assert out["window"]["source"] == "default-7d" and len(out["pages"]) == 1
 
 
-def test_no_history_walk_and_constant_spawn_kinds(repo, monkeypatch):
+def test_no_history_walk_and_constant_spawn_kinds(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _wiki(repo, "alpha", "src/a.py")
     for i in range(3):
         _plan(repo, f"p{i}")
@@ -271,7 +271,7 @@ def test_no_history_walk_and_constant_spawn_kinds(repo, monkeypatch):
     assert sorted(seen) == ["cat-file", "rev-parse"]
 
 
-def test_empty_ledger_returns_an_empty_reply_without_grep_or_catfile(repo, monkeypatch):
+def test_empty_ledger_returns_an_empty_reply_without_grep_or_catfile(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = []
     real = wc.run_git
     monkeypatch.setattr(wc, "run_git", lambda args, **kw: (seen.append(args[0]), real(args, **kw))[1])
@@ -279,7 +279,7 @@ def test_empty_ledger_returns_an_empty_reply_without_grep_or_catfile(repo, monke
     assert out["pages"] == [] and seen == ["rev-parse"]
 
 
-def test_repo_root_param_queries_another_repo_and_rejects_a_missing_one(repo, tmp_path):
+def test_repo_root_param_queries_another_repo_and_rejects_a_missing_one(repo, tmp_path: Path) -> None:
     _wiki(repo, "alpha", "src/a.py")
     _plan(repo, "p1")
     out = wc._ceremony_wiki_candidates({"repo_root": str(repo)}, repo_root=tmp_path / "no" / ".git")
@@ -290,12 +290,12 @@ def test_repo_root_param_queries_another_repo_and_rejects_a_missing_one(repo, tm
         wc._ceremony_wiki_candidates({}, repo_root=None)
 
 
-def test_empty_reason_ledger_missing(repo):
+def test_empty_reason_ledger_missing(repo) -> None:
     out = _run(repo)
     assert out["pages"] == [] and out["empty_reason"] == "ledger_missing"
 
 
-def test_empty_reason_ledger_empty_in_window(repo):
+def test_empty_reason_ledger_empty_in_window(repo) -> None:
     _wiki(repo, "alpha", "src/a.py")
     text = "---\nstatus: landed\n---\n\nx\n"
     old = _NOW - timedelta(days=30)
@@ -304,14 +304,14 @@ def test_empty_reason_ledger_empty_in_window(repo):
     assert out["pages"] == [] and out["empty_reason"] == "ledger_empty_in_window"
 
 
-def test_empty_reason_no_citing_page(repo):
+def test_empty_reason_no_citing_page(repo) -> None:
     _wiki(repo, "alpha", "src/a.py")
     _plan(repo, "other", writes=("src/zzz.py",))
     out = _run(repo)
     assert out["pages"] == [] and out["empty_reason"] == "no_citing_page"
 
 
-def test_empty_reason_hub_cut(repo):
+def test_empty_reason_hub_cut(repo) -> None:
     for i in range(wc.HUB_CITING_PAGES + 1):
         _wiki(repo, f"hub{i}", "src/hub.py")
     _plan(repo, "ph", writes=("src/hub.py",))
@@ -319,7 +319,7 @@ def test_empty_reason_hub_cut(repo):
     assert out["pages"] == [] and out["empty_reason"] == "hub_cut"
 
 
-def test_empty_reason_is_null_when_pages_non_empty(repo):
+def test_empty_reason_is_null_when_pages_non_empty(repo) -> None:
     _wiki(repo, "alpha", "src/a.py")
     _plan(repo, "p1")
     out = _run(repo)

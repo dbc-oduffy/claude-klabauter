@@ -3,6 +3,8 @@ never escapes the tick."""
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from coordinator_core.git import maintenance_tick
@@ -20,14 +22,14 @@ class _FakeVersionState:
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     path = tmp_path / "served"
     path.mkdir()
     return path
 
 
 @pytest.fixture
-def ctx(tmp_path, repo, monkeypatch):
+def ctx(tmp_path: Path, repo, monkeypatch: pytest.MonkeyPatch):
     lifecycle.reset_shutdown_guard_for_test()
     idle.reset_idle_clock_for_test()
     monkeypatch.setattr(idle, "should_demote", lambda **kwargs: False)
@@ -41,14 +43,14 @@ def ctx(tmp_path, repo, monkeypatch):
     idle.reset_idle_clock_for_test()
 
 
-def test_idle_tick_hands_served_repos_to_the_maintenance_trigger(ctx, repo, monkeypatch):
+def test_idle_tick_hands_served_repos_to_the_maintenance_trigger(ctx, repo, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list = []
     monkeypatch.setattr(maintenance_tick, "on_idle_tick", lambda repos: seen.append(list(repos)) or False)
     ctx._idle_tick()
     assert seen == [[repo]]
 
 
-def test_a_launch_counts_as_engine_work(ctx, monkeypatch):
+def test_a_launch_counts_as_engine_work(ctx, monkeypatch: pytest.MonkeyPatch) -> None:
     marked: list = []
     monkeypatch.setattr(maintenance_tick, "on_idle_tick", lambda repos: True)
     monkeypatch.setattr(idle, "mark_invocation", lambda: marked.append(1))
@@ -56,7 +58,28 @@ def test_a_launch_counts_as_engine_work(ctx, monkeypatch):
     assert marked
 
 
-def test_trigger_failure_never_escapes_the_tick(ctx, monkeypatch):
+def test_idle_tick_offers_a_registered_non_served_store(ctx, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    from coordinator_core.git import git_objects, pack_deletion_pause
+
+    monkeypatch.setattr(pack_deletion_pause, "PACK_DELETION_PAUSED", False)
+    registry = tmp_path / "engine-read-stores"
+    registry.mkdir()
+    other = tmp_path / "other"
+    (other / ".git").mkdir(parents=True)
+    (registry / "e").write_text(str(other / ".git") + "\n", encoding="utf-8")
+    monkeypatch.setattr(git_objects, "read_store_registry_dir", lambda: registry)
+    monkeypatch.setattr(maintenance_tick, "_next_check", {})
+    monkeypatch.setattr(maintenance_tick, "_registry_next", float("-inf"))
+    monkeypatch.setattr(maintenance_tick, "_registry_cache", [])
+    # tmp_path lives under the system temp dir, whose registry entries the tick unlinks.
+    monkeypatch.setattr(maintenance_tick, "_temp_root", lambda: tmp_path / "system-temp")
+    launched: list = []
+    monkeypatch.setattr(maintenance_tick, "_spawn", lambda r, tiers: launched.append(r) or True)
+    ctx._idle_tick()
+    assert other.resolve() in launched
+
+
+def test_trigger_failure_never_escapes_the_tick(ctx, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(repos):
         raise RuntimeError("maintenance broke")
 

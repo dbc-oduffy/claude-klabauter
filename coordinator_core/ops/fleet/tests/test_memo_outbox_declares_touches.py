@@ -113,7 +113,7 @@ def _write_draft(sender_repo: Path, topic: str, *, to: str = "example-retrieval-
 
 
 class TestMemoSendDeclaresTouches:
-    def test_act_run_declares_sent_copy_and_record(self, tmp_path, monkeypatch):
+    def test_act_run_declares_sent_copy_and_record(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -136,7 +136,7 @@ class TestMemoSendDeclaresTouches:
         receiver_inbox = receiver_repo / "cross-repo" / "inbox"
         assert not any(receiver_inbox in p.parents for p in touched)
 
-    def test_dry_run_declares_nothing(self, tmp_path, monkeypatch):
+    def test_dry_run_declares_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -167,7 +167,7 @@ def _write_memo(root: Path, name: str, status: str) -> Path:
 
 
 class TestMemoReconcileOutboxDeclaresTouches:
-    def test_no_op_run_declares_nothing(self, worktree):
+    def test_no_op_run_declares_nothing(self, worktree) -> None:
         _write_memo(worktree, "live.md", "draft")
 
         result = _memo_reconcile_outbox({"dry_run": False}, repo_root=worktree)
@@ -175,7 +175,7 @@ class TestMemoReconcileOutboxDeclaresTouches:
         assert result["exit_code"] == 0, result
         assert "_scope_touch_paths" not in result
 
-    def test_dry_run_declares_nothing(self, worktree):
+    def test_dry_run_declares_nothing(self, worktree) -> None:
         _write_memo(worktree, "delivered.md", "sent")
 
         result = _memo_reconcile_outbox({"dry_run": True}, repo_root=worktree)

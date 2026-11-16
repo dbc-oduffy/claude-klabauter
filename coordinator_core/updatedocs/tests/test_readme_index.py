@@ -14,13 +14,13 @@ def _write(path: Path, text: str) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def test_raises_when_docs_dir_absent(tmp_path):
+def test_raises_when_docs_dir_absent(tmp_path: Path) -> None:
     with pytest.raises(UpdatedocsTargetMissing) as excinfo:
         compute_readme_index_drift(tmp_path)
     assert excinfo.value.missing_path == tmp_path / "docs"
 
 
-def test_raises_when_readme_absent(tmp_path):
+def test_raises_when_readme_absent(tmp_path: Path) -> None:
     (tmp_path / "docs").mkdir()
     with pytest.raises(UpdatedocsTargetMissing) as excinfo:
         compute_readme_index_drift(tmp_path)
@@ -62,7 +62,7 @@ def _make_fixture(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_missing_and_dead_computed_per_section(tmp_path):
+def test_missing_and_dead_computed_per_section(tmp_path: Path) -> None:
     root = _make_fixture(tmp_path)
     drift = compute_readme_index_drift(root)
     by_section = {s.section: s for s in drift.sections}
@@ -99,14 +99,14 @@ _GOOD_PLANS = (
 )
 
 
-def test_older_unlinked_plans_raise_no_drift(tmp_path):
+def test_older_unlinked_plans_raise_no_drift(tmp_path: Path) -> None:
     section = _plans_section(_plans_fixture(tmp_path, _GOOD_PLANS))
     assert section.on_disk == 8
     assert section.missing == []
     assert section.dead == []
 
 
-def test_plans_wrong_count_is_drift(tmp_path):
+def test_plans_wrong_count_is_drift(tmp_path: Path) -> None:
     section = _plans_section(
         _plans_fixture(tmp_path, _GOOD_PLANS.replace("8 plan", "7 plan"))
     )
@@ -121,31 +121,31 @@ _TABLE_PLANS = (
 )
 
 
-def test_plans_count_stated_in_a_table_row_is_read(tmp_path):
+def test_plans_count_stated_in_a_table_row_is_read(tmp_path: Path) -> None:
     section = _plans_section(_plans_fixture(tmp_path, _TABLE_PLANS.format(count=8)))
     assert section.missing == []
     assert section.dead == []
 
 
-def test_plans_wrong_count_in_a_table_row_is_drift(tmp_path):
+def test_plans_wrong_count_in_a_table_row_is_drift(tmp_path: Path) -> None:
     section = _plans_section(_plans_fixture(tmp_path, _TABLE_PLANS.format(count="1,000")))
     assert section.dead == ["stated count 1,000 != 8 on disk"]
 
 
-def test_plans_table_without_a_plans_count_row_is_still_missing_count(tmp_path):
+def test_plans_table_without_a_plans_count_row_is_still_missing_count(tmp_path: Path) -> None:
     body = _TABLE_PLANS.format(count=8).replace("| Plans |", "| Research |")
     section = _plans_section(_plans_fixture(tmp_path, body))
     assert section.missing == ["stated count"]
 
 
-def test_plans_missing_pointer_is_drift(tmp_path):
+def test_plans_missing_pointer_is_drift(tmp_path: Path) -> None:
     section = _plans_section(
         _plans_fixture(tmp_path, _GOOD_PLANS.replace("[`docs/plans/`](plans/)", "docs/plans/"))
     )
     assert section.missing == ["pointer link to plans/"]
 
 
-def test_plans_stale_recent_links_are_drift(tmp_path):
+def test_plans_stale_recent_links_are_drift(tmp_path: Path) -> None:
     stale = (
         "→ [`docs/plans/`](plans/) — 8 plan docs on file. Most recent:\n\n"
         "- [p](plans/2026-01-01-p1.md)\n- [g](plans/gone.md)\n"
@@ -155,7 +155,7 @@ def test_plans_stale_recent_links_are_drift(tmp_path):
     assert section.dead == ["gone.md"]
 
 
-def test_undated_plan_files_are_never_recent(tmp_path):
+def test_undated_plan_files_are_never_recent(tmp_path: Path) -> None:
     root = _plans_fixture(tmp_path, _GOOD_PLANS)
     _write(root / "docs" / "plans" / "config-slash-x.md", "# X\n")
     _write(root / "docs" / "plans" / "README.md", "# R\n")
@@ -164,7 +164,7 @@ def test_undated_plan_files_are_never_recent(tmp_path):
     assert section.dead == ["stated count 8 != 10 on disk"]
 
 
-def test_other_corpora_still_require_every_doc_linked(tmp_path):
+def test_other_corpora_still_require_every_doc_linked(tmp_path: Path) -> None:
     root = _plans_fixture(tmp_path, _GOOD_PLANS)
     _write(root / "docs" / "problems" / "r1.md", "# R1\n")
     readme = root / "docs" / "README.md"
@@ -174,7 +174,7 @@ def test_other_corpora_still_require_every_doc_linked(tmp_path):
     assert listed.missing == ["r1.md"]
 
 
-def test_undeclared_sections_report_no_drift(tmp_path):
+def test_undeclared_sections_report_no_drift(tmp_path: Path) -> None:
     root = _plans_fixture(tmp_path, _GOOD_PLANS)
     _write(root / "docs" / "decisions" / "d1.md", "# D1\n")
     _write(root / "docs" / "problems" / "p1.md", "# P1\n")
@@ -185,7 +185,7 @@ def test_undeclared_sections_report_no_drift(tmp_path):
         assert section.dead == []
 
 
-def test_pointer_style_section_reports_no_drift(tmp_path):
+def test_pointer_style_section_reports_no_drift(tmp_path: Path) -> None:
     root = _plans_fixture(tmp_path, _GOOD_PLANS)
     _write(root / "docs" / "decisions" / "d1.md", "# D1\n")
     _write(root / "docs" / "decisions" / "d2.md", "# D2\n")
@@ -201,7 +201,7 @@ def test_pointer_style_section_reports_no_drift(tmp_path):
     assert decisions.dead == []
 
 
-def test_declared_section_without_pointer_or_links_still_drifts(tmp_path):
+def test_declared_section_without_pointer_or_links_still_drifts(tmp_path: Path) -> None:
     root = _plans_fixture(tmp_path, _GOOD_PLANS)
     _write(root / "docs" / "decisions" / "d1.md", "# D1\n")
     readme = root / "docs" / "README.md"
@@ -213,14 +213,14 @@ def test_declared_section_without_pointer_or_links_still_drifts(tmp_path):
     assert decisions.missing == ["d1.md"]
 
 
-def test_repo_root_readme_link_is_not_counted_as_docs_target(tmp_path):
+def test_repo_root_readme_link_is_not_counted_as_docs_target(tmp_path: Path) -> None:
     root = _make_fixture(tmp_path)
     drift = compute_readme_index_drift(root)
     for section in drift.sections:
         assert "README.md" not in section.dead
 
 
-def test_all_configured_sections_present(tmp_path):
+def test_all_configured_sections_present(tmp_path: Path) -> None:
     root = _make_fixture(tmp_path)
     drift = compute_readme_index_drift(root)
     names = {s.section for s in drift.sections}
@@ -234,7 +234,7 @@ def test_all_configured_sections_present(tmp_path):
     }
 
 
-def test_reference_documentation_uses_top_level_docs_only(tmp_path):
+def test_reference_documentation_uses_top_level_docs_only(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     _write(docs / "exec-summary.md", "# Exec Summary\n")
     _write(docs / "wiki" / "not-top-level.md", "# Not Top Level\n")
@@ -261,32 +261,32 @@ def test_reference_documentation_uses_top_level_docs_only(tmp_path):
 from coordinator_core.updatedocs.readme_index import _extract_title  # noqa: E402
 
 
-def test_title_extraction_frontmatter(tmp_path):
+def test_title_extraction_frontmatter(tmp_path: Path) -> None:
     path = tmp_path / "with-frontmatter.md"
     _write(path, '---\ntitle: "Custom Title"\n---\n\n# A Heading\n')
     assert _extract_title(path) == "Custom Title"
 
 
-def test_title_extraction_first_heading(tmp_path):
+def test_title_extraction_first_heading(tmp_path: Path) -> None:
     path = tmp_path / "with-heading.md"
     _write(path, "Some intro text.\n\n# The Real Heading\n\nBody.\n")
     assert _extract_title(path) == "The Real Heading"
 
 
-def test_title_extraction_falls_through_to_stem_when_neither_present(tmp_path):
+def test_title_extraction_falls_through_to_stem_when_neither_present(tmp_path: Path) -> None:
     path = tmp_path / "bare-file-no-title.md"
     _write(path, "Just some prose with no frontmatter and no heading at all.\n")
     title = _extract_title(path)
     assert title == "bare-file-no-title"
 
 
-def test_title_extraction_reads_a_bounded_head_not_the_whole_file(tmp_path):
+def test_title_extraction_reads_a_bounded_head_not_the_whole_file(tmp_path: Path) -> None:
     path = tmp_path / "huge.md"
     _write(path, "x" * 70_000 + "\n# Late Heading\n")
     assert _extract_title(path) == "huge"
 
 
-def test_table_form_section_counts_every_linked_row_as_indexed(tmp_path):
+def test_table_form_section_counts_every_linked_row_as_indexed(tmp_path: Path) -> None:
     root = tmp_path
     docs = root / "docs"
     rows = "".join(f"| [`r{i}.md`](problems/r{i}.md) | topic {i} |\n" for i in range(3))
@@ -299,7 +299,7 @@ def test_table_form_section_counts_every_linked_row_as_indexed(tmp_path):
     assert listed.dead == []
 
 
-def test_plan_sidecars_are_not_plans_on_disk_or_in_the_index(tmp_path):
+def test_plan_sidecars_are_not_plans_on_disk_or_in_the_index(tmp_path: Path) -> None:
     root = _plans_fixture(tmp_path, _GOOD_PLANS)
     _write(root / "docs" / "plans" / "2026-01-08-p8.premise-check.md", "no frontmatter\n")
     _write(root / "docs" / "plans" / "2026-01-09-p9.prior-art-check.md", "no frontmatter\n")
@@ -309,7 +309,7 @@ def test_plan_sidecars_are_not_plans_on_disk_or_in_the_index(tmp_path):
     assert section.dead == []
 
 
-def test_a_sidecar_the_readme_links_is_not_dead_and_a_real_doc_still_is(tmp_path):
+def test_a_sidecar_the_readme_links_is_not_dead_and_a_real_doc_still_is(tmp_path: Path) -> None:
     root = _plans_fixture(
         tmp_path,
         _GOOD_PLANS + "\n- [s](plans/2026-01-08-p8.premise-check.md)\n- [g](plans/gone.md)\n",
@@ -318,7 +318,7 @@ def test_a_sidecar_the_readme_links_is_not_dead_and_a_real_doc_still_is(tmp_path
     assert _plans_section(root).dead == ["gone.md"]
 
 
-def test_research_is_a_pointer_section_checked_by_count_and_recent(tmp_path):
+def test_research_is_a_pointer_section_checked_by_count_and_recent(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     for i in range(7):
         _write(docs / "research" / f"2026-11-0{i + 1}-r{i}.md", f"# R{i}\n")

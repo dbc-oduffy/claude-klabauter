@@ -139,7 +139,7 @@ from coordinator_core.ops.ceremony.push_ceiling import (
 )
 from coordinator_core.ops.fleet._memo_resolver import RegistryReadError, read_registry_repos
 from coordinator_core.ops.push_outstanding import push_outstanding, resolve_push_remote
-from coordinator_core.push_hold import read_compile_hold
+from coordinator_core.push_hold import read_compile_hold, read_hold
 from coordinator_core.session.day_branch_cut_lock import record_is_stale
 from coordinator_core.warm import engine_converge, telemetry
 from coordinator_core.warm.push_sweep_order import (
@@ -460,14 +460,34 @@ def _declined_by_compile_hold(root: Path) -> bool:
         return False
     if note is None:
         return False
+    _log_hold_decline(root, f"compile-hold: {root.name} push declined ({note})")
+    return True
+
+
+def _log_hold_decline(root: Path, text: str) -> None:
     try:
-        line = f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} compile-hold: {root.name} push declined ({note})\n"
+        line = f"{time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime())} {text}\n"
         log_path = resolve_git_common_dir(root) / COMPILE_HOLD_LOG
         if not log_path.exists() or log_path.stat().st_size < COMPILE_HOLD_LOG_MAX_BYTES:
-            with open(log_path, "a", encoding="utf-8") as fh:
+            with open(log_path, "a", encoding="utf-8", newline="\n") as fh:
                 fh.write(line)
     except OSError:
         pass
+
+
+def _declined_by_branch_hold(root: Path, branch: Optional[str]) -> bool:
+    """True when a repo or `branch` push hold governs: the sweep pushes nothing for it (the
+    allow-sha is a manual-push release only) and logs `push-hold: ...` to the same log as the compile hold (`COMPILE_HOLD_LOG`).
+    Zero spawns; never raises."""
+    if not branch:
+        return False
+    try:
+        note = read_hold(root, branch)
+    except Exception:  # noqa: BLE001 -- an unreadable hold must not stop the sweep
+        return False
+    if note is None:
+        return False
+    _log_hold_decline(root, f"push-hold: {root.name} {branch} push declined ({note})")
     return True
 
 
@@ -494,6 +514,8 @@ def _sweep_one(repo_root: Union[str, Path]) -> str:
     if _declined_by_compile_hold(root):
         return "skipped"
     branch = head_branch(root)
+    if _declined_by_branch_hold(root, branch):
+        return "skipped"
     sha = head_sha(root) if branch is not None else None
     if branch is not None and sha is not None and no_upstream_and_no_new_commits(root, branch, sha):
         return "skipped"
@@ -624,6 +646,8 @@ def _push_foreign(pair: tuple, *, ceiling_secs: float) -> None:
     if seen == local:
         _forget_foreign(pair)
         return
+    if _declined_by_branch_hold(root, branch):
+        return
     if not _acquire_sweep_lock(root):
         return
     try:
@@ -696,6 +720,8 @@ def _push_pending_record(sender: Path, record: dict, *, ceiling_secs: float) -> 
     allowed, _reason = branch_gate(branch)
     if not allowed:
         _memo_push_pending.bump_attempt(record, f"branch {branch!r} is not pushable")
+        return
+    if _declined_by_branch_hold(root, branch):
         return
     if not _acquire_sweep_lock(root):
         return

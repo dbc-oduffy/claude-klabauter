@@ -4,6 +4,7 @@ import pytest
 
 from coordinator_core.bash_guards.block_whole_filesystem_scan import check as _check
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def check(*args, **kwargs):
@@ -60,30 +61,30 @@ def _reason(out):
     return out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def _run(cmd, tool="Bash"):
+def _run(cmd, tool: str = "Bash"):
     return check({"tool_name": tool, "tool_input": {"command": cmd}})
 
 
 @pytest.mark.parametrize("cmd", DENY)
-def test_denies_root_scan(cmd):
+def test_denies_root_scan(cmd) -> None:
     out = _run(cmd)
     assert out and out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
 @pytest.mark.parametrize("cmd", ALLOW)
-def test_allows_scoped(cmd):
+def test_allows_scoped(cmd) -> None:
     assert _run(cmd) is None
 
 
-def test_root_scan_deny_recommends_example_retrieval_repo():
+def test_root_scan_deny_recommends_example_retrieval_repo() -> None:
     assert "project_semantic_search" in _reason(_run("grep -r foo /"))
 
 
-def test_powershell_tool_is_matched():
+def test_powershell_tool_is_matched() -> None:
     assert _run("find / -name x", tool="PowerShell")
 
 
-def _repo(tmp_path, heavy="scratch", git_file=False):
+def _repo(tmp_path, heavy: str | None = "scratch", git_file: bool = False):
     root = tmp_path / "repo"
     root.mkdir()
     if git_file:
@@ -101,7 +102,7 @@ def _run_cwd(cmd, cwd):
 
 
 @pytest.mark.parametrize("heavy", ["scratch", "data", "toolchains", "node_modules"])
-def test_repo_root_recursive_search_is_not_handled_here(tmp_path, heavy):
+def test_repo_root_recursive_search_is_not_handled_here(tmp_path: Path, heavy) -> None:
     # Handled by rewrite_repo_root_search (git grep rewrite or advisory); this guard allows it.
     root = _repo(tmp_path, heavy)
     for cmd in (
@@ -116,12 +117,12 @@ def test_repo_root_recursive_search_is_not_handled_here(tmp_path, heavy):
         assert _run_cwd(cmd, root) is None, cmd
 
 
-def test_scoped_grep_passes_untouched(tmp_path):
+def test_scoped_grep_passes_untouched(tmp_path: Path) -> None:
     root = _repo(tmp_path, heavy=None)
     assert _check({"tool_name": "Bash", "tool_input": {"command": "grep -rn x coordinator/hooks"}, "cwd": str(root)}) is None
 
 
-def test_whole_drive_scan_still_denies_from_a_repo_root(tmp_path):
+def test_whole_drive_scan_still_denies_from_a_repo_root(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     assert _run_cwd("grep -rn foo ~", root)["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -160,7 +161,7 @@ HUGE_ALLOW = [
 
 
 @pytest.mark.parametrize("cmd", HUGE_DENY)
-def test_denies_recursive_scan_of_engine_or_scratch_root(cmd):
+def test_denies_recursive_scan_of_engine_or_scratch_root(cmd) -> None:
     out = _run(cmd)
     assert out and out["hookSpecificOutput"]["permissionDecision"] == "deny", cmd
     reason = _reason(out)
@@ -168,7 +169,7 @@ def test_denies_recursive_scan_of_engine_or_scratch_root(cmd):
 
 
 @pytest.mark.parametrize("cmd", HUGE_ALLOW)
-def test_allows_scoped_run_dir_and_non_recursive(cmd):
+def test_allows_scoped_run_dir_and_non_recursive(cmd) -> None:
     assert _run(cmd) is None, cmd
 
 
@@ -179,7 +180,7 @@ def _engine_file(tmp_path):
     return src
 
 
-def test_engine_single_regular_file_passes_by_absolute_and_cd_relative_path(tmp_path):
+def test_engine_single_regular_file_passes_by_absolute_and_cd_relative_path(tmp_path: Path) -> None:
     src = _engine_file(tmp_path)
     f = src / "Pal" / "Public" / "Inst.h"
     for cmd in (
@@ -191,7 +192,7 @@ def test_engine_single_regular_file_passes_by_absolute_and_cd_relative_path(tmp_
         assert _run(cmd) is None, cmd
 
 
-def test_engine_directory_glob_variable_and_missing_file_still_deny(tmp_path):
+def test_engine_directory_glob_variable_and_missing_file_still_deny(tmp_path: Path) -> None:
     src = _engine_file(tmp_path)
     for cmd in (
         f"cd {src.as_posix()} && rg -n foo Pal",
@@ -206,7 +207,7 @@ def test_engine_directory_glob_variable_and_missing_file_still_deny(tmp_path):
         assert out and out["hookSpecificOutput"]["permissionDecision"] == "deny", cmd
 
 
-def test_scratch_cwd_with_bare_recursive_target_denies(tmp_path):
+def test_scratch_cwd_with_bare_recursive_target_denies(tmp_path: Path) -> None:
     d = tmp_path / "scratch"
     d.mkdir()
     assert _run_cwd("grep -rn foo .", d)
@@ -222,7 +223,7 @@ def test_scratch_cwd_with_bare_recursive_target_denies(tmp_path):
         "sh -c 'find / -maxdepth 1 -name x'",
     ],
 )
-def test_runaway_find_bounded_root_warns(cmd):
+def test_runaway_find_bounded_root_warns(cmd) -> None:
     from coordinator_core.bash_guards import _dc_rewrites as dc
 
     rec = dc.check_runaway_find(cmd, "s")
@@ -245,14 +246,14 @@ def test_runaway_find_bounded_root_warns(cmd):
         "find C:" + BS + ".." + BS + ".. -name x",
     ],
 )
-def test_runaway_find_unbounded_root_still_denies(cmd):
+def test_runaway_find_unbounded_root_still_denies(cmd) -> None:
     from coordinator_core.bash_guards import _dc_rewrites as dc
 
     rec = dc.check_runaway_find(cmd, "s")
     assert rec is not None and rec.verdict_kind == "deny"
 
 
-def test_deny_is_a_floor_and_survives_a_warn_level():
+def test_deny_is_a_floor_and_survives_a_warn_level() -> None:
     from coordinator_core import machine_profile
 
     assert "block-whole-filesystem-scan" in machine_profile.FLOOR_GUARDS

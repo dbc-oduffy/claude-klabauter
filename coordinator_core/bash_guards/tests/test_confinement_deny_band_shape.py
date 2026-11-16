@@ -94,6 +94,7 @@ from coordinator_core.bash_guards.tests.guard_message_corpus import (
     _CMD_OVERRIDE_KEY,
     _CWD_OVERRIDE_KEY,
     CONFINEMENT_ROWS,
+    _held_push_setup,
     _post_executor_setup,
     CorpusRow,
 )
@@ -196,6 +197,15 @@ _EXTRA_FIRING_ROWS: List[CorpusRow] = [
         True,
         GuardBand.CONFINEMENT_DENY,
         False,
+    ),
+    CorpusRow(
+        "block-held-push",
+        "block-held-push-fire",
+        "git push origin HEAD",
+        True,
+        GuardBand.CONFINEMENT_DENY,
+        False,
+        setup=_held_push_setup,
     ),
     CorpusRow(
         "block-editor-kill-by-name",

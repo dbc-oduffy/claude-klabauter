@@ -25,6 +25,7 @@ import json
 import pytest
 
 from coordinator_core.ops import peer_notice_check, peer_notice_send
+from pathlib import Path
 
 
 def _repo_root(tmp_path):
@@ -32,7 +33,7 @@ def _repo_root(tmp_path):
     return tmp_path
 
 
-def test_send_writes_notice_file(tmp_path, monkeypatch):
+def test_send_writes_notice_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo_root(tmp_path)
     monkeypatch.setattr(
         "coordinator_core.ops.peer_notice_send.main_worktree_root", lambda p: root
@@ -72,7 +73,7 @@ def test_send_writes_notice_file(tmp_path, monkeypatch):
         {"target_session_id": "peer-abc", "artifact_path": "x.py"},
     ],
 )
-def test_send_requires_fields(tmp_path, monkeypatch, params):
+def test_send_requires_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, params) -> None:
     root = _repo_root(tmp_path)
     monkeypatch.setattr(
         "coordinator_core.ops.peer_notice_send.main_worktree_root", lambda p: root
@@ -81,7 +82,7 @@ def test_send_requires_fields(tmp_path, monkeypatch, params):
         peer_notice_send._peer_notice_send(params, repo_root=root)
 
 
-def test_check_lists_unread_only(tmp_path, monkeypatch):
+def test_check_lists_unread_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo_root(tmp_path)
     monkeypatch.setattr(
         "coordinator_core.ops.peer_notice_send.main_worktree_root", lambda p: root
@@ -121,7 +122,7 @@ def test_check_lists_unread_only(tmp_path, monkeypatch):
         assert "_path" not in n
 
 
-def test_check_empty_for_unknown_session(tmp_path, monkeypatch):
+def test_check_empty_for_unknown_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo_root(tmp_path)
     monkeypatch.setattr(
         "coordinator_core.ops.peer_notice_check.main_worktree_root", lambda p: root
@@ -132,7 +133,7 @@ def test_check_empty_for_unknown_session(tmp_path, monkeypatch):
     assert result == {"notices": []}
 
 
-def test_delivered_notice_excluded_from_unread(tmp_path, monkeypatch):
+def test_delivered_notice_excluded_from_unread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo_root(tmp_path)
     monkeypatch.setattr(
         "coordinator_core.ops.peer_notice_send.main_worktree_root", lambda p: root
@@ -165,7 +166,7 @@ def test_delivered_notice_excluded_from_unread(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("bad_id", ["../escape", "a/b", "a\\b", "..", "."])
-def test_send_rejects_unsafe_target_session_id(tmp_path, monkeypatch, bad_id):
+def test_send_rejects_unsafe_target_session_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_id) -> None:
     root = _repo_root(tmp_path)
     monkeypatch.setattr(
         "coordinator_core.ops.peer_notice_send.main_worktree_root", lambda p: root
@@ -182,7 +183,7 @@ def test_send_rejects_unsafe_target_session_id(tmp_path, monkeypatch, bad_id):
 
 
 @pytest.mark.parametrize("bad_id", ["../escape", "a/b", "a\\b", "..", "."])
-def test_check_rejects_unsafe_session_id(tmp_path, monkeypatch, bad_id):
+def test_check_rejects_unsafe_session_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_id) -> None:
     root = _repo_root(tmp_path)
     monkeypatch.setattr(
         "coordinator_core.ops.peer_notice_check.main_worktree_root", lambda p: root
@@ -191,7 +192,7 @@ def test_check_rejects_unsafe_session_id(tmp_path, monkeypatch, bad_id):
         peer_notice_check._peer_notice_check({"session_id": bad_id}, repo_root=root)
 
 
-def test_list_unread_notices_orders_by_created_at_not_filename(tmp_path, monkeypatch):
+def test_list_unread_notices_orders_by_created_at_not_filename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo_root(tmp_path)
     monkeypatch.setattr(
         "coordinator_core.ops.peer_notice_send.main_worktree_root", lambda p: root
@@ -217,7 +218,7 @@ def test_list_unread_notices_orders_by_created_at_not_filename(tmp_path, monkeyp
     assert [n["message"] for n in notices] == ["oldest", "newest"]
 
 
-def test_send_truncates_oversized_message(tmp_path, monkeypatch):
+def test_send_truncates_oversized_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo_root(tmp_path)
     monkeypatch.setattr(
         "coordinator_core.ops.peer_notice_send.main_worktree_root", lambda p: root

@@ -7,6 +7,7 @@ import json
 from coordinator_core.ops.dispatch_emit import emission_receipt as er
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_MANIFEST_MARKER
 from coordinator_core.ops.dispatch_emit.commit_request import MARKER_PREFIX
+from pathlib import Path
 
 
 def _script(tmp_path, body):
@@ -15,7 +16,7 @@ def _script(tmp_path, body):
     return p
 
 
-def test_writer_records_both_marker_kinds_in_order(tmp_path):
+def test_writer_records_both_marker_kinds_in_order(tmp_path: Path) -> None:
     a = MARKER_PREFIX + '{"x":1}'
     b = ASK_MANIFEST_MARKER + '{"y":2}'
     s = _script(tmp_path, f"// head\n{a}\ncode();\n{b}\n")
@@ -25,7 +26,7 @@ def test_writer_records_both_marker_kinds_in_order(tmp_path):
     assert er.receipt_landing_text(s) == a + "\n" + b
 
 
-def test_markerless_script_gets_empty_list_and_no_text(tmp_path):
+def test_markerless_script_gets_empty_list_and_no_text(tmp_path: Path) -> None:
     s = _script(tmp_path, "code();\n")
     er._write_emission_receipt(s, None, {})
     data = json.loads(er.emission_receipt_path(s).read_text(encoding="utf-8"))
@@ -33,7 +34,7 @@ def test_markerless_script_gets_empty_list_and_no_text(tmp_path):
     assert er.receipt_landing_text(s) is None
 
 
-def test_reader_none_when_receipt_absent_or_unreadable(tmp_path):
+def test_reader_none_when_receipt_absent_or_unreadable(tmp_path: Path) -> None:
     s = _script(tmp_path, "x\n")
     assert er.receipt_landing_text(s) is None
     er.emission_receipt_path(s).write_text("{not json", encoding="utf-8")
@@ -41,7 +42,7 @@ def test_reader_none_when_receipt_absent_or_unreadable(tmp_path):
     assert er.receipt_unlanded(s) is False
 
 
-def test_extras_cannot_shadow_markers_or_landed(tmp_path):
+def test_extras_cannot_shadow_markers_or_landed(tmp_path: Path) -> None:
     a = MARKER_PREFIX + "{}"
     s = _script(tmp_path, a + "\n")
     er._write_emission_receipt(
@@ -52,7 +53,7 @@ def test_extras_cannot_shadow_markers_or_landed(tmp_path):
     assert "landed" not in data
 
 
-def test_unlanded_then_stamp_landed_keeps_other_keys(tmp_path):
+def test_unlanded_then_stamp_landed_keeps_other_keys(tmp_path: Path) -> None:
     s = _script(tmp_path, MARKER_PREFIX + "{}\n")
     er._write_emission_receipt(s, None, {})
     assert er.receipt_unlanded(s) is True
@@ -63,13 +64,13 @@ def test_unlanded_then_stamp_landed_keeps_other_keys(tmp_path):
     assert er.receipt_unlanded(s) is False
 
 
-def test_stamp_landed_without_receipt_is_a_noop(tmp_path):
+def test_stamp_landed_without_receipt_is_a_noop(tmp_path: Path) -> None:
     s = _script(tmp_path, "x\n")
     er.stamp_landed(s, "abc")
     assert not er.emission_receipt_path(s).exists()
 
 
-def test_reemit_drops_prior_landed_stamp(tmp_path):
+def test_reemit_drops_prior_landed_stamp(tmp_path: Path) -> None:
     s = _script(tmp_path, MARKER_PREFIX + "{}\n")
     er._write_emission_receipt(s, None, {})
     er.stamp_landed(s, "abc")

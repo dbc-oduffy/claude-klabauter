@@ -17,17 +17,18 @@ import pytest
 
 from coordinator_core.warm.door import build as door_build
 from coordinator_core.warm.door import build_posix as door_build_posix
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def clean_builder_identity(monkeypatch):
+def clean_builder_identity(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
 
     for key in SESSION_ENV_PRECEDENCE:
         monkeypatch.delenv(key, raising=False)
 
 
-def test_codex_builder_and_warm_caller_provenance(monkeypatch):
+def test_codex_builder_and_warm_caller_provenance(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm.entry_seam import per_request_state
 
     monkeypatch.setenv('CODEX_THREAD_ID', 'codex-builder')
@@ -39,7 +40,7 @@ def test_codex_builder_and_warm_caller_provenance(monkeypatch):
         assert door_build.build_attribution()['builder'] is None
 
 
-def test_write_provenance_records_image_sha256_matching_the_output_exe(tmp_path):
+def test_write_provenance_records_image_sha256_matching_the_output_exe(tmp_path: Path) -> None:
     output_exe = tmp_path / "door.exe"
     output_exe.write_bytes(b"stand-in compiled binary bytes")
 
@@ -56,7 +57,7 @@ def test_write_provenance_records_image_sha256_matching_the_output_exe(tmp_path)
     assert record["door_c_sha256"] == door_build.source_sha256(door_build._SOURCE)
 
 
-def test_write_provenance_posix_records_image_sha256_matching_the_output(tmp_path):
+def test_write_provenance_posix_records_image_sha256_matching_the_output(tmp_path: Path) -> None:
     output = tmp_path / "door"
     output.write_bytes(b"stand-in posix compiled binary bytes")
 
@@ -67,7 +68,7 @@ def test_write_provenance_posix_records_image_sha256_matching_the_output(tmp_pat
 
 
 
-def test_provenance_names_the_builder_session_and_command(tmp_path, monkeypatch):
+def test_provenance_names_the_builder_session_and_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "sess-123")
     output_exe = tmp_path / "door.exe"
     output_exe.write_bytes(b"x")
@@ -83,7 +84,7 @@ def test_provenance_names_the_builder_session_and_command(tmp_path, monkeypatch)
     assert posix["builder"] == "sess-123"
 
 
-def test_provenance_records_an_unattributed_build_as_none(tmp_path, monkeypatch):
+def test_provenance_records_an_unattributed_build_as_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
     output_exe = tmp_path / "door.exe"
     output_exe.write_bytes(b"x")
@@ -92,7 +93,7 @@ def test_provenance_records_an_unattributed_build_as_none(tmp_path, monkeypatch)
     )
     assert record["builder"] is None
 
-def test_source_sha256_is_line_ending_blind(tmp_path):
+def test_source_sha256_is_line_ending_blind(tmp_path: Path) -> None:
     lf = tmp_path / "lf.c"
     crlf = tmp_path / "crlf.c"
     lf.write_bytes(b"int a;\nint b;\n")
@@ -101,7 +102,7 @@ def test_source_sha256_is_line_ending_blind(tmp_path):
     assert door_build.source_sha256(lf) == hashlib.sha256(b"int a;\nint b;\n").hexdigest()
 
 
-def test_verifier_accepts_crlf_copy_of_recorded_source(tmp_path):
+def test_verifier_accepts_crlf_copy_of_recorded_source(tmp_path: Path) -> None:
     from coordinator_core.install import door_install
 
     src = tmp_path / "door.c"
@@ -110,7 +111,7 @@ def test_verifier_accepts_crlf_copy_of_recorded_source(tmp_path):
     assert door_install._source_matches_recorded(src, recorded)
 
 
-def test_no_door_c_or_h_source_names_the_authoring_engine():
+def test_no_door_c_or_h_source_names_the_authoring_engine() -> None:
     door_dir = door_build._SOURCE.parent
     offenders = [
         p.name

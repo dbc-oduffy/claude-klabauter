@@ -669,3 +669,50 @@ def test_sibling_declaring_depends_on_blocked_row_still_waits():
     after = _after(rows)
     assert "B" in after["S1"]
     assert "S1" not in after["B"]
+
+
+def test_writes_overlap_equals_the_all_pairs_paths_overlap_relation():
+    paths = [".", "a", "a/b", "a/b/c.py", "A/B", "a/bc", "d/e.py", "/", "/abs", "/abs/x", "a/./b/../b"]
+    for x in paths:
+        for y in paths:
+            a, b = _row("A", [x]), _row("B", [y])
+            assert wave_map._writes_overlap(a, b) is wave_map._paths_overlap(x, y), (x, y)
+
+
+_INDEX_PATHS = [".", "a", "a/b", "a/b/c.py", "A/B", "a/bc", "d/e.py", "/", "/abs", "/abs/x"]
+
+
+def _index_rows():
+    rows = [_row(f"R{i}", [p]) for i, p in enumerate(_INDEX_PATHS)]
+    rows.append(_row("U", wave_map.UNDECLARED))
+    rows.append(_row("E", []))
+    rows.append(EmitterRow(id="UP", title="t", surface="test", writes=["x.py"], writes_under=["a/b"], reads=[], depends_on=[]))
+    return rows
+
+
+def test_wave_writes_collides_exactly_when_some_placed_row_overlaps():
+    rows = _index_rows()
+    for probe in rows:
+        placed, wave = [], wave_map._WaveWrites()
+        assert wave.collides(probe) is False
+        for other in rows:
+            placed.append(other)
+            wave.add(other)
+            assert wave.collides(probe) is any(wave_map._writes_overlap(probe, p) for p in placed), (probe.id, other.id)
+
+
+def test_earlier_writes_returns_exactly_the_ids_the_all_pairs_scan_finds():
+    rows = _index_rows()
+    waves = [[r] for r in rows]
+    earlier = wave_map._EarlierWrites(waves)
+    for own, probe in enumerate(rows):
+        want = {o.id for w in waves[:own] for o in w if wave_map._writes_overlap(probe, o)}
+        assert earlier.overlapping_ids(probe, own) == want, probe.id
+
+
+def test_a_reader_of_a_path_under_a_writers_prefix_or_above_it_is_ordered_after_the_writer():
+    for read in ("out/x.py", "out", "OUT/deep/y.py", "."):
+        rows = [_row("R", ["r.py"], reads=[read]), EmitterRow(id="W", title="t", surface="test", writes=["w.py"], writes_under=["out"], reads=[], depends_on=[])]
+        assert "W" in wave_map._predecessors(rows)["R"], read
+    rows = [_row("R", ["r.py"], reads=["other/x.py"]), EmitterRow(id="W", title="t", surface="test", writes=["w.py"], writes_under=["out"], reads=[], depends_on=[])]
+    assert "W" not in wave_map._predecessors(rows)["R"]

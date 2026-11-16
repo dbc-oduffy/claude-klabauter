@@ -21,6 +21,8 @@ import os
 
 from coordinator_core.authz.classification import OpClass, classify
 from coordinator_core.warm.hook_http import HOOK_PATH, op_for_path
+from pathlib import Path
+import pytest
 
 
 def test_op_registers_and_resolves_through_op_for_path() -> None:
@@ -54,7 +56,7 @@ def test_op_returns_no_advisory_envelope_on_missing_session_id() -> None:
     assert _handler({}) == {}
 
 
-def test_op_archives_the_session_dir_and_returns_no_advisory(tmp_path, monkeypatch) -> None:
+def test_op_archives_the_session_dir_and_returns_no_advisory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Mirrors `_cmd_archive_session`'s own contract: call `archive(sid)` and
     always return the no-op envelope, regardless of `archive()`'s own result.
 
@@ -95,7 +97,7 @@ def test_op_archives_the_session_dir_and_returns_no_advisory(tmp_path, monkeypat
     assert (moved[0] / "marker.txt").read_text(encoding="utf-8") == "hello"
 
 
-def test_op_is_non_fatal_when_archive_raises(monkeypatch) -> None:
+def test_op_is_non_fatal_when_archive_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """Non-fatal by design (module docstring, verbatim from the source CLI's
     own `_cmd_archive_session`): an exception from `archive()` is swallowed,
     never propagated, and the op still returns the no-op envelope."""
@@ -109,14 +111,14 @@ def test_op_is_non_fatal_when_archive_raises(monkeypatch) -> None:
     assert result == {}
 
 
-def test_op_reads_only_from_payload_never_os_environ(monkeypatch) -> None:
+def test_op_reads_only_from_payload_never_os_environ(monkeypatch: pytest.MonkeyPatch) -> None:
     """`session_id`/`cwd` come from params["payload"], never from os.environ or
     this process's own cwd — the payload-in contract this runbook pins."""
     import coordinator_core.hooks.sessionend_archive_session as mod
 
     captured = {}
 
-    def _fake_archive(sid, cwd=None):
+    def _fake_archive(sid, cwd=None) -> bool:
         captured["sid"] = sid
         captured["cwd"] = cwd
         return True

@@ -149,6 +149,43 @@ class TreeEviction:
                     self.paths.remove(rel)
 
 
+def record_touched_blobs(
+    root: Path, record_dir_rel: str, run_written: list, paths: list, dirty: Optional[list] = None,
+) -> list:
+    """Write ``<record_dir>/touched-blobs.json`` (``{path: {base, run}}``) for every path in
+    ``run_written`` and append its repo-relative path to ``paths``. ``base`` is the manifest
+    ``write_baseline`` blob, else the HEAD blob from one ``HeadView`` over the whole set; ``run`` is the
+    worktree bytes' blob (None when deleted). Returns the ``dirty`` paths no run manifest declares
+    (``stranded_sibling.ownerless``). Never raises: an unwritable record names no claim."""
+    try:
+        from coordinator_core.authoring_leaks import HeadView
+        from coordinator_core.ops.dispatch_emit import kept_work, stranded_sibling
+        from coordinator_core.ops.dispatch_emit.halted_record_request import _manifest_baseline
+
+        record_dir = root / record_dir_rel
+        owned = sorted({p for p in run_written if not p.startswith(record_dir_rel + "/")})
+        ownerless = stranded_sibling.ownerless(root, [p for p in (dirty or ()) if not p.startswith(record_dir_rel + "/")])
+        if not record_dir.is_dir() or not owned:
+            return ownerless
+        baseline = _manifest_baseline(record_dir) or {}
+        head = HeadView(root, [p for p in owned if p not in baseline])
+        touched = {}
+        for p in owned:
+            if p in baseline:
+                base = baseline[p]
+            else:
+                entry = head.entry(p)
+                base = entry[1] if entry else None
+            touched[p] = {"base": base, "run": kept_work.fingerprint(root, p)}
+        out = stranded_sibling.write(record_dir, touched)
+        rel = f"{record_dir_rel}/{stranded_sibling.TOUCHED_FILE}"
+        if out is not None and rel not in paths:
+            paths.append(rel)
+        return ownerless
+    except Exception:  # noqa: BLE001 -- the record is advisory; a halt never fails on it
+        return []
+
+
 def plan_tree_eviction(
     root: Path, record_dir_rel: str, run_written: list, changed: set, write_set: list,
     withheld: dict, paths: list, run_id: Optional[str] = None,

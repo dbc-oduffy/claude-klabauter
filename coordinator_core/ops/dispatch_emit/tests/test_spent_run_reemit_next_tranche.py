@@ -65,6 +65,30 @@ def test_inventory_route_row_budget_mints_next_tranche_when_base_is_spent(tmp_pa
     }
 
 
+def test_spent_spine_remint_reuses_the_budget_recorded_on_the_spine(tmp_path):
+    _, spine = _spent_base(tmp_path)
+    assert op_module.recorded_tranche_state(spine)[0] == _ROOMY
+
+    params = op_module._spent_spine_tranche_params({"target_root": str(tmp_path)}, str(spine))
+
+    assert params["row_budget"] == _ROOMY
+
+
+def test_spent_spine_without_a_recorded_budget_remints_unbounded(tmp_path):
+    _, spine = _spent_base(tmp_path)
+    text = spine.read_text(encoding="utf-8")
+    spine.write_text(
+        "".join(
+            line for line in text.splitlines(keepends=True) if not line.startswith("tranche_")
+        ),
+        encoding="utf-8",
+    )
+
+    params = op_module._spent_spine_tranche_params({"target_root": str(tmp_path)}, str(spine))
+
+    assert params["row_budget"] == op_module._UNBOUNDED_ROW_BUDGET
+
+
 def test_plan_route_only_incomplete_mints_next_tranche_when_spine_is_spent(tmp_path):
     _, spine = _spent_base(tmp_path)
 

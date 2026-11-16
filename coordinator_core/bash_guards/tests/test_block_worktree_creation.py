@@ -31,75 +31,75 @@ def _reason(out):
 
 
 class TestNonBashOrEmpty:
-    def test_non_bash_tool_allows(self):
+    def test_non_bash_tool_allows(self) -> None:
         payload = {"tool_name": "Edit", "tool_input": {"file_path": "x"}}
         assert _enveloped(guard.check)(payload) is None
 
-    def test_empty_command_allows(self):
+    def test_empty_command_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("")) is None
 
-    def test_malformed_tool_input_allows(self):
+    def test_malformed_tool_input_allows(self) -> None:
         payload = {"tool_name": "Bash", "tool_input": "not-a-dict"}
         assert _enveloped(guard.check)(payload) is None
 
-    def test_no_worktree_mention_allows(self):
+    def test_no_worktree_mention_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("git status && ls -la")) is None
 
 
 class TestDenyCreationSubcommands:
-    def test_git_worktree_add_denies(self):
+    def test_git_worktree_add_denies(self) -> None:
         out = _enveloped(guard.check)(_payload("git worktree add ../wt-1 feature-branch"))
         reason = _reason(out)
         assert "worktree" in reason.lower()
         assert "banned fleet-wide" in reason
 
-    def test_git_worktree_move_denies(self):
+    def test_git_worktree_move_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("git worktree move ../wt-1 ../wt-2")))
 
-    def test_git_worktree_repair_denies(self):
+    def test_git_worktree_repair_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("git worktree repair")))
 
-    def test_git_worktree_lock_denies(self):
+    def test_git_worktree_lock_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("git worktree lock ../wt-1")))
 
-    def test_git_worktree_unlock_denies(self):
+    def test_git_worktree_unlock_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("git worktree unlock ../wt-1")))
 
-    def test_chained_command_denies(self):
+    def test_chained_command_denies(self) -> None:
         out = _enveloped(guard.check)(_payload("cd /x && git worktree add y"))
         _reason(out)
 
-    def test_unrecognized_subcommand_denies_default(self):
+    def test_unrecognized_subcommand_denies_default(self) -> None:
         out = _enveloped(guard.check)(_payload("git worktree frobnicate"))
         reason = _reason(out)
         assert "default-deny" in reason.lower() or "unrecognized" in reason.lower()
 
 
 class TestAllowCleanupAndReadonly:
-    def test_git_worktree_list_allows(self):
+    def test_git_worktree_list_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("git worktree list")) is None
 
-    def test_git_worktree_remove_allows(self):
+    def test_git_worktree_remove_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("git worktree remove ../wt-1")) is None
 
-    def test_git_worktree_prune_allows(self):
+    def test_git_worktree_prune_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("git worktree prune")) is None
 
-    def test_bare_git_worktree_allows(self):
+    def test_bare_git_worktree_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("git worktree")) is None
 
 
 class TestNoNaiveWorktreeFlagSubstringMatch:
-    def test_git_restore_worktree_flag_allows(self):
+    def test_git_restore_worktree_flag_allows(self) -> None:
         out = _enveloped(guard.check)(_payload("git restore --worktree foo.py"))
         assert out is None
 
-    def test_git_restore_dash_w_short_flag_allows(self):
+    def test_git_restore_dash_w_short_flag_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("git restore -W foo.py")) is None
 
 
 class TestEnvAssignmentPrefix:
-    def test_leading_env_assignment_still_denies(self):
+    def test_leading_env_assignment_still_denies(self) -> None:
         out = _enveloped(guard.check)(_payload("GIT_TRACE=1 git worktree add ../wt-1 x"))
         _reason(out)
 
@@ -118,25 +118,25 @@ class TestMentionIsNotInvocation:
     GIT-TOKEN FIX", same diff).
     """
 
-    def test_echo_git_worktree_add_mention_allows(self):
+    def test_echo_git_worktree_add_mention_allows(self) -> None:
         out = _enveloped(guard.check)(_payload("echo git worktree add x"))
         assert out is None
 
-    def test_printf_git_worktree_add_mention_allows(self):
+    def test_printf_git_worktree_add_mention_allows(self) -> None:
         out = _enveloped(guard.check)(_payload("printf 'git worktree add\\n'"))
         assert out is None
 
-    def test_grep_pattern_mentioning_git_worktree_add_allows(self):
+    def test_grep_pattern_mentioning_git_worktree_add_allows(self) -> None:
         out = _enveloped(guard.check)(_payload('grep -n "git worktree add" file.py'))
         assert out is None
 
-    def test_commit_message_mentioning_git_worktree_add_allows(self):
+    def test_commit_message_mentioning_git_worktree_add_allows(self) -> None:
         out = _enveloped(guard.check)(
             _payload('git commit -m "document git worktree add usage"')
         )
         assert out is None
 
-    def test_a_real_invocation_after_an_echo_mention_still_denies(self):
+    def test_a_real_invocation_after_an_echo_mention_still_denies(self) -> None:
         out = _enveloped(guard.check)(_payload("echo git worktree add x && git worktree add ../wt-1 y"))
         _reason(out)
 
@@ -152,35 +152,35 @@ class TestProseInArgumentOfUntokenizableCommand:
         "worktree creation; it's a false positive\"}]}'"
     )
 
-    def test_fixture_really_is_untokenizable(self):
+    def test_fixture_really_is_untokenizable(self) -> None:
         assert guard._tokenize_full_command(self._LAND_RUN) is None
 
-    def test_land_run_payload_with_worktree_prose_allows(self):
+    def test_land_run_payload_with_worktree_prose_allows(self) -> None:
         assert _enveloped(guard.check)(_payload(self._LAND_RUN)) is None
 
-    def test_untokenizable_real_git_worktree_add_still_denies(self):
+    def test_untokenizable_real_git_worktree_add_still_denies(self) -> None:
         out = _enveloped(guard.check)(_payload("git worktree add ../wt-1 x # it's"))
         _reason(out)
 
-    def test_untokenizable_git_global_option_worktree_add_still_denies(self):
+    def test_untokenizable_git_global_option_worktree_add_still_denies(self) -> None:
         out = _enveloped(guard.check)(_payload("git -C /repo worktree add ../wt-1 x # it's"))
         _reason(out)
 
-    def test_untokenizable_git_exe_worktree_add_still_denies(self):
+    def test_untokenizable_git_exe_worktree_add_still_denies(self) -> None:
         out = _enveloped(guard.check)(_payload("git.exe worktree add ../wt-1 x # it's"))
         _reason(out)
 
-    def test_untokenizable_git_worktree_default_deny_still_denies(self):
+    def test_untokenizable_git_worktree_default_deny_still_denies(self) -> None:
         out = _enveloped(guard.check)(_payload("git worktree frobnicate # it's"))
         _reason(out)
 
 
 class TestPowerShellIdiomDialectNeutral:
 
-    def test_semicolon_chained_powershell_style_denies(self):
+    def test_semicolon_chained_powershell_style_denies(self) -> None:
         _reason(_enveloped(guard.check)(_payload("Get-Location; git worktree add ../wt-1 x")))
 
-    def test_semicolon_chained_powershell_style_allow_case_unaffected(self):
+    def test_semicolon_chained_powershell_style_allow_case_unaffected(self) -> None:
         assert _enveloped(guard.check)(_payload("Get-Location; git worktree list")) is None
 
 
@@ -201,7 +201,7 @@ class TestHeredocBodyIsNotShellText:
     naming-guard-files.yaml` (coordinator-content-repo).
     """
 
-    def test_plain_mention_of_add_and_filename_in_heredoc_body_allows(self):
+    def test_plain_mention_of_add_and_filename_in_heredoc_body_allows(self) -> None:
         cmd = (
             "cat <<EOF > /tmp/review.md\n"
             "Discussion of git worktree add and block_worktree_creation.py "
@@ -209,42 +209,42 @@ class TestHeredocBodyIsNotShellText:
         )
         assert _enveloped(guard.check)(_payload(cmd)) is None
 
-    def test_semicolon_before_git_mention_in_heredoc_body_allows(self):
+    def test_semicolon_before_git_mention_in_heredoc_body_allows(self) -> None:
         cmd = (
             "cat <<EOF > /tmp/review.md\n"
             "See notes; git worktree add x is denied by design.\nEOF\n"
         )
         assert _enveloped(guard.check)(_payload(cmd)) is None
 
-    def test_pipe_before_git_mention_in_heredoc_body_allows(self):
+    def test_pipe_before_git_mention_in_heredoc_body_allows(self) -> None:
         cmd = (
             "cat <<EOF > /tmp/review.md\n"
             "notes | git worktree add x\nEOF\n"
         )
         assert _enveloped(guard.check)(_payload(cmd)) is None
 
-    def test_git_mention_at_start_of_heredoc_body_line_allows(self):
+    def test_git_mention_at_start_of_heredoc_body_line_allows(self) -> None:
         cmd = "cat <<EOF > /tmp/review.md\ngit worktree add x\nEOF\n"
         assert _enveloped(guard.check)(_payload(cmd)) is None
 
-    def test_guard_filename_only_no_verb_allows(self):
+    def test_guard_filename_only_no_verb_allows(self) -> None:
         cmd = (
             "cat <<EOF > /tmp/review.md\n"
             "See block_worktree_creation.py for the guard logic.\nEOF\n"
         )
         assert _enveloped(guard.check)(_payload(cmd)) is None
 
-    def test_quoted_heredoc_delimiter_with_git_mention_allows(self):
+    def test_quoted_heredoc_delimiter_with_git_mention_allows(self) -> None:
         cmd = (
             "cat <<'EOF' > /tmp/review.md\n"
             "\\`git worktree add ../wt-1 x\\` should still deny.\nEOF\n"
         )
         assert _enveloped(guard.check)(_payload(cmd)) is None
 
-    def test_real_invocation_still_denies_when_no_heredoc_present(self):
+    def test_real_invocation_still_denies_when_no_heredoc_present(self) -> None:
         _reason(_enveloped(guard.check)(_payload("git worktree add ../wt-1 x")))
 
-    def test_real_invocation_after_heredoc_write_still_denies(self):
+    def test_real_invocation_after_heredoc_write_still_denies(self) -> None:
         cmd = (
             "cat <<EOF > /tmp/review.md\n"
             "git worktree add is a real command.\nEOF\n"
@@ -252,7 +252,7 @@ class TestHeredocBodyIsNotShellText:
         )
         _reason(_enveloped(guard.check)(_payload(cmd)))
 
-    def test_real_invocation_preceding_unrelated_heredoc_still_denies(self):
+    def test_real_invocation_preceding_unrelated_heredoc_still_denies(self) -> None:
         # Anti-bypass: stripping an UNRELATED heredoc's body must not mask a
         # real invocation living on an earlier line. This guard has no
         # interpreter-indirection probe of its own (that lives in the
@@ -268,7 +268,7 @@ class TestHeredocBodyIsNotShellText:
         cmd = "git worktree add ../wt-1 x\ncat <<EOF\nharmless\nEOF\n"
         _reason(_enveloped(guard.check)(_payload(cmd)))
 
-    def test_interpreter_fed_by_heredoc_via_worktree_guard_is_a_known_open_residual(self):
+    def test_interpreter_fed_by_heredoc_via_worktree_guard_is_a_known_open_residual(self) -> None:
         # KNOWN-OPEN RESIDUAL, not a regression from the `<<\EOF` regex
         # widening (2026-07-29 review finding 1). This guard (unlike its
         # identity-gated sibling in `block_subagent_destructive_action.py`)
@@ -298,11 +298,11 @@ class TestHeredocBodyIsNotShellText:
 
 
 class TestNotIdentityGated:
-    def test_denies_without_any_identity_fields(self):
+    def test_denies_without_any_identity_fields(self) -> None:
         out = _enveloped(guard.check)(_payload("git worktree add ../wt-1 x"))
         _reason(out)
 
-    def test_denies_with_subagent_identity(self):
+    def test_denies_with_subagent_identity(self) -> None:
         out = _enveloped(guard.check)(
             _payload(
                 "git worktree add ../wt-1 x",
@@ -326,22 +326,22 @@ class TestReachableThroughTheDispatchChain:
         )
         return "deny" if (out and '"deny"' in json.dumps(out)) else "allow"
 
-    def test_bare_creation_denied_end_to_end(self):
+    def test_bare_creation_denied_end_to_end(self) -> None:
         assert self._decision("git worktree add ../wt-1 x") == "deny"
 
-    def test_cd_prefixed_creation_denied_end_to_end(self):
+    def test_cd_prefixed_creation_denied_end_to_end(self) -> None:
         assert self._decision("cd /tmp && git worktree add ../y") == "deny"
 
-    def test_semicolon_chained_creation_denied_end_to_end(self):
+    def test_semicolon_chained_creation_denied_end_to_end(self) -> None:
         assert self._decision("cd /tmp; git worktree add ../y") == "deny"
 
-    def test_git_c_form_denied_end_to_end(self):
+    def test_git_c_form_denied_end_to_end(self) -> None:
         assert self._decision("git -C /tmp worktree add ../y") == "deny"
 
-    def test_cleanup_subcommands_still_allowed_end_to_end(self):
+    def test_cleanup_subcommands_still_allowed_end_to_end(self) -> None:
         assert self._decision("git worktree list") == "allow"
         assert self._decision("git worktree remove ../wt-1") == "allow"
         assert self._decision("git worktree prune") == "allow"
 
-    def test_git_restore_worktree_flag_still_allowed_end_to_end(self):
+    def test_git_restore_worktree_flag_still_allowed_end_to_end(self) -> None:
         assert self._decision("git restore --worktree foo.py") == "allow"

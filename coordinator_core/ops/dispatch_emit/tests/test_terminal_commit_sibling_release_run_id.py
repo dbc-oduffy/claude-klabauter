@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit import ask_fanout_contract as c
 from coordinator_core.ops.dispatch_emit import terminal_commit
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_MANIFEST_MARKER, RUN_DIR_ROOT
 from coordinator_core.warp_fire import fire_command
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process]
 
@@ -21,7 +22,7 @@ SUCCESSOR = "ask-20261016T000000-bbbbbb"
 PARENT = "ask-parent-20261016T000000-cccccc"
 
 
-def test_held_successor_fires_and_close_job_keeps_the_script_stem(tmp_path, monkeypatch):
+def test_held_successor_fires_and_close_job_keeps_the_script_stem(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import claims
 
     parent = tmp_path / "work"

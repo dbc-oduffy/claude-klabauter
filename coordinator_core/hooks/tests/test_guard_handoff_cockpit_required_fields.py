@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.hooks import guard_handoff_summary_cap_on_write as g
 from coordinator_core.ops.emit.sections._cockpit_required import REQUIRED_STRING_FIELDS
+from pathlib import Path
 
 FULL = {"title": "T", "created": "2026-10-16", "status": "open", "deployment_state": "pending"}
 
@@ -29,37 +30,37 @@ def _context(result) -> str:
 
 @pytest.mark.parametrize("field", REQUIRED_STRING_FIELDS)
 @pytest.mark.parametrize("rel", ["state/handoffs/2026-10-16-x.md", "archive/handoffs/2026-09/x.md"])
-def test_missing_field_is_named_with_scaffold_command(tmp_path, rel, field):
+def test_missing_field_is_named_with_scaffold_command(tmp_path: Path, rel, field) -> None:
     ctx = _context(_write(tmp_path, rel, _content(**{field: None})))
     assert field in ctx
     assert "coordinator-doc-new --type handoff" in ctx
 
 
-def test_all_missing_fields_named(tmp_path):
+def test_all_missing_fields_named(tmp_path: Path) -> None:
     ctx = _context(_write(tmp_path, "state/handoffs/x.md", "---\nsummary: s\n---\nbody\n"))
     for field in REQUIRED_STRING_FIELDS:
         assert field in ctx
 
 
-def test_conformant_record_is_silent(tmp_path):
+def test_conformant_record_is_silent(tmp_path: Path) -> None:
     assert _write(tmp_path, "state/handoffs/x.md", _content()) == {}
 
 
-def test_conformant_record_with_unquoted_yaml_date_is_silent(tmp_path):
+def test_conformant_record_with_unquoted_yaml_date_is_silent(tmp_path: Path) -> None:
     assert _write(tmp_path, "archive/handoffs/x.md", _content(created="2026-10-16")) == {}
 
 
-def test_out_of_scope_path_is_silent(tmp_path):
+def test_out_of_scope_path_is_silent(tmp_path: Path) -> None:
     assert _write(tmp_path, "docs/other/x.md", "---\nsummary: s\n---\nbody\n") == {}
 
 
-def test_over_cap_and_missing_both_reported(tmp_path):
+def test_over_cap_and_missing_both_reported(tmp_path: Path) -> None:
     ctx = _context(_write(tmp_path, "state/handoffs/x.md", _content(deployment_state=None, summary="x" * 150)))
     assert "150 chars" in ctx
     assert "deployment_state" in ctx
 
 
-def test_guard_holds_no_second_required_field_list():
+def test_guard_holds_no_second_required_field_list() -> None:
     import inspect
 
     src = inspect.getsource(g)

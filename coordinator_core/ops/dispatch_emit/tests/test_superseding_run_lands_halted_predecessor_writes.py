@@ -43,11 +43,11 @@ FOREIGN = "foreign.py"
 
 
 @pytest.fixture(autouse=True)
-def _wave_sidecar(repo):  # noqa: F811
+def _wave_sidecar(repo) -> None:  # noqa: F811
     (repo.parent / "wave-review.md").write_text("# review\n", encoding="utf-8")
 
 
-def _halt_predecessor(root, monkeypatch):
+def _halt_predecessor(root, monkeypatch) -> None:
     """Run A wrote ``PATHS`` and halted: the halt record lands, A's product stays dirty, withheld."""
     for p in PATHS:
         _write(root, p, "x = 1\n")
@@ -67,7 +67,7 @@ def _halt_predecessor(root, monkeypatch):
     assert out.get("withheld", {}).keys() >= set(PATHS), out
 
 
-def _stage_b(root, claimed):
+def _stage_b(root, claimed) -> None:
     """Run B's stage: write baseline captured with the tree as it stands, ``claimed`` declared for R1."""
     row = ManifestRow(
         id="C1", agent_type="x", model="m", brief_path="b.md", writes=claimed, wave=0, register_rows=("R1",)
@@ -84,7 +84,7 @@ def _stage_b(root, claimed):
     _write(root, "run.mjs", f"// emitted\n{ASK_MANIFEST_MARKER}{RUN_DIR_ROOT}/{RUN}/manifest.json\n")
 
 
-def _foreign_dirt(root):
+def _foreign_dirt(root) -> None:
     _write(root, FOREIGN, "y = 1\n")
     _git(root, "add", FOREIGN)
     _git(root, "commit", "-q", "-m", "foreign v1")
@@ -106,7 +106,7 @@ def _call_b(root):
     return terminal_commit._handler(params, repo_root=root / ".git")
 
 
-def test_predecessor_writes_pass_the_ledger_gate_and_foreign_dirt_beside_them_is_refused(repo, monkeypatch):  # noqa: F811
+def test_predecessor_writes_pass_the_ledger_gate_and_foreign_dirt_beside_them_is_refused(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _halt_predecessor(repo, monkeypatch)
     _foreign_dirt(repo)
     _stage_b(repo, (*PATHS, FOREIGN))
@@ -114,7 +114,7 @@ def test_predecessor_writes_pass_the_ledger_gate_and_foreign_dirt_beside_them_is
     assert _dirt(_call_b(repo)) == FOREIGN
 
 
-def test_predecessor_writes_alone_are_no_pre_existing_dirt(repo, monkeypatch):  # noqa: F811
+def test_predecessor_writes_alone_are_no_pre_existing_dirt(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _halt_predecessor(repo, monkeypatch)
     _stage_b(repo, PATHS)
 
@@ -123,7 +123,7 @@ def test_predecessor_writes_alone_are_no_pre_existing_dirt(repo, monkeypatch):  
     assert "pre-existing-dirt" not in json.dumps(out, default=str), out
 
 
-def test_a_predecessor_path_edited_after_the_halt_is_dirt(repo, monkeypatch):  # noqa: F811
+def test_a_predecessor_path_edited_after_the_halt_is_dirt(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _halt_predecessor(repo, monkeypatch)
     _write(repo, "a.py", "x = 3\n")
     _stage_b(repo, PATHS)
@@ -131,7 +131,7 @@ def test_a_predecessor_path_edited_after_the_halt_is_dirt(repo, monkeypatch):  #
     assert _dirt(_call_b(repo)) == "a.py"
 
 
-def test_dirt_with_no_halted_predecessor_of_the_sizing_is_refused(repo):  # noqa: F811
+def test_dirt_with_no_halted_predecessor_of_the_sizing_is_refused(repo) -> None:  # noqa: F811
     for p in PATHS:
         _write(repo, p, "x = 1\n")
     _git(repo, "add", ".")

@@ -27,6 +27,7 @@ from coordinator_core.ops.test_red_record import (
     set_acknowledgement,
     write_test_red_record,
 )
+from pathlib import Path
 
 # Declares a real external-process spawn (spawn ratchet Rule 2). Tiering onto the
 # cadence suite is the separate threshold ruling, not this declaration.
@@ -41,7 +42,7 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 def _make_git_repo(root):
     root.mkdir(parents=True, exist_ok=True)
 
-    def _git(*args):
+    def _git(*args) -> None:
         subprocess.run(
             ["git", *args],
             cwd=str(root),
@@ -67,7 +68,7 @@ def _make_git_repo(root):
 
 
 class TestParseFailingNodeids:
-    def test_pytest_failed_and_error_lines(self):
+    def test_pytest_failed_and_error_lines(self) -> None:
         output = (
             "==== FAILURES ====\n"
             "FAILED coordinator_core/tests/test_foo.py::test_bar - AssertionError\n"
@@ -80,13 +81,13 @@ class TestParseFailingNodeids:
             "coordinator_core/tests/test_foo.py::test_bar",
         ]
 
-    def test_node_test_tap_lines(self):
+    def test_node_test_tap_lines(self) -> None:
         output = "TAP version 13\nnot ok 1 - some failing test\nok 2 - a passing test\n"
         runner, failing = parse_failing_nodeids(output)
         assert runner == "node-test"
         assert failing == ["some failing test"]
 
-    def test_unrecognized_output_is_tri_state_null(self):
+    def test_unrecognized_output_is_tri_state_null(self) -> None:
         runner, failing = parse_failing_nodeids("nothing recognizable here\n")
         assert runner == "unknown"
         assert failing is None
@@ -98,7 +99,7 @@ class TestParseFailingNodeids:
 
 
 class TestBuildTierEntry:
-    def test_first_run_has_no_previous(self):
+    def test_first_run_has_no_previous(self) -> None:
         entry = build_tier_entry(
             existing=None,
             ran_at="2026-08-14T09:00:00Z",
@@ -111,7 +112,7 @@ class TestBuildTierEntry:
         assert "previous" not in entry
         assert entry["failing"] == []
 
-    def test_authoritative_run_rotates_previous_forward(self):
+    def test_authoritative_run_rotates_previous_forward(self) -> None:
         existing = {
             "ran_at": "2026-08-13T09:00:00Z",
             "failing": ["a::b"],
@@ -127,7 +128,7 @@ class TestBuildTierEntry:
         )
         assert entry["previous"] == {"ran_at": "2026-08-13T09:00:00Z", "failing": ["a::b"]}
 
-    def test_null_failing_run_does_not_rotate_previous(self):
+    def test_null_failing_run_does_not_rotate_previous(self) -> None:
         existing = {
             "ran_at": "2026-08-13T09:00:00Z",
             "failing": ["a::b"],
@@ -146,7 +147,7 @@ class TestBuildTierEntry:
         # previous carried forward UNCHANGED, not rotated to the just-superseded run
         assert entry["previous"] == {"ran_at": "2026-08-12T09:00:00Z", "failing": ["z::z"]}
 
-    def test_acknowledged_block_carried_forward_byte_for_byte(self):
+    def test_acknowledged_block_carried_forward_byte_for_byte(self) -> None:
         ack = {
             "owner": "docs/plans/x.md",
             "acknowledged_at": "2026-08-01T00:00:00Z",
@@ -165,7 +166,7 @@ class TestBuildTierEntry:
         )
         assert entry["acknowledged"] == ack
 
-    def test_rejects_invalid_outcome(self):
+    def test_rejects_invalid_outcome(self) -> None:
         with pytest.raises(ValueError):
             build_tier_entry(
                 existing=None,
@@ -184,7 +185,7 @@ class TestBuildTierEntry:
 
 
 class TestWriteTestRedRecord:
-    def test_writes_tiers_mapping_at_state_test_red_machine_yaml(self, tmp_path):
+    def test_writes_tiers_mapping_at_state_test_red_machine_yaml(self, tmp_path: Path) -> None:
         repo = _make_git_repo(tmp_path / "repo")
         write_test_red_record(
             repo_root=repo,
@@ -205,7 +206,7 @@ class TestWriteTestRedRecord:
         assert doc["tiers"]["fast"]["failing"] == []
         assert doc["tiers"]["fast"]["runner"] == "pytest"
 
-    def test_tri_state_null_survives_yaml_round_trip(self, tmp_path):
+    def test_tri_state_null_survives_yaml_round_trip(self, tmp_path: Path) -> None:
         repo = _make_git_repo(tmp_path / "repo")
         write_test_red_record(
             repo_root=repo,
@@ -222,7 +223,7 @@ class TestWriteTestRedRecord:
         doc = yaml.safe_load(target.read_text(encoding="utf-8"))
         assert doc["tiers"]["fast"]["failing"] is None
 
-    def test_second_tier_does_not_clobber_first(self, tmp_path):
+    def test_second_tier_does_not_clobber_first(self, tmp_path: Path) -> None:
         repo = _make_git_repo(tmp_path / "repo")
         write_test_red_record(
             repo_root=repo,
@@ -250,7 +251,7 @@ class TestWriteTestRedRecord:
         doc = yaml.safe_load(target.read_text(encoding="utf-8"))
         assert set(doc["tiers"].keys()) == {"fast", "plugin-ecosystem"}
 
-    def test_monotonic_ran_at_guard_refuses_older_run(self, tmp_path):
+    def test_monotonic_ran_at_guard_refuses_older_run(self, tmp_path: Path) -> None:
         repo = _make_git_repo(tmp_path / "repo")
         write_test_red_record(
             repo_root=repo,
@@ -280,7 +281,7 @@ class TestWriteTestRedRecord:
         # older write never landed
         assert doc["tiers"]["fast"]["sha"] == "abc123"
 
-    def test_acknowledged_block_preserved_across_emitter_rewrite(self, tmp_path):
+    def test_acknowledged_block_preserved_across_emitter_rewrite(self, tmp_path: Path) -> None:
         repo = _make_git_repo(tmp_path / "repo")
         write_test_red_record(
             repo_root=repo,
@@ -323,7 +324,7 @@ class TestWriteTestRedRecord:
 
 
 class TestAcknowledgement:
-    def test_set_acknowledgement_computes_default_expiry_14d(self, tmp_path):
+    def test_set_acknowledgement_computes_default_expiry_14d(self, tmp_path: Path) -> None:
         repo = _make_git_repo(tmp_path / "repo")
         write_test_red_record(
             repo_root=repo,
@@ -345,7 +346,7 @@ class TestAcknowledgement:
         )
         assert entry["acknowledged"]["expires_at"] == "2026-08-28T10:00:00Z"
 
-    def test_set_acknowledgement_refuses_null_failing(self, tmp_path):
+    def test_set_acknowledgement_refuses_null_failing(self, tmp_path: Path) -> None:
         repo = _make_git_repo(tmp_path / "repo")
         write_test_red_record(
             repo_root=repo,
@@ -366,7 +367,7 @@ class TestAcknowledgement:
                 machine="machine-b-local",
             )
 
-    def test_clear_acknowledgement_removes_only_that_block(self, tmp_path):
+    def test_clear_acknowledgement_removes_only_that_block(self, tmp_path: Path) -> None:
         repo = _make_git_repo(tmp_path / "repo")
         write_test_red_record(
             repo_root=repo,

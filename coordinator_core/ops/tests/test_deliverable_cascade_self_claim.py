@@ -11,6 +11,7 @@ import pytest
 
 import coordinator_core.ops.deliverable_cascade as cascade_mod
 import coordinator_core.ops.handoff_children as handoff_children_mod
+from pathlib import Path
 
 _CALLER = "11111111-1111-1111-1111-111111111111"
 _OTHER = "22222222-2222-2222-2222-222222222222"
@@ -33,23 +34,23 @@ def _run(tmp_path, monkeypatch, claimant, caller):
     )
 
 
-def test_callers_own_live_claim_clears(tmp_path, monkeypatch):
+def test_callers_own_live_claim_clears(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert _run(tmp_path, monkeypatch, _CALLER, _CALLER) is None
 
 
-def test_different_live_claimant_still_refuses(tmp_path, monkeypatch):
+def test_different_live_claimant_still_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reason = _run(tmp_path, monkeypatch, _OTHER, _CALLER)
     assert reason is not None and "claimed by live session" in reason
 
 
-def test_no_caller_session_keeps_refusing_live_claimant(tmp_path, monkeypatch):
+def test_no_caller_session_keeps_refusing_live_claimant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     reason = _run(tmp_path, monkeypatch, _CALLER, "")
     assert reason is not None and "claimed by live session" in reason
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_plan_cascade_entry_passes_attributable_session_as_caller(tmp_path, monkeypatch):
+def test_plan_cascade_entry_passes_attributable_session_as_caller(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`plan_status_transition._run_cascade` -> the real handler threads the invoking session."""
     import subprocess
 
@@ -68,7 +69,7 @@ def test_plan_cascade_entry_passes_attributable_session_as_caller(tmp_path, monk
     )
     seen = []
 
-    def spy(*args, **kwargs):
+    def spy(*args, **kwargs) -> str:
         seen.append(kwargs.get("caller_session_id"))
         return "stop here"
 

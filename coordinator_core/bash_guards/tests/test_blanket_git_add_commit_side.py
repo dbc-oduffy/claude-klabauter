@@ -34,20 +34,22 @@ from types import SimpleNamespace
 from coordinator_core.bash_guards import dispatch_checks as guard
 from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
+import pytest
 
 
 def _enveloped(check):
     return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
-def _wire_hazard(monkeypatch, *, is_hazard=True):
+def _wire_hazard(monkeypatch, *, is_hazard: bool = True) -> None:
     monkeypatch.setattr(_dc_git_shared, "_is_hazard_repo", lambda root: is_hazard)
 
 
-def _wire_git(monkeypatch, root, *, diff_lines=None, diff_rc=0):
+def _wire_git(monkeypatch, root, *, diff_lines=None, diff_rc: int = 0):
     calls = []
 
-    def _fake_run_git(args, cwd=None, timeout=2.0, extra_env=None):
+    def _fake_run_git(args, cwd=None, timeout: float = 2.0, extra_env=None):
         calls.append(list(args))
         if args[:2] == ["rev-parse", "--show-toplevel"]:
             return 0, root + "\n"
@@ -61,7 +63,7 @@ def _wire_git(monkeypatch, root, *, diff_lines=None, diff_rc=0):
     return calls
 
 
-def _wire_claims(monkeypatch, claimed_paths):
+def _wire_claims(monkeypatch, claimed_paths) -> None:
     fake_projection = SimpleNamespace(
         claims={p: object() for p in claimed_paths}, degraded=False
     )
@@ -72,7 +74,7 @@ def _wire_claims(monkeypatch, claimed_paths):
             return claimant_dir
 
         @staticmethod
-        def project_live_claims(*sink_paths, cwd=None):
+        def project_live_claims(*sink_paths, cwd=None) -> SimpleNamespace:
             return fake_projection
 
     monkeypatch.setitem(
@@ -88,7 +90,7 @@ def _wire_claims(monkeypatch, claimed_paths):
 # ---------------------------------------------------------------------------
 
 
-def test_commit_dot_pathspec_denies(monkeypatch, tmp_path):
+def test_commit_dot_pathspec_denies(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir(parents=True)
     monkeypatch.chdir(root)
@@ -107,7 +109,7 @@ def test_commit_dot_pathspec_denies(monkeypatch, tmp_path):
     assert "--pathspec-from-file" not in reason
 
 
-def test_commit_magic_root_pathspec_denies(monkeypatch, tmp_path):
+def test_commit_magic_root_pathspec_denies(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir(parents=True)
     monkeypatch.chdir(root)
@@ -128,7 +130,7 @@ def test_commit_magic_root_pathspec_denies(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_subtree_commit_with_foreign_path_is_denied(monkeypatch, tmp_path):
+def test_subtree_commit_with_foreign_path_is_denied(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "repo"
     subtree = root / "src"
     subtree.mkdir(parents=True)
@@ -146,7 +148,7 @@ def test_subtree_commit_with_foreign_path_is_denied(monkeypatch, tmp_path):
     assert "src/peer.py" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_subtree_commit_all_own_paths_is_allowed(monkeypatch, tmp_path):
+def test_subtree_commit_all_own_paths_is_allowed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "repo"
     subtree = root / "src"
     subtree.mkdir(parents=True)
@@ -162,7 +164,7 @@ def test_subtree_commit_all_own_paths_is_allowed(monkeypatch, tmp_path):
     assert result is None
 
 
-def test_subtree_commit_no_session_id_fails_open(monkeypatch, tmp_path):
+def test_subtree_commit_no_session_id_fails_open(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "repo"
     subtree = root / "src"
     subtree.mkdir(parents=True)
@@ -177,7 +179,7 @@ def test_subtree_commit_no_session_id_fails_open(monkeypatch, tmp_path):
     assert result is None
 
 
-def test_subtree_commit_diff_failure_fails_open(monkeypatch, tmp_path):
+def test_subtree_commit_diff_failure_fails_open(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "repo"
     subtree = root / "src"
     subtree.mkdir(parents=True)
@@ -198,7 +200,7 @@ def test_subtree_commit_diff_failure_fails_open(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_single_file_commit_is_not_denied(monkeypatch, tmp_path):
+def test_single_file_commit_is_not_denied(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir(parents=True)
     monkeypatch.chdir(root)
@@ -213,8 +215,8 @@ def test_single_file_commit_is_not_denied(monkeypatch, tmp_path):
 
 
 def test_a_bare_commit_with_no_dash_dash_is_not_touched_by_this_branch(
-    monkeypatch, tmp_path
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """No `--` at all -- outside this branch's scoped remit (bare-commit-half
     is `check_git_commit_safe_commit_advise`'s own remit)."""
     root = tmp_path / "repo"
@@ -230,7 +232,7 @@ def test_a_bare_commit_with_no_dash_dash_is_not_touched_by_this_branch(
     assert result is None
 
 
-def test_dash_o_only_form_is_not_this_branchs_remit(monkeypatch, tmp_path):
+def test_dash_o_only_form_is_not_this_branchs_remit(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """`-o state/` sweeps too, but that shape belongs to
     `check_git_commit_safe_commit_advise`'s own advisory, unescalated."""
     root = tmp_path / "repo"
@@ -247,7 +249,7 @@ def test_dash_o_only_form_is_not_this_branchs_remit(monkeypatch, tmp_path):
     assert result is None
 
 
-def test_not_a_hazard_repo_is_not_denied(monkeypatch, tmp_path):
+def test_not_a_hazard_repo_is_not_denied(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir(parents=True)
     monkeypatch.chdir(root)
@@ -290,7 +292,7 @@ def _warp_repo(monkeypatch, tmp_path, *, holder, staged=None, live=("sess1", "pe
     return root, calls
 
 
-def test_commit_of_own_submitted_run_record_dir_is_allowed(monkeypatch, tmp_path):
+def test_commit_of_own_submitted_run_record_dir_is_allowed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _, calls = _warp_repo(monkeypatch, tmp_path, holder="sess1")
 
     result = _enveloped(guard.check_blanket_git_add)(
@@ -301,7 +303,7 @@ def test_commit_of_own_submitted_run_record_dir_is_allowed(monkeypatch, tmp_path
     assert [c for c in calls if c[0] not in ("rev-parse", "diff")] == []
 
 
-def test_commit_of_a_different_live_sessions_run_record_dir_is_denied(monkeypatch, tmp_path):
+def test_commit_of_a_different_live_sessions_run_record_dir_is_denied(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _warp_repo(monkeypatch, tmp_path, holder="peer")
 
     result = _enveloped(guard.check_blanket_git_add)(
@@ -314,7 +316,7 @@ def test_commit_of_a_different_live_sessions_run_record_dir_is_denied(monkeypatc
     assert "state/warp/ask-1/run.json" in reason
 
 
-def test_commit_of_a_dead_sessions_run_record_dir_is_allowed(monkeypatch, tmp_path):
+def test_commit_of_a_dead_sessions_run_record_dir_is_allowed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _warp_repo(monkeypatch, tmp_path, holder="peer", live=("sess1",))
 
     result = _enveloped(guard.check_blanket_git_add)(
@@ -324,7 +326,7 @@ def test_commit_of_a_dead_sessions_run_record_dir_is_allowed(monkeypatch, tmp_pa
     assert result is None
 
 
-def test_commit_of_an_unheld_run_record_dir_is_allowed(monkeypatch, tmp_path):
+def test_commit_of_an_unheld_run_record_dir_is_allowed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _warp_repo(monkeypatch, tmp_path, holder=None)
 
     result = _enveloped(guard.check_blanket_git_add)(
@@ -334,7 +336,7 @@ def test_commit_of_an_unheld_run_record_dir_is_allowed(monkeypatch, tmp_path):
     assert result is None
 
 
-def test_a_non_warp_foreign_path_beside_an_own_run_is_still_denied(monkeypatch, tmp_path):
+def test_a_non_warp_foreign_path_beside_an_own_run_is_still_denied(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _warp_repo(
         monkeypatch, tmp_path, holder="sess1", staged=RUN_FILES + ["state/other/peer.md"]
     )
@@ -349,11 +351,11 @@ def test_a_non_warp_foreign_path_beside_an_own_run_is_still_denied(monkeypatch, 
     assert "state/warp/ask-1/run.json" not in reason
 
 
-def test_full_em_checkpoint_shape_with_literal_file_operands_is_allowed(monkeypatch, tmp_path):
+def test_full_em_checkpoint_shape_with_literal_file_operands_is_allowed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root, _ = _warp_repo(monkeypatch, tmp_path, holder="sess1")
     inner = guard._run_git
 
-    def _git(args, cwd=None, timeout=2.0, extra_env=None):
+    def _git(args, cwd=None, timeout: float = 2.0, extra_env=None):
         if args[:2] == ["add", "--dry-run"]:
             return 0, "".join("add '%s'\n" % p for p in RUN_FILES)
         return inner(args, cwd, timeout, extra_env)

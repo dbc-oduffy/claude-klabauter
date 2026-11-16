@@ -7,10 +7,11 @@ import asyncio
 import pytest
 
 from coordinator_core import machine_profile as mp
+from pathlib import Path
 
 
 @pytest.fixture()
-def consumer(tmp_path, monkeypatch):
+def consumer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     reg = tmp_path / "reg"
     reg.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
@@ -22,17 +23,17 @@ def consumer(tmp_path, monkeypatch):
     mp.reset_cache()
 
 
-def test_publishing_refusal_names_feature_and_verb(consumer):
+def test_publishing_refusal_names_feature_and_verb(consumer) -> None:
     msg = mp.feature_refusal("publishing")
     assert "off on this machine" in msg and "\n" not in msg
     assert "machine-local set coordinator.feature.publishing on" in msg
 
 
-def test_memo_refusal_names_feature_and_verb(consumer):
+def test_memo_refusal_names_feature_and_verb(consumer) -> None:
     assert "machine-local set coordinator.feature.cross_repo_memos on" in mp.feature_refusal("cross_repo_memos")
 
 
-def test_refusal_absent_on_author(monkeypatch):
+def test_refusal_absent_on_author(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE", "author")
     mp.reset_cache()
     assert mp.feature_refusal("publishing") is None
@@ -40,7 +41,7 @@ def test_refusal_absent_on_author(monkeypatch):
 
 
 @pytest.mark.parametrize("feature", ["publishing", "cross_repo_memos"])
-def test_explicit_feature_on_lifts_refusal_on_consumer(consumer, monkeypatch, feature):
+def test_explicit_feature_on_lifts_refusal_on_consumer(consumer, monkeypatch: pytest.MonkeyPatch, feature) -> None:
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_FEATURE_" + feature.upper(), "on")
     mp.reset_cache()
     assert mp.feature_refusal(feature) is None
@@ -54,7 +55,7 @@ def test_explicit_feature_on_lifts_refusal_on_consumer(consumer, monkeypatch, fe
     ("percolate_ci_smoke_check", "_percolate_run_ci_smoke_check", {}),
     ("percolate_identity_check", "_percolate_run_identity_check", {}),
 ])
-def test_percolate_ops_refuse_on_consumer(consumer, modname, fn, params):
+def test_percolate_ops_refuse_on_consumer(consumer, modname, fn, params) -> None:
     import importlib
 
     handler = getattr(importlib.import_module(f"coordinator_core.ops.{modname}"), fn)
@@ -64,7 +65,7 @@ def test_percolate_ops_refuse_on_consumer(consumer, modname, fn, params):
             asyncio.run(out)
 
 
-def test_memo_send_refuses_on_consumer(consumer):
+def test_memo_send_refuses_on_consumer(consumer) -> None:
     from coordinator_core.ops.fleet.memo_send import _memo_send
 
     result = _memo_send({"dry_run": True, "topic": "t"}, repo_root=None)
@@ -75,7 +76,7 @@ def test_memo_send_refuses_on_consumer(consumer):
     ("memo_draft", "_memo_draft"),
     ("memo_compose", "_memo_compose"),
 ])
-def test_memo_draft_compose_refuse_on_consumer(consumer, caplog, modname, fn):
+def test_memo_draft_compose_refuse_on_consumer(consumer, caplog: pytest.LogCaptureFixture, modname, fn) -> None:
     import importlib
 
     handler = getattr(importlib.import_module(f"coordinator_core.ops.fleet.{modname}"), fn)
@@ -88,21 +89,21 @@ def test_memo_draft_compose_refuse_on_consumer(consumer, caplog, modname, fn):
     assert "cross-repo memos is off on this machine" in caplog.text
 
 
-def test_preflight_scratch_publish_refuses_on_consumer(consumer, capsys):
+def test_preflight_scratch_publish_refuses_on_consumer(consumer, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.ops import percolate_preflight_scratch_publish as p
 
     assert p.main(["--self-test"]) == 2
     assert "off on this machine" in capsys.readouterr().err
 
 
-def test_setup_rag_decision_skips_on_consumer(consumer, capsys):
+def test_setup_rag_decision_skips_on_consumer(consumer, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.ops import setup_rag_decision as srd
 
     assert srd.main([]) == 0
     assert "consumer profile" in capsys.readouterr().out
 
 
-def test_memo_surface_readers_skip_on_consumer(consumer, monkeypatch, tmp_path):
+def test_memo_surface_readers_skip_on_consumer(consumer, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.ops import check_rag_state as crs
     from coordinator_core.orient_brief import _work
 
@@ -115,7 +116,7 @@ def test_memo_surface_readers_skip_on_consumer(consumer, monkeypatch, tmp_path):
     assert not _work._rag_directive()
 
 
-def test_check_rag_state_honours_injected_state_on_consumer(consumer, monkeypatch):
+def test_check_rag_state_honours_injected_state_on_consumer(consumer, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import check_rag_state as crs
 
     monkeypatch.setenv("RAG_STATE", "fresh")
@@ -125,14 +126,14 @@ def test_check_rag_state_honours_injected_state_on_consumer(consumer, monkeypatc
 @pytest.mark.parametrize("modname", [
     "workday_start_cross_repo_memo_surface",
 ])
-def test_workday_memo_surfaces_silent_on_consumer(consumer, capsys, modname):
+def test_workday_memo_surfaces_silent_on_consumer(consumer, capsys: pytest.CaptureFixture[str], modname) -> None:
     import importlib
 
     assert importlib.import_module(f"coordinator_core.ops.{modname}").main([]) == 0
     assert capsys.readouterr().out == ""
 
 
-def test_memo_features_independent_of_publishing(consumer, monkeypatch):
+def test_memo_features_independent_of_publishing(consumer, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_FEATURE_PUBLISHING", "on")
     mp.reset_cache()
     assert mp.feature_refusal("cross_repo_memos")

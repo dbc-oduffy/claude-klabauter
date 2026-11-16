@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core.benchmarks import land_run_leg_budget_profile as prof
 from coordinator_core.benchmarks.land_run_slow_disk_profile import _bind_session
+from pathlib import Path
 
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
@@ -20,12 +21,12 @@ IMPORT_CLOSURE_LEGS = (
 
 
 @pytest.fixture(autouse=True)
-def _env_restored(monkeypatch):
+def _env_restored(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in ("COORDINATOR_INVOCATION_ORIGIN", "COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
         monkeypatch.setenv(name, "x")
 
 
-def test_halted_shape_landing_reaches_import_closure_under_the_per_leg_bar(tmp_path):
+def test_halted_shape_landing_reaches_import_closure_under_the_per_leg_bar(tmp_path: Path) -> None:
     prof.declare_benchmark_origin()
     _bind_session()
     with ExitStack() as stack:
@@ -99,12 +100,12 @@ def _land_at_n_and_2n(tmp_path):
     return one, one_reads, two, two_reads
 
 
-def test_landing_spawns_are_flat_at_double_the_halted_runs(tmp_path):
+def test_landing_spawns_are_flat_at_double_the_halted_runs(tmp_path: Path) -> None:
     one, _, two, _ = _land_at_n_and_2n(tmp_path)
     assert one.spawns == two.spawns
 
 
-def test_halted_record_reads_are_flat_at_double_the_halted_runs(tmp_path):
+def test_halted_record_reads_are_flat_at_double_the_halted_runs(tmp_path: Path) -> None:
     """Indexed halted runs are answered from their fresh `halted_withheld_index` entry: no `halted.json` strict read."""
     _, one_reads, _, two_reads = _land_at_n_and_2n(tmp_path)
     assert one_reads == two_reads

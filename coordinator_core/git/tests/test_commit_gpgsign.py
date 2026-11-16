@@ -20,6 +20,7 @@ import pytest
 
 from coordinator_core.git import commit as commit_mod
 from coordinator_core.git.run import GitResult
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -32,7 +33,7 @@ _ENV_KEYS = (
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
-def _git(repo, *args, check=True):
+def _git(repo, *args, check: bool = True):
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **_NOWIN
     )
@@ -50,13 +51,13 @@ def _repo(tmp_path):
     return repo
 
 
-def _write(path, body: str):
+def _write(path, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")
 
 
 @pytest.fixture(autouse=True)
-def _clear_memos(monkeypatch):
+def _clear_memos(monkeypatch: pytest.MonkeyPatch):
     for key in _ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
     commit_mod._CONFIG_IDENTITY_MEMO.clear()
@@ -67,19 +68,19 @@ def _clear_memos(monkeypatch):
 
 
 @pytest.fixture
-def isolated_config(tmp_path, monkeypatch):
+def isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "global-gitconfig"))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     return tmp_path
 
 
-def _popen_spy(monkeypatch):
+def _popen_spy(monkeypatch) -> list[list[str]]:
     seen: "list[list[str]]" = []
     real = subprocess.Popen
 
     class Spy(real):  # type: ignore[misc,valid-type]
-        def __init__(self, cmd, *a, **kw):
+        def __init__(self, cmd, *a, **kw) -> None:
             seen.append(cmd if isinstance(cmd, str) else list(cmd)[:4])
             super().__init__(cmd, *a, **kw)
 
@@ -87,35 +88,35 @@ def _popen_spy(monkeypatch):
     return seen
 
 
-def test_gpgsign_defaults_false_with_no_config(isolated_config):
+def test_gpgsign_defaults_false_with_no_config(isolated_config) -> None:
     assert commit_mod._gpgsign_enabled(None) is False
 
 
-def test_gpgsign_true_read_from_global_config(isolated_config):
+def test_gpgsign_true_read_from_global_config(isolated_config) -> None:
     _write(isolated_config / "global-gitconfig", "[commit]\n\tgpgsign = true\n")
     assert commit_mod._gpgsign_enabled(None) is True
 
 
-def test_gpgsign_false_read_explicitly(isolated_config):
+def test_gpgsign_false_read_explicitly(isolated_config) -> None:
     _write(isolated_config / "global-gitconfig", "[commit]\n\tgpgsign = false\n")
     assert commit_mod._gpgsign_enabled(None) is False
 
 
-def test_gpgsign_repo_local_outranks_global(isolated_config):
+def test_gpgsign_repo_local_outranks_global(isolated_config) -> None:
     _write(isolated_config / "global-gitconfig", "[commit]\n\tgpgsign = true\n")
     repo = isolated_config / "repo"
     _write(repo / ".git" / "config", "[commit]\n\tgpgsign = false\n")
     assert commit_mod._gpgsign_enabled(repo) is False
 
 
-def test_gpgsign_read_costs_zero_spawns(isolated_config, monkeypatch):
+def test_gpgsign_read_costs_zero_spawns(isolated_config, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(isolated_config / "global-gitconfig", "[commit]\n\tgpgsign = true\n")
     seen = _popen_spy(monkeypatch)
     assert commit_mod._gpgsign_enabled(None) is True
     assert seen == [], f"gpgsign config read spawned {seen}"
 
 
-def test_gpgsign_cached_across_repeated_resolves(isolated_config, monkeypatch):
+def test_gpgsign_cached_across_repeated_resolves(isolated_config, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(isolated_config / "global-gitconfig", "[commit]\n\tgpgsign = true\n")
     first = commit_mod._gpgsign_enabled(None)
     seen = _popen_spy(monkeypatch)
@@ -124,7 +125,7 @@ def test_gpgsign_cached_across_repeated_resolves(isolated_config, monkeypatch):
     assert seen == [], f"cached gpgsign reads spawned {seen}"
 
 
-def test_gpgsign_answers_per_repo_in_one_process(isolated_config):
+def test_gpgsign_answers_per_repo_in_one_process(isolated_config) -> None:
     signed = isolated_config / "signed"
     plain = isolated_config / "plain"
     _write(signed / ".git" / "config", "[commit]\n\tgpgsign = true\n")
@@ -133,7 +134,7 @@ def test_gpgsign_answers_per_repo_in_one_process(isolated_config):
     assert commit_mod._gpgsign_enabled(plain) is False
 
 
-def test_commit_paths_stays_zero_spawn_when_gpgsign_unset(tmp_path, isolated_config, monkeypatch):
+def test_commit_paths_stays_zero_spawn_when_gpgsign_unset(tmp_path: Path, isolated_config, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
     seen = _popen_spy(monkeypatch)
@@ -144,7 +145,7 @@ def test_commit_paths_stays_zero_spawn_when_gpgsign_unset(tmp_path, isolated_con
     assert outcome.sign_warning is None
 
 
-def test_commit_paths_signs_via_commit_tree_when_gpgsign_true(tmp_path, isolated_config, monkeypatch):
+def test_commit_paths_signs_via_commit_tree_when_gpgsign_true(tmp_path: Path, isolated_config, monkeypatch: pytest.MonkeyPatch) -> None:
     """Real signing end to end, via `gpg.format=ssh` -- `ssh-keygen` is on
     every box this suite runs on; `gpg` is not, so this is the format that
     can exercise the real external program rather than a mock of it.
@@ -177,7 +178,7 @@ def test_commit_paths_signs_via_commit_tree_when_gpgsign_true(tmp_path, isolated
 
     real_run_git = run_mod.run_git
 
-    def spying_run_git(args, **kw):
+    def spying_run_git(args, **kw) -> GitResult:
         calls.append(list(args))
         return real_run_git(args, **kw)
 
@@ -195,12 +196,12 @@ def test_commit_paths_signs_via_commit_tree_when_gpgsign_true(tmp_path, isolated
     assert "good" in combined or "signature" in combined, combined
 
 
-def test_commit_paths_degrades_to_unsigned_on_signing_failure(tmp_path, isolated_config, monkeypatch):
+def test_commit_paths_degrades_to_unsigned_on_signing_failure(tmp_path: Path, isolated_config, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     _write(repo / ".git" / "config", "[commit]\n\tgpgsign = true\n")
     (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
 
-    def failing_run_git(args, **kw):
+    def failing_run_git(args, **kw) -> GitResult:
         return GitResult(
             returncode=128, timed_out=False,
             stdout="", stderr="gpg failed to sign the data",
@@ -218,7 +219,7 @@ def test_commit_paths_degrades_to_unsigned_on_signing_failure(tmp_path, isolated
     assert _git(repo, "cat-file", "-e", outcome.sha).returncode == 0
 
 
-def test_commit_paths_degrades_to_unsigned_when_signing_raises(tmp_path, isolated_config, monkeypatch):
+def test_commit_paths_degrades_to_unsigned_when_signing_raises(tmp_path: Path, isolated_config, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     _write(repo / ".git" / "config", "[commit]\n\tgpgsign = true\n")
     (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")

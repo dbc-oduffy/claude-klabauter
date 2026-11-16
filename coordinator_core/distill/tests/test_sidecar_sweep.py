@@ -38,13 +38,14 @@ from coordinator_core.distill.sidecar_sweep import (
     sidecar_candidate_ids,
     sweep_sidecars,
 )
+from pathlib import Path
 
 
 _HAS_RG = shutil.which("rg") is not None
 _requires_rg = pytest.mark.skipif(not _HAS_RG, reason="ripgrep (rg) not installed")
 
 
-def test_sidecar_candidate_ids_are_posix_relative_and_spawn_nothing(tmp_path, monkeypatch):
+def test_sidecar_candidate_ids_are_posix_relative_and_spawn_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     scan_root = tmp_path / "archive" / "specs"
     (scan_root / "sub").mkdir(parents=True)
     (scan_root / "sub" / "b.review.md").write_text("x\n")
@@ -67,7 +68,7 @@ def test_sidecar_candidate_ids_are_posix_relative_and_spawn_nothing(tmp_path, mo
 # ---------------------------------------------------------------------------
 
 
-def test_finds_seeded_sidecar_fixture(tmp_path):
+def test_finds_seeded_sidecar_fixture(tmp_path: Path) -> None:
     scan_root = tmp_path / "tasks" / "some-workstream"
     scan_root.mkdir(parents=True)
     sidecar = scan_root / "2026-07-12-some-plan.review.md"
@@ -78,7 +79,7 @@ def test_finds_seeded_sidecar_fixture(tmp_path):
     assert sidecar in found
 
 
-def test_finds_timestamped_variant(tmp_path):
+def test_finds_timestamped_variant(tmp_path: Path) -> None:
     scan_root = tmp_path / "tasks"
     scan_root.mkdir()
     sidecar = scan_root / "2026-07-12_143022-slug.c0-findings.md"
@@ -89,7 +90,7 @@ def test_finds_timestamped_variant(tmp_path):
     assert sidecar in found
 
 
-def test_rejects_bare_substring_hit(tmp_path):
+def test_rejects_bare_substring_hit(tmp_path: Path) -> None:
     scan_root = tmp_path / "tasks"
     scan_root.mkdir()
     not_a_sidecar = scan_root / "my-review-notes.md"
@@ -101,11 +102,11 @@ def test_rejects_bare_substring_hit(tmp_path):
     assert found == []
 
 
-def test_nonexistent_scan_root_returns_empty(tmp_path):
+def test_nonexistent_scan_root_returns_empty(tmp_path: Path) -> None:
     assert find_sidecar_candidates(tmp_path / "does-not-exist") == []
 
 
-def test_recursive_nested_sidecar_found(tmp_path):
+def test_recursive_nested_sidecar_found(tmp_path: Path) -> None:
     nested = tmp_path / "tasks" / "workstream-a" / "sub"
     nested.mkdir(parents=True)
     sidecar = nested / "foo.plan-coverage-check.md"
@@ -122,7 +123,7 @@ def test_recursive_nested_sidecar_found(tmp_path):
 
 
 @_requires_rg
-def test_unreferenced_sidecar_is_swept(tmp_path):
+def test_unreferenced_sidecar_is_swept(tmp_path: Path) -> None:
     repo_root = tmp_path
     (repo_root / "docs").mkdir()
     (repo_root / "docs" / "unrelated.md").write_text("nothing relevant here\n")
@@ -140,7 +141,7 @@ def test_unreferenced_sidecar_is_swept(tmp_path):
 
 
 @_requires_rg
-def test_actively_referenced_sidecar_is_not_swept(tmp_path):
+def test_actively_referenced_sidecar_is_not_swept(tmp_path: Path) -> None:
     repo_root = tmp_path
     docs = repo_root / "docs"
     docs.mkdir()
@@ -164,7 +165,7 @@ def test_actively_referenced_sidecar_is_not_swept(tmp_path):
 
 
 @_requires_rg
-def test_deletion_manifest_never_contains_actively_referenced_path(tmp_path):
+def test_deletion_manifest_never_contains_actively_referenced_path(tmp_path: Path) -> None:
     repo_root = tmp_path
     docs = repo_root / "docs"
     docs.mkdir()
@@ -185,7 +186,7 @@ def test_deletion_manifest_never_contains_actively_referenced_path(tmp_path):
 
 
 @_requires_rg
-def test_process_count_does_not_grow_with_the_set(tmp_path, monkeypatch):
+def test_process_count_does_not_grow_with_the_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The amplification property: sweeping N sidecar candidates must cost the same
     `rg` process count as sweeping one — `sweep_sidecars` batches the active-reference
     guard lookup into a single `rg -f <patternfile>` call regardless of N."""
@@ -221,7 +222,7 @@ def test_process_count_does_not_grow_with_the_set(tmp_path, monkeypatch):
 
 
 @_requires_rg
-def test_non_sidecar_file_ignored(tmp_path):
+def test_non_sidecar_file_ignored(tmp_path: Path) -> None:
     repo_root = tmp_path
     (repo_root / "docs").mkdir()
 

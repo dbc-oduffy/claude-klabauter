@@ -11,6 +11,7 @@ from coordinator_core.git import commit
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, measured_rev_record_path
+from pathlib import Path
 
 RUN = "ask-20261014T000000-abc123"
 REL = "state/sizings/2026-10-14-drift.yaml"
@@ -18,7 +19,7 @@ VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True}]}
 
 
 @pytest.fixture
-def run(tmp_path):
+def run(tmp_path: Path) -> tuple[Path, Path]:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     doc = {
@@ -34,7 +35,7 @@ def run(tmp_path):
     return tmp_path, tmp_path / RECORD_DIR_ROOT / RUN
 
 
-def _record(root):
+def _record(root) -> None:
     path = measured_rev_record_path(root, RUN)
     path.write_text(json.dumps({
         "sha": "s", "base_sha": "b", "paths": ["a.txt"], "removed": [],
@@ -46,12 +47,12 @@ def _gate(run):
     return tc._ledger_gate(run[0], run[1], VERDICT)[0]
 
 
-def test_matching_record_passes(run):
+def test_matching_record_passes(run) -> None:
     _record(run[0])
     assert _gate(run) is None
 
 
-def test_drifted_blob_refuses_naming_the_path(run):
+def test_drifted_blob_refuses_naming_the_path(run) -> None:
     _record(run[0])
     (run[0] / "a.txt").write_text("two\n")
     refusal = _gate(run)
@@ -60,11 +61,11 @@ def test_drifted_blob_refuses_naming_the_path(run):
     assert "a.txt" in refusal["ledger_failures"][0]["reason"]
 
 
-def test_no_record_is_unchanged(run):
+def test_no_record_is_unchanged(run) -> None:
     assert _gate(run) is None
 
 
-def test_drift_does_not_refuse_a_verdict_without_a_met_item(run):
+def test_drift_does_not_refuse_a_verdict_without_a_met_item(run) -> None:
     _record(run[0])
     (run[0] / "a.txt").write_text("two\n")
     verdict = {"items": [{"id": "R1", "status": "not_met", "reason": "x"}]}

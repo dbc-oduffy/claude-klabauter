@@ -124,14 +124,22 @@ def test_the_register_row_is_in_the_ledger_before_the_refire(run):
 def test_stage_function_declares_the_revise_rows_files(run):
     manifest = _stage_via_function(run)
     declared = set(manifest.review_declared_paths)
-    assert {"pkg/b.py", "pkg/c.py"} <= declared, f"review_declared_paths lacks R2's files: {sorted(declared)}"
+    assert declared == {"pkg/b.py", "pkg/c.py"}, f"review_declared_paths is not exactly R2's files: {sorted(declared)}"
+
+
+def _served_section(brief: str) -> str:
+    """The brief's ledger-resume served-rows section. R2_TEXT also reaches the brief through the
+    "Revisions sent while the run was in flight" block, so a whole-brief membership check passes
+    with the ledger-resume carry removed; only this section proves the carry."""
+    assert SERVED_ROWS_HEADING in brief, "the brief lacks the served-rows section"
+    return brief.split(SERVED_ROWS_HEADING, 1)[1]
 
 
 def test_stage_function_brief_carries_the_revise_row_text(run):
     manifest = _stage_via_function(run)
     row = next(r for r in manifest.rows if r.id == "C2")
     brief = (run / row.brief_path).read_text(encoding="utf-8")
-    assert R2_TEXT in brief, "the brief for C2 lacks R2's register text"
+    assert R2_TEXT in _served_section(brief), "the served-rows section of C2's brief lacks R2's register text"
 
 
 def test_the_op_the_replan_leg_calls_declares_the_revise_rows_files(run):
@@ -147,6 +155,27 @@ def test_the_op_the_replan_leg_calls_briefs_the_revise_row(run):
     assert R2_TEXT in brief, "the brief for C2 lacks R2's register text"
 
 
+# dispatch.ask_stage's _run_ask_stage does not forward `ledger_resume` to stage() (its _PARAMS
+# declare only_rows, not ledger_resume), so the re-plan leg's ledger resume stages as a fresh stage.
+# Strict: fixing the op turns these XPASS, which fails and forces the marker off.
+_OP_DROPS_LEDGER_RESUME = pytest.mark.xfail(
+    strict=True, reason="dispatch.ask_stage drops ledger_resume: no served-rows section, landed row declared"
+)
+
+
+@_OP_DROPS_LEDGER_RESUME
+def test_the_op_the_replan_leg_calls_carries_the_served_rows_section(run):
+    reply = _stage_via_op(run)
+    row = next(r for r in reply["rows"] if r["id"] == "C2")
+    brief = (run / row["brief_path"]).read_text(encoding="utf-8")
+    assert R2_TEXT in _served_section(brief)
+
+
+@_OP_DROPS_LEDGER_RESUME
+def test_the_op_the_replan_leg_calls_declares_exactly_the_revise_rows_files(run):
+    assert set(_stage_via_op(run)["review_declared_paths"]) == {"pkg/b.py", "pkg/c.py"}
+
+
 def test_a_landed_row_stays_out_of_the_declared_paths(run):
     assert "pkg/a.py" not in set(_stage_via_function(run).review_declared_paths)
 
@@ -155,8 +184,7 @@ def test_the_brief_leads_with_the_served_rows_section_naming_r2(run):
     manifest = _stage_via_function(run)
     row = next(r for r in manifest.rows if r.id == "C2")
     brief = (run / row.brief_path).read_text(encoding="utf-8")
-    assert SERVED_ROWS_HEADING in brief
-    assert "R2:" in brief.split(SERVED_ROWS_HEADING, 1)[1]
+    assert "R2:" in _served_section(brief)
 
 
 def test_the_served_row_files_are_recorded_as_widens(run):

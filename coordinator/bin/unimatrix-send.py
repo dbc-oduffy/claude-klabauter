@@ -19,18 +19,23 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from os import _Environ
+    from types import ModuleType
 
 HERE = Path(__file__).resolve().parent
 
 
-def _router():
+def _router() -> "ModuleType":
     spec = importlib.util.spec_from_file_location("unimatrix_peer_router", HERE / "unimatrix-peer-router.py")
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
     return m
 
 
-def _sibling(filename, modname):
+def _sibling(filename, modname) -> "ModuleType":
     spec = importlib.util.spec_from_file_location(modname, HERE / filename)
     m = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(m)
@@ -76,7 +81,7 @@ def _mirror_name(name):
                  if any(e.get(f) for f in _MIRROR_FIELDS) and name in (e.get("name"), e.get("unimatrixFarName"))), "")
 
 
-def _is_mirror(name):
+def _is_mirror(name) -> bool:
     """True when `name` is a live mirror here: its router receipt only means the bridge took the frame."""
     return bool(_mirror_name(name))
 
@@ -103,7 +108,7 @@ def relay_outcome(name, since, wait=RELAY_SETTLE_SECONDS, sleep=time.sleep, now=
         sleep(0.25)
 
 
-def _route_note(outcome):
+def _route_note(outcome) -> str:
     """` [box <box>, transport <leg>]` from the bridge's recorded row; `[box unknown]` when an older bridge's row lacks them."""
     box = outcome.get("box")
     transport = outcome.get("transport")
@@ -121,7 +126,7 @@ def _reached_note(resp):
     return f" (reached {reached} on {box})" if isinstance(box, str) and box else f" (reached {reached})"
 
 
-def _print_rows(rows):
+def _print_rows(rows) -> None:
     print("NAME\tBOX\tTHIS-BOX\tVENDOR\tSTATE")
     for name, box, this_box, vendor, state in rows:
         print(f"{name}\t{box}\t{this_box}\t{vendor}\t{state}")
@@ -153,7 +158,7 @@ def _member_ip_hosts():
     return out
 
 
-def _list_from_sessions():
+def _list_from_sessions() -> None:
     c = _sibling("unimatrix-peer-contract.py", "unimatrix_peer_contract_send")
     box = c.local_box()
     rows = [c.agent_row(e, box) for e in _session_entries()]
@@ -175,13 +180,13 @@ def _grok_target():
     return peer["target"] if peer else ""
 
 
-def own_target(env=os.environ, grok=None):
+def own_target(env: "_Environ[str]" = os.environ, grok=None):
     """Session id of the sending agent: Codex or agy env, else the Grok session this shell descends from."""
     return (env.get("CODEX_THREAD_ID") or env.get("ANTIGRAVITY_CONVERSATION_ID")
             or (grok or _grok_target)())
 
 
-def main(argv=None):
+def main(argv=None) -> int:
     p = argparse.ArgumentParser(prog="unimatrix-send.py", description=__doc__.split("\n\n")[0])
     p.add_argument("--to", help="name of the agent to message (see --list)")
     p.add_argument("--list", action="store_true", help="list the agents you can message")

@@ -23,18 +23,19 @@ import os
 import pytest
 
 from coordinator_core import workstream_complete as wsc
+from pathlib import Path
 
 
-def test_ordinary_file_passes_through_as_itself(tmp_path):
+def test_ordinary_file_passes_through_as_itself(tmp_path: Path) -> None:
     (tmp_path / "real.py").write_text("x = 1\n", encoding="utf-8")
     assert wsc._expand_untracked(tmp_path, "real.py") == ["real.py"]
 
 
-def test_missing_path_stays_a_populated_singleton(tmp_path):
+def test_missing_path_stays_a_populated_singleton(tmp_path: Path) -> None:
     assert wsc._expand_untracked(tmp_path, "ghost.py") == ["ghost.py"]
 
 
-def test_directory_expands_to_the_files_beneath_it(tmp_path):
+def test_directory_expands_to_the_files_beneath_it(tmp_path: Path) -> None:
     brief = tmp_path / "briefs" / "a-brief"
     brief.mkdir(parents=True)
     (brief / "one.py").write_text("a = 1\n", encoding="utf-8")
@@ -49,7 +50,7 @@ def test_directory_expands_to_the_files_beneath_it(tmp_path):
     ]
 
 
-def test_walk_stops_at_the_shared_budget(tmp_path):
+def test_walk_stops_at_the_shared_budget(tmp_path: Path) -> None:
     for name in ("first", "second"):
         target = tmp_path / name
         target.mkdir()
@@ -66,7 +67,7 @@ def test_walk_stops_at_the_shared_budget(tmp_path):
     assert budget[0] == 0
 
 
-def test_absent_budget_walks_the_whole_directory(tmp_path):
+def test_absent_budget_walks_the_whole_directory(tmp_path: Path) -> None:
     target = tmp_path / "many"
     target.mkdir()
     for i in range(20):
@@ -77,7 +78,7 @@ def test_absent_budget_walks_the_whole_directory(tmp_path):
     assert len(members) == 20
 
 
-def test_symlinked_subdirectory_is_not_followed(tmp_path):
+def test_symlinked_subdirectory_is_not_followed(tmp_path: Path) -> None:
     target = tmp_path / "tree"
     target.mkdir()
     (target / "real.py").write_text("x = 1\n", encoding="utf-8")
@@ -91,7 +92,7 @@ def test_symlinked_subdirectory_is_not_followed(tmp_path):
     assert members == ["tree/real.py"], members
 
 
-def test_unwalkable_directory_returns_none(tmp_path, monkeypatch):
+def test_unwalkable_directory_returns_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "tree"
     target.mkdir()
     (target / "real.py").write_text("x = 1\n", encoding="utf-8")

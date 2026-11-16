@@ -36,6 +36,7 @@ from coordinator_core.install.write_surface import (
     ShapedClause,
     validate,
 )
+from pathlib import Path
 
 
 class _OSNameProxy:
@@ -61,7 +62,7 @@ class _OSNameProxy:
 
 
 @pytest.fixture(autouse=True)
-def _fake_home(tmp_path, monkeypatch):
+def _fake_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("HOME", str(tmp_path))
     # PINNED, not deleted. Most tests in this module exercise the rc
     # write/append/idempotency/escaping logic and merely need *some* stable rc
@@ -93,24 +94,24 @@ def _fake_home(tmp_path, monkeypatch):
     return tmp_path
 
 
-def test_resolve_rc_path_zsh(monkeypatch, tmp_path):
+def test_resolve_rc_path_zsh(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("SHELL", "/bin/zsh")
     assert _resolve_rc_path() == tmp_path / ".zshrc"
 
 
-def test_resolve_rc_path_bash(monkeypatch, tmp_path):
+def test_resolve_rc_path_bash(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("SHELL", "/bin/bash")
     assert _resolve_rc_path() == tmp_path / ".bashrc"
 
 
-def test_resolve_rc_path_default_unset_darwin(monkeypatch, tmp_path):
+def test_resolve_rc_path_default_unset_darwin(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """zsh is the macOS interactive default, so it is the right guess there."""
     monkeypatch.delenv("SHELL", raising=False)
     monkeypatch.setattr(mod.sys, "platform", "darwin")
     assert _resolve_rc_path() == tmp_path / ".zshrc"
 
 
-def test_resolve_rc_path_default_unset_linux(monkeypatch, tmp_path):
+def test_resolve_rc_path_default_unset_linux(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """...and the wrong guess anywhere else. `$SHELL` is most often unset in
     exactly the containers where the box is bash-only, so the pre-fix default
     wrote the sentinel block into a `~/.zshrc` nothing would ever source.
@@ -123,7 +124,7 @@ def test_resolve_rc_path_default_unset_linux(monkeypatch, tmp_path):
     assert _resolve_rc_path() == tmp_path / ".bashrc"
 
 
-def test_resolve_rc_path_git_bash_exe_suffix(monkeypatch, tmp_path):
+def test_resolve_rc_path_git_bash_exe_suffix(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Git-Bash/MSYS `$SHELL` carries a `.exe` suffix — the pre-fix
     exact-match against `"bash"` missed it and returned `.zshrc`, a file
     that shell never sources."""
@@ -131,25 +132,25 @@ def test_resolve_rc_path_git_bash_exe_suffix(monkeypatch, tmp_path):
     assert _resolve_rc_path() == tmp_path / ".bashrc"
 
 
-def test_resolve_rc_path_msystem_wins_over_unset_shell(monkeypatch, tmp_path):
+def test_resolve_rc_path_msystem_wins_over_unset_shell(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Under MSYS `$SHELL` is frequently unset entirely; `MSYSTEM` is the
     reliable signal and takes precedence."""
     monkeypatch.setenv("MSYSTEM", "MINGW64")
     assert _resolve_rc_path() == tmp_path / ".bashrc"
 
 
-def test_resolve_rc_path_msystem_wins_over_zsh_shell(monkeypatch, tmp_path):
+def test_resolve_rc_path_msystem_wins_over_zsh_shell(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("MSYSTEM", "MINGW64")
     monkeypatch.setenv("SHELL", "/bin/zsh")
     assert _resolve_rc_path() == tmp_path / ".bashrc"
 
 
-def test_resolve_rc_path_zsh_exe_suffix(monkeypatch, tmp_path):
+def test_resolve_rc_path_zsh_exe_suffix(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("SHELL", "C:/tools/zsh.exe")  # abs-path-ok: synthetic $SHELL value under test, not a path this repo resolves
     assert _resolve_rc_path() == tmp_path / ".zshrc"
 
 
-def test_first_invocation_appends_block(tmp_path):
+def test_first_invocation_appends_block(tmp_path: Path) -> None:
     result = write_shell_rc_guard_block(check_only=False)
     assert result["already_present"] is False
     assert result["modified"] is True
@@ -161,7 +162,7 @@ def test_first_invocation_appends_block(tmp_path):
     assert 'export CLAUDE_KLABAUTER_CLONE="/resolved/claude-klabauter/clone"' in text
 
 
-def test_double_invocation_is_safe_noop(tmp_path):
+def test_double_invocation_is_safe_noop(tmp_path: Path) -> None:
     first = write_shell_rc_guard_block(check_only=False)
     assert first["modified"] is True
     text_after_first = (tmp_path / ".zshrc").read_text(encoding="utf-8")
@@ -175,7 +176,7 @@ def test_double_invocation_is_safe_noop(tmp_path):
     assert text_after_second.count(SENTINEL_BEGIN) == 1
 
 
-def test_check_only_never_mutates(tmp_path):
+def test_check_only_never_mutates(tmp_path: Path) -> None:
     result = write_shell_rc_guard_block(check_only=True)
     assert result["modified"] is False
     assert result["already_present"] is False
@@ -183,14 +184,14 @@ def test_check_only_never_mutates(tmp_path):
     assert not rc_path.exists()
 
 
-def test_check_only_reports_already_present_without_mutating(tmp_path):
+def test_check_only_reports_already_present_without_mutating(tmp_path: Path) -> None:
     write_shell_rc_guard_block(check_only=False)
     result = write_shell_rc_guard_block(check_only=True)
     assert result["already_present"] is True
     assert result["modified"] is False
 
 
-def test_append_preserves_existing_content_and_adds_newline(tmp_path):
+def test_append_preserves_existing_content_and_adds_newline(tmp_path: Path) -> None:
     rc_path = tmp_path / ".zshrc"
     rc_path.write_text("existing line, no trailing newline", encoding="utf-8")
 
@@ -201,7 +202,7 @@ def test_append_preserves_existing_content_and_adds_newline(tmp_path):
     assert SENTINEL_BEGIN in text
 
 
-def test_claude_klabauter_root_resolution_failure_skips_write_without_raising(tmp_path, monkeypatch):
+def test_claude_klabauter_root_resolution_failure_skips_write_without_raising(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def _raise():
         raise RuntimeError("CLAUDE_KLABAUTER_ROOT unresolvable")
 
@@ -212,25 +213,25 @@ def test_claude_klabauter_root_resolution_failure_skips_write_without_raising(tm
     assert not (tmp_path / ".zshrc").exists()
 
 
-def test_windows_branch_is_documented_noop(monkeypatch):
+def test_windows_branch_is_documented_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod.os, "name", "nt")
     result = write_shell_rc_guard_block(check_only=False)
     assert result == {"rc_path": "", "already_present": False, "modified": False}
 
 
-def test_handler_check_only_true(tmp_path):
+def test_handler_check_only_true(tmp_path: Path) -> None:
     result = asyncio.run(_handler({"check_only": True}))
     assert result["modified"] is False
     assert not (tmp_path / ".zshrc").exists()
 
 
-def test_handler_check_only_false_default(tmp_path):
+def test_handler_check_only_false_default(tmp_path: Path) -> None:
     result = asyncio.run(_handler({}))
     assert result["modified"] is True
     assert (tmp_path / ".zshrc").exists()
 
 
-def test_handler_registered_under_contractual_op_key():
+def test_handler_registered_under_contractual_op_key() -> None:
     from coordinator_core.ipc import get_op_handler
 
     assert get_op_handler("install.write_shell_rc_guard_block") is not None
@@ -241,21 +242,21 @@ def test_handler_registered_under_contractual_op_key():
 # call sites into write_path_entry_guard_blocks. ---
 
 
-def test_write_shell_rc_guard_block_refuses_when_mutation_disabled(tmp_path, monkeypatch):
+def test_write_shell_rc_guard_block_refuses_when_mutation_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
     result = write_shell_rc_guard_block(check_only=False)
     assert result["modified"] is False
     assert not (tmp_path / ".zshrc").exists()
 
 
-def test_write_shell_rc_guard_block_proceeds_when_mutation_enabled(tmp_path, monkeypatch):
+def test_write_shell_rc_guard_block_proceeds_when_mutation_enabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     result = write_shell_rc_guard_block(check_only=False)
     assert result["modified"] is True
     assert (tmp_path / ".zshrc").exists()
 
 
-def test_handler_refuses_when_mutation_disabled(tmp_path, monkeypatch):
+def test_handler_refuses_when_mutation_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The IPC entry point (`install.write_shell_rc_guard_block`) — the third,
     independently-reachable call path — must inherit the same guard as
     substrate.py's call sites, since it's reachable outside the
@@ -266,7 +267,7 @@ def test_handler_refuses_when_mutation_disabled(tmp_path, monkeypatch):
     assert not (tmp_path / ".zshrc").exists()
 
 
-def test_handler_check_only_true_still_works_with_mutation_disabled(tmp_path, monkeypatch):
+def test_handler_check_only_true_still_works_with_mutation_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`ops/install_health_run.py` calls this path with `check_only=True` as
     a read-only health probe — it must keep working even with the kill
     switch set, since check-only mutates nothing regardless."""
@@ -276,7 +277,7 @@ def test_handler_check_only_true_still_works_with_mutation_disabled(tmp_path, mo
     assert not (tmp_path / ".zshrc").exists()
 
 
-def test_write_path_entry_guard_blocks_check_only_works_with_mutation_disabled(tmp_path, monkeypatch):
+def test_write_path_entry_guard_blocks_check_only_works_with_mutation_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`write_path_entry_guard_blocks(check_only=True)` — the read-only
     health-probe shape used by `ops/install_health_run.py` — must not be
     blocked by the kill switch, since it performs no write."""
@@ -287,7 +288,7 @@ def test_write_path_entry_guard_blocks_check_only_works_with_mutation_disabled(t
     assert result["modified"] is False
 
 
-def test_write_path_entry_guard_blocks_refuses_when_mutation_disabled(tmp_path, monkeypatch):
+def test_write_path_entry_guard_blocks_refuses_when_mutation_disabled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
     result = write_path_entry_guard_blocks(
         path_entry="/some/bin/dir", sentinel_id="SETTINGS_HOME_BIN", position="append", check_only=False,
@@ -300,14 +301,14 @@ def test_write_path_entry_guard_blocks_refuses_when_mutation_disabled(tmp_path, 
 # silently truncate the rest of the file. ---
 
 
-def test_strip_block_text_well_formed_still_strips():
+def test_strip_block_text_well_formed_still_strips() -> None:
     """Sanity/regression: the happy path (BEGIN...END both present) must
     still strip correctly — the malformed-input fix must not break this."""
     text = "before\nBEGIN\nbody line\nEND\nafter"
     assert _strip_block_text(text, "BEGIN", "END") == "before\nafter"
 
 
-def test_strip_block_text_unterminated_begin_is_true_noop():
+def test_strip_block_text_unterminated_begin_is_true_noop() -> None:
     """An orphaned BEGIN marker with no matching END anywhere after it
     (truncated write, crash mid-install, hand-edit that removed the END
     line) must leave `text` completely unchanged — never silently drop the
@@ -316,12 +317,12 @@ def test_strip_block_text_unterminated_begin_is_true_noop():
     assert _strip_block_text(text, "BEGIN", "END") == text
 
 
-def test_strip_block_text_absent_begin_is_noop():
+def test_strip_block_text_absent_begin_is_noop() -> None:
     text = "just some operator content\nno markers here at all"
     assert _strip_block_text(text, "BEGIN", "END") == text
 
 
-def test_relocation_self_heal_with_unterminated_stale_block_does_not_eat_rc_file(tmp_path):
+def test_relocation_self_heal_with_unterminated_stale_block_does_not_eat_rc_file(tmp_path: Path) -> None:
     """Integration-level regression for Finding 1's exact failure mode: a
     stale (content-mismatched) block whose END marker is missing must not
     cause `_write_block_to_file`'s relocation self-heal to drop the
@@ -353,18 +354,18 @@ def test_relocation_self_heal_with_unterminated_stale_block_does_not_eat_rc_file
 # escaped before interpolation into a double-quoted shell string. ---
 
 
-def test_shell_dquote_escape_metacharacters():
+def test_shell_dquote_escape_metacharacters() -> None:
     assert _shell_dquote_escape('$(rm -rf ~)') == '\\$(rm -rf ~)'
     assert _shell_dquote_escape('`whoami`') == '\\`whoami\\`'
     assert _shell_dquote_escape('has "quotes"') == 'has \\"quotes\\"'
     assert _shell_dquote_escape('back\\slash') == 'back\\\\slash'
 
 
-def test_shell_dquote_escape_path_with_spaces_is_unmodified():
+def test_shell_dquote_escape_path_with_spaces_is_unmodified() -> None:
     assert _shell_dquote_escape("/Users/op erator/settings home/bin") == "/Users/op erator/settings home/bin"
 
 
-def test_build_path_entry_body_escapes_command_substitution():
+def test_build_path_entry_body_escapes_command_substitution() -> None:
     body = _build_path_entry_body('/tmp/$(touch /tmp/pwned)', "append")
     # The `$` is backslash-escaped, so the shell never sees an unescaped
     # `$(` — it sees a literal `\$(`, not the start of command
@@ -373,13 +374,13 @@ def test_build_path_entry_body_escapes_command_substitution():
     assert re.search(r"(?<!\\)\$\(", body) is None, f"unescaped command substitution survived in: {body!r}"
 
 
-def test_build_path_entry_body_escapes_backticks():
+def test_build_path_entry_body_escapes_backticks() -> None:
     body = _build_path_entry_body("/tmp/`touch /tmp/pwned`", "prepend")
     assert "`touch /tmp/pwned`" not in body
     assert "\\`touch /tmp/pwned\\`" in body
 
 
-def test_write_path_entry_guard_blocks_with_metacharacter_path_is_inert_when_sourced(tmp_path):
+def test_write_path_entry_guard_blocks_with_metacharacter_path_is_inert_when_sourced(tmp_path: Path) -> None:
     """End-to-end: a malicious path_entry containing command substitution,
     written via the real multi-file production path, must render inert
     shell text — not an executable payload — in the rc file actually
@@ -403,7 +404,7 @@ def test_write_path_entry_guard_blocks_with_metacharacter_path_is_inert_when_sou
     assert re.search(r"(?<!\\)`", written) is None, f"unescaped backtick in: {written!r}"
 
 
-def test_write_path_entry_guard_blocks_with_spaces_path_roundtrips(tmp_path):
+def test_write_path_entry_guard_blocks_with_spaces_path_roundtrips(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     spacey = "/Users/op erator/settings home/bin"
@@ -420,7 +421,7 @@ def test_write_path_entry_guard_blocks_with_spaces_path_roundtrips(tmp_path):
     assert spacey in written
 
 
-def test_claude_klabauter_clone_body_escapes_metacharacters(tmp_path, monkeypatch):
+def test_claude_klabauter_clone_body_escapes_metacharacters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         mod, "coordinator_engine_root_with_class", lambda: ('/tmp/$(touch /tmp/PWNED)', "live-working-tree")
     )
@@ -430,23 +431,23 @@ def test_claude_klabauter_clone_body_escapes_metacharacters(tmp_path, monkeypatc
     assert "\\$(touch /tmp/PWNED)" in text
 
 
-def test_write_surface_identity():
+def test_write_surface_identity() -> None:
     assert WRITE_SURFACE.writer_id == "shell-rc-guard"
     assert WRITE_SURFACE.source_module == "coordinator_core.install.shell_rc_guard"
 
 
-def test_write_surface_is_clean():
+def test_write_surface_is_clean() -> None:
     assert validate(WRITE_SURFACE) == ()
 
 
-def test_write_surface_has_one_shaped_rc_block_clause():
+def test_write_surface_has_one_shaped_rc_block_clause() -> None:
     assert len(WRITE_SURFACE.clauses) == 1
     clause = WRITE_SURFACE.clauses[0]
     assert isinstance(clause, ShapedClause)
     assert clause.entry_template.kind == "rc-block"
 
 
-def test_write_surface_marker_template_matches_sentinel_markers():
+def test_write_surface_marker_template_matches_sentinel_markers() -> None:
     """The declared begin/end marker template must be recomputed from
     `_sentinel_markers` at test time, not hand-copied — a future edit to
     `_sentinel_markers`'s format alone (with no edit to WRITE_SURFACE) must
@@ -457,7 +458,7 @@ def test_write_surface_marker_template_matches_sentinel_markers():
     assert entry.end_marker == expected_end
 
 
-def test_write_surface_end_marker_is_not_absent_on_legacy():
+def test_write_surface_end_marker_is_not_absent_on_legacy() -> None:
     """This writer always renders BEGIN and END together in one write
     (`_desired_block`) — it never produces a begin-only block itself, so the
     tri-state end_marker must be a literal string, never the
@@ -467,7 +468,7 @@ def test_write_surface_end_marker_is_not_absent_on_legacy():
     assert entry.end_marker is not None
 
 
-def test_write_surface_target_file_set_is_computed_not_hardcoded():
+def test_write_surface_target_file_set_is_computed_not_hardcoded() -> None:
     """The declaration's `discovered_by` names applicable_rc_files as the
     file-set mechanism rather than enumerating files — cross-check that the
     live function still returns the five-file set this declaration's prose
@@ -484,7 +485,7 @@ def test_write_surface_target_file_set_is_computed_not_hardcoded():
 
 
 @pytest.fixture
-def _journal_env(tmp_path, monkeypatch):
+def _journal_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from coordinator_core.install import resolution_journal as journal_mod
 
     journal_path = tmp_path / "journal" / "resolution-journal.jsonl"
@@ -497,7 +498,7 @@ def _resolved(journal_mod):
     return journal.get("shell-rc-guard", {}).get(mod._RC_BLOCK_CLAUSE_INDEX)
 
 
-def test_journal_records_written_rc_block(tmp_path, _journal_env):
+def test_journal_records_written_rc_block(tmp_path: Path, _journal_env) -> None:
     write_shell_rc_guard_block(check_only=False)
 
     resolution = _resolved(_journal_env)
@@ -510,7 +511,7 @@ def test_journal_records_written_rc_block(tmp_path, _journal_env):
     assert entry.end_marker == SENTINEL_END
 
 
-def test_journal_records_already_present_block_on_second_run(tmp_path, _journal_env):
+def test_journal_records_already_present_block_on_second_run(tmp_path: Path, _journal_env) -> None:
     write_shell_rc_guard_block(check_only=False)
     write_shell_rc_guard_block(check_only=False)
 
@@ -519,13 +520,13 @@ def test_journal_records_already_present_block_on_second_run(tmp_path, _journal_
     assert str(tmp_path / ".zshrc") in paths
 
 
-def test_journal_not_written_under_check_only(tmp_path, _journal_env):
+def test_journal_not_written_under_check_only(tmp_path: Path, _journal_env) -> None:
     write_shell_rc_guard_block(check_only=True)
 
     assert _journal_env.read_journal() == {}
 
 
-def test_journal_unreported_on_windows_noop(monkeypatch, _journal_env):
+def test_journal_unreported_on_windows_noop(monkeypatch: pytest.MonkeyPatch, _journal_env) -> None:
     # The native-Windows platform branch is deliberately left UNREPORTED
     # (no journal row at all), not journaled empty — see the call site's
     # own comment.
@@ -535,7 +536,7 @@ def test_journal_unreported_on_windows_noop(monkeypatch, _journal_env):
     assert _resolved(_journal_env) is None
 
 
-def test_journal_records_empty_tuple_on_claude_klabauter_root_resolution_failure(monkeypatch, _journal_env):
+def test_journal_records_empty_tuple_on_claude_klabauter_root_resolution_failure(monkeypatch: pytest.MonkeyPatch, _journal_env) -> None:
     def _raise():
         raise RuntimeError("CLAUDE_KLABAUTER_ROOT unresolvable")
 
@@ -547,7 +548,7 @@ def test_journal_records_empty_tuple_on_claude_klabauter_root_resolution_failure
     assert resolution.entries == ()
 
 
-def test_journal_omits_entry_for_refused_write(tmp_path, _journal_env, monkeypatch):
+def test_journal_omits_entry_for_refused_write(tmp_path: Path, _journal_env, monkeypatch: pytest.MonkeyPatch) -> None:
     # COORDINATOR_DISABLE_MACHINE_MUTATION refuses BOTH the rc-block write
     # AND the journal append itself (resolution_journal honours the same
     # kill switch) — so this clause is left UNREPORTED, not journaled
@@ -560,7 +561,7 @@ def test_journal_omits_entry_for_refused_write(tmp_path, _journal_env, monkeypat
     assert not (tmp_path / ".zshrc").exists()
 
 
-def test_a_block_under_the_superseded_engine_stem_is_replaced_not_joined(tmp_path, monkeypatch):
+def test_a_block_under_the_superseded_engine_stem_is_replaced_not_joined(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A mirror publish used to spell its markers with another engine noun; an
     install from either side must leave exactly one block per guard."""
     from coordinator_core.install import shell_rc_guard as mod
@@ -587,7 +588,7 @@ def test_a_block_under_the_superseded_engine_stem_is_replaced_not_joined(tmp_pat
     assert again["already_present"] is True and rc.read_text() == text
 
 
-def test_superseded_and_current_blocks_together_collapse_to_one(tmp_path, monkeypatch):
+def test_superseded_and_current_blocks_together_collapse_to_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.install import shell_rc_guard as mod
 
     monkeypatch.setattr(mod.os, "name", "posix")

@@ -5,11 +5,12 @@ from types import SimpleNamespace
 import pytest
 
 from coordinator_core.session import external_registry as registry
+from pathlib import Path
 
 SID = "00000000-0000-4000-8000-0000000000aa"
 
 
-def proc(name, cmdline=(), pid=123):
+def proc(name, cmdline=(), pid: int = 123) -> SimpleNamespace:
     return SimpleNamespace(pid=pid, name=lambda: name, cmdline=lambda: list(cmdline), create_time=lambda: 456)
 
 
@@ -22,7 +23,7 @@ def proc(name, cmdline=(), pid=123):
     ("node", ["/opt/homebrew/bin/node", "/opt/homebrew/lib/node_modules/@openai/codex/bin/codex.js", "--model", "x"]),
     ("node.exe", ["node.exe", "..\\npm\\node_modules\\@openai\\codex\\bin\\codex.js"]),
 ])
-def test_codex_host_shapes_qualify(name, cmdline):
+def test_codex_host_shapes_qualify(name, cmdline) -> None:
     assert registry._is_codex_host(proc(name, cmdline))
 
 
@@ -36,11 +37,11 @@ def test_codex_host_shapes_qualify(name, cmdline):
     ("python", ["python", "codex.js"]),
     ("zsh", []),
 ])
-def test_non_codex_processes_are_refused(name, cmdline):
+def test_non_codex_processes_are_refused(name, cmdline) -> None:
     assert not registry._is_codex_host(proc(name, cmdline))
 
 
-def test_unreadable_process_is_not_a_host():
+def test_unreadable_process_is_not_a_host() -> None:
     def boom():
         raise OSError("gone")
     assert not registry._is_codex_host(SimpleNamespace(name=boom, cmdline=boom))
@@ -59,13 +60,13 @@ def _start(tmp_path, monkeypatch, parents):
         {"session_id": SID, "cwd": str(cwd), "hook_event_name": "SessionStart"}, tmp_path)
 
 
-def test_darwin_launcher_ancestor_gets_an_engine_address(tmp_path, monkeypatch):
+def test_darwin_launcher_ancestor_gets_an_engine_address(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     parents = [proc("zsh"), proc("node", ["node", "/x/@openai/codex/bin/codex.js", "exec", "-"], pid=77)]
     record = _start(tmp_path, monkeypatch, parents)
     assert record["pid"] == 77
     assert re.fullmatch(r"repo-codex-[a-z0-9-]+-[1-9][0-9]*", record["name"])
 
 
-def test_no_codex_ancestor_still_raises_with_a_message(tmp_path, monkeypatch):
+def test_no_codex_ancestor_still_raises_with_a_message(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ValueError, match="no observed Codex ancestor"):
         _start(tmp_path, monkeypatch, [proc("zsh"), proc("node", ["node", "server.js"])])

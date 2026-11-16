@@ -25,7 +25,7 @@ def _git(repo: Path, *args: str) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@example.com")
     _git(tmp_path, "config", "user.name", "T")
@@ -57,7 +57,7 @@ def _call(repo: Path, paths: list[str], **kw) -> dict:
     )
 
 
-def test_one_product_file_is_one_whole_diff_slice_and_writes_the_sidecar(repo):
+def test_one_product_file_is_one_whole_diff_slice_and_writes_the_sidecar(repo) -> None:
     _write(repo, ["a/b/one.py"], 3)
     started = time.process_time()
     result = _call(repo, ["a/b/one.py"])
@@ -78,7 +78,7 @@ def test_one_product_file_is_one_whole_diff_slice_and_writes_the_sidecar(repo):
     assert cpu_s < 0.5
 
 
-def test_partition_mandatory_returns_one_slice_per_frozen_group(repo):
+def test_partition_mandatory_returns_one_slice_per_frozen_group(repo) -> None:
     rels = [f"pkg{i % 8}/sub{i % 3}/mod{i}.py" for i in range(19)]
     _write(repo, rels, 30)
     result = _call(repo, rels)
@@ -92,7 +92,7 @@ def test_partition_mandatory_returns_one_slice_per_frozen_group(repo):
         assert s["diff_path"] != result["whole_diff_path"]
 
 
-def test_zero_product_files_returns_no_slices(repo):
+def test_zero_product_files_returns_no_slices(repo) -> None:
     _write(repo, ["state/note.md"], 3)
     result = _call(repo, ["state/note.md"])
     assert result["error"] is None
@@ -100,7 +100,7 @@ def test_zero_product_files_returns_no_slices(repo):
     assert result["slices"] == []
 
 
-def test_empty_paths_return_a_zero_file_reply_and_spawn_nothing(repo, monkeypatch):
+def test_empty_paths_return_a_zero_file_reply_and_spawn_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _spawn_trap(monkeypatch)
     result = _call(repo, [])
     assert result["error"] is None
@@ -112,7 +112,7 @@ def test_empty_paths_return_a_zero_file_reply_and_spawn_nothing(repo, monkeypatc
     assert not (repo / result["share_dir"] / "prep-t.review-prep.lock").exists()
 
 
-def test_cross_repo_path_is_excluded_from_the_freeze_not_fatal(repo):
+def test_cross_repo_path_is_excluded_from_the_freeze_not_fatal(repo) -> None:
     _write(repo, ["a/b/one.py"], 3)
     result = _call(repo, ["a/b/one.py", "../coordinator-content-repo/coordinator/workflows/plan-blitz.mjs"])
     assert result["error"] is None
@@ -120,34 +120,34 @@ def test_cross_repo_path_is_excluded_from_the_freeze_not_fatal(repo):
     assert [s["files"] for s in result["slices"]] == [["a/b/one.py"]]
 
 
-def test_only_cross_repo_paths_freeze_nothing_and_still_succeed(repo, monkeypatch):
+def test_only_cross_repo_paths_freeze_nothing_and_still_succeed(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _spawn_trap(monkeypatch)
     result = _call(repo, ["../coordinator-content-repo/x.mjs", "a/../../y.py"])
     assert result["error"] is None
     assert result["slices"] == []
 
 
-def test_dotdot_inside_the_repo_is_kept(repo):
+def test_dotdot_inside_the_repo_is_kept(repo) -> None:
     _write(repo, ["a/b/one.py"], 3)
     result = _call(repo, ["a/c/../b/one.py"])
     assert result["error"] is None
     assert result["product_files"] == 1
 
 
-def test_empty_paths_with_a_group_return_no_slices(repo):
+def test_empty_paths_with_a_group_return_no_slices(repo) -> None:
     result = _call(repo, [], group_index=0, group_count=2)
     assert result["error"] is None
     assert result["slices"] == []
 
 
-def test_empty_slice_prefix_is_still_refused(repo):
+def test_empty_slice_prefix_is_still_refused(repo) -> None:
     result = rp.review_prep(
         repo, base=_base(repo), paths=[], slice_prefix="", plan_path="docs/plans/p.md", session_id=SESSION
     )
     assert result["error"] == "base, paths, slice_prefix and plan_path are required"
 
 
-def test_a_freeze_refusal_is_returned_as_error_with_no_slices(repo):
+def test_a_freeze_refusal_is_returned_as_error_with_no_slices(repo) -> None:
     _write(repo, ["a.py"], 3)
     result = rp.review_prep(
         repo, base="deadbeef", paths=["a.py"], slice_prefix="prep-t", plan_path="docs/plans/p.md",
@@ -157,14 +157,14 @@ def test_a_freeze_refusal_is_returned_as_error_with_no_slices(repo):
     assert result["slices"] == []
 
 
-def test_range_mode_refusal_passes_through(repo):
+def test_range_mode_refusal_passes_through(repo) -> None:
     _write(repo, ["a.py"], 3)
     result = _call(repo, ["a.py"], head="no-such-ref-xyz")
     assert result["error"]
     assert result["slices"] == []
 
 
-def test_handler_requires_exactly_one_of_head_and_worktree(repo):
+def test_handler_requires_exactly_one_of_head_and_worktree(repo) -> None:
     common = {"base": _base(repo), "paths": ["seed.py"], "slice_prefix": "p", "plan_path": "docs/plans/p.md"}
     assert "exactly one" in rp._handler({**common, "head": "x", "worktree": True}, repo)["error"]
     assert "exactly one" in rp._handler(dict(common), repo)["error"]
@@ -179,7 +179,7 @@ def _landed_commit(repo: Path, rel: str) -> str:
     return base
 
 
-def test_foreign_claims_keep_only_paths_a_live_other_session_holds(repo, monkeypatch):
+def test_foreign_claims_keep_only_paths_a_live_other_session_holds(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     base = _landed_commit(repo, "pkg/held.py")
     _write(repo, ["pkg/own.py"], 3)
     _git(repo, "add", "-A")
@@ -190,7 +190,7 @@ def test_foreign_claims_keep_only_paths_a_live_other_session_holds(repo, monkeyp
     assert found == ["pkg/held.py"]
 
 
-def test_unanswerable_claim_is_not_foreign_and_empty_paths_spawn_nothing(repo, monkeypatch):
+def test_unanswerable_claim_is_not_foreign_and_empty_paths_spawn_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     base = _landed_commit(repo, "pkg/x.py")
     monkeypatch.setattr(
         rp.claim_index, "lookup", lambda paths, **kw: {p: [rp.claim_index.UNANSWERABLE] for p in paths}
@@ -204,7 +204,7 @@ def test_unanswerable_claim_is_not_foreign_and_empty_paths_spawn_nothing(repo, m
     assert rp.foreign_claims(repo, f"{base}..HEAD", [], SESSION) == []
 
 
-def _spawn_trap(monkeypatch):
+def _spawn_trap(monkeypatch) -> None:
     def boom(*a, **k):
         raise AssertionError("spawned")
 
@@ -213,7 +213,7 @@ def _spawn_trap(monkeypatch):
     monkeypatch.setattr(rp, "partition_slices", boom)
 
 
-def test_second_call_with_the_same_prefix_reads_the_store_and_spawns_nothing(repo, monkeypatch):
+def test_second_call_with_the_same_prefix_reads_the_store_and_spawns_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     rels = [f"pkg{i % 8}/sub{i % 3}/mod{i}.py" for i in range(19)]
     _write(repo, rels, 30)
     first = _call(repo, rels)
@@ -223,7 +223,7 @@ def test_second_call_with_the_same_prefix_reads_the_store_and_spawns_nothing(rep
     assert second["slices"] and second["error"] is None
 
 
-def test_a_call_for_other_paths_is_not_served_from_the_store(repo, monkeypatch):
+def test_a_call_for_other_paths_is_not_served_from_the_store(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(repo, ["a/one.py", "b/two.py"], 3)
     _call(repo, ["a/one.py"])
     _spawn_trap(monkeypatch)
@@ -231,7 +231,7 @@ def test_a_call_for_other_paths_is_not_served_from_the_store(repo, monkeypatch):
         _call(repo, ["a/one.py", "b/two.py"])
 
 
-def test_a_refusal_is_not_stored(repo):
+def test_a_refusal_is_not_stored(repo) -> None:
     _write(repo, ["a.py"], 3)
     bad = rp.review_prep(
         repo, base="deadbeef", paths=["a.py"], slice_prefix="prep-t", plan_path="docs/plans/p.md",
@@ -242,7 +242,7 @@ def test_a_refusal_is_not_stored(repo):
     assert _call(repo, ["a.py"])["error"] is None
 
 
-def test_concurrent_first_callers_freeze_once(repo, monkeypatch):
+def test_concurrent_first_callers_freeze_once(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from concurrent.futures import ThreadPoolExecutor
 
     rels = [f"pkg{i % 8}/sub{i % 3}/mod{i}.py" for i in range(19)]
@@ -292,7 +292,7 @@ def _count_freezes(monkeypatch) -> list:
     return calls
 
 
-def test_a_loser_on_a_fresh_lock_returns_busy_without_computing(repo, monkeypatch):
+def test_a_loser_on_a_fresh_lock_returns_busy_without_computing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(repo, ["a.py"], 3)
     monkeypatch.setattr(rp, "_LOCK_WAIT_SECS", 0.05)
     lock = _make_lock(repo)
@@ -303,7 +303,7 @@ def test_a_loser_on_a_fresh_lock_returns_busy_without_computing(repo, monkeypatc
     assert lock.exists()
 
 
-def test_a_stale_lock_is_reclaimed_and_computed_once(repo, monkeypatch):
+def test_a_stale_lock_is_reclaimed_and_computed_once(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(repo, ["a.py"], 3)
     _make_lock(repo, age_secs=rp._LOCK_STALE_SECS + 5)
     calls = _count_freezes(monkeypatch)
@@ -314,13 +314,13 @@ def test_a_stale_lock_is_reclaimed_and_computed_once(repo, monkeypatch):
     assert not _lock_path(repo).exists()
 
 
-def test_a_loser_whose_winner_unlinked_the_lock_reclaims_and_computes_once(repo, monkeypatch):
+def test_a_loser_whose_winner_unlinked_the_lock_reclaims_and_computes_once(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(repo, ["a.py"], 3)
     lock = _make_lock(repo)
     monkeypatch.setattr(rp, "_LOCK_POLL_SECS", 0.0)
     real_sleep = time.sleep
 
-    def winner_leaves(secs):
+    def winner_leaves(secs) -> None:
         lock.unlink(missing_ok=True)
         real_sleep(0)
 
@@ -332,7 +332,7 @@ def test_a_loser_whose_winner_unlinked_the_lock_reclaims_and_computes_once(repo,
     assert not lock.exists()
 
 
-def test_group_index_selects_the_balanced_contiguous_group(repo):
+def test_group_index_selects_the_balanced_contiguous_group(repo) -> None:
     rels = [f"pkg{i % 8}/sub{i % 3}/mod{i}.py" for i in range(19)]
     _write(repo, rels, 30)
     whole = _call(repo, rels)
@@ -349,7 +349,7 @@ def test_group_index_selects_the_balanced_contiguous_group(repo):
     assert len(_call(repo, rels, group_index=n - 1, group_count=99)["slices"]) == 1
 
 
-def test_group_params_go_together_and_stay_in_range(repo):
+def test_group_params_go_together_and_stay_in_range(repo) -> None:
     _write(repo, ["a.py"], 3)
     assert "go together" in _call(repo, ["a.py"], group_index=0)["error"]
     assert _call(repo, ["a.py"], group_index=2, group_count=2)["error"]
@@ -358,7 +358,7 @@ def test_group_params_go_together_and_stay_in_range(repo):
     assert "integers" in rp._handler(dict(common, group_index="0", group_count=1), repo)["error"]
 
 
-def test_group_slices_split_matches_the_js_helper():
+def test_group_slices_split_matches_the_js_helper() -> None:
     items = [{"id": i} for i in range(5)]
     assert [[s["id"] for s in g] for g in rp.group_slices(items, 2)] == [[0, 1, 2], [3, 4]]
     assert [[s["id"] for s in g] for g in rp.group_slices(items, 99)] == [[0], [1], [2], [3], [4]]
@@ -374,7 +374,7 @@ def _stored(repo: Path, paths: list[str], run: str = "run1", base: str | None = 
     )
 
 
-def test_stored_reply_for_run_returns_the_one_matching_reply(repo):
+def test_stored_reply_for_run_returns_the_one_matching_reply(repo) -> None:
     _write(repo, ["a/b/one.py", "a/b/two.py"], 3)
     made = _stored(repo, ["a/b/one.py", "a/b/two.py"])
     got = rp.stored_reply_for_run(
@@ -387,27 +387,27 @@ def test_stored_reply_for_run_returns_the_one_matching_reply(repo):
     assert not Path(got["sidecar_path"]).is_absolute() and "\\" not in got["sidecar_path"]
 
 
-def test_stored_reply_for_run_ignores_another_runs_sidecar(repo):
+def test_stored_reply_for_run_ignores_another_runs_sidecar(repo) -> None:
     _write(repo, ["a/b/one.py"], 3)
     made = _stored(repo, ["a/b/one.py"], run="other")
     assert rp.stored_reply_for_run(repo, SESSION, made["run_base_sha"], run_key="run1") is None
 
 
-def test_stored_reply_for_run_ignores_a_different_base(repo):
+def test_stored_reply_for_run_ignores_a_different_base(repo) -> None:
     _write(repo, ["a/b/one.py"], 3)
     made = _stored(repo, ["a/b/one.py"])
     other = made["run_base_sha"][:12] + "0" * 28
     assert rp.stored_reply_for_run(repo, SESSION, other, run_key="run1") is None
 
 
-def test_stored_reply_for_run_ignores_paths_outside_within(repo):
+def test_stored_reply_for_run_ignores_paths_outside_within(repo) -> None:
     _write(repo, ["a/b/one.py", "a/b/two.py"], 3)
     made = _stored(repo, ["a/b/one.py", "a/b/two.py"])
     assert rp.stored_reply_for_run(repo, SESSION, made["run_base_sha"], within=["a/b/one.py"]) is None
     assert rp.stored_reply_for_run(repo, SESSION, made["run_base_sha"]) is not None
 
 
-def test_covering_keeps_a_reply_that_names_extra_paths_and_default_drops_it(repo):
+def test_covering_keeps_a_reply_that_names_extra_paths_and_default_drops_it(repo) -> None:
     _write(repo, ["a/b/one.py", "a/b/two.py"], 3)
     made = _stored(repo, ["a/b/one.py", "a/b/two.py"])
     base = made["run_base_sha"]
@@ -420,7 +420,7 @@ def test_covering_keeps_a_reply_that_names_extra_paths_and_default_drops_it(repo
     assert rp.stored_reply_for_run(repo, SESSION, base, run_key="run1", covering=True) is not None
 
 
-def test_stored_reply_for_run_returns_none_on_two_matches(repo):
+def test_stored_reply_for_run_returns_none_on_two_matches(repo) -> None:
     _write(repo, ["a/b/one.py"], 3)
     made = _stored(repo, ["a/b/one.py"], run="run1")
     _stored(repo, ["a/b/one.py"], run="run2")
@@ -428,11 +428,11 @@ def test_stored_reply_for_run_returns_none_on_two_matches(repo):
     assert rp.stored_reply_for_run(repo, SESSION, made["run_base_sha"], run_key="run1") is not None
 
 
-def test_stored_reply_for_run_returns_none_without_a_share_dir(repo):
+def test_stored_reply_for_run_returns_none_without_a_share_dir(repo) -> None:
     assert rp.stored_reply_for_run(repo, "sess-none", _base(repo), run_key="run1") is None
 
 
-def test_stored_reply_without_base_finds_the_one_ask_route_reply_by_run_key(repo):
+def test_stored_reply_without_base_finds_the_one_ask_route_reply_by_run_key(repo) -> None:
     _write(repo, ["a/b/one.py"], 3)
     b = _base(repo)
     made = rp.review_prep(
@@ -446,7 +446,7 @@ def test_stored_reply_without_base_finds_the_one_ask_route_reply_by_run_key(repo
     assert got["sidecar_path"] == made["sidecar_path"]
 
 
-def test_stored_reply_without_base_returns_none_on_two_bases_for_one_run(repo):
+def test_stored_reply_without_base_returns_none_on_two_bases_for_one_run(repo) -> None:
     _write(repo, ["a/b/one.py"], 3)
     _stored(repo, ["a/b/one.py"], run="run1")
     _git(repo, "add", "-A")
@@ -455,13 +455,13 @@ def test_stored_reply_without_base_returns_none_on_two_bases_for_one_run(repo):
     assert rp.stored_reply_for_run(repo, SESSION, None, run_key="run1") is None
 
 
-def test_stored_reply_without_base_and_run_key_returns_none(repo):
+def test_stored_reply_without_base_and_run_key_returns_none(repo) -> None:
     _write(repo, ["a/b/one.py"], 3)
     _stored(repo, ["a/b/one.py"])
     assert rp.stored_reply_for_run(repo, SESSION, None) is None
 
 
-def test_stored_reply_without_base_ignores_a_non_engine_agent_type(repo):
+def test_stored_reply_without_base_ignores_a_non_engine_agent_type(repo) -> None:
     _write(repo, ["a/b/one.py"], 3)
     made = _stored(repo, ["a/b/one.py"])
     sidecar = repo / made["sidecar_path"]
@@ -471,7 +471,7 @@ def test_stored_reply_without_base_ignores_a_non_engine_agent_type(repo):
     assert rp.stored_reply_for_run(repo, SESSION, None, run_key="run1") is None
 
 
-def test_prep_block_unions_slice_files_in_order_and_copies_the_rest():
+def test_prep_block_unions_slice_files_in_order_and_copies_the_rest() -> None:
     reply = {
         "run_base_sha": "abc",
         "product_files": 3,
@@ -493,7 +493,7 @@ def _sidecar_fm(repo: Path, reply: dict) -> dict:
     return yaml.safe_load(text.split("---\n")[1])
 
 
-def test_worktree_prep_records_reviewed_sha256_and_re_freezes_a_moved_file(repo):
+def test_worktree_prep_records_reviewed_sha256_and_re_freezes_a_moved_file(repo) -> None:
     from coordinator_core.git.content_hash import eol_folded_sha256  # noqa: PLC0415
 
     _write(repo, ["a/one.py", "b/two.py"], 3)
@@ -514,7 +514,7 @@ def test_worktree_prep_records_reviewed_sha256_and_re_freezes_a_moved_file(repo)
     assert list(Path(first["whole_diff_path"]).parent.glob("*.attempt1.diff"))
 
 
-def test_unmoved_declared_paths_are_served_with_no_git_spawn_and_a_directory_entry_is_never_served(repo, monkeypatch):
+def test_unmoved_declared_paths_are_served_with_no_git_spawn_and_a_directory_entry_is_never_served(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(repo, ["a/one.py", "b/two.py"], 3)
     first = _call(repo, ["a/one.py", "b/two.py", "never/written.py"])
     assert _sidecar_fm(repo, first)["declared_sha256"]["never/written.py"] is None
@@ -528,7 +528,7 @@ def test_unmoved_declared_paths_are_served_with_no_git_spawn_and_a_directory_ent
     assert rp._stored_reply(repo, repo / made["sidecar_path"], _base(repo), pathspecs, None) is None
 
 
-def test_a_worktree_sidecar_without_declared_sha256_is_recomputed_but_range_is_served(repo):
+def test_a_worktree_sidecar_without_declared_sha256_is_recomputed_but_range_is_served(repo) -> None:
     import yaml  # noqa: PLC0415
 
     base = _base(repo)
@@ -555,7 +555,7 @@ def test_a_worktree_sidecar_without_declared_sha256_is_recomputed_but_range_is_s
     assert rp._stored_reply(repo, repo / wt["sidecar_path"], base, ["a/one.py"], None) is None
 
 
-def test_stored_reply_for_run_returns_reviewed_sha256_and_recorded_at_and_tolerates_their_absence(repo):
+def test_stored_reply_for_run_returns_reviewed_sha256_and_recorded_at_and_tolerates_their_absence(repo) -> None:
     _write(repo, ["a/b/one.py"], 3)
     made = _stored(repo, ["a/b/one.py"])
     got = rp.stored_reply_for_run(repo, SESSION, made["run_base_sha"], run_key="run1")
@@ -574,7 +574,7 @@ def test_stored_reply_for_run_returns_reviewed_sha256_and_recorded_at_and_tolera
     assert old is not None and "reviewed_sha256" not in old and "recorded_at" not in old
 
 
-def test_registered_in_every_op_set():
+def test_registered_in_every_op_set() -> None:
     from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass  # noqa: PLC0415
     from coordinator_core.op_scopes import _OP_KEY_SCOPE  # noqa: PLC0415
     from coordinator_core.ops._registry_map import OP_MODULE_MAP  # noqa: PLC0415
@@ -622,7 +622,7 @@ def _prep(repo: Path, base: str, **kw) -> dict:
 @pytest.mark.parametrize(
     "peer_session,peer_deliverable", [(PEER, None), (SESSION, "dlv-sibling")]
 )
-def test_worktree_whole_diff_drops_the_peer_hunk_and_keeps_the_run_own(repo, peer_session, peer_deliverable):
+def test_worktree_whole_diff_drops_the_peer_hunk_and_keeps_the_run_own(repo, peer_session, peer_deliverable) -> None:
     base = _peer_scenario(repo, peer_session, peer_deliverable)
     (repo / "a.py").write_text("v = 0\npeer = 1\nown = 1\n", encoding="utf-8")
     reply = _prep(repo, base)
@@ -633,7 +633,7 @@ def test_worktree_whole_diff_drops_the_peer_hunk_and_keeps_the_run_own(repo, pee
     assert set(reply) >= set(rp._STORED_KEYS) - {"sidecar_path"} and "peer_bases" not in reply
 
 
-def test_range_mode_whole_run_prep_prefix_has_the_snapshot_review_reverify_looks_up(repo):
+def test_range_mode_whole_run_prep_prefix_has_the_snapshot_review_reverify_looks_up(repo) -> None:
     from coordinator_core.ops import review_reverify as rr
 
     base = _peer_scenario(repo, PEER, None)
@@ -647,7 +647,7 @@ def test_range_mode_whole_run_prep_prefix_has_the_snapshot_review_reverify_looks
         assert rr._read_manifest(manifest.parent) is not None
 
 
-def test_range_whole_diff_drops_the_peer_hunk_and_keeps_the_run_own(repo):
+def test_range_whole_diff_drops_the_peer_hunk_and_keeps_the_run_own(repo) -> None:
     base = _peer_scenario(repo, PEER, None)
     head = _commit_as(repo, "v = 0\npeer = 1\nown = 1\n", "own edit", SESSION, DELIVERABLE)
     reply = _prep(repo, base, head=head)
@@ -656,7 +656,7 @@ def test_range_whole_diff_drops_the_peer_hunk_and_keeps_the_run_own(repo):
     assert "+own = 1" in diff and "+peer = 1" not in diff
 
 
-def test_a_declared_directory_takes_the_peer_base_for_its_peer_file_and_keeps_the_rest(repo):
+def test_a_declared_directory_takes_the_peer_base_for_its_peer_file_and_keeps_the_rest(repo) -> None:
     _plan_with_deliverable(repo)
     (repo / "d").mkdir()
     (repo / "d" / "x.py").write_text("x = 0\n", encoding="utf-8")
@@ -685,7 +685,7 @@ def test_a_declared_directory_takes_the_peer_base_for_its_peer_file_and_keeps_th
     assert "+peer = 1" not in diff
 
 
-def test_a_peer_commit_after_the_run_own_commit_keeps_the_run_base(repo):
+def test_a_peer_commit_after_the_run_own_commit_keeps_the_run_base(repo) -> None:
     _plan_with_deliverable(repo)
     (repo / "a.py").write_text("v = 0\n", encoding="utf-8")
     _git(repo, "add", "-A")
@@ -697,7 +697,7 @@ def test_a_peer_commit_after_the_run_own_commit_keeps_the_run_base(repo):
     assert "+own = 1" in diff and "+peer = 1" in diff
 
 
-def test_partition_receives_the_peer_base_map(repo, monkeypatch):
+def test_partition_receives_the_peer_base_map(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     base = _peer_scenario(repo, PEER, None)
     (repo / "a.py").write_text("v = 0\npeer = 1\nown = 1\n", encoding="utf-8")
     seen = {}
@@ -712,7 +712,7 @@ def test_partition_receives_the_peer_base_map(repo, monkeypatch):
     assert list(seen["path_bases"]) == ["a.py"] and seen["path_bases"]["a.py"] != base
 
 
-def test_a_stored_reply_is_refused_after_a_peer_commit_that_leaves_the_bytes_unmoved(repo):
+def test_a_stored_reply_is_refused_after_a_peer_commit_that_leaves_the_bytes_unmoved(repo) -> None:
     base = _peer_scenario(repo, PEER, None)
     own_text = "v = 0\npeer = 1\nown = 1\n"
     (repo / "a.py").write_text(own_text, encoding="utf-8")
@@ -726,7 +726,7 @@ def test_a_stored_reply_is_refused_after_a_peer_commit_that_leaves_the_bytes_unm
     assert "+own = 1" not in Path(second["whole_diff_path"]).read_text(encoding="utf-8")
 
 
-def test_a_served_reply_costs_exactly_one_peer_log_spawn(repo, monkeypatch):
+def test_a_served_reply_costs_exactly_one_peer_log_spawn(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import review_peer_bases as rpb  # noqa: PLC0415
 
     base = _peer_scenario(repo, PEER, None)
@@ -745,7 +745,7 @@ def test_a_served_reply_costs_exactly_one_peer_log_spawn(repo, monkeypatch):
     assert len(calls) == 1
 
 
-def test_range_mode_untracked_and_uncommitted_paths_get_a_head_fallback_slice(repo):
+def test_range_mode_untracked_and_uncommitted_paths_get_a_head_fallback_slice(repo) -> None:
     base = _base(repo)
     _write(repo, ["a/new.py"], 3)
     result = rp.review_prep(
@@ -758,7 +758,7 @@ def test_range_mode_untracked_and_uncommitted_paths_get_a_head_fallback_slice(re
     assert "+v = 1" in Path(result["whole_diff_path"]).read_text(encoding="utf-8")
 
 
-def test_a_declared_path_with_no_delta_is_named_excluded(repo):
+def test_a_declared_path_with_no_delta_is_named_excluded(repo) -> None:
     _write(repo, ["a/mine.py"], 3)
     result = _call(repo, ["a/mine.py", "seed.py"])
     assert [f for s in result["slices"] for f in s["files"]] == ["a/mine.py"]
@@ -767,7 +767,7 @@ def test_a_declared_path_with_no_delta_is_named_excluded(repo):
     assert fm["excluded"] == result["excluded"]
 
 
-def test_an_outside_repo_path_is_named_excluded_and_zero_paths_still_reply(repo):
+def test_an_outside_repo_path_is_named_excluded_and_zero_paths_still_reply(repo) -> None:
     result = _call(repo, ["../x.py"])
     assert result["slices"] == [] and result["error"] is None
     assert result["excluded"] == [{"path": "../x.py", "reason": "outside-repo"}]
@@ -780,7 +780,7 @@ def _peer_holder() -> dict:
                             withheld=frozenset({"a/theirs.py"}), claims=frozenset())}
 
 
-def test_review_prep_keeps_a_path_a_halted_peer_withholds(repo):
+def test_review_prep_keeps_a_path_a_halted_peer_withholds(repo) -> None:
     _write(repo, ["a/mine.py", "a/theirs.py"], 3)
     result = _call(repo, ["a/mine.py", "a/theirs.py"], run_id="me", live_runs=_peer_holder())
     assert result["error"] is None
@@ -790,7 +790,7 @@ def test_review_prep_keeps_a_path_a_halted_peer_withholds(repo):
 
 
 @pytest.mark.parametrize("ranged", [False, True], ids=["worktree", "range"])
-def test_a_run_whose_only_path_is_peer_withheld_gets_one_slice(repo, ranged):
+def test_a_run_whose_only_path_is_peer_withheld_gets_one_slice(repo, ranged) -> None:
     _write(repo, ["a/theirs.py"], 3)
     mode = {"head": _base(repo)} if ranged else {}
     result = _call(repo, ["a/theirs.py"], run_id="me", live_runs=_peer_holder(), **mode)
@@ -799,14 +799,14 @@ def test_a_run_whose_only_path_is_peer_withheld_gets_one_slice(repo, ranged):
     assert result["peer_held"] == ["a/theirs.py"]
 
 
-def test_cover_index_answers_like_the_sequence_form():
+def test_cover_index_answers_like_the_sequence_form() -> None:
     files = ["src/a/x.py", "src/b/y.py", "top.py"]
     index = rp._cover_index(files)
     for declared in ["src", "src/", "src/a", "src/a/x.py", "src/c", "top.py", "to", "src/a/x.py/", ""]:
         assert rp._covers(declared, index) == rp._covers(declared, files), declared
 
 
-def test_native_blob_parse_finds_the_broken_py_at_head_and_defers_a_non_sha_head(repo):
+def test_native_blob_parse_finds_the_broken_py_at_head_and_defers_a_non_sha_head(repo) -> None:
     from coordinator_core.ops.dispatch_emit.landing_integrity import unparseable_py_at
 
     _write(repo, ["ok.py"], 2)

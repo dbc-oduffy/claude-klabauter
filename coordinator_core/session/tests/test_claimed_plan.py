@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.session import claimed_plan
+import pytest
 
 
 def _set_sid(monkeypatch, sid: str = "me-sid") -> None:
@@ -47,12 +48,12 @@ def _write_claim(
 
 
 class TestListHeldPlanClaims:
-    def test_zero_claims_returns_empty_list(self, tmp_path, monkeypatch):
+    def test_zero_claims_returns_empty_list(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
         assert claimed_plan.list_held_plan_claims(str(tmp_path)) == []
 
-    def test_one_claim(self, tmp_path, monkeypatch):
+    def test_one_claim(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
         _write_claim(
@@ -63,8 +64,8 @@ class TestListHeldPlanClaims:
         ]
 
     def test_two_claims_distinct_claimed_at_deterministic_earliest_first(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
         _write_claim(
@@ -84,8 +85,8 @@ class TestListHeldPlanClaims:
         ]
 
     def test_two_claims_one_missing_claimed_at_orders_per_claim_not_set_wide(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """2026-08-13, sedge-15: this used to codify the SET-WIDE
         alphabetical fallback (one claim missing `claimed_at` discarded the
         ordering signal for the WHOLE set, including `plan-z`'s own known
@@ -107,8 +108,8 @@ class TestListHeldPlanClaims:
         ]
 
     def test_per_claim_degradation_orders_known_timestamps_around_unknown(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
         _write_claim(
@@ -125,14 +126,14 @@ class TestListHeldPlanClaims:
             "docs/plans/2026-08-10-plan-a.md",
         ]
 
-    def test_no_session_id_returns_empty_list(self, tmp_path, monkeypatch):
+    def test_no_session_id_returns_empty_list(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _make_sessions_dir(tmp_path, monkeypatch)
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         assert claimed_plan.list_held_plan_claims(str(tmp_path)) == []
 
-    def test_claim_held_by_other_session_excluded(self, tmp_path, monkeypatch):
+    def test_claim_held_by_other_session_excluded(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch, sid="me-sid")
         _write_claim(
@@ -145,12 +146,12 @@ class TestListHeldPlanClaims:
 
 
 class TestResolveClaimedPlanPathForTrailer:
-    def test_zero_claims_returns_none(self, tmp_path, monkeypatch):
+    def test_zero_claims_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
         assert claimed_plan.resolve_claimed_plan_path_for_trailer(str(tmp_path)) is None
 
-    def test_single_claim_returns_that_path(self, tmp_path, monkeypatch):
+    def test_single_claim_returns_that_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
         _write_claim(
@@ -161,7 +162,7 @@ class TestResolveClaimedPlanPathForTrailer:
             == "docs/plans/2026-08-10-plan-a.md"
         )
 
-    def test_multi_claim_returns_earliest_claimed_at(self, tmp_path, monkeypatch):
+    def test_multi_claim_returns_earliest_claimed_at(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
         _write_claim(
@@ -187,12 +188,12 @@ class TestResolveClaimedPlanPathUnchanged:
     pointer no longer answers, because nothing but `claim_plan` writes that
     field and both release and mid-plan death leave it behind."""
 
-    def test_no_plan_claimed_returns_none(self, tmp_path, monkeypatch):
+    def test_no_plan_claimed_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
         assert claimed_plan.resolve_claimed_plan_path(str(tmp_path)) is None
 
-    def test_single_claim_tier_b_return_value_unchanged(self, tmp_path, monkeypatch):
+    def test_single_claim_tier_b_return_value_unchanged(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
         _write_claim(
@@ -204,8 +205,8 @@ class TestResolveClaimedPlanPathUnchanged:
         )
 
     def test_tier_a_session_shape_takes_precedence_over_tier_b(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
         _write_claim(
@@ -226,8 +227,8 @@ class TestResolveClaimedPlanPathUnchanged:
         )
 
     def test_tier_a_pointer_without_backing_claim_is_ignored(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
         _write_claim(
@@ -245,8 +246,8 @@ class TestResolveClaimedPlanPathUnchanged:
         )
 
     def test_tier_a_pointer_with_no_claims_at_all_returns_none(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
         monkeypatch.setattr(
@@ -258,8 +259,8 @@ class TestResolveClaimedPlanPathUnchanged:
         assert claimed_plan.resolve_claimed_plan_path(str(tmp_path)) is None
 
     def test_multi_claim_tier_b_becomes_deterministic_earliest_claimed_at(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
         _write_claim(
@@ -282,12 +283,12 @@ class TestArchiveAwareSlugResolution:
         monkeypatch.setattr(claimed_plan.core, "git_root", lambda cwd=None: str(repo))
         return repo
 
-    def test_live_plan_resolves_to_docs_plans(self, tmp_path, monkeypatch):
+    def test_live_plan_resolves_to_docs_plans(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = self._repo(tmp_path, monkeypatch)
         (repo / "docs" / "plans" / "p.md").write_text("x", encoding="utf-8")
         assert claimed_plan._resolve_plan_slug_path(str(repo), "p") == "docs/plans/p.md"
 
-    def test_archived_plan_resolves_to_archive_specs(self, tmp_path, monkeypatch):
+    def test_archived_plan_resolves_to_archive_specs(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = self._repo(tmp_path, monkeypatch)
         dest = repo / "archive" / "specs" / "2026-08"
         dest.mkdir(parents=True)
@@ -297,7 +298,7 @@ class TestArchiveAwareSlugResolution:
             == "archive/specs/2026-08/p.md"
         )
 
-    def test_archive_specs_wins_over_archive_completed(self, tmp_path, monkeypatch):
+    def test_archive_specs_wins_over_archive_completed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = self._repo(tmp_path, monkeypatch)
         for rel in ("archive/specs/2026-08", "archive/completed/2026-07"):
             (repo / rel).mkdir(parents=True)
@@ -307,7 +308,7 @@ class TestArchiveAwareSlugResolution:
             == "archive/specs/2026-08/p.md"
         )
 
-    def test_live_plan_wins_over_an_archived_namesake(self, tmp_path, monkeypatch):
+    def test_live_plan_wins_over_an_archived_namesake(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = self._repo(tmp_path, monkeypatch)
         (repo / "docs" / "plans" / "p.md").write_text("x", encoding="utf-8")
         dest = repo / "archive" / "specs" / "2026-08"
@@ -315,27 +316,27 @@ class TestArchiveAwareSlugResolution:
         (dest / "p.md").write_text("x", encoding="utf-8")
         assert claimed_plan._resolve_plan_slug_path(str(repo), "p") == "docs/plans/p.md"
 
-    def test_archive_handoffs_is_never_searched(self, tmp_path, monkeypatch):
+    def test_archive_handoffs_is_never_searched(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = self._repo(tmp_path, monkeypatch)
         dest = repo / "archive" / "handoffs" / "2026-08"
         dest.mkdir(parents=True)
         (dest / "p.md").write_text("x", encoding="utf-8")
         assert claimed_plan._resolve_plan_slug_path(str(repo), "p") == "docs/plans/p.md"
 
-    def test_unresolvable_slug_falls_back_to_the_live_path(self, tmp_path, monkeypatch):
+    def test_unresolvable_slug_falls_back_to_the_live_path(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = self._repo(tmp_path, monkeypatch)
         assert (
             claimed_plan._resolve_plan_slug_path(str(repo), "nowhere")
             == "docs/plans/nowhere.md"
         )
 
-    def test_unresolvable_root_falls_back_to_the_live_path(self, tmp_path):
+    def test_unresolvable_root_falls_back_to_the_live_path(self, tmp_path: Path) -> None:
         assert claimed_plan._resolve_plan_slug_path("", "p") == "docs/plans/p.md"
         assert claimed_plan._resolve_plan_slug_path(None, "p") == "docs/plans/p.md"
 
     def test_held_claim_on_an_archived_plan_reports_the_archive_path(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         sessions_dir = _make_sessions_dir(tmp_path, monkeypatch)
         _set_sid(monkeypatch)
         repo = self._repo(tmp_path, monkeypatch)
@@ -350,7 +351,7 @@ class TestArchiveAwareSlugResolution:
 
         assert held == [("archive/specs/2026-08/2026-08-01-shipped.md", "2026-08-01T10:00:00+00:00")]
 
-    def test_shape_pointer_still_backs_an_archived_claim(self, tmp_path, monkeypatch):
+    def test_shape_pointer_still_backs_an_archived_claim(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         assert claimed_plan._backed_by_claim(
             "docs/plans/p.md", [("archive/specs/2026-08/p.md", None)]
         )

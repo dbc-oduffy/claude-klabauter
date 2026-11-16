@@ -7,6 +7,7 @@ import pytest
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards import guard_headless_claude_plugin_dir as g
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -16,7 +17,7 @@ ROOT = "/native/coordinator"
 
 
 @pytest.fixture(autouse=True)
-def _root(monkeypatch):
+def _root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(g, "_plugin_root", lambda: ROOT)
     monkeypatch.setattr(g, "_is_dev_install", lambda: True)
 
@@ -30,37 +31,37 @@ def _rewritten(cmd):
     return spec["updatedInput"]["command"]
 
 
-def test_bare_print_rewritten():
+def test_bare_print_rewritten() -> None:
     assert _rewritten('claude -p "x"') == 'claude --plugin-dir /native/coordinator -p "x"'
 
 
-def test_exe_long_flag_rewritten():
+def test_exe_long_flag_rewritten() -> None:
     assert _rewritten("claude.exe --print hi") == "claude.exe --plugin-dir /native/coordinator --print hi"
 
 
-def test_after_and_and_pipe_rewritten():
+def test_after_and_and_pipe_rewritten() -> None:
     assert _rewritten("cd d && claude -p x | cat") == "cd d && claude --plugin-dir /native/coordinator -p x | cat"
 
 
-def test_path_and_env_prefix_rewritten():
+def test_path_and_env_prefix_rewritten() -> None:
     assert _rewritten("FOO=1 /usr/bin/claude -p x") == "FOO=1 /usr/bin/claude --plugin-dir /native/coordinator -p x"
 
 
-def test_bg_rewritten():
+def test_bg_rewritten() -> None:
     assert _rewritten('claude --bg -n x "go"') == 'claude --plugin-dir /native/coordinator --bg -n x "go"'
 
 
-def test_agent_bg_rewritten():
+def test_agent_bg_rewritten() -> None:
     assert _rewritten("claude --agent r --bg x") == "claude --plugin-dir /native/coordinator --agent r --bg x"
 
 
-def _payload(tool_name, cmd, cwd):
+def _payload(tool_name, cmd, cwd) -> str:
     return json.dumps({"tool_name": tool_name, "tool_input": {"command": cmd}, "cwd": str(cwd)})
 
 
 @pytest.mark.parametrize("tool_name", ["Bash", "PowerShell"])
 @pytest.mark.parametrize("cmd", ['claude --bg -n x "go"', "claude --agent r --bg x"])
-def test_bg_rewritten_through_dispatch(tool_name, cmd, tmp_path):
+def test_bg_rewritten_through_dispatch(tool_name, cmd, tmp_path: Path) -> None:
     out = dispatch.evaluate_payload_json(_payload(tool_name, cmd, tmp_path))
     spec = out["hookSpecificOutput"]
     assert spec["permissionDecision"] == "allow"
@@ -68,7 +69,7 @@ def test_bg_rewritten_through_dispatch(tool_name, cmd, tmp_path):
 
 
 @pytest.mark.parametrize("tool_name", ["Bash", "PowerShell"])
-def test_bg_with_plugin_dir_passes_through_dispatch(tool_name, tmp_path):
+def test_bg_with_plugin_dir_passes_through_dispatch(tool_name, tmp_path: Path) -> None:
     out = dispatch.evaluate_payload_json(_payload(tool_name, "claude --bg --plugin-dir /p x", tmp_path))
     assert "updatedInput" not in json.dumps(out)
 
@@ -92,11 +93,11 @@ def test_bg_with_plugin_dir_passes_through_dispatch(tool_name, tmp_path):
         "ls",
     ],
 )
-def test_pass_through(cmd):
+def test_pass_through(cmd) -> None:
     assert _enveloped(g.check_headless_claude_plugin_dir)(cmd) is None
 
 
-def test_unresolvable_root_allows_with_advisory(monkeypatch):
+def test_unresolvable_root_allows_with_advisory(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(g, "_plugin_root", lambda: None)
     out = _enveloped(g.check_headless_claude_plugin_dir)("claude -p x")
     spec = out["hookSpecificOutput"]
@@ -106,14 +107,14 @@ def test_unresolvable_root_allows_with_advisory(monkeypatch):
     assert "coordinator plugin" in spec["additionalContext"].lower()
 
 
-def test_no_sentinel_is_noop(monkeypatch):
+def test_no_sentinel_is_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(g, "_is_dev_install", lambda: False)
     assert _enveloped(g.check_headless_claude_plugin_dir)("claude -p x") is None
     monkeypatch.setattr(g, "_plugin_root", lambda: None)
     assert _enveloped(g.check_headless_claude_plugin_dir)("claude -p x") is None
 
 
-def test_is_dev_install_follows_sentinel(monkeypatch, tmp_path):
+def test_is_dev_install_follows_sentinel(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import coordinator_core._fleet_names as fn
 
     monkeypatch.undo()

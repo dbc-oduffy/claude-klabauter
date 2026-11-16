@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import emit, halt_baseline
+from pathlib import Path
+import pytest
 
 PLAN = "docs/plans/p.md"
 A, B, C = "a" * 40, "b" * 40, "c" * 40
 
 
-def test_precedence_table(tmp_path):
+def test_precedence_table(tmp_path: Path) -> None:
     state = emit.ResumeLanded(frozenset(), None, run_halts={"r": (frozenset(), B)}, run_first_halts={"r": A})
     base = lambda resume, head=None, st=state: halt_baseline.since_halt_base(tmp_path, resume, PLAN, head, st)
     assert base({"run_id": "r", "since_sha": C, "halt_sha": B}, "h") == (C, "param")
@@ -18,7 +20,7 @@ def test_precedence_table(tmp_path):
     assert base({"run_id": "zz", "since_sha": "short"}, None) == (None, None)
 
 
-def test_param_present_spawns_no_git(tmp_path, monkeypatch):
+def test_param_present_spawns_no_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.git.run as git_run
 
     calls: list = []

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -25,7 +26,7 @@ _SESSION_IS_REAL = nomination._session_is_real
 
 
 @pytest.fixture(autouse=True)
-def _human_entered(monkeypatch):
+def _human_entered(monkeypatch: pytest.MonkeyPatch) -> None:
     """Verdict tests assume a verified human-typed /group-em; the gate is tested below."""
     monkeypatch.setattr(
         nomination, "claim", lambda *a, **k: _REAL_CLAIM(*a, **{"prompt_id": "p-1", **k})
@@ -34,20 +35,20 @@ def _human_entered(monkeypatch):
 
 
 @pytest.fixture
-def repo_root(tmp_path):
+def repo_root(tmp_path: Path) -> str:
     root = tmp_path / "repo"
     root.mkdir()
     return str(root)
 
 
 @pytest.fixture
-def record_dir(tmp_path):
+def record_dir(tmp_path: Path) -> Path:
     d = tmp_path / "group-em-records"
     d.mkdir()
     return d
 
 
-def test_no_record_claims_it(repo_root, record_dir):
+def test_no_record_claims_it(repo_root, record_dir) -> None:
     result = nomination.claim(repo_root, "sid-new", directory=record_dir)
     assert result == {
         "claimed": True,
@@ -61,7 +62,7 @@ def test_no_record_claims_it(repo_root, record_dir):
     assert "pid" not in on_disk
 
 
-def test_record_already_names_us_refreshes_and_reports_already_held(repo_root, record_dir):
+def test_record_already_names_us_refreshes_and_reports_already_held(repo_root, record_dir) -> None:
     nomination.claim(repo_root, "sid-us", directory=record_dir)
     first = nomination.read_record(repo_root, record_dir)["nominated_at"]
 
@@ -79,7 +80,7 @@ def test_record_already_names_us_refreshes_and_reports_already_held(repo_root, r
     assert first is not None
 
 
-def test_record_names_another_live_is_taken_over_and_reported(repo_root, record_dir, monkeypatch):
+def test_record_names_another_live_is_taken_over_and_reported(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     nomination.claim(repo_root, "sid-incumbent", directory=record_dir)
 
     monkeypatch.setattr(nomination, "session_live", lambda sid: True)
@@ -104,7 +105,7 @@ def test_record_names_another_live_is_taken_over_and_reported(repo_root, record_
     assert on_disk["displaced_holder"] == "sid-incumbent"
 
 
-def test_record_names_another_no_registry_record_is_taken_over(repo_root, record_dir, monkeypatch):
+def test_record_names_another_no_registry_record_is_taken_over(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     """Absence of registry evidence (no row for the incumbent's session_id at all) stays a
     refusal -- this fleet is multi-machine, and no row is indistinguishable from a session
     on another machine or with its messaging gate off. Never auto-replaced."""
@@ -127,7 +128,7 @@ def test_record_names_another_no_registry_record_is_taken_over(repo_root, record
     assert on_disk["session_id"] == "sid-challenger"
 
 
-def test_record_names_another_pid_not_running_auto_replaces(repo_root, record_dir, monkeypatch):
+def test_record_names_another_pid_not_running_auto_replaces(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     """POSITIVE evidence of death (a harness registry row exists for the incumbent's
     session_id and its pid is not running) auto-replaces -- a dead-but-unreaped record is
     this mode's steady state, not an anomaly. The replacement must be VISIBLE: it lands in
@@ -182,8 +183,8 @@ def test_record_names_another_pid_not_running_auto_replaces(repo_root, record_di
 
 
 def test_pid_not_running_replace_leaves_no_trace_on_a_prior_first_claim(
-    repo_root, record_dir, monkeypatch
-):
+    repo_root, record_dir, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A record that was never replaced (the ordinary first-claim/self-refresh path)
     must NOT carry any `replaced_*` keys -- additive only, on the replace branch alone."""
     nomination.claim(repo_root, "sid-solo", directory=record_dir)
@@ -198,7 +199,7 @@ def test_pid_not_running_replace_leaves_no_trace_on_a_prior_first_claim(
 # Pin the `_build_record` scoping
 # invariant with an on-disk assertion rather than resting on the claim() return dict,
 # which would pass even if `replaced_*` leaked into the refresh path.
-def test_same_session_refresh_leaves_no_replaced_trace_on_disk(repo_root, record_dir):
+def test_same_session_refresh_leaves_no_replaced_trace_on_disk(repo_root, record_dir) -> None:
     """A same-session refresh (`already_held: True`) must not carry any `replaced_*`
     key forward on disk -- `_build_record` never emits them, and this asserts the
     written record itself, not the `claim()` return value."""
@@ -213,7 +214,7 @@ def test_same_session_refresh_leaves_no_replaced_trace_on_disk(repo_root, record
     assert "replaced_live_reason" not in on_disk
 
 
-def test_reentry_by_holder_still_reports_already_held_true(repo_root, record_dir):
+def test_reentry_by_holder_still_reports_already_held_true(repo_root, record_dir) -> None:
     """Re-entry by the current holder is unchanged by the auto-replace split -- it must
     never be mistaken for a replacement of itself."""
     nomination.claim(repo_root, "sid-us", directory=record_dir)
@@ -226,7 +227,7 @@ def test_reentry_by_holder_still_reports_already_held_true(repo_root, record_dir
     assert result["replaced_holder"] is None
 
 
-def test_write_is_atomic_no_tmp_file_left_behind(repo_root, record_dir):
+def test_write_is_atomic_no_tmp_file_left_behind(repo_root, record_dir) -> None:
     nomination.claim(repo_root, "sid-a", directory=record_dir)
 
     leftovers = list(record_dir.glob("*.tmp"))
@@ -238,7 +239,7 @@ def test_write_is_atomic_no_tmp_file_left_behind(repo_root, record_dir):
     assert data["session_id"] == "sid-a"
 
 
-def test_write_atomic_failure_cleans_up_tmp_and_propagates(repo_root, record_dir, monkeypatch):
+def test_write_atomic_failure_cleans_up_tmp_and_propagates(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(a, b):
         raise OSError("disk full")
 
@@ -252,7 +253,7 @@ def test_write_atomic_failure_cleans_up_tmp_and_propagates(repo_root, record_dir
     assert not nomination._record_path(repo_root, record_dir).exists()
 
 
-def test_is_live_never_reads_a_recorded_pid(repo_root, record_dir, monkeypatch):
+def test_is_live_never_reads_a_recorded_pid(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     """The nomination record carries no `pid` field at all, and even if a caller injected one
     onto a record dict by hand, `is_live` must not consult it -- only `session_id` feeds the
     liveness join.
@@ -269,7 +270,7 @@ def test_is_live_never_reads_a_recorded_pid(repo_root, record_dir, monkeypatch):
 
     seen_args = []
 
-    def _fake_session_live(sid):
+    def _fake_session_live(sid) -> bool:
         seen_args.append(sid)
         return True
 
@@ -283,7 +284,7 @@ def test_is_live_never_reads_a_recorded_pid(repo_root, record_dir, monkeypatch):
     assert seen_args == ["sid-x"]
 
 
-def test_is_live_consults_registry_at_most_once_per_call(repo_root, record_dir, monkeypatch):
+def test_is_live_consults_registry_at_most_once_per_call(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     """Finding 8 (overengineering-reviewer): `is_live` must not read the harness registry
     twice to answer one question -- `session_live`'s own Source-0 check and the not-live
     reason label must share ONE registry consult, not two independent `snapshot()` scans.
@@ -312,28 +313,28 @@ def test_is_live_consults_registry_at_most_once_per_call(repo_root, record_dir, 
     assert len(scan_calls) == 1
 
 
-def test_built_record_never_carries_a_pid_field(repo_root, record_dir):
+def test_built_record_never_carries_a_pid_field(repo_root, record_dir) -> None:
     nomination.claim(repo_root, "sid-a", directory=record_dir)
     record = nomination.read_record(repo_root, record_dir)
     assert "pid" not in record
 
 
-def test_claim_response_never_carries_a_pid_field(repo_root, record_dir):
+def test_claim_response_never_carries_a_pid_field(repo_root, record_dir) -> None:
     result = nomination.claim(repo_root, "sid-a", directory=record_dir)
     assert "pid" not in json.dumps(result)
 
 
-def _stub_live(monkeypatch, live, reason):
+def _stub_live(monkeypatch, live, reason) -> None:
     monkeypatch.setattr(
         nomination, "is_live", lambda record: nomination.LivenessResult(live, reason)
     )
 
 
-def test_who_returns_none_without_record(repo_root, record_dir):
+def test_who_returns_none_without_record(repo_root, record_dir) -> None:
     assert nomination.who(repo_root, record_dir) is None
 
 
-def test_who_annotates_from_is_live_only(repo_root, record_dir, monkeypatch):
+def test_who_annotates_from_is_live_only(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     nomination.claim(repo_root, "sid-h", directory=record_dir)
     _stub_live(monkeypatch, False, "pid_not_running")
     out = nomination.who(repo_root, record_dir)
@@ -342,7 +343,7 @@ def test_who_annotates_from_is_live_only(repo_root, record_dir, monkeypatch):
     assert out["live_reason"] == "pid_not_running"
 
 
-def test_standing_no_match_for_non_holder(repo_root, record_dir, monkeypatch):
+def test_standing_no_match_for_non_holder(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     nomination.claim(repo_root, "sid-h", directory=record_dir)
     _stub_live(monkeypatch, True, "live")
     monkeypatch.setattr(nomination.session_registry, "read_rows", lambda: [])
@@ -350,7 +351,7 @@ def test_standing_no_match_for_non_holder(repo_root, record_dir, monkeypatch):
     assert nomination.standing(repo_root, "", record_dir)["standing"] == "no_match"
 
 
-def test_standing_live_by_id_and_by_unique_name(repo_root, record_dir, monkeypatch):
+def test_standing_live_by_id_and_by_unique_name(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     nomination.claim(repo_root, "sid-h", directory=record_dir)
     _stub_live(monkeypatch, True, "live")
     row = type("Row", (), {"session_id": "sid-h", "name": "alice"})()
@@ -359,7 +360,7 @@ def test_standing_live_by_id_and_by_unique_name(repo_root, record_dir, monkeypat
     assert nomination.standing(repo_root, "alice", record_dir)["standing"] == "live"
 
 
-def test_standing_ambiguous_name_is_no_match(repo_root, record_dir, monkeypatch):
+def test_standing_ambiguous_name_is_no_match(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     nomination.claim(repo_root, "sid-h", directory=record_dir)
     _stub_live(monkeypatch, True, "live")
     rows = [
@@ -370,7 +371,7 @@ def test_standing_ambiguous_name_is_no_match(repo_root, record_dir, monkeypatch)
     assert nomination.standing(repo_root, "dup", record_dir)["standing"] == "no_match"
 
 
-def test_standing_not_live_when_is_live_says_pid_not_running(repo_root, record_dir, monkeypatch):
+def test_standing_not_live_when_is_live_says_pid_not_running(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     nomination.claim(repo_root, "sid-h", directory=record_dir)
     _stub_live(monkeypatch, False, "pid_not_running")
     out = nomination.standing(repo_root, "sid-h", record_dir)
@@ -378,17 +379,17 @@ def test_standing_not_live_when_is_live_says_pid_not_running(repo_root, record_d
     assert out["live_reason"] == "pid_not_running"
 
 
-def test_standing_none_without_record(repo_root, record_dir):
+def test_standing_none_without_record(repo_root, record_dir) -> None:
     assert nomination.standing(repo_root, "sid-h", record_dir) is None
 
 
-def test_claim_without_prompt_id_refuses_and_writes_nothing(repo_root, record_dir):
+def test_claim_without_prompt_id_refuses_and_writes_nothing(repo_root, record_dir) -> None:
     with pytest.raises(nomination.NotHumanEnteredError):
         _REAL_CLAIM(repo_root, "sid-new", directory=record_dir)
     assert nomination.read_record(repo_root, record_dir) is None
 
 
-def test_claim_records_pending_entry_evidence(repo_root, record_dir):
+def test_claim_records_pending_entry_evidence(repo_root, record_dir) -> None:
     _REAL_CLAIM(repo_root, "sid-new", directory=record_dir, prompt_id="p-9", now=1_700_000_000.0)
     record = nomination.read_record(repo_root, record_dir)
     assert record["entered_via"] == "human-slash-command"
@@ -397,7 +398,7 @@ def test_claim_records_pending_entry_evidence(repo_root, record_dir):
     }
 
 
-def test_home_start_claim_writes_kind_and_claimed_at_only(repo_root, record_dir, monkeypatch):
+def test_home_start_claim_writes_kind_and_claimed_at_only(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(nomination.human_entry, "home_start_refusal", lambda sid: None)
     _REAL_CLAIM(repo_root, "sid-new", directory=record_dir, entry_kind="home-start", now=1_700_000_000.0)
     record = nomination.read_record(repo_root, record_dir)
@@ -405,7 +406,7 @@ def test_home_start_claim_writes_kind_and_claimed_at_only(repo_root, record_dir,
     assert record["entry_evidence"] == {"kind": "home-start", "claimed_at": "2023-11-14T22:13:20Z"}
 
 
-def test_home_start_refusal_reason_raises_and_writes_nothing(repo_root, record_dir, monkeypatch):
+def test_home_start_refusal_reason_raises_and_writes_nothing(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(nomination.human_entry, "home_start_refusal", lambda sid: "cwd-outside-home")
     with pytest.raises(nomination.NotHumanEnteredError, match="cwd-outside-home"):
         _REAL_CLAIM(repo_root, "sid-new", directory=record_dir, entry_kind="home-start")
@@ -416,21 +417,21 @@ def test_home_start_refusal_reason_raises_and_writes_nothing(repo_root, record_d
 @pytest.mark.parametrize(
     "kwargs", [{"entry_kind": "home-start", "prompt_id": "p-1"}, {"entry_kind": "bogus"}]
 )
-def test_entry_kind_with_prompt_id_or_unknown_kind_raises(kwargs, repo_root, record_dir, monkeypatch):
+def test_entry_kind_with_prompt_id_or_unknown_kind_raises(kwargs, repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(nomination.human_entry, "home_start_refusal", lambda sid: None)
     with pytest.raises(nomination.NotHumanEnteredError):
         _REAL_CLAIM(repo_root, "sid-new", directory=record_dir, **kwargs)
     assert nomination.read_record(repo_root, record_dir) is None
 
 
-def test_prompt_id_claim_record_is_unchanged_by_entry_kind_support(repo_root, record_dir):
+def test_prompt_id_claim_record_is_unchanged_by_entry_kind_support(repo_root, record_dir) -> None:
     _REAL_CLAIM(repo_root, "sid-new", directory=record_dir, prompt_id="p-9", now=1_700_000_000.0)
     record = nomination.read_record(repo_root, record_dir)
     assert record["entered_via"] == "human-slash-command"
     assert set(record["entry_evidence"]) == {"status", "prompt_id", "claimed_at"}
 
 
-def test_identify_names_the_evidence_kind(repo_root, record_dir, monkeypatch):
+def test_identify_names_the_evidence_kind(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     _no_registry_name(monkeypatch)
     _stub_live(monkeypatch, True, "live")
     monkeypatch.setattr(nomination.human_entry, "home_start_refusal", lambda sid: None)
@@ -449,13 +450,13 @@ def test_identify_names_the_evidence_kind(repo_root, record_dir, monkeypatch):
 
 
 @pytest.mark.parametrize("sid", ["*", "a?c", "[ab]", "../x", "a/b", "a\\b", "", "a b"])
-def test_claim_rejects_non_token_session_ids(sid, repo_root, record_dir):
+def test_claim_rejects_non_token_session_ids(sid, repo_root, record_dir) -> None:
     with pytest.raises(nomination.NotHumanEnteredError):
         _REAL_CLAIM(repo_root, sid, directory=record_dir, prompt_id="p-1")
     assert nomination.read_record(repo_root, record_dir) is None
 
 
-def test_rejected_standing_is_no_standing(repo_root, record_dir, monkeypatch):
+def test_rejected_standing_is_no_standing(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     nomination.claim(repo_root, "sid-h", directory=record_dir)
     monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "rejected"})
     _stub_live(monkeypatch, True, "live")
@@ -464,7 +465,7 @@ def test_rejected_standing_is_no_standing(repo_root, record_dir, monkeypatch):
     assert nomination.read_authoritative(repo_root, record_dir) is None
 
 
-def test_claim_writes_the_box_record_and_a_claim_elsewhere_takes_it(tmp_path, record_dir, monkeypatch):
+def test_claim_writes_the_box_record_and_a_claim_elsewhere_takes_it(tmp_path: Path, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_a, repo_b = tmp_path / "a", tmp_path / "b"
     repo_a.mkdir()
     repo_b.mkdir()
@@ -479,19 +480,19 @@ def test_claim_writes_the_box_record_and_a_claim_elsewhere_takes_it(tmp_path, re
     assert nomination.read_record(str(repo_a.resolve()), record_dir)["session_id"] == "sid-a"
 
 
-def test_box_record_is_not_listed_as_a_repo_record(repo_root, record_dir):
+def test_box_record_is_not_listed_as_a_repo_record(repo_root, record_dir) -> None:
     nomination.claim(repo_root, "sid-a", directory=record_dir)
     assert [p.name for p in record_dir.glob("*.json")] == [nomination._record_path(repo_root, record_dir).name]
 
 
-def test_box_holder_none_without_record_or_unverified(repo_root, record_dir, monkeypatch):
+def test_box_holder_none_without_record_or_unverified(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     assert nomination.box_holder(record_dir) is None
     nomination.claim(repo_root, "sid-h", directory=record_dir)
     monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "pending"})
     assert nomination.box_holder(record_dir) is None
 
 
-def _reject_sid(monkeypatch, bad_sid):
+def _reject_sid(monkeypatch, bad_sid) -> None:
     monkeypatch.setattr(
         nomination,
         "entry_status",
@@ -499,7 +500,7 @@ def _reject_sid(monkeypatch, bad_sid):
     )
 
 
-def test_rejected_box_claim_over_verified_holder_leaves_the_verified_holder(tmp_path, record_dir, monkeypatch):
+def test_rejected_box_claim_over_verified_holder_leaves_the_verified_holder(tmp_path: Path, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_real, repo_probe = tmp_path / "real", tmp_path / "probe"
     repo_real.mkdir()
     repo_probe.mkdir()
@@ -519,13 +520,13 @@ def test_rejected_box_claim_over_verified_holder_leaves_the_verified_holder(tmp_
     assert probe_view["holder"]["session_id"] == "sid-real" and probe_view["repo_record"] == "stale"
 
 
-def test_rejected_box_claim_with_no_verified_repo_record_is_none(repo_root, record_dir, monkeypatch):
+def test_rejected_box_claim_with_no_verified_repo_record_is_none(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     nomination.claim(repo_root, "sid-probe", directory=record_dir)
     _reject_sid(monkeypatch, "sid-probe")
     assert nomination.box_holder(record_dir) is None
 
 
-def test_rejected_newer_repo_record_is_skipped_for_an_older_verified_one(tmp_path, record_dir, monkeypatch):
+def test_rejected_newer_repo_record_is_skipped_for_an_older_verified_one(tmp_path: Path, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_old, repo_probe = tmp_path / "old", tmp_path / "probe"
     repo_old.mkdir()
     repo_probe.mkdir()
@@ -546,16 +547,16 @@ def test_rejected_newer_repo_record_is_skipped_for_an_older_verified_one(tmp_pat
     assert nomination.box_holder(record_dir)["session_id"] == "sid-real"
 
 
-def _no_registry_name(monkeypatch):
+def _no_registry_name(monkeypatch) -> None:
     monkeypatch.setattr(_liveness, "_cached_registry_lookup", lambda sid: None)
 
 
-def test_identify_vacant(repo_root, record_dir):
+def test_identify_vacant(repo_root, record_dir) -> None:
     out = nomination.identify(repo_root, record_dir)
     assert out == {"state": "vacant", "holder": None, "source": None, "repo_record": "absent", "line": None}
 
 
-def test_identify_box_holder_live_marks_another_repos_record_stale(tmp_path, record_dir, monkeypatch):
+def test_identify_box_holder_live_marks_another_repos_record_stale(tmp_path: Path, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_a, repo_b = tmp_path / "a", tmp_path / "b"
     repo_a.mkdir()
     repo_b.mkdir()
@@ -572,7 +573,7 @@ def test_identify_box_holder_live_marks_another_repos_record_stale(tmp_path, rec
     assert nomination.identify(str(repo_b), record_dir)["repo_record"] == "current"
 
 
-def test_identify_ended_holder(repo_root, record_dir, monkeypatch):
+def test_identify_ended_holder(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     _no_registry_name(monkeypatch)
     nomination.claim(repo_root, "sid-h", peer_name="gem-1", directory=record_dir)
     _stub_live(monkeypatch, False, "pid_not_running")
@@ -580,7 +581,7 @@ def test_identify_ended_holder(repo_root, record_dir, monkeypatch):
     assert out["state"] == "ended" and "has ended" in out["line"]
 
 
-def test_identify_unverified_record(repo_root, record_dir, monkeypatch):
+def test_identify_unverified_record(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     _no_registry_name(monkeypatch)
     nomination.claim(repo_root, "sid-h", peer_name="gem-1", directory=record_dir)
     monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "rejected"})
@@ -588,7 +589,7 @@ def test_identify_unverified_record(repo_root, record_dir, monkeypatch):
     assert out["state"] == "unverified" and "unverified" in out["line"]
 
 
-def test_identify_falls_back_to_a_verified_pre_box_repo_record(repo_root, record_dir, monkeypatch):
+def test_identify_falls_back_to_a_verified_pre_box_repo_record(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     _no_registry_name(monkeypatch)
     _stub_live(monkeypatch, True, "live")
     nomination.claim(repo_root, "sid-h", peer_name="gem-1", directory=record_dir)
@@ -597,7 +598,7 @@ def test_identify_falls_back_to_a_verified_pre_box_repo_record(repo_root, record
     assert out["source"] == "repo" and out["state"] == "live" and out["repo_record"] == "current"
 
 
-def test_every_identify_line_fits_the_doe_head_leg_budget(tmp_path, record_dir, monkeypatch):
+def test_every_identify_line_fits_the_doe_head_leg_budget(tmp_path: Path, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     # DoE's SessionStart head-leg byte budget assumes <= 250 bytes for a 64-char holder name.
     name = "n" * 64
     monkeypatch.setattr(_liveness, "_cached_registry_lookup", lambda sid: None)
@@ -615,7 +616,7 @@ def test_every_identify_line_fits_the_doe_head_leg_budget(tmp_path, record_dir, 
     ]
 
 
-def test_claim_with_a_fabricated_session_id_writes_nothing(repo_root, record_dir, monkeypatch):
+def test_claim_with_a_fabricated_session_id_writes_nothing(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(nomination, "_session_is_real", _SESSION_IS_REAL)
     monkeypatch.setattr(nomination.session_registry, "find_registry_row", lambda sid: None)
     monkeypatch.setattr(nomination.human_entry, "transcript_paths", lambda sid: [])
@@ -625,7 +626,7 @@ def test_claim_with_a_fabricated_session_id_writes_nothing(repo_root, record_dir
 
 
 @pytest.mark.parametrize("known", ["registry", "transcript"])
-def test_claim_with_a_known_session_id_is_accepted(known, repo_root, record_dir, monkeypatch):
+def test_claim_with_a_known_session_id_is_accepted(known, repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(nomination, "_session_is_real", _SESSION_IS_REAL)
     row = object() if known == "registry" else None
     monkeypatch.setattr(nomination.session_registry, "find_registry_row", lambda sid: row)
@@ -638,15 +639,15 @@ def test_claim_with_a_known_session_id_is_accepted(known, repo_root, record_dir,
 _NOW = 1_800_000_000.0
 
 
-def _publish(record_dir, box_id, sessions, ok=True, fetched_at=_NOW):
+def _publish(record_dir, box_id, sessions, ok: bool = True, fetched_at=_NOW) -> None:
     nomination.remote_roster._write_snapshot(record_dir, box_id, ok, sessions, fetched_at)
 
 
-def _gem_row(sid="sid-remote", name="group-em-56", status="busy"):
+def _gem_row(sid: str = "sid-remote", name: str = "group-em-56", status: str = "busy") -> dict[str, str]:
     return {"session_id": sid, "name": name, "cwd": "/x", "status": status, "address": "addr"}
 
 
-def _claim_local(repo_root, record_dir, monkeypatch, live):
+def _claim_local(repo_root, record_dir, monkeypatch, live) -> None:
     _no_registry_name(monkeypatch)
     _stub_live(monkeypatch, live, "live" if live else "pid_not_running")
     nomination.claim(repo_root, "sid-local", peer_name="gem", directory=record_dir)
@@ -657,8 +658,8 @@ def _fleet(record_dir):
 
 
 def test_fleet_holder_names_the_remote_gem_when_the_local_holder_is_not_live(
-    repo_root, record_dir, monkeypatch
-):
+    repo_root, record_dir, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _claim_local(repo_root, record_dir, monkeypatch, live=False)
     _publish(record_dir, "box-win", [_gem_row(), _gem_row("sid-peer", "coordinator-content-repo-em")])
     out = _fleet(record_dir)
@@ -667,14 +668,14 @@ def test_fleet_holder_names_the_remote_gem_when_the_local_holder_is_not_live(
     assert nomination.box_holder(record_dir)["live"] is False
 
 
-def test_fleet_holder_prefers_the_live_local_holder(repo_root, record_dir, monkeypatch):
+def test_fleet_holder_prefers_the_live_local_holder(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     _claim_local(repo_root, record_dir, monkeypatch, live=True)
     _publish(record_dir, "box-win", [_gem_row()])
     out = _fleet(record_dir)
     assert out["session_id"] == "sid-local" and out["remote"] is False
 
 
-def test_fleet_holder_is_none_when_no_box_shows_a_live_gem(repo_root, record_dir, monkeypatch):
+def test_fleet_holder_is_none_when_no_box_shows_a_live_gem(repo_root, record_dir, monkeypatch: pytest.MonkeyPatch) -> None:
     _claim_local(repo_root, record_dir, monkeypatch, live=False)
     assert _fleet(record_dir) is None
     _publish(record_dir, "box-win", [_gem_row("sid-peer", "coordinator-content-repo-em")])
@@ -682,25 +683,25 @@ def test_fleet_holder_is_none_when_no_box_shows_a_live_gem(repo_root, record_dir
     assert _fleet(record_dir) is None
 
 
-def test_fleet_holder_ignores_an_unreachable_or_stale_snapshot(record_dir):
+def test_fleet_holder_ignores_an_unreachable_or_stale_snapshot(record_dir) -> None:
     _publish(record_dir, "box-down", [_gem_row()], ok=False)
     _publish(record_dir, "box-old", [_gem_row()], fetched_at=_NOW - 10_000)
     assert _fleet(record_dir) is None
 
 
-def test_fleet_holder_with_no_local_record_still_finds_the_remote_gem(record_dir):
+def test_fleet_holder_with_no_local_record_still_finds_the_remote_gem(record_dir) -> None:
     _publish(record_dir, "box-win", [_gem_row()])
     assert _fleet(record_dir)["peer_name"] == "group-em-56"
 
 
-def test_fleet_holder_never_reports_this_boxs_own_snapshot_as_remote(record_dir):
+def test_fleet_holder_never_reports_this_boxs_own_snapshot_as_remote(record_dir) -> None:
     _publish(record_dir, "box-me", [_gem_row()])
     assert _fleet(record_dir) is None
 
 
 def test_fleet_holder_remote_tie_goes_to_the_session_the_local_holder_names(
-    repo_root, record_dir, monkeypatch
-):
+    repo_root, record_dir, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _claim_local(repo_root, record_dir, monkeypatch, live=False)
     _publish(record_dir, "box-a", [_gem_row("sid-other", "group-em-01")])
     _publish(record_dir, "box-b", [_gem_row("sid-local", "group-em-02")])

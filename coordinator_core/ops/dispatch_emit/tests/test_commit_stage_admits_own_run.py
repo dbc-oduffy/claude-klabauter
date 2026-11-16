@@ -49,7 +49,7 @@ def _assert_admitted(out: dict) -> None:
     assert not out.get("error"), out
 
 
-def test_case_a_carry_prior_remint_keeps_the_params_file_the_held_token_needs(repo):
+def test_case_a_carry_prior_remint_keeps_the_params_file_the_held_token_needs(repo) -> None:
     first = run_token.mint(repo, RUN, SCRIPT)
     params_file = channel.params_path(repo, RUN)
     assert channel.materialize(params_file, {"run_id": RUN, "run_token": first, "script_path": SCRIPT})
@@ -63,7 +63,7 @@ def test_case_a_carry_prior_remint_keeps_the_params_file_the_held_token_needs(re
 
 
 @pytest.mark.parametrize("remover", ["none", "consume", "discard"])
-def test_case_b_first_held_token_survives_two_remints_and_a_remover(repo, remover):
+def test_case_b_first_held_token_survives_two_remints_and_a_remover(repo, remover) -> None:
     first = run_token.mint(repo, RUN, SCRIPT)
     run_token.mint(repo, RUN, SCRIPT)
     run_token.mint(repo, RUN, SCRIPT)
@@ -77,7 +77,7 @@ def test_case_b_first_held_token_survives_two_remints_and_a_remover(repo, remove
     _assert_admitted(_call(repo, run_token=first))
 
 
-def test_case_b_idle_reaper_leaves_the_first_held_token_admitted(bare):
+def test_case_b_idle_reaper_leaves_the_first_held_token_admitted(bare) -> None:
     first = run_token.mint(bare, FOO_OLD, SCRIPT, session_id="s")
     run_token.mint(bare, FOO_OLD, SCRIPT, session_id="s")
     run_token.mint(bare, FOO_OLD, SCRIPT, session_id="s")
@@ -103,7 +103,7 @@ def test_case_b_idle_reaper_leaves_the_first_held_token_admitted(bare):
     _assert_admitted(terminal_commit._handler(params, repo_root=bare / ".git"))
 
 
-def test_case_c_product_already_in_head_is_answered_already_landed_after_a_remint(repo):
+def test_case_c_product_already_in_head_is_answered_already_landed_after_a_remint(repo) -> None:
     token = run_token.mint(repo, RUN, SCRIPT)
     assert run_token.redeem(repo, RUN, token, SCRIPT)
     head = _git(["rev-parse", "HEAD"], repo).strip()
@@ -118,7 +118,7 @@ def test_case_c_product_already_in_head_is_answered_already_landed_after_a_remin
     assert _git(["rev-parse", "HEAD"], repo).strip() == head
 
 
-def test_case_d_token_admits_after_a_warm_restart(repo):
+def test_case_d_token_admits_after_a_warm_restart(repo) -> None:
     token = run_token.mint(repo, RUN, SCRIPT)
     try:
         reloaded = importlib.reload(run_token)

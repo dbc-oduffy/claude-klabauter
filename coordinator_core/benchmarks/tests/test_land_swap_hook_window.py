@@ -29,7 +29,7 @@ def test_summarize_reports_the_longest_unanswered_run() -> None:
         lw.Sample(2.6, 0.01, True),
     ]
     report = lw.summarize(samples)
-    assert report.max_unanswered_secs == 2.23
+    assert report.max_unanswered_secs == 0.02
     assert report.slow_answers == 1
     assert report.requests == 6
 
@@ -47,7 +47,7 @@ def test_summarize_open_run_counts_to_the_last_sample() -> None:
     assert report.max_unanswered_secs == 0.11
 
 
-def test_hook_request_with_the_pair_up_is_answered_immediately(tmp_path: Path, monkeypatch) -> None:
+def test_hook_request_with_the_pair_up_is_answered_immediately(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path / "rt"))
     pair = lw.FakePair(boot_secs=10)
     pair.start_answering()
@@ -55,7 +55,7 @@ def test_hook_request_with_the_pair_up_is_answered_immediately(tmp_path: Path, m
 
 
 def test_hook_request_under_a_held_marker_refuses_at_base_and_degrades_when_bounded(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path / "rt"))
     pair = lw.FakePair(boot_secs=10)
@@ -74,8 +74,9 @@ def test_base_swap_leaves_a_window_spanning_copy_and_boot() -> None:
         tail_secs=0.1,
         stop_pair=_fast_stop,
     )
-    assert report.max_unanswered_secs >= 1.5
+    assert report.max_unanswered_secs > lw.UNANSWERED_BUDGET_SECS
     assert report.slow_answers >= 1
+    assert report.swap_window_fail_open_count >= 1
     assert not report.within_budget()
 
 
@@ -91,6 +92,7 @@ def test_pre_release_respawn_with_bounded_hooks_leaves_no_window() -> None:
     )
     assert report.max_unanswered_secs <= BUDGET
     assert report.slow_answers == 0
+    assert report.swap_window_fail_open_count == 0
 
 
 def test_pre_release_respawn_at_base_hook_path_still_has_a_window() -> None:
@@ -106,7 +108,7 @@ def test_pre_release_respawn_at_base_hook_path_still_has_a_window() -> None:
     assert report.max_unanswered_secs >= 1.5
 
 
-def test_run_swap_restores_the_runtime_base_env(monkeypatch) -> None:
+def test_run_swap_restores_the_runtime_base_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, "sentinel")
     lw.run_swap(copy_secs=0.1, boot_secs=0.1, pre_roll_secs=0.05, tail_secs=0.05, stop_pair=_fast_stop)
     import os
@@ -114,7 +116,7 @@ def test_run_swap_restores_the_runtime_base_env(monkeypatch) -> None:
     assert os.environ[breadcrumb.RUNTIME_BASE_ENV] == "sentinel"
 
 
-def test_main_assert_budget_fails_the_base_swap(capsys, monkeypatch) -> None:
+def test_main_assert_budget_fails_the_base_swap(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.telemetry import op_latency
 
     monkeypatch.setenv(op_latency.ORIGIN_ENV, op_latency.BENCHMARK)
@@ -123,9 +125,10 @@ def test_main_assert_budget_fails_the_base_swap(capsys, monkeypatch) -> None:
     assert code == 1
     assert "max_unanswered_secs=" in out and "slow_answers=" in out
     assert "unevaluated_guard_count=" in out
+    assert "swap_window_fail_open_count=" in out and "handover_gap_process_ms=" in out
 
 
-def test_summarize_counts_every_guard_that_got_no_evaluated_answer() -> None:
+def test_summarize_counts_every_guard_that_got_no_verdict_however_fast() -> None:
     samples = [
         lw.Sample(0.0, 0.01, True),
         lw.Sample(0.1, 0.02, False),
@@ -133,7 +136,14 @@ def test_summarize_counts_every_guard_that_got_no_evaluated_answer() -> None:
         lw.Sample(2.4, 0.01, True),
     ]
     report = lw.summarize(samples)
-    assert report.unevaluated_guard_count == 2
+    assert report.unevaluated_guard_count == 1
+
+
+def test_a_slow_verdict_is_evaluated_and_never_breaks_the_budget() -> None:
+    report = lw.summarize([lw.Sample(0.0, 5.0, True), lw.Sample(5.0, 0.01, True)])
+    assert report.slow_answers == 1
+    assert report.unevaluated_guard_count == 0 and report.max_unanswered_secs == 0.0
+    assert report.within_budget()
 
 
 def test_an_unevaluated_guard_alone_breaks_the_budget() -> None:
@@ -160,6 +170,90 @@ def test_the_unanswered_budget_is_the_half_second_brightline() -> None:
     )
     assert lw.UNANSWERED_BUDGET_SECS == 0.5
     assert not over.within_budget()
+
+
+def test_only_unevaluated_requests_under_the_marker_are_swap_window_fail_opens() -> None:
+    samples = [
+        lw.Sample(0.0, 0.01, False, marker_held=False),
+        lw.Sample(0.1, 0.01, False, marker_held=True),
+        lw.Sample(0.2, 2.13, True, marker_held=True),
+        lw.Sample(0.3, 0.01, True, marker_held=True),
+    ]
+    report = lw.summarize(samples)
+    assert report.unevaluated_guard_count == 2
+    assert report.swap_window_fail_open_count == 1
+
+
+def _report(**overrides) -> lw.WindowReport:
+    base = dict(max_unanswered_secs=0.0, slow_answers=0, requests=1, respawn="", hook_path="")
+    base.update(overrides)
+    return lw.WindowReport(**base)
+
+
+def test_each_new_metric_alone_breaks_the_budget_at_its_edge() -> None:
+    assert lw.HANDOVER_GAP_PROCESS_MS_BUDGET == 500
+    assert _report().within_budget()
+    assert _report(handover_gap_process_ms=500.0).within_budget()
+    assert not _report(handover_gap_process_ms=500.1).within_budget()
+    assert not _report(swap_window_fail_open_count=1).within_budget()
+
+
+def _evaluated(start: float, gen: str) -> lw.Sample:
+    return lw.Sample(start, 0.01, True, generation=gen)
+
+
+def test_handover_gap_is_zero_when_the_old_pair_answers_until_the_successor_does() -> None:
+    samples = [_evaluated(0.0, "old"), _evaluated(0.5, "old"), _evaluated(0.5, "new")]
+    trace = [(0.2, 100.0), (0.5, 800.0)]
+    assert lw.handover_gap_process_ms(samples, "old", trace) == 0.0
+
+
+def test_handover_gap_is_the_successor_cpu_between_last_old_and_first_new_answer() -> None:
+    samples = [
+        _evaluated(0.0, "old"),
+        lw.Sample(0.1, 0.01, False),
+        _evaluated(1.0, "new"),
+    ]
+    trace = [(0.05, 10.0), (0.3, 50.0), (0.6, 200.0), (1.0, 640.0), (1.2, 900.0)]
+    # last old answer ends 0.01 (cpu 0); first new answer ends 1.01 (cpu 640)
+    assert lw.handover_gap_process_ms(samples, "old", trace) == 640.0
+    over = lw.WindowReport(0.0, 0, 3, "", "", handover_gap_process_ms=640.0)
+    assert not over.within_budget()
+
+
+def test_handover_gap_excludes_cpu_the_successor_spent_while_the_old_pair_still_answered() -> None:
+    samples = [_evaluated(0.0, "old"), _evaluated(0.4, "old"), _evaluated(0.9, "new")]
+    trace = [(0.1, 300.0), (0.41, 350.0), (0.91, 480.0)]
+    assert lw.handover_gap_process_ms(samples, "old", trace) == 130.0
+
+
+def test_handover_gap_is_unmeasured_when_the_successor_never_answered() -> None:
+    samples = [_evaluated(0.0, "old"), lw.Sample(0.1, 0.01, False)]
+    assert lw.handover_gap_process_ms(samples, "old", [(0.2, 90.0)]) is None
+
+
+def test_cpu_sampler_traces_only_a_pid_other_than_the_old_pair() -> None:
+    import threading
+
+    pids = iter([11, 22, 22])
+    stop = threading.Event()
+    reads: list[int] = []
+
+    def _read_pid() -> int:
+        try:
+            return next(pids)
+        except StopIteration:
+            stop.set()
+            return 22
+
+    def _cpu(pid: int) -> float:
+        reads.append(pid)
+        return 123.0
+
+    sampler = lw.SuccessorCpuSampler(Path("."), 11, 0.0, stop, read_pid=_read_pid, read_cpu_ms=_cpu)
+    sampler.run()
+    assert reads and set(reads) == {22}
+    assert all(cpu == 123.0 for _t, cpu in sampler.trace)
 
 
 def _engine_root(tmp_path: Path) -> Path:
@@ -248,7 +342,7 @@ def test_spike_verdict_refuses_each_way_the_old_pair_can_stop_answering() -> Non
 
 
 def test_production_handover_runs_the_publish_order_with_the_marker_held_around_the_successor(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from coordinator_core.percolate import round as round_mod
 
@@ -257,10 +351,10 @@ def test_production_handover_runs_the_publish_order_with_the_marker_held_around_
     marker_dir = breadcrumb.svc_dir(root)
     events: list[str] = []
 
-    def _stop(_root, **_k):
+    def _stop(_root, **_k) -> None:
         events.append(f"stop held={breadcrumb.publish_marker_held(marker_dir)}")
 
-    def _start(_root, *, err, ready_budget_secs, old_stamp, new_stamp=None):
+    def _start(_root, *, err, ready_budget_secs, old_stamp, new_stamp=None) -> bool:
         events.append(f"start held={breadcrumb.publish_marker_held(marker_dir)} pinned={old_stamp is not None}")
         return True
 
@@ -278,7 +372,7 @@ def test_production_handover_runs_the_publish_order_with_the_marker_held_around_
 
 
 def test_the_harness_copy_never_leaves_the_new_stamp_visible_to_the_first_enumeration(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from coordinator_core.warm import client, supervisor
 
@@ -307,7 +401,7 @@ def _dial(started: float, root: str, outcome: str, transport: str = lw.TRANSPORT
     return lw.RoundSample(started, 0.01, root, transport, outcome)
 
 
-def _classify(samples, marks=MARKS, successor=None, scope=lw.SCOPE_WHOLE_LANDING) -> lw.PublishRoundReport:
+def _classify(samples, marks: dict[str, float] = MARKS, successor=None, scope=lw.SCOPE_WHOLE_LANDING) -> lw.PublishRoundReport:
     return lw.classify_round(
         samples,
         marks,
@@ -401,11 +495,11 @@ def _run_round(scope: str, monkeypatch, tmp_path: Path) -> list:
     return events
 
 
-def test_the_whole_landing_round_holds_across_the_landing_and_the_copy(monkeypatch, tmp_path: Path) -> None:
+def test_the_whole_landing_round_holds_across_the_landing_and_the_copy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert _run_round(lw.SCOPE_WHOLE_LANDING, monkeypatch, tmp_path) == ["enter", "land", "copy", "exit"]
 
 
-def test_the_per_root_round_lands_before_the_hold_and_holds_only_the_copy(monkeypatch, tmp_path: Path) -> None:
+def test_the_per_root_round_lands_before_the_hold_and_holds_only_the_copy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert _run_round(lw.SCOPE_PER_ROOT, monkeypatch, tmp_path) == ["land", "enter", "copy", "exit"]
 
 

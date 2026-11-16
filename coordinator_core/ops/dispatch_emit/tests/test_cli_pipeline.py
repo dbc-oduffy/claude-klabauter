@@ -6,16 +6,17 @@ import pytest
 import coordinator_core.ops.dispatch_emit as _pkg
 from coordinator_core.ops.dispatch_emit import cli as cli_module
 from coordinator_core.ops.dispatch_emit.pipeline_contract import PipelineEmitRefused
+from pathlib import Path
 
 
 class _Admitted:
     @staticmethod
-    def await_admission(start_dir, *, hold_allowed):
+    def await_admission(start_dir, *, hold_allowed) -> dict[str, str]:
         return {"verdict": "disabled"}
 
 
 @pytest.fixture
-def captured(monkeypatch, tmp_path):
+def captured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     (tmp_path / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(_pkg, "admission", _Admitted, raising=False)
@@ -29,7 +30,7 @@ def captured(monkeypatch, tmp_path):
     return calls
 
 
-def test_pipeline_flags_map_to_params(captured, tmp_path, monkeypatch):
+def test_pipeline_flags_map_to_params(captured, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.ops.dispatch_emit.cross_repo_write_refusal.is_remote_venue", lambda env=None: False
     )
@@ -51,7 +52,7 @@ def test_pipeline_flags_map_to_params(captured, tmp_path, monkeypatch):
     assert repo_root == tmp_path
 
 
-def test_subjects_file_skips_comments(captured, tmp_path):
+def test_subjects_file_skips_comments(captured, tmp_path: Path) -> None:
     subjects = tmp_path / "s.txt"
     subjects.write_text("# head\nalpha  # trailing\n\nbeta\n", encoding="utf-8")
     assert cli_module.main(
@@ -61,14 +62,14 @@ def test_subjects_file_skips_comments(captured, tmp_path):
 
 
 @pytest.mark.parametrize("value", [",,", "A b,a-b"])
-def test_bad_subjects_exit_1(captured, value, capsys):
+def test_bad_subjects_exit_1(captured, value, capsys: pytest.CaptureFixture[str]) -> None:
     assert cli_module.main(
         ["--pipeline", "p", "--brief", "x", "--subjects", value]
     ) == cli_module.EXIT_DATA_ERROR
     assert not captured
 
 
-def test_no_brief_exit_2(captured):
+def test_no_brief_exit_2(captured) -> None:
     assert cli_module.main(["--pipeline", "p"]) == cli_module.EXIT_USAGE
 
 
@@ -85,16 +86,16 @@ def test_no_brief_exit_2(captured):
         ["--sizing", "s.yaml"],
     ],
 )
-def test_pipeline_exclusive_of_other_routes(captured, extra):
+def test_pipeline_exclusive_of_other_routes(captured, extra) -> None:
     assert cli_module.main(["--pipeline", "p", "--brief", "x", *extra]) == cli_module.EXIT_USAGE
     assert not captured
 
 
-def test_pipeline_only_flag_without_pipeline_exit_2(captured):
+def test_pipeline_only_flag_without_pipeline_exit_2(captured) -> None:
     assert cli_module.main(["--brief", "x", "--plan", "p.md"]) == cli_module.EXIT_USAGE
 
 
-def test_resume_missing_flag_reaches_params(captured, tmp_path):
+def test_resume_missing_flag_reaches_params(captured, tmp_path: Path) -> None:
     argv = [
         "--pipeline", "p", "--brief", "x", "--list", "a=1,2",
         "--scratch-dir", "scratch/run", "--resume-missing",
@@ -105,28 +106,28 @@ def test_resume_missing_flag_reaches_params(captured, tmp_path):
     assert params["scratch_dir"] == "scratch/run"
 
 
-def test_resume_missing_absent_leaves_params_clean(captured):
+def test_resume_missing_absent_leaves_params_clean(captured) -> None:
     assert cli_module.main(["--pipeline", "p", "--brief", "x"]) == cli_module.EXIT_OK
     assert "resume_missing" not in captured[0][0]
 
 
-def test_resume_missing_requires_scratch_dir(captured):
+def test_resume_missing_requires_scratch_dir(captured) -> None:
     assert cli_module.main(["--pipeline", "p", "--brief", "x", "--resume-missing"]) == cli_module.EXIT_USAGE
     assert not captured
 
 
-def test_resume_missing_requires_pipeline(captured):
+def test_resume_missing_requires_pipeline(captured) -> None:
     assert cli_module.main(["--brief", "x", "--resume-missing"]) == cli_module.EXIT_USAGE
     assert not captured
 
 
-def test_malformed_flag_exit_1(captured):
+def test_malformed_flag_exit_1(captured) -> None:
     assert cli_module.main(
         ["--pipeline", "p", "--brief", "x", "--flag", "nodepth"]
     ) == cli_module.EXIT_DATA_ERROR
 
 
-def test_refusal_prints_every_reason_and_exits_1(monkeypatch, tmp_path, capsys):
+def test_refusal_prints_every_reason_and_exits_1(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(_pkg, "admission", _Admitted, raising=False)

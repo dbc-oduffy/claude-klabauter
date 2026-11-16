@@ -7,12 +7,13 @@ from coordinator_core.ops.dispatch_emit.emit import _run_row_helper_js, compose_
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
 from .conftest import REVIEW_KW
+from pathlib import Path
 
 _PUSH = "label: 'verify:' + id"
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
 
-def _emit_script(tmp_path):
+def _emit_script(tmp_path) -> str:
     target = tmp_path / "pkg" / "c1.py"
     target.parent.mkdir(parents=True)
     target.write_text("x = 1\n", encoding="utf-8")
@@ -23,7 +24,7 @@ def _emit_script(tmp_path):
     return compose_script([[row]], name="wf", description="d", repo_root=tmp_path, **REVIEW_KW)
 
 
-def _ask_script():
+def _ask_script() -> str:
     return compose_ask_script(
         repo_root="REPO",
         prompt="add a thing",
@@ -36,7 +37,7 @@ def _ask_script():
     )
 
 
-def test_an_emit_script_with_a_terminal_test_leg_composes_no_verify_label(tmp_path):
+def test_an_emit_script_with_a_terminal_test_leg_composes_no_verify_label(tmp_path: Path) -> None:
     script = _emit_script(tmp_path)
 
     assert "test:terminal" in script
@@ -45,13 +46,13 @@ def test_an_emit_script_with_a_terminal_test_leg_composes_no_verify_label(tmp_pa
     assert "await Promise.all(_verifications);" in script
 
 
-def test_the_row_helper_keeps_the_push_where_no_terminal_leg_composes():
+def test_the_row_helper_keeps_the_push_where_no_terminal_leg_composes() -> None:
     assert _PUSH in _run_row_helper_js()
     assert "if (!incomplete && verifyScope && (true))" in _run_row_helper_js()
     assert _PUSH not in _run_row_helper_js(None, None, "false")
 
 
-def test_the_ask_row_runner_pushes_behind_the_review_independent_test_guard():
+def test_the_ask_row_runner_pushes_behind_the_review_independent_test_guard() -> None:
     script = _ask_script()
 
     assert "if (!incomplete && verifyScope && (_rowVerifyWanted))" in script
@@ -63,7 +64,7 @@ def test_the_ask_row_runner_pushes_behind_the_review_independent_test_guard():
     assert script.index(decl) < script.index("_rows[r.id] = _runRow(")
 
 
-def test_the_executor_brief_names_scoped_test_legs_not_per_row_verify_calls():
+def test_the_executor_brief_names_scoped_test_legs_not_per_row_verify_calls() -> None:
     row = WaveRow(id="C1", title="t", surface="pkg", writes=["pkg/c1.py"], reads=[], depends_on=[])
     script = compose_script(
         [[row]], name="wf", description="d", plan_path="docs/plans/example.md", **REVIEW_KW

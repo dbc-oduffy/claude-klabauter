@@ -22,11 +22,16 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
-def _load_publish_module():
+def _load_publish_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "publish_percolate_root_override_under_test", _BIN_DIR / "publish.py"
     )
@@ -40,17 +45,17 @@ def _load_publish_module():
 publish = _load_publish_module()
 
 
-def test_percolate_root_flag_is_accepted():
+def test_percolate_root_flag_is_accepted() -> None:
     args = publish.build_arg_parser().parse_args(["mytarget", "--percolate-root", "/tmp/foo"])
     assert args.percolate_root == "/tmp/foo"
 
 
-def test_percolate_root_flag_defaults_to_none():
+def test_percolate_root_flag_defaults_to_none() -> None:
     args = publish.build_arg_parser().parse_args(["mytarget"])
     assert args.percolate_root is None
 
 
-def test_override_wins_before_the_native_resolver_runs(monkeypatch):
+def test_override_wins_before_the_native_resolver_runs(monkeypatch: pytest.MonkeyPatch) -> None:
     """The override must short-circuit ahead of `_locate_cc_invoke` --
     asserting that helper is never called is the load-bearing check: a fix
     that merely preferred the override's VALUE but still ran the native
@@ -66,7 +71,7 @@ def test_override_wins_before_the_native_resolver_runs(monkeypatch):
     assert called == []
 
 
-def test_no_override_still_falls_through_to_native_resolver(monkeypatch):
+def test_no_override_still_falls_through_to_native_resolver(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(publish, "_locate_cc_invoke", lambda: None)
     root, rung = publish._resolve_percolate_root_and_rung(override=None)
     assert rung != "cli-override"

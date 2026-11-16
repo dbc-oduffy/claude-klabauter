@@ -13,6 +13,7 @@ Spec backlink: docs/plans/2026-09-11-wire-the-authoring-surface-lint-and-clos.md
 from __future__ import annotations
 
 from coordinator_core.write_guards import nudge_handoff_author_lint as guard
+from pathlib import Path
 
 _LEDGER_HEADING = "## Session Ledger"
 _LEDGER_FORMAT_COMMENT = (
@@ -20,7 +21,7 @@ _LEDGER_FORMAT_COMMENT = (
 )
 
 
-def _doc(summary="a real one-line summary", ac="- [ ] do the thing", ledger_rows=""):
+def _doc(summary: str = "a real one-line summary", ac: str = "- [ ] do the thing", ledger_rows: str = "") -> str:
     return (
         "---\n"
         "title: t\n"
@@ -57,7 +58,7 @@ def _context(result):
 
 
 class TestFiresOnWriteToNewPath:
-    def test_over_cap_summary_fires(self, tmp_path):
+    def test_over_cap_summary_fires(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "new-handoff.md"
         result = guard.check(
@@ -72,7 +73,7 @@ class TestFiresOnWriteToNewPath:
         assert "permissionDecision" not in result["hookSpecificOutput"]
         assert "truncat" in _context(result)
 
-    def test_unparseable_ledger_row_fires(self, tmp_path):
+    def test_unparseable_ledger_row_fires(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "new-handoff.md"
         rows = "2026-08-19 | abc123 | S | 0.3d / 0o | Wrote a duration\n"
@@ -86,7 +87,7 @@ class TestFiresOnWriteToNewPath:
         assert result is not None
         assert "Session Ledger" in _context(result)
 
-    def test_placeholder_summary_fires(self, tmp_path):
+    def test_placeholder_summary_fires(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "new-handoff.md"
         placeholder = '"PLACEHOLDER — replace with one-line spinoff summary (≤140 chars)"'
@@ -102,7 +103,7 @@ class TestFiresOnWriteToNewPath:
 
 
 class TestFiresOnEditIntroducingDefect:
-    def test_edit_adding_unparseable_row_to_clean_pre_image_fires(self, tmp_path):
+    def test_edit_adding_unparseable_row_to_clean_pre_image_fires(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "some-handoff.md"
         target.write_text(_doc())
@@ -126,8 +127,8 @@ class TestFiresOnEditIntroducingDefect:
 
 class TestSilentOnAlreadyPresentDefect:
     def test_edit_touching_unrelated_line_with_pre_existing_defect_is_silent(
-        self, tmp_path
-    ):
+        self, tmp_path: Path
+    ) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "some-handoff.md"
         target.write_text(_doc(summary="x" * 200))
@@ -146,7 +147,7 @@ class TestSilentOnAlreadyPresentDefect:
 
 
 class TestSilentOnFilteredCode:
-    def test_ac_no_checkboxes_alone_is_silent_here(self, tmp_path):
+    def test_ac_no_checkboxes_alone_is_silent_here(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "new-handoff.md"
         result = guard.check(
@@ -160,7 +161,7 @@ class TestSilentOnFilteredCode:
 
 
 class TestSilentOnCleanBody:
-    def test_clean_handoff_is_silent(self, tmp_path):
+    def test_clean_handoff_is_silent(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "new-handoff.md"
         result = guard.check(
@@ -174,7 +175,7 @@ class TestSilentOnCleanBody:
 
 
 class TestSilentOnScope:
-    def test_non_handoff_path_is_silent(self, tmp_path):
+    def test_non_handoff_path_is_silent(self, tmp_path: Path) -> None:
         d = tmp_path / "docs" / "plans"
         d.mkdir(parents=True)
         target = d / "some-plan.md"
@@ -187,7 +188,7 @@ class TestSilentOnScope:
         )
         assert result is None
 
-    def test_path_outside_git_root_matching_handoff_shape_is_silent(self, tmp_path):
+    def test_path_outside_git_root_matching_handoff_shape_is_silent(self, tmp_path: Path) -> None:
         repo_dir = tmp_path / "repo"
         (repo_dir / ".git").mkdir(parents=True)
         outside_dir = tmp_path / "elsewhere" / "state" / "handoffs"
@@ -204,7 +205,7 @@ class TestSilentOnScope:
 
 
 class TestNeverDenies:
-    def test_no_branch_returns_a_deny_envelope(self, tmp_path):
+    def test_no_branch_returns_a_deny_envelope(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "new-handoff.md"
         for content in (_doc(), _doc(summary="x" * 200), "not even markdown"):
@@ -220,7 +221,7 @@ class TestNeverDenies:
 
 
 class TestRewordedSummary:
-    def test_reword_to_different_still_over_cap_length_fires(self, tmp_path):
+    def test_reword_to_different_still_over_cap_length_fires(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "some-handoff.md"
         target.write_text(_doc(summary="y" * 200))
@@ -238,7 +239,7 @@ class TestRewordedSummary:
         assert result is not None
         assert "truncat" in _context(result)
 
-    def test_reword_to_same_length_is_silent(self, tmp_path):
+    def test_reword_to_same_length_is_silent(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "some-handoff.md"
         target.write_text(_doc(summary="y" * 200))
@@ -257,7 +258,7 @@ class TestRewordedSummary:
 
 
 class TestMultisetDedupe:
-    def test_second_byte_identical_ledger_row_fires_exactly_once(self, tmp_path):
+    def test_second_byte_identical_ledger_row_fires_exactly_once(self, tmp_path: Path) -> None:
         d = _handoff_dir(tmp_path)
         target = d / "some-handoff.md"
         row = "2026-08-19 | abc123 | S | 0.3d / 0o | Wrote a duration\n"

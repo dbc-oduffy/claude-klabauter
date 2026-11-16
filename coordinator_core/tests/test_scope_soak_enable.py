@@ -18,6 +18,7 @@ import pytest
 
 from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+from pathlib import Path
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -29,21 +30,21 @@ pytestmark = [
 _ISO_UTC_RE = re.compile(r"^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$")
 
 
-def test_1_creates_sentinel_when_not_present(tmp_path):
+def test_1_creates_sentinel_when_not_present(tmp_path: Path) -> None:
     text, rc = enable(git_root=str(tmp_path))
     sentinel = hub_for_common(tmp_path / ".git") / ".warn-mode-enabled-at"
     assert sentinel.is_file()
     assert rc == 0
 
 
-def test_2_sentinel_contains_valid_iso_timestamp(tmp_path):
+def test_2_sentinel_contains_valid_iso_timestamp(tmp_path: Path) -> None:
     enable(git_root=str(tmp_path))
     sentinel = hub_for_common(tmp_path / ".git") / ".warn-mode-enabled-at"
     ts = sentinel.read_text(encoding="utf-8").strip()
     assert _ISO_UTC_RE.match(ts), f"sentinel timestamp format invalid: {ts!r}"
 
 
-def test_3_idempotent_second_run_does_not_overwrite(tmp_path):
+def test_3_idempotent_second_run_does_not_overwrite(tmp_path: Path) -> None:
     enable(git_root=str(tmp_path))
     sentinel = hub_for_common(tmp_path / ".git") / ".warn-mode-enabled-at"
     first_ts = sentinel.read_text(encoding="utf-8").strip()
@@ -56,7 +57,7 @@ def test_3_idempotent_second_run_does_not_overwrite(tmp_path):
     assert rc2 == 0
 
 
-def test_not_in_git_repo_exits_1(capsys):
+def test_not_in_git_repo_exits_1(capsys: pytest.CaptureFixture[str]) -> None:
     # An explicit falsy git_root (empty string) exercises the identical
     # `if not git_root` branch _resolve_git_root() returning None would hit —
     # deterministic without depending on the test-runner's cwd being outside
@@ -68,7 +69,7 @@ def test_not_in_git_repo_exits_1(capsys):
     assert "not inside a git repository" in captured.err
 
 
-def test_main_wraps_enable_and_writes_stdout(tmp_path, monkeypatch, capsys):
+def test_main_wraps_enable_and_writes_stdout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.chdir(tmp_path)
     import subprocess
 

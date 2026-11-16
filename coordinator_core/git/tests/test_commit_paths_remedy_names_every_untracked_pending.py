@@ -8,6 +8,7 @@ import subprocess
 import pytest
 
 from coordinator_core.git import commit as gcommit
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -27,13 +28,13 @@ def _git(repo, *args):
     )
 
 
-def _write(path, text):
+def _write(path, text) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/p")
@@ -47,7 +48,7 @@ def repo(tmp_path):
     return r
 
 
-def test_peer_dirty_portable_is_regenerated_from_head_and_lands_index_only(repo):
+def test_peer_dirty_portable_is_regenerated_from_head_and_lands_index_only(repo) -> None:
     _write(repo / "coordinator" / "bin" / "new-tool.py", "x = 1\n")
     peer = _PORTABLE + "# peer edit\n"
     _write(repo / "setup" / "publish-targets.portable", peer)

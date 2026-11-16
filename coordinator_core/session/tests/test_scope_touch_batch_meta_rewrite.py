@@ -5,13 +5,15 @@ from __future__ import annotations
 from coordinator_core import ipc
 from coordinator_core.session import core, scope
 from coordinator_core.tests.git_seed import seeded_repo
+from pathlib import Path
+import pytest
 
 
 def _count_activity_writes(monkeypatch):
     calls = []
     real = core.update_meta_field
 
-    def spy(sdir, field, value):
+    def spy(sdir, field, value) -> bool:
         calls.append(field)
         return real(sdir, field, value)
 
@@ -19,7 +21,7 @@ def _count_activity_writes(monkeypatch):
     return calls
 
 
-def test_touch_refresh_activity_false_skips_meta_rewrite(tmp_path, monkeypatch):
+def test_touch_refresh_activity_false_skips_meta_rewrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = seeded_repo(tmp_path, readme="x")
     core.init("s1", cwd=str(repo))
     calls = _count_activity_writes(monkeypatch)
@@ -27,7 +29,7 @@ def test_touch_refresh_activity_false_skips_meta_rewrite(tmp_path, monkeypatch):
     assert calls == []
 
 
-def test_declared_batch_rewrites_last_activity_once(tmp_path, monkeypatch):
+def test_declared_batch_rewrites_last_activity_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = seeded_repo(tmp_path, readme="x")
     root = str(repo)
     names = [f"f{i}.txt" for i in range(5)]

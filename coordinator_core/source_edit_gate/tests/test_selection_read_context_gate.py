@@ -9,6 +9,7 @@ mention or an execution-only use (`subprocess`/`runpy`/`importlib`/argv).
 from __future__ import annotations
 
 from coordinator_core.source_edit_gate.selection import select_test_files
+from pathlib import Path
 
 
 def _doc_only_repo(tmp_path, test_source: str):
@@ -35,7 +36,7 @@ def _doc_only_repo(tmp_path, test_source: str):
     return all_files, original, edited
 
 
-def _select(tmp_path, test_source, classification="doc-only"):
+def _select(tmp_path, test_source, classification: str = "doc-only"):
     all_files, original, edited = _doc_only_repo(tmp_path, test_source)
     if classification == "code":
         # Force a "code" classification instead of "doc-only" -- some other
@@ -49,7 +50,7 @@ def _select(tmp_path, test_source, classification="doc-only"):
     )
 
 
-def test_exec_only_literal_not_selected_for_doc_only_edit(tmp_path):
+def test_exec_only_literal_not_selected_for_doc_only_edit(tmp_path: Path) -> None:
     test_source = (
         "import subprocess\n\n"
         "def test_it():\n"
@@ -58,7 +59,7 @@ def test_exec_only_literal_not_selected_for_doc_only_edit(tmp_path):
     assert _select(tmp_path, test_source) == []
 
 
-def test_read_text_literal_selected_for_doc_only_edit(tmp_path):
+def test_read_text_literal_selected_for_doc_only_edit(tmp_path: Path) -> None:
     test_source = (
         "from pathlib import Path\n\n"
         "def test_it():\n"
@@ -67,7 +68,7 @@ def test_read_text_literal_selected_for_doc_only_edit(tmp_path):
     assert _select(tmp_path, test_source) == ["tests/test_x.py"]
 
 
-def test_hashlib_of_literal_selected_for_doc_only_edit(tmp_path):
+def test_hashlib_of_literal_selected_for_doc_only_edit(tmp_path: Path) -> None:
     test_source = (
         "import hashlib\n\n"
         "def test_it():\n"
@@ -76,7 +77,7 @@ def test_hashlib_of_literal_selected_for_doc_only_edit(tmp_path):
     assert _select(tmp_path, test_source) == ["tests/test_x.py"]
 
 
-def test_glob_over_dir_selected_for_doc_only_edit(tmp_path):
+def test_glob_over_dir_selected_for_doc_only_edit(tmp_path: Path) -> None:
     test_source = (
         "import glob\n\n"
         "def test_it():\n"
@@ -85,7 +86,7 @@ def test_glob_over_dir_selected_for_doc_only_edit(tmp_path):
     assert _select(tmp_path, test_source) == ["tests/test_x.py"]
 
 
-def test_exec_only_literal_still_selected_for_code_edit(tmp_path):
+def test_exec_only_literal_still_selected_for_code_edit(tmp_path: Path) -> None:
     test_source = (
         "import subprocess\n\n"
         "def test_it():\n"

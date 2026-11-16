@@ -26,6 +26,7 @@ from coordinator_core.ops.generator_census.declarations import DECLARATION_NAMES
 from coordinator_core.session import output_tree_layout
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -114,7 +115,7 @@ def _sites() -> dict[str, int]:
     return dict(found)
 
 
-def test_no_new_flat_only_output_tree_listers():
+def test_no_new_flat_only_output_tree_listers() -> None:
     grown = {p: n for p, n in _sites().items() if n > _FLAT_ONLY_SITES.get(p, 0)}
     assert not grown, (
         "flat-only output-tree glob literal(s) above the pinned count (list via "
@@ -122,13 +123,13 @@ def test_no_new_flat_only_output_tree_listers():
     )
 
 
-def test_pinned_sites_still_carry_their_literals():
+def test_pinned_sites_still_carry_their_literals() -> None:
     found = _sites()
     stale = {p: n for p, n in _FLAT_ONLY_SITES.items() if found.get(p, 0) < n}
     assert not stale, f"pinned site(s) shrank or vanished -- lower or remove the pin: {stale}"
 
 
-def test_detector_counts_listers_and_exempts_declarations_docstrings_and_shard_aware_files():
+def test_detector_counts_listers_and_exempts_declarations_docstrings_and_shard_aware_files() -> None:
     assert _flat_literal_count('x = root.glob("docs/plans/*.md")\n') == 1
     assert _flat_literal_count('y = f"{r}/state/sizings/*.yaml"\n') == 1
     assert _flat_literal_count('z = ("state/handoffs/*.md", "docs/delivery/*.md")\n') == 2
@@ -142,14 +143,14 @@ def test_detector_counts_listers_and_exempts_declarations_docstrings_and_shard_a
     assert _flat_literal_count('def f():\n    MUTATES = ["docs/plans/*.md"]\n') == 1
 
 
-def _write(root, rel, text="---\ntitle: t\n---\nbody\n"):
+def _write(root, rel, text: str = "---\ntitle: t\n---\nbody\n"):
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text, encoding="utf-8")
     return p
 
 
-def test_backfill_enumerate_corpus_lists_flat_and_sharded_entries(tmp_path):
+def test_backfill_enumerate_corpus_lists_flat_and_sharded_entries(tmp_path: Path) -> None:
     from coordinator_core.ops import backfill_deliverable_spine as mod
 
     _write(tmp_path, "docs/plans/2026-01-01-flat.md")
@@ -172,14 +173,14 @@ def test_backfill_enumerate_corpus_lists_flat_and_sharded_entries(tmp_path):
         assert rel in names, (rel, sorted(names))
 
 
-def test_backfill_non_month_subdir_is_not_descended(tmp_path):
+def test_backfill_non_month_subdir_is_not_descended(tmp_path: Path) -> None:
     from coordinator_core.ops import backfill_deliverable_spine as mod
 
     _write(tmp_path, "docs/plans/notes/2026-11-03-x.md")
     assert mod._list_md_files(str(tmp_path / "docs" / "plans"), recursive=False) == []
 
 
-def test_normalize_walk_dir_lists_flat_and_sharded_handoffs(tmp_path):
+def test_normalize_walk_dir_lists_flat_and_sharded_handoffs(tmp_path: Path) -> None:
     from coordinator_core.ops import normalize_claimed_frontmatter as mod
 
     flat = _write(tmp_path, "state/handoffs/2026-01-01-flat.md")
@@ -188,7 +189,7 @@ def test_normalize_walk_dir_lists_flat_and_sharded_handoffs(tmp_path):
     assert got == {os.path.normpath(str(flat)), os.path.normpath(str(sharded))}
 
 
-def test_orphan_memo_owning_text_reads_flat_and_sharded_artifacts(tmp_path):
+def test_orphan_memo_owning_text_reads_flat_and_sharded_artifacts(tmp_path: Path) -> None:
     from coordinator_core.ops import deferral_detect_orphan_memo as mod
 
     _write(tmp_path, "docs/plans/2026-01-01-a.md", "FLATPLAN\n")

@@ -157,7 +157,7 @@ def _rmtree_clearing_readonly(root: Path) -> None:
     retry is left for `rmtree_or_raise` to report.
     """
 
-    def _retry(func, path, _exc):
+    def _retry(func, path, _exc) -> None:
         try:
             make_removable(path)
             func(path)
@@ -239,7 +239,7 @@ def record_fixture_repo(source_root: Path, paths, *, prefix: str, label: str) ->
         dest = tmp / "c"
         dest.mkdir()
 
-        def git(*args: str):
+        def git(*args: str) -> None:
             result = run_git(
                 ["-c", "core.fsmonitor=false", "-c", "core.longpaths=true", *args], cwd=str(dest)
             )
@@ -306,7 +306,7 @@ class Reaped(list):
 
     foreign: List[int]
 
-    def __init__(self, signalled=(), foreign=()):
+    def __init__(self, signalled=(), foreign=()) -> None:
         super().__init__(signalled)
         self.foreign = list(foreign)
 

@@ -21,6 +21,7 @@ from coordinator_core.benchmarks.ambient_sampler import (
 )
 
 import pytest
+from pathlib import Path
 
 # Declared, not excused: this file spawns a real process (git/python) because
 # the property under test is that binary's own behaviour, which no fixture
@@ -33,7 +34,7 @@ pytestmark = [
 ]
 
 
-def test_take_sample_shape():
+def test_take_sample_shape() -> None:
     sample = take_sample()
     assert set(sample.keys()) == {
         "t", "live_sessions", "claude_procs", "cpu_pct", "ram_free_mb", "ram_total_mb",
@@ -46,7 +47,7 @@ def test_take_sample_shape():
     assert sample["ram_total_mb"] is None or isinstance(sample["ram_total_mb"], float)
 
 
-def test_take_sample_ram_comes_from_avail_mb(monkeypatch):
+def test_take_sample_ram_comes_from_avail_mb(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.telemetry import host_sampler
 
     monkeypatch.setattr(host_sampler, "avail_mb", lambda: (1234, 5678))
@@ -55,7 +56,7 @@ def test_take_sample_ram_comes_from_avail_mb(monkeypatch):
     assert sample["ram_total_mb"] == 5678.0
 
 
-def test_take_sample_ram_none_when_avail_mb_unreadable(monkeypatch):
+def test_take_sample_ram_none_when_avail_mb_unreadable(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.telemetry import host_sampler
 
     monkeypatch.setattr(host_sampler, "avail_mb", lambda: (None, None))
@@ -64,7 +65,7 @@ def test_take_sample_ram_none_when_avail_mb_unreadable(monkeypatch):
     assert sample["ram_total_mb"] is None
 
 
-def test_append_sample_writes_one_json_line(tmp_path):
+def test_append_sample_writes_one_json_line(tmp_path: Path) -> None:
     sink = tmp_path / "logs" / "ambient-load.jsonl"
     sample = {
         "t": 123.0, "live_sessions": 3, "claude_procs": 5,
@@ -80,7 +81,7 @@ def test_append_sample_writes_one_json_line(tmp_path):
     assert len(lines) == 2
 
 
-def test_append_sample_unwritable_sink_does_not_raise(tmp_path):
+def test_append_sample_unwritable_sink_does_not_raise(tmp_path: Path) -> None:
     blocking_file = tmp_path / "blocked"
     blocking_file.write_text("not a directory", encoding="utf-8")
     unwritable_sink = blocking_file / "impossible-child" / "ambient-load.jsonl"
@@ -89,7 +90,7 @@ def test_append_sample_unwritable_sink_does_not_raise(tmp_path):
     append_sample(unwritable_sink, {"t": 1.0})
 
 
-def test_interval_floor_enforced_via_once(tmp_path, monkeypatch):
+def test_interval_floor_enforced_via_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     exit_code = main(["--repo", str(tmp_path.parent), "--interval", "0.001", "--once"])
     # --once always exits 0 or 1 depending on repo resolution; the point of

@@ -28,10 +28,10 @@ class FakeProc:
 
 
 class Out:
-    def __init__(self):
+    def __init__(self) -> None:
         self.lines, self.lock = [], threading.Lock()
 
-    def write(self, b):
+    def write(self, b) -> None:
         with self.lock:
             self.lines += [json.loads(x) for x in b.splitlines() if x]
 
@@ -40,7 +40,7 @@ class Out:
 
 
 @pytest.fixture
-def host(tmp_path, monkeypatch):
+def host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # Measured: the relay's srv.bind() raises OSError "AF_UNIX path too long" (macOS sun_path cap
     # 104) for a socket under pytest's tmp_path (~159 bytes), so serve_mux never registers a name.
     # The socket dir lives in <repo>/scratch (short, doctrine scratch root), removed on teardown.
@@ -60,11 +60,11 @@ def host(tmp_path, monkeypatch):
 
     class Helpers:
         @staticmethod
-        def local_peer_key(body, ps, domain):
+        def local_peer_key(body, ps, domain) -> str:
             return f"{body}|{ps}|{domain}"
 
         @staticmethod
-        def write_peer_key(path, value):
+        def write_peer_key(path, value) -> None:
             Path(path).write_text(value, encoding="utf-8")
 
     monkeypatch.setattr(relay, "load_roster", lambda: Helpers)
@@ -81,11 +81,11 @@ def start_mux():
     return w, t, out
 
 
-def send(w, **frame):
+def send(w, **frame) -> None:
     os.write(w, json.dumps(frame).encode() + b"\n")
 
 
-def wait(pred, secs=5):
+def wait(pred, secs: int = 5) -> bool:
     end = time.time() + secs
     while time.time() < end:
         if pred():
@@ -94,13 +94,13 @@ def wait(pred, secs=5):
     return False
 
 
-def test_parse_mode_accepts_inbox_mux_and_nothing_wider():
+def test_parse_mode_accepts_inbox_mux_and_nothing_wider() -> None:
     assert relay.parse_mode("inbox-mux") == ("inbox-mux", None)
     assert relay.parse_mode("inbox-mux extra") is None
     assert relay.parse_mode("inbox face-0") == ("inbox", "face-0")
 
 
-def test_one_process_registers_six_names_and_releases_all_on_stdin_eof(host):
+def test_one_process_registers_six_names_and_releases_all_on_stdin_eof(host) -> None:
     sess, socks = host
     w, t, out = start_mux()
     for n in NAMES:
@@ -116,7 +116,7 @@ def test_one_process_registers_six_names_and_releases_all_on_stdin_eof(host):
     assert not list(sess.iterdir()) and not list(socks.iterdir())
 
 
-def test_a_message_to_a_names_socket_is_wrapped_with_that_name(host):
+def test_a_message_to_a_names_socket_is_wrapped_with_that_name(host) -> None:
     sess, socks = host
     w, t, out = start_mux()
     send(w, op="add", name="face-0", entry={}, key="K")
@@ -132,7 +132,7 @@ def test_a_message_to_a_names_socket_is_wrapped_with_that_name(host):
     t.join(5)
 
 
-def test_drop_releases_only_that_name_and_readd_replaces_it(host):
+def test_drop_releases_only_that_name_and_readd_replaces_it(host) -> None:
     sess, socks = host
     w, t, out = start_mux()
     for n in ("face-0", "face-1"):
@@ -150,10 +150,10 @@ def test_drop_releases_only_that_name_and_readd_replaces_it(host):
     t.join(5)
 
 
-def test_a_refused_name_is_reported_and_the_others_still_register(host, monkeypatch):
+def test_a_refused_name_is_reported_and_the_others_still_register(host, monkeypatch: pytest.MonkeyPatch) -> None:
     sess, socks = host
 
-    def refuse(name, client="", own_pid=None):
+    def refuse(name, client: str = "", own_pid=None):
         if name == "face-0":
             sys.exit("name face-0 belongs to a live local session")
         return []
@@ -168,10 +168,10 @@ def test_a_refused_name_is_reported_and_the_others_still_register(host, monkeypa
     t.join(5)
 
 
-def test_a_non_exit_failure_registering_one_name_is_reported_and_the_process_lives(host, monkeypatch):
+def test_a_non_exit_failure_registering_one_name_is_reported_and_the_process_lives(host, monkeypatch: pytest.MonkeyPatch) -> None:
     sess, socks = host
 
-    def boom(name, client="", own_pid=None):
+    def boom(name, client: str = "", own_pid=None):
         if name == "face-0":
             raise OSError("bind failed")
         return []
@@ -186,7 +186,7 @@ def test_a_non_exit_failure_registering_one_name_is_reported_and_the_process_liv
     t.join(5)
 
 
-def test_mux_entries_are_visible_to_entries_with_their_own_key(host, monkeypatch):
+def test_mux_entries_are_visible_to_entries_with_their_own_key(host, monkeypatch: pytest.MonkeyPatch) -> None:
     sess, _ = host
     monkeypatch.setattr(relay, "_liveness", lambda: type("L", (), {
         "entry_live": staticmethod(lambda d: True), "supervisor_live": staticmethod(lambda d: True)}))
@@ -202,7 +202,7 @@ def test_mux_entries_are_visible_to_entries_with_their_own_key(host, monkeypatch
     assert [d["name"] for _, d, _ in relay.entries()] == ["a"]
 
 
-def test_a_failure_after_bind_releases_the_names_socket_and_entry(host, monkeypatch):
+def test_a_failure_after_bind_releases_the_names_socket_and_entry(host, monkeypatch: pytest.MonkeyPatch) -> None:
     sess, socks = host
     monkeypatch.setattr(relay.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(OSError("ps gone")))
     with pytest.raises(OSError):

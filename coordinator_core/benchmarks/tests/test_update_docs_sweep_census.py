@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from coordinator_core.benchmarks import update_docs_sweep_census as census
+from pathlib import Path
+import pytest
 
 
-def test_base_op_without_verdicts_or_cohort_reads_zero_and_absent(tmp_path):
+def test_base_op_without_verdicts_or_cohort_reads_zero_and_absent(tmp_path: Path) -> None:
     base = {"agent_worklist": [{"kind": "doc_drift_review"}], "decided_by_op": {"prune": {"plans": []}}}
     report = census.run(tmp_path, runs=1, call=lambda: base)
     assert report["agent_phases"] == 0
@@ -16,11 +18,11 @@ def test_base_op_without_verdicts_or_cohort_reads_zero_and_absent(tmp_path):
     assert report["spawns"] == 0
 
 
-def test_agent_phases_counts_only_agent_verdicts():
+def test_agent_phases_counts_only_agent_verdicts() -> None:
     assert census.agent_phase_count({"phase_verdicts": {"1": "agent", "6": "noop", "8": {"verdict": "agent"}, "9b": "op"}}) == 2
 
 
-def test_coverage_counts_all_three_states_against_the_disk_total(tmp_path):
+def test_coverage_counts_all_three_states_against_the_disk_total(tmp_path: Path) -> None:
     (tmp_path / "archive" / "handoffs" / "2026-11").mkdir(parents=True)
     for name in ("a.md", "b.md", "c.md"):
         (tmp_path / "archive" / "handoffs" / "2026-11" / name).write_text("x", encoding="utf-8")
@@ -30,12 +32,12 @@ def test_coverage_counts_all_three_states_against_the_disk_total(tmp_path):
     assert cov == {"classified": 3, "total": 3, "ratio": 1.0}
 
 
-def test_partial_coverage_is_reported_not_rounded_up():
+def test_partial_coverage_is_reported_not_rounded_up() -> None:
     result = {"decided_by_op": {"archived_handoffs": {"total": 4, "prune": 1, "keep": 1}}}
     assert census.archived_handoff_coverage(result, 4)["ratio"] == 0.5
 
 
-def test_pass_follows_the_bar(tmp_path):
+def test_pass_follows_the_bar(tmp_path: Path) -> None:
     assert census.run(tmp_path, runs=1, call=lambda: {})["pass"] is True
 
 
@@ -45,7 +47,7 @@ def _unavailable():
     raise OpUnavailableError("not registered")
 
 
-def test_every_op_is_measured_and_an_unregistered_one_reads_absent(tmp_path):
+def test_every_op_is_measured_and_an_unregistered_one_reads_absent(tmp_path: Path) -> None:
     calls = {census.OP: lambda: {}, census.INDEX_OP: lambda: {}, census.BOOKKEEPING_OP: _unavailable}
     report = census.run(tmp_path, runs=1, calls=calls)
     assert set(report["ops"]) == set(census.OPS)
@@ -56,12 +58,12 @@ def test_every_op_is_measured_and_an_unregistered_one_reads_absent(tmp_path):
     assert report["pass"] is False
 
 
-def test_all_ops_measured_passes(tmp_path):
+def test_all_ops_measured_passes(tmp_path: Path) -> None:
     calls = {op: (lambda: {}) for op in census.OPS}
     assert census.run(tmp_path, runs=1, calls=calls)["pass"] is True
 
 
-def test_reply_tokens_count_the_composite_once(tmp_path):
+def test_reply_tokens_count_the_composite_once(tmp_path: Path) -> None:
     inventory, index = {"a": "x" * 400}, {"b": "y" * 400}
     calls = {
         census.OP: lambda: inventory,
@@ -75,24 +77,24 @@ def test_reply_tokens_count_the_composite_once(tmp_path):
     assert composite > parts - 1 and report["reply_tokens"] != composite + parts
 
 
-def test_reply_tokens_sum_the_base_ops_when_the_composite_is_absent(tmp_path):
+def test_reply_tokens_sum_the_base_ops_when_the_composite_is_absent(tmp_path: Path) -> None:
     calls = {census.OP: lambda: {"a": "x" * 400}, census.INDEX_OP: lambda: {"b": "y" * 400}, census.BOOKKEEPING_OP: _unavailable}
     report = census.run(tmp_path, runs=1, calls=calls)
     assert report["reply_tokens"] == report["ops"][census.OP]["reply_tokens"] + report["ops"][census.INDEX_OP]["reply_tokens"]
 
 
-def test_pass_fails_when_any_measured_op_is_over_the_bar(tmp_path, monkeypatch):
+def test_pass_fails_when_any_measured_op_is_over_the_bar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(census, "BAR_MS", -1.0)
     assert census.run(tmp_path, runs=1, calls={census.INDEX_OP: lambda: {}})["pass"] is False
 
 
-def test_token_axis_is_before_and_unmeasured_after_without_a_transcript(tmp_path):
+def test_token_axis_is_before_and_unmeasured_after_without_a_transcript(tmp_path: Path) -> None:
     axis = census.run(tmp_path, runs=1, call=lambda: {"phase_verdicts": {"1": "agent"}})["token_axis"]
     assert axis["before"]["tokens"] == 148000
     assert axis["after"] == {"tokens": "unmeasured", "agent_phases": 1}
 
 
-def test_token_axis_after_sums_a_transcript_through_ceremony_token_census(tmp_path):
+def test_token_axis_after_sums_a_transcript_through_ceremony_token_census(tmp_path: Path) -> None:
     transcript = tmp_path / "s.jsonl"
     transcript.write_text(
         '{"type":"assistant","message":{"id":"m1","content":[],"usage":{"input_tokens":10,"output_tokens":5}}}\n',

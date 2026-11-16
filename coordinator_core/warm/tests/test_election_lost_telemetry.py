@@ -4,9 +4,10 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.warm import election, server, telemetry
+from pathlib import Path
 
 
-def test_row_carries_endpoint_token_pid_and_interval(tmp_path):
+def test_row_carries_endpoint_token_pid_and_interval(tmp_path: Path) -> None:
     telemetry.record_election_lost(
         endpoint=r"\\.\pipe\coordinator-warm-abc",
         token="abc",
@@ -23,7 +24,7 @@ def test_row_carries_endpoint_token_pid_and_interval(tmp_path):
     assert rows[0]["lost_secs"] == 0.123
 
 
-def test_unmeasurable_interval_is_omitted_not_zeroed(tmp_path):
+def test_unmeasurable_interval_is_omitted_not_zeroed(tmp_path: Path) -> None:
     telemetry.record_election_lost(endpoint="sock", engine_root=tmp_path)
 
     row = telemetry.election_lost_samples(tmp_path)[0]
@@ -32,11 +33,11 @@ def test_unmeasurable_interval_is_omitted_not_zeroed(tmp_path):
     assert "pid" not in row
 
 
-def test_absent_file_reads_as_no_losses(tmp_path):
+def test_absent_file_reads_as_no_losses(tmp_path: Path) -> None:
     assert telemetry.election_lost_samples(tmp_path) == []
 
 
-def test_recorder_never_raises(tmp_path, monkeypatch):
+def test_recorder_never_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*args, **kwargs):
         raise OSError("disk full")
 
@@ -44,7 +45,7 @@ def test_recorder_never_raises(tmp_path, monkeypatch):
     telemetry.record_election_lost(endpoint="sock", engine_root=tmp_path)
 
 
-def test_run_guarded_records_the_loss_and_still_exits_zero(tmp_path, monkeypatch):
+def test_run_guarded_records_the_loss_and_still_exits_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     recorded: list = []
 
     monkeypatch.setattr(server, "_engine_clone_root", lambda: tmp_path)
@@ -67,7 +68,7 @@ def test_run_guarded_records_the_loss_and_still_exits_zero(tmp_path, monkeypatch
     assert recorded[0]["engine_root"] == tmp_path
 
 
-def test_a_failing_instrument_never_stops_a_clean_loss(tmp_path, monkeypatch):
+def test_a_failing_instrument_never_stops_a_clean_loss(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "_engine_clone_root", lambda: tmp_path)
     monkeypatch.setattr(server.skew, "compute_client_token", lambda root: "tok-1")
     monkeypatch.setattr(server, "_spawn_epoch_from_env", lambda: None)

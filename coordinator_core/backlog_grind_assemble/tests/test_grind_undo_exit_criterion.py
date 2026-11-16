@@ -16,6 +16,7 @@ from coordinator_core.backlog_grind_assemble import grind_rows
 from coordinator_core.bash_guards import block_subagent_destructive_action as guard
 from coordinator_core.ops.dispatch_emit import grind_stages
 from coordinator_core.session import scope
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -23,7 +24,7 @@ SID = "undo-exit-criterion-session"
 AGENT_TYPE = "coordinator:queue-grind-op-runner"
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> None:
     subprocess.run(
         ["git", "-C", str(repo), *args],
         check=True,
@@ -46,7 +47,7 @@ def _js_encode_uri_component(s: str) -> str:
     return quote(s, safe="-_.!~*'()").replace("'", "%27")
 
 
-def _rendered_command(paths):
+def _rendered_command(paths) -> str:
     """The stage's shell command, with the JS encoder expression evaluated in Python."""
     js = grind_stages.compose_verify_op_call(
         label="verify-op", phase_title="Undo", run_dir="RUN_DIR", reject_paths_js=json.dumps(paths)
@@ -59,14 +60,14 @@ def _rendered_command(paths):
     return f"{grind_stages.ASSEMBLE_CMD} grind-row undo --paths-urlenc '{token}' --repo-root REPO"
 
 
-def _run_as_op_runner(command, repo):
+def _run_as_op_runner(command, repo) -> int:
     argv = shlex.split(command)
     assert argv[1:3] == ["grind-row", "undo"], argv
     return grind_rows.main(["undo", *[a if a != "REPO" else str(repo) for a in argv[3:]]])
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     r = tmp_path / "repo"
     r.mkdir()
     _git(r, "init", "-q")
@@ -83,7 +84,7 @@ def repo(tmp_path, monkeypatch):
     return r
 
 
-def test_verify_failed_row_restored_by_stage_command(repo, capsys):
+def test_verify_failed_row_restored_by_stage_command(repo, capsys: pytest.CaptureFixture[str]) -> None:
     head_tree = _tree(repo)
     (repo / "fixed.md").write_text("bad fix\n")
     (repo / "row one.md").unlink()
@@ -106,7 +107,7 @@ def test_verify_failed_row_restored_by_stage_command(repo, capsys):
 
 
 @pytest.mark.parametrize("tool_name", ["Bash", "PowerShell"])
-def test_guard_still_denies_checkout_on_undeclared_path(tool_name):
+def test_guard_still_denies_checkout_on_undeclared_path(tool_name) -> None:
     payload = {
         "tool_name": tool_name,
         "tool_input": {"command": "git checkout HEAD -- unclaimed.md"},

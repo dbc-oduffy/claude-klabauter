@@ -21,6 +21,7 @@ from coordinator_core.ops.dispatch_emit.emit import compose_script
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
 from .conftest import REVIEW_KW
+from pathlib import Path
 
 RUN = "ask-20261029T000000-abc123"
 REL = "state/sizings/2026-10-29-widen-e2e.yaml"
@@ -28,7 +29,7 @@ PATH = "pkg/scripts/install_plugin.py"
 
 
 @pytest.fixture
-def halted(tmp_path):
+def halted(tmp_path: Path) -> tuple[Path, Path]:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     doc = {
@@ -53,7 +54,7 @@ def _revise(root):
     return rl._handler({"run_id": RUN, "widened": [{"row": "C1", "path": PATH}]}, repo_root=root)
 
 
-def test_revise_widened_records_and_invalidates_the_halt_resume_record(halted):
+def test_revise_widened_records_and_invalidates_the_halt_resume_record(halted) -> None:
     root, rd = halted
     at_halt = hrr.fingerprint_for_run(root, rd, REL, "plan.md")
     record = hrr.build_record(
@@ -69,7 +70,7 @@ def test_revise_widened_records_and_invalidates_the_halt_resume_record(halted):
     assert not hrr.matches(record, hrr.fingerprint_for_run(root, rd, REL, "plan.md"))
 
 
-def test_the_refired_run_footprint_fence_admits_the_widened_path_only_after_the_revise(halted, monkeypatch):
+def test_the_refired_run_footprint_fence_admits_the_widened_path_only_after_the_revise(halted, monkeypatch: pytest.MonkeyPatch) -> None:
     root, rd = halted
     (rd / land_run.LEG_FOOTPRINT_FILE).write_text(json.dumps({"writes": ["a.py"]}), encoding="utf-8")
     monkeypatch.setattr(land_run, "_manifest_declared", lambda m: (["a.py", PATH], None))
@@ -81,7 +82,7 @@ def test_the_refired_run_footprint_fence_admits_the_widened_path_only_after_the_
     assert land_run._footprint_fence(root, rd, {"blocking": []}, None, None) == {"recorded": True, "breach": []}
 
 
-def test_the_refired_row_brief_names_the_widened_path(halted):
+def test_the_refired_row_brief_names_the_widened_path(halted) -> None:
     """`compose_script` seeds `_widenOf` from the widen record, so a refired row's prompt carries the
     revised path."""
     root, rd = halted
@@ -94,7 +95,7 @@ def test_the_refired_row_brief_names_the_widened_path(halted):
     assert f'"C1": "{PATH}"' in script
 
 
-def test_a_second_revised_path_for_the_same_row_is_not_dropped(halted):
+def test_a_second_revised_path_for_the_same_row_is_not_dropped(halted) -> None:
     root, rd = halted
     second = "pkg/scripts/other.py"
     rl._handler(
@@ -109,7 +110,7 @@ def test_a_second_revised_path_for_the_same_row_is_not_dropped(halted):
     assert PATH in script and second in script
 
 
-def test_a_non_terminal_sibling_script_still_seeds_the_widened_path(halted):
+def test_a_non_terminal_sibling_script_still_seeds_the_widened_path(halted) -> None:
     """A split run's non-carrier script gets the widen seed even though it splices no absorb tail."""
     from coordinator_core.ops.dispatch_emit.emit import emit_script
     from coordinator_core.ops.dispatch_emit.tests.test_sibling_split import _plan_file

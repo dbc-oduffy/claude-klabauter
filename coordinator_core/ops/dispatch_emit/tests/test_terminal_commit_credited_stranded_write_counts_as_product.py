@@ -10,6 +10,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 from coordinator_core.ops.dispatch_emit.ask_contract import UNCHANGED_SINCE_HALT_REASON
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -24,7 +25,7 @@ def _git(root, *a):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path):
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@t.example")
     _git(tmp_path, "config", "user.name", "t")
@@ -45,19 +46,19 @@ def _failures(root, halt, manifest):
     return tc._unchanged_since_halt_failures(root, resume, MET, manifest)
 
 
-def test_untracked_state_corpus_write_declared_by_the_chunk_counts_as_product(repo):
+def test_untracked_state_corpus_write_declared_by_the_chunk_counts_as_product(repo) -> None:
     root, halt = repo
     (root / "state" / "bug-backlog").mkdir(parents=True)
     (root / STRANDED).write_text("a: 1\n", encoding="utf-8")
     assert _failures(root, halt, _manifest(root, STRANDED)) == []
 
 
-def test_declared_write_absent_from_disk_is_still_refused(repo):
+def test_declared_write_absent_from_disk_is_still_refused(repo) -> None:
     root, halt = repo
     assert _failures(root, halt, _manifest(root, STRANDED)) == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
 
 
-def test_undeclared_untracked_state_file_does_not_count(repo):
+def test_undeclared_untracked_state_file_does_not_count(repo) -> None:
     root, halt = repo
     (root / "state" / "bug-backlog").mkdir(parents=True)
     (root / STRANDED).write_text("a: 1\n", encoding="utf-8")
@@ -66,7 +67,7 @@ def test_undeclared_untracked_state_file_does_not_count(repo):
 
 
 @pytest.mark.parametrize("rel", ["state/sizings/x.yaml", "state/warp/r/x.json", "state/loose.yaml"])
-def test_run_process_state_still_does_not_count(repo, rel):
+def test_run_process_state_still_does_not_count(repo, rel) -> None:
     root, halt = repo
     (root / rel).parent.mkdir(parents=True, exist_ok=True)
     (root / rel).write_text("a: 1\n", encoding="utf-8")

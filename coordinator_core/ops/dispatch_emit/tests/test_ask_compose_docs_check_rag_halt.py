@@ -66,6 +66,46 @@ def test_a_non_ue_compose_carries_no_docs_check_leg(monkeypatch, tmp_path):
         assert "rag_corpus_down" not in script
 
 
+def test_a_ue_repo_plan_leg_is_skipped_only_when_declared_writes_touch_no_ue_path(monkeypatch, tmp_path):
+    root = _ue_declared_repo(tmp_path)
+    py_only = _presized(monkeypatch, arm="m_plus", repo_root=root, writes=["tools/x/labeller.py", "docs/a.md"],
+                        **_named_fragment())
+    assert "label: 'plan-docs-check'" not in py_only
+    assert "gap: 'no_ue_paths'" in py_only and "leg: 'plan-docs-check'" in py_only
+    ue = _presized(monkeypatch, arm="m_plus", repo_root=root, writes=["tools/x.py", "Source/G/A.cpp"],
+                   **_named_fragment())
+    assert "label: 'plan-docs-check'" in ue and "leg: 'plan-docs-check', gap: 'no_ue_paths'" not in ue
+    assert "label: 'plan-docs-check'" in _m_plus(monkeypatch, root)
+
+
+def test_the_diff_leg_is_guarded_by_the_ue_path_test_and_keeps_its_agent_call(tmp_path):
+    script = _compose(repo_root=_ue_declared_repo(tmp_path), **_named_fragment())
+    assert "label: 'diff-docs-check'" in script
+    assert "const _runTouchesUe" in script
+    assert script.index("if (!_runTouchesUe)") < _label_at(script, "diff-docs-check")
+
+
+@pytest.mark.skipif(shutil.which("node") is None, reason="needs node to evaluate the composed skip guard")
+def test_the_composed_diff_guard_skips_python_docs_and_runs_ue_paths(tmp_path):
+    script = _compose(repo_root=_ue_declared_repo(tmp_path), **_named_fragment())
+    start = script.index("const _uePathRe")
+    guard = script[start:script.index(";\n", script.index("const _runTouchesUe")) + 1]
+    harness = (
+        "function run(paths, writes) { const _reviewPaths = paths, _writes = writes;\n"
+        + guard + "\n return _runTouchesUe; }\n"
+        "console.log(JSON.stringify([\n"
+        "  run(['tools/likeness-prototype/likeness/hairstyle_class/x.py','docs/c.md','schema/b.json'], []),\n"
+        "  run(['a.py'], ['Plugins/P/Source/P/Y.cpp']),\n"
+        "  run(['control\\\\plugin\\\\Z.txt'], []),\n"
+        "  run(['a.uasset'], null),\n"
+        "]))"
+    )
+    path = tmp_path / "guard.js"
+    path.write_text(harness, encoding="utf-8")
+    out = subprocess.run(["node", str(path)], capture_output=True, text=True, check=True).stdout
+    assert json.loads(out) == [False, True, True, True]
+
+
 def test_the_checker_schema_admits_rag_down_and_degraded():
     assert ask_compose._DOCS_CHECK_SCHEMA["properties"]["verdict"]["enum"] == ["ok", "corrected", "rag_down", "degraded"]
     assert "degraded_bands" in ask_compose._DOCS_CHECK_SCHEMA["properties"]
@@ -115,13 +155,16 @@ def test_each_leg_retries_a_corpus_down_once_then_degrades_and_halts_only_on_cit
         "  await run({verdict:'ok'}, {verdict:'transcript_unreadable', branch:'transcript_missing', reason:'gone'}, OK, OK),\n"
         "  await run({verdict:'ok'}, DOWN, OK, OK),\n"
         "  await run({verdict:'ok'}, DOWN, OK, CITE),\n"
+        "  await run({verdict:'degraded', degraded_bands:['engine-source'], reason:'d'}, null, {verdict:'degraded', degraded_bands:['engine-source'], reason:'d'}, undefined),\n"
+        "  await run({verdict:'degraded', degraded_bands:['engine-source'], reason:'d'}, undefined, {verdict:'degraded', degraded_bands:['engine-source'], reason:'d'}, OK),\n"
         "])))();"
     )
     script_path = tmp_path / "halt_harness.js"
     script_path.write_text(harness, encoding="utf-8")
     out = subprocess.run(["node", str(script_path)], capture_output=True, text=True, check=True).stdout
     (degraded, ok, down, rag_down, unbacked, no_verdict, checker_down_gate_degraded, checker_degraded_na,
-     checker_down_na, checker_degraded_ok, not_used, unreadable, recovered, cite_after_retry) = json.loads(out)
+     checker_down_na, checker_degraded_ok, not_used, unreadable, recovered, cite_after_retry, degraded_gateless,
+     degraded_gate_returns) = json.loads(out)
     name = f"{leg}-docs-check"
     checker_entry = {"leg": name, "source": "checker", "degraded_bands": ["engine-source"]}
     assert checker_degraded_na == {"out": {"continued": [{**checker_entry, "reason": "d"}]}, "retries": 0}
@@ -150,6 +193,9 @@ def test_each_leg_retries_a_corpus_down_once_then_degrades_and_halts_only_on_cit
         assert "[rag: project_symbol Foo]" in structural["out"]["reason"]
         assert structural["out"]["unbacked"] == ["[rag: project_symbol Foo]"]
     assert unbacked["retries"] == 0 and cite_after_retry["retries"] == 1
+    assert "halted" not in degraded_gateless["out"]
+    assert degraded_gateless == {"out": {"continued": [{**outage, "branch": None, "reason": "d"}]}, "retries": 1}
+    assert degraded_gate_returns == {"out": {"continued": [{**checker_entry, "reason": "d"}]}, "retries": 1}
 
 
 @pytest.mark.parametrize("leg", ["plan", "diff"])

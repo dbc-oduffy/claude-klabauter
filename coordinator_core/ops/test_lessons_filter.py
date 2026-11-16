@@ -11,13 +11,14 @@ from coordinator_core.ops.lessons_filter import (
     filter_undated_universal,
     reject_orphan_strip_entries,
 )
+from pathlib import Path
 
 
 def _extraction_yaml(records):
     return yaml.safe_dump({"records": records}, sort_keys=False)
 
 
-def test_filter_keeps_only_undated_and_universal():
+def test_filter_keeps_only_undated_and_universal() -> None:
     records = [
         {"id": "r1", "undated": True, "tag_universal": True},
         {"id": "r2", "undated": True, "tag_universal": False},
@@ -31,7 +32,7 @@ def test_filter_keeps_only_undated_and_universal():
     assert [r["id"] for r in filtered["records"]] == ["r1"]
 
 
-def test_filter_preserves_other_top_level_fields():
+def test_filter_preserves_other_top_level_fields() -> None:
     payload = yaml.safe_dump(
         {"meta": {"shortname": "foo"}, "records": [{"id": "r1", "undated": True, "tag_universal": True}]},
         sort_keys=False,
@@ -41,25 +42,25 @@ def test_filter_preserves_other_top_level_fields():
     assert filtered["meta"] == {"shortname": "foo"}
 
 
-def test_filter_empty_records_yields_zero_kept():
+def test_filter_empty_records_yields_zero_kept() -> None:
     result = filter_undated_universal(_extraction_yaml([]))
     assert result["kept_count"] == 0
     assert yaml.safe_load(result["filtered_yaml"])["records"] == []
 
 
-def test_filter_handler_returns_expected_shape():
+def test_filter_handler_returns_expected_shape() -> None:
     payload = _extraction_yaml([{"id": "r1", "undated": True, "tag_universal": True}])
     result = _lessons_filter_undated_universal({"extraction_yaml": payload})
     assert result["kept_count"] == 1
     assert "filtered_yaml" in result
 
 
-def test_filter_handler_requires_extraction_yaml_param():
+def test_filter_handler_requires_extraction_yaml_param() -> None:
     with pytest.raises(ValueError):
         _lessons_filter_undated_universal({})
 
 
-def test_filter_double_invocation_is_idempotent_no_op():
+def test_filter_double_invocation_is_idempotent_no_op() -> None:
     payload = _extraction_yaml(
         [
             {"id": "r1", "undated": True, "tag_universal": True},
@@ -71,11 +72,11 @@ def test_filter_double_invocation_is_idempotent_no_op():
     assert first == second
 
 
-def _write_yaml(path, data):
+def _write_yaml(path, data) -> None:
     path.write_text(yaml.safe_dump(data, sort_keys=False), encoding="utf-8")
 
 
-def test_reject_orphan_flags_id_with_no_routed_record(tmp_path):
+def test_reject_orphan_flags_id_with_no_routed_record(tmp_path: Path) -> None:
     records_path = tmp_path / "records.yaml"
     strip_path = tmp_path / "strip-list.yaml"
     _write_yaml(
@@ -90,7 +91,7 @@ def test_reject_orphan_flags_id_with_no_routed_record(tmp_path):
     assert result["ok"] is False
 
 
-def test_reject_orphan_ok_when_all_strip_entries_routed(tmp_path):
+def test_reject_orphan_ok_when_all_strip_entries_routed(tmp_path: Path) -> None:
     records_path = tmp_path / "records.yaml"
     strip_path = tmp_path / "strip-list.yaml"
     _write_yaml(records_path, {"records": [{"id": "r1", "change_kind": "wiki-append"}]})
@@ -101,7 +102,7 @@ def test_reject_orphan_ok_when_all_strip_entries_routed(tmp_path):
     assert result == {"orphans": [], "ok": True}
 
 
-def test_reject_orphan_empty_strip_list_is_ok(tmp_path):
+def test_reject_orphan_empty_strip_list_is_ok(tmp_path: Path) -> None:
     records_path = tmp_path / "records.yaml"
     strip_path = tmp_path / "strip-list.yaml"
     _write_yaml(records_path, {"records": []})
@@ -112,7 +113,7 @@ def test_reject_orphan_empty_strip_list_is_ok(tmp_path):
     assert result == {"orphans": [], "ok": True}
 
 
-def test_reject_orphan_treats_missing_change_kind_as_unrouted(tmp_path):
+def test_reject_orphan_treats_missing_change_kind_as_unrouted(tmp_path: Path) -> None:
     records_path = tmp_path / "records.yaml"
     strip_path = tmp_path / "strip-list.yaml"
     _write_yaml(records_path, {"records": [{"id": "r1"}]})
@@ -124,7 +125,7 @@ def test_reject_orphan_treats_missing_change_kind_as_unrouted(tmp_path):
     assert result["ok"] is False
 
 
-def test_reject_orphan_handler_returns_expected_shape(tmp_path):
+def test_reject_orphan_handler_returns_expected_shape(tmp_path: Path) -> None:
     records_path = tmp_path / "records.yaml"
     strip_path = tmp_path / "strip-list.yaml"
     _write_yaml(records_path, {"records": [{"id": "r1", "change_kind": "wiki-append"}]})
@@ -136,14 +137,14 @@ def test_reject_orphan_handler_returns_expected_shape(tmp_path):
     assert result == {"orphans": [], "ok": True}
 
 
-def test_reject_orphan_handler_requires_both_params(tmp_path):
+def test_reject_orphan_handler_requires_both_params(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         _lessons_reject_orphan_strip_entries({})
     with pytest.raises(ValueError):
         _lessons_reject_orphan_strip_entries({"records_path": str(tmp_path / "r.yaml")})
 
 
-def test_reject_orphan_double_invocation_is_idempotent_no_op(tmp_path):
+def test_reject_orphan_double_invocation_is_idempotent_no_op(tmp_path: Path) -> None:
     records_path = tmp_path / "records.yaml"
     strip_path = tmp_path / "strip-list.yaml"
     _write_yaml(

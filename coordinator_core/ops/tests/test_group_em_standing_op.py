@@ -17,16 +17,17 @@ from coordinator_core.group_em import nomination, watch_heartbeat
 from coordinator_core.op_scopes import OP_KEY_SCOPE
 from coordinator_core.ops import _registry_map
 from coordinator_core.ops import group_em_standing as ges
+import pytest
 
 
-def test_registration_quad():
+def test_registration_quad() -> None:
     assert ipc._REGISTRY.get("groupem.standing") is not None
     assert _registry_map.OP_MODULE_MAP["groupem.standing"] == "coordinator_core.ops.group_em_standing"
     assert OP_KEY_SCOPE["groupem.standing"] == "none"
     assert OP_CLASSIFICATION["groupem.standing"] is OpClass.COMPUTE_ONLY
 
 
-def test_read_only_over_fixture_record_and_heartbeat(tmp_path, monkeypatch):
+def test_read_only_over_fixture_record_and_heartbeat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings = tmp_path / "settings"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings))
     monkeypatch.setattr(
@@ -59,7 +60,7 @@ def test_read_only_over_fixture_record_and_heartbeat(tmp_path, monkeypatch):
     assert after == before
 
 
-def test_no_peer_uses_who(tmp_path, monkeypatch):
+def test_no_peer_uses_who(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
     monkeypatch.setattr(ges.nomination, "who", lambda root: seen.setdefault("who", root) and None)
     monkeypatch.setattr(ges.nomination, "identify", lambda root: {"state": "vacant"})
@@ -69,7 +70,7 @@ def test_no_peer_uses_who(tmp_path, monkeypatch):
     assert result == {"nomination": None, "identity": {"state": "vacant"}, "watch_liveness": {"verdict": "absent"}}
 
 
-def test_raising_legs_degrade_without_raising(tmp_path, monkeypatch):
+def test_raising_legs_degrade_without_raising(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*args, **kwargs):
         raise RuntimeError("boom")
 

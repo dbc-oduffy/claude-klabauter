@@ -19,6 +19,8 @@ import json
 import os
 
 from coordinator_core.ops.verify_coverage import main
+from pathlib import Path
+import pytest
 
 
 def _write(path: str, content: str) -> None:
@@ -27,7 +29,7 @@ def _write(path: str, content: str) -> None:
         fh.write(content)
 
 
-def test_retired_agent_ids_quoted_in_doctrine_are_not_flagged_orphaned(tmp_path):
+def test_retired_agent_ids_quoted_in_doctrine_are_not_flagged_orphaned(tmp_path: Path) -> None:
     root = tmp_path / "plugin-root"
     sweep_root = tmp_path / "sweep-root"
 
@@ -54,7 +56,7 @@ def test_retired_agent_ids_quoted_in_doctrine_are_not_flagged_orphaned(tmp_path)
     assert exit_code == 0, "sweep must be clean when only retired ids are quoted"
 
 
-def test_retired_agent_ids_absent_from_allowlist_would_be_flagged_orphaned(tmp_path, monkeypatch):
+def test_retired_agent_ids_absent_from_allowlist_would_be_flagged_orphaned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Negative control: prove the fixture DOES trip the orphan check absent
     the allowlist entries, so the green result above is not a fixture that
     can never fail."""

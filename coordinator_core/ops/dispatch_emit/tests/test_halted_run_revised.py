@@ -3,6 +3,7 @@
 import json
 
 from coordinator_core.ops.dispatch_emit import halted_run as hr
+from pathlib import Path
 
 SIZING = "state/sizings/2026-10-16-foo.yaml"
 AT = "2026-10-19T12:00:00Z"
@@ -14,7 +15,7 @@ def _halted(tmp_path):
     return d
 
 
-def test_stamp_on_halted(tmp_path):
+def test_stamp_on_halted(tmp_path: Path) -> None:
     d = _halted(tmp_path)
     assert hr.revised_halt(d) is None
     assert hr.mark_revised(d, AT) is True
@@ -24,14 +25,14 @@ def test_stamp_on_halted(tmp_path):
     assert data["status"] == "halted"
 
 
-def test_refuse_on_absent(tmp_path):
+def test_refuse_on_absent(tmp_path: Path) -> None:
     d = tmp_path / "none"
     assert hr.mark_revised(d, AT) is False
     assert not (d / hr.HALTED_FILE).exists()
     assert hr.revised_halt(d) is None
 
 
-def test_refuse_on_resumed(tmp_path):
+def test_refuse_on_resumed(tmp_path: Path) -> None:
     d = _halted(tmp_path)
     assert hr.mark_resumed(d) is True
     before = (d / hr.HALTED_FILE).read_text()
@@ -39,7 +40,7 @@ def test_refuse_on_resumed(tmp_path):
     assert (d / hr.HALTED_FILE).read_text() == before
 
 
-def test_revised_halt_cleared_by_mark_resumed(tmp_path):
+def test_revised_halt_cleared_by_mark_resumed(tmp_path: Path) -> None:
     d = _halted(tmp_path)
     hr.mark_revised(d, AT)
     assert hr.mark_resumed(d) is True

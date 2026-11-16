@@ -144,7 +144,7 @@ class IndexSnapshot(dict):
     `{path: IndexEntry}` consumer keeps working unmodified.
     """
 
-    def __init__(self, entries: Dict[str, IndexEntry], stat_identity: Optional[StatIdentity]):
+    def __init__(self, entries: Dict[str, IndexEntry], stat_identity: Optional[StatIdentity]) -> None:
         super().__init__(entries)
         self.stat_identity = stat_identity
 

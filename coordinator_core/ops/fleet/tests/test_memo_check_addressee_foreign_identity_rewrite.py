@@ -24,9 +24,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.ops.fleet import memo_check_addressee as mca
+import pytest
 
 
-def test_unresolved_central_id_note_never_names_content_root(monkeypatch):
+def test_unresolved_central_id_note_never_names_content_root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mca, "read_redirect_aliases", lambda: set())
     monkeypatch.setattr(mca, "read_central_receiver_ids", lambda: {"central-hub"})
     monkeypatch.setattr(
@@ -43,7 +44,7 @@ def test_unresolved_central_id_note_never_names_content_root(monkeypatch):
     assert "coordinator-content-repo" not in note.lower()
 
 
-def test_unresolved_central_id_note_stays_actionable(monkeypatch):
+def test_unresolved_central_id_note_stays_actionable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mca, "read_redirect_aliases", lambda: set())
     monkeypatch.setattr(mca, "read_central_receiver_ids", lambda: {"central-hub"})
     monkeypatch.setattr(

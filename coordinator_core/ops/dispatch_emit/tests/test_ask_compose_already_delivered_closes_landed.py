@@ -44,7 +44,7 @@ def _guard(script: str) -> str:
     return script[start : script.index("\n", start)]
 
 
-def test_default_script_hoists_the_hook_and_the_guard_calls_it():
+def test_default_script_hoists_the_hook_and_the_guard_calls_it() -> None:
     script = _script()
     assert script.count("await _alreadyDeliveredClose()") == 1
     assert "in_run: true" in _hook(script) and ROUTE_OP in _hook(script)
@@ -52,7 +52,7 @@ def test_default_script_hoists_the_hook_and_the_guard_calls_it():
     assert f"_halted = {{ halted: '{NO_SLICES_HALT}'" in _guard(script)
 
 
-def test_landed_close_skips_the_review_floor_halt_and_the_terminal_commit():
+def test_landed_close_skips_the_review_floor_halt_and_the_terminal_commit() -> None:
     script = _script()
     assert "if (!_halted && !_alreadyDelivered && _codeReviewOwed && _reviewVerdicts === 0" in script
     assert "if (!_halted && !_alreadyDelivered) {" in script
@@ -60,7 +60,7 @@ def test_landed_close_skips_the_review_floor_halt_and_the_terminal_commit():
     assert "already_delivered: _alreadyDelivered," in script
 
 
-def test_delivery_notes_is_declared_at_top_level_beside_the_run_base():
+def test_delivery_notes_is_declared_at_top_level_beside_the_run_base() -> None:
     """The hook is a top-level function: a `let _deliveryNotes` inside the execute block is out of its
     scope and the hook throws ReferenceError (rag-56's 6cc5b7 crash). The node harness below declares
     its own, so only this pins the emitted declaration."""
@@ -69,7 +69,7 @@ def test_delivery_notes_is_declared_at_top_level_beside_the_run_base():
     assert "let _runBase = '';\nlet _deliveryNotes = '';\n" in script.replace("\n  ", "\n")
 
 
-def test_default_script_validates_with_zero_errors():
+def test_default_script_validates_with_zero_errors() -> None:
     assert [f for f in run_checks(_script()) if f.severity is Severity.ERROR] == []
 
 
@@ -98,7 +98,7 @@ _node = pytest.mark.skipif(shutil.which("node") is None, reason="node unavailabl
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @_node
-def test_verified_claim_closes_landed_with_no_halt():
+def test_verified_claim_closes_landed_with_no_halt() -> None:
     result = _run(_DONE, {"ok": True, "close": {"queued": False}})
     assert result["halted"] is None
     assert result["delivered"]["sha"] == _SHA
@@ -110,7 +110,7 @@ def test_verified_claim_closes_landed_with_no_halt():
 @pytest.mark.cadence
 @_node
 @pytest.mark.parametrize("reply", [{"ok": False, "error": "abc is not an ancestor of HEAD"}, None, "throw"])
-def test_refused_claim_still_halts_with_the_refusal_appended(reply):
+def test_refused_claim_still_halts_with_the_refusal_appended(reply) -> None:
     result = _run(_DONE, reply)
     assert result["halted"]["halted"].startswith(NO_SLICES_HALT)
     assert "Already-delivered claim refused: " in result["halted"]["reason"]
@@ -125,7 +125,7 @@ def test_refused_claim_still_halts_with_the_refusal_appended(reply):
 @pytest.mark.parametrize(
     "notes", ["", "r1: DONE (changed x.py)", "r1: BLOCKED already delivered at HEAD by commit 2534205b9f"]
 )
-def test_no_claim_spawns_nothing_and_halts_as_before(notes):
+def test_no_claim_spawns_nothing_and_halts_as_before(notes) -> None:
     result = _run(notes, {"ok": True})
     assert result["calls"] == []
     assert result["halted"]["halted"].startswith(NO_SLICES_HALT)

@@ -17,11 +17,12 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e import 
     halted,
     repo,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
-def test_ledger_resume_verdict_carries_a_whole_manifest(halted):  # noqa: F811
+def test_ledger_resume_verdict_carries_a_whole_manifest(halted) -> None:  # noqa: F811
     _met_out_of_band(halted)
 
     out = _handler({"sizing_path": SIZING, "run_id": "newrun", "writes": ["a.py"]}, repo_root=halted)
@@ -33,7 +34,7 @@ def test_ledger_resume_verdict_carries_a_whole_manifest(halted):  # noqa: F811
     assert "head_sha" in manifest
 
 
-def test_ledger_resume_without_run_id_carries_no_manifest(halted):  # noqa: F811
+def test_ledger_resume_without_run_id_carries_no_manifest(halted) -> None:  # noqa: F811
     _met_out_of_band(halted)
 
     out = _handler({"sizing_path": SIZING}, repo_root=halted)
@@ -41,7 +42,7 @@ def test_ledger_resume_without_run_id_carries_no_manifest(halted):  # noqa: F811
     assert out["resume_ledger"] is not None and "manifest" not in out
 
 
-def test_non_ledger_verdict_has_no_manifest_key(tmp_path, monkeypatch):
+def test_non_ledger_verdict_has_no_manifest_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, _put
 
     (tmp_path / ".git").mkdir()
@@ -54,7 +55,7 @@ def test_non_ledger_verdict_has_no_manifest_key(tmp_path, monkeypatch):
     assert "manifest" not in out
 
 
-def test_staging_adds_no_spawn_to_the_ledger_resume_gate(halted, monkeypatch):  # noqa: F811
+def test_staging_adds_no_spawn_to_the_ledger_resume_gate(halted, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _met_out_of_band(halted)
 
     with _count_spawns_attributed(monkeypatch) as bare:
@@ -67,7 +68,7 @@ def test_staging_adds_no_spawn_to_the_ledger_resume_gate(halted, monkeypatch):  
     assert len(staged) == len(bare), [s.argv for s in staged]
 
 
-def test_a_resume_whose_halt_landed_every_staged_row_has_no_unlanded_rows(halted):  # noqa: F811
+def test_a_resume_whose_halt_landed_every_staged_row_has_no_unlanded_rows(halted) -> None:  # noqa: F811
     _met_out_of_band(halted)
 
     out = _handler({"sizing_path": SIZING, "run_id": "newrun", "writes": ["a.py"]}, repo_root=halted)
@@ -77,7 +78,7 @@ def test_a_resume_whose_halt_landed_every_staged_row_has_no_unlanded_rows(halted
     assert "manifest_handle" in out
 
 
-def test_a_halt_that_landed_no_chunk_names_its_staged_rows_unlanded_and_stages_exactly_them(repo):  # noqa: F811
+def test_a_halt_that_landed_no_chunk_names_its_staged_rows_unlanded_and_stages_exactly_them(repo) -> None:  # noqa: F811
     from coordinator_core.ops.dispatch_emit.tests.test_refire_after_ledger_halt_executes_unmet_rows_incident import (
         HALTED_RUN,
         REFIRE_RUN,

@@ -21,7 +21,7 @@ from coordinator_core.frontmatter import schema_validate as sv
         "state/handoffs/REDIRECTS.md",
     ],
 )
-def test_sidecar_suffix_is_exempt(path):
+def test_sidecar_suffix_is_exempt(path) -> None:
     assert sv._lint_is_sidecar_file(path) is True
 
 
@@ -34,7 +34,7 @@ def test_sidecar_suffix_is_exempt(path):
         "docs/plans/2026-11-14-ledger-cut-matrix-evidence.md",
     ],
 )
-def test_parent_artifact_is_not_exempt(path):
+def test_parent_artifact_is_not_exempt(path) -> None:
     assert sv._lint_is_sidecar_file(path) is False
 
 
@@ -47,21 +47,21 @@ def _schemas():
 _VERDICT = "docs/research/spikes/2026-11-01-x/verdict.md"
 
 
-def test_declared_type_naming_a_schema_beats_the_path():
+def test_declared_type_naming_a_schema_beats_the_path() -> None:
     resolved = sv.match_schema(_VERDICT, {"type": "plan"}, _schemas())
     assert resolved is not None and resolved["schemaName"] == "plan"
 
 
-def test_path_routes_when_nothing_is_declared():
+def test_path_routes_when_nothing_is_declared() -> None:
     resolved = sv.match_schema(_VERDICT, {"title": "t"}, _schemas())
     assert resolved is not None and resolved["schemaName"] == "spike-result"
 
 
-def test_unregistered_type_is_content_and_the_path_still_routes():
+def test_unregistered_type_is_content_and_the_path_still_routes() -> None:
     resolved = sv.match_schema(_VERDICT, {"type": "inconclusive"}, _schemas())
     assert resolved is not None and resolved["schemaName"] == "spike-result"
 
 
-def test_declared_kind_still_outranks_declared_type():
+def test_declared_kind_still_outranks_declared_type() -> None:
     resolved = sv.match_schema(_VERDICT, {"kind": "session-handoff", "type": "decision"}, _schemas())
     assert resolved is not None and resolved["schemaName"] == "handoff"

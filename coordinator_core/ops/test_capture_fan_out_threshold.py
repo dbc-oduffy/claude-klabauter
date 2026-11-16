@@ -8,7 +8,7 @@ calls `machine-local keys`/`set`, never reads
 MACHINE_LOCAL_FAN_OUT_LARGE_WAVE_THRESHOLD itself), --check-only no-mutation,
 --check-only pre-existing, and bad-flag usage error.
 
-`machine-local` is stubbed via monkeypatched subprocess.run so these tests
+`machine-local` is stubbed via monkeypatched machine_local_spawn.run_bounded so these tests
 are hermetic (no real registry touched, no `machine-local` binary required
 on PATH).
 """
@@ -78,7 +78,7 @@ def _patch_registry(monkeypatch, reg: "_FakeRegistry") -> None:
 
 def test_key_absent_writes_3x_cores(monkeypatch):
     reg = _FakeRegistry(keys=[])
-    monkeypatch.setattr(mod.subprocess, "run", reg.run)
+    monkeypatch.setattr(mod.machine_local_spawn, "run_bounded", reg.run)
     _patch_registry(monkeypatch, reg)
 
     text, rc = mod.capture(check_only=False)
@@ -90,7 +90,7 @@ def test_key_absent_writes_3x_cores(monkeypatch):
 
 def test_key_present_no_clobber(monkeypatch):
     reg = _FakeRegistry(keys=[mod._KEY])
-    monkeypatch.setattr(mod.subprocess, "run", reg.run)
+    monkeypatch.setattr(mod.machine_local_spawn, "run_bounded", reg.run)
     _patch_registry(monkeypatch, reg)
 
     text, rc = mod.capture(check_only=False)
@@ -102,7 +102,7 @@ def test_key_present_no_clobber(monkeypatch):
 
 def test_check_only_absent_key_no_mutation(monkeypatch):
     reg = _FakeRegistry(keys=[])
-    monkeypatch.setattr(mod.subprocess, "run", reg.run)
+    monkeypatch.setattr(mod.machine_local_spawn, "run_bounded", reg.run)
     _patch_registry(monkeypatch, reg)
 
     text, rc = mod.capture(check_only=True)
@@ -115,7 +115,7 @@ def test_check_only_absent_key_no_mutation(monkeypatch):
 
 def test_check_only_present_key_reports_pre_existing(monkeypatch):
     reg = _FakeRegistry(keys=[mod._KEY])
-    monkeypatch.setattr(mod.subprocess, "run", reg.run)
+    monkeypatch.setattr(mod.machine_local_spawn, "run_bounded", reg.run)
     _patch_registry(monkeypatch, reg)
 
     text, rc = mod.capture(check_only=True)
@@ -126,7 +126,7 @@ def test_check_only_present_key_reports_pre_existing(monkeypatch):
 
 def test_main_bad_flag_usage_error(monkeypatch, capsys):
     reg = _FakeRegistry(keys=[])
-    monkeypatch.setattr(mod.subprocess, "run", reg.run)
+    monkeypatch.setattr(mod.machine_local_spawn, "run_bounded", reg.run)
     _patch_registry(monkeypatch, reg)
 
     rc = mod.main(["--bogus"])
@@ -138,7 +138,7 @@ def test_main_bad_flag_usage_error(monkeypatch, capsys):
 
 def test_main_no_args_writes(monkeypatch, capsys):
     reg = _FakeRegistry(keys=[])
-    monkeypatch.setattr(mod.subprocess, "run", reg.run)
+    monkeypatch.setattr(mod.machine_local_spawn, "run_bounded", reg.run)
     _patch_registry(monkeypatch, reg)
 
     rc = mod.main([])
@@ -149,8 +149,8 @@ def test_main_no_args_writes(monkeypatch, capsys):
 
 
 def test_missing_machine_local_binary_degrades_to_absent(monkeypatch):
-    def _raise(*args, **kwargs):
-        raise FileNotFoundError("machine-local not found")
+    def _unlaunchable(*args, **kwargs):
+        return None
 
     # The key-presence probe is an IN-PROCESS registry read since the
     # 2026-08-16 zero-spawn cutover, so patching `subprocess.run` alone leaves
@@ -161,7 +161,6 @@ def test_missing_machine_local_binary_degrades_to_absent(monkeypatch):
     # "absent" precondition this test's own name asserts is actually the one
     # under test rather than an accident of the operator's registry.
     _patch_registry(monkeypatch, _FakeRegistry(keys=[]))
-    monkeypatch.setattr(mod.subprocess, "run", _raise)
+    monkeypatch.setattr(mod.machine_local_spawn, "run_bounded", _unlaunchable)
 
-    with pytest.raises(FileNotFoundError):
-        mod.capture(check_only=False)
+    assert mod.capture(check_only=False) == ("", 1)

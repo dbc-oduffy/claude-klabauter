@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit import bug_close
+from pathlib import Path
 
 ID = "0123456789ab"
 ID2 = "ba9876543210"
@@ -29,14 +30,14 @@ def _row(tmp_path, bug_id=ID, text=ROW, name=None):
     return p
 
 
-def test_marker_round_trip_and_tolerance():
+def test_marker_round_trip_and_tolerance() -> None:
     assert bug_close.marker_line(ID) == f"post-commit: bug_close {ID}"
     assert bug_close.marker_ids(bug_close.marker_line(ID)) == (ID,)
     text = f"DONE\n- post-commit: bug_close {ID}\n> post-commit: bug_close {ID2}\n**post-commit: bug_close {ID}**\n"
     assert bug_close.marker_ids(text) == (ID, ID2)
 
 
-def test_closing_bug_ids_requires_closure_intent(tmp_path):
+def test_closing_bug_ids_requires_closure_intent(tmp_path: Path) -> None:
     _row(tmp_path)
     for ok in (f"close bug {ID}", f"Closes {ID}", f"fix bug row {ID}", f"please close the bug row `{ID}` now"):
         assert bug_close.closing_bug_ids(tmp_path, ok) == (ID,), ok
@@ -46,17 +47,17 @@ def test_closing_bug_ids_requires_closure_intent(tmp_path):
         assert bug_close.closing_bug_ids(tmp_path, bad) == (), bad
 
 
-def test_marker_ids_ignore_prose():
+def test_marker_ids_ignore_prose() -> None:
     assert bug_close.marker_ids(f"close bug {ID} with the landing sha") == ()
 
 
 @pytest.mark.parametrize("bad", ["", "abc", "0123456789AB", "0123456789abc", None])
-def test_marker_line_bad_id_raises(bad):
+def test_marker_line_bad_id_raises(bad) -> None:
     with pytest.raises(ValueError):
         bug_close.marker_line(bad)
 
 
-def test_delivered_with_post_commit():
+def test_delivered_with_post_commit() -> None:
     m = bug_close.marker_line(ID)
     assert bug_close.delivered_with_post_commit(f"PARTIAL: x\n{m}\n")
     assert bug_close.delivered_with_post_commit(f"status: partial\n{m}\n")
@@ -66,7 +67,7 @@ def test_delivered_with_post_commit():
     assert not bug_close.delivered_with_post_commit(f"PARTIAL: x\nNot done: close {ID} with the landing sha\n")
 
 
-def test_bug_row_rel(tmp_path):
+def test_bug_row_rel(tmp_path: Path) -> None:
     assert bug_close.bug_row_rel(tmp_path, ID) is None
     _row(tmp_path)
     assert bug_close.bug_row_rel(tmp_path, ID) == f"state/bug-backlog/2026-10-26-x-{ID}.yaml"
@@ -74,56 +75,56 @@ def test_bug_row_rel(tmp_path):
     assert bug_close.bug_row_rel(tmp_path, ID) is None
 
 
-def test_bug_row_rel_ignores_directory(tmp_path):
+def test_bug_row_rel_ignores_directory(tmp_path: Path) -> None:
     (tmp_path / "state" / "bug-backlog" / f"2026-10-26-x-{ID}.yaml").mkdir(parents=True)
     assert bug_close.bug_row_rel(tmp_path, ID) is None
 
 
-def test_named_bug_ids(tmp_path):
+def test_named_bug_ids(tmp_path: Path) -> None:
     _row(tmp_path)
     assert bug_close.named_bug_ids(tmp_path, f"{ID} closed; also {ID2} and {ID}") == (ID,)
     assert bug_close.named_bug_ids(tmp_path, "") == ()
 
 
-def test_post_commit_clause_names_ids_and_marker():
+def test_post_commit_clause_names_ids_and_marker() -> None:
     c = bug_close.post_commit_clause((ID, ID2))
     assert ID in c and ID2 in c and bug_close.marker_line(ID) in c
     assert "never undone work" in c
 
 
-def test_closed_text_adds_three_keys_and_keeps_other_bytes():
+def test_closed_text_adds_three_keys_and_keeps_other_bytes() -> None:
     new = bug_close.closed_text(ROW, SHA, "2026-10-27")
     assert new == ROW.replace(
         "status: open\n", 'status: closed\nclosed_at: 2026-10-27\nresolution: "fixed at ffffffffff"\n'
     )
 
 
-def test_closed_text_crlf_stays_crlf():
+def test_closed_text_crlf_stays_crlf() -> None:
     old = ROW.replace("\n", "\r\n")
     new = bug_close.closed_text(old, SHA, "2026-10-27")
     assert new.count("\n") == new.count("\r\n")
     assert new.replace("\r\n", "\n") == bug_close.closed_text(ROW, SHA, "2026-10-27")
 
 
-def test_closed_text_keeps_prior_resolution():
+def test_closed_text_keeps_prior_resolution() -> None:
     old = ROW + 'resolution: "earlier note"\n'
     new = bug_close.closed_text(old, SHA, "2026-10-27")
     assert 'resolution: "fixed at ffffffffff; earlier note"\n' in new
     assert new.count("resolution:") == 1
 
 
-def test_closed_text_already_closed_is_none():
+def test_closed_text_already_closed_is_none() -> None:
     assert bug_close.closed_text(ROW.replace("open", "closed"), SHA, "2026-10-27") is None
     closed_other = ROW.replace("open", "closed") + 'resolution: "fixed at 1111111111"\n'
     assert bug_close.closed_text(closed_other, SHA, "2026-10-27") is None
 
 
-def test_closed_text_multiline_prior_resolution_raises():
+def test_closed_text_multiline_prior_resolution_raises() -> None:
     with pytest.raises(ValueError):
         bug_close.closed_text(ROW + "resolution: |\n  a\n", SHA, "2026-10-27")
 
 
-def test_close_rows_buckets(tmp_path):
+def test_close_rows_buckets(tmp_path: Path) -> None:
     open_p = _row(tmp_path)
     done = ROW.replace("open", "closed") + 'resolution: "fixed at 1111111111"\n'
     done_p = _row(tmp_path, ID2, done)
@@ -137,14 +138,14 @@ def test_close_rows_buckets(tmp_path):
     assert again["already"] and not again["closed"]
 
 
-def test_close_rows_crlf_round_trips(tmp_path):
+def test_close_rows_crlf_round_trips(tmp_path: Path) -> None:
     p = _row(tmp_path, text=ROW.replace("\n", "\r\n"))
     assert bug_close.close_rows(tmp_path, (ID,), SHA)["closed"]
     data = p.read_bytes()
     assert data.count(b"\n") == data.count(b"\r\n") and b"status: closed" in data
 
 
-def test_close_rows_schema_invalid_is_refused_and_unchanged(tmp_path):
+def test_close_rows_schema_invalid_is_refused_and_unchanged(tmp_path: Path) -> None:
     bad = ROW.replace("severity: P1\n", "")
     p = _row(tmp_path, text=bad)
     res = bug_close.close_rows(tmp_path, (ID,), SHA)
@@ -152,7 +153,7 @@ def test_close_rows_schema_invalid_is_refused_and_unchanged(tmp_path):
     assert p.read_text(encoding="utf-8") == bad
 
 
-def test_close_rows_refuses_bad_sha(tmp_path):
+def test_close_rows_refuses_bad_sha(tmp_path: Path) -> None:
     p = _row(tmp_path)
     res = bug_close.close_rows(tmp_path, (ID,), "nothex")
     assert res["refused"] and p.read_text(encoding="utf-8") == ROW

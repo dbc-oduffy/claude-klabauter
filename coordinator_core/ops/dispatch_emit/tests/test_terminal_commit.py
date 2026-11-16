@@ -1705,3 +1705,22 @@ def test_a_review_halt_over_an_own_red_lands_its_finished_rows_listing_the_red_i
     assert out["committed"] is True, out
     assert _head(repo) != before
     assert "red: tests/test_a.py::t (introduced)" in _show(repo, "--format=%B", "-s", "HEAD")
+
+
+def _already_landed_ctx(root):
+    return {
+        "legs": {}, "applies": True, "presets": {}, "kind": "plan-run", "root": root,
+        "plan_rel": "docs/plans/x.md", "run_id": "r1", "completion_entry": None,
+    }
+
+
+@pytest.mark.parametrize(
+    "extra, status",
+    [({"coded_sha": "c" * 40}, "ran"), ({"coded_stamp_error": "boom"}, "failed"), ({}, "not-applicable")],
+)
+def test_an_already_landed_refire_reads_its_coded_stamp_leg_off_the_reply(tmp_path, extra, status):
+    from coordinator_core.ops.dispatch_emit.terminal_commit_closeout import _close_block
+
+    block = _close_block(_already_landed_ctx(tmp_path), {"committed": False, "nothing_to_commit": True, **extra})
+
+    assert block["legs"]["coded-stamp"]["status"] == status

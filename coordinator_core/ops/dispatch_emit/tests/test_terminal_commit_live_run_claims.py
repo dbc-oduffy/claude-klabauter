@@ -39,7 +39,7 @@ def _git(args, cwd: Path) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], root)
@@ -98,7 +98,7 @@ def _committed(repo: Path) -> list:
     return sorted(landed)
 
 
-def test_a_live_peer_runs_manifest_path_is_never_landed_as_run_owned(repo):
+def test_a_live_peer_runs_manifest_path_is_never_landed_as_run_owned(repo) -> None:
     _peer_run_declares(repo, "src/op.py")
     out = _run_a(repo)
     assert out["committed"] is True, out
@@ -108,7 +108,7 @@ def test_a_live_peer_runs_manifest_path_is_never_landed_as_run_owned(repo):
     assert (repo / "src" / "op.py").read_text(encoding="utf-8") == _PEER_EDIT
 
 
-def test_control_an_expired_peer_token_admits_the_same_path(repo):
+def test_control_an_expired_peer_token_admits_the_same_path(repo) -> None:
     _peer_run_declares(repo, "src/op.py")
     record_path = run_token._record_path(repo, "run-b")
     record = json.loads(record_path.read_text(encoding="utf-8"))
@@ -120,7 +120,7 @@ def test_control_an_expired_peer_token_admits_the_same_path(repo):
     assert _git(["show", "HEAD:src/op.py"], repo) == _PEER_EDIT
 
 
-def test_control_a_dead_peer_session_admits_the_same_path(repo, monkeypatch):
+def test_control_a_dead_peer_session_admits_the_same_path(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _peer_run_declares(repo, "src/op.py")
     real = touch_record.session_live
     monkeypatch.setattr(
@@ -163,7 +163,7 @@ def _run_a_same_session(repo: Path) -> dict:
     )
 
 
-def test_a_running_same_session_sibling_keeps_declared_and_dirtied_files_out_of_the_commit(repo):
+def test_a_running_same_session_sibling_keeps_declared_and_dirtied_files_out_of_the_commit(repo) -> None:
     _live_same_session_sibling(repo, "src/b.py", "src/c.py")
     out = _run_a_same_session(repo)
     assert out["committed"] is True, out
@@ -175,7 +175,7 @@ def test_a_running_same_session_sibling_keeps_declared_and_dirtied_files_out_of_
     assert "src/b.py" in porcelain and "src/c.py" in porcelain
 
 
-def test_a_running_same_session_sibling_declared_path_outside_the_shared_dir_stays_out(repo):
+def test_a_running_same_session_sibling_declared_path_outside_the_shared_dir_stays_out(repo) -> None:
     _live_same_session_sibling(repo, "other/b.py")
     out = _run_a_same_session(repo)
     assert out["committed"] is True, out
@@ -183,7 +183,7 @@ def test_a_running_same_session_sibling_declared_path_outside_the_shared_dir_sta
     assert _git(["ls-files", "other/b.py"], repo).strip() == ""
 
 
-def test_control_a_stale_same_session_sibling_token_releases_its_declared_path(repo):
+def test_control_a_stale_same_session_sibling_token_releases_its_declared_path(repo) -> None:
     _live_same_session_sibling(repo, "other/b.py")
     record_path = run_token._record_path(repo, "run-b")
     record = json.loads(record_path.read_text(encoding="utf-8"))
@@ -194,7 +194,7 @@ def test_control_a_stale_same_session_sibling_token_releases_its_declared_path(r
     assert "other/b.py" in _committed(repo)
 
 
-def test_each_claim_check_lists_the_token_store_once(repo, monkeypatch):
+def test_each_claim_check_lists_the_token_store_once(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _peer_run_declares(repo, "src/op.py")
     listings: list = []
     checks: list = []
@@ -218,7 +218,7 @@ def test_each_claim_check_lists_the_token_store_once(repo, monkeypatch):
         per_check.append(0)
         return real_claims(*a, **k)
 
-    def sole_run(*a, **k):
+    def sole_run(*a, **k) -> frozenset[str]:
         in_sole.append(1)
         try:
             return real_sole(*a, **k)

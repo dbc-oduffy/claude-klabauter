@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import sys
+from pathlib import Path
+import pytest
 
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _BIN_DIR = os.path.dirname(_TESTS_DIR)
@@ -12,7 +14,7 @@ if _LIB_DIR not in sys.path:
 import machine_local_impl_resolve as mlir  # noqa: E402
 
 
-def test_claude_home_env_override_wins(monkeypatch, tmp_path):
+def test_claude_home_env_override_wins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Convention A: CLAUDE_HOME is a $HOME substitute, not the .claude dir
     itself — claude_home() appends the .claude segment."""
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
@@ -20,13 +22,13 @@ def test_claude_home_env_override_wins(monkeypatch, tmp_path):
     assert mlir.claude_home() == os.path.join(str(tmp_path), ".claude")
 
 
-def test_claude_home_default_falls_back_to_home_dot_claude(monkeypatch):
+def test_claude_home_default_falls_back_to_home_dot_claude(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CLAUDE_HOME", raising=False)
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
     assert mlir.claude_home() == os.path.join(os.path.expanduser("~"), ".claude")
 
 
-def test_claude_home_claude_config_dir_wins_over_claude_home(monkeypatch, tmp_path):
+def test_claude_home_claude_config_dir_wins_over_claude_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """CLAUDE_CONFIG_DIR (the harness's own env var) takes precedence over
     CLAUDE_HOME (this fleet's invention) — mirrors
     coordinator_core._settings_home.claude_config_dir()'s precedence, the
@@ -37,7 +39,7 @@ def test_claude_home_claude_config_dir_wins_over_claude_home(monkeypatch, tmp_pa
     assert mlir.claude_home() == str(config_dir)
 
 
-def test_claude_home_claude_config_dir_absent_falls_back_to_claude_home(monkeypatch, tmp_path):
+def test_claude_home_claude_config_dir_absent_falls_back_to_claude_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Convention A: with CLAUDE_CONFIG_DIR unset, claude_home() derives
     <CLAUDE_HOME>/.claude, matching check_install_singularity._claude_base_dir()."""
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
@@ -45,19 +47,19 @@ def test_claude_home_claude_config_dir_absent_falls_back_to_claude_home(monkeypa
     assert mlir.claude_home() == os.path.join(str(tmp_path), ".claude")
 
 
-def test_settings_home_env_override_wins(monkeypatch, tmp_path):
+def test_settings_home_env_override_wins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     monkeypatch.setenv("CLAUDE_HOME", "/should/be/ignored")
     assert mlir.settings_home() == str(tmp_path)
 
 
-def test_settings_home_honors_claude_home_when_override_absent(monkeypatch, tmp_path):
+def test_settings_home_honors_claude_home_when_override_absent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
     assert mlir.settings_home() == os.path.join(str(tmp_path), ".coordinator-claude-settings")
 
 
-def test_settings_home_default_falls_back_to_home_not_claude_home(monkeypatch):
+def test_settings_home_default_falls_back_to_home_not_claude_home(monkeypatch: pytest.MonkeyPatch) -> None:
     """Negative-spec pin: the fallback base is CLAUDE_HOME-or-HOME directly,
     NEVER claude_home() (which appends /.claude) — using claude_home() here
     would nest settings-home one level too deep."""
@@ -87,12 +89,12 @@ def _wire_homes(monkeypatch, tmp_path):
     return settings_home, claude_home
 
 
-def _touch(path):
+def _touch(path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("", encoding="utf-8")
 
 
-def test_machine_local_impl_path_env_override_wins(monkeypatch, tmp_path):
+def test_machine_local_impl_path_env_override_wins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     settings_home, claude_home = _wire_homes(monkeypatch, tmp_path)
     _touch(settings_home / "bin" / "_machine_local.py")
     _touch(claude_home / "bin" / "_machine_local.py")
@@ -100,7 +102,7 @@ def test_machine_local_impl_path_env_override_wins(monkeypatch, tmp_path):
     assert mlir.machine_local_impl_path() == "/override/path.py"
 
 
-def test_machine_local_impl_path_env_override_none_skips_check(monkeypatch, tmp_path):
+def test_machine_local_impl_path_env_override_none_skips_check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """env_override=None means the caller's pre-existing contract never
     honoured a test-isolation env var — passing None must skip that check
     entirely even when MACHINE_LOCAL_IMPL is set in the environment."""
@@ -111,31 +113,31 @@ def test_machine_local_impl_path_env_override_none_skips_check(monkeypatch, tmp_
     assert result == str(settings_home / "bin" / "_machine_local.py")
 
 
-def test_machine_local_impl_path_both_present_settings_home_wins(monkeypatch, tmp_path):
+def test_machine_local_impl_path_both_present_settings_home_wins(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     settings_home, claude_home = _wire_homes(monkeypatch, tmp_path)
     _touch(settings_home / "bin" / "_machine_local.py")
     _touch(claude_home / "bin" / "_machine_local.py")
     assert mlir.machine_local_impl_path() == str(settings_home / "bin" / "_machine_local.py")
 
 
-def test_machine_local_impl_path_settings_home_only(monkeypatch, tmp_path):
+def test_machine_local_impl_path_settings_home_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     settings_home, claude_home = _wire_homes(monkeypatch, tmp_path)
     _touch(settings_home / "bin" / "_machine_local.py")
     assert mlir.machine_local_impl_path() == str(settings_home / "bin" / "_machine_local.py")
 
 
-def test_machine_local_impl_path_mirror_only(monkeypatch, tmp_path):
+def test_machine_local_impl_path_mirror_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     settings_home, claude_home = _wire_homes(monkeypatch, tmp_path)
     _touch(claude_home / "bin" / "_machine_local.py")
     assert mlir.machine_local_impl_path() == str(claude_home / "bin" / "_machine_local.py")
 
 
-def test_machine_local_impl_path_neither_present_falls_back_to_mirror_path(monkeypatch, tmp_path):
+def test_machine_local_impl_path_neither_present_falls_back_to_mirror_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     settings_home, claude_home = _wire_homes(monkeypatch, tmp_path)
     assert mlir.machine_local_impl_path() == str(claude_home / "bin" / "_machine_local.py")
 
 
-def test_machine_local_impl_path_custom_env_var_name(monkeypatch, tmp_path):
+def test_machine_local_impl_path_custom_env_var_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A caller-supplied env_override name (e.g. a registry-local constant)
     is honoured, not just the default MACHINE_LOCAL_IMPL."""
     settings_home, claude_home = _wire_homes(monkeypatch, tmp_path)
@@ -143,7 +145,7 @@ def test_machine_local_impl_path_custom_env_var_name(monkeypatch, tmp_path):
     assert mlir.machine_local_impl_path(env_override="CUSTOM_IMPL_ENV") == "/custom/override.py"
 
 
-def test_machine_local_bin_candidates_posix_order(monkeypatch, tmp_path):
+def test_machine_local_bin_candidates_posix_order(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     settings_home, claude_home = _wire_homes(monkeypatch, tmp_path)
     monkeypatch.setattr(mlir.os, "name", "posix")
     assert mlir.machine_local_bin_candidates() == [
@@ -152,7 +154,7 @@ def test_machine_local_bin_candidates_posix_order(monkeypatch, tmp_path):
     ]
 
 
-def test_machine_local_bin_candidates_windows_cmd_first_per_base(monkeypatch, tmp_path):
+def test_machine_local_bin_candidates_windows_cmd_first_per_base(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     settings_home, claude_home = _wire_homes(monkeypatch, tmp_path)
     monkeypatch.setattr(mlir.os, "name", "nt")
     assert mlir.machine_local_bin_candidates() == [
@@ -163,13 +165,13 @@ def test_machine_local_bin_candidates_windows_cmd_first_per_base(monkeypatch, tm
     ]
 
 
-def test_windows_cmd_first_candidates_posix_passthrough(monkeypatch):
+def test_windows_cmd_first_candidates_posix_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mlir.os, "name", "posix")
     bases = ["/a/base", "/b/base"]
     assert mlir.windows_cmd_first_candidates(bases) == bases
 
 
-def test_windows_cmd_first_candidates_nt_expands_each_base(monkeypatch):
+def test_windows_cmd_first_candidates_nt_expands_each_base(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mlir.os, "name", "nt")
     bases = ["/a/base", "/b/base"]
     assert mlir.windows_cmd_first_candidates(bases) == [
@@ -197,7 +199,7 @@ def _norm(p):
     return str(p).replace("\\", "/") if p else p
 
 
-def test_agreement_pin_claude_home_only(monkeypatch, tmp_path):
+def test_agreement_pin_claude_home_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """CLAUDE_HOME set to a $HOME substitute, CLAUDE_CONFIG_DIR unset: mlir,
     the checker, and the canonical seam all name
     <CLAUDE_HOME>/.claude (mod separator normalization)."""
@@ -211,7 +213,7 @@ def test_agreement_pin_claude_home_only(monkeypatch, tmp_path):
     assert _norm(str(settings_home.claude_config_dir())) == _norm(expected)
 
 
-def test_agreement_pin_claude_config_dir_set(monkeypatch, tmp_path):
+def test_agreement_pin_claude_config_dir_set(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """CLAUDE_CONFIG_DIR set: mlir and the canonical seam
     agree on CLAUDE_CONFIG_DIR verbatim; the checker (out of scope, Anti-scope)
     still derives <CLAUDE_HOME>/.claude, pinning the known divergence."""
@@ -228,7 +230,7 @@ def test_agreement_pin_claude_config_dir_set(monkeypatch, tmp_path):
     )
 
 
-def test_agreement_pin_planted_violation_self_check(monkeypatch, tmp_path):
+def test_agreement_pin_planted_violation_self_check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Planted-violation self-check: monkeypatch claude_home() back to
     returning CLAUDE_HOME unchanged (the pre-C2 defect) and assert the pin
     reports the divergence, proving this pin goes red on the defect it
@@ -254,14 +256,14 @@ def _pointer_env(monkeypatch, tmp_path):
     return home, settings
 
 
-def test_read_content_root_pointer_prefers_settings_home_content_root_name(monkeypatch, tmp_path):
+def test_read_content_root_pointer_prefers_settings_home_content_root_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     home, settings = _pointer_env(monkeypatch, tmp_path)
     (settings / "machine-local" / mlir._CONTENT_ROOT_POINTER).write_text("/durable\n", encoding="utf-8")
     (home / ".claude" / mlir._CONTENT_ROOT_POINTER).write_text("/home-level\n", encoding="utf-8")
     assert mlir.read_content_root_pointer() == "/durable"
 
 
-def test_read_content_root_pointer_falls_back_to_claude_home_then_pre_rename_name(monkeypatch, tmp_path):
+def test_read_content_root_pointer_falls_back_to_claude_home_then_pre_rename_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     home, settings = _pointer_env(monkeypatch, tmp_path)
     (settings / "machine-local" / mlir._LEGACY_ROOT_POINTER).write_text("/pre-rename\n", encoding="utf-8")
     assert mlir.read_content_root_pointer() == "/pre-rename"
@@ -269,12 +271,12 @@ def test_read_content_root_pointer_falls_back_to_claude_home_then_pre_rename_nam
     assert mlir.read_content_root_pointer() == "/home-level"
 
 
-def test_read_content_root_pointer_returns_empty_when_nothing_resolves(monkeypatch, tmp_path):
+def test_read_content_root_pointer_returns_empty_when_nothing_resolves(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _pointer_env(monkeypatch, tmp_path)
     assert mlir.read_content_root_pointer() == ""
 
 
-def test_read_content_root_pointer_returns_empty_without_a_home(monkeypatch, tmp_path):
+def test_read_content_root_pointer_returns_empty_without_a_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     for name in ("CLAUDE_HOME", "HOME", "USERPROFILE"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))

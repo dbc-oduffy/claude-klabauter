@@ -261,7 +261,7 @@ class _RosterError(Exception):
     and turns it into the `(None, reason)` fail-closed return.
     """
 
-    def __init__(self, reason: str):
+    def __init__(self, reason: str) -> None:
         super().__init__(reason)
         self.reason = reason
 

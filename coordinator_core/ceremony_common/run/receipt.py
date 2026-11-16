@@ -136,7 +136,8 @@ def _run_cost(rows: list[StepResult], steps: Mapping[str, StepSpec]) -> list[str
     parts = [f"{len(ran)} steps run", f"{spawns} spawns"]
     if timed:
         slow = max(timed, key=lambda r: r.process_ms or 0.0)
-        parts.append(f"slowest `{slow.id}` {slow.process_ms:.0f}ms")
+        wall = f" (wall {slow.wall_ms:.0f}ms)" if slow.wall_ms is not None else ""
+        parts.append(f"slowest `{slow.id}` {slow.process_ms:.0f}ms{wall}")
     over = [
         f"`{r.id}` {r.process_ms:.0f}ms"
         for r in timed

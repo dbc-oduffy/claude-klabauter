@@ -5,6 +5,8 @@ import json
 from coordinator_core.hooks import block_unenumerated_agent_type as bua
 from coordinator_core.ops.dispatch_emit.ask_contract import ROUTE_SOURCES
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
+from pathlib import Path
+import pytest
 
 UE = "example-game-repo-control:ue-editor"
 MCP = "mcp__example_game_repo-control__"
@@ -42,7 +44,7 @@ deliverable_id: dlv-fixture-abc123
 """
 
 
-def _agent_md(name, tools, model="sonnet"):
+def _agent_md(name, tools, model: str = "sonnet") -> str:
     return f"---\nname: {name}\nmodel: {model}\ntools: {tools}\n---\nbody\n"
 
 
@@ -78,7 +80,7 @@ def _staged(tmp_path, monkeypatch):
     return stage(root, run_id="r1", plan_rel=PLAN_REL)
 
 
-def test_every_staged_row_carries_both_fields(tmp_path, monkeypatch):
+def test_every_staged_row_carries_both_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rows = {r.id: r for r in _staged(tmp_path, monkeypatch).rows}
     assert {"C1", "C2", "C3"} <= set(rows)
     for r in rows.values():
@@ -90,7 +92,7 @@ def test_every_staged_row_carries_both_fields(tmp_path, monkeypatch):
     assert rows["C3"].route_source == "default"
 
 
-def test_no_route_table_leaves_explicit_overlay_and_plain_default(tmp_path, monkeypatch):
+def test_no_route_table_leaves_explicit_overlay_and_plain_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _staged(tmp_path, monkeypatch)
     root = tmp_path / "repo"
     (root / ".claude" / "route-table.json").unlink()

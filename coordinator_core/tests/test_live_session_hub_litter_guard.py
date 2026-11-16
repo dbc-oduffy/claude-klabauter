@@ -5,9 +5,10 @@ import pytest
 
 from coordinator_core import conftest as cc_conftest
 from coordinator_core.session_hub_path import hub_for_common
+from pathlib import Path
 
 
-def test_a_fixture_named_dir_created_during_a_test_fails_loudly(tmp_path, monkeypatch):
+def test_a_fixture_named_dir_created_during_a_test_fails_loudly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     hub = hub_for_common(tmp_path)
     hub.mkdir()
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
@@ -21,7 +22,7 @@ def test_a_fixture_named_dir_created_during_a_test_fails_loudly(tmp_path, monkey
             pass
 
 
-def test_a_uuid_shaped_dir_is_never_flagged(tmp_path, monkeypatch):
+def test_a_uuid_shaped_dir_is_never_flagged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     hub = hub_for_common(tmp_path)
     hub.mkdir()
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
@@ -32,7 +33,7 @@ def test_a_uuid_shaped_dir_is_never_flagged(tmp_path, monkeypatch):
         next(gen)
 
 
-def test_a_registered_harness_session_is_never_flagged(tmp_path, monkeypatch):
+def test_a_registered_harness_session_is_never_flagged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import harness_registry
 
     hub = hub_for_common(tmp_path)
@@ -46,7 +47,7 @@ def test_a_registered_harness_session_is_never_flagged(tmp_path, monkeypatch):
         next(gen)
 
 
-def test_an_absent_hub_is_not_an_error(tmp_path, monkeypatch):
+def test_an_absent_hub_is_not_an_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(tmp_path / "nope"))
     gen = cc_conftest._no_new_live_session_hub_entries.__wrapped__()
     next(gen)
@@ -64,7 +65,7 @@ def _mint(hub, name, stable_pid):
     return d
 
 
-def test_a_peer_sessions_dir_is_not_our_leak(tmp_path, monkeypatch):
+def test_a_peer_sessions_dir_is_not_our_leak(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     hub = hub_for_common(tmp_path)
     hub.mkdir()
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
@@ -76,7 +77,7 @@ def test_a_peer_sessions_dir_is_not_our_leak(tmp_path, monkeypatch):
         next(gen)
 
 
-def test_our_own_sessions_dir_is_still_our_leak(tmp_path, monkeypatch):
+def test_our_own_sessions_dir_is_still_our_leak(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     hub = hub_for_common(tmp_path)
     hub.mkdir()
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
@@ -91,7 +92,7 @@ def test_our_own_sessions_dir_is_still_our_leak(tmp_path, monkeypatch):
             pass
 
 
-def test_a_dir_with_no_meta_json_is_still_flagged(tmp_path, monkeypatch):
+def test_a_dir_with_no_meta_json_is_still_flagged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     hub = hub_for_common(tmp_path)
     hub.mkdir()
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
@@ -107,7 +108,7 @@ def test_a_dir_with_no_meta_json_is_still_flagged(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("meta_body", ["{ not json", "{}", '{"stable_pid": ""}'])
-def test_an_unusable_stamp_fails_closed(tmp_path, monkeypatch, meta_body):
+def test_an_unusable_stamp_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, meta_body) -> None:
     hub = hub_for_common(tmp_path)
     hub.mkdir()
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
@@ -125,11 +126,11 @@ def test_an_unusable_stamp_fails_closed(tmp_path, monkeypatch, meta_body):
 
 
 class _FakeRequest:
-    def __init__(self, nodeid):
+    def __init__(self, nodeid) -> None:
         self.node = type("N", (), {"nodeid": nodeid})()
 
 
-def test_append_guard_names_the_test_that_wrote_the_entry(tmp_path, monkeypatch):
+def test_append_guard_names_the_test_that_wrote_the_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     hub = hub_for_common(tmp_path)
     (hub / "test-c8-litter").mkdir(parents=True)
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
@@ -153,7 +154,7 @@ def test_append_guard_names_the_test_that_wrote_the_entry(tmp_path, monkeypatch)
     assert "test_innocent" not in message
 
 
-def test_append_guard_says_so_when_no_writer_was_captured(tmp_path, monkeypatch):
+def test_append_guard_says_so_when_no_writer_was_captured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     hub = hub_for_common(tmp_path)
     (hub / "test-c8-litter").mkdir(parents=True)
     monkeypatch.setattr(cc_conftest, "_LIVE_HUB", str(hub))
@@ -164,7 +165,7 @@ def test_append_guard_says_so_when_no_writer_was_captured(tmp_path, monkeypatch)
             (hub / "test-c8-litter" / "x.json").write_text("{}", encoding="utf-8")
 
 
-def test_no_claude_pid_in_our_env_fails_closed(tmp_path, monkeypatch):
+def test_no_claude_pid_in_our_env_fails_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Without our own `CLAUDE_PID` there is nothing to compare against, so the
     guard must behave exactly as it did before this exemption existed rather
     than exempting everything."""

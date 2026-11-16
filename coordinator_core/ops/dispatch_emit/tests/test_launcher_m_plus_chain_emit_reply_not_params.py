@@ -10,6 +10,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_launcher_child_m_plus_chains_
     _drive,
     _script,
 )
+from pathlib import Path
 
 _PARAMS = {"ask": True, "sizing_path": _SIZING, "session_id": "sess-1", "target_root": "/r"}
 
@@ -18,12 +19,12 @@ def _handoff(reply: dict) -> dict:
     return {CHAIN_HANDOFF_KEY: {**_PARAMS, **reply}, "sizing": _SIZING, "run_id": "ask-r1"}
 
 
-def _reply(tmp_path, run_id="ask-r2") -> dict:
+def _reply(tmp_path, run_id: str = "ask-r2") -> dict:
     return {"path": f"{tmp_path.as_posix()}/scratch/warp/{run_id}.workflow.mjs", "run_id": run_id, "ok": True}
 
 
 @pytest.mark.spawns_process
-def test_a_gate_emitted_reply_starts_its_run_without_a_second_emit(tmp_path):
+def test_a_gate_emitted_reply_starts_its_run_without_a_second_emit(tmp_path: Path) -> None:
     reply = _reply(tmp_path)
     out = _drive(_script(tmp_path), [_handoff(reply), {"route": "dispatch", "done": True}], {"error": "must not be called"})
     assert out["r"]["status"] == "ok", out["r"]
@@ -32,7 +33,7 @@ def test_a_gate_emitted_reply_starts_its_run_without_a_second_emit(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_a_gate_emitted_reply_resumes_its_own_twin_on_stage_pending(tmp_path):
+def test_a_gate_emitted_reply_resumes_its_own_twin_on_stage_pending(tmp_path: Path) -> None:
     sha = "cd" * 32
     pending = {"stage_pending": {"handle": {"sha256": sha}}}
     out = _drive(_script(tmp_path), [_handoff(_reply(tmp_path)), pending, {"done": True}], {})
@@ -41,7 +42,7 @@ def test_a_gate_emitted_reply_resumes_its_own_twin_on_stage_pending(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_a_reply_without_a_run_still_emits_once_with_no_reply_keys(tmp_path):
+def test_a_reply_without_a_run_still_emits_once_with_no_reply_keys(tmp_path: Path) -> None:
     chain = {"path": f"{tmp_path.as_posix()}/scratch/warp/ask-r2.workflow.mjs", "run_id": "ask-r2", "fire_args": {}}
     out = _drive(_script(tmp_path), [_handoff({"ok": True, "path": ""}), {"done": True}], chain)
     assert out["r"]["status"] == "ok", out["r"]
@@ -53,7 +54,7 @@ def test_a_reply_without_a_run_still_emits_once_with_no_reply_keys(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_a_gate_error_reply_fails_without_emitting(tmp_path):
+def test_a_gate_error_reply_fails_without_emitting(tmp_path: Path) -> None:
     out = _drive(_script(tmp_path), [_handoff({"error": "SizingFireRefused: gone"})], {})
     assert out["r"]["status"] == "failed"
     assert "SizingFireRefused: gone" in out["r"]["error"]
@@ -61,7 +62,7 @@ def test_a_gate_error_reply_fails_without_emitting(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_a_gate_reply_naming_the_childs_own_run_is_refused(tmp_path):
+def test_a_gate_reply_naming_the_childs_own_run_is_refused(tmp_path: Path) -> None:
     out = _drive(_script(tmp_path), [_handoff(_reply(tmp_path, "ask-r1"))], {})
     assert out["r"]["status"] == "failed"
     assert "not a fresh run id" in out["r"]["error"]
@@ -69,7 +70,7 @@ def test_a_gate_reply_naming_the_childs_own_run_is_refused(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_a_reply_carrying_the_childs_run_id_beside_a_fresh_path_starts_the_chained_run(tmp_path):
+def test_a_reply_carrying_the_childs_run_id_beside_a_fresh_path_starts_the_chained_run(tmp_path: Path) -> None:
     reply = {**_reply(tmp_path), "run_id": "ask-r1"}
     out = _drive(_script(tmp_path), [_handoff(reply), {"route": "dispatch", "done": True}], {"error": "must not be called"})
     assert out["r"]["status"] == "ok", out["r"]
@@ -77,7 +78,7 @@ def test_a_reply_carrying_the_childs_run_id_beside_a_fresh_path_starts_the_chain
 
 
 @pytest.mark.spawns_process
-def test_a_reply_whose_path_is_no_run_script_is_refused_whatever_its_run_id(tmp_path):
+def test_a_reply_whose_path_is_no_run_script_is_refused_whatever_its_run_id(tmp_path: Path) -> None:
     reply = {"path": f"{tmp_path.as_posix()}/scratch/warp/ask-r2/c.mjs", "run_id": "ask-r2", "ok": True}
     out = _drive(_script(tmp_path), [_handoff(reply)], {})
     assert out["r"]["status"] == "failed"

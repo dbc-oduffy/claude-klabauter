@@ -14,6 +14,7 @@ import pytest
 
 from coordinator_core.hooks import auto_push
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -24,7 +25,7 @@ _NO_CRED_ERR = (
 
 
 @pytest.fixture
-def hermetic_git_env(monkeypatch, tmp_path):
+def hermetic_git_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     for key in ("GIT_ASKPASS", "GIT_CONFIG_COUNT", "GIT_CONFIG_PARAMETERS"):
         monkeypatch.delenv(key, raising=False)
     empty = tmp_path / "empty-gitconfig"
@@ -46,20 +47,20 @@ def _log(root):
     return root / ".git" / "push-failures.log"
 
 
-def _feed(root, first_err=_NO_CRED_ERR):
+def _feed(root, first_err=_NO_CRED_ERR) -> None:
     auto_push.log_failure(
         str(root), "work/foo", "cadence-sweep", "sweep-failed", 1, first_err, ""
     )
 
 
-def test_credentialless_https_remote_writes_no_row(tmp_path, hermetic_git_env):
+def test_credentialless_https_remote_writes_no_row(tmp_path: Path, hermetic_git_env) -> None:
     root = _repo(tmp_path, "https://github.com/org/repo")
     _feed(root)
     assert not _log(root).exists()
     assert not list((root / ".git").glob("push-stderr-*.log"))
 
 
-def test_credential_helper_keeps_the_row(tmp_path, hermetic_git_env):
+def test_credential_helper_keeps_the_row(tmp_path: Path, hermetic_git_env) -> None:
     root = _repo(tmp_path, "https://github.com/org/repo")
     subprocess.run(
         ["git", "-C", str(root), "config", "credential.helper", "store"], check=True, **no_console_passthrough_kwargs(),
@@ -68,26 +69,26 @@ def test_credential_helper_keeps_the_row(tmp_path, hermetic_git_env):
     assert "PUSH FAILED on work/foo" in _log(root).read_text(encoding="utf-8")
 
 
-def test_askpass_keeps_the_row(tmp_path, hermetic_git_env, monkeypatch):
+def test_askpass_keeps_the_row(tmp_path: Path, hermetic_git_env, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path, "https://github.com/org/repo")
     monkeypatch.setenv("GIT_ASKPASS", "/bin/true")
     _feed(root)
     assert _log(root).exists()
 
 
-def test_userinfo_url_keeps_the_row(tmp_path, hermetic_git_env):
+def test_userinfo_url_keeps_the_row(tmp_path: Path, hermetic_git_env) -> None:
     root = _repo(tmp_path, "https://user:tok@github.com/org/repo")
     _feed(root)
     assert _log(root).exists()
 
 
-def test_ssh_remote_keeps_the_row(tmp_path, hermetic_git_env):
+def test_ssh_remote_keeps_the_row(tmp_path: Path, hermetic_git_env) -> None:
     root = _repo(tmp_path, "git@github.com:org/repo.git")
     _feed(root)
     assert _log(root).exists()
 
 
-def test_other_failure_on_credentialless_remote_keeps_the_row(tmp_path, hermetic_git_env):
+def test_other_failure_on_credentialless_remote_keeps_the_row(tmp_path: Path, hermetic_git_env) -> None:
     root = _repo(tmp_path, "https://github.com/org/repo")
     _feed(root, "git push: fatal: unable to access: Could not resolve host: github.com")
     assert _log(root).exists()

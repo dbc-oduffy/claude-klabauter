@@ -13,6 +13,7 @@ from coordinator_core.benchmarks.budget import load_manifest
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 from coordinator_core.ops.dispatch_emit.tests.test_op import _write_fixture_plan
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -21,7 +22,7 @@ def _budget() -> dict:
     return load_manifest()["overrides"]["dispatch.emit"]["spawn_count_budget"]
 
 
-def test_plan_route_spawns_exactly_the_budgeted_check_ignore(tmp_path, monkeypatch):
+def test_plan_route_spawns_exactly_the_budgeted_check_ignore(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_AGENT_TYPE_HOST", raising=False)
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     plan_path = _write_fixture_plan(tmp_path)
@@ -37,7 +38,7 @@ def test_plan_route_spawns_exactly_the_budgeted_check_ignore(tmp_path, monkeypat
     assert all("check-ignore" in s.argv for s in spawns), [s.argv for s in spawns]
 
 
-def test_review_only_route_spawns_exactly_the_budgeted_terminal_pin(tmp_path, monkeypatch):
+def test_review_only_route_spawns_exactly_the_budgeted_terminal_pin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit.emit import emit_script
     from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
     from coordinator_core.ops.dispatch_emit.tests.test_review_only_emit import _real_repo

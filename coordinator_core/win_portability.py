@@ -401,7 +401,7 @@ def install_console_less_spawn_default() -> None:
         return
     orig = _winapi.CreateProcess
 
-    def CreateProcess(app, cmd, proc_attrs, thread_attrs, inherit, flags, env, cwd, startupinfo):
+    def CreateProcess(app, cmd, proc_attrs, thread_attrs, inherit, flags, env, cwd, startupinfo) -> tuple[int, int, int, int]:
         if not (flags & (_CREATE_NEW_CONSOLE | _DETACHED_PROCESS)) and _process_has_no_console():
             flags |= _CREATE_NO_WINDOW
         return orig(app, cmd, proc_attrs, thread_attrs, inherit, flags, env, cwd, startupinfo)

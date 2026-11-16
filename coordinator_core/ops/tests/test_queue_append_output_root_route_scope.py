@@ -29,36 +29,37 @@ import pytest
 
 from coordinator_core.ops import queue_append
 from coordinator_core.telemetry import op_latency
+from pathlib import Path
 
 
 @pytest.fixture
-def _redirect(monkeypatch, tmp_path):
+def _redirect(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> str:
     monkeypatch.setenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, str(tmp_path))
     return str(tmp_path)
 
 
-def test_in_process_route_honours_the_redirect(_redirect, monkeypatch):
+def test_in_process_route_honours_the_redirect(_redirect, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(op_latency.ROUTE_ENV, raising=False)
     assert op_latency.execution_route() == op_latency.IN_PROCESS
     assert queue_append._output_root_override() == _redirect
 
 
 @pytest.mark.parametrize("route", [op_latency.WARM_SERVER, op_latency.HTTP_SERVER])
-def test_served_routes_ignore_the_servers_inherited_redirect(_redirect, monkeypatch, route):
+def test_served_routes_ignore_the_servers_inherited_redirect(_redirect, monkeypatch: pytest.MonkeyPatch, route) -> None:
     monkeypatch.setenv(op_latency.ROUTE_ENV, route)
     assert op_latency.execution_route() == route
     assert os.environ[queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV] == _redirect
     assert queue_append._output_root_override() is None
 
 
-def test_absent_env_is_none_on_every_route(monkeypatch):
+def test_absent_env_is_none_on_every_route(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, raising=False)
     for route in (op_latency.IN_PROCESS, op_latency.WARM_SERVER):
         monkeypatch.setenv(op_latency.ROUTE_ENV, route)
         assert queue_append._output_root_override() is None
 
 
-def test_empty_env_value_is_not_treated_as_a_redirect(monkeypatch):
+def test_empty_env_value_is_not_treated_as_a_redirect(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, "")
     monkeypatch.delenv(op_latency.ROUTE_ENV, raising=False)
     assert queue_append._output_root_override() is None
@@ -79,13 +80,13 @@ def test_empty_env_value_is_not_treated_as_a_redirect(monkeypatch):
 # Bug: state/bug-backlog/2026-09-18-coordinator-queue-append-writes-into-a-swept-tmp-root.yaml
 
 
-def _pin_temp_root(monkeypatch, root):
+def _pin_temp_root(monkeypatch, root) -> None:
     """Make `root` the process temp root, so a path under it is a temp path wherever pytest put `tmp_path`."""
     monkeypatch.setattr(tempfile, "tempdir", str(root))
     monkeypatch.setenv("TMPDIR", str(root))
 
 
-def test_swept_temp_root_refuses_even_in_process(monkeypatch, tmp_path):
+def test_swept_temp_root_refuses_even_in_process(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _pin_temp_root(monkeypatch, tmp_path)
     swept = tmp_path / "already-gone"
     monkeypatch.setenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, str(swept))
@@ -96,7 +97,7 @@ def test_swept_temp_root_refuses_even_in_process(monkeypatch, tmp_path):
         queue_append._output_root_override()
 
 
-def test_live_temp_root_is_still_honoured(monkeypatch, tmp_path):
+def test_live_temp_root_is_still_honoured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, str(tmp_path))
     monkeypatch.delenv(op_latency.ROUTE_ENV, raising=False)
     assert queue_append._output_root_override() == str(tmp_path)
@@ -108,7 +109,7 @@ def test_live_temp_root_is_still_honoured(monkeypatch, tmp_path):
 # now refuse the latch instead of honouring it unconditionally.
 
 
-def test_foreign_session_live_root_is_refused(monkeypatch, tmp_path):
+def test_foreign_session_live_root_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, str(tmp_path))
     monkeypatch.delenv(op_latency.ROUTE_ENV, raising=False)
 
@@ -120,7 +121,7 @@ def test_foreign_session_live_root_is_refused(monkeypatch, tmp_path):
         queue_append._output_root_override()
 
 
-def test_same_session_reclaiming_its_own_root_is_still_honoured(monkeypatch, tmp_path):
+def test_same_session_reclaiming_its_own_root_is_still_honoured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, str(tmp_path))
     monkeypatch.delenv(op_latency.ROUTE_ENV, raising=False)
     monkeypatch.setattr(queue_append, "resolve_current_session_id", lambda *a, **k: "session-A")
@@ -131,7 +132,7 @@ def test_same_session_reclaiming_its_own_root_is_still_honoured(monkeypatch, tmp
     assert queue_append._output_root_override() == str(tmp_path)
 
 
-def test_unresolvable_session_id_leaves_ownership_unverified(monkeypatch, tmp_path):
+def test_unresolvable_session_id_leaves_ownership_unverified(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv(queue_append._QUEUE_APPEND_OUTPUT_ROOT_ENV, str(tmp_path))
     monkeypatch.delenv(op_latency.ROUTE_ENV, raising=False)
     monkeypatch.setattr(queue_append, "resolve_current_session_id", lambda *a, **k: None)
@@ -143,7 +144,7 @@ def test_unresolvable_session_id_leaves_ownership_unverified(monkeypatch, tmp_pa
     )
 
 
-def test_is_swept_tmp_root_predicate(monkeypatch, tmp_path):
+def test_is_swept_tmp_root_predicate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _pin_temp_root(monkeypatch, tmp_path)
     live = tmp_path / "still-here"
     live.mkdir()
@@ -164,7 +165,7 @@ def test_is_swept_tmp_root_predicate(monkeypatch, tmp_path):
 # Backlink: state/bug-backlog/2026-08-20-central-scope-queue-entries-land-in-the-6a0c80dedc44.yaml
 
 
-def test_claude_klabauter_root_refuses_a_root_that_is_the_published_mirror(monkeypatch):
+def test_claude_klabauter_root_refuses_a_root_that_is_the_published_mirror(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import queue_append as qa
 
     monkeypatch.setattr(qa, "_engine_source_root", lambda: None)
@@ -177,7 +178,7 @@ def test_claude_klabauter_root_refuses_a_root_that_is_the_published_mirror(monke
     assert "PUBLISHED engine mirror" in str(exc.value)
 
 
-def test_claude_klabauter_root_returns_a_live_working_tree_unchanged(monkeypatch):
+def test_claude_klabauter_root_returns_a_live_working_tree_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import queue_append as qa
 
     monkeypatch.setattr(qa, "_engine_source_root", lambda: None)
@@ -188,7 +189,7 @@ def test_claude_klabauter_root_returns_a_live_working_tree_unchanged(monkeypatch
     assert qa._claude_klabauter_root() == "/repos/claude-klabauter"
 
 
-def test_mirror_valued_env_override_falls_through_to_the_registry(monkeypatch):
+def test_mirror_valued_env_override_falls_through_to_the_registry(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import queue_append as qa
     from coordinator_core.telemetry import op_latency
 
@@ -201,7 +202,7 @@ def test_mirror_valued_env_override_falls_through_to_the_registry(monkeypatch):
     assert qa._claude_klabauter_root() == "/repos/claude-klabauter"
 
 
-def test_mirror_valued_env_and_registry_is_still_refused(monkeypatch):
+def test_mirror_valued_env_and_registry_is_still_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import queue_append as qa
     from coordinator_core.telemetry import op_latency
 
@@ -215,7 +216,7 @@ def test_mirror_valued_env_and_registry_is_still_refused(monkeypatch):
         qa._claude_klabauter_root()
 
 
-def test_transform_proof_key_wins_over_a_mirror_naming_registry(monkeypatch):
+def test_transform_proof_key_wins_over_a_mirror_naming_registry(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import queue_append as qa
 
     monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "")
@@ -225,7 +226,7 @@ def test_transform_proof_key_wins_over_a_mirror_naming_registry(monkeypatch):
     assert qa._claude_klabauter_root() == "/repos/claude-klabauter"
 
 
-def test_absent_transform_proof_key_falls_through_to_the_repo_named_rung(monkeypatch):
+def test_absent_transform_proof_key_falls_through_to_the_repo_named_rung(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import queue_append as qa
 
     monkeypatch.setattr(qa, "coordinator_engine_root_env", lambda _name: "")

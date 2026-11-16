@@ -4,6 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import coordinator_core.baton_assemble as ba
+import pytest
 
 
 def _write_handoff_with_body(
@@ -24,23 +25,23 @@ def _write_handoff_with_body(
 
 class TestBoundedReaderMatchesFullReader:
 
-    def test_bounded_read_matches_full_read_for_a_large_body(self, tmp_path):
+    def test_bounded_read_matches_full_read_for_a_large_body(self, tmp_path: Path) -> None:
         candidate = _write_handoff_with_body(
             tmp_path, "state/handoffs/large.md", "DEL-LARGE", "in_flight", 50_000
         )
         assert ba._read_frontmatter_bounded(candidate) == ba._read_frontmatter(candidate)
 
-    def test_bounded_read_of_missing_file_is_empty(self, tmp_path):
+    def test_bounded_read_of_missing_file_is_empty(self, tmp_path: Path) -> None:
         missing = tmp_path / "state" / "handoffs" / "absent.md"
         assert ba._read_frontmatter_bounded(missing) == ""
 
-    def test_bounded_read_of_frontmatter_less_file_is_empty(self, tmp_path):
+    def test_bounded_read_of_frontmatter_less_file_is_empty(self, tmp_path: Path) -> None:
         path = tmp_path / "state" / "handoffs" / "no-fm.md"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text("# just a body, no delimiters\n" + ("y" * 20_000), encoding="utf-8")
         assert ba._read_frontmatter_bounded(path) == ""
 
-    def test_bounded_read_of_delimiter_less_file_larger_than_one_chunk_is_empty(self, tmp_path):
+    def test_bounded_read_of_delimiter_less_file_larger_than_one_chunk_is_empty(self, tmp_path: Path) -> None:
         """No closing `---` anywhere -- the growing-buffer loop must fall
         through to EOF and return `""`, not hang or raise, even past the
         first `_FM_BOUNDED_READ_CHUNK`."""
@@ -52,7 +53,7 @@ class TestBoundedReaderMatchesFullReader:
 
 class TestBoundedReadStaysUnderBudget:
 
-    def test_scan_reads_far_fewer_bytes_than_the_corpus_body_size(self, tmp_path, monkeypatch):
+    def test_scan_reads_far_fewer_bytes_than_the_corpus_body_size(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         body_bytes = 50_000
         num_candidates = 20
         for i in range(num_candidates):
@@ -71,7 +72,7 @@ class TestBoundedReadStaysUnderBudget:
             fh = real_open(self, *args, **kwargs)
             real_read = fh.read
 
-            def _counting_read(size=-1):
+            def _counting_read(size: int = -1):
                 data = real_read(size)
                 read_sizes.append(len(data))
                 return data
@@ -94,7 +95,7 @@ class TestBoundedReadStaysUnderBudget:
             "the bounded reader must stay well under the full-corpus-body size"
         )
 
-    def test_scan_still_finds_a_collision_after_a_large_bodied_earlier_candidate(self, tmp_path):
+    def test_scan_still_finds_a_collision_after_a_large_bodied_earlier_candidate(self, tmp_path: Path) -> None:
         _write_handoff_with_body(
             tmp_path, "state/handoffs/a-large-no-hit.md", "DEL-OTHER", "in_flight", 50_000
         )

@@ -3,9 +3,11 @@
 import json
 
 from coordinator_core.telemetry import engine_report, traffic_manifest
+from pathlib import Path
+import pytest
 
 
-def _w(path, rows):
+def _w(path, rows) -> None:
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n", encoding="utf-8")
 
 
@@ -23,7 +25,7 @@ def _sink(tmp_path):
     return [cur, old]
 
 
-def test_fold(tmp_path):
+def test_fold(tmp_path: Path) -> None:
     m = traffic_manifest.build_manifest(tmp_path, sink_paths=_sink(tmp_path))
     assert m["schema_version"] == "1"
     assert m["excluded"] == {"non_complete_kinds": 1, "non_production_origins": 2}
@@ -41,20 +43,20 @@ def test_fold(tmp_path):
     }
 
 
-def test_legacy_row_without_kind_and_origin_counts(tmp_path):
+def test_legacy_row_without_kind_and_origin_counts(tmp_path: Path) -> None:
     m = traffic_manifest.build_manifest(tmp_path, sink_paths=_sink(tmp_path))
     # legacy rows: a.b (old gen, no kind) and c.d (no origin -> "unknown")
     assert m["legs"]["engine_served"]["ops"]["c.d"]["by_origin"] == {"unknown": 1}
 
 
-def test_truncation_flag(tmp_path, monkeypatch):
+def test_truncation_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(engine_report, "MAX_ROWS_SCANNED", 3)
     m = traffic_manifest.build_manifest(tmp_path, sink_paths=_sink(tmp_path))
     assert m["source"]["rows_truncated"] is True
     assert m["source"]["rows_scanned"] == 3
 
 
-def test_main_writes_only_with_out(tmp_path, monkeypatch, capsys):
+def test_main_writes_only_with_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
     assert traffic_manifest.main([]) == 0

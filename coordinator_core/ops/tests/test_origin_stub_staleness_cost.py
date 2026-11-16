@@ -6,12 +6,13 @@ from pathlib import Path
 
 from coordinator_core.ops.origin_stub_staleness import survey
 from coordinator_core.session import record_homes
+import pytest
 
 _RECORDS = 600
 _STUB_EVERY = 20
 
 
-def _build(root):
+def _build(root) -> None:
     handoffs = Path(record_homes.home_dir(str(root), "handoffs"))
     plans = root / "docs" / "plans"
     handoffs.mkdir(parents=True)
@@ -37,12 +38,12 @@ def _build(root):
     )
 
 
-def test_survey_spawns_nothing_and_is_under_budget(tmp_path, monkeypatch):
+def test_survey_spawns_nothing_and_is_under_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _build(tmp_path)
     spawned = []
     real_init = subprocess.Popen.__init__
 
-    def counting_init(self, *a, **kw):
+    def counting_init(self, *a, **kw) -> None:
         spawned.append(a)
         real_init(self, *a, **kw)
 

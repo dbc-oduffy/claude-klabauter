@@ -50,7 +50,7 @@ _IGNORED = (
 class HomeRefused(Exception):
     """The resolved home sits inside a checkout; `.checkout` names it."""
 
-    def __init__(self, home: str, checkout: str):
+    def __init__(self, home: str, checkout: str) -> None:
         self.home = home
         self.checkout = checkout
         super().__init__(f"group-em home {home} is inside checkout {checkout}")

@@ -55,6 +55,7 @@ reads as coverage while providing none.
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -66,7 +67,7 @@ def _skip_if_no_prebuilt() -> None:
         pytest.skip("no committed prebuilt door for this platform in this checkout")
 
 
-def _engine_root(tmp_path, *, names=(), stamped=True):
+def _engine_root(tmp_path, *, names=(), stamped: bool = True):
     root = tmp_path / "engine"
     (root / "coordinator" / "bin").mkdir(parents=True)
     if stamped:
@@ -80,7 +81,7 @@ def _engine_root(tmp_path, *, names=(), stamped=True):
 
 
 @pytest.fixture
-def generator_bin_carrying_publish(tmp_path, monkeypatch):
+def generator_bin_carrying_publish(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A generator `coordinator/bin/` that carries `publish.py` while the engine under
     test does not: the publish-excluded shape, independent of which tree runs the suite."""
     generator_bin = tmp_path / "generator-bin"
@@ -90,7 +91,7 @@ def generator_bin_carrying_publish(tmp_path, monkeypatch):
     return generator_bin
 
 
-def test_engine_carries_entrypoint_script_is_keyed_on_the_name_the_door_sends(tmp_path):
+def test_engine_carries_entrypoint_script_is_keyed_on_the_name_the_door_sends(tmp_path: Path) -> None:
     root = _engine_root(tmp_path, names=["check-widget-doctor-sentinel"])
 
     assert door_install.engine_carries_entrypoint_script(
@@ -102,8 +103,8 @@ def test_engine_carries_entrypoint_script_is_keyed_on_the_name_the_door_sends(tm
 
 
 def test_a_name_the_engine_cannot_serve_gets_no_launcher(
-    tmp_path, capsys, generator_bin_carrying_publish
-):
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], generator_bin_carrying_publish
+) -> None:
     root = _engine_root(tmp_path, names=["coordinator-invoke"])
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -132,8 +133,8 @@ def test_a_name_the_engine_cannot_serve_gets_no_launcher(
 
 
 def test_the_forwarder_loop_writes_nothing_at_all_for_an_unservable_name(
-    tmp_path, generator_bin_carrying_publish
-):
+    tmp_path: Path, generator_bin_carrying_publish
+) -> None:
     """The regression this file's unit tests could not see.
 
     `_write_native_door_forwarder` declining to write the native image is
@@ -173,8 +174,8 @@ def test_the_forwarder_loop_writes_nothing_at_all_for_an_unservable_name(
 
 
 def test_a_stale_launcher_from_an_earlier_install_is_taken_back(
-    tmp_path, generator_bin_carrying_publish
-):
+    tmp_path: Path, generator_bin_carrying_publish
+) -> None:
     root = _engine_root(tmp_path, names=["coordinator-invoke"])
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -188,7 +189,7 @@ def test_a_stale_launcher_from_an_earlier_install_is_taken_back(
     assert not stale.exists()
 
 
-def test_check_only_removes_nothing(tmp_path, generator_bin_carrying_publish):
+def test_check_only_removes_nothing(tmp_path: Path, generator_bin_carrying_publish) -> None:
     root = _engine_root(tmp_path, names=["coordinator-invoke"])
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -201,7 +202,7 @@ def test_check_only_removes_nothing(tmp_path, generator_bin_carrying_publish):
 
     assert stale.exists()
 
-def test_a_name_the_engine_carries_still_gets_its_launcher(tmp_path, capsys):
+def test_a_name_the_engine_carries_still_gets_its_launcher(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _skip_if_no_prebuilt()
     root = _engine_root(tmp_path, names=["coordinator-invoke", "handoff-housekeeping"])
     bin_dst = tmp_path / "bin"
@@ -215,7 +216,7 @@ def test_a_name_the_engine_carries_still_gets_its_launcher(tmp_path, capsys):
     assert "no launcher installed" not in capsys.readouterr().err
 
 
-def test_a_name_with_no_py_twin_in_either_tree_keeps_its_launcher(tmp_path, capsys):
+def test_a_name_with_no_py_twin_in_either_tree_keeps_its_launcher(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _skip_if_no_prebuilt()
     root = _engine_root(tmp_path, names=["coordinator-invoke"])
     bin_dst = tmp_path / "bin"
@@ -229,7 +230,7 @@ def test_a_name_with_no_py_twin_in_either_tree_keeps_its_launcher(tmp_path, caps
     assert "no launcher installed" not in capsys.readouterr().err
 
 
-def test_a_killed_op_image_is_reaped_by_the_orphan_sweep_even_without_manifest_membership(monkeypatch, tmp_path):
+def test_a_killed_op_image_is_reaped_by_the_orphan_sweep_even_without_manifest_membership(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -241,7 +242,7 @@ def test_a_killed_op_image_is_reaped_by_the_orphan_sweep_even_without_manifest_m
     assert not stale.exists()
 
 
-def test_the_auto_push_forwarder_is_reaped_in_all_three_shapes(monkeypatch, tmp_path):
+def test_the_auto_push_forwarder_is_reaped_in_all_three_shapes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -258,7 +259,7 @@ def test_the_auto_push_forwarder_is_reaped_in_all_three_shapes(monkeypatch, tmp_
     assert [e for e in stale if e.exists()] == []
 
 
-def test_a_killed_op_image_check_only_reports_but_does_not_remove(tmp_path):
+def test_a_killed_op_image_check_only_reports_but_does_not_remove(tmp_path: Path) -> None:
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     stale = bin_dst / "list-review-trail-records.exe"
@@ -274,7 +275,7 @@ def test_a_killed_op_image_check_only_reports_but_does_not_remove(tmp_path):
     assert stale.exists()
 
 
-def test_the_canonical_door_is_never_removed_as_stale(tmp_path):
+def test_the_canonical_door_is_never_removed_as_stale(tmp_path: Path) -> None:
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     canonical = bin_dst / door_install.DOOR_INSTALLED_NAME
@@ -286,7 +287,7 @@ def test_the_canonical_door_is_never_removed_as_stale(tmp_path):
     assert canonical.exists()
 
 
-def test_a_renamed_native_image_is_reaped_on_windows_not_only_posix(monkeypatch, tmp_path):
+def test_a_renamed_native_image_is_reaped_on_windows_not_only_posix(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Condition 0 (native-forwarder manifest match) must identify a native
     image by the FILENAME it was written under, not by the bare name the
     manifest records.
@@ -322,7 +323,7 @@ def test_a_renamed_native_image_is_reaped_on_windows_not_only_posix(monkeypatch,
     assert not stale.exists()
 
 
-def test_a_native_image_this_run_still_writes_survives_the_sweep(monkeypatch, tmp_path):
+def test_a_native_image_this_run_still_writes_survives_the_sweep(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The other half, and the one that makes the fix safe: broadening
     condition 0's identification must not broaden DELETION. Condition 2
     (absence from this run's complete write set) still gates it, and a

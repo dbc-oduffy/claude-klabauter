@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from coordinator_core.git import since_base_overlap
 from coordinator_core.ops.dispatch_emit import landing_integrity
+from pathlib import Path
+import pytest
 
 
 def _spy(monkeypatch) -> list:
@@ -23,14 +25,14 @@ def _spy(monkeypatch) -> list:
     return calls
 
 
-def test_no_declared_path_starts_no_walk(tmp_path, monkeypatch):
+def test_no_declared_path_starts_no_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _spy(monkeypatch)
 
     assert landing_integrity.since_base_findings(tmp_path, [], "abc123", run_id="r") == []
     assert calls == []
 
 
-def test_a_declared_path_is_scanned_once(tmp_path, monkeypatch):
+def test_a_declared_path_is_scanned_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _spy(monkeypatch)
 
     landing_integrity.since_base_findings(tmp_path, ["a.py", "b.py", "a.py"], "abc123", run_id="r")

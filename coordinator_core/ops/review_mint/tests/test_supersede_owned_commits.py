@@ -9,6 +9,7 @@ import yaml
 
 from coordinator_core.ops.review_mint.supersede import SupersedeRefused, record_superseding_review
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -32,7 +33,7 @@ def _commit(root, files, msg):
 
 
 @pytest.fixture
-def shared_branch(tmp_path):
+def shared_branch(tmp_path: Path):
     _git(tmp_path, "init", "-q")
     base = _commit(tmp_path, ["base.txt"], "base")
     _commit(tmp_path, ["own1.txt", "own2.txt"], f"own a\n\nDeliverable-Id: {DID}")
@@ -69,19 +70,19 @@ def _product_files(root, res):
     return yaml.safe_load((root / prep).read_text().split("---\n")[1])["product_files"]
 
 
-def test_owned_deliverable_id_counts_only_owned_files(shared_branch):
+def test_owned_deliverable_id_counts_only_owned_files(shared_branch) -> None:
     root, base, head = shared_branch
     res = _call(root, base, head, deliverable_id=DID)
     assert _product_files(root, res) == 3
 
 
-def test_no_deliverable_id_is_refused_naming_the_field(shared_branch):
+def test_no_deliverable_id_is_refused_naming_the_field(shared_branch) -> None:
     root, base, head = shared_branch
     with pytest.raises(SupersedeRefused, match="no deliverable_id"):
         _call(root, base, head)
 
 
-def test_deliverable_id_from_plan_file_frontmatter(shared_branch):
+def test_deliverable_id_from_plan_file_frontmatter(shared_branch) -> None:
     root, base, head = shared_branch
     plan_file = root / "plan.md"
     plan_file.write_text(f"---\nplan_id: {PLAN}\ndeliverable_id: {DID}\n---\nbody\n", encoding="utf-8")
@@ -94,7 +95,7 @@ def test_deliverable_id_from_plan_file_frontmatter(shared_branch):
     assert _product_files(root, res) == 3
 
 
-def test_deliverable_id_matching_no_commit_is_refused(shared_branch):
+def test_deliverable_id_matching_no_commit_is_refused(shared_branch) -> None:
     root, base, head = shared_branch
     with pytest.raises(SupersedeRefused, match="carries Deliverable-Id del-none"):
         _call(root, base, head, deliverable_id="del-none")

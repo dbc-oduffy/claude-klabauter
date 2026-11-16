@@ -5,6 +5,7 @@ from __future__ import annotations
 import shlex
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -14,7 +15,7 @@ _FAST = "python3 bin/run-fast-tests.py"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> str:
     monkeypatch.delenv("COORDINATOR_FAST_TEST_CMD", raising=False)
     monkeypatch.delenv("COORDINATOR_FULL_TEST_CMD", raising=False)
     (tmp_path / ".git").mkdir()
@@ -36,7 +37,7 @@ def _verdict(cmd: str, cwd: str):
     return None if res is None else getattr(res, "verdict_kind", "other")
 
 
-def _tiers(cmd: str, cwd: str):
+def _tiers(cmd: str, cwd: str) -> list[tuple[str, str]]:
     return [(m.tier, m.detected) for m in guard.classify_command(cmd, cwd=cwd)]
 
 
@@ -50,14 +51,14 @@ _CHAINED = [
 
 
 @pytest.mark.parametrize("wrapped,unwrapped", _CHAINED)
-def test_chained_payload_is_denied_and_classified_like_the_unwrapped_chain(repo, wrapped, unwrapped):
+def test_chained_payload_is_denied_and_classified_like_the_unwrapped_chain(repo, wrapped, unwrapped) -> None:
     assert _verdict(unwrapped, repo) == "deny"
     assert _verdict(wrapped, repo) == "deny"
     assert _tiers(unwrapped, repo)
     assert _tiers(wrapped, repo) == _tiers(unwrapped, repo)
 
 
-def test_file_scoped_chained_payload_is_not_denied_like_its_unwrapped_chain(repo):
+def test_file_scoped_chained_payload_is_not_denied_like_its_unwrapped_chain(repo) -> None:
     unwrapped = "python -m pytest tests/test_a.py; echo exit=$?"
     wrapped = 'bash -c "python -m pytest tests/test_a.py; echo exit=$?"'
     assert _verdict(unwrapped, repo) != "deny"
@@ -65,19 +66,19 @@ def test_file_scoped_chained_payload_is_not_denied_like_its_unwrapped_chain(repo
     assert _tiers(wrapped, repo) == _tiers(unwrapped, repo)
 
 
-def test_single_segment_payload_behaves_as_before(repo):
+def test_single_segment_payload_behaves_as_before(repo) -> None:
     cmd = "with-suite-mutex -- bash -c 'python3 -m pytest -m \"not cadence\"'"
     bare = "with-suite-mutex -- python3 -m pytest -m 'not cadence'"
     assert _tiers(cmd, repo) == _tiers(bare, repo)
     assert _verdict(cmd, repo) == _verdict(bare, repo)
 
 
-def test_payload_without_a_runner_stays_silent(repo):
+def test_payload_without_a_runner_stays_silent(repo) -> None:
     assert _verdict('bash -c "echo a; echo b"', repo) is None
     assert _tiers('bash -c "echo a; echo b"', repo) == []
 
 
-def test_depth_past_the_cap_still_unwraps_the_single_argv(repo):
+def test_depth_past_the_cap_still_unwraps_the_single_argv(repo) -> None:
     # Single-segment nesting: pins the unwrap fallback only, not the expansion cap.
     cmd = "pytest"
     for _ in range(guard._SHELL_C_EXPANSION_DEPTH + 2):

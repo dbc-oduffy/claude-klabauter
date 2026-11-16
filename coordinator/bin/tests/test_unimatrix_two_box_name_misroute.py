@@ -14,11 +14,15 @@ import sys
 from pathlib import Path
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 BIN = Path(__file__).resolve().parents[1]
 
 
-def _load(filename, modname):
+def _load(filename, modname) -> "ModuleType":
     spec = importlib.util.spec_from_file_location(modname, BIN / filename)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -33,7 +37,7 @@ SOCKS = {"target": "/near/cc-msg-target.sock", "example-game-repo": "/near/cc-ms
          "group": "/near/cc-msg-group.sock", "addon": "/near/cc-msg-addon.sock"}
 
 
-def dead_pid():
+def dead_pid() -> int:
     """A pid that belonged to a process that has exited."""
     flags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
     child = subprocess.Popen([sys.executable, "-c", "pass"], creationflags=flags)
@@ -46,7 +50,7 @@ def far_session(name, sid, sock):
     return {"name": name, "sessionId": sid, "vendor": "claude", "messagingSocketPath": sock, "pid": 4242}
 
 
-def mirror(far_row, mirror_name, near_sock, far_name=None, sid=None, live=True):
+def mirror(far_row, mirror_name, near_sock, far_name=None, sid=None, live: bool = True):
     """The near box's mirror row for `far_row`; name, far name and session id may be made to disagree."""
     return {"name": mirror_name, "unimatrixFarName": far_name or far_row["name"], "vendor": "claude",
             "sessionId": sid or far_row["sessionId"], "messagingSocketPath": near_sock,
@@ -71,10 +75,10 @@ FAR_ADDON = far_session(ADDON, "bb0000bb-0000-4000-8000-000000000004", r"\\.\pip
 def capture(r, monkeypatch):
     sent = []
 
-    async def deliver(peer, endpoint, frame):
+    async def deliver(peer, endpoint, frame) -> None:
         sent.append(endpoint)
 
-    async def face(source, destination):
+    async def face(source, destination) -> str:
         return "transport-face"
     monkeypatch.setattr(r, "_deliver_as_peer", deliver)
     monkeypatch.setattr(r, "_transport_face", face)
@@ -94,7 +98,7 @@ STALE_CASES = [
 
 @pytest.mark.parametrize("asked, far_name, sock, far_row", STALE_CASES)
 def test_stale_mirror_named_for_one_session_and_relaying_to_another_is_refused(
-        tmp_path, monkeypatch, asked, far_name, sock, far_row):
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, asked, far_name, sock, far_row) -> None:
     # The true session's own mirror is down (dead pid); the stale row is the only live carrier of the name.
     true_row = {TARGET: FAR_TARGET, GROUP: FAR_GROUP}[asked]
     r = near_box(tmp_path, [mirror(true_row, asked, "/near/cc-msg-true.sock", live=False),
@@ -109,14 +113,14 @@ def test_stale_mirror_named_for_one_session_and_relaying_to_another_is_refused(
 
 @pytest.mark.parametrize("asked, far_name, sock, far_row", STALE_CASES)
 def test_the_far_name_a_stale_mirror_relays_to_is_refused_through_it_too(
-        tmp_path, monkeypatch, asked, far_name, sock, far_row):
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, asked, far_name, sock, far_row) -> None:
     r = near_box(tmp_path, [mirror(far_row, asked, SOCKS[sock], far_name=far_name)])
     sent = capture(r, monkeypatch)
     assert r.resolve_sender(far_name) == ""
     assert not dispatch(r, far_name)["ok"] and sent == []
 
 
-def test_stale_mirror_beside_the_live_true_mirror_never_wins_the_name(tmp_path, monkeypatch):
+def test_stale_mirror_beside_the_live_true_mirror_never_wins_the_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     r = near_box(tmp_path, [mirror(FAR_TARGET, TARGET, SOCKS["target"]),
                             mirror(FAR_EXAMPLE_GAME_REPO, TARGET, SOCKS["example-game-repo"], far_name=EXAMPLE_GAME_REPO)])
     sent = capture(r, monkeypatch)
@@ -124,7 +128,7 @@ def test_stale_mirror_beside_the_live_true_mirror_never_wins_the_name(tmp_path, 
     assert not dispatch(r, TARGET)["ok"] and sent == []
 
 
-def test_box_qualified_stale_mirror_is_refused_by_its_full_name(tmp_path, monkeypatch):
+def test_box_qualified_stale_mirror_is_refused_by_its_full_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     r = near_box(tmp_path, [mirror(FAR_EXAMPLE_GAME_REPO, f"{TARGET}.machine-a", SOCKS["example-game-repo"], far_name=EXAMPLE_GAME_REPO)])
     sent = capture(r, monkeypatch)
     assert r.resolve_sender(f"{TARGET}.machine-a") == ""
@@ -132,7 +136,7 @@ def test_box_qualified_stale_mirror_is_refused_by_its_full_name(tmp_path, monkey
 
 
 @pytest.mark.parametrize("name", [TARGET, f"{TARGET}.machine-a"])
-def test_consistent_mirrors_still_deliver_to_their_own_session(tmp_path, monkeypatch, name):
+def test_consistent_mirrors_still_deliver_to_their_own_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name) -> None:
     r = near_box(tmp_path, [mirror(FAR_TARGET, name, SOCKS["target"]),
                             mirror(FAR_EXAMPLE_GAME_REPO, EXAMPLE_GAME_REPO, SOCKS["example-game-repo"])])
     sent = capture(r, monkeypatch)
@@ -140,11 +144,11 @@ def test_consistent_mirrors_still_deliver_to_their_own_session(tmp_path, monkeyp
     assert dispatch(r, name)["ok"] and sent == [SOCKS["target"]]
 
 
-def ref_name(name, sid):
+def ref_name(name, sid) -> str:
     return f"{name} [{sid[:6]}]"
 
 
-def test_name_ref_for_a_session_the_bare_name_row_does_not_carry_is_refused(tmp_path, monkeypatch):
+def test_name_ref_for_a_session_the_bare_name_row_does_not_carry_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     r = near_box(tmp_path, [mirror(FAR_EXAMPLE_GAME_REPO, EXAMPLE_GAME_REPO, SOCKS["example-game-repo"]),
                             mirror(FAR_TARGET, TARGET, SOCKS["target"], live=False)])
     sent = capture(r, monkeypatch)
@@ -154,7 +158,7 @@ def test_name_ref_for_a_session_the_bare_name_row_does_not_carry_is_refused(tmp_
     assert sent == []
 
 
-def test_name_ref_row_whose_session_id_is_another_sessions_is_refused(tmp_path, monkeypatch):
+def test_name_ref_row_whose_session_id_is_another_sessions_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     asked = ref_name(TARGET, TARGET_SID)
     r = near_box(tmp_path, [mirror(FAR_EXAMPLE_GAME_REPO, asked, SOCKS["example-game-repo"], far_name=asked, sid=EXAMPLE_GAME_REPO_SID)])
     sent = capture(r, monkeypatch)
@@ -163,14 +167,14 @@ def test_name_ref_row_whose_session_id_is_another_sessions_is_refused(tmp_path, 
     assert not dispatch(r, asked)["ok"] and sent == []
 
 
-def test_name_ref_row_carrying_that_ref_delivers(tmp_path, monkeypatch):
+def test_name_ref_row_carrying_that_ref_delivers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     asked = ref_name(TARGET, TARGET_SID)
     r = near_box(tmp_path, [mirror(FAR_TARGET, asked, SOCKS["target"], far_name=asked)])
     sent = capture(r, monkeypatch)
     assert dispatch(r, asked)["ok"] and sent == [SOCKS["target"]]
 
 
-def test_peer_send_by_a_stale_name_is_refused_and_writes_nothing(tmp_path, monkeypatch):
+def test_peer_send_by_a_stale_name_is_refused_and_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     r = near_box(tmp_path, [mirror(FAR_EXAMPLE_GAME_REPO, TARGET, SOCKS["example-game-repo"], far_name=EXAMPLE_GAME_REPO)])
     r.peers["agy-a"] = {"name": "agy-a", "vendor": "agy", "target": "conv-1"}
     sent = capture(r, monkeypatch)
@@ -178,7 +182,7 @@ def test_peer_send_by_a_stale_name_is_refused_and_writes_nothing(tmp_path, monke
     assert not response["ok"] and "written" not in response and sent == []
 
 
-def test_pipe_address_off_windows_with_no_relay_route_is_refused_not_opened(tmp_path, monkeypatch):
+def test_pipe_address_off_windows_with_no_relay_route_is_refused_not_opened(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     row = mirror(FAR_TARGET, TARGET, FAR_TARGET["messagingSocketPath"])
     r = near_box(tmp_path, [row])
     sent = capture(r, monkeypatch)

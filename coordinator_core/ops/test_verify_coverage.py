@@ -61,7 +61,7 @@ def _run(root: Path, sweep_root: Path | None = None, extra: list[str] | None = N
     old_stdout = sys.stdout
 
     class _Capture:
-        def write(self, s):
+        def write(self, s) -> None:
             out.append(s)
 
         def flush(self):
@@ -81,7 +81,7 @@ def _run(root: Path, sweep_root: Path | None = None, extra: list[str] | None = N
 # ---------------------------------------------------------------------------
 
 
-def test_empty_tree_zero_violations(tmp_path):
+def test_empty_tree_zero_violations(tmp_path: Path) -> None:
     root = _scaffold(tmp_path, {"coordinator": {}})
     r = _run(root, root)
     assert r["exit"] == 0
@@ -89,7 +89,7 @@ def test_empty_tree_zero_violations(tmp_path):
     assert r["json"]["ok"] is True
 
 
-def test_all_refs_resolve(tmp_path):
+def test_all_refs_resolve(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["plan"], "agents": ["staff-eng"], "commands": ["workday-start"]}},
@@ -108,7 +108,7 @@ def test_all_refs_resolve(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_qualified_orphan_typo(tmp_path):
+def test_qualified_orphan_typo(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["plan"]}},
@@ -121,7 +121,7 @@ def test_qualified_orphan_typo(tmp_path):
     assert r["json"]["violations"][0]["ref"] == "coordinator:plann"
 
 
-def test_external_plugin_prefix_skipped(tmp_path):
+def test_external_plugin_prefix_skipped(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["plan"]}},
@@ -142,7 +142,7 @@ def test_external_plugin_prefix_skipped(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_subagent_bare_name_resolves_across_plugins(tmp_path):
+def test_subagent_bare_name_resolves_across_plugins(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["plan"]}, "game-dev": {"agents": ["staff-game-dev"]}},
@@ -152,7 +152,7 @@ def test_subagent_bare_name_resolves_across_plugins(tmp_path):
     assert r["exit"] == 0, r["json"]
 
 
-def test_subagent_typo_flagged(tmp_path):
+def test_subagent_typo_flagged(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["plan"], "agents": ["staff-eng"]}},
@@ -164,7 +164,7 @@ def test_subagent_typo_flagged(tmp_path):
     assert found, r["json"]["violations"]
 
 
-def test_subagent_builtin_harness_type_resolves(tmp_path):
+def test_subagent_builtin_harness_type_resolves(tmp_path: Path) -> None:
     # Regression: BUILTIN_AGENT_TYPES (general-purpose/Explore/Plan/statusline-setup)
     # have no on-disk artifact by construction (harness-provided, not repo-authored)
     # and previously fell through resolve()'s bare-name agents lookup as orphans,
@@ -183,7 +183,7 @@ def test_subagent_builtin_harness_type_resolves(tmp_path):
     assert r["exit"] == 0, r["json"]
 
 
-def test_subagent_template_placeholder_not_flagged(tmp_path):
+def test_subagent_template_placeholder_not_flagged(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["session-start"]}},
@@ -202,7 +202,7 @@ def test_subagent_template_placeholder_not_flagged(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_command_qualified_resolves(tmp_path):
+def test_command_qualified_resolves(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"commands": ["workday-start"], "skills": ["plan"]}},
@@ -212,7 +212,7 @@ def test_command_qualified_resolves(tmp_path):
     assert r["exit"] == 0
 
 
-def test_command_bare_resolves_via_fallback(tmp_path):
+def test_command_bare_resolves_via_fallback(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"commands": ["workday-start"], "skills": ["plan"]}},
@@ -227,7 +227,7 @@ def test_command_bare_resolves_via_fallback(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_worker_bullet_resolves(tmp_path):
+def test_worker_bullet_resolves(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"agents": ["staff-eng", "test-evidence-parser", "security-audit-worker"]}},
@@ -242,7 +242,7 @@ def test_worker_bullet_resolves(tmp_path):
     assert r["exit"] == 0, r["json"]
 
 
-def test_worker_typo_flagged(tmp_path):
+def test_worker_typo_flagged(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"agents": ["staff-eng", "test-evidence-parser"]}},
@@ -258,7 +258,7 @@ def test_worker_typo_flagged(tmp_path):
     assert found, r["json"]["violations"]
 
 
-def test_worker_block_ends_at_next_heading(tmp_path):
+def test_worker_block_ends_at_next_heading(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"agents": ["staff-eng"]}},
@@ -280,7 +280,7 @@ def test_worker_block_ends_at_next_heading(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_code_fences_stripped(tmp_path):
+def test_code_fences_stripped(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["plan"]}},
@@ -294,7 +294,7 @@ def test_code_fences_stripped(tmp_path):
     assert r["exit"] == 0, r["json"]
 
 
-def test_frontmatter_stripped(tmp_path):
+def test_frontmatter_stripped(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["plan"]}},
@@ -309,7 +309,7 @@ def test_frontmatter_stripped(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_vendor_dir_excluded_from_sweep(tmp_path):
+def test_vendor_dir_excluded_from_sweep(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["plan"]}},
@@ -326,7 +326,7 @@ def test_vendor_dir_excluded_from_sweep(tmp_path):
     assert r["json"]["summary"]["violations"] == 0
 
 
-def test_docs_recovered_excluded_from_sweep(tmp_path):
+def test_docs_recovered_excluded_from_sweep(tmp_path: Path) -> None:
     """cross-repo/archive/2026-08-16-example-retrieval-repo-em-ceremony-cli-defects-found-
     running-workweek-complete.md section 2: a recovered historical document
     names commands that genuinely existed when it was written, and rewriting it
@@ -350,7 +350,7 @@ def test_docs_recovered_excluded_from_sweep(tmp_path):
     assert r["json"]["summary"]["violations"] == 0
 
 
-def test_recovered_exclusion_is_basename_scoped_not_docs_scoped(tmp_path):
+def test_recovered_exclusion_is_basename_scoped_not_docs_scoped(tmp_path: Path) -> None:
     """Deliberate, and consistent with every other member of the set --
     `archive`, `audits` and `tasks` over-match the same way. The NAME is the
     claim: a directory called `recovered` holding a live surface someone will
@@ -370,7 +370,7 @@ def test_recovered_exclusion_is_basename_scoped_not_docs_scoped(tmp_path):
     assert r["exit"] == 0, r["json"]
 
 
-def test_a_live_docs_page_with_the_same_ref_is_still_flagged(tmp_path):
+def test_a_live_docs_page_with_the_same_ref_is_still_flagged(tmp_path: Path) -> None:
     """The negative half. `docs/` itself stays swept -- the comment's own line
     is that live surfaces someone will ACT on are the whole signal this gate
     exists to produce, so the exclusion must not leak upward from
@@ -390,7 +390,7 @@ def test_a_live_docs_page_with_the_same_ref_is_still_flagged(tmp_path):
     assert r["json"]["violations"][0]["ref"] == "coordinator:ghost-thing"
 
 
-def test_engine_homed_workflow_skill_resolves(tmp_path):
+def test_engine_homed_workflow_skill_resolves(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["plan"]}},
@@ -409,7 +409,7 @@ def test_engine_homed_workflow_skill_resolves(tmp_path):
     assert "coordinator:_shared" not in vc.discover_artifacts(str(root))["skills"]
 
 
-def test_nonexistent_workflow_ref_still_flagged(tmp_path):
+def test_nonexistent_workflow_ref_still_flagged(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["plan"]}},
@@ -423,7 +423,7 @@ def test_nonexistent_workflow_ref_still_flagged(tmp_path):
     assert r["json"]["violations"][0]["ref"] == "coordinator:engine-bogus"
 
 
-def test_run_records_and_docs_research_excluded_from_sweep(tmp_path):
+def test_run_records_and_docs_research_excluded_from_sweep(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["plan"]}},
@@ -436,7 +436,7 @@ def test_run_records_and_docs_research_excluded_from_sweep(tmp_path):
     assert r["exit"] == 0, r["json"]
 
 
-def test_research_exclusion_is_scoped_to_docs_not_every_research_dir(tmp_path):
+def test_research_exclusion_is_scoped_to_docs_not_every_research_dir(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["plan"]}},
@@ -453,7 +453,7 @@ def test_research_exclusion_is_scoped_to_docs_not_every_research_dir(tmp_path):
     }
 
 
-def test_non_excluded_dir_with_same_bogus_ref_is_flagged(tmp_path):
+def test_non_excluded_dir_with_same_bogus_ref_is_flagged(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["plan"]}},
@@ -476,7 +476,7 @@ def test_non_excluded_dir_with_same_bogus_ref_is_flagged(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_default_root_uses_sentinel_when_present(tmp_path, monkeypatch):
+def test_default_root_uses_sentinel_when_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # `read_pointer_files`'s rung 1 (settings-home's own
     # `machine-local/.coordinator-content-root` durable mirror) resolves via
     # `_settings_home.settings_home()` UNCONDITIONALLY -- the injectable
@@ -496,7 +496,7 @@ def test_default_root_uses_sentinel_when_present(tmp_path, monkeypatch):
     assert result == fake_content_root
 
 
-def test_default_root_falls_back_when_sentinel_absent(tmp_path, monkeypatch):
+def test_default_root_falls_back_when_sentinel_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Same real-machine-settings-home isolation as the sibling test above --
     # without it, rung 1 can resolve against this box's actual settings-home
     # content-root pointer and this "no sentinel anywhere" case would never truly
@@ -514,17 +514,17 @@ def test_default_root_falls_back_when_sentinel_absent(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_missing_root_is_usage_error_exit_2(tmp_path):
+def test_missing_root_is_usage_error_exit_2(tmp_path: Path) -> None:
     code = vc.main(["--root", str(tmp_path / "does-not-exist")])
     assert code == 2
 
 
-def test_unknown_flag_is_usage_error_exit_2():
+def test_unknown_flag_is_usage_error_exit_2() -> None:
     code = vc.main(["--not-a-real-flag"])
     assert code == 2
 
 
-def test_report_only_forces_exit_0_despite_violations(tmp_path):
+def test_report_only_forces_exit_0_despite_violations(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["plan"]}},
@@ -541,7 +541,7 @@ def test_report_only_forces_exit_0_despite_violations(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_unreadable_subdirectory_fails_gate_not_silently_clean(tmp_path):
+def test_unreadable_subdirectory_fails_gate_not_silently_clean(tmp_path: Path) -> None:
     if os.name == "nt":
         pytest.skip("No portable way to make a Windows directory unreadable via chmod.")
         return
@@ -575,7 +575,7 @@ def test_unreadable_subdirectory_fails_gate_not_silently_clean(tmp_path):
     assert r["exit"] == 1
 
 
-def test_undecodable_file_fails_gate_not_silently_clean(tmp_path):
+def test_undecodable_file_fails_gate_not_silently_clean(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["plan"]}},
@@ -592,7 +592,7 @@ def test_undecodable_file_fails_gate_not_silently_clean(tmp_path):
     assert r["exit"] == 1
 
 
-def test_scan_incomplete_still_exit_0_under_report_only(tmp_path):
+def test_scan_incomplete_still_exit_0_under_report_only(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["plan"]}},
@@ -608,7 +608,7 @@ def test_scan_incomplete_still_exit_0_under_report_only(tmp_path):
     assert r["json"]["ok"] is False
 
 
-def test_files_scanned_count_excludes_unread_candidates(tmp_path):
+def test_files_scanned_count_excludes_unread_candidates(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["plan"]}},
@@ -641,7 +641,7 @@ def test_files_scanned_count_excludes_unread_candidates(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_independent_reconstruction_of_expected_violations(tmp_path):
+def test_independent_reconstruction_of_expected_violations(tmp_path: Path) -> None:
     # Two skills, one referenced correctly, one orphaned; one agent referenced by
     # a typo'd subagent_type; a worker bullet naming a nonexistent agent.
     root = _scaffold(
@@ -662,7 +662,7 @@ def test_independent_reconstruction_of_expected_violations(tmp_path):
     assert r["json"]["summary"]["violations"] == 3
 
 
-def test_json_envelope_top_level_keys_are_stable(tmp_path):
+def test_json_envelope_top_level_keys_are_stable(tmp_path: Path) -> None:
     root = _scaffold(
         tmp_path,
         {"coordinator": {"skills": ["plan"], "agents": ["staff-eng"]}},
@@ -698,7 +698,7 @@ def test_json_envelope_top_level_keys_are_stable(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_undocumented_marker_token_in_fence_prose_not_flagged(tmp_path):
+def test_undocumented_marker_token_in_fence_prose_not_flagged(tmp_path: Path) -> None:
     # `coordinator:totally-undocumented-marker` is NEVER listed anywhere
     # (not REF_ALLOWLIST, not the two real examples from the sender) -- this
     # proves the discriminator is shape-based (same-line marker noun), not a
@@ -718,7 +718,7 @@ def test_undocumented_marker_token_in_fence_prose_not_flagged(tmp_path):
     assert r["json"]["violations"] == []
 
 
-def test_dispatch_reference_with_distant_marker_noun_still_flagged(tmp_path):
+def test_dispatch_reference_with_distant_marker_noun_still_flagged(tmp_path: Path) -> None:
     """Regression pin for coordinator-code-reviewer bd2f004c's P2 finding: a
     genuine dispatch reference must not be dropped merely because its line
     ALSO mentions a marker noun far away in the prose -- only a marker noun
@@ -746,7 +746,7 @@ def test_dispatch_reference_with_distant_marker_noun_still_flagged(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_orphan_line_number_matches_original_file_across_frontmatter_and_fence(tmp_path):
+def test_orphan_line_number_matches_original_file_across_frontmatter_and_fence(tmp_path: Path) -> None:
     # Frontmatter (2 lines incl. delimiters) + a fenced block (3 lines) precede
     # the orphan ref -- prior to the T37 fix, strip_code_fences deleted both
     # regions outright, so the reported line number was computed against a
@@ -774,7 +774,7 @@ def test_orphan_line_number_matches_original_file_across_frontmatter_and_fence(t
     assert "coordinator:ghost-thing" in real_line, (v["line"], real_line)
 
 
-def test_hard_wrapped_hyphen_ref_resolves_not_orphaned(tmp_path):
+def test_hard_wrapped_hyphen_ref_resolves_not_orphaned(tmp_path: Path) -> None:
     # The skill name is hyphenated and the doc hard-wraps mid-name at the
     # hyphen -- prior to the T37 fix, the regex stopped at the newline
     # (not in the old `[a-z0-9\-]` class), truncating the ref to
@@ -792,7 +792,7 @@ def test_hard_wrapped_hyphen_ref_resolves_not_orphaned(tmp_path):
     assert r["json"]["summary"]["violations"] == 0
 
 
-def test_hard_wrapped_hyphen_ref_still_flagged_when_genuinely_orphaned(tmp_path):
+def test_hard_wrapped_hyphen_ref_still_flagged_when_genuinely_orphaned(tmp_path: Path) -> None:
     # Same hard-wrap shape, but the joined name has no backing artifact --
     # must still be reported as an orphan (joining must not swallow real gaps).
     root = _scaffold(tmp_path, {"coordinator": {}})
@@ -806,7 +806,7 @@ def test_hard_wrapped_hyphen_ref_still_flagged_when_genuinely_orphaned(tmp_path)
     assert "coordinator:multi-line-ghost" in refs
 
 
-def test_trailing_hyphen_allowlist_entry_still_matches_unchanged(tmp_path):
+def test_trailing_hyphen_allowlist_entry_still_matches_unchanged(tmp_path: Path) -> None:
     # Negative-spec regression: a plain trailing hyphen with no following
     # newline+alnum (the documented truncated-glob allowlist shape) must
     # still resolve via REF_ALLOWLIST, unaffected by the hard-wrap change.
@@ -820,7 +820,7 @@ def test_trailing_hyphen_allowlist_entry_still_matches_unchanged(tmp_path):
     assert r["json"]["summary"]["violations"] == 0
 
 
-def test_fork_builtin_agent_type_resolves(tmp_path):
+def test_fork_builtin_agent_type_resolves(tmp_path: Path) -> None:
     # `fork` is a harness-provided subagent_type with no on-disk artifact,
     # same class as general-purpose/Explore/Plan/statusline-setup.
     root = _scaffold(
@@ -836,7 +836,7 @@ def test_fork_builtin_agent_type_resolves(tmp_path):
     assert r["exit"] == 0, r["json"]
 
 
-def test_genuine_dispatch_reference_still_flagged(tmp_path):
+def test_genuine_dispatch_reference_still_flagged(tmp_path: Path) -> None:
     # Same token shape, same plugin prefix, but no marker noun anywhere on the
     # line -- a genuine orphaned dispatch reference must still be caught.
     root = _scaffold(
@@ -860,7 +860,7 @@ def test_genuine_dispatch_reference_still_flagged(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_repo_flag_sweeps_target_from_foreign_cwd(tmp_path, monkeypatch):
+def test_repo_flag_sweeps_target_from_foreign_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _scaffold(tmp_path, {"coordinator": {"skills": ["plan"]}})
     target = tmp_path / "target"
     _write(
@@ -881,7 +881,7 @@ def test_repo_flag_sweeps_target_from_foreign_cwd(tmp_path, monkeypatch):
     assert without_repo["exit"] == 0, without_repo["json"]
 
 
-def test_explicit_sweep_root_outranks_repo(tmp_path, monkeypatch):
+def test_explicit_sweep_root_outranks_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _scaffold(tmp_path, {"coordinator": {"skills": ["plan"]}})
     clean = tmp_path / "clean"
     clean.mkdir()
@@ -891,7 +891,7 @@ def test_explicit_sweep_root_outranks_repo(tmp_path, monkeypatch):
     assert r["json"]["sweepRoot"] == str(clean)
 
 
-def test_plugins_line_lists_only_manifest_bearing_dirs(tmp_path, capsys):
+def test_plugins_line_lists_only_manifest_bearing_dirs(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     root = _scaffold(tmp_path, {"coordinator": {"skills": ["plan"]}})
     for name in ("scratch", "state", "tasks", "archive"):
         _write(root / name / "notes.md", "# not a plugin\n")

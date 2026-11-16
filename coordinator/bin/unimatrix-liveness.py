@@ -10,6 +10,7 @@ import os
 import struct
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 CACHE_NAME = "autolink-boxes.json"
@@ -23,21 +24,21 @@ _BSDINFO_SIZE = 136
 _BSDINFO_TVSEC_OFFSET = 120
 
 
-def settings_home():
+def settings_home() -> Path:
     env = os.environ.get("COORDINATOR_SETTINGS_HOME")
     return Path(env) if env else Path.home() / ".coordinator-claude-settings"
 
 
-def state_dir(home=None):
+def state_dir(home=None) -> Path:
     return Path(home if home is not None else settings_home()) / "unimatrix"
 
 
-def _lstart(epoch):
+def _lstart(epoch) -> str:
     t = time.localtime(epoch)
     return time.strftime("%a %b ", t) + f"{t.tm_mday:2d}" + time.strftime(" %H:%M:%S %Y", t)
 
 
-def _darwin_start(pid):
+def _darwin_start(pid) -> str:
     import ctypes
     import ctypes.util
     lib = ctypes.CDLL(ctypes.util.find_library("proc") or "/usr/lib/libproc.dylib", use_errno=True)
@@ -50,7 +51,7 @@ def _darwin_start(pid):
     return _lstart(sec)
 
 
-def _linux_start(pid):
+def _linux_start(pid) -> str:
     with open(f"/proc/{pid}/stat", encoding="utf-8", errors="replace") as fh:
         stat = fh.read()
     ticks = int(stat[stat.rindex(")") + 2:].split()[19])
@@ -59,7 +60,7 @@ def _linux_start(pid):
     return _lstart(btime + ticks // os.sysconf("SC_CLK_TCK"))
 
 
-def _win_filetime(pid):
+def _win_filetime(pid) -> str:
     import ctypes
     from ctypes import wintypes
     k32 = ctypes.windll.kernel32
@@ -75,7 +76,7 @@ def _win_filetime(pid):
     return str((times[0].dwHighDateTime << 32) | times[0].dwLowDateTime)
 
 
-def proc_start(pid, platform=None):
+def proc_start(pid, platform=None) -> str:
     """Process-start stamp as the harness records it; raises OSError when the pid cannot be read."""
     plat = platform or sys.platform
     try:
@@ -286,7 +287,7 @@ def codex_thread_holder(codex_home, thread_id):
     return holder
 
 
-def codex_locks_dir():
+def codex_locks_dir() -> Path:
     return Path(os.environ.get("CODEX_HOME") or Path.home() / ".codex") / "thread-writer-locks"
 
 
@@ -326,7 +327,7 @@ def codex_probe_lines(peers_file, locks_dir):
     return lines
 
 
-def main(argv=None):
+def main(argv=None) -> int:
     args = list(sys.argv[1:] if argv is None else argv)
     if not args or args[0] != "codex-probe":
         print("usage: unimatrix-liveness.py codex-probe [--peers FILE] [--locks-dir DIR]", file=sys.stderr)
@@ -360,11 +361,10 @@ def _slug(alias):
 def healthy(state_dir, now=None, probe=None):
     """True only when the boxes cache is under 24h old and every listed alias has both supervisors live.
 
-    With `probe`, every alias is then probed concurrently (`probe(alias)` returns None when answered, a
-    reason string otherwise) and any reason makes it unhealthy; no probe runs while a supervisor is dead.
-    Speculative: no production caller passes `probe` yet (autolink calls `healthy` without it).
-
-    A fresh cache listing zero aliases is healthy; a missing or unreadable cache is not."""
+    A fresh cache listing zero aliases is healthy; a missing or unreadable cache is not.
+    `probe(alias)` is an optional far-end check returning None (answered) or a reason string; it runs
+    only after every local supervisor check passed, and any reason makes the result False. The probe
+    owns its own short deadline: healthy() adds none."""
     sdir = Path(state_dir)
     cache = sdir / CACHE_NAME
     now = time.time() if now is None else now
@@ -381,14 +381,17 @@ def healthy(state_dir, now=None, probe=None):
         rec = read_record(sdir / f"autolink-{_slug(alias)}.json")
         if not all(supervisor_live(rec.get(role) or {}) for role in ROLES):
             return False
-    if probe is not None and aliases:
-        from concurrent.futures import ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=len(aliases)) as pool:
-            return not any(list(pool.map(probe, aliases)))
+    if probe is not None:
+        if not aliases:
+            return True
+        # Concurrent: wall time is the slowest probe, not N*deadline; no short-circuit, every dead far end is recorded.
+        with ThreadPoolExecutor(max_workers=min(len(aliases), 8)) as pool:
+            answers = list(pool.map(probe, aliases))
+        return all(a is None for a in answers)
     return True
 
 
-def _backoff_path(state_dir, alias):
+def _backoff_path(state_dir, alias) -> Path:
     return Path(state_dir) / f"autolink-{_slug(alias)}.backoff.json"
 
 
@@ -398,7 +401,7 @@ def backoff_until(state_dir, alias):
     return float(until) if isinstance(until, (int, float)) and not isinstance(until, bool) else 0.0
 
 
-def note_probe(state_dir, alias, ok, now=None):
+def note_probe(state_dir, alias, ok, now=None) -> None:
     """Record a probe outcome: success removes the backoff, failure doubles it (60s base, 3600s cap)."""
     path = _backoff_path(state_dir, alias)
     if ok:

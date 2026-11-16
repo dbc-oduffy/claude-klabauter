@@ -32,6 +32,7 @@ from coordinator_core.ops.bootstrap_repo import (
     main,
 )
 from coordinator_core.win_portability import no_console_creationflags, no_console_passthrough_kwargs
+from pathlib import Path
 
 # Declared, not excused: this file spawns a real git process because
 # `_validate_target_root_is_git_repo` under test validates a real target
@@ -126,16 +127,16 @@ def _make_coordinator_root(
 
 
 @pytest.fixture
-def coordinator_root(tmp_path):
+def coordinator_root(tmp_path: Path) -> str:
     return _make_coordinator_root(tmp_path)
 
 
 @pytest.fixture(autouse=True)
-def _set_coordinator_root(monkeypatch, coordinator_root):
+def _set_coordinator_root(monkeypatch: pytest.MonkeyPatch, coordinator_root) -> None:
     monkeypatch.setenv("COORDINATOR_ROOT", coordinator_root)
 
 
-def test_help_exits_zero_and_prints_usage(capsys):
+def test_help_exits_zero_and_prints_usage(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--help"])
     assert rc == 0
     out = capsys.readouterr().out
@@ -143,32 +144,32 @@ def test_help_exits_zero_and_prints_usage(capsys):
     assert "Exit codes:" in out
 
 
-def test_root_flag_missing_value_exits_one(capsys):
+def test_root_flag_missing_value_exits_one(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--root"])
     assert rc == 1
     assert "requires an argument" in capsys.readouterr().err
 
 
-def test_unknown_flag_exits_one(capsys):
+def test_unknown_flag_exits_one(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--bogus"])
     assert rc == 1
     assert "unknown flag" in capsys.readouterr().err
 
 
-def test_unexpected_positional_exits_one(capsys):
+def test_unexpected_positional_exits_one(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["stray-arg"])
     assert rc == 1
     assert "unexpected argument" in capsys.readouterr().err
 
 
-def test_target_root_missing_exits_one(tmp_path, capsys):
+def test_target_root_missing_exits_one(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     missing = str(tmp_path / "does-not-exist")
     rc = main(["--root", missing, "--non-interactive"])
     assert rc == 1
     assert "target root does not exist" in capsys.readouterr().err
 
 
-def test_missing_scaffold_manifest_is_advisory_not_fatal(tmp_path, monkeypatch, capsys):
+def test_missing_scaffold_manifest_is_advisory_not_fatal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     empty_root = tmp_path / "empty-coordinator"
     bin_dir = empty_root / "bin"
     bin_dir.mkdir(parents=True)
@@ -197,7 +198,7 @@ def test_missing_scaffold_manifest_is_advisory_not_fatal(tmp_path, monkeypatch, 
     assert "nothing to commit" in out.out
 
 
-def test_resolve_scaffold_manifest_root_rung_one_hit_skips_fallback(tmp_path, monkeypatch):
+def test_resolve_scaffold_manifest_root_rung_one_hit_skips_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     coordinator_root = _make_coordinator_root(tmp_path, name="rung-one-hit-coordinator")
     monkeypatch.setattr(
         "coordinator_core.ops.bootstrap_repo._content_root_rungs_2_to_4",
@@ -209,7 +210,7 @@ def test_resolve_scaffold_manifest_root_rung_one_hit_skips_fallback(tmp_path, mo
     assert result == coordinator_root
 
 
-def test_resolve_scaffold_manifest_root_rung_one_miss_rung_two_hit(tmp_path, monkeypatch):
+def test_resolve_scaffold_manifest_root_rung_one_miss_rung_two_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     empty_root = tmp_path / "empty-coordinator"
     (empty_root / "bin").mkdir(parents=True)
     fallback_root = _make_coordinator_root(tmp_path, name="fallback-coordinator")
@@ -229,7 +230,7 @@ def test_resolve_scaffold_manifest_root_rung_one_miss_rung_two_hit(tmp_path, mon
     assert result == str(content_root / "coordinator")
 
 
-def test_resolve_scaffold_manifest_root_all_rungs_miss_stays_loud(tmp_path, monkeypatch, capsys):
+def test_resolve_scaffold_manifest_root_all_rungs_miss_stays_loud(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     empty_root = tmp_path / "empty-coordinator"
     (empty_root / "bin").mkdir(parents=True)
     (empty_root / "bin" / "check-install-divergence.py").write_text(
@@ -261,7 +262,7 @@ def test_resolve_scaffold_manifest_root_all_rungs_miss_stays_loud(tmp_path, monk
     assert "nothing to commit" in out.out
 
 
-def test_non_git_non_interactive_exits_two_and_writes_nothing(tmp_path, capsys):
+def test_non_git_non_interactive_exits_two_and_writes_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     target = tmp_path / "target"
     target.mkdir()
     rc = main(["--root", str(target), "--non-interactive"])
@@ -270,13 +271,13 @@ def test_non_git_non_interactive_exits_two_and_writes_nothing(tmp_path, capsys):
     assert list(target.iterdir()) == []
 
 
-def _claude_home_env(monkeypatch, home):
+def _claude_home_env(monkeypatch, home) -> None:
     monkeypatch.setenv("HOME", str(home))
     monkeypatch.delenv("USERPROFILE", raising=False)
     monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
 
 
-def test_claude_home_target_is_refused_before_any_stage(tmp_path, monkeypatch, capsys):
+def test_claude_home_target_is_refused_before_any_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     home = tmp_path / "home"
     claude_home = home / ".claude"
     claude_home.mkdir(parents=True)
@@ -289,7 +290,7 @@ def test_claude_home_target_is_refused_before_any_stage(tmp_path, monkeypatch, c
     assert sorted(p.name for p in claude_home.iterdir()) == before
 
 
-def test_claude_config_dir_is_claude_home_for_the_refusal(tmp_path, monkeypatch, capsys):
+def test_claude_config_dir_is_claude_home_for_the_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     config_dir = tmp_path / "custom-claude-config"
     config_dir.mkdir()
     _init_git(str(config_dir))
@@ -300,11 +301,11 @@ def test_claude_config_dir_is_claude_home_for_the_refusal(tmp_path, monkeypatch,
     assert "resolves to Claude Home" in capsys.readouterr().err
 
 
-def test_eof_at_git_init_prompt_defaults_to_accept(tmp_path, monkeypatch):
+def test_eof_at_git_init_prompt_defaults_to_accept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "target"
     target.mkdir()
 
-    def _eof_input(_prompt=""):
+    def _eof_input(_prompt: str = ""):
         raise EOFError
 
     monkeypatch.setattr("builtins.input", _eof_input)
@@ -314,7 +315,7 @@ def test_eof_at_git_init_prompt_defaults_to_accept(tmp_path, monkeypatch):
     assert _commit_subject(str(target)) == "chore(coordinator): bootstrap"
 
 
-def test_dirty_tree_non_interactive_exits_three(tmp_path, capsys):
+def test_dirty_tree_non_interactive_exits_three(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -327,7 +328,7 @@ def test_dirty_tree_non_interactive_exits_three(tmp_path, capsys):
     assert "uncommitted changes" in capsys.readouterr().out
 
 
-def test_unverifiable_status_aborts_rather_than_proceeding(tmp_path, monkeypatch, capsys):
+def test_unverifiable_status_aborts_rather_than_proceeding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """BEHAVIOUR CHANGE regression (2026-07-22): a git-status check that fails
     (timeout/OSError/nonzero rc) is UNKNOWN, not clean — previously
     `_git_status_porcelain` returned "" for both cases, so this gate treated
@@ -347,7 +348,7 @@ def test_unverifiable_status_aborts_rather_than_proceeding(tmp_path, monkeypatch
     assert "unable to verify" in capsys.readouterr().out.lower()
 
 
-def test_unverifiable_status_dry_run_reports_would_be_refused(tmp_path, monkeypatch, capsys):
+def test_unverifiable_status_dry_run_reports_would_be_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -362,7 +363,7 @@ def test_unverifiable_status_dry_run_reports_would_be_refused(tmp_path, monkeypa
     assert "UNABLE TO VERIFY" in capsys.readouterr().out
 
 
-def test_eof_at_dirty_tree_prompt_defaults_to_decline(tmp_path, monkeypatch):
+def test_eof_at_dirty_tree_prompt_defaults_to_decline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Negative-spec regression: bash `${_reply:-N}` on EOF declines the dirty-tree
     force-proceed prompt -- the OPPOSITE polarity of the git-init prompt's EOF
     default. Both must be reproduced, not collapsed to one behavior."""
@@ -373,7 +374,7 @@ def test_eof_at_dirty_tree_prompt_defaults_to_decline(tmp_path, monkeypatch):
     with open(target / "dirty.txt", "w", encoding="utf-8") as fh:
         fh.write("uncommitted\n")
 
-    def _eof_input(_prompt=""):
+    def _eof_input(_prompt: str = ""):
         raise EOFError
 
     monkeypatch.setattr("builtins.input", _eof_input)
@@ -381,7 +382,7 @@ def test_eof_at_dirty_tree_prompt_defaults_to_decline(tmp_path, monkeypatch):
     assert rc == 3
 
 
-def test_dry_run_prints_plan_and_makes_no_commit(tmp_path, capsys):
+def test_dry_run_prints_plan_and_makes_no_commit(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -396,7 +397,7 @@ def test_dry_run_prints_plan_and_makes_no_commit(tmp_path, capsys):
     assert not (target / "state").exists()
 
 
-def test_first_bootstrap_creates_commit(tmp_path):
+def test_first_bootstrap_creates_commit(tmp_path: Path) -> None:
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -408,7 +409,7 @@ def test_first_bootstrap_creates_commit(tmp_path):
     assert (target / "state" / "orientation_cache.md").is_file()
 
 
-def test_forced_dirty_tree_commit_does_not_absorb_unrelated_staged_file(tmp_path, monkeypatch):
+def test_forced_dirty_tree_commit_does_not_absorb_unrelated_staged_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -441,7 +442,7 @@ def test_forced_dirty_tree_commit_does_not_absorb_unrelated_staged_file(tmp_path
     assert "unrelated.txt" in still_staged
 
 
-def test_second_bootstrap_is_noop_when_nothing_to_stage(tmp_path, capsys):
+def test_second_bootstrap_is_noop_when_nothing_to_stage(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -456,7 +457,7 @@ def test_second_bootstrap_is_noop_when_nothing_to_stage(tmp_path, capsys):
     assert _head_sha(str(target)) == sha_after_first
 
 
-def test_conflict_warn_gate_fires_exit_four(tmp_path, monkeypatch):
+def test_conflict_warn_gate_fires_exit_four(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -487,7 +488,7 @@ def test_conflict_warn_gate_fires_exit_four(tmp_path, monkeypatch):
     assert rc == 4
 
 
-def test_dry_run_scaffold_failure_is_advisory_not_propagated(tmp_path, monkeypatch, capsys):
+def test_dry_run_scaffold_failure_is_advisory_not_propagated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -515,7 +516,7 @@ def test_dry_run_scaffold_failure_is_advisory_not_propagated(tmp_path, monkeypat
     assert "scaffold dry-run failed" in out
 
 
-def test_pre_commit_hook_rejection_propagates_and_skips_completion_trailer(tmp_path, capfd):
+def test_pre_commit_hook_rejection_propagates_and_skips_completion_trailer(tmp_path: Path, capfd: pytest.CaptureFixture[str]) -> None:
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -544,7 +545,7 @@ def test_pre_commit_hook_rejection_propagates_and_skips_completion_trailer(tmp_p
     assert "bootstrap complete" not in captured.out
 
 
-def test_validate_target_root_valid_git_repo(tmp_path):
+def test_validate_target_root_valid_git_repo(tmp_path: Path) -> None:
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -554,7 +555,7 @@ def test_validate_target_root_valid_git_repo(tmp_path):
     assert result == {"valid": True, "reason": None}
 
 
-def test_validate_target_root_missing_directory(tmp_path):
+def test_validate_target_root_missing_directory(tmp_path: Path) -> None:
     missing = tmp_path / "does-not-exist"
 
     result = _validate_target_root_is_git_repo(str(missing))
@@ -563,7 +564,7 @@ def test_validate_target_root_missing_directory(tmp_path):
     assert "does not exist" in result["reason"]
 
 
-def test_validate_target_root_directory_not_a_git_repo(tmp_path):
+def test_validate_target_root_directory_not_a_git_repo(tmp_path: Path) -> None:
     target = tmp_path / "plain-dir"
     target.mkdir()
 
@@ -573,7 +574,7 @@ def test_validate_target_root_directory_not_a_git_repo(tmp_path):
     assert "not a git repository" in result["reason"]
 
 
-def test_validate_target_root_double_invocation_is_a_safe_no_op(tmp_path):
+def test_validate_target_root_double_invocation_is_a_safe_no_op(tmp_path: Path) -> None:
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -584,7 +585,7 @@ def test_validate_target_root_double_invocation_is_a_safe_no_op(tmp_path):
     assert first == second == {"valid": True, "reason": None}
 
 
-def test_validate_target_root_op_handler_returns_contract_shape(tmp_path):
+def test_validate_target_root_op_handler_returns_contract_shape(tmp_path: Path) -> None:
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -594,7 +595,7 @@ def test_validate_target_root_op_handler_returns_contract_shape(tmp_path):
     assert result == {"valid": True, "reason": None}
 
 
-def test_validate_target_root_op_handler_requires_target_root_param():
+def test_validate_target_root_op_handler_requires_target_root_param() -> None:
     with pytest.raises(ValueError):
         _validate_target_root_op({})
 
@@ -617,7 +618,7 @@ def _multi_entry_coordinator_root(tmp_path, n: int, name: str = "fake-coordinato
     return _make_coordinator_root(tmp_path, manifest_body=manifest_body, name=name)
 
 
-def test_stage_five_batches_add_into_one_call_not_per_file(tmp_path, monkeypatch):
+def test_stage_five_batches_add_into_one_call_not_per_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -647,7 +648,7 @@ def test_stage_five_batches_add_into_one_call_not_per_file(tmp_path, monkeypatch
         assert (target / "state" / f"scaffolded-{i}.md").is_file()
 
 
-def test_batch_paths_by_byte_budget_splits_on_bytes_not_count():
+def test_batch_paths_by_byte_budget_splits_on_bytes_not_count() -> None:
     """Byte-budget regression (AC-7; Review: code-reviewer P2). Uses
     realistically long paths (80+ chars, matching this repo's own
     `state/bug-backlog/<date>-<slug>-<hash>.yaml`-shaped scaffold output) --
@@ -684,7 +685,7 @@ def test_batch_paths_by_byte_budget_splits_on_bytes_not_count():
         assert composed <= _STAGE_BATCH_MAX_ARGV_BYTES
 
 
-def test_batch_paths_by_byte_budget_never_drops_an_oversized_single_path():
+def test_batch_paths_by_byte_budget_never_drops_an_oversized_single_path() -> None:
     from coordinator_core.ops.bootstrap_repo import (
         _STAGE_BATCH_MAX_ARGV_BYTES,
         _batch_paths_by_byte_budget,
@@ -701,7 +702,7 @@ def test_batch_paths_by_byte_budget_never_drops_an_oversized_single_path():
     assert any(batch == [huge_path] for batch in batches)
 
 
-def test_stage_five_add_retries_through_lock_contention(tmp_path, monkeypatch):
+def test_stage_five_add_retries_through_lock_contention(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -736,7 +737,7 @@ def test_stage_five_add_retries_through_lock_contention(tmp_path, monkeypatch):
     assert (target / "state" / "orientation_cache.md").is_file()
 
 
-def test_extract_failed_path_ignores_unrelated_quoted_substring():
+def test_extract_failed_path_ignores_unrelated_quoted_substring() -> None:
     stderr = (
         "hint: Waiting for your editor to close the file... 'core.editor' is unset\n"
         "hint: see 'git help config' for more details\n"
@@ -744,12 +745,12 @@ def test_extract_failed_path_ignores_unrelated_quoted_substring():
     assert _extract_failed_path_from_git_stderr(stderr) is None
 
 
-def test_extract_failed_path_matches_known_pathspec_template():
+def test_extract_failed_path_matches_known_pathspec_template() -> None:
     stderr = "fatal: pathspec 'state/foo/bar.md' did not match any files\n"
     assert _extract_failed_path_from_git_stderr(stderr) == "state/foo/bar.md"
 
 
-def test_extract_failed_path_ignores_unrelated_quote_preceding_real_failure():
+def test_extract_failed_path_ignores_unrelated_quote_preceding_real_failure() -> None:
     stderr = (
         "hint: see 'git help config' for more details\n"
         "fatal: pathspec 'state/real-failure.md' did not match any files\n"
@@ -757,12 +758,12 @@ def test_extract_failed_path_ignores_unrelated_quote_preceding_real_failure():
     assert _extract_failed_path_from_git_stderr(stderr) == "state/real-failure.md"
 
 
-def test_extract_failed_path_returns_none_for_no_stderr():
+def test_extract_failed_path_returns_none_for_no_stderr() -> None:
     assert _extract_failed_path_from_git_stderr(None) is None
     assert _extract_failed_path_from_git_stderr("") is None
 
 
-def test_git_add_batch_env_pins_locale_without_dropping_ambient_env(monkeypatch):
+def test_git_add_batch_env_pins_locale_without_dropping_ambient_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LC_ALL", "fr_FR.UTF-8")
     monkeypatch.setenv("SOME_UNRELATED_VAR", "keep-me")
     env = _git_add_batch_env()
@@ -773,7 +774,7 @@ def test_git_add_batch_env_pins_locale_without_dropping_ambient_env(monkeypatch)
     assert env.get("PATH") == os.environ.get("PATH")
 
 
-def test_stage_five_add_failure_warning_uses_locale_pinned_extraction(tmp_path, monkeypatch, capfd):
+def test_stage_five_add_failure_warning_uses_locale_pinned_extraction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]) -> None:
     target = tmp_path / "target"
     target.mkdir()
     _init_git(str(target))
@@ -799,7 +800,7 @@ def test_stage_five_add_failure_warning_uses_locale_pinned_extraction(tmp_path, 
         assert env.get("LC_ALL") == "C"
 
 
-def _pointer_home(tmp_path, monkeypatch, content_root):
+def _pointer_home(tmp_path, monkeypatch, content_root) -> str:
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     (home / ".claude" / ".coordinator-content-root").write_text(str(content_root), encoding="utf-8")
@@ -807,7 +808,7 @@ def _pointer_home(tmp_path, monkeypatch, content_root):
     return str(tmp_path / "claude-home")
 
 
-def test_pointer_rung_resolves_the_private_authoring_tree(tmp_path, monkeypatch):
+def test_pointer_rung_resolves_the_private_authoring_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.bootstrap_repo import _content_root_rungs_2_to_4
 
     content_root = tmp_path / "coordinator-content-repo"
@@ -817,7 +818,7 @@ def test_pointer_rung_resolves_the_private_authoring_tree(tmp_path, monkeypatch)
     assert _content_root_rungs_2_to_4(claude_home) == str(content_root / "coordinator")
 
 
-def test_pointer_rung_resolves_the_published_flat_mirror(tmp_path, monkeypatch):
+def test_pointer_rung_resolves_the_published_flat_mirror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.bootstrap_repo import _content_root_rungs_2_to_4
 
     content_root = tmp_path / "coordinator-claude"
@@ -828,7 +829,7 @@ def test_pointer_rung_resolves_the_published_flat_mirror(tmp_path, monkeypatch):
     assert _content_root_rungs_2_to_4(claude_home) == str(content_root)
 
 
-def test_pointer_rung_skips_a_bare_directory_and_falls_through(tmp_path, monkeypatch):
+def test_pointer_rung_skips_a_bare_directory_and_falls_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.bootstrap_repo import _content_root_rungs_2_to_4
 
     content_root = tmp_path / "bare"

@@ -8,6 +8,7 @@ from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import halted_record_commit, run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM
+import pytest
 
 RUN = "ask-20261023T000000-aaaaaa"
 OTHER = "ask-20261023T000000-bbbbbb"
@@ -43,7 +44,7 @@ def _root(tmp_path: Path, monkeypatch) -> Path:
     return tmp_path
 
 
-def test_unverified_token_keeps_own_twin_but_sweeps_aged(tmp_path, monkeypatch):
+def test_unverified_token_keeps_own_twin_but_sweeps_aged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path, monkeypatch)
     run_token.mint(root, RUN, SCRIPT)
     own = _twin(root, RUN)
@@ -57,7 +58,7 @@ def test_unverified_token_keeps_own_twin_but_sweeps_aged(tmp_path, monkeypatch):
     assert not aged.exists()
 
 
-def test_verified_token_removes_own_twin_and_sweeps_aged(tmp_path, monkeypatch):
+def test_verified_token_removes_own_twin_and_sweeps_aged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path, monkeypatch)
     token = run_token.mint(root, RUN, SCRIPT)
     own = _twin(root, RUN)
@@ -73,7 +74,7 @@ def test_verified_token_removes_own_twin_and_sweeps_aged(tmp_path, monkeypatch):
     assert fresh_foreign.exists()
 
 
-def test_tokenless_commit_keeps_own_twin_but_sweeps_aged(tmp_path, monkeypatch):
+def test_tokenless_commit_keeps_own_twin_but_sweeps_aged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path, monkeypatch)
     own = _twin(root, RUN)
     aged = _twin(root, OTHER)

@@ -30,13 +30,14 @@ import subprocess
 import pytest
 
 from coordinator_core.git import commit as gcommit
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
-def _git(repo, *args, check=True):
+def _git(repo, *args, check: bool = True):
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **_NOWIN
     )
@@ -60,7 +61,7 @@ def _ls_files_mode(repo, path):
     return out.split()[0]
 
 
-def test_stage_paths_in_process_preserves_existing_exec_mode(tmp_path):
+def test_stage_paths_in_process_preserves_existing_exec_mode(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "run.sh").write_bytes(b"#!/bin/sh\necho one\n")
     blob = _git(repo, "hash-object", "-w", "--", "run.sh").stdout.strip()
@@ -78,7 +79,7 @@ def test_stage_paths_in_process_preserves_existing_exec_mode(tmp_path):
     )
 
 
-def test_stage_paths_in_process_new_file_still_defaults_to_100644(tmp_path):
+def test_stage_paths_in_process_new_file_still_defaults_to_100644(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
 
@@ -88,7 +89,7 @@ def test_stage_paths_in_process_new_file_still_defaults_to_100644(tmp_path):
     assert _ls_files_mode(repo, "new.txt") == "100644"
 
 
-def test_stage_paths_in_process_preserves_exec_mode_via_fallback_leg(tmp_path):
+def test_stage_paths_in_process_preserves_exec_mode_via_fallback_leg(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / ".gitattributes").write_text(
         "*.cmd text eol=crlf\n", encoding="utf-8", newline="\n"
@@ -134,14 +135,14 @@ def _attrs_repo(tmp_path):
     return repo
 
 
-def test_cr_bearing_eol_crlf_pin_refuses_without_fallback(tmp_path):
+def test_cr_bearing_eol_crlf_pin_refuses_without_fallback(tmp_path: Path) -> None:
     repo = _attrs_repo(tmp_path)
     (repo / "run.cmd").write_bytes(b"echo one\r\necho two\r\n")
     with pytest.raises(gcommit.FilterUnsupported, match="run.cmd"):
         gcommit.commit_paths(repo, ["run.cmd"], "no fallback")
 
 
-def test_cr_bearing_eol_crlf_pin_routes_through_fallback(tmp_path):
+def test_cr_bearing_eol_crlf_pin_routes_through_fallback(tmp_path: Path) -> None:
     repo = _attrs_repo(tmp_path)
     (repo / "run.cmd").write_bytes(b"echo one\r\necho two\r\n")
 
@@ -166,7 +167,7 @@ def test_cr_bearing_eol_crlf_pin_routes_through_fallback(tmp_path):
     assert _git(repo, "rev-parse", "HEAD:run.cmd").stdout.strip() == expected_blob
 
 
-def test_text_eol_lf_cr_free_content_never_calls_fallback(tmp_path):
+def test_text_eol_lf_cr_free_content_never_calls_fallback(tmp_path: Path) -> None:
     repo = _attrs_repo(tmp_path)
     (repo / "run.sh").write_text("echo one\necho two\n", encoding="utf-8", newline="\n")
 
@@ -180,7 +181,7 @@ def test_text_eol_lf_cr_free_content_never_calls_fallback(tmp_path):
     assert _git(repo, "status", "--porcelain").stdout.strip() == ""
 
 
-def test_binary_pin_never_calls_fallback_even_with_cr_bytes(tmp_path):
+def test_binary_pin_never_calls_fallback_even_with_cr_bytes(tmp_path: Path) -> None:
     repo = _attrs_repo(tmp_path)
     (repo / "_goldens").mkdir()
     (repo / "_goldens" / "fixture.bin").write_bytes(b"line one\r\nline two\r\n")
@@ -245,7 +246,7 @@ def _oracle_blob(repo, rel):
         ("crlf_inside_nul_content", b"bin\x00head\r\nmore\x00\r\ntail\r\n"),
     ],
 )
-def test_unattributed_cr_content_autocrlf_true_matches_oracle(tmp_path, name, content):
+def test_unattributed_cr_content_autocrlf_true_matches_oracle(tmp_path: Path, name, content) -> None:
     repo = _autocrlf_repo(tmp_path, "true")
     rel = f"{name}.dat"
     (repo / rel).write_bytes(content)
@@ -261,7 +262,7 @@ def test_unattributed_cr_content_autocrlf_true_matches_oracle(tmp_path, name, co
 
 
 @pytest.mark.parametrize("value", ["input", "false"])
-def test_unattributed_cr_content_autocrlf_non_true_refuses_without_fallback(tmp_path, value):
+def test_unattributed_cr_content_autocrlf_non_true_refuses_without_fallback(tmp_path: Path, value) -> None:
     repo = _autocrlf_repo(tmp_path, value)
     rel = "crlf.dat"
     (repo / rel).write_bytes(b"line one\r\nline two\r\n")
@@ -270,7 +271,7 @@ def test_unattributed_cr_content_autocrlf_non_true_refuses_without_fallback(tmp_
         gcommit.commit_paths(repo, [rel], "no fallback")
 
 
-def test_unattributed_cr_content_autocrlf_unset_refuses_without_fallback(tmp_path, monkeypatch):
+def test_unattributed_cr_content_autocrlf_unset_refuses_without_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """No `core.autocrlf` set at all -- `_repo_autocrlf_true` must answer
     False, and the CR-bearing unattributed path refuses exactly as the
     `false` case does.
@@ -310,7 +311,7 @@ def test_unattributed_cr_content_autocrlf_unset_refuses_without_fallback(tmp_pat
 # peer-held lock refuses with `CommitRefused`: no commit, index byte-identical.
 
 
-def test_lock_held_during_splice_refuses_before_anything_lands(tmp_path, monkeypatch):
+def test_lock_held_during_splice_refuses_before_anything_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gcommit, "_SPLICE_LOCK_BACKOFF_SECS", ())
     repo = _repo(tmp_path)
     (repo / "seed.txt").write_text("changed\n", encoding="utf-8", newline="\n")
@@ -330,7 +331,7 @@ def test_lock_held_during_splice_refuses_before_anything_lands(tmp_path, monkeyp
     assert (repo / ".git" / "index").read_bytes() == index_bytes_before
 
 
-def test_busy_lock_refusal_message_says_nothing_landed_and_retry_is_safe(tmp_path, monkeypatch):
+def test_busy_lock_refusal_message_says_nothing_landed_and_retry_is_safe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gcommit, "_SPLICE_LOCK_BACKOFF_SECS", ())
     repo = _repo(tmp_path)
     (repo / "seed.txt").write_text("changed\n", encoding="utf-8", newline="\n")
@@ -345,7 +346,7 @@ def test_busy_lock_refusal_message_says_nothing_landed_and_retry_is_safe(tmp_pat
     assert "LANDED" not in text
 
 
-def test_ordinary_commit_still_splices_and_raises_nothing(tmp_path):
+def test_ordinary_commit_still_splices_and_raises_nothing(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "seed.txt").write_text("changed\n", encoding="utf-8", newline="\n")
 

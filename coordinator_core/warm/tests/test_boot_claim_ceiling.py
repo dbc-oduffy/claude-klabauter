@@ -25,6 +25,7 @@ primitive no longer reads.
 from __future__ import annotations
 
 from coordinator_core.warm import breadcrumb as bc
+from pathlib import Path
 
 _CLAIMED_AT = 1_756_800_000.0
 
@@ -33,22 +34,22 @@ _CLAIMED_AT = 1_756_800_000.0
 _EXPIRED = _CLAIMED_AT + bc.BOOT_CLAIM_MAX_SECS + 0.01
 
 
-def _lock(tmp_path):
+def _lock(tmp_path) -> Path:
     return bc.boot_lock_path(tmp_path / "warm-http.json")
 
 
 class TestBootClaimCeiling:
-    def test_a_fresh_claim_still_blocks_a_second_caller(self, tmp_path):
+    def test_a_fresh_claim_still_blocks_a_second_caller(self, tmp_path: Path) -> None:
         assert bc.try_claim_boot(_lock(tmp_path), now=_CLAIMED_AT) is True
         assert bc.try_claim_boot(_lock(tmp_path), now=_CLAIMED_AT) is False
 
-    def test_a_claim_older_than_the_ceiling_stops_vouching(self, tmp_path):
+    def test_a_claim_older_than_the_ceiling_stops_vouching(self, tmp_path: Path) -> None:
         lock = _lock(tmp_path)
         assert bc.try_claim_boot(lock, now=_CLAIMED_AT) is True
 
         assert bc.try_claim_boot(lock, now=_EXPIRED) is True
 
-    def test_passing_the_ceiling_restamps_so_the_herd_is_bounded_too(self, tmp_path):
+    def test_passing_the_ceiling_restamps_so_the_herd_is_bounded_too(self, tmp_path: Path) -> None:
         lock = _lock(tmp_path)
         bc.try_claim_boot(lock, now=_CLAIMED_AT)
 
@@ -56,8 +57,8 @@ class TestBootClaimCeiling:
         assert bc.try_claim_boot(lock, now=_EXPIRED) is False
 
     def test_the_ceiling_is_measured_from_the_claim_not_the_files_creation(
-        self, tmp_path
-    ):
+        self, tmp_path: Path
+    ) -> None:
         lock = _lock(tmp_path)
         bc.try_claim_boot(lock, now=_CLAIMED_AT)
         assert bc.try_claim_boot(lock, now=_EXPIRED) is True
@@ -66,13 +67,13 @@ class TestBootClaimCeiling:
 
 
 class TestDecisionBodyHonoursIt:
-    def test_no_record_plus_an_expired_claim_means_spawn(self, tmp_path):
+    def test_no_record_plus_an_expired_claim_means_spawn(self, tmp_path: Path) -> None:
         lock = _lock(tmp_path)
         bc.try_claim_boot(lock, now=_CLAIMED_AT)
 
         assert bc.should_spawn_decision(None, lock_path=lock, now=_EXPIRED) is True
 
-    def test_no_record_plus_a_live_claim_still_means_wait(self, tmp_path):
+    def test_no_record_plus_a_live_claim_still_means_wait(self, tmp_path: Path) -> None:
         lock = _lock(tmp_path)
         bc.try_claim_boot(lock, now=_CLAIMED_AT)
 

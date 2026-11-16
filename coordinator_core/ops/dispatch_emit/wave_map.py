@@ -275,9 +275,104 @@ def _writes_overlap(a: EmitterRow, b: EmitterRow) -> bool:
     """
     if a.writes is UNDECLARED or b.writes is UNDECLARED:
         return True
-    a_paths = [*a.writes, *a.writes_under]
-    b_paths = [*b.writes, *b.writes_under]
-    return any(_paths_overlap(x, y) for x in a_paths for y in b_paths)
+    a_paths, a_above = _overlap_profile((*a.writes, *a.writes_under))
+    b_paths, b_above = _overlap_profile((*b.writes, *b.writes_under))
+    return not (
+        a_paths.isdisjoint(b_paths)
+        and a_paths.isdisjoint(b_above)
+        and a_above.isdisjoint(b_paths)
+    )
+
+
+@functools.lru_cache(maxsize=16384)
+def _overlap_profile(paths: tuple) -> tuple[frozenset, frozenset]:
+    """The normalized ``paths`` and every strict ancestor of them, so two rows'
+    overlap is set intersection (equal path, or one a strict ancestor of the
+    other: the ``_paths_overlap`` relation) rather than an all-pairs scan."""
+    normalized = {_normalize_path(p) for p in paths}
+    above: set[str] = set()
+    for path in normalized:
+        if path.startswith("/"):
+            above.add("/")
+        elif path != ".":
+            above.add(".")
+        parent = posixpath.dirname(path)
+        while parent and parent != path:
+            above.add(parent)
+            path, parent = parent, posixpath.dirname(parent)
+    return frozenset(normalized), frozenset(above)
+
+
+class _WaveWrites:
+    """One wave's write profile: ``collides(row)`` is True exactly when
+    ``_writes_overlap(row, placed)`` holds for some placed row, answered by
+    set intersection against the wave's union rather than a scan of its rows."""
+
+    __slots__ = ("paths", "above", "undeclared", "size")
+
+    def __init__(self) -> None:
+        self.paths: set[str] = set()
+        self.above: set[str] = set()
+        self.undeclared = False
+        self.size = 0
+
+    def collides(self, row) -> bool:
+        if not self.size:
+            return False
+        if row.writes is UNDECLARED or self.undeclared:
+            return True
+        paths, above = _overlap_profile((*row.writes, *row.writes_under))
+        return not (
+            self.paths.isdisjoint(paths)
+            and self.paths.isdisjoint(above)
+            and self.above.isdisjoint(paths)
+        )
+
+    def add(self, row) -> None:
+        self.size += 1
+        if row.writes is UNDECLARED:
+            self.undeclared = True
+            return
+        paths, above = _overlap_profile((*row.writes, *row.writes_under))
+        self.paths |= paths
+        self.above |= above
+
+
+class _EarlierWrites:
+    """Inverted index over the waves placed before a row's own: the ids of the
+    rows whose writes overlap it, in time proportional to the hits."""
+
+    def __init__(self, waves) -> None:
+        self._waves = waves
+        self._by_path: dict[str, list[str]] = {}
+        self._by_ancestor: dict[str, list[str]] = {}
+        self._all: list[str] = []
+        self._undeclared: list[str] = []
+        self._indexed = 0
+
+    def overlapping_ids(self, row, own_wave: int) -> set[str]:
+        while self._indexed < own_wave:
+            for other in self._waves[self._indexed]:
+                self._all.append(other.id)
+                if other.writes is UNDECLARED:
+                    self._undeclared.append(other.id)
+                    continue
+                paths, above = _overlap_profile((*other.writes, *other.writes_under))
+                for path in paths:
+                    self._by_path.setdefault(path, []).append(other.id)
+                for ancestor in above:
+                    self._by_ancestor.setdefault(ancestor, []).append(other.id)
+            self._indexed += 1
+        if row.writes is UNDECLARED:
+            return set(self._all)
+        hits = set(self._undeclared)
+        paths, above = _overlap_profile((*row.writes, *row.writes_under))
+        for path in paths:
+            hits.update(self._by_path.get(path, ()))
+            hits.update(self._by_ancestor.get(path, ()))
+        for ancestor in above:
+            hits.update(self._by_path.get(ancestor, ()))
+        return hits
 
 
 def _declared_closure(declared: dict[str, set[str]]) -> dict[str, set[str]]:
@@ -453,6 +548,16 @@ def _predecessors(
 
     declared_closure = _declared_closure(declared)
 
+    readers_at: dict[str, set[int]] = {}
+    readers_below: dict[str, set[int]] = {}
+    for position, reader in enumerate(rows):
+        for read_path in reader.reads:
+            normalized, above = _overlap_profile((read_path,))
+            for path in normalized:
+                readers_at.setdefault(path, set()).add(position)
+            for ancestor in above:
+                readers_below.setdefault(ancestor, set()).add(position)
+
     for writer in rows:
         if writer.writes is UNDECLARED or not isinstance(writer.writes, list):
             continue
@@ -460,7 +565,16 @@ def _predecessors(
         write_prefixes = {
             _normalize_path(prefix): prefix for prefix in writer.writes_under
         }
-        for reader in rows:
+        candidates: set[int] = set()
+        for path in write_paths:
+            candidates |= readers_at.get(path, set())
+        for prefix in write_prefixes:
+            candidates |= readers_at.get(prefix, set())
+            candidates |= readers_below.get(prefix, set())
+            for ancestor in _overlap_profile((prefix,))[1]:
+                candidates |= readers_at.get(ancestor, set())
+        for position in sorted(candidates):
+            reader = rows[position]
             if reader.id == writer.id:
                 continue
             collisions = []
@@ -791,6 +905,7 @@ def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
 
     wave_of: dict[str, int] = {}
     waves: list[list[EmitterRow]] = []
+    wave_index: list[_WaveWrites] = []
 
     for row in order:
         min_wave = 0
@@ -803,10 +918,11 @@ def build_waves(rows: list[EmitterRow]) -> list[list[WaveRow]]:
         while True:
             if candidate >= len(waves):
                 waves.append([])
-            if all(
-                not _writes_overlap(row, placed) for placed in waves[candidate]
-            ):
+            if candidate >= len(wave_index):
+                wave_index.append(_WaveWrites())
+            if not wave_index[candidate].collides(row):
                 waves[candidate].append(row)
+                wave_index[candidate].add(row)
                 wave_of[row.id] = candidate
                 break
             candidate += 1
@@ -869,14 +985,12 @@ def dag_from_waves(waves: list[list[WaveRow]]) -> DagPlan:
     nodes: list[DagNode] = []
     depth: dict[str, int] = {}
     depth_counts: dict[int, int] = {}
+    earlier = _EarlierWrites(waves)
 
     for row in flat:
         after_ids = set(preds[row.id])
         own_wave = wave_of[row.id]
-        for earlier_wave in waves[:own_wave]:
-            for other in earlier_wave:
-                if _writes_overlap(row, other):
-                    after_ids.add(other.id)
+        after_ids.update(earlier.overlapping_ids(row, own_wave))
 
         after = tuple(
             sorted(after_ids, key=lambda rid: order_index[rid])

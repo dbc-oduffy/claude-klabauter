@@ -5,6 +5,7 @@ import subprocess
 import pytest
 
 from coordinator_core.git import commit as gcommit
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -33,7 +34,7 @@ def _mode(repo, path):
     return _git(repo, "ls-tree", "HEAD", "--", path).split()[0]
 
 
-def test_declared_mode_wins_for_a_new_path(tmp_path):
+def test_declared_mode_wins_for_a_new_path(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "a.sh").write_bytes(b"#!/bin/sh\n")
     (repo / "b.txt").write_bytes(b"b\n")
@@ -42,14 +43,14 @@ def test_declared_mode_wins_for_a_new_path(tmp_path):
     assert _mode(repo, "b.txt") == "100644"
 
 
-def test_declared_mode_overrides_a_tracked_entry(tmp_path):
+def test_declared_mode_overrides_a_tracked_entry(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "seed.txt").write_bytes(b"seed2\n")
     gcommit.commit_paths(repo, ["seed.txt"], "m", modes={"seed.txt": 0o100755})
     assert _mode(repo, "seed.txt") == "100755"
 
 
-def test_declared_mode_key_with_backslashes_is_normalised(tmp_path):
+def test_declared_mode_key_with_backslashes_is_normalised(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "d").mkdir()
     (repo / "d" / "e.sh").write_bytes(b"x\n")
@@ -57,7 +58,7 @@ def test_declared_mode_key_with_backslashes_is_normalised(tmp_path):
     assert _mode(repo, "d/e.sh") == "100755"
 
 
-def test_no_modes_keeps_default(tmp_path):
+def test_no_modes_keeps_default(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "c.sh").write_bytes(b"x\n")
     gcommit.commit_paths(repo, ["c.sh"], "m")

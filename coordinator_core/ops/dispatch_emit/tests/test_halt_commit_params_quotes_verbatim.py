@@ -53,7 +53,7 @@ def _composed_prompt(repo_root: Path, halted: dict) -> str:
     return "\n".join("    " + ln for ln in out.stdout.decode("utf-8").split("\n"))
 
 
-def test_halt_commit_prompt_runs_a_bare_params_file_command_and_never_inlines_params(tmp_path):
+def test_halt_commit_prompt_runs_a_bare_params_file_command_and_never_inlines_params(tmp_path: Path) -> None:
     prompt = _composed_prompt(tmp_path, _HALTED)
     params_file = chan.params_path(tmp_path, _RUN_ID)
     cmd_lines = [ln.strip() for ln in prompt.split("\n") if ln.strip().startswith("coordinator-invoke ")]
@@ -65,7 +65,7 @@ def test_halt_commit_prompt_runs_a_bare_params_file_command_and_never_inlines_pa
     assert "self_correction" not in outside_block and _APPLIED not in outside_block
 
 
-def test_params_with_both_quote_kinds_reach_the_params_file_byte_identical(tmp_path, monkeypatch):
+def test_params_with_both_quote_kinds_reach_the_params_file_byte_identical(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(run_token, "halt_admits", lambda *_a: True)
     prompt = _composed_prompt(tmp_path, _HALTED)
 
@@ -78,12 +78,12 @@ def test_params_with_both_quote_kinds_reach_the_params_file_byte_identical(tmp_p
     assert "'" in _APPLIED and '"' in _APPLIED
 
 
-def test_prompt_params_reads_back_a_halted_by_with_both_quote_kinds_from_the_python_block():
+def test_prompt_params_reads_back_a_halted_by_with_both_quote_kinds_from_the_python_block() -> None:
     params = {"run_id": _RUN_ID, "run_token": "t", "script_path": "s", "halted_by": _HALTED}
     assert chan.prompt_params(chan.render_params_block(params)) == params
     assert chan.prompt_params("\n".join("  " + ln for ln in chan.render_params_block(params).split("\n"))) == params
 
 
-def test_commit_stage_prompt_carries_the_params_file_only_clause():
+def test_commit_stage_prompt_carries_the_params_file_only_clause() -> None:
     call = ask_compose._commit_stage_call(head="h", anchor="a", repo_root="/mnt/r", run_id="run-1")
     assert ask_compose._PARAMS_FILE_ONLY_CLAUSE.strip() in " ".join(call.split())

@@ -136,7 +136,7 @@ def _run_door(
 # =============================================================================
 
 
-def test_stdin_mode_env_name_and_hook_value_are_defined_once_in_shared_core():
+def test_stdin_mode_env_name_and_hook_value_are_defined_once_in_shared_core() -> None:
     header_source = read(DOOR_CORE_H)
     assert header_source.count("#define DOOR_STDIN_MODE_ENV_NAME") == 1
     assert header_source.count("#define DOOR_STDIN_MODE_HOOK_VALUE") == 1
@@ -156,7 +156,7 @@ def test_stdin_mode_env_name_and_hook_value_are_defined_once_in_shared_core():
         )
 
 
-def test_both_doors_include_shared_core_and_neither_defines_its_own_drain_loop():
+def test_both_doors_include_shared_core_and_neither_defines_its_own_drain_loop() -> None:
     """`door_drain_stdin_bounded` and `build_hook_deny_envelope` are shared
     verbatim -- a door that defined its own body for either could refuse at
     a different bound or emit a different deny shape than its sibling."""
@@ -172,7 +172,7 @@ def test_both_doors_include_shared_core_and_neither_defines_its_own_drain_loop()
         ), f"{source_path.name} defines its own build_hook_deny_envelope -- the doors have drifted"
 
 
-def test_both_doors_gate_fall_through_on_the_same_flag_name():
+def test_both_doors_gate_fall_through_on_the_same_flag_name() -> None:
     """Both platform `fall_through` functions must check a hook-mode flag as
     their own first statement -- the single choke point every existing
     fall-through call site (and any added later) funnels through. This does
@@ -193,7 +193,7 @@ def test_both_doors_gate_fall_through_on_the_same_flag_name():
         )
 
 
-def test_stdin_max_bytes_is_not_a_this_box_measurement():
+def test_stdin_max_bytes_is_not_a_this_box_measurement() -> None:
     """Anti-scope: the spike's timings gate NOTHING about this bound (cost
     is flat to 256KB and the spike says so explicitly). Scoped to the new
     stdin block's own comment, not the whole file -- `door.c` legitimately
@@ -210,7 +210,7 @@ def test_stdin_max_bytes_is_not_a_this_box_measurement():
     assert "15.6" not in match.group(0)
 
 
-def test_try_warm_dispatch_inner_forwards_params_verbatim():
+def test_try_warm_dispatch_inner_forwards_params_verbatim() -> None:
     """PRODUCER INVARIANT (docs/plans/2026-08-30-the-warm-envelope-s-two-
     producers-cannot.md): the door is not the only producer of a warm
     request. `warm.client._try_warm_dispatch_inner` is the other, and this
@@ -436,7 +436,7 @@ def _run_door_argv(
     )
 
 
-def test_stdin_hook_flag_is_defined_once_and_both_doors_honour_it():
+def test_stdin_hook_flag_is_defined_once_and_both_doors_honour_it() -> None:
     assert _header_define("DOOR_STDIN_HOOK_FLAG") == "--stdin-hook"
     assert "door_argv_declares_stdin_hook" in read(DOOR_CORE_C)
     assert "door_argv_declares_stdin_hook" in read(DOOR_WINDOWS_C)

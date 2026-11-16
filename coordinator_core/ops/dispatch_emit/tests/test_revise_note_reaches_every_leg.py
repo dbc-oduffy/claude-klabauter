@@ -22,6 +22,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_refire_inherits_halted_base i
     composed,
     repo,
 )
+import pytest
 
 LEDGER_OPEN = "Requirements ledger: read "
 UNFRAMED = ("ledger grades", "unconfirmed (session task list only)")
@@ -33,7 +34,7 @@ def _ledger_legs(text):
     return [text[a:b] for a, b in zip(at, at[1:] + [len(text)])]
 
 
-def test_every_ledger_reading_leg_carries_the_note_as_binding_em_context(repo, monkeypatch):  # noqa: F811
+def test_every_ledger_reading_leg_carries_the_note_as_binding_em_context(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     seen = _spy_texts(monkeypatch)
     _halt(repo, ASK, BASE)
     _seed_notes(repo, ASK)
@@ -49,7 +50,7 @@ def test_every_ledger_reading_leg_carries_the_note_as_binding_em_context(repo, m
     assert run_notes.HEADING in _executor_prompt(seen["script"])
 
 
-def test_a_note_accepted_after_compose_reaches_the_view_the_legs_read(repo, composed):  # noqa: F811
+def test_a_note_accepted_after_compose_reaches_the_view_the_legs_read(repo, composed) -> None:  # noqa: F811
     run_id = "ask-20261106T000000-live00"
     rl.start(repo, run_id)
     rl.revise(repo, run_id, note="no camera-fed scale")
@@ -58,7 +59,7 @@ def test_a_note_accepted_after_compose_reaches_the_view_the_legs_read(repo, comp
     assert not any(u in view for u in UNFRAMED)
 
 
-def test_a_retracted_note_still_reads_as_not_to_be_acted_on(repo, composed):  # noqa: F811
+def test_a_retracted_note_still_reads_as_not_to_be_acted_on(repo, composed) -> None:  # noqa: F811
     run_id = "ask-20261106T000000-live01"
     rl.start(repo, run_id)
     rl.revise(repo, run_id, note="drop this")

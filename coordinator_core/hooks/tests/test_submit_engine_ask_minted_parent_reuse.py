@@ -25,7 +25,7 @@ _TAGS = ("job", "other", "old", "new")
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     for name in ("CLAUDE_CODE_REMOTE", "CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_CONTAINER_ID",
                  "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_PLUGIN_ROOT", "DELIVERABLE_ID"):
         monkeypatch.delenv(name, raising=False)
@@ -96,7 +96,7 @@ def _age(root: Path, seconds: float) -> None:
         entry.write_text(json.dumps(data), encoding="utf-8")
 
 
-def test_a_resubmission_after_a_post_mint_death_reuses_the_minted_launcher(repo):
+def test_a_resubmission_after_a_post_mint_death_reuses_the_minted_launcher(repo) -> None:
     first = _script(_submit(repo, _asks()))
     second_env = _submit(repo, _asks())
 
@@ -106,7 +106,7 @@ def test_a_resubmission_after_a_post_mint_death_reuses_the_minted_launcher(repo)
     assert Path(first).is_file()
 
 
-def test_a_parent_with_a_started_run_is_not_reused(repo):
+def test_a_parent_with_a_started_run_is_not_reused(repo) -> None:
     first = _script(_submit(repo, _asks()))
     runs = _runs(repo, _parents(repo)[0])
     _stage(repo, runs[0], "staged")
@@ -118,13 +118,13 @@ def test_a_parent_with_a_started_run_is_not_reused(repo):
     assert len(_parents(repo)) == 2
 
 
-def test_different_asks_mint_their_own_parent(repo):
+def test_different_asks_mint_their_own_parent(repo) -> None:
     first = _script(_submit(repo, _asks("job")))
     assert _script(_submit(repo, _asks("other"))) != first
     assert len(_parents(repo)) == 2
 
 
-def test_an_aged_all_minted_parent_is_reaped_by_the_next_submission(repo):
+def test_an_aged_all_minted_parent_is_reaped_by_the_next_submission(repo) -> None:
     _submit(repo, _asks("old"))
     old = _parents(repo)[0]
     old_runs = _runs(repo, old)
@@ -146,7 +146,7 @@ def test_an_aged_all_minted_parent_is_reaped_by_the_next_submission(repo):
     assert not (repo / minted_parent.digest_rel(old_digest)).exists()
 
 
-def test_an_aged_entry_over_a_started_parent_keeps_the_run_files(repo):
+def test_an_aged_entry_over_a_started_parent_keeps_the_run_files(repo) -> None:
     _submit(repo, _asks("old"))
     old = _parents(repo)[0]
     old_runs = _runs(repo, old)

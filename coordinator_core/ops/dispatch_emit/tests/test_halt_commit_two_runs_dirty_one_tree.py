@@ -47,7 +47,7 @@ def _two_runs_dirty(root) -> None:
     _write(root, f"{RECORD_DIR_ROOT}/ask-20261015T000001-bbbbbb/ask.md", "peer ask\n")
 
 
-def test_halt_commit_withholds_the_artifact_holding_the_peer_hunk_and_leaves_it_untouched(repo):
+def test_halt_commit_withholds_the_artifact_holding_the_peer_hunk_and_leaves_it_untouched(repo) -> None:
     _two_runs_dirty(repo)
 
     out = _halt(repo)
@@ -59,7 +59,7 @@ def test_halt_commit_withholds_the_artifact_holding_the_peer_hunk_and_leaves_it_
     assert _git(["show", f"HEAD:{PLAN}"], repo) == "# plan\nline one\n"
 
 
-def test_halt_commit_withholding_one_path_still_commits_and_skips_the_peers_record(repo):
+def test_halt_commit_withholding_one_path_still_commits_and_skips_the_peers_record(repo) -> None:
     _two_runs_dirty(repo)
 
     out = _halt(repo)
@@ -70,7 +70,7 @@ def test_halt_commit_withholding_one_path_still_commits_and_skips_the_peers_reco
     assert (repo / RECORD_DIR_ROOT / "ask-20261015T000001-bbbbbb" / "ask.md").read_text(encoding="utf-8") == "peer ask\n"
 
 
-def test_halt_commit_lands_a_tracked_artifact_whose_every_hunk_the_run_produced(repo):
+def test_halt_commit_lands_a_tracked_artifact_whose_every_hunk_the_run_produced(repo) -> None:
     _write(repo, PLAN, "# plan\nline one\n")
     _git(["add", PLAN], repo)
     _git(["commit", "-q", "-m", "plan"], repo)
@@ -88,7 +88,7 @@ def test_halt_commit_lands_a_tracked_artifact_whose_every_hunk_the_run_produced(
     assert PLAN in _landed(repo, out, "--name-only")
 
 
-def test_halt_commit_without_a_write_baseline_withholds_a_dirty_tracked_artifact(repo):
+def test_halt_commit_without_a_write_baseline_withholds_a_dirty_tracked_artifact(repo) -> None:
     _write(repo, PLAN, "# plan\nline one\n")
     _git(["add", PLAN], repo)
     _git(["commit", "-q", "-m", "plan"], repo)

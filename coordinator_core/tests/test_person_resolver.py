@@ -22,10 +22,15 @@ import textwrap
 import pytest
 
 from coordinator_core import person_resolver, tracker_entities
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
 
 
 @pytest.fixture(autouse=True)
-def _reset_cache(monkeypatch):
+def _reset_cache(monkeypatch: pytest.MonkeyPatch):
     person_resolver.reset_person_resolver_git_config_cache()
     monkeypatch.setattr(person_resolver, "_resolve_repo_root", lambda: "/fixture/repo")
     yield
@@ -56,7 +61,7 @@ def _patch_git_config(monkeypatch, values: dict[str, str]) -> None:
     monkeypatch.setattr(person_resolver, "_git_config", _fake)
 
 
-def test_pinned_signature_and_keys():
+def test_pinned_signature_and_keys() -> None:
     assert person_resolver.ALIAS_BUNDLE_KEYS == (
         "github",
         "github_id",
@@ -66,7 +71,7 @@ def test_pinned_signature_and_keys():
     )
 
 
-def test_both_sources_agree(tmp_path, monkeypatch):
+def test_both_sources_agree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_hosts_yml(tmp_path, "gh-fixture")
     _patch_git_config(
         monkeypatch,
@@ -84,7 +89,7 @@ def test_both_sources_agree(tmp_path, monkeypatch):
     assert result["email"] == "999+gh-fixture@users.noreply.github.com".casefold()
 
 
-def test_sources_disagree_hosts_yml_wins(tmp_path, monkeypatch):
+def test_sources_disagree_hosts_yml_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_hosts_yml(tmp_path, "hosts-yml-winner")
     _patch_git_config(
         monkeypatch,
@@ -100,7 +105,7 @@ def test_sources_disagree_hosts_yml_wins(tmp_path, monkeypatch):
     assert result["github_id"] == "999"
 
 
-def test_hosts_yml_absent_noreply_fallback(tmp_path, monkeypatch):
+def test_hosts_yml_absent_noreply_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_git_config(
         monkeypatch,
         {
@@ -115,7 +120,7 @@ def test_hosts_yml_absent_noreply_fallback(tmp_path, monkeypatch):
     assert result["github_id"] == "999"
 
 
-def test_noreply_absent_plain_email_github_unresolved(tmp_path, monkeypatch):
+def test_noreply_absent_plain_email_github_unresolved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_git_config(
         monkeypatch,
         {
@@ -132,7 +137,7 @@ def test_noreply_absent_plain_email_github_unresolved(tmp_path, monkeypatch):
     assert result["email"] == "email@fixture"
 
 
-def test_nothing_configured_empty_dict(tmp_path, monkeypatch):
+def test_nothing_configured_empty_dict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_git_config(monkeypatch, {})
 
     result = person_resolver.resolve_operating_person(home=tmp_path)
@@ -140,7 +145,7 @@ def test_nothing_configured_empty_dict(tmp_path, monkeypatch):
     assert result == {}
 
 
-def test_malformed_hosts_yml_degrades_to_fallback(tmp_path, monkeypatch):
+def test_malformed_hosts_yml_degrades_to_fallback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     gh_dir = tmp_path / ".config" / "gh"
     gh_dir.mkdir(parents=True, exist_ok=True)
     (gh_dir / "hosts.yml").write_text("not: valid: yaml: [unterminated", encoding="utf-8")
@@ -158,7 +163,7 @@ def test_malformed_hosts_yml_degrades_to_fallback(tmp_path, monkeypatch):
     assert result["github_id"] == "999"
 
 
-def test_mixed_case_hosts_yml_resolves_casefolded(tmp_path, monkeypatch):
+def test_mixed_case_hosts_yml_resolves_casefolded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_hosts_yml(tmp_path, "DBC-example-operator")
     _patch_git_config(monkeypatch, {})
 
@@ -167,7 +172,7 @@ def test_mixed_case_hosts_yml_resolves_casefolded(tmp_path, monkeypatch):
     assert result["github"] == "dbc-example-operator"
 
 
-def test_mixed_case_noreply_fallback_resolves_casefolded(tmp_path, monkeypatch):
+def test_mixed_case_noreply_fallback_resolves_casefolded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_git_config(
         monkeypatch,
         {
@@ -191,7 +196,7 @@ def test_mixed_case_noreply_fallback_resolves_casefolded(tmp_path, monkeypatch):
 # addition is covered automatically. Intentionally NOT a shared-helper
 # extraction — a loudly-failing coupling test is the scoped fix; unifying
 # the implementations is out of remit here.
-def test_casefold_policy_matches_tracker_entities_normalize_alias(tmp_path, monkeypatch):
+def test_casefold_policy_matches_tracker_entities_normalize_alias(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mixed = "Mixed-CaseValue"
     _write_hosts_yml(tmp_path, mixed)
     _patch_git_config(
@@ -222,7 +227,7 @@ def test_casefold_policy_matches_tracker_entities_normalize_alias(tmp_path, monk
         )
 
 
-def test_git_config_cache_is_keyed_on_repo_root_not_collided(tmp_path, monkeypatch):
+def test_git_config_cache_is_keyed_on_repo_root_not_collided(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """C7: the old cache keyed on ``key`` alone was a missing-key COLLISION
     under a process serving two different repos — the first repo's
     resolved `user.name` would leak into the second repo's resolution.
@@ -251,10 +256,10 @@ def test_git_config_cache_is_keyed_on_repo_root_not_collided(tmp_path, monkeypat
     assert second["display"] == "Bob"
 
 
-def test_git_config_uncached_passes_cwd_through(monkeypatch):
+def test_git_config_uncached_passes_cwd_through(monkeypatch: pytest.MonkeyPatch) -> None:
     captured = {}
 
-    def _fake_run(args, **kwargs):
+    def _fake_run(args, **kwargs) -> CompletedProcess[str]:
         captured["cwd"] = kwargs.get("cwd")
         return subprocess.CompletedProcess(args, 0, stdout="v\n", stderr="")
 
@@ -263,7 +268,7 @@ def test_git_config_uncached_passes_cwd_through(monkeypatch):
     assert captured["cwd"] == "/some/repo"
 
 
-def test_git_config_cache_reused_across_calls(tmp_path, monkeypatch):
+def test_git_config_cache_reused_across_calls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = {"count": 0}
 
     def _fake(key: str, cwd: str | None = None) -> str:
@@ -295,18 +300,18 @@ def test_git_config_cache_reused_across_calls(tmp_path, monkeypatch):
         (999999999, "0zdsdj8ag"),
     ],
 )
-def test_contributor_slug_pinned_vectors(database_id, expected_slug):
+def test_contributor_slug_pinned_vectors(database_id, expected_slug) -> None:
     assert person_resolver._derive_contributor_slug(database_id) == expected_slug
 
 
 @pytest.mark.parametrize(
     "bad_id", [None, "not-an-int", 0, -1, float("nan"), float("inf"), True, False]
 )
-def test_contributor_slug_null_contract(bad_id):
+def test_contributor_slug_null_contract(bad_id) -> None:
     assert person_resolver._derive_contributor_slug(bad_id) is None
 
 
-def test_contributor_slug_derived_in_bundle(tmp_path, monkeypatch):
+def test_contributor_slug_derived_in_bundle(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_git_config(
         monkeypatch,
         {
@@ -320,7 +325,7 @@ def test_contributor_slug_derived_in_bundle(tmp_path, monkeypatch):
     assert result["contributor_slug"] == "67c9mio1h"
 
 
-def test_contributor_slug_rename_invariant(tmp_path, monkeypatch):
+def test_contributor_slug_rename_invariant(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_git_config(
         monkeypatch,
         {
@@ -345,7 +350,7 @@ def test_contributor_slug_rename_invariant(tmp_path, monkeypatch):
     assert first["contributor_slug"] == second["contributor_slug"] == "67c9mio1h"
 
 
-def test_operator_noreply_resolves_github_and_github_id(tmp_path, monkeypatch):
+def test_operator_noreply_resolves_github_and_github_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_git_config(
         monkeypatch,
         {
@@ -361,7 +366,7 @@ def test_operator_noreply_resolves_github_and_github_id(tmp_path, monkeypatch):
     assert result["contributor_slug"] == person_resolver._derive_contributor_slug(999)
 
 
-def test_operator_noreply_domain_matches_case_insensitively(tmp_path, monkeypatch):
+def test_operator_noreply_domain_matches_case_insensitively(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_git_config(
         monkeypatch,
         {"coordinator.operator": "999+operator-fixture@Users.NoReply.GitHub.com"},
@@ -373,7 +378,7 @@ def test_operator_noreply_domain_matches_case_insensitively(tmp_path, monkeypatc
     assert result["github_id"] == "999"
 
 
-def test_operator_bare_handle_resolves_github_no_id(tmp_path, monkeypatch):
+def test_operator_bare_handle_resolves_github_no_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_git_config(monkeypatch, {"coordinator.operator": "Operator-Handle"})
 
     result = person_resolver.resolve_operating_person(home=tmp_path)
@@ -383,7 +388,7 @@ def test_operator_bare_handle_resolves_github_no_id(tmp_path, monkeypatch):
     assert "contributor_slug" not in result
 
 
-def test_operator_non_noreply_email_stays_unresolved(tmp_path, monkeypatch):
+def test_operator_non_noreply_email_stays_unresolved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_git_config(monkeypatch, {"coordinator.operator": "someone@example.com"})
 
     result = person_resolver.resolve_operating_person(home=tmp_path)
@@ -392,7 +397,7 @@ def test_operator_non_noreply_email_stays_unresolved(tmp_path, monkeypatch):
     assert "github_id" not in result
 
 
-def test_hosts_yml_wins_over_operator(tmp_path, monkeypatch):
+def test_hosts_yml_wins_over_operator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_hosts_yml(tmp_path, "hosts-yml-winner")
     _patch_git_config(
         monkeypatch,
@@ -405,7 +410,7 @@ def test_hosts_yml_wins_over_operator(tmp_path, monkeypatch):
     assert "github_id" not in result
 
 
-def test_noreply_email_wins_over_operator(tmp_path, monkeypatch):
+def test_noreply_email_wins_over_operator(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_git_config(
         monkeypatch,
         {
@@ -420,7 +425,7 @@ def test_noreply_email_wins_over_operator(tmp_path, monkeypatch):
     assert result["github_id"] == "111"
 
 
-def test_no_source_at_all_still_returns_empty_dict(tmp_path, monkeypatch):
+def test_no_source_at_all_still_returns_empty_dict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_git_config(monkeypatch, {})
 
     result = person_resolver.resolve_operating_person(home=tmp_path)
@@ -428,7 +433,7 @@ def test_no_source_at_all_still_returns_empty_dict(tmp_path, monkeypatch):
     assert result == {}
 
 
-def test_contributor_slug_absent_when_github_id_unresolved(tmp_path, monkeypatch):
+def test_contributor_slug_absent_when_github_id_unresolved(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_git_config(
         monkeypatch,
         {

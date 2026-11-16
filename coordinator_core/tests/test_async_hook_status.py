@@ -19,15 +19,16 @@ from __future__ import annotations
 import json
 
 import coordinator_core.async_hook_status as ahs
+from pathlib import Path
 
 
-def test_status_dir_creates_canonical_path(tmp_path):
+def test_status_dir_creates_canonical_path(tmp_path: Path) -> None:
     result = ahs.status_dir(claude_home=tmp_path)
     assert result == tmp_path / ".claude" / ".cache" / "async-hook-status"
     assert result.is_dir()
 
 
-def test_status_dir_unwritable_returns_none(tmp_path):
+def test_status_dir_unwritable_returns_none(tmp_path: Path) -> None:
     # Place a regular FILE where .claude would need to be a directory, so
     # mkdir -p fails — mirrors the bash test's unwritable-.cache simulation.
     blocker = tmp_path / ".claude"
@@ -37,7 +38,7 @@ def test_status_dir_unwritable_returns_none(tmp_path):
     assert result is None
 
 
-def test_record_failure_writes_marker(tmp_path):
+def test_record_failure_writes_marker(tmp_path: Path) -> None:
     ahs.record_failure("my-hook", 1, "boom", "/tmp/my-hook.log", claude_home=tmp_path)
 
     marker = tmp_path / ".claude" / ".cache" / "async-hook-status" / "my-hook.json"
@@ -51,7 +52,7 @@ def test_record_failure_writes_marker(tmp_path):
     assert data["failed_at"].endswith("Z")
 
 
-def test_record_failure_latest_wins(tmp_path):
+def test_record_failure_latest_wins(tmp_path: Path) -> None:
     ahs.record_failure("my-hook", 1, "first", claude_home=tmp_path)
     ahs.record_failure("my-hook", 2, "second", claude_home=tmp_path)
 
@@ -61,7 +62,7 @@ def test_record_failure_latest_wins(tmp_path):
     assert data["detail"] == "second"
 
 
-def test_record_failure_never_raises_on_unwritable_cache(tmp_path):
+def test_record_failure_never_raises_on_unwritable_cache(tmp_path: Path) -> None:
     blocker = tmp_path / ".claude"
     blocker.write_text("not a directory", encoding="utf-8")
 
@@ -69,7 +70,7 @@ def test_record_failure_never_raises_on_unwritable_cache(tmp_path):
     ahs.record_failure("my-hook", 1, "boom", claude_home=tmp_path)
 
 
-def test_surface_and_clear_happy_path(tmp_path):
+def test_surface_and_clear_happy_path(tmp_path: Path) -> None:
     ahs.record_failure("my-hook", 1, "boom", claude_home=tmp_path)
 
     lines = ahs.surface_and_clear(claude_home=tmp_path)
@@ -84,7 +85,7 @@ def test_surface_and_clear_happy_path(tmp_path):
     assert not marker.exists()
 
 
-def test_surface_and_clear_no_renag_then_resurfaces_on_rewrite(tmp_path):
+def test_surface_and_clear_no_renag_then_resurfaces_on_rewrite(tmp_path: Path) -> None:
     ahs.record_failure("my-hook", 1, "boom", claude_home=tmp_path)
 
     first = ahs.surface_and_clear(claude_home=tmp_path)
@@ -101,7 +102,7 @@ def test_surface_and_clear_no_renag_then_resurfaces_on_rewrite(tmp_path):
     assert "boom again" in third[0]
 
 
-def test_surface_and_clear_unwritable_cache_returns_empty(tmp_path):
+def test_surface_and_clear_unwritable_cache_returns_empty(tmp_path: Path) -> None:
     blocker = tmp_path / ".claude"
     blocker.write_text("not a directory", encoding="utf-8")
 
@@ -109,12 +110,12 @@ def test_surface_and_clear_unwritable_cache_returns_empty(tmp_path):
     assert lines == []
 
 
-def test_surface_and_clear_no_markers_returns_empty(tmp_path):
+def test_surface_and_clear_no_markers_returns_empty(tmp_path: Path) -> None:
     lines = ahs.surface_and_clear(claude_home=tmp_path)
     assert lines == []
 
 
-def test_surface_and_clear_skips_malformed_marker_without_raising(tmp_path):
+def test_surface_and_clear_skips_malformed_marker_without_raising(tmp_path: Path) -> None:
     status_dir = tmp_path / ".claude" / ".cache" / "async-hook-status"
     status_dir.mkdir(parents=True)
     (status_dir / "broken.json").write_text("not valid json{{{", encoding="utf-8")
@@ -128,7 +129,7 @@ def test_surface_and_clear_skips_malformed_marker_without_raising(tmp_path):
     assert not (status_dir / "broken.json").exists()
 
 
-def test_surface_and_clear_multiple_markers(tmp_path):
+def test_surface_and_clear_multiple_markers(tmp_path: Path) -> None:
     ahs.record_failure("hook-a", 1, "a-detail", claude_home=tmp_path)
     ahs.record_failure("hook-b", 2, "b-detail", claude_home=tmp_path)
 

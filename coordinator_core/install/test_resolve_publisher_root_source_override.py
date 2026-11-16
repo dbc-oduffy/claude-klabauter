@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import pytest
 
 _MODULE_PATH = (
     Path(__file__).resolve().parents[2]
@@ -38,7 +39,7 @@ resolve_claude_klabauter = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(resolve_claude_klabauter)
 
 
-def test_source_override_wins_ahead_of_the_dispatch_ladder(tmp_path, monkeypatch):
+def test_source_override_wins_ahead_of_the_dispatch_ladder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_ENGINE_SOURCE_ROOT", str(tmp_path))
     # A dispatch-axis rung that WOULD resolve to something else, to prove the
     # override short-circuits before it is ever consulted.
@@ -49,7 +50,7 @@ def test_source_override_wins_ahead_of_the_dispatch_ladder(tmp_path, monkeypatch
     assert result == str(tmp_path)
 
 
-def test_a_non_directory_source_override_is_ignored(tmp_path, monkeypatch):
+def test_a_non_directory_source_override_is_ignored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     bogus = tmp_path / "does-not-exist"
     monkeypatch.setenv("COORDINATOR_ENGINE_SOURCE_ROOT", str(bogus))
     monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(tmp_path))
@@ -59,7 +60,7 @@ def test_a_non_directory_source_override_is_ignored(tmp_path, monkeypatch):
     assert result == str(tmp_path)
 
 
-def test_no_source_override_still_uses_the_dispatch_ladder(tmp_path, monkeypatch):
+def test_no_source_override_still_uses_the_dispatch_ladder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_ENGINE_SOURCE_ROOT", raising=False)
     monkeypatch.setenv("COORDINATOR_ENGINE_ROOT", str(tmp_path))
 
@@ -68,7 +69,7 @@ def test_no_source_override_still_uses_the_dispatch_ladder(tmp_path, monkeypatch
     assert result == str(tmp_path)
 
 
-def test_failure_message_names_the_source_override_remedy(monkeypatch, tmp_path):
+def test_failure_message_names_the_source_override_remedy(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("COORDINATOR_ENGINE_SOURCE_ROOT", raising=False)
     monkeypatch.delenv("COORDINATOR_ENGINE_ROOT", raising=False)
     monkeypatch.setattr(resolve_claude_klabauter, "_ml_dir", lambda: tmp_path / "no-such-dir")

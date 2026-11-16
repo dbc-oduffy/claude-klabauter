@@ -55,14 +55,14 @@ def _register(monkeypatch: pytest.MonkeyPatch, value: str) -> None:
     monkeypatch.setattr(machine_resolver, "registry_get", lambda key, *a, **k: value)
 
 
-def test_clean_mirror_is_pass(mod, clone, monkeypatch) -> None:
+def test_clean_mirror_is_pass(mod, clone, monkeypatch: pytest.MonkeyPatch) -> None:
     _register(monkeypatch, str(clone))
     result = mod._run_probe_publish_mirror_clean(None)
     assert result.probe == mod._PUBLISH_MIRROR_CLEAN_PROBE
     assert result.status == mod._PASS
 
 
-def test_dirty_mirror_is_degraded_and_names_files(mod, clone, monkeypatch) -> None:
+def test_dirty_mirror_is_degraded_and_names_files(mod, clone, monkeypatch: pytest.MonkeyPatch) -> None:
     (clone / "engine.py").write_text("x = 2\n", encoding="utf-8")
     (clone / "stray.py").write_text("y\n", encoding="utf-8")
     _register(monkeypatch, str(clone))
@@ -72,14 +72,14 @@ def test_dirty_mirror_is_degraded_and_names_files(mod, clone, monkeypatch) -> No
     assert (clone / "engine.py").read_text(encoding="utf-8") == "x = 2\n"
 
 
-def test_unregistered_mirror_is_skipped(mod, monkeypatch) -> None:
+def test_unregistered_mirror_is_skipped(mod, monkeypatch: pytest.MonkeyPatch) -> None:
     _register(monkeypatch, "")
     result = mod._run_probe_publish_mirror_clean(None)
     assert result.status == mod._INFO
     assert result.skipped is True
 
 
-def test_missing_directory_is_skipped(mod, tmp_path, monkeypatch) -> None:
+def test_missing_directory_is_skipped(mod, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _register(monkeypatch, str(tmp_path / "absent"))
     result = mod._run_probe_publish_mirror_clean(None)
     assert result.status == mod._INFO

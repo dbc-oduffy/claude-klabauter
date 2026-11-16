@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     read_spine,
 )
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow, build_waves
+from pathlib import Path
 
 PLAN_REL = "docs/plans/2026-11-01-role.md"
 
@@ -34,7 +35,7 @@ def _plan(tmp_path, extra: str, agent_type: str = "coordinator:executor"):
 
 
 @pytest.mark.parametrize("role", ["scout", "research", "review"])
-def test_role_reaches_rows_unchanged_otherwise(tmp_path, role, caplog):
+def test_role_reaches_rows_unchanged_otherwise(tmp_path: Path, role, caplog: pytest.LogCaptureFixture) -> None:
     _plan(tmp_path, f"  stage_role: {role}\n")
     with caplog.at_level(logging.WARNING):
         (row,) = read_spine(tmp_path / PLAN_REL)
@@ -46,26 +47,26 @@ def test_role_reaches_rows_unchanged_otherwise(tmp_path, role, caplog):
     assert wave[0].stage_role == role
 
 
-def test_absent_role_is_none_and_wave_row_default_holds(tmp_path):
+def test_absent_role_is_none_and_wave_row_default_holds(tmp_path: Path) -> None:
     _plan(tmp_path, "")
     assert read_spine(tmp_path / PLAN_REL)[0].stage_role is None
     wr = WaveRow(id="C1", title="t", surface="s", writes=[], reads=[], depends_on=[])
     assert wr.stage_role is None
 
 
-def test_unknown_role_refused_naming_row(tmp_path):
+def test_unknown_role_refused_naming_row(tmp_path: Path) -> None:
     _plan(tmp_path, "  stage_role: size\n")
     with pytest.raises(InvalidFieldTypeError, match="C1.*scout\\|research\\|review"):
         read_spine(tmp_path / PLAN_REL)
 
 
-def test_role_beside_family_refused(tmp_path):
+def test_role_beside_family_refused(tmp_path: Path) -> None:
     _plan(tmp_path, "  stage_role: scout\n  family: grok\n", agent_type="")
     with pytest.raises(InvalidFieldTypeError, match="keep one"):
         read_spine(tmp_path / PLAN_REL)
 
 
-def test_role_is_a_known_key_and_matches_stage_family_roles():
+def test_role_is_a_known_key_and_matches_stage_family_roles() -> None:
     assert "stage_role" in KNOWN_ROW_KEYS
     from coordinator_core.ops.dispatch_emit import spine_read
 

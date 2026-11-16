@@ -1,4 +1,5 @@
 from coordinator_core.backlog.extract import MAX_RECORD_TOKENS, extract_record, record_tokens
+from pathlib import Path
 
 PLAN = """---
 status: active
@@ -48,7 +49,7 @@ Body.
 """
 
 
-def test_plan_with_tasks_spine():
+def test_plan_with_tasks_spine() -> None:
     rec = extract_record("docs/plans/p.md", text=PLAN)
     assert rec.tasks_ledger == ("C0 | Pin interfaces | done", "C1 | Walk weeks | open")
     assert "fm: status: active" in rec.headings
@@ -59,24 +60,24 @@ def test_plan_with_tasks_spine():
     assert record_tokens(rec) < MAX_RECORD_TOKENS
 
 
-def test_decision_keeps_first_line_only():
+def test_decision_keeps_first_line_only() -> None:
     rec = extract_record("docs/decisions/DR-344-x.md", text=DR)
     assert rec.decisions == ("decision: 500ms or deleted.", "consequences: Over the bar means kill.")
 
 
-def test_handoff_bold_outcome():
+def test_handoff_bold_outcome() -> None:
     rec = extract_record("state/handoffs/h.md", text=HANDOFF)
     assert rec.outcomes == ("Outcome: landed C3",)
 
 
-def test_outline_stands_in_for_file_read(tmp_path):
+def test_outline_stands_in_for_file_read(tmp_path: Path) -> None:
     missing = str(tmp_path / "gone.md")
     assert extract_record(missing) .headings == ()
     rec = extract_record(missing, outline="# Only outline\n")
     assert rec.headings == ("# Only outline",)
 
 
-def test_oversized_artifact_is_trimmed_under_budget():
+def test_oversized_artifact_is_trimmed_under_budget() -> None:
     rows = "\n".join(f"- id: T{i}\n  title: {'word ' * 30}\n  disposition: open" for i in range(80))
     text = "# big\n" + "\n".join(f"## Heading number {i} " + "x" * 90 for i in range(80)) + f"\n```yaml plan-tasks\n{rows}\n```\n"
     rec = extract_record("big.md", text=text)
@@ -84,7 +85,7 @@ def test_oversized_artifact_is_trimmed_under_budget():
     assert rec.headings and rec.tasks_ledger
 
 
-def test_real_file_reads_from_disk(tmp_path):
+def test_real_file_reads_from_disk(tmp_path: Path) -> None:
     p = tmp_path / "d.md"
     p.write_text(DR)
     assert extract_record(str(p)).decisions[0] == "decision: 500ms or deleted."

@@ -4,6 +4,7 @@ import threading
 import time
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -13,7 +14,7 @@ from coordinator_core.roadmap import gate_v2
 WALL = 0.3
 
 
-def _write(root, name, body="body"):
+def _write(root, name, body: str = "body"):
     where = root / "state/handoffs"
     where.mkdir(parents=True, exist_ok=True)
     path = where / f"{name}.md"
@@ -25,7 +26,7 @@ def _write(root, name, body="body"):
 
 
 class _Block:
-    def __init__(self, monkeypatch, target):
+    def __init__(self, monkeypatch, target) -> None:
         self.target = str(target).replace("\\", "/")
         self.gate = threading.Event()
         self.entered = threading.Event()
@@ -39,7 +40,7 @@ class _Block:
 
         monkeypatch.setattr(gate_v2, "open", fake, raising=False)
 
-    def release(self):
+    def release(self) -> None:
         self.gate.set()
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline:
@@ -52,7 +53,7 @@ class _Block:
 
 
 @pytest.fixture(autouse=True)
-def _wall(monkeypatch):
+def _wall(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(gate_v2, "HEAD_READ_DEADLINE_SECS", WALL)
     gate_v2._HEAD_CACHE.clear()
     yield
@@ -60,13 +61,13 @@ def _wall(monkeypatch):
 
 
 @pytest.fixture
-def root(tmp_path):
+def root(tmp_path: Path) -> Path:
     (tmp_path / "state/handoffs").mkdir(parents=True)
     return tmp_path
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds the wall a blocked open may hold the gate scan")
-def test_blocked_open_without_stale_head_refuses_naming_the_file(root, monkeypatch):
+def test_blocked_open_without_stale_head_refuses_naming_the_file(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(root, "ok")
     blocked = _write(root, "stuck")
     blk = _Block(monkeypatch, blocked.as_posix())
@@ -82,7 +83,7 @@ def test_blocked_open_without_stale_head_refuses_naming_the_file(root, monkeypat
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds the wall a blocked open may hold the gate scan")
-def test_blocked_open_with_stale_head_serves_it_and_keeps_the_old_cache_key(root, monkeypatch):
+def test_blocked_open_with_stale_head_serves_it_and_keeps_the_old_cache_key(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(root, "ok")
     blocked = _write(root, "stuck")
     first = gate_v2.compute_gate_report(root)
@@ -102,7 +103,7 @@ def test_blocked_open_with_stale_head_serves_it_and_keeps_the_old_cache_key(root
         blk.release()
 
 
-def test_unblocked_scan_reads_and_caches_every_head(root):
+def test_unblocked_scan_reads_and_caches_every_head(root) -> None:
     _write(root, "a")
     _write(root, "b")
     report = gate_v2.compute_gate_report(root)
@@ -110,7 +111,7 @@ def test_unblocked_scan_reads_and_caches_every_head(root):
     assert len(gate_v2._HEAD_CACHE) == 2
 
 
-def test_read_error_inside_the_wall_still_refuses_with_the_unreadable_message(root, monkeypatch):
+def test_read_error_inside_the_wall_still_refuses_with_the_unreadable_message(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(root, "a")
 
     def boom(path, *a, **k):

@@ -2,6 +2,8 @@
 
 from coordinator_core.roadmap import prep_gate as pg
 from coordinator_core.roadmap.tests.test_prep_gate_four_legs import _CLEAN_FM, _write_plan
+from pathlib import Path
+import pytest
 
 _ROW = """- id: C1
   title: Baseline
@@ -19,7 +21,7 @@ def _gate(tmp_path, spine):
     return pg.gate_plan(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
 
 
-def test_executor_row_running_vitest_is_refused_naming_test_runner(tmp_path):
+def test_executor_row_running_vitest_is_refused_naming_test_runner(tmp_path: Path) -> None:
     result = _gate(tmp_path, _ROW)
     cls = result["classes"]["EXECUTOR_HEAVY"]
     assert result["verdict"] == pg.NOT_PREPPED
@@ -29,83 +31,83 @@ def test_executor_row_running_vitest_is_refused_naming_test_runner(tmp_path):
     assert "C1-V" in cls["repair"] and "`performer: em`" in cls["repair"]
 
 
-def test_same_row_declaring_test_runner_passes(tmp_path):
+def test_same_row_declaring_test_runner_passes(tmp_path: Path) -> None:
     spine = _ROW.replace("  disposition: open", "  agent_type: coordinator:test-runner\n  disposition: open")
     assert _gate(tmp_path, spine)["classes"]["EXECUTOR_HEAVY"]["status"] == "PASS"
 
 
-def test_verification_string_is_read(tmp_path):
+def test_verification_string_is_read(tmp_path: Path) -> None:
     spine = _ROW.replace("`pnpm vitest run`", "the suite").replace(
         "  disposition: open", "  verification: pnpm vitest run\n  disposition: open"
     )
     assert _gate(tmp_path, spine)["classes"]["EXECUTOR_HEAVY"]["status"] == "DEFECT"
 
 
-def test_prose_and_light_commands_pass(tmp_path):
+def test_prose_and_light_commands_pass(tmp_path: Path) -> None:
     spine = _ROW.replace("`pnpm vitest run`", "vitest, then `git status`")
     assert _gate(tmp_path, spine)["classes"]["EXECUTOR_HEAVY"]["status"] == "PASS"
 
 
-def test_lone_noemit_tsc_is_the_guard_carve_out_and_passes(tmp_path):
+def test_lone_noemit_tsc_is_the_guard_carve_out_and_passes(tmp_path: Path) -> None:
     spine = _ROW.replace("`pnpm vitest run`", "`tsc --noEmit`")
     assert _gate(tmp_path, spine)["classes"]["EXECUTOR_HEAVY"]["status"] == "PASS"
 
 
-def test_other_declared_agent_type_is_not_executor_routed(tmp_path):
+def test_other_declared_agent_type_is_not_executor_routed(tmp_path: Path) -> None:
     spine = _ROW.replace("  disposition: open", "  agent_type: coordinator:code-reviewer\n  disposition: open")
     assert _gate(tmp_path, spine)["classes"]["EXECUTOR_HEAVY"]["status"] == "PASS"
 
 
-def test_wont_do_row_passes(tmp_path):
+def test_wont_do_row_passes(tmp_path: Path) -> None:
     spine = _ROW.replace("disposition: open", "disposition: wont_do")
     assert _gate(tmp_path, spine)["classes"]["EXECUTOR_HEAVY"]["status"] == "PASS"
 
 
-def test_row_writing_only_an_immutable_plan_body_is_not_executor_routed(tmp_path):
+def test_row_writing_only_an_immutable_plan_body_is_not_executor_routed(tmp_path: Path) -> None:
     spine = _ROW.replace("surface: src/a.py", "surface: docs/plans/x.md").replace(
         "writes: [src/a.py]", "writes: [docs/plans/x.md]"
     )
     assert _gate(tmp_path, spine)["classes"]["EXECUTOR_HEAVY"]["status"] == "PASS"
 
 
-def test_single_file_node_test_is_admitted(tmp_path):
+def test_single_file_node_test_is_admitted(tmp_path: Path) -> None:
     spine = _ROW.replace("`pnpm vitest run`", "`node --test test/x.test.js`")
     assert _gate(tmp_path, spine)["classes"]["EXECUTOR_HEAVY"]["status"] == "PASS"
 
 
-def test_writing_row_running_heavy_command_gets_the_split_remedy(tmp_path):
+def test_writing_row_running_heavy_command_gets_the_split_remedy(tmp_path: Path) -> None:
     result = _gate(tmp_path, _ROW)
     detail = result["classes"]["EXECUTOR_HEAVY"]["detail"]
     assert "keeps its writes" in detail and "`<id>-V` verify row" in detail
     assert "`<id>-V` verify row" in result["message"]
 
 
-def test_row_without_writes_keeps_the_declare_test_runner_remedy(tmp_path):
+def test_row_without_writes_keeps_the_declare_test_runner_remedy(tmp_path: Path) -> None:
     spine = _ROW.replace("writes: [src/a.py]", "writes: []")
     detail = _gate(tmp_path, spine)["classes"]["EXECUTOR_HEAVY"]["detail"]
     assert "Fix: declare `agent_type: coordinator:test-runner` on the row." in detail
     assert "`<id>-V` verify row" not in detail
 
 
-def test_no_writes_hit_is_a_mechanical_repair_naming_the_row(tmp_path):
+def test_no_writes_hit_is_a_mechanical_repair_naming_the_row(tmp_path: Path) -> None:
     cls = _gate(tmp_path, _ROW.replace("writes: [src/a.py]", "writes: []"))["classes"]["EXECUTOR_HEAVY"]
     assert cls["mechanical"] is True
     assert "row C1: declare" in cls["repair"] and "`performer: em`" in cls["repair"]
 
 
-def test_writes_bearing_hit_is_a_mechanical_split_repair(tmp_path):
+def test_writes_bearing_hit_is_a_mechanical_split_repair(tmp_path: Path) -> None:
     cls = _gate(tmp_path, _ROW)["classes"]["EXECUTOR_HEAVY"]
     assert cls["mechanical"] is True
     assert "C1" in cls["repair"] and "C1-V" in cls["repair"]
 
 
-def test_verify_row_id_skips_ids_already_in_the_spine(tmp_path):
+def test_verify_row_id_skips_ids_already_in_the_spine(tmp_path: Path) -> None:
     taken = _ROW.replace("C1", "C1-V").replace("writes: [src/a.py]", "writes: []").replace("vitest run", "echo")
     cls = _gate(tmp_path, _ROW + taken)["classes"]["EXECUTOR_HEAVY"]
     assert "C1-V2" in cls["repair"] and "add row C1-V " not in cls["repair"]
 
 
-def test_mixed_hits_are_a_mechanical_repair_naming_both_rows(tmp_path):
+def test_mixed_hits_are_a_mechanical_repair_naming_both_rows(tmp_path: Path) -> None:
     second = _ROW.replace("C1", "C2").replace("writes: [src/a.py]", "writes: []")
     cls = _gate(tmp_path, _ROW + second)["classes"]["EXECUTOR_HEAVY"]
     assert set(cls["withheld"]) == {"C1", "C2"}
@@ -113,7 +115,7 @@ def test_mixed_hits_are_a_mechanical_repair_naming_both_rows(tmp_path):
     assert "row C1:" in cls["repair"] and "row C2:" in cls["repair"] and "C1-V" in cls["repair"]
 
 
-def test_classification_root_is_the_plan_root_not_process_cwd(tmp_path, monkeypatch):
+def test_classification_root_is_the_plan_root_not_process_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = []
     from coordinator_core.bash_guards import _heavy_command_class as hcc
 
@@ -131,14 +133,14 @@ def _cls(tmp_path, body_text):
     return _gate(tmp_path, spine)["classes"]["EXECUTOR_HEAVY"]["status"]
 
 
-def test_quoted_command_mid_sentence_or_in_text_fence_is_not_an_act(tmp_path):
+def test_quoted_command_mid_sentence_or_in_text_fence_is_not_an_act(tmp_path: Path) -> None:
     assert _cls(tmp_path, "The old step was `pnpm vitest run`; do not repeat it.") == "PASS"
     assert _cls(tmp_path, "Do not run `pnpm vitest run` here.") == "PASS"
     assert _cls(tmp_path, "Measure with `pnpm vitest run`.") == "PASS"
     assert _cls(tmp_path, "```yaml\n    note: pnpm vitest run\n    ```") == "PASS"
 
 
-def test_run_step_bare_span_and_shell_fence_are_still_refused(tmp_path):
+def test_run_step_bare_span_and_shell_fence_are_still_refused(tmp_path: Path) -> None:
     assert _cls(tmp_path, "- Run `pnpm vitest run`.") == "DEFECT"
     assert _cls(tmp_path, "`pnpm vitest run`") == "DEFECT"
     assert _cls(tmp_path, "Step 2: execute `pnpm vitest run`") == "DEFECT"
@@ -146,7 +148,7 @@ def test_run_step_bare_span_and_shell_fence_are_still_refused(tmp_path):
     assert _cls(tmp_path, "```\n    pnpm vitest run\n    ```") == "DEFECT"
 
 
-def test_class_order(tmp_path):
+def test_class_order(tmp_path: Path) -> None:
     result = _gate(tmp_path, _ROW)
     assert tuple(result["classes"]) == pg.CLASS_ORDER
     assert pg.CLASS_ORDER.index("EXECUTOR_HEAVY") == pg.CLASS_ORDER.index("EXECUTOR_COMMIT") + 1

@@ -5,11 +5,13 @@ from datetime import date
 
 from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.workday_start.recheck_due import recheck_due
+from pathlib import Path
+import pytest
 
 BAR_MS = 500.0
 
 
-def test_recheck_due_median_under_bar_and_spawns_nothing(tmp_path, monkeypatch):
+def test_recheck_due_median_under_bar_and_spawns_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for n in range(7):
         (tmp_path / "state").mkdir(exist_ok=True)
         (tmp_path / "state" / f"g-recheck-due-2026-07-{n + 1:02d}.md").write_text("x")

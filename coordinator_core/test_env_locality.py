@@ -13,6 +13,7 @@ import os
 import pathlib
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -20,7 +21,7 @@ from coordinator_core import env_locality as EL
 
 
 # ------------------------------------------------------------ rung 0
-def test_documented_contract_is_the_first_rung():
+def test_documented_contract_is_the_first_rung() -> None:
     """`CLAUDE_CODE_REMOTE` is the documented variable with an explicit
     negative guarantee; it must answer before any undocumented marker."""
     hit = EL.harness_rung({"CLAUDE_CODE_REMOTE": "true"})
@@ -29,7 +30,7 @@ def test_documented_contract_is_the_first_rung():
     assert hit.basis == "CLAUDE_CODE_REMOTE=true"
 
 
-def test_documented_beats_undocumented_when_both_present():
+def test_documented_beats_undocumented_when_both_present() -> None:
     hit = EL.harness_rung({
         "CLAUDE_CODE_REMOTE": "true",
         "CLAUDE_CODE_CONTAINER_ID": "container_x--claude_code_remote--y",
@@ -40,7 +41,7 @@ def test_documented_beats_undocumented_when_both_present():
     )
 
 
-def test_undocumented_markers_are_high_not_certain():
+def test_undocumented_markers_are_high_not_certain() -> None:
     """They may raise confidence toward cloud; they may not claim certainty."""
     for env in ({"CLAUDE_CODE_CONTAINER_ID": "c--claude_code_remote--z"},
                 {"CLAUDE_CODE_ENTRYPOINT": "remote_mobile"}):
@@ -49,22 +50,22 @@ def test_undocumented_markers_are_high_not_certain():
         assert hit.confidence == "high"
 
 
-def test_claudecode_without_remote_marker_reads_attended():
+def test_claudecode_without_remote_marker_reads_attended() -> None:
     hit = EL.harness_rung({"CLAUDECODE": "1"})
     assert hit.call == "attended"
 
 
-def test_harness_rung_is_silent_when_harness_says_nothing():
+def test_harness_rung_is_silent_when_harness_says_nothing() -> None:
     assert EL.harness_rung({}) is None
     assert EL.harness_rung({"PATH": "/usr/bin"}) is None
 
 
-def test_remote_false_is_not_remote():
+def test_remote_false_is_not_remote() -> None:
     """The documented guarantee is about the literal string `true`."""
     assert EL.harness_rung({"CLAUDE_CODE_REMOTE": "false"}) is None
 
 
-def test_env_is_a_parameter_never_an_ambient_read(monkeypatch):
+def test_env_is_a_parameter_never_an_ambient_read(monkeypatch: pytest.MonkeyPatch) -> None:
     """Engine-side, the warm server's own `os.environ` belongs to its spawner.
     An explicitly-passed env must be the ONLY thing consulted."""
     monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
@@ -85,11 +86,11 @@ def test_env_is_a_parameter_never_an_ambient_read(monkeypatch):
     ("QEMU Virtual CPU version 2.5+", "explicit-vm"),
     ("", "unknown"),
 ])
-def test_silicon_classification(brand, expected):
+def test_silicon_classification(brand, expected) -> None:
     assert EL._silicon_class(brand) == expected
 
 
-def test_masked_server_is_what_separates_cloud_from_a_rack():
+def test_masked_server_is_what_separates_cloud_from_a_rack() -> None:
     """A SKU designator is the difference between real server silicon (which a
     homelab may also have) and a hypervisor's generic model (which is the
     cloud tell)."""
@@ -97,7 +98,7 @@ def test_masked_server_is_what_separates_cloud_from_a_rack():
     assert EL._silicon_class("Intel(R) Xeon(R) CPU E5-2680 v4 @ 2.40GHz") == "server-real"
 
 
-def test_cpu_brand_read_is_bounded(tmp_path):
+def test_cpu_brand_read_is_bounded(tmp_path: Path) -> None:
     """The reader must not depend on the whole file: /proc/cpuinfo repeats a
     block per core, and both fields live in the first block."""
     f = tmp_path / "cpuinfo"
@@ -108,25 +109,25 @@ def test_cpu_brand_read_is_bounded(tmp_path):
     assert micro == "0x114"
 
 
-def test_cpu_brand_read_survives_a_missing_file():
+def test_cpu_brand_read_survives_a_missing_file() -> None:
     assert EL._cpu_brand_linux("/nonexistent/cpuinfo") == ("", "")
 
 
 # ------------------------------------------------------------ rung 1
-def _force_linux(monkeypatch):
+def _force_linux(monkeypatch) -> None:
     monkeypatch.setattr(EL, "IS_WINDOWS", False)
     monkeypatch.setattr(EL, "IS_DARWIN", False)
     monkeypatch.setattr(EL, "IS_LINUX", True)
 
 
 class _Uname:
-    def __init__(self, release):
+    def __init__(self, release) -> None:
         self.release = release
         self.machine = "x86_64"
         self.nodename = "host"
 
 
-def test_wsl_is_attended_and_says_windows(monkeypatch):
+def test_wsl_is_attended_and_says_windows(monkeypatch: pytest.MonkeyPatch) -> None:
     """The highest-stakes case: WSL presents as Linux but needs the WINDOWS
     guards, so the basis must name the Windows host, not merely 'not cloud'."""
     _force_linux(monkeypatch)
@@ -138,7 +139,7 @@ def test_wsl_is_attended_and_says_windows(monkeypatch):
     assert "Windows host" in got.basis
 
 
-def test_consumer_silicon_rescues_a_nested_vm_on_a_laptop(monkeypatch):
+def test_consumer_silicon_rescues_a_nested_vm_on_a_laptop(monkeypatch: pytest.MonkeyPatch) -> None:
     """A Docker-Desktop-class VM is a headless VM by shape, but the host CPU
     passes through -- consumer silicon means somebody's machine is underneath."""
     _force_linux(monkeypatch)
@@ -150,7 +151,7 @@ def test_consumer_silicon_rescues_a_nested_vm_on_a_laptop(monkeypatch):
     assert got.confidence == "high"
 
 
-def test_masked_silicon_with_synthetic_microcode_is_cloud(monkeypatch):
+def test_masked_silicon_with_synthetic_microcode_is_cloud(monkeypatch: pytest.MonkeyPatch) -> None:
     _force_linux(monkeypatch)
     monkeypatch.setattr(EL.os, "uname", lambda: _Uname("6.18.44-fc-v24"), raising=False)
     monkeypatch.setattr(EL, "_cpu_brand_linux",
@@ -160,7 +161,7 @@ def test_masked_silicon_with_synthetic_microcode_is_cloud(monkeypatch):
     assert got.confidence == "high"
 
 
-def test_generic_hypervisor_brand_stays_suspect(monkeypatch):
+def test_generic_hypervisor_brand_stays_suspect(monkeypatch: pytest.MonkeyPatch) -> None:
     """The one irreducible band. Rounding this to either answer is the defect
     the third state exists to prevent."""
     _force_linux(monkeypatch)
@@ -173,7 +174,7 @@ def test_generic_hypervisor_brand_stays_suspect(monkeypatch):
     assert got.confidence == "low"
 
 
-def test_windows_falls_back_to_env_when_registry_unavailable(monkeypatch):
+def test_windows_falls_back_to_env_when_registry_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(EL, "IS_WINDOWS", True)
     monkeypatch.setattr(EL, "IS_DARWIN", False)
     monkeypatch.setattr(EL, "IS_LINUX", False)
@@ -181,7 +182,7 @@ def test_windows_falls_back_to_env_when_registry_unavailable(monkeypatch):
     assert got.call == "attended"
 
 
-def test_darwin_is_settled_without_touching_the_disk(monkeypatch):
+def test_darwin_is_settled_without_touching_the_disk(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(EL, "IS_WINDOWS", False)
     monkeypatch.setattr(EL, "IS_DARWIN", True)
     monkeypatch.setattr(EL, "IS_LINUX", False)
@@ -194,13 +195,13 @@ def test_darwin_is_settled_without_touching_the_disk(monkeypatch):
 
 
 # ------------------------------------------------------------ contract
-def test_calls_and_confidences_come_from_the_closed_vocabularies():
+def test_calls_and_confidences_come_from_the_closed_vocabularies() -> None:
     got = EL.locality()
     assert got.call in EL.CALLS
     assert got.confidence in EL.CONFIDENCES
 
 
-def test_harness_rung_wins_over_machine_rung(monkeypatch):
+def test_harness_rung_wins_over_machine_rung(monkeypatch: pytest.MonkeyPatch) -> None:
     """Rung 0 is a contract, rung 1 an inference. Where they disagree, the
     contract wins."""
     _force_linux(monkeypatch)
@@ -212,7 +213,7 @@ def test_harness_rung_wins_over_machine_rung(monkeypatch):
     assert got.call == "cloud" and got.rung == "harness"
 
 
-def test_cross_check_surfaces_disagreement(monkeypatch):
+def test_cross_check_surfaces_disagreement(monkeypatch: pytest.MonkeyPatch) -> None:
     _force_linux(monkeypatch)
     monkeypatch.setattr(EL, "_cpu_brand_linux",
                         lambda *a: ("Intel(R) Core(TM) Ultra 9 285K", "0x114"))
@@ -222,14 +223,14 @@ def test_cross_check_surfaces_disagreement(monkeypatch):
     assert out["effective"].rung == "harness"
 
 
-def test_cross_check_agree_is_none_when_harness_is_silent(monkeypatch):
+def test_cross_check_agree_is_none_when_harness_is_silent(monkeypatch: pytest.MonkeyPatch) -> None:
     _force_linux(monkeypatch)
     monkeypatch.setattr(EL.os, "uname", lambda: _Uname("6.1.0"), raising=False)
     out = EL.cross_check({})
     assert out["agree"] is None
 
 
-def test_machine_rung_is_memoized(monkeypatch):
+def test_machine_rung_is_memoized(monkeypatch: pytest.MonkeyPatch) -> None:
     EL._MACHINE_CACHE.clear()
     EL.machine_rung({})
     calls = []
@@ -240,7 +241,7 @@ def test_machine_rung_is_memoized(monkeypatch):
     EL._MACHINE_CACHE.clear()
 
 
-def test_module_spawns_nothing():
+def test_module_spawns_nothing() -> None:
     """The primitive exists because the shell-out alternative costs a spawn and
     a 127.8 ms tail. Checked over the parsed AST, not the source text: the
     module docstring names `platform.system()` and `systemd-detect-virt` in
@@ -270,20 +271,20 @@ def test_module_spawns_nothing():
 
 
 # ------------------------------------------------------------ accelerator
-def _clear_accel(monkeypatch):
+def _clear_accel(monkeypatch) -> None:
     EL._ACCEL_CACHE.clear()
     monkeypatch.setattr(EL, "IS_WINDOWS", False)
     monkeypatch.setattr(EL, "IS_DARWIN", False)
     monkeypatch.setattr(EL, "IS_LINUX", True)
 
 
-def test_accel_calls_come_from_the_closed_vocabulary():
+def test_accel_calls_come_from_the_closed_vocabulary() -> None:
     got = EL.accelerator({})
     assert got.call in EL.ACCEL_CALLS
     assert got.confidence in EL.CONFIDENCES
 
 
-def test_scan_path_for_finds_a_file_with_no_exec(tmp_path, monkeypatch):
+def test_scan_path_for_finds_a_file_with_no_exec(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(EL, "IS_WINDOWS", False)
     target = tmp_path / "nvidia-smi"
     target.write_text("#!/bin/sh\n")
@@ -291,7 +292,7 @@ def test_scan_path_for_finds_a_file_with_no_exec(tmp_path, monkeypatch):
     assert EL._scan_path_for("nvidia-smi", {"PATH": str(tmp_path / "nope")}) is False
 
 
-def test_scan_path_for_respects_pathext_on_windows(tmp_path, monkeypatch):
+def test_scan_path_for_respects_pathext_on_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(EL, "IS_WINDOWS", True)
     monkeypatch.setattr(EL.os, "pathsep", ";")
     target = tmp_path / "nvidia-smi.EXE"
@@ -301,11 +302,11 @@ def test_scan_path_for_respects_pathext_on_windows(tmp_path, monkeypatch):
     assert EL._scan_path_for("other-tool", env) is False
 
 
-def test_scan_path_for_empty_path_is_false():
+def test_scan_path_for_empty_path_is_false() -> None:
     assert EL._scan_path_for("nvidia-smi", {}) is False
 
 
-def test_nvidia_via_path_scan(monkeypatch):
+def test_nvidia_via_path_scan(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_accel(monkeypatch)
     monkeypatch.setattr(EL, "_scan_path_for", lambda name, env: True)
     got = EL._accelerator_uncached({})
@@ -314,7 +315,7 @@ def test_nvidia_via_path_scan(monkeypatch):
     assert "PATH" in got.basis
 
 
-def test_nvidia_via_linux_proc_driver(monkeypatch):
+def test_nvidia_via_linux_proc_driver(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_accel(monkeypatch)
     monkeypatch.setattr(EL, "_scan_path_for", lambda name, env: False)
     monkeypatch.setattr(EL.os.path, "exists", lambda p: p == "/proc/driver/nvidia")
@@ -323,7 +324,7 @@ def test_nvidia_via_linux_proc_driver(monkeypatch):
     assert "/proc/driver/nvidia" in got.basis
 
 
-def test_nvidia_via_linux_dev_node(monkeypatch):
+def test_nvidia_via_linux_dev_node(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_accel(monkeypatch)
     monkeypatch.setattr(EL, "_scan_path_for", lambda name, env: False)
     monkeypatch.setattr(EL.os.path, "exists", lambda p: p == "/dev/nvidia0")
@@ -332,7 +333,7 @@ def test_nvidia_via_linux_dev_node(monkeypatch):
     assert "/dev/nvidia0" in got.basis
 
 
-def test_nvidia_via_windows_system32(monkeypatch):
+def test_nvidia_via_windows_system32(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(EL, "IS_WINDOWS", True)
     monkeypatch.setattr(EL, "IS_DARWIN", False)
     monkeypatch.setattr(EL, "IS_LINUX", False)
@@ -345,13 +346,13 @@ def test_nvidia_via_windows_system32(monkeypatch):
     assert "System32" in got.basis
 
 
-def test_mps_on_apple_silicon(monkeypatch):
+def test_mps_on_apple_silicon(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(EL, "IS_WINDOWS", False)
     monkeypatch.setattr(EL, "IS_DARWIN", True)
     monkeypatch.setattr(EL, "IS_LINUX", False)
     monkeypatch.setattr(EL, "_scan_path_for", lambda name, env: False)
 
-    def _apple_uname():
+    def _apple_uname() -> _Uname:
         u = _Uname("23.0.0")
         u.machine = "arm64"
         return u
@@ -362,7 +363,7 @@ def test_mps_on_apple_silicon(monkeypatch):
     assert got.confidence == "high"
 
 
-def test_none_on_intel_mac(monkeypatch):
+def test_none_on_intel_mac(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(EL, "IS_WINDOWS", False)
     monkeypatch.setattr(EL, "IS_DARWIN", True)
     monkeypatch.setattr(EL, "IS_LINUX", False)
@@ -373,7 +374,7 @@ def test_none_on_intel_mac(monkeypatch):
     assert "Intel" in got.basis
 
 
-def test_none_high_confidence_on_masked_server_silicon(monkeypatch):
+def test_none_high_confidence_on_masked_server_silicon(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_accel(monkeypatch)
     monkeypatch.setattr(EL, "_scan_path_for", lambda name, env: False)
     monkeypatch.setattr(EL.os.path, "exists", lambda p: False)
@@ -386,7 +387,7 @@ def test_none_high_confidence_on_masked_server_silicon(monkeypatch):
     assert got.confidence == "high"
 
 
-def test_unknown_when_passthrough_device_with_no_driver(monkeypatch):
+def test_unknown_when_passthrough_device_with_no_driver(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_accel(monkeypatch)
     monkeypatch.setattr(EL, "_scan_path_for", lambda name, env: False)
     monkeypatch.setattr(EL, "machine_rung",
@@ -398,7 +399,7 @@ def test_unknown_when_passthrough_device_with_no_driver(monkeypatch):
     assert got.confidence == "low"
 
 
-def test_none_when_no_signal_at_all(monkeypatch):
+def test_none_when_no_signal_at_all(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_accel(monkeypatch)
     monkeypatch.setattr(EL, "_scan_path_for", lambda name, env: False)
     monkeypatch.setattr(EL, "machine_rung",
@@ -410,7 +411,7 @@ def test_none_when_no_signal_at_all(monkeypatch):
     assert got.confidence == "medium"
 
 
-def test_accelerator_is_memoized(monkeypatch):
+def test_accelerator_is_memoized(monkeypatch: pytest.MonkeyPatch) -> None:
     EL._ACCEL_CACHE.clear()
     EL.accelerator({})
     calls = []
@@ -421,7 +422,7 @@ def test_accelerator_is_memoized(monkeypatch):
     EL._ACCEL_CACHE.clear()
 
 
-def test_accelerator_env_is_a_parameter(monkeypatch):
+def test_accelerator_env_is_a_parameter(monkeypatch: pytest.MonkeyPatch) -> None:
     """Passing an explicit env must be the only thing consulted -- ambient
     os.environ must never be read, matching locality()'s own guarantee."""
     monkeypatch.setattr(EL, "IS_WINDOWS", True)
@@ -431,7 +432,7 @@ def test_accelerator_env_is_a_parameter(monkeypatch):
     assert EL._scan_path_for("nvidia-smi", {}) is False
 
 
-def test_winreg_key_path_has_single_separators():
+def test_winreg_key_path_has_single_separators() -> None:
     """A raw-string registry path resolves to DOUBLED separators and is not a
     valid key. It would raise on Windows, be swallowed by the fallback's broad
     except, and present as the env-var path working normally -- a silent

@@ -9,16 +9,17 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import land_remainder_writeset as tool
 from coordinator_core.ops.dispatch_emit.dirty_write_set import DirtyWriteSetError
+from pathlib import Path
 
 RUN = "warp-test-run"
 
 
-def _row(rid, writes, under=()):
+def _row(rid, writes, under=()) -> SimpleNamespace:
     return SimpleNamespace(id=rid, writes=list(writes), surface="", writes_under=list(under))
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     run_dir = tmp_path / "state" / "warp" / RUN
     run_dir.mkdir(parents=True)
     (run_dir / "run.json").write_text(json.dumps({"sizing_rel": "state/sizings/s.yaml"}), encoding="utf-8")
@@ -41,7 +42,7 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _write(repo, *rels):
+def _write(repo, *rels) -> None:
     for rel in rels:
         p = repo / rel
         p.parent.mkdir(parents=True, exist_ok=True)
@@ -58,7 +59,7 @@ def test_in_set_paths_pass_and_prefix_sibling_is_refused(repo) -> None:
     assert tool.refuse_out_of_write_set(repo, RUN, ["gen/dirty.txt"]) == ["gen/dirty.txt"]
 
 
-def test_run_without_plan_raises(tmp_path) -> None:
+def test_run_without_plan_raises(tmp_path: Path) -> None:
     (tmp_path / "state" / "warp" / RUN).mkdir(parents=True)
     with pytest.raises(ValueError):
         tool.refuse_out_of_write_set(tmp_path, RUN, ["x"])
@@ -80,7 +81,7 @@ def test_generated_output_is_named_not_staged(repo) -> None:
     assert omitted[0][1]
 
 
-def test_git_failure_raises(repo, monkeypatch) -> None:
+def test_git_failure_raises(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tool, "_dirty_in_write_set", lambda *a, **k: None)
     with pytest.raises(DirtyWriteSetError):
         tool.dirty_declared(repo, RUN)

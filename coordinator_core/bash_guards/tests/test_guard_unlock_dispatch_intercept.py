@@ -33,6 +33,7 @@ import pytest
 
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.session import guard_unlock_sentinel as gus
+from pathlib import Path
 
 
 SENTINEL_BASENAME = ".coordinator-dev-repo"
@@ -43,7 +44,7 @@ SENTINEL_REMOVAL_GUARD_NAME = "block-dev-repo-sentinel-removal"
 
 
 @pytest.fixture(autouse=True)
-def _isolated_tempdir(tmp_path, monkeypatch):
+def _isolated_tempdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
     yield
 
@@ -68,22 +69,22 @@ def _decision(payload):
 
 class TestAbsentSentinelDenies:
 
-    def test_no_sentinel_denies(self):
+    def test_no_sentinel_denies(self) -> None:
         assert _decision(_payload("sess-1")) == "deny"
 
 
 class TestPresentSentinelGrantsOnce:
 
-    def test_sentinel_allows(self):
+    def test_sentinel_allows(self) -> None:
         gus.sentinel_path("sess-1", GUARD_NAME).write_text("", encoding="utf-8")
         assert _decision(_payload("sess-1")) == "allow"
 
-    def test_one_shot_re_denies_on_immediate_retry(self):
+    def test_one_shot_re_denies_on_immediate_retry(self) -> None:
         gus.sentinel_path("sess-1", GUARD_NAME).write_text("", encoding="utf-8")
         assert _decision(_payload("sess-1")) == "allow"
         assert _decision(_payload("sess-1")) == "deny"
 
-    def test_sentinel_file_is_consumed_from_disk(self):
+    def test_sentinel_file_is_consumed_from_disk(self) -> None:
         p = gus.sentinel_path("sess-1", GUARD_NAME)
         p.write_text("", encoding="utf-8")
         dispatch.evaluate_payload_json(json.dumps(_payload("sess-1")))
@@ -91,23 +92,23 @@ class TestPresentSentinelGrantsOnce:
 
 
 class TestPerGuardIsolation:
-    def test_sentinel_for_a_different_guard_does_not_clear_this_one(self):
+    def test_sentinel_for_a_different_guard_does_not_clear_this_one(self) -> None:
         gus.sentinel_path("sess-1", "no-verify").write_text("", encoding="utf-8")
         assert _decision(_payload("sess-1")) == "deny"
 
 
 class TestPerSessionIsolation:
-    def test_peer_session_sentinel_does_not_clear_ours(self):
+    def test_peer_session_sentinel_does_not_clear_ours(self) -> None:
         gus.sentinel_path("peer-session", GUARD_NAME).write_text("", encoding="utf-8")
         assert _decision(_payload("sess-1")) == "deny"
 
 
 class TestUnresolvableSessionIdFailsClosed:
-    def test_missing_session_id_denies_even_with_a_sentinel_on_disk(self):
+    def test_missing_session_id_denies_even_with_a_sentinel_on_disk(self) -> None:
         gus.sentinel_path("", GUARD_NAME).write_text("", encoding="utf-8")
         assert _decision(_payload(None)) == "deny"
 
-    def test_empty_string_session_id_denies(self):
+    def test_empty_string_session_id_denies(self) -> None:
         gus.sentinel_path("", GUARD_NAME).write_text("", encoding="utf-8")
         assert _decision(_payload("")) == "deny"
 
@@ -120,10 +121,10 @@ STASH_DROP_CMD = "git stash drop"
 class TestRemovalLegGuardGrantsUnderTheSameMechanism:
     """AC4 -- the removal-leg cohort is not exempt from the unlock."""
 
-    def test_denies_without_sentinel(self):
+    def test_denies_without_sentinel(self) -> None:
         assert _decision(_payload("sess-1", command=STASH_DROP_CMD)) == "deny"
 
-    def test_grants_once_then_re_denies_on_immediate_retry(self):
+    def test_grants_once_then_re_denies_on_immediate_retry(self) -> None:
         gus.sentinel_path("sess-1", STASH_GUARD_NAME).write_text("", encoding="utf-8")
         assert _decision(_payload("sess-1", command=STASH_DROP_CMD)) == "allow"
         assert _decision(_payload("sess-1", command=STASH_DROP_CMD)) == "deny"
@@ -139,7 +140,7 @@ class TestIndirectionLegIsAllowNotDeny:
     moment must be left untouched — the gate must never mistake this leg
     for a deny to unlock."""
 
-    def test_unparseable_indirection_allows_and_leaves_sentinel_unconsumed(self):
+    def test_unparseable_indirection_allows_and_leaves_sentinel_unconsumed(self) -> None:
         # An unbalanced-quote command that only TEXTUALLY mentions the
         # sentinel basename -- one of `SentinelRemovalDetector`'s
         # documented indirection triggers. A plain `xargs`/interpreter
@@ -167,7 +168,7 @@ class TestUnlockNotConsumedWhenSuppressionWouldHaveAllowedAnyway:
     this test pins that a sentinel for this guard survives a non-Windows
     dispatch untouched."""
 
-    def test_sentinel_survives_non_windows_dispatch_of_suppressible_guard(self):
+    def test_sentinel_survives_non_windows_dispatch_of_suppressible_guard(self) -> None:
         sentinel = gus.sentinel_path("sess-1", "plumbing-and-loops")
         sentinel.write_text("", encoding="utf-8")
         payload = _payload("sess-1", command="cat some_file.txt | head -50")

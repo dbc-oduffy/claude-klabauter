@@ -359,6 +359,8 @@ def _ml_set(ml_bin: str, key: str, value: str) -> int:
     if result is None:
         print(f"skip: _ml_set: machine-local set {key} failed to launch or outlived its ceiling", file=sys.stderr)
         return 1
+    if result.returncode != 0:
+        sys.stderr.write(result.stderr or "")
     return result.returncode
 
 

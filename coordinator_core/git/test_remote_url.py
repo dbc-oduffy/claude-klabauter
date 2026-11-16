@@ -6,13 +6,14 @@ import subprocess
 import pytest
 
 from coordinator_core.git import remote_url
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _GIT_TIMEOUT = 10
 
 
-def _run_git(args, cwd):
+def _run_git(args, cwd) -> None:
     subprocess.run(
         ["git"] + args,
         cwd=str(cwd),
@@ -24,7 +25,7 @@ def _run_git(args, cwd):
     )
 
 
-def _init_repo(tmp_path, name="repo"):
+def _init_repo(tmp_path, name: str = "repo"):
     repo = tmp_path / name
     repo.mkdir()
     _run_git(["init", "-b", "main"], repo)
@@ -33,24 +34,24 @@ def _init_repo(tmp_path, name="repo"):
     return repo
 
 
-def test_get_remote_url_returns_configured_url(tmp_path):
+def test_get_remote_url_returns_configured_url(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _run_git(["remote", "add", "origin", "https://example.invalid/o/r.git"], repo)
     assert remote_url.get_remote_url("origin", cwd=str(repo)) == "https://example.invalid/o/r.git"
 
 
-def test_get_remote_url_absent_remote_returns_none(tmp_path):
+def test_get_remote_url_absent_remote_returns_none(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     assert remote_url.get_remote_url("origin", cwd=str(repo)) is None
 
 
-def test_get_remote_url_not_a_repo_returns_none(tmp_path):
+def test_get_remote_url_not_a_repo_returns_none(tmp_path: Path) -> None:
     lone = tmp_path / "lonely"
     lone.mkdir()
     assert remote_url.get_remote_url("origin", cwd=str(lone)) is None
 
 
-def test_get_remote_url_git_missing_oserror_returns_none(tmp_path, monkeypatch):
+def test_get_remote_url_git_missing_oserror_returns_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def _fake_run(*a, **kw):
         raise OSError("git not found")
 
@@ -60,7 +61,7 @@ def test_get_remote_url_git_missing_oserror_returns_none(tmp_path, monkeypatch):
     assert remote_url.get_remote_url("origin", cwd=str(repo)) is None
 
 
-def test_get_remote_url_timeout_returns_none(tmp_path, monkeypatch):
+def test_get_remote_url_timeout_returns_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def _fake_run(*a, **kw):
         raise subprocess.TimeoutExpired(cmd="git", timeout=2.0)
 
@@ -70,7 +71,7 @@ def test_get_remote_url_timeout_returns_none(tmp_path, monkeypatch):
     assert remote_url.get_remote_url("origin", cwd=str(repo)) is None
 
 
-def test_get_remote_url_matches_real_git_rev_parse_toplevel_scoped(tmp_path):
+def test_get_remote_url_matches_real_git_rev_parse_toplevel_scoped(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _run_git(["remote", "add", "origin", "https://example.invalid/o/r.git"], repo)
 
@@ -89,7 +90,7 @@ def test_get_remote_url_matches_real_git_rev_parse_toplevel_scoped(tmp_path):
     assert remote_url.get_remote_url("origin", cwd=str(repo)) == "https://example.invalid/o/r.git"
 
 
-def test_get_remote_url_matches_git_remote_get_url_directly(tmp_path):
+def test_get_remote_url_matches_git_remote_get_url_directly(tmp_path: Path) -> None:
     """Equivalence test (brief's DERIVATION METHOD requirement): this
     module's answer must match `git remote get-url origin` run directly,
     since this module is a thin spawn wrapper around exactly that command
@@ -110,7 +111,7 @@ def test_get_remote_url_matches_git_remote_get_url_directly(tmp_path):
     assert remote_url.get_remote_url("origin", cwd=str(repo)) == direct
 
 
-def test_get_remote_url_respects_insteadof_rewrite(tmp_path):
+def test_get_remote_url_respects_insteadof_rewrite(tmp_path: Path) -> None:
     """Fixture repo carrying an `insteadOf` rewrite (brief's named
     divergence case). This module spawns `git remote get-url`, which
     reports the REWRITTEN url -- a `.git/config` line-parser would report
@@ -138,7 +139,7 @@ def test_get_remote_url_respects_insteadof_rewrite(tmp_path):
     assert resolved == "https://example.invalid/expanded/o/r.git"
 
 
-def test_get_remote_url_absent_to_present_within_one_process(tmp_path):
+def test_get_remote_url_absent_to_present_within_one_process(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     assert remote_url.get_remote_url("origin", cwd=str(repo)) is None
     _run_git(["remote", "add", "origin", "https://example.invalid/o/r.git"], repo)

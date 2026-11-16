@@ -6,11 +6,13 @@ import json
 import re
 
 from coordinator_core.ops.dispatch_emit import cli, run_token
+from pathlib import Path
+import pytest
 
 _STAMP_RE = re.compile(r"run_stamp: '([^']+)'")
 
 
-def test_queue_route_token_record_is_kind_grind(tmp_path, capsys):
+def test_queue_route_token_record_is_kind_grind(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / ".git").mkdir()
     cli._print_workflow_invocation(
         {"path": "scratch/g.workflow.mjs"}, is_queue_route=True, profile_dir="p", repo_root=tmp_path
@@ -22,7 +24,7 @@ def test_queue_route_token_record_is_kind_grind(tmp_path, capsys):
     assert record["script_path"] == "scratch/g.workflow.mjs"
 
 
-def test_default_mint_kind_is_ask(tmp_path):
+def test_default_mint_kind_is_ask(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     run_token.mint(tmp_path, "20260101T000000Z", "s.mjs")
     record = json.loads(run_token._record_path(tmp_path, "20260101T000000Z").read_text(encoding="utf-8"))

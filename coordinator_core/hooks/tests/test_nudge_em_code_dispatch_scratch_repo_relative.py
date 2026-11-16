@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.hooks import nudge_em_code_dispatch as hook
+from pathlib import Path
 
 
 def _repo(base):
@@ -13,25 +14,25 @@ def _repo(base):
     return repo
 
 
-def test_nested_git_probe_repo_under_scratch_is_not_scratch_py(tmp_path):
+def test_nested_git_probe_repo_under_scratch_is_not_scratch_py(tmp_path: Path) -> None:
     repo = _repo(tmp_path / "scratch" / "fam-1a")
     target = str(repo / "src" / "x.py")
     assert not hook._is_scratch_py(target)
 
 
-def test_repo_scratch_py_is_denied_shape(tmp_path):
+def test_repo_scratch_py_is_denied_shape(tmp_path: Path) -> None:
     repo = _repo(tmp_path / "scratch" / "fam-1a")
     assert hook._is_scratch_py(str(repo / "scratch" / "probe.py"))
     assert hook._is_scratch_py(str(repo / "src" / "scratch" / "probe.py"))
 
 
-def test_no_repo_falls_back_to_absolute_path(tmp_path):
+def test_no_repo_falls_back_to_absolute_path(tmp_path: Path) -> None:
     assert hook._is_scratch_py(str(tmp_path / "scratch" / "probe.py"))
     assert not hook._is_scratch_py(str(tmp_path / "other" / "probe.py"))
 
 
 @pytest.mark.parametrize("autonomous", [False, True])
-def test_scratch_py_without_an_executor_deny_draws_the_advisory(tmp_path, monkeypatch, autonomous):
+def test_scratch_py_without_an_executor_deny_draws_the_advisory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, autonomous) -> None:
     import tempfile
 
     import coordinator_core.machine_profile as mp
@@ -57,6 +58,6 @@ def test_scratch_py_without_an_executor_deny_draws_the_advisory(tmp_path, monkey
     assert "No sizing" in result["hookSpecificOutput"]["additionalContext"]
 
 
-def test_non_py_is_not_scratch_py(tmp_path):
+def test_non_py_is_not_scratch_py(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     assert not hook._is_scratch_py(str(repo / "scratch" / "probe.txt"))

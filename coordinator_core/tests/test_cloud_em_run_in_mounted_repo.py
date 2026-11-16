@@ -31,7 +31,7 @@ _HARNESS_HEADER = "[Workflow harness — computed task] The task text below was 
 
 
 @pytest.fixture
-def fleet(tmp_path, monkeypatch):
+def fleet(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     from coordinator_core.bash_guards import block_reviewer_bash_outside_allowlist as roster_guard
     from coordinator_core.bash_guards import block_subagent_commit as commit_guard
 
@@ -98,12 +98,12 @@ def _transcript(fleet, prompt: str) -> Path:
     return path
 
 
-def test_run_agent_write_into_the_run_repo_is_admitted(fleet):
+def test_run_agent_write_into_the_run_repo_is_admitted(fleet) -> None:
     out = _write(fleet, fleet.b / "docs" / "plans" / "p.md")
     assert not _denied(out), out
 
 
-def test_write_into_a_third_registered_repo_is_still_flagged(fleet):
+def test_write_into_a_third_registered_repo_is_still_flagged(fleet) -> None:
     out = _write(fleet, fleet.c / "docs" / "plans" / "p.md")
     assert not _denied(out), out
     hso = out["hookSpecificOutput"]
@@ -121,7 +121,7 @@ def test_write_into_a_third_registered_repo_is_still_flagged(fleet):
         f"python3 PLUGIN/bin/plan-spine-check.py {_PLAN}",
     ],
 )
-def test_plan_fill_bash_shapes_are_admitted(fleet, cmd):
+def test_plan_fill_bash_shapes_are_admitted(fleet, cmd) -> None:
     plugin = fleet.b / "coordinator"
     for rel in ("bin/coordinator-doc-new.py", "lib/plan_scaffold_markers.py", "bin/plan-spine-check.py"):
         (plugin / rel).parent.mkdir(parents=True, exist_ok=True)
@@ -131,7 +131,7 @@ def test_plan_fill_bash_shapes_are_admitted(fleet, cmd):
     assert not _denied(out), out
 
 
-def test_composed_commit_command_is_admitted_and_params_land_in_b(fleet):
+def test_composed_commit_command_is_admitted_and_params_land_in_b(fleet) -> None:
     call = _commit_stage_call(
         head="head", anchor=f"Repo root: {fleet.b.as_posix()}", repo_root=str(fleet.b),
         run_id=_RUN, script_path=_SCRIPT,

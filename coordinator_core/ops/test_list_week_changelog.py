@@ -8,21 +8,22 @@ import contextlib
 from pathlib import Path
 
 from coordinator_core.ops import list_week_changelog as lwc
+import pytest
 
 
-def test_bugcompat_zero_matches_doubles(tmp_path):
+def test_bugcompat_zero_matches_doubles(tmp_path: Path) -> None:
     f = tmp_path / "a.md"
     f.write_text("not a commit line\nnor this one\n")
     assert lwc._grep_commit_count_bugcompat(f) == "0\n0"
 
 
-def test_bugcompat_nonzero_matches_single(tmp_path):
+def test_bugcompat_nonzero_matches_single(tmp_path: Path) -> None:
     f = tmp_path / "a.md"
     f.write_text("abc1234 a commit\nnot a commit\ndef5678 another\n")
     assert lwc._grep_commit_count_bugcompat(f) == "2"
 
 
-def test_wc_l_counts_newlines(tmp_path):
+def test_wc_l_counts_newlines(tmp_path: Path) -> None:
     f = tmp_path / "a.md"
     f.write_text("one\ntwo\nthree\n")
     assert lwc._wc_l(f) == "3"
@@ -33,7 +34,7 @@ def test_wc_l_counts_newlines(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _run_main(monkeypatch, tmp_path, argv):
+def _run_main(monkeypatch, tmp_path, argv) -> tuple[int, str, str]:
     monkeypatch.setenv("LWC_TEST_STATE_ROOT", str(tmp_path / "state"))
     monkeypatch.setattr(lwc, "_git_root", lambda cwd=None: str(tmp_path))
     out = io.StringIO()
@@ -43,14 +44,14 @@ def _run_main(monkeypatch, tmp_path, argv):
     return rc, out.getvalue(), err.getvalue()
 
 
-def test_no_changelog_dir(monkeypatch, tmp_path):
+def test_no_changelog_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     rc, out, err = _run_main(monkeypatch, tmp_path, [str(tmp_path)])
     assert rc == 0
     assert f"(no state/week-changelog/ directory at {tmp_path})" in out
 
 
-def test_no_daily_files_only_header(monkeypatch, tmp_path):
+def test_no_daily_files_only_header(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     d = tmp_path / "state" / "week-changelog"
     d.mkdir(parents=True)
@@ -66,7 +67,7 @@ def test_no_daily_files_only_header(monkeypatch, tmp_path):
     assert "**Last /workweek-start:** 2026-07-13" in lines
 
 
-def test_daily_file_zero_commit_lines_reproduces_doubled_zero(monkeypatch, tmp_path):
+def test_daily_file_zero_commit_lines_reproduces_doubled_zero(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     d = tmp_path / "state" / "week-changelog"
     d.mkdir(parents=True)
@@ -76,7 +77,7 @@ def test_daily_file_zero_commit_lines_reproduces_doubled_zero(monkeypatch, tmp_p
     assert "2026-07-15-foo.md  lines=2  commit-lines=0\n0" in out
 
 
-def test_daily_file_with_commit_lines(monkeypatch, tmp_path):
+def test_daily_file_with_commit_lines(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     d = tmp_path / "state" / "week-changelog"
     d.mkdir(parents=True)
@@ -88,7 +89,7 @@ def test_daily_file_with_commit_lines(monkeypatch, tmp_path):
     assert "2026-07-15-foo.md  lines=3  commit-lines=2" in out
 
 
-def test_header_md_excluded_from_daily_listing(monkeypatch, tmp_path):
+def test_header_md_excluded_from_daily_listing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     d = tmp_path / "state" / "week-changelog"
     d.mkdir(parents=True)
@@ -99,7 +100,7 @@ def test_header_md_excluded_from_daily_listing(monkeypatch, tmp_path):
     assert "2026-07-15-foo.md" in out
 
 
-def test_no_header_md(monkeypatch, tmp_path):
+def test_no_header_md(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     d = tmp_path / "state" / "week-changelog"
     d.mkdir(parents=True)
@@ -108,7 +109,7 @@ def test_no_header_md(monkeypatch, tmp_path):
     assert "(no HEADER.md)" in out
 
 
-def test_header_without_markers(monkeypatch, tmp_path):
+def test_header_without_markers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     d = tmp_path / "state" / "week-changelog"
     d.mkdir(parents=True)
@@ -117,7 +118,7 @@ def test_header_without_markers(monkeypatch, tmp_path):
     assert "(HEADER has no Week-starting / Last-workweek-start markers)" in out
 
 
-def test_not_a_git_repo(monkeypatch, tmp_path):
+def test_not_a_git_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     rc, out, err = lwc.main([str(tmp_path)]), None, None
     out_buf = io.StringIO()
@@ -129,7 +130,7 @@ def test_not_a_git_repo(monkeypatch, tmp_path):
     assert out_buf.getvalue() == ""
 
 
-def test_main_never_raises_on_unexpected_error(monkeypatch, tmp_path):
+def test_main_never_raises_on_unexpected_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
 
     def _boom(argv):

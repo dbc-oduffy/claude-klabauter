@@ -10,6 +10,7 @@ import pytest
 from coordinator_core.ipc import CallerFacingValidationError
 from coordinator_core.ops import plan_backfill_warp_executing as op
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -50,7 +51,7 @@ def _add_plan(root, name: str, text: str, newline=None) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "00000000-0000-4000-8000-000000000000")
     _git(tmp_path, "init", "-q", "-b", "main")
     (tmp_path / "seed").write_text("1", encoding="utf-8")
@@ -93,7 +94,7 @@ def _populate(root) -> dict:
     return rels
 
 
-def test_dry_run_lists_exactly_the_pre_executing_plans_with_a_coded_row_and_writes_nothing(repo):
+def test_dry_run_lists_exactly_the_pre_executing_plans_with_a_coded_row_and_writes_nothing(repo) -> None:
     rels = _populate(repo)
     before = _snapshot(repo)
     head = _git(repo, "rev-parse", "HEAD")
@@ -108,21 +109,21 @@ def test_dry_run_lists_exactly_the_pre_executing_plans_with_a_coded_row_and_writ
     assert _snapshot(repo) == before and _git(repo, "rev-parse", "HEAD") == head
 
 
-def test_a_manifest_with_no_rows_still_links_its_plan(repo):
+def test_a_manifest_with_no_rows_still_links_its_plan(repo) -> None:
     _add_plan(repo, "a", _plan("reviewed", "pln-a"))
     _manifest(repo, "resume", "pln-a", rows=[])
     _commit_all(repo)
     assert [c["plan_id"] for c in _call(repo)["candidates"]] == ["pln-a"]
 
 
-def test_a_manifest_naming_a_null_plan_links_nothing(repo):
+def test_a_manifest_naming_a_null_plan_links_nothing(repo) -> None:
     _add_plan(repo, "a", _plan("reviewed", "pln-a"))
     _manifest(repo, "minted", None)
     _commit_all(repo)
     assert _call(repo)["candidates"] == []
 
 
-def test_apply_flips_every_candidate_in_one_commit_touching_only_them(repo):
+def test_apply_flips_every_candidate_in_one_commit_touching_only_them(repo) -> None:
     rels = _populate(repo)
     head = _git(repo, "rev-parse", "HEAD")
 
@@ -141,7 +142,7 @@ def test_apply_flips_every_candidate_in_one_commit_touching_only_them(repo):
     assert _git(repo, "status", "--porcelain") == ""
 
 
-def test_apply_keeps_crlf(repo):
+def test_apply_keeps_crlf(repo) -> None:
     rel = _add_plan(repo, "crlf", _plan("reviewed", "pln-a").replace("\n", "\r\n"), newline="")
     _manifest(repo, "r1", "pln-a")
     _commit_all(repo)
@@ -154,7 +155,7 @@ def test_apply_keeps_crlf(repo):
     assert b"status: executing\r\n" in data and b"\n" not in data.replace(b"\r\n", b"")
 
 
-def test_plan_ids_narrows_apply_and_reports_unmatched(repo):
+def test_plan_ids_narrows_apply_and_reports_unmatched(repo) -> None:
     rels = _populate(repo)
 
     out = _call(repo, apply=True, plan_ids=["pln-b", "pln-nope"])
@@ -165,7 +166,7 @@ def test_plan_ids_narrows_apply_and_reports_unmatched(repo):
     assert "status: reviewed\n" in (repo / rels["reviewed"]).read_text(encoding="utf-8")
 
 
-def test_a_plan_dirty_against_head_is_skipped_and_listed(repo):
+def test_a_plan_dirty_against_head_is_skipped_and_listed(repo) -> None:
     rels = _populate(repo)
     dirty = repo / rels["reviewed"]
     dirty.write_text(dirty.read_text(encoding="utf-8") + "\nedit\n", encoding="utf-8")
@@ -179,7 +180,7 @@ def test_a_plan_dirty_against_head_is_skipped_and_listed(repo):
     assert dirty.read_bytes() == on_disk
 
 
-def test_an_untracked_plan_is_skipped_and_listed(repo):
+def test_an_untracked_plan_is_skipped_and_listed(repo) -> None:
     rel = _add_plan(repo, "fresh", _plan("reviewed", "pln-a"))
     _manifest(repo, "r1", "pln-a")
     (repo / "docs" / "other").mkdir(parents=True)
@@ -198,23 +199,23 @@ def test_an_untracked_plan_is_skipped_and_listed(repo):
     "params",
     [{"apply": "yes"}, {"plan_ids": []}, {"plan_ids": "pln-a"}, {"plan_ids": [""]}, {"root": "/x"}],
 )
-def test_bad_params_are_refused(repo, params):
+def test_bad_params_are_refused(repo, params) -> None:
     with pytest.raises(CallerFacingValidationError):
         _call(repo, **params)
 
 
-def test_a_missing_repo_root_is_refused():
+def test_a_missing_repo_root_is_refused() -> None:
     with pytest.raises(CallerFacingValidationError):
         op._handler({}, repo_root=None)
 
 
-def test_an_empty_repo_has_no_candidates(repo):
+def test_an_empty_repo_has_no_candidates(repo) -> None:
     assert _call(repo)["candidates"] == []
 
 
 @pytest.mark.cadence
 @pytest.mark.spawns_process
-def test_dry_run_spawns_nothing_and_apply_spawns_nothing(repo, monkeypatch):
+def test_dry_run_spawns_nothing_and_apply_spawns_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 
     _populate(repo)

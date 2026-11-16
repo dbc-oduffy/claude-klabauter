@@ -132,16 +132,34 @@ def test_all_own_checkpoint_commits_every_declared_path_across_both_directories(
 
 
 def test_unprinted_paths_are_each_named_withheld_with_a_reason(repo, monkeypatch):
-    prints = {TAXONOMY: "recorded"}
-    monkeypatch.setattr(run_write_prints, "read", lambda r, run: prints)
+    monkeypatch.setattr(run_write_prints, "read", lambda r, run: {})
 
     reply = commit_v2._handler(_checkpoint_params(repo), repo_root=repo / ".git")
 
-    assert _unaccounted(repo, reply) == [], reply
+    assert reply.get("committed") is True, reply
+    assert NEW_PY in _git(["show", "--name-only", "--format=", reply["sha"]], repo).split()
+    assert "Checkpoint-Withheld-Rows: C1" in _git(["log", "-1", "--format=%B", reply["sha"]], repo).splitlines()
+    withheld = set(reply.get("checkpoint_withheld_paths") or [])
+    assert {TAXONOMY, SCHEMA, FIXTURE} <= withheld, reply
+    assert all((reply.get("checkpoint_withheld_reasons") or {}).get(p) for p in withheld), reply
 
 
-@pytest.mark.designed_red
-def test_a_chunk_split_across_commit_and_withhold_is_refused_and_nothing_commits(repo, monkeypatch):
+def test_a_chunk_with_only_some_paths_printed_commits_them_and_names_each_withheld_path(repo, monkeypatch):
+    monkeypatch.setattr(run_write_prints, "read", lambda r, run: {TAXONOMY: "recorded"})
+    head = _git(["rev-parse", "HEAD"], repo).strip()
+
+    reply = commit_v2._handler(_checkpoint_params(repo), repo_root=repo / ".git")
+
+    assert reply.get("committed") is True, reply
+    assert _git(["rev-parse", "HEAD"], repo).strip() != head
+    landed = set(_git(["show", "--name-only", "--format=", reply["sha"]], repo).split())
+    assert {TAXONOMY, NEW_PY} <= landed
+    withheld = set(reply.get("checkpoint_withheld_paths") or [])
+    assert {SCHEMA, FIXTURE} <= withheld, reply
+    assert all((reply.get("checkpoint_withheld_reasons") or {}).get(p) for p in withheld), reply
+
+
+def test_a_chunk_split_across_commit_and_withhold_commits_the_carried_part(repo, monkeypatch):
     monkeypatch.setattr(
         run_hunk_claims, "own_hunks",
         lambda r, run, path, hunks, holders: (
@@ -152,8 +170,8 @@ def test_a_chunk_split_across_commit_and_withhold_is_refused_and_nothing_commits
 
     reply = commit_v2._handler(_checkpoint_params(repo), repo_root=repo / ".git")
 
-    assert reply.get("committed") is not True, reply
-    assert _git(["rev-parse", "HEAD"], repo).strip() == head
+    assert reply.get("committed") is True, reply
+    assert _git(["rev-parse", "HEAD"], repo).strip() != head
     assert SCHEMA in (reply.get("checkpoint_withheld_paths") or []), reply
     assert (reply.get("checkpoint_withheld_reasons") or {}).get(SCHEMA), reply
 

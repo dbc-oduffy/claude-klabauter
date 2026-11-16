@@ -7,6 +7,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -22,7 +23,7 @@ _GUARD = "block_subagent_commit"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: str(tmp_path))
     monkeypatch.setattr(guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123")
@@ -77,21 +78,21 @@ def _assert_written_or_named(repo, params: dict) -> None:
     assert leg.strip() in chan.missing_file_diagnosis(str(path))
 
 
-def test_agent_type_present_writes_the_params_file(repo):
+def test_agent_type_present_writes_the_params_file(repo) -> None:
     params = _params(repo)
     assert _call(_argv(repo), _transcript(repo, params)) is None
     _assert_written_or_named(repo, params)
     assert chan.params_path(repo, _RUN).exists()
 
 
-def test_a_backpointer_only_git_commit_agent_reaches_the_writer(repo, monkeypatch):
+def test_a_backpointer_only_git_commit_agent_reaches_the_writer(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "_read_backpointer_subagent_type", lambda root, agent_id: _COMMIT_AGENT)
     params = _params(repo)
     _call(_argv(repo), _transcript(repo, params), agent_type="")
     _assert_written_or_named(repo, params)
 
 
-def test_a_backpointer_only_git_commit_agent_is_still_not_admitted_by_the_raw_type_path(repo, monkeypatch):
+def test_a_backpointer_only_git_commit_agent_is_still_not_admitted_by_the_raw_type_path(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "_read_backpointer_subagent_type", lambda root, agent_id: _COMMIT_AGENT)
     monkeypatch.setattr(guard, "_git_commit_agent_may_commit", lambda *a, **k: pytest.fail("raw-type admit entered"))
     params = _params(repo)
@@ -107,14 +108,14 @@ def test_a_backpointer_only_git_commit_agent_is_still_not_admitted_by_the_raw_ty
         guard._LEG_SKIP_COMMAND_SHAPE,
     ],
 )
-def test_every_skip_leg_is_noted_beside_the_params_file(repo, leg):
+def test_every_skip_leg_is_noted_beside_the_params_file(repo, leg) -> None:
     chan.params_path(repo, _RUN).parent.mkdir(parents=True, exist_ok=True)
     guard._note_params_writer_skipped(_argv(repo), str(repo), leg)
     note = chan.params_path(repo, _RUN).with_name(chan.REFUSAL_FILE_NAME)
     assert note.read_text(encoding="utf-8") == _GUARD + ": " + leg
 
 
-def test_an_unresolved_git_root_leaves_a_note_naming_the_guard_and_leg(repo, monkeypatch):
+def test_an_unresolved_git_root_leaves_a_note_naming_the_guard_and_leg(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: None)
     params = _params(repo)
     chan.params_path(repo, _RUN).parent.mkdir(parents=True, exist_ok=True)
@@ -122,7 +123,7 @@ def test_an_unresolved_git_root_leaves_a_note_naming_the_guard_and_leg(repo, mon
     _assert_written_or_named(repo, params)
 
 
-def test_a_relative_params_path_from_below_the_root_writes_or_names_the_leg(repo, monkeypatch):
+def test_a_relative_params_path_from_below_the_root_writes_or_names_the_leg(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     sub = repo / "sub"
     sub.mkdir()
     monkeypatch.chdir(sub)
@@ -133,7 +134,7 @@ def test_a_relative_params_path_from_below_the_root_writes_or_names_the_leg(repo
     _assert_written_or_named(repo, params)
 
 
-def test_a_trailing_stderr_redirect_still_writes_or_names_the_leg(repo):
+def test_a_trailing_stderr_redirect_still_writes_or_names_the_leg(repo) -> None:
     params = _params(repo)
     assert _call(_argv(repo, " 2>&1"), _transcript(repo, params)) is not None
     _assert_written_or_named(repo, params)

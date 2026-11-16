@@ -16,6 +16,7 @@ from http.server import ThreadingHTTPServer
 import pytest
 
 from coordinator_core.warm import front_door, front_door_routing, lifecycle
+from pathlib import Path
 
 
 pytestmark = pytest.mark.complete
@@ -25,7 +26,7 @@ class _NoDials:
     def record(self, **_kw):
         pass
 
-    def flush(self):
+    def flush(self) -> bool:
         return True
 
 
@@ -37,7 +38,7 @@ def _clean_guard():
 
 
 @pytest.fixture
-def door(monkeypatch, tmp_path):
+def door(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setattr(front_door._FrontDoorContext, "_boot_credential", staticmethod(lambda: "k"))
     monkeypatch.setattr(front_door.door_credential, "read_secret", lambda: "k")
     monkeypatch.setattr(
@@ -52,7 +53,7 @@ def door(monkeypatch, tmp_path):
     exited = threading.Event()
     exit_codes: list = []
 
-    def fake_exit(code):
+    def fake_exit(code) -> None:
         exit_codes.append(code)
         exited.set()
 
@@ -72,7 +73,7 @@ def door(monkeypatch, tmp_path):
     httpd.server_close()
 
 
-def _post(port, path, body=b"{}", timeout=10, key="k"):
+def _post(port, path, body: bytes = b"{}", timeout: int = 10, key: str = "k"):
     headers = {front_door.door_credential.CREDENTIAL_HEADER: key} if key else {}
     req = urllib.request.Request(
         f"http://127.0.0.1:{port}{path}", data=body, method="POST", headers=headers
@@ -81,7 +82,7 @@ def _post(port, path, body=b"{}", timeout=10, key="k"):
         return resp.status, resp.read()
 
 
-def test_stop_ask_lets_in_flight_relay_finish_before_exit(door, monkeypatch):
+def test_stop_ask_lets_in_flight_relay_finish_before_exit(door, monkeypatch: pytest.MonkeyPatch) -> None:
     ctx, port, exited, exit_codes = door
     in_relay = threading.Event()
     release = threading.Event()
@@ -95,7 +96,7 @@ def test_stop_ask_lets_in_flight_relay_finish_before_exit(door, monkeypatch):
 
     relay_result: dict = {}
 
-    def relay():
+    def relay() -> None:
         relay_result["status"], relay_result["body"] = _post(port, "/hook")
 
     t = threading.Thread(target=relay)
@@ -112,19 +113,19 @@ def test_stop_ask_lets_in_flight_relay_finish_before_exit(door, monkeypatch):
     assert exit_codes == [0]
 
 
-def test_stop_ask_with_nothing_in_flight_exits(door):
+def test_stop_ask_with_nothing_in_flight_exits(door) -> None:
     _ctx, port, exited, _codes = door
     assert front_door.ask_front_door_to_stop({"port": port, "pid": os.getpid()}) is True
     assert exited.wait(5)
 
 
-def test_stop_ask_naming_another_pid_is_refused_and_door_stays_up(door):
+def test_stop_ask_naming_another_pid_is_refused_and_door_stays_up(door) -> None:
     _ctx, port, exited, _codes = door
     assert front_door.ask_front_door_to_stop({"port": port, "pid": 1}) is False
     assert not exited.wait(0.3)
 
 
-def test_non_loopback_peer_is_refused(door, monkeypatch):
+def test_non_loopback_peer_is_refused(door, monkeypatch: pytest.MonkeyPatch) -> None:
     ctx, port, exited, _codes = door
     monkeypatch.setattr(front_door, "_LOOPBACK_PEERS", ("10.0.0.9",))
     with pytest.raises(urllib.error.HTTPError) as err:
@@ -134,7 +135,7 @@ def test_non_loopback_peer_is_refused(door, monkeypatch):
 
 
 @pytest.mark.parametrize("key", [None, "wrong"])
-def test_stop_without_the_door_credential_is_refused(door, key):
+def test_stop_without_the_door_credential_is_refused(door, key) -> None:
     _ctx, port, exited, _codes = door
     body = json.dumps({"pid": os.getpid()}).encode()
     with pytest.raises(urllib.error.HTTPError) as err:
@@ -143,14 +144,14 @@ def test_stop_without_the_door_credential_is_refused(door, key):
     assert not exited.wait(0.3)
 
 
-def test_ask_without_a_readable_secret_is_refused(door, monkeypatch):
+def test_ask_without_a_readable_secret_is_refused(door, monkeypatch: pytest.MonkeyPatch) -> None:
     _ctx, port, exited, _codes = door
     monkeypatch.setattr(front_door.door_credential, "read_secret", lambda: None)
     assert front_door.ask_front_door_to_stop({"port": port, "pid": os.getpid()}) is False
     assert not exited.wait(0.3)
 
 
-def test_ask_is_false_without_a_port_and_never_raises():
+def test_ask_is_false_without_a_port_and_never_raises() -> None:
     assert front_door.ask_front_door_to_stop(None) is False
     assert front_door.ask_front_door_to_stop({"pid": 1}) is False
 
@@ -160,17 +161,17 @@ def test_ask_is_false_without_a_port_and_never_raises():
     assert front_door.ask_front_door_to_stop({"port": 1, "pid": 1}, opener=boom) is False
 
 
-def test_ask_rejects_a_foreign_2xx_answer():
+def test_ask_rejects_a_foreign_2xx_answer() -> None:
     class _Resp:
         status = 200
 
         def __enter__(self):
             return self
 
-        def __exit__(self, *a):
+        def __exit__(self, *a) -> bool:
             return False
 
-        def read(self):
+        def read(self) -> bytes:
             return json.dumps({"stopping": True}).encode()
 
     assert (

@@ -13,6 +13,7 @@ from coordinator_core.ops.tests.test_review_reverify import (  # noqa: F401  (wo
 from coordinator_core.ops.tests.test_review_reverify_sibling_owned import (
     PARAM_NODE, SIBLING_FILE, TRACE, _blob_sha, _dirty_sibling,
 )
+import pytest
 
 
 def _default(root):
@@ -22,7 +23,7 @@ def _default(root):
     )
 
 
-def test_unheld_dirty_out_of_footprint_cause_is_foreign_red_not_a_blocker(world, monkeypatch):
+def test_unheld_dirty_out_of_footprint_cause_is_foreign_red_not_a_blocker(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _declared = world
     _dirty_sibling(root, monkeypatch, held=False)
     out = _default(root)
@@ -31,14 +32,14 @@ def test_unheld_dirty_out_of_footprint_cause_is_foreign_red_not_a_blocker(world,
     assert from_reverify({**out, "failing": [PARAM_NODE]}) == []
 
 
-def test_halt_held_cause_stays_sibling_owned_not_foreign_red(world, monkeypatch):
+def test_halt_held_cause_stays_sibling_owned_not_foreign_red(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _declared = world
     _dirty_sibling(root, monkeypatch, held=True)
     out = _default(root)
     assert out["sibling_owned"] == [PARAM_NODE] and out["foreign_red"] == {}
 
 
-def test_in_footprint_cause_still_blocks(world, monkeypatch):
+def test_in_footprint_cause_still_blocks(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _declared = world
     _dirty_sibling(root, monkeypatch, held=False)
     (root / "pkg/mod.py").write_bytes(b"VALUE = 2\n")
@@ -50,7 +51,7 @@ def test_in_footprint_cause_still_blocks(world, monkeypatch):
     assert out["foreign_red"] == {} and out["unattributed"] == [PARAM_NODE]
 
 
-def test_clean_cause_file_still_blocks(world, monkeypatch):
+def test_clean_cause_file_still_blocks(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _declared = world
     _dirty_sibling(root, monkeypatch, held=False)
     monkeypatch.setattr(rr.git_state, "head_blobs", lambda r, paths: {
@@ -60,12 +61,12 @@ def test_clean_cause_file_still_blocks(world, monkeypatch):
     assert out["foreign_red"] == {} and out["unattributed"] == [PARAM_NODE]
 
 
-def test_unreadable_halt_record_still_blocks(world, monkeypatch):
+def test_unreadable_halt_record_still_blocks(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _declared = world
     _dirty_sibling(root, monkeypatch, record=land_run.UNREADABLE_HALT_RECORD)
     out = _default(root)
     assert out["foreign_red"] == {} and out["unattributed"] == [PARAM_NODE]
 
 
-def test_composed_js_excludes_foreign_red():
+def test_composed_js_excludes_foreign_red() -> None:
     assert "Object.keys(_tSrc?.foreign_red ?? {})" in ask_compose._test_blockers_js("_r", "_t")

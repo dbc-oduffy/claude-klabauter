@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.git import corpus_guard_hook as cgh
+from pathlib import Path
 
 DOE_STUB = (
     "#!/usr/bin/env python3\n"
@@ -14,14 +15,14 @@ DOE_STUB = (
 )
 
 
-def test_stub_predicate_both_sides():
+def test_stub_predicate_both_sides() -> None:
     assert cgh.is_forwarder_stub(DOE_STUB)
     assert not cgh.is_forwarder_stub("#!/bin/sh\nexit 0\n")
     assert not cgh.is_forwarder_stub("from _engine_forward import forward\n")
     assert not cgh.is_forwarder_stub("Edit in claude-klabauter\n")
 
 
-def test_hook_body_shape():
+def test_hook_body_shape() -> None:
     body = cgh.hook_body(["/a/claude-klabauter", "/b/mirror"])
     assert body.startswith("#!/bin/sh\n")
     assert cgh.STAMP in body
@@ -31,31 +32,31 @@ def test_hook_body_shape():
     assert "pre_commit_corpus_artifact_guard.py" in body
 
 
-def test_env_root_tried_before_baked_roots():
+def test_env_root_tried_before_baked_roots() -> None:
     body = cgh.hook_body(["/a/claude-klabauter", "/b/mirror"])
     env_at = body.index("COORDINATOR_ENGINE_ROOT:-")
     assert env_at < body.index("'/a/claude-klabauter'") < body.index("'/b/mirror'")
 
 
-def test_no_root_fails_loud():
+def test_no_root_fails_loud() -> None:
     body = cgh.hook_body([])
     assert "COORDINATOR_ENGINE_ROOT" in body
     assert "pre_commit_corpus_artifact_guard --install-hook" in body
     assert body.rstrip().endswith("exit 1")
 
 
-def test_roots_use_forward_slashes_and_quote():
+def test_roots_use_forward_slashes_and_quote() -> None:
     body = cgh.hook_body(["x\\y\\it's"])
     assert "'x/y/it'\\''s'" in body
 
 
-def test_hook_body_refuses_stub_output(monkeypatch):
+def test_hook_body_refuses_stub_output(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cgh, "is_forwarder_stub", lambda text: True)
     with pytest.raises(ValueError):
         cgh.hook_body([])
 
 
-def test_candidate_engine_roots_filters_dedupes_and_orders(tmp_path, monkeypatch):
+def test_candidate_engine_roots_filters_dedupes_and_orders(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     engine_tree = tmp_path / "claude-klabauter"
     mirror = tmp_path / "mirror"
     engine_tree.mkdir()

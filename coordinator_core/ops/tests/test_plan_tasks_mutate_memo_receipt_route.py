@@ -12,6 +12,7 @@ from coordinator_core.ops.plan_tasks_mutate import _handler
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ops.tests.test_plan_tasks_mutate import _make_git_repo, _seed_plan
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -63,11 +64,11 @@ schema_version: '1.2.0'
 """
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> None:
     subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True, **no_console_creationflags())
 
 
-def _fixture(tmp_path, committed=("alpha", "beta")):
+def _fixture(tmp_path, committed=("alpha", "beta")) -> tuple[Path, Path]:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "m.md", _PLAN)
     (repo / _SENT).mkdir(parents=True)
@@ -100,7 +101,7 @@ def _rows(plan):
     return {r["id"]: r for r in load_rows(plan.read_text(encoding="utf-8")).rows}
 
 
-def test_receipt_on_disk_resolves_and_clears_gate(tmp_path):
+def test_receipt_on_disk_resolves_and_clears_gate(tmp_path: Path) -> None:
     repo, plan = _fixture(tmp_path)
     out = _resolve(repo, plan, [_memo("M1", "alpha")])
     assert out["exit_code"] == 0, out
@@ -113,7 +114,7 @@ def test_receipt_on_disk_resolves_and_clears_gate(tmp_path):
     assert not any("not commit-proven" in w for w in out.get("warnings", []))
 
 
-def test_untracked_gitignored_receipt_resolves(tmp_path):
+def test_untracked_gitignored_receipt_resolves(tmp_path: Path) -> None:
     repo, plan = _fixture(tmp_path)
     (repo / ".gitignore").write_text(".coordinator-local\n", encoding="utf-8")
     out = _resolve(repo, plan, [_memo("M2", "gamma")])
@@ -121,7 +122,7 @@ def test_untracked_gitignored_receipt_resolves(tmp_path):
     assert _rows(plan)["M2"]["disposition"] == "delivered_elsewhere"
 
 
-def test_missing_receipt_refuses(tmp_path):
+def test_missing_receipt_refuses(tmp_path: Path) -> None:
     repo, plan = _fixture(tmp_path)
     before = plan.read_bytes()
     out = _resolve(repo, plan, [_memo("M2", "delta")])
@@ -131,7 +132,7 @@ def test_missing_receipt_refuses(tmp_path):
     assert plan.read_bytes() == before
 
 
-def test_mismatched_slug_refuses(tmp_path):
+def test_mismatched_slug_refuses(tmp_path: Path) -> None:
     repo, plan = _fixture(tmp_path)
     out = _resolve(repo, plan, [_memo("M1", "beta")])
     assert out["exit_code"] != 0
@@ -139,21 +140,21 @@ def test_mismatched_slug_refuses(tmp_path):
     assert "plan.tasks.mutate" in out["error"]
 
 
-def test_non_receipt_ref_refuses(tmp_path):
+def test_non_receipt_ref_refuses(tmp_path: Path) -> None:
     repo, plan = _fixture(tmp_path)
     out = _resolve(repo, plan, [_memo("M1", "alpha", disposition_ref="other-repo@abc1234")])
     assert out["exit_code"] != 0
     assert "sent receipt" in out["error"]
 
 
-def test_delivered_via_other_than_memo_refuses(tmp_path):
+def test_delivered_via_other_than_memo_refuses(tmp_path: Path) -> None:
     repo, plan = _fixture(tmp_path)
     out = _resolve(repo, plan, [_memo("M1", "alpha", delivered_via="direct-message")])
     assert out["exit_code"] != 0
     assert "delivered_via memo" in out["error"]
 
 
-def test_receipt_check_spawns_no_ls_tree(tmp_path, monkeypatch):
+def test_receipt_check_spawns_no_ls_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, plan = _fixture(tmp_path)
     with _count_spawns_attributed(monkeypatch) as spawns:
         out = _resolve(repo, plan, [_memo("M1", "alpha"), _memo("M2", "beta")])
@@ -161,7 +162,7 @@ def test_receipt_check_spawns_no_ls_tree(tmp_path, monkeypatch):
     assert not any("ls-tree" in s.argv for s in spawns), [s.argv for s in spawns]
 
 
-def test_non_memo_delivered_elsewhere_is_unchanged(tmp_path):
+def test_non_memo_delivered_elsewhere_is_unchanged(tmp_path: Path) -> None:
     repo, plan = _fixture(tmp_path)
     out = _resolve(repo, plan, [{
         "id": "C1",
@@ -174,7 +175,7 @@ def test_non_memo_delivered_elsewhere_is_unchanged(tmp_path):
     assert any("completion asserted, not commit-proven" in w for w in out.get("warnings", []))
 
 
-def test_em_discharge_refusal_names_the_route(tmp_path):
+def test_em_discharge_refusal_names_the_route(tmp_path: Path) -> None:
     repo, plan = _fixture(tmp_path)
     text = plan.read_text(encoding="utf-8").replace("  kind: memo-send\n  surface: a.py", "  kind: memo-send\n  performer: em\n  surface: a.py")
     plan.write_text(text, encoding="utf-8")

@@ -34,20 +34,20 @@ ALL_PARAMS = [PARAMS, SIDECAR_PARAMS, WITH_PATH, HOSTILE_PATH]
 
 
 @pytest.mark.parametrize("params", ALL_PARAMS)
-def test_python_cli_has_no_html_escapable_character_and_no_heredoc(params):
+def test_python_cli_has_no_html_escapable_character_and_no_heredoc(params) -> None:
     cli = sibling_split._cli(params)
     assert not set(cli) & set("<>&")
     assert "\n" not in cli and "JSON" not in cli
 
 
-def test_python_cli_names_the_task_output_path_as_one_quoted_argument():
+def test_python_cli_names_the_task_output_path_as_one_quoted_argument() -> None:
     assert sibling_split._cli(WITH_PATH) == (
         f"coordinator-invoke dispatch.terminal_commit --from-task-output '{OUT}'"
     )
 
 
 @pytest.mark.parametrize("params", [PARAMS, SIDECAR_PARAMS, HOSTILE_PATH])
-def test_a_missing_or_unquotable_path_yields_the_placeholder_token(params):
+def test_a_missing_or_unquotable_path_yields_the_placeholder_token(params) -> None:
     assert sibling_split._cli(params).endswith(" --from-task-output TASK_OUTPUT_PATH")
 
 
@@ -56,7 +56,7 @@ def _halve(text: str) -> str:
     return text.replace("\\\\", "\\")
 
 
-def test_no_params_yields_no_line():
+def test_no_params_yields_no_line() -> None:
     assert sibling_split._cli(None) is None and sibling_split._cli({}) is None
 
 
@@ -70,7 +70,7 @@ LEDGER_PARAMS = {
 
 
 @pytest.fixture
-def commit_stage(tmp_path, monkeypatch):
+def commit_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, str]:
     from coordinator_core.bash_guards import block_reviewer_bash_outside_allowlist as roster_guard
     from coordinator_core.bash_guards import block_subagent_commit as guard
 
@@ -128,7 +128,7 @@ def _bash_payload(cmd: str, cwd: Path, transcript: Path) -> str:
 
 
 @pytest.mark.parametrize("params", [PARAMS, SIDECAR_PARAMS, LEDGER_PARAMS])
-def test_backslash_params_reach_terminal_commit_through_the_commit_stage(commit_stage, params):
+def test_backslash_params_reach_terminal_commit_through_the_commit_stage(commit_stage, params) -> None:
     from coordinator_core.bash_guards import dispatch
 
     root, token = commit_stage
@@ -150,7 +150,7 @@ def test_backslash_params_reach_terminal_commit_through_the_commit_stage(commit_
     assert reached == params
 
 
-def test_altered_run_token_writes_no_file_and_only_logs(commit_stage):
+def test_altered_run_token_writes_no_file_and_only_logs(commit_stage) -> None:
     """A refused params leg never denies (only irreversible classes may); it writes no params file."""
     from coordinator_core.bash_guards import dispatch
 
@@ -166,7 +166,7 @@ def test_altered_run_token_writes_no_file_and_only_logs(commit_stage):
     assert not params_path(root, _RUN_ID).exists()
 
 
-def test_ask_compose_still_wires_the_shared_cli_helper_not_a_local_copy():
+def test_ask_compose_still_wires_the_shared_cli_helper_not_a_local_copy() -> None:
     from coordinator_core.ops.dispatch_emit import ask_compose
 
     src = Path(ask_compose.__file__).read_text(encoding="utf-8")
@@ -193,17 +193,17 @@ def _js_cli(params) -> str:
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("params", ALL_PARAMS)
-def test_js_and_python_helpers_agree(params):
+def test_js_and_python_helpers_agree(params) -> None:
     assert _js_cli(params) == sibling_split._cli(params)
 
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("params", ALL_PARAMS)
-def test_js_line_has_no_html_escapable_character(params):
+def test_js_line_has_no_html_escapable_character(params) -> None:
     assert not set(_js_cli(params)) & set("<>&")
 
 
-def test_ask_compose_in_run_getter_routes_through_the_helper():
+def test_ask_compose_in_run_getter_routes_through_the_helper() -> None:
     from coordinator_core.ops.dispatch_emit import ask_compose
 
     src = Path(ask_compose.__file__).read_text(encoding="utf-8")

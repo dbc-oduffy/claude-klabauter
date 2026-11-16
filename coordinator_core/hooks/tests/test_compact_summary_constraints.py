@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 
 from coordinator_core.hooks import compact_summary_constraints as csc
+from pathlib import Path
+import pytest
 
 SUMMARY = (
     "This session is being continued.\n\nSummary:\n## Standing constraints\n"
@@ -16,7 +18,7 @@ SUMMARY = (
 )
 
 
-def _transcript(tmp_path, summary=SUMMARY, pad=0):
+def _transcript(tmp_path, summary=SUMMARY, pad: int = 0) -> str:
     p = tmp_path / "t.jsonl"
     rows = [{"type": "user", "message": {"role": "user", "content": "x" * pad}}]
     rows.append({"type": "user", "isCompactSummary": True,
@@ -27,7 +29,7 @@ def _transcript(tmp_path, summary=SUMMARY, pad=0):
     return str(p)
 
 
-def test_flags_only_uncited_constraint(tmp_path):
+def test_flags_only_uncited_constraint(tmp_path: Path) -> None:
     line = csc.warn_line({"transcript_path": _transcript(tmp_path)})
     assert line and "Never push `work/x`" in line
     assert "git add -A" not in line and "scratch" not in line and "Fine line" not in line
@@ -37,14 +39,14 @@ def test_flags_only_uncited_constraint(tmp_path):
 CANNED = "The user doesn't want to take this action right now. STOP what you are doing and wait."
 
 
-def test_canned_stop_in_summary_gets_advisory_alongside_constraint_warning(tmp_path):
+def test_canned_stop_in_summary_gets_advisory_alongside_constraint_warning(tmp_path: Path) -> None:
     p = _transcript(tmp_path, SUMMARY + f"Last: {CANNED}\n")
     lines = csc.warn_line({"transcript_path": p}).splitlines()
     assert "not a PM order" in lines[0]
     assert lines[1].startswith("WARNING:") and "Never push" in lines[1]
 
 
-def test_canned_stop_in_kept_tail_only_gets_advisory(tmp_path):
+def test_canned_stop_in_kept_tail_only_gets_advisory(tmp_path: Path) -> None:
     p = _transcript(tmp_path, "Summary:\n- Fine line.\n")
     with open(p, "a", encoding="utf-8") as fh:
         fh.write(json.dumps({"type": "user", "message": {"content": CANNED}}) + "\n")
@@ -52,7 +54,7 @@ def test_canned_stop_in_kept_tail_only_gets_advisory(tmp_path):
     assert "not a PM order" in line and "\n" not in line
 
 
-def test_canned_stop_with_json_escaped_curly_apostrophe_gets_advisory(tmp_path):
+def test_canned_stop_with_json_escaped_curly_apostrophe_gets_advisory(tmp_path: Path) -> None:
     p = _transcript(tmp_path, "Summary:\n- Fine line.\n")
     escaped = "The user doesn\\u2019t want to take this action right now. STOP what you are doing"
     with open(p, "a", encoding="utf-8") as fh:
@@ -60,11 +62,11 @@ def test_canned_stop_with_json_escaped_curly_apostrophe_gets_advisory(tmp_path):
     assert "not a PM order" in csc.warn_line({"transcript_path": p})
 
 
-def test_no_canned_stop_gives_no_advisory(tmp_path):
+def test_no_canned_stop_gives_no_advisory(tmp_path: Path) -> None:
     assert "not a PM order" not in csc.warn_line({"transcript_path": _transcript(tmp_path)})
 
 
-def test_tail_read_failure_keeps_constraint_warning(tmp_path, monkeypatch):
+def test_tail_read_failure_keeps_constraint_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(_path):
         raise OSError("locked")
 
@@ -72,17 +74,17 @@ def test_tail_read_failure_keeps_constraint_warning(tmp_path, monkeypatch):
     assert csc.warn_line({"transcript_path": _transcript(tmp_path)}) is None
 
 
-def test_all_cited_gives_no_warning(tmp_path):
+def test_all_cited_gives_no_warning(tmp_path: Path) -> None:
     p = _transcript(tmp_path, "Summary:\n- Never push (turn 3).\n")
     assert csc.warn_line({"transcript_path": p}) is None
 
 
-def test_summary_found_past_big_prefix_within_tail_window(tmp_path):
+def test_summary_found_past_big_prefix_within_tail_window(tmp_path: Path) -> None:
     p = _transcript(tmp_path, pad=3 * csc._TAIL_BYTES)
     assert "Never push" in csc.warn_line({"transcript_path": p})
 
 
-def test_missing_or_bad_input_is_none(tmp_path):
+def test_missing_or_bad_input_is_none(tmp_path: Path) -> None:
     assert csc.warn_line({}) is None
     assert csc.warn_line({"transcript_path": str(tmp_path / "nope")}) is None
     bad = tmp_path / "b.jsonl"
@@ -90,7 +92,7 @@ def test_missing_or_bad_input_is_none(tmp_path):
     assert csc.warn_line({"transcript_path": str(bad)}) is None
 
 
-def test_compact_leg_registered_for_compact_only():
+def test_compact_leg_registered_for_compact_only() -> None:
     from coordinator_core.hooks import sessionstart_dispatch as d
 
     row = [r for r in d._LEGS if r[0] == "compact_summary_constraints"][0]

@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 
 from coordinator_core.install import substrate
+import pytest
 
 _REPO = Path(__file__).resolve().parents[3]
 _IMAGE = b"\xcf\xfa\xed\xfe native door image"
@@ -21,7 +22,7 @@ def _real_publisher_only() -> "frozenset[str]":
     return names
 
 
-def test_publisher_only_names_reap_image_and_only_launchable_get_forwarder(tmp_path, monkeypatch):
+def test_publisher_only_names_reap_image_and_only_launchable_get_forwarder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     publisher_only = _real_publisher_only()
     launchable = substrate._publisher_only_names(_REPO, "PUBLISHER_ONLY_LAUNCHABLE")
     assert launchable and launchable <= publisher_only

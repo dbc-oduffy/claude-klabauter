@@ -24,6 +24,7 @@ from coordinator_core.bash_guards._sanctioned_remedy import (
     CALLER_SUBAGENT,
     probe_remedy,
 )
+from pathlib import Path
 
 _TOOL = {Dialect.BASH: "Bash", Dialect.POWERSHELL: "PowerShell"}
 _REVIEWER_TYPE = "coordinator:code-reviewer"
@@ -31,7 +32,7 @@ _BANNER = 'echo "=== facts ==="; pwd; whoami; git status --short; date'
 
 
 @pytest.fixture
-def host(tmp_path, monkeypatch):
+def host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A cwd whose coordinator.local.md opts into both subagent bash policies,
     and a reviewer guard whose identity lookup resolves to the type in `kind`."""
     (tmp_path / "coordinator.local.md").write_text(
@@ -78,7 +79,7 @@ _CHECKS = (
 
 @pytest.mark.parametrize("dialect", list(Dialect))
 @pytest.mark.parametrize("caller_class", [CALLER_EM, CALLER_SUBAGENT])
-def test_command_exemplar_is_admitted_by_every_refusing_guard(host, caller_class, dialect, tmp_path):
+def test_command_exemplar_is_admitted_by_every_refusing_guard(host, caller_class, dialect, tmp_path: Path) -> None:
     _, exemplar = probe_remedy(caller_class, dialect, str(tmp_path / "multiprobe.py"))
     payload = host(caller_class, dialect, exemplar)
     for name, check in _CHECKS:
@@ -87,7 +88,7 @@ def test_command_exemplar_is_admitted_by_every_refusing_guard(host, caller_class
         assert ban_guard.check(dict(payload)) is None
 
 
-def test_subagent_bash_tool_is_refused_wholesale_under_the_ban_policy(host, tmp_path):
+def test_subagent_bash_tool_is_refused_wholesale_under_the_ban_policy(host, tmp_path: Path) -> None:
     """The ban refuses the tool, not the shape: no Bash exemplar passes it, and
     the PowerShell exemplar is the outlet."""
     _, bash_exemplar = probe_remedy(CALLER_SUBAGENT, Dialect.BASH, str(tmp_path / "multiprobe.py"))
@@ -97,19 +98,19 @@ def test_subagent_bash_tool_is_refused_wholesale_under_the_ban_policy(host, tmp_
 
 
 @pytest.mark.parametrize("dialect", list(Dialect))
-def test_the_refused_banner_shape_is_the_control_the_exemplar_escapes(host, dialect):
+def test_the_refused_banner_shape_is_the_control_the_exemplar_escapes(host, dialect) -> None:
     assert _denied(spawn_guard.check(host(CALLER_SUBAGENT, dialect, _BANNER)))
 
 
 @pytest.mark.parametrize("dialect", list(Dialect))
-def test_reviewer_has_no_command_exemplar_and_names_the_harness_tools(dialect):
+def test_reviewer_has_no_command_exemplar_and_names_the_harness_tools(dialect) -> None:
     text, exemplar = probe_remedy(CALLER_REVIEWER, dialect)
     assert exemplar == ""
     assert all(tool in text for tool in ("Read", "Grep", "Glob"))
 
 
 @pytest.mark.parametrize("dialect", list(Dialect))
-def test_multiprobe_banner_script_remedy_is_refused_for_reviewer(host, dialect, tmp_path):
+def test_multiprobe_banner_script_remedy_is_refused_for_reviewer(host, dialect, tmp_path: Path) -> None:
     """The subagent-class banner remedy (`python3 <script>`) is not performable by
     a reviewer: the shipped policy leaves `interpreter_allow_scripts` false, and
     inline `python3 -c` is refused unconditionally."""
@@ -119,23 +120,23 @@ def test_multiprobe_banner_script_remedy_is_refused_for_reviewer(host, dialect, 
     assert _denied(reviewer_guard.check(host(CALLER_REVIEWER, dialect, inline_remedy)))
 
 
-def test_script_hint_with_whitespace_is_quoted():
+def test_script_hint_with_whitespace_is_quoted() -> None:
     _, exemplar = probe_remedy(CALLER_SUBAGENT, Dialect.POWERSHELL, "C:/Users/a b/multiprobe.py")
     assert exemplar == 'python3 "C:/Users/a b/multiprobe.py"'
 
 
-def test_blank_hint_renders_a_placeholder_path():
+def test_blank_hint_renders_a_placeholder_path() -> None:
     text, exemplar = probe_remedy(CALLER_SUBAGENT, Dialect.BASH)
     assert "multiprobe.py" in text and exemplar.startswith("python3 ")
 
 
 @pytest.mark.parametrize("caller_class", CALLER_CLASSES)
-def test_remedy_text_carries_no_override_key(caller_class):
+def test_remedy_text_carries_no_override_key(caller_class) -> None:
     text, _ = probe_remedy(caller_class, Dialect.BASH)
     assert "COORDINATOR_" not in text and "override" not in text.lower()
 
 
-def test_unknown_inputs_raise():
+def test_unknown_inputs_raise() -> None:
     with pytest.raises(ValueError):
         probe_remedy("operator", Dialect.BASH)
     with pytest.raises(ValueError):

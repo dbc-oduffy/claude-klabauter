@@ -16,13 +16,14 @@ import pytest
 from coordinator_core import machine_profile
 from coordinator_core.bash_guards import block_drive_root_new_dir_bash_write as guard
 from coordinator_core.bash_guards import dispatch
+from pathlib import Path
 
 _GUARD_FILE = os.path.normcase(guard.__file__)
 _SPAWNERS = ("spawnv", "spawnve", "spawnl", "spawnle", "spawnlp", "spawnvp", "system")
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     root = tmp_path / "root"
     home = tmp_path / "home"
     (root / "existing").mkdir(parents=True)
@@ -38,14 +39,14 @@ def world(tmp_path, monkeypatch):
     machine_profile.reset_cache()
 
 
-def _raw(cmd, tool, cwd):
+def _raw(cmd, tool, cwd) -> str:
     return json.dumps(
         {"tool_name": tool, "tool_input": {"command": cmd}, "cwd": str(cwd), "session_id": "drive-root-spawn-budget"}
     )
 
 
 @pytest.fixture
-def spawns_from_guard(monkeypatch) -> List[str]:
+def spawns_from_guard(monkeypatch: pytest.MonkeyPatch) -> List[str]:
     """Spawn sites whose call stack passes through the guard module."""
     seen: List[str] = []
 
@@ -64,7 +65,7 @@ def spawns_from_guard(monkeypatch) -> List[str]:
     return seen
 
 
-def test_guard_check_spawns_nothing_when_spawning_is_forbidden(world, tmp_path, monkeypatch):
+def test_guard_check_spawns_nothing_when_spawning_is_forbidden(world, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def forbidden(*_a, **_k):
         raise AssertionError("spawn attempted")
 
@@ -82,7 +83,7 @@ def test_guard_check_spawns_nothing_when_spawning_is_forbidden(world, tmp_path, 
 
 
 @pytest.mark.parametrize("cmd,denied", [("mkdir {r}/new", True), ("mkdir {r}/existing/a", False)])
-def test_dispatch_verdict_spawns_nothing_from_this_guard(world, tmp_path, spawns_from_guard, cmd, denied):
+def test_dispatch_verdict_spawns_nothing_from_this_guard(world, tmp_path: Path, spawns_from_guard, cmd, denied) -> None:
     out = dispatch.evaluate_payload_json(_raw(cmd.format(r=world.as_posix()), "Bash", tmp_path))
     assert ("new top-level folder" in json.dumps(out)) is denied, out
     assert spawns_from_guard == []

@@ -32,6 +32,7 @@ from coordinator_core.codex_runner.contract import (
     RunResult,
     findings_schema_path,
 )
+from coordinator_core import tenant_priority
 from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
 from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
 from coordinator_core.codex_runner.resolve import (
@@ -303,6 +304,7 @@ def run(req: RunRequest, run_dir: Path, on_spawn: OnSpawn) -> RunResult:
             proc = subprocess.Popen(
                 argv, cwd=str(run_dir), env=child_env, shell=False,
                 stdin=subprocess.DEVNULL, stdout=out, stderr=err, creationflags=flags,
+                **tenant_priority.popen_kwargs(argv),
             )
         except OSError as exc:
             return _failed(run_id, f"codex spawn failed: {exc}")

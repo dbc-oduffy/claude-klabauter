@@ -51,7 +51,7 @@ def write_receipt(run_dir, stage: str, verdict: str, artifact: Optional[str], *,
     }
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    tmp.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8", newline="\n")
     os.replace(tmp, path)
     return path
 

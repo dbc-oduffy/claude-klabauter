@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.ops.detect_onboarding_offer import detect_onboarding_offer, main
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+from pathlib import Path
 
 # Declared, not excused: this file spawns real git because the bash-oracle parity
 # contract (test-detect-onboarding-offer.sh) it ports depends on real repo state
@@ -20,7 +21,7 @@ from coordinator_core.win_portability import no_console_passthrough_kwargs
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
-def _init_git_repo(path):
+def _init_git_repo(path) -> None:
     subprocess.run(["git", "init", "--quiet"], cwd=str(path), check=True, **no_console_passthrough_kwargs())
     subprocess.run(["git", "config", "user.email", "test@test"], cwd=str(path), check=True, **no_console_passthrough_kwargs())
     subprocess.run(["git", "config", "user.name", "Test"], cwd=str(path), check=True, **no_console_passthrough_kwargs())
@@ -33,15 +34,15 @@ def _init_git_repo(path):
     )
 
 
-def _mark_onboarded(path):
+def _mark_onboarded(path) -> None:
     (path / "state" / "workstreams").mkdir(parents=True, exist_ok=True)
 
 
-def _write_gitignore_distribution(path):
+def _write_gitignore_distribution(path) -> None:
     (path / ".gitignore").write_text("tasks/\narchive/\nnode_modules/\n")
 
 
-def _write_currency_stamp(path, version):
+def _write_currency_stamp(path, version) -> None:
     (path / "docs").mkdir(parents=True, exist_ok=True)
     (path / "docs" / "coordinator-currency.yaml").write_text(
         f"schema_version: {version}\nstamped_at: 2026-01-01\n"
@@ -57,7 +58,7 @@ def _make_fake_plugin_root(base, version):
 
 
 @pytest.fixture(autouse=True)
-def _fake_claude_klabauter_root(tmp_path, monkeypatch):
+def _fake_claude_klabauter_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """Autouse: pins CLAUDE_KLABAUTER_ROOT deterministically (env monkeypatch, never
     the real machine-local registry or a real claude-klabauter checkout) to a
     synthetic claude-klabauter root containing coordinator/lib/coordinator_currency.py
@@ -74,7 +75,7 @@ def _fake_claude_klabauter_root(tmp_path, monkeypatch):
     return claude_klabauter_root
 
 
-def test_case1_unonboarded_working_repo_offers(tmp_path):
+def test_case1_unonboarded_working_repo_offers(tmp_path: Path) -> None:
     repo = tmp_path / "case1"
     repo.mkdir()
     _init_git_repo(repo)
@@ -87,7 +88,7 @@ def test_case1_unonboarded_working_repo_offers(tmp_path):
     assert "Dismiss" in out
 
 
-def test_case2_unonboarded_distribution_repo_silent(tmp_path):
+def test_case2_unonboarded_distribution_repo_silent(tmp_path: Path) -> None:
     repo = tmp_path / "case2"
     repo.mkdir()
     _init_git_repo(repo)
@@ -98,7 +99,7 @@ def test_case2_unonboarded_distribution_repo_silent(tmp_path):
     assert out == ""
 
 
-def test_case3_stale_drift_offers(tmp_path):
+def test_case3_stale_drift_offers(tmp_path: Path) -> None:
     repo = tmp_path / "case3"
     repo.mkdir()
     _init_git_repo(repo)
@@ -113,7 +114,7 @@ def test_case3_stale_drift_offers(tmp_path):
     assert "older" in out
 
 
-def test_case4_dismissed_silent(tmp_path):
+def test_case4_dismissed_silent(tmp_path: Path) -> None:
     repo = tmp_path / "case4"
     repo.mkdir()
     _init_git_repo(repo)
@@ -124,7 +125,7 @@ def test_case4_dismissed_silent(tmp_path):
     assert out == ""
 
 
-def test_case4b_dismissed_stale_still_silent(tmp_path):
+def test_case4b_dismissed_stale_still_silent(tmp_path: Path) -> None:
     repo = tmp_path / "case4b"
     repo.mkdir()
     _init_git_repo(repo)
@@ -137,7 +138,7 @@ def test_case4b_dismissed_stale_still_silent(tmp_path):
     assert out == ""
 
 
-def test_case5_onboarded_current_silent(tmp_path):
+def test_case5_onboarded_current_silent(tmp_path: Path) -> None:
     repo = tmp_path / "case5"
     repo.mkdir()
     _init_git_repo(repo)
@@ -149,7 +150,7 @@ def test_case5_onboarded_current_silent(tmp_path):
     assert out == ""
 
 
-def test_case6_non_git_dir_silent(tmp_path):
+def test_case6_non_git_dir_silent(tmp_path: Path) -> None:
     repo = tmp_path / "case6"
     repo.mkdir()
     plugin_root = _make_fake_plugin_root(tmp_path, 2)
@@ -158,7 +159,7 @@ def test_case6_non_git_dir_silent(tmp_path):
     assert out == ""
 
 
-def test_primary_path_probe_script_present_offers(tmp_path):
+def test_primary_path_probe_script_present_offers(tmp_path: Path) -> None:
     repo = tmp_path / "primary"
     repo.mkdir()
     _init_git_repo(repo)
@@ -175,7 +176,7 @@ def test_primary_path_probe_script_present_offers(tmp_path):
     assert "drift(1->2)" in out
 
 
-def test_primary_path_probe_script_present_unstamped(tmp_path):
+def test_primary_path_probe_script_present_unstamped(tmp_path: Path) -> None:
     repo = tmp_path / "primary-unstamped"
     repo.mkdir()
     _init_git_repo(repo)
@@ -192,7 +193,7 @@ def test_primary_path_probe_script_present_unstamped(tmp_path):
     assert "unstamped(" not in out
 
 
-def test_case7_fallback_source_is_live_silent(tmp_path):
+def test_case7_fallback_source_is_live_silent(tmp_path: Path) -> None:
     repo = tmp_path / "case7"
     repo.mkdir()
     _init_git_repo(repo)
@@ -207,7 +208,7 @@ def test_case7_fallback_source_is_live_silent(tmp_path):
     assert out == ""
 
 
-def test_case7b_fallback_non_source_is_live_offers(tmp_path):
+def test_case7b_fallback_non_source_is_live_offers(tmp_path: Path) -> None:
     repo = tmp_path / "case7b"
     repo.mkdir()
     _init_git_repo(repo)
@@ -224,7 +225,7 @@ def test_case7b_fallback_non_source_is_live_offers(tmp_path):
     assert "drift(1->2)" in out
 
 
-def test_main_env_var_contract(tmp_path, monkeypatch, capsys):
+def test_main_env_var_contract(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo = tmp_path / "main-env"
     repo.mkdir()
     _init_git_repo(repo)
@@ -238,7 +239,7 @@ def test_main_env_var_contract(tmp_path, monkeypatch, capsys):
     assert "[onboarding]" in out
 
 
-def test_main_cli_flags_override_env(tmp_path, monkeypatch, capsys):
+def test_main_cli_flags_override_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     offered_repo = tmp_path / "main-cli-offer"
     offered_repo.mkdir()
     _init_git_repo(offered_repo)
@@ -258,7 +259,7 @@ def test_main_cli_flags_override_env(tmp_path, monkeypatch, capsys):
     assert "[onboarding]" in out
 
 
-def test_main_never_fails_on_missing_plugin_root(tmp_path, monkeypatch, capsys):
+def test_main_never_fails_on_missing_plugin_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo = tmp_path / "main-no-plugin"
     repo.mkdir()
     _init_git_repo(repo)
@@ -280,7 +281,7 @@ def test_main_never_fails_on_missing_plugin_root(tmp_path, monkeypatch, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_fallback_unresolvable_claude_klabauter_root_degrades_to_silent(tmp_path, monkeypatch):
+def test_fallback_unresolvable_claude_klabauter_root_degrades_to_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """CLAUDE_KLABAUTER_ROOT unresolvable (no env, no settings-home pointer, no
     machine-local entry) must degrade to the "no probe available" silent
     return -- never raise -- matching detect_onboarding_offer's own
@@ -307,7 +308,7 @@ def test_fallback_unresolvable_claude_klabauter_root_degrades_to_silent(tmp_path
     assert out == ""
 
 
-def test_fallback_reaches_probe_when_claude_klabauter_root_resolved(tmp_path):
+def test_fallback_reaches_probe_when_claude_klabauter_root_resolved(tmp_path: Path) -> None:
     """With CLAUDE_KLABAUTER_ROOT resolved (via the autouse fixture) and
     coordinator/lib/coordinator_currency.py present under it, the fallback
     branch actually reaches coordinator_currency_probe() and surfaces

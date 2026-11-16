@@ -10,6 +10,7 @@ from coordinator_core import machine_profile
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards._advisory_value import AdvisoryValue
 from coordinator_core.bash_guards.dispatch import GuardBand, GuardEntry
+from pathlib import Path
 
 _FIND = "find /mnt/c -maxdepth 4 -name '*.py'"
 # runaway-find (deny_registry, BOX_DEGRADING) denies the unbounded shape; the depth-bounded
@@ -20,7 +21,7 @@ _PYTEST = "python -m pytest -q"
 
 
 @pytest.fixture(autouse=True)
-def _no_flags(monkeypatch, tmp_path):
+def _no_flags(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     import os
 
     for key in list(os.environ):
@@ -36,7 +37,7 @@ def _no_flags(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def loadbearing_repo(tmp_path):
+def loadbearing_repo(tmp_path: Path) -> str:
     """A real repo whose only untracked file is load-bearing: the floor guard's
     `git clean -nd` oracle must run in a repo that has something to lose, or it
     fails open (a non-repo cwd) and the deny never fires. The `.git` skeleton
@@ -52,7 +53,7 @@ def loadbearing_repo(tmp_path):
     return str(repo)
 
 
-def _run(cmd, session="sess-policy", cwd="/tmp"):
+def _run(cmd, session: str = "sess-policy", cwd: str = "/tmp"):
     payload = {
         "tool_name": "Bash",
         "tool_input": {"command": cmd},
@@ -66,19 +67,19 @@ def _decision(out):
     return ((out or {}).get("hookSpecificOutput") or {}).get("permissionDecision")
 
 
-def test_no_flags_runaway_find_warns():
+def test_no_flags_runaway_find_warns() -> None:
     out = _run(_FIND)
     assert _decision(out) != "deny"
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "depth-bounded" in ctx
 
 
-def test_global_strict_denies(monkeypatch):
+def test_global_strict_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")
     assert _decision(_run(_RUNAWAY)) == "deny"
 
 
-def test_per_guard_strict_hardens_one_guard_alone(monkeypatch):
+def test_per_guard_strict_hardens_one_guard_alone(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "warn")
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL_RUNAWAY-FIND", "strict")
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL_CHECK-TEST-SUITE-INVOCATION", "warn")
@@ -89,26 +90,26 @@ def test_per_guard_strict_hardens_one_guard_alone(monkeypatch):
     assert out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_suite_guard_defaults_strict_under_a_global_warn(monkeypatch):
+def test_suite_guard_defaults_strict_under_a_global_warn(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "warn")
     assert _decision(_run(_PYTEST, session="sess-policy-3")) == "deny"
 
 
-def test_floor_guard_denies_with_no_flags(loadbearing_repo):
+def test_floor_guard_denies_with_no_flags(loadbearing_repo) -> None:
     assert _decision(_run(_CLEAN, cwd=loadbearing_repo)) == "deny"
 
 
-def test_demoted_deny_does_not_shadow_a_later_floor_deny(loadbearing_repo):
+def test_demoted_deny_does_not_shadow_a_later_floor_deny(loadbearing_repo) -> None:
     out = _run("%s; %s" % (_FIND, _CLEAN), cwd=loadbearing_repo)
     assert _decision(out) == "deny"
 
 
-def test_held_demoted_envelope_returned_when_no_later_deny():
+def test_held_demoted_envelope_returned_when_no_later_deny() -> None:
     out = _run(_FIND)
     assert _decision(out) == "allow"
 
 
-def test_collect_mode_gathers_demoted_advisory():
+def test_collect_mode_gathers_demoted_advisory() -> None:
     payload = {
         "tool_name": "Bash",
         "tool_input": {"command": _FIND},
@@ -119,7 +120,7 @@ def test_collect_mode_gathers_demoted_advisory():
     assert out and all(_decision(e) != "deny" for e in out)
 
 
-def test_crashed_floor_guard_still_denies(monkeypatch):
+def test_crashed_floor_guard_still_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom():
         raise RuntimeError("x")
 

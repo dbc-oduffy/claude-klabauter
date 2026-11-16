@@ -25,6 +25,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e import 
 )
 from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import DLV, _write, repo  # noqa: F401
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -50,7 +51,7 @@ def _resume(halt, **extra):
 
 
 @pytest.fixture
-def plain_repo(tmp_path):
+def plain_repo(tmp_path: Path):
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@t.example")
     _git(tmp_path, "config", "user.name", "t")
@@ -62,7 +63,7 @@ def plain_repo(tmp_path):
     return tmp_path, manifest, _git(tmp_path, "rev-parse", "HEAD")
 
 
-def test_credited_row_is_exempt_without_a_git_spawn(plain_repo, monkeypatch):
+def test_credited_row_is_exempt_without_a_git_spawn(plain_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, manifest, halt = plain_repo
 
     def boom(*a, **k):
@@ -72,45 +73,45 @@ def test_credited_row_is_exempt_without_a_git_spawn(plain_repo, monkeypatch):
     assert tc._unchanged_since_halt_failures(root, _resume(halt), _verdict(), manifest) == []
 
 
-def test_credited_row_is_exempt_with_declared_path_unchanged(plain_repo):
+def test_credited_row_is_exempt_with_declared_path_unchanged(plain_repo) -> None:
     root, manifest, halt = plain_repo
     assert tc._unchanged_since_halt_failures(root, _resume(halt), _verdict(), manifest) == []
 
 
-def test_met_by_naming_an_unnamed_sha_still_refuses(plain_repo):
+def test_met_by_naming_an_unnamed_sha_still_refuses(plain_repo) -> None:
     root, manifest, halt = plain_repo
     got = tc._unchanged_since_halt_failures(root, _resume(halt), _verdict("abcdef1234"), manifest)
     assert got == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
 
 
-def test_post_commit_row_met_by_the_halt_sha_is_exempt(plain_repo):
+def test_post_commit_row_met_by_the_halt_sha_is_exempt(plain_repo) -> None:
     root, manifest, halt = plain_repo
     resume = _resume(halt, revise_notes=[f"R1 met by {halt[:10]} (halt commit)"])
     verdict = {"items": [{"id": "R1", "status": "post_commit", "met_by": [halt[:10]]}]}
     assert tc._unchanged_since_halt_failures(root, resume, verdict, manifest) == []
 
 
-def test_post_commit_row_with_an_unnamed_sha_still_refuses(plain_repo):
+def test_post_commit_row_with_an_unnamed_sha_still_refuses(plain_repo) -> None:
     root, manifest, halt = plain_repo
     verdict = {"items": [{"id": "R1", "status": "post_commit", "met_by": ["abcdef1234"]}]}
     got = tc._unchanged_since_halt_failures(root, _resume(halt), verdict, manifest)
     assert got == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
 
 
-def test_post_commit_row_with_a_noted_sha_that_does_not_resolve_is_refused(plain_repo):
+def test_post_commit_row_with_a_noted_sha_that_does_not_resolve_is_refused(plain_repo) -> None:
     root, manifest, halt = plain_repo
     verdict = {"items": [{"id": "R1", "status": "post_commit", "met_by": [CREDIT_SHA]}]}
     got = tc._unchanged_since_halt_failures(root, _resume(halt), verdict, manifest)
     assert got == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
 
 
-def test_no_revise_note_still_refuses(plain_repo):
+def test_no_revise_note_still_refuses(plain_repo) -> None:
     root, manifest, halt = plain_repo
     got = tc._unchanged_since_halt_failures(root, _resume(halt, revise_notes=[]), _verdict(), manifest)
     assert got == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
 
 
-def _close_only_run(root):
+def _close_only_run(root) -> str:
     """Run RUN2 declaring a.py (landed before the halt, unchanged since) while its commit request
     carries only the docs chunk."""
     token = _second_run(root)
@@ -139,7 +140,7 @@ def _terminal(root, token, resume, verdict):
     )
 
 
-def test_ledger_gate_passes_for_the_credited_resume(halted):
+def test_ledger_gate_passes_for_the_credited_resume(halted) -> None:
     _close_only_run(halted)
     root = halted
     run_dir = root / RUN_DIR_ROOT / RUN2
@@ -150,7 +151,7 @@ def test_ledger_gate_passes_for_the_credited_resume(halted):
     assert refusal is None, refusal
 
 
-def test_close_only_commit_lands_without_a_declared_product_path(halted):
+def test_close_only_commit_lands_without_a_declared_product_path(halted) -> None:
     token = _close_only_run(halted)
     root = halted
     halt = _git(root, "rev-parse", "HEAD")
@@ -161,7 +162,7 @@ def test_close_only_commit_lands_without_a_declared_product_path(halted):
     assert "docs/plans/p.md" in landed
 
 
-def test_close_only_commit_with_an_uncredited_sha_is_refused(halted):
+def test_close_only_commit_with_an_uncredited_sha_is_refused(halted) -> None:
     token = _close_only_run(halted)
     root = halted
     halt = _git(root, "rev-parse", "HEAD")

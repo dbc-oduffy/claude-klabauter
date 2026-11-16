@@ -9,6 +9,10 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 # Declared, not excused: the end-to-end tests below (see the "end-to-end
 # (real subprocess spawn of coordinator_core.invoke)" section) spawn a real
@@ -26,7 +30,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 _BIN_DIR = Path(__file__).parent.parent
 
 
-def _load_module():
+def _load_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "cartography_cli",
         _BIN_DIR / "cartography.py",
@@ -73,7 +77,7 @@ def test_resolve_op_name_unknown_exits_1() -> None:
     assert exc.value.code == 1
 
 
-def test_main_list_prints_known_ops_and_exits_0(capsys) -> None:
+def test_main_list_prints_known_ops_and_exits_0(capsys: pytest.CaptureFixture[str]) -> None:
     rc = _mod.main(["--list"])
     assert rc == 0
     out = capsys.readouterr().out
@@ -81,25 +85,25 @@ def test_main_list_prints_known_ops_and_exits_0(capsys) -> None:
     assert "cartography.tree" in out
 
 
-def test_main_missing_op_exits_1(capsys) -> None:
+def test_main_missing_op_exits_1(capsys: pytest.CaptureFixture[str]) -> None:
     rc = _mod.main([])
     assert rc == 1
     assert "an <op> is required" in capsys.readouterr().err
 
 
-def test_main_missing_target_root_exits_1(capsys) -> None:
+def test_main_missing_target_root_exits_1(capsys: pytest.CaptureFixture[str]) -> None:
     rc = _mod.main(["file_index"])
     assert rc == 1
     assert "--target-root is required" in capsys.readouterr().err
 
 
-def test_main_malformed_params_json_exits_1(capsys) -> None:
+def test_main_malformed_params_json_exits_1(capsys: pytest.CaptureFixture[str]) -> None:
     rc = _mod.main(["file_index", "--target-root", "/tmp", "--params", "not-json"])
     assert rc == 1
     assert "--params must be valid JSON" in capsys.readouterr().err
 
 
-def test_main_params_non_object_exits_1(capsys) -> None:
+def test_main_params_non_object_exits_1(capsys: pytest.CaptureFixture[str]) -> None:
     rc = _mod.main(["file_index", "--target-root", "/tmp", "--params", "[1, 2]"])
     assert rc == 1
     assert "must decode to a JSON object" in capsys.readouterr().err

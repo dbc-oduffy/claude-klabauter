@@ -22,13 +22,15 @@ from coordinator_core.ops.dispatch_emit.tests.test_refire_resumes_halted_run imp
     _fire,
     repo,
 )
+from pathlib import Path
+import pytest
 
 PLAN_REL = "docs/plans/2026-10-16-refire-c3.md"
 STEM = "2026-10-16-refire-c3"
 ONE_STAMP = re.compile(rf"^warp-{STEM}-\d{{8}}T\d{{6}}-[0-9a-f]{{6}}$")
 
 
-def _halt_review_blocked(repo):
+def _halt_review_blocked(repo) -> None:
     plan = repo / PLAN_REL
     plan.parent.mkdir(parents=True, exist_ok=True)
     plan.write_text(
@@ -41,7 +43,7 @@ def _halt_review_blocked(repo):
     write_halt_marker(record_dir(repo, OLDER), halted="review_blocked", sizing_rel=REL, plan_rel=PLAN_REL)
 
 
-def _add_task_c4(repo):
+def _add_task_c4(repo) -> None:
     row = {
         "id": "C4", "title": "TC4", "disposition": "open", "surface": "some/C4.py",
         "change_kind": "code-edit", "writes": ["some/C4.py"], "queue_scope": "project",
@@ -50,13 +52,13 @@ def _add_task_c4(repo):
     assert reply.get("exit_code") == 0, reply
 
 
-def test_a_rebound_refire_after_add_task_answers_the_halted_id_unchanged(repo):
+def test_a_rebound_refire_after_add_task_answers_the_halted_id_unchanged(repo) -> None:
     _halt_review_blocked(repo)
     _add_task_c4(repo)
     assert _fire(repo)["run_id"] == OLDER
 
 
-def test_a_refire_after_add_task_whose_halted_id_is_not_rebindable_mints_one_suffix(repo, monkeypatch):
+def test_a_refire_after_add_task_whose_halted_id_is_not_rebindable_mints_one_suffix(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _halt_review_blocked(repo)
     _emit_by(repo, "dead-peer", False, monkeypatch)
     _add_task_c4(repo)
@@ -66,7 +68,7 @@ def test_a_refire_after_add_task_whose_halted_id_is_not_rebindable_mints_one_suf
     assert reply["output_path_redirect"]["to"].endswith(f"{reply['run_id']}.workflow.mjs")
 
 
-def test_a_second_refire_after_add_task_still_mints_one_suffix(repo):
+def test_a_second_refire_after_add_task_still_mints_one_suffix(repo) -> None:
     _halt_review_blocked(repo)
     _add_task_c4(repo)
     first = _fire(repo)["run_id"]
@@ -80,21 +82,21 @@ def _shell_run(repo, run_id):
     return run_id
 
 
-def test_the_launcher_abandon_envelope_closes_a_minted_only_run_without_a_request_root(repo):
+def test_the_launcher_abandon_envelope_closes_a_minted_only_run_without_a_request_root(repo) -> None:
     run = _shell_run(repo, "warp-2026-10-16-refire-c3-20260102T000000-bbbbbb")
     reply = op._dispatch_emit({"_caller_cwd": str(repo), "emits": [{"abandon_run": run}]}, None)
     assert reply["replies"][0].get("error") is None
     assert reply["replies"][0]["abandoned"] is True
 
 
-def test_an_abandon_batch_with_no_root_and_no_caller_cwd_still_refuses(repo, tmp_path, monkeypatch):
+def test_an_abandon_batch_with_no_root_and_no_caller_cwd_still_refuses(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     run = _shell_run(repo, "warp-2026-10-16-refire-c3-20260102T000000-bbbbbb")
     reply = op._dispatch_emit({"emits": [{"abandon_run": run}]}, None)
     assert "requires repo_root, target_root or a caller cwd" in reply["replies"][0]["error"]
 
 
-def test_a_sizing_stem_already_carrying_a_run_stamp_mints_one_suffix():
+def test_a_sizing_stem_already_carrying_a_run_stamp_mints_one_suffix() -> None:
     assert op._unstamped_stem("state/sizings/2026-10-16-refire-c3.yaml") == STEM
     assert op._unstamped_stem(f"state/sizings/{OLDER}.yaml") == STEM
     assert op._unstamped_stem("state/sizings/2026-10-16-refire-c3-20260101T000000-aaaaaa.yaml") == STEM

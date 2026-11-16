@@ -30,7 +30,7 @@ def _budget(route: str) -> int:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     for name in ("CLAUDE_CODE_REMOTE", "CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_CONTAINER_ID",
                  "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_PLUGIN_ROOT", "DELIVERABLE_ID"):
         monkeypatch.delenv(name, raising=False)
@@ -104,7 +104,7 @@ def _all_git_run(spawns) -> None:
     assert all(s.origin == "run_git" for s in spawns), [(s.origin, s.argv) for s in spawns]
 
 
-def test_sizing_submission_through_the_real_emit(repo, monkeypatch):
+def test_sizing_submission_through_the_real_emit(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _put_sizing(repo)
     with _count_spawns_attributed(monkeypatch) as spawns:
         env = mod.evaluate(_payload(repo, {"sizing": REL}))
@@ -118,7 +118,7 @@ def test_sizing_submission_through_the_real_emit(repo, monkeypatch):
     _all_git_run(spawns)
 
 
-def test_raw_ask_submission_through_the_real_emit(repo, monkeypatch):
+def test_raw_ask_submission_through_the_real_emit(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     sid = "sess-real-emit"
     pm_turns.log_path(sid, str(repo)).parent.mkdir(parents=True)
     assert pm_turns.append_turn("add the widget", session_id=sid, cwd=str(repo))["ok"]
@@ -134,7 +134,7 @@ def test_raw_ask_submission_through_the_real_emit(repo, monkeypatch):
     _all_git_run(spawns)
 
 
-def test_asks_submission_through_the_real_fanout_and_emit(repo, monkeypatch):
+def test_asks_submission_through_the_real_fanout_and_emit(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import baton_pm_turns as PT
     from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
     from coordinator_core.session_baton import store
@@ -160,7 +160,7 @@ def test_asks_submission_through_the_real_fanout_and_emit(repo, monkeypatch):
     _all_git_run(spawns)
 
 
-def test_relayed_ask_submission_writes_relayed_ask_beside_no_ask_md(repo, monkeypatch):
+def test_relayed_ask_submission_writes_relayed_ask_beside_no_ask_md(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     with _count_spawns_attributed(monkeypatch) as spawns:
         env = mod.evaluate(_payload(repo, {"ask": "RELAYED-MARK add the widget", "source": "relayed"}))
         hook_spawns = len(spawns)
@@ -173,7 +173,7 @@ def test_relayed_ask_submission_writes_relayed_ask_beside_no_ask_md(repo, monkey
     assert hook_spawns == _budget("raw_ask_submission"), [s.argv for s in spawns]
 
 
-def test_ask_with_inline_brief_reaches_the_real_emit(repo):
+def test_ask_with_inline_brief_reaches_the_real_emit(repo) -> None:
     env = mod.evaluate(_payload(repo, {"ask": "add the widget", "source": "pm", "brief": "BRIEF-MARK prefer small"}))
     run_id = _run_deferred_emit(_assert_rewrite(env, deferred=True), repo)["run_id"]
     assert any(
@@ -183,7 +183,7 @@ def test_ask_with_inline_brief_reaches_the_real_emit(repo):
     )
 
 
-def test_ask_with_a_missing_brief_file_is_denied_by_the_real_emit(repo):
+def test_ask_with_a_missing_brief_file_is_denied_by_the_real_emit(repo) -> None:
     env = mod.evaluate(_payload(repo, {"ask": "add the widget", "source": "pm", "brief_file": "nope.md"}))
     hso = env["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"

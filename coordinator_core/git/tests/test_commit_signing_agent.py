@@ -24,6 +24,11 @@ from coordinator_core.git.tests.test_commit_sshsig_agent import (
     _repo,
     key,  # noqa: F401 -- fixture
 )
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from threading import Event
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -41,7 +46,7 @@ def _popens(monkeypatch):
     real = subprocess.Popen
 
     class Spy(real):  # type: ignore[misc,valid-type]
-        def __init__(self, cmd, *a, **kw):
+        def __init__(self, cmd, *a, **kw) -> None:
             seen.append(cmd)
             super().__init__(cmd, *a, **kw)
 
@@ -59,7 +64,7 @@ def _serve(tmp_path, agent):
     return sock, UnixServer(sock, agent)
 
 
-def test_agent_signs_commit_v2_object_with_zero_spawns(tmp_path, key, monkeypatch):  # noqa: F811
+def test_agent_signs_commit_v2_object_with_zero_spawns(tmp_path: Path, key, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     keyfile, private, pub_text, blob = key
     agent = FakeAgent(private, blob)
     sock, server = _serve(tmp_path, agent)
@@ -83,7 +88,7 @@ def test_agent_signs_commit_v2_object_with_zero_spawns(tmp_path, key, monkeypatc
         server.close()
 
 
-def test_no_agent_falls_back_to_one_commit_tree_spawn(tmp_path, key, monkeypatch):  # noqa: F811
+def test_no_agent_falls_back_to_one_commit_tree_spawn(tmp_path: Path, key, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     keyfile, _, pub_text, _ = key
     repo = _repo(tmp_path, keyfile, pub_text)
     tree, head = _inputs(repo)
@@ -97,7 +102,7 @@ def test_no_agent_falls_back_to_one_commit_tree_spawn(tmp_path, key, monkeypatch
     assert _git(repo, "verify-commit", sha, check=False).returncode == 0
 
 
-def test_limiter_caps_in_flight_and_falls_back_when_full(tmp_path, monkeypatch):
+def test_limiter_caps_in_flight_and_falls_back_when_full(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sshsig, "_SLOT_DIR", tmp_path / "slots")
     monkeypatch.setattr(sshsig, "MAX_IN_FLIGHT", 2)
     monkeypatch.setattr(sshsig, "_SLOT_WAIT_S", 0.05)
@@ -110,14 +115,14 @@ def test_limiter_caps_in_flight_and_falls_back_when_full(tmp_path, monkeypatch):
             pass
 
 
-def test_limiter_never_exceeds_cap_under_threads(tmp_path, monkeypatch):
+def test_limiter_never_exceeds_cap_under_threads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sshsig, "_SLOT_DIR", tmp_path / "slots")
     monkeypatch.setattr(sshsig, "MAX_IN_FLIGHT", 3)
     monkeypatch.setattr(sshsig, "_SLOT_WAIT_S", 5.0)
     lock = threading.Lock()
     state = {"now": 0, "peak": 0}
 
-    def work():
+    def work() -> None:
         with sshsig.agent_slot():
             with lock:
                 state["now"] += 1
@@ -134,7 +139,7 @@ def test_limiter_never_exceeds_cap_under_threads(tmp_path, monkeypatch):
     assert state["peak"] <= 3 and state["now"] == 0
 
 
-def test_busy_slots_make_sign_via_agent_unavailable_without_contacting_agent(tmp_path, monkeypatch):
+def test_busy_slots_make_sign_via_agent_unavailable_without_contacting_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sshsig, "_SLOT_DIR", tmp_path / "slots")
     monkeypatch.setattr(sshsig, "MAX_IN_FLIGHT", 1)
     monkeypatch.setattr(sshsig, "_SLOT_WAIT_S", 0.05)
@@ -147,13 +152,13 @@ def test_busy_slots_make_sign_via_agent_unavailable_without_contacting_agent(tmp
             sshsig.sign_via_agent(b"x", blob, env={"SSH_AUTH_SOCK": str(tmp_path / "s")})
 
 
-def test_timed_out_worker_keeps_its_slot_until_it_finishes(tmp_path, monkeypatch):
+def test_timed_out_worker_keeps_its_slot_until_it_finishes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sshsig, "_SLOT_DIR", tmp_path / "slots")
     monkeypatch.setattr(sshsig, "MAX_IN_FLIGHT", 1)
     monkeypatch.setattr(sshsig, "_SLOT_WAIT_S", 0.05)
     started, gate = threading.Event(), threading.Event()
 
-    def hung():
+    def hung() -> str:
         started.set()
         gate.wait(10)
         return "late"
@@ -170,7 +175,7 @@ def test_timed_out_worker_keeps_its_slot_until_it_finishes(tmp_path, monkeypatch
         pass
 
 
-def _hung_agent(monkeypatch, tmp_path):
+def _hung_agent(monkeypatch, tmp_path) -> Event:
     monkeypatch.setattr(sshsig, "_SLOT_DIR", tmp_path / "slots")
     sshsig._UNREACHABLE.clear()
     gate = threading.Event()
@@ -178,7 +183,7 @@ def _hung_agent(monkeypatch, tmp_path):
     return gate
 
 
-def test_deadline_truncated_timeout_leaves_agent_reachable(tmp_path, monkeypatch):
+def test_deadline_truncated_timeout_leaves_agent_reachable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     gate = _hung_agent(monkeypatch, tmp_path)
     address = str(tmp_path / "s")
     blob = sshsig._s(b"ssh-ed25519") + sshsig._s(b"k")
@@ -190,7 +195,7 @@ def test_deadline_truncated_timeout_leaves_agent_reachable(tmp_path, monkeypatch
         gate.set()
 
 
-def test_truncated_socket_timeout_in_probe_leaves_agent_reachable(tmp_path, monkeypatch):
+def test_truncated_socket_timeout_in_probe_leaves_agent_reachable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sshsig._UNREACHABLE.clear()
     address = str(tmp_path / "s")
 
@@ -207,7 +212,7 @@ def test_truncated_socket_timeout_in_probe_leaves_agent_reachable(tmp_path, monk
     sshsig._UNREACHABLE.clear()
 
 
-def test_full_timeout_non_answer_still_marks_agent_unreachable(tmp_path, monkeypatch):
+def test_full_timeout_non_answer_still_marks_agent_unreachable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     gate = _hung_agent(monkeypatch, tmp_path)
     monkeypatch.setattr(sshsig, "_DEFAULT_TIMEOUT_S", 0.02)
     address = str(tmp_path / "s")
@@ -223,11 +228,11 @@ def test_full_timeout_non_answer_still_marks_agent_unreachable(tmp_path, monkeyp
         sshsig._UNREACHABLE.clear()
 
 
-def test_tampered_agent_signature_falls_back_to_git(tmp_path, key, monkeypatch):  # noqa: F811
+def test_tampered_agent_signature_falls_back_to_git(tmp_path: Path, key, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     keyfile, private, pub_text, blob = key
 
     class Forger(FakeAgent):
-        def respond(self, msg):
+        def respond(self, msg) -> bytes:
             reply = super().respond(msg)
             if msg[0] == 13:
                 sig = bytearray(reply)

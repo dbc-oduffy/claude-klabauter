@@ -69,13 +69,18 @@ from coordinator_core.conservatism import (
     iter_declarations,
 )
 from coordinator_core.conservatism.verify import assert_safe_direction_holds
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 
 @contextlib.contextmanager
 def _no_psutil():
     real_import = builtins.__import__
 
-    def _blocked(name, *args, **kwargs):
+    def _blocked(name, *args, **kwargs) -> ModuleType:
         if name == "psutil" or name.startswith("psutil."):
             raise ImportError("psutil blocked by test")
         return real_import(name, *args, **kwargs)
@@ -87,7 +92,7 @@ def _no_psutil():
         builtins.__import__ = real_import
 
 
-def test_default_usable_ram_gb_raises_as_declared():
+def test_default_usable_ram_gb_raises_as_declared() -> None:
     pytest.importorskip("psutil", reason="the control run needs a real reading to be distinguishable")
     assert_safe_direction_holds(
         cp.default_usable_ram_gb,
@@ -97,7 +102,7 @@ def test_default_usable_ram_gb_raises_as_declared():
     )
 
 
-def test_default_physical_cores_falls_back_as_declared():
+def test_default_physical_cores_falls_back_as_declared() -> None:
     assert_safe_direction_holds(
         cp.default_physical_cores,
         invoke=cp.default_physical_cores,
@@ -114,7 +119,7 @@ def _unreadable_state() -> cp.MachineState:
     return cp.MachineState(readable=False, free_ram_gb=None, cpu_percent=None, process_count=None, error="probe failed")
 
 
-def test_evaluate_escape_hatch_refuses_on_unreadable_state_as_declared():
+def test_evaluate_escape_hatch_refuses_on_unreadable_state_as_declared() -> None:
     state = {"value": _readable_state()}
 
     @contextlib.contextmanager
@@ -134,7 +139,7 @@ def test_evaluate_escape_hatch_refuses_on_unreadable_state_as_declared():
     )
 
 
-def test_reap_stale_git_lock_falls_back_as_declared(tmp_path, monkeypatch):
+def test_reap_stale_git_lock_falls_back_as_declared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Precondition: this guard's cheap, no-subprocess walk can resolve the
     lock-holding git directory. Undeterminable: `cwd` sits outside any repo
     this guard's bounded upward walk can reach, so `_resolve_git_dir`
@@ -178,7 +183,7 @@ def test_reap_stale_git_lock_falls_back_as_declared(tmp_path, monkeypatch):
     )
 
 
-def test_no_optional_locks_falls_back_as_declared():
+def test_no_optional_locks_falls_back_as_declared() -> None:
     original = gnol._bt_tokenize_full_command
 
     def _invoke():
@@ -199,7 +204,7 @@ def test_no_optional_locks_falls_back_as_declared():
     )
 
 
-def test_offer_git_c_falls_back_as_declared():
+def test_offer_git_c_falls_back_as_declared() -> None:
     state = {"cmd": "cd /tmp && git status"}
 
     def _invoke():
@@ -220,7 +225,7 @@ def test_offer_git_c_falls_back_as_declared():
     )
 
 
-def test_block_worktree_sentinel_creation_raises_as_declared():
+def test_block_worktree_sentinel_creation_raises_as_declared() -> None:
     payload = {"tool_name": "Bash", "tool_input": {"command": "ls -la"}}
 
     def _invoke():
@@ -247,7 +252,7 @@ def test_block_worktree_sentinel_creation_raises_as_declared():
     )
 
 
-def test_block_noncanonical_branch_creation_falls_back_as_declared(monkeypatch):
+def test_block_noncanonical_branch_creation_falls_back_as_declared(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(bncbc, "resolve_git_root", lambda cwd: "/repo")
     monkeypatch.setattr(bncbc, "_is_hazard_repo", lambda root: True)
 
@@ -276,7 +281,7 @@ def test_block_noncanonical_branch_creation_falls_back_as_declared(monkeypatch):
     )
 
 
-def test_block_worktree_sentinel_write_raises_as_declared():
+def test_block_worktree_sentinel_write_raises_as_declared() -> None:
     payload = {"tool_name": "Write", "tool_input": {"file_path": "foo.txt"}}
 
     def _invoke():
@@ -337,10 +342,10 @@ del _site, _sibling_module, _sibling_attr
 _DECLARING_MODULES = (cp, dwc, grsg, gnol, gogc, bwsc, bncbc, bwsw, npnu)
 
 
-def test_nudge_peer_notice_unread_falls_back_as_declared():
+def test_nudge_peer_notice_unread_falls_back_as_declared() -> None:
     state = {"raise": False}
 
-    def _list_unread_notices(repo_root, session_id):
+    def _list_unread_notices(repo_root, session_id) -> list[dict[str, str]]:
         if state["raise"]:
             raise OSError("notice channel unreadable")
         # The intact path must return something DISTINGUISHABLE from the
@@ -384,7 +389,7 @@ def test_nudge_peer_notice_unread_falls_back_as_declared():
         npnu.list_unread_notices = monkeyed["orig"]
 
 
-def test_every_declaring_site_has_an_assertion():
+def test_every_declaring_site_has_an_assertion() -> None:
     declared = {
         name for module in _DECLARING_MODULES for name, _ in iter_declarations(module)
     }
@@ -397,7 +402,7 @@ def test_every_declaring_site_has_an_assertion():
     )
 
 
-def test_both_directions_are_expressible():
+def test_both_directions_are_expressible() -> None:
     """Survives a second review that deleted it as "redundant with the
     per-site tests" (Review: code-reviewer). It is not redundant: the
     per-site tests each assert whatever direction its site CURRENTLY
@@ -411,7 +416,7 @@ def test_both_directions_are_expressible():
     assert directions == {SafeDirection.RAISE, SafeDirection.FALL_BACK}
 
 
-def test_an_imported_declaration_is_not_attributed_to_the_importer():
+def test_an_imported_declaration_is_not_attributed_to_the_importer() -> None:
     names = {name for name, _ in iter_declarations(dwc)}
     assert names == {"coordinator_core.install.derive_worker_cap.cap_command_for_this_box"}
 
@@ -425,15 +430,15 @@ def test_an_imported_declaration_is_not_attributed_to_the_importer():
         ({"direction": SafeDirection.RAISE, "because": "  "}, "because"),
     ],
 )
-def test_malformed_declarations_are_refused_at_import(kwargs, message):
+def test_malformed_declarations_are_refused_at_import(kwargs, message) -> None:
     with pytest.raises(ValueError, match=message):
         declares_safe_direction(**kwargs)
 
 
-def test_verify_catches_a_site_that_lies_about_its_direction():
+def test_verify_catches_a_site_that_lies_about_its_direction() -> None:
 
     @declares_safe_direction(SafeDirection.RAISE, because="claims to refuse, does not")
-    def liar():
+    def liar() -> int:
         return 0
 
     broken = {"value": False}

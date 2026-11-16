@@ -8,6 +8,7 @@ from pathlib import Path
 from coordinator_core.ops.dispatch_emit import agent_body_dedupe as dedupe
 from coordinator_core.ops.dispatch_emit import ask_compose, emit, prompt_fragments
 from coordinator_core.subagent_sandbox.provision_report import resolve_plugin_root
+import pytest
 
 _ANCHOR = "// anchor"
 _REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -41,7 +42,7 @@ def _src(*schemas: str) -> str:
     return f"{_ANCHOR}\n{calls}"
 
 
-def test_repeated_constant_schema_becomes_a_thunk_and_round_trips(monkeypatch):
+def test_repeated_constant_schema_becomes_a_thunk_and_round_trips(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
     src = _src(_SCHEMA, _SCHEMA, _SCHEMA)
     out = dedupe.dedupe_agent_payloads(src, anchor=_ANCHOR)
@@ -51,20 +52,20 @@ def test_repeated_constant_schema_becomes_a_thunk_and_round_trips(monkeypatch):
     assert dedupe.resolve_schema_refs(out) == src
 
 
-def test_thunk_precedes_every_use(monkeypatch):
+def test_thunk_precedes_every_use(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
     out = dedupe.dedupe_agent_payloads(_src(_SCHEMA, _SCHEMA), anchor=_ANCHOR)
     assert out.index("const _SC0 = ") < out.index("_SC0()")
 
 
-def test_schema_with_a_free_identifier_stays_inline(monkeypatch):
+def test_schema_with_a_free_identifier_stays_inline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
     free = '{"type": "object", "required": ["a", "b"], "properties": {"a": {"enum": someRuntimeList}}, "pad": "xxxxxxxxxxxxxxxx"}'
     src = _src(free, free, free)
     assert dedupe.dedupe_agent_payloads(src, anchor=_ANCHOR) == src
 
 
-def test_schema_holding_a_fragment_ref_is_still_a_constant_literal(monkeypatch):
+def test_schema_holding_a_fragment_ref_is_still_a_constant_literal(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
     holds_ref = '{"type": "object", "required": ["a"], "properties": {"a": {"description": _PF237}}, "pad": "xxxxxxxxxxxxxxxx"}'
     src = _src(holds_ref, holds_ref, holds_ref)
@@ -73,19 +74,19 @@ def test_schema_holding_a_fragment_ref_is_still_a_constant_literal(monkeypatch):
     assert dedupe.resolve_schema_refs(out) == src
 
 
-def test_schema_appearing_once_stays_inline(monkeypatch):
+def test_schema_appearing_once_stays_inline(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
     src = _src(_SCHEMA)
     assert dedupe.dedupe_agent_payloads(src, anchor=_ANCHOR) == src
 
 
-def test_disabled_switch_leaves_the_script_byte_identical(monkeypatch):
+def test_disabled_switch_leaves_the_script_byte_identical(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", False)
     src = _src(_SCHEMA, _SCHEMA, _SCHEMA)
     assert dedupe.dedupe_agent_payloads(src, anchor=_ANCHOR) == src
 
 
-def test_braces_inside_strings_and_comments_do_not_unbalance_the_scan(monkeypatch):
+def test_braces_inside_strings_and_comments_do_not_unbalance_the_scan(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
     tricky = '{"description": "a } brace and { another", "type": "object", "pad": "xxxxxxxxxxxxxxxxxxxx"}'
     src = _src(tricky, tricky, tricky)
@@ -94,7 +95,7 @@ def test_braces_inside_strings_and_comments_do_not_unbalance_the_scan(monkeypatc
     assert dedupe.resolve_schema_refs(out) == src
 
 
-def test_production_ask_resolves_back_to_the_unhoisted_script(monkeypatch):
+def test_production_ask_resolves_back_to_the_unhoisted_script(monkeypatch: pytest.MonkeyPatch) -> None:
     plain = _compose(monkeypatch, hoist=False)
     hoisted = _compose(monkeypatch, hoist=True)
     assert "const _SC" not in plain and len(hoisted) < len(plain)
@@ -103,17 +104,17 @@ def test_production_ask_resolves_back_to_the_unhoisted_script(monkeypatch):
     assert _single_quoted(resolved) == _single_quoted(expected)
 
 
-def test_indentation_strip_keeps_template_string_and_comment_whitespace():
+def test_indentation_strip_keeps_template_string_and_comment_whitespace() -> None:
     src = "  const a = 1;\n    const t = `x\n      y`;\n  /* c\n     d */\n\tfoo();\n"
     assert dedupe.strip_code_indentation(src) == "const a = 1;\nconst t = `x\n      y`;\n/* c\n     d */\nfoo();\n"
 
 
-def test_blank_code_lines_are_dropped_but_template_and_comment_blank_lines_stay():
+def test_blank_code_lines_are_dropped_but_template_and_comment_blank_lines_stay() -> None:
     src = "const a = 1;\n\n  \nconst t = `x\n\n   y`;\n/* c\n\n d */\n\nfoo();\n"
     assert dedupe.strip_code_indentation(src) == "const a = 1;\nconst t = `x\n\n   y`;\n/* c\n\n d */\nfoo();\n"
 
 
-def test_every_composed_schema_site_reads_as_a_call_after_its_const(monkeypatch):
+def test_every_composed_schema_site_reads_as_a_call_after_its_const(monkeypatch: pytest.MonkeyPatch) -> None:
     hoisted = _compose(monkeypatch, hoist=True)
     defined = {m.group(1): m.start() for m in re.finditer(r"^const (_SC\d+) = ", hoisted, re.M)}
     uses = [(m.group(1), m.start()) for m in re.finditer(r"\b(_SC\d+)\b(?! =)", hoisted)]

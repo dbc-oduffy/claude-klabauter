@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from coordinator_core.bash_guards import _dialect
 from coordinator_core.bash_guards._command_tokenizer import normalize_executable_basename
+from coordinator_core.bash_guards._dc_shell_text import _strip_heredoc_bodies
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 CLASS = "advisory"
@@ -150,6 +151,10 @@ def check_move_from_inside_cwd(
         return None
     dialect = _dialect.dialect_from_tool_name(payload.get("tool_name")) or _dialect.Dialect.BASH
     powershell = dialect is _dialect.Dialect.POWERSHELL
+    if not powershell and "<<" in cmd:
+        cmd = _strip_heredoc_bodies(cmd)
+        if not _PREFILTER.search(cmd):
+            return None
     segments = _dialect.resolve_segments_for_dialect(cmd, dialect, guard_name=_GUARD_NAME)
     if not segments:
         return None

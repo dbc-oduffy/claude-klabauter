@@ -46,23 +46,23 @@ def _write_rollout(home: Path, thread: str, cwd: str) -> None:
 
 
 class Runner:
-    def __init__(self, lsof_text: str):
+    def __init__(self, lsof_text: str) -> None:
         self.calls: list[list[str]] = []
         self.lsof_text = lsof_text
 
-    def __call__(self, argv, **kw):
+    def __call__(self, argv, **kw) -> SimpleNamespace:
         self.calls.append(list(argv))
         out = PS if argv[0] == "ps" else self.lsof_text
         return SimpleNamespace(returncode=0, stdout=out, stderr="")
 
 
 @pytest.fixture(autouse=True)
-def _posix(monkeypatch):
+def _posix(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(live.sys, "platform", "darwin")
     monkeypatch.delenv("CODEX_HOME", raising=False)
 
 
-def test_agy_pid(tmp_path):
+def test_agy_pid(tmp_path: Path) -> None:
     r = Runner(_lsof(tmp_path, []))
     out = live.find_live(pid=100, run=r, home=tmp_path)
     assert out == {"sessions": [{"agent": "antigravity", "pid": 100, "cwd": CWD, "conversation": AGY_CONV}]}
@@ -70,7 +70,7 @@ def test_agy_pid(tmp_path):
     assert "100" in r.calls[1] and "300" not in r.calls[1][2]
 
 
-def test_codex_pid_via_daemon_rollout(tmp_path):
+def test_codex_pid_via_daemon_rollout(tmp_path: Path) -> None:
     _write_rollout(tmp_path, THREAD, CWD)
     r = Runner(_lsof(tmp_path, [THREAD]))
     out = live.find_live(pid=200, run=r, home=tmp_path)
@@ -78,7 +78,7 @@ def test_codex_pid_via_daemon_rollout(tmp_path):
     assert len(r.calls) == 2
 
 
-def test_codex_lock_dir_fallback_when_no_daemon_lsof_names(tmp_path):
+def test_codex_lock_dir_fallback_when_no_daemon_lsof_names(tmp_path: Path) -> None:
     locks = tmp_path / ".codex" / "thread-writer-locks"
     locks.mkdir(parents=True)
     (locks / f"{THREAD}.lock").write_text("")
@@ -88,7 +88,7 @@ def test_codex_lock_dir_fallback_when_no_daemon_lsof_names(tmp_path):
     assert [s["conversation"] for s in out["sessions"]] == [THREAD]
 
 
-def test_cwd_match_returns_both_agents_and_filters_others(tmp_path):
+def test_cwd_match_returns_both_agents_and_filters_others(tmp_path: Path) -> None:
     _write_rollout(tmp_path, THREAD, CWD)
     out = live.find_live(cwd=CWD, run=Runner(_lsof(tmp_path, [THREAD])), home=tmp_path)
     assert {(s["agent"], s["conversation"]) for s in out["sessions"]} == {
@@ -96,26 +96,26 @@ def test_cwd_match_returns_both_agents_and_filters_others(tmp_path):
     assert live.find_live(cwd="/elsewhere", run=Runner(_lsof(tmp_path, [THREAD])), home=tmp_path) == {"sessions": []}
 
 
-def test_no_match_is_empty_list(tmp_path):
+def test_no_match_is_empty_list(tmp_path: Path) -> None:
     assert live.find_live(pid=999, run=Runner(""), home=tmp_path) == {"sessions": []}
     assert live.find_live(pid=500, run=Runner(""), home=tmp_path) == {"sessions": []}
 
 
-def test_two_threads_one_cwd_one_tui_flags_ambiguous(tmp_path):
+def test_two_threads_one_cwd_one_tui_flags_ambiguous(tmp_path: Path) -> None:
     _write_rollout(tmp_path, THREAD, CWD)
     _write_rollout(tmp_path, THREAD2, CWD)
     out = live.find_live(pid=200, run=Runner(_lsof(tmp_path, [THREAD, THREAD2])), home=tmp_path)
     assert len(out["sessions"]) == 2 and all(s["ambiguous"] for s in out["sessions"])
 
 
-def test_codex_thread_in_other_cwd_not_attributed(tmp_path):
+def test_codex_thread_in_other_cwd_not_attributed(tmp_path: Path) -> None:
     _write_rollout(tmp_path, THREAD, "/other")
     out = live.find_live(pid=200, run=Runner(_lsof(tmp_path, [THREAD])), home=tmp_path)
     assert out == {"sessions": []}
 
 
-def test_lsof_absent_is_unsupported(tmp_path):
-    def run(argv, **kw):
+def test_lsof_absent_is_unsupported(tmp_path: Path) -> None:
+    def run(argv, **kw) -> SimpleNamespace:
         if argv[0] == "lsof":
             raise FileNotFoundError("lsof")
         return SimpleNamespace(returncode=0, stdout=PS, stderr="")
@@ -124,14 +124,14 @@ def test_lsof_absent_is_unsupported(tmp_path):
     assert out["sessions"] == [] and "lsof" in out["unsupported"]
 
 
-def test_ps_timeout_is_unsupported(tmp_path):
+def test_ps_timeout_is_unsupported(tmp_path: Path) -> None:
     def run(argv, **kw):
         raise subprocess.TimeoutExpired(argv, 5)
 
     assert "ps" in live.find_live(run=run, home=tmp_path)["unsupported"]
 
 
-def test_windows_is_unsupported_without_spawning(tmp_path, monkeypatch):
+def test_windows_is_unsupported_without_spawning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(live.sys, "platform", "win32")
 
     def run(*a, **k):
@@ -140,7 +140,7 @@ def test_windows_is_unsupported_without_spawning(tmp_path, monkeypatch):
     assert live.find_live(pid=1, run=run, home=tmp_path)["unsupported"]
 
 
-def test_agy_two_brain_ids_picks_newest(tmp_path):
+def test_agy_two_brain_ids_picks_newest(tmp_path: Path) -> None:
     old, new = "aaaaaaaa-0000-4000-8000-000000000001", "bbbbbbbb-0000-4000-8000-000000000002"
     brain = tmp_path / ".gemini" / "antigravity-cli" / "brain"
     for i, c in enumerate((new, old)):

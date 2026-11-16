@@ -15,19 +15,20 @@ import pytest
 
 from coordinator_core.git import commit as gcommit
 from coordinator_core.git.commit import CommitRefused, StagedRollbackRefused
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
-def _git(repo, *args, check=True):
+def _git(repo, *args, check: bool = True):
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **_NOWIN
     )
 
 
-def _repo(tmp_path, name="r"):
+def _repo(tmp_path, name: str = "r"):
     repo = tmp_path / name
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "work/z")
@@ -51,7 +52,7 @@ def _head_tree_paths_unchanged(repo, before_sha):
     return out == before_sha
 
 
-def test_refuses_depth_2_rollback(tmp_path):
+def test_refuses_depth_2_rollback(tmp_path: Path) -> None:
     """v0 -> v1 -> v2 -> a commit whose staged bytes restore v0's exact
     blob at depth 2: refused, and nothing landed."""
     repo = _repo(tmp_path)
@@ -69,7 +70,7 @@ def test_refuses_depth_2_rollback(tmp_path):
     assert _head_tree_paths_unchanged(repo, before)
 
 
-def test_no_tree_or_commit_object_written_on_refusal(tmp_path):
+def test_no_tree_or_commit_object_written_on_refusal(tmp_path: Path) -> None:
     """No ref move, and HEAD's tree is unchanged -- the refusal fires
     before `_rewrite_head_spine`/the commit object write."""
     repo = _repo(tmp_path)
@@ -86,7 +87,7 @@ def test_no_tree_or_commit_object_written_on_refusal(tmp_path):
     assert gcommit.head_tree_sha(repo) == before_tree
 
 
-def test_declared_reverts_lands_the_commit(tmp_path):
+def test_declared_reverts_lands_the_commit(tmp_path: Path) -> None:
     """`declared_reverts=[p]` excludes it from the candidate set -- the
     same rollback lands rather than refusing."""
     repo = _repo(tmp_path)
@@ -105,7 +106,7 @@ def test_declared_reverts_lands_the_commit(tmp_path):
     assert (repo / "p.txt").read_text(encoding="utf-8") == "v0\n"
 
 
-def test_detect_rollback_false_default_lands_unchanged(tmp_path):
+def test_detect_rollback_false_default_lands_unchanged(tmp_path: Path) -> None:
     """`detect_rollback=False` (the default) never raises, even over the
     identical planted rollback."""
     repo = _repo(tmp_path)
@@ -116,7 +117,7 @@ def test_detect_rollback_false_default_lands_unchanged(tmp_path):
     assert outcome.sha
 
 
-def test_clean_edit_not_refused(tmp_path):
+def test_clean_edit_not_refused(tmp_path: Path) -> None:
     """An ordinary edit that never restores an older exact blob is
     unaffected by `detect_rollback=True`."""
     repo = _repo(tmp_path)
@@ -126,7 +127,7 @@ def test_clean_edit_not_refused(tmp_path):
     assert outcome.sha
 
 
-def test_breadth_3_refused(tmp_path):
+def test_breadth_3_refused(tmp_path: Path) -> None:
     """Three distinct paths each restoring an older version at any depth
     refuses on breadth alone (K-016's rule, via `rollback_check.refusal`)."""
     repo = _repo(tmp_path)
@@ -148,14 +149,14 @@ def test_breadth_3_refused(tmp_path):
         )
 
 
-def test_is_a_commit_refused_subclass(tmp_path):
+def test_is_a_commit_refused_subclass(tmp_path: Path) -> None:
     """`StagedRollbackRefused` is a `CommitRefused`, so every existing
     `except (CommitRefused, FilterUnsupported)` call site catches it
     without an edit."""
     assert issubclass(StagedRollbackRefused, CommitRefused)
 
 
-def test_reused_content_across_a_burst_is_a_real_rollback_not_a_bug(tmp_path):
+def test_reused_content_across_a_burst_is_a_real_rollback_not_a_bug(tmp_path: Path) -> None:
     """Regression for the `test_commit_v2_process_time_gate.py` C6
     gate-corruption-guard failure (2026-09-24): a harness that rewrites a
     path through the SAME sequence of exact byte values more than once
@@ -191,7 +192,7 @@ def test_reused_content_across_a_burst_is_a_real_rollback_not_a_bug(tmp_path):
             _commit(repo, "p.txt", f"harness rev {n}\n", f"unique rev {n}", detect_rollback=True)
 
 
-def test_move_of_a_path_absent_at_depth_2_is_not_a_rollback(tmp_path):
+def test_move_of_a_path_absent_at_depth_2_is_not_a_rollback(tmp_path: Path) -> None:
     """Archiving a file created two commits ago deletes it at the old path,
     which alone reads as restoring depth-2 absence; its blob landing at the
     new path in the same commit makes it a move, never a refusal."""
@@ -208,7 +209,7 @@ def test_move_of_a_path_absent_at_depth_2_is_not_a_rollback(tmp_path):
     assert outcome.sha
 
 
-def test_archival_move_with_an_edit_is_not_a_rollback(tmp_path):
+def test_archival_move_with_an_edit_is_not_a_rollback(tmp_path: Path) -> None:
     """Queue-row archival moves the row AND stamps it closed, so the blob at
     the new path differs from HEAD's; the same-named new path still makes it
     a move."""
@@ -226,7 +227,7 @@ def test_archival_move_with_an_edit_is_not_a_rollback(tmp_path):
     assert outcome.sha
 
 
-def test_same_name_already_tracked_elsewhere_does_not_excuse_a_deletion(tmp_path):
+def test_same_name_already_tracked_elsewhere_does_not_excuse_a_deletion(tmp_path: Path) -> None:
     """Only a NEW same-named path pairs with the deletion; editing a file that
     already exists under the same name elsewhere is not a move."""
     repo = _repo(tmp_path)
@@ -245,7 +246,7 @@ def test_same_name_already_tracked_elsewhere_does_not_excuse_a_deletion(tmp_path
     assert gcommit.head_sha(repo) == before
 
 
-def test_deletion_without_a_matching_add_still_refuses(tmp_path):
+def test_deletion_without_a_matching_add_still_refuses(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _commit(repo, "live/s.yaml", "status: routed\n", "create")
     _commit(repo, "live/s.yaml", "status: shipped\n", "ship")
@@ -260,7 +261,7 @@ def test_deletion_without_a_matching_add_still_refuses(tmp_path):
     assert gcommit.head_sha(repo) == before
 
 
-def test_untrack_is_not_a_rollback(tmp_path):
+def test_untrack_is_not_a_rollback(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _commit(repo, "live/s.yaml", "status: routed\n", "create")
     _commit(repo, "live/s.yaml", "status: shipped\n", "ship")
@@ -273,7 +274,7 @@ def test_untrack_is_not_a_rollback(tmp_path):
     assert (repo / "live/s.yaml").exists()
 
 
-def test_commit_v2_pin_passes_detect_rollback(tmp_path):
+def test_commit_v2_pin_passes_detect_rollback(tmp_path: Path) -> None:
     """Pin: `ceremony.commit_v2`'s `commit_paths` call always passes
     `detect_rollback=True`."""
     import inspect
@@ -284,7 +285,7 @@ def test_commit_v2_pin_passes_detect_rollback(tmp_path):
     assert "detect_rollback=True" in src
 
 
-def test_safe_commit_offer_pin_passes_detect_rollback(tmp_path):
+def test_safe_commit_offer_pin_passes_detect_rollback(tmp_path: Path) -> None:
     """Pin: `safe_commit_offer`'s `commit_paths` call always passes
     `detect_rollback=True`."""
     import inspect
@@ -295,7 +296,7 @@ def test_safe_commit_offer_pin_passes_detect_rollback(tmp_path):
     assert "detect_rollback=True" in src
 
 
-def test_novel_content_skips_the_history_walk(tmp_path, monkeypatch):
+def test_novel_content_skips_the_history_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A blob the object store never held cannot restore an ancestor's version,
     so a fresh edit never pays for the first-parent walk; a restored blob still does."""
     repo = _repo(tmp_path)
@@ -316,7 +317,7 @@ def test_novel_content_skips_the_history_walk(tmp_path, monkeypatch):
     assert [list(w) for w in walked] == [["p.txt"]]
 
 
-def test_edit_then_move_is_not_a_rollback(tmp_path):
+def test_edit_then_move_is_not_a_rollback(tmp_path: Path) -> None:
     """Archiving a row whose content was edited in the same commit changes the
     blob, so the move is recognised by basename landing at a new path."""
     repo = _repo(tmp_path)
@@ -333,7 +334,7 @@ def test_edit_then_move_is_not_a_rollback(tmp_path):
     assert outcome.sha
 
 
-def test_edit_after_an_earlier_close_is_not_a_rollback(tmp_path):
+def test_edit_after_an_earlier_close_is_not_a_rollback(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _commit(repo, "live/s.yaml", "status: open\n", "create")
     _commit(repo, "live/s.yaml", "status: closed\n", "close")
@@ -343,7 +344,7 @@ def test_edit_after_an_earlier_close_is_not_a_rollback(tmp_path):
     assert outcome.sha
 
 
-def test_true_revert_to_an_older_blob_still_refuses(tmp_path):
+def test_true_revert_to_an_older_blob_still_refuses(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _commit(repo, "live/s.yaml", "status: open\n", "create")
     _commit(repo, "live/s.yaml", "status: closed\n", "close")
@@ -369,7 +370,7 @@ def _pinned_commit(repo, content, msg, **kwargs):
     )
 
 
-def test_crlf_pinned_novel_blob_skips_the_walk_but_a_restore_still_refuses(tmp_path, monkeypatch):
+def test_crlf_pinned_novel_blob_skips_the_walk_but_a_restore_still_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A fallback-resolved blob proven novel skips the walk; one an ancestor
     held is not novel and is refused."""
     repo = _pinned_repo(tmp_path)

@@ -30,6 +30,7 @@ import pytest
 from coordinator_core.contract.grind_vocab import OP_RUNNER_AGENT_TYPE
 from coordinator_core.ops.dispatch_emit import grind_stages
 from coordinator_core.ops.dispatch_emit.grind_commit_contract import RELAY_SHA256_JS, relay_digest
+from pathlib import Path
 
 
 pytestmark = pytest.mark.complete
@@ -90,7 +91,7 @@ def _all_non_commit_calls() -> dict:
     }
 
 
-def test_only_commit_composers_mention_settle_or_staging():
+def test_only_commit_composers_mention_settle_or_staging() -> None:
     # "stage" alone collides with the stage-kind role noun every composer's
     # prompt uses ("you are the X stage") -- the forbidden tokens are the
     # STAGING-ACTION markers (the git-staging verb and the settle verb),
@@ -116,7 +117,7 @@ def test_only_commit_composers_mention_settle_or_staging():
     assert "you do not stage" in sweep_call.lower()
 
 
-def _sweep_call(**kw):
+def _sweep_call(**kw) -> str:
     kw.setdefault("queue_dirs", ["state/bug-backlog"])
     kw.setdefault("run_id_js", "RUN_ID")
     kw.setdefault("record_js", "REC")
@@ -127,7 +128,7 @@ def _sweep_call(**kw):
     )
 
 
-def test_review_fix_commit_prompt_never_names_a_ledger_in_its_path_lists():
+def test_review_fix_commit_prompt_never_names_a_ledger_in_its_path_lists() -> None:
     """A ledger is usually untracked (commit_v2 refuses it as a declared
     deletion absent from HEAD) and, when tracked, its removal reads as a
     staged rollback -- it is settled out of band, never committed."""
@@ -136,7 +137,7 @@ def test_review_fix_commit_prompt_never_names_a_ledger_in_its_path_lists():
     assert "Never name a state/queue-grind/ path in either commit path list" in call_text
 
 
-def test_ledger_sweep_names_every_queue_and_never_commits():
+def test_ledger_sweep_names_every_queue_and_never_commits() -> None:
     call_text = _sweep_call(queue_dirs=["state/bug-backlog", "state/other"])
     assert "grind-row run-record --sweep --profile-dir ' + (_shq(PROFILE_DIR)) + ' --profile p1 --queue state/bug-backlog --queue state/other --run-id " in call_text
     assert "--repo-root ' + (_shq(REPO_ROOT))" in call_text
@@ -245,7 +246,7 @@ def _emitted_run_record_argv(cwd, *, record: str, declared: list, decisions: str
 
 
 @pytest.mark.spawns_process
-def test_emitted_run_record_argv_is_accepted_by_the_cli(tmp_path, monkeypatch):
+def test_emitted_run_record_argv_is_accepted_by_the_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The drain brief and `grind_rows.cmd_run_record` agree: the argv the
     brief names, run as written with NOTHING on stdin, writes the run record
     byte-faithfully -- including a quote and non-ASCII in a reason string,
@@ -271,7 +272,7 @@ def test_emitted_run_record_argv_is_accepted_by_the_cli(tmp_path, monkeypatch):
 
 
 @pytest.mark.spawns_process
-def test_bug_profile_emitted_run_record_call_passes_the_clis_flag_validation(tmp_path, monkeypatch):
+def test_bug_profile_emitted_run_record_call_passes_the_clis_flag_validation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Run 20261030T234623Z died stage-dead because its emitted call typed --record-len/--record-sha256
     beside --record-from-transcript, which the CLI refuses; the bug-profile call as emitted now is
     accepted and writes state/queue-grind/bug/runs/<run>.json."""
@@ -303,7 +304,7 @@ def test_bug_profile_emitted_run_record_call_passes_the_clis_flag_validation(tmp
     assert {k: written[k] for k in record} == record
 
 
-def test_run_record_with_empty_stdin_names_the_heredoc(tmp_path, monkeypatch, capsys):
+def test_run_record_with_empty_stdin_names_the_heredoc(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """An op-runner that skips the heredoc gets a fix-naming error, not a JSON parse error."""
     import io
 
@@ -320,7 +321,7 @@ def test_run_record_with_empty_stdin_names_the_heredoc(tmp_path, monkeypatch, ca
     assert "not valid JSON" not in err
 
 
-def test_drain_call_carries_every_flag_in_one_command():
+def test_drain_call_carries_every_flag_in_one_command() -> None:
     from coordinator_core.ops.dispatch_emit import grind_commit_contract as gcc
 
     call_text = _sweep_call(queue_dirs=["state/bug-backlog", "state/other"])
@@ -339,12 +340,12 @@ def test_drain_call_carries_every_flag_in_one_command():
     assert "coordinator:git-commit-agent" not in call_text
 
 
-def test_drain_call_omits_decisions_flag_behind_a_runtime_guard():
+def test_drain_call_omits_decisions_flag_behind_a_runtime_guard() -> None:
     call_text = _sweep_call(decisions_js="DEC")
     assert "(DEC) ? " in call_text and "_shq(DEC) : ''" in call_text
 
 
-def test_drain_runs_assemble_so_it_never_rides_the_op_runner():
+def test_drain_runs_assemble_so_it_never_rides_the_op_runner() -> None:
     # The op-runner spec refuses anything but `coordinator-invoke <op>`; the drain runs backlog-grind-assemble.
     assert "run-record" not in grind_stages.STAGE_AGENT_TYPES
     assert "ledger-sweep" not in grind_stages.STAGE_AGENT_TYPES
@@ -353,13 +354,13 @@ def test_drain_runs_assemble_so_it_never_rides_the_op_runner():
     assert "agentType: 'general-purpose'" in call and "model: 'haiku'" in call
 
 
-def test_drain_call_without_queues_omits_the_sweep_flag():
+def test_drain_call_without_queues_omits_the_sweep_flag() -> None:
     call_text = _sweep_call(queue_dirs=[])
     assert "--sweep" not in call_text and "--profile-dir" not in call_text
     assert "grind-row run-record' + ' --profile p1 --run-id " in call_text
 
 
-def test_fix_prompt_names_every_historical_record_prefix():
+def test_fix_prompt_names_every_historical_record_prefix() -> None:
     from coordinator_core.ops.dispatch_emit.grind_commit_contract import HISTORICAL_RECORD_PREFIXES
 
     call_text = grind_stages.compose_fix_call(label="f", phase_title="F", row_id="r")
@@ -369,7 +370,7 @@ def test_fix_prompt_names_every_historical_record_prefix():
     assert "NEEDS_WIDER_SCOPE" in call_text
 
 
-def test_terminal_commit_prompt_is_one_bare_invoke_segment_plus_the_params_block():
+def test_terminal_commit_prompt_is_one_bare_invoke_segment_plus_the_params_block() -> None:
     call_text = _terminal_call(params_file_js="P", params_js="PARAMS")
     assert call_text.count("coordinator-invoke") == 1
     assert "coordinator-invoke dispatch.land_run --params-file ' + (P) + '" in call_text
@@ -380,7 +381,7 @@ def test_terminal_commit_prompt_is_one_bare_invoke_segment_plus_the_params_block
     assert "settle" not in call_text.lower()
 
 
-def test_terminal_commit_call_is_the_haiku_committer_and_returns_the_reply_shape():
+def test_terminal_commit_call_is_the_haiku_committer_and_returns_the_reply_shape() -> None:
     call_text = _terminal_call()
     assert "agentType: 'coordinator:git-commit-agent'" in call_text
     assert "model: 'haiku'" in call_text
@@ -389,7 +390,7 @@ def test_terminal_commit_call_is_the_haiku_committer_and_returns_the_reply_shape
     assert "verbatim" in call_text
 
 
-def test_terminal_commit_call_returns_already_landed_and_unlanded_verbatim():
+def test_terminal_commit_call_returns_already_landed_and_unlanded_verbatim() -> None:
     call_text = _terminal_call()
     assert '"already_landed"' in call_text and '"unlanded"' in call_text
     assert "already_landed, unlanded and close_refused, verbatim (null where absent)" in call_text
@@ -400,14 +401,14 @@ def test_terminal_commit_call_returns_already_landed_and_unlanded_verbatim():
     assert grind_stages._TERMINAL_COMMIT_SCHEMA["required"] == ["committed"]
 
 
-def test_terminal_commit_prompt_passes_no_trailer_or_path_list():
+def test_terminal_commit_prompt_passes_no_trailer_or_path_list() -> None:
     call_text = _terminal_call()
     assert "trailer" not in call_text
     assert "deleted_paths" not in call_text.replace("no `paths` array is owed", "")
     assert "stage exactly" not in call_text.lower()
 
 
-def test_op_runner_agent_type_equals_vocab_constant():
+def test_op_runner_agent_type_equals_vocab_constant() -> None:
     call_text = grind_stages.compose_verify_op_call(
         label="verify-op:b1",
         phase_title="Verify",
@@ -469,7 +470,7 @@ def _runner_calls() -> dict:
     }
 
 
-def test_runner_prompts_name_the_runner_with_every_flag_and_no_suite_command():
+def test_runner_prompts_name_the_runner_with_every_flag_and_no_suite_command() -> None:
     for stage, call in _runner_calls().items():
         assert "bin/targeted-test-run" in call, stage
         for flag in ("--repo", "--row", "--touched", "--record"):
@@ -479,7 +480,7 @@ def test_runner_prompts_name_the_runner_with_every_flag_and_no_suite_command():
             assert banned not in call, (stage, banned)
 
 
-def test_runner_off_prompts_never_name_the_runner():
+def test_runner_off_prompts_never_name_the_runner() -> None:
     off = {
         "triage": grind_stages.compose_triage_call(label="t", phase_title="T", run_dir="r"),
         "fix": grind_stages.compose_fix_call(label="f", phase_title="F", row_id="r"),
@@ -490,7 +491,7 @@ def test_runner_off_prompts_never_name_the_runner():
     assert "run its tests" in off["fix"]
 
 
-def test_runner_verify_schema_carries_the_runner_outcome_enum():
+def test_runner_verify_schema_carries_the_runner_outcome_enum() -> None:
     from coordinator_core.bug_blitz.contract import OUTCOMES
 
     call = _runner_calls()["verify"]
@@ -498,7 +499,7 @@ def test_runner_verify_schema_carries_the_runner_outcome_enum():
     assert "tests_record" in call and "tests_outcome" in call
 
 
-def test_guard_admits_the_composed_runner_line_and_denies_bare_suites(tmp_path, monkeypatch):
+def test_guard_admits_the_composed_runner_line_and_denies_bare_suites(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import re
 
     from coordinator_core.bash_guards import check_test_suite_invocation as guard
@@ -524,13 +525,13 @@ def test_guard_admits_the_composed_runner_line_and_denies_bare_suites(tmp_path, 
     assert _decision("pnpm test") == "deny"
 
 
-def test_runner_fail_outcomes_are_the_non_passing_ones():
+def test_runner_fail_outcomes_are_the_non_passing_ones() -> None:
     assert set(grind_stages.RUNNER_FAIL_OUTCOMES) == {
         "failed", "refused", "no-runner", "passed-on-foreign-uncommitted",
     }
 
 
-def test_runner_prompts_name_foreign_uncommitted_as_live_and_require_the_holders():
+def test_runner_prompts_name_foreign_uncommitted_as_live_and_require_the_holders() -> None:
     from coordinator_core.bug_blitz.contract import OUTCOME_FOREIGN_UNCOMMITTED
 
     calls = _runner_calls()
@@ -541,7 +542,7 @@ def test_runner_prompts_name_foreign_uncommitted_as_live_and_require_the_holders
     assert OUTCOME_FOREIGN_UNCOMMITTED not in calls["triage"]
 
 
-def test_triage_already_fixed_invocation_and_fix_not_reproduced_check_use_committed_head():
+def test_triage_already_fixed_invocation_and_fix_not_reproduced_check_use_committed_head() -> None:
     calls = _runner_calls()
     assert " --committed-head`" in calls["triage"]
     assert calls["triage"].count("--committed-head") == 1
@@ -551,7 +552,7 @@ def test_triage_already_fixed_invocation_and_fix_not_reproduced_check_use_commit
     assert fix.count("--committed-head") == 1
 
 
-def test_done_check_and_verify_keep_head_plus_own_not_committed_head():
+def test_done_check_and_verify_keep_head_plus_own_not_committed_head() -> None:
     calls = _runner_calls()
     assert "--committed-head" not in calls["verify"]
     fix = calls["fix"]
@@ -559,36 +560,36 @@ def test_done_check_and_verify_keep_head_plus_own_not_committed_head():
     assert "--committed-head" not in done_line
 
 
-def test_runner_off_triage_and_fix_never_name_committed_head():
+def test_runner_off_triage_and_fix_never_name_committed_head() -> None:
     assert "--committed-head" not in grind_stages.compose_triage_call(label="t", phase_title="T", run_dir="r")
     assert "--committed-head" not in grind_stages.compose_fix_call(label="f", phase_title="F", row_id="r")
 
 
-def test_every_composer_carries_its_stage_model():
+def test_every_composer_carries_its_stage_model() -> None:
     for key, call_text in _calls_by_stage().items():
         stage = {"review-fix-commit": "commit", "verify-op-reject": "verify-op"}.get(key, key)
         assert f"model: '{grind_stages.STAGE_MODELS[stage]}'" in call_text
 
 
-def test_triage_stage_model_is_haiku():
+def test_triage_stage_model_is_haiku() -> None:
     assert grind_stages.STAGE_MODELS["triage"] == "haiku"
     triage_call = grind_stages.compose_triage_call(label="t", phase_title="T", run_dir="r")
     assert "model: 'haiku'" in triage_call
 
 
-def test_refute_close_and_fix_stage_models_are_sonnet():
+def test_refute_close_and_fix_stage_models_are_sonnet() -> None:
     assert grind_stages.STAGE_MODELS["refute-close"] == "sonnet"
     assert grind_stages.STAGE_MODELS["fix"] == "sonnet"
     assert "model: 'sonnet'" in _calls_by_stage()["refute-close"]
 
 
-def test_models_override_changes_only_its_stage():
+def test_models_override_changes_only_its_stage() -> None:
     calls = _calls_by_stage(models={"triage": "opus"})
     for key, call_text in calls.items():
         assert ("model: 'opus'" in call_text) == (key == "triage")
 
 
-def test_unknown_stage_key_in_models_raises():
+def test_unknown_stage_key_in_models_raises() -> None:
     with pytest.raises(ValueError, match="nonesuch"):
         grind_stages.compose_verify_op_call(
             label="u", phase_title="Undo", run_dir="r", reject_paths_js='["a"]',
@@ -601,7 +602,7 @@ def test_unknown_stage_key_in_models_raises():
         )
 
 
-def test_fix_prompt_precheck_peer_dirty_before_work():
+def test_fix_prompt_precheck_peer_dirty_before_work() -> None:
     call_text = grind_stages.compose_fix_call(
         label="fix:row1",
         phase_title="Fix",
@@ -614,7 +615,7 @@ def test_fix_prompt_precheck_peer_dirty_before_work():
     assert peer_dirty_index < fix_index
 
 
-def test_fix_prompt_images_pre_before_work_and_post_before_close():
+def test_fix_prompt_images_pre_before_work_and_post_before_close() -> None:
     text = grind_stages.compose_fix_call(
         label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py", "b.py"],
     )
@@ -627,14 +628,14 @@ def test_fix_prompt_images_pre_before_work_and_post_before_close():
     assert "per locked file (edited or not) and per file you created" in text
 
 
-def test_fix_prompt_images_interpolate_the_locked_files_js_expression():
+def test_fix_prompt_images_interpolate_the_locked_files_js_expression() -> None:
     text = grind_stages.compose_fix_call(
         label="f", phase_title="F", row_id_js="row.row_id", locked_files_js="row.files",
     )
     assert "JSON.stringify({paths: row.files})" in text
 
 
-def test_review_fix_commit_reconciles_before_retry():
+def test_review_fix_commit_reconciles_before_retry() -> None:
     call_text = _review_fix_call()
     assert "git log" in call_text
     assert "git status" in call_text
@@ -649,7 +650,7 @@ def test_review_fix_commit_reconciles_before_retry():
 # ---------------------------------------------------------------------------
 
 
-def test_fix_prompt_interpolates_locked_files_js_expression():
+def test_fix_prompt_interpolates_locked_files_js_expression() -> None:
     call_text = grind_stages.compose_fix_call(
         label="fix:row1",
         phase_title="Fix",
@@ -660,7 +661,7 @@ def test_fix_prompt_interpolates_locked_files_js_expression():
     assert "'a.py'" not in call_text  # no static list baked in
 
 
-def test_fix_static_locked_files_still_works():
+def test_fix_static_locked_files_still_works() -> None:
     call_text = grind_stages.compose_fix_call(
         label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"],
     )
@@ -668,12 +669,12 @@ def test_fix_static_locked_files_still_works():
     assert ".join(" not in call_text
 
 
-def test_review_fix_commit_prompt_interpolates_the_touched_js_expression():
+def test_review_fix_commit_prompt_interpolates_the_touched_js_expression() -> None:
     call_text = _review_fix_call(touched_files_js="fixResult.touched_files")
     assert "(fixResult.touched_files).join(', ')" in call_text
 
 
-def _assert_commit_route_bound_to_repo_root(call_text):
+def _assert_commit_route_bound_to_repo_root(call_text) -> None:
     # The route git-commit-agent allows (commit_v2 via coordinator-invoke), never
     # coordinator-safe-commit, which its rules forbid; `--repo` bound to the
     # fire-time REPO_ROOT, never the firing session's cwd.
@@ -682,26 +683,26 @@ def _assert_commit_route_bound_to_repo_root(call_text):
     assert call_text.lstrip().startswith("await agent('Your repo is `' + (REPO_ROOT) + '`")
 
 
-def test_review_fix_call_default_trailers_is_byte_identical_and_names_none():
+def test_review_fix_call_default_trailers_is_byte_identical_and_names_none() -> None:
     base = _review_fix_call()
     assert _review_fix_call(trailers=()) == base
     assert "trailer" not in base
 
 
-def test_review_fix_call_trailers_are_json_quoted_and_precede_the_route():
+def test_review_fix_call_trailers_are_json_quoted_and_precede_the_route() -> None:
     text = _review_fix_call(trailers=['X: a"b`c', "Y: 2"])
     assert "trailer lines" in text
     assert json.dumps(['X: a"b`c', "Y: 2"]) in text.replace("\\\\", "\\") or "Y: 2" in text
     assert text.index("trailer lines") < text.index("ceremony.commit_v2")
 
 
-def test_fix_prompt_asks_for_repo_relative_paths_inside_and_absolute_outside():
+def test_fix_prompt_asks_for_repo_relative_paths_inside_and_absolute_outside() -> None:
     text = grind_stages.compose_fix_call(label="fix:row1", phase_title="Fix", row_id="row1")
     assert "relative to the repo root" in text
     assert "by its absolute path" in text
 
 
-def test_review_fix_commit_prompt_names_commit_v2_as_the_route_bound_to_repo_root():
+def test_review_fix_commit_prompt_names_commit_v2_as_the_route_bound_to_repo_root() -> None:
     # Bug e11733fb3a90: an agent left to improvise `git commit` was refused
     # by block-subagent-commit, stranding a settled/archived/staged row.
     call_text = _review_fix_call()
@@ -714,13 +715,13 @@ def test_review_fix_commit_prompt_names_commit_v2_as_the_route_bound_to_repo_roo
     assert " Then commit. " not in call_text
 
 
-def test_review_fix_commit_schema_carries_a_failure_reason():
+def test_review_fix_commit_schema_carries_a_failure_reason() -> None:
     call_text = _review_fix_call()
     assert '"reason": {"type": "string"}' in call_text
     assert "verbatim refusal or the divergence you found in `reason`" in call_text
 
 
-def test_reject_mode_is_one_undo_command_run_by_the_op_runner_under_the_verify_op_label():
+def test_reject_mode_is_one_undo_command_run_by_the_op_runner_under_the_verify_op_label() -> None:
     call_text = grind_stages.compose_verify_op_call(
         label="verify-op", phase_title="Undo", run_dir="r", reject_paths_js="fixResult.paths",
         reject_reason_js="why",
@@ -739,20 +740,20 @@ def test_reject_mode_is_one_undo_command_run_by_the_op_runner_under_the_verify_o
     assert grind_stages.OP_RUNNER_AGENT_TYPE not in call_text
 
 
-def test_reject_mode_literal_paths_render_a_json_array():
+def test_reject_mode_literal_paths_render_a_json_array() -> None:
     call_text = grind_stages.compose_verify_op_call(
         label="verify-op", phase_title="U", run_dir="r", reject_paths_js=json.dumps(["a.py", "b c.py"])
     )
     assert 'JSON.stringify({paths: ["a.py", "b c.py"]})' in call_text
 
 
-def test_no_undo_or_run_record_composer_remains():
+def test_no_undo_or_run_record_composer_remains() -> None:
     for folded in ("undo", "run_record"):
         assert not hasattr(grind_stages, f"compose_{folded}_call")
     assert "undo" not in grind_stages.STAGE_MODELS and "run-record" not in grind_stages.STAGE_MODELS
 
 
-def test_fix_schema_carries_touched_files():
+def test_fix_schema_carries_touched_files() -> None:
     call_text = grind_stages.compose_fix_call(
         label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"],
     )
@@ -773,7 +774,7 @@ _NEW_MODULES = [
 ]
 
 
-def test_golden_carries_judge_against_head_clause_in_triage_refute_close_and_fix():
+def test_golden_carries_judge_against_head_clause_in_triage_refute_close_and_fix() -> None:
     text = _GOLDEN.read_text(encoding="utf-8")
     for fn_name, next_fn_name in (
         ("async function _triageCall", "async function _closeCall"),
@@ -784,7 +785,7 @@ def test_golden_carries_judge_against_head_clause_in_triage_refute_close_and_fix
         assert "git show HEAD" in block, fn_name
 
 
-def test_emitted_prompts_carry_no_posix_only_construct():
+def test_emitted_prompts_carry_no_posix_only_construct() -> None:
     """multi-os-first-class: agents run on Bash or PowerShell, so no prompt
     may lean on a POSIX-only construct."""
     import re
@@ -794,7 +795,7 @@ def test_emitted_prompts_carry_no_posix_only_construct():
     assert not re.search(r"(?<![\w-])[A-Z][A-Z0-9_]*=\S+ [a-z]", text), "VAR=value cmd"
 
 
-def test_no_machine_local_path_in_new_modules_or_golden():
+def test_no_machine_local_path_in_new_modules_or_golden() -> None:
     """no-single-machine-assumptions: the queue path is cloud-launchable, so
     neither the engine modules nor the emitted script name a host path."""
     import re
@@ -805,7 +806,7 @@ def test_no_machine_local_path_in_new_modules_or_golden():
         assert hit is None, f"{rel}: {hit.group(0) if hit else ''}"
 
 
-def test_every_grind_row_close_in_golden_carries_every_required_flag():
+def test_every_grind_row_close_in_golden_carries_every_required_flag() -> None:
     """A close invocation missing a flag is one the agent cannot run; the fixer's
     once said only "run `grind-row close`"."""
     import re
@@ -820,7 +821,7 @@ def test_every_grind_row_close_in_golden_carries_every_required_flag():
     assert "PROFILE_DIR = args.profile_dir" in text
 
 
-def test_fix_and_triage_schemas_gate_tradeoff_on_a_boolean():
+def test_fix_and_triage_schemas_gate_tradeoff_on_a_boolean() -> None:
     """Live-run defect 6: a non-empty `tradeoff` string ("None", "No
     tradeoff") routed to needs-judgment. Both schemas now require a
     `has_tradeoff` boolean and the prompt gates `tradeoff` on it."""
@@ -844,7 +845,7 @@ _RULING_ENUM = ["accepts", "rejects", "silent", "no-ruling"]
 _RULING_PROP = '"ruling_on_tradeoff": {"enum": ["accepts", "rejects", "silent", "no-ruling"], "type": "string"}'
 
 
-def test_triage_and_fix_schemas_require_ruling_on_tradeoff_with_the_exact_enum():
+def test_triage_and_fix_schemas_require_ruling_on_tradeoff_with_the_exact_enum() -> None:
     fix_call = grind_stages.compose_fix_call(
         label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"],
     )
@@ -859,7 +860,7 @@ def test_triage_and_fix_schemas_require_ruling_on_tradeoff_with_the_exact_enum()
     assert grind_stages.RULING_ON_TRADEOFF == tuple(_RULING_ENUM)
 
 
-def test_fix_prompt_close_gate_names_the_accepts_exception():
+def test_fix_prompt_close_gate_names_the_accepts_exception() -> None:
     fix_call = grind_stages.compose_fix_call(
         label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"],
     )
@@ -870,7 +871,7 @@ def test_fix_prompt_close_gate_names_the_accepts_exception():
     )
 
 
-def test_review_fix_commit_prompt_carries_an_explicit_subject_and_body():
+def test_review_fix_commit_prompt_carries_an_explicit_subject_and_body() -> None:
     """Live-run defect 1: `coordinator:git-commit-agent` refuses a brief with
     no subject. The review-fix committer composes one at runtime; the terminal
     commit's subject and body come from `dispatch.land_run`."""
@@ -884,14 +885,14 @@ def test_review_fix_commit_prompt_carries_an_explicit_subject_and_body():
 # ---------------------------------------------------------------------------
 
 
-def test_judge_against_head_clause_present_in_module_at_least_once():
+def test_judge_against_head_clause_present_in_module_at_least_once() -> None:
     """`grep -c 'git show HEAD' grind_stages.py` is at least 1 (C2 acceptance)."""
     module_path = __import__("pathlib").Path(grind_stages.__file__)
     text = module_path.read_text(encoding="utf-8")
     assert text.count("git show HEAD") >= 1
 
 
-def test_judge_against_head_clause_in_triage_refute_close_and_fix_prompts():
+def test_judge_against_head_clause_in_triage_refute_close_and_fix_prompts() -> None:
     triage_call = grind_stages.compose_triage_call(
         label="triage:b1", phase_title="Triage", run_dir="state/queue-grind/run1",
         batch_id="b1", triage_depth="standard",
@@ -906,14 +907,14 @@ def test_judge_against_head_clause_in_triage_refute_close_and_fix_prompts():
         assert "git show HEAD" in call_text
 
 
-def test_refute_close_prompt_names_each_proposals_origin():
+def test_refute_close_prompt_names_each_proposals_origin() -> None:
     call_text = grind_stages.compose_refute_close_call(
         label="refute-close:b1", phase_title="Refute-close",
     )
     assert "origin" in call_text
 
 
-def test_fix_prompt_interpolates_refute_note_js_expression():
+def test_fix_prompt_interpolates_refute_note_js_expression() -> None:
     call_text = grind_stages.compose_fix_call(
         label="fix:row1",
         phase_title="Fix",
@@ -924,14 +925,14 @@ def test_fix_prompt_interpolates_refute_note_js_expression():
     assert "(row.refuteNote)" in call_text
 
 
-def test_fix_prompt_omits_refute_note_clause_when_absent():
+def test_fix_prompt_omits_refute_note_clause_when_absent() -> None:
     call_text = grind_stages.compose_fix_call(
         label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"],
     )
     assert "refuteNote" not in call_text
 
 
-def test_grind_row_verb_always_run_through_backlog_grind_assemble():
+def test_grind_row_verb_always_run_through_backlog_grind_assemble() -> None:
     """Every composer's PROMPT text names the installed entrypoint
     (`backlog-grind-assemble grind-row <verb>`) -- a bare `grind-row` is not
     on PATH and exits 127 (live-run defect 8)."""
@@ -949,7 +950,7 @@ def test_grind_row_verb_always_run_through_backlog_grind_assemble():
             )
 
 
-def test_every_stage_binds_the_fire_time_repo_root_never_cwd():
+def test_every_stage_binds_the_fire_time_repo_root_never_cwd() -> None:
     """A queue grind emitted for repo A and fired from a session whose cwd is
     repo B ran every committer in B. Each prompt must anchor to `REPO_ROOT`,
     and no `grind-row` invocation may fall back to `--repo-root .`."""
@@ -965,7 +966,7 @@ def test_every_stage_binds_the_fire_time_repo_root_never_cwd():
             assert "--repo-root ' + (_shq(REPO_ROOT)) + '" in call_text, kind
 
 
-def test_review_fix_commit_call_stages_only_the_expression_and_settles_no_ledger():
+def test_review_fix_commit_call_stages_only_the_expression_and_settles_no_ledger() -> None:
     text = grind_stages.compose_review_fix_commit_call(
         touched_files_js="reviewFix.touched_files",
         label="commit:review",
@@ -982,7 +983,7 @@ def test_review_fix_commit_call_stages_only_the_expression_and_settles_no_ledger
     assert "state/queue-grind/ path" in text
 
 
-def test_triage_brief_binds_a_rows_pm_ruling():
+def test_triage_brief_binds_a_rows_pm_ruling() -> None:
     """An APM/PM ruling on a row is binding triage input: a grind that
     re-derived `park` from the body alone re-triaged rows the APM had ruled
     `cloud grinds: skip`."""
@@ -995,13 +996,13 @@ def test_triage_brief_binds_a_rows_pm_ruling():
     assert "never re-derive a fresh verdict from the body alone" in call_text
 
 
-def test_review_fix_commit_prompt_passes_drop_ignored_and_reports_the_dropped_paths():
+def test_review_fix_commit_prompt_passes_drop_ignored_and_reports_the_dropped_paths() -> None:
     text = _review_fix_call()
     assert "drop_ignored" in text
     assert "dropped_ignored" in text
 
 
-def test_fix_prompt_fences_the_published_mirror():
+def test_fix_prompt_fences_the_published_mirror() -> None:
     call_text = grind_stages.compose_fix_call(
         label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"]
     )
@@ -1009,7 +1010,7 @@ def test_fix_prompt_fences_the_published_mirror():
     assert "publish.mirrors.*" in call_text
 
 
-def test_paths_reach_the_emitted_command_as_one_single_quoted_token():
+def test_paths_reach_the_emitted_command_as_one_single_quoted_token() -> None:
     import json
     import shutil
     import subprocess
@@ -1043,7 +1044,7 @@ def test_paths_reach_the_emitted_command_as_one_single_quoted_token():
 
 
 @pytest.mark.spawns_process
-def test_emitted_ledger_sweep_command_parses_and_round_trips_under_bash(tmp_path):
+def test_emitted_ledger_sweep_command_parses_and_round_trips_under_bash(tmp_path: Path) -> None:
     """A run record far past the ~8 KB `bash -c` cap, carrying quotes, spaces and Windows paths,
     reaches the verb byte-faithfully: every Bash call the prompt names parses and stays under the cap."""
     from urllib.parse import unquote
@@ -1071,7 +1072,7 @@ def test_emitted_ledger_sweep_command_parses_and_round_trips_under_bash(tmp_path
 
 
 @pytest.mark.spawns_process
-def test_a_lossy_to_retype_record_is_never_typed_and_lands_byte_identical(tmp_path):
+def test_a_lossy_to_retype_record_is_never_typed_and_lands_byte_identical(tmp_path: Path) -> None:
     """The agent types only a marker; the record bytes and their digest ride the prompt once and the
     segment the verb reads equals the script's serialisation."""
     from urllib.parse import unquote
@@ -1101,7 +1102,7 @@ def test_a_lossy_to_retype_record_is_never_typed_and_lands_byte_identical(tmp_pa
 
 
 @pytest.mark.spawns_process
-def test_the_verbs_transcript_read_recovers_the_record_from_a_harness_indented_emitted_prompt(tmp_path, monkeypatch):
+def test_the_verbs_transcript_read_recovers_the_record_from_a_harness_indented_emitted_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The harness indents every prompt line by two spaces; the real verb read, not a stand-in, must still
     return the script's token (run 20261030T172043Z died on 2 spaces + token + newline + 2 spaces)."""
     from urllib.parse import unquote
@@ -1128,7 +1129,7 @@ def test_the_verbs_transcript_read_recovers_the_record_from_a_harness_indented_e
     assert refusal == "" and unquote(token) == record
 
 
-def test_ledger_sweep_call_types_no_record_digest_but_keeps_the_declared_one():
+def test_ledger_sweep_call_types_no_record_digest_but_keeps_the_declared_one() -> None:
     call_text = _sweep_call()
     assert "--record-sha256" not in call_text and "--record-len" not in call_text
     assert "_recEnc.length + ' ' + _sha256Ascii(_recEnc)" in call_text
@@ -1137,7 +1138,7 @@ def test_ledger_sweep_call_types_no_record_digest_but_keeps_the_declared_one():
 
 
 @pytest.mark.spawns_process
-def test_ledger_sweep_encodes_each_payload_once():
+def test_ledger_sweep_encodes_each_payload_once() -> None:
     import shutil
     import subprocess
 
@@ -1160,7 +1161,7 @@ def test_ledger_sweep_encodes_each_payload_once():
     assert "COUNTS 1 1" in out.stdout
 
 
-def test_every_evidence_file_flag_names_its_evidence_path():
+def test_every_evidence_file_flag_names_its_evidence_path() -> None:
     """AC10: no prompt leaves `--evidence-file` to a placeholder."""
     fix = grind_stages.compose_fix_call(
         label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"], profile="bug",
@@ -1183,7 +1184,7 @@ def _size_calls(**kw) -> dict:
     }
 
 
-def test_size_call_carries_scout_agent_schema_and_clauses():
+def test_size_call_carries_scout_agent_schema_and_clauses() -> None:
     from coordinator_core.ops.dispatch_emit import ask_contract
 
     call = _size_calls()["size"]
@@ -1196,7 +1197,7 @@ def test_size_call_carries_scout_agent_schema_and_clauses():
     assert "plan-weight" not in call
 
 
-def test_size_call_runs_the_assemble_chain_as_its_closing_act():
+def test_size_call_runs_the_assemble_chain_as_its_closing_act() -> None:
     call = _size_calls()["size"]
     assert "_sizeChainTemplate(row)" in call
     assert "_sizeAssembleWhen()" in call
@@ -1223,7 +1224,7 @@ def _final_verify_calls() -> dict:
     }
 
 
-def test_the_verify_stages_run_the_undo_op_themselves_on_the_final_verification():
+def test_the_verify_stages_run_the_undo_op_themselves_on_the_final_verification() -> None:
     for key, call in _final_verify_calls().items():
         assert "(row.verifyRetried) ? " in call, key
         assert "grind-row undo --paths-urlenc" in call, f"{key} lacks the undo command"
@@ -1236,7 +1237,7 @@ def test_the_verify_stages_run_the_undo_op_themselves_on_the_final_verification(
     assert "neither `passed` nor `nothing-to-run`" in _final_verify_calls()["verify-targeted"]
 
 
-def test_a_verify_call_without_an_undo_carries_no_undo_clause():
+def test_a_verify_call_without_an_undo_carries_no_undo_clause() -> None:
     op_call = grind_stages.compose_verify_op_call(
         label="vo", phase_title="Verify", op="x.y", run_dir="r", batch_id="b1"
     )
@@ -1246,7 +1247,7 @@ def test_a_verify_call_without_an_undo_carries_no_undo_clause():
         assert '"undo"' not in call
 
 
-def test_size_calls_carry_sonnet_and_follow_a_models_override():
+def test_size_calls_carry_sonnet_and_follow_a_models_override() -> None:
     for call in _size_calls().values():
         assert "model: 'sonnet'" in call
     assert len(_size_calls()) == 1
@@ -1255,12 +1256,12 @@ def test_size_calls_carry_sonnet_and_follow_a_models_override():
         _size_calls(models={"size": "haiku"})
 
 
-def test_size_stages_are_in_the_table_driven_model_helper():
+def test_size_stages_are_in_the_table_driven_model_helper() -> None:
     for key, call_text in _size_calls().items():
         assert f"model: '{grind_stages.STAGE_MODELS[key]}'" in call_text
 
 
-def test_size_assemble_js_commands():
+def test_size_assemble_js_commands() -> None:
     js = grind_stages.SIZE_ASSEMBLE_JS
     chain = js.split("const _sizeChainCmd")[1].split("const _SIZE_SLOTS")[0]
     assert "grind-row size-chain" in chain
@@ -1293,7 +1294,7 @@ def _size_chain_command(row_id: str) -> str:
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_size_chain_is_one_plain_engine_command_for_a_reminted_and_a_plain_row():
+def test_size_chain_is_one_plain_engine_command_for_a_reminted_and_a_plain_row() -> None:
     for row_id in ("2026-10-15-tf-coordinator-tests-test-x-fedcba987654", "plain-row"):
         cmd = _size_chain_command(row_id)
         assert "grind-row size-chain" in cmd
@@ -1303,7 +1304,7 @@ def test_size_chain_is_one_plain_engine_command_for_a_reminted_and_a_plain_row()
             assert banned not in cmd, banned
 
 
-def test_the_commit_agent_is_haiku_in_every_emitter():
+def test_the_commit_agent_is_haiku_in_every_emitter() -> None:
     from coordinator_core.ops.dispatch_emit import emit
 
     assert grind_stages.STAGE_MODELS["commit"] == "haiku"
@@ -1312,7 +1313,7 @@ def test_the_commit_agent_is_haiku_in_every_emitter():
         _calls_by_stage(models={"commit": "sonnet"})
 
 
-def test_verify_test_run_is_the_test_runner_on_haiku():
+def test_verify_test_run_is_the_test_runner_on_haiku() -> None:
     from coordinator_core.ops.dispatch_emit import emit
 
     for targeted in (False, True):
@@ -1323,7 +1324,7 @@ def test_verify_test_run_is_the_test_runner_on_haiku():
         assert "model: 'haiku'" in call
 
 
-def test_every_doe_typed_call_reads_the_engine_table():
+def test_every_doe_typed_call_reads_the_engine_table() -> None:
     from coordinator_core.ops.dispatch_emit import emit
 
     for stage, agent_type in grind_stages.STAGE_AGENT_TYPES.items():
@@ -1333,12 +1334,12 @@ def test_every_doe_typed_call_reads_the_engine_table():
 
 
 @pytest.mark.parametrize("stage", sorted(grind_stages.STAGE_AGENT_TYPES))
-def test_a_models_override_changing_a_pinned_type_is_refused(stage):
+def test_a_models_override_changing_a_pinned_type_is_refused(stage) -> None:
     with pytest.raises(ValueError, match="pinned to"):
         _calls_by_stage(models={stage: "opus"})
 
 
-def test_the_adjudicate_block_is_one_sonnet_medium_call_with_no_apm():
+def test_the_adjudicate_block_is_one_sonnet_medium_call_with_no_apm() -> None:
     from coordinator_core.ops.dispatch_emit import pm_adjudication
 
     assert pm_adjudication.ADJUDICATOR_AGENT_TYPE == grind_stages.GENERAL_PURPOSE_AGENT_TYPE
@@ -1350,7 +1351,7 @@ def test_the_adjudicate_block_is_one_sonnet_medium_call_with_no_apm():
     assert "Promise.all" not in block
 
 
-def test_fix_prompt_makes_test_vs_code_side_the_fixers_call_without_a_tradeoff():
+def test_fix_prompt_makes_test_vs_code_side_the_fixers_call_without_a_tradeoff() -> None:
     fix_call = grind_stages.compose_fix_call(
         label="fix:row1", phase_title="Fix", row_id="row1", locked_files=["a.py"],
     )
@@ -1360,7 +1361,7 @@ def test_fix_prompt_makes_test_vs_code_side_the_fixers_call_without_a_tradeoff()
 
 
 @pytest.mark.parametrize("targeted", [False, True])
-def test_verify_judge_leg_runs_at_medium_effort(targeted):
+def test_verify_judge_leg_runs_at_medium_effort(targeted) -> None:
     call = grind_stages.compose_verify_agent_call(
         label="v", phase_title="Verify", targeted_runner=targeted
     )
@@ -1368,7 +1369,7 @@ def test_verify_judge_leg_runs_at_medium_effort(targeted):
     assert "effort: 'high'" not in call
 
 
-def test_the_adjudicate_block_pins_sonnet():
+def test_the_adjudicate_block_pins_sonnet() -> None:
     from coordinator_core.ops.dispatch_emit import pm_adjudication
 
     block = pm_adjudication.compose_adjudicate_block(agent_type_host=None)
@@ -1399,7 +1400,7 @@ def _six_adjudicated_record() -> dict:
 
 
 @pytest.mark.spawns_process
-def test_a_six_adjudicated_run_record_reaches_the_verb_whole_over_stale_scratch_files(tmp_path, monkeypatch):
+def test_a_six_adjudicated_run_record_reaches_the_verb_whole_over_stale_scratch_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A record past two pieces is relayed by commands that overwrite a prior relay's scratch files, so
     the record lands with no `drain sweep did not complete` hand-back."""
     import io
@@ -1428,13 +1429,13 @@ def test_a_six_adjudicated_run_record_reaches_the_verb_whole_over_stale_scratch_
     assert not [h for h in landed["handed_back"] if h["reason"].startswith(SWEEP_FAILED_HEAD)]
 
 
-def test_the_ledger_sweep_relay_stays_on_the_haiku_floor():
+def test_the_ledger_sweep_relay_stays_on_the_haiku_floor() -> None:
     # The floor legs are haiku-bound (leg_register ratchet); record fidelity is the op's to own.
     assert grind_stages.STAGE_MODELS["ledger-sweep"] == "haiku"
     assert "model: 'haiku'" in _sweep_call()
 
 
-def _retire_verify(**kw):
+def _retire_verify(**kw) -> str:
     return grind_stages.compose_verify_agent_call(
         label="v", phase_title="Grind", row_id_js="row.rowId", row_path_js="row.path",
         touched_files_js="row.touchedFiles", evidence_js="row.evidence", fix_plan_js="row.fixPlan",
@@ -1442,7 +1443,7 @@ def _retire_verify(**kw):
     )
 
 
-def test_a_targeted_retire_verify_reruns_the_row_at_committed_head_and_returns_the_outcome():
+def test_a_targeted_retire_verify_reruns_the_row_at_committed_head_and_returns_the_outcome() -> None:
     call = _retire_verify(targeted_runner=True)
     assert " --committed-head`" in call
     assert "retired only while those tests pass at committed HEAD" in call
@@ -1450,7 +1451,7 @@ def test_a_targeted_retire_verify_reruns_the_row_at_committed_head_and_returns_t
     assert "tests_outcome" in call and "tests_failing_ids" in call
 
 
-def test_an_untargeted_retire_verify_and_a_fix_bound_routing_verify_stay_runnerless():
+def test_an_untargeted_retire_verify_and_a_fix_bound_routing_verify_stay_runnerless() -> None:
     assert "--committed-head" not in _retire_verify(targeted_runner=False)
     fix_bound = grind_stages.compose_verify_agent_call(
         label="v", phase_title="Grind", profile="bug", routing=True, targeted_runner=True,
@@ -1460,7 +1461,7 @@ def test_an_untargeted_retire_verify_and_a_fix_bound_routing_verify_stay_runnerl
     assert "Run no tests" in fix_bound
 
 
-def test_triage_schema_admits_optional_items_and_does_not_require_them():
+def test_triage_schema_admits_optional_items_and_does_not_require_them() -> None:
     call = grind_stages.compose_triage_call(label="t", phase_title="T", run_dir="r")
     assert '"items"' in call
     assert '"required": ["title"]' in call
@@ -1469,7 +1470,7 @@ def test_triage_schema_admits_optional_items_and_does_not_require_them():
     assert "share one root cause stay one row: leave `items` out" in call
 
 
-def _batch_call(**kw):
+def _batch_call(**kw) -> str:
     return grind_stages.compose_verify_routing_batch_call(
         label="vb", phase_title="Grind", rows_js="rows", profile="lessons", run_id_js="RUN_ID", **kw,
     )
@@ -1479,7 +1480,7 @@ def _batch_schema(call: str) -> dict:
     return json.loads(re.search(r"schema: (\{.*\}) \}\)", call, re.DOTALL).group(1))
 
 
-def test_routing_batch_schema_requires_verdicts_with_row_id_outcome_reason():
+def test_routing_batch_schema_requires_verdicts_with_row_id_outcome_reason() -> None:
     schema = _batch_schema(_batch_call())
     assert schema["required"] == ["verdicts"]
     item = schema["properties"]["verdicts"]["items"]
@@ -1488,7 +1489,7 @@ def test_routing_batch_schema_requires_verdicts_with_row_id_outcome_reason():
     assert "covered_by" in item["properties"] and "right_home" in item["properties"]
 
 
-def test_routing_batch_lists_every_row_field_and_dispatches_the_routing_verifier():
+def test_routing_batch_lists_every_row_field_and_dispatches_the_routing_verifier() -> None:
     call = _batch_call()
     for field in ("rowId", "path", "evidence", "fixPlan", "digest"):
         assert f"r.{field}" in call
@@ -1496,13 +1497,13 @@ def test_routing_batch_lists_every_row_field_and_dispatches_the_routing_verifier
     assert "label: 'vb'" in call
 
 
-def test_routing_batch_hand_back_keeps_the_haiku_pin_and_routing_keeps_the_agent_pin():
+def test_routing_batch_hand_back_keeps_the_haiku_pin_and_routing_keeps_the_agent_pin() -> None:
     assert f"model: '{grind_stages.ROUTING_VERIFY_HAND_BACK_MODEL}'" in _batch_call(hand_back=True)
     pinned = grind_stages.resolve_agent_model(grind_stages.ROUTING_VERIFY_AGENT_TYPE, None)
     assert f"model: '{pinned}'" in _batch_call()
 
 
-def test_routing_batch_retire_never_asks_for_right_home_or_a_covered_fail():
+def test_routing_batch_retire_never_asks_for_right_home_or_a_covered_fail() -> None:
     retire = _batch_call(retire=True)
     item = _batch_schema(retire)["properties"]["verdicts"]["items"]
     assert "right_home" not in item["properties"]
@@ -1511,7 +1512,7 @@ def test_routing_batch_retire_never_asks_for_right_home_or_a_covered_fail():
     assert "Judge the routing only" in _batch_call()
 
 
-def test_routing_batch_retire_rerun_is_committed_head_and_returns_runner_fields_per_row():
+def test_routing_batch_retire_rerun_is_committed_head_and_returns_runner_fields_per_row() -> None:
     call = _batch_call(retire=True, targeted_runner=True)
     assert "--committed-head" in call
     item = _batch_schema(call)["properties"]["verdicts"]["items"]
@@ -1519,7 +1520,7 @@ def test_routing_batch_retire_rerun_is_committed_head_and_returns_runner_fields_
     assert "Run no tests" in _batch_call(targeted_runner=True), "a routing batch never reruns tests"
 
 
-def test_checkpoint_js_renders_the_contract_thresholds_and_logs_without_waking_anyone(monkeypatch):
+def test_checkpoint_js_renders_the_contract_thresholds_and_logs_without_waking_anyone(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.grind_triage import contract
     from coordinator_core.ops.dispatch_emit import grind_stages
 
@@ -1533,7 +1534,7 @@ def test_checkpoint_js_renders_the_contract_thresholds_and_logs_without_waking_a
     assert contract.CHECKPOINT_PERCENTS == (25, 50, 75)
 
 
-def test_checkpoint_js_runs_once_per_threshold_under_node():
+def test_checkpoint_js_runs_once_per_threshold_under_node() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
@@ -1553,7 +1554,7 @@ def test_checkpoint_js_runs_once_per_threshold_under_node():
     assert json.loads(out.strip().splitlines()[-1]) == [25, 50, 75]
 
 
-def test_checkpoint_js_fires_on_budget_spent_before_rows_and_reports_the_run_counts():
+def test_checkpoint_js_fires_on_budget_spent_before_rows_and_reports_the_run_counts() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")

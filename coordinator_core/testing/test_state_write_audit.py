@@ -14,6 +14,7 @@ import os
 import sys
 
 from coordinator_core.testing import state_write_audit as swa
+import pytest
 
 _CC_FRAME = "coordinator_core/ops/some_writer.py"
 _CC_TEST_FRAME = "coordinator_core/ops/tests/test_some_writer.py"
@@ -25,11 +26,11 @@ _CC_TESTING_FRAME = "coordinator_core/testing/run.py"
 _NON_CC_FRAME = "/usr/lib/python3.11/tempfile.py"
 
 
-def test_module_never_installs_the_hook_on_import():
+def test_module_never_installs_the_hook_on_import() -> None:
     assert swa.audit_hook_installed() is False
 
 
-def test_write_mode_chars_classify_as_write():
+def test_write_mode_chars_classify_as_write() -> None:
     for mode in ("w", "a", "x", "wb", "ab", "xb", "w+", "a+", "r+", "r+b"):
         record = swa.classify_event(
             "open", ("state/foo.txt", mode, None), [_CC_FRAME]
@@ -39,7 +40,7 @@ def test_write_mode_chars_classify_as_write():
         assert record["path"] == "state/foo.txt"
 
 
-def test_read_mode_chars_are_not_a_write():
+def test_read_mode_chars_are_not_a_write() -> None:
     for mode in ("r", "rb", "rt"):
         record = swa.classify_event(
             "open", ("state/foo.txt", mode, None), [_CC_FRAME]
@@ -47,7 +48,7 @@ def test_read_mode_chars_are_not_a_write():
         assert record is None, mode
 
 
-def test_write_flag_combinations_classify_as_write():
+def test_write_flag_combinations_classify_as_write() -> None:
     combos = [
         os.O_WRONLY,
         os.O_RDWR,
@@ -64,14 +65,14 @@ def test_write_flag_combinations_classify_as_write():
         assert record is not None, flags
 
 
-def test_o_rdonly_alone_is_not_a_write():
+def test_o_rdonly_alone_is_not_a_write() -> None:
     record = swa.classify_event(
         "open", ("state/foo.bin", None, os.O_RDONLY), [_CC_FRAME]
     )
     assert record is None
 
 
-def test_os_rename_dst_under_state_is_a_write():
+def test_os_rename_dst_under_state_is_a_write() -> None:
     record = swa.classify_event(
         "os.rename", ("/tmp/src.tmp", "state/foo.txt"), [_CC_FRAME]
     )
@@ -80,35 +81,35 @@ def test_os_rename_dst_under_state_is_a_write():
     assert record["path"] == "state/foo.txt"
 
 
-def test_os_rename_dst_not_under_state_is_none():
+def test_os_rename_dst_not_under_state_is_none() -> None:
     record = swa.classify_event(
         "os.rename", ("/tmp/src.tmp", "/tmp/dst.tmp"), [_CC_FRAME]
     )
     assert record is None
 
 
-def test_non_state_path_is_none_even_for_a_write():
+def test_non_state_path_is_none_even_for_a_write() -> None:
     record = swa.classify_event(
         "open", ("coordinator_core/foo.py", "w", None), [_CC_FRAME]
     )
     assert record is None
 
 
-def test_state_must_be_a_full_path_component():
+def test_state_must_be_a_full_path_component() -> None:
     record = swa.classify_event(
         "open", ("some/reinstated/foo.txt", "w", None), [_CC_FRAME]
     )
     assert record is None
 
 
-def test_unrelated_event_is_none():
+def test_unrelated_event_is_none() -> None:
     record = swa.classify_event(
         "os.remove", ("state/foo.txt",), [_CC_FRAME]
     )
     assert record is None
 
 
-def test_attributes_to_innermost_and_outermost_coordinator_core_frame():
+def test_attributes_to_innermost_and_outermost_coordinator_core_frame() -> None:
     outer = "coordinator_core/ops/outer_caller.py"
     record = swa.classify_event(
         "open",
@@ -120,7 +121,7 @@ def test_attributes_to_innermost_and_outermost_coordinator_core_frame():
     assert record["outer_frame"] == outer
 
 
-def test_single_qualifying_frame_is_both_inner_and_outer():
+def test_single_qualifying_frame_is_both_inner_and_outer() -> None:
     record = swa.classify_event(
         "open", ("state/foo.txt", "w", None), [_NON_CC_FRAME, _CC_FRAME]
     )
@@ -129,7 +130,7 @@ def test_single_qualifying_frame_is_both_inner_and_outer():
     assert record["outer_frame"] == _CC_FRAME
 
 
-def test_no_qualifying_frame_is_none():
+def test_no_qualifying_frame_is_none() -> None:
     record = swa.classify_event(
         "open",
         ("state/foo.txt", "w", None),
@@ -138,7 +139,7 @@ def test_no_qualifying_frame_is_none():
     assert record is None
 
 
-def test_plugin_frame_itself_is_never_attributed():
+def test_plugin_frame_itself_is_never_attributed() -> None:
     record = swa.classify_event(
         "open",
         ("state/foo.txt", "w", None),
@@ -147,14 +148,14 @@ def test_plugin_frame_itself_is_never_attributed():
     assert record is None
 
 
-def test_claimed_write_seam_frame_is_never_attributed():
+def test_claimed_write_seam_frame_is_never_attributed() -> None:
     record = swa.classify_event(
         "open", ("state/foo.txt", "w", None), [_CC_SEAM_FRAME]
     )
     assert record is None
 
 
-def test_atomic_append_and_replace_frames_are_never_attributed():
+def test_atomic_append_and_replace_frames_are_never_attributed() -> None:
     for frame in (_CC_APPEND_FRAME, _CC_REPLACE_FRAME):
         record = swa.classify_event(
             "open", ("state/foo.txt", "w", None), [frame]
@@ -162,7 +163,7 @@ def test_atomic_append_and_replace_frames_are_never_attributed():
         assert record is None, frame
 
 
-def test_seam_frame_does_not_block_a_real_caller_above_it():
+def test_seam_frame_does_not_block_a_real_caller_above_it() -> None:
     record = swa.classify_event(
         "open",
         ("state/foo.txt", "w", None),
@@ -173,21 +174,21 @@ def test_seam_frame_does_not_block_a_real_caller_above_it():
     assert record["outer_frame"] == _CC_FRAME
 
 
-def test_testing_subpackage_frames_are_excluded_like_tests():
+def test_testing_subpackage_frames_are_excluded_like_tests() -> None:
     record = swa.classify_event(
         "open", ("state/foo.txt", "w", None), [_CC_TESTING_FRAME]
     )
     assert record is None
 
 
-def test_non_coordinator_core_frame_is_excluded():
+def test_non_coordinator_core_frame_is_excluded() -> None:
     record = swa.classify_event(
         "open", ("state/foo.txt", "w", None), [_NON_CC_FRAME]
     )
     assert record is None
 
 
-def test_addoption_registers_expected_default(pytestconfig):
+def test_addoption_registers_expected_default(pytestconfig: pytest.Config) -> None:
     try:
         value = pytestconfig.getoption("state_write_audit_out")
     except (ValueError, LookupError):
@@ -198,6 +199,6 @@ def test_addoption_registers_expected_default(pytestconfig):
         assert isinstance(value, str)
 
 
-def test_audit_hook_installed_reflects_module_state():
+def test_audit_hook_installed_reflects_module_state() -> None:
     before = swa.audit_hook_installed()
     assert before in (True, False)

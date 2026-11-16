@@ -11,6 +11,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_script_byte_headroom impo
     _PLUGIN_ROOT,
     _padded_plan_blitz_text,
 )
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[4]
 
@@ -29,7 +30,7 @@ def _compose(monkeypatch, *, arm, plan_blitz_text=None) -> str:
     )
 
 
-def _measure(monkeypatch, arm_key):
+def _measure(monkeypatch, arm_key) -> dict[str, int]:
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", _PLUGIN_ROOT)
     if arm_key == "m_plus":
         text = _padded_plan_blitz_text()
@@ -44,18 +45,18 @@ def _measure(monkeypatch, arm_key):
     return measured
 
 
-def test_bare_ask_stages_stay_inside_their_budgets(monkeypatch):
+def test_bare_ask_stages_stay_inside_their_budgets(monkeypatch: pytest.MonkeyPatch) -> None:
     measured = _measure(monkeypatch, "bare")
     assert not asb.budget_failures("bare", measured), asb.budget_failures("bare", measured)
 
 
-def test_m_plus_ask_stages_stay_inside_their_budgets(monkeypatch):
+def test_m_plus_ask_stages_stay_inside_their_budgets(monkeypatch: pytest.MonkeyPatch) -> None:
     measured = _measure(monkeypatch, "m_plus")
     assert measured["planBlitz"] > 0
     assert not asb.budget_failures("m_plus", measured), asb.budget_failures("m_plus", measured)
 
 
-def test_a_stage_over_budget_fails_and_a_slack_stage_names_the_new_number(monkeypatch):
+def test_a_stage_over_budget_fails_and_a_slack_stage_names_the_new_number(monkeypatch: pytest.MonkeyPatch) -> None:
     budget = asb.STAGE_BUDGETS["bare"]["core"]
     over = {"core": budget + 1}
     assert any("core" in f and "budget" in f for f in asb.budget_failures("bare", over))
@@ -66,7 +67,7 @@ def test_a_stage_over_budget_fails_and_a_slack_stage_names_the_new_number(monkey
     assert asb.budget_failures("bare", within) == []
 
 
-def test_stage_bytes_attributes_a_planted_block():
+def test_stage_bytes_attributes_a_planted_block() -> None:
     block = "async function planBlitz(args) {\nconst x = 1\n}\n"
     script = "head\n" + block + "tail\n"
     got = asb.stage_bytes(script, {"planBlitz": block})

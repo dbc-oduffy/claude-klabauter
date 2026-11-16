@@ -8,10 +8,11 @@ import pytest
 
 from coordinator_core.ops import review_findings_ledger
 from coordinator_core.ops.review_reverify_findings import FindingRef, applied_rows, invert
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _no_spawn(monkeypatch):
+def _no_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*_a, **_k):
         raise AssertionError("spawn")
 
@@ -22,7 +23,7 @@ def _row(i, before, after, **extra):
     return (FindingRef("s.md", i), {"id": i, "before": before, "after": after, **extra})
 
 
-def test_single_finding_inverted_executor_lines_untouched():
+def test_single_finding_inverted_executor_lines_untouched() -> None:
     data = b"exec1\nnew_name = 1\nexec2\n"
     out = invert(data, [_row("f1", "old_name = 1\n", "new_name = 1\n")])
     assert out.data == b"exec1\nold_name = 1\nexec2\n"
@@ -30,7 +31,7 @@ def test_single_finding_inverted_executor_lines_untouched():
     assert out.kept == []
 
 
-def test_two_findings_reverse_order_with_overlap():
+def test_two_findings_reverse_order_with_overlap() -> None:
     # f2's before contains f1's after, so f2 must be undone first.
     rows = [_row("f1", "a\n", "B\n"), _row("f2", "B\n", "C\n")]
     out = invert(b"x\nC\nZ\n", rows)
@@ -38,32 +39,32 @@ def test_two_findings_reverse_order_with_overlap():
     assert [r.id for r in out.reverted] == ["f1", "f2"]
 
 
-def test_after_absent_kept():
+def test_after_absent_kept() -> None:
     out = invert(b"hello\n", [_row("f1", "a", "gone")])
     assert out.data == b"hello\n"
     assert out.kept == [(FindingRef("s.md", "f1"), "after-absent")]
 
 
-def test_after_twice_kept_ambiguous():
+def test_after_twice_kept_ambiguous() -> None:
     out = invert(b"dup\ndup\n", [_row("f1", "x", "dup")])
     assert out.data == b"dup\ndup\n"
     assert out.kept == [(FindingRef("s.md", "f1"), "after-ambiguous")]
 
 
-def test_empty_after_kept_no_after():
+def test_empty_after_kept_no_after() -> None:
     out = invert(b"abc\n", [_row("f1", "x", "")])
     assert out.data == b"abc\n"
     assert out.kept == [(FindingRef("s.md", "f1"), "no-after")]
 
 
-def test_crlf_file_with_lf_row_stays_crlf():
+def test_crlf_file_with_lf_row_stays_crlf() -> None:
     data = b"exec\r\nnew\r\nmore\r\ntail\r\n"
     out = invert(data, [_row("f1", "old\nline\n", "new\nmore\n")])
     assert out.data == b"exec\r\nold\r\nline\r\ntail\r\n"
     assert out.reverted == [FindingRef("s.md", "f1")]
 
 
-def test_undecodable_returns_unchanged_all_kept():
+def test_undecodable_returns_unchanged_all_kept() -> None:
     data = b"\xff\xfe\x00bad"
     out = invert(data, [_row("f1", "a", "b"), _row("f2", "c", "d")])
     assert out.data == data
@@ -71,7 +72,7 @@ def test_undecodable_returns_unchanged_all_kept():
     assert [reason for _, reason in out.kept] == ["undecodable", "undecodable"]
 
 
-def test_applied_rows_filters(tmp_path, monkeypatch):
+def test_applied_rows_filters(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inside = tmp_path / "inside.md"
     inside.write_text("x")
     nol = tmp_path / "noledger.md"

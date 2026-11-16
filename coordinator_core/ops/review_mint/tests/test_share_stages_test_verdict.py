@@ -7,6 +7,7 @@ import yaml
 
 from coordinator_core.ops.review_mint import share_stages
 from coordinator_core.ops.review_mint.share_stages import ShareStageMissing, ShareStagesMissing, assemble_from_share
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -15,16 +16,16 @@ JUDGE = {"status": "met", "observation": "holds"}
 
 
 @pytest.fixture(autouse=True)
-def _rostered_delivery_verifier(monkeypatch):
+def _rostered_delivery_verifier(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(share_stages, "_delivery_verifier_rostered", lambda _root: True)
 
 
-def _sc(share, name, **fm):
+def _sc(share, name, **fm) -> None:
     share.mkdir(parents=True, exist_ok=True)
     (share / name).write_text("---\n" + yaml.safe_dump(fm, sort_keys=False) + "---\nbody\n", encoding="utf-8")
 
 
-def _share(root, **tests_fm):
+def _share(root, **tests_fm) -> None:
     share = root / ".coordinator-local" / "subagent-share" / "sess-1"
     _sc(share, "coordinator-code-reviewer.a1.md", agent_type="coordinator:code-reviewer", target_plan=PLAN)
     _sc(share, "coordinator-test-runner.p1.md", agent_type="coordinator:test-runner",
@@ -42,32 +43,32 @@ def _assemble(root):
     )
 
 
-def test_complete_status_with_test_verdict_is_chosen(tmp_path):
+def test_complete_status_with_test_verdict_is_chosen(tmp_path: Path) -> None:
     _share(tmp_path, status="complete", test_verdict="pass", run=124, failed=0)
     res = _assemble(tmp_path)
     assert res["stage_returns"]["tests"]["status"] == "pass"
     assert res["used"]["tests"] == [".coordinator-local/subagent-share/sess-1/coordinator-test-runner.t1.md"]
 
 
-def test_old_shape_status_pass_still_chosen(tmp_path):
+def test_old_shape_status_pass_still_chosen(tmp_path: Path) -> None:
     _share(tmp_path, status="pass", run=4, failed=0)
     assert _assemble(tmp_path)["stage_returns"]["tests"]["status"] == "pass"
 
 
-def test_complete_without_verdict_raises(tmp_path):
+def test_complete_without_verdict_raises(tmp_path: Path) -> None:
     _share(tmp_path, status="complete")
     with pytest.raises(ShareStageMissing) as exc:
         _assemble(tmp_path)
     assert exc.value.stage == "tests"
 
 
-def test_errored_verdict_not_selected(tmp_path):
+def test_errored_verdict_not_selected(tmp_path: Path) -> None:
     _share(tmp_path, status="complete", test_verdict="errored")
     with pytest.raises(ShareStageMissing):
         _assemble(tmp_path)
 
 
-def test_a_test_runner_sidecar_with_no_plan_binding_is_named_in_the_refusal(tmp_path):
+def test_a_test_runner_sidecar_with_no_plan_binding_is_named_in_the_refusal(tmp_path: Path) -> None:
     share = tmp_path / ".coordinator-local" / "subagent-share" / "sess-1"
     _share(tmp_path, status="complete")
     (share / "coordinator-test-runner.t1.md").unlink()
@@ -82,7 +83,7 @@ def test_a_test_runner_sidecar_with_no_plan_binding_is_named_in_the_refusal(tmp_
     assert f"set target_plan: {PLAN}" in msg
 
 
-def test_a_run_that_recorded_tests_not_run_supplies_the_tests_stage(tmp_path):
+def test_a_run_that_recorded_tests_not_run_supplies_the_tests_stage(tmp_path: Path) -> None:
     share = tmp_path / ".coordinator-local" / "subagent-share" / "sess-1"
     _share(tmp_path, status="complete")
     (share / "coordinator-test-runner.t1.md").unlink()
@@ -92,7 +93,7 @@ def test_a_run_that_recorded_tests_not_run_supplies_the_tests_stage(tmp_path):
     assert tests["status"] == "not_run"
 
 
-def test_a_run_that_recorded_tests_pass_is_not_reused(tmp_path):
+def test_a_run_that_recorded_tests_pass_is_not_reused(tmp_path: Path) -> None:
     share = tmp_path / ".coordinator-local" / "subagent-share" / "sess-1"
     _share(tmp_path, status="complete")
     (share / "coordinator-test-runner.t1.md").unlink()
@@ -110,18 +111,18 @@ def _only_lens(root, name, agent_type):
     return share
 
 
-def test_staff_eng_sidecar_counts_as_reviewer(tmp_path):
+def test_staff_eng_sidecar_counts_as_reviewer(tmp_path: Path) -> None:
     share = _only_lens(tmp_path, "coordinator-staff-eng.s1.md", "coordinator:staff-eng")
     res = _assemble(tmp_path)
     assert res["used"]["reviewer"] == [f".coordinator-local/subagent-share/sess-1/{(share / 'coordinator-staff-eng.s1.md').name}"]
 
 
-def test_security_audit_sidecar_counts_as_reviewer(tmp_path):
+def test_security_audit_sidecar_counts_as_reviewer(tmp_path: Path) -> None:
     _only_lens(tmp_path, "coordinator-security-audit.s1.md", "coordinator:security-audit")
     assert len(_assemble(tmp_path)["used"]["reviewer"]) == 1
 
 
-def test_delivery_verdict_key_is_read(tmp_path):
+def test_delivery_verdict_key_is_read(tmp_path: Path) -> None:
     share = tmp_path / ".coordinator-local" / "subagent-share" / "sess-1"
     _share(tmp_path, status="complete", test_verdict="pass", run=1, failed=0)
     (share / "coordinator-delivery-verifier.d1.md").unlink()
@@ -130,7 +131,7 @@ def test_delivery_verdict_key_is_read(tmp_path):
     assert _assemble(tmp_path)["stage_returns"]["delivery"]["verdict"] == "FAIL"
 
 
-def test_all_missing_stages_listed(tmp_path):
+def test_all_missing_stages_listed(tmp_path: Path) -> None:
     share = tmp_path / ".coordinator-local" / "subagent-share" / "sess-1"
     _share(tmp_path, status="complete", test_verdict="pass")
     for name in ("coordinator-code-reviewer.a1.md", "coordinator-delivery-verifier.d1.md",
@@ -144,7 +145,7 @@ def test_all_missing_stages_listed(tmp_path):
         assert f"no {stage} sidecar" in str(exc.value)
 
 
-def test_prep_with_run_base_sha_and_product_files_only_in_the_body_is_assembled(tmp_path):
+def test_prep_with_run_base_sha_and_product_files_only_in_the_body_is_assembled(tmp_path: Path) -> None:
     """The real test-runner prep reports both in prose; frontmatter-only matching stranded it."""
     _share(tmp_path, status="complete", test_verdict="pass", run=1, failed=0)
     share = tmp_path / ".coordinator-local" / "subagent-share" / "sess-1"
@@ -157,7 +158,7 @@ def test_prep_with_run_base_sha_and_product_files_only_in_the_body_is_assembled(
     assert res["used"]["prep"] == [".coordinator-local/subagent-share/sess-1/coordinator-test-runner.p1.md"]
 
 
-def test_an_unrostered_delivery_verifier_is_no_missing_stage(tmp_path, monkeypatch):
+def test_an_unrostered_delivery_verifier_is_no_missing_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(share_stages, "_delivery_verifier_rostered", lambda _root: False)
     share = tmp_path / ".coordinator-local" / "subagent-share" / "sess-1"
     _share(tmp_path, status="complete", test_verdict="pass", run=1, failed=0)

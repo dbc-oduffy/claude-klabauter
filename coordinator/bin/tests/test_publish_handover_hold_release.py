@@ -33,14 +33,14 @@ def _assert_released(env) -> None:
     assert _remaining(env) == [0.0, 0.0]
 
 
-def test_success_leaves_no_handover_hold(tmp_path, monkeypatch):
+def test_success_leaves_no_handover_hold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env = _q._setup(tmp_path, monkeypatch, True)
     rc, err = _q._run(env)
     assert rc == 0, err
     _assert_released(env)
 
 
-def test_fatal_refusal_for_a_mid_stage_run_leaves_no_handover_hold(tmp_path, monkeypatch):
+def test_fatal_refusal_for_a_mid_stage_run_leaves_no_handover_hold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm import live_runs
 
     monkeypatch.setattr(live_runs, "HOLD_BOUND_S", 0.0)
@@ -52,7 +52,7 @@ def test_fatal_refusal_for_a_mid_stage_run_leaves_no_handover_hold(tmp_path, mon
     _assert_released(env)
 
 
-def test_busy_75_leaves_no_handover_hold(tmp_path, monkeypatch):
+def test_busy_75_leaves_no_handover_hold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import contextlib
     import io
 
@@ -68,7 +68,7 @@ def test_busy_75_leaves_no_handover_hold(tmp_path, monkeypatch):
     _assert_released(env)
 
 
-def test_slot_gate_exit_leaves_no_handover_hold(tmp_path, monkeypatch):
+def test_slot_gate_exit_leaves_no_handover_hold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.percolate import publish_slot
 
     env = _q._setup(tmp_path, monkeypatch, True)
@@ -86,7 +86,7 @@ def test_slot_gate_exit_leaves_no_handover_hold(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("where", ["fetch", "stale_index_lock", "refresh", "gate"])
-def test_a_raised_exception_leaves_no_handover_hold(tmp_path, monkeypatch, where):
+def test_a_raised_exception_leaves_no_handover_hold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, where) -> None:
     env = _q._setup(tmp_path, monkeypatch, True)
     import percolate.dest_refresh as dr  # importable only after `_setup` bootstraps the engine path
 
@@ -110,7 +110,7 @@ def test_a_raised_exception_leaves_no_handover_hold(tmp_path, monkeypatch, where
     _assert_released(env)
 
 
-def test_the_breadcrumb_is_held_only_inside_stop_and_copy(tmp_path, monkeypatch):
+def test_the_breadcrumb_is_held_only_inside_stop_and_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm import live_runs, pair_stop
 
     env = _q._setup(tmp_path, monkeypatch, True)
@@ -119,7 +119,7 @@ def test_the_breadcrumb_is_held_only_inside_stop_and_copy(tmp_path, monkeypatch)
 
     seen: "list[tuple[str, bool]]" = []
 
-    def watch(module, attr, label):
+    def watch(module, attr, label) -> None:
         inner = getattr(module, attr)
 
         def wrapper(*a, **k):
@@ -153,7 +153,7 @@ def test_the_breadcrumb_is_held_only_inside_stop_and_copy(tmp_path, monkeypatch)
     _assert_released(env)
 
 
-def test_a_mid_stage_run_still_refuses_before_anything_is_copied(tmp_path, monkeypatch):
+def test_a_mid_stage_run_still_refuses_before_anything_is_copied(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm import live_runs
 
     monkeypatch.setattr(live_runs, "HOLD_BOUND_S", 0.0)
@@ -166,14 +166,14 @@ def test_a_mid_stage_run_still_refuses_before_anything_is_copied(tmp_path, monke
     _assert_released(env)
 
 
-def _spy_slot(env, monkeypatch):
+def _spy_slot(env, monkeypatch) -> list[str]:
     """Record the tokens `acquire_slot` hands out so a test proves a slot was really taken."""
     from coordinator_core.percolate import publish_slot
 
     taken: "list[str]" = []
     real = publish_slot.acquire_slot
 
-    def acquire(*a, **k):
+    def acquire(*a, **k) -> str:
         token = real(*a, **k)
         taken.append(token)
         return token
@@ -182,7 +182,7 @@ def _spy_slot(env, monkeypatch):
     return taken
 
 
-def test_warm_handover_refusal_releases_the_publish_slot(tmp_path, monkeypatch):
+def test_warm_handover_refusal_releases_the_publish_slot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.percolate import publish_lease, publish_slot
     from coordinator_core.warm import live_runs
 
@@ -197,7 +197,7 @@ def test_warm_handover_refusal_releases_the_publish_slot(tmp_path, monkeypatch):
     assert publish_lease.read(env.repo, publish_slot.SLOT_REMOTE) is None
 
 
-def test_a_release_that_returns_false_is_reported(tmp_path, monkeypatch):
+def test_a_release_that_returns_false_is_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.percolate import publish_slot
 
     env = _q._setup(tmp_path, monkeypatch, True)
@@ -208,7 +208,7 @@ def test_a_release_that_returns_false_is_reported(tmp_path, monkeypatch):
     assert taken and f"publish slot {taken[0]}" in err and "not released" in err
 
 
-def test_a_release_that_raises_is_reported_and_keeps_the_exit_code(tmp_path, monkeypatch):
+def test_a_release_that_raises_is_reported_and_keeps_the_exit_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.percolate import publish_slot
 
     env = _q._setup(tmp_path, monkeypatch, True)

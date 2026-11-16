@@ -85,7 +85,8 @@ class RunHooks:
     results. `directive_wanted(directive)` is False for an envelope directive the spec's own
     steps already cover. `acting_dispositions` are the dispositions that must open at least one
     envelope directive, else the decision has a `failed` row. `held_stages` are the stages a
-    rule's `Hold` halts (None: every later stage). A finish step whose stage is
+    rule's `Hold` halts (None: every later stage). `concurrent_stages` are the stages whose
+    independent `cli` steps run on a bounded pool. A finish step whose stage is
     `PRE_DIRECTIVE_STAGE` runs once the agents' results are in, before the finish directives.
     """
 
@@ -94,6 +95,7 @@ class RunHooks:
     directive_wanted: Callable[[Mapping[str, Any]], bool] | None = None
     acting_dispositions: frozenset[str] = frozenset()
     held_stages: "frozenset[str] | None" = None
+    concurrent_stages: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -403,7 +405,7 @@ def _run_batch(
         results = run_stages(
             runnable, ceremony=spec.dispatch_key, repo_root=run.repo_root, run_dir=run.run_dir,
             dispatch=table, rules=rules, allow_suite=allow_suite, suite_grant=_suite_grant(owed),
-            held_stages=held_stages,
+            held_stages=held_stages, concurrent_stages=_hooks(spec).concurrent_stages,
         ) if runnable else []
         if gating:
             blocking = {s.id for s in owed if s.gates_next and not s.best_effort}
@@ -664,7 +666,7 @@ def _file_failures(run: _Run, spec: Any, table: Dispatch, filed: set[str]) -> li
     if to_run:
         run_stages(
             to_run, ceremony=spec.dispatch_key, repo_root=run.repo_root, run_dir=run.run_dir,
-            dispatch=table, rules=None,
+            dispatch=table, rules=None, concurrent_stages=_hooks(spec).concurrent_stages,
         )
     return display
 

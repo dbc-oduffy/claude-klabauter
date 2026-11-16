@@ -7,9 +7,10 @@ import pytest
 
 from coordinator_core.op_census import meter
 from coordinator_core.telemetry.op_latency import BENCHMARK, PRODUCTION, TEST
+from pathlib import Path
 
 
-def _write_sink(tmp_path, rows, name="op-latency.jsonl"):
+def _write_sink(tmp_path, rows, name: str = "op-latency.jsonl"):
     path = tmp_path / name
     path.write_text(
         "".join(json.dumps(r, separators=(",", ":")) + "\n" for r in rows),
@@ -40,7 +41,7 @@ def _process_time(op, process_ms, spawns=None, origin=None, scope=None):
     return row
 
 
-def test_corrupt_midfile_row_raises_rather_than_returning_a_short_count(tmp_path):
+def test_corrupt_midfile_row_raises_rather_than_returning_a_short_count(tmp_path: Path) -> None:
     path = tmp_path / "op-latency.jsonl"
     path.write_text(
         json.dumps(_complete("a.op")) + "\n"
@@ -53,7 +54,7 @@ def test_corrupt_midfile_row_raises_rather_than_returning_a_short_count(tmp_path
     assert "unparseable" in str(exc.value)
 
 
-def test_partial_trailing_line_is_tolerated_as_a_live_append(tmp_path):
+def test_partial_trailing_line_is_tolerated_as_a_live_append(tmp_path: Path) -> None:
     """The sink is append-only and concurrently written.
 
     A reader can legitimately arrive mid-append, so exactly one unparseable
@@ -72,7 +73,7 @@ def test_partial_trailing_line_is_tolerated_as_a_live_append(tmp_path):
     assert read.unparseable == 1
 
 
-def test_bad_line_then_trailing_blank_line_is_still_tolerated(tmp_path):
+def test_bad_line_then_trailing_blank_line_is_still_tolerated(tmp_path: Path) -> None:
     path = tmp_path / "op-latency.jsonl"
     path.write_text(
         json.dumps(_complete("a.op")) + "\n" + '{"op": "b.op", "ki' + "\n\n",
@@ -83,7 +84,7 @@ def test_bad_line_then_trailing_blank_line_is_still_tolerated(tmp_path):
     assert read.unparseable == 1
 
 
-def test_no_read_path_bounds_by_bytes_or_rows(tmp_path):
+def test_no_read_path_bounds_by_bytes_or_rows(tmp_path: Path) -> None:
     rows = [_complete(f"op.{i}") for i in range(5000)]
     path = _write_sink(tmp_path, rows)
     parsed, read = meter._read_generation(path)
@@ -91,7 +92,7 @@ def test_no_read_path_bounds_by_bytes_or_rows(tmp_path):
     assert read.rows == 5000
 
 
-def test_origins_are_split_and_never_blended(tmp_path, monkeypatch):
+def test_origins_are_split_and_never_blended(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rows = [
         _complete("ping", origin=BENCHMARK),
         _complete("ping", origin=BENCHMARK),
@@ -110,7 +111,7 @@ def test_origins_are_split_and_never_blended(tmp_path, monkeypatch):
     assert measurements["real.op"].production_count == 1
 
 
-def test_untagged_rows_are_unknown_not_production(tmp_path, monkeypatch):
+def test_untagged_rows_are_unknown_not_production(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_sink(tmp_path, [_complete("legacy.op"), _complete("legacy.op")])
     monkeypatch.setattr(
         meter, "generation_paths", lambda root, window: [tmp_path / "op-latency.jsonl"]
@@ -121,7 +122,7 @@ def test_untagged_rows_are_unknown_not_production(tmp_path, monkeypatch):
     assert measurements["legacy.op"].production_count == 0
 
 
-def test_summary_states_all_four_origin_buckets_by_name(tmp_path, monkeypatch):
+def test_summary_states_all_four_origin_buckets_by_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_sink(tmp_path, [_complete("legacy.op"), _complete("legacy.op")])
     monkeypatch.setattr(
         meter, "generation_paths", lambda root, window: [tmp_path / "op-latency.jsonl"]
@@ -137,7 +138,7 @@ def test_summary_states_all_four_origin_buckets_by_name(tmp_path, monkeypatch):
     }
 
 
-def test_render_origin_caveat_names_unknown_as_not_misclassified(tmp_path, monkeypatch):
+def test_render_origin_caveat_names_unknown_as_not_misclassified(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_sink(tmp_path, [_complete("legacy.op", origin=None)])
     monkeypatch.setattr(
         meter, "generation_paths", lambda root, window: [tmp_path / "op-latency.jsonl"]
@@ -152,7 +153,7 @@ def test_render_origin_caveat_names_unknown_as_not_misclassified(tmp_path, monke
     assert "NEVER" in caveat
 
 
-def test_process_time_and_spawn_count_are_both_reported(tmp_path, monkeypatch):
+def test_process_time_and_spawn_count_are_both_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rows = [
         _process_time("git.heavy", 120.0, spawns=27, origin=PRODUCTION),
         _process_time("git.heavy", 80.0, spawns=13, origin=PRODUCTION),
@@ -169,7 +170,7 @@ def test_process_time_and_spawn_count_are_both_reported(tmp_path, monkeypatch):
     assert summary["spawn_samples"] == 2
 
 
-def test_a_single_sample_reports_no_percentile(tmp_path, monkeypatch):
+def test_a_single_sample_reports_no_percentile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_sink(tmp_path, [_process_time("lonely.op", 42.0, origin=PRODUCTION)])
     monkeypatch.setattr(
         meter, "generation_paths", lambda root, window: [tmp_path / "op-latency.jsonl"]
@@ -180,7 +181,7 @@ def test_a_single_sample_reports_no_percentile(tmp_path, monkeypatch):
     assert summary["process_ms_max"] == 42.0
 
 
-def test_process_time_rows_do_not_double_count_invocations(tmp_path, monkeypatch):
+def test_process_time_rows_do_not_double_count_invocations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rows = [
         _complete("dual.op", origin=PRODUCTION),
         _process_time("dual.op", 10.0, spawns=1, origin=PRODUCTION),
@@ -195,7 +196,7 @@ def test_process_time_rows_do_not_double_count_invocations(tmp_path, monkeypatch
     assert measurements["dual.op"].process_ms == [10.0]
 
 
-def test_started_and_composition_rows_are_excluded_not_counted(tmp_path, monkeypatch):
+def test_started_and_composition_rows_are_excluded_not_counted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rows = [
         {"op": "real.op", "kind": "started", "origin": PRODUCTION},
         {"op": "real.op", "kind": "composition", "origin": PRODUCTION},
@@ -212,7 +213,7 @@ def test_started_and_composition_rows_are_excluded_not_counted(tmp_path, monkeyp
     assert population.filters["kind"] == [meter.KIND_PROCESS_TIME, meter.KIND_COMPLETE]
 
 
-def test_population_states_window_filters_and_row_count(tmp_path, monkeypatch):
+def test_population_states_window_filters_and_row_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_sink(tmp_path, [_complete("a.op", origin=PRODUCTION), _complete("b.op")])
     monkeypatch.setattr(
         meter, "generation_paths", lambda root, window: [tmp_path / "op-latency.jsonl"]
@@ -228,7 +229,7 @@ def test_population_states_window_filters_and_row_count(tmp_path, monkeypatch):
     assert "rows=1" in described
 
 
-def test_render_declares_rows_it_dropped(tmp_path, monkeypatch):
+def test_render_declares_rows_it_dropped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_sink(tmp_path, [_complete(f"op.{i}", origin=PRODUCTION) for i in range(5)])
     monkeypatch.setattr(
         meter, "generation_paths", lambda root, window: [tmp_path / "op-latency.jsonl"]
@@ -240,12 +241,12 @@ def test_render_declares_rows_it_dropped(tmp_path, monkeypatch):
     assert doc["rows_not_shown"] == 3
 
 
-def test_unknown_window_is_refused_rather_than_defaulted(tmp_path):
+def test_unknown_window_is_refused_rather_than_defaulted(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="unknown window"):
         meter.generation_paths(tmp_path, window="last-week")
 
 
-def test_rows_at_another_scope_are_excluded_and_counted(tmp_path, monkeypatch) -> None:
+def test_rows_at_another_scope_are_excluded_and_counted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rows = [
         _complete("scoped.op", origin=PRODUCTION),
         _process_time("scoped.op", 10.0, origin=PRODUCTION, scope=meter.SCOPE_PER_OP_HANDLER),
@@ -263,7 +264,7 @@ def test_rows_at_another_scope_are_excluded_and_counted(tmp_path, monkeypatch) -
     assert "scope_excluded=2" in population.describe()
 
 
-def test_the_blended_opt_out_is_explicit(tmp_path, monkeypatch) -> None:
+def test_the_blended_opt_out_is_explicit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rows = [
         _complete("scoped.op", origin=PRODUCTION),
         _process_time("scoped.op", 10.0, origin=PRODUCTION, scope=meter.SCOPE_PER_OP_HANDLER),
@@ -280,6 +281,6 @@ def test_the_blended_opt_out_is_explicit(tmp_path, monkeypatch) -> None:
     assert population.filters["measurement_scope"] is None
 
 
-def test_an_unknown_scope_is_a_loud_error_not_an_empty_result(tmp_path) -> None:
+def test_an_unknown_scope_is_a_loud_error_not_an_empty_result(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="unknown measurement scope"):
         meter.measure(tmp_path, scope="per-op-handler")

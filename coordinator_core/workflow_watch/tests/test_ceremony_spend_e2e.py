@@ -7,6 +7,7 @@ import json
 import pytest
 
 from coordinator_core import workflow_watch as ww
+from pathlib import Path
 
 
 class _Rec:
@@ -18,7 +19,7 @@ class _Watcher:
     def __init__(self, *_a):
         pass
 
-    def check_record(self):
+    def check_record(self) -> _Rec:
         return _Rec()
 
 
@@ -46,7 +47,7 @@ def _wf_dir(root, run_id):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     (root / "scratch" / "warp").mkdir(parents=True)
     ratchet_dir = root / "coordinator_core" / "workflow_watch"
@@ -65,7 +66,7 @@ def _spend_rows(root):
 
 
 @pytest.mark.parametrize("stem,ceremony", [("distill-harvest", "distill"), ("survey", "atlas")])
-def test_watch_leaves_run_cost_and_ceremony_spend_row(repo, stem, ceremony):
+def test_watch_leaves_run_cost_and_ceremony_spend_row(repo, stem, ceremony) -> None:
     wf = _wf_dir(repo, f"wf_{ceremony}")
     script = str(repo / "scripts" / f"{stem}.workflow.js")
     assert ww._watch("t", str(wf / "journal.jsonl"), "tid", 0.0, 1.0, script_path=script) == 0
@@ -83,14 +84,14 @@ def test_watch_leaves_run_cost_and_ceremony_spend_row(repo, stem, ceremony):
     assert set(row["by_role"]) == {"work", "verify"}
 
 
-def test_no_script_path_still_writes_other_row(repo):
+def test_no_script_path_still_writes_other_row(repo) -> None:
     wf = _wf_dir(repo, "wf_plain")
     assert ww._watch("t", str(wf / "journal.jsonl"), "tid", 0.0, 1.0) == 0
     (row_path,) = _spend_rows(repo)
     assert json.loads(row_path.read_text(encoding="utf-8"))["ceremony"] == "other"
 
 
-def test_no_repo_root_skips_spend_row_and_exit_stays_zero(repo, tmp_path, monkeypatch):
+def test_no_repo_root_skips_spend_row_and_exit_stays_zero(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     wf = _wf_dir(repo, "wf_norepo")
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
@@ -100,7 +101,7 @@ def test_no_repo_root_skips_spend_row_and_exit_stays_zero(repo, tmp_path, monkey
     assert _spend_rows(repo) == [] and not (elsewhere / "state").exists()
 
 
-def test_watch_tightens_only_the_resolved_repo_ratchet(repo):
+def test_watch_tightens_only_the_resolved_repo_ratchet(repo) -> None:
     wf = _wf_dir(repo, "wf_exec")
     # an executor-labelled agent with tool calls gives a positive observed value below the ceiling
     (wf / "agent-a1.jsonl").write_text("\n".join(json.dumps(e) for e in [

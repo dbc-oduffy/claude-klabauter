@@ -95,7 +95,7 @@ def _bookkeep(root: Path, **extra) -> dict:
 
 
 @_requires_rg
-def test_default_call_runs_every_step(tmp_path: Path, monkeypatch):
+def test_default_call_runs_every_step(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
     _fixture_repo(tmp_path)
     _assemble(tmp_path, stamp=True)
@@ -118,7 +118,7 @@ def test_default_call_runs_every_step(tmp_path: Path, monkeypatch):
 
 
 @_requires_rg
-def test_unstamped_manifest_refuses_disposal_but_the_other_steps_run(tmp_path: Path, monkeypatch):
+def test_unstamped_manifest_refuses_disposal_but_the_other_steps_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
     _fixture_repo(tmp_path)
     _assemble(tmp_path, stamp=False)
@@ -132,7 +132,7 @@ def test_unstamped_manifest_refuses_disposal_but_the_other_steps_run(tmp_path: P
     assert out["steps"]["scratch"]["ran"] is True
 
 
-def test_absent_manifest_skips_disposal_without_error(tmp_path: Path, monkeypatch):
+def test_absent_manifest_skips_disposal_without_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
     _fixture_repo(tmp_path)
 
@@ -143,7 +143,7 @@ def test_absent_manifest_skips_disposal_without_error(tmp_path: Path, monkeypatc
     assert out["steps"]["spec_archive"]["ran"] is True
 
 
-def test_non_terminal_plan_is_never_archived(tmp_path: Path, monkeypatch):
+def test_non_terminal_plan_is_never_archived(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
     _fixture_repo(tmp_path)
     (tmp_path / _DONE_PLAN).write_text(_plan("executing"), encoding="utf-8")
@@ -156,7 +156,7 @@ def test_non_terminal_plan_is_never_archived(tmp_path: Path, monkeypatch):
     assert (tmp_path / _DONE_PLAN).is_file()
 
 
-def test_plan_cap_bounds_plans_archived_per_call(tmp_path: Path, monkeypatch):
+def test_plan_cap_bounds_plans_archived_per_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
     _fixture_repo(tmp_path)
     second = "docs/plans/2026-11-03-second-done-plan.md"
@@ -170,7 +170,7 @@ def test_plan_cap_bounds_plans_archived_per_call(tmp_path: Path, monkeypatch):
     assert [p for p in (_DONE_PLAN, second) if (tmp_path / p).exists()] != []
 
 
-def test_run_id_and_repo_root_are_required(tmp_path: Path):
+def test_run_id_and_repo_root_are_required(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="run_id"):
         _run(_handler({}, repo_root=tmp_path / ".git"))
     with pytest.raises(ValueError, match="repo_root"):

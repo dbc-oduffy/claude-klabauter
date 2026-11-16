@@ -194,6 +194,20 @@ def test_zero_dispatchable_rows_fail_spine_and_name_the_em_owned_rows(tmp_path):
     _validate(reply)
 
 
+def test_a_plan_moved_mid_blitz_is_judged_and_spine_read_on_its_new_path(tmp_path):
+    common = _plan(tmp_path)
+    moved = tmp_path / "docs" / "plans" / "2026-10" / Path(REL).name
+    moved.parent.mkdir()
+    (tmp_path / REL).rename(moved)
+    reply = op._handler({"plan": REL}, common)
+    new_rel = "docs/plans/2026-10/" + Path(REL).name
+    assert reply["plan"] == new_rel
+    assert reply["prep_gate"]["plan"] == new_rel
+    assert reply["verdict"] != "REFUSED"
+    assert reply["prep_gate"]["classes"]["SPINE"]["status"] != "DEFECT"
+    _validate(reply)
+
+
 def test_handler_reply_validates_and_spawns_nothing_under_the_bar(tmp_path, monkeypatch):
     common = _plan(tmp_path)
     with _count_spawns_attributed(monkeypatch) as spawns:

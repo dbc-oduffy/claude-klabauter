@@ -5,9 +5,10 @@ import pytest
 
 from coordinator_core.learn_lessons_pipeline.run_stamp import stamp_run_complete
 from coordinator_core.ops.learn_lessons_cutoff import derive_cutoff
+from pathlib import Path
 
 
-def test_fresh_stamp_creates_dir_and_file(tmp_path):
+def test_fresh_stamp_creates_dir_and_file(tmp_path: Path) -> None:
     runs_dir = tmp_path / "tasks"
     sentinel = stamp_run_complete(runs_dir, "2026-09-19")
 
@@ -16,7 +17,7 @@ def test_fresh_stamp_creates_dir_and_file(tmp_path):
     assert sentinel.read_bytes() == b""
 
 
-def test_restamp_is_a_noop(tmp_path):
+def test_restamp_is_a_noop(tmp_path: Path) -> None:
     runs_dir = tmp_path / "tasks"
     sentinel = stamp_run_complete(runs_dir, "2026-09-19")
     first_stat = sentinel.stat()
@@ -29,7 +30,7 @@ def test_restamp_is_a_noop(tmp_path):
     assert second_stat.st_size == first_stat.st_size == 0
 
 
-def test_malformed_date_raises(tmp_path):
+def test_malformed_date_raises(tmp_path: Path) -> None:
     runs_dir = tmp_path / "tasks"
     with pytest.raises(ValueError):
         stamp_run_complete(runs_dir, "2026-13-45-bogus")
@@ -38,14 +39,14 @@ def test_malformed_date_raises(tmp_path):
     assert not runs_dir.exists()
 
 
-def test_roundtrip_with_derive_cutoff(tmp_path):
+def test_roundtrip_with_derive_cutoff(tmp_path: Path) -> None:
     runs_dir = tmp_path / "tasks"
     stamp_run_complete(runs_dir, "2026-09-19")
 
     assert derive_cutoff(runs_dir) == "2026-09-19"
 
 
-def _stage(runs_dir, repo, run_date="2026-11-13"):
+def _stage(runs_dir, repo, run_date: str = "2026-11-13"):
     from coordinator_core import run_watermark
     from coordinator_core.learn_lessons_pipeline import (
         lessons_run_dir,
@@ -56,7 +57,7 @@ def _stage(runs_dir, repo, run_date="2026-11-13"):
     return repo / "state" / "run-watermarks" / "learn-lessons.json"
 
 
-def test_promotion_happens_only_inside_the_stamp_dispatch(tmp_path):
+def test_promotion_happens_only_inside_the_stamp_dispatch(tmp_path: Path) -> None:
     from coordinator_core.learn_lessons_pipeline import apply as llp_apply
 
     runs_dir, repo = tmp_path / "tasks", tmp_path / "repo"
@@ -67,7 +68,7 @@ def test_promotion_happens_only_inside_the_stamp_dispatch(tmp_path):
     assert target.is_file() and out["watermark"] == str(target)
 
 
-def test_failed_stamp_promotes_nothing(tmp_path):
+def test_failed_stamp_promotes_nothing(tmp_path: Path) -> None:
     from coordinator_core.learn_lessons_pipeline import apply as llp_apply
 
     runs_dir, repo = tmp_path / "tasks", tmp_path / "repo"
@@ -77,7 +78,7 @@ def test_failed_stamp_promotes_nothing(tmp_path):
     assert not target.exists()
 
 
-def test_since_follows_the_committed_watermark_else_the_cutoff(tmp_path):
+def test_since_follows_the_committed_watermark_else_the_cutoff(tmp_path: Path) -> None:
     from coordinator_core.learn_lessons_pipeline import apply as llp_apply
     from coordinator_core.learn_lessons_pipeline import build_directives, lessons_since
 

@@ -12,6 +12,7 @@ from pathlib import Path
 import coordinator_core.baton_assemble as ba
 import coordinator_core.session.claims as claims
 from coordinator_core.test_baton_assemble import _write_artifact
+import pytest
 
 SESSION = "sess-current-0001"
 NAME = "2026-11-11-machine-a-restart-deposit-fix-seal-merge-r.md"
@@ -31,7 +32,7 @@ def _hold(monkeypatch, *basenames: str) -> None:
     )
 
 
-def test_single_held_claim_resolves_to_its_month_shard(tmp_path, monkeypatch):
+def test_single_held_claim_resolves_to_its_month_shard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     _write_artifact(repo / "state/handoffs/2026-11" / NAME, ["kind: session-handoff"])
     _hold(monkeypatch, NAME)
@@ -43,7 +44,7 @@ def test_single_held_claim_resolves_to_its_month_shard(tmp_path, monkeypatch):
     assert additional == []
 
 
-def test_held_claim_filed_in_another_month_folder_still_resolves(tmp_path, monkeypatch):
+def test_held_claim_filed_in_another_month_folder_still_resolves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     _write_artifact(repo / "state/handoffs/2026-12" / NAME, ["kind: session-handoff"])
     _hold(monkeypatch, NAME)
@@ -53,7 +54,7 @@ def test_held_claim_filed_in_another_month_folder_still_resolves(tmp_path, monke
     assert primary == f"state/handoffs/2026-12/{NAME}"
 
 
-def test_undated_handoff_in_a_month_folder_resolves(tmp_path, monkeypatch):
+def test_undated_handoff_in_a_month_folder_resolves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     _write_artifact(repo / "state/handoffs/2026-11/machine-a-restart.md", ["kind: session-handoff"])
     _hold(monkeypatch, "machine-a-restart.md")
@@ -63,7 +64,7 @@ def test_undated_handoff_in_a_month_folder_resolves(tmp_path, monkeypatch):
     assert primary == "state/handoffs/2026-11/machine-a-restart.md"
 
 
-def test_continued_chain_inside_shards_reaches_the_sharded_leaf(tmp_path, monkeypatch):
+def test_continued_chain_inside_shards_reaches_the_sharded_leaf(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     leaf = "2026-11-12-next.md"
     _write_artifact(
@@ -84,7 +85,7 @@ def test_continued_chain_inside_shards_reaches_the_sharded_leaf(tmp_path, monkey
     assert primary == f"state/handoffs/2026-11/{leaf}"
 
 
-def test_flat_cite_of_a_sharded_handoff_resolves_instead_of_refusing(tmp_path):
+def test_flat_cite_of_a_sharded_handoff_resolves_instead_of_refusing(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     sharded = _write_artifact(repo / "state/handoffs/2026-11" / NAME, ["kind: session-handoff"])
 

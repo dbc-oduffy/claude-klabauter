@@ -42,24 +42,61 @@ def fm_field(path: str, key: str) -> str:
     prefix = key + ":"
     val = ""
     try:
+        decided, val = _fm_field_from_head(path, prefix)
+        if decided:
+            return _unquote(val)
         with open(path, "r", encoding="utf-8", errors="replace") as fh:
             in_fm = False
             for line in fh:
-                stripped_line = line.rstrip("\n").rstrip("\r")
+                # `"---" in line` is the C-speed gate before the strip: most lines are neither fence nor key.
                 if not in_fm:
-                    if stripped_line.strip() == "---":
+                    if "---" in line and line.strip() == "---":
                         in_fm = True
                     continue
-                if stripped_line.strip() == "---":
+                if line.startswith(prefix):
+                    val = line[len(prefix):].strip()
                     break
-                if stripped_line.startswith(prefix):
-                    val = stripped_line[len(prefix):].strip()
+                if "---" in line and line.strip() == "---":
                     break
     except OSError:
         return ""
+    return _unquote(val)
+
+
+def _unquote(val: str) -> str:
     if len(val) >= 2 and val[0] == val[-1] and val[0] in ("'", '"'):
-        val = val[1:-1]
+        return val[1:-1]
     return val
+
+
+_HEAD_BYTES = 4096
+
+
+def _fm_field_from_head(path: str, prefix: str) -> tuple:
+    """`(decided, val)` from one raw read of the file head; `decided` False means scan the whole file.
+
+    A sidecar's frontmatter fits the head, and a raw read skips the text-layer construction that
+    dominates the per-file cost. Only complete lines are judged (the last one may be cut by the
+    read), so a verdict here is the same one the full scan reaches.
+    """
+    with open(path, "rb", buffering=0) as fh:
+        raw = fh.read(_HEAD_BYTES)
+    text = raw.decode("utf-8", errors="replace").replace("\r\n", "\n").replace("\r", "\n")
+    lines = text.split("\n")
+    at_eof = len(raw) < _HEAD_BYTES
+    if not at_eof:
+        lines.pop()
+    in_fm = False
+    for line in lines:
+        if not in_fm:
+            if "---" in line and line.strip() == "---":
+                in_fm = True
+            continue
+        if line.startswith(prefix):
+            return True, line[len(prefix):].strip()
+        if "---" in line and line.strip() == "---":
+            return True, ""
+    return at_eof, ""
 
 
 def write_pathspec_file(paths: list) -> str:

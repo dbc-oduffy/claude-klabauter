@@ -75,6 +75,6 @@ def __getattr__(name: str):
     return value
 
 
-def __dir__():
+def __dir__() -> list[str]:
     return sorted(set(globals()) | set(__all__))
 

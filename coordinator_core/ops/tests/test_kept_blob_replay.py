@@ -9,23 +9,24 @@ from coordinator_core.ops import kept_blob_replay as kr
 from coordinator_core.ops.dispatch_emit.kept_work import blob_sha
 from coordinator_core.ops.kept_blob_transcripts import ToolEdit
 from coordinator_core.ops.tests._kept_blob_fixture import commit_at, git_repo
+from pathlib import Path
 
 
 def _ts(day: int) -> datetime:
     return datetime(2026, 1, day, tzinfo=timezone.utc)
 
 
-def _edit(day, name, inp, n=0):
+def _edit(day, name, inp, n: int = 0) -> ToolEdit:
     return ToolEdit(_ts(day), f"t{day}-{n}", name, inp, "s/f.jsonl")
 
 
-def _e(day, old, new):
+def _e(day, old, new) -> ToolEdit:
     return _edit(day, "Edit", {"old_string": old, "new_string": new})
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_hit_from_historical_blob_not_head_or_base(tmp_path):
+def test_hit_from_historical_blob_not_head_or_base(tmp_path: Path) -> None:
     repo = git_repo(tmp_path)
     commit_at(repo, "a.txt", b"one\n", "2026-01-01T00:00:00Z")
     commit_at(repo, "a.txt", b"two\n", "2026-01-02T00:00:00Z")
@@ -40,7 +41,7 @@ def test_hit_from_historical_blob_not_head_or_base(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_commit_base_cutoff_vs_empty_base(tmp_path):
+def test_commit_base_cutoff_vs_empty_base(tmp_path: Path) -> None:
     repo = git_repo(tmp_path)
     commit_at(repo, "a.txt", b"hello\n", "2026-01-10T00:00:00Z")
     bases = kr.history_bases(repo, ["a.txt"])["a.txt"]
@@ -55,7 +56,7 @@ def test_commit_base_cutoff_vs_empty_base(tmp_path):
     assert kr.replay_exact(only_commit, [_e(11, "hello", "hello world")], kept) is not None
 
 
-def test_absent_old_string_skipped_and_replay_continues():
+def test_absent_old_string_skipped_and_replay_continues() -> None:
     bases = [kr.Base("empty", b"", None)]
     edits = [
         _edit(1, "Write", {"content": "abc\n"}),
@@ -66,7 +67,7 @@ def test_absent_old_string_skipped_and_replay_continues():
     assert hit is not None and hit.applied == 2
 
 
-def test_multiedit_whole_and_skipped_whole():
+def test_multiedit_whole_and_skipped_whole() -> None:
     base = [kr.Base("empty", b"a b\n", None)]
     ok = _edit(1, "MultiEdit", {"edits": [
         {"old_string": "a", "new_string": "x"}, {"old_string": "b", "new_string": "y"}]})
@@ -77,20 +78,20 @@ def test_multiedit_whole_and_skipped_whole():
     assert kr.replay_exact(base, [bad], blob_sha(b"x b\n")) is None
 
 
-def test_match_mid_sequence():
+def test_match_mid_sequence() -> None:
     bases = [kr.Base("empty", b"", None)]
     edits = [_edit(1, "Write", {"content": "a\n"}), _e(2, "a", "b"), _e(3, "b", "c")]
     hit = kr.replay_exact(bases, edits, blob_sha(b"b\n"))
     assert hit is not None and hit.applied == 2 and hit.data == b"b\n"
 
 
-def test_near_miss_returns_none():
+def test_near_miss_returns_none() -> None:
     bases = [kr.Base("empty", b"", None)]
     edits = [_edit(1, "Write", {"content": "abc\n"})]
     assert kr.replay_exact(bases, edits, blob_sha(b"abc")) is None
 
 
-def test_base_equality_hit_applies_zero():
+def test_base_equality_hit_applies_zero() -> None:
     b = kr.Base("empty", b"same\n", None)
     hit = kr.replay_exact([b], [], blob_sha(b"same\n"))
     assert hit is not None and hit.applied == 0
@@ -98,7 +99,7 @@ def test_base_equality_hit_applies_zero():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_history_bases_one_spawn_for_three_rels(tmp_path, monkeypatch):
+def test_history_bases_one_spawn_for_three_rels(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = git_repo(tmp_path)
     for r in ("a.txt", "b.txt", "c.txt"):
         commit_at(repo, r, r.encode() + b"\n", "2026-01-01T00:00:00Z")
@@ -117,7 +118,7 @@ def test_history_bases_one_spawn_for_three_rels(tmp_path, monkeypatch):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_base_sha_uses_single_cat_file_spawn(tmp_path, monkeypatch):
+def test_base_sha_uses_single_cat_file_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = git_repo(tmp_path)
     commit_at(repo, "a.txt", b"a\n", "2026-01-01T00:00:00Z")
     c, _ = commit_at(repo, "b.txt", b"b\n", "2026-01-02T00:00:00Z")

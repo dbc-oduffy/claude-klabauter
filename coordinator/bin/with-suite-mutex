@@ -549,6 +549,16 @@ def _default_collection(owner_label: Optional[str], command: List[str]) -> str:
     return name if name and suite_run_record.COLLECTION_RE.match(name) else _DEFAULT_COLLECTION
 
 
+def _ceiling_line(max_runtime: float) -> str:
+    """The stderr line stating the active ceiling, printed once the mutex is won."""
+    if max_runtime > 0:
+        return (
+            f"with-suite-mutex: max-runtime ceiling {max_runtime:g}s; the command is killed "
+            "(exit 124) past it. Override with --max-runtime SECS (0 = unbounded)."
+        )
+    return "with-suite-mutex: max-runtime ceiling disabled (unbounded)."
+
+
 def _hand_ticket_to_run(qdir, ticket: str) -> None:
     """Flip ``ticket`` to adoptable so the follow-on run of the same owner inherits its place."""
     meta = suite_mutex._read_ticket(qdir, ticket)
@@ -1088,6 +1098,7 @@ def main(argv: List[str]) -> int:
                         file=sys.stderr,
                     )
                 return _MUTEX_HELD_EXIT_CODE
+            print(_ceiling_line(max_runtime), file=sys.stderr, flush=True)
             started_at = suite_run_reuse._now_iso()
             started_mono = time.monotonic()
             head_sha, dirty_paths = (None, [])

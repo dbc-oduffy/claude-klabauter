@@ -15,6 +15,7 @@ from coordinator_core.op_census.occupancy_scan import (
     live_registry_op_names,
     scan_occupancy,
 )
+from pathlib import Path
 
 
 def _row(**kwargs) -> str:
@@ -29,7 +30,7 @@ def _fake_common_dir(tmp_path):
     return fake_common_dir
 
 
-def _patch_git(monkeypatch, tmp_path):
+def _patch_git(monkeypatch, tmp_path) -> Path:
     fake_common_dir = _fake_common_dir(tmp_path)
     monkeypatch.setattr(
         "coordinator_core.lifecycle.git_common_dir", lambda repo_root: fake_common_dir
@@ -39,7 +40,7 @@ def _patch_git(monkeypatch, tmp_path):
     return sink
 
 
-def test_started_with_no_complete_counts_as_reconciliation_gap(tmp_path, monkeypatch):
+def test_started_with_no_complete_counts_as_reconciliation_gap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     sink.write_text(
         _row(kind="started", op="foo", t_start=1.0, corr_id="a") + "\n",
@@ -57,7 +58,7 @@ def test_started_with_no_complete_counts_as_reconciliation_gap(tmp_path, monkeyp
     assert foo.occupancy_ms == 0.0
 
 
-def test_complete_with_no_elapsed_ms_is_not_a_crash_and_not_counted(tmp_path, monkeypatch):
+def test_complete_with_no_elapsed_ms_is_not_a_crash_and_not_counted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     sink.write_text(
         _row(kind="complete", op="foo", outcome="ok", t_start=1.0) + "\n",
@@ -74,7 +75,7 @@ def test_complete_with_no_elapsed_ms_is_not_a_crash_and_not_counted(tmp_path, mo
     assert foo.occupancy_ms == 0.0
 
 
-def test_unparseable_line_is_counted_and_read_continues(tmp_path, monkeypatch):
+def test_unparseable_line_is_counted_and_read_continues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     lines = [
         "{not json",
@@ -91,7 +92,7 @@ def test_unparseable_line_is_counted_and_read_continues(tmp_path, monkeypatch):
     assert result.ops["foo"].ok_count == 1
 
 
-def test_op_appearing_in_two_generations_is_merged_under_full_history(tmp_path, monkeypatch):
+def test_op_appearing_in_two_generations_is_merged_under_full_history(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     sink.write_text(
         _row(kind="complete", op="foo", outcome="ok", elapsed_ms=10.0, t_start=2.0) + "\n",
@@ -117,8 +118,8 @@ def test_op_appearing_in_two_generations_is_merged_under_full_history(tmp_path, 
 
 
 def test_windowing_excludes_early_breach_late_clean_op_under_current_generation(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     sink.write_text(
         _row(kind="complete", op="hooks.track_touched_files", outcome="ok", elapsed_ms=50.0, t_start=2.0)
@@ -157,7 +158,7 @@ def test_windowing_excludes_early_breach_late_clean_op_under_current_generation(
     assert len(full.stamp.generation_paths) == 2
 
 
-def test_stamp_is_populated(tmp_path, monkeypatch):
+def test_stamp_is_populated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     sink.write_text(
         _row(kind="complete", op="foo", outcome="ok", elapsed_ms=10.0, t_start=1.0) + "\n",
@@ -179,7 +180,7 @@ def test_stamp_is_populated(tmp_path, monkeypatch):
     assert stamp.liveness_poisoned_modules == {}
 
 
-def test_reconciliation_counts_are_exact_with_paired_and_unpaired_rows(tmp_path, monkeypatch):
+def test_reconciliation_counts_are_exact_with_paired_and_unpaired_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     lines = [
         _row(kind="started", op="foo", t_start=1.0, corr_id="a"),
@@ -198,7 +199,7 @@ def test_reconciliation_counts_are_exact_with_paired_and_unpaired_rows(tmp_path,
     assert foo.ok_count == 1
 
 
-def test_occupancy_sums_ok_rows_only(tmp_path, monkeypatch):
+def test_occupancy_sums_ok_rows_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     lines = [
         _row(kind="complete", op="foo", outcome="ok", elapsed_ms=10.0, t_start=1.0),
@@ -218,7 +219,7 @@ def test_occupancy_sums_ok_rows_only(tmp_path, monkeypatch):
     assert foo.occupancy_ms == 10.0
 
 
-def test_max_observed_vs_max_completed_diverge_on_a_timeout_row(tmp_path, monkeypatch):
+def test_max_observed_vs_max_completed_diverge_on_a_timeout_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     lines = [
         _row(kind="complete", op="foo", outcome="ok", elapsed_ms=10.0, t_start=1.0),
@@ -235,7 +236,7 @@ def test_max_observed_vs_max_completed_diverge_on_a_timeout_row(tmp_path, monkey
     assert foo.max_completed_ms == 10.0
 
 
-def test_shape_ceiling_dominated_when_non_ok_share_exceeds_bar(tmp_path, monkeypatch):
+def test_shape_ceiling_dominated_when_non_ok_share_exceeds_bar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     lines = [
         _row(kind="complete", op="foo", outcome="ok", elapsed_ms=10.0, t_start=1.0),
@@ -250,7 +251,7 @@ def test_shape_ceiling_dominated_when_non_ok_share_exceeds_bar(tmp_path, monkeyp
     assert result.ops["foo"].shape is Shape.CEILING_DOMINATED
 
 
-def test_shape_tail_driven_when_mean_over_p50_bar_is_hit(tmp_path, monkeypatch):
+def test_shape_tail_driven_when_mean_over_p50_bar_is_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     values = [10.0] * 9 + [1000.0]
     lines = [
@@ -266,7 +267,7 @@ def test_shape_tail_driven_when_mean_over_p50_bar_is_hit(tmp_path, monkeypatch):
     assert result.ops["foo"].shape is Shape.TAIL_DRIVEN
 
 
-def test_shape_broad_when_neither_bar_is_hit(tmp_path, monkeypatch):
+def test_shape_broad_when_neither_bar_is_hit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     values = [10.0] * 10
     lines = [
@@ -282,7 +283,7 @@ def test_shape_broad_when_neither_bar_is_hit(tmp_path, monkeypatch):
     assert result.ops["foo"].shape is Shape.BROAD
 
 
-def test_n_times_p50_is_the_robust_twin_of_occupancy(tmp_path, monkeypatch):
+def test_n_times_p50_is_the_robust_twin_of_occupancy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     values = [10.0, 20.0, 30.0]
     lines = [
@@ -301,7 +302,7 @@ def test_n_times_p50_is_the_robust_twin_of_occupancy(tmp_path, monkeypatch):
     assert foo.n_times_p50_ms == 60.0
 
 
-def test_classify_liveness_three_known_answers():
+def test_classify_liveness_three_known_answers() -> None:
     # AC1b: coverage.gate dead, hooks.track_touched_files live,
     # handoff.reconcile_open DEAD as of the K-108 cut (2026-08-27, d20d56893)
     # -- against a real combined registry read.
@@ -330,7 +331,7 @@ def test_classify_liveness_three_known_answers():
     assert result["handoff.reconcile_open"] is Liveness.DEAD
 
 
-def test_classify_liveness_reports_unclassifiable_when_a_module_is_poisoned():
+def test_classify_liveness_reports_unclassifiable_when_a_module_is_poisoned() -> None:
     registry = frozenset({"alive.op"})
     result = classify_liveness(
         ["alive.op", "vanished.op"],
@@ -342,8 +343,8 @@ def test_classify_liveness_reports_unclassifiable_when_a_module_is_poisoned():
 
 
 def test_scan_occupancy_liveness_defaults_to_unclassifiable_not_live_when_poisoned(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     sink.write_text(
         _row(kind="complete", op="never.registered", outcome="ok", elapsed_ms=1.0, t_start=1.0)
@@ -360,7 +361,7 @@ def test_scan_occupancy_liveness_defaults_to_unclassifiable_not_live_when_poison
     assert result.ops["never.registered"].liveness is Liveness.UNCLASSIFIABLE
 
 
-def test_scan_occupancy_liveness_dead_when_absent_and_nothing_poisoned(tmp_path, monkeypatch):
+def test_scan_occupancy_liveness_dead_when_absent_and_nothing_poisoned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     sink.write_text(
         _row(kind="complete", op="never.registered", outcome="ok", elapsed_ms=1.0, t_start=1.0)
@@ -375,7 +376,7 @@ def test_scan_occupancy_liveness_dead_when_absent_and_nothing_poisoned(tmp_path,
     assert result.ops["never.registered"].liveness is Liveness.DEAD
 
 
-def test_unrouted_row_is_included_not_excluded(tmp_path, monkeypatch):
+def test_unrouted_row_is_included_not_excluded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     lines = [
         json.dumps(
@@ -395,7 +396,7 @@ def test_unrouted_row_is_included_not_excluded(tmp_path, monkeypatch):
     assert result.stamp.total_rows_read == 2
 
 
-def test_routed_and_routeless_counts_and_maxes_are_surfaced_per_op(tmp_path, monkeypatch):
+def test_routed_and_routeless_counts_and_maxes_are_surfaced_per_op(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     lines = [
         json.dumps(
@@ -417,7 +418,7 @@ def test_routed_and_routeless_counts_and_maxes_are_surfaced_per_op(tmp_path, mon
     assert foo.max_observed_ms == 999.0
 
 
-def test_stamp_reports_corpus_level_routeless_share(tmp_path, monkeypatch):
+def test_stamp_reports_corpus_level_routeless_share(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     lines = [
         json.dumps(
@@ -441,7 +442,7 @@ def test_stamp_reports_corpus_level_routeless_share(tmp_path, monkeypatch):
     assert result.stamp.routeless_share == pytest.approx(2 / 3)
 
 
-def test_admitted_on_field_uses_the_imported_predicate_max_breach(tmp_path, monkeypatch):
+def test_admitted_on_field_uses_the_imported_predicate_max_breach(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     sink.write_text(
         _row(kind="complete", op="foo", outcome="ok", elapsed_ms=5000.0, t_start=1.0) + "\n",
@@ -455,7 +456,7 @@ def test_admitted_on_field_uses_the_imported_predicate_max_breach(tmp_path, monk
     assert result.ops["foo"].admitted_on == ["max"]
 
 
-def test_admitted_on_field_is_empty_when_neither_axis_breaches(tmp_path, monkeypatch):
+def test_admitted_on_field_is_empty_when_neither_axis_breaches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     sink.write_text(
         _row(kind="complete", op="foo", outcome="ok", elapsed_ms=10.0, t_start=1.0) + "\n",
@@ -469,7 +470,7 @@ def test_admitted_on_field_is_empty_when_neither_axis_breaches(tmp_path, monkeyp
     assert result.ops["foo"].admitted_on == []
 
 
-def test_wall_clock_cutoff_requires_since():
+def test_wall_clock_cutoff_requires_since() -> None:
     import pytest as _pytest
 
     with _pytest.raises(ValueError):
@@ -482,8 +483,8 @@ def test_wall_clock_cutoff_requires_since():
 
 
 def test_wall_clock_cutoff_excludes_pre_fix_breach_but_full_history_column_shows_it(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     now = 1_000_000.0
     seven_days = 7 * 24 * 60 * 60.0
@@ -530,8 +531,8 @@ def test_wall_clock_cutoff_excludes_pre_fix_breach_but_full_history_column_shows
 
 
 def test_wall_clock_cutoff_row_outside_window_excluded_from_reconciliation(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     cutoff = 1000.0
     sink.write_text(
@@ -551,8 +552,8 @@ def test_wall_clock_cutoff_row_outside_window_excluded_from_reconciliation(
 
 
 def test_full_history_columns_mirror_windowed_when_no_cutoff_applied(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     sink = _patch_git(monkeypatch, tmp_path)
     sink.write_text(
         _row(kind="complete", op="foo", outcome="ok", elapsed_ms=10.0, t_start=1.0) + "\n",
@@ -568,7 +569,7 @@ def test_full_history_columns_mirror_windowed_when_no_cutoff_applied(
     assert foo.max_completed_ms == foo.max_completed_ms_full_history == 10.0
 
 
-def test_admitted_on_matches_module_level_predicate_directly(tmp_path, monkeypatch):
+def test_admitted_on_matches_module_level_predicate_directly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.op_budget_suspension import admitted_on
 
     sink = _patch_git(monkeypatch, tmp_path)

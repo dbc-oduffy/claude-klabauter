@@ -305,8 +305,9 @@ def test_the_verdict_follows_the_verify_agents_own_scoped_test_run():
 
 def test_a_merged_leg_that_returns_no_test_leaves_the_result_unread_and_no_target_stays_degraded():
     script = _compose(**_JUDGE_KW)
-    assert "{ status: 'degraded', summary: 'No terminal test run: ' + _manifest.no_test_target.reason }" in script
-    assert script.index("label: 'verify'") < script.index("_manifest.no_test_target")
+    degraded = "{ status: 'degraded', summary: 'No terminal test run: ' + _manifest.no_test_target.reason }"
+    assert degraded in script
+    assert script.index("label: 'verify'") < script.index(degraded)
 
 
 def test_the_review_phase_runs_on_every_arm_but_xs_and_xs_hands_commit_an_empty_wave():
@@ -510,18 +511,13 @@ def test_the_scout_runs_ask_stage_as_its_last_act_for_xs_only():
     assert "stage_reply" in ask_compose._ASK_SCOUT_STAGED_SCHEMA["properties"]
 
 
-def test_the_presized_gate_agent_runs_ask_stage_after_the_gate_op(monkeypatch):
+def test_the_presized_gate_agent_stages_inside_the_one_gate_op(monkeypatch):
     gate = _gate_prompt(_presized(monkeypatch))
-    assert gate.index(OP_ASK_GATE) < gate.index(OP_ASK_STAGE)
+    assert OP_ASK_GATE in gate and OP_ASK_STAGE not in gate
+    assert "stage_act: true, gated: _gated" in gate
 
 
-def test_the_gate_prompt_stages_xs_only_and_passes_an_s_resume_manifest_through(monkeypatch):
-    gate = _gate_prompt(_presized(monkeypatch))
-    stage_act = gate.split("As your very last act", 1)[1]
-    base, edge = stage_act.split(", except that with a resume_plan in the gate reply", 1)
-    assert "arm is XS" in base and "plan_path" not in base and "resume_plan is non-null" not in gate
-    assert "`plan_path` to it" in edge and "drop `writes`, `gated` and `sizing_path`" in edge
-    assert "an S resume stages itself" in gate and "stage_reply" in gate
+def test_the_gate_reply_schemas_carry_the_stage_reply(monkeypatch):
     assert "stage_reply" in ask_compose._GATE_STAGED_SCHEMA["properties"]
     assert "stage_reply" in ask_compose._ASK_SCOUT_STAGED_SCHEMA["properties"]
     assert "stage_error" not in ask_compose._GATE_STAGED_SCHEMA["properties"]

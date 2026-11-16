@@ -9,12 +9,13 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.warm import breadcrumb
+from pathlib import Path
 
 MSG = {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}
 
 
 @pytest.fixture
-def client(tmp_path, monkeypatch):
+def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import coordinator_core.warm.client as wc
 
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path / "rt"))
@@ -35,7 +36,7 @@ def client(tmp_path, monkeypatch):
     return wc, dest
 
 
-def test_reply_is_warm_served_once_marker_released(client, capsys):
+def test_reply_is_warm_served_once_marker_released(client, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.invoke.warm_miss import settle_warm_miss
 
     wc, dest = client
@@ -46,7 +47,7 @@ def test_reply_is_warm_served_once_marker_released(client, capsys):
     assert "ENGINE UNREACHABLE" not in capsys.readouterr().err
 
 
-def test_reply_is_cold_while_marker_still_held(client, capsys):
+def test_reply_is_cold_while_marker_still_held(client, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.invoke.warm_miss import settle_warm_miss
 
     _wc, dest = client

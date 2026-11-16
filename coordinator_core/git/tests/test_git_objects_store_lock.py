@@ -18,7 +18,7 @@ _REPO_ROOT = str(Path(__file__).resolve().parents[3])
 
 
 @pytest.fixture(autouse=True)
-def _unpaused(monkeypatch):
+def _unpaused(monkeypatch: pytest.MonkeyPatch) -> None:
     """These tests pin the lock around the fold; the paused behaviour is pinned in test_pack_deletion_pause."""
     from coordinator_core.git import pack_deletion_pause
 
@@ -89,14 +89,14 @@ def _read_all(common: Path, pending: dict) -> None:
         assert got is not None and got[1] == payload
 
 
-def test_write_pack_uncontended_places_a_pack(common: Path):
+def test_write_pack_uncontended_places_a_pack(common: Path) -> None:
     pending = _pending(12, b"free")
     go._write_pack(common, pending)
     assert any(n.endswith(".idx") for n in _packs(common))
     _read_all(common, pending)
 
 
-def test_flush_pack_uncontended_places_a_pack_and_tail_marker(common: Path):
+def test_flush_pack_uncontended_places_a_pack_and_tail_marker(common: Path) -> None:
     pending = _pending(12, b"free-flush")
     go._flush_pack(common, pending)
     names = _packs(common)
@@ -104,21 +104,21 @@ def test_flush_pack_uncontended_places_a_pack_and_tail_marker(common: Path):
     _read_all(common, pending)
 
 
-def test_write_pack_held_elsewhere_falls_back_loose(common: Path, held_elsewhere):
+def test_write_pack_held_elsewhere_falls_back_loose(common: Path, held_elsewhere) -> None:
     pending = _pending(12, b"busy-write")
     go._write_pack(common, pending)
     assert _packs(common) == []
     _read_all(common, pending)
 
 
-def test_flush_pack_held_elsewhere_never_touches_pack_dir(common: Path, held_elsewhere):
+def test_flush_pack_held_elsewhere_never_touches_pack_dir(common: Path, held_elsewhere) -> None:
     pending = _pending(12, b"busy-flush")
     go._flush_pack(common, pending)
     assert _packs(common) == []
     _read_all(common, pending)
 
 
-def test_flush_pack_held_elsewhere_keeps_existing_tail(common: Path):
+def test_flush_pack_held_elsewhere_keeps_existing_tail(common: Path) -> None:
     first = _pending(12, b"tail")
     go._flush_pack(common, first)
     before = _packs(common)

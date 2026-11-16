@@ -18,6 +18,7 @@ from __future__ import annotations
 import re
 from typing import Any, Dict
 
+from coordinator_core.bash_guards._dc_blanket_add import _awk_quote_aware_split
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
 #: The CLI must be what a segment EXECUTES -- first word, or the script handed
@@ -26,17 +27,11 @@ _CLI = r"(?:\S*[/\\])?(?:(?:percolate-round|percolate-push|coordinator-publish)(
 _PUBLISH_CLI_RE = re.compile(
     r"(?:^|[;&|(]|&&|\|\|)\s*(?:timeout\s+\S+\s+)?(?:[\"']?\S*(?:python3?|py|\$_py|\$\{?_py\}?)[\"']?\s+(?:-\S+\s+)*)?"
     r"[\"']?" + _CLI + r"[\"']?(?=$|[\s;&|)])",
-    re.MULTILINE,
-)
-
-#: A heredoc body is data, not a command line.
-_HEREDOC_BODY_RE = re.compile(
-    r"<<-?\s*['\"]?(\w+)['\"]?[^\n]*\n.*?^\s*\1\s*$", re.MULTILINE | re.DOTALL
 )
 
 #: Separators inside a quoted span are text (`grep 'a|percolate-push' f`), not
 #: segment boundaries.
-_QUOTED_RE = re.compile(r"\"[^\"\n]*\"|'[^'\n]*'")
+_QUOTED_RE = re.compile(r"\"[^\"]*\"|'[^']*'")
 _SEPARATORS_RE = re.compile(r"[;&|()]")
 
 #: An executed publisher asked only for usage runs in milliseconds.
@@ -51,11 +46,14 @@ def _mask_quoted_separators(cmd: str) -> str:
 
 
 def _runs_a_round(cmd: str) -> bool:
-    for match in _PUBLISH_CLI_RE.finditer(cmd):
-        tail = cmd[match.end():]
-        end = _SEGMENT_END_RE.search(tail)
-        if not _HELP_FLAG_RE.search(tail[: end.start()] if end else tail):
-            return True
+    """Heredoc bodies and quoted spans are data: only top-level segments are matched."""
+    for seg in _awk_quote_aware_split(cmd):
+        masked = _mask_quoted_separators(seg)
+        for match in _PUBLISH_CLI_RE.finditer(masked):
+            tail = masked[match.end():]
+            end = _SEGMENT_END_RE.search(tail)
+            if not _HELP_FLAG_RE.search(tail[: end.start()] if end else tail):
+                return True
     return False
 
 
@@ -68,7 +66,7 @@ def check_background_publish(payload: Dict[str, Any]) -> Any:
     cmd = tool_input.get("command")
     if not isinstance(cmd, str):
         return None
-    if not _runs_a_round(_mask_quoted_separators(_HEREDOC_BODY_RE.sub("", cmd))):
+    if not _runs_a_round(cmd):
         return None
     from coordinator_core.bash_guards._rewrite_support import _allow_rewrite_record
 

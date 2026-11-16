@@ -20,38 +20,39 @@ import os
 import pytest
 
 from coordinator_core.session import fleet_mode
+from pathlib import Path
 
 
 @pytest.fixture
-def isolated_home(tmp_path, monkeypatch):
+def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     return tmp_path
 
 
-def test_fleet_mode_path_is_settings_home_rooted(isolated_home):
+def test_fleet_mode_path_is_settings_home_rooted(isolated_home) -> None:
     path = fleet_mode.fleet_mode_path()
     assert path == isolated_home / "fleet-mode.json"
     assert path.parent == isolated_home
 
 
-def test_round_trip_write_then_read(isolated_home):
+def test_round_trip_write_then_read(isolated_home) -> None:
     record = {"mode": "solo", "set_by": "pm", "set_at": "2026-08-29T00:00:00Z"}
     assert fleet_mode.write_fleet_mode(record) is True
     assert fleet_mode.read_fleet_mode() == record
 
 
-def test_round_trip_overwrite(isolated_home):
+def test_round_trip_overwrite(isolated_home) -> None:
     fleet_mode.write_fleet_mode({"mode": "solo"})
     fleet_mode.write_fleet_mode({"mode": "fleet"})
     assert fleet_mode.read_fleet_mode() == {"mode": "fleet"}
 
 
-def test_read_absent_file_returns_empty_mapping(isolated_home):
+def test_read_absent_file_returns_empty_mapping(isolated_home) -> None:
     assert fleet_mode.fleet_mode_path().exists() is False
     assert fleet_mode.read_fleet_mode() == {}
 
 
-def test_read_unreadable_file_returns_empty_mapping(isolated_home, monkeypatch):
+def test_read_unreadable_file_returns_empty_mapping(isolated_home, monkeypatch: pytest.MonkeyPatch) -> None:
     fleet_mode.write_fleet_mode({"mode": "solo"})
 
     real_read_text = fleet_mode.Path.read_text
@@ -64,25 +65,25 @@ def test_read_unreadable_file_returns_empty_mapping(isolated_home, monkeypatch):
     monkeypatch.setattr(fleet_mode.Path, "read_text", real_read_text)
 
 
-def test_read_malformed_json_returns_empty_mapping(isolated_home):
+def test_read_malformed_json_returns_empty_mapping(isolated_home) -> None:
     path = fleet_mode.fleet_mode_path()
     path.write_text("{not valid json", encoding="utf-8")
     assert fleet_mode.read_fleet_mode() == {}
 
 
-def test_read_valid_json_wrong_shape_returns_empty_mapping(isolated_home):
+def test_read_valid_json_wrong_shape_returns_empty_mapping(isolated_home) -> None:
     path = fleet_mode.fleet_mode_path()
     path.write_text(json.dumps(["a", "list", "not", "a", "dict"]), encoding="utf-8")
     assert fleet_mode.read_fleet_mode() == {}
 
 
-def test_read_unknown_key_still_returns_the_mapping_as_is(isolated_home):
+def test_read_unknown_key_still_returns_the_mapping_as_is(isolated_home) -> None:
     record = {"totally_unrecognized_key": "value"}
     fleet_mode.write_fleet_mode(record)
     assert fleet_mode.read_fleet_mode() == record
 
 
-def test_write_atomicity_no_partial_file_observable(isolated_home, monkeypatch):
+def test_write_atomicity_no_partial_file_observable(isolated_home, monkeypatch: pytest.MonkeyPatch) -> None:
     fleet_mode.write_fleet_mode({"mode": "solo"})
 
     real_replace = os.replace
@@ -100,12 +101,12 @@ def test_write_atomicity_no_partial_file_observable(isolated_home, monkeypatch):
     assert fleet_mode.read_fleet_mode() == {"mode": "fleet"}
 
 
-def test_write_requires_dict(isolated_home):
+def test_write_requires_dict(isolated_home) -> None:
     with pytest.raises(TypeError):
         fleet_mode.write_fleet_mode(["not", "a", "dict"])  # type: ignore[arg-type]
 
 
-def test_write_non_serializable_dict_value_leaves_no_tmp_file(isolated_home):
+def test_write_non_serializable_dict_value_leaves_no_tmp_file(isolated_home) -> None:
     import datetime
 
     record = {"set_at": datetime.datetime(2026, 8, 29)}

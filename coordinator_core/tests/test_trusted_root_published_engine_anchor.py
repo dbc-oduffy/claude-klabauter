@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from coordinator_core import trusted_root_guard as g
+from pathlib import Path
+import pytest
 
 
-def _env(tmp_path, registry_lines):
+def _env(tmp_path, registry_lines) -> dict[str, str]:
     sh = tmp_path / "settings-home"
     (sh / "machine-local").mkdir(parents=True)
     (sh / "machine-local" / "registry.toml").write_text("\n".join(registry_lines) + "\n", encoding="utf-8")
@@ -13,7 +15,7 @@ def _env(tmp_path, registry_lines):
     return {"COORDINATOR_SETTINGS_HOME": str(sh), "HOME": str(home)}
 
 
-def _mirror(tmp_path, stamp="sha:abc\n"):
+def _mirror(tmp_path, stamp: str | None = "sha:abc\n"):
     m = tmp_path / "klabauter"
     (m / "coordinator").mkdir(parents=True)
     (m / "coordinator_core").mkdir()
@@ -22,46 +24,46 @@ def _mirror(tmp_path, stamp="sha:abc\n"):
     return m
 
 
-def _klabauter_env(tmp_path, m):
+def _klabauter_env(tmp_path, m) -> dict[str, str]:
     return _env(
         tmp_path,
         ["[repos]", f'claude_klabauter = "{m.as_posix()}"', "[engine]", 'target = "claude-klabauter"'],
     )
 
 
-def test_stamped_mirror_is_trusted(tmp_path):
+def test_stamped_mirror_is_trusted(tmp_path: Path) -> None:
     m = _mirror(tmp_path)
     env = _klabauter_env(tmp_path, m)
     assert g.is_trusted(str(m / "coordinator"), env=env) is True
     assert g.is_trusted(str(m), env=env) is True
 
 
-def test_unstamped_mirror_is_not_trusted(tmp_path):
+def test_unstamped_mirror_is_not_trusted(tmp_path: Path) -> None:
     m = _mirror(tmp_path, stamp=None)
     env = _klabauter_env(tmp_path, m)
     assert g._published_engine_root(env) == ""
     assert g.is_trusted(str(m / "coordinator"), env=env) is False
 
 
-def test_empty_stamp_is_not_trusted(tmp_path):
+def test_empty_stamp_is_not_trusted(tmp_path: Path) -> None:
     m = _mirror(tmp_path, stamp="")
     env = _klabauter_env(tmp_path, m)
     assert g.is_trusted(str(m / "coordinator"), env=env) is False
 
 
-def test_registry_key_absent_gives_empty(tmp_path):
+def test_registry_key_absent_gives_empty(tmp_path: Path) -> None:
     env = _env(tmp_path, ["[engine]", 'target = "x"'])
     assert g._published_engine_root(env) == ""
     assert g._published_engine_root_rungs(env)[0][1] == "<absent>"
 
 
-def test_traversal_under_mirror_still_rejected(tmp_path):
+def test_traversal_under_mirror_still_rejected(tmp_path: Path) -> None:
     m = _mirror(tmp_path)
     env = _klabauter_env(tmp_path, m)
     assert g.is_trusted(str(m / "coordinator" / ".." / "x"), env=env) is False
 
 
-def test_pure_klabauter_registry_trusts_stamped_mirror(tmp_path, monkeypatch):
+def test_pure_klabauter_registry_trusts_stamped_mirror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Pure klabauter install: no claude_klabauter keys, no .claude-klabauter-live-root. Self-location
     # is neutralised so the anchor under test is the only thing that can answer.
     monkeypatch.setattr(g, "_self_located_engine_root", lambda: "")
@@ -71,7 +73,7 @@ def test_pure_klabauter_registry_trusts_stamped_mirror(tmp_path, monkeypatch):
     assert g.is_trusted(str(m / "coordinator"), env=env) is True
 
 
-def test_diagnosis_names_published_engine_rung(tmp_path):
+def test_diagnosis_names_published_engine_rung(tmp_path: Path) -> None:
     m = _mirror(tmp_path)
     env = _klabauter_env(tmp_path, m)
     text = g._diagnose_untrusted("/elsewhere", env)

@@ -22,6 +22,7 @@ from coordinator_core.ops.dispatch_emit.tests import test_ask_compose_plan_blitz
 from coordinator_core.ops.dispatch_emit.tests import test_ask_compose_stage_handle as handle
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import stage_root  # noqa: F401
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -40,13 +41,13 @@ def _assert_parked(out: dict) -> None:
     assert out["result"]["halt_commit"] is not None
 
 
-def test_a_parked_stage_reply_halts_as_a_parked_terminal_and_commits_the_halt_record(monkeypatch):
+def test_a_parked_stage_reply_halts_as_a_parked_terminal_and_commits_the_halt_record(monkeypatch: pytest.MonkeyPatch) -> None:
     out = handle._run(handle._script(monkeypatch), _PARKED_REPLY)
     _assert_parked(out)
     assert out["workflowCalls"] == []
 
 
-def test_the_parked_reason_names_an_own_marker_and_never_the_workflow_revise_text(monkeypatch):
+def test_the_parked_reason_names_an_own_marker_and_never_the_workflow_revise_text(monkeypatch: pytest.MonkeyPatch) -> None:
     own = {"run_id": "run-1", "from": "", "inherited": False}
     out = handle._run(handle._script(monkeypatch), {**_PARKED_REPLY, PARK_SOURCE_REPLY_KEY: own})
     reason = out["result"]["halted_by"]["reason"]
@@ -54,19 +55,19 @@ def test_the_parked_reason_names_an_own_marker_and_never_the_workflow_revise_tex
     assert "workflow.revise" not in reason
 
 
-def test_a_parked_reply_without_a_source_says_so(monkeypatch):
+def test_a_parked_reply_without_a_source_says_so(monkeypatch: pytest.MonkeyPatch) -> None:
     bare = {PARKED_REPLY_KEY: "plan", "plan_path": handle._PLAN}
     out = handle._run(handle._script(monkeypatch), bare)
     assert out["result"]["halted_by"]["reason"] == "parked after plan: stop_after=plan marker of unreported source"
 
 
-def test_a_parked_stage_reply_dispatches_no_executor_or_review(monkeypatch):
+def test_a_parked_stage_reply_dispatches_no_executor_or_review(monkeypatch: pytest.MonkeyPatch) -> None:
     out = handle._run(handle._script(monkeypatch), _PARKED_REPLY)
     labels = handle._labels(out)
     assert "verify" not in labels and not [lab for lab in labels if lab and lab.startswith(("work:", "C"))], labels
 
 
-def test_a_parked_reply_carrying_an_error_is_a_refusal_not_a_park(monkeypatch):
+def test_a_parked_reply_carrying_an_error_is_a_refusal_not_a_park(monkeypatch: pytest.MonkeyPatch) -> None:
     out = handle._run(handle._script(monkeypatch), {**_PARKED_REPLY, "error": "boom"})
     assert out["result"]["halted_by"]["reason"] == "stage refused: boom"
 
@@ -90,20 +91,20 @@ def _assert_stage_wait_park(out: dict) -> None:
     assert 'dispatch.release_run_token {"run_id": "ask-blocker-1"}' in halt["next_action"]
 
 
-def test_the_stage_wait_literal_matches_the_stage_op():
+def test_the_stage_wait_literal_matches_the_stage_op() -> None:
     from coordinator_core.ops.dispatch_emit import ask_compose
     from coordinator_core.ops.dispatch_emit.ask_stage import STAGE_WAIT_PARKED
 
     assert ask_compose._STAGE_WAIT_PARKED == STAGE_WAIT_PARKED
 
 
-def test_a_stage_wait_reply_parks_naming_the_blocker_and_the_refire_never_a_refusal(monkeypatch):
+def test_a_stage_wait_reply_parks_naming_the_blocker_and_the_refire_never_a_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
     out = handle._run(handle._script(monkeypatch), _STAGE_WAIT_REPLY)
     _assert_stage_wait_park(out)
     assert out["workflowCalls"] == []
 
 
-def test_a_stage_wait_plan_blitz_ready_reply_parks_the_same_way(monkeypatch):
+def test_a_stage_wait_plan_blitz_ready_reply_parks_the_same_way(monkeypatch: pytest.MonkeyPatch) -> None:
     out = blitz._run(
         blitz._script(monkeypatch, {"planPath": blitz._PLAN, "readyOpReply": _STAGE_WAIT_REPLY}),
         read={"stage_reply": _STAGE_WAIT_REPLY},
@@ -111,12 +112,12 @@ def test_a_stage_wait_plan_blitz_ready_reply_parks_the_same_way(monkeypatch):
     _assert_stage_wait_park(out)
 
 
-def test_a_stage_wait_reply_carrying_an_error_is_still_a_refusal(monkeypatch):
+def test_a_stage_wait_reply_carrying_an_error_is_still_a_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
     out = handle._run(handle._script(monkeypatch), {**_STAGE_WAIT_REPLY, "error": "boom"})
     assert out["result"]["halted_by"]["reason"] == "stage refused: boom"
 
 
-def test_a_reply_with_neither_key_still_halts_as_not_whole(monkeypatch):
+def test_a_reply_with_neither_key_still_halts_as_not_whole(monkeypatch: pytest.MonkeyPatch) -> None:
     out = handle._run(handle._script(monkeypatch), {})
     reason = handle._halt_reason(out)
     assert reason.startswith("no folded stage manifest") and "stage_reply absent" in reason
@@ -148,7 +149,7 @@ def _hold_calls(out: dict) -> list[dict]:
     return [c for c in out["calls"] if c["label"] == "blitz-stage-read" and "Hold until they land" in c["prompt"]]
 
 
-def test_a_stage_wait_park_holds_then_stages_once_the_blocker_lands(monkeypatch):
+def test_a_stage_wait_park_holds_then_stages_once_the_blocker_lands(monkeypatch: pytest.MonkeyPatch) -> None:
     manifest = {**handle.big_manifest(1)}
     landed = handle.stage_reply(manifest)
     out = _run_with_replies(handle._script(monkeypatch), _STAGE_WAIT_REPLY, {"blitz-stage-read": {"stage_reply": landed}})
@@ -159,7 +160,7 @@ def test_a_stage_wait_park_holds_then_stages_once_the_blocker_lands(monkeypatch)
     assert "stage refused" not in str(halt)
 
 
-def test_a_stage_wait_hold_that_times_out_still_parks_naming_the_blocker(monkeypatch):
+def test_a_stage_wait_hold_that_times_out_still_parks_naming_the_blocker(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run_with_replies(
         handle._script(monkeypatch), _STAGE_WAIT_REPLY, {"blitz-stage-read": {"stage_reply": _STAGE_WAIT_REPLY}}
     )
@@ -167,25 +168,25 @@ def test_a_stage_wait_hold_that_times_out_still_parks_naming_the_blocker(monkeyp
     _assert_stage_wait_park(out)
 
 
-def test_a_stage_wait_hold_that_ends_in_a_refusal_halts_as_a_refusal(monkeypatch):
+def test_a_stage_wait_hold_that_ends_in_a_refusal_halts_as_a_refusal(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run_with_replies(
         handle._script(monkeypatch), _STAGE_WAIT_REPLY, {"blitz-stage-read": {"stage_reply": {"error": "boom"}}}
     )
     assert out["result"]["halted_by"]["reason"] == "stage refused: boom"
 
 
-def test_a_plan_park_never_holds(monkeypatch):
+def test_a_plan_park_never_holds(monkeypatch: pytest.MonkeyPatch) -> None:
     out = handle._run(handle._script(monkeypatch), _PARKED_REPLY)
     assert not _hold_calls(out)
 
 
-def test_a_parked_plan_blitz_ready_reply_halts_as_a_parked_terminal(monkeypatch):
+def test_a_parked_plan_blitz_ready_reply_halts_as_a_parked_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     out = blitz._run(blitz._script(monkeypatch, {"planPath": blitz._PLAN, "readyOpReply": _PARKED_REPLY}))
     _assert_parked(out)
     assert "blitz-stage-read" not in blitz._labels(out)
 
 
-def test_a_blitz_ready_reply_with_neither_key_still_halts_as_not_whole(monkeypatch):
+def test_a_blitz_ready_reply_with_neither_key_still_halts_as_not_whole(monkeypatch: pytest.MonkeyPatch) -> None:
     out = blitz._run(blitz._script(monkeypatch, {"planPath": blitz._PLAN, "readyOpReply": {"rows": []}}))
     assert out["result"]["halted_by"]["reason"] == "stage manifest relay is not whole: manifest_handle"
 
@@ -198,7 +199,7 @@ def _emit_time_script(*, in_run_commit: bool = False, sizing_rel: str | None = N
     )
 
 
-def test_an_emit_time_stop_after_ends_as_the_same_parked_halt_naming_mise_prep(tmp_path, monkeypatch, capsys, m_plus_known_arm):
+def test_an_emit_time_stop_after_ends_as_the_same_parked_halt_naming_mise_prep(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], m_plus_known_arm) -> None:
     scout, decision, verdict, rel = e2e._fixture(tmp_path, monkeypatch, capsys, "M", "ceo", [])
     stub = {**e2e._stub(scout, decision, verdict), "gate": verdict}
     out = e2e._run_script(_emit_time_script(sizing_rel=rel), stub)
@@ -209,7 +210,7 @@ def test_an_emit_time_stop_after_ends_as_the_same_parked_halt_naming_mise_prep(t
     assert "/mise-prep" in halt["next_action"] and e2e.PLAN_PATH in halt["next_action"]
 
 
-def test_an_emit_time_stop_after_with_no_landed_plan_on_a_non_xs_arm_is_a_refusal(tmp_path, monkeypatch, capsys):
+def test_an_emit_time_stop_after_with_no_landed_plan_on_a_non_xs_arm_is_a_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     # An S sizing without positive S evidence resizes to XS at assemble; the precedent flag keeps it on the S arm.
     # The Workflow runtime provides a `log` global that the refusal path calls; the shared e2e harness defines none.
     monkeypatch.setattr(e2e, "_HARNESS", e2e._HARNESS.replace("const phase =", "const log = () => {};\nconst phase =", 1))
@@ -223,14 +224,14 @@ def test_an_emit_time_stop_after_with_no_landed_plan_on_a_non_xs_arm_is_a_refusa
     assert "route" not in out["result"] and "planned" not in out["result"]
 
 
-def test_an_emit_time_park_is_set_before_the_halt_record_commit_that_lands_it():
+def test_an_emit_time_park_is_set_before_the_halt_record_commit_that_lands_it() -> None:
     script = _emit_time_script(in_run_commit=True)
     assert script.index("parked after plan: stop_after=plan") < script.index("await _commitHaltRecord()")
     assert "halt_commit: _haltCommit" in script
 
 
 @pytest.mark.parametrize("research", [False, True])
-def test_every_chain_literal_carries_chain_parent_and_stop_after_only_when_the_run_has_one(research):
+def test_every_chain_literal_carries_chain_parent_and_stop_after_only_when_the_run_has_one(research) -> None:
     from coordinator_core.ops.dispatch_emit.ask_compose import _chain_emit_params_js
 
     bare = _chain_emit_params_js("SZ", research=research)
@@ -240,7 +241,7 @@ def test_every_chain_literal_carries_chain_parent_and_stop_after_only_when_the_r
 
 
 @pytest.mark.parametrize("stop_after", [None, STOP_AFTER_PLAN])
-def test_the_composed_chain_legs_thread_the_runs_stop_after_into_their_emit_params(stop_after):
+def test_the_composed_chain_legs_thread_the_runs_stop_after_into_their_emit_params(stop_after) -> None:
     from coordinator_core.ops.dispatch_emit import ask_compose as ac
 
     legs = {

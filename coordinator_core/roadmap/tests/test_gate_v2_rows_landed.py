@@ -1,11 +1,12 @@
 """gate_v2: a baton whose non-terminal linked plan has every row landed is coded and shipped_unstamped."""
 from coordinator_core.roadmap import gate_v2
 from coordinator_core.roadmap.tests.test_gate_v2 import baton, by_id, root  # noqa: F401
+import pytest
 
 _ROW = "- id: {id}\n  title: t\n  change_kind: code-edit\n  surface: a.py\n  disposition: {disp}\n  deferred: false\n"
 
 
-def _plan(root, name, dispositions, status="reviewed"):
+def _plan(root, name, dispositions, status: str = "reviewed") -> str:
     rows = "".join(_ROW.format(id=f"C{i}", disp=d) for i, d in enumerate(dispositions))
     path = root / "docs/plans" / f"{name}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -16,11 +17,11 @@ def _plan(root, name, dispositions, status="reviewed"):
     return f"docs/plans/{name}.md"
 
 
-def _coded(sha="abc1234"):
+def _coded(sha: str = "abc1234") -> str:
     return f"coded\n  disposition_ref: {sha}"
 
 
-def test_landed_rows_on_a_reviewed_plan_report_shipped_unstamped_with_coded_sha(root):
+def test_landed_rows_on_a_reviewed_plan_report_shipped_unstamped_with_coded_sha(root) -> None:
     gp = _plan(root, "p", [_coded("aaa1111"), _coded("bbb2222")])
     baton(root, "a", governing_plan=gp)
     report = gate_v2.compute_gate_report(root)
@@ -31,7 +32,7 @@ def test_landed_rows_on_a_reviewed_plan_report_shipped_unstamped_with_coded_sha(
     assert by_id(report)["a"]["candidate"] is False
 
 
-def test_an_open_row_keeps_the_baton_a_candidate(root):
+def test_an_open_row_keeps_the_baton_a_candidate(root) -> None:
     gp = _plan(root, "p", [_coded(), "open"])
     baton(root, "a", governing_plan=gp)
     report = gate_v2.compute_gate_report(root)
@@ -39,21 +40,21 @@ def test_an_open_row_keeps_the_baton_a_candidate(root):
     assert by_id(report)["a"]["candidate"] is True
 
 
-def test_terminal_plan_entry_carries_plan_terminal_basis(root):
+def test_terminal_plan_entry_carries_plan_terminal_basis(root) -> None:
     gp = _plan(root, "p", ["open"], status="implemented")
     baton(root, "a", governing_plan=gp)
     entry = gate_v2.compute_gate_report(root)["shipped_unstamped"][0]
     assert entry["basis"] == "plan_terminal" and "coded_sha" not in entry
 
 
-def test_landed_plan_makes_the_baton_coded_so_its_blockers_do_not_close_it(root):
+def test_landed_plan_makes_the_baton_coded_so_its_blockers_do_not_close_it(root) -> None:
     gp = _plan(root, "p", [_coded()])
     baton(root, "a", governing_plan=gp, blocked_by=["no-such-record"])
     row = gate_v2.compute_gate_report(root, subject="a")["batons"][0]
     assert row["planning_gate"]["open"] is True and row["execution_gate"]["open"] is True
 
 
-def test_a_plan_shared_by_two_batons_is_read_once(root, monkeypatch):
+def test_a_plan_shared_by_two_batons_is_read_once(root, monkeypatch: pytest.MonkeyPatch) -> None:
     gp = _plan(root, "p", [_coded()])
     baton(root, "a", governing_plan=gp)
     baton(root, "b", governing_plan=gp)

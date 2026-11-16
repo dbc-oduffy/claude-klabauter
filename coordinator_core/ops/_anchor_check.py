@@ -1,5 +1,5 @@
 """In-process evaluator for an anchor premise's check. No spawn, no walk: it streams only the
-files the command names (any size), under the repo root it is handed. A stage that reads a git ref
+files the command names (up to MAX_LANE_BYTES read in total), under the repo root it is handed. A stage that reads a git ref
 (its own `git grep ... REF -- FILE`, or the caller's base_ref) counts over blobs the caller
 fetched once with `read_at_ref`; the evaluator itself never spawns.
 
@@ -8,6 +8,7 @@ with `git`; FLAGS = c (or n, which implies c) plus at most one of E or F (a line
 pattern matches); command := stage (("&&" | ";") stage)*; expect := N | >=N | <=N | >N | <N |
 "N then M [then K ...]". Anything else is NOT_EVALUABLE."""
 
+import functools
 import re
 import shlex
 from pathlib import Path, PurePosixPath
@@ -17,6 +18,9 @@ GRAMMAR: str = (
     '[git] grep -c [-E|-F] (PATTERN | -e PATTERN ...) [REF --] FILE [&&|; grep ...]; '
     'expect N|>=N|<=N|>N|<N|"N then M"'
 )
+
+# Total bytes one check may read across its stages; past it the check is NOT_EVALUABLE, never a hang.
+MAX_LANE_BYTES: int = 16 * 1024 * 1024
 
 _GLOB = set("*?[]{}")
 _BRE_UNESCAPE = set("|(){}")
@@ -103,7 +107,7 @@ def _parse_stage(words: List[str]) -> Stage:
             patterns.append(rest.pop(0))
             continue
         body = flag[1:]
-        if not body or not set(body) <= set("cEFn"):
+        if not body or not set(body) <= set("cEFni"):
             raise _NotEvaluable(f"unsupported grep flag {flag!r}")
         flags.extend(body)
     if flags.count("n") > 1:
@@ -133,12 +137,17 @@ def _parse_stage(words: List[str]) -> Stage:
             raise _NotEvaluable("a stage takes exactly one pattern and one file")
         patterns.append(rest.pop(0))
     mode = "F" if "F" in flags else "E" if "E" in flags else "B"
+    if "i" in flags:
+        mode += "i"
     return mode, patterns, rest[0], ref
 
 
 def _compile(mode: str, pattern: str) -> "re.Pattern[str]":
+    """mode is F, E or B, suffixed `i` for a case-insensitive match."""
+    ignore = re.IGNORECASE if mode.endswith("i") else 0
+    mode = mode[0]
     if mode == "F":
-        return re.compile(re.escape(pattern))
+        return re.compile(re.escape(pattern), ignore)
     if "[[:" in pattern or "[[." in pattern or "[[=" in pattern:
         raise _NotEvaluable("POSIX bracket classes are not evaluable")
     out: List[str] = []
@@ -168,7 +177,7 @@ def _compile(mode: str, pattern: str) -> "re.Pattern[str]":
     if _NESTED_QUANTIFIER.search(compiled) or _ambiguous_alternation(compiled):
         raise _NotEvaluable("nested quantifier is not evaluable (backtracking risk)")
     try:
-        return re.compile(compiled)
+        return re.compile(compiled, ignore)
     except re.error as exc:
         raise _NotEvaluable(f"pattern does not compile: {exc}")
 
@@ -190,25 +199,69 @@ def _resolve(file_arg: str, repo_root: Path) -> Path:
     return target
 
 
-def _count_lines(regexes: "List[re.Pattern[str]]", raws: Iterable[bytes]) -> int:
+@functools.lru_cache(maxsize=64)
+def _fast_pattern(sources: "Tuple[str, ...]", flags: int = 0) -> "Optional[re.Pattern[bytes]]":
+    """One bytes alternation equal to any of the pattern `sources` on ASCII lines, or None when a
+    pattern is not pure ASCII or the alternation does not compile (callers fall back to the
+    decoded path). `flags` carries IGNORECASE, which a stage applies to all its patterns alike.
+    Cached: the same stage patterns recur across every file of a check."""
+    try:
+        src = "|".join(f"(?:{s})" for s in sources)
+        return re.compile(src.encode("ascii"), flags)
+    except (UnicodeEncodeError, re.error):
+        return None
+
+
+def _count_lines(
+    regexes: "List[re.Pattern[str]]", raws: Iterable[bytes], stop: Optional[int] = None
+) -> int:
+    """Lines matching any regex; with `stop`, returns as soon as the count reaches it. An ASCII
+    line is searched as bytes by one alternation; only a line with a non-ASCII byte is decoded."""
+    fast = _fast_pattern(
+        tuple(r.pattern for r in regexes), regexes[0].flags & re.IGNORECASE if regexes else 0
+    )
     n = 0
     for raw in raws:
         if raw.endswith(b"\r\n"):
             raw = raw[:-2]
         elif raw.endswith(b"\n"):
             raw = raw[:-1]
-        line = raw.decode("utf-8", errors="replace")
-        if any(r.search(line) for r in regexes):
+        if fast is not None and raw.isascii():
+            hit = fast.search(raw) is not None
+        else:
+            line = raw.decode("utf-8", errors="replace")
+            hit = any(r.search(line) for r in regexes)
+        if hit:
             n += 1
+            if stop is not None and n >= stop:
+                return n
     return n
 
 
-def _count(regexes: "List[re.Pattern[str]]", path: Path) -> Optional[int]:
+class _Lane:
+    """Byte budget one check shares across its stages; charged for the lines actually read, so a
+    stage a short-circuit decides early costs only what it read."""
+
+    def __init__(self) -> None:
+        self.left = MAX_LANE_BYTES
+
+    def meter(self, raws: Iterable[bytes]) -> Iterator[bytes]:
+        for raw in raws:
+            self.left -= len(raw)
+            if self.left < 0:
+                raise _NotEvaluable(f"input past the {MAX_LANE_BYTES}-byte bound")
+            yield raw
+
+
+def _count(
+    regexes: "List[re.Pattern[str]]", path: Path, stop: Optional[int] = None,
+    lane: Optional[_Lane] = None,
+) -> Optional[int]:
     """None when grep would print no count (missing file or not a regular file)."""
     if not path.is_file():
         return None
     with path.open("rb") as fh:
-        return _count_lines(regexes, fh)
+        return _count_lines(regexes, fh if lane is None else lane.meter(fh), stop)
 
 
 def _blob_lines(data: bytes) -> Iterator[bytes]:
@@ -220,9 +273,31 @@ def _blob_lines(data: bytes) -> Iterator[bytes]:
             yield part
 
 
-def _count_bytes(regexes: "List[re.Pattern[str]]", data: bytes) -> int:
+def _count_bytes(
+    regexes: "List[re.Pattern[str]]", data: bytes, stop: Optional[int] = None,
+    lane: Optional[_Lane] = None,
+) -> int:
     """`_count` over blob bytes: the same CRLF/LF line rule as a file read."""
-    return _count_lines(regexes, _blob_lines(data))
+    lines = _blob_lines(data)
+    return _count_lines(regexes, lines if lane is None else lane.meter(lines), stop)
+
+
+def _stop_for(wants: List[Tuple[str, int]], index: int, stages: int) -> Optional[int]:
+    """Count at which stage `index` is decided: `>=N` and `>N` hold from N / N+1 on."""
+    if len(wants) != stages:
+        return None
+    op, want = wants[index]
+    if op == ">=":
+        return max(want, 1)
+    if op == ">":
+        return want + 1
+    return None
+
+
+def _observed(counts: List[int], lower: List[bool]) -> str:
+    """Printed counts, one per line; a stage a short-circuit cut at its stop reports `>=N`, the
+    lower bound it proved, never the truncated figure as if it were the count."""
+    return "\n".join(f">={c}" if lb else str(c) for c, lb in zip(counts, lower))
 
 
 def _rel(file_arg: str) -> str:
@@ -336,29 +411,32 @@ def evaluate(
             for m, ps, f, ref in stages
         ]
         counts: List[int] = []
-        for regexes, path, ref, rel in plan:
+        lower: List[bool] = []
+        lane = _Lane()
+        for idx, (regexes, path, ref, rel) in enumerate(plan):
+            stop = _stop_for(wants, idx, len(plan))
             if ref is None:
-                n = _count(regexes, path)
+                n = _count(regexes, path, stop, lane)
                 gone = f"no such file: {path.name}"
             else:
                 if not _valid_ref(ref) or blobs is None or (ref, rel) not in blobs:
                     raise _NotEvaluable(f"base ref {ref} unreadable")
                 blob = blobs[(ref, rel)]
-                n = None if blob is None else _count_bytes(regexes, blob)
+                n = None if blob is None else _count_bytes(regexes, blob, stop, lane)
                 gone = f"no such file at {ref}: {path.name}"
             if n is None:
-                observed = "\n".join(str(c) for c in counts)
-                return _result("MISMATCH", observed, gone)
+                return _result("MISMATCH", _observed(counts, lower), gone)
             counts.append(n)
+            lower.append(stop is not None and n >= stop)
     except _NotEvaluable as exc:
         return _result("NOT_EVALUABLE", "", str(exc))
-    observed = "\n".join(str(c) for c in counts)
+    observed = _observed(counts, lower)
     if len(wants) == len(counts) and all(_holds(o, w, c) for (o, w), c in zip(wants, counts)):
         return _result("MATCH", observed, "")
     detail = f"expected {expect!r}"
     if len(wants) == len(counts):
-        for (o, w), c, (_, path, _, _) in zip(wants, counts, plan):
+        for (o, w), c, lb, (_, path, _, _) in zip(wants, counts, lower, plan):
             if not _holds(o, w, c):
-                detail += f"; {path.name} counted {c}"
+                detail += f"; {path.name} counted {'>=' if lb else ''}{c}"
                 break
     return _result("MISMATCH", observed, detail)

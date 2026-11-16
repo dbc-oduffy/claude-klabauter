@@ -32,7 +32,7 @@ def _put(repo, rel: str) -> None:
     path.write_text("ask: x\n", encoding="utf-8")
 
 
-def test_a_missing_sizing_is_flagged_not_declared_and_the_halt_still_lands(repo):
+def test_a_missing_sizing_is_flagged_not_declared_and_the_halt_still_lands(repo) -> None:
     _record_naming_sizing(repo)
 
     out = _call(repo)
@@ -46,7 +46,7 @@ def test_a_missing_sizing_is_flagged_not_declared_and_the_halt_still_lands(repo)
     assert f"run sizing {SIZING} is absent on disk" in message
 
 
-def test_a_present_sizing_is_declared_and_raises_no_flag(repo):
+def test_a_present_sizing_is_declared_and_raises_no_flag(repo) -> None:
     _record_naming_sizing(repo)
     _put(repo, SIZING)
 
@@ -57,7 +57,7 @@ def test_a_present_sizing_is_declared_and_raises_no_flag(repo):
     assert SIZING in _landed(repo, out, "--name-only")
 
 
-def test_an_archive_only_sizing_is_not_flagged_and_not_declared_at_sizing_rel(repo):
+def test_an_archive_only_sizing_is_not_flagged_and_not_declared_at_sizing_rel(repo) -> None:
     _record_naming_sizing(repo)
     _put(repo, "archive/sizings/2026-11/2026-11-14-lost-aaaaaa.yaml")
 
@@ -68,7 +68,7 @@ def test_an_archive_only_sizing_is_not_flagged_and_not_declared_at_sizing_rel(re
     assert SIZING not in _landed(repo, out, "--name-only")
 
 
-def test_two_archive_copies_of_the_sizing_read_as_missing(repo):
+def test_two_archive_copies_of_the_sizing_read_as_missing(repo) -> None:
     _record_naming_sizing(repo)
     _put(repo, "archive/sizings/2026-11/2026-11-14-lost-aaaaaa.yaml")
     _put(repo, "archive/sizings/2026-10/2026-11-14-lost-aaaaaa.yaml")

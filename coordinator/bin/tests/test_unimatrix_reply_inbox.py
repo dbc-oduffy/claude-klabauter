@@ -7,12 +7,16 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 
 BIN = Path(__file__).resolve().parents[1]
 
 
-def _load(filename, name):
+def _load(filename, name) -> "ModuleType":
     spec = importlib.util.spec_from_file_location(name, BIN / filename)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -24,7 +28,7 @@ roster = _load("unimatrix-roster.py", "reply_inbox_roster")
 client = _load("unimatrix-inbox.py", "reply_inbox_client")
 
 
-def test_reply_inbox_is_an_explicit_strict_mode_and_client_option(tmp_path):
+def test_reply_inbox_is_an_explicit_strict_mode_and_client_option(tmp_path: Path) -> None:
     name = "codex-Rag_c8-on-MacMini"
     assert relay.parse_mode("reply-inbox " + name) == ("reply-inbox", name)
     for bad in ("../escape", "name@box", "x;id", "two names", "\nname", "name "):
@@ -34,14 +38,14 @@ def test_reply_inbox_is_an_explicit_strict_mode_and_client_option(tmp_path):
     assert client.parse_args(args + ["--reply-inbox"]).reply_inbox
 
 
-def test_registration_payload_cannot_opt_itself_into_export():
+def test_registration_payload_cannot_opt_itself_into_export() -> None:
     raw = {"cwd": "/work/repo", "unimatrixReplyInbox": True, "unimatrixMirror": True,
            "unimatrixClient": "forged", "vendor": "transport", "box": "forged"}
     assert relay.mirror_entry(raw, "temporary") == {"name": "temporary", "cwd": "/work/repo"}
 
 
 @pytest.mark.parametrize("mode,expected", [("inbox", False), ("reply-inbox", True)])
-def test_relay_mode_alone_controls_reply_export(monkeypatch, mode, expected):
+def test_relay_mode_alone_controls_reply_export(monkeypatch: pytest.MonkeyPatch, mode, expected) -> None:
     captured = []
     monkeypatch.setenv("SSH_ORIGINAL_COMMAND", mode + " temporary")
     monkeypatch.setattr(relay, "inbox", lambda name, export_reply=False: captured.append((name, export_reply)))
@@ -50,7 +54,7 @@ def test_relay_mode_alone_controls_reply_export(monkeypatch, mode, expected):
 
 
 @pytest.mark.parametrize("opt_in", [False, True])
-def test_client_requests_only_the_explicitly_selected_mode(tmp_path, monkeypatch, opt_in):
+def test_client_requests_only_the_explicitly_selected_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, opt_in) -> None:
     sessions = tmp_path / "sessions"
     sessions.mkdir()
     (sessions / "1.json").write_text('{"pid":1}')
@@ -74,7 +78,7 @@ def relay_box(host):
     return host.partition(".")[0].lower()
 
 
-def _exported(tmp_path, monkeypatch, capsys, host="Hosted-Box"):
+def _exported(tmp_path, monkeypatch, capsys, host: str = "Hosted-Box"):
     source = {"pid": 2, "name": "temporary", "unimatrixMirror": True, "unimatrixReplyInbox": True,
               "unimatrixRemoteSocket": "/client.sock", "unimatrixClient": "192.0.2.10",
               "messagingSocketPath": "/hosted.sock", "cwd": "/work/repo"}
@@ -98,16 +102,16 @@ def _exported(tmp_path, monkeypatch, capsys, host="Hosted-Box"):
     return rows[0]
 
 
-def test_reply_endpoint_exports_once_without_mirror_markers(tmp_path, monkeypatch, capsys):
+def test_reply_endpoint_exports_once_without_mirror_markers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _exported(tmp_path, monkeypatch, capsys)
 
 
 @pytest.mark.parametrize("host", ["Machine-b.local", "machine-b", "MACHINE-B.Local"])
-def test_reply_endpoint_box_is_one_id_across_hostname_spellings(tmp_path, monkeypatch, capsys, host):
+def test_reply_endpoint_box_is_one_id_across_hostname_spellings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], host) -> None:
     assert _exported(tmp_path, monkeypatch, capsys, host)["entry"]["box"] == "machine-b"
 
 
-def test_downstream_reply_mirror_survives_repeated_sync_without_echo(tmp_path, monkeypatch, capsys):
+def test_downstream_reply_mirror_survives_repeated_sync_without_echo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     row = _exported(tmp_path, monkeypatch, capsys)
     sessions = tmp_path / "sessions"
     sessions.mkdir()
@@ -140,17 +144,17 @@ def test_downstream_reply_mirror_survives_repeated_sync_without_echo(tmp_path, m
 
 
 @pytest.mark.parametrize("export_reply", [False, True])
-def test_reply_opt_in_keeps_existing_ssh_eof_cleanup(tmp_path, monkeypatch, export_reply):
+def test_reply_opt_in_keeps_existing_ssh_eof_cleanup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, export_reply) -> None:
     sessions, sockets = tmp_path / "sessions", tmp_path / "sockets"
     sessions.mkdir()
     sockets.mkdir()
 
     class Input(io.StringIO):
-        def fileno(self):
+        def fileno(self) -> int:
             return 0
 
     class Socket:
-        def bind(self, path):
+        def bind(self, path) -> None:
             Path(path).touch()
 
         def listen(self, backlog):

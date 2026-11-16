@@ -38,11 +38,6 @@ class ObjectStoreBusy(Exception):
     """Another holder owned the object-store lock for the whole `wait_s`."""
 
 
-def _anchor_root(common_dir: Path) -> Path:
-    """The checkout root `held_lock` derives the sidecar directory from."""
-    return common_dir.parent if common_dir.name == ".git" else common_dir
-
-
 @contextlib.contextmanager
 def hold(common_dir: Path, *, wait_s: float, holder_label: str) -> Iterator[None]:
     """Hold the object-store lock of the repo owning `common_dir` for the scope.
@@ -62,14 +57,14 @@ def hold(common_dir: Path, *, wait_s: float, holder_label: str) -> Iterator[None
             depths[key] -= 1
         return
 
-    from coordinator_core.locked_write import LockTimeout, held_lock
+    from coordinator_core.locked_write import LockTimeout, _lock_dir_for_common, held_lock
 
     with contextlib.ExitStack() as stack:
         try:
             stack.enter_context(
                 held_lock(
                     common_dir / "objects" / "pack",
-                    anchor_root=_anchor_root(common_dir),
+                    lock_dir=_lock_dir_for_common(common_dir),
                     timeout=wait_s,
                     holder_label=holder_label,
                 )

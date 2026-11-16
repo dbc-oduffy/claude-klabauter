@@ -14,6 +14,7 @@ import time
 import pytest
 
 from coordinator_core.warm import server, telemetry
+from pathlib import Path
 
 _HOOK_OP = "hooks.preuse_bash_dispatch"
 _HOLD_OP = "dispatch.ask_stage"
@@ -45,7 +46,7 @@ class _VersionState:
 
 
 class _FakeIO:
-    def __init__(self, frame: dict):
+    def __init__(self, frame: dict) -> None:
         self._lines = [(json.dumps(frame) + "\n").encode("utf-8")]
         self.written: list = []
 
@@ -105,7 +106,7 @@ def _saturated_ctx(tmp_path, monkeypatch, release, served_on):
     return ctx
 
 
-def test_door_hook_frame_is_served_on_guard_lane_with_resolved_op(tmp_path, monkeypatch):
+def test_door_hook_frame_is_served_on_guard_lane_with_resolved_op(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     release = threading.Event()
     served_on: dict = {}
     ctx = _saturated_ctx(tmp_path, monkeypatch, release, served_on)
@@ -124,7 +125,7 @@ def test_door_hook_frame_is_served_on_guard_lane_with_resolved_op(tmp_path, monk
         _settle(ctx, release)
 
 
-def test_non_hook_door_frame_under_saturation_goes_back_to_the_shared_queue(tmp_path, monkeypatch):
+def test_non_hook_door_frame_under_saturation_goes_back_to_the_shared_queue(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     release = threading.Event()
     served_on: dict = {}
     ctx = _saturated_ctx(tmp_path, monkeypatch, release, served_on)
@@ -139,7 +140,7 @@ def test_non_hook_door_frame_under_saturation_goes_back_to_the_shared_queue(tmp_
         _settle(ctx, release)
 
 
-def test_named_entrypoint_never_resolves_to_its_first_argument(tmp_path, monkeypatch):
+def test_named_entrypoint_never_resolves_to_its_first_argument(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     release = threading.Event()
     served_on: dict = {}
     ctx = _saturated_ctx(tmp_path, monkeypatch, release, served_on)
@@ -168,11 +169,11 @@ def test_named_entrypoint_never_resolves_to_its_first_argument(tmp_path, monkeyp
         (_door_frame(["--check-all"], entrypoint="hook-run"), "hook-run"),
     ],
 )
-def test_effective_method(frame, expected):
+def test_effective_method(frame, expected) -> None:
     assert server._effective_method(frame) == expected
 
 
-def test_live_hook_run_frame_is_served_on_guard_lane_with_resolved_op(tmp_path, monkeypatch):
+def test_live_hook_run_frame_is_served_on_guard_lane_with_resolved_op(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The frame every harness hook produces: `hook-run hooks.<name>` through the door."""
     release = threading.Event()
     served_on: dict = {}

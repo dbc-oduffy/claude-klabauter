@@ -20,7 +20,7 @@ def scratch_root() -> Path:
     return managed_tempdir(_REPO_ROOT) / "coordinator-falsifier"
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Path:
     if name == "SCRATCH_ROOT":
         return scratch_root()
     raise AttributeError(name)
@@ -209,7 +209,7 @@ def check_maintenance_tier_budget(repo: Path):
     except ImportError as exc:
         return False, "maintenance-tier entrypoint not importable: %s" % exc
 
-    def _legs_for(tier, target):
+    def _legs_for(tier, target) -> list[list[str]]:
         out = []
         if tier == "daily":
             # The loose leg's enumeration; its pack-objects step takes stdin, which

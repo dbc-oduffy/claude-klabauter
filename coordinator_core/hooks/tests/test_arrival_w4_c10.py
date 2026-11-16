@@ -21,6 +21,11 @@ import asyncio
 import json
 
 import pytest
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = pytest.mark.complete
 
@@ -67,7 +72,7 @@ _EXPECTED_OP_NAMES = (
 
 
 @pytest.mark.parametrize("op_name", _EXPECTED_OP_NAMES)
-def test_op_registered(op_name):
+def test_op_registered(op_name) -> None:
     assert op_name in _REGISTRY
 
 
@@ -76,12 +81,12 @@ def test_op_registered(op_name):
 # ---------------------------------------------------------------------------
 
 
-def test_guard_plane_check_silent_outside_remote_session(monkeypatch):
+def test_guard_plane_check_silent_outside_remote_session(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
     assert session_start_guard_plane_check.build_report() is None
 
 
-def test_guard_plane_check_counts_pretooluse_coordinator_hooks(tmp_path, monkeypatch):
+def test_guard_plane_check_counts_pretooluse_coordinator_hooks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
     settings = tmp_path / "settings.json"
     settings.write_text(
@@ -102,11 +107,11 @@ def test_guard_plane_check_counts_pretooluse_coordinator_hooks(tmp_path, monkeyp
     assert session_start_guard_plane_check.count_coordinator_hooks(str(settings)) == 1
 
 
-def test_guard_plane_check_absent_file_is_zero_not_error():
+def test_guard_plane_check_absent_file_is_zero_not_error() -> None:
     assert session_start_guard_plane_check.count_coordinator_hooks("/nonexistent/x.json") == 0
 
 
-def test_guard_plane_check_op_reports_absence(tmp_path, monkeypatch):
+def test_guard_plane_check_op_reports_absence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CODE_REMOTE", "true")
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     monkeypatch.setenv("CLAUDE_PROJECT_DIR", str(tmp_path))
@@ -120,7 +125,7 @@ def test_guard_plane_check_op_reports_absence(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_announce_job_mode_reports_resolved_mode(monkeypatch):
+def test_announce_job_mode_reports_resolved_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_JOB_MODE", "interactive")
     result = session_start_announce_job_mode._handler(
         {"payload": {"session_id": "sess-1"}}
@@ -130,7 +135,7 @@ def test_announce_job_mode_reports_resolved_mode(monkeypatch):
     assert "asserted via COORDINATOR_JOB_MODE" in context
 
 
-def test_announce_job_mode_fails_open_on_bad_payload():
+def test_announce_job_mode_fails_open_on_bad_payload() -> None:
     result = session_start_announce_job_mode._handler({})
     assert "hookSpecificOutput" in result  # resolves even with an absent payload
 
@@ -140,12 +145,12 @@ def test_announce_job_mode_fails_open_on_bad_payload():
 # ---------------------------------------------------------------------------
 
 
-def test_self_probe_fails_open_when_engine_module_unimportable(monkeypatch):
+def test_self_probe_fails_open_when_engine_module_unimportable(monkeypatch: pytest.MonkeyPatch) -> None:
     import builtins
 
     real_import = builtins.__import__
 
-    def _blocked(name, *a, **k):
+    def _blocked(name, *a, **k) -> ModuleType:
         if name == "coordinator_core.ops.session.guard_hook_generation_self_probe":
             raise ImportError("blocked for test")
         return real_import(name, *a, **k)
@@ -155,7 +160,7 @@ def test_self_probe_fails_open_when_engine_module_unimportable(monkeypatch):
     assert result == {}  # no_advisory()
 
 
-def test_self_probe_returns_context_when_probe_emits_text(monkeypatch):
+def test_self_probe_returns_context_when_probe_emits_text(monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.ops.session.guard_hook_generation_self_probe as real_probe
 
     monkeypatch.setattr(real_probe, "run_self_probe", lambda config_dir=None: "banner text")
@@ -168,19 +173,19 @@ def test_self_probe_returns_context_when_probe_emits_text(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_is_stamped_engine_root_rejects_missing_stamp(tmp_path):
+def test_is_stamped_engine_root_rejects_missing_stamp(tmp_path: Path) -> None:
     (tmp_path / "coordinator_core").mkdir()
     assert not session_start_register_published_engine.is_stamped_engine_root(tmp_path)
 
 
-def test_is_stamped_engine_root_accepts_nonempty_stamp(tmp_path):
+def test_is_stamped_engine_root_accepts_nonempty_stamp(tmp_path: Path) -> None:
     core = tmp_path / "coordinator_core"
     core.mkdir()
     (core / "_engine_stamp").write_bytes(b"stamped\n")
     assert session_start_register_published_engine.is_stamped_engine_root(tmp_path)
 
 
-def test_published_engine_handler_never_raises():
+def test_published_engine_handler_never_raises() -> None:
     result = session_start_register_published_engine._handler({})
     assert isinstance(result, dict)
 
@@ -190,13 +195,13 @@ def test_published_engine_handler_never_raises():
 # ---------------------------------------------------------------------------
 
 
-def test_repair_commit_msg_hook_no_op_outside_a_git_repo(tmp_path, monkeypatch):
+def test_repair_commit_msg_hook_no_op_outside_a_git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     result = session_start_repair_prepare_commit_msg_hook._handler({})
     assert isinstance(result, dict)
 
 
-def test_repair_commit_msg_first_existing_finds_real_file(tmp_path):
+def test_repair_commit_msg_first_existing_finds_real_file(tmp_path: Path) -> None:
     target = tmp_path / "real.txt"
     target.write_text("x", encoding="utf-8")
     found = session_start_repair_prepare_commit_msg_hook._first_existing(
@@ -210,7 +215,7 @@ def test_repair_commit_msg_first_existing_finds_real_file(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_plugin_root_breadcrumb_no_op_without_plugin_root(monkeypatch, tmp_path):
+def test_plugin_root_breadcrumb_no_op_without_plugin_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     monkeypatch.setenv("HOME", str(tmp_path))
     result = session_start_write_plugin_root_breadcrumb._handler({})
@@ -218,7 +223,7 @@ def test_plugin_root_breadcrumb_no_op_without_plugin_root(monkeypatch, tmp_path)
     assert not (tmp_path / ".claude" / ".coordinator-plugin-root").exists()
 
 
-def test_plugin_root_breadcrumb_writes_atomically(monkeypatch, tmp_path):
+def test_plugin_root_breadcrumb_writes_atomically(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     plugin_root = tmp_path / "plugin"
     plugin_root.mkdir()
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
@@ -228,7 +233,7 @@ def test_plugin_root_breadcrumb_writes_atomically(monkeypatch, tmp_path):
     assert breadcrumb.read_text(encoding="utf-8").strip() == plugin_root.as_posix()
 
 
-def test_plugin_root_breadcrumb_idempotent_no_rewrite(monkeypatch, tmp_path):
+def test_plugin_root_breadcrumb_idempotent_no_rewrite(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     plugin_root = tmp_path / "plugin"
     plugin_root.mkdir()
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
@@ -245,7 +250,7 @@ def test_plugin_root_breadcrumb_idempotent_no_rewrite(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_bin_drift_refresh_fails_open_on_error(monkeypatch):
+def test_bin_drift_refresh_fails_open_on_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def _raise(bin_dir):
         raise RuntimeError("boom")
 
@@ -254,7 +259,7 @@ def test_bin_drift_refresh_fails_open_on_error(monkeypatch):
     assert result == {}
 
 
-def test_bin_drift_refresh_returns_banner(monkeypatch):
+def test_bin_drift_refresh_returns_banner(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         sessionstart_bin_drift_refresh, "check_and_refresh", lambda bin_dir: "refreshed x"
     )
@@ -267,20 +272,20 @@ def test_bin_drift_refresh_returns_banner(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_ensure_http_forwarder_discloses_when_no_forwarder_resolves(monkeypatch):
+def test_ensure_http_forwarder_discloses_when_no_forwarder_resolves(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sessionstart_ensure_http_forwarder, "_forwarder_module_path", lambda: None)
     result = sessionstart_ensure_http_forwarder._handler({})
     assert "not ensured" in result["hookSpecificOutput"]["additionalContext"]
 
 
-def test_probe_bind_wins_or_loses_cleanly():
+def test_probe_bind_wins_or_loses_cleanly() -> None:
     result = sessionstart_ensure_http_forwarder._probe_bind_wins(port=0)
     # port=0 asks the OS to pick an ephemeral port -- always wins, never
     # address-in-use; exercises the real socket path without a fixed port.
     assert result is True
 
 
-def test_forwarder_argv_regex_matches_whole_path_component():
+def test_forwarder_argv_regex_matches_whole_path_component() -> None:
     rx = sessionstart_ensure_http_forwarder._FORWARDER_ARGV_RE
     assert rx.search("python3 /repo/hooks/http_hook_forwarder.py")
     assert not rx.search("pytest test_http_hook_forwarder_staleness.py")
@@ -292,18 +297,18 @@ def test_forwarder_argv_regex_matches_whole_path_component():
 # ---------------------------------------------------------------------------
 
 
-def test_sweep_boot_session_reap_due_true_when_no_marker(tmp_path):
+def test_sweep_boot_session_reap_due_true_when_no_marker(tmp_path: Path) -> None:
     assert sweep_boot._session_reap_due(str(tmp_path)) is True
 
 
-def test_sweep_boot_session_reap_due_false_when_marker_fresh(tmp_path):
+def test_sweep_boot_session_reap_due_false_when_marker_fresh(tmp_path: Path) -> None:
     marker_dir = hub_for_common(tmp_path / ".git")
     marker_dir.mkdir(parents=True)
     (marker_dir / ".last-reap").write_text("", encoding="utf-8")
     assert sweep_boot._session_reap_due(str(tmp_path)) is False
 
 
-def test_sweep_boot_cache_head_parses_frontmatter(tmp_path):
+def test_sweep_boot_cache_head_parses_frontmatter(tmp_path: Path) -> None:
     (tmp_path / "state").mkdir()
     (tmp_path / "state" / "orientation_cache.md").write_text(
         "---\ngit_head_at_generation: abc123\n---\nbody\n", encoding="utf-8"
@@ -311,11 +316,11 @@ def test_sweep_boot_cache_head_parses_frontmatter(tmp_path):
     assert sweep_boot._read_cache_head(str(tmp_path)) == "abc123"
 
 
-def test_sweep_boot_cache_head_none_when_missing():
+def test_sweep_boot_cache_head_none_when_missing() -> None:
     assert sweep_boot._read_cache_head("/nonexistent/repo") is None
 
 
-def test_sweep_boot_handler_never_raises(monkeypatch):
+def test_sweep_boot_handler_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_ORIENTATION_SELFHEAL_OFF", "1")
     monkeypatch.setenv("COORDINATOR_SESSION_REAP_OFF", "1")
     result = _run(sweep_boot._handler({}))
@@ -327,14 +332,14 @@ def test_sweep_boot_handler_never_raises(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_assert_em_role_missing_plugin_root_still_returns_envelope(monkeypatch):
+def test_assert_em_role_missing_plugin_root_still_returns_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     result = assert_em_role._handler({"payload": {}})
     assert "hookSpecificOutput" in result
     assert result["hookSpecificOutput"]["hookEventName"] == "SessionStart"
 
 
-def test_assert_em_role_delivers_plugin_snippet(monkeypatch, tmp_path):
+def test_assert_em_role_delivers_plugin_snippet(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     plugin_root = tmp_path / "plugin"
     (plugin_root / "snippets").mkdir(parents=True)
     (plugin_root / "snippets" / "agent-role-em.md").write_text(
@@ -345,7 +350,7 @@ def test_assert_em_role_delivers_plugin_snippet(monkeypatch, tmp_path):
     assert "You are the EM." in result["hookSpecificOutput"]["additionalContext"]
 
 
-def test_assert_em_role_missing_plugin_snippet_banners(monkeypatch, tmp_path):
+def test_assert_em_role_missing_plugin_snippet_banners(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     plugin_root = tmp_path / "plugin"
     plugin_root.mkdir()
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin_root))
@@ -354,7 +359,7 @@ def test_assert_em_role_missing_plugin_snippet_banners(monkeypatch, tmp_path):
     assert "agent-role-em.md MISSING" in context
 
 
-def test_assert_em_role_repo_slot_is_silent_when_absent(monkeypatch, tmp_path):
+def test_assert_em_role_repo_slot_is_silent_when_absent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     result = assert_em_role._handler({"payload": {"cwd": str(tmp_path)}})
     context = result["hookSpecificOutput"]["additionalContext"]
@@ -366,7 +371,7 @@ def test_assert_em_role_repo_slot_is_silent_when_absent(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_sessionstart_dispatch_concatenates_leg_output(monkeypatch, tmp_path):
+def test_sessionstart_dispatch_concatenates_leg_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("COORDINATOR_JOB_MODE", "cron")
     monkeypatch.setattr(
         sessionstart_dispatch,
@@ -383,7 +388,7 @@ def test_sessionstart_dispatch_concatenates_leg_output(monkeypatch, tmp_path):
     assert "cron" in context
 
 
-def test_sessionstart_dispatch_one_leg_failure_does_not_drop_others(monkeypatch):
+def test_sessionstart_dispatch_one_leg_failure_does_not_drop_others(monkeypatch: pytest.MonkeyPatch) -> None:
     async def _raising(params):
         raise RuntimeError("leg failure")
 
@@ -404,7 +409,7 @@ def test_sessionstart_dispatch_one_leg_failure_does_not_drop_others(monkeypatch)
 # a mismatched sync/async wrapping on any of them would silently no-op
 # through _handler's broad except-continue. Cover all six legs landing in
 # the concatenated output, including these three.
-def test_sessionstart_dispatch_all_six_legs_land_in_output(monkeypatch, tmp_path):
+def test_sessionstart_dispatch_all_six_legs_land_in_output(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("COORDINATOR_JOB_MODE", "cron")
 
     def _sync_text(text):
@@ -446,7 +451,7 @@ def test_sessionstart_dispatch_all_six_legs_land_in_output(monkeypatch, tmp_path
     assert "leg-kill-switch" in context
 
 
-def test_sessionstart_dispatch_sync_leg_wrapping_mismatch_is_isolated(monkeypatch):
+def test_sessionstart_dispatch_sync_leg_wrapping_mismatch_is_isolated(monkeypatch: pytest.MonkeyPatch) -> None:
     # A leg handler that is sync (not awaitable) must not raise through
     # _handler's inspect.isawaitable gate -- exercises the exact wiring
     # class the P3 finding flagged (project_orientation is `def`, not
@@ -466,7 +471,7 @@ def test_sessionstart_dispatch_sync_leg_wrapping_mismatch_is_isolated(monkeypatc
     assert "sync-leg-ok" in result["hookSpecificOutput"]["additionalContext"]
 
 
-def test_sessionstart_async_dispatch_never_raises(tmp_path, monkeypatch):
+def test_sessionstart_async_dispatch_never_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     result = _run(sessionstart_async_dispatch._handler({"payload": {"cwd": str(tmp_path)}}))
@@ -481,7 +486,7 @@ if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
 
 
-def test_plugin_root_breadcrumb_path_none_when_home_unresolvable(monkeypatch):
+def test_plugin_root_breadcrumb_path_none_when_home_unresolvable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("HOME", raising=False)
     monkeypatch.delenv("USERPROFILE", raising=False)
 
@@ -492,7 +497,7 @@ def test_plugin_root_breadcrumb_path_none_when_home_unresolvable(monkeypatch):
     assert session_start_write_plugin_root_breadcrumb._breadcrumb_path() is None
 
 
-def test_ensure_http_forwarder_falls_back_to_own_forwarder(monkeypatch, tmp_path):
+def test_ensure_http_forwarder_falls_back_to_own_forwarder(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("CLAUDE_PLUGIN_ROOT", raising=False)
     own = sessionstart_ensure_http_forwarder._forwarder_module_path()
     assert own is not None and own.is_file()
@@ -502,7 +507,7 @@ def test_ensure_http_forwarder_falls_back_to_own_forwarder(monkeypatch, tmp_path
     assert sessionstart_ensure_http_forwarder._forwarder_module_path() == own
 
 
-def test_ensure_http_forwarder_prefers_plugin_forwarder(monkeypatch, tmp_path):
+def test_ensure_http_forwarder_prefers_plugin_forwarder(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     forwarder = tmp_path / "hooks" / "http_hook_forwarder.py"
     forwarder.parent.mkdir()
     forwarder.write_text("", encoding="utf-8")

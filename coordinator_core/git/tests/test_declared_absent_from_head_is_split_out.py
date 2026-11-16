@@ -5,6 +5,7 @@ import pytest
 
 from coordinator_core.git import commit as gcommit
 from coordinator_core.git.commit import CommitRefused, NothingToCommit, PhantomDeletionDeclared
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -19,7 +20,7 @@ def _git(repo, *args):
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/a")
@@ -38,7 +39,7 @@ def _head(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_nothing_to_commit_still_raises_when_every_path_is_no_delta(repo):
+def test_nothing_to_commit_still_raises_when_every_path_is_no_delta(repo) -> None:
     before = _head(repo)
 
     with pytest.raises(PhantomDeletionDeclared) as excinfo:
@@ -55,7 +56,7 @@ def test_nothing_to_commit_still_raises_when_every_path_is_no_delta(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ordinary_nothing_to_commit_still_raises_with_no_phantom(repo):
+def test_ordinary_nothing_to_commit_still_raises_with_no_phantom(repo) -> None:
     before = _head(repo)
 
     with pytest.raises(NothingToCommit):
@@ -70,7 +71,7 @@ def test_ordinary_nothing_to_commit_still_raises_with_no_phantom(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_phantom_alongside_a_real_head_tracked_deletion_refuses_the_whole_call(repo):
+def test_phantom_alongside_a_real_head_tracked_deletion_refuses_the_whole_call(repo) -> None:
     (repo / "seed.txt").unlink()
     before = _head(repo)
 
@@ -87,7 +88,7 @@ def test_phantom_alongside_a_real_head_tracked_deletion_refuses_the_whole_call(r
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_phantom_absent_from_head_but_staged_still_refuses_and_keeps_the_staged_entry(repo):
+def test_phantom_absent_from_head_but_staged_still_refuses_and_keeps_the_staged_entry(repo) -> None:
     (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
     _git(repo, "add", "new.txt")
     (repo / "new.txt").unlink()
@@ -107,7 +108,7 @@ def test_phantom_absent_from_head_but_staged_still_refuses_and_keeps_the_staged_
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_allow_empty_does_not_suppress_the_phantom_raise(repo):
+def test_allow_empty_does_not_suppress_the_phantom_raise(repo) -> None:
     before = _head(repo)
 
     with pytest.raises(PhantomDeletionDeclared):
@@ -121,7 +122,7 @@ def test_allow_empty_does_not_suppress_the_phantom_raise(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_forced_none_spine_raises_the_bare_refusal_not_the_phantom(monkeypatch, repo):
+def test_forced_none_spine_raises_the_bare_refusal_not_the_phantom(monkeypatch: pytest.MonkeyPatch, repo) -> None:
     before = _head(repo)
     monkeypatch.setattr(gcommit, "read_tree_spine", lambda repo, paths: None)
 
@@ -137,7 +138,7 @@ def test_forced_none_spine_raises_the_bare_refusal_not_the_phantom(monkeypatch, 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_partition_declared_deletions_splits_tracked_from_absent(repo):
+def test_partition_declared_deletions_splits_tracked_from_absent(repo) -> None:
     tracked, absent = gcommit.partition_declared_deletions(
         repo, ["seed.txt", "ghost.txt"]
     )
@@ -147,14 +148,14 @@ def test_partition_declared_deletions_splits_tracked_from_absent(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_partition_declared_deletions_forced_none_spine_returns_none(monkeypatch, repo):
+def test_partition_declared_deletions_forced_none_spine_returns_none(monkeypatch: pytest.MonkeyPatch, repo) -> None:
     monkeypatch.setattr(gcommit, "read_tree_spine", lambda repo, paths: None)
     assert gcommit.partition_declared_deletions(repo, ["seed.txt"]) is None
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_partition_declared_deletions_backslash_and_absolute_spellings_track(repo):
+def test_partition_declared_deletions_backslash_and_absolute_spellings_track(repo) -> None:
     tracked, absent = gcommit.partition_declared_deletions(
         repo, ["seed.txt".replace("/", "\\"), str(repo / "seed.txt")]
     )
@@ -164,7 +165,7 @@ def test_partition_declared_deletions_backslash_and_absolute_spellings_track(rep
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_partition_declared_deletions_spawns_no_process(repo):
+def test_partition_declared_deletions_spawns_no_process(repo) -> None:
     real_run, real_popen = subprocess.run, subprocess.Popen
     spawned = []
 
@@ -174,7 +175,7 @@ def test_partition_declared_deletions_spawns_no_process(repo):
         return real_run(*a, **k)
 
     class PopenSpy(real_popen):  # type: ignore[misc,valid-type]
-        def __init__(self, *a, **k):
+        def __init__(self, *a, **k) -> None:
             if a:
                 spawned.append(a[0])
             super().__init__(*a, **k)

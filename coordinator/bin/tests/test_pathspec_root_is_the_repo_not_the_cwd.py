@@ -62,15 +62,15 @@ def _repo(tmp_path):
     return root
 
 
-def test_the_root_is_walked_up_from_a_subdirectory(tmp_path, monkeypatch):
+def test_the_root_is_walked_up_from_a_subdirectory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     monkeypatch.chdir(root / "pkg" / "sub")
     assert Path(safe_commit._worktree_root_from_cwd()) == root.resolve()
 
 
 def test_a_present_path_is_not_declared_deleted_from_a_subdirectory(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     root = _repo(tmp_path)
     monkeypatch.chdir(root / "pkg" / "sub")
 
@@ -85,7 +85,7 @@ def test_a_present_path_is_not_declared_deleted_from_a_subdirectory(
     assert exc.value.code == 1
 
 
-def test_a_genuinely_absent_path_is_still_a_deletion(tmp_path, monkeypatch):
+def test_a_genuinely_absent_path_is_still_a_deletion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     monkeypatch.chdir(root)
 
@@ -97,7 +97,7 @@ def test_a_genuinely_absent_path_is_still_a_deletion(tmp_path, monkeypatch):
     assert deleted == ["pkg/gone.py"]
 
 
-def test_outside_a_repo_it_degrades_to_the_cwd(tmp_path, monkeypatch):
+def test_outside_a_repo_it_degrades_to_the_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plain = tmp_path / "no-repo"
     plain.mkdir()
     monkeypatch.chdir(plain)

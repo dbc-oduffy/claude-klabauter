@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import checkpoint_stamp as cs
 from coordinator_core.ops.dispatch_emit.tests.test_checkpoint_rows_landed import PLAN, _commit, _git
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -15,13 +16,13 @@ OTHER_BASE = "c" * 40
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     _git(tmp_path, "init", "-q")
     _commit(tmp_path, "seed")
     return tmp_path
 
 
-def _marked(root, ids=("A1",), base=BASE, review=None):
+def _marked(root, ids=("A1",), base=BASE, review=None) -> str:
     trailers = f"Checkpoint-Plan: {PLAN}\nCheckpoint-Base: {base}"
     if review:
         trailers += f"\nCheckpoint-Review-Base: {review}"
@@ -29,7 +30,7 @@ def _marked(root, ids=("A1",), base=BASE, review=None):
     return _commit(root, f"checkpoint(wave 0): {len(ids)} rows — {', '.join(ids)}", trailers)
 
 
-def _close(root, *bases):
+def _close(root, *bases) -> str:
     return _commit(root, "terminal", "\n".join(f"Checkpoint-Run-Closed: {b}" for b in bases))
 
 
@@ -37,55 +38,55 @@ def _at_head(root, ids=("A1",)):
     return cs.rows_landed_at_head(root, PLAN, frozenset(ids))
 
 
-def test_marked_checkpoint_is_not_landed_at_head(repo):
+def test_marked_checkpoint_is_not_landed_at_head(repo) -> None:
     _marked(repo)
     _commit(repo, "later")
     assert _at_head(repo) == frozenset()
 
 
-def test_later_close_of_its_base_lands_it(repo):
+def test_later_close_of_its_base_lands_it(repo) -> None:
     _marked(repo)
     _close(repo, BASE)
     assert _at_head(repo) == {"A1"}
 
 
-def test_close_naming_another_base_does_not_count(repo):
+def test_close_naming_another_base_does_not_count(repo) -> None:
     _marked(repo)
     _close(repo, OTHER_BASE)
     assert _at_head(repo) == frozenset()
 
 
-def test_close_older_than_the_checkpoint_does_not_count(repo):
+def test_close_older_than_the_checkpoint_does_not_count(repo) -> None:
     _close(repo, BASE)
     _marked(repo)
     assert _at_head(repo) == frozenset()
 
 
-def test_review_base_close_counts(repo):
+def test_review_base_close_counts(repo) -> None:
     _marked(repo, review=REVIEW)
     _close(repo, REVIEW)
     assert _at_head(repo) == {"A1"}
 
 
-def test_one_close_line_per_base_each_counts(repo):
+def test_one_close_line_per_base_each_counts(repo) -> None:
     _marked(repo, ids=("A1",), base=BASE)
     _marked(repo, ids=("A2",), base=OTHER_BASE)
     _close(repo, BASE, OTHER_BASE)
     assert _at_head(repo, ("A1", "A2")) == {"A1", "A2"}
 
 
-def test_legacy_checkpoint_stays_landed(repo):
+def test_legacy_checkpoint_stays_landed(repo) -> None:
     _commit(repo, "checkpoint(wave 0): 1 rows — A1", f"Checkpoint-Plan: {PLAN}\nCheckpoint-Base: {BASE}")
     assert _at_head(repo) == {"A1"}
 
 
-def test_run_internal_walk_ignores_the_marker(repo):
+def test_run_internal_walk_ignores_the_marker(repo) -> None:
     head = _marked(repo)
     walk = cs.checkpoint_rows_landed(repo, PLAN, head, frozenset({"A1"}))
     assert walk.landed == {head: frozenset({"A1"})}
 
 
-def test_parse_both_shapes_and_run_closed_bases():
+def test_parse_both_shapes_and_run_closed_bases() -> None:
     marked = (
         f"checkpoint(wave 1): 1 rows — C1\n\nCheckpoint-Plan: {PLAN}\n"
         f"Checkpoint-Base: {BASE}\nCheckpoint-Review-Base: {REVIEW}\nCheckpoint-Not-Landed: run-open"

@@ -8,6 +8,7 @@ import random
 import pytest
 
 from coordinator_core import warp_live
+from pathlib import Path
 
 TAIL = 200
 HEAD = 2000
@@ -15,7 +16,7 @@ CHUNK = 128
 
 
 @pytest.fixture(autouse=True)
-def small_windows(monkeypatch):
+def small_windows(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(warp_live, "_TRANSCRIPT_TAIL_BYTES", TAIL)
     monkeypatch.setattr(warp_live, "_TRANSCRIPT_HEAD_BYTES", HEAD)
     monkeypatch.setattr(warp_live, "_SCAN_CHUNK_BYTES", CHUNK)
@@ -39,7 +40,7 @@ def _reference(path: str, needle: str) -> str:
 
 
 class _CountingFile:
-    def __init__(self, inner, counter):
+    def __init__(self, inner, counter) -> None:
         self._inner = inner
         self._counter = counter
 
@@ -60,11 +61,11 @@ class _CountingFile:
 
 
 @pytest.fixture
-def bytes_read(monkeypatch):
+def bytes_read(monkeypatch: pytest.MonkeyPatch) -> list[int]:
     counter = [0]
     real_open = open
 
-    def counting_open(path, mode="r", *args, **kwargs):
+    def counting_open(path, mode: str = "r", *args, **kwargs) -> _CountingFile:
         return _CountingFile(real_open(path, mode, *args, **kwargs), counter)
 
     monkeypatch.setattr(warp_live, "open", counting_open, raising=False)
@@ -78,16 +79,16 @@ def _line(i: int, needle: str = "", width: int = 40) -> bytes:
     return (body + "\n").encode()
 
 
-def _write(path, lines):
+def _write(path, lines) -> None:
     path.write_bytes(b"".join(lines))
 
 
-def _append(path, lines):
+def _append(path, lines) -> None:
     with open(path, "ab") as handle:
         handle.write(b"".join(lines))
 
 
-def test_repeat_call_on_an_unchanged_transcript_reads_no_head_bytes(tmp_path, bytes_read):
+def test_repeat_call_on_an_unchanged_transcript_reads_no_head_bytes(tmp_path: Path, bytes_read) -> None:
     path = tmp_path / "t.jsonl"
     _write(path, [_line(i, "task-a" if i % 7 == 0 else "") for i in range(80)])
     first = warp_live._earlier_lines(str(path), "task-a")
@@ -98,7 +99,7 @@ def test_repeat_call_on_an_unchanged_transcript_reads_no_head_bytes(tmp_path, by
     assert bytes_read[0] <= warp_live._EARLIER_PROBE_BYTES
 
 
-def test_append_reads_only_the_newly_exposed_bytes_and_matches_a_full_scan(tmp_path, bytes_read):
+def test_append_reads_only_the_newly_exposed_bytes_and_matches_a_full_scan(tmp_path: Path, bytes_read) -> None:
     path = tmp_path / "t.jsonl"
     _write(path, [_line(i, "task-a" if i % 5 == 0 else "") for i in range(60)])
     warp_live._earlier_lines(str(path), "task-a")
@@ -111,7 +112,7 @@ def test_append_reads_only_the_newly_exposed_bytes_and_matches_a_full_scan(tmp_p
     assert bytes_read[0] <= appended + warp_live._EARLIER_PROBE_BYTES + 128
 
 
-def test_lines_sliding_from_the_tail_into_the_head_window_are_found(tmp_path):
+def test_lines_sliding_from_the_tail_into_the_head_window_are_found(tmp_path: Path) -> None:
     path = tmp_path / "t.jsonl"
     _write(path, [_line(i) for i in range(10)] + [_line(99, "task-a")])
     assert warp_live._earlier_lines(str(path), "task-a") == ""  # still inside the tail
@@ -121,7 +122,7 @@ def test_lines_sliding_from_the_tail_into_the_head_window_are_found(tmp_path):
     assert "task-a" in warp_live._earlier_lines(str(path), "task-a")
 
 
-def test_a_partial_line_that_completes_later_is_matched_once_whole(tmp_path):
+def test_a_partial_line_that_completes_later_is_matched_once_whole(tmp_path: Path) -> None:
     path = tmp_path / "t.jsonl"
     path.write_bytes(b"".join(_line(i) for i in range(30)) + b"half task-")
     _append(path, [_line(500) for _ in range(8)])
@@ -132,7 +133,7 @@ def test_a_partial_line_that_completes_later_is_matched_once_whole(tmp_path):
     assert warp_live._earlier_lines(str(path), "task-a") == _reference(str(path), "task-a")
 
 
-def test_truncation_invalidates_the_memo(tmp_path):
+def test_truncation_invalidates_the_memo(tmp_path: Path) -> None:
     path = tmp_path / "t.jsonl"
     _write(path, [_line(i, "task-a" if i % 4 == 0 else "") for i in range(80)])
     warp_live._earlier_lines(str(path), "task-a")
@@ -141,7 +142,7 @@ def test_truncation_invalidates_the_memo(tmp_path):
     assert warp_live._earlier_lines(str(path), "task-b") == _reference(str(path), "task-b")
 
 
-def test_a_replaced_file_of_greater_size_is_rescanned(tmp_path):
+def test_a_replaced_file_of_greater_size_is_rescanned(tmp_path: Path) -> None:
     path = tmp_path / "t.jsonl"
     _write(path, [_line(i, "task-a") for i in range(40)])
     stale = warp_live._earlier_lines(str(path), "task-a")
@@ -150,12 +151,12 @@ def test_a_replaced_file_of_greater_size_is_rescanned(tmp_path):
     assert warp_live._earlier_lines(str(path), "task-a") == _reference(str(path), "task-a")
 
 
-def test_a_missing_transcript_answers_empty_and_stores_nothing(tmp_path):
+def test_a_missing_transcript_answers_empty_and_stores_nothing(tmp_path: Path) -> None:
     assert warp_live._earlier_lines(str(tmp_path / "absent.jsonl"), "task-a") == ""
     assert warp_live._EARLIER_MEMO == {}
 
 
-def test_the_memo_is_keyed_on_the_needle(tmp_path):
+def test_the_memo_is_keyed_on_the_needle(tmp_path: Path) -> None:
     path = tmp_path / "t.jsonl"
     _write(path, [_line(i, "task-a" if i % 2 else "task-b") for i in range(60)])
     a = warp_live._earlier_lines(str(path), "task-a")
@@ -165,7 +166,7 @@ def test_the_memo_is_keyed_on_the_needle(tmp_path):
     assert b == _reference(str(path), "task-b")
 
 
-def test_memo_key_count_is_bounded(tmp_path, monkeypatch):
+def test_memo_key_count_is_bounded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(warp_live, "_EARLIER_MEMO_MAX_KEYS", 3)
     path = tmp_path / "t.jsonl"
     _write(path, [_line(i) for i in range(40)])
@@ -176,7 +177,7 @@ def test_memo_key_count_is_bounded(tmp_path, monkeypatch):
     assert (str(path), "needle-0") not in warp_live._EARLIER_MEMO
 
 
-def test_matched_bytes_over_the_cap_are_answered_but_not_stored(tmp_path, monkeypatch):
+def test_matched_bytes_over_the_cap_are_answered_but_not_stored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(warp_live, "_EARLIER_MEMO_MAX_BYTES", 10)
     path = tmp_path / "t.jsonl"
     _write(path, [_line(i, "task-a") for i in range(40)])
@@ -184,7 +185,7 @@ def test_matched_bytes_over_the_cap_are_answered_but_not_stored(tmp_path, monkey
     assert warp_live._EARLIER_MEMO == {}
 
 
-def test_crlf_lines_match_a_full_scan(tmp_path):
+def test_crlf_lines_match_a_full_scan(tmp_path: Path) -> None:
     path = tmp_path / "t.jsonl"
     _write(path, [_line(i, "task-a" if i % 3 == 0 else "").replace(b"\n", b"\r\n") for i in range(60)])
     assert warp_live._earlier_lines(str(path), "task-a") == _reference(str(path), "task-a")
@@ -192,7 +193,7 @@ def test_crlf_lines_match_a_full_scan(tmp_path):
     assert warp_live._earlier_lines(str(path), "task-a") == _reference(str(path), "task-a")
 
 
-def test_random_growth_always_equals_an_unmemoised_scan(tmp_path):
+def test_random_growth_always_equals_an_unmemoised_scan(tmp_path: Path) -> None:
     rng = random.Random(7)
     path = tmp_path / "t.jsonl"
     path.write_bytes(b"")

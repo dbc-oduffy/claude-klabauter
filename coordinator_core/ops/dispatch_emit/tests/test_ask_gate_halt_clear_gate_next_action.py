@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
+from pathlib import Path
+import pytest
 
 PLAN_REL = "docs/plans/2026-10-03-gated-only.md"
 _SIZING = "state/sizings/x.yaml"
@@ -36,21 +38,21 @@ def _refuse(tmp_path, plan: str) -> dict:
     return _handler({"run_id": "r1", "plan_path": PLAN_REL}, repo_root=tmp_path)
 
 
-def test_gated_only_refusal_carries_the_gated_rows_and_plan(tmp_path):
+def test_gated_only_refusal_carries_the_gated_rows_and_plan(tmp_path: Path) -> None:
     reply = _refuse(tmp_path, _PLAN)
     assert "zero dispatchable rows" in reply["error"]
     assert reply["gated_rows"] == [{"id": "G1", "owner_repo": "other-repo"}]
     assert reply["owed_plan"] == PLAN_REL
 
 
-def test_refusal_without_gated_rows_carries_none(tmp_path):
+def test_refusal_without_gated_rows_carries_none(tmp_path: Path) -> None:
     plan = _PLAN.replace("  external_gate:\n    - owner_repo: other-repo\n      requires: landed-work\n", "  disposition: coded\n")
     reply = _refuse(tmp_path, plan)
     assert "error" in reply
     assert "gated_rows" not in reply
 
 
-def test_halt_next_action_names_clear_gate_then_refire():
+def test_halt_next_action_names_clear_gate_then_refire() -> None:
     expr = ask_compose._all_em_next_action_js(_SIZING)
     gated = ask_compose._gated_next_action_js(_SIZING)
     assert gated in expr
@@ -62,7 +64,7 @@ def test_halt_next_action_names_clear_gate_then_refire():
     assert ask_compose._no_manifest_next_action_js(_SIZING) in gated
 
 
-def test_composed_script_folds_gated_rows_into_the_halt_manifest(monkeypatch):
+def test_composed_script_folds_gated_rows_into_the_halt_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit.tests.test_ask_owed_handback import _script
 
     script = _script(monkeypatch)

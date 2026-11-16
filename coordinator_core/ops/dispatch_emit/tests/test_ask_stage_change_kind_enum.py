@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     change_kind_members,
     read_spine,
 )
+from pathlib import Path
 
 PLAN_REL = "docs/plans/2026-10-16-ck.md"
 
@@ -24,40 +25,40 @@ def _plan(kind: str | None) -> str:
     )
 
 
-def _repo(tmp_path, kind):
+def _repo(tmp_path, kind) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / PLAN_REL).write_text(_plan(kind), encoding="utf-8", newline="\n")
 
 
-def test_members_come_from_the_schema():
+def test_members_come_from_the_schema() -> None:
     members = change_kind_members()
     assert "code-edit" in members
     assert "schema-edit" not in members
 
 
 @pytest.mark.parametrize("bad", ["schema-edit", "nonsense"])
-def test_stage_refuses_non_member_naming_row_and_field(tmp_path, bad):
+def test_stage_refuses_non_member_naming_row_and_field(tmp_path: Path, bad) -> None:
     _repo(tmp_path, bad)
     reply = _handler({"run_id": "r1", "plan_path": PLAN_REL}, repo_root=tmp_path)
     assert "INVALID-CHANGE-KIND" in reply["error"]
     assert "A1" in reply["error"] and "change_kind" in reply["error"] and bad in reply["error"]
 
 
-def test_stage_accepts_member(tmp_path):
+def test_stage_accepts_member(tmp_path: Path) -> None:
     _repo(tmp_path, "code-edit")
     write_run_scripts(tmp_path, "r1")
     reply = _handler({"run_id": "r1", "plan_path": PLAN_REL}, repo_root=tmp_path)
     assert "error" not in reply
 
 
-def test_emit_script_refuses_non_member(tmp_path):
+def test_emit_script_refuses_non_member(tmp_path: Path) -> None:
     _repo(tmp_path, "schema-edit")
     with pytest.raises(InvalidChangeKindError, match="A1"):
         emit.emit_script(tmp_path / PLAN_REL, repo_root=str(tmp_path))
 
 
-def test_enum_edited_after_first_read_is_seen_by_a_warm_engine(tmp_path, monkeypatch):
+def test_enum_edited_after_first_read_is_seen_by_a_warm_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import json
 
     from coordinator_core.ops.dispatch_emit import spine_read
@@ -78,7 +79,7 @@ def test_enum_edited_after_first_read_is_seen_by_a_warm_engine(tmp_path, monkeyp
     read_spine(repo / PLAN_REL)
 
 
-def test_read_spine_refuses_non_member(tmp_path):
+def test_read_spine_refuses_non_member(tmp_path: Path) -> None:
     _repo(tmp_path, "schema-edit")
     with pytest.raises(InvalidChangeKindError, match="change_kind"):
         read_spine(tmp_path / PLAN_REL)

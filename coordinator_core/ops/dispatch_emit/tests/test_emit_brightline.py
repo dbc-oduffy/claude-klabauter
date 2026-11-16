@@ -14,6 +14,8 @@ import time
 from coordinator_core.ops.dispatch_emit import emit as emit_mod
 from coordinator_core.ops.dispatch_emit import pathspec as pathspec_mod
 from coordinator_core.ops.dispatch_emit.emit import emit_script
+from pathlib import Path
+import pytest
 
 
 def _write_forty_row_plan(tmp_path):
@@ -34,7 +36,7 @@ def _write_forty_row_plan(tmp_path):
     return plan_path
 
 
-def test_emit_script_forty_row_fixture_is_fast_and_spawns_at_most_once(tmp_path, monkeypatch):
+def test_emit_script_forty_row_fixture_is_fast_and_spawns_at_most_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plan_path = _write_forty_row_plan(tmp_path)
 
     spawn_count = 0
@@ -55,7 +57,7 @@ def test_emit_script_forty_row_fixture_is_fast_and_spawns_at_most_once(tmp_path,
     assert spawn_count <= 1
 
 
-def test_map_written_path_to_test_target_called_at_most_once_per_distinct_path(tmp_path, monkeypatch):
+def test_map_written_path_to_test_target_called_at_most_once_per_distinct_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plan_path = _write_forty_row_plan(tmp_path)
 
     calls = []
@@ -88,7 +90,7 @@ def _write_two_row_plan(tmp_path, name, surface):
     return plan_path
 
 
-def test_memo_shaped_row_costs_the_same_spawns_and_process_time(tmp_path, monkeypatch):
+def test_memo_shaped_row_costs_the_same_spawns_and_process_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     receiver = tmp_path / "receiver-repo"
     (receiver / ".git").mkdir(parents=True)
     machine_local = tmp_path / "claude-home" / ".coordinator-claude-settings" / "machine-local"

@@ -107,12 +107,35 @@ def test_from_sizing_honours_a_given_list(repo, capsys):
     assert "notebooks" not in bound["nlm-preflight"]
 
 
-def test_a_notebooklm_sizing_with_no_notebooks_names_both_routes(repo, capsys):
+def test_a_notebooklm_sizing_with_no_notebooks_derives_one_per_question(repo, capsys):
+    rel = _write_sizing(
+        repo, "--research-class", "corpus", "--research-source", "notebooklm", "--research-notebooklm-need", "youtube",
+        "--research-question", "One?", "--research-question", "Two?",
+    )
+    capsys.readouterr()
+    code, reply = _run(capsys, ["--from-sizing", rel])
+    assert code == cli_module.EXIT_OK and reply["ok"]
+    ctx, _, _ = op_module._research_route_setup({}, repo, rel, None)
+    bound = {m.pipeline: i.lists for m, i, _ in ctx["segments"]}
+    assert bound["notebooklm"]["notebooks"] == ("A", "B")
+
+
+def test_a_notebooklm_sizing_with_no_notebooks_and_no_questions_names_both_routes(repo, capsys):
     rel = _write_sizing(repo, "--research-class", "corpus", "--research-source", "notebooklm", "--research-notebooklm-need", "youtube")
     capsys.readouterr()
     assert cli_module.main(["--from-sizing", rel]) == cli_module.EXIT_DATA_ERROR
     err = capsys.readouterr().err
     assert "--research-target notebooklm=" in err and "--list notebooks=" in err
+
+
+def test_a_given_notebook_list_wins_over_the_derived_one(repo):
+    rel = _write_sizing(
+        repo, "--research-class", "corpus", "--research-source", "notebooklm", "--research-notebooklm-need", "youtube",
+        "--research-question", "One?", "--research-question", "Two?", "--research-question", "Three?",
+    )
+    ctx, _, _ = op_module._research_route_setup({"lists": {"notebooks": ["Z"]}}, repo, rel, None)
+    bound = {m.pipeline: i.lists for m, i, _ in ctx["segments"]}
+    assert bound["notebooklm"]["notebooks"] == ("Z",)
 
 
 def test_research_ask_writes_ask_md_and_binds_it_as_the_brief(repo, capsys):

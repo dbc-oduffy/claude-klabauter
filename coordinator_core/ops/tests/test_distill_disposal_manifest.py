@@ -132,7 +132,7 @@ def _unclassifiable(tmp_path: Path, name: str = "spec.md") -> Path:
 
 
 @_requires_rg
-def test_evaluate_candidate_receipts_fully_eligible(tmp_path: Path):
+def test_evaluate_candidate_receipts_fully_eligible(tmp_path: Path) -> None:
     handoff = _full_handoff(tmp_path)
     receipt = evaluate_candidate_receipts(handoff, tmp_path)
     assert receipt["eligible"] is True
@@ -145,7 +145,7 @@ def test_evaluate_candidate_receipts_fully_eligible(tmp_path: Path):
 
 
 @_requires_rg
-def test_evaluate_candidate_receipts_blocked_but_receipts_present(tmp_path: Path):
+def test_evaluate_candidate_receipts_blocked_but_receipts_present(tmp_path: Path) -> None:
     handoff = _blocked_handoff(tmp_path)
     receipt = evaluate_candidate_receipts(handoff, tmp_path)
     assert receipt["eligible"] is False
@@ -159,7 +159,7 @@ def test_evaluate_candidate_receipts_blocked_but_receipts_present(tmp_path: Path
 
 
 @_requires_rg
-def test_evaluate_candidate_receipts_unclassifiable(tmp_path: Path):
+def test_evaluate_candidate_receipts_unclassifiable(tmp_path: Path) -> None:
     spec = _unclassifiable(tmp_path)
     receipt = evaluate_candidate_receipts(spec, tmp_path)
     assert receipt["eligible"] is False
@@ -173,7 +173,7 @@ def test_evaluate_candidate_receipts_unclassifiable(tmp_path: Path):
 
 
 @_requires_rg
-def test_compute_disposal_manifest_eligible_and_retained_rows(tmp_path: Path):
+def test_compute_disposal_manifest_eligible_and_retained_rows(tmp_path: Path) -> None:
     _full_handoff(tmp_path, "eligible.md")
     _blocked_handoff(tmp_path, "blocked.md")
     result = compute_disposal_manifest(
@@ -195,7 +195,7 @@ def test_compute_disposal_manifest_eligible_and_retained_rows(tmp_path: Path):
 
 
 @_requires_rg
-def test_compute_disposal_manifest_receipt_completeness(tmp_path: Path):
+def test_compute_disposal_manifest_receipt_completeness(tmp_path: Path) -> None:
     _full_handoff(tmp_path, "eligible.md")
     _blocked_handoff(tmp_path, "blocked.md")
     result = compute_disposal_manifest(
@@ -210,7 +210,7 @@ def test_compute_disposal_manifest_receipt_completeness(tmp_path: Path):
 
 
 @_requires_rg
-def test_compute_disposal_manifest_scan_stats_totals(tmp_path: Path):
+def test_compute_disposal_manifest_scan_stats_totals(tmp_path: Path) -> None:
     _full_handoff(tmp_path, "a.md")
     _full_handoff(tmp_path, "b.md")
     _blocked_handoff(tmp_path, "c.md")
@@ -231,7 +231,7 @@ def test_compute_disposal_manifest_scan_stats_totals(tmp_path: Path):
 
 
 @_requires_rg
-def test_compute_disposal_manifest_mass_throttle_boundary(tmp_path: Path):
+def test_compute_disposal_manifest_mass_throttle_boundary(tmp_path: Path) -> None:
     # Exactly at the ratio (1/2 == 0.5, NOT > 0.5) -> flag unset.
     _full_handoff(tmp_path, "eligible.md")
     _blocked_handoff(tmp_path, "blocked.md")
@@ -258,7 +258,7 @@ def test_compute_disposal_manifest_mass_throttle_boundary(tmp_path: Path):
     assert over_threshold.manifest["mass_throttle"] is True
 
 
-def test_compute_disposal_manifest_mass_throttle_zero_scanned_does_not_trip(tmp_path: Path):
+def test_compute_disposal_manifest_mass_throttle_zero_scanned_does_not_trip(tmp_path: Path) -> None:
     # § 1a fix: an empty manifest (zero blast radius, the single safest
     # possible input) must be a clean no-op, NOT a flag that trains an
     # operator to type the ack reflexively on the harmless run.
@@ -268,7 +268,7 @@ def test_compute_disposal_manifest_mass_throttle_zero_scanned_does_not_trip(tmp_
 
 
 @_requires_rg
-def test_compute_disposal_manifest_mass_throttle_absolute_floor(tmp_path: Path):
+def test_compute_disposal_manifest_mass_throttle_absolute_floor(tmp_path: Path) -> None:
     # § 1a fix: the plan's own motivating F2 scenario ("400 eligible out of
     # 1000 scanned") is a 0.4 ratio and would never trip a ratio-only test at
     # a corpus size where the ratio stays under 0.5. Use a low ratio
@@ -315,7 +315,7 @@ def test_compute_disposal_manifest_mass_throttle_absolute_floor(tmp_path: Path):
     assert over_floor.manifest["mass_throttle"] is True
 
 
-def test_compute_disposal_manifest_absent_candidate_path_retained(tmp_path: Path):
+def test_compute_disposal_manifest_absent_candidate_path_retained(tmp_path: Path) -> None:
     result = compute_disposal_manifest(
         tmp_path,
         run_id="2026-07-23-01h00",
@@ -334,7 +334,7 @@ def test_compute_disposal_manifest_absent_candidate_path_retained(tmp_path: Path
 
 
 @_requires_rg
-def test_compute_disposal_manifest_deletion_groups_additive_key(tmp_path: Path):
+def test_compute_disposal_manifest_deletion_groups_additive_key(tmp_path: Path) -> None:
     candidates = []
     for i in range(GROUP_THRESHOLD + 5):
         name = f"eligible-{i:03d}.md"
@@ -350,7 +350,7 @@ def test_compute_disposal_manifest_deletion_groups_additive_key(tmp_path: Path):
 
 
 @_requires_rg
-def test_compute_disposal_manifest_no_deletion_groups_below_threshold(tmp_path: Path):
+def test_compute_disposal_manifest_no_deletion_groups_below_threshold(tmp_path: Path) -> None:
     _full_handoff(tmp_path, "eligible.md")
     result = compute_disposal_manifest(
         tmp_path, run_id="2026-07-23-01h00", candidates=["archive/handoffs/eligible.md"]
@@ -364,7 +364,7 @@ def test_compute_disposal_manifest_no_deletion_groups_below_threshold(tmp_path: 
 
 
 @_requires_rg
-def test_write_disposal_manifest_writes_valid_json(tmp_path: Path):
+def test_write_disposal_manifest_writes_valid_json(tmp_path: Path) -> None:
     _full_handoff(tmp_path, "eligible.md")
     result = compute_disposal_manifest(
         tmp_path, run_id="2026-07-23-01h00", candidates=["archive/handoffs/eligible.md"]
@@ -384,7 +384,7 @@ def test_write_disposal_manifest_writes_valid_json(tmp_path: Path):
 
 
 @_requires_rg
-def test_write_disposal_manifest_write_confined_to_own_run_id(tmp_path: Path):
+def test_write_disposal_manifest_write_confined_to_own_run_id(tmp_path: Path) -> None:
     _full_handoff(tmp_path, "eligible.md")
     result_a = compute_disposal_manifest(
         tmp_path, run_id="2026-07-23-01h00", candidates=["archive/handoffs/eligible.md"]
@@ -406,25 +406,25 @@ def test_write_disposal_manifest_write_confined_to_own_run_id(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_handler_raises_on_repo_root_none():
+def test_handler_raises_on_repo_root_none() -> None:
     with pytest.raises(ValueError, match="_origin_worktree"):
         _handler({"run_id": "2026-07-23-01h00", "candidates": []}, repo_root=None)
 
 
-def test_handler_raises_on_missing_run_id(tmp_path: Path):
+def test_handler_raises_on_missing_run_id(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     with pytest.raises(ValueError, match=r"run_id.*distill\.scope"):
         _handler({"candidates": []}, repo_root=tmp_path / ".git")
 
 
-def test_handler_raises_on_missing_candidates(tmp_path: Path):
+def test_handler_raises_on_missing_candidates(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     with pytest.raises(ValueError, match="candidates"):
         _handler({"run_id": "2026-07-23-01h00"}, repo_root=tmp_path / ".git")
 
 
 @_requires_rg
-def test_dispatch_message_smoke(tmp_path: Path):
+def test_dispatch_message_smoke(tmp_path: Path) -> None:
     """End-to-end command-type dispatch via the REAL registered wiring
     (ops/__init__.py eager import + _registry_map.py + op_scopes.py + the
     @register_op decorator)."""

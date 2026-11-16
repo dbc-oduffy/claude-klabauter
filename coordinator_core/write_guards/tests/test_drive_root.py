@@ -8,10 +8,11 @@ import pytest
 
 from coordinator_core.bash_guards import _write_bump_sink_shapes as sinks
 from coordinator_core.write_guards import _drive_root as dr
+from pathlib import Path
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     root = tmp_path / "root"
     home = tmp_path / "home"
     root.mkdir()
@@ -25,20 +26,20 @@ def world(tmp_path, monkeypatch):
     return root, home
 
 
-def test_new_top_level_under_root_returns_name(world):
+def test_new_top_level_under_root_returns_name(world) -> None:
     root, _ = world
     assert dr.new_top_level_entry(str(root / "fresh" / "f.txt"), None) == "fresh"
     assert dr.new_top_level_entry(str(root / "fresh"), None) == "fresh"
 
 
-def test_existing_nested_and_root_itself_allowed(world):
+def test_existing_nested_and_root_itself_allowed(world) -> None:
     root, _ = world
     assert dr.new_top_level_entry(str(root / "existing" / "a" / "b.txt"), None) is None
     assert dr.new_top_level_entry(str(root / "existing"), None) is None
     assert dr.new_top_level_entry(str(root), None) is None
 
 
-def test_placed_checkout_is_existing_entry(world):
+def test_placed_checkout_is_existing_entry(world) -> None:
     root, _ = world
     (root / "placed" / ".git").mkdir(parents=True)
     assert dr.new_top_level_entry(str(root / "placed" / "x" / "f"), None) is None
@@ -46,36 +47,36 @@ def test_placed_checkout_is_existing_entry(world):
     assert not dr.is_checkout_or_link(str(root / "existing"))
 
 
-def test_home_depth_two_new_first_component(world):
+def test_home_depth_two_new_first_component(world) -> None:
     _, home = world
     assert dr.new_top_level_entry(str(home / "newdir" / "f.txt"), None) == "newdir"
     assert dr.new_top_level_entry(str(home / "dotdir" / "f.txt"), None) is None
 
 
-def test_home_depth_one_left_to_home_root_pair(world):
+def test_home_depth_one_left_to_home_root_pair(world) -> None:
     _, home = world
     assert dr.new_top_level_entry(str(home / "f.txt"), None) is None
 
 
-def test_relative_target_with_cwd_at_root(world):
+def test_relative_target_with_cwd_at_root(world) -> None:
     root, _ = world
     assert dr.new_top_level_entry("fresh", str(root)) == "fresh"
     assert dr.new_top_level_entry("existing/x", str(root)) is None
     assert dr.new_top_level_entry("fresh", "") is None
 
 
-def test_outside_configured_roots_allowed(world, tmp_path):
+def test_outside_configured_roots_allowed(world, tmp_path: Path) -> None:
     assert dr.new_top_level_entry(str(tmp_path / "elsewhere" / "f"), None) is None
 
 
-def test_payload_env_pins_roots(world, tmp_path):
+def test_payload_env_pins_roots(world, tmp_path: Path) -> None:
     other = tmp_path / "other"
     other.mkdir()
     env = {"COORDINATOR_DRIVE_ROOTS": str(other)}
     assert dr.new_top_level_entry(str(other / "n" / "f"), None, env=env) == "n"
 
 
-def test_windows_bare_slash_rerooted_on_cwd_drive(monkeypatch):
+def test_windows_bare_slash_rerooted_on_cwd_drive(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sinks, "_host_is_windows", lambda: True)
     # `configured_drive_roots` splits on `os.pathsep`; a POSIX ":" would cut "Z:\\" into "Z" and "\\".
     monkeypatch.setattr(os, "pathsep", ";")
@@ -89,7 +90,7 @@ def test_windows_bare_slash_rerooted_on_cwd_drive(monkeypatch):
     assert dr.new_top_level_entry("/newdir/f", z + "work", env=env) is None
 
 
-def test_override_active_is_caller_keyed(monkeypatch):
+def test_override_active_is_caller_keyed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(dr.OVERRIDE_KEY, raising=False)
     assert dr.override_active({"env": {dr.OVERRIDE_KEY: "1"}})
     monkeypatch.setenv(dr.OVERRIDE_KEY, "1")
@@ -100,13 +101,13 @@ def test_override_active_is_caller_keyed(monkeypatch):
     assert not dr.override_active({"env": {dr.OVERRIDE_KEY: "0"}})
 
 
-def test_configured_drive_roots(monkeypatch):
+def test_configured_drive_roots(monkeypatch: pytest.MonkeyPatch) -> None:
     assert dr.configured_drive_roots({}) == ()
     joined = os.pathsep.join(["a", "", "b"])
     assert dr.configured_drive_roots({"COORDINATOR_DRIVE_ROOTS": joined}) == ("a", "b")
 
 
-def test_deny_reason_names_scratch_and_leaks_nothing():
+def test_deny_reason_names_scratch_and_leaks_nothing() -> None:
     text = dr.deny_reason("fresh")
     assert "<repo>/scratch/" in text
     assert "fresh" in text
@@ -114,13 +115,13 @@ def test_deny_reason_names_scratch_and_leaks_nothing():
     assert not any(tok.startswith((os.sep, "/")) and len(tok) > 1 for tok in text.split())
 
 
-def _pin(monkeypatch, value):
+def _pin(monkeypatch, value) -> None:
     from coordinator_core.session import general_work_scope as gws
 
     monkeypatch.setattr(gws, "general_work_root", lambda: value)
 
 
-def test_pinned_general_work_root_is_exempt(world, monkeypatch):
+def test_pinned_general_work_root_is_exempt(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _ = world
     _pin(monkeypatch, str(root / "_general-work"))
     assert dr.new_top_level_entry(str(root / "_general-work" / "a" / "f.txt"), None) is None
@@ -128,13 +129,13 @@ def test_pinned_general_work_root_is_exempt(world, monkeypatch):
     assert dr.new_top_level_entry(str(root / "other" / "f.txt"), None) == "other"
 
 
-def test_unset_or_unreadable_pin_exempts_nothing(world, monkeypatch):
+def test_unset_or_unreadable_pin_exempts_nothing(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _ = world
     _pin(monkeypatch, None)
     assert dr.new_top_level_entry(str(root / "_general-work" / "f"), None) == "_general-work"
 
 
-def test_general_work_and_gem_cwd_are_exempt_other_cwd_is_not(world, monkeypatch):
+def test_general_work_and_gem_cwd_are_exempt_other_cwd_is_not(world, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.group_em import gem_home
     from coordinator_core.session import general_work_scope as gws
 
@@ -151,7 +152,7 @@ def test_general_work_and_gem_cwd_are_exempt_other_cwd_is_not(world, monkeypatch
     assert dr.new_top_level_entry(target, None) == "fresh"
 
 
-def test_unreadable_exemption_sources_exempt_nothing(world, monkeypatch):
+def test_unreadable_exemption_sources_exempt_nothing(world, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.group_em import gem_home
     from coordinator_core.session import general_work_scope as gws
 
@@ -165,7 +166,7 @@ def test_unreadable_exemption_sources_exempt_nothing(world, monkeypatch):
     assert dr.new_top_level_entry(str(root / "fresh" / "f"), str(root / "existing")) == "fresh"
 
 
-def test_scope_equals_enforcement(world):
+def test_scope_equals_enforcement(world) -> None:
     root, home = world
     in_scope = [
         str(root / "n1"),

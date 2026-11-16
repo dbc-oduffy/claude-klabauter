@@ -9,15 +9,14 @@ Windows, ``uss`` elsewhere. The test spawns once and only in this test, never in
 from __future__ import annotations
 
 import os
-import subprocess
 import sys
-import time
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.ops._pytest_child_env import pytest_child_env
 from coordinator_core.testing import spawn_depth
+from coordinator_core.testing.peak_rss import peak_private_bytes
 
 psutil = pytest.importorskip("psutil")
 
@@ -28,41 +27,11 @@ _POLL_S = 0.02
 _TIMEOUT_S = 120
 
 
-def _private_bytes(proc: "psutil.Process") -> int:
-    if sys.platform == "win32":
-        return proc.memory_info().private
-    return proc.memory_full_info().uss
-
-
 def _peak_private_bytes(argv: list, env: dict) -> tuple:
-    """Run ``argv`` to completion; return (returncode, peak private bytes seen while it ran)."""
-    child = subprocess.Popen(
-        argv,
-        cwd=str(REPO_ROOT),
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    )
-    peak = 0
-    deadline = time.monotonic() + _TIMEOUT_S
     try:
-        proc = psutil.Process(child.pid)
-        while child.poll() is None:
-            if time.monotonic() > deadline:
-                child.kill()
-                pytest.fail(f"pytest child exceeded {_TIMEOUT_S}s")
-            try:
-                peak = max(peak, _private_bytes(proc))
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                break
-            time.sleep(_POLL_S)
-        child.communicate(timeout=30)
-    finally:
-        if child.poll() is None:
-            child.kill()
-            child.communicate()
-    return child.returncode, peak
+        return peak_private_bytes(argv, env, cwd=str(REPO_ROOT), timeout_s=_TIMEOUT_S, poll_s=_POLL_S)
+    except TimeoutError:
+        pytest.fail(f"pytest child exceeded {_TIMEOUT_S}s")
 
 
 def test_spawned_pytest_child_private_commit_below_bar(monkeypatch):

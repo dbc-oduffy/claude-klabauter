@@ -7,6 +7,7 @@ from typing import Any, Iterator
 
 from coordinator_core.contract.cockpit_schema import ENTITY_SCHEMAS
 from coordinator_core.contract.cockpit_schema.emit_schema import emit_schemas
+from pathlib import Path
 
 _DELIVERABLE_STATUS = [
     "proposed",
@@ -34,7 +35,7 @@ def _status_enums(doc: dict) -> list[list]:
     return list(_walk_enums(status))
 
 
-def test_plan_and_initiative_status_enums_hold_closed_and_abandoned(tmp_path):
+def test_plan_and_initiative_status_enums_hold_closed_and_abandoned(tmp_path: Path) -> None:
     emit_schemas(ENTITY_SCHEMAS, out_dir=tmp_path)
     for name in ("plan-summary", "initiative-summary"):
         doc = json.loads((tmp_path / f"{name}.schema.json").read_text(encoding="utf-8"))
@@ -43,7 +44,7 @@ def test_plan_and_initiative_status_enums_hold_closed_and_abandoned(tmp_path):
         assert any("closed" in e and "abandoned" in e for e in enums), (name, enums)
 
 
-def test_deliverable_status_enums_unchanged(tmp_path):
+def test_deliverable_status_enums_unchanged(tmp_path: Path) -> None:
     emit_schemas(ENTITY_SCHEMAS, out_dir=tmp_path)
     found = 0
     for path in sorted(tmp_path.glob("*.schema.json")):

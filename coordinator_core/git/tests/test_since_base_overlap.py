@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 from coordinator_core.git import since_base_overlap
 from coordinator_core.git.git_objects import build_tree, write_object
 from coordinator_core.ops.dispatch_emit.landing_integrity import SINCE_BASE_OVERLAP
+import pytest
 
 PATH = "pkg/mod.py"
 PLAN = "docs/plans/own-plan.md"
@@ -58,7 +59,7 @@ def _join(lines: List[str]) -> str:
     return "".join(lines)
 
 
-def _setup(tmp_path: Path):
+def _setup(tmp_path: Path) -> tuple[_Repo, str, list[str]]:
     repo = _Repo(tmp_path)
     base_lines = _base_lines()
     base = repo.commit({PATH: _join(base_lines)}, "base")
@@ -224,7 +225,7 @@ def test_own_checkpoint_commit_lines_do_not_count(tmp_path: Path) -> None:
     assert since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id=None, plan=PLAN) == []
 
 
-def _older_base_setup(tmp_path: Path, plan: str):
+def _older_base_setup(tmp_path: Path, plan: str) -> str:
     repo, b0, base_lines = _setup(tmp_path)
     b1 = repo.commit({PATH: _join(base_lines), "other.txt": "x\n"}, "run base")
     own_lines = list(base_lines)
@@ -240,7 +241,7 @@ def test_own_checkpoint_commit_stamped_with_ancestor_of_run_base_is_own(tmp_path
     assert since_base_overlap.check(tmp_path, [PATH], b1, plan=PLAN) == ([], [])
 
 
-def test_ancestor_walk_is_bounded_by_ancestor_cap(tmp_path: Path, monkeypatch) -> None:
+def test_ancestor_walk_is_bounded_by_ancestor_cap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     b1 = _older_base_setup(tmp_path, PLAN)
     monkeypatch.setattr(since_base_overlap, "ANCESTOR_CAP", 0)
 
@@ -265,7 +266,7 @@ def test_other_plan_checkpoint_commit_is_foreign(tmp_path: Path) -> None:
     assert len(since_base_overlap.find_overlaps(tmp_path, [PATH], base, run_id=None, plan=PLAN)) == 1
 
 
-def _halt_record_setup(tmp_path: Path, subject: str):
+def _halt_record_setup(tmp_path: Path, subject: str) -> str:
     repo, base, base_lines = _setup(tmp_path)
     halted = list(base_lines)
     halted.insert(40, "halt_record_line = 1\n")
@@ -401,7 +402,7 @@ def _count_meta_reads_after_chain_walk(monkeypatch) -> List[str]:
     return reads
 
 
-def test_clean_landing_reads_no_commit_metadata_beyond_the_chain_walk(tmp_path: Path, monkeypatch) -> None:
+def test_clean_landing_reads_no_commit_metadata_beyond_the_chain_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, base, base_lines = _setup(tmp_path)
     for n in range(30):
         repo.commit({PATH: _join(base_lines), f"other{n}.txt": "x\n"}, f"unrelated {n}")
@@ -416,7 +417,7 @@ def test_clean_landing_reads_no_commit_metadata_beyond_the_chain_walk(tmp_path: 
     assert (findings, notes) == ([], []) and reads == []
 
 
-def test_landing_that_drops_no_line_never_walks_the_chain(tmp_path: Path, monkeypatch) -> None:
+def test_landing_that_drops_no_line_never_walks_the_chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, base, base_lines = _setup(tmp_path)
     repo.commit({PATH: _join(base_lines) + "foreign = 1\n"}, "foreign")
     repo.land(_join(base_lines) + "foreign = 1\n" + "own = 1\n")
@@ -428,7 +429,7 @@ def test_landing_that_drops_no_line_never_walks_the_chain(tmp_path: Path, monkey
     assert walks == []
 
 
-def test_landing_that_drops_a_line_walks_the_chain_once(tmp_path: Path, monkeypatch) -> None:
+def test_landing_that_drops_a_line_walks_the_chain_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, base, base_lines = _setup(tmp_path)
     foreign_lines = list(base_lines)
     foreign_lines.insert(40, "foreign_change = 1\n")
@@ -443,7 +444,7 @@ def test_landing_that_drops_a_line_walks_the_chain_once(tmp_path: Path, monkeypa
     assert len(findings) == 2 and len(walks) == 1
 
 
-def test_dropping_landing_reads_commit_metadata_for_the_chain(tmp_path: Path, monkeypatch) -> None:
+def test_dropping_landing_reads_commit_metadata_for_the_chain(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, base, base_lines = _setup(tmp_path)
     foreign_lines = list(base_lines)
     foreign_lines.insert(40, "foreign_change = 1\n")
@@ -465,7 +466,7 @@ def _tiles(ops, a, b) -> bool:
     return (i, j) == (len(a), len(b))
 
 
-def _repetitive_pair(n: int):
+def _repetitive_pair(n: int) -> tuple[list[bytes], list[bytes]]:
     a = [b"    0.0,\n" if i % 5 else f"    {i}.5,\n".encode() for i in range(n)]
     b = [b"    0.0,\n" if i % 4 else f"    {i}.25,\n".encode() for i in range(n)]
     b[0], a[-1] = b"first\n", b"last\n"
@@ -484,7 +485,7 @@ def test_opcodes_on_a_70k_line_repetitive_pair_tile_both_sides_under_the_bar() -
     assert _tiles(ops, a, b)
 
 
-def test_opcodes_hand_difflib_no_more_than_the_bound_per_side(monkeypatch) -> None:
+def test_opcodes_hand_difflib_no_more_than_the_bound_per_side(monkeypatch: pytest.MonkeyPatch) -> None:
     import difflib
 
     from coordinator_core.ops.dispatch_emit.run_hunk_claims import MAX_MATCHED_MIDDLE
@@ -493,7 +494,7 @@ def test_opcodes_hand_difflib_no_more_than_the_bound_per_side(monkeypatch) -> No
     real = difflib.SequenceMatcher
 
     class Spy(real):
-        def __init__(self, isjunk=None, a="", b="", autojunk=True):
+        def __init__(self, isjunk=None, a: str = "", b: str = "", autojunk: bool = True) -> None:
             seen.append((len(a), len(b)))
             super().__init__(isjunk, a, b, autojunk)
 
@@ -537,7 +538,7 @@ def test_module_cannot_spawn() -> None:
     assert not hasattr(since_base_overlap, "subprocess")
 
 
-def test_path_history_beyond_version_cap_is_a_note_not_a_finding(tmp_path: Path, monkeypatch) -> None:
+def test_path_history_beyond_version_cap_is_a_note_not_a_finding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, base, base_lines = _setup(tmp_path)
     monkeypatch.setattr(since_base_overlap, "VERSIONS_PER_PATH_CAP", 2)
     lines = list(base_lines)

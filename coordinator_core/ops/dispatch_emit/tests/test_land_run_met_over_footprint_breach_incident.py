@@ -93,7 +93,7 @@ def _stage_replanned_run(root, c5_register_rows: str) -> str:
     return token
 
 
-def test_row_appended_after_the_footprint_was_recorded_lands_with_no_unlanded_trailer(halted):  # noqa: F811
+def test_row_appended_after_the_footprint_was_recorded_lands_with_no_unlanded_trailer(halted) -> None:  # noqa: F811
     resume = _composed(halted)
     token = _stage_replanned_run(halted, "")
 
@@ -106,7 +106,7 @@ def test_row_appended_after_the_footprint_was_recorded_lands_with_no_unlanded_tr
     assert "Row-Unlanded: C5" not in _git(halted, "show", "-s", "--format=%B", out["sha"])
 
 
-def test_met_resting_on_a_row_whose_paths_are_withheld_refuses_and_leaves_them_dirty(halted):  # noqa: F811
+def test_met_resting_on_a_row_whose_paths_are_withheld_refuses_and_leaves_them_dirty(halted) -> None:  # noqa: F811
     resume = _composed(halted)
     token = _stage_replanned_run(halted, '  register_rows: ["R2"]\n')
     head = _git(halted, "rev-parse", "HEAD")

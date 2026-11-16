@@ -16,7 +16,7 @@ FOREIGN = "committed lines 3 were not produced by run ask-own; probable owner ru
 CONFLICT = "memo says execute_review.py stays untouched; the ask edits it"
 
 
-def _critical(repo, severity="critical", status=None, stem="rev-1", file=PATH) -> None:
+def _critical(repo, severity: str = "critical", status=None, stem: str = "rev-1", file=PATH) -> None:
     _record(repo, OWN, stem)
     row = {"id": "f1", "file": file, "summary": "peer hunks ride along", "severity": severity}
     if status:
@@ -38,44 +38,44 @@ def _landing(repo, conflicts=()) -> dict:
 
 
 @pytest.mark.parametrize("severity", ["critical", "P0"])
-def test_a_critical_row_naming_the_path_is_an_out_of_ask_hold(repo, severity):
+def test_a_critical_row_naming_the_path_is_an_out_of_ask_hold(repo, severity) -> None:
     _critical(repo, severity)
     assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, [PATH]) == [(PATH, "rev-1", "peer hunks ride along")]
 
 
 @pytest.mark.parametrize("severity", ["major", "P1", "minor", "nit", "bogus"])
-def test_a_non_critical_row_holds_nothing(repo, severity):
+def test_a_non_critical_row_holds_nothing(repo, severity) -> None:
     _critical(repo, severity)
     assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, [PATH]) == []
 
 
 @pytest.mark.parametrize("status", ["applied", "em-rejected"])
-def test_a_resolved_critical_row_holds_nothing(repo, status):
+def test_a_resolved_critical_row_holds_nothing(repo, status) -> None:
     _critical(repo, status=status)
     assert peer_hunk_gate.out_of_ask_holds(repo, SELF, OWN, [PATH]) == []
 
 
-def test_a_critical_row_on_a_path_with_a_foreign_hunk_is_held_under_its_owner(repo, monkeypatch):
+def test_a_critical_row_on_a_path_with_a_foreign_hunk_is_held_under_its_owner(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _critical(repo)
     _stub_unproduced(monkeypatch, {PATH: FOREIGN})
     monkeypatch.setattr(hunk_provenance, "landable_under_hold", lambda *a, **k: set())
     assert _landing(repo) == {PATH: "run-z"}
 
 
-def test_a_critical_row_on_a_foreign_hunk_path_carries_the_own_hunk_split(repo, monkeypatch):
+def test_a_critical_row_on_a_foreign_hunk_path_carries_the_own_hunk_split(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _critical(repo)
     _stub_unproduced(monkeypatch, {PATH: FOREIGN})
     monkeypatch.setattr(hunk_provenance, "landable_under_hold", lambda root, run_id, plan, held, split_only=frozenset(): set(held))
     assert _landing(repo) == {}
 
 
-def test_a_critical_row_on_an_own_only_path_is_not_held(repo, monkeypatch):
+def test_a_critical_row_on_an_own_only_path_is_not_held(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _critical(repo)
     _stub_unproduced(monkeypatch, {})
     assert _landing(repo) == {}
 
 
-def test_a_critical_row_on_a_path_a_live_peer_co_declares_is_held_and_released_only_by_the_split(repo, monkeypatch):
+def test_a_critical_row_on_a_path_a_live_peer_co_declares_is_held_and_released_only_by_the_split(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _critical(repo)
     _declare(repo, "run-b", PATH)
     run_token.mint(repo, "run-b", "b.mjs", session_id=SELF)
@@ -91,7 +91,7 @@ def test_a_critical_row_on_a_path_a_live_peer_co_declares_is_held_and_released_o
     assert seen == [({PATH: "run-b"}, frozenset({PATH}))]
 
 
-def test_an_out_of_ask_row_still_holds_a_path_with_no_foreign_hunk(repo, monkeypatch):
+def test_an_out_of_ask_row_still_holds_a_path_with_no_foreign_hunk(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _critical(repo, severity="major")
     path = repo / ".coordinator-local" / "subagent-share" / SELF / "rev-1.md"
     path.write_text(path.read_text(encoding="utf-8").replace('"severity"', '"out_of_ask": true, "severity"'), encoding="utf-8")
@@ -100,13 +100,13 @@ def test_an_out_of_ask_row_still_holds_a_path_with_no_foreign_hunk(repo, monkeyp
     assert _landing(repo) == {PATH: "rev-1"}
 
 
-def test_a_ledger_conflict_naming_a_path_with_a_foreign_hunk_is_held(repo, monkeypatch):
+def test_a_ledger_conflict_naming_a_path_with_a_foreign_hunk_is_held(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_unproduced(monkeypatch, {PATH: FOREIGN})
     monkeypatch.setattr(hunk_provenance, "landable_under_hold", lambda *a, **k: set())
     assert _landing(repo, [CONFLICT]) == {PATH: "run-z"}
 
 
-def test_a_ledger_conflict_carries_the_own_hunk_split_when_one_settles(repo, monkeypatch):
+def test_a_ledger_conflict_carries_the_own_hunk_split_when_one_settles(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_unproduced(monkeypatch, {PATH: FOREIGN})
     seen: list = []
 
@@ -119,7 +119,7 @@ def test_a_ledger_conflict_carries_the_own_hunk_split_when_one_settles(repo, mon
     assert seen == [frozenset({PATH})]
 
 
-def test_a_ledger_conflict_naming_an_own_only_path_or_another_file_holds_nothing(repo, monkeypatch):
+def test_a_ledger_conflict_naming_an_own_only_path_or_another_file_holds_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_unproduced(monkeypatch, {})
     assert _landing(repo, [CONFLICT]) == {}
     assert peer_hunk_gate._conflict_paths(["memo about pkg/other.py only"], [PATH]) == []
@@ -127,7 +127,7 @@ def test_a_ledger_conflict_naming_an_own_only_path_or_another_file_holds_nothing
     assert peer_hunk_gate._conflict_paths([f"see {PATH}"], [PATH, "x/execute_review.py"]) == [PATH]
 
 
-def test_a_halted_owner_with_a_live_junior_refire_declaring_the_path_is_held_under_the_refire(repo, monkeypatch):
+def test_a_halted_owner_with_a_live_junior_refire_declaring_the_path_is_held_under_the_refire(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _declare(repo, "run-b", PATH)
     _halt(repo / "state" / "warp" / "run-b")
     refire = _stamped("5b4c54")
@@ -139,7 +139,7 @@ def test_a_halted_owner_with_a_live_junior_refire_declaring_the_path_is_held_und
     assert peer_hunk_gate._live_sibling_holds(repo, OWN, None, [PATH], [PATH], junior) == {PATH: refire}
 
 
-def test_a_halted_owner_with_no_live_refire_holds_nothing_live(repo, monkeypatch):
+def test_a_halted_owner_with_no_live_refire_holds_nothing_live(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _declare(repo, "run-b", PATH)
     _halt(repo / "state" / "warp" / "run-b")
     _stub_unproduced(monkeypatch, {PATH: "committed lines 3 were not produced by run ask-own; probable owner run-b"})

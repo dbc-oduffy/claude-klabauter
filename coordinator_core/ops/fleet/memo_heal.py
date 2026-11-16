@@ -55,12 +55,9 @@ Negative-spec:
 from __future__ import annotations
 
 import hashlib
-import os
-import tempfile
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional
 
-from coordinator_core.temp_layout import managed_tempdir
 from coordinator_core.git.content_hash import (
     _autocrlf_checkin_normalize,
     _repo_autocrlf_true,
@@ -86,6 +83,11 @@ from coordinator_core.ops.fleet._memo_anchor import (
     anchor_names,
     present_filenames,
     resolve_anchor,
+)
+from coordinator_core.ops.fleet._receiver_materialize import (
+    STATUS_ALREADY_PRESENT,
+    STATUS_MATERIALIZED,
+    materialize_memo,
 )
 
 _MODE = "heal_inbox"
@@ -166,40 +168,8 @@ def _blob_sha1(data: bytes) -> str:
     return hashlib.sha1(header + data).hexdigest()
 
 
-def _rollback_unwritten_file(target_file: Path) -> str:
-    try:
-        target_file.unlink()
-    except OSError as unlink_exc:
-        return (
-            f" WARNING: the file this call wrote could NOT be removed"
-            f" ({unlink_exc}); it is left uncommitted and a retry will refuse"
-            f" on the no-clobber guard until it is cleared."
-        )
-    return " the file this call wrote was removed (tree restored)."
-
-
-def _write_msg_file(text: str) -> Path:
-    fd, name = tempfile.mkstemp(prefix="memo-heal-msg-", suffix=".txt", dir=managed_tempdir())
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
-            f.write(text)
-    except BaseException:
-        os.unlink(name)
-        raise
-    return Path(name)
-
-
 def _restore_commit_message(filename: str) -> str:
     return f"cross-repo memo restored: {filename}\n\nRestored by memo.heal_inbox.\n"
-
-
-def _inbox_write_target(worktree_root: Path, filename: str) -> Tuple[Path, str]:
-    from coordinator_core import memo_corpus
-
-    inbox_dir = Path(memo_corpus.memo_corpus_root(str(worktree_root))) / "inbox"
-    target = inbox_dir / filename
-    relpath = target.relative_to(worktree_root).as_posix()
-    return target, relpath
 
 
 class _RestoreOutcome:
@@ -221,35 +191,15 @@ def _restore_one(worktree_root: Path, filename: str, blob_sha: str, common_dir: 
     except UnicodeDecodeError as exc:
         return _RestoreOutcome(False, False, None, f"anchor blob for {filename!r} is not valid UTF-8 text: {exc}")
 
-    target_file, rel_path = _inbox_write_target(worktree_root, filename)
-    target_file.parent.mkdir(parents=True, exist_ok=True)
-    try:
-        fd = os.open(str(target_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o644)
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as f:
-            f.write(content)
-    except FileExistsError:
+    outcome = materialize_memo(
+        worktree_root, filename, content,
+        dest="inbox", commit_message=_restore_commit_message(filename),
+    )
+    if outcome.status == STATUS_ALREADY_PRESENT:
         return _RestoreOutcome(True, True, None, None)
-    except OSError as exc:
-        return _RestoreOutcome(False, False, None, f"write-failed restoring {filename!r}: {exc}")
-
-    msg_file = _write_msg_file(_restore_commit_message(filename))
-    try:
-        commit_result = git_native.commit_authored_new_file(
-            rel_path, content, msg_file, worktree_root, record_ledger=True,
-        )
-    finally:
-        try:
-            msg_file.unlink()
-        except OSError:
-            pass
-
-    if not commit_result.ok:
-        rollback_detail = _rollback_unwritten_file(target_file)
-        return _RestoreOutcome(
-            False, False, None,
-            f"restore commit declined for {filename!r}: {commit_result.stderr};{rollback_detail}",
-        )
-    return _RestoreOutcome(True, False, commit_result.stdout.strip(), None)
+    if outcome.status == STATUS_MATERIALIZED:
+        return _RestoreOutcome(True, False, outcome.commit_sha, None)
+    return _RestoreOutcome(False, False, None, f"{outcome.status}: {outcome.reason}")
 
 
 def _anchor_ref(filename: str, commit_sha: str) -> str:

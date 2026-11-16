@@ -5,23 +5,25 @@ from __future__ import annotations
 import json
 
 from coordinator_core.session import em_prefire_window as epw
+from pathlib import Path
+import pytest
 
 
 def _line(rec: dict) -> str:
     return json.dumps(rec, separators=(",", ":")) + "\n"
 
 
-def user(text="do the thing") -> str:
+def user(text: str = "do the thing") -> str:
     return _line({"type": "user", "message": {"role": "user", "content": text}})
 
 
-def tool_result(tid="x") -> str:
+def tool_result(tid: str = "x") -> str:
     return _line(
         {"type": "user", "message": {"role": "user", "content": [{"type": "tool_result", "tool_use_id": tid, "content": "ok"}]}}
     )
 
 
-def tool_use(tid, name, inp, sidechain=False) -> str:
+def tool_use(tid, name, inp, sidechain: bool = False) -> str:
     rec = {
         "type": "assistant",
         "message": {"role": "assistant", "content": [{"type": "tool_use", "id": tid, "name": name, "input": inp}]},
@@ -37,14 +39,14 @@ def run(tmp_path, lines, state=None, **kw):
     return epw.advance(path, state or epw.fresh_state(), **kw)
 
 
-def test_counts_reads_and_resets_on_user_not_tool_result(tmp_path):
+def test_counts_reads_and_resets_on_user_not_tool_result(tmp_path: Path) -> None:
     st = run(tmp_path, [user(), tool_use("a", "Read", {"file_path": "x.py"}), tool_result("a"), tool_use("b", "Grep", {"pattern": "q"})])
     assert st["pre"] == ["a", "b"]
     st = run(tmp_path, [user(), tool_use("a", "Read", {"file_path": "x.py"}), user("again"), tool_use("c", "Glob", {"pattern": "*"})])
     assert st["pre"] == ["c"] and st["window"] == 2
 
 
-def test_current_id_joins_once(tmp_path):
+def test_current_id_joins_once(tmp_path: Path) -> None:
     lines = [user(), tool_use("a", "Read", {"file_path": "x.py"})]
     st = run(tmp_path, lines, current_tool_use_id="a", current_call=("Read", {"file_path": "x.py"}))
     assert st["pre"] == ["a"]
@@ -52,12 +54,12 @@ def test_current_id_joins_once(tmp_path):
     assert st["pre"] == ["a", "z"]
 
 
-def test_subagent_records_never_count_or_open(tmp_path):
+def test_subagent_records_never_count_or_open(tmp_path: Path) -> None:
     st = run(tmp_path, [user(), tool_use("a", "Read", {"file_path": "x"}, sidechain=True)])
     assert st["pre"] == []
 
 
-def test_path_exemptions(tmp_path):
+def test_path_exemptions(tmp_path: Path) -> None:
     st = run(
         tmp_path,
         [
@@ -72,7 +74,7 @@ def test_path_exemptions(tmp_path):
     assert st["pre"] == ["e"]
 
 
-def test_opening_text_does_not_exempt_dot_or_substring_paths(tmp_path):
+def test_opening_text_does_not_exempt_dot_or_substring_paths(tmp_path: Path) -> None:
     st = run(
         tmp_path,
         [
@@ -85,7 +87,7 @@ def test_opening_text_does_not_exempt_dot_or_substring_paths(tmp_path):
     assert st["pre"] == ["a", "b"]
 
 
-def test_settings_bin_cli_forms(tmp_path):
+def test_settings_bin_cli_forms(tmp_path: Path) -> None:
     home = str(tmp_path / "sh")
     cmds = {
         f"{home}/bin/coordinator-doc-new --type x": True,
@@ -104,7 +106,7 @@ def test_settings_bin_cli_forms(tmp_path):
         assert epw.is_settings_bin_cli(cmd, home) is want, cmd
 
 
-def test_cli_exempt_pre_but_counted_in_all(tmp_path):
+def test_cli_exempt_pre_but_counted_in_all(tmp_path: Path) -> None:
     home = str(tmp_path / "sh")
     st = run(
         tmp_path,
@@ -114,7 +116,7 @@ def test_cli_exempt_pre_but_counted_in_all(tmp_path):
     assert st["pre"] == ["b"] and st["all"] == ["a", "b"]
 
 
-def test_fire_skill_revise_flags(tmp_path):
+def test_fire_skill_revise_flags(tmp_path: Path) -> None:
     from coordinator_core import warp_fire
 
     st = run(tmp_path, [user(), tool_use("a", "Workflow", {"name": warp_fire.SUBMIT_STUB_NAME})])
@@ -138,7 +140,7 @@ def _cmd(name: str, tail: str = "") -> str:
     return user(f"<command-message>{name}</command-message>\n<command-name>/{name}</command-name>{tail}")
 
 
-def test_ceremony_skills_disarm_as_skill_use_and_as_command_record(tmp_path):
+def test_ceremony_skills_disarm_as_skill_use_and_as_command_record(tmp_path: Path) -> None:
     for skill in ("consolidate-git", "merging-to-main", "distill", "update-docs"):
         for form in (skill, "coordinator:" + skill):
             st = run(tmp_path, [user(), tool_use("a", "Skill", {"skill": form})])
@@ -149,7 +151,7 @@ def test_ceremony_skills_disarm_as_skill_use_and_as_command_record(tmp_path):
         assert st["disarmed"], skill
 
 
-def test_command_record_disarm_is_limited_to_ceremonies_at_window_open(tmp_path):
+def test_command_record_disarm_is_limited_to_ceremonies_at_window_open(tmp_path: Path) -> None:
     for text in (
         "do the thing",
         "<command-name>/plan</command-name>",
@@ -164,14 +166,14 @@ def test_command_record_disarm_is_limited_to_ceremonies_at_window_open(tmp_path)
     assert not st["disarmed"]
 
 
-def test_new_user_resets_flags_but_not_fire_seen(tmp_path):
+def test_new_user_resets_flags_but_not_fire_seen(tmp_path: Path) -> None:
     from coordinator_core import warp_fire
 
     st = run(tmp_path, [user(), tool_use("a", "Workflow", {"name": warp_fire.SUBMIT_STUB_NAME}), user("next")])
     assert not st["fired"] and st["fire_seen"]
 
 
-def test_incremental_read_and_partial_line(tmp_path):
+def test_incremental_read_and_partial_line(tmp_path: Path) -> None:
     path = tmp_path / "t.jsonl"
     first = user() + tool_use("a", "Read", {"file_path": "x"})
     path.write_bytes((first + tool_use("b", "Read", {"file_path": "y"})[:20]).encode("utf-8"))
@@ -182,13 +184,13 @@ def test_incremental_read_and_partial_line(tmp_path):
     assert st["pre"] == ["a", "b"]
 
 
-def test_delta_over_read_cap_jumps_to_tail(tmp_path, monkeypatch):
+def test_delta_over_read_cap_jumps_to_tail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(epw, "READ_CAP", 10)
     st = run(tmp_path, [user(), tool_use("a", "Read", {"file_path": "x"})])
     assert st["partial"] is True and st["pre"] == []
 
 
-def test_publish_mechanics_exempt_and_survey_git_counts():
+def test_publish_mechanics_exempt_and_survey_git_counts() -> None:
     ok = [
         "git push origin abc:refs/heads/x",
         "git -C scratch/claude-klabauter-pub fetch origin",
@@ -215,7 +217,7 @@ def test_publish_mechanics_exempt_and_survey_git_counts():
     assert not any(epw.publish_mechanics(c) for c in bad)
 
 
-def test_gate_probe_ops_and_sibling_git_probes_count_toward_no_budget():
+def test_gate_probe_ops_and_sibling_git_probes_count_toward_no_budget() -> None:
     exempt = [
         "coordinator-invoke baton.awaiting_gate_recheck --path x",
         "coordinator-invoke roadmap.plan_gate",
@@ -237,7 +239,7 @@ def test_gate_probe_ops_and_sibling_git_probes_count_toward_no_budget():
         assert epw.classify("Bash", {"command": cmd}, "", None) == (True, True), cmd
 
 
-def test_lifecycle_op_every_invocation_shape():
+def test_lifecycle_op_every_invocation_shape() -> None:
     verbatim = "it'\\''s a `thing`; ok & \"q\" $(x)"
     for inv in ("coordinator-invoke", "/opt/x/.coordinator-claude-settings/bin/coordinator-invoke"):
         for arg in (
@@ -260,7 +262,7 @@ def test_lifecycle_op_every_invocation_shape():
         assert epw.lifecycle_op(bad) is None, bad
 
 
-def test_workflow_revise_with_cd_cat_substitution_and_trim_is_exempt():
+def test_workflow_revise_with_cd_cat_substitution_and_trim_is_exempt() -> None:
     line = (
         'cd /opt/x/coordinator-content-repo && /opt/x/.coordinator-claude-settings/bin/coordinator-invoke '
         'workflow.revise "$(cat scratch/revise-338db0-r4.json)" --bare 2>&1 | tail -c 200'
@@ -301,7 +303,7 @@ def test_workflow_revise_with_cd_cat_substitution_and_trim_is_exempt():
         assert epw.lifecycle_op(bad) is None, bad
 
 
-def test_cross_repo_reads_release_lists_and_outside_scripts_are_uncounted(tmp_path):
+def test_cross_repo_reads_release_lists_and_outside_scripts_are_uncounted(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     other = (tmp_path / "sibling").as_posix()
     exempt = [
@@ -331,14 +333,14 @@ def test_cross_repo_reads_release_lists_and_outside_scripts_are_uncounted(tmp_pa
         assert epw.classify("Bash", {"command": cmd}, "", None, repo_root=root) == (True, True), cmd
 
 
-def test_deny_texts_name_the_exempt_form():
+def test_deny_texts_name_the_exempt_form() -> None:
     from coordinator_core.hooks import guard_em_prefire_survey as g
 
     form = "coordinator-invoke workflow.revise --params-file <file>"
     assert form in g.postlanding_deny_text(5, 3)
 
 
-def test_relayed_workflow_revise_classifies_exempt_in_every_shape():
+def test_relayed_workflow_revise_classifies_exempt_in_every_shape() -> None:
     run_id = "warp-2026-10-24-ladder-add-l-c-xl-xxl-tasks-16cd3b-20261024T141445-90120f"
     inline = "coordinator-invoke workflow.revise '{\"run_id\":\"" + run_id + "\",\"verbatim\":\"it'\\''s `x`; a & b\"}'"
     forms = (
@@ -353,7 +355,7 @@ def test_relayed_workflow_revise_classifies_exempt_in_every_shape():
     assert epw.classify("Bash", {"command": survey}, "", None) == (True, True)
 
 
-def test_one_test_run_per_window_is_exempt_postlanding(tmp_path):
+def test_one_test_run_per_window_is_exempt_postlanding(tmp_path: Path) -> None:
     cmd = {"command": "python3 -m pytest coordinator_core/x/tests/test_a.py -q"}
     st = run(tmp_path, [user(), tool_use("a", "Bash", cmd), tool_use("b", "Bash", cmd)])
     assert st["all"] == ["b"] and st["test_used"] is True
@@ -361,12 +363,12 @@ def test_one_test_run_per_window_is_exempt_postlanding(tmp_path):
     assert not epw.is_test_run("pytest test_a.py; cat x")
 
 
-def test_unreadable_transcript_returns_state(tmp_path):
+def test_unreadable_transcript_returns_state(tmp_path: Path) -> None:
     st = epw.advance(tmp_path / "missing.jsonl", epw.fresh_state())
     assert st == epw.fresh_state()
 
 
-def test_state_roundtrip_and_malformed_reset(tmp_path):
+def test_state_roundtrip_and_malformed_reset(tmp_path: Path) -> None:
     p = tmp_path / "em-prefire.json"
     t = tmp_path / "t.jsonl"
     t.write_bytes(b"abc\n")
@@ -382,7 +384,7 @@ def _result(tid, text) -> str:
     )
 
 
-def test_every_installed_assemble_bin_is_lifecycle():
+def test_every_installed_assemble_bin_is_lifecycle() -> None:
     names = {
         "backlog-grind-assemble", "baton-assemble", "consolidate-assemble", "coordinator-assemble",
         "execute-plan-assemble", "merge-assemble", "orient-assemble", "pickup-assemble",
@@ -399,7 +401,7 @@ def test_every_installed_assemble_bin_is_lifecycle():
         assert epw.lifecycle_op(bad) is None, bad
 
 
-def test_doe_close_sequence_replay_is_not_counted_beyond_reply_named_output(tmp_path):
+def test_doe_close_sequence_replay_is_not_counted_beyond_reply_named_output(tmp_path: Path) -> None:
     led = "coordinator-invoke handoff.append_session_ledger '{\"a\":1}'"
     lines = [
         user("close it"),
@@ -421,7 +423,7 @@ def test_doe_close_sequence_replay_is_not_counted_beyond_reply_named_output(tmp_
     assert st["named"] == ["scratch/wsc-apply.json"]
 
 
-def test_reply_named_path_only_from_assembler_results(tmp_path):
+def test_reply_named_path_only_from_assembler_results(tmp_path: Path) -> None:
     lines = [
         user(),
         tool_use("g", "Bash", {"command": "ls scratch"}),
@@ -451,7 +453,7 @@ def _repo_with_manifest(tmp_path):
     return tmp_path
 
 
-def test_touches_landed_run_footprint_and_records(tmp_path):
+def test_touches_landed_run_footprint_and_records(tmp_path: Path) -> None:
     root = _repo_with_manifest(tmp_path)
     t = lambda name, inp: epw.touches_landed_run(name, inp, RUN, root)
     assert t("Read", {"file_path": "pkg/mod.py"})
@@ -465,7 +467,7 @@ def test_touches_landed_run_footprint_and_records(tmp_path):
     assert t("Bash", {"command": "cat pkg/mod.py | head"})
 
 
-def test_unrelated_calls_do_not_touch_landed_run(tmp_path):
+def test_unrelated_calls_do_not_touch_landed_run(tmp_path: Path) -> None:
     root = _repo_with_manifest(tmp_path)
     t = lambda name, inp: epw.touches_landed_run(name, inp, RUN, root)
     assert not t("Bash", {"command": "python -m pytest other/tests/test_other.py"})
@@ -476,7 +478,7 @@ def test_unrelated_calls_do_not_touch_landed_run(tmp_path):
     assert not t("Grep", {"pattern": "x", "path": "other"})
 
 
-def test_missing_or_bad_manifest_fails_open_but_records_still_count(tmp_path):
+def test_missing_or_bad_manifest_fails_open_but_records_still_count(tmp_path: Path) -> None:
     t = lambda name, inp: epw.touches_landed_run(name, inp, RUN, tmp_path)
     assert epw.run_footprint(tmp_path, RUN) is None
     assert not t("Bash", {"command": "runner.py judge --help"})
@@ -491,11 +493,11 @@ def test_missing_or_bad_manifest_fails_open_but_records_still_count(tmp_path):
     assert epw.run_footprint(tmp_path, "../x") is None
 
 
-def _w(tid, path, name="Write"):
+def _w(tid, path, name: str = "Write") -> str:
     return tool_use(tid, name, {"file_path": path})
 
 
-def test_self_written_scratch_reads_and_syntax_checks_are_free(tmp_path):
+def test_self_written_scratch_reads_and_syntax_checks_are_free(tmp_path: Path) -> None:
     st = run(
         tmp_path,
         [
@@ -511,7 +513,7 @@ def test_self_written_scratch_reads_and_syntax_checks_are_free(tmp_path):
     assert st["written"] == ["/r/scratch/chk/a.py"] and st["pre"] == []
 
 
-def test_self_written_backslash_and_edit_tools(tmp_path):
+def test_self_written_backslash_and_edit_tools(tmp_path: Path) -> None:
     st = run(
         tmp_path,
         [user(), _w("w", "C:\\r\\scratch\\n.py", "Edit"), tool_use("a", "Read", {"file_path": "C:/r/scratch/n.py"})],
@@ -519,7 +521,7 @@ def test_self_written_backslash_and_edit_tools(tmp_path):
     assert st["pre"] == []
 
 
-def test_self_written_does_not_exempt_other_or_mixed_paths(tmp_path):
+def test_self_written_does_not_exempt_other_or_mixed_paths(tmp_path: Path) -> None:
     st = run(
         tmp_path,
         [
@@ -535,13 +537,13 @@ def test_self_written_does_not_exempt_other_or_mixed_paths(tmp_path):
     assert st["pre"] == ["a", "b", "c", "d", "e"]
 
 
-def test_self_written_cleared_on_new_user_turn_and_py_compile_not_for_named(tmp_path):
+def test_self_written_cleared_on_new_user_turn_and_py_compile_not_for_named(tmp_path: Path) -> None:
     st = run(tmp_path, [user(), _w("w", "/r/scratch/a.py"), user("next"), tool_use("a", "Read", {"file_path": "/r/scratch/a.py"})])
     assert st["written"] == [] and st["pre"] == ["a"]
     assert epw.named_read("Bash", {"command": "python3 -m py_compile plan.md"}, ["plan.md"]) is False
 
 
-def test_memo_tooling_is_exempt_whatever_the_tail(tmp_path):
+def test_memo_tooling_is_exempt_whatever_the_tail(tmp_path: Path) -> None:
     cmds = [
         "cross-repo-memo send --to x --body y",
         "$HOME/.coordinator-claude-settings/bin/cross-repo-memo list; echo done",
@@ -553,7 +555,7 @@ def test_memo_tooling_is_exempt_whatever_the_tail(tmp_path):
     assert st["pre"] == ["g"]
 
 
-def test_memo_gh_comment_update_ref_and_ledger_append_are_not_counted(tmp_path):
+def test_memo_gh_comment_update_ref_and_ledger_append_are_not_counted(tmp_path: Path) -> None:
     cmds = [
         'cross-repo-memo send --to coordinator-content-repo-em --body "x"',
         'gh issue comment 12 --body "done; see x"',
@@ -566,7 +568,7 @@ def test_memo_gh_comment_update_ref_and_ledger_append_are_not_counted(tmp_path):
     assert st["pre"] == [] and st["all"] == []
 
 
-def test_comms_integrity_exemption_still_refuses_chains_and_other_verbs(tmp_path):
+def test_comms_integrity_exemption_still_refuses_chains_and_other_verbs(tmp_path: Path) -> None:
     cmds = [
         "gh issue view 12",
         "gh pr comment 7 --body x && grep -r foo .",
@@ -580,8 +582,8 @@ def test_comms_integrity_exemption_still_refuses_chains_and_other_verbs(tmp_path
     assert st["pre"] == ["r"]
 
 
-def test_task_reset_on_changed_in_progress_task_only(tmp_path):
-    def upd(tid, task, status="in_progress"):
+def test_task_reset_on_changed_in_progress_task_only(tmp_path: Path) -> None:
+    def upd(tid, task, status: str = "in_progress") -> str:
         return tool_use(tid, "TaskUpdate", {"taskId": task, "status": status})
 
     st = run(
@@ -607,7 +609,7 @@ def test_task_reset_on_changed_in_progress_task_only(tmp_path):
     assert st["pre"] == ["b"] and st["task_key"] == "second"
 
 
-def test_written_list_is_capped_and_paths_past_the_cap_are_charged(tmp_path):
+def test_written_list_is_capped_and_paths_past_the_cap_are_charged(tmp_path: Path) -> None:
     over = epw.WRITTEN_CAP + 1
     events = [user()] + [_w(f"w{i}", f"/r/scratch/f{i}.py") for i in range(over)]
     events.append(tool_use("last", "Read", {"file_path": f"/r/scratch/f{over - 1}.py"}))
@@ -615,7 +617,7 @@ def test_written_list_is_capped_and_paths_past_the_cap_are_charged(tmp_path):
     assert len(st["written"]) == epw.WRITTEN_CAP and st["pre"] == ["last"]
 
 
-def test_advance_threads_repo_root_to_classification(tmp_path):
+def test_advance_threads_repo_root_to_classification(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     other = (tmp_path / "sibling").as_posix()
     tr = tmp_path / "t.jsonl"

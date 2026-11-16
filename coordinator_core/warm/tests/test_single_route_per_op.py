@@ -16,15 +16,16 @@ import os
 import pytest
 
 from coordinator_core.telemetry import op_latency
+from pathlib import Path
 
 
-def test_execution_routes_is_a_closed_set_stated_once():
+def test_execution_routes_is_a_closed_set_stated_once() -> None:
     assert op_latency.EXECUTION_ROUTES == frozenset(
         {op_latency.IN_PROCESS, op_latency.WARM_SERVER, op_latency.HTTP_SERVER}
     )
 
 
-def test_route_defaults_to_in_process(monkeypatch):
+def test_route_defaults_to_in_process(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_EXECUTION_ROUTE", raising=False)
     assert op_latency.execution_route() == op_latency.IN_PROCESS
 
@@ -33,18 +34,18 @@ def test_route_defaults_to_in_process(monkeypatch):
     "declared",
     [op_latency.IN_PROCESS, op_latency.WARM_SERVER, op_latency.HTTP_SERVER],
 )
-def test_a_serving_process_can_declare_its_route(monkeypatch, declared):
+def test_a_serving_process_can_declare_its_route(monkeypatch: pytest.MonkeyPatch, declared) -> None:
     monkeypatch.setenv("COORDINATOR_EXECUTION_ROUTE", declared)
     assert op_latency.execution_route() == declared
 
 
-def test_unrecognised_route_degrades_rather_than_raising(monkeypatch):
+def test_unrecognised_route_degrades_rather_than_raising(monkeypatch: pytest.MonkeyPatch) -> None:
     """A wrong label costs one census row; a raise here would cost the op."""
     monkeypatch.setenv("COORDINATOR_EXECUTION_ROUTE", "not-a-route")
     assert op_latency.execution_route() == op_latency.IN_PROCESS
 
 
-def test_both_row_kinds_carry_the_route(tmp_path, monkeypatch):
+def test_both_row_kinds_carry_the_route(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Both kinds funnel through `_write_entry`, so the stamp lands once."""
     monkeypatch.setenv("COORDINATOR_EXECUTION_ROUTE", op_latency.HTTP_SERVER)
     monkeypatch.delenv("COORDINATOR_OP_LATENCY_DISABLE", raising=False)
@@ -67,7 +68,7 @@ def test_both_row_kinds_carry_the_route(tmp_path, monkeypatch):
     assert all(r["route"] == op_latency.HTTP_SERVER for r in rows)
 
 
-def test_double_routed_corr_ids_flags_the_ac6c_violation():
+def test_double_routed_corr_ids_flags_the_ac6c_violation() -> None:
     """The http-plus-in-process double pair is what this must catch."""
     entries = [
         {"corr_id": "same-op", "route": op_latency.HTTP_SERVER, "kind": "started"},
@@ -78,7 +79,7 @@ def test_double_routed_corr_ids_flags_the_ac6c_violation():
     assert op_latency.double_routed_corr_ids(entries) == {"same-op"}
 
 
-def test_double_routed_ignores_rows_missing_either_field():
+def test_double_routed_ignores_rows_missing_either_field() -> None:
     """Older rows predate the stamp; a census must not read them as violations."""
     entries = [
         {"corr_id": "legacy", "kind": "started"},
@@ -88,7 +89,7 @@ def test_double_routed_ignores_rows_missing_either_field():
     assert op_latency.double_routed_corr_ids(entries) == set()
 
 
-def test_warm_server_declares_the_warm_server_route(monkeypatch):
+def test_warm_server_declares_the_warm_server_route(monkeypatch: pytest.MonkeyPatch) -> None:
     """The stamp was inert until a serving process declared itself.
 
     Without this, every row in the corpus reads `in_process` -- including the
@@ -105,7 +106,7 @@ def test_warm_server_declares_the_warm_server_route(monkeypatch):
     assert op_latency.execution_route() == op_latency.WARM_SERVER
 
 
-def test_route_is_declared_before_the_server_starts_accepting():
+def test_route_is_declared_before_the_server_starts_accepting() -> None:
     """Pool workers inherit the environment AT SPAWN, so the declaration must
     precede any dispatch -- `_run_guarded` is the only place that ordering
     holds.

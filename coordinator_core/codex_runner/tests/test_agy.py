@@ -10,6 +10,10 @@ import pytest
 from coordinator_core.codex_runner import agy
 from coordinator_core.codex_runner.contract import FALLBACK_REVIEWER, RunRequest
 from coordinator_core.codex_runner.resolve import CodexUnavailable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import Popen
 
 pytestmark = pytest.mark.complete
 
@@ -24,7 +28,7 @@ GOOD = {
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     for k in ("FAKE_AGY_EXIT", "FAKE_AGY_STDERR", "FAKE_AGY_DIE_AFTER", "FAKE_AGY_HANG"):
         monkeypatch.delenv(k, raising=False)
     monkeypatch.setenv("FAKE_AGY_JSONL", str(FIX / "agy_review_run.jsonl"))
@@ -33,7 +37,7 @@ def env(tmp_path, monkeypatch):
     monkeypatch.setenv("FAKE_AGY_PID_OUT", str(tmp_path / "pids.txt"))
     real_env = agy._build_env
 
-    def env_with_fake_knobs(*a, **kw):
+    def env_with_fake_knobs(*a, **kw) -> dict[str, str]:
         # The allowlist drops FAKE_AGY_*; only the stand-in needs them.
         import os
 
@@ -50,7 +54,7 @@ def env(tmp_path, monkeypatch):
     return tmp_path, tmp_path / "runs" / "run1", req, monkeypatch
 
 
-def test_spawn_argv_and_single_user_line_with_artifact_inlined(env):
+def test_spawn_argv_and_single_user_line_with_artifact_inlined(env) -> None:
     tmp_path, run_dir, req, _ = env
     pids: list[int] = []
     res = agy.review_run(req, run_dir, pids.append)
@@ -70,7 +74,7 @@ def test_spawn_argv_and_single_user_line_with_artifact_inlined(env):
     assert pids == [res.codex_pid] and res.codex_pid
 
 
-def test_result_carries_cumulative_usage_and_per_turn(env):
+def test_result_carries_cumulative_usage_and_per_turn(env) -> None:
     _, run_dir, req, _ = env
     res = agy.review_run(req, run_dir, lambda pid: None)
     assert res.usage["input_tokens"] == 1000 and res.usage["per_turn"] == {"input_tokens": 1000, "output_tokens": 50}
@@ -78,7 +82,7 @@ def test_result_carries_cumulative_usage_and_per_turn(env):
     assert (run_dir / "agy-events.jsonl").read_text(encoding="utf-8").count("\n") >= 3
 
 
-def test_two_turns_reuse_one_process_and_usage_is_a_difference_never_a_sum(env):
+def test_two_turns_reuse_one_process_and_usage_is_a_difference_never_a_sum(env) -> None:
     tmp_path, run_dir, _, _ = env
     with agy.AgyConversation(run_dir, FAKE, None) as conv:
         first = conv.send("one")
@@ -95,13 +99,13 @@ def test_two_turns_reuse_one_process_and_usage_is_a_difference_never_a_sum(env):
     assert len((tmp_path / "stdin.txt").read_text(encoding="utf-8").splitlines()) == 2
 
 
-def test_usage_delta():
+def test_usage_delta() -> None:
     assert agy.usage_delta(None, {"a": 5}) == {"a": 5}
     assert agy.usage_delta({"a": 5, "b": 1}, {"a": 8, "b": 1, "c": 2, "s": "x"}) == {"a": 3, "b": 0, "c": 2}
     assert agy.usage_delta({"a": 1}, None) is None
 
 
-def _no_native(monkeypatch, tmp_path):
+def _no_native(monkeypatch, tmp_path) -> None:
     empty = tmp_path / "emptyhome"
     empty.mkdir(exist_ok=True)
     for key in ("HOME", "USERPROFILE"):
@@ -109,7 +113,7 @@ def _no_native(monkeypatch, tmp_path):
     monkeypatch.setenv("PATH", str(empty))
 
 
-def test_agy_resolves_from_home_bin_when_path_lacks_it(tmp_path, monkeypatch):
+def test_agy_resolves_from_home_bin_when_path_lacks_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _no_native(monkeypatch, tmp_path)
     exe = tmp_path / "emptyhome" / ".agy" / "bin" / ("agy.exe" if sys.platform.startswith("win") else "agy")
     exe.parent.mkdir(parents=True)
@@ -117,7 +121,7 @@ def test_agy_resolves_from_home_bin_when_path_lacks_it(tmp_path, monkeypatch):
     assert agy.resolve_agy() == [str(exe)]
 
 
-def test_agy_absent_is_named_unavailable(env, monkeypatch, tmp_path):
+def test_agy_absent_is_named_unavailable(env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _, run_dir, req, mp = env
     mp.undo()
     _no_native(monkeypatch, tmp_path)
@@ -128,14 +132,14 @@ def test_agy_absent_is_named_unavailable(env, monkeypatch, tmp_path):
     assert res.status == "failed" and "AgyUnavailable" in res.error
 
 
-def test_child_env_has_no_api_key_and_keeps_path(env):
+def test_child_env_has_no_api_key_and_keeps_path(env) -> None:
     _, run_dir, req, mp = env
     mp.setenv("GEMINI_API_KEY", "leak")
     mp.setenv("OPENAI_API_KEY", "leak")
     seen = {}
     real = agy.subprocess.Popen
 
-    def spy(argv, **kw):
+    def spy(argv, **kw) -> Popen[str]:
         seen.update(kw["env"])
         assert kw["shell"] is False
         return real(argv, **kw)
@@ -145,7 +149,7 @@ def test_child_env_has_no_api_key_and_keeps_path(env):
     assert "GEMINI_API_KEY" not in seen and "OPENAI_API_KEY" not in seen and "PATH" in seen
 
 
-def test_windows_env_keeps_essentials():
+def test_windows_env_keeps_essentials() -> None:
     keys = ("SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "COMSPEC")
     src = {k: f"v-{k}" for k in keys} | {"GEMINI_API_KEY": "k"}
     win = agy._build_env(src, windows=True)
@@ -153,7 +157,7 @@ def test_windows_env_keeps_essentials():
     assert {"SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "COMSPEC"}.isdisjoint(agy._build_env(src, windows=False))
 
 
-def test_env_allowlist():
+def test_env_allowlist() -> None:
     src = {"PATH": "/p", "HOME": "/h", "GEMINI_API_KEY": "k", "SECRET": "x", "SYSTEMROOT": "S"}
     assert {k:v for k,v in agy._build_env(src, windows=False).items() if not k.startswith("COORDINATOR_")} == {"PATH": "/p", "HOME": "/h"}
     assert agy._build_env(src, windows=True)["SYSTEMROOT"] == "S"
@@ -164,7 +168,7 @@ def _spy_env(mp):
     seen = {}
     real = agy.subprocess.Popen
 
-    def spy(argv, **kw):
+    def spy(argv, **kw) -> Popen[str]:
         seen.update(kw["env"])
         return real(argv, **kw)
 
@@ -172,7 +176,7 @@ def _spy_env(mp):
     return seen
 
 
-def test_flag_off_scrubs_key_and_passes_no_settings(env):
+def test_flag_off_scrubs_key_and_passes_no_settings(env) -> None:
     tmp_path, run_dir, req, mp = env
     mp.setenv("GEMINI_API_KEY", "leak")
     mp.delenv("CODEX_RUNNER_ALLOW_API_KEY", raising=False)
@@ -184,7 +188,7 @@ def test_flag_off_scrubs_key_and_passes_no_settings(env):
     assert "--settings" not in argv
 
 
-def test_flag_on_reads_key_sets_child_env_and_settings_not_argv(env):
+def test_flag_on_reads_key_sets_child_env_and_settings_not_argv(env) -> None:
     tmp_path, run_dir, req, mp = env
     mp.setenv("GEMINI_API_KEY", "parent-leak")
     mp.setattr(agy, "read_api_key", lambda *a, **k: "paid-key")
@@ -198,7 +202,7 @@ def test_flag_on_reads_key_sets_child_env_and_settings_not_argv(env):
     assert "--dangerously-skip-permissions" not in argv
 
 
-def test_flag_on_via_env_flag_also_enables(env):
+def test_flag_on_via_env_flag_also_enables(env) -> None:
     tmp_path, run_dir, req, mp = env
     mp.setenv("CODEX_RUNNER_ALLOW_API_KEY", "1")
     mp.setattr(agy, "read_api_key", lambda *a, **k: "paid-key")
@@ -207,7 +211,7 @@ def test_flag_on_via_env_flag_also_enables(env):
     assert seen["GEMINI_API_KEY"] == "paid-key"
 
 
-def test_flag_on_without_key_fails_and_never_spawns_or_falls_back(env):
+def test_flag_on_without_key_fails_and_never_spawns_or_falls_back(env) -> None:
     _, run_dir, req, mp = env
     mp.setattr(agy, "read_api_key", lambda *a, **k: None)
     mp.setattr(agy.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned"))
@@ -216,7 +220,7 @@ def test_flag_on_without_key_fails_and_never_spawns_or_falls_back(env):
     assert res.status == "failed" and "gemini-use-api-key" in res.error
 
 
-def test_paid_exhaustion_is_limit_with_remedy(env):
+def test_paid_exhaustion_is_limit_with_remedy(env) -> None:
     tmp_path, run_dir, req, mp = env
     mp.setattr(agy, "read_api_key", lambda *a, **k: "paid-key")
     mp.setenv("FAKE_AGY_DIE_AFTER", "0")
@@ -227,7 +231,7 @@ def test_paid_exhaustion_is_limit_with_remedy(env):
     assert res.status == "limit_exhausted" and "ai.studio/projects" in res.error
 
 
-def test_read_api_key_per_os():
+def test_read_api_key_per_os() -> None:
     calls = []
 
     class CP:
@@ -253,13 +257,13 @@ def test_read_api_key_per_os():
     assert agy.read_api_key("darwin", {}, boom) is None
 
 
-def test_env_with_api_key_only_when_passed():
+def test_env_with_api_key_only_when_passed() -> None:
     src = {"PATH": "/p", "GEMINI_API_KEY": "parent"}
     assert "GEMINI_API_KEY" not in agy._build_env(src, windows=False)
     assert agy._build_env(src, windows=False, api_key="k")["GEMINI_API_KEY"] == "k"
 
 
-def _fixture(tmp_path, monkeypatch, response, status="SUCCESS", **extra):
+def _fixture(tmp_path, monkeypatch, response, status: str = "SUCCESS", **extra) -> None:
     p = tmp_path / "turn.jsonl"
     result = {"status": status, "response": response, "usage": {"input_tokens": 1}, **extra}
     p.write_text(json.dumps({"event": "result", "result": result}) + "\n", encoding="utf-8")
@@ -268,20 +272,20 @@ def _fixture(tmp_path, monkeypatch, response, status="SUCCESS", **extra):
 
 @pytest.mark.parametrize("bad", ["not json", json.dumps({"verdict": "OK"}), json.dumps({"verdict": "MAYBE", "findings": []}),
                                  json.dumps({"verdict": "OK", "findings": [], "extra": 1})])
-def test_schema_invalid_response_is_failed(env, bad):
+def test_schema_invalid_response_is_failed(env, bad) -> None:
     tmp_path, run_dir, req, mp = env
     _fixture(tmp_path, mp, bad)
     res = agy.review_run(req, run_dir, lambda pid: None)
     assert res.status == "failed" and "schema-valid" in res.error
 
 
-def test_fenced_json_response_parses(env):
+def test_fenced_json_response_parses(env) -> None:
     tmp_path, run_dir, req, mp = env
     _fixture(tmp_path, mp, "```json\n" + json.dumps(GOOD) + "\n```")
     assert agy.review_run(req, run_dir, lambda pid: None).findings == GOOD["findings"]
 
 
-def test_error_status_is_failed_and_exhaustion_is_limit_with_fallback(env):
+def test_error_status_is_failed_and_exhaustion_is_limit_with_fallback(env) -> None:
     tmp_path, run_dir, req, mp = env
     _fixture(tmp_path, mp, "kaboom", status="ERROR")
     res = agy.review_run(req, run_dir, lambda pid: None)
@@ -292,7 +296,7 @@ def test_error_status_is_failed_and_exhaustion_is_limit_with_fallback(env):
     assert "RESOURCE_EXHAUSTED" in res.error
 
 
-def test_death_before_result_is_failed_with_stderr(env):
+def test_death_before_result_is_failed_with_stderr(env) -> None:
     _, run_dir, req, mp = env
     mp.setenv("FAKE_AGY_DIE_AFTER", "0")
     mp.setenv("FAKE_AGY_EXIT", "3")
@@ -301,7 +305,7 @@ def test_death_before_result_is_failed_with_stderr(env):
     assert res.status == "failed" and "exited 3" in res.error and "AGY_ERROR" in res.error
 
 
-def test_exit_with_exhaustion_stderr_is_limit_exhausted(env):
+def test_exit_with_exhaustion_stderr_is_limit_exhausted(env) -> None:
     _, run_dir, req, mp = env
     mp.setenv("FAKE_AGY_DIE_AFTER", "0")
     mp.setenv("FAKE_AGY_EXIT", "3")
@@ -310,7 +314,7 @@ def test_exit_with_exhaustion_stderr_is_limit_exhausted(env):
     assert res.status == "limit_exhausted" and res.fallback == FALLBACK_REVIEWER
 
 
-def test_timeout_kills_the_process_and_fails(env):
+def test_timeout_kills_the_process_and_fails(env) -> None:
     _, run_dir, _, mp = env
     mp.setenv("FAKE_AGY_HANG", "1")
     conv = agy.AgyConversation(run_dir, FAKE, None, timeout_s=0.5).open()
@@ -322,14 +326,14 @@ def test_timeout_kills_the_process_and_fails(env):
         conv.close()
 
 
-def test_missing_artifact_is_failed_and_never_spawns(env):
+def test_missing_artifact_is_failed_and_never_spawns(env) -> None:
     tmp_path, run_dir, _, mp = env
     mp.setattr(agy.subprocess, "Popen", lambda *a, **k: pytest.fail("spawned"))
     gone = RunRequest(mode="review", repo_root=str(tmp_path), artifact=str(tmp_path / "nope"))
     assert agy.review_run(gone, run_dir, lambda pid: pytest.fail("spawned")).status == "failed"
 
 
-def test_directory_artifact_is_inlined_with_headers(env):
+def test_directory_artifact_is_inlined_with_headers(env) -> None:
     tmp_path, run_dir, _, _ = env
     d = tmp_path / "art"
     (d / "sub").mkdir(parents=True)
@@ -339,7 +343,7 @@ def test_directory_artifact_is_inlined_with_headers(env):
     assert name == "art" and "--- a.py ---\nA_BODY" in text and "--- sub/b.py ---\nB_BODY" in text
 
 
-def test_oversize_artifact_is_refused(env, monkeypatch):
+def test_oversize_artifact_is_refused(env, monkeypatch: pytest.MonkeyPatch) -> None:
     tmp_path, run_dir, req, mp = env
     mp.setattr(agy, "MAX_ARTIFACT_CHARS", 5)
     res = agy.review_run(req, run_dir, lambda pid: None)

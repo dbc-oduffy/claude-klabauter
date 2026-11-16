@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import inventory_mint as im
 from coordinator_core.ops.dispatch_emit.tests.test_checkpoint_rows_landed import _commit, _cp, _git
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -82,7 +83,7 @@ start_sha: {{start}}
 """
 
 
-def _tr(item, plan, deps, disposition):
+def _tr(item, plan, deps, disposition) -> str:
     return (
         f"| {item} | `docs/plans/{plan}.md` | whole {plan} | `docs/plans/{plan}.md` | {deps} "
         f"| scoped pytest | S | {disposition} |\n"
@@ -90,7 +91,7 @@ def _tr(item, plan, deps, disposition):
 
 
 @pytest.fixture
-def inv(tmp_path):
+def inv(tmp_path: Path) -> Path:
     _git(tmp_path, "init", "-q")
     plans = tmp_path / "docs" / "plans"
     plans.mkdir(parents=True)
@@ -137,7 +138,7 @@ def _wave(by_id, rid, memo=None):
     return memo[rid]
 
 
-def test_dependent_orders_after_predecessor_and_landed_chunk_is_not_minted(inv):
+def test_dependent_orders_after_predecessor_and_landed_chunk_is_not_minted(inv) -> None:
     accounting: dict = {}
     landed_chunks: dict = {}
     withheld: dict = {}
@@ -156,7 +157,7 @@ def test_dependent_orders_after_predecessor_and_landed_chunk_is_not_minted(inv):
         assert item not in accounting
 
 
-def test_cross_repo_routed_out_row_stays_out(inv):
+def test_cross_repo_routed_out_row_stays_out(inv) -> None:
     accounting: dict = {}
     by_id = {r["id"]: r for r in _mint(inv, accounting_out=accounting)}
 
@@ -164,7 +165,7 @@ def test_cross_repo_routed_out_row_stays_out(inv):
     assert "I20" in accounting
 
 
-def test_one_tranche_holds_the_dependent_with_its_predecessor(inv):
+def test_one_tranche_holds_the_dependent_with_its_predecessor(inv) -> None:
     bound: dict = {}
     minted = _mint(inv, bound_out=bound)
     taken, report = im.select_tranche(minted, ["I10", "I12", "I13"], 100, bound=bound)
@@ -174,7 +175,7 @@ def test_one_tranche_holds_the_dependent_with_its_predecessor(inv):
     assert not report["deferred"]
 
 
-def test_no_head_means_no_landed_map(tmp_path):
+def test_no_head_means_no_landed_map(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / DIR).mkdir(parents=True)
     path = tmp_path / DIR / f"{BASE}.md"

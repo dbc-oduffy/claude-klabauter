@@ -71,7 +71,7 @@ except ImportError:  # pragma: no cover - exercised by the publish pre-swap gate
     read_content_root = None  # type: ignore[assignment]
 
 
-def _resolve_content_root():
+def _resolve_content_root() -> str:
     resolver = read_content_root
     if resolver is None:
         from coordinator_core.content_root import (  # noqa: PLC0415

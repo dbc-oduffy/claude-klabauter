@@ -11,48 +11,48 @@ from coordinator_core.bash_guards import _taskstop_contract as c
 _ALLOWED_INTERNAL = {"coordinator_core.bash_guards._heavy_admission_contract"}
 
 
-def test_op_names_pinned():
+def test_op_names_pinned() -> None:
     assert c.RECORDER_OP == "hooks.taskstop_launch_recorder"
     assert c.REAPER_OP == "hooks.taskstop_reaper"
 
 
-def test_outcome_values_pinned():
+def test_outcome_values_pinned() -> None:
     assert {o.value for o in c.ReapOutcome} == {
         "killed", "incomplete", "ambiguous", "no-record", "session-mismatch", "no-candidate",
     }
 
 
-def test_ttl_exceeds_a_day_and_relpaths_are_relative():
+def test_ttl_exceeds_a_day_and_relpaths_are_relative() -> None:
     assert c.RECORD_TTL_S > 24 * 3600
     for rel in (c.STORE_RELPATH, c.LOG_RELPATH):
         assert not Path(rel).is_absolute()
 
 
-def test_reap_row_defaults():
+def test_reap_row_defaults() -> None:
     row = c.ReapRow(task_id="t", outcome=c.ReapOutcome.NO_RECORD)
     assert row.killed == () and row.competing == () and row.candidates == 0
 
 
-def test_launch_record_new_fields_are_last_and_defaulted():
+def test_launch_record_new_fields_are_last_and_defaulted() -> None:
     r = c.LaunchRecord("t", "s", "u", "cmd", 1)
     assert (r.agent_id, r.timed_out) == ("", False)
     assert list(c.LaunchRecord.__dataclass_fields__)[-2:] == ["agent_id", "timed_out"]
     assert c.LaunchRecord("t", "s", "u", "cmd", 1, "ag", True).agent_id == "ag"
 
 
-def test_kill_primitives_protocol_is_structural():
+def test_kill_primitives_protocol_is_structural() -> None:
     class Stub:
-        def terminate_verified(self, pid, ctime):
+        def terminate_verified(self, pid, ctime) -> bool:
             return False
 
-        def command_line(self, pid, ctime):
+        def command_line(self, pid, ctime) -> None:
             return None
 
     assert isinstance(Stub(), c.KillPrimitives)
     assert not isinstance(object(), c.KillPrimitives)
 
 
-def test_import_closure_is_stdlib_plus_heavy_admission_contract():
+def test_import_closure_is_stdlib_plus_heavy_admission_contract() -> None:
     tree = ast.parse(Path(c.__file__).read_text(encoding="utf-8"))
     stdlib = set(sys.stdlib_module_names)
     for node in ast.walk(tree):

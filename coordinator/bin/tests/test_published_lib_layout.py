@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import os
 import shutil
+from pathlib import Path
 
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _BIN_DIR = os.path.dirname(_TESTS_DIR)
@@ -89,7 +90,7 @@ def _rows():
             yield line.split("|")
 
 
-def test_a_row_publishes_coordinator_lib_to_coordinator_lib():
+def test_a_row_publishes_coordinator_lib_to_coordinator_lib() -> None:
     matches = [r for r in _rows() if len(r) > 4 and r[3] == "coordinator/lib" and r[4] == "coordinator/lib"]
     assert matches, (
         "no publish-targets row maps source coordinator/lib -> dest coordinator/lib; "
@@ -97,7 +98,7 @@ def test_a_row_publishes_coordinator_lib_to_coordinator_lib():
     )
 
 
-def test_row_five_admits_percolate():
+def test_row_five_admits_percolate() -> None:
     lib_rows = [r for r in _rows() if len(r) > 6 and r[3] == "coordinator/lib"]
     assert lib_rows, "expected at least one coordinator/lib publish row"
     for row in lib_rows:
@@ -107,7 +108,7 @@ def test_row_five_admits_percolate():
         )
 
 
-def test_both_klabauter_lib_rows_admit_install():
+def test_both_klabauter_lib_rows_admit_install() -> None:
     wanted = {"claude-klabauter-lib", "claude-klabauter-coordinator-lib"}
     rows = {r[0]: r for r in _rows() if r[0] in wanted}
     assert set(rows) == wanted, f"missing lib rows: {wanted - set(rows)}"
@@ -118,13 +119,13 @@ def test_both_klabauter_lib_rows_admit_install():
         )
 
 
-def test_source_fixtures_exist():
+def test_source_fixtures_exist() -> None:
     assert os.path.isfile(_SOURCE_BIN_LIB_CC_INVOKE)
     assert os.path.isfile(_SOURCE_SETTINGS_HOME)
     assert os.path.isfile(_SOURCE_SESSION_IDENTITY)
 
 
-def test_cruft_sweep_bin_lib_resolves(tmp_path):
+def test_cruft_sweep_bin_lib_resolves(tmp_path: Path) -> None:
     mirror_bin = _build_published_mirror(str(tmp_path))
     cli_path = os.path.join(mirror_bin, "cruft-sweep")
 
@@ -132,7 +133,7 @@ def test_cruft_sweep_bin_lib_resolves(tmp_path):
     assert os.path.isfile(os.path.join(lib_dir, "cc_invoke.py"))
 
 
-def test_cruft_sweep_coordinator_lib_resolves(tmp_path):
+def test_cruft_sweep_coordinator_lib_resolves(tmp_path: Path) -> None:
     """cruft-sweep's `_COORDINATOR_LIB_DIR = <bin>/../lib` (settings_home) —
     the leg C4's new publish row fixes. This is AC5's critical assertion:
     a fix verified only against the `<bin>/lib` leg above proves nothing
@@ -146,7 +147,7 @@ def test_cruft_sweep_coordinator_lib_resolves(tmp_path):
     assert os.path.isfile(os.path.join(coordinator_lib_dir, "settings_home.py"))
 
 
-def test_identity_cli_lib_session_resolves(tmp_path):
+def test_identity_cli_lib_session_resolves(tmp_path: Path) -> None:
     mirror_bin = _build_published_mirror(str(tmp_path))
     cli_path = os.path.join(mirror_bin, "identity-cli")
 

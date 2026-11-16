@@ -51,13 +51,13 @@ def _phantoms(root: Path) -> list:
     return found
 
 
-def test_slow_pre_emit_worker_reaching_the_emit_after_the_answer_mints_nothing(repo, monkeypatch):
+def test_slow_pre_emit_worker_reaching_the_emit_after_the_answer_mints_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "1.0")
     hold = threading.Event()
     drained = threading.Event()
     original = mod._premintable
 
-    def blocked(*args, **kwargs):
+    def blocked(*args, **kwargs) -> bool:
         hold.wait(30)
         return original(*args, **kwargs)
 
@@ -97,7 +97,7 @@ def _emit_blocking_then_real(release: threading.Event, done: threading.Event, se
     return emit
 
 
-def test_slow_emit_answered_nothing_taken_publishes_no_record_when_it_resumes(repo, monkeypatch):
+def test_slow_emit_answered_nothing_taken_publishes_no_record_when_it_resumes(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "1.0")
     _delay(monkeypatch, "_call_preference", 0.7)  # the emit join falls past the answer deadline
     release, done, seen = threading.Event(), threading.Event(), []
@@ -112,7 +112,7 @@ def test_slow_emit_answered_nothing_taken_publishes_no_record_when_it_resumes(re
     assert _phantoms(repo) == []
 
 
-def test_cancelled_gate_aborts_the_real_emit_before_it_writes_anything(repo):
+def test_cancelled_gate_aborts_the_real_emit_before_it_writes_anything(repo) -> None:
     gate = run_token.WriteGate()
     assert gate.cancel() == "idle"
 
@@ -126,7 +126,7 @@ def test_cancelled_gate_aborts_the_real_emit_before_it_writes_anything(repo):
     assert not list((repo / "scratch" / "warp").glob("*")) if (repo / "scratch" / "warp").exists() else True
 
 
-def test_an_emit_started_after_the_answer_never_runs(repo):
+def test_an_emit_started_after_the_answer_never_runs(repo) -> None:
     ran: list = []
     call = {"t0": time.monotonic(), "wall0": time.time(), "roots": [repo], "minted": [], "gate": run_token.WriteGate(), "gates": []}
     mod._cancel_call_gates(call)
@@ -139,7 +139,7 @@ def test_an_emit_started_after_the_answer_never_runs(repo):
     assert ran == [] and not caught.value.minted and NOTHING_TAKEN in caught.value.message
 
 
-def test_a_later_emit_of_the_call_gets_its_own_gate_that_the_answer_also_cancels(repo):
+def test_a_later_emit_of_the_call_gets_its_own_gate_that_the_answer_also_cancels(repo) -> None:
     call = {"t0": time.monotonic(), "wall0": time.time(), "roots": [repo], "minted": [], "gate": run_token.WriteGate(), "gates": []}
     token = mod._CALL.set(call)
     try:
@@ -152,7 +152,7 @@ def test_a_later_emit_of_the_call_gets_its_own_gate_that_the_answer_also_cancels
     assert call["gates"][0].begin() is False
 
 
-def test_committed_token_at_the_answer_names_the_run_and_never_says_nothing_taken(repo, monkeypatch):
+def test_committed_token_at_the_answer_names_the_run_and_never_says_nothing_taken(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "1.0")
     _delay(monkeypatch, "_call_preference", 0.7)
     release, done, seen = threading.Event(), threading.Event(), []
@@ -169,7 +169,7 @@ SIZING = real.REL
 
 
 @pytest.fixture
-def launch_dirs(tmp_path, monkeypatch):
+def launch_dirs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     managed, legacy = tmp_path / "managed", tmp_path / "legacy"
     managed.mkdir()
     legacy.mkdir()
@@ -188,7 +188,7 @@ def _stranded_token(root: Path, age_s: float) -> None:
     path.write_text(json.dumps(record), encoding="utf-8")
 
 
-def test_a_sizing_whose_run_has_no_runner_past_the_grace_is_named_resumable(repo, launch_dirs):
+def test_a_sizing_whose_run_has_no_runner_past_the_grace_is_named_resumable(repo, launch_dirs) -> None:
     real._put_sizing(repo)
     _stranded_token(repo, warp_live.MINTED_RUNNER_GRACE_SECONDS + 60)
     env = mod.evaluate(real._payload(repo, {"sizing": SIZING}))
@@ -197,7 +197,7 @@ def test_a_sizing_whose_run_has_no_runner_past_the_grace_is_named_resumable(repo
     assert RUN_ID in text and mod._MINTED_OP in text and "already working" not in text
 
 
-def test_a_sizing_whose_minted_run_is_inside_the_grace_is_not_named_resumable(repo, launch_dirs):
+def test_a_sizing_whose_minted_run_is_inside_the_grace_is_not_named_resumable(repo, launch_dirs) -> None:
     real._put_sizing(repo)
     _stranded_token(repo, 5)
     env = mod.evaluate(real._payload(repo, {"sizing": SIZING}))

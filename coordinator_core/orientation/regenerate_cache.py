@@ -1571,7 +1571,7 @@ class _OrientationCacheLock:
     residual (pre-existing, not newly introduced) race this does not close.
     """
 
-    def __init__(self, state_root: Path, timeout: Optional[float] = None, poll_interval: Optional[float] = None):
+    def __init__(self, state_root: Path, timeout: Optional[float] = None, poll_interval: Optional[float] = None) -> None:
         # Module globals read at INSTANTIATION time (not bound as arg defaults
         # at def-time) so tests can monkeypatch _LOCK_TIMEOUT_S/_LOCK_POLL_S.
         self._dir = state_root / _LOCK_DIR_SUFFIX

@@ -92,29 +92,29 @@ def _run(coro):
 # ---------------------------------------------------------------------------
 
 
-def test_dr146_constants_match_js_port():
+def test_dr146_constants_match_js_port() -> None:
     assert DR146_STRIP_SUFFIXES == ("-shape", "-design", "-v2")
     assert DR146_MIN_STEM_LEN == 8
     assert STEM_PREFIX_LEN == 6
     assert DR146_DATE_PREFIX_RE.match("2026-07-23-foo")
 
 
-def test_dr146_normalize_strips_date_prefix():
+def test_dr146_normalize_strips_date_prefix() -> None:
     assert dr146_normalize("2026-07-23-foo-bar") == "foo-bar"
 
 
-def test_dr146_normalize_strips_one_suffix_first_match():
+def test_dr146_normalize_strips_one_suffix_first_match() -> None:
     assert dr146_normalize("percolation-engine-shape") == "percolation-engine"
     assert dr146_normalize("percolation-engine-design") == "percolation-engine"
     assert dr146_normalize("percolation-engine-v2") == "percolation-engine"
 
 
-def test_dr146_normalize_depluralizes_non_ss_trailing_s():
+def test_dr146_normalize_depluralizes_non_ss_trailing_s() -> None:
     assert dr146_normalize("guides") == "guide"
     assert dr146_normalize("process") == "process"  # ends in "ss" -> untouched
 
 
-def test_slugify_stem_collapses_non_alnum_and_trims():
+def test_slugify_stem_collapses_non_alnum_and_trims() -> None:
     assert slugify_stem("Foo_Bar Baz!!") == "foo-bar-baz"
     assert slugify_stem("--leading-trailing--") == "leading-trailing"
 
@@ -191,14 +191,14 @@ def fixture_repo(tmp_path: Path) -> Path:
     return root
 
 
-def test_compute_scope_harvest_cohort_is_ripe_and_undebted(fixture_repo):
+def test_compute_scope_harvest_cohort_is_ripe_and_undebted(fixture_repo) -> None:
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
     assert result.manifest["cohorts"]["harvest"] == ["archive/specs/2026-07-01-alpha.md"]
     assert "archive/specs/2026-07-02-beta.md" not in result.manifest["cohorts"]["harvest"]
     assert "archive/specs/2026-07-03-gamma.md" not in result.manifest["cohorts"]["harvest"]
 
 
-def test_compute_scope_sidecar_cohort_via_sweep_not_ripe_filter(fixture_repo):
+def test_compute_scope_sidecar_cohort_via_sweep_not_ripe_filter(fixture_repo) -> None:
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
     assert result.manifest["cohorts"]["sidecars"] == [
         "archive/specs/2026-07-04-delta.review.md"
@@ -206,7 +206,7 @@ def test_compute_scope_sidecar_cohort_via_sweep_not_ripe_filter(fixture_repo):
     assert "archive/specs/2026-07-04-delta.review.md" not in result.manifest["cohorts"]["harvest"]
 
 
-def test_compute_scope_reports_referenced_sidecar_without_spawning_rg(fixture_repo, monkeypatch):
+def test_compute_scope_reports_referenced_sidecar_without_spawning_rg(fixture_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """The op reports candidates and spawns nothing; the reference decision is the
     delete-time guard's, which still blocks a referenced sidecar."""
     from coordinator_core.distill.delete_guard import check_active_reference
@@ -227,7 +227,7 @@ def test_compute_scope_reports_referenced_sidecar_without_spawning_rg(fixture_re
         assert check_active_reference(rel, fixture_repo).passed is False
 
 
-def test_compute_scope_handoff_resolution_gate(fixture_repo):
+def test_compute_scope_handoff_resolution_gate(fixture_repo) -> None:
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
     handoffs = result.manifest["cohorts"]["handoffs"]
     assert "archive/handoffs/2026-07-01-eligible.md" in handoffs
@@ -238,7 +238,7 @@ def test_compute_scope_handoff_resolution_gate(fixture_repo):
     assert len(handoffs) == 2
 
 
-def test_compute_scope_memos_cohort(fixture_repo):
+def test_compute_scope_memos_cohort(fixture_repo) -> None:
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
     assert result.manifest["cohorts"]["memos"] == [
         "cross-repo/archive/2026-07-01-memo-one.md",
@@ -246,7 +246,7 @@ def test_compute_scope_memos_cohort(fixture_repo):
     ]
 
 
-def test_compute_scope_wiki_inventory_default_dirs(fixture_repo):
+def test_compute_scope_wiki_inventory_default_dirs(fixture_repo) -> None:
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
     assert result.manifest["wiki_dirs"] == ["docs/wiki"]
     assert isinstance(result.manifest["wiki_slugs"], list)
@@ -255,7 +255,7 @@ def test_compute_scope_wiki_inventory_default_dirs(fixture_repo):
     }
 
 
-def test_compute_scope_wiki_inventory_indexes_nested_pages(fixture_repo):
+def test_compute_scope_wiki_inventory_indexes_nested_pages(fixture_repo) -> None:
     """C3 (ANWH): the navigable-hierarchy wiki nests family pages under a
     family directory. wiki_slugs must index a nested page (rglob, not the
     prior top-level-only glob), keyed and pathed exactly as a top-level page,
@@ -273,7 +273,7 @@ def test_compute_scope_wiki_inventory_indexes_nested_pages(fixture_repo):
     assert _WIKI + "fam/_index.md" not in slugs.values()
 
 
-def test_compute_scope_wiki_inventory_adds_coordinator_dir_when_present(fixture_repo):
+def test_compute_scope_wiki_inventory_adds_coordinator_dir_when_present(fixture_repo) -> None:
     _write(
         fixture_repo / "coordinator" / "docs" / "wiki" / "other-guide.md",
         "# Other\n",
@@ -283,14 +283,14 @@ def test_compute_scope_wiki_inventory_adds_coordinator_dir_when_present(fixture_
     assert "other-guide" in wiki_slugs_as_dict(result.manifest)
 
 
-def test_compute_scope_default_wiki_dirs_include_guides_when_present(fixture_repo):
+def test_compute_scope_default_wiki_dirs_include_guides_when_present(fixture_repo) -> None:
     _write(fixture_repo / "docs" / "guides" / "league-rules.md", "# League\n")
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
     assert result.manifest["wiki_dirs"] == ["docs/wiki", "docs/guides"]
     assert "league-rules" in wiki_slugs_as_dict(result.manifest)
 
 
-def test_empty_wiki_warning_names_dirs_when_slugs_zero_but_guides_exist(fixture_repo):
+def test_empty_wiki_warning_names_dirs_when_slugs_zero_but_guides_exist(fixture_repo) -> None:
     _write(fixture_repo / "docs" / "guides" / "league-rules.md", "# League\n")
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00", wiki_dirs=["docs/empty"])
     assert result.manifest["wiki_slugs"] == []
@@ -299,7 +299,7 @@ def test_empty_wiki_warning_names_dirs_when_slugs_zero_but_guides_exist(fixture_
     assert "docs/guides" in warning and "docs/empty" in warning
 
 
-def test_empty_wiki_warning_silent_when_slugs_present_or_no_candidate_files(fixture_repo, tmp_path):
+def test_empty_wiki_warning_silent_when_slugs_present_or_no_candidate_files(fixture_repo, tmp_path: Path) -> None:
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
     assert empty_wiki_warning(fixture_repo, result.manifest) is None
     bare = tmp_path / "bare"
@@ -307,7 +307,7 @@ def test_empty_wiki_warning_silent_when_slugs_present_or_no_candidate_files(fixt
     assert empty_wiki_warning(bare, {"wiki_slugs": [], "wiki_dirs": []}) is None
 
 
-def test_compute_scope_batching_respects_batch_size(fixture_repo):
+def test_compute_scope_batching_respects_batch_size(fixture_repo) -> None:
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00", batch_size=2)
     batches = result.manifest["batches"]
     total = sum(len(b) for b in batches)
@@ -315,35 +315,35 @@ def test_compute_scope_batching_respects_batch_size(fixture_repo):
     assert all(len(b) <= 2 for b in batches)
 
 
-def test_compute_scope_batching_chronological_order(fixture_repo):
+def test_compute_scope_batching_chronological_order(fixture_repo) -> None:
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00", batch_size=100)
     flat = [p for batch in result.manifest["batches"] for p in batch]
     assert flat == sorted(flat, key=_date_sort_key)
 
 
-def test_pack_batches_closes_batch_at_byte_budget_and_keeps_order():
+def test_pack_batches_closes_batch_at_byte_budget_and_keeps_order() -> None:
     sizes = {"a": 40, "b": 40, "c": 40, "d": 10}
     batches = pack_batches(list(sizes), size_of=sizes.__getitem__, byte_budget=100, max_files=50)
     assert batches == [["a", "b"], ["c", "d"]]
 
 
-def test_pack_batches_oversize_file_gets_own_batch_never_dropped():
+def test_pack_batches_oversize_file_gets_own_batch_never_dropped() -> None:
     sizes = {"a": 10, "huge": 1000, "b": 10}
     batches = pack_batches(list(sizes), size_of=sizes.__getitem__, byte_budget=100, max_files=50)
     assert batches == [["a"], ["huge"], ["b"]]
 
 
-def test_pack_batches_max_files_is_hard_cap_under_budget():
+def test_pack_batches_max_files_is_hard_cap_under_budget() -> None:
     paths = [f"p{i}" for i in range(5)]
     batches = pack_batches(paths, size_of=lambda _p: 1, byte_budget=10**9, max_files=2)
     assert batches == [["p0", "p1"], ["p2", "p3"], ["p4"]]
 
 
-def test_pack_batches_empty_input_yields_no_batches():
+def test_pack_batches_empty_input_yields_no_batches() -> None:
     assert pack_batches([], size_of=lambda _p: 1, byte_budget=10, max_files=3) == []
 
 
-def test_compute_scope_byte_budget_splits_by_on_disk_size(fixture_repo):
+def test_compute_scope_byte_budget_splits_by_on_disk_size(fixture_repo) -> None:
     _write(fixture_repo / "cross-repo" / "archive" / "2026-07-01-memo-one.md", "x" * 500)
     _write(fixture_repo / "cross-repo" / "archive" / "2026-07-02-memo-two.md", "y" * 500)
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00", byte_budget=600)
@@ -354,13 +354,13 @@ def test_compute_scope_byte_budget_splits_by_on_disk_size(fixture_repo):
         assert "cross-repo/archive/2026-07-01-memo-one.md" not in b or "cross-repo/archive/2026-07-02-memo-two.md" not in b
 
 
-def test_compute_scope_size_of_hook_replaces_on_disk_size(fixture_repo):
+def test_compute_scope_size_of_hook_replaces_on_disk_size(fixture_repo) -> None:
     solo = compute_scope(fixture_repo, run_id="2026-07-23-01h00", size_of=lambda _p: 10**9)
     assert all(len(b) == 1 for b in solo.manifest["batches"])
     assert solo.counts["batches"] == solo.counts["scannable"]
 
 
-def test_pack_batches_entry_budget_is_a_third_axis():
+def test_pack_batches_entry_budget_is_a_third_axis() -> None:
     batches = pack_batches(
         ["a", "b", "c"], size_of=lambda _p: 1, byte_budget=10**9, max_files=50,
         entry_cost_of=lambda _p: 60, entry_budget=100,
@@ -368,7 +368,7 @@ def test_pack_batches_entry_budget_is_a_third_axis():
     assert batches == [["a"], ["b"], ["c"]]
 
 
-def test_compute_scope_write_digests_packs_by_digest_bytes_and_maps_paths(fixture_repo):
+def test_compute_scope_write_digests_packs_by_digest_bytes_and_maps_paths(fixture_repo) -> None:
     big = "---\nstatus: draft\n---\nprose\n```yaml plan-tasks\n- id: C0\n  title: T\n" + "  body: x\n" * 500 + "```\n"
     _write(fixture_repo / "cross-repo" / "archive" / "2026-07-01-memo-one.md", big)
     plain = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
@@ -382,12 +382,12 @@ def test_compute_scope_write_digests_packs_by_digest_bytes_and_maps_paths(fixtur
     assert digested.manifest["batches"] == plain.manifest["batches"]
 
 
-def test_compute_scope_size_of_hook_overrides_digest_sizes(fixture_repo):
+def test_compute_scope_size_of_hook_overrides_digest_sizes(fixture_repo) -> None:
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00", write_digests=True, size_of=lambda _p: 10**9)
     assert all(len(b) == 1 for b in result.manifest["batches"])
 
 
-def test_handler_batch_files_carry_digests_and_stay_under_relay_cap(fixture_repo):
+def test_handler_batch_files_carry_digests_and_stay_under_relay_cap(fixture_repo) -> None:
     from coordinator_core.ops.distill_workflow_input import SLUG_SHARD_MAX_BYTES
 
     for i in range(60):
@@ -408,7 +408,7 @@ def test_handler_batch_files_carry_digests_and_stay_under_relay_cap(fixture_repo
             assert (fixture_repo / digest_rel).is_file()
 
 
-def test_handler_batch_files_carry_relevant_guides_within_cap(fixture_repo):
+def test_handler_batch_files_carry_relevant_guides_within_cap(fixture_repo) -> None:
     from coordinator_core.ops.distill_workflow_input import SLUG_SHARD_MAX_BYTES
 
     _write(
@@ -437,7 +437,7 @@ def test_handler_batch_files_carry_relevant_guides_within_cap(fixture_repo):
 # ---------------------------------------------------------------------------
 
 
-def test_default_cohort_specs_reproduces_hardcoded_behavior(fixture_repo):
+def test_default_cohort_specs_reproduces_hardcoded_behavior(fixture_repo) -> None:
     """cohort_specs=None (the default) must reproduce the pre-ruling hardcoded
     handoffs+memos cohorts byte-for-byte — the sibling-repo compatibility
     contract this chunk must not break."""
@@ -454,17 +454,17 @@ def test_default_cohort_specs_reproduces_hardcoded_behavior(fixture_repo):
     assert result.manifest["cohort_modes"]["memos"] == "harvest"
 
 
-def test_cohort_specs_invalid_mode_rejected():
+def test_cohort_specs_invalid_mode_rejected() -> None:
     with pytest.raises(ValueError, match="mode must be one of"):
         CohortSpec(name="bad", glob="foo/*.md", mode="delete")
 
 
-def test_cohort_specs_unknown_filter_rejected():
+def test_cohort_specs_unknown_filter_rejected() -> None:
     with pytest.raises(ValueError, match="unknown filter"):
         CohortSpec(name="bad", glob="foo/*.md", filter="not_a_real_filter")
 
 
-def test_pm_ruling_cohort_specs_reproduces_ruling_as_config(fixture_repo):
+def test_pm_ruling_cohort_specs_reproduces_ruling_as_config(fixture_repo) -> None:
     """AC: the 2026-08-06 ruling is reproducible purely as config — archive/
     completed/ and state/week-changelog/ are first-class harvest cohorts,
     memos narrow to the distill_fate-promote subset, and archived handoffs
@@ -514,7 +514,7 @@ def test_pm_ruling_cohort_specs_reproduces_ruling_as_config(fixture_repo):
 # ---------------------------------------------------------------------------
 
 
-def test_compute_scope_determinism(fixture_repo):
+def test_compute_scope_determinism(fixture_repo) -> None:
     a = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
     b = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
     assert canonical_manifest_bytes(a.manifest) == canonical_manifest_bytes(b.manifest)
@@ -525,7 +525,7 @@ def test_compute_scope_determinism(fixture_repo):
 # ---------------------------------------------------------------------------
 
 
-def test_write_scope_manifest_writes_valid_json(fixture_repo):
+def test_write_scope_manifest_writes_valid_json(fixture_repo) -> None:
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
     written = write_scope_manifest(fixture_repo, result.manifest)
     assert written == fixture_repo / "state" / "scratch" / "artifact-distillation" / "2026-07-23-01h00" / "input.json"
@@ -534,7 +534,7 @@ def test_write_scope_manifest_writes_valid_json(fixture_repo):
     assert loaded["run_id"] == "2026-07-23-01h00"
 
 
-def test_workflow_input_matches_distill_harvest_input_shape(fixture_repo):
+def test_workflow_input_matches_distill_harvest_input_shape(fixture_repo) -> None:
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00", batch_size=2)
     wf = workflow_input(result.manifest, fixture_repo)
     assert wf["runId"] == "2026-07-23-01h00"
@@ -544,7 +544,7 @@ def test_workflow_input_matches_distill_harvest_input_shape(fixture_repo):
     assert wf["wikiSlugCount"] == len(wf["wikiSlugs"])
 
 
-def test_write_scope_manifest_write_confined_to_own_run_id(fixture_repo):
+def test_write_scope_manifest_write_confined_to_own_run_id(fixture_repo) -> None:
     result_a = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
     result_b = compute_scope(fixture_repo, run_id="2026-07-23-02h00")
     written_a = write_scope_manifest(fixture_repo, result_a.manifest)
@@ -561,17 +561,17 @@ def test_write_scope_manifest_write_confined_to_own_run_id(fixture_repo):
 # ---------------------------------------------------------------------------
 
 
-def test_handler_raises_on_repo_root_none():
+def test_handler_raises_on_repo_root_none() -> None:
     with pytest.raises(ValueError, match="_origin_worktree"):
         _handler({"run_id": "2026-07-23-01h00"}, repo_root=None)
 
 
-def test_handler_raises_on_missing_run_id(fixture_repo):
+def test_handler_raises_on_missing_run_id(fixture_repo) -> None:
     with pytest.raises(ValueError, match=r"'run_id' param \(str, e\.g\. '\d{4}-\d{2}-\d{2}-\d{2}h\d{2}'"):
         _handler({}, repo_root=fixture_repo / ".git")
 
 
-def test_dispatch_message_smoke(fixture_repo, monkeypatch):
+def test_dispatch_message_smoke(fixture_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """End-to-end command-type dispatch via the REAL registered wiring
     (ops/__init__.py eager import + _registry_map.py + op_scopes.py + the
     @register_op decorator) — proves distill.scope is reachable exactly as a
@@ -605,14 +605,14 @@ def test_dispatch_message_smoke(fixture_repo, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_render_summary_shows_default_handoffs_and_memos_counts(fixture_repo):
+def test_render_summary_shows_default_handoffs_and_memos_counts(fixture_repo) -> None:
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
     summary = render_summary(result.manifest, result.counts)
     assert f"handoffs={result.counts['handoffs']}" in summary
     assert f"memos={result.counts['memos']}" in summary
 
 
-def test_render_summary_reflects_custom_cohort_specs_names(fixture_repo):
+def test_render_summary_reflects_custom_cohort_specs_names(fixture_repo) -> None:
     custom_specs = [
         CohortSpec(name="week_changelog", glob="state/week-changelog/**/*.md", filter=None, mode="harvest"),
     ]
@@ -633,7 +633,7 @@ def test_render_summary_reflects_custom_cohort_specs_names(fixture_repo):
 # ---------------------------------------------------------------------------
 
 
-def test_handler_cohort_specs_malformed_row_raises_value_error_not_type_error(fixture_repo):
+def test_handler_cohort_specs_malformed_row_raises_value_error_not_type_error(fixture_repo) -> None:
     with pytest.raises(ValueError, match="cohort_specs"):
         _handler(
             {
@@ -644,7 +644,7 @@ def test_handler_cohort_specs_malformed_row_raises_value_error_not_type_error(fi
         )
 
 
-def test_handler_cohort_specs_non_dict_row_raises_value_error(fixture_repo):
+def test_handler_cohort_specs_non_dict_row_raises_value_error(fixture_repo) -> None:
     with pytest.raises(ValueError, match="cohort_specs"):
         _handler(
             {"run_id": "2026-07-23-01h00", "cohort_specs": ["not-a-dict"]},
@@ -652,7 +652,7 @@ def test_handler_cohort_specs_non_dict_row_raises_value_error(fixture_repo):
         )
 
 
-def test_memo_cohorts_follow_a_state_rooted_corpus(fixture_repo):
+def test_memo_cohorts_follow_a_state_rooted_corpus(fixture_repo) -> None:
     """A repo whose memo corpus lives under state/cross-repo/ is scanned there, for the default
     cohort and for the 2026-08-06 ruling's row, which names the legacy path."""
     (fixture_repo / "state").mkdir(exist_ok=True)
@@ -692,7 +692,7 @@ def test_memo_cohorts_follow_a_state_rooted_corpus(fixture_repo):
         ("---\ndistill_fate: ephemeral\n", None),
     ],
 )
-def test_mechanical_fate_decides_from_frontmatter_alone(text, expected):
+def test_mechanical_fate_decides_from_frontmatter_alone(text, expected) -> None:
     from coordinator_core.ops.distill_scope import mechanical_fate
 
     assert mechanical_fate(text) == expected
@@ -707,7 +707,7 @@ def _add_fate_rows(root: Path) -> None:
     )
 
 
-def test_compute_scope_tags_ephemeral_rows_out_of_batches(fixture_repo):
+def test_compute_scope_tags_ephemeral_rows_out_of_batches(fixture_repo) -> None:
     _add_fate_rows(fixture_repo)
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
     mech = {r["path"]: r for r in result.manifest["mechanical"]}
@@ -730,13 +730,13 @@ def test_compute_scope_tags_ephemeral_rows_out_of_batches(fixture_repo):
     assert "cross-repo/archive/2026-07-03-memo-eph.md" in result.manifest["cohorts"]["memos"]
 
 
-def test_compute_scope_without_fate_rows_emits_empty_mechanical(fixture_repo):
+def test_compute_scope_without_fate_rows_emits_empty_mechanical(fixture_repo) -> None:
     result = compute_scope(fixture_repo, run_id="2026-07-23-01h00")
     assert result.manifest["mechanical"] == []
     assert result.counts["mechanical"] == 0
 
 
-def test_handler_workflow_input_excludes_mechanical_rows(fixture_repo, wide_budget):
+def test_handler_workflow_input_excludes_mechanical_rows(fixture_repo, wide_budget) -> None:
     _write(fixture_repo / "cross-repo" / "archive" / "2026-07-04-memo-promote.md", "---\ndistill_fate: commitment\n---\nm\n")
     before = _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo / ".git")
     before_total = json.loads((fixture_repo / before["workflow_input_path"]).read_text(encoding="utf-8"))[
@@ -762,7 +762,7 @@ def _add_plans(root: Path) -> None:
     _write(root / "docs" / "plans" / "2026-11-05-e.review.md", "---\nstatus: implemented\n---\nbody\n")
 
 
-def test_plans_cohort_holds_implemented_undebted_plans_only(fixture_repo):
+def test_plans_cohort_holds_implemented_undebted_plans_only(fixture_repo) -> None:
     _add_plans(fixture_repo)
     log = fixture_repo / "state" / "distillation-log.md"
     log.write_text(
@@ -787,7 +787,7 @@ def test_plans_cohort_holds_implemented_undebted_plans_only(fixture_repo):
     assert not any(p.startswith("docs/plans/") for p in result.manifest["cohorts"]["skip"])
 
 
-def test_plans_cohort_a_nested_log_row_credits_the_dated_subdir_plan(fixture_repo):
+def test_plans_cohort_a_nested_log_row_credits_the_dated_subdir_plan(fixture_repo) -> None:
     _add_plans(fixture_repo)
     log = fixture_repo / "state" / "distillation-log.md"
     log.write_text(
@@ -800,7 +800,7 @@ def test_plans_cohort_a_nested_log_row_credits_the_dated_subdir_plan(fixture_rep
     assert "docs/plans/2026-11-01-a.md" in cohort
 
 
-def test_plans_cohort_an_ephemeral_log_row_is_not_a_harvest(fixture_repo):
+def test_plans_cohort_an_ephemeral_log_row_is_not_a_harvest(fixture_repo) -> None:
     _add_plans(fixture_repo)
     log = fixture_repo / "state" / "distillation-log.md"
     log.write_text(
@@ -810,13 +810,13 @@ def test_plans_cohort_an_ephemeral_log_row_is_not_a_harvest(fixture_repo):
     assert "docs/plans/2026-11-01-a.md" in compute_scope(fixture_repo, run_id="r").manifest["cohorts"]["plans"]
 
 
-def test_plans_cohort_is_empty_without_a_plans_dir(fixture_repo):
+def test_plans_cohort_is_empty_without_a_plans_dir(fixture_repo) -> None:
     result = compute_scope(fixture_repo, run_id="r")
     assert result.manifest["cohorts"]["plans"] == []
     assert result.counts["plans"] == 0
 
 
-def test_scannable_count_equals_compute_scope_scannable_at_pm_ruling(fixture_repo):
+def test_scannable_count_equals_compute_scope_scannable_at_pm_ruling(fixture_repo) -> None:
     _add_plans(fixture_repo)
     _add_fate_rows(fixture_repo)
     _write(
@@ -844,7 +844,7 @@ def _fresh_repo_with_log(fixture_repo: Path, log_text: str | None) -> None:
         log.write_text(log_text, encoding="utf-8")
 
 
-def test_an_absent_log_is_an_empty_baseline_not_a_refusal(fixture_repo):
+def test_an_absent_log_is_an_empty_baseline_not_a_refusal(fixture_repo) -> None:
     _fresh_repo_with_log(fixture_repo, None)
     scope = compute_scope(fixture_repo, run_id="r")
     assert "archive/specs/2026-07-01-alpha.md" in scope.manifest["cohorts"]["harvest"]
@@ -857,13 +857,13 @@ def test_an_absent_log_is_an_empty_baseline_not_a_refusal(fixture_repo):
     assert not (fixture_repo / "state" / "distillation-log.md").exists()
 
 
-def test_a_header_only_log_is_an_empty_baseline(fixture_repo):
+def test_a_header_only_log_is_an_empty_baseline(fixture_repo) -> None:
     _fresh_repo_with_log(fixture_repo, "# Distillation Log\n\n## Run 2026-07-05-00h00\n")
     scope = compute_scope(fixture_repo, run_id="r")
     assert "archive/specs/2026-07-02-beta.md" in scope.manifest["cohorts"]["harvest"]
 
 
-def test_a_log_with_content_and_no_parseable_row_still_refuses(fixture_repo):
+def test_a_log_with_content_and_no_parseable_row_still_refuses(fixture_repo) -> None:
     from coordinator_core.distill.harvest_debt import DistillationLogUnparseableError
 
     _fresh_repo_with_log(fixture_repo, "some prose that is no table and no row\n")
@@ -873,14 +873,14 @@ def test_a_log_with_content_and_no_parseable_row_still_refuses(fixture_repo):
         scannable_count(fixture_repo)
 
 
-def test_the_handler_scopes_an_absent_log_repo(fixture_repo):
+def test_the_handler_scopes_an_absent_log_repo(fixture_repo) -> None:
     _fresh_repo_with_log(fixture_repo, None)
     result = _handler({"run_id": "fresh"}, repo_root=fixture_repo / ".git")
     assert (fixture_repo / result["input_json_path"]).is_file()
     assert not (fixture_repo / "state" / "distillation-log.md").exists()
 
 
-def test_the_handler_scopes_params_repo_root_not_the_injected_repo(fixture_repo, tmp_path):
+def test_the_handler_scopes_params_repo_root_not_the_injected_repo(fixture_repo, tmp_path: Path) -> None:
     other = tmp_path / "other"
     (other / "archive" / "specs").mkdir(parents=True)
     result = _handler({"run_id": "r", "repo_root": str(fixture_repo / ".git")}, repo_root=other / ".git")
@@ -888,7 +888,7 @@ def test_the_handler_scopes_params_repo_root_not_the_injected_repo(fixture_repo,
     assert not (other / "state").exists()
 
 
-def test_the_handler_without_params_repo_root_scopes_the_injected_repo(fixture_repo, tmp_path):
+def test_the_handler_without_params_repo_root_scopes_the_injected_repo(fixture_repo, tmp_path: Path) -> None:
     other = tmp_path / "other"
     (other / "archive" / "specs").mkdir(parents=True)
     result = _handler({"run_id": "r"}, repo_root=other / ".git")
@@ -896,7 +896,7 @@ def test_the_handler_without_params_repo_root_scopes_the_injected_repo(fixture_r
     assert not (fixture_repo / "state" / "scratch").exists()
 
 
-def test_scannable_count_cap_stops_at_cap_and_is_exact_below_it(fixture_repo):
+def test_scannable_count_cap_stops_at_cap_and_is_exact_below_it(fixture_repo) -> None:
     for day in range(1, 5):
         _backlog_file(fixture_repo, f"2026-11-0{day}")
     full = scannable_count(fixture_repo)
@@ -943,7 +943,7 @@ def _age(repo: Path, run_id: str, seconds: float = 2 * 86400) -> None:
         os.utime(p, (old, old))
 
 
-def test_two_scope_calls_through_dispatch_leave_one_run_dir(fixture_repo):
+def test_two_scope_calls_through_dispatch_leave_one_run_dir(fixture_repo) -> None:
     _git_init(fixture_repo)
     _dispatch_scope(fixture_repo, "2026-07-23-01h00")
     _age(fixture_repo, "2026-07-23-01h00")
@@ -951,7 +951,7 @@ def test_two_scope_calls_through_dispatch_leave_one_run_dir(fixture_repo):
     assert _scope_dirs(fixture_repo) == ["2026-07-23-02h00"]
 
 
-def test_back_to_back_scope_calls_leave_one_dir(fixture_repo):
+def test_back_to_back_scope_calls_leave_one_dir(fixture_repo) -> None:
     _git_init(fixture_repo)
     _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo)
     _age(fixture_repo, "2026-07-23-01h00")
@@ -959,14 +959,14 @@ def test_back_to_back_scope_calls_leave_one_dir(fixture_repo):
     assert _scope_dirs(fixture_repo) == ["2026-07-23-02h00"]
 
 
-def test_scope_keeps_a_young_unconsumed_dir_a_live_run_may_still_read(fixture_repo):
+def test_scope_keeps_a_young_unconsumed_dir_a_live_run_may_still_read(fixture_repo) -> None:
     _git_init(fixture_repo)
     _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo)
     _handler({"run_id": "2026-07-23-02h00"}, repo_root=fixture_repo)
     assert _scope_dirs(fixture_repo) == ["2026-07-23-01h00", "2026-07-23-02h00"]
 
 
-def test_rescoping_a_consumed_same_run_id_clears_stale_downstream_files(fixture_repo):
+def test_rescoping_a_consumed_same_run_id_clears_stale_downstream_files(fixture_repo) -> None:
     _git_init(fixture_repo)
     _handler({"run_id": "autofire"}, repo_root=fixture_repo)
     d = fixture_repo / "state" / "scratch" / "artifact-distillation" / "autofire"
@@ -976,7 +976,7 @@ def test_rescoping_a_consumed_same_run_id_clears_stale_downstream_files(fixture_
     assert (d / "input.json").is_file()
 
 
-def test_scope_keeps_a_prior_dir_a_downstream_step_has_written_into(fixture_repo):
+def test_scope_keeps_a_prior_dir_a_downstream_step_has_written_into(fixture_repo) -> None:
     _git_init(fixture_repo)
     _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo)
     consumed = fixture_repo / "state" / "scratch" / "artifact-distillation" / "2026-07-23-01h00"
@@ -985,7 +985,7 @@ def test_scope_keeps_a_prior_dir_a_downstream_step_has_written_into(fixture_repo
     assert _scope_dirs(fixture_repo) == ["2026-07-23-01h00", "2026-07-23-02h00"]
 
 
-def test_scope_keeps_non_scope_siblings(fixture_repo):
+def test_scope_keeps_non_scope_siblings(fixture_repo) -> None:
     _git_init(fixture_repo)
     base = fixture_repo / "state" / "scratch" / "artifact-distillation"
     probe = base / "perf-probe"
@@ -997,7 +997,7 @@ def test_scope_keeps_non_scope_siblings(fixture_repo):
     assert (base / "loose.params.json").exists()
 
 
-def test_rescoping_the_same_run_id_keeps_its_dir(fixture_repo):
+def test_rescoping_the_same_run_id_keeps_its_dir(fixture_repo) -> None:
     _git_init(fixture_repo)
     _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo)
     _handler({"run_id": "2026-07-23-01h00"}, repo_root=fixture_repo)
@@ -1012,12 +1012,12 @@ _HOUR_NS = 3600 * 10**9
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_cache_root(monkeypatch):
+def _hermetic_cache_root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ds, "registry_get", lambda _key: None)
 
 
 @pytest.fixture()
-def wide_budget(monkeypatch):
+def wide_budget(monkeypatch: pytest.MonkeyPatch) -> None:
     """A run budget roomy enough that the default fit never narrows a small fixture."""
     from coordinator_core.contract.run_budget import RunBudget
 
@@ -1071,7 +1071,7 @@ def _no_source_reads(monkeypatch) -> None:
         monkeypatch.setitem(ds._COHORT_FILTERS, name, boom)
 
 
-def test_cold_and_warm_scope_are_identical_and_the_warm_one_reads_no_source(fixture_repo, monkeypatch):
+def test_cold_and_warm_scope_are_identical_and_the_warm_one_reads_no_source(fixture_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _age_tree(fixture_repo)
     cold = compute_scope(fixture_repo, run_id="R", write_digests=True)
     assert (_cache_dir(fixture_repo)).is_dir()
@@ -1083,7 +1083,7 @@ def test_cold_and_warm_scope_are_identical_and_the_warm_one_reads_no_source(fixt
     assert _snapshot(compute_scope(fixture_repo, run_id="R", write_digests=True), "R") == _snapshot(cold, "R")
 
 
-def test_stale_entries_serve_the_same_scope_a_cache_less_run_computes(fixture_repo):
+def test_stale_entries_serve_the_same_scope_a_cache_less_run_computes(fixture_repo) -> None:
     """Touch (same size, new mtime), delete, add, and edit the log: each change shows up in the
     cached scope exactly as in a scope computed with no cache at all."""
     _age_tree(fixture_repo)
@@ -1118,7 +1118,7 @@ def test_stale_entries_serve_the_same_scope_a_cache_less_run_computes(fixture_re
     assert_matches_cache_less("log edited")
 
 
-def test_a_run_dir_wiped_between_runs_gets_its_digests_back_without_rereading_sources(fixture_repo, monkeypatch):
+def test_a_run_dir_wiped_between_runs_gets_its_digests_back_without_rereading_sources(fixture_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _age_tree(fixture_repo)
     first = compute_scope(fixture_repo, run_id="R", write_digests=True)
     expected = {rel: (fixture_repo / d).read_bytes() for rel, d in first.digests.items()}
@@ -1132,7 +1132,7 @@ def test_a_run_dir_wiped_between_runs_gets_its_digests_back_without_rereading_so
         assert {rel: (fixture_repo / d).read_bytes() for rel, d in result.digests.items()} == expected
 
 
-def test_an_unchanged_digest_is_not_rewritten_and_a_tampered_one_is(fixture_repo, monkeypatch):
+def test_an_unchanged_digest_is_not_rewritten_and_a_tampered_one_is(fixture_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _age_tree(fixture_repo)
     first = compute_scope(fixture_repo, run_id="R", write_digests=True)
     rel, digest_rel = next(iter(first.digests.items()))
@@ -1150,7 +1150,7 @@ def test_an_unchanged_digest_is_not_rewritten_and_a_tampered_one_is(fixture_repo
     assert again.digests == first.digests
 
 
-def test_a_changed_fact_deriving_function_discards_the_cache(fixture_repo, monkeypatch):
+def test_a_changed_fact_deriving_function_discards_the_cache(fixture_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _age_tree(fixture_repo)
     compute_scope(fixture_repo, run_id="R")
     calls: list[str] = []
@@ -1175,7 +1175,7 @@ def _fingerprint_of_original() -> str:
 _ORIGINAL_FINGERPRINT = ds._code_fingerprint()
 
 
-def test_a_schema_mismatch_in_the_stored_cache_is_a_full_miss_not_an_error(fixture_repo):
+def test_a_schema_mismatch_in_the_stored_cache_is_a_full_miss_not_an_error(fixture_repo) -> None:
     _age_tree(fixture_repo)
     cold = compute_scope(fixture_repo, run_id="R")
     path = next(_cache_dir(fixture_repo).glob("facts-*.json"))
@@ -1189,7 +1189,7 @@ def test_a_schema_mismatch_in_the_stored_cache_is_a_full_miss_not_an_error(fixtu
     assert _snapshot(compute_scope(fixture_repo, run_id="R"), "R") == _snapshot(cold, "R")
 
 
-def test_an_entry_modified_inside_the_racy_window_is_never_stored(fixture_repo):
+def test_an_entry_modified_inside_the_racy_window_is_never_stored(fixture_repo) -> None:
     """Files created just now sit inside the window where a same-size rewrite could keep the
     same stat; their facts are recomputed every run instead of cached."""
     compute_scope(fixture_repo, run_id="R")
@@ -1197,7 +1197,7 @@ def test_an_entry_modified_inside_the_racy_window_is_never_stored(fixture_repo):
     assert stored["files"] == {}
 
 
-def test_the_log_entry_obeys_the_racy_window_like_file_entries(fixture_repo):
+def test_the_log_entry_obeys_the_racy_window_like_file_entries(fixture_repo) -> None:
     """A log modified inside the window is never stored; once aged out it is."""
     _age_tree(fixture_repo)
     log = fixture_repo / "state" / "distillation-log.md"
@@ -1210,7 +1210,7 @@ def test_the_log_entry_obeys_the_racy_window_like_file_entries(fixture_repo):
     assert json.loads(path.read_text(encoding="utf-8"))["log"]["canonical"]
 
 
-def test_a_failed_cache_store_is_not_an_error(fixture_repo):
+def test_a_failed_cache_store_is_not_an_error(fixture_repo) -> None:
     _age_tree(fixture_repo)
     expected = _snapshot(compute_scope(fixture_repo, run_id="R", write_digests=True), "R")
     shutil.rmtree(_cache_dir(fixture_repo).parent)
@@ -1218,7 +1218,7 @@ def test_a_failed_cache_store_is_not_an_error(fixture_repo):
     assert _snapshot(compute_scope(fixture_repo, run_id="R", write_digests=True), "R") == expected
 
 
-def test_the_cache_root_follows_the_settings_registry_key(fixture_repo, tmp_path, monkeypatch):
+def test_the_cache_root_follows_the_settings_registry_key(fixture_repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = tmp_path / "elsewhere"
     monkeypatch.setattr(ds, "registry_get", lambda key: str(base) if key == "paths.distill_scope_cache" else None)
     _age_tree(fixture_repo)
@@ -1227,7 +1227,7 @@ def test_the_cache_root_follows_the_settings_registry_key(fixture_repo, tmp_path
     assert not (fixture_repo / ".coordinator-local").exists()
 
 
-def test_a_warm_scope_spawns_nothing(fixture_repo, monkeypatch):
+def test_a_warm_scope_spawns_nothing(fixture_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _age_tree(fixture_repo)
     compute_scope(fixture_repo, run_id="R", write_digests=True)
 
@@ -1239,7 +1239,7 @@ def test_a_warm_scope_spawns_nothing(fixture_repo, monkeypatch):
     compute_scope(fixture_repo, run_id="R", write_digests=True)
 
 
-def test_scandir_cohorts_equal_the_library_oracle_the_scope_used_before(fixture_repo):
+def test_scandir_cohorts_equal_the_library_oracle_the_scope_used_before(fixture_repo) -> None:
     """harvest / skip / sidecars equal ripe_filter + harvest_debt + sidecar_sweep over a tree with
     nested month dirs, a non-markdown file, a legacy action-table row and an ambiguous basename."""
     from coordinator_core.distill.harvest_debt import compute_harvest_debt
@@ -1277,8 +1277,8 @@ def test_scandir_cohorts_equal_the_library_oracle_the_scope_used_before(fixture_
 
 
 def test_handler_serves_guides_from_cache_and_ranks_only_the_batches_that_changed(
-    fixture_repo, monkeypatch, wide_budget
-):
+    fixture_repo, monkeypatch: pytest.MonkeyPatch, wide_budget
+) -> None:
     from coordinator_core.distill import guide_index
 
     for i in range(6):
@@ -1360,7 +1360,7 @@ def _batched(scope) -> list[str]:
     return [p for batch in scope.manifest["batches"] for p in batch]
 
 
-def test_cite_keys_name_plans_by_dated_stem_or_path():
+def test_cite_keys_name_plans_by_dated_stem_or_path() -> None:
     text = (
         "see docs/plans/2026-11/2026-11-13-Big-Refactor.md and 2026-11-14-new-system-ab12cd, "
         "also archive/specs/old_spec.md; ignore " + _WIKI + "guide.md"
@@ -1392,7 +1392,7 @@ def test_logs_are_triage_only_and_a_cited_plan_is_the_only_candidate(tmp_path, m
     assert not [rel for rel in scope.keys if rel in logs]
 
 
-def test_admission_refuses_light_plans_and_ranks_uncited_ones_after_cited_ones(fixture_repo, wide_budget):
+def test_admission_refuses_light_plans_and_ranks_uncited_ones_after_cited_ones(fixture_repo, wide_budget) -> None:
     uncited = _heavy_plan(fixture_repo, "2026-11-01-uncited")
     cited = _heavy_plan(fixture_repo, "2026-11-04-cited")
     light = "docs/plans/2026-11-02-light.md"
@@ -1406,7 +1406,7 @@ def test_admission_refuses_light_plans_and_ranks_uncited_ones_after_cited_ones(f
     assert scope.counts["not_admitted"] == len(reasons)
 
 
-def test_admission_refuses_what_a_guide_or_decision_already_cites(fixture_repo, wide_budget):
+def test_admission_refuses_what_a_guide_or_decision_already_cites(fixture_repo, wide_budget) -> None:
     in_guide = _heavy_plan(fixture_repo, "2026-11-01-in-guide")
     in_decision = _heavy_plan(fixture_repo, "2026-11-02-in-decision")
     fresh = _heavy_plan(fixture_repo, "2026-11-03-fresh")
@@ -1420,7 +1420,7 @@ def test_admission_refuses_what_a_guide_or_decision_already_cites(fixture_repo, 
     assert fresh in _batched(scope)
 
 
-def test_a_harvested_log_is_no_target_and_its_citations_do_not_rank_a_plan(fixture_repo, wide_budget):
+def test_a_harvested_log_is_no_target_and_its_citations_do_not_rank_a_plan(fixture_repo, wide_budget) -> None:
     plan = _heavy_plan(fixture_repo, "2026-11-01-big")
     done = _log(fixture_repo, "2026-11-02", plan)
     log = fixture_repo / "state" / "distillation-log.md"
@@ -1434,7 +1434,7 @@ def test_a_harvested_log_is_no_target_and_its_citations_do_not_rank_a_plan(fixtu
     assert plan in _batched(scope) and scope.counts["log_cited_plan_count"] == 0
 
 
-def test_log_headers_are_not_log_entries(fixture_repo):
+def test_log_headers_are_not_log_entries(fixture_repo) -> None:
     _write(fixture_repo / "state" / "week-changelog" / "HEADER.md", "# Week Changelog\n")
     _write(fixture_repo / "state" / "week-changelog" / "HEADER.priorities.abc.md", "priorities\n")
     _write(fixture_repo / "state" / "week-changelog" / "2026-11-09.md", "- a day\n")
@@ -1446,7 +1446,7 @@ def test_log_headers_are_not_log_entries(fixture_repo):
     ]
 
 
-def test_cited_plans_rank_by_citation_count_then_bytes(fixture_repo, wide_budget):
+def test_cited_plans_rank_by_citation_count_then_bytes(fixture_repo, wide_budget) -> None:
     once = _heavy_plan(fixture_repo, "2026-11-01-once")
     twice = _heavy_plan(fixture_repo, "2026-11-02-twice")
     fatter = _heavy_plan(fixture_repo, "2026-11-03-fatter", extra="more\n" * 2000)
@@ -1595,7 +1595,7 @@ def test_pass_complete_holds_only_at_zero_backlog(tmp_path, monkeypatch):
     assert scope.settle([]).pass_complete is False
 
 
-def test_an_ephemeral_fate_stays_mechanical_never_not_admitted(fixture_repo):
+def test_an_ephemeral_fate_stays_mechanical_never_not_admitted(fixture_repo) -> None:
     eph = "docs/plans/2026-11-01-eph.md"
     _write(fixture_repo / eph, "---\nstatus: implemented\ndistill_fate: ephemeral\n---\nx\n")
     scope = _admit_scope(fixture_repo)
@@ -1603,14 +1603,14 @@ def test_an_ephemeral_fate_stays_mechanical_never_not_admitted(fixture_repo):
     assert eph not in _not_admitted(scope)
 
 
-def test_admission_adds_the_logs_cohort_to_a_caller_set_without_one(fixture_repo):
+def test_admission_adds_the_logs_cohort_to_a_caller_set_without_one(fixture_repo) -> None:
     _log(fixture_repo, "2026-11-02", "a day")
     spec = CohortSpec(name="completed", glob="archive/completed/**/*.md")
     scope = compute_scope(fixture_repo, run_id="r", cohort_specs=[spec], admit=True)
     assert scope.manifest["cohorts"]["logs"] == ["archive/daily-summaries/2026-11-02.md"]
 
 
-def test_the_batch_budget_defers_overflow_and_keeps_it_out_of_mechanical(fixture_repo):
+def test_the_batch_budget_defers_overflow_and_keeps_it_out_of_mechanical(fixture_repo) -> None:
     for day in range(1, 6):
         _backlog_file(fixture_repo, f"2026-11-0{day}")
     scope = _admit_scope(fixture_repo, size_of=lambda rel: 600, byte_budget=1000, max_scan_batches=2)
@@ -1622,7 +1622,7 @@ def test_the_batch_budget_defers_overflow_and_keeps_it_out_of_mechanical(fixture
     assert not set(deferred) & {row["path"] for row in scope.manifest["mechanical"]}
 
 
-def test_every_candidate_settles_exactly_once_and_scannable_count_agrees(fixture_repo):
+def test_every_candidate_settles_exactly_once_and_scannable_count_agrees(fixture_repo) -> None:
     _add_plans(fixture_repo)
     _add_fate_rows(fixture_repo)
     _heavy_plan(fixture_repo, "2026-11-11-uncited")
@@ -1652,7 +1652,7 @@ def test_every_candidate_settles_exactly_once_and_scannable_count_agrees(fixture
     assert not {row["path"] for row in manifest["not_admitted"]} & {row["path"] for row in manifest["mechanical"]}
 
 
-def test_cohort_excluded_counts_the_dropped_default_cohorts_and_lists_none(fixture_repo):
+def test_cohort_excluded_counts_the_dropped_default_cohorts_and_lists_none(fixture_repo) -> None:
     scope = _admit_scope(fixture_repo)
     assert scope.counts["cohort_excluded"] == 7  # 5 handoffs, 2 memos with no distill_fate
     listed = {row["path"] for row in scope.manifest["not_admitted"]}
@@ -1660,7 +1660,7 @@ def test_cohort_excluded_counts_the_dropped_default_cohorts_and_lists_none(fixtu
     assert "handoffs" not in scope.manifest["cohorts"]
 
 
-def test_the_op_default_admits_under_the_pm_ruling_set(fixture_repo, wide_budget):
+def test_the_op_default_admits_under_the_pm_ruling_set(fixture_repo, wide_budget) -> None:
     plan = _heavy_plan(fixture_repo, "2026-11-01-big")
     _log(fixture_repo, "2026-11-02", plan)
     result = _handler({"run_id": "r"}, repo_root=fixture_repo / ".git")
@@ -1673,7 +1673,7 @@ def test_the_op_default_admits_under_the_pm_ruling_set(fixture_repo, wide_budget
     assert manifest["not_admitted"] and manifest["deferred"] == []
 
 
-def test_admission_is_deterministic_across_runs(fixture_repo):
+def test_admission_is_deterministic_across_runs(fixture_repo) -> None:
     plan = _heavy_plan(fixture_repo, "2026-11-01-big")
     _log(fixture_repo, "2026-11-02", plan)
     first = _admit_scope(fixture_repo)
@@ -1728,7 +1728,7 @@ def _touch(root: Path, rel: str) -> None:
     path.write_text(path.read_text(encoding="utf-8") + "edited after the run\n", encoding="utf-8")
 
 
-def test_scope_after_promote_is_delta_plus_next_backlog_slice(tmp_path, monkeypatch):
+def test_scope_after_promote_is_delta_plus_next_backlog_slice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _watermarked_repo(tmp_path, monkeypatch)
     first = _slice_scope(root)
     assert sorted(_batched(first)) == [_log_rel(d) for d in _LOG_DAYS[:3]]
@@ -1742,7 +1742,7 @@ def test_scope_after_promote_is_delta_plus_next_backlog_slice(tmp_path, monkeypa
     assert _log_rel(_LOG_DAYS[1]) not in _batched(second)
 
 
-def test_completed_pass_scopes_only_changed_files(tmp_path, monkeypatch):
+def test_completed_pass_scopes_only_changed_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _watermarked_repo(tmp_path, monkeypatch)
     for _ in range(2):
         _commit_watermark(root, _slice_scope(root))
@@ -1755,7 +1755,7 @@ def test_completed_pass_scopes_only_changed_files(tmp_path, monkeypatch):
     assert delta.counts["deferred"] == len(_LOG_DAYS) - 1
 
 
-def test_unpromoted_runs_leave_the_watermark_absent_and_rescope_identically(tmp_path, monkeypatch):
+def test_unpromoted_runs_leave_the_watermark_absent_and_rescope_identically(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _watermarked_repo(tmp_path, monkeypatch)
     first = _slice_scope(root)
     second = _slice_scope(root)
@@ -1763,7 +1763,7 @@ def test_unpromoted_runs_leave_the_watermark_absent_and_rescope_identically(tmp_
     assert not (root / "state" / "run-watermarks").exists()
 
 
-def test_the_handler_stages_the_proposal_and_never_the_state_file(tmp_path, monkeypatch, wide_budget):
+def test_the_handler_stages_the_proposal_and_never_the_state_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wide_budget) -> None:
     root = _watermarked_repo(tmp_path, monkeypatch)
     result = _handler({"run_id": "r", "batch_size": 2}, repo_root=root / ".git")
     pending = root / "state" / "scratch" / "artifact-distillation" / "r" / "watermark.pending.json"
@@ -1772,7 +1772,7 @@ def test_the_handler_stages_the_proposal_and_never_the_state_file(tmp_path, monk
     assert not (root / "state" / "run-watermarks").exists()
 
 
-def test_no_head_means_no_watermark_and_the_full_admitted_scope(tmp_path, monkeypatch):
+def test_no_head_means_no_watermark_and_the_full_admitted_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import run_watermark
 
     monkeypatch.setattr(run_watermark, "registry_get", lambda _key: None)
@@ -1786,7 +1786,7 @@ def test_no_head_means_no_watermark_and_the_full_admitted_scope(tmp_path, monkey
     assert _batched(scope) == [_log_rel(d) for d in _LOG_DAYS[:3]] and scope.counts["deferred"] == 2
 
 
-def test_byte_packing_overflow_holds_the_cursor_before_the_first_deferred_file(tmp_path, monkeypatch):
+def test_byte_packing_overflow_holds_the_cursor_before_the_first_deferred_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _watermarked_repo(tmp_path, monkeypatch)
     scope = _admit_scope(root, batch_size=100, max_scan_batches=1, byte_budget=1, size_of=lambda _rel: 1)
     assert len(_batched(scope)) == 1
@@ -1823,7 +1823,7 @@ def _narrow_to_topics(monkeypatch, topics: int, agents: int = 1000, minutes: int
     monkeypatch.setattr(ds._run_budget, "whole_backlog_bar", lambda path=None: cap.tokens)
 
 
-def test_default_admission_takes_a_backlog_that_fits_the_whole_backlog_bar_whole(tmp_path, monkeypatch):
+def test_default_admission_takes_a_backlog_that_fits_the_whole_backlog_bar_whole(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.contract import run_budget
 
     root = _watermarked_repo(tmp_path, monkeypatch)
@@ -1863,7 +1863,7 @@ def test_synthesis_is_priced_per_topic_and_files_open_topics_at_the_corpus_ratio
     assert _files_for_topics(10) > 10
 
 
-def test_budget_block_projection_is_the_one_shared_projection():
+def test_budget_block_projection_is_the_one_shared_projection() -> None:
     fixed = ds.run_fixed_cost({})
     base = ds.budget_block(fixed, files=0, batches=0, scan_bytes=0)["projected"]
     full = ds.budget_block(fixed, files=44, batches=2, scan_bytes=8_000)["projected"]
@@ -1878,7 +1878,7 @@ def test_budget_block_projection_is_the_one_shared_projection():
     assert fixed.tokens == ds._schema.LOAD_RELAY_TOKENS + ds._schema.SYNTHESIS_FIXED_TOKENS
 
 
-def test_a_slice_whose_topics_exceed_the_token_cap_is_over_budget():
+def test_a_slice_whose_topics_exceed_the_token_cap_is_over_budget() -> None:
     from coordinator_core.contract import run_budget
 
     fixed = ds.run_fixed_cost({})
@@ -1918,7 +1918,7 @@ def test_default_admission_narrows_files_when_synthesis_exceeds_the_token_cap(tm
     assert block["projected"]["tokens"] <= _fit_tokens_for_topics(2)
 
 
-def test_default_admission_narrows_on_the_agents_axis_and_still_meets_the_bar(tmp_path, monkeypatch):
+def test_default_admission_narrows_on_the_agents_axis_and_still_meets_the_bar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.contract.run_budget import RunBudget
 
     root = _watermarked_repo(tmp_path, monkeypatch)
@@ -2018,14 +2018,14 @@ def test_the_topic_file_cap_holds_when_no_watermark_resolves(tmp_path, monkeypat
     assert scope.counts["deferred"] == len(_LOG_DAYS) - cap
 
 
-def test_default_admission_with_room_for_every_file_defers_nothing(tmp_path, monkeypatch, wide_budget):
+def test_default_admission_with_room_for_every_file_defers_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wide_budget) -> None:
     root = _watermarked_repo(tmp_path, monkeypatch)
     scope = _admit_scope(root, batch_size=100)
     assert len(_batched(scope)) == len(_LOG_DAYS) and scope.counts["deferred"] == 0
     assert all(scope.manifest["budget"]["within"].values())
 
 
-def test_a_larger_budget_admits_more_batches_than_the_default(tmp_path, monkeypatch):
+def test_a_larger_budget_admits_more_batches_than_the_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.contract.run_budget import RunBudget
 
     root = _watermarked_repo(tmp_path, monkeypatch)
@@ -2036,7 +2036,7 @@ def test_a_larger_budget_admits_more_batches_than_the_default(tmp_path, monkeypa
     assert len(wide.manifest["batches"]) > narrow and wide.counts["deferred"] < len(_LOG_DAYS) - narrow + 1
 
 
-def test_a_budget_the_fixed_cost_alone_exceeds_still_admits_one_batch(tmp_path, monkeypatch):
+def test_a_budget_the_fixed_cost_alone_exceeds_still_admits_one_batch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.contract.run_budget import RunBudget
 
     root = _watermarked_repo(tmp_path, monkeypatch)
@@ -2047,7 +2047,7 @@ def test_a_budget_the_fixed_cost_alone_exceeds_still_admits_one_batch(tmp_path, 
     assert block["over_cap_fixed"] is True and block["within"]["agents"] is False
 
 
-def test_a_run_narrowed_by_the_budget_is_followed_by_the_files_it_deferred(tmp_path, monkeypatch):
+def test_a_run_narrowed_by_the_budget_is_followed_by_the_files_it_deferred(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _watermarked_repo(tmp_path, monkeypatch)
     _narrow_to_topics(monkeypatch, 1)
     seen: list[str] = []
@@ -2059,7 +2059,7 @@ def test_a_run_narrowed_by_the_budget_is_followed_by_the_files_it_deferred(tmp_p
     assert seen == [_log_rel(d) for d in _LOG_DAYS]
 
 
-def test_the_handler_reports_the_budget_and_records_the_run_in_the_backlog_pass_ledger(tmp_path, monkeypatch):
+def test_the_handler_reports_the_budget_and_records_the_run_in_the_backlog_pass_ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import backlog_pass_ledger
 
     root = _watermarked_repo(tmp_path, monkeypatch)
@@ -2071,12 +2071,12 @@ def test_the_handler_reports_the_budget_and_records_the_run_in_the_backlog_pass_
     assert ledger["cumulative_tokens"] == result["budget"]["projected"]["tokens"]
 
 
-def test_files_a_tier_split_drops_are_deferred_and_the_watermark_holds_before_them(tmp_path, monkeypatch, wide_budget):
+def test_files_a_tier_split_drops_are_deferred_and_the_watermark_holds_before_them(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wide_budget) -> None:
     from coordinator_core.ops import distill_workflow_input as dwi
 
     real = dwi.attach_relevant_guides
 
-    def drop_last(payload, guides, **kw):
+    def drop_last(payload, guides, **kw) -> None:
         real(payload, guides, **kw)
         payload["batches"] = payload["batches"][:-1]
 

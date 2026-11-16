@@ -498,3 +498,16 @@ def test_dead_pid_trees_are_reaped_and_live_ones_kept(repo, monkeypatch, capsys)
     code, _, _ = _run(repo, ["--sha", _base(repo), *_py("pass")], monkeypatch, capsys)
     assert code == 0
     assert not orphan.exists() and live.exists() and other.exists()
+
+
+def test_export_env_lets_a_child_import_coordinator_core_from_an_export_without_it(tmp_path):
+    export = tmp_path / "export"
+    export.mkdir()
+    env = be.export_env(export, {"PYTHONPATH": "keep-me"})
+    assert env["PYTHONPATH"].split(os.pathsep) == [str(ENGINE_ROOT), "keep-me"]
+    probe = "import coordinator_core, pathlib; print(pathlib.Path(coordinator_core.__file__).resolve().parent.parent)"
+    out = subprocess.run(
+        [sys.executable, "-c", probe], cwd=export, env=env, capture_output=True, text=True, **_NO_CONSOLE
+    )
+    assert out.returncode == 0, out.stderr
+    assert Path(out.stdout.strip()) == ENGINE_ROOT

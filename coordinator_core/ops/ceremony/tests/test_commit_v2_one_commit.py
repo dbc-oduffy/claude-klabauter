@@ -55,7 +55,7 @@ def _subjects(repo: Path) -> list:
     return _git(["log", "--format=%s", "-n", "3"], repo).splitlines()
 
 
-def test_one_commit_lands_a_mixed_set_as_one_commit(tmp_path):
+def test_one_commit_lands_a_mixed_set_as_one_commit(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     params = _mixed(repo)
 
@@ -69,7 +69,7 @@ def test_one_commit_lands_a_mixed_set_as_one_commit(tmp_path):
     assert all("(process files)" not in s for s in _subjects(repo))
 
 
-def test_absent_one_commit_still_splits(tmp_path):
+def test_absent_one_commit_still_splits(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
 
     result = _call(repo, _mixed(repo))
@@ -79,7 +79,7 @@ def test_absent_one_commit_still_splits(tmp_path):
     assert any("(process files)" in s for s in _subjects(repo))
 
 
-def test_one_commit_false_still_splits(tmp_path):
+def test_one_commit_false_still_splits(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
 
     result = _call(repo, {**_mixed(repo), "one_commit": False})
@@ -88,7 +88,7 @@ def test_one_commit_false_still_splits(tmp_path):
     assert _count(repo) == 3
 
 
-def test_non_bool_one_commit_refuses(tmp_path):
+def test_non_bool_one_commit_refuses(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
 
     result = _call(repo, {**_mixed(repo), "one_commit": "yes"})

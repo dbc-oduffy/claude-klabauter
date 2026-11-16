@@ -29,7 +29,7 @@ def rows() -> dict:
 
 
 @pytest.mark.parametrize("axis", TIMING_AXES)
-def test_axis_is_under_the_brightline_bar(rows, axis):
+def test_axis_is_under_the_brightline_bar(rows, axis) -> None:
     row = rows[axis]
     assert not row.get("error"), row
     assert not row.get("timed_out"), row
@@ -37,14 +37,14 @@ def test_axis_is_under_the_brightline_bar(rows, axis):
     assert bench.BAR_MS == 500.0
 
 
-def test_second_land_after_abandoned_is_not_refused_in_flight(rows):
+def test_second_land_after_abandoned_is_not_refused_in_flight(rows) -> None:
     row = rows[bench.AXIS_TOKEN]
     assert not row.get("error"), row
     assert row.get("refusal") != bench.IN_FLIGHT, row
     assert row["process_time_ms"] < bench.BAR_MS, row
 
 
-def test_axis_past_its_cap_is_a_timed_out_row_not_a_blocked_run(tmp_path, monkeypatch):
+def test_axis_past_its_cap_is_a_timed_out_row_not_a_blocked_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "s"))
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "c"))
     row = bench.measure_axis(bench.AXIS_LAND, tmp_path, bench.DEFAULT_LINES, 0.01)
@@ -53,7 +53,7 @@ def test_axis_past_its_cap_is_a_timed_out_row_not_a_blocked_run(tmp_path, monkey
     assert bench.over_bar(row) is True
 
 
-def test_over_bar_flags_the_refusal_and_the_slow_row():
+def test_over_bar_flags_the_refusal_and_the_slow_row() -> None:
     assert bench.over_bar({"axis": bench.AXIS_LAND, "process_time_ms": 499.0}) is False
     assert bench.over_bar({"axis": bench.AXIS_LAND, "process_time_ms": 500.0}) is True
     assert bench.over_bar({"axis": bench.AXIS_LAND, "timed_out": True}) is True
@@ -80,7 +80,7 @@ def _fixture_files_newer_than(root: Path, start: float) -> list:
     return hits
 
 
-def test_run_writes_nothing_to_the_real_registry(tmp_path, monkeypatch):
+def test_run_writes_nothing_to_the_real_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     real = _real_engine_records()
     start = time.time()
     time.sleep(0.05)

@@ -242,6 +242,126 @@ def test_absolute_write_in_distant_provisioned_checkout_still_refused(tmp_path: 
     assert contract.ROUTE_REMEDY in str(excinfo.value)
 
 
+def _audit_row(row_id: str, audit_writes):
+    from types import SimpleNamespace
+
+    return SimpleNamespace(id=row_id, writes=UNDECLARED, writes_under=(), cross_repo_audit_writes=audit_writes)
+
+
+def test_audit_write_field_records_a_grant_without_asking_the_pm(tmp_path: Path) -> None:
+    repo_root = tmp_path / "work" / "coordinator-content-repo"
+    repo_root.mkdir(parents=True)
+    sibling = _make_sibling_repo(tmp_path / "elsewhere", "audited")
+    target = (sibling / "docs" / "audit" / "findings.md").as_posix()
+    rows = [_audit_row("A", [target])]
+
+    assert check_cross_repo_writes(rows, repo_root, env=LOCAL, session_id="s1") == []
+    ledger = session_dir_for(repo_root / ".git", "s1") / "cross-repo-writes.txt"
+    assert ledger.read_text(encoding="utf-8").split() == [target]
+
+
+def test_audit_write_field_without_session_records_nothing(tmp_path: Path) -> None:
+    repo_root = tmp_path / "work" / "coordinator-content-repo"
+    repo_root.mkdir(parents=True)
+    sibling = _make_sibling_repo(tmp_path / "elsewhere", "audited")
+    check_cross_repo_writes([_audit_row("A", [(sibling / "a.md").as_posix()])], repo_root, env=LOCAL)
+    assert not (session_dir_for(repo_root / ".git", "s1") / "cross-repo-writes.txt").exists()
+
+
+def test_audit_write_field_still_refuses_a_path_under_no_checkout(tmp_path: Path) -> None:
+    repo_root = tmp_path / "work" / "coordinator-content-repo"
+    repo_root.mkdir(parents=True)
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    with pytest.raises(CrossRepoWriteError) as excinfo:
+        check_cross_repo_writes(
+            [_audit_row("A", [(plain / "a.md").as_posix()])], repo_root, env=LOCAL, session_id="s1"
+        )
+    assert "cross_repo_audit_writes" in str(excinfo.value)
+    assert not (session_dir_for(repo_root / ".git", "s1") / "cross-repo-writes.txt").exists()
+
+
+def test_audit_write_field_still_refuses_a_provisioned_publish_target(tmp_path: Path, monkeypatch) -> None:
+    from coordinator_core.ops.dispatch_emit import cross_repo_write_refusal as mod
+
+    repo_root = tmp_path / "work" / "coordinator-content-repo"
+    repo_root.mkdir(parents=True)
+    sibling = _make_sibling_repo(tmp_path / "elsewhere", "pub-target")
+    monkeypatch.setattr(mod, "provisioned_target_of", lambda path, root: "pub-target")
+    with pytest.raises(CrossRepoWriteError):
+        check_cross_repo_writes(
+            [_audit_row("A", [(sibling / "a.md").as_posix()])], repo_root, env=LOCAL, session_id="s1"
+        )
+
+
+def test_audit_write_field_path_in_the_run_repo_is_skipped(tmp_path: Path) -> None:
+    repo_root = tmp_path / "work" / "coordinator-content-repo"
+    (repo_root / ".git").mkdir(parents=True)
+    check_cross_repo_writes(
+        [_audit_row("A", [(repo_root / "docs" / "a.md").as_posix()])], repo_root, env=LOCAL, session_id="s1"
+    )
+    assert not (session_dir_for(repo_root / ".git", "s1") / "cross-repo-writes.txt").exists()
+
+
+def _parsed_plan(repo_root: Path, audit_value: str):
+    from coordinator_core.ops.dispatch_emit import ask_stage
+
+    plan = repo_root / "docs" / "plans" / "p.md"
+    plan.parent.mkdir(parents=True, exist_ok=True)
+    text = f"""---
+title: fixture
+---
+# Fixture
+
+## Tasks
+
+```yaml plan-tasks
+- id: A1
+  title: audit a sibling
+  change_kind: code-edit
+  surface: pkg/a.py
+  writes:
+    - pkg/a.py
+  cross_repo_audit_writes: {audit_value}
+```
+"""
+    plan.write_text(text, encoding="utf-8")
+    return ask_stage._parse_plan(repo_root, plan, text)
+
+
+def test_parsed_plan_row_audit_field_reaches_the_grant_ledger(tmp_path: Path) -> None:
+    repo_root = tmp_path / "work" / "coordinator-content-repo"
+    (repo_root / ".git").mkdir(parents=True)
+    sibling = _make_sibling_repo(tmp_path / "elsewhere", "audited")
+    target = (sibling / "docs" / "findings.md").as_posix()
+    parse = _parsed_plan(repo_root, f"['{target}']")
+
+    assert check_cross_repo_writes(
+        parse.rows, repo_root, env=LOCAL, session_id="s1", raw_by_id=parse.raw_by_id
+    ) == []
+    ledger = session_dir_for(repo_root / ".git", "s1") / "cross-repo-writes.txt"
+    assert ledger.read_text(encoding="utf-8").split() == [target]
+
+
+def test_parsed_plan_row_without_raw_by_id_records_nothing(tmp_path: Path) -> None:
+    repo_root = tmp_path / "work" / "coordinator-content-repo"
+    (repo_root / ".git").mkdir(parents=True)
+    sibling = _make_sibling_repo(tmp_path / "elsewhere", "audited")
+    parse = _parsed_plan(repo_root, f"['{(sibling / 'f.md').as_posix()}']")
+    check_cross_repo_writes(parse.rows, repo_root, env=LOCAL, session_id="s1")
+    assert not (session_dir_for(repo_root / ".git", "s1") / "cross-repo-writes.txt").exists()
+
+
+def test_parsed_plan_row_audit_field_not_a_list_is_refused(tmp_path: Path) -> None:
+    repo_root = tmp_path / "work" / "coordinator-content-repo"
+    (repo_root / ".git").mkdir(parents=True)
+    parse = _parsed_plan(repo_root, "'just/a/string.md'")
+    with pytest.raises(CrossRepoWriteError):
+        check_cross_repo_writes(
+            parse.rows, repo_root, env=LOCAL, session_id="s1", raw_by_id=parse.raw_by_id
+        )
+
+
 def test_checkout_probe_is_bounded(tmp_path: Path) -> None:
     repo_root = tmp_path / "work" / "coordinator-content-repo"
     repo_root.mkdir(parents=True)

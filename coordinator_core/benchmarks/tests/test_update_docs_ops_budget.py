@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core.benchmarks import update_docs_ops_budget as bench
 from coordinator_core.git.run import run_git
+from pathlib import Path
 
 OP_KEYS = {"route", "reply_code", "process_ms", "spawn_count", "dominant_leg", "wall_ms"}
 DOOR_KEYS = {
@@ -16,20 +17,20 @@ DOOR_KEYS = {
 }
 
 
-def test_op_table_names_the_four_ops_with_default_argv():
+def test_op_table_names_the_four_ops_with_default_argv() -> None:
     assert set(bench.OPS) == {"repomap-gate", "refresh-queries", "reap-stale-subagent-sidecars", "check-citation-integrity"}
     assert bench.OPS["repomap-gate"] == ("update-docs-probes", ["repomap-gate"])
     assert all(not argv for op, (_n, argv) in bench.OPS.items() if op != "repomap-gate")
 
 
-def test_default_callers_is_bounded_and_positive():
+def test_default_callers_is_bounded_and_positive() -> None:
     import os
 
     n = bench.default_callers()
     assert 1 <= n <= max(1, (os.cpu_count() or 2) // 2)
 
 
-def test_percentile_interpolates_and_rejects_empty():
+def test_percentile_interpolates_and_rejects_empty() -> None:
     assert bench.percentile([10.0], 95) == 10.0
     assert bench.percentile([0.0, 100.0], 50) == 50.0
     assert bench.percentile([1.0, 2.0, 3.0, 4.0, 5.0], 100) == 5.0
@@ -37,12 +38,12 @@ def test_percentile_interpolates_and_rejects_empty():
         bench.percentile([], 50)
 
 
-def test_summarize_rtt_counts_failures_without_timing_them():
+def test_summarize_rtt_counts_failures_without_timing_them() -> None:
     assert bench.summarize_rtt([(10.0, True), (30.0, True), (9999.0, False)]) == (20.0, 29.0, 1)
     assert bench.summarize_rtt([(5.0, False)]) == (None, None, 1)
 
 
-def test_dominant_leg_prefers_spawned_children_when_they_outweigh_self():
+def test_dominant_leg_prefers_spawned_children_when_they_outweigh_self() -> None:
     spawned = {"spawned": ["generate-repomap.py", "git", "git"], "self_ms": 10.0, "top_function": "x.py:f", "route": "warm"}
     assert bench.dominant_leg(spawned, 400.0).startswith("spawned:git")
     own = {"spawned": [], "self_ms": 300.0, "top_function": "refresh_queries.py:process_file", "route": "warm"}
@@ -50,7 +51,7 @@ def test_dominant_leg_prefers_spawned_children_when_they_outweigh_self():
     assert bench.dominant_leg({"route": "cold", "self_ms": 0.0}, 5.0) == "cold launcher"
 
 
-def test_fixture_is_committed_with_wiki_pages_and_seeded_baseline(tmp_path):
+def test_fixture_is_committed_with_wiki_pages_and_seeded_baseline(tmp_path: Path) -> None:
     repo = bench.ensure_ops_fixture(tmp_path, wiki_pages=7)
     tracked = run_git(["ls-files", "-z"], cwd=str(repo)).stdout.split("\0")
     assert sum(1 for t in tracked if t.startswith("docs/wiki/")) == 7
@@ -58,7 +59,7 @@ def test_fixture_is_committed_with_wiki_pages_and_seeded_baseline(tmp_path):
     assert run_git(["status", "--porcelain", "--untracked-files=no"], cwd=str(repo)).stdout.strip() == ""
 
 
-def test_export_source_extracts_only_the_named_sha(tmp_path):
+def test_export_source_extracts_only_the_named_sha(tmp_path: Path) -> None:
     repo = tmp_path / "src"
     (repo / "coordinator_core").mkdir(parents=True)
     (repo / "coordinator" / "bin").mkdir(parents=True)
@@ -81,7 +82,7 @@ def test_export_source_extracts_only_the_named_sha(tmp_path):
         bench.export_source(repo, "0" * 40, tmp_path / "bad")
 
 
-def test_remove_tree_clears_read_only_files(tmp_path):
+def test_remove_tree_clears_read_only_files(tmp_path: Path) -> None:
     import os
     import stat
 
@@ -94,7 +95,7 @@ def test_remove_tree_clears_read_only_files(tmp_path):
     assert not (tmp_path / "w").exists()
 
 
-def test_parse_rejects_bad_flags():
+def test_parse_rejects_bad_flags() -> None:
     assert bench._parse(["--callers", "0"]) is None
     assert bench._parse(["--callers", "x"]) is None
     assert bench._parse(["--source"]) is None
@@ -103,14 +104,14 @@ def test_parse_rejects_bad_flags():
     assert bench._parse(["--source", "abc", "--no-door"]) == {"source": "abc", "callers": None, "workdir": None, "door": False}
 
 
-def test_main_usage_error_returns_2():
+def test_main_usage_error_returns_2() -> None:
     assert bench.main(["--callers", "0"]) == 2
 
 
-def test_main_prints_the_pinned_keys(monkeypatch, tmp_path, capsys):
+def test_main_prints_the_pinned_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     seen = {}
 
-    def fake_measure(source, workdir, callers, with_door=True):
+    def fake_measure(source, workdir, callers, with_door: bool = True):
         seen.update(source=source, callers=callers, with_door=with_door, workdir=workdir)
         return {"source": source, "ops": {op: dict.fromkeys(OP_KEYS) for op in bench.OPS}, "door": dict.fromkeys(DOOR_KEYS)}
 
@@ -126,14 +127,14 @@ def test_main_prints_the_pinned_keys(monkeypatch, tmp_path, capsys):
     assert set(report["door"]) == DOOR_KEYS
 
 
-def test_measure_door_without_installed_door_reports_why(monkeypatch, tmp_path):
+def test_measure_door_without_installed_door_reports_why(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(bench, "installed_door", lambda name="coordinator-invoke": None)
     door = bench.measure_door(tmp_path, 2)
     assert set(door) == DOOR_KEYS
     assert door["unavailable"] and door["door_rtt_p95_ms_load"] is None and door["callers"] == 2
 
 
-def test_measure_op_reports_pinned_keys_through_the_real_door_handler(tmp_path):
+def test_measure_op_reports_pinned_keys_through_the_real_door_handler(tmp_path: Path) -> None:
     repo = bench.ensure_ops_fixture(tmp_path, wiki_pages=12)
     result = bench.measure_op("check-citation-integrity", bench.repo_root(), repo, tmp_path / "scratch")
     assert set(result) == OP_KEYS

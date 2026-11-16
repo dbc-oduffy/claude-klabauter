@@ -10,9 +10,10 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_stage_resume_added_rows i
     _row,
     _stage,
 )
+from pathlib import Path
 
 
-def test_outside_credit_is_named_in_the_reply_with_its_sha(tmp_path):
+def test_outside_credit_is_named_in_the_reply_with_its_sha(tmp_path: Path) -> None:
     _plan(tmp_path, _row("FA") + _row("F3"))
     resume_snapshot.write(
         tmp_path, RUN, PLAN_REL, ["FA"], ["F3"], reasons={"FA": "landed outside the executor at 011d651482"}
@@ -22,7 +23,7 @@ def test_outside_credit_is_named_in_the_reply_with_its_sha(tmp_path):
     assert reply["outside_credited"] == [{"id": "FA", "sha": "011d651482"}]
 
 
-def test_reason_constant_round_trips_through_the_reply(tmp_path):
+def test_reason_constant_round_trips_through_the_reply(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.ask_stage import OUTSIDE_CREDIT_REASON
 
     _plan(tmp_path, _row("FA") + _row("F3"))
@@ -32,7 +33,7 @@ def test_reason_constant_round_trips_through_the_reply(tmp_path):
     assert reply["outside_credited"] == [{"id": "FA", "sha": "deadbeef01"}]
 
 
-def test_other_drop_reasons_are_not_outside_credit(tmp_path):
+def test_other_drop_reasons_are_not_outside_credit(tmp_path: Path) -> None:
     _plan(tmp_path, _row("FA") + _row("F3"))
     resume_snapshot.write(tmp_path, RUN, PLAN_REL, ["FA"], ["F3"], reasons={"FA": "landed at abc1234"})
     reply = _stage(tmp_path, ["F3"])

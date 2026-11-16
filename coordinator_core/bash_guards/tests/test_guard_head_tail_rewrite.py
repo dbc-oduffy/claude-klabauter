@@ -32,20 +32,22 @@ from coordinator_core.bash_guards import guard_head_tail_rewrite as guard
 from coordinator_core.bash_guards import _dialect
 from coordinator_core.search import census as _census
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
+import pytest
 
 
 def _enveloped(check):
     return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
-def _ps_rewrite(cmd, session_id="sess1"):
+def _ps_rewrite(cmd, session_id: str = "sess1"):
     return _enveloped(guard.check_head_tail_plumbing_rewrite)(
         cmd, session_id, dialect=_dialect.Dialect.POWERSHELL
     )
 
 
 class TestPowerShellSelectObjectFirstLast:
-    def test_ls_piped_into_select_object_first_rewrites(self):
+    def test_ls_piped_into_select_object_first_rewrites(self) -> None:
         out = _ps_rewrite("ls . | Select-Object -First 5")
         assert out is not None
         hso = out["hookSpecificOutput"]
@@ -54,39 +56,39 @@ class TestPowerShellSelectObjectFirstLast:
             "updatedInput"
         ]["command"]
 
-    def test_select_object_last_rewrites(self):
+    def test_select_object_last_rewrites(self) -> None:
         out = _ps_rewrite("ls . | Select-Object -Last 3")
         assert out is not None
         assert "updatedInput" in out["hookSpecificOutput"]
 
-    def test_sls_alias_for_select_object_recognized(self):
+    def test_sls_alias_for_select_object_recognized(self) -> None:
         out = _ps_rewrite("ls . | select -First 5")
         assert out is not None
         assert "updatedInput" in out["hookSpecificOutput"]
 
-    def test_unrecognized_count_form_advises_not_rewrites(self):
+    def test_unrecognized_count_form_advises_not_rewrites(self) -> None:
         out = _ps_rewrite("ls . | Select-Object -Skip 1")
         assert out is not None
         assert "updatedInput" not in out["hookSpecificOutput"]
 
-    def test_first_and_last_together_advises_not_rewrites(self):
+    def test_first_and_last_together_advises_not_rewrites(self) -> None:
         out = _ps_rewrite("ls . | Select-Object -First 5 -Last 2")
         assert out is not None
         assert "updatedInput" not in out["hookSpecificOutput"]
 
-    def test_longer_chain_silent_not_advised_or_rewritten(self):
+    def test_longer_chain_silent_not_advised_or_rewritten(self) -> None:
         assert _ps_rewrite("ls . | Sort-Object | Select-Object -First 5") is None
 
-    def test_unrecognized_upstream_generator_silent_not_advised(self):
+    def test_unrecognized_upstream_generator_silent_not_advised(self) -> None:
         assert _ps_rewrite("Get-Process | Select-Object -First 5") is None
 
-    def test_no_select_object_at_all_is_a_genuine_clean(self):
+    def test_no_select_object_at_all_is_a_genuine_clean(self) -> None:
         assert _ps_rewrite("Get-Process") is None
 
-    def test_empty_command_allows(self):
+    def test_empty_command_allows(self) -> None:
         assert _ps_rewrite("") is None
 
-    def test_bash_leg_unchanged_when_dialect_omitted(self):
+    def test_bash_leg_unchanged_when_dialect_omitted(self) -> None:
         out = _enveloped(guard.check_head_tail_plumbing_rewrite)("find . -type f | head -n 5")
         assert out is not None
         assert "updatedInput" in out["hookSpecificOutput"]
@@ -103,7 +105,7 @@ def _payload(cmd, cwd):
 class TestFindCensusServesInProcess:
 
     @staticmethod
-    def _bash_root(path):
+    def _bash_root(path) -> str:
         # Bash de-escapes the backslashes of a native Windows path before the
         # guard sees it (`_command_tokenizer`), so the bash leg is fed the
         # forward-slash form a real bash session would pass.
@@ -115,7 +117,7 @@ class TestFindCensusServesInProcess:
         (tmp_path / "c.log").write_text("three\n")
         return tmp_path
 
-    def test_served_answer_replaces_command_with_true(self, tmp_path):
+    def test_served_answer_replaces_command_with_true(self, tmp_path: Path) -> None:
         census_dir = self._fixture(tmp_path)
         cmd = "find %s -type f -name '*.txt' | head -n 5" % self._bash_root(census_dir)
         out = _enveloped(guard.check_head_tail_plumbing_rewrite)(cmd, payload=_payload(cmd, tmp_path))
@@ -126,7 +128,7 @@ class TestFindCensusServesInProcess:
         assert "python3" not in hso.get("additionalContext", "")
         assert "Answered in-process" in hso["additionalContext"]
 
-    def test_served_answer_matches_real_find_equivalence(self, tmp_path):
+    def test_served_answer_matches_real_find_equivalence(self, tmp_path: Path) -> None:
         census_dir = self._fixture(tmp_path)
         cmd = "find %s -type f -name '*.txt' | head -n 5" % self._bash_root(census_dir)
         out = _enveloped(guard.check_head_tail_plumbing_rewrite)(cmd, payload=_payload(cmd, tmp_path))
@@ -142,7 +144,7 @@ class TestFindCensusServesInProcess:
         assert rendered.splitlines()[: len(expected)] == expected
         assert hso["updatedInput"]["command"] == "true"
 
-    def test_no_payload_keeps_old_generator_rewrite(self, tmp_path):
+    def test_no_payload_keeps_old_generator_rewrite(self, tmp_path: Path) -> None:
         census_dir = self._fixture(tmp_path)
         cmd = "find %s -type f -name '*.txt' | head -n 5" % self._bash_root(census_dir)
         out = _enveloped(guard.check_head_tail_plumbing_rewrite)(cmd)
@@ -151,7 +153,7 @@ class TestFindCensusServesInProcess:
             "python" in out["hookSpecificOutput"]["updatedInput"]["command"]
         )
 
-    def test_shape_census_declines_falls_back_to_generator_rewrite(self, tmp_path):
+    def test_shape_census_declines_falls_back_to_generator_rewrite(self, tmp_path: Path) -> None:
         census_dir = self._fixture(tmp_path)
         cmd = "find %s -type d | head -n 5" % self._bash_root(census_dir)
         out = _enveloped(guard.check_head_tail_plumbing_rewrite)(cmd, payload=_payload(cmd, tmp_path))
@@ -159,7 +161,7 @@ class TestFindCensusServesInProcess:
         hso = out["hookSpecificOutput"]
         assert hso["updatedInput"]["command"] != "true"
 
-    def test_walk_budget_exceeded_falls_back_not_crashes(self, tmp_path, monkeypatch):
+    def test_walk_budget_exceeded_falls_back_not_crashes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         census_dir = self._fixture(tmp_path)
         monkeypatch.setattr(_census, "WALK_BUDGET_ENTRIES", 0)
         cmd = "find %s -type f | head -n 5" % self._bash_root(census_dir)
@@ -167,7 +169,7 @@ class TestFindCensusServesInProcess:
         assert out is not None
         assert out["hookSpecificOutput"]["updatedInput"]["command"] != "true"
 
-    def test_powershell_leg_also_serves(self, tmp_path):
+    def test_powershell_leg_also_serves(self, tmp_path: Path) -> None:
         census_dir = self._fixture(tmp_path)
         cmd = "ls %s | Select-Object -First 5" % census_dir
         out = _enveloped(guard.check_head_tail_plumbing_rewrite)(
@@ -187,7 +189,7 @@ class TestFindCensusServesInProcess:
 
 
 class TestGeneratorScriptEscapesAndFallsBack:
-    def test_windows_path_and_backslash_regex_compile(self):
+    def test_windows_path_and_backslash_regex_compile(self) -> None:
         win = "C:" + "\\Users\\x\\new"  # abs-path-ok: synthetic escape fixture
         for kind, parsed in (
             ("grep", {"flags": "", "pattern": r"foo\s+\d\U", "targets": [win]}),
@@ -197,14 +199,14 @@ class TestGeneratorScriptEscapesAndFallsBack:
             script = "\n".join(guard._bt_build_generator_lines(kind, parsed))
             compile(script, "<t>", "exec")
 
-    def test_uncompilable_script_leaves_original_command(self, monkeypatch):
+    def test_uncompilable_script_leaves_original_command(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(
             guard, "_bt_build_generator_lines", lambda kind, parsed: ['x = "C:\\Users"[']
         )
         assert _enveloped(guard.check_head_tail_plumbing_rewrite)("grep -r foo src | head -5") is None
 
 
-def test_rewrite_and_advisory_are_records_carrying_a_subagent_route():
+def test_rewrite_and_advisory_are_records_carrying_a_subagent_route() -> None:
     from coordinator_core.guard_messages.alternative_record import (
         AlternativeRecord,
         Audience,
@@ -226,7 +228,7 @@ class TestEmRenderKeepsLegacyText:
     """`em_text` makes the EM render the legacy envelope byte for byte; the
     subagent render drops the override pointer."""
 
-    def test_advisory_em_render_is_the_legacy_text_with_the_override_pointer(self):
+    def test_advisory_em_render_is_the_legacy_text_with_the_override_pointer(self) -> None:
         from coordinator_core.guard_messages.alternative_record import Audience
         from coordinator_core.guard_messages.render import render
 
@@ -239,7 +241,7 @@ class TestEmRenderKeepsLegacyText:
             render(record, Audience.SUBAGENT)
         )
 
-    def test_census_serve_is_stamped_and_carries_no_permission_decision(self, tmp_path):
+    def test_census_serve_is_stamped_and_carries_no_permission_decision(self, tmp_path: Path) -> None:
         from coordinator_core.guard_messages.alternative_record import Audience
         from coordinator_core.guard_messages.render import render
 

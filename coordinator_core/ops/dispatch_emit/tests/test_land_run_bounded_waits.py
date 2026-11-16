@@ -14,6 +14,7 @@ import pytest
 from coordinator_core.benchmarks import land_run_slow_disk_profile as prof
 from coordinator_core.ops.ceremony import commit_v2
 from coordinator_core.ops.dispatch_emit import land_deadline
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -29,7 +30,7 @@ class FakeClock:
 
 
 @pytest.fixture
-def clock(monkeypatch):
+def clock(monkeypatch: pytest.MonkeyPatch) -> FakeClock:
     fake = FakeClock()
     monkeypatch.setattr(land_deadline, "_now", fake)
     return fake
@@ -46,7 +47,7 @@ def _bind(monkeypatch) -> None:
 
 
 @pytest.fixture
-def landing(tmp_path, monkeypatch):
+def landing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     _bind(monkeypatch)
     with ExitStack() as stack:
         root, base = prof.build_land_fixture(tmp_path, mode="clean", tracked=5, chain=2, stack=stack)
@@ -69,11 +70,11 @@ class Reads:
             if pathlib.Path(path).name == "p.py":
                 clock.now += slow_secs
 
-        def read_bytes(path):
+        def read_bytes(path) -> bytes:
             charge(path)
             return real_bytes(path)
 
-        def read_text(path, *a, **k):
+        def read_text(path, *a, **k) -> str:
             charge(path)
             return real_text(path, *a, **k)
 
@@ -81,7 +82,7 @@ class Reads:
         monkeypatch.setattr(pathlib.Path, "read_text", read_text)
 
 
-def test_a_landing_inside_the_budget_commits(landing, clock, monkeypatch):
+def test_a_landing_inside_the_budget_commits(landing, clock, monkeypatch: pytest.MonkeyPatch) -> None:
     root, base = landing
     before = _head(root)
     reads = Reads(monkeypatch, clock, slow_secs=1.0)
@@ -91,7 +92,7 @@ def test_a_landing_inside_the_budget_commits(landing, clock, monkeypatch):
     assert reads.count > 0
 
 
-def test_a_slow_read_ends_the_landing_as_a_named_halt(landing, clock, monkeypatch):
+def test_a_slow_read_ends_the_landing_as_a_named_halt(landing, clock, monkeypatch: pytest.MonkeyPatch) -> None:
     root, base = landing
     before = _head(root)
     Reads(monkeypatch, clock, slow_secs=SLOW_SECS)
@@ -103,7 +104,7 @@ def test_a_slow_read_ends_the_landing_as_a_named_halt(landing, clock, monkeypatc
     assert _head(root) == before
 
 
-def test_the_deadline_cuts_the_reads_a_stalled_landing_would_still_make(tmp_path_factory, clock, monkeypatch):
+def test_the_deadline_cuts_the_reads_a_stalled_landing_would_still_make(tmp_path_factory: pytest.TempPathFactory, clock, monkeypatch: pytest.MonkeyPatch) -> None:
     counts = {}
     for label, budget in (("before", None), ("after", land_deadline.LAND_BUDGET_SECS)):
         with ExitStack() as stack, monkeypatch.context() as m:
@@ -119,7 +120,7 @@ def test_the_deadline_cuts_the_reads_a_stalled_landing_would_still_make(tmp_path
     assert counts["after"] < counts["before"], counts
 
 
-def test_check_is_a_noop_without_a_scope_and_raises_past_it(clock):
+def test_check_is_a_noop_without_a_scope_and_raises_past_it(clock) -> None:
     land_deadline.check("anywhere")
     with land_deadline.scope(5.0):
         land_deadline.check("inside")
@@ -131,7 +132,7 @@ def test_check_is_a_noop_without_a_scope_and_raises_past_it(clock):
     assert not land_deadline.expired()
 
 
-def test_a_fail_open_except_exception_cannot_swallow_the_deadline(clock):
+def test_a_fail_open_except_exception_cannot_swallow_the_deadline(clock) -> None:
     with land_deadline.scope(1.0):
         clock.now += 2.0
         with pytest.raises(land_deadline.LandDeadlineExceeded):
@@ -141,14 +142,14 @@ def test_a_fail_open_except_exception_cannot_swallow_the_deadline(clock):
                 pass
 
 
-def test_an_inner_scope_never_extends_the_outer_deadline(clock):
+def test_an_inner_scope_never_extends_the_outer_deadline(clock) -> None:
     with land_deadline.scope(5.0):
         with land_deadline.scope(500.0):
             clock.now += 6.0
             assert land_deadline.expired()
 
 
-def test_claim_release_past_the_deadline_is_skipped_and_named(clock, monkeypatch, tmp_path):
+def test_claim_release_past_the_deadline_is_skipped_and_named(clock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     released = []
     monkeypatch.setattr(
         commit_v2.session_scope, "release_committed_claims_or_retain", lambda *a, **k: released.append(a)
@@ -163,7 +164,7 @@ def test_claim_release_past_the_deadline_is_skipped_and_named(clock, monkeypatch
     assert len(released) == 1
 
 
-def test_expired_release_records_paths_and_sha_and_a_record_failure_is_swallowed(clock, monkeypatch, tmp_path):
+def test_expired_release_records_paths_and_sha_and_a_record_failure_is_swallowed(clock, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.session import deferred_release
 
     recorded = []

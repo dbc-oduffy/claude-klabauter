@@ -31,6 +31,7 @@ from coordinator_core.git import commit as gcommit
 from coordinator_core.git import action_guard
 from coordinator_core.git.commit import CommitDeniedByActionGuard, CommitRefused
 from coordinator_core.ops.session import scope_report
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -44,7 +45,7 @@ def _git(repo, *args):
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/z")
@@ -56,7 +57,7 @@ def repo(tmp_path):
     return r
 
 
-def test_a_sweeping_pathspec_is_denied_with_no_restrict_to_session(repo):
+def test_a_sweeping_pathspec_is_denied_with_no_restrict_to_session(repo) -> None:
     """THE NEGATIVE FIXTURE. Constructs a sweeping pathspec (a magic-
     pathspec `-A` flag token, per `_pathspec_element_is_sweeping`'s own
     docstring) and calls `commit_paths` with NO `restrict_to_session` -- the
@@ -77,7 +78,7 @@ def test_a_sweeping_pathspec_is_denied_with_no_restrict_to_session(repo):
         gcommit.commit_paths(repo_root=repo, paths=["-A"], message="sweep")
 
 
-def test_a_sweeping_pathspec_deny_is_also_caught_by_except_commit_refused(repo):
+def test_a_sweeping_pathspec_deny_is_also_caught_by_except_commit_refused(repo) -> None:
     """PINS THE PROPERTY THE P1 FIX BOUGHT: `CommitDeniedByActionGuard` is a
     `CommitRefused` subclass, so every existing `commit_paths` caller's
     `except (CommitRefused, FilterUnsupported)` keeps catching a
@@ -89,7 +90,7 @@ def test_a_sweeping_pathspec_deny_is_also_caught_by_except_commit_refused(repo):
         gcommit.commit_paths(repo_root=repo, paths=["-A"], message="sweep")
 
 
-def test_a_sweeping_pathspec_deny_surfaces_as_commit_refused_with_reason(repo):
+def test_a_sweeping_pathspec_deny_surfaces_as_commit_refused_with_reason(repo) -> None:
     """FINDING 1 REGRESSION: a sweeping pathspec must surface to a caller as
     `CommitRefused` (the exception every known `commit_paths` caller already
     catches) while still carrying the guard's deny reason verbatim, proving
@@ -102,7 +103,7 @@ def test_a_sweeping_pathspec_deny_surfaces_as_commit_refused_with_reason(repo):
     assert reason, "the raised CommitRefused must carry the guard's deny reason"
 
 
-def test_an_ordinary_pathspec_still_commits_with_no_restrict_to_session(repo):
+def test_an_ordinary_pathspec_still_commits_with_no_restrict_to_session(repo) -> None:
     (repo / "a.txt").write_text("a\n", encoding="utf-8", newline="\n")
 
     gcommit.commit_paths(repo_root=repo, paths=["a.txt"], message="ordinary")
@@ -110,7 +111,7 @@ def test_an_ordinary_pathspec_still_commits_with_no_restrict_to_session(repo):
     assert _git(repo, "log", "--format=%s").stdout.splitlines()[0] == "ordinary"
 
 
-def test_default_path_never_reaches_the_ownership_leg(monkeypatch, repo):
+def test_default_path_never_reaches_the_ownership_leg(monkeypatch: pytest.MonkeyPatch, repo) -> None:
     """ACCEPTANCE CRITERION: `assert_paths_in_session_scope` is NOT reached
     on the default path. Spies on the ownership predicate's own
     module-level binding (`coordinator_core.ops.session.scope_report.
@@ -141,7 +142,7 @@ def test_default_path_never_reaches_the_ownership_leg(monkeypatch, repo):
     )
 
 
-def test_assert_pathspec_shape_permitted_takes_no_session_id_parameter():
+def test_assert_pathspec_shape_permitted_takes_no_session_id_parameter() -> None:
     """Pins the wrapper's shape: no `session_id` parameter at all, so the
     fail-open-by-caller-supplied-identity shape the module docstring forbids
     is not merely unused here but structurally unreachable through it."""
@@ -151,7 +152,7 @@ def test_assert_pathspec_shape_permitted_takes_no_session_id_parameter():
     assert "session_id" not in sig.parameters
 
 
-def test_zero_new_process_spawns_for_a_representative_commit(repo, monkeypatch):
+def test_zero_new_process_spawns_for_a_representative_commit(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """DR-344: the predicate is a pure in-process call. Spies on
     `subprocess.run` to prove `commit_paths` spawns nothing extra via it
     for an ordinary, non-sweeping pathspec on the default path. Does not
@@ -176,7 +177,7 @@ def test_zero_new_process_spawns_for_a_representative_commit(repo, monkeypatch):
     )
 
 
-def test_default_axis_ignores_a_foreign_staged_path(repo):
+def test_default_axis_ignores_a_foreign_staged_path(repo) -> None:
     """C4, leg (a) -- DEFAULT AXIS (`prefer_deliberate_stage=False`, the
     existing spec). `validate-commit` warns when a peer's unrelated content
     is staged at commit time; with the default `prefer_deliberate_stage=
@@ -216,7 +217,7 @@ def test_default_axis_ignores_a_foreign_staged_path(repo):
     )
 
 
-def test_residual_axis_prefer_deliberate_stage_substitutes_staged_bytes(repo):
+def test_residual_axis_prefer_deliberate_stage_substitutes_staged_bytes(repo) -> None:
     """C4, leg (b) -- RESIDUAL AXIS (`prefer_deliberate_stage=True`), the
     real DR-379 axis staff-eng Finding 2 names. `commit_paths` accepts
     `prefer_deliberate_stage: bool = False` (DR-379): when True, the

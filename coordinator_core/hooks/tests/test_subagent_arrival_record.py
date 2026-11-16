@@ -9,6 +9,7 @@ from coordinator_core.arrival_record import arrival_log_path, has_arrived
 from coordinator_core.hooks._envelope import no_advisory
 from coordinator_core.hooks.subagent_arrival_record import _handler
 from coordinator_core.session_hub_path import hub_for_common
+from pathlib import Path
 
 
 def _repo(tmp_path):
@@ -20,11 +21,11 @@ def _run(payload, repo):
     return asyncio.run(_handler(payload, repo))
 
 
-def _log(repo, session_id):
+def _log(repo, session_id) -> Path:
     return arrival_log_path(repo / ".git", session_id)
 
 
-def test_background_agent_is_recorded(tmp_path):
+def test_background_agent_is_recorded(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     out = _run(
         {"session_id": "sess-1", "agent_id": "a1b2c3d4e5f60718", "agent_type": "coordinator:executor"},
@@ -40,7 +41,7 @@ def test_background_agent_is_recorded(tmp_path):
     assert has_arrived(repo / ".git", "sess-1", "a1b2c3d4e5f60718")
 
 
-def test_named_teammate_is_recorded(tmp_path):
+def test_named_teammate_is_recorded(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     out = _run(
         {"session_id": "sess-2", "agent_id": "adana-0123456789abcdef", "agent_type": "coordinator:reviewer"},
@@ -50,7 +51,7 @@ def test_named_teammate_is_recorded(tmp_path):
     assert has_arrived(repo / ".git", "sess-2", "adana-0123456789abcdef")
 
 
-def test_missing_agent_id_writes_nothing(tmp_path):
+def test_missing_agent_id_writes_nothing(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     out = _run({"session_id": "sess-3", "agent_type": "x"}, repo)
     assert out == no_advisory()
@@ -58,18 +59,18 @@ def test_missing_agent_id_writes_nothing(tmp_path):
     assert not hub_for_common(repo / ".git").exists()
 
 
-def test_missing_session_id_writes_nothing(tmp_path):
+def test_missing_session_id_writes_nothing(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     assert _run({"agent_id": "abc"}, repo) == no_advisory()
     assert not hub_for_common(repo / ".git").exists()
 
 
-def test_unsafe_id_fails_open_and_writes_nothing(tmp_path):
+def test_unsafe_id_fails_open_and_writes_nothing(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     out = _run({"session_id": "sess-4", "agent_id": "../evil"}, repo)
     assert out == no_advisory()
     assert not _log(repo, "sess-4").exists()
 
 
-def test_no_repo_root_is_silent():
+def test_no_repo_root_is_silent() -> None:
     assert _run({"session_id": "s", "agent_id": "a"}, None) == no_advisory()

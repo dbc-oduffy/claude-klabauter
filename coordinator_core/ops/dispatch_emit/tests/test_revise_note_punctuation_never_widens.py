@@ -9,6 +9,7 @@ import yaml
 
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 RUN = "warp-2026-11-02-x-6fcf46-20261102T200256-bf0de2"
 SIZING_REL = "state/sizings/s.yaml"
@@ -68,7 +69,7 @@ def _spine_ids(repo):
     return [r["id"] for r in yaml.safe_load(located.body)]
 
 
-def test_punctuation_tokens_are_never_paths_even_when_the_file_exists(tmp_path):
+def test_punctuation_tokens_are_never_paths_even_when_the_file_exists(tmp_path: Path) -> None:
     repo = _make(tmp_path)
     note = "Halted. Remaining: (1) update the assertions - and ... then -- refire"
     assert rl._paths_named(repo, [note]) == []
@@ -77,7 +78,7 @@ def test_punctuation_tokens_are_never_paths_even_when_the_file_exists(tmp_path):
     assert _spine_ids(repo) == ["C1"]
 
 
-def test_a_real_repo_path_in_the_same_note_still_widens(tmp_path):
+def test_a_real_repo_path_in_the_same_note_still_widens(tmp_path: Path) -> None:
     repo = _make(tmp_path)
     note = f"Remaining: - fix {OUTSIDE} ..."
     assert rl._paths_named(repo, [note]) == [OUTSIDE]

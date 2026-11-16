@@ -31,11 +31,16 @@ import importlib.util
 import inspect
 import sys
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
-def _load_publish_module():
+def _load_publish_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "publish_inject_round_pin_under_test", _BIN_DIR / "publish.py"
     )
@@ -53,17 +58,17 @@ def _section(src: Path) -> dict:
     return {"inject": [{"src": str(src), "dest": "somewhere"}]}
 
 
-def test_inject_materializes_at_the_round_pinned_sha(monkeypatch, tmp_path):
+def test_inject_materializes_at_the_round_pinned_sha(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The pin already in the round's dict is what inject materializes at —
     `_inject_src_shadow` must receive it as `ref`, never fall back to HEAD."""
     src_dir = tmp_path / "content-root"
     src_dir.mkdir()
     materialize_calls: "list[tuple[Path, str]]" = []
 
-    def _fake_pin(root, pinned_shas, *, out=None, late=False):
+    def _fake_pin(root, pinned_shas, *, out=None, late: bool = False):
         return pinned_shas.setdefault(str(root), "PINNED_SHA")
 
-    def _fake_materialize(src, ref):
+    def _fake_materialize(src, ref) -> Path:
         materialize_calls.append((src, ref))
         return src_dir
 
@@ -79,7 +84,7 @@ def test_inject_materializes_at_the_round_pinned_sha(monkeypatch, tmp_path):
     ), f"inject materialized at a non-pinned ref: {materialize_calls!r}"
 
 
-def test_inject_reuses_a_pin_the_round_already_resolved(monkeypatch, tmp_path):
+def test_inject_reuses_a_pin_the_round_already_resolved(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A sha pinned earlier in the round (by main's round-start pass or an
     earlier row) is reused verbatim — inject must not resolve its own."""
     src_dir = tmp_path / "content-root"
@@ -106,7 +111,7 @@ def test_inject_reuses_a_pin_the_round_already_resolved(monkeypatch, tmp_path):
     )
 
 
-def test_no_unpinned_materialize_call_survives_in_the_inject_path():
+def test_no_unpinned_materialize_call_survives_in_the_inject_path() -> None:
     """Source guard: the bare `_git_materialize_ref(git_root)` form is what
     regressed, and it reads as harmless. Name it explicitly."""
     source = inspect.getsource(publish._materialize_inject_srcs)
@@ -117,7 +122,7 @@ def test_no_unpinned_materialize_call_survives_in_the_inject_path():
     assert "ref=sha" in source, "expected the pinned-ref materialize call"
 
 
-def test_pin_is_threaded_from_process_target_to_inject():
+def test_pin_is_threaded_from_process_target_to_inject() -> None:
     """The pin only helps if it actually arrives. Both hops are guarded, since
     either one silently reverts inject to its own HEAD read."""
     dispatch_src = inspect.getsource(publish.dispatch_percolate_inject)
@@ -135,7 +140,7 @@ def test_pin_is_threaded_from_process_target_to_inject():
     )
 
 
-def test_absent_pin_still_works_for_direct_callers(monkeypatch, tmp_path):
+def test_absent_pin_still_works_for_direct_callers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A caller passing no pin (unit tests driving dispatch directly) keeps
     today's behaviour rather than raising on a missing dict."""
     src_dir = tmp_path / "content-root"

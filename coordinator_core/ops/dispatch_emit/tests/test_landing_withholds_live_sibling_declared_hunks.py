@@ -36,7 +36,7 @@ def _git(args, cwd: Path) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     (root / "pkg").mkdir(parents=True)
     _git(["init", "-q"], root)
@@ -71,7 +71,7 @@ def _holds(root: Path) -> dict:
     )
 
 
-def test_a_live_siblings_declared_path_carrying_its_hunk_is_withheld_naming_it(repo):
+def test_a_live_siblings_declared_path_carrying_its_hunk_is_withheld_naming_it(repo) -> None:
     rows = list(ROWS)
     rows[2] = "x_3 = 'SIBLING status-line seeding'\n"
     rows[37] = "x_38 = 'OWN'\n"
@@ -90,7 +90,7 @@ def test_a_live_siblings_declared_path_carrying_its_hunk_is_withheld_naming_it(r
     assert _holds(repo) == {PATH: LIVE}
 
 
-def test_a_live_sibling_declaring_the_path_with_no_hunk_in_it_does_not_hold_it(repo):
+def test_a_live_sibling_declaring_the_path_with_no_hunk_in_it_does_not_hold_it(repo) -> None:
     rows = list(ROWS)
     rows[37] = "x_38 = 'OWN'\n"
     (repo / PATH).write_text("".join(rows), encoding="utf-8")
@@ -98,7 +98,7 @@ def test_a_live_sibling_declaring_the_path_with_no_hunk_in_it_does_not_hold_it(r
     assert _holds(repo) == {}
 
 
-def test_a_terminal_sibling_holds_nothing(repo, monkeypatch):
+def test_a_terminal_sibling_holds_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import hunk_provenance
 
     rows = list(ROWS)

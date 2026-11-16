@@ -28,6 +28,7 @@ from coordinator_core.bash_guards._dialect import (
 )
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.bash_guards._write_bump_sink_shapes import (
+    _PS_REDIRECT_RE,
     _host_is_windows,
     extract_write_sink_targets_for_segment,
     extract_write_sink_targets_powershell,
@@ -105,11 +106,23 @@ def _bash_targets(cmd: str) -> Iterable[str]:
         )
 
 
+def ps_home_var_redirects(tokens: List[str]) -> Iterable[str]:
+    """`>`/`>>`/`N>` targets spelled with a leading home variable: the shared extractor drops every `$` target."""
+    for i, tok in enumerate(tokens[1:], start=1):
+        m = _PS_REDIRECT_RE.match(tok)
+        if not m:
+            continue
+        target = (m.group(1) or (tokens[i + 1] if i + 1 < len(tokens) else "")).strip("\"'")
+        if _HOME_VAR_RE.match(target):
+            yield target
+
+
 def _powershell_targets(cmd: str) -> Iterable[str]:
     segments = resolve_segments_for_dialect(cmd, Dialect.POWERSHELL, guard_name="block-home-root-bash-write")
     for tokens, _pipe in segments or ():
         if tokens:
             yield from extract_write_sink_targets_powershell(tokens, tokens[0].lower())
+            yield from ps_home_var_redirects(tokens)
 
 
 def _creates_home_entry(cmd: str, cwd: Optional[str], dialect: Optional[Dialect]) -> bool:

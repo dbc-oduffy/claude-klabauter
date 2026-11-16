@@ -15,7 +15,9 @@ Reply fields:
 
     ``code_complete`` is true only when every named plan was read and none carries an open
     executor row. An open row is a spine row whose canonical ``disposition`` is not closed
-    (``spine_read.NON_DISPATCHABLE_DISPOSITIONS``; an unrecognized disposition counts as open).
+    (``spine_read.NON_DISPATCHABLE_DISPOSITIONS``; an unrecognized disposition counts as open)
+    and is not satisfied by an eligible ``em-discharge`` record in the plan's evidence sidecar
+    (``spine_read.drop_em_discharged``, the predicate every other spine reader uses).
     An executor row is one whose ``agent_type`` is absent or names an executor
     (``coordinator:executor`` and its variants); EM-, reviewer- and test-runner-owned rows do not
     hold the verdict. A plan that is missing, escapes the worktree, is unreadable or has no
@@ -23,7 +25,8 @@ Reply fields:
     be read is never evidence of completion.
 
 Negative-spec:
-  - Does NOT write, stamp or mutate anything; the verdict is derived from each plan's spine.
+  - Does NOT write, stamp or mutate anything; the verdict is derived from each plan's spine and
+    its evidence sidecar.
   - Does NOT spawn and does NOT invoke git; plans are read as files and parsed by
     ``spine_read.load_rows_memo``, the engine's one spine parser.
   - Does NOT sweep the corpus: only the named plans are read.
@@ -42,6 +45,7 @@ from coordinator_core.lifecycle import main_worktree_root
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops.dispatch_emit.spine_read import (
     NON_DISPATCHABLE_DISPOSITIONS,
+    drop_em_discharged,
     load_rows_memo,
     with_canonical_disposition,
 )
@@ -56,21 +60,23 @@ def _is_executor_row(row: dict) -> bool:
     return agent_type.strip().rsplit(":", 1)[-1].startswith("executor")
 
 
-def _open_executor_rows(text: str) -> list:
+def _open_executor_rows(text: str, plan_path: Path) -> list:
     result = load_rows_memo(text)
     if result.status is not LocateStatus.LOCATED:
         raise ValueError(f"task spine is {result.status.name}, not LOCATED")
     if not result.rows:
         raise ValueError("task spine has no rows")
+    rows = []
     open_rows = []
     for raw in map(with_canonical_disposition, result.rows):
         if not isinstance(raw, dict):
             raise ValueError("task spine carries a non-mapping row")
+        rows.append(raw)
         if raw.get("disposition") in NON_DISPATCHABLE_DISPOSITIONS:
             continue
         if _is_executor_row(raw):
-            open_rows.append(str(raw.get("id")))
-    return open_rows
+            open_rows.append(raw.get("id"))
+    return [str(i) for i in drop_em_discharged(plan_path, text, rows, open_rows)]
 
 
 def _one_plan(raw: object, worktree_root: Path) -> dict:
@@ -95,7 +101,7 @@ def _one_plan(raw: object, worktree_root: Path) -> dict:
         return entry
     try:
         text = candidate.read_text(encoding="utf-8", errors="replace")
-        entry["open_rows"] = _open_executor_rows(text)
+        entry["open_rows"] = _open_executor_rows(text, candidate)
     except (OSError, ValueError) as exc:
         entry["error"] = str(exc)
     return entry

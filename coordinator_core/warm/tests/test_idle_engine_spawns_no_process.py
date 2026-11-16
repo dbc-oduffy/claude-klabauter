@@ -112,7 +112,7 @@ def _wait_boot_spawns_settled(pid: int) -> None:
         time.sleep(_SAMPLE_INTERVAL_SECS)
 
 
-def test_idle_engine_starts_no_process(engine):
+def test_idle_engine_starts_no_process(engine) -> None:
     _wait_boot_spawns_settled(engine.pid)
     with LiveTreeAccountant(engine.pid) as acct:
         seen: dict = {}

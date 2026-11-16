@@ -23,13 +23,14 @@ import json
 import subprocess
 
 import pytest
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 import coordinator_core.ops.review_coverage_core as rcc
 
 
-def _git(*args, cwd):
+def _git(*args, cwd) -> None:
     subprocess.run(
         ["git", *args],
         cwd=cwd,
@@ -58,7 +59,7 @@ def _commit(cwd, name: str) -> str:
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     _git("init", "-q", str(tmp_path), cwd=tmp_path.parent)
     _git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty",
          "-m", "root", cwd=tmp_path)
@@ -92,7 +93,7 @@ def _both_ways(records, cwd, monkeypatch):
     return batched, unbatched, counts["batched"], counts["unbatched"]
 
 
-def test_batched_and_unbatched_agree_and_the_batch_spawns_less(repo, monkeypatch):
+def test_batched_and_unbatched_agree_and_the_batch_spawns_less(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     shas = [_commit(repo, f"f{i}.txt") for i in range(6)]
     records = _records([f"{s}~1..{s}" for s in shas])
 
@@ -106,7 +107,7 @@ def test_batched_and_unbatched_agree_and_the_batch_spawns_less(repo, monkeypatch
     )
 
 
-def test_a_merge_commit_falls_back_rather_than_over_crediting(repo, monkeypatch):
+def test_a_merge_commit_falls_back_rather_than_over_crediting(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     base = _head(repo)
     _git("checkout", "-q", "-b", "side", cwd=repo)
     side = _commit(repo, "side.txt")
@@ -127,7 +128,7 @@ def test_a_merge_commit_falls_back_rather_than_over_crediting(repo, monkeypatch)
     )
 
 
-def test_a_root_commit_range_falls_back(repo, monkeypatch):
+def test_a_root_commit_range_falls_back(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _head(repo)
     records = _records([f"{root}~1..{root}"])
 
@@ -136,7 +137,7 @@ def test_a_root_commit_range_falls_back(repo, monkeypatch):
     assert json.dumps(batched, sort_keys=True) == json.dumps(unbatched, sort_keys=True)
 
 
-def test_a_multi_commit_range_is_untouched_by_the_batch(repo, monkeypatch):
+def test_a_multi_commit_range_is_untouched_by_the_batch(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     first = _commit(repo, "a.txt")
     _commit(repo, "b.txt")
     last = _commit(repo, "c.txt")
@@ -149,7 +150,7 @@ def test_a_multi_commit_range_is_untouched_by_the_batch(repo, monkeypatch):
     assert len(list(batched[0]["shas"])) == 2, "a..c credits b and c, not a"
 
 
-def test_only_the_single_commit_shape_is_recognised():
+def test_only_the_single_commit_shape_is_recognised() -> None:
     m = rcc._SINGLE_COMMIT_RANGE_RE
     assert m.match("abc1234~1..abc1234")
     assert m.match("abc1234^..abc1234")
@@ -159,7 +160,7 @@ def test_only_the_single_commit_shape_is_recognised():
     assert not m.match("origin/main..HEAD")
 
 
-def test_an_abbreviated_sha_resolves_to_the_full_sha_in_the_mapping(repo):
+def test_an_abbreviated_sha_resolves_to_the_full_sha_in_the_mapping(repo) -> None:
     sha = _commit(repo, "abbr.txt")
     short = sha[:9]
     rng = f"{short}~1..{short}"
@@ -169,7 +170,7 @@ def test_an_abbreviated_sha_resolves_to_the_full_sha_in_the_mapping(repo):
     assert memo[rng][0] == {sha}, "the mapping must carry %H, never the abbreviation"
 
 
-def test_an_ambiguous_abbreviation_falls_back_to_the_per_range_path(monkeypatch):
+def test_an_ambiguous_abbreviation_falls_back_to_the_per_range_path(monkeypatch: pytest.MonkeyPatch) -> None:
     a = "abcdef1" + "0" * 33
     b = "abcdef1" + "1" * 33
     lone = "1234567" + "2" * 33
@@ -191,7 +192,7 @@ def test_an_ambiguous_abbreviation_falls_back_to_the_per_range_path(monkeypatch)
     assert memo[unique][0] == {lone}
 
 
-def test_each_record_is_classified_once(repo, capsys):
+def test_each_record_is_classified_once(repo, capsys: pytest.CaptureFixture[str]) -> None:
     records = [("p.json", {"scope_kind": "diff", "sha_range": "abc..def;x", "verdict": "ok"})]
 
     rcc.build_segments(records, "skip", cwd=str(repo))

@@ -39,6 +39,7 @@ from coordinator_core.bash_guards import dispatch_checks as dc
 from coordinator_core.bash_guards import guard_head_tail_rewrite as ht
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -73,7 +74,7 @@ def _run_via_real_shell(command: str, timeout: float = 10.0) -> subprocess.Compl
 
 
 class TestFindExecRewriteApostropheSafety:
-    def test_path_with_apostrophe_does_not_break_outer_quote(self, tmp_path):
+    def test_path_with_apostrophe_does_not_break_outer_quote(self, tmp_path: Path) -> None:
         target_dir = tmp_path / "don't-panic"
         target_dir.mkdir()
         (target_dir / "a.tmp").write_text("x")
@@ -87,7 +88,7 @@ class TestFindExecRewriteApostropheSafety:
 
 
 class TestGrepViaBashRewriteApostropheSafety:
-    def test_pattern_with_apostrophe_does_not_break_outer_quote(self, tmp_path):
+    def test_pattern_with_apostrophe_does_not_break_outer_quote(self, tmp_path: Path) -> None:
         (tmp_path / "f.txt").write_text("don't stop\nkeep going\n")
         cmd = "grep -rn \"don't\" %s" % _posix(tmp_path)
         out = _enveloped(dc.check_grep_via_bash_rewrite)(cmd)
@@ -99,7 +100,7 @@ class TestGrepViaBashRewriteApostropheSafety:
 
 
 class TestMultiprobeBannerRewriteApostropheSafety:
-    def test_echo_banner_with_apostrophe_does_not_break_outer_quote(self):
+    def test_echo_banner_with_apostrophe_does_not_break_outer_quote(self) -> None:
         cmd = 'echo "=== it\'s facts ==="; pwd; whoami'
         out = _enveloped(dc.check_multiprobe_banner_rewrite)(cmd)
         assert out is not None
@@ -110,7 +111,7 @@ class TestMultiprobeBannerRewriteApostropheSafety:
 
 
 class TestHeadTailPlumbingRewriteApostropheSafety:
-    def test_grep_upstream_pattern_with_apostrophe_does_not_break_outer_quote(self, tmp_path):
+    def test_grep_upstream_pattern_with_apostrophe_does_not_break_outer_quote(self, tmp_path: Path) -> None:
         (tmp_path / "f.txt").write_text("don't stop\nkeep going\n")
         cmd = "grep -rn \"don't\" %s | head -n 1" % _posix(tmp_path)
         out = _enveloped(ht.check_head_tail_plumbing_rewrite)(cmd)
@@ -120,7 +121,7 @@ class TestHeadTailPlumbingRewriteApostropheSafety:
         assert result.returncode == 0, (rewrite, result.stdout, result.stderr)
         assert "don't stop" in result.stdout
 
-    def test_find_upstream_path_with_apostrophe_does_not_break_outer_quote(self, tmp_path):
+    def test_find_upstream_path_with_apostrophe_does_not_break_outer_quote(self, tmp_path: Path) -> None:
         target_dir = tmp_path / "don't-panic"
         target_dir.mkdir()
         (target_dir / "a.tmp").write_text("x")

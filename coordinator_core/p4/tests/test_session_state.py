@@ -4,9 +4,11 @@ from __future__ import annotations
 import json
 
 from coordinator_core.p4 import session_state, workspace
+from pathlib import Path
+import pytest
 
 
-def test_registered_workspace_with_session_returns_full_state(monkeypatch, tmp_path):
+def test_registered_workspace_with_session_returns_full_state(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     values = {
         "p4.studio/repo.port": "ssl:p4.example.com:1666",
         "p4.studio/repo.user": "agent",
@@ -37,7 +39,7 @@ def test_registered_workspace_with_session_returns_full_state(monkeypatch, tmp_p
     }
 
 
-def test_unregistered_workspace_returns_registered_false(monkeypatch, tmp_path):
+def test_unregistered_workspace_returns_registered_false(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(workspace, "registry_get", lambda key: None)
     (tmp_path / "meta.json").write_text(json.dumps({}), encoding="utf-8")
 
@@ -50,14 +52,14 @@ def test_unregistered_workspace_returns_registered_false(monkeypatch, tmp_path):
     assert result["port"] is None
 
 
-def test_repo_key_omitted_reads_as_unregistered(monkeypatch, tmp_path):
+def test_repo_key_omitted_reads_as_unregistered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     result = session_state._session_state({"sdir": str(tmp_path)})
     assert result["registered"] is False
     assert result["client"] is None
     assert result["port"] is None
 
 
-def test_sdir_omitted_returns_all_none_p4_fields(monkeypatch):
+def test_sdir_omitted_returns_all_none_p4_fields(monkeypatch: pytest.MonkeyPatch) -> None:
     values = {
         "p4.studio/repo.port": "ssl:p4.example.com:1666",
         "p4.studio/repo.user": "agent",

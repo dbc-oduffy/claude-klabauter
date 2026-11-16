@@ -19,10 +19,11 @@ import pytest
 
 from coordinator_core.git.run import GitResult
 from coordinator_core.p4 import runner, shelve, workspace
+from pathlib import Path
 
 
 @pytest.fixture
-def sdir(tmp_path):
+def sdir(tmp_path: Path) -> Path:
     d = tmp_path / "session"
     d.mkdir()
     (d / "meta.json").write_text("{}", encoding="utf-8")
@@ -51,14 +52,14 @@ def _fstat_block(client_file: str, *, action: str = None, change: str = None) ->
 
 class TestOrphanedOpenIsAdoptedBeforeReconcile:
     def test_file_open_in_exited_sessions_cl_is_reopened_into_this_cl(
-        self, monkeypatch, tmp_path, sdir, identity
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sdir, identity
+    ) -> None:
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         orphan = repo_root / "orphan.uasset"
         orphan.write_text("open-in-cl-a\n", encoding="utf-8")
 
-        def fake_run_git(args, **kw):
+        def fake_run_git(args, **kw) -> GitResult:
             if "cat-file" in args:
                 return _git_ok()
             if "log" in args:
@@ -97,13 +98,13 @@ class TestOrphanedOpenIsAdoptedBeforeReconcile:
 
 class TestOtherClientOpenIsNeverReopened:
     def test_a_path_open_by_a_different_client_is_refused_not_reopened(
-        self, monkeypatch, tmp_path, sdir, identity
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sdir, identity
+    ) -> None:
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         (repo_root / "peer.uasset").write_text("owned-elsewhere\n", encoding="utf-8")
 
-        def fake_run_git(args, **kw):
+        def fake_run_git(args, **kw) -> GitResult:
             if "cat-file" in args:
                 return _git_ok()
             if "log" in args:
@@ -137,13 +138,13 @@ class TestOtherClientOpenIsNeverReopened:
 
 class TestNoOrphanPathSpendsFourSpawns:
     def test_no_orphan_path_still_spends_exactly_four_p4_spawns(
-        self, monkeypatch, tmp_path, sdir, identity
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sdir, identity
+    ) -> None:
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         (repo_root / "plain.uasset").write_text("edited\n", encoding="utf-8")
 
-        def fake_run_git(args, **kw):
+        def fake_run_git(args, **kw) -> GitResult:
             if "cat-file" in args:
                 return _git_ok()
             if "log" in args:

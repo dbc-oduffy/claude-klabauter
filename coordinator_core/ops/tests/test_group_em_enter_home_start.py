@@ -9,12 +9,13 @@ import pytest
 
 from coordinator_core.group_em import human_entry, nomination
 from coordinator_core.ops import group_em_enter as gee
+from pathlib import Path
 
 SID = "11111111-2222-3333-4444-555555555555"
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     config = tmp_path / "claude"
     (config / "projects" / "proj-a").mkdir(parents=True)
     settings = tmp_path / "settings"
@@ -38,7 +39,7 @@ def env(tmp_path, monkeypatch):
     return config, settings / "group-em"
 
 
-def _transcript(config, cwd, entrypoint="cli"):
+def _transcript(config, cwd, entrypoint: str = "cli") -> None:
     line = json.dumps({
         "type": "attachment", "uuid": "u-1", "timestamp": "2026-10-21T00:00:05Z",
         "cwd": str(cwd), "entrypoint": entrypoint,
@@ -57,7 +58,7 @@ def _repo(tmp_path):
     return repo
 
 
-def _assert_refused(result, repo):
+def _assert_refused(result, repo) -> None:
     assert result["refusal"] == "GROUP-EM-NOT-HUMAN-ENTERED"
     assert result["exit_code"] == gee.EXIT_NOT_HUMAN_ENTERED
     assert result["standing"]["claimed"] is False
@@ -65,7 +66,7 @@ def _assert_refused(result, repo):
     assert nomination.read_record(str(repo)) is None
 
 
-def test_start_inside_home_claims_and_verifies(env, tmp_path):
+def test_start_inside_home_claims_and_verifies(env, tmp_path: Path) -> None:
     config, home = env
     _transcript(config, home)
     repo = _repo(tmp_path)
@@ -80,21 +81,21 @@ def test_start_inside_home_claims_and_verifies(env, tmp_path):
     assert nomination.entry_status(record)["status"] == "verified"
 
 
-def test_start_outside_home_refuses_and_writes_nothing(env, tmp_path):
+def test_start_outside_home_refuses_and_writes_nothing(env, tmp_path: Path) -> None:
     config, _ = env
     _transcript(config, tmp_path / "elsewhere")
     repo = _repo(tmp_path)
     _assert_refused(_enter(repo, entry_evidence="home-start"), repo)
 
 
-def test_headless_start_inside_home_refuses(env, tmp_path):
+def test_headless_start_inside_home_refuses(env, tmp_path: Path) -> None:
     config, home = env
     _transcript(config, home, entrypoint="sdk-cli")
     repo = _repo(tmp_path)
     _assert_refused(_enter(repo, entry_evidence="home-start"), repo)
 
 
-def test_no_transcript_yet_is_pending_then_rejected(env, tmp_path):
+def test_no_transcript_yet_is_pending_then_rejected(env, tmp_path: Path) -> None:
     repo = _repo(tmp_path)
 
     result = _enter(repo, entry_evidence="home-start")
@@ -111,14 +112,14 @@ def test_no_transcript_yet_is_pending_then_rejected(env, tmp_path):
     {"entry_evidence": "bogus", "prompt_id": "p-1"},
     {},
 ])
-def test_wrong_proof_combinations_refuse(env, tmp_path, extra):
+def test_wrong_proof_combinations_refuse(env, tmp_path: Path, extra) -> None:
     config, home = env
     _transcript(config, home)
     repo = _repo(tmp_path)
     _assert_refused(_enter(repo, **extra), repo)
 
 
-def test_transcript_decides_not_repo_root(env, tmp_path):
+def test_transcript_decides_not_repo_root(env, tmp_path: Path) -> None:
     config, home = env
     _transcript(config, home)
     outside = _repo(tmp_path)
@@ -130,7 +131,7 @@ def test_transcript_decides_not_repo_root(env, tmp_path):
     _assert_refused(_enter(inside, entry_evidence="home-start"), inside)
 
 
-def test_home_start_claim_and_cached_status_are_fast(env, tmp_path):
+def test_home_start_claim_and_cached_status_are_fast(env, tmp_path: Path) -> None:
     config, home = env
     _transcript(config, home)
     repo = _repo(tmp_path)
@@ -149,7 +150,7 @@ def test_home_start_claim_and_cached_status_are_fast(env, tmp_path):
     assert claim_ms < 200 and status_ms < 200
 
 
-def test_prompt_id_path_keeps_its_record_shape(env, tmp_path):
+def test_prompt_id_path_keeps_its_record_shape(env, tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     assert _enter(repo, prompt_id="p-1")["standing"]["claimed"] is True
     record = nomination.read_record(str(repo))

@@ -43,7 +43,7 @@ def _load(path, name):
 class Meter:
     """Accumulates per-phase CPU ms and call counts, and counts Popen spawns."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.phase_ms = {p: 0.0 for p in REQUIRED_PHASES}
         self.phase_calls = {p: 0 for p in REQUIRED_PHASES}
         self.spawns = 0
@@ -73,18 +73,18 @@ def measure(relay_path=None, sessions_dir=None):
 
     real_listdir, real_json_load, real_popen = os.listdir, json.load, subprocess.Popen
 
-    def listdir(path="."):
+    def listdir(path: str = "."):
         names = real_listdir(path)
         if meter.candidates is None and os.path.abspath(os.fspath(path)) == os.path.abspath(sess):
             meter.candidates = sum(1 for n in names if _ENTRY_NAME.fullmatch(n))
         return names
 
     class _SpawnCounter(real_popen):
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *args, **kwargs) -> None:
             meter.spawns += 1
             super().__init__(*args, **kwargs)
 
-    def relay_print(*args, file=None, **kwargs):
+    def relay_print(*args, file=None, **kwargs) -> None:
         if file is None or file is sys.stdout:
             meter.rows += 1
         else:
@@ -160,7 +160,7 @@ def measure(relay_path=None, sessions_dir=None):
     }
 
 
-def main(argv=None):
+def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--sessions-dir", help="sessions dir to scan (default: the relay's own)")
     ap.add_argument("--relay", help="path of unimatrix-relay.py (default: the sibling copy)")

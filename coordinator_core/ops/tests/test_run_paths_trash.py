@@ -9,17 +9,18 @@ import pytest
 from coordinator_core.ops import run_paths_trash as rpt
 from coordinator_core.ops import scratch_delete as sd
 from coordinator_core.ops.tests.test_scratch_delete import CHUNK, RUN, _index, _repo, _tree
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _no_spawn(monkeypatch):
+def _no_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("run.paths_trash spawned a process")
 
     monkeypatch.setattr(subprocess, "Popen", boom)
 
 
-def test_declared_build_dir_outside_scratch_is_trashed(tmp_path):
+def test_declared_build_dir_outside_scratch_is_trashed(tmp_path: Path) -> None:
     root = _repo(tmp_path, ["web/.next", "raw_sources/image-hashes-cache"])
     _tree(root, "web/.next")
     _tree(root, "raw_sources/image-hashes-cache")
@@ -30,7 +31,7 @@ def test_declared_build_dir_outside_scratch_is_trashed(tmp_path):
     assert len(list((root / "scratch" / sd.TOMBSTONE_DIRNAME).iterdir())) == 2
 
 
-def test_absent_path_is_idempotent(tmp_path):
+def test_absent_path_is_idempotent(tmp_path: Path) -> None:
     root = _repo(tmp_path, ["web/.next"])
     out = rpt.trash_declared(root, RUN, CHUNK, ["web/.next"])
     assert out == {"deleted": [], "absent": ["web/.next"], "refused": []}
@@ -47,14 +48,14 @@ def test_absent_path_is_idempotent(tmp_path):
     ("scratch/warp/x", "run records"),
     ("scratch/.deleted/x", "tombstones"),
 ])
-def test_refusals_leave_disk_untouched(tmp_path, path, reason):
+def test_refusals_leave_disk_untouched(tmp_path: Path, path, reason) -> None:
     root = _repo(tmp_path, ["web/declared" if path == "web/other" else path])
     out = rpt.trash_declared(root, RUN, CHUNK, [path])
     assert out["deleted"] == []
     assert reason in out["refused"][0]["reason"]
 
 
-def test_tracked_path_is_refused(tmp_path):
+def test_tracked_path_is_refused(tmp_path: Path) -> None:
     root = _repo(tmp_path, ["web/src"], index=_index(tracked=("web/src/a.ts",)))
     _tree(root, "web/src")
     out = rpt.trash_declared(root, RUN, CHUNK, ["web/src"])
@@ -63,7 +64,7 @@ def test_tracked_path_is_refused(tmp_path):
     assert (root / "web/src/f.txt").exists()
 
 
-def test_unknown_chunk_refuses_everything(tmp_path):
+def test_unknown_chunk_refuses_everything(tmp_path: Path) -> None:
     root = _repo(tmp_path, ["web/.next"])
     _tree(root, "web/.next")
     out = rpt.trash_declared(root, RUN, "NOPE", ["web/.next"])
@@ -71,7 +72,7 @@ def test_unknown_chunk_refuses_everything(tmp_path):
     assert (root / "web/.next").exists()
 
 
-def test_handler_round_trip(tmp_path):
+def test_handler_round_trip(tmp_path: Path) -> None:
     root = _repo(tmp_path, ["web/.next"])
     _tree(root, "web/.next")
     out = rpt._handler({"run_id": RUN, "chunk_id": CHUNK, "paths": ["web/.next"],
@@ -79,7 +80,7 @@ def test_handler_round_trip(tmp_path):
     assert out["deleted"] == ["web/.next"]
 
 
-def test_link_component_is_refused(tmp_path):
+def test_link_component_is_refused(tmp_path: Path) -> None:
     import os
 
     root = _repo(tmp_path, ["web/.next"])

@@ -23,6 +23,8 @@ from coordinator_core.guard_messages.alternative_record import (
     Override,
 )
 from coordinator_core.guard_messages.render import render
+from pathlib import Path
+import pytest
 
 
 def _bash(cmd: str, **extra) -> dict:
@@ -43,7 +45,7 @@ def _no_override(record: AlternativeRecord) -> None:
     assert not any(isinstance(m, Override) for m in record.members)
 
 
-def test_editor_kill_offers_the_pid_form_and_still_allows_a_pid_kill():
+def test_editor_kill_offers_the_pid_form_and_still_allows_a_pid_kill() -> None:
     record = kill.check(_bash("taskkill /F /IM UnrealEditor.exe"))
     _no_override(record)
     assert "Kill by the PID of your own launch" in _em(record)
@@ -53,7 +55,7 @@ def test_editor_kill_offers_the_pid_form_and_still_allows_a_pid_kill():
 
 
 
-def test_perforce_submit_carries_a_route_that_survives_the_subagent_render(monkeypatch):
+def test_perforce_submit_carries_a_route_that_survives_the_subagent_render(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(p4, "_armed", lambda: True)
     record = p4.check(_bash("p4 submit -c 1"))
     _no_override(record)
@@ -64,7 +66,7 @@ def test_perforce_submit_carries_a_route_that_survives_the_subagent_render(monke
     assert p4.check(_bash("p4 submit -c 1")) is None
 
 
-def test_background_publish_is_a_rewrite_record_that_keeps_every_input_field():
+def test_background_publish_is_a_rewrite_record_that_keeps_every_input_field() -> None:
     payload = {
         "tool_name": "Bash",
         "tool_input": {"command": "python percolate-round.py --dest x", "description": "d"},
@@ -81,7 +83,7 @@ def test_background_publish_is_a_rewrite_record_that_keeps_every_input_field():
     assert publish.check_background_publish(payload) is None
 
 
-def test_deploy_dirty_tree_denies_with_git_status_and_passes_a_clean_tree(monkeypatch, tmp_path):
+def test_deploy_dirty_tree_denies_with_git_status_and_passes_a_clean_tree(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     payload = _bash("firebase deploy", cwd=str(tmp_path))
     monkeypatch.setattr(deploy, "_dirty_paths", lambda cwd: ["src/app.ts"])
     record = deploy.check(payload)
@@ -92,7 +94,7 @@ def test_deploy_dirty_tree_denies_with_git_status_and_passes_a_clean_tree(monkey
     assert deploy.check(payload) is None
 
 
-def test_headless_launch_rewrite_and_unresolved_root_advisory_are_records(monkeypatch):
+def test_headless_launch_rewrite_and_unresolved_root_advisory_are_records(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(headless, "_is_dev_install", lambda: True)
     monkeypatch.setattr(headless, "_plugin_root", lambda: "/plugin-root")
     rewrite = headless.check_headless_claude_plugin_dir('claude -p "x"')
@@ -106,7 +108,7 @@ def test_headless_launch_rewrite_and_unresolved_root_advisory_are_records(monkey
     assert advisory.verdict_kind == "advisory" and "claude-author" in _em(advisory)
 
 
-def test_piped_pytest_names_both_dialect_fixes_and_stays_quiet_with_pipefail():
+def test_piped_pytest_names_both_dialect_fixes_and_stays_quiet_with_pipefail() -> None:
     record = piped.check_piped_pytest_exit("pytest tests | tail -5")
     _no_override(record)
     text = _em(record)
@@ -114,7 +116,7 @@ def test_piped_pytest_names_both_dialect_fixes_and_stays_quiet_with_pipefail():
     assert piped.check_piped_pytest_exit("set -o pipefail; pytest tests | tail -5") is None
 
 
-def test_trailing_ampersand_offers_run_in_background_and_honours_the_skip():
+def test_trailing_ampersand_offers_run_in_background_and_honours_the_skip() -> None:
     record = ampersand.check_trailing_background_ampersand("sleep 1 &")
     _no_override(record)
     assert "run_in_background: true" in _em(record)
@@ -127,14 +129,14 @@ def test_trailing_ampersand_offers_run_in_background_and_honours_the_skip():
     )
 
 
-def test_subagent_ue_launch_routes_to_the_slot_and_leaves_the_main_loop_alone():
+def test_subagent_ue_launch_routes_to_the_slot_and_leaves_the_main_loop_alone() -> None:
     record = ue_launch.check(_bash("RunUAT.bat BuildCookRun", agent_id="a1"))
     _no_override(record)
     assert "needs_slot" in _text(render(record, Audience.SUBAGENT))
     assert ue_launch.check(_bash("RunUAT.bat BuildCookRun")) is None
 
 
-def test_heavy_admission_denies_are_records_with_an_offer_or_route(monkeypatch):
+def test_heavy_admission_denies_are_records_with_an_offer_or_route(monkeypatch: pytest.MonkeyPatch) -> None:
     hold = SimpleNamespace(set_by_session="other", expires_at=0, reason="reindex")
     monkeypatch.setattr(admission, "_read_box_hold", lambda: hold)
     record = admission._box_hold_leg({"session_id": "mine"})
@@ -146,7 +148,7 @@ def test_heavy_admission_denies_are_records_with_an_offer_or_route(monkeypatch):
     assert admission._deny_reason(record) == text
 
 
-def test_post_executor_deny_is_a_record_and_the_write_hook_still_gets_an_envelope(monkeypatch):
+def test_post_executor_deny_is_a_record_and_the_write_hook_still_gets_an_envelope(monkeypatch: pytest.MonkeyPatch) -> None:
     record = post_exec._deny_record("sentinel.txt")
     _no_override(record)
     text = _em(record)
@@ -167,7 +169,7 @@ def test_post_executor_deny_is_a_record_and_the_write_hook_still_gets_an_envelop
     assert post_exec.after_executor_deny({"session_id": "s"}, "scratch/x.py") is None
 
 
-def test_em_render_is_the_legacy_text_and_rewrites_keep_the_allow_decision():
+def test_em_render_is_the_legacy_text_and_rewrites_keep_the_allow_decision() -> None:
     record = ampersand.check_trailing_background_ampersand("sleep 1 &")
     assert _em(record).endswith("Use `run_in_background: true` instead.")
     rewrite = publish.check_background_publish(

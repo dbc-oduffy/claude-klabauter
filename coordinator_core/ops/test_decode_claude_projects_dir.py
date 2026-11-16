@@ -6,25 +6,26 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.ops.decode_claude_projects_dir import _decode_one, _run, main
+import pytest
 
 
-def test_decode_one_basic_drive_prefix():
+def test_decode_one_basic_drive_prefix() -> None:
     assert _decode_one("X--coordinator-claude") == ("coordinator-claude", "x:/coordinator-claude")
 
 
-def test_decode_one_drops_subdir_suffix():
+def test_decode_one_drops_subdir_suffix() -> None:
     assert _decode_one("X---repo-name--tasks--foo") == ("repo-name", "x:/repo-name")
 
 
-def test_decode_one_claude_central_double_dash_form():
+def test_decode_one_claude_central_double_dash_form() -> None:
     assert _decode_one("C--Users-alice--claude") == ("claude-central", "c:/Users/alice/.claude")
 
 
-def test_decode_one_claude_central_triple_dash_form():
+def test_decode_one_claude_central_triple_dash_form() -> None:
     assert _decode_one("C---Users--alice---claude") == ("claude-central", "c:/Users/alice/.claude")
 
 
-def test_decode_one_skips_garbled_entries():
+def test_decode_one_skips_garbled_entries() -> None:
     assert _decode_one("tmp") is None
     assert _decode_one("tmp-foo") is None
     assert _decode_one("some-smoketest") is None
@@ -32,15 +33,15 @@ def test_decode_one_skips_garbled_entries():
     assert _decode_one("AppData-Local-Temp-foo") is None
 
 
-def test_decode_one_skips_no_drive_prefix():
+def test_decode_one_skips_no_drive_prefix() -> None:
     assert _decode_one("no-drive-prefix-here") is None
 
 
-def test_decode_one_skips_short_shortname():
+def test_decode_one_skips_short_shortname() -> None:
     assert _decode_one("X--a") is None
 
 
-def test_run_projects_dir_not_found(tmp_path):
+def test_run_projects_dir_not_found(tmp_path: Path) -> None:
     missing = tmp_path / "nonexistent"
     stdout_lines, stderr_lines, exit_code = _run(str(missing))
     assert exit_code == 1
@@ -48,7 +49,7 @@ def test_run_projects_dir_not_found(tmp_path):
     assert any("projects dir not found" in line for line in stderr_lines)
 
 
-def test_run_zero_candidates_reproduces_oracle_crash_contract(tmp_path):
+def test_run_zero_candidates_reproduces_oracle_crash_contract(tmp_path: Path) -> None:
     empty = tmp_path / "empty"
     empty.mkdir()
     stdout_lines, stderr_lines, exit_code = _run(str(empty))
@@ -57,7 +58,7 @@ def test_run_zero_candidates_reproduces_oracle_crash_contract(tmp_path):
     assert not any("WARNING" in line for line in stderr_lines)
 
 
-def test_run_zero_candidates_all_filtered_reproduces_oracle_crash_contract(tmp_path):
+def test_run_zero_candidates_all_filtered_reproduces_oracle_crash_contract(tmp_path: Path) -> None:
     root = tmp_path / "skipall"
     (root / "tmp").mkdir(parents=True)
     stdout_lines, stderr_lines, exit_code = _run(str(root))
@@ -65,7 +66,7 @@ def test_run_zero_candidates_all_filtered_reproduces_oracle_crash_contract(tmp_p
     assert stdout_lines == []
 
 
-def test_run_positive_corpus_dedupe_and_content(tmp_path):
+def test_run_positive_corpus_dedupe_and_content(tmp_path: Path) -> None:
     for name in (
         "X--coordinator-claude",
         "X--example-sim-repo",
@@ -88,7 +89,7 @@ def test_run_positive_corpus_dedupe_and_content(tmp_path):
     assert any("candidate(s) emitted" in line for line in stderr_lines)
 
 
-def test_run_output_deterministically_sorted_by_shortname(tmp_path):
+def test_run_output_deterministically_sorted_by_shortname(tmp_path: Path) -> None:
     for name in ("X--zzz-repo", "X--aaa-repo", "X--mmm-repo"):
         (tmp_path / name).mkdir()
     stdout_lines, _, exit_code = _run(str(tmp_path))
@@ -97,7 +98,7 @@ def test_run_output_deterministically_sorted_by_shortname(tmp_path):
     assert shortnames == sorted(shortnames)
 
 
-def test_main_defaults_to_home_claude_projects(monkeypatch, tmp_path):
+def test_main_defaults_to_home_claude_projects(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fake_home = tmp_path / "home"
     projects = fake_home / ".claude" / "projects"
     projects.mkdir(parents=True)

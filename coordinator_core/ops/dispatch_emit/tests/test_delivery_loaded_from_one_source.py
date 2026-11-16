@@ -6,6 +6,7 @@ from __future__ import annotations
 import yaml
 
 from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
+from pathlib import Path
 
 _FAIL = {"verdict": "FAIL", "unbacked": [{"claim": "c", "anchor": "a"}]}
 
@@ -29,26 +30,26 @@ def _sidecar_only_record(tmp_path, *, inline_prep):
     return _write(tmp_path / "records/run.md", fm)
 
 
-def test_load_delivery_falls_back_to_the_prep_sidecar_named_delivery(tmp_path):
+def test_load_delivery_falls_back_to_the_prep_sidecar_named_delivery(tmp_path: Path) -> None:
     for inline in (True, False):
         record = rd._frontmatter(_sidecar_only_record(tmp_path, inline_prep=inline))
         assert rd.load_delivery(tmp_path, record) == _FAIL
         assert rd.load_delivery(None, record) is None
 
 
-def test_frontmatter_delivery_outranks_the_sidecar(tmp_path):
+def test_frontmatter_delivery_outranks_the_sidecar(tmp_path: Path) -> None:
     record = rd._frontmatter(_sidecar_only_record(tmp_path, inline_prep=True))
     record["delivery"] = {"verdict": "PASS"}
     assert rd.load_delivery(tmp_path, record) == {"verdict": "PASS"}
 
 
-def test_prior_unbacked_claims_reads_the_sidecar_delivery(tmp_path):
+def test_prior_unbacked_claims_reads_the_sidecar_delivery(tmp_path: Path) -> None:
     path = _sidecar_only_record(tmp_path, inline_prep=True)
     _, claims = rd.prior_unbacked_claims(path, tmp_path)
     assert claims == [{"claim": "c", "anchor": "a"}]
 
 
-def test_resolver_picks_a_record_whose_delivery_lives_only_in_the_sidecar(tmp_path):
+def test_resolver_picks_a_record_whose_delivery_lives_only_in_the_sidecar(tmp_path: Path) -> None:
     path = _sidecar_only_record(tmp_path, inline_prep=True)
     found, block = rd.resolve_delivery_in_force(tmp_path, None, None, str(path))
     assert found == path

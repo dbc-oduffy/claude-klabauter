@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_r
 from coordinator_core.ops.dispatch_emit.engine_owned_rows import engine_owner_rows, routed_roots
 from coordinator_core.ops.dispatch_emit.requirements_ledger import Item, Ledger, judge
 from coordinator_core.ops.dispatch_emit.tests.conftest import _V5_ROSTER_FRAGMENT, _V5_STAGE_SCHEMAS
+from pathlib import Path
 
 ENGINE_CLASS = "resolved-engine"
 PLAN_REL = "docs/plans/2026-10-14-doe-engine-row.md"
@@ -43,7 +44,7 @@ _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, str]:
     """A DoE-like cwd (no coordinator_core/) and an engine root holding the only `intake_mint`."""
     cwd = tmp_path / "doe"
     (cwd / ".git").mkdir(parents=True)
@@ -66,7 +67,7 @@ REGISTER = [
 ]
 
 
-def test_engine_owner_rows_routes_the_engine_row_with_root_and_class(world):
+def test_engine_owner_rows_routes_the_engine_row_with_root_and_class(world) -> None:
     cwd, root = world
     rows = engine_owner_rows([], REGISTER, "", cwd)
     assert [r["id"] for r in rows] == ["T8"]
@@ -76,7 +77,7 @@ def test_engine_owner_rows_routes_the_engine_row_with_root_and_class(world):
     assert rows[0]["owner_repo"] == "claude-klabauter"
 
 
-def test_stage_manifest_carries_engine_rows_for_the_engine_row_only(world):
+def test_stage_manifest_carries_engine_rows_for_the_engine_row_only(world) -> None:
     cwd, root = world
     reply = read_stage_reply(cwd, _handler({"run_id": "r1", "plan_path": PLAN_REL}, repo_root=cwd))
     assert "error" not in reply
@@ -109,7 +110,7 @@ def _verdict_text_def(script: str) -> str:
     return script[start : script.index("\n", start)]
 
 
-def test_verify_prompt_carries_the_engine_clause_and_root_read(monkeypatch):
+def test_verify_prompt_carries_the_engine_clause_and_root_read(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert "label: 'ledger-check'" not in script
     verify_end = script.index("label: 'verify'")
@@ -121,7 +122,7 @@ def test_verify_prompt_carries_the_engine_clause_and_root_read(monkeypatch):
     assert "root_read" in str(ask_compose._LEDGER_CHECK_SCHEMA)
 
 
-def test_the_folded_judge_carries_the_engine_clause_and_root_read(monkeypatch):
+def test_the_folded_judge_carries_the_engine_clause_and_root_read(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "m_plus")
     roster = copy.deepcopy(_V5_ROSTER_FRAGMENT)
     roster["execute_review"]["stages"][1]["agents"].append(
@@ -154,7 +155,7 @@ def _ledger() -> Ledger:
     )
 
 
-def test_verdict_naming_the_engine_root_passes(world):
+def test_verdict_naming_the_engine_root_passes(world) -> None:
     _, root = world
     verdict = {"items": [
         {"id": "T8", "status": "met", "root_read": root},
@@ -163,7 +164,7 @@ def test_verdict_naming_the_engine_root_passes(world):
     assert judge(_ledger(), verdict, routed={"T8": root}) == {"pass": True, "failures": [], "open": []}
 
 
-def test_verdict_naming_the_cwd_root_for_an_engine_row_fails_as_misrouted(world):
+def test_verdict_naming_the_cwd_root_for_an_engine_row_fails_as_misrouted(world) -> None:
     cwd, root = world
     verdict = {"items": [
         {"id": "T8", "status": "met", "root_read": cwd.as_posix()},
@@ -175,18 +176,18 @@ def test_verdict_naming_the_cwd_root_for_an_engine_row_fails_as_misrouted(world)
     assert "owed the engine root" in result["failures"][0]["reason"]
 
 
-def test_a_ledger_with_no_engine_rows_judges_identically_with_and_without_routed():
+def test_a_ledger_with_no_engine_rows_judges_identically_with_and_without_routed() -> None:
     verdict = {"items": [{"id": "T8", "status": "not_met"}, {"id": "T1", "status": "met"}]}
     assert judge(_ledger(), verdict, routed={}) == judge(_ledger(), verdict)
     assert judge(_ledger(), verdict, routed=None) == judge(_ledger(), verdict)
 
 
-def test_routed_roots_reads_a_manifest_and_tolerates_absence():
+def test_routed_roots_reads_a_manifest_and_tolerates_absence() -> None:
     assert routed_roots({}) == {}
     assert routed_roots({"engine_rows": [{"id": "T8", "owner_root": "R"}]}) == {"T8": "R"}
 
 
-def test_resolve_engine_root_degrades_to_unresolved(monkeypatch):
+def test_resolve_engine_root_degrades_to_unresolved(monkeypatch: pytest.MonkeyPatch) -> None:
     def _miss():
         raise RuntimeError("no engine")
 

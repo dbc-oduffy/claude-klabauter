@@ -9,11 +9,12 @@ import pytest
 from coordinator_core.install import door_install
 from coordinator_core.install import door_install_posix_build
 from coordinator_core.warm.door import build as door_build
+from pathlib import Path
 
 NAMES = ("hook-run", "cross-repo-memo", "coordinator-queue-append")
 
 
-def _stamp_engine_root(root):
+def _stamp_engine_root(root) -> None:
     stamp_dir = root / "coordinator_core"
     stamp_dir.mkdir(parents=True, exist_ok=True)
     (stamp_dir / "_engine_stamp").write_text("sha:deadbeef\n", encoding="utf-8")
@@ -31,7 +32,7 @@ def _fake_build(*, in_place: bool, payload: bytes):
 
 
 @pytest.fixture
-def linked_bin(tmp_path, monkeypatch):
+def linked_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(
         door_install, "verify_installed_provenance", lambda bin_dst: type("V", (), {"status": "stale"})()
@@ -48,7 +49,7 @@ def linked_bin(tmp_path, monkeypatch):
     return engine_root, bin_dst
 
 
-def test_a_new_image_carries_every_linked_name_with_it(linked_bin, monkeypatch, capsys):
+def test_a_new_image_carries_every_linked_name_with_it(linked_bin, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     engine_root, bin_dst = linked_bin
     monkeypatch.setattr(
         door_install_posix_build, "build_or_advise", _fake_build(in_place=False, payload=b"new-door")
@@ -66,7 +67,7 @@ def test_a_new_image_carries_every_linked_name_with_it(linked_bin, monkeypatch, 
     assert not [p for p in bin_dst.iterdir() if ".relink-" in p.name], "a temp link was left behind"
 
 
-def test_an_in_place_rewrite_needs_no_relink(linked_bin, monkeypatch, capsys):
+def test_an_in_place_rewrite_needs_no_relink(linked_bin, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     engine_root, bin_dst = linked_bin
     monkeypatch.setattr(
         door_install_posix_build, "build_or_advise", _fake_build(in_place=True, payload=b"new-door")
@@ -79,7 +80,7 @@ def test_an_in_place_rewrite_needs_no_relink(linked_bin, monkeypatch, capsys):
     assert "re-linked" not in capsys.readouterr().out
 
 
-def test_a_name_left_on_the_old_image_fails_the_install(linked_bin, monkeypatch):
+def test_a_name_left_on_the_old_image_fails_the_install(linked_bin, monkeypatch: pytest.MonkeyPatch) -> None:
     engine_root, bin_dst = linked_bin
     monkeypatch.setattr(
         door_install_posix_build, "build_or_advise", _fake_build(in_place=False, payload=b"new-door")
@@ -90,7 +91,7 @@ def test_a_name_left_on_the_old_image_fails_the_install(linked_bin, monkeypatch)
         door_install.install_door(bin_dst, engine_root)
 
 
-def test_a_fresh_install_has_nothing_to_relink(tmp_path, monkeypatch):
+def test_a_fresh_install_has_nothing_to_relink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(
         door_install_posix_build, "build_or_advise", _fake_build(in_place=False, payload=b"new-door")

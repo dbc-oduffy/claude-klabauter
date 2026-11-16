@@ -276,10 +276,12 @@ otherwise will refuse at runtime with nobody present to widen it.
 from __future__ import annotations
 
 import logging
+import os
+import posixpath
 from collections import OrderedDict
 from functools import lru_cache
 from pathlib import Path, PurePosixPath
-from typing import cast
+from typing import Any, cast
 
 from coordinator_core.ops.dispatch_emit.inventory_mint import (
     as_git_pathspec,
@@ -322,6 +324,17 @@ class NoWritesDeclaredError(ValueError):
     (operational/EM-owned rows, ``change_kind: verification`` rows) — see
     module docstring's § ``writes: []`` vs an absent ``writes:`` key.
     """
+
+
+#: Paths a `NoTestTargetError` names; the staged manifest carries them, so its size is bounded, not per-row.
+NO_TARGET_NAMED_CAP = 20
+
+
+def _named(paths: list[str]) -> str:
+    """`repr` of the first `NO_TARGET_NAMED_CAP` paths, then the count of the rest."""
+    head = repr(paths[:NO_TARGET_NAMED_CAP])
+    rest = len(paths) - NO_TARGET_NAMED_CAP
+    return head if rest <= 0 else f"{head} and {rest} more"
 
 
 class NoTestTargetError(ValueError):
@@ -593,7 +606,9 @@ def commit_pathspec_or_none(wave: list[WaveRow]) -> list[str] | None:
 
 
 def candidate_test_additions(
-    pathspec: list[str], repo_root: Path | None = None
+    pathspec: list[str],
+    repo_root: Path | None = None,
+    probe_memo: dict[tuple[str, str], Any] | None = None,
 ) -> list[str]:
     """The co-located test-file path each ``.py`` entry in ``pathspec`` would
     be paired with, by this repo's own ``tests/test_<stem>.py`` convention —
@@ -631,26 +646,30 @@ def candidate_test_additions(
     own target, not a source a test is derived FOR — and this module's
     negative spec still holds: every candidate is stem-derived from a path
     the caller already declared, never a directory listing or a git query.
+
+    ``probe_memo`` is a caller-owned, call-scoped stat memo (see ``_memo_is_file``): a
+    caller resolving one row at a time passes one dict for the whole batch so a shared
+    ``tests/`` directory is probed once, not once per row.
     """
-    declared_names = {
-        PurePosixPath(strip_literal_pathspec(p)).name for p in pathspec
-    }
+    split = [_split_posix(strip_literal_pathspec(p)) for p in pathspec]
+    declared_names = {name for _parent, name, _stem, _suffix in split}
     candidates: list[str] = []
-    for path in pathspec:
-        candidate = PurePosixPath(strip_literal_pathspec(path))
-        if candidate.suffix != ".py" or _is_test_file(candidate):
+    for parent_s, name, stem, suffix in split:
+        if suffix != ".py" or name.startswith("test_"):
             continue
-        if "tests" in candidate.parent.parts:
+        if "tests" in parent_s.split("/"):
             # A non-test helper already living under tests/ is its own file;
             # pairing it would join tests/ onto itself (tests/tests/test_x.py).
             continue
-        test_name = _normalized_test_name(candidate.stem)
+        test_name = _normalized_test_name(stem)
         if test_name is None or test_name in declared_names:
             continue
-        target = _resolve_test_dir_target(candidate, repo_root)
-        if repo_root is not None and not (Path(repo_root) / target.parent).is_dir():
+        target = _resolve_test_dir_target_of(parent_s, stem, repo_root, probe_memo)
+        if repo_root is not None and not _memo_is_dir(
+            str(repo_root), posixpath.dirname(target) or ".", probe_memo if probe_memo is not None else {}
+        ):
             continue
-        candidates.append(as_git_pathspec(target.as_posix()))
+        candidates.append(as_git_pathspec(target))
     return _dedupe(candidates)
 
 
@@ -688,9 +707,11 @@ def _pytest_testpaths(root: str) -> tuple[str, ...]:
 
 
 def _resolve_test_dir_target(
-    candidate: PurePosixPath, repo_root: Path | None
-) -> PurePosixPath:
-    """The ONE test path for source ``candidate``, by the layout on disk.
+    candidate: PurePosixPath,
+    repo_root: Path | None,
+    probe_memo: dict[tuple[str, str], Any] | None = None,
+) -> str:
+    """The ONE test path (posix string) for source ``candidate``, by the layout on disk.
 
     Order: an existing stem-named test at any ancestor ``tests/``; the
     nearest ancestor ``tests/`` directory that exists (an existing sibling
@@ -698,24 +719,69 @@ def _resolve_test_dir_target(
     else the nearest-rung convention. Without ``repo_root`` only the last
     applies. Stats only; never lists a directory.
     """
-    test_name = _normalized_test_name(candidate.stem)
+    return _resolve_test_dir_target_of(candidate.parent.as_posix(), candidate.stem, repo_root, probe_memo)
+
+
+def _split_posix(path: str) -> tuple[str, str, str, str]:
+    """`(parent, name, stem, suffix)` of a posix path string, as `PurePosixPath` reports them
+    (`parent` is `.` for a bare name); the pathlib object is built only for a path it would normalize."""
+    if "//" in path or "/./" in path or path.startswith(("./", "/")) or path.endswith(("/", "/.")) or path in ("", "."):
+        p = PurePosixPath(path)
+        return p.parent.as_posix(), p.name, p.stem, p.suffix
+    parent, _, name = path.rpartition("/")
+    dot = name.rfind(".")
+    suffix = name[dot:] if 0 < dot < len(name) - 1 else ""
+    return parent or ".", name, name[:dot] if suffix else name, suffix
+
+
+def _resolve_test_dir_target_of(
+    parent_s: str,
+    stem: str,
+    repo_root: Path | None,
+    probe_memo: dict[tuple[str, str], Any] | None = None,
+) -> str:
+    """`_resolve_test_dir_target` over a source's parent directory and stem, both posix strings."""
+    test_name = _normalized_test_name(stem)
     assert test_name is not None, "dunder stems are filtered by the caller"
-    nearest = candidate.parent / "tests" / test_name
+    nearest = _tests_under(parent_s, test_name)
     if repo_root is None:
         return nearest
-    root = Path(repo_root)
-    ancestors = (candidate.parent, *candidate.parent.parents)
-    for parent in ancestors:
-        if (root / parent / "tests" / test_name).is_file():
-            return parent / "tests" / test_name
-    for parent in ancestors:
-        if (root / parent / "tests").is_dir():
-            return parent / "tests" / test_name
-    for testpath in _pytest_testpaths(str(root)):
-        base = PurePosixPath(testpath)
-        if base.parent in ancestors and (root / base).is_dir():
-            return base / test_name
+    root_s = str(repo_root)
+    memo = probe_memo if probe_memo is not None else {}
+    layout = memo.get(("layout", parent_s))
+    if layout is None:
+        layout = memo[("layout", parent_s)] = _layout_of(root_s, parent_s, memo)
+    existing, testpath_base = layout
+    for parent in existing:
+        target = _tests_under(parent, test_name)
+        if _memo_is_file(root_s, target, memo):
+            return target
+    if existing:
+        return _tests_under(existing[0], test_name)
+    if testpath_base is not None:
+        return test_name if testpath_base == "." else f"{testpath_base}/{test_name}"
     return nearest
+
+
+def _layout_of(root_s: str, parent_s: str, memo: dict[tuple[str, str], Any]) -> tuple[tuple[str, ...], str | None]:
+    """For one source directory, `(ancestors holding a tests/ directory, nearest first; the first
+    ``testpaths`` entry under an ancestor)`: everything about the layout that does not depend on the
+    source's stem, so a batch of sources in one directory probes the layout once."""
+    ancestors = [parent_s]
+    while ancestors[-1] not in (".", "/"):
+        ancestors.append(posixpath.dirname(ancestors[-1]) or ".")
+    existing = tuple(p for p in ancestors if _memo_is_dir(root_s, _tests_under(p, ""), memo))
+    for testpath in _pytest_testpaths(root_s):
+        base = PurePosixPath(testpath)
+        if base.parent.as_posix() in ancestors and _memo_is_dir(root_s, base.as_posix(), memo):
+            return existing, base.as_posix()
+    return existing, None
+
+
+def _tests_under(directory: str, name: str) -> str:
+    """``directory/tests[/name]`` as posix, ``directory`` being ``.`` for the repo root."""
+    base = "tests" if directory == "." else posixpath.join(directory, "tests")
+    return posixpath.join(base, name) if name else base
 
 
 def commit_prefixes(wave: list[WaveRow]) -> list[tuple[str, tuple[str, ...]]]:
@@ -743,19 +809,10 @@ def _candidate_test_targets(
     *,
     test_locator_suffixes: tuple[str, ...] = (),
 ) -> list[PurePosixPath]:
-    test_name = _normalized_test_name(candidate.stem)
-    targets: list[PurePosixPath] = []
-    if test_name is not None:
-        targets = [
-            parent / "tests" / test_name
-            for parent in (candidate.parent, *candidate.parent.parents)
-        ]
-        targets.append(candidate.parent / test_name)
-    for pattern in test_locator_suffixes:
-        if candidate.suffix != _locator_source_suffix(pattern):
-            continue
-        targets.append(candidate.parent / f"{candidate.stem}{pattern.lstrip('*')}")
-    return targets
+    return [
+        PurePosixPath(target)
+        for target in _candidate_target_strings(candidate, test_locator_suffixes)
+    ]
 
 
 def _is_testable_surface(
@@ -774,28 +831,94 @@ def _map_written_path_to_test_target(
     *,
     repo_root: Path | None = None,
     declared: frozenset[str] = frozenset(),
+    test_locator_suffixes: tuple[str, ...] | None = None,
+    is_file_cache: dict[tuple[str, str], bool] | None = None,
 ) -> str | None:
+    """``test_locator_suffixes`` and ``is_file_cache`` are call-scoped hoists
+    a batch caller passes so config and stat probes run once per batch."""
     candidate = PurePosixPath(path)
     if _is_test_file(candidate):
         return candidate.as_posix()
     root = repo_root or _REPO_ROOT
-    test_locator_suffixes = tuple(
-        resolve_test_locator_config(str(root)).test_locator_suffixes
-    )
+    if test_locator_suffixes is None:
+        test_locator_suffixes = tuple(
+            resolve_test_locator_config(str(root)).test_locator_suffixes
+        )
     if any(
         path.endswith(pattern.lstrip("*")) for pattern in test_locator_suffixes
     ):
         return candidate.as_posix()
-    for target in _candidate_test_targets(
-        candidate, test_locator_suffixes=test_locator_suffixes
-    ):
-        posix = target.as_posix()
-        if posix in declared or (root / target).is_file():
+    if is_file_cache is None:
+        is_file_cache = {}
+    root_s = str(root)
+    for posix in _candidate_target_strings(candidate, test_locator_suffixes):
+        if posix in declared or _memo_is_file(root_s, posix, is_file_cache):
             return posix
     return None
 
 
-def terminal_test_scope(waves: list[list[WaveRow]], *, repo_root: Path | None = None) -> list[str]:
+def _candidate_target_strings(
+    candidate: PurePosixPath, test_locator_suffixes: tuple[str, ...]
+) -> tuple[str, ...]:
+    """The one derivation of a source's candidate test paths (``_candidate_test_targets``
+    wraps it), as posix strings built without per-target path objects: the batch
+    scope maps tens of thousands of paths. Pure in its arguments, so the
+    process-wide memo holds no filesystem state."""
+    return _candidate_target_strings_for(candidate.as_posix(), test_locator_suffixes)
+
+
+@lru_cache(maxsize=65536)
+def _candidate_target_strings_for(
+    posix: str, test_locator_suffixes: tuple[str, ...]
+) -> tuple[str, ...]:
+    candidate = PurePosixPath(posix)
+    parent = posixpath.dirname(posix)
+    join = posixpath.join
+    targets: list[str] = []
+    test_name = _normalized_test_name(candidate.stem)
+    if test_name is not None:
+        directory, previous = parent, None
+        while directory != previous:
+            targets.append(join(directory, "tests", test_name))
+            directory, previous = posixpath.dirname(directory), directory
+        targets.append(join(parent, test_name))
+    suffix = candidate.suffix
+    for pattern in test_locator_suffixes:
+        if suffix == _locator_source_suffix(pattern):
+            targets.append(join(parent, f"{candidate.stem}{pattern.lstrip('*')}"))
+    return tuple(targets)
+
+
+def _memo_is_file(root: str, posix: str, memo: dict[tuple[str, str], bool]) -> bool:
+    """``(root / posix).is_file()``, probing the parent directory first so a
+    directory missing for many targets costs one stat; both answers are kept
+    in the caller's call-local ``memo``."""
+    key = ("f", posix)
+    known = memo.get(key)
+    if known is not None:
+        return known
+    parent = posixpath.dirname(posix)
+    parent_ok = memo.get(("d", parent))
+    if parent_ok is None:
+        parent_ok = memo[("d", parent)] = os.path.isdir(os.path.join(root, parent))
+    known = memo[key] = parent_ok and os.path.isfile(os.path.join(root, posix))
+    return known
+
+
+def _memo_is_dir(root: str, posix: str, memo: dict[tuple[str, str], bool]) -> bool:
+    """``(root / posix).is_dir()``, answered once per ``memo``. A ``.`` or empty ``posix`` is the root."""
+    key = ("d", posix)
+    known = memo.get(key)
+    if known is None:
+        known = memo[key] = os.path.isdir(os.path.join(root, posix))
+    return known
+
+
+def terminal_test_scope(
+    waves: list[list[WaveRow]], *, repo_root: Path | None = None, probes: dict[tuple[str, str], bool] | None = None,
+) -> list[str]:
+    """The test targets of every path the waves write. `probes` is the caller's call-scoped stat memo
+    (`_memo_is_file`): a caller running several passes over one tree shares one dict so each path is probed once."""
     all_rows = [row for wave in waves for row in wave]
     declares_writes = [row for row in all_rows if row.writes is not UNDECLARED]
     if not declares_writes:
@@ -810,11 +933,21 @@ def terminal_test_scope(waves: list[list[WaveRow]], *, repo_root: Path | None = 
     written_paths = _dedupe(written_paths)
     declared = frozenset(written_paths)
 
+    test_locator_suffixes = tuple(
+        resolve_test_locator_config(
+            str(repo_root or _REPO_ROOT)
+        ).test_locator_suffixes
+    )
+    is_file_cache: dict[tuple[str, str], bool] = {} if probes is None else probes
     targets: list[str] = []
     unmapped: list[str] = []
     for path in written_paths:
         target = _map_written_path_to_test_target(
-            path, repo_root=repo_root, declared=declared
+            path,
+            repo_root=repo_root,
+            declared=declared,
+            test_locator_suffixes=test_locator_suffixes,
+            is_file_cache=is_file_cache,
         )
         if target is None:
             unmapped.append(path)
@@ -823,11 +956,6 @@ def terminal_test_scope(waves: list[list[WaveRow]], *, repo_root: Path | None = 
     targets = _dedupe(targets)
 
     if not targets:
-        test_locator_suffixes = tuple(
-            resolve_test_locator_config(
-                str(repo_root or _REPO_ROOT)
-            ).test_locator_suffixes
-        )
         omissions = [
             path
             for path in unmapped
@@ -836,10 +964,10 @@ def terminal_test_scope(waves: list[list[WaveRow]], *, repo_root: Path | None = 
         if omissions or (not unmapped and not any(row.writes_under for row in all_rows)):
             raise NoTestTargetError(
                 "every written path mapped to no runnable test target, "
-                f"refusing an empty terminal test scope (paths: {unmapped!r}; "
-                f"testable surfaces with no target: {omissions!r})",
-                unmapped_paths=tuple(unmapped),
-                testable_omissions=tuple(omissions),
+                f"refusing an empty terminal test scope (paths: {_named(unmapped)}; "
+                f"testable surfaces with no target: {_named(omissions)})",
+                unmapped_paths=tuple(unmapped[:NO_TARGET_NAMED_CAP]),
+                testable_omissions=tuple(omissions[:NO_TARGET_NAMED_CAP]),
             )
         _logger.info(
             "spine writes no testable surface; terminal test scope is "

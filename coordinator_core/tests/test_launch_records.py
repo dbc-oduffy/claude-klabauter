@@ -7,9 +7,10 @@ import threading
 import pytest
 
 from coordinator_core import launch_records as lr
+from pathlib import Path
 
 
-def test_paths_and_unsafe_ids(tmp_path):
+def test_paths_and_unsafe_ids(tmp_path: Path) -> None:
     t = str(tmp_path)
     assert lr.session_dir(t, "s1") == os.path.join(t, "workflow-runs", "s1")
     p = lr.record_path(t, "s1", "t1")
@@ -25,7 +26,7 @@ def test_paths_and_unsafe_ids(tmp_path):
             lr.flat_record_path(t, bad, "t1")
 
 
-def test_session_record_paths_absent_and_present(tmp_path):
+def test_session_record_paths_absent_and_present(tmp_path: Path) -> None:
     t = str(tmp_path)
     assert lr.session_record_paths(t, "s1") == []
     assert lr.session_record_paths(t, "../bad") == []
@@ -36,7 +37,7 @@ def test_session_record_paths_absent_and_present(tmp_path):
     assert lr.session_record_paths(t, "s2") == []
 
 
-def _forbid_listing(monkeypatch, forbidden):
+def _forbid_listing(monkeypatch, forbidden) -> None:
     real_scandir, real_listdir, real_glob = os.scandir, os.listdir, glob.glob
     owner = threading.get_ident()
 
@@ -44,7 +45,7 @@ def _forbid_listing(monkeypatch, forbidden):
         return os.path.normcase(os.path.abspath(os.fspath(x)))
 
     def guard(real):
-        def wrapped(path=".", *a, **k):
+        def wrapped(path: str = ".", *a, **k):
             if threading.get_ident() == owner and norm(path) in forbidden:
                 raise AssertionError(f"listed {path}")
             return real(path, *a, **k)
@@ -61,7 +62,7 @@ def _forbid_listing(monkeypatch, forbidden):
     monkeypatch.setattr(glob, "glob", g)
 
 
-def test_session_record_paths_never_lists_parent(tmp_path, monkeypatch):
+def test_session_record_paths_never_lists_parent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     t = str(tmp_path)
     lr.record_path(t, "s1", "t1")
     open(lr.record_path(t, "s1", "t1"), "w", encoding="utf-8").close()
@@ -74,7 +75,7 @@ def test_session_record_paths_never_lists_parent(tmp_path, monkeypatch):
         assert len(lr.session_record_paths(t, "s1")) == 1
 
 
-def test_migrate_moves_named_flat_without_listing(tmp_path, monkeypatch):
+def test_migrate_moves_named_flat_without_listing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     a = tmp_path / "a"
     b = tmp_path / "b"
     a.mkdir()
@@ -101,7 +102,7 @@ def test_migrate_moves_named_flat_without_listing(tmp_path, monkeypatch):
     assert not os.path.exists(lr.session_dir(ta, "s1") + "/t3.json")
 
 
-def test_migrate_never_overwrites_and_creates_no_dir_without_source(tmp_path):
+def test_migrate_never_overwrites_and_creates_no_dir_without_source(tmp_path: Path) -> None:
     t = str(tmp_path)
     assert lr.migrate_flat_records([t], "s1", ["t1"]) == 0
     assert not os.path.exists(lr.session_dir(t, "s1"))

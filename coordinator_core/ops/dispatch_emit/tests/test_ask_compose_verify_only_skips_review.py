@@ -5,6 +5,7 @@ from __future__ import annotations
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+import pytest
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
@@ -24,7 +25,7 @@ def _script(monkeypatch) -> str:
     )
 
 
-def test_review_block_gated_on_declared_paths(monkeypatch):
+def test_review_block_gated_on_declared_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert "const _noReviewPaths = !_reviewPaths.length;" in script
     assert "!!((_manifest?.rows ?? []).length &&" not in script
@@ -32,7 +33,7 @@ def test_review_block_gated_on_declared_paths(monkeypatch):
     assert "if (!_halted && !_reviewReused && !_noReviewPaths && ((_gate.arm !== 'xs' && !_xsTail) || _codeReviewOwed)) {\n  phase('Review wave');" in script
 
 
-def test_no_path_run_logs_and_empties_wave(monkeypatch):
+def test_no_path_run_logs_and_empties_wave(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert "execute_review skipped: no row declares a path, nothing to review" in script
     skip_line = script.split("execute_review skipped")[0].rsplit("\n", 1)[-1]
@@ -40,7 +41,7 @@ def test_no_path_run_logs_and_empties_wave(monkeypatch):
     assert script.split("execute_review skipped")[1].split("\n", 1)[0].endswith("_reviewWave = []; }")
 
 
-def test_refire_remaining_leg_writes_count_as_review_paths(monkeypatch):
+def test_refire_remaining_leg_writes_count_as_review_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert (
         "const _reviewPaths = [...(_manifest?.review_declared_paths ?? []), "

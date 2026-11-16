@@ -7,22 +7,23 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit.op import InventoryOutsideRepoError, _refuse_inventory_outside_repo
+from pathlib import Path
 
 
-def _record(tmp_path, *parts):
+def _record(tmp_path, *parts) -> str:
     f = tmp_path.joinpath(*parts)
     f.parent.mkdir(parents=True)
     f.write_text("x\n", encoding="utf-8")
     return str(f)
 
 
-def test_a_warp_run_manifest_is_refused_naming_the_plan_route(tmp_path):
+def test_a_warp_run_manifest_is_refused_naming_the_plan_route(tmp_path: Path) -> None:
     rec = _record(tmp_path, "state", "warp", "run-1", "manifest.json")
     with pytest.raises(InventoryOutsideRepoError, match="--plan <plan.md> --review-only --rows"):
         _refuse_inventory_outside_repo(rec, tmp_path)
 
 
-def test_a_record_in_mise_inventory_is_accepted(tmp_path):
+def test_a_record_in_mise_inventory_is_accepted(tmp_path: Path) -> None:
     rec = _record(tmp_path, "state", "mise-inventory", "inv.md")
     _refuse_inventory_outside_repo(rec, tmp_path)
 
@@ -36,7 +37,7 @@ def test_a_record_in_mise_inventory_is_accepted(tmp_path):
         ("stuff", "inv.md"),
     ],
 )
-def test_a_record_outside_mise_inventory_is_refused(tmp_path, parts):
+def test_a_record_outside_mise_inventory_is_refused(tmp_path: Path, parts) -> None:
     rec = _record(tmp_path, *parts)
     with pytest.raises(InventoryOutsideRepoError, match="is not under"):
         _refuse_inventory_outside_repo(rec, tmp_path)

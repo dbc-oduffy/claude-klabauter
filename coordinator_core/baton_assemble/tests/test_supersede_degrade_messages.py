@@ -35,6 +35,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.baton_assemble import apply as ba_apply
+import pytest
 
 _PRED_REL = "state/handoffs/predecessor.md"
 
@@ -45,8 +46,8 @@ def _write(path: Path, text: str) -> None:
 
 
 def test_placeholder_refusal_names_handoff_transition_supersede_and_claim_first(
-    tmp_path, capsys
-):
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     successor_rel = "state/handoffs/successor-fan-in.md"
     _write(
         tmp_path / successor_rel,
@@ -74,8 +75,8 @@ def test_placeholder_refusal_names_handoff_transition_supersede_and_claim_first(
 
 
 def test_housekeeping_off_refusal_names_handoff_transition_supersede_and_claim_first(
-    tmp_path, monkeypatch, capsys
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     from coordinator_core.op_budget_suspension import OpSuspendedError
     from coordinator_core.test_baton_assemble import _PREDECESSOR_FM, _write_artifact
 
@@ -101,7 +102,7 @@ def test_housekeeping_off_refusal_names_handoff_transition_supersede_and_claim_f
     assert "invoke `handoff.supersede_predecessor`" not in stderr
 
 
-def test_dispatch_table_and_cli_field_stay_unchanged_by_this_ac():
+def test_dispatch_table_and_cli_field_stay_unchanged_by_this_ac() -> None:
     from coordinator_core.baton_assemble import apply as ba_apply_mod
 
     assert "handoff.supersede_predecessor" in ba_apply_mod._CLI_DISPATCH

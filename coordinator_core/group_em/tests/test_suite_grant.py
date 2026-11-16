@@ -4,6 +4,7 @@ import json
 import subprocess
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -19,7 +20,7 @@ def _row(sid, name, cwd):
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     records = tmp_path / "group-em"
@@ -58,7 +59,7 @@ def _grant_files(env):
     return list((env["dir"] / "suite-grants").rglob("*.json"))
 
 
-def test_holder_issues_and_grantee_checks_granted(env):
+def test_holder_issues_and_grantee_checks_granted(env) -> None:
     result = _issue(env)
     assert result.ok and result.record["issuer_session_id"] == HOLDER
     assert result.record["grantee_session_id"] == PEER
@@ -67,16 +68,16 @@ def test_holder_issues_and_grantee_checks_granted(env):
     assert granted and record["grantee_session_id"] == PEER
 
 
-def test_grantee_resolves_by_registry_name(env):
+def test_grantee_resolves_by_registry_name(env) -> None:
     assert _issue(env, "peer-name").record["grantee_session_id"] == PEER
 
 
-def test_holder_may_grant_itself(env):
+def test_holder_may_grant_itself(env) -> None:
     _issue(env, HOLDER)
     assert _check(env, HOLDER)[0]
 
 
-def test_non_holder_issue_refused_and_writes_nothing(env):
+def test_non_holder_issue_refused_and_writes_nothing(env) -> None:
     env["mp"].setenv("COORDINATOR_SESSION_ID", PEER)
     result = _issue(env)
     assert (result.ok, result.reason) == (False, suite_grant.NOT_GROUP_EM)
@@ -84,23 +85,23 @@ def test_non_holder_issue_refused_and_writes_nothing(env):
 
 
 @pytest.mark.parametrize("status", ["pending", "rejected"])
-def test_unverified_holder_is_refused(env, status):
+def test_unverified_holder_is_refused(env, status) -> None:
     env["mp"].setattr(nomination, "entry_status", lambda *a, **k: {"status": status})
     assert _issue(env).reason == suite_grant.NOT_GROUP_EM
     assert _grant_files(env) == []
 
 
-def test_dead_holder_is_refused(env):
+def test_dead_holder_is_refused(env) -> None:
     env["live"].discard(HOLDER)
     assert _issue(env).reason == suite_grant.GROUP_EM_NOT_LIVE
 
 
-def test_unresolved_issuer_is_refused(env):
+def test_unresolved_issuer_is_refused(env) -> None:
     env["mp"].setattr(suite_grant.core, "resolve_session_id", lambda cwd=None: "")
     assert _issue(env).reason == suite_grant.ISSUER_UNRESOLVED
 
 
-def test_empty_note_ttl_and_grantee_refusals(env):
+def test_empty_note_ttl_and_grantee_refusals(env) -> None:
     assert suite_grant.issue_suite_grant(PEER, "  ", directory=env["dir"], now=NOW).reason == suite_grant.NOTE_EMPTY
     assert _issue(env, ttl_minutes=0).reason == suite_grant.TTL_OUT_OF_RANGE
     assert _issue(env, ttl_minutes=721).reason == suite_grant.TTL_OUT_OF_RANGE
@@ -110,11 +111,11 @@ def test_empty_note_ttl_and_grantee_refusals(env):
     assert _grant_files(env) == []
 
 
-def test_ttl_ceiling_is_accepted(env):
+def test_ttl_ceiling_is_accepted(env) -> None:
     assert _issue(env, ttl_minutes=720).ok and _check(env)[0]
 
 
-def test_file_planted_under_a_non_holder_key_is_never_read(env):
+def test_file_planted_under_a_non_holder_key_is_never_read(env) -> None:
     _issue(env)
     holder_file = env["dir"] / "suite-grants" / HOLDER / f"{PEER}.json"
     planted = env["dir"] / "suite-grants" / OTHER / f"{PEER}.json"
@@ -124,19 +125,19 @@ def test_file_planted_under_a_non_holder_key_is_never_read(env):
     assert _check(env) == (False, None)
 
 
-def test_another_session_reads_ungranted(env):
+def test_another_session_reads_ungranted(env) -> None:
     _issue(env)
     assert _check(env, OTHER) == (False, None)
 
 
-def test_expired_grant_reads_ungranted_with_its_record(env):
+def test_expired_grant_reads_ungranted_with_its_record(env) -> None:
     _issue(env, ttl_minutes=10)
     granted, record = _check(env, now=NOW + 601)
     assert not granted and record["grantee_session_id"] == PEER
     assert not _check(env, now=NOW - 1)[0]
 
 
-def test_record_over_the_ceiling_reads_ungranted(env):
+def test_record_over_the_ceiling_reads_ungranted(env) -> None:
     _issue(env)
     path = _grant_files(env)[0]
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -145,31 +146,31 @@ def test_record_over_the_ceiling_reads_ungranted(env):
     assert not _check(env, now=NOW + 60)[0]
 
 
-def test_displaced_holder_grant_reads_ungranted(env):
+def test_displaced_holder_grant_reads_ungranted(env) -> None:
     _issue(env)
     nomination.claim(env["repo"], OTHER, directory=env["dir"], prompt_id="p-2")
     assert not _check(env)[0]
 
 
-def test_standing_down_holder_grant_reads_ungranted(env):
+def test_standing_down_holder_grant_reads_ungranted(env) -> None:
     _issue(env)
     env["live"].discard(HOLDER)
     assert not _check(env)[0]
 
 
-def test_unverified_holder_grant_reads_ungranted(env):
+def test_unverified_holder_grant_reads_ungranted(env) -> None:
     _issue(env)
     env["mp"].setattr(nomination, "entry_status", lambda *a, **k: {"status": "pending"})
     assert not _check(env)[0]
 
 
-def test_dead_grantee_reads_ungranted(env):
+def test_dead_grantee_reads_ungranted(env) -> None:
     _issue(env)
     env["live"].discard(PEER)
     assert not _check(env)[0]
 
 
-def test_scope_root_is_component_wise(env, tmp_path):
+def test_scope_root_is_component_wise(env, tmp_path: Path) -> None:
     _issue(env, repo=str(tmp_path / "r" / "a"))
     assert _check(env, root=str(tmp_path / "r" / "a"))[0]
     assert _check(env, root=str(tmp_path / "r" / "a" / "sub"))[0]
@@ -178,7 +179,7 @@ def test_scope_root_is_component_wise(env, tmp_path):
     assert not _check(env, root=env["repo"])[0]
 
 
-def test_malformed_json_reads_ungranted(env):
+def test_malformed_json_reads_ungranted(env) -> None:
     _issue(env)
     _grant_files(env)[0].write_text("{not json", encoding="utf-8")
     assert _check(env) == (False, None)
@@ -186,7 +187,7 @@ def test_malformed_json_reads_ungranted(env):
     assert _check(env) == (False, None)
 
 
-def _stamp(env, box_id):
+def _stamp(env, box_id) -> None:
     path = _grant_files(env)[0]
     rec = json.loads(path.read_text(encoding="utf-8"))
     if box_id is None:
@@ -196,13 +197,13 @@ def _stamp(env, box_id):
     path.write_text(json.dumps(rec), encoding="utf-8")
 
 
-def test_issue_stamps_local_box_id(env):
+def test_issue_stamps_local_box_id(env) -> None:
     env["mp"].setattr(suite_grant.box_registry, "local_box_id", lambda home=None: "box-aaaa1111")
     assert _issue(env).record["box_id"] == "box-aaaa1111"
     assert _check(env)[0] is True
 
 
-def test_grant_from_another_box_reads_ungranted_with_its_record(env):
+def test_grant_from_another_box_reads_ungranted_with_its_record(env) -> None:
     env["mp"].setattr(suite_grant.box_registry, "local_box_id", lambda home=None: "box-aaaa1111")
     _issue(env)
     _stamp(env, "box-bbbb2222")
@@ -211,19 +212,19 @@ def test_grant_from_another_box_reads_ungranted_with_its_record(env):
 
 
 @pytest.mark.parametrize("stamped", [None, "local"])
-def test_unstamped_or_local_grant_stays_valid_after_identity_minted(env, stamped):
+def test_unstamped_or_local_grant_stays_valid_after_identity_minted(env, stamped) -> None:
     _issue(env)
     _stamp(env, stamped)
     env["mp"].setattr(suite_grant.box_registry, "local_box_id", lambda home=None: "box-aaaa1111")
     assert _check(env)[0] is True
 
 
-def test_unsafe_session_id_reads_ungranted(env):
+def test_unsafe_session_id_reads_ungranted(env) -> None:
     assert _check(env, "../x") == (False, None)
     assert _check(env, "") == (False, None)
 
 
-def test_reissue_overwrites_and_revoke_is_idempotent(env):
+def test_reissue_overwrites_and_revoke_is_idempotent(env) -> None:
     _issue(env, ttl_minutes=5)
     _issue(env, ttl_minutes=60)
     assert len(_grant_files(env)) == 1 and _check(env, now=NOW + 3000)[0]
@@ -233,7 +234,7 @@ def test_reissue_overwrites_and_revoke_is_idempotent(env):
     assert not _check(env)[0]
 
 
-def test_revoke_touches_only_the_callers_key(env):
+def test_revoke_touches_only_the_callers_key(env) -> None:
     _issue(env)
     env["mp"].setenv("COORDINATOR_SESSION_ID", OTHER)
     suite_grant.revoke_suite_grant(PEER, directory=env["dir"])
@@ -247,16 +248,16 @@ MSYS_ROOT = "C:/Program Files/Git/Users/x/repo"  # abs-path-ok: MSYS fixture val
     "path",
     [MSYS_ROOT, "c:\\msys64\\home\\x", "D:/cygwin64/home/x", "C:/Program Files (x86)/Git/usr/x"],  # abs-path-ok: MSYS fixture values
 )
-def test_msys_prefixed_roots_are_detected(path):
+def test_msys_prefixed_roots_are_detected(path) -> None:
     assert suite_grant._msys_mangled(path)
 
 
 @pytest.mark.parametrize("path", ["/Users/x/repo", "C:/Users/x/repo", "C:/Program Files/Other/x", ""])
-def test_ordinary_roots_are_not_msys_mangled(path):
+def test_ordinary_roots_are_not_msys_mangled(path) -> None:
     assert not suite_grant._msys_mangled(path)
 
 
-def test_remote_issue_with_msys_mangled_repo_is_refused_and_delivers_nothing(env, monkeypatch):
+def test_remote_issue_with_msys_mangled_repo_is_refused_and_delivers_nothing(env, monkeypatch: pytest.MonkeyPatch) -> None:
     delivered = []
     monkeypatch.setattr(
         suite_grant.node_transport, "select", lambda *a, **k: delivered.append(a) or None
@@ -266,11 +267,11 @@ def test_remote_issue_with_msys_mangled_repo_is_refused_and_delivers_nothing(env
     assert delivered == []
 
 
-def test_local_issue_with_a_msys_looking_repo_is_unaffected(env):
+def test_local_issue_with_a_msys_looking_repo_is_unaffected(env) -> None:
     assert _issue(env, repo=MSYS_ROOT).ok
 
 
-def test_cli_message_for_msys_refusal_names_msys_no_pathconv():
+def test_cli_message_for_msys_refusal_names_msys_no_pathconv() -> None:
     from coordinator_core.session import grant_directive
 
     assert "MSYS_NO_PATHCONV=1" in grant_directive._refusal(suite_grant.SCOPE_ROOT_MSYS_MANGLED)
@@ -283,13 +284,13 @@ def test_cli_message_for_msys_refusal_names_msys_no_pathconv():
     ("windows", "C:/Program Files/Git/Users/x", True),
     ("windows", "repo\\sub", False),
 ])
-def test_absolute_here_follows_the_os_flavour(monkeypatch, flavour, path, expected):
+def test_absolute_here_follows_the_os_flavour(monkeypatch: pytest.MonkeyPatch, flavour, path, expected) -> None:
     cls = suite_grant.PurePosixPath if flavour == "posix" else suite_grant.PureWindowsPath
     monkeypatch.setattr(suite_grant, "_path_flavour", lambda: cls)
     assert suite_grant._absolute_here(path) is expected
 
 
-def test_check_spawns_nothing(env, monkeypatch):
+def test_check_spawns_nothing(env, monkeypatch: pytest.MonkeyPatch) -> None:
     _issue(env)
 
     def _boom(*a, **k):
@@ -299,12 +300,12 @@ def test_check_spawns_nothing(env, monkeypatch):
     assert _check(env)[0]
 
 
-def test_check_never_raises(env):
+def test_check_never_raises(env) -> None:
     env["mp"].setattr(nomination, "box_holder", lambda *a, **k: 1 / 0)
     assert _check(env) == (False, None)
 
 
-def test_human_grant_enum_is_unchanged():
+def test_human_grant_enum_is_unchanged() -> None:
     assert session_grant._VALID_GRANTED_BY == frozenset({"pm", "ceremony"})
 
 
@@ -312,7 +313,7 @@ def test_human_grant_enum_is_unchanged():
 
 
 @pytest.fixture
-def boxes(tmp_path, monkeypatch):
+def boxes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import base64
 
     from coordinator_core.group_em import box_key, box_registry
@@ -352,7 +353,7 @@ def _check_b(boxes, now=NOW + 60, root=None):
     )
 
 
-def test_relay_issue_delivers_and_grantee_box_reads_granted_with_no_local_holder(boxes):
+def test_relay_issue_delivers_and_grantee_box_reads_granted_with_no_local_holder(boxes) -> None:
     result = _relay(boxes)
     assert result.ok and result.record["grantee_box_id"] == boxes["idb"] and "sig" in result.record
     assert (boxes["b"] / "suite-grants" / "relayed" / f"{PEER}.json").is_file()
@@ -361,7 +362,7 @@ def test_relay_issue_delivers_and_grantee_box_reads_granted_with_no_local_holder
     assert granted and record["issuer_session_id"] == HOLDER and record["scope_root"] == boxes["repo"]
 
 
-def test_relay_passes_through_node_transport_deliver_grant(boxes):
+def test_relay_passes_through_node_transport_deliver_grant(boxes) -> None:
     from coordinator_core.group_em import node_transport
 
     seen = []
@@ -376,14 +377,14 @@ def test_relay_passes_through_node_transport_deliver_grant(boxes):
     assert seen[0][0] == boxes["idb"] and seen[0][1]["issuer_box_id"] == boxes["ida"]
 
 
-def test_relay_far_refusal_is_surfaced_and_writes_nothing(boxes):
+def test_relay_far_refusal_is_surfaced_and_writes_nothing(boxes) -> None:
     boxes["live"].discard(PEER)
     result = _relay(boxes)
     assert not result.ok and result.reason == f"{suite_grant.RELAY_FAILED}:{suite_grant.GRANTEE_NOT_LIVE}"
     assert not (boxes["b"] / "suite-grants").exists()
 
 
-def test_relay_unknown_box_and_non_holder_are_refused(boxes):
+def test_relay_unknown_box_and_non_holder_are_refused(boxes) -> None:
     assert _relay(boxes, grantee=f"box-nope:{PEER}").reason.startswith(suite_grant.BOX_UNKNOWN)
     boxes["mp"].setenv("COORDINATOR_SESSION_ID", PEER)
     assert _relay(boxes).reason == suite_grant.NOT_GROUP_EM
@@ -406,13 +407,13 @@ def _receive(boxes, envelope, now=NOW + 1):
     return suite_grant.receive_relayed_grant(envelope, directory=boxes["b"], now=now)
 
 
-def test_receive_accepts_a_valid_envelope_and_scope_comes_from_the_local_registry(boxes):
+def test_receive_accepts_a_valid_envelope_and_scope_comes_from_the_local_registry(boxes) -> None:
     assert _receive(boxes, _envelope(boxes))["ok"] is True
     assert _check_b(boxes)[0]
     assert not _check_b(boxes, root=str(boxes["home_b"]))[0]
 
 
-def test_receive_refuses_unsigned_forged_tampered_and_unpinned(boxes):
+def test_receive_refuses_unsigned_forged_tampered_and_unpinned(boxes) -> None:
     good = _envelope(boxes)
     unsigned = {k: v for k, v in good.items() if k != "sig"}
     tampered = {**good, "expires_at": suite_grant._iso(NOW + 7200)}
@@ -425,7 +426,7 @@ def test_receive_refuses_unsigned_forged_tampered_and_unpinned(boxes):
     assert not (boxes["b"] / "suite-grants").exists()
 
 
-def test_receive_refuses_expired_ceiling_wrong_box_and_not_live(boxes):
+def test_receive_refuses_expired_ceiling_wrong_box_and_not_live(boxes) -> None:
     assert _receive(boxes, _envelope(boxes), now=NOW + 7200)["reason"] == "expired"
     over = _envelope(boxes, expires_at=suite_grant._iso(NOW + 721 * 60))
     assert _receive(boxes, over)["reason"] == "bad_ttl"
@@ -435,7 +436,7 @@ def test_receive_refuses_expired_ceiling_wrong_box_and_not_live(boxes):
     assert not (boxes["b"] / "suite-grants").exists()
 
 
-def test_planted_relayed_file_reads_ungranted(boxes):
+def test_planted_relayed_file_reads_ungranted(boxes) -> None:
     import json as _json
 
     target = boxes["b"] / "suite-grants" / "relayed" / f"{PEER}.json"
@@ -448,7 +449,7 @@ def test_planted_relayed_file_reads_ungranted(boxes):
     assert _check_b(boxes) == (False, None)
 
 
-def test_relayed_grant_expiry_liveness_and_envelope_scope_are_enforced(boxes):
+def test_relayed_grant_expiry_liveness_and_envelope_scope_are_enforced(boxes) -> None:
     assert _receive(boxes, _envelope(boxes, scope_root=str(boxes["repo"]) + "/sub"))["ok"]
     assert not _check_b(boxes)[0]
     assert _receive(boxes, _envelope(boxes))["ok"]
@@ -458,7 +459,7 @@ def test_relayed_grant_expiry_liveness_and_envelope_scope_are_enforced(boxes):
     assert not _check_b(boxes)[0]
 
 
-def test_bare_sid_still_takes_the_same_box_path(boxes):
+def test_bare_sid_still_takes_the_same_box_path(boxes) -> None:
     boxes["mp"].setattr(
         session_registry, "read_rows", lambda directory=None: [_row(PEER, "peer-name", boxes["repo"])]
     )

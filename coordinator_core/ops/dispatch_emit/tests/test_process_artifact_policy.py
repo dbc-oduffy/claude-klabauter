@@ -6,11 +6,12 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import process_artifact_policy as pap
 from coordinator_core.ops.dispatch_emit.run_artifacts import RunArtifacts
+from pathlib import Path
 
 pytestmark = pytest.mark.foreign_repo
 
 
-def _artifacts(root):
+def _artifacts(root) -> RunArtifacts:
     return RunArtifacts(
         run_id="r1",
         by_class={"record": ("state/warp/r1/a.json",), "plan": ("docs/plans/p.md",)},
@@ -19,13 +20,13 @@ def _artifacts(root):
     )
 
 
-def test_predicate_both_ways(tmp_path):
+def test_predicate_both_ways(tmp_path: Path) -> None:
     assert pap.hosts_coordinator_state(tmp_path) is False
     (tmp_path / "archive").mkdir()
     assert pap.hosts_coordinator_state(tmp_path) is True
 
 
-def test_filter_withholds_when_not_opted_in(tmp_path):
+def test_filter_withholds_when_not_opted_in(tmp_path: Path) -> None:
     arts = _artifacts(tmp_path)
     kept, withheld = pap.withhold_process_artifacts(tmp_path, arts)
     assert kept.paths() == ()
@@ -36,14 +37,14 @@ def test_filter_withholds_when_not_opted_in(tmp_path):
     }
 
 
-def test_filter_passes_through_when_opted_in(tmp_path):
+def test_filter_passes_through_when_opted_in(tmp_path: Path) -> None:
     (tmp_path / "archive").mkdir()
     arts = _artifacts(tmp_path)
     kept, withheld = pap.withhold_process_artifacts(tmp_path, arts)
     assert kept is arts and withheld == {}
 
 
-def test_exclude_is_idempotent_and_anchored(tmp_path):
+def test_exclude_is_idempotent_and_anchored(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     first = pap.exclude_locally(tmp_path, ["docs/plans/p.md"], ["state/warp/r1"])
     assert first == ["/docs/plans/p.md", "/state/warp/r1/"]
@@ -52,7 +53,7 @@ def test_exclude_is_idempotent_and_anchored(tmp_path):
     assert raw == b"/docs/plans/p.md\n/state/warp/r1/\n"
 
 
-def test_exclude_appends_after_unterminated_line(tmp_path):
+def test_exclude_appends_after_unterminated_line(tmp_path: Path) -> None:
     info = tmp_path / ".git" / "info"
     info.mkdir(parents=True)
     (info / "exclude").write_bytes(b"*.pyc")
@@ -60,7 +61,7 @@ def test_exclude_appends_after_unterminated_line(tmp_path):
     assert (info / "exclude").read_bytes() == b"*.pyc\n/a.md\n"
 
 
-def test_exclude_uses_common_dir_of_a_linked_worktree(tmp_path):
+def test_exclude_uses_common_dir_of_a_linked_worktree(tmp_path: Path) -> None:
     common = tmp_path / "main" / ".git"
     private = common / "worktrees" / "wt"
     private.mkdir(parents=True)
@@ -73,7 +74,7 @@ def test_exclude_uses_common_dir_of_a_linked_worktree(tmp_path):
     assert not (private / "info").exists()
 
 
-def test_exclude_never_raises(tmp_path):
+def test_exclude_never_raises(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / ".git" / "info").write_text("a file, not a dir", encoding="utf-8")
     assert pap.exclude_locally(tmp_path, ["x.md"]) == []

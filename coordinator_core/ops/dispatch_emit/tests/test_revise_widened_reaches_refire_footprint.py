@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
 from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
+from pathlib import Path
 
 RUN = "ask-20261104T000000-abc123"
 REL = "state/sizings/2026-11-04-widen-refire.yaml"
@@ -49,7 +50,7 @@ Two rows.
 
 
 @pytest.fixture
-def halted(tmp_path, monkeypatch):
+def halted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(halted_run, "_RESUME_SPAWNER", lambda *a, **k: None)
     (tmp_path / ".git").mkdir()
     (tmp_path / "docs" / "plans").mkdir(parents=True)
@@ -88,7 +89,7 @@ def _briefs(root) -> dict:
     return {r.id: (root / r.brief_path).read_text(encoding="utf-8") for r in manifest.rows}
 
 
-def test_halt_then_revise_widened_then_refire_footprint_includes_the_path(halted):
+def test_halt_then_revise_widened_then_refire_footprint_includes_the_path(halted) -> None:
     assert NEW not in _briefs(halted)["LR1"]
 
     reply = _revise(halted, [{"row": "LR1", "path": NEW}])
@@ -104,19 +105,19 @@ def test_halt_then_revise_widened_then_refire_footprint_includes_the_path(halted
     assert in_run_widen.widened_by_row(dir_) == {"LR1": [NEW]}
 
 
-def test_repeated_revise_does_not_duplicate_the_path(halted):
+def test_repeated_revise_does_not_duplicate_the_path(halted) -> None:
     _revise(halted, [{"row": "LR1", "path": NEW}])
     _revise(halted, [{"row": "LR1", "path": NEW}])
     assert _rows(halted)["LR1"]["writes"] == [OLD, NEW]
 
 
-def test_denied_path_stamps_nothing(halted):
+def test_denied_path_stamps_nothing(halted) -> None:
     before = (halted / PLAN_REL).read_text(encoding="utf-8")
     _revise(halted, [{"row": "LR1", "path": "state/x.yaml"}])
     assert (halted / PLAN_REL).read_text(encoding="utf-8") == before
 
 
-def test_row_unknown_to_the_plan_falls_back_to_a_footprint_row(halted):
+def test_row_unknown_to_the_plan_falls_back_to_a_footprint_row(halted) -> None:
     reply = _revise(halted, [{"row": "LR99", "path": NEW}])
     assert reply.get("ok") is True, reply
     assert reply["footprint_widened"][0]["paths"] == [NEW]

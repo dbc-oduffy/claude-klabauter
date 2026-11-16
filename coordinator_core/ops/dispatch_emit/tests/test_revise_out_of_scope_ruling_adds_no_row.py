@@ -8,6 +8,7 @@ import yaml
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import run_token
+from pathlib import Path
 
 RUN = "ask-20261016T000000-def456"
 REL = "state/sizings/2026-10-16-oos-norow.yaml"
@@ -24,7 +25,7 @@ def _sizing():
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / REL).write_text(yaml.safe_dump(_sizing(), sort_keys=False), encoding="utf-8")
@@ -41,7 +42,7 @@ def _revise(repo, **params):
     return rl._handler({"run_id": RUN, **params}, repo_root=repo)
 
 
-def test_ruling_quotes_verbatim_and_adds_no_row(repo):
+def test_ruling_quotes_verbatim_and_adds_no_row(repo) -> None:
     out = _revise(repo, verbatim=WORDS, out_of_scope=["R1"])
     assert out["ok"] and out["item"] is None and out["withheld"] == ["R1"]
     rows = _rows(repo)
@@ -52,7 +53,7 @@ def test_ruling_quotes_verbatim_and_adds_no_row(repo):
     assert ruling["ref"] == f"workflow.revise:{RUN}:out_of_scope"
 
 
-def test_identical_second_call_leaves_the_sizing_bytes_unchanged(repo):
+def test_identical_second_call_leaves_the_sizing_bytes_unchanged(repo) -> None:
     _revise(repo, verbatim=WORDS, out_of_scope=["R1"])
     first = (repo / REL).read_bytes()
     out = _revise(repo, verbatim=WORDS, out_of_scope=["R1"])
@@ -61,20 +62,20 @@ def test_identical_second_call_leaves_the_sizing_bytes_unchanged(repo):
     assert len(_rows(repo)) == 2
 
 
-def test_refire_reply_is_refire_not_revise_plan(repo, monkeypatch):
+def test_refire_reply_is_refire_not_revise_plan(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(run_token, "is_live", lambda root, run_id: False)
     out = _revise(repo, verbatim=WORDS, out_of_scope=["R1"])
     assert out["next"]["kind"] == "refire"
 
 
-def test_verbatim_without_out_of_scope_still_appends_a_row(repo):
+def test_verbatim_without_out_of_scope_still_appends_a_row(repo) -> None:
     out = _revise(repo, verbatim="also add a changelog entry")
     assert out["item"] == "R3"
     rows = _rows(repo)
     assert len(rows) == 3 and rows[-1]["anchor"].startswith("revision@")
 
 
-def test_old_shape_ref_reads_withheld_by_revision(repo):
+def test_old_shape_ref_reads_withheld_by_revision(repo) -> None:
     def edit(rows):
         rows[0] = {
             **rows[0], "status": "deferred",

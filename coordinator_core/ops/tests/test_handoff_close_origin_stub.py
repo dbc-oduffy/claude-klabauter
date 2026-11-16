@@ -37,6 +37,7 @@ import asyncio
 from pathlib import Path
 
 import coordinator_core.ops.handoff_close_origin_stub as m
+import pytest
 
 
 def _run(coro):
@@ -96,8 +97,8 @@ def _complete_proof(deliverable_id: str = "dlv-d1") -> dict:
 
 
 def test_try_close_reports_live_children_distinct_reason_and_relative_paths(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     worktree = tmp_path
     stub_path = _seed_stub(worktree)
     blocker_abs = str(worktree / "state" / "handoffs" / "blocker.md")
@@ -120,8 +121,8 @@ def test_try_close_reports_live_children_distinct_reason_and_relative_paths(
 
 
 def test_try_close_reports_indeterminate_distinct_reason_and_guard_error(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     worktree = tmp_path
     stub_path = _seed_stub(worktree)
 
@@ -142,7 +143,7 @@ def test_try_close_reports_indeterminate_distinct_reason_and_guard_error(
     assert skipped["guard_error"] == "unscannable subtree: boom"
 
 
-def test_is_complete_delivery_proof_accepts_only_the_full_condition_set():
+def test_is_complete_delivery_proof_accepts_only_the_full_condition_set() -> None:
     assert m._is_complete_delivery_proof(_complete_proof()) is True
     assert m._is_complete_delivery_proof(None) is False
     assert m._is_complete_delivery_proof({}) is False
@@ -161,8 +162,8 @@ def test_is_complete_delivery_proof_accepts_only_the_full_condition_set():
 
 
 def test_try_close_complete_matching_proof_closes_without_consulting_guard(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     worktree = tmp_path
     stub_path = _seed_stub(worktree, deliverable_id="dlv-d1")
     _fake_git_common_dir(worktree, monkeypatch)
@@ -192,8 +193,8 @@ def test_try_close_complete_matching_proof_closes_without_consulting_guard(
 
 
 def test_try_close_proof_deliverable_id_whitespace_padding_still_matches(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     worktree = tmp_path
     stub_path = _seed_stub(worktree, deliverable_id="dlv-d1")
     _fake_git_common_dir(worktree, monkeypatch)
@@ -222,7 +223,7 @@ def test_try_close_proof_deliverable_id_whitespace_padding_still_matches(
     assert closed["stub_path"] == "state/handoffs/origin-stub.md"
 
 
-def test_try_close_guard_fallback_close_reports_guard_basis(tmp_path, monkeypatch):
+def test_try_close_guard_fallback_close_reports_guard_basis(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     worktree = tmp_path
     stub_path = _seed_stub(worktree)
     _fake_git_common_dir(worktree, monkeypatch)
@@ -243,8 +244,8 @@ def test_try_close_guard_fallback_close_reports_guard_basis(tmp_path, monkeypatc
 
 
 def test_try_close_proof_for_mismatched_deliverable_id_falls_back_to_guard(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     worktree = tmp_path
     stub_path = _seed_stub(worktree, deliverable_id="d1")
 
@@ -263,7 +264,7 @@ def test_try_close_proof_for_mismatched_deliverable_id_falls_back_to_guard(
     assert skipped["reason"] == "guard-declined-live-children"
 
 
-def test_try_close_incomplete_proof_falls_back_to_guard(tmp_path, monkeypatch):
+def test_try_close_incomplete_proof_falls_back_to_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     worktree = tmp_path
     stub_path = _seed_stub(worktree, deliverable_id="d1")
 
@@ -293,7 +294,7 @@ def test_try_close_incomplete_proof_falls_back_to_guard(tmp_path, monkeypatch):
     assert skipped2["reason"] == "guard-declined-live-children"
 
 
-def test_try_close_absent_proof_preserves_today_behaviour(tmp_path, monkeypatch):
+def test_try_close_absent_proof_preserves_today_behaviour(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     worktree = tmp_path
     stub_path = _seed_stub(worktree, deliverable_id="dlv-d1")
     _fake_git_common_dir(worktree, monkeypatch)
@@ -313,12 +314,12 @@ def test_try_close_absent_proof_preserves_today_behaviour(tmp_path, monkeypatch)
     assert closed["close_basis"] == m.CLOSE_BASIS_GUARD
 
 
-def test_is_complete_delivery_proof_rejects_zero_commit_required_count():
+def test_is_complete_delivery_proof_rejects_zero_commit_required_count() -> None:
     proof = {**_complete_proof(), "commit_required_chunk_count": 0}
     assert m._is_complete_delivery_proof(proof) is False
 
 
-def test_is_complete_delivery_proof_rejects_missing_or_wrong_typed_count():
+def test_is_complete_delivery_proof_rejects_missing_or_wrong_typed_count() -> None:
     assert (
         m._is_complete_delivery_proof(
             {k: v for k, v in _complete_proof().items() if k != "commit_required_chunk_count"}
@@ -339,7 +340,7 @@ def test_is_complete_delivery_proof_rejects_missing_or_wrong_typed_count():
     )
 
 
-def test_try_close_zero_commit_required_proof_falls_back_to_guard(tmp_path, monkeypatch):
+def test_try_close_zero_commit_required_proof_falls_back_to_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     worktree = tmp_path
     stub_path = _seed_stub(worktree, deliverable_id="dlv-d1")
 
@@ -359,12 +360,12 @@ def test_try_close_zero_commit_required_proof_falls_back_to_guard(tmp_path, monk
     assert skipped["reason"] == "guard-declined-live-children"
 
 
-def test_is_complete_delivery_proof_missing_key_vs_empty_list_for_missing_chunk_ids():
+def test_is_complete_delivery_proof_missing_key_vs_empty_list_for_missing_chunk_ids() -> None:
     proof = {k: v for k, v in _complete_proof().items() if k != "missing_chunk_ids"}
     assert m._is_complete_delivery_proof(proof) is False
 
 
-def test_try_close_stub_without_deliverable_id_falls_back_to_guard(tmp_path, monkeypatch):
+def test_try_close_stub_without_deliverable_id_falls_back_to_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     worktree = tmp_path
     stub_path = _seed_stub(worktree, deliverable_id=None)
     _fake_git_common_dir(worktree, monkeypatch)
@@ -397,7 +398,7 @@ def test_try_close_stub_without_deliverable_id_falls_back_to_guard(tmp_path, mon
     assert closed["close_basis"] == m.CLOSE_BASIS_GUARD
 
 
-def test_handler_coerces_non_dict_delivery_proof_safely(tmp_path, monkeypatch):
+def test_handler_coerces_non_dict_delivery_proof_safely(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     worktree = tmp_path
     (worktree / ".git").mkdir(parents=True, exist_ok=True)
     handoffs_dir = worktree / "state" / "handoffs"
@@ -413,7 +414,7 @@ def test_handler_coerces_non_dict_delivery_proof_safely(tmp_path, monkeypatch):
         assert result["exit_code"] == 1
 
 
-def test_handler_multi_stub_fan_out_reruns_proof_check_per_stub(tmp_path, monkeypatch):
+def test_handler_multi_stub_fan_out_reruns_proof_check_per_stub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     worktree = tmp_path
     _fake_git_common_dir(worktree, monkeypatch)
 
@@ -571,7 +572,7 @@ def _seed_plan(
     return plan
 
 
-def test_predecessor_handoff_closes_non_roadmap_spinoff_stub(tmp_path, monkeypatch):
+def test_predecessor_handoff_closes_non_roadmap_spinoff_stub(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     worktree = tmp_path
     _fake_git_common_dir(worktree, monkeypatch)
     _seed_non_roadmap_spinoff_stub(worktree)
@@ -600,7 +601,7 @@ def test_predecessor_handoff_closes_non_roadmap_spinoff_stub(tmp_path, monkeypat
     assert closed_entry["stub_id"] is None
 
 
-def test_predecessor_handoff_shipped_stub_excluded_not_no_candidates(tmp_path, monkeypatch):
+def test_predecessor_handoff_shipped_stub_excluded_not_no_candidates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     worktree = tmp_path
     (worktree / ".git").mkdir(parents=True, exist_ok=True)
     _seed_non_roadmap_spinoff_stub(worktree, deployment_state="shipped")
@@ -623,7 +624,7 @@ def test_predecessor_handoff_shipped_stub_excluded_not_no_candidates(tmp_path, m
     assert excluded[0]["exclusion_reason"] == "state-not-eligible"
 
 
-def test_predecessor_handoff_dedupes_against_pair_leg(tmp_path, monkeypatch):
+def test_predecessor_handoff_dedupes_against_pair_leg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     worktree = tmp_path
     _fake_git_common_dir(worktree, monkeypatch)
     stub = _seed_stub(worktree)
@@ -657,7 +658,7 @@ def test_predecessor_handoff_dedupes_against_pair_leg(tmp_path, monkeypatch):
     assert len(close_calls) == 1
 
 
-def test_predecessor_handoff_absent_is_byte_identical_to_today(tmp_path, monkeypatch):
+def test_predecessor_handoff_absent_is_byte_identical_to_today(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     worktree = tmp_path
     (worktree / ".git").mkdir(parents=True, exist_ok=True)
     _seed_plan(worktree)
@@ -673,7 +674,7 @@ def test_predecessor_handoff_absent_is_byte_identical_to_today(tmp_path, monkeyp
     assert result["pairs_resolved"] == 0
 
 
-def test_predecessor_handoff_nonexistent_path_does_not_crash(tmp_path, monkeypatch):
+def test_predecessor_handoff_nonexistent_path_does_not_crash(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     worktree = tmp_path
     (worktree / ".git").mkdir(parents=True, exist_ok=True)
     _seed_plan(
@@ -690,7 +691,7 @@ def test_predecessor_handoff_nonexistent_path_does_not_crash(tmp_path, monkeypat
     assert result["skipped"] == []
 
 
-def test_op_resolves_pair_through_imported_read_pair(tmp_path, monkeypatch):
+def test_op_resolves_pair_through_imported_read_pair(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.ops.origin_stub_staleness as staleness
 
     assert m.read_pair is staleness.read_pair
@@ -717,7 +718,7 @@ def test_op_resolves_pair_through_imported_read_pair(tmp_path, monkeypatch):
     assert result["skipped"][0]["reason"] == "no-match"
 
 
-def test_predecessor_handoff_non_baton_kind_refused(tmp_path, monkeypatch):
+def test_predecessor_handoff_non_baton_kind_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     worktree = tmp_path
     (worktree / ".git").mkdir(parents=True, exist_ok=True)
     _seed_session_handoff(worktree)
@@ -736,8 +737,8 @@ def test_predecessor_handoff_non_baton_kind_refused(tmp_path, monkeypatch):
 
 
 def test_handler_closes_the_origin_stub_of_a_plan_already_archived_to_specs(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     worktree = tmp_path
     stub_path = _seed_stub(worktree)
     _fake_git_common_dir(worktree, monkeypatch)

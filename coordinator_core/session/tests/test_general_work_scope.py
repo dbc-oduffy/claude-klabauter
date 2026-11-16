@@ -3,31 +3,33 @@
 from __future__ import annotations
 
 from coordinator_core.session import general_work_scope as gws
+from pathlib import Path
+import pytest
 
 
-def _registry(monkeypatch, values: dict, flat: dict | None = None):
+def _registry(monkeypatch, values: dict, flat: dict | None = None) -> None:
     monkeypatch.setattr(gws.machine_resolver, "registry_get", lambda k: values.get(k))
     monkeypatch.setattr(gws.machine_resolver, "merged_flat_registry", lambda: flat if flat is not None else {})
 
 
-def test_root_declared(monkeypatch, tmp_path):
+def test_root_declared(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _registry(monkeypatch, {"coordinator.general_work_root": str(tmp_path)})
     assert gws.general_work_root() == str(tmp_path)
 
 
-def test_root_fallback_key(monkeypatch, tmp_path):
+def test_root_fallback_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _registry(monkeypatch, {"repos.general_work": str(tmp_path)})
     assert gws.general_work_root() == str(tmp_path)
 
 
-def test_root_unset_and_empty(monkeypatch):
+def test_root_unset_and_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     _registry(monkeypatch, {})
     assert gws.general_work_root() is None
     _registry(monkeypatch, {"coordinator.general_work_root": ""})
     assert gws.general_work_root() is None
 
 
-def test_root_unreadable(monkeypatch, capsys):
+def test_root_unreadable(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     def boom(_k):
         raise RuntimeError("bad registry")
 
@@ -36,7 +38,7 @@ def test_root_unreadable(monkeypatch, capsys):
     assert "unreadable" in capsys.readouterr().err
 
 
-def test_session_under_and_outside_root(monkeypatch, tmp_path):
+def test_session_under_and_outside_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "gw"
     (root / "sub").mkdir(parents=True)
     other = tmp_path / "other"
@@ -49,12 +51,12 @@ def test_session_under_and_outside_root(monkeypatch, tmp_path):
     assert not gws.in_general_work_session("")
 
 
-def test_session_false_when_root_unset(monkeypatch, tmp_path):
+def test_session_false_when_root_unset(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _registry(monkeypatch, {})
     assert not gws.in_general_work_session(str(tmp_path))
 
 
-def test_foreign_checkout_none_without_git_ancestor(monkeypatch, tmp_path):
+def test_foreign_checkout_none_without_git_ancestor(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "gw"
     plain = tmp_path / "plain"
     root.mkdir()
@@ -63,14 +65,14 @@ def test_foreign_checkout_none_without_git_ancestor(monkeypatch, tmp_path):
     assert gws.foreign_checkout(str(plain / "f.txt")) is None
 
 
-def test_foreign_checkout_none_under_root_holding_git(monkeypatch, tmp_path):
+def test_foreign_checkout_none_under_root_holding_git(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "gw"
     (root / ".git").mkdir(parents=True)
     _registry(monkeypatch, {"coordinator.general_work_root": str(root)}, {"repos.general_work": str(root)})
     assert gws.foreign_checkout(str(root / "a" / "f.txt")) is None
 
 
-def test_foreign_checkout_returns_sibling_checkout(monkeypatch, tmp_path):
+def test_foreign_checkout_returns_sibling_checkout(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "gw"
     sib = tmp_path / "sib"
     root.mkdir()
@@ -80,14 +82,14 @@ def test_foreign_checkout_returns_sibling_checkout(monkeypatch, tmp_path):
     assert hit is not None and hit.endswith("sib")
 
 
-def test_foreign_checkout_registry_root_that_is_general_work_is_not_foreign(monkeypatch, tmp_path):
+def test_foreign_checkout_registry_root_that_is_general_work_is_not_foreign(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "gw"
     root.mkdir()
     _registry(monkeypatch, {}, {"repos.general_work": str(root)})
     assert gws.foreign_checkout(str(root / "f.txt"), root=str(root)) is None
 
 
-def test_foreign_checkout_registry_root_other_repo_is_foreign(monkeypatch, tmp_path):
+def test_foreign_checkout_registry_root_other_repo_is_foreign(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "gw"
     other = tmp_path / "other"
     root.mkdir()

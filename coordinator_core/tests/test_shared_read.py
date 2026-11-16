@@ -9,11 +9,12 @@ import sys
 import pytest
 
 from coordinator_core.shared_read import read_bytes_shared
+from pathlib import Path
 
 _WIN = sys.platform == "win32"
 
 
-def test_returns_exact_bytes(tmp_path):
+def test_returns_exact_bytes(tmp_path: Path) -> None:
     p = tmp_path / "f.bin"
     data = b"a\r\nb\x00\xff" * 1000
     p.write_bytes(data)
@@ -21,14 +22,14 @@ def test_returns_exact_bytes(tmp_path):
     assert read_bytes_shared(str(p)) == data
 
 
-def test_missing_file_raises_filenotfound(tmp_path):
+def test_missing_file_raises_filenotfound(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         read_bytes_shared(tmp_path / "nope.toml")
     with pytest.raises(FileNotFoundError):
         read_bytes_shared(tmp_path / "nodir" / "nope.toml")
 
 
-def test_posix_path_reads_bytes(tmp_path):
+def test_posix_path_reads_bytes(tmp_path: Path) -> None:
     if _WIN:
         pytest.skip("POSIX-only branch")
     p = tmp_path / "f"
@@ -75,7 +76,7 @@ def _posix_rename(src: str, dst: str) -> None:
 
 
 @pytest.mark.skipif(not _WIN, reason="Windows share-mode semantics")
-def test_open_shared_handle_does_not_block_posix_rename(tmp_path):
+def test_open_shared_handle_does_not_block_posix_rename(tmp_path: Path) -> None:
     import _winapi
     import msvcrt
 
@@ -94,7 +95,7 @@ def test_open_shared_handle_does_not_block_posix_rename(tmp_path):
 
 
 @pytest.mark.skipif(not _WIN, reason="Windows share-mode semantics")
-def test_plain_open_holder_blocks_posix_rename(tmp_path):
+def test_plain_open_holder_blocks_posix_rename(tmp_path: Path) -> None:
     target = tmp_path / "registry.toml"
     target.write_bytes(b"old")
     other = tmp_path / "registry.toml.tmp"
@@ -108,7 +109,7 @@ def test_plain_open_holder_blocks_posix_rename(tmp_path):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @pytest.mark.skipif(not _WIN, reason="Windows import path")
-def test_winapi_path_imports_no_ctypes(tmp_path):
+def test_winapi_path_imports_no_ctypes(tmp_path: Path) -> None:
     p = tmp_path / "f"
     p.write_bytes(b"x")
     code = (

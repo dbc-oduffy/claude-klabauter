@@ -16,9 +16,10 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
 )
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
+from pathlib import Path
 
 
-def _wave_row(id_, writes, surface="dispatch_emit"):
+def _wave_row(id_, writes, surface: str = "dispatch_emit") -> WaveRow:
     return WaveRow(
         id=id_,
         title=f"title-{id_}",
@@ -29,7 +30,7 @@ def _wave_row(id_, writes, surface="dispatch_emit"):
     )
 
 
-def test_commit_pathspec_derives_from_declared_writes():
+def test_commit_pathspec_derives_from_declared_writes() -> None:
     wave = [
         _wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"]),
         _wave_row("C2", ["coordinator_core/ops/dispatch_emit/wave_map.py"]),
@@ -40,7 +41,7 @@ def test_commit_pathspec_derives_from_declared_writes():
     ]
 
 
-def test_commit_pathspec_dedupes_overlapping_declared_writes():
+def test_commit_pathspec_dedupes_overlapping_declared_writes() -> None:
     wave = [
         _wave_row("C1", ["a.py", "shared.py"]),
         _wave_row("C2", ["shared.py", "b.py"]),
@@ -48,7 +49,7 @@ def test_commit_pathspec_dedupes_overlapping_declared_writes():
     assert commit_pathspec(wave) == ["a.py", "shared.py", "b.py"]
 
 
-def test_commit_pathspec_falls_back_to_concrete_surface():
+def test_commit_pathspec_falls_back_to_concrete_surface() -> None:
     # A wave where at least one row declares writes: is not refused; a
     # sibling row with UNDECLARED writes and a concrete surface still
     # contributes via the surface fallback.
@@ -62,7 +63,7 @@ def test_commit_pathspec_falls_back_to_concrete_surface():
     ]
 
 
-def test_commit_pathspec_literalizes_app_router_bracket_paths():
+def test_commit_pathspec_literalizes_app_router_bracket_paths() -> None:
     # klabauter#71 F24a: git reads a bare `[slug]` as glob magic, so the
     # commit pathspec must carry the `:(literal)` prefix downstream.
     wave = [_wave_row("C1", ["src/app/(main)/players/[slug]/page.tsx"])]
@@ -71,13 +72,13 @@ def test_commit_pathspec_literalizes_app_router_bracket_paths():
     ]
 
 
-def test_commit_pathspec_ignores_non_concrete_surface_fallback():
+def test_commit_pathspec_ignores_non_concrete_surface_fallback() -> None:
     wave = [_wave_row("C1", UNDECLARED, surface="dispatch_emit")]
     with pytest.raises(NoWritesDeclaredError, match="C1"):
         commit_pathspec(wave)
 
 
-def test_commit_pathspec_refuses_when_no_row_declares_writes_naming_rows():
+def test_commit_pathspec_refuses_when_no_row_declares_writes_naming_rows() -> None:
     wave = [_wave_row("C1", UNDECLARED), _wave_row("C2", UNDECLARED)]
     with pytest.raises(NoWritesDeclaredError) as excinfo:
         commit_pathspec(wave)
@@ -85,12 +86,12 @@ def test_commit_pathspec_refuses_when_no_row_declares_writes_naming_rows():
     assert "'C2'" in str(excinfo.value)
 
 
-def test_commit_pathspec_does_not_refuse_when_at_least_one_row_declares_writes():
+def test_commit_pathspec_does_not_refuse_when_at_least_one_row_declares_writes() -> None:
     wave = [_wave_row("C1", ["a.py"]), _wave_row("C2", UNDECLARED, surface="dispatch_emit")]
     assert commit_pathspec(wave) == ["a.py"]
 
 
-def test_commit_pathspec_warns_and_refuses_when_every_row_declares_empty_writes_naming_rows(caplog):
+def test_commit_pathspec_warns_and_refuses_when_every_row_declares_empty_writes_naming_rows(caplog: pytest.LogCaptureFixture) -> None:
     # writes: [] is an explicit declaration, distinct from UNDECLARED -- the
     # AC4 "no row declares writes:" check does not fire (every row DID
     # declare). But every row is also zero-contributing, so the union is
@@ -111,7 +112,7 @@ def test_commit_pathspec_warns_and_refuses_when_every_row_declares_empty_writes_
     assert "'C2'" in str(excinfo.value)
 
 
-def test_commit_pathspec_warns_but_returns_real_paths_when_one_row_declares_empty_writes_sharing_a_wave(caplog):
+def test_commit_pathspec_warns_but_returns_real_paths_when_one_row_declares_empty_writes_sharing_a_wave(caplog: pytest.LogCaptureFixture) -> None:
     wave = [_wave_row("C1", ["a.py"]), _wave_row("C2", [])]
     with caplog.at_level("WARNING"):
         assert commit_pathspec(wave) == ["a.py"]
@@ -119,7 +120,7 @@ def test_commit_pathspec_warns_but_returns_real_paths_when_one_row_declares_empt
     assert "'C1'" not in caplog.text
 
 
-def test_zero_contribution_warning_names_a_row_once_per_emit_and_again_on_the_next(caplog):
+def test_zero_contribution_warning_names_a_row_once_per_emit_and_again_on_the_next(caplog: pytest.LogCaptureFixture) -> None:
     rows = [_wave_row("C1", ["a.py"]), _wave_row("C2", [])]
     with caplog.at_level("WARNING"):
         for _ in range(4):
@@ -134,7 +135,7 @@ def test_zero_contribution_warning_names_a_row_once_per_emit_and_again_on_the_ne
     assert caplog.text.count("'C2'") == 1
 
 
-def test_commit_pathspec_warns_but_returns_surface_fallback_when_empty_writes_row_shares_a_wave(caplog):
+def test_commit_pathspec_warns_but_returns_surface_fallback_when_empty_writes_row_shares_a_wave(caplog: pytest.LogCaptureFixture) -> None:
     wave = [
         _wave_row("C1", UNDECLARED, surface="coordinator_core/ops/dispatch_emit/pathspec.py"),
         _wave_row("C2", []),
@@ -144,7 +145,7 @@ def test_commit_pathspec_warns_but_returns_surface_fallback_when_empty_writes_ro
     assert "'C2'" in caplog.text
 
 
-def test_commit_pathspec_refuses_directory_shaped_write_naming_row_and_path():
+def test_commit_pathspec_refuses_directory_shaped_write_naming_row_and_path() -> None:
     wave = [_wave_row("C4", ["state/memo-outbox/sent/"])]
     with pytest.raises(DirectoryShapedWriteError) as excinfo:
         commit_pathspec(wave)
@@ -152,12 +153,12 @@ def test_commit_pathspec_refuses_directory_shaped_write_naming_row_and_path():
     assert "state/memo-outbox/sent/" in str(excinfo.value)
 
 
-def test_commit_pathspec_normal_file_writes_are_unaffected():
+def test_commit_pathspec_normal_file_writes_are_unaffected() -> None:
     wave = [_wave_row("C1", ["a.py", "sub/b.py"])]
     assert commit_pathspec(wave) == ["a.py", "sub/b.py"]
 
 
-def test_declared_paths_surface_fallback_still_behaves_as_before():
+def test_declared_paths_surface_fallback_still_behaves_as_before() -> None:
     # The surface:-fallback path (UNDECLARED writes) is untouched by the
     # new writes:-primary-path check -- is_concrete_surface's own
     # trailing-slash check already governed this path before this fix and
@@ -167,7 +168,7 @@ def test_declared_paths_surface_fallback_still_behaves_as_before():
         commit_pathspec(wave)
 
 
-def test_commit_pathspec_ac4_refusal_still_fires_when_no_row_declares_writes_at_all():
+def test_commit_pathspec_ac4_refusal_still_fires_when_no_row_declares_writes_at_all() -> None:
     # Guard against over-correction: downgrading the per-row zero-
     # contribution case to a warning must not have touched the wave-level
     # AC4 refusal, which fires when NOT ONE row in the wave declares
@@ -179,27 +180,27 @@ def test_commit_pathspec_ac4_refusal_still_fires_when_no_row_declares_writes_at_
     assert "'C2'" in str(excinfo.value)
 
 
-def test_is_concrete_surface_true_for_suffixed_path():
+def test_is_concrete_surface_true_for_suffixed_path() -> None:
     assert is_concrete_surface("coordinator_core/ops/dispatch_emit/pathspec.py") is True
 
 
-def test_is_concrete_surface_false_for_trailing_slash():
+def test_is_concrete_surface_false_for_trailing_slash() -> None:
     assert is_concrete_surface("coordinator_core/ops/dispatch_emit/") is False
 
 
-def test_is_concrete_surface_false_for_bare_package_name():
+def test_is_concrete_surface_false_for_bare_package_name() -> None:
     assert is_concrete_surface("dispatch_emit") is False
 
 
-def test_is_concrete_surface_false_for_no_suffix_no_matching_file():
+def test_is_concrete_surface_false_for_no_suffix_no_matching_file() -> None:
     assert is_concrete_surface("coordinator_core/ops/dispatch_emit/nonexistent_module") is False
 
 
-def test_is_concrete_surface_false_for_empty_string():
+def test_is_concrete_surface_false_for_empty_string() -> None:
     assert is_concrete_surface("") is False
 
 
-def test_terminal_test_scope_maps_written_paths_to_test_targets():
+def test_terminal_test_scope_maps_written_paths_to_test_targets() -> None:
     waves = [
         [_wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"])],
         [_wave_row("C2", ["coordinator_core/ops/dispatch_emit/wave_map.py"])],
@@ -211,7 +212,7 @@ def test_terminal_test_scope_maps_written_paths_to_test_targets():
     ]
 
 
-def test_terminal_test_scope_refuses_whole_spine_no_writes_declared_naming_rows():
+def test_terminal_test_scope_refuses_whole_spine_no_writes_declared_naming_rows() -> None:
     waves = [[_wave_row("C1", UNDECLARED)], [_wave_row("C2", UNDECLARED)]]
     with pytest.raises(NoWritesDeclaredError) as excinfo:
         terminal_test_scope(waves)
@@ -219,7 +220,7 @@ def test_terminal_test_scope_refuses_whole_spine_no_writes_declared_naming_rows(
     assert "'C2'" in str(excinfo.value)
 
 
-def test_terminal_test_scope_refuses_when_every_written_path_is_doc_only():
+def test_terminal_test_scope_refuses_when_every_written_path_is_doc_only() -> None:
     # Declares writes: (passes AC10's literal wording) but every path is a
     # doc, so no test target exists -- must refuse (AC16), not report an
     # empty scope as green.
@@ -239,7 +240,7 @@ def test_terminal_test_scope_refuses_when_every_written_path_is_doc_only():
     assert terminal_test_scope(waves) == []
 
 
-def test_terminal_test_scope_drops_doc_paths_but_keeps_mapped_ones():
+def test_terminal_test_scope_drops_doc_paths_but_keeps_mapped_ones() -> None:
     waves = [
         [
             _wave_row(
@@ -255,13 +256,13 @@ def test_terminal_test_scope_drops_doc_paths_but_keeps_mapped_ones():
     assert scope == ["coordinator_core/ops/dispatch_emit/tests/test_spine_read.py"]
 
 
-def test_terminal_test_scope_refuses_when_every_row_declares_empty_writes():
+def test_terminal_test_scope_refuses_when_every_row_declares_empty_writes() -> None:
     waves = [[_wave_row("C1", [])], [_wave_row("C2", [])]]
     with pytest.raises(NoTestTargetError):
         terminal_test_scope(waves)
 
 
-def test_terminal_test_scope_resolves_a_data_fixture_to_its_driver_test(tmp_path):
+def test_terminal_test_scope_resolves_a_data_fixture_to_its_driver_test(tmp_path: Path) -> None:
     driver = tmp_path / "coordinator_core/install/tests/test_engine_root_conformance.py"
     driver.parent.mkdir(parents=True)
     driver.write_text("", encoding="utf-8")
@@ -270,7 +271,7 @@ def test_terminal_test_scope_resolves_a_data_fixture_to_its_driver_test(tmp_path
     assert scope == ["coordinator_core/install/tests/test_engine_root_conformance.py"]
 
 
-def test_terminal_test_scope_resolves_a_hyphenated_stem_to_an_importable_test_name(tmp_path):
+def test_terminal_test_scope_resolves_a_hyphenated_stem_to_an_importable_test_name(tmp_path: Path) -> None:
     driver = tmp_path / "coordinator/bin/tests/test_compose_review_wave.py"
     driver.parent.mkdir(parents=True)
     driver.write_text("", encoding="utf-8")
@@ -279,7 +280,7 @@ def test_terminal_test_scope_resolves_a_hyphenated_stem_to_an_importable_test_na
     assert scope == ["coordinator/bin/tests/test_compose_review_wave.py"]
 
 
-def test_terminal_test_scope_resolves_non_code_by_stem_not_by_proximity(tmp_path):
+def test_terminal_test_scope_resolves_non_code_by_stem_not_by_proximity(tmp_path: Path) -> None:
     neighbour = tmp_path / "docs/wiki/tests/test_something_else.py"
     neighbour.parent.mkdir(parents=True)
     neighbour.write_text(
@@ -296,7 +297,7 @@ def test_terminal_test_scope_resolves_non_code_by_stem_not_by_proximity(tmp_path
     )
 
 
-def test_terminal_test_scope_resolves_a_flat_test_directory_at_an_ancestor(tmp_path):
+def test_terminal_test_scope_resolves_a_flat_test_directory_at_an_ancestor(tmp_path: Path) -> None:
     driver = tmp_path / "coordinator/tests/test_emit_dispatch_workflow.py"
     driver.parent.mkdir(parents=True)
     driver.write_text("", encoding="utf-8")
@@ -305,7 +306,7 @@ def test_terminal_test_scope_resolves_a_flat_test_directory_at_an_ancestor(tmp_p
     assert scope == ["coordinator/tests/test_emit_dispatch_workflow.py"]
 
 
-def test_terminal_test_scope_prefers_the_nearest_stem_named_test(tmp_path):
+def test_terminal_test_scope_prefers_the_nearest_stem_named_test(tmp_path: Path) -> None:
     for rel in (
         "coordinator/bin/tests/test_emit_dispatch_workflow.py",
         "coordinator/tests/test_emit_dispatch_workflow.py",
@@ -318,13 +319,13 @@ def test_terminal_test_scope_prefers_the_nearest_stem_named_test(tmp_path):
     assert scope == ["coordinator/bin/tests/test_emit_dispatch_workflow.py"]
 
 
-def test_terminal_test_scope_maps_a_written_test_file_to_itself(tmp_path):
+def test_terminal_test_scope_maps_a_written_test_file_to_itself(tmp_path: Path) -> None:
     waves = [[_wave_row("C1", ["coordinator_core/ops/tests/test_new_surface.py"])]]
     scope = terminal_test_scope(waves, repo_root=tmp_path)
     assert scope == ["coordinator_core/ops/tests/test_new_surface.py"]
 
 
-def test_terminal_test_scope_resolves_a_test_this_spine_has_yet_to_write(tmp_path):
+def test_terminal_test_scope_resolves_a_test_this_spine_has_yet_to_write(tmp_path: Path) -> None:
     waves = [
         [
             _wave_row(
@@ -340,7 +341,7 @@ def test_terminal_test_scope_resolves_a_test_this_spine_has_yet_to_write(tmp_pat
     assert scope == ["coordinator_core/ops/tests/test_brand_new.py"]
 
 
-def test_terminal_test_scope_resolves_a_declared_test_written_by_a_later_row(tmp_path):
+def test_terminal_test_scope_resolves_a_declared_test_written_by_a_later_row(tmp_path: Path) -> None:
     waves = [
         [_wave_row("C1", ["coordinator_core/ops/brand_new.py"])],
         [_wave_row("C2", ["coordinator_core/ops/tests/test_brand_new.py"])],
@@ -349,7 +350,7 @@ def test_terminal_test_scope_resolves_a_declared_test_written_by_a_later_row(tmp
     assert scope == ["coordinator_core/ops/tests/test_brand_new.py"]
 
 
-def test_declared_optimism_does_not_resolve_a_path_nobody_declares(tmp_path):
+def test_declared_optimism_does_not_resolve_a_path_nobody_declares(tmp_path: Path) -> None:
     waves = [[_wave_row("C1", ["docs/wiki/machine-load-norm.md"])]]
     assert terminal_test_scope(waves, repo_root=tmp_path) == []
     assert (
@@ -360,7 +361,7 @@ def test_declared_optimism_does_not_resolve_a_path_nobody_declares(tmp_path):
     )
 
 
-def test_terminal_test_scope_is_not_the_same_union_as_commit_pathspec():
+def test_terminal_test_scope_is_not_the_same_union_as_commit_pathspec() -> None:
     wave = [
         _wave_row(
             "C1",
@@ -380,7 +381,7 @@ if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
 
 
-def test_terminal_test_scope_refuses_an_uncovered_python_path():
+def test_terminal_test_scope_refuses_an_uncovered_python_path() -> None:
     waves = [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/nonexistent_module.py"])]]
     with pytest.raises(NoTestTargetError) as excinfo:
         terminal_test_scope(waves)
@@ -388,7 +389,7 @@ def test_terminal_test_scope_refuses_an_uncovered_python_path():
     assert "testable surfaces with no target" in str(excinfo.value)
 
 
-def test_terminal_test_scope_refuses_a_wave_mixing_prose_with_an_uncovered_module():
+def test_terminal_test_scope_refuses_a_wave_mixing_prose_with_an_uncovered_module() -> None:
     waves = [
         [
             _wave_row(
@@ -405,7 +406,7 @@ def test_terminal_test_scope_refuses_a_wave_mixing_prose_with_an_uncovered_modul
     assert "nonexistent_module.py" in str(excinfo.value)
 
 
-def test_terminal_test_scope_is_empty_for_a_spine_that_writes_only_prose():
+def test_terminal_test_scope_is_empty_for_a_spine_that_writes_only_prose() -> None:
     waves = [
         [_wave_row("C6", ["state/audits/ue-cpp-embedding-ab/RESULTS-samples.md"])],
         [_wave_row("C11", ["state/audits/ue-cpp-embedding-ab/RESULTS.md"])],
@@ -413,13 +414,13 @@ def test_terminal_test_scope_is_empty_for_a_spine_that_writes_only_prose():
     assert terminal_test_scope(waves) == []
 
 
-def test_a_prose_spine_does_not_swallow_the_zero_contribution_refusal():
+def test_a_prose_spine_does_not_swallow_the_zero_contribution_refusal() -> None:
     waves = [[_wave_row("C1", [])], [_wave_row("C2", [])]]
     with pytest.raises(NoTestTargetError):
         terminal_test_scope(waves)
 
 
-def _write_local_md(root, suffixes):
+def _write_local_md(root, suffixes) -> None:
     (root / "coordinator.local.md").write_text(
         "---\n"
         f"test_locator_suffixes: [{', '.join(suffixes)}]\n"
@@ -428,7 +429,7 @@ def _write_local_md(root, suffixes):
     )
 
 
-def test_terminal_test_scope_resolves_a_configured_non_py_suffix(tmp_path):
+def test_terminal_test_scope_resolves_a_configured_non_py_suffix(tmp_path: Path) -> None:
     _write_local_md(tmp_path, ["*.test.ts"])
     driver = tmp_path / "src/widgets/foo.test.ts"
     driver.parent.mkdir(parents=True)
@@ -438,7 +439,7 @@ def test_terminal_test_scope_resolves_a_configured_non_py_suffix(tmp_path):
     assert scope == ["src/widgets/foo.test.ts"]
 
 
-def test_map_written_path_to_test_target_resolves_a_configured_non_py_suffix(tmp_path):
+def test_map_written_path_to_test_target_resolves_a_configured_non_py_suffix(tmp_path: Path) -> None:
     _write_local_md(tmp_path, ["*.test.ts"])
     driver = tmp_path / "src/widgets/foo.test.ts"
     driver.parent.mkdir(parents=True)
@@ -449,14 +450,14 @@ def test_map_written_path_to_test_target_resolves_a_configured_non_py_suffix(tmp
     )
 
 
-def test_a_written_test_locator_file_is_its_own_target(tmp_path):
+def test_a_written_test_locator_file_is_its_own_target(tmp_path: Path) -> None:
     _write_local_md(tmp_path, ["*.test.ts"])
     waves = [[_wave_row("C1", ["src/widgets/foo.test.ts"])]]
     scope = terminal_test_scope(waves, repo_root=tmp_path)
     assert scope == ["src/widgets/foo.test.ts"]
 
 
-def test_terminal_test_scope_treats_an_unresolved_configured_suffix_as_an_omission(tmp_path):
+def test_terminal_test_scope_treats_an_unresolved_configured_suffix_as_an_omission(tmp_path: Path) -> None:
     _write_local_md(tmp_path, ["*.test.ts"])
     waves = [[_wave_row("C1", ["src/widgets/bar.ts"])]]
     with pytest.raises(NoTestTargetError) as excinfo:
@@ -464,7 +465,7 @@ def test_terminal_test_scope_treats_an_unresolved_configured_suffix_as_an_omissi
     assert "bar.ts" in str(excinfo.value)
 
 
-def test_terminal_test_scope_does_not_derive_an_unconfigured_suffix(tmp_path):
+def test_terminal_test_scope_does_not_derive_an_unconfigured_suffix(tmp_path: Path) -> None:
     driver = tmp_path / "src/widgets/foo.test.ts"
     driver.parent.mkdir(parents=True)
     driver.write_text("", encoding="utf-8")
@@ -476,7 +477,7 @@ def test_terminal_test_scope_does_not_derive_an_unconfigured_suffix(tmp_path):
     )
 
 
-def test_candidate_test_targets_matches_suffix_by_own_source_suffix_not_prefix(tmp_path):
+def test_candidate_test_targets_matches_suffix_by_own_source_suffix_not_prefix(tmp_path: Path) -> None:
     # `_locator_source_suffix` reads a pattern's own trailing suffix
     # (`*.test.ts` -> `.ts`), so a path with a DIFFERENT suffix never matches
     # even though the pattern's literal string starts with `*.test`.
@@ -485,21 +486,21 @@ def test_candidate_test_targets_matches_suffix_by_own_source_suffix_not_prefix(t
     assert terminal_test_scope(waves, repo_root=tmp_path) == []
 
 
-def test_candidate_test_additions_derives_the_co_located_test_for_a_py_path():
+def test_candidate_test_additions_derives_the_co_located_test_for_a_py_path() -> None:
     assert candidate_test_additions(
         ["coordinator_core/ops/dispatch_emit/brand_new.py"]
     ) == ["coordinator_core/ops/dispatch_emit/tests/test_brand_new.py"]
 
 
-def test_candidate_test_additions_ignores_non_py_paths():
+def test_candidate_test_additions_ignores_non_py_paths() -> None:
     assert candidate_test_additions(["docs/wiki/dispatch-emit.md"]) == []
 
 
-def test_candidate_test_additions_ignores_a_path_that_is_already_a_test_file():
+def test_candidate_test_additions_ignores_a_path_that_is_already_a_test_file() -> None:
     assert candidate_test_additions(["coordinator_core/ops/tests/test_foo.py"]) == []
 
 
-def test_candidate_test_additions_dedupes_and_preserves_order():
+def test_candidate_test_additions_dedupes_and_preserves_order() -> None:
     assert candidate_test_additions(
         [
             "coordinator_core/ops/a.py",
@@ -512,17 +513,17 @@ def test_candidate_test_additions_dedupes_and_preserves_order():
     ]
 
 
-def test_candidate_test_additions_empty_for_an_empty_pathspec():
+def test_candidate_test_additions_empty_for_an_empty_pathspec() -> None:
     assert candidate_test_additions([]) == []
 
 
-def test_commit_pathspec_or_none_returns_the_same_pathspec_when_writes_exist():
+def test_commit_pathspec_or_none_returns_the_same_pathspec_when_writes_exist() -> None:
     wave = [_wave_row("C1", ["coordinator_core/ops/dispatch_emit/pathspec.py"])]
 
     assert commit_pathspec_or_none(wave) == commit_pathspec(wave)
 
 
-def test_commit_pathspec_or_none_degrades_undeclared_solo_row_to_none():
+def test_commit_pathspec_or_none_degrades_undeclared_solo_row_to_none() -> None:
     """Refusal shape 1: a single UNDECLARED, non-concrete-surface row. This is
     the shape that sank a whole plan's emission -- `_all_writes_declared_empty`
     cannot reach it, so `commit_pathspec` was called and raised."""
@@ -533,7 +534,7 @@ def test_commit_pathspec_or_none_degrades_undeclared_solo_row_to_none():
     assert commit_pathspec_or_none(wave) is None
 
 
-def test_commit_pathspec_or_none_degrades_all_empty_writes_to_none():
+def test_commit_pathspec_or_none_degrades_all_empty_writes_to_none() -> None:
     wave = [_wave_row("C1", []), _wave_row("C2", [])]
 
     with pytest.raises(NoWritesDeclaredError):
@@ -541,14 +542,14 @@ def test_commit_pathspec_or_none_degrades_all_empty_writes_to_none():
     assert commit_pathspec_or_none(wave) is None
 
 
-def test_commit_pathspec_or_none_still_raises_on_a_directory_shaped_write():
+def test_commit_pathspec_or_none_still_raises_on_a_directory_shaped_write() -> None:
     wave = [_wave_row("C1", ["coordinator_core/ops/dispatch_emit/"])]
 
     with pytest.raises(DirectoryShapedWriteError):
         commit_pathspec_or_none(wave)
 
 
-def test_commit_pathspec_or_none_never_returns_an_empty_list():
+def test_commit_pathspec_or_none_never_returns_an_empty_list() -> None:
     wave = [_wave_row("C1", ["coordinator_core/ops/dispatch_emit/pathspec.py"])]
 
     result = commit_pathspec_or_none(wave)
@@ -556,14 +557,14 @@ def test_commit_pathspec_or_none_never_returns_an_empty_list():
     assert result is not None and result != []
 
 
-def test_candidate_test_additions_skips_a_helper_already_under_tests():
+def test_candidate_test_additions_skips_a_helper_already_under_tests() -> None:
     assert candidate_test_additions(["tests/_libclang_host.py"]) == []
 
 
 @pytest.mark.parametrize("repo_root_given", [False, True])
 def test_candidate_test_additions_declares_no_test_for_a_dunder_module(
-    tmp_path, repo_root_given
-):
+    tmp_path: Path, repo_root_given
+) -> None:
     (tmp_path / "likeness/head_checks").mkdir(parents=True)
     (tmp_path / "likeness/tests").mkdir(parents=True)
     root = tmp_path if repo_root_given else None
@@ -573,7 +574,7 @@ def test_candidate_test_additions_declares_no_test_for_a_dunder_module(
     assert candidate_test_additions(["pkg/__init__.py"], root) == []
 
 
-def test_candidate_test_additions_still_pairs_an_ordinary_stem_beside_a_dunder(tmp_path):
+def test_candidate_test_additions_still_pairs_an_ordinary_stem_beside_a_dunder(tmp_path: Path) -> None:
     (tmp_path / "likeness/head_checks/tests").mkdir(parents=True)
     assert candidate_test_additions(
         ["likeness/head_checks/__main__.py","likeness/head_checks/check_x.py"],
@@ -581,7 +582,7 @@ def test_candidate_test_additions_still_pairs_an_ordinary_stem_beside_a_dunder(t
     ) == ["likeness/head_checks/tests/test_check_x.py"]
 
 
-def test_dunder_module_maps_to_no_terminal_test_target_even_when_declared(tmp_path):
+def test_dunder_module_maps_to_no_terminal_test_target_even_when_declared(tmp_path: Path) -> None:
     assert (
         _map_written_path_to_test_target(
             "likeness/head_checks/__main__.py",

@@ -7,6 +7,7 @@ import jsonschema
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import _MANIFEST_SCHEMA, compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+import pytest
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
@@ -31,11 +32,11 @@ def _halt(script: str) -> str:
     return script[start : script.index("}; }", start)]
 
 
-def test_the_bare_empty_items_halt_clause_is_gone(monkeypatch):
+def test_the_bare_empty_items_halt_clause_is_gone(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "!(_ledger.items ?? []).length" not in _script(monkeypatch)
 
 
-def test_ledger_ids_prefer_minted_manifest_ids_then_the_resume_verdict(monkeypatch):
+def test_ledger_ids_prefer_minted_manifest_ids_then_the_resume_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert (
         "_manifest?.ledger_item_ids?.length ? _manifest.ledger_item_ids "
@@ -44,7 +45,7 @@ def test_ledger_ids_prefer_minted_manifest_ids_then_the_resume_verdict(monkeypat
     assert "_gate.resume_ledger?.withheld_ids ?? _manifest?.withheld_ids ?? null" in script
 
 
-def test_an_empty_verdict_passes_iff_no_items_are_owed_and_some_row_is_withheld(monkeypatch):
+def test_an_empty_verdict_passes_iff_no_items_are_owed_and_some_row_is_withheld(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert (
         "const _allRuledOut = Array.isArray(_ledgerIds) && !_ledgerIds.length "
@@ -54,7 +55,7 @@ def test_an_empty_verdict_passes_iff_no_items_are_owed_and_some_row_is_withheld(
     assert "!_ledger || _emptyVerdict || _ledgerBlocking(_ledger).length" in script
 
 
-def test_an_owed_but_unjudged_empty_verdict_blocks_on_the_owed_ids(monkeypatch):
+def test_an_owed_but_unjudged_empty_verdict_blocks_on_the_owed_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert "const _owedIds = _emptyVerdict && Array.isArray(_ledgerIds) ? _ledgerIds : [];" in script
     text = _halt(script)
@@ -62,18 +63,18 @@ def test_an_owed_but_unjudged_empty_verdict_blocks_on_the_owed_ids(monkeypatch):
     assert "were owed a verdict and the verify leg returned none" in text
 
 
-def test_next_action_has_no_unreadable_label_and_gates_the_refire_on_blocking_ids(monkeypatch):
+def test_next_action_has_no_unreadable_label_and_gates_the_refire_on_blocking_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     text = _halt(_script(monkeypatch))
     assert "(ledger unreadable)" not in text
     assert "(_blkIds.length ? ' Re-fire the same sizing" in text
 
 
-def test_a_null_ledger_names_the_verify_leg_cause(monkeypatch):
+def test_a_null_ledger_names_the_verify_leg_cause(monkeypatch: pytest.MonkeyPatch) -> None:
     text = _halt(_script(monkeypatch))
     assert "The verify leg returned no items list" in text
 
 
-def test_manifest_schema_accepts_the_ledger_id_arrays():
+def test_manifest_schema_accepts_the_ledger_id_arrays() -> None:
     props = _MANIFEST_SCHEMA["properties"]
     assert props["ledger_item_ids"] == props["withheld_ids"] == {"type": "array", "items": {"type": "string"}}
     jsonschema.validate(

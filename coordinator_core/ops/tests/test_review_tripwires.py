@@ -36,73 +36,73 @@ def _repo(tmp_path: Path, files: dict, *, track: bool = True) -> Path:
     return tmp_path
 
 
-def _selected(tmp_path, literal, edited=EDITED, **kw):
+def _selected(tmp_path, literal, edited=EDITED, **kw) -> list[str]:
     repo = _repo(tmp_path, {"tests/test_t.py": f"X = [{literal}]\n"})
     return list(literal_namers(repo, [edited], **kw))
 
 
-def test_bare_basename_literal_selected(tmp_path):
+def test_bare_basename_literal_selected(tmp_path: Path) -> None:
     assert _selected(tmp_path, '"run_pass.py"') == ["tests/test_t.py"]
 
 
-def test_component_suffix_and_full_path_selected(tmp_path):
+def test_component_suffix_and_full_path_selected(tmp_path: Path) -> None:
     assert _selected(tmp_path, '"coverage-oracles/run_pass.py"') == ["tests/test_t.py"]
 
 
-def test_full_path_selected(tmp_path):
+def test_full_path_selected(tmp_path: Path) -> None:
     assert _selected(tmp_path, f'"{EDITED}"') == ["tests/test_t.py"]
 
 
-def test_longer_basename_not_selected(tmp_path):
+def test_longer_basename_not_selected(tmp_path: Path) -> None:
     assert _selected(tmp_path, '"test_run_pass.py"') == []
 
 
-def test_other_directory_not_selected(tmp_path):
+def test_other_directory_not_selected(tmp_path: Path) -> None:
     assert _selected(tmp_path, '"other/run_pass.py"') == []
 
 
-def test_backslash_literal_selected(tmp_path):
+def test_backslash_literal_selected(tmp_path: Path) -> None:
     assert _selected(tmp_path, '"ops\\\\coverage-oracles\\\\run_pass.py"') == [
         "tests/test_t.py"
     ]
 
 
-def test_bare_generic_basename_not_selected(tmp_path):
+def test_bare_generic_basename_not_selected(tmp_path: Path) -> None:
     assert _selected(tmp_path, '"__init__.py"', edited="x/indexer_arm/__init__.py") == []
 
 
-def test_qualified_generic_basename_selected(tmp_path):
+def test_qualified_generic_basename_selected(tmp_path: Path) -> None:
     assert _selected(
         tmp_path, '"indexer_arm/__init__.py"', edited="x/indexer_arm/__init__.py"
     ) == ["tests/test_t.py"]
 
 
-def test_non_py_edited_path_selected(tmp_path):
+def test_non_py_edited_path_selected(tmp_path: Path) -> None:
     assert _selected(tmp_path, '"data.json"', edited="fixtures/data.json") == [
         "tests/test_t.py"
     ]
 
 
-def test_exclude_honoured(tmp_path):
+def test_exclude_honoured(tmp_path: Path) -> None:
     assert _selected(tmp_path, '"run_pass.py"', exclude={"tests/test_t.py"}) == []
 
 
-def test_non_test_module_not_scanned(tmp_path):
+def test_non_test_module_not_scanned(tmp_path: Path) -> None:
     repo = _repo(tmp_path, {"lib/helper.py": 'X = "run_pass.py"\n'})
     assert literal_namers(repo, [EDITED]) == {}
 
 
-def test_suffix_named_test_module_scanned(tmp_path):
+def test_suffix_named_test_module_scanned(tmp_path: Path) -> None:
     repo = _repo(tmp_path, {"t/run_test.py": 'X = "run_pass.py"\n'})
     assert list(literal_namers(repo, [EDITED])) == ["t/run_test.py"]
 
 
-def test_empty_named_returns_empty(tmp_path):
+def test_empty_named_returns_empty(tmp_path: Path) -> None:
     repo = _repo(tmp_path, {"tests/test_t.py": '"run_pass.py"\n'})
     assert literal_namers(repo, []) == {}
 
 
-def test_maps_to_sorted_named_paths(tmp_path):
+def test_maps_to_sorted_named_paths(tmp_path: Path) -> None:
     repo = _repo(tmp_path, {"tests/test_t.py": '["b.py", "a.py"]\n'})
     assert literal_namers(repo, ["z/b.py", "z/a.py", "z/c.py"]) == {
         "tests/test_t.py": ["z/a.py", "z/b.py"]
@@ -149,16 +149,16 @@ _PROBE_BODIES = [
     ["ops/run_pass.py", "run_pass.py"],
 ])
 @pytest.mark.parametrize("data", _PROBE_BODIES)
-def test_probed_scan_equals_every_occurrence_definition(data, named):
+def test_probed_scan_equals_every_occurrence_definition(data, named) -> None:
     assert names_in(data, named) == _names_reference(data, named)
 
 
-def test_names_in_single_file():
+def test_names_in_single_file() -> None:
     assert names_in(b"x = 'run_pass.py'", [EDITED, "q/other.py"]) == [EDITED]
     assert names_in(b"x = 1", [EDITED]) == []
 
 
-def test_testpaths_bound_the_walk_tripwire(tmp_path):
+def test_testpaths_bound_the_walk_tripwire(tmp_path: Path) -> None:
     body = 'X = "run_pass.py"\n'
     repo = _repo(
         tmp_path,
@@ -176,7 +176,7 @@ def test_testpaths_bound_the_walk_tripwire(tmp_path):
     assert list(literal_namers(repo, [EDITED])) == ["tests/test_a.py"]
 
 
-def test_stray_apostrophe_does_not_hide_literal_tripwire(tmp_path):
+def test_stray_apostrophe_does_not_hide_literal_tripwire(tmp_path: Path) -> None:
     repo = _repo(
         tmp_path,
         {"tests/test_t.py": "# don't\nA = 1\nFILES = [\"run_pass.py\"]\n"},
@@ -184,7 +184,7 @@ def test_stray_apostrophe_does_not_hide_literal_tripwire(tmp_path):
     assert list(literal_namers(repo, [EDITED])) == ["tests/test_t.py"]
 
 
-def test_scan_writes_nothing_and_reads_no_index_tripwire(tmp_path):
+def test_scan_writes_nothing_and_reads_no_index_tripwire(tmp_path: Path) -> None:
     from coordinator_core.ops import review_tripwires as rt
 
     for attr in ("git_index", "machinery_paths", "json", "hashlib"):

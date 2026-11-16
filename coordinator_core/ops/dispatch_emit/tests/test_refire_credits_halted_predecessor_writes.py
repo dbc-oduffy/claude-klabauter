@@ -10,6 +10,8 @@ from types import SimpleNamespace
 from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 from coordinator_core.ops.dispatch_emit import write_baseline as wb
 from coordinator_core.ops.dispatch_emit.ask_contract import ManifestRow, StageManifest
+from pathlib import Path
+import pytest
 
 LEDGER = SimpleNamespace(items=(1,), all_of_pm_ask=False)
 VERDICT = {"items": [{"id": "R1", "status": "met"}]}
@@ -17,7 +19,7 @@ PRED = "ask-20261031T003103-ac5f01"
 CUR = "warp-2026-10-31-x-ac5f01-20261031T004508-c53b82"
 
 
-def _manifest(root, names):
+def _manifest(root, names) -> StageManifest:
     row = ManifestRow(
         id="C1", agent_type="x", model="m", brief_path="b", writes=tuple(names), wave=0,
         register_rows=("R1",),
@@ -38,7 +40,7 @@ def _run(root, name, resumed_from=None, baseline=None):
     return d
 
 
-def _own(monkeypatch):
+def _own(monkeypatch) -> None:
     monkeypatch.setattr(tc, "_plan_checkpoint_touched", lambda root, plan, paths: frozenset())
 
 
@@ -52,14 +54,14 @@ def _scenario(root, pred_baseline_of):
     return _run(root, CUR, resumed_from=PRED)
 
 
-def test_path_the_halted_predecessor_wrote_is_not_dirt(tmp_path, monkeypatch):
+def test_path_the_halted_predecessor_wrote_is_not_dirt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _own(monkeypatch)
     cur = _scenario(tmp_path, {"wrote.py": "blob-before"})
     m = _manifest(tmp_path, ["wrote.py"])
     assert tc._pre_existing_dirt_refusal(tmp_path, m, VERDICT, LEDGER, None, cur) is None
 
 
-def test_foreign_dirt_beside_the_predecessor_write_still_refuses(tmp_path, monkeypatch):
+def test_foreign_dirt_beside_the_predecessor_write_still_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _own(monkeypatch)
     cur = _scenario(tmp_path, {"wrote.py": "blob-before"})
     pred_base = {"wrote.py": "blob-before", "foreign.py": wb.fingerprint(tmp_path, "foreign.py")}
@@ -70,7 +72,7 @@ def test_foreign_dirt_beside_the_predecessor_write_still_refuses(tmp_path, monke
     assert out["ledger_failures"][0]["reason"] == "pre-existing-dirt: foreign.py"
 
 
-def test_path_the_predecessor_never_baselined_is_dirt(tmp_path, monkeypatch):
+def test_path_the_predecessor_never_baselined_is_dirt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _own(monkeypatch)
     cur = _scenario(tmp_path, {"wrote.py": "blob-before"})
     m = _manifest(tmp_path, ["foreign.py"])
@@ -78,7 +80,7 @@ def test_path_the_predecessor_never_baselined_is_dirt(tmp_path, monkeypatch):
     assert out["ledger_failures"][0]["reason"] == "pre-existing-dirt: foreign.py"
 
 
-def test_run_without_a_resume_link_credits_nothing(tmp_path, monkeypatch):
+def test_run_without_a_resume_link_credits_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _own(monkeypatch)
     _scenario(tmp_path, {"wrote.py": "blob-before"})
     cur = _run(tmp_path, "warp-unlinked-20261031T010000-aaaaaa")
@@ -87,7 +89,7 @@ def test_run_without_a_resume_link_credits_nothing(tmp_path, monkeypatch):
     assert out["ledger_failures"][0]["reason"] == "pre-existing-dirt: wrote.py"
 
 
-def test_predecessor_wrote_walks_the_resume_chain(tmp_path):
+def test_predecessor_wrote_walks_the_resume_chain(tmp_path: Path) -> None:
     for n in ("a.py",):
         (tmp_path / n).write_text("after\n")
     _run(tmp_path, "ask-20261031T000000-111111", baseline={"a.py": "blob-before"})

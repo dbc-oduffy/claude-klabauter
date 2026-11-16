@@ -6,11 +6,15 @@ from pathlib import Path
 import pytest
 
 from coordinator_core.codex_runner import contract
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
-def test_review_request_requires_artifact_only():
+def test_review_request_requires_artifact_only() -> None:
     contract.RunRequest(mode="review", repo_root="/r", artifact="a.md")
     with pytest.raises(ValueError):
         contract.RunRequest(mode="review", repo_root="/r")
@@ -18,7 +22,7 @@ def test_review_request_requires_artifact_only():
         contract.RunRequest(mode="review", repo_root="/r", artifact="a", plan="p", chunk="C0")
 
 
-def test_agy_review_request_requires_artifact_only():
+def test_agy_review_request_requires_artifact_only() -> None:
     assert "agy-review" in contract.MODES
     contract.RunRequest(mode="agy-review", repo_root="/r", artifact="a.md")
     with pytest.raises(ValueError):
@@ -27,7 +31,7 @@ def test_agy_review_request_requires_artifact_only():
         contract.RunRequest(mode="agy-review", repo_root="/r", artifact="a", plan="p", chunk="C0")
 
 
-def test_grok_review_request_requires_artifact_only():
+def test_grok_review_request_requires_artifact_only() -> None:
     assert "grok-review" in contract.MODES and "grok-review" in contract.ARTIFACT_MODES
     contract.RunRequest(mode="grok-review", repo_root="/r", artifact="a.md")
     with pytest.raises(ValueError):
@@ -36,7 +40,7 @@ def test_grok_review_request_requires_artifact_only():
         contract.RunRequest(mode="grok-review", repo_root="/r", artifact="a", plan="p", chunk="C0")
 
 
-def test_execute_request_requires_plan_and_chunk_only():
+def test_execute_request_requires_plan_and_chunk_only() -> None:
     contract.RunRequest(mode="execute", repo_root="/r", plan="p.md", chunk="C0")
     with pytest.raises(ValueError):
         contract.RunRequest(mode="execute", repo_root="/r", plan="p.md")
@@ -44,14 +48,14 @@ def test_execute_request_requires_plan_and_chunk_only():
         contract.RunRequest(mode="execute", repo_root="/r", plan="p.md", chunk="C0", artifact="a")
 
 
-def test_unknown_mode_and_missing_repo_root_refused():
+def test_unknown_mode_and_missing_repo_root_refused() -> None:
     with pytest.raises(ValueError):
         contract.RunRequest(mode="chat", repo_root="/r", artifact="a")
     with pytest.raises(ValueError):
         contract.RunRequest(mode="review", repo_root="", artifact="a")
 
 
-def test_request_and_result_are_frozen_and_roundtrip():
+def test_request_and_result_are_frozen_and_roundtrip() -> None:
     req = contract.RunRequest(mode="review", repo_root="/r", artifact="a", parent_session_id="s")
     with pytest.raises(Exception):
         req.mode = "execute"  # type: ignore[misc]
@@ -62,7 +66,7 @@ def test_request_and_result_are_frozen_and_roundtrip():
     assert contract.RunResult.from_dict(json.loads(json.dumps(res.to_dict()))) == res
 
 
-def test_allow_api_key_defaults_off_and_roundtrips():
+def test_allow_api_key_defaults_off_and_roundtrips() -> None:
     req = contract.RunRequest(mode="review", repo_root="/r", artifact="a")
     assert req.allow_api_key is False and req.to_dict()["allow_api_key"] is False
     on = contract.RunRequest(mode="review", repo_root="/r", artifact="a", allow_api_key=True)
@@ -72,7 +76,7 @@ def test_allow_api_key_defaults_off_and_roundtrips():
     assert contract.RunRequest.from_dict({**legacy, "allow_api_key": "yes"}).allow_api_key is False
 
 
-def test_status_set_is_closed():
+def test_status_set_is_closed() -> None:
     assert contract.STATUS == {
         "ok", "limit_exhausted", "login_required", "confinement_breach", "scope_breach", "failed",
     }
@@ -82,7 +86,7 @@ def test_status_set_is_closed():
     assert contract.FALLBACK_REVIEWER == "claude-reviewer"
 
 
-def test_run_dir_under_settings_home(tmp_path, monkeypatch):
+def test_run_dir_under_settings_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     assert contract.run_dir("abc") == tmp_path / "codex-runs" / "abc"
     for bad in ("", "..", "a/b", "a\\b"):
@@ -90,7 +94,7 @@ def test_run_dir_under_settings_home(tmp_path, monkeypatch):
             contract.run_dir(bad)
 
 
-def test_schema_is_strict_and_shaped():
+def test_schema_is_strict_and_shaped() -> None:
     schema = json.loads(contract.findings_schema_path().read_text(encoding="utf-8"))
     assert schema["additionalProperties"] is False
     assert set(schema["required"]) == {"verdict", "findings"}
@@ -101,14 +105,14 @@ def test_schema_is_strict_and_shaped():
     assert set(item["required"]) == set(item["properties"]) == {"severity", "title", "location", "detail"}
 
 
-def _load_fake():
+def _load_fake() -> "ModuleType":
     spec = importlib.util.spec_from_file_location("fake_codex", FIXTURES / "fake_codex.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
-def test_fake_codex_replays_jsonl_and_writes_last_json(tmp_path, monkeypatch, capsys):
+def test_fake_codex_replays_jsonl_and_writes_last_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     jsonl = tmp_path / "run.jsonl"
     jsonl.write_text('{"type":"a"}\n{"type":"b"}', encoding="utf-8")
     last_src = tmp_path / "src.json"

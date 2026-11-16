@@ -15,6 +15,7 @@ from coordinator_core.ops.dispatch_emit import clean_overlay_verify as cov
 from coordinator_core.ops.dispatch_emit import overlay_verify_measure as ovm
 from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import _git, _write
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
@@ -23,7 +24,7 @@ _FAILING = "t/test_bad.py"
 
 
 @pytest.fixture(autouse=True)
-def _isolated_system_temp(tmp_path, monkeypatch):
+def _isolated_system_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import tempfile
 
     (tmp_path / "systemp").mkdir()
@@ -52,7 +53,7 @@ def _recording():
     return seen, leg
 
 
-def test_meter_records_cpu_and_spawns_of_a_real_child_and_wall_time_apart():
+def test_meter_records_cpu_and_spawns_of_a_real_child_and_wall_time_apart() -> None:
     with ovm.LegMeter() as meter:
         with meter("burn"):
             subprocess.run(
@@ -65,7 +66,7 @@ def test_meter_records_cpu_and_spawns_of_a_real_child_and_wall_time_apart():
     assert rec["wall_ms"] > 0 and rec["files_written"] == 0
 
 
-def test_meter_with_no_child_records_zero_spawns_and_the_files_a_leg_reports():
+def test_meter_with_no_child_records_zero_spawns_and_the_files_a_leg_reports() -> None:
     with ovm.LegMeter() as meter:
         with meter("idle"):
             pass
@@ -75,7 +76,7 @@ def test_meter_with_no_child_records_zero_spawns_and_the_files_a_leg_reports():
     assert meter.records[1]["files_written"] == 7
 
 
-def test_verify_enters_the_hook_for_clone_checkout_pytest_in_order_on_a_cold_mirror_only(tmp_path):
+def test_verify_enters_the_hook_for_clone_checkout_pytest_in_order_on_a_cold_mirror_only(tmp_path: Path) -> None:
     root, head = _repo(tmp_path)
     seen, leg = _recording()
 
@@ -89,7 +90,7 @@ def test_verify_enters_the_hook_for_clone_checkout_pytest_in_order_on_a_cold_mir
     assert seen == ["checkout", "pytest"]
 
 
-def test_verify_enters_base_rerun_only_for_a_red_with_a_distinct_base(tmp_path):
+def test_verify_enters_base_rerun_only_for_a_red_with_a_distinct_base(tmp_path: Path) -> None:
     root, head = _repo(tmp_path)
     _write(root, "t/extra.txt", "x\n")
     _git(root, "add", "t/extra.txt")
@@ -106,7 +107,7 @@ def test_verify_enters_base_rerun_only_for_a_red_with_a_distinct_base(tmp_path):
     assert "base_rerun" not in seen
 
 
-def test_measure_reports_every_leg_with_numbers_for_a_ran_leg_and_a_total(tmp_path):
+def test_measure_reports_every_leg_with_numbers_for_a_ran_leg_and_a_total(tmp_path: Path) -> None:
     root, head = _repo(tmp_path)
 
     result = ovm.measure(root, [_PASSING], candidate_sha=head)
@@ -126,7 +127,7 @@ def test_measure_reports_every_leg_with_numbers_for_a_ran_leg_and_a_total(tmp_pa
     assert total["total_wall_ms"] > 0 and total["total_files_written"] == 2
 
 
-def test_a_warm_measure_skips_the_clone_leg_and_writes_no_file_and_cold_rebuilds(tmp_path):
+def test_a_warm_measure_skips_the_clone_leg_and_writes_no_file_and_cold_rebuilds(tmp_path: Path) -> None:
     root, head = _repo(tmp_path)
     ovm.measure(root, [_PASSING], candidate_sha=head)
 
@@ -138,7 +139,7 @@ def test_a_warm_measure_skips_the_clone_leg_and_writes_no_file_and_cold_rebuilds
     assert cold["clone"]["ran"] is True and cold["checkout"]["files_written"] == 2
 
 
-def test_the_cli_prints_one_json_line_per_leg_then_the_verdict_with_totals(tmp_path, capsys):
+def test_the_cli_prints_one_json_line_per_leg_then_the_verdict_with_totals(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     root, _head = _repo(tmp_path)
 
     assert ovm.main(["--repo-root", str(root), "--seeds", _PASSING, "--cold"]) == 0
@@ -148,7 +149,7 @@ def test_the_cli_prints_one_json_line_per_leg_then_the_verdict_with_totals(tmp_p
     assert lines[-1]["verdict"] == "green" and "total_wall_ms" in lines[-1] and "total_files_written" in lines[-1]
 
 
-def test_the_mirror_leaves_the_run_artifact_trees_unchecked_out_and_keeps_the_rest(tmp_path):
+def test_the_mirror_leaves_the_run_artifact_trees_unchecked_out_and_keeps_the_rest(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     subprocess.run(["git", "init", "-q", str(root)], check=True, **no_console_creationflags())

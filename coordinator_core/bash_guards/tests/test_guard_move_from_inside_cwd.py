@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core.bash_guards.guard_move_from_inside_cwd import check_move_from_inside_cwd
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -18,20 +19,20 @@ def _ctx(out):
     return out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def _run(cmd, cwd, tool_name="Bash"):
+def _run(cmd, cwd, tool_name: str = "Bash"):
     return _enveloped(check_move_from_inside_cwd)(
         cmd, "s", payload={"tool_name": tool_name, "cwd": str(cwd), "tool_input": {"command": cmd}}
     )
 
 
 @pytest.fixture
-def tree(tmp_path):
+def tree(tmp_path: Path) -> Path:
     (tmp_path / "a" / "b").mkdir(parents=True)
     (tmp_path / "sib").mkdir()
     return tmp_path
 
 
-def test_cwd_inside_source_fires_and_names_cwd(tree):
+def test_cwd_inside_source_fires_and_names_cwd(tree) -> None:
     cwd = tree / "a" / "b"
     out = _run(f"mv {(tree / 'a').as_posix()} {(tree / 'z').as_posix()}", cwd)
     assert out is not None
@@ -42,24 +43,24 @@ def test_cwd_inside_source_fires_and_names_cwd(tree):
     assert str(cwd) in _ctx(out)
 
 
-def test_cwd_equals_source_fires(tree):
+def test_cwd_equals_source_fires(tree) -> None:
     assert _run(f"mv {(tree / 'a').as_posix()} {(tree / 'z').as_posix()}", tree / "a") is not None
 
 
-def test_cd_prefix_in_same_command_fires(tree):
+def test_cd_prefix_in_same_command_fires(tree) -> None:
     out = _run("cd a/b && mv .. ../../z", tree)
     assert out is not None and str(tree / "a" / "b") in _ctx(out)
 
 
-def test_relative_source_resolves_against_cwd(tree):
+def test_relative_source_resolves_against_cwd(tree) -> None:
     assert _run("mv ../b ../../z", tree / "a" / "b") is not None
 
 
-def test_target_directory_flag_makes_all_operands_sources(tree):
+def test_target_directory_flag_makes_all_operands_sources(tree) -> None:
     assert _run(f"mv -t {(tree / 'z').as_posix()} {(tree / 'a').as_posix()}", tree / "a" / "b") is not None
 
 
-def test_powershell_move_item_named_params_fires(tree):
+def test_powershell_move_item_named_params_fires(tree) -> None:
     out = _run(
         f"Move-Item -Path '{(tree / 'a').as_posix()}' -Destination '{(tree / 'z').as_posix()}'",
         tree / "a" / "b",
@@ -68,46 +69,46 @@ def test_powershell_move_item_named_params_fires(tree):
     assert out is not None and "BLOCKED" in _ctx(out)
 
 
-def test_powershell_relative_path_from_cwd(tree):
+def test_powershell_relative_path_from_cwd(tree) -> None:
     assert _run("Move-Item -Path .. -Destination z", tree / "a" / "b", tool_name="PowerShell") is not None
 
 
-def test_powershell_positional_move_alias_fires(tree):
+def test_powershell_positional_move_alias_fires(tree) -> None:
     assert _run(f"move {(tree / 'a').as_posix()} {(tree / 'z').as_posix()}", tree / "a" / "b", "PowerShell") is not None
 
 
-def test_control_cwd_outside_source(tree):
+def test_control_cwd_outside_source(tree) -> None:
     assert _run(f"mv {(tree / 'a').as_posix()} {(tree / 'z').as_posix()}", tree / "sib") is None
 
 
-def test_control_sibling_move(tree):
+def test_control_sibling_move(tree) -> None:
     assert _run(f"mv {(tree / 'sib').as_posix()} {(tree / 'z').as_posix()}", tree / "a" / "b") is None
 
 
-def test_control_destination_is_cwd_not_source(tree):
+def test_control_destination_is_cwd_not_source(tree) -> None:
     assert _run(f"mv {(tree / 'sib').as_posix()} {(tree / 'a').as_posix()}", tree / "a") is None
 
 
-def test_control_prefix_name_is_not_ancestor(tree):
+def test_control_prefix_name_is_not_ancestor(tree) -> None:
     (tree / "ab").mkdir()
     assert _run(f"mv {(tree / 'a').as_posix()} {(tree / 'z').as_posix()}", tree / "ab") is None
 
 
-def test_control_cd_out_first(tree):
+def test_control_cd_out_first(tree) -> None:
     assert _run(f"cd {tree.as_posix()} && mv a z", tree / "a" / "b") is None
 
 
 @pytest.mark.parametrize("src", ["a*", "$SRC", "$(pwd)", "`pwd`"])
-def test_silent_on_non_literal_operand(tree, src):
+def test_silent_on_non_literal_operand(tree, src) -> None:
     assert _run(f"mv {src} z", tree / "a") is None
 
 
-def test_silent_without_move_or_cwd(tree):
+def test_silent_without_move_or_cwd(tree) -> None:
     assert _run("ls -la", tree / "a") is None
     assert _enveloped(check_move_from_inside_cwd)("mv a z", "s", payload={"tool_name": "Bash"}) is None
 
 
-def test_cost_under_five_ms_per_call(tree):
+def test_cost_under_five_ms_per_call(tree) -> None:
     cmd = f"mv {(tree / 'a').as_posix()} {(tree / 'z').as_posix()}"
     _run(cmd, tree / "a" / "b")
     n = 200
@@ -118,7 +119,7 @@ def test_cost_under_five_ms_per_call(tree):
     assert per_call_ms < 5.0
 
 
-def test_compound_command_denied_before_earlier_segment_runs(tree):
+def test_compound_command_denied_before_earlier_segment_runs(tree) -> None:
     """The example-game-repo-3b shape: cwd inherited from an earlier call, mv after a commit in one call."""
     cwd = tree / "a" / "b"
     out = _run(f"git commit -m x && mv {(tree / 'a').as_posix()} {(tree / 'z').as_posix()}", cwd)
@@ -127,15 +128,15 @@ def test_compound_command_denied_before_earlier_segment_runs(tree):
 
 
 @pytest.mark.parametrize("cmd", ["rm -rf {a}", "rm -r -- {a}", "rmdir {a}"])
-def test_remove_of_cwd_ancestor_denied(tree, cmd):
+def test_remove_of_cwd_ancestor_denied(tree, cmd) -> None:
     out = _run(cmd.format(a=(tree / "a").as_posix()), tree / "a" / "b")
     assert out is not None and "remove" in _ctx(out)
 
 
-def test_powershell_remove_item_denied(tree):
+def test_powershell_remove_item_denied(tree) -> None:
     out = _run(f"Remove-Item -Recurse -Force '{(tree / 'a').as_posix()}'", tree / "a" / "b", "PowerShell")
     assert out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_control_remove_sibling(tree):
+def test_control_remove_sibling(tree) -> None:
     assert _run(f"rm -rf {(tree / 'sib').as_posix()}", tree / "a" / "b") is None

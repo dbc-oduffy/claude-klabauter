@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import land_deadline, land_leg_record, land_run
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -17,21 +18,21 @@ RUN = "ask-20261030T000000-abcdef"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     subprocess.run(["git", "init", "-q"], cwd=str(tmp_path), check=True, **no_console_creationflags())
     monkeypatch.setattr("coordinator_core.lifecycle.main_worktree_root", lambda repo_root: tmp_path)
     return tmp_path
 
 
 @pytest.fixture(autouse=True)
-def _lock_namespace(tmp_path_factory, monkeypatch):
+def _lock_namespace(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the byte gate's lock sidecar out of the operator's home."""
     locks = tmp_path_factory.mktemp("locks")
     monkeypatch.setattr("coordinator_core.locked_write._machine_lock_dir", lambda: locks)
 
 
 @pytest.fixture
-def clock(monkeypatch):
+def clock(monkeypatch: pytest.MonkeyPatch) -> list[float]:
     now = [100.0]
     monkeypatch.setattr(land_deadline, "_now", lambda: now[0])
     monkeypatch.setattr(land_deadline, "_cpu", lambda: now[0] / 1000.0)
@@ -62,7 +63,7 @@ def _halting(clock):
     return body
 
 
-def test_halt_leaves_the_ledger_naming_the_halting_leg(repo, clock, monkeypatch):
+def test_halt_leaves_the_ledger_naming_the_halting_leg(repo, clock, monkeypatch: pytest.MonkeyPatch) -> None:
     _mode(monkeypatch, _halting(clock))
 
     reply = land_run._dispatch({"run_id": RUN, "script_path": "run.mjs"}, repo)
@@ -80,7 +81,7 @@ def test_halt_leaves_the_ledger_naming_the_halting_leg(repo, clock, monkeypatch)
     assert record["legs"][-1]["elapsed_secs"] == 50.0
 
 
-def test_landed_call_leaves_the_ledger_and_no_dirt(repo, clock, monkeypatch):
+def test_landed_call_leaves_the_ledger_and_no_dirt(repo, clock, monkeypatch: pytest.MonkeyPatch) -> None:
     def body():
         land_deadline.check("land_run.script_read")
         clock[0] += 1.0
@@ -145,7 +146,7 @@ def _scan_body(root, literals):
     return body
 
 
-def test_product_landing_ledger_counts_bytes_of_stat_dirty_paths_only(repo, clock, monkeypatch, dirty_tree):
+def test_product_landing_ledger_counts_bytes_of_stat_dirty_paths_only(repo, clock, monkeypatch: pytest.MonkeyPatch, dirty_tree) -> None:
     literals, dirty_bytes = dirty_tree
     _mode(monkeypatch, _scan_body(repo, literals))
 
@@ -162,7 +163,7 @@ def test_product_landing_ledger_counts_bytes_of_stat_dirty_paths_only(repo, cloc
     assert legs["land_run.commit"]["bytes_read"] == 0
 
 
-def test_uncommitted_reply_writes_no_ledger(repo, clock, monkeypatch):
+def test_uncommitted_reply_writes_no_ledger(repo, clock, monkeypatch: pytest.MonkeyPatch) -> None:
     _mode(monkeypatch, lambda: {"committed": False, "error": "refused"})
 
     land_run._dispatch({"run_id": RUN, "script_path": "run.mjs"}, repo)
@@ -171,7 +172,7 @@ def test_uncommitted_reply_writes_no_ledger(repo, clock, monkeypatch):
 
 
 @pytest.mark.parametrize("run_id", [None, "", "../evil", "a/b", "a\\b"])
-def test_absent_or_unsafe_run_id_writes_nothing_and_keeps_the_reply(repo, clock, monkeypatch, run_id):
+def test_absent_or_unsafe_run_id_writes_nothing_and_keeps_the_reply(repo, clock, monkeypatch: pytest.MonkeyPatch, run_id) -> None:
     _mode(monkeypatch, _halting(clock))
     params = {"script_path": "run.mjs"} if run_id is None else {"script_path": "run.mjs", "run_id": run_id}
 
@@ -183,7 +184,7 @@ def test_absent_or_unsafe_run_id_writes_nothing_and_keeps_the_reply(repo, clock,
     assert not (repo.parent / "evil").exists()
 
 
-def test_a_failing_write_leaves_the_halt_reply_unchanged(repo, clock, monkeypatch):
+def test_a_failing_write_leaves_the_halt_reply_unchanged(repo, clock, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*args, **kwargs):
         raise OSError("disk full")
 

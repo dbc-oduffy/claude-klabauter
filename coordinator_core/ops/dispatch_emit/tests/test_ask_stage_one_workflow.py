@@ -8,6 +8,7 @@ from pathlib import Path, PurePath
 import yaml
 
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
+from coordinator_core.ops.dispatch_emit import live_run_index
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.session.record_homes import home_dir, record_path
 
@@ -120,6 +121,7 @@ def test_hands_on_sizing_stages_briefs_identical_to_no_sizing(tmp_path):
     assert "error" not in _stage(tmp_path)
     with_sizing = {r: _brief(tmp_path, r) for r in ("D1", "R1")}
 
+    live_run_index.remove(tmp_path, "r1")
     (tmp_path / PLAN_REL).write_text(_plan(False), encoding="utf-8", newline="\n")
     assert "error" not in _stage(tmp_path, "r2")
     assert with_sizing == {r: _brief(tmp_path, r, "r2") for r in ("D1", "R1")}

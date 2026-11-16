@@ -18,7 +18,7 @@ MESSAGE = "deliver memo\n\nSession-Id: s-1\n"
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _git(cwd, *args):
+def _git(cwd, *args) -> str:
     return subprocess.run(
         ["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -39,7 +39,7 @@ def _config(repo: Path) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _state(monkeypatch):
+def _state(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("COORDINATOR_MACHINE", "testbox")
     push_cadence.reset_cadence_for_test()
     monkeypatch.setattr(push_cadence, "machine_profile", lambda: "author")
@@ -48,7 +48,7 @@ def _state(monkeypatch):
 
 
 @pytest.fixture
-def world(tmp_path):
+def world(tmp_path: Path):
     bare = tmp_path / "origin.git"
     _git(tmp_path, "init", "--bare", "-b", "main", str(bare))
     recv = tmp_path / "recv"
@@ -82,7 +82,7 @@ def _move_remote_tip(world, name: str) -> str:
     return tip
 
 
-def test_record_is_pushed_and_removed(world):
+def test_record_is_pushed_and_removed(world) -> None:
     _sweep(world["sender"])
     sha = world["out"].commit_sha
     assert _git(world["bare"], "rev-parse", f"refs/heads/{BRANCH}") == sha
@@ -90,7 +90,7 @@ def test_record_is_pushed_and_removed(world):
     assert _git(world["recv"], "rev-parse", f"refs/remotes/origin/{BRANCH}") == sha
 
 
-def test_unreachable_remote_keeps_record_and_counts_attempt(world):
+def test_unreachable_remote_keeps_record_and_counts_attempt(world) -> None:
     _git(world["recv"], "remote", "set-url", "origin", str(world["tmp"] / "gone.git"))
     _sweep(world["sender"])
     rows = pp.list_pending(world["sender"])
@@ -103,7 +103,7 @@ def test_unreachable_remote_keeps_record_and_counts_attempt(world):
     assert _git(world["bare"], "rev-parse", f"refs/heads/{BRANCH}") == world["out"].commit_sha
 
 
-def test_moved_tip_is_fetched_rebuilt_and_pushed(world):
+def test_moved_tip_is_fetched_rebuilt_and_pushed(world) -> None:
     moved = _move_remote_tip(world, "other.txt")
     _sweep(world["sender"])
     tip = _git(world["bare"], "rev-parse", f"refs/heads/{BRANCH}")
@@ -113,7 +113,7 @@ def test_moved_tip_is_fetched_rebuilt_and_pushed(world):
     assert pp.list_pending(world["sender"]) == []
 
 
-def test_moved_tip_already_holding_path_retires_record_without_push(world):
+def test_moved_tip_already_holding_path_retires_record_without_push(world) -> None:
     other = world["tmp"] / "other"
     _git(world["tmp"], "clone", "-q", str(world["bare"]), str(other))
     _config(other)
@@ -126,7 +126,7 @@ def test_moved_tip_already_holding_path_retires_record_without_push(world):
     assert pp.list_pending(world["sender"]) == []
 
 
-def test_definitive_reject_never_deletes_record(world):
+def test_definitive_reject_never_deletes_record(world) -> None:
     hook = world["bare"] / "hooks" / "pre-receive"
     hook.write_text("#!/bin/sh\necho no >&2\nexit 1\n", encoding="utf-8", newline="\n")
     hook.chmod(0o755)
@@ -137,19 +137,19 @@ def test_definitive_reject_never_deletes_record(world):
     assert rows[0]["attempts"] == 2
 
 
-def test_non_author_profile_pushes_nothing(world, monkeypatch):
+def test_non_author_profile_pushes_nothing(world, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(push_cadence, "machine_profile", lambda: "consumer")
     _sweep(world["sender"])
     assert len(pp.list_pending(world["sender"])) == 1
     assert _git(world["bare"], "rev-parse", f"refs/heads/{BRANCH}") != world["out"].commit_sha
 
 
-def test_deadline_shorter_than_ceiling_defers_push(world):
+def test_deadline_shorter_than_ceiling_defers_push(world) -> None:
     push_cadence._sweep_memo_push_pending([world["sender"]], deadline=0.0, clock=lambda: 0.0)
     assert len(pp.list_pending(world["sender"])) == 1
 
 
-def test_resolver_error_does_not_escape_sweep(world, monkeypatch):
+def test_resolver_error_does_not_escape_sweep(world, monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*a, **k):
         raise OSError("config unreadable")
 
@@ -158,13 +158,13 @@ def test_resolver_error_does_not_escape_sweep(world, monkeypatch):
     assert len(pp.list_pending(world["sender"])) == 1
 
 
-def test_sweep_repos_runs_the_arm_over_served(world):
+def test_sweep_repos_runs_the_arm_over_served(world) -> None:
     push_cadence.sweep_repos([world["sender"]])
     assert _git(world["bare"], "rev-parse", f"refs/heads/{BRANCH}") == world["out"].commit_sha
     assert pp.list_pending(world["sender"]) == []
 
 
-def test_exhausted_record_is_left_unpushed_on_disk(world):
+def test_exhausted_record_is_left_unpushed_on_disk(world) -> None:
     row = pp.list_pending(world["sender"])[0]
     pp.write_pending(world["sender"], {**row, "attempts": pp.MAX_ATTEMPTS})
     _sweep(world["sender"])
@@ -172,7 +172,7 @@ def test_exhausted_record_is_left_unpushed_on_disk(world):
     assert [r["commit_sha"] for r in pp.list_pending(world["sender"])] == [world["out"].commit_sha]
 
 
-def test_below_cap_record_is_still_pushed(world):
+def test_below_cap_record_is_still_pushed(world) -> None:
     row = pp.list_pending(world["sender"])[0]
     pp.write_pending(world["sender"], {**row, "attempts": pp.MAX_ATTEMPTS - 1})
     _sweep(world["sender"])

@@ -13,6 +13,7 @@ from coordinator_core.ops import baton_close_report as op
 from coordinator_core.ops.baton_close_report_contract import OP_KEY, REPORT_KEYS
 from coordinator_core.ops.baton_close_report_readers import read_baton_headers, successor_index
 from coordinator_core.ops.baton_close_report_targets import target_evidence
+import pytest
 
 
 _SHA = "a" * 40
@@ -375,7 +376,7 @@ def test_writes_nothing(tmp_path: Path) -> None:
     assert _snapshot(tmp_path) == before
 
 
-def test_zero_subprocess_spawns(tmp_path: Path, monkeypatch) -> None:
+def test_zero_subprocess_spawns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fixture(tmp_path)
     calls: list[object] = []
 

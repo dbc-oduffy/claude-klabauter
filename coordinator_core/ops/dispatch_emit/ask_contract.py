@@ -627,9 +627,13 @@ HALT_MISSING_PLAN_PLACEHOLDER = "<the plan>"
 
 
 def halted_naming_existing_plan(repo_root: Path, halted: dict) -> dict:
-    """`halted`, or a copy whose `plan` is None and whose `next_action` text carries
-    `HALT_MISSING_PLAN_PLACEHOLDER` when the named plan is not a file under `repo_root` (the
-    author moved it after the run minted the path). One stat; no search for a replacement. Pure."""
+    """`halted`, or a copy whose `plan` names the on-disk month-dir or flat twin (`next_action`
+    text rewritten to match) when the named plan moved after the run minted the path; with
+    neither form a file under `repo_root`, a copy whose `plan` is None and whose `next_action`
+    text carries `HALT_MISSING_PLAN_PLACEHOLDER`. At most two stats; no search. Pure."""
+    # Function-local: ask_stage imports this module at top level.
+    from coordinator_core.ops.dispatch_emit.ask_stage import _plan_edge_layouts
+
     plan = halted.get(HALT_PLAN_FIELD) if isinstance(halted, dict) else None
     if not isinstance(plan, str) or not plan:
         return halted
@@ -637,11 +641,16 @@ def halted_naming_existing_plan(repo_root: Path, halted: dict) -> dict:
     target = contained_path(root / plan, [root])
     if target is not None and target.is_file():
         return halted
-    out = {**halted, HALT_PLAN_FIELD: None}
+    resolved = next(
+        (twin for twin in _plan_edge_layouts(plan) if (hit := contained_path(root / twin, [root])) is not None and hit.is_file()),
+        None,
+    )
+    out = {**halted, HALT_PLAN_FIELD: resolved}
     next_action = halted.get("next_action")
     if next_action is not None:
         needle = json.dumps(plan)[1:-1]
-        out["next_action"] = json.loads(json.dumps(next_action).replace(needle, HALT_MISSING_PLAN_PLACEHOLDER))
+        replacement = json.dumps(resolved)[1:-1] if resolved else HALT_MISSING_PLAN_PLACEHOLDER
+        out["next_action"] = json.loads(json.dumps(next_action).replace(needle, replacement))
     return out
 
 

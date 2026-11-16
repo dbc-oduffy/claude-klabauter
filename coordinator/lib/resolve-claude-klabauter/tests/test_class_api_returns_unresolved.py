@@ -12,6 +12,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core import engine_root
+from pathlib import Path
 
 _FETCH_URL = "https://github.com/dbc-oduffy/claude-klabauter"
 
@@ -22,7 +23,7 @@ def _reset() -> None:
 
 
 @pytest.fixture
-def no_engine(tmp_path, monkeypatch):
+def no_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     settings_home = tmp_path / "settings-home"
     (settings_home / "machine-local").mkdir(parents=True)
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
@@ -41,7 +42,7 @@ def no_engine(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def published_engine(tmp_path, monkeypatch, no_engine):
+def published_engine(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_engine) -> Path:
     mirror = tmp_path / "claude-klabauter"
     (mirror / "coordinator_core").mkdir(parents=True)
     (mirror / "coordinator_core" / "_engine_stamp").write_text("sha:test\n", encoding="utf-8")
@@ -51,18 +52,18 @@ def published_engine(tmp_path, monkeypatch, no_engine):
     return mirror
 
 
-def test_class_api_returns_unresolved_without_raising(no_engine):
+def test_class_api_returns_unresolved_without_raising(no_engine) -> None:
     assert engine_root.coordinator_engine_root_with_class() == (None, "unresolved")
 
 
-def test_install_entry_prints_fetch_message_and_exits_nonzero(no_engine, capsys):
+def test_install_entry_prints_fetch_message_and_exits_nonzero(no_engine, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.install import coordinator_install_entry
 
     assert coordinator_install_entry.main([]) == 1
     assert _FETCH_URL in capsys.readouterr().err
 
 
-def test_verify_templates_setup_sync_exits_nonzero_with_fetch_message(no_engine, monkeypatch, capsys):
+def test_verify_templates_setup_sync_exits_nonzero_with_fetch_message(no_engine, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.ops import verify_templates_setup_sync as mod
 
     monkeypatch.setattr(mod, "_resolve_plugin_root", lambda: no_engine)
@@ -70,7 +71,7 @@ def test_verify_templates_setup_sync_exits_nonzero_with_fetch_message(no_engine,
     assert _FETCH_URL in capsys.readouterr().err
 
 
-def test_state_root_engine_subject_raises_state_root_error_naming_fetch(no_engine):
+def test_state_root_engine_subject_raises_state_root_error_naming_fetch(no_engine) -> None:
     from coordinator_core import state_root
 
     with pytest.raises(state_root.StateRootError) as exc:
@@ -78,7 +79,7 @@ def test_state_root_engine_subject_raises_state_root_error_naming_fetch(no_engin
     assert _FETCH_URL in str(exc.value)
 
 
-def test_install_helpers_raise_runtime_error_naming_fetch(no_engine):
+def test_install_helpers_raise_runtime_error_naming_fetch(no_engine) -> None:
     from coordinator_core.install import first_run, substrate
 
     for helper in (first_run._engine_root_or_raise, substrate._engine_root_or_raise):
@@ -87,19 +88,19 @@ def test_install_helpers_raise_runtime_error_naming_fetch(no_engine):
         assert _FETCH_URL in str(exc.value)
 
 
-def test_engine_owned_rows_resolve_degrades_to_empty_root(no_engine):
+def test_engine_owned_rows_resolve_degrades_to_empty_root(no_engine) -> None:
     from coordinator_core.ops.dispatch_emit import engine_owned_rows
 
     assert engine_owned_rows.resolve_engine_root() == ("", "unresolved")
 
 
-def test_forwarder_self_heal_swallows_into_failure_ledger(no_engine):
+def test_forwarder_self_heal_swallows_into_failure_ledger(no_engine) -> None:
     from coordinator_core.install import forwarder_self_heal
 
     forwarder_self_heal.self_heal_forwarders()
 
 
-def test_hooks_degrade_without_raising(no_engine):
+def test_hooks_degrade_without_raising(no_engine) -> None:
     from coordinator_core.hooks import nudge_cross_repo_cwd_boundary as nudge
     from coordinator_core.hooks import session_start_register_published_engine as reg
 
@@ -107,13 +108,13 @@ def test_hooks_degrade_without_raising(no_engine):
     assert reg._handler({}) == {}
 
 
-def test_stamped_published_engine_still_resolves(published_engine):
+def test_stamped_published_engine_still_resolves(published_engine) -> None:
     root, klass = engine_root.coordinator_engine_root_with_class()
     assert root == published_engine.as_posix() or root == str(published_engine)
     assert klass == "resolved-engine"
 
 
-def test_engine_owned_rows_resolve_returns_published_engine(published_engine):
+def test_engine_owned_rows_resolve_returns_published_engine(published_engine) -> None:
     from coordinator_core.ops.dispatch_emit import engine_owned_rows
 
     root, klass = engine_owned_rows.resolve_engine_root()

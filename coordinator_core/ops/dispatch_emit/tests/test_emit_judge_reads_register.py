@@ -6,6 +6,7 @@ import yaml
 from coordinator_core.ops.dispatch_emit.reverify_delivery import compose_rejudge_script
 from coordinator_core.ops.review_mint.execute_review import _prompt_literal
 from coordinator_core.ops.review_mint.tests.test_execute_review import _STAGE_SCHEMAS, _v5_fragment
+from pathlib import Path
 
 _TEXT = "Let me \"open\" it\nfrom the menu"
 
@@ -23,7 +24,7 @@ def _fragment():
     return fragment
 
 
-def _script(tmp_path, plan_text):
+def _script(tmp_path, plan_text) -> str:
     plan = tmp_path / "plan.md"
     plan.write_text(plan_text, encoding="utf-8")
     return compose_rejudge_script(
@@ -37,7 +38,7 @@ def _script(tmp_path, plan_text):
     )
 
 
-def _register_plan(tmp_path):
+def _register_plan(tmp_path) -> str:
     row = {
         "id": "a", "source_text": _TEXT, "anchor": "p.3", "surface": "ui", "status": "open",
         "claimed_by": ["plan.md"], "wired": False, "met_by": [], "last_progress_at": None,
@@ -50,13 +51,13 @@ def _register_plan(tmp_path):
     return '---\nplan_id: "p1"\nsizing_object: "state/sizings/s.yaml"\n---\nbody\n'
 
 
-def test_rejudge_script_carries_register_rows_verbatim(tmp_path):
+def test_rejudge_script_carries_register_rows_verbatim(tmp_path: Path) -> None:
     script = _script(tmp_path, _register_plan(tmp_path))
     assert _prompt_literal(_TEXT)[1:-1] in script
     assert "anchor=p.3" in script and "surface=ui" in script
 
 
-def test_rejudge_script_lists_uncovered_pm_turns(tmp_path):
+def test_rejudge_script_lists_uncovered_pm_turns(tmp_path: Path) -> None:
     plan = _register_plan(tmp_path)
     sizing = tmp_path / "state" / "sizings" / "s.yaml"
     doc = yaml.safe_load(sizing.read_text(encoding="utf-8"))
@@ -69,7 +70,7 @@ def test_rejudge_script_lists_uncovered_pm_turns(tmp_path):
     assert "turn 4: use the shape that comes back" in script
 
 
-def test_rejudge_script_omits_uncited_pm_turns(tmp_path):
+def test_rejudge_script_omits_uncited_pm_turns(tmp_path: Path) -> None:
     plan = _register_plan(tmp_path)
     sizing = tmp_path / "state" / "sizings" / "s.yaml"
     doc = yaml.safe_load(sizing.read_text(encoding="utf-8"))
@@ -79,7 +80,7 @@ def test_rejudge_script_omits_uncited_pm_turns(tmp_path):
     assert "turn 4: use the shape" not in script
 
 
-def test_plan_without_register_gets_pointer_tier_only(tmp_path):
+def test_plan_without_register_gets_pointer_tier_only(tmp_path: Path) -> None:
     script = _script(tmp_path, "---\nplan_id: p1\n---\nbody\n")
     assert "TIER 1 (pointer)" in script
     assert "TIER 1 evidence, verbatim" not in script

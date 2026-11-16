@@ -26,7 +26,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 
 @pytest.fixture(autouse=True)
-def _redirect_runtime_base(tmp_path: Path, monkeypatch) -> None:
+def _redirect_runtime_base(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     override = tmp_path / "runtime-base"
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(override))
 
@@ -72,7 +72,7 @@ def test_mint_tmp_sibling_does_not_survive(tmp_path: Path) -> None:
     assert not tmp_sibling.exists()
 
 
-def test_mint_is_atomic_via_os_replace(tmp_path: Path, monkeypatch) -> None:
+def test_mint_is_atomic_via_os_replace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The rename is the load-bearing step -- assert `os.replace` is
     actually the mechanism used, not merely that the end state looks
     right (which a non-atomic write-then-rename-free sequence could also
@@ -226,7 +226,7 @@ def test_cookie_path_is_under_svc_dir(tmp_path: Path) -> None:
 _OTHER_SID = "S-1-5-21-9999999999-8888888888-7777777777-1234"
 
 
-def test_parse_sddl_owner_sid_reads_the_owner_component():
+def test_parse_sddl_owner_sid_reads_the_owner_component() -> None:
     """The `O:` field ends at the next COMPONENT marker, not at its leading
     letter -- every SID starts with `S`, so a `[^GDS]+` exclusion matches
     nothing. Regression pin for exactly that bug."""
@@ -238,12 +238,12 @@ def test_parse_sddl_owner_sid_reads_the_owner_component():
     assert cookie._parse_sddl_owner_sid(sddl) == "S-1-5-21-1-2-3-1002"
 
 
-def test_parse_sddl_owner_sid_returns_none_when_absent():
+def test_parse_sddl_owner_sid_returns_none_when_absent() -> None:
     assert cookie._parse_sddl_owner_sid("D:(A;;FA;;;SY)") is None
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows DACL semantics")
-def test_ow_ace_is_accepted_only_when_the_owner_is_this_user(monkeypatch, tmp_path):
+def test_ow_ace_is_accepted_only_when_the_owner_is_this_user(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """OW + owner==us is the ordinary %TEMP% shape and must pass."""
     from coordinator_core.warm.election import current_user_sid
 
@@ -254,7 +254,7 @@ def test_ow_ace_is_accepted_only_when_the_owner_is_this_user(monkeypatch, tmp_pa
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="Windows DACL semantics")
-def test_ow_ace_is_refused_when_another_principal_owns_the_directory(monkeypatch):
+def test_ow_ace_is_refused_when_another_principal_owns_the_directory(monkeypatch: pytest.MonkeyPatch) -> None:
     """THE POINT OF THE BRANCH. Same ACE set, different owner -- OW then
     grants a principal that is not this user, and the guard must refuse."""
     sddl = (
@@ -277,13 +277,13 @@ def test_ow_ace_is_refused_when_another_principal_owns_the_directory(monkeypatch
 # --------------------------------------------------------------------------
 
 
-def test_mint_writes_a_curl_config_carrying_the_token(tmp_path):
+def test_mint_writes_a_curl_config_carrying_the_token(tmp_path: Path) -> None:
     token = cookie.mint(tmp_path)
     text = cookie.curl_config_path(tmp_path).read_text(encoding="ascii")
     assert text == f'header = "{cookie.COOKIE_HEADER}: {token}"\n'
 
 
-def test_mint_writes_the_listener_url_when_port_given(tmp_path):
+def test_mint_writes_the_listener_url_when_port_given(tmp_path: Path) -> None:
     """`port` lands in the SAME write as the header -- the whole point being
     that C5's forwarder resolves nothing: `curl --config <file>` alone
     carries both the credential and the destination."""
@@ -295,7 +295,7 @@ def test_mint_writes_the_listener_url_when_port_given(tmp_path):
     )
 
 
-def test_mint_omits_the_url_line_when_port_is_none(tmp_path):
+def test_mint_omits_the_url_line_when_port_is_none(tmp_path: Path) -> None:
     """The default -- today's only caller (`ensure()`, before the bind)
     does not yet have a port to give. Omission, not a placeholder."""
     token = cookie.mint(tmp_path)
@@ -304,7 +304,7 @@ def test_mint_omits_the_url_line_when_port_is_none(tmp_path):
     assert "url" not in text
 
 
-def test_clear_removes_the_curl_config_too(tmp_path):
+def test_clear_removes_the_curl_config_too(tmp_path: Path) -> None:
     """Leaving the curlrc behind would leave a readable secret on disk after
     a clean exit that was supposed to remove it."""
     cookie.mint(tmp_path)
@@ -314,7 +314,7 @@ def test_clear_removes_the_curl_config_too(tmp_path):
     assert not cookie.curl_config_path(tmp_path).exists()
 
 
-def test_curl_config_and_cookie_never_disagree(tmp_path):
+def test_curl_config_and_cookie_never_disagree(tmp_path: Path) -> None:
     """Re-minting rewrites BOTH. A curlrc that lagged the cookie would send a
     stale credential the refusal path would correctly reject -- a
     self-inflicted outage that looks like an attack."""
@@ -325,7 +325,7 @@ def test_curl_config_and_cookie_never_disagree(tmp_path):
         assert cookie.read(tmp_path) == token
 
 
-def test_curl_actually_consumes_the_config_and_sends_the_header(tmp_path):
+def test_curl_actually_consumes_the_config_and_sends_the_header(tmp_path: Path) -> None:
     """END-TO-END, against a real socket and the real curl binary.
 
     This is the assertion the whole file is for: not that the config LOOKS
@@ -341,7 +341,7 @@ def test_curl_actually_consumes_the_config_and_sends_the_header(tmp_path):
     seen = {}
 
     class _Handler(BaseHTTPRequestHandler):
-        def do_GET(self):
+        def do_GET(self) -> None:
             seen["header"] = self.headers.get(cookie.COOKIE_HEADER)
             seen["host"] = self.headers.get("Host")
             self.send_response(200)
@@ -416,7 +416,7 @@ def test_ensure_refuses_a_present_but_unreadable_cookie(tmp_path: Path) -> None:
 
 
 def test_ensure_refuses_when_presence_cannot_be_determined(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """THE BRANCH THE DECODE-FAILURE TESTS NEVER REACH. All the other
     unreadable-cookie tests fabricate the same failure -- non-ASCII bytes, a
@@ -494,7 +494,7 @@ def test_credential_guard_generates_the_cookie_when_the_directory_is_sound(
 
 
 def test_credential_guard_raises_on_a_directory_that_is_not_private(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """AC2. The guard's whole job is to be the thing that says no."""
     from coordinator_core.warm import supervisor
@@ -658,7 +658,7 @@ def test_grant_is_idempotent_and_adds_no_second_ace(tmp_path: Path) -> None:
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="DACL semantics are Windows-only")
-def test_no_logon_sid_means_no_ace_added(tmp_path: Path, monkeypatch) -> None:
+def test_no_logon_sid_means_no_ace_added(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm import election
 
     logon = election.current_logon_sid()

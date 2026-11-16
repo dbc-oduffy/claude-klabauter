@@ -216,7 +216,7 @@ def parent_pool_admission_selector(session_id: str, run: str, parent_run: str, p
     parent = box_registry.admission_parent(session_id)
     parent_sid = parent["session_id"]
 
-    def validate_parent_peak(registered_peak_mb):
+    def validate_parent_peak(registered_peak_mb) -> None:
         from coordinator_core.group_em.slot_wait import SLOT_THRESHOLD_MB
 
         if registered_peak_mb > SLOT_THRESHOLD_MB and not check_slot_grant(

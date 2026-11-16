@@ -12,6 +12,10 @@ from coordinator_core.ask_spool import record
 from coordinator_core.benchmarks import fixture_settings_home
 from coordinator_core.benchmarks import submit_engine_ask_process_budget as B
 from coordinator_core.hooks import submit_engine_ask as hook
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import SimpleNamespace
 
 
 #: The spool envelope's own reason text; the benchmark's `spooled` flag keys on a different phrase.
@@ -27,7 +31,7 @@ class _Unavailable(Exception):
 
 
 @pytest.fixture(scope="module")
-def burst(tmp_path_factory) -> tuple[Path, dict]:
+def burst(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, dict]:
     parent = tmp_path_factory.mktemp("three-run-burst")
     repo = parent / "repo"
     repo.mkdir()
@@ -36,25 +40,25 @@ def burst(tmp_path_factory) -> tuple[Path, dict]:
         return repo, B.measure_multi_run_launch(repo, B.LAUNCH_STARTS, runs=0)
 
 
-def test_every_submission_is_allowed_and_none_is_spooled(burst):
+def test_every_submission_is_allowed_and_none_is_spooled(burst) -> None:
     _repo, res = burst
     assert res["errors"] == []
     assert res["decisions"] == ["allow"] * (B.LAUNCH_STARTS + 1)
     assert _spooled_reasons(res) == []
 
 
-def test_no_spool_envelope_is_written(burst):
+def test_no_spool_envelope_is_written(burst) -> None:
     repo, _res = burst
     assert record.list_pending(str(repo)) == []
 
 
-def test_no_leg_passes_the_bar_and_no_process_is_spawned(burst):
+def test_no_leg_passes_the_bar_and_no_process_is_spawned(burst) -> None:
     _repo, res = burst
     assert res["legs_over_bar"] == []
     assert res["spawns"] == 0
 
 
-def test_a_hook_that_loses_the_engine_is_reported_spooled(tmp_path, monkeypatch):
+def test_a_hook_that_loses_the_engine_is_reported_spooled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The other side: a dispatch timeout spools, so the assertions above can fail."""
 
     def stalled(*a, **k):
@@ -83,14 +87,14 @@ def _burst_with_prewarm_probe(tmp_path, monkeypatch, prewarm):
     return calls, res
 
 
-def test_round_zero_prewarms_the_emit_chain_the_way_the_engine_worker_does(tmp_path, monkeypatch):
+def test_round_zero_prewarms_the_emit_chain_the_way_the_engine_worker_does(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls, res = _burst_with_prewarm_probe(tmp_path, monkeypatch, True)
     assert calls == [1]
     assert res["prewarmed"] is True
     assert res["prewarm_ms"] is not None
 
 
-def test_a_fresh_process_burst_skips_the_prewarm_and_says_so(tmp_path, monkeypatch):
+def test_a_fresh_process_burst_skips_the_prewarm_and_says_so(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls, res = _burst_with_prewarm_probe(tmp_path, monkeypatch, False)
     assert calls == []
     assert res["prewarmed"] is False
@@ -98,7 +102,7 @@ def test_a_fresh_process_burst_skips_the_prewarm_and_says_so(tmp_path, monkeypat
 
 
 class _FakePool:
-    def __init__(self):
+    def __init__(self) -> None:
         self.submitted = []
 
     def submit(self, fn):
@@ -110,7 +114,7 @@ class _FakePool:
         return done
 
 
-def _boot_ctx(guard_pool, dispatch_pool, explode=False):
+def _boot_ctx(guard_pool, dispatch_pool, explode: bool = False) -> SimpleNamespace:
     from types import SimpleNamespace
 
     from coordinator_core.warm import server as warm_server
@@ -129,7 +133,7 @@ def _boot_ctx(guard_pool, dispatch_pool, explode=False):
     return ctx
 
 
-def test_boot_prewarm_starts_a_guard_worker_per_burst_request_and_a_dispatch_worker():
+def test_boot_prewarm_starts_a_guard_worker_per_burst_request_and_a_dispatch_worker() -> None:
     from coordinator_core.warm import server as warm_server
 
     guard, dispatch = _FakePool(), _FakePool()
@@ -139,5 +143,5 @@ def test_boot_prewarm_starts_a_guard_worker_per_burst_request_and_a_dispatch_wor
     assert set(guard.submitted + dispatch.submitted) == {warm_server._prewarm_noop}
 
 
-def test_boot_prewarm_failure_is_swallowed_so_the_first_request_builds_lazily():
+def test_boot_prewarm_failure_is_swallowed_so_the_first_request_builds_lazily() -> None:
     _boot_ctx(_FakePool(), _FakePool(), explode=True)._boot_prewarm_run()

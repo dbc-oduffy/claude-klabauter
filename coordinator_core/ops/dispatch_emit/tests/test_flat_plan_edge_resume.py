@@ -6,7 +6,7 @@ from pathlib import Path
 
 import yaml
 
-from coordinator_core.ops.dispatch_emit.sizing_fire import flat_plan_edge, resumable_plan
+from coordinator_core.ops.dispatch_emit.sizing_fire import flat_plan_edge, resolve_plan_edge, resumable_plan
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import _plan
 
@@ -42,3 +42,48 @@ def test_763b4b_sizing_plan_edge_names_an_existing_plan_file():
     edge = yaml.safe_load((root / SIZING_763B4B).read_text(encoding="utf-8"))["plan"]
     assert edge == FLAT
     assert (root / edge).is_file()
+
+
+def _touch(root: Path, rel: str) -> None:
+    (root / rel).parent.mkdir(parents=True, exist_ok=True)
+    (root / rel).write_text("x", encoding="utf-8")
+
+
+def test_resolve_month_edge_to_flat(tmp_path):
+    _touch(tmp_path, FLAT)
+    assert resolve_plan_edge(tmp_path, MONTH) == FLAT
+
+
+def test_resolve_flat_edge_to_month_dir_from_date_head(tmp_path):
+    _touch(tmp_path, MONTH)
+    assert resolve_plan_edge(tmp_path, FLAT) == MONTH
+
+
+def test_resolve_existing_edge_kept_as_is(tmp_path):
+    _touch(tmp_path, FLAT)
+    _touch(tmp_path, MONTH)
+    assert resolve_plan_edge(tmp_path, MONTH) == MONTH
+    assert resolve_plan_edge(tmp_path, FLAT) == FLAT
+
+
+def test_resolve_both_missing_is_none(tmp_path):
+    assert resolve_plan_edge(tmp_path, MONTH) is None
+    assert resolve_plan_edge(tmp_path, FLAT) is None
+
+
+def test_resolve_undated_flat_name_gets_no_month_candidate(tmp_path):
+    _touch(tmp_path, "docs/plans/2026-11/notes.md")
+    assert resolve_plan_edge(tmp_path, "docs/plans/notes.md") is None
+    _touch(tmp_path, "docs/plans/notes.md")
+    assert resolve_plan_edge(tmp_path, "docs/plans/notes.md") == "docs/plans/notes.md"
+
+
+def test_resolve_backslash_edge_yields_forward_slashes(tmp_path):
+    _touch(tmp_path, FLAT)
+    assert resolve_plan_edge(tmp_path, MONTH.replace("/", chr(92))) == FLAT
+
+
+def test_flat_edge_resumes_the_month_dir_plan(repo):  # noqa: F811
+    _plan(repo, rel=MONTH)
+    plan = resumable_plan({"plan": FLAT}, REL, repo, "m_plus")
+    assert plan is not None and plan.plan_rel == MONTH

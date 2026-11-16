@@ -285,8 +285,8 @@ def test_send_delivers_staged_draft() -> None:
                 f"stdout={send_result.stdout!r} stderr={send_result.stderr!r}"
             )
 
-        if "Receiver-side:" not in send_result.stdout:
-            raise AssertionError(f"{name}: send stdout should name the receiver-side path. stdout={send_result.stdout!r}")
+        if "Receiver-side:" in send_result.stdout or "not materialized" not in send_result.stdout:
+            raise AssertionError(f"{name}: object-only delivery must report 'not materialized', never 'Receiver-side:'. stdout={send_result.stdout!r}")
 
         # The delivery is an object-only commit anchored under refs/coordinator/inbox/<file>/<sha>;
         # the receiver's HEAD, index and worktree are never written, and the push is owed to the
@@ -614,6 +614,7 @@ def test_send_sender_unattributed_notice_names_measured_cause() -> None:
                 {
                     "id": "/fake/receiver/repo/cross-repo/inbox/2026-08-25-roundtrip-topic.md",
                     "sender_unattributed": True,
+                    "anchored": True,
                 }
             ],
         }

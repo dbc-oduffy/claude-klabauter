@@ -56,6 +56,11 @@ import textwrap
 
 import pytest
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -75,7 +80,7 @@ def _python() -> str:
     return sys.executable
 
 
-def _load_harvest_module():
+def _load_harvest_module() -> ModuleType:
     """Load coordinator-harvest-deferrals in-process.
 
     The script has no `.py` extension, so `importlib.util.spec_from_file_location`
@@ -95,7 +100,7 @@ def _load_harvest_module():
 
 
 @pytest.fixture(scope="module")
-def harvest_mod():
+def harvest_mod() -> ModuleType:
     return _load_harvest_module()
 
 
@@ -116,7 +121,7 @@ def _row(row_id: str, **overrides) -> dict:
     return base
 
 
-def test_disposition_selected_row(harvest_mod):
+def test_disposition_selected_row(harvest_mod) -> None:
     rows = [_row("D1", disposition="backlogged", pm_approved=True)]
     candidates, warnings, malformed = harvest_mod._select_harvest_candidates(rows)
     assert [r["id"] for r in candidates] == ["D1"]
@@ -124,13 +129,13 @@ def test_disposition_selected_row(harvest_mod):
     assert malformed == 0
 
 
-def test_legacy_deferred_only_row(harvest_mod):
+def test_legacy_deferred_only_row(harvest_mod) -> None:
     rows = [_row("D2", deferred=True, pm_approved=True)]
     candidates, _warnings, _malformed = harvest_mod._select_harvest_candidates(rows)
     assert [r["id"] for r in candidates] == ["D2"]
 
 
-def test_both_set_row_harvested_once(harvest_mod):
+def test_both_set_row_harvested_once(harvest_mod) -> None:
     rows = [
         _row(
             "D3",
@@ -144,25 +149,25 @@ def test_both_set_row_harvested_once(harvest_mod):
     assert len(candidates) == 1
 
 
-def test_backlogged_row_lacking_pm_approved_not_harvested(harvest_mod):
+def test_backlogged_row_lacking_pm_approved_not_harvested(harvest_mod) -> None:
     rows = [_row("D4", disposition="backlogged", pm_approved=False)]
     candidates, _warnings, _malformed = harvest_mod._select_harvest_candidates(rows)
     assert candidates == []
 
 
-def test_non_backlogged_disposition_never_selected_even_with_legacy_deferred(harvest_mod):
+def test_non_backlogged_disposition_never_selected_even_with_legacy_deferred(harvest_mod) -> None:
     rows = [_row("D5", disposition="open", deferred=True, pm_approved=True)]
     candidates, _warnings, _malformed = harvest_mod._select_harvest_candidates(rows)
     assert candidates == []
 
 
-def test_legacy_deferred_without_pm_approved_not_selected(harvest_mod):
+def test_legacy_deferred_without_pm_approved_not_selected(harvest_mod) -> None:
     rows = [_row("D6", deferred=True)]
     candidates, _warnings, _malformed = harvest_mod._select_harvest_candidates(rows)
     assert candidates == []
 
 
-def test_required_row_fields_no_longer_includes_deferred(harvest_mod):
+def test_required_row_fields_no_longer_includes_deferred(harvest_mod) -> None:
     assert "deferred" not in harvest_mod._REQUIRED_ROW_FIELDS
     row = _row("D7", disposition="backlogged", pm_approved=True)
     assert "deferred" not in row
@@ -230,7 +235,7 @@ _PLAN_FIXTURE = textwrap.dedent(
 )
 
 
-def test_end_to_end_dry_run_selection(tmp_path):
+def test_end_to_end_dry_run_selection(tmp_path: Path) -> None:
     plan_path = tmp_path / "2026-07-27-c5b-selection-fixture.md"
     plan_path.write_text(_PLAN_FIXTURE, encoding="utf-8")
 
@@ -283,7 +288,7 @@ def _unroutable_plan_fixture(*, pm_approved: bool) -> str:
     )
 
 
-def test_pm_approved_unroutable_row_fails_loud(tmp_path):
+def test_pm_approved_unroutable_row_fails_loud(tmp_path: Path) -> None:
     plan_path = tmp_path / "2026-07-29-unroutable-pm-approved-fixture.md"
     plan_path.write_text(_unroutable_plan_fixture(pm_approved=True), encoding="utf-8")
 
@@ -301,7 +306,7 @@ def test_pm_approved_unroutable_row_fails_loud(tmp_path):
     assert "SILENTLY LOST" in result.stderr
 
 
-def test_non_pm_approved_unroutable_row_stays_exit_zero(tmp_path):
+def test_non_pm_approved_unroutable_row_stays_exit_zero(tmp_path: Path) -> None:
     plan_path = tmp_path / "2026-07-29-unroutable-non-pm-approved-fixture.md"
     plan_path.write_text(_unroutable_plan_fixture(pm_approved=False), encoding="utf-8")
 
@@ -319,7 +324,7 @@ def test_non_pm_approved_unroutable_row_stays_exit_zero(tmp_path):
     assert "Queued 0 deferred items: (none)" in result.stdout
 
 
-def test_harvest_unroutable_not_pm_approved_stays_soft_warn(harvest_mod):
+def test_harvest_unroutable_not_pm_approved_stays_soft_warn(harvest_mod) -> None:
     rows = [
         _row(
             "D8",
@@ -348,7 +353,7 @@ def test_harvest_unroutable_not_pm_approved_stays_soft_warn(harvest_mod):
     ]
 
 
-def test_harvest_unroutable_pm_approved_recorded(harvest_mod):
+def test_harvest_unroutable_pm_approved_recorded(harvest_mod) -> None:
     rows = [
         _row(
             "W-windows-verify",
@@ -370,7 +375,7 @@ def test_harvest_unroutable_pm_approved_recorded(harvest_mod):
     ]
 
 
-def test_config_edit_routes_to_queue_append(harvest_mod):
+def test_config_edit_routes_to_queue_append(harvest_mod) -> None:
     """`config-edit` is in BOTH the plan-tasks and improvement-queue enums but
     matched neither routing branch before it was added to
     `_QUEUE_ELIGIBLE_CHANGE_KINDS` — a `backlogged` resolve on such a row hit
@@ -389,7 +394,7 @@ def test_config_edit_routes_to_queue_append(harvest_mod):
     assert skipped_unroutable == []
 
 
-def test_verification_routes_to_queue_append(harvest_mod):
+def test_verification_routes_to_queue_append(harvest_mod) -> None:
     """`verification` is in BOTH the plan-tasks and improvement-queue enums
     but matched neither routing branch before it was added to
     `_QUEUE_ELIGIBLE_CHANGE_KINDS` — the same abort-path shape as
@@ -408,7 +413,7 @@ def test_verification_routes_to_queue_append(harvest_mod):
     assert skipped_unroutable == []
 
 
-def test_all_routable_behavior_unchanged(harvest_mod):
+def test_all_routable_behavior_unchanged(harvest_mod) -> None:
     """Existing all-routable end-to-end behavior (D1/D2/D3) is unaffected by
     the skipped_unroutable plumbing — same as test_end_to_end_dry_run_selection,
     re-asserted here alongside the new unroutable-row tests for locality."""
@@ -468,7 +473,7 @@ def _vendored_enum(schema_name: str) -> set[str]:
     return set(schema["properties"]["change_kind"]["enum"])
 
 
-def test_queue_eligible_set_equals_improvement_queue_schema_enum(harvest_mod):
+def test_queue_eligible_set_equals_improvement_queue_schema_enum(harvest_mod) -> None:
     """`_QUEUE_ELIGIBLE_CHANGE_KINDS` must equal the improvement-queue enum.
 
     Failure means a `verification`-shaped half-sync: either the harvest routes
@@ -480,7 +485,7 @@ def test_queue_eligible_set_equals_improvement_queue_schema_enum(harvest_mod):
     assert harvest_mod._QUEUE_ELIGIBLE_CHANGE_KINDS == _vendored_enum("improvement-queue")
 
 
-def test_routing_sets_cover_the_plan_tasks_authoring_enum(harvest_mod):
+def test_routing_sets_cover_the_plan_tasks_authoring_enum(harvest_mod) -> None:
     """Every authorable `change_kind` must route to exactly one write seam.
 
     plan-tasks is the wider universal enum an author writes against; the two
@@ -506,20 +511,20 @@ def test_routing_sets_cover_the_plan_tasks_authoring_enum(harvest_mod):
 # ---------------------------------------------------------------------------
 
 
-def test_derive_proposed_action_uses_first_sentence_of_body(harvest_mod):
+def test_derive_proposed_action_uses_first_sentence_of_body(harvest_mod) -> None:
     body = "Fix the flaky retry loop. Also update the changelog."
     action = harvest_mod._derive_proposed_action(body, "some title", "some/surface.py")
     assert action == "Fix the flaky retry loop."
     assert action != "some/surface.py"
 
 
-def test_derive_proposed_action_does_not_split_on_dotted_filename(harvest_mod):
+def test_derive_proposed_action_does_not_split_on_dotted_filename(harvest_mod) -> None:
     body = "Update boot_sweep.py to skip the v1.2 fixture and rerun the suite."
     action = harvest_mod._derive_proposed_action(body, "title", "some/surface.py")
     assert action == "Update boot_sweep.py to skip the v1.2 fixture and rerun the suite."
 
 
-def test_derive_proposed_action_falls_back_to_title_when_body_empty(harvest_mod):
+def test_derive_proposed_action_falls_back_to_title_when_body_empty(harvest_mod) -> None:
     action = harvest_mod._derive_proposed_action("", "Fallback title text", "some/surface.py")
     assert action == "Fallback title text"
 
@@ -527,7 +532,7 @@ def test_derive_proposed_action_falls_back_to_title_when_body_empty(harvest_mod)
     assert action_none_body == "Fallback title text"
 
 
-def test_derive_proposed_action_falls_back_to_surface_as_last_resort(harvest_mod):
+def test_derive_proposed_action_falls_back_to_surface_as_last_resort(harvest_mod) -> None:
     action = harvest_mod._derive_proposed_action("", "", "some/surface.py")
     assert action == "some/surface.py"
 
@@ -535,7 +540,7 @@ def test_derive_proposed_action_falls_back_to_surface_as_last_resort(harvest_mod
     assert action_none == "some/surface.py"
 
 
-def test_derive_proposed_action_truncates_overlong_body(harvest_mod):
+def test_derive_proposed_action_truncates_overlong_body(harvest_mod) -> None:
     body = "word " * 60  # no sentence terminator, well over the 200-char cap
     action = harvest_mod._derive_proposed_action(body, "title", "some/surface.py")
     assert len(action) <= 201  # cap + ellipsis char
@@ -543,7 +548,7 @@ def test_derive_proposed_action_truncates_overlong_body(harvest_mod):
     assert " " not in action[-2:]  # truncated on a word boundary, not mid-word
 
 
-def test_run_queue_append_emits_proposed_action_distinct_from_surface(harvest_mod, monkeypatch):
+def test_run_queue_append_emits_proposed_action_distinct_from_surface(harvest_mod, monkeypatch: pytest.MonkeyPatch) -> None:
     captured_cmd = {}
 
     def fake_run(cmd, **kwargs):
@@ -577,7 +582,7 @@ def test_run_queue_append_emits_proposed_action_distinct_from_surface(harvest_mo
 
 
 @pytest.mark.parametrize("runner", ["_run_queue_append", "_run_lesson_promote"])
-def test_multiline_body_travels_by_body_file_on_both_write_seams(harvest_mod, monkeypatch, runner):
+def test_multiline_body_travels_by_body_file_on_both_write_seams(harvest_mod, monkeypatch: pytest.MonkeyPatch, runner) -> None:
     """Both write CLIs refuse a newline in `--body`; a prose body must go by `--body-file`."""
     seen = {}
 
@@ -612,7 +617,7 @@ def test_multiline_body_travels_by_body_file_on_both_write_seams(harvest_mod, mo
     assert not os.path.exists(seen["path"])
 
 
-def test_single_line_body_stays_inline(harvest_mod, monkeypatch):
+def test_single_line_body_stays_inline(harvest_mod, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
 
     def fake_run(cmd, **kwargs):
@@ -635,7 +640,7 @@ def test_single_line_body_stays_inline(harvest_mod, monkeypatch):
     assert cmd[cmd.index("--body") + 1] == "One line."
 
 
-def test_partial_failure_headline_is_not_the_nothing_to_defer_headline(harvest_mod, monkeypatch, tmp_path, capsys):
+def test_partial_failure_headline_is_not_the_nothing_to_defer_headline(harvest_mod, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """`Queued 0 deferred items: (none)` must never print when a row failed to write."""
     plan = tmp_path / "plan.md"
     plan.write_text("placeholder", encoding="utf-8")
@@ -656,7 +661,7 @@ def test_partial_failure_headline_is_not_the_nothing_to_defer_headline(harvest_m
     assert "Queued 0 deferred items: (none)" not in out
 
 
-def test_routing_sets_are_disjoint(harvest_mod):
+def test_routing_sets_are_disjoint(harvest_mod) -> None:
     """No `change_kind` may route to both seams.
 
     `_harvest` tests lesson-promote first and queue-append second, so an
@@ -669,7 +674,7 @@ def test_routing_sets_are_disjoint(harvest_mod):
     )
 
 
-def test_a_plan_without_plan_id_harvests_under_its_path_key(harvest_mod, monkeypatch, tmp_path, capsys):
+def test_a_plan_without_plan_id_harvests_under_its_path_key(harvest_mod, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """example-retrieval-repo-ue-addon F20: a blitz-minted S-lane spec carries no
     `plan_id`, so every such harvest returned 0 after a warning that reads,
     in the close-out line an EM surfaces, exactly like a plan with nothing to
@@ -706,8 +711,8 @@ def test_a_plan_without_plan_id_harvests_under_its_path_key(harvest_mod, monkeyp
 
 
 def test_a_minted_plan_id_still_wins_and_carries_the_path_key_for_dedup(
-    harvest_mod, monkeypatch, tmp_path
-):
+    harvest_mod, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     """A plan harvested once under its path key and later given a `plan_id`
     must not re-queue those rows -- both keys are checked before any write."""
     plan = tmp_path / "2026-09-11-a-named-plan.md"
@@ -732,7 +737,7 @@ def test_a_minted_plan_id_still_wins_and_carries_the_path_key_for_dedup(
     assert seen["legacy"] == "plan-path-2026-09-11-a-named-plan"
 
 
-def test_the_other_key_dedups_a_row_already_harvested(harvest_mod, monkeypatch):
+def test_the_other_key_dedups_a_row_already_harvested(harvest_mod, monkeypatch: pytest.MonkeyPatch) -> None:
     """The dedup check is what makes two keys safe rather than duplicating:
     a row queued under the path key must not queue again under a later-minted
     `plan_id`."""
@@ -753,7 +758,7 @@ def test_the_other_key_dedups_a_row_already_harvested(harvest_mod, monkeypatch):
     assert unroutable == []
 
 
-def test_a_plan_the_stamp_already_archived_resolves_to_its_archive_home(harvest_mod, tmp_path):
+def test_a_plan_the_stamp_already_archived_resolves_to_its_archive_home(harvest_mod, tmp_path: Path) -> None:
     # workstream_complete's stamp archives the plan before the harvest directive
     # dispatches with the docs/plans path it was built with.
     archived = tmp_path / "archive" / "specs" / "2026-09" / "2026-09-22-some-plan.md"
@@ -763,7 +768,7 @@ def test_a_plan_the_stamp_already_archived_resolves_to_its_archive_home(harvest_
     assert harvest_mod._resolve_archived_plan(str(stale)) == str(archived)
 
 
-def test_a_live_or_unarchived_plan_path_is_left_unchanged(harvest_mod, tmp_path):
+def test_a_live_or_unarchived_plan_path_is_left_unchanged(harvest_mod, tmp_path: Path) -> None:
     live = tmp_path / "docs" / "plans" / "2026-09-22-live-plan.md"
     live.parent.mkdir(parents=True)
     live.write_text("# plan\n", encoding="utf-8")

@@ -6,6 +6,7 @@ import pytest
 
 import coordinator_core.ipc as ipc
 from coordinator_core.invoke.__main__ import _dispatch_argv
+from pathlib import Path
 
 
 pytestmark = pytest.mark.complete
@@ -31,7 +32,7 @@ def _run(
     allow_unstamped: bool,
     boot_wait_secs: str = "0",
     warm_dispatch=None,
-):
+) -> tuple[str, str, int]:
     """`boot_wait_secs` defaults to "0" -- the bounded boot wait OFF.
 
     Every test in this file that predates the wait is asserting the
@@ -66,7 +67,7 @@ def _run(
     return _dispatch_argv(argv, str(tmp_path), allow_warm=True)
 
 
-def test_warm_miss_runs_cold_loudly_when_not_opted_in(monkeypatch, tmp_path):
+def test_warm_miss_runs_cold_loudly_when_not_opted_in(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """AN UNREACHABLE ENGINE PASSES LOUDLY, NEVER DENIES (PM ruling 2026-09-21,
     replacing the 2026-08-21 refusal). A miss is never a delivered mutation, so
     the op runs cold -- and says so on stderr, because the ruling it replaces
@@ -84,7 +85,7 @@ def test_warm_miss_runs_cold_loudly_when_not_opted_in(monkeypatch, tmp_path):
     assert "defect" in stderr, "a slow path must still name itself a defect, not a queue"
 
 
-def test_a_permanent_reason_runs_cold_at_once_and_names_itself(monkeypatch, tmp_path):
+def test_a_permanent_reason_runs_cold_at_once_and_names_itself(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     reason = "warm engine: resolved engine root does not exist: /nowhere/klabauter"
     monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: reason)
 
@@ -103,7 +104,7 @@ def test_a_permanent_reason_runs_cold_at_once_and_names_itself(monkeypatch, tmp_
     assert "ENGINE UNREACHABLE" in stderr
 
 
-def test_a_bounded_wait_that_expires_runs_cold_and_reports_what_it_waited(monkeypatch, tmp_path):
+def test_a_bounded_wait_that_expires_runs_cold_and_reports_what_it_waited(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """The duration it ACTUALLY waited is a fact about this call, never an ETA."""
     monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
 
@@ -121,7 +122,7 @@ def test_a_bounded_wait_that_expires_runs_cold_and_reports_what_it_waited(monkey
     assert "no warm server answered within" in stderr
 
 
-def test_a_delivered_but_unanswered_mutation_is_never_re_run_cold(monkeypatch, tmp_path):
+def test_a_delivered_but_unanswered_mutation_is_never_re_run_cold(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     indeterminate = {
         "jsonrpc": "2.0",
         "id": 1,
@@ -137,7 +138,7 @@ def test_a_delivered_but_unanswered_mutation_is_never_re_run_cold(monkeypatch, t
     assert "ENGINE UNREACHABLE" not in stderr
 
 
-def test_transient_advice_does_not_fabricate_an_eta(monkeypatch, tmp_path):
+def test_transient_advice_does_not_fabricate_an_eta(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
 
     stdout, stderr, code = _run(
@@ -147,7 +148,7 @@ def test_transient_advice_does_not_fabricate_an_eta(monkeypatch, tmp_path):
     assert not re.search(r"[0-9]+ *(s|sec|second|m|min|minute)[a-z]*\b", stderr), stderr
 
 
-def test_warm_miss_falls_through_to_cold_when_opted_in(monkeypatch, tmp_path):
+def test_warm_miss_falls_through_to_cold_when_opted_in(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     stdout, stderr, code = _run(
         monkeypatch, tmp_path, warm_enabled=True, warm_response=None, allow_unstamped=True
     )
@@ -156,7 +157,7 @@ def test_warm_miss_falls_through_to_cold_when_opted_in(monkeypatch, tmp_path):
     assert '"pong":true' in stdout.lower().replace(" ", "")
 
 
-def test_warm_hit_never_reaches_the_policy_check(monkeypatch, tmp_path):
+def test_warm_hit_never_reaches_the_policy_check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     served = {"jsonrpc": "2.0", "id": 1, "result": {"pong": "warm"}}
     stdout, stderr, code = _run(
         monkeypatch, tmp_path, warm_enabled=True, warm_response=served, allow_unstamped=False
@@ -166,7 +167,7 @@ def test_warm_hit_never_reaches_the_policy_check(monkeypatch, tmp_path):
     assert "warm" in stdout
 
 
-def test_bounded_wait_returns_a_server_that_comes_up_mid_wait(monkeypatch, tmp_path):
+def test_bounded_wait_returns_a_server_that_comes_up_mid_wait(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls = {"n": 0}
 
     def _late(msg, **kw):
@@ -192,7 +193,7 @@ def test_bounded_wait_returns_a_server_that_comes_up_mid_wait(monkeypatch, tmp_p
     assert "waiting up to" in stderr, "a wait must announce itself, never be silent"
 
 
-def _boot_wait_harness(monkeypatch, *, mutating, dispatch):
+def _boot_wait_harness(monkeypatch, *, mutating, dispatch) -> None:
     monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", "0.3")
     monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
     monkeypatch.setattr("coordinator_core.warm.client._op_may_mutate", lambda m: mutating)
@@ -202,14 +203,14 @@ def _boot_wait_harness(monkeypatch, *, mutating, dispatch):
     )
 
 
-def test_boot_wait_cannot_outrun_its_bound_when_an_attempt_blocks(monkeypatch):
+def test_boot_wait_cannot_outrun_its_bound_when_an_attempt_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
     import time
 
     from coordinator_core.invoke.__main__ import _wait_for_warm_boot
 
     deadlines = []
 
-    def _blocks_to_its_deadline(msg, *, read_deadline_secs=None):
+    def _blocks_to_its_deadline(msg, *, read_deadline_secs=None) -> None:
         deadlines.append(read_deadline_secs)
         time.sleep(30 if read_deadline_secs is None else read_deadline_secs)
         return None
@@ -226,7 +227,7 @@ def test_boot_wait_cannot_outrun_its_bound_when_an_attempt_blocks(monkeypatch):
     assert elapsed <= 0.3 + 0.1
 
 
-def test_boot_wait_polls_a_mutation_with_ping_and_sends_it_once(monkeypatch):
+def test_boot_wait_polls_a_mutation_with_ping_and_sends_it_once(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.invoke.__main__ import _wait_for_warm_boot
 
     calls = []
@@ -249,12 +250,12 @@ def test_boot_wait_polls_a_mutation_with_ping_and_sends_it_once(monkeypatch):
     assert calls[-1][1] is None
 
 
-def test_boot_wait_never_sends_a_mutation_the_server_did_not_answer_for(monkeypatch):
+def test_boot_wait_never_sends_a_mutation_the_server_did_not_answer_for(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.invoke.__main__ import _wait_for_warm_boot
 
     methods = []
 
-    def _dispatch(msg, *, read_deadline_secs=None):
+    def _dispatch(msg, *, read_deadline_secs=None) -> None:
         methods.append(msg["method"])
         return None
 
@@ -268,7 +269,7 @@ def test_boot_wait_never_sends_a_mutation_the_server_did_not_answer_for(monkeypa
     assert methods and set(methods) == {"ping"}
 
 
-def _boot_wait_harness(monkeypatch, *, mutating, dispatch):
+def _boot_wait_harness(monkeypatch, *, mutating, dispatch) -> None:
     monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", "0.3")
     monkeypatch.setattr("coordinator_core.warm.client.last_cold_reason", lambda: None)
     monkeypatch.setattr("coordinator_core.warm.client._op_may_mutate", lambda m: mutating)
@@ -278,14 +279,14 @@ def _boot_wait_harness(monkeypatch, *, mutating, dispatch):
     )
 
 
-def test_boot_wait_cannot_outrun_its_bound_when_an_attempt_blocks(monkeypatch):
+def test_boot_wait_cannot_outrun_its_bound_when_an_attempt_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
     import time
 
     from coordinator_core.invoke.__main__ import _wait_for_warm_boot
 
     deadlines = []
 
-    def _blocks_to_its_deadline(msg, *, read_deadline_secs=None):
+    def _blocks_to_its_deadline(msg, *, read_deadline_secs=None) -> None:
         deadlines.append(read_deadline_secs)
         time.sleep(30 if read_deadline_secs is None else read_deadline_secs)
         return None
@@ -302,7 +303,7 @@ def test_boot_wait_cannot_outrun_its_bound_when_an_attempt_blocks(monkeypatch):
     assert elapsed <= 0.3 + 0.1
 
 
-def test_boot_wait_polls_a_mutation_with_ping_and_sends_it_once(monkeypatch):
+def test_boot_wait_polls_a_mutation_with_ping_and_sends_it_once(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.invoke.__main__ import _wait_for_warm_boot
 
     calls = []
@@ -325,12 +326,12 @@ def test_boot_wait_polls_a_mutation_with_ping_and_sends_it_once(monkeypatch):
     assert calls[-1][1] is None
 
 
-def test_boot_wait_never_sends_a_mutation_the_server_did_not_answer_for(monkeypatch):
+def test_boot_wait_never_sends_a_mutation_the_server_did_not_answer_for(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.invoke.__main__ import _wait_for_warm_boot
 
     methods = []
 
-    def _dispatch(msg, *, read_deadline_secs=None):
+    def _dispatch(msg, *, read_deadline_secs=None) -> None:
         methods.append(msg["method"])
         return None
 
@@ -344,7 +345,7 @@ def test_boot_wait_never_sends_a_mutation_the_server_did_not_answer_for(monkeypa
     assert methods and set(methods) == {"ping"}
 
 
-def test_boot_wait_knob_parsing(monkeypatch):
+def test_boot_wait_knob_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.invoke.__main__ import (
         WARM_BOOT_WAIT_SECS,
         _warm_boot_wait_deadline,
@@ -366,8 +367,8 @@ def test_boot_wait_knob_parsing(monkeypatch):
 
 @pytest.mark.parametrize("falsy", ["0", "false", "no", "off"])
 def test_env_warm_off_never_contacts_a_warm_engine_for_a_mutating_op(
-    monkeypatch, tmp_path, falsy
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, falsy
+) -> None:
     """`COORDINATOR_WARM=<falsy>` reaches the real `is_warm_enabled` (unpatched)
     and the dispatch never dials, waits on, or probes a warm engine; the
     mutating op runs cold."""
@@ -395,7 +396,7 @@ def test_env_warm_off_never_contacts_a_warm_engine_for_a_mutating_op(
     settings._reset_for_test()
 
 
-def test_warm_disabled_still_falls_through_to_cold(monkeypatch, tmp_path):
+def test_warm_disabled_still_falls_through_to_cold(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     stdout, stderr, code = _run(
         monkeypatch, tmp_path, warm_enabled=False, warm_response=None, allow_unstamped=False
     )

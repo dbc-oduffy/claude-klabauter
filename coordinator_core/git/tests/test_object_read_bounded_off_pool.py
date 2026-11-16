@@ -14,18 +14,22 @@ import pytest
 
 from coordinator_core.benchmarks import object_read_stall_profile as bench
 from coordinator_core.git import git_objects as go
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import SimpleNamespace
 
 WALL = 0.3
 HOLD = 3.0
 
 
 @pytest.fixture(scope="module")
-def fx(tmp_path_factory):
+def fx(tmp_path_factory: pytest.TempPathFactory) -> SimpleNamespace:
     return bench.build_fixtures(go, tmp_path_factory.mktemp("object-read-fixtures"))
 
 
 @pytest.fixture(autouse=True)
-def _short_wall(monkeypatch):
+def _short_wall(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(go, "PACK_READ_DEADLINE_SECS", WALL)
     bench.clear_caches(go)
     yield
@@ -51,7 +55,7 @@ def _read_on_one_worker_pool(work, stall):
         pool.shutdown(wait=True)
 
 
-def _assert_raises_deadline(work, stall):
+def _assert_raises_deadline(work, stall) -> None:
     fut, elapsed = _read_on_one_worker_pool(work, stall)
     assert isinstance(fut.exception(), go.PackReadDeadline), f"expected PackReadDeadline, got {fut.exception()!r}"
     assert elapsed <= WALL + 0.5

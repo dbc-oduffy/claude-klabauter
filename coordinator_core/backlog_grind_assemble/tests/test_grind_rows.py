@@ -132,7 +132,7 @@ def _git(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
 
 
 @pytest.fixture
-def close_fixture(tmp_path, monkeypatch):
+def close_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.chdir(tmp_path)
     row_path = tmp_path / "state" / "bug-backlog" / "bug-1.yaml"
     row_text = _write_row(row_path)
@@ -152,7 +152,7 @@ def close_fixture(tmp_path, monkeypatch):
 
 
 class TestCloseLeavesIndexUntouched:
-    def test_close_leaves_an_unstaged_delete_and_untracked_add(self, close_fixture, tmp_path):
+    def test_close_leaves_an_unstaged_delete_and_untracked_add(self, close_fixture, tmp_path: Path) -> None:
         init = _git(["init"], tmp_path)
         assert init.returncode == 0
         _git(["add", "-A"], tmp_path)
@@ -185,7 +185,7 @@ class TestCloseLeavesIndexUntouched:
 
 
 class TestDigestRefusal:
-    def test_mismatched_digest_refuses_with_manifest_stale(self, close_fixture, tmp_path):
+    def test_mismatched_digest_refuses_with_manifest_stale(self, close_fixture, tmp_path: Path) -> None:
         exit_code = grind_rows.main(
             [
                 "close",
@@ -203,7 +203,7 @@ class TestDigestRefusal:
         assert exit_code == grind_rows.EXIT_MANIFEST_STALE
         assert close_fixture["row_path"].is_file(), "a refused close must not move the row"
 
-    def test_vanished_row_refuses_with_manifest_stale(self, close_fixture, tmp_path):
+    def test_vanished_row_refuses_with_manifest_stale(self, close_fixture, tmp_path: Path) -> None:
         close_fixture["row_path"].unlink()
         exit_code = grind_rows.main(
             [
@@ -226,7 +226,7 @@ class TestUnruledTradeoffRefusal:
     """A needs-judgment row (triage records a tradeoff) with no pm_ruling is never closed."""
 
     @staticmethod
-    def _close(fx, tmp_path, evidence: Path, digest: str):
+    def _close(fx, tmp_path, evidence: Path, digest: str) -> int:
         return grind_rows.main(
             [
                 "close",
@@ -251,27 +251,27 @@ class TestUnruledTradeoffRefusal:
         done.write_text("Declined per pm_ruling.", encoding="utf-8")
         return done
 
-    def test_unruled_tradeoff_row_stays_open_and_unstamped(self, close_fixture, tmp_path):
+    def test_unruled_tradeoff_row_stays_open_and_unstamped(self, close_fixture, tmp_path: Path) -> None:
         done = self._evidence(tmp_path, "- Verdict: fix.\n- has_tradeoff: true (a vs b)\n- ruling_on_tradeoff = no-ruling\n")
         assert self._close(close_fixture, tmp_path, done, close_fixture["digest"]) == grind_rows.EXIT_REFUSAL
         assert close_fixture["row_path"].read_text(encoding="utf-8") == close_fixture["row_text"]
         assert not (tmp_path / "archive").exists()
 
-    def test_ruled_tradeoff_row_still_closes(self, close_fixture, tmp_path):
+    def test_ruled_tradeoff_row_still_closes(self, close_fixture, tmp_path: Path) -> None:
         ruled = close_fixture["row_text"].replace("title:", "pm_ruling: accept the tradeoff\ntitle:")
         close_fixture["row_path"].write_text(ruled, encoding="utf-8", newline="\n")
         done = self._evidence(tmp_path, "- has_tradeoff: true (a vs b)\n")
         assert self._close(close_fixture, tmp_path, done, _sha256(ruled)) == grind_rows.EXIT_OK
         assert not close_fixture["row_path"].exists()
 
-    def test_unruled_row_without_tradeoff_still_closes(self, close_fixture, tmp_path):
+    def test_unruled_row_without_tradeoff_still_closes(self, close_fixture, tmp_path: Path) -> None:
         done = self._evidence(tmp_path, "- has_tradeoff: false.\n")
         assert self._close(close_fixture, tmp_path, done, close_fixture["digest"]) == grind_rows.EXIT_OK
         assert not close_fixture["row_path"].exists()
 
 
 class TestUntouchedFormattingPreservedByteForByte:
-    def test_untouched_title_field_and_body_survive_byte_for_byte(self, close_fixture, tmp_path):
+    def test_untouched_title_field_and_body_survive_byte_for_byte(self, close_fixture, tmp_path: Path) -> None:
         exit_code = grind_rows.main(
             [
                 "close",
@@ -301,7 +301,7 @@ class TestUntouchedFormattingPreservedByteForByte:
 
 
 class TestRowContainment:
-    def test_absolute_row_outside_repo_root_is_refused_with_usage(self, close_fixture, tmp_path):
+    def test_absolute_row_outside_repo_root_is_refused_with_usage(self, close_fixture, tmp_path: Path) -> None:
         other_root = tmp_path / "other-root"
         other_root.mkdir()
         exit_code = grind_rows.main(
@@ -321,7 +321,7 @@ class TestRowContainment:
         assert exit_code == grind_rows.EXIT_USAGE
         assert close_fixture["row_path"].is_file()
 
-    def test_escaping_row_is_refused_with_usage(self, close_fixture, tmp_path):
+    def test_escaping_row_is_refused_with_usage(self, close_fixture, tmp_path: Path) -> None:
         outside = tmp_path.parent / "outside-row.yaml"
         outside.write_text(close_fixture["row_text"], encoding="utf-8")
         try:
@@ -346,7 +346,7 @@ class TestRowContainment:
 
 
 class TestCrashWindowReconciliation:
-    def test_rerun_after_replace_but_before_unlink_finishes_the_removal(self, close_fixture, tmp_path):
+    def test_rerun_after_replace_but_before_unlink_finishes_the_removal(self, close_fixture, tmp_path: Path) -> None:
         first = grind_rows.main(
             [
                 "close",
@@ -388,7 +388,7 @@ class TestCrashWindowReconciliation:
         assert archived.is_file()
         assert not close_fixture["row_path"].exists()
 
-    def test_genuinely_conflicting_archive_destination_still_refuses(self, close_fixture, tmp_path):
+    def test_genuinely_conflicting_archive_destination_still_refuses(self, close_fixture, tmp_path: Path) -> None:
         archive_dir = tmp_path / "archive" / "bug-backlog" / "2026-09"
         archive_dir.mkdir(parents=True)
         (archive_dir / "bug-1.yaml").write_text("id: other\nstatus: closed-fixed\n", encoding="utf-8")
@@ -435,21 +435,21 @@ class TestCrashWindowReconciliation:
             ]
         )
 
-    def test_archived_row_for_the_same_surface_closure_is_tolerated(self, close_fixture, tmp_path):
+    def test_archived_row_for_the_same_surface_closure_is_tolerated(self, close_fixture, tmp_path: Path) -> None:
         exit_code = self._close_with_surface(close_fixture, tmp_path, archived_surface="a/test_x.py")
         assert exit_code == grind_rows.EXIT_OK
         assert not close_fixture["row_path"].exists()
         archived = tmp_path / "archive" / "bug-backlog" / "2026-09" / "bug-1.yaml"
         assert "closer: earlier run" in archived.read_text(encoding="utf-8")
 
-    def test_archived_row_for_a_different_surface_still_refuses(self, close_fixture, tmp_path):
+    def test_archived_row_for_a_different_surface_still_refuses(self, close_fixture, tmp_path: Path) -> None:
         exit_code = self._close_with_surface(close_fixture, tmp_path, archived_surface="b/test_y.py")
         assert exit_code == grind_rows.EXIT_REFUSAL
         assert close_fixture["row_path"].is_file()
 
 
 class TestAppendIdempotence:
-    def test_retried_append_does_not_duplicate_the_line(self, tmp_path, monkeypatch):
+    def test_retried_append_does_not_duplicate_the_line(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         argv = [
             "append",
@@ -470,7 +470,7 @@ class TestAppendIdempotence:
         lines = ledger_path.read_text(encoding="utf-8").splitlines()
         assert len(lines) == 1
 
-    def test_a_changed_field_appends_a_second_distinct_line(self, tmp_path, monkeypatch):
+    def test_a_changed_field_appends_a_second_distinct_line(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         base_argv = [
             "append",
@@ -495,7 +495,7 @@ class TestAppendIdempotence:
 
 
 class TestSettleDeletesOnlyItsOwnRowFile:
-    def test_settle_removes_only_the_named_row_ledger(self, tmp_path, monkeypatch):
+    def test_settle_removes_only_the_named_row_ledger(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         ledger_dir = Path("state/queue-grind/bug")
         ledger_dir.mkdir(parents=True)
@@ -510,7 +510,7 @@ class TestSettleDeletesOnlyItsOwnRowFile:
         assert not (ledger_dir / "bug-1.jsonl").exists()
         assert (ledger_dir / "bug-2.jsonl").exists()
 
-    def test_settle_on_an_already_settled_row_is_a_no_op(self, tmp_path, monkeypatch):
+    def test_settle_on_an_already_settled_row_is_a_no_op(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         exit_code = grind_rows.main(
             ["settle", "--profile", "bug", "--row-id", "never-existed", "--repo-root", str(tmp_path)]
@@ -519,7 +519,7 @@ class TestSettleDeletesOnlyItsOwnRowFile:
 
 
 class TestRepoRootRequired:
-    def test_append_without_repo_root_is_a_usage_error(self, tmp_path, monkeypatch):
+    def test_append_without_repo_root_is_a_usage_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         argv = [
             "append",
@@ -534,7 +534,7 @@ class TestRepoRootRequired:
         ]
         assert grind_rows.main(argv) == grind_rows.EXIT_USAGE
 
-    def test_close_without_repo_root_is_a_usage_error(self, close_fixture):
+    def test_close_without_repo_root_is_a_usage_error(self, close_fixture) -> None:
         exit_code = grind_rows.main(
             [
                 "close",
@@ -550,21 +550,21 @@ class TestRepoRootRequired:
         )
         assert exit_code == grind_rows.EXIT_USAGE
 
-    def test_close_usage_spells_each_flag_and_every_closing_verdict(self, close_fixture, capsys):
+    def test_close_usage_spells_each_flag_and_every_closing_verdict(self, close_fixture, capsys: pytest.CaptureFixture[str]) -> None:
         exit_code = grind_rows.main(["close", "--profile-dir", str(close_fixture["profile_dir"])])
         err = capsys.readouterr().err
         assert exit_code == grind_rows.EXIT_USAGE
         assert str(sorted(grind_rows.CLOSURE_CLOSING_BRANCHES)) in err
         assert "--profile-dir <dir>" in err and "--verdict D" not in err and "--verdict V" not in err
 
-    def test_settle_without_repo_root_is_a_usage_error(self, tmp_path, monkeypatch):
+    def test_settle_without_repo_root_is_a_usage_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         exit_code = grind_rows.main(["settle", "--profile", "bug", "--row-id", "never-existed"])
         assert exit_code == grind_rows.EXIT_USAGE
 
 
 class TestCheckVerb:
-    def test_stale_and_vanished_rows_are_reported(self, tmp_path, monkeypatch, capsys):
+    def test_stale_and_vanished_rows_are_reported(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         monkeypatch.chdir(tmp_path)
         row_a = tmp_path / "a.yaml"
         row_a.write_text("---\nid: a\n---\nbody\n", encoding="utf-8")
@@ -635,7 +635,7 @@ def _touched_paths(repo, sid):
     ]
 
 
-def _run_grind_row_recording(argv, cwd):
+def _run_grind_row_recording(argv, cwd) -> int:
     from coordinator_core.cli_entry import recording_declared_writes
 
     with recording_declared_writes(cwd=str(cwd)):
@@ -645,12 +645,12 @@ def _run_grind_row_recording(argv, cwd):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 class TestDR276DeclaredWrites:
-    def _set_session(self, monkeypatch, sid):
+    def _set_session(self, monkeypatch, sid) -> None:
         monkeypatch.setenv("CLAUDE_SESSION_ID", sid)
         monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
 
-    def test_append_records_a_touch_claim_for_the_ledger_file(self, tmp_path, monkeypatch):
+    def test_append_records_a_touch_claim_for_the_ledger_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = _make_repo(tmp_path)
         self._set_session(monkeypatch, "sid-append")
 
@@ -673,8 +673,8 @@ class TestDR276DeclaredWrites:
         assert "state/queue-grind/bug/row-1.jsonl" in _touched_paths(repo, "sid-append")
 
     def test_append_records_a_touch_claim_when_process_cwd_diverges_from_repo_root(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """state/bug-backlog/2026-09-22-ledger-only-grind-commits-deny-on-
         path-scope-for-run-scratch-files.yaml: `cmd_append` used to call bare
         `declare_write(ledger_path)`, which records under the OUTER
@@ -713,7 +713,7 @@ class TestDR276DeclaredWrites:
         assert exit_code == grind_rows.EXIT_OK
         assert "state/queue-grind/bug/row-1.jsonl" in _touched_paths(repo, "sid-append-cwd")
 
-    def test_close_records_touch_claims_for_both_new_and_removed_paths(self, tmp_path, monkeypatch):
+    def test_close_records_touch_claims_for_both_new_and_removed_paths(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         (tmp_path / ".git").mkdir()
         self._set_session(monkeypatch, "sid-close")
@@ -747,7 +747,7 @@ class TestDR276DeclaredWrites:
         assert "state/bug-backlog/bug-1.yaml" in touched
         assert any(p.startswith("archive/bug-backlog/2026-09/") and p.endswith("bug-1.yaml") for p in touched)
 
-    def test_settle_records_a_touch_claim_for_the_deleted_ledger(self, tmp_path, monkeypatch):
+    def test_settle_records_a_touch_claim_for_the_deleted_ledger(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = _make_repo(tmp_path)
         self._set_session(monkeypatch, "sid-settle")
         ledger_dir = repo / "state" / "queue-grind" / "bug"
@@ -761,7 +761,7 @@ class TestDR276DeclaredWrites:
         assert exit_code == grind_rows.EXIT_OK
         assert "state/queue-grind/bug/row-1.jsonl" in _touched_paths(repo, "sid-settle")
 
-    def test_run_record_records_a_touch_claim_for_the_run_record(self, tmp_path, monkeypatch):
+    def test_run_record_records_a_touch_claim_for_the_run_record(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = _make_repo(tmp_path)
         self._set_session(monkeypatch, "sid-run-record")
         record_file = repo / "record.json"
@@ -824,7 +824,7 @@ class TestRunRecordFromTranscript:
             f"--{contract.RECORD_FROM_TRANSCRIPT_FLAG}", open_m, "--repo-root", str(repo),
         ]
 
-    def test_lossy_record_lands_byte_identical(self, tmp_path, monkeypatch):
+    def test_lossy_record_lands_byte_identical(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from urllib.parse import quote
 
         from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
@@ -852,7 +852,7 @@ class TestRunRecordFromTranscript:
 
         assert unquote(token) == serialised
 
-    def test_instruction_sentence_marker_is_not_taken_as_the_segment(self, tmp_path, monkeypatch):
+    def test_instruction_sentence_marker_is_not_taken_as_the_segment(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from urllib.parse import quote
 
         from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
@@ -865,7 +865,7 @@ class TestRunRecordFromTranscript:
         self._env(monkeypatch, home)
         assert grind_rows.main(self._args(repo, open_m)) == grind_rows.EXIT_OK
 
-    def test_harness_indented_prompt_lands_the_record(self, tmp_path, monkeypatch):
+    def test_harness_indented_prompt_lands_the_record(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The harness indents every line of a computed prompt by two spaces (run 20261030T172043Z read
         the token as 2 spaces + token + newline + 2 spaces, 5 chars over what was sent)."""
         from urllib.parse import quote
@@ -886,7 +886,7 @@ class TestRunRecordFromTranscript:
         landed = repo / "state" / "queue-grind" / "bug" / "runs" / f"{self.RUN_ID}.json"
         assert json.loads(landed.read_text(encoding="utf-8"))["note"] == record["note"]
 
-    def test_damaged_delivery_still_lands(self, tmp_path, monkeypatch, capsys):
+    def test_damaged_delivery_still_lands(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         """The harness wraps the token line and indents every line: the record still lands byte-identical,
         while a token that lost a real char under the same wrap is still refused."""
         import textwrap
@@ -918,7 +918,7 @@ class TestRunRecordFromTranscript:
         assert grind_rows.main(self._args(bad_repo, open_m)) == grind_rows.EXIT_RELAY_CORRUPT
         assert not (bad_repo / "state").exists()
 
-    def test_harness_indented_damaged_segment_is_still_refused(self, tmp_path, monkeypatch, capsys):
+    def test_harness_indented_damaged_segment_is_still_refused(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         from urllib.parse import quote
 
         from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
@@ -934,7 +934,7 @@ class TestRunRecordFromTranscript:
         assert contract.RECORD_SEGMENT_CAUSE in capsys.readouterr().err
         assert not (repo / "state").exists()
 
-    def test_newest_transcript_with_marker_wins_over_older_stale_segment(self, tmp_path, monkeypatch):
+    def test_newest_transcript_with_marker_wins_over_older_stale_segment(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from urllib.parse import quote
 
         from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
@@ -951,7 +951,7 @@ class TestRunRecordFromTranscript:
         landed = repo / "state" / "queue-grind" / "bug" / "runs" / f"{self.RUN_ID}.json"
         assert json.loads(landed.read_text(encoding="utf-8"))["v"] == "new"
 
-    def test_damaged_segment_is_refused_and_nothing_lands(self, tmp_path, monkeypatch, capsys):
+    def test_damaged_segment_is_refused_and_nothing_lands(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         from urllib.parse import quote
 
         from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
@@ -969,7 +969,7 @@ class TestRunRecordFromTranscript:
         assert err.startswith(contract.RELAY_CORRUPT_HEAD) and contract.RECORD_SEGMENT_CAUSE in err
         assert not (repo / "state").exists()
 
-    def test_no_transcript_is_a_refusal_never_a_fallback(self, tmp_path, monkeypatch, capsys):
+    def test_no_transcript_is_a_refusal_never_a_fallback(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
 
         open_m, _ = contract.record_markers(self.RUN_ID)
@@ -991,7 +991,7 @@ class TestRunRecordFromTranscript:
         f.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return f
 
-    def test_marker_in_firing_session_main_transcript_lands_regardless_of_repo_root(self, tmp_path, monkeypatch):
+    def test_marker_in_firing_session_main_transcript_lands_regardless_of_repo_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from urllib.parse import quote
 
         from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
@@ -1007,7 +1007,7 @@ class TestRunRecordFromTranscript:
         landed = repo / "state" / "queue-grind" / "bug" / "runs" / f"{self.RUN_ID}.json"
         assert json.loads(landed.read_text(encoding="utf-8"))["v"] == "main"
 
-    def test_main_transcript_of_another_session_is_not_scanned(self, tmp_path, monkeypatch, capsys):
+    def test_main_transcript_of_another_session_is_not_scanned(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         from urllib.parse import quote
 
         from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
@@ -1027,7 +1027,7 @@ class TestRunRecordFromTranscript:
         assert grind_rows.main(self._args(repo, open_m)) == grind_rows.EXIT_USAGE
         assert not (repo / "state").exists()
 
-    def test_transcript_flag_with_another_record_source_is_usage(self, tmp_path):
+    def test_transcript_flag_with_another_record_source_is_usage(self, tmp_path: Path) -> None:
         exit_code = grind_rows.main(
             [
                 "run-record", "--profile", "bug", "--run-id", self.RUN_ID,
@@ -1037,7 +1037,7 @@ class TestRunRecordFromTranscript:
         )
         assert exit_code == grind_rows.EXIT_USAGE
 
-    def test_transcript_flag_refuses_an_agent_typed_digest(self, tmp_path, capsys):
+    def test_transcript_flag_refuses_an_agent_typed_digest(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         exit_code = grind_rows.main(
             [
                 "run-record", "--profile", "bug", "--run-id", self.RUN_ID,
@@ -1048,7 +1048,7 @@ class TestRunRecordFromTranscript:
         assert exit_code == grind_rows.EXIT_USAGE
         assert "reads its digest from the transcript" in capsys.readouterr().err
 
-    def test_segment_without_a_digest_line_is_never_taken_as_the_record(self, tmp_path, monkeypatch, capsys):
+    def test_segment_without_a_digest_line_is_never_taken_as_the_record(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         from urllib.parse import quote
 
         from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
@@ -1063,7 +1063,7 @@ class TestRunRecordFromTranscript:
         assert grind_rows.main(self._args(repo, open_m)) == grind_rows.EXIT_RELAY_CORRUPT
         assert not (repo / "state").exists()
 
-    def test_lookup_over_200_agent_files_is_under_500ms(self, tmp_path, monkeypatch):
+    def test_lookup_over_200_agent_files_is_under_500ms(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import time
         from urllib.parse import quote
 
@@ -1083,7 +1083,7 @@ class TestRunRecordFromTranscript:
 
 
 class TestRunRecordVerb:
-    def test_writes_the_record_atomically_under_repo_root(self, tmp_path, capsys):
+    def test_writes_the_record_atomically_under_repo_root(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         record_file = tmp_path / "record.json"
         record_file.write_text(json.dumps(_record(a=1, b=2)), encoding="utf-8")
 
@@ -1102,7 +1102,7 @@ class TestRunRecordVerb:
         # No leftover temp file.
         assert list(target.parent.glob(".*.tmp-*")) == []
 
-    def test_reads_a_percent_encoded_record_argument(self, tmp_path, capsys):
+    def test_reads_a_percent_encoded_record_argument(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         from urllib.parse import quote
 
         record = _record(reason="it's — café")
@@ -1117,7 +1117,7 @@ class TestRunRecordVerb:
         target = tmp_path / "state" / "queue-grind" / "bug" / "runs" / "20260922T000000Z.json"
         assert json.loads(target.read_text(encoding="utf-8")) == record
 
-    def _corrupt_token(self):
+    def _corrupt_token(self) -> tuple[str, str]:
         from urllib.parse import quote
 
         token = quote(json.dumps(_record(note="x")), safe="")
@@ -1125,7 +1125,7 @@ class TestRunRecordVerb:
         pos = token.rindex("%7D")
         return token, token[:pos] + token[pos + 1:]
 
-    def test_dropped_char_in_record_token_is_refused_before_any_write(self, tmp_path, capsys):
+    def test_dropped_char_in_record_token_is_refused_before_any_write(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
 
         good, bad = self._corrupt_token()
@@ -1140,7 +1140,7 @@ class TestRunRecordVerb:
         assert "--record-urlenc" in err
         assert not (tmp_path / "state").exists()
 
-    def test_dropped_char_in_declared_token_is_refused_before_any_write(self, tmp_path, capsys):
+    def test_dropped_char_in_declared_token_is_refused_before_any_write(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         from coordinator_core.ops.dispatch_emit import grind_commit_contract as contract
 
         from urllib.parse import quote
@@ -1161,7 +1161,7 @@ class TestRunRecordVerb:
         assert f"--{contract.DECLARED_FLAG}" in err
         assert not (tmp_path / "state").exists()
 
-    def test_record_urlenc_without_digest_flags_is_usage_naming_both(self, tmp_path, capsys):
+    def test_record_urlenc_without_digest_flags_is_usage_naming_both(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         exit_code = grind_rows.main(
             ["run-record", "--profile", "p", "--run-id", "r", "--record-urlenc", "%7B%7D", "--repo-root", str(tmp_path)]
         )
@@ -1169,7 +1169,7 @@ class TestRunRecordVerb:
         assert exit_code == grind_rows.EXIT_USAGE
         assert "--record-len" in err and "--record-sha256" in err
 
-    def test_invalid_json_names_the_source_flag(self, tmp_path, capsys):
+    def test_invalid_json_names_the_source_flag(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         exit_code = grind_rows.main(
             [
                 "run-record", "--profile", "p", "--run-id", "r",
@@ -1179,7 +1179,7 @@ class TestRunRecordVerb:
         assert exit_code == grind_rows.EXIT_USAGE
         assert "--record-urlenc is not valid JSON" in capsys.readouterr().err
 
-    def test_record_file_and_urlenc_together_is_usage(self, tmp_path, capsys):
+    def test_record_file_and_urlenc_together_is_usage(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         exit_code = grind_rows.main(
             [
                 "run-record", "--profile", "bug", "--run-id", "20260922T000000Z",
@@ -1189,7 +1189,7 @@ class TestRunRecordVerb:
         )
         assert exit_code == grind_rows.EXIT_USAGE
 
-    def test_reads_from_stdin_when_record_file_is_a_dash(self, tmp_path, monkeypatch, capsys):
+    def test_reads_from_stdin_when_record_file_is_a_dash(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         import io
 
         monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(_record(x=1))))
@@ -1206,7 +1206,7 @@ class TestRunRecordVerb:
         target = tmp_path / "state" / "queue-grind" / "bug" / "runs" / "20260922T000001Z.json"
         assert json.loads(target.read_text(encoding="utf-8")) == _record(x=1)
 
-    def test_reads_from_stdin_when_record_file_is_absent(self, tmp_path, monkeypatch, capsys):
+    def test_reads_from_stdin_when_record_file_is_absent(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         import io
 
         monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(_record(y=2))))
@@ -1222,7 +1222,7 @@ class TestRunRecordVerb:
         target = tmp_path / "state" / "queue-grind" / "bug" / "runs" / "20260922T000004Z.json"
         assert json.loads(target.read_text(encoding="utf-8")) == _record(y=2)
 
-    def test_run_id_escaping_the_runs_directory_is_a_usage_error(self, tmp_path):
+    def test_run_id_escaping_the_runs_directory_is_a_usage_error(self, tmp_path: Path) -> None:
         record_file = tmp_path / "record.json"
         record_file.write_text(json.dumps(_record()), encoding="utf-8")
         exit_code = grind_rows.main(
@@ -1236,7 +1236,7 @@ class TestRunRecordVerb:
         )
         assert exit_code == grind_rows.EXIT_USAGE
 
-    def test_malformed_json_is_a_usage_error(self, tmp_path):
+    def test_malformed_json_is_a_usage_error(self, tmp_path: Path) -> None:
         record_file = tmp_path / "record.json"
         record_file.write_text("not json", encoding="utf-8")
         exit_code = grind_rows.main(
@@ -1250,7 +1250,7 @@ class TestRunRecordVerb:
         )
         assert exit_code == grind_rows.EXIT_USAGE
 
-    def test_missing_repo_root_is_a_usage_error(self, tmp_path):
+    def test_missing_repo_root_is_a_usage_error(self, tmp_path: Path) -> None:
         record_file = tmp_path / "record.json"
         record_file.write_text("{}", encoding="utf-8")
         exit_code = grind_rows.main(
@@ -1265,7 +1265,7 @@ class TestRunRecordVerb:
 
 
 class TestSweepSettlesOrphanedLedgers:
-    def test_sweep_settles_only_rows_the_queue_no_longer_yields(self, tmp_path):
+    def test_sweep_settles_only_rows_the_queue_no_longer_yields(self, tmp_path: Path) -> None:
         # A hand closure `git mv`s the row out without settling; a restored row
         # at the same id would inherit the stale ledger's route-to-* mark.
         profile_dir = tmp_path / "queue-profiles"
@@ -1299,7 +1299,7 @@ class TestSweepSettlesOrphanedLedgers:
         assert sorted(p.name for p in ledger_dir.glob("*.jsonl")) == ["bug-filtered.jsonl", "bug-live.jsonl"]
         assert sorted(p.name for p in (ledger_dir / "_handback").glob("*.json")) == ["mark-live.json"]
 
-    def test_sweep_without_a_queue_is_a_usage_error_and_deletes_nothing(self, tmp_path):
+    def test_sweep_without_a_queue_is_a_usage_error_and_deletes_nothing(self, tmp_path: Path) -> None:
         ledger = tmp_path / "state" / "queue-grind" / "bug" / "bug-1.jsonl"
         ledger.parent.mkdir(parents=True)
         ledger.write_text("{}\n", encoding="utf-8")
@@ -1311,7 +1311,7 @@ class TestSweepSettlesOrphanedLedgers:
 
 
 class TestArchiveDestinationIsTheMoversPath:
-    def test_close_writes_exactly_the_path_archive_destination_names(self, close_fixture, tmp_path, capsys):
+    def test_close_writes_exactly_the_path_archive_destination_names(self, close_fixture, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         stamp = "20261002T010203Z"
         exit_code = grind_rows.main(
             [
@@ -1335,7 +1335,7 @@ class TestArchiveDestinationIsTheMoversPath:
         assert Path(printed["new"]) == tmp_path / dest
 
 
-def test_evidence_rel_names_the_one_evidence_home():
+def test_evidence_rel_names_the_one_evidence_home() -> None:
     assert (
         grind_rows.evidence_rel("bug", "[run-id]", "<item-id>", "done")
         == "state/queue-grind/bug/evidence/[run-id]/<item-id>.done.md"
@@ -1373,7 +1373,7 @@ class TestAppendEvidenceFileRefusal:
             "C:\\elsewhere\\outside.md",  # abs-path-ok: refusal fixture for a Windows drive path
         ],
     )
-    def test_refused_without_writing(self, tmp_path, capsys, evidence):
+    def test_refused_without_writing(self, tmp_path: Path, capsys: pytest.CaptureFixture[str], evidence) -> None:
         assert grind_rows.main(self._argv(tmp_path, evidence)) == grind_rows.EXIT_USAGE
         assert not (tmp_path / "state" / "queue-grind").exists()
         assert "state/queue-grind/<profile>/evidence" in capsys.readouterr().err
@@ -1386,7 +1386,7 @@ class TestAppendEvidenceFileRefusal:
             "scratchy/x.md",
         ],
     )
-    def test_admitted_relative_and_absolute(self, tmp_path, evidence):
+    def test_admitted_relative_and_absolute(self, tmp_path: Path, evidence) -> None:
         assert grind_rows.main(self._argv(tmp_path, evidence)) == grind_rows.EXIT_OK
         absolute = str(tmp_path / "state" / "queue-grind" / "bug" / "evidence" / "r1" / "i1.done.md")
         assert grind_rows.main(self._argv(tmp_path, absolute)) == grind_rows.EXIT_OK
@@ -1394,14 +1394,14 @@ class TestAppendEvidenceFileRefusal:
         assert json.dumps(evidence)[1:-1] in stored
 
 
-def test_evidence_rel_rejects_unknown_kind():
+def test_evidence_rel_rejects_unknown_kind() -> None:
     with pytest.raises(ValueError):
         grind_rows.evidence_rel("bug", "r1", "i1", "notes")
 
 
 class TestCloseReleasesRowClaim:
     @pytest.fixture
-    def claimed(self, close_fixture, tmp_path, monkeypatch):
+    def claimed(self, close_fixture, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         from coordinator_core.session import claims, liveness
         from coordinator_core.tests.git_seed import seeded_repo
 
@@ -1411,7 +1411,7 @@ class TestCloseReleasesRowClaim:
         for var in ("CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
             monkeypatch.delenv(var, raising=False)
 
-        def as_session(sid):
+        def as_session(sid) -> None:
             monkeypatch.setenv("COORDINATOR_SESSION_ID", sid)
             live.add(sid)
 
@@ -1424,7 +1424,7 @@ class TestCloseReleasesRowClaim:
         )
         return close_fixture
 
-    def _close(self, fx, *, digest=None):
+    def _close(self, fx, *, digest=None) -> int:
         return grind_rows.main(
             [
                 "close",
@@ -1445,14 +1445,14 @@ class TestCloseReleasesRowClaim:
             "row", fx["row_rel"], baton_repo_root=str(fx["root"]), cwd=str(fx["root"])
         )
 
-    def test_closers_own_claim_is_released(self, claimed):
+    def test_closers_own_claim_is_released(self, claimed) -> None:
         claimed["as_session"]("sid-a")
         assert self._claim(claimed)
         assert claimed["claim_dir"].is_dir()
         assert self._close(claimed) == grind_rows.EXIT_OK
         assert not claimed["claim_dir"].exists()
 
-    def test_reconcile_path_also_releases(self, claimed):
+    def test_reconcile_path_also_releases(self, claimed) -> None:
         claimed["as_session"]("sid-a")
         assert self._close(claimed) == grind_rows.EXIT_OK
         claimed["row_path"].write_text(claimed["row_text"], encoding="utf-8", newline="\n")
@@ -1460,25 +1460,25 @@ class TestCloseReleasesRowClaim:
         assert self._close(claimed) == grind_rows.EXIT_OK
         assert not claimed["claim_dir"].exists()
 
-    def test_peer_live_claim_is_untouched(self, claimed):
+    def test_peer_live_claim_is_untouched(self, claimed) -> None:
         claimed["as_session"]("sid-a")
         assert self._claim(claimed)
         claimed["as_session"]("sid-b")
         assert self._close(claimed) == grind_rows.EXIT_OK
         assert (claimed["claim_dir"] / "session_id").read_text().strip() == "sid-a"
 
-    def test_digest_mismatch_refusal_keeps_claim(self, claimed):
+    def test_digest_mismatch_refusal_keeps_claim(self, claimed) -> None:
         claimed["as_session"]("sid-a")
         assert self._claim(claimed)
         assert self._close(claimed, digest="0" * 64) == grind_rows.EXIT_MANIFEST_STALE
         assert claimed["claim_dir"].is_dir()
 
-    def test_close_without_claim_succeeds(self, claimed):
+    def test_close_without_claim_succeeds(self, claimed) -> None:
         claimed["as_session"]("sid-a")
         assert self._close(claimed) == grind_rows.EXIT_OK
         assert not claimed["claim_dir"].exists()
 
-    def test_close_records_zero_spawns(self, claimed, monkeypatch):
+    def test_close_records_zero_spawns(self, claimed, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 
         claimed["as_session"]("sid-a")
@@ -1496,7 +1496,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
     SID = "sid-a"
 
     @pytest.fixture
-    def repo(self, tmp_path, monkeypatch):
+    def repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
         from coordinator_core.session import touch_record
         from coordinator_core.tests.git_seed import seeded_repo
 
@@ -1517,7 +1517,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert _git(["commit", "-m", "seed ledgers"], tmp_path).returncode == 0
         return tmp_path
 
-    def _run_record(self, repo, capsys, run_id="20261015T000000Z", record=None, extra=()):
+    def _run_record(self, repo, capsys, run_id: str = "20261015T000000Z", record=None, extra=()):
         from urllib.parse import quote
 
         capsys.readouterr()
@@ -1529,7 +1529,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         captured = capsys.readouterr()
         return code, captured
 
-    def _sweep_and_append(self, repo):
+    def _sweep_and_append(self, repo) -> None:
         for row in ("old-1", "old-2"):
             assert grind_rows.main(["settle", "--profile", "bug", "--row-id", row, "--repo-root", str(repo)]) == 0
         assert grind_rows.main(
@@ -1542,7 +1542,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         evidence.write_text("done\n", encoding="utf-8")
         grind_rows._declare_under_repo_root(evidence, repo)
 
-    def test_everything_lands_in_one_commit_and_the_tree_is_clean(self, repo, capsys):
+    def test_everything_lands_in_one_commit_and_the_tree_is_clean(self, repo, capsys: pytest.CaptureFixture[str]) -> None:
         self._sweep_and_append(repo)
         discharge = repo / "state" / "block-discharge" / f"{self.SID}.jsonl"
         discharge.parent.mkdir(parents=True)
@@ -1571,7 +1571,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         subject = _git(["log", "-1", "--format=%s"], repo).stdout.strip()
         assert subject == "grind(bug): run 20261015T000000Z bookkeeping, removed 2 settled ledgers"
 
-    def test_a_ledger_a_live_peer_claims_is_withheld_and_left_dirty(self, repo, capsys):
+    def test_a_ledger_a_live_peer_claims_is_withheld_and_left_dirty(self, repo, capsys: pytest.CaptureFixture[str]) -> None:
         from coordinator_core.session import scope, touch_record
 
         self._sweep_and_append(repo)
@@ -1589,7 +1589,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert peer_file not in out["landed"]
         assert _git(["status", "--porcelain"], repo).stdout.split() == ["M", peer_file]
 
-    def test_a_run_with_nothing_swept_or_appended_still_lands_its_record(self, repo, capsys):
+    def test_a_run_with_nothing_swept_or_appended_still_lands_its_record(self, repo, capsys: pytest.CaptureFixture[str]) -> None:
         code, captured = self._run_record(repo, capsys)
 
         assert code == grind_rows.EXIT_OK, captured.err
@@ -1598,7 +1598,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert out["deleted"] == [] and out["commit"]
         assert _git(["status", "--porcelain"], repo).stdout == ""
 
-    def test_no_resolvable_session_writes_the_record_and_commits_nothing(self, repo, capsys, monkeypatch):
+    def test_no_resolvable_session_writes_the_record_and_commits_nothing(self, repo, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("COORDINATOR_SESSION_ID")
 
         code, captured = self._run_record(repo, capsys)
@@ -1607,7 +1607,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         out = json.loads(captured.out)
         assert out["commit"] is None and out["landed"] == []
 
-    def test_a_commit_refusal_exits_nonzero_with_the_verbatim_reason(self, repo, capsys, monkeypatch):
+    def test_a_commit_refusal_exits_nonzero_with_the_verbatim_reason(self, repo, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.ops.ceremony import commit_v2
 
         monkeypatch.setattr(
@@ -1619,7 +1619,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert code == grind_rows.EXIT_REFUSAL
         assert "gate says no" in captured.err
 
-    def test_plain_bookkeeping_spawns_no_git_process(self, repo, capsys, monkeypatch):
+    def test_plain_bookkeeping_spawns_no_git_process(self, repo, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 
         self._sweep_and_append(repo)
@@ -1632,14 +1632,14 @@ class TestRunRecordLandsTheRunsBookkeeping:
 
     # -- widened run-close land set ------------------------------------------------
 
-    def _write(self, repo, rel, text, *, claim=True):
+    def _write(self, repo, rel, text, *, claim: bool = True) -> None:
         path = repo / rel
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8")
         if claim:
             grind_rows._declare_under_repo_root(path, repo)
 
-    def _decisions(self, repo, **keys):
+    def _decisions(self, repo, **keys) -> list[str]:
         path = repo.parent / f"{repo.name}-decisions.json"
         path.write_text(json.dumps(keys), encoding="utf-8")
         return ["--decisions-file", str(path)]
@@ -1653,7 +1653,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
             *decisions,
         ]
 
-    def test_queue_edit_declared_sizing_baton_and_minted_row_land_in_one_commit(self, repo, capsys):
+    def test_queue_edit_declared_sizing_baton_and_minted_row_land_in_one_commit(self, repo, capsys: pytest.CaptureFixture[str]) -> None:
         self._write(repo, "state/bug-backlog/bug-1.yaml", "status: open\n", claim=False)
         assert _git(["add", "-A"], repo).returncode == 0
         assert _git(["commit", "-m", "seed row"], repo).returncode == 0
@@ -1678,7 +1678,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert _git(["rev-list", "--count", "HEAD"], repo).stdout.strip() == str(int(before) + 1)
         assert _git(["status", "--porcelain"], repo).stdout == ""
 
-    def test_a_baseline_dirty_claim_does_not_land(self, repo, capsys):
+    def test_a_baseline_dirty_claim_does_not_land(self, repo, capsys: pytest.CaptureFixture[str]) -> None:
         self._write(repo, "state/sizings/old.yaml", "predates the run\n")
         self._write(repo, "state/sizings/new.yaml", "this run\n")
         extra = self._widened_extra(repo, [], self._decisions(repo, baseline_dirty=["state/sizings/old.yaml"]))
@@ -1690,7 +1690,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert "state/sizings/new.yaml" in landed and "state/sizings/old.yaml" not in landed
         assert _git(["status", "--porcelain"], repo).stdout.split() == ["??", "state/sizings/old.yaml"]
 
-    def test_a_peer_contested_declared_path_is_withheld_and_named(self, repo, capsys):
+    def test_a_peer_contested_declared_path_is_withheld_and_named(self, repo, capsys: pytest.CaptureFixture[str]) -> None:
         from coordinator_core.session import scope, touch_record
 
         self._write(repo, "state/handoffs/b.md", "---\ncarried_items: []\n---\nbaton\n", claim=False)
@@ -1703,7 +1703,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert out["withheld"] == ["state/handoffs/b.md"]
         assert "state/handoffs/b.md" not in out["landed"]
 
-    def test_a_declared_path_outside_the_roots_never_lands(self, repo, capsys):
+    def test_a_declared_path_outside_the_roots_never_lands(self, repo, capsys: pytest.CaptureFixture[str]) -> None:
         self._write(repo, "docs/elsewhere.md", "x\n", claim=False)
 
         code, captured = self._run_record(repo, capsys, extra=self._widened_extra(repo, ["docs/elsewhere.md"]))
@@ -1712,7 +1712,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert "docs/elsewhere.md" not in json.loads(captured.out)["landed"]
         assert _git(["status", "--porcelain", "-uall"], repo).stdout.split() == ["??", "docs/elsewhere.md"]
 
-    def test_a_record_missing_a_required_key_exits_usage_and_writes_nothing(self, repo, capsys):
+    def test_a_record_missing_a_required_key_exits_usage_and_writes_nothing(self, repo, capsys: pytest.CaptureFixture[str]) -> None:
         record = _record()
         del record["handed_back"]
 
@@ -1722,7 +1722,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert "handed_back" in captured.err
         assert not (repo / "state/queue-grind/bug/runs/20261015T000000Z.json").exists()
 
-    def test_a_tradeoff_is_written_verbatim_beside_the_evidence_and_lands(self, repo, capsys):
+    def test_a_tradeoff_is_written_verbatim_beside_the_evidence_and_lands(self, repo, capsys: pytest.CaptureFixture[str]) -> None:
         text = "it's a trade — café\nsecond line"
         record = _record(handed_back=[
             {"row": "bug-1", "type": "needs-judgment", "reason": "fix reported a tradeoff", "tradeoff": text},
@@ -1740,13 +1740,13 @@ class TestRunRecordLandsTheRunsBookkeeping:
 
     # -- run-record --sweep ----------------------------------------------------------
 
-    def _sweep_extra(self, repo, profile_dir):
+    def _sweep_extra(self, repo, profile_dir) -> list[str]:
         queue = repo / "state" / "bug-backlog"
         queue.mkdir(parents=True, exist_ok=True)
         (queue / "keep.yaml").write_text("id: keep\nstatus: open\n", encoding="utf-8")
         return ["--sweep", "--profile-dir", str(profile_dir), "--queue", "state/bug-backlog"]
 
-    def test_sweep_settles_the_ledgers_and_lands_the_unlinks_in_the_records_commit(self, repo, capsys):
+    def test_sweep_settles_the_ledgers_and_lands_the_unlinks_in_the_records_commit(self, repo, capsys: pytest.CaptureFixture[str]) -> None:
         profile_dir = repo.parent / f"{repo.name}-profiles"
         _write_profile(profile_dir, archive_path="archive/bug-backlog", schema_rel="schema/bug.schema.json")
 
@@ -1761,7 +1761,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         record = json.loads((repo / "state/queue-grind/bug/runs/20261015T000000Z.json").read_text(encoding="utf-8"))
         assert record["handed_back"] == []
 
-    def test_a_refused_sweep_still_writes_the_record_and_names_the_failure(self, repo, capsys):
+    def test_a_refused_sweep_still_writes_the_record_and_names_the_failure(self, repo, capsys: pytest.CaptureFixture[str]) -> None:
         from coordinator_core.ops.dispatch_emit.grind_commit_contract import SWEEP_FAILED_HEAD
 
         missing_profiles = repo.parent / f"{repo.name}-no-profiles"
@@ -1781,7 +1781,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert record["counts"]["by_type"]["stage-dead"] == 1
         assert (repo / "state/queue-grind/bug/old-1.jsonl").is_file()
 
-    def test_sweep_without_a_profile_dir_or_a_queue_is_a_usage_error_and_writes_no_record(self, repo, capsys):
+    def test_sweep_without_a_profile_dir_or_a_queue_is_a_usage_error_and_writes_no_record(self, repo, capsys: pytest.CaptureFixture[str]) -> None:
         record_path = repo / "state/queue-grind/bug/runs/20261015T000000Z.json"
         no_profile_dir = self._run_record(repo, capsys, extra=["--sweep", "--queue", "state/bug-backlog"])
         no_queue = self._run_record(repo, capsys, extra=["--sweep", "--profile-dir", str(repo)])
@@ -1793,7 +1793,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
 
     # -- resolved vs stray deletions -------------------------------------------------
 
-    def _deletion_fixture(self, repo):
+    def _deletion_fixture(self, repo) -> tuple[str, list[str]]:
         """A settled ledger removed, `closed.yaml` archived at its destination, `stray.yaml`
         removed with no archive copy."""
         profile_dir = repo.parent / f"{repo.name}-profiles"
@@ -1823,7 +1823,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         monkeypatch.setattr(commit_v2, "_handler", spy)
         return seen
 
-    def test_settled_ledger_and_archived_row_deletions_are_declared_and_commit(self, repo, capsys, monkeypatch):
+    def test_settled_ledger_and_archived_row_deletions_are_declared_and_commit(self, repo, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
         archive_rel, extra = self._deletion_fixture(repo)
         seen = self._capture_commit_params(monkeypatch)
 
@@ -1840,7 +1840,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert archive_rel in tracked
         assert not set(gone) & set(tracked)
 
-    def test_a_queue_row_deleted_without_an_archive_copy_stays_out_and_is_named(self, repo, capsys, monkeypatch):
+    def test_a_queue_row_deleted_without_an_archive_copy_stays_out_and_is_named(self, repo, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
         _, extra = self._deletion_fixture(repo)
         seen = self._capture_commit_params(monkeypatch)
 
@@ -1855,7 +1855,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert "state/bug-backlog/stray.yaml" in _git(["ls-tree", "-r", "--name-only", "HEAD"], repo).stdout.split()
         assert out["commit"] and "state/queue-grind/bug/runs/20261015T000000Z.json" in out["landed"]
 
-    def test_without_a_profile_dir_every_queue_row_deletion_is_unresolved(self, repo, capsys):
+    def test_without_a_profile_dir_every_queue_row_deletion_is_unresolved(self, repo, capsys: pytest.CaptureFixture[str]) -> None:
         _, extra = self._deletion_fixture(repo)
 
         code, captured = self._run_record(repo, capsys, extra=extra[:2])
@@ -1865,7 +1865,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert out["unresolved_deletions"] == ["state/bug-backlog/closed.yaml", "state/bug-backlog/stray.yaml"]
         assert out["deleted"] == ["state/queue-grind/bug/old-1.jsonl"]
 
-    def test_a_malformed_profile_is_named_on_stderr_and_deletions_stay_unresolved(self, repo, capsys):
+    def test_a_malformed_profile_is_named_on_stderr_and_deletions_stay_unresolved(self, repo, capsys: pytest.CaptureFixture[str]) -> None:
         _, extra = self._deletion_fixture(repo)
         (repo.parent / f"{repo.name}-profiles" / "bug.yaml").write_text("- not\n- a mapping\n", encoding="utf-8")
 
@@ -1877,7 +1877,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert out["unresolved_deletions"] == ["state/bug-backlog/closed.yaml", "state/bug-backlog/stray.yaml"]
         assert out["deleted"] == ["state/queue-grind/bug/old-1.jsonl"]
 
-    def test_the_widened_land_set_spawns_no_git_process(self, repo, capsys, monkeypatch):
+    def test_the_widened_land_set_spawns_no_git_process(self, repo, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 
         self._write(repo, "state/sizings/s.yaml", "size: s\n", claim=False)
@@ -1888,7 +1888,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert "state/sizings/s.yaml" in json.loads(captured.out)["landed"]
         assert list(spawns) == []
 
-    def test_a_landed_done_md_brings_its_unclaimed_verify_md_sibling(self, repo, capsys):
+    def test_a_landed_done_md_brings_its_unclaimed_verify_md_sibling(self, repo, capsys: pytest.CaptureFixture[str]) -> None:
         done = "state/queue-grind/bug/evidence/r/row-1.done.md"
         verify = "state/queue-grind/bug/evidence/r/row-1.verify.md"
         self._write(repo, done, "done\n")
@@ -1901,7 +1901,7 @@ class TestRunRecordLandsTheRunsBookkeeping:
         assert done in landed and verify in landed
         assert verify in _git(["ls-tree", "-r", "--name-only", "HEAD"], repo).stdout.split()
 
-    def test_a_done_md_without_a_verify_md_lands_alone_and_a_stray_verify_md_stays_out(self, repo, capsys):
+    def test_a_done_md_without_a_verify_md_lands_alone_and_a_stray_verify_md_stays_out(self, repo, capsys: pytest.CaptureFixture[str]) -> None:
         done = "state/queue-grind/bug/evidence/r/row-2.done.md"
         stray = "state/queue-grind/bug/evidence/r/row-3.verify.md"
         self._write(repo, done, "done\n")
@@ -1918,7 +1918,7 @@ class TestSplitVerb:
     PARENT = "2026-11-01-three-failures-abc123def456"
 
     @pytest.fixture(autouse=True)
-    def _no_output_override(self, monkeypatch):
+    def _no_output_override(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("QUEUE_APPEND_OUTPUT_ROOT", raising=False)
 
     def _seed(self, root: Path) -> None:
@@ -1939,7 +1939,7 @@ class TestSplitVerb:
         ])
         return code, capsys.readouterr()
 
-    def test_split_writes_children_and_a_rerun_returns_the_same_ids(self, tmp_path, capsys):
+    def test_split_writes_children_and_a_rerun_returns_the_same_ids(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         self._seed(tmp_path)
         items = [{"title": f"item {i}", "evidence": "e", "declared_files": [f"p/f{i}.py"]} for i in range(3)]
         code, out = self._split(tmp_path, items, capsys)
@@ -1952,18 +1952,18 @@ class TestSplitVerb:
         assert code == grind_rows.EXIT_OK
         assert json.loads(again.out)["children"] == children
 
-    def test_one_item_is_refused_and_mints_nothing(self, tmp_path, capsys):
+    def test_one_item_is_refused_and_mints_nothing(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         self._seed(tmp_path)
         code, _out = self._split(tmp_path, [{"title": "only"}], capsys)
         assert code == grind_rows.EXIT_REFUSAL
         assert len(list((tmp_path / "state" / "bug-backlog").glob("*.yaml"))) == 1
 
-    def test_non_array_items_is_a_usage_error(self, tmp_path, capsys):
+    def test_non_array_items_is_a_usage_error(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         self._seed(tmp_path)
         code, _out = self._split(tmp_path, {"title": "x"}, capsys)
         assert code == grind_rows.EXIT_USAGE
 
-    def test_split_is_listed_in_the_verb_usage(self, capsys):
+    def test_split_is_listed_in_the_verb_usage(self, capsys: pytest.CaptureFixture[str]) -> None:
         assert grind_rows.main([]) == grind_rows.EXIT_USAGE
         assert "split" in capsys.readouterr().err
 
@@ -1975,7 +1975,7 @@ class TestPrewriteCommitParams:
     SCRIPT = "scratch/warp/g.workflow.mjs"
     SESSION = "sess-prewrite"
 
-    def _spawn(self, tmp_path, monkeypatch, params):
+    def _spawn(self, tmp_path, monkeypatch, params) -> None:
         from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 
         home = tmp_path / "claude-home"
@@ -2004,10 +2004,10 @@ class TestPrewriteCommitParams:
             },
         }
 
-    def _argv(self, repo):
+    def _argv(self, repo) -> list[str]:
         return ["prewrite-commit-params", "--repo-root", str(repo), "--run-id", self.RUN]
 
-    def test_admitted_token_writes_params_and_the_rows_fix_paths(self, tmp_path, monkeypatch, capsys):
+    def test_admitted_token_writes_params_and_the_rows_fix_paths(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         from coordinator_core.backlog_grind_assemble import grind_fix_paths
         from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 
@@ -2022,7 +2022,7 @@ class TestPrewriteCommitParams:
         record = grind_fix_paths.read(path.parent, "r1")
         assert record == {"touched": ["a.md", "docs/x.md"], "created": [], "removed": ["gone.md"]}
 
-    def test_bad_token_is_refused_naming_the_leg_and_writes_nothing(self, tmp_path, monkeypatch, capsys):
+    def test_bad_token_is_refused_naming_the_leg_and_writes_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 
         repo = tmp_path / "repo"
@@ -2034,7 +2034,7 @@ class TestPrewriteCommitParams:
         assert not chan.params_path(repo, self.RUN).exists()
         assert not (chan.params_path(repo, self.RUN).parent / "fix-paths").exists()
 
-    def test_no_params_block_in_any_spawn_is_refused(self, tmp_path, monkeypatch, capsys):
+    def test_no_params_block_in_any_spawn_is_refused(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         repo = tmp_path / "repo"
         repo.mkdir()
         monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path / "empty-home"))
@@ -2042,7 +2042,7 @@ class TestPrewriteCommitParams:
         assert grind_rows.main(self._argv(repo)) == grind_rows.EXIT_REFUSAL
         assert "no-params-block" in capsys.readouterr().err
 
-    def test_a_block_for_another_run_is_not_taken(self, tmp_path, monkeypatch, capsys):
+    def test_a_block_for_another_run_is_not_taken(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         repo = tmp_path / "repo"
         (repo / ".git").mkdir(parents=True)
         self._spawn(tmp_path, monkeypatch, {**self._params(repo), "run_id": "20261113T020202Z"})
@@ -2055,7 +2055,7 @@ class TestCloseAdmitsLegacyLessonRows:
 
     _BASE = 'created: "2026-08-21"\ntitle: "t"\nbody: "b"\nstatus: "open"\n'
 
-    def _close(self, tmp_path, monkeypatch, row_text, row_rel="state/lessons/l-1.yaml"):
+    def _close(self, tmp_path, monkeypatch, row_text, row_rel: str = "state/lessons/l-1.yaml"):
         import coordinator_core.frontmatter.schema_validate as sv
 
         monkeypatch.chdir(tmp_path)
@@ -2083,7 +2083,7 @@ class TestCloseAdmitsLegacyLessonRows:
         )
         return code, tmp_path / "archive" / "lessons"
 
-    def test_partial_provenance_and_missing_scope_close(self, tmp_path, monkeypatch):
+    def test_partial_provenance_and_missing_scope_close(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         row = self._BASE + 'repo: "example-store-repo"\nsystem:\n  provenance_completeness: "partial"\n'
         code, archive = self._close(tmp_path, monkeypatch, row)
         assert code == grind_rows.EXIT_OK
@@ -2091,13 +2091,13 @@ class TestCloseAdmitsLegacyLessonRows:
         text = closed.read_text(encoding="utf-8")
         assert 'provenance_completeness: "partial"' in text and "from_repo" not in text
 
-    def test_row_with_no_repo_in_its_own_queue_closes_with_from_repo_defaulted(self, tmp_path, monkeypatch):
+    def test_row_with_no_repo_in_its_own_queue_closes_with_from_repo_defaulted(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         code, archive = self._close(tmp_path, monkeypatch, self._BASE)
         assert code == grind_rows.EXIT_OK
         (closed,) = archive.rglob("l-1.yaml")
         assert "from_repo" not in closed.read_text(encoding="utf-8")
 
-    def test_outbox_row_with_no_repo_is_refused_with_the_named_reason(self, tmp_path, monkeypatch, capsys):
+    def test_outbox_row_with_no_repo_is_refused_with_the_named_reason(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         rel = "state/cross-repo/outbox/l-1.yaml"
         code, archive = self._close(tmp_path, monkeypatch, self._BASE, row_rel=rel)
         assert code == grind_rows.EXIT_REFUSAL

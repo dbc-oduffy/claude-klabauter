@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_pipeline_compose_brief_and_ha
     _segment,
     _stage,
 )
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -72,12 +73,12 @@ def _offences(workflow: str, script: str) -> list[str]:
     return bad
 
 
-def test_the_phrases_checked_are_the_ones_the_clause_carries():
+def test_the_phrases_checked_are_the_ones_the_clause_carries() -> None:
     clause = sidecar_clause("x/")
     assert all(p in clause for p in _HEREDOC_PHRASES)
 
 
-def test_every_composed_workflow_agent_call_names_its_sidecar_and_the_heredoc_fallback(tmp_path):
+def test_every_composed_workflow_agent_call_names_its_sidecar_and_the_heredoc_fallback(tmp_path: Path) -> None:
     composed = dict(_composed(tmp_path))
     composed["pipeline"] = [
         _compose_pipeline(
@@ -97,7 +98,7 @@ def test_every_composed_workflow_agent_call_names_its_sidecar_and_the_heredoc_fa
     assert not offences, "\n".join(sorted(set(offences)))
 
 
-def test_the_ratchet_refuses_a_call_without_the_clause():
+def test_the_ratchet_refuses_a_call_without_the_clause() -> None:
     script = "const r = await agent('do a thing', { label: 'bare', agentType: 'x', model: 'sonnet' });"
     assert _offences("t", script) == [
         "t 'bare': 0 sidecar_dir markers",
@@ -105,19 +106,19 @@ def test_the_ratchet_refuses_a_call_without_the_clause():
     ]
 
 
-def test_the_ratchet_refuses_a_doubled_marker():
+def test_the_ratchet_refuses_a_doubled_marker() -> None:
     clause = sidecar_clause("d/")
     script = f"await agent({'x' + clause + clause!r}, {{ label: 'dup' }});"
     assert any("2 sidecar_dir markers" in o for o in _offences("t", script))
 
 
 @pytest.mark.parametrize("phrase", _HEREDOC_PHRASES)
-def test_the_ratchet_refuses_a_call_missing_one_phrase(phrase):
+def test_the_ratchet_refuses_a_call_missing_one_phrase(phrase) -> None:
     script = f"await agent({sidecar_clause('d/').replace(phrase, 'zzz')!r}, {{ label: 'p' }});"
     assert any("heredoc fallback missing" in o for o in _offences("t", script))
 
 
-def test_a_hoisted_prompt_is_judged_by_its_definition_transitively():
+def test_a_hoisted_prompt_is_judged_by_its_definition_transitively() -> None:
     clause = sidecar_clause("d/")
     call = "await agent(_groupPrompt(g), { label: 'work:' + g });"
     group = "function _groupPrompt(g) {\n    return ms.map((m) => _rowPrompt(m)).join('');\n  }\n"

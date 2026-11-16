@@ -94,7 +94,7 @@ _detector = SentinelRemovalDetector(_TARGET_BASENAME)
 _GUARD_NAME = "block-dev-repo-sentinel-removal-advisory"
 
 
-def _evaluate(cmd: str, dialect: Optional[Dialect]):
+def _evaluate(cmd: str, dialect: Optional[Dialect]) -> tuple[str, str, str]:
     return _detector.evaluate(cmd, dialect)
 
 

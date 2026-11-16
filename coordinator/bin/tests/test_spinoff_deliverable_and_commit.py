@@ -6,6 +6,7 @@ import subprocess
 import sys
 
 import pytest
+from pathlib import Path
 
 # Declared, not excused: the commit-scope CLI tests below spawn real
 # `git`/CLI-subprocess processes because the property under test is the
@@ -33,7 +34,7 @@ from cc_invoke import require_dispatch_engine_on_path, child_env  # noqa: E402
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 
-def _write_frontmatter(path, **fields):
+def _write_frontmatter(path, **fields) -> None:
     lines = ["---"]
     for key, value in fields.items():
         lines.append(f"{key}: {value}")
@@ -50,7 +51,7 @@ def _load_ops():
     return read_frontmatter_field
 
 
-def test_resolve_origin_handoff_id_reads_handoff_id_from_named_file(tmp_path):
+def test_resolve_origin_handoff_id_reads_handoff_id_from_named_file(tmp_path: Path) -> None:
     read_frontmatter_field = _load_ops()
     origin = tmp_path / "origin-handoff.md"
     _write_frontmatter(origin, handoff_id="hnd-origin-xyz")
@@ -60,21 +61,21 @@ def test_resolve_origin_handoff_id_reads_handoff_id_from_named_file(tmp_path):
     assert result == "hnd-origin-xyz"
 
 
-def test_resolve_origin_handoff_id_empty_when_unset():
+def test_resolve_origin_handoff_id_empty_when_unset() -> None:
     read_frontmatter_field = _load_ops()
 
     assert _module.resolve_origin_handoff_id(read_frontmatter_field, None) == ""
     assert _module.resolve_origin_handoff_id(read_frontmatter_field, "") == ""
 
 
-def test_resolve_origin_handoff_id_empty_when_file_missing(tmp_path):
+def test_resolve_origin_handoff_id_empty_when_file_missing(tmp_path: Path) -> None:
     read_frontmatter_field = _load_ops()
     missing = tmp_path / "does-not-exist.md"
 
     assert _module.resolve_origin_handoff_id(read_frontmatter_field, str(missing)) == ""
 
 
-def test_cli_resolve_origin_handoff_id_emits_shell_assignment(tmp_path):
+def test_cli_resolve_origin_handoff_id_emits_shell_assignment(tmp_path: Path) -> None:
     origin = tmp_path / "origin-handoff.md"
     _write_frontmatter(origin, handoff_id="hnd-cli-check")
 
@@ -91,7 +92,7 @@ def test_cli_resolve_origin_handoff_id_emits_shell_assignment(tmp_path):
     assert proc.stdout.strip() == "ORIGIN_HANDOFF_ID=hnd-cli-check"
 
 
-def test_extract_scope_paths_basic_block():
+def test_extract_scope_paths_basic_block() -> None:
     text = "\n".join(
         [
             "---",
@@ -107,7 +108,7 @@ def test_extract_scope_paths_basic_block():
     assert _module.extract_scope_paths(text) == ["path/one.md", "path/two.py"]
 
 
-def test_extract_scope_paths_stops_at_next_top_level_key():
+def test_extract_scope_paths_stops_at_next_top_level_key() -> None:
     text = "\n".join(
         [
             "scope:",
@@ -119,23 +120,23 @@ def test_extract_scope_paths_stops_at_next_top_level_key():
     assert _module.extract_scope_paths(text) == ["only-one.md"]
 
 
-def test_extract_scope_paths_missing_block_returns_empty():
+def test_extract_scope_paths_missing_block_returns_empty() -> None:
     text = "\n".join(["---", "title: Foo", "workstream: bar", "---"])
     assert _module.extract_scope_paths(text) == []
 
 
-def test_extract_scope_paths_empty_block_returns_empty():
+def test_extract_scope_paths_empty_block_returns_empty() -> None:
     text = "\n".join(["scope:", "workstream: bar"])
     assert _module.extract_scope_paths(text) == []
 
 
-def _init_repo(repo_dir):
+def _init_repo(repo_dir) -> None:
     subprocess.run(["git", "init", "-q"], cwd=repo_dir, check=True)
     subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=repo_dir, check=True)
     subprocess.run(["git", "config", "user.name", "Test"], cwd=repo_dir, check=True)
 
 
-def test_cli_commit_scope_fails_loud_on_missing_scope_block(tmp_path):
+def test_cli_commit_scope_fails_loud_on_missing_scope_block(tmp_path: Path) -> None:
     handoff = tmp_path / "state" / "handoffs" / "spinoff.md"
     handoff.parent.mkdir(parents=True)
     _write_frontmatter(handoff, title="No Scope")
@@ -153,7 +154,7 @@ def test_cli_commit_scope_fails_loud_on_missing_scope_block(tmp_path):
     assert "scope: block missing or empty" in proc.stderr
 
 
-def test_cli_commit_scope_dry_run_prints_git_commands(tmp_path):
+def test_cli_commit_scope_dry_run_prints_git_commands(tmp_path: Path) -> None:
     handoff = tmp_path / "state" / "handoffs" / "spinoff.md"
     handoff.parent.mkdir(parents=True)
     scoped_file = tmp_path / "coordinator" / "example.py"
@@ -191,7 +192,7 @@ def test_cli_commit_scope_dry_run_prints_git_commands(tmp_path):
     assert "chore(spinoff): my-slug [authored mid-session]" in proc.stdout
 
 
-def test_cli_commit_scope_actually_commits_scope_and_handoff(tmp_path):
+def test_cli_commit_scope_actually_commits_scope_and_handoff(tmp_path: Path) -> None:
     _init_repo(tmp_path)
 
     scoped_file = tmp_path / "coordinator" / "example.py"
@@ -240,7 +241,7 @@ def test_cli_commit_scope_actually_commits_scope_and_handoff(tmp_path):
     assert "state/handoffs/spinoff.md" in log.stdout
 
 
-def test_cli_missing_subcommand_exits_nonzero():
+def test_cli_missing_subcommand_exits_nonzero() -> None:
     proc = subprocess.run(
         [sys.executable, _CLI],
         capture_output=True,

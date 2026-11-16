@@ -35,7 +35,7 @@ def _pid_birth(pid: int) -> float | None:
         return None
 
 
-def validate_private_engine_config(value, *, backend='codex') -> dict | None:
+def validate_private_engine_config(value, *, backend: str = 'codex') -> dict | None:
     """Validate an EM-selected native build without starting a service."""
     if value is None:
         return None
@@ -269,7 +269,7 @@ def _install_no_spawn_seam(client) -> None:
             return
         original = client._spawn_once
 
-        def guarded():
+        def guarded() -> None:
             if getattr(_WARM_ATTEMPT, 'missed', None) is None:
                 original()
             else:
@@ -352,7 +352,7 @@ def _invoke_source(op: str, params: dict, repo: str, artifacts: Path, timeout: f
     return reply['result']
 
 
-def _result_failure(value, *, landing=False) -> str | None:
+def _result_failure(value, *, landing: bool = False) -> str | None:
     """Recognize engine failure envelopes, rather than grep arbitrary task data.
 
     A Node exit of zero proves that the script returned, not that an engine ask
@@ -451,7 +451,7 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
     except Exception as exc:
         return _preflight_failed(record_path, record, exc)
     journal_lock, input_lock = threading.Lock(), threading.Lock()
-    def journal(event):
+    def journal(event) -> None:
         with journal_lock, (artifacts / 'journal.jsonl').open('a', encoding='utf-8') as stream:
             stream.write(json.dumps({'at': time.time(), **event}) + '\n')
     process = None
@@ -495,7 +495,7 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
             timer = threading.Timer(max(.1, deadline-time.monotonic()), process.kill)
             timer.daemon = True
             timer.start()
-            def respond(event):
+            def respond(event) -> None:
                 reply = {'id': event['id']}
                 try:
                     remaining = deadline - time.monotonic()
@@ -513,7 +513,7 @@ def execute(record_path: Path, *, agent_runner=None, terminal_runner=_land,
                         commit_prompt = None
                         if private is not None:
                             commit_prompt = _prepare_private_commit(private, event, script, record)
-                            def observed_spawn(pid):
+                            def observed_spawn(pid) -> None:
                                 nonlocal spawned
                                 private.on_spawn(pid, request_id)
                                 spawned = True

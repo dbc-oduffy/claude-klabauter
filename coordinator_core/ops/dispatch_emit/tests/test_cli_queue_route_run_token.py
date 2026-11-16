@@ -6,6 +6,8 @@ import json
 import re
 
 from coordinator_core.ops.dispatch_emit import cli, run_token
+from pathlib import Path
+import pytest
 
 _STAMP_RE = re.compile(r"run_stamp: '([^']+)'")
 _SCRIPT_RE = re.compile(r"script_path: (\"(?:[^\"\\]|\\.)*\")")
@@ -19,7 +21,7 @@ def _print(capsys, repo_root, script_path):
     return capsys.readouterr().err
 
 
-def test_printed_token_admits_for_the_printed_stamp_and_script(tmp_path, capsys):
+def test_printed_token_admits_for_the_printed_stamp_and_script(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / ".git").mkdir()
     script = str(tmp_path / "scratch" / "grind with \"quote\".workflow.mjs")
     err = _print(capsys, tmp_path, script)
@@ -34,13 +36,13 @@ def test_printed_token_admits_for_the_printed_stamp_and_script(tmp_path, capsys)
     assert not run_token.admits(tmp_path, stamp, token, printed_script + "x")
 
 
-def test_no_repo_root_prints_no_token(capsys):
+def test_no_repo_root_prints_no_token(capsys: pytest.CaptureFixture[str]) -> None:
     err = _print(capsys, None, "scratch/g.workflow.mjs")
     assert "run_stamp" in err
     assert "run_token" not in err
 
 
-def test_no_git_dir_prints_no_token(tmp_path, capsys):
+def test_no_git_dir_prints_no_token(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     err = _print(capsys, tmp_path, "scratch/g.workflow.mjs")
     assert "run_stamp" in err
     assert "run_token" not in err

@@ -14,6 +14,7 @@ from coordinator_core import locked_write
 from coordinator_core.ops.dispatch_emit import op as op_module
 from coordinator_core.ops.dispatch_emit.emission_receipt import emission_receipt_path
 from coordinator_core.ops.dispatch_emit.tests.test_chain_emit_minted_run_id import _TORN, _verify_sequence
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -35,7 +36,7 @@ def _emit(path, script):
     )
 
 
-def test_overlapping_emits_leave_a_receipt_that_names_the_script_on_disk(tmp_path, monkeypatch):
+def test_overlapping_emits_leave_a_receipt_that_names_the_script_on_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(locked_write, "_machine_lock_dir", lambda: tmp_path / "locks")
     monkeypatch.setattr(op_module, "check_agent_types_resolve", lambda *a, **k: None)
     monkeypatch.setattr(op_module, "run_checks", lambda script: [])
@@ -59,7 +60,7 @@ def test_overlapping_emits_leave_a_receipt_that_names_the_script_on_disk(tmp_pat
     stop = threading.Event()
     whole = {_SCRIPT_A.encode("utf-8"), _SCRIPT_B.encode("utf-8")}
 
-    def reader():
+    def reader() -> None:
         while not stop.is_set():
             try:
                 data = path.read_bytes()
@@ -70,7 +71,7 @@ def test_overlapping_emits_leave_a_receipt_that_names_the_script_on_disk(tmp_pat
 
     errors = []
 
-    def emitter(script):
+    def emitter(script) -> None:
         try:
             _emit(path, script)
         except Exception as exc:  # noqa: BLE001 -- surfaced by the assert below
@@ -96,7 +97,7 @@ def test_overlapping_emits_leave_a_receipt_that_names_the_script_on_disk(tmp_pat
     assert seen_partial == []
 
 
-def test_a_genuine_mismatch_verdict_names_both_digests_and_the_remedy():
+def test_a_genuine_mismatch_verdict_names_both_digests_and_the_remedy() -> None:
     out = _verify_sequence([_TORN])
     error = out["v"]["error"]
     assert "emit receipt sha mismatch" in error

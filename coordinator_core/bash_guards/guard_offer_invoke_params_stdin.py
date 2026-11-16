@@ -96,6 +96,8 @@ from coordinator_core.bash_guards._rewrite_support import (
     _deny_record,
     _override,
 )
+from coordinator_core.bash_guards._dc_blanket_add import _awk_quote_aware_split
+from coordinator_core.bash_guards._dc_shell_text import _strip_shell_comments_for_prose_scan
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._command_tokenizer import (
     exceeds_tokenizable_ceiling,
@@ -114,6 +116,33 @@ _GUARD = "offer-invoke-params-stdin"
 _ARGV_PAYLOAD_HAZARD_BYTES = 8000
 
 _HEREDOC_DELIM = "CCJSON"
+
+
+def _outside_quotes(text: str, pos: int) -> bool:
+    sq = dq = False
+    i = 0
+    while i < pos:
+        ch = text[i]
+        if ch == "\\" and not sq:
+            i += 2
+            continue
+        if ch == "'" and not dq:
+            sq = not sq
+        elif ch == '"' and not sq:
+            dq = not dq
+        i += 1
+    return not (sq or dq)
+
+
+def _invoke_in_command_position(cmd: str) -> bool:
+    """True when ``coordinator_core.invoke`` appears outside heredoc bodies and
+    quoted spans. Only the text BEFORE the payload quote is judged, so the
+    untokenizable odd-apostrophe shape this guard targets still matches."""
+    for seg in _awk_quote_aware_split(cmd):
+        for m in _INVOKE_RE.finditer(seg):
+            if _outside_quotes(seg, m.start()):
+                return True
+    return False
 
 
 def _extract_inline_payload(cmd: str) -> Optional[Tuple[int, int, str, str]]:
@@ -241,7 +270,7 @@ def check_offer_invoke_params_stdin(
     if not cmd:
         return None
     original_cmd = _crlf_strip(cmd)
-    if not _INVOKE_RE.search(original_cmd):
+    if not _invoke_in_command_position(_strip_shell_comments_for_prose_scan(original_cmd)):
         return None
     if "--params-file" in original_cmd:
         return None

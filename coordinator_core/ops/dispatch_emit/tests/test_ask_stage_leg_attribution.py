@@ -12,6 +12,8 @@ from coordinator_core.bash_guards import leg_attribution
 from coordinator_core.ops.dispatch_emit import ask_stage
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.tests._size_l_plan import build_size_l_plan, isolate_launch_dirs
+from pathlib import Path
+import pytest
 
 _OP = "dispatch.ask_stage"
 
@@ -35,7 +37,7 @@ def _call(repo, monkeypatch, params) -> tuple[dict, list[dict]]:
     return response["result"], [r for r in rows if r.get("kind") == "process_time" and r.get("op") == _OP]
 
 
-def _fixture(tmp_path, monkeypatch):
+def _fixture(tmp_path, monkeypatch) -> tuple[Path, dict[str, str]]:
     isolate_launch_dirs(monkeypatch, tmp_path)
     repo, plan_rel, _ = build_size_l_plan(tmp_path, rows=2, live_tokens=0)
     run_id = "leg-attribution-run"
@@ -46,7 +48,7 @@ def _fixture(tmp_path, monkeypatch):
     return repo, {"run_id": run_id, "plan_path": plan_rel}
 
 
-def test_forced_slow_stage_phase_is_named_in_the_row_through_to_thread(tmp_path, monkeypatch):
+def test_forced_slow_stage_phase_is_named_in_the_row_through_to_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, params = _fixture(tmp_path, monkeypatch)
     real = ask_stage._stage_write_baseline
 
@@ -66,7 +68,7 @@ def test_forced_slow_stage_phase_is_named_in_the_row_through_to_thread(tmp_path,
     assert len(row["legs"]) <= 3
 
 
-def test_forced_slow_handler_phase_is_named_outside_stage(tmp_path, monkeypatch):
+def test_forced_slow_handler_phase_is_named_outside_stage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, params = _fixture(tmp_path, monkeypatch)
     real = ask_stage.stamp_plan_executing
 
@@ -80,7 +82,7 @@ def test_forced_slow_handler_phase_is_named_outside_stage(tmp_path, monkeypatch)
     assert by_name.get("stamp", 0.0) >= 250.0
 
 
-def test_early_return_carries_handler_thread_ms_and_drains_the_collector(tmp_path, monkeypatch):
+def test_early_return_carries_handler_thread_ms_and_drains_the_collector(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, params = _fixture(tmp_path, monkeypatch)
     _call(repo, monkeypatch, params)
     again, rows = _call(repo, monkeypatch, params)
@@ -89,7 +91,7 @@ def test_early_return_carries_handler_thread_ms_and_drains_the_collector(tmp_pat
     assert not leg_attribution.active()
 
 
-def test_error_reply_drains_the_collector_and_still_attaches(tmp_path, monkeypatch):
+def test_error_reply_drains_the_collector_and_still_attaches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, params = _fixture(tmp_path, monkeypatch)
     result, rows = _call(repo, monkeypatch, {**params, "plan_path": "docs/plans/absent.md"})
     assert "error" in result

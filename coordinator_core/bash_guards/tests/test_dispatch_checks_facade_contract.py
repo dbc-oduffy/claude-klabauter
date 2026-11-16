@@ -25,12 +25,12 @@ _FIXTURE = json.loads(
 _DC_PREFIX = "coordinator_core.bash_guards._dc_"
 
 
-def test_every_baseline_name_is_gettable_on_the_facade():
+def test_every_baseline_name_is_gettable_on_the_facade() -> None:
     missing = [n for n in _FIXTURE["names"] if not hasattr(dispatch_checks, n)]
     assert not missing, f"names missing from the dispatch_checks facade: {missing}"
 
 
-def test_facade_objects_are_their_home_module_objects():
+def test_facade_objects_are_their_home_module_objects() -> None:
     mismatched = []
     for name in _FIXTURE["names"]:
         obj = getattr(dispatch_checks, name, None)
@@ -44,7 +44,7 @@ def test_facade_objects_are_their_home_module_objects():
     assert not mismatched, f"facade object is not the home-module object: {mismatched}"
 
 
-def test_roster_script_tails_match_the_baseline():
+def test_roster_script_tails_match_the_baseline() -> None:
     actual = {e.id: e.script for e in roster.guard_roster()}
     expected = _FIXTURE["roster_tails"]
     changed = {
@@ -55,12 +55,12 @@ def test_roster_script_tails_match_the_baseline():
     assert not changed, f"roster script tails drifted from the baseline: {changed}"
 
 
-def test_dispatch_check_discovery_matches_the_baseline():
+def test_dispatch_check_discovery_matches_the_baseline() -> None:
     assert _alternative_liveness.discover_dispatch_check_names() == _FIXTURE[
         "dispatch_check_names"
     ]
 
 
 @pytest.mark.parametrize("key", ["names", "dispatch_check_names"])
-def test_fixture_lists_are_sorted(key):
+def test_fixture_lists_are_sorted(key) -> None:
     assert _FIXTURE[key] == sorted(_FIXTURE[key])

@@ -15,6 +15,7 @@ import json
 import sys
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -22,20 +23,20 @@ from coordinator_core.install import door_install
 from coordinator_core.warm.door import build as door_build
 
 
-def _stamp_engine_root(root):
+def _stamp_engine_root(root) -> None:
     stamp_dir = root / "coordinator_core"
     stamp_dir.mkdir(parents=True, exist_ok=True)
     (stamp_dir / "_engine_stamp").write_text("sha:deadbeef\n", encoding="utf-8")
 
 
-def test_door_installed_name_is_platform_resolved():
+def test_door_installed_name_is_platform_resolved() -> None:
     if sys.platform == "win32":
         assert door_install.DOOR_INSTALLED_NAME == "coordinator-invoke.exe"
     else:
         assert door_install.DOOR_INSTALLED_NAME == "coordinator-invoke"
 
 
-def test_prebuilt_lookup_and_provenance_match_platform_build_convention():
+def test_prebuilt_lookup_and_provenance_match_platform_build_convention() -> None:
     if sys.platform == "win32":
         assert door_install._PREBUILT_DOOR_EXE.name == "door.exe"
         assert door_install._PREBUILT_PROVENANCE.name == "door.exe.provenance.json"
@@ -45,13 +46,13 @@ def test_prebuilt_lookup_and_provenance_match_platform_build_convention():
     assert door_install._PREBUILT_DOOR_EXE.parent == door_install._PREBUILT_PROVENANCE.parent
 
 
-def test_is_door_installed_false_on_absence(tmp_path):
+def test_is_door_installed_false_on_absence(tmp_path: Path) -> None:
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     assert door_install.is_door_installed(bin_dst) is False
 
 
-def test_is_door_installed_true_after_install(tmp_path):
+def test_is_door_installed_true_after_install(tmp_path: Path) -> None:
     if not door_install._PREBUILT_DOOR_EXE.exists():
         pytest.skip("no committed prebuilt door for this platform in this checkout")
 
@@ -65,13 +66,13 @@ def test_is_door_installed_true_after_install(tmp_path):
     assert door_install.is_door_installed(bin_dst) is True
 
 
-def test_is_door_installed_does_not_raise_when_check_only_would():
+def test_is_door_installed_does_not_raise_when_check_only_would() -> None:
     bin_dst_missing = "/nonexistent-path-for-door-install-test/bin"
     result = door_install.is_door_installed(bin_dst_missing)
     assert result is False
 
 
-def test_check_only_still_raises_on_absence(tmp_path):
+def test_check_only_still_raises_on_absence(tmp_path: Path) -> None:
     engine_root = tmp_path / "engine"
     _stamp_engine_root(engine_root)
     bin_dst = tmp_path / "bin"
@@ -81,7 +82,7 @@ def test_check_only_still_raises_on_absence(tmp_path):
         door_install.install_door(bin_dst, engine_root, check_only=True)
 
 
-def test_install_writes_sidecar_alongside_installed_name(tmp_path):
+def test_install_writes_sidecar_alongside_installed_name(tmp_path: Path) -> None:
     if not door_install._PREBUILT_DOOR_EXE.exists():
         pytest.skip("no committed prebuilt door for this platform in this checkout")
 
@@ -94,7 +95,7 @@ def test_install_writes_sidecar_alongside_installed_name(tmp_path):
     assert (bin_dst / door_build.SIDECAR_FILENAME).exists()
 
 
-def test_install_removes_shadowing_ps1_sibling(tmp_path):
+def test_install_removes_shadowing_ps1_sibling(tmp_path: Path) -> None:
     if not door_install._PREBUILT_DOOR_EXE.exists():
         pytest.skip("no committed prebuilt door for this platform in this checkout")
 
@@ -122,7 +123,7 @@ def test_install_removes_shadowing_ps1_sibling(tmp_path):
     assert not shadow.exists()
 
 
-def test_install_leaves_cmd_sibling_untouched(tmp_path):
+def test_install_leaves_cmd_sibling_untouched(tmp_path: Path) -> None:
     if not door_install._PREBUILT_DOOR_EXE.exists():
         pytest.skip("no committed prebuilt door for this platform in this checkout")
 
@@ -138,7 +139,7 @@ def test_install_leaves_cmd_sibling_untouched(tmp_path):
     assert cmd_sibling.exists()
 
 
-def test_check_only_never_removes_shadowing_ps1_sibling(tmp_path):
+def test_check_only_never_removes_shadowing_ps1_sibling(tmp_path: Path) -> None:
     engine_root = tmp_path / "engine"
     _stamp_engine_root(engine_root)
     bin_dst = tmp_path / "bin"
@@ -153,20 +154,20 @@ def test_check_only_never_removes_shadowing_ps1_sibling(tmp_path):
     assert shadow.exists()
 
 
-def test_verify_installed_provenance_python_forwarder_is_no_door(tmp_path):
+def test_verify_installed_provenance_python_forwarder_is_no_door(tmp_path: Path) -> None:
     (tmp_path / door_install.DOOR_INSTALLED_NAME).write_text("#!/usr/bin/env python3\n", encoding="utf-8")
     verdict = door_install.verify_installed_provenance(tmp_path)
     assert verdict.status == "no-door"
 
 
-def test_verify_installed_provenance_no_door(tmp_path):
+def test_verify_installed_provenance_no_door(tmp_path: Path) -> None:
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     verdict = door_install.verify_installed_provenance(bin_dst)
     assert verdict.status == "no-door"
 
 
-def test_verify_installed_provenance_absent_sidecar(tmp_path):
+def test_verify_installed_provenance_absent_sidecar(tmp_path: Path) -> None:
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(b"\x7fELF door bytes")
@@ -174,7 +175,7 @@ def test_verify_installed_provenance_absent_sidecar(tmp_path):
     assert verdict.status == "absent"
 
 
-def test_verify_installed_provenance_unrecorded(tmp_path):
+def test_verify_installed_provenance_unrecorded(tmp_path: Path) -> None:
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(b"\x7fELF door bytes")
@@ -185,7 +186,7 @@ def test_verify_installed_provenance_unrecorded(tmp_path):
     assert verdict.status == "unrecorded"
 
 
-def test_verify_installed_provenance_mismatch(tmp_path):
+def test_verify_installed_provenance_mismatch(tmp_path: Path) -> None:
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     (bin_dst / door_install.DOOR_INSTALLED_NAME).write_bytes(b"\x7fELF door bytes")
@@ -197,7 +198,7 @@ def test_verify_installed_provenance_mismatch(tmp_path):
     assert "0" * 64 in verdict.detail
 
 
-def test_verify_installed_provenance_ok(tmp_path):
+def test_verify_installed_provenance_ok(tmp_path: Path) -> None:
     """`ok` certifies BOTH that the sidecar describes the binary beside it AND
     that the binary is current. Planting arbitrary bytes with a matching hash
     is precisely the shape a build-behind install has -- self-consistent and
@@ -233,25 +234,25 @@ def test_verify_installed_provenance_ok(tmp_path):
     assert verdict.status == "ok", verdict
 
 
-def _write_prebuilt_record(tmp_path, monkeypatch, record):
+def _write_prebuilt_record(tmp_path, monkeypatch, record) -> None:
     path = tmp_path / "door.exe.provenance.json"
     path.write_text(json.dumps(record), encoding="utf-8")
     monkeypatch.setattr(door_install, "_WINDOWS_PREBUILT_PROVENANCE", path)
 
 
-def _tree_sources():
+def _tree_sources() -> dict[str, str]:
     return {
         path.name: door_install.door_build.source_sha256(path)
         for path in door_install.door_build.SOURCES
     }
 
 
-def test_prebuilt_built_from_this_trees_sources_has_no_drift(tmp_path, monkeypatch):
+def test_prebuilt_built_from_this_trees_sources_has_no_drift(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _write_prebuilt_record(tmp_path, monkeypatch, {"sources": _tree_sources()})
     assert door_install.committed_prebuilt_source_drift() == []
 
 
-def test_prebuilt_built_from_older_sources_names_each_changed_file(tmp_path, monkeypatch):
+def test_prebuilt_built_from_older_sources_names_each_changed_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sources = _tree_sources()
     sources["door.c"] = "0" * 64
     del sources["door_env_set.h"]
@@ -260,7 +261,7 @@ def test_prebuilt_built_from_older_sources_names_each_changed_file(tmp_path, mon
 
 
 @pytest.mark.parametrize("record", [None, {}, {"sources": {}}, ["not", "an", "object"]])
-def test_prebuilt_drift_is_unanswerable_without_a_source_record(tmp_path, monkeypatch, record):
+def test_prebuilt_drift_is_unanswerable_without_a_source_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, record) -> None:
     if record is None:
         monkeypatch.setattr(
             door_install, "_WINDOWS_PREBUILT_PROVENANCE", tmp_path / "missing.json"
@@ -271,7 +272,7 @@ def test_prebuilt_drift_is_unanswerable_without_a_source_record(tmp_path, monkey
         door_install.committed_prebuilt_source_drift()
 
 
-def test_install_door_raises_when_prebuilt_exe_and_sidecar_disagree(tmp_path, monkeypatch):
+def test_install_door_raises_when_prebuilt_exe_and_sidecar_disagree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # PREBUILT-BRANCH TEST, SO PLATFORM IS THE SKIP KEY, NOT FILE PRESENCE.
     # `install_door` routes on platform first and POSIX never reads the prebuilt
     # pair at all -- it compiles. Skipping on `_PREBUILT_DOOR_EXE.exists()`
@@ -297,8 +298,8 @@ def test_install_door_raises_when_prebuilt_exe_and_sidecar_disagree(tmp_path, mo
 
 
 def test_install_door_removes_stale_destination_sidecar_when_no_prebuilt_sidecar(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     if not door_install._PREBUILT_DOOR_EXE.exists():
         pytest.skip("no committed prebuilt door for this platform in this checkout")
 
@@ -318,7 +319,7 @@ def test_install_door_removes_stale_destination_sidecar_when_no_prebuilt_sidecar
     door_install.install_door(bin_dst, engine_root)
 
 
-def test_replace_possibly_running_image_identical_content_writes_nothing(tmp_path):
+def test_replace_possibly_running_image_identical_content_writes_nothing(tmp_path: Path) -> None:
     source = tmp_path / "source.exe"
     source.write_bytes(b"same-content")
     dest = tmp_path / "dest.exe"
@@ -332,7 +333,7 @@ def test_replace_possibly_running_image_identical_content_writes_nothing(tmp_pat
     assert list(tmp_path.glob("*.stale-*")) == []
 
 
-def test_replace_possibly_running_image_copies_when_content_differs(tmp_path):
+def test_replace_possibly_running_image_copies_when_content_differs(tmp_path: Path) -> None:
     source = tmp_path / "source.exe"
     source.write_bytes(b"new-content")
     dest = tmp_path / "dest.exe"
@@ -344,8 +345,8 @@ def test_replace_possibly_running_image_copies_when_content_differs(tmp_path):
 
 
 def test_replace_possibly_running_image_falls_through_to_copy_on_comparison_error(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     source = tmp_path / "source.exe"
     source.write_bytes(b"content-a")
     dest = tmp_path / "dest.exe"
@@ -369,7 +370,7 @@ def test_replace_possibly_running_image_falls_through_to_copy_on_comparison_erro
     assert calls, "copy2 must be reached when the content comparison itself raises"
 
 
-def test_sweep_displaced_images_removes_stale_siblings_only(tmp_path):
+def test_sweep_displaced_images_removes_stale_siblings_only(tmp_path: Path) -> None:
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     stale_one = bin_dst / "coordinator-invoke.exe.stale-1234-5678"
@@ -387,7 +388,7 @@ def test_sweep_displaced_images_removes_stale_siblings_only(tmp_path):
     assert keep.exists()
 
 
-def test_sweep_displaced_images_skips_permission_error_and_continues(tmp_path, monkeypatch):
+def test_sweep_displaced_images_skips_permission_error_and_continues(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     locked = bin_dst / "coordinator-invoke.exe.stale-1-1"
@@ -411,7 +412,7 @@ def test_sweep_displaced_images_skips_permission_error_and_continues(tmp_path, m
     assert not unlockable.exists()
 
 
-def test_install_door_check_only_sweeps_nothing(tmp_path):
+def test_install_door_check_only_sweeps_nothing(tmp_path: Path) -> None:
     engine_root = tmp_path / "engine"
     _stamp_engine_root(engine_root)
     bin_dst = tmp_path / "bin"
@@ -438,7 +439,7 @@ def _unresolvable_fixture(tmp_path, manifest_text):
     return bin_dst, tmp_path / "engine"
 
 
-def test_sweep_unresolvable_named_images_removes_only_recorded_dead_names(tmp_path):
+def test_sweep_unresolvable_named_images_removes_only_recorded_dead_names(tmp_path: Path) -> None:
     manifest = json.dumps({"names": ["gen-claude-author-shim", "gen-claude-retired-shim"]})
     bin_dst, engine_root = _unresolvable_fixture(tmp_path, manifest)
 
@@ -451,14 +452,14 @@ def test_sweep_unresolvable_named_images_removes_only_recorded_dead_names(tmp_pa
     assert door_install.named_forwarder_path(bin_dst, "unrecorded").exists()
 
 
-def test_sweep_unresolvable_named_images_sweeps_nothing_on_unreadable_manifest(tmp_path):
+def test_sweep_unresolvable_named_images_sweeps_nothing_on_unreadable_manifest(tmp_path: Path) -> None:
     bin_dst, engine_root = _unresolvable_fixture(tmp_path, "{not json")
 
     assert door_install._sweep_unresolvable_named_images(bin_dst, engine_root) == []
     assert door_install.named_forwarder_path(bin_dst, "gen-claude-retired-shim").exists()
 
 
-def test_sweep_unresolvable_named_images_sweeps_nothing_for_a_root_without_bin(tmp_path):
+def test_sweep_unresolvable_named_images_sweeps_nothing_for_a_root_without_bin(tmp_path: Path) -> None:
     manifest = json.dumps({"names": ["gen-claude-retired-shim"]})
     bin_dst, _ = _unresolvable_fixture(tmp_path, manifest)
 
@@ -466,7 +467,7 @@ def test_sweep_unresolvable_named_images_sweeps_nothing_for_a_root_without_bin(t
     assert door_install.named_forwarder_path(bin_dst, "gen-claude-retired-shim").exists()
 
 
-def test_sweep_unresolvable_named_images_keeps_an_extensionless_script(tmp_path):
+def test_sweep_unresolvable_named_images_keeps_an_extensionless_script(tmp_path: Path) -> None:
     manifest = json.dumps({"names": ["static-check"]})
     bin_dst, engine_root = _unresolvable_fixture(tmp_path, manifest)
     (engine_root / "coordinator" / "bin" / "static-check").write_text("")
@@ -490,7 +491,7 @@ def _pe_subsystem(path):
     return struct.unpack_from("<H", data, pe + 24 + 68)[0]
 
 
-def test_windowless_link_flags_for_both_compilers():
+def test_windowless_link_flags_for_both_compilers() -> None:
     clang = door_build._compile_flags("clang", True)
     assert clang[-4:] == ["-Xlinker", "/SUBSYSTEM:WINDOWS", "-Xlinker", "/ENTRY:mainCRTStartup"]
     cl = door_build._compile_flags("cl", True)
@@ -500,7 +501,7 @@ def test_windowless_link_flags_for_both_compilers():
 
 
 @pytest.mark.parametrize("kind", ["clang", "cl"])
-def test_compile_passes_subsystem_only_for_the_windowless_link(tmp_path, monkeypatch, kind):
+def test_compile_passes_subsystem_only_for_the_windowless_link(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kind) -> None:
     seen = []
 
     def _run(cmd, **kwargs):
@@ -516,7 +517,7 @@ def test_compile_passes_subsystem_only_for_the_windowless_link(tmp_path, monkeyp
 
 
 @_WIN
-def test_committed_images_are_gui_and_console_subsystems():
+def test_committed_images_are_gui_and_console_subsystems() -> None:
     if not door_install._PREBUILT_WINDOWLESS_EXE.exists():
         pytest.skip("no committed door-w.exe")
     assert _pe_subsystem(door_install._PREBUILT_WINDOWLESS_EXE) == 2
@@ -526,7 +527,7 @@ def test_committed_images_are_gui_and_console_subsystems():
     assert "/SUBSYSTEM:WINDOWS" in record["compile_flags"]
 
 
-def test_windowless_names_are_hook_run_on_windows_only(monkeypatch):
+def test_windowless_names_are_hook_run_on_windows_only(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(door_install.sys, "platform", "win32")
     assert door_install.name_gets_windowless_image("hook-run") is True
     assert door_install.name_gets_windowless_image("cross-repo-memo") is False
@@ -535,7 +536,7 @@ def test_windowless_names_are_hook_run_on_windows_only(monkeypatch):
 
 
 @_WIN
-def test_install_door_lands_the_windowless_image_and_provenance_beside_the_door(tmp_path, monkeypatch):
+def test_install_door_lands_the_windowless_image_and_provenance_beside_the_door(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     if not door_install._PREBUILT_WINDOWLESS_EXE.exists():
         pytest.skip("no committed door-w.exe")
     engine_root = tmp_path / "engine"
@@ -552,7 +553,7 @@ def test_install_door_lands_the_windowless_image_and_provenance_beside_the_door(
 
 
 @_WIN
-def test_hook_run_links_the_windowless_image_and_every_other_name_the_door(tmp_path, monkeypatch):
+def test_hook_run_links_the_windowless_image_and_every_other_name_the_door(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     door = bin_dst / door_install.DOOR_INSTALLED_NAME
@@ -569,7 +570,7 @@ def test_hook_run_links_the_windowless_image_and_every_other_name_the_door(tmp_p
 
 
 @_WIN
-def test_hook_run_falls_back_to_the_door_when_no_windowless_image_is_installed(tmp_path):
+def test_hook_run_falls_back_to_the_door_when_no_windowless_image_is_installed(tmp_path: Path) -> None:
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     door = bin_dst / door_install.DOOR_INSTALLED_NAME
@@ -581,7 +582,7 @@ def test_hook_run_falls_back_to_the_door_when_no_windowless_image_is_installed(t
 
 
 @_WIN
-def test_audit_judges_hook_run_against_the_windowless_image(tmp_path):
+def test_audit_judges_hook_run_against_the_windowless_image(tmp_path: Path) -> None:
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     door = bin_dst / door_install.DOOR_INSTALLED_NAME
@@ -605,7 +606,7 @@ def test_audit_judges_hook_run_against_the_windowless_image(tmp_path):
 
 
 @_WIN
-def test_audit_reads_a_windowless_slot_stale_when_no_windowless_image_is_installed(tmp_path):
+def test_audit_reads_a_windowless_slot_stale_when_no_windowless_image_is_installed(tmp_path: Path) -> None:
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     door = bin_dst / door_install.DOOR_INSTALLED_NAME
@@ -616,7 +617,7 @@ def test_audit_reads_a_windowless_slot_stale_when_no_windowless_image_is_install
 
 
 @_WIN
-def test_replacing_the_door_relinks_hook_run_to_the_windowless_image_not_the_door(tmp_path):
+def test_replacing_the_door_relinks_hook_run_to_the_windowless_image_not_the_door(tmp_path: Path) -> None:
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     door = bin_dst / door_install.DOOR_INSTALLED_NAME
@@ -639,7 +640,7 @@ def test_replacing_the_door_relinks_hook_run_to_the_windowless_image_not_the_doo
 
 
 @_WIN
-def test_drift_covers_the_windowless_provenance(tmp_path, monkeypatch):
+def test_drift_covers_the_windowless_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sources = {p.name: door_build.source_sha256(p) for p in door_build.SOURCES}
     door_prov = tmp_path / "door.exe.provenance.json"
     door_prov.write_text(json.dumps({"sources": sources}), encoding="utf-8")
@@ -653,7 +654,7 @@ def test_drift_covers_the_windowless_provenance(tmp_path, monkeypatch):
 
 
 @_WIN
-def test_mirror_rebuild_ships_both_images(tmp_path):
+def test_mirror_rebuild_ships_both_images(tmp_path: Path) -> None:
     mirror = tmp_path / "mirror"
     door_dir = mirror / "coordinator_core" / "warm" / "door"
     door_dir.mkdir(parents=True)

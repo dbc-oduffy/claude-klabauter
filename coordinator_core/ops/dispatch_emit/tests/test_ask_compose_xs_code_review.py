@@ -5,6 +5,7 @@ from __future__ import annotations
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+import pytest
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _GATE = (
@@ -33,38 +34,38 @@ def _script(monkeypatch) -> str:
     )
 
 
-def test_review_block_runs_when_code_review_owed(monkeypatch):
+def test_review_block_runs_when_code_review_owed(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert "const _codeReviewOwed = (_manifest?.review_code_paths ?? []).length > 0;" in script
     assert script.index("const _codeReviewOwed") < script.index(_GATE)
     assert "_gate.arm !== 'xs' && !_xsTail && !_noReviewPaths) {\n  phase('Review wave');" not in script
 
 
-def test_docs_only_xs_keeps_empty_wave(monkeypatch):
+def test_docs_only_xs_keeps_empty_wave(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert "if (!_halted && !_codeReviewOwed && (_gate.arm === 'xs' || _xsTail)) { _reviewWave = []; }" in script
     assert "{ _reviewWave = []; }\n  if (!_halted && !_codeReviewOwed && (_gate.arm === 'xs' || _xsTail)) {" in script
 
 
-def test_zero_verdict_code_run_halts_before_ledger_check(monkeypatch):
+def test_zero_verdict_code_run_halts_before_ledger_check(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert _HALT in script
     assert script.index("w.verdict === 'BLOCKED'") < script.index(_HALT) < script.index("halted: 'ledger-check'")
     assert "review: 0 verdicts on a code-editing run (" in script
 
 
-def test_verdict_expression_requires_sidecar_path(monkeypatch):
+def test_verdict_expression_requires_sidecar_path(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert _SIDECAR_CLAUSE in script[script.index("const _reviewVerdicts"):][:300]
     assert _SIDECAR_CLAUSE in script[script.index("receipt: 'review: '"):][:300]
 
 
-def test_digest_carries_review_receipt(monkeypatch):
+def test_digest_carries_review_receipt(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert "receipt: 'review: ' + (Array.isArray(_reviewWave) ? _reviewWave : []).filter(" in script
     assert "_reviewVerdicts" not in script[script.index("receipt: 'review: '"):][:200]
 
 
-def test_manifest_schema_lists_code_paths_but_does_not_require_them():
+def test_manifest_schema_lists_code_paths_but_does_not_require_them() -> None:
     assert "review_code_paths" in ask_compose._MANIFEST_SCHEMA["properties"]
     assert "review_code_paths" not in ask_compose._MANIFEST_SCHEMA["required"]

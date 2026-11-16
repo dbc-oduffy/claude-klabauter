@@ -8,6 +8,7 @@ import pytest
 
 import coordinator_core.ops.session.resolve_chain_terminal_disposition as rctd
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.cadence,
@@ -26,28 +27,28 @@ def _make_repo(tmp_path):
 
 
 class TestResolveSessionIdUnresolvedTier:
-    def test_no_tier_resolves_returns_empty_never_fabricated(self):
+    def test_no_tier_resolves_returns_empty_never_fabricated(self) -> None:
         sid, source = rctd._resolve_session_id(None, None, {})
         assert sid == ""
         assert source == "unresolved"
 
-    def test_no_tier_resolves_regression_guard_against_epoch_shape(self):
+    def test_no_tier_resolves_regression_guard_against_epoch_shape(self) -> None:
         sid, _ = rctd._resolve_session_id(None, None, {})
         assert not (len(sid) == 6 and sid.isdigit())
 
-    def test_param_sid_still_wins(self):
+    def test_param_sid_still_wins(self) -> None:
         sid, source = rctd._resolve_session_id("explicit", None, {})
         assert sid == "explicit"
         assert source == "param"
 
-    def test_env_tier_still_resolves(self):
+    def test_env_tier_still_resolves(self) -> None:
         sid, source = rctd._resolve_session_id(None, None, {"em_sid": "env-sid"})
         assert sid == "env-sid"
         assert source == "em_sid"
 
 
 class TestClassifySyncUnresolvedGuard:
-    def test_unresolved_sid_yields_error_never_a_clean_open_verdict(self, tmp_path):
+    def test_unresolved_sid_yields_error_never_a_clean_open_verdict(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
         result = rctd._classify_sync(repo, None, {})
 
@@ -55,7 +56,7 @@ class TestClassifySyncUnresolvedGuard:
         assert result["disposition"] is None
         assert result["chain_terminal"] is False
 
-    def test_unresolved_sid_evidence_labelled_unresolved_not_silently_open(self, tmp_path):
+    def test_unresolved_sid_evidence_labelled_unresolved_not_silently_open(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
         result = rctd._classify_sync(repo, None, {})
 
@@ -63,7 +64,7 @@ class TestClassifySyncUnresolvedGuard:
         assert evidence["session_id"] == ""
         assert evidence["session_id_source"] == "unresolved"
 
-    def test_unresolved_sid_never_spuriously_matches_an_unclaimed_handoff(self, tmp_path):
+    def test_unresolved_sid_never_spuriously_matches_an_unclaimed_handoff(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
         handoffs_dir = repo / "state" / "handoffs"
         handoffs_dir.mkdir(parents=True)
@@ -78,7 +79,7 @@ class TestClassifySyncUnresolvedGuard:
         assert result["chain_terminal"] is False
         assert result["disposition"] is None
 
-    def test_resolved_sid_path_unaffected_by_the_guard(self, tmp_path):
+    def test_resolved_sid_path_unaffected_by_the_guard(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
         result = rctd._classify_sync(repo, "real-session-id", {})
         assert result["exit_code"] == 0
@@ -117,7 +118,7 @@ class TestDetectorBPositiveOwnership:
         # "open" verdict rather than an error.
         return repo / ".git"
 
-    def test_ownerless_looking_record_is_not_read_as_consumed(self, tmp_path):
+    def test_ownerless_looking_record_is_not_read_as_consumed(self, tmp_path: Path) -> None:
         sid = "ddadea9e-0000-0000-0000-000000000000"
         repo = self._repo_with_archived_touch(
             tmp_path,
@@ -138,7 +139,7 @@ class TestDetectorBPositiveOwnership:
             for note in result["evidence"]["notes"]
         ), result["evidence"]["notes"]
 
-    def test_own_claim_still_resolves_chain_terminal(self, tmp_path):
+    def test_own_claim_still_resolves_chain_terminal(self, tmp_path: Path) -> None:
         sid = "ddadea9e-0000-0000-0000-000000000000"
         repo = self._repo_with_archived_touch(
             tmp_path,
@@ -156,7 +157,7 @@ class TestDetectorBPositiveOwnership:
 
 class TestDetectorAMultipleClaimedArchivedHandoffs:
 
-    def test_last_sorted_archived_claim_wins_not_the_first(self, tmp_path):
+    def test_last_sorted_archived_claim_wins_not_the_first(self, tmp_path: Path) -> None:
         sid = "chain-sid-multi-claim"
         repo = _make_repo(tmp_path)
         archive_dir = repo / "archive" / "handoffs"
@@ -184,7 +185,7 @@ class TestDetectorAMultipleClaimedArchivedHandoffs:
 
 
 class TestHandlerUnresolvedGuard:
-    def test_handler_returns_error_envelope_when_sid_unresolvable(self, tmp_path, monkeypatch):
+    def test_handler_returns_error_envelope_when_sid_unresolvable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo = _make_repo(tmp_path)
         for var in ("em_sid", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
             monkeypatch.delenv(var, raising=False)

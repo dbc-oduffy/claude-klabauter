@@ -10,17 +10,18 @@ import pytest
 from coordinator_core.ops import plan_seam_check as op
 from coordinator_core.ops.dispatch_emit import spine_read
 from coordinator_core.ops.tests.test_plan_seam_check import _plan, _root, _row, git  # noqa: F401
+from pathlib import Path
 
 TARGET_ROW = _row("T1", "[t.py]")
 
 
-def _dependent(root, name):
+def _dependent(root, name) -> str:
     edge = "  depends_on_plan:\n    - {plan: docs/plans/target.md, chunk: T1, gate_kind: output-consumption-runtime}\n"
     return _plan(root, name, _row("R1", f"[{name}.py]", extra=edge))
 
 
 @pytest.fixture
-def target_reads(monkeypatch):
+def target_reads(monkeypatch: pytest.MonkeyPatch):
     """Texts `resolve_plan_edge` parses, as a list: one entry per edge-target load."""
     reads: list = []
     real = spine_read.load_rows_memo
@@ -34,7 +35,7 @@ def target_reads(monkeypatch):
     return reads
 
 
-def test_three_plans_onto_one_target_read_it_once_per_evaluate(tmp_path, git, target_reads):
+def test_three_plans_onto_one_target_read_it_once_per_evaluate(tmp_path: Path, git, target_reads) -> None:
     root = _root(tmp_path)
     target = _plan(root, "target", TARGET_ROW)
     plans = [target] + [_dependent(root, n) for n in ("a", "b", "c")]
@@ -43,7 +44,7 @@ def test_three_plans_onto_one_target_read_it_once_per_evaluate(tmp_path, git, ta
     assert len(target_reads) == 2
 
 
-def test_two_evaluates_do_not_share_a_cache(tmp_path, git, target_reads):
+def test_two_evaluates_do_not_share_a_cache(tmp_path: Path, git, target_reads) -> None:
     root = _root(tmp_path)
     target = _plan(root, "target", TARGET_ROW)
     plans = [target] + [_dependent(root, n) for n in ("a", "b", "c")]

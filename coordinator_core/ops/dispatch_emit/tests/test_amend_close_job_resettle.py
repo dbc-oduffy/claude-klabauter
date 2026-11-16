@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import run_close
 from coordinator_core.ops.dispatch_emit.run_close import LegResult
+from pathlib import Path
 
 RUN = "run-r.workflow"
 
@@ -17,7 +18,7 @@ def _record(root):
     return json.loads((root / run_close.close_job_path(RUN)).read_text(encoding="utf-8"))
 
 
-def _deferred_record(root):
+def _deferred_record(root) -> None:
     run_close.write_close_job(
         root, RUN, ["completion-entry", "baton-ship", "review"], datetime.now().astimezone() + timedelta(minutes=10)
     )
@@ -25,7 +26,7 @@ def _deferred_record(root):
     run_close.record_leg_outcome(root, RUN, "baton-ship", "failed", "not started: job process time 469ms reached 400ms")
 
 
-def test_settling_a_failed_listed_leg_supersedes_it(tmp_path):
+def test_settling_a_failed_listed_leg_supersedes_it(tmp_path: Path) -> None:
     _deferred_record(tmp_path)
     run_close.amend_close_job(
         tmp_path, RUN,
@@ -40,7 +41,7 @@ def test_settling_a_failed_listed_leg_supersedes_it(tmp_path):
     assert closed.legs["completion-entry"].status == "ran"
 
 
-def test_the_same_leg_in_queue_and_settled_is_still_refused(tmp_path):
+def test_the_same_leg_in_queue_and_settled_is_still_refused(tmp_path: Path) -> None:
     _deferred_record(tmp_path)
     with pytest.raises(ValueError, match="both queued and settled"):
         run_close.amend_close_job(

@@ -38,7 +38,7 @@ def _stamp(runs_dir: Path, run_date: str) -> None:
     (run_dir / "COMPLETE").touch()
 
 
-def test_stamped_tree_emits_seven_directives_in_order(tmp_path, monkeypatch):
+def test_stamped_tree_emits_seven_directives_in_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = tmp_path / "repo"
     (repo_root / "state" / "lessons").mkdir(parents=True)
     claude_home = tmp_path / "fx"
@@ -64,7 +64,7 @@ def test_stamped_tree_emits_seven_directives_in_order(tmp_path, monkeypatch):
     assert envelope["judgment_points"] == []
 
 
-def test_empty_tree_withholds_age_sweep_and_records_gate_reason(tmp_path, monkeypatch):
+def test_empty_tree_withholds_age_sweep_and_records_gate_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = tmp_path / "repo"
     (repo_root / "state" / "lessons").mkdir(parents=True)
     claude_home = tmp_path / "fx-empty"
@@ -86,7 +86,7 @@ def test_empty_tree_withholds_age_sweep_and_records_gate_reason(tmp_path, monkey
     assert "d-assert-outbox-empty" in by_id["d-mechanical-close"]["depends_on"]
 
 
-def test_no_argv_token_is_em_supplied(tmp_path, monkeypatch):
+def test_no_argv_token_is_em_supplied(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """No override channel exists: brief() takes no date/cutoff argument."""
     import inspect
 
@@ -96,7 +96,7 @@ def test_no_argv_token_is_em_supplied(tmp_path, monkeypatch):
     assert "date" not in sig.parameters
 
 
-def test_cli_directives_are_consumes_manifest_members(tmp_path, monkeypatch):
+def test_cli_directives_are_consumes_manifest_members(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = tmp_path / "repo"
     (repo_root / "state" / "lessons").mkdir(parents=True)
     claude_home = tmp_path / "fx"
@@ -115,7 +115,7 @@ def test_cli_directives_are_consumes_manifest_members(tmp_path, monkeypatch):
             }
 
 
-def test_no_judgment_point_names_extract_or_verify_directives(tmp_path, monkeypatch):
+def test_no_judgment_point_names_extract_or_verify_directives(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = tmp_path / "repo"
     (repo_root / "state" / "lessons").mkdir(parents=True)
     claude_home = tmp_path / "fx"
@@ -127,7 +127,7 @@ def test_no_judgment_point_names_extract_or_verify_directives(tmp_path, monkeypa
     assert envelope["judgment_points"] == []
 
 
-def test_no_model_call_in_package():
+def test_no_model_call_in_package() -> None:
     """AC2 source-level oracle: parse every module in this package with
     `ast` and assert no `import subprocess`, no `subprocess.*` attribute
     access, and no import of a model/LLM client. A text-grep cannot
@@ -163,7 +163,7 @@ def test_no_model_call_in_package():
                     pytest.fail(f"{source_path}: subprocess.{node.attr} attribute access found")
 
 
-def test_brief_is_read_only(tmp_path, monkeypatch):
+def test_brief_is_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """brief() must not create the run-stamp directory or any other new
     path on disk — it only reads the COMPLETE-sentinel tree."""
     repo_root = tmp_path / "repo"
@@ -192,7 +192,7 @@ def _digests_fixture(repo_root: Path, run_id: str) -> None:
     (d / "digests.json").write_text(json.dumps({"topics": topics}), encoding="utf-8")
 
 
-def test_digests_present_yield_one_unit_per_topic(tmp_path, monkeypatch):
+def test_digests_present_yield_one_unit_per_topic(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = tmp_path / "repo"
     (repo_root / "state" / "lessons").mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "fx"))
@@ -206,7 +206,7 @@ def test_digests_present_yield_one_unit_per_topic(tmp_path, monkeypatch):
     assert [d["id"] for d in envelope["directives"]][0] == "d-extract-lessons"
 
 
-def test_digests_absent_leaves_brief_unchanged(tmp_path, monkeypatch):
+def test_digests_absent_leaves_brief_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = tmp_path / "repo"
     (repo_root / "state" / "lessons").mkdir(parents=True)
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "fx"))

@@ -6,6 +6,7 @@ import copy
 import functools
 
 from coordinator_core.completion_receipts.verdict import judge_verdict, mint_refusal
+from pathlib import Path
 
 NOW = "2026-10-01T12:00:00Z"
 
@@ -25,30 +26,30 @@ def _refusal(rec: dict) -> str | None:
     return mint_refusal(rec, rec["prep"], rec["tests"])
 
 
-def test_clean_record_is_not_refused():
+def test_clean_record_is_not_refused() -> None:
     assert _refusal(_record()) is None
 
 
-def test_delivery_not_pass():
+def test_delivery_not_pass() -> None:
     rec = _record()
     rec["delivery"]["verdict"] = "FAIL"
     assert _refusal(rec) == "review-stamp: refusing to mint: delivery verdict is 'FAIL', not PASS"
 
 
-def test_criterion_not_met_and_indeterminate():
+def test_criterion_not_met_and_indeterminate() -> None:
     for status in ("not_met", "indeterminate"):
         rec = _record()
         rec["criterion"]["status"] = status
         assert _refusal(rec) == f"review-stamp: refusing to mint: exit criterion is {status}"
 
 
-def test_tests_not_pass():
+def test_tests_not_pass() -> None:
     rec = _record()
     rec["tests"]["status"] = "fail"
     assert _refusal(rec) == "review-stamp: refusing to mint: build/test verdict is 'fail', not pass"
 
 
-def test_tests_not_run_ok_only_with_met_criterion():
+def test_tests_not_run_ok_only_with_met_criterion() -> None:
     rec = _record()
     rec["tests"]["status"] = "not_run"
     assert _refusal(rec) is None
@@ -58,7 +59,7 @@ def test_tests_not_run_ok_only_with_met_criterion():
     )
 
 
-def test_unresolved_confinement_foreign_zero_files():
+def test_unresolved_confinement_foreign_zero_files() -> None:
     rec = _record()
     rec["unresolved"] = ["x", "y"]
     assert _refusal(rec) == "review-stamp: refusing to mint: 2 unresolved finding(s)"
@@ -77,7 +78,7 @@ def test_unresolved_confinement_foreign_zero_files():
     )
 
 
-def test_an_empty_diff_mints_on_a_met_criterion():
+def test_an_empty_diff_mints_on_a_met_criterion() -> None:
     rec = _record()
     rec["prep"]["slice_files"] = []
     rec["prep"]["product_files"] = []
@@ -85,62 +86,62 @@ def test_an_empty_diff_mints_on_a_met_criterion():
     assert _refusal(rec) is None
 
 
-def test_refusal_order_delivery_first():
+def test_refusal_order_delivery_first() -> None:
     rec = _record()
     rec["delivery"]["verdict"] = "FAIL"
     rec["unresolved"] = ["x"]
     assert "delivery verdict" in _refusal(rec)
 
 
-def test_judge_met_is_agent_delivered():
+def test_judge_met_is_agent_delivered() -> None:
     verdict, judge = judge_verdict(_record(), all_rows_landed=True, now=NOW)
     assert verdict == "agent-delivered"
     assert judge == {"identity": "execute-review", "observation_summary": "ran and held", "judged_at": NOW}
 
 
-def test_judge_not_met_and_indeterminate_are_null():
+def test_judge_not_met_and_indeterminate_are_null() -> None:
     for status in ("not_met", "indeterminate"):
         rec = _record()
         rec["criterion"]["status"] = status
         assert judge_verdict(rec, all_rows_landed=True, now=NOW) == (None, None)
 
 
-def test_judge_rows_not_landed_is_null():
+def test_judge_rows_not_landed_is_null() -> None:
     assert judge_verdict(_record(), all_rows_landed=False, now=NOW) == (None, None)
 
 
-def test_judge_no_record_or_empty_observation_is_null():
+def test_judge_no_record_or_empty_observation_is_null() -> None:
     assert judge_verdict(None, all_rows_landed=True, now=NOW) == (None, None)
     rec = copy.deepcopy(_record())
     rec["criterion"]["observation"] = "  "
     assert judge_verdict(rec, all_rows_landed=True, now=NOW) == (None, None)
 
 
-def test_judge_refused_record_is_null():
+def test_judge_refused_record_is_null() -> None:
     rec = _record()
     rec["unresolved"] = ["x"]
     assert judge_verdict(rec, all_rows_landed=True, now=NOW) == (None, None)
 
 
-def test_delivery_fail_names_the_unbacked_claims():
+def test_delivery_fail_names_the_unbacked_claims() -> None:
     rec = _record()
     rec["delivery"] = {"verdict": "FAIL", "unbacked": [{"claim": "adds retry", "anchor": "no hunk in x.py"}]}
     assert _refusal(rec).endswith("unbacked claims:\n- adds retry [lacked: no hunk in x.py]")
 
 
-def test_test_verdict_pass_beats_open_lifecycle_status():
+def test_test_verdict_pass_beats_open_lifecycle_status() -> None:
     rec = _record()
     rec["tests"] = {"status": "open", "test_verdict": "pass"}
     assert _refusal(rec) is None
 
 
-def test_test_verdict_fail_refuses_despite_complete_status():
+def test_test_verdict_fail_refuses_despite_complete_status() -> None:
     rec = _record()
     rec["tests"] = {"status": "complete", "test_verdict": "fail"}
     assert _refusal(rec) == "review-stamp: refusing to mint: build/test verdict is 'fail', not pass"
 
 
-def test_absent_test_verdict_falls_back_to_status():
+def test_absent_test_verdict_falls_back_to_status() -> None:
     rec = _record()
     rec["tests"] = {"status": "pass"}
     assert _refusal(rec) is None
@@ -148,7 +149,7 @@ def test_absent_test_verdict_falls_back_to_status():
     assert "build/test verdict is 'open'" in _refusal(rec)
 
 
-def test_criterion_open_ok_lets_an_unmet_criterion_stamp_and_never_a_failed_delivery():
+def test_criterion_open_ok_lets_an_unmet_criterion_stamp_and_never_a_failed_delivery() -> None:
     for status in ("not_met", "indeterminate"):
         rec = _record()
         rec["criterion"]["status"] = status
@@ -194,15 +195,15 @@ def _baseline_record(log_dir, **over):
 
 
 @pytest.fixture
-def baseline_record(tmp_path):
+def baseline_record(tmp_path: Path):
     return functools.partial(_baseline_record, tmp_path)
 
 
-def test_failures_identical_at_baseline_read_as_pass(baseline_record):
+def test_failures_identical_at_baseline_read_as_pass(baseline_record) -> None:
     assert baseline_clears(baseline_record()) and effective_test_verdict(baseline_record()) == "pass"
 
 
-def test_baseline_equal_tests_do_not_block_the_mint(baseline_record):
+def test_baseline_equal_tests_do_not_block_the_mint(baseline_record) -> None:
     integration = {"delivery": {"verdict": "PASS"}, "criterion": {"status": "met"}}
     prep = {"slice_files": ["a.py"], "product_files": ["a.py"]}
     assert mint_refusal(integration, prep, baseline_record()) is None
@@ -218,12 +219,12 @@ def test_baseline_equal_tests_do_not_block_the_mint(baseline_record):
         {"baseline": {"pre_existing": [], "caused": [], "unverified": []}},
     ],
 )
-def test_a_caused_unverified_or_unattributed_failure_still_refuses(over, baseline_record):
+def test_a_caused_unverified_or_unattributed_failure_still_refuses(over, baseline_record) -> None:
     record = baseline_record(**over)
     assert not baseline_clears(record) and effective_test_verdict(record) == "fail"
 
 
-def test_all_foreign_failures_clear(baseline_record):
+def test_all_foreign_failures_clear(baseline_record) -> None:
     record = baseline_record(
         tests_failed=2,
         baseline={"pre_existing": [], "foreign": ["p.py::a", "p.py::b"], "evidence": ["p.py::a", "p.py::b"], "caused": [], "unverified": []},
@@ -231,14 +232,14 @@ def test_all_foreign_failures_clear(baseline_record):
     assert baseline_clears(record) and effective_test_verdict(record) == "pass"
 
 
-def test_foreign_ids_absent_from_evidence_do_not_clear(baseline_record):
+def test_foreign_ids_absent_from_evidence_do_not_clear(baseline_record) -> None:
     record = baseline_record(
         tests_failed=2, baseline={"pre_existing": [], "foreign": ["p.py::a", "p.py::b"], "caused": [], "unverified": []}
     )
     assert not baseline_clears(record) and effective_test_verdict(record) == "fail"
 
 
-def test_a_partly_evidenced_foreign_set_does_not_clear(baseline_record):
+def test_a_partly_evidenced_foreign_set_does_not_clear(baseline_record) -> None:
     record = baseline_record(
         tests_failed=2,
         baseline={"pre_existing": [], "foreign": ["p.py::a", "p.py::b"], "evidence": ["p.py::a"], "caused": [], "unverified": []},
@@ -246,7 +247,7 @@ def test_a_partly_evidenced_foreign_set_does_not_clear(baseline_record):
     assert not baseline_clears(record)
 
 
-def test_evidence_for_an_unattributed_id_does_not_clear_it(baseline_record):
+def test_evidence_for_an_unattributed_id_does_not_clear_it(baseline_record) -> None:
     record = baseline_record(
         tests_failed=1,
         baseline={"pre_existing": [], "foreign": ["p.py::a"], "evidence": ["p.py::z"], "caused": [], "unverified": []},
@@ -254,7 +255,7 @@ def test_evidence_for_an_unattributed_id_does_not_clear_it(baseline_record):
     assert not baseline_clears(record)
 
 
-def test_evidenced_clear_ids_is_the_attributed_and_evidenced_intersection():
+def test_evidenced_clear_ids_is_the_attributed_and_evidenced_intersection() -> None:
     from coordinator_core.completion_receipts.verdict import evidenced_clear_ids
 
     baseline = {"pre_existing": ["p.py::a"], "foreign": [{"id": "p.py::b"}, "p.py::c"], "evidence": ["p.py::a", {"id": "p.py::b"}, "p.py::z"]}
@@ -263,7 +264,7 @@ def test_evidenced_clear_ids_is_the_attributed_and_evidenced_intersection():
     assert evidenced_clear_ids(None, measured=True) == set()
 
 
-def test_self_written_evidence_without_a_measured_base_log_never_clears(tmp_path, baseline_record):
+def test_self_written_evidence_without_a_measured_base_log_never_clears(tmp_path: Path, baseline_record) -> None:
     from coordinator_core.completion_receipts.verdict import evidenced_clear_ids
 
     base = {"pre_existing": [], "foreign": ["p.py::a"], "evidence": ["p.py::a"], "caused": [], "unverified": []}
@@ -276,7 +277,7 @@ def test_self_written_evidence_without_a_measured_base_log_never_clears(tmp_path
     assert baseline_clears(baseline_record(tests_failed=1, baseline=dict(base)))
 
 
-def test_pre_existing_plus_foreign_mix_covering_the_failures_clears(baseline_record):
+def test_pre_existing_plus_foreign_mix_covering_the_failures_clears(baseline_record) -> None:
     record = baseline_record(
         tests_failed=2,
         baseline={"pre_existing": ["p.py::a"], "foreign": ["p.py::b"], "evidence": ["p.py::a", "p.py::b"], "caused": [], "unverified": []},
@@ -284,14 +285,14 @@ def test_pre_existing_plus_foreign_mix_covering_the_failures_clears(baseline_rec
     assert baseline_clears(record)
 
 
-def test_foreign_plus_one_caused_does_not_clear(baseline_record):
+def test_foreign_plus_one_caused_does_not_clear(baseline_record) -> None:
     record = baseline_record(
         tests_failed=2, baseline={"pre_existing": [], "foreign": ["p.py::a"], "caused": ["p.py::b"], "unverified": []}
     )
     assert not baseline_clears(record)
 
 
-def test_foreign_under_a_heuristic_method_does_not_clear(baseline_record):
+def test_foreign_under_a_heuristic_method_does_not_clear(baseline_record) -> None:
     record = baseline_record(
         tests_failed=1, baseline_method="heuristic",
         baseline={"pre_existing": [], "foreign": ["p.py::a"], "caused": [], "unverified": []},
@@ -305,18 +306,18 @@ def _no_delivery() -> dict:
     return rec
 
 
-def test_absent_delivery_mints_when_the_tier_exempts_the_verifier():
+def test_absent_delivery_mints_when_the_tier_exempts_the_verifier() -> None:
     rec = _no_delivery()
     assert mint_refusal(rec, rec["prep"], rec["tests"], delivery_exempt=True) is None
 
 
-def test_absent_delivery_refuses_when_the_tier_does_not_exempt_it():
+def test_absent_delivery_refuses_when_the_tier_does_not_exempt_it() -> None:
     rec = _no_delivery()
     assert "delivery verdict is None" in mint_refusal(rec, rec["prep"], rec["tests"], delivery_exempt=False)
     assert "delivery verdict is None" in _refusal(rec)
 
 
-def test_a_present_fail_delivery_refuses_even_when_exempt():
+def test_a_present_fail_delivery_refuses_even_when_exempt() -> None:
     rec = _record()
     rec["delivery"] = {"verdict": "FAIL"}
     assert "delivery verdict is 'FAIL'" in mint_refusal(rec, rec["prep"], rec["tests"], delivery_exempt=True)

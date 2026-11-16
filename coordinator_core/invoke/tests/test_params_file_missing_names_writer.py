@@ -5,13 +5,15 @@ from __future__ import annotations
 import json
 
 from coordinator_core.invoke.__main__ import _dispatch_argv
+from pathlib import Path
+import pytest
 
 
 def _message(stderr: str) -> str:
     return json.loads(stderr.strip())["error"]["message"]
 
 
-def test_missing_canonical_path_names_the_writer(tmp_path):
+def test_missing_canonical_path_names_the_writer(tmp_path: Path) -> None:
     path = tmp_path / "scratch" / "warp" / "ask-1" / "terminal-commit-params.json"
     stdout, stderr, exit_code = _dispatch_argv(
         ["ping", "--params-file", str(path)], str(tmp_path), allow_warm=False
@@ -25,7 +27,7 @@ def test_missing_canonical_path_names_the_writer(tmp_path):
     assert "Cannot read" not in message
 
 
-def test_missing_canonical_path_without_a_note_says_the_writer_was_not_reached(tmp_path):
+def test_missing_canonical_path_without_a_note_says_the_writer_was_not_reached(tmp_path: Path) -> None:
     path = tmp_path / "scratch" / "warp" / "ask-1" / "terminal-commit-params.json"
     _, stderr, _ = _dispatch_argv(["ping", "--params-file", str(path)], str(tmp_path), allow_warm=False)
     message = _message(stderr)
@@ -33,7 +35,7 @@ def test_missing_canonical_path_without_a_note_says_the_writer_was_not_reached(t
     assert "never written" in message and "did not run or refused" in message
 
 
-def test_missing_canonical_path_with_a_note_names_the_refusing_leg(tmp_path):
+def test_missing_canonical_path_with_a_note_names_the_refusing_leg(tmp_path: Path) -> None:
     path = tmp_path / "scratch" / "warp" / "ask-1" / "terminal-commit-params.json"
     path.parent.mkdir(parents=True)
     path.with_name("terminal-commit-params.refused").write_text("some-leg", encoding="utf-8")
@@ -43,7 +45,7 @@ def test_missing_canonical_path_with_a_note_names_the_refusing_leg(tmp_path):
     assert "some-leg" in text and "was not reached" not in text
 
 
-def test_missing_arbitrary_path_keeps_the_existing_message(tmp_path):
+def test_missing_arbitrary_path_keeps_the_existing_message(tmp_path: Path) -> None:
     path = tmp_path / "other" / "params.json"
     _, stderr, exit_code = _dispatch_argv(
         ["ping", "--params-file", str(path)], str(tmp_path), allow_warm=False
@@ -57,7 +59,7 @@ def test_missing_arbitrary_path_keeps_the_existing_message(tmp_path):
 _REL = "scratch/warp/ask-1/terminal-commit-params.json"
 
 
-def test_relative_path_from_below_repo_root_reads_the_existing_file(tmp_path):
+def test_relative_path_from_below_repo_root_reads_the_existing_file(tmp_path: Path) -> None:
     """Hypothesis (a) held: the caller's cwd sits below the repo root, so the typed relative
     path misses under cwd while the canonical file exists at the root."""
     (tmp_path / _REL).parent.mkdir(parents=True)
@@ -71,7 +73,7 @@ def test_relative_path_from_below_repo_root_reads_the_existing_file(tmp_path):
     assert json.loads(stdout)["result"]["ok"] is True
 
 
-def test_relative_path_absent_everywhere_still_says_never_written(tmp_path):
+def test_relative_path_absent_everywhere_still_says_never_written(tmp_path: Path) -> None:
     deep = tmp_path / "sub"
     deep.mkdir()
     _, stderr, exit_code = _dispatch_argv(
@@ -85,7 +87,7 @@ def _land_params(run_id):
     return {"run_id": run_id, "run_token": "t" * 8, "script_path": "s.mjs", "inline_review": {"k": 1}}
 
 
-def test_absent_params_file_is_recovered_from_the_land_params(tmp_path):
+def test_absent_params_file_is_recovered_from_the_land_params(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 
     target = chan.params_path(tmp_path, "ask-1")
@@ -99,7 +101,7 @@ def test_absent_params_file_is_recovered_from_the_land_params(tmp_path):
     assert target.is_file()
 
 
-def test_absent_relative_params_file_is_recovered_against_cwd(tmp_path):
+def test_absent_relative_params_file_is_recovered_against_cwd(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 
     target = chan.params_path(tmp_path, "ask-1")
@@ -110,7 +112,7 @@ def test_absent_relative_params_file_is_recovered_against_cwd(tmp_path):
     assert target.is_file()
 
 
-def test_relative_path_from_below_the_root_is_not_recovered(tmp_path):
+def test_relative_path_from_below_the_root_is_not_recovered(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 
     target = chan.params_path(tmp_path, "ask-1")
@@ -124,7 +126,7 @@ def test_relative_path_from_below_the_root_is_not_recovered(tmp_path):
     assert not target.exists()
 
 
-def test_missing_params_file_without_land_params_names_the_door_fail_open(tmp_path, monkeypatch):
+def test_missing_params_file_without_land_params_names_the_door_fail_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import time
 
     from coordinator_core.ops.dispatch_emit import run_token
@@ -143,7 +145,7 @@ def test_missing_params_file_without_land_params_names_the_door_fail_open(tmp_pa
     assert "PreToolUse door failed open" in message and "cause=wedged" in message
 
 
-def test_present_canonical_file_still_dispatches(tmp_path):
+def test_present_canonical_file_still_dispatches(tmp_path: Path) -> None:
     path = tmp_path / "scratch" / "warp" / "ask-1" / "terminal-commit-params.json"
     path.parent.mkdir(parents=True)
     path.write_text("{}", encoding="utf-8")

@@ -34,10 +34,15 @@ def _take(n, owner="owner"):
 
 
 def test_cap_is_derived_not_constant():
-    from coordinator_core.install.derive_worker_cap import derive_cap
-
-    assert tier_t_slots.slot_cap() == max(1, int(derive_cap()))
     assert tier_t_slots.slot_cap() >= 1
+
+
+def test_cap_is_stable_under_changing_live_load(monkeypatch):
+    from coordinator_core.install import derive_worker_cap
+
+    caps = iter([19, 10, 3])
+    monkeypatch.setattr(derive_worker_cap, "derive_cap", lambda: next(caps))
+    assert len({tier_t_slots.slot_cap() for _ in range(3)}) == 1
 
 
 def test_semaphore_admits_exactly_k_then_refuses():

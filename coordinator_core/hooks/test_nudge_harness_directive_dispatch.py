@@ -11,11 +11,12 @@ import pytest
 from coordinator_core.hooks import nudge_harness_directive_dispatch as m
 from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
-def _transcript(tmp_path, *assistant_texts):
+def _transcript(tmp_path, *assistant_texts) -> str:
     path = tmp_path / "transcript.jsonl"
     with open(path, "w", encoding="utf-8") as fh:
         for text in assistant_texts:
@@ -44,12 +45,12 @@ def _payload(tmp_path, transcript_path, **over):
 
 
 @pytest.fixture(autouse=True)
-def _no_env_hatch(monkeypatch):
+def _no_env_hatch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_HARNESS_DIRECTIVE_NUDGE_OFF", raising=False)
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     os.makedirs(tmp_path / ".git")
     return tmp_path
 
@@ -69,7 +70,7 @@ def repo(tmp_path):
         "should I dispatch the executor anyway?",
     ],
 )
-def test_tells_trip(text):
+def test_tells_trip(text) -> None:
     assert m.message_trips_tell(text) is True
 
 
@@ -84,11 +85,11 @@ def test_tells_trip(text):
         "That's your rule against fan-out here, so I declined to spawn anyone.",
     ],
 )
-def test_tell_c_misattribution_trips(text):
+def test_tell_c_misattribution_trips(text) -> None:
     assert m.message_trips_tell(text) is True
 
 
-def test_recurrence_5_regression_verbatim():
+def test_recurrence_5_regression_verbatim() -> None:
     text = (
         "this session was started with a standing instruction not to use "
         "the Agent tool unless you request it. That's yours to resolve, "
@@ -104,7 +105,7 @@ def test_recurrence_5_regression_verbatim():
         "Not calling the Agent Tool unless you request it.",
     ],
 )
-def test_tell_a_widened_spacing_and_pronoun_trip(text):
+def test_tell_a_widened_spacing_and_pronoun_trip(text) -> None:
     assert m.message_trips_tell(text) is True
 
 
@@ -115,7 +116,7 @@ def test_tell_a_widened_spacing_and_pronoun_trip(text):
         "Unless you object, I'll proceed with the plan as written.",
     ],
 )
-def test_tell_a_widened_patterns_stay_silent_on_controls(text):
+def test_tell_a_widened_patterns_stay_silent_on_controls(text) -> None:
     assert m.message_trips_tell(text) is False
 
 
@@ -127,7 +128,7 @@ def test_tell_a_widened_patterns_stay_silent_on_controls(text):
         "subagents here.",
     ],
 )
-def test_tell_c_widened_patterns_trip(text):
+def test_tell_c_widened_patterns_trip(text) -> None:
     assert m.message_trips_tell(text) is True
 
 
@@ -144,7 +145,7 @@ def test_tell_c_widened_patterns_trip(text):
         "small. Also dispatched a reviewer for the diff.",
     ],
 )
-def test_tell_c_widened_patterns_stay_silent_on_controls(text):
+def test_tell_c_widened_patterns_stay_silent_on_controls(text) -> None:
     assert m.message_trips_tell(text) is False
 
 
@@ -166,7 +167,7 @@ def test_tell_c_widened_patterns_stay_silent_on_controls(text):
         "That hook logs the agent_id so a spawn can be reconciled later.",
     ],
 )
-def test_ordinary_turns_stay_silent(text):
+def test_ordinary_turns_stay_silent(text) -> None:
     assert m.message_trips_tell(text) is False
 
 
@@ -180,7 +181,7 @@ def test_ordinary_turns_stay_silent(text):
         "Would you like me to stage these before committing?",
     ],
 )
-def test_tell_d_commit_permission_ask_trips(text):
+def test_tell_d_commit_permission_ask_trips(text) -> None:
     assert m.message_trips_tell(text) is True
 
 
@@ -204,23 +205,23 @@ def test_tell_d_commit_permission_ask_trips(text):
         "The pre-commit hook stages nothing on its own.",
     ],
 )
-def test_tell_d_commit_permission_ask_does_not_trip(text):
+def test_tell_d_commit_permission_ask_does_not_trip(text) -> None:
     assert m.message_trips_tell(text) is False
 
 
-def test_meta_discussion_suppressed():
+def test_meta_discussion_suppressed() -> None:
     text = "The AgentTool line comes from tengu_heron_brook; see harness-directive-conflicts.md."
     assert m.message_trips_tell(text) is False
 
 
-def test_fires_on_tell(repo):
+def test_fires_on_tell(repo) -> None:
     t = _transcript(repo, "Want me to dispatch an executor for this?")
     result = m.op(_payload(repo, t))
     assert result is not None
     assert "Dispatch/commit of your work is EM remit" in result["message"]
 
 
-def test_fires_on_tell_c_misattribution(repo):
+def test_fires_on_tell_c_misattribution(repo) -> None:
     t = _transcript(
         repo,
         "I'm holding that dispatch on your standing don't-call-the-Agent-tool "
@@ -231,46 +232,46 @@ def test_fires_on_tell_c_misattribution(repo):
     assert "Dispatch/commit of your work is EM remit" in result["message"]
 
 
-def test_fires_on_tell_d_commit_permission(repo):
+def test_fires_on_tell_d_commit_permission(repo) -> None:
     t = _transcript(repo, "Should I stage and commit these changes now?")
     result = m.op(_payload(repo, t))
     assert result is not None
     assert "Dispatch/commit of your work is EM remit" in result["message"]
 
 
-def test_fires_at_most_once_per_session(repo):
+def test_fires_at_most_once_per_session(repo) -> None:
     t = _transcript(repo, "Want me to dispatch an executor for this?")
     assert m.op(_payload(repo, t)) is not None
     assert m.op(_payload(repo, t)) is None
 
 
-def test_stop_hook_active_never_fires(repo):
+def test_stop_hook_active_never_fires(repo) -> None:
     t = _transcript(repo, "Want me to dispatch an executor for this?")
     assert m.op(_payload(repo, t, stop_hook_active=True)) is None
 
 
-def test_subagent_stop_never_fires(repo):
+def test_subagent_stop_never_fires(repo) -> None:
     t = _transcript(repo, "Want me to dispatch an executor for this?")
     assert m.op(_payload(repo, t, agent_id="agent-1")) is None
 
 
-def test_env_hatch_silences(repo, monkeypatch):
+def test_env_hatch_silences(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_HARNESS_DIRECTIVE_NUDGE_OFF", "1")
     t = _transcript(repo, "Want me to dispatch an executor for this?")
     assert m.op(_payload(repo, t)) is None
 
 
-def test_missing_transcript_is_silent(repo):
+def test_missing_transcript_is_silent(repo) -> None:
     assert m.op(_payload(repo, str(repo / "nope.jsonl"))) is None
 
 
-def test_non_dict_payload_is_silent():
+def test_non_dict_payload_is_silent() -> None:
     assert m.op(["not", "a", "dict"]) is None
     assert m.op(None) is None
     assert m.op("also not a dict") is None
 
 
-def test_missing_session_id_warns_and_may_repeat(repo):
+def test_missing_session_id_warns_and_may_repeat(repo) -> None:
     t = _transcript(repo, "Want me to dispatch an executor for this?")
     payload = _payload(repo, t)
     del payload["session_id"]
@@ -279,7 +280,7 @@ def test_missing_session_id_warns_and_may_repeat(repo):
     assert "invocation-scoped" in result["message"]
 
 
-def test_worktree_style_git_file_resolves_sentinel_root(tmp_path):
+def test_worktree_style_git_file_resolves_sentinel_root(tmp_path: Path) -> None:
     outer = tmp_path / "outer"
     os.makedirs(outer / ".git")
     inner = outer / "worktree"
@@ -301,12 +302,12 @@ def test_worktree_style_git_file_resolves_sentinel_root(tmp_path):
     assert m.op(payload) is None
 
 
-def test_ordinary_final_turn_is_silent(repo):
+def test_ordinary_final_turn_is_silent(repo) -> None:
     t = _transcript(repo, "Want me to dispatch a reviewer?", "Dispatched; verdict OK.")
     assert m.op(_payload(repo, t)) is None
 
 
-def _git_init(repo):
+def _git_init(repo) -> None:
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, **no_console_passthrough_kwargs())
@@ -315,13 +316,13 @@ def _git_init(repo):
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True, **no_console_passthrough_kwargs())
 
 
-def _write_dispatched_agents(repo, session_id, content):
+def _write_dispatched_agents(repo, session_id, content) -> None:
     d = session_dir_for(repo / ".git", session_id)
     os.makedirs(d, exist_ok=True)
     (d / "dispatched-agents.txt").write_text(content, encoding="utf-8")
 
 
-def test_fires_even_when_dispatched_agents_file_present_and_nonempty(tmp_path):
+def test_fires_even_when_dispatched_agents_file_present_and_nonempty(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     os.makedirs(repo)
     _git_init(repo)
@@ -332,7 +333,7 @@ def test_fires_even_when_dispatched_agents_file_present_and_nonempty(tmp_path):
     assert result is not None
 
 
-def test_fires_when_dispatched_agents_file_absent(tmp_path):
+def test_fires_when_dispatched_agents_file_absent(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     os.makedirs(repo)
     _git_init(repo)
@@ -342,7 +343,7 @@ def test_fires_when_dispatched_agents_file_absent(tmp_path):
     assert result is not None
 
 
-def test_fires_when_dispatched_agents_file_present_but_empty(tmp_path):
+def test_fires_when_dispatched_agents_file_present_but_empty(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     os.makedirs(repo)
     _git_init(repo)
@@ -353,7 +354,7 @@ def test_fires_when_dispatched_agents_file_present_but_empty(tmp_path):
     assert result is not None
 
 
-def test_dispatch_evidence_in_worktree_common_dir_still_does_not_suppress(tmp_path):
+def test_dispatch_evidence_in_worktree_common_dir_still_does_not_suppress(tmp_path: Path) -> None:
     main_repo = tmp_path / "main"
     os.makedirs(main_repo)
     _git_init(main_repo)
@@ -374,7 +375,7 @@ def test_dispatch_evidence_in_worktree_common_dir_still_does_not_suppress(tmp_pa
     assert result is not None
 
 
-def test_last_assistant_text_skips_tool_only_turns(repo):
+def test_last_assistant_text_skips_tool_only_turns(repo) -> None:
     path = repo / "t.jsonl"
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(
@@ -395,7 +396,7 @@ def test_last_assistant_text_skips_tool_only_turns(repo):
     assert m.last_assistant_text(str(path)) == "spoken"
 
 
-def test_last_assistant_text_handles_malformed_lines(repo):
+def test_last_assistant_text_handles_malformed_lines(repo) -> None:
     path = repo / "t.jsonl"
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("{not json\n")
@@ -403,13 +404,13 @@ def test_last_assistant_text_handles_malformed_lines(repo):
     assert m.last_assistant_text(str(path)) == "plain"
 
 
-def test_no_git_root_degrades_without_sentinel(tmp_path):
+def test_no_git_root_degrades_without_sentinel(tmp_path: Path) -> None:
     t = _transcript(tmp_path, "Want me to dispatch an executor?")
     assert m.op(_payload(tmp_path, t)) is not None
     assert m.op(_payload(tmp_path, t)) is not None
 
 
-def test_last_assistant_text_non_dict_message_does_not_raise(repo):
+def test_last_assistant_text_non_dict_message_does_not_raise(repo) -> None:
     path = repo / "t.jsonl"
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(json.dumps({"type": "assistant", "message": "not-a-dict"}) + "\n")
@@ -417,7 +418,7 @@ def test_last_assistant_text_non_dict_message_does_not_raise(repo):
     assert m.last_assistant_text(str(path)) == "plain"
 
 
-def test_last_assistant_text_handles_large_transcript(repo):
+def test_last_assistant_text_handles_large_transcript(repo) -> None:
     path = repo / "big.jsonl"
     filler = json.dumps({"type": "user", "message": {"content": "x" * 200}})
     with open(path, "w", encoding="utf-8") as fh:
@@ -436,13 +437,13 @@ def test_last_assistant_text_handles_large_transcript(repo):
     assert m.last_assistant_text(str(path)) == "final spoken turn"
 
 
-def test_claim_fire_is_atomic(tmp_path):
+def test_claim_fire_is_atomic(tmp_path: Path) -> None:
     sentinel = str(tmp_path / "sub" / "harness-directive-nudge.fired")
     assert m._claim_fire(sentinel) is True
     assert m._claim_fire(sentinel) is False
 
 
-def test_last_assistant_message_is_preferred_over_transcript(repo):
+def test_last_assistant_message_is_preferred_over_transcript(repo) -> None:
     payload = _payload(
         repo,
         str(repo / "does-not-exist.jsonl"),
@@ -451,13 +452,13 @@ def test_last_assistant_message_is_preferred_over_transcript(repo):
     assert m.op(payload) is not None
 
 
-def test_falls_back_to_transcript_when_field_absent(repo):
+def test_falls_back_to_transcript_when_field_absent(repo) -> None:
     t = _transcript(repo, "Want me to dispatch an executor for this?")
     assert m.op(_payload(repo, t)) is not None
 
 
 @pytest.mark.parametrize("bad_field", ["   ", ["nope"], 7, None])
-def test_falls_back_when_field_is_blank_or_wrong_type(repo, bad_field):
+def test_falls_back_when_field_is_blank_or_wrong_type(repo, bad_field) -> None:
     t = _transcript(repo, "Want me to dispatch an executor for this?")
     payload = _payload(
         repo, t, session_id=f"sess-{abs(hash(str(bad_field)))}", last_assistant_message=bad_field
@@ -465,12 +466,12 @@ def test_falls_back_when_field_is_blank_or_wrong_type(repo, bad_field):
     assert m.op(payload) is not None
 
 
-def test_no_transcript_and_no_field_is_silent(repo):
+def test_no_transcript_and_no_field_is_silent(repo) -> None:
     payload = {"session_id": "s", "cwd": str(repo), "stop_hook_active": False}
     assert m.op(payload) is None
 
 
-def test_worktree_gitdir_pointer_allows_sentinel_write(tmp_path):
+def test_worktree_gitdir_pointer_allows_sentinel_write(tmp_path: Path) -> None:
     real_git = tmp_path / "realgit"
     os.makedirs(real_git)
     wt = tmp_path / "wt"
@@ -491,7 +492,7 @@ def test_worktree_gitdir_pointer_allows_sentinel_write(tmp_path):
     assert m.op(payload) is None
 
 
-def test_relative_gitdir_pointer_resolves(tmp_path):
+def test_relative_gitdir_pointer_resolves(tmp_path: Path) -> None:
     os.makedirs(tmp_path / "realgit")
     wt = tmp_path / "wt"
     os.makedirs(wt)
@@ -507,7 +508,7 @@ def test_relative_gitdir_pointer_resolves(tmp_path):
     assert m.op(payload) is None
 
 
-def test_unparseable_git_file_degrades_silently(tmp_path):
+def test_unparseable_git_file_degrades_silently(tmp_path: Path) -> None:
     wt = tmp_path / "wt"
     os.makedirs(wt)
     with open(wt / ".git", "w", encoding="utf-8") as fh:
@@ -521,7 +522,7 @@ def test_unparseable_git_file_degrades_silently(tmp_path):
     assert m.op(payload) is not None
 
 
-def test_nudge_message_carries_no_bare_decision_record_id(tmp_path):
+def test_nudge_message_carries_no_bare_decision_record_id(tmp_path: Path) -> None:
     wt = tmp_path
     os.makedirs(wt / ".git")
     payload = {
@@ -535,21 +536,21 @@ def test_nudge_message_carries_no_bare_decision_record_id(tmp_path):
     assert not re.search(r"\bDR-\d+\b", result["message"])
 
 
-def test_tell_c_catches_scope_possessive_attribution():
+def test_tell_c_catches_scope_possessive_attribution() -> None:
     assert m.message_trips_tell(
         "But this session's standing instruction is do not call the Agent tool "
         "unless the user requested it, so I did not dispatch the reviewers."
     )
 
 
-def test_scope_possessive_does_not_trip_on_unrelated_session_prose():
+def test_scope_possessive_does_not_trip_on_unrelated_session_prose() -> None:
     assert not m.message_trips_tell("This session's scope is the install surface.")
     assert not m.message_trips_tell(
         "Per your standing instruction to keep PRs under 300 lines, I split it."
     )
 
 
-def _write_transcript(tmp_path, entries):
+def _write_transcript(tmp_path, entries) -> str:
     path = tmp_path / "transcript.jsonl"
     with open(path, "w", encoding="utf-8") as fh:
         for entry in entries:
@@ -557,7 +558,7 @@ def _write_transcript(tmp_path, entries):
     return str(path)
 
 
-def _ask_entry(question, label="Authorize the dispatch", description="You lift the rule."):
+def _ask_entry(question, label: str = "Authorize the dispatch", description: str = "You lift the rule."):
     return {
         "type": "assistant",
         "message": {
@@ -580,7 +581,7 @@ def _ask_entry(question, label="Authorize the dispatch", description="You lift t
     }
 
 
-def test_permission_ask_via_askuserquestion_is_visible_to_the_tells(tmp_path):
+def test_permission_ask_via_askuserquestion_is_visible_to_the_tells(tmp_path: Path) -> None:
     transcript = _write_transcript(
         tmp_path,
         [
@@ -596,7 +597,7 @@ def test_permission_ask_via_askuserquestion_is_visible_to_the_tells(tmp_path):
     assert m.message_trips_tell(text)
 
 
-def test_askuserquestion_harvest_stops_at_the_turn_boundary(tmp_path):
+def test_askuserquestion_harvest_stops_at_the_turn_boundary(tmp_path: Path) -> None:
     transcript = _write_transcript(
         tmp_path,
         [
@@ -609,11 +610,11 @@ def test_askuserquestion_harvest_stops_at_the_turn_boundary(tmp_path):
     assert m.ask_user_question_text(transcript) == ""
 
 
-def test_askuserquestion_harvest_is_fail_silent_on_a_bad_path():
+def test_askuserquestion_harvest_is_fail_silent_on_a_bad_path() -> None:
     assert m.ask_user_question_text("/nonexistent/transcript.jsonl") == ""
 
 
-def test_spoken_text_still_wins_when_both_channels_are_present(tmp_path):
+def test_spoken_text_still_wins_when_both_channels_are_present(tmp_path: Path) -> None:
     """The harvest AUGMENTS the scanned corpus; it does not replace spoken text."""
     transcript = _write_transcript(
         tmp_path,
@@ -629,7 +630,7 @@ def test_spoken_text_still_wins_when_both_channels_are_present(tmp_path):
     assert "dispatch the reviewers" in text
 
 
-def test_scope_possessive_does_not_trip_on_a_budget_noun_phrase():
+def test_scope_possessive_does_not_trip_on_a_budget_noun_phrase() -> None:
     """Regression for the review finding on the scope-possessive widening.
 
     "instruction budget" is a QUANTITY, not an authored rule, and the vocabulary
@@ -647,14 +648,14 @@ def test_scope_possessive_does_not_trip_on_a_budget_noun_phrase():
     )
 
 
-def test_scope_possessive_still_fires_when_the_rule_noun_is_the_head():
+def test_scope_possessive_still_fires_when_the_rule_noun_is_the_head() -> None:
     assert m.message_trips_tell(
         "But this session's standing instruction is do not call the Agent tool, "
         "so I did not dispatch the reviewers."
     )
 
 
-def test_scope_possessive_does_not_trip_when_the_quantity_word_precedes():
+def test_scope_possessive_does_not_trip_when_the_quantity_word_precedes() -> None:
     """Second review pass: the first tightening only excluded a quantity word
     that FOLLOWS the rule-noun ("instruction budget"). A quantity word used as a
     MODIFIER ahead of it still tripped — and "spawn-count budget" is CLAUDE.md's

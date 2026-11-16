@@ -18,6 +18,7 @@ import re
 import pytest
 
 from coordinator_core.ops.docgen import template_format as tf
+from pathlib import Path
 
 # The full 22-type surface this chunk extracts (Problem section: all 22
 # `_scaffold_*` bodies in DoE's coordinator-doc-new, with _scaffold_sidecar's
@@ -48,27 +49,27 @@ EXPECTED_DOC_TYPES = frozenset({
 })
 
 
-def _all_template_paths():
+def _all_template_paths() -> list[Path]:
     return sorted(tf.templates_dir().glob("*.json"))
 
 
-def test_exactly_22_templates_staged():
+def test_exactly_22_templates_staged() -> None:
     paths = _all_template_paths()
     assert len(paths) == 22, f"expected 22 templates, found {len(paths)}: {[p.name for p in paths]}"
 
 
-def test_every_template_parses_and_validates():
+def test_every_template_parses_and_validates() -> None:
     for path in _all_template_paths():
         data = tf.load_template(path)  # raises TemplateFormatError on defect
         errors = tf.validate_template(data)
         assert errors == [], f"{path.name}: {errors}"
 
 
-def test_doc_type_set_is_the_full_22():
+def test_doc_type_set_is_the_full_22() -> None:
     assert tf.available_template_types() == sorted(EXPECTED_DOC_TYPES)
 
 
-def test_doc_type_matches_filename_stem_family():
+def test_doc_type_matches_filename_stem_family() -> None:
     # Not a strict 1:1 (hyphen vs underscore), but every template's doc_type
     # must be one of the expected 22 and every file must be distinct.
     seen = set()
@@ -81,7 +82,7 @@ def test_doc_type_matches_filename_stem_family():
 
 
 @pytest.mark.parametrize("path", _all_template_paths(), ids=lambda p: p.name)
-def test_format_round_trip_is_lossless(path):
+def test_format_round_trip_is_lossless(path) -> None:
     """Load -> serialize -> reparse -> revalidate reproduces the identical structure.
 
     This is the format's round-trip contract (plan C2 body: "Test: format
@@ -96,7 +97,7 @@ def test_format_round_trip_is_lossless(path):
     assert tf.validate_template(reloaded) == []
 
 
-def test_all_conditional_idioms_are_exercised():
+def test_all_conditional_idioms_are_exercised() -> None:
     # Count-agnostic name and body (Review: code-reviewer — CONDITIONAL_FIELD_KINDS
     # is the live source of truth for how many idioms exist; naming/asserting a
     # fixed count here would go stale again the next time the set grows).
@@ -112,7 +113,7 @@ def test_all_conditional_idioms_are_exercised():
     assert not missing, f"conditional idiom(s) never exercised across the 22 templates: {missing}"
 
 
-def test_no_field_kind_outside_the_sanctioned_set():
+def test_no_field_kind_outside_the_sanctioned_set() -> None:
     """AC3: 'no idiom requires an escape hatch to Python' — structurally enforced.
 
     Every field kind used by every template must be in FIELD_KINDS; this is also
@@ -129,7 +130,7 @@ def test_no_field_kind_outside_the_sanctioned_set():
             assert field["kind"] in tf.FIELD_KINDS, f"{path.name}: unsanctioned kind {field['kind']!r}"
 
 
-def test_whole_document_style_forbids_body():
+def test_whole_document_style_forbids_body() -> None:
     for path in _all_template_paths():
         data = tf.load_template(path)
         frontmatter = data.get("frontmatter")
@@ -137,7 +138,7 @@ def test_whole_document_style_forbids_body():
             assert data["body"] is None, f"{path.name}: whole_document style must carry body: null"
 
 
-def test_unknown_field_kind_is_rejected():
+def test_unknown_field_kind_is_rejected() -> None:
     bad = {
         "format_version": tf.FORMAT_VERSION,
         "doc_type": "bogus",
@@ -151,13 +152,13 @@ def test_unknown_field_kind_is_rejected():
     assert any("unknown field kind" in e for e in errors)
 
 
-def test_wrong_format_version_is_rejected():
+def test_wrong_format_version_is_rejected() -> None:
     bad = {"format_version": "docgen-template/v0", "doc_type": "x", "frontmatter": None, "body": None}
     errors = tf.validate_template(bad)
     assert any("format_version" in e for e in errors)
 
 
-def test_missing_required_key_is_rejected():
+def test_missing_required_key_is_rejected() -> None:
     bad = {
         "format_version": tf.FORMAT_VERSION,
         "doc_type": "x",
@@ -171,7 +172,7 @@ def test_missing_required_key_is_rejected():
     assert any("missing required key" in e for e in errors)
 
 
-def test_absent_literal_must_be_a_string():
+def test_absent_literal_must_be_a_string() -> None:
     # Backfilled alongside fallback_line since
     # this is the direct precedent the finding named for the same untested gap.
     bad = {
@@ -195,7 +196,7 @@ def test_absent_literal_must_be_a_string():
     assert any("'absent_literal' must be a string" in e for e in errors)
 
 
-def test_absent_comment_must_be_a_string():
+def test_absent_comment_must_be_a_string() -> None:
     # Backfilled alongside fallback_line since
     # this is the direct precedent the finding named for the same untested gap.
     bad = {
@@ -219,7 +220,7 @@ def test_absent_comment_must_be_a_string():
     assert any("'absent_comment' must be a string" in e for e in errors)
 
 
-def test_load_template_raises_on_invalid_file(tmp_path):
+def test_load_template_raises_on_invalid_file(tmp_path: Path) -> None:
     bad_path = tmp_path / "bad.json"
     bad_path.write_text(json.dumps({"format_version": "wrong", "doc_type": "x"}), encoding="utf-8")
     with pytest.raises(tf.TemplateFormatError):
@@ -238,7 +239,7 @@ _NUMBER_WORDS = {
 }
 
 
-def test_docstring_conditional_idiom_count_matches_conditional_field_kinds():
+def test_docstring_conditional_idiom_count_matches_conditional_field_kinds() -> None:
     doc = tf.__doc__ or ""
     numbered_items = re.findall(r"^\s+(\d+)\.\s+\*\*", doc, flags=re.MULTILINE)
     assert numbered_items, "expected the docstring's numbered idiom list to be findable"
@@ -250,7 +251,7 @@ def test_docstring_conditional_idiom_count_matches_conditional_field_kinds():
     )
 
 
-def test_docstring_field_kind_total_matches_field_kinds():
+def test_docstring_field_kind_total_matches_field_kinds() -> None:
     doc = tf.__doc__ or ""
     match = re.search(r"beyond these (\w+) exists", doc)
     assert match, "expected the docstring's 'beyond these N exists' claim to be findable"

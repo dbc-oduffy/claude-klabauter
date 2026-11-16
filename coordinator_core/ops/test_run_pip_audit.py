@@ -10,6 +10,7 @@ import coordinator_core.ops.run_pip_audit  # noqa: F401 — fires @register_op
 
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.run_pip_audit import _run_pip_audit
+from pathlib import Path
 
 _OP_NAME = "ci.run_pip_audit"
 assert _OP_NAME in _REGISTRY, (
@@ -19,7 +20,7 @@ assert _OP_NAME in _REGISTRY, (
 
 
 class _FakeCompletedProcess:
-    def __init__(self, stdout="", stderr="", returncode=0):
+    def __init__(self, stdout: str = "", stderr: str = "", returncode: int = 0) -> None:
         self.stdout = stdout
         self.stderr = stderr
         self.returncode = returncode
@@ -55,31 +56,31 @@ def _make_lockfile(tmp_path):
     return lockfile
 
 
-def test_op_registered():
+def test_op_registered() -> None:
     assert _OP_NAME in _REGISTRY
 
 
-def test_missing_lockfile_path_raises_value_error():
+def test_missing_lockfile_path_raises_value_error() -> None:
     with pytest.raises(ValueError, match="lockfile_path"):
         _run_pip_audit({})
 
 
-def test_blank_lockfile_path_raises_value_error():
+def test_blank_lockfile_path_raises_value_error() -> None:
     with pytest.raises(ValueError, match="lockfile_path"):
         _run_pip_audit({"lockfile_path": "   "})
 
 
-def test_nonexistent_lockfile_path_raises_value_error(tmp_path):
+def test_nonexistent_lockfile_path_raises_value_error(tmp_path: Path) -> None:
     missing = tmp_path / "does-not-exist.lock"
     with pytest.raises(ValueError, match="does not exist"):
         _run_pip_audit({"lockfile_path": str(missing)})
 
 
-def test_happy_path_flattens_findings(tmp_path, monkeypatch):
+def test_happy_path_flattens_findings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lockfile = _make_lockfile(tmp_path)
     captured_cmd = {}
 
-    def fake_run(cmd, **kwargs):
+    def fake_run(cmd, **kwargs) -> _FakeCompletedProcess:
         captured_cmd["cmd"] = cmd
         return _FakeCompletedProcess(stdout=json.dumps(_SAMPLE_PAYLOAD), returncode=1)
 
@@ -101,7 +102,7 @@ def test_happy_path_flattens_findings(tmp_path, monkeypatch):
     assert "-m" in captured_cmd["cmd"] and "pip_audit" in captured_cmd["cmd"]
 
 
-def test_clean_payload_returns_empty_findings(tmp_path, monkeypatch):
+def test_clean_payload_returns_empty_findings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lockfile = _make_lockfile(tmp_path)
     monkeypatch.setattr(
         subprocess,
@@ -120,7 +121,7 @@ def test_clean_payload_returns_empty_findings(tmp_path, monkeypatch):
     }
 
 
-def test_non_json_stdout_raises_runtime_error(tmp_path, monkeypatch):
+def test_non_json_stdout_raises_runtime_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lockfile = _make_lockfile(tmp_path)
     monkeypatch.setattr(
         subprocess,
@@ -134,7 +135,7 @@ def test_non_json_stdout_raises_runtime_error(tmp_path, monkeypatch):
         _run_pip_audit({"lockfile_path": str(lockfile)})
 
 
-def test_empty_stdout_with_nonzero_exit_raises_runtime_error(tmp_path, monkeypatch):
+def test_empty_stdout_with_nonzero_exit_raises_runtime_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lockfile = _make_lockfile(tmp_path)
     monkeypatch.setattr(
         subprocess,
@@ -148,7 +149,7 @@ def test_empty_stdout_with_nonzero_exit_raises_runtime_error(tmp_path, monkeypat
         _run_pip_audit({"lockfile_path": str(lockfile)})
 
 
-def test_empty_stdout_with_zero_exit_is_treated_as_clean(tmp_path, monkeypatch):
+def test_empty_stdout_with_zero_exit_is_treated_as_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lockfile = _make_lockfile(tmp_path)
     monkeypatch.setattr(
         subprocess,
@@ -161,11 +162,11 @@ def test_empty_stdout_with_zero_exit_is_treated_as_clean(tmp_path, monkeypatch):
     assert result == {"findings": [], "vulnerable_count": 0, "extra_index_detected": False}
 
 
-def test_extra_index_url_forwarded_when_present(tmp_path, monkeypatch):
+def test_extra_index_url_forwarded_when_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lockfile = _make_lockfile(tmp_path)
     captured_cmd = {}
 
-    def fake_run(cmd, **kwargs):
+    def fake_run(cmd, **kwargs) -> _FakeCompletedProcess:
         captured_cmd["cmd"] = cmd
         return _FakeCompletedProcess(stdout=json.dumps(_CLEAN_PAYLOAD), returncode=0)
 
@@ -185,11 +186,11 @@ def test_extra_index_url_forwarded_when_present(tmp_path, monkeypatch):
     assert cmd[idx + 1] == "https://download.pytorch.org/whl/cu121"
 
 
-def test_extra_index_url_absent_omits_flag(tmp_path, monkeypatch):
+def test_extra_index_url_absent_omits_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lockfile = _make_lockfile(tmp_path)
     captured_cmd = {}
 
-    def fake_run(cmd, **kwargs):
+    def fake_run(cmd, **kwargs) -> _FakeCompletedProcess:
         captured_cmd["cmd"] = cmd
         return _FakeCompletedProcess(stdout=json.dumps(_CLEAN_PAYLOAD), returncode=0)
 
@@ -200,11 +201,11 @@ def test_extra_index_url_absent_omits_flag(tmp_path, monkeypatch):
     assert "--extra-index-url" not in captured_cmd["cmd"]
 
 
-def test_invocation_is_list_argv_of_sys_executable_no_shell(tmp_path, monkeypatch):
+def test_invocation_is_list_argv_of_sys_executable_no_shell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lockfile = _make_lockfile(tmp_path)
     captured = {}
 
-    def fake_run(cmd, **kwargs):
+    def fake_run(cmd, **kwargs) -> _FakeCompletedProcess:
         captured["cmd"] = cmd
         captured["kwargs"] = kwargs
         return _FakeCompletedProcess(stdout=json.dumps(_CLEAN_PAYLOAD), returncode=0)
@@ -218,11 +219,11 @@ def test_invocation_is_list_argv_of_sys_executable_no_shell(tmp_path, monkeypatc
     assert not any(arg in ("bash", "sh") for arg in captured["cmd"])
 
 
-def test_subprocess_run_carries_timeout(tmp_path, monkeypatch):
+def test_subprocess_run_carries_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lockfile = _make_lockfile(tmp_path)
     captured = {}
 
-    def fake_run(cmd, **kwargs):
+    def fake_run(cmd, **kwargs) -> _FakeCompletedProcess:
         captured["kwargs"] = kwargs
         return _FakeCompletedProcess(stdout=json.dumps(_CLEAN_PAYLOAD), returncode=0)
 
@@ -234,7 +235,7 @@ def test_subprocess_run_carries_timeout(tmp_path, monkeypatch):
     assert captured["kwargs"]["timeout"] and captured["kwargs"]["timeout"] > 0
 
 
-def test_subprocess_timeout_raises_runtime_error(tmp_path, monkeypatch):
+def test_subprocess_timeout_raises_runtime_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lockfile = _make_lockfile(tmp_path)
 
     def fake_run(cmd, **kwargs):
@@ -246,7 +247,7 @@ def test_subprocess_timeout_raises_runtime_error(tmp_path, monkeypatch):
         _run_pip_audit({"lockfile_path": str(lockfile)})
 
 
-def test_double_invocation_identical_result(tmp_path, monkeypatch):
+def test_double_invocation_identical_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     lockfile = _make_lockfile(tmp_path)
     monkeypatch.setattr(
         subprocess,

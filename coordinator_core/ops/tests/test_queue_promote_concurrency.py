@@ -31,12 +31,13 @@ from pathlib import Path
 import coordinator_core.ops  # noqa: F401 — populates _REGISTRY (import guard, mirrors sibling tests)
 
 from coordinator_core.ops.queue_promote import _content_digest, promote_lesson
+import pytest
 
 _TEST_FROM_REPO = "claude-klabauter-em"
 _FIXED_TS = "2026-01-15T10:30:00+00:00"
 
 
-def _isolate_promote_env(monkeypatch, outbox_dir):
+def _isolate_promote_env(monkeypatch, outbox_dir) -> None:
     monkeypatch.setenv("LESSON_PROMOTE_OUTBOX_ROOT", str(outbox_dir))
     monkeypatch.delenv("CLAUDE_KLABAUTER_ROOT", raising=False)
 
@@ -44,7 +45,7 @@ def _isolate_promote_env(monkeypatch, outbox_dir):
 class TestQueuePromoteConcurrencyCollisionGuard:
     """queue.promote content-keyed filename resolves same-second+slug collisions."""
 
-    def test_two_distinct_lessons_same_second_and_slug_both_survive(self, tmp_path, monkeypatch):
+    def test_two_distinct_lessons_same_second_and_slug_both_survive(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """AC2: two DISTINCT lessons forced to the same created-ts + slug → two files."""
         _isolate_promote_env(monkeypatch, tmp_path)
 
@@ -90,8 +91,8 @@ class TestQueuePromoteConcurrencyCollisionGuard:
         assert "Body B" in text_b and "Body B" not in text_a
 
     def test_identical_lesson_rerun_with_same_id_and_created_dedups_to_one_file(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """AC3: re-running promote_lesson with identical content AND identical
         entry_id/created (the caller-supplied-correlation-id re-run shape) dedups to
         one file via same digest → same filename → os.replace overwrite.
@@ -121,7 +122,7 @@ class TestQueuePromoteConcurrencyCollisionGuard:
             f"got {len(yaml_files)}: {yaml_files}"
         )
 
-    def test_content_digest_ignores_id_and_created(self):
+    def test_content_digest_ignores_id_and_created(self) -> None:
         """_content_digest excludes uuid4 id + created timestamp (per-write-varying
         provenance) so two calls with the SAME semantic content but DIFFERENT
         id/created — the shape of an independent promote_lesson() call without a
@@ -157,7 +158,7 @@ class TestQueuePromoteConcurrencyCollisionGuard:
             "excluded from the digest field-set by design"
         )
 
-    def test_content_digest_diverges_on_semantic_content_change(self):
+    def test_content_digest_diverges_on_semantic_content_change(self) -> None:
         """Sanity counterpart: changing a semantic field (body) DOES change the digest."""
         base_fields = {
             "id": "33333333-3333-3333-3333-333333333333",

@@ -14,6 +14,7 @@ from coordinator_core.ops import sizing_intake_contract as contract
 from coordinator_core.ops.dispatch_emit import ask_compose, cli
 from coordinator_core.ops.dispatch_emit.ask_brief import EM_BRIEF_VAR
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+from pathlib import Path
 
 REL = "state/sizings/2026-10-14-intake.yaml"
 _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n"
@@ -21,7 +22,7 @@ BRIEF = "EM-DIRECTIVE keep the change small"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
@@ -31,7 +32,7 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _put(repo, *, text="ship it", brief=None, route=None):
+def _put(repo, *, text: str = "ship it", brief=None, route=None) -> None:
     doc = contract.intake_record(name="intake", turn={"text": text, "turn": 4}, today="2026-10-14")
     if brief:
         doc["em_analysis"][contract.EM_BRIEF_KEY] = brief
@@ -46,7 +47,7 @@ def _script(repo, *extra):
     return path.read_text(encoding="utf-8")
 
 
-def _reshape(repo, *, status, intake_mark):
+def _reshape(repo, *, status, intake_mark) -> None:
     doc = yaml.safe_load((repo / REL).read_text(encoding="utf-8"))
     doc["status"] = status
     doc["estimate"]["provisional"] = True  # the register schema pins it true on every sizing
@@ -55,7 +56,7 @@ def _reshape(repo, *, status, intake_mark):
     (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
 
 
-def test_intake_sizing_with_brief_emits_the_brief_clause_and_sizes_in_run(repo, capsys):
+def test_intake_sizing_with_brief_emits_the_brief_clause_and_sizes_in_run(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _put(repo, brief=BRIEF)
     script = _script(repo)
     assert EM_BRIEF_VAR in script and BRIEF in script
@@ -68,26 +69,26 @@ def test_intake_sizing_with_brief_emits_the_brief_clause_and_sizes_in_run(repo, 
     ) in script
 
 
-def test_intake_sizing_without_brief_emits_no_clause(repo, capsys):
+def test_intake_sizing_without_brief_emits_no_clause(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _put(repo)
     script = _script(repo)
     assert "phase('size')" in script
     assert f"const {EM_BRIEF_VAR} =" not in script
 
 
-def test_explicit_brief_arg_wins_over_the_sizings_brief(repo, capsys):
+def test_explicit_brief_arg_wins_over_the_sizings_brief(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _put(repo, brief=BRIEF)
     script = _script(repo, "--brief", "ARG-DIRECTIVE wins")
     assert "ARG-DIRECTIVE wins" in script and BRIEF not in script
 
 
-def test_a_placeholder_roadmap_route_never_picks_the_arm_or_refuses_the_brief(repo, capsys):
+def test_a_placeholder_roadmap_route_never_picks_the_arm_or_refuses_the_brief(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _put(repo, brief=BRIEF, route="roadmap")
     script = _script(repo)
     assert BRIEF in script and "phase('size')" in script
 
 
-def test_a_sized_sizing_still_skips_the_size_stage(repo, capsys):
+def test_a_sized_sizing_still_skips_the_size_stage(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _put(repo)
     _reshape(repo, status="routed", intake_mark=True)
     doc = yaml.safe_load((repo / REL).read_text(encoding="utf-8"))
@@ -95,7 +96,7 @@ def test_a_sized_sizing_still_skips_the_size_stage(repo, capsys):
     assert ask_compose._intake_sizing(str(repo), REL) is None
 
 
-def test_a_draft_sizing_lacking_the_intake_mark_is_sized_in_run(repo, capsys):
+def test_a_draft_sizing_lacking_the_intake_mark_is_sized_in_run(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _put(repo)
     _reshape(repo, status="draft", intake_mark=False)
     assert contract.is_intake(yaml.safe_load((repo / REL).read_text(encoding="utf-8"))) is False
@@ -106,14 +107,14 @@ def test_a_draft_sizing_lacking_the_intake_mark_is_sized_in_run(repo, capsys):
     assert "phase('size')" in script
 
 
-def test_a_routed_sizing_is_not_sized_in_run_though_its_provisional_flag_is_true(repo, capsys):
+def test_a_routed_sizing_is_not_sized_in_run_though_its_provisional_flag_is_true(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _put(repo)
     _reshape(repo, status="routed", intake_mark=False)
     assert ask_compose._intake_sizing(str(repo), REL) is None
     assert "phase('size')" not in _script(repo)
 
 
-def test_the_size_stage_keeps_a_two_word_turns_minted_verbatim(repo, capsys):
+def test_the_size_stage_keeps_a_two_word_turns_minted_verbatim(repo, capsys: pytest.CaptureFixture[str]) -> None:
     import coordinator_core.sizing_assemble as sizing_assemble
 
     _put(repo, text="ship it")
@@ -135,7 +136,7 @@ def _mark_relayed(repo):
     return doc["intent"] if "intent" in doc else None
 
 
-def test_a_relayed_intake_slice_writes_relayed_ask_and_no_ask_md(repo):
+def test_a_relayed_intake_slice_writes_relayed_ask_and_no_ask_md(repo) -> None:
     _put(repo, text="relay me")
     intent = _mark_relayed(repo)
     script = _script(repo)
@@ -146,21 +147,21 @@ def test_a_relayed_intake_slice_writes_relayed_ask_and_no_ask_md(repo):
     assert "Relayed ask" in script
 
 
-def test_a_pm_intake_slice_is_unchanged(repo):
+def test_a_pm_intake_slice_is_unchanged(repo) -> None:
     _put(repo)
     script = _script(repo)
     assert "--relayed-ask-file" not in script
     assert not list((repo / "state").rglob("relayed-ask.md"))
 
 
-def test_em_passed_relayed_beside_a_sizing_path_still_refuses(repo, capsys):
+def test_em_passed_relayed_beside_a_sizing_path_still_refuses(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _put(repo)
     code = cli.main(["--ask", "--sizing", REL, "--repo-root", str(repo), "--ask-source", "relayed"])
     assert code != 0
     assert "sizing_path carries none" in capsys.readouterr().err
 
 
-def test_compose_refuses_relayed_on_a_planned_sizing(repo):
+def test_compose_refuses_relayed_on_a_planned_sizing(repo) -> None:
     _put(repo)
     _reshape(repo, status="routed", intake_mark=True)
     with pytest.raises(ask_compose.AskComposeRefused, match="planned sizing"):

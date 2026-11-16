@@ -8,19 +8,20 @@ import pytest
 from coordinator_core.session import core
 from coordinator_core.warm.caller_context import CallerContext, merge_env_axis
 from coordinator_core.ops import baton_pm_turns, session_baton_mint
+from pathlib import Path
 
 SID = "01a1b60c-a65b-7692-afc3-b93eabd93b04"
 OTHER = "11111111-2222-4333-8444-555555555555"
 
 
 @pytest.fixture(autouse=True)
-def identity_env(monkeypatch):
+def identity_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in core.SESSION_ENV_PRECEDENCE:
         monkeypatch.delenv(name, raising=False)
 
 
 @pytest.mark.parametrize("name", core.NATIVE_SESSION_ENV_PRECEDENCE)
-def test_native_uuid_is_preserved_and_beats_inherited_claude(monkeypatch, name):
+def test_native_uuid_is_preserved_and_beats_inherited_claude(monkeypatch: pytest.MonkeyPatch, name) -> None:
     monkeypatch.setenv(name, SID)
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", OTHER)
     assert core.resolve_session_id() == SID
@@ -28,7 +29,7 @@ def test_native_uuid_is_preserved_and_beats_inherited_claude(monkeypatch, name):
     assert core.resolve_session_id() == OTHER
 
 
-def test_opaque_native_session_has_stable_vendor_namespaced_uuid(monkeypatch):
+def test_opaque_native_session_has_stable_vendor_namespaced_uuid(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_AGENT_VENDOR", "grok")
     monkeypatch.setenv("COORDINATOR_AGENT_SESSION", "conversation-7")
     first = core.resolve_session_id()
@@ -39,7 +40,7 @@ def test_opaque_native_session_has_stable_vendor_namespaced_uuid(monkeypatch):
 
 
 @pytest.mark.parametrize("native", core.NATIVE_SESSION_ENV_PRECEDENCE)
-def test_warm_env_axis_carries_native_identity_without_inheriting_server(monkeypatch, native):
+def test_warm_env_axis_carries_native_identity_without_inheriting_server(monkeypatch: pytest.MonkeyPatch, native) -> None:
     monkeypatch.setenv("CLAUDE_SESSION_ID", OTHER)
     caller = CallerContext(plugin_root=None, cwd=None, session_id=None, agent_id=None, pid=None)
     merged = merge_env_axis(caller, {native: SID})
@@ -47,7 +48,7 @@ def test_warm_env_axis_carries_native_identity_without_inheriting_server(monkeyp
     assert merged.env["COORDINATOR_SESSION_ID"] == SID
 
 
-def test_warm_opaque_identity_uses_wire_vendor_not_spawner(monkeypatch):
+def test_warm_opaque_identity_uses_wire_vendor_not_spawner(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_AGENT_VENDOR", "agy")
     caller = CallerContext(plugin_root=None, cwd=None, session_id=None, agent_id=None, pid=None)
     env = {"COORDINATOR_AGENT_VENDOR": "grok", "COORDINATOR_AGENT_SESSION": "opaque-7"}
@@ -56,7 +57,7 @@ def test_warm_opaque_identity_uses_wire_vendor_not_spawner(monkeypatch):
         "COORDINATOR_AGENT_SESSION", "opaque-7", vendor="grok")
 
 
-def test_subprocess_does_not_manufacture_native_vendor_slots(monkeypatch):
+def test_subprocess_does_not_manufacture_native_vendor_slots(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_SESSION_ID", SID)
     child = core.subprocess_identity_env()
     assert all(name not in child for name in core.NATIVE_SESSION_ENV_PRECEDENCE)
@@ -66,7 +67,7 @@ def test_subprocess_does_not_manufacture_native_vendor_slots(monkeypatch):
     assert "ANTIGRAVITY_CONVERSATION_ID" not in child
 
 
-def test_external_baton_bootstrap_then_verbatim_pm_ledger(tmp_path, monkeypatch):
+def test_external_baton_bootstrap_then_verbatim_pm_ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     (tmp_path / ".git" / "config").write_text("[core]\nrepositoryformatversion = 0\n", encoding="utf-8")
@@ -86,6 +87,6 @@ def test_external_baton_bootstrap_then_verbatim_pm_ledger(tmp_path, monkeypatch)
 
 
 @pytest.mark.parametrize("sid", ["../outside", "nested/session", "..", "nested\\session"])
-def test_bootstrap_rejects_session_path_escape(tmp_path, sid):
+def test_bootstrap_rejects_session_path_escape(tmp_path: Path, sid) -> None:
     result = session_baton_mint._handler({"session_id": sid, "cwd": str(tmp_path), "initialize": True})
     assert result["exit_code"] == 1

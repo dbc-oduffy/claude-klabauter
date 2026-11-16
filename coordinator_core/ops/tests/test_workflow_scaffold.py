@@ -43,6 +43,7 @@ import coordinator_core.ipc as ipc
 from coordinator_core.ops._workflow_patterns import HOUSE_PATTERNS
 from coordinator_core.ops.workflow_scaffold import _workflow_scaffold
 from coordinator_core.ops.workflow_validate import _workflow_validate
+from pathlib import Path
 
 
 def _run(coro):
@@ -74,7 +75,7 @@ def _validate_via_dispatch(tmp_path, name, text):
 
 
 @pytest.mark.parametrize("pattern", sorted(HOUSE_PATTERNS.keys()))
-def test_each_pattern_emits_conformant_shape(pattern):
+def test_each_pattern_emits_conformant_shape(pattern) -> None:
     result = _scaffold(
         name="demo",
         description="a demo workflow",
@@ -100,7 +101,7 @@ def test_each_pattern_emits_conformant_shape(pattern):
 
 
 @pytest.mark.parametrize("pattern", sorted(HOUSE_PATTERNS.keys()))
-def test_phase_and_agent_calls_are_top_level_not_wrapped(pattern):
+def test_phase_and_agent_calls_are_top_level_not_wrapped(pattern) -> None:
     result = _scaffold(
         name="demo",
         description="a demo workflow",
@@ -117,29 +118,29 @@ def test_phase_and_agent_calls_are_top_level_not_wrapped(pattern):
     assert any(line.startswith("await agent(") for line in lines)
 
 
-def test_pattern_omitted_defaults_to_pipeline_default():
+def test_pattern_omitted_defaults_to_pipeline_default() -> None:
     result = _scaffold(name="demo", description="a demo workflow")
     assert HOUSE_PATTERNS["pipeline-default"] in result["script"]
 
 
-def test_phases_omitted_still_phase_conformant():
+def test_phases_omitted_still_phase_conformant() -> None:
     result = _scaffold(name="demo", description="a demo workflow")
     script = result["script"]
     assert "phase('Run');" in script
     assert "phases: ['Run']" in script
 
 
-def test_unknown_pattern_raises_value_error():
+def test_unknown_pattern_raises_value_error() -> None:
     with pytest.raises(ValueError, match="pattern"):
         _scaffold(name="demo", description="a demo workflow", pattern="not-a-real-pattern")
 
 
-def test_missing_name_raises_value_error():
+def test_missing_name_raises_value_error() -> None:
     with pytest.raises(ValueError, match="name"):
         _run(_workflow_scaffold({"description": "a demo workflow"}))
 
 
-def test_missing_description_raises_value_error():
+def test_missing_description_raises_value_error() -> None:
     with pytest.raises(ValueError, match="description"):
         _run(_workflow_scaffold({"name": "demo"}))
 
@@ -151,7 +152,7 @@ def test_missing_description_raises_value_error():
 
 
 @pytest.mark.parametrize("pattern", sorted(HOUSE_PATTERNS.keys()))
-def test_round_trip_scaffold_output_validates_clean(tmp_path, pattern):
+def test_round_trip_scaffold_output_validates_clean(tmp_path: Path, pattern) -> None:
     scaffolded = _scaffold(
         name=f"round-trip-{pattern}",
         description="round-trip drift guard fixture",
@@ -249,7 +250,7 @@ export default run;
 '''
 
 
-def test_large_realistic_fixture_is_ok_zero_error(tmp_path):
+def test_large_realistic_fixture_is_ok_zero_error(tmp_path: Path) -> None:
     result = _validate_text(tmp_path, "large-realistic.mjs", LARGE_REALISTIC_FIXTURE)
     assert result["ok"] is True
     assert result["error_count"] == 0
@@ -259,12 +260,12 @@ def test_large_realistic_fixture_is_ok_zero_error(tmp_path):
     assert "agent-model-default" not in codes
 
 
-def test_fixture_prompt_body_contains_forbidden_global_literal_text():
+def test_fixture_prompt_body_contains_forbidden_global_literal_text() -> None:
     assert "Date.now()" in LARGE_REALISTIC_FIXTURE
     assert "Math.random()" in LARGE_REALISTIC_FIXTURE
 
 
-def test_large_fixture_mutated_impure_meta_bare_identifier_is_error(tmp_path):
+def test_large_fixture_mutated_impure_meta_bare_identifier_is_error(tmp_path: Path) -> None:
     mutated = LARGE_REALISTIC_FIXTURE.replace(
         "const SEVERITY_FLOOR = 'P2';",
         "const SEVERITY_FLOOR = 'P2';\nconst computedName = deriveName();",
@@ -278,7 +279,7 @@ def test_large_fixture_mutated_impure_meta_bare_identifier_is_error(tmp_path):
     assert "meta-impure-bare-identifier" in codes
 
 
-def test_large_fixture_mutated_real_forbidden_global_in_code_is_error(tmp_path):
+def test_large_fixture_mutated_real_forbidden_global_in_code_is_error(tmp_path: Path) -> None:
     mutated = LARGE_REALISTIC_FIXTURE.replace(
         "  const verdictCounts = { escalate: 0, 'keep-monitoring': 0, 'close-as-resolved': 0 };",
         "  const triageStartedAt = Date.now();\n"
@@ -290,7 +291,7 @@ def test_large_fixture_mutated_real_forbidden_global_in_code_is_error(tmp_path):
     assert "forbidden-global-date-now" in codes
 
 
-def test_large_fixture_mutated_phase_title_absent_from_meta_is_warn(tmp_path):
+def test_large_fixture_mutated_phase_title_absent_from_meta_is_warn(tmp_path: Path) -> None:
     mutated = LARGE_REALISTIC_FIXTURE.replace(
         "phase('brief');\n\n  const brief",
         "phase('wrap-up');\n\n  const brief",

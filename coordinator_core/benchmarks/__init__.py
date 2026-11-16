@@ -1,5 +1,9 @@
 
 from __future__ import annotations
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from unittest.mock import _patch_dict
 
 
 def declare_benchmark_origin() -> None:
@@ -36,7 +40,7 @@ def declare_benchmark_origin() -> None:
     os.environ.setdefault(op_latency.ORIGIN_ENV, op_latency.BENCHMARK)
 
 
-def fixture_settings_home(parent):
+def fixture_settings_home(parent) -> _patch_dict:
     """A context pinning ``COORDINATOR_SETTINGS_HOME`` to ``<parent>/settings-home``; restored on exit.
 
     Trap: run tokens and the live-run index resolve under the settings home, never the

@@ -10,6 +10,8 @@ from __future__ import annotations
 import asyncio
 
 from coordinator_core.ipc import dispatch_message
+from pathlib import Path
+import pytest
 
 
 def _dispatch_bash(cwd, command) -> dict:
@@ -29,7 +31,7 @@ def _dispatch_bash(cwd, command) -> dict:
     return asyncio.run(dispatch_message(msg))
 
 
-def test_banned_command_is_denied_when_cwd_is_outside_a_worktree(tmp_path, monkeypatch):
+def test_banned_command_is_denied_when_cwd_is_outside_a_worktree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
     result = _dispatch_bash(tmp_path, f"git worktree add {tmp_path / 'x'}")
     assert "error" not in result, result
@@ -37,7 +39,7 @@ def test_banned_command_is_denied_when_cwd_is_outside_a_worktree(tmp_path, monke
     assert hso["permissionDecision"] == "deny"
 
 
-def test_no_unevaluated_advisory_when_cwd_is_outside_a_worktree(tmp_path, monkeypatch):
+def test_no_unevaluated_advisory_when_cwd_is_outside_a_worktree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
     result = _dispatch_bash(tmp_path, "echo hi")
     assert "error" not in result, result

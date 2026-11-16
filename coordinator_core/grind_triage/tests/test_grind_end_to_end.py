@@ -60,7 +60,7 @@ def _red_test(src: str) -> str:
 
 
 @pytest.fixture
-def grind(tmp_path, monkeypatch):
+def grind(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("QUEUE_APPEND_OUTPUT_ROOT", raising=False)
     root = tmp_path / "repo"
     (root / "tests").mkdir(parents=True)
@@ -120,7 +120,7 @@ def _tf_id(grind: dict, stem: str) -> str:
     return ids[0]
 
 
-def test_a_grinder_run_meets_the_whole_exit_criterion(grind):
+def test_a_grinder_run_meets_the_whole_exit_criterion(grind) -> None:
     root = grind["root"]
 
     # Mints each row once: the second run id reuses the first run's rows.

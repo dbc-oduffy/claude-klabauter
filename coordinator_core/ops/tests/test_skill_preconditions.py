@@ -44,7 +44,7 @@ def repo(tmp_path: Path) -> Path:
 
 
 @pytest.fixture(autouse=True)
-def no_spawn(monkeypatch):
+def no_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
     def refuse(*args, **kwargs):
         raise AssertionError("skill.preconditions must not spawn a process")
 
@@ -53,7 +53,7 @@ def no_spawn(monkeypatch):
 
 
 @pytest.fixture
-def indexed(monkeypatch):
+def indexed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sp, "_has_index", lambda repo: True)
 
 
@@ -73,7 +73,7 @@ def only(result: dict) -> dict:
     return result["checks"][0]
 
 
-def test_fresh_cache_reads_fresh_with_age_and_on_stale(plugin, repo, indexed):
+def test_fresh_cache_reads_fresh_with_age_and_on_stale(plugin, repo, indexed) -> None:
     write_cache(repo, age_hours=1.0)
     check = only(run(plugin, repo))
     assert check["verdict"] == "fresh"
@@ -83,67 +83,67 @@ def test_fresh_cache_reads_fresh_with_age_and_on_stale(plugin, repo, indexed):
     assert check["checked_at"].endswith("Z")
 
 
-def test_cache_older_than_max_age_reads_stale(plugin, repo, indexed):
+def test_cache_older_than_max_age_reads_stale(plugin, repo, indexed) -> None:
     write_cache(repo, age_hours=7.0)
     assert only(run(plugin, repo))["verdict"] == "stale"
 
 
-def test_cache_at_the_age_bound_still_reads_fresh(plugin, repo, indexed):
+def test_cache_at_the_age_bound_still_reads_fresh(plugin, repo, indexed) -> None:
     write_cache(repo, age_hours=6.0)
     assert only(run(plugin, repo))["verdict"] == "fresh"
 
 
-def test_missing_cache_reads_absent(plugin, repo, indexed):
+def test_missing_cache_reads_absent(plugin, repo, indexed) -> None:
     check = only(run(plugin, repo))
     assert check["verdict"] == "absent"
     assert check["on_stale"] == "queue"
 
 
-def test_unparseable_cache_reads_absent(plugin, repo, indexed):
+def test_unparseable_cache_reads_absent(plugin, repo, indexed) -> None:
     (repo / ".coordinator-local").mkdir()
     (repo / CACHE_REL).write_text("{not json", encoding="utf-8")
     assert only(run(plugin, repo))["verdict"] == "absent"
 
 
-def test_cache_of_another_version_reads_absent(plugin, repo, indexed):
+def test_cache_of_another_version_reads_absent(plugin, repo, indexed) -> None:
     write_cache(repo, age_hours=1.0, cache_version=2)
     assert only(run(plugin, repo))["verdict"] == "absent"
 
 
-def test_cached_stale_verdict_reads_stale_even_when_young(plugin, repo, indexed):
+def test_cached_stale_verdict_reads_stale_even_when_young(plugin, repo, indexed) -> None:
     write_cache(repo, age_hours=0.5, verdict="stale", reason="behind_head")
     check = only(run(plugin, repo))
     assert check["verdict"] == "stale"
     assert check["reason"] == "behind_head"
 
 
-def test_cached_unknown_verdict_never_reads_fresh(plugin, repo, indexed):
+def test_cached_unknown_verdict_never_reads_fresh(plugin, repo, indexed) -> None:
     write_cache(repo, age_hours=0.5, verdict="unknown")
     assert only(run(plugin, repo))["verdict"] == "stale"
 
 
-def test_cached_absent_verdict_reads_absent(plugin, repo, indexed):
+def test_cached_absent_verdict_reads_absent(plugin, repo, indexed) -> None:
     write_cache(repo, age_hours=0.5, verdict="absent", reason="no_structural_db")
     assert only(run(plugin, repo))["verdict"] == "absent"
 
 
-def test_repo_without_a_example_retrieval_repo_index_is_not_applicable(plugin, repo, monkeypatch):
+def test_repo_without_a_example_retrieval_repo_index_is_not_applicable(plugin, repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sp, "_has_index", lambda r: False)
     write_cache(repo, age_hours=1.0)
     assert only(run(plugin, repo))["verdict"] == "not_applicable"
 
 
-def test_unregistered_tmp_repo_is_not_applicable_through_the_real_slug_lookup(plugin, repo):
+def test_unregistered_tmp_repo_is_not_applicable_through_the_real_slug_lookup(plugin, repo) -> None:
     assert only(run(plugin, repo))["verdict"] == "not_applicable"
 
 
-def test_unknown_skill_returns_empty_checks_naming_the_skill(plugin, repo):
+def test_unknown_skill_returns_empty_checks_naming_the_skill(plugin, repo) -> None:
     result = run(plugin, repo, "no-such-skill")
     assert result["skill"] == "no-such-skill"
     assert result["checks"] == []
 
 
-def test_missing_registry_returns_empty_checks(tmp_path, repo):
+def test_missing_registry_returns_empty_checks(tmp_path: Path, repo) -> None:
     empty = tmp_path / "empty"
     empty.mkdir()
     result = run(empty, repo)
@@ -151,20 +151,20 @@ def test_missing_registry_returns_empty_checks(tmp_path, repo):
     assert result["registry_found"] is False
 
 
-def test_check_outside_the_cache_read_shape_is_unsupported_and_names_its_id(plugin, repo, indexed):
+def test_check_outside_the_cache_read_shape_is_unsupported_and_names_its_id(plugin, repo, indexed) -> None:
     check = only(run(plugin, repo, "odd"))
     assert check == {"id": "x", "on_stale": "queue", "verdict": "unsupported"}
 
 
 @pytest.mark.parametrize("rel", ["/etc/passwd", "../outside.json"])
-def test_cache_path_escaping_the_repo_is_unsupported(plugin, repo, indexed, rel):
+def test_cache_path_escaping_the_repo_is_unsupported(plugin, repo, indexed, rel) -> None:
     (plugin / sp.REGISTRY_FILENAME).write_text(
         yaml.safe_dump({"skills": {"distill": [{**CHECK, "reads_cache": rel}]}}), encoding="utf-8"
     )
     assert only(run(plugin, repo))["verdict"] == "unsupported"
 
 
-def test_registry_under_a_coordinator_subdir_is_found(tmp_path, repo, indexed):
+def test_registry_under_a_coordinator_subdir_is_found(tmp_path: Path, repo, indexed) -> None:
     root = tmp_path / "clone"
     (root / "coordinator").mkdir(parents=True)
     (root / "coordinator" / sp.REGISTRY_FILENAME).write_text(
@@ -174,7 +174,7 @@ def test_registry_under_a_coordinator_subdir_is_found(tmp_path, repo, indexed):
     assert only(run(root, repo))["verdict"] == "fresh"
 
 
-def test_handler_resolves_plugin_root_from_env_and_runs_end_to_end(plugin, repo, indexed, monkeypatch):
+def test_handler_resolves_plugin_root_from_env_and_runs_end_to_end(plugin, repo, indexed, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(plugin))
     write_cache(repo, age_hours=0.1)
     reply = sp._skill_preconditions({"skill": "distill", "repo_root": str(repo)})
@@ -182,5 +182,5 @@ def test_handler_resolves_plugin_root_from_env_and_runs_end_to_end(plugin, repo,
     assert only(reply)["verdict"] == "fresh"
 
 
-def test_handler_refuses_a_missing_skill_without_raising():
+def test_handler_refuses_a_missing_skill_without_raising() -> None:
     assert sp._skill_preconditions({"repo_root": "x"})["ok"] is False

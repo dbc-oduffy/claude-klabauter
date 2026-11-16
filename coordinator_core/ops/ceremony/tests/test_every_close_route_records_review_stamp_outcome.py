@@ -10,6 +10,7 @@ from coordinator_core.ops.dispatch_emit import halted_record_commit as hrc
 from coordinator_core.ops.dispatch_emit import halted_run_landed as hrl
 from coordinator_core.ops.dispatch_emit import run_close
 from coordinator_core.ops.tests.test_review_stamp_superseding import _git, _record, _repo
+from pathlib import Path
 
 pytestmark = pytest.mark.spawns_process
 
@@ -20,7 +21,7 @@ SPINE_PLAN = "docs/plans/p.spine.md"
 
 
 @pytest.fixture(autouse=True)
-def _opted_in(monkeypatch):
+def _opted_in(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cb, "_not_opted_in", lambda ctx: False)
     monkeypatch.setattr(hrl, "_launch", lambda root, run_id: True)
 
@@ -55,7 +56,7 @@ _KIND_JOB = {
 
 
 @pytest.mark.parametrize("kind", run_close.CLOSE_KINDS)
-def test_unqueued_review_stamp_reads_a_reasoned_skip(kind):
+def test_unqueued_review_stamp_reads_a_reasoned_skip(kind) -> None:
     block = run_close.build_close_block(RID, True, {}, kind=kind)
     leg = run_close.LegResult(**block["legs"]["review-stamp"])
     _assert_outcome(leg)
@@ -65,7 +66,7 @@ def test_unqueued_review_stamp_reads_a_reasoned_skip(kind):
 
 @pytest.mark.cadence
 @pytest.mark.parametrize("kind", run_close.CLOSE_KINDS)
-def test_queued_review_stamp_ends_classified(tmp_path, kind):
+def test_queued_review_stamp_ends_classified(tmp_path: Path, kind) -> None:
     repo, head = _repo(tmp_path)
     plan_rel, has_sha = _KIND_JOB.get(kind, _KIND_JOB["plan-run"])
     leg = cb._review_stamp(_ctx(repo, plan_rel, head if has_sha else None))
@@ -74,7 +75,7 @@ def test_queued_review_stamp_ends_classified(tmp_path, kind):
 
 
 @pytest.mark.cadence
-def test_halted_ledger_check_without_review_record_settles_no_review_outcome(tmp_path):
+def test_halted_ledger_check_without_review_record_settles_no_review_outcome(tmp_path: Path) -> None:
     repo, head = _repo(tmp_path)
     marker = {"status": "halted", "plan": "docs/plans/example.md", "blocking": []}
     out = hrl._queue_close(repo, RID, head, marker, None)
@@ -87,7 +88,7 @@ def test_halted_ledger_check_without_review_record_settles_no_review_outcome(tmp
 
 
 @pytest.mark.cadence
-def test_halted_ledger_check_with_review_record_mints_without_an_inline_review_trailer(tmp_path):
+def test_halted_ledger_check_with_review_record_mints_without_an_inline_review_trailer(tmp_path: Path) -> None:
     repo, head = _repo(tmp_path)
     assert "Inline-Review" not in _git(repo, "log", "-1", "--format=%B")
     sidecar = _record(repo, head, tests={"status": "pass", "run": 3, "failed": 0, "sidecar": None})

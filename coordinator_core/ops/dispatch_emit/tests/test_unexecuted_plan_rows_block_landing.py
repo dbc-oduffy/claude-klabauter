@@ -56,34 +56,34 @@ def _plan_rows() -> tuple[ManifestRow, ...]:
 # -- the helper -------------------------------------------------------------------------------
 
 
-def test_helper_names_staged_rows_after_the_executed_wave():
+def test_helper_names_staged_rows_after_the_executed_wave() -> None:
     assert unexecuted_plan_rows(_plan_rows(), ["C1", "C2"]) == ("C4", "C5")
 
 
-def test_helper_counts_a_row_alongside_the_executed_wave():
+def test_helper_counts_a_row_alongside_the_executed_wave() -> None:
     rows = (_row("C1", 0), _row("C2", 0), _row("C3", 0))
     assert unexecuted_plan_rows(rows, ["C1"]) == ("C2", "C3")
 
 
-def test_helper_ignores_an_unexecuted_row_earlier_than_every_executed_row():
+def test_helper_ignores_an_unexecuted_row_earlier_than_every_executed_row() -> None:
     rows = (_row("C1", 0), _row("C2", 1), _row("C3", 2))
     assert unexecuted_plan_rows(rows, ["C2"]) == ("C3",)
 
 
-def test_helper_returns_nothing_when_no_row_executed():
+def test_helper_returns_nothing_when_no_row_executed() -> None:
     assert unexecuted_plan_rows(_plan_rows(), []) == ()
 
 
-def test_helper_returns_nothing_when_every_row_executed():
+def test_helper_returns_nothing_when_every_row_executed() -> None:
     assert unexecuted_plan_rows(_plan_rows(), ["C1", "C2", "C4", "C5"]) == ()
 
 
-def test_helper_treats_a_ran_and_stopped_row_as_executed():
+def test_helper_treats_a_ran_and_stopped_row_as_executed() -> None:
     # Callers add halted["stopped_rows"] to the report-backed ids: a row that ran and stopped is not unexecuted.
     assert unexecuted_plan_rows(_plan_rows(), ["C1", "C2", "C4"]) == ("C5",)
 
 
-def test_helper_ids_are_sorted_and_the_message_names_them():
+def test_helper_ids_are_sorted_and_the_message_names_them() -> None:
     rows = (_row("C5", 1), _row("C1", 0), _row("C4", 1))
     assert unexecuted_plan_rows(rows, ["C1"]) == ("C4", "C5")
     assert message(("C4", "C5")) == "unexecuted plan rows: C4, C5"
@@ -130,7 +130,7 @@ def _paths_committed_since_seed(root: Path) -> set:
     return {line for line in out.splitlines() if line}
 
 
-def test_normal_land_withholds_executed_rows_code_while_guard_rows_are_unexecuted(repo):
+def test_normal_land_withholds_executed_rows_code_while_guard_rows_are_unexecuted(repo) -> None:
     out = _land_normal(repo, EXECUTED)
 
     assert not ({"c1.py", "c2.py"} & _paths_committed_since_seed(repo)), out
@@ -138,7 +138,7 @@ def test_normal_land_withholds_executed_rows_code_while_guard_rows_are_unexecute
     assert (repo / "c1.py").exists() and (repo / "c2.py").exists()
 
 
-def test_normal_land_with_every_row_executed_lands_the_code(repo):
+def test_normal_land_with_every_row_executed_lands_the_code(repo) -> None:
     out = _land_normal(repo, EXECUTED + GUARDS)
 
     assert out["committed"] is True, out
@@ -168,7 +168,7 @@ def _stage_halted(root: Path, executed: tuple[str, ...]) -> None:
     _marker_script(root, [(cid, [PRODUCT[cid]]) for cid in ("C1", "C2", "C4", "C5")], reports)
 
 
-def test_halt_commit_withholds_executed_rows_code_and_names_the_unexecuted_rows(repo):
+def test_halt_commit_withholds_executed_rows_code_and_names_the_unexecuted_rows(repo) -> None:
     _stage_halted(repo, EXECUTED)
 
     out = _call(repo, LEDGER, **PASSING)
@@ -181,7 +181,7 @@ def test_halt_commit_withholds_executed_rows_code_and_names_the_unexecuted_rows(
         assert NAMES_GUARDS in out["withheld"][path], out["withheld"]
 
 
-def test_halt_commit_with_every_row_executed_lands_the_code(repo):
+def test_halt_commit_with_every_row_executed_lands_the_code(repo) -> None:
     _stage_halted(repo, EXECUTED + GUARDS)
 
     out = _call(repo, LEDGER, **PASSING)

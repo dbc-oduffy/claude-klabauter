@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from coordinator_core.backlog_grind_assemble import apply as bga_apply
+import pytest
 
 
 class _CountingFakeGit:
@@ -12,7 +13,7 @@ class _CountingFakeGit:
     def __init__(self) -> None:
         self.log: list[tuple[str, ...]] = []
 
-    def __call__(self, args: list[str], cwd: Path):
+    def __call__(self, args: list[str], cwd: Path) -> SimpleNamespace:
         self.log.append(tuple(args))
         if args[:2] == ["rev-parse", "--abbrev-ref"]:
             return SimpleNamespace(returncode=0, stdout="work/x\n", stderr="")
@@ -47,7 +48,7 @@ def _n_item_payload(n: int) -> list[str]:
 
 
 class TestCommitPerItemAcquisitionCountNoLongerScalesWithN:
-    def test_three_items_take_one_add_and_three_commits(self, tmp_path, monkeypatch):
+    def test_three_items_take_one_add_and_three_commits(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_git = _CountingFakeGit()
         monkeypatch.setattr(bga_apply, "_run_git", fake_git)
         handler = bga_apply._CLI_DISPATCH["commit-per-item"]
@@ -57,7 +58,7 @@ class TestCommitPerItemAcquisitionCountNoLongerScalesWithN:
         assert fake_git.add_calls == 1
         assert fake_git.commit_calls == 3
 
-    def test_seven_items_still_take_exactly_one_add(self, tmp_path, monkeypatch):
+    def test_seven_items_still_take_exactly_one_add(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         fake_git = _CountingFakeGit()
         monkeypatch.setattr(bga_apply, "_run_git", fake_git)
         handler = bga_apply._CLI_DISPATCH["commit-per-item"]
@@ -67,7 +68,7 @@ class TestCommitPerItemAcquisitionCountNoLongerScalesWithN:
         assert fake_git.add_calls == 1
         assert fake_git.commit_calls == 7
 
-    def test_non_pass_items_are_excluded_from_the_staged_pathspec(self, tmp_path, monkeypatch):
+    def test_non_pass_items_are_excluded_from_the_staged_pathspec(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A non-PASS item never commits (D-3(c)'s checkout sub-path) and
         must never be part of the combined `add` pathspec either -- staging
         a path this run is about to `git checkout --` (revert) would be a

@@ -15,11 +15,16 @@ import platform
 import sys
 import types
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
-def _load_publish_module():
+def _load_publish_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "publish_background_priority_under_test", _BIN_DIR / "publish.py"
     )
@@ -34,20 +39,20 @@ publish = _load_publish_module()
 
 
 class _FakeLibc:
-    def __init__(self):
+    def __init__(self) -> None:
         self.calls = []
 
-    def syscall(self, *args):
+    def syscall(self, *args) -> None:
         self.calls.append(("syscall", args))
 
-    def setiopolicy_np(self, *args):
+    def setiopolicy_np(self, *args) -> None:
         self.calls.append(("setiopolicy_np", args))
 
 
-def test_windows_sets_below_normal_then_background_mode(monkeypatch):
+def test_windows_sets_below_normal_then_background_mode(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     class _Fn:
-        def __init__(self, impl):
+        def __init__(self, impl) -> None:
             self._impl = impl
 
         def __call__(self, *a):
@@ -71,7 +76,7 @@ def test_windows_sets_below_normal_then_background_mode(monkeypatch):
     assert publish._WIN_PROCESS_MODE_BACKGROUND_BEGIN == 0x100000
 
 
-def test_linux_niceness_and_ioprio_idle(monkeypatch):
+def test_linux_niceness_and_ioprio_idle(monkeypatch: pytest.MonkeyPatch) -> None:
     nice_calls = []
     libc = _FakeLibc()
     monkeypatch.setattr(sys, "platform", "linux")
@@ -83,7 +88,7 @@ def test_linux_niceness_and_ioprio_idle(monkeypatch):
     assert libc.calls == [("syscall", (251, 1, 0, 3 << 13))]
 
 
-def test_linux_unknown_machine_still_nices_and_skips_ioprio(monkeypatch):
+def test_linux_unknown_machine_still_nices_and_skips_ioprio(monkeypatch: pytest.MonkeyPatch) -> None:
     nice_calls = []
     libc = _FakeLibc()
     monkeypatch.setattr(sys, "platform", "linux")
@@ -95,7 +100,7 @@ def test_linux_unknown_machine_still_nices_and_skips_ioprio(monkeypatch):
     assert libc.calls == []
 
 
-def test_darwin_niceness_and_io_throttle(monkeypatch):
+def test_darwin_niceness_and_io_throttle(monkeypatch: pytest.MonkeyPatch) -> None:
     nice_calls = []
     libc = _FakeLibc()
     monkeypatch.setattr(sys, "platform", "darwin")
@@ -106,7 +111,7 @@ def test_darwin_niceness_and_io_throttle(monkeypatch):
     assert libc.calls == [("setiopolicy_np", (1, 0, 3))]
 
 
-def test_failure_is_silent_on_every_branch(monkeypatch):
+def test_failure_is_silent_on_every_branch(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*_a, **_k):
         raise OSError("denied")
 
@@ -124,7 +129,7 @@ def test_failure_is_silent_on_every_branch(monkeypatch):
     publish.lower_process_priority_self()
 
 
-def test_main_lowers_priority_before_any_publish_work(monkeypatch):
+def test_main_lowers_priority_before_any_publish_work(monkeypatch: pytest.MonkeyPatch) -> None:
     order = []
     monkeypatch.setattr(publish, "lower_process_priority_self", lambda: order.append("lower"))
     monkeypatch.setattr(publish, "_install_staging_signal_cleanup", lambda: (lambda: None))
@@ -133,7 +138,7 @@ def test_main_lowers_priority_before_any_publish_work(monkeypatch):
     assert order == ["lower", "_main"]
 
 
-def test_main_still_runs_when_priority_lowering_raises_nothing_fatal(monkeypatch):
+def test_main_still_runs_when_priority_lowering_raises_nothing_fatal(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(publish.os, "nice", lambda n: (_ for _ in ()).throw(OSError()), raising=False)
     monkeypatch.setattr(publish, "_install_staging_signal_cleanup", lambda: (lambda: None))
@@ -159,7 +164,7 @@ print(*before, *after)
 """
 
 
-def test_windows_real_process_priority_is_lowered_in_live_child():
+def test_windows_real_process_priority_is_lowered_in_live_child() -> None:
     import subprocess
     import pytest
 

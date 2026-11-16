@@ -8,6 +8,7 @@ from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_contract import HALT_REFUSAL
 from coordinator_core.ops.dispatch_emit.stage_task_hijack import HIJACK_HALT_REASON, hijack_test_js
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+import pytest
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _HALT_AWAIT = "_haltCommit = await _commitHaltRecord();"
@@ -31,7 +32,7 @@ def _compose(monkeypatch) -> str:
     )
 
 
-def test_commit_stage_refusal_is_tested_and_retyped(monkeypatch):
+def test_commit_stage_refusal_is_tested_and_retyped(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _compose(monkeypatch)
     retype = (
         f"if ({_PRED}) _halted = {{ ..._halted, halted: '{HALT_REFUSAL}', reason: {_REASON} }};"
@@ -44,7 +45,7 @@ def test_commit_stage_refusal_is_tested_and_retyped(monkeypatch):
     assert ".join(' ').slice(0, 1000);" in tail[-400:]
 
 
-def test_halt_commit_reply_gets_hijacked_reason_after_its_await(monkeypatch):
+def test_halt_commit_reply_gets_hijacked_reason_after_its_await(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _compose(monkeypatch)
     mark = f"_haltCommit = {{ ..._haltCommit, hijacked: {_REASON} }};"
     assert script.count(mark) == 1
@@ -54,7 +55,7 @@ def test_halt_commit_reply_gets_hijacked_reason_after_its_await(monkeypatch):
     assert "halt_commit: _haltCommit" in script
 
 
-def test_ordinary_refusal_is_not_matched_and_script_is_valid(monkeypatch):
+def test_ordinary_refusal_is_not_matched_and_script_is_valid(monkeypatch: pytest.MonkeyPatch) -> None:
     # The predicate is the shared regex; a land-deadline refusal must not match it.
     import re
 
@@ -68,7 +69,7 @@ def test_ordinary_refusal_is_not_matched_and_script_is_valid(monkeypatch):
     assert [f for f in run_checks(script) if f.severity is Severity.ERROR] == []
 
 
-def test_roadmap_commit_leg_retypes_a_hijacked_refusal():
+def test_roadmap_commit_leg_retypes_a_hijacked_refusal() -> None:
     text = "\n".join(
         ask_compose.roadmap_commit_lines(head="h", anchor="a", repo_root="r", run_id="run1")
     )

@@ -64,6 +64,7 @@ from dataclasses import replace
 from typing import Callable, Optional
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -126,7 +127,7 @@ def _resolves_its_own_home(dispatch_call: Callable[[dict, str], dict], home: str
     return resolved == home
 
 
-def test_two_callers_are_served_warm_concurrently_through_the_real_pool(tmp_path):
+def test_two_callers_are_served_warm_concurrently_through_the_real_pool(tmp_path: Path) -> None:
     ctx = _make_pool_ctx()
     try:
         home_a = str(tmp_path / "home-a")
@@ -170,7 +171,7 @@ def _echo_op_scoped_to_this_process():
             ipc._REGISTRY.pop(_ECHO_METHOD, None)
 
 
-def test_the_check_discriminates_against_the_pre_fix_shape(tmp_path, _echo_op_scoped_to_this_process):
+def test_the_check_discriminates_against_the_pre_fix_shape(tmp_path: Path, _echo_op_scoped_to_this_process) -> None:
     from coordinator_core.ipc import dispatch_message
 
     def _pre_fix_dispatch_call(msg: dict, home: str) -> dict:

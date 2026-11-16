@@ -132,7 +132,7 @@ def _batched_row_ids(script: str) -> list:
     return [row if isinstance(row, str) else row["row_id"] for b in _batches_const(script) for row in b["rows"]]
 
 
-def _emit(tmp_path: Path, *, n_rows: int = 3, **overrides):
+def _emit(tmp_path: Path, *, n_rows: int = 3, **overrides) -> QueueEmission:
     repo_root, queue_dir, run_dir = _setup_repo(tmp_path, n_rows=n_rows)
     kwargs: dict = dict(
         profile="fixture",
@@ -155,7 +155,7 @@ def _emit(tmp_path: Path, *, n_rows: int = 3, **overrides):
 # ---------------------------------------------------------------------------
 
 
-def test_emit_queue_script_end_to_end(tmp_path):
+def test_emit_queue_script_end_to_end(tmp_path: Path) -> None:
     emission = _emit(tmp_path)
     assert isinstance(emission, QueueEmission)
     assert emission.script
@@ -171,7 +171,7 @@ def test_emit_queue_script_end_to_end(tmp_path):
     assert "plan" not in extras
 
 
-def test_receipt_claimed_block_names_rows_a_live_peer_holds(tmp_path, monkeypatch):
+def test_receipt_claimed_block_names_rows_a_live_peer_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import claims, liveness
 
     repo_root, _queue, _run = _setup_repo(tmp_path)
@@ -201,12 +201,12 @@ def test_receipt_claimed_block_names_rows_a_live_peer_holds(tmp_path, monkeypatc
     assert "row0" not in _batched_row_ids(emission.script)
 
 
-def test_receipt_claimed_block_is_empty_without_claims(tmp_path):
+def test_receipt_claimed_block_is_empty_without_claims(tmp_path: Path) -> None:
     emission = _emit(tmp_path)
     assert emission.receipt_extras["claimed"] == {"count": 0, "rows": []}
 
 
-def test_21_row_emit_at_standard_ceiling_admits_16_and_names_5(tmp_path):
+def test_21_row_emit_at_standard_ceiling_admits_16_and_names_5(tmp_path: Path) -> None:
     emission = _emit(tmp_path, n_rows=21)
     not_admitted = emission.receipt_extras["not_admitted"]
     run_order = sorted(f"row{i}" for i in range(21))
@@ -219,7 +219,7 @@ def test_21_row_emit_at_standard_ceiling_admits_16_and_names_5(tmp_path):
     assert _batched_row_ids(emission.script) == run_order[:admitted]
 
 
-def test_21_row_emit_under_a_ceiling_that_covers_all_admits_all(tmp_path):
+def test_21_row_emit_under_a_ceiling_that_covers_all_admits_all(tmp_path: Path) -> None:
     profile_dir = _profile_dir_with_max_agent_calls(tmp_path / "profiles", _covering_ceiling(21))
     emission = _emit(tmp_path, n_rows=21, profile_dir=profile_dir)
     assert emission.receipt_extras["not_admitted"]["count"] == 0
@@ -227,12 +227,12 @@ def test_21_row_emit_under_a_ceiling_that_covers_all_admits_all(tmp_path):
     assert len(_batched_row_ids(emission.script)) == 21
 
 
-def test_receipt_manifest_digest_matches_the_scripts_frozen_digest(tmp_path):
+def test_receipt_manifest_digest_matches_the_scripts_frozen_digest(tmp_path: Path) -> None:
     emission = _emit(tmp_path, n_rows=21)
     assert emission.receipt_extras["manifest_digest"] == _script_string_const(emission.script, "MANIFEST_DIGEST")
 
 
-def test_receipt_extras_reemit_argv_round_trips_through_cli(tmp_path):
+def test_receipt_extras_reemit_argv_round_trips_through_cli(tmp_path: Path) -> None:
     repo_root, queue_dir, run_dir = _setup_repo(tmp_path)
     emission = emit_queue_script(
         "fixture",
@@ -255,7 +255,7 @@ def test_receipt_extras_reemit_argv_round_trips_through_cli(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_queue_dir_outside_repo_root_refused(tmp_path):
+def test_queue_dir_outside_repo_root_refused(tmp_path: Path) -> None:
     repo_root, queue_dir, run_dir = _setup_repo(tmp_path)
     outside = tmp_path.parent / f"outside-{tmp_path.name}"
     outside.mkdir(exist_ok=True)
@@ -271,7 +271,7 @@ def test_queue_dir_outside_repo_root_refused(tmp_path):
         )
 
 
-def test_run_dir_outside_repo_root_refused(tmp_path):
+def test_run_dir_outside_repo_root_refused(tmp_path: Path) -> None:
     repo_root, queue_dir, _run_dir = _setup_repo(tmp_path)
     outside_run_dir = tmp_path.parent / f"outside-run-{tmp_path.name}"
     with pytest.raises(QueuePathEscapeError):
@@ -313,11 +313,11 @@ def _expected_signature() -> inspect.Signature:
     return inspect.signature(emit_queue_script)
 
 
-def test_entrypoint_signature_pinned_to_the_design_doc():
+def test_entrypoint_signature_pinned_to_the_design_doc() -> None:
     assert inspect.signature(emit_queue_script) == _expected_signature()
 
 
-def test_queue_emission_fields_pinned_to_the_design_doc():
+def test_queue_emission_fields_pinned_to_the_design_doc() -> None:
     assert QueueEmission._fields == ("script", "receipt_extras")
 
 
@@ -328,7 +328,7 @@ def test_queue_emission_fields_pinned_to_the_design_doc():
 # ---------------------------------------------------------------------------
 
 
-def _run_900_row_perf(tmp_path, monkeypatch, profile_dir):
+def _run_900_row_perf(tmp_path, monkeypatch, profile_dir) -> QueueEmission:
     repo_root = tmp_path
     (repo_root / ".git").mkdir()
     queue_dir = repo_root / "state" / "bug-backlog"
@@ -386,12 +386,12 @@ def _run_900_row_perf(tmp_path, monkeypatch, profile_dir):
     return emission
 
 
-def test_synthetic_900_row_queue_seeded_ledger_perf_zero_spawn(tmp_path, monkeypatch):
+def test_synthetic_900_row_queue_seeded_ledger_perf_zero_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     emission = _run_900_row_perf(tmp_path, monkeypatch, _FIXTURE_PROFILE_DIR)
     assert emission.receipt_extras["not_admitted"]["count"] == 900 - _admitted_at(900, _STANDARD_CEILING)
 
 
-def test_synthetic_900_row_queue_fully_admitted_composes_all_rows_zero_spawn(tmp_path, monkeypatch):
+def test_synthetic_900_row_queue_fully_admitted_composes_all_rows_zero_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     emission = _run_900_row_perf(
         tmp_path, monkeypatch, _profile_dir_with_max_agent_calls(tmp_path / "profiles", _covering_ceiling(900))
     )
@@ -419,7 +419,7 @@ def _dispatch_queue_emit(tmp_path, **extra):
     return result, output_path, repo_root, queue_dir
 
 
-def test_op_writes_script_and_receipt_lf_only_with_plan_null(tmp_path):
+def test_op_writes_script_and_receipt_lf_only_with_plan_null(tmp_path: Path) -> None:
     result, output_path, _repo_root, _queue_dir = _dispatch_queue_emit(tmp_path)
 
     raw_script = output_path.read_bytes()
@@ -435,7 +435,7 @@ def test_op_writes_script_and_receipt_lf_only_with_plan_null(tmp_path):
     assert result["ok"] is True
 
 
-def test_op_refuses_queue_and_plan_together(tmp_path):
+def test_op_refuses_queue_and_plan_together(tmp_path: Path) -> None:
     repo_root, queue_dir, _run_dir = _setup_repo(tmp_path)
     output_path = tmp_path / "emitted.mjs"
     params = {
@@ -449,7 +449,7 @@ def test_op_refuses_queue_and_plan_together(tmp_path):
         _dispatch_emit(params, repo_root=repo_root)
 
 
-def test_op_refuses_foreign_overwrite(tmp_path):
+def test_op_refuses_foreign_overwrite(tmp_path: Path) -> None:
     # Both calls pin an EXPLICIT, distinct session_id rather than relying on
     # ambient ``resolve_session_id()`` fallback being empty. In any shell
     # where CLAUDE_CODE_SESSION_ID/CLAUDE_SESSION_ID/COORDINATOR_SESSION_ID
@@ -479,7 +479,7 @@ def test_op_refuses_foreign_overwrite(tmp_path):
         _dispatch_emit(params, repo_root=repo_root)
 
 
-def test_op_refuses_queue_route_with_no_repo_root_or_target_root(tmp_path):
+def test_op_refuses_queue_route_with_no_repo_root_or_target_root(tmp_path: Path) -> None:
     repo_root, queue_dir, _run_dir = _setup_repo(tmp_path)
     output_path = tmp_path / "emitted.mjs"
     params = {
@@ -492,7 +492,7 @@ def test_op_refuses_queue_route_with_no_repo_root_or_target_root(tmp_path):
         _dispatch_emit(params, repo_root=None)
 
 
-def test_op_resolves_relative_queue_dir_against_target_root(tmp_path):
+def test_op_resolves_relative_queue_dir_against_target_root(tmp_path: Path) -> None:
     repo_root, queue_dir, _run_dir = _setup_repo(tmp_path)
     output_path = repo_root / "queue-grind" / "emitted.mjs"
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -508,7 +508,7 @@ def test_op_resolves_relative_queue_dir_against_target_root(tmp_path):
     assert result["ok"] is True
 
 
-def test_cli_round_trip_produces_same_bytes_as_the_op(tmp_path):
+def test_cli_round_trip_produces_same_bytes_as_the_op(tmp_path: Path) -> None:
     result, output_path, repo_root, queue_dir = _dispatch_queue_emit(tmp_path)
     op_bytes = output_path.read_bytes()
 
@@ -528,7 +528,7 @@ def test_cli_round_trip_produces_same_bytes_as_the_op(tmp_path):
     assert cli_output.read_bytes() == op_bytes
 
 
-def test_cli_omitted_profile_dir_defaults_to_content_root_queue_profiles(tmp_path, monkeypatch):
+def test_cli_omitted_profile_dir_defaults_to_content_root_queue_profiles(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # klabauter#51: every published command emits without --profile-dir.
     result, output_path, repo_root, queue_dir = _dispatch_queue_emit(tmp_path)
     content_root = tmp_path / "plugin-root"
@@ -552,8 +552,8 @@ def test_cli_omitted_profile_dir_defaults_to_content_root_queue_profiles(tmp_pat
 
 
 def test_cli_omitted_profile_dir_with_no_default_profile_names_the_probed_path(
-    tmp_path, monkeypatch, capsys
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     repo_root, queue_dir, _run_dir = _setup_repo(tmp_path)
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
@@ -569,7 +569,7 @@ def test_cli_omitted_profile_dir_with_no_default_profile_names_the_probed_path(
     assert str(content_root / "queue-profiles" / "fixture.yaml") in capsys.readouterr().err
 
 
-def test_cli_malformed_where_json_is_exit_usage(tmp_path):
+def test_cli_malformed_where_json_is_exit_usage(tmp_path: Path) -> None:
     repo_root, queue_dir, _run_dir = _setup_repo(tmp_path)
     argv = [
         "--queue", str(queue_dir),
@@ -582,7 +582,7 @@ def test_cli_malformed_where_json_is_exit_usage(tmp_path):
     assert cli_module.main(argv) == cli_module.EXIT_USAGE
 
 
-def test_cli_where_without_queue_route_is_exit_usage(tmp_path):
+def test_cli_where_without_queue_route_is_exit_usage(tmp_path: Path) -> None:
     repo_root, _queue_dir, _run_dir = _setup_repo(tmp_path)
     plan_path = tmp_path / "plan.md"
     plan_path.write_text("# a plan\n", encoding="utf-8")
@@ -595,7 +595,7 @@ def test_cli_where_without_queue_route_is_exit_usage(tmp_path):
     assert cli_module.main(argv) == cli_module.EXIT_USAGE
 
 
-def test_stage_models_triage_haiku_lands_once_and_in_reemit_argv(tmp_path):
+def test_stage_models_triage_haiku_lands_once_and_in_reemit_argv(tmp_path: Path) -> None:
     for name in "abc":
         (tmp_path / name).mkdir()
     plain = _emit(tmp_path / "a")
@@ -612,7 +612,7 @@ def test_stage_models_triage_haiku_lands_once_and_in_reemit_argv(tmp_path):
     assert "--stage-model" not in plain.receipt_extras["reemit"]
 
 
-def test_stage_models_absent_script_is_unchanged(tmp_path):
+def test_stage_models_absent_script_is_unchanged(tmp_path: Path) -> None:
     for name in "abc":
         (tmp_path / name).mkdir()
     a = _emit(tmp_path / "a")
@@ -622,7 +622,7 @@ def test_stage_models_absent_script_is_unchanged(tmp_path):
 
 
 @pytest.mark.parametrize("bad", [{"nope": "haiku"}, {"triage": "ha iku"}, {"triage": "-x"}])
-def test_op_refuses_bad_stage_models_before_writing(tmp_path, bad):
+def test_op_refuses_bad_stage_models_before_writing(tmp_path: Path, bad) -> None:
     repo_root, queue_dir, _run_dir = _setup_repo(tmp_path)
     out = tmp_path / "queue-grind" / "emitted.mjs"
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -644,7 +644,7 @@ def test_op_refuses_bad_stage_models_before_writing(tmp_path, bad):
 # ---------------------------------------------------------------------------
 
 
-def test_end_to_end_resume_over_a_seeded_ledger(tmp_path):
+def test_end_to_end_resume_over_a_seeded_ledger(tmp_path: Path) -> None:
     repo_root = tmp_path
     (repo_root / ".git").mkdir()
     queue_dir = repo_root / "state" / "bug-backlog"
@@ -747,7 +747,7 @@ def test_end_to_end_resume_over_a_seeded_ledger(tmp_path):
 _TRAILER = "Host-Trailer: queue-grind-7"
 
 
-def test_emit_queue_script_puts_trailers_in_commit_prompt(tmp_path):
+def test_emit_queue_script_puts_trailers_in_commit_prompt(tmp_path: Path) -> None:
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
     with_trailer = _emit(tmp_path / "a", commit_trailers=[_TRAILER]).script
@@ -758,7 +758,7 @@ def test_emit_queue_script_puts_trailers_in_commit_prompt(tmp_path):
 
 @pytest.mark.cadence
 @pytest.mark.spawns_process
-def test_dispatch_queue_emit_carries_repo_trailer_into_script(tmp_path):
+def test_dispatch_queue_emit_carries_repo_trailer_into_script(tmp_path: Path) -> None:
     repo_root, _queue_dir, _run_dir = _setup_repo(tmp_path)
     (repo_root / ".git").rmdir()
     subprocess.run(["git", "init", "-q", str(repo_root)], check=True, **no_console_passthrough_kwargs())
@@ -780,7 +780,7 @@ def test_dispatch_queue_emit_carries_repo_trailer_into_script(tmp_path):
     assert json.dumps([_TRAILER]) in output_path.read_text()
 
 
-def test_a_profile_outside_the_mechanical_close_set_carries_no_run_budget(tmp_path):
+def test_a_profile_outside_the_mechanical_close_set_carries_no_run_budget(tmp_path: Path) -> None:
     emission = _emit(tmp_path, n_rows=20)
     assert "budget" not in emission.receipt_extras and "deferred" not in emission.receipt_extras
     assert len(_batched_row_ids(emission.script)) == _admitted_at(20, _STANDARD_CEILING)

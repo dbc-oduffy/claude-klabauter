@@ -8,10 +8,11 @@ import os
 import pytest
 
 from coordinator_core.write_guards._memory_evict import evict_oldest
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _isolated_lessons(monkeypatch, tmp_path):
+def _isolated_lessons(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Pin the lessons root so no test writes into the real repo's state/lessons."""
     root = tmp_path / "lessons-root"
     root.mkdir()
@@ -19,7 +20,7 @@ def _isolated_lessons(monkeypatch, tmp_path):
     return root
 
 
-def _seed(mem, names_types):
+def _seed(mem, names_types) -> None:
     mem.mkdir()
     rows = []
     for i, (name, typ) in enumerate(names_types):
@@ -32,7 +33,7 @@ def _seed(mem, names_types):
 
 
 @pytest.mark.parametrize("typ", ["user", "feedback", "project", "reference"])
-def test_evicts_oldest_row_and_logs(tmp_path, typ):
+def test_evicts_oldest_row_and_logs(tmp_path: Path, typ) -> None:
     mem = tmp_path / "memory"
     _seed(mem, [("a.md", typ), ("b.md", "user"), ("c.md", "user")])
     rec = evict_oldest(mem)
@@ -48,7 +49,7 @@ def test_evicts_oldest_row_and_logs(tmp_path, typ):
     assert logged["path"].endswith("a.md")
 
 
-def test_evicted_body_lands_as_a_lesson_before_unlink(tmp_path, _isolated_lessons):
+def test_evicted_body_lands_as_a_lesson_before_unlink(tmp_path: Path, _isolated_lessons) -> None:
     mem = tmp_path / "memory"
     _seed(mem, [("a.md", "feedback"), ("b.md", "user")])
     body = (mem / "a.md").read_text(encoding="utf-8")
@@ -62,7 +63,7 @@ def test_evicted_body_lands_as_a_lesson_before_unlink(tmp_path, _isolated_lesson
     assert body.splitlines()[1] in text
 
 
-def test_failed_lesson_write_keeps_the_memory_and_logs_nothing(tmp_path, monkeypatch):
+def test_failed_lesson_write_keeps_the_memory_and_logs_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.write_guards import _memory_evict
 
     mem = tmp_path / "memory"
@@ -79,13 +80,13 @@ def test_failed_lesson_write_keeps_the_memory_and_logs_nothing(tmp_path, monkeyp
     assert not (tmp_path / "memory-evictions.jsonl").exists()
 
 
-def test_unknown_type_without_frontmatter(tmp_path):
+def test_unknown_type_without_frontmatter(tmp_path: Path) -> None:
     mem = tmp_path / "memory"
     _seed(mem, [("a.md", None), ("b.md", "user")])
     assert evict_oldest(mem)["type"] == "unknown"
 
 
-def test_empty_dir_returns_none_and_logs_nothing(tmp_path):
+def test_empty_dir_returns_none_and_logs_nothing(tmp_path: Path) -> None:
     mem = tmp_path / "memory"
     mem.mkdir()
     (mem / "MEMORY.md").write_text("# idx\n", encoding="utf-8")
@@ -93,7 +94,7 @@ def test_empty_dir_returns_none_and_logs_nothing(tmp_path):
     assert not (tmp_path / "memory-evictions.jsonl").exists()
 
 
-def test_index_row_match_is_exact_link_target(tmp_path):
+def test_index_row_match_is_exact_link_target(tmp_path: Path) -> None:
     mem = tmp_path / "memory"
     _seed(mem, [("a.md", "user"), ("xa.md", "user")])
     evict_oldest(mem)
@@ -101,7 +102,7 @@ def test_index_row_match_is_exact_link_target(tmp_path):
     assert "(xa.md)" in idx and "(a.md)" not in idx
 
 
-def test_log_appends(tmp_path):
+def test_log_appends(tmp_path: Path) -> None:
     mem = tmp_path / "memory"
     _seed(mem, [("a.md", "user"), ("b.md", "user")])
     evict_oldest(mem)
@@ -109,7 +110,7 @@ def test_log_appends(tmp_path):
     assert len((tmp_path / "memory-evictions.jsonl").read_text().splitlines()) == 2
 
 
-def test_failed_unlink_logs_nothing(tmp_path, monkeypatch):
+def test_failed_unlink_logs_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mem = tmp_path / "memory"
     _seed(mem, [("a.md", "user"), ("b.md", "user")])
 
@@ -123,7 +124,7 @@ def test_failed_unlink_logs_nothing(tmp_path, monkeypatch):
     assert "a.md" in (mem / "MEMORY.md").read_text(encoding="utf-8")
 
 
-def test_failed_row_drop_is_tolerated_after_unlink_and_log(tmp_path, monkeypatch):
+def test_failed_row_drop_is_tolerated_after_unlink_and_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.write_guards import _memory_evict
 
     mem = tmp_path / "memory"
@@ -138,7 +139,7 @@ def test_failed_row_drop_is_tolerated_after_unlink_and_log(tmp_path, monkeypatch
     assert len((tmp_path / "memory-evictions.jsonl").read_text().splitlines()) == 1
 
 
-def test_failed_log_write_still_drops_index_rows_then_raises(tmp_path):
+def test_failed_log_write_still_drops_index_rows_then_raises(tmp_path: Path) -> None:
     mem = tmp_path / "memory"
     _seed(mem, [("a.md", "user"), ("b.md", "user")])
     (tmp_path / "memory-evictions.jsonl").mkdir()
@@ -148,6 +149,6 @@ def test_failed_log_write_still_drops_index_rows_then_raises(tmp_path):
     assert "a.md" not in (mem / "MEMORY.md").read_text(encoding="utf-8")
 
 
-def test_oserror_propagates(tmp_path):
+def test_oserror_propagates(tmp_path: Path) -> None:
     with pytest.raises(OSError):
         evict_oldest(tmp_path / "missing")

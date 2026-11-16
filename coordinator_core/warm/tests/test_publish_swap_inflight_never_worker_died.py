@@ -218,7 +218,7 @@ def _open_client(endpoint: str):
 class _Leg:
     """One admitted op on its own thread; `.line` is the raw reply (b"" on EOF), `.error` a transport failure."""
 
-    def __init__(self, old: _OldServer, tag: str, sleep_secs: float) -> None:
+    def __init__(self, old: _OldServer, tag: str, sleep_secs: float, method: str = _LONG_OP) -> None:
         self.tag = tag
         self.line: "bytes | None" = None
         self.error: "BaseException | None" = None
@@ -226,7 +226,7 @@ class _Leg:
         self._frame = {
             "jsonrpc": "2.0",
             "id": tag,
-            "method": _LONG_OP,
+            "method": method,
             "params": {"sleep": sleep_secs, "tag": tag},
             "_engine_token": "client-ok",
         }
@@ -328,7 +328,25 @@ def test_op_admitted_after_the_stop_ask_is_answered_or_never_started(engine_root
     if old.entered("late"):
         assert late_kind == "result", late.describe()
     else:
-        assert late_kind in {"not_started", "skew_refusal", "cut"}, late.describe()
+        assert late_kind in {"not_started", "skew_refusal"}, late.describe()
+    assert result.ok(), result.render_survivors()
+
+
+def test_hook_mode_frame_delivered_while_the_old_server_drains_is_answered_never_cut(engine_root, spawned) -> None:
+    """A hook-lane frame that reaches the old pair after its listener closed gets a determinate
+    answer: the zero-byte close it used to get on Windows reads at the native door as 'connection
+    closed or read failed after delivery' and fails the hook open. The determinate refusal is
+    ENGINE_SKEW, the answer `warm.client` and the door treat as provably not executed."""
+    old = _boot_old_server_with_successor_crumb(engine_root, spawned)
+    running = _Leg(old, "running", 3.0).start()
+    _wait_entered(old, "running")
+    stop = _Stop(old).start()
+    time.sleep(0.5)
+    hook = _Leg(old, "hook", 0.0, method="hooks.preuse_bash_dispatch").start()
+    kind = hook.kind()
+    result = stop.finish()
+    assert running.kind() == "result", running.describe()
+    assert kind in {"result", "skew_refusal", "not_started"}, hook.describe()
     assert result.ok(), result.render_survivors()
 
 

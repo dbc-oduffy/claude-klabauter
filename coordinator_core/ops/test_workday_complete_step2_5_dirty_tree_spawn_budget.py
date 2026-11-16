@@ -35,11 +35,12 @@ from coordinator_core.win_portability import (
     no_console_creationflags,
     no_console_passthrough_kwargs,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
-def _make_repo(tmp_path, name="repo"):
+def _make_repo(tmp_path, name: str = "repo"):
     repo = tmp_path / name
     repo.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **no_console_passthrough_kwargs())
@@ -55,7 +56,7 @@ def _manifest_spawn_budget() -> dict:
     return entry["spawn_count_budget"]
 
 
-def test_classify_main_pass_spawns_exactly_two_git_calls_for_several_dirty_paths(tmp_path):
+def test_classify_main_pass_spawns_exactly_two_git_calls_for_several_dirty_paths(tmp_path: Path) -> None:
     """Several dirty paths spanning tracked-modified, untracked, and
     committed-then-untouched (EOL-phantom candidate) states must still cost
     exactly the manifest's `spawn_count_budget.per_classify_call` `git`

@@ -89,7 +89,7 @@ def test_large_offset_table_is_decoded(tmp_path: Path) -> None:
     assert pidx.offsets[-1] == 0x7FFFFFFF
 
 
-def test_find_decodes_at_most_one_offset(tmp_path: Path, monkeypatch) -> None:
+def test_find_decodes_at_most_one_offset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     idx = _real_idx(tmp_path)
     pidx = _parse_pack_index_uncached(idx)
     assert pidx is not None

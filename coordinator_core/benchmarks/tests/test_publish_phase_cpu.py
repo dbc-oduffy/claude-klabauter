@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from coordinator_core.benchmarks import publish_phase_cpu as ppc
 
 SUFFIX = "(driver only, excludes subprocesses)"
@@ -54,7 +56,7 @@ def test_ten_x_regression_names_every_phase(tmp_path: Path) -> None:
     after = _write(tmp_path, "after.txt", _log(ROWS, scale=10.0, rkl=60.0))
     code, report = ppc.run(after, base)
     assert code == ppc.EXIT_REGRESSION
-    for phase in ppc.PHASE_LABELS:
+    for phase in ppc.PHASE_LABELS.keys() - ppc.INFORMATIONAL_PHASES:
         assert phase in report.splitlines()[-1]
 
 
@@ -91,7 +93,36 @@ def test_log_without_timing_lines_is_not_a_pass(tmp_path: Path) -> None:
     assert ppc.run(empty, base)[0] == ppc.EXIT_ROWSET_DIFFERS
 
 
-def test_main_returns_exit_code(tmp_path: Path, capsys) -> None:
+SWEEP_LINE = (
+    "  [timing] a: content_transform_sweep: 12.500s wall / 7.250s cpu "
+    f"{SUFFIX}; files=9836"
+)
+
+
+def test_sweep_timing_line_is_reported_as_a_phase() -> None:
+    totals, rows = ppc.parse_log(SWEEP_LINE + "\n")
+    assert rows == {"a"}
+    assert totals["content_transform_sweep"] == 7.25
+
+
+def test_sweep_phase_is_reported_but_never_gates_against_a_log_that_predates_it(tmp_path: Path) -> None:
+    base = _write(tmp_path, "base.txt", _log(ROWS))
+    after = _write(tmp_path, "after.txt", _log(ROWS) + SWEEP_LINE.replace(" a:", " b:") + "\n")
+    code, report = ppc.run(after, base)
+    assert code == ppc.EXIT_OK
+    sweep = next(ln for ln in report.splitlines() if ln.startswith("content_transform_sweep"))
+    assert "7.2s" in sweep and "informational" in sweep and "REGRESSED" not in sweep
+
+
+def test_gated_phase_still_regresses_alongside_the_sweep_phase(tmp_path: Path) -> None:
+    base = _write(tmp_path, "base.txt", _log(ROWS))
+    after = _write(tmp_path, "after.txt", _log(ROWS, scale=10.0) + SWEEP_LINE + "\n")
+    code, report = ppc.run(after, base)
+    assert code == ppc.EXIT_REGRESSION
+    assert "content_transform_sweep" not in report.splitlines()[-1]
+
+
+def test_main_returns_exit_code(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     base = _write(tmp_path, "base.txt", _log(ROWS))
     after = _write(tmp_path, "after.txt", _log(ROWS, scale=10.0))
     assert ppc.main([str(after), "--baseline", str(base)]) == ppc.EXIT_REGRESSION

@@ -16,6 +16,7 @@ from coordinator_core.ops.tests.test_deliverable_cascade_kinds import (
     _seed_handoff,
     _seed_sizing,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -44,7 +45,7 @@ def _sizing_status(path) -> str:
     return yaml.safe_load(path.read_text(encoding="utf-8"))["status"]
 
 
-def test_stamping_a_plan_implemented_ships_its_sizing_and_baton(tmp_path):
+def test_stamping_a_plan_implemented_ships_its_sizing_and_baton(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
     sizing = _seed_sizing(repo, "s.yaml", deliverable_id=_DLV, plan=_PLAN)
@@ -57,7 +58,7 @@ def test_stamping_a_plan_implemented_ships_its_sizing_and_baton(tmp_path):
     assert _baton_state(baton) == "shipped"
 
 
-def test_a_plan_already_implemented_on_disk_still_closes_its_plan_fk_sizing(tmp_path):
+def test_a_plan_already_implemented_on_disk_still_closes_its_plan_fk_sizing(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
     sizing = _seed_sizing(repo, "s.yaml", deliverable_id="null", plan=_PLAN)
@@ -69,7 +70,7 @@ def test_a_plan_already_implemented_on_disk_still_closes_its_plan_fk_sizing(tmp_
     assert _sizing_status(sizing) == "shipped"
 
 
-def test_a_repeat_stamp_on_a_closed_sizing_changes_nothing(tmp_path):
+def test_a_repeat_stamp_on_a_closed_sizing_changes_nothing(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
     sizing = _seed_sizing(repo, "s.yaml", deliverable_id="null", plan=_PLAN)
@@ -85,7 +86,7 @@ def test_a_repeat_stamp_on_a_closed_sizing_changes_nothing(tmp_path):
 
 
 @pytest.mark.parametrize("pointer", ["../outside.yaml", "/etc/hosts", "state/sizings/absent.yaml"])
-def test_a_sizing_pointer_outside_the_repo_or_absent_never_cascades(tmp_path, pointer, capsys):
+def test_a_sizing_pointer_outside_the_repo_or_absent_never_cascades(tmp_path: Path, pointer, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.ops import plan_status_transition as pst
 
     repo = tmp_path / "repo"

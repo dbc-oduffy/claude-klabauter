@@ -11,23 +11,24 @@ import json
 import pytest
 
 from coordinator_core.group_em import atomic_record as ar
+from pathlib import Path
 
 
-def test_write_json_atomic_creates_parent_and_writes_readable_json(tmp_path):
+def test_write_json_atomic_creates_parent_and_writes_readable_json(tmp_path: Path) -> None:
     target = tmp_path / "nested" / "record.json"
     ar.write_json_atomic(target, {"a": 1})
     assert target.is_file()
     assert json.loads(target.read_text(encoding="utf-8")) == {"a": 1}
 
 
-def test_write_json_atomic_no_temp_file_left_behind_on_success(tmp_path):
+def test_write_json_atomic_no_temp_file_left_behind_on_success(tmp_path: Path) -> None:
     target = tmp_path / "record.json"
     ar.write_json_atomic(target, {"a": 1})
     leftovers = list(tmp_path.glob("*.tmp"))
     assert leftovers == []
 
 
-def test_write_json_atomic_overwrites_existing_file(tmp_path):
+def test_write_json_atomic_overwrites_existing_file(tmp_path: Path) -> None:
     """The Windows-hostile case: `os.replace` over an existing destination must succeed,
     not raise `PermissionError`/`FileExistsError` as a naive `os.rename` would on Windows.
     """
@@ -37,7 +38,7 @@ def test_write_json_atomic_overwrites_existing_file(tmp_path):
     assert json.loads(target.read_text(encoding="utf-8")) == {"a": 2}
 
 
-def test_write_json_atomic_never_exposes_a_torn_or_absent_read(tmp_path):
+def test_write_json_atomic_never_exposes_a_torn_or_absent_read(tmp_path: Path) -> None:
     """A reader polling the destination path during/around a write must always observe
     either the old complete record or the new complete record -- never a missing file and
     never a partial one. Simulated in-process (no real concurrency) by reading immediately
@@ -56,7 +57,7 @@ def test_write_json_atomic_never_exposes_a_torn_or_absent_read(tmp_path):
         assert post == {"v": i}
 
 
-def test_write_json_atomic_temp_file_lands_on_same_filesystem_as_destination(tmp_path, monkeypatch):
+def test_write_json_atomic_temp_file_lands_on_same_filesystem_as_destination(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`tempfile.mkstemp(dir=...)` must be called with the DESTINATION's own parent directory,
     not the platform default temp dir -- otherwise `os.replace` can raise `OSError` (cross-
     device rename) on any host where the system temp dir is a different filesystem/volume
@@ -75,7 +76,7 @@ def test_write_json_atomic_temp_file_lands_on_same_filesystem_as_destination(tmp
     assert seen_dirs == [str(target.parent)]
 
 
-def test_write_json_atomic_cleans_up_temp_file_on_write_failure(tmp_path, monkeypatch):
+def test_write_json_atomic_cleans_up_temp_file_on_write_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "record.json"
 
     def boom(*args, **kwargs):
@@ -91,13 +92,13 @@ def test_write_json_atomic_cleans_up_temp_file_on_write_failure(tmp_path, monkey
     assert list(tmp_path.glob("*.tmp")) == []
 
 
-def test_repo_key_deterministic_and_stable_across_calls():
+def test_repo_key_deterministic_and_stable_across_calls() -> None:
     a = ar.repo_key("/some/repo/root")
     b = ar.repo_key("/some/repo/root")
     assert a == b
 
 
-def test_repo_key_separator_normalised():
+def test_repo_key_separator_normalised() -> None:
     """Trailing/redundant separators collapse to the same key -- `os.path.normpath` covers
     this on every platform, distinct from the deliberately-unclaimed drive-letter/UNC
     identity case (see the module docstring).
@@ -107,7 +108,7 @@ def test_repo_key_separator_normalised():
     assert a == b
 
 
-def test_repo_key_digest_case_normalised_where_platform_defines_it():
+def test_repo_key_digest_case_normalised_where_platform_defines_it() -> None:
     """The collision-resistant digest half of the key is derived from `os.path.normcase`
     output, so it collapses on case where the platform does (Windows) and stays distinct
     where it doesn't (POSIX). The human-readable stem PREFIX is deliberately NOT
@@ -125,13 +126,13 @@ def test_repo_key_digest_case_normalised_where_platform_defines_it():
         assert a_digest != b_digest
 
 
-def test_repo_key_distinct_roots_with_same_basename_do_not_collide():
+def test_repo_key_distinct_roots_with_same_basename_do_not_collide() -> None:
     a = ar.repo_key("/one/path/repo")
     b = ar.repo_key("/other/path/repo")
     assert a != b
 
 
-def test_holder_lock_ignores_a_lock_file_left_on_disk(tmp_path):
+def test_holder_lock_ignores_a_lock_file_left_on_disk(tmp_path: Path) -> None:
     """A `.lock` file with no live holder -- a crashed process's leftover -- never blocks: the
     kernel lock died with its holder, and the file itself is inert."""
     target = tmp_path / "record.json"
@@ -140,7 +141,7 @@ def test_holder_lock_ignores_a_lock_file_left_on_disk(tmp_path):
         pass
 
 
-def test_holder_lock_refuses_a_second_holder_until_release(tmp_path):
+def test_holder_lock_refuses_a_second_holder_until_release(tmp_path: Path) -> None:
     target = tmp_path / "record.json"
     with ar.holder_lock(target):
         with pytest.raises(ar.LockTimeout):

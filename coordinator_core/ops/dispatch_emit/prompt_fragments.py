@@ -180,7 +180,7 @@ _COMPOSITE_REF = re.compile(r"\b_PFC\d+\b")
 class _Tok:
     __slots__ = ("start", "end", "text", "ident", "composite")
 
-    def __init__(self, start: int, end: int, text: str, ident: int, composite: bool = False):
+    def __init__(self, start: int, end: int, text: str, ident: int, composite: bool = False) -> None:
         self.start, self.end, self.text, self.ident, self.composite = start, end, text, ident, composite
 
 

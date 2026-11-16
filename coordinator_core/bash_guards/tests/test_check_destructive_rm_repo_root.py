@@ -48,6 +48,7 @@ from coordinator_core.bash_guards.dispatch_checks import (
 )
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -92,29 +93,29 @@ def _reason(cmd: str) -> str:
 
 
 @pytest.fixture()
-def repo_outside_any_repo(tmp_path):
+def repo_outside_any_repo(tmp_path: Path) -> str:
     parent = tmp_path / "home"
     parent.mkdir()
     return _make_repo(str(parent / "checkout"))
 
 
 class TestRepoRootIsDenied:
-    def test_root_denied_though_parent_is_not_a_repo(self, repo_outside_any_repo):
+    def test_root_denied_though_parent_is_not_a_repo(self, repo_outside_any_repo) -> None:
         assert _denied(f"rm -rf {repo_outside_any_repo}")
 
-    def test_deny_names_root_ness_and_the_store(self, repo_outside_any_repo):
+    def test_deny_names_root_ness_and_the_store(self, repo_outside_any_repo) -> None:
         reason = _reason(f"rm -rf {repo_outside_any_repo}")
         assert "ROOT of a git repository" in reason
         assert ".git store" in reason
 
-    def test_subdirectory_of_same_repo_still_denied(self, repo_outside_any_repo):
+    def test_subdirectory_of_same_repo_still_denied(self, repo_outside_any_repo) -> None:
         sub = os.path.join(repo_outside_any_repo, "sub")
         os.makedirs(sub)
         with open(os.path.join(sub, "untracked.txt"), "w", encoding="utf-8") as fh:
             fh.write("uncommitted\n")
         assert _denied(f"rm -rf {sub}")
 
-    def test_plain_non_repo_directory_is_not_denied(self, tmp_path):
+    def test_plain_non_repo_directory_is_not_denied(self, tmp_path: Path) -> None:
         plain = tmp_path / "scratch"
         plain.mkdir()
         (plain / "junk.txt").write_text("junk\n")
@@ -125,7 +126,7 @@ class TestUnbornScratchRepo:
     """A repo with no ref, stash or reflog inside an enclosing repo's scratch/ holds no history."""
 
     @pytest.fixture()
-    def scratch(self, tmp_path):
+    def scratch(self, tmp_path: Path) -> Path:
         outer = tmp_path / "outer"
         outer.mkdir()
         _git("init", "-q", cwd=str(outer))
@@ -133,17 +134,17 @@ class TestUnbornScratchRepo:
         s.mkdir()
         return s
 
-    def test_an_unborn_repo_under_scratch_is_allowed(self, scratch):
+    def test_an_unborn_repo_under_scratch_is_allowed(self, scratch) -> None:
         probe = scratch / "probe"
         probe.mkdir()
         _git("init", "-q", cwd=str(probe))
         (probe / "copy.yaml").write_text("x: 1\n")
         assert not _denied(f"rm -rf {probe}")
 
-    def test_a_repo_with_a_commit_under_scratch_is_allowed(self, scratch):
+    def test_a_repo_with_a_commit_under_scratch_is_allowed(self, scratch) -> None:
         assert not _denied(f"rm -rf {_make_repo(str(scratch / 'probe'))}")
 
-    def test_an_unborn_repo_outside_scratch_stays_denied(self, tmp_path):
+    def test_an_unborn_repo_outside_scratch_stays_denied(self, tmp_path: Path) -> None:
         probe = tmp_path / "outer" / "work" / "probe"
         probe.mkdir(parents=True)
         _git("init", "-q", cwd=str(tmp_path / "outer"))
@@ -155,7 +156,7 @@ class TestRecoverableScratchClone:
     """Anything under <repo>/scratch is deletable, whatever work a nested clone holds."""
 
     @pytest.fixture()
-    def clone(self, tmp_path):
+    def clone(self, tmp_path: Path) -> str:
         origin = _make_repo(str(tmp_path / "origin"))
         outer = tmp_path / "outer"
         outer.mkdir()
@@ -168,39 +169,39 @@ class TestRecoverableScratchClone:
         _git("config", "user.name", "t", cwd=dest)
         return dest
 
-    def test_clean_pushed_clone_is_allowed(self, clone):
+    def test_clean_pushed_clone_is_allowed(self, clone) -> None:
         assert not _denied(f"rm -rf {clone}")
 
-    def test_unpushed_commit_is_allowed(self, clone):
+    def test_unpushed_commit_is_allowed(self, clone) -> None:
         with open(os.path.join(clone, "tracked.txt"), "a", encoding="utf-8") as fh:
             fh.write("more\n")
         _git("commit", "-qam", "local", cwd=clone)
         assert not _denied(f"rm -rf {clone}")
 
-    def test_stash_is_allowed(self, clone):
+    def test_stash_is_allowed(self, clone) -> None:
         with open(os.path.join(clone, "tracked.txt"), "a", encoding="utf-8") as fh:
             fh.write("wip\n")
         _git("stash", cwd=clone)
         assert not _denied(f"rm -rf {clone}")
 
-    def test_untracked_file_is_allowed(self, clone):
+    def test_untracked_file_is_allowed(self, clone) -> None:
         with open(os.path.join(clone, "new.txt"), "w", encoding="utf-8") as fh:
             fh.write("x\n")
         assert not _denied(f"rm -rf {clone}")
 
-    def test_modified_file_is_allowed(self, clone):
+    def test_modified_file_is_allowed(self, clone) -> None:
         with open(os.path.join(clone, "tracked.txt"), "a", encoding="utf-8") as fh:
             fh.write("edit\n")
         assert not _denied(f"rm -rf {clone}")
 
-    def test_modified_and_untracked_together_is_allowed(self, clone):
+    def test_modified_and_untracked_together_is_allowed(self, clone) -> None:
         with open(os.path.join(clone, "tracked.txt"), "a", encoding="utf-8") as fh:
             fh.write("edit\n")
         with open(os.path.join(clone, "new.txt"), "w", encoding="utf-8") as fh:
             fh.write("x\n")
         assert not _denied(f"rm -rf {clone}")
 
-    def test_committed_repo_with_no_remote_is_allowed(self, tmp_path):
+    def test_committed_repo_with_no_remote_is_allowed(self, tmp_path: Path) -> None:
         outer = tmp_path / "outer"
         outer.mkdir()
         _git("init", "-q", cwd=str(outer))
@@ -208,7 +209,7 @@ class TestRecoverableScratchClone:
         local = _make_repo(str(outer / "scratch" / "local-only"))
         assert not _denied(f"rm -rf {local}")
 
-    def test_clone_outside_scratch_stays_denied(self, tmp_path):
+    def test_clone_outside_scratch_stays_denied(self, tmp_path: Path) -> None:
         origin = _make_repo(str(tmp_path / "origin"))
         dest = str(tmp_path / "work" / "dc-clone")
         os.makedirs(os.path.dirname(dest))
@@ -219,7 +220,7 @@ class TestRecoverableScratchClone:
 
 
 class TestCleanRepoRootStillDenied:
-    def test_pristine_worktree_does_not_soften_the_deny(self, repo_outside_any_repo):
+    def test_pristine_worktree_does_not_soften_the_deny(self, repo_outside_any_repo) -> None:
         out = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=repo_outside_any_repo,
@@ -238,7 +239,7 @@ def _fs_is_case_insensitive(tmp_dir: str) -> bool:
 
 class TestCaseVariantAliasing:
 
-    def test_case_variant_spelling_of_a_repo_root_is_denied(self, tmp_path):
+    def test_case_variant_spelling_of_a_repo_root_is_denied(self, tmp_path: Path) -> None:
         if not _fs_is_case_insensitive(str(tmp_path)):
             pytest.skip("case-sensitive filesystem — the alias cannot exist here")
         parent = tmp_path / "home"
@@ -247,7 +248,7 @@ class TestCaseVariantAliasing:
         variant = parent / ".Claude"
         assert _denied(f"rm -rf {variant}")
 
-    def test_deny_warns_about_case_insensitive_filesystems(self, tmp_path):
+    def test_deny_warns_about_case_insensitive_filesystems(self, tmp_path: Path) -> None:
         if not _fs_is_case_insensitive(str(tmp_path)):
             pytest.skip("case-sensitive filesystem — the alias cannot exist here")
         parent = tmp_path / "home"
@@ -279,35 +280,35 @@ def _redirect_home(monkeypatch, home: str) -> None:
 
 class TestTildeAndHomeVarTargets:
 
-    def test_tilde_spelled_root_is_denied(self, monkeypatch, tmp_path):
+    def test_tilde_spelled_root_is_denied(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         home = tmp_path / "home"
         home.mkdir()
         _make_repo(str(home / "checkout"))
         _redirect_home(monkeypatch, str(home))
         assert _denied("rm -rf ~/checkout")
 
-    def test_home_var_spelled_root_is_denied(self, monkeypatch, tmp_path):
+    def test_home_var_spelled_root_is_denied(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         home = tmp_path / "home"
         home.mkdir()
         _make_repo(str(home / "checkout"))
         _redirect_home(monkeypatch, str(home))
         assert _denied("rm -rf $HOME/checkout")
 
-    def test_braced_home_var_spelled_root_is_denied(self, monkeypatch, tmp_path):
+    def test_braced_home_var_spelled_root_is_denied(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         home = tmp_path / "home"
         home.mkdir()
         _make_repo(str(home / "checkout"))
         _redirect_home(monkeypatch, str(home))
         assert _denied("rm -rf ${HOME}/checkout")
 
-    def test_unresolvable_var_target_still_skipped(self, monkeypatch, tmp_path):
+    def test_unresolvable_var_target_still_skipped(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         home = tmp_path / "home"
         home.mkdir()
         _make_repo(str(home / "checkout"))
         _redirect_home(monkeypatch, str(home))
         assert not _denied("rm -rf $FOO/checkout")
 
-    def test_glob_target_still_skipped(self, tmp_path):
+    def test_glob_target_still_skipped(self, tmp_path: Path) -> None:
         repo = _make_repo(str(tmp_path / "checkout"))
         assert not _denied(f"rm -rf {os.path.dirname(repo)}/*")
 
@@ -319,11 +320,11 @@ class TestBareRepoRoot:
         _git("init", "-q", "--bare", cwd=path)
         return path
 
-    def test_bare_repo_root_is_denied(self, tmp_path):
+    def test_bare_repo_root_is_denied(self, tmp_path: Path) -> None:
         bare = self._make_bare_repo(str(tmp_path / "repo.git"))
         assert _denied(f"rm -rf {bare}")
 
-    def test_bare_repo_deny_names_root_ness(self, tmp_path):
+    def test_bare_repo_deny_names_root_ness(self, tmp_path: Path) -> None:
         bare = self._make_bare_repo(str(tmp_path / "repo.git"))
         reason = _reason(f"rm -rf {bare}")
         assert "ROOT of a git repository" in reason
@@ -335,12 +336,12 @@ class TestLinkedWorktreeRoot:
         _git("worktree", "add", worktree_path, "-b", branch, cwd=repo)
         return worktree_path
 
-    def test_linked_worktree_root_is_denied(self, tmp_path):
+    def test_linked_worktree_root_is_denied(self, tmp_path: Path) -> None:
         repo = _make_repo(str(tmp_path / "repo"))
         worktree = self._make_worktree(repo, str(tmp_path / "wt"), "wt-branch")
         assert _denied(f"rm -rf {worktree}")
 
-    def test_linked_worktree_deny_uses_worktree_specific_wording(self, tmp_path):
+    def test_linked_worktree_deny_uses_worktree_specific_wording(self, tmp_path: Path) -> None:
         repo = _make_repo(str(tmp_path / "repo"))
         worktree = self._make_worktree(repo, str(tmp_path / "wt"), "wt-branch")
         reason = _reason(f"rm -rf {worktree}")
@@ -352,20 +353,20 @@ class TestRmOverride:
     """Finding 3: the override escape hatch (`COORDINATOR_ALLOW_RM=1`) was
     untested on the new root-deny branch specifically."""
 
-    def test_override_allows_repo_root_delete(self, monkeypatch, repo_outside_any_repo):
+    def test_override_allows_repo_root_delete(self, monkeypatch: pytest.MonkeyPatch, repo_outside_any_repo) -> None:
         monkeypatch.setenv("COORDINATOR_ALLOW_RM", "1")
         assert not _denied(f"rm -rf {repo_outside_any_repo}")
 
 
 class TestGitLockTarget:
 
-    def test_lock_file_allowed(self, repo_outside_any_repo):
+    def test_lock_file_allowed(self, repo_outside_any_repo) -> None:
         lock = os.path.join(repo_outside_any_repo, ".git", "index.lock")
         with open(lock, "w", encoding="utf-8") as fh:
             fh.write("")
         assert not _denied(f"rm -f {lock}")
 
-    def test_nested_ref_lock_allowed(self, repo_outside_any_repo):
+    def test_nested_ref_lock_allowed(self, repo_outside_any_repo) -> None:
         refs_dir = os.path.join(repo_outside_any_repo, ".git", "refs", "heads")
         os.makedirs(refs_dir, exist_ok=True)
         lock = os.path.join(refs_dir, "main.lock")
@@ -373,27 +374,27 @@ class TestGitLockTarget:
             fh.write("")
         assert not _denied(f"rm -f {lock}")
 
-    def test_non_lock_store_target_keeps_original_irreversibility_message(self, repo_outside_any_repo):
+    def test_non_lock_store_target_keeps_original_irreversibility_message(self, repo_outside_any_repo) -> None:
         head = os.path.join(repo_outside_any_repo, ".git", "HEAD")
         reason = _reason(f"rm -f {head}")
         assert "irreversibly" in reason
         assert "reflog" in reason
 
-    def test_git_objects_dir_still_denied(self, repo_outside_any_repo):
+    def test_git_objects_dir_still_denied(self, repo_outside_any_repo) -> None:
         objects_dir = os.path.join(repo_outside_any_repo, ".git", "objects", "ab")
         os.makedirs(objects_dir, exist_ok=True)
         assert _denied(f"rm -rf {objects_dir}")
 
-    def test_git_dir_itself_still_denied(self, repo_outside_any_repo):
+    def test_git_dir_itself_still_denied(self, repo_outside_any_repo) -> None:
         git_dir = os.path.join(repo_outside_any_repo, ".git")
         assert _denied(f"rm -rf {git_dir}")
 
-    def test_lock_suffixed_directory_still_denied(self, repo_outside_any_repo):
+    def test_lock_suffixed_directory_still_denied(self, repo_outside_any_repo) -> None:
         lock_dir = os.path.join(repo_outside_any_repo, ".git", "objects", "incoming-1234.lock")
         os.makedirs(lock_dir, exist_ok=True)
         assert _denied(f"rm -rf {lock_dir}")
 
-    def test_override_still_allows_lock_leg(self, monkeypatch, repo_outside_any_repo):
+    def test_override_still_allows_lock_leg(self, monkeypatch: pytest.MonkeyPatch, repo_outside_any_repo) -> None:
         lock = os.path.join(repo_outside_any_repo, ".git", "index.lock")
         with open(lock, "w", encoding="utf-8") as fh:
             fh.write("")
@@ -403,7 +404,7 @@ class TestGitLockTarget:
 
 class TestWriteBumpMarkerTarget:
 
-    def test_marker_file_allowed(self, repo_outside_any_repo):
+    def test_marker_file_allowed(self, repo_outside_any_repo) -> None:
         marker = os.path.join(
             repo_outside_any_repo, ".git", "allow-xrepo-write-2fc859e3-abcd"
         )
@@ -411,20 +412,20 @@ class TestWriteBumpMarkerTarget:
             fh.write("")
         assert not _denied(f"rm -f {marker}")
 
-    def test_similarly_named_directory_still_denied(self, repo_outside_any_repo):
+    def test_similarly_named_directory_still_denied(self, repo_outside_any_repo) -> None:
         marker_dir = os.path.join(
             repo_outside_any_repo, ".git", "allow-xrepo-write-2fc859e3-abcd"
         )
         os.makedirs(marker_dir, exist_ok=True)
         assert _denied(f"rm -rf {marker_dir}")
 
-    def test_engine_cache_file_allowed(self, repo_outside_any_repo):
+    def test_engine_cache_file_allowed(self, repo_outside_any_repo) -> None:
         cache = os.path.join(repo_outside_any_repo, ".git", "claude-klabauter-records-query-cache.json")
         with open(cache, "w", encoding="utf-8") as fh:
             fh.write("{}")
         assert not _denied(f"rm -f {cache}")
 
-    def test_engine_cache_name_nested_or_dir_still_denied(self, repo_outside_any_repo):
+    def test_engine_cache_name_nested_or_dir_still_denied(self, repo_outside_any_repo) -> None:
         nested = os.path.join(repo_outside_any_repo, ".git", "refs", "claude-klabauter-x.json")
         os.makedirs(os.path.dirname(nested), exist_ok=True)
         with open(nested, "w", encoding="utf-8") as fh:
@@ -436,7 +437,7 @@ class TestWriteBumpMarkerTarget:
 
     def test_non_marker_store_target_keeps_original_irreversibility_message(
         self, repo_outside_any_repo
-    ):
+    ) -> None:
         head = os.path.join(repo_outside_any_repo, ".git", "HEAD")
         reason = _reason(f"rm -f {head}")
         assert "irreversibly" in reason
@@ -444,13 +445,13 @@ class TestWriteBumpMarkerTarget:
 
 
 class TestIsSameDir:
-    def test_distinct_directories_are_not_the_same(self, tmp_path):
+    def test_distinct_directories_are_not_the_same(self, tmp_path: Path) -> None:
         a, b = tmp_path / "a", tmp_path / "b"
         a.mkdir()
         b.mkdir()
         assert not _is_same_dir(str(a), str(b))
 
-    def test_symlink_alias_resolves_to_the_same_dir(self, tmp_path):
+    def test_symlink_alias_resolves_to_the_same_dir(self, tmp_path: Path) -> None:
         real = tmp_path / "real"
         real.mkdir()
         link = tmp_path / "link"
@@ -460,9 +461,9 @@ class TestIsSameDir:
             pytest.skip("symlink creation unavailable (Windows without developer mode)")
         assert _is_same_dir(str(link), str(real))
 
-    def test_missing_path_returns_false_rather_than_raising(self, tmp_path):
+    def test_missing_path_returns_false_rather_than_raising(self, tmp_path: Path) -> None:
         assert not _is_same_dir(str(tmp_path / "absent"), str(tmp_path))
 
     @pytest.mark.skipif(sys.platform == "win32", reason="POSIX device-node path")
-    def test_unstattable_operand_returns_false(self):
+    def test_unstattable_operand_returns_false(self) -> None:
         assert not _is_same_dir("\x00invalid", "/")

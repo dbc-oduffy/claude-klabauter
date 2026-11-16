@@ -6,10 +6,11 @@ import pytest
 
 from coordinator_core.ops.workflow_fire import headless
 from coordinator_core.warm import sandboxed_spawn
+from pathlib import Path
 
 
 @pytest.fixture
-def rig(tmp_path, monkeypatch):
+def rig(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     script = repo / "run.mjs"
@@ -22,12 +23,12 @@ def rig(tmp_path, monkeypatch):
     return script, repo
 
 
-def test_sandboxed_forwards_and_never_spawns(rig, monkeypatch):
+def test_sandboxed_forwards_and_never_spawns(rig, monkeypatch: pytest.MonkeyPatch) -> None:
     script, repo = rig
     seen = {}
     monkeypatch.setattr(sandboxed_spawn, "caller_is_sandboxed", lambda: True)
 
-    def forward(op, params, repo_arg):
+    def forward(op, params, repo_arg) -> dict[str, str]:
         seen.update(op=op, params=params, repo=repo_arg)
         return {"fire_id": "warm-record", "route": "warm"}
 
@@ -44,7 +45,7 @@ def test_sandboxed_forwards_and_never_spawns(rig, monkeypatch):
     assert not any(key.startswith("CODEX_SANDBOX") for key in params)
 
 
-def test_sandboxed_warm_miss_refuses_naming_cause_and_never_spawns(rig, monkeypatch):
+def test_sandboxed_warm_miss_refuses_naming_cause_and_never_spawns(rig, monkeypatch: pytest.MonkeyPatch) -> None:
     script, repo = rig
     monkeypatch.setattr(sandboxed_spawn, "caller_is_sandboxed", lambda: True)
 
@@ -58,7 +59,7 @@ def test_sandboxed_warm_miss_refuses_naming_cause_and_never_spawns(rig, monkeypa
     assert "sandbox" in str(info.value)
 
 
-def test_unsandboxed_takes_todays_path_and_never_forwards(rig, monkeypatch):
+def test_unsandboxed_takes_todays_path_and_never_forwards(rig, monkeypatch: pytest.MonkeyPatch) -> None:
     script, repo = rig
     monkeypatch.setattr(sandboxed_spawn, "caller_is_sandboxed", lambda: False)
 

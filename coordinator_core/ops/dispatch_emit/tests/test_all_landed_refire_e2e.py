@@ -30,6 +30,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 from coordinator_core.ops.dispatch_emit.ask_gate import _handler, gate
 from coordinator_core.ops.dispatch_emit.phase_ledger import RESUME_PHASES_FIELD
 from coordinator_core.ops.dispatch_emit.reply_sidecar import read_reply
+from coordinator_core.ops.dispatch_emit.tests._review_fixture import REVIEW_SIDECAR
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW, write_run_scripts
 from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import ACCEPTED, REL, _put, repo  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import (
@@ -53,6 +54,11 @@ _EM_ROWS = ("E1", "E2")
 _LANDED = {"committed": True, "sha": "abc1234", "error": None, "refused": None}
 _MET = {"items": [{"id": i, "status": "met", "wired": True} for i in _RULABLE]}
 _UNMET = {"items": [{"id": "T2", "status": "not_met", "essential": True, "remaining": ["the criterion is red"]}]}
+# The resume's landed A1/A2 code owes the review floor (review_floor.py); a carried prior-run verdict stands in
+# for the review wave this stubbed run never dispatches.
+_CARRIED_REVIEW = {
+    "slice_id": "s1", "verdict": "PASS", "findings": 0, "applied": 0, "sidecar_path": REVIEW_SIDECAR,
+}
 _NODE_PROGRAM = WORKFLOW_FAKE_JS + r"""
 const src = require('fs').readFileSync(process.env.SRC_FILE, 'utf8').replace(/^export const meta/m, 'const meta');
 const cfg = JSON.parse(process.env.CFG);

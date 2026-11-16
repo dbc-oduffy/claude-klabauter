@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -58,19 +59,19 @@ def _all_types() -> list[str]:
     return tf.available_template_types()
 
 
-def test_available_types_is_full_22_surface():
+def test_available_types_is_full_22_surface() -> None:
     assert len(_all_types()) == 22
 
 
 @pytest.mark.parametrize("doc_type", _all_types())
-def test_every_type_renders_without_error(doc_type):
+def test_every_type_renders_without_error(doc_type) -> None:
     output = render_document(doc_type, FULL_VALUES)
     assert isinstance(output, str)
     assert output != ""
 
 
 @pytest.mark.parametrize("doc_type", _all_types())
-def test_fence_shape_matches_frontmatter_style(doc_type):
+def test_fence_shape_matches_frontmatter_style(doc_type) -> None:
     template = tf.load_template(tf.templates_dir() / f"{doc_type.replace('-', '_')}.json")
     output = render_document(doc_type, FULL_VALUES)
     fence_count = sum(1 for line in output.split("\n") if line == "---")
@@ -83,19 +84,19 @@ def test_fence_shape_matches_frontmatter_style(doc_type):
         assert fence_count == 0, doc_type
 
 
-def test_present_as_null_absent_branch_defaults_to_null():
+def test_present_as_null_absent_branch_defaults_to_null() -> None:
     values = dict(FULL_VALUES)
     del values["deliverable_id"]
     output = render_document("handoff", values)
     assert "deliverable_id: null" in output.split("\n")
 
 
-def test_present_as_null_present_branch_quotes_value():
+def test_present_as_null_present_branch_quotes_value() -> None:
     output = render_document("handoff", FULL_VALUES)
     assert 'deliverable_id: "dlv-example-abcdef"' in output.split("\n")
 
 
-def test_present_as_null_custom_absent_literal():
+def test_present_as_null_custom_absent_literal() -> None:
     template = {
         "format_version": tf.FORMAT_VERSION,
         "doc_type": "custom-absent-literal-test",
@@ -119,19 +120,19 @@ def test_present_as_null_custom_absent_literal():
     assert "gate_dependency: PLACEHOLDER" in output.split("\n")
 
 
-def test_optional_omit_present_branch_emits_line():
+def test_optional_omit_present_branch_emits_line() -> None:
     output = render_document("handoff", FULL_VALUES)
     assert 'handoff_id: "hnd-example-abcdef"' in output.split("\n")
 
 
-def test_optional_omit_absent_branch_omits_key_entirely_when_no_comment():
+def test_optional_omit_absent_branch_omits_key_entirely_when_no_comment() -> None:
     values = dict(FULL_VALUES)
     del values["handoff_id"]
     output = render_document("handoff", values)
     assert not any(line.startswith("handoff_id") for line in output.split("\n"))
 
 
-def test_optional_omit_absent_branch_emits_absent_comment_when_declared():
+def test_optional_omit_absent_branch_emits_absent_comment_when_declared() -> None:
     values = dict(FULL_VALUES)
     del values["chain"]
     output = render_document("completion", values)
@@ -140,7 +141,7 @@ def test_optional_omit_absent_branch_emits_absent_comment_when_declared():
     assert not any(line.startswith("chain: example-chain") for line in lines)
 
 
-def test_list_emit_if_present_present_branch():
+def test_list_emit_if_present_present_branch() -> None:
     output = render_document("goal-seed", FULL_VALUES)
     lines = output.split("\n")
     idx = lines.index("origin_goal_id:")
@@ -148,21 +149,21 @@ def test_list_emit_if_present_present_branch():
     assert lines[idx + 2] == '  - "goal-two"'
 
 
-def test_list_emit_if_present_absent_branch_empty_list():
+def test_list_emit_if_present_absent_branch_empty_list() -> None:
     values = dict(FULL_VALUES)
     values["goals"] = []
     output = render_document("goal-seed", values)
     assert "origin_goal_id:" not in output.split("\n")
 
 
-def test_list_emit_if_present_absent_branch_missing_key():
+def test_list_emit_if_present_absent_branch_missing_key() -> None:
     values = dict(FULL_VALUES)
     del values["goals"]
     output = render_document("goal-seed", values)
     assert "origin_goal_id:" not in output.split("\n")
 
 
-def test_literal_placeholder_substitution_in_frontmatter():
+def test_literal_placeholder_substitution_in_frontmatter() -> None:
     output = render_document("goal", FULL_VALUES)
     assert '# goal_id: "goal-example-abcdef"' in output.split("\n")[-1:] or any(
         line.startswith("# goal_id: ") and "goal-example-abcdef" in line
@@ -170,17 +171,17 @@ def test_literal_placeholder_substitution_in_frontmatter():
     )
 
 
-def test_raw_body_placeholder_substitution():
+def test_raw_body_placeholder_substitution() -> None:
     output = render_document("plan", FULL_VALUES)
     assert "# Example Title" in output.split("\n")
 
 
-def test_escaped_double_brace_survives_as_literal_brace():
+def test_escaped_double_brace_survives_as_literal_brace() -> None:
     output = render_document("strategic-self-description", FULL_VALUES)
     assert "version_highlights: []  # optional; add {label, date, bullets, provenance} entries as dated milestones land" in output.split("\n")
 
 
-def test_yaml_quote_escaping_matches_oracle():
+def test_yaml_quote_escaping_matches_oracle() -> None:
     values = dict(FULL_VALUES)
     values["title"] = 'has "quotes" and a \\backslash\\ and\ta tab'
     output = render_document("handoff", values)
@@ -188,7 +189,7 @@ def test_yaml_quote_escaping_matches_oracle():
     assert first_line == 'title: "has \\"quotes\\" and a \\\\backslash\\\\ and\\ta tab"'
 
 
-def test_frontmatter_none_type_has_no_fences_or_field_lines():
+def test_frontmatter_none_type_has_no_fences_or_field_lines() -> None:
     template = {
         "format_version": tf.FORMAT_VERSION,
         "doc_type": "body-only-test",
@@ -200,31 +201,31 @@ def test_frontmatter_none_type_has_no_fences_or_field_lines():
     assert output.startswith("# Code Review: Slice slice-1 -- coordinator_core/ops/docgen/")
 
 
-def test_whole_document_style_has_no_fences():
+def test_whole_document_style_has_no_fences() -> None:
     output = render_document("goal", FULL_VALUES)
     assert "---" not in output
 
 
-def test_unknown_doc_type_raises_render_error():
+def test_unknown_doc_type_raises_render_error() -> None:
     with pytest.raises(RenderError):
         render_document("not-a-real-doc-type", FULL_VALUES)
 
 
-def test_missing_required_value_field_raises_render_error():
+def test_missing_required_value_field_raises_render_error() -> None:
     values = dict(FULL_VALUES)
     del values["title"]
     with pytest.raises(RenderError):
         render_document("handoff", values)
 
 
-def test_missing_literal_placeholder_raises_render_error():
+def test_missing_literal_placeholder_raises_render_error() -> None:
     values = dict(FULL_VALUES)
     del values["goal_id_quoted"]
     with pytest.raises(RenderError):
         render_document("goal", values)
 
 
-def test_render_template_accepts_in_memory_template_dict():
+def test_render_template_accepts_in_memory_template_dict() -> None:
     template = {
         "format_version": tf.FORMAT_VERSION,
         "doc_type": "inline-test",
@@ -240,14 +241,14 @@ def test_render_template_accepts_in_memory_template_dict():
     assert output == '---\ntitle: "Inline"\n---\n\nhello Inline'
 
 
-def test_render_document_does_not_mutate_input_mapping():
+def test_render_document_does_not_mutate_input_mapping() -> None:
     values = dict(FULL_VALUES)
     snapshot = dict(values)
     render_document("plan", values)
     assert values == snapshot
 
 
-def test_duplicate_doc_type_raises_render_error(tmp_path):
+def test_duplicate_doc_type_raises_render_error(tmp_path: Path) -> None:
     import json
 
     template = {
@@ -263,13 +264,13 @@ def test_duplicate_doc_type_raises_render_error(tmp_path):
 
 
 @pytest.mark.parametrize("doc_type", ["goal-seed", "roadmap-seed"])
-def test_awaiting_gate_seed_types_omit_pickup_ready_true(doc_type):
+def test_awaiting_gate_seed_types_omit_pickup_ready_true(doc_type) -> None:
     output = render_document(doc_type, FULL_VALUES)
     assert "pickup_ready: true" not in output
 
 
 @pytest.mark.parametrize("doc_type", ["handoff", "recovery", "spinoff"])
-def test_ready_to_fire_arms_still_scaffold_pickup_ready_true(doc_type):
+def test_ready_to_fire_arms_still_scaffold_pickup_ready_true(doc_type) -> None:
     output = render_document(doc_type, FULL_VALUES)
     assert "pickup_ready: true" in output
 
@@ -298,6 +299,6 @@ _SEED_TYPES = ["goal-seed", "roadmap-seed", "roadmap-baton"]
 
 
 @pytest.mark.parametrize("doc_type", _SEED_TYPES)
-def test_seed_templates_never_scaffold_a_hardcoded_ready_to_fire(doc_type):
+def test_seed_templates_never_scaffold_a_hardcoded_ready_to_fire(doc_type) -> None:
     output = render_document(doc_type, FULL_VALUES)
     assert "deployment_state: ready_to_fire" not in output

@@ -9,6 +9,7 @@ from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
 from coordinator_core.ops.review_mint.execute_review import criterion_judge_brief
 from coordinator_core.ops.review_mint.tests.test_execute_review import _STAGE_SCHEMAS, _judge_review
 from coordinator_core.ops.tests.test_review_stamp_superseding_record import _git, _record, _repo
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -19,7 +20,7 @@ def _criterion(status):
     return {"status": status, "observation": "o", "sidecar": None}
 
 
-def _run(tmp_path, criterion_status):
+def _run(tmp_path, criterion_status) -> tuple[Path, Path]:
     repo = _repo(tmp_path)
     record = _record(
         repo, _git(repo, "rev-parse", "HEAD"), delivery=_PASS, criterion=_criterion(criterion_status),
@@ -29,7 +30,7 @@ def _run(tmp_path, criterion_status):
 
 
 @pytest.mark.parametrize("status", ["not_met", "indeterminate"])
-def test_delivery_pass_with_unsettled_criterion_is_allowed(tmp_path, monkeypatch, status):
+def test_delivery_pass_with_unsettled_criterion_is_allowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, status) -> None:
     repo, record = _run(tmp_path, status)
     _, claims = rd.prior_unbacked_claims(record)
     assert claims == []
@@ -45,7 +46,7 @@ def test_delivery_pass_with_unsettled_criterion_is_allowed(tmp_path, monkeypatch
     assert "python3" in text and "criterion" in text
 
 
-def test_writer_statuses_are_binary_and_reject_indeterminate(tmp_path):
+def test_writer_statuses_are_binary_and_reject_indeterminate(tmp_path: Path) -> None:
     assert rd._CRITERION_STATUSES == ("met", "not_met")
     with pytest.raises(rd.ReverifyRefused):
         rd.record_criterion_rejudge(
@@ -54,26 +55,26 @@ def test_writer_statuses_are_binary_and_reject_indeterminate(tmp_path):
         )
 
 
-def test_legacy_indeterminate_reads_as_not_met():
+def test_legacy_indeterminate_reads_as_not_met() -> None:
     assert rd._criterion_unsettled({"criterion": {"status": "indeterminate"}})
     assert rd._read_criterion_status("indeterminate") == "not_met"
     assert rd._read_criterion_status("met") == "met"
 
 
-def test_delivery_pass_with_met_criterion_is_refused(tmp_path):
+def test_delivery_pass_with_met_criterion_is_refused(tmp_path: Path) -> None:
     _, record = _run(tmp_path, "met")
     with pytest.raises(rd.ReverifyRefused):
         rd.prior_unbacked_claims(record)
 
 
-def test_delivery_fail_still_returns_its_claims(tmp_path):
+def test_delivery_fail_still_returns_its_claims(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     fail = {"verdict": "FAIL", "unbacked": [{"claim": "c", "anchor": "a"}]}
     record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery=fail)
     assert rd.prior_unbacked_claims(record)[1] == [{"claim": "c", "anchor": "a"}]
 
 
-def test_judge_preamble_names_the_python_interpreter(tmp_path):
+def test_judge_preamble_names_the_python_interpreter(tmp_path: Path) -> None:
     plan = tmp_path / "p.md"
     plan.write_text("# p\n", encoding="utf-8")
     prompt, _ = criterion_judge_brief(
@@ -84,7 +85,7 @@ def test_judge_preamble_names_the_python_interpreter(tmp_path):
 
 
 @pytest.mark.usefixtures("verifier_roster")
-def test_recorded_row_evidence_reaches_the_verifier_and_the_judge(tmp_path, monkeypatch):
+def test_recorded_row_evidence_reaches_the_verifier_and_the_judge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     fail = {"verdict": "FAIL", "unbacked": [{"claim": "timing", "anchor": "unmeasured"}]}
     record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery=fail)
@@ -102,7 +103,7 @@ def test_recorded_row_evidence_reaches_the_verifier_and_the_judge(tmp_path, monk
     assert "row_evidence: docs/plans/p.evidence.yaml" in text
 
 
-def test_no_recorded_evidence_names_no_sidecar(tmp_path, monkeypatch):
+def test_no_recorded_evidence_names_no_sidecar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     fail = {"verdict": "FAIL", "unbacked": [{"claim": "c", "anchor": "a"}]}
     record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery=fail)

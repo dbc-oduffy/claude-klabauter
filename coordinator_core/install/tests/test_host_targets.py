@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core.install import host_targets
 from coordinator_core.install.host_targets import HOSTS, HostPlan, plan, resolve_home
+from pathlib import Path
 
 
 def _exe_name(name):
@@ -21,24 +22,24 @@ def _env(tmp_path, **extra):
     return env
 
 
-def test_hosts_constant():
+def test_hosts_constant() -> None:
     assert HOSTS == ("codex", "agy")
 
 
-def test_unknown_host_rejected(tmp_path):
+def test_unknown_host_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         plan("gemini", tmp_path, _env(tmp_path))
 
 
 @pytest.mark.parametrize("platform,key", [("win32", "USERPROFILE"), ("darwin", "HOME"), ("linux", "HOME")])
-def test_resolve_home_key_per_platform(tmp_path, platform, key):
+def test_resolve_home_key_per_platform(tmp_path: Path, platform, key) -> None:
     other = "HOME" if key == "USERPROFILE" else "USERPROFILE"
     env = {key: str(tmp_path / "right"), other: str(tmp_path / "wrong")}
     assert resolve_home(env, platform) == tmp_path / "right"
 
 
 @pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])
-def test_codex_paths_from_home(tmp_path, platform):
+def test_codex_paths_from_home(tmp_path: Path, platform) -> None:
     p = plan("codex", None, _env(tmp_path, HOME=str(tmp_path), USERPROFILE=str(tmp_path)), platform)
     assert isinstance(p, HostPlan)
     assert p.config_path == tmp_path / ".codex" / "config.toml"
@@ -47,7 +48,7 @@ def test_codex_paths_from_home(tmp_path, platform):
     assert p.changes and p.host_provides and p.unreachable
 
 
-def test_codex_home_env_wins(tmp_path):
+def test_codex_home_env_wins(tmp_path: Path) -> None:
     ch = tmp_path / "elsewhere"
     p = plan("codex", tmp_path, _env(tmp_path, CODEX_HOME=str(ch)))
     assert p.config_path == ch / "config.toml"
@@ -55,7 +56,7 @@ def test_codex_home_env_wins(tmp_path):
 
 
 @pytest.mark.parametrize("platform", ["win32", "darwin", "linux"])
-def test_agy_paths_from_home(tmp_path, platform):
+def test_agy_paths_from_home(tmp_path: Path, platform) -> None:
     p = plan("agy", tmp_path, _env(tmp_path), platform)
     assert p.config_path == tmp_path / ".gemini" / "config" / "mcp_config.json"
     assert p.hooks_path == tmp_path / ".gemini" / "config" / "hooks.json"
@@ -63,19 +64,19 @@ def test_agy_paths_from_home(tmp_path, platform):
 
 
 @pytest.mark.parametrize("host", ["codex", "agy"])
-def test_plan_names_no_hooks_fragment(tmp_path, host):
+def test_plan_names_no_hooks_fragment(tmp_path: Path, host) -> None:
     p = plan(host, tmp_path, _env(tmp_path))
     assert not hasattr(p, "hooks_fragment")
     assert not any("fragment" in c for c in p.changes)
 
 
-def test_binary_absent_is_none(tmp_path):
+def test_binary_absent_is_none(tmp_path: Path) -> None:
     env = _env(tmp_path)
     assert plan("agy", tmp_path, env).binary is None
     assert plan("codex", tmp_path, env, "linux").binary is None
 
 
-def test_agy_binary_found_on_path(tmp_path):
+def test_agy_binary_found_on_path(tmp_path: Path) -> None:
     bindir = tmp_path / "bin"
     bindir.mkdir()
     exe = bindir / _exe_name("agy")
@@ -84,7 +85,7 @@ def test_agy_binary_found_on_path(tmp_path):
     assert os.path.normcase(plan("agy", tmp_path, {"PATH": str(bindir)}).binary) == os.path.normcase(str(exe))
 
 
-def test_codex_binary_via_resolve_codex(tmp_path, monkeypatch):
+def test_codex_binary_via_resolve_codex(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fnm = "/x/fnm/node-versions/v24/installation"
     codex_js = f"{fnm}/lib/node_modules/@openai/codex/bin/codex.js"
     monkeypatch.setattr(host_targets, "resolve_codex", lambda platform, env: [f"{fnm}/bin/node", codex_js])
@@ -93,12 +94,12 @@ def test_codex_binary_via_resolve_codex(tmp_path, monkeypatch):
     assert not binary.endswith("/node")
 
 
-def test_codex_single_element_argv_reports_that_codex(tmp_path, monkeypatch):
+def test_codex_single_element_argv_reports_that_codex(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(host_targets, "resolve_codex", lambda platform, env: ["/usr/bin/codex"])
     assert plan("codex", tmp_path, _env(tmp_path)).binary == "/usr/bin/codex"
 
 
-def test_codex_falls_back_to_which_when_resolver_misses(tmp_path, monkeypatch):
+def test_codex_falls_back_to_which_when_resolver_misses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     bindir = tmp_path / "bin"
     bindir.mkdir()
     exe = bindir / _exe_name("codex")
@@ -112,7 +113,7 @@ def test_codex_falls_back_to_which_when_resolver_misses(tmp_path, monkeypatch):
     assert os.path.normcase(plan("codex", tmp_path, {"PATH": str(bindir)}).binary) == os.path.normcase(str(exe))
 
 
-def test_plan_writes_nothing(tmp_path):
+def test_plan_writes_nothing(tmp_path: Path) -> None:
     env = _env(tmp_path)
     plan("codex", tmp_path, env)
     plan("agy", tmp_path, env)

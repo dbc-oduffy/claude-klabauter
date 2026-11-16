@@ -21,6 +21,7 @@ import pytest
 
 import coordinator_core.baton_assemble as ba
 from coordinator_core.test_baton_assemble import _FAKE_OPERATOR_CONFIG, _write_artifact
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -29,19 +30,19 @@ pytestmark = [
 
 
 @pytest.fixture(autouse=True)
-def _stub_operator_config(monkeypatch):
+def _stub_operator_config(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
 
 
 class TestJSpinoffPlanSizingEmittedOnlyForSpinoff:
-    def test_emitted_on_a_bare_slug_spinoff_mint(self, tmp_path):
+    def test_emitted_on_a_bare_slug_spinoff_mint(self, tmp_path: Path) -> None:
         decision = ba.brief(
             "spinoff", "a-fresh-mint-slug-c7", repo_root=tmp_path
         ).decision_object
         ids = {jp["id"] for jp in decision["judgment_points"]}
         assert "j-spinoff-plan-sizing" in ids, ids
 
-    def test_absent_on_a_handoff_kind_brief(self, tmp_path):
+    def test_absent_on_a_handoff_kind_brief(self, tmp_path: Path) -> None:
         artifact = _write_artifact(
             tmp_path / "state" / "handoffs" / "h1.md",
             ["deliverable_id: DEL-C7-HANDOFF", "initiative: init-c7"],
@@ -54,7 +55,7 @@ class TestJSpinoffPlanSizingEmittedOnlyForSpinoff:
 
 
 class TestJSpinoffPlanSizingDispositions:
-    def test_advertises_associate_and_none_only(self, tmp_path):
+    def test_advertises_associate_and_none_only(self, tmp_path: Path) -> None:
         decision = ba.brief(
             "spinoff", "a-fresh-mint-slug-c7", repo_root=tmp_path
         ).decision_object
@@ -64,7 +65,7 @@ class TestJSpinoffPlanSizingDispositions:
         values = {d["value"] for d in jp["dispositions"]}
         assert values == {"associate", "none"}
 
-    def test_none_disposition_resolves_nothing_and_carries_guidance(self, tmp_path):
+    def test_none_disposition_resolves_nothing_and_carries_guidance(self, tmp_path: Path) -> None:
         decision = ba.brief(
             "spinoff", "a-fresh-mint-slug-c7", repo_root=tmp_path
         ).decision_object
@@ -75,7 +76,7 @@ class TestJSpinoffPlanSizingDispositions:
         assert none_disposition["resolves"] == []
         assert none_disposition.get("guidance")
 
-    def test_associate_disposition_carries_guidance_and_resolves_nothing(self, tmp_path):
+    def test_associate_disposition_carries_guidance_and_resolves_nothing(self, tmp_path: Path) -> None:
         decision = ba.brief(
             "spinoff", "a-fresh-mint-slug-c7", repo_root=tmp_path
         ).decision_object
@@ -88,7 +89,7 @@ class TestJSpinoffPlanSizingDispositions:
         assert associate_disposition["resolves"] == []
         assert associate_disposition.get("guidance")
 
-    def test_carries_no_recommendation(self, tmp_path):
+    def test_carries_no_recommendation(self, tmp_path: Path) -> None:
         decision = ba.brief(
             "spinoff", "a-fresh-mint-slug-c7", repo_root=tmp_path
         ).decision_object
@@ -113,7 +114,7 @@ class TestJSpinoffPlanSizingAnswerReachesTheMint:
         d1c = [d for d in decision["directives"] if d["id"] == "d1c"]
         return d1c[0]["args"] if d1c else None
 
-    def test_associate_stamps_governing_plan_onto_the_mint(self, tmp_path):
+    def test_associate_stamps_governing_plan_onto_the_mint(self, tmp_path: Path) -> None:
         decision = ba.brief(
             "spinoff",
             "a-fresh-mint-slug-c7",
@@ -130,7 +131,7 @@ class TestJSpinoffPlanSizingAnswerReachesTheMint:
         assert args is not None, decision["directives"]
         assert "--governing-plan=docs/plans/2026-09-04-some-plan.md" in args
 
-    def test_associate_stamps_sizing_object_onto_the_mint(self, tmp_path):
+    def test_associate_stamps_sizing_object_onto_the_mint(self, tmp_path: Path) -> None:
         decision = ba.brief(
             "spinoff",
             "a-fresh-mint-slug-c7",
@@ -146,7 +147,7 @@ class TestJSpinoffPlanSizingAnswerReachesTheMint:
         assert args is not None, decision["directives"]
         assert "--sizing-object=state/sizings/2026-09-04-some-ask.yaml" in args
 
-    def test_none_disposition_stamps_nothing(self, tmp_path):
+    def test_none_disposition_stamps_nothing(self, tmp_path: Path) -> None:
         decision = ba.brief(
             "spinoff",
             "a-fresh-mint-slug-c7",
@@ -155,7 +156,7 @@ class TestJSpinoffPlanSizingAnswerReachesTheMint:
         ).decision_object
         assert self._d1c_args(decision) is None
 
-    def test_associate_naming_nothing_fails_loud(self, tmp_path):
+    def test_associate_naming_nothing_fails_loud(self, tmp_path: Path) -> None:
         with pytest.raises(ValueError, match="at least one of governing_plan"):
             ba.brief(
                 "spinoff",
@@ -169,7 +170,7 @@ class TestJSpinoffPlanSizingAnswerReachesTheMint:
                 },
             )
 
-    def test_associate_on_a_handoff_kind_fails_loud(self, tmp_path):
+    def test_associate_on_a_handoff_kind_fails_loud(self, tmp_path: Path) -> None:
         artifact = _write_artifact(
             tmp_path / "state" / "handoffs" / "h1.md",
             ["deliverable_id: DEL-C7-HANDOFF", "initiative: init-c7"],

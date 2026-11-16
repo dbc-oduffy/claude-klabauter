@@ -14,13 +14,19 @@ from coordinator_core import warp_fire
 from coordinator_core.hooks import submit_engine_ask as mod
 from coordinator_core.ops import baton_pm_turns as PT
 from coordinator_core.session_baton import store
+from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import Popen
 
 BUDGET_MS = 500.0
 SID = "sid-submit-fan-budget"
 ASKS = 14
 
 
-def test_a_fourteen_ask_submission_is_under_the_bar_with_no_spawn_beyond_the_fanout(tmp_path, monkeypatch):
+def test_a_fourteen_ask_submission_is_under_the_bar_with_no_spawn_beyond_the_fanout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for name in ("CLAUDE_CODE_REMOTE", "CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_CONTAINER_ID",
                  "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_PLUGIN_ROOT", "DELIVERABLE_ID"):
         monkeypatch.delenv(name, raising=False)
@@ -37,7 +43,7 @@ def test_a_fourteen_ask_submission_is_under_the_bar_with_no_spawn_beyond_the_fan
     spawns: list = []
     real_popen = subprocess.Popen
 
-    def counting_popen(*a, **k):
+    def counting_popen(*a, **k) -> Popen[str]:
         spawns.append(a)
         return real_popen(*a, **k)
 

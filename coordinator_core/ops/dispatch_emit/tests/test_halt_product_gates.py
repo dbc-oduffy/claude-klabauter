@@ -11,6 +11,7 @@ from coordinator_core.git import git_objects
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as contract
 from coordinator_core.ops.dispatch_emit import co_declared_settle, halt_product_gates, halted_hunk_attribution as hha, peer_hunk_gate
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -36,13 +37,13 @@ def _gate(tmp_path, monkeypatch, settled):
     return out, prov
 
 
-def test_a_settled_co_declared_path_clears_the_gate(tmp_path, monkeypatch):
+def test_a_settled_co_declared_path_clears_the_gate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out, prov = _gate(tmp_path, monkeypatch, {"DELIVERY.md"})
     assert out == {}
     assert prov == [("src/a.py", peer_hunk_gate.PEER_HUNKS_CO_DECLARED, SIB)]
 
 
-def test_a_path_settle_keeps_held_is_provenance_not_a_refusal(tmp_path, monkeypatch):
+def test_a_path_settle_keeps_held_is_provenance_not_a_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out, prov = _gate(tmp_path, monkeypatch, set())
     assert out == {}
     assert prov == [
@@ -51,12 +52,12 @@ def test_a_path_settle_keeps_held_is_provenance_not_a_refusal(tmp_path, monkeypa
     ]
 
 
-def _text(n, edits=None):
+def _text(n, edits=None) -> str:
     edits = edits or {}
     return "".join(f"{edits.get(i, f'line{i}')}\n" for i in range(1, n + 1))
 
 
-def _git(root, *args):
+def _git(root, *args) -> None:
     subprocess.run(
         ["git", *args], cwd=root, check=True, capture_output=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -64,7 +65,7 @@ def _git(root, *args):
 
 
 @pytest.fixture
-def real_world(tmp_path, monkeypatch):
+def real_world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A repo with DELIVERY.md at HEAD, two same-parent siblings, and only the peer-hold lookup stubbed."""
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@t")
@@ -83,20 +84,20 @@ def real_world(tmp_path, monkeypatch):
         rel.parent.mkdir(parents=True, exist_ok=True)
         rel.write_text(json.dumps({"parent_id": PARENT}))
 
-    def baseline(run, text):
+    def baseline(run, text) -> None:
         sha = git_objects.write_object(resolve_git_common_dir(tmp_path), b"blob", text.encode())
         baselines.setdefault(run, {})[DELIVERY] = sha
 
     return tmp_path, baseline
 
 
-def _run_gate(root):
+def _run_gate(root) -> dict[str, str]:
     return halt_product_gates.gate_halt_product(
         root, RUN, [DELIVERY], [], {DELIVERY: "C1"}, [DELIVERY], plan=None,
     )
 
 
-def test_live_sibling_disjoint_delivery_hunks_clear_the_gate_through_the_real_settle(real_world):
+def test_live_sibling_disjoint_delivery_hunks_clear_the_gate_through_the_real_settle(real_world) -> None:
     root, baseline = real_world
     (root / DELIVERY).write_text(_text(10, {2: "mine", 9: "theirs"}))
     baseline(RUN, _text(10, {9: "theirs"}))
@@ -106,7 +107,7 @@ def test_live_sibling_disjoint_delivery_hunks_clear_the_gate_through_the_real_se
     assert peer_hunk_gate.PEER_HUNKS_CO_DECLARED not in out.values()
 
 
-def test_live_sibling_overlapping_delivery_hunks_are_recorded_as_co_declared_provenance(real_world):
+def test_live_sibling_overlapping_delivery_hunks_are_recorded_as_co_declared_provenance(real_world) -> None:
     root, baseline = real_world
     (root / DELIVERY).write_text(_text(10, {3: "both"}))
     baseline(RUN, _text(10))

@@ -2,11 +2,12 @@
 from __future__ import annotations
 
 import importlib.util
-import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+
+from coordinator_core.testing.tmp_git_repo import init_tmp_git_repo
 
 pytestmark = [
     pytest.mark.cadence,
@@ -14,7 +15,6 @@ pytestmark = [
 ]
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
-_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _init_git_repo(root: Path) -> None:
@@ -29,26 +29,7 @@ def _init_git_repo(root: Path) -> None:
     # be asserting by accident.
     if (root / ".git").is_dir():
         return
-    def _git(*args: str) -> None:
-        subprocess.run(
-            ["git", *args],
-            cwd=str(root),
-            capture_output=True,
-            check=True,
-            creationflags=_NO_WINDOW,
-        )
-
-    _git("init", "-b", "main")
-    _git("config", "user.email", "publish-row-failure-aggregates-gates-test@claude-klabauter.test")
-    _git("config", "user.name", "Publish Row Failure Aggregates Gates Test")
-    _git("config", "commit.gpgsign", "false")
-    keeper = root / ".gitkeep"
-    keeper.write_text("", encoding="utf-8")
-    _git("add", ".gitkeep")
-    _git("commit", "-m", "chore: init")
-    _git("remote", "add", "origin", str(root))
-    _git("fetch", "--no-tags", "origin")
-    _git("branch", "--set-upstream-to=origin/main", "main")
+    init_tmp_git_repo(root, identity="publish-row-failure-aggregates-gates-test")
 
 
 def _load_publish_module():

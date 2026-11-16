@@ -16,40 +16,40 @@ def _manifest() -> dict:
     return contract.parse_manifest_yaml(FIXTURE.read_text(encoding="utf-8"))
 
 
-def test_minimal_fixture_validates_from_object_and_yaml_string():
+def test_minimal_fixture_validates_from_object_and_yaml_string() -> None:
     assert contract.validate_manifest(_manifest())["job_id"] == "demo-job"
     assert contract.validate_manifest(FIXTURE.read_text(encoding="utf-8"))["job_id"] == "demo-job"
 
 
-def test_plan_permission_mode_refused():
+def test_plan_permission_mode_refused() -> None:
     m = _manifest()
     m["permission_mode"] = "plan"
     with pytest.raises(ValueError, match=r"\$\.permission_mode"):
         contract.validate_manifest(m)
 
 
-def test_duplicate_worker_id_refused():
+def test_duplicate_worker_id_refused() -> None:
     m = _manifest()
     m["workers"].append(copy.deepcopy(m["workers"][0]))
     with pytest.raises(ValueError, match=r"workers\[1\]\.id"):
         contract.validate_manifest(m)
 
 
-def test_missing_parent_channel_pr_url_refused():
+def test_missing_parent_channel_pr_url_refused() -> None:
     m = _manifest()
     del m["parent"]["channel_pr_url"]
     with pytest.raises(ValueError, match="channel_pr_url"):
         contract.validate_manifest(m)
 
 
-def test_comms_repo_required_for_pr_channel():
+def test_comms_repo_required_for_pr_channel() -> None:
     m = _manifest()
     del m["comms_repo"]
     with pytest.raises(ValueError, match="comms_repo"):
         contract.validate_manifest(m)
 
 
-def test_focus_required_and_repos_shaped():
+def test_focus_required_and_repos_shaped() -> None:
     m = _manifest()
     m["workers"][0]["focus"] = "not-a-key"
     with pytest.raises(ValueError, match="focus"):
@@ -59,21 +59,21 @@ def test_focus_required_and_repos_shaped():
         contract.validate_manifest(m)
 
 
-def test_worker_id_slug_pattern():
+def test_worker_id_slug_pattern() -> None:
     m = _manifest()
     m["workers"][0]["id"] = "Bad:Id"
     with pytest.raises(ValueError, match=r"workers\[0\]\.id"):
         contract.validate_manifest(m)
 
 
-def test_invalid_yaml_and_non_object_refused():
+def test_invalid_yaml_and_non_object_refused() -> None:
     with pytest.raises(ValueError):
         contract.validate_manifest("a: [unclosed")
     with pytest.raises(ValueError):
         contract.validate_manifest("- just\n- a list\n")
 
 
-def test_roster_extends_and_never_shrinks():
+def test_roster_extends_and_never_shrinks() -> None:
     m = _manifest()
     worker = m["workers"][0]
     assert tuple(contract.effective_roster(m, worker)) == contract.STANDARD_CHILD_ROSTER
@@ -87,7 +87,7 @@ def test_roster_extends_and_never_shrinks():
     assert contract.load_schema()["additionalProperties"] is False
 
 
-def test_tag_builders_deterministic_and_ordered():
+def test_tag_builders_deterministic_and_ordered() -> None:
     m = _manifest()
     m["workers"][0]["tags"] = ["custom", "fanout:demo-job"]
     tags = contract.worker_tags(m, m["workers"][0])
@@ -102,11 +102,11 @@ def test_tag_builders_deterministic_and_ordered():
     assert contract.session_title("j", "w") == contract.idempotency_key("j", "w") == "j/w"
 
 
-def test_create_session_arg_keys_match_typeddict():
+def test_create_session_arg_keys_match_typeddict() -> None:
     assert set(contract.CREATE_SESSION_ARG_KEYS) == set(contract.CreateSessionArgs.__annotations__)
 
 
-def test_parse_checkin_accepts_exact_line_and_rejects_near_misses():
+def test_parse_checkin_accepts_exact_line_and_rejects_near_misses() -> None:
     t = transport.for_channel("pr")
     assert t.parse_checkin("[session abc-1] channel: https://example.invalid/c/pull/2") == (
         "abc-1",
@@ -125,13 +125,13 @@ def test_parse_checkin_accepts_exact_line_and_rejects_near_misses():
         assert t.parse_checkin(bad) is None
 
 
-def test_broadcast_target_requires_checkin():
+def test_broadcast_target_requires_checkin() -> None:
     t = transport.for_channel("pr")
     assert t.broadcast_target({"checked_in": True, "channel_url": "https://example.invalid/u"}) == "https://example.invalid/u"
     assert t.broadcast_target({"checked_in": False, "channel_url": "https://example.invalid/u"}) is None
 
 
-def test_child_prompt_block_names_parent_and_checkin_shape():
+def test_child_prompt_block_names_parent_and_checkin_shape() -> None:
     m = _manifest()
     block = transport.for_channel("pr").child_prompt_block(m, m["workers"][0])
     assert m["parent"]["channel_pr_url"] in block
@@ -139,6 +139,6 @@ def test_child_prompt_block_names_parent_and_checkin_shape():
     assert "[session <your-session-id>] channel: <your-channel-pr-url>" in block
 
 
-def test_unknown_channel_refused():
+def test_unknown_channel_refused() -> None:
     with pytest.raises(ValueError):
         transport.for_channel("slack")

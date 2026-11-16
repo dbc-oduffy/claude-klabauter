@@ -447,3 +447,96 @@ def test_main_exits_zero_and_untouched_when_election_lost(
     assert supervisor.main() == 0
     assert written == []
     assert supervisor.read_discovery(tmp_path) is None
+
+
+def test_start_basetemp_sweeper_calls_start_sweeper_and_swallows_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from coordinator_core.warm import pytest_basetemp_sweep as sw
+
+    calls: list[int] = []
+    monkeypatch.setattr(sw, "start_sweeper", lambda: calls.append(1))
+    supervisor._start_basetemp_sweeper()
+    assert calls == [1]
+
+    def boom():
+        raise RuntimeError("no thread")
+
+    monkeypatch.setattr(sw, "start_sweeper", boom)
+    supervisor._start_basetemp_sweeper()
+
+
+def test_main_serve_path_starts_the_basetemp_sweeper_before_serving(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import http.server
+
+    from coordinator_core.warm import pytest_basetemp_sweep as sw
+
+    events: list[str] = []
+
+    class _FakeHttpd:
+        server_address = ("127.0.0.1", 4242)
+        RequestHandlerClass = None
+
+        def __init__(self, *_a, **_kw) -> None:
+            pass
+
+        def serve_forever(self) -> None:
+            events.append("serve")
+
+    class _FakeCtx:
+        def __init__(self, **_kw) -> None:
+            pass
+
+        def _skew_watchdog_loop(self) -> None:
+            return
+
+        def ctx_shutdown(self) -> None:
+            events.append("shutdown")
+
+    monkeypatch.setattr(supervisor, "_default_engine_clone", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "engine_root_divergence_message", lambda _root: None)
+    monkeypatch.setattr(supervisor.idle, "ladder_gone_tombstoned", lambda _root: False)
+    monkeypatch.setattr(supervisor.breadcrumb, "publish_marker_blocks_boot", lambda _d: False)
+    monkeypatch.setattr(supervisor, "_elect_supervisor_slot", lambda _root: object())
+    monkeypatch.setattr(supervisor, "_log_priority_boost", lambda *_a: None)
+    monkeypatch.setattr(supervisor, "_raise_worker_priority", lambda *_a: False)
+    monkeypatch.setattr(supervisor, "_assert_credential_ready", lambda _root: None)
+    monkeypatch.setattr(supervisor.skew, "ServerVersionState", lambda _root: object())
+    monkeypatch.setattr(supervisor.skew, "compute_client_token", lambda _root: "tok")
+    monkeypatch.setattr(supervisor, "_declare_execution_route", lambda: None)
+    monkeypatch.setattr(supervisor, "_ServerContext", _FakeCtx)
+    monkeypatch.setattr(supervisor, "_make_handler", lambda _ctx: object)
+    monkeypatch.setattr(supervisor, "write_discovery", lambda **_kw: None)
+    monkeypatch.setattr(http.server, "ThreadingHTTPServer", _FakeHttpd)
+    monkeypatch.setattr(sw, "start_sweeper", lambda: events.append("sweeper"))
+
+    assert supervisor.main() == 0
+    assert events == ["sweeper", "serve", "shutdown"]
+
+
+def test_main_refusing_the_credential_never_starts_the_basetemp_sweeper(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coordinator_core.warm import cookie
+    from coordinator_core.warm import pytest_basetemp_sweep as sw
+
+    started: list[int] = []
+
+    def _refuse(_root) -> None:
+        raise cookie.DirectoryNotPrivateError("not private")
+
+    monkeypatch.setattr(supervisor, "_default_engine_clone", lambda: tmp_path)
+    monkeypatch.setattr(supervisor, "engine_root_divergence_message", lambda _root: None)
+    monkeypatch.setattr(supervisor.idle, "ladder_gone_tombstoned", lambda _root: False)
+    monkeypatch.setattr(supervisor.breadcrumb, "publish_marker_blocks_boot", lambda _d: False)
+    monkeypatch.setattr(supervisor, "_elect_supervisor_slot", lambda _root: object())
+    monkeypatch.setattr(supervisor, "_log_priority_boost", lambda *_a: None)
+    monkeypatch.setattr(supervisor, "_raise_worker_priority", lambda *_a: False)
+    monkeypatch.setattr(supervisor, "_release_election_handle", lambda _h: None)
+    monkeypatch.setattr(supervisor, "_assert_credential_ready", _refuse)
+    monkeypatch.setattr(sw, "start_sweeper", lambda: started.append(1))
+
+    assert supervisor.main() == 3
+    assert started == []

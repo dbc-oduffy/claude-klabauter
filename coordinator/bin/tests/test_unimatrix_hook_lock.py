@@ -7,9 +7,13 @@ import sys
 import time
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 
-def _hook():
+def _hook() -> "ModuleType":
     import importlib.util
     script = Path(__file__).resolve().parents[1] / "unimatrix-codex-hook-sessionstart.py"
     spec = importlib.util.spec_from_file_location("hook_under_test", script)
@@ -25,7 +29,7 @@ ROWS = [
 ]
 
 
-def test_drop_peer_rows_removes_only_named_agy_targets_and_keeps_the_rest(tmp_path):
+def test_drop_peer_rows_removes_only_named_agy_targets_and_keeps_the_rest(tmp_path: Path) -> None:
     hook = _hook()
     peers = tmp_path / "peers.json"
     peers.write_text(json.dumps(ROWS))
@@ -33,7 +37,7 @@ def test_drop_peer_rows_removes_only_named_agy_targets_and_keeps_the_rest(tmp_pa
     assert json.loads(peers.read_text()) == ROWS[1:]
 
 
-def test_drop_peer_rows_preserves_the_peers_container_shape(tmp_path):
+def test_drop_peer_rows_preserves_the_peers_container_shape(tmp_path: Path) -> None:
     hook = _hook()
     peers = tmp_path / "peers.json"
     peers.write_text(json.dumps({"version": 2, "peers": ROWS}))
@@ -41,7 +45,7 @@ def test_drop_peer_rows_preserves_the_peers_container_shape(tmp_path):
     assert json.loads(peers.read_text()) == {"version": 2, "peers": ROWS[1:]}
 
 
-def test_drop_peer_rows_writes_nothing_when_nothing_matches(tmp_path):
+def test_drop_peer_rows_writes_nothing_when_nothing_matches(tmp_path: Path) -> None:
     hook = _hook()
     peers = tmp_path / "peers.json"
     peers.write_text(json.dumps(ROWS))
@@ -52,7 +56,7 @@ def test_drop_peer_rows_writes_nothing_when_nothing_matches(tmp_path):
 
 
 @pytest.mark.parametrize("content", ["{not json", '{"peers": "x"}', '"str"'])
-def test_drop_peer_rows_never_writes_an_unparseable_or_non_list_file(tmp_path, content):
+def test_drop_peer_rows_never_writes_an_unparseable_or_non_list_file(tmp_path: Path, content) -> None:
     hook = _hook()
     peers = tmp_path / "peers.json"
     peers.write_text(content)
@@ -60,13 +64,13 @@ def test_drop_peer_rows_never_writes_an_unparseable_or_non_list_file(tmp_path, c
     assert peers.read_text() == content
 
 
-def test_drop_peer_rows_missing_file_is_a_noop(tmp_path):
+def test_drop_peer_rows_missing_file_is_a_noop(tmp_path: Path) -> None:
     hook = _hook()
     assert hook.drop_peer_rows(tmp_path / "peers.json", {"dead-1"}) == []
     assert not (tmp_path / "peers.json").exists()
 
 
-def test_drop_peer_rows_runs_under_the_peers_lock(tmp_path, monkeypatch):
+def test_drop_peer_rows_runs_under_the_peers_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     hook = _hook()
     peers = tmp_path / "peers.json"
     peers.write_text(json.dumps(ROWS))
@@ -87,7 +91,7 @@ def test_drop_peer_rows_runs_under_the_peers_lock(tmp_path, monkeypatch):
     assert seen == [("enter", peers), ("exit", peers)]
 
 
-def test_register_peer_still_registers_through_the_shared_lock(tmp_path):
+def test_register_peer_still_registers_through_the_shared_lock(tmp_path: Path) -> None:
     hook = _hook()
     peers = tmp_path / "peers.json"
     assert hook.register_peer(peers, "p1", "codex", "t1") == "added"
@@ -96,7 +100,7 @@ def test_register_peer_still_registers_through_the_shared_lock(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows registration lock")
-def test_windows_hooks_serialize_the_entire_read_modify_write(tmp_path):
+def test_windows_hooks_serialize_the_entire_read_modify_write(tmp_path: Path) -> None:
     script = Path(__file__).resolve().parents[1] / "unimatrix-codex-hook-sessionstart.py"
     peers = tmp_path / "peers.json"
     release = tmp_path / "release-first"
@@ -122,7 +126,7 @@ def pick(rows):
 hook.register_peer(peers, pick, "codex", ident)
 '''
 
-    def wait_for(path):
+    def wait_for(path) -> None:
         deadline = time.monotonic() + 5
         while not path.exists():
             assert time.monotonic() < deadline, f"worker did not reach {path.name}"

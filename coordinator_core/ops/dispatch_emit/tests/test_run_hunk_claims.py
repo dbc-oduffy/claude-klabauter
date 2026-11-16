@@ -444,3 +444,21 @@ def test_settle_holds_when_the_unlinked_holder_is_bound_to_another_sizing(staged
     _bind_sizing(staged_lineage, ME, "docs/sizing/one.md")
     _bind_sizing(staged_lineage, PRIOR, "docs/sizing/two.md")
     assert cds.settle(staged_lineage.root, ME, [(PATH, PRIOR)]) == ({}, [(PATH, PRIOR)])
+
+
+@pytest.mark.spawns_process
+def test_settle_reads_the_sizing_of_a_run_whose_run_json_sits_under_scratch_beside_a_state_record_dir(staged_lineage):
+    import json
+
+    from coordinator_core.ops.dispatch_emit import co_declared_settle as cds
+
+    _staged_world(staged_lineage)
+    root = staged_lineage.root
+    for run in (ME, PRIOR):
+        (root / "scratch" / "warp" / run).mkdir(parents=True, exist_ok=True)
+        (root / "scratch" / "warp" / run / "run.json").write_text(json.dumps({"sizing_rel": "docs/sizing/one.md"}))
+    (root / "state" / "warp" / PRIOR).mkdir(parents=True, exist_ok=True)
+    (root / "state" / "warp" / PRIOR / "halted.json").write_text("{}")
+    stage, still = cds.settle(root, ME, [(PATH, PRIOR)])
+    assert still == []
+    assert [(h.old_start, h.old_len) for h in stage[PATH]] == [(2, 1), (9, 1)]

@@ -41,6 +41,20 @@ def test_every_leg_and_total_is_reported(report):
     assert report["import_top"] and report["import_top"][0]["cumulative_us"] >= report["import_top"][-1]["cumulative_us"]
 
 
+@pytest.fixture(scope="module")
+def default_report(tmp_path_factory):
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path_factory.mktemp("settings-home-default")))
+        return bench.measure()
+
+
+def test_the_cold_child_at_default_arguments_is_under_the_bar(default_report):
+    assert not bench.over_bar(default_report), {
+        k: default_report[k] for k in ("total_process_ms", "cold_total_process_ms", "error_code", "halt", "dominant_leg")
+    }
+    assert (default_report["dirs"], default_report["runs"]) == (bench.DEFAULT_DIRS, bench.DEFAULT_RUNS)
+
+
 def test_carveout_follows_the_stamp(tmp_path):
     stamped = tmp_path / "stamped"
     (stamped / "coordinator_core").mkdir(parents=True)

@@ -61,6 +61,7 @@ from coordinator_core.bash_guards import block_subagent_commit as guard
 from coordinator_core.bash_guards.tests import test_block_subagent_commit as base
 from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -79,7 +80,7 @@ _B64_ARGV = base64.b64encode((HELPER + " -m x").encode()).decode()
 _HEX_ARGV = (HELPER + " -m x").encode().hex()
 
 
-def test_folder_never_executes_the_payload(tmp_path):
+def test_folder_never_executes_the_payload(tmp_path: Path) -> None:
     marker = tmp_path / "folder-executed-the-payload.txt"
     spelling = str(marker).replace("\\", "\\\\")
     payloads = [
@@ -94,7 +95,7 @@ def test_folder_never_executes_the_payload(tmp_path):
     assert not marker.exists()
 
 
-def test_folder_resolves_the_assembly_shapes_it_claims():
+def test_folder_resolves_the_assembly_shapes_it_claims() -> None:
     payloads = [
         "import os; os.system('scoped-git'+'-commit')",
         "import os; os.system('sc'+'oped-git'+'-commit')",
@@ -132,7 +133,7 @@ _FOLD_BOMB_PAYLOADS = [
 @pytest.mark.parametrize(
     "label,payload", _FOLD_BOMB_PAYLOADS, ids=[p[0] for p in _FOLD_BOMB_PAYLOADS]
 )
-def test_folding_bomb_hits_a_bound_and_does_not_resolve(label, payload):
+def test_folding_bomb_hits_a_bound_and_does_not_resolve(label, payload) -> None:
     """Bounds are security properties: every bomb below resolves to
     UNRESOLVED (never to a partial value treated as complete) and returns
     promptly. The time assertion is deliberately loose -- it is there to
@@ -166,7 +167,7 @@ _LENGTH_BOMB_PAYLOADS = [
 @pytest.mark.parametrize(
     "label,payload", _LENGTH_BOMB_PAYLOADS, ids=[p[0] for p in _LENGTH_BOMB_PAYLOADS]
 )
-def test_length_bomb_latches_bounds_exceeded(label, payload):
+def test_length_bomb_latches_bounds_exceeded(label, payload) -> None:
     """The bounds that are LENGTH bounds report themselves as such, so a
     reader of a fold result can tell "nothing to fold" from "gave up" --
     including the AGGREGATE bound, which no single value trips.
@@ -175,7 +176,7 @@ def test_length_bomb_latches_bounds_exceeded(label, payload):
     assert guard._fold_python_c_payload(payload).bounds_exceeded is True
 
 
-def test_bounds_are_the_documented_values():
+def test_bounds_are_the_documented_values() -> None:
     """A pin, not a tautology: these four numbers are named as load-bearing
     in the module docstring and in `_MAX_FOLDED_VALUE_LEN`'s own comment, so
     a silent bump (the tempting fix when a corpus row will not fold) shows
@@ -188,7 +189,7 @@ def test_bounds_are_the_documented_values():
     assert guard._MAX_FOLD_FIELD_WIDTH == 4096
 
 
-def test_unparseable_payload_folds_to_nothing_and_claims_nothing():
+def test_unparseable_payload_folds_to_nothing_and_claims_nothing() -> None:
     guard._fold_python_c_payload.cache_clear()
     folded = guard._fold_python_c_payload("import ast; ast.parse('%s'" % HELPER)
     assert folded.parsed is False
@@ -213,7 +214,7 @@ def _recursion_bomb_payload():
     )
 
 
-def test_recursion_bomb_is_a_bound_hit_not_an_unparseable_payload():
+def test_recursion_bomb_is_a_bound_hit_not_an_unparseable_payload() -> None:
     payload = _recursion_bomb_payload()
     with pytest.raises((RecursionError, MemoryError)):
         ast.parse(payload)
@@ -225,7 +226,7 @@ def test_recursion_bomb_is_a_bound_hit_not_an_unparseable_payload():
     assert folded.opaque_sink_call is True
 
 
-def test_recursion_bomb_command_denies(monkeypatch):
+def test_recursion_bomb_command_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     base._denies(monkeypatch, 'python3 -c "%s"' % _recursion_bomb_payload())
 
 
@@ -239,7 +240,7 @@ def test_recursion_bomb_command_denies(monkeypatch):
         ("comprehension-via-name", "import os; s = ''.join([chr(c) for c in [%s]]); os.system(s)" % _CODEPOINTS),
     ],
 )
-def test_comprehension_into_a_sink_is_unresolved_and_denies(label, payload):
+def test_comprehension_into_a_sink_is_unresolved_and_denies(label, payload) -> None:
     guard._fold_python_c_payload.cache_clear()
     folded = guard._fold_python_c_payload(payload)
     assert "scoped-git-commit" not in folded.text, label
@@ -255,7 +256,7 @@ def test_comprehension_into_a_sink_is_unresolved_and_denies(label, payload):
         ("genexp", "(x for x in [1])"),
     ],
 )
-def test_folder_refuses_every_comprehension_node_type(label, node_src):
+def test_folder_refuses_every_comprehension_node_type(label, node_src) -> None:
     import ast as _ast
 
     node = _ast.parse(node_src, mode="eval").body
@@ -263,7 +264,7 @@ def test_folder_refuses_every_comprehension_node_type(label, node_src):
     assert guard._fold_expr(node, {}, budget, {}, 0) is guard._FOLD_UNRESOLVED
 
 
-def test_sink_sets_are_derived_from_part14_not_re_enumerated():
+def test_sink_sets_are_derived_from_part14_not_re_enumerated() -> None:
     """The anti-drift property, mechanically: every part-16 sink name comes
     from a part-14 set by SUBTRACTION, so a name added there for reaching an
     execution sink appears here automatically.
@@ -708,42 +709,42 @@ _PART20_RECEIVER_QUALIFIED_ALLOW_COMMANDS = [
 @pytest.mark.parametrize(
     "label,cmd", _ASSEMBLY_COMMANDS, ids=[c[0] for c in _ASSEMBLY_COMMANDS]
 )
-def test_assembled_commit_command_denies(monkeypatch, label, cmd):
+def test_assembled_commit_command_denies(monkeypatch: pytest.MonkeyPatch, label, cmd) -> None:
     base._denies(monkeypatch, cmd)
 
 
 @pytest.mark.parametrize(
     "label,cmd", _BOUNDARY_NEGATIVE_COMMANDS, ids=[c[0] for c in _BOUNDARY_NEGATIVE_COMMANDS]
 )
-def test_boundary_anchoring_survives_folding(monkeypatch, label, cmd):
+def test_boundary_anchoring_survives_folding(monkeypatch: pytest.MonkeyPatch, label, cmd) -> None:
     base._allows(monkeypatch, cmd)
 
 
 @pytest.mark.parametrize(
     "label,cmd", _REALISTIC_COMMANDS, ids=[c[0] for c in _REALISTIC_COMMANDS]
 )
-def test_realistic_command_still_allows(monkeypatch, label, cmd):
+def test_realistic_command_still_allows(monkeypatch: pytest.MonkeyPatch, label, cmd) -> None:
     base._allows(monkeypatch, cmd)
 
 
 @pytest.mark.parametrize(
     "label,cmd", _ARGV_SLOT0_DENY_COMMANDS, ids=[c[0] for c in _ARGV_SLOT0_DENY_COMMANDS]
 )
-def test_argv_vector_with_unknown_program_slot_denies(monkeypatch, label, cmd):
+def test_argv_vector_with_unknown_program_slot_denies(monkeypatch: pytest.MonkeyPatch, label, cmd) -> None:
     base._denies(monkeypatch, cmd)
 
 
 @pytest.mark.parametrize(
     "label,cmd", _ARGV_SLOT0_ALLOW_COMMANDS, ids=[c[0] for c in _ARGV_SLOT0_ALLOW_COMMANDS]
 )
-def test_argv_vector_with_known_program_slot_still_allows(monkeypatch, label, cmd):
+def test_argv_vector_with_known_program_slot_still_allows(monkeypatch: pytest.MonkeyPatch, label, cmd) -> None:
     base._allows(monkeypatch, cmd)
 
 
 @pytest.mark.parametrize(
     "label,cmd", _PART18_PRICED_DENY_COMMANDS, ids=[c[0] for c in _PART18_PRICED_DENY_COMMANDS]
 )
-def test_priced_realistic_rows_now_deny(monkeypatch, label, cmd):
+def test_priced_realistic_rows_now_deny(monkeypatch: pytest.MonkeyPatch, label, cmd) -> None:
     """The cost, pinned as a DENY rather than deleted: these two rows used to
     live in `_REALISTIC_COMMANDS` and now deny, and that is a DECISION taken
     at a measured price of two (see `_PART18_PRICED_DENY_COMMANDS`), not a
@@ -753,7 +754,7 @@ def test_priced_realistic_rows_now_deny(monkeypatch, label, cmd):
     base._denies(monkeypatch, cmd)
 
 
-def test_part18_moves_exactly_the_two_priced_realistic_rows(monkeypatch):
+def test_part18_moves_exactly_the_two_priced_realistic_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     base._subagent(monkeypatch)
     rows = (
         [("assembly:" + label, cmd) for label, cmd in _ASSEMBLY_COMMANDS]
@@ -805,7 +806,7 @@ def test_part18_moves_exactly_the_two_priced_realistic_rows(monkeypatch):
         ("unresolved-repetition-count", "['python3']*n", "UNRESOLVED"),
     ],
 )
-def test_argv_program_slot_resolves_only_what_it_claims(label, src, expected):
+def test_argv_program_slot_resolves_only_what_it_claims(label, src, expected) -> None:
     """The resolver at the node level, so the three-way distinction stays
     legible: a resolved value, `_ARGV_SLOT_EMPTY` (determined -- no program
     starts), and `_FOLD_UNRESOLVED` (unknown -- deny). Conflating the middle
@@ -835,7 +836,7 @@ def test_argv_program_slot_resolves_only_what_it_claims(label, src, expected):
     _PART19_SINK_ID_DENY_COMMANDS,
     ids=[c[0] for c in _PART19_SINK_ID_DENY_COMMANDS],
 )
-def test_unidentified_sink_now_denies(monkeypatch, label, cmd):
+def test_unidentified_sink_now_denies(monkeypatch: pytest.MonkeyPatch, label, cmd) -> None:
     base._denies(monkeypatch, cmd)
 
 
@@ -844,7 +845,7 @@ def test_unidentified_sink_now_denies(monkeypatch, label, cmd):
     _PART19_SINK_ID_ALLOW_COMMANDS,
     ids=[c[0] for c in _PART19_SINK_ID_ALLOW_COMMANDS],
 )
-def test_identified_sink_with_a_knowable_program_still_allows(monkeypatch, label, cmd):
+def test_identified_sink_with_a_knowable_program_still_allows(monkeypatch: pytest.MonkeyPatch, label, cmd) -> None:
     """The other half, row by row: resolving MORE names as sinks must not
     resolve more PROGRAMS as unknown. A local alias of an import is the
     import, a resolvable nested ``-c`` payload is recursed into rather than
@@ -853,7 +854,7 @@ def test_identified_sink_with_a_knowable_program_still_allows(monkeypatch, label
     base._allows(monkeypatch, cmd)
 
 
-def _disable_part19(monkeypatch):
+def _disable_part19(monkeypatch) -> None:
     monkeypatch.setattr(guard, "_payload_bindings", lambda tree: guard._EMPTY_BINDINGS)
     #: Spelled out rather than read off `_NON_INERT_ATTRIBUTE_PREFIXES`: part
     #: 21 dropped the ``exec`` root, and this substitute must keep reproducing
@@ -875,7 +876,7 @@ def _disable_part19(monkeypatch):
     guard._fold_python_c_payload.cache_clear()
 
 
-def test_part19_moves_exactly_its_own_rows_and_no_corpus_row(monkeypatch):
+def test_part19_moves_exactly_its_own_rows_and_no_corpus_row(monkeypatch: pytest.MonkeyPatch) -> None:
     base._subagent(monkeypatch)
     corpus = (
         [("assembly:" + label, cmd) for label, cmd in _ASSEMBLY_COMMANDS]
@@ -945,7 +946,7 @@ def test_part19_moves_exactly_its_own_rows_and_no_corpus_row(monkeypatch):
 )
 def test_payload_bindings_resolve_only_what_they_claim(
     label, src, expected_names, expected_opaque
-):
+) -> None:
     """The binding walk at the node level, so the three outcomes stay
     legible: RESOLVED to a canonical dotted target, OPAQUE (rebound to
     something unknowable -- fail closed), and neither (a ``def`` name, whose
@@ -997,7 +998,7 @@ def test_payload_bindings_resolve_only_what_they_claim(
         ),
     ],
 )
-def test_a_name_bound_twice_keeps_both_identities(label, src, name, expected_targets):
+def test_a_name_bound_twice_keeps_both_identities(label, src, name, expected_targets) -> None:
     """PART 21's fix stated as the property that was violated: a binding is
     UNIONED, never replaced.
 
@@ -1053,11 +1054,11 @@ _PART21_SHADOWED_BINDING_SOURCES = [
     _PART21_SHADOWED_BINDING_SOURCES,
     ids=[c[0] for c in _PART21_SHADOWED_BINDING_SOURCES],
 )
-def test_shadowed_alias_still_denies_end_to_end(monkeypatch, label, src):
+def test_shadowed_alias_still_denies_end_to_end(monkeypatch: pytest.MonkeyPatch, label, src) -> None:
     base._denies(monkeypatch, 'python3 -c "%s"' % src.replace('"', '\\"'))
 
 
-def test_honest_import_fallback_is_not_denied_by_the_union(monkeypatch):
+def test_honest_import_fallback_is_not_denied_by_the_union(monkeypatch: pytest.MonkeyPatch) -> None:
     base._allows(
         monkeypatch,
         'python3 -c "import os\ntry:\n    import json as j\nexcept ImportError:\n'
@@ -1065,7 +1066,7 @@ def test_honest_import_fallback_is_not_denied_by_the_union(monkeypatch):
     )
 
 
-def test_import_resolution_makes_an_alias_the_same_sink():
+def test_import_resolution_makes_an_alias_the_same_sink() -> None:
     import ast as _ast
 
     tree = _ast.parse("from subprocess import run as r\nr(v)")
@@ -1099,7 +1100,7 @@ def test_import_resolution_makes_an_alias_the_same_sink():
         ("db_exec", False),
     ],
 )
-def test_process_creation_family_is_matched_at_a_name_boundary(name, expected):
+def test_process_creation_family_is_matched_at_a_name_boundary(name, expected) -> None:
     """Gap 2 was a MATCHING defect, not two missing names: the ``spawn``
     family root anchors at a name-segment boundary, so ``posix_spawn`` and any
     future ``<prefix>_spawn`` are covered by the same rule.
@@ -1113,7 +1114,7 @@ def test_process_creation_family_is_matched_at_a_name_boundary(name, expected):
     assert guard._name_is_process_creation(name) is expected
 
 
-def test_os_exec_family_is_enumerated_not_prefix_matched():
+def test_os_exec_family_is_enumerated_not_prefix_matched() -> None:
     for name in guard._OS_EXEC_FAMILY_NAMES:
         assert not guard._name_is_process_creation(name), name
         assert guard._attribute_name_is_non_inert(name), name
@@ -1163,7 +1164,7 @@ _PART21_OS_EXEC_DENY_COMMANDS = [
     _PART21_EXECUTE_COLLATERAL_ALLOW_COMMANDS,
     ids=[c[0] for c in _PART21_EXECUTE_COLLATERAL_ALLOW_COMMANDS],
 )
-def test_execute_collateral_now_allows(monkeypatch, label, cmd):
+def test_execute_collateral_now_allows(monkeypatch: pytest.MonkeyPatch, label, cmd) -> None:
     base._allows(monkeypatch, cmd)
 
 
@@ -1172,11 +1173,11 @@ def test_execute_collateral_now_allows(monkeypatch, label, cmd):
     _PART21_OS_EXEC_DENY_COMMANDS,
     ids=[c[0] for c in _PART21_OS_EXEC_DENY_COMMANDS],
 )
-def test_os_process_creation_still_denies_after_the_root_drop(monkeypatch, label, cmd):
+def test_os_process_creation_still_denies_after_the_root_drop(monkeypatch: pytest.MonkeyPatch, label, cmd) -> None:
     base._denies(monkeypatch, cmd)
 
 
-def test_nested_interpreter_recursion_is_depth_bounded():
+def test_nested_interpreter_recursion_is_depth_bounded() -> None:
     """The recursion's bound is a security property, not a tuning knob: a
     hand-nested interpreter chain fails CLOSED at
     `_MAX_NESTED_INTERPRETER_DEPTH` rather than parsing forever inside a
@@ -1196,13 +1197,13 @@ def test_nested_interpreter_recursion_is_depth_bounded():
     )
 
 
-def test_unparseable_nested_payload_is_unknown():
+def test_unparseable_nested_payload_is_unknown() -> None:
     assert guard._nested_python_source_has_opaque_sink(
         "import os; os.system('", guard._FoldBudget(), 1
     )
 
 
-def test_kwargs_splat_hides_the_program_slot():
+def test_kwargs_splat_hides_the_program_slot() -> None:
     import ast as _ast
 
     splat = _ast.parse("run(**opts)").body[0].value
@@ -1211,7 +1212,7 @@ def test_kwargs_splat_hides_the_program_slot():
     assert guard._argv_vector_argument(none_named) is None
 
 
-def test_communicate_is_subtracted_from_the_program_slot_family():
+def test_communicate_is_subtracted_from_the_program_slot_family() -> None:
     assert "communicate" in guard._ARGV_VECTOR_SINK_ATTRIBUTES
     assert "communicate" not in guard._ARGV_PROGRAM_SLOT_SINK_ATTRIBUTES
     assert guard._ARGV_PROGRAM_SLOT_SINK_ATTRIBUTES <= guard._ARGV_VECTOR_SINK_ATTRIBUTES
@@ -1231,7 +1232,7 @@ def test_communicate_is_subtracted_from_the_program_slot_family():
     _PART20_RECEIVER_QUALIFIED_DENY_COMMANDS,
     ids=[c[0] for c in _PART20_RECEIVER_QUALIFIED_DENY_COMMANDS],
 )
-def test_receiver_qualified_shell_sink_denies(monkeypatch, label, cmd):
+def test_receiver_qualified_shell_sink_denies(monkeypatch: pytest.MonkeyPatch, label, cmd) -> None:
     base._denies(monkeypatch, cmd)
 
 
@@ -1240,7 +1241,7 @@ def test_receiver_qualified_shell_sink_denies(monkeypatch, label, cmd):
     _PART20_RECEIVER_QUALIFIED_ALLOW_COMMANDS,
     ids=[c[0] for c in _PART20_RECEIVER_QUALIFIED_ALLOW_COMMANDS],
 )
-def test_unrelated_getoutput_receiver_still_allows(monkeypatch, label, cmd):
+def test_unrelated_getoutput_receiver_still_allows(monkeypatch: pytest.MonkeyPatch, label, cmd) -> None:
     """The half that made the closure affordable, row by row: admission is by
     RESOLVED receiver, so an unrelated ``.getoutput()`` is not a sink on the
     strength of a generic attribute name. A failure here means the leg has
@@ -1273,8 +1274,8 @@ def test_unrelated_getoutput_receiver_still_allows(monkeypatch, label, cmd):
     ids=["benign-constant", "commit-identity-constant", "commit-identity-constant-via-alias"],
 )
 def test_constant_argument_is_judged_on_content_like_any_command_text_sink(
-    monkeypatch, label, cmd, denies
-):
+    monkeypatch: pytest.MonkeyPatch, label, cmd, denies
+) -> None:
     """A RESOLVABLE argument is never refused by mechanism 2 -- it is handed to
     mechanism 1 and judged on its CONTENT, exactly as ``os.system('...')`` is.
     Part 20 admits two sinks; it does not make constants unknowable.
@@ -1307,7 +1308,7 @@ def test_constant_argument_is_judged_on_content_like_any_command_text_sink(
 )
 def test_receiver_qualification_admits_only_a_resolved_subprocess_target(
     label, src, expected
-):
+) -> None:
     import ast as _ast
 
     tree = _ast.parse(src)
@@ -1316,7 +1317,7 @@ def test_receiver_qualification_admits_only_a_resolved_subprocess_target(
     assert guard._call_is_receiver_qualified_shell_sink(call.func, bindings) is expected, label
 
 
-def test_subprocess_shell_out_surface_is_audited_not_sampled():
+def test_subprocess_shell_out_surface_is_audited_not_sampled() -> None:
     """Pins the audit behind `_RECEIVER_QUALIFIED_SHELL_SINK_TARGETS`: every
     public callable ``subprocess`` exports is either the argv-vector family
     (parts 16/18), one of the two command-line sinks part 20 admits, or
@@ -1357,14 +1358,14 @@ def test_subprocess_shell_out_surface_is_audited_not_sampled():
     assert argv_family <= guard._ARGV_VECTOR_SINK_ATTRIBUTES
 
 
-def _disable_part20(monkeypatch):
+def _disable_part20(monkeypatch) -> None:
     monkeypatch.setattr(
         guard, "_call_is_receiver_qualified_shell_sink", lambda func, bindings: False
     )
     guard._fold_python_c_payload.cache_clear()
 
 
-def test_part20_moves_exactly_its_own_rows_and_no_corpus_row(monkeypatch):
+def test_part20_moves_exactly_its_own_rows_and_no_corpus_row(monkeypatch: pytest.MonkeyPatch) -> None:
     base._subagent(monkeypatch)
     corpus = (
         [("assembly:" + label, cmd) for label, cmd in _ASSEMBLY_COMMANDS]
@@ -1431,7 +1432,7 @@ def _last_visit_wins_bindings(tree):
     return guard._PayloadBindings(imports=collapsed, opaque=real.opaque)
 
 
-def _disable_part21_binding_union(monkeypatch):
+def _disable_part21_binding_union(monkeypatch) -> None:
     monkeypatch.setattr(guard, "_payload_bindings", _last_visit_wins_bindings)
     guard._fold_python_c_payload.cache_clear()
 
@@ -1447,7 +1448,7 @@ _PART21_SHADOWED_BINDING_DENY_LABELS = frozenset(
 )
 
 
-def test_part21_moves_exactly_the_shadowed_rows_and_no_corpus_row(monkeypatch):
+def test_part21_moves_exactly_the_shadowed_rows_and_no_corpus_row(monkeypatch: pytest.MonkeyPatch) -> None:
     """Blast-radius pin in the shape parts 14-20 use, for the one seam part 21
     changed in the RESOLVER: with the union forced back to last-visit-wins,
     every shadowed-alias row comes back ALLOW -- proving the rows exercise the
@@ -1553,14 +1554,14 @@ def _verdicts(rows):
             for label, cmd in rows}
 
 
-def _disable_part16(monkeypatch, mechanism_1=False, mechanism_2=False):
+def _disable_part16(monkeypatch, mechanism_1: bool = False, mechanism_2: bool = False) -> None:
     if not mechanism_1:
         monkeypatch.setattr(guard, "_has_folded_commit_identity", lambda cmd, legs=None: False)
     if not mechanism_2:
         monkeypatch.setattr(guard, "_has_opaque_execution_sink", lambda cmd, legs=None: False)
 
 
-def test_part16_corpus_moves_exactly_the_measured_set(monkeypatch):
+def test_part16_corpus_moves_exactly_the_measured_set(monkeypatch: pytest.MonkeyPatch) -> None:
     base._subagent(monkeypatch)
     live = _verdicts(_ASSEMBLY_COMMANDS)
     _disable_part16(monkeypatch)
@@ -1572,7 +1573,7 @@ def test_part16_corpus_moves_exactly_the_measured_set(monkeypatch):
     assert {label for label in live if before[label] and not live[label]} == set()
 
 
-def test_mechanism_1_alone_reaches_every_resolvable_row(monkeypatch):
+def test_mechanism_1_alone_reaches_every_resolvable_row(monkeypatch: pytest.MonkeyPatch) -> None:
     base._subagent(monkeypatch)
     _disable_part16(monkeypatch, mechanism_1=True)
     with_m1_only = _verdicts(_ASSEMBLY_COMMANDS)
@@ -1580,13 +1581,13 @@ def test_mechanism_1_alone_reaches_every_resolvable_row(monkeypatch):
     assert reopened == set(_MECHANISM_2_ONLY_LABELS)
 
 
-def test_realistic_corpus_is_untouched_by_mechanism_1(monkeypatch):
+def test_realistic_corpus_is_untouched_by_mechanism_1(monkeypatch: pytest.MonkeyPatch) -> None:
     base._subagent(monkeypatch)
     _disable_part16(monkeypatch, mechanism_1=True)
     assert not any(_verdicts(_REALISTIC_COMMANDS).values())
 
 
-def test_part16_moves_no_command_outside_the_python_c_family(monkeypatch):
+def test_part16_moves_no_command_outside_the_python_c_family(monkeypatch: pytest.MonkeyPatch) -> None:
     base._subagent(monkeypatch)
     outside = [c for c, _ in base._VERDICT_PARITY_MATRIX if not ("python" in c and "-c " in c)]
     live = [_enveloped(guard.check)(base._payload(c, agent_type=base._SUBAGENT_TYPE)) is not None for c in outside]
@@ -1595,7 +1596,7 @@ def test_part16_moves_no_command_outside_the_python_c_family(monkeypatch):
     assert live == after
 
 
-def test_prefilter_widening_moves_no_pre_part16_verdict(monkeypatch):
+def test_prefilter_widening_moves_no_pre_part16_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
     """The pre-filter widening is verdict-neutral for the three older
     matchers, which is the claim `_prefilter_mentions_commit`'s part-16
     paragraph makes: each of them still requires the literal ``commit``
@@ -1612,7 +1613,7 @@ def test_prefilter_widening_moves_no_pre_part16_verdict(monkeypatch):
     assert live == narrow
 
 
-def test_inert_read_only_command_survives_folding(monkeypatch):
+def test_inert_read_only_command_survives_folding(monkeypatch: pytest.MonkeyPatch) -> None:
     for cmd in (
         "python3 -c \"import ast; ast.parse(open('%s').read())\"" % HELPER,
         "python3 -c \"print(open('%s').read())\"" % HELPER,
@@ -1623,13 +1624,13 @@ def test_inert_read_only_command_survives_folding(monkeypatch):
         assert not guard._has_opaque_execution_sink(cmd)
 
 
-def test_fold_matchers_ignore_a_real_shell_payload():
+def test_fold_matchers_ignore_a_real_shell_payload() -> None:
     assert not guard._has_folded_commit_identity("sh -c 'git commit -m x'")
     assert not guard._has_opaque_execution_sink("sh -c \"eval $CMD\"")
     assert list(guard._python_c_source_payloads("sh -c 'git commit -m x'")) == []
 
 
-def test_opaque_sink_message_names_a_resolvable_next_action():
+def test_opaque_sink_message_names_a_resolvable_next_action() -> None:
     from coordinator_core.bash_guards._message_size import (
         MESSAGE_PROSE_CAP_BYTES,
         measure_envelope,
@@ -1652,7 +1653,7 @@ def test_opaque_sink_message_names_a_resolvable_next_action():
     assert measurement.prose_bytes <= MESSAGE_PROSE_CAP_BYTES
 
 
-def test_resolved_identity_leg_wins_message_selection(monkeypatch):
+def test_resolved_identity_leg_wins_message_selection(monkeypatch: pytest.MonkeyPatch) -> None:
     """Leg precedence: when folding RESOLVED the name, the more specific
     literal-reconstruction message is the one the caller sees.
     """
@@ -1670,7 +1671,7 @@ def test_resolved_identity_leg_wins_message_selection(monkeypatch):
     )
 
 
-def test_unwrap_memo_does_not_outlive_one_check(monkeypatch):
+def test_unwrap_memo_does_not_outlive_one_check(monkeypatch: pytest.MonkeyPatch) -> None:
     """The memo added for the tokenizer cost is a WITHIN-ONE-CHECK cache:
     ``check()`` clears it on entry, so a monkeypatched predicate can never
     read a result computed under the unpatched one. Asserted directly,

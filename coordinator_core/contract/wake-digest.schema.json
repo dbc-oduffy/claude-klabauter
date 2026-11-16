@@ -569,6 +569,11 @@
           }
         },
         "typecheck_clean": { "type": ["boolean", "null"] },
+        "failing_ids": {
+          "type": "array",
+          "maxItems": 50,
+          "items": { "type": "string", "maxLength": 300 }
+        },
         "summary": { "type": "string", "maxLength": 300 },
         "sidecar_path": { "type": "string", "maxLength": 300 }
       }

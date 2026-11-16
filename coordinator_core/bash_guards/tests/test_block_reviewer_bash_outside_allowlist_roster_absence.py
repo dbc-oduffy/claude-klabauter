@@ -25,6 +25,7 @@ from coordinator_core.bash_guards import (
     block_reviewer_bash_outside_allowlist as guard,
 )
 from coordinator_core.guard_messages.testing import envelope_of
+import pytest
 
 
 def _enveloped(check):
@@ -35,7 +36,7 @@ _ENUMERATED_NON_CONFINED_TYPE = "coordinator:enricher"
 _CONFINED_TYPE = "coordinator:code-reviewer"
 
 
-def _payload(command, agent_id="deadbeef0123", agent_type=None, session_id="sess1"):
+def _payload(command, agent_id: str = "deadbeef0123", agent_type=None, session_id: str = "sess1"):
     p: dict = {
         "tool_name": "Bash",
         "tool_input": {"command": command},
@@ -49,7 +50,7 @@ def _payload(command, agent_id="deadbeef0123", agent_type=None, session_id="sess
     return p
 
 
-def _wire_identity(monkeypatch, subagent_type=""):
+def _wire_identity(monkeypatch, subagent_type: str = "") -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(
         guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123"
@@ -61,7 +62,7 @@ def _wire_identity(monkeypatch, subagent_type=""):
     )
 
 
-def test_roster_absence_empty_type_never_confines(monkeypatch):
+def test_roster_absence_empty_type_never_confines(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.bash_guards import _helpers
 
     def _boom():
@@ -72,7 +73,7 @@ def test_roster_absence_empty_type_never_confines(monkeypatch):
     assert _helpers.is_confined_by_roster_absence(None) is False
 
 
-def test_roster_absence_true_for_unenumerated_type(monkeypatch):
+def test_roster_absence_true_for_unenumerated_type(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.bash_guards import _helpers
 
     monkeypatch.setattr(
@@ -81,7 +82,7 @@ def test_roster_absence_true_for_unenumerated_type(monkeypatch):
     assert _helpers.is_confined_by_roster_absence(_INVENTED_TYPE) is True
 
 
-def test_roster_absence_false_for_enumerated_type(monkeypatch):
+def test_roster_absence_false_for_enumerated_type(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.bash_guards import _helpers
 
     monkeypatch.setattr(
@@ -90,7 +91,7 @@ def test_roster_absence_false_for_enumerated_type(monkeypatch):
     assert _helpers.is_confined_by_roster_absence("coordinator:enricher") is False
 
 
-def test_roster_absence_fails_closed_on_roster_load_failure(monkeypatch):
+def test_roster_absence_fails_closed_on_roster_load_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.bash_guards import _helpers
 
     monkeypatch.setattr(
@@ -99,7 +100,7 @@ def test_roster_absence_fails_closed_on_roster_load_failure(monkeypatch):
     assert _helpers.is_confined_by_roster_absence(_INVENTED_TYPE) is True
 
 
-def test_unenumerated_type_denies_arbitrary_command(monkeypatch):
+def test_unenumerated_type_denies_arbitrary_command(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire_identity(monkeypatch, subagent_type=_INVENTED_TYPE)
     monkeypatch.setattr(guard, "is_confined_by_roster_absence", lambda t: t == _INVENTED_TYPE)
     payload = _payload("rm -rf /", agent_type=None)
@@ -108,21 +109,21 @@ def test_unenumerated_type_denies_arbitrary_command(monkeypatch):
     assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_unenumerated_type_allows_readonly_tier_a_command(monkeypatch):
+def test_unenumerated_type_allows_readonly_tier_a_command(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire_identity(monkeypatch, subagent_type=_INVENTED_TYPE)
     monkeypatch.setattr(guard, "is_confined_by_roster_absence", lambda t: t == _INVENTED_TYPE)
     payload = _payload("git status", agent_type=None)
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_enumerated_non_confined_type_still_allows(monkeypatch):
+def test_enumerated_non_confined_type_still_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire_identity(monkeypatch, subagent_type="")
     monkeypatch.setattr(guard, "is_confined_by_roster_absence", lambda t: False)
     payload = _payload("rm -rf /", agent_type=_ENUMERATED_NON_CONFINED_TYPE)
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_already_confined_type_unaffected_by_roster_leg(monkeypatch):
+def test_already_confined_type_unaffected_by_roster_leg(monkeypatch: pytest.MonkeyPatch) -> None:
     _wire_identity(monkeypatch, subagent_type=_CONFINED_TYPE)
     monkeypatch.setattr(guard, "is_confined_by_roster_absence", lambda t: False)
     payload = _payload("rm -rf /", agent_type=None)
@@ -131,7 +132,7 @@ def test_already_confined_type_unaffected_by_roster_leg(monkeypatch):
     assert verdict["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_workflow_subagent_can_run_verification(monkeypatch):
+def test_workflow_subagent_can_run_verification(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.bash_guards import _helpers
     from coordinator_core.hooks import block_unenumerated_agent_type as roster_mod
 

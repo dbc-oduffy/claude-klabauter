@@ -21,6 +21,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import
 )
 
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import stage_root  # noqa: E402,F401
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -35,7 +36,7 @@ def _record_remnant(root, *, footprint, paths) -> None:
     _write(root, f"{RUN_DIR_ROOT}/{RUN}/{lr.RECOVERY_RECORD_FILE}", json.dumps({"remnant": remnant}))
 
 
-def test_a_reported_out_of_footprint_remnant_write_is_withheld_while_the_in_footprint_write_lands(repo):  # noqa: F811
+def test_a_reported_out_of_footprint_remnant_write_is_withheld_while_the_in_footprint_write_lands(repo) -> None:  # noqa: F811
     _write(repo, "a.py", "a = 2\n")
     _write(repo, STRAY, "x = 1\n")
     _record_remnant(repo, footprint=["a.py"], paths=[STRAY])
@@ -49,7 +50,7 @@ def test_a_reported_out_of_footprint_remnant_write_is_withheld_while_the_in_foot
     assert (repo / STRAY).read_text(encoding="utf-8") == "x = 1\n"
 
 
-def test_an_unreported_out_of_footprint_remnant_write_with_a_clean_self_report_is_never_landed(repo):  # noqa: F811
+def test_an_unreported_out_of_footprint_remnant_write_with_a_clean_self_report_is_never_landed(repo) -> None:  # noqa: F811
     _write(repo, "a.py", "a = 2\n")
     _write(repo, STRAY, "x = 1\n")
     _record_remnant(repo, footprint=["a.py"], paths=[])
@@ -63,7 +64,7 @@ def test_an_unreported_out_of_footprint_remnant_write_with_a_clean_self_report_i
     assert STRAY in _git(repo, "status", "--porcelain", "--", STRAY)
 
 
-def test_a_record_whose_status_hides_the_breach_still_withholds_it(repo):  # noqa: F811
+def test_a_record_whose_status_hides_the_breach_still_withholds_it(repo) -> None:  # noqa: F811
     _write(repo, "a.py", "a = 2\n")
     _write(repo, STRAY, "x = 1\n")
     _record_remnant(repo, footprint=["a.py"], paths=[STRAY])
@@ -95,12 +96,12 @@ _LEG_WRITES_HOOK = r"""
 """
 
 
-def _git_repo(root):
+def _git_repo(root) -> None:
     import subprocess
 
     from coordinator_core.win_portability import no_console_creationflags
 
-    def git(*args):
+    def git(*args) -> None:
         subprocess.run(
             ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=root, check=True, capture_output=True,
             **no_console_creationflags(),
@@ -167,7 +168,7 @@ def _remnant_rec(out: dict) -> dict:
     return json.loads(prompt.split("exactly this JSON text: ", 1)[1].split(". Edit nothing else", 1)[0])
 
 
-def test_a_remnant_leg_that_writes_head_plus_own_over_a_foreign_hunk_keeps_the_foreign_hunk(tmp_path, monkeypatch):
+def test_a_remnant_leg_that_writes_head_plus_own_over_a_foreign_hunk_keeps_the_foreign_hunk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path
     _git_repo(root)
     (root / _PATH).write_bytes(_FOREIGN.encode())
@@ -183,7 +184,7 @@ def test_a_remnant_leg_that_writes_head_plus_own_over_a_foreign_hunk_keeps_the_f
     assert labels.index("live-restore:remnant") < labels.index("remnant-reverify")
 
 
-def test_a_remnant_leg_whose_write_overlaps_a_foreign_hunk_is_refused_and_not_accepted_as_fixed(tmp_path, monkeypatch):
+def test_a_remnant_leg_whose_write_overlaps_a_foreign_hunk_is_refused_and_not_accepted_as_fixed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path
     _git_repo(root)
     (root / _PATH).write_bytes(_FOREIGN.encode())
@@ -201,7 +202,7 @@ def test_a_remnant_leg_whose_write_overlaps_a_foreign_hunk_is_refused_and_not_ac
     assert entries[0]["path"] == _PATH and entries[0]["run_id"] == "run-1"
 
 
-def test_a_remnant_leg_over_a_clean_file_restores_nothing(tmp_path, monkeypatch):
+def test_a_remnant_leg_over_a_clean_file_restores_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path
     _git_repo(root)
 
@@ -212,7 +213,7 @@ def test_a_remnant_leg_over_a_clean_file_restores_nothing(tmp_path, monkeypatch)
     assert rec["status"] == "fixed" and "live_restored" not in rec and "live_refused" not in rec
 
 
-def test_an_in_footprint_only_remnant_record_withholds_nothing(repo):  # noqa: F811
+def test_an_in_footprint_only_remnant_record_withholds_nothing(repo) -> None:  # noqa: F811
     _write(repo, "a.py", "a = 2\n")
     _record_remnant(repo, footprint=["a.py"], paths=[])
 

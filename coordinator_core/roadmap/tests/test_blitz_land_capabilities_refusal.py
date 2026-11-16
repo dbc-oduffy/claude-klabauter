@@ -6,6 +6,7 @@ from pathlib import Path
 
 from coordinator_core.roadmap import blitz_land as bl
 from coordinator_core.roadmap import plan_gate as pg
+import pytest
 
 _SPINE = (
     "- id: C1\n  title: Ship the thing\n"
@@ -27,26 +28,26 @@ def _plan(root: Path, slug: str, status: str, capabilities: str = "") -> str:
     return f"docs/plans/{slug}.md"
 
 
-def test_a_draft_keyless_plan_is_refused(tmp_path):
+def test_a_draft_keyless_plan_is_refused(tmp_path: Path) -> None:
     plan = _plan(tmp_path, "keyless", "draft")
     refusal, _ = bl.prep_gate_refusal(tmp_path, plan)
     assert refusal and "CAPABILITIES capabilities-undeclared" in refusal
     assert "capabilities: []" in refusal
 
 
-def test_a_draft_plan_declaring_empty_capabilities_is_not_refused(tmp_path):
+def test_a_draft_plan_declaring_empty_capabilities_is_not_refused(tmp_path: Path) -> None:
     plan = _plan(tmp_path, "declared", "draft", "capabilities: []\n")
     refusal, _ = bl.prep_gate_refusal(tmp_path, plan)
     assert refusal is None
 
 
-def test_an_already_approved_keyless_plan_is_not_refused_on_re_land(tmp_path):
+def test_an_already_approved_keyless_plan_is_not_refused_on_re_land(tmp_path: Path) -> None:
     plan = _plan(tmp_path, "approved", "approved")
     refusal, _ = bl.prep_gate_refusal(tmp_path, plan)
     assert refusal is None
 
 
-def test_land_wave_refuses_a_draft_keyless_plan(tmp_path, monkeypatch):
+def test_land_wave_refuses_a_draft_keyless_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(bl, "shipped_in_refusals", lambda root, shas: {})
     (tmp_path / ".git").mkdir()
     baton = tmp_path / "state" / "handoffs" / "b-1.md"

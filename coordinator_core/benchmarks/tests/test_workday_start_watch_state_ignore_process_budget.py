@@ -8,6 +8,7 @@ from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workday_start import runtime_ignore_set as rset
 from coordinator_core.workday_start.watch_state_ignore import watch_state_ignore
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -15,7 +16,7 @@ BAR_MS = 500.0
 TRACKED_FILES = 3000
 
 
-def _git(root, *args):
+def _git(root, *args) -> None:
     done = subprocess.run(
         ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid", *args],
         cwd=root, capture_output=True, text=True, **no_console_creationflags(),
@@ -23,7 +24,7 @@ def _git(root, *args):
     assert done.returncode == 0, done.stderr
 
 
-def test_watch_state_ignore_median_under_bar_and_spawns_nothing(tmp_path, monkeypatch):
+def test_watch_state_ignore_median_under_bar_and_spawns_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rules = ("state/group-em-watch.json", ".coordinator-local/", "state/**/*.fire.mjs")
     template = tmp_path.parent / f"{tmp_path.name}-gitignore.template"
     template.write_text("\n".join(rules) + "\n", encoding="utf-8")

@@ -34,8 +34,8 @@ def repo(tmp_path):
     _git(["init", "-q"], root)
     _git(["config", "user.email", "t@example.com"], root)
     _git(["config", "user.name", "t"], root)
-    # Real repos ignore .coordinator-local/; the halt path writes its withheld index there.
-    (root / ".git" / "info" / "exclude").write_text(".coordinator-local/\n", encoding="utf-8")
+    # Real repos ignore .coordinator-local/ and state/warp/ (run state); the halt path writes its withheld index there.
+    (root / ".git" / "info" / "exclude").write_text(".coordinator-local/\nstate/warp/\n", encoding="utf-8")
     (root / "docs").mkdir()
     (root / "docs" / "guide.md").write_text("seed\n", encoding="utf-8")
     (root / "product.py").write_text("x = 1\n", encoding="utf-8")
@@ -85,8 +85,9 @@ def _landed(root: Path, out: dict, *show_args: str) -> list:
 
 
 def _status(root: Path) -> dict:
-    out = _git(["status", "--porcelain", "-uall"], root)
-    return {line[3:]: line[:2] for line in out.splitlines()}
+    """Porcelain status with ignored run state listed as ``!!``; the fixture's ``.coordinator-local/`` is dropped."""
+    out = _git(["status", "--porcelain", "-uall", "--ignored"], root)
+    return {line[3:]: line[:2] for line in out.splitlines() if not line[3:].startswith(".coordinator-local/")}
 
 
 def test_stop_rule_typed_halt_lands_and_bare_string_halt_is_refused(repo):
@@ -141,7 +142,7 @@ def test_halt_after_stage_lands_manifest_and_requirements(repo):
 
 def test_tracked_record_file_deleted_from_disk_lands(repo):
     rec = _write_record(repo, RUN)
-    _git(["add", RECORD_DIR_ROOT], repo)
+    _git(["add", "-f", RECORD_DIR_ROOT], repo)
     _git(["commit", "-q", "-m", "record"], repo)
     (rec / "run.json").unlink()
 
@@ -171,7 +172,7 @@ def test_unsafe_run_id_and_malformed_halted_by_refuse(repo):
     malformed = _call(repo, **{HALTED_RECORD_PARAM: {"reason": REASON}})
     assert malformed.get("refused") == "missing-run-outcome"
     assert malformed["committed"] is False
-    assert _status(repo)[f"{RECORD_DIR_ROOT}/{RUN}/ask.md"] == "??"
+    assert _status(repo)[f"{RECORD_DIR_ROOT}/{RUN}/ask.md"] == "!!"
 
 
 def test_token_stays_live_after_landed_record_commit_and_wrong_token_refuses(repo):
@@ -361,7 +362,7 @@ def test_halted_run_lands_done_chunk_not_unfinished_one(repo):
 
     assert out["committed"] is True, out
     assert "landed_chunks" not in out
-    assert out["withheld"]["done.py"] == "halt-record-only"
+    assert out["withheld"]["done.py"] == "foreign-hunk-unproduced"  # no write baseline: provenance holds it
     names = _landed(repo, out, "--name-only")
     assert "done.py" not in names and "half.py" not in names
     assert outcome_rel(RUN) in names
@@ -409,8 +410,8 @@ def test_done_tracked_deletion_is_declared_and_never_tracked_path_is_not_staged(
     out = _call(repo, LEDGER, **PASSING)
 
     assert out["committed"] is True, out
-    assert "D\tproduct.py" not in _landed(repo, out, "--name-status")
-    assert out["withheld"]["product.py"] == "halt-record-only"
+    assert "D\tproduct.py" in _landed(repo, out, "--name-status")
+    assert "product.py" not in out.get("withheld", {})
     assert out.get("dropped", []) == []
 
 

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from coordinator_core.ops.session import safe_commit_offer
 from coordinator_core.session import claim_index
+import pytest
 
 
 def _fake_commit_set(paths, read_only):
@@ -15,7 +16,7 @@ def _fake_commit_set(paths, read_only):
     return _commit_set
 
 
-def test_twelve_reads_and_one_write_offers_only_the_write(monkeypatch):
+def test_twelve_reads_and_one_write_offers_only_the_write(monkeypatch: pytest.MonkeyPatch) -> None:
     reads = ["r%02d.py" % i for i in range(12)]
     monkeypatch.setattr(claim_index, "commit_set", _fake_commit_set(["w.py"], reads))
 
@@ -31,7 +32,7 @@ def test_twelve_reads_and_one_write_offers_only_the_write(monkeypatch):
     assert line.count("r0") + line.count("r1") == 5
 
 
-def test_no_read_only_renders_no_line(monkeypatch):
+def test_no_read_only_renders_no_line(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(claim_index, "commit_set", _fake_commit_set(["w.py"], []))
 
     offer = safe_commit_offer.compute_offer("me", None)

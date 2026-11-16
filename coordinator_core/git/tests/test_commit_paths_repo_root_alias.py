@@ -15,6 +15,7 @@ import subprocess
 import pytest
 
 from coordinator_core.git import commit as gcommit
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -29,7 +30,7 @@ def _git(repo, *args):
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/z")
@@ -46,7 +47,7 @@ def _subjects(repo):
     return _git(repo, "log", "--format=%s").stdout.splitlines()
 
 
-def test_the_agents_verbatim_block_lands_a_commit(repo):
+def test_the_agents_verbatim_block_lands_a_commit(repo) -> None:
     (repo / "a.txt").write_text("a\n", encoding="utf-8", newline="\n")
     (repo / "gone.txt").unlink()
 
@@ -66,7 +67,7 @@ def test_the_agents_verbatim_block_lands_a_commit(repo):
     ]
 
 
-def test_a_deletion_only_call_reaches_git_not_a_missing_argument_error(repo):
+def test_a_deletion_only_call_reaches_git_not_a_missing_argument_error(repo) -> None:
     (repo / "gone.txt").unlink()
 
     gcommit.commit_paths(repo_root=repo, deleted_paths=["gone.txt"], message="drop it")
@@ -74,7 +75,7 @@ def test_a_deletion_only_call_reaches_git_not_a_missing_argument_error(repo):
     assert _subjects(repo)[0] == "drop it"
 
 
-def test_repo_positional_still_wins_and_the_alias_stays_optional(repo):
+def test_repo_positional_still_wins_and_the_alias_stays_optional(repo) -> None:
     (repo / "a.txt").write_text("a\n", encoding="utf-8", newline="\n")
 
     gcommit.commit_paths(repo, ["a.txt"], "positional")
@@ -82,16 +83,16 @@ def test_repo_positional_still_wins_and_the_alias_stays_optional(repo):
     assert _subjects(repo)[0] == "positional"
 
 
-def test_supplying_both_names_for_the_same_value_is_refused(repo):
+def test_supplying_both_names_for_the_same_value_is_refused(repo) -> None:
     with pytest.raises(TypeError, match="both `repo` and its alias"):
         gcommit.commit_paths(repo, ["seed.txt"], "two roots", repo_root=repo)
 
 
-def test_omitting_the_root_entirely_names_all_three_spellings(repo):
+def test_omitting_the_root_entirely_names_all_three_spellings(repo) -> None:
     with pytest.raises(TypeError, match="repo_root"):
         gcommit.commit_paths(paths=["seed.txt"], message="no root")
 
 
-def test_an_empty_pathspec_is_still_refused_not_defaulted(repo):
+def test_an_empty_pathspec_is_still_refused_not_defaulted(repo) -> None:
     with pytest.raises(gcommit.CommitRefused, match="empty pathspec"):
         gcommit.commit_paths(repo_root=repo, message="nothing named")

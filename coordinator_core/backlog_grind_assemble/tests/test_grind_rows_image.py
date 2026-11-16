@@ -6,6 +6,7 @@ import pytest
 from coordinator_core.backlog_grind_assemble import grind_rows
 from coordinator_core.git import git_objects
 from coordinator_core.ops.dispatch_emit import grind_commit_contract as gcc
+from pathlib import Path
 
 
 def _repo(tmp_path):
@@ -14,18 +15,18 @@ def _repo(tmp_path):
     return tmp_path
 
 
-def _run(repo, phase, *paths, run="R1", row="C1"):
+def _run(repo, phase, *paths, run: str = "R1", row: str = "C1") -> int:
     argv = ["image", "--run-id", run, "--row-id", row, "--phase", phase, "--repo-root", str(repo)]
     for p in paths:
         argv += ["--path", p]
     return grind_rows.main(argv)
 
 
-def _record(repo, run="R1", row="C1"):
+def _record(repo, run: str = "R1", row: str = "C1"):
     return json.loads((repo / gcc.row_images_rel(run, row) / gcc.IMAGE_RECORD_FILE).read_text(encoding="utf-8"))
 
 
-def test_pre_post_round_trip_and_blob_readable(tmp_path):
+def test_pre_post_round_trip_and_blob_readable(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     assert _run(repo, "pre", "a.txt", "new.txt") == 0
     (repo / "a.txt").write_bytes(b"two\n")
@@ -38,7 +39,7 @@ def test_pre_post_round_trip_and_blob_readable(tmp_path):
     assert git_objects.read_object(repo / ".git", rec["pre"]["a.txt"]) == ("blob", b"one\n")
 
 
-def test_repeat_is_idempotent_and_urlenc_shape(tmp_path):
+def test_repeat_is_idempotent_and_urlenc_shape(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     tok = gcc.encode_declared_paths(["a.txt"])
     argv = ["image", "--run-id", "R1", "--row-id", "C1", "--phase", "pre", "--repo-root", str(repo), "--paths-urlenc", tok]
@@ -48,20 +49,20 @@ def test_repeat_is_idempotent_and_urlenc_shape(tmp_path):
     assert _record(repo) == first
 
 
-def test_unsafe_row_id_refused_before_any_write(tmp_path):
+def test_unsafe_row_id_refused_before_any_write(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     assert _run(repo, "pre", "a.txt", row="../x") == 1
     assert not (repo / gcc.ROW_IMAGES_ROOT).exists()
 
 
-def test_bad_phase_and_escaping_path_refused(tmp_path):
+def test_bad_phase_and_escaping_path_refused(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     assert _run(repo, "mid", "a.txt") == 2
     assert _run(repo, "pre", "../out.txt") == 1
     assert not (repo / gcc.ROW_IMAGES_ROOT).exists()
 
 
-def test_pre_rerun_after_edit_keeps_first_image(tmp_path):
+def test_pre_rerun_after_edit_keeps_first_image(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     assert _run(repo, "pre", "a.txt") == 0
     first = _record(repo)["pre"]["a.txt"]
@@ -70,7 +71,7 @@ def test_pre_rerun_after_edit_keeps_first_image(tmp_path):
     assert _record(repo)["pre"]["a.txt"] == first
 
 
-def test_corrupt_record_refused_and_left_byte_identical(tmp_path):
+def test_corrupt_record_refused_and_left_byte_identical(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     rec = repo / gcc.row_images_rel("R1", "C1") / gcc.IMAGE_RECORD_FILE
     rec.parent.mkdir(parents=True)
@@ -81,12 +82,12 @@ def test_corrupt_record_refused_and_left_byte_identical(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_writer_reader_round_trip_excludes_peer_hunk(tmp_path):
+def test_writer_reader_round_trip_excludes_peer_hunk(tmp_path: Path) -> None:
     import subprocess
 
     from coordinator_core.ops.dispatch_emit import grind_landing_select
 
-    def git(*a):
+    def git(*a) -> None:
         subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True,
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 

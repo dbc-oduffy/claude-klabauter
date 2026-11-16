@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core.session import guard_unlock_sentinel as gus
 from coordinator_core.write_guards import engine
+from pathlib import Path
 
 
 SENTINEL_BASENAME = ".coordinator-override-worktree-guard"
@@ -20,7 +21,7 @@ _REPO_ROOT = "/repo"
 
 
 @pytest.fixture(autouse=True)
-def _isolated_tempdir(tmp_path, monkeypatch):
+def _isolated_tempdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # A fake "/repo" is a new top-level entry under the drive root and trips
     # block_drive_root_new_dir_write; payload paths must live under tmp_path.
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
@@ -31,7 +32,7 @@ def _isolated_tempdir(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def floor_guard(monkeypatch):
+def floor_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """A hard-deny under a deny_registry name: the unlock seam only matters for a deny that
     survives the policy point, and no shipped write guard is both hard-deny and registered."""
     deny = {
@@ -45,7 +46,7 @@ def floor_guard(monkeypatch):
     monkeypatch.setattr(engine, "_discover_guards", lambda: ([guard], []))
 
 
-def _payload(session_id, tool_name="Write", file_path=None):
+def _payload(session_id, tool_name: str = "Write", file_path=None):
     p = {
         "tool_name": tool_name,
         "tool_input": {"file_path": file_path or "%s/%s" % (_REPO_ROOT, SENTINEL_BASENAME)},
@@ -64,26 +65,26 @@ def _is_deny(out):
 @pytest.mark.usefixtures("floor_guard")
 class TestAbsentSentinelDenies:
 
-    def test_no_sentinel_denies(self):
+    def test_no_sentinel_denies(self) -> None:
         out = engine.evaluate(_payload("sess-1"))
         assert _is_deny(out)
 
 
 @pytest.mark.usefixtures("floor_guard")
 class TestPresentSentinelGrantsOnce:
-    def test_sentinel_allows(self):
+    def test_sentinel_allows(self) -> None:
         gus.sentinel_path("sess-1", GUARD_NAME).write_text("", encoding="utf-8")
         out = engine.evaluate(_payload("sess-1"))
         assert not _is_deny(out)
 
-    def test_one_shot_re_denies_on_immediate_retry(self):
+    def test_one_shot_re_denies_on_immediate_retry(self) -> None:
         gus.sentinel_path("sess-1", GUARD_NAME).write_text("", encoding="utf-8")
         first = engine.evaluate(_payload("sess-1"))
         assert not _is_deny(first)
         second = engine.evaluate(_payload("sess-1"))
         assert _is_deny(second)
 
-    def test_sentinel_file_is_consumed_from_disk(self):
+    def test_sentinel_file_is_consumed_from_disk(self) -> None:
         p = gus.sentinel_path("sess-1", GUARD_NAME)
         p.write_text("", encoding="utf-8")
         engine.evaluate(_payload("sess-1"))
@@ -92,7 +93,7 @@ class TestPresentSentinelGrantsOnce:
 
 @pytest.mark.usefixtures("floor_guard")
 class TestPerGuardIsolation:
-    def test_sentinel_for_a_different_guard_does_not_clear_this_one(self):
+    def test_sentinel_for_a_different_guard_does_not_clear_this_one(self) -> None:
         gus.sentinel_path("sess-1", "block_priority_ledger_edit").write_text("", encoding="utf-8")
         out = engine.evaluate(_payload("sess-1"))
         assert _is_deny(out)
@@ -100,7 +101,7 @@ class TestPerGuardIsolation:
 
 @pytest.mark.usefixtures("floor_guard")
 class TestPerSessionIsolation:
-    def test_peer_session_sentinel_does_not_clear_ours(self):
+    def test_peer_session_sentinel_does_not_clear_ours(self) -> None:
         gus.sentinel_path("peer-session", GUARD_NAME).write_text("", encoding="utf-8")
         out = engine.evaluate(_payload("sess-1"))
         assert _is_deny(out)
@@ -108,12 +109,12 @@ class TestPerSessionIsolation:
 
 @pytest.mark.usefixtures("floor_guard")
 class TestUnresolvableSessionIdFailsClosed:
-    def test_missing_session_id_denies_even_with_a_sentinel_on_disk(self):
+    def test_missing_session_id_denies_even_with_a_sentinel_on_disk(self) -> None:
         gus.sentinel_path("", GUARD_NAME).write_text("", encoding="utf-8")
         out = engine.evaluate(_payload(None))
         assert _is_deny(out)
 
-    def test_empty_string_session_id_denies(self):
+    def test_empty_string_session_id_denies(self) -> None:
         gus.sentinel_path("", GUARD_NAME).write_text("", encoding="utf-8")
         out = engine.evaluate(_payload(""))
         assert _is_deny(out)
@@ -127,7 +128,7 @@ class TestAdvisoryGuardNeverConsultsUnlock:
             file_path="%s/%s" % (_REPO_ROOT, ADVISORY_TARGET),
         )
 
-    def test_fires_as_advisory_regardless_of_sentinel(self):
+    def test_fires_as_advisory_regardless_of_sentinel(self) -> None:
         out = engine.evaluate(self._advisory_payload("sess-1"))
         assert not _is_deny(out)
         assert out is not None
@@ -136,7 +137,7 @@ class TestAdvisoryGuardNeverConsultsUnlock:
             is None
         )
 
-    def test_unlock_sentinel_for_the_advisory_guard_is_left_untouched(self):
+    def test_unlock_sentinel_for_the_advisory_guard_is_left_untouched(self) -> None:
         p = gus.sentinel_path("sess-1", ADVISORY_GUARD_NAME)
         p.write_text("", encoding="utf-8")
         engine.evaluate(self._advisory_payload("sess-1"))

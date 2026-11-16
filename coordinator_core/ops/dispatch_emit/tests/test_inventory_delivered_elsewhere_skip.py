@@ -9,6 +9,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_inventory_tranche_and_withhel
     _plan_text,
     _repo,
 )
+from pathlib import Path
 
 _EDGE = [{"chunk": "C1", "gate_kind": "output-consumption-runtime"}]
 
@@ -48,7 +49,7 @@ def _mint(inv, **kwargs):
     return {r["id"]: r for r in rows}, ledger
 
 
-def test_single_chunk_delivered_elsewhere_is_skipped_and_dependent_released(tmp_path):
+def test_single_chunk_delivered_elsewhere_is_skipped_and_dependent_released(tmp_path: Path) -> None:
     inv = _single_chunk_inventory(tmp_path, "delivered_elsewhere")
     minted, ledger = _mint(inv)
     assert set(minted) == {"C2"}
@@ -56,7 +57,7 @@ def test_single_chunk_delivered_elsewhere_is_skipped_and_dependent_released(tmp_
     assert "delivered_elsewhere" in ledger["C1"]
 
 
-def test_every_non_dispatchable_disposition_skips_the_row(tmp_path):
+def test_every_non_dispatchable_disposition_skips_the_row(tmp_path: Path) -> None:
     for disposition in sorted(im.NON_DISPATCHABLE_DISPOSITIONS - {"coded"}):
         sub = tmp_path / disposition
         sub.mkdir()
@@ -65,7 +66,7 @@ def test_every_non_dispatchable_disposition_skips_the_row(tmp_path):
         assert disposition in ledger["C1"]
 
 
-def test_open_row_is_still_minted_and_still_gates_its_dependent(tmp_path):
+def test_open_row_is_still_minted_and_still_gates_its_dependent(tmp_path: Path) -> None:
     inv = _single_chunk_inventory(tmp_path, None)
     minted, ledger = _mint(inv)
     assert set(minted) == {"C1", "C2"}
@@ -73,7 +74,7 @@ def test_open_row_is_still_minted_and_still_gates_its_dependent(tmp_path):
     assert ledger == {}
 
 
-def test_coded_row_still_mints_without_skip_landed_and_skips_with_it(tmp_path):
+def test_coded_row_still_mints_without_skip_landed_and_skips_with_it(tmp_path: Path) -> None:
     inv = _single_chunk_inventory(tmp_path, "coded")
     minted, _ = _mint(inv)
     assert set(minted) == {"C1", "C2"}
@@ -84,14 +85,14 @@ def test_coded_row_still_mints_without_skip_landed_and_skips_with_it(tmp_path):
     assert "skip_landed" in ledger["C1"]
 
 
-def test_delivered_elsewhere_is_not_reported_as_landed(tmp_path):
+def test_delivered_elsewhere_is_not_reported_as_landed(tmp_path: Path) -> None:
     inv = _single_chunk_inventory(tmp_path, "delivered_elsewhere")
     skipped: list = []
     _mint(inv, skip_landed=True, skipped_out=skipped)
     assert skipped == []
 
 
-def test_whole_plan_expansion_drops_delivered_elsewhere_chunk_and_releases_dependent(tmp_path):
+def test_whole_plan_expansion_drops_delivered_elsewhere_chunk_and_releases_dependent(tmp_path: Path) -> None:
     plan = [
         _chunk("C1", "src/c1.py", disposition="delivered_elsewhere"),
         _chunk("C2", "src/c2.py", depends_on=_EDGE),

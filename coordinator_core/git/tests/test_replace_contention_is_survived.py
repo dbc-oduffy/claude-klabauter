@@ -29,6 +29,7 @@ import pytest
 
 from coordinator_core.git import git_objects
 from coordinator_core.git.git_objects import _replace_with_retry, cas_ref, write_object
+from pathlib import Path
 
 
 def _gitdir(tmp_path: pathlib.Path) -> pathlib.Path:
@@ -38,7 +39,7 @@ def _gitdir(tmp_path: pathlib.Path) -> pathlib.Path:
 
 
 class TestReplaceHelper:
-    def test_retries_the_windows_transient_then_succeeds(self, tmp_path, monkeypatch):
+    def test_retries_the_windows_transient_then_succeeds(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         src, dst = tmp_path / "s", tmp_path / "d"
         src.write_bytes(b"x")
         calls = {"n": 0}
@@ -54,7 +55,7 @@ class TestReplaceHelper:
         assert _replace_with_retry(src, dst) is True
         assert calls["n"] == 3
 
-    def test_gives_up_rather_than_forcing(self, tmp_path, monkeypatch):
+    def test_gives_up_rather_than_forcing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         src, dst = tmp_path / "s", tmp_path / "d"
         src.write_bytes(b"x")
         monkeypatch.setattr(
@@ -65,7 +66,7 @@ class TestReplaceHelper:
         assert _replace_with_retry(src, dst) is False
         assert not dst.exists()
 
-    def test_a_non_transient_oserror_is_not_retried(self, tmp_path, monkeypatch):
+    def test_a_non_transient_oserror_is_not_retried(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         src, dst = tmp_path / "s", tmp_path / "d"
         src.write_bytes(b"x")
         calls = {"n": 0}
@@ -78,7 +79,7 @@ class TestReplaceHelper:
         assert _replace_with_retry(src, dst) is False
         assert calls["n"] == 1, "a non-transient must not walk the ladder"
 
-    def test_still_valid_is_rechecked_before_each_retry(self, tmp_path, monkeypatch):
+    def test_still_valid_is_rechecked_before_each_retry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         src, dst = tmp_path / "s", tmp_path / "d"
         src.write_bytes(b"x")
         monkeypatch.setattr(
@@ -88,7 +89,7 @@ class TestReplaceHelper:
         )
         checks = {"n": 0}
 
-        def expires_after_two():
+        def expires_after_two() -> bool:
             checks["n"] += 1
             return checks["n"] < 2
 
@@ -98,8 +99,8 @@ class TestReplaceHelper:
 
 class TestWriteObjectIsContentAddressed:
     def test_a_peer_writing_identical_bytes_is_success_not_failure(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """CONTENT-ADDRESSED: the path is keyed on the sha of exactly these
         bytes, so if it exists a peer wrote byte-identical content and the
         object IS in the store. No other site may reason this way."""
@@ -117,7 +118,7 @@ class TestWriteObjectIsContentAddressed:
         assert len(sha) == 40
         assert (gitdir / "objects" / sha[:2] / sha[2:]).exists()
 
-    def test_a_destination_that_never_appears_is_raised(self, tmp_path, monkeypatch):
+    def test_a_destination_that_never_appears_is_raised(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         gitdir = tmp_path / ".git"
         (gitdir / "objects").mkdir(parents=True)
         monkeypatch.setattr(
@@ -130,11 +131,11 @@ class TestWriteObjectIsContentAddressed:
 
 
 class TestCasRefRefusesRatherThanCrashes:
-    def test_permissionerror_taking_the_lock_is_a_refusal(self, tmp_path, monkeypatch):
+    def test_permissionerror_taking_the_lock_is_a_refusal(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         gitdir = _gitdir(tmp_path)
         real_open = os.open
 
-        def denied(path, *a, **k):
+        def denied(path, *a, **k) -> int:
             if str(path).endswith(".lock"):
                 raise PermissionError(5, "Access is denied")
             return real_open(path, *a, **k)

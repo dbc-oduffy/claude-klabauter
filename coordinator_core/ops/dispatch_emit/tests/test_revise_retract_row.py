@@ -7,6 +7,7 @@ import yaml
 
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 RUN = "ask-20261027T000001-abc124"
 REL = "state/sizings/2026-10-27-revise-retract.yaml"
@@ -23,7 +24,7 @@ def _sizing():
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / REL).write_text(yaml.safe_dump(_sizing(), sort_keys=False), encoding="utf-8")
@@ -40,11 +41,11 @@ def _revise(repo, **params):
     return rl._handler({"run_id": RUN, **params}, repo_root=repo)
 
 
-def _retract(repo, row_id, reason="duplicate"):
+def _retract(repo, row_id, reason: str = "duplicate"):
     return _revise(repo, retract_row={"row_id": row_id, "reason": reason})
 
 
-def test_retract_withdraws_an_unclaimed_revision_row(repo):
+def test_retract_withdraws_an_unclaimed_revision_row(repo) -> None:
     row = _revise(repo, verbatim=WORDS)["item"]
     out = _retract(repo, row)
     assert out["ok"], out
@@ -54,33 +55,33 @@ def test_retract_withdraws_an_unclaimed_revision_row(repo):
     assert WORDS not in view
 
 
-def test_retract_adds_no_row(repo):
+def test_retract_adds_no_row(repo) -> None:
     row = _revise(repo, verbatim=WORDS)["item"]
     assert _retract(repo, row)["item"] is None
 
 
-def test_a_retracted_verbatim_can_be_sent_again(repo):
+def test_a_retracted_verbatim_can_be_sent_again(repo) -> None:
     row = _revise(repo, verbatim=WORDS)["item"]
     _retract(repo, row)
     assert _revise(repo, verbatim=WORDS)["item"] == row
 
 
-def _refused(repo, row_id, match):
+def _refused(repo, row_id, match) -> None:
     before = (repo / REL).read_bytes()
     out = _retract(repo, row_id)
     assert "error" in out and match in out["error"], out
     assert (repo / REL).read_bytes() == before
 
 
-def test_unknown_row_refuses(repo):
+def test_unknown_row_refuses(repo) -> None:
     _refused(repo, "R9", "no register row")
 
 
-def test_a_non_revision_row_refuses(repo):
+def test_a_non_revision_row_refuses(repo) -> None:
     _refused(repo, "R1", "not a revision row")
 
 
-def test_a_claimed_row_refuses(repo):
+def test_a_claimed_row_refuses(repo) -> None:
     row = _revise(repo, verbatim=WORDS)["item"]
 
     def edit(rows):
@@ -93,7 +94,7 @@ def test_a_claimed_row_refuses(repo):
     _refused(repo, row, "claimed")
 
 
-def test_a_row_claimed_only_by_the_plans_register_claims_refuses(repo):
+def test_a_row_claimed_only_by_the_plans_register_claims_refuses(repo) -> None:
     row = _revise(repo, verbatim=WORDS)["item"]
     sizing_doc = yaml.safe_load((repo / REL).read_text(encoding="utf-8"))
     sizing_doc["plan"] = "docs/plans/p.md"
@@ -105,14 +106,14 @@ def test_a_row_claimed_only_by_the_plans_register_claims_refuses(repo):
     _refused(repo, row, "register_claims")
 
 
-def test_a_row_that_is_no_longer_open_refuses(repo):
+def test_a_row_that_is_no_longer_open_refuses(repo) -> None:
     row = _revise(repo, verbatim=WORDS)["item"]
     _revise(repo, verbatim="drop it", out_of_scope=[row])
     _refused(repo, row, "deferred")
 
 
 @pytest.mark.parametrize("bad", [{"row_id": "R2", "reason": ""}, {"reason": "x"}, "R2"])
-def test_malformed_retract_refuses(repo, bad):
+def test_malformed_retract_refuses(repo, bad) -> None:
     _revise(repo, verbatim=WORDS)
     before = (repo / REL).read_bytes()
     out = _revise(repo, retract_row=bad)
@@ -120,7 +121,7 @@ def test_malformed_retract_refuses(repo, bad):
     assert (repo / REL).read_bytes() == before
 
 
-def test_retract_combined_with_a_verbatim_refuses(repo):
+def test_retract_combined_with_a_verbatim_refuses(repo) -> None:
     row = _revise(repo, verbatim=WORDS)["item"]
     before = (repo / REL).read_bytes()
     out = _revise(repo, verbatim="more words", retract_row={"row_id": row, "reason": "dup"})
@@ -128,7 +129,7 @@ def test_retract_combined_with_a_verbatim_refuses(repo):
     assert (repo / REL).read_bytes() == before
 
 
-def test_a_held_run_refuses(tmp_path):
+def test_a_held_run_refuses(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     out = rl._handler({"run_id": "ask-held", "retract_row": {"row_id": "R2", "reason": "x"}}, repo_root=tmp_path)
     assert "emit it first" in out["error"]

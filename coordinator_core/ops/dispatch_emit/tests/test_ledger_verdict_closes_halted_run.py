@@ -5,6 +5,7 @@ from __future__ import annotations
 import subprocess
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 import yaml
@@ -27,7 +28,7 @@ def _git(repo, *args):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     _git(tmp_path, "init", "-q")
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     doc = {
@@ -48,7 +49,7 @@ def repo(tmp_path):
     return tmp_path
 
 
-def _verdict(repo, status="met", sha=None):
+def _verdict(repo, status: str = "met", sha=None):
     ledger = rl.read_ledger(repo, rl.run_dir(repo, RUN))
     out = {"items": [{"id": i.id, "status": status, "wired": True} for i in ledger.items]}
     if sha:
@@ -60,7 +61,7 @@ def _marker(repo):
     return hr._read(rl.run_dir(repo, RUN))
 
 
-def test_all_met_by_landed_commit_closes_the_run_landed(repo):
+def test_all_met_by_landed_commit_closes_the_run_landed(repo) -> None:
     head = _git(repo, "rev-parse", "HEAD")
     reply = rl._handler({"run_id": RUN, "ledger_verdict": _verdict(repo, sha=head)}, repo)
     assert reply.get("ok") is True, reply
@@ -70,7 +71,7 @@ def test_all_met_by_landed_commit_closes_the_run_landed(repo):
     assert marker["status"] == hr.STATUS_LANDED and marker["sha"] == head
 
 
-def test_a_not_met_row_leaves_the_run_halted(repo):
+def test_a_not_met_row_leaves_the_run_halted(repo) -> None:
     head = _git(repo, "rev-parse", "HEAD")
     reply = rl._handler({"run_id": RUN, "ledger_verdict": _verdict(repo, status="not_met", sha=head)}, repo)
     assert "ledger_verdict" not in reply["applied"]
@@ -78,20 +79,20 @@ def test_a_not_met_row_leaves_the_run_halted(repo):
     assert _marker(repo)["status"] == hr.STATUS_HALTED
 
 
-def test_verdict_without_a_landed_sha_leaves_the_run_halted(repo):
+def test_verdict_without_a_landed_sha_leaves_the_run_halted(repo) -> None:
     reply = rl._handler({"run_id": RUN, "ledger_verdict": _verdict(repo)}, repo)
     assert any(r["input"] == "ledger_verdict" for r in reply["refused"])
     assert _marker(repo)["status"] == hr.STATUS_HALTED
 
 
-def test_a_sha_that_is_not_a_commit_leaves_the_run_halted(repo):
+def test_a_sha_that_is_not_a_commit_leaves_the_run_halted(repo) -> None:
     reply = rl._handler({"run_id": RUN, "ledger_verdict": _verdict(repo, sha="0" * 40)}, repo)
     assert any(r["input"] == "ledger_verdict" for r in reply["refused"])
     assert _marker(repo)["status"] == hr.STATUS_HALTED
 
 
 @pytest.mark.spawns_process
-def test_closing_on_a_full_sha_spawns_exactly_the_one_ancestry_check(repo, monkeypatch):
+def test_closing_on_a_full_sha_spawns_exactly_the_one_ancestry_check(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """The verdict leg verifies through `halted_run_landed._verify`: one batched `run_git` ancestry read,
     the figure the budget manifest pins for that shared verifier."""
     head = _git(repo, "rev-parse", "HEAD")

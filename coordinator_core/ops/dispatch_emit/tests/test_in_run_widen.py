@@ -8,11 +8,12 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import in_run_widen as w
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 ROOT = "/repo"
 
 
-def _reply(value):
+def _reply(value) -> str:
     return f"BLOCKED: footprint mismatch\nROW-LOCAL-BLOCK: {value}\n"
 
 
@@ -33,7 +34,7 @@ def _reply(value):
         ("S", "HUGE", "flag"),
     ],
 )
-def test_resize_verdict(old, new, expected):
+def test_resize_verdict(old, new, expected) -> None:
     assert w.resize_verdict(old, new) == expected
 
 
@@ -66,7 +67,7 @@ CASES = [
 
 
 @pytest.mark.parametrize("text,held,kind,path", CASES)
-def test_classify_block(text, held, kind, path):
+def test_classify_block(text, held, kind, path) -> None:
     got = w.classify_block(text, ROOT, held)
     if kind == "widen":
         assert got == w.Widen(path)
@@ -74,16 +75,16 @@ def test_classify_block(text, held, kind, path):
         assert isinstance(got, w.Halt) and got.reason
 
 
-def test_doctrine_path_halts_via_guard_constants():
+def test_doctrine_path_halts_via_guard_constants() -> None:
     for parts in (*w._CONTENT_ONLY_SURFACES, *w._PER_REPO_SURFACES):
         assert isinstance(w.classify_block(_reply("/".join(parts)), ROOT, ()), w.Halt)
 
 
-def test_ordinary_source_file_widens_so_denial_is_not_blanket():
+def test_ordinary_source_file_widens_so_denial_is_not_blanket() -> None:
     assert w.classify_block(_reply("coordinator_core/x.py"), ROOT, ()) == w.Widen("coordinator_core/x.py")
 
 
-def test_record_and_read_back(tmp_path):
+def test_record_and_read_back(tmp_path: Path) -> None:
     run = tmp_path / "run"
     assert w.widened_paths(run) == []
     w.record_widen(run, "C1", "a/b.py")
@@ -95,7 +96,7 @@ def test_record_and_read_back(tmp_path):
     assert len(lines) == 3 and all(json.loads(x) for x in lines)
 
 
-def test_widened_paths_skips_corrupt_lines(tmp_path):
+def test_widened_paths_skips_corrupt_lines(tmp_path: Path) -> None:
     (tmp_path / w.WIDEN_RECORD_NAME).write_text('garbage\n{"row": "C1", "path": "a.py"}\n[1]\n')
     assert w.widened_paths(tmp_path) == ["a.py"]
 
@@ -103,7 +104,7 @@ def test_widened_paths_skips_corrupt_lines(tmp_path):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @pytest.mark.skipif(shutil.which("node") is None, reason="node unavailable")
-def test_js_parity_with_python(tmp_path):
+def test_js_parity_with_python(tmp_path: Path) -> None:
     held = ["held/file.py"]
     cases = [(t, h if h else held, k) for t, h, k, _ in CASES]
     cases.append((_reply("held/file.py"), held, "halt"))
@@ -127,12 +128,12 @@ def test_js_parity_with_python(tmp_path):
             assert "halt" in js_res, text
 
 
-def test_js_extra_denylist_halts():
+def test_js_extra_denylist_halts() -> None:
     src = w.classify_block_js(["secret/"])
     assert "secret/" in src
 
 
-def test_record_widens_persists_wellformed_items_and_skips_the_rest(tmp_path):
+def test_record_widens_persists_wellformed_items_and_skips_the_rest(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.in_run_widen import record_widens, widened_paths
 
     n = record_widens(
@@ -144,14 +145,14 @@ def test_record_widens_persists_wellformed_items_and_skips_the_rest(tmp_path):
     assert record_widens(tmp_path, None) == 0
 
 
-def test_widened_by_row_groups_paths_per_row_in_order_without_duplicates(tmp_path):
+def test_widened_by_row_groups_paths_per_row_in_order_without_duplicates(tmp_path: Path) -> None:
     for row, path in (("r1", "a.py"), ("r2", "b.py"), ("r1", "c.py"), ("r1", "a.py")):
         w.record_widen(tmp_path, row, path)
     assert w.widened_by_row(tmp_path) == {"r1": ["a.py", "c.py"], "r2": ["b.py"]}
     assert w.widened_by_row(tmp_path / "absent") == {}
 
 
-def test_record_widens_refuses_denied_surfaces_the_classifier_halts_on(tmp_path):
+def test_record_widens_refuses_denied_surfaces_the_classifier_halts_on(tmp_path: Path) -> None:
     items = [{"row": "r1", "path": p} for p in ("state/x.yaml", "CLAUDE.md", "sub/CLAUDE.md", ".git/config", "a//b.py")]
     assert w.record_widens(tmp_path, items) == 0
     assert w.widened_paths(tmp_path) == []

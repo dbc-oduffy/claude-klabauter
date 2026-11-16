@@ -6,14 +6,17 @@ daily (24h) or weekly (7d) stamp stale, or has the store crossed a pack/loose th
 (`store_hygiene.owed_by_threshold`, stat calls only)?" -- and launches ONE detached child for
 the due tiers. A threshold crossing makes daily due even with a fresh stamp; each launch does
 one bounded batch, so the store converges over ticks. The child runs the tiers in order, each
-holding `object_store_lock` (store_hygiene's daily body, `git_maintenance.run_tier("weekly")`),
-after a busy check.
+holding `object_store_lock` (store_hygiene's daily body, which owns its own load decision, and
+`git_maintenance.run_tier("weekly")` after a busy check). Candidates are the served repos plus
+every store the engine's pack reader opened (`git_objects.read_store_registry_dir`).
 
 Invariants:
-  - The tick thread spawns nothing and samples no load when nothing is owed; the busy check
+  - The tick thread spawns nothing and samples no load when nothing is owed; the weekly busy check
     (`store_hygiene._box_busy`, which may sleep a sampling gap) and all real work run in the child.
+  - Daily is never gated on load here; while `pack_deletion_pause` holds, only daily is offered and
+    only when `store_hygiene.midx_upkeep_owed`.
   - The stamp is claimed (touched) at launch, so a slow child is not relaunched. A child that finds
-    the box busy, the lock held or the run failed backdates the stamp to retry after `RETRY_S`, not a whole interval.
+    the box busy (weekly), the lock held or the run failed backdates the stamp to retry after `RETRY_S`, not a whole interval.
   - At most one child launch per tick; repos are staggered across ticks.
   - Stamps live under the repo's git common dir.
 """
@@ -23,6 +26,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Iterable, Optional
@@ -39,6 +43,8 @@ RETRY_S = 3600
 THRESHOLD_COOLDOWN_S = 900
 #: In-process gate: a repo's stamps are re-stat'ed at most this often.
 CHECK_INTERVAL_S = 300.0
+#: Most registry entries kept; the oldest-mtime ones past it are unlinked.
+READ_STORE_REGISTRY_MAX = 256
 
 TIERS = ("daily", "weekly")
 _INTERVALS = {"daily": DAILY_INTERVAL_S, "weekly": WEEKLY_INTERVAL_S}
@@ -46,6 +52,9 @@ _STAMP_DIR = "coordinator"
 
 _log = logging.getLogger(__name__)
 _next_check: dict[Path, float] = {}
+_next_paused_check: dict[Path, float] = {}
+_registry_next = float("-inf")
+_registry_cache: list[Path] = []
 
 
 def stamp_path(common_dir: Path, tier: str) -> Path:
@@ -115,17 +124,101 @@ def _spawn(repo: Path, tiers: list[str]) -> bool:
     )
 
 
+def _unlink_quiet(path: Path) -> None:
+    try:
+        path.unlink()
+    except OSError:
+        pass
+
+
+def _registry_repo(common_dir: Path) -> Optional[Path]:
+    """The non-bare repo whose `.git` directory is `common_dir`; None for a bare, gone or
+    worktree-linked store."""
+    if common_dir.name != ".git" or not common_dir.is_dir():
+        return None
+    return common_dir.parent
+
+
+def _read_store_repos() -> list[Path]:
+    """Repos whose store the engine's pack reader opened (one listdir of the registry). An entry
+    naming no resolvable repo is unlinked; an unresolvable settings home logs and yields none."""
+    from coordinator_core.git import git_objects
+
+    try:
+        registry = git_objects.read_store_registry_dir()
+        names = os.listdir(registry)
+    except FileNotFoundError:
+        return []
+    except Exception as exc:  # noqa: BLE001 -- the registry never fails the tick
+        _log.warning("engine read-store registry unreadable (settings_home unresolved?): %s", exc)
+        return []
+    kept: list[tuple[float, Path, Path]] = []
+    temp_root = _temp_root()
+    for name in names:
+        entry = registry / name
+        try:
+            line = entry.read_text(encoding="utf-8").strip()
+            mtime = entry.stat().st_mtime
+        except OSError:
+            continue
+        repo = _registry_repo(Path(line)) if line else None
+        if repo is None or _is_under(repo, temp_root):
+            _unlink_quiet(entry)
+            continue
+        kept.append((mtime, entry, repo))
+    kept.sort(key=lambda item: item[0], reverse=True)
+    for _, entry, _repo in kept[READ_STORE_REGISTRY_MAX:]:
+        _unlink_quiet(entry)
+    return [repo for _, _, repo in kept[:READ_STORE_REGISTRY_MAX]]
+
+
+def _temp_root() -> Path:
+    return Path(tempfile.gettempdir()).resolve()
+
+
+def _is_under(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root)
+    except (OSError, RuntimeError, ValueError):
+        return False
+    return True
+
+
+def _registered_repos(now_mono: float) -> list[Path]:
+    """`_read_store_repos`, re-read at most every CHECK_INTERVAL_S."""
+    global _registry_next, _registry_cache
+    if now_mono >= _registry_next:
+        _registry_next = now_mono + CHECK_INTERVAL_S
+        _registry_cache = _read_store_repos()
+    return _registry_cache
+
+
+def _due_tiers(common_dir: Path, now: float, paused: bool) -> list[str]:
+    """Tiers to launch. Paused: daily alone, and only when the MIDX is owed a rewrite (stat only)."""
+    if paused:
+        from coordinator_core.git import store_hygiene
+
+        if _threshold_cooled(common_dir, now) and store_hygiene.midx_upkeep_owed(common_dir):
+            return ["daily"]
+        return []
+    due = [t for t in TIERS if _owed(common_dir, t, now)]
+    if "daily" not in due and _threshold_cooled(common_dir, now) and _owed_by_threshold(common_dir):
+        due.insert(0, "daily")
+    return due
+
+
 def on_idle_tick(repos: Iterable[Path]) -> bool:
     """Launch the due tiers for at most one repo; True when a child was launched.
 
-    A not-owed tick is a few stats and spawns nothing; a paused one (`pack_deletion_pause`) does
-    not even stat."""
-    if pack_deletion_pause.paused():
-        return False
+    Candidates are the served repos plus every store the pack reader opened (the registry). A
+    not-owed tick is a few stats and spawns nothing; a paused one (`pack_deletion_pause`) stats
+    only for MIDX upkeep and offers daily alone."""
+    paused = pack_deletion_pause.paused()
+    gate = _next_paused_check if paused else _next_check
     now_mono = time.monotonic()
     now = time.time()
     seen: set[Path] = set()
-    for raw in repos:
+    for raw in (*repos, *_registered_repos(now_mono)):
         try:
             repo = Path(raw).resolve()
         except (OSError, RuntimeError, ValueError):
@@ -133,16 +226,15 @@ def on_idle_tick(repos: Iterable[Path]) -> bool:
         if repo in seen:
             continue
         seen.add(repo)
-        if now_mono < _next_check.get(repo, float("-inf")):
+        if now_mono < gate.get(repo, float("-inf")):
             continue
-        _next_check[repo] = now_mono + CHECK_INTERVAL_S
+        gate[repo] = now_mono + CHECK_INTERVAL_S
         try:
-            if not (repo / ".git").exists():
+            dot_git = repo / ".git"
+            if not dot_git.exists():
                 continue
-            common_dir = resolve_git_common_dir(repo)
-            due = [t for t in TIERS if _owed(common_dir, t, now)]
-            if "daily" not in due and _threshold_cooled(common_dir, now) and _owed_by_threshold(common_dir):
-                due.insert(0, "daily")
+            common_dir = dot_git if dot_git.is_dir() else resolve_git_common_dir(repo)
+            due = _due_tiers(common_dir, now, paused)
             if not due:
                 continue
             claimed = [t for t in due if _claim(common_dir, t)]
@@ -180,12 +272,12 @@ def _run_due_locked(repo: Path, common_dir: Path, tiers: Iterable[str], store_hy
     for tier in tiers:
         if tier not in _INTERVALS:
             continue
-        if store_hygiene._box_busy():
-            _backdate(common_dir, tier)
-            continue
         if tier == "daily":
             rc, deferred = store_hygiene._run_daily_outcome(repo)
         else:
+            if store_hygiene._box_busy():
+                _backdate(common_dir, tier)
+                continue
             result = run_tier(repo, "weekly")
             rc, deferred = result.rc, result.deferred
         if deferred or rc != 0:

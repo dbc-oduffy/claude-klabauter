@@ -6,10 +6,11 @@ import pytest
 from coordinator_core import _settings_home
 from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
 from coordinator_core.ops.dispatch_emit import live_run_index as idx
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _isolated(tmp_path, monkeypatch):
+def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_settings_home, "machine_local_dir", lambda: tmp_path / "ml-home")
 
 
@@ -17,7 +18,7 @@ def _blocker(monkeypatch, real=None):
     gate = threading.Event()
     calls = []
 
-    def fake(path, data, **kw):
+    def fake(path, data, **kw) -> None:
         calls.append(path)
         gate.wait(10)
         if real is not None:
@@ -27,7 +28,7 @@ def _blocker(monkeypatch, real=None):
     return gate, calls
 
 
-def test_success_returns_none_and_writes(tmp_path):
+def test_success_returns_none_and_writes(tmp_path: Path) -> None:
     p = tmp_path / "a.bin"
     assert hrr.bounded_write(p, b"x", 1000) is None
     assert p.read_bytes() == b"x"
@@ -35,7 +36,7 @@ def test_success_returns_none_and_writes(tmp_path):
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds a blocked write that must report stalled at its deadline")
-def test_blocked_write_returns_stalled_within_deadline(tmp_path, monkeypatch):
+def test_blocked_write_returns_stalled_within_deadline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     gate, _ = _blocker(monkeypatch)
     p = tmp_path / "a.bin"
     t0 = time.monotonic()
@@ -48,7 +49,7 @@ def test_blocked_write_returns_stalled_within_deadline(tmp_path, monkeypatch):
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds a write to a path with a blocked write outstanding that must not wait")
-def test_second_write_to_outstanding_path_stalls_at_once(tmp_path, monkeypatch):
+def test_second_write_to_outstanding_path_stalls_at_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     gate, calls = _blocker(monkeypatch)
     p = tmp_path / "a.bin"
     try:
@@ -61,7 +62,7 @@ def test_second_write_to_outstanding_path_stalls_at_once(tmp_path, monkeypatch):
         gate.set()
 
 
-def test_late_write_lands_and_path_frees(tmp_path, monkeypatch):
+def test_late_write_lands_and_path_frees(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.atomic_replace import atomic_write_bytes
 
     gate, _ = _blocker(monkeypatch, real=atomic_write_bytes)
@@ -76,7 +77,7 @@ def test_late_write_lands_and_path_frees(tmp_path, monkeypatch):
     assert hrr.bounded_write(p, b"next", 1000) is None
 
 
-def test_oserror_on_worker_is_reraised_not_stalled(tmp_path, monkeypatch):
+def test_oserror_on_worker_is_reraised_not_stalled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(path, data, **kw):
         raise PermissionError("denied")
 
@@ -88,7 +89,7 @@ def test_oserror_on_worker_is_reraised_not_stalled(tmp_path, monkeypatch):
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds a blocked index write that must return false at its deadline")
-def test_live_run_index_add_returns_false_when_write_blocks(tmp_path, monkeypatch):
+def test_live_run_index_add_returns_false_when_write_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".git").mkdir()
     gate, _ = _blocker(monkeypatch)
     monkeypatch.setattr(idx, "WRITE_DEADLINE_MS", 100.0)
@@ -100,7 +101,7 @@ def test_live_run_index_add_returns_false_when_write_blocks(tmp_path, monkeypatc
         gate.set()
 
 
-def test_mutate_skips_load_while_write_outstanding(tmp_path, monkeypatch):
+def test_mutate_skips_load_while_write_outstanding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".git").mkdir()
     gate, _ = _blocker(monkeypatch)
     monkeypatch.setattr(idx, "WRITE_DEADLINE_MS", 50.0)

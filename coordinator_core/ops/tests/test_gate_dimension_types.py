@@ -36,6 +36,7 @@ from coordinator_core.ops.gate_validate_invocable import (
     _run_dimension,
 )
 from coordinator_core.ops.tests._dod_gate_test_helpers import available, unavailable
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
@@ -50,18 +51,18 @@ def test_self_registration_replaces_stub() -> None:
     assert _DIMENSION_REGISTRY["types"] is types_dim._check_types
 
 
-def test_no_python_files_is_unavailable(tmp_path) -> None:
+def test_no_python_files_is_unavailable(tmp_path: Path) -> None:
     result = types_dim._check_types(["docs/reference/foo.md"], None, tmp_path)
     assert result.verdict is Verdict.UNAVAILABLE
     assert "nothing" in result.detail.lower()
 
 
-def test_empty_changed_files_is_unavailable(tmp_path) -> None:
+def test_empty_changed_files_is_unavailable(tmp_path: Path) -> None:
     result = types_dim._check_types([], None, tmp_path)
     assert result.verdict is Verdict.UNAVAILABLE
 
 
-def test_tool_unavailable_degrades_to_unavailable(monkeypatch, tmp_path) -> None:
+def test_tool_unavailable_degrades_to_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         types_dim,
         "resolve_tool",
@@ -72,7 +73,7 @@ def test_tool_unavailable_degrades_to_unavailable(monkeypatch, tmp_path) -> None
     assert "mypy not found" in result.detail
 
 
-def test_rc0_is_pass(monkeypatch, tmp_path) -> None:
+def test_rc0_is_pass(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         types_dim,
         "resolve_tool",
@@ -83,7 +84,7 @@ def test_rc0_is_pass(monkeypatch, tmp_path) -> None:
     assert result.verdict is Verdict.PASS
 
 
-def test_rc1_is_fail(monkeypatch, tmp_path) -> None:
+def test_rc1_is_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         types_dim,
         "resolve_tool",
@@ -99,7 +100,7 @@ def test_rc1_is_fail(monkeypatch, tmp_path) -> None:
     assert "bad type" in result.detail
 
 
-def test_rc2_fatal_error_is_unavailable_not_fail(monkeypatch, tmp_path) -> None:
+def test_rc2_fatal_error_is_unavailable_not_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         types_dim,
         "resolve_tool",
@@ -113,7 +114,7 @@ def test_rc2_fatal_error_is_unavailable_not_fail(monkeypatch, tmp_path) -> None:
     assert "fatal: bad config" in result.detail
 
 
-def test_timeout_is_unavailable_not_fail(monkeypatch, tmp_path) -> None:
+def test_timeout_is_unavailable_not_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     def _raise_timeout(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd="mypy", timeout=120)
 
@@ -127,7 +128,7 @@ def test_non_py_files_filtered_out() -> None:
     assert types_dim._python_changed_files(["a.py", "b.md", "c.py", "d.txt"]) == ["a.py", "c.py"]
 
 
-def test_run_dimension_wraps_types_check(monkeypatch, tmp_path) -> None:
+def test_run_dimension_wraps_types_check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         types_dim,
         "resolve_tool",
@@ -138,7 +139,7 @@ def test_run_dimension_wraps_types_check(monkeypatch, tmp_path) -> None:
     assert result.verdict is Verdict.UNAVAILABLE
 
 
-def test_live_smoke_never_raises(tmp_path) -> None:
+def test_live_smoke_never_raises(tmp_path: Path) -> None:
     """Real machine, no monkeypatching -- mypy is expected UNAVAILABLE here
     (not resolved on the authoring machine), but the check must never raise
     regardless of what is actually installed."""

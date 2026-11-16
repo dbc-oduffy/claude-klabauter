@@ -22,6 +22,7 @@ from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.ops.dispatch_emit.run_close import close_job_path
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -67,7 +68,7 @@ prime_exit_criterion:
 """
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> None:
     subprocess.run(
         ["git", *args], cwd=repo, capture_output=True, text=True, check=True, **no_console_creationflags()
     )
@@ -140,7 +141,7 @@ def _rejudge_records(repo) -> list:
     return [p for p in root.rglob("*") if p.is_file() and "rejudge" in p.name]
 
 
-def test_run_with_product_at_head_and_met_criterion_closes_in_run(tmp_path, monkeypatch):
+def test_run_with_product_at_head_and_met_criterion_closes_in_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env = _landed(tmp_path, monkeypatch, slice_sizing=True)
     repo = env["repo"]
 
@@ -153,7 +154,7 @@ def test_run_with_product_at_head_and_met_criterion_closes_in_run(tmp_path, monk
     assert _rejudge_records(repo) == []
 
 
-def test_same_run_without_ask_parent_leaves_the_plan_unimplemented_on_the_uncovered_turn(tmp_path, monkeypatch):
+def test_same_run_without_ask_parent_leaves_the_plan_unimplemented_on_the_uncovered_turn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Without an ask-parent no register row covers PM turn 29: the close job's plan-reconciliation leg
     fails naming the turn and the plan stays unimplemented (the old refire refused at the stamp instead)."""
     env = _landed(tmp_path, monkeypatch, slice_sizing=False)
@@ -166,7 +167,7 @@ def test_same_run_without_ask_parent_leaves_the_plan_unimplemented_on_the_uncove
     assert "status: implemented" not in (repo / PLAN_REL).read_text(encoding="utf-8")
 
 
-def test_zero_file_pass_anchor_lands_an_empty_delta_commit_carrying_the_review_trailer(tmp_path, monkeypatch):
+def test_zero_file_pass_anchor_lands_an_empty_delta_commit_carrying_the_review_trailer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import hashlib
 
     env = _landed(tmp_path, monkeypatch, slice_sizing=True)

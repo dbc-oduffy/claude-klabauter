@@ -8,10 +8,11 @@ import pytest
 
 from coordinator_core.agent_pipe import bridge, grok, mailbox, roster
 from coordinator_core.ops.workflow_fire.notify import notify_terminal
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _home(tmp_path, monkeypatch):
+def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
 
 
@@ -21,7 +22,7 @@ def _record(**kw) -> dict:
     return rec
 
 
-def test_agy_peer_gets_one_labelled_message(monkeypatch, tmp_path):
+def test_agy_peer_gets_one_labelled_message(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     out = tmp_path / "argv.json"
     script = f"import sys,json;open({str(out)!r},'w').write(json.dumps(sys.argv[1:]))"
 
@@ -46,14 +47,14 @@ def test_agy_peer_gets_one_labelled_message(monkeypatch, tmp_path):
     assert "driver-done" in text
 
 
-def test_grok_peer_gets_one_labelled_message(monkeypatch):
+def test_grok_peer_gets_one_labelled_message(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = []
 
     class FakeDriver:
         def __init__(self, argv=None):
             pass
 
-        def resume(self, sid):
+        def resume(self, sid) -> str:
             seen.append(("resume", sid))
             return "h"
 
@@ -88,7 +89,7 @@ def test_grok_peer_gets_one_labelled_message(monkeypatch):
     assert seen[1][1].count("fire_id=f1") >= 1
 
 
-def test_non_roster_sender_is_not_refused():
+def test_non_roster_sender_is_not_refused() -> None:
     roster.bind("cl", "claude", "sess-c")
     msg = bridge.make_message("workflow.fire", "cl", "x")
     assert bridge.refusal(msg) is None
@@ -98,14 +99,14 @@ def test_non_roster_sender_is_not_refused():
     assert "fire_id=f1" in line["content"]
 
 
-def test_unbound_notify_to_is_recorded_not_raised():
+def test_unbound_notify_to_is_recorded_not_raised() -> None:
     done = notify_terminal(_record(notify_to="ghost"))
     assert done["notify_status"] == "unroutable"
     assert "unroutable" in done["notify_error"]
     assert "notified_at" not in done
 
 
-def test_refused_sets_error():
+def test_refused_sets_error() -> None:
     roster.bind("cl", "claude", "sess-c")
     bridge.set_mute("cl")
     done = notify_terminal(_record(notify_to="cl"))
@@ -114,7 +115,7 @@ def test_refused_sets_error():
     assert "notified_at" not in done
 
 
-def test_idempotent_via_notified_at():
+def test_idempotent_via_notified_at() -> None:
     roster.bind("cl", "claude", "sess-c")
     first = notify_terminal(_record(notify_to="cl"))
     second = notify_terminal(first)
@@ -122,7 +123,7 @@ def test_idempotent_via_notified_at():
     assert len(mailbox.drain("sess-c")) == 1
 
 
-def test_no_notify_to_or_non_terminal_is_noop():
+def test_no_notify_to_or_non_terminal_is_noop() -> None:
     roster.bind("cl", "claude", "sess-c")
     rec = _record(notify_to=None)
     assert notify_terminal(rec) == rec
@@ -131,7 +132,7 @@ def test_no_notify_to_or_non_terminal_is_noop():
     assert mailbox.drain("sess-c") == []
 
 
-def test_never_raises(monkeypatch):
+def test_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise RuntimeError("bridge down")
 
@@ -141,7 +142,7 @@ def test_never_raises(monkeypatch):
     assert "RuntimeError" in done["notify_error"] and "notified_at" not in done
 
 
-def test_input_record_not_mutated():
+def test_input_record_not_mutated() -> None:
     roster.bind("cl", "claude", "sess-c")
     rec = _record(notify_to="cl")
     notify_terminal(rec)

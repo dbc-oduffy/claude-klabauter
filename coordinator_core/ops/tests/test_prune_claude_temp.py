@@ -10,11 +10,12 @@ import pytest
 from coordinator_core import temp_layout
 from coordinator_core.hooks import sessionstart_async_dispatch as disp
 from coordinator_core.ops import prune_claude_temp as pct
+from pathlib import Path
 
 DAY = 86400
 
 
-def _age(path, days):
+def _age(path, days) -> None:
     t = time.time() - days * DAY
     os.utime(path, (t, t))
 
@@ -29,7 +30,7 @@ def _session(root, project, session, days, files=("a.txt",)):
     return d
 
 
-def test_stale_dir_deleted_and_empty_project_removed(tmp_path):
+def test_stale_dir_deleted_and_empty_project_removed(tmp_path: Path) -> None:
     root = tmp_path / "claude"
     d = _session(root, "proj", "s1", 10)
     assert pct.prune(roots=[(root, 2, 7)]) == 1
@@ -37,7 +38,7 @@ def test_stale_dir_deleted_and_empty_project_removed(tmp_path):
     assert not (root / "proj").exists()
 
 
-def test_fresh_nested_file_keeps_dir(tmp_path):
+def test_fresh_nested_file_keeps_dir(tmp_path: Path) -> None:
     root = tmp_path / "claude"
     d = _session(root, "proj", "s1", 10)
     (d / "sub").mkdir()
@@ -48,14 +49,14 @@ def test_fresh_nested_file_keeps_dir(tmp_path):
     assert nested.exists()
 
 
-def test_current_session_kept_even_if_stale(tmp_path):
+def test_current_session_kept_even_if_stale(tmp_path: Path) -> None:
     root = tmp_path / "claude"
     d = _session(root, "proj", "cur", 30)
     assert pct.prune("cur", roots=[(root, 2, 7)]) == 0
     assert d.exists()
 
 
-def test_fresh_stamp_is_noop(tmp_path):
+def test_fresh_stamp_is_noop(tmp_path: Path) -> None:
     root = tmp_path / "claude"
     d = _session(root, "proj", "s1", 30)
     (root / pct.STAMP_NAME).write_text("")
@@ -63,7 +64,7 @@ def test_fresh_stamp_is_noop(tmp_path):
     assert d.exists()
 
 
-def test_old_stamp_runs_and_restamps(tmp_path):
+def test_old_stamp_runs_and_restamps(tmp_path: Path) -> None:
     root = tmp_path / "claude"
     root.mkdir()
     stamp = root / pct.STAMP_NAME
@@ -74,11 +75,11 @@ def test_old_stamp_runs_and_restamps(tmp_path):
     assert pct.stamp_is_fresh(root)
 
 
-def test_missing_root_noop(tmp_path):
+def test_missing_root_noop(tmp_path: Path) -> None:
     assert pct.prune(roots=[(tmp_path / "nope", 2, 7)]) == 0
 
 
-def test_loose_stale_file_under_project_removed(tmp_path):
+def test_loose_stale_file_under_project_removed(tmp_path: Path) -> None:
     root = tmp_path / "claude"
     (root / "proj").mkdir(parents=True)
     f = root / "proj" / "loose.txt"
@@ -89,7 +90,7 @@ def test_loose_stale_file_under_project_removed(tmp_path):
     assert not (root / "proj").exists()
 
 
-def test_permission_error_skipped_not_raised(tmp_path, monkeypatch):
+def test_permission_error_skipped_not_raised(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "claude"
     locked = _session(root, "proj", "locked", 10)
     ok = _session(root, "proj", "ok", 10)
@@ -106,7 +107,7 @@ def test_permission_error_skipped_not_raised(tmp_path, monkeypatch):
     assert locked.exists() and not ok.exists()
 
 
-def test_leg_spawns_only_when_due_and_never_raises(tmp_path, monkeypatch):
+def test_leg_spawns_only_when_due_and_never_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "claude"
     root.mkdir()
     monkeypatch.setattr(pct, "default_roots", lambda repo_root="": [(root, 2, 7)])
@@ -131,27 +132,27 @@ def test_leg_spawns_only_when_due_and_never_raises(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def temp(tmp_path, monkeypatch):
+def temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(pct.tempfile, "gettempdir", lambda: str(tmp_path))
     monkeypatch.setattr(temp_layout.tempfile, "gettempdir", lambda: str(tmp_path))
     return tmp_path
 
 
-def _file(path, days, text="x"):
+def _file(path, days, text: str = "x"):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text)
     _age(path, days)
     return path
 
 
-def test_default_roots_include_fleet_and_repo_coordinator_root(temp):
+def test_default_roots_include_fleet_and_repo_coordinator_root(temp) -> None:
     repo = temp / "myrepo"
     paths = [r for r, _d, _n in pct.default_roots(str(repo))]
     assert temp_layout.fleet_temp_root() in paths
     assert temp_layout.coordinator_temp_root(repo) in paths
 
 
-def test_fleet_pass(temp):
+def test_fleet_pass(temp) -> None:
     fleet = temp_layout.fleet_temp_root()
     old = _file(fleet / "guard-unlock-old", 10)
     fresh = _file(fleet / "guard-unlock-new", 1)
@@ -162,7 +163,7 @@ def test_fleet_pass(temp):
     assert fresh.exists() and live.exists()
 
 
-def test_coordinator_root_skips_pytest_child(temp):
+def test_coordinator_root_skips_pytest_child(temp) -> None:
     repo = temp / "myrepo"
     croot = temp_layout.coordinator_temp_root(repo)
     kept = _file(croot / "pytest" / "run" / "f", 30)
@@ -175,7 +176,7 @@ def test_coordinator_root_skips_pytest_child(temp):
     assert not gone.parent.exists()
 
 
-def test_top_level_pass(temp):
+def test_top_level_pass(temp) -> None:
     legacy_old = _file(temp / "git-index-1-abc", 10)
     legacy_new = _file(temp / "git-index-2-new", 1)
     other = _file(temp / "unrelated.txt", 30)
@@ -200,7 +201,7 @@ def _aged_dir(path, days):
     return path
 
 
-def test_top_level_pass_drains_test_leftover_shapes(temp):
+def test_top_level_pass_drains_test_leftover_shapes(temp) -> None:
     old = [
         _aged_dir(temp / n, 10)
         for n in ("altlive-repo-x1", "sgc-cold-e2e-x1", "fmhook-test-x1", "land_pull_test_x1",
@@ -214,7 +215,7 @@ def test_top_level_pass_drains_test_leftover_shapes(temp):
     assert fresh.exists() and generic.exists()
 
 
-def test_top_level_pass_keeps_link(temp):
+def test_top_level_pass_keeps_link(temp) -> None:
     target = temp / "target-dir"
     target.mkdir()
     keep = _file(target / "f", 30)
@@ -227,7 +228,7 @@ def test_top_level_pass_keeps_link(temp):
     assert keep.exists() and os.path.lexists(link)
 
 
-def test_budget_zero_deletes_one_unit_and_leaves_stamp(temp):
+def test_budget_zero_deletes_one_unit_and_leaves_stamp(temp) -> None:
     fleet = temp_layout.fleet_temp_root()
     a = _file(fleet / "a", 10)
     b = _file(fleet / "b", 10)
@@ -237,7 +238,7 @@ def test_budget_zero_deletes_one_unit_and_leaves_stamp(temp):
     assert not pct.stamp_is_fresh(temp_layout.fleet_temp_root().parent)
 
 
-def test_drain_ignores_budget_and_throttle(temp):
+def test_drain_ignores_budget_and_throttle(temp) -> None:
     fleet = temp_layout.fleet_temp_root()
     files = [_file(fleet / f"f{i}", 10) for i in range(3)]
     (fleet / pct.STAMP_NAME).write_text("")
@@ -249,7 +250,7 @@ def test_drain_ignores_budget_and_throttle(temp):
     assert not any(f.exists() for f in files) and not legacy.exists()
 
 
-def test_main_drain_flag(temp, monkeypatch):
+def test_main_drain_flag(temp, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     import coordinator_core.ops.cruft_sweep as cs
 

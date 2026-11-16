@@ -12,6 +12,7 @@ from coordinator_core.bash_guards import _helpers
 from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.session import core as session_core
 from coordinator_core.write_guards import block_confined_agent_write as write_guard
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -21,11 +22,11 @@ _DOC_NEW = "/x/coordinator/bin/coordinator-doc-new.py"
 
 
 @pytest.fixture(autouse=True)
-def _stub_roster_absence_leg(monkeypatch):
+def _stub_roster_absence_leg(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "is_confined_by_roster_absence", lambda effective_type: False)
 
 
-def _confine(monkeypatch, subagent_type):
+def _confine(monkeypatch, subagent_type) -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123")
     monkeypatch.setattr(
@@ -59,7 +60,7 @@ def _decide(monkeypatch, command, subagent_type=_WRITER):
         "coordinator-doc-new.cmd --type decision",
     ],
 )
-def test_scaffolder_decision_is_allowed(monkeypatch, command):
+def test_scaffolder_decision_is_allowed(monkeypatch: pytest.MonkeyPatch, command) -> None:
     assert _decide(monkeypatch, command) is None
 
 
@@ -91,34 +92,34 @@ def test_scaffolder_decision_is_allowed(monkeypatch, command):
         "",
     ],
 )
-def test_everything_else_is_denied(monkeypatch, command):
+def test_everything_else_is_denied(monkeypatch: pytest.MonkeyPatch, command) -> None:
     assert _decide(monkeypatch, command) is not None
 
 
-def test_code_reviewer_ruleset_unchanged(monkeypatch):
+def test_code_reviewer_ruleset_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _decide(monkeypatch, "git status", _REVIEWER) is None
     assert _decide(monkeypatch, "coordinator-doc-new --type review-findings", _REVIEWER) is None
     assert _decide(monkeypatch, "coordinator-doc-new --type decision", _REVIEWER) is not None
 
 
-def test_shared_findings_set_does_not_gain_the_writer():
+def test_shared_findings_set_does_not_gain_the_writer() -> None:
     assert not _helpers.is_confined_findings_agent(_WRITER)
     assert _WRITER not in session_core._CONFINED_FINDINGS_AGENTS
 
 
-def test_override_key_is_a_confined_type():
+def test_override_key_is_a_confined_type() -> None:
     policy = guard.load_policy(None)
     for key in guard._DEFAULT_RULESET_TYPE_OVERRIDES:
         assert guard._is_confined_type(key, policy)
 
 
-def test_leg_removal_unconfines_the_writer(monkeypatch):
+def test_leg_removal_unconfines_the_writer(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "_SCAFFOLDER_ONLY_TYPES", frozenset())
     assert _decide(monkeypatch, "ls") is None
 
 
 @pytest.mark.parametrize("tool_name", ["Write", "Edit"])
-def test_writer_write_and_edit_are_not_denied(monkeypatch, tmp_path, tool_name):
+def test_writer_write_and_edit_are_not_denied(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tool_name) -> None:
     monkeypatch.delenv("COORDINATOR_OVERRIDE_CONFINED_AGENT_WRITE", raising=False)
     monkeypatch.setattr(write_guard, "resolve_repo_root", lambda cwd: str(tmp_path))
     monkeypatch.setattr(

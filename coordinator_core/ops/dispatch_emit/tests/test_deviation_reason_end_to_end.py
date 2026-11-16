@@ -52,7 +52,7 @@ run({}, agent, async (xs) => Promise.all(xs.map((f) => f())), async () => ({}), 
 """
 
 
-def _row(row_id, deps=(), plan="docs/plans/x.md"):
+def _row(row_id, deps=(), plan: str = "docs/plans/x.md") -> WaveRow:
     return WaveRow(
         id=row_id,
         title=f"title-{row_id}",
@@ -89,7 +89,7 @@ def _digest(replies: dict) -> dict:
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
-def test_blocked_partial_and_held_rows_carry_their_reason():
+def test_blocked_partial_and_held_rows_carry_their_reason() -> None:
     digest = _digest({"A": "BLOCKED: no pnpm on host", "B": "PARTIAL: C3 tests unwritten"})
 
     by_chunk = {d["chunk"]: d for d in digest["deviations"]}

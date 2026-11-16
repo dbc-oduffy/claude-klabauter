@@ -7,10 +7,11 @@ import json
 import pytest
 
 from coordinator_core.ops.test_warp_run_deliverable_halted_claims import HALTED_ID, _claims, _record
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _no_stale_release(monkeypatch):
+def _no_stale_release(monkeypatch: pytest.MonkeyPatch) -> None:
     """HALTED_ID is minted 2026-10-19; the wall-clock stale bound would release it (see the sibling `repo` fixture)."""
     from coordinator_core.ops.dispatch_emit import halted_hold_release
 
@@ -19,12 +20,12 @@ def _no_stale_release(monkeypatch):
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _git_repo_with_two_withheld(tmp_path, b_head):
+def _git_repo_with_two_withheld(tmp_path, b_head) -> None:
     import subprocess
 
     from coordinator_core.win_portability import no_console_creationflags
 
-    def git(*args, stdin=""):
+    def git(*args, stdin: str = ""):
         return subprocess.run(
             ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=tmp_path, input=stdin,
             capture_output=True, text=True, check=True, **no_console_creationflags(),
@@ -43,12 +44,12 @@ def _git_repo_with_two_withheld(tmp_path, b_head):
     (rec / "kept.json").write_text(json.dumps({"chunks": {"X1": {"paths": kept}}, "plan_gate": None}), encoding="utf-8")
 
 
-def test_withheld_path_kept_at_head_is_released_per_path(tmp_path):
+def test_withheld_path_kept_at_head_is_released_per_path(tmp_path: Path) -> None:
     _git_repo_with_two_withheld(tmp_path, "b = 3\n")
     assert _claims(tmp_path, ["a.py", "b.py"]) == {"b.py": [HALTED_ID]}
 
 
-def test_withheld_path_released_is_not_reclaimed_through_hunk_attribution(tmp_path):
+def test_withheld_path_released_is_not_reclaimed_through_hunk_attribution(tmp_path: Path) -> None:
     _git_repo_with_two_withheld(tmp_path, "b = 3\n")
     seen = []
 
@@ -61,6 +62,6 @@ def test_withheld_path_released_is_not_reclaimed_through_hunk_attribution(tmp_pa
     assert all("a.py" not in s for s in seen)
 
 
-def test_all_withheld_paths_at_head_hold_nothing(tmp_path):
+def test_all_withheld_paths_at_head_hold_nothing(tmp_path: Path) -> None:
     _git_repo_with_two_withheld(tmp_path, "b = 2\n")
     assert _claims(tmp_path, ["a.py", "b.py"]) == {}

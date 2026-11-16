@@ -9,23 +9,24 @@ import pytest
 
 from coordinator_core.bash_guards import _disk_fill_contract as contract
 from coordinator_core.bash_guards import guard_disk_fill as g
+from pathlib import Path
 
 GiB = 1024**3
 _Usage = namedtuple("_Usage", "total used free")
 
 
 @pytest.fixture()
-def free(monkeypatch):
+def free(monkeypatch: pytest.MonkeyPatch):
     """Set the volume's free bytes the guard sees; floor pinned to the 10 GiB default."""
     monkeypatch.delenv("COORDINATOR_DISK_BUDGET_VOLUME_FREE_FLOOR", raising=False)
 
-    def _set(n):
+    def _set(n) -> None:
         monkeypatch.setattr(shutil, "disk_usage", lambda p: _Usage(100 * GiB, 0, n))
 
     return _set
 
 
-def _payload(cmd, cwd, tool="Bash"):
+def _payload(cmd, cwd, tool: str = "Bash"):
     return {"tool_name": tool, "tool_input": {"command": cmd}, "cwd": str(cwd)}
 
 
@@ -34,7 +35,7 @@ def _text(rec):
 
 
 @pytest.fixture()
-def tree(tmp_path):
+def tree(tmp_path: Path) -> Path:
     src = tmp_path / "big"
     src.mkdir()
     (src / "a.bin").write_bytes(b"x" * 4096)
@@ -52,7 +53,7 @@ def tree(tmp_path):
         ("truncate -s 1M out.img", "Bash"),
     ],
 )
-def test_bulk_write_under_floor_is_denied_naming_redirect(tree, free, cmd, tool):
+def test_bulk_write_under_floor_is_denied_naming_redirect(tree, free, cmd, tool) -> None:
     free(10 * GiB)
     rec = g.check(_payload(cmd, tree, tool))
     assert rec is not None and rec.verdict_kind == "deny"
@@ -70,18 +71,18 @@ def test_bulk_write_under_floor_is_denied_naming_redirect(tree, free, cmd, tool)
         ("truncate -s 1M out.img", "Bash"),
     ],
 )
-def test_bulk_write_with_room_is_allowed(tree, free, cmd, tool):
+def test_bulk_write_with_room_is_allowed(tree, free, cmd, tool) -> None:
     free(500 * GiB)
     assert g.check(_payload(cmd, tree, tool)) is None
 
 
 @pytest.mark.parametrize("cmd", ["echo x > f", "git commit -m x", "cp a b", "ls -la"])
-def test_non_bulk_write_is_allowed_even_when_full(tree, free, cmd):
+def test_non_bulk_write_is_allowed_even_when_full(tree, free, cmd) -> None:
     free(0)
     assert g.check(_payload(cmd, tree)) is None
 
 
-def test_unestimable_source_is_allowed(tree, free, monkeypatch):
+def test_unestimable_source_is_allowed(tree, free, monkeypatch: pytest.MonkeyPatch) -> None:
     free(0)
     real = contract.estimate_output_bytes
     monkeypatch.setattr(
@@ -91,7 +92,7 @@ def test_unestimable_source_is_allowed(tree, free, monkeypatch):
     assert g.check(_payload("dd if=/dev/zero of=out.img", tree)) is None
 
 
-def test_relative_destination_resolves_against_payload_cwd(tree, free, monkeypatch):
+def test_relative_destination_resolves_against_payload_cwd(tree, free, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = []
     monkeypatch.setattr(
         shutil, "disk_usage", lambda p: seen.append(p) or _Usage(100 * GiB, 0, 0)
@@ -101,14 +102,14 @@ def test_relative_destination_resolves_against_payload_cwd(tree, free, monkeypat
     assert seen == [tree]
 
 
-def test_non_command_tool_and_malformed_payload_allow(tree, free):
+def test_non_command_tool_and_malformed_payload_allow(tree, free) -> None:
     free(0)
     assert g.check({"tool_name": "Write", "tool_input": {"command": "cp -r big dst"}}) is None
     assert g.check({"tool_name": "Bash", "tool_input": None}) is None
     assert g.check("nope") is None
 
 
-def test_internal_failure_allows(tree, free, monkeypatch):
+def test_internal_failure_allows(tree, free, monkeypatch: pytest.MonkeyPatch) -> None:
     free(0)
 
     def boom(*a, **k):

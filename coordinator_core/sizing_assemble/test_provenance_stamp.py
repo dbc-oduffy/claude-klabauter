@@ -6,6 +6,7 @@ from pathlib import Path
 import jsonschema
 
 from coordinator_core.sizing_assemble import provenance
+import pytest
 
 SCHEMA = (
     Path(__file__).resolve().parent.parent
@@ -14,7 +15,7 @@ SCHEMA = (
 SHA = "a" * 40
 
 
-def test_stamp_shape_and_null_passthrough(monkeypatch):
+def test_stamp_shape_and_null_passthrough(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         provenance, "engine_build", lambda: {"engine_sha": None, "engine_dirty": None}
     )
@@ -26,7 +27,7 @@ def test_stamp_shape_and_null_passthrough(monkeypatch):
     }
 
 
-def test_stamp_spawns_no_subprocess(monkeypatch):
+def test_stamp_spawns_no_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     def refuse(*a, **k):
@@ -38,7 +39,7 @@ def test_stamp_spawns_no_subprocess(monkeypatch):
     assert stamped["engine_dirty"] is None
 
 
-def test_stamp_spawns_nothing_when_registry_and_env_rungs_fail(tmp_path, monkeypatch):
+def test_stamp_spawns_nothing_when_registry_and_env_rungs_fail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     from coordinator_core import _claude_klabauter_root, resolve_coordinator_clone as rcc
@@ -60,7 +61,7 @@ def test_stamp_spawns_nothing_when_registry_and_env_rungs_fail(tmp_path, monkeyp
     assert provenance.stamp()["doe_plugin_sha"] is None
 
 
-def test_version_file_fallback_and_unresolvable(tmp_path, monkeypatch):
+def test_version_file_fallback_and_unresolvable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".claude-plugin").mkdir()
     (tmp_path / ".claude-plugin/plugin.json").write_text(json.dumps({"version": "9.9.9"}))
     monkeypatch.setattr(
@@ -76,7 +77,7 @@ def test_version_file_fallback_and_unresolvable(tmp_path, monkeypatch):
     assert provenance.resolve_doe_plugin_sha() is None
 
 
-def test_schema_accepts_provenance_and_refuses_unknown_key():
+def test_schema_accepts_provenance_and_refuses_unknown_key() -> None:
     schema = json.loads(SCHEMA.read_text())
     prov = schema["properties"]["provenance"]
     v = jsonschema.Draft202012Validator(prov)

@@ -141,7 +141,7 @@ def _drive(monkeypatch, replies: dict, *, items=None, manifest=None, test=None) 
     )
 
 
-def test_r43_fixed_in_one_attempt_lands_all_three_chunks(monkeypatch, repo):  # noqa: F811
+def test_r43_fixed_in_one_attempt_lands_all_three_chunks(monkeypatch: pytest.MonkeyPatch, repo) -> None:  # noqa: F811
     out = _drive(monkeypatch, {"ledger-fix:C1": _FIXED, lr.LEDGER_REVERIFY_LABEL: {"items": [_R5_MET]}})
 
     assert _fix_calls(out) == ["ledger-fix:C1"]
@@ -161,7 +161,7 @@ def test_r43_fixed_in_one_attempt_lands_all_three_chunks(monkeypatch, repo):  # 
     assert {"pkg/producer.py", _TEST_FILE, "pkg/live.py", "a.py"} <= base._names(repo, landed["sha"])
 
 
-def test_r43_exhausted_at_the_cap_withholds_the_chunk_and_lands_the_rest(monkeypatch, repo):  # noqa: F811
+def test_r43_exhausted_at_the_cap_withholds_the_chunk_and_lands_the_rest(monkeypatch: pytest.MonkeyPatch, repo) -> None:  # noqa: F811
     out = _drive(monkeypatch, {"ledger-fix:C1": _FIXED, lr.LEDGER_REVERIFY_LABEL: {"items": [_R5_PARTIAL]}})
 
     assert _fix_calls(out) == ["ledger-fix:C1"] * lr.RECOVERY_ATTEMPT_CAP
@@ -183,7 +183,7 @@ def test_r43_exhausted_at_the_cap_withholds_the_chunk_and_lands_the_rest(monkeyp
     assert landed["recovery"]["open_rows"] == ["R5"]
 
 
-def test_r43_a_fix_that_changes_nothing_ends_after_one_attempt(monkeypatch, repo):  # noqa: F811
+def test_r43_a_fix_that_changes_nothing_ends_after_one_attempt(monkeypatch: pytest.MonkeyPatch, repo) -> None:  # noqa: F811
     out = _drive(monkeypatch, {"ledger-fix:C1": _FIXED, lr.LEDGER_REVERIFY_LABEL: {"items": [_R5_OPEN]}})
 
     assert _fix_calls(out) == ["ledger-fix:C1"]
@@ -192,7 +192,7 @@ def test_r43_a_fix_that_changes_nothing_ends_after_one_attempt(monkeypatch, repo
     assert _commit_params(out)[lr.RECOVERY_WITHHELD_PARAM] == ["C1"]
 
 
-def test_r43_footprint_escape_blocks_the_chunk_withholds_its_importer_and_still_lands(monkeypatch, repo):  # noqa: F811
+def test_r43_footprint_escape_blocks_the_chunk_withholds_its_importer_and_still_lands(monkeypatch: pytest.MonkeyPatch, repo) -> None:  # noqa: F811
     out = _drive(monkeypatch, {"ledger-fix:C1": [_FIXED, _ESCAPED], lr.LEDGER_REVERIFY_LABEL: {"items": [_R5_PARTIAL]}})
 
     assert _fix_calls(out) == ["ledger-fix:C1"] * 2
@@ -257,7 +257,7 @@ def _assert_t5_reported_open(landed: dict) -> None:
     assert all(r.startswith(lr.HELD) for r in landed["recovery"]["withheld"].values())
 
 
-def test_432570_held_chunks_run_no_fix_leg_and_t5_is_reported_open(monkeypatch, repo, tmp_path):  # noqa: F811
+def test_432570_held_chunks_run_no_fix_leg_and_t5_is_reported_open(monkeypatch: pytest.MonkeyPatch, repo, tmp_path: Path) -> None:  # noqa: F811
     """Stage as it must emit the shape: T5 not ruled by the EM, its unrun chunks listed as held ids."""
     landed = _replay_432570(
         monkeypatch, repo, tmp_path, rulable_ids=[], held_ids=["C7", "C8", "C9", "C10"],
@@ -266,7 +266,7 @@ def test_432570_held_chunks_run_no_fix_leg_and_t5_is_reported_open(monkeypatch, 
     _assert_t5_reported_open(landed)
 
 
-def test_432570_as_recorded_ends_without_a_ledger_check_halt(monkeypatch, repo, tmp_path):  # noqa: F811
+def test_432570_as_recorded_ends_without_a_ledger_check_halt(monkeypatch: pytest.MonkeyPatch, repo, tmp_path: Path) -> None:  # noqa: F811
     """The manifest exactly as run 432570 staged it carries no `held_ids`; the ledger-resume stage derives them
     from the recorded manifest and the plan spine, with no hand edit."""
     plan = _REPO_ROOT / "docs" / "plans" / "2026-10-23-xl-xxl-fan-out-sizing-seam-pass.md"

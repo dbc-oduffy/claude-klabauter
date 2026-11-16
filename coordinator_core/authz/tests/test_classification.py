@@ -16,6 +16,7 @@ Test convention: pytest. Invoke via
 from __future__ import annotations
 
 from coordinator_core.authz.classification import OpClass, classify
+from pathlib import Path
 
 
 class TestNudgeAutonomousAskuserquestion:
@@ -41,7 +42,7 @@ class TestPlanSetCodeDone:
     def test_classifies_compute_only(self) -> None:
         assert classify("plan.set_code_done") is OpClass.COMPUTE_ONLY
 
-    def test_dispatch_entrypoint_reaches_the_registered_op(self, tmp_path) -> None:
+    def test_dispatch_entrypoint_reaches_the_registered_op(self, tmp_path: Path) -> None:
         import asyncio
 
         from coordinator_core import ipc

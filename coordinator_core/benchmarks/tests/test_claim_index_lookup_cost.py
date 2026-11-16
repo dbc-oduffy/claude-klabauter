@@ -4,9 +4,10 @@ from datetime import datetime
 
 from coordinator_core.benchmarks import claim_index_lookup_cost as cost
 from coordinator_core.session import claim_index, touch_record
+from pathlib import Path
 
 
-def _touch(base, sid, path):
+def _touch(base, sid, path) -> None:
     sink = os.path.join(str(base), sid, "touch-record.jsonl")
     ts = datetime.fromisoformat("2026-08-08T10:00:00+00:00").timestamp()
     touch_record.append_event(
@@ -14,7 +15,7 @@ def _touch(base, sid, path):
     )
 
 
-def _corpus(tmp_path):
+def _corpus(tmp_path) -> str:
     base = str(tmp_path)
     for sid in ("sess-a", "sess-b", "sess-c"):
         _touch(base, sid, "shared/hot.py")
@@ -22,7 +23,7 @@ def _corpus(tmp_path):
     return base
 
 
-def test_cold_lookup_folds_every_claimant_sink_and_warm_folds_none(tmp_path):
+def test_cold_lookup_folds_every_claimant_sink_and_warm_folds_none(tmp_path: Path) -> None:
     base = _corpus(tmp_path)
     claim_index.lookup(["shared/hot.py"], sessions_dir=base)
 
@@ -36,7 +37,7 @@ def test_cold_lookup_folds_every_claimant_sink_and_warm_folds_none(tmp_path):
     assert warm["fold_cache_misses"] == 0 and warm["fold_bytes_read"] == 0
 
 
-def test_unclaimed_path_folds_no_sink(tmp_path):
+def test_unclaimed_path_folds_no_sink(tmp_path: Path) -> None:
     base = _corpus(tmp_path)
     claim_index.lookup(["only/a.py"], sessions_dir=base)
 
@@ -45,7 +46,7 @@ def test_unclaimed_path_folds_no_sink(tmp_path):
     assert out["claimants"] == 0 and out["sinks_folded"] == 0
 
 
-def test_instrument_restores_the_seams(tmp_path):
+def test_instrument_restores_the_seams(tmp_path: Path) -> None:
     fold = touch_record.read_stream_claims_and_held_kind
     names = claim_index._read_index_names
     with cost.instrument(cost.Probe()):
@@ -54,7 +55,7 @@ def test_instrument_restores_the_seams(tmp_path):
     assert claim_index._read_index_names is names
 
 
-def test_concurrent_cold_lookups_report_per_thread_folds(tmp_path):
+def test_concurrent_cold_lookups_report_per_thread_folds(tmp_path: Path) -> None:
     base = _corpus(tmp_path)
     claim_index.lookup(["shared/hot.py"], sessions_dir=base)
 
@@ -66,7 +67,7 @@ def test_concurrent_cold_lookups_report_per_thread_folds(tmp_path):
     assert out["max_misses_on_one_sink"] >= 1
 
 
-def test_run_and_census_on_fixture(tmp_path):
+def test_run_and_census_on_fixture(tmp_path: Path) -> None:
     base = _corpus(tmp_path)
 
     report = cost.run(base, None, 2, 2)

@@ -11,12 +11,13 @@ from coordinator_core.bash_guards import _write_bump_session_start as session_st
 from coordinator_core.tests.git_seed import seeded_repo
 from coordinator_core.write_guards import _gem_doctrine_carve_out as carve_out
 from coordinator_core.write_guards import bump_out_of_repo_tool_write as guard
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     own = seeded_repo(tmp_path / "own-repo", name="Test")
     doe = seeded_repo(tmp_path / "doe-repo", name="Test")
     peer = seeded_repo(tmp_path / "peer-repo", name="Test")
@@ -27,7 +28,7 @@ def world(tmp_path, monkeypatch):
     return {"own": own, "doe": doe, "peer": peer, "sid": session_id}
 
 
-def _payload(world, path, sid=None, agent_id=""):
+def _payload(world, path, sid=None, agent_id: str = ""):
     return {
         "tool_name": "Edit",
         "tool_input": {"file_path": str(path)},
@@ -47,13 +48,13 @@ def _doctrine_paths(doe):
 @pytest.mark.parametrize("blocked", [True, False])
 @pytest.mark.parametrize("which", [0, 1])
 @pytest.mark.parametrize("agent_id", ["", "sub-1"])
-def test_doctrine_path_gets_none_for_every_caller(world, monkeypatch, blocked, which, agent_id):
+def test_doctrine_path_gets_none_for_every_caller(world, monkeypatch: pytest.MonkeyPatch, blocked, which, agent_id) -> None:
     monkeypatch.setattr(guard, "out_of_repo_write_blocked", lambda: blocked)
     target = _doctrine_paths(world["doe"])[which]
     assert guard.check(_payload(world, target, agent_id=agent_id)) is None
 
 
-def test_deferral_is_what_clears_the_doctrine_path(world, monkeypatch):
+def test_deferral_is_what_clears_the_doctrine_path(world, monkeypatch: pytest.MonkeyPatch) -> None:
     target = _doctrine_paths(world["doe"])[0]
     monkeypatch.setattr(guard, "out_of_repo_write_blocked", lambda: True)
     assert guard.check(_payload(world, target)) is None
@@ -64,7 +65,7 @@ def test_deferral_is_what_clears_the_doctrine_path(world, monkeypatch):
 
 
 @pytest.mark.parametrize("repo", ["doe", "peer"])
-def test_non_doctrine_paths_deny_exactly_as_before(world, monkeypatch, repo):
+def test_non_doctrine_paths_deny_exactly_as_before(world, monkeypatch: pytest.MonkeyPatch, repo) -> None:
     monkeypatch.setattr(guard, "out_of_repo_write_blocked", lambda: True)
     target = world[repo] / "state" / "x.md"
     now = guard.check(_payload(world, target))
@@ -74,7 +75,7 @@ def test_non_doctrine_paths_deny_exactly_as_before(world, monkeypatch, repo):
     assert guard.check(_payload(world, target)) == now
 
 
-def test_engine_plane_path_still_denies(world, monkeypatch):
+def test_engine_plane_path_still_denies(world, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "out_of_repo_write_blocked", lambda: True)
     target = world["peer"] / "coordinator" / "skills" / "group-em" / "SKILL.md"
     refused = guard.check(_payload(world, target))

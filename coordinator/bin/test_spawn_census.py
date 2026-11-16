@@ -31,6 +31,10 @@ from pathlib import Path
 
 import pytest
 from coordinator_core.win_portability import no_console_creationflags
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -42,7 +46,7 @@ pytestmark = [
 _SCRIPT = Path(__file__).resolve().parent / "spawn-census"
 
 
-def _load_module():
+def _load_module() -> ModuleType:
     loader = SourceFileLoader("spawn_census_under_test", str(_SCRIPT))
     spec = importlib.util.spec_from_loader(loader.name, loader)
     module = importlib.util.module_from_spec(spec)
@@ -166,7 +170,7 @@ def _run_subprocess(args: list[str]) -> subprocess.CompletedProcess:
     )
 
 
-def test_parallel_and_serial_report_json_are_byte_identical(tmp_path):
+def test_parallel_and_serial_report_json_are_byte_identical(tmp_path: Path) -> None:
     """The whole point of parallelising the walk: a faster census that
     reports differently is not the same census. Spawns the real script via
     subprocess (not the in-process module load used elsewhere in this file)
@@ -190,7 +194,7 @@ def test_parallel_and_serial_report_json_are_byte_identical(tmp_path):
     assert serial_census == parallel_census
 
 
-def test_parallel_and_serial_report_human_table_identical_modulo_timing_line(tmp_path):
+def test_parallel_and_serial_report_human_table_identical_modulo_timing_line(tmp_path: Path) -> None:
     root = _make_repo_over_parallel_threshold(tmp_path)
 
     serial = _run_subprocess(["report", "--root", str(root), "--workers", "1"])
@@ -207,7 +211,7 @@ def test_parallel_and_serial_report_human_table_identical_modulo_timing_line(tmp
     assert serial_lines == parallel_lines
 
 
-def test_default_worker_cap_is_bounded_never_bare_cpu_count(tmp_path):
+def test_default_worker_cap_is_bounded_never_bare_cpu_count(tmp_path: Path) -> None:
     cap = spawn_census.default_worker_cap()
     assert cap >= 1
     # Never a bare os.cpu_count() fan-out (the plan's hard constraint).
@@ -215,7 +219,7 @@ def test_default_worker_cap_is_bounded_never_bare_cpu_count(tmp_path):
     assert cap <= max(1, (os.cpu_count() or 1))
 
 
-def test_small_repo_stays_serial_regardless_of_workers_flag(tmp_path):
+def test_small_repo_stays_serial_regardless_of_workers_flag(tmp_path: Path) -> None:
     """Below _PARALLEL_FILE_THRESHOLD, --workers is accepted but the process
     pool never spins up -- avoids fork/pickle overhead on tiny repos (and
     keeps every other in-process fixture test in this file fast).
@@ -227,7 +231,7 @@ def test_small_repo_stays_serial_regardless_of_workers_flag(tmp_path):
     assert census["total_sites"] == 1
 
 
-def test_comment_only_mention_of_subprocess_is_still_fully_parsed(tmp_path):
+def test_comment_only_mention_of_subprocess_is_still_fully_parsed(tmp_path: Path) -> None:
     """If a textual pre-filter is ever added (plan step 3, not needed here --
     parallelising the walk alone cleared the AC3 budget), it must be a
     strict over-approximation: a file merely mentioning 'subprocess' in a
@@ -258,7 +262,7 @@ def _run(args: list[str]) -> tuple[int, str, str]:
     return code, out.getvalue(), err.getvalue()
 
 
-def test_report_json_shape_and_counts(tmp_path):
+def test_report_json_shape_and_counts(tmp_path: Path) -> None:
     root = _make_repo(tmp_path)
     code, out, _err = _run(["report", "--json", "--root", str(root)])
     assert code == 0
@@ -274,7 +278,7 @@ def test_report_json_shape_and_counts(tmp_path):
     assert excl["suppressed_site_count"] == 1
 
 
-def test_report_human_table_has_exclusions_and_unpinned_lines(tmp_path):
+def test_report_human_table_has_exclusions_and_unpinned_lines(tmp_path: Path) -> None:
     root = _make_repo(tmp_path)
     code, out, _err = _run(["report", "--root", str(root)])
     assert code == 0
@@ -284,7 +288,7 @@ def test_report_human_table_has_exclusions_and_unpinned_lines(tmp_path):
     assert "Unsanctioned sites: 0" in out
 
 
-def test_negative_spec_no_cost_or_hot_path_language(tmp_path):
+def test_negative_spec_no_cost_or_hot_path_language(tmp_path: Path) -> None:
     root = _make_repo(tmp_path, with_unsanctioned=True)
     _code, out_json, _err = _run(["report", "--json", "--root", str(root)])
     _code2, out_table, _err2 = _run(["report", "--root", str(root)])
@@ -298,20 +302,20 @@ def test_negative_spec_no_cost_or_hot_path_language(tmp_path):
         assert "cost" not in lowered
 
 
-def test_assert_mode_passes_when_all_sanctioned(tmp_path):
+def test_assert_mode_passes_when_all_sanctioned(tmp_path: Path) -> None:
     root = _make_repo(tmp_path)
     code, _out, _err = _run(["assert", "--root", str(root)])
     assert code == 0
 
 
-def test_assert_mode_fails_on_unsanctioned_site(tmp_path):
+def test_assert_mode_fails_on_unsanctioned_site(tmp_path: Path) -> None:
     root = _make_repo(tmp_path, with_unsanctioned=True)
     code, _out, err = _run(["assert", "--root", str(root)])
     assert code == 1
     assert "other.py" in err
 
 
-def test_unpinned_count_surfaced_in_both_shapes(tmp_path):
+def test_unpinned_count_surfaced_in_both_shapes(tmp_path: Path) -> None:
     root = _make_repo(tmp_path, unpinned=True)
     code, out, _err = _run(["report", "--json", "--root", str(root)])
     assert code == 0
@@ -326,7 +330,7 @@ def test_unpinned_count_surfaced_in_both_shapes(tmp_path):
     assert "Unpinned register entries (argv_digest: null): 1" in out2
 
 
-def test_report_mode_json_and_table_agree_on_totals(tmp_path):
+def test_report_mode_json_and_table_agree_on_totals(tmp_path: Path) -> None:
     root = _make_repo(tmp_path, with_unsanctioned=True)
     _code, out_json, _err = _run(["report", "--json", "--root", str(root)])
     census = json.loads(out_json)
@@ -335,6 +339,6 @@ def test_report_mode_json_and_table_agree_on_totals(tmp_path):
     assert census["unsanctioned_count"] == 1
 
 
-def test_unknown_mode_is_a_usage_error():
+def test_unknown_mode_is_a_usage_error() -> None:
     code, _out, _err = _run(["bogus-mode"])
     assert code == 2

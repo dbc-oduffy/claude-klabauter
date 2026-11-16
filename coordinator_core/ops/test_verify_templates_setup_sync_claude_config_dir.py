@@ -15,11 +15,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.ops import verify_templates_setup_sync as vtss
+import pytest
 
 _TRACKED_NAME = ".percolate-identity.example"
 
 
-def test_main_reads_live_setup_from_claude_config_dir(monkeypatch, tmp_path, capsys):
+def test_main_reads_live_setup_from_claude_config_dir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     plugin_root = tmp_path / "plugin"
     templates_setup = plugin_root / "templates" / "setup"
     templates_setup.mkdir(parents=True)
@@ -40,7 +41,7 @@ def test_main_reads_live_setup_from_claude_config_dir(monkeypatch, tmp_path, cap
     assert rc == 0
 
 
-def test_main_flags_mismatch_against_claude_config_dir_live_setup(monkeypatch, tmp_path, capsys):
+def test_main_flags_mismatch_against_claude_config_dir_live_setup(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     plugin_root = tmp_path / "plugin"
     templates_setup = plugin_root / "templates" / "setup"
     templates_setup.mkdir(parents=True)

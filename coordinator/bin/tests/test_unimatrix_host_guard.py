@@ -166,6 +166,28 @@ def test_guard_hot_path_spawns_no_python_child_and_a_cold_engine_answers_open(mo
     assert spawns == []
 
 
+def test_cold_engine_force_push_to_main_is_denied_and_status_is_not(monkeypatch, settings_home):
+    """Real codex and agy payload shapes, warm dial forced to a miss: the backstop answers the deny."""
+    monkeypatch.syspath_prepend(str(REPO))
+    from coordinator_core.warm import client
+
+    monkeypatch.setattr(client, "try_warm_dispatch", lambda *a, **k: None)
+    codex = {"hook_event_name": "PreToolUse", "tool_name": "Bash", "session_id": "s1", "cwd": "/x",
+             "tool_input": {"command": "git push --force origin main"}}
+    agy = {"toolCall": {"name": "run_command", "args": {"CommandLine": "git push --force origin main"}},
+           "workspacePaths": ["/x"], "conversationId": "c1"}
+    answer, state = hg.guard("codex", json.dumps(codex), str(REPO), budget_secs=5.0)
+    assert state == "engine" and hg._is_codex_deny(answer), (answer, state)
+    answer, state = hg.guard("agy", json.dumps(agy), str(REPO), budget_secs=5.0)
+    assert state == "engine" and answer["decision"] == "deny" and answer["reason"], (answer, state)
+    codex["tool_input"]["command"] = "git status"
+    agy["toolCall"]["args"]["CommandLine"] = "git status"
+    answer, state = hg.guard("codex", json.dumps(codex), str(REPO), budget_secs=5.0)
+    assert answer == {} and state == "neutral-unknown"
+    answer, state = hg.guard("agy", json.dumps(agy), str(REPO), budget_secs=5.0)
+    assert answer["decision"] != "deny" and state != "engine"
+
+
 def test_guard_module_carries_no_subprocess_use():
     text = SCRIPT.read_text(encoding="utf-8")
     assert "subprocess" not in text and "sys.executable" not in text
@@ -512,3 +534,67 @@ def test_multi_file_apply_patch_guard_answer_is_the_budget_advisory_with_true_to
             assert state == "neutral-unknown" and answer != {}, (answer, state)
             context = answer["hookSpecificOutput"]["additionalContext"]
             assert context.count("XS budget spent") == 1 and totals in context, context
+
+
+GROK_NAG_ANSWER = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                                          "additionalContext": "NAG-BODY"}}
+
+
+def stub_nag_shim(monkeypatch, answer, run=None, nag=("/repo", "sid-n", "NAG-BODY")):
+    """A shim stub that records the nag it merged and every `mark_if_delivered` call the guard makes."""
+    marks = []
+    state = {"nag": None}
+
+    def _run(host, text):
+        out = run(host, text) if run else answer
+        state["nag"] = nag
+        return out
+
+    def _take():
+        taken, state["nag"] = state["nag"], None
+        return taken
+
+    shim = types.SimpleNamespace(run=_run, take_pending_nag=_take,
+                                 mark_if_delivered=lambda pending, ans: marks.append((pending, ans)))
+    monkeypatch.setattr(hg, "_load_shim", lambda root: shim)
+    return marks
+
+
+def _main_with(monkeypatch, tmp_path, host="grok"):
+    import io
+
+    monkeypatch.setattr(sys, "stdin", io.StringIO(GROK_PAYLOAD))
+    return hg.main(["--host", host, "--engine-root", str(tmp_path)])
+
+
+def test_main_marks_the_nag_after_writing_the_answer_that_carries_it(tmp_path, monkeypatch, capsys):
+    marks = stub_nag_shim(monkeypatch, GROK_NAG_ANSWER)
+    assert _main_with(monkeypatch, tmp_path) == 0
+    assert json.loads(capsys.readouterr().out) == GROK_NAG_ANSWER
+    assert marks == [(("/repo", "sid-n", "NAG-BODY"), GROK_NAG_ANSWER)]
+
+
+def test_main_marks_nothing_after_a_timeout(tmp_path, monkeypatch, capsys):
+    release = threading.Event()
+    marks = stub_nag_shim(monkeypatch, GROK_NAG_ANSWER, run=lambda h, t: release.wait(30) or GROK_NAG_ANSWER)
+    monkeypatch.setattr(hg, "DEFAULT_BUDGET_SECS", 0.1)
+    monkeypatch.setattr(hg.guard, "__defaults__", (0.1, None))
+    try:
+        _main_with(monkeypatch, tmp_path)
+    finally:
+        release.set()
+    assert json.loads(capsys.readouterr().out) == {}
+    assert marks == []
+
+
+def test_main_marks_nothing_when_the_answer_is_degraded_to_neutral(tmp_path, monkeypatch, capsys):
+    marks = stub_nag_shim(monkeypatch, {"not": "a decision"})
+    _main_with(monkeypatch, tmp_path)
+    assert json.loads(capsys.readouterr().out) == {}
+    assert marks == []
+
+
+def test_guard_without_a_pending_box_still_returns_the_pair(tmp_path, monkeypatch):
+    stub_nag_shim(monkeypatch, GROK_NAG_ANSWER)
+    answer, state = hg.guard("grok", GROK_PAYLOAD, str(tmp_path))
+    assert answer == GROK_NAG_ANSWER and state == "neutral-unknown"

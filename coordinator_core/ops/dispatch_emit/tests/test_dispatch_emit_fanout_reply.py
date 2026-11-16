@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit import op as op_module
 from coordinator_core.ops.dispatch_emit.fanout_cost import FanoutCost, read_fanout, with_fanout
 from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 from coordinator_core.ops.dispatch_emit.pipeline_contract import Manifest, Schedule
+from pathlib import Path
 
 _PKG = "coordinator_core.ops.dispatch_emit"
 _BARE = "export const meta = { name: 'p', phases: [{ title: 'a' }] };\nreturn {};\n"
@@ -24,7 +25,7 @@ _COSTED = with_fanout(_BARE, _COST)
 
 
 @pytest.fixture
-def composer(monkeypatch, tmp_path):
+def composer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     seen: dict = {"script": _COSTED, "kwargs": None}
     manifest = Manifest("structured", tmp_path, {}, (), {}, {}, "m" * 64)
 
@@ -48,7 +49,7 @@ def _params(tmp_path, **extra):
             "session_id": "sess-1", **extra}
 
 
-def test_reply_carries_the_scripts_fanout_with_groups(composer, tmp_path):
+def test_reply_carries_the_scripts_fanout_with_groups(composer, tmp_path: Path) -> None:
     reply = _dispatch_emit(_params(tmp_path))
 
     assert reply["fanout"] == read_fanout(_COSTED)
@@ -56,13 +57,13 @@ def test_reply_carries_the_scripts_fanout_with_groups(composer, tmp_path):
     assert reply["fanout"]["groups"] == [["a", "b"], ["c", "d"], ["e", "f"]]
 
 
-def test_reply_fanout_is_none_when_the_script_carries_none(composer, tmp_path):
+def test_reply_fanout_is_none_when_the_script_carries_none(composer, tmp_path: Path) -> None:
     composer["script"] = _BARE
 
     assert _dispatch_emit(_params(tmp_path))["fanout"] is None
 
 
-def test_default_passes_no_fanout_group_and_split_passes_it(composer, tmp_path):
+def test_default_passes_no_fanout_group_and_split_passes_it(composer, tmp_path: Path) -> None:
     _dispatch_emit(_params(tmp_path))
     assert composer["kwargs"] == {}
 
@@ -71,7 +72,7 @@ def test_default_passes_no_fanout_group_and_split_passes_it(composer, tmp_path):
 
 
 @pytest.mark.parametrize("bad", ["merge", "", "SPLIT", 3])
-def test_a_value_outside_the_modes_is_refused_with_nothing_composed(composer, tmp_path, bad):
+def test_a_value_outside_the_modes_is_refused_with_nothing_composed(composer, tmp_path: Path, bad) -> None:
     reply = _dispatch_emit(_params(tmp_path, fanout_group=bad))
 
     assert "fanout_group" in reply["error"]
@@ -80,14 +81,14 @@ def test_a_value_outside_the_modes_is_refused_with_nothing_composed(composer, tm
 
 
 @pytest.mark.parametrize("route", [{"plan_path": "p.md"}, {"queue": ["q"], "profile": "g"}, {"ask": "do x"}])
-def test_split_is_refused_on_routes_whose_composer_takes_no_override(route, tmp_path):
+def test_split_is_refused_on_routes_whose_composer_takes_no_override(route, tmp_path: Path) -> None:
     reply = _dispatch_emit({**route, "fanout_group": "split", "output_path": str(tmp_path / "o.mjs")})
 
     assert "pipeline and research" in reply["error"]
     assert not (tmp_path / "o.mjs").exists()
 
 
-def test_cli_maps_fanout_flag_to_the_param(monkeypatch, tmp_path):
+def test_cli_maps_fanout_flag_to_the_param(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     captured: dict = {}
 
     def fake_emit(params, repo_root=None, **_):
@@ -108,6 +109,6 @@ def test_cli_maps_fanout_flag_to_the_param(monkeypatch, tmp_path):
     assert "fanout_group" not in captured
 
 
-def test_cli_refuses_a_fanout_value_outside_the_choices():
+def test_cli_refuses_a_fanout_value_outside_the_choices() -> None:
     with pytest.raises(SystemExit):
         cli_module._build_parser().parse_args(["--fanout", "merge"])

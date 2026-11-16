@@ -65,7 +65,7 @@ def test_mechanical_or_none_ready_reply_is_accepted_without_a_reblitz():
     block = _pulled_block()
     assert "_revised?.pull_class === 'none'" in block
     branch = block.index("_revised?.verdict === 'ready' && (_revised?.pull_class === 'mechanical'")
-    accept = block.index("_planRel = _revised.plan_rel", branch)
+    accept = block.index("_planRel = _pullPlan", branch)
     assert accept < block.index("else {", branch) < block.index("await planBlitz(")
 
 

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import pipeline_run as pr
 from coordinator_core.ops.dispatch_emit.pipeline_contract import RUN_DIR_ROOT
+from pathlib import Path
 
 RID = "pipeline-research-20261024T000000-abc123"
 
@@ -14,12 +15,12 @@ def _emit(root, run_id=RID):
     return d / f"{run_id}.workflow.mjs"
 
 
-def test_resolves_emitted_run(tmp_path):
+def test_resolves_emitted_run(tmp_path: Path) -> None:
     script = _emit(tmp_path)
     assert pr.emitted_pipeline_run(tmp_path, RID) == script
 
 
-def test_unemitted_wrong_prefix_and_unsafe_ids_refuse(tmp_path):
+def test_unemitted_wrong_prefix_and_unsafe_ids_refuse(tmp_path: Path) -> None:
     assert pr.emitted_pipeline_run(tmp_path, RID) is None
     _emit(tmp_path, "ask-20261024T000000-abc123")
     assert pr.emitted_pipeline_run(tmp_path, "ask-20261024T000000-abc123") is None
@@ -27,18 +28,18 @@ def test_unemitted_wrong_prefix_and_unsafe_ids_refuse(tmp_path):
     assert pr.emitted_pipeline_run(tmp_path, "pipeline-a/b") is None
 
 
-def test_run_name_keeps_any_pipeline_prefixed_id_and_prefixes_bare_ones():
+def test_run_name_keeps_any_pipeline_prefixed_id_and_prefixes_bare_ones() -> None:
     assert pr.run_name("structured", "pipeline-research-x") == "pipeline-research-x"
     assert pr.run_name("structured", "r1") == "pipeline-structured-r1"
 
 
-def test_revisions_rel_and_marker():
+def test_revisions_rel_and_marker() -> None:
     assert pr.revisions_rel(RID) == f"scratch/warp/{RID}/revisions.md"
     assert pr.reads_revisions(f"x\n{pr.REVISIONS_MARKER}\ny")
     assert not pr.reads_revisions("no marker here")
 
 
-def test_state_unknown_live_finished(tmp_path):
+def test_state_unknown_live_finished(tmp_path: Path) -> None:
     assert pr.pipeline_run_state(tmp_path, RID) == "unknown"
     assert pr.pipeline_run_state(tmp_path, "pipeline-../x") == "unknown"
     _emit(tmp_path)
@@ -50,7 +51,7 @@ def test_state_unknown_live_finished(tmp_path):
     assert pr.pipeline_run_state(tmp_path, RID) == "finished"
 
 
-def test_append_creates_dir_and_appends_blocks(tmp_path):
+def test_append_creates_dir_and_appends_blocks(tmp_path: Path) -> None:
     p1 = pr.append_revision(tmp_path, RID, "first note\n", "em-1", "revision")
     p2 = pr.append_revision(tmp_path, RID, "second note", "em-2", "revision")
     assert p1 == p2 == tmp_path / pr.revisions_rel(RID)

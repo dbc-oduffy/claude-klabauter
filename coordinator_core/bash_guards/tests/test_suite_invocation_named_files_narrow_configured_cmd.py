@@ -10,13 +10,14 @@ import pytest
 
 from coordinator_core.bash_guards import check_test_suite_invocation as guard
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 _AGENT_ID = "a0123456789abcdef"
 _RUNNER = "python3 bin/run-fast-tests.py"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "pyproject.toml").write_text(
         "[tool.pytest.ini_options]\n" 'testpaths = ["tests"]\n', encoding="utf-8"
     )
@@ -28,7 +29,7 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _configure(monkeypatch, cmd):
+def _configure(monkeypatch, cmd) -> None:
     monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", cmd)
     monkeypatch.setattr(
         guard, "_configured_test_cmds",
@@ -58,7 +59,7 @@ def _denied(verdict):
     f"{_RUNNER} -q tests/test_a.py",
     f"{_RUNNER} -k foo tests/test_a.py",
 ])
-def test_named_files_on_configured_runner_are_a_named_run(repo, monkeypatch, command):
+def test_named_files_on_configured_runner_are_a_named_run(repo, monkeypatch: pytest.MonkeyPatch, command) -> None:
     _configure(monkeypatch, _RUNNER)
     assert not _denied(_subagent_verdict(command, repo))
     assert guard.classify_command(command, cwd=str(repo)) == []
@@ -72,13 +73,13 @@ def test_named_files_on_configured_runner_are_a_named_run(repo, monkeypatch, com
     f"{_RUNNER} tests/",
     f"{_RUNNER} tests/ tests/test_a.py",
 ])
-def test_unnarrowed_configured_runner_stays_the_tier_and_denied(repo, monkeypatch, command):
+def test_unnarrowed_configured_runner_stays_the_tier_and_denied(repo, monkeypatch: pytest.MonkeyPatch, command) -> None:
     _configure(monkeypatch, _RUNNER)
     assert _denied(_subagent_verdict(command, repo))
     assert guard.classify_command(command, cwd=str(repo)) != []
 
 
-def test_configured_directory_still_runs_in_full_with_a_file_appended(repo, monkeypatch):
+def test_configured_directory_still_runs_in_full_with_a_file_appended(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _configure(monkeypatch, "pytest tests/")
     command = "pytest tests/ tests/test_a.py"
     assert _denied(_subagent_verdict(command, repo))

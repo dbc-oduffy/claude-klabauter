@@ -128,7 +128,7 @@ def _run(root: Path, staged: dict) -> dict:
     return json.loads(proc.stdout.strip().splitlines()[-1])
 
 
-def test_the_launcher_starts_the_staged_twin_and_the_twin_adopts_the_manifest(tmp_path, monkeypatch):
+def test_the_launcher_starts_the_staged_twin_and_the_twin_adopts_the_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     staged = _stage(tmp_path, monkeypatch)
     out = _run(tmp_path, staged)
     run = out["result"]["runs"][0]
@@ -139,13 +139,13 @@ def test_the_launcher_starts_the_staged_twin_and_the_twin_adopts_the_manifest(tm
     assert run["result"]["rows"] == [r["id"] for r in staged["manifest"]["rows"]]
 
 
-def test_no_child_calls_workflow_and_no_child_start_carries_args(tmp_path, monkeypatch):
+def test_no_child_calls_workflow_and_no_child_start_carries_args(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(tmp_path, _stage(tmp_path, monkeypatch))
     assert out["childWorkflowCalls"] == []
     assert out["topCalls"] and all(c["argsUndefined"] for c in out["topCalls"])
 
 
-def test_a_twin_with_one_inlined_byte_changed_halts_on_the_sha_check(tmp_path, monkeypatch):
+def test_a_twin_with_one_inlined_byte_changed_halts_on_the_sha_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     staged = _stage(tmp_path, monkeypatch)
     twin_text = staged["twin"].read_text(encoding="utf-8")
     assert _SLOT not in twin_text
@@ -158,7 +158,7 @@ def test_a_twin_with_one_inlined_byte_changed_halts_on_the_sha_check(tmp_path, m
     assert out["childWorkflowCalls"] == []
 
 
-def test_the_emitted_script_holds_the_slot_once_and_the_twin_is_that_script_with_the_slot_filled(tmp_path, monkeypatch):
+def test_the_emitted_script_holds_the_slot_once_and_the_twin_is_that_script_with_the_slot_filled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     staged = _stage(tmp_path, monkeypatch)
     assert staged["script"].count(_SLOT) == 1
     assert "workflow(" not in staged["script"]
@@ -167,7 +167,7 @@ def test_the_emitted_script_holds_the_slot_once_and_the_twin_is_that_script_with
     assert twin_text.startswith(head) and twin_text.endswith(tail)
 
 
-def test_writing_the_sidecar_twice_for_the_same_content_yields_the_same_handle_and_twin(tmp_path, monkeypatch):
+def test_writing_the_sidecar_twice_for_the_same_content_yields_the_same_handle_and_twin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     staged = _stage(tmp_path, monkeypatch)
     first = staged["twin"].read_bytes()
     again = reply_sidecar.write_reply(

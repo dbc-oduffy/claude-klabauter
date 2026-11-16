@@ -25,6 +25,11 @@ def _module_files(module: str) -> List[str]:
 _SUITE_BOUND = 30
 
 _TEST_STEM_RE = re.compile(r"^test_(.+)\.py$")
+_JS_TEST_STEM_RE = re.compile(r"^(.+)\.(?:test|spec)\.[jt]sx?$")
+_JS_SOURCE_RE = re.compile(r"\.[jt]sx?$")
+_JS_TEST_PATHSPECS = ("*.test.[jt]s", "*.test.[jt]sx", "*.spec.[jt]s", "*.spec.[jt]sx")
+#: Index key prefix keeping JS/TS stems apart from Python stems.
+_JS_KEY = "js:"
 
 
 def _changed_paths(repo_root: Path, base: str, head: str) -> List[str]:
@@ -39,7 +44,14 @@ def _changed_paths(repo_root: Path, base: str, head: str) -> List[str]:
     return sorted({ln.strip() for ln in proc.stdout.splitlines() if ln.strip()})
 
 
+def _is_js_test_file(path: str) -> bool:
+    return bool(_JS_TEST_STEM_RE.match(PurePosixPath(path).name))
+
+
 def _is_test_file(path: str, testpaths: List[str]) -> bool:
+    """Python tests are gated on pytest ``testpaths``; JS/TS tests have none, so are never gated."""
+    if _is_js_test_file(path):
+        return True
     return bool(_TEST_FILE_RE.match(PurePosixPath(path).name)) and _under_testpaths(path, testpaths)
 
 
@@ -87,24 +99,36 @@ def _imported(repo_root: Path, rel: str, sources: Set[str]) -> Set[str]:
 
 
 def _tracked_test_index(repo_root: Path, testpaths: List[str]) -> Dict[str, List[str]]:
-    """Basename stem -> tracked test files under ``testpaths`` (one ``git ls-files`` spawn).
+    """Basename stem -> tracked test files (one ``git ls-files`` spawn).
 
-    Replaces ``map_source_to_tests``, which re-walks the whole tree on every call.
+    Python tests sit under ``testpaths``; JS/TS ``*.test|spec.[jt]sx?`` files index under
+    ``_JS_KEY`` + stem with no ``testpaths`` gate. Replaces ``map_source_to_tests``, which
+    re-walks the whole tree on every call.
     """
-    proc = run_git(["ls-files", "--", "*test_*.py"], cwd=str(repo_root))
+    proc = run_git(["ls-files", "--", "*test_*.py", *_JS_TEST_PATHSPECS], cwd=str(repo_root))
     if proc.returncode != 0:
         raise ValueError(f"select_tests: git ls-files failed: {proc.stderr.strip()}")
     index: Dict[str, Set[str]] = {}
     for ln in proc.stdout.splitlines():
         rel = ln.strip()
-        m = _TEST_STEM_RE.match(PurePosixPath(rel).name) if rel else None
+        if not rel:
+            continue
+        name = PurePosixPath(rel).name
+        js = _JS_TEST_STEM_RE.match(name)
+        if js:
+            index.setdefault(_JS_KEY + js.group(1), set()).add(rel)
+            continue
+        m = _TEST_STEM_RE.match(name)
         if m and _under_testpaths(rel, testpaths):
             index.setdefault(m.group(1), set()).add(rel)
     return {stem: sorted(paths) for stem, paths in index.items()}
 
 
 def _mapped(index: Dict[str, List[str]], source: str) -> List[str]:
-    return index.get(PurePosixPath(source).stem.replace("-", "_"), [])
+    stem = PurePosixPath(source).stem
+    if _JS_SOURCE_RE.search(source):
+        return index.get(_JS_KEY + stem, [])
+    return index.get(stem.replace("-", "_"), [])
 
 
 def _importers(repo_root: Path, sources: Set[str]) -> Dict[str, Set[str]]:
@@ -145,7 +169,7 @@ def select_tests(repo_root: Path, base: str, head: str = "HEAD") -> dict:
 
     Returns ``{"tests": sorted posix paths, "changed": posix paths, "fully_mapped": bool,
     "notice": str}`` (``notice`` is empty unless the selection was narrowed).
-    ``fully_mapped`` is False when a changed non-test ``.py`` has no mapped or importing test.
+    ``fully_mapped`` is False when a changed non-test ``.py`` or ``.js/.ts`` source has no mapped or importing test.
     Raises ``ValueError`` when ``base`` is unknown or the diff fails; never an empty set for that.
     """
     repo_root = Path(repo_root)
@@ -157,14 +181,14 @@ def select_tests(repo_root: Path, base: str, head: str = "HEAD") -> dict:
     changed_src: Set[str] = set()
     index = _tracked_test_index(repo_root, testpaths)
     for path in changed:
-        if not path.endswith(".py"):
+        if not (path.endswith(".py") or _JS_SOURCE_RE.search(path)):
             continue
         if _is_test_file(path, testpaths):
             tests.add(path)
         else:
             changed_src.add(path)
     touched = set(tests)
-    importers = _importers(repo_root, changed_src)
+    importers = _importers(repo_root, {p for p in changed_src if p.endswith(".py")})
     importing_tests = {imp for imp in importers if _is_test_file(imp, testpaths)}
     mapped: Set[str] = set()
     for path in sorted(changed_src):

@@ -8,16 +8,17 @@ import pytest
 import coordinator_core.ops.dispatch_emit as _pkg
 from coordinator_core.ops.dispatch_emit import cli
 from coordinator_core.ops.dispatch_emit.sizing_fire import SizingHandBack
+from pathlib import Path
 
 
 class _Admitted:
     @staticmethod
-    def await_admission(start_dir, *, hold_allowed):
+    def await_admission(start_dir, *, hold_allowed) -> dict[str, str]:
         return {"verdict": "disabled"}
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(_pkg, "admission", _Admitted, raising=False)
@@ -36,7 +37,7 @@ def _plan(repo):
     return plan
 
 
-def test_plan_fire_prints_one_document_with_the_fire_record_nested(repo, monkeypatch, capsys):
+def test_plan_fire_prints_one_document_with_the_fire_record_nested(repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     plan = _plan(repo)
     monkeypatch.setattr(
         "coordinator_core.ops.workflow_fire.fire.fire_workflow",
@@ -51,7 +52,7 @@ def test_plan_fire_prints_one_document_with_the_fire_record_nested(repo, monkeyp
     assert "Workflow(" in captured.err
 
 
-def test_a_fire_failure_still_leaves_one_document_on_stdout(repo, monkeypatch, capsys):
+def test_a_fire_failure_still_leaves_one_document_on_stdout(repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     plan = _plan(repo)
 
     def _boom(path, cwd=None, run_id=None):
@@ -64,13 +65,13 @@ def test_a_fire_failure_still_leaves_one_document_on_stdout(repo, monkeypatch, c
     assert "fire" not in document and document["path"]
 
 
-def test_plan_without_fire_has_no_fire_key(repo, capsys):
+def test_plan_without_fire_has_no_fire_key(repo, capsys: pytest.CaptureFixture[str]) -> None:
     plan = _plan(repo)
     assert cli.main(["--plan", str(plan), "--out", str(repo / "p.workflow.mjs")]) == cli.EXIT_OK
     assert "fire" not in json.loads(capsys.readouterr().out)
 
 
-def test_sizing_hand_back_is_a_json_object_on_stdout_and_text_on_stderr(repo, monkeypatch, capsys):
+def test_sizing_hand_back_is_a_json_object_on_stdout_and_text_on_stderr(repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     line = "sizing routed to the PM: S-L"
 
     def _raise(params, repo_root=None):

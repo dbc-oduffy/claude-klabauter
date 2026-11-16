@@ -7,6 +7,7 @@ import yaml
 
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 REL = "state/sizings/2026-10-01-lettered.yaml"
 RUN = "ask-20261001T000000-aaaaaa"
@@ -14,14 +15,14 @@ BRIEF = "Do two things: (a) fix the reacher gating. (b) finish the remnant."
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
     return tmp_path
 
 
-def _put(repo, brief=None):
+def _put(repo, brief=None) -> None:
     doc = {
         "schema": "sizing-object", "name": "lettered", "intent": "exercise lettered parts",
         "estimate": {"tshirt": "XS", "provisional": True}, "route": "dispatch", "detents": [],
@@ -40,27 +41,27 @@ def _texts(repo):
     return [r["source_text"] for r in rr.read_register((repo / REL).read_text(encoding="utf-8")).rows]
 
 
-def _bound(repo, brief=None):
+def _bound(repo, brief=None) -> None:
     _put(repo, brief)
     rl.start(repo, RUN)
     rl.bind(repo, RUN, REL, ask_text="the ask")
 
 
-def test_note_naming_lettered_parts_mints_no_row_a_note_is_not_a_requirement(repo):
+def test_note_naming_lettered_parts_mints_no_row_a_note_is_not_a_requirement(repo) -> None:
     _bound(repo)
     before = _texts(repo)
     rl.revise(repo, RUN, note="Scope: (a) the gating fix; (b) remnant completion.")
     assert _texts(repo) == before
 
 
-def test_verbatim_naming_lettered_parts_mints_one_row_for_the_verbatim(repo):
+def test_verbatim_naming_lettered_parts_mints_one_row_for_the_verbatim(repo) -> None:
     _bound(repo)
     before = _texts(repo)
     rl.revise(repo, RUN, verbatim="Scope: (a) the gating fix; (b) remnant completion.")
     assert _texts(repo)[len(before):] == ["Scope: (a) the gating fix; (b) remnant completion."]
 
 
-def test_repeated_note_adds_no_duplicate(repo):
+def test_repeated_note_adds_no_duplicate(repo) -> None:
     _bound(repo)
     note = "(a) the gating fix (b) remnant completion"
     rl.revise(repo, RUN, note=note)
@@ -69,7 +70,7 @@ def test_repeated_note_adds_no_duplicate(repo):
     assert _texts(repo) == once
 
 
-def test_note_without_lettered_part_adds_no_row(repo):
+def test_note_without_lettered_part_adds_no_row(repo) -> None:
     _bound(repo)
     before = _texts(repo)
     rl.revise(repo, RUN, note="just a progress remark, nothing lettered")
@@ -83,26 +84,26 @@ def _anchors(repo):
     return [r["anchor"] for r in rr.read_register((repo / REL).read_text(encoding="utf-8")).rows]
 
 
-def test_method_lead_in_marks_every_lettered_part_and_origin_survives(repo):
+def test_method_lead_in_marks_every_lettered_part_and_origin_survives(repo) -> None:
     _bound(repo, METHOD_BRIEF)
     marked = [a for a in _anchors(repo) if "#method-step:" in a]
     assert len(marked) == 3
     assert {rl._origin(a)[0] for a in marked} == {"relayed"}
 
 
-def test_plain_lettered_list_marks_no_row(repo):
+def test_plain_lettered_list_marks_no_row(repo) -> None:
     _bound(repo, BRIEF)
     assert not [a for a in _anchors(repo) if "#method-step:" in a]
 
 
-def test_method_rows_are_not_duplicated_on_rebind(repo):
+def test_method_rows_are_not_duplicated_on_rebind(repo) -> None:
     _bound(repo, METHOD_BRIEF)
     once = _texts(repo)
     rl.bind(repo, RUN, REL, ask_text="the ask")
     assert _texts(repo) == once
 
 
-def test_bind_mints_a_row_per_lettered_part_of_the_em_brief_once(repo):
+def test_bind_mints_a_row_per_lettered_part_of_the_em_brief_once(repo) -> None:
     _bound(repo, BRIEF)
     texts = _texts(repo)
     assert "(a) fix the reacher gating." in texts

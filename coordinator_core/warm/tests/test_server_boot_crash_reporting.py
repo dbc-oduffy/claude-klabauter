@@ -37,7 +37,7 @@ from coordinator_core.warm import server
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def test_main_reports_run_guarded_crash_and_reraises(monkeypatch):
+def test_main_reports_run_guarded_crash_and_reraises(monkeypatch: pytest.MonkeyPatch) -> None:
     """A `_run_guarded` failure must reach `record_child_failure` with the
     real exception, and `main()` must still raise -- not swallow it into a
     quiet non-zero return, per PM ruling: die audibly, not gracefully."""
@@ -51,7 +51,7 @@ def test_main_reports_run_guarded_crash_and_reraises(monkeypatch):
 
     recorded = {}
 
-    def _fake_record_child_failure(repo_root, script_path, *, exit_code=None, exc=None):
+    def _fake_record_child_failure(repo_root, script_path, *, exit_code=None, exc=None) -> None:
         recorded["repo_root"] = repo_root
         recorded["script_path"] = script_path
         recorded["exc"] = exc
@@ -68,7 +68,7 @@ def test_main_reports_run_guarded_crash_and_reraises(monkeypatch):
     assert recorded["script_path"] == server.__file__
 
 
-def test_boot_crash_surfaces_under_devnull_stdio(tmp_path):
+def test_boot_crash_surfaces_under_devnull_stdio(tmp_path: Path) -> None:
     """Real-subprocess proof: a `_run_guarded` crash still lands a "CHILD
     FAILED" record in `state/housekeeping-failures.log` when the child's
     own stdin/stdout/stderr are all `subprocess.DEVNULL`, matching

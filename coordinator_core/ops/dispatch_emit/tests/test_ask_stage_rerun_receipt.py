@@ -7,10 +7,11 @@ import pytest
 from coordinator_core.ops.dispatch_emit import ask_stage, ask_stage_receipt, reply_sidecar
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 from coordinator_core.ops.dispatch_emit.tests._size_l_plan import build_size_l_plan, isolate_launch_dirs
+from pathlib import Path
 
 
 @pytest.fixture
-def staged_repo(tmp_path, monkeypatch):
+def staged_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, str, str]:
     isolate_launch_dirs(monkeypatch, tmp_path)
     root = tmp_path / "repo"
     root.mkdir()
@@ -21,7 +22,7 @@ def _tree(path):
     return {p: p.read_bytes() for p in sorted(path.rglob("*")) if p.is_file()}
 
 
-def test_rerun_after_landed_stage_replies_recorded_handle_and_writes_nothing(staged_repo, monkeypatch):
+def test_rerun_after_landed_stage_replies_recorded_handle_and_writes_nothing(staged_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, plan_rel, run_id = staged_repo
     params = {"run_id": run_id, "plan_path": plan_rel}
     first = ask_stage._handler(dict(params), repo_root=root)
@@ -39,7 +40,7 @@ def test_rerun_after_landed_stage_replies_recorded_handle_and_writes_nothing(sta
     assert (root / plan_rel).read_bytes() == plan_before
 
 
-def test_manifest_without_receipt_refuses_and_writes_nothing(staged_repo, monkeypatch):
+def test_manifest_without_receipt_refuses_and_writes_nothing(staged_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, plan_rel, run_id = staged_repo
     params = {"run_id": run_id, "plan_path": plan_rel}
     ask_stage._handler(dict(params), repo_root=root)
@@ -51,7 +52,7 @@ def test_manifest_without_receipt_refuses_and_writes_nothing(staged_repo, monkey
     assert _tree(root / "state") | _tree(root / "scratch") == before
 
 
-def test_changed_params_stage_afresh_and_rewrite_the_receipt(staged_repo):
+def test_changed_params_stage_afresh_and_rewrite_the_receipt(staged_repo) -> None:
     root, plan_rel, run_id = staged_repo
     first = ask_stage._handler({"run_id": run_id, "plan_path": plan_rel}, repo_root=root)
     revised = {"run_id": run_id, "plan_path": plan_rel, "only_rows": ["C1"]}

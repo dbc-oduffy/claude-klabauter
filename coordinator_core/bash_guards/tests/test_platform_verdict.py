@@ -28,9 +28,11 @@ import os
 import sys
 
 from coordinator_core.bash_guards import _platform_verdict as pv
+from pathlib import Path
+import pytest
 
 
-def test_windows_override_still_advises_never_denies():
+def test_windows_override_still_advises_never_denies() -> None:
     result = pv.platform_verdict_for_shape(
         "grep-via-bash",
         "grep -r foo .",
@@ -49,7 +51,7 @@ def test_windows_override_still_advises_never_denies():
     assert "DENIED" not in ctx
 
 
-def test_macos_override_advises_never_denies():
+def test_macos_override_advises_never_denies() -> None:
     result = pv.platform_verdict_for_shape(
         "grep-via-bash",
         "grep -r foo .",
@@ -67,7 +69,7 @@ def test_macos_override_advises_never_denies():
     assert "permissionDecisionReason" not in out
 
 
-def test_shape_helper_allows_regardless_of_os_name(monkeypatch):
+def test_shape_helper_allows_regardless_of_os_name(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pv, "_declared_host_is_windows", lambda: None)
     monkeypatch.setattr(os, "name", "nt")
     windows_result = pv.platform_verdict_for_shape(
@@ -82,7 +84,7 @@ def test_shape_helper_allows_regardless_of_os_name(monkeypatch):
     assert posix_result["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
-def test_low_level_verdict_default_is_not_baked_in_at_import_time(monkeypatch):
+def test_low_level_verdict_default_is_not_baked_in_at_import_time(monkeypatch: pytest.MonkeyPatch) -> None:
     # Same process, same imported module object -- flipping os.name between
     # two calls must flip the LOW-LEVEL platform_verdict's verdict both
     # times, proving the read happens at call time (never cached on a prior
@@ -99,7 +101,7 @@ def test_low_level_verdict_default_is_not_baked_in_at_import_time(monkeypatch):
     assert second["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
-def test_sniff_widens_to_cygwin_and_msys_sys_platform(monkeypatch):
+def test_sniff_widens_to_cygwin_and_msys_sys_platform(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pv, "_declared_host_is_windows", lambda: None)
     monkeypatch.setattr(os, "name", "posix")
     for plat in ("cygwin", "msys"):
@@ -109,7 +111,7 @@ def test_sniff_widens_to_cygwin_and_msys_sys_platform(monkeypatch):
     assert pv._sniff_host_is_windows() is False
 
 
-def test_declared_registry_value_wins_over_sniffing(monkeypatch):
+def test_declared_registry_value_wins_over_sniffing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(os, "name", "posix")
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(pv, "_declared_host_is_windows", lambda: True)
@@ -120,7 +122,7 @@ def test_declared_registry_value_wins_over_sniffing(monkeypatch):
     assert pv._resolve_host_is_windows(None) is False
 
 
-def test_shape_helper_ignores_host_is_windows_kwarg_entirely(monkeypatch):
+def test_shape_helper_ignores_host_is_windows_kwarg_entirely(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pv, "_declared_host_is_windows", lambda: True)
     result = pv.platform_verdict_for_shape(
         "shape", "cmd", "outlet", "example", host_is_windows=False
@@ -132,7 +134,7 @@ def test_shape_helper_ignores_host_is_windows_kwarg_entirely(monkeypatch):
     assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
-def test_declared_registry_value_parsing(monkeypatch):
+def test_declared_registry_value_parsing(monkeypatch: pytest.MonkeyPatch) -> None:
     for raw, expected in (
         ("true", True), ("True", True), ("1", True), ("yes", True),
         ("false", False), ("False", False), ("0", False), ("no", False),
@@ -142,27 +144,27 @@ def test_declared_registry_value_parsing(monkeypatch):
         assert pv._declared_host_is_windows() == expected
 
 
-def test_absent_registry_value_falls_through_to_sniffing_not_false(monkeypatch):
+def test_absent_registry_value_falls_through_to_sniffing_not_false(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pv, "_read_declared_registry_value", lambda: None)
     monkeypatch.setattr(os, "name", "nt")
     assert pv._resolve_host_is_windows(None) is True
 
 
-def test_declared_registry_read_is_fresh_not_cached(monkeypatch):
+def test_declared_registry_read_is_fresh_not_cached(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pv, "_read_declared_registry_value", lambda: "true")
     assert pv._resolve_host_is_windows(None) is True
     monkeypatch.setattr(pv, "_read_declared_registry_value", lambda: "false")
     assert pv._resolve_host_is_windows(None) is False
 
 
-def test_low_level_platform_verdict_honors_override():
+def test_low_level_platform_verdict_honors_override() -> None:
     denied = pv.platform_verdict("deny text", "advise text", host_is_windows=True)
     advised = pv.platform_verdict("deny text", "advise text", host_is_windows=False)
     assert denied["hookSpecificOutput"]["permissionDecisionReason"].endswith("deny text")
     assert advised["hookSpecificOutput"]["additionalContext"].endswith("advise text")
 
 
-def test_shape_helper_advisory_does_not_echo_matched_cmd():
+def test_shape_helper_advisory_does_not_echo_matched_cmd() -> None:
     long_cmd = "grep -r " + ("x" * 400)
     result = pv.platform_verdict_for_shape(
         "grep-via-bash", long_cmd, "the outlet", "outlet_call()", host_is_windows=True
@@ -171,7 +173,7 @@ def test_shape_helper_advisory_does_not_echo_matched_cmd():
     assert long_cmd not in ctx
 
 
-def test_no_override_env_var_influences_anything(monkeypatch):
+def test_no_override_env_var_influences_anything(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pv, "_declared_host_is_windows", lambda: None)
     monkeypatch.setattr(os, "name", "posix")
     monkeypatch.setattr(sys, "platform", "linux")
@@ -181,7 +183,7 @@ def test_no_override_env_var_influences_anything(monkeypatch):
     assert result["hookSpecificOutput"]["permissionDecision"] == "allow"
 
 
-def test_declared_registry_key_env_override_does_not_influence_verdict(monkeypatch, tmp_path):
+def test_declared_registry_key_env_override_does_not_influence_verdict(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     # `machine_resolver.registry_get` has
     # its own MACHINE_LOCAL_<KEY> env-override rung, checked BEFORE the TOML
     # file, which is a live third override surface for this specific

@@ -35,7 +35,7 @@ if _REPO_ROOT not in sys.path:
 from coordinator_core.win_portability import no_console_creationflags  # noqa: E402
 
 
-def write(path, content):
+def write(path, content) -> None:
     with open(path, "w", encoding="utf-8") as fh:
         fh.write(content)
 
@@ -56,7 +56,7 @@ def run_helper(args, cwd=None, extra_env=None):
 
 
 @pytest.fixture(scope="module")
-def root(tmp_path_factory):
+def root(tmp_path_factory: pytest.TempPathFactory) -> str:
     return str(tmp_path_factory.mktemp("check-machine-path-leak-test"))
 
 
@@ -67,7 +67,7 @@ def fake_home(root):
     return d
 
 
-def test_settings_json_hard_block(root):
+def test_settings_json_hard_block(root) -> None:
     bad_settings = os.path.join(root, "settings.json")
     write(bad_settings, json.dumps({
         "mcpServers": {
@@ -80,7 +80,7 @@ def test_settings_json_hard_block(root):
     assert "BLOCKED" in se
 
 
-def test_settings_json_clean_file(root):
+def test_settings_json_clean_file(root) -> None:
     clean_dir = os.path.join(root, "clean")
     os.makedirs(clean_dir, exist_ok=True)
     clean_settings = os.path.join(clean_dir, "settings.json")
@@ -94,7 +94,7 @@ def test_settings_json_clean_file(root):
     assert "OK" in so
 
 
-def test_working_repos_yaml_soft_warn(root, fake_home):
+def test_working_repos_yaml_soft_warn(root, fake_home) -> None:
     wr_dir_c = os.path.join(root, "wr-c")
     os.makedirs(wr_dir_c, exist_ok=True)
     wr_file = os.path.join(wr_dir_c, "working-repos.yaml")
@@ -108,7 +108,7 @@ def test_working_repos_yaml_soft_warn(root, fake_home):
     assert "othermachine" not in se
 
 
-def test_home_unset_falls_back_to_expanduser(root):
+def test_home_unset_falls_back_to_expanduser(root) -> None:
     wr_dir_d = os.path.join(root, "wr-d")
     os.makedirs(wr_dir_d, exist_ok=True)
     real_home = os.path.expanduser("~")
@@ -121,7 +121,7 @@ def test_home_unset_falls_back_to_expanduser(root):
     assert "WARN" in se, "HOME-unset must still WARN on the real home-rooted path (expanduser fallback fired)"
 
 
-def test_pyyaml_absent_linescan_fallback(root, fake_home):
+def test_pyyaml_absent_linescan_fallback(root, fake_home) -> None:
     wr_dir_e = os.path.join(root, "wr-e")
     os.makedirs(wr_dir_e, exist_ok=True)
     wr_file_e = os.path.join(wr_dir_e, "working-repos.yaml")
@@ -152,7 +152,7 @@ def test_pyyaml_absent_linescan_fallback(root, fake_home):
     assert "WARN" in r.stderr, "linescan must still find the current-machine path"
 
 
-def test_staged_outside_git_repo(root):
+def test_staged_outside_git_repo(root) -> None:
     nogit_dir = os.path.join(root, "nogit")
     os.makedirs(nogit_dir, exist_ok=True)
     code, so, se = run_helper(["--staged"], cwd=nogit_dir)
@@ -160,7 +160,7 @@ def test_staged_outside_git_repo(root):
     assert "ERROR" in se
 
 
-def test_nothing_in_scope(root):
+def test_nothing_in_scope(root) -> None:
     unrelated = os.path.join(root, "unrelated.txt")
     write(unrelated, "nothing to see here\n")
     code, so, se = run_helper([unrelated])

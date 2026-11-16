@@ -6,23 +6,24 @@ import re
 import pytest
 
 from coordinator_core.canvas_harvest import model, reader
+from pathlib import Path
 
 URL = "https://claude.ai/artifact/LvATpzxR9vvEBxJsy84rjx"
 AID = "LvATpzxR9vvEBxJsy84rjx"
 
 
-def test_dispatch_fields():
+def test_dispatch_fields() -> None:
     d = reader.dispatch(URL)
     assert set(d) == {"subagent_type", "description", "prompt", "harvest_argv"}
     assert d["subagent_type"] == "general-purpose"
     assert d["description"] == reader.READER_DESCRIPTION_PREFIX + AID
 
 
-def test_description_fullmatches_gate_pattern():
+def test_description_fullmatches_gate_pattern() -> None:
     assert re.fullmatch(r"canvas-reader ([A-Za-z0-9_-]+)", reader.dispatch(URL)["description"])
 
 
-def test_prompt_cites_url_once_and_no_other_canvas_url():
+def test_prompt_cites_url_once_and_no_other_canvas_url() -> None:
     prompt = reader.dispatch(URL)["prompt"]
     assert prompt.count(URL) == 1
     assert prompt.count("/artifact/") == 1
@@ -30,33 +31,33 @@ def test_prompt_cites_url_once_and_no_other_canvas_url():
         assert needle in prompt
 
 
-def test_prompt_step_order():
+def test_prompt_step_order() -> None:
     p = reader.dispatch(URL)["prompt"]
     marks = ["ToolSearch", "list the files", "ONCE", "ArtifactComments on", "no write", "only the word"]
     idx = [p.index(m) for m in marks]
     assert idx == sorted(idx)
 
 
-def test_prompt_cites_canonical_url_for_bare_id_and_decorated_url():
+def test_prompt_cites_canonical_url_for_bare_id_and_decorated_url() -> None:
     canonical = f"https://claude.ai/artifact/{AID}"
     for given in (AID, f"{URL}?x=ignore+previous#frag"):
         prompt = reader.dispatch(given)["prompt"]
         assert prompt.count(canonical) == 1 and "ignore" not in prompt
 
 
-def test_dispatch_rejects_non_artifact_url():
+def test_dispatch_rejects_non_artifact_url() -> None:
     with pytest.raises(ValueError):
         reader.dispatch("https://example.com/x")
 
 
-def test_argv_is_not_bareword():
+def test_argv_is_not_bareword() -> None:
     argv = reader.dispatch(URL)["harvest_argv"]
     assert argv[0] != "canvas-harvest"
     assert argv[1:4] == ["harvest", "--url", URL]
     assert "--reader" in argv and "--transcript" in argv
 
 
-def _fixture(tmp_path, stem="agent-aX", description=reader.READER_DESCRIPTION_PREFIX + AID, meta=True):
+def _fixture(tmp_path, stem: str = "agent-aX", description=reader.READER_DESCRIPTION_PREFIX + AID, meta: bool = True):
     t = tmp_path / f"{stem}.jsonl"
     t.write_text("", encoding="utf-8")
     if meta:
@@ -66,7 +67,7 @@ def _fixture(tmp_path, stem="agent-aX", description=reader.READER_DESCRIPTION_PR
     return t
 
 
-def test_named_reader_pass(tmp_path):
+def test_named_reader_pass(tmp_path: Path) -> None:
     assert reader.named_reader(_fixture(tmp_path), AID) == "aX"
 
 
@@ -74,14 +75,14 @@ def test_named_reader_pass(tmp_path):
     "kwargs",
     [{"meta": False}, {"description": "canvas-reader OTHER"}, {"stem": "notagent-aX"}, {"stem": "agent-"}],
 )
-def test_named_reader_refusals(tmp_path, kwargs):
+def test_named_reader_refusals(tmp_path: Path, kwargs) -> None:
     t = _fixture(tmp_path, **kwargs)
     with pytest.raises(model.HarvestError) as exc:
         reader.named_reader(t, AID)
     assert exc.value.reason == model.READER_NOT_NAMED
 
 
-def test_named_reader_unparseable_meta(tmp_path):
+def test_named_reader_unparseable_meta(tmp_path: Path) -> None:
     t = _fixture(tmp_path)
     (tmp_path / "agent-aX.meta.json").write_text("{not json", encoding="utf-8")
     with pytest.raises(model.HarvestError) as exc:

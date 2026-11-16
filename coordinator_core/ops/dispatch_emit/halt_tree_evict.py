@@ -140,7 +140,7 @@ def evict(
     if index:
         record_dir.mkdir(parents=True, exist_ok=True)
         index_path = record_dir / EVICTED_FILE
-        index_path.write_text(json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        index_path.write_text(json.dumps(index, indent=2, sort_keys=True) + "\n", encoding="utf-8", newline="\n")
         declare_write(index_path)
     return index
 

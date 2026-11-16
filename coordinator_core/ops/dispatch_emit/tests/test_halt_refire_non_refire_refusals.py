@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit.write_baseline import (
     NON_REFIRE_REFUSALS,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 _REFIRE_CALL = "Workflow({ script: 'engine-ask s.yaml' })"
 
@@ -39,7 +40,7 @@ def _finalise(halted: dict) -> dict:
 
 
 @pytest.mark.parametrize("hk", ["no-op", "review_blocked"])
-def test_no_change_with_dirty_lands_exactly_those_paths_review_only(hk):
+def test_no_change_with_dirty_lands_exactly_those_paths_review_only(hk) -> None:
     action = _finalise(
         {"halted": hk, "refused": "no-change", DIRTY_BEFORE_RUN_KEY: ["a.py", "b.py"], MEANT_TO_LAND_KEY: ["a.py"]}
     )
@@ -48,32 +49,32 @@ def test_no_change_with_dirty_lands_exactly_those_paths_review_only(hk):
     assert action["call"] != _REFIRE_CALL
 
 
-def test_no_change_on_clean_paths_revises_naming_meant_paths():
+def test_no_change_on_clean_paths_revises_naming_meant_paths() -> None:
     action = _finalise({"halted": "no-op", "refused": "no-change", MEANT_TO_LAND_KEY: ["x.py"]})
     assert hr.is_exit_next_action(action) and action["route"] == hr.ROUTE_REVISE
     assert action["call"].startswith("workflow.revise") and "r1" in action["call"] and "x.py" in action["reason"]
 
 
-def test_unreviewed_re_emits_review_only():
+def test_unreviewed_re_emits_review_only() -> None:
     action = _finalise({"halted": "review_blocked", "refused": "unreviewed"})
     assert hr.is_exit_next_action(action) and action["call"] == hr.REVIEW_ONLY_CALL
 
 
-def test_every_non_refire_refusal_finalises_to_exit():
+def test_every_non_refire_refusal_finalises_to_exit() -> None:
     for refused in NON_REFIRE_REFUSALS:
         assert _finalise({"halted": "x", "refused": refused})["kind"] == hr.EXIT_KIND
 
 
-def test_other_refusal_still_finalises_to_refire_envelope():
+def test_other_refusal_still_finalises_to_refire_envelope() -> None:
     action = _finalise({"halted": "review_blocked", "refused": "dirty-peer", "next_action": "Fix it"})
     assert hr.is_refire_next_action(action) and action["call"] == _REFIRE_CALL
 
 
-def test_no_refusal_still_finalises_to_refire_envelope():
+def test_no_refusal_still_finalises_to_refire_envelope() -> None:
     assert hr.is_refire_next_action(_finalise({"halted": "review_blocked"}))
 
 
-def test_exit_validator_refuses_a_refire_shaped_call():
+def test_exit_validator_refuses_a_refire_shaped_call() -> None:
     ok = hr.exit_next_action(reason="r", route=hr.ROUTE_REVIEW_ONLY, call="emit-dispatch-workflow --review-only")
     assert hr.is_exit_next_action(ok)
     assert not hr.is_exit_next_action({**ok, "call": _REFIRE_CALL})
@@ -82,7 +83,7 @@ def test_exit_validator_refuses_a_refire_shaped_call():
     assert not hr.is_exit_next_action({**ok, "extra": 1})
 
 
-def test_halted_json_records_exit_object_and_refuses_junk(tmp_path):
+def test_halted_json_records_exit_object_and_refuses_junk(tmp_path: Path) -> None:
     exit_obj = hr.exit_next_action(reason="r", route=hr.ROUTE_REVISE, call="workflow.revise {run_id: r1}")
     path = halted_run.write_halt_marker(tmp_path, halted="no-op", sizing_rel="s.yaml", next_action=exit_obj)
     assert json.loads(path.read_text())["next_action"] == exit_obj

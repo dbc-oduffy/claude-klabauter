@@ -9,10 +9,11 @@ import pytest
 
 from coordinator_core.hooks import project_orientation as po
 from coordinator_core.index_distribution import newer_index_marker as nim
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _no_spawn_no_net(monkeypatch):
+def _no_spawn_no_net(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("spawn or network attempted")
 
@@ -21,31 +22,31 @@ def _no_spawn_no_net(monkeypatch):
     monkeypatch.setattr(socket, "socket", boom)
 
 
-def _render(root):
+def _render(root) -> str:
     out: list[str] = []
     po._newer_index_banner(out, {}, str(root))
     return "".join(out)
 
 
-def test_newer_marker_prints_notice_naming_fetch_command(tmp_path):
+def test_newer_marker_prints_notice_naming_fetch_command(tmp_path: Path) -> None:
     nim.write_marker(tmp_path, {"kind": "structural", "checked_at": time.time(), "newer_available": True})
     text = _render(tmp_path)
     assert "Newer structural index available" in text
     assert "structural-index-refresh" in text
 
 
-def test_not_newer_marker_prints_nothing(tmp_path):
+def test_not_newer_marker_prints_nothing(tmp_path: Path) -> None:
     nim.write_marker(tmp_path, {"kind": "structural", "checked_at": time.time(), "newer_available": False})
     assert _render(tmp_path) == ""
 
 
-def test_missing_marker_prints_stale_unknown_naming_workday_start(tmp_path):
+def test_missing_marker_prints_stale_unknown_naming_workday_start(tmp_path: Path) -> None:
     text = _render(tmp_path)
     assert "stale-unknown" in text and "/workday-start" in text
     assert text.count("\n") == 1
 
 
-def test_stale_marker_prints_stale_unknown_even_if_newer(tmp_path):
+def test_stale_marker_prints_stale_unknown_even_if_newer(tmp_path: Path) -> None:
     nim.write_marker(
         tmp_path,
         {"kind": "structural", "checked_at": time.time() - nim.TTL_SECONDS - 10, "newer_available": True},
@@ -54,7 +55,7 @@ def test_stale_marker_prints_stale_unknown_even_if_newer(tmp_path):
     assert "stale-unknown" in text and "Newer structural" not in text
 
 
-def test_no_repo_root_renders_nothing():
+def test_no_repo_root_renders_nothing() -> None:
     out: list[str] = []
     po._newer_index_banner(out, {}, None)
     assert out == []

@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_contract as c
 from coordinator_core.ops.dispatch_emit import commit_request
+from pathlib import Path
 
 
 def _manifest():
@@ -16,12 +17,12 @@ def _manifest():
     return c.StageManifest("scratch/warp/r", rows, ("a.py",), "scratch/warp/r/req.json")
 
 
-def test_manifest_round_trip():
+def test_manifest_round_trip() -> None:
     m = _manifest()
     assert c.StageManifest.from_json(json.loads(json.dumps(m.to_json()))) == m
 
 
-def test_manifest_row_always_serialises_route_source_and_rag_calls():
+def test_manifest_row_always_serialises_route_source_and_rag_calls() -> None:
     row = c.ManifestRow("C1", "executor", "sonnet", "b.md", (), 0)
     out = row.to_json()
     assert out["route_source"] == "default" and out["rag_calls"] is None
@@ -33,14 +34,14 @@ def test_manifest_row_always_serialises_route_source_and_rag_calls():
     assert c.ManifestRow.from_json(legacy).rag_calls is None
 
 
-def test_manifest_row_refuses_unknown_route_source():
+def test_manifest_row_refuses_unknown_route_source() -> None:
     for ok in c.ROUTE_SOURCES:
         c.ManifestRow("C1", "executor", "sonnet", "b.md", (), 0, route_source=ok)
     with pytest.raises(ValueError):
         c.ManifestRow("C1", "executor", "sonnet", "b.md", (), 0, route_source="guess")
 
 
-def test_owed_round_trip():
+def test_owed_round_trip() -> None:
     owed = (c.OwedRow("C3", "em-performed", "EM runs it"), c.OwedRow("C4", "memo-send", "send memo"))
     m = _manifest()
     m = c.StageManifest(m.run_dir, m.rows, m.review_declared_paths, m.marker_path, owed=owed)
@@ -49,20 +50,20 @@ def test_owed_round_trip():
     assert c.StageManifest.from_json(out) == m
 
 
-def test_absent_owed_key_reads_empty():
+def test_absent_owed_key_reads_empty() -> None:
     data = _manifest().to_json()
     del data["owed"]
     assert c.StageManifest.from_json(data).owed == ()
 
 
-def test_ask_scout_schema_admits_acceptance_rows_and_grind_scout_does_not():
+def test_ask_scout_schema_admits_acceptance_rows_and_grind_scout_does_not() -> None:
     rows = c.ASK_SCOUT_SCHEMA["properties"]["acceptance_rows"]
     assert rows["type"] == ["array", "null"]
     assert rows["items"]["required"] == ["statement", "writes", "check"]
     assert "acceptance_rows" not in c.SCOUT_SCHEMA["properties"]
 
 
-def test_route_preference_record_file_and_override_reason_slot():
+def test_route_preference_record_file_and_override_reason_slot() -> None:
     assert "route-preference.json" in c.RUN_RECORD_FILES
     slot = c.ASK_SCOUT_SCHEMA["properties"]["route_override_reason"]
     assert slot["type"] == ["string", "null"]
@@ -70,14 +71,14 @@ def test_route_preference_record_file_and_override_reason_slot():
     assert "route_override_reason" not in c.SCOUT_SCHEMA["properties"]
 
 
-def test_route_verdict_slot_is_ask_only_and_optional():
+def test_route_verdict_slot_is_ask_only_and_optional() -> None:
     slot = c.ASK_SCOUT_SCHEMA["properties"]["route_verdict"]
     assert slot["type"] == ["object", "null"]
     assert "route_verdict" not in c.ASK_SCOUT_SCHEMA["required"]
     assert "route_verdict" not in c.SCOUT_SCHEMA["properties"]
 
 
-def test_stop_after_key_and_value_domain():
+def test_stop_after_key_and_value_domain() -> None:
     assert c.STOP_AFTER_KEY == "stop_after"
     assert c.STOP_AFTER_PLAN == "plan"
     from coordinator_core.ops.dispatch_emit import ask_fanout_contract as fc
@@ -85,14 +86,14 @@ def test_stop_after_key_and_value_domain():
     assert fc.ASKS_ITEM_KEYS[-2:] == ("writes", c.STOP_AFTER_KEY)
 
 
-def test_parked_next_action_text():
+def test_parked_next_action_text() -> None:
     assert c.parked_next_action("docs/plans/x.md") == "Run /mise-prep on docs/plans/x.md, then /mise-en-place."
     expected = "Run /mise-prep on the run's plan, then /mise-en-place."
     assert c.parked_next_action(None) == expected
     assert c.parked_next_action("") == expected
 
 
-def test_parked_next_action_js_matches_python_form():
+def test_parked_next_action_js_matches_python_form() -> None:
     js = c.parked_next_action_js("_planRel")
     plan_branch, none_branch = js[1:-1].split(" ? ", 1)[1].split(" : ", 1)
     assert plan_branch == '"Run /mise-prep on " + _planRel + ", then /mise-en-place."'
@@ -102,13 +103,13 @@ def test_parked_next_action_js_matches_python_form():
     assert json.loads(head) + "X" + json.loads(tail) == c.parked_next_action("X")
 
 
-def test_phase_order_and_names():
+def test_phase_order_and_names() -> None:
     assert c.ASK_PHASES == ("size", "gate", "accept", "plan", "stage", "execute", "review")
     assert (c.OP_ASK_GATE, c.OP_ASK_STAGE) == ("dispatch.ask_gate", "dispatch.ask_stage")
     assert (c.HALT_ROOM, c.HALT_TOUCHPOINT, c.HALT_REFUSAL) == ("room", "touchpoint", "refusal")
 
 
-def test_tail_and_grouping_constants_are_pinned():
+def test_tail_and_grouping_constants_are_pinned() -> None:
     assert (c.ASK_VERIFY_LABEL, c.ASK_VERIFY_PHASE) == ("verify", "Verify")
     assert c.ASK_STAGE_PHASE == c.ASK_FALSIFIER_PHASE == "stage"
     assert c.ASK_STAGE_PHASE in c.ASK_PHASES
@@ -124,7 +125,7 @@ def test_tail_and_grouping_constants_are_pinned():
     assert c.ASK_VERIFY_PHASE not in c.ASK_PHASES
 
 
-def test_size_then_plan_names():
+def test_size_then_plan_names() -> None:
     assert c.STOP_AFTER_PLAN == "plan"
     assert c.SIZING_SCOUT_AGENT_TYPE == "coordinator:sizing-scout"
     assert c.NO_PLAN_HAND_OFF_FLAG == "--no-plan-hand-off"
@@ -133,41 +134,41 @@ def test_size_then_plan_names():
     assert c.STOP_AFTER_PLAN in c.ASK_PHASES
 
 
-def test_marker_distinct_from_commit_request():
+def test_marker_distinct_from_commit_request() -> None:
     assert c.ASK_MANIFEST_MARKER != commit_request.MARKER_PREFIX
     assert not c.ASK_MANIFEST_MARKER.startswith(commit_request.MARKER_PREFIX)
     assert not commit_request.MARKER_PREFIX.startswith(c.ASK_MANIFEST_MARKER)
 
 
-def test_gate_verdict_to_json():
+def test_gate_verdict_to_json() -> None:
     v = c.GateVerdict(None, {"kind": c.HALT_ROOM, "reason": "x"})
     assert v.to_json() == {"arm": None, "halt": {"kind": "room", "reason": "x"}, "baton": None}
 
 
-def test_gate_verdict_to_json_omits_acceptance_when_unset():
+def test_gate_verdict_to_json_omits_acceptance_when_unset() -> None:
     assert "acceptance" not in c.GateVerdict("s", None).to_json()
     stamp = {"by": "engine-size-rule"}
     assert c.GateVerdict("s", None, acceptance=stamp).to_json()["acceptance"] == stamp
 
 
-def test_design_brief_absent_from_json_when_empty_and_present_when_set():
+def test_design_brief_absent_from_json_when_empty_and_present_when_set() -> None:
     assert "design_brief" not in c.GateVerdict("s", None).to_json()
     assert c.GateVerdict("s", None, design_brief="b").to_json()["design_brief"] == "b"
 
 
-def test_resume_rows_absent_from_json_when_unset_and_ordered_when_set():
+def test_resume_rows_absent_from_json_when_unset_and_ordered_when_set() -> None:
     assert "resume_rows" not in c.GateVerdict("s", None, resume_plan="p.md").to_json()
     out = c.GateVerdict("s", None, resume_plan="p.md", resume_rows=["M1", "A1"]).to_json()
     assert out["resume_rows"] == ["M1", "A1"]
 
 
-def test_scout_schema_admits_resume_rows_array_or_null():
+def test_scout_schema_admits_resume_rows_array_or_null() -> None:
     prop = c.ASK_SCOUT_SCHEMA["properties"]["resume_rows"]
     assert set(prop["type"]) == {"array", "null"}
     assert prop["items"] == {"type": "string"}
 
 
-def test_resume_plan_is_a_named_tuple():
+def test_resume_plan_is_a_named_tuple() -> None:
     r = c.ResumePlan("docs/plans/p.md", ("A1", "M0"))
     plan_rel, incomplete, ledger, landed_open, _kept, _kept_run, held, *_rest = r
     assert (plan_rel, incomplete) == (r.plan_rel, r.incomplete) == ("docs/plans/p.md", ("A1", "M0"))
@@ -176,57 +177,57 @@ def test_resume_plan_is_a_named_tuple():
     assert held == r.held == ()
 
 
-def test_record_dir_root_is_state_warp_and_run_dir_root_unchanged():
+def test_record_dir_root_is_state_warp_and_run_dir_root_unchanged() -> None:
     assert c.RECORD_DIR_ROOT.endswith("/warp") and c.RECORD_DIR_ROOT.startswith("state")
     assert c.RUN_DIR_ROOT == "scratch/warp"
 
 
-def test_record_dir_no_directory_on_disk(tmp_path):
+def test_record_dir_no_directory_on_disk(tmp_path: Path) -> None:
     assert c.record_dir(tmp_path, "r1") == (tmp_path / c.RECORD_DIR_ROOT / "r1").resolve()
 
 
-def test_record_dir_prefers_state_when_present(tmp_path):
+def test_record_dir_prefers_state_when_present(tmp_path: Path) -> None:
     (tmp_path / c.RECORD_DIR_ROOT / "r1").mkdir(parents=True)
     (tmp_path / "scratch/warp/r1").mkdir(parents=True)
     (tmp_path / "scratch/warp/r1/manifest.json").write_text("{}")
     assert c.record_dir(tmp_path, "r1") == (tmp_path / c.RECORD_DIR_ROOT / "r1").resolve()
 
 
-def test_record_dir_scratch_with_only_briefs_and_commit_request_is_state(tmp_path):
+def test_record_dir_scratch_with_only_briefs_and_commit_request_is_state(tmp_path: Path) -> None:
     scratch = tmp_path / "scratch/warp/r1"
     (scratch / "briefs").mkdir(parents=True)
     (scratch / "commit-request.txt").write_text("x")
     assert c.record_dir(tmp_path, "r1") == (tmp_path / c.RECORD_DIR_ROOT / "r1").resolve()
 
 
-def test_record_dir_scratch_record_file_selects_scratch(tmp_path):
+def test_record_dir_scratch_record_file_selects_scratch(tmp_path: Path) -> None:
     scratch = tmp_path / "scratch/warp/r1"
     scratch.mkdir(parents=True)
     (scratch / c.RELAYED_ASK_FILE).write_text("x")
     assert c.record_dir(tmp_path, "r1") == scratch.resolve()
 
 
-def test_record_dir_scratch_spine_only_selects_scratch(tmp_path):
+def test_record_dir_scratch_spine_only_selects_scratch(tmp_path: Path) -> None:
     scratch = tmp_path / "scratch/warp/r1"
     scratch.mkdir(parents=True)
     (scratch / "r1.spine.md").write_text("x")
     assert c.record_dir(tmp_path, "r1") == scratch.resolve()
 
 
-def test_record_dir_unsafe_run_id_raises(tmp_path):
+def test_record_dir_unsafe_run_id_raises(tmp_path: Path) -> None:
     for bad in ("..", "a/b", ""):
         with pytest.raises(ValueError):
             c.record_dir(tmp_path, bad)
 
 
-def test_scout_and_assemble_schema_required_fields():
+def test_scout_and_assemble_schema_required_fields() -> None:
     assert set(c.SCOUT_SCHEMA["required"]) == {
         "tshirt", "intent", "name", "premise_provenance", "premise_evidence", "exit_criterion", "writes",
     }
     assert set(c.ASSEMBLE_SCHEMA["required"]) == {"exit_code", "stdout"}
 
 
-def test_scout_schema_carries_the_closing_act_fields_as_optional():
+def test_scout_schema_carries_the_closing_act_fields_as_optional() -> None:
     props = c.ASK_SCOUT_SCHEMA["properties"]
     for field in (
         "exit_code", "stdout", "arm", "halt", "baton", "resume_plan", "spine_plan", "tshirt", "route",
@@ -240,7 +241,7 @@ def test_scout_schema_carries_the_closing_act_fields_as_optional():
     assert not {"manifest", "falsifier"} & set(c.SCOUT_SCHEMA["properties"])
 
 
-def test_ask_scout_schema_requires_integer_exit_code():
+def test_ask_scout_schema_requires_integer_exit_code() -> None:
     assert c.ASK_SCOUT_SCHEMA["required"] == [*c.SCOUT_SCHEMA["required"], "exit_code"]
     assert c.ASK_SCOUT_SCHEMA["properties"]["exit_code"] == {"type": "integer"}
     assert "exit_code" not in c.SCOUT_SCHEMA["required"]
@@ -255,7 +256,7 @@ def test_ask_scout_schema_requires_integer_exit_code():
         jsonschema.validate(reply, c.ASK_SCOUT_SCHEMA)
 
 
-def test_shim_commands_name_settings_home():
+def test_shim_commands_name_settings_home() -> None:
     for cmd, tail in (
         (c.SIZING_ASSEMBLE_CMD, '/bin/sizing-assemble"'),
         (c.DOC_NEW_CMD, '/bin/coordinator-doc-new"'),
@@ -264,25 +265,25 @@ def test_shim_commands_name_settings_home():
         assert "COORDINATOR_SETTINGS_HOME" in cmd
 
 
-def test_scout_return_clause_names_every_required_field():
+def test_scout_return_clause_names_every_required_field() -> None:
     for field in c.SCOUT_SCHEMA["required"]:
         assert field in c.SCOUT_RETURN_CLAUSE
     assert c.SCOUT_RETURN_CLAUSE.startswith("Return its inputs:")
     assert c.SCOUT_RETURN_CLAUSE.endswith("never omit one.")
 
 
-def test_scout_return_clause_forbids_suite_tier_names_and_states_the_phrasing():
+def test_scout_return_clause_forbids_suite_tier_names_and_states_the_phrasing() -> None:
     assert "never name a suite tier" in c.SCOUT_RETURN_CLAUSE
     assert "'tests covering touched files pass'" in c.SCOUT_RETURN_CLAUSE
 
 
-def test_research_flags_js_appends_one_quoted_seed_flag_per_seed():
+def test_research_flags_js_appends_one_quoted_seed_flag_per_seed() -> None:
     js = c.research_assemble_flags_js("s", "q")
     assert "(s.research.seeds || []).map(function (v) { return ' --research-seed ' + q(v); })" in js
     assert js.index("--research-target") < js.index("--research-seed") < js.index("--research-question")
 
 
-def test_manifest_row_group_serialises_only_when_set_and_round_trips():
+def test_manifest_row_group_serialises_only_when_set_and_round_trips() -> None:
     solo = c.ManifestRow("C1", "executor", "sonnet", "b.md", (), 0)
     grouped = c.ManifestRow("C2", "executor", "sonnet", "b.md", (), 0, (), "g0-C2")
     assert "group" not in solo.to_json()
@@ -292,7 +293,7 @@ def test_manifest_row_group_serialises_only_when_set_and_round_trips():
     assert c.ManifestRow.from_json(legacy).group == ""
 
 
-def test_stage_manifest_fanout_serialises_only_when_set_and_round_trips():
+def test_stage_manifest_fanout_serialises_only_when_set_and_round_trips() -> None:
     base = c.StageManifest("r", (), (), "m")
     assert "fanout" not in base.to_json()
     assert c.StageManifest.from_json(base.to_json()).fanout is None
@@ -302,7 +303,7 @@ def test_stage_manifest_fanout_serialises_only_when_set_and_round_trips():
     assert c.StageManifest.from_json(json.loads(json.dumps(m.to_json()))) == m
 
 
-def test_stage_manifest_memo_close_serialises_only_when_set_and_round_trips():
+def test_stage_manifest_memo_close_serialises_only_when_set_and_round_trips() -> None:
     base = c.StageManifest("r", (), (), "m")
     assert "memo_close" not in base.to_json()
     assert c.StageManifest.from_json(base.to_json()).memo_close == ()
@@ -312,7 +313,7 @@ def test_stage_manifest_memo_close_serialises_only_when_set_and_round_trips():
     assert c.StageManifest.from_json(json.loads(json.dumps(m.to_json()))) == m
 
 
-def test_scout_schema_seeds_pattern_admits_only_seed_kinds():
+def test_scout_schema_seeds_pattern_admits_only_seed_kinds() -> None:
     import re
 
     items = c.ASK_SCOUT_SCHEMA["properties"]["research"]["properties"]["seeds"]["items"]
@@ -321,7 +322,7 @@ def test_scout_schema_seeds_pattern_admits_only_seed_kinds():
     assert not pat.match("blog=https://x") and not pat.match("doc=") and not pat.match("doc=a b")
 
 
-def test_kept_work_fields_absent_at_defaults_and_present_when_set():
+def test_kept_work_fields_absent_at_defaults_and_present_when_set() -> None:
     assert "resume_ready" not in c.GateVerdict("s", None).to_json()
     assert c.GateVerdict("s", None, resume_ready=True).to_json()["resume_ready"] is True
     row = _manifest().rows[0]
@@ -333,7 +334,7 @@ def test_kept_work_fields_absent_at_defaults_and_present_when_set():
     assert plan.kept == () and plan.kept_run is None
 
 
-def test_measured_rev_constants_and_record_path(tmp_path):
+def test_measured_rev_constants_and_record_path(tmp_path: Path) -> None:
     assert c.MEASURED_REV_OP == "dispatch.measured_rev"
     assert c.MEASURED_REV_ENV == "COORDINATOR_MEASURED_REV"
     assert c.MEASURED_REV_RECORD == "measured-rev.json"
@@ -347,11 +348,11 @@ def test_measured_rev_constants_and_record_path(tmp_path):
             c.measured_rev_record_path(tmp_path, bad)
 
 
-def test_ask_verify_return_keys_unchanged_by_measured_rev():
+def test_ask_verify_return_keys_unchanged_by_measured_rev() -> None:
     assert not set(c.MEASURED_REV_KEYS) & set(c.ASK_VERIFY_RETURN_KEYS)
 
 
-def test_parked_halt_carries_one_refire_call_not_a_hand_step():
+def test_parked_halt_carries_one_refire_call_not_a_hand_step() -> None:
     from coordinator_core.ops.dispatch_emit import halt_refire
 
     env = c.parked_refire_next_action("docs/plans/x.md", run_id="ask-1", sizing_rel="state/sizings/s.yaml")
@@ -361,7 +362,7 @@ def test_parked_halt_carries_one_refire_call_not_a_hand_step():
     assert env["detail"] == c.parked_next_action("docs/plans/x.md")
 
 
-def test_dependents_unstarted_halt_carries_one_refire_call_with_the_hold_reason():
+def test_dependents_unstarted_halt_carries_one_refire_call_with_the_hold_reason() -> None:
     from coordinator_core.ops.dispatch_emit import halt_refire
 
     env = c.dependents_unstarted_refire_next_action("C2 held on C1", run_id="ask-1", sizing_rel="state/sizings/s.yaml")
@@ -369,13 +370,13 @@ def test_dependents_unstarted_halt_carries_one_refire_call_with_the_hold_reason(
     assert env["resume"]["halted"] == c.HALT_DEPENDENTS_UNSTARTED and env["detail"].startswith("C2 held on C1") and c.ACCEPT_PARTIAL_FORM.format(run_id="ask-1") in env["detail"]
 
 
-def test_delivery_note_rel_shards_ask_and_warp_ids_and_keeps_undated_flat():
+def test_delivery_note_rel_shards_ask_and_warp_ids_and_keeps_undated_flat() -> None:
     assert c.delivery_note_rel("ask-20261103T072223-8a7c52") == "docs/delivery/2026-11/ask-20261103T072223-8a7c52.md"
     assert c.delivery_note_rel("warp-2026-11-03-387be4-1-x-20261103T072122-bc1f3d").startswith("docs/delivery/2026-11/")
     assert c.delivery_note_rel("run-1") == "docs/delivery/run-1.md"
 
 
-def test_delivery_note_locate_resolves_flat_and_sharded(tmp_path):
+def test_delivery_note_locate_resolves_flat_and_sharded(tmp_path: Path) -> None:
     rid = "ask-20261103T072223-8a7c52"
     assert c.delivery_note_locate(tmp_path, rid) == f"docs/delivery/2026-11/{rid}.md"
     (tmp_path / "docs/delivery").mkdir(parents=True)
@@ -384,7 +385,7 @@ def test_delivery_note_locate_resolves_flat_and_sharded(tmp_path):
     assert c.delivery_note_locate(tmp_path, "run-1") == "docs/delivery/run-1.md"
 
 
-def test_halted_naming_existing_plan_drops_missing_plan_from_trailer(tmp_path):
+def test_halted_naming_existing_plan_drops_missing_plan_from_trailer(tmp_path: Path) -> None:
     missing = {"halted": "commit", c.HALT_PLAN_FIELD: "docs/plans/gone.md"}
     assert c.HALT_PLAN_TRAILER not in c.halted_record_message("r", c.halted_naming_existing_plan(tmp_path, missing))
     assert f"{c.HALT_PLAN_TRAILER}: docs/plans/gone.md" in c.halted_record_message("r", missing)

@@ -17,6 +17,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.ceremony import commit_v2
+from pathlib import Path
 
 
 def _spy(monkeypatch):
@@ -34,7 +35,7 @@ def _call(repo_root, params):
     return commit_v2._handler(params, repo_root=repo_root)
 
 
-def test_the_flag_reaches_commit_paths(monkeypatch, tmp_path):
+def test_the_flag_reaches_commit_paths(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen = _spy(monkeypatch)
     with pytest.raises(AssertionError, match="stop-after-capture"):
         _call(tmp_path / ".git", {
@@ -45,14 +46,14 @@ def test_the_flag_reaches_commit_paths(monkeypatch, tmp_path):
     assert seen["prefer_deliberate_stage"] is True
 
 
-def test_the_default_is_false_when_undeclared(monkeypatch, tmp_path):
+def test_the_default_is_false_when_undeclared(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen = _spy(monkeypatch)
     with pytest.raises(AssertionError, match="stop-after-capture"):
         _call(tmp_path / ".git", {"paths": ["a.md"], "message": "m"})
     assert seen["prefer_deliberate_stage"] is False
 
 
-def test_both_declarations_travel_together(monkeypatch, tmp_path):
+def test_both_declarations_travel_together(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen = _spy(monkeypatch)
     with pytest.raises(AssertionError, match="stop-after-capture"):
         _call(tmp_path / ".git", {
@@ -65,7 +66,7 @@ def test_both_declarations_travel_together(monkeypatch, tmp_path):
     assert seen["prefer_deliberate_stage"] is True
 
 
-def test_a_non_boolean_flag_is_refused_not_coerced(tmp_path):
+def test_a_non_boolean_flag_is_refused_not_coerced(tmp_path: Path) -> None:
     """`"false"` is truthy. A flag deciding whose bytes land must refuse the
     string rather than read it as True. `isinstance(1, bool)` is False, so a
     JSON-RPC-delivered int is refused here too."""
@@ -80,12 +81,12 @@ def test_a_non_boolean_flag_is_refused_not_coerced(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_the_divergence_warning_names_the_shared_branch_remedy(tmp_path):
+def test_the_divergence_warning_names_the_shared_branch_remedy(tmp_path: Path) -> None:
     import subprocess
 
     from coordinator_core.win_portability import no_console_creationflags
 
-    def git(*args):
+    def git(*args) -> None:
         subprocess.run(["git", *args], cwd=str(repo), check=True,
                        capture_output=True, **no_console_creationflags())
 

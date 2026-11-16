@@ -8,13 +8,14 @@ import json
 from .test_seam_wave_boundary import (
     CLEAN_REPLY, P1, P2, _NODE, _compose, _row, _run_script, _two_plan_waves,
 )
+from pathlib import Path
 
 
 def _seam_prompt(script: str) -> str:
     return script.split("async function _seamLeg", 1)[1].split("  function _seamFail", 1)[0]
 
 
-def test_the_leg_prompt_returns_the_seam_record_reply_verbatim():
+def test_the_leg_prompt_returns_the_seam_record_reply_verbatim() -> None:
     leg = _seam_prompt(_compose(_two_plan_waves()))
     assert "review.reachability" not in leg
     assert "verbatim from that reply" in leg
@@ -22,7 +23,7 @@ def test_the_leg_prompt_returns_the_seam_record_reply_verbatim():
 
 
 @_NODE
-def test_an_unreachable_finding_without_a_plan_halts_the_plan_that_wrote_its_path(tmp_path):
+def test_an_unreachable_finding_without_a_plan_halts_the_plan_that_wrote_its_path(tmp_path: Path) -> None:
     reply = {"verdict": "DRIFT", "per_plan": {}, "findings": [{"class": "unreachable", "path": "a.py", "blocking": True}]}
     out = _run_script(tmp_path, _compose(_two_plan_waves()), reply)
     assert P1 in out["haltedPlans"]
@@ -32,7 +33,7 @@ def test_an_unreachable_finding_without_a_plan_halts_the_plan_that_wrote_its_pat
 
 
 @_NODE
-def test_a_refused_op_error_halts_the_held_plans(tmp_path):
+def test_a_refused_op_error_halts_the_held_plans(tmp_path: Path) -> None:
     reply = {"verdict": "REFUSED", "per_plan": {}, "findings": [{"class": "op-error"}]}
     out = _run_script(tmp_path, _compose(_two_plan_waves()), reply)
     assert out["haltedPlans"] == [P2] and out["failures"]
@@ -45,7 +46,7 @@ def _test_row_waves():
     ]
 
 
-def test_landed_python_test_files_ride_into_the_leg_behind_a_non_empty_guard():
+def test_landed_python_test_files_ride_into_the_leg_behind_a_non_empty_guard() -> None:
     script = _compose(_test_row_waves())
     leg = _seam_prompt(script)
     assert "const _seamOwnTests = " in script
@@ -60,7 +61,7 @@ def test_landed_python_test_files_ride_into_the_leg_behind_a_non_empty_guard():
 
 
 @_NODE
-def test_an_execution_failed_finding_halts_the_plan_that_wrote_the_failing_file(tmp_path):
+def test_an_execution_failed_finding_halts_the_plan_that_wrote_the_failing_file(tmp_path: Path) -> None:
     reply = {"verdict": "DRIFT", "per_plan": {}, "findings": [{"class": "execution-failed", "path": "tests/test_a.py", "blocking": True}]}
     out = _run_script(tmp_path, _compose(_test_row_waves()), reply)
     assert P1 in out["haltedPlans"] and "work:P2-C1" not in out["calls"]
@@ -73,13 +74,13 @@ def test_an_execution_failed_finding_halts_the_plan_that_wrote_the_failing_file(
 
 
 @_NODE
-def test_a_leg_with_no_landed_test_file_carries_no_tests_step(tmp_path):
+def test_a_leg_with_no_landed_test_file_carries_no_tests_step(tmp_path: Path) -> None:
     out = _run_script(tmp_path, _compose(_two_plan_waves()), CLEAN_REPLY)
     assert "Tests: " not in out["seamParams"][0]
     assert "Step 2" not in out["seamParams"][0]
 
 
-def test_the_leg_prompt_sends_a_saved_reply_under_scratch_never_the_repo_root():
+def test_the_leg_prompt_sends_a_saved_reply_under_scratch_never_the_repo_root() -> None:
     leg = _seam_prompt(_compose(_two_plan_waves()))
     assert "`scratch/seam/<run-id>/`" in leg
     assert "never the repo root" in leg

@@ -77,3 +77,65 @@ def test_early_returns_still_set_since(monkeypatch):
     state = _state({"new": (frozenset(), _sha("b")), "old": (frozenset(), _sha("a"))})
     assert _carry(monkeypatch, state, "new", {}).since_sha == _sha("b")
     assert _carry(monkeypatch, state, "new", {"new": _rec("new")}, kind=COMMIT_HALT_KIND).since_sha == _sha("b")
+
+
+def _two_halt_setup(monkeypatch, pointer_plan: str):
+    pointer = LedgerHalt("old", pointer_plan, SIZING, ("R1",))
+    state = ResumeLanded(
+        frozenset(), "new", _sha("b"),
+        run_halts={"new": (frozenset(), _sha("b")), "old": (frozenset(), _sha("a"))},
+    )
+    monkeypatch.setattr(sizing_fire, "_terminal_coded", lambda *a, **k: False)
+    monkeypatch.setattr(sizing_fire, "_sha_coded", lambda *a, **k: False)
+    monkeypatch.setattr(sizing_fire, "_carry", lambda root, plan, halt, st: halt)
+    monkeypatch.setattr(ask_contract, "read_halt_record", lambda root, run, at_sha=None: _rec(run))
+    return pointer, state
+
+
+def test_stale_pointer_run_cites_the_newest_halt_sha(monkeypatch, tmp_path):
+    pointer, state = _two_halt_setup(monkeypatch, PLAN)
+    monkeypatch.setattr(sizing_fire, "_own_pointer", lambda *a, **k: pointer)
+    out = sizing_fire._ledger_halt_for(tmp_path, PLAN, SIZING, [], [], state)
+    assert (out.run_id, out.halt_sha) == ("new", _sha("b"))
+    assert out.blocking == ("R1",)
+
+
+def test_newest_halt_for_another_sizing_leaves_the_pointer_run(monkeypatch, tmp_path):
+    pointer, state = _two_halt_setup(monkeypatch, PLAN)
+    monkeypatch.setattr(sizing_fire, "_own_pointer", lambda *a, **k: pointer)
+    monkeypatch.setattr(ask_contract, "read_halt_record", lambda root, run, at_sha=None: _rec(run, "state/sizings/other.yaml"))
+    out = sizing_fire._ledger_halt_for(tmp_path, PLAN, SIZING, [], [], state)
+    assert (out.run_id, out.halt_sha) == ("old", _sha("a"))
+
+
+def _record_form_setup(monkeypatch, tmp_path, record_plan: str):
+    flat, month = "docs/plans/2026-11-12-x.md", "docs/plans/2026-11/2026-11-12-x.md"
+    (tmp_path / flat).parent.mkdir(parents=True)
+    (tmp_path / flat).write_text("p\n", encoding="utf-8")
+    state = ResumeLanded(frozenset(), "new", _sha("b"), run_halts={"new": (frozenset(), _sha("b"))})
+    monkeypatch.setattr(sizing_fire, "_terminal_coded", lambda *a, **k: False)
+    monkeypatch.setattr(sizing_fire, "_sha_coded", lambda *a, **k: False)
+    monkeypatch.setattr(sizing_fire, "_carry", lambda root, plan, halt, st: halt)
+    monkeypatch.setattr(ask_contract, "read_halt_record", lambda root, run, at_sha=None: HaltRecord(run, record_plan, SIZING, frozenset({"C1"}), ("C1",)))
+    return flat, month, state
+
+
+def test_newest_halt_record_naming_the_month_form_resumes_the_flat_plan(monkeypatch, tmp_path):
+    flat, month, state = _record_form_setup(monkeypatch, tmp_path, "docs/plans/2026-11/2026-11-12-x.md")
+    out = sizing_fire._ledger_halt_for(tmp_path, flat, SIZING, ["C1"], ["C1"], state, pointer=None)
+    assert out is not None and (out.run_id, out.halt_sha) == ("new", _sha("b"))
+
+
+def test_newest_halt_record_naming_another_plan_still_refuses(monkeypatch, tmp_path):
+    flat, month, state = _record_form_setup(monkeypatch, tmp_path, "docs/plans/other.md")
+    assert sizing_fire._ledger_halt_for(tmp_path, flat, SIZING, ["C1"], ["C1"], state, pointer=None) is None
+
+
+def test_pointer_recorded_under_the_month_form_is_found_for_the_flat_plan(tmp_path):
+    flat, month = "docs/plans/2026-11-12-x.md", "docs/plans/2026-11/2026-11-12-x.md"
+    (tmp_path / flat).parent.mkdir(parents=True)
+    (tmp_path / flat).write_text("p\n", encoding="utf-8")
+    ask_contract.write_ledger_halt(ask_contract.ledger_halt_path(tmp_path, month), LedgerHalt("r", month, SIZING, ("R1",)))
+    got = sizing_fire._own_pointer(tmp_path, flat, SIZING)
+    assert got is not None and got.plan_rel == flat
+    assert sizing_fire._own_pointer(tmp_path, flat, "state/sizings/other.yaml") is None

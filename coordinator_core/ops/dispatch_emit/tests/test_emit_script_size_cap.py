@@ -17,12 +17,13 @@ from coordinator_core.ops.dispatch_emit.emit import (
     compose_script,
 )
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
+from pathlib import Path
 
 
 pytestmark = pytest.mark.complete
 
 
-def _wave_row(id_, writes):
+def _wave_row(id_, writes) -> WaveRow:
     return WaveRow(
         id=id_,
         title=f"title-{id_}",
@@ -42,7 +43,7 @@ def _n_row_waves(n: int) -> list:
     ]
 
 
-def test_compose_script_refuses_over_the_runner_byte_cap():
+def test_compose_script_refuses_over_the_runner_byte_cap() -> None:
     # DAG emission (§ Design D4) dropped the per-wave commit/preflight
     # prompt text, so a far larger row count is needed to cross the byte
     # cap than the pre-DAG shape required.
@@ -57,7 +58,7 @@ def test_compose_script_refuses_over_the_runner_byte_cap():
     assert "split the inventory into parts of fewer rows" in message
 
 
-def test_compose_script_emits_fine_under_the_runner_byte_cap():
+def test_compose_script_emits_fine_under_the_runner_byte_cap() -> None:
     waves = _n_row_waves(2)
 
     script = compose_script(waves, name="small", description="small inventory", **REVIEW_KW)
@@ -65,7 +66,7 @@ def test_compose_script_emits_fine_under_the_runner_byte_cap():
     assert len(script.encode("utf-8")) <= _WORKFLOW_SCRIPT_BYTE_CAP
 
 
-def test_inventory_over_max_rows_is_refused_before_compose(tmp_path, monkeypatch):
+def test_inventory_over_max_rows_is_refused_before_compose(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import inventory_mint
 
     monkeypatch.setattr(inventory_mint, "parse_chunk_table", lambda text: [])

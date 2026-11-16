@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 
 from coordinator_core.ops.dispatch_emit import deferred_emit_script as des
+from pathlib import Path
+import pytest
 
 
-def test_deferred_script_has_receipt_beside_it(tmp_path):
+def test_deferred_script_has_receipt_beside_it(tmp_path: Path) -> None:
     script = des.write_deferred_script(tmp_path, {"ask_brief": "x"})
     receipt = script.with_name(script.name + ".emitted.json")
     assert receipt.is_file()
@@ -41,7 +43,7 @@ def _run_stage_loop(pending: dict, first: str = "/r/scratch/warp/ask-r1.workflow
     return json.loads(out.stdout)
 
 
-def test_a_restaged_twin_named_by_the_reply_is_started_not_the_stale_handle_twin():
+def test_a_restaged_twin_named_by_the_reply_is_started_not_the_stale_handle_twin() -> None:
     from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
 
     stale, fresh = "3c" * 32, "2d" * 32
@@ -50,7 +52,7 @@ def test_a_restaged_twin_named_by_the_reply_is_started_not_the_stale_handle_twin
     assert calls[1] == "/r/" + staged_twin_rel("ask-r1", fresh)
 
 
-def test_a_reply_that_names_no_twin_still_resumes_from_the_handle_sha():
+def test_a_reply_that_names_no_twin_still_resumes_from_the_handle_sha() -> None:
     from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
 
     sha = "ab" * 32
@@ -58,7 +60,7 @@ def test_a_reply_that_names_no_twin_still_resumes_from_the_handle_sha():
     assert out["ok"] is True and calls[1] == "/r/" + staged_twin_rel("ask-r1", sha)
 
 
-def test_a_named_twin_of_another_run_or_shape_is_refused_by_name():
+def test_a_named_twin_of_another_run_or_shape_is_refused_by_name() -> None:
     from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
 
     sha = "2d" * 32
@@ -68,7 +70,7 @@ def test_a_named_twin_of_another_run_or_shape_is_refused_by_name():
         assert len(calls) == 1
 
 
-def test_a_refire_twin_staged_under_an_earlier_stamp_is_started_and_another_warp_run_is_refused():
+def test_a_refire_twin_staged_under_an_earlier_stamp_is_started_and_another_warp_run_is_refused() -> None:
     from coordinator_core.ops.dispatch_emit.nested_run_contract import staged_twin_rel
 
     sha = "2d" * 32
@@ -117,31 +119,31 @@ _SHA = "ab" * 32
 _REAL = "/r/scratch/warp/ask-r1.workflow.mjs"
 
 
-def test_a_wrong_relay_path_still_starts_the_script_the_receipt_names():
+def test_a_wrong_relay_path_still_starts_the_script_the_receipt_names() -> None:
     verdict, asked = _verify({"path": "/other/tmp/none", "run_id": "ask-r1"}, {_REAL: [_SHA, _SHA]})
     assert verdict == {"path": _REAL}
     assert asked == [_REAL]
 
 
-def test_a_wrong_but_script_shaped_relay_path_is_skipped_when_it_has_no_receipt():
+def test_a_wrong_but_script_shaped_relay_path_is_skipped_when_it_has_no_receipt() -> None:
     verdict, asked = _verify({"path": "/elsewhere/ask-r1.workflow.mjs", "run_id": "ask-r1"}, {_REAL: [_SHA, _SHA]})
     assert verdict == {"path": _REAL}
     assert asked == ["/elsewhere/ask-r1.workflow.mjs", _REAL]
 
 
-def test_a_windows_style_relay_path_with_doubled_backslashes_is_normalised_and_verified():
+def test_a_windows_style_relay_path_with_doubled_backslashes_is_normalised_and_verified() -> None:
     win = "E:/claude/scratch/warp/ask-r1.workflow.mjs"  # abs-path-ok: carve-out=test-input-data
     verdict, asked = _verify({"path": win.replace("/", "\\\\"), "run_id": "ask-r1"}, {win: [_SHA, _SHA]})
     assert verdict == {"path": win}
     assert asked == [win]
 
 
-def test_a_receipt_whose_sha_disagrees_with_the_script_bytes_is_refused_by_name():
+def test_a_receipt_whose_sha_disagrees_with_the_script_bytes_is_refused_by_name() -> None:
     verdict, _ = _verify({"path": _REAL, "run_id": "ask-r1"}, {_REAL: [_SHA, "cd" * 32]})
     assert "error" in verdict and "emit receipt sha mismatch" in verdict["error"] and "path" not in verdict
 
 
-def test_a_match_verdict_starts_without_the_relay_copying_any_digest():
+def test_a_match_verdict_starts_without_the_relay_copying_any_digest() -> None:
     """The relay returns only the command's MATCH token; no sha256 string crosses the relay."""
     block = des._RECEIPT_PATH_JS
     assert "receipt_sha256" not in block and "script_sha256" not in block
@@ -149,23 +151,23 @@ def test_a_match_verdict_starts_without_the_relay_copying_any_digest():
     assert verdict == {"path": _REAL}
 
 
-def test_a_missing_receipt_is_refused_by_name():
+def test_a_missing_receipt_is_refused_by_name() -> None:
     verdict, _ = _verify({"path": _REAL, "run_id": "ask-r1"}, {})
     assert "no emit receipt for " + _REAL in verdict["error"] and "path" not in verdict
 
 
-def test_a_reply_naming_neither_path_nor_run_id_is_refused():
+def test_a_reply_naming_neither_path_nor_run_id_is_refused() -> None:
     verdict, asked = _verify({"path": "/other/none", "run_id": "bad id!"}, {_REAL: [_SHA, _SHA]})
     assert "error" in verdict and asked == []
 
 
-def test_rendered_script_starts_only_the_verified_path(tmp_path):
+def test_rendered_script_starts_only_the_verified_path(tmp_path: Path) -> None:
     script = des.write_deferred_script(tmp_path, {"ask_brief": "x"})
     body = script.read_text(encoding="utf-8")
     assert "_verifiedScriptPath(reply)" in body and "reply.path.replace" not in body
 
 
-def test_receipt_failure_never_fails_the_emit(tmp_path, monkeypatch):
+def test_receipt_failure_never_fails_the_emit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import emission_receipt
 
     def boom(*a, **k):
@@ -177,7 +179,7 @@ def test_receipt_failure_never_fails_the_emit(tmp_path, monkeypatch):
     assert not script.with_name(script.name + ".emitted.json").exists()
 
 
-def test_the_receipt_check_command_reads_the_top_level_sha_not_em_brief(tmp_path):
+def test_the_receipt_check_command_reads_the_top_level_sha_not_em_brief(tmp_path: Path) -> None:
     """The relay copies what the command prints, so the key path must live in the command: a receipt whose
     em_brief.sha256 precedes the top-level sha256 once made a haiku relay report the brief's digest."""
     import hashlib

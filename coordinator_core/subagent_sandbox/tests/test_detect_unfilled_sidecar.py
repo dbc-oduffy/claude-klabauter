@@ -18,36 +18,37 @@ from coordinator_core.subagent_sandbox.provision_report import (
     _build_run_report_legacy_doc_text,
     _build_staff_eng_review_doc_text,
 )
+from pathlib import Path
 
 
-def test_pristine_run_report_scaffold_is_unfilled():
+def test_pristine_run_report_scaffold_is_unfilled() -> None:
     text = _build_run_report_doc_text("coordinator:executor", "t", "abc")
     assert is_unfilled_body(text) is True
 
 
-def test_pristine_staff_eng_review_scaffold_is_unfilled():
+def test_pristine_staff_eng_review_scaffold_is_unfilled() -> None:
     text = _build_staff_eng_review_doc_text("coordinator:staff-eng-reviewer", "t", "abc")
     assert is_unfilled_body(text) is True
 
 
-def test_pristine_review_findings_scaffold_is_unfilled():
+def test_pristine_review_findings_scaffold_is_unfilled() -> None:
     text = _build_review_findings_doc_text("coordinator:reviewer", "t", "abc")
     assert is_unfilled_body(text) is True
 
 
-def test_run_notes_content_flips_to_filled():
+def test_run_notes_content_flips_to_filled() -> None:
     text = _build_run_report_doc_text("coordinator:executor", "t", "abc")
     text = text.replace("## Run notes\n\n", "## Run notes\n\nDid a thing.\n\n")
     assert is_unfilled_body(text) is False
 
 
-def test_checked_completion_box_alone_does_not_count_as_filled():
+def test_checked_completion_box_alone_does_not_count_as_filled() -> None:
     text = _build_run_report_doc_text("coordinator:executor", "t", "abc")
     text = text.replace("- [ ] Complete", "- [x] Complete")
     assert is_unfilled_body(text) is False
 
 
-def test_genuine_unchecked_todo_is_not_stripped_as_scaffold():
+def test_genuine_unchecked_todo_is_not_stripped_as_scaffold() -> None:
     # Regression for the P2 finding: only the scaffold's own literal
     # checkbox line is stripped, so an agent's genuine unchecked TODO --
     # even if it is the sidecar's only authored content -- must survive the
@@ -60,29 +61,29 @@ def test_genuine_unchecked_todo_is_not_stripped_as_scaffold():
     assert is_unfilled_body(text) is False
 
 
-def test_pristine_assessment_scaffold_is_unfilled():
+def test_pristine_assessment_scaffold_is_unfilled() -> None:
     text = _build_assessment_doc_text("coordinator:executor", "t", "abc")
     assert is_unfilled_body(text) is True
 
 
-def test_answered_assessment_flips_to_filled():
+def test_answered_assessment_flips_to_filled() -> None:
     text = _build_assessment_doc_text("coordinator:executor", "t", "abc")
     text = text.replace("## Questions\n\n", "## Questions\n\n- Q: ok? / A: yes.\n\n")
     assert is_unfilled_body(text) is False
 
 
-def test_pristine_legacy_no_type_key_scaffold_is_unfilled():
+def test_pristine_legacy_no_type_key_scaffold_is_unfilled() -> None:
     text = _build_run_report_legacy_doc_text("coordinator:executor", "t", "abc")
     assert is_unfilled_body(text) is True
 
 
-def test_filled_legacy_no_type_key_scaffold_flips_to_filled():
+def test_filled_legacy_no_type_key_scaffold_flips_to_filled() -> None:
     text = _build_run_report_legacy_doc_text("coordinator:executor", "t", "abc")
     text = text.replace("## Observations\n\n", "## Observations\n\nSaw the thing.\n\n")
     assert is_unfilled_body(text) is False
 
 
-def test_answered_exit_interview_alone_flips_to_filled():
+def test_answered_exit_interview_alone_flips_to_filled() -> None:
     text = _build_run_report_doc_text("coordinator:executor", "t", "abc")
     text = text.replace(
         "- Anything you wanted to say and had nowhere to put?\n\n",
@@ -91,7 +92,7 @@ def test_answered_exit_interview_alone_flips_to_filled():
     assert is_unfilled_body(text) is False
 
 
-def test_scan_paths_flags_open_and_unfilled(tmp_path):
+def test_scan_paths_flags_open_and_unfilled(tmp_path: Path) -> None:
     unfilled_path = tmp_path / "unfilled.md"
     unfilled_path.write_text(
         _build_run_report_doc_text("coordinator:executor", "t", "abc"), encoding="utf-8"
@@ -115,7 +116,7 @@ def test_scan_paths_flags_open_and_unfilled(tmp_path):
     assert flagged == {str(unfilled_path)}
 
 
-def test_scan_session_dir_reads_the_named_session_only(tmp_path):
+def test_scan_session_dir_reads_the_named_session_only(tmp_path: Path) -> None:
     share = tmp_path / ".coordinator-local" / "subagent-share"
     session_a = share / "session-a"
     session_b = share / "session-b"
@@ -136,7 +137,7 @@ def test_scan_session_dir_reads_the_named_session_only(tmp_path):
     assert verdicts[0].flagged is True
 
 
-def test_scan_session_dir_rejects_traversal_outside_subagent_share(tmp_path):
+def test_scan_session_dir_rejects_traversal_outside_subagent_share(tmp_path: Path) -> None:
     share = tmp_path / ".coordinator-local" / "subagent-share"
     share.mkdir(parents=True)
     outside = tmp_path / "outside"

@@ -10,6 +10,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 from coordinator_core.ops.dispatch_emit.ask_contract import UNCHANGED_SINCE_HALT_REASON
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -24,7 +25,7 @@ def _git(root, *a):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path):
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@t.example")
     _git(tmp_path, "config", "user.name", "t")
@@ -40,7 +41,7 @@ def _resume(halt, **extra):
     return {"run_id": "old", "halt_sha": halt, "blocking": ["R1"], **extra}
 
 
-def test_empty_unlanded_exempts_met_rows_without_a_git_spawn(repo, monkeypatch):
+def test_empty_unlanded_exempts_met_rows_without_a_git_spawn(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, manifest, halt = repo
 
     def boom(*a, **k):
@@ -51,13 +52,13 @@ def test_empty_unlanded_exempts_met_rows_without_a_git_spawn(repo, monkeypatch):
 
 
 @pytest.mark.parametrize("extra", [{"unlanded": ["C1"]}, {}, {"unlanded": "none"}])
-def test_row_without_landing_evidence_still_refuses(repo, extra):
+def test_row_without_landing_evidence_still_refuses(repo, extra) -> None:
     root, manifest, halt = repo
     got = tc._unchanged_since_halt_failures(root, _resume(halt, **extra), MET, manifest)
     assert got == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
 
 
-def test_changed_path_still_passes_with_unlanded_rows(repo):
+def test_changed_path_still_passes_with_unlanded_rows(repo) -> None:
     root, manifest, halt = repo
     (root / "prod.py").write_text("x = 2\n", encoding="utf-8")
     assert tc._unchanged_since_halt_failures(root, _resume(halt, unlanded=["C1"]), MET, manifest) == []

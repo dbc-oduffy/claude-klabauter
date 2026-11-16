@@ -59,7 +59,7 @@ def _edit(data: bytes, old: bytes, new: bytes) -> bytes:
     return data.replace(old, new, 1)
 
 
-def test_scoped_blob_keeps_a_halted_peers_hunk(tmp_path):
+def test_scoped_blob_keeps_a_halted_peers_hunk(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _halted_peer(root)
     live = _edit(HEAD, b"line 2\n", b"PEER 2\n")
@@ -71,7 +71,7 @@ def test_scoped_blob_keeps_a_halted_peers_hunk(tmp_path):
     assert (root / PATH).read_bytes() == live
 
 
-def test_overlapping_hunk_is_refused_naming_the_holder_and_live_is_untouched(tmp_path):
+def test_overlapping_hunk_is_refused_naming_the_holder_and_live_is_untouched(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     peer = _halted_peer(root)
     live = _edit(HEAD, b"line 2\n", b"PEER 2\n")
@@ -82,7 +82,7 @@ def test_overlapping_hunk_is_refused_naming_the_holder_and_live_is_untouched(tmp
     assert (root / PATH).read_bytes() == live
 
 
-def test_a_hunk_with_no_claim_is_foreign_and_kept(tmp_path):
+def test_a_hunk_with_no_claim_is_foreign_and_kept(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     live = _edit(HEAD, b"line 5\n", b"???\n")
     (root / PATH).write_bytes(live)
@@ -91,7 +91,7 @@ def test_a_hunk_with_no_claim_is_foreign_and_kept(tmp_path):
     assert out == _edit(_edit(HEAD, b"line 5\n", b"???\n"), b"line 9\n", b"MINE 9\n")
 
 
-def test_an_unclaimed_overlap_is_refused_as_unattributed(tmp_path):
+def test_an_unclaimed_overlap_is_refused_as_unattributed(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     live = _edit(HEAD, b"line 5\n", b"???\n")
     (root / PATH).write_bytes(live)
@@ -101,7 +101,7 @@ def test_an_unclaimed_overlap_is_refused_as_unattributed(tmp_path):
     assert (root / PATH).read_bytes() == live
 
 
-def test_the_same_edit_on_both_sides_is_not_a_conflict(tmp_path):
+def test_the_same_edit_on_both_sides_is_not_a_conflict(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _halted_peer(root)
     both = _edit(HEAD, b"line 2\n", b"SAME 2\n")
@@ -111,7 +111,7 @@ def test_the_same_edit_on_both_sides_is_not_a_conflict(tmp_path):
     assert out == _edit(both, b"line 8\n", b"MINE 8\n")
 
 
-def test_crlf_line_endings_survive_the_merge(tmp_path):
+def test_crlf_line_endings_survive_the_merge(tmp_path: Path) -> None:
     head = HEAD.replace(b"\n", b"\r\n")
     root = _repo(tmp_path, head)
     _halted_peer(root)
@@ -123,7 +123,7 @@ def test_crlf_line_endings_survive_the_merge(tmp_path):
     assert out.count(b"\r\n") == 10 and out.count(b"\n") == 10
 
 
-def test_base_moved_is_refused(tmp_path):
+def test_base_moved_is_refused(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     old_sha = _git(root, "rev-parse", f"HEAD:{PATH}")
     (root / PATH).write_bytes(_edit(HEAD, b"line 1\n", b"NEW HEAD 1\n"))
@@ -137,19 +137,19 @@ def test_base_moved_is_refused(tmp_path):
     assert refusal is None and out == live + b"x\n"
 
 
-def test_clean_live_file_takes_the_new_bytes(tmp_path):
+def test_clean_live_file_takes_the_new_bytes(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     new = _edit(HEAD, b"line 3\n", b"MINE 3\n")
     assert live_write_guard.merge_or_refuse(root, ME, PATH, new) == (new, None)
 
 
-def test_absent_live_file_takes_the_new_bytes(tmp_path):
+def test_absent_live_file_takes_the_new_bytes(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     (root / PATH).unlink()
     assert live_write_guard.merge_or_refuse(root, ME, PATH, b"x\n") == (b"x\n", None)
 
 
-def test_the_live_bytes_override_not_the_disk_is_the_ours_side(tmp_path):
+def test_the_live_bytes_override_not_the_disk_is_the_ours_side(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     foreign = _edit(HEAD, b"line 2\n", b"FOREIGN 2\n")
     scoped = _edit(HEAD, b"line 8\n", b"MINE 8\n")
@@ -161,7 +161,7 @@ def test_the_live_bytes_override_not_the_disk_is_the_ours_side(tmp_path):
     assert (root / PATH).read_bytes() == scoped
 
 
-def test_the_override_refuses_an_overlap_and_keeps_a_hunk_the_new_bytes_extend(tmp_path):
+def test_the_override_refuses_an_overlap_and_keeps_a_hunk_the_new_bytes_extend(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     pre = _edit(HEAD, b"line 5\n", b"ADDED 5\n")
     (root / PATH).write_bytes(_edit(HEAD, b"line 5\n", b"OTHER 5\n"))
@@ -171,7 +171,7 @@ def test_the_override_refuses_an_overlap_and_keeps_a_hunk_the_new_bytes_extend(t
     assert live_write_guard.merge_or_refuse(root, ME, PATH, extended, live_bytes=pre) == (extended, None)
 
 
-def test_a_failure_refuses_instead_of_raising(tmp_path, monkeypatch):
+def test_a_failure_refuses_instead_of_raising(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     (root / PATH).write_bytes(_edit(HEAD, b"line 2\n", b"PEER 2\n"))
 
@@ -183,7 +183,7 @@ def test_a_failure_refuses_instead_of_raising(tmp_path, monkeypatch):
     assert out is None and PATH in refusal
 
 
-def test_merge_spawns_no_git(tmp_path, monkeypatch):
+def test_merge_spawns_no_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _halted_peer(root)
     (root / PATH).write_bytes(_edit(HEAD, b"line 2\n", b"PEER 2\n"))
@@ -208,7 +208,7 @@ def _own_run(root: Path) -> None:
     )
 
 
-def test_the_override_lets_the_run_refine_its_own_earlier_hunk(tmp_path):
+def test_the_override_lets_the_run_refine_its_own_earlier_hunk(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _own_run(root)
     pre = _edit(HEAD, b"line 5\n", b"EARLIER 5\n")
@@ -216,7 +216,7 @@ def test_the_override_lets_the_run_refine_its_own_earlier_hunk(tmp_path):
     assert live_write_guard.merge_or_refuse(root, ME, PATH, refined, live_bytes=pre) == (refined, None)
 
 
-def test_the_override_still_refuses_the_same_overlap_for_a_run_that_did_not_write_it(tmp_path):
+def test_the_override_still_refuses_the_same_overlap_for_a_run_that_did_not_write_it(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     pre = _edit(HEAD, b"line 5\n", b"EARLIER 5\n")
     refined = _edit(HEAD, b"line 5\n", b"REFINED 5\n")
@@ -236,7 +236,7 @@ def _leg_snapshot(root: Path, tmp_path: Path, pre: bytes, post: bytes, rel: str 
     return out
 
 
-def test_restore_after_leg_names_a_written_path_a_peer_run_holds(tmp_path):
+def test_restore_after_leg_names_a_written_path_a_peer_run_holds(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _halted_peer(root)
     pre = _edit(HEAD, b"line 2\n", b"FOREIGN 2\n")
@@ -245,7 +245,7 @@ def test_restore_after_leg_names_a_written_path_a_peer_run_holds(tmp_path):
     assert out["peer_held"] == [PATH] and out["refused"] == []
 
 
-def test_restore_after_leg_names_no_peer_held_path_when_no_run_claims_it(tmp_path):
+def test_restore_after_leg_names_no_peer_held_path_when_no_run_claims_it(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     pre = _edit(HEAD, b"line 2\n", b"FOREIGN 2\n")
     snap = _leg_snapshot(root, tmp_path, pre, _edit(pre, b"line 8\n", b"MINE 8\n"))

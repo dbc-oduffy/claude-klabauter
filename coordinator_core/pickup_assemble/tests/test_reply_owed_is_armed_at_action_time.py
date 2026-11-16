@@ -24,32 +24,33 @@ Run: python -m pytest coordinator_core/pickup_assemble/tests/test_reply_owed_is_
 from __future__ import annotations
 
 import coordinator_core.pickup_assemble as pa
+from pathlib import Path
 
 
-def test_fyi_owes_nothing():
+def test_fyi_owes_nothing() -> None:
     assert pa.reply_obligation_at_open({"kind": "fyi"}) is None
 
 
-def test_the_three_reply_owed_kinds_owe():
+def test_the_three_reply_owed_kinds_owe() -> None:
     for kind in ("ask", "consult", "proposal"):
         assert pa.reply_obligation_at_open({"kind": kind}), kind
 
 
-def test_absent_kind_owes():
+def test_absent_kind_owes() -> None:
     assert pa.reply_obligation_at_open({})
 
 
-def test_unrecognized_kind_owes_so_a_new_kind_defaults_to_owing():
+def test_unrecognized_kind_owes_so_a_new_kind_defaults_to_owing() -> None:
     assert pa.reply_obligation_at_open({"kind": "some-future-kind"})
 
 
-def test_it_says_the_reply_is_part_of_actioning_not_a_follow_up():
+def test_it_says_the_reply_is_part_of_actioning_not_a_follow_up() -> None:
     prefix = pa.reply_obligation_at_open({"kind": "ask"})
     assert "same pass" in prefix
     assert "not a follow-up" in prefix
 
 
-def test_it_agrees_with_the_closure_check_on_which_kinds_are_excused(tmp_path):
+def test_it_agrees_with_the_closure_check_on_which_kinds_are_excused(tmp_path: Path) -> None:
     for kind in ("fyi", "ask", "consult"):
         closure = pa.compute_reply_closure({"kind": kind}, "m.md", tmp_path)
         owed_at_open = pa.reply_obligation_at_open({"kind": kind}) is not None

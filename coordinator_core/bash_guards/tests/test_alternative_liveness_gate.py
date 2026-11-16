@@ -45,11 +45,12 @@ from coordinator_core.guard_messages.alternative_record import (
     ReadyCommand,
 )
 from coordinator_core.subagent_sandbox.engine import load_policy
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
 
-def _record(*members, kind="deny", summary="BLOCKED: fake finding.", **extra) -> AlternativeRecord:
+def _record(*members, kind: str = "deny", summary: str = "BLOCKED: fake finding.", **extra) -> AlternativeRecord:
     return AlternativeRecord(verdict_kind=kind, summary=summary, members=members, guard_name="fake", **extra)
 
 
@@ -60,7 +61,7 @@ def _record(*members, kind="deny", summary="BLOCKED: fake finding.", **extra) ->
 # ---------------------------------------------------------------------------
 
 
-def test_every_dispatch_check_is_registered():
+def test_every_dispatch_check_is_registered() -> None:
     discovered = set(altlive.discover_dispatch_check_names())
     registered = set(altlive.LIVE_TRIGGERS) | set(altlive.UNTRIGGERED) | set(altlive.LOG_ONLY)
     missing = discovered - registered
@@ -70,7 +71,7 @@ def test_every_dispatch_check_is_registered():
     )
 
 
-def test_every_module_guard_is_registered():
+def test_every_module_guard_is_registered() -> None:
     discovered = set(altlive.discover_module_guard_names())
     registered = set(altlive.LIVE_TRIGGERS) | set(altlive.UNTRIGGERED) | set(altlive.LOG_ONLY)
     missing = discovered - registered
@@ -80,7 +81,7 @@ def test_every_module_guard_is_registered():
     )
 
 
-def test_untriggered_set_is_documented_not_silently_empty():
+def test_untriggered_set_is_documented_not_silently_empty() -> None:
     for name, reason in altlive.UNTRIGGERED.items():
         assert isinstance(reason, str) and len(reason) > 20, (
             "%s is in UNTRIGGERED with no real written reason" % name
@@ -96,7 +97,7 @@ EXPECTED_UNTRIGGERED = frozenset(
 )
 
 
-def test_untriggered_set_matches_expected_no_silent_growth():
+def test_untriggered_set_matches_expected_no_silent_growth() -> None:
     """A newly-UNVERIFIABLE/untriggered guard must surface here, not hide.
     Shrinking this set (a follow-up session closes one) requires editing
     this constant -- that's the point: it cannot happen silently."""
@@ -109,7 +110,7 @@ def test_untriggered_set_matches_expected_no_silent_growth():
 _UNTRIGGERED_PINNED_MAX = 5
 
 
-def test_untriggered_count_never_grows_past_pin():
+def test_untriggered_count_never_grows_past_pin() -> None:
     assert len(altlive.UNTRIGGERED) <= _UNTRIGGERED_PINNED_MAX, (
         "UNTRIGGERED grew past its pinned ceiling (%d) -- a guard silently "
         "gained a suppression-list escape hatch; lower the pin only after "
@@ -125,7 +126,7 @@ def test_untriggered_count_never_grows_past_pin():
 # ---------------------------------------------------------------------------
 
 
-def test_every_write_guard_is_registered_or_documented():
+def test_every_write_guard_is_registered_or_documented() -> None:
     discovered = set(altlive.discover_write_guard_names())
     registered = set(altlive.WRITE_GUARD_LIVE_TRIGGERS) | set(altlive.WRITE_GUARD_UNTRIGGERED)
     missing = discovered - registered
@@ -135,14 +136,14 @@ def test_every_write_guard_is_registered_or_documented():
     )
 
 
-def test_write_guard_untriggered_set_is_documented_not_silently_empty():
+def test_write_guard_untriggered_set_is_documented_not_silently_empty() -> None:
     for name, reason in altlive.WRITE_GUARD_UNTRIGGERED.items():
         assert isinstance(reason, str) and len(reason) > 20, (
             "%s is in WRITE_GUARD_UNTRIGGERED with no real written reason" % name
         )
 
 
-def test_write_guard_live_triggers_registry_is_non_empty():
+def test_write_guard_live_triggers_registry_is_non_empty() -> None:
     """The parametrized tests below collect zero cases -- and silently
     report a pass -- if `WRITE_GUARD_LIVE_TRIGGERS` were ever emptied."""
     assert altlive.WRITE_GUARD_LIVE_TRIGGERS, (
@@ -152,7 +153,7 @@ def test_write_guard_live_triggers_registry_is_non_empty():
 
 
 @pytest.mark.parametrize("guard", sorted(altlive.WRITE_GUARD_LIVE_TRIGGERS))
-def test_write_guard_registered_trigger_fires(guard):
+def test_write_guard_registered_trigger_fires(guard) -> None:
     result = altlive.fire_guard(guard)
     assert result.fired, (
         "%s's registered write_guards trigger did not fire (error=%r) -- broken "
@@ -161,7 +162,7 @@ def test_write_guard_registered_trigger_fires(guard):
 
 
 @pytest.mark.parametrize("guard", sorted(altlive.WRITE_GUARD_LIVE_TRIGGERS))
-def test_write_guard_named_alternatives_are_not_dead(guard):
+def test_write_guard_named_alternatives_are_not_dead(guard) -> None:
     ev = altlive.evaluate_guard(guard)
     if not ev.fire.fired:
         pytest.skip("covered by test_write_guard_registered_trigger_fires; not re-asserted here")
@@ -179,7 +180,7 @@ def test_write_guard_named_alternatives_are_not_dead(guard):
 
 
 @pytest.mark.parametrize("guard", sorted(altlive.LIVE_TRIGGERS))
-def test_registered_trigger_fires(guard, tmp_path, monkeypatch):
+def test_registered_trigger_fires(guard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     if guard == "block_topic_branch":
         (tmp_path / ".git").mkdir()
         (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
@@ -199,7 +200,7 @@ def _message_text(result) -> str:
     return hso.get("permissionDecisionReason") or hso.get("additionalContext") or ""
 
 
-def test_fire_guard_isolates_from_a_pre_existing_session_latch(monkeypatch, tmp_path):
+def test_fire_guard_isolates_from_a_pre_existing_session_latch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fixed_sid = "altlive-isolation-fixture-session"
     monkeypatch.setattr(
         guard_inprocess_search,
@@ -300,11 +301,11 @@ _INSTALLED_BINARY_GUARDS = frozenset({"check_raw_pid_liveness"})
 
 
 @pytest.mark.parametrize("guard", sorted(set(altlive.LIVE_TRIGGERS) - _INSTALLED_BINARY_GUARDS))
-def test_named_alternatives_are_not_dead(guard):
+def test_named_alternatives_are_not_dead(guard) -> None:
     assert_named_alternatives_are_not_dead(guard)
 
 
-def assert_named_alternatives_are_not_dead(guard):
+def assert_named_alternatives_are_not_dead(guard) -> None:
     ev = altlive.evaluate_guard(guard)
     if not ev.fire.fired:
         pytest.skip("covered by test_registered_trigger_fires; not re-asserted here")
@@ -445,12 +446,12 @@ def _fired_record(guard):
     return result.envelope
 
 
-def test_rung_floors_name_exactly_the_registered_guards():
+def test_rung_floors_name_exactly_the_registered_guards() -> None:
     assert set(RUNG_FLOORS) == set(altlive.LIVE_TRIGGERS)
 
 
 @pytest.mark.parametrize("guard", sorted(altlive.LIVE_TRIGGERS))
-def test_no_guard_caller_pair_grades_below_its_rung_floor(guard, tmp_path, monkeypatch, policy):
+def test_no_guard_caller_pair_grades_below_its_rung_floor(guard, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, policy) -> None:
     if guard == "block_topic_branch":
         (tmp_path / ".git").mkdir()
         (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
@@ -474,14 +475,14 @@ def test_no_guard_caller_pair_grades_below_its_rung_floor(guard, tmp_path, monke
 _EM_RUNG_AB_FLOORS = 30
 
 
-def test_em_rung_a_and_b_floors_are_not_edited_down():
+def test_em_rung_a_and_b_floors_are_not_edited_down() -> None:
     em_ab = sum(1 for floor in RUNG_FLOORS.values() if floor[0] in "AB")
     assert em_ab >= _EM_RUNG_AB_FLOORS, (
         "EM rung A/B floors were edited down -- a downgrade needs an ACKNOWLEDGED_RUNG_DROPS entry"
     )
 
 
-def test_em_text_offer_gaps_match_the_pinned_set(tmp_path, monkeypatch):
+def test_em_text_offer_gaps_match_the_pinned_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
     (tmp_path / ".git" / "config").write_text('[remote "origin"]\n\turl = x\n', encoding="utf-8")
@@ -504,51 +505,51 @@ class TestRungSemantics:
 
     REVIEWER = "coordinator:code-reviewer"
 
-    def test_ready_command_reachable_for_em_is_a(self, policy):
+    def test_ready_command_reachable_for_em_is_a(self, policy) -> None:
         record = _record(ReadyCommand("git status"))
         assert altlive.rung(record, None, Audience.EM, policy) == "A"
 
-    def test_adaptable_offer_or_capability_is_b(self, policy):
+    def test_adaptable_offer_or_capability_is_b(self, policy) -> None:
         offer = _record(AdaptableOffer("git status", "paths"))
         ref = _record(CapabilityRef("guard_inprocess_search::in-process"))
         assert altlive.rung(offer, None, Audience.EM, policy) == "B"
         assert altlive.rung(ref, None, Audience.EM, policy) == "B"
 
-    def test_only_route_or_override_is_c(self, policy):
+    def test_only_route_or_override_is_c(self, policy) -> None:
         record = _record(EscalationRoute("what", "authorize"), Override("COORDINATOR_ALLOW_X"))
         assert altlive.rung(record, None, Audience.EM, policy) == "C"
         assert altlive.rung(record, self.REVIEWER, Audience.SUBAGENT, policy) == "C"
 
-    def test_nothing_reachable_is_d(self, policy):
+    def test_nothing_reachable_is_d(self, policy) -> None:
         record = _record(ReadyCommand("rm -rf build"))
         assert altlive.rung(record, self.REVIEWER, Audience.SUBAGENT, policy) == "D"
         assert altlive.rung(record, None, Audience.SUBAGENT, policy) == "D"
 
-    def test_unresolved_subagent_fails_closed_but_keeps_the_route(self, policy):
+    def test_unresolved_subagent_fails_closed_but_keeps_the_route(self, policy) -> None:
         record = _record(ReadyCommand("git status"), EscalationRoute("what", "authorize"))
         assert altlive.rung(record, None, Audience.SUBAGENT, policy) == "C"
 
-    def test_verdict_kind_never_changes_the_rung(self, policy):
+    def test_verdict_kind_never_changes_the_rung(self, policy) -> None:
         members = (CapabilityRef("guard_inprocess_search::in-process"),)
         deny = _record(*members, kind="deny")
         advisory = _record(*members, kind="advisory")
         assert altlive.rung(deny, None, Audience.EM, policy) == altlive.rung(advisory, None, Audience.EM, policy) == "B"
 
-    def test_em_text_drops_a_member_whose_text_it_does_not_offer(self, policy):
+    def test_em_text_drops_a_member_whose_text_it_does_not_offer(self, policy) -> None:
         record = _record(ReadyCommand("git status"), em_text="Use something else entirely.")
         assert altlive.rung(record, None, Audience.EM, policy) == "D"
         assert [type(m) for m in altlive.em_text_gaps(record)] == [ReadyCommand]
 
-    def test_em_text_keeps_a_member_whose_text_it_offers(self, policy):
+    def test_em_text_keeps_a_member_whose_text_it_offers(self, policy) -> None:
         record = _record(ReadyCommand("git status"), em_text="Run git status instead.")
         assert altlive.rung(record, None, Audience.EM, policy) == "A"
         assert altlive.em_text_gaps(record) == []
 
-    def test_subagent_rung_ignores_em_text(self, policy):
+    def test_subagent_rung_ignores_em_text(self, policy) -> None:
         record = _record(ReadyCommand("git status"), em_text="Nothing relevant.")
         assert altlive.rung(record, self.REVIEWER, Audience.SUBAGENT, policy) == "A"
 
-    def test_rewrite_command_counts_for_em_without_appearing_in_em_text(self, policy):
+    def test_rewrite_command_counts_for_em_without_appearing_in_em_text(self, policy) -> None:
         record = _record(
             ReadyCommand("git status"),
             kind="rewrite",
@@ -557,11 +558,11 @@ class TestRungSemantics:
         )
         assert altlive.rung(record, None, Audience.EM, policy) == "A"
 
-    def test_em_text_is_never_parsed_for_alternatives(self, policy):
+    def test_em_text_is_never_parsed_for_alternatives(self, policy) -> None:
         record = _record(EscalationRoute("what", "authorize"), em_text="Use instead: `git status`")
         assert altlive.rung(record, None, Audience.EM, policy) == "D"
 
-    def test_rung_table_covers_em_unresolved_and_each_confined_class(self, policy):
+    def test_rung_table_covers_em_unresolved_and_each_confined_class(self, policy) -> None:
         table = altlive.rung_table(_record(ReadyCommand("git status")), policy)
         assert set(_RUNG_CLASSES) <= set(table)
         assert set(table) == {"em", "unresolved"} | set(altlive.confined_caller_classes(policy))
@@ -572,7 +573,7 @@ def _fake_deny(reason: str) -> AlternativeRecord:
 
 
 class TestMetaGateProvenToFail:
-    def test_dead_binary_alternative_is_caught(self):
+    def test_dead_binary_alternative_is_caught(self) -> None:
         record = _record(ReadyCommand("this-binary-does-not-exist-anywhere --fake-flag"))
         alts = altlive.record_alternatives(record)
         assert alts, "no alternative read from a record with a ReadyCommand"
@@ -581,7 +582,7 @@ class TestMetaGateProvenToFail:
             "a nonexistent-binary alternative was not classified DEAD: %s" % verdicts
         )
 
-    def test_dead_flag_on_a_real_cli_is_caught(self):
+    def test_dead_flag_on_a_real_cli_is_caught(self) -> None:
         alt = altlive.Alternative(
             altlive.AlternativeKind.FLAG,
             "--this-flag-does-not-exist-anywhere",
@@ -590,7 +591,7 @@ class TestMetaGateProvenToFail:
         verdict = altlive.probe_flag(alt)
         assert verdict.status is altlive.VerdictStatus.DEAD
 
-    def test_dead_override_not_read_by_guard_is_caught(self):
+    def test_dead_override_not_read_by_guard_is_caught(self) -> None:
         # check_raw_pid_liveness's real trigger genuinely never reads this
         # made-up var, so the behavioral re-fire must reproduce an
         # IDENTICAL verdict -- DEAD.
@@ -602,18 +603,18 @@ class TestMetaGateProvenToFail:
         verdict = altlive.probe_override(alt, "check_raw_pid_liveness", baseline)
         assert verdict.status is altlive.VerdictStatus.DEAD
 
-    def test_live_command_alternative_passes(self):
+    def test_live_command_alternative_passes(self) -> None:
         alts = altlive.record_alternatives(_record(ReadyCommand("git --version")))
         assert alts
         verdicts = [altlive.probe_alternative(a) for a in alts]
         assert all(v.status is altlive.VerdictStatus.LIVE for v in verdicts), verdicts
 
-    def test_live_flag_on_a_real_cli_passes(self):
+    def test_live_flag_on_a_real_cli_passes(self) -> None:
         alt = altlive.Alternative(altlive.AlternativeKind.FLAG, "--help", ("git", "--help"))
         verdict = altlive.probe_flag(alt)
         assert verdict.status is altlive.VerdictStatus.LIVE
 
-    def test_live_override_read_by_guard_passes(self):
+    def test_live_override_read_by_guard_passes(self) -> None:
         alt = altlive.Alternative(
             altlive.AlternativeKind.OVERRIDE, "COORDINATOR_OVERRIDE_RAW_PID_LIVENESS", "COORDINATOR_OVERRIDE_RAW_PID_LIVENESS"
         )
@@ -622,14 +623,14 @@ class TestMetaGateProvenToFail:
         verdict = altlive.probe_override(alt, "check_raw_pid_liveness", baseline)
         assert verdict.status is altlive.VerdictStatus.LIVE
 
-    def test_key_specific_trigger_not_reading_its_var_is_still_dead(self, monkeypatch):
+    def test_key_specific_trigger_not_reading_its_var_is_still_dead(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """A registered key-specific trigger that never reads the env var it is
         supposed to prove must still grade DEAD, exactly like an ordinary
         LIVE_TRIGGERS-based probe would."""
         guard = "check_git_commit_safe_commit_advise"
         env_var = "COORDINATOR_ALLOW_TOTALLY_MADE_UP_KEY_SPECIFIC"
 
-        def _inert_trigger():
+        def _inert_trigger() -> AlternativeRecord:
             return _fake_deny("Deny: fake finding, never reads its own override.\n")
 
         monkeypatch.setitem(altlive.KEY_SPECIFIC_TRIGGERS, (guard, env_var), _inert_trigger)
@@ -643,14 +644,14 @@ class TestMetaGateProvenToFail:
 
 class TestCapabilityManifestOracle:
 
-    def test_guard_inprocess_search_real_fired_message_grades_live(self):
+    def test_guard_inprocess_search_real_fired_message_grades_live(self) -> None:
         ev = altlive.evaluate_guard("guard_inprocess_search")
         assert ev.fire.fired
         capability_verdicts = [v for alt, v in ev.verdicts if alt.kind is altlive.AlternativeKind.HARNESS_CAPABILITY]
         assert capability_verdicts, "expected guard_inprocess_search's real record to carry its in-process capability"
         assert all(v.status is altlive.VerdictStatus.LIVE for v in capability_verdicts), capability_verdicts
 
-    def test_guard_grep_via_bash_composed_advisory_no_longer_claims_in_process(self):
+    def test_guard_grep_via_bash_composed_advisory_no_longer_claims_in_process(self) -> None:
         """A plain `&&`-chained grep is SILENT. A genuine GNU-only construct
         with no partial rewrite still fires, and its record offers the
         subagent-dispatch fallback as a template -- never an `in-process`
@@ -669,7 +670,7 @@ class TestCapabilityManifestOracle:
         assert not [r for r in refs if "in-process" in r.capability_id], refs
         assert any(isinstance(m, AdaptableOffer) and "subagent" in m.template for m in record.members)
 
-    def test_planted_t8_shape_defect_is_not_corroborated_by_prose_coincidence(self):
+    def test_planted_t8_shape_defect_is_not_corroborated_by_prose_coincidence(self) -> None:
         """The SAME marker word ("in-process") that a DIFFERENT guard's
         genuinely-live capability also uses, fired under a guard name
         (`check_head_tail_plumbing_rewrite`) that carries NO manifest entry
@@ -698,7 +699,7 @@ class TestCapabilityManifestOracle:
         )
         assert real_verdict.status is not altlive.VerdictStatus.LIVE
 
-    def test_capability_ref_id_is_graded_against_the_manifest_by_its_own_id(self):
+    def test_capability_ref_id_is_graded_against_the_manifest_by_its_own_id(self) -> None:
         record = _record(CapabilityRef("guard_inprocess_search::in-process"))
         (alt,) = altlive.record_alternatives(record)
         assert alt.kind is altlive.AlternativeKind.HARNESS_CAPABILITY
@@ -710,7 +711,7 @@ class _FakeNTOS:
 
     name = "nt"
 
-    def access(self, path, mode):
+    def access(self, path, mode) -> bool:
         if mode == os.X_OK:
             return os.path.isfile(path)
         return os.access(path, mode)
@@ -721,7 +722,7 @@ class _FakeNTOS:
 
 class TestResolveOnPathOrSettingsHomeWindowsGuard:
 
-    def test_windows_prefers_cmd_twin_over_lying_bare_file_access(self, tmp_path, monkeypatch):
+    def test_windows_prefers_cmd_twin_over_lying_bare_file_access(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         settings_home = tmp_path / "settings-home"
         bin_dir = settings_home / "bin"
         bin_dir.mkdir(parents=True)
@@ -742,7 +743,7 @@ class TestResolveOnPathOrSettingsHomeWindowsGuard:
             "lying os.access(X_OK) check -- expected the .cmd twin, got %r" % resolved
         )
 
-    def test_windows_with_no_cmd_twin_is_unresolved_not_the_lying_bare_file(self, tmp_path, monkeypatch):
+    def test_windows_with_no_cmd_twin_is_unresolved_not_the_lying_bare_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         settings_home = tmp_path / "settings-home"
         bin_dir = settings_home / "bin"
         bin_dir.mkdir(parents=True)
@@ -763,11 +764,11 @@ class TestResolveOnPathOrSettingsHomeWindowsGuard:
 
 
 class TestRecordAlternatives:
-    def test_pure_policy_record_offers_no_alternative(self):
+    def test_pure_policy_record_offers_no_alternative(self) -> None:
         record = _record(EscalationRoute("what", "authorize"))
         assert altlive.record_alternatives(record) == []
 
-    def test_ready_command_and_rewrite_command_are_one_alternative(self):
+    def test_ready_command_and_rewrite_command_are_one_alternative(self) -> None:
         record = _record(
             ReadyCommand("git -C /tmp status"),
             kind="rewrite",
@@ -778,14 +779,14 @@ class TestRecordAlternatives:
         assert alts[0].kind is altlive.AlternativeKind.COMMAND
         assert alts[0].detail == ["git", "-C", "/tmp", "status"]
 
-    def test_updated_input_command_is_extracted_without_a_member(self):
+    def test_updated_input_command_is_extracted_without_a_member(self) -> None:
         record = _record(EscalationRoute("what", "authorize"), kind="rewrite", updated_input={"command": "git -C /tmp status"})
         assert any(
             a.kind is altlive.AlternativeKind.COMMAND and a.detail == ["git", "-C", "/tmp", "status"]
             for a in altlive.record_alternatives(record)
         )
 
-    def test_members_map_to_their_alternative_kinds(self):
+    def test_members_map_to_their_alternative_kinds(self) -> None:
         record = _record(
             CapabilityRef("guard_inprocess_search::in-process"),
             Override("COORDINATOR_ALLOW_X"),
@@ -793,7 +794,7 @@ class TestRecordAlternatives:
         kinds = [a.kind for a in altlive.record_alternatives(record)]
         assert kinds == [altlive.AlternativeKind.HARNESS_CAPABILITY, altlive.AlternativeKind.OVERRIDE]
 
-    def test_a_git_template_is_probed_with_its_placeholders_intact(self):
+    def test_a_git_template_is_probed_with_its_placeholders_intact(self) -> None:
         record = _record(AdaptableOffer("git stash push -u -- <paths>", "paths"))
         (alt,) = altlive.record_alternatives(record)
         assert alt.kind is altlive.AlternativeKind.COMMAND and alt.detail[0] == "git"
@@ -807,10 +808,10 @@ class TestRecordAlternatives:
             "git show stash@{N}:<path> > <path>",
         ],
     )
-    def test_other_templates_are_never_executed(self, template):
+    def test_other_templates_are_never_executed(self, template) -> None:
         assert altlive.record_alternatives(_record(AdaptableOffer(template, "x"))) == []
 
-    def test_a_legacy_dict_result_offers_only_its_updated_input_command(self, monkeypatch):
+    def test_a_legacy_dict_result_offers_only_its_updated_input_command(self, monkeypatch: pytest.MonkeyPatch) -> None:
         legacy = {
             "hookSpecificOutput": {
                 "permissionDecision": "allow",
@@ -826,7 +827,7 @@ class TestRecordAlternatives:
         monkeypatch.setitem(altlive.LIVE_TRIGGERS, "fake_legacy_guard", lambda: prose_only)
         assert altlive.evaluate_guard("fake_legacy_guard").alternatives == []
 
-    def test_the_prose_extractor_is_gone(self):
+    def test_the_prose_extractor_is_gone(self) -> None:
         assert not [n for n in dir(altlive) if n.startswith("extract_")]
         assert not hasattr(altlive, "UnclassifiableAlternative")
 
@@ -849,13 +850,13 @@ EXPECTED_OURS = frozenset(
 )
 
 
-def test_log_only_guards_are_pinned_and_never_double_registered():
+def test_log_only_guards_are_pinned_and_never_double_registered() -> None:
     """LOG_ONLY is a closed pair, disjoint from the trigger registries: growth or overlap fails."""
     assert set(altlive.LOG_ONLY) == {"guard_xs_lane_shell_write", "guard_em_post_fire_shell_write"}
     assert not set(altlive.LOG_ONLY) & (set(altlive.LIVE_TRIGGERS) | set(altlive.UNTRIGGERED))
 
 
-def test_pre_clamp_levels_restores_the_clamp_on_exit():
+def test_pre_clamp_levels_restores_the_clamp_on_exit() -> None:
     """The floor resolution is scoped to the probe call; a deny-registry-absent guard clamps again after."""
     from coordinator_core import machine_profile
 
@@ -865,13 +866,13 @@ def test_pre_clamp_levels_restores_the_clamp_on_exit():
     assert machine_profile.resolved_level("block-home-root-bash-write") == "log"
 
 
-def test_every_registered_guard_has_exactly_one_band():
+def test_every_registered_guard_has_exactly_one_band() -> None:
     for name in sorted(set(altlive.LIVE_TRIGGERS) | set(altlive.UNTRIGGERED) | set(altlive.LOG_ONLY)):
         band = altlive.classify_band(name)
         assert band in (altlive.GuardBand.OURS, altlive.GuardBand.PEER)
 
 
-def test_ours_band_matches_the_pm_ruling_no_silent_drift():
+def test_ours_band_matches_the_pm_ruling_no_silent_drift() -> None:
     all_guards = set(altlive.LIVE_TRIGGERS) | set(altlive.UNTRIGGERED) | set(altlive.LOG_ONLY)
     ours = {g for g in all_guards if altlive.classify_band(g) is altlive.GuardBand.OURS}
     assert ours == EXPECTED_OURS
@@ -881,7 +882,7 @@ def test_ours_band_matches_the_pm_ruling_no_silent_drift():
     assert "guard_inprocess_search" in peer
 
 
-def test_report_output_is_band_attributable():
+def test_report_output_is_band_attributable() -> None:
     evaluations = altlive.evaluate_all(["guard_grep_via_bash", "block_worktree_creation"])
     report = altlive.format_report(evaluations)
     assert "[ours] guard_grep_via_bash" in report
@@ -892,7 +893,7 @@ def test_report_output_is_band_attributable():
 
 
 class TestWindowsPosixTwinResolution:
-    def test_only_the_colliding_system32_binary_is_remapped(self, tmp_path, monkeypatch):
+    def test_only_the_colliding_system32_binary_is_remapped(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         system = tmp_path / "Windows" / "System32"
         system.mkdir(parents=True)
         monkeypatch.setenv("SystemRoot", str(tmp_path / "Windows"))

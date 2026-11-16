@@ -12,6 +12,7 @@ from coordinator_core.composition_budget import (
     identity_from_file,
     new_composition_id,
 )
+from pathlib import Path
 
 
 class _FakeClock:
@@ -26,7 +27,7 @@ class _FakeClock:
         self.now += secs
 
 
-def test_no_budget_set_never_breaches():
+def test_no_budget_set_never_breaches() -> None:
     clock = _FakeClock()
     budget = CompositionBudget(composition_id="c1", clock=clock)
     clock.advance(1000.0)
@@ -36,7 +37,7 @@ def test_no_budget_set_never_breaches():
     assert budget.breached_units == ()
 
 
-def test_elapsed_budget_skip_and_surface_parity_with_percolate_shape():
+def test_elapsed_budget_skip_and_surface_parity_with_percolate_shape() -> None:
     clock = _FakeClock()
     budget = CompositionBudget(composition_id="c1", aggregate_elapsed_budget=10.0, clock=clock)
 
@@ -49,7 +50,7 @@ def test_elapsed_budget_skip_and_surface_parity_with_percolate_shape():
     assert budget.disposition == SKIP_AND_SURFACE
 
 
-def test_invocation_count_ceiling_is_independent_of_elapsed():
+def test_invocation_count_ceiling_is_independent_of_elapsed() -> None:
     clock = _FakeClock()
     budget = CompositionBudget(composition_id="c1", max_invocations=3, clock=clock)
     budget.record_invocation()
@@ -60,7 +61,7 @@ def test_invocation_count_ceiling_is_independent_of_elapsed():
     assert budget.breached_units == ("invocations",)
 
 
-def test_fail_loud_raises_budget_breach_with_named_composition_fanout_unit_and_count():
+def test_fail_loud_raises_budget_breach_with_named_composition_fanout_unit_and_count() -> None:
     clock = _FakeClock()
     budget = CompositionBudget(
         composition_id="wsc-close-42",
@@ -85,7 +86,7 @@ def test_fail_loud_raises_budget_breach_with_named_composition_fanout_unit_and_c
     assert budget.breached_units == ("review-coverage-gate",)
 
 
-def test_fail_loud_default_unit_names_which_ceiling_breached():
+def test_fail_loud_default_unit_names_which_ceiling_breached() -> None:
     clock = _FakeClock()
     budget = CompositionBudget(
         composition_id="c1", aggregate_elapsed_budget=5.0, disposition=FAIL_LOUD, clock=clock
@@ -96,12 +97,12 @@ def test_fail_loud_default_unit_names_which_ceiling_breached():
     assert excinfo.value.unit == "elapsed"
 
 
-def test_invalid_disposition_rejected_at_construction():
+def test_invalid_disposition_rejected_at_construction() -> None:
     with pytest.raises(ValueError):
         CompositionBudget(composition_id="c1", disposition="abort-now")
 
 
-def test_advisory_check_never_raises_regardless_of_disposition():
+def test_advisory_check_never_raises_regardless_of_disposition() -> None:
     clock = _FakeClock()
     budget = CompositionBudget(
         composition_id="c1", max_invocations=1, disposition=FAIL_LOUD, clock=clock
@@ -113,7 +114,7 @@ def test_advisory_check_never_raises_regardless_of_disposition():
         budget.check()
 
 
-def test_on_count_injection_point_receives_unit_and_running_total():
+def test_on_count_injection_point_receives_unit_and_running_total() -> None:
     calls = []
     budget = CompositionBudget(
         composition_id="c1", on_count=lambda unit, total: calls.append((unit, total))
@@ -124,7 +125,7 @@ def test_on_count_injection_point_receives_unit_and_running_total():
     assert budget.invocation_count == 4
 
 
-def test_on_count_not_called_by_check_or_advisory_check():
+def test_on_count_not_called_by_check_or_advisory_check() -> None:
     calls = []
     budget = CompositionBudget(
         composition_id="c1",
@@ -138,7 +139,7 @@ def test_on_count_not_called_by_check_or_advisory_check():
     assert calls == [("invocation", 1)]
 
 
-def test_new_composition_id_is_unique_and_pid_prefixed():
+def test_new_composition_id_is_unique_and_pid_prefixed() -> None:
     import os
 
     id1 = new_composition_id()
@@ -147,7 +148,7 @@ def test_new_composition_id_is_unique_and_pid_prefixed():
     assert id1.startswith(f"{os.getpid()}-")
 
 
-def test_identity_from_env_reads_and_falls_back_to_none(monkeypatch):
+def test_identity_from_env_reads_and_falls_back_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_COMPOSITION_ID", raising=False)
     assert identity_from_env() is None
 
@@ -158,7 +159,7 @@ def test_identity_from_env_reads_and_falls_back_to_none(monkeypatch):
     assert identity_from_env("MY_CUSTOM_VAR") == "custom-id"
 
 
-def test_identity_from_file_reads_strips_and_handles_absence(tmp_path):
+def test_identity_from_file_reads_strips_and_handles_absence(tmp_path: Path) -> None:
     missing = tmp_path / "absent.txt"
     assert identity_from_file(missing) is None
 
@@ -171,23 +172,23 @@ def test_identity_from_file_reads_strips_and_handles_absence(tmp_path):
     assert identity_from_file(empty) is None
 
 
-def test_for_composition_uses_resolver_when_it_returns_a_value():
+def test_for_composition_uses_resolver_when_it_returns_a_value() -> None:
     budget = CompositionBudget.for_composition(identity_resolver=lambda: "env-supplied-id")
     assert budget.composition_id == "env-supplied-id"
 
 
-def test_for_composition_falls_back_to_new_id_when_resolver_returns_none():
+def test_for_composition_falls_back_to_new_id_when_resolver_returns_none() -> None:
     budget = CompositionBudget.for_composition(identity_resolver=lambda: None)
     assert budget.composition_id
     assert "-" in budget.composition_id
 
 
-def test_for_composition_falls_back_to_new_id_when_no_resolver_supplied():
+def test_for_composition_falls_back_to_new_id_when_no_resolver_supplied() -> None:
     budget = CompositionBudget.for_composition()
     assert budget.composition_id
 
 
-def test_breached_units_is_append_only_and_never_cleared():
+def test_breached_units_is_append_only_and_never_cleared() -> None:
     clock = _FakeClock()
     budget = CompositionBudget(composition_id="c1", max_invocations=1, clock=clock)
     budget.record_invocation()
@@ -201,17 +202,17 @@ class TestFleetDialsAreUntouchedByTheFactLayerPlan:
     PRE_PLAN_FLEET_AGGREGATE_ELAPSED_BUDGET = 1200.0
     PRE_PLAN_FLEET_MAX_INVOCATIONS = 110
 
-    def test_fleet_aggregate_elapsed_budget_is_unchanged(self):
+    def test_fleet_aggregate_elapsed_budget_is_unchanged(self) -> None:
         from coordinator_core.composition_budget import FLEET_AGGREGATE_ELAPSED_BUDGET
 
         assert FLEET_AGGREGATE_ELAPSED_BUDGET == self.PRE_PLAN_FLEET_AGGREGATE_ELAPSED_BUDGET
 
-    def test_fleet_max_invocations_is_unchanged(self):
+    def test_fleet_max_invocations_is_unchanged(self) -> None:
         from coordinator_core.composition_budget import FLEET_MAX_INVOCATIONS
 
         assert FLEET_MAX_INVOCATIONS == self.PRE_PLAN_FLEET_MAX_INVOCATIONS
 
-    def test_the_fact_layer_dial_is_a_separate_constant_in_a_separate_module(self):
+    def test_the_fact_layer_dial_is_a_separate_constant_in_a_separate_module(self) -> None:
         from coordinator_core import composition_budget
         from coordinator_core.session import session_facts_budget
 

@@ -25,7 +25,7 @@ def _rec(outcome, **kw):
     return c.RunnerRecord(**base)
 
 
-def test_names():
+def test_names() -> None:
     assert c.SUBMIT_OP == "hooks.submit_bug_blitz"
     assert c.STUB_NAME == "bug-blitz"
     assert c.CLI_NAME == "targeted-test-run"
@@ -33,7 +33,7 @@ def test_names():
     assert c.run_tag("r1") == "bug-blitz-r1"
 
 
-def test_exit_codes_cover_outcomes_and_reserve_usage():
+def test_exit_codes_cover_outcomes_and_reserve_usage() -> None:
     assert set(c.EXIT_CODES) == set(c.OUTCOMES)
     assert [c.EXIT_CODES[o] for o in c.OUTCOMES] == [0, 1, 3, 4, 5, 6]
     assert c.EXIT_CODES[c.OUTCOME_FOREIGN_UNCOMMITTED] == 6
@@ -42,14 +42,14 @@ def test_exit_codes_cover_outcomes_and_reserve_usage():
     assert c.EXIT_USAGE not in c.EXIT_CODES.values()
 
 
-def test_tests_record_rel():
+def test_tests_record_rel() -> None:
     assert (
         c.tests_record_rel("bug", "run1", "TF-9")
         == "state/queue-grind/bug/evidence/run1/TF-9.tests.json"
     )
 
 
-def test_schema_enum_matches_outcomes():
+def test_schema_enum_matches_outcomes() -> None:
     assert tuple(_schema()["properties"]["outcome"]["enum"]) == c.OUTCOMES
 
 
@@ -68,7 +68,7 @@ def test_schema_enum_matches_outcomes():
     ],
     ids=lambda r: r.outcome,
 )
-def test_record_validates_for_each_outcome(rec):
+def test_record_validates_for_each_outcome(rec) -> None:
     jsonschema.validate(rec.to_json(), _schema())
 
 
@@ -84,25 +84,25 @@ def test_record_validates_for_each_outcome(rec):
     ],
     ids=["bad-outcome", "passed-no-exit", "refused-with-exit", "nothing-with-selection", "dup-selected", "foreign-no-exit"],
 )
-def test_record_schema_rejects_inconsistent(rec):
+def test_record_schema_rejects_inconsistent(rec) -> None:
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(rec.to_json(), _schema())
 
 
-def test_foreign_holders_serialized_as_object():
+def test_foreign_holders_serialized_as_object() -> None:
     rec = _rec("passed-on-foreign-uncommitted", foreign_holders=(("a/x.py", ("s1",)),))
     assert rec.to_json()["foreign_holders"] == {"a/x.py": ["s1"]}
     assert _rec("passed").to_json()["foreign_holders"] == {}
 
 
-def test_schema_rejects_non_list_holders():
+def test_schema_rejects_non_list_holders() -> None:
     doc = _rec("passed").to_json()
     doc["foreign_holders"] = {"a/x.py": "s1"}
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate(doc, _schema())
 
 
-def test_schema_rejects_extra_field():
+def test_schema_rejects_extra_field() -> None:
     doc = _rec("passed").to_json()
     doc["extra"] = 1
     with pytest.raises(jsonschema.ValidationError):

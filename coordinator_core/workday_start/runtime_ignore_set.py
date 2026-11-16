@@ -11,12 +11,25 @@ from __future__ import annotations
 import bisect
 import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath
 
+from coordinator_core.session import record_homes
 from coordinator_core.git.git_state import IndexParseError, read_index_paths  # noqa: F401
 from coordinator_core.git.run import run_git
 
 TEMPLATE_REL = Path("skills/repo-setup/templates/gitignore.project.template")
+
+def _home_rule(kind: str, tail: str = "") -> str:
+    """Gitignore rule for a record home, derived from `record_homes` and posix for gitignore."""
+    return PurePath(record_homes.home_dir("", kind)).as_posix() + "/" + tail
+
+
+# Engine-written run state and receipts; merged with the template rules by the apply path.
+ENGINE_RUNTIME_IGNORE_RULES: tuple[str, ...] = (
+    _home_rule("warp"),
+    "state/test-runs/",
+    _home_rule("queue-grind", "**/evidence/"),
+)
 
 # Memo delivery force-tracks these; neither the sweep nor apply reports or untracks them.
 UNTRACK_EXEMPT_PREFIXES: tuple[str, ...] = (".coordinator-local/memo-outbox/",)

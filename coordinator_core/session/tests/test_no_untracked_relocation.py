@@ -138,9 +138,6 @@ _TMP_FIXTURE_REASON = (
 )
 
 _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
-    ("coordinator_core", "warm/dispatch_ack.py", "_sweep_legacy", "os.replace", "os.replace(entry.path, target)", 1): "moves a legacy flat engine-state journal entry into its day bucket; machinery state under the engine's own journal dir, never a claimable work path",
-    ("coordinator_core", "warm/tests/test_dispatch_ack_land_record.py", "test_prune_sweeps_old_land_records", "Path.replace", "path.replace(expired / path.name)", 1): _TMP_FIXTURE_REASON,
-    ("coordinator_core", "warm/tests/test_minus_32004_after_commit_reports_outcome.py", "test_prune_drops_only_entries_older_than_the_retention", "Path.replace", "stale.replace(expired / stale.name)", 1): _TMP_FIXTURE_REASON,
     # --- C1: relocate_touched_path IS the move; seeded first, per the plan ---
     ("coordinator_core", "session/scope.py", "relocate_touched_path", "shutil.move", "shutil.move(src_abs, dst_abs)", 1):
         "relocate_touched_path's own shutil.move -- this function IS the "
@@ -236,6 +233,12 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("coordinator_core", "session/scope.py", "archive", "shutil.move", "shutil.move(sdir, archive_dir)", 1): "archive(): source lives under the .git/ subtree, categorically outside claimable space",
     ("coordinator_core", "ops/repo_scratch_sweep.py", "_held_probe", "os.rename", "os.rename(path, tomb)", 1): "Windows hold probe: renames an unclaimable scratch path to a tombstone to see whether a handle holds it, then straight back; no net relocation",
     ("coordinator_core", "ops/repo_scratch_sweep.py", "_held_probe", "os.rename", "os.rename(tomb, path)", 1): "the return leg of the hold probe above; same no-net-relocation reasoning",
+    ("coordinator_core", "warm/dispatch_ack.py", "_sweep_legacy", "os.replace", "os.replace(entry.path, target)", 1): "moves a legacy flat engine-state journal entry into its day bucket; machinery state under the engine's own journal dir, never a claimable work path",
+    ("coordinator_core", "warm/tests/test_dispatch_ack_land_record.py", "test_prune_sweeps_old_land_records", "Path.replace", "path.replace(expired / path.name)", 1): _TMP_FIXTURE_REASON,
+    ("coordinator_core", "warm/tests/test_minus_32004_after_commit_reports_outcome.py", "test_prune_drops_only_entries_older_than_the_retention", "Path.replace", "stale.replace(expired / stale.name)", 1): _TMP_FIXTURE_REASON,
+    ("coordinator_core", "git/ref_lock.py", "_claim_owner", "os.replace", "os.replace(owner, claimed)", 1): "claims a stale ref-lock owner sidecar by renaming it to a pid-suffixed sibling so one recoverer wins; lives under .git/, categorically outside claimable space",
+    ("coordinator_core", "git/ref_lock.py", "_resolve_lock", "os.replace", "os.replace(lock, dest)", 1): "moves a stale `<ref>.lock` into the .git recovery dir; source and destination both under .git/, never a claimable work path",
+    ("coordinator_core", "git/ref_lock.py", "_resolve_lock", "os.replace", "os.replace(lock, gitdir / ref)", 1): "completes an interrupted ref update by renaming its lock onto the ref under .git/, which is git's own commit step, not a work-path relocation",
     ("coordinator_core", "warm/server.py", "_claim_stall_episode", "os.replace", "os.replace(marker, retired)", 1): "engine-state stall-episode marker retired before unlink; machinery path under the engine's own state dir, never claimable",
     ("coordinator_core", "publish/time_transform.py", "rename_codename_basenames", "Path.rename", "old_path.rename(new_path)", 1): "rename_codename_basenames operates on the meta-repo/publish-repo trees, neither of which is this worktree -- normalize_touch_path returns None, no claim expressible; also invoked out-of-process via a CLI trampoline",
 
@@ -600,7 +603,7 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("coordinator_core", "remote_engine/background.py", "run_child", "os.replace", "os.replace(_params_path(key), claim)", 1): "claims a queued remote-engine params file by renaming it to a .claimed sibling so exactly one child runs it; queue state, never a T-claimed work path",
 
     # --- 2026-11-15: sites that landed 2026-11-13..15 without an entry. Each read at its own call site. ---
-    ("bin", "percolate-round.py", "_export_chain_at_sha", "os.replace", "os.replace(tree, dest)", 1): "atomic publish of a freshly extracted chain-export tree (a mkdtemp staging sibling under the export cache root) to its sha-keyed cache entry; temp source never claimed, cache dir is machinery outside any T-claimable work path (a49c415ebc)",
+    ("bin", "lib/commit_clone.py", "materialise_commit_clone", "os.replace", "os.replace(staging, dest)", 1): "publishes a freshly built shared clone from a mkdtemp staging sibling to its sha-keyed cache entry, both under the managed tempdir `claude-klabauter-commit-clone/` -- outside the worktree, so no touch-claim can name either end",
     ("coordinator_core", "benchmarks/live_root_swap_spike.py", "_swap_scenario", "os.rename", "os.rename(old, new)", 1): "benchmark rotates the package dir inside a throwaway root the spike builds under gitignored `scratch/live-root-swap-spike/` to time a live-root swap; never the live worktree's tracked paths or a claimable work path (35e1943787)",
     ("coordinator_core", "codex_runner/codex_spawn_env.py", "_isolate_codex_home", "os.replace", "os.replace(part, dst)", 1): "atomic `.part` -> final publish of a codex config file into the isolated per-spawn codex home; temp source never claimed, destination is machine-local spawn state outside any T-claimable work path (320702b1f8)",
     ("coordinator_core", "gem_inbox_apply.py", "apply_manifest", "os.replace", "os.replace(src, dst)", 1): "applies the manifest's `moves`: closed-out inbox memos relocated to their archive homes by a one-shot CLI with no session_id in scope; the paths are listed in the manifest's one scoped commit pathspec, and the run's own writes are declared via declare_write -- same closed-out-artifact reasoning as ops/fleet/memo_reconcile_outbox (5e480be2fc)",
@@ -612,6 +615,7 @@ _ALLOWED: Dict[Tuple[str, str, str, str, str, int], str] = {
     ("coordinator_core", "ops/dispatch_emit/land_resume.py", "next_due", "os.rename", "os.rename(src, dst)", 2): "the byte-identical claim rename of the not-expired branch; same pending -> `.claimed` queue bookkeeping as #1 (bdfcd1821b)",
     ("coordinator_core", "ops/dispatch_emit/tests/test_ask_stage_sizing_plan_edge_stages_plan.py", "_move_plan", "Path.rename", "src.rename(repo / dest)", 1): "test fixture: moves a plan inside a pytest tmp_path repo, outside any session's claimable space (4255043a09)",
     ("coordinator_core", "ops/dispatch_emit/tree_write_fence.py", "record_refusal", "os.replace", "os.replace(path, path.with_name(REFUSALS_FILE + '.corrupt'))", 1): "sets an unparseable tree-write-refusals.json aside to `.corrupt` inside the run's own record dir; engine run-record bookkeeping, not a session-touched work path, and the live file is re-written and declare_written right after (54887c3317)",
+    ("coordinator_core", "ops/tests/test_plan_prep_gate.py", "_move_to_month_folder", "Path.rename", "src.rename(dest)", 1): _TMP_FIXTURE_REASON,
     ("coordinator_core", "percolate/tests/test_source_preflight.py", "bare_mirror", "Path.rename", "_copy_repo(_repo_trio, 'mirror-unstamped', tmp_path).rename(tmp_path / 'mirror')", 1): "test fixture: renames a repo copy it created under pytest tmp_path, outside any session's claimable space (22b1f00a3d)",
     ("coordinator_core", "session/claim_index.py", "_begin_index", "os.replace", "os.replace(index_dir, f'{index_dir}{_RETIRED_MARK}{token}')", 1): "retires the claim-index directory aside to a unique `.retired-<token>` sibling before a rebuild, then sweeps it; the session engine's own derived index under its state dir, never a T-claimed work path (bb53e37907)",
 }

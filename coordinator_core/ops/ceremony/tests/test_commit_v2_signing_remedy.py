@@ -27,6 +27,8 @@ from __future__ import annotations
 
 from coordinator_core.git.commit import CommitRefused, FilterUnsupported
 from coordinator_core.ops.ceremony import commit_v2
+from pathlib import Path
+import pytest
 
 
 def _call(repo_root, params):
@@ -39,7 +41,7 @@ def _raise(exc: Exception):
     return _fake_commit_paths
 
 
-def test_a_signing_shaped_message_is_never_enriched(monkeypatch, tmp_path):
+def test_a_signing_shaped_message_is_never_enriched(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Text that would have matched the old `_SIGNING_FAILURE_PREFIX` still
     passes through byte-for-byte -- no remedy is appended, because nothing
     raises this shape any more and the carve-out that used to react to it
@@ -63,7 +65,7 @@ def test_a_signing_shaped_message_is_never_enriched(monkeypatch, tmp_path):
     assert "--no-gpg-sign" not in result["error"]
 
 
-def test_non_signing_refusal_is_passed_through_unmodified(monkeypatch, tmp_path):
+def test_non_signing_refusal_is_passed_through_unmodified(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     other_message = "cannot read a/b.txt: [Errno 2] No such file or directory"
     monkeypatch.setattr(
         commit_v2, "commit_paths", _raise(CommitRefused(other_message))
@@ -74,7 +76,7 @@ def test_non_signing_refusal_is_passed_through_unmodified(monkeypatch, tmp_path)
     assert result["error"] == other_message
 
 
-def test_filter_unsupported_is_passed_through_unmodified(monkeypatch, tmp_path):
+def test_filter_unsupported_is_passed_through_unmodified(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     other_message = "eol=crlf path carries CR bytes and no fallback resolved it"
     monkeypatch.setattr(
         commit_v2, "commit_paths", _raise(FilterUnsupported(other_message))

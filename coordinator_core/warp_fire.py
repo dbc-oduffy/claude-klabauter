@@ -91,11 +91,13 @@ def nag_text(
     state_dir: Optional[Path] = None,
     host: Optional[str] = None,
     edit_size: Optional[tuple[int, int]] = None,
+    edit_size_truncated: bool = False,
 ) -> str:
     """The session's nag: full `fire_step` first, then a one-line `[engine-ask nag #N]`. Never empty.
 
     `edit_size` is the measured (files, lines) of the EM's uncommitted hand edit; when given, the
-    text leads with it against the XS bound.
+    text leads with it against the XS bound. `edit_size_truncated` says the count stopped early,
+    so the figures are lower bounds and read "at least".
     """
     n = _bump(session_id or "", state_dir)
     lead = ""
@@ -104,7 +106,8 @@ def nag_text(
 
         files, lines = edit_size
         lead = (
-            f"Your uncommitted hand edit is {files} files / {lines} lines, past the XS bound "
+            f"Your uncommitted hand edit is {'at least ' if edit_size_truncated else ''}{files} files / {lines} lines, "
+            f"past the XS bound "
             f"({xs_lane_budget.BUDGET_FILES} files / {xs_lane_budget.BUDGET_LINES} lines). "
         )
     if n <= 1:

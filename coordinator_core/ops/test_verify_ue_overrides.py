@@ -22,6 +22,7 @@ import os
 import pytest
 
 from coordinator_core.ops import verify_ue_overrides as vuo
+from pathlib import Path
 
 
 def _seed_registry(tmp_path, **pairs: str):
@@ -73,13 +74,13 @@ def _setup_success_tree(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def _isolated_registry(monkeypatch, tmp_path):
+def _isolated_registry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     empty_registry = tmp_path / "ml-registry"
     empty_registry.mkdir(exist_ok=True)
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(empty_registry))
 
 
-def test_no_ue_repo_registered_is_not_applicable(monkeypatch, tmp_path, capsys):
+def test_no_ue_repo_registered_is_not_applicable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """An empty registry means no UE repo lives here — a clean skip, not drift.
 
     These keys were REQUIRED until 2026-09-02, so this check failed by
@@ -97,7 +98,7 @@ def test_no_ue_repo_registered_is_not_applicable(monkeypatch, tmp_path, capsys):
     assert "repos.claude_unreal_holodeck" in out
 
 
-def test_partial_registration_walks_only_what_is_registered(monkeypatch, tmp_path, capsys):
+def test_partial_registration_walks_only_what_is_registered(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     example_game_repo_dir, _example_retrieval_repo, home = _setup_success_tree(tmp_path)
     _seed_registry(tmp_path, **{"repos.claude_unreal_holodeck": str(example_game_repo_dir)})
     monkeypatch.setenv("HOME", str(home))
@@ -106,7 +107,7 @@ def test_partial_registration_walks_only_what_is_registered(monkeypatch, tmp_pat
     assert "all known UE-context dirs" in capsys.readouterr().out
 
 
-def test_missing_directory_fails_loud(monkeypatch, tmp_path, capsys):
+def test_missing_directory_fails_loud(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _seed_registry(
         tmp_path,
         **{
@@ -121,7 +122,7 @@ def test_missing_directory_fails_loud(monkeypatch, tmp_path, capsys):
     assert "does not exist on this machine" in err
 
 
-def test_missing_settings_json(monkeypatch, tmp_path, capsys):
+def test_missing_settings_json(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     example_game_repo_dir = tmp_path / "example-game-repo-repo"
     example_retrieval_repo = tmp_path / "example-retrieval-repo-repo"
     home = tmp_path / "home"
@@ -140,7 +141,7 @@ def test_missing_settings_json(monkeypatch, tmp_path, capsys):
     assert "claude-ue-bootstrap" in err
 
 
-def test_wrong_key_value(monkeypatch, tmp_path, capsys):
+def test_wrong_key_value(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     example_game_repo_dir, example_retrieval_repo, home = _setup_success_tree(tmp_path)
     _write_settings(
         str(example_game_repo_dir / ".claude" / "settings.json"),
@@ -160,7 +161,7 @@ def test_wrong_key_value(monkeypatch, tmp_path, capsys):
     assert "example-game-repo-control@example-game-workbench-repo] = false" in err
 
 
-def test_no_game_dev_vendor_enabled(monkeypatch, tmp_path, capsys):
+def test_no_game_dev_vendor_enabled(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     example_game_repo_dir, example_retrieval_repo, home = _setup_success_tree(tmp_path)
     _write_settings(
         str(example_game_repo_dir / ".claude" / "settings.json"),
@@ -178,7 +179,7 @@ def test_no_game_dev_vendor_enabled(monkeypatch, tmp_path, capsys):
     assert "no game-dev vendor enabled" in err
 
 
-def test_example_sim_repo_optional_when_unset(monkeypatch, tmp_path, capsys):
+def test_example_sim_repo_optional_when_unset(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     example_game_repo_dir, example_retrieval_repo, home = _setup_success_tree(tmp_path)
     _seed_registry(
         tmp_path,
@@ -192,7 +193,7 @@ def test_example_sim_repo_optional_when_unset(monkeypatch, tmp_path, capsys):
     assert "all known UE-context dirs carry the expected override" in out
 
 
-def test_success_all_expected(monkeypatch, tmp_path, capsys):
+def test_success_all_expected(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     example_game_repo_dir, example_retrieval_repo, home = _setup_success_tree(tmp_path)
     example_sim_repo_dir = tmp_path / "example-sim-repo-repo"
     example_sim_repo_dir.mkdir()
@@ -213,7 +214,7 @@ def test_success_all_expected(monkeypatch, tmp_path, capsys):
     assert "all known UE-context dirs carry the expected override" in out
 
 
-def test_a_ue_enabled_global_settings_file_is_the_drift(monkeypatch, tmp_path, capsys):
+def test_a_ue_enabled_global_settings_file_is_the_drift(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     example_game_repo_dir, example_retrieval_repo, home = _setup_success_tree(tmp_path)
     _write_settings(str(home / ".claude" / "settings.json"), _FULLY_ENABLED)
     _seed_registry(
@@ -233,7 +234,7 @@ def test_a_ue_enabled_global_settings_file_is_the_drift(monkeypatch, tmp_path, c
     assert "expected off" in err
 
 
-def test_a_global_settings_file_with_no_ue_keys_passes(monkeypatch, tmp_path, capsys):
+def test_a_global_settings_file_with_no_ue_keys_passes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     example_game_repo_dir, example_retrieval_repo, home = _setup_success_tree(tmp_path)
     _write_settings(str(home / ".claude" / "settings.json"), {})
     _seed_registry(

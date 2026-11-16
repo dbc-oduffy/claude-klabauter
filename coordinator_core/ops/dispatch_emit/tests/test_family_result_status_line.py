@@ -52,19 +52,19 @@ def _fam(verdict, **extra):
 
 
 @pytest.mark.parametrize("verdict", ["OK", "WARN"])
-def test_ok_or_warn_family_result_object_is_done(verdict):
+def test_ok_or_warn_family_result_object_is_done(verdict) -> None:
     out = _go(_fam(verdict))
     assert out["incomplete"] == [] and out["unanswered"] == []
 
 
 @pytest.mark.parametrize("verdict", ["FAILED", "BLOCKED"])
-def test_failed_or_blocked_family_result_object_is_blocked_with_its_reason(verdict):
+def test_failed_or_blocked_family_result_object_is_blocked_with_its_reason(verdict) -> None:
     out = _go(_fam(verdict, exit_code=1, blocked_reason="vendor cli missing"))
     assert out["incomplete"] == ["X"] and out["blocked"] == ["X"] and out["unanswered"] == []
     assert "vendor cli missing" in out["reason"]["X"]
 
 
-def test_object_without_family_still_has_no_status_line():
+def test_object_without_family_still_has_no_status_line() -> None:
     out = _go({"verdict": "OK"})
     assert out["unanswered"] == ["X"]
     assert out["reason"]["X"] == "no contract status line in the executor reply"

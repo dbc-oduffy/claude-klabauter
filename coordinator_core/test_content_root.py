@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core import content_root as cr
 from coordinator_core.machine_resolver import registry_get
+from pathlib import Path
 
 LEGACY_KEY = "repos.doe_claude"  # private-name-ok: compat-fallback
 LEGACY_ENGINE_KEY = "engine.working_repos.doe_claude"  # private-name-ok: compat-fallback
@@ -15,7 +16,7 @@ LEGACY_POINTER = ".coordinator-content-root"  # private-name-ok: compat-fallback
 
 
 @pytest.fixture
-def box(tmp_path, monkeypatch):
+def box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "home"
     settings = tmp_path / "settings"
     (settings / "machine-local").mkdir(parents=True)
@@ -34,14 +35,14 @@ def _registry(box, text: str) -> None:
     (box / "registry.local.toml").write_text(text, encoding="utf-8")
 
 
-def test_fresh_box_writes_nothing(box):
+def test_fresh_box_writes_nothing(box) -> None:
     result = cr.migrate_legacy_config()
     assert not result.migrated
     assert cr.read_content_root() == ""
     assert sorted(p.name for p in box.iterdir()) == []
 
 
-def test_legacy_pointer_only_is_migrated(box, tmp_path):
+def test_legacy_pointer_only_is_migrated(box, tmp_path: Path) -> None:
     root = tmp_path / "content"
     (box / LEGACY_POINTER).write_text(str(root) + "\n", encoding="utf-8")
     before = cr.read_content_root()
@@ -54,7 +55,7 @@ def test_legacy_pointer_only_is_migrated(box, tmp_path):
     assert cr.read_content_root() == str(root)
 
 
-def test_legacy_registry_key_only_is_migrated(box, tmp_path):
+def test_legacy_registry_key_only_is_migrated(box, tmp_path: Path) -> None:
     root = tmp_path / "content"
     _registry(box, f"\"{LEGACY_KEY}\" = '{root}'\n")
     result = cr.migrate_legacy_config()
@@ -64,7 +65,7 @@ def test_legacy_registry_key_only_is_migrated(box, tmp_path):
     assert LEGACY_KEY not in (box / "registry.local.toml").read_text(encoding="utf-8")
 
 
-def test_engine_twin_is_migrated(box, tmp_path):
+def test_engine_twin_is_migrated(box, tmp_path: Path) -> None:
     root = tmp_path / "content"
     _registry(box, f"\"{LEGACY_ENGINE_KEY}\" = '{root}'\n")
     result = cr.migrate_legacy_config()
@@ -73,7 +74,7 @@ def test_engine_twin_is_migrated(box, tmp_path):
     assert registry_get(cr.CONTENT_ROOT_KEY) == str(root)
 
 
-def test_empty_content_root_with_legacy_value_resolves_and_migrates(box, tmp_path):
+def test_empty_content_root_with_legacy_value_resolves_and_migrates(box, tmp_path: Path) -> None:
     root = tmp_path / "content"
     _registry(box, f"\"{cr.CONTENT_ROOT_KEY}\" = ''\n\"{LEGACY_KEY}\" = '{root}'\n")
     assert cr.read_content_root() == str(root)
@@ -82,7 +83,7 @@ def test_empty_content_root_with_legacy_value_resolves_and_migrates(box, tmp_pat
     assert registry_get(cr.CONTENT_ROOT_KEY) == str(root)
 
 
-def test_second_run_is_noop(box, tmp_path):
+def test_second_run_is_noop(box, tmp_path: Path) -> None:
     (box / LEGACY_POINTER).write_text(str(tmp_path / "content"), encoding="utf-8")
     assert cr.migrate_legacy_config().migrated
     snapshot = {p.name: p.read_bytes() for p in box.iterdir()}
@@ -91,7 +92,7 @@ def test_second_run_is_noop(box, tmp_path):
     assert {p.name: p.read_bytes() for p in box.iterdir()} == snapshot
 
 
-def test_migration_spawns_no_process(box, tmp_path, monkeypatch):
+def test_migration_spawns_no_process(box, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (box / LEGACY_POINTER).write_text(str(tmp_path / "content"), encoding="utf-8")
 
     def _boom(*args, **kwargs):

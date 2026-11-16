@@ -15,19 +15,20 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.ceremony import git_native
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
-def _git(repo, *args, check=True):
+def _git(repo, *args, check: bool = True):
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **_NOWIN
     )
 
 
-def _repo(tmp_path, name="r"):
+def _repo(tmp_path, name: str = "r"):
     repo = tmp_path / name
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "work/z")
@@ -55,7 +56,7 @@ def _head_tree_sha(repo):
     return _git(repo, "rev-parse", "HEAD^{tree}").stdout.strip()
 
 
-def test_refuses_depth_2_rollback(tmp_path):
+def test_refuses_depth_2_rollback(tmp_path: Path) -> None:
     """v0 -> v1 -> v2 -> a commit whose staged bytes restore v0's exact
     blob at depth 2: refused, `ok is False`, findings named, nothing
     landed."""
@@ -74,7 +75,7 @@ def test_refuses_depth_2_rollback(tmp_path):
     assert _head_sha(repo) == before
 
 
-def test_no_tree_or_commit_object_written_on_refusal(tmp_path):
+def test_no_tree_or_commit_object_written_on_refusal(tmp_path: Path) -> None:
     """No ref move, and HEAD's tree is unchanged -- the refusal fires
     before `_commit_scoped_private_index` runs."""
     repo = _repo(tmp_path)
@@ -91,7 +92,7 @@ def test_no_tree_or_commit_object_written_on_refusal(tmp_path):
     assert _head_tree_sha(repo) == before_tree
 
 
-def test_declared_reverts_lands_the_commit(tmp_path):
+def test_declared_reverts_lands_the_commit(tmp_path: Path) -> None:
     """`declared_reverts=[p]` excludes it from the candidate set -- the
     same rollback lands rather than refusing."""
     repo = _repo(tmp_path)
@@ -110,7 +111,7 @@ def test_declared_reverts_lands_the_commit(tmp_path):
     assert (repo / "p.txt").read_text(encoding="utf-8") == "v0\n"
 
 
-def test_detect_rollback_false_default_lands_unchanged(tmp_path):
+def test_detect_rollback_false_default_lands_unchanged(tmp_path: Path) -> None:
     """`detect_rollback=False` (the default) never refuses, even over the
     identical planted rollback."""
     repo = _repo(tmp_path)
@@ -121,7 +122,7 @@ def test_detect_rollback_false_default_lands_unchanged(tmp_path):
     assert result.ok is True
 
 
-def test_clean_edit_not_refused(tmp_path):
+def test_clean_edit_not_refused(tmp_path: Path) -> None:
     """An ordinary edit that never restores an older exact blob is
     unaffected by `detect_rollback=True`."""
     repo = _repo(tmp_path)
@@ -131,7 +132,7 @@ def test_clean_edit_not_refused(tmp_path):
     assert result.ok is True
 
 
-def test_breadth_3_refused(tmp_path):
+def test_breadth_3_refused(tmp_path: Path) -> None:
     """Three distinct paths each restoring an older version at any depth
     refuses on breadth alone (K-016's rule, via `rollback_check.refusal`)."""
     repo = _repo(tmp_path)
@@ -157,7 +158,7 @@ def test_breadth_3_refused(tmp_path):
     assert result.ok is False
 
 
-def test_do_scoped_pin_passes_detect_rollback(tmp_path):
+def test_do_scoped_pin_passes_detect_rollback(tmp_path: Path) -> None:
     """Pin: `do_scoped`'s `commit_scoped` call always passes
     `detect_rollback=True`."""
     import importlib.util
@@ -175,7 +176,7 @@ def test_do_scoped_pin_passes_detect_rollback(tmp_path):
     assert "detect_rollback=True" in src
 
 
-def test_do_scope_from_pin_passes_detect_rollback(tmp_path):
+def test_do_scope_from_pin_passes_detect_rollback(tmp_path: Path) -> None:
     """Pin: `do_scope_from`'s `commit_scoped` call always passes
     `detect_rollback=True`."""
     import importlib.util
@@ -193,7 +194,7 @@ def test_do_scope_from_pin_passes_detect_rollback(tmp_path):
     assert "detect_rollback=True" in src
 
 
-def test_declared_revert_flag_parses(tmp_path):
+def test_declared_revert_flag_parses(tmp_path: Path) -> None:
     """`--declared-revert <path>` is repeatable and reaches
     `args.declared_reverts`."""
     import importlib.util
@@ -223,7 +224,7 @@ def _archive_row(repo):
     return msg_path
 
 
-def test_archival_move_with_an_edit_is_not_a_rollback(tmp_path):
+def test_archival_move_with_an_edit_is_not_a_rollback(tmp_path: Path) -> None:
     """Same rule as `commit.commit_paths`: a deletion paired with a NEW
     same-named path is a rename-with-edit, never a depth-2 absence rollback."""
     repo = _repo(tmp_path)
@@ -238,7 +239,7 @@ def test_archival_move_with_an_edit_is_not_a_rollback(tmp_path):
     assert not (repo / "live/s.yaml").exists()
 
 
-def test_bare_deletion_of_a_young_row_still_refuses(tmp_path):
+def test_bare_deletion_of_a_young_row_still_refuses(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     msg_path = _archive_row(repo)
     before = _head_sha(repo)

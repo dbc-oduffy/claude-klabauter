@@ -51,7 +51,7 @@ _BG_UUID = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 _BG_ID = re.compile(r"\b(?:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[0-9a-f]{6,12})\b")
 
 
-def _worker_marker(environ):
+def _worker_marker(environ) -> str:
     """Why this env is a worker's, or '' when it is not."""
     if str(environ.get("COORDINATOR_AGENT_WORKER", "")).lower() in ("1", "true", "yes"):
         return "COORDINATOR_AGENT_WORKER is set"

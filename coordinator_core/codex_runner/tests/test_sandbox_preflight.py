@@ -9,10 +9,11 @@ import subprocess
 import pytest
 
 from coordinator_core.codex_runner import sandbox_preflight as sp
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _no_spawn(monkeypatch):
+def _no_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("preflight must not spawn")
 
@@ -28,7 +29,7 @@ def _home(tmp_path, body):
     return home
 
 
-def _prove(repo, roots):
+def _prove(repo, roots) -> None:
     rec = repo / sp.PROVEN_ROOTS_RELPATH
     rec.parent.mkdir(parents=True)
     rec.write_text(json.dumps(roots), encoding="utf-8")
@@ -38,15 +39,15 @@ UNELEVATED = '[windows]\nsandbox = "unelevated"\n'
 
 
 class _Probe:
-    def __init__(self, rc=0, hang=False, pid=4242):
+    def __init__(self, rc: int = 0, hang: bool = False, pid: int = 4242) -> None:
         self.rc, self.hang, self.pid, self.killed = rc, hang, pid, False
 
-    def wait(self, timeout=None):
+    def wait(self, timeout=None) -> int:
         if self.hang:
             raise subprocess.TimeoutExpired("codex", timeout)
         return self.rc
 
-    def kill(self):
+    def kill(self) -> None:
         self.killed = True
 
     terminate = kill
@@ -63,14 +64,14 @@ def _spawner(monkeypatch, probe):
     return calls
 
 
-def test_unproven_root_without_argv_is_allowed_with_advisory(tmp_path):
+def test_unproven_root_without_argv_is_allowed_with_advisory(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     out = sp.check_workspace_write(repo, codex_home=_home(tmp_path, UNELEVATED))
     assert out.startswith("advisory:")
 
 
-def test_probe_success_records_root_and_is_not_repeated(tmp_path, monkeypatch):
+def test_probe_success_records_root_and_is_not_repeated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     home = _home(tmp_path, UNELEVATED)
@@ -85,7 +86,7 @@ def test_probe_success_records_root_and_is_not_repeated(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
-def test_probe_outliving_cap_is_left_running_not_killed(tmp_path, monkeypatch):
+def test_probe_outliving_cap_is_left_running_not_killed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     home = _home(tmp_path, UNELEVATED)
@@ -98,7 +99,7 @@ def test_probe_outliving_cap_is_left_running_not_killed(tmp_path, monkeypatch):
     assert calls[0][1]["creationflags"] == sp._DETACHED
 
 
-def test_live_warmup_is_not_respawned(tmp_path, monkeypatch):
+def test_live_warmup_is_not_respawned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     home = _home(tmp_path, UNELEVATED)
@@ -108,7 +109,7 @@ def test_live_warmup_is_not_respawned(tmp_path, monkeypatch):
     assert "warm-up" in out and calls == []
 
 
-def test_probe_failure_never_refuses_or_records(tmp_path, monkeypatch):
+def test_probe_failure_never_refuses_or_records(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     _spawner(monkeypatch, _Probe(rc=1))
@@ -116,14 +117,14 @@ def test_probe_failure_never_refuses_or_records(tmp_path, monkeypatch):
     assert out.startswith("advisory:") and not (repo / sp.PROVEN_ROOTS_RELPATH).exists()
 
 
-def test_passes_when_root_is_proven(tmp_path):
+def test_passes_when_root_is_proven(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     _prove(repo, [str(repo)])
     assert sp.check_workspace_write(repo, codex_home=_home(tmp_path, UNELEVATED)) is None
 
 
-def test_proven_record_read_from_repo_root_for_other_workspace(tmp_path):
+def test_proven_record_read_from_repo_root_for_other_workspace(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     stage = tmp_path / "stage"
     repo.mkdir()
@@ -135,7 +136,7 @@ def test_proven_record_read_from_repo_root_for_other_workspace(tmp_path):
 
 
 @pytest.mark.parametrize("record", ["not json", '{"a": 1}', "[1, null]"])
-def test_unreadable_or_malformed_record_reads_as_empty(tmp_path, record):
+def test_unreadable_or_malformed_record_reads_as_empty(tmp_path: Path, record) -> None:
     repo = tmp_path / "repo"
     (repo / ".coordinator-local").mkdir(parents=True)
     (repo / sp.PROVEN_ROOTS_RELPATH).write_text(record, encoding="utf-8")
@@ -146,13 +147,13 @@ def test_unreadable_or_malformed_record_reads_as_empty(tmp_path, record):
     "body",
     [None, "not = [valid", '[windows]\nsandbox = "elevated"\n', "[tui]\nx = 1\n"],
 )
-def test_passes_without_unelevated_config(tmp_path, body):
+def test_passes_without_unelevated_config(tmp_path: Path, body) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     assert sp.check_workspace_write(repo, codex_home=_home(tmp_path, body)) is None
 
 
-def test_passes_off_windows(tmp_path, monkeypatch):
+def test_passes_off_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sp, "_is_windows", lambda: False)
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -166,7 +167,7 @@ def _pwsh_dir(tmp_path, *parts):
     return d
 
 
-def test_pwsh_first_under_windowsapps_is_refused(tmp_path):
+def test_pwsh_first_under_windowsapps_is_refused(tmp_path: Path) -> None:
     store = _pwsh_dir(tmp_path, "Microsoft", "WindowsApps")
     good = _pwsh_dir(tmp_path, "pf", "PowerShell", "7")
     env = {"PATH": os.pathsep.join([str(store), str(good)]), "ProgramFiles": str(tmp_path / "pf")}
@@ -175,26 +176,26 @@ def test_pwsh_first_under_windowsapps_is_refused(tmp_path):
     assert str(good) in str(exc.value)
 
 
-def test_pwsh_outside_windowsapps_passes(tmp_path):
+def test_pwsh_outside_windowsapps_passes(tmp_path: Path) -> None:
     store = _pwsh_dir(tmp_path, "Microsoft", "WindowsApps")
     good = _pwsh_dir(tmp_path, "pf", "PowerShell", "7")
     sp.check_pwsh_launchable({"Path": os.pathsep.join([str(good), str(store)])})
 
 
-def test_no_pwsh_on_path_is_refused(tmp_path):
+def test_no_pwsh_on_path_is_refused(tmp_path: Path) -> None:
     (tmp_path / "empty").mkdir()
     with pytest.raises(sp.SandboxSetupRefused, match="no pwsh.exe"):
         sp.check_pwsh_launchable({"PATH": str(tmp_path / "empty")})
 
 
-def test_alias_first_pwsh_returns_alias_path_for_alias_first_path(tmp_path):
+def test_alias_first_pwsh_returns_alias_path_for_alias_first_path(tmp_path: Path) -> None:
     store = _pwsh_dir(tmp_path, "Microsoft", "WindowsApps")
     good = _pwsh_dir(tmp_path, "pf", "PowerShell", "7")
     env = {"PATH": os.pathsep.join([str(store), str(good)])}
     assert sp.alias_first_pwsh(env) == os.path.join(str(store), "pwsh.exe")
 
 
-def test_alias_first_pwsh_none_when_real_first_or_absent(tmp_path):
+def test_alias_first_pwsh_none_when_real_first_or_absent(tmp_path: Path) -> None:
     store = _pwsh_dir(tmp_path, "Microsoft", "WindowsApps")
     good = _pwsh_dir(tmp_path, "pf", "PowerShell", "7")
     assert sp.alias_first_pwsh({"Path": os.pathsep.join([str(good), str(store)])}) is None
@@ -203,21 +204,21 @@ def test_alias_first_pwsh_none_when_real_first_or_absent(tmp_path):
 
 
 @pytest.mark.parametrize("p", ["Users\\x\\AppData\\Local\\Microsoft\\WindowsApps", "/a/windowsapps/b", "x/WINDOWSAPPS"])
-def test_is_windowsapps_path_matches_component_on_any_host(p):
+def test_is_windowsapps_path_matches_component_on_any_host(p) -> None:
     assert sp.is_windowsapps_path(p)
 
 
 @pytest.mark.parametrize("p", ["Program Files\\PowerShell\\7", "/a/windowsapps2/b", ""])
-def test_is_windowsapps_path_rejects_non_component(p):
+def test_is_windowsapps_path_rejects_non_component(p) -> None:
     assert not sp.is_windowsapps_path(p)
 
 
-def test_pwsh_check_is_noop_off_windows(tmp_path, monkeypatch):
+def test_pwsh_check_is_noop_off_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sp, "_is_windows", lambda: False)
     sp.check_pwsh_launchable({"PATH": str(_pwsh_dir(tmp_path, "WindowsApps"))})
 
 
-def test_codex_home_env_is_honoured(tmp_path, monkeypatch):
+def test_codex_home_env_is_honoured(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     monkeypatch.setenv("CODEX_HOME", str(_home(tmp_path, UNELEVATED)))

@@ -30,6 +30,7 @@ from coordinator_core.pickup_assemble import (
     compute_repo_identity_gate,
 )
 from coordinator_core.session import harness_registry as hr
+from pathlib import Path
 
 
 def _epoch_to_filetime_ticks(epoch: float) -> int:
@@ -58,7 +59,7 @@ def _make_repo(root) -> None:
     (root / ".git").mkdir(parents=True, exist_ok=True)
 
 
-def _patch_pid_env(monkeypatch, pid, create_time=0.0, hit=True):
+def _patch_pid_env(monkeypatch, pid, create_time: float = 0.0, hit: bool = True) -> None:
     if hit:
         monkeypatch.setattr(
             "coordinator_core.session.core._resolve_claude_pid_from_env",
@@ -72,7 +73,7 @@ def _patch_pid_env(monkeypatch, pid, create_time=0.0, hit=True):
 
 
 class TestVerdictMatch:
-    def test_match_when_anchor_equals_repo_root(self, tmp_path, monkeypatch):
+    def test_match_when_anchor_equals_repo_root(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo_root = tmp_path / "repo"
         _make_repo(repo_root)
         sessions_dir = tmp_path / "sessions"
@@ -90,7 +91,7 @@ class TestVerdictMatch:
         assert "sess-a" in result["message"]
         assert str(repo_root) in result["message"] or result["resolved_root"] == str(repo_root)
 
-    def test_match_for_subdirectory_launch(self, tmp_path, monkeypatch):
+    def test_match_for_subdirectory_launch(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo_root = tmp_path / "repo"
         _make_repo(repo_root)
         subdir = repo_root / "coordinator_core"
@@ -109,7 +110,7 @@ class TestVerdictMatch:
 
 
 class TestVerdictMismatch:
-    def test_mismatch_on_real_divergence(self, tmp_path, monkeypatch):
+    def test_mismatch_on_real_divergence(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo_root = tmp_path / "repo"
         foreign_root = tmp_path / "foreign"
         _make_repo(repo_root)
@@ -131,7 +132,7 @@ class TestVerdictMismatch:
 
 
 class TestVerdictUnresolved:
-    def test_unresolved_when_no_registry_record(self, tmp_path, monkeypatch):
+    def test_unresolved_when_no_registry_record(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo_root = tmp_path / "repo"
         _make_repo(repo_root)
         sessions_dir = tmp_path / "sessions"
@@ -142,7 +143,7 @@ class TestVerdictUnresolved:
         result = compute_repo_identity_gate(repo_root, "sess-none")
         assert result["verdict"] == _REPO_IDENTITY_UNRESOLVED
 
-    def test_unresolved_when_registry_populated_but_unparseable(self, tmp_path, monkeypatch):
+    def test_unresolved_when_registry_populated_but_unparseable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo_root = tmp_path / "repo"
         _make_repo(repo_root)
         sessions_dir = tmp_path / "sessions"
@@ -158,7 +159,7 @@ class TestVerdictUnresolved:
         assert result["verdict"] == _REPO_IDENTITY_UNRESOLVED
         assert "registry holds 1 file(s), 0 parsed" in result["message"]
 
-    def test_unresolved_when_registry_populated_and_parsed_but_no_match(self, tmp_path, monkeypatch):
+    def test_unresolved_when_registry_populated_and_parsed_but_no_match(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo_root = tmp_path / "repo"
         _make_repo(repo_root)
         sessions_dir = tmp_path / "sessions"
@@ -181,7 +182,7 @@ class TestVerdictUnresolved:
         assert result["verdict"] == _REPO_IDENTITY_UNRESOLVED
         assert "registry holds 2 file(s), 2 parsed" in result["message"]
 
-    def test_unresolved_on_plausibility_band_degenerate_cwd(self, tmp_path, monkeypatch):
+    def test_unresolved_on_plausibility_band_degenerate_cwd(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo_root = tmp_path / "repo"
         _make_repo(repo_root)
         sessions_dir = tmp_path / "sessions"
@@ -203,7 +204,7 @@ class TestVerdictUnresolved:
 
 
 class TestAC10StaleRecordReusedPid:
-    def test_stale_record_reused_pid_fails_trust_check_unresolved(self, tmp_path, monkeypatch):
+    def test_stale_record_reused_pid_fails_trust_check_unresolved(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A pid-keyed record whose sessionId does not match sid (stale record
         wrongfully carried by a reused pid) must never produce MATCH — the
         gate must fall through to the snapshot() leg and, finding nothing
@@ -227,7 +228,7 @@ class TestAC10StaleRecordReusedPid:
 
 
 class TestSnapshotFallbackDuplicateSessionIdCrashResume:
-    def test_snapshot_fallback_leg_used_when_self_record_sessionid_mismatches(self, tmp_path, monkeypatch):
+    def test_snapshot_fallback_leg_used_when_self_record_sessionid_mismatches(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Crash-then-resume: the pid-keyed file belongs to an unrelated
         session, but a snapshot()-reachable record under the real sid
         exists (a second file, different pid) — the gate must fall
@@ -249,7 +250,7 @@ class TestSnapshotFallbackDuplicateSessionIdCrashResume:
         result = compute_repo_identity_gate(repo_root, "sess-real")
         assert result["verdict"] == _REPO_IDENTITY_MATCH
 
-    def test_crash_resume_duplicate_sessionid_stale_pid_loses_is_unresolved(self, tmp_path, monkeypatch):
+    def test_crash_resume_duplicate_sessionid_stale_pid_loses_is_unresolved(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Known limitation, stated in-code and observed here: when TWO
         files share the same sessionId (crash-then-resume reusing a
         sessionId under a new pid) and the STALE dead-pid record wins
@@ -276,7 +277,7 @@ class TestSnapshotFallbackDuplicateSessionIdCrashResume:
 
 
 class TestNoSid:
-    def test_unresolved_when_sid_falsy(self, tmp_path):
+    def test_unresolved_when_sid_falsy(self, tmp_path: Path) -> None:
         repo_root = tmp_path / "repo"
         _make_repo(repo_root)
         result = compute_repo_identity_gate(repo_root, None)
@@ -287,7 +288,7 @@ class TestComputeRepoIdentityGateNoSubprocess:
     """Regression guard mirroring `TestComputeAddresseeGateNoSubprocess` —
     `compute_repo_identity_gate` must never spawn a subprocess."""
 
-    def test_no_subprocess_spawned(self, tmp_path, monkeypatch):
+    def test_no_subprocess_spawned(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         repo_root = tmp_path / "repo"
         _make_repo(repo_root)
         sessions_dir = tmp_path / "sessions"
@@ -323,7 +324,7 @@ class TestAC11ShapeDriftTripwire:
     quarantine — required here because the whole point is reading the
     REAL, un-quarantined `<claude-config>/sessions` directory."""
 
-    def test_live_registry_field_shape(self):
+    def test_live_registry_field_shape(self) -> None:
         directory = hr.registry_dir()
         if directory is None or not directory.is_dir():
             pytest.skip("no live <claude-config>/sessions directory resolvable on this host")
@@ -349,7 +350,7 @@ class TestAC11ShapeDriftTripwire:
         if not checked_any:
             pytest.skip("no parseable live registry record found to assert shape against")
 
-    def test_installed_harness_binary_names_the_fields(self):
+    def test_installed_harness_binary_names_the_fields(self) -> None:
         import shutil
 
         claude_bin = shutil.which("claude")

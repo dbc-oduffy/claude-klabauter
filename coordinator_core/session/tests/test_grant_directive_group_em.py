@@ -4,6 +4,7 @@ import pytest
 
 from coordinator_core.group_em import suite_grant
 from coordinator_core.session import grant_directive as gd
+from pathlib import Path
 
 
 def _result(ok, reason, record=None):
@@ -21,20 +22,20 @@ def _result(ok, reason, record=None):
         ["g", "n", "--repo"],
     ],
 )
-def test_grant_malformed_argv_is_usage(rest, monkeypatch):
+def test_grant_malformed_argv_is_usage(rest, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(suite_grant, "issue_suite_grant", lambda *a, **k: pytest.fail("called"))
     code, _ = gd.run_grant_directive(["group-em-grant", *rest])
     assert code == gd.EXIT_USAGE
 
 
 @pytest.mark.parametrize("rest", [[], ["a", "b"], [""]])
-def test_revoke_malformed_argv_is_usage(rest, monkeypatch):
+def test_revoke_malformed_argv_is_usage(rest, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(suite_grant, "revoke_suite_grant", lambda *a, **k: pytest.fail("called"))
     code, _ = gd.run_grant_directive(["group-em-revoke", *rest])
     assert code == gd.EXIT_USAGE
 
 
-def test_grant_valid_argv_forwards_flags_and_prints_summary(monkeypatch):
+def test_grant_valid_argv_forwards_flags_and_prints_summary(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
 
     def fake(grantee, note, **kw):
@@ -54,7 +55,7 @@ def test_grant_valid_argv_forwards_flags_and_prints_summary(monkeypatch):
     assert "sid-g" in msg and "2026-10-21T10:00:00Z" in msg and "sid-i" in msg
 
 
-def test_grant_default_ttl_is_not_passed(monkeypatch):
+def test_grant_default_ttl_is_not_passed(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
     monkeypatch.setattr(
         suite_grant, "issue_suite_grant", lambda g, n, **kw: seen.update(kw) or _result(True, "issued", {})
@@ -64,14 +65,14 @@ def test_grant_default_ttl_is_not_passed(monkeypatch):
 
 
 @pytest.mark.parametrize("reason", [suite_grant.NOT_GROUP_EM, suite_grant.TTL_OUT_OF_RANGE, suite_grant.GRANTEE_NOT_LIVE])
-def test_refusal_is_exit_false_with_reason(reason, monkeypatch):
+def test_refusal_is_exit_false_with_reason(reason, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(suite_grant, "issue_suite_grant", lambda *a, **k: _result(False, reason))
     code, msg = gd.run_grant_directive(["group-em-grant", "peer", "n"])
     assert code == gd.EXIT_FALSE
     assert msg.startswith(f"{reason}:")
 
 
-def test_non_holder_caller_is_refused_and_writes_nothing(tmp_path, monkeypatch):
+def test_non_holder_caller_is_refused_and_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.group_em import nomination
 
     monkeypatch.setattr(suite_grant.core, "resolve_session_id", lambda *a, **k: "peer-sid")
@@ -83,7 +84,7 @@ def test_non_holder_caller_is_refused_and_writes_nothing(tmp_path, monkeypatch):
     assert not (tmp_path / "suite-grants").exists()
 
 
-def test_holder_record_issuer_is_resolved_sid_not_argv(tmp_path, monkeypatch):
+def test_holder_record_issuer_is_resolved_sid_not_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.group_em import nomination
 
     holder = {"session_id": "holder-sid", "live": True}
@@ -105,7 +106,7 @@ def test_holder_record_issuer_is_resolved_sid_not_argv(tmp_path, monkeypatch):
     assert gd.run_grant_directive(["group-em-revoke", "grantee-sid"])[0] == gd.EXIT_OK
 
 
-def test_relay_outcome_lines(monkeypatch):
+def test_relay_outcome_lines(monkeypatch: pytest.MonkeyPatch) -> None:
     rec = {"grantee_session_id": "sid-g", "grantee_box_id": "box-b", "expires_at": "2026-10-21T10:00:00Z",
            "issuer_session_id": "sid-i"}
     monkeypatch.setattr(suite_grant, "issue_suite_grant", lambda *a, **k: _result(True, "issued", rec))

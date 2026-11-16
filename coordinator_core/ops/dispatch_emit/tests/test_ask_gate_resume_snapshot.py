@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -19,7 +20,7 @@ RUN = "ask-20261017T000000-aaaaaa"
 
 
 @pytest.fixture(autouse=True)
-def _no_bind(monkeypatch):
+def _no_bind(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_gate, "_bind_run", lambda *a, **k: None)
 
 
@@ -34,7 +35,7 @@ def _snap(repo, run_id=RUN):
     return resume_snapshot.read(repo, run_id, PLAN_REL)
 
 
-def test_resume_writes_plan_ids_minus_resume_rows(repo):  # noqa: F811
+def test_resume_writes_plan_ids_minus_resume_rows(repo) -> None:  # noqa: F811
     _put(repo, tshirt="S", route="spec-dispatch")
     _plan(repo, rows=[("A1", "coded"), ("A2", "open"), ("A3", "delivered_elsewhere"), ("A4", "open")])
     reply = _call(repo)
@@ -45,14 +46,14 @@ def test_resume_writes_plan_ids_minus_resume_rows(repo):  # noqa: F811
     )
 
 
-def test_no_run_id_writes_nothing(repo):  # noqa: F811
+def test_no_run_id_writes_nothing(repo) -> None:  # noqa: F811
     _put(repo, tshirt="S", route="spec-dispatch")
     _plan(repo, rows=[("A1", "coded"), ("A2", "open")])
     _call(repo, run_id=None)
     assert _snap(repo) is None
 
 
-def test_no_resume_removes_an_earlier_snapshot(repo):  # noqa: F811
+def test_no_resume_removes_an_earlier_snapshot(repo) -> None:  # noqa: F811
     _put(repo, tshirt="S", route="spec-dispatch")
     _plan(repo, rows=[("A1", "coded"), ("A2", "open")])
     _call(repo)
@@ -72,7 +73,7 @@ def _halt() -> LedgerHalt:
     return LedgerHalt(RUN, PLAN_REL, REL, ("A2",))
 
 
-def _stub_resume(monkeypatch, resume, ledger=None):
+def _stub_resume(monkeypatch, resume, ledger=None) -> None:
     """Hand the gate a fixed ResumePlan, as `collect_fire_refusals` would through its `resume_sink`."""
     monkeypatch.setattr(
         ask_gate, "collect_fire_refusals", lambda *a, resume_sink=None, **k: (resume_sink.append(resume), [])[1]
@@ -81,7 +82,7 @@ def _stub_resume(monkeypatch, resume, ledger=None):
         monkeypatch.setattr(ask_gate, "_resume_ledger", lambda *a, **k: ledger)
 
 
-def test_row_resume_writes_held(repo, monkeypatch):  # noqa: F811
+def test_row_resume_writes_held(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _put(repo, tshirt="S", route="spec-dispatch")
     _plan(repo, rows=[("A1", "coded"), ("A2", "open"), ("A4", "open")])
     _stub_resume(monkeypatch, ResumePlan(PLAN_REL, ("A2",), held=HELD))
@@ -90,7 +91,7 @@ def test_row_resume_writes_held(repo, monkeypatch):  # noqa: F811
     assert _snap(repo).resume_rows == frozenset({"A2"})
 
 
-def test_ledger_resume_writes_held_and_its_unlanded_rows_as_the_resume_set(repo, monkeypatch):  # noqa: F811
+def test_ledger_resume_writes_held_and_its_unlanded_rows_as_the_resume_set(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _put(repo, tshirt="S", route="spec-dispatch")
     _plan(repo, rows=[("A1", "coded"), ("A2", "open"), ("A4", "open")])
     _stub_resume(
@@ -105,7 +106,7 @@ def test_ledger_resume_writes_held_and_its_unlanded_rows_as_the_resume_set(repo,
     assert "A2" not in snap.not_to_run
 
 
-def test_empty_held_reads_empty_on_both_resumes(repo, monkeypatch):  # noqa: F811
+def test_empty_held_reads_empty_on_both_resumes(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _put(repo, tshirt="S", route="spec-dispatch")
     _plan(repo, rows=[("A1", "coded"), ("A2", "open")])
     _stub_resume(monkeypatch, ResumePlan(PLAN_REL, ("A2",)))
@@ -116,7 +117,7 @@ def test_empty_held_reads_empty_on_both_resumes(repo, monkeypatch):  # noqa: F81
     assert _snap(repo).held == ()
 
 
-def test_halted_gate_writes_no_snapshot_for_a_ledger_resume(repo, monkeypatch):  # noqa: F811
+def test_halted_gate_writes_no_snapshot_for_a_ledger_resume(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _put(repo, tshirt="S", route="spec-dispatch")
     _plan(repo, rows=[("A1", "coded"), ("A2", "open")])
     _call(repo)
@@ -126,7 +127,7 @@ def test_halted_gate_writes_no_snapshot_for_a_ledger_resume(repo, monkeypatch): 
     assert _snap(repo) is None
 
 
-def test_ledger_resume_snapshot_leaves_ledger_path_staging_unchanged(tmp_path):
+def test_ledger_resume_snapshot_leaves_ledger_path_staging_unchanged(tmp_path: Path) -> None:
     rows = "".join(
         f"- id: {i}\n  title: t{i}\n  change_kind: doc-edit\n  surface: docs/x/{i}.md\n  writes:\n    - docs/x/{i}.md\n"
         for i in ("C1", "C2")
@@ -144,7 +145,7 @@ def test_ledger_resume_snapshot_leaves_ledger_path_staging_unchanged(tmp_path):
     assert after == before
 
 
-def test_unsafe_run_id_writes_nothing(repo):  # noqa: F811
+def test_unsafe_run_id_writes_nothing(repo) -> None:  # noqa: F811
     _put(repo, tshirt="S", route="spec-dispatch")
     _plan(repo, rows=[("A1", "coded"), ("A2", "open")])
     _call(repo, run_id="../escape")

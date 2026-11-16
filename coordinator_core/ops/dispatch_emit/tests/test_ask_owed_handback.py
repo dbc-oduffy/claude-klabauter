@@ -47,6 +47,7 @@ def test_all_em_halt_names_the_discharge_call_per_owed_row():
     assert "owed by the EM" not in expr
     assert "em-discharge" in expr
     assert "_manifest.owed_plan" in expr
+    assert "_manifest.owed_memo_rows" in expr
     assert _REFIRE in expr
     assert ask_compose._no_manifest_next_action_js("state/sizings/x.yaml") in expr
 

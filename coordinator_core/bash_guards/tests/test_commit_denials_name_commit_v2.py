@@ -20,6 +20,7 @@ from coordinator_core.bash_guards import dispatch_checks as blanket
 from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
 from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.hooks import _em_post_fire as post_fire
+from pathlib import Path
 
 SESSION = "sess-c4"
 
@@ -46,7 +47,7 @@ def _blanket_deny(monkeypatch, tmp_path, cmd) -> str:
     root = tmp_path / "repo"
     root.mkdir(parents=True, exist_ok=True)
 
-    def _fake_run_git(args, cwd=None, timeout=2.0, extra_env=None):
+    def _fake_run_git(args, cwd=None, timeout: float = 2.0, extra_env=None):
         if args[:2] == ["rev-parse", "--show-toplevel"]:
             return 0, str(root) + "\n"
         if args[:3] == ["diff", "--cached", "--name-only"]:
@@ -62,25 +63,25 @@ def _blanket_deny(monkeypatch, tmp_path, cmd) -> str:
     return _reason(result)
 
 
-def test_blanket_git_c_add_names_the_route(monkeypatch, tmp_path):
+def test_blanket_git_c_add_names_the_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     text = _blanket_deny(monkeypatch, tmp_path, "git -C /some/dir add -A")
     _assert_names_route_only(text)
 
 
-def test_blanket_commit_side_names_the_route(monkeypatch, tmp_path):
+def test_blanket_commit_side_names_the_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     text = _blanket_deny(monkeypatch, tmp_path, "git commit -m x -- .")
     _assert_names_route_only(text)
 
 
 @pytest.mark.parametrize("paths", [(), ("state/records/a.yaml",), ("CLAUDE.md",)])
-def test_post_fire_deny_names_the_route(paths):
+def test_post_fire_deny_names_the_route(paths) -> None:
     envelope = post_fire.deny_envelope(paths)
     assert envelope is not None
     _assert_names_route_only(_reason(envelope))
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     temp = tmp_path / "tmp"
     pad = temp / "claude" / "proj" / SESSION / "scratchpad"
     pad.mkdir(parents=True)
@@ -108,7 +109,7 @@ def _destructive(command, cwd):
 
 
 @pytest.mark.parametrize("sub", ["add --pathspec-from-file=list.txt", "add -- a.py"])
-def test_subagent_git_c_into_the_real_repo_names_the_route(world, sub):
+def test_subagent_git_c_into_the_real_repo_names_the_route(world, sub) -> None:
     pad, repo = world
     result = _destructive(f"git -C {repo} {sub}", pad)
     assert result is not None
@@ -116,13 +117,13 @@ def test_subagent_git_c_into_the_real_repo_names_the_route(world, sub):
     _assert_names_route_only(_reason(result))
 
 
-def test_git_commit_agent_may_commit_its_supplied_pathspec_through_git_c(world):
+def test_git_commit_agent_may_commit_its_supplied_pathspec_through_git_c(world) -> None:
     # b564bcaa2c: the committer's own `commit -m x -- <pathspec>` is admitted, not denied.
     pad, repo = world
     assert _destructive(f"git -C {repo} commit -m x -- a.py", pad) is None
 
 
-def test_subagent_commit_leg_messages_offer_one_route():
+def test_subagent_commit_leg_messages_offer_one_route() -> None:
     texts = list(commit_guard._GIT_COMMIT_AGENT_LEG_MESSAGES.values())
     texts.append(commit_guard._GIT_COMMIT_AGENT_DENY_REASON)
     for text in texts:
@@ -133,18 +134,18 @@ def test_subagent_commit_leg_messages_offer_one_route():
         assert COMMIT_ROUTE.split(" (")[0] in commit_guard._GIT_COMMIT_AGENT_LEG_MESSAGES[leg]
 
 
-def test_blanket_add_offers_only_the_commit_route(monkeypatch, tmp_path):
+def test_blanket_add_offers_only_the_commit_route(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     text = _blanket_deny(monkeypatch, tmp_path, "git add -A")
     _assert_names_route_only(text)
     assert "git add -- path/to/file" not in text
 
 
-def test_git_probe_scope_clause_names_the_route():
+def test_git_probe_scope_clause_names_the_route() -> None:
     assert COMMIT_ROUTE in _dc_git_probe._SAFE_COMMIT_ROUTE_CLAUSE
     assert "coordinator-safe-commit" not in _dc_git_probe._SAFE_COMMIT_ROUTE_CLAUSE
 
 
-def test_commit_guard_scope_denial_offers_the_route():
+def test_commit_guard_scope_denial_offers_the_route() -> None:
     from coordinator_core.bash_guards import _dc_commit
 
     record = _dc_commit._scope_denial("BLOCKED (strict scope): x", foreign_hunk=False)
@@ -153,7 +154,7 @@ def test_commit_guard_scope_denial_offers_the_route():
     assert "coordinator-safe-commit" not in text
 
 
-def test_approval_sentinel_denial_names_the_route_only():
+def test_approval_sentinel_denial_names_the_route_only() -> None:
     from coordinator_core.bash_guards import block_approval_sentinel_creation as sentinel
     from coordinator_core.bash_guards.tests.test_block_approval_sentinel_creation import (
         SENTINEL,

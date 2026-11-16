@@ -3,6 +3,7 @@
 import pytest
 
 from coordinator_core.ue_project_detection import declared_ue, is_skipped_path
+from pathlib import Path
 
 
 @pytest.mark.parametrize(
@@ -14,14 +15,14 @@ from coordinator_core.ue_project_detection import declared_ue, is_skipped_path
         "tests\\fixtures\\Foo.uproject",
     ],
 )
-def test_skipped(p):
+def test_skipped(p) -> None:
     assert is_skipped_path(p) is True
 
 
 @pytest.mark.parametrize(
     "p", ["Game/Game.uproject", "Foo.uproject", "contests/Foo.uproject", "Game/tests"]
 )
-def test_not_skipped(p):
+def test_not_skipped(p) -> None:
     assert is_skipped_path(p) is False
 
 
@@ -30,7 +31,7 @@ def _decl(tmp_path, body):
     return declared_ue(tmp_path)
 
 
-def test_missing_file_is_none(tmp_path):
+def test_missing_file_is_none(tmp_path: Path) -> None:
     assert declared_ue(tmp_path) is None
 
 
@@ -43,35 +44,35 @@ def test_missing_file_is_none(tmp_path):
         "---\nproject_type:\n---\n",
     ],
 )
-def test_none_cases(tmp_path, body):
+def test_none_cases(tmp_path: Path, body) -> None:
     assert _decl(tmp_path, body) is None
 
 
-def test_unreal_type(tmp_path):
+def test_unreal_type(tmp_path: Path) -> None:
     assert _decl(tmp_path, "---\nproject_type: unreal\n---\n") is True
 
 
-def test_quoted_unreal_type(tmp_path):
+def test_quoted_unreal_type(tmp_path: Path) -> None:
     assert _decl(tmp_path, '---\nproject_type: "unreal"  # c\n---\n') is True
 
 
-def test_block_subtypes(tmp_path):
+def test_block_subtypes(tmp_path: Path) -> None:
     body = "---\nproject_type: game-dev\nproject_subtypes:\n  - unreal\n---\n"
     assert _decl(tmp_path, body) is True
 
 
-def test_flow_subtypes(tmp_path):
+def test_flow_subtypes(tmp_path: Path) -> None:
     assert _decl(tmp_path, "---\nproject_subtypes: [unreal]\n---\n") is True
     assert _decl(tmp_path, "---\nproject_subtypes: [a, 'unreal']\n---\n") is True
 
 
-def test_unreal_engine_type_and_subtype(tmp_path):
+def test_unreal_engine_type_and_subtype(tmp_path: Path) -> None:
     assert _decl(tmp_path, "---\nproject_type: unreal-engine\n---\n") is True
     assert _decl(tmp_path, "---\nproject_subtypes: [unreal-engine]\n---\n") is True
     assert _decl(tmp_path, "---\nproject_type: unreal-engine-tools\n---\n") is False
 
 
-def test_is_ue_repo_declared_or_marker(tmp_path):
+def test_is_ue_repo_declared_or_marker(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import ue_route_source
 
     ue_route_source.clear_caches()
@@ -96,11 +97,11 @@ def test_is_ue_repo_declared_or_marker(tmp_path):
         ue_route_source.clear_caches()
 
 
-def test_general_is_false(tmp_path):
+def test_general_is_false(tmp_path: Path) -> None:
     body = "---\nproject_type: general\nproject_subtypes: []\n---\n"
     assert _decl(tmp_path, body) is False
 
 
-def test_block_subtypes_without_unreal_is_false(tmp_path):
+def test_block_subtypes_without_unreal_is_false(tmp_path: Path) -> None:
     body = "---\nproject_subtypes:\n  - web\n---\n"
     assert _decl(tmp_path, body) is False

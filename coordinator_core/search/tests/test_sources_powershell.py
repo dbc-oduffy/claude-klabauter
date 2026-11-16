@@ -5,6 +5,7 @@ import os
 import sys
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -13,44 +14,44 @@ from coordinator_core.search.engine import MAX_RENDER_BYTES, Unanswerable
 
 
 @pytest.fixture()
-def workdir(tmp_path):
+def workdir(tmp_path: Path) -> str:
     (tmp_path / "a.txt").write_text("one\ntwo\nthree\n", newline="")
     (tmp_path / "b.txt").write_text("four\nfive", newline="")
     (tmp_path / "empty.txt").write_text("", newline="")
     return str(tmp_path)
 
 
-def _produce(tokens, cwd, newline="\r\n"):
+def _produce(tokens, cwd, newline: str = "\r\n") -> str:
     return sp.parse_content_segment(tokens).produce(cwd, newline=newline)
 
 
-def test_get_content_single_file(workdir):
+def test_get_content_single_file(workdir) -> None:
     assert _produce(["Get-Content", "a.txt"], workdir) == "one\r\ntwo\r\nthree\r\n"
 
 
 @pytest.mark.parametrize("alias", ["cat", "gc", "type", "Get-Content", "get-content"])
-def test_get_content_aliases_recognized(workdir, alias):
+def test_get_content_aliases_recognized(workdir, alias) -> None:
     assert _produce([alias, "a.txt"], workdir) == "one\r\ntwo\r\nthree\r\n"
 
 
-def test_get_content_line_object_stream_always_ends_with_newline(workdir):
+def test_get_content_line_object_stream_always_ends_with_newline(workdir) -> None:
     assert _produce(["Get-Content", "b.txt"], workdir) == "four\r\nfive\r\n"
 
 
-def test_get_content_empty_file_is_empty(workdir):
+def test_get_content_empty_file_is_empty(workdir) -> None:
     assert _produce(["Get-Content", "empty.txt"], workdir) == ""
 
 
-def test_get_content_custom_newline_parameter(workdir):
+def test_get_content_custom_newline_parameter(workdir) -> None:
     assert _produce(["Get-Content", "a.txt"], workdir, newline="\n") == "one\ntwo\nthree\n"
 
 
-def test_get_content_absolute_operand_passthrough(workdir):
+def test_get_content_absolute_operand_passthrough(workdir) -> None:
     abs_path = os.path.join(workdir, "a.txt")
     assert _produce(["Get-Content", abs_path], workdir) == "one\r\ntwo\r\nthree\r\n"
 
 
-def test_get_content_relative_operand_joins_cwd(workdir):
+def test_get_content_relative_operand_joins_cwd(workdir) -> None:
     sub = os.path.join(workdir, "sub")
     os.mkdir(sub)
     with open(os.path.join(sub, "c.txt"), "w", newline="", encoding="utf-8") as fh:
@@ -58,69 +59,69 @@ def test_get_content_relative_operand_joins_cwd(workdir):
     assert _produce(["Get-Content", "c.txt"], sub) == "x\r\n"
 
 
-def test_get_content_totalcount(workdir):
+def test_get_content_totalcount(workdir) -> None:
     with open(os.path.join(workdir, "many.txt"), "w", newline="", encoding="utf-8") as fh:
         fh.write("\n".join(str(i) for i in range(1, 21)) + "\n")
     out = _produce(["Get-Content", "-TotalCount", "3", "many.txt"], workdir)
     assert out == "1\r\n2\r\n3\r\n"
 
 
-def test_get_content_first_alias(workdir):
+def test_get_content_first_alias(workdir) -> None:
     out = _produce(["Get-Content", "-First", "2", "a.txt"], workdir)
     assert out == "one\r\ntwo\r\n"
 
 
-def test_get_content_tail(workdir):
+def test_get_content_tail(workdir) -> None:
     out = _produce(["Get-Content", "-Tail", "1", "a.txt"], workdir)
     assert out == "three\r\n"
 
 
-def test_get_content_last_alias(workdir):
+def test_get_content_last_alias(workdir) -> None:
     out = _produce(["Get-Content", "-Last", "2", "a.txt"], workdir)
     assert out == "two\r\nthree\r\n"
 
 
-def test_get_content_tail_zero_is_empty(workdir):
+def test_get_content_tail_zero_is_empty(workdir) -> None:
     assert _produce(["Get-Content", "-Tail", "0", "a.txt"], workdir) == ""
 
 
-def test_get_content_totalcount_missing_value_declines():
+def test_get_content_totalcount_missing_value_declines() -> None:
     with pytest.raises(Unanswerable):
         sp.parse_content_segment(["Get-Content", "-TotalCount"])
 
 
-def test_get_content_totalcount_non_numeric_declines():
+def test_get_content_totalcount_non_numeric_declines() -> None:
     with pytest.raises(Unanswerable):
         sp.parse_content_segment(["Get-Content", "-TotalCount", "x", "a.txt"])
 
 
-def test_get_content_duplicate_totalcount_declines():
+def test_get_content_duplicate_totalcount_declines() -> None:
     with pytest.raises(Unanswerable):
         sp.parse_content_segment(["Get-Content", "-TotalCount", "1", "-First", "2", "a.txt"])
 
 
 @pytest.mark.parametrize("flag", ["-Raw", "-Encoding", "-Stream", "-Force", "-Wait"])
-def test_get_content_declines_bytes_changing_flags(flag):
+def test_get_content_declines_bytes_changing_flags(flag) -> None:
     with pytest.raises(Unanswerable):
         sp.parse_content_segment(["Get-Content", flag, "a.txt"])
 
 
-def test_get_content_declines_absent_operand():
+def test_get_content_declines_absent_operand() -> None:
     with pytest.raises(Unanswerable):
         sp.parse_content_segment(["Get-Content"])
 
 
-def test_get_content_declines_multiple_operands():
+def test_get_content_declines_multiple_operands() -> None:
     with pytest.raises(Unanswerable):
         sp.parse_content_segment(["Get-Content", "a.txt", "b.txt"])
 
 
-def test_get_content_declines_unsupported_verb():
+def test_get_content_declines_unsupported_verb() -> None:
     with pytest.raises(Unanswerable):
         sp.parse_content_segment(["Get-Item", "a.txt"])
 
 
-def test_get_content_declines_empty_segment():
+def test_get_content_declines_empty_segment() -> None:
     with pytest.raises(Unanswerable):
         sp.parse_content_segment([])
 
@@ -135,7 +136,7 @@ def test_get_content_declines_empty_segment():
     ["Get-Content", "$env:TEMP"],
     ["Get-Content", "&"],
 ])
-def test_get_content_declines_redirection_and_substitution(tokens):
+def test_get_content_declines_redirection_and_substitution(tokens) -> None:
     with pytest.raises(Unanswerable):
         sp.parse_content_segment(tokens)
 
@@ -150,29 +151,29 @@ def test_get_content_declines_redirection_and_substitution(tokens):
     "Variable:\\Home",
     "Alias:\\gci",
 ])
-def test_get_content_declines_non_filesystem_providers(operand):
+def test_get_content_declines_non_filesystem_providers(operand) -> None:
     with pytest.raises(Unanswerable):
         sp.parse_content_segment(["Get-Content", operand])
 
 
-def test_get_content_declines_glob_operand(workdir):
+def test_get_content_declines_glob_operand(workdir) -> None:
     with pytest.raises(Unanswerable):
         _produce(["Get-Content", "*.txt"], workdir)
 
 
-def test_get_content_declines_nonexistent_path(workdir):
+def test_get_content_declines_nonexistent_path(workdir) -> None:
     with pytest.raises(Unanswerable):
         _produce(["Get-Content", "does-not-exist.txt"], workdir)
 
 
-def test_get_content_declines_directory(workdir):
+def test_get_content_declines_directory(workdir) -> None:
     sub = os.path.join(workdir, "sub")
     os.mkdir(sub)
     with pytest.raises(Unanswerable):
         _produce(["Get-Content", "sub"], workdir)
 
 
-def test_get_content_declines_nul_byte(workdir):
+def test_get_content_declines_nul_byte(workdir) -> None:
     path = os.path.join(workdir, "mostly-text.dat")
     with open(path, "wb") as fh:
         fh.write(b"line\n" * 4000)
@@ -181,7 +182,7 @@ def test_get_content_declines_nul_byte(workdir):
         _produce(["Get-Content", "mostly-text.dat"], workdir)
 
 
-def test_get_content_declines_non_utf8_bytes(workdir):
+def test_get_content_declines_non_utf8_bytes(workdir) -> None:
     path = os.path.join(workdir, "latin1.txt")
     with open(path, "wb") as fh:
         fh.write("café".encode("latin-1"))
@@ -189,7 +190,7 @@ def test_get_content_declines_non_utf8_bytes(workdir):
         _produce(["Get-Content", "latin1.txt"], workdir)
 
 
-def test_get_content_declines_oversized_file_without_reading(workdir):
+def test_get_content_declines_oversized_file_without_reading(workdir) -> None:
     path = os.path.join(workdir, "big.txt")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("x" * (MAX_RENDER_BYTES + 1))
@@ -197,46 +198,46 @@ def test_get_content_declines_oversized_file_without_reading(workdir):
         _produce(["Get-Content", "big.txt"], workdir)
 
 
-def test_get_content_at_cap_file_is_still_served(workdir):
+def test_get_content_at_cap_file_is_still_served(workdir) -> None:
     path = os.path.join(workdir, "exact.txt")
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("x" * MAX_RENDER_BYTES)
     assert _produce(["Get-Content", "exact.txt"], workdir) == "x" * MAX_RENDER_BYTES + "\r\n"
 
 
-def test_parse_bare_get_childitem():
+def test_parse_bare_get_childitem() -> None:
     spec = sp.parse_childitem_segment(["Get-ChildItem"])
     assert spec == sp.ChildItemSpec(directory=".")
 
 
 @pytest.mark.parametrize("alias", ["gci", "ls", "dir", "Get-ChildItem", "get-childitem"])
-def test_parse_get_childitem_aliases(alias):
+def test_parse_get_childitem_aliases(alias) -> None:
     spec = sp.parse_childitem_segment([alias, "subdir"])
     assert spec == sp.ChildItemSpec(directory="subdir")
 
 
 @pytest.mark.parametrize("flag", ["-Force", "-Recurse", "-Filter", "-Include", "-Hidden"])
-def test_get_childitem_declines_any_flag(flag):
+def test_get_childitem_declines_any_flag(flag) -> None:
     with pytest.raises(Unanswerable):
         sp.parse_childitem_segment(["Get-ChildItem", flag])
 
 
-def test_get_childitem_declines_multiple_operands():
+def test_get_childitem_declines_multiple_operands() -> None:
     with pytest.raises(Unanswerable):
         sp.parse_childitem_segment(["Get-ChildItem", "dir1", "dir2"])
 
 
-def test_get_childitem_declines_glob_operand():
+def test_get_childitem_declines_glob_operand() -> None:
     with pytest.raises(Unanswerable):
         sp.parse_childitem_segment(["Get-ChildItem", "*.py"])
 
 
-def test_get_childitem_declines_not_a_listing_verb():
+def test_get_childitem_declines_not_a_listing_verb() -> None:
     with pytest.raises(Unanswerable):
         sp.parse_childitem_segment(["Get-Content", "a.txt"])
 
 
-def test_get_childitem_declines_empty_segment():
+def test_get_childitem_declines_empty_segment() -> None:
     with pytest.raises(Unanswerable):
         sp.parse_childitem_segment([])
 
@@ -251,18 +252,18 @@ def test_get_childitem_declines_empty_segment():
     ["Get-ChildItem", "$env:TEMP"],
     ["Get-ChildItem", "&"],
 ])
-def test_get_childitem_declines_redirection_and_substitution(tokens):
+def test_get_childitem_declines_redirection_and_substitution(tokens) -> None:
     with pytest.raises(Unanswerable):
         sp.parse_childitem_segment(tokens)
 
 
-def test_get_childitem_declines_non_filesystem_provider():
+def test_get_childitem_declines_non_filesystem_provider() -> None:
     with pytest.raises(Unanswerable):
         sp.parse_childitem_segment(["Get-ChildItem", "Env:"])
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="enumeration-order equivalence is win32-only")
-def test_run_childitem_lists_visible_entries(tmp_path):
+def test_run_childitem_lists_visible_entries(tmp_path: Path) -> None:
     (tmp_path / "visible.txt").write_text("x", encoding="utf-8")
     spec = sp.ChildItemSpec(directory=".")
     result = sp.run_childitem(spec, cwd=str(tmp_path))
@@ -270,7 +271,7 @@ def test_run_childitem_lists_visible_entries(tmp_path):
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="enumeration-order equivalence is win32-only")
-def test_run_childitem_excludes_hidden_attribute(tmp_path):
+def test_run_childitem_excludes_hidden_attribute(tmp_path: Path) -> None:
     import ctypes
 
     hidden_path = tmp_path / "hidden.txt"
@@ -285,36 +286,36 @@ def test_run_childitem_excludes_hidden_attribute(tmp_path):
     assert "hidden.txt" not in result
 
 
-def test_run_childitem_declines_nonexistent_directory(tmp_path):
+def test_run_childitem_declines_nonexistent_directory(tmp_path: Path) -> None:
     spec = sp.ChildItemSpec(directory="does-not-exist")
     with pytest.raises(Unanswerable):
         sp.run_childitem(spec, cwd=str(tmp_path))
 
 
-def test_run_childitem_declines_file_operand(tmp_path):
+def test_run_childitem_declines_file_operand(tmp_path: Path) -> None:
     (tmp_path / "plain.txt").write_text("hi", encoding="utf-8")
     spec = sp.ChildItemSpec(directory="plain.txt")
     with pytest.raises(Unanswerable):
         sp.run_childitem(spec, cwd=str(tmp_path))
 
 
-def test_run_childitem_declines_off_windows(tmp_path, monkeypatch):
+def test_run_childitem_declines_off_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sp.sys, "platform", "linux")
     spec = sp.ChildItemSpec(directory=".")
     with pytest.raises(Unanswerable):
         sp.run_childitem(spec, cwd=str(tmp_path))
 
 
-def test_parse_powershell_segment_dispatches_content():
+def test_parse_powershell_segment_dispatches_content() -> None:
     spec = sp.parse_powershell_segment(["Get-Content", "a.txt"])
     assert isinstance(spec, sp.ContentSpec)
 
 
-def test_parse_powershell_segment_dispatches_childitem():
+def test_parse_powershell_segment_dispatches_childitem() -> None:
     spec = sp.parse_powershell_segment(["ls"])
     assert isinstance(spec, sp.ChildItemSpec)
 
 
-def test_parse_powershell_segment_declines_unrecognized_verb():
+def test_parse_powershell_segment_declines_unrecognized_verb() -> None:
     with pytest.raises(Unanswerable):
         sp.parse_powershell_segment(["Remove-Item", "a.txt"])

@@ -7,6 +7,7 @@ import pytest
 
 from coordinator_core.ops.resolve_swept_baton import _resolve_swept_baton_in_archive
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+from pathlib import Path
 
 # Declared, not excused: this file spawns real git because the AC7 archiving-commit
 # resolution the module implements genuinely runs `git log` against a real repo --
@@ -38,7 +39,7 @@ def _init_repo(path):
     return path
 
 
-def _commit_all(path, message):
+def _commit_all(path, message) -> None:
     subprocess.run(
         ["git", "add", "-A"], cwd=str(path), check=True, **no_console_passthrough_kwargs()
     )
@@ -51,7 +52,7 @@ def _commit_all(path, message):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path):
     return _init_repo(tmp_path / "repo")
 
 
@@ -59,7 +60,7 @@ def _call(params, repo_root=None):
     return asyncio.run(_resolve_swept_baton_in_archive(params, repo_root=repo_root))
 
 
-def test_flat_cross_repo_archive_hit(repo):
+def test_flat_cross_repo_archive_hit(repo) -> None:
     archive_dir = repo / "cross-repo" / "archive"
     archive_dir.mkdir(parents=True)
     baton = archive_dir / "2026-07-01_memo.md"
@@ -75,7 +76,7 @@ def test_flat_cross_repo_archive_hit(repo):
     assert len(result["archiving_commit"]) == 40
 
 
-def test_month_nested_archive_handoffs_hit(repo):
+def test_month_nested_archive_handoffs_hit(repo) -> None:
     nested_dir = repo / "archive" / "handoffs" / "2026-07"
     nested_dir.mkdir(parents=True)
     baton = nested_dir / "2026-07-15_120000_swept.md"
@@ -89,7 +90,7 @@ def test_month_nested_archive_handoffs_hit(repo):
     assert result["frontmatter"]["title"] == "swept baton"
 
 
-def test_mixed_flat_and_nested_completed_dir(repo):
+def test_mixed_flat_and_nested_completed_dir(repo) -> None:
     completed_dir = repo / "archive" / "completed"
     (completed_dir / "2026-06").mkdir(parents=True)
     flat = completed_dir / "flat.md"
@@ -107,7 +108,7 @@ def test_mixed_flat_and_nested_completed_dir(repo):
     assert nested_result["archive_path"] == str(nested)
 
 
-def test_search_order_prefers_cross_repo_archive_first(repo):
+def test_search_order_prefers_cross_repo_archive_first(repo) -> None:
     cra = repo / "cross-repo" / "archive"
     cra.mkdir(parents=True)
     ah = repo / "archive" / "handoffs"
@@ -122,7 +123,7 @@ def test_search_order_prefers_cross_repo_archive_first(repo):
     assert result["frontmatter"]["src"] == "cross-repo"
 
 
-def test_bare_slug_resolves_to_md(repo):
+def test_bare_slug_resolves_to_md(repo) -> None:
     archive_dir = repo / "archive" / "handoffs"
     archive_dir.mkdir(parents=True)
     baton = archive_dir / "2026-07-25-triage-red-tests.md"
@@ -135,7 +136,7 @@ def test_bare_slug_resolves_to_md(repo):
     assert result["archive_path"] == str(baton)
 
 
-def test_bare_slug_not_found_stays_not_found(repo):
+def test_bare_slug_not_found_stays_not_found(repo) -> None:
     result = _call({"basename": "totally-absent-slug"}, repo_root=repo / ".git")
 
     assert result == {
@@ -146,7 +147,7 @@ def test_bare_slug_not_found_stays_not_found(repo):
     }
 
 
-def test_bare_slug_same_dir_collision_prefers_extensionless(repo):
+def test_bare_slug_same_dir_collision_prefers_extensionless(repo) -> None:
     archive_dir = repo / "archive" / "completed"
     archive_dir.mkdir(parents=True)
     extensionless = archive_dir / "dup-slug"
@@ -162,7 +163,7 @@ def test_bare_slug_same_dir_collision_prefers_extensionless(repo):
     assert result["frontmatter"]["src"] == "extensionless"
 
 
-def test_not_found_anywhere(repo):
+def test_not_found_anywhere(repo) -> None:
     result = _call({"basename": "no-such-file.md"}, repo_root=repo / ".git")
 
     assert result == {
@@ -173,20 +174,20 @@ def test_not_found_anywhere(repo):
     }
 
 
-def test_missing_basename_param_structured_not_found():
+def test_missing_basename_param_structured_not_found() -> None:
     for bad in ({}, {"basename": ""}, {"basename": 42}):
         result = _call(bad)
         assert result["found"] is False
         assert result["archive_path"] is None
 
 
-def test_absent_repo_root_returns_not_found():
+def test_absent_repo_root_returns_not_found() -> None:
     result = _call({"basename": "anything.md"}, repo_root=None)
 
     assert result["found"] is False
 
 
-def test_malformed_frontmatter_degrades_to_empty_dict(repo):
+def test_malformed_frontmatter_degrades_to_empty_dict(repo) -> None:
     archive_dir = repo / "archive" / "completed"
     archive_dir.mkdir(parents=True)
     baton = archive_dir / "broken.md"
@@ -199,7 +200,7 @@ def test_malformed_frontmatter_degrades_to_empty_dict(repo):
     assert result["frontmatter"] == {}
 
 
-def test_double_invocation_identical_result(repo):
+def test_double_invocation_identical_result(repo) -> None:
     archive_dir = repo / "cross-repo" / "archive"
     archive_dir.mkdir(parents=True)
     baton = archive_dir / "idempotent.md"
@@ -214,7 +215,7 @@ def test_double_invocation_identical_result(repo):
     assert first == second
 
 
-def test_archiving_commit_git_call_carries_hardening_kwargs(repo, monkeypatch):
+def test_archiving_commit_git_call_carries_hardening_kwargs(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     archive_dir = repo / "cross-repo" / "archive"
     archive_dir.mkdir(parents=True)
     baton = archive_dir / "hardening.md"
@@ -238,7 +239,7 @@ def test_archiving_commit_git_call_carries_hardening_kwargs(repo, monkeypatch):
     assert "creationflags" in captured["kwargs"]
 
 
-def test_archiving_commit_degrades_on_timeout(repo, monkeypatch):
+def test_archiving_commit_degrades_on_timeout(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     archive_dir = repo / "cross-repo" / "archive"
     archive_dir.mkdir(parents=True)
     baton = archive_dir / "timeout.md"
@@ -256,7 +257,7 @@ def test_archiving_commit_degrades_on_timeout(repo, monkeypatch):
     assert result["archiving_commit"] is None
 
 
-def test_registered_under_op_key():
+def test_registered_under_op_key() -> None:
     from coordinator_core.ipc import get_op_handler
 
     assert get_op_handler("baton.resolve_swept_in_archive") is _resolve_swept_baton_in_archive

@@ -192,6 +192,20 @@ def _reader_body(raw: bytes) -> bytes:
     return body
 
 
+def _reader_body_for(rel: str, raw: bytes) -> bytes | None:
+    """``_reader_body(raw)``, or None for a run manifest over ``READER_MAX_BYTES``.
+
+    Trap: a run manifest over the cap has no stage reader; its consumer is the staged twin (``_ensure_twin``,
+    packed or slimmed under the same cap), and ``read_text``/``read_reply`` read the on-disk manifest by handle.
+    Any other sidecar keeps the refusal."""
+    try:
+        return _reader_body(raw)
+    except ReplySidecarError:
+        if _twin.manifest_run_id(rel) is None:
+            raise
+        return None
+
+
 def _ensure_reader(root: Path, raw: bytes, body: bytes) -> None:
     """Leave the content-addressed reader ``body`` for ``raw`` under ``root``; no write when it is already identical."""
     target = _contain(root, reader_rel(hashlib.sha256(raw).hexdigest()))
@@ -219,12 +233,13 @@ def write_reply(root: Path, path: Path, payload: Mapping) -> dict:
     """Write ``canonical_json(payload)`` at ``path`` atomically; return its handle.
 
     Trap: ``canonical_json`` is the one form the handle covers and a re-indented copy is refused.
-    Refuses before writing anything when the reader script would exceed ``READER_MAX_BYTES``.
+    Refuses before writing anything when the reader script would exceed ``READER_MAX_BYTES``, except for a run
+    manifest (``_reader_body_for``), which is written without a reader.
     """
     rel = _relative_to_root(root, path)
     target = _contain(root, rel)
     raw = canonical_json(payload).encode("ascii")
-    body = _reader_body(raw)
+    body = _reader_body_for(rel, raw)
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_name(f"{target.name}.{os.getpid()}.tmp")
     try:
@@ -232,7 +247,8 @@ def write_reply(root: Path, path: Path, payload: Mapping) -> dict:
         os.replace(tmp, target)
     finally:
         tmp.unlink(missing_ok=True)
-    _ensure_reader(root, raw, body)
+    if body is not None:
+        _ensure_reader(root, raw, body)
     _ensure_twin(root, rel, raw)
     return _handle(rel, raw)
 
@@ -249,8 +265,10 @@ def handle_and_twin(root: Path, path: Path) -> tuple[dict, str | None]:
         raise _refuse(f"sidecar {rel!r} is unreadable: {exc}") from exc
     twin = None
     try:
-        _ensure_reader(root, raw, _reader_body(raw))
-        twin = _ensure_twin(root, rel, raw)
+        body = _reader_body_for(rel, raw)
+        if body is not None:
+            _ensure_reader(root, raw, body)
+        twin =_ensure_twin(root, rel, raw)
     except UnicodeDecodeError:
         pass
     return _handle(rel, raw), twin

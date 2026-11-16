@@ -13,6 +13,7 @@ from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.roadmap import blitz_land as bl
 from coordinator_core.roadmap.tests._multi_plan_wave_fixture import build_wave, install_fixture_gate
+from pathlib import Path
 
 pytestmark = pytest.mark.cadence
 
@@ -20,7 +21,7 @@ BAR_MS = 500.0
 N = 7
 
 
-def test_seven_plan_fire_is_under_the_bar_and_spawn_free(tmp_path, monkeypatch):
+def test_seven_plan_fire_is_under_the_bar_and_spawn_free(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     install_fixture_gate(monkeypatch)
     root, wave = build_wave(tmp_path, n=N)
 

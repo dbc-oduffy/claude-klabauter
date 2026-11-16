@@ -9,6 +9,11 @@ import psutil
 import pytest
 
 from coordinator_core.benchmarks import clone_orphan_sweep as cos
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import Popen
 
 _SLEEP = "import time; time.sleep(120)"
 _NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -16,7 +21,7 @@ _NOWIN = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _spawn(cwd):
+def _spawn(cwd) -> Popen[bytes]:
     return subprocess.Popen([sys.executable, "-c", _SLEEP], cwd=str(cwd), creationflags=_NOWIN)
 
 
@@ -30,17 +35,17 @@ def procs():
         p.wait(timeout=10)
 
 
-def _clone(tmp_path, name="c1"):
+def _clone(tmp_path, name: str = "c1"):
     d = tmp_path / "scratch" / "benchmark-clones" / name / "clone"
     d.mkdir(parents=True)
     return d
 
 
-def _alive(p):
+def _alive(p) -> bool:
     return p.poll() is None
 
 
-def test_dead_parent_orphan_is_terminated(tmp_path, procs):
+def test_dead_parent_orphan_is_terminated(tmp_path: Path, procs) -> None:
     child = _spawn(_clone(tmp_path))
     procs.append(child)
     reaped = cos.sweep(str(tmp_path), parent_dead=lambda proc: proc.pid == child.pid)
@@ -49,7 +54,7 @@ def test_dead_parent_orphan_is_terminated(tmp_path, procs):
     assert not _alive(child)
 
 
-def test_clone_dir_removed_is_orphan(tmp_path, procs):
+def test_clone_dir_removed_is_orphan(tmp_path: Path, procs) -> None:
     clone = _clone(tmp_path)
     child = _spawn(clone)
     procs.append(child)
@@ -66,14 +71,14 @@ def test_clone_dir_removed_is_orphan(tmp_path, procs):
     assert _alive(child)
 
 
-def test_live_parent_live_tree_left_alone(tmp_path, procs):
+def test_live_parent_live_tree_left_alone(tmp_path: Path, procs) -> None:
     child = _spawn(_clone(tmp_path))
     procs.append(child)
     assert cos.sweep(str(tmp_path), parent_dead=lambda proc: False) == []
     assert _alive(child)
 
 
-def test_process_outside_clones_never_considered(tmp_path, procs):
+def test_process_outside_clones_never_considered(tmp_path: Path, procs) -> None:
     outside = tmp_path / "scratch" / "other"
     outside.mkdir(parents=True)
     child = _spawn(outside)
@@ -82,7 +87,7 @@ def test_process_outside_clones_never_considered(tmp_path, procs):
     assert _alive(child)
 
 
-def test_live_parent_in_clone_with_orphan_left_alone(tmp_path, procs):
+def test_live_parent_in_clone_with_orphan_left_alone(tmp_path: Path, procs) -> None:
     clone = _clone(tmp_path)
     live = _spawn(clone)
     orphan = _spawn(clone)
@@ -100,7 +105,7 @@ def test_live_parent_in_clone_with_orphan_left_alone(tmp_path, procs):
     assert called == []
 
 
-def test_real_parent_predicate_keeps_live_parent(tmp_path, procs):
+def test_real_parent_predicate_keeps_live_parent(tmp_path: Path, procs) -> None:
     child = _spawn(_clone(tmp_path))
     procs.append(child)
     assert psutil.pid_exists(child.pid)
@@ -108,15 +113,15 @@ def test_real_parent_predicate_keeps_live_parent(tmp_path, procs):
     assert _alive(child)
 
 
-def test_terminate_all_skips_self_and_ancestor(monkeypatch):
+def test_terminate_all_skips_self_and_ancestor(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.box_memory import orphan_reap
 
     class _P:
-        def __init__(self, pid):
+        def __init__(self, pid) -> None:
             self.pid = pid
             self.terminated = False
 
-        def terminate(self):
+        def terminate(self) -> None:
             self.terminated = True
 
     monkeypatch.setattr(orphan_reap, "protected_pids", lambda self_pid=None: frozenset({1}))

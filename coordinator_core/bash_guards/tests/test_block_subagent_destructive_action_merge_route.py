@@ -6,12 +6,13 @@ import pytest
 
 from coordinator_core.bash_guards import block_subagent_destructive_action as guard
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 _STAGE = """coordinator-invoke branch.merge_into_workstream --repo <repo-root> '{"branch":"<ref>","reason":"<why>","stage":true}'"""
 
 
 @pytest.fixture
-def trees(tmp_path):
+def trees(tmp_path: Path) -> tuple[Path, Path]:
     main = tmp_path / "repo"
     (main / ".git").mkdir(parents=True)
     clone = main / "scratch" / "merge-clone"
@@ -35,12 +36,12 @@ def _run(command, cwd):
     "command",
     ["git merge-tree --write-tree HEAD other", "git merge-tree --write-tree --name-only HEAD other"],
 )
-def test_merge_tree_is_allowed(trees, command):
+def test_merge_tree_is_allowed(trees, command) -> None:
     assert _run(command, trees[0]) is None
 
 
 @pytest.mark.parametrize("command", ["git merge other", "git merge --no-commit other"])
-def test_main_tree_merge_denied_and_names_the_stage_op(trees, command):
+def test_main_tree_merge_denied_and_names_the_stage_op(trees, command) -> None:
     out = _run(command, trees[0])
     assert out is not None
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
@@ -48,13 +49,13 @@ def test_main_tree_merge_denied_and_names_the_stage_op(trees, command):
     assert _STAGE in reason
 
 
-def test_deny_record_carries_the_adaptable_stage_template():
+def test_deny_record_carries_the_adaptable_stage_template() -> None:
     record = guard._build_record("git merge (not --ff-only)", "a", "coordinator:executor", "git merge x", "git merge x")
     templates = [getattr(m, "template", None) for m in record.members]
     assert _STAGE in templates
 
 
-def test_scratch_clone_merge_and_ff_only_still_allowed(trees):
+def test_scratch_clone_merge_and_ff_only_still_allowed(trees) -> None:
     main, clone = trees
     assert _run("git merge --no-ff origin/feature", clone) is None
     assert _run("git merge --ff-only x", main) is None

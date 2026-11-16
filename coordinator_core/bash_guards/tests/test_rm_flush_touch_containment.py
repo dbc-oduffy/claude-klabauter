@@ -26,13 +26,14 @@ import sys
 import pytest
 
 from coordinator_core.bash_guards import _dc_rm, dispatch_checks
+from pathlib import Path
 
 
 def _capture(monkeypatch):
     calls = []
     kinds = []
 
-    def fake_append_touch_claims(paths, session_id, root, *, kind=None, **_kw):
+    def fake_append_touch_claims(paths, session_id, root, *, kind=None, **_kw) -> None:
         calls.append(list(paths))
         kinds.append(kind)
 
@@ -44,7 +45,7 @@ def _capture(monkeypatch):
 
 
 class TestInRepoTargetStillRecords:
-    def test_in_repo_target_is_recorded(self, tmp_path, monkeypatch):
+    def test_in_repo_target_is_recorded(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         calls, kinds = _capture(monkeypatch)
         root = tmp_path / "repo"
         root.mkdir()
@@ -61,7 +62,7 @@ class TestInRepoTargetStillRecords:
 
 
 class TestOutOfRepoSameDriveIsSkipped:
-    def test_out_of_repo_target_records_nothing(self, tmp_path, monkeypatch):
+    def test_out_of_repo_target_records_nothing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         calls, kinds = _capture(monkeypatch)
         root = tmp_path / "repo"
         root.mkdir()
@@ -78,7 +79,7 @@ class TestOutOfRepoSameDriveIsSkipped:
 
 
 class TestCrossDriveTargetSkipped:
-    def test_cross_drive_target_skipped_by_containment_gate(self, tmp_path, monkeypatch):
+    def test_cross_drive_target_skipped_by_containment_gate(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         calls, kinds = _capture(monkeypatch)
         root = tmp_path / "repo"
         root.mkdir()
@@ -102,7 +103,7 @@ class TestCrossDriveTargetSkipped:
         gate_calls = []
         real_is_within = dispatch_checks._is_within
 
-        def spying_is_within(path, root_arg):
+        def spying_is_within(path, root_arg) -> bool:
             result = real_is_within(path, root_arg)
             gate_calls.append((path, root_arg, result))
             return result
@@ -120,7 +121,7 @@ class TestCrossDriveTargetSkipped:
 
 
 class TestRootItselfIsRecorded:
-    def test_root_itself_is_recorded_as_dot(self, tmp_path, monkeypatch):
+    def test_root_itself_is_recorded_as_dot(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         calls, kinds = _capture(monkeypatch)
         root = tmp_path / "repo"
         root.mkdir()
@@ -132,8 +133,8 @@ class TestRootItselfIsRecorded:
 
 class TestRootWithTrailingSeparatorTargetIsRecorded:
     def test_target_under_root_with_trailing_separator_is_recorded(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         calls, kinds = _capture(monkeypatch)
         root = tmp_path / "repo"
         root.mkdir()
@@ -150,8 +151,8 @@ class TestRootWithTrailingSeparatorTargetIsRecorded:
 
 class TestDotDotNormalizesBackInsideIsRecorded:
     def test_dot_dot_path_normalizing_inside_root_is_recorded(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # A target spelled with a `..` segment
         # that normalizes back inside `root` (e.g. `root/sub/../file.txt`)
         # must still be RECORDED: it is in-repo once normalized, and
@@ -171,7 +172,7 @@ class TestDotDotNormalizesBackInsideIsRecorded:
 
 
 class TestRecordingFailureNeverRaises:
-    def test_appender_exception_is_swallowed(self, tmp_path, monkeypatch):
+    def test_appender_exception_is_swallowed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         root = tmp_path / "repo"
         root.mkdir()
         target = root / "file.txt"

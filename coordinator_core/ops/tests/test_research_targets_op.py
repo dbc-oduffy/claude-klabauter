@@ -6,10 +6,11 @@ import pytest
 
 from coordinator_core import machine_resolver as mr
 from coordinator_core.ops.research_targets import _handler
+from pathlib import Path
 
 
 @pytest.fixture
-def reg(tmp_path, monkeypatch):
+def reg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     d = tmp_path / "ml"
     d.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(d))
@@ -18,7 +19,7 @@ def reg(tmp_path, monkeypatch):
     mr._external_ws_cache.clear()
 
 
-def _register(reg, tmp_path, entries):
+def _register(reg, tmp_path, entries) -> None:
     text = ""
     for key, parts, extra in entries:
         p = tmp_path.joinpath(*parts)
@@ -28,7 +29,7 @@ def _register(reg, tmp_path, entries):
     mr._external_ws_cache.clear()
 
 
-def test_rows_carry_purpose_and_topic(reg, tmp_path):
+def test_rows_carry_purpose_and_topic(reg, tmp_path: Path) -> None:
     _register(
         reg,
         tmp_path,
@@ -42,7 +43,7 @@ def test_rows_carry_purpose_and_topic(reg, tmp_path):
     assert row["topic"] == "Graphs"
 
 
-def test_topic_filter_narrows_casefold(reg, tmp_path):
+def test_topic_filter_narrows_casefold(reg, tmp_path: Path) -> None:
     _register(
         reg,
         tmp_path,
@@ -57,7 +58,7 @@ def test_topic_filter_narrows_casefold(reg, tmp_path):
 
 
 # Forwarding contract only: the handler must surface registry_readable verbatim.
-def test_unreadable_registry_reports_false(reg, monkeypatch):
+def test_unreadable_registry_reports_false(reg, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mr, "external_workspace_registry_readable", lambda: False)
     monkeypatch.setattr(mr, "research_targets", lambda: [])
     out = _handler({})

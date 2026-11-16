@@ -23,10 +23,11 @@ from __future__ import annotations
 import threading
 
 from coordinator_core.warm import server
+import pytest
 
 
 class _FakeVersionState:
-    def __init__(self, *, server_sha: str = "deadbeef"):
+    def __init__(self, *, server_sha: str = "deadbeef") -> None:
         self.server_sha = server_sha
 
     def is_skewed(self, client_token: str) -> bool:
@@ -36,10 +37,10 @@ class _FakeVersionState:
         return self.is_skewed(client_token)
 
 
-def test_worker_loop_dispatches_through_the_process_pool_not_in_process(monkeypatch):
+def test_worker_loop_dispatches_through_the_process_pool_not_in_process(monkeypatch: pytest.MonkeyPatch) -> None:
     captured: dict[str, object] = {}
 
-    def _fake_handle_connection(io, *, dispatch=None, **kwargs):
+    def _fake_handle_connection(io, *, dispatch=None, **kwargs) -> None:
         captured["dispatch"] = dispatch
         kwargs["in_flight"].exit()
 
@@ -59,13 +60,13 @@ def test_worker_loop_dispatches_through_the_process_pool_not_in_process(monkeypa
     assert captured["dispatch"] != server._run_dispatch
 
 
-def test_pool_dispatch_is_lazily_constructed():
+def test_pool_dispatch_is_lazily_constructed() -> None:
     ctx = server._ServerContext(name="pipe-lazy", sid="sid-lazy", version_state=_FakeVersionState())
     assert ctx._dispatch_pool is None
     ctx._start_worker_pool(pool_size=1)
     assert ctx._dispatch_pool is None
 
 
-def test_ctx_shutdown_tolerates_a_never_built_dispatch_pool():
+def test_ctx_shutdown_tolerates_a_never_built_dispatch_pool() -> None:
     ctx = server._ServerContext(name="pipe-shutdown", sid="sid-shutdown", version_state=_FakeVersionState())
     ctx._ctx_shutdown()

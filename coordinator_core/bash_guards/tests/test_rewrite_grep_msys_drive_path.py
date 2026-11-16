@@ -13,6 +13,7 @@ import sys
 import pytest
 
 from coordinator_core.bash_guards import _rewrite_support as rs
+from pathlib import Path
 
 pytestmark = pytest.mark.skipif(os.name != "nt", reason="MSYS drive paths exist only on Windows")
 
@@ -24,7 +25,7 @@ def _msys(path) -> str:
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_msys_drive_target_is_translated_and_the_walker_prints_the_match(tmp_path):
+def test_msys_drive_target_is_translated_and_the_walker_prints_the_match(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("x = 1\ndef stub_root():\n    pass\n", encoding="utf-8")
     parsed = rs._bt_grep_flags_and_operands(["grep", "-rn", "def stub_root", _msys(tmp_path) + "/"])
 
@@ -38,7 +39,7 @@ def test_msys_drive_target_is_translated_and_the_walker_prints_the_match(tmp_pat
     assert "def stub_root" in out.stdout, (out.stdout, out.stderr)
 
 
-def test_a_posix_path_that_is_not_a_drive_prefix_is_left_alone():
+def test_a_posix_path_that_is_not_a_drive_prefix_is_left_alone() -> None:
     parsed = rs._bt_grep_flags_and_operands(["grep", "-rn", "x", "/etc/hosts"])
 
     assert parsed is not None and parsed["targets"] == ["/etc/hosts"]

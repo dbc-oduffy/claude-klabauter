@@ -78,7 +78,7 @@ def _writer(repo: Path, paths: Sequence[str]) -> None:
         make_diverged_path(repo, p, f"staged {p}\n", f"worktree {p}\n")
 
 
-def test_commit_paths_satisfies_all_three_legs(tmp_path):
+def test_commit_paths_satisfies_all_three_legs(tmp_path: Path) -> None:
     repo = real_git_repo(tmp_path)
     paths = ["a/new.txt", "seed.txt"]
 
@@ -91,11 +91,11 @@ def test_commit_paths_satisfies_all_three_legs(tmp_path):
     )
 
 
-def test_commit_scoped_fails_the_helper(tmp_path):
+def test_commit_scoped_fails_the_helper(tmp_path: Path) -> None:
     repo = real_git_repo(tmp_path)
     paths = ["a/new.txt", "seed.txt"]
 
-    def commit_fn():
+    def commit_fn() -> None:
         _writer(repo, paths)
         msg = repo / "MSG"
         msg.write_text("via commit_scoped\n", encoding="utf-8", newline="\n")

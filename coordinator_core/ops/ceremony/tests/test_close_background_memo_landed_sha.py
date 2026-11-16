@@ -9,12 +9,14 @@ from coordinator_core import archive_stamp
 from coordinator_core.memo_corpus import memo_corpus_root
 from coordinator_core.ops.ceremony import close_background as cb
 from coordinator_core.ops.dispatch_emit import run_close
+from pathlib import Path
+import pytest
 
 RUN = "run-sha"
 SHA = "abcdef0123456789abcdef0123456789abcdef01"
 
 
-def _inbox_memo(root):
+def _inbox_memo(root) -> None:
     inbox = root / "state" / "cross-repo" / "inbox"
     inbox.mkdir(parents=True)
     assert memo_corpus_root(str(root)).replace("\\", "/").endswith("state/cross-repo")
@@ -24,7 +26,7 @@ def _inbox_memo(root):
 def _capture(monkeypatch):
     calls = []
 
-    def fake(path, *args, return_result=False):
+    def fake(path, *args, return_result: bool = False) -> dict[str, int]:
         calls.append((path, args))
         return {"exit_code": 0}
 
@@ -36,7 +38,7 @@ def _ctx(root, sha):
     return cb.JobContext(root, root / ".git", RUN, (), "state/cross-repo/inbox/x.md", sha)
 
 
-def test_sha_is_passed_as_realized_by_and_named_in_the_note(tmp_path, monkeypatch):
+def test_sha_is_passed_as_realized_by_and_named_in_the_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _inbox_memo(tmp_path)
     calls = _capture(monkeypatch)
     spawns = []
@@ -51,7 +53,7 @@ def test_sha_is_passed_as_realized_by_and_named_in_the_note(tmp_path, monkeypatc
     assert len(spawns) <= 1
 
 
-def test_absent_sha_keeps_the_old_note_and_no_realized_by(tmp_path, monkeypatch):
+def test_absent_sha_keeps_the_old_note_and_no_realized_by(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _inbox_memo(tmp_path)
     calls = _capture(monkeypatch)
 
@@ -61,7 +63,7 @@ def test_absent_sha_keeps_the_old_note_and_no_realized_by(tmp_path, monkeypatch)
     assert args == ("--actioned-note", f"resolved by run {RUN}")
 
 
-def test_run_background_reads_terminal_sha_from_the_close_job_record(tmp_path, monkeypatch):
+def test_run_background_reads_terminal_sha_from_the_close_job_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _inbox_memo(tmp_path)
     calls = _capture(monkeypatch)
     run_close.write_close_job(
@@ -76,7 +78,7 @@ def test_run_background_reads_terminal_sha_from_the_close_job_record(tmp_path, m
     assert args[args.index("--realized-by") + 1] == SHA
 
 
-def test_record_without_terminal_sha_resolves_with_the_old_note(tmp_path, monkeypatch):
+def test_record_without_terminal_sha_resolves_with_the_old_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _inbox_memo(tmp_path)
     calls = _capture(monkeypatch)
     run_close.write_close_job(

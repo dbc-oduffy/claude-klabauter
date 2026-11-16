@@ -11,15 +11,16 @@ from coordinator_core.testing.checkout_engine_probe import (
     assert_inherited_pin_child_resolves_checkout,
     assert_unpinned_child_loads_core_from_checkout,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def test_unpinned_test_child_loads_core_from_checkout(tmp_path):
+def test_unpinned_test_child_loads_core_from_checkout(tmp_path: Path) -> None:
     assert_unpinned_child_loads_core_from_checkout(tmp_path)
 
 
-def test_inherited_harness_pin_child_resolves_checkout_dispatch_root(tmp_path):
+def test_inherited_harness_pin_child_resolves_checkout_dispatch_root(tmp_path: Path) -> None:
     """The shape `test_coordinator_safe_commit_k3_failure_path._wrapper` spawns: the env the
     root conftest left in `os.environ`, with no pin added by the test."""
     assert_inherited_pin_child_resolves_checkout(tmp_path)

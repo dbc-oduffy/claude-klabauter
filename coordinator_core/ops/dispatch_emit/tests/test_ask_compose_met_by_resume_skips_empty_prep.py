@@ -15,6 +15,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import RESUME_LEDGER_LANDED
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.review_mint.execute_review import NO_SLICES_HALT
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _GUARD_OPEN = "  if (!_halted && (!_reviewPrep ||"
@@ -46,7 +47,7 @@ def _guard(script: str) -> str:
     return script[start : script.index("\n", start)]
 
 
-def test_composed_script_wires_the_skip_without_touching_the_delivered_exit():
+def test_composed_script_wires_the_skip_without_touching_the_delivered_exit() -> None:
     script = _script()
     assert script.count("_metBySinceHaltSkip()") == 2  # the definition and the guard's call
     assert "if (!_halted && !_alreadyDelivered) {\n  if (!_metBySkipped) {\n" in script
@@ -85,7 +86,7 @@ _node = pytest.mark.skipif(shutil.which("node") is None, reason="node unavailabl
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @_node
-def test_all_blocking_rows_met_skips_review_names_the_shas_and_leaves_the_rejudge_open():
+def test_all_blocking_rows_met_skips_review_names_the_shas_and_leaves_the_rejudge_open() -> None:
     result = _run(blocking=["R1", "R2"], met_by={"R1": _SHA_A, "R2": _SHA_B}, prep=_EMPTY_PREP)
     assert result["halted"] is None
     assert result["delivered"] is None  # the re-judge is gated on _alreadyDelivered; it stays unset
@@ -108,7 +109,7 @@ def test_all_blocking_rows_met_skips_review_names_the_shas_and_leaves_the_rejudg
         (["R1"], {"R1": _SHA_A}, {**_EMPTY_PREP, "slices": [{"id": "s", "files": ["a.py"]}]}),
     ],
 )
-def test_no_credit_or_unclean_prep_still_halts_on_no_slices(blocking, met_by, prep):
+def test_no_credit_or_unclean_prep_still_halts_on_no_slices(blocking, met_by, prep) -> None:
     result = _run(blocking=blocking, met_by=met_by, prep=prep)
     assert result["skipped"] is None
     if prep is None or not prep["slices"]:
@@ -120,12 +121,12 @@ def test_no_credit_or_unclean_prep_still_halts_on_no_slices(blocking, met_by, pr
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @_node
-def test_no_credit_empty_prep_halts():
+def test_no_credit_empty_prep_halts() -> None:
     result = _run(blocking=["R1"], met_by={}, prep={"verdict": "refused", "product_files": 0, "slices": []})
     assert result["halted"]["halted"].startswith(NO_SLICES_HALT)
 
 
-def test_gate_reads_met_by_from_the_run_marker(tmp_path, monkeypatch):
+def test_gate_reads_met_by_from_the_run_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import halted_run
 
     marker = {"status": "halted", "met_by": {"R1": _SHA_A, "R2": 7, "R3": ""}}

@@ -332,7 +332,7 @@ STAGED_STALE_SECONDS = 4 * 3600
 ABANDONED_AT_STAGED = "abandoned_at_staged"
 #: A run alive this long since `started_at`, at any non-terminal stage and whatever its activity, is
 #: halted by the peer-liveness reaper.
-RUN_WALL_TIMEOUT_SECONDS = 3600
+RUN_WALL_TIMEOUT_SECONDS = 4 * 3600
 WALL_TIMEOUT = "wall_timeout"
 
 

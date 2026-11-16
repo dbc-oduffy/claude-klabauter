@@ -99,6 +99,10 @@ from pathlib import Path
 from typing import Callable, Optional
 
 from coordinator_core.warm.engine_root import current_engine_clone
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from socket import socket
 
 __all__ = [
     "ElectionError",
@@ -135,7 +139,7 @@ class ElectionError(Exception):
 
 class ElectionLost(ElectionError):
 
-    def __init__(self, name: str):
+    def __init__(self, name: str) -> None:
         self.pipe_name = name
         super().__init__(f"lost first-instance election for {name!r}")
 
@@ -613,7 +617,7 @@ def reclaim_stale_socket(
     return True
 
 
-def _acquire_election_lock(path: Path):
+def _acquire_election_lock(path: Path) -> int:
     """Take the non-blocking exclusive ``flock`` guarding this endpoint's
     probe/unlink/bind sequence. Returns an fd the caller must release.
 
@@ -724,7 +728,7 @@ def elect_unix_socket(
     backlog: int = UNIX_LISTEN_BACKLOG,
     probe: Callable[[Path], str] = probe_endpoint,
     use_lock: bool = True,
-):
+) -> socket:
     """Attempt the election for unix socket ``path``. POSIX counterpart of
     ``elect``.
 

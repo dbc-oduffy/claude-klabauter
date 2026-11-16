@@ -95,7 +95,23 @@ def test_repo_target_plus_repo_seed_get_two_keyed_segments_and_a_compare(repo, t
     assert "/repo-2-engine-repo-git/clone" in _brief(repo, ctx, "repo-2-engine-repo-git")
 
 
-def test_a_notebooklm_segment_without_notebooks_or_video_seeds_still_refuses(repo):
+def test_a_notebooklm_segment_without_notebooks_derives_them_from_the_questions(repo):
+    rel = _seeded_sizing(
+        repo, [("doc", URL_C)], "--research-source", "notebooklm", "--research-notebooklm-need", "youtube",
+        "--research-question", "One?", "--research-question", "Two?",
+    )
+    ctx = _setup(repo, rel)
+    nlm = next(i for m, i, _ in ctx["segments"] if m.pipeline == "notebooklm")
+    assert nlm.lists["notebooks"] == ("A", "B")
+
+
+def test_corpus_default_lists_derive_one_notebook_per_question():
+    assert re_.corpus_default_lists("notebooklm", ["q"] * 3) == {"notebooks": ("A", "B", "C")}
+    assert re_.corpus_default_lists("notebooklm", ["q"] * 30)["notebooks"] == tuple("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+    assert re_.corpus_default_lists("notebooklm", []) == {}
+
+
+def test_a_notebooklm_segment_without_notebooks_or_questions_still_refuses(repo):
     rel = _seeded_sizing(repo, [("doc", URL_C)], "--research-source", "notebooklm", "--research-notebooklm-need", "youtube")
     with pytest.raises(PipelineEmitRefused) as exc:
         _setup(repo, rel)

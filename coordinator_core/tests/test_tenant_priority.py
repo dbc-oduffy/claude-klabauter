@@ -84,30 +84,19 @@ def test_serve_lineage_argv_is_never_lowered(monkeypatch, marker):
         assert "preexec_fn" in tenant_priority.popen_kwargs([sys.executable, "x/other.py"])
 
 
-def test_apply_to_self_noops_when_argv_names_serve(monkeypatch):
+@pytest.mark.parametrize("marker", tenant_priority.SERVE_LINEAGE_MARKERS)
+def test_serve_descendant_spawner_is_never_lowered(monkeypatch, marker):
     _profile(monkeypatch, "true")
-    monkeypatch.setattr(sys, "argv", ["/a/run_daemon_supervisor.py"])
-    assert tenant_priority.apply_to_self() == {"prime": False}
+    monkeypatch.setattr(sys, "argv", ["python", "/opt/x/" + marker])
+    assert tenant_priority.popen_kwargs([sys.executable, "child.py"]) == {}
+    monkeypatch.setattr(sys, "argv", ["python", "engine.py"])
+    assert ("preexec_fn" in tenant_priority.popen_kwargs([sys.executable, "child.py"])) == POSIX
 
 
-def test_apply_to_self_off_prime_is_noop(monkeypatch):
-    _profile(monkeypatch, None)
-    assert tenant_priority.apply_to_self() == {"prime": False}
-
-
-@pytest.mark.skipif(not POSIX, reason="nice is POSIX")
-def test_apply_to_self_lowers_and_legs_are_still_lowered(monkeypatch):
-    import os
-
-    _profile(monkeypatch, "true")
-    set_calls = []
-    monkeypatch.setattr(os, "getpriority", lambda *_: 0)
-    monkeypatch.setattr(os, "setpriority", lambda *a: set_calls.append(a))
-    monkeypatch.setattr(sys, "argv", ["engine"])
-    got = tenant_priority.apply_to_self()
-    assert got["prime"] is True and got["nice"] == 15
-    assert set_calls == [(os.PRIO_PROCESS, 0, 15)]
-    assert tenant_priority.popen_kwargs([sys.executable]) == {"preexec_fn": tenant_priority._lower_child}
+@pytest.mark.parametrize("marker", tenant_priority.SERVE_LINEAGE_MARKERS)
+def test_argv_and_string_predicates_agree_on_mid_argument_marker(marker):
+    argv = ["python", f"--cfg={marker}:x"]
+    assert tenant_priority.is_serve_lineage(argv) is tenant_priority.is_serve_lineage(" ".join(argv)) is True
 
 
 @pytest.mark.parametrize("marker", tenant_priority.SERVE_LINEAGE_MARKERS)
@@ -139,21 +128,6 @@ def test_settings_home_prefix_refusal_names_the_key(monkeypatch):
         tenant_priority.settings_home_prefix()
 
 
-@pytest.mark.skipif(not POSIX, reason="nice is POSIX")
-def test_apply_to_self_swallows_setpriority_failure(monkeypatch):
-    import os
-
-    _profile(monkeypatch, "true")
-
-    def boom(*_):
-        raise OSError("EPERM")
-
-    monkeypatch.setattr(os, "getpriority", lambda *_: 19)
-    monkeypatch.setattr(os, "setpriority", boom)
-    monkeypatch.setattr(sys, "argv", ["engine"])
-    assert tenant_priority.apply_to_self()["prime"] is True
-
-
 def test_is_prime_tenant_is_memoised_and_fails_closed(monkeypatch):
     calls = _profile(monkeypatch, "true")
     assert tenant_priority.is_prime_tenant() is True
@@ -177,4 +151,3 @@ def test_is_prime_tenant_is_memoised_and_fails_closed(monkeypatch):
 def test_win32_is_unchanged(monkeypatch):
     _profile(monkeypatch, "true")
     assert tenant_priority.popen_kwargs([sys.executable]) == {}
-    assert tenant_priority.apply_to_self() == {"prime": False}

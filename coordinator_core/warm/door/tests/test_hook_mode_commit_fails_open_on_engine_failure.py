@@ -39,7 +39,7 @@ _posix_only = pytest.mark.skipif(os.name == "nt", reason="door_posix is a macOS/
 
 
 @pytest.fixture(scope="module")
-def door(tmp_path_factory) -> Path:
+def door(tmp_path_factory: pytest.TempPathFactory) -> Path:
     cc = shutil.which("cc") or shutil.which("clang")
     if cc is None:
         pytest.skip("no C compiler")
@@ -128,7 +128,7 @@ def _assert_irreversible_deny(proc) -> None:
 @pytest.mark.warm_tier
 @pytest.mark.cadence
 @pytest.mark.parametrize("op", [_PRECHECK_OP, _OTHER_OP])
-def test_worker_died_response_allows_a_commit_and_still_denies_a_push(door, tmp_path, runtime_base, op):
+def test_worker_died_response_allows_a_commit_and_still_denies_a_push(door, tmp_path: Path, runtime_base, op) -> None:
     root = _make_stub_engine_root(tmp_path)
     sock = _socket_path_for(runtime_base, root)
     _make_socket_dir(sock)
@@ -153,7 +153,7 @@ def test_worker_died_response_allows_a_commit_and_still_denies_a_push(door, tmp_
 @pytest.mark.spawns_process
 @pytest.mark.warm_tier
 @pytest.mark.cadence
-def test_a_never_answering_engine_allows_a_commit_and_still_denies_a_push(door, tmp_path, runtime_base):
+def test_a_never_answering_engine_allows_a_commit_and_still_denies_a_push(door, tmp_path: Path, runtime_base) -> None:
     root = _make_stub_engine_root(tmp_path)
     sock = _socket_path_for(runtime_base, root)
     _make_socket_dir(sock)
@@ -176,7 +176,7 @@ def test_a_never_answering_engine_allows_a_commit_and_still_denies_a_push(door, 
 
 
 @pytest.mark.parametrize("source", [DOOR_WINDOWS_C, DOOR_POSIX_C], ids=lambda p: p.name)
-def test_both_doors_route_every_non_irreversible_hook_failure_to_the_one_line_allow(source):
+def test_both_doors_route_every_non_irreversible_hook_failure_to_the_one_line_allow(source) -> None:
     text = source.read_text(encoding="utf-8")
     failure = text[text.index("static int emit_post_delivery_failure("):]
     failure = failure[: failure.index("\n}\n")]

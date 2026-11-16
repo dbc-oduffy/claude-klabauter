@@ -149,6 +149,126 @@ def test_no_divergence_spawns_no_process(tmp_path, monkeypatch):
     assert spawns == []
 
 
+def _count_collector(monkeypatch) -> list[str]:
+    import coordinator_core.ops.cascade_redrive as mod
+
+    calls: list[str] = []
+    real = mod._collect_live_candidates_for_kind
+
+    def _counting(worktree_root, did, *args, **kwargs):
+        calls.append(did)
+        return real(worktree_root, did, *args, **kwargs)
+
+    monkeypatch.setattr(mod, "_collect_live_candidates_for_kind", _counting)
+    return calls
+
+
+def test_collector_runs_once_over_many_ids_and_each_baton_advances(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    dids = [f"dlv-many-{i:06d}" for i in range(4)]
+    batons = [_seed_handoff(repo, f"2026010{i}-baton.md", deliverable_id=d) for i, d in enumerate(dids)]
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    for i, d in enumerate(dids):
+        _write_plan(repo, f"docs/plans/many-{i}.md", "implemented", did=d, shipped_in=head)
+    _commit_all(repo)
+    calls = _count_collector(monkeypatch)
+
+    result = redrive_terminal_divergences(repo / ".git")
+
+    assert len(calls) == 1
+    assert result["errors"] == []
+    assert sorted(Path(a["path"]).name for a in result["advanced"]) == sorted(b.name for b in batons)
+    assert all(_state(b) == "shipped" for b in batons)
+    assert result["scan_incomplete"] is False
+
+
+def test_collector_runs_once_over_many_refused_ids(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    dids = [f"dlv-refused-{i:06d}" for i in range(3)]
+    batons = [_seed_handoff(repo, f"2026010{i}-baton.md", deliverable_id=d) for i, d in enumerate(dids)]
+    for i, d in enumerate(dids):
+        _write_plan(repo, f"docs/plans/refused-{i}.md", "implemented", did=d)
+    _commit_all(repo)
+    calls = _count_collector(monkeypatch)
+
+    result = redrive_terminal_divergences(repo / ".git")
+
+    assert len(calls) == 1
+    assert result["advanced"] == []
+    assert sorted(Path(r["path"]).name for r in result["refused"]) == sorted(b.name for b in batons)
+    assert all(_state(b) == "ready_to_fire" for b in batons)
+
+
+def test_scan_incomplete_from_the_single_scan_is_reported(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    _write_plan(repo, "docs/plans/orphan.md", "implemented")
+    _commit_all(repo)
+
+    result = redrive_terminal_divergences(repo / ".git")
+
+    assert result["scan_incomplete"] is True
+    assert result["advanced"] == []
+
+
+def test_a_child_advanced_for_one_id_is_seen_terminal_when_the_next_parent_is_judged(tmp_path, monkeypatch):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    parent = _seed_handoff(repo, "20260101-parent.md", deliverable_id="dlv-b-parent-000000")
+    child = _seed_handoff(repo, "20260102-child.md", deliverable_id="dlv-a-child-000000")
+    child.write_text(
+        child.read_text(encoding="utf-8").replace('predecessor: "none"', 'predecessor: "state/handoffs/20260101-parent.md"'),
+        encoding="utf-8",
+    )
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _write_plan(repo, "docs/plans/a.md", "implemented", did="dlv-a-child-000000", shipped_in=head)
+    _write_plan(repo, "docs/plans/b.md", "implemented", did="dlv-b-parent-000000", shipped_in=head)
+    _commit_all(repo)
+    calls = _count_collector(monkeypatch)
+    import coordinator_core.ops.cascade_redrive as mod
+
+    seen: list[tuple[str, str]] = []
+    real_predicate = mod._predicate_refusal_sync
+
+    def _spy(candidate_path, fm, common_dir, **kwargs):
+        child_meta = next(m for k, m in kwargs["corpus_metas"].items() if k.endswith("20260102-child.md"))
+        seen.append((Path(candidate_path).name, child_meta["deployment_state"]))
+        return real_predicate(candidate_path, fm, common_dir, **kwargs)
+
+    monkeypatch.setattr(mod, "_predicate_refusal_sync", _spy)
+
+    result = redrive_terminal_divergences(repo / ".git")
+
+    assert len(calls) == 1
+    assert result["errors"] == []
+    assert seen == [("20260102-child.md", "ready_to_fire"), ("20260101-parent.md", "shipped")]
+    assert [Path(a["path"]).name for a in result["advanced"]] == ["20260102-child.md", "20260101-parent.md"]
+    assert _state(child) == "shipped"
+    assert _state(parent) == "shipped"
+
+
+def test_a_live_child_of_an_unrelated_id_still_refuses_its_parent(tmp_path):
+    repo = tmp_path / "repo"
+    _init_repo(repo)
+    parent = _seed_handoff(repo, "20260101-parent.md", deliverable_id="dlv-b-parent-000000")
+    child = _seed_handoff(repo, "20260102-child.md", deliverable_id="dlv-a-child-000000")
+    child.write_text(
+        child.read_text(encoding="utf-8").replace('predecessor: "none"', 'predecessor: "state/handoffs/20260101-parent.md"'),
+        encoding="utf-8",
+    )
+    head = _git(repo, "rev-parse", "HEAD").stdout.strip()
+    _write_plan(repo, "docs/plans/b.md", "implemented", did="dlv-b-parent-000000", shipped_in=head)
+    _commit_all(repo)
+
+    result = redrive_terminal_divergences(repo / ".git")
+
+    assert result["advanced"] == []
+    assert _state(parent) == "ready_to_fire"
+    assert _state(child) == "ready_to_fire"
+
+
 def test_landed_parked_lists_plans_in_month_subdirectories(tmp_path):
     repo = tmp_path / "repo"
     repo.mkdir()

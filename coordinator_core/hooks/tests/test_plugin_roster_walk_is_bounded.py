@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 from coordinator_core.hooks import block_unenumerated_agent_type as mod
+from pathlib import Path
 
 
-def _agent(path):
+def _agent(path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text("---\nname: x\n---\n", encoding="utf-8")
 
 
-def test_both_documented_depths_are_read_and_deeper_trees_are_never_walked(tmp_path):
+def test_both_documented_depths_are_read_and_deeper_trees_are_never_walked(tmp_path: Path) -> None:
     top = tmp_path / "example-game-workbench-repo"
     _agent(top / "agents" / "flat.md")
     _agent(top / "game-dev" / "agents" / "staff-game-dev.md")

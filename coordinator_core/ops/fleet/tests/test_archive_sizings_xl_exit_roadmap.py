@@ -24,6 +24,7 @@ from coordinator_core.ops.fleet.tests.archive_git_free_seam import (
     patched_disposition_seam,
     run,
 )
+import pytest
 
 _TERMINAL_BODY = "---\nstatus: shipped\ntitle: {title}\n---\n"
 
@@ -239,7 +240,7 @@ def test_preview_excludes_roadmap_exit_still_open_and_reports_scan_skipped(tmp_p
 
 
 def test_citer_corpus_is_not_walked_unless_a_roadmap_exit_asks(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """The citer walk is the sweep's dominant cost (every plan and handoff
     read); only a roadmap-exit sizing needs it."""
@@ -259,7 +260,7 @@ def test_citer_corpus_is_not_walked_unless_a_roadmap_exit_asks(
 
 
 def test_citer_index_prefilter_skips_files_that_never_name_sizing_object(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     worktree = tmp_path / "repo"
     plans = worktree / "docs" / "plans"

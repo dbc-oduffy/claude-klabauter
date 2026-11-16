@@ -8,24 +8,25 @@ import pytest
 
 from coordinator_core.git import merge_owner, merge_state
 from coordinator_core.ops.dispatch_emit.merge_landing import run_owned_merge
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
-def _git(repo, *args, check=True):
+def _git(repo, *args, check: bool = True):
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **_NOWIN
     )
 
 
-def _w(repo, name, text):
+def _w(repo, name, text) -> None:
     (repo / name).write_text(text, encoding="utf-8", newline="\n")
 
 
 @pytest.fixture()
-def merging(tmp_path):
+def merging(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "base")
@@ -51,20 +52,20 @@ def merging(tmp_path):
     return r
 
 
-def _own(repo, run_id="run-1"):
+def _own(repo, run_id: str = "run-1") -> None:
     mh = _git(repo, "rev-parse", "MERGE_HEAD").stdout.strip()
     h = _git(repo, "rev-parse", "HEAD").stdout.strip()
     merge_owner.record(repo, run_id, mh, h)
 
 
-def test_owned_merge_splits_present_and_deleted(merging):
+def test_owned_merge_splits_present_and_deleted(merging) -> None:
     _own(merging)
     got = run_owned_merge(merging, "run-1")
     assert got.present == ("auto.txt", "shared.txt")
     assert got.deleted == ("gone.txt",)
 
 
-def test_no_merge_head_is_none_without_reading_state(merging, monkeypatch):
+def test_no_merge_head_is_none_without_reading_state(merging, monkeypatch: pytest.MonkeyPatch) -> None:
     _git(merging, "merge", "--abort")
 
     def boom(*a, **k):
@@ -75,13 +76,13 @@ def test_no_merge_head_is_none_without_reading_state(merging, monkeypatch):
     assert run_owned_merge(merging, None) is None
 
 
-def test_other_or_no_owner_is_none(merging):
+def test_other_or_no_owner_is_none(merging) -> None:
     assert run_owned_merge(merging, "run-1") is None
     _own(merging, "run-2")
     assert run_owned_merge(merging, "run-1") is None
 
 
-def test_unreadable_state_fails_closed(merging, monkeypatch):
+def test_unreadable_state_fails_closed(merging, monkeypatch: pytest.MonkeyPatch) -> None:
     _own(merging)
 
     def bad(*a, **k):

@@ -13,10 +13,15 @@ import pytest
 from coordinator_core.agent_pipe import bridge
 from coordinator_core.ops import engine_ask_submit
 from coordinator_core.ops.workflow_fire import completion, fire, op
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import Popen
 
 
 @pytest.fixture(autouse=True)
-def fresh_watchdog(monkeypatch):
+def fresh_watchdog(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(completion, '_next_tick', 0.0)
     monkeypatch.setattr(completion, '_active', {})
     monkeypatch.setattr(completion, '_repo_cursor', 0)
@@ -26,7 +31,7 @@ def fresh_watchdog(monkeypatch):
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize('recipient', ['codex-peer', 'agy-peer', 'grok-peer'])
-def test_external_submit_fire_survives_observer_restart_and_delivers(tmp_path, monkeypatch, recipient):
+def test_external_submit_fire_survives_observer_restart_and_delivers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, recipient) -> None:
     # No Workflow tool and no real model invocation: the real fire path owns a
     # short-lived Python driver, while shared submission gates supply its script.
     from coordinator_core.hooks import _engine_ask_gates
@@ -50,7 +55,7 @@ def test_external_submit_fire_survives_observer_restart_and_delivers(tmp_path, m
     # before reaping, including the POSIX zombie interval.
     children = []
     real_popen = subprocess.Popen
-    def spawn(*a, **kw):
+    def spawn(*a, **kw) -> Popen[str]:
         child = real_popen(*a, **kw)
         children.append(child)
         return child
@@ -89,7 +94,7 @@ def test_external_submit_fire_survives_observer_restart_and_delivers(tmp_path, m
     assert len(deliveries) == 1
 
 
-def test_watchdog_delivery_failure_retries_without_caller_status(tmp_path, monkeypatch):
+def test_watchdog_delivery_failure_retries_without_caller_status(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fire, '_registry_dir', lambda cwd=None: tmp_path)
     path = tmp_path / 'fire.json'
     fire._write_record(path, {'fire_id':'fire', 'state':'exited', 'notify_to':'codex-peer'})
@@ -102,7 +107,7 @@ def test_watchdog_delivery_failure_retries_without_caller_status(tmp_path, monke
     assert fire._read_record(path)['notified_at']
 
 
-def test_busy_kernel_lock_skips_delivery_without_changing_record(tmp_path, monkeypatch):
+def test_busy_kernel_lock_skips_delivery_without_changing_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import locked_write
     from coordinator_core.ops.workflow_fire import notify
     monkeypatch.setattr(locked_write, '_machine_lock_dir', lambda: tmp_path / 'locks')
@@ -118,7 +123,7 @@ def test_busy_kernel_lock_skips_delivery_without_changing_record(tmp_path, monke
     assert path.read_bytes() == persisted
 
 
-def test_deployed_watchdog_keeps_pending_completion_alive(monkeypatch):
+def test_deployed_watchdog_keeps_pending_completion_alive(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm import server
     calls = []
     monkeypatch.setattr(completion, 'on_idle_tick', lambda repos: calls.append('completion') or True)
@@ -138,7 +143,7 @@ def test_deployed_watchdog_keeps_pending_completion_alive(monkeypatch):
     server._ServerContext._idle_tick(context)
     assert calls == ['completion', 'keep-alive', 'retirement']
 
-def test_watchdog_bounds_active_deliveries_and_rotates(tmp_path, monkeypatch):
+def test_watchdog_bounds_active_deliveries_and_rotates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fire, '_registry_dir', lambda cwd=None: tmp_path)
     for index in range(3):
         fire._write_record(tmp_path / f'f{index}.json', {
@@ -152,7 +157,7 @@ def test_watchdog_bounds_active_deliveries_and_rotates(tmp_path, monkeypatch):
     assert set(delivered) == {'peer-0', 'peer-1', 'peer-2'}
 
 
-def test_released_kernel_lock_rereads_owner_checkpoint_without_duplicate(tmp_path, monkeypatch):
+def test_released_kernel_lock_rereads_owner_checkpoint_without_duplicate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import locked_write
     from coordinator_core.ops.workflow_fire import notify
     monkeypatch.setattr(locked_write, '_machine_lock_dir', lambda: tmp_path / 'locks')
@@ -169,7 +174,7 @@ def test_released_kernel_lock_rereads_owner_checkpoint_without_duplicate(tmp_pat
     assert fire._read_record(path) == refreshed
 
 
-def test_released_kernel_lock_retries_failed_delivery_with_stable_message_id(tmp_path, monkeypatch):
+def test_released_kernel_lock_retries_failed_delivery_with_stable_message_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import locked_write
     from coordinator_core.ops.workflow_fire import notify
     monkeypatch.setattr(locked_write, '_machine_lock_dir', lambda: tmp_path / 'locks')
@@ -177,7 +182,7 @@ def test_released_kernel_lock_retries_failed_delivery_with_stable_message_id(tmp
     fire._write_record(path, {'fire_id':'fire', 'state':'exited', 'notify_to':'codex-peer'})
     stale = fire._read_record(path)
     calls = []
-    def route(message):
+    def route(message) -> SimpleNamespace:
         calls.append(message)
         return (SimpleNamespace(status='unroutable', reason='offline') if len(calls) == 1
                 else SimpleNamespace(status='queued'))
@@ -193,7 +198,7 @@ def test_released_kernel_lock_retries_failed_delivery_with_stable_message_id(tmp
     assert notify.refresh_record(path, stale) == second
     assert len(calls) == 2
 
-def test_completed_history_is_not_rescanned_until_directory_changes(tmp_path, monkeypatch):
+def test_completed_history_is_not_rescanned_until_directory_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fire, '_registry_dir', lambda cwd=None: tmp_path)
     fire._write_record(tmp_path / 'done.json', {'fire_id':'done', 'state':'exited', 'notify_to':'peer', 'notified_at':'done'})
     real_read = fire._read_record
@@ -211,10 +216,10 @@ def test_completed_history_is_not_rescanned_until_directory_changes(tmp_path, mo
     assert real_read(tmp_path / 'new.json')['notified_at']
 
 
-def test_removed_repo_releases_discovery_iterator_and_stamp(tmp_path, monkeypatch):
+def test_removed_repo_releases_discovery_iterator_and_stamp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     class Scan:
         closed = False
-        def close(self):
+        def close(self) -> None:
             self.closed = True
     scan = Scan()
     completion._scans[tmp_path] = scan
@@ -228,13 +233,13 @@ def test_removed_repo_releases_discovery_iterator_and_stamp(tmp_path, monkeypatc
     {'fire_id':'broken', 'state':'unknown', 'notify_to':'peer'},
     ['not-a-record'],
 ])
-def test_malformed_history_does_not_keep_engine_alive(tmp_path, monkeypatch, record):
+def test_malformed_history_does_not_keep_engine_alive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, record) -> None:
     monkeypatch.setattr(fire, '_registry_dir', lambda cwd=None: tmp_path)
     (tmp_path / 'broken.json').write_text(json.dumps(record), encoding='utf-8')
     assert not completion.on_idle_tick([tmp_path])
     assert not completion._active
 
-def test_active_selection_visits_one_key_without_snapshot(tmp_path, monkeypatch):
+def test_active_selection_visits_one_key_without_snapshot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     class Counted(dict):
         visits = 0
         def __iter__(self):
@@ -250,7 +255,7 @@ def test_active_selection_visits_one_key_without_snapshot(tmp_path, monkeypatch)
 
 
 
-def test_ended_recipient_retains_terminal_artifact_without_keepalive_and_resume_retries(tmp_path, monkeypatch):
+def test_ended_recipient_retains_terminal_artifact_without_keepalive_and_resume_retries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import external_registry
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     registry = tmp_path / "fires"
@@ -276,7 +281,7 @@ def test_ended_recipient_retains_terminal_artifact_without_keepalive_and_resume_
     epoch = psutil.Process(os.getpid()).create_time()
     class Host:
         pid = os.getpid()
-        def name(self):
+        def name(self) -> str:
             return "codex.exe"
         def create_time(self):
             return epoch
@@ -292,7 +297,7 @@ def test_ended_recipient_retains_terminal_artifact_without_keepalive_and_resume_
     assert len(calls) == 1 and fire._read_record(path)["notified_at"]
 
 
-def test_ended_recipient_does_not_stop_observing_running_driver(tmp_path, monkeypatch):
+def test_ended_recipient_does_not_stop_observing_running_driver(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import external_registry
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     sid = "00000000-0000-4000-8000-000000000001"
@@ -306,7 +311,7 @@ def test_ended_recipient_does_not_stop_observing_running_driver(tmp_path, monkey
     assert not completion._pending({"state":"exited", "notify_to":sid})
 
 
-def test_ended_uuid_does_not_override_explicit_rebinding(tmp_path, monkeypatch):
+def test_ended_uuid_does_not_override_explicit_rebinding(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.agent_pipe import roster
     from coordinator_core.session import external_registry
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
@@ -321,7 +326,7 @@ def test_ended_uuid_does_not_override_explicit_rebinding(tmp_path, monkeypatch):
     assert not completion.recipient_ended(sid)
 
 
-def test_unregistered_uuid_is_unknown_not_ended(tmp_path, monkeypatch):
+def test_unregistered_uuid_is_unknown_not_ended(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     sid = "00000000-0000-4000-8000-000000000001"
     assert not completion.recipient_ended(sid)
@@ -329,7 +334,7 @@ def test_unregistered_uuid_is_unknown_not_ended(tmp_path, monkeypatch):
 
 
 
-def test_unreadable_override_is_unknown_not_terminal(monkeypatch):
+def test_unreadable_override_is_unknown_not_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.agent_pipe import roster
     from coordinator_core.session import external_registry
     monkeypatch.setattr(external_registry, "is_ended", lambda target: True)

@@ -62,10 +62,9 @@ def reviewable_paths(paths: Iterable[str]) -> tuple[str, ...]:
     """The paths a reviewer can read a product diff for: bookkeeping prefixes
     (`review_stamp.PRODUCT_FILE_EXCLUDED_PREFIXES`) and `scratch/` freeze no reviewable diff. The
     stage route and the commit floor both classify through this, so they cannot disagree."""
-    from coordinator_core.ops.review_stamp import PRODUCT_FILE_EXCLUDED_PREFIXES
+    from coordinator_core.ops.review_stamp import is_product_path
 
-    skip = (*PRODUCT_FILE_EXCLUDED_PREFIXES, "scratch/")
-    return tuple(p for p in paths if not p.replace("\\", "/").removeprefix("./").startswith(skip))
+    return tuple(p for p in paths if is_product_path(p) and not p.replace("\\", "/").removeprefix("./").startswith("scratch/"))
 
 
 def review_owed_paths(paths: Iterable[str]) -> list[str]:

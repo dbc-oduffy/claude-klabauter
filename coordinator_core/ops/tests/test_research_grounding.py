@@ -240,7 +240,8 @@ def test_key_ruling_name_outside_judged_falls_back_to_all():
 def test_grader_version_is_derived_from_ruling_note():
     import hashlib
 
-    assert g.GRADER_VERSION == hashlib.sha256((g.REOPEN_NOTE + g.RULING_NOTE).encode("utf-8")).hexdigest()[:12]
+    expected = hashlib.sha256((g.REOPEN_NOTE + g.OPEN_NOTE + g.RULING_NOTE).encode("utf-8")).hexdigest()[:12]
+    assert g.GRADER_VERSION == expected
     assert len(g.GRADER_VERSION) == 12
 
 

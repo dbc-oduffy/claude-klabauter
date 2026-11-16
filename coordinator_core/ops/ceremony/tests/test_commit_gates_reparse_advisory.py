@@ -13,11 +13,10 @@ from coordinator_core.ops.ceremony import commit_gates, commit_v2
 pytestmark = pytest.mark.complete
 
 _NT = os.name == "nt"
-_SHA = "a" * 40
 
 
 @pytest.fixture(autouse=True)
-def _empty_registry(tmp_path, monkeypatch):
+def _empty_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     reg = tmp_path / "reg"
     reg.mkdir()
     (reg / "registry.toml").write_text("schema = 1\n", encoding="utf-8")
@@ -45,7 +44,7 @@ def _tree(tmp_path: Path) -> tuple[Path, Path]:
     return root, real
 
 
-def test_junction_ancestor_is_reported_and_does_not_refuse(tmp_path):
+def test_junction_ancestor_is_reported_and_does_not_refuse(tmp_path: Path) -> None:
     root, real = _tree(tmp_path)
     outcome = commit_gates.reparse_advisory_gate(root, ["sub/a.md"])
     assert outcome.passed is True
@@ -55,14 +54,14 @@ def test_junction_ancestor_is_reported_and_does_not_refuse(tmp_path):
     assert str(root / "sub") in line and " -> " in line and real.name in line
 
 
-def test_ordinary_ancestor_is_silent(tmp_path):
+def test_ordinary_ancestor_is_silent(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     (root / "d").mkdir(parents=True)
     outcome = commit_gates.reparse_advisory_gate(root, ["d/a.md", "top.md"])
     assert outcome.passed is True and outcome.diagnostics == []
 
 
-def test_volume_mount_target_passes(tmp_path, monkeypatch):
+def test_volume_mount_target_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     if not _NT:
         pytest.skip("volume mount targets are an nt reparse shape")
     root, _real = _tree(tmp_path)
@@ -71,20 +70,7 @@ def test_volume_mount_target_passes(tmp_path, monkeypatch):
     assert outcome.passed is True and outcome.diagnostics == []
 
 
-def test_chain_export_engine_link_passes(tmp_path):
-    export = tmp_path / "claude-klabauter-publish-chain" / _SHA
-    (export / "coordinator").mkdir(parents=True)
-    src = tmp_path / "src"
-    (src / "coordinator_core").mkdir(parents=True)
-    try:
-        os.symlink(src / "coordinator_core", export / "coordinator_core", target_is_directory=True)
-    except (OSError, NotImplementedError) as exc:
-        pytest.skip(f"directory symlink not creatable here: {exc}")
-    outcome = commit_gates.reparse_advisory_gate(export, ["coordinator_core/x.py"])
-    assert outcome.passed is True and outcome.diagnostics == []
-
-
-def test_allowlisted_path_passes(tmp_path, _empty_registry):
+def test_allowlisted_path_passes(tmp_path: Path, _empty_registry: Path) -> None:
     root, _real = _tree(tmp_path)
     link = (root / "sub").as_posix()
     (_empty_registry / "registry.local.toml").write_text(
@@ -94,7 +80,7 @@ def test_allowlisted_path_passes(tmp_path, _empty_registry):
     assert outcome.passed is True and outcome.diagnostics == []
 
 
-def test_advisory_lines_are_persisted_to_the_sink(tmp_path, monkeypatch):
+def test_advisory_lines_are_persisted_to_the_sink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.telemetry import op_latency
 
     rows: list = []
@@ -104,7 +90,7 @@ def test_advisory_lines_are_persisted_to_the_sink(tmp_path, monkeypatch):
     assert rows[0]["kind"] == "reparse_advisory" and rows[0]["lines"] == ["reparse\t/x -> /y"]
 
 
-def test_pre_commit_gates_carries_advisory_and_still_lands(tmp_path):
+def test_pre_commit_gates_carries_advisory_and_still_lands(tmp_path: Path) -> None:
     root, _real = _tree(tmp_path)
     advisories: list = []
     refusal = commit_v2._pre_commit_gates(

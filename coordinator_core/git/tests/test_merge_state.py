@@ -7,24 +7,25 @@ import subprocess
 import pytest
 
 from coordinator_core.git import merge_state as ms
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
-def _git(repo, *args, check=True):
+def _git(repo, *args, check: bool = True):
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **_NOWIN
     )
 
 
-def _w(repo, name, text):
+def _w(repo, name, text) -> None:
     (repo / name).write_text(text, encoding="utf-8", newline="\n")
 
 
 @pytest.fixture()
-def merging(tmp_path):
+def merging(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "base")
@@ -50,14 +51,14 @@ def merging(tmp_path):
     return r
 
 
-def test_no_merge_reads_none(tmp_path):
+def test_no_merge_reads_none(tmp_path: Path) -> None:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q")
     assert ms.read_merge_state(r) is None
 
 
-def test_read_classifies_paths(merging):
+def test_read_classifies_paths(merging) -> None:
     state = ms.read_merge_state(merging)
     assert state.merge_head == _git(merging, "rev-parse", "MERGE_HEAD").stdout.strip()
     assert state.unmerged == ("shared.txt",)
@@ -67,12 +68,12 @@ def test_read_classifies_paths(merging):
     assert "bystander.txt" not in state.merge_paths
 
 
-def test_read_spawns_nothing(merging, monkeypatch):
+def test_read_spawns_nothing(merging, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     real = subprocess.Popen
 
     class Spy(real):
-        def __init__(self, *a, **k):
+        def __init__(self, *a, **k) -> None:
             calls.append(a)
             super().__init__(*a, **k)
 
@@ -81,13 +82,13 @@ def test_read_spawns_nothing(merging, monkeypatch):
     assert calls == []
 
 
-def test_unreadable_tree_raises(merging):
+def test_unreadable_tree_raises(merging) -> None:
     (merging / ".git" / "MERGE_HEAD").write_text("0" * 40 + "\n")
     with pytest.raises(ms.MergeStateError):
         ms.read_merge_state(merging)
 
 
-def test_markers_refuse_then_resolved_passes(merging):
+def test_markers_refuse_then_resolved_passes(merging) -> None:
     state = ms.read_merge_state(merging)
     paths = ["shared.txt", "auto.txt"]
     assert ms.merge_refusal(state, paths, merging).startswith(ms.MERGE_MARKERS)
@@ -95,39 +96,39 @@ def test_markers_refuse_then_resolved_passes(merging):
     assert ms.merge_refusal(state, paths, merging) is None
 
 
-def test_marker_in_auto_merged_path_is_not_scanned(merging):
+def test_marker_in_auto_merged_path_is_not_scanned(merging) -> None:
     state = ms.read_merge_state(merging)
     _w(merging, "shared.txt", "resolved\n")
     _w(merging, "auto.txt", "<<<<<<< x\nfixture\n>>>>>>> y\n")
     assert ms.merge_refusal(state, ["shared.txt", "auto.txt"], merging) is None
 
 
-def test_unresolved_path_omitted(merging):
+def test_unresolved_path_omitted(merging) -> None:
     state = ms.read_merge_state(merging)
     _w(merging, "shared.txt", "resolved\n")
     assert ms.merge_refusal(state, ["auto.txt"], merging).startswith(ms.MERGE_UNRESOLVED)
 
 
-def test_foreign_path_refused(merging):
+def test_foreign_path_refused(merging) -> None:
     state = ms.read_merge_state(merging)
     _w(merging, "shared.txt", "resolved\n")
     out = ms.merge_refusal(state, ["shared.txt", "auto.txt", "bystander.txt"], merging)
     assert out.startswith(ms.MERGE_FOREIGN) and "bystander.txt" in out
 
 
-def test_incomplete_pathspec_refused(merging):
+def test_incomplete_pathspec_refused(merging) -> None:
     state = ms.read_merge_state(merging)
     state = state._replace(unmerged=())
     out = ms.merge_refusal(state, ["shared.txt"], merging)
     assert out.startswith(ms.MERGE_INCOMPLETE) and "auto.txt" in out
 
 
-def test_octopus_refused(merging):
+def test_octopus_refused(merging) -> None:
     state = ms.read_merge_state(merging)._replace(merge_head="a" * 40 + "\n" + "b" * 40)
     assert ms.merge_refusal(state, [], merging).startswith(ms.MERGE_OCTOPUS)
 
 
-def test_clear_removes_all_four(tmp_path):
+def test_clear_removes_all_four(tmp_path: Path) -> None:
     for n in ("MERGE_HEAD", "MERGE_MSG", "MERGE_MODE", "AUTO_MERGE"):
         (tmp_path / n).write_text("x")
     (tmp_path / "keep").write_text("x")

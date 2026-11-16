@@ -12,11 +12,15 @@ import time
 from pathlib import Path
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 BIN = Path(__file__).resolve().parents[1]
 
 
-def _load(filename, modname):
+def _load(filename, modname) -> "ModuleType":
     spec = importlib.util.spec_from_file_location(modname, BIN / filename)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -37,21 +41,27 @@ STYLES = {
 }
 GEM, TARGET, FAR_GEM, DECOY = "group-em-ad", "example-game-repo-19", "group-em-ad.mini", "claude-klabauter-c6"
 REF = "[d92c0d]"
-MIRROR = {"unimatrixRemote": "mini", "macSocketPath": "/far/1.sock", "farPid": 7, "box": "mini"}
+MIRROR = {"unimatrixRemote": "mini", "macSocketPath": "/far/1.sock", "farPid": 7, "box": "mini",}
 
 
 @pytest.fixture(params=sorted(STYLES))
-def eps(request):
+def eps(request: pytest.FixtureRequest) -> dict[str, str]:
     return STYLES[request.param]
 
 
-def write_session(directory, filename, name, endpoint, **extra):
+def live_mirror_fields() -> dict:
+    """The stamps a roster poll leaves on a mirror whose far session it confirmed this poll."""
+    return {**router._roster().supervisor_fields(), "unimatrixFarSeen": int(time.time() * 1000)}
+
+
+def write_session(directory, filename, name, endpoint, **extra) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     (directory / filename).write_text(json.dumps(
-        {"pid": os.getpid(), "name": name, "messagingSocketPath": endpoint, **extra}), encoding="utf-8")
+        {"pid": os.getpid(), "name": name, "messagingSocketPath": endpoint,
+         **(live_mirror_fields() if "unimatrixRemote" in extra else {}), **extra}), encoding="utf-8")
 
 
-def roster(tmp_path, eps, with_far_gem=False):
+def roster(tmp_path, eps, with_far_gem: bool = False):
     """A live local G-EM, the far mirror of the named target, a decoy, and optionally the far box's own group-em-ad."""
     sessions = tmp_path / "sessions"
     write_session(sessions, "gem.json", GEM, eps["gem"])
@@ -71,35 +81,35 @@ def capture(r, monkeypatch):
     """Record every (sender, endpoint) the router would deliver to; nothing is sent."""
     sent = []
 
-    async def deliver(peer, endpoint, frame):
+    async def deliver(peer, endpoint, frame) -> None:
         sent.append((peer, endpoint))
 
-    async def face(source, destination):
+    async def face(source, destination) -> str:
         return "transport-face"
     monkeypatch.setattr(r, "_deliver_as_peer", deliver)
     monkeypatch.setattr(r, "_transport_face", face)
     return sent
 
 
-def dispatch(r, to, text="hello"):
+def dispatch(r, to, text: str = "hello"):
     return asyncio.run(r._dispatch({"op": "send", "as": "cli", "to": to, "text": text}))
 
 
-def test_bare_far_name_resolves_to_its_own_mirror_only(tmp_path, eps):
+def test_bare_far_name_resolves_to_its_own_mirror_only(tmp_path: Path, eps) -> None:
     r = make_router(tmp_path, roster(tmp_path, eps))
     assert r.resolve_sender(TARGET) == eps["far"]
     assert r.resolve_sender(f"{TARGET}.mini") == eps["far"]
 
 
 @pytest.mark.parametrize("name", [f"{GEM} {REF}", f"{TARGET} {REF}", f"{GEM}{REF}", REF])
-def test_name_plus_ref_never_resolves_to_another_session(tmp_path, eps, name):
+def test_name_plus_ref_never_resolves_to_another_session(tmp_path: Path, eps, name) -> None:
     r = make_router(tmp_path, roster(tmp_path, eps, with_far_gem=True))
     assert r.resolve_sender(name, "") == ""
     assert r.resolve_sender(name) not in {eps["gem"], eps["decoy"], eps["far"], eps["far_gem"]}
 
 
 @pytest.mark.parametrize("name", [f"{GEM} {REF}", f"{TARGET} {REF}", "no-such-session"])
-def test_unresolved_send_delivers_nothing_and_errors_by_name(tmp_path, eps, monkeypatch, name):
+def test_unresolved_send_delivers_nothing_and_errors_by_name(tmp_path: Path, eps, monkeypatch: pytest.MonkeyPatch, name) -> None:
     r = make_router(tmp_path, roster(tmp_path, eps))
     sent = capture(r, monkeypatch)
     response = dispatch(r, name)
@@ -107,19 +117,19 @@ def test_unresolved_send_delivers_nothing_and_errors_by_name(tmp_path, eps, monk
     assert sent == []
 
 
-def test_bare_name_carried_by_local_gem_and_far_mirror_is_refused_not_won_by_the_gem(tmp_path, eps):
+def test_bare_name_carried_by_local_gem_and_far_mirror_is_refused_not_won_by_the_gem(tmp_path: Path, eps) -> None:
     r = make_router(tmp_path, roster(tmp_path, eps, with_far_gem=True))
     assert r.resolve_sender(GEM) == ""
 
 
-def test_transport_send_to_a_name_two_live_sessions_carry_never_reaches_the_gem(tmp_path, eps, monkeypatch):
+def test_transport_send_to_a_name_two_live_sessions_carry_never_reaches_the_gem(tmp_path: Path, eps, monkeypatch: pytest.MonkeyPatch) -> None:
     r = make_router(tmp_path, roster(tmp_path, eps, with_far_gem=True))
     sent = capture(r, monkeypatch)
     response = dispatch(r, GEM)
     assert not response["ok"] and sent == []
 
 
-def test_peer_send_to_a_name_two_live_sessions_carry_never_reaches_the_gem(tmp_path, eps, monkeypatch):
+def test_peer_send_to_a_name_two_live_sessions_carry_never_reaches_the_gem(tmp_path: Path, eps, monkeypatch: pytest.MonkeyPatch) -> None:
     peer = {"name": "agy-a", "vendor": "agy", "target": "conv-1"}
     r = make_router(tmp_path, roster(tmp_path, eps, with_far_gem=True), peers=[peer])
     sent = capture(r, monkeypatch)
@@ -127,7 +137,7 @@ def test_peer_send_to_a_name_two_live_sessions_carry_never_reaches_the_gem(tmp_p
     assert not response["ok"] and sent == []
 
 
-def test_peer_send_to_a_bare_far_name_reaches_only_that_mirror(tmp_path, eps, monkeypatch):
+def test_peer_send_to_a_bare_far_name_reaches_only_that_mirror(tmp_path: Path, eps, monkeypatch: pytest.MonkeyPatch) -> None:
     peer = {"name": "agy-a", "vendor": "agy", "target": "conv-1"}
     r = make_router(tmp_path, roster(tmp_path, eps), peers=[peer])
     sent = capture(r, monkeypatch)
@@ -141,7 +151,7 @@ def reply_endpoints(r, monkeypatch, sender_name, frame_endpoint):
     """Run handle_inbound for a peer whose frame names `sender_name` at `frame_endpoint`; return the delivery endpoints."""
     sent = capture(r, monkeypatch)
 
-    async def turn(peer, text, addressed=None):
+    async def turn(peer, text, addressed=None) -> str:
         return "answer"
     monkeypatch.setattr(r, "turn", turn)
     frame = router._contract().build_frame(frame_endpoint, sender_name, "question")
@@ -149,14 +159,14 @@ def reply_endpoints(r, monkeypatch, sender_name, frame_endpoint):
     return [endpoint for _, endpoint in sent]
 
 
-def test_reply_to_a_far_sender_sharing_a_local_session_name_never_lands_on_that_local_session(tmp_path, eps, monkeypatch):
+def test_reply_to_a_far_sender_sharing_a_local_session_name_never_lands_on_that_local_session(tmp_path: Path, eps, monkeypatch: pytest.MonkeyPatch) -> None:
     peer = {"name": "agy-a", "vendor": "agy", "target": "conv-1"}
     r = make_router(tmp_path, roster(tmp_path, eps), peers=[peer])
     endpoints = reply_endpoints(r, monkeypatch, GEM, eps["frame"])
     assert eps["gem"] not in endpoints and eps["decoy"] not in endpoints
 
 
-def test_reply_to_a_sender_with_no_roster_row_goes_to_its_own_frame_endpoint(tmp_path, eps, monkeypatch):
+def test_reply_to_a_sender_with_no_roster_row_goes_to_its_own_frame_endpoint(tmp_path: Path, eps, monkeypatch: pytest.MonkeyPatch) -> None:
     peer = {"name": "agy-a", "vendor": "agy", "target": "conv-1"}
     r = make_router(tmp_path, roster(tmp_path, eps), peers=[peer])
     assert reply_endpoints(r, monkeypatch, "cli-sender", eps["frame"]) == [eps["frame"]]
@@ -165,7 +175,7 @@ def test_reply_to_a_sender_with_no_roster_row_goes_to_its_own_frame_endpoint(tmp
 class RouterOverDispatch:
     """The router module as unimatrix-send.py sees it, with request_line answered by an in-process router."""
 
-    def __init__(self, r):
+    def __init__(self, r) -> None:
         self._r = r
 
     def __getattr__(self, attr):
@@ -176,7 +186,7 @@ class RouterOverDispatch:
 
 
 @pytest.mark.parametrize("to", [f"{GEM} {REF}", f"{TARGET} {REF}", "no-such-session"])
-def test_send_cli_exits_nonzero_naming_an_unresolved_target(tmp_path, eps, monkeypatch, capsys, to):
+def test_send_cli_exits_nonzero_naming_an_unresolved_target(tmp_path: Path, eps, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], to) -> None:
     r = make_router(tmp_path, roster(tmp_path, eps))
     sent = capture(r, monkeypatch)
     monkeypatch.setattr(send_cli, "_router", lambda: RouterOverDispatch(r))
@@ -184,7 +194,7 @@ def test_send_cli_exits_nonzero_naming_an_unresolved_target(tmp_path, eps, monke
     assert to in capsys.readouterr().err and sent == []
 
 
-def test_send_cli_to_a_name_two_live_sessions_carry_exits_nonzero_and_delivers_nothing(tmp_path, eps, monkeypatch, capsys):
+def test_send_cli_to_a_name_two_live_sessions_carry_exits_nonzero_and_delivers_nothing(tmp_path: Path, eps, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     r = make_router(tmp_path, roster(tmp_path, eps, with_far_gem=True))
     sent = capture(r, monkeypatch)
     monkeypatch.setattr(send_cli, "_router", lambda: RouterOverDispatch(r))
@@ -192,11 +202,11 @@ def test_send_cli_to_a_name_two_live_sessions_carry_exits_nonzero_and_delivers_n
     assert GEM in capsys.readouterr().err and sent == []
 
 
-def relay_entries(eps, monkeypatch, rows):
+def relay_entries(eps, monkeypatch, rows) -> None:
     monkeypatch.setattr(relay, "entries", lambda: iter((pid, d, f"{pid}.key") for pid, d in rows))
 
 
-def test_far_relay_refuses_a_pid_that_no_longer_holds_the_addressed_session(eps, monkeypatch):
+def test_far_relay_refuses_a_pid_that_no_longer_holds_the_addressed_session(eps, monkeypatch: pytest.MonkeyPatch) -> None:
     relay_entries(eps, monkeypatch, [(11, {"name": DECOY, "sessionId": "sid-decoy", "messagingSocketPath": eps["decoy"]})])
     with pytest.raises(SystemExit) as refused:
         relay._session_path(11, expected_name_digest=relay.name_digest(GEM))
@@ -206,7 +216,7 @@ def test_far_relay_refuses_a_pid_that_no_longer_holds_the_addressed_session(eps,
     assert str(refused.value).startswith("target mismatch")
 
 
-def test_far_relay_refuses_a_name_two_live_far_sessions_carry(eps, monkeypatch):
+def test_far_relay_refuses_a_name_two_live_far_sessions_carry(eps, monkeypatch: pytest.MonkeyPatch) -> None:
     rows = [(11, {"name": GEM, "sessionId": "sid-1", "messagingSocketPath": eps["gem"]}),
             (12, {"name": GEM, "sessionId": "sid-2", "messagingSocketPath": eps["far_gem"]})]
     relay_entries(eps, monkeypatch, rows)
@@ -230,7 +240,7 @@ def home_roster(tmp_path, eps, monkeypatch):
 
 
 @pytest.mark.parametrize("to", [f"{TARGET}.mini", TARGET])
-def test_send_cli_surfaces_a_far_relay_failure_for_the_mirror_by_full_or_bare_name(tmp_path, eps, monkeypatch, capsys, to):
+def test_send_cli_surfaces_a_far_relay_failure_for_the_mirror_by_full_or_bare_name(tmp_path: Path, eps, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], to) -> None:
     r = make_router(tmp_path, home_roster(tmp_path, eps, monkeypatch))
     capture(r, monkeypatch)
     monkeypatch.setattr(send_cli, "_router", lambda: RouterOverDispatch(r))
@@ -239,7 +249,7 @@ def test_send_cli_surfaces_a_far_relay_failure_for_the_mirror_by_full_or_bare_na
     assert captured.err.startswith(f"undelivered: {to}:") and "sent to" not in captured.out
 
 
-def test_pipe_endpoint_off_windows_with_no_relay_route_is_refused_never_opened(tmp_path, monkeypatch):
+def test_pipe_endpoint_off_windows_with_no_relay_route_is_refused_never_opened(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     far = STYLES["pipe"]
     r = make_router(tmp_path, roster(tmp_path, far))
     sent = capture(r, monkeypatch)

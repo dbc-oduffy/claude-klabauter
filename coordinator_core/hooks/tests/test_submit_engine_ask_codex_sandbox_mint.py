@@ -22,7 +22,7 @@ STALL = "the disk is stalled"
 
 
 @pytest.fixture(autouse=True)
-def _codex_headless_em(monkeypatch):
+def _codex_headless_em(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CODEX_THREAD_ID", "0c8eeac3-0000-0000-0000-000000000000")
     monkeypatch.setenv("COORDINATOR_AGENT_VENDOR", "codex")
     monkeypatch.setenv("COORDINATOR_WORKFLOW_HOOK_TIMEOUT_S", "2.5")
@@ -54,7 +54,7 @@ def _deny_creates(monkeypatch, release: threading.Event) -> None:
     refusal as a name collision (minutes of CPU) instead of raising."""
     real_open, real_mkstemp = os.open, tempfile.mkstemp
 
-    def open_(path, *args, **kwargs):
+    def open_(path, *args, **kwargs) -> int:
         if ".mint-probe." in str(path):
             raise PermissionError(13, DENIED)
         return real_open(path, *args, **kwargs)
@@ -70,7 +70,7 @@ def _deny_creates(monkeypatch, release: threading.Event) -> None:
 
 
 @pytest.mark.deliberate_wall_clock(reason="a regression back to the spinning create burns the hook budget before it fails")
-def test_a_sandbox_denied_record_write_neither_stalls_nor_blocks_the_mint(repo, monkeypatch, release):
+def test_a_sandbox_denied_record_write_neither_stalls_nor_blocks_the_mint(repo, monkeypatch: pytest.MonkeyPatch, release) -> None:
     _deny_creates(monkeypatch, release)
     started = time.monotonic()
     reply = _submit(repo)
@@ -81,7 +81,7 @@ def test_a_sandbox_denied_record_write_neither_stalls_nor_blocks_the_mint(repo, 
 
 
 @pytest.mark.deliberate_wall_clock(reason="the sandbox denial surfaces after the emit begins its write; the follow-up scans run to the deadline")
-def test_a_denial_that_reaches_the_hook_is_refused_as_the_denial_with_its_remedy(repo):
+def test_a_denial_that_reaches_the_hook_is_refused_as_the_denial_with_its_remedy(repo) -> None:
     def emit(params, root):
         run_token.WRITE_GATE.get().begin()
         raise PermissionError(13, DENIED)
@@ -93,7 +93,7 @@ def test_a_denial_that_reaches_the_hook_is_refused_as_the_denial_with_its_remedy
 
 
 @pytest.mark.deliberate_wall_clock(reason="runs the hook to its emit budget against a blocked create")
-def test_a_slow_record_write_that_never_raises_still_refuses_as_a_stall(repo, monkeypatch, release):
+def test_a_slow_record_write_that_never_raises_still_refuses_as_a_stall(repo, monkeypatch: pytest.MonkeyPatch, release) -> None:
     real_mkstemp = tempfile.mkstemp
 
     def stalled(*args, **kwargs):
@@ -107,7 +107,7 @@ def test_a_slow_record_write_that_never_raises_still_refuses_as_a_stall(repo, mo
     assert STALL in reply["reason"]
 
 
-def test_an_allowed_record_write_mints_the_run_and_its_token(repo):
+def test_an_allowed_record_write_mints_the_run_and_its_token(repo) -> None:
     reply = _submit(repo)
     assert reply["run_id"], reply
     assert list(_token_dir(repo).glob("ask-*.json"))

@@ -19,6 +19,7 @@ import sys
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
+from coordinator_core import tenant_priority
 from coordinator_core.agent_pipe.agy import AgyAdapter
 from coordinator_core.agent_pipe.codex import CodexAdapter
 from coordinator_core.agent_pipe.reviewer_provider import ProviderChoice
@@ -201,6 +202,7 @@ def run_reviewer(
             cwd=cwd,
             env=child_env,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **tenant_priority.popen_kwargs(argv),
         )
         try:
             if on_spawn is not None:

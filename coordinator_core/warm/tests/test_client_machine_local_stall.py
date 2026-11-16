@@ -32,13 +32,13 @@ class _StuckPipe:
 
 
 class _UnsetPipe(_StuckPipe):
-    def readline(self):
+    def readline(self) -> bytes:
         result = {"stdout": "", "stderr": "", "exit_code": 1}
         return (json.dumps({"jsonrpc": "2.0", "id": 1, "result": result}) + "\n").encode()
 
 
 @pytest.fixture()
-def engine(monkeypatch, tmp_path):
+def engine(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("COORDINATOR_WARM_RUNTIME_BASE", str(tmp_path))
     monkeypatch.setenv("MACHINE_LOCAL_DEADLINE_S", "0.05")
     monkeypatch.setattr(client, "is_warm_enabled", lambda: True)
@@ -66,7 +66,7 @@ def _frame(verb: str, entrypoint: str = "machine-local") -> dict:
     }
 
 
-def test_stalled_warm_get_is_exit_4_with_the_typed_token(engine, monkeypatch) -> None:
+def test_stalled_warm_get_is_exit_4_with_the_typed_token(engine, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, "_open_pipe", lambda name: _StuckPipe())
     response = client.try_warm_dispatch(_frame("get"))
     result = response["result"]
@@ -76,29 +76,29 @@ def test_stalled_warm_get_is_exit_4_with_the_typed_token(engine, monkeypatch) ->
     assert "error" not in response
 
 
-def test_stalled_warm_get_waits_the_kernel_deadline_not_the_mutation_wait(engine, monkeypatch) -> None:
+def test_stalled_warm_get_waits_the_kernel_deadline_not_the_mutation_wait(engine, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, "_open_pipe", lambda name: _StuckPipe())
     monkeypatch.setattr(client, "_mutation_deadline_for", lambda method: pytest.fail("mutation wait consulted"))
     assert client.try_warm_dispatch(_frame("get"))["result"]["exit_code"] == 4
 
 
-def test_an_answered_unset_key_stays_exit_1(engine, monkeypatch) -> None:
+def test_an_answered_unset_key_stays_exit_1(engine, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, "_open_pipe", lambda name: _UnsetPipe())
     assert client.try_warm_dispatch(_frame("get"))["result"]["exit_code"] == 1
 
 
-def test_a_stalled_write_verb_keeps_the_indeterminate_envelope(engine, monkeypatch) -> None:
+def test_a_stalled_write_verb_keeps_the_indeterminate_envelope(engine, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, "_open_pipe", lambda name: _StuckPipe())
     response = client.try_warm_dispatch(_frame("set"))
     assert response["error"]["code"] == client.WARM_DISPATCH_INDETERMINATE
 
 
-def test_another_entrypoint_is_untouched(engine, monkeypatch) -> None:
+def test_another_entrypoint_is_untouched(engine, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, "_open_pipe", lambda name: _StuckPipe())
     assert client._machine_local_read_deadline(_frame("get", "cross-repo-memo")) is None
 
 
-def test_deadline_follows_the_env_and_falls_back_to_the_kernel_backstop(monkeypatch) -> None:
+def test_deadline_follows_the_env_and_falls_back_to_the_kernel_backstop(monkeypatch: pytest.MonkeyPatch) -> None:
     frame = _frame("get")
     monkeypatch.setenv("MACHINE_LOCAL_DEADLINE_S", "3")
     assert client._machine_local_read_deadline(frame) == 3.0

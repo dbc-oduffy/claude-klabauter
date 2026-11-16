@@ -38,6 +38,7 @@ from unittest import mock
 
 from coordinator_core.ops import session_hierarchy_derive as sut
 from coordinator_core.session.core import session_identity_override
+import pytest
 
 _CALLER_SID = "11111111-2222-3333-4444-555555555555"
 _SERVER_ENV_SID = "99999999-8888-7777-6666-555555555555"
@@ -58,7 +59,7 @@ def _run_and_capture_created_by_session(worktree_root: Path) -> str:
 
 
 class TestWarmCallerIdentity:
-    def test_override_beats_process_env(self, tmp_path, monkeypatch):
+    def test_override_beats_process_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.setenv("CLAUDE_SESSION_ID", _SERVER_ENV_SID)
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SERVER_ENV_SID)
@@ -69,7 +70,7 @@ class TestWarmCallerIdentity:
         assert created_by_session == _CALLER_SID
         assert created_by_session != _SERVER_ENV_SID
 
-    def test_no_override_falls_through_to_env(self, tmp_path, monkeypatch):
+    def test_no_override_falls_through_to_env(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.setenv("CLAUDE_SESSION_ID", _SERVER_ENV_SID)
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SERVER_ENV_SID)

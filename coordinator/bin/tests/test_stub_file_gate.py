@@ -14,11 +14,16 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).parent.parent
 
 
-def _load_module():
+def _load_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "stub_file_gate",
         _BIN_DIR / "stub-file-gate.py",
@@ -31,7 +36,7 @@ def _load_module():
 _mod = _load_module()
 
 
-def test_all_pass_exits_zero(tmp_path, capsys):
+def test_all_pass_exits_zero(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     f = tmp_path / "long.txt"
     f.write_text("\n".join(str(i) for i in range(30)) + "\n")
 
@@ -42,7 +47,7 @@ def test_all_pass_exits_zero(tmp_path, capsys):
     assert "GATE PASS" in captured.out
 
 
-def test_missing_file_exits_one(tmp_path, capsys):
+def test_missing_file_exits_one(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = _mod.main(["--min-lines", "5", str(tmp_path / "nope.txt")])
 
     assert rc == 1
@@ -51,7 +56,7 @@ def test_missing_file_exits_one(tmp_path, capsys):
     assert "does not exist" in captured.out
 
 
-def test_short_file_exits_one(tmp_path, capsys):
+def test_short_file_exits_one(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     f = tmp_path / "short.txt"
     f.write_text("a\nb\nc\n")
 
@@ -63,7 +68,7 @@ def test_short_file_exits_one(tmp_path, capsys):
     assert "has 3 line(s)" in captured.out
 
 
-def test_mixed_pass_and_fail_exits_one_reports_both(tmp_path, capsys):
+def test_mixed_pass_and_fail_exits_one_reports_both(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     good = tmp_path / "good.txt"
     good.write_text("\n".join(str(i) for i in range(10)) + "\n")
     bad = tmp_path / "bad.txt"
@@ -77,7 +82,7 @@ def test_mixed_pass_and_fail_exits_one_reports_both(tmp_path, capsys):
     assert "GATE FAIL: " + str(bad) in captured.out
 
 
-def test_min_lines_negative_exits_two(tmp_path, capsys):
+def test_min_lines_negative_exits_two(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     f = tmp_path / "x.txt"
     f.write_text("a\n")
 

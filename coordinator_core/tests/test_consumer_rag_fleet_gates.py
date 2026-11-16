@@ -78,5 +78,4 @@ def test_setup_rag_decision_profiles(profile, monkeypatch, tmp_path, capsys):
     claude_md = tmp_path / "CLAUDE.md"
     claude_md.write_text("# t\n", encoding="utf-8")
     assert srd.main([]) == 0
-    written = "RAG Index" in claude_md.read_text(encoding="utf-8")
-    assert written == (profile == "author")
+    assert claude_md.read_text(encoding="utf-8") == "# t\n"

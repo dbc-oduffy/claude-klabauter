@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -28,7 +29,7 @@ BODY = (
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("COORDINATOR_SESSION_ID", _AUTHOR_SESSION)
     monkeypatch.setattr(
         run_close_completion,
@@ -38,7 +39,7 @@ def repo(tmp_path, monkeypatch):
     return _make_git_repo(tmp_path)
 
 
-def _baton(repo, name="own.md"):
+def _baton(repo, name: str = "own.md") -> str:
     extra = (
         "deployment_state: ready_to_fire\n"
         f"claimed_by: {_AUTHOR_SESSION}\n"
@@ -49,12 +50,12 @@ def _baton(repo, name="own.md"):
     return f"state/handoffs/{name}"
 
 
-def _record(repo, rel):
+def _record(repo, rel) -> None:
     record_dir(repo, RUN).mkdir(parents=True, exist_ok=True)
     write_run_baton(repo, RUN, rel)
 
 
-def _pay(repo, monkeypatch, *, claims=(), met=True):
+def _pay(repo, monkeypatch, *, claims=(), met: bool = True):
     monkeypatch.setattr(completion_receipt, "_handoff_claims", lambda root, sid: list(claims))
     ctx = {
         "run_id": RUN,
@@ -66,7 +67,7 @@ def _pay(repo, monkeypatch, *, claims=(), met=True):
     return ctx, written
 
 
-def test_met_ships_the_recorded_baton_with_no_session_claim(repo, monkeypatch):
+def test_met_ships_the_recorded_baton_with_no_session_claim(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     rel = _baton(repo)
     _record(repo, rel)
 
@@ -80,7 +81,7 @@ def test_met_ships_the_recorded_baton_with_no_session_claim(repo, monkeypatch):
     assert ctx["batons"] == [rel]
 
 
-def test_session_claim_of_the_same_baton_ships_it_once(repo, monkeypatch):
+def test_session_claim_of_the_same_baton_ships_it_once(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     rel = _baton(repo)
     _record(repo, rel)
 
@@ -91,7 +92,7 @@ def test_session_claim_of_the_same_baton_ships_it_once(repo, monkeypatch):
     assert (repo / rel).read_text(encoding="utf-8").count(MARKER) == 1
 
 
-def test_not_met_leaves_the_recorded_baton_untouched(repo, monkeypatch):
+def test_not_met_leaves_the_recorded_baton_untouched(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     rel = _baton(repo)
     _record(repo, rel)
     before = (repo / rel).read_bytes()
@@ -104,7 +105,7 @@ def test_not_met_leaves_the_recorded_baton_untouched(repo, monkeypatch):
     assert rel not in written
 
 
-def test_recorded_path_outside_the_handoffs_home_is_ignored(repo, monkeypatch):
+def test_recorded_path_outside_the_handoffs_home_is_ignored(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "elsewhere.md").write_text("---\ntitle: x\n---\n", encoding="utf-8")
     _record(repo, "elsewhere.md")
 
@@ -115,7 +116,7 @@ def test_recorded_path_outside_the_handoffs_home_is_ignored(repo, monkeypatch):
     assert (repo / "elsewhere.md").read_text(encoding="utf-8") == "---\ntitle: x\n---\n"
 
 
-def test_recorded_baton_missing_on_disk_is_ignored(repo, monkeypatch):
+def test_recorded_baton_missing_on_disk_is_ignored(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _record(repo, "state/handoffs/gone.md")
 
     ctx, _ = _pay(repo, monkeypatch)
@@ -123,7 +124,7 @@ def test_recorded_baton_missing_on_disk_is_ignored(repo, monkeypatch):
     assert ctx["batons"] == []
 
 
-def test_already_shipped_at_this_sha_is_discharged_with_no_second_row(repo, monkeypatch):
+def test_already_shipped_at_this_sha_is_discharged_with_no_second_row(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     rel = _baton(repo)
     _record(repo, rel)
     _pay(repo, monkeypatch)

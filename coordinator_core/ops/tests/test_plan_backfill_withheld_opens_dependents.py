@@ -11,6 +11,7 @@ from coordinator_core.ops import plan_backfill_warp_executing as op
 from coordinator_core.ops.dispatch_emit.spine_read import coded_or_withheld
 from coordinator_core.roadmap import gate_v2
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -40,7 +41,7 @@ def _git(root, *args):
     ).stdout.strip()
 
 
-def _plan(root, name, status, spine):
+def _plan(root, name, status, spine) -> None:
     path = root / "docs/plans" / f"{name}.md"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -49,7 +50,7 @@ def _plan(root, name, status, spine):
     )
 
 
-def _baton(root, name, **extra):
+def _baton(root, name, **extra) -> None:
     d = root / "state/handoffs"
     d.mkdir(parents=True, exist_ok=True)
     lines = [f"stub_id: {name}", "baton_role: work", "status: open", "deployment_state: ready_to_fire"]
@@ -57,20 +58,20 @@ def _baton(root, name, **extra):
     (d / f"{name}.md").write_text("---\n" + "\n".join(lines) + "\n---\nbody\n", encoding="utf-8")
 
 
-def _manifest(root, plan_id):
+def _manifest(root, plan_id) -> None:
     d = root / "state/warp" / f"run-{plan_id}"
     d.mkdir(parents=True, exist_ok=True)
     (d / "manifest.json").write_text(json.dumps({"plan_id": plan_id, "rows": []}), encoding="utf-8")
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", "00000000-0000-4000-8000-000000000000")
     _git(tmp_path, "init", "-q", "-b", "main")
     return tmp_path
 
 
-def _build(repo, specs):
+def _build(repo, specs) -> None:
     for name, status, spine in specs:
         _plan(repo, name, status, spine)
         _manifest(repo, name)
@@ -86,7 +87,7 @@ def _dep_gate(repo):
     return row["execution_gate"]
 
 
-def test_withheld_plans_flip_to_landed_and_open_the_dependents_execution_gate(repo):
+def test_withheld_plans_flip_to_landed_and_open_the_dependents_execution_gate(repo) -> None:
     _build(repo, [("eet-01", "approved", GATED), ("eet-02", "executing", SLOT)])
     assert _dep_gate(repo)["open"] is False
 
@@ -101,7 +102,7 @@ def test_withheld_plans_flip_to_landed_and_open_the_dependents_execution_gate(re
     assert _dep_gate(repo) == {"open": True, "blocking": []}
 
 
-def test_a_plan_with_an_open_ungated_row_does_not_flip_to_landed(repo):
+def test_a_plan_with_an_open_ungated_row_does_not_flip_to_landed(repo) -> None:
     _build(repo, [("eet-01", "approved", UNGATED), ("eet-02", "approved", CLEARED)])
     out = op._handler({"apply": True}, repo_root=repo / ".git")
     assert {c["plan_id"]: c["target_status"] for c in out["candidates"]} == {
@@ -112,12 +113,12 @@ def test_a_plan_with_an_open_ungated_row_does_not_flip_to_landed(repo):
     assert _dep_gate(repo)["open"] is False
 
 
-def test_executing_plan_with_an_ungated_open_row_is_left_alone(repo):
+def test_executing_plan_with_an_ungated_open_row_is_left_alone(repo) -> None:
     _build(repo, [("eet-01", "executing", UNGATED)])
     assert op._handler({}, repo_root=repo / ".git")["candidates"] == []
 
 
-def test_coded_or_withheld_truth_table():
+def test_coded_or_withheld_truth_table() -> None:
     assert coded_or_withheld(GATED) and coded_or_withheld(SLOT)
     assert not coded_or_withheld(UNGATED) and not coded_or_withheld(CLEARED)
     assert not coded_or_withheld("no spine here")
@@ -125,10 +126,10 @@ def test_coded_or_withheld_truth_table():
     assert not coded_or_withheld(only_withheld)
 
 
-def test_close_path_lands_only_a_withheld_shape():
+def test_close_path_lands_only_a_withheld_shape() -> None:
     from coordinator_core.ops.ceremony.close_background import _land_if_withheld
 
-    def doc(status, spine):
+    def doc(status, spine) -> str:
         return f"---\ntitle: t\nstatus: {status}\n---\n\n{spine}"
 
     assert "status: landed\n" in _land_if_withheld(doc("approved", GATED))

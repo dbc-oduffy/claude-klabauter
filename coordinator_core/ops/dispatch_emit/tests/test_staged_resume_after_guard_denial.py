@@ -10,6 +10,8 @@ from coordinator_core.ops.dispatch_emit import ask_compose, launcher_staged_twin
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import _BLITZ_FN, _SIZING
+from pathlib import Path
+import pytest
 
 RAW = b'{"rows":[{"id":"C1"}]}'
 SHA = hashlib.sha256(RAW).hexdigest()
@@ -40,7 +42,7 @@ def _setup(root, run_record: dict) -> None:
     sizing.write_text(SIZING_TEXT, encoding="utf-8")
 
 
-def test_restage_after_guard_denial_keeps_the_accepted_plan_and_tshirt_seed(tmp_path):
+def test_restage_after_guard_denial_keeps_the_accepted_plan_and_tshirt_seed(tmp_path: Path) -> None:
     _setup(tmp_path, {"sizing_rel": "state/sizings/s1.yaml"})
     _stage(tmp_path)
     before = _resume(tmp_path)
@@ -53,7 +55,7 @@ def test_restage_after_guard_denial_keeps_the_accepted_plan_and_tshirt_seed(tmp_
     assert _resume(tmp_path) == before
 
 
-def test_restage_after_denial_without_a_sizing_plan_edge_seeds_no_plan_rather_than_a_fresh_one(tmp_path):
+def test_restage_after_denial_without_a_sizing_plan_edge_seeds_no_plan_rather_than_a_fresh_one(tmp_path: Path) -> None:
     _setup(tmp_path, {"sizing_rel": "state/sizings/s1.yaml", "status": "halted"})
     (tmp_path / "state/sizings/s1.yaml").write_text("estimate:\n  tshirt: L\n", encoding="utf-8")
     _stage(tmp_path)
@@ -70,7 +72,7 @@ def _script(monkeypatch) -> str:
     )
 
 
-def test_composed_script_runs_plan_blitz_only_when_no_resume_block(monkeypatch):
+def test_composed_script_runs_plan_blitz_only_when_no_resume_block(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     lines = script.splitlines()
     calls = [i for i, ln in enumerate(lines) if re.search(r"await \w*\(\{ .*mode: 'single'", ln)]
@@ -81,7 +83,7 @@ def test_composed_script_runs_plan_blitz_only_when_no_resume_block(monkeypatch):
     assert "const _STAGED_RESUME" in script
 
 
-def test_the_plan_legs_sit_behind_the_no_resume_guard(monkeypatch):
+def test_the_plan_legs_sit_behind_the_no_resume_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     guards = [ln for ln in script.splitlines() if re.match(r"  if \(!_halted && !_STAGED_RESUME && _gate\.arm === ", ln)]
     assert len(guards) >= 2

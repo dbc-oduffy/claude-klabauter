@@ -184,6 +184,21 @@ def test_is_skewed_true_on_axis1_primary_mismatch(monkeypatch, tmp_path):
     assert state.is_skewed("a-stale-client-token-from-before-a-checkout") is True
 
 
+def test_is_token_skewed_reads_axis1_only_and_ignores_a_stale_source(monkeypatch, tmp_path):
+    root = tmp_path / "clone"
+    _write_head_and_ref(root / ".git", "refs/heads/main", "a" * 40)
+    skew.write_engine_stamp(root, "sha:" + "1" * 40)
+    monkeypatch.setattr(skew.engine_version, "resolve_engine_sha", lambda: "deadbeef")
+    monkeypatch.setattr(lifecycle, "_compute_core_version", lambda: "hash-0")
+
+    state = skew.ServerVersionState(root)
+    state._source_stale = True
+
+    assert state.is_token_skewed(skew.compute_client_token(root)) is False
+    assert state.is_token_skewed("a-stale-client-token") is True
+    assert state.is_skewed(skew.compute_client_token(root)) is True
+
+
 def test_axis_attribution_records_both_axes_when_both_hold(monkeypatch, tmp_path):
     """THE ATTRIBUTION TRAP (claude-klabauter-22, 2026-08-26). `is_skewed` used
     to test axis 2 first and return early, so a count built on the deciding

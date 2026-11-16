@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_commit_pending_e2e
 )
 from coordinator_core.ops.review_reachability import _handler
 from coordinator_core.ops.tests._reachability_fixture import PLAN_REL, _git, _plan, _write, build
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -52,7 +53,7 @@ def _met_judge(reachability: dict) -> dict:
     )
 
 
-def test_fixed_scanner_output_leaves_a_met_judge_met(tmp_path):
+def test_fixed_scanner_output_leaves_a_met_judge_met(tmp_path: Path) -> None:
     res = _scan(tmp_path)
     reach = _reachability(res)
     assert reach["unreachable"] == [], reach
@@ -64,7 +65,7 @@ def test_fixed_scanner_output_leaves_a_met_judge_met(tmp_path):
     assert "commit" in out["phases"]
 
 
-def test_baseline_shape_unreachable_list_demotes_the_same_judge():
+def test_baseline_shape_unreachable_list_demotes_the_same_judge() -> None:
     (out,) = _run([_met_judge({"unreachable": [f"{_LIFECYCLE}:owner_lease_tick"], "undecidable": []})], judged=True)
     assert out["revise_and_refire"] is not None
     assert out["revise_and_refire"]["reason"].startswith("not wired up: ")

@@ -7,6 +7,7 @@ import subprocess
 import time
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -20,7 +21,7 @@ WRITES = ("src/a.py", "src/b.py")
 
 
 @pytest.fixture(autouse=True)
-def _no_spawn(monkeypatch):
+def _no_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("subprocess spawned")
 
@@ -28,18 +29,18 @@ def _no_spawn(monkeypatch):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     return tmp_path
 
 
-def _sizing(repo, rel=SIZING, did="dlv-run-1", status="routed"):
+def _sizing(repo, rel=SIZING, did: str = "dlv-run-1", status: str = "routed") -> None:
     path = repo / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f'status: {status}  # c\ndeliverable_id: "{did}"  # key\n', encoding="utf-8")
 
 
-def _run(repo, run_id="r1", writes=WRITES, session=SESSION, sizing_in_submission=SIZING, reconciled=False):
+def _run(repo, run_id: str = "r1", writes=WRITES, session=SESSION, sizing_in_submission=SIZING, reconciled: bool = False):
     run_dir = repo / "scratch/warp" / run_id
     run_dir.mkdir(parents=True)
     marker = render_marker(
@@ -55,11 +56,11 @@ def _run(repo, run_id="r1", writes=WRITES, session=SESSION, sizing_in_submission
     return run_dir
 
 
-def _mint(repo, run_id="r1", session=SESSION, sizing=SIZING):
+def _mint(repo, run_id: str = "r1", session=SESSION, sizing=SIZING) -> str:
     return run_token.mint(repo, run_id, "s.mjs", session_id=session, sizing_rel=sizing)
 
 
-def test_live_run_returns_sizing_deliverable(repo):
+def test_live_run_returns_sizing_deliverable(repo) -> None:
     _sizing(repo)
     _run(repo)
     _mint(repo)
@@ -67,27 +68,27 @@ def test_live_run_returns_sizing_deliverable(repo):
     assert wrd.live_run_deliverable_id(repo, SESSION, ["src\\a.py"]) == "dlv-run-1"
 
 
-def test_no_token_returns_empty(repo):
+def test_no_token_returns_empty(repo) -> None:
     _sizing(repo)
     _run(repo)
     assert wrd.live_run_deliverable_id(repo, SESSION, ["src/a.py"]) == ""
 
 
-def test_other_session_returns_empty(repo):
+def test_other_session_returns_empty(repo) -> None:
     _sizing(repo)
     _run(repo)
     _mint(repo, session="22222222-2222-2222-2222-222222222222")
     assert wrd.live_run_deliverable_id(repo, SESSION, ["src/a.py"]) == ""
 
 
-def test_raw_ask_token_without_sizing_returns_empty(repo):
+def test_raw_ask_token_without_sizing_returns_empty(repo) -> None:
     _sizing(repo)
     _run(repo)
     _mint(repo, sizing=None)
     assert wrd.live_run_deliverable_id(repo, SESSION, ["src/a.py"]) == ""
 
 
-def test_consumed_token_returns_empty(repo):
+def test_consumed_token_returns_empty(repo) -> None:
     _sizing(repo)
     _run(repo)
     _mint(repo)
@@ -95,7 +96,7 @@ def test_consumed_token_returns_empty(repo):
     assert wrd.live_run_deliverable_id(repo, SESSION, ["src/a.py"]) == ""
 
 
-def test_expired_token_returns_empty(repo):
+def test_expired_token_returns_empty(repo) -> None:
     _sizing(repo)
     _run(repo)
     _mint(repo)
@@ -106,7 +107,7 @@ def test_expired_token_returns_empty(repo):
     assert wrd.live_run_deliverable_id(repo, SESSION, ["src/a.py"]) == ""
 
 
-def test_two_distinct_ids_return_empty(repo):
+def test_two_distinct_ids_return_empty(repo) -> None:
     _sizing(repo, SIZING, "dlv-one")
     _sizing(repo, "state/sizings/b.yaml", "dlv-two")
     _run(repo, "r1")
@@ -116,7 +117,7 @@ def test_two_distinct_ids_return_empty(repo):
     assert wrd.live_run_deliverable_id(repo, SESSION, ["src/a.py"]) == ""
 
 
-def test_two_runs_same_id_return_it(repo):
+def test_two_runs_same_id_return_it(repo) -> None:
     _sizing(repo)
     _run(repo, "r1")
     _run(repo, "r2")
@@ -125,7 +126,7 @@ def test_two_runs_same_id_return_it(repo):
     assert wrd.live_run_deliverable_id(repo, SESSION, ["src/a.py"]) == "dlv-run-1"
 
 
-def test_disjoint_staged_paths_return_empty(repo):
+def test_disjoint_staged_paths_return_empty(repo) -> None:
     _sizing(repo)
     _run(repo)
     _mint(repo)
@@ -133,14 +134,14 @@ def test_disjoint_staged_paths_return_empty(repo):
     assert wrd.live_run_deliverable_id(repo, SESSION, []) == ""
 
 
-def test_reconciled_run_returns_empty(repo):
+def test_reconciled_run_returns_empty(repo) -> None:
     _sizing(repo)
     _run(repo, reconciled=True)
     _mint(repo)
     assert wrd.live_run_deliverable_id(repo, SESSION, ["src/a.py"]) == ""
 
 
-def test_run_records_reads_submission(repo):
+def test_run_records_reads_submission(repo) -> None:
     _run(repo)
     (rec,) = list(wrd.run_records(repo))
     assert (rec.run_id, rec.session_id, rec.sizing_rel) == ("r1", SESSION, SIZING)
@@ -149,7 +150,7 @@ def test_run_records_reads_submission(repo):
     assert rec.reconciled is False
 
 
-def test_run_records_falls_back_to_record_run_json(repo):
+def test_run_records_falls_back_to_record_run_json(repo) -> None:
     _run(repo, sizing_in_submission=None)
     rec_dir = repo / "state/warp/r1"
     rec_dir.mkdir(parents=True)
@@ -158,7 +159,7 @@ def test_run_records_falls_back_to_record_run_json(repo):
     assert rec.sizing_rel == "state/sizings/z.yaml"
 
 
-def test_run_records_reconciled_flag_and_no_marker(repo):
+def test_run_records_reconciled_flag_and_no_marker(repo) -> None:
     run_dir = _run(repo, reconciled=True)
     (run_dir / "commit-request.txt").unlink()
     (rec,) = list(wrd.run_records(repo))
@@ -166,11 +167,11 @@ def test_run_records_reconciled_flag_and_no_marker(repo):
     assert rec.writes == ()
 
 
-def test_run_records_empty_without_scratch(repo):
+def test_run_records_empty_without_scratch(repo) -> None:
     assert list(wrd.run_records(repo)) == []
 
 
-def test_write_reconciled_round_trips(repo):
+def test_write_reconciled_round_trips(repo) -> None:
     run_dir = _run(repo)
     path = wrd.write_reconciled(run_dir, SIZING, "dlv-run-1", ["abc", "def"])
     assert path.name == wrd.RECONCILED_FILE
@@ -179,7 +180,7 @@ def test_write_reconciled_round_trips(repo):
     assert rec.reconciled is True
 
 
-def test_sizing_scalar_forms(repo):
+def test_sizing_scalar_forms(repo) -> None:
     _sizing(repo)
     assert wrd.sizing_scalar(repo, SIZING, "status") == "routed"
     assert wrd.sizing_scalar(repo, SIZING, "deliverable_id") == "dlv-run-1"
@@ -191,7 +192,7 @@ PEER = "22222222-2222-2222-2222-222222222222"
 
 
 @pytest.fixture
-def live(monkeypatch):
+def live(monkeypatch: pytest.MonkeyPatch):
     from coordinator_core.session import touch_record
 
     dead: set = set()
@@ -199,7 +200,7 @@ def live(monkeypatch):
     return dead
 
 
-def _manifest(repo, run_id, writes=(), doc_writes=(), raw=None):
+def _manifest(repo, run_id, writes=(), doc_writes=(), raw=None) -> None:
     d = repo / "state/warp" / run_id
     d.mkdir(parents=True, exist_ok=True)
     body = raw if raw is not None else json.dumps({"rows": [{"id": "C1", "writes": list(writes)}], "doc_writes": list(doc_writes)})
@@ -211,19 +212,19 @@ def _claims(repo, paths, **kw):
     return wrd.live_run_write_claims(repo, paths, **kw)
 
 
-def test_claims_manifest_row_path(repo, live):
+def test_claims_manifest_row_path(repo, live) -> None:
     _manifest(repo, "p1", writes=["pkg/op.py"])
     run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
     assert _claims(repo, ["pkg/op.py", "pkg/other.py"]) == {"pkg/op.py": [PEER]}
 
 
-def test_claims_doc_writes_path(repo, live):
+def test_claims_doc_writes_path(repo, live) -> None:
     _manifest(repo, "p1", doc_writes=["docs/a.md"])
     run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
     assert _claims(repo, ["docs\\a.md"]) == {"docs/a.md": [PEER]}
 
 
-def test_commit_request_prefix_claims_child(repo, live):
+def test_commit_request_prefix_claims_child(repo, live) -> None:
     run_dir = repo / "scratch/warp/p1"
     run_dir.mkdir(parents=True)
     marker = render_marker(
@@ -234,7 +235,7 @@ def test_commit_request_prefix_claims_child(repo, live):
     assert _claims(repo, ["pkg/tests/t.py", "pkg/testsx/t.py"]) == {"pkg/tests/t.py": [PEER]}
 
 
-def test_peer_prefix_never_holds_a_path_the_asking_run_names_exactly(repo, live):
+def test_peer_prefix_never_holds_a_path_the_asking_run_names_exactly(repo, live) -> None:
     run_dir = repo / "scratch/warp/p1"
     run_dir.mkdir(parents=True)
     marker = render_marker(
@@ -247,7 +248,7 @@ def test_peer_prefix_never_holds_a_path_the_asking_run_names_exactly(repo, live)
     assert got == {"pkg/x.py": [PEER], "pkg/b.py": [PEER]}
 
 
-def test_minted_run_with_unproven_runner_is_not_a_live_peer(repo, live, monkeypatch):
+def test_minted_run_with_unproven_runner_is_not_a_live_peer(repo, live, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import warp_live
 
     _manifest(repo, "p1", writes=["a.py"])
@@ -259,7 +260,7 @@ def test_minted_run_with_unproven_runner_is_not_a_live_peer(repo, live, monkeypa
     assert _claims(repo, ["a.py"]) == {"a.py": [PEER]}
 
 
-def test_halted_run_never_reaches_liveness_or_transcript_checks(repo, monkeypatch):
+def test_halted_run_never_reaches_liveness_or_transcript_checks(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import warp_live
     from coordinator_core.session import touch_record
 
@@ -277,7 +278,7 @@ def test_halted_run_never_reaches_liveness_or_transcript_checks(repo, monkeypatc
     assert _claims(repo, ["a.py"]) == {}
 
 
-def test_a_real_minted_run_past_the_grace_with_no_launch_is_not_a_live_peer(repo, live, tmp_path, monkeypatch):
+def test_a_real_minted_run_past_the_grace_with_no_launch_is_not_a_live_peer(repo, live, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import warp_live
 
     managed = tmp_path / "managed"
@@ -294,33 +295,33 @@ def test_a_real_minted_run_past_the_grace_with_no_launch_is_not_a_live_peer(repo
     assert _claims(repo, ["a.py"]) == {}
 
 
-def test_own_session_excluded(repo, live):
+def test_own_session_excluded(repo, live) -> None:
     _manifest(repo, "p1", writes=["a.py"])
     run_token.mint(repo, "p1", "s.mjs", session_id=SESSION)
     assert _claims(repo, ["a.py"]) == {}
 
 
-def test_ownerless_token_excluded(repo, live):
+def test_ownerless_token_excluded(repo, live) -> None:
     _manifest(repo, "p1", writes=["a.py"])
     run_token.mint(repo, "p1", "s.mjs")
     assert _claims(repo, ["a.py"]) == {}
 
 
-def test_dead_session_excluded(repo, live):
+def test_dead_session_excluded(repo, live) -> None:
     _manifest(repo, "p1", writes=["a.py"])
     run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
     live.add(PEER)
     assert _claims(repo, ["a.py"]) == {}
 
 
-def test_claimed_token_counts(repo, live):
+def test_claimed_token_counts(repo, live) -> None:
     _manifest(repo, "p1", writes=["a.py"])
     token = run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
     assert run_token.redeem(repo, "p1", token, "s.mjs")
     assert _claims(repo, ["a.py"]) == {"a.py": [PEER]}
 
 
-def test_expired_token_does_not_count(repo, live, monkeypatch):
+def test_expired_token_does_not_count(repo, live, monkeypatch: pytest.MonkeyPatch) -> None:
     _manifest(repo, "p1", writes=["a.py"])
     run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
     real = time.time
@@ -328,25 +329,25 @@ def test_expired_token_does_not_count(repo, live, monkeypatch):
     assert _claims(repo, ["a.py"]) == {}
 
 
-def test_malformed_manifest_without_commit_request_is_unknown(repo, live):
+def test_malformed_manifest_without_commit_request_is_unknown(repo, live) -> None:
     _manifest(repo, "p1", raw="{not json")
     run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
     assert _claims(repo, ["a.py"]) is None
 
 
-def test_malformed_manifest_with_commit_request_falls_back(repo, live):
+def test_malformed_manifest_with_commit_request_falls_back(repo, live) -> None:
     _manifest(repo, "p1", raw="{not json")
     _run(repo, run_id="p1", writes=("a.py",))
     run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
     assert _claims(repo, ["a.py"]) == {"a.py": [PEER]}
 
 
-def test_no_declaration_files_claims_nothing(repo, live):
+def test_no_declaration_files_claims_nothing(repo, live) -> None:
     run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
     assert _claims(repo, ["a.py"]) == {}
 
 
-def test_minted_before_keeps_only_senior_runs(repo, live):
+def test_minted_before_keeps_only_senior_runs(repo, live) -> None:
     _manifest(repo, "p1", writes=["a.py"])
     run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
     minted = next(iter(run_token.live_records(repo)))["minted_at"]
@@ -355,7 +356,7 @@ def test_minted_before_keeps_only_senior_runs(repo, live):
     assert _claims(repo, ["a.py"], minted_before=(minted, "p2")) == {"a.py": [PEER]}
 
 
-def test_many_runs_many_paths_no_spawn_and_one_listing(repo, live, monkeypatch):
+def test_many_runs_many_paths_no_spawn_and_one_listing(repo, live, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import run as git_run
 
     monkeypatch.setattr(git_run, "run_git", lambda *a, **k: (_ for _ in ()).throw(AssertionError("git")))
@@ -370,7 +371,7 @@ def test_many_runs_many_paths_no_spawn_and_one_listing(repo, live, monkeypatch):
     assert len(out) == 50
 
 
-def test_exclude_run_skips_record_whatever_its_session(repo, live):
+def test_exclude_run_skips_record_whatever_its_session(repo, live) -> None:
     _manifest(repo, "p1", writes=["a.py"])
     _manifest(repo, "p2", writes=["b.py"])
     run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
@@ -379,13 +380,13 @@ def test_exclude_run_skips_record_whatever_its_session(repo, live):
     assert _claims(repo, ["a.py", "b.py"], exclude_session="", exclude_run="p1") == {"b.py": [PEER]}
 
 
-def test_exclude_run_skips_malformed_manifest_of_that_run(repo, live):
+def test_exclude_run_skips_malformed_manifest_of_that_run(repo, live) -> None:
     _manifest(repo, "p1", raw="{not json")
     run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
     assert _claims(repo, ["a.py"], exclude_run="p1") == {}
 
 
-def test_unknown_result_logs_offending_run_id(repo, live, caplog):
+def test_unknown_result_logs_offending_run_id(repo, live, caplog: pytest.LogCaptureFixture) -> None:
     _manifest(repo, "p-bad", raw="{not json")
     run_token.mint(repo, "p-bad", "s.mjs", session_id=PEER)
     with caplog.at_level("WARNING"):
@@ -393,7 +394,7 @@ def test_unknown_result_logs_offending_run_id(repo, live, caplog):
     assert "p-bad" in caplog.text
 
 
-def test_a_halted_run_declares_nothing(repo, live):
+def test_a_halted_run_declares_nothing(repo, live) -> None:
     from coordinator_core.ops.dispatch_emit import halted_run
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
@@ -403,7 +404,7 @@ def test_a_halted_run_declares_nothing(repo, live):
     assert _claims(repo, ["a.py"]) == {}
 
 
-def test_a_resumed_run_declares_again(repo, live):
+def test_a_resumed_run_declares_again(repo, live) -> None:
     from coordinator_core.ops.dispatch_emit import halted_run
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
@@ -414,7 +415,7 @@ def test_a_resumed_run_declares_again(repo, live):
     assert _claims(repo, ["a.py"]) == {"a.py": [PEER]}
 
 
-def test_a_landed_run_declares_nothing(repo, live):
+def test_a_landed_run_declares_nothing(repo, live) -> None:
     from coordinator_core.ops.dispatch_emit import halted_run
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
@@ -430,7 +431,7 @@ def test_a_landed_run_declares_nothing(repo, live):
     assert _claims(repo, ["a.py"]) == {"a.py": [PEER]}
 
 
-def test_withheld_path_is_not_claimed(repo, live):
+def test_withheld_path_is_not_claimed(repo, live) -> None:
     from coordinator_core.ops.dispatch_emit import run_withhold
 
     _manifest(repo, "p1", writes=["a.py", "b.py"])
@@ -445,31 +446,31 @@ def _owners(repo, paths, **kw):
     return wrd.live_record_dir_owners(repo, paths, **kw)
 
 
-def test_owners_own_run_absent(repo, live):
+def test_owners_own_run_absent(repo, live) -> None:
     run_token.mint(repo, "p1", "s.mjs", session_id=SESSION)
     assert _owners(repo, ["state/warp/p1/run.json"]) == {}
 
 
-def test_owners_live_peer_run_present(repo, live):
+def test_owners_live_peer_run_present(repo, live) -> None:
     run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
     got = _owners(repo, ["state/warp/p1/run.json", "state\\warp\\p1\\sub\\x.json", "state/warp/p2/run.json"])
     assert got == {"state/warp/p1/run.json": [PEER], "state/warp/p1/sub/x.json": [PEER]}
 
 
-def test_owners_dead_peer_absent(repo, live):
+def test_owners_dead_peer_absent(repo, live) -> None:
     run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
     live.add(PEER)
     assert _owners(repo, ["state/warp/p1/run.json"]) == {}
 
 
-def test_owners_expired_token_absent(repo, live, monkeypatch):
+def test_owners_expired_token_absent(repo, live, monkeypatch: pytest.MonkeyPatch) -> None:
     run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
     real = time.time
     monkeypatch.setattr(time, "time", lambda: real() + run_token.TTL_SECONDS + 5)
     assert _owners(repo, ["state/warp/p1/run.json"]) == {}
 
 
-def test_owners_halted_run_absent(repo, live):
+def test_owners_halted_run_absent(repo, live) -> None:
     from coordinator_core.ops.dispatch_emit import halted_run
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
@@ -478,12 +479,12 @@ def test_owners_halted_run_absent(repo, live):
     assert _owners(repo, ["state/warp/p1/run.json"]) == {}
 
 
-def test_owners_unheld_run_and_outside_paths_absent(repo, live):
+def test_owners_unheld_run_and_outside_paths_absent(repo, live) -> None:
     run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
     assert _owners(repo, ["state/warp/p9/run.json", "src/a.py", "state/warp", "state/warp/"]) == {}
 
 
-def test_owners_claimed_fresh_present_expired_absent(repo, live, monkeypatch):
+def test_owners_claimed_fresh_present_expired_absent(repo, live, monkeypatch: pytest.MonkeyPatch) -> None:
     token = run_token.mint(repo, "p1", "s.mjs", session_id=PEER)
     assert run_token.redeem(repo, "p1", token, "s.mjs")
     assert _owners(repo, ["state/warp/p1/run.json"]) == {"state/warp/p1/run.json": [PEER]}
@@ -492,7 +493,7 @@ def test_owners_claimed_fresh_present_expired_absent(repo, live, monkeypatch):
     assert _owners(repo, ["state/warp/p1/run.json"]) == {}
 
 
-def test_run_records_reads_other_box_run_from_tracked_outcome(tmp_path):
+def test_run_records_reads_other_box_run_from_tracked_outcome(tmp_path: Path) -> None:
     import json as _json
     from coordinator_core.ops import warp_run_deliverable as wrd
 
@@ -508,7 +509,7 @@ def test_run_records_reads_other_box_run_from_tracked_outcome(tmp_path):
     assert recs["ask-halted-1"].sizing_rel == "state/sizings/s.yaml"
 
 
-def test_claims_inside_a_land_scope_share_one_peer_view_and_match_outside_a_scope(repo, live, monkeypatch):
+def test_claims_inside_a_land_scope_share_one_peer_view_and_match_outside_a_scope(repo, live, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import land_deadline
 
     for n in range(3):
@@ -538,7 +539,7 @@ def test_claims_inside_a_land_scope_share_one_peer_view_and_match_outside_a_scop
     assert len(listed) == 2 and len(decided) == 6
 
 
-def test_a_land_scope_peer_view_is_never_held_into_a_following_scope(repo, live):
+def test_a_land_scope_peer_view_is_never_held_into_a_following_scope(repo, live) -> None:
     from coordinator_core.ops.dispatch_emit import land_deadline
 
     _manifest(repo, "p1", writes=["a.py"])

@@ -7,12 +7,14 @@ records the figures and asserts their shape; the bar is not enforced here yet.
 
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
 
 import pytest
 
 from coordinator_core.benchmarks import submit_ask_hook_to_reply_legs as legs
+from coordinator_core.win_portability import no_console_creationflags
 
 # Resolved at import: the suite root's conftest quarantines HOME for unmarked tests.
 _DOOR = legs.installed_door()
@@ -101,6 +103,129 @@ def test_instrumentation_seam_exists_in_the_live_server_source():
 def test_instrumentation_refuses_a_server_that_lost_its_main_guard():
     with pytest.raises(ValueError, match="no seam"):
         legs.instrumented_server_source("def main():\n    return 0\n")
+
+
+def _allow(reason: str, context: str = "") -> str:
+    return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow",
+                                              "permissionDecisionReason": reason, "additionalContext": context}})
+
+
+def _deny(reason: str) -> str:
+    return json.dumps({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                              "permissionDecisionReason": reason}})
+
+
+@pytest.mark.parametrize("stdout, expected", [
+    (_allow("Engine submission: emitted x.workflow.mjs this call.", "Submitted to the engine as run warp-1-abc."), "minted"),
+    (_allow("Engine submission: minted run r1, deferred start s.mjs.", "Submitted to the engine as run r1: its emit outran"), "minted"),
+    (_deny("The submission outran the hook budget before any run was minted. Re-submit once.\nInstead: `Workflow(...)`."), "refused"),
+    (_deny("Start or abandon r1 with dispatch.minted_run {run_id, action: start|abandon}."), "refused"),
+    (_allow("Engine submission: spooled as 0123abcd.", "The engine is unavailable (x); the ask is spooled as 0123abcd."), "spooled"),
+    (json.dumps({"systemMessage": "coordinator: Engine unavailable; ask spooled as 0123abcd; it mints when the engine "
+                                  "recovers. To withdraw: coordinator-invoke ask_spool.withdraw", "suppressOutput": False}), "spooled"),
+    (_deny("The engine is unavailable (x); the ask is spooled as 0123abcd. Do not re-submit."), "spooled"),
+    ("", "silent"),
+    ("  \n", "silent"),
+    (json.dumps({"systemMessage": "coordinator: engine failed (deadline); guard not evaluated, command allowed.",
+                 "hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"}}), "silent"),
+    (json.dumps({"systemMessage": "coordinator: the engine gave no answer and the ask could not be spooled; nothing was "
+                                  "minted - re-submit, or check state/warp for a minted run.", "suppressOutput": False,
+                 "hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": "coordinator: the engine "
+                                        "gave no answer and the ask could not be spooled; nothing was minted - re-submit, "
+                                        "or check state/warp for a minted run."}}), "refused"),
+    (json.dumps({"systemMessage": "coordinator: the ask was spooled; the drain mints it - do not re-submit.",
+                 "suppressOutput": False}), "spooled"),
+    (json.dumps({"systemMessage": "coordinator: the ask could not be spooled."}), "silent"),
+    (_allow("nothing minted"), "silent"),
+    (_deny("blocked"), "silent"),
+    ("not json at all", "silent"),
+])
+def test_classify_outcome_on_fixture_stdouts(stdout, expected):
+    assert legs.classify_outcome(stdout) == expected
+
+
+def test_classify_outcome_only_returns_a_declared_outcome():
+    assert {legs.classify_outcome(s) for s in ("", _deny("x"), _allow("Submitted to the engine as run r."))} <= set(legs.OUTCOMES)
+
+
+def test_suspended_stops_the_processes_and_resumes_them_after_the_hold(tmp_path):
+    import subprocess
+    import sys
+    import time
+
+    import psutil
+
+    child = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **no_console_creationflags())
+    try:
+        proc = psutil.Process(child.pid)
+        with legs._Suspended([proc], hold_s=0.4):
+            time.sleep(0.1)
+            assert proc.status() == psutil.STATUS_STOPPED
+            deadline = time.time() + 5
+            while proc.status() == psutil.STATUS_STOPPED and time.time() < deadline:
+                time.sleep(0.05)
+            assert proc.status() != psutil.STATUS_STOPPED, "the hold timer never resumed the process"
+        with legs._Suspended([proc], hold_s=60.0):
+            assert proc.status() == psutil.STATUS_STOPPED
+        assert proc.status() != psutil.STATUS_STOPPED, "leaving the block must resume the process"
+    finally:
+        child.kill()
+        child.wait()
+
+
+def test_the_blocked_ask_spool_refuses_a_real_spool_write(tmp_path):
+    from coordinator_core.ask_spool import record
+
+    legs._block_ask_spool(tmp_path)
+    with pytest.raises(OSError):
+        record.spool_ask(str(tmp_path), b"{}", session_id="s", tool_use_id="t", reason="x")
+
+
+def test_the_door_pass_loudly_advisory_the_spool_failed_leg_returns_is_silent():
+    advisory = json.dumps({"systemMessage": "coordinator: engine failed (no response within 8000ms of delivery); "
+                           "guard not evaluated, command allowed.", "suppressOutput": False,
+                           "hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                                  "additionalContext": "coordinator: engine failed; guard not evaluated, command allowed."}})
+    assert legs.classify_outcome(advisory) == "silent"
+
+
+def test_starve_targets_refuses_an_unknown_leg():
+    with pytest.raises(ValueError, match="unknown starvation leg"):
+        legs.starve_targets("nope", os.getpid())
+
+
+def test_starve_targets_split_the_server_from_its_workers():
+    import subprocess
+    import sys
+
+    import psutil
+
+    child = subprocess.Popen([sys.executable, "-I", "-c", "import time; time.sleep(60)"], stdin=subprocess.DEVNULL,
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, **no_console_creationflags())
+    try:
+        me = os.getpid()
+        assert [p.pid for p in legs.starve_targets("hook_start", me)] == [me]
+        assert child.pid in [p.pid for p in legs.starve_targets("warm_timeout", me)]
+        assert me not in [p.pid for p in legs.starve_targets("warm_timeout", me)]
+        both = [p.pid for p in legs.starve_targets("door_bound", me)]
+        assert me in both and child.pid in both
+        assert psutil.Process(me).is_running()
+    finally:
+        child.kill()
+        child.wait()
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.skipif(_DOOR is None, reason="no installed hook-run door on this box")
+@pytest.mark.skipif(os.name != "nt", reason="the engine-clone job-object teardown is measured on Windows")
+def test_the_starved_harness_classifies_every_submit_and_the_control_mints():
+    report = legs.measure_starved(runs=1, door=_DOOR)
+    assert report["control_minted"], report["rows"][0]
+    assert {r["leg"] for r in report["rows"]} == {legs.CONTROL_LEG, *legs.STARVE_LEGS}
+    assert all(r["outcome"] in legs.OUTCOMES for r in report["rows"])
+    print("SUBMIT-STARVE", {k: v for k, v in report.items() if k != "rows"})
 
 
 #: Spawns the submit's `evaluate` may make under concurrent run starts: it reads and emits in process.

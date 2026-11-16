@@ -26,10 +26,11 @@ from coordinator_core.ops.coordinator_setup_state import (
     main,
     record_setup_concluded,
 )
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _drop_settings_home_override(monkeypatch):
+def _drop_settings_home_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """Neutralise ``COORDINATOR_SETTINGS_HOME`` for every test in this module.
 
     ``_ml_dir`` below (and the module's own ``_machine_local_dir``) resolve the
@@ -45,7 +46,7 @@ def _drop_settings_home_override(monkeypatch):
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
 
 
-def _env(tmp_path, claude_home_exists=True):
+def _env(tmp_path, claude_home_exists: bool = True):
     home = tmp_path / "home"
     home.mkdir()
     if claude_home_exists:
@@ -53,13 +54,13 @@ def _env(tmp_path, claude_home_exists=True):
     return {"CLAUDE_HOME": str(home), "HOME": str(home)}, home / ".claude" / "coordinator-setup-state.yaml"
 
 
-def _run(monkeypatch, env, *args):
+def _run(monkeypatch, env, *args) -> int:
     for k, v in env.items():
         monkeypatch.setenv(k, v)
     return main(list(args))
 
 
-def test_paths_absolute_when_home_unset_userprofile_set(tmp_path):
+def test_paths_absolute_when_home_unset_userprofile_set(tmp_path: Path) -> None:
     """Native Windows sets USERPROFILE and not HOME. Resolving off HOME alone
     produced a RELATIVE `.claude/...` path, so `record` wrote its receipt into
     the process CWD — a real file, truthfully reported, in whatever repo the
@@ -73,7 +74,7 @@ def test_paths_absolute_when_home_unset_userprofile_set(tmp_path):
     assert state_file == os.path.join(str(tmp_path), ".claude", "coordinator-setup-state.yaml")
 
 
-def test_claude_home_still_wins_over_both_home_vars(tmp_path):
+def test_claude_home_still_wins_over_both_home_vars(tmp_path: Path) -> None:
     env = {
         "CLAUDE_HOME": str(tmp_path / "explicit"),
         "HOME": str(tmp_path / "posix"),
@@ -82,18 +83,18 @@ def test_claude_home_still_wins_over_both_home_vars(tmp_path):
     assert _state_file(env).startswith(str(tmp_path / "explicit"))
 
 
-def test_home_wins_over_userprofile_when_both_set(tmp_path):
+def test_home_wins_over_userprofile_when_both_set(tmp_path: Path) -> None:
     env = {"HOME": str(tmp_path / "posix"), "USERPROFILE": str(tmp_path / "windows")}
     assert _state_file(env).startswith(str(tmp_path / "posix"))
 
 
-def test_check_before_record_fails(tmp_path, monkeypatch, capsys):
+def test_check_before_record_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     env, _ = _env(tmp_path)
     rc = _run(monkeypatch, env, "check", "setup_concluded")
     assert rc == 1
 
 
-def test_status_before_record_nonzero(tmp_path, monkeypatch, capsys):
+def test_status_before_record_nonzero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     env, _ = _env(tmp_path)
     rc = _run(monkeypatch, env, "status")
     assert rc == 1
@@ -101,7 +102,7 @@ def test_status_before_record_nonzero(tmp_path, monkeypatch, capsys):
     assert "No coordinator setup-state receipt at" in out
 
 
-def test_record_seeds_and_writes(tmp_path, monkeypatch, capsys):
+def test_record_seeds_and_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     env, state_file = _env(tmp_path)
     rc = _run(monkeypatch, env, "record", "orientation_started")
     assert rc == 0
@@ -111,14 +112,14 @@ def test_record_seeds_and_writes(tmp_path, monkeypatch, capsys):
     assert "orientation_started_at:" in content
 
 
-def test_check_after_record_passes(tmp_path, monkeypatch):
+def test_check_after_record_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env, _ = _env(tmp_path)
     _run(monkeypatch, env, "record", "orientation_started")
     rc = _run(monkeypatch, env, "check", "orientation_started")
     assert rc == 0
 
 
-def test_record_idempotent_first_occurrence_wins(tmp_path, monkeypatch, capsys):
+def test_record_idempotent_first_occurrence_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     env, state_file = _env(tmp_path)
     _run(monkeypatch, env, "record", "orientation_started")
     first = [l for l in state_file.read_text().splitlines() if l.startswith("orientation_started_at:")][0]
@@ -130,7 +131,7 @@ def test_record_idempotent_first_occurrence_wins(tmp_path, monkeypatch, capsys):
     assert first == second
 
 
-def test_independent_milestones_coexist(tmp_path, monkeypatch):
+def test_independent_milestones_coexist(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env, state_file = _env(tmp_path)
     _run(monkeypatch, env, "record", "orientation_completed")
     _run(monkeypatch, env, "record", "orientation_started")
@@ -152,13 +153,13 @@ def test_independent_milestones_coexist(tmp_path, monkeypatch):
         ("frobnicate",),
     ],
 )
-def test_bad_or_missing_args_rejected(tmp_path, monkeypatch, args):
+def test_bad_or_missing_args_rejected(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, args) -> None:
     env, _ = _env(tmp_path)
     rc = _run(monkeypatch, env, *args)
     assert rc == 2
 
 
-def test_status_prints_receipt(tmp_path, monkeypatch, capsys):
+def test_status_prints_receipt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     env, _ = _env(tmp_path)
     _run(monkeypatch, env, "record", "orientation_started")
     capsys.readouterr()
@@ -168,14 +169,14 @@ def test_status_prints_receipt(tmp_path, monkeypatch, capsys):
     assert "orientation_started_at:" in out
 
 
-def test_status_header_only_file_nonzero(tmp_path, monkeypatch):
+def test_status_header_only_file_nonzero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env, state_file = _env(tmp_path)
     state_file.write_text("# header comment\nversion: 1\n")
     rc = _run(monkeypatch, env, "status")
     assert rc == 1
 
 
-def test_record_fails_when_claude_home_missing(tmp_path, monkeypatch, capsys):
+def test_record_fails_when_claude_home_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """Bash-oracle-faithful quirk: record does NOT create a missing parent dir."""
     env, state_file = _env(tmp_path, claude_home_exists=False)
     rc = _run(monkeypatch, env, "record", "orientation_started")
@@ -185,7 +186,7 @@ def test_record_fails_when_claude_home_missing(tmp_path, monkeypatch, capsys):
     assert "mktemp failed (seed)" in err
 
 
-def test_auto_record_is_a_noop_even_when_source_is_live(tmp_path, monkeypatch, capsys):
+def test_auto_record_is_a_noop_even_when_source_is_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     env, state_file = _env(tmp_path)
     ml_dir = os.path.join(env["HOME"], ".coordinator-claude-settings", "machine-local")
     os.makedirs(ml_dir, exist_ok=True)
@@ -197,7 +198,7 @@ def test_auto_record_is_a_noop_even_when_source_is_live(tmp_path, monkeypatch, c
     assert not state_file.is_file()
 
 
-def _receipt(**over):
+def _receipt(**over) -> SetupReceipt:
     base = dict(
         phases_ran=("Phase 1", "Phase 3"),
         phases_skipped=(("defender", 'declined: # "x"'),),
@@ -208,14 +209,14 @@ def _receipt(**over):
     return SetupReceipt(**base)
 
 
-def test_record_setup_concluded_is_noop_via_cli(tmp_path, monkeypatch, capsys):
+def test_record_setup_concluded_is_noop_via_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     env, state_file = _env(tmp_path)
     assert _run(monkeypatch, env, "record", "setup_concluded") == 0
     assert "nothing recorded" in capsys.readouterr().out
     assert not state_file.is_file()
 
 
-def test_record_setup_concluded_single_atomic_write(tmp_path, monkeypatch):
+def test_record_setup_concluded_single_atomic_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env, state_file = _env(tmp_path)
     calls = []
     real = css._atomic_write
@@ -234,7 +235,7 @@ def test_record_setup_concluded_single_atomic_write(tmp_path, monkeypatch):
     assert data["setup_receipt"]["engine_ref"] == "abc123"
 
 
-def test_record_setup_concluded_existing_stamp_is_byte_identical(tmp_path):
+def test_record_setup_concluded_existing_stamp_is_byte_identical(tmp_path: Path) -> None:
     env, state_file = _env(tmp_path)
     state_file.write_bytes(b"version: 1\nsetup_concluded_at: 2026-01-01T00:00:00Z\n")
     before = state_file.read_bytes()
@@ -242,7 +243,7 @@ def test_record_setup_concluded_existing_stamp_is_byte_identical(tmp_path):
     assert state_file.read_bytes() == before
 
 
-def test_record_setup_concluded_reader_idiom_and_roundtrip(tmp_path, monkeypatch):
+def test_record_setup_concluded_reader_idiom_and_roundtrip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env, state_file = _env(tmp_path)
     assert record_setup_concluded(_receipt(coordinator_version=None, engine_ref=None), env) == 0
     text = state_file.read_text()
@@ -259,14 +260,14 @@ def test_record_setup_concluded_reader_idiom_and_roundtrip(tmp_path, monkeypatch
     ]
 
 
-def test_record_setup_concluded_missing_claude_dir_returns_1(tmp_path, capsys):
+def test_record_setup_concluded_missing_claude_dir_returns_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     env, state_file = _env(tmp_path, claude_home_exists=False)
     assert record_setup_concluded(_receipt(), env) == 1
     assert not state_file.is_file()
     assert "mktemp failed" in capsys.readouterr().err
 
 
-def test_doubled_claude_home_is_rejected_on_every_subcommand(tmp_path, monkeypatch):
+def test_doubled_claude_home_is_rejected_on_every_subcommand(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """CLAUDE_HOME is the PARENT of `.claude`; the resolver appends that
     segment. `CLAUDE_HOME=$HOME/.claude` resolved the receipt to
     `$HOME/.claude/.claude/coordinator-setup-state.yaml` -- and where that
@@ -288,7 +289,7 @@ def test_doubled_claude_home_is_rejected_on_every_subcommand(tmp_path, monkeypat
     assert not (home / ".claude" / ".claude" / "coordinator-setup-state.yaml").exists()
 
 
-def test_doubled_claude_home_names_the_value_to_pass_instead(tmp_path, monkeypatch, capsys):
+def test_doubled_claude_home_names_the_value_to_pass_instead(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     home = tmp_path / "home"
     (home / ".claude").mkdir(parents=True)
     env = {"CLAUDE_HOME": str(home / ".claude"), "HOME": str(home)}

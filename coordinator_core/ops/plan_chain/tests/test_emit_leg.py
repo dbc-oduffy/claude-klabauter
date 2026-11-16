@@ -2,6 +2,7 @@ from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import CrossRep
 from coordinator_core.ops.dispatch_emit.dirty_write_set import DirtyWriteSetError
 from coordinator_core.ops.plan_chain.contract import Halt
 from coordinator_core.ops.plan_chain.emit_leg import run
+from pathlib import Path
 
 
 def _call(dispatch, tmp_path):
@@ -9,7 +10,7 @@ def _call(dispatch, tmp_path):
                trail_dir="trail", chain_id="7", dispatch=dispatch)
 
 
-def test_session_id_passed_and_result_returned(tmp_path):
+def test_session_id_passed_and_result_returned(tmp_path: Path) -> None:
     seen = {}
 
     def dispatch(msg):
@@ -23,28 +24,28 @@ def test_session_id_passed_and_result_returned(tmp_path):
     assert "fire" not in seen["params"]
 
 
-def test_dirty_write_set_halts(tmp_path):
+def test_dirty_write_set_halts(tmp_path: Path) -> None:
     def dispatch(msg):
         raise DirtyWriteSetError("dirty")
 
     assert _call(dispatch, tmp_path) == Halt("execute", "dirty")
 
 
-def test_cross_repo_halts(tmp_path):
+def test_cross_repo_halts(tmp_path: Path) -> None:
     def dispatch(msg):
         raise CrossRepoWriteError("outside")
 
     assert _call(dispatch, tmp_path) == Halt("execute", "outside")
 
 
-def test_error_reply_maps_by_message(tmp_path):
+def test_error_reply_maps_by_message(tmp_path: Path) -> None:
     r = _call(lambda m: {"error": {"message": "Internal error: DirtyWriteSetError: x"}}, tmp_path)
     assert isinstance(r, Halt) and r.halted_at == "execute" and "DirtyWriteSetError" in r.reason
     r = _call(lambda m: {"error": {"message": "CrossRepoWriteError: y"}}, tmp_path)
     assert isinstance(r, Halt) and "CrossRepoWriteError" in r.reason
 
 
-def test_other_raise_and_empty_reply_halt(tmp_path):
+def test_other_raise_and_empty_reply_halt(tmp_path: Path) -> None:
     def boom(msg):
         raise RuntimeError("kaput")
 

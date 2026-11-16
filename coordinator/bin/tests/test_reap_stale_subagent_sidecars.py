@@ -248,5 +248,32 @@ def test_dry_run_makes_no_git_rm_or_commit_call(git_repo, monkeypatch):
     assert (session_dir / "a.md").exists()
 
 
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        (b"---\nstatus: blocked\n---\n", "blocked"),
+        (b"---\r\nstatus: 'thrashing'\r\n---\r\n", "thrashing"),
+        (b"---\rstatus: \"complete\"\r---\r", "complete"),
+        (b"---\nplan: x\n---\nstatus: blocked\n", ""),  # key after the closing fence is not frontmatter
+        (b"# no fence\ntext\n---\nstatus: blocked\n---\n", "blocked"),  # first fence anywhere opens
+        (b"  ---  \nstatus:  in_flight  \n", "in_flight"),
+        (b"---\nsubstatus: blocked\n---\n", ""),
+        (b"---\nstatus:\n---\n", ""),
+        (b"no frontmatter at all\n", ""),
+        # Past the head read: the key (or the fence) sits beyond the first 4096 bytes.
+        (b"---\n" + b"k: " + b"v" * 5000 + b"\nstatus: blocked\n---\n", "blocked"),
+        (b"---\n" + b"k: " + b"v" * 5000 + b"\n---\nstatus: blocked\n", ""),
+        (b"---\nstatus: blocked", "blocked"),  # no trailing newline at EOF
+        (b"---\n" + b"v" * 4090 + b"\nstatus: blocked\n---\n", "blocked"),  # key line straddles the head boundary
+    ],
+)
+def test_fm_field_status_reading_is_unchanged(tmp_path, body, expected):
+    from coordinator_core.sidecar_reap import fm_field
+
+    path = tmp_path / "s.md"
+    path.write_bytes(body)
+    assert fm_field(str(path), "status") == expected
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

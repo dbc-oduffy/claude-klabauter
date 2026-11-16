@@ -22,6 +22,7 @@ from coordinator_core.ops.fleet.tests.test_memo_send import (
     _pending_records,
     _write_draft,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -57,7 +58,7 @@ def _publish_copy_in_receiver(receiver, sha, text=None):
     return receiver / "cross-repo" / "inbox" / name
 
 
-def test_next_send_writes_receipt_from_anchor_without_redelivering(tmp_path, monkeypatch):
+def test_next_send_writes_receipt_from_anchor_without_redelivering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sender, receiver, draft, sha = _stalled_first_send(tmp_path, monkeypatch, "t-land")
     head_before = (receiver / ".git" / "refs" / "heads" / "main").read_text()
 
@@ -73,7 +74,7 @@ def test_next_send_writes_receipt_from_anchor_without_redelivering(tmp_path, mon
     assert (receiver / ".git" / "refs" / "heads" / "main").read_text() == head_before
 
 
-def test_reconcile_keeps_the_one_owed_push_record(tmp_path, monkeypatch):
+def test_reconcile_keeps_the_one_owed_push_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sender, _receiver, _draft, sha = _stalled_first_send(tmp_path, monkeypatch, "t-push")
 
     result = _memo_send({"dry_run": False, "topic": "t-push"}, repo_root=sender)
@@ -82,7 +83,7 @@ def test_reconcile_keeps_the_one_owed_push_record(tmp_path, monkeypatch):
     assert [r["commit_sha"] for r in _pending_records(sender)] == [sha]
 
 
-def test_a_landed_memo_with_no_owed_push_is_not_reconciled_from_its_anchor(tmp_path, monkeypatch):
+def test_a_landed_memo_with_no_owed_push_is_not_reconciled_from_its_anchor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An anchor alone is a finished delivery: with no push-pending record naming it, the next send
     of the same topic delivers again rather than skipping the receiver."""
     sender, receiver, draft, sha = _stalled_first_send(tmp_path, monkeypatch, "t-done")
@@ -100,7 +101,7 @@ def test_a_landed_memo_with_no_owed_push_is_not_reconciled_from_its_anchor(tmp_p
     assert len(_pending_records(sender)) == 1
 
 
-def test_next_send_reconciles_from_tree_copy_when_no_anchor(tmp_path, monkeypatch):
+def test_next_send_reconciles_from_tree_copy_when_no_anchor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sender, receiver, draft, sha = _stalled_first_send(tmp_path, monkeypatch, "t-noanchor")
     _publish_copy_in_receiver(receiver, sha)
     shutil.rmtree(receiver / ".git" / "refs" / "coordinator", ignore_errors=True)
@@ -113,7 +114,7 @@ def test_next_send_reconciles_from_tree_copy_when_no_anchor(tmp_path, monkeypatc
     assert not draft.exists()
 
 
-def test_different_memo_under_the_same_filename_still_refuses(tmp_path, monkeypatch):
+def test_different_memo_under_the_same_filename_still_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sender, receiver, draft, sha = _stalled_first_send(tmp_path, monkeypatch, "t-other")
     different = _delivered_text(receiver).replace("Body prose.", "A different body.")
     _publish_copy_in_receiver(receiver, sha, text=different)

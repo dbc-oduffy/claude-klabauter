@@ -7,6 +7,7 @@ outside their own module and tests)."""
 from __future__ import annotations
 
 from coordinator_core.orientation import warm_health_signal as whs
+import pytest
 
 
 def _fake_warm_rate(warm_count: int, cold_count: int):
@@ -19,7 +20,7 @@ def _fake_warm_rate(warm_count: int, cold_count: int):
     }
 
 
-def test_omitted_below_min_samples(monkeypatch):
+def test_omitted_below_min_samples(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.warm.telemetry.warm_rate",
         lambda **kw: _fake_warm_rate(0, whs.MIN_SAMPLES - 1),
@@ -27,7 +28,7 @@ def test_omitted_below_min_samples(monkeypatch):
     assert whs.emit_warm_engine_health() == ""
 
 
-def test_omitted_when_healthy(monkeypatch):
+def test_omitted_when_healthy(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.warm.telemetry.warm_rate",
         lambda **kw: _fake_warm_rate(180, 20),  # 90% warm, well over MIN_SAMPLES
@@ -35,7 +36,7 @@ def test_omitted_when_healthy(monkeypatch):
     assert whs.emit_warm_engine_health() == ""
 
 
-def test_omitted_at_exact_threshold(monkeypatch):
+def test_omitted_at_exact_threshold(monkeypatch: pytest.MonkeyPatch) -> None:
     """Exactly at DEGRADED_WARM_RATE is still "not degraded" -- the
     threshold is a floor for the good side, not a ceiling for the bad."""
     warm = 50
@@ -48,7 +49,7 @@ def test_omitted_at_exact_threshold(monkeypatch):
     assert whs.emit_warm_engine_health() == ""
 
 
-def test_renders_when_degraded_with_enough_samples(monkeypatch):
+def test_renders_when_degraded_with_enough_samples(monkeypatch: pytest.MonkeyPatch) -> None:
     """Below DEGRADED_WARM_RATE with enough samples must render a line
     naming the rate, the raw counts, and a runnable next step -- never a
     bare "something is wrong"."""
@@ -64,7 +65,7 @@ def test_renders_when_degraded_with_enough_samples(monkeypatch):
     assert "warm_rate" in line
 
 
-def test_omitted_on_undefined_rate(monkeypatch):
+def test_omitted_on_undefined_rate(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.warm.telemetry.warm_rate",
         lambda **kw: _fake_warm_rate(0, 0),
@@ -72,7 +73,7 @@ def test_omitted_on_undefined_rate(monkeypatch):
     assert whs.emit_warm_engine_health() == ""
 
 
-def test_fail_open_on_telemetry_exception(monkeypatch):
+def test_fail_open_on_telemetry_exception(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def _boom(**kw):
         raise RuntimeError("telemetry file unreadable")
@@ -81,7 +82,7 @@ def test_fail_open_on_telemetry_exception(monkeypatch):
     assert whs.emit_warm_engine_health() == ""
 
 
-def test_fail_open_on_import_failure(monkeypatch):
+def test_fail_open_on_import_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     import sys
 
     monkeypatch.setitem(sys.modules, "coordinator_core.warm.telemetry", None)

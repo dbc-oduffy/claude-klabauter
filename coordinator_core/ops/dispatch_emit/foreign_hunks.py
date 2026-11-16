@@ -79,7 +79,7 @@ def _unattributed(root: Path, common_dir: Path, path: str) -> List[str]:
     return _headers(head_lines, lifted.splitlines(keepends=True))
 
 
-def _sort_key(header: str):
+def _sort_key(header: str) -> tuple[int, ...]:
     return tuple(int(n) for n in re.findall(r"\d+", header))
 
 

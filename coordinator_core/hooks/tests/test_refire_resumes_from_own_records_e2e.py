@@ -106,7 +106,7 @@ def _emit(emitted: list):
     return emit
 
 
-def test_default_refire_resumes_the_run_at_landing_from_its_own_records_with_no_resume_json(tmp_path, monkeypatch):
+def test_default_refire_resumes_the_run_at_landing_from_its_own_records_with_no_resume_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     spawned: list = []
     emitted: list = []
@@ -134,7 +134,7 @@ def _readiness(root: Path, citation_path: str) -> dict:
     return plan_readiness_verdict._handler({"plan": PLAN_REL, "premise": {"rows": [row]}}, root / ".git")
 
 
-def test_premise_verdict_never_contradicts_the_runs_own_kept_or_returned_paths(tmp_path):
+def test_premise_verdict_never_contradicts_the_runs_own_kept_or_returned_paths(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     for own in (KEPT, RETURNED_ONLY):
         verdict = _readiness(root, own)
@@ -143,7 +143,7 @@ def test_premise_verdict_never_contradicts_the_runs_own_kept_or_returned_paths(t
     assert untouched["verdict"] == "judgment" and untouched["blocking_findings"] == 1
 
 
-def test_one_pack_read_stall_in_the_recompose_is_retried_and_the_run_id_reused(tmp_path, monkeypatch):
+def test_one_pack_read_stall_in_the_recompose_is_retried_and_the_run_id_reused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path, orphan=False)  # an orphan composed run would itself make the recompose gate refuse
     monkeypatch.chdir(root)
     monkeypatch.setattr(ask_compose, "_read_plan_blitz", lambda: BLITZ)
@@ -159,7 +159,7 @@ def test_one_pack_read_stall_in_the_recompose_is_retried_and_the_run_id_reused(t
     monkeypatch.setattr(op, "_gate_sizing_at_emit", stalling_gate)
     recomposed: list = []
 
-    def recompose_in_process(r, run_id):
+    def recompose_in_process(r, run_id) -> bool:
         recomposed.append((run_id, *halt_resume_build.recompose_script(r, run_id)))
         return True
 

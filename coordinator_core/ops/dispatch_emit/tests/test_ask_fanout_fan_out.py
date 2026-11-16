@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit import ask_fanout_contract as c
 from coordinator_core.ops.sizing_intake_contract import INTAKE_MARK_KEY, needs_size_stage
 from coordinator_core.session_baton import store
 from coordinator_core.sizing_assemble import _BASE_ROUTE_BY_TSHIRT
+from pathlib import Path
 
 SID = "sid-fan-out"
 PARENT_CRITERION = "every component lands and the seams hold"
@@ -23,7 +24,7 @@ DELIVERABLE = "dlv-fan-out-fixture"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "hub" / SID).mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
@@ -51,7 +52,7 @@ def _parent(repo, rows):
     return rel
 
 
-def _comp(label, rows, estimate="M", **kw):
+def _comp(label, rows, estimate: str = "M", **kw):
     return {"label": label, "ask": f"do {label}", "rows": rows, "estimate": estimate,
             "exit_criterion": f"{label} is done", "writes": [f"pkg/{label}"], **kw}
 
@@ -75,7 +76,7 @@ def _run(repo):
     return parent, out
 
 
-def test_component_slices_are_routed_accepted_and_skip_the_size_stage(repo):
+def test_component_slices_are_routed_accepted_and_skip_the_size_stage(repo) -> None:
     _parent_rel, out = _run(repo)
     sizings = [_doc(repo, r["sizing"]) for r in out["ready"]]
     assert len(sizings) == 2
@@ -91,7 +92,7 @@ def test_component_slices_are_routed_accepted_and_skip_the_size_stage(repo):
         assert "deliverable_id" not in doc
 
 
-def test_written_sized_records_validate_against_the_schema(repo):
+def test_written_sized_records_validate_against_the_schema(repo) -> None:
     _run(repo)
     for rel in _all_slice_paths(repo):
         assert validate_frontmatter(_doc(repo, rel), mod._SIZING_SCHEMA_PATH) == []
@@ -101,7 +102,7 @@ def _all_slice_paths(repo):
     return [p for p in _files(repo) if p.startswith("state/sizings/") and not p.endswith("-parent.yaml")]
 
 
-def test_seam_waits_on_every_component_and_carries_the_parent_deliverable(repo):
+def test_seam_waits_on_every_component_and_carries_the_parent_deliverable(repo) -> None:
     _parent_rel, out = _run(repo)
     runs = out["runs"]
     assert [r["label"] for r in runs] == ["a", "b", c.SEAM_PASS_LABEL]
@@ -122,7 +123,7 @@ def test_seam_waits_on_every_component_and_carries_the_parent_deliverable(repo):
     assert len(out["ready"]) == 2
 
 
-def test_seam_carrier_slice_assigns_the_seam_its_rows(repo):
+def test_seam_carrier_slice_assigns_the_seam_its_rows(repo) -> None:
     parent = _parent(repo, ["R1", "R2"])
     out = _go(repo, {"parent_sizing": parent, "slices": [
         _comp("a", ["R1"]), {"label": c.SEAM_PASS_LABEL, "ask": "ignored", "rows": ["R2"]},
@@ -133,7 +134,7 @@ def test_seam_carrier_slice_assigns_the_seam_its_rows(repo):
 
 
 @pytest.mark.parametrize("bad", ["XS", "S", "XL", "XXL", None])
-def test_component_outside_the_component_sizes_is_refused_before_any_write(repo, bad):
+def test_component_outside_the_component_sizes_is_refused_before_any_write(repo, bad) -> None:
     parent = _parent(repo, ["R1", "R2"])
     before = _files(repo)
     out = _go(repo, {"parent_sizing": parent, "slices": [_comp("a", ["R1"]), _comp("b", ["R2"], bad)]})
@@ -142,7 +143,7 @@ def test_component_outside_the_component_sizes_is_refused_before_any_write(repo,
 
 
 @pytest.mark.parametrize("bad", [None, "", "   "])
-def test_missing_exit_criterion_is_refused_before_any_write(repo, bad):
+def test_missing_exit_criterion_is_refused_before_any_write(repo, bad) -> None:
     parent = _parent(repo, ["R1", "R2"])
     before = _files(repo)
     second = _comp("b", ["R2"])
@@ -152,7 +153,7 @@ def test_missing_exit_criterion_is_refused_before_any_write(repo, bad):
     assert _files(repo) == before
 
 
-def test_without_fan_out_a_slice_stays_a_plain_draft_with_no_seam(repo):
+def test_without_fan_out_a_slice_stays_a_plain_draft_with_no_seam(repo) -> None:
     parent = _parent(repo, ["R1", "R2"])
     out = mod.fanout({"session_id": SID, "parent_sizing": parent, "slices": [
         {"label": "a", "ask": "do a", "rows": ["R1"], "estimate": "XS", "exit_criterion": "ignored"},
@@ -166,12 +167,12 @@ def test_without_fan_out_a_slice_stays_a_plain_draft_with_no_seam(repo):
         assert "exit_criterion" not in doc and needs_size_stage(doc)
 
 
-def test_fan_out_is_refused_on_the_asks_arm(repo):
+def test_fan_out_is_refused_on_the_asks_arm(repo) -> None:
     out = _go(repo, {"asks": [{"ask": "x"}]})
     assert out["exit_code"] == 1 and "slices arm" in out["error"]
 
 
-def test_parent_without_an_exit_criterion_is_refused(repo):
+def test_parent_without_an_exit_criterion_is_refused(repo) -> None:
     parent = _parent(repo, ["R1"])
     path = repo / parent
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
@@ -183,7 +184,7 @@ def test_parent_without_an_exit_criterion_is_refused(repo):
     assert _files(repo) == before
 
 
-def test_four_components_spawn_nothing_and_stay_under_the_bar(repo, monkeypatch):
+def test_four_components_spawn_nothing_and_stay_under_the_bar(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     spawned = []
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: spawned.append(a) or (_ for _ in ()).throw(AssertionError("spawn")))
     parent = _parent(repo, ["R1", "R2", "R3", "R4"])

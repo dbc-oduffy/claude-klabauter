@@ -341,9 +341,15 @@ _SPAWN_COUNT_HIGH_WATER = {
             ),
         },
         "resume_checkpoint_log": {
+            "ceiling": 0,
+            "reason": (
+                "Lowered 2026-11-15 from 1: a seeded landed-trailer record answers the resume read in process, so the gate spawns no git."
+            ),
+        },
+        "resume_checkpoint_seed_log": {
             "ceiling": 1,
             "reason": (
-                "First recorded 2026-10-17 at the value it entered with: one git log --grep subtracts the rows a checkpoint commit landed."
+                "First recorded 2026-11-15 at the value it entered with: with no usable record, one git log seeds the landed-trailer record."
             ),
         },
     },

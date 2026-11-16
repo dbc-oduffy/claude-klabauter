@@ -14,6 +14,8 @@ from coordinator_core.ops.tests.test_review_reverify import (  # noqa: F401  (wo
 )
 from coordinator_core.ops.tests.test_review_reverify_sibling_owned import _blob_sha
 from coordinator_core.ops.dispatch_emit import land_run
+from pathlib import Path
+import pytest
 
 GATE = "coordinator_core/tests/test_raw_writes_have_a_disposition.py::test_the_live_gate_is_green"
 PEER_FILES = [
@@ -27,7 +29,7 @@ HALT_TEXT = (
 )
 
 
-def _peer_dirt(root, monkeypatch):
+def _peer_dirt(root, monkeypatch) -> None:
     for rel in PEER_FILES:
         f = root / rel
         f.parent.mkdir(parents=True, exist_ok=True)
@@ -46,7 +48,7 @@ def _reverify(root, text):
     )
 
 
-def test_halt_shape_names_only_peer_paths_is_foreign_red_and_no_fix_leg(world, monkeypatch):
+def test_halt_shape_names_only_peer_paths_is_foreign_red_and_no_fix_leg(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _declared = world
     _peer_dirt(root, monkeypatch)
     out = _reverify(root, HALT_TEXT)
@@ -57,14 +59,14 @@ def test_halt_shape_names_only_peer_paths_is_foreign_red_and_no_fix_leg(world, m
     assert not split.owned and split.foreign == (GATE,)
 
 
-def test_backslash_paths_in_the_failure_text_still_attribute(world, monkeypatch):
+def test_backslash_paths_in_the_failure_text_still_attribute(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _declared = world
     _peer_dirt(root, monkeypatch)
     out = _reverify(root, HALT_TEXT.replace("/", "\\"))
     assert list(out["foreign_red"]) == [GATE]
 
 
-def test_naming_a_footprint_path_keeps_the_node_blocking(world, monkeypatch):
+def test_naming_a_footprint_path_keeps_the_node_blocking(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _declared = world
     _peer_dirt(root, monkeypatch)
     out = _reverify(root, HALT_TEXT + "; pkg/mod.py")
@@ -72,7 +74,7 @@ def test_naming_a_footprint_path_keeps_the_node_blocking(world, monkeypatch):
     assert from_reverify({**out, "failing": [GATE]}) != []
 
 
-def test_a_node_in_a_footprint_test_file_keeps_blocking(world, monkeypatch):
+def test_a_node_in_a_footprint_test_file_keeps_blocking(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _declared = world
     _peer_dirt(root, monkeypatch)
     node = "tests/test_mod.py::test_v"
@@ -83,7 +85,7 @@ def test_a_node_in_a_footprint_test_file_keeps_blocking(world, monkeypatch):
     assert out["foreign_red"] == {} and out["unattributed"] == [node]
 
 
-def test_one_matcher_serves_the_retest_and_the_reverify(tmp_path):
+def test_one_matcher_serves_the_retest_and_the_reverify(tmp_path: Path) -> None:
     assert retest_targeted.red_attribution is red_attribution
     log = tmp_path / "t.log"
     log.write_text(f"___ test_x ___\nboom {PEER_FILES[0]}\n=== 1 failed ===\n", encoding="utf-8")

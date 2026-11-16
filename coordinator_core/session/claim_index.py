@@ -765,7 +765,7 @@ def lookup(
     sink_names: Dict[str, Set[str]] = {}
     sid_sinks: Dict[str, Set[str]] = {}
 
-    def _note_sink(sink_path, claimant_sid, stream_claims):
+    def _note_sink(sink_path, claimant_sid, stream_claims) -> None:
         layout = touch_record.sink_layout(sink_path)
         if layout is None:
             return

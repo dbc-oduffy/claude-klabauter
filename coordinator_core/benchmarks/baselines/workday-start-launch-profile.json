@@ -17,13 +17,116 @@
     },
     "sentinels": {
       "steps": 11,
-      "stubbed": ["sentinel-corpus-currency-probe", "sentinel-doctor-sentinel-full"],
-      "statuses": {"failed": 1, "ran": 10},
+      "stubbed": [
+        "sentinel-corpus-currency-probe",
+        "sentinel-doctor-sentinel-full"
+      ],
+      "statuses": {
+        "failed": 1,
+        "ran": 10
+      },
       "process_ms": 1593.8,
       "spawns": 43,
       "popen_spawns": 8,
       "stage_wall_ms": 3704.9,
       "step_wall_ms_sum": 3699.5
+    },
+    "sentinels_spread_at_base": {
+      "note": "5 serial runs, export of c89663d57a plus this benchmark with the concurrent_stages kwarg removed",
+      "process_ms_runs": [
+        1703.1,
+        1703.1,
+        1625.0,
+        1718.8,
+        1625.0
+      ],
+      "process_ms_median": 1703.1,
+      "spawns": 41
+    }
+  },
+  "after": {
+    "ref": "work/machine-a/2026-10-20 worktree at C1..C3 landed (uncommitted), HEAD d2ccbfe314",
+    "measured_on": "2026-11-15",
+    "note": "redrive is the shipped benchmark's output. sentinels_serial and sentinels_concurrent are 5 runs each from the shipped benchmark (concurrent passes the stage set run_spec ships), interleaved in one session under peer load; the bar compares the median of same-condition runs, never one run against one run. Process time and spawns are the bar; wall_ms is attribution only.",
+    "redrive": {
+      "terminal_handoffs": 229,
+      "collector_calls": 1,
+      "read_meta_calls": 1491,
+      "process_ms": 609.4,
+      "spawns": 0,
+      "wall_ms": 653.3,
+      "scan_incomplete": false,
+      "errors": 0
+    },
+    "sentinels": {
+      "note": "superseded by sentinels_serial; first-measure single run kept for the record",
+      "process_ms": 1562.5,
+      "spawns": 43,
+      "popen_spawns": 8,
+      "stage_wall_ms": 3056.9
+    },
+    "sentinels_concurrent": {
+      "process_ms_median": 1656.2,
+      "process_ms_runs": [
+        1968.8,
+        1656.2,
+        1531.2,
+        2015.6,
+        1640.6
+      ],
+      "spawns_runs": [
+        43,
+        43,
+        43,
+        43,
+        41
+      ],
+      "popen_spawns_runs": [
+        8,
+        8,
+        8,
+        8,
+        8
+      ],
+      "stage_wall_ms_runs": [
+        1593.2,
+        1314.4,
+        1405.6,
+        1727.6,
+        10776.7
+      ],
+      "verdict": "Concurrency adds no process time: same-tree, same-session medians over 5 runs each, concurrent 1875.0 / 1843.8 vs serial 1953.1 / 1781.2 (spawns 43). Per-step process_ms is the same serial and concurrent (cold python per step); the cost is in sentinel-check-plugin-drift (531-625ms, 20 spawns) and sentinel-forwarder-drift (547-703ms, 9 spawns), both coordinator/bin scripts outside this row's footprint. The pinned before (1593.8) is one low draw; the base sha re-measured as 5 runs from an export of c89663d57a gives median 1703.1 (1625.0-1718.8, 41 spawns), and live-tree serial reads 1780-1950, so the pinned figure is reproduced by neither tree. Bar vs the pinned single draw stays open and is not re-pinned; it closes only by cutting the two drift sentinels."
+    },
+    "sentinels_serial": {
+      "process_ms_median": 1937.5,
+      "process_ms_runs": [
+        1718.8,
+        1937.5,
+        1984.4,
+        1859.4,
+        2062.5
+      ],
+      "spawns_runs": [
+        43,
+        43,
+        43,
+        43,
+        43
+      ],
+      "popen_spawns_runs": [
+        8,
+        8,
+        8,
+        8,
+        8
+      ],
+      "stage_wall_ms_runs": [
+        4045.7,
+        3495.9,
+        4296.1,
+        5072.4,
+        9168.0
+      ]
     }
   }
 }

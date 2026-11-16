@@ -5,12 +5,18 @@ import importlib.machinery
 import importlib.util
 import pathlib
 import sys
+from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_BIN_DIR.parent.parent))
 
 
-def _load():
+def _load() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "crm_inbox_under_test", str(_BIN_DIR / "cross-repo-memo.py"))
     spec = importlib.util.spec_from_loader(loader.name, loader)
@@ -27,7 +33,7 @@ def _memo(inbox: pathlib.Path, name: str, status: str, sender: str, title: str) 
     )
 
 
-def test_inbox_lists_status_sender_title_open_first(tmp_path, monkeypatch, capsys):
+def test_inbox_lists_status_sender_title_open_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     mod = _load()
     inbox = tmp_path / "state" / "cross-repo" / "inbox"
     inbox.mkdir(parents=True)
@@ -42,7 +48,7 @@ def test_inbox_lists_status_sender_title_open_first(tmp_path, monkeypatch, capsy
     assert lines[2] == "2 memo(s), 1 open"
 
 
-def test_inbox_empty_and_outside_repo(tmp_path, monkeypatch, capsys):
+def test_inbox_empty_and_outside_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     mod = _load()
     monkeypatch.setattr(mod, "_current_repo_root", lambda: str(tmp_path))
     assert mod._cmd_inbox(argparse.Namespace()) == 0
@@ -51,7 +57,7 @@ def test_inbox_empty_and_outside_repo(tmp_path, monkeypatch, capsys):
     assert mod._cmd_inbox(argparse.Namespace()) == 2
 
 
-def test_main_dispatches_inbox_verb(tmp_path, monkeypatch, capsys):
+def test_main_dispatches_inbox_verb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     mod = _load()
     inbox = tmp_path / "state" / "cross-repo" / "inbox"
     inbox.mkdir(parents=True)
@@ -66,7 +72,7 @@ def test_main_dispatches_inbox_verb(tmp_path, monkeypatch, capsys):
     assert mod.main(["inbox"]) == 2
 
 
-def test_inbox_lists_stranded_after_open_and_counts_them(tmp_path, monkeypatch, capsys):
+def test_inbox_lists_stranded_after_open_and_counts_them(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     mod = _load()
     inbox = tmp_path / "state" / "cross-repo" / "inbox"
     inbox.mkdir(parents=True)
@@ -84,7 +90,7 @@ def test_inbox_lists_stranded_after_open_and_counts_them(tmp_path, monkeypatch, 
     assert lines[3] == "3 memo(s), 1 open, 1 stranded"
 
 
-def test_inbox_with_only_stranded_memos_is_not_empty(tmp_path, monkeypatch, capsys):
+def test_inbox_with_only_stranded_memos_is_not_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     mod = _load()
     monkeypatch.setattr(mod, "_current_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr(mod, "_stranded_inbox_rows", lambda root: [
@@ -95,11 +101,11 @@ def test_inbox_with_only_stranded_memos_is_not_empty(tmp_path, monkeypatch, caps
     assert "1 memo(s), 0 open, 1 stranded" in out
 
 
-def test_stranded_rows_empty_outside_a_git_repo(tmp_path):
+def test_stranded_rows_empty_outside_a_git_repo(tmp_path: Path) -> None:
     assert _load()._stranded_inbox_rows(str(tmp_path)) == []
 
 
-def test_inbox_is_a_registered_verb():
+def test_inbox_is_a_registered_verb() -> None:
     mod = _load()
     assert "inbox" in mod._SUBCOMMAND_VERBS
     assert mod._build_combined_parser().parse_args(["inbox"]).verb == "inbox"

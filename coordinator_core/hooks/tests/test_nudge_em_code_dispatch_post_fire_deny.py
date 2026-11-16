@@ -20,7 +20,7 @@ OWNED = "pkg/mod.py"
 
 
 @pytest.fixture
-def root(tmp_path, monkeypatch):
+def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     (repo / "state" / "handoffs").mkdir(parents=True)
@@ -32,7 +32,7 @@ def root(tmp_path, monkeypatch):
     return repo
 
 
-def _fire(monkeypatch, runs):
+def _fire(monkeypatch, runs) -> None:
     monkeypatch.setattr(fl, "session_workflow_run_ids", lambda sid: runs)
 
 
@@ -61,7 +61,7 @@ def _advised(result) -> bool:
 
 
 @pytest.mark.parametrize("tool", ["Edit", "Write", "MultiEdit", "NotebookEdit"])
-def test_live_run_owned_path_is_advised_never_denied(root, monkeypatch, tool):
+def test_live_run_owned_path_is_advised_never_denied(root, monkeypatch: pytest.MonkeyPatch, tool) -> None:
     _fire(monkeypatch, ["run-1"])
     _declare(root)
     result = mod.op(_payload(root, tool, OWNED))
@@ -69,7 +69,7 @@ def test_live_run_owned_path_is_advised_never_denied(root, monkeypatch, tool):
 
 
 @pytest.mark.parametrize("rel", ["CLAUDE.md", "sub/CLAUDE.md", ".claude/CLAUDE.md"])
-def test_fired_claude_md_write_names_the_grant_route(root, monkeypatch, rel):
+def test_fired_claude_md_write_names_the_grant_route(root, monkeypatch: pytest.MonkeyPatch, rel) -> None:
     from coordinator_core.session.claude_md_grant import GRANT_CLI_NAME
 
     _fire(monkeypatch, ["run-1"])
@@ -81,7 +81,7 @@ def test_fired_claude_md_write_names_the_grant_route(root, monkeypatch, rel):
     assert "from the repo that holds the CLAUDE.md" in text
 
 
-def test_multiedit_edits_path_of_a_live_run_is_advised(root, monkeypatch):
+def test_multiedit_edits_path_of_a_live_run_is_advised(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _fire(monkeypatch, ["run-1"])
     _declare(root)
     payload = {
@@ -94,7 +94,7 @@ def test_multiedit_edits_path_of_a_live_run_is_advised(root, monkeypatch):
     assert _advised(result) and not _is_deny(result)
 
 
-def test_live_runs_plan_writes_are_advised(root, monkeypatch):
+def test_live_runs_plan_writes_are_advised(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _fire(monkeypatch, ["run-2"])
     run = root / "state" / "warp" / "run-2"
     run.mkdir(parents=True)
@@ -108,14 +108,14 @@ def test_live_runs_plan_writes_are_advised(root, monkeypatch):
 
 
 @pytest.mark.parametrize("marker", ["halted", "landed"])
-def test_halted_or_landed_run_owns_nothing(root, monkeypatch, marker):
+def test_halted_or_landed_run_owns_nothing(root, monkeypatch: pytest.MonkeyPatch, marker) -> None:
     _fire(monkeypatch, ["run-1"])
     _declare(root, marker=marker)
     result = mod.op(_payload(root, "Edit", OWNED))
     assert not _advised(result) and not _is_deny(result)
 
 
-def test_live_run_does_not_own_an_undeclared_path(root, monkeypatch):
+def test_live_run_does_not_own_an_undeclared_path(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _fire(monkeypatch, ["run-1"])
     _declare(root)
     result = mod.op(_payload(root, "Edit", "pkg/other.py"))
@@ -123,14 +123,14 @@ def test_live_run_does_not_own_an_undeclared_path(root, monkeypatch):
 
 
 @pytest.mark.parametrize("rel", ["state/handoffs/h.md", ".coordinator-local/x/y.md"])
-def test_fired_non_product_paths_are_not_advised(root, monkeypatch, rel):
+def test_fired_non_product_paths_are_not_advised(root, monkeypatch: pytest.MonkeyPatch, rel) -> None:
     _fire(monkeypatch, ["run-1"])
     _declare(root, writes=(rel,))
     result = mod.op(_payload(root, "Write", rel, content="x"))
     assert not _advised(result) and not _is_deny(result)
 
 
-def test_fired_scratch_path_a_live_run_declares_gets_the_post_fire_verdict(root, monkeypatch):
+def test_fired_scratch_path_a_live_run_declares_gets_the_post_fire_verdict(root, monkeypatch: pytest.MonkeyPatch) -> None:
     rel = "scratch/probe.py"
     _fire(monkeypatch, ["run-1"])
     _declare(root, writes=(rel,))
@@ -138,7 +138,7 @@ def test_fired_scratch_path_a_live_run_declares_gets_the_post_fire_verdict(root,
     assert _advised(result) and not _is_deny(result)
 
 
-def test_path_outside_the_repo_is_not_advised(root, monkeypatch, tmp_path):
+def test_path_outside_the_repo_is_not_advised(root, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _fire(monkeypatch, ["run-1"])
     _declare(root)
     payload = _payload(root, "Edit", OWNED)
@@ -146,7 +146,7 @@ def test_path_outside_the_repo_is_not_advised(root, monkeypatch, tmp_path):
     assert not _advised(mod.op(payload))
 
 
-def test_subagent_is_unaffected(root, monkeypatch):
+def test_subagent_is_unaffected(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _fire(monkeypatch, ["run-1"])
     _declare(root)
     payload = _payload(root, "Edit", OWNED)
@@ -154,7 +154,7 @@ def test_subagent_is_unaffected(root, monkeypatch):
     assert mod.op(payload) is None
 
 
-def test_unfired_session_gets_no_post_fire_record(root, monkeypatch):
+def test_unfired_session_gets_no_post_fire_record(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _fire(monkeypatch, [])
     monkeypatch.setattr(mod, "_session_sizing_state", lambda payload, sid: (True, False))
     monkeypatch.setattr(leaf, "_session_sizing_state", lambda payload, sid: (True, False))
@@ -162,7 +162,7 @@ def test_unfired_session_gets_no_post_fire_record(root, monkeypatch):
     assert not _advised(result)
 
 
-def test_post_fire_record_decides_on_liveness(root, monkeypatch):
+def test_post_fire_record_decides_on_liveness(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _fire(monkeypatch, ["run-1"])
     assert mod._post_fire_deny(SID, (), str(root)) is not None
     _declare(root, marker="landed")

@@ -8,13 +8,14 @@ from coordinator_core.testing.checkout_engine_probe import (
     assert_inherited_pin_child_resolves_checkout,
     assert_unpinned_child_loads_core_from_checkout,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def test_unpinned_test_child_loads_core_from_checkout(tmp_path):
+def test_unpinned_test_child_loads_core_from_checkout(tmp_path: Path) -> None:
     assert_unpinned_child_loads_core_from_checkout(tmp_path, may_refuse_without_published_engine=True)
 
 
-def test_inherited_harness_pin_child_resolves_checkout_dispatch_root(tmp_path):
+def test_inherited_harness_pin_child_resolves_checkout_dispatch_root(tmp_path: Path) -> None:
     assert_inherited_pin_child_resolves_checkout(tmp_path)

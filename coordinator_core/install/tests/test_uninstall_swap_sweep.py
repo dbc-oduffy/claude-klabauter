@@ -7,6 +7,11 @@ import sys
 import pytest
 
 from coordinator_core.install import uninstall_legs
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 
 def _block_ensure_venv_import(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -18,7 +23,7 @@ def _block_ensure_venv_import(monkeypatch: pytest.MonkeyPatch) -> None:
 
     real_import = builtins.__import__
 
-    def _guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+    def _guarded_import(name, globals=None, locals=None, fromlist=(), level: int = 0) -> ModuleType:
         if name == "coordinator_core.install.ensure_venv":
             raise ImportError(
                 "coordinator_core.install.ensure_venv is unimportable in this test "
@@ -46,7 +51,7 @@ def test_sweep_orphaned_swap_dirs_lives_on_uninstall_legs() -> None:
 
 
 def test_uninstall_sweeps_both_tree_targets_with_ensure_venv_unimportable(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     _isolate_settings_home(monkeypatch, tmp_path)
     _block_ensure_venv_import(monkeypatch)

@@ -5,12 +5,13 @@ from __future__ import annotations
 import json
 
 from coordinator_core.ops.ceremony import commit_v2
+import pytest
 
 REPLY_BYTE_CAP = 8 * 1024
 MANY = 600
 
 
-def test_cap_reply_keeps_a_sample_and_the_total():
+def test_cap_reply_keeps_a_sample_and_the_total() -> None:
     paths = [f"dir/file-{i:05d}.py" for i in range(MANY)]
     reply = {"committed": True, "warnings": paths, "short": ["a"]}
 
@@ -22,7 +23,7 @@ def test_cap_reply_keeps_a_sample_and_the_total():
     assert "short_total" not in capped
 
 
-def test_handler_reply_is_bounded_and_full_reply_keeps_the_whole_set(monkeypatch):
+def test_handler_reply_is_bounded_and_full_reply_keeps_the_whole_set(monkeypatch: pytest.MonkeyPatch) -> None:
     warnings = [f"left/{'x' * 40}-{i:05d}.py" for i in range(MANY)]
     monkeypatch.setattr(
         commit_v2, "_handler_body", lambda params, repo_root, ledger: {"committed": True, "warnings": list(warnings)}

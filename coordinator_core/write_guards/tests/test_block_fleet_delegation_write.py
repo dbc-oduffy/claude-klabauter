@@ -38,6 +38,8 @@ from __future__ import annotations
 
 from coordinator_core.write_guards import block_fleet_delegation_write as guard
 from coordinator_core.write_guards import engine
+from pathlib import Path
+import pytest
 
 
 def _payload(
@@ -75,12 +77,12 @@ def _deny(file_path, **kw):
     return result
 
 
-def _allow(file_path, **kw):
+def _allow(file_path, **kw) -> None:
     result = guard.check(_payload(file_path, **kw))
     assert result is None, f"expected ALLOW for: {file_path!r}, got {result!r}"
 
 
-def _target_path(monkeypatch, tmp_path):
+def _target_path(monkeypatch, tmp_path) -> str:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     return str(tmp_path / "fleet-delegation.json")
 
@@ -91,18 +93,18 @@ def _target_path(monkeypatch, tmp_path):
 
 
 class TestBaseCases:
-    def test_em_inline_write_denied_no_agent_id(self, monkeypatch, tmp_path):
+    def test_em_inline_write_denied_no_agent_id(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         target = _target_path(monkeypatch, tmp_path)
         _deny(target, agent_id="", tool_name="Write", cwd=str(tmp_path))
 
-    def test_deny_message_names_no_pm_remedy(self, monkeypatch, tmp_path):
+    def test_deny_message_names_no_pm_remedy(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         target = _target_path(monkeypatch, tmp_path)
         result = _deny(target, agent_id="", tool_name="Write", cwd=str(tmp_path))
         reason = result["hookSpecificOutput"]["permissionDecisionReason"]
         assert "PM" not in reason and "human" not in reason.lower()
         assert "coordinator-delegation grant" in reason
 
-    def test_subagent_write_denied(self, monkeypatch, tmp_path):
+    def test_subagent_write_denied(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         target = _target_path(monkeypatch, tmp_path)
         _deny(
             target,
@@ -111,7 +113,7 @@ class TestBaseCases:
             cwd=str(tmp_path),
         )
 
-    def test_subagent_edit_denied(self, monkeypatch, tmp_path):
+    def test_subagent_edit_denied(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         target = _target_path(monkeypatch, tmp_path)
         _deny(
             target,
@@ -120,7 +122,7 @@ class TestBaseCases:
             cwd=str(tmp_path),
         )
 
-    def test_subagent_multiedit_denied(self, monkeypatch, tmp_path):
+    def test_subagent_multiedit_denied(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         target = _target_path(monkeypatch, tmp_path)
         _deny(
             target,
@@ -129,7 +131,7 @@ class TestBaseCases:
             cwd=str(tmp_path),
         )
 
-    def test_subagent_notebookedit_denied(self, monkeypatch, tmp_path):
+    def test_subagent_notebookedit_denied(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         target = _target_path(monkeypatch, tmp_path)
         result = guard.check(
             _notebook_payload(
@@ -141,50 +143,50 @@ class TestBaseCases:
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_sibling_file_in_settings_home_allowed(self, monkeypatch, tmp_path):
+    def test_sibling_file_in_settings_home_allowed(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
         sibling = str(tmp_path / "machine-local" / "some-other-record.json")
         _allow(sibling, cwd=str(tmp_path))
 
     def test_similarly_named_file_outside_settings_home_allowed(
-        self, monkeypatch, tmp_path
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
         outside = str(tmp_path / "elsewhere" / "fleet-delegation.json")
         _allow(outside, cwd=str(tmp_path))
 
-    def test_non_matcher_tool_name_allowed(self, monkeypatch, tmp_path):
+    def test_non_matcher_tool_name_allowed(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         target = _target_path(monkeypatch, tmp_path)
         _allow(target, tool_name="Read", cwd=str(tmp_path))
 
 
 class TestTraversalAndCaseFoldBypasses:
-    def test_unrelated_traversal_path_allowed(self, monkeypatch, tmp_path):
+    def test_unrelated_traversal_path_allowed(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
         unrelated = str(tmp_path / "some" / "dir" / ".." / "other" / "file.py")
         _allow(unrelated, cwd=str(tmp_path))
 
-    def test_traversal_path_resolving_onto_target_denied(self, monkeypatch, tmp_path):
+    def test_traversal_path_resolving_onto_target_denied(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
         traversal_path = str(
             tmp_path / "sub" / ".." / "fleet-delegation.json"
         )
         _deny(traversal_path, cwd=str(tmp_path))
 
-    def test_differently_cased_candidate_denied(self, monkeypatch, tmp_path):
+    def test_differently_cased_candidate_denied(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
         cased_path = str(tmp_path / "FLEET-DELEGATION.JSON")
         _deny(cased_path, cwd=str(tmp_path))
 
     def test_relative_candidate_resolved_against_cwd_denied(
-        self, monkeypatch, tmp_path
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
         _deny("fleet-delegation.json", cwd=str(tmp_path))
 
 
 class TestReachableThroughEngine:
-    def test_engine_evaluate_advises_on_fleet_delegation_write(self, monkeypatch, tmp_path):
+    def test_engine_evaluate_advises_on_fleet_delegation_write(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """The guard is advisory-by-ruling (deny_registry.ADVISORY_BY_RULING), so the engine's
         policy point answers allow plus one advisory line, never a deny."""
         from coordinator_core import machine_profile

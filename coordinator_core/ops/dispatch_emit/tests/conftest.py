@@ -9,7 +9,7 @@ import pytest
 #: collection. Guard: test_dispatch_emit_fixtures_attach.py.
 
 
-def pytest_configure(config):
+def pytest_configure(config) -> None:
     config.addinivalue_line(
         "markers",
         "xs_gate_live: opt out of this directory's stub of the XS diff-budget refusal "
@@ -35,7 +35,7 @@ def _payload_files_unlinked_per_test():
 
 
 @pytest.fixture(autouse=True)
-def _xs_diff_budget_gate_off_outside_its_own_tests(request, monkeypatch):
+def _xs_diff_budget_gate_off_outside_its_own_tests(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """A terminal_commit fixture cites an XS sizing but names no run base, so the XS diff-budget
     gate refuses it as unmeasurable before the behaviour under test. A module marked
     `xs_gate_live` exercises the gate live."""
@@ -118,7 +118,7 @@ _LIVE_TWIN_REFUSAL_MODULES = frozenset({"test_reply_sidecar"})
 
 
 @pytest.fixture(autouse=True)
-def _stage_finds_its_run_script(request):
+def _stage_finds_its_run_script(request: pytest.FixtureRequest):
     """Cluster B: staging a run manifest leaves a twin beside the run's script and refuses when the
     script is absent. A fixture that stages `run_id` without emitting the script gets the same
     `write_run_scripts` stub the explicit callers use, written only when the file is missing.
@@ -152,7 +152,7 @@ def execute_section(script: str) -> str:
 
 
 @pytest.fixture
-def m_plus_known_arm(monkeypatch):
+def m_plus_known_arm(monkeypatch: pytest.MonkeyPatch) -> None:
     """Compose as an `--ask --sizing` M+ re-fire: only a known M+/roadmap arm embeds plan-blitz,
     so a test reading the embedded planBlitz body opts in here rather than composing a raw ask."""
     from coordinator_core.ops.dispatch_emit import ask_compose
@@ -161,7 +161,7 @@ def m_plus_known_arm(monkeypatch):
 
 
 @pytest.fixture
-def verifier_roster(monkeypatch):
+def verifier_roster(monkeypatch: pytest.MonkeyPatch) -> None:
     """DoE's live plan-route roster plus a delivery-verifier. The live roster names none
     (delivery-exempt), so a test of the verifier's brief has to add one."""
     import copy

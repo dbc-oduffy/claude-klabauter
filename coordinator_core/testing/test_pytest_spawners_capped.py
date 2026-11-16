@@ -123,25 +123,25 @@ def census() -> dict[str, bool]:
     return scan(REPO_ROOT)
 
 
-def test_every_pytest_spawner_is_capped_exempt_or_pending(census):
+def test_every_pytest_spawner_is_capped_exempt_or_pending(census) -> None:
     assert not violations(census), (
         "uncapped `-m pytest` spawner(s); route through spawn_in_capped_job / guarded_child_env "
         "or add to EXEMPT (with a reason) or PENDING_FIX (with a follow-up row id)"
     )
 
 
-def test_census_is_not_vacuous(census):
+def test_census_is_not_vacuous(census) -> None:
     assert len(census) >= 5, f"scan found {sorted(census)}; the detector has gone blind"
 
 
 @pytest.mark.parametrize("module", REQUIRED_ADOPTERS)
-def test_required_adopters_call_the_capped_launcher(module):
+def test_required_adopters_call_the_capped_launcher(module) -> None:
     tree = _parse(REPO_ROOT / module)
     assert tree is not None, f"{module} unreadable"
     assert _calls_adoption(tree), f"{module} no longer calls spawn_in_capped_job or guarded_child_env"
 
 
-def test_exempt_and_pending_entries_are_live(census):
+def test_exempt_and_pending_entries_are_live(census) -> None:
     for name, table in (("EXEMPT", EXEMPT), ("PENDING_FIX", PENDING_FIX)):
         for module, why in table.items():
             assert why.strip(), f"{name}[{module}] needs a non-empty reason or follow-up row id"
@@ -150,7 +150,7 @@ def test_exempt_and_pending_entries_are_live(census):
     assert not set(EXEMPT) & set(PENDING_FIX)
 
 
-def test_child_env_chokepoint_caps_blas_pools_unless_set():
+def test_child_env_chokepoint_caps_blas_pools_unless_set() -> None:
     from coordinator_core.ops._pytest_child_env import pytest_child_env
     from coordinator_core.testing import nested_session_guard, spawn_depth
 
@@ -182,7 +182,7 @@ def _foreground_capped_calls(tree: ast.AST) -> list[int]:
 
 
 @pytest.mark.parametrize("module", BACKGROUND_ADOPTERS)
-def test_test_leg_spawners_opt_into_background(module):
+def test_test_leg_spawners_opt_into_background(module) -> None:
     tree = _parse(REPO_ROOT / module)
     assert tree is not None, f"{module} unreadable"
     assert _calls_adoption(tree) and not _foreground_capped_calls(tree), (
@@ -190,7 +190,7 @@ def test_test_leg_spawners_opt_into_background(module):
     )
 
 
-def test_every_scanned_spawner_passes_background(census):
+def test_every_scanned_spawner_passes_background(census) -> None:
     bad = {
         m: _foreground_capped_calls(tree)
         for m in census
@@ -199,7 +199,7 @@ def test_every_scanned_spawner_passes_background(census):
     assert not bad, f"pytest spawner(s) call spawn_in_capped_job without background=: {bad}"
 
 
-def test_fixture_foreground_capped_call_is_flagged():
+def test_fixture_foreground_capped_call_is_flagged() -> None:
     assert _foreground_capped_calls(ast.parse("spawn_in_capped_job(['python'])\n")) == [1]
     assert _foreground_capped_calls(ast.parse("m.spawn_in_capped_job(['python'], background=True)\n")) == []
 
@@ -213,14 +213,14 @@ def _write(root: Path, rel: str, body: str) -> None:
 _UNCAPPED = "import subprocess, sys\nsubprocess.run([sys.executable, '-m', 'pytest', 'x'])\n"
 
 
-def test_fixture_uncapped_spawner_goes_red(tmp_path):
+def test_fixture_uncapped_spawner_goes_red(tmp_path: Path) -> None:
     _write(tmp_path, "coordinator_core/ops/bad.py", _UNCAPPED)
     found = scan(tmp_path)
     assert found == {"coordinator_core/ops/bad.py": False}
     assert violations(found, exempt={}, pending={}) == ["coordinator_core/ops/bad.py"]
 
 
-def test_fixture_exempt_pending_and_adopted_are_admitted(tmp_path):
+def test_fixture_exempt_pending_and_adopted_are_admitted(tmp_path: Path) -> None:
     _write(tmp_path, "coordinator_core/ops/bad.py", _UNCAPPED)
     found = scan(tmp_path)
     assert violations(found, exempt={"coordinator_core/ops/bad.py": "why"}, pending={}) == []
@@ -240,12 +240,12 @@ def test_fixture_exempt_pending_and_adopted_are_admitted(tmp_path):
     assert found["coordinator/bin/good2.py"] is True
 
 
-def test_fixture_comparison_against_pytest_argv_is_not_a_spawn(tmp_path):
+def test_fixture_comparison_against_pytest_argv_is_not_a_spawn(tmp_path: Path) -> None:
     _write(tmp_path, "coordinator_core/ops/cmp.py", "def f(t):\n    return t[:2] == ['-m', 'pytest']\n")
     assert scan(tmp_path) == {}
 
 
-def test_fixture_test_modules_and_prose_are_not_spawners(tmp_path):
+def test_fixture_test_modules_and_prose_are_not_spawners(tmp_path: Path) -> None:
     _write(tmp_path, "coordinator_core/tests/test_a.py", _UNCAPPED)
     _write(tmp_path, "coordinator_core/ops/test_b.py", _UNCAPPED)
     _write(tmp_path, "coordinator_core/ops/doc.py", '"""runs [\'-m\', \'pytest\'] somewhere"""\nx = 1\n')

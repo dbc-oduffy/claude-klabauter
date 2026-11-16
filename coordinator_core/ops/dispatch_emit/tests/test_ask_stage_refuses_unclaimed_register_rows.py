@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_stage
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
+from pathlib import Path
 
 PLAN_REL = "docs/plans/2026-10-24-unclaimed.md"
 SIZING_REL = "state/sizings/2026-10-24-unclaimed.yaml"
@@ -48,7 +49,7 @@ def _plan(claimed: str) -> str:
     )
 
 
-def _repo(tmp_path, claimed):
+def _repo(tmp_path, claimed) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / "state" / "sizings").mkdir(parents=True)
@@ -56,14 +57,14 @@ def _repo(tmp_path, claimed):
     (tmp_path / SIZING_REL).write_text(SIZING, encoding="utf-8", newline="\n")
 
 
-def test_a_plan_omitting_a_register_row_claims_it_in_run_and_stages(tmp_path):
+def test_a_plan_omitting_a_register_row_claims_it_in_run_and_stages(tmp_path: Path) -> None:
     _repo(tmp_path, "[R1]")
     manifest = ask_stage.stage(tmp_path, run_id="r1", plan_rel=PLAN_REL)
     claims = (tmp_path / PLAN_REL).read_text(encoding="utf-8").split("---")[1]
     assert manifest is not None and "R2" in claims
 
 
-def test_a_register_row_no_claim_can_settle_is_refused_before_any_manifest(tmp_path, monkeypatch):
+def test_a_register_row_no_claim_can_settle_is_refused_before_any_manifest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _repo(tmp_path, "[R1]")
     monkeypatch.setattr(ask_stage, "_claim_register_rows", lambda *a, **k: None)
     with pytest.raises(ask_stage.AskStageError) as exc:
@@ -74,19 +75,19 @@ def test_a_register_row_no_claim_can_settle_is_refused_before_any_manifest(tmp_p
     assert not list((tmp_path / RUN_DIR_ROOT).rglob("manifest.json"))
 
 
-def test_ledger_resume_is_not_refused(tmp_path):
+def test_ledger_resume_is_not_refused(tmp_path: Path) -> None:
     _repo(tmp_path, "[R1]")
     manifest = ask_stage.stage(tmp_path, run_id="r1", plan_rel=PLAN_REL, ledger_resume=True)
     assert manifest is not None
 
 
-def test_claim_register_rows_claims_the_omitted_rows_and_passes(tmp_path):
+def test_claim_register_rows_claims_the_omitted_rows_and_passes(tmp_path: Path) -> None:
     _repo(tmp_path, "[R1]")
     manifest = ask_stage.stage(tmp_path, run_id="r1", plan_rel=PLAN_REL, claim_register_rows=True)
     assert manifest is not None
 
 
-def test_a_ruled_out_row_alone_does_not_refuse(tmp_path):
+def test_a_ruled_out_row_alone_does_not_refuse(tmp_path: Path) -> None:
     _repo(tmp_path, "[R1, R2]")
     manifest = ask_stage.stage(tmp_path, run_id="r1", plan_rel=PLAN_REL)
     assert manifest is not None

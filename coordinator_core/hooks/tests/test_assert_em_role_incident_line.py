@@ -64,3 +64,12 @@ def test_failure_never_blocks_session_start(env, monkeypatch):
 
     monkeypatch.setattr(incident_claims, "list_peers", boom)
     assert "incident claim" not in _run()
+
+
+def test_gem_display_name_uses_roster_before_literal(env, monkeypatch):
+    from coordinator_core.hooks import peer_identity
+
+    monkeypatch.setattr(peer_identity, "roster_name", lambda sid: "gem-a1" if sid == "s-gem" else None)
+    assert mod._gem_display_name(env, "s-gem", None) == "gem-a1"
+    assert mod._gem_display_name(env, "s-other", None) == "name unrecorded"
+    assert mod._gem_display_name(env, "s-gem", "nominated") == "nominated"

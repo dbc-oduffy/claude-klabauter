@@ -17,10 +17,11 @@ from coordinator_core.hooks.nudge_em_code_dispatch import (
     _is_whitespace_only_diff,
     op,
 )
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _outside_f7_carveout_scope(monkeypatch):
+def _outside_f7_carveout_scope(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_mod, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
     monkeypatch.setattr(leaf, "_is_bootstrap_or_out_of_repo", lambda file_path: False)
 
@@ -31,7 +32,7 @@ def _set_sizing(monkeypatch, state: tuple[bool, bool]) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _isolated_tempdir(monkeypatch, tmp_path):
+def _isolated_tempdir(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
 
 
@@ -39,7 +40,7 @@ _REAL_SIZING_STATE = _mod._session_sizing_state
 
 
 @pytest.fixture(autouse=True)
-def _sized_by_default(monkeypatch):
+def _sized_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_sizing(monkeypatch, (True, False))
 
 
@@ -181,7 +182,7 @@ def test_multiedit_malformed_entry_does_not_bypass() -> None:
     assert _is_advisory(op(payload))
 
 
-def test_write_whitespace_only_against_disk_content_suppresses_nudge(tmp_path) -> None:
+def test_write_whitespace_only_against_disk_content_suppresses_nudge(tmp_path: Path) -> None:
     target = tmp_path / "module.py"
     target.write_text("x = 1\n", encoding="utf-8")
     payload = {
@@ -195,7 +196,7 @@ def test_write_whitespace_only_against_disk_content_suppresses_nudge(tmp_path) -
     assert op(payload) is None
 
 
-def test_write_substantive_change_against_disk_content_fires(tmp_path) -> None:
+def test_write_substantive_change_against_disk_content_fires(tmp_path: Path) -> None:
     target = tmp_path / "module.py"
     target.write_text("def f():\n    return 1\n", encoding="utf-8")
     payload = {
@@ -209,7 +210,7 @@ def test_write_substantive_change_against_disk_content_fires(tmp_path) -> None:
     assert _is_advisory(op(payload))
 
 
-def test_write_brand_new_file_never_bypasses(tmp_path) -> None:
+def test_write_brand_new_file_never_bypasses(tmp_path: Path) -> None:
     target = tmp_path / "does-not-exist-yet.py"
     payload = {
         "tool_name": "Write",
@@ -260,7 +261,7 @@ def _level(monkeypatch, level: str) -> None:
     monkeypatch.setattr(mp, "guard_level", lambda name: level)
 
 
-def test_unsized_advises_and_repeats_at_warn(monkeypatch) -> None:
+def test_unsized_advises_and_repeats_at_warn(monkeypatch: pytest.MonkeyPatch) -> None:
     _unsized(monkeypatch)
     _level(monkeypatch, "warn")
     first = _advisory(op(_payload()))
@@ -270,7 +271,7 @@ def test_unsized_advises_and_repeats_at_warn(monkeypatch) -> None:
     assert "coordinator:engine-ask" in second
 
 
-def test_unsized_denies_at_strict(monkeypatch) -> None:
+def test_unsized_denies_at_strict(monkeypatch: pytest.MonkeyPatch) -> None:
     _unsized(monkeypatch)
     _level(monkeypatch, "strict")
     result = op(_payload())
@@ -279,12 +280,12 @@ def test_unsized_denies_at_strict(monkeypatch) -> None:
     assert "coordinator:engine-ask" in out["additionalContext"]
 
 
-def test_sized_advises_at_strict(monkeypatch) -> None:
+def test_sized_advises_at_strict(monkeypatch: pytest.MonkeyPatch) -> None:
     _level(monkeypatch, "strict")
     assert "route through the warp run" in _advisory(op(_payload()))
 
 
-def test_sized_advises_and_repeats(monkeypatch) -> None:
+def test_sized_advises_and_repeats(monkeypatch: pytest.MonkeyPatch) -> None:
     first = _advisory(op(_payload()))
     second = _advisory(op(_payload()))
     assert "route through the warp run" in first
@@ -292,7 +293,7 @@ def test_sized_advises_and_repeats(monkeypatch) -> None:
     assert first == second
 
 
-def test_plan_routed_sizing_without_a_plan_advises_and_repeats(monkeypatch) -> None:
+def test_plan_routed_sizing_without_a_plan_advises_and_repeats(monkeypatch: pytest.MonkeyPatch) -> None:
     _set_sizing(monkeypatch, (True, True))
     first = _advisory(op(_payload()))
     second = _advisory(op(_payload()))
@@ -301,7 +302,7 @@ def test_plan_routed_sizing_without_a_plan_advises_and_repeats(monkeypatch) -> N
     assert "[engine-ask nag #2]" in second and 'args: {"sizing": ' in second
 
 
-def test_unsized_advisory_names_the_ask_fire_not_the_express_lane(monkeypatch) -> None:
+def test_unsized_advisory_names_the_ask_fire_not_the_express_lane(monkeypatch: pytest.MonkeyPatch) -> None:
     _level(monkeypatch, "warn")
     _unsized(monkeypatch)
     reason = _advisory(op(_payload()))
@@ -312,7 +313,7 @@ def test_unsized_advisory_names_the_ask_fire_not_the_express_lane(monkeypatch) -
     ("plan", [], True), ("spec-dispatch", [], True),
     ("plan", ["docs/plans/p.md"], False), ("dispatch", [], False),
 ])
-def test_session_sizing_state_reads_the_route(monkeypatch, route, plans, pending) -> None:
+def test_session_sizing_state_reads_the_route(monkeypatch: pytest.MonkeyPatch, route, plans, pending) -> None:
     from coordinator_core.hooks import nudge_unrouted_sizing as sizing
 
     monkeypatch.setattr(sizing, "_repo_root", lambda p: "/repo")
@@ -322,21 +323,21 @@ def test_session_sizing_state_reads_the_route(monkeypatch, route, plans, pending
     assert _REAL_SIZING_STATE({"cwd": "/repo"}, "s") == (True, pending)
 
 
-def test_subagent_allowed(monkeypatch) -> None:
+def test_subagent_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     _unsized(monkeypatch)
     p = _payload()
     p["agent_id"] = "a1"
     assert op(p) is None
 
 
-def test_doc_file_allowed(monkeypatch) -> None:
+def test_doc_file_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     _unsized(monkeypatch)
     p = _payload()
     p["tool_input"]["file_path"] = "/repo/docs/x.md"
     assert op(p) is None
 
 
-def test_scratch_path_draws_the_advisory(monkeypatch) -> None:
+def test_scratch_path_draws_the_advisory(monkeypatch: pytest.MonkeyPatch) -> None:
     _unsized(monkeypatch)
     _level(monkeypatch, "warn")
     p = _payload()
@@ -344,19 +345,19 @@ def test_scratch_path_draws_the_advisory(monkeypatch) -> None:
     assert "No sizing" in _advisory(op(p))
 
 
-def test_autonomous_allowed_when_sized(monkeypatch) -> None:
+def test_autonomous_allowed_when_sized(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_mod, "resolve_mode", lambda k, sid: True)
     assert op(_payload()) is None
 
 
-def test_autonomous_does_not_skip_sizing(monkeypatch) -> None:
+def test_autonomous_does_not_skip_sizing(monkeypatch: pytest.MonkeyPatch) -> None:
     _unsized(monkeypatch)
     _level(monkeypatch, "strict")
     monkeypatch.setattr(_mod, "resolve_mode", lambda k, sid: True)
     assert op(_payload())["guardLevel"] == "log"
 
 
-def test_empty_sentinel_still_advises(monkeypatch) -> None:
+def test_empty_sentinel_still_advises(monkeypatch: pytest.MonkeyPatch) -> None:
     open(_mod.dispatch_nudge_sentinel_path("sess-sizing-1"), "w", encoding="utf-8").close()
     assert _is_advisory(op(_payload()))
 
@@ -380,20 +381,20 @@ def _sidecar(repo, status: str, agent: str = "coordinator:executor") -> None:
         fh.write(f"---\nstatus: {status}\nagent_type: {agent}\n---\n")
 
 
-def test_reason_without_grant_or_failure_advises_and_keeps_sentinel(tmp_path) -> None:
+def test_reason_without_grant_or_failure_advises_and_keeps_sentinel(tmp_path: Path) -> None:
     _repo, p = _repo_with_reason(tmp_path)
     assert _is_advisory(op(p))
     assert os.path.exists(_mod.dispatch_nudge_sentinel_path("sess-sizing-1"))
 
 
-def test_non_failed_executor_with_reason_advises(tmp_path) -> None:
+def test_non_failed_executor_with_reason_advises(tmp_path: Path) -> None:
     repo, p = _repo_with_reason(tmp_path)
     _sidecar(repo, "complete")
     assert _is_advisory(op(p))
     assert os.path.exists(_mod.dispatch_nudge_sentinel_path("sess-sizing-1"))
 
 
-def test_pm_grant_is_honoured(tmp_path) -> None:
+def test_pm_grant_is_honoured(tmp_path: Path) -> None:
     from coordinator_core.session import guard_unlock_sentinel as gus
 
     repo = tmp_path / "repo"
@@ -405,7 +406,7 @@ def test_pm_grant_is_honoured(tmp_path) -> None:
     assert _is_advisory(op(p))
 
 
-def test_reasoned_sentinel_allows_and_logs_one_line(monkeypatch, tmp_path) -> None:
+def test_reasoned_sentinel_allows_and_logs_one_line(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import json
 
     from coordinator_core.hooks.dispatch_escape import ESCAPE_LOG_NAME
@@ -424,7 +425,7 @@ def test_reasoned_sentinel_allows_and_logs_one_line(monkeypatch, tmp_path) -> No
     assert "ts" in entry
 
 
-def test_launched_run_counts_as_sized_after_touched_release(monkeypatch) -> None:
+def test_launched_run_counts_as_sized_after_touched_release(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks import flag_em_poll_in_flight as poll
     from coordinator_core.hooks import nudge_unrouted_sizing as sizing
 

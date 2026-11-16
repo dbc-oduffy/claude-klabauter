@@ -80,6 +80,19 @@ def _no_origin_slot(monkeypatch):
     """The fake dest is a plain directory under a Popen-forbidden spy: the slot
     gate sees no origin. Slot behaviour is pinned in test_percolate_round_publish_slot."""
     monkeypatch.setattr(_mod._publish_slot, "slot_remote", lambda repo_root: None)
+    monkeypatch.setattr(_mod, "_early_engine_import_refusal", lambda *a, **k: None)
+
+
+@pytest.fixture(autouse=True)
+def _never_clone_the_live_repo(monkeypatch):
+    """A cold commit clone of the live repo costs seconds; a test reaching one fails fast
+    instead of stalling the leg. Build the repo under tmp_path or stub the clone."""
+    commit_clone = _mod._commit_clone_module()
+
+    def _refuse(*_a, **_k):
+        raise AssertionError("test reached materialise_commit_clone; stub it or use a tmp_path repo")
+
+    monkeypatch.setattr(commit_clone, "materialise_commit_clone", _refuse)
 
 
 def _completed(returncode: int = 0, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess:
@@ -1367,7 +1380,8 @@ def _round_with_publish_stub(tmp_path, monkeypatch, publish_stub):
     return rc, buf.getvalue()
 
 
-def test_dirty_publisher_refusal_retries_from_clean_export(tmp_path, monkeypatch):
+def test_dirty_publisher_refusal_is_not_retried_from_a_clean_export(tmp_path, monkeypatch):
+    """The round already runs from a commit clone, so a publisher-code refusal is reported, not retried."""
     refusal = (
         "publish: refused -- publisher code differs from aa24a0395993: "
         "coordinator/bin/lib/x.py; commit them, or run from a clean export\n"
@@ -1376,20 +1390,13 @@ def test_dirty_publisher_refusal_retries_from_clean_export(tmp_path, monkeypatch
 
     def _publish(cmd, kwargs):
         calls.append(list(cmd))
-        if len(calls) == 1:
-            return _completed(1, "", refusal)
-        return _completed(1, "", "  Error: export run reached publish\n")
+        return _completed(1, "", refusal)
 
     monkeypatch.setattr(_mod, "_commit_sha", lambda _root, _ref: "a" * 40)
     rc, out = _round_with_publish_stub(tmp_path, monkeypatch, _publish)
     assert rc == _mod._EXIT_FAIL
-    assert len(calls) == 2
-    retry = calls[1]
-    assert str(_mod._BASELINE_EXPORT) in retry and "--" in retry
-    assert retry[retry.index("--sha") + 1] == "a" * 40
-    assert retry[retry.index("--") + 2] == "coordinator/bin/publish.py"
-    assert "--no-commit" in retry and "--percolate-root" in retry
-    assert "cause:     Error: export run reached publish" in out
+    assert len(calls) == 1
+    assert not hasattr(_mod, "_clean_export_publish_cmd")
 
 
 def test_non_publisher_refusal_does_not_retry_from_export(tmp_path, monkeypatch):
@@ -2489,6 +2496,8 @@ def test_every_leg_bound_comes_from_a_declared_family(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "exists", lambda self: True)
     # `_dump_cache` is process-global; a warm entry would hide the dump spawn.
     monkeypatch.setattr(_resolve_target, "_dump_cache", {})
+    # The in-process kernel read answers without a spawn; force the fallback spawn leg.
+    monkeypatch.setattr(_resolve_target, "_dump_in_process", lambda _bin: None)
     rc, out, spy, dest = _run_round(tmp_path, monkeypatch)
 
     assert rc == _mod._EXIT_OK

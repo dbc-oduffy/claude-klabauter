@@ -21,11 +21,12 @@ from coordinator_core.ops.dispatch_emit.tests.test_refire_inherits_halted_base i
     composed,
     repo,
 )
+import pytest
 
 NEWER_WARP = "warp-2026-10-16-refire-c3b-20271231T000000-eeeeee"
 
 
-def _prior(repo, run_id, status=None):
+def _prior(repo, run_id, status=None) -> None:
     rl.start(repo, run_id)
     rl.bind(repo, run_id, REL, ask_text="the ask")
     if status:
@@ -38,7 +39,7 @@ def _text(seen):
     return seen["script"] + "\n".join((seen["kw"].get("staged_out") or {}).values())
 
 
-def test_a_non_halted_ask_predecessor_carries_its_notes(repo, monkeypatch):  # noqa: F811
+def test_a_non_halted_ask_predecessor_carries_its_notes(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     seen = _spy_texts(monkeypatch)
     _prior(repo, ASK, status="closed")
     _seed_notes(repo, ASK)
@@ -49,7 +50,7 @@ def test_a_non_halted_ask_predecessor_carries_its_notes(repo, monkeypatch):  # n
     assert f"> {LIVE_A}" in _text(seen) and f"> {LIVE_B}" in _text(seen)
 
 
-def test_a_warp_predecessor_superseded_by_a_newer_non_halted_run_carries_its_notes(repo, monkeypatch):  # noqa: F811
+def test_a_warp_predecessor_superseded_by_a_newer_non_halted_run_carries_its_notes(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     seen = _spy_texts(monkeypatch)
     _prior(repo, WARP, status="resumed")
     _seed_notes(repo, WARP)
@@ -67,7 +68,7 @@ def test_a_warp_predecessor_superseded_by_a_newer_non_halted_run_carries_its_not
     assert f"> {LIVE_A}" in _text(seen)
 
 
-def test_the_newest_note_holder_wins_and_a_noteless_sizing_resumes_nothing(repo):  # noqa: F811
+def test_the_newest_note_holder_wins_and_a_noteless_sizing_resumes_nothing(repo) -> None:  # noqa: F811
     _prior(repo, ASK, status="closed")
     assert halted_run.notes_predecessor(repo, REL) is None
     _seed_notes(repo, ASK)

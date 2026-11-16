@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     AmbiguousExternalGateError,
     read_spine,
 )
+from pathlib import Path
 
 _HEADER = "# fixture plan\n\n## Tasks\n\n"
 
@@ -24,7 +25,7 @@ def _write_plan(tmp_path, body: str, *, frontmatter: str = ""):
     return path
 
 
-def _basic_two_row_body():
+def _basic_two_row_body() -> str:
     return (
         "- id: T1\n"
         "  title: gated row\n"
@@ -35,7 +36,7 @@ def _basic_two_row_body():
     )
 
 
-def test_frontmatter_gate_with_row_withholds_named_row(tmp_path):
+def test_frontmatter_gate_with_row_withholds_named_row(tmp_path: Path) -> None:
     frontmatter = (
         "external_gate:\n"
         "  - id: claude-klabauter-inbox-delivery\n"
@@ -51,7 +52,7 @@ def test_frontmatter_gate_with_row_withholds_named_row(tmp_path):
     assert ids == {"T2"}
 
 
-def test_frontmatter_gate_cleared_true_dispatches_the_row(tmp_path):
+def test_frontmatter_gate_cleared_true_dispatches_the_row(tmp_path: Path) -> None:
     frontmatter = (
         "external_gate:\n"
         "  - id: claude-klabauter-inbox-delivery\n"
@@ -66,7 +67,7 @@ def test_frontmatter_gate_cleared_true_dispatches_the_row(tmp_path):
     assert ids == {"T1", "T2"}
 
 
-def test_frontmatter_gate_naming_unknown_row_refuses(tmp_path):
+def test_frontmatter_gate_naming_unknown_row_refuses(tmp_path: Path) -> None:
     frontmatter = (
         "external_gate:\n"
         "  - id: claude-klabauter-inbox-delivery\n"
@@ -79,7 +80,7 @@ def test_frontmatter_gate_naming_unknown_row_refuses(tmp_path):
         read_spine(plan_path)
 
 
-def test_frontmatter_gate_entry_not_a_mapping_refuses(tmp_path):
+def test_frontmatter_gate_entry_not_a_mapping_refuses(tmp_path: Path) -> None:
     frontmatter = "external_gate:\n  - just-a-string\n"
     plan_path = _write_plan(tmp_path, _basic_two_row_body(), frontmatter=frontmatter)
 
@@ -87,7 +88,7 @@ def test_frontmatter_gate_entry_not_a_mapping_refuses(tmp_path):
         read_spine(plan_path)
 
 
-def test_frontmatter_gate_not_a_list_refuses(tmp_path):
+def test_frontmatter_gate_not_a_list_refuses(tmp_path: Path) -> None:
     frontmatter = "external_gate: not-a-list\n"
     plan_path = _write_plan(tmp_path, _basic_two_row_body(), frontmatter=frontmatter)
 
@@ -95,7 +96,7 @@ def test_frontmatter_gate_not_a_list_refuses(tmp_path):
         read_spine(plan_path)
 
 
-def test_frontmatter_gate_without_row_key_is_out_of_scope_and_skipped(tmp_path):
+def test_frontmatter_gate_without_row_key_is_out_of_scope_and_skipped(tmp_path: Path) -> None:
     frontmatter = "external_gate:\n  - id: plan-wide-gate\n    cleared: false\n"
     plan_path = _write_plan(tmp_path, _basic_two_row_body(), frontmatter=frontmatter)
 
@@ -104,7 +105,7 @@ def test_frontmatter_gate_without_row_key_is_out_of_scope_and_skipped(tmp_path):
     assert ids == {"T1", "T2"}
 
 
-def test_row_level_plain_string_gate_list_withholds_the_row(tmp_path):
+def test_row_level_plain_string_gate_list_withholds_the_row(tmp_path: Path) -> None:
     body = (
         "- id: C6\n"
         "  title: gated on named names\n"
@@ -123,7 +124,7 @@ def test_row_level_plain_string_gate_list_withholds_the_row(tmp_path):
     assert ids == {"C7"}
 
 
-def test_row_level_mapping_gate_with_cleared_false_still_withholds(tmp_path):
+def test_row_level_mapping_gate_with_cleared_false_still_withholds(tmp_path: Path) -> None:
     body = (
         "- id: C6\n"
         "  title: rewritten as mappings\n"

@@ -8,6 +8,7 @@ from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import StageManifest
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
+from pathlib import Path
 
 RUN = "ask-20261016T000000-abc124"
 PLAN_REL = "docs/plans/2026-10-16-ledger-ids.md"
@@ -58,7 +59,7 @@ def _stage(tmp_path, rows: list[dict]):
     )
 
 
-def test_every_row_ruled_out_stages_empty_items_and_all_withheld(tmp_path):
+def test_every_row_ruled_out_stages_empty_items_and_all_withheld(tmp_path: Path) -> None:
     ruling = f"workflow.revise:{RUN}:out_of_scope"
     reply = _stage(tmp_path, [_row("R1", ref=ruling), _row("R2", ref=ruling)])
     assert "error" not in reply
@@ -69,14 +70,14 @@ def test_every_row_ruled_out_stages_empty_items_and_all_withheld(tmp_path):
     assert manifest.withheld_ids == ("R1", "R2")
 
 
-def test_open_rows_are_items_and_ruled_out_rows_are_withheld(tmp_path):
+def test_open_rows_are_items_and_ruled_out_rows_are_withheld(tmp_path: Path) -> None:
     reply = _stage(tmp_path, [_row("R1"), _row("R2", ref=f"workflow.revise:{RUN}:out_of_scope")])
     assert reply["ledger_item_ids"] == ["R1"]
     assert reply["withheld_ids"] == ["R2"]
     assert (reply["ledger_item_ids"], reply["withheld_ids"]) == tuple(list(t) for t in rl.ledger_ids([_row("R1"), _row("R2", ref=f"workflow.revise:{RUN}:out_of_scope")]))
 
 
-def test_manifest_json_without_the_keys_reads_empty():
+def test_manifest_json_without_the_keys_reads_empty() -> None:
     manifest = StageManifest.from_json({"run_dir": "d", "rows": [], "review_declared_paths": [], "marker_path": "m"})
     assert manifest.ledger_item_ids == ()
     assert manifest.withheld_ids == ()

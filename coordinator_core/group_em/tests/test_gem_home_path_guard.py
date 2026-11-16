@@ -6,6 +6,11 @@ import subprocess
 import sys
 
 from coordinator_core.group_em import gem_home_path_guard as g
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
 
 # Fixtures are assembled from fragments so no literal machine path sits in this source.
 _DRIVE_BS = "C" + ":" + "\\" + "Users" + "\\" + "x" + "\\" + "a.md"
@@ -15,17 +20,17 @@ _LINUX = "/" + "home" + "/al/f"
 _NO_FLAGS = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
-def _git(cwd, *args):
+def _git(cwd, *args) -> CompletedProcess[str]:
     return subprocess.run(["git", *args], cwd=cwd, capture_output=True, text=True, creationflags=_NO_FLAGS)
 
 
-def _run_hook(hook, cwd):
+def _run_hook(hook, cwd) -> CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(hook)], cwd=cwd, capture_output=True, text=True, creationflags=_NO_FLAGS
     )
 
 
-def test_scan_flags_machine_paths_and_passes_clean(tmp_path):
+def test_scan_flags_machine_paths_and_passes_clean(tmp_path: Path) -> None:
     bad = tmp_path / "bad.md"
     bad.write_text(f"see {_DRIVE_BS}\nalso {_DRIVE_FS}\nmac {_MAC}\nlinux {_LINUX}\n", encoding="utf-8")
     ok = tmp_path / "ok.md"
@@ -37,13 +42,13 @@ def test_scan_flags_machine_paths_and_passes_clean(tmp_path):
     assert g.scan([ok]) == []
 
 
-def test_scan_skips_binary_and_missing(tmp_path):
+def test_scan_skips_binary_and_missing(tmp_path: Path) -> None:
     b = tmp_path / "b.bin"
     b.write_bytes(_DRIVE_BS.encode() + b"\x00")
     assert g.scan([b, tmp_path / "nope"]) == []
 
 
-def test_install_refuses_non_repo_and_foreign_hook(tmp_path):
+def test_install_refuses_non_repo_and_foreign_hook(tmp_path: Path) -> None:
     assert g.install(tmp_path) is None
     _git(tmp_path, "init", "-q")
     hook = tmp_path / ".git" / "hooks" / "pre-commit"
@@ -53,7 +58,7 @@ def test_install_refuses_non_repo_and_foreign_hook(tmp_path):
     assert "mine" in hook.read_text(encoding="utf-8")
 
 
-def test_installed_hook_is_python_advisory_and_never_denies(tmp_path):
+def test_installed_hook_is_python_advisory_and_never_denies(tmp_path: Path) -> None:
     _git(tmp_path, "init", "-q")
     hook = g.install(tmp_path)
     assert hook is not None and hook.name == "pre-commit"

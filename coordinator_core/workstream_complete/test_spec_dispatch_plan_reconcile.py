@@ -7,6 +7,7 @@ import pytest
 import coordinator_core.workstream_complete as wsc
 from coordinator_core.ops.ceremony import wsc_disposition
 from coordinator_core.session import claimed_plan
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -25,7 +26,7 @@ def _gate() -> wsc.SessionShapeGate:
     )
 
 
-def _plan(tmp_path, *, scope_mode="spec-dispatch", status="draft"):
+def _plan(tmp_path, *, scope_mode: str = "spec-dispatch", status: str = "draft"):
     path = tmp_path / _REL
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -35,7 +36,7 @@ def _plan(tmp_path, *, scope_mode="spec-dispatch", status="draft"):
     return path
 
 
-def _setup(monkeypatch, tmp_path, **plan_kwargs):
+def _setup(monkeypatch, tmp_path, **plan_kwargs) -> None:
     _plan(tmp_path, **plan_kwargs)
     monkeypatch.setattr(wsc, "compute_session_shape_gate", lambda root, history=None: _gate())
     monkeypatch.setattr(
@@ -50,7 +51,7 @@ def _jp_ids(tmp_path, decisions=None):
     ]
 
 
-def test_fires_for_a_claimed_non_terminal_spec_dispatch_plan(monkeypatch, tmp_path):
+def test_fires_for_a_claimed_non_terminal_spec_dispatch_plan(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _setup(monkeypatch, tmp_path)
     obj = wsc.brief(decisions={}, repo_root=tmp_path)
     points = {jp["id"]: jp for jp in obj["judgment_points"]}
@@ -60,23 +61,23 @@ def test_fires_for_a_claimed_non_terminal_spec_dispatch_plan(monkeypatch, tmp_pa
     assert points[_JP].get("recommendation") is None
 
 
-def test_silent_when_a_governing_plan_resolves(monkeypatch, tmp_path):
+def test_silent_when_a_governing_plan_resolves(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _setup(monkeypatch, tmp_path)
     ids = _jp_ids(tmp_path, {"governing_plan_path": _REL})
     assert _JP not in ids
 
 
-def test_silent_for_a_terminal_plan(monkeypatch, tmp_path):
+def test_silent_for_a_terminal_plan(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _setup(monkeypatch, tmp_path, status="implemented")
     assert _JP not in _jp_ids(tmp_path)
 
 
-def test_silent_for_another_scope_mode(monkeypatch, tmp_path):
+def test_silent_for_another_scope_mode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _setup(monkeypatch, tmp_path, scope_mode="plan")
     assert _JP not in _jp_ids(tmp_path)
 
 
-def test_silent_without_a_claim(monkeypatch, tmp_path):
+def test_silent_without_a_claim(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _setup(monkeypatch, tmp_path)
     monkeypatch.setattr(claimed_plan, "list_held_plan_claims", lambda cwd=None: [])
     assert _JP not in _jp_ids(tmp_path)

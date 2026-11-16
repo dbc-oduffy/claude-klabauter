@@ -7,6 +7,7 @@ import pytest
 
 from coordinator_core.cartography._guard import PathEscapeError
 from coordinator_core.ops.workflow_validate import _workflow_validate
+from pathlib import Path
 
 
 def _run(coro):
@@ -47,7 +48,7 @@ async function run(ctx) {
 """
 
 
-def test_impure_meta_is_error(tmp_path):
+def test_impure_meta_is_error(tmp_path: Path) -> None:
     script = _write(
         tmp_path,
         "impure.mjs",
@@ -76,7 +77,7 @@ export const meta = {
         ("const d = new Date();", "forbidden-global-new-date"),
     ],
 )
-def test_forbidden_globals_are_error_and_actionable(tmp_path, snippet, expected_code):
+def test_forbidden_globals_are_error_and_actionable(tmp_path: Path, snippet, expected_code) -> None:
     script = _write(
         tmp_path,
         "forbidden.mjs",
@@ -100,14 +101,14 @@ async function run(ctx) {{
     assert len(finding["message"]) > 20
 
 
-def test_conformant_script_is_ok_zero_error(tmp_path):
+def test_conformant_script_is_ok_zero_error(tmp_path: Path) -> None:
     script = _write(tmp_path, "conformant.mjs", _CONFORMANT_SCRIPT)
     result = _validate(script)
     assert result["ok"] is True
     assert result["error_count"] == 0
 
 
-def test_f1_date_now_literal_in_prompt_body_is_not_error(tmp_path):
+def test_f1_date_now_literal_in_prompt_body_is_not_error(tmp_path: Path) -> None:
     script = _write(
         tmp_path,
         "f1.mjs",
@@ -133,7 +134,7 @@ async function run(ctx) {
     assert result["error_count"] == 0
 
 
-def test_parallel_transform_parallel_is_warn(tmp_path):
+def test_parallel_transform_parallel_is_warn(tmp_path: Path) -> None:
     script = _write(
         tmp_path,
         "barrier.mjs",
@@ -159,7 +160,7 @@ async function run(ctx) {
     assert finding["severity"] == "WARN"
 
 
-def test_legitimate_agent_mediated_barrier_does_not_hard_fail(tmp_path):
+def test_legitimate_agent_mediated_barrier_does_not_hard_fail(tmp_path: Path) -> None:
     script = _write(
         tmp_path,
         "legit-barrier.mjs",
@@ -187,7 +188,7 @@ async function run(ctx) {
     assert "barrier-vs-pipeline" not in codes
 
 
-def test_phase_call_title_mismatch_is_warn(tmp_path):
+def test_phase_call_title_mismatch_is_warn(tmp_path: Path) -> None:
     script = _write(
         tmp_path,
         "phase-mismatch.mjs",
@@ -213,7 +214,7 @@ async function run(ctx) {
     assert finding["severity"] == "WARN"
 
 
-def test_agent_options_phase_mismatch_is_warn(tmp_path):
+def test_agent_options_phase_mismatch_is_warn(tmp_path: Path) -> None:
     script = _write(
         tmp_path,
         "agent-phase-mismatch.mjs",
@@ -244,12 +245,12 @@ async function run(ctx) {
     assert finding["severity"] == "WARN"
 
 
-def test_missing_script_path_raises_value_error():
+def test_missing_script_path_raises_value_error() -> None:
     with pytest.raises(ValueError, match="script_path"):
         _run(_workflow_validate({}))
 
 
-def test_script_path_outside_target_root_raises_path_escape_error(tmp_path):
+def test_script_path_outside_target_root_raises_path_escape_error(tmp_path: Path) -> None:
     inside_dir = tmp_path / "inside"
     inside_dir.mkdir()
     outside_dir = tmp_path / "outside"
@@ -260,7 +261,7 @@ def test_script_path_outside_target_root_raises_path_escape_error(tmp_path):
         _validate(escaping_script, target_root=inside_dir)
 
 
-def test_script_path_derives_containment_root_from_parent_when_omitted(tmp_path):
+def test_script_path_derives_containment_root_from_parent_when_omitted(tmp_path: Path) -> None:
     script = _write(tmp_path, "derived-root.mjs", _CONFORMANT_SCRIPT)
     result = _validate(script)
     assert result["ok"] is True
@@ -357,7 +358,7 @@ export default run;
 '''
 
 
-def test_large_realistic_fixture_is_ok_zero_error(tmp_path):
+def test_large_realistic_fixture_is_ok_zero_error(tmp_path: Path) -> None:
     script = _write(tmp_path, "large-realistic.mjs", LARGE_REALISTIC_SCRIPT)
     result = _validate(script)
     assert result["ok"] is True
@@ -366,7 +367,7 @@ def test_large_realistic_fixture_is_ok_zero_error(tmp_path):
     assert "agent-model-default" not in codes
 
 
-def test_large_fixture_mutated_impure_meta_is_error(tmp_path):
+def test_large_fixture_mutated_impure_meta_is_error(tmp_path: Path) -> None:
     mutated = LARGE_REALISTIC_SCRIPT.replace(
         "description: 'Scans every registered repo for stale branches, dispatches ' +\n"
         "    'a review agent per candidate, and rolls the findings into a single report.',",
@@ -379,7 +380,7 @@ def test_large_fixture_mutated_impure_meta_is_error(tmp_path):
     assert "meta-impure-call" in codes
 
 
-def test_large_fixture_mutated_forbidden_global_is_error(tmp_path):
+def test_large_fixture_mutated_forbidden_global_is_error(tmp_path: Path) -> None:
     mutated = LARGE_REALISTIC_SCRIPT.replace(
         "const verdictCounts = { keep: 0, archive: 0, delete: 0 };",
         "const sweepStartedAt = Date.now();\n"
@@ -392,7 +393,7 @@ def test_large_fixture_mutated_forbidden_global_is_error(tmp_path):
     assert "forbidden-global-date-now" in codes
 
 
-def test_large_fixture_mutated_phase_mismatch_is_warn_not_error(tmp_path):
+def test_large_fixture_mutated_phase_mismatch_is_warn_not_error(tmp_path: Path) -> None:
     mutated = LARGE_REALISTIC_SCRIPT.replace(
         "phase('report');\n\n  const summary",
         "phase('finalize');\n\n  const summary",
@@ -406,7 +407,7 @@ def test_large_fixture_mutated_phase_mismatch_is_warn_not_error(tmp_path):
     assert finding["severity"] == "WARN"
 
 
-def test_an_agent_type_pinning_its_own_model_is_not_a_model_default(monkeypatch):
+def test_an_agent_type_pinning_its_own_model_is_not_a_model_default(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks import block_workflow_unmodeled_agent as bwua
     from coordinator_core.ops._workflow_contract import run_checks
 

@@ -15,6 +15,7 @@ import pytest
 from coordinator_core.benchmarks import object_read_stall_profile as bench
 from coordinator_core.git import git_objects as go
 from coordinator_core.warm import server
+from pathlib import Path
 
 WALL = 0.3
 HOLD = 3.0
@@ -24,7 +25,7 @@ PEER_LIGHT_METHOD = "memo.send"
 
 
 @pytest.fixture(autouse=True)
-def _short_wall(monkeypatch):
+def _short_wall(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(go, "PACK_READ_DEADLINE_SECS", WALL)
     bench.clear_caches(go)
     yield
@@ -43,7 +44,7 @@ def _ctx(tmp_path, workers):
     return ctx
 
 
-def _msg(method, i=1):
+def _msg(method, i: int = 1):
     return {"jsonrpc": "2.0", "id": i, "method": method, "params": {}}
 
 
@@ -61,7 +62,7 @@ def _handler(fx, outcome):
 
 
 @pytest.mark.deliberate_wall_clock(reason="stall bound: a stalled pack read raises within one wall and peers answer meanwhile")
-def test_stalled_pack_read_raises_within_one_wall_and_peers_answer(tmp_path, monkeypatch):
+def test_stalled_pack_read_raises_within_one_wall_and_peers_answer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fx = bench.build_fixtures(go, tmp_path / "fixtures")
     outcome: dict = {}
     monkeypatch.setattr(server, "DISPATCH_PROCESS_POOL_SIZE", 1)

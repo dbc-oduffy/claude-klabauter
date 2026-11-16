@@ -50,6 +50,7 @@ from coordinator_core.write_guards.tests.test_bump_out_of_repo_tool_write import
     _isolate_home,
     _payload,
 )
+from pathlib import Path
 
 # `_init_repo` builds real git repos; declared, not inherited silently.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -60,7 +61,7 @@ pytestmark = [
 
 
 @pytest.fixture()
-def cloud_container(monkeypatch):
+def cloud_container(monkeypatch: pytest.MonkeyPatch) -> None:
     """A managed remote container: the package conftest's capability pin is
     removed and the venue markers a real one sets are put back."""
     monkeypatch.delenv("COORDINATOR_CAP_FLEET_PRESENT", raising=False)
@@ -68,7 +69,7 @@ def cloud_container(monkeypatch):
 
 
 @pytest.fixture()
-def exploding_capability(monkeypatch):
+def exploding_capability(monkeypatch: pytest.MonkeyPatch) -> None:
     """The capability layer itself unhappy -- the fail-open leg. Patched at
     `coordinator_core.environment.capability`, the attribute
     `_write_bump_stand_down` imports inside its own function body, so the
@@ -92,7 +93,7 @@ def _anchored_foreign_edit(tmp_path, monkeypatch, session_id: str):
     return payload, own
 
 
-def test_stands_down_on_a_host_with_no_fleet(tmp_path, monkeypatch, capsys):
+def test_stands_down_on_a_host_with_no_fleet(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """Property 1. The hard deny becomes an after-the-fact advisory, and the
     `Edit` proceeds -- matching what the Bash surface already did for the
     equivalent `git commit`."""
@@ -110,7 +111,7 @@ def test_stands_down_on_a_host_with_no_fleet(tmp_path, monkeypatch, capsys):
     assert "out-of-repo-tool-write" in capsys.readouterr().err
 
 
-def test_stand_down_leaves_a_durable_audit_line_in_the_session_repo(tmp_path, monkeypatch):
+def test_stand_down_leaves_a_durable_audit_line_in_the_session_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Property 1's other half, plus WHERE. Without the line, "permissive and
     warn" degrades to "permissive"; and the line must land in the session's
     own repo, never in the repo the bump was steering the write away from."""
@@ -129,7 +130,7 @@ def test_stand_down_leaves_a_durable_audit_line_in_the_session_repo(tmp_path, mo
     )
 
 
-def test_still_hard_denies_where_the_premise_holds(tmp_path, monkeypatch):
+def test_still_hard_denies_where_the_premise_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Property 2, resting on the package pin rather than restating it."""
     payload, _own = _anchored_foreign_edit(tmp_path, monkeypatch, "sess-c7-sd-fleet")
 
@@ -140,8 +141,8 @@ def test_still_hard_denies_where_the_premise_holds(tmp_path, monkeypatch):
 
 
 def test_denies_when_the_capability_layer_raises(
-    tmp_path, monkeypatch, cloud_container, exploding_capability
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, cloud_container, exploding_capability
+) -> None:
     """Property 3. The venue markers say "stand down" and the capability
     layer cannot answer -- the guard behaves as it did before the stand-down
     existed rather than guessing."""
@@ -153,7 +154,7 @@ def test_denies_when_the_capability_layer_raises(
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_the_stand_down_did_not_soften_the_class(cloud_container):
+def test_the_stand_down_did_not_soften_the_class(cloud_container) -> None:
     """Property 4. The decline is environment-conditional and lives at one
     call site; reverting `CLASS` would soften this guard on every host,
     including the fleet workstations where its premise holds."""

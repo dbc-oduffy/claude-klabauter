@@ -15,6 +15,7 @@ import coordinator_core.ops.sizing_record_xl_exit as mod
 from coordinator_core.authz.classification import OP_CLASSIFICATION
 from coordinator_core.op_scopes import _OP_KEY_SCOPE
 from coordinator_core.ops._registry_map import OP_MODULE_MAP
+import pytest
 
 _QUOTE = "go roadmap on that one"
 
@@ -62,7 +63,7 @@ def _doc(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
-def test_records_pick_quote_and_date(tmp_path):
+def test_records_pick_quote_and_date(tmp_path: Path) -> None:
     p = _seed(tmp_path)
     r = _run(tmp_path, "roadmap")
     assert r["exit_code"] == 0 and r["applied"] is True, r
@@ -72,7 +73,7 @@ def test_records_pick_quote_and_date(tmp_path):
     assert d["route"] == "pm-decision"
 
 
-def test_shape_then_roadmap_overwrites(tmp_path):
+def test_shape_then_roadmap_overwrites(tmp_path: Path) -> None:
     p = _seed(tmp_path)
     assert _run(tmp_path, "shape", "shape it first")["applied"] is True
     r = _run(tmp_path, "roadmap")
@@ -81,7 +82,7 @@ def test_shape_then_roadmap_overwrites(tmp_path):
     assert d["xl_exit"] == "roadmap" and d["pm_resolution"]["xl_exit"] == _QUOTE
 
 
-def test_fan_out_pick_records(tmp_path):
+def test_fan_out_pick_records(tmp_path: Path) -> None:
     p = _seed(tmp_path)
     r = _run(tmp_path, "fan_out")
     assert r["exit_code"] == 0 and r["applied"] is True, r
@@ -89,7 +90,7 @@ def test_fan_out_pick_records(tmp_path):
     assert d["xl_exit"] == "fan_out" and d["pm_resolution"]["xl_exit"] == _QUOTE
 
 
-def test_shape_then_fan_out_overwrites_but_fan_out_then_roadmap_refused(tmp_path):
+def test_shape_then_fan_out_overwrites_but_fan_out_then_roadmap_refused(tmp_path: Path) -> None:
     p = _seed(tmp_path)
     assert _run(tmp_path, "shape", "shape it first")["applied"] is True
     r = _run(tmp_path, "fan_out")
@@ -101,7 +102,7 @@ def test_shape_then_fan_out_overwrites_but_fan_out_then_roadmap_refused(tmp_path
     assert p.read_text(encoding="utf-8") == before
 
 
-def test_same_pick_is_idempotent_and_keeps_first_quote(tmp_path):
+def test_same_pick_is_idempotent_and_keeps_first_quote(tmp_path: Path) -> None:
     p = _seed(tmp_path)
     _run(tmp_path, "roadmap")
     r = _run(tmp_path, "roadmap", "different words")
@@ -109,7 +110,7 @@ def test_same_pick_is_idempotent_and_keeps_first_quote(tmp_path):
     assert _doc(p)["pm_resolution"]["xl_exit"] == _QUOTE
 
 
-def test_settled_exit_is_not_re_decided(tmp_path):
+def test_settled_exit_is_not_re_decided(tmp_path: Path) -> None:
     p = _seed(tmp_path, "roadmap")
     before = p.read_text(encoding="utf-8")
     for pick in ("shape", "accept_multi_session"):
@@ -118,7 +119,7 @@ def test_settled_exit_is_not_re_decided(tmp_path):
     assert p.read_text(encoding="utf-8") == before
 
 
-def test_preserves_existing_pm_resolution_keys(tmp_path):
+def test_preserves_existing_pm_resolution_keys(tmp_path: Path) -> None:
     p = _seed(tmp_path)
     p.write_text(
         p.read_text(encoding="utf-8")
@@ -131,7 +132,7 @@ def test_preserves_existing_pm_resolution_keys(tmp_path):
     assert pm["decided_on"] == "2026-10-03"
 
 
-def test_split_is_recorded_with_only_xl_exit_and_resolution(tmp_path):
+def test_split_is_recorded_with_only_xl_exit_and_resolution(tmp_path: Path) -> None:
     p = _seed(tmp_path)
     r = _run(tmp_path, "split")
     assert r["exit_code"] == 0 and r["applied"] is True
@@ -140,7 +141,7 @@ def test_split_is_recorded_with_only_xl_exit_and_resolution(tmp_path):
     assert "initiatives" not in doc and "parent_id" not in doc
 
 
-def test_refusals(tmp_path):
+def test_refusals(tmp_path: Path) -> None:
     p = _seed(tmp_path)
     before = p.read_text(encoding="utf-8")
     assert _run(tmp_path, "roadmap", "  ")["exit_code"] == 1
@@ -150,13 +151,13 @@ def test_refusals(tmp_path):
     assert p.read_text(encoding="utf-8") == before
 
 
-def test_registered_everywhere():
+def test_registered_everywhere() -> None:
     assert OP_CLASSIFICATION.get("sizing.record_xl_exit") is not None
     assert _OP_KEY_SCOPE.get("sizing.record_xl_exit") == "common_dir"
     assert OP_MODULE_MAP["sizing.record_xl_exit"] == "coordinator_core.ops.sizing_record_xl_exit"
 
 
-def test_sizing_assemble_cli_routes_to_writer(tmp_path, monkeypatch):
+def test_sizing_assemble_cli_routes_to_writer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import sizing_assemble
 
     p = _seed(tmp_path)

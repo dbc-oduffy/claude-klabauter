@@ -7,16 +7,17 @@ import json
 import pytest
 
 from coordinator_core.ops.dispatch_emit import run_notes
+from pathlib import Path
 
 
-def _write(path, *objs, torn=False):
+def _write(path, *objs, torn: bool = False) -> None:
     text = "".join(json.dumps(o) + "\n" for o in objs)
     if torn:
         text += '{"note": "tor'
     path.write_text(text, encoding="utf-8")
 
 
-def test_ids_skip_torn_and_retraction_lines_and_stay_stable(tmp_path):
+def test_ids_skip_torn_and_retraction_lines_and_stay_stable(tmp_path: Path) -> None:
     p = tmp_path / "notes.jsonl"
     _write(p, {"note": "a", "at": "t1"}, {"retracts": "N1", "reason": "r", "at": "t2"},
            {"note": "b", "at": "t3"})
@@ -32,11 +33,11 @@ def test_ids_skip_torn_and_retraction_lines_and_stay_stable(tmp_path):
     assert again[0]["note"] == "a"
 
 
-def test_missing_file_is_empty(tmp_path):
+def test_missing_file_is_empty(tmp_path: Path) -> None:
     assert run_notes.entries(tmp_path / "none.jsonl", "r") == []
 
 
-def test_retraction_marks_exactly_its_id(tmp_path):
+def test_retraction_marks_exactly_its_id(tmp_path: Path) -> None:
     p = tmp_path / "notes.jsonl"
     _write(p, {"note": "a", "at": "t1"}, {"note": "b", "at": "t2"})
     p.write_bytes(p.read_bytes() + run_notes.retraction_line("N2", "done by hand", "t3", "em"))
@@ -45,12 +46,12 @@ def test_retraction_marks_exactly_its_id(tmp_path):
     assert got[1]["retracted"] == {"reason": "done by hand", "at": "t3", "from": "em"}
 
 
-def test_retraction_line_omits_empty_sender():
+def test_retraction_line_omits_empty_sender() -> None:
     obj = json.loads(run_notes.retraction_line("N1", "why", "t", ""))
     assert obj == {"retracts": "N1", "reason": "why", "at": "t"}
 
 
-def test_live_drops_retracted(tmp_path):
+def test_live_drops_retracted(tmp_path: Path) -> None:
     p = tmp_path / "notes.jsonl"
     _write(p, {"note": "a", "at": "t1"}, {"note": "b", "at": "t2"}, {"retracts": "N1", "reason": "r", "at": "t3"})
     assert [e["id"] for e in run_notes.live(run_notes.entries(p, "r"))] == ["N2"]
@@ -63,23 +64,23 @@ def test_live_drops_retracted(tmp_path):
     {"note_id": "N1", "reason": "x" * (run_notes.REASON_CAP + 1)},
     "nope",
 ])
-def test_validate_retract_refuses(raw):
+def test_validate_retract_refuses(raw) -> None:
     with pytest.raises(ValueError):
         run_notes.validate_retract(raw)
 
 
-def test_validate_retract_normalises():
+def test_validate_retract_normalises() -> None:
     assert run_notes.validate_retract({"note_id": " N3 ", "reason": " why "}) == {"note_id": "N3", "reason": "why"}
 
 
-def test_brief_block_empty_when_no_live_note(tmp_path):
+def test_brief_block_empty_when_no_live_note(tmp_path: Path) -> None:
     assert run_notes.brief_block([]) == ""
     p = tmp_path / "notes.jsonl"
     _write(p, {"note": "a", "at": "t1"}, {"retracts": "N1", "reason": "r", "at": "t2"})
     assert run_notes.brief_block(run_notes.entries(p, "r")) == ""
 
 
-def test_brief_block_quotes_live_only_and_is_not_pm_verbatim(tmp_path):
+def test_brief_block_quotes_live_only_and_is_not_pm_verbatim(tmp_path: Path) -> None:
     p = tmp_path / "notes.jsonl"
     _write(p, {"note": "keep\nthis", "at": "t1"}, {"note": "gone", "at": "t2"},
            {"retracts": "N2", "reason": "r", "at": "t3"})
@@ -91,17 +92,17 @@ def test_brief_block_quotes_live_only_and_is_not_pm_verbatim(tmp_path):
         run_notes.render_section(run_notes.entries(p, "run-7")))
 
 
-def test_brief_block_strips_the_marker_delimiter(tmp_path):
+def test_brief_block_strips_the_marker_delimiter(tmp_path: Path) -> None:
     p = tmp_path / "notes.jsonl"
     _write(p, {"note": "a\x01evil()\x01b", "at": "t1"})
     assert "\x01" not in run_notes.brief_block(run_notes.entries(p, "r"))
 
 
-def test_render_section_empty():
+def test_render_section_empty() -> None:
     assert run_notes.render_section([]) == []
 
 
-def test_render_section_live_retracted_and_call(tmp_path):
+def test_render_section_live_retracted_and_call(tmp_path: Path) -> None:
     p = tmp_path / "notes.jsonl"
     _write(p, {"note": "line one\nline two", "at": "t1"}, {"note": "gone", "at": "t2"},
            {"retracts": "N2", "reason": "applied by hand", "at": "t3"})

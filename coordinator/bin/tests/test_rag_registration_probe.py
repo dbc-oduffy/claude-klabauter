@@ -6,11 +6,16 @@ import subprocess
 from pathlib import Path
 
 from coordinator_core.install import rag_fleet_registration as rfr
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
-def _load_module():
+def _load_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "workday_start_health_probes_under_test_rr", _BIN_DIR / "workday-start-health-probes.py"
     )
@@ -22,7 +27,7 @@ def _load_module():
 _mod = _load_module()
 
 
-def _no_spawn(monkeypatch):
+def _no_spawn(monkeypatch) -> None:
     def boom(*a, **k):
         raise AssertionError("probe spawned a subprocess")
 
@@ -30,7 +35,7 @@ def _no_spawn(monkeypatch):
     monkeypatch.setattr(subprocess, "run", boom)
 
 
-def test_absent_rag_is_silent_exit_zero(monkeypatch, capsys):
+def test_absent_rag_is_silent_exit_zero(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _no_spawn(monkeypatch)
     monkeypatch.setattr(rfr, "detect_example_retrieval_repo", lambda: None)
     assert _mod.main(["rag-registration"]) == 0
@@ -38,7 +43,7 @@ def test_absent_rag_is_silent_exit_zero(monkeypatch, capsys):
     assert out.out == "" and out.err == ""
 
 
-def test_unregistered_repos_each_get_a_defect_line(monkeypatch, capsys, tmp_path):
+def test_unregistered_repos_each_get_a_defect_line(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     _no_spawn(monkeypatch)
     rag = rfr.RagInstall(root=tmp_path, interpreter="py")
     monkeypatch.setattr(rfr, "detect_example_retrieval_repo", lambda: rag)
@@ -49,7 +54,7 @@ def test_unregistered_repos_each_get_a_defect_line(monkeypatch, capsys, tmp_path
     assert all("fix: python scripts/setup.py" in ln for ln in lines)
 
 
-def test_all_registered_is_silent_exit_zero(monkeypatch, capsys, tmp_path):
+def test_all_registered_is_silent_exit_zero(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     rag = rfr.RagInstall(root=tmp_path, interpreter="py")
     monkeypatch.setattr(rfr, "detect_example_retrieval_repo", lambda: rag)
     monkeypatch.setattr(rfr, "unregistered_repos", lambda r: [])
@@ -57,11 +62,11 @@ def test_all_registered_is_silent_exit_zero(monkeypatch, capsys, tmp_path):
     assert capsys.readouterr().err == ""
 
 
-def test_unknown_argument_refused(capsys):
+def test_unknown_argument_refused(capsys: pytest.CaptureFixture[str]) -> None:
     assert _mod.main(["rag-registration", "--bogus"]) == 2
 
 
-def test_listed_in_usage_and_subcommands(capsys):
+def test_listed_in_usage_and_subcommands(capsys: pytest.CaptureFixture[str]) -> None:
     assert "rag-registration" in _mod._SUBCOMMANDS
     _mod.main([])
     assert "rag-registration" in capsys.readouterr().err

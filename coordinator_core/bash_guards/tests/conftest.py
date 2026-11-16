@@ -5,7 +5,7 @@ from coordinator_core.testing.fleet_pin import assume_a_fleet_machine  # noqa: F
 
 
 @pytest.fixture(autouse=True)
-def _assume_override_keys_doc_installed(monkeypatch):
+def _assume_override_keys_doc_installed(monkeypatch: pytest.MonkeyPatch) -> None:
     """Pin this package's dozens of ``operator_override_note`` call sites to
     the "settings-home wiki copy is installed" state: ``operator_override_note``
     gates the doc-pointer sentence on ``_helpers._override_keys_doc_reachable()``
@@ -45,7 +45,7 @@ def _assume_override_keys_doc_installed(monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _strict_guard_level(monkeypatch):
+def _strict_guard_level(monkeypatch: pytest.MonkeyPatch):
     """Pin guard_level strict: this package's tests assert the strict (deny)
     behaviour; warn tests set GUARD_LEVEL=warn explicitly."""
     from coordinator_core import machine_profile

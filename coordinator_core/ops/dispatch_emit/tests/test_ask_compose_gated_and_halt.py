@@ -146,5 +146,62 @@ def test_no_ready_halt_keeps_the_bare_literal_without_pulled_reasons():
     assert _eval_reason('[{"planPath":"p"},null,{"reason":""}]') == "plan-blitz reported no ready plan"
 
 
+def test_gate_clause_refires_once_and_halts_a_persisting_32004():
+    clause = ask_compose.ASK_GATE_RECONCILE_CLAUSE
+    assert "retry_safe true" in clause and "exactly once more" in clause
+    assert "also replies with error code -32004" in clause and "kind: 'refusal'" in clause
+
+
+def _gate_timeout_halt(script: str, halted: dict) -> dict:
+    import json
+    import shutil
+    import subprocess
+
+    from coordinator_core.win_portability import no_console_creationflags
+
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node not on PATH")
+    line = next(ln for ln in script.splitlines() if "The gate timed out (-32004)" in ln)
+    prelude = "".join(
+        f"{m.group(0)}\n" for m in re.finditer(r"const _PF\d+ = [^\n]*?;(?=\n)", script) if m.group(0).split()[1] in line
+    )
+    prog = f"{prelude}let _halted = {json.dumps(halted)};\n{line}\nprocess.stdout.write(JSON.stringify(_halted));"
+    done = subprocess.run(
+        [node, "-"], input=prog, capture_output=True, text=True, check=True, timeout=30, **no_console_creationflags(),
+    )
+    return json.loads(done.stdout)
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_a_gate_32004_that_survives_its_refire_halts_with_the_gate_refire(monkeypatch):
+    from coordinator_core.ops.dispatch_emit.landing_targeted_tests import REVERIFY_INDETERMINATE
+    from coordinator_core.warp_fire import fire_command
+
+    script = _script(monkeypatch)
+    halted = _gate_timeout_halt(
+        script, {"halted": "refusal", "reason": "error code -32004 hung_past_ceiling", "run_id": "run-1"}
+    )
+    assert halted["halted"] == REVERIFY_INDETERMINATE
+    assert fire_command("state/sizings/x.yaml") in halted["next_action"]
+    assert "no folded stage manifest" not in halted["next_action"] + halted["reason"]
+    assert "scout not clean" not in halted["next_action"] + halted["reason"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+@pytest.mark.parametrize(
+    "halted",
+    [
+        {"halted": "refusal", "reason": "gate denied by guard"},
+        {"halted": "refusal", "reason": "-32004", "next_action": "keep me"},
+        {"halted": "research", "reason": "-32004"},
+    ],
+)
+def test_other_halts_keep_their_shape(monkeypatch, halted):
+    assert _gate_timeout_halt(_script(monkeypatch), halted) == halted
+
+
 def test_script_stays_under_byte_cap(monkeypatch):
     assert len(_script(monkeypatch).encode("utf-8")) <= emit._WORKFLOW_SCRIPT_BYTE_CAP

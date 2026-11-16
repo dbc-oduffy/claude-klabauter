@@ -5,14 +5,15 @@ from __future__ import annotations
 from unittest import mock
 
 import pytest
+from pathlib import Path
 
-def test_module_has_no_module_level_asyncio_name():
+def test_module_has_no_module_level_asyncio_name() -> None:
     from coordinator_core import archive_stamp
 
     assert not hasattr(archive_stamp, "asyncio")
 
 
-def test_transition_wrapper_calls_transition_sync(tmp_path):
+def test_transition_wrapper_calls_transition_sync(tmp_path: Path) -> None:
     from coordinator_core import archive_stamp
 
     h = tmp_path / "state" / "handoffs" / "x.md"
@@ -29,7 +30,7 @@ def test_transition_wrapper_calls_transition_sync(tmp_path):
     assert sync.call_args.args[0]["verb"] == "repark"
 
 
-def test_stamp_shipped_in_uses_stamp_sync(tmp_path):
+def test_stamp_shipped_in_uses_stamp_sync(tmp_path: Path) -> None:
     from coordinator_core import archive_stamp
 
     h = tmp_path / "state" / "handoffs" / "x.md"

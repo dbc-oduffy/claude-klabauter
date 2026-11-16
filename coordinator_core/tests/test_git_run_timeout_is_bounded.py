@@ -45,6 +45,8 @@ import subprocess
 import sys
 
 from coordinator_core.git import run as git_run
+from pathlib import Path
+import pytest
 
 
 class _NeverDrainingProc:
@@ -61,7 +63,7 @@ class _NeverDrainingProc:
     def __enter__(self):
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc) -> bool:
         assert sys.platform != 'win32', 'Windows must never enter Popen.__exit__'
         self.closed = True
         return False
@@ -76,10 +78,10 @@ class _NeverDrainingProc:
             "raise, it hangs forever"
         )
 
-    def kill(self):
+    def kill(self) -> None:
         self.kill_calls += 1
 
-    def wait(self, timeout=None):
+    def wait(self, timeout=None) -> int:
         self.wait_calls.append(timeout)
         if sys.platform == 'win32' and len(self.wait_calls) == 1:
             raise subprocess.TimeoutExpired(cmd=['git'], timeout=timeout)
@@ -88,14 +90,14 @@ class _NeverDrainingProc:
 
 def _install(monkeypatch) -> _NeverDrainingProc:
     proc = _NeverDrainingProc()
-    def spawn(*args, **kwargs):
+    def spawn(*args, **kwargs) -> _NeverDrainingProc:
         proc.files = [kwargs[key] for key in ('stdout', 'stderr') if kwargs.get(key) != subprocess.PIPE]
         return proc
     monkeypatch.setattr(subprocess, "Popen", spawn)
     return proc
 
 
-def test_a_timed_out_git_call_returns_instead_of_re_draining(monkeypatch) -> None:
+def test_a_timed_out_git_call_returns_instead_of_re_draining(monkeypatch: pytest.MonkeyPatch) -> None:
     proc = _install(monkeypatch)
 
     result = git_run.run_git(["rev-parse", "--show-toplevel"], cwd=".")
@@ -105,7 +107,7 @@ def test_a_timed_out_git_call_returns_instead_of_re_draining(monkeypatch) -> Non
     assert proc.communicate_calls == (0 if sys.platform == 'win32' else 1)
 
 
-def test_the_timed_out_child_is_killed_and_reaped_under_a_bound(monkeypatch) -> None:
+def test_the_timed_out_child_is_killed_and_reaped_under_a_bound(monkeypatch: pytest.MonkeyPatch) -> None:
     proc = _install(monkeypatch)
 
     git_run.run_git(["status", "--porcelain"], cwd=".")
@@ -115,7 +117,7 @@ def test_the_timed_out_child_is_killed_and_reaped_under_a_bound(monkeypatch) -> 
     assert all(t is not None for t in proc.wait_calls), "every reap is bounded"
 
 
-def test_the_pipes_are_closed_on_the_timeout_path(monkeypatch) -> None:
+def test_the_pipes_are_closed_on_the_timeout_path(monkeypatch: pytest.MonkeyPatch) -> None:
     proc = _install(monkeypatch)
 
     git_run.run_git(["rev-parse", "HEAD"], cwd=".")
@@ -127,7 +129,7 @@ def test_the_pipes_are_closed_on_the_timeout_path(monkeypatch) -> None:
         assert proc.closed is True
 
 
-def test_a_timed_out_call_yields_no_bytes(monkeypatch) -> None:
+def test_a_timed_out_call_yields_no_bytes(monkeypatch: pytest.MonkeyPatch) -> None:
     _install(monkeypatch)
 
     result = git_run.run_git(["log", "--oneline"], cwd=".")
@@ -136,7 +138,7 @@ def test_a_timed_out_call_yields_no_bytes(monkeypatch) -> None:
     assert result.stderr == ""
 
 
-def test_a_reaping_wait_that_itself_times_out_still_returns(monkeypatch) -> None:
+def test_a_reaping_wait_that_itself_times_out_still_returns(monkeypatch: pytest.MonkeyPatch) -> None:
     proc = _install(monkeypatch)
 
     def _wait(timeout=None):
@@ -151,14 +153,14 @@ def test_a_reaping_wait_that_itself_times_out_still_returns(monkeypatch) -> None
     assert result.returncode == -1
 
 
-def test_windows_file_capture_preserves_binary_and_text_contract(monkeypatch):
+def test_windows_file_capture_preserves_binary_and_text_contract(monkeypatch: pytest.MonkeyPatch) -> None:
     import pytest
     if sys.platform != 'win32':pytest.skip('Windows file-backed capture')
     recorded=[]
     class Proc:
         returncode=3
-        def __init__(self,kwargs):self.kwargs=kwargs
-        def wait(self,timeout=None):
+        def __init__(self,kwargs) -> None:self.kwargs=kwargs
+        def wait(self,timeout=None) -> int:
             assert timeout is not None
             self.kwargs['stdout'].write(b'a\r\nb\rc\xff\0')
             self.kwargs['stderr'].write(b'err\r\n')
@@ -174,18 +176,18 @@ def test_windows_file_capture_preserves_binary_and_text_contract(monkeypatch):
     assert all(item['stdout'].closed and item['stderr'].closed for item in recorded)
 
 
-def test_windows_job_accounting_closes_before_owned_capture_files(monkeypatch):
+def test_windows_job_accounting_closes_before_owned_capture_files(monkeypatch: pytest.MonkeyPatch) -> None:
     import pytest
     if sys.platform != 'win32':pytest.skip('Windows file-backed cleanup')
     recorded={};charged=[]
     class Proc:
         returncode=0
-        def wait(self,timeout=None):return 0
+        def wait(self,timeout=None) -> int:return 0
     def spawn(*args,**kwargs):recorded.update(kwargs);return Proc()
     monkeypatch.setattr(subprocess,'Popen',spawn)
     monkeypatch.setattr(git_run,'_open_charging_job',lambda:object())
     monkeypatch.setattr(git_run,'_assign_and_resume',lambda *_:True)
-    def charge(job):
+    def charge(job) -> None:
         assert not recorded['stdout'].closed and not recorded['stderr'].closed
         charged.append(job)
     monkeypatch.setattr(git_run,'_charge_and_close_job',charge)
@@ -193,7 +195,7 @@ def test_windows_job_accounting_closes_before_owned_capture_files(monkeypatch):
     assert len(charged)==1 and recorded['stdout'].closed and recorded['stderr'].closed
 
 
-def test_windows_missing_spawn_closes_files_and_charges_once(monkeypatch):
+def test_windows_missing_spawn_closes_files_and_charges_once(monkeypatch: pytest.MonkeyPatch) -> None:
     import pytest
     if sys.platform != 'win32':pytest.skip('Windows file-backed cleanup')
     files=[];charged=[]
@@ -207,7 +209,7 @@ def test_windows_missing_spawn_closes_files_and_charges_once(monkeypatch):
     assert len(charged)==1 and all(stream.closed for stream in files)
 
 
-def test_windows_inherited_writer_returns_before_grandchild_eof(tmp_path,monkeypatch):
+def test_windows_inherited_writer_returns_before_grandchild_eof(tmp_path: Path,monkeypatch: pytest.MonkeyPatch) -> None:
     """One harmless Python tree; the outer canonical test Job owns cleanup.
 
     run_git itself does not promise descendant containment. A surviving writer

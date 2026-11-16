@@ -88,6 +88,29 @@ def test_parse_checkpoint_shapes():
     assert parse_checkpoint(_message(subject="checkpoint(wave 3): 1 rows — C9")).row_ids == {"C9"}
 
 
+def test_a_none_subject_names_no_row():
+    cp = parse_checkpoint(_message(subject="checkpoint(wave 3): 0 rows — (none)"))
+    assert cp.row_ids == frozenset()
+    assert parse_checkpoint(_message(subject="checkpoint(wave 3): 1 row — C9")).row_ids == {"C9"}
+
+
+def test_message_naming_carried_rows_when_every_row_is_withheld_reads_none(tmp_path):
+    plan = tmp_path / PLAN
+    plan.parent.mkdir(parents=True)
+    plan.write_text(_plan_text(), encoding="utf-8", newline="\n")
+    message = _message()
+
+    out = checkpoint_stamp.checkpoint_message_naming_carried_rows(
+        tmp_path, message, ["some/C1.py", "some/C2.py"]
+    )
+
+    lines = out.splitlines()
+    assert lines[0] == "checkpoint(wave 0): 0 rows — (none)"
+    assert lines[1] == "Checkpoint-Withheld-Rows: C1, C2"
+    assert parse_checkpoint(out).row_ids == frozenset()
+    assert checkpoint_stamp.checkpoint_message_naming_carried_rows(tmp_path, message, []) == message
+
+
 def test_parse_checkpoint_reads_base_and_not_landed_marker():
     cp = parse_checkpoint(_message())
     assert (cp.base, cp.review_base, cp.not_landed) == ("abc1234", None, False)

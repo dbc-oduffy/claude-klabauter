@@ -32,24 +32,25 @@ from coordinator_core.ops.dispatch_emit.shipped_claims import (
     shipped_gate,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 HALT = "halt-record-only"
 
 
-def _self_applied():
+def _self_applied() -> frozenset[str]:
     from coordinator_core.ops.dispatch_emit import shipped_claims
 
     return shipped_claims.SELF_APPLIED_WITHHOLDS
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
 
-    def git(*args):
+    def git(*args) -> None:
         subprocess.run(
             ["git", *args], cwd=str(root), check=True, capture_output=True, **no_console_creationflags()
         )
@@ -67,38 +68,38 @@ def repo(tmp_path):
     return root
 
 
-def _judge(root, path, **kw):
+def _judge(root, path, **kw) -> str:
     (v,) = judge_shipped_claims(root, [ShippedClaim(path, f"`{path}`")], **kw)
     return v.verdict
 
 
-def test_the_two_halt_record_only_literals_are_equal():
+def test_the_two_halt_record_only_literals_are_equal() -> None:
     assert kept_work.HALT_RECORD_ONLY == land_run_halt.HALT_RECORD_ONLY == HALT
 
 
-def test_self_applied_set_is_seeded_from_halt_record_only():
+def test_self_applied_set_is_seeded_from_halt_record_only() -> None:
     assert kept_work.HALT_RECORD_ONLY in _self_applied()
     assert "peer-held" not in _self_applied()
 
 
-def test_a_halt_record_only_path_in_the_landing_is_backed(repo):
+def test_a_halt_record_only_path_in_the_landing_is_backed(repo) -> None:
     assert HALT in _self_applied()
     assert _judge(repo, "arms.py", landing_paths=["arms.py"], withheld_paths={"arms.py": HALT}) == "backed"
 
 
-def test_a_peer_held_path_still_judges_withheld(repo):
+def test_a_peer_held_path_still_judges_withheld(repo) -> None:
     assert HALT in _self_applied()
     got = _judge(repo, "peer.py", landing_paths=["peer.py"], withheld_paths={"peer.py": "peer-held"})
     assert got == "withheld"
 
 
-def test_a_halt_record_only_path_outside_the_landing_is_not_landed_never_withheld(repo):
+def test_a_halt_record_only_path_outside_the_landing_is_not_landed_never_withheld(repo) -> None:
     assert HALT in _self_applied()
     assert _judge(repo, "tracked.py", withheld_paths={"tracked.py": HALT}) == "not-in-commit"
     assert _judge(repo, "arms.py", withheld_paths={"arms.py": HALT}) == "untracked"
 
 
-def test_a_refire_reading_back_a_halt_stamped_map_is_not_refused(repo):
+def test_a_refire_reading_back_a_halt_stamped_map_is_not_refused(repo) -> None:
     """The refire loop: the halt stamped the product halt-record-only, the refire reads it back."""
     owner = {"arms.py": "C1"}
     stamped = {"arms.py": HALT}

@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, UNCHANGED_SINCE_HALT_REASON
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -29,7 +30,7 @@ def _git(root, *a):
 
 
 @pytest.fixture
-def incident(tmp_path):
+def incident(tmp_path: Path):
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@t.example")
     _git(tmp_path, "config", "user.name", "t")
@@ -69,13 +70,13 @@ def _gate(incident, met_by):
     return land_run._ledger_gate(root, run_dir, verdict, manifest, [], {}, None, {}, resume, PLAN)[0]
 
 
-def test_prose_met_by_closes_on_the_prior_checkpoint(incident):
+def test_prose_met_by_closes_on_the_prior_checkpoint(incident) -> None:
     reply = _gate(incident, PROSE)
     assert reply["committed"] is True and reply["already_landed"] is True
     assert reply["sha"] == incident[3] and not reply["refused"]
 
 
-def test_met_by_naming_an_unrelated_sha_still_refuses(incident):
+def test_met_by_naming_an_unrelated_sha_still_refuses(incident) -> None:
     reply = _gate(incident, "deadbeef1234")
     assert reply["refused"] == "ledger-unmet"
     assert reply["ledger_failures"] == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
@@ -96,18 +97,18 @@ def _land(monkeypatch, inner_reply):
     return land_run._land_product(None, None, {}, {})
 
 
-def test_nothing_left_to_stage_reports_the_credit_as_already_landed(monkeypatch):
+def test_nothing_left_to_stage_reports_the_credit_as_already_landed(monkeypatch: pytest.MonkeyPatch) -> None:
     reply = _land(monkeypatch, {"committed": False, "nothing_to_commit": True})
     assert reply["committed"] is True and reply["already_landed"] is True and reply["sha"] == "a" * 40
     assert not reply["nothing_to_commit"] and not reply["refused"]
 
 
-def test_a_fresh_commit_carries_the_reviewer_edit_and_the_credit(monkeypatch):
+def test_a_fresh_commit_carries_the_reviewer_edit_and_the_credit(monkeypatch: pytest.MonkeyPatch) -> None:
     reply = _land(monkeypatch, {"committed": True, "sha": "b" * 40, "paths": ["twin.py"]})
     assert reply["sha"] == "b" * 40 and "already_landed" not in reply
     assert reply["since_halt"] == {"landed_sha": "a" * 40}
 
 
-def test_a_commit_refusal_is_not_masked_by_the_credit(monkeypatch):
+def test_a_commit_refusal_is_not_masked_by_the_credit(monkeypatch: pytest.MonkeyPatch) -> None:
     refused = {"committed": False, "error": "boom", "refused": "blob-drift"}
     assert _land(monkeypatch, refused)["refused"] == "blob-drift"

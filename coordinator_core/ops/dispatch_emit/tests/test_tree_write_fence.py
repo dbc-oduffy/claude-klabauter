@@ -6,38 +6,39 @@ import json
 
 from coordinator_core.ops.dispatch_emit import tree_write_fence as fence
 from coordinator_core.session import declared_writes
+from pathlib import Path
 
 
-def test_path_outside_owned_refused():
+def test_path_outside_owned_refused() -> None:
     assert fence.check_tree_write("a.md", owned_paths={"b.md"}, base_blob="x", head_blob="x") == "outside-own-paths"
 
 
-def test_no_owned_paths_refuses_everything():
+def test_no_owned_paths_refuses_everything() -> None:
     assert fence.check_tree_write("a.md", owned_paths=None, base_blob="x", head_blob="x") == "outside-own-paths"
     assert fence.check_tree_write("a.md", owned_paths=[], base_blob="x", head_blob="x") == "outside-own-paths"
 
 
-def test_base_differs_from_head_refused():
+def test_base_differs_from_head_refused() -> None:
     assert fence.check_tree_write("a.md", owned_paths={"a.md"}, base_blob="old", head_blob="new") == "older-than-head"
 
 
-def test_base_vs_absent_head_refused():
+def test_base_vs_absent_head_refused() -> None:
     assert fence.check_tree_write("a.md", owned_paths={"a.md"}, base_blob="old", head_blob=None) == "older-than-head"
 
 
-def test_own_path_base_equals_head_admitted():
+def test_own_path_base_equals_head_admitted() -> None:
     assert fence.check_tree_write("a.md", owned_paths={"a.md"}, base_blob="x", head_blob="x") is None
 
 
-def test_own_path_absent_at_both_admitted():
+def test_own_path_absent_at_both_admitted() -> None:
     assert fence.check_tree_write("a.md", owned_paths={"a.md"}, base_blob=None, head_blob=None) is None
 
 
-def test_backslash_and_dot_prefix_normalised():
+def test_backslash_and_dot_prefix_normalised() -> None:
     assert fence.check_tree_write("./d\\a.md", owned_paths={"d/a.md"}, base_blob="x", head_blob="x") is None
 
 
-def test_record_refusal_appends_and_declares(tmp_path):
+def test_record_refusal_appends_and_declares(tmp_path: Path) -> None:
     with declared_writes.collecting() as got:
         p = fence.record_refusal(tmp_path / "rec", "a.md", "older-than-head", "run-1")
         fence.record_refusal(tmp_path / "rec", "b.md", "outside-own-paths", "run-1")
@@ -50,7 +51,7 @@ def test_record_refusal_appends_and_declares(tmp_path):
     assert str(p) in [str(x) for x in got]
 
 
-def test_corrupt_record_moved_aside(tmp_path):
+def test_corrupt_record_moved_aside(tmp_path: Path) -> None:
     rec = tmp_path / "rec"
     rec.mkdir()
     (rec / "tree-write-refusals.json").write_text("{not json", encoding="utf-8")

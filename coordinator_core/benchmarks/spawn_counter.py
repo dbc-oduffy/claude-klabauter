@@ -57,7 +57,7 @@ def _count_spawns_attributed(monkeypatch: pytest.MonkeyPatch) -> Iterator[list[_
     real_popen = subprocess.Popen
 
     class _Popen(real_popen):  # type: ignore[misc,valid-type]
-        def __init__(self, args, *a, **kw):
+        def __init__(self, args, *a, **kw) -> None:
             origin = "unattributed"
             frame = __import__("sys")._getframe(1)
             while frame is not None:

@@ -10,10 +10,11 @@ import threading
 import pytest
 
 from coordinator_core.git import call_io_scope as cis
+from pathlib import Path
 
 
 @pytest.fixture
-def opens(monkeypatch):
+def opens(monkeypatch: pytest.MonkeyPatch):
     real = builtins.open
     seen = []
 
@@ -25,11 +26,11 @@ def opens(monkeypatch):
     return seen
 
 
-def _count(opens, p):
+def _count(opens, p) -> int:
     return sum(1 for x in opens if x == os.fspath(p))
 
 
-def test_scope_reads_once(tmp_path, opens):
+def test_scope_reads_once(tmp_path: Path, opens) -> None:
     f = tmp_path / "a.txt"
     f.write_bytes(b"hi")
     with cis.call_io_scope():
@@ -40,7 +41,7 @@ def test_scope_reads_once(tmp_path, opens):
     assert not cis.scope_open()
 
 
-def test_invalidate_path_rereads(tmp_path, opens):
+def test_invalidate_path_rereads(tmp_path: Path, opens) -> None:
     f = tmp_path / "a.txt"
     f.write_bytes(b"1")
     with cis.call_io_scope():
@@ -52,7 +53,7 @@ def test_invalidate_path_rereads(tmp_path, opens):
     assert _count(opens, f) == 2
 
 
-def test_invalidate_all(tmp_path):
+def test_invalidate_all(tmp_path: Path) -> None:
     f = tmp_path / "a.txt"
     f.write_bytes(b"1")
     with cis.call_io_scope():
@@ -64,7 +65,7 @@ def test_invalidate_all(tmp_path):
         assert cis.memo("ns", "k", lambda: 9) == 9
 
 
-def test_outside_scope_every_read_opens(tmp_path, opens):
+def test_outside_scope_every_read_opens(tmp_path: Path, opens) -> None:
     f = tmp_path / "a.txt"
     f.write_bytes(b"x")
     for _ in range(3):
@@ -73,7 +74,7 @@ def test_outside_scope_every_read_opens(tmp_path, opens):
     cis.invalidate(cis.HEAD_NAMESPACE)  # no-op outside a scope
 
 
-def test_missing_cached_as_none(tmp_path, opens):
+def test_missing_cached_as_none(tmp_path: Path, opens) -> None:
     f = tmp_path / "missing"
     with cis.call_io_scope():
         assert cis.read_bytes(f) is None
@@ -82,7 +83,7 @@ def test_missing_cached_as_none(tmp_path, opens):
     assert _count(opens, f) == 1
 
 
-def test_permission_error_not_cached(tmp_path, monkeypatch):
+def test_permission_error_not_cached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     f = tmp_path / "a.txt"
     f.write_bytes(b"x")
     real = builtins.open
@@ -103,10 +104,10 @@ def test_permission_error_not_cached(tmp_path, monkeypatch):
     assert calls["n"] == 2
 
 
-def test_memo_once_per_key():
+def test_memo_once_per_key() -> None:
     n = {"c": 0}
 
-    def compute():
+    def compute() -> int:
         n["c"] += 1
         return n["c"]
 
@@ -118,10 +119,10 @@ def test_memo_once_per_key():
     assert n["c"] == 3
 
 
-def test_memo_outside_scope_always_computes():
+def test_memo_outside_scope_always_computes() -> None:
     n = {"c": 0}
 
-    def compute():
+    def compute() -> int:
         n["c"] += 1
         return n["c"]
 
@@ -129,10 +130,10 @@ def test_memo_outside_scope_always_computes():
     assert cis.memo("ns", "k", compute) == 2
 
 
-def test_memo_exception_not_cached():
+def test_memo_exception_not_cached() -> None:
     n = {"c": 0}
 
-    def compute():
+    def compute() -> str:
         n["c"] += 1
         if n["c"] == 1:
             raise ValueError("boom")
@@ -146,7 +147,7 @@ def test_memo_exception_not_cached():
     assert n["c"] == 2
 
 
-def test_invalidate_namespace_only_that_namespace():
+def test_invalidate_namespace_only_that_namespace() -> None:
     with cis.call_io_scope():
         cis.memo(cis.HEAD_NAMESPACE, "r", lambda: "old")
         cis.memo("other", "r", lambda: "keep")
@@ -155,7 +156,7 @@ def test_invalidate_namespace_only_that_namespace():
         assert cis.memo("other", "r", lambda: "changed") == "keep"
 
 
-def test_sibling_scopes_share_nothing(tmp_path, opens):
+def test_sibling_scopes_share_nothing(tmp_path: Path, opens) -> None:
     f = tmp_path / "a.txt"
     f.write_bytes(b"x")
     with cis.call_io_scope():
@@ -167,7 +168,7 @@ def test_sibling_scopes_share_nothing(tmp_path, opens):
     assert _count(opens, f) == 2
 
 
-def test_nested_scope_shadows(tmp_path, opens):
+def test_nested_scope_shadows(tmp_path: Path, opens) -> None:
     f = tmp_path / "a.txt"
     f.write_bytes(b"x")
     with cis.call_io_scope():
@@ -179,7 +180,7 @@ def test_nested_scope_shadows(tmp_path, opens):
     assert _count(opens, f) == 2
 
 
-def test_scope_closed_after_exception():
+def test_scope_closed_after_exception() -> None:
     with pytest.raises(RuntimeError):
         with cis.call_io_scope():
             raise RuntimeError("x")
@@ -190,7 +191,7 @@ def test_scope_closed_after_exception():
     getattr(sys.flags, "thread_inherit_context", 0),
     reason="threads inherit the context under this flag",
 )
-def test_plain_thread_does_not_see_scope():
+def test_plain_thread_does_not_see_scope() -> None:
     seen = []
     with cis.call_io_scope():
         t = threading.Thread(target=lambda: seen.append(cis.scope_open()))
@@ -199,7 +200,7 @@ def test_plain_thread_does_not_see_scope():
     assert seen == [False]
 
 
-def test_module_imports_only_stdlib():
+def test_module_imports_only_stdlib() -> None:
     import ast
     from pathlib import Path
 

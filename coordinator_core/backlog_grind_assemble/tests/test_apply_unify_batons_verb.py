@@ -40,6 +40,7 @@ import coordinator_core.pickup_assemble as pa
 from coordinator_core.backlog_grind_assemble import apply as bga_apply
 from coordinator_core.backlog_grind_assemble import readers_mise
 from coordinator_core.contract import apply_base
+import pytest
 
 
 def _reader_directive(legs: list[str], *, fallback: int = 0) -> dict:
@@ -49,7 +50,7 @@ def _reader_directive(legs: list[str], *, fallback: int = 0) -> dict:
     )
 
 
-def test_the_readers_verb_resolves_through_the_closed_dispatch_table():
+def test_the_readers_verb_resolves_through_the_closed_dispatch_table() -> None:
     directive = _reader_directive(["state/handoffs/a.md"])
     assert directive["cli"] in bga_apply._CLI_DISPATCH
     assert (
@@ -58,7 +59,7 @@ def test_the_readers_verb_resolves_through_the_closed_dispatch_table():
     )
 
 
-def test_repack_carries_legs_and_sibling_keys_into_args_zero():
+def test_repack_carries_legs_and_sibling_keys_into_args_zero() -> None:
     directive = _reader_directive(
         ["state/handoffs/a.md", "state/handoffs/b.md"], fallback=1
     )
@@ -72,7 +73,7 @@ def test_repack_carries_legs_and_sibling_keys_into_args_zero():
     }
 
 
-def test_handler_delegates_to_the_routed_path_and_reports_its_result(monkeypatch):
+def test_handler_delegates_to_the_routed_path_and_reports_its_result(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[tuple] = []
 
     def _fake_unify(root, legs):
@@ -100,7 +101,7 @@ def test_handler_delegates_to_the_routed_path_and_reports_its_result(monkeypatch
     assert report["inventory_record"] == "state/mise-inventory/run-1.md"
 
 
-def test_handler_does_not_swallow_a_half_moved_tree(monkeypatch):
+def test_handler_does_not_swallow_a_half_moved_tree(monkeypatch: pytest.MonkeyPatch) -> None:
 
     def _boom(_root, _legs):
         raise RuntimeError("mint failed after parents stamped")
@@ -119,7 +120,7 @@ def test_handler_does_not_swallow_a_half_moved_tree(monkeypatch):
         raise AssertionError("handler swallowed a half-moved-tree failure")
 
 
-def test_predicate_off_keeps_the_verb_a_reporting_no_op(monkeypatch):
+def test_predicate_off_keeps_the_verb_a_reporting_no_op(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pa, "_baton_unification_routing_enabled", lambda: False)
 
     prepared = bga_apply._prepare_directives_for_dispatch(

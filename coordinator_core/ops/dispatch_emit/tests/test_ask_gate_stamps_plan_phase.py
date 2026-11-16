@@ -12,6 +12,7 @@ from coordinator_core import warp_live
 from coordinator_core.ops.dispatch_emit import ask_gate, run_token
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+from pathlib import Path
 
 REL = "state/sizings/2026-10-01-gate.yaml"
 RUN = "ask-20261111T105517-512525"
@@ -25,12 +26,12 @@ class _FakeDocNew:
         pass
 
     @staticmethod
-    def mint_baton_from_sizing(sizing_rel, repo_root, baton=None):
+    def mint_baton_from_sizing(sizing_rel, repo_root, baton=None) -> dict[str, str]:
         return {"id": "baton-fixture", "path": BATON}
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
@@ -55,14 +56,14 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _minted_run(repo):
+def _minted_run(repo) -> None:
     """A run as the script leaves it before its first gate call: minted token, minted stage, no runner."""
     rl.start(repo, RUN)
     run_token.mint(repo, RUN, SCRIPT, session_id="s1", sizing_rel=REL)
     warp_live.record_submission(repo, RUN, session_id="s1", transcript_path=None, script_path=SCRIPT, sizing_rel=REL)
 
 
-def _past_the_grace(monkeypatch):
+def _past_the_grace(monkeypatch) -> None:
     late = time.time() + warp_live.MINTED_RUNNER_GRACE_SECONDS + 60
     monkeypatch.setattr(warp_live.time, "time", lambda: late)
 
@@ -75,14 +76,14 @@ def _stage(repo) -> dict:
     return json.loads((record_dir(repo, RUN) / "run-stage.json").read_text(encoding="utf-8"))
 
 
-def test_a_run_that_has_not_reached_the_gate_is_unproven(repo, monkeypatch):
+def test_a_run_that_has_not_reached_the_gate_is_unproven(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _minted_run(repo)
     _past_the_grace(monkeypatch)
     assert "plan_started_at" not in _stage(repo)
     assert warp_live.runner_unproven(repo, RUN) is True
 
 
-def test_the_gate_stamps_plan_started_at_when_it_binds_the_run(repo):
+def test_the_gate_stamps_plan_started_at_when_it_binds_the_run(repo) -> None:
     _minted_run(repo)
     out = ask_gate._handler({"sizing_path": REL, "run_id": RUN}, repo_root=repo)
     assert out["arm"] == "m_plus" and out["halt"] is None
@@ -90,7 +91,7 @@ def test_the_gate_stamps_plan_started_at_when_it_binds_the_run(repo):
     assert stage["stage"] == "minted" and stage["plan_started_at"]
 
 
-def test_a_revise_during_m_plus_plan_review_is_applied_not_runner_unproven(repo, monkeypatch):
+def test_a_revise_during_m_plus_plan_review_is_applied_not_runner_unproven(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _minted_run(repo)
     ask_gate._handler({"sizing_path": REL, "run_id": RUN}, repo_root=repo)
     _past_the_grace(monkeypatch)
@@ -100,7 +101,7 @@ def test_a_revise_during_m_plus_plan_review_is_applied_not_runner_unproven(repo,
     assert "runner unproven" not in out.get("note", "") and out.get("next", {}).get("kind") != "recheck"
 
 
-def test_a_refused_bind_stamps_nothing(repo, monkeypatch):
+def test_a_refused_bind_stamps_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _minted_run(repo)
     monkeypatch.setattr(ask_gate, "_bind_run", lambda *a, **k: "requirements: refused")
     out = ask_gate._handler({"sizing_path": REL, "run_id": RUN}, repo_root=repo)
@@ -108,7 +109,7 @@ def test_a_refused_bind_stamps_nothing(repo, monkeypatch):
     assert "plan_started_at" not in _stage(repo)
 
 
-def test_a_call_without_a_run_id_stamps_nothing(repo):
+def test_a_call_without_a_run_id_stamps_nothing(repo) -> None:
     _minted_run(repo)
     ask_gate._handler({"sizing_path": REL}, repo_root=repo)
     assert "plan_started_at" not in _stage(repo)

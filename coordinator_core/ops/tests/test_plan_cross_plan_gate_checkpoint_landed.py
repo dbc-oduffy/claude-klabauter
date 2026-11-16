@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.ops import plan_cross_plan_gate as op
 from coordinator_core.ops.dispatch_emit.tests.test_checkpoint_rows_landed import _commit, _git
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -18,14 +19,14 @@ _DEP_ROWS = (
 )
 
 
-def _write(root, name, rows):
+def _write(root, name, rows) -> None:
     p = root / "docs" / "plans" / name
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text("---\ntitle: t\nstatus: executing\n---\n\n" + _TASKS.format(rows=rows), encoding="utf-8")
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     _git(tmp_path, "init", "-q")
     _commit(tmp_path, "seed")
     _write(tmp_path, "pred.md", _PRED_ROWS)
@@ -37,18 +38,18 @@ def _gate(root):
     return op._handler({"plan": "docs/plans/dep.md"}, repo_root=root)
 
 
-def test_unlanded_predecessor_holds(repo):
+def test_unlanded_predecessor_holds(repo) -> None:
     out = _gate(repo)
     assert out["satisfied"] is False and out["holds"][0]["scope"] == "D1"
 
 
-def test_checkpoint_landed_predecessor_satisfies(repo):
+def test_checkpoint_landed_predecessor_satisfies(repo) -> None:
     _commit(repo, "checkpoint(wave 0): 1 rows — P1", f"Checkpoint-Plan: {PRED}")
     out = _gate(repo)
     assert out["satisfied"] is True and out["holds"] == [] and out["dangling"] == []
 
 
-def test_gate_owed_checkpoint_still_holds(repo):
+def test_gate_owed_checkpoint_still_holds(repo) -> None:
     _commit(
         repo, "checkpoint(wave 0): 1 rows — P1", f"Checkpoint-Plan: {PRED}\nCheckpoint-Gate-Owed: P1"
     )

@@ -7,6 +7,11 @@ import os
 import re
 import sys
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN = Path(__file__).resolve().parent.parent
 _ENGINE = _BIN.parent.parent
@@ -28,7 +33,7 @@ def place_engine_root_on_path(root):
 '''
 
 
-def _load(path, name):
+def _load(path, name) -> ModuleType:
     spec = importlib.util.spec_from_file_location(name, path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -46,14 +51,14 @@ def _doe_shaped_mirror(tmp_path, text):
     return bin_dir
 
 
-def _publish_rewritten(text):
+def _publish_rewritten(text) -> str:
     from coordinator_core.percolate.rewrite_stem import rewrite_stems
 
     text = re.sub(r"\bclaude-klabauter\b", "claude_klabauter", text)
     return rewrite_stems(text, {"claude-klabauter": "claude_klabauter"})
 
 
-def test_doe_shaped_tree_places_through_the_seam_before_and_after_the_stem_rewrite(tmp_path, monkeypatch):
+def test_doe_shaped_tree_places_through_the_seam_before_and_after_the_stem_rewrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source = _SCRIPT.read_text(encoding="utf-8")
     for label, text in (("plain", source), ("rewritten", _publish_rewritten(source))):
         root = tmp_path / label

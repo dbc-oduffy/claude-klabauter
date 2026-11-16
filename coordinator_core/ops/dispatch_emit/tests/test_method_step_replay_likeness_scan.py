@@ -13,6 +13,7 @@ import yaml
 
 from coordinator_core.ops import method_step
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 REL = "state/sizings/2026-11-02-likeness-scan.yaml"
 RUN = "ask-20261102T000000-aaaaaa"
@@ -25,7 +26,7 @@ PROBE = "def map_to_expected_value_space("
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / "likeness").mkdir()
@@ -60,7 +61,7 @@ def _step_ids(ledger):
     return steps
 
 
-def _fence(row, mechanism, contains=PROBE, deviation=""):
+def _fence(row, mechanism, contains=PROBE, deviation: str = "") -> str:
     return (
         f"```yaml method-trace\nrow: {row}\nmechanism: {mechanism}\n"
         f"at: {{path: {PROBE_FILE}, contains: '{contains}'}}\n{deviation}```\n"
@@ -87,19 +88,19 @@ GOOD_B = "map scan landmarks into MetaHuman expected-value space"
 LIKENESS_SCAN_SUBSTITUTION = "conform scan values onto the MetaHuman mesh"
 
 
-def test_register_mints_one_marked_row_per_step(repo):
+def test_register_mints_one_marked_row_per_step(repo) -> None:
     ids = _step_ids(_ledger(repo))
     assert sorted(ids) == ["a", "b", "c"]
 
 
-def test_traced_present_mechanism_passes(repo):
+def test_traced_present_mechanism_passes(repo) -> None:
     ledger = _ledger(repo)
     ids = _step_ids(ledger)
     out = rl.judge(ledger, _verdict(ledger), repo_root=repo, plan_text=_plan(ids, _fence(ids["b"], GOOD_B)))
     assert out["pass"], out
 
 
-def test_name_only_mechanism_is_refused(repo):
+def test_name_only_mechanism_is_refused(repo) -> None:
     ledger = _ledger(repo)
     ids = _step_ids(ledger)
     plan = _plan(ids, _fence(ids["b"], "the likeness method step b"))
@@ -109,7 +110,7 @@ def test_name_only_mechanism_is_refused(repo):
     assert not _reasons(out, ids["a"]) and not _reasons(out, ids["c"])
 
 
-def test_likeness_scan_substitution_without_deviation_is_refused_though_it_shares_a_noun(repo):
+def test_likeness_scan_substitution_without_deviation_is_refused_though_it_shares_a_noun(repo) -> None:
     ledger = _ledger(repo)
     ids = _step_ids(ledger)
     shared = method_step._words(LIKENESS_SCAN_SUBSTITUTION) & method_step._words("map into MetaHuman expected-value space")
@@ -120,7 +121,7 @@ def test_likeness_scan_substitution_without_deviation_is_refused_though_it_share
     assert any("under half" in r for r in _reasons(out, ids["b"])), out
 
 
-def test_substitution_with_a_ratified_deviation_passes(repo):
+def test_substitution_with_a_ratified_deviation_passes(repo) -> None:
     ledger = _ledger(repo)
     ids = _step_ids(ledger)
     dev = "deviation: {delivers_by: mesh conform, reason: no mapper yet, ratified_by: PM ruling}\n"
@@ -128,7 +129,7 @@ def test_substitution_with_a_ratified_deviation_passes(repo):
     assert rl.judge(ledger, _verdict(ledger), repo_root=repo, plan_text=plan)["pass"]
 
 
-def test_substitution_with_an_unratified_deviation_is_refused(repo):
+def test_substitution_with_an_unratified_deviation_is_refused(repo) -> None:
     ledger = _ledger(repo)
     ids = _step_ids(ledger)
     dev = "deviation: {delivers_by: mesh conform, reason: no mapper yet}\n"
@@ -137,7 +138,7 @@ def test_substitution_with_an_unratified_deviation_is_refused(repo):
     assert any("ratified_by" in r for r in _reasons(out, ids["b"])), out
 
 
-def test_mechanism_absent_from_tree_fails_while_the_metric_moved(repo):
+def test_mechanism_absent_from_tree_fails_while_the_metric_moved(repo) -> None:
     ledger = _ledger(repo)
     ids = _step_ids(ledger)
     plan = _plan(ids, _fence(ids["b"], GOOD_B, contains="def never_written("))
@@ -148,7 +149,7 @@ def test_mechanism_absent_from_tree_fails_while_the_metric_moved(repo):
     assert all(o["id"] != ids["b"] for o in out["open"])
 
 
-def test_refusals_vanish_when_the_judge_branch_is_reverted(repo, monkeypatch):
+def test_refusals_vanish_when_the_judge_branch_is_reverted(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     ledger = _ledger(repo)
     ids = _step_ids(ledger)
     cases = [

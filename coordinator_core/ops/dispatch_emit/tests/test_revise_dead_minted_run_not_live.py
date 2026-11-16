@@ -9,6 +9,8 @@ from coordinator_core.ops.dispatch_emit import halted_run, run_token
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 from coordinator_core.ops.warp_run_deliverable import ABANDONED_AT_MINTED
+from pathlib import Path
+import pytest
 
 RUN = "ask-20261102T212555-a24ad1"
 SIBLING = "warp-2026-11-02-x-20261102T224849-178ba8"
@@ -30,7 +32,7 @@ def _repo(tmp_path):
     return tmp_path
 
 
-def _tokens(monkeypatch, *, own: bool, sibling: bool):
+def _tokens(monkeypatch, *, own: bool, sibling: bool) -> None:
     monkeypatch.setattr(run_token, "is_live", lambda _r, run_id: own and run_id == RUN)
     records = [{"run_id": SIBLING, "sizing_rel": REL}] if sibling else []
     monkeypatch.setattr(run_token, "live_records", lambda _r: iter(records))
@@ -40,21 +42,21 @@ def _revise(root):
     return rl._handler({"run_id": RUN, "verbatim": "also cover Windows"}, repo_root=root)
 
 
-def test_sibling_token_with_unproven_runner_is_not_live(tmp_path, monkeypatch):
+def test_sibling_token_with_unproven_runner_is_not_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _tokens(monkeypatch, own=False, sibling=True)
     monkeypatch.setattr(warp_live, "runner_unproven", lambda _r, run_id: run_id == SIBLING)
     assert _revise(root)["run_live"] is False
 
 
-def test_sibling_token_with_runner_not_disproven_stays_live(tmp_path, monkeypatch):
+def test_sibling_token_with_runner_not_disproven_stays_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _tokens(monkeypatch, own=False, sibling=True)
     monkeypatch.setattr(warp_live, "runner_unproven", lambda _r, _id: False)
     assert _revise(root)["run_live"] is True
 
 
-def test_sibling_token_whose_run_is_abandoned_at_minted_is_not_live(tmp_path, monkeypatch):
+def test_sibling_token_whose_run_is_abandoned_at_minted_is_not_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _tokens(monkeypatch, own=False, sibling=True)
     monkeypatch.setattr(warp_live, "runner_unproven", lambda _r, _id: False)
@@ -62,7 +64,7 @@ def test_sibling_token_whose_run_is_abandoned_at_minted_is_not_live(tmp_path, mo
     assert _revise(root)["run_live"] is False
 
 
-def test_sibling_token_whose_halt_reason_is_abandoned_is_not_live(tmp_path, monkeypatch):
+def test_sibling_token_whose_halt_reason_is_abandoned_is_not_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _tokens(monkeypatch, own=False, sibling=True)
     monkeypatch.setattr(warp_live, "runner_unproven", lambda _r, _id: False)
@@ -72,7 +74,7 @@ def test_sibling_token_whose_halt_reason_is_abandoned_is_not_live(tmp_path, monk
     assert _revise(root)["run_live"] is False
 
 
-def test_sibling_token_with_an_ordinary_halt_stays_live(tmp_path, monkeypatch):
+def test_sibling_token_with_an_ordinary_halt_stays_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _tokens(monkeypatch, own=False, sibling=True)
     monkeypatch.setattr(warp_live, "runner_unproven", lambda _r, _id: False)
@@ -80,21 +82,21 @@ def test_sibling_token_with_an_ordinary_halt_stays_live(tmp_path, monkeypatch):
     assert _revise(root)["run_live"] is True
 
 
-def test_own_token_with_unproven_runner_is_not_live(tmp_path, monkeypatch):
+def test_own_token_with_unproven_runner_is_not_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _tokens(monkeypatch, own=True, sibling=False)
     monkeypatch.setattr(warp_live, "runner_unproven", lambda _r, run_id: run_id == RUN)
     assert _revise(root)["run_live"] is False
 
 
-def test_own_token_with_runner_not_disproven_stays_live(tmp_path, monkeypatch):
+def test_own_token_with_runner_not_disproven_stays_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _tokens(monkeypatch, own=True, sibling=False)
     monkeypatch.setattr(warp_live, "runner_unproven", lambda _r, _id: False)
     assert _revise(root)["run_live"] is True
 
 
-def test_unproven_own_runner_note_never_says_finished(tmp_path, monkeypatch):
+def test_unproven_own_runner_note_never_says_finished(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _tokens(monkeypatch, own=True, sibling=False)
     monkeypatch.setattr(warp_live, "runner_unproven", lambda _r, run_id: run_id == RUN)
@@ -104,7 +106,7 @@ def test_unproven_own_runner_note_never_says_finished(tmp_path, monkeypatch):
     assert "runner unproven" in out["note"] and "will not be applied" in out["note"]
 
 
-def test_unproven_own_runner_gets_a_recheck_next_never_a_refire(tmp_path, monkeypatch):
+def test_unproven_own_runner_gets_a_recheck_next_never_a_refire(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _tokens(monkeypatch, own=True, sibling=False)
     monkeypatch.setattr(warp_live, "runner_unproven", lambda _r, run_id: run_id == RUN)
@@ -113,14 +115,14 @@ def test_unproven_own_runner_gets_a_recheck_next_never_a_refire(tmp_path, monkey
     assert "refire" not in out["note"].replace("no refire is offered", "")
 
 
-def test_a_finished_run_still_gets_a_refire_next(tmp_path, monkeypatch):
+def test_a_finished_run_still_gets_a_refire_next(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _tokens(monkeypatch, own=False, sibling=False)
     monkeypatch.setattr(warp_live, "runner_unproven", lambda _r, _id: True)
     assert _revise(root)["next"]["kind"] == "refire"
 
 
-def test_run_with_no_token_still_reads_finished(tmp_path, monkeypatch):
+def test_run_with_no_token_still_reads_finished(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _tokens(monkeypatch, own=False, sibling=False)
     monkeypatch.setattr(warp_live, "runner_unproven", lambda _r, _id: True)
@@ -130,7 +132,7 @@ def test_run_with_no_token_still_reads_finished(tmp_path, monkeypatch):
     assert "runner unproven" not in out["note"]
 
 
-def test_a_read_failure_keeps_the_token_live(tmp_path, monkeypatch):
+def test_a_read_failure_keeps_the_token_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _tokens(monkeypatch, own=True, sibling=False)
 
@@ -141,7 +143,7 @@ def test_a_read_failure_keeps_the_token_live(tmp_path, monkeypatch):
     assert _revise(root)["run_live"] is True
 
 
-def test_a_real_own_token_past_the_grace_with_no_launch_is_not_live(tmp_path, monkeypatch):
+def test_a_real_own_token_past_the_grace_with_no_launch_is_not_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import json
 
     managed = tmp_path / "managed"

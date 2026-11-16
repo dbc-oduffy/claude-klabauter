@@ -4,9 +4,10 @@ import json
 import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_contract as c
+from pathlib import Path
 
 
-def _outcome(path, review):
+def _outcome(path, review) -> None:
     (path / c.RUN_OUTCOME_FILE).write_text(json.dumps({"inline_review": review, "plan_path": "p.md"}))
 
 
@@ -14,20 +15,20 @@ def _criterion(path):
     return json.loads((path / c.RUN_OUTCOME_FILE).read_text())["inline_review"]["criterion"]
 
 
-def test_missing_outcome_ends_not_met(tmp_path):
+def test_missing_outcome_ends_not_met(tmp_path: Path) -> None:
     c.stamp_run_stage_at(tmp_path, "landed")
     crit = _criterion(tmp_path)
     assert crit["status"] == "not_met" and crit["authored_by"] == c.ENGINE_JUDGE_AUTHOR
     assert crit["prior_status"] is None
 
 
-def test_malformed_outcome_ends_not_met(tmp_path):
+def test_malformed_outcome_ends_not_met(tmp_path: Path) -> None:
     (tmp_path / c.RUN_OUTCOME_FILE).write_text("{nope")
     assert c.record_terminal_judge_at(tmp_path) is True
     assert _criterion(tmp_path)["status"] == "not_met"
 
 
-def test_no_criterion_keeps_other_keys(tmp_path):
+def test_no_criterion_keeps_other_keys(tmp_path: Path) -> None:
     _outcome(tmp_path, {"verdict": "x"})
     c.stamp_run_stage_at(tmp_path, "landed")
     data = json.loads((tmp_path / c.RUN_OUTCOME_FILE).read_text())
@@ -35,7 +36,7 @@ def test_no_criterion_keeps_other_keys(tmp_path):
     assert data["inline_review"]["criterion"]["status"] == "not_met"
 
 
-def test_indeterminate_ends_not_met_with_prior(tmp_path):
+def test_indeterminate_ends_not_met_with_prior(tmp_path: Path) -> None:
     _outcome(tmp_path, {"criterion": {"status": "indeterminate", "note": "n"}})
     c.stamp_run_stage_at(tmp_path, "landed")
     crit = _criterion(tmp_path)
@@ -43,7 +44,7 @@ def test_indeterminate_ends_not_met_with_prior(tmp_path):
 
 
 @pytest.mark.parametrize("status", ["met", "not_met"])
-def test_verdict_records_stay_byte_identical(tmp_path, status):
+def test_verdict_records_stay_byte_identical(tmp_path: Path, status) -> None:
     _outcome(tmp_path, {"criterion": {"status": status}})
     before = (tmp_path / c.RUN_OUTCOME_FILE).read_bytes()
     assert c.record_terminal_judge_at(tmp_path) is False
@@ -51,26 +52,26 @@ def test_verdict_records_stay_byte_identical(tmp_path, status):
     assert (tmp_path / c.RUN_OUTCOME_FILE).read_bytes() == before
 
 
-def test_non_landed_stage_writes_no_verdict(tmp_path):
+def test_non_landed_stage_writes_no_verdict(tmp_path: Path) -> None:
     c.stamp_run_stage_at(tmp_path, "staged")
     assert not (tmp_path / c.RUN_OUTCOME_FILE).exists()
 
 
-def test_write_run_outcome_keeps_engine_not_met(tmp_path, monkeypatch):
+def test_write_run_outcome_keeps_engine_not_met(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(c, "record_dir", lambda repo_root, run_id: tmp_path)
     c.stamp_run_stage_at(tmp_path, "landed")
     c.write_run_outcome(tmp_path, "r", {"inline_review": {"verdict": "later"}})
     assert _criterion(tmp_path)["authored_by"] == c.ENGINE_JUDGE_AUTHOR
 
 
-def test_write_run_outcome_incoming_verdict_wins(tmp_path, monkeypatch):
+def test_write_run_outcome_incoming_verdict_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(c, "record_dir", lambda repo_root, run_id: tmp_path)
     c.stamp_run_stage_at(tmp_path, "landed")
     c.write_run_outcome(tmp_path, "r", {"inline_review": {"criterion": {"status": "met"}}})
     assert _criterion(tmp_path) == {"status": "met"}
 
 
-def test_write_run_outcome_does_not_keep_non_engine_criterion(tmp_path, monkeypatch):
+def test_write_run_outcome_does_not_keep_non_engine_criterion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(c, "record_dir", lambda repo_root, run_id: tmp_path)
     _outcome(tmp_path, {"criterion": {"status": "met", "authored_by": "judge"}})
     c.write_run_outcome(tmp_path, "r", {"inline_review": {"verdict": "x"}})

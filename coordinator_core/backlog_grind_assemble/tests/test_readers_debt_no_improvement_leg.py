@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.backlog_grind_assemble import readers_debt
+import pytest
 
 
 def _collect_debt_triage(
@@ -31,16 +32,16 @@ def _the_jp(result) -> dict:
     raise AssertionError("j-debt-triage-batched-pm-gate not found")
 
 
-def test_cluster_candidates_helper_is_gone():
+def test_cluster_candidates_helper_is_gone() -> None:
     assert not hasattr(readers_debt, "_cluster_candidates")
 
 
-def test_no_clustering_import_left_behind():
+def test_no_clustering_import_left_behind() -> None:
     assert "detect_candidates" not in dir(readers_debt)
     assert not hasattr(readers_debt, "_SUPPRESSED_CLUSTER_SIGNAL")
 
 
-def test_question_carries_no_item_five(tmp_path: Path, monkeypatch) -> None:
+def test_question_carries_no_item_five(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     result = _collect_debt_triage(tmp_path, monkeypatch)
     jp = _the_jp(result)
     question = jp["question"]
@@ -57,7 +58,7 @@ def test_question_carries_no_item_five(tmp_path: Path, monkeypatch) -> None:
 
 
 def test_evidence_carries_no_cluster_summary_only_open_row_count(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     improvement_records = [
         {"path": "state/improvement-queue/a.yaml", "frontmatter": {}},
@@ -75,7 +76,7 @@ def test_evidence_carries_no_cluster_summary_only_open_row_count(
     assert "MIN_CLUSTER_SIZE" not in evidence
 
 
-def test_collect_still_only_fires_on_debt_triage_cadence(tmp_path: Path, monkeypatch) -> None:
+def test_collect_still_only_fires_on_debt_triage_cadence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(readers_debt, "_wt_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr(readers_debt, "load_family_records", lambda *a, **k: [])
     for cadence in ("mise-en-place", "bug-sweep", "bug-blitz", "dogfood"):
@@ -84,7 +85,7 @@ def test_collect_still_only_fires_on_debt_triage_cadence(tmp_path: Path, monkeyp
         assert result.judgment_points == []
 
 
-def test_groups_key_on_surface_path_then_fall_back_to_title():
+def test_groups_key_on_surface_path_then_fall_back_to_title() -> None:
     rows = [
         {"frontmatter": {"surface": "coordinator_core/ops/a.py, docs/x.md", "system": "free text"}},
         {"frontmatter": {"surface": "|-\ncoordinator_core/ops/session/b.py"}},

@@ -40,6 +40,7 @@ Public surface (pinned contract — do not change without updating consumers):
         anchor_root: Path | None = None,
         timeout: float = LOCK_TIMEOUT_SECS,
         holder_label: str = "",
+        lock_dir: Path | None = None,  # a caller holding the git common dir passes `_lock_dir_for_common(common)`
     ) -> Iterator[None]: ...
 
 Spec backlink: pln-ceremony-as-pipeline-2-invert--fd1b98 § C1
@@ -416,7 +417,13 @@ def _lock_dir_path(anchor_root: Path) -> Path:
     spawning a subprocess on every call.
     """
     from coordinator_core.lifecycle import git_common_dir  # local import avoids cycles
-    common = git_common_dir(anchor_root)
+    return _lock_dir_for_common(git_common_dir(anchor_root))
+
+
+def _lock_dir_for_common(common: Path) -> Path:
+    """The sidecar directory for a repo whose git common dir is *common*: the one mapping
+    ``_lock_dir_path`` and a caller that already holds the common dir (``held_lock(lock_dir=...)``)
+    share, so both resolve the same lock files. Pure path arithmetic, no git resolution."""
     if common.name == ".git":
         return common.parent / ".coordinator-local" / "locks"
     return common / "coordinator-locks"
@@ -1080,11 +1087,12 @@ def held_lock(
     anchor_root: "Path | None" = None,
     timeout: float = LOCK_TIMEOUT_SECS,
     holder_label: str = "",
+    lock_dir: "Path | None" = None,
 ) -> "contextlib.AbstractContextManager[None]":
     from contextlib import contextmanager
 
     return contextmanager(_held_lock_gen)(
-        target, anchor_root=anchor_root, timeout=timeout, holder_label=holder_label
+        target, anchor_root=anchor_root, timeout=timeout, holder_label=holder_label, lock_dir=lock_dir
     )
 
 
@@ -1094,6 +1102,7 @@ def _held_lock_gen(
     anchor_root: "Path | None" = None,
     timeout: float = LOCK_TIMEOUT_SECS,
     holder_label: str = "",
+    lock_dir: "Path | None" = None,
 ) -> "Iterator[None]":
     """Hold an exclusive advisory lock on *target* for the duration of a scope.
 
@@ -1178,9 +1187,10 @@ def _held_lock_gen(
             f"held_lock: anchor_root must be an absolute path, got {anchor_root!r}"
         )
 
-    lock_dir = (
-        _machine_lock_dir() if anchor_root is None else _lock_dir_path(anchor_root)
-    )
+    if lock_dir is None:
+        lock_dir = (
+            _machine_lock_dir() if anchor_root is None else _lock_dir_path(anchor_root)
+        )
     _assert_anchor_outside_target(target, lock_dir)
 
     key = _lock_key(target)

@@ -77,6 +77,24 @@ def test_expiry_prints_loud_line_once(client, monkeypatch, capsys):
     assert "running ping COLD: no warm server answered within" in err
 
 
+def test_restricted_token_denial_prints_its_cause_not_a_respawn_timeout(client, monkeypatch, capsys):
+    from coordinator_core.invoke.warm_miss import settle_warm_miss
+
+    monkeypatch.setattr(client, "_cold_reason", None)
+    monkeypatch.setattr(client, "last_cold_reason", lambda: client._cold_reason)
+    monkeypatch.setattr(client, "_process_token_is_restricted", lambda: True)
+    client._record_restricted_token_denial(PermissionError(13, "Access is denied", None, 5))
+    monkeypatch.setattr(
+        client, "try_warm_dispatch", lambda *a, **k: pytest.fail("must not poll")
+    )
+    assert settle_warm_miss(MSG) is None
+    err = capsys.readouterr().err
+    assert err.count("ENGINE UNREACHABLE") == 1
+    assert "restricted (sandboxed) token" in err
+    assert "winerror 5" in err
+    assert "of a respawn" not in err
+
+
 def test_in_process_serve_prints_terse_line_not_defect_text(client, monkeypatch, capsys):
     from coordinator_core.invoke.warm_miss import serving_in_process, settle_warm_miss
 

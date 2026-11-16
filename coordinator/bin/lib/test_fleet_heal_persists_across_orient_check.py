@@ -14,7 +14,7 @@ import git_hook_install as ghi  # noqa: E402
 from test_git_hook_install import _make_worktree  # noqa: E402
 
 
-def test_fleet_heal_persists_across_orient_check_only_read(tmp_path, monkeypatch, capsys):
+def test_fleet_heal_persists_across_orient_check_only_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     wt_root = _make_worktree(tmp_path)
     (wt_root / "CLAUDE.md").write_text("x", encoding="utf-8")
     coord_bin = tmp_path / "bin"

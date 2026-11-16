@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from coordinator_core.ops.emit.resolvers import _resolve_central_state_root
+import pytest
 
 
 class TestResolveCentralStateRootNative:
@@ -18,7 +19,7 @@ class TestResolveCentralStateRootNative:
         assert result == claude_klabauter_root / "state"
 
     def test_falls_back_to_claude_home_state_on_runtime_error(
-        self, tmp_path: Path, monkeypatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Unresolvable claude-klabauter root (RuntimeError, the resolver's documented failure mode)
         falls back to CLAUDE_HOME/.claude/state — the same fallback the old bridge's
@@ -32,7 +33,7 @@ class TestResolveCentralStateRootNative:
         assert result == tmp_path / ".claude" / "state"
 
     def test_falls_back_to_claude_home_state_on_falsy_return(
-        self, tmp_path: Path, monkeypatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
         with patch(

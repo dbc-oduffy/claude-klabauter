@@ -10,6 +10,7 @@ import pytest
 from coordinator_core.bash_guards import block_push_pr_non_owned_remote as push_guard
 from coordinator_core.host_hooks import shim
 from coordinator_core.warm import telemetry
+from pathlib import Path
 
 CODEX_LS = {"hook_event_name": "PreToolUse", "session_id": "sess-1", "cwd": "/nonexistent-shim-cwd",
             "tool_name": "exec_command", "tool_input": {"command": "ls"}}
@@ -20,7 +21,7 @@ AGY_PUSH = {"conversationId": "agy-1", "toolCall": {"name": "run_command", "args
 
 
 @pytest.fixture(autouse=True)
-def _env(monkeypatch):
+def _env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(push_guard, "_configured_prefixes", lambda: ["github.com/stranger/"])
     monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
     rows = []
@@ -33,7 +34,7 @@ def rows(_env):
     return _env
 
 
-def _engine(monkeypatch, response, seen=None):
+def _engine(monkeypatch, response, seen=None) -> None:
     def dial(request):
         if seen is not None:
             seen.append(request)
@@ -42,7 +43,7 @@ def _engine(monkeypatch, response, seen=None):
     monkeypatch.setattr(shim, "_dial", dial)
 
 
-def test_engine_deny_is_rendered_for_codex(monkeypatch, rows):
+def test_engine_deny_is_rendered_for_codex(monkeypatch: pytest.MonkeyPatch, rows) -> None:
     seen = []
     _engine(monkeypatch, {"result": {"permissionDecision": "deny", "permissionDecisionReason": "no"}}, seen)
     out = shim.run("codex", json.dumps(CODEX_LS))
@@ -53,19 +54,19 @@ def test_engine_deny_is_rendered_for_codex(monkeypatch, rows):
     assert rows == []
 
 
-def test_engine_allow_agy_is_explicit_allow(monkeypatch, rows):
+def test_engine_allow_agy_is_explicit_allow(monkeypatch: pytest.MonkeyPatch, rows) -> None:
     _engine(monkeypatch, {"result": {}})
     assert shim.run("agy", json.dumps(AGY_LS)) == {"decision": "allow"}
     assert rows == []
 
 
-def test_engine_allow_not_overridden_by_backstop(monkeypatch, rows):
+def test_engine_allow_not_overridden_by_backstop(monkeypatch: pytest.MonkeyPatch, rows) -> None:
     _engine(monkeypatch, {"result": {}})
     assert shim.run("codex", json.dumps(CODEX_PUSH)) == {}
     assert shim.run("agy", json.dumps(AGY_PUSH)) == {"decision": "allow"}
 
 
-def test_session_identity_comes_from_payload(monkeypatch):
+def test_session_identity_comes_from_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     import os
 
     seen = []
@@ -76,7 +77,7 @@ def test_session_identity_comes_from_payload(monkeypatch):
 
 
 @pytest.mark.parametrize("response", [None, {"error": {"code": -32601}}, {"result": "x"}, "junk"])
-def test_engine_down_or_error_is_neutral_fallback_with_degrade_row(monkeypatch, rows, response):
+def test_engine_down_or_error_is_neutral_fallback_with_degrade_row(monkeypatch: pytest.MonkeyPatch, rows, response) -> None:
     _engine(monkeypatch, response)
     assert shim.run("codex", json.dumps(CODEX_LS)) == {}
     assert shim.run("agy", json.dumps(AGY_LS))["decision"] == "ask"
@@ -85,7 +86,7 @@ def test_engine_down_or_error_is_neutral_fallback_with_degrade_row(monkeypatch, 
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds the shim dial budget against a sleeping engine; sleep burns no CPU")
-def test_slow_engine_past_budget_falls_back_within_wall(monkeypatch, rows):
+def test_slow_engine_past_budget_falls_back_within_wall(monkeypatch: pytest.MonkeyPatch, rows) -> None:
     monkeypatch.setattr(shim, "DIAL_BUDGET_SECS", 0.05)
     monkeypatch.setattr(shim, "_dial", lambda request: time.sleep(2) or {"result": {}})
     start = time.monotonic()
@@ -95,7 +96,7 @@ def test_slow_engine_past_budget_falls_back_within_wall(monkeypatch, rows):
     assert [r["kind"] for r in rows] == [telemetry.KIND_HOOK_TIMEOUT]
 
 
-def test_engine_down_irreversible_command_denied(monkeypatch, rows):
+def test_engine_down_irreversible_command_denied(monkeypatch: pytest.MonkeyPatch, rows) -> None:
     _engine(monkeypatch, None)
     out = shim.run("codex", json.dumps(CODEX_PUSH))
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -103,20 +104,20 @@ def test_engine_down_irreversible_command_denied(monkeypatch, rows):
     assert rows == []
 
 
-def test_slow_engine_irreversible_command_denied(monkeypatch):
+def test_slow_engine_irreversible_command_denied(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(shim, "DIAL_BUDGET_SECS", 0.05)
     monkeypatch.setattr(shim, "_dial", lambda request: time.sleep(2))
     out = shim.run("codex", json.dumps(CODEX_PUSH))
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_engine_down_ordinary_command_fails_open(monkeypatch, rows):
+def test_engine_down_ordinary_command_fails_open(monkeypatch: pytest.MonkeyPatch, rows) -> None:
     _engine(monkeypatch, None)
     assert shim.run("codex", json.dumps(CODEX_LS)) == {}
     assert len(rows) == 1
 
 
-def test_unserved_event_is_neutral_without_dialing(monkeypatch, rows):
+def test_unserved_event_is_neutral_without_dialing(monkeypatch: pytest.MonkeyPatch, rows) -> None:
     def boom(request):
         raise AssertionError("dialed")
 
@@ -124,7 +125,7 @@ def test_unserved_event_is_neutral_without_dialing(monkeypatch, rows):
     assert shim.run("codex", json.dumps({**CODEX_LS, "hook_event_name": "PostToolUse"})) == {}
 
 
-def test_dial_exception_is_a_miss(monkeypatch, rows):
+def test_dial_exception_is_a_miss(monkeypatch: pytest.MonkeyPatch, rows) -> None:
     def boom(request):
         raise RuntimeError("socket exploded")
 
@@ -133,7 +134,7 @@ def test_dial_exception_is_a_miss(monkeypatch, rows):
     assert len(rows) == 1
 
 
-def test_garbage_stdin_is_neutral_fallback(monkeypatch):
+def test_garbage_stdin_is_neutral_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     _engine(monkeypatch, None)
     assert shim.run("codex", "not json") == {}
     assert shim.run("agy", "not json")["decision"] == "ask"
@@ -141,7 +142,7 @@ def test_garbage_stdin_is_neutral_fallback(monkeypatch):
     assert shim.run("nope", "{}") == {}
 
 
-def test_degrade_raising_still_answers(monkeypatch):
+def test_degrade_raising_still_answers(monkeypatch: pytest.MonkeyPatch) -> None:
     _engine(monkeypatch, None)
 
     def boom(**kw):
@@ -151,7 +152,7 @@ def test_degrade_raising_still_answers(monkeypatch):
     assert shim.run("codex", json.dumps(CODEX_LS)) == {}
 
 
-def test_main_prints_json_and_returns_zero(monkeypatch, capsys):
+def test_main_prints_json_and_returns_zero(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _engine(monkeypatch, {"result": {}})
     monkeypatch.setattr("sys.stdin", io.StringIO(json.dumps(AGY_LS)))
     assert shim.main(["--host", "agy"]) == 0
@@ -164,7 +165,7 @@ GROK_SHELL = {**GROK_EDIT, "tool_name": "shell", "tool_input": {"command": "ls"}
 GROK_PUSH = {**GROK_SHELL, "tool_input": {"command": "git push https://github.com/stranger/r.git main"}}
 
 
-def test_grok_edit_payload_reaches_engine_as_edit_with_file_path(monkeypatch, rows):
+def test_grok_edit_payload_reaches_engine_as_edit_with_file_path(monkeypatch: pytest.MonkeyPatch, rows) -> None:
     seen = []
     _engine(monkeypatch, {"result": {}}, seen)
     assert shim.run("grok", json.dumps(GROK_EDIT)) == {}
@@ -173,7 +174,7 @@ def test_grok_edit_payload_reaches_engine_as_edit_with_file_path(monkeypatch, ro
     assert rows == []
 
 
-def test_grok_shell_payload_reaches_engine_as_bash_with_command(monkeypatch, rows):
+def test_grok_shell_payload_reaches_engine_as_bash_with_command(monkeypatch: pytest.MonkeyPatch, rows) -> None:
     seen = []
     _engine(monkeypatch, {"result": {"permissionDecision": "deny", "permissionDecisionReason": "no"}}, seen)
     out = shim.run("grok", json.dumps(GROK_SHELL))
@@ -182,7 +183,7 @@ def test_grok_shell_payload_reaches_engine_as_bash_with_command(monkeypatch, row
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_grok_dispatches_to_grok_adapter_not_agy():
+def test_grok_dispatches_to_grok_adapter_not_agy() -> None:
     from coordinator_core.host_hooks.grok_adapter import GrokAdapter
 
     assert isinstance(shim._adapter("grok"), GrokAdapter)
@@ -190,7 +191,7 @@ def test_grok_dispatches_to_grok_adapter_not_agy():
         shim._adapter("nope")
 
 
-def test_grok_engine_down_is_neutral_and_irreversible_command_denied(monkeypatch, rows):
+def test_grok_engine_down_is_neutral_and_irreversible_command_denied(monkeypatch: pytest.MonkeyPatch, rows) -> None:
     _engine(monkeypatch, None)
     assert shim.run("grok", json.dumps(GROK_SHELL)) == {}
     assert len(rows) == 1
@@ -209,7 +210,7 @@ def _agy_write(tmp_path, tool):
 
 
 @pytest.fixture
-def nag_guard(monkeypatch):
+def nag_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     """The DIY nag guard body answers the nag for an EM payload and nothing for a subagent payload."""
     from coordinator_core.write_guards import nudge_em_code_dispatch as guard
 
@@ -222,31 +223,31 @@ def nag_guard(monkeypatch):
     monkeypatch.setattr(guard, "_op", op)
 
 
-def _nag_in(host, out):
+def _nag_in(host, out) -> bool:
     return NAG in json.dumps(out)
 
 
 @pytest.mark.parametrize("payload", [CODEX_EDIT, CODEX_WRITE])
-def test_warm_codex_write_tools_render_nag(monkeypatch, payload):
+def test_warm_codex_write_tools_render_nag(monkeypatch: pytest.MonkeyPatch, payload) -> None:
     _engine(monkeypatch, {"result": {"additionalContext": NAG}})
     assert _nag_in("codex", shim.decide("codex", payload))
 
 
 @pytest.mark.parametrize("tool", ["edit_file", "write_file"])
-def test_warm_agy_write_tools_render_nag(monkeypatch, tmp_path, tool):
+def test_warm_agy_write_tools_render_nag(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, tool) -> None:
     _engine(monkeypatch, {"result": {"additionalContext": NAG}})
     out = shim.decide("agy", _agy_write(tmp_path, tool))
     assert _nag_in("agy", out) and out["decision"] == "ask"
 
 
 @pytest.mark.parametrize("payload", [CODEX_EDIT, CODEX_WRITE])
-def test_cold_codex_write_tools_render_nag(monkeypatch, nag_guard, payload):
+def test_cold_codex_write_tools_render_nag(monkeypatch: pytest.MonkeyPatch, nag_guard, payload) -> None:
     _engine(monkeypatch, None)
     assert _nag_in("codex", shim.decide("codex", payload))
 
 
 @pytest.mark.parametrize("tool", ["edit_file", "write_file"])
-def test_cold_agy_write_tools_render_nag(monkeypatch, nag_guard, tmp_path, tool):
+def test_cold_agy_write_tools_render_nag(monkeypatch: pytest.MonkeyPatch, nag_guard, tmp_path: Path, tool) -> None:
     _engine(monkeypatch, None)
     assert _nag_in("agy", shim.decide("agy", _agy_write(tmp_path, tool)))
 
@@ -256,31 +257,31 @@ def _grok_write(tool):
 
 
 @pytest.mark.parametrize("tool", ["edit_file", "write_file"])
-def test_warm_grok_write_tools_render_nag(monkeypatch, tool):
+def test_warm_grok_write_tools_render_nag(monkeypatch: pytest.MonkeyPatch, tool) -> None:
     _engine(monkeypatch, {"result": {"additionalContext": NAG}})
     assert _nag_in("grok", shim.decide("grok", _grok_write(tool)))
 
 
 @pytest.mark.parametrize("tool", ["edit_file", "write_file"])
-def test_cold_grok_write_tools_render_nag(monkeypatch, nag_guard, tool):
+def test_cold_grok_write_tools_render_nag(monkeypatch: pytest.MonkeyPatch, nag_guard, tool) -> None:
     _engine(monkeypatch, None)
     assert _nag_in("grok", shim.decide("grok", _grok_write(tool)))
 
 
 @pytest.mark.parametrize("tool", ["edit_file", "write_file"])
-def test_cold_grok_subagent_write_gets_no_nag(monkeypatch, nag_guard, tool):
+def test_cold_grok_subagent_write_gets_no_nag(monkeypatch: pytest.MonkeyPatch, nag_guard, tool) -> None:
     _engine(monkeypatch, None)
     assert not _nag_in("grok", shim.decide("grok", {**_grok_write(tool), "agent_id": "sub-1"}))
 
 
 @pytest.mark.parametrize("tool", ["Edit", "Write"])
-def test_cold_subagent_write_gets_no_nag(monkeypatch, nag_guard, tool):
+def test_cold_subagent_write_gets_no_nag(monkeypatch: pytest.MonkeyPatch, nag_guard, tool) -> None:
     _engine(monkeypatch, None)
     payload = {**(CODEX_EDIT if tool == "Edit" else CODEX_WRITE), "agent_id": "sub-1"}
     assert not _nag_in("codex", shim.decide("codex", payload))
 
 
-def test_cold_shell_advisory_still_not_forwarded(monkeypatch):
+def test_cold_shell_advisory_still_not_forwarded(monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.host_hooks.tool_policy as tool_policy
 
     _engine(monkeypatch, None)
@@ -288,7 +289,7 @@ def test_cold_shell_advisory_still_not_forwarded(monkeypatch):
     assert shim.decide("codex", CODEX_LS) == {}
 
 
-def test_main_without_host_exits_zero_with_empty_answer(monkeypatch, capsys):
+def test_main_without_host_exits_zero_with_empty_answer(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr("sys.stdin", io.StringIO("{}"))
     assert shim.main([]) == 0
     assert json.loads(capsys.readouterr().out) == {}

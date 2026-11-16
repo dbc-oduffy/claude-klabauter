@@ -20,20 +20,21 @@ import json
 import pytest
 
 from coordinator_core.ops.ensure_vscode_readonly import GUARD_KEYS, main
+from pathlib import Path
 
 
-def test_guard_keys_is_empty():
+def test_guard_keys_is_empty() -> None:
     assert GUARD_KEYS == {}
 
 
-def test_fresh_create_no_vscode_dir_writes_nothing(tmp_path, capsys):
+def test_fresh_create_no_vscode_dir_writes_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--root", str(tmp_path)])
     assert rc == 0
     settings = tmp_path / ".vscode" / "settings.json"
     assert not settings.exists()
 
 
-def test_existing_settings_json_untouched(tmp_path):
+def test_existing_settings_json_untouched(tmp_path: Path) -> None:
     vscode = tmp_path / ".vscode"
     vscode.mkdir()
     settings = vscode / "settings.json"
@@ -44,7 +45,7 @@ def test_existing_settings_json_untouched(tmp_path):
     assert settings.read_text(encoding="utf-8") == raw
 
 
-def test_jsonc_settings_untouched_no_backup_written(tmp_path):
+def test_jsonc_settings_untouched_no_backup_written(tmp_path: Path) -> None:
     vscode = tmp_path / ".vscode"
     vscode.mkdir()
     settings = vscode / "settings.json"
@@ -60,7 +61,7 @@ def test_jsonc_settings_untouched_no_backup_written(tmp_path):
     assert not backup.exists()
 
 
-def test_idempotent_second_run_byte_identical(tmp_path):
+def test_idempotent_second_run_byte_identical(tmp_path: Path) -> None:
     rc = main(["--root", str(tmp_path)])
     assert rc == 0
     settings = tmp_path / ".vscode" / "settings.json"
@@ -70,7 +71,7 @@ def test_idempotent_second_run_byte_identical(tmp_path):
     assert not settings.exists()
 
 
-def test_unparseable_settings_preserved_not_clobbered(tmp_path):
+def test_unparseable_settings_preserved_not_clobbered(tmp_path: Path) -> None:
     vscode = tmp_path / ".vscode"
     vscode.mkdir()
     settings = vscode / "settings.json"
@@ -81,17 +82,17 @@ def test_unparseable_settings_preserved_not_clobbered(tmp_path):
     assert settings.read_text(encoding="utf-8") == raw
 
 
-def test_root_missing_value_exits_2(capsys):
+def test_root_missing_value_exits_2(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--root"])
     assert rc == 2
 
 
-def test_unknown_arg_exits_2(capsys):
+def test_unknown_arg_exits_2(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--bogus"])
     assert rc == 2
 
 
-def test_root_not_a_directory_exits_2(tmp_path):
+def test_root_not_a_directory_exits_2(tmp_path: Path) -> None:
     not_a_dir = tmp_path / "nope"
     rc = main(["--root", str(not_a_dir)])
     assert rc == 2

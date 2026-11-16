@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from coordinator_core.subagent_sandbox import provision_report
+from pathlib import Path
+import pytest
 
 
-def test_unresolved_plugin_root_names_the_skip_and_the_key(monkeypatch, capsys, tmp_path):
+def test_unresolved_plugin_root_names_the_skip_and_the_key(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     monkeypatch.setattr(provision_report, "_show_toplevel_no_spawn", lambda cwd: str(tmp_path))
     monkeypatch.setattr(provision_report, "resolve_plugin_root", lambda: None)
 

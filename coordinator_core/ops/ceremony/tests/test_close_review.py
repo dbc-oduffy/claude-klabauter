@@ -14,6 +14,7 @@ from coordinator_core.ops.ceremony import close_background as cb
 from coordinator_core.ops.ceremony import close_review as cr
 from coordinator_core.ops.dispatch_emit import run_close
 from coordinator_core.ops.dispatch_emit.run_close import LegResult
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -30,14 +31,14 @@ def _record(root):
     return json.loads((root / run_close.close_job_path(RUN)).read_text(encoding="utf-8"))["legs"]
 
 
-def _g(repo, *args):
+def _g(repo, *args) -> str:
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True, check=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     ).stdout.strip()
 
 
-def _chain_commit(repo, name, deliverable=DID):
+def _chain_commit(repo, name, deliverable=DID) -> str:
     (repo / "src").mkdir(exist_ok=True)
     (repo / "src" / name).write_text(name, encoding="utf-8")
     _g(repo, "add", "--", f"src/{name}")
@@ -46,7 +47,7 @@ def _chain_commit(repo, name, deliverable=DID):
 
 
 @pytest.fixture
-def chain_repo(tmp_path):
+def chain_repo(tmp_path: Path) -> Path:
     _g(tmp_path, "init", "-q")
     _g(tmp_path, "config", "user.email", "t@example.com")
     _g(tmp_path, "config", "user.name", "t")
@@ -56,12 +57,12 @@ def chain_repo(tmp_path):
 
 
 @pytest.fixture
-def nothing_credited(monkeypatch):
+def nothing_credited(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("coordinator_core.review_trail.reviewed_set.read_reviewed_set", lambda r: set())
     monkeypatch.setattr("coordinator_core.review_trail.receipt_credit.receipt_credited_shas", lambda r, c: set())
 
 
-def _queue(root, *, base, terminal, receipt="docs/plans/p.md", batons=(BATON,), minutes=10):
+def _queue(root, *, base, terminal, receipt: str = "docs/plans/p.md", batons=(BATON,), minutes: int = 10) -> None:
     run_close.write_close_job(
         root, RUN, ("review",), datetime.now().astimezone() + timedelta(minutes=minutes),
         claimed_batons=batons, review_receipt=receipt, run_base_sha=base, terminal_sha=terminal,
@@ -73,7 +74,7 @@ def _pay(root, batons=(BATON,)):
     return _record(root)["review"]
 
 
-def test_ran_with_zero_unreceipted_commits(chain_repo, monkeypatch):
+def test_ran_with_zero_unreceipted_commits(chain_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     sha = _chain_commit(chain_repo, "a.py")
     monkeypatch.setattr("coordinator_core.review_trail.reviewed_set.read_reviewed_set", lambda r: {sha})
     _queue(chain_repo, base=sha, terminal=sha)
@@ -82,7 +83,7 @@ def test_ran_with_zero_unreceipted_commits(chain_repo, monkeypatch):
     assert "receipt docs/plans/p.md" in leg["detail"] and "0 unreceipted" in leg["detail"]
 
 
-def test_failed_with_the_rendered_unreceipted_detail(chain_repo, nothing_credited):
+def test_failed_with_the_rendered_unreceipted_detail(chain_repo, nothing_credited) -> None:
     _chain_commit(chain_repo, "a.py")
     sha = _chain_commit(chain_repo, "b.py")
     _queue(chain_repo, base=sha, terminal=sha)
@@ -91,7 +92,7 @@ def test_failed_with_the_rendered_unreceipted_detail(chain_repo, nothing_credite
     assert sha[:12] in leg["detail"] and "2 unreceipted ancestor commits" in leg["detail"]
 
 
-def test_truncated_at_the_cap_is_failed_never_ran(chain_repo, nothing_credited, monkeypatch):
+def test_truncated_at_the_cap_is_failed_never_ran(chain_repo, nothing_credited, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cr, "REVIEW_RANGE_CAP", 2)
     for n in range(3):
         sha = _chain_commit(chain_repo, f"{n}.py")
@@ -100,19 +101,19 @@ def test_truncated_at_the_cap_is_failed_never_ran(chain_repo, nothing_credited, 
     assert leg["status"] == "failed" and "range truncated" in leg["detail"]
 
 
-def test_no_receipt_is_failed(tmp_path):
+def test_no_receipt_is_failed(tmp_path: Path) -> None:
     run_close.write_close_job(tmp_path, RUN, ("review",), datetime.now().astimezone() + timedelta(minutes=10))
     leg = _pay(tmp_path)
     assert leg["status"] == "failed" and "review_receipt" in leg["detail"]
 
 
-def test_null_run_base_is_failed_naming_it(tmp_path):
+def test_null_run_base_is_failed_naming_it(tmp_path: Path) -> None:
     _queue(tmp_path, base=None, terminal="a" * 40)
     leg = _pay(tmp_path)
     assert leg["status"] == "failed" and "run_base_sha" in leg["detail"]
 
 
-def test_bad_endpoint_is_failed_never_ran(chain_repo):
+def test_bad_endpoint_is_failed_never_ran(chain_repo) -> None:
     _chain_commit(chain_repo, "a.py")
     sha = _g(chain_repo, "rev-parse", "HEAD")
     _queue(chain_repo, base=sha, terminal=sha)
@@ -124,7 +125,7 @@ def test_bad_endpoint_is_failed_never_ran(chain_repo):
     assert leg["status"] == "failed" and "not a full 40-hex" in leg["detail"]
 
 
-def test_stops_at_a_receipted_tip_and_ignores_other_deliverables(chain_repo):
+def test_stops_at_a_receipted_tip_and_ignores_other_deliverables(chain_repo) -> None:
     old = _chain_commit(chain_repo, "old.py")
     _chain_commit(chain_repo, "other.py", deliverable="dlv-other")
     sha = _g(chain_repo, "rev-parse", "HEAD")
@@ -138,7 +139,7 @@ def test_stops_at_a_receipted_tip_and_ignores_other_deliverables(chain_repo):
     assert leg["status"] == "ran" and f"since {old[:12]}" in leg["detail"]
 
 
-def test_tip_from_a_close_job_record_with_a_ran_review(chain_repo, nothing_credited):
+def test_tip_from_a_close_job_record_with_a_ran_review(chain_repo, nothing_credited) -> None:
     old = _chain_commit(chain_repo, "old.py")
     sha = _chain_commit(chain_repo, "new.py")
     run_close.write_close_job(
@@ -150,26 +151,26 @@ def test_tip_from_a_close_job_record_with_a_ran_review(chain_repo, nothing_credi
     assert leg["status"] == "failed" and sha[:12] in leg["detail"] and old[:12] not in leg["detail"]
 
 
-def test_a_raising_review_is_recorded_failed(tmp_path, monkeypatch):
+def test_a_raising_review_is_recorded_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _queue(tmp_path, base="a" * 40, terminal="b" * 40)
     monkeypatch.setattr(cr, "_review", lambda ctx: (_ for _ in ()).throw(RuntimeError("boom")))
     leg = _pay(tmp_path)
     assert leg["status"] == "failed" and "RuntimeError" in leg["detail"]
 
 
-def test_past_deadline_runs_nothing(tmp_path, monkeypatch):
+def test_past_deadline_runs_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _queue(tmp_path, base="a" * 40, terminal="b" * 40, minutes=-5)
     monkeypatch.setattr(cr, "_review", lambda ctx: pytest.fail("review ran past its deadline"))
     assert cr.run_review(_ctx(tmp_path)) == {}
 
 
-def test_handler_reports_a_missing_record_and_a_missing_run_id(tmp_path):
+def test_handler_reports_a_missing_record_and_a_missing_run_id(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     assert "error" in cr._handler({"run_id": RUN}, tmp_path / ".git")
     assert "run_id" in cr._handler({}, tmp_path / ".git")["error"]
 
 
-def test_op_is_registered_mutating_fire_and_forget_common_dir():
+def test_op_is_registered_mutating_fire_and_forget_common_dir() -> None:
     from coordinator_core.op_scopes import _OP_KEY_SCOPE as OP_SCOPES
 
     assert OP_CLASSIFICATION["close.review"] is OpClass.MUTATING

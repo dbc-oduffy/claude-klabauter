@@ -41,7 +41,7 @@ def _ident(root: Path, rel: str):
     return probe_store._stat_identity(str(root / rel))
 
 
-def _seed(root: Path, **legs):
+def _seed(root: Path, **legs) -> Path:
     inp = root / "sizing.yaml"
     inp.write_text("a: 1", encoding="utf-8")
     _old(inp)
@@ -61,7 +61,7 @@ def _get(root: Path, **legs):
                                      args["engine_key"])
 
 
-def test_round_trip_drops_process_ms(tmp_path):
+def test_round_trip_drops_process_ms(tmp_path: Path) -> None:
     root = _root(tmp_path)
     _seed(root)
     assert store_path(root).is_file()
@@ -72,13 +72,13 @@ def test_round_trip_drops_process_ms(tmp_path):
     ("plan_sha", "other"), ("upgrade", False), ("head", "h2"), ("engine_key", "e2"),
     ("engine_key", None),
 ])
-def test_any_changed_leg_misses(tmp_path, leg, value):
+def test_any_changed_leg_misses(tmp_path: Path, leg, value) -> None:
     root = _root(tmp_path)
     _seed(root)
     assert _get(root, **{leg: value}) is None
 
 
-def test_changed_created_or_deleted_input_misses(tmp_path):
+def test_changed_created_or_deleted_input_misses(tmp_path: Path) -> None:
     root = _root(tmp_path)
     inp = _seed(root)
     inp.write_text("a: 22", encoding="utf-8")
@@ -98,7 +98,7 @@ def test_changed_created_or_deleted_input_misses(tmp_path):
     assert _get(root3) is None
 
 
-def test_racy_mtime_misses(tmp_path):
+def test_racy_mtime_misses(tmp_path: Path) -> None:
     root = _root(tmp_path)
     store = ProbeStore.load(root)
     inp = root / "fresh.yaml"
@@ -115,7 +115,7 @@ def test_racy_mtime_misses(tmp_path):
 
 @pytest.mark.parametrize("content", [None, "{not json", '{"schema": 99, "records": {}}',
                                      '{"schema": 1, "records": []}', "[]"])
-def test_missing_corrupt_or_other_schema_loads_empty(tmp_path, content):
+def test_missing_corrupt_or_other_schema_loads_empty(tmp_path: Path, content) -> None:
     root = _root(tmp_path)
     if content is not None:
         path = store_path(root)
@@ -124,7 +124,7 @@ def test_missing_corrupt_or_other_schema_loads_empty(tmp_path, content):
     assert ProbeStore.load(root).get(REL, "s", True, "h", "e") is None
 
 
-def test_save_without_change_writes_nothing(tmp_path):
+def test_save_without_change_writes_nothing(tmp_path: Path) -> None:
     root = _root(tmp_path)
     ProbeStore.load(root).save()
     assert not store_path(root).exists()
@@ -134,7 +134,7 @@ def test_save_without_change_writes_nothing(tmp_path):
     assert store_path(root).stat().st_mtime_ns == before
 
 
-def test_save_to_unwritable_directory_raises_nothing(tmp_path):
+def test_save_to_unwritable_directory_raises_nothing(tmp_path: Path) -> None:
     root = _root(tmp_path)
     store = ProbeStore.load(root)
     store.put(REL, "s", True, "h", "e", {}, REPLY)
@@ -144,7 +144,7 @@ def test_save_to_unwritable_directory_raises_nothing(tmp_path):
     store.save()
 
 
-def test_save_drops_records_of_plans_no_longer_present(tmp_path):
+def test_save_drops_records_of_plans_no_longer_present(tmp_path: Path) -> None:
     root = _root(tmp_path)
     store = ProbeStore.load(root)
     store.put(REL, "s", True, "h", "e", {}, REPLY)
@@ -155,7 +155,7 @@ def test_save_drops_records_of_plans_no_longer_present(tmp_path):
     assert reloaded.get("docs/plans/gone.md", "s", True, "h", "e") is None
 
 
-def test_other_repo_root_misses(tmp_path):
+def test_other_repo_root_misses(tmp_path: Path) -> None:
     root = _root(tmp_path)
     _seed(root)
     store = ProbeStore.load(root)
@@ -163,7 +163,7 @@ def test_other_repo_root_misses(tmp_path):
     assert store.get(REL, "s", True, "h", "e") is None
 
 
-def test_plan_sha_is_sha256_of_bytes():
+def test_plan_sha_is_sha256_of_bytes() -> None:
     assert plan_sha(b"abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 
 
@@ -192,7 +192,7 @@ def _fake_engine(tmp_path: Path, monkeypatch) -> Path:
     return eng
 
 
-def test_engine_key_none_when_a_closure_file_is_newer_than_import(tmp_path, monkeypatch):
+def test_engine_key_none_when_a_closure_file_is_newer_than_import(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     eng = _fake_engine(tmp_path, monkeypatch)
     key = engine_key("abc")
     assert key is not None and key.startswith("abc:")
@@ -202,7 +202,7 @@ def test_engine_key_none_when_a_closure_file_is_newer_than_import(tmp_path, monk
     assert engine_key("abc") is None
 
 
-def test_engine_key_equal_across_calls_with_an_unrelated_import_between(monkeypatch):
+def test_engine_key_equal_across_calls_with_an_unrelated_import_between(monkeypatch: pytest.MonkeyPatch) -> None:
     first = engine_key("abc")
     monkeypatch.delitem(sys.modules, "coordinator_core.roadmap.mise_residue", raising=False)
     import coordinator_core.roadmap.mise_residue  # noqa: F401
@@ -211,7 +211,7 @@ def test_engine_key_equal_across_calls_with_an_unrelated_import_between(monkeypa
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_engine_key_is_the_same_in_a_fresh_process():
+def test_engine_key_is_the_same_in_a_fresh_process() -> None:
     import subprocess
 
     here = engine_key("abc")
@@ -226,7 +226,7 @@ def test_engine_key_is_the_same_in_a_fresh_process():
     assert out.stdout.strip() == here, out.stderr
 
 
-def test_a_warm_engine_key_costs_under_20ms_of_process_time():
+def test_a_warm_engine_key_costs_under_20ms_of_process_time() -> None:
     import time
 
     first = time.process_time()
@@ -247,7 +247,7 @@ def test_a_warm_engine_key_costs_under_20ms_of_process_time():
     assert warm_ms < 20
 
 
-def test_a_fresh_process_reuses_the_persisted_import_graph(tmp_path, monkeypatch):
+def test_a_fresh_process_reuses_the_persisted_import_graph(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     eng = _fake_engine(tmp_path, monkeypatch)
     root = os.path.normpath(str(eng))
     first = probe_store._closure(root)
@@ -261,7 +261,7 @@ def test_a_fresh_process_reuses_the_persisted_import_graph(tmp_path, monkeypatch
     assert probe_store._closure(root) == first
 
 
-def test_engine_key_changes_on_a_closure_file_edit_and_ignores_one_outside(tmp_path, monkeypatch):
+def test_engine_key_changes_on_a_closure_file_edit_and_ignores_one_outside(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     eng = _fake_engine(tmp_path, monkeypatch)
     key = engine_key("abc")
     outside = eng / "coordinator_core" / "outside.py"
@@ -273,7 +273,7 @@ def test_engine_key_changes_on_a_closure_file_edit_and_ignores_one_outside(tmp_p
     assert engine_key("abc") != key
 
 
-def test_a_function_level_import_pulls_its_target_into_the_closure(tmp_path, monkeypatch):
+def test_a_function_level_import_pulls_its_target_into_the_closure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     eng = _fake_engine(tmp_path, monkeypatch)
     files = probe_store._closure(os.path.normpath(str(eng)))
     rels = {os.path.relpath(f, eng).replace(os.sep, "/") for f in files}
@@ -281,13 +281,13 @@ def test_a_function_level_import_pulls_its_target_into_the_closure(tmp_path, mon
     assert "coordinator_core/outside.py" not in rels
 
 
-def test_engine_key_changes_with_engine_sha(tmp_path, monkeypatch):
+def test_engine_key_changes_with_engine_sha(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_engine(tmp_path, monkeypatch)
     assert engine_key("a") is not None
     assert engine_key("a") != engine_key("b")
 
 
-def test_input_paths_names_sizing_edge_target_writes_dir_and_globals(tmp_path):
+def test_input_paths_names_sizing_edge_target_writes_dir_and_globals(tmp_path: Path) -> None:
     root = _root(tmp_path)
     fm = {"derived_from": "state/sizings/s.yaml", "status": "approved", "title": "A plan title"}
     rows = [{
@@ -308,7 +308,7 @@ def test_input_paths_names_sizing_edge_target_writes_dir_and_globals(tmp_path):
     assert "approved" not in got and "A plan title" not in got
 
 
-def test_input_paths_adds_top_level_dirs_when_a_first_segment_is_absent(tmp_path):
+def test_input_paths_adds_top_level_dirs_when_a_first_segment_is_absent(tmp_path: Path) -> None:
     root = _root(tmp_path)
     (root / "state").mkdir()
     got = input_paths({}, [{"writes": ["cross-repo/inbox/x.md"]}], root)
@@ -317,7 +317,7 @@ def test_input_paths_adds_top_level_dirs_when_a_first_segment_is_absent(tmp_path
     assert "state" not in quiet
 
 
-def test_input_paths_names_the_memo_receipt_of_a_memo_row(tmp_path):
+def test_input_paths_names_the_memo_receipt_of_a_memo_row(tmp_path: Path) -> None:
     root = _root(tmp_path)
     got = input_paths({}, [{"id": "C1", "receipt": "topic-x"}], root)
     assert any(p.endswith("sent/topic-x.md") for p in got)
@@ -334,7 +334,7 @@ def _count_read_sites(path: Path, skip: str = "") -> int:
     )
 
 
-def test_read_site_pin_prep_gate_and_upgrader():
+def test_read_site_pin_prep_gate_and_upgrader() -> None:
     """C30 read-site pin: a new read site in prep_gate.py or mise-prep-upgrade.py must be
     checked against probe_store.input_paths (and the audit in its docstring) before this
     count moves, or the store vouches for a verdict it cannot see the inputs of.

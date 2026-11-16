@@ -6,17 +6,18 @@ from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import pipeline_compose
 from coordinator_core.ops.dispatch_emit.tests.test_research_emit_script_cap import VENDORED, _emit
+import pytest
 
 _SOURCES = ["web", "notebooklm"]
 
 
-def test_under_the_cap_the_reply_carries_no_parts(monkeypatch, tmp_path, capsys):
+def test_under_the_cap_the_reply_carries_no_parts(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _, reply = _emit(monkeypatch, tmp_path, capsys, VENDORED, _SOURCES, 2)
     assert "parts" not in reply
     assert reply["path"].endswith(".workflow.mjs")
 
 
-def test_over_the_cap_it_emits_one_script_per_pipeline(monkeypatch, tmp_path, capsys):
+def test_over_the_cap_it_emits_one_script_per_pipeline(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     whole, whole_reply = _emit(monkeypatch, tmp_path / "whole", capsys, VENDORED, _SOURCES, 2)
     cap = len(whole.encode("utf-8")) - 1
     monkeypatch.setattr(pipeline_compose, "WORKFLOW_SCRIPT_CAP_BYTES", cap)

@@ -42,6 +42,11 @@ import shutil
 import subprocess
 
 import pytest
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
 
 _HAS_RG = shutil.which("rg") is not None
 _requires_rg = pytest.mark.skipif(not _HAS_RG, reason="ripgrep (rg) not installed")
@@ -62,7 +67,7 @@ from coordinator_core.distill._common import (
 )
 
 
-def test_parse_single_run_multiple_rows():
+def test_parse_single_run_multiple_rows() -> None:
     text = (
         "## Run r-001\n"
         "- docs/plans/foo.md -> DISTILLED, folded into wiki/foo.md (run: r-001)\n"
@@ -77,7 +82,7 @@ def test_parse_single_run_multiple_rows():
     assert rows[1].disposition == "SKIP"
 
 
-def test_parse_multiple_run_headers_group_correctly():
+def test_parse_multiple_run_headers_group_correctly() -> None:
     text = (
         "## Run r-001\n"
         "- a.md -> PROMOTE, promoted to decision (run: r-001)\n"
@@ -92,7 +97,7 @@ def test_parse_multiple_run_headers_group_correctly():
     assert rows[1].path == "b.md"
 
 
-def test_parse_invalid_disposition_skipped_not_raised():
+def test_parse_invalid_disposition_skipped_not_raised() -> None:
     text = (
         "## Run r-001\n"
         "- a.md -> BOGUS, not a real disposition (run: r-001)\n"
@@ -104,7 +109,7 @@ def test_parse_invalid_disposition_skipped_not_raised():
     assert rows[0].disposition == "PRESERVE"
 
 
-def test_parse_row_before_any_run_header_skipped():
+def test_parse_row_before_any_run_header_skipped() -> None:
     text = (
         "- orphan.md -> DISTILLED, no header above me (run: r-000)\n"
         "## Run r-001\n"
@@ -115,24 +120,24 @@ def test_parse_row_before_any_run_header_skipped():
     assert rows[0].path == "a.md"
 
 
-def test_parse_requires_ascii_arrow_not_unicode():
+def test_parse_requires_ascii_arrow_not_unicode() -> None:
     ascii_text = "## Run r-001\n- a.md -> DISTILLED, fine (run: r-001)\n"
     unicode_text = "## Run r-001\n- a.md → DISTILLED, fine (run: r-001)\n"
     assert len(parse_distillation_log(ascii_text)) == 1
     assert len(parse_distillation_log(unicode_text)) == 0
 
 
-def test_parse_fate_captured_verbatim_trimmed():
+def test_parse_fate_captured_verbatim_trimmed() -> None:
     text = "## Run r-001\n- a.md -> DISTILLED,   spaced fate text   (run: r-001)\n"
     rows = parse_distillation_log(text)
     assert rows[0].fate == "spaced fate text"
 
 
-def test_dispositions_constant_matches_plan_spec():
+def test_dispositions_constant_matches_plan_spec() -> None:
     assert DISPOSITIONS == {"DISTILLED", "PROMOTE", "EPHEMERAL", "SKIP", "PRESERVE"}
 
 
-def test_parse_fate_ending_in_run_shaped_substring_pins_documented_edge_case():
+def test_parse_fate_ending_in_run_shaped_substring_pins_documented_edge_case() -> None:
     text = "## Run r-001\n- a.md -> DISTILLED, superseded (run: r-999)\n"
     rows = parse_distillation_log(text)
     assert len(rows) == 1
@@ -144,21 +149,21 @@ def test_parse_fate_ending_in_run_shaped_substring_pins_documented_edge_case():
 # SIDECAR_SUFFIXES / is_sidecar_filename
 # ---------------------------------------------------------------------------
 
-def test_sidecar_full_suffix_anchored_match():
+def test_sidecar_full_suffix_anchored_match() -> None:
     assert is_sidecar_filename("2026-07-12-some-plan.review.md") is True
 
 
-def test_sidecar_rejects_bare_substring_hit():
+def test_sidecar_rejects_bare_substring_hit() -> None:
     assert is_sidecar_filename("my-review-notes.md") is False
     assert is_sidecar_filename("review.md") is False
 
 
 @pytest.mark.parametrize("suffix", SIDECAR_SUFFIXES)
-def test_every_declared_suffix_matches(suffix):
+def test_every_declared_suffix_matches(suffix) -> None:
     assert is_sidecar_filename(f"some-stem{suffix}") is True
 
 
-def test_sidecar_timestamped_variant_matches():
+def test_sidecar_timestamped_variant_matches() -> None:
     # Covered by the plain SIDECAR_SUFFIXES endswith check alone — a former
     # dedicated TIMESTAMPED_SIDECAR_RE regex was confirmed dead code (every
     # string it matched already satisfied endswith(SIDECAR_SUFFIXES)) and
@@ -167,16 +172,16 @@ def test_sidecar_timestamped_variant_matches():
     assert is_sidecar_filename("2026-07-12T14-slug.c0-findings.md") is True
 
 
-def test_sidecar_rejects_non_matching_name():
+def test_sidecar_rejects_non_matching_name() -> None:
     assert is_sidecar_filename("plain-design-doc.md") is False
     assert is_sidecar_filename("2026-07-12-plan.md") is False
 
 
-def test_sidecar_bare_dash_check_suffix_matches():
+def test_sidecar_bare_dash_check_suffix_matches() -> None:
     assert is_sidecar_filename("2026-07-10-percolation-engine-claude-klabauter.v3-divergence-check.md") is True
 
 
-def test_sidecar_bare_dash_review_suffix_matches():
+def test_sidecar_bare_dash_review_suffix_matches() -> None:
     # C1 — confirmed real, on-disk class: reviewer-named dash-separated review
     # sidecars (the Staff Engineer-review.md, sonnet-review.md, eng-director-review.md,
     # OVERVIEW.the Director of Engineering-review.md) live under docs/plans/ and state/review-trail/,
@@ -189,7 +194,7 @@ def test_sidecar_bare_dash_review_suffix_matches():
     assert is_sidecar_filename("OVERVIEW.zoli-review.md") is True
 
 
-def test_sidecar_narrowed_suffixes_reject_plausible_non_reviewer_plan_filename():
+def test_sidecar_narrowed_suffixes_reject_plausible_non_reviewer_plan_filename() -> None:
     assert is_sidecar_filename(
         "2026-07-23-hook-repoint-validation-doctrine-hooks-check.md"
     ) is False
@@ -197,7 +202,7 @@ def test_sidecar_narrowed_suffixes_reject_plausible_non_reviewer_plan_filename()
     assert is_sidecar_filename("2026-07-01-some-plan.pre-commit-hook-check.md") is False
 
 
-def test_sidecar_corpus_archive_specs_all_match_no_plan_body_matches():
+def test_sidecar_corpus_archive_specs_all_match_no_plan_body_matches() -> None:
     from pathlib import Path
 
     repo_root = Path(__file__).resolve().parents[3]
@@ -226,7 +231,7 @@ def test_sidecar_corpus_archive_specs_all_match_no_plan_body_matches():
 
 
 @_requires_rg
-def test_active_reference_guard_finds_match(tmp_path):
+def test_active_reference_guard_finds_match(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "some-doc.md").write_text("references archive/specs/old-thing.md here\n")
@@ -234,7 +239,7 @@ def test_active_reference_guard_finds_match(tmp_path):
 
 
 @_requires_rg
-def test_active_reference_guard_no_match(tmp_path):
+def test_active_reference_guard_no_match(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "some-doc.md").write_text("nothing relevant here\n")
@@ -339,17 +344,17 @@ def test_active_reference_guard_pointer_page_unreadable_head_counts_as_cited(tmp
     )
 
 
-def test_active_reference_guard_absent_scope_returns_false(tmp_path):
+def test_active_reference_guard_absent_scope_returns_false(tmp_path: Path) -> None:
     assert active_reference_guard("anything", tmp_path) is False
 
 
-def test_active_reference_guard_raises_on_ripgrep_error(tmp_path, monkeypatch):
+def test_active_reference_guard_raises_on_ripgrep_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
 
     monkeypatch.setattr(_common.shutil, "which", lambda name: f"/usr/bin/{name}")
 
-    def fake_run(*args, **kwargs):
+    def fake_run(*args, **kwargs) -> CompletedProcess[str]:
         return subprocess.CompletedProcess(args, returncode=2, stdout="", stderr="boom")
 
     monkeypatch.setattr(_common.subprocess, "run", fake_run)
@@ -357,11 +362,11 @@ def test_active_reference_guard_raises_on_ripgrep_error(tmp_path, monkeypatch):
         active_reference_guard("needle", tmp_path)
 
 
-def _force_rg_absent(monkeypatch):
+def _force_rg_absent(monkeypatch) -> None:
     monkeypatch.setattr(_common.shutil, "which", lambda _name: None)
 
 
-def test_every_reference_guard_refuses_without_rg_and_reads_zero_files(monkeypatch, tmp_path):
+def test_every_reference_guard_refuses_without_rg_and_reads_zero_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _force_rg_absent(monkeypatch)
     docs = tmp_path / "docs"
     docs.mkdir()
@@ -369,7 +374,7 @@ def test_every_reference_guard_refuses_without_rg_and_reads_zero_files(monkeypat
     reads: list[object] = []
     real_read_text = _common.Path.read_text
 
-    def counting_read_text(self, *args, **kwargs):
+    def counting_read_text(self, *args, **kwargs) -> str:
         reads.append(self)
         return real_read_text(self, *args, **kwargs)
 
@@ -384,11 +389,11 @@ def test_every_reference_guard_refuses_without_rg_and_reads_zero_files(monkeypat
     assert reads == []
 
 
-def test_ripgrep_unavailable_is_a_runtime_error():
+def test_ripgrep_unavailable_is_a_runtime_error() -> None:
     assert issubclass(RipgrepUnavailableError, RuntimeError)
 
 
-def test_referenced_needles_reads_each_file_once(monkeypatch, tmp_path):
+def test_referenced_needles_reads_each_file_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     files = []
     for i in range(3):
         f = tmp_path / f"f{i}.md"
@@ -397,7 +402,7 @@ def test_referenced_needles_reads_each_file_once(monkeypatch, tmp_path):
     reads: list[object] = []
     real_read_text = _common.Path.read_text
 
-    def counting_read_text(self, *args, **kwargs):
+    def counting_read_text(self, *args, **kwargs) -> str:
         reads.append(self)
         return real_read_text(self, *args, **kwargs)
 
@@ -407,13 +412,13 @@ def test_referenced_needles_reads_each_file_once(monkeypatch, tmp_path):
     assert len(reads) == 3
 
 
-def test_referenced_needles_unreadable_file_blocks_every_needle(tmp_path):
+def test_referenced_needles_unreadable_file_blocks_every_needle(tmp_path: Path) -> None:
     result = referenced_needles(["a.md", "b.md"], [str(tmp_path / "missing.md")])
     assert result == {"a.md": True, "b.md": True}
 
 
 @_requires_rg
-def test_referenced_needles_parity_with_per_needle_guard(tmp_path):
+def test_referenced_needles_parity_with_per_needle_guard(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "live.md").write_text("see x/live.md and x/both.md\n", encoding="utf-8")
@@ -449,7 +454,7 @@ def test_referenced_needles_parity_with_per_needle_guard(tmp_path):
 # ---------------------------------------------------------------------------
 
 @_requires_rg
-def test_active_reference_guard_excludes_provenance_only_citation(tmp_path):
+def test_active_reference_guard_excludes_provenance_only_citation(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "harvested.md").write_text(
@@ -464,7 +469,7 @@ def test_active_reference_guard_excludes_provenance_only_citation(tmp_path):
 
 
 @_requires_rg
-def test_active_reference_guard_excludes_cross_repo_memo_tombstone(tmp_path):
+def test_active_reference_guard_excludes_cross_repo_memo_tombstone(tmp_path: Path) -> None:
     # The memo half of the same contract: a harvested commitment memo whose ONLY citation is
     # its own `cross_repo_memo:` tombstone is deletable. Pinned separately from the
     # `archived_handoff:` case because the two keys arrive from different harvest paths — a
@@ -485,7 +490,7 @@ def test_active_reference_guard_excludes_cross_repo_memo_tombstone(tmp_path):
 
 
 @_requires_rg
-def test_active_reference_guard_blocks_citation_outside_provenance_block(tmp_path):
+def test_active_reference_guard_blocks_citation_outside_provenance_block(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "still-cited.md").write_text(
@@ -498,7 +503,7 @@ def test_active_reference_guard_blocks_citation_outside_provenance_block(tmp_pat
 
 
 @_requires_rg
-def test_active_reference_guard_blocks_when_cited_both_inside_and_outside_provenance_block(tmp_path):
+def test_active_reference_guard_blocks_when_cited_both_inside_and_outside_provenance_block(tmp_path: Path) -> None:
     docs = tmp_path / "docs"
     docs.mkdir()
     (docs / "harvested.md").write_text(
@@ -512,7 +517,7 @@ def test_active_reference_guard_blocks_when_cited_both_inside_and_outside_proven
 
 
 @_requires_rg
-def test_active_reference_guard_blocks_on_unknown_marker_key(tmp_path):
+def test_active_reference_guard_blocks_on_unknown_marker_key(tmp_path: Path) -> None:
     # A citation inside a frontmatter block under a key that is NOT in
     # PROVENANCE_MARKER_KEYS is not recognized as a tombstone -> blocks, exactly like a
     # plain prose citation. Ambiguity blocks; only the named, DoE-ratified key set is
@@ -529,20 +534,20 @@ def test_active_reference_guard_blocks_on_unknown_marker_key(tmp_path):
     assert active_reference_guard("archive/handoffs/old-thing.md", tmp_path) is True
 
 
-def test_frontmatter_reexports_are_the_primitives_functions():
+def test_frontmatter_reexports_are_the_primitives_functions() -> None:
     from coordinator_core.frontmatter import primitives
 
     assert split_frontmatter is primitives.split_frontmatter
     assert read_fm_field is primitives.read_fm_field
 
 
-def test_frontmatter_reexport_round_trip():
+def test_frontmatter_reexport_round_trip() -> None:
     text = "---\nstatus: implemented\n---\nbody text\n"
     split = split_frontmatter(text)
     assert split is not None
     assert read_fm_field(split.fm_text, "status") == "implemented"
 
 
-def test_common_does_not_export_mutation_helpers():
+def test_common_does_not_export_mutation_helpers() -> None:
     for name in ("insert_fm_field", "replace_fm_field", "remove_fm_field", "rebuild"):
         assert not hasattr(_common, name) or name not in _common.__all__

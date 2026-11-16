@@ -7,10 +7,11 @@ from coordinator_core.ops.dispatch_emit import halt_resume_record as hrr
 from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_contract import _read_json_object
 from coordinator_core.session import claim_index, touch_record
+from pathlib import Path
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds a stalled claim lookup that must answer no-hold at its deadline")
-def test_peer_held_answers_no_hold_when_claim_lookup_stalls(tmp_path, monkeypatch):
+def test_peer_held_answers_no_hold_when_claim_lookup_stalls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(land_run, "PEER_CLAIM_LOOKUP_DEADLINE_S", 0.1)
     monkeypatch.setattr(claim_index, "lookup", lambda *a, **k: time.sleep(2) or {})
     t0 = time.monotonic()
@@ -19,13 +20,13 @@ def test_peer_held_answers_no_hold_when_claim_lookup_stalls(tmp_path, monkeypatc
     assert held == {}
 
 
-def test_bounded_claim_lookup_passes_a_fast_answer_through(monkeypatch):
+def test_bounded_claim_lookup_passes_a_fast_answer_through(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(claim_index, "lookup", lambda paths, cwd=None: {"a": ["s"]})
     assert land_run._bounded_claim_lookup(claim_index, ["a"], "x") == {"a": ["s"]}
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds a stalled JSON read that must give up at the read deadline")
-def test_read_json_object_refuses_oversize_and_stalled(tmp_path, monkeypatch):
+def test_read_json_object_refuses_oversize_and_stalled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     big = tmp_path / "run.json"
     big.write_text('{"k": "' + "x" * 200 + '"}', encoding="utf-8")
     assert _read_json_object(big) == {"k": "x" * 200}
@@ -36,7 +37,7 @@ def test_read_json_object_refuses_oversize_and_stalled(tmp_path, monkeypatch):
     assert time.monotonic() - t0 < 1.0
 
 
-def test_walk_stops_at_wall_deadline(tmp_path, monkeypatch):
+def test_walk_stops_at_wall_deadline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for i in range(5):
         d = tmp_path / f"sess{i}"
         d.mkdir()
@@ -47,7 +48,7 @@ def test_walk_stops_at_wall_deadline(tmp_path, monkeypatch):
     assert state.abort_cause == claim_index.ABORT_CAUSE_CAP_EXCEEDED
 
 
-def test_oversize_sink_degrades_not_hangs(tmp_path, monkeypatch):
+def test_oversize_sink_degrades_not_hangs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(touch_record, "_MAX_SINK_BYTES", 10)
     sink = tmp_path / "touch-record.jsonl"
     sink.write_bytes(b"x" * 100)
@@ -55,14 +56,14 @@ def test_oversize_sink_degrades_not_hangs(tmp_path, monkeypatch):
     assert degraded and reasons
 
 
-def test_agent_owner_sid_caps_first_line(tmp_path):
+def test_agent_owner_sid_caps_first_line(tmp_path: Path) -> None:
     (tmp_path / "em-session-id.txt").write_text("s" * 100000, encoding="utf-8")
     sid, ok = touch_record.agent_owner_sid(str(tmp_path))
     assert ok and len(sid) == touch_record._AGENT_OWNER_MAX_CHARS
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds a stalled open that must return the default at the read deadline")
-def test_hook_state_reads_return_default_when_open_stalls(tmp_path, monkeypatch):
+def test_hook_state_reads_return_default_when_open_stalls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks import postuse_advisory_dispatch as pad
 
     monkeypatch.setattr(hrr, "_read_file", lambda p: time.sleep(2) or b"{}")
@@ -72,7 +73,7 @@ def test_hook_state_reads_return_default_when_open_stalls(tmp_path, monkeypatch)
     assert time.monotonic() - t0 < 1.0
 
 
-def test_hook_state_reads_unchanged_for_normal_files(tmp_path):
+def test_hook_state_reads_unchanged_for_normal_files(tmp_path: Path) -> None:
     from coordinator_core.hooks import postuse_advisory_dispatch as pad
 
     f = tmp_path / "r.json"
@@ -80,7 +81,7 @@ def test_hook_state_reads_unchanged_for_normal_files(tmp_path):
     assert pad._read_workflow_run_record(str(f)) == {"a": 1}
 
 
-def test_token_dir_scan_opens_nothing_when_unchanged(tmp_path, monkeypatch):
+def test_token_dir_scan_opens_nothing_when_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import run_token
 
     for i in range(20):

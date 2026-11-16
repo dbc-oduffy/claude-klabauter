@@ -127,7 +127,7 @@ def _bootstraps_lib(source: str) -> bool:
     )
 
 
-def test_every_bare_name_lib_importer_bootstraps_lib_first():
+def test_every_bare_name_lib_importer_bootstraps_lib_first() -> None:
     siblings = _sibling_module_names()
     assert siblings, f"no lib siblings discovered under {LIB_DIR} — test is inert"
 
@@ -154,7 +154,7 @@ def test_every_bare_name_lib_importer_bootstraps_lib_first():
     )
 
 
-def test_the_check_catches_a_planted_omission():
+def test_the_check_catches_a_planted_omission() -> None:
     """Proof the gate above can fail — a green suite must mean the tree is clean,
     never that the detector stopped detecting."""
     siblings = _sibling_module_names()
@@ -355,7 +355,7 @@ def _find_unbound_bin_targeting_calls(source: str, is_repo_root_bin: bool) -> li
     return offending
 
 
-def test_no_bin_script_path_load_skips_the_bind():
+def test_no_bin_script_path_load_skips_the_bind() -> None:
     stale = set(_EXEMPT)
     offenders: list[str] = []
 
@@ -425,7 +425,7 @@ def test_no_bin_script_path_load_skips_the_bind():
     )
 
 
-def test_the_bin_load_check_catches_a_planted_omission():
+def test_the_bin_load_check_catches_a_planted_omission() -> None:
     """Proof the check above can fail two different ways — an outright
     missing bind, and a bind that exists but does not dominate (planted
     under an `if` ahead of the spec call)."""

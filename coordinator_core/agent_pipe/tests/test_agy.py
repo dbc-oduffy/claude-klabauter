@@ -21,12 +21,12 @@ def _lines() -> list[str]:
     return FIXTURE.read_text(encoding="utf-8").splitlines()
 
 
-def test_parse_line_yields_only_agent_messages():
+def test_parse_line_yields_only_agent_messages() -> None:
     parsed = [AgyAdapter().parse_line(line) for line in _lines()]
     assert [p for p in parsed if p is not None] == [(CONV, "ALPHA\n\nBETA")]
 
 
-def test_parse_line_ignores_garbage():
+def test_parse_line_ignores_garbage() -> None:
     a = AgyAdapter()
     assert a.parse_line("") is None
     assert a.parse_line("not json") is None
@@ -34,20 +34,20 @@ def test_parse_line_ignores_garbage():
     assert a.parse_line('{"event":"step_update","step_update":{"step_type":"agent_response","text_delta":"x"}}') is None
 
 
-def test_parse_line_records_quota_cause_from_error_event():
+def test_parse_line_records_quota_cause_from_error_event() -> None:
     a = AgyAdapter()
     assert a.parse_line('{"event":"error","error":{"message":"RESOURCE_EXHAUSTED: quota exceeded"}}') is None
     assert a.cause == "quota_exhausted"
 
 
-def test_ordinary_stream_leaves_no_cause():
+def test_ordinary_stream_leaves_no_cause() -> None:
     a = AgyAdapter()
     for line in _lines():
         a.parse_line(line)
     assert a.cause is None
 
 
-def test_argv_shapes_and_no_bypass(monkeypatch):
+def test_argv_shapes_and_no_bypass(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("coordinator_core.agent_pipe.agy.shutil.which", lambda name: "/bin/agy")
     a = AgyAdapter()
     spawn = a.spawn_argv("hi")
@@ -61,7 +61,7 @@ def test_argv_shapes_and_no_bypass(monkeypatch):
         assert settings == {"permissions": {"allow": [f"command({c} *)" for c in agy_mod.DEFAULT_ALLOW_COMMANDS]}}
 
 
-def test_caller_allowlist_is_rendered_and_no_argv_carries_a_bare_wildcard(monkeypatch):
+def test_caller_allowlist_is_rendered_and_no_argv_carries_a_bare_wildcard(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("coordinator_core.agent_pipe.agy.shutil.which", lambda name: "/bin/agy")
     for a in (AgyAdapter(), AgyAdapter(["pytest", "git status"])):
         for argv in (a.spawn_argv("p"), a.resume_argv("c", "t")):
@@ -71,7 +71,7 @@ def test_caller_allowlist_is_rendered_and_no_argv_carries_a_bare_wildcard(monkey
     assert custom == {"permissions": {"allow": ["command(pytest *)"]}}
 
 
-def test_wildcard_or_empty_allowlist_entry_is_refused():
+def test_wildcard_or_empty_allowlist_entry_is_refused() -> None:
     import pytest
 
     for bad in (["*"], ["command(*)"], ["git", "*"], ["py*"], [""], []):
@@ -83,7 +83,7 @@ def _would_allow(command: str) -> bool:
     return any(command == c or command.startswith(c + " ") for c in agy_mod.DEFAULT_ALLOW_COMMANDS)
 
 
-def test_default_allowlist_is_exact_prefixes_and_never_permits_push_or_python_dash_c():
+def test_default_allowlist_is_exact_prefixes_and_never_permits_push_or_python_dash_c() -> None:
     defaults = agy_mod.DEFAULT_ALLOW_COMMANDS
     assert not set(defaults) & {"python", "python3", "git", "nohup"}
     assert all(len(c.split()) >= 2 for c in defaults)
@@ -95,7 +95,7 @@ def test_default_allowlist_is_exact_prefixes_and_never_permits_push_or_python_da
         assert not _would_allow(denied), denied
 
 
-def test_validated_refuses_bare_interpreters_push_dash_c_and_metacharacters():
+def test_validated_refuses_bare_interpreters_push_dash_c_and_metacharacters() -> None:
     import pytest
 
     for bad in (["python"], ["python3"], ["git"], ["nohup"], ["nohup *"], ["python -c"], ["python3 -c x"],
@@ -106,7 +106,7 @@ def test_validated_refuses_bare_interpreters_push_dash_c_and_metacharacters():
     AgyAdapter(["python coordinator/bin/x.py", "nohup  python3   coordinator/bin/y.py", "git log"])
 
 
-def test_agy_missing_from_path_falls_back_to_bare_name(monkeypatch):
+def test_agy_missing_from_path_falls_back_to_bare_name(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("coordinator_core.agent_pipe.agy.shutil.which", lambda name: None)
     assert AgyAdapter().spawn_argv("p")[0] == "agy"
 
@@ -114,7 +114,7 @@ def test_agy_missing_from_path_falls_back_to_bare_name(monkeypatch):
 FAKE_ACP = [sys.executable, str(Path(__file__).parent / "fixtures" / "fake_acp_agent.py")]
 
 
-def test_agy_acp_driver_argv_is_agy_acp_with_no_bypass(monkeypatch):
+def test_agy_acp_driver_argv_is_agy_acp_with_no_bypass(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(agy_mod.shutil, "which", lambda name: None)
     assert AgyAcpDriver()._argv == ["agy", "acp"]
     monkeypatch.setattr(agy_mod.shutil, "which", lambda name: "/opt/agy")
@@ -122,7 +122,7 @@ def test_agy_acp_driver_argv_is_agy_acp_with_no_bypass(monkeypatch):
     assert AgyAcpDriver(argv=FAKE_ACP)._argv == FAKE_ACP
 
 
-def test_agy_acp_driver_starts_prompts_and_resumes_over_acp(monkeypatch):
+def test_agy_acp_driver_starts_prompts_and_resumes_over_acp(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("FAKE_ACP_LOG", raising=False)
     with AgyAcpDriver(argv=FAKE_ACP) as d:
         h = d.start("/w")
@@ -132,7 +132,7 @@ def test_agy_acp_driver_starts_prompts_and_resumes_over_acp(monkeypatch):
         assert d.resume(h.session_id).session_id == h.session_id
 
 
-def test_agy_adapter_headless_argv_unchanged_by_acp_driver(monkeypatch):
+def test_agy_adapter_headless_argv_unchanged_by_acp_driver(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(agy_mod.shutil, "which", lambda name: None)
     assert AgyAdapter().spawn_argv("p")[:5] == ["agy", "-p", "p", "--output-format", "stream-json"]
 

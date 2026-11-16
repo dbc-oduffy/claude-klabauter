@@ -8,6 +8,7 @@ import json
 
 from coordinator_core.frontmatter.primitives import canonical_body_sha
 from coordinator_core.hooks.block_workflow_foreign_emission import _handler
+from pathlib import Path
 
 PLAN_REL = "docs/plans/p.md"
 PLAN_V1 = "---\ntitle: p\n---\n\n# P\n\nold wording\n"
@@ -35,24 +36,24 @@ def _provenance(text):
     return {"plan_body_sha": canonical_body_sha(text), "plan_relpath": PLAN_REL}
 
 
-def _denied(result):
+def _denied(result) -> bool:
     return "deny" in json.dumps(result)
 
 
-def test_amended_plan_is_denied_naming_reemit(tmp_path):
+def test_amended_plan_is_denied_naming_reemit(tmp_path: Path) -> None:
     result = _fire(tmp_path, receipt_extra=_provenance(PLAN_V1), plan_now=PLAN_V2)
     assert _denied(result)
     assert "changed since emission" in json.dumps(result)
     assert "--plan " + PLAN_REL in json.dumps(result)
 
 
-def test_unchanged_plan_fires(tmp_path):
+def test_unchanged_plan_fires(tmp_path: Path) -> None:
     assert not _denied(_fire(tmp_path, receipt_extra=_provenance(PLAN_V1)))
 
 
-def test_legacy_receipt_without_key_fires(tmp_path):
+def test_legacy_receipt_without_key_fires(tmp_path: Path) -> None:
     assert not _denied(_fire(tmp_path, plan_now=PLAN_V2))
 
 
-def test_missing_plan_fires(tmp_path):
+def test_missing_plan_fires(tmp_path: Path) -> None:
     assert not _denied(_fire(tmp_path, receipt_extra=_provenance(PLAN_V1), plan_now=None))

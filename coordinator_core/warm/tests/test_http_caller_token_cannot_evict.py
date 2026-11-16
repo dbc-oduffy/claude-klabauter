@@ -58,11 +58,12 @@ from http.server import ThreadingHTTPServer
 
 from coordinator_core.warm import cookie, hook_http, skew, supervisor
 from coordinator_core.warm.http_listener import ENGINE_TOKEN_HEADER, _frame_from_request
+from pathlib import Path
 
 SERVER_TOKEN = "5e4be47a0000ffff"
 
 
-def _live_listener(tmp_path):
+def _live_listener(tmp_path) -> tuple[int, str, ThreadingHTTPServer]:
     skew.write_engine_stamp(tmp_path, "sha-test")
     token = cookie.ensure(tmp_path)
     ctx = supervisor._ServerContext(
@@ -127,7 +128,7 @@ def _hostile_event():
     }
 
 
-def test_a_stale_caller_is_refused_and_the_listener_keeps_serving(tmp_path):
+def test_a_stale_caller_is_refused_and_the_listener_keeps_serving(tmp_path: Path) -> None:
     """AC9, ASSERTION 1 -- REWRITTEN, NOT MADE GREEN BY ASSERTING THE NEW BEHAVIOUR.
 
     This assertion used to say the server overwrites a caller's token. It does not
@@ -158,7 +159,7 @@ def test_a_stale_caller_is_refused_and_the_listener_keeps_serving(tmp_path):
         httpd.server_close()
 
 
-def test_a_burst_of_stale_callers_cannot_drain_the_engine(tmp_path):
+def test_a_burst_of_stale_callers_cannot_drain_the_engine(tmp_path: Path) -> None:
     """AC9, ASSERTION 2 -- one refusal leaving the listener up could be luck. A run of
     them establishes that the refusal path is not wired to any drain or close."""
     port, token, httpd = _live_listener(tmp_path)
@@ -174,7 +175,7 @@ def test_a_burst_of_stale_callers_cannot_drain_the_engine(tmp_path):
         httpd.server_close()
 
 
-def test_build_request_never_lifts_a_caller_token_to_the_top_level():
+def test_build_request_never_lifts_a_caller_token_to_the_top_level() -> None:
     frame = hook_http.build_request(_hostile_event(), hook_http.DEFAULT_OP_NAME)
 
     assert _top_level_token(frame) is None, (
@@ -187,7 +188,7 @@ def test_build_request_never_lifts_a_caller_token_to_the_top_level():
     )
 
 
-def test_a_none_token_passes_the_body_through_verbatim():
+def test_a_none_token_passes_the_body_through_verbatim() -> None:
     """THE ARMING CONDITION, asserted so it cannot be introduced silently.
 
     `_frame_from_request` returns the body UNCHANGED when the token is None. That is why

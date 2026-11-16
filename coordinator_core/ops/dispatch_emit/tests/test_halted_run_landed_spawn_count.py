@@ -52,14 +52,14 @@ def _commit_files(repo: Path, files: dict) -> str:
 
 
 @pytest.fixture(autouse=True)
-def launches(monkeypatch):
+def launches(monkeypatch: pytest.MonkeyPatch):
     calls: list = []
     monkeypatch.setattr(op, "_launch", lambda root, run_id: calls.append(run_id) or True)
     return calls
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> tuple[Path, list[str]]:
     _git(tmp_path, "init", "-q")
     shas = [_commit_files(tmp_path, {f"f{i}": str(i)}) for i in range(3)]
     return tmp_path, shas
@@ -92,7 +92,7 @@ def _count(monkeypatch, root: Path, **params):
     return out, spawns
 
 
-def test_sibling_run_full_sha_spawns_one_ancestry_check(repo, monkeypatch):
+def test_sibling_run_full_sha_spawns_one_ancestry_check(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, shas = repo
     _seed_sibling(root)
     out, spawns = _count(monkeypatch, root, run_id="A", sha=shas[0])
@@ -100,7 +100,7 @@ def test_sibling_run_full_sha_spawns_one_ancestry_check(repo, monkeypatch):
     assert len(spawns) == _budget()["ancestry_check"], [s.argv for s in spawns]  # sibling run: no record-dir commit
 
 
-def test_solo_run_full_sha_spawns_one_ancestry_check(repo, monkeypatch):
+def test_solo_run_full_sha_spawns_one_ancestry_check(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, shas = repo
     _seed_solo(root)
     out, spawns = _count(monkeypatch, root, run_id=SOLO, sha=shas[0])
@@ -108,7 +108,7 @@ def test_solo_run_full_sha_spawns_one_ancestry_check(repo, monkeypatch):
     assert len(spawns) == _budget()["ancestry_check"] + RECORD_COMMIT_SPAWNS, [s.argv for s in spawns]
 
 
-def test_abbreviated_sha_spawns_prefix_resolve_plus_ancestry_check(repo, monkeypatch):
+def test_abbreviated_sha_spawns_prefix_resolve_plus_ancestry_check(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, shas = repo
     _seed_solo(root)
     out, spawns = _count(monkeypatch, root, run_id=SOLO, sha=shas[0][:12])
@@ -119,7 +119,7 @@ def test_abbreviated_sha_spawns_prefix_resolve_plus_ancestry_check(repo, monkeyp
     ), [s.argv for s in spawns]
 
 
-def test_three_sha_set_is_still_one_ancestry_check(repo, monkeypatch):
+def test_three_sha_set_is_still_one_ancestry_check(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, shas = repo
     _seed_solo(root)
     out, spawns = _count(monkeypatch, root, run_id=SOLO, shas=list(shas))
@@ -127,7 +127,7 @@ def test_three_sha_set_is_still_one_ancestry_check(repo, monkeypatch):
     assert len(spawns) == _budget()["ancestry_check"] + RECORD_COMMIT_SPAWNS, [s.argv for s in spawns]
 
 
-def test_several_withheld_paths_add_no_per_path_spawn(repo, monkeypatch):
+def test_several_withheld_paths_add_no_per_path_spawn(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _ = repo
     names = {f"docs/w{i}.md": str(i) for i in range(5)}
     landed = _commit_files(root, names)
@@ -140,7 +140,7 @@ def test_several_withheld_paths_add_no_per_path_spawn(repo, monkeypatch):
     assert len(spawns) == _budget()["ancestry_check"] + RECORD_COMMIT_SPAWNS, [s.argv for s in spawns]
 
 
-def test_idempotent_second_call_spawns_nothing(repo, monkeypatch):
+def test_idempotent_second_call_spawns_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, shas = repo
     _seed_sibling(root)
     assert op._handler({"run_id": "A", "sha": shas[0]}, root)["ok"]
@@ -149,7 +149,7 @@ def test_idempotent_second_call_spawns_nothing(repo, monkeypatch):
     assert spawns == []
 
 
-def test_full_sha_that_is_not_a_commit_spawns_nothing(repo, monkeypatch):
+def test_full_sha_that_is_not_a_commit_spawns_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _ = repo
     _seed_solo(root)
     out, spawns = _count(monkeypatch, root, run_id=SOLO, sha="b" * 40)
@@ -157,7 +157,7 @@ def test_full_sha_that_is_not_a_commit_spawns_nothing(repo, monkeypatch):
     assert spawns == []
 
 
-def test_a_written_landing_launches_the_close_job_exactly_once(repo, launches):
+def test_a_written_landing_launches_the_close_job_exactly_once(repo, launches) -> None:
     root, shas = repo
     _seed_solo(root, plan="docs/plans/p.md", blocking=["R1"], met_by={"R1": "d" * 40}, run_base_sha="c" * 40)
     out = op._handler({"run_id": SOLO, "sha": shas[0]}, root)

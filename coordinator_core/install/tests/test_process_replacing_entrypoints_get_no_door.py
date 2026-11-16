@@ -31,22 +31,23 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.install import door_install, substrate
+from pathlib import Path
 
 
-def test_claude_author_gets_no_door_image():
+def test_claude_author_gets_no_door_image() -> None:
     """The roster is reachable through a named predicate, not read directly
     by its callers -- `substrate` asks the question, `door_install` owns the
     answer."""
     assert not door_install.name_gets_door_image("claude-author")
 
 
-def test_an_ordinary_op_name_gets_a_door_image():
+def test_an_ordinary_op_name_gets_a_door_image() -> None:
     """The roster is a carve-out, not a gate: everything else still cuts
     over. `blocked` is the name the 2026-09-02 report reproduced on."""
     assert door_install.name_gets_door_image("blocked")
 
 
-def test_no_native_image_is_written_for_a_process_replacing_name(tmp_path):
+def test_no_native_image_is_written_for_a_process_replacing_name(tmp_path: Path) -> None:
     """`_write_native_door_forwarder` returns None BEFORE it consults the
     engine root at all -- so the refusal holds on a box whose root would
     otherwise supply a perfectly good door."""
@@ -61,7 +62,7 @@ def test_no_native_image_is_written_for_a_process_replacing_name(tmp_path):
     assert not (bin_dst / "claude-author").exists()
 
 
-def test_a_stale_image_from_an_earlier_install_is_taken_back(tmp_path):
+def test_a_stale_image_from_an_earlier_install_is_taken_back(tmp_path: Path) -> None:
     """The fix has to reach a box that already ran the broken cutover. On
     POSIX the image is not merely outranked by the Python forwarder -- it IS
     the name's only file, so leaving it is leaving the break in place."""
@@ -78,7 +79,7 @@ def test_a_stale_image_from_an_earlier_install_is_taken_back(tmp_path):
     assert not stale.exists()
 
 
-def test_check_only_reports_but_removes_nothing(tmp_path):
+def test_check_only_reports_but_removes_nothing(tmp_path: Path) -> None:
     """A probe must not mutate -- the same contract every other branch of
     this function honours."""
     bin_dst = tmp_path / "bin"
@@ -95,7 +96,7 @@ def test_check_only_reports_but_removes_nothing(tmp_path):
 
 
 @pytest.mark.parametrize("name", sorted(door_install._EXEC_SHAPED_NAMES))
-def test_every_rostered_name_actually_execs(name):
+def test_every_rostered_name_actually_execs(name) -> None:
     """The roster is only honest while its members still exec. A name whose
     entrypoint stopped replacing its process should REJOIN the door rather
     than sit here collecting an exemption it no longer needs -- the mistake

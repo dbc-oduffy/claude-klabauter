@@ -8,12 +8,13 @@ import yaml
 from coordinator_core.ops import baton_pm_turns as PT
 from coordinator_core.ops.dispatch_emit import ask_fanout as mod
 from coordinator_core.session_baton import store
+from pathlib import Path
 
 SID = "sid-stop-after"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "hub" / SID).mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
@@ -29,7 +30,7 @@ def _files(repo):
     return sorted(p.relative_to(repo).as_posix() for p in repo.rglob("*") if p.is_file() and "hub" not in p.parts)
 
 
-def test_stop_after_lands_on_exactly_the_entry_that_set_it(repo):
+def test_stop_after_lands_on_exactly_the_entry_that_set_it(repo) -> None:
     out = _go(repo, [
         {"ask": "fix a", "writes": ["a.py"], "stop_after": "plan"},
         {"ask": "fix b", "writes": ["b.py"]},
@@ -39,7 +40,7 @@ def test_stop_after_lands_on_exactly_the_entry_that_set_it(repo):
     assert [d["em_analysis"].get("stop_after") for d in docs] == ["plan", None]
 
 
-def test_bad_stop_after_refuses_naming_the_key_and_writes_nothing(repo):
+def test_bad_stop_after_refuses_naming_the_key_and_writes_nothing(repo) -> None:
     before = _files(repo)
     out = _go(repo, [{"ask": "fix a"}, {"ask": "fix b", "stop_after": "execute"}])
     assert out["exit_code"] == 1 and out["applied"] is False

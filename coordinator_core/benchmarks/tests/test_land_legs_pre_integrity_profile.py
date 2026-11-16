@@ -12,6 +12,7 @@ import pytest
 from coordinator_core.benchmarks import land_legs_pre_integrity_profile as prof
 from coordinator_core.benchmarks import land_run_dirty_scan_bytes as fixture
 from coordinator_core.ops.dispatch_emit import land_deadline
+from pathlib import Path
 
 pytestmark = pytest.mark.cadence
 
@@ -36,7 +37,7 @@ class _Clock:
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path):
     fx = fixture.build_fixture(tmp_path / "r", 25, 3)
     return tmp_path / "r", fx["paths"]
 
@@ -46,7 +47,7 @@ def _measure(repo, **kw):
     return prof.measure(root, paths, RUN_ID, "state/sizings/x.yaml", **kw)
 
 
-def test_report_shape(repo):
+def test_report_shape(repo) -> None:
     res = _measure(repo)
     assert set(res["legs"]) == set(prof.LEGS)
     for leg in res["legs"].values():
@@ -57,7 +58,7 @@ def test_report_shape(repo):
     assert res["wall_fits"] is True and res["process_fits"] is True
 
 
-def test_per_touch_delay_turns_wall_red_while_process_and_spawns_stay_flat(repo):
+def test_per_touch_delay_turns_wall_red_while_process_and_spawns_stay_flat(repo) -> None:
     base = _measure(repo)
     touches = base["total"]["files_touched"]
     assert touches > 0
@@ -71,7 +72,7 @@ def test_per_touch_delay_turns_wall_red_while_process_and_spawns_stay_flat(repo)
     assert base["wall_fits"] is True
 
 
-def test_recorded_baseline_of_this_repo_stays_under_the_ceilings():
+def test_recorded_baseline_of_this_repo_stays_under_the_ceilings() -> None:
     """Runs the default-args benchmark on this tree; pins spawns and process ceiling, never wall."""
     root = prof._REPO
     inputs = prof.default_inputs(root)

@@ -28,14 +28,14 @@ def _git(repo: Path, *args: str) -> str:
 
 
 @pytest.fixture
-def launches(monkeypatch):
+def launches(monkeypatch: pytest.MonkeyPatch):
     calls: list = []
     monkeypatch.setattr(op, "_launch", lambda root, run_id: calls.append(run_id) or True)
     return calls
 
 
 @pytest.fixture
-def repo(tmp_path, launches):
+def repo(tmp_path: Path, launches) -> tuple[Path, str]:
     _git(tmp_path, "init", "-q")
     (tmp_path / "one").write_text("one", encoding="utf-8")
     _git(tmp_path, "add", "--", "one")
@@ -69,7 +69,7 @@ def _past() -> datetime:
     return datetime.now().astimezone() - timedelta(hours=1)
 
 
-def test_stale_unpaid_job_is_requeued_and_relaunched(repo, launches):
+def test_stale_unpaid_job_is_requeued_and_relaunched(repo, launches) -> None:
     root, sha = repo
     _job(root, _past())
     close = _land(root, sha)["close"]
@@ -81,7 +81,7 @@ def test_stale_unpaid_job_is_requeued_and_relaunched(repo, launches):
     assert {leg: r.status for leg, r in legs.items()} == {leg: "queued" for leg in LEGS}
 
 
-def test_failed_relaunch_replies_the_next_action(repo, launches, monkeypatch):
+def test_failed_relaunch_replies_the_next_action(repo, launches, monkeypatch: pytest.MonkeyPatch) -> None:
     root, sha = repo
     monkeypatch.setattr(op, "_launch", lambda root, run_id: False)
     _job(root, _past())
@@ -90,7 +90,7 @@ def test_failed_relaunch_replies_the_next_action(repo, launches, monkeypatch):
     assert RID in close["next_action"] and "close_background.py" in close["next_action"]
 
 
-def test_fully_paid_job_stays_not_applicable_and_spawns_nothing(repo, launches):
+def test_fully_paid_job_stays_not_applicable_and_spawns_nothing(repo, launches) -> None:
     root, sha = repo
     _job(root, _past(), settle_all=True)
     close = _land(root, sha)["close"]
@@ -98,7 +98,7 @@ def test_fully_paid_job_stays_not_applicable_and_spawns_nothing(repo, launches):
     assert launches == []
 
 
-def test_job_inside_its_deadline_is_in_flight_is_not_relaunched(repo, launches):
+def test_job_inside_its_deadline_is_in_flight_is_not_relaunched(repo, launches) -> None:
     root, sha = repo
     _job(root, datetime.now().astimezone() + timedelta(minutes=5))
     close = _land(root, sha)["close"]
@@ -106,7 +106,7 @@ def test_job_inside_its_deadline_is_in_flight_is_not_relaunched(repo, launches):
     assert launches == []
 
 
-def _plan_less_halt(root: Path, sizing_plan, plan_exists: bool = True):
+def _plan_less_halt(root: Path, sizing_plan, plan_exists: bool = True) -> str:
     (root / "docs" / "plans").mkdir(parents=True, exist_ok=True)
     if plan_exists:
         (root / "docs" / "plans" / "p.md").write_text("plan", encoding="utf-8")
@@ -121,7 +121,7 @@ def _plan_less_halt(root: Path, sizing_plan, plan_exists: bool = True):
     return _git(root, "rev-parse", "HEAD")
 
 
-def test_plan_less_commit_halt_queues_close_for_the_sizing_plan(tmp_path, launches):
+def test_plan_less_commit_halt_queues_close_for_the_sizing_plan(tmp_path: Path, launches) -> None:
     _git(tmp_path, "init", "-q")
     (tmp_path / "one").write_text("one", encoding="utf-8")
     _git(tmp_path, "add", "--", "one")
@@ -135,7 +135,7 @@ def test_plan_less_commit_halt_queues_close_for_the_sizing_plan(tmp_path, launch
 
 
 @pytest.mark.parametrize("sizing_plan, exists", [(None, True), ("docs/plans/p.md", False), ("../p.md", True)])
-def test_plan_less_halt_without_a_resolvable_sizing_plan_stays_not_applicable(tmp_path, launches, sizing_plan, exists):
+def test_plan_less_halt_without_a_resolvable_sizing_plan_stays_not_applicable(tmp_path: Path, launches, sizing_plan, exists) -> None:
     _git(tmp_path, "init", "-q")
     (tmp_path / "one").write_text("one", encoding="utf-8")
     _git(tmp_path, "add", "--", "one")

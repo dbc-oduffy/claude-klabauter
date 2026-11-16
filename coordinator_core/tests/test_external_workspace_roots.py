@@ -7,10 +7,11 @@ import os
 import pytest
 
 from coordinator_core import machine_resolver as mr
+from pathlib import Path
 
 
 @pytest.fixture
-def reg(tmp_path, monkeypatch):
+def reg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     d = tmp_path / "ml"
     d.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(d))
@@ -19,18 +20,18 @@ def reg(tmp_path, monkeypatch):
     mr._external_ws_cache.clear()
 
 
-def _write(reg, text):
+def _write(reg, text) -> None:
     (reg / "registry.local.toml").write_text(text, encoding="utf-8")
     mr._external_ws_cache.clear()
 
 
-def _ws(tmp_path, name="slice"):
+def _ws(tmp_path, name: str = "slice"):
     p = tmp_path / name
     p.mkdir()
     return p
 
 
-def test_existing_dir_entry_returned(reg, tmp_path):
+def test_existing_dir_entry_returned(reg, tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     _write(reg, f'[external_workspaces.p4_x]\npath = "{ws.as_posix()}"\nkind = "external-readonly"\nvcs = "p4"\np4_client = "c1"\n')
     roots = mr.external_workspace_roots()
@@ -46,7 +47,7 @@ def test_existing_dir_entry_returned(reg, tmp_path):
     assert mr.external_workspace_registry_readable() is True
 
 
-def test_missing_dir_and_empty_path_not_returned(reg, tmp_path):
+def test_missing_dir_and_empty_path_not_returned(reg, tmp_path: Path) -> None:
     _write(
         reg,
         f'[external_workspaces.gone]\npath = "{(tmp_path / "nope").as_posix()}"\n'
@@ -56,7 +57,7 @@ def test_missing_dir_and_empty_path_not_returned(reg, tmp_path):
     assert mr.external_workspace_roots() == {}
 
 
-def test_absent_and_unknown_kind_read_as_external_readonly(reg, tmp_path):
+def test_absent_and_unknown_kind_read_as_external_readonly(reg, tmp_path: Path) -> None:
     a, b = _ws(tmp_path, "a"), _ws(tmp_path, "b")
     _write(
         reg,
@@ -69,7 +70,7 @@ def test_absent_and_unknown_kind_read_as_external_readonly(reg, tmp_path):
     assert roots["b"]["kind"] == "external-readonly"
 
 
-def test_containment_root_child_and_shared_prefix_sibling(reg, tmp_path):
+def test_containment_root_child_and_shared_prefix_sibling(reg, tmp_path: Path) -> None:
     ws = _ws(tmp_path, "slice")
     sib = _ws(tmp_path, "slice2")
     (ws / "sub").mkdir()
@@ -80,7 +81,7 @@ def test_containment_root_child_and_shared_prefix_sibling(reg, tmp_path):
     assert mr.external_workspace_containing("") is None
 
 
-def test_case_variant_matches_under_case_insensitive_normcase(reg, tmp_path, monkeypatch):
+def test_case_variant_matches_under_case_insensitive_normcase(reg, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     ws = _ws(tmp_path, "Slice")
     monkeypatch.setattr(os.path, "normcase", lambda s: s.lower())
     _write(reg, f'[external_workspaces.k]\npath = "{ws.as_posix()}"\n')
@@ -88,7 +89,7 @@ def test_case_variant_matches_under_case_insensitive_normcase(reg, tmp_path, mon
     assert mr.external_workspace_containing(variant) == "k"
 
 
-def test_windows_drive_letter_path_never_raises_and_is_not_contained(reg, tmp_path):
+def test_windows_drive_letter_path_never_raises_and_is_not_contained(reg, tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     _write(reg, f'[external_workspaces.k]\npath = "{ws.as_posix()}"\n')
     assert mr.external_workspace_containing("C:\\somedrive\\slice") is None  # abs-path-ok: synthetic drive-letter fixture
@@ -96,7 +97,7 @@ def test_windows_drive_letter_path_never_raises_and_is_not_contained(reg, tmp_pa
     assert mr.external_workspace_roots() == {}
 
 
-def test_unreadable_registry_yields_empty_and_not_readable(reg):
+def test_unreadable_registry_yields_empty_and_not_readable(reg) -> None:
     (reg / "registry.local.toml").write_text("this is [not toml", encoding="utf-8")
     mr._external_ws_cache.clear()
     assert mr.external_workspace_roots() == {}
@@ -104,12 +105,12 @@ def test_unreadable_registry_yields_empty_and_not_readable(reg):
     assert mr.external_workspace_containing("/anywhere") is None
 
 
-def test_no_registry_is_readable_and_empty(reg):
+def test_no_registry_is_readable_and_empty(reg) -> None:
     assert mr.external_workspace_roots() == {}
     assert mr.external_workspace_registry_readable() is True
 
 
-def test_registry_change_invalidates_cache(reg, tmp_path):
+def test_registry_change_invalidates_cache(reg, tmp_path: Path) -> None:
     ws = _ws(tmp_path)
     _write(reg, f'[external_workspaces.k]\npath = "{ws.as_posix()}"\n')
     assert "k" in mr.external_workspace_roots()

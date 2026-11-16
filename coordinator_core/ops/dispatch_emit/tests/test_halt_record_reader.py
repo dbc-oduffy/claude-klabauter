@@ -9,11 +9,12 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     halted_run_id,
     read_halt_record,
 )
+from pathlib import Path
 
 SIZING = "state/sizings/s.yaml"
 
 
-def _record(root, run_id, halted=None, manifest=None):
+def _record(root, run_id, halted=None, manifest=None) -> None:
     d = root / "state" / "warp" / run_id
     d.mkdir(parents=True)
     if halted is not None:
@@ -26,7 +27,7 @@ LEDGER = {"status": "halted", "halted": "ledger-check", "sizing_rel": SIZING}
 MANIFEST = {"rows": [{"id": "C1"}], "owed": [{"id": "V1"}], "gated": [{"id": "G1"}]}
 
 
-def test_subject_parses_with_and_without_process_files_suffix():
+def test_subject_parses_with_and_without_process_files_suffix() -> None:
     subject = halted_record_message("run-1", {"halted": "x"}).splitlines()[0]
     assert halted_run_id(subject) == "run-1"
     assert halted_run_id(subject + " (process files)") == "run-1"
@@ -34,7 +35,7 @@ def test_subject_parses_with_and_without_process_files_suffix():
     assert halted_run_id("warp: record halted ../x run artifacts") is None
 
 
-def test_staged_covers_rows_owed_and_gated(tmp_path):
+def test_staged_covers_rows_owed_and_gated(tmp_path: Path) -> None:
     _record(tmp_path, "run-1", {**LEDGER, "plan": "docs/plans/p.md", "blocking": ["R1"]}, MANIFEST)
     rec = read_halt_record(tmp_path, "run-1")
     assert rec.staged == {"C1", "V1", "G1"}
@@ -42,31 +43,31 @@ def test_staged_covers_rows_owed_and_gated(tmp_path):
     assert rec.blocking == ("R1",)
 
 
-def test_blocking_and_plan_none_when_halted_json_lacks_them(tmp_path):
+def test_blocking_and_plan_none_when_halted_json_lacks_them(tmp_path: Path) -> None:
     _record(tmp_path, "run-1", LEDGER, MANIFEST)
     rec = read_halt_record(tmp_path, "run-1")
     assert rec.blocking is None and rec.plan_rel is None
 
 
-def test_empty_owed_and_gated_lists_still_read(tmp_path):
+def test_empty_owed_and_gated_lists_still_read(tmp_path: Path) -> None:
     _record(tmp_path, "run-1", LEDGER, {"rows": [{"id": "C1"}], "owed": [], "gated": []})
     assert read_halt_record(tmp_path, "run-1").staged == {"C1"}
 
 
-def test_missing_manifest_answers_none(tmp_path):
+def test_missing_manifest_answers_none(tmp_path: Path) -> None:
     _record(tmp_path, "run-1", LEDGER)
     assert read_halt_record(tmp_path, "run-1") is None
 
 
-def test_non_ledger_halt_answers_none(tmp_path):
+def test_non_ledger_halt_answers_none(tmp_path: Path) -> None:
     _record(tmp_path, "run-1", {**LEDGER, "halted": "refusal"}, MANIFEST)
     assert read_halt_record(tmp_path, "run-1") is None
 
 
-def test_unsafe_run_id_answers_none(tmp_path):
+def test_unsafe_run_id_answers_none(tmp_path: Path) -> None:
     assert read_halt_record(tmp_path, "../escape") is None
 
 
-def test_malformed_blocking_is_none(tmp_path):
+def test_malformed_blocking_is_none(tmp_path: Path) -> None:
     _record(tmp_path, "run-1", {**LEDGER, "blocking": [1]}, MANIFEST)
     assert read_halt_record(tmp_path, "run-1").blocking is None

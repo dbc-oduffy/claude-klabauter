@@ -18,6 +18,7 @@ import signal
 import pytest
 
 from coordinator_core.warm import server as srv
+from pathlib import Path
 
 
 _POSIX_ONLY = pytest.mark.skipif(
@@ -27,7 +28,7 @@ _POSIX_ONLY = pytest.mark.skipif(
 
 
 @pytest.fixture(autouse=True)
-def _svc_dir_in_tmp(tmp_path, monkeypatch):
+def _svc_dir_in_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Autouse: a test that forgot would register a real signal handler in the
     test process and append to the operator's live svc dir."""
     monkeypatch.setattr(srv.breadcrumb, "svc_dir", lambda engine_root=None: tmp_path)
@@ -36,12 +37,12 @@ def _svc_dir_in_tmp(tmp_path, monkeypatch):
 
 
 @_POSIX_ONLY
-def test_the_dump_goes_to_a_file_beside_the_breadcrumb(tmp_path, monkeypatch):
+def test_the_dump_goes_to_a_file_beside_the_breadcrumb(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A resident server is spawned detached with `stderr=DEVNULL`, so a dump to
     stderr is a dump into nothing. The file is the whole point."""
     registered = {}
 
-    def _fake_register(sig, file=None, all_threads=False, chain=True):
+    def _fake_register(sig, file=None, all_threads: bool = False, chain: bool = True) -> None:
         registered.update(sig=sig, file=file, all_threads=all_threads, chain=chain)
 
     monkeypatch.setattr(srv.faulthandler, "register", _fake_register)
@@ -58,7 +59,7 @@ def test_the_dump_goes_to_a_file_beside_the_breadcrumb(tmp_path, monkeypatch):
 
 
 @_POSIX_ONLY
-def test_the_file_object_is_held_so_its_descriptor_cannot_be_collected(monkeypatch):
+def test_the_file_object_is_held_so_its_descriptor_cannot_be_collected(monkeypatch: pytest.MonkeyPatch) -> None:
     """`faulthandler.register` keeps only the fd. If the file object it came from
     is garbage-collected the fd closes, and the handler then writes into a closed
     — or recycled — descriptor. Holding it at module scope is the fix, so the
@@ -72,7 +73,7 @@ def test_the_file_object_is_held_so_its_descriptor_cannot_be_collected(monkeypat
 
 
 @_POSIX_ONLY
-def test_the_dump_appends_rather_than_truncating(tmp_path, monkeypatch):
+def test_the_dump_appends_rather_than_truncating(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Several dumps over one server life must accumulate. An operator who takes
     a second sample to compare against the first must not destroy the first."""
     monkeypatch.setattr(srv.faulthandler, "register", lambda *a, **kw: None)
@@ -88,7 +89,7 @@ def test_the_dump_appends_rather_than_truncating(tmp_path, monkeypatch):
     assert "later dump" in body
 
 
-def test_the_absent_signal_branch_returns_none_rather_than_a_dead_handler(monkeypatch):
+def test_the_absent_signal_branch_returns_none_rather_than_a_dead_handler(monkeypatch: pytest.MonkeyPatch) -> None:
     """Windows has no SIGUSR1. Registering nothing and SAYING so is the
     contract: an operator who believes the box carries an instrument it does not
     is worse off than one told plainly that it does not."""
@@ -108,7 +109,7 @@ def test_the_absent_signal_branch_returns_none_rather_than_a_dead_handler(monkey
     "boom",
     [OSError("unwritable"), RuntimeError("faulthandler unavailable"), ValueError("bad fd")],
 )
-def test_a_registration_failure_never_takes_the_server_down(monkeypatch, boom):
+def test_a_registration_failure_never_takes_the_server_down(monkeypatch: pytest.MonkeyPatch, boom) -> None:
     """A server that cannot describe itself must still serve. Every failure here
     degrades to `None`; none of them reaches the boot sequence as an exception."""
 
@@ -125,7 +126,7 @@ def test_a_registration_failure_never_takes_the_server_down(monkeypatch, boom):
     assert srv._STACK_DUMP_FILE is None
 
 
-def test_an_unwritable_svc_dir_degrades_rather_than_raising(monkeypatch):
+def test_an_unwritable_svc_dir_degrades_rather_than_raising(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         srv.breadcrumb, "svc_dir", lambda engine_root=None: (_ for _ in ()).throw(OSError("no dir"))
     )
@@ -133,7 +134,7 @@ def test_an_unwritable_svc_dir_degrades_rather_than_raising(monkeypatch):
     assert srv._register_stack_dump_signal() is None
 
 
-def test_the_dump_file_is_not_the_telemetry_file():
+def test_the_dump_file_is_not_the_telemetry_file() -> None:
     """`telemetry.jsonl` is one JSON row per server life. A stack dump is
     free-form multi-thread text appended on request; sharing the file would make
     neither parseable."""

@@ -35,6 +35,7 @@ _THEIRS = "https://github.com/theirs/repo.git"
 _BASH_CASES = {
     "block-push-pr-non-owned-remote": ("git push upstream main", False),
     "block-empty-source-push": ("git push origin :refs/heads/x", False),
+    "block-held-push": ("git push origin HEAD", False),
     "block-perforce-submit": ("p4 submit -d x", False),
     "p4-verb-fence": ("p4 reconcile", False),
     "destructive-git-orphan": ("git reset --hard $(git rev-parse HEAD~1)", False),
@@ -212,6 +213,10 @@ def test_registered_guard_denies_a_live_harmful_input(guard, world, tmp_path, mo
             (world["repo"] / "coordinator.local.md").write_text(
                 "---\nvcs_mirror: p4\n---\n", encoding="utf-8"
             )
+        if guard == "block-held-push":
+            from coordinator_core import push_hold
+
+            assert push_hold.set_hold(world["repo"], None, "pr freeze")
         index = _stale_scratch_index(Path(world["repo"]), tmp_path) if "{index}" in cmd else None
         cmd = cmd.format(
             repo=Path(world["repo"]).as_posix(),

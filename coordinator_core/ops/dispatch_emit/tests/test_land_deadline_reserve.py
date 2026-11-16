@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core import dispatch_abandon
 from coordinator_core.ops.dispatch_emit import land_deadline
+from pathlib import Path
 
 BUDGET = land_deadline.LAND_BUDGET_SECS
 RESERVE = land_deadline.RESERVE_SECS
@@ -20,14 +21,14 @@ class FakeClock:
 
 
 @pytest.fixture
-def clock(monkeypatch):
+def clock(monkeypatch: pytest.MonkeyPatch) -> FakeClock:
     fake = FakeClock()
     monkeypatch.setattr(land_deadline, "_now", fake)
     return fake
 
 
 @pytest.fixture
-def cpu(monkeypatch):
+def cpu(monkeypatch: pytest.MonkeyPatch) -> FakeClock:
     fake = FakeClock()
     fake.now = 0.0
     monkeypatch.setattr(land_deadline, "_cpu", fake)
@@ -44,7 +45,7 @@ def cpu(monkeypatch):
         "land_run._integrity.since_base",
     ],
 )
-def test_slow_earlier_leg_still_lets_reserved_leg_start(clock, leg):
+def test_slow_earlier_leg_still_lets_reserved_leg_start(clock, leg) -> None:
     with land_deadline.scope():
         land_deadline.check("land_run.script_read")
         clock.now += BUDGET + 0.5
@@ -52,7 +53,7 @@ def test_slow_earlier_leg_still_lets_reserved_leg_start(clock, leg):
 
 
 @pytest.mark.parametrize("leg", ["land_run.script_read", "land_run_halt._land.claims", "land_run.other"])
-def test_optional_leg_halts_inside_the_reserve(clock, leg):
+def test_optional_leg_halts_inside_the_reserve(clock, leg) -> None:
     with land_deadline.scope():
         clock.now += BUDGET + 0.5
         with pytest.raises(land_deadline.LandDeadlineExceeded) as exc:
@@ -60,21 +61,21 @@ def test_optional_leg_halts_inside_the_reserve(clock, leg):
     assert exc.value.leg == leg
 
 
-def test_leg_after_an_open_integrity_leg_draws_on_the_reserve(clock):
+def test_leg_after_an_open_integrity_leg_draws_on_the_reserve(clock) -> None:
     with land_deadline.scope():
         land_deadline.check("land_run.integrity")
         clock.now += BUDGET + 1.0
         land_deadline.check("peer_hunk_gate.sibling_spine")
 
 
-def test_leg_without_an_open_integrity_leg_halts_inside_the_reserve(clock):
+def test_leg_without_an_open_integrity_leg_halts_inside_the_reserve(clock) -> None:
     with land_deadline.scope():
         clock.now += BUDGET + 1.0
         with pytest.raises(land_deadline.LandDeadlineExceeded):
             land_deadline.check("peer_hunk_gate.sibling_spine")
 
 
-def test_nested_reserved_leg_is_still_bounded_by_the_hard_deadline(clock, cpu):
+def test_nested_reserved_leg_is_still_bounded_by_the_hard_deadline(clock, cpu) -> None:
     with land_deadline.scope():
         land_deadline.check("land_run.integrity")
         clock.now += BUDGET + RESERVE + 0.1
@@ -84,7 +85,7 @@ def test_nested_reserved_leg_is_still_bounded_by_the_hard_deadline(clock, cpu):
     assert exc.value.bound_by == land_deadline.BOUND_BUDGET
 
 
-def test_integrity_open_in_one_scope_does_not_reserve_the_next(clock):
+def test_integrity_open_in_one_scope_does_not_reserve_the_next(clock) -> None:
     with land_deadline.scope():
         land_deadline.check("land_run.integrity")
     with land_deadline.scope():
@@ -93,7 +94,7 @@ def test_integrity_open_in_one_scope_does_not_reserve_the_next(clock):
             land_deadline.check("peer_hunk_gate.sibling_spine")
 
 
-def test_reserved_leg_halts_past_the_full_budget(clock, cpu):
+def test_reserved_leg_halts_past_the_full_budget(clock, cpu) -> None:
     with land_deadline.scope():
         clock.now += BUDGET + RESERVE + 0.1
         cpu.now += BUDGET + RESERVE + 0.1
@@ -102,7 +103,7 @@ def test_reserved_leg_halts_past_the_full_budget(clock, cpu):
         assert land_deadline.expired()
 
 
-def test_outer_dispatcher_clamp_binds_non_reserved_legs(clock, monkeypatch):
+def test_outer_dispatcher_clamp_binds_non_reserved_legs(clock, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dispatch_abandon, "remaining", lambda: 2.0 + dispatch_abandon.REPLY_MARGIN_SECS)
     with land_deadline.scope():
         clock.now += 2.5
@@ -111,7 +112,7 @@ def test_outer_dispatcher_clamp_binds_non_reserved_legs(clock, monkeypatch):
     assert exc.value.bound_by == land_deadline.BOUND_DISPATCHER
 
 
-def test_server_window_clamp_binds_reserved_legs(clock):
+def test_server_window_clamp_binds_reserved_legs(clock) -> None:
     land_deadline.set_queue_wait(5.0, window_secs=5.0 + 2.0 + dispatch_abandon.REPLY_MARGIN_SECS)
     try:
         with land_deadline.scope():
@@ -122,7 +123,7 @@ def test_server_window_clamp_binds_reserved_legs(clock):
         land_deadline.set_queue_wait(0.0, None)
 
 
-def test_excepted_retest_time_does_not_spend_the_leg_budget(clock):
+def test_excepted_retest_time_does_not_spend_the_leg_budget(clock) -> None:
     with land_deadline.scope():
         land_deadline.check("land_run.script_read")
         with land_deadline.excepted():
@@ -131,7 +132,7 @@ def test_excepted_retest_time_does_not_spend_the_leg_budget(clock):
         land_deadline.check("peer_hunk_gate.co_declared_peer_holds")
 
 
-def test_excepted_never_moves_a_deadline_past_the_dispatcher_clamp(clock, monkeypatch):
+def test_excepted_never_moves_a_deadline_past_the_dispatcher_clamp(clock, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dispatch_abandon, "remaining", lambda: 20.0 + dispatch_abandon.REPLY_MARGIN_SECS)
     with land_deadline.scope():
         with land_deadline.excepted():
@@ -141,7 +142,7 @@ def test_excepted_never_moves_a_deadline_past_the_dispatcher_clamp(clock, monkey
             land_deadline.check("land_run.script_read")
 
 
-def test_a_first_leg_halt_attributes_the_time_before_it_to_scope_entry(clock):
+def test_a_first_leg_halt_attributes_the_time_before_it_to_scope_entry(clock) -> None:
     with land_deadline.scope():
         clock.now += BUDGET + 1.0
         with pytest.raises(land_deadline.LandDeadlineExceeded) as exc:
@@ -152,7 +153,7 @@ def test_a_first_leg_halt_attributes_the_time_before_it_to_scope_entry(clock):
     assert {"process_time_ms", "spawns"} <= set(leg)
 
 
-def test_no_deadline_bound_is_a_noop():
+def test_no_deadline_bound_is_a_noop() -> None:
     land_deadline.check("land_run.script_read")
     land_deadline.check("land_run.integrity")
 
@@ -164,7 +165,7 @@ def _source_legs(path):
     return re.findall(r'land_deadline\.check\("([^"]+)"\)', Path(path).read_text(encoding="utf-8"))
 
 
-def test_landing_sources_pass_reserved_leg_names_to_the_deadline():
+def test_landing_sources_pass_reserved_leg_names_to_the_deadline() -> None:
     from coordinator_core.ops.dispatch_emit import land_run, land_run_halt
 
     run_legs = _source_legs(land_run.__file__)
@@ -175,7 +176,7 @@ def test_landing_sources_pass_reserved_leg_names_to_the_deadline():
     assert [leg for leg in run_legs + halt_legs if not land_deadline._is_reserved(leg)]
 
 
-def test_superseded_prefilter_yields_the_same_runs_as_the_unfiltered_scan(tmp_path, monkeypatch):
+def test_superseded_prefilter_yields_the_same_runs_as_the_unfiltered_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import json
 
     from coordinator_core.ops.dispatch_emit import land_run, run_artifacts, run_token
@@ -197,7 +198,7 @@ def test_superseded_prefilter_yields_the_same_runs_as_the_unfiltered_scan(tmp_pa
     seen = []
     real = run_artifacts.superseded_runs
 
-    def spy(root, run_id, sizing_rel, changed, live_run_ids=()):
+    def spy(root, run_id, sizing_rel, changed, live_run_ids=()) -> tuple[str, ...]:
         changed = list(changed)
         seen.append(changed)
         return real(root, run_id, sizing_rel, changed, live_run_ids=live_run_ids)
@@ -244,13 +245,13 @@ def _ledger_gate_probe(tmp_path, monkeypatch, *, dirt_without_credit):
     return refusal, prior_calls
 
 
-def test_ledger_gate_skips_prior_credit_read_when_no_row_shows_dirt(tmp_path, monkeypatch):
+def test_ledger_gate_skips_prior_credit_read_when_no_row_shows_dirt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     refusal, prior_calls = _ledger_gate_probe(tmp_path, monkeypatch, dirt_without_credit=False)
     assert refusal is None
     assert prior_calls == []
 
 
-def test_ledger_gate_credits_prior_passes_before_flagging_dirt(tmp_path, monkeypatch):
+def test_ledger_gate_credits_prior_passes_before_flagging_dirt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     refusal, prior_calls = _ledger_gate_probe(tmp_path, monkeypatch, dirt_without_credit=True)
     assert refusal is None
     assert prior_calls == [1]

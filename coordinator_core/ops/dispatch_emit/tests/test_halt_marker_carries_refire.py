@@ -13,6 +13,8 @@ from coordinator_core.ops.dispatch_emit.tests.test_halt_records_kept_work import
     _chunks,
     repo,
 )
+from pathlib import Path
+import pytest
 
 HALTED_REL = f"{RECORD_DIR_ROOT}/{RUN}/{halted_run.HALTED_FILE}"
 KEPT_POINTER = f"{RECORD_DIR_ROOT}/{RUN}/{kept_work.KEPT_FILE}"
@@ -34,7 +36,7 @@ def _halted(envelope, *, with_plan: bool = False) -> dict:
     return halted
 
 
-def test_valid_envelope_is_written_and_invalid_or_legacy_is_omitted(tmp_path):
+def test_valid_envelope_is_written_and_invalid_or_legacy_is_omitted(tmp_path: Path) -> None:
     base = dict(halted="refusal", sizing_rel="s.yaml")
     plain = halted_run.write_halt_marker(tmp_path / "a", **base).read_bytes()
 
@@ -48,7 +50,7 @@ def test_valid_envelope_is_written_and_invalid_or_legacy_is_omitted(tmp_path):
     assert (tmp_path / "d" / "halted.json").read_bytes() == plain
 
 
-def test_record_resume_stage_sets_stage_and_refuses_otherwise(tmp_path):
+def test_record_resume_stage_sets_stage_and_refuses_otherwise(tmp_path: Path) -> None:
     stage = {"kept": "k.json", "chunks": ["C1"], "plan_gate": False}
     with_env = tmp_path / "e"
     halted_run.write_halt_marker(with_env, halted="refusal", sizing_rel="s.yaml", next_action=_envelope())
@@ -73,13 +75,13 @@ def test_record_resume_stage_sets_stage_and_refuses_otherwise(tmp_path):
 
 
 @WRITERS
-def test_callers_forward_next_action_and_stamp_after_record_kept(repo, call, monkeypatch):
+def test_callers_forward_next_action_and_stamp_after_record_kept(repo, call, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import halted_record_commit
 
     order: list = []
     real_marker, real_kept, real_stage = halted_run.write_halt_marker, halted_record_commit._record_kept, halted_run.record_resume_stage
 
-    def marker(*a, **k):
+    def marker(*a, **k) -> Path:
         order.append(("marker", k.get("next_action")))
         return real_marker(*a, **k)
 
@@ -87,7 +89,7 @@ def test_callers_forward_next_action_and_stamp_after_record_kept(repo, call, mon
         order.append(("kept",))
         return real_kept(*a, **k)
 
-    def stage(*a, **k):
+    def stage(*a, **k) -> bool:
         order.append(("stage", a[1]))
         return real_stage(*a, **k)
 

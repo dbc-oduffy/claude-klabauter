@@ -13,6 +13,7 @@ import json
 import subprocess
 
 import pytest
+from pathlib import Path
 
 _REAL_POPEN = subprocess.Popen  # the `world` fixture swaps Popen for a refusal; measuring needs the real one
 
@@ -30,7 +31,7 @@ FAILING = [*AT_BASE, *SIBLING_DIRT]
 EXPORT = "scratch/reverify-base-export-run.txt"
 
 
-def _write_export(root, red, *, runner_exit=1, export="ok"):
+def _write_export(root, red, *, runner_exit: int = 1, export: str = "ok") -> None:
     path = root / EXPORT
     path.parent.mkdir(parents=True, exist_ok=True)
     tail = {"baseline_export": {"export": export, "runner_exit": runner_exit, "passed_at_base": SIBLING_DIRT}}
@@ -43,11 +44,11 @@ def _revert(root, **kw):
     )
 
 
-def _output():
+def _output() -> dict[str, str]:
     return {n: TRACE for n in SIBLING_DIRT}
 
 
-def test_base_red_is_pre_existing_and_sibling_dirt_is_foreign_red_and_nothing_blocks(world, monkeypatch):
+def test_base_red_is_pre_existing_and_sibling_dirt_is_foreign_red_and_nothing_blocks(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _declared = world
     _dirty_sibling(root, monkeypatch, held=False)
     _write_export(root, AT_BASE)
@@ -59,7 +60,7 @@ def test_base_red_is_pre_existing_and_sibling_dirt_is_foreign_red_and_nothing_bl
     assert from_reverify({**out, "failing": FAILING}) == []
 
 
-def test_without_the_base_export_or_failure_text_the_same_reds_block(world, monkeypatch):
+def test_without_the_base_export_or_failure_text_the_same_reds_block(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _declared = world
     _dirty_sibling(root, monkeypatch, held=False)
     out = _revert(root)
@@ -67,7 +68,7 @@ def test_without_the_base_export_or_failure_text_the_same_reds_block(world, monk
     assert sorted(b.node_id for b in from_reverify({**out, "failing": FAILING})) == sorted(FAILING)
 
 
-def test_a_base_red_id_stays_pre_existing_when_the_sibling_dirt_names_no_path(world, monkeypatch):
+def test_a_base_red_id_stays_pre_existing_when_the_sibling_dirt_names_no_path(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _declared = world
     _dirty_sibling(root, monkeypatch, held=False)
     _write_export(root, AT_BASE)
@@ -76,7 +77,7 @@ def test_a_base_red_id_stays_pre_existing_when_the_sibling_dirt_names_no_path(wo
     assert out["foreign_red"] == {} and sorted(out["unattributed"]) == sorted(SIBLING_DIRT)
 
 
-def test_an_unusable_base_export_leaves_every_red_unmeasured_not_pre_existing(world, monkeypatch):
+def test_an_unusable_base_export_leaves_every_red_unmeasured_not_pre_existing(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _declared = world
     _dirty_sibling(root, monkeypatch, held=False)
     _write_export(root, AT_BASE, runner_exit=2)
@@ -85,7 +86,7 @@ def test_an_unusable_base_export_leaves_every_red_unmeasured_not_pre_existing(wo
     assert sorted(out["unmeasured"]) == sorted(AT_BASE)
 
 
-def test_measure_output_with_head_pass_feeds_review_reverify_pre_existing(world, monkeypatch):
+def test_measure_output_with_head_pass_feeds_review_reverify_pre_existing(world, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import reverify_base_measure as rbm
 
     root, _orig, _declared = world
@@ -108,7 +109,7 @@ def test_measure_output_with_head_pass_feeds_review_reverify_pre_existing(world,
 
 
 @pytest.mark.parametrize("prefixes", [(), ("g1", "g2")])
-def test_reverify_sidecar_schema_and_prompt_carry_the_classed_red_sets(prefixes):
+def test_reverify_sidecar_schema_and_prompt_carry_the_classed_red_sets(prefixes) -> None:
     from coordinator_core.ops.review_mint.execute_review import _REVERIFY_SCHEMA, _reverify_phase
 
     props = _REVERIFY_SCHEMA["properties"]
@@ -128,14 +129,14 @@ _SLOW = "".join(f"def test_red_{i}():\n    assert False\n\n\n" for i in range(4)
 _CENSUS = "import pytest\n\n\n@pytest.mark.parametrize('i', [0, 1])\ndef test_dirt(i):\n    assert True\n"
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> str:
     return subprocess.run(
         ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
         check=True, capture_output=True, text=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     ).stdout.strip()
 
 
-def _commit(repo, files, message):
+def _commit(repo, files, message) -> str:
     for rel, body in files.items():
         (repo / rel).parent.mkdir(parents=True, exist_ok=True)
         (repo / rel).write_text(body, encoding="utf-8")
@@ -168,8 +169,8 @@ def _measure_export(tmp_path, monkeypatch, *, ids_at_base):
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("ids_at_base", [True, False], ids=["ids-at-base", "ids-added-after-base"])
 def test_measure_on_a_real_git_fixture_feeds_review_reverify_pre_existing_and_foreign(
-    world, monkeypatch, tmp_path, ids_at_base
-):
+    world, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, ids_at_base
+) -> None:
     root, _orig, _declared = world
     _dirty_sibling(root, monkeypatch, held=False)
     text = _measure_export(tmp_path, monkeypatch, ids_at_base=ids_at_base)

@@ -7,10 +7,11 @@ import pytest
 
 from coordinator_core.install import door_install, substrate
 from coordinator_core.warm import telemetry
+from pathlib import Path
 
 
 @pytest.fixture
-def engine_root(tmp_path, monkeypatch):
+def engine_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "engine"
     (root / "coordinator_core").mkdir(parents=True)
     (root / "coordinator_core" / "_engine_stamp").write_text("sha:deadbeef\n", encoding="utf-8")
@@ -30,7 +31,7 @@ def _raise(exc):
 @pytest.mark.parametrize(
     "exc", [door_install.DoorInstallError("no C compiler"), SystemExit("compile failed")]
 )
-def test_failed_build_degrades_and_records_a_prefixed_row(tmp_path, engine_root, monkeypatch, exc):
+def test_failed_build_degrades_and_records_a_prefixed_row(tmp_path: Path, engine_root, monkeypatch: pytest.MonkeyPatch, exc) -> None:
     monkeypatch.setattr(door_install, "install_named_forwarder", _raise(exc))
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -45,7 +46,7 @@ def test_failed_build_degrades_and_records_a_prefixed_row(tmp_path, engine_root,
     assert rows[0]["cause"].startswith("install-door:some-tool: ")
 
 
-def test_check_only_records_nothing(tmp_path, engine_root, monkeypatch):
+def test_check_only_records_nothing(tmp_path: Path, engine_root, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(door_install, "install_named_forwarder", _raise(door_install.DoorInstallError("x")))
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
@@ -53,12 +54,12 @@ def test_check_only_records_nothing(tmp_path, engine_root, monkeypatch):
     assert door_install.install_door_degrade_rows() == []
 
 
-def test_reader_ignores_other_planes_cold_failed_rows(tmp_path, engine_root):
+def test_reader_ignores_other_planes_cold_failed_rows(tmp_path: Path, engine_root) -> None:
     telemetry.record_degrade(kind=telemetry.KIND_COLD_FAILED, cause="dialect-guard 'x': nope")
     assert door_install.install_door_degrade_rows() == []
 
 
-def test_record_never_raises_into_the_install(monkeypatch):
+def test_record_never_raises_into_the_install(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(**kwargs):
         raise RuntimeError("sink down")
 
@@ -66,7 +67,7 @@ def test_record_never_raises_into_the_install(monkeypatch):
     door_install.record_install_door_degrade("n", RuntimeError("x"))
 
 
-def test_per_name_exceptions_are_oserror_only():
+def test_per_name_exceptions_are_oserror_only() -> None:
     src = substrate.__file__
     text = open(src, encoding="utf-8").read()
     assert "_PER_NAME_DEGRADE_EXCEPTIONS = (OSError,)" in text

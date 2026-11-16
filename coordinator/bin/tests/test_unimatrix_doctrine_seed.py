@@ -5,6 +5,10 @@ import os
 from pathlib import Path
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = pytest.mark.complete
 
@@ -12,7 +16,7 @@ BIN = Path(__file__).resolve().parents[1]
 REPO = BIN.parents[1]
 
 
-def load():
+def load() -> "ModuleType":
     spec = importlib.util.spec_from_file_location("unimatrix_doctrine_seed", BIN / "unimatrix-doctrine-seed.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -24,7 +28,7 @@ B, E = ds.DOCTRINE_BEGIN, ds.DOCTRINE_END
 OTHER_B, OTHER_E = "<!-- BEGIN other -->", "<!-- END other -->"
 
 
-def test_real_doctrine_fits_agy_cap(tmp_path):
+def test_real_doctrine_fits_agy_cap(tmp_path: Path) -> None:
     # claude-klabauter carries no global-doctrine/ tree: its own CLAUDE.md stands in as the real doctrine text.
     (tmp_path / "global-doctrine" / "rules").mkdir(parents=True)
     (tmp_path / "global-doctrine" / "CLAUDE.md").write_text(
@@ -36,7 +40,7 @@ def test_real_doctrine_fits_agy_cap(tmp_path):
     assert "North star" in block and "Context7" in block
 
 
-def test_over_cap_raises(tmp_path):
+def test_over_cap_raises(tmp_path: Path) -> None:
     (tmp_path / "global-doctrine" / "rules").mkdir(parents=True)
     (tmp_path / "global-doctrine" / "CLAUDE.md").write_text("x" * 100)
     (tmp_path / "global-doctrine" / "rules" / "rules.md").write_text("y")
@@ -45,7 +49,7 @@ def test_over_cap_raises(tmp_path):
         ds.render_coordinator_doctrine(tmp_path, 100)
 
 
-def test_two_marker_pairs_coexist_and_unseed_independently(tmp_path):
+def test_two_marker_pairs_coexist_and_unseed_independently(tmp_path: Path) -> None:
     f = tmp_path / "AGENTS.md"
     f.write_text("user text\n")
     assert ds.seed_block(f, f"{B}\nA\n{E}\n", B, E) == "added"
@@ -60,14 +64,14 @@ def test_two_marker_pairs_coexist_and_unseed_independently(tmp_path):
     assert ds.unseed_block(f, B, E) == "absent"
 
 
-def test_seed_block_creates_and_unseed_deletes_empty_file(tmp_path):
+def test_seed_block_creates_and_unseed_deletes_empty_file(tmp_path: Path) -> None:
     f = tmp_path / "sub" / "GEMINI.md"
     assert ds.seed_block(f, f"{B}\nA\n{E}\n", B, E) == "created"
     assert ds.unseed_block(f, B, E) == "removed"
     assert not f.exists()
 
 
-def test_agy_skills_idempotent_and_unseed_only_ours(tmp_path):
+def test_agy_skills_idempotent_and_unseed_only_ours(tmp_path: Path) -> None:
     sj = tmp_path / "skills.json"
     sj.write_text(json.dumps({"entries": [{"path": "/foreign"}]}))
     root = tmp_path / "plugin" / "skills"
@@ -80,7 +84,7 @@ def test_agy_skills_idempotent_and_unseed_only_ours(tmp_path):
     assert ds.unseed_agy_skills(sj, root) == "absent"
 
 
-def test_agy_skills_created_then_file_removed_when_empty(tmp_path):
+def test_agy_skills_created_then_file_removed_when_empty(tmp_path: Path) -> None:
     sj = tmp_path / "d" / "skills.json"
     assert ds.seed_agy_skills(sj, "/p/skills") == "created"
     assert json.loads(sj.read_text()) == {"entries": [{"path": "/p/skills"}]}
@@ -89,7 +93,7 @@ def test_agy_skills_created_then_file_removed_when_empty(tmp_path):
 
 
 @pytest.fixture
-def skills_root(tmp_path):
+def skills_root(tmp_path: Path) -> Path:
     root = tmp_path / "plugin" / "skills"
     for name in ("alpha", "beta"):
         (root / name).mkdir(parents=True)
@@ -100,7 +104,7 @@ def skills_root(tmp_path):
     return root
 
 
-def test_codex_skills_one_entry_per_skill_dir(tmp_path, skills_root):
+def test_codex_skills_one_entry_per_skill_dir(tmp_path: Path, skills_root) -> None:
     dest = tmp_path / "home" / ".agents" / "skills"
     assert ds.seed_codex_skills(dest, skills_root) == ["alpha", "beta"]
     assert (dest / "alpha" / "SKILL.md").read_text() == "# alpha\n"
@@ -109,7 +113,7 @@ def test_codex_skills_one_entry_per_skill_dir(tmp_path, skills_root):
     assert ds.seed_codex_skills(dest, skills_root) == ["alpha", "beta"]
 
 
-def test_codex_skills_copy_when_symlink_refused(tmp_path, skills_root, monkeypatch):
+def test_codex_skills_copy_when_symlink_refused(tmp_path: Path, skills_root, monkeypatch: pytest.MonkeyPatch) -> None:
     def refuse(*a, **k):
         raise OSError("symlink refused")
 
@@ -120,7 +124,7 @@ def test_codex_skills_copy_when_symlink_refused(tmp_path, skills_root, monkeypat
     assert (dest / "alpha" / "SKILL.md").read_text() == "# alpha\n"
 
 
-def test_codex_unseed_removes_only_marker_carrying_entries(tmp_path, skills_root):
+def test_codex_unseed_removes_only_marker_carrying_entries(tmp_path: Path, skills_root) -> None:
     dest = tmp_path / "skills"
     (dest / "mine").mkdir(parents=True)
     (dest / "mine" / "SKILL.md").write_text("user skill")
@@ -135,7 +139,7 @@ def test_codex_unseed_removes_only_marker_carrying_entries(tmp_path, skills_root
     assert (skills_root / "beta" / "SKILL.md").is_file()
 
 
-def test_codex_unseed_of_symlink_leaves_source(tmp_path, skills_root):
+def test_codex_unseed_of_symlink_leaves_source(tmp_path: Path, skills_root) -> None:
     dest = tmp_path / "skills"
     ds.seed_codex_skills(dest, skills_root)
     assert sorted(ds.unseed_codex_skills(dest)) == ["alpha", "beta"]
@@ -143,7 +147,7 @@ def test_codex_unseed_of_symlink_leaves_source(tmp_path, skills_root):
     assert list(dest.iterdir()) == []
 
 
-def test_codex_reseed_prunes_removed_skill_but_keeps_foreign(tmp_path, skills_root):
+def test_codex_reseed_prunes_removed_skill_but_keeps_foreign(tmp_path: Path, skills_root) -> None:
     dest = tmp_path / "skills"
     (dest / "mine").mkdir(parents=True)
     (dest / "mine" / "SKILL.md").write_text("user skill")
@@ -157,7 +161,7 @@ def test_codex_reseed_prunes_removed_skill_but_keeps_foreign(tmp_path, skills_ro
 
 
 @pytest.fixture
-def klabauter_mirror(tmp_path, monkeypatch):
+def klabauter_mirror(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> "tuple[ModuleType, Path]":
     """The installer copied beside its lib/ and seeder under tmp_path (outside every repo), with no global-doctrine sibling."""
     import shutil
     bin_dir = tmp_path / "mirror" / "bin"
@@ -192,7 +196,7 @@ def _content_root(tmp_path):
     return doe
 
 
-def test_doctrine_installs_from_content_root_pointer_and_names_rung(tmp_path, klabauter_mirror):
+def test_doctrine_installs_from_content_root_pointer_and_names_rung(tmp_path: Path, klabauter_mirror) -> None:
     mod, home = klabauter_mirror
     doe = _content_root(tmp_path)
     (home / ".claude" / ".coordinator-content-root").write_text(str(doe) + "\n", encoding="utf-8")
@@ -210,7 +214,7 @@ def _seed_codex(mod, tmp_path, home):
     return out, rp, lambda: mod._seed_standing_doctrine(out, True, False, rp, None, tmp_path / "codex" / "skills", None)
 
 
-def test_unmanaged_text_is_reported_untouched_and_block_carries_steer(tmp_path, klabauter_mirror):
+def test_unmanaged_text_is_reported_untouched_and_block_carries_steer(tmp_path: Path, klabauter_mirror) -> None:
     mod, home = klabauter_mirror
     out, rp, run = _seed_codex(mod, tmp_path, home)
     rp.parent.mkdir(parents=True)
@@ -225,7 +229,7 @@ def test_unmanaged_text_is_reported_untouched_and_block_carries_steer(tmp_path, 
     assert ds.split_block(seeded, B, E)[0] == outside + "\n"
 
 
-def test_block_tracks_the_live_source_on_every_run(tmp_path, klabauter_mirror):
+def test_block_tracks_the_live_source_on_every_run(tmp_path: Path, klabauter_mirror) -> None:
     mod, home = klabauter_mirror
     out, rp, run = _seed_codex(mod, tmp_path, home)
     assert run() == []
@@ -240,7 +244,7 @@ def test_block_tracks_the_live_source_on_every_run(tmp_path, klabauter_mirror):
     assert "a fresh live rule" not in seeded and "- only rule" in seeded
 
 
-def test_clean_file_prints_no_unmanaged_advisory(tmp_path, klabauter_mirror):
+def test_clean_file_prints_no_unmanaged_advisory(tmp_path: Path, klabauter_mirror) -> None:
     mod, home = klabauter_mirror
     out, rp, run = _seed_codex(mod, tmp_path, home)
     assert run() == []
@@ -251,7 +255,7 @@ def test_clean_file_prints_no_unmanaged_advisory(tmp_path, klabauter_mirror):
     assert "outside the coordinator-doctrine block" not in out.getvalue()
 
 
-def test_doctrine_miss_names_the_pointer_files_read(tmp_path, klabauter_mirror):
+def test_doctrine_miss_names_the_pointer_files_read(tmp_path: Path, klabauter_mirror) -> None:
     mod, home = klabauter_mirror
     missing, text, rp = _seed_agy(mod, tmp_path)
     assert missing == ["agy coordinator doctrine"]
@@ -261,7 +265,7 @@ def test_doctrine_miss_names_the_pointer_files_read(tmp_path, klabauter_mirror):
     assert not rp.exists()
 
 
-def test_doctrine_miss_names_a_pointer_value_without_doctrine(tmp_path, klabauter_mirror):
+def test_doctrine_miss_names_a_pointer_value_without_doctrine(tmp_path: Path, klabauter_mirror) -> None:
     mod, home = klabauter_mirror
     empty = tmp_path / "empty-doe"
     empty.mkdir()
@@ -271,7 +275,7 @@ def test_doctrine_miss_names_a_pointer_value_without_doctrine(tmp_path, klabaute
     assert str(empty) in text and "no global-doctrine/CLAUDE.md" in text
 
 
-def test_beside_install_rung_still_resolves_without_pointer(tmp_path, klabauter_mirror):
+def test_beside_install_rung_still_resolves_without_pointer(tmp_path: Path, klabauter_mirror) -> None:
     mod, _ = klabauter_mirror
     plugin = tmp_path / "plug"
     (plugin / "bin").mkdir(parents=True)
@@ -281,6 +285,6 @@ def test_beside_install_rung_still_resolves_without_pointer(tmp_path, klabauter_
     assert root == plugin.parent / "plug" and rung == "--plugin-root"
 
 
-def test_main_is_a_refusing_library_entrypoint(capsys):
+def test_main_is_a_refusing_library_entrypoint(capsys: pytest.CaptureFixture[str]) -> None:
     assert ds.main(["--any"]) == 2
     assert "library module" in capsys.readouterr().err

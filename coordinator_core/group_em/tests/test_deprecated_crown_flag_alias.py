@@ -37,6 +37,7 @@ import pytest
 
 from coordinator_core.group_em import idle_report
 from coordinator_core.group_em import watch
+from pathlib import Path
 
 _SID = "group-em-1"
 _SPELLINGS = ["--group-em-session-id", "--crown-session-id"]
@@ -44,8 +45,8 @@ _SPELLINGS = ["--group-em-session-id", "--crown-session-id"]
 
 @pytest.mark.parametrize("spelling", _SPELLINGS)
 def test_watch_routes_both_spellings_to_the_same_handler_argument(
-    spelling, tmp_path, monkeypatch
-):
+    spelling, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     seen: dict = {}
     monkeypatch.setattr(
         watch.repo_root_arg, "resolve_repo_root_arg", lambda v: str(tmp_path)
@@ -64,14 +65,14 @@ def test_watch_routes_both_spellings_to_the_same_handler_argument(
 
 
 @pytest.mark.parametrize("spelling", _SPELLINGS)
-def test_idle_report_does_not_refuse_either_spelling(spelling, tmp_path):
+def test_idle_report_does_not_refuse_either_spelling(spelling, tmp_path: Path) -> None:
     try:
         idle_report._cli(["--repo-root", str(tmp_path), spelling, _SID, "--json"])
     except SystemExit as exc:
         pytest.fail(f"{spelling} was refused by argparse (exit {exc.code})")
 
 
-def test_watch_both_spellings_on_one_argv_the_later_flag_wins(tmp_path, monkeypatch):
+def test_watch_both_spellings_on_one_argv_the_later_flag_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen: dict = {}
     monkeypatch.setattr(
         watch.repo_root_arg, "resolve_repo_root_arg", lambda v: str(tmp_path)
@@ -95,7 +96,7 @@ def test_watch_both_spellings_on_one_argv_the_later_flag_wins(tmp_path, monkeypa
 @pytest.mark.parametrize(
     "module", [watch, idle_report], ids=["watch", "idle_report"]
 )
-def test_the_retired_spelling_is_accepted_but_never_advertised(module, capsys):
+def test_the_retired_spelling_is_accepted_but_never_advertised(module, capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(SystemExit):
         module._cli(["--help"])
     out = capsys.readouterr().out

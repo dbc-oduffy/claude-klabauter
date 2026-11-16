@@ -194,7 +194,7 @@ def is_read_only_compound(cmd: str) -> bool:
     return _tokens_are_read_only(cmd, 0)
 
 
-def _evaluate(cmd: str, dialect: Optional[Dialect] = None):
+def _evaluate(cmd: str, dialect: Optional[Dialect] = None) -> tuple[bool, str, str]:
     if dialect is None or dialect is Dialect.BASH:
         return _detector.evaluate(cmd)
     return _detector.evaluate_for_dialect(

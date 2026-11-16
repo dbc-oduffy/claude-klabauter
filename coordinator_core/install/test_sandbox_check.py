@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import os
 import stat
-import tempfile
 from pathlib import Path
 
 import pytest
@@ -191,7 +190,7 @@ def test_run_all_raises_transport_error_when_sandbox_creation_fails(monkeypatch)
     def _boom(*a, **kw):
         raise OSError("disk full (simulated)")
 
-    monkeypatch.setattr(tempfile, "mkdtemp", _boom)
+    monkeypatch.setattr(sandbox_check, "create_managed_temp_dir", _boom)
     with pytest.raises(SandboxCheckTransportError):
         run_all()
 
@@ -200,7 +199,7 @@ def test_main_returns_dedicated_transport_code_on_sandbox_creation_failure(monke
     def _boom(*a, **kw):
         raise OSError("disk full (simulated)")
 
-    monkeypatch.setattr(tempfile, "mkdtemp", _boom)
+    monkeypatch.setattr(sandbox_check, "create_managed_temp_dir", _boom)
     rc = main([])
     assert rc == 3
 

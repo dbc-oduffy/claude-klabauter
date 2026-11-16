@@ -9,12 +9,13 @@ import pytest
 from coordinator_core.session import core, native_actor as native
 from coordinator_core.warm.caller_context import resolve_caller_context, with_verified_native_actor
 from coordinator_core.warm.entry_seam import per_request_state
+from pathlib import Path
 
 SID = "aaaaaaaa-0000-4000-8000-000000000001"
 PARENT = "bbbbbbbb-0000-4000-8000-000000000002"
 
 @pytest.fixture
-def actor(tmp_path, monkeypatch):
+def actor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     import psutil
     exe = tmp_path / 'codex.exe'
     exe.touch()
@@ -29,7 +30,7 @@ def actor(tmp_path, monkeypatch):
     monkeypatch.setattr(core, 'git_root', lambda cwd:str(tmp_path))
     return value, process, module
 
-def test_wire_actor_ignored_and_typed_attachment_pickle_safe(actor):
+def test_wire_actor_ignored_and_typed_attachment_pickle_safe(actor) -> None:
     value, _, _ = actor
     caller=resolve_caller_context({'session_id':SID, 'verified_native_actor':value})
     assert caller.verified_native_actor is None
@@ -38,7 +39,7 @@ def test_wire_actor_ignored_and_typed_attachment_pickle_safe(actor):
     with pytest.raises(TypeError):
         with_verified_native_actor(caller,vars(value))
 
-def test_nested_scope_restores_and_new_request_clears_without_env_changes(actor):
+def test_nested_scope_restores_and_new_request_clears_without_env_changes(actor) -> None:
     value, _, _ = actor
     before=dict(os.environ)
     with native.bind_verified_native_actor(value):
@@ -54,7 +55,7 @@ def test_nested_scope_restores_and_new_request_clears_without_env_changes(actor)
     assert dict(os.environ)==before
 
 @pytest.mark.parametrize('change',[{'session_id':PARENT},{'start_epoch':456.126},{'pid':True}])
-def test_mismatch_refuses_before_any_session_creation(actor,tmp_path,change):
+def test_mismatch_refuses_before_any_session_creation(actor,tmp_path: Path,change) -> None:
     value, _, _=actor
     base=tmp_path/'uncreated'
     with native.bind_verified_native_actor(replace(value,**change)):
@@ -64,7 +65,7 @@ def test_mismatch_refuses_before_any_session_creation(actor,tmp_path,change):
             core.init(SID,cwd=str(tmp_path),sessions_base=str(base))
     assert not base.exists()
 
-def test_wrong_repo_dead_and_ambiguous_refuse(actor,tmp_path):
+def test_wrong_repo_dead_and_ambiguous_refuse(actor,tmp_path: Path) -> None:
     value, process, kernel=actor
     other=tmp_path/'other';other.mkdir()
     with pytest.raises(native.NativeActorMismatch):
@@ -78,7 +79,7 @@ def test_wrong_repo_dead_and_ambiguous_refuse(actor,tmp_path):
     kernel.kernel_live_pid=lambda pid:False
     assert not native.precise_pid_alive(123,'456.125')
 
-def test_existing_meta_fast_path_still_refreshes_via_sole_init(actor,tmp_path,monkeypatch):
+def test_existing_meta_fast_path_still_refreshes_via_sole_init(actor,tmp_path: Path,monkeypatch: pytest.MonkeyPatch) -> None:
     value, _, _=actor
     base=tmp_path/'sessions';sdir=base/SID;sdir.mkdir(parents=True)
     (sdir/'meta.json').write_text(json.dumps({'stable_pid':'999'}))
@@ -88,7 +89,7 @@ def test_existing_meta_fast_path_still_refreshes_via_sole_init(actor,tmp_path,mo
         assert core.ensure_session(SID,cwd=str(tmp_path),sessions_base=str(base))==str(sdir)
     assert len(calls)==1 and calls[0][0][0]==SID
 
-def test_native_fractional_birth_rejects_same_second_reuse_legacy_unchanged(actor,monkeypatch):
+def test_native_fractional_birth_rejects_same_second_reuse_legacy_unchanged(actor,monkeypatch: pytest.MonkeyPatch) -> None:
     _, process, _=actor
     assert core.stable_pid_alive('123','','456.125')
     process.create_time=lambda:456.126
@@ -96,7 +97,7 @@ def test_native_fractional_birth_rejects_same_second_reuse_legacy_unchanged(acto
     monkeypatch.setattr(core,'_win_create_time_epoch',lambda pid:456)
     assert core.stable_pid_alive('123','','456')
 
-def test_init_persists_precise_native_witness_and_preserves_goal(actor,tmp_path,monkeypatch):
+def test_init_persists_precise_native_witness_and_preserves_goal(actor,tmp_path: Path,monkeypatch: pytest.MonkeyPatch) -> None:
     value, _, _=actor
     from coordinator_core.git import git_state
     from coordinator_core.session import harness_registry
@@ -114,10 +115,10 @@ def test_init_persists_precise_native_witness_and_preserves_goal(actor,tmp_path,
     assert row['goal']=='original'
 
 
-def test_actor_contexts_are_independent_and_explicit_entry_binds(actor):
+def test_actor_contexts_are_independent_and_explicit_entry_binds(actor) -> None:
     from contextvars import Context
     value, _, _ = actor
-    def read_bound():
+    def read_bound() -> None:
         with native.bind_verified_native_actor(value):
             assert Context().run(native.current_verified_native_actor) is None
             with per_request_state(isolated=True, verified_native_actor=value):
@@ -127,7 +128,7 @@ def test_actor_contexts_are_independent_and_explicit_entry_binds(actor):
 
 
 @pytest.mark.parametrize('initialized,has_meta', [(False, False), (False, True), (True, False)])
-def test_actor_ensure_rejects_failed_init_or_missing_metadata(actor,tmp_path,monkeypatch,initialized,has_meta):
+def test_actor_ensure_rejects_failed_init_or_missing_metadata(actor,tmp_path: Path,monkeypatch: pytest.MonkeyPatch,initialized,has_meta) -> None:
     value, _, _=actor
     base=tmp_path/'sessions'
     if has_meta:

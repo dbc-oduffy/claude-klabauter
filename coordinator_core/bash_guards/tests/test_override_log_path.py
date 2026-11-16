@@ -23,13 +23,14 @@ from coordinator_core.bash_guards._override_log_path import (
     _override_log_path,
 )
 from coordinator_core.session_hub_path import hub_for_common
+from pathlib import Path
 
 
-def _sessions_root(tmp_path):
+def _sessions_root(tmp_path) -> Path:
     return hub_for_common(tmp_path / ".git")
 
 
-def test_unknown_session_lands_in_the_no_session_bucket(tmp_path):
+def test_unknown_session_lands_in_the_no_session_bucket(tmp_path: Path) -> None:
     """The line must still be RECORDED — this is the audit trail for a
     deliberately-overridden safety check, so dropping it to avoid minting a
     directory would trade a bookkeeping defect for a security one."""
@@ -41,7 +42,7 @@ def test_unknown_session_lands_in_the_no_session_bucket(tmp_path):
     assert not (_sessions_root(tmp_path) / "sess-not-a-real-session").exists()
 
 
-def test_existing_session_dir_is_used_as_is(tmp_path):
+def test_existing_session_dir_is_used_as_is(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     own = _sessions_root(tmp_path) / "11111111-2222-3333-4444-555555555555"
     own.mkdir(parents=True)
@@ -51,7 +52,7 @@ def test_existing_session_dir_is_used_as_is(tmp_path):
     assert path == str(own / "overrides.log")
 
 
-def test_absent_session_id_uses_the_bucket_directly(tmp_path):
+def test_absent_session_id_uses_the_bucket_directly(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     path = _override_log_path(str(tmp_path), None)
 
@@ -59,11 +60,11 @@ def test_absent_session_id_uses_the_bucket_directly(tmp_path):
     assert os.path.basename(os.path.dirname(path)) == NO_SESSION_BUCKET
 
 
-def test_no_git_root_resolves_nothing(tmp_path):
+def test_no_git_root_resolves_nothing(tmp_path: Path) -> None:
     assert _override_log_path("", "sess-x") is None
 
 
-def test_a_root_that_is_not_a_repo_is_never_created(tmp_path):
+def test_a_root_that_is_not_a_repo_is_never_created(tmp_path: Path) -> None:
     """A fake root (a test's "/repo") must not be minted: on Windows it lands
     at the drive root."""
     fake = tmp_path / "repo"
@@ -72,7 +73,7 @@ def test_a_root_that_is_not_a_repo_is_never_created(tmp_path):
     assert not fake.exists()
 
 
-def test_stand_down_log_refuses_a_root_that_is_not_a_repo(tmp_path):
+def test_stand_down_log_refuses_a_root_that_is_not_a_repo(tmp_path: Path) -> None:
     from coordinator_core.bash_guards._write_bump_stand_down import log_environment_stand_down
 
     fake = tmp_path / "repo"
@@ -83,7 +84,7 @@ def test_stand_down_log_refuses_a_root_that_is_not_a_repo(tmp_path):
     assert not fake.exists()
 
 
-def test_override_log_bucket_is_denylisted():
+def test_override_log_bucket_is_denylisted() -> None:
     from coordinator_core.session import liveness
 
     assert NO_SESSION_BUCKET in liveness._NON_SESSION_DIR_NAMES

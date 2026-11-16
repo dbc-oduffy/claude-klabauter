@@ -182,7 +182,7 @@ def test_stale_zero_run_record_with_failing_reverify_refuses_naming_the_node(tmp
     _stale_zero_run_tree(tmp_path)
     params = _gate_params(status_before="fail", status_after="fail", failing=[f"{TEST}::test_a"])
     findings, check = li.landing_test_gate(tmp_path, params, "r1")
-    assert check == "failed" and f"{TEST}::test_a" in findings[0].detail
+    assert check == li.UNKNOWN_ONLY and list(findings) == [] and findings.unknown_ids == [f"{TEST}::test_a"]
 
 
 def test_stale_zero_run_record_with_no_reverify_still_refuses_unattributed(tmp_path):

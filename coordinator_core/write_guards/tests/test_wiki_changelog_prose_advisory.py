@@ -4,10 +4,11 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.write_guards import wiki_changelog_prose_advisory as guard
+from pathlib import Path
 
 
 @pytest.fixture
-def _repo(tmp_path, monkeypatch):
+def _repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     repo_root = tmp_path / "repo"
     (repo_root / "docs" / "wiki").mkdir(parents=True)
     (repo_root / ".git").mkdir()
@@ -48,7 +49,7 @@ def _multiedit_payload(file_path: str, new_strings, cwd: str) -> dict:
     }
 
 
-def test_fires_on_ruling_date_inside_scope(_repo):
+def test_fires_on_ruling_date_inside_scope(_repo) -> None:
     wiki_path = str(_repo / "docs" / "wiki" / "some-doctrine.md")
     payload = _write_payload(wiki_path, "Ruled 2026-08-01 that X.", str(_repo))
     result = guard.check(payload)
@@ -60,7 +61,7 @@ def test_fires_on_ruling_date_inside_scope(_repo):
     assert "ruling date" in result["hookSpecificOutput"]["additionalContext"]
 
 
-def test_fires_on_dr_reference(_repo):
+def test_fires_on_dr_reference(_repo) -> None:
     wiki_path = str(_repo / "docs" / "wiki" / "some-doctrine.md")
     payload = _write_payload(wiki_path, "Superseded by DR-344.", str(_repo))
     result = guard.check(payload)
@@ -68,7 +69,7 @@ def test_fires_on_dr_reference(_repo):
     assert "DR-NNN" in result["hookSpecificOutput"]["additionalContext"]
 
 
-def test_fires_on_was_now_phrasing(_repo):
+def test_fires_on_was_now_phrasing(_repo) -> None:
     wiki_path = str(_repo / "docs" / "wiki" / "some-doctrine.md")
     payload = _write_payload(
         wiki_path, "It was P, and it is now Q.", str(_repo)
@@ -78,44 +79,44 @@ def test_fires_on_was_now_phrasing(_repo):
     assert "was ... now ..." in result["hookSpecificOutput"]["additionalContext"]
 
 
-def test_allows_plain_doctrine_prose(_repo):
+def test_allows_plain_doctrine_prose(_repo) -> None:
     wiki_path = str(_repo / "docs" / "wiki" / "some-doctrine.md")
     payload = _write_payload(wiki_path, "State the rule as it stands.", str(_repo))
     assert guard.check(payload) is None
 
 
-def test_never_fires_outside_docs_wiki(_repo):
+def test_never_fires_outside_docs_wiki(_repo) -> None:
     plan_path = str(_repo / "docs" / "plans" / "some-plan.md")
     (_repo / "docs" / "plans").mkdir(parents=True)
     payload = _write_payload(plan_path, "Ruled 2026-08-01 that X.", str(_repo))
     assert guard.check(payload) is None
 
 
-def test_filename_changelog_exemption(_repo):
+def test_filename_changelog_exemption(_repo) -> None:
     wiki_path = str(_repo / "docs" / "wiki" / "2026-09-changelog.md")
     payload = _write_payload(wiki_path, "Ruled 2026-08-01 that X.", str(_repo))
     assert guard.check(payload) is None
 
 
-def test_filename_exemption_is_case_insensitive(_repo):
+def test_filename_exemption_is_case_insensitive(_repo) -> None:
     wiki_path = str(_repo / "docs" / "wiki" / "CHANGELOG.md")
     payload = _write_payload(wiki_path, "Ruled 2026-08-01 that X.", str(_repo))
     assert guard.check(payload) is None
 
 
-def test_delta_scoped_edit_only_scans_new_string(_repo):
+def test_delta_scoped_edit_only_scans_new_string(_repo) -> None:
     wiki_path = str(_repo / "docs" / "wiki" / "some-doctrine.md")
     payload = _edit_payload(wiki_path, "State the rule as it stands.", str(_repo))
     assert guard.check(payload) is None
 
 
-def test_delta_scoped_edit_fires_on_new_string(_repo):
+def test_delta_scoped_edit_fires_on_new_string(_repo) -> None:
     wiki_path = str(_repo / "docs" / "wiki" / "some-doctrine.md")
     payload = _edit_payload(wiki_path, "Superseded by DR-1.", str(_repo))
     assert guard.check(payload) is not None
 
 
-def test_multiedit_scans_each_new_string(_repo):
+def test_multiedit_scans_each_new_string(_repo) -> None:
     wiki_path = str(_repo / "docs" / "wiki" / "some-doctrine.md")
     payload = _multiedit_payload(
         wiki_path, ["plain prose", "Superseded by DR-9."], str(_repo)
@@ -123,7 +124,7 @@ def test_multiedit_scans_each_new_string(_repo):
     assert guard.check(payload) is not None
 
 
-def test_fails_open_when_repo_root_unresolvable(tmp_path):
+def test_fails_open_when_repo_root_unresolvable(tmp_path: Path) -> None:
     unresolvable = tmp_path / "no-repo" / "docs" / "wiki" / "some-doctrine.md"
     payload = _write_payload(
         str(unresolvable), "Ruled 2026-08-01 that X.", str(tmp_path / "no-repo")
@@ -131,7 +132,7 @@ def test_fails_open_when_repo_root_unresolvable(tmp_path):
     assert guard.check(payload) is None
 
 
-def test_scope_root_is_per_repo_not_bare_segment_match(tmp_path, monkeypatch):
+def test_scope_root_is_per_repo_not_bare_segment_match(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_a = tmp_path / "repo_a"
     (repo_a / ".git").mkdir(parents=True)
     (repo_a / "docs" / "wiki").mkdir(parents=True)
@@ -143,13 +144,13 @@ def test_scope_root_is_per_repo_not_bare_segment_match(tmp_path, monkeypatch):
     assert guard.check(payload) is None
 
 
-def test_malformed_payload_fails_open():
+def test_malformed_payload_fails_open() -> None:
     assert guard.check({}) is None
     assert guard.check({"tool_input": "not-a-dict"}) is None
     assert guard.check({"tool_name": "Write", "tool_input": {}}) is None
 
 
-def test_never_raises_on_unexpected_shapes():
+def test_never_raises_on_unexpected_shapes() -> None:
     assert guard.check({"tool_input": {"file_path": 5}}) is None
     assert guard.check(
         {"tool_name": "MultiEdit", "tool_input": {"file_path": "x", "edits": "bad"}}

@@ -367,6 +367,7 @@ from coordinator_core.spawn_policy.detect import (
     DEFAULT_EXCLUDE,
     discover_source_files,
 )
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -5511,7 +5512,7 @@ _GATE_CACHE_DIR: pathlib.Path | None = None
 
 
 @pytest.fixture(autouse=True, scope="module")
-def _bind_gate_cache_dir(pytestconfig):
+def _bind_gate_cache_dir(pytestconfig: pytest.Config):
     """Binds the scan cache directory for this module's tests; None when the cache provider
     is disabled, which makes `_gate_violations` run the uncached collector."""
     global _GATE_CACHE_DIR
@@ -5544,7 +5545,7 @@ def _gate_violations() -> list[AmpSite]:
     return [site for site in _GATE_SCAN_RAW if site.key not in exempt and site.key not in claims]
 
 
-def test_no_new_amplification_sites_outside_known_inventory():
+def test_no_new_amplification_sites_outside_known_inventory() -> None:
     """Standing gate (G2), green at land: NOT a bare `violations == []` (blocked on volume --
     116 hits / 51 files, measured 2026-08-08 repo-wide run, `state/audits/
     2026-08-08-git-amplification-gate-known-sites.md`). A SUBSET-of-frozen-inventory assertion
@@ -5559,7 +5560,7 @@ def test_no_new_amplification_sites_outside_known_inventory():
     assert not new_site_keys, "\n\n".join(_format_violation(site) for site in new_violations)
 
 
-def test_every_exemption_still_names_a_live_site(monkeypatch):
+def test_every_exemption_still_names_a_live_site(monkeypatch: pytest.MonkeyPatch) -> None:
     """Self-invalidation for `_EXEMPT_SITES` -- the leg the sibling `_EXEMPT_SITES` in
     `test_no_hardcoded_paths.py` lacks and `_PRODUCTION_EXEMPT_SITES` in
     `test_no_bare_chain_terminal_literal.py` has. An exemption that no longer matches anything
@@ -5578,7 +5579,7 @@ def test_every_exemption_still_names_a_live_site(monkeypatch):
     )
 
 
-def test_thread_pool_and_two_hop_sites_are_named_in_known_blind_spots():
+def test_thread_pool_and_two_hop_sites_are_named_in_known_blind_spots() -> None:
     """Regression pin for `state/bug-backlog/
     2026-08-08-the-amplification-gate-cannot-see-the-th-a4f2e77dc787.yaml`: two of the row's
     three named sites -- `review_coverage_core.classify_pending_records`'s
@@ -5662,7 +5663,7 @@ def _exempt_entry_comment_blocks() -> dict[tuple[str, str, str], str]:
     return blocks
 
 
-def test_every_oracle_claim_names_a_real_oracle():
+def test_every_oracle_claim_names_a_real_oracle() -> None:
     """The binding that makes `_ORACLE_CLAIMS` a different object from `_EXEMPT_SITES`.
 
     A prose exemption costs one sentence and suppresses forever. An oracle claim cannot be added
@@ -5693,7 +5694,7 @@ def test_every_oracle_claim_names_a_real_oracle():
     )
 
 
-def test_oracle_claims_and_exemptions_do_not_overlap():
+def test_oracle_claims_and_exemptions_do_not_overlap() -> None:
     """A site is suppressed by an oracle or by prose, never both. An overlap would let a
     still-listed prose entry keep a site quiet after its oracle went red -- the fail-OPEN shape
     this whole layer exists to remove."""
@@ -5704,7 +5705,7 @@ def test_oracle_claims_and_exemptions_do_not_overlap():
     )
 
 
-def test_oracle_claims_still_name_live_sites(monkeypatch):
+def test_oracle_claims_still_name_live_sites(monkeypatch: pytest.MonkeyPatch) -> None:
     """`_EXEMPT_SITES`'s self-invalidation leg, extended to the replacement. A claim whose site
     no longer fires is dead weight that will silently pre-approve whatever next takes that key,
     and it must be deleted rather than left to age."""
@@ -5719,7 +5720,7 @@ def test_oracle_claims_still_name_live_sites(monkeypatch):
     )
 
 
-def test_every_exemption_carries_a_dated_rationale():
+def test_every_exemption_carries_a_dated_rationale() -> None:
     """AC8 of `docs/plans/2026-08-19-burn-down-the-amplification-worklist-to-zero.md`.
 
     AC2-AC4 are all trivially satisfiable by exempting every remaining key: that would pass every
@@ -5755,7 +5756,7 @@ def test_every_exemption_carries_a_dated_rationale():
     )
 
 
-def test_exempt_sites_match_amp_site_key_shape():
+def test_exempt_sites_match_amp_site_key_shape() -> None:
     """`_EXEMPT_SITES` is checked against `AmpSite.key` -- `(path, enclosing, callee, ordinal)`,
     a 4-tuple -- at the membership test in `find_unbatched_per_item_spawns`. A 3-tuple entry
     here can never equal a 4-tuple key, so it silently stops suppressing its site instead of
@@ -5952,7 +5953,7 @@ def _asserts_a_site_is_still_reported(func: ast.FunctionDef) -> bool:
     return False
 
 
-def test_every_discriminator_is_pinned_by_a_declining_test():
+def test_every_discriminator_is_pinned_by_a_declining_test() -> None:
     """The keep-at-zero guard, and the one that actually matters once `_EXEMPT_SITES` is empty.
 
     An empty register is trivially reachable the wrong way: widen a discriminator until it
@@ -6013,7 +6014,7 @@ def test_every_discriminator_is_pinned_by_a_declining_test():
     )
 
 
-def test_burn_down_known_preexisting_amplification_sites():
+def test_burn_down_known_preexisting_amplification_sites() -> None:
     """Closed 2026-10-07: the known-site inventory reached zero (27 at 2026-08-27, 21 -> 0 on
     2026-10-07 by batching, a collector discriminator, and six classed `_EXEMPT_SITES`), so this
     stopped being a `designed_red` worklist and stands with the gate. A new per-item spawn is
@@ -6045,7 +6046,7 @@ def _format_violation(site: AmpSite) -> str:
 # --------------------------------------------------------------------------
 
 
-def test_route_a_direct_positive(tmp_path):
+def test_route_a_direct_positive(tmp_path: Path) -> None:
     fixture = tmp_path / "route_a.py"
     fixture.write_text(
         "import subprocess\n"
@@ -6061,7 +6062,7 @@ def test_route_a_direct_positive(tmp_path):
     assert violations[0].lineno == 5
 
 
-def test_route_b_local_helper_positive(tmp_path):
+def test_route_b_local_helper_positive(tmp_path: Path) -> None:
     fixture = tmp_path / "route_b.py"
     fixture.write_text(
         "import subprocess\n"
@@ -6080,7 +6081,7 @@ def test_route_b_local_helper_positive(tmp_path):
     assert violations[0].callee == "_git_add"
 
 
-def test_route_c_cross_module_positive(tmp_path):
+def test_route_c_cross_module_positive(tmp_path: Path) -> None:
     helper_mod = tmp_path / "git_helpers.py"
     helper_mod.write_text(
         "import subprocess\n"
@@ -6113,7 +6114,7 @@ def test_route_c_cross_module_positive(tmp_path):
 # --------------------------------------------------------------------------
 
 
-def test_relpath_to_module_collapses_package_init():
+def test_relpath_to_module_collapses_package_init() -> None:
     assert _relpath_to_module("coordinator_core/plan_assemble/predicates/__init__.py") == (
         "coordinator_core.plan_assemble.predicates"
     )
@@ -6122,7 +6123,7 @@ def test_relpath_to_module_collapses_package_init():
     )
 
 
-def test_absolute_import_module_relative_import_in_package_init():
+def test_absolute_import_module_relative_import_in_package_init() -> None:
     # `pkg/sub/__init__.py`'s OWN package is itself (case 3) -- a level-1 relative import
     # there resolves against `pkg.sub`, not its parent `pkg`.
     node = ast.parse("from . import helper\n").body[0]
@@ -6136,7 +6137,7 @@ def test_absolute_import_module_relative_import_in_package_init():
     assert _absolute_import_module("pkg/sub/mod.py", node3) == "pkg.sub"
 
 
-def test_resolve_reexport_chain_rewrites_the_name_across_a_renaming_hop():
+def test_resolve_reexport_chain_rewrites_the_name_across_a_renaming_hop() -> None:
     # `pkg/__init__.py`: `from .impl import spawn_it as g` -- a renaming re-export.
     raw = {
         "pkg/__init__.py": {"g": {("spawn_it", "pkg.impl")}},
@@ -6146,7 +6147,7 @@ def test_resolve_reexport_chain_rewrites_the_name_across_a_renaming_hop():
     assert _resolve_reexport_chain(raw, module_to_relpath, "g", "pkg") == ("spawn_it", "pkg.impl")
 
 
-def test_resolve_reexport_chain_declines_to_constrain_past_a_star_reexport():
+def test_resolve_reexport_chain_declines_to_constrain_past_a_star_reexport() -> None:
     raw = {
         "pkg/reexport.py": {"*": {("*", "pkg.real")}},
         "pkg/real.py": {},
@@ -6156,7 +6157,7 @@ def test_resolve_reexport_chain_declines_to_constrain_past_a_star_reexport():
     assert (name, module) == ("real_spawn", _UNCONSTRAINED_MODULE)
 
 
-def test_resolve_reexport_chain_bound_exhaustion_resolves_to_syntactically_named_module():
+def test_resolve_reexport_chain_bound_exhaustion_resolves_to_syntactically_named_module() -> None:
     # A cycle: `a` re-exports `x` from `b`, `b` re-exports `x` from `a`. Cycle detection stops
     # the walk and resolves to the pair reached so far, not an iteration-order-dependent "last
     # module reached" -- pins `_REEXPORT_HOP_BOUND`.
@@ -6170,7 +6171,7 @@ def test_resolve_reexport_chain_bound_exhaustion_resolves_to_syntactically_named
     assert module in ("a", "b")
 
 
-def test_route_c_resolves_reexported_init_name(tmp_path):
+def test_route_c_resolves_reexported_init_name(tmp_path: Path) -> None:
     # `__init__` collapse (case 1): the callee is defined directly inside a package's
     # `__init__.py`, imported by its collapsed dotted module -- must not be mis-pruned by a
     # naive `pkg.sub.__init__` comparison.
@@ -6197,7 +6198,7 @@ def test_route_c_resolves_reexported_init_name(tmp_path):
     assert matches[0].callee == "spawn_one"
 
 
-def test_route_c_resolves_a_renaming_reexport(tmp_path):
+def test_route_c_resolves_a_renaming_reexport(tmp_path: Path) -> None:
     # `pkg/__init__.py` re-exports `impl.g` under a DIFFERENT local name (`h`); the caller then
     # re-imports THAT under yet another alias that happens to collide, at the call site, with
     # an unrelated function elsewhere also named `g` (a decoy real spawner in a different
@@ -6239,7 +6240,7 @@ def test_route_c_resolves_a_renaming_reexport(tmp_path):
     assert matches[0].callee == "g"
 
 
-def test_route_c_declines_to_constrain_past_a_star_reexport(tmp_path):
+def test_route_c_declines_to_constrain_past_a_star_reexport(tmp_path: Path) -> None:
     # `pkg/reexport.py` re-exports `real.real_spawn` via `import *`, which cannot be followed
     # by name. Without the star's decline-to-constrain fallback, the resolved module would stay
     # `pkg.reexport` (the immediate import's own module) and never match `real_spawn`'s true
@@ -6268,7 +6269,7 @@ def test_route_c_declines_to_constrain_past_a_star_reexport(tmp_path):
     assert matches[0].callee == "real_spawn"
 
 
-def test_import_resolves_to_prunes_a_homonym_of_the_alias():
+def test_import_resolves_to_prunes_a_homonym_of_the_alias() -> None:
     # An aliased import's local binding equals a same-named-but-unrelated function's def name
     # -- must NOT match, since the module differs (the false-positive this chunk's resolver
     # exists to prune).
@@ -6278,7 +6279,7 @@ def test_import_resolves_to_prunes_a_homonym_of_the_alias():
     assert _import_resolves_to(index, "caller.py", "g", "real_mod.py", "f") is True
 
 
-def test_route_c_resolves_the_imported_name_not_the_local_alias(tmp_path):
+def test_route_c_resolves_the_imported_name_not_the_local_alias(tmp_path: Path) -> None:
     """THE GOAL PROBE for `pln-route-c-resolves-the-imported-name-not-the-local-alias`, and the
     test whose absence let that plan ship green while delivering the shape it had REJECTED.
 
@@ -6332,7 +6333,7 @@ def test_route_c_resolves_the_imported_name_not_the_local_alias(tmp_path):
     assert matches[0].callee == "_spawn_it"
 
 
-def test_resolve_callee_def_resolves_an_alias_to_its_original_name():
+def test_resolve_callee_def_resolves_an_alias_to_its_original_name() -> None:
     """Unit-level companion to the goal probe above: the resolver must ANSWER with the true
     target, not merely decline the decoy. Pins the distinction the first delivery collapsed --
     filtering an alias-keyed candidate pool can only ever return a subset of homonyms OF THE
@@ -6349,7 +6350,7 @@ def test_resolve_callee_def_resolves_an_alias_to_its_original_name():
     assert _resolve_callee_def(index, "caller.py", "_spawn_it") == [("pkg/impl.py", "spawn_it")]
 
 
-def test_resolve_callee_def_wide_keeps_the_homonym_narrow_prunes():
+def test_resolve_callee_def_wide_keeps_the_homonym_narrow_prunes() -> None:
     """C2a asymmetry pin: `_resolve_callee_def_wide` (the two suppressor legs,
     `_argv0_varies_through_helper` and `_root_scoped_through_helper`) must return BOTH
     same-named candidates -- the real import target AND an unrelated homonym defined elsewhere
@@ -6380,7 +6381,7 @@ def test_resolve_callee_def_wide_keeps_the_homonym_narrow_prunes():
     assert set(wide) == {("real_mod.py", "g"), ("unrelated_mod.py", "g")}
 
 
-def test_route_d_injected_positive(tmp_path):
+def test_route_d_injected_positive(tmp_path: Path) -> None:
     """Matches `session_attribution.trailer_foreign_shas(..., run=_run)`'s real shape: the
     injected identifier passed AT THE CALL SITE must itself be named `_run` for this
     collector's by-name index resolution to find it -- resolving through an intermediate
@@ -6415,7 +6416,7 @@ _RUNNER_MODULE_SRC = (
 )
 
 
-def test_route_e_generic_runner_positive_attribute_access(tmp_path):
+def test_route_e_generic_runner_positive_attribute_access(tmp_path: Path) -> None:
     """Route e requires a CROSS-MODULE runner: `sites_in_source`'s own `_local_helpers`
     resolution already recognizes a same-module `_run(argv)` wrapper called with a literal argv
     and reports it as route a-direct -- that is spawn_policy's existing capability, reused, not
@@ -6444,7 +6445,7 @@ def test_route_e_generic_runner_positive_attribute_access(tmp_path):
     assert matches[0].path.endswith("route_e.py")
 
 
-def test_route_e_generic_runner_positive_non_git_argv(tmp_path):
+def test_route_e_generic_runner_positive_non_git_argv(tmp_path: Path) -> None:
     """AC11 at route e. This fixture is the pre-AC11 `test_route_e_generic_runner_negative_
     non_git_argv`, INVERTED: a per-item `['ls', name]` spawn used to be a required silence,
     because route e read git-ness off the call site. A per-item process is a per-item process
@@ -6465,7 +6466,7 @@ def test_route_e_generic_runner_positive_non_git_argv(tmp_path):
     assert matches[0].callee == "_run"
 
 
-def test_route_e_negative_argument_not_argv_shaped(tmp_path):
+def test_route_e_negative_argument_not_argv_shaped(tmp_path: Path) -> None:
     """Negative control that survives AC11: route e reads the call site's argument SHAPE, and a
     bare `Name` is not statically an argv. Conservative by construction -- see
     `_call_arg_is_argv_shaped`."""
@@ -6481,7 +6482,7 @@ def test_route_e_negative_argument_not_argv_shaped(tmp_path):
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_route_e_negative_runner_forwards_into_a_non_spawn(tmp_path):
+def test_route_e_negative_runner_forwards_into_a_non_spawn(tmp_path: Path) -> None:
     """A single-parameter function that forwards its parameter into an ordinary call is NOT a
     runner. Before AC11 this was free: route e also demanded a `"git"`-prefixed argv at the call
     site, so a non-spawning forwarder could never produce a violation on its own. Once every
@@ -6509,7 +6510,7 @@ def test_route_e_negative_runner_forwards_into_a_non_spawn(tmp_path):
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_ac11_per_item_non_git_spawn_is_flagged(tmp_path):
+def test_ac11_per_item_non_git_spawn_is_flagged(tmp_path: Path) -> None:
     """AC11's headline: "the regression guard fails on a new per-unit NON-GIT spawn in a
     composer path". The fixture is `cutover_gate`'s real shape -- a `sys.executable`-fronted
     pytest invocation per item -- which no argv0-keyed check can see: `_resolve_argv0` reports
@@ -6530,7 +6531,7 @@ def test_ac11_per_item_non_git_spawn_is_flagged(tmp_path):
     assert violations[0].enclosing == "reverify"
 
 
-def test_route_a_does_not_report_a_helper_sharing_the_spawn_line(tmp_path):
+def test_route_a_does_not_report_a_helper_sharing_the_spawn_line(tmp_path: Path) -> None:
     """Route a matches on `SpawnSite.lineno`, and a spawn line routinely carries a second call
     (`subprocess.call(argv, **no_console_passthrough_kwargs())`). The spawn is the violation;
     the kwargs helper is not. Without the `_SPAWN_API_NAMES` half of route a's test, widening
@@ -6550,7 +6551,7 @@ def test_route_a_does_not_report_a_helper_sharing_the_spawn_line(tmp_path):
     assert [v.callee for v in violations] == ["call"]
 
 
-def test_route_f_parameter_default_runner_is_resolved(tmp_path):
+def test_route_f_parameter_default_runner_is_resolved(tmp_path: Path) -> None:
     """Route f: the injectable-seam idiom, where the loop calls a PARAMETER and the runner is
     bound as that parameter's default a hop up. `_common.py`'s two index-resync sites are the
     live instance, and before AC11 they were visible only through an accidental collision with
@@ -6573,7 +6574,7 @@ def test_route_f_parameter_default_runner_is_resolved(tmp_path):
     assert matches[0].callee == "run_git"
 
 
-def test_route_f_negative_default_is_not_a_spawner(tmp_path):
+def test_route_f_negative_default_is_not_a_spawner(tmp_path: Path) -> None:
     """Negative control: a parameter default that resolves to a function which does not spawn
     is not a runner, so the loop is not amplification."""
     (tmp_path / "seam_negative.py").write_text(
@@ -6588,7 +6589,7 @@ def test_route_f_negative_default_is_not_a_spawner(tmp_path):
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_route_e_generic_runner_positive_spawn_in_nested_closure(tmp_path):
+def test_route_e_generic_runner_positive_spawn_in_nested_closure(tmp_path: Path) -> None:
     """A runner candidate whose forwarding call sits inside a NESTED
     closure (`_run(argv): def _forward(): subprocess.run(argv); _forward()`) must still be
     recognized. `SpawnSite.enclosing` is a DOTTED scope path (`"_run._forward"`, not bare
@@ -6619,7 +6620,7 @@ def test_route_e_generic_runner_positive_spawn_in_nested_closure(tmp_path):
     assert matches[0].callee == "_run"
 
 
-def test_route_f_negative_unscoped_default_name_collision(tmp_path):
+def test_route_f_negative_unscoped_default_name_collision(tmp_path: Path) -> None:
     """Route f's `default_name in index.direct_spawn_funcs` fallback was
     unscoped by file, so a same-named, unrelated, UNIMPORTED spawning function in another file
     would false-positive route f purely off a bare-name repo-wide match. A parameter default
@@ -6644,7 +6645,7 @@ def test_route_f_negative_unscoped_default_name_collision(tmp_path):
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_spawn_api_names_track_spawn_policy():
+def test_spawn_api_names_track_spawn_policy() -> None:
     """Completeness pin for `_SPAWN_API_NAMES`, whose SSOT is `spawn_policy.detect._RECOGNIZED`.
     That name is private, so the collector holds a leaf-name projection rather than importing it
     (see the negative spec). This assertion is what stops the copy drifting: a spawn API added
@@ -6655,7 +6656,7 @@ def test_spawn_api_names_track_spawn_policy():
     assert {func for _module, func in _RECOGNIZED} == set(_SPAWN_API_NAMES)
 
 
-def test_discriminator_loop_iterable_expression_not_flagged(tmp_path):
+def test_discriminator_loop_iterable_expression_not_flagged(tmp_path: Path) -> None:
     """Discriminator 1: a call that IS the loop's own iterable expression (evaluated once,
     before the first iteration) must never be flagged, matching the measured #2/#11/#17/#28/#29
     FP class in gate-substrate.md."""
@@ -6678,7 +6679,7 @@ def test_discriminator_loop_iterable_expression_not_flagged(tmp_path):
     assert violations == []
 
 
-def test_discriminator_constant_literal_sequence_not_flagged(tmp_path):
+def test_discriminator_constant_literal_sequence_not_flagged(tmp_path: Path) -> None:
     """Discriminator 2: `for x in (module-level literal tuple)` must never be flagged, matching
     the measured #12/#19 FP class."""
     fixture = tmp_path / "disc_literal.py"
@@ -6699,7 +6700,7 @@ def test_discriminator_constant_literal_sequence_not_flagged(tmp_path):
     assert violations == []
 
 
-def test_discriminator_while_loop_not_flagged(tmp_path):
+def test_discriminator_while_loop_not_flagged(tmp_path: Path) -> None:
     """Discriminator 3: a `while` loop must never be flagged, matching the measured
     #8/#15/#16 FP class (retry loops, interactive prompts, calendar walks)."""
     fixture = tmp_path / "disc_while.py"
@@ -6720,7 +6721,7 @@ def test_discriminator_while_loop_not_flagged(tmp_path):
     assert violations == []
 
 
-def test_discriminator_chunking_stride_loop_not_flagged(tmp_path):
+def test_discriminator_chunking_stride_loop_not_flagged(tmp_path: Path) -> None:
     """Discriminator 4: `for i in range(0, len(xs), CHUNK)` is the BATCHED shape this
     collector's own remedy asks for -- one spawn per chunk, not per item. Flagging it
     reported `coverage.py::_filter_shas_by_scope_paths` (documented as batched over
@@ -6744,7 +6745,7 @@ def test_discriminator_chunking_stride_loop_not_flagged(tmp_path):
     assert violations == []
 
 
-def test_discriminator_chunking_helper_iteration_not_flagged_but_per_item_is(tmp_path):
+def test_discriminator_chunking_helper_iteration_not_flagged_but_per_item_is(tmp_path: Path) -> None:
     """Chunking-helper iteration (`for chunk in _argv_group_chunks(...)`) is one spawn per
     chunk; the same body over a plain item list is still flagged."""
     fixture = tmp_path / "disc_helper.py"
@@ -6764,7 +6765,7 @@ def test_discriminator_chunking_helper_iteration_not_flagged_but_per_item_is(tmp
     assert [site.enclosing for site in violations] == ["per_item"]
 
 
-def test_discriminator_unit_stride_range_still_flagged(tmp_path):
+def test_discriminator_unit_stride_range_still_flagged(tmp_path: Path) -> None:
     """Negative control for discriminator 4: a 3-arg `range` with a LITERAL `1` step is a
     per-item walk wearing a stride's clothes, and must still be flagged -- the
     discriminator keys on a non-unit stride, never on the `range` call alone."""
@@ -6784,7 +6785,7 @@ def test_discriminator_unit_stride_range_still_flagged(tmp_path):
     assert [site.enclosing for site in violations] == ["check"]
 
 
-def test_discriminator_argv_spliced_chunk_not_flagged(tmp_path):
+def test_discriminator_argv_spliced_chunk_not_flagged(tmp_path: Path) -> None:
     """Discriminator 7, direct-spawn arm: a runtime-built chunk list bounded by argv BYTES has
     no `range` for discriminator 4 to read, but splices its loop target into argv as a
     sequence -- one spawn per chunk. The real shape at `publish.py::_git_status_porcelain`."""
@@ -6802,7 +6803,7 @@ def test_discriminator_argv_spliced_chunk_not_flagged(tmp_path):
     assert violations == []
 
 
-def test_discriminator_argv_accumulated_over_chunk_not_flagged(tmp_path):
+def test_discriminator_argv_accumulated_over_chunk_not_flagged(tmp_path: Path) -> None:
     """Discriminator 7, accumulation leg: argv is a bare prefix list grown by `.extend()` in a
     nested loop over the chunk, then spawned once. The real shape at `ops/fleet/_common.py::
     _resync_main_index_for_moves`, whose bounded chunking is itself the fix for a Windows argv
@@ -6823,7 +6824,7 @@ def test_discriminator_argv_accumulated_over_chunk_not_flagged(tmp_path):
     assert violations == []
 
 
-def test_discriminator_argv_accumulation_declines_a_nested_loop_over_another_collection(tmp_path):
+def test_discriminator_argv_accumulation_declines_a_nested_loop_over_another_collection(tmp_path: Path) -> None:
     """Negative pin for the accumulation leg. The nested loop iterates a collection that has
     nothing to do with the outer target, so argv carries loop-invariant flags and the outer walk
     is still one spawn per item -- the leg must key on the nested iterable NAMING the outer
@@ -6845,7 +6846,7 @@ def test_discriminator_argv_accumulation_declines_a_nested_loop_over_another_col
     assert [site.enclosing for site in violations] == ["resync"]
 
 
-def test_discriminator_argv_accumulation_declines_an_invariant_payload(tmp_path):
+def test_discriminator_argv_accumulation_declines_an_invariant_payload(tmp_path: Path) -> None:
     """Second negative pin: the nested loop DOES iterate the outer target, but what it pushes
     into argv is a constant, so no per-item payload is carried and the call is still one spawn
     per outer item. Without the "mutation arguments name the nested target" conjunct this shape
@@ -6866,7 +6867,7 @@ def test_discriminator_argv_accumulation_declines_an_invariant_payload(tmp_path)
     assert [site.enclosing for site in violations] == ["resync"]
 
 
-def test_route_d_declines_a_runner_shaped_name_bound_to_a_loop_item(tmp_path):
+def test_route_d_declines_a_runner_shaped_name_bound_to_a_loop_item(tmp_path: Path) -> None:
     """Route-d resolution precision (`_name_is_locally_bound_data`), iteration-target leg. A
     comprehension variable spelled `run` because it holds a digit RUN collides by prefix with an
     unrelated module-level spawner, and route d resolves the collision repo-wide. The callee is
@@ -6887,7 +6888,7 @@ def test_route_d_declines_a_runner_shaped_name_bound_to_a_loop_item(tmp_path):
     assert violations == []
 
 
-def test_route_d_declines_a_runner_shaped_name_bound_to_a_literal(tmp_path):
+def test_route_d_declines_a_runner_shaped_name_bound_to_a_literal(tmp_path: Path) -> None:
     """Same predicate, constant-bearing-RHS leg. `run = m.group(1) if m else ''` can evaluate to
     a string, so the identifier does not denote the same-named spawner it collides with. Real
     shape: `fix_concrete_path_citations.fenced_line_numbers`."""
@@ -6907,7 +6908,7 @@ def test_route_d_declines_a_runner_shaped_name_bound_to_a_literal(tmp_path):
     assert violations == []
 
 
-def test_route_d_still_resolves_an_or_default_runner_binding(tmp_path):
+def test_route_d_still_resolves_an_or_default_runner_binding(tmp_path: Path) -> None:
     """The pin that keeps `_name_is_locally_bound_data` from swallowing route d whole. The
     injectable-seam idiom rebinds its own parameter (`run_git = run_git or default_run_git`,
     `consolidate_assemble.brief`) -- a local assignment, but one with no literal leaf and no
@@ -6931,7 +6932,7 @@ def test_route_d_still_resolves_an_or_default_runner_binding(tmp_path):
     assert [site.enclosing for site in violations] == ["brief"]
 
 
-def test_discriminator_argv_spliced_chunk_not_flagged_through_wrapper(tmp_path):
+def test_discriminator_argv_spliced_chunk_not_flagged_through_wrapper(tmp_path: Path) -> None:
     """Discriminator 7, wrapper arm: the same shape reached through a local runner. Unlike
     discriminator 6 this is NOT restricted to a direct spawn call -- a wrapper handed a whole
     chunk in one argument spawns once for that chunk whatever it does with it. The real shape
@@ -6955,7 +6956,7 @@ def test_discriminator_argv_spliced_chunk_not_flagged_through_wrapper(tmp_path):
     assert violations == []
 
 
-def test_discriminator_argv_element_loop_target_still_flagged(tmp_path):
+def test_discriminator_argv_element_loop_target_still_flagged(tmp_path: Path) -> None:
     """Negative control for discriminator 7, and the whole point of it: a loop target placed in
     argv as ONE ELEMENT is the per-item shape this gate exists to report. Only splicing it as a
     SEQUENCE (`+ chunk`, `*chunk`) says one call carries the group."""
@@ -6973,7 +6974,7 @@ def test_discriminator_argv_element_loop_target_still_flagged(tmp_path):
     assert [site.enclosing for site in violations] == ["check"]
 
 
-def test_discriminator_argv_splice_declines_bare_name_argv(tmp_path):
+def test_discriminator_argv_splice_declines_bare_name_argv(tmp_path: Path) -> None:
     """Discriminator 7 declines a bare `Name` argv: `_run(argv_for(item))` and `_run(chunk)`
     are indistinguishable at this seam, so the site stays REPORTED. Declining rather than
     guessing is the safe direction for a discriminator that suppresses -- the same discipline
@@ -6991,7 +6992,7 @@ def test_discriminator_argv_splice_declines_bare_name_argv(tmp_path):
     assert [site.enclosing for site in violations] == ["check"]
 
 
-def test_discriminator_argv_splice_declines_attribute_off_loop_target(tmp_path):
+def test_discriminator_argv_splice_declines_attribute_off_loop_target(tmp_path: Path) -> None:
     """Discriminator 7 matches only a name the LOOP ITSELF binds. `item.argv` is an attribute
     off the target, not the group the iterable yielded -- a per-item spawn whose argv happens to
     be assembled from the item, which must stay reported."""
@@ -7024,7 +7025,7 @@ _VERB_GATED_CHOKEPOINT = (
 )
 
 
-def test_discriminator_verb_gated_chokepoint_non_spawning_verb_not_flagged(tmp_path):
+def test_discriminator_verb_gated_chokepoint_non_spawning_verb_not_flagged(tmp_path: Path) -> None:
     """Discriminator 5: `pickup_assemble._run_git` spawns real git only for the verbs in its
     own module-level allowlist and serves every other verb from an in-process read model, so
     a loop calling it with `cat-file` creates ZERO processes. Reporting that as git
@@ -7042,7 +7043,7 @@ def test_discriminator_verb_gated_chokepoint_non_spawning_verb_not_flagged(tmp_p
     assert violations == []
 
 
-def test_discriminator_verb_gated_chokepoint_spawning_verb_still_flagged(tmp_path):
+def test_discriminator_verb_gated_chokepoint_spawning_verb_still_flagged(tmp_path: Path) -> None:
     """Negative control for discriminator 5: the SAME chokepoint called per-item with a verb
     that IS on its spawn allowlist really does spawn one process per item, and must stay
     flagged. The discriminator keys on the call site's own literal verb, never on the
@@ -7059,7 +7060,7 @@ def test_discriminator_verb_gated_chokepoint_spawning_verb_still_flagged(tmp_pat
     assert [(site.enclosing, site.callee) for site in violations] == [("check", "_run_git")]
 
 
-def test_discriminator_verb_gated_requires_a_statically_known_verb(tmp_path):
+def test_discriminator_verb_gated_requires_a_statically_known_verb(tmp_path: Path) -> None:
     """Discriminator 5 stays false-negative-biased in the collector's own direction only:
     a call site whose verb is a VARIABLE cannot be decided statically, so the chokepoint is
     treated exactly as it was before this discriminator existed -- flagged."""
@@ -7075,7 +7076,7 @@ def test_discriminator_verb_gated_requires_a_statically_known_verb(tmp_path):
     assert [(site.enclosing, site.callee) for site in violations] == [("check", "_run_git")]
 
 
-def test_discriminator_program_identity_behind_a_fixed_interpreter_not_flagged(tmp_path):
+def test_discriminator_program_identity_behind_a_fixed_interpreter_not_flagged(tmp_path: Path) -> None:
     """Discriminator 11: argv[0] is a constant `sys.executable` and the SCRIPT behind it varies,
     so the loop runs N different programs. Discriminator 6 reads argv[0] only and sees one fixed
     interpreter -- correct about the slot it reads, blind to the one that names the program."""
@@ -7092,7 +7093,7 @@ def test_discriminator_program_identity_behind_a_fixed_interpreter_not_flagged(t
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_program_identity_declines_behind_an_interpreter_flag(tmp_path):
+def test_discriminator_program_identity_declines_behind_an_interpreter_flag(tmp_path: Path) -> None:
     """Discriminator 11's load-bearing negative. With a flag between the interpreter and the
     rest, argv[1] stops naming the program -- `-m` makes argv[2] a MODULE, and what a flag
     consumes is not knowable from the AST. Declines rather than guessing at a position."""
@@ -7110,7 +7111,7 @@ def test_discriminator_program_identity_declines_behind_an_interpreter_flag(tmp_
     assert [(site.enclosing, site.callee) for site in violations] == [("run_all", "run")]
 
 
-def test_discriminator_program_identity_declines_a_varying_value_argument(tmp_path):
+def test_discriminator_program_identity_declines_a_varying_value_argument(tmp_path: Path) -> None:
     """Discriminator 11 reads the PROGRAM slot, never a value slot. Here the interpreter and the
     script are both fixed and only an argument varies -- one program, N items, genuinely
     batchable, and the exact site this gate exists to catch."""
@@ -7130,7 +7131,7 @@ def test_discriminator_program_identity_declines_a_varying_value_argument(tmp_pa
     assert [(site.enclosing, site.callee) for site in violations] == [("run_all", "run")]
 
 
-def test_discriminator_argv_binding_resolves_through_shlex_split_not_flagged(tmp_path):
+def test_discriminator_argv_binding_resolves_through_shlex_split_not_flagged(tmp_path: Path) -> None:
     """Binding-capture widening for discriminator 6/11 (`_shlex_split_subject_expr`, measured
     2026-08-19 against `workweek_reverse_drift_gate.run_gate`). `argv = shlex.split(cmd)` is a
     bare `Call` RHS -- `_argv0_expr` alone leaves it unresolved, so the call site passing the
@@ -7151,7 +7152,7 @@ def test_discriminator_argv_binding_resolves_through_shlex_split_not_flagged(tmp
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_argv_binding_declines_shlex_split_of_a_non_tainted_command(tmp_path):
+def test_discriminator_argv_binding_declines_shlex_split_of_a_non_tainted_command(tmp_path: Path) -> None:
     """Declining half: the `shlex.split` SUBJECT is a constant, not loop-tainted, so argv[0]
     does not vary and the site is genuinely batchable -- stays flagged. Proves the widening does
     not treat every `shlex.split` result as immune regardless of what it splits."""
@@ -7170,7 +7171,7 @@ def test_discriminator_argv_binding_declines_shlex_split_of_a_non_tainted_comman
     assert [(site.enclosing, site.callee) for site in violations] == [("run_all", "run")]
 
 
-def test_discriminator_argv_binding_declines_a_non_shlex_call_rhs(tmp_path):
+def test_discriminator_argv_binding_declines_a_non_shlex_call_rhs(tmp_path: Path) -> None:
     """The other declining half, and the one the widening exists to guard against: an arbitrary
     function call assigned to the argv name (`build_argv(item)`) must NOT be treated as
     argv0-transparent even though `item` is loop-tainted -- a repo-defined resolver can return a
@@ -7193,7 +7194,7 @@ def test_discriminator_argv_binding_declines_a_non_shlex_call_rhs(tmp_path):
     assert [(site.enclosing, site.callee) for site in violations] == [("run_all", "run")]
 
 
-def test_discriminator_argv_splice_resolves_a_one_hop_local_binding(tmp_path):
+def test_discriminator_argv_splice_resolves_a_one_hop_local_binding(tmp_path: Path) -> None:
     """Discriminator 7's one-hop binding resolution: the chunker builds argv as its own
     statement and passes the local, which is how the idiom is actually spelled in this tree.
     Before this, `args[0]` was a bare `Name` and the matcher declined."""
@@ -7210,7 +7211,7 @@ def test_discriminator_argv_splice_resolves_a_one_hop_local_binding(tmp_path):
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_argv_splice_binding_declines_a_non_argv_shaped_local(tmp_path):
+def test_discriminator_argv_splice_binding_declines_a_non_argv_shaped_local(tmp_path: Path) -> None:
     """The hop resolves only argv-SHAPED right-hand sides. A local bound to a per-item value is
     not a spliced group, and resolving it would turn a suppressor loose on ordinary per-item
     spawns -- the bare-`Name` decline this discriminator has always made, preserved."""
@@ -7231,7 +7232,7 @@ def test_discriminator_argv_splice_binding_declines_a_non_argv_shaped_local(tmp_
     assert [(site.enclosing, site.callee) for site in violations] == [("sweep", "run")]
 
 
-def test_discriminator_retry_loop_not_flagged(tmp_path):
+def test_discriminator_retry_loop_not_flagged(tmp_path: Path) -> None:
     """Discriminator 10: a bounded retry with an early exit, whose target never reaches the
     spawn's arguments. Every iteration issues an identical spawn. Discriminator 3 already
     excludes the `while` spelling of this wholesale; that `for attempt in range(N)` was still
@@ -7253,7 +7254,7 @@ def test_discriminator_retry_loop_not_flagged(tmp_path):
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_retry_loop_declines_when_the_target_reaches_argv(tmp_path):
+def test_discriminator_retry_loop_declines_when_the_target_reaches_argv(tmp_path: Path) -> None:
     """Discriminator 10's load-bearing negative -- the call-level half of the test. The loop is
     retry-SHAPED (count-bounded range, early exit) but its target reaches the spawn's arguments,
     so the argv genuinely varies and the site is a fan-out, not a retry."""
@@ -7275,7 +7276,7 @@ def test_discriminator_retry_loop_declines_when_the_target_reaches_argv(tmp_path
     assert [(site.enclosing, site.callee) for site in violations] == [("sweep", "run")]
 
 
-def test_discriminator_retry_loop_declines_a_size_derived_bound(tmp_path):
+def test_discriminator_retry_loop_declines_a_size_derived_bound(tmp_path: Path) -> None:
     """Discriminator 10 inherits discriminator 9's safety line: a bound derived from a
     collection's SIZE is a fan-out however it is spelled, so `len(...)` anywhere in the range
     arguments declines even when the loop is otherwise retry-shaped."""
@@ -7295,7 +7296,7 @@ def test_discriminator_retry_loop_declines_a_size_derived_bound(tmp_path):
     assert [(site.enclosing, site.callee) for site in violations] == [("sweep", "run")]
 
 
-def test_discriminator_retry_loop_declines_without_an_early_exit(tmp_path):
+def test_discriminator_retry_loop_declines_without_an_early_exit(tmp_path: Path) -> None:
     """Discriminator 10 requires the loop to be able to STOP on success. A count-bounded loop
     that runs all N iterations unconditionally is not retrying anything -- it is repeating work,
     and whether that is intentional is exactly what discriminator 9's discarded-target test
@@ -7316,7 +7317,7 @@ def test_discriminator_retry_loop_declines_without_an_early_exit(tmp_path):
     assert [(site.enclosing, site.callee) for site in violations] == [("churn", "run")]
 
 
-def test_discriminator_repetition_loop_statement_form_not_flagged(tmp_path):
+def test_discriminator_repetition_loop_statement_form_not_flagged(tmp_path: Path) -> None:
     """Discriminator 9, `ast.For` form: target discarded over a count-bounded `range`, so every
     iteration's argv is identical -- a repetition, not one spawn per item."""
     fixture = tmp_path / "disc_repetition_for.py"
@@ -7331,7 +7332,7 @@ def test_discriminator_repetition_loop_statement_form_not_flagged(tmp_path):
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_repetition_loop_comprehension_form_not_flagged(tmp_path):
+def test_discriminator_repetition_loop_comprehension_form_not_flagged(tmp_path: Path) -> None:
     """Discriminator 9, comprehension form -- load-bearing, not a symmetry nicety. MEASURED
     2026-08-19: each retired benchmark key carried TWO call sites, a `for _ in range(warmup)`
     statement AND the sampling comprehension, so a statement-only matcher would have retired
@@ -7347,7 +7348,7 @@ def test_discriminator_repetition_loop_comprehension_form_not_flagged(tmp_path):
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_repetition_loop_declines_a_size_derived_count(tmp_path):
+def test_discriminator_repetition_loop_declines_a_size_derived_count(tmp_path: Path) -> None:
     """Discriminator 9's load-bearing negative and its entire safety argument. `range(len(x))`
     scales with INPUT SIZE -- that is the amplification this gate exists to catch, wearing a
     discarded target. Any `Call` in the `range` argument declines."""
@@ -7364,7 +7365,7 @@ def test_discriminator_repetition_loop_declines_a_size_derived_count(tmp_path):
     assert [(site.enclosing, site.callee) for site in violations] == [("sweep", "run")]
 
 
-def test_discriminator_repetition_loop_declines_a_target_read_back(tmp_path):
+def test_discriminator_repetition_loop_declines_a_target_read_back(tmp_path: Path) -> None:
     """Discriminator 9 decides by USE, not by name: a target the body reads back is not
     discarded, whatever it is called. This is why the three MISCLASSIFIED `retry-loop` rows --
     all of which name their target `attempt` and read it for backoff -- are NOT retired here,
@@ -7382,7 +7383,7 @@ def test_discriminator_repetition_loop_declines_a_target_read_back(tmp_path):
     assert [(site.enclosing, site.callee) for site in violations] == [("attempts", "run")]
 
 
-def test_discriminator_argv0_varies_through_a_local_helper_not_flagged(tmp_path):
+def test_discriminator_argv0_varies_through_a_local_helper_not_flagged(tmp_path: Path) -> None:
     """Discriminator 8, positive: the loop calls a HELPER and the helper spawns whichever
     program its caller handed it. Same "different program each iteration" fact discriminator 6
     decides at route a, reached across one hop -- which is where this repo's population actually
@@ -7402,7 +7403,7 @@ def test_discriminator_argv0_varies_through_a_local_helper_not_flagged(tmp_path)
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_operator_gated_spawn_not_flagged(tmp_path):
+def test_discriminator_operator_gated_spawn_not_flagged(tmp_path: Path) -> None:
     """Discriminator 15. The spawn fires only when the operator types `d`, so its count is bounded
     by keypresses and the modal path spawns zero."""
     fixture = tmp_path / "disc_operator_gate.py"
@@ -7420,7 +7421,7 @@ def test_discriminator_operator_gated_spawn_not_flagged(tmp_path):
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_operator_gate_declines_a_read_before_the_loop(tmp_path):
+def test_discriminator_operator_gate_declines_a_read_before_the_loop(tmp_path: Path) -> None:
     """Discriminator 15's load-bearing negative. A stdin read BEFORE the loop is the ITERABLE'S
     SOURCE, not a per-item gate -- "read a work list from stdin, then fan out over it" is ordinary
     amplification and common in this tree. Only a read inside the loop body gates per item."""
@@ -7439,7 +7440,7 @@ def test_discriminator_operator_gate_declines_a_read_before_the_loop(tmp_path):
     assert [site.enclosing for site in violations] == ["review"]
 
 
-def test_discriminator_lazy_memo_not_flagged(tmp_path):
+def test_discriminator_lazy_memo_not_flagged(tmp_path: Path) -> None:
     """Discriminator 16's positive control -- the shape at
     `promote_shipped_in_flight_stubs.py :: _run_promotions`. One resolution per scan behind a
     single-slot cache bound before the loop."""
@@ -7458,7 +7459,7 @@ def test_discriminator_lazy_memo_not_flagged(tmp_path):
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_lazy_memo_declines_an_unguarded_assignment(tmp_path):
+def test_discriminator_lazy_memo_declines_an_unguarded_assignment(tmp_path: Path) -> None:
     """Discriminator 16's first load-bearing negative: assignment to a name is not memoization.
     Without the unset-test clause, every `x = subprocess.run(...)` in a loop goes silent."""
     fixture = tmp_path / "disc_lazy_memo_unguarded.py"
@@ -7476,7 +7477,7 @@ def test_discriminator_lazy_memo_declines_an_unguarded_assignment(tmp_path):
     assert [site.enclosing for site in violations] == ["promote"]
 
 
-def test_discriminator_lazy_memo_declines_a_cache_bound_inside_the_loop(tmp_path):
+def test_discriminator_lazy_memo_declines_a_cache_bound_inside_the_loop(tmp_path: Path) -> None:
     """Discriminator 16's second load-bearing negative. A name first bound INSIDE the loop is
     re-created every pass, so its `is None` test is true every pass and the call fires every
     pass. The guard is present and means nothing -- this is amplification wearing one."""
@@ -7496,7 +7497,7 @@ def test_discriminator_lazy_memo_declines_a_cache_bound_inside_the_loop(tmp_path
     assert [site.enclosing for site in violations] == ["promote"]
 
 
-def test_discriminator_lazy_memo_declines_a_cache_rebound_inside_the_loop(tmp_path):
+def test_discriminator_lazy_memo_declines_a_cache_rebound_inside_the_loop(tmp_path: Path) -> None:
     """Discriminator 16's third load-bearing negative. A cache cleared mid-loop is resolved
     again on the next pass, so the site really does spawn per item -- N times, not once."""
     fixture = tmp_path / "disc_lazy_memo_rebound.py"
@@ -7516,7 +7517,7 @@ def test_discriminator_lazy_memo_declines_a_cache_rebound_inside_the_loop(tmp_pa
     assert [site.enclosing for site in violations] == ["promote"]
 
 
-def test_discriminator_lazy_memo_declines_a_keyed_cache(tmp_path):
+def test_discriminator_lazy_memo_declines_a_keyed_cache(tmp_path: Path) -> None:
     """Discriminator 16's scope boundary. A keyed cache resolves once per DISTINCT KEY, and the
     key set is a function of the iterable -- it may be N. Only a single-slot cache is provably
     once-per-scan, so the keyed shape stays reported."""
@@ -7536,7 +7537,7 @@ def test_discriminator_lazy_memo_declines_a_keyed_cache(tmp_path):
     assert [site.enclosing for site in violations] == ["promote"]
 
 
-def test_discriminator_attribution_search_not_flagged(tmp_path):
+def test_discriminator_attribution_search_not_flagged(tmp_path: Path) -> None:
     """Discriminator 14. The loop runs one candidate, then asks OUT-OF-BAND state whether it was
     perturbed, and stops at the first that was. A batched run reports that the artifact appeared
     but not which candidate made it -- and that attribution is the entire output."""
@@ -7556,7 +7557,7 @@ def test_discriminator_attribution_search_not_flagged(tmp_path):
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_attribution_search_declines_ordinary_fail_fast(tmp_path):
+def test_discriminator_attribution_search_declines_ordinary_fail_fast(tmp_path: Path) -> None:
     """Discriminator 14's load-bearing negative, and the clause that keeps it from silencing every
     early-exit loop in the tree. `if result.returncode: return` reads the SPAWN'S OWN result -- a
     per-item check on a genuinely batchable fan-out, not an out-of-band observation."""
@@ -7576,7 +7577,7 @@ def test_discriminator_attribution_search_declines_ordinary_fail_fast(tmp_path):
     assert [site.enclosing for site in violations] == ["main"]
 
 
-def test_discriminator_attribution_search_declines_a_loop_target_test(tmp_path):
+def test_discriminator_attribution_search_declines_a_loop_target_test(tmp_path: Path) -> None:
     """The other half of clause 2: a test on the LOOP TARGET is a per-item filter, not an
     observation of state the spawn perturbed."""
     fixture = tmp_path / "disc_attribution_target_test.py"
@@ -7595,7 +7596,7 @@ def test_discriminator_attribution_search_declines_a_loop_target_test(tmp_path):
     assert [site.enclosing for site in violations] == ["main"]
 
 
-def test_discriminator_function_local_append_only_literal_not_flagged(tmp_path):
+def test_discriminator_function_local_append_only_literal_not_flagged(tmp_path: Path) -> None:
     """Discriminator 2 at FUNCTION scope. The count is `len(literal) + number of append
     statements` -- both fixed at author time, which is the same safety argument the rule already
     made at module scope. `prereq_probe.probe_clone_auth`'s real shape."""
@@ -7616,7 +7617,7 @@ def test_discriminator_function_local_append_only_literal_not_flagged(tmp_path):
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_function_local_literal_declines_an_unbounded_grow(tmp_path):
+def test_discriminator_function_local_literal_declines_an_unbounded_grow(tmp_path: Path) -> None:
     """The negative that keeps the function-local arm honest. `extend` grows the sequence by an
     amount nobody can read off the source, so the loop is input-sized again and the site must
     stay reported. Same for a rebind or a comprehension -- `append` is the only growth whose
@@ -7636,7 +7637,7 @@ def test_discriminator_function_local_literal_declines_an_unbounded_grow(tmp_pat
     assert [site.enclosing for site in violations] == ["probe"]
 
 
-def test_discriminator_batched_primary_fallback_except_shape_not_flagged(tmp_path):
+def test_discriminator_batched_primary_fallback_except_shape_not_flagged(tmp_path: Path) -> None:
     """Discriminator 13, shape 3a -- the per-item loop lives in the `except` of the batched
     primary, so it runs only when the batch spawn failed."""
     fixture = tmp_path / "disc_fallback_except.py"
@@ -7656,7 +7657,7 @@ def test_discriminator_batched_primary_fallback_except_shape_not_flagged(tmp_pat
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_batched_primary_fallback_early_return_shape_not_flagged(tmp_path):
+def test_discriminator_batched_primary_fallback_early_return_shape_not_flagged(tmp_path: Path) -> None:
     """Discriminator 13, shape 3c -- dominance by EARLY RETURN ON SUCCESS rather than by
     nesting. `coordinator-safe-commit._first_invalid_pathspec`'s real shape, and the one a
     nesting-only matcher misses entirely."""
@@ -7676,7 +7677,7 @@ def test_discriminator_batched_primary_fallback_early_return_shape_not_flagged(t
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_batched_primary_fallback_declines_an_ungated_loop(tmp_path):
+def test_discriminator_batched_primary_fallback_declines_an_ungated_loop(tmp_path: Path) -> None:
     """Discriminator 13's load-bearing negative. Clause 3 is the ONLY thing separating a real
     fallback from "calls a batch, ignores the result, fans out anyway" -- here the batch runs and
     its result is never consulted, so the per-item loop is unconditional amplification and must
@@ -7695,7 +7696,7 @@ def test_discriminator_batched_primary_fallback_declines_an_ungated_loop(tmp_pat
     assert [site.enclosing for site in violations] == ["check"]
 
 
-def test_discriminator_batched_primary_fallback_declines_without_a_primary(tmp_path):
+def test_discriminator_batched_primary_fallback_declines_without_a_primary(tmp_path: Path) -> None:
     """Clause 1/2: a guard on some unrelated condition is not a batched primary. Without a call
     that CARRIES THE COLLECTION WHOLE, there is nothing for the fallback to be a fallback to."""
     fixture = tmp_path / "disc_fallback_no_primary.py"
@@ -7713,7 +7714,7 @@ def test_discriminator_batched_primary_fallback_declines_without_a_primary(tmp_p
     assert [site.enclosing for site in violations] == ["check"]
 
 
-def test_discriminator_batched_primary_fallback_orelse_shape_not_flagged(tmp_path):
+def test_discriminator_batched_primary_fallback_orelse_shape_not_flagged(tmp_path: Path) -> None:
     """Discriminator 13, shape 3d (WIDENED 2026-08-27, chunk C3 of `2026-08-27-the-
     discriminators-that-already-exist-reach-their-rows`) -- the per-item loop is the FALLBACK,
     sitting in the `orelse` of an `If` gated on the batch's own success flag, symmetric to shape
@@ -7738,7 +7739,7 @@ def test_discriminator_batched_primary_fallback_orelse_shape_not_flagged(tmp_pat
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_batched_primary_fallback_orelse_declines_when_test_is_unrelated(tmp_path):
+def test_discriminator_batched_primary_fallback_orelse_declines_when_test_is_unrelated(tmp_path: Path) -> None:
     """AC7b negative for shape 3d -- the nearest shape that must STILL be reported: the loop sits
     in an `orelse`, but the gating `If`'s test does not reference the primary's result at all, so
     there is no real gate on the batch outcome. A widening that pattern-matched on "loop in an
@@ -7762,7 +7763,7 @@ def test_discriminator_batched_primary_fallback_orelse_declines_when_test_is_unr
     assert [site.enclosing for site in violations] == ["check"]
 
 
-def test_discriminator_batched_primary_fallback_ifexp_shape_not_flagged(tmp_path):
+def test_discriminator_batched_primary_fallback_ifexp_shape_not_flagged(tmp_path: Path) -> None:
     """Discriminator 13, shape 3e (WIDENED 2026-08-27, chunk C3) -- the fallback CALL is the
     else-arm of an `ast.IfExp` (a ternary, often nested inside a dict literal), not a loop nested
     in a statement-level `if`/`else`: the loop itself runs unconditionally every iteration, and
@@ -7788,7 +7789,7 @@ def test_discriminator_batched_primary_fallback_ifexp_shape_not_flagged(tmp_path
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_batched_primary_fallback_ifexp_declines_when_test_is_unrelated(tmp_path):
+def test_discriminator_batched_primary_fallback_ifexp_declines_when_test_is_unrelated(tmp_path: Path) -> None:
     """AC7b negative for shape 3e -- the nearest shape that must STILL be reported: the fallback
     call is the else-arm of an `IfExp`, but the ternary's test is unrelated to the primary's
     result, so there is no real per-item gate on the batch outcome."""
@@ -7812,7 +7813,7 @@ def test_discriminator_batched_primary_fallback_ifexp_declines_when_test_is_unre
     assert [site.enclosing for site in violations] == ["brief"]
 
 
-def test_discriminator_batched_primary_fallback_starred_comprehension_not_flagged(tmp_path):
+def test_discriminator_batched_primary_fallback_starred_comprehension_not_flagged(tmp_path: Path) -> None:
     """Discriminator 13, clause 2 (WIDENED 2026-08-27, chunk C3) -- a `Starred` argument that maps
     the group through a one-generator, unfiltered comprehension still carries it WHOLE.
     `distill_apply_disposal.py`'s real primary argv (`*[str(p) for p in tracked_paths]`)."""
@@ -7832,7 +7833,7 @@ def test_discriminator_batched_primary_fallback_starred_comprehension_not_flagge
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_batched_primary_fallback_filtered_comprehension_declines(tmp_path):
+def test_discriminator_batched_primary_fallback_filtered_comprehension_declines(tmp_path: Path) -> None:
     """AC7b negative for the comprehension leg of clause 2 -- the nearest shape that must STILL be
     reported: the comprehension carries a FILTERED subset (`if p.exists()`), not the group whole,
     so the primary does not actually cover every per-item call the loop later makes."""
@@ -7855,7 +7856,7 @@ def test_discriminator_batched_primary_fallback_filtered_comprehension_declines(
     assert [site.enclosing for site in violations] == ["check"]
 
 
-def test_discriminator_batched_primary_fallback_plural_result_indexed_not_flagged(tmp_path):
+def test_discriminator_batched_primary_fallback_plural_result_indexed_not_flagged(tmp_path: Path) -> None:
     """Discriminator 13, clauses 1 and 2 together (WIDENED 2026-08-27, chunk C3) -- a plural
     batched-primary callee (`_tip_authors`) bridges to its singular per-item callee (`_tip_
     author`, clause 1), and the primary's bound result carries the group not by argv but by being
@@ -7884,7 +7885,7 @@ def test_discriminator_batched_primary_fallback_plural_result_indexed_not_flagge
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_batched_primary_fallback_plural_from_split_not_flagged(tmp_path):
+def test_discriminator_batched_primary_fallback_plural_from_split_not_flagged(tmp_path: Path) -> None:
     """Discriminator 13, clause 1's `_from` SPLIT (WIDENED 2026-09-11) -- the same plural bridge
     when the batched producer has been divided into a spawning half (`_ref_rows`) and a parsing
     half (`_tip_authors_from`) so ONE `for-each-ref` feeds two consumers. This is the live shape
@@ -7916,7 +7917,7 @@ def test_discriminator_batched_primary_fallback_plural_from_split_not_flagged(tm
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_batched_primary_fallback_from_suffix_is_not_a_prefix_match(tmp_path):
+def test_discriminator_batched_primary_fallback_from_suffix_is_not_a_prefix_match(tmp_path: Path) -> None:
     """AC7b negative for the 2026-09-11 widening -- the bridge is a CLOSED two-name set, never a
     prefix match. `_tip_author_lookup` starts with the per-item callee's own name and is not its
     batched plural, so it must not bridge; the per-item call stays reported."""
@@ -7943,7 +7944,7 @@ def test_discriminator_batched_primary_fallback_from_suffix_is_not_a_prefix_matc
     assert [site.enclosing for site in violations] == ["brief"]
 
 
-def test_discriminator_batched_primary_fallback_plural_declines_without_indexing(tmp_path):
+def test_discriminator_batched_primary_fallback_plural_declines_without_indexing(tmp_path: Path) -> None:
     """AC7b negative for the clause-1/clause-2 pairing -- the nearest shape that must STILL be
     reported: the plural batched primary exists and clause 1's name bridge matches it, but its
     bound result is never subscripted or `.get()`-ed by the loop's own target name anywhere in
@@ -7971,7 +7972,7 @@ def test_discriminator_batched_primary_fallback_plural_declines_without_indexing
     assert [site.enclosing for site in violations] == ["brief"]
 
 
-def test_discriminator_single_shot_terminal_own_block_not_flagged(tmp_path):
+def test_discriminator_single_shot_terminal_own_block_not_flagged(tmp_path: Path) -> None:
     """Discriminator 17 (BUILT 2026-08-27, chunk C4 of `2026-08-27-the-discriminators-that-
     already-exist-reach-their-rows`) -- shape A: the call's own containing statement sits inside
     a branch whose SAME block also holds an unconditional `return` after it. `find_polluter.py::
@@ -8006,7 +8007,7 @@ def test_discriminator_single_shot_terminal_own_block_not_flagged(tmp_path):
     assert "main" in {site.enclosing for site in violations}
 
 
-def test_discriminator_single_shot_terminal_outer_block_not_flagged(tmp_path):
+def test_discriminator_single_shot_terminal_outer_block_not_flagged(tmp_path: Path) -> None:
     """Discriminator 17, shape B: the call's own containing statement has nothing after it in
     ITS block, but an outer ancestor's block (the `try` statement itself, a sibling of the
     terminator) does. `percolate_preflight_scratch_publish.py::check_allowlist_string::
@@ -8050,7 +8051,7 @@ def test_discriminator_single_shot_terminal_outer_block_not_flagged(tmp_path):
     # covers the over-suppression regression this test class is meant to guard against.
 
 
-def test_discriminator_single_shot_terminal_declines_sibling_conditional_terminator(tmp_path):
+def test_discriminator_single_shot_terminal_declines_sibling_conditional_terminator(tmp_path: Path) -> None:
     """AC7b negative -- the nearest shape that must STILL be reported: an early-exit `return`
     follows the call, gated on the call's OWN result (`result.returncode != 0`, so
     discriminator 14's out-of-band exclusion also declines this shape -- ordinary per-item
@@ -8081,7 +8082,7 @@ def test_discriminator_single_shot_terminal_declines_sibling_conditional_termina
     assert [site.enclosing for site in violations] == ["scan"]
 
 
-def test_discriminator_single_shot_terminal_nested_loop_break_still_flagged(tmp_path):
+def test_discriminator_single_shot_terminal_nested_loop_break_still_flagged(tmp_path: Path) -> None:
     """P1 fixture (code review of chunk C4): a `break` only exits the loop it is lexically
     inside. A call inside an INNER loop whose `break` exits only that inner loop leaves the
     OUTER loop still iterating, so the call still fires once per OUTER item -- genuine per-item
@@ -8104,7 +8105,7 @@ def test_discriminator_single_shot_terminal_nested_loop_break_still_flagged(tmp_
     assert [site.enclosing for site in violations] == ["scan"]
 
 
-def test_discriminator_annotated_module_literal_not_flagged(tmp_path):
+def test_discriminator_annotated_module_literal_not_flagged(tmp_path: Path) -> None:
     """Discriminator 2 reads an ANNOTATED module-level literal too. The annotation is a fact
     about the author's typing discipline, never about how many times the loop runs."""
     fixture = tmp_path / "disc_annotated_literal.py"
@@ -8121,7 +8122,7 @@ def test_discriminator_annotated_module_literal_not_flagged(tmp_path):
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_annotated_module_name_without_a_literal_still_flagged(tmp_path):
+def test_discriminator_annotated_module_name_without_a_literal_still_flagged(tmp_path: Path) -> None:
     """The negative that keeps the annotation arm honest: an annotated module-level name bound
     to a CALL is not a literal, its length is not fixed at author time, and the loop over it is
     a genuine input-sized fan-out."""
@@ -8140,7 +8141,7 @@ def test_discriminator_annotated_module_name_without_a_literal_still_flagged(tmp
     assert [site.enclosing for site in violations] == ["check"]
 
 
-def test_discriminator_argv_splice_accepts_an_elementwise_comprehension(tmp_path):
+def test_discriminator_argv_splice_accepts_an_elementwise_comprehension(tmp_path: Path) -> None:
     """Discriminator 7, comprehension arm. `*[str(s) for s in batch]` puts the whole group into
     one argv exactly as `*batch` would -- the byte-budget chunking shape, where spawn count is
     O(argv_bytes) and never O(items)."""
@@ -8156,7 +8157,7 @@ def test_discriminator_argv_splice_accepts_an_elementwise_comprehension(tmp_path
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_argv_splice_declines_a_comprehension_not_over_the_target(tmp_path):
+def test_discriminator_argv_splice_declines_a_comprehension_not_over_the_target(tmp_path: Path) -> None:
     """The comprehension arm must read the group the LOOP yielded, not any comprehension that
     happens to sit in argv. Here the comprehension iterates an unrelated collection while the
     loop target rides in as a single element -- a real per-item fan-out."""
@@ -8173,7 +8174,7 @@ def test_discriminator_argv_splice_declines_a_comprehension_not_over_the_target(
     assert [site.enclosing for site in violations] == ["check"]
 
 
-def test_discriminator_root_scoped_direct_not_flagged(tmp_path):
+def test_discriminator_root_scoped_direct_not_flagged(tmp_path: Path) -> None:
     """Discriminator 12, leg A. argv0 is the constant `git` and the loop target reaches only the
     `-C` operand -- one process cannot serve two roots, so N roots is N spawns."""
     fixture = tmp_path / "disc_root_scoped_direct.py"
@@ -8188,7 +8189,7 @@ def test_discriminator_root_scoped_direct_not_flagged(tmp_path):
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_root_scoped_through_helper_not_flagged(tmp_path):
+def test_discriminator_root_scoped_through_helper_not_flagged(tmp_path: Path) -> None:
     """Discriminator 12, leg B -- the same fact one helper hop away, with the per-root group
     already spliced whole into the single spawn (`publish.py`'s real shape)."""
     fixture = tmp_path / "disc_root_scoped_helper.py"
@@ -8206,7 +8207,7 @@ def test_discriminator_root_scoped_through_helper_not_flagged(tmp_path):
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_root_scoped_declines_when_a_pathspec_also_varies(tmp_path):
+def test_discriminator_root_scoped_declines_when_a_pathspec_also_varies(tmp_path: Path) -> None:
     """Discriminator 12's load-bearing negative, and a REAL refutation rather than a synthetic
     one: this is `dispatch_checks.check_destructive_git_orphan`'s shape, which an earlier draft
     of leg B silenced. The root varies AND a per-item pathspec rides along in the same argv --
@@ -8229,7 +8230,7 @@ def test_discriminator_root_scoped_declines_when_a_pathspec_also_varies(tmp_path
     assert [(site.enclosing, site.callee) for site in violations] == [("check", "_run_git")]
 
 
-def test_discriminator_root_scoped_declines_a_non_git_program(tmp_path):
+def test_discriminator_root_scoped_declines_a_non_git_program(tmp_path: Path) -> None:
     """`-C` means "change directory" to git and something else entirely to another program. The
     `elts[0] == "git"` requirement is what makes the flag's semantics knowable; without it this
     suppresses on a coincidence of spelling."""
@@ -8246,7 +8247,7 @@ def test_discriminator_root_scoped_declines_a_non_git_program(tmp_path):
     assert [site.enclosing for site in violations] == ["check"]
 
 
-def _write_route_d_injected_runner_bare_name_collision(tmp_path):
+def _write_route_d_injected_runner_bare_name_collision(tmp_path) -> None:
     """Route d resolves `_find_injected_runner_name`'s result BY BARE NAME, repo-wide
     (`runner_name in index.direct_spawn_funcs`), mirroring route f's own documented imprecision
     -- never by tracing what the argument at this call site actually, eventually binds to. The
@@ -8268,7 +8269,7 @@ def _write_route_d_injected_runner_bare_name_collision(tmp_path):
     )
 
 
-def test_discriminator_root_scoped_through_injected_runner_not_flagged(tmp_path):
+def test_discriminator_root_scoped_through_injected_runner_not_flagged(tmp_path: Path) -> None:
     """Discriminator 12, leg B's route-d extension (`_root_scoped_through_injected_runner`,
     measured 2026-08-19 against `consolidate_assemble.brief`'s real
     `worktree_is_dirty(run_git, wt_path)` shape). `worktree_is_dirty` does not itself contain a
@@ -8301,7 +8302,7 @@ def test_discriminator_root_scoped_through_injected_runner_not_flagged(tmp_path)
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_root_scoped_injected_runner_declines_a_non_git_program(tmp_path):
+def test_discriminator_root_scoped_injected_runner_declines_a_non_git_program(tmp_path: Path) -> None:
     """Declining half: the resolved runner (`default_run_program`) does not scope on a literal
     `git` argv0 -- `_resolve_named_git_scope_param` re-derives its scope params the normal way
     and finds none, so this leg must not guess from the runner-shaped NAME alone. Stays
@@ -8329,7 +8330,7 @@ def test_discriminator_root_scoped_injected_runner_declines_a_non_git_program(tm
     assert [(site.enclosing, site.callee) for site in violations] == [("brief", "worktree_is_dirty")]
 
 
-def test_discriminator_root_scoped_injected_runner_declines_when_a_pathspec_also_varies(tmp_path):
+def test_discriminator_root_scoped_injected_runner_declines_when_a_pathspec_also_varies(tmp_path: Path) -> None:
     """Discriminator 12's precision constraint, applied to the injected-runner leg: the tainted
     name filling the scope slot (`wt_path`) must fill nothing else this call passes. Here a
     second tainted value (`pathspec`) co-varies with it and rides into the runner's own argv --
@@ -8358,7 +8359,7 @@ def test_discriminator_root_scoped_injected_runner_declines_when_a_pathspec_also
     assert [(site.enclosing, site.callee) for site in violations] == [("brief", "worktree_is_dirty")]
 
 
-def test_discriminator_argv0_through_helper_looks_past_a_fixed_interpreter(tmp_path):
+def test_discriminator_argv0_through_helper_looks_past_a_fixed_interpreter(tmp_path: Path) -> None:
     """The merge-order regression (2026-08-19). The helper's argv is bound to a local before the
     spawn, so BOTH binding maps hold the name `argv`: `_loop_argv0_bindings` holds the extracted
     head (`sys.executable`), `_loop_expr_bindings` holds the whole list. Merged with the head map
@@ -8382,7 +8383,7 @@ def test_discriminator_argv0_through_helper_looks_past_a_fixed_interpreter(tmp_p
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_discriminator_argv0_through_helper_declines_a_constant_program(tmp_path):
+def test_discriminator_argv0_through_helper_declines_a_constant_program(tmp_path: Path) -> None:
     """Discriminator 8's load-bearing negative, and the reason it is not the relaxation
     discriminator 6's route-a restriction exists to prevent. The helper's argv0 is the LITERAL
     `git`; only a git SUBCOMMAND varies with the loop. The program is identical every iteration,
@@ -8408,7 +8409,7 @@ def test_discriminator_argv0_through_helper_declines_a_constant_program(tmp_path
     assert [(site.enclosing, site.callee) for site in violations] == [("check", "_run_git")]
 
 
-def test_discriminator_argv0_through_helper_declines_an_unfilled_slot(tmp_path):
+def test_discriminator_argv0_through_helper_declines_an_unfilled_slot(tmp_path: Path) -> None:
     """Discriminator 8 declines when the caller does not supply the argv0 parameter at all --
     the helper falls back to its default, which is loop-invariant by construction, so the loop
     spawns ONE program N times and is genuinely batchable."""
@@ -8428,7 +8429,7 @@ def test_discriminator_argv0_through_helper_declines_an_unfilled_slot(tmp_path):
     assert [(site.enclosing, site.callee) for site in violations] == [("check", "_run_tool")]
 
 
-def test_discriminator_varying_argv0_direct_loop_target_not_flagged(tmp_path):
+def test_discriminator_varying_argv0_direct_loop_target_not_flagged(tmp_path: Path) -> None:
     """Discriminator 6, AC5 first direction (direct): argv0 IS the loop target itself --
     each iteration spawns a different program by construction, so there is no single call to
     batch into."""
@@ -8445,7 +8446,7 @@ def test_discriminator_varying_argv0_direct_loop_target_not_flagged(tmp_path):
     assert violations == []
 
 
-def test_discriminator_varying_argv0_via_assignment_hop_not_flagged(tmp_path):
+def test_discriminator_varying_argv0_via_assignment_hop_not_flagged(tmp_path: Path) -> None:
     """Discriminator 6, AC5 first direction (assignment hop): argv0 is a local the loop body
     derives from the loop target in one assignment -- `resolved = _resolve_toolchain_tool(row)`
     -- matching the real `cruft_sweep.sweep_toolchain_caches` shape this discriminator retires
@@ -8467,7 +8468,7 @@ def test_discriminator_varying_argv0_via_assignment_hop_not_flagged(tmp_path):
     assert violations == []
 
 
-def test_discriminator_varying_argv0_invariant_argv0_still_flagged(tmp_path):
+def test_discriminator_varying_argv0_invariant_argv0_still_flagged(tmp_path: Path) -> None:
     """Discriminator 6, AC5 negative control: argv0 is LOOP-INVARIANT (always `sys.executable`
     in spirit, here a fixed literal) while a later argv element varies with the loop target --
     the batchable shape this whole module exists to flag. Proves the discriminator checks
@@ -8486,7 +8487,7 @@ def test_discriminator_varying_argv0_invariant_argv0_still_flagged(tmp_path):
     assert violations[0].route == "a-direct"
 
 
-def test_discriminator_varying_argv0_unpacked_constant_argv0_still_flagged(tmp_path):
+def test_discriminator_varying_argv0_unpacked_constant_argv0_still_flagged(tmp_path: Path) -> None:
     """Discriminator 6, the negative control that actually bites (Review: code-reviewer
     2026-08-17, BLOCK + nit). The sibling control above uses a LITERAL argv0, so `_argv0_expr`
     returns a `Constant` with no names at all and the test passes whether or not the taint set
@@ -8514,7 +8515,7 @@ def test_discriminator_varying_argv0_unpacked_constant_argv0_still_flagged(tmp_p
     assert violations[0].route == "a-direct"
 
 
-def test_deep_tail_not_flagged(tmp_path):
+def test_deep_tail_not_flagged(tmp_path: Path) -> None:
     """Negative control: a callee that only TRANSITIVELY reaches a git spawn (two hops) must
     not be flagged -- this collector is restricted to the high-precision stratum by design."""
     fixture = tmp_path / "deep_tail.py"
@@ -8549,7 +8550,7 @@ def _index_transform_fixture(tmp_path):
     return fixture
 
 
-def test_index_transform_none_is_byte_identical_to_today(tmp_path):
+def test_index_transform_none_is_byte_identical_to_today(tmp_path: Path) -> None:
     """AC9.1: `index_transform=None` (the default) returns exactly what the untransformed call
     returns today -- the no-regression pin for this chunk's whole change."""
     _index_transform_fixture(tmp_path)
@@ -8559,7 +8560,7 @@ def test_index_transform_none_is_byte_identical_to_today(tmp_path):
     assert len(baseline) == 1
 
 
-def test_index_transform_identity_matches_untransformed_key_set(tmp_path):
+def test_index_transform_identity_matches_untransformed_key_set(tmp_path: Path) -> None:
     """AC9.2: an identity `index_transform` returns the identical key set to the untransformed
     call -- the positive leg this plan's later widened-index use builds on."""
     _index_transform_fixture(tmp_path)
@@ -8572,7 +8573,7 @@ def test_index_transform_identity_matches_untransformed_key_set(tmp_path):
     }
 
 
-def test_index_transform_forecloses_the_cross_parse_configuration(tmp_path):
+def test_index_transform_forecloses_the_cross_parse_configuration(tmp_path: Path) -> None:
     """AC9.3: pins that the cross-parse configuration this chunk replaces is UNREACHABLE
     through the public signature. The unsound predecessor shape let a caller hand in an
     `index` built from a DIFFERENT parse than the `ast.Call` nodes being visited -- measured
@@ -8615,7 +8616,7 @@ def test_index_transform_forecloses_the_cross_parse_configuration(tmp_path):
     }
 
 
-def test_gate_ignores_test_tree_paths(tmp_path):
+def test_gate_ignores_test_tree_paths(tmp_path: Path) -> None:
     """Negative control: a planted per-item git spawn under a `tests/` directory (routed
     through the shared `is_test_tree_site` predicate) must not be flagged."""
     test_dir = tmp_path / "tests"
@@ -8633,12 +8634,12 @@ def test_gate_ignores_test_tree_paths(tmp_path):
     assert violations == []
 
 
-def test_gate_scope_includes_coordinator_bin():
+def test_gate_scope_includes_coordinator_bin() -> None:
     """AC4: coordinator/bin/ must be in the collector's scope constant."""
     assert "coordinator/bin" in _GATE_SCOPE_ROOTS
 
 
-def test_reentrancy_sentinel_raises_loudly_if_self_scanned(tmp_path, monkeypatch):
+def test_reentrancy_sentinel_raises_loudly_if_self_scanned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Anti-scope 20: prove the sentinel actually fires, rather than trusting the filtering it
     double-checks. Simulates a discovery result that (wrongly) includes this gate's own file."""
     poisoned = [("coordinator_core/tests/test_no_unbatched_per_item_git_spawn.py", _THIS_FILE)]
@@ -8646,7 +8647,7 @@ def test_reentrancy_sentinel_raises_loudly_if_self_scanned(tmp_path, monkeypatch
         _assert_not_self_scanned(poisoned)
 
 
-def test_gate_does_not_scan_its_own_file_in_a_real_pass(tmp_path):
+def test_gate_does_not_scan_its_own_file_in_a_real_pass(tmp_path: Path) -> None:
     """Companion positive control: a real discovery pass over this file's own directory does
     NOT trip the sentinel, because `is_test_tree_site` correctly filters it first -- proving
     the sentinel and the filtering it double-checks agree in the ordinary case."""
@@ -8654,7 +8655,7 @@ def test_gate_does_not_scan_its_own_file_in_a_real_pass(tmp_path):
     assert all(f != _THIS_FILE for _rel, f in files)
 
 
-def test_route_g_positive_two_hop_forwarded_runner(tmp_path):
+def test_route_g_positive_two_hop_forwarded_runner(tmp_path: Path) -> None:
     """Route g, `g-param-forwarded` shape: a runner forwarded through TWO parameter hops into
     a loop, where neither the parameter nor the callee is named `run`/`git`/`spawn` -- the
     real shape (`_collect_discharging_range_shas`'s `resolve_range_shas` parameter, forwarding
@@ -8685,7 +8686,7 @@ def test_route_g_positive_two_hop_forwarded_runner(tmp_path):
     assert matches[0].callee == "_record_membership_shas"
 
 
-def test_route_g_positive_direct_call_of_spawn_bearing_param(tmp_path):
+def test_route_g_positive_direct_call_of_spawn_bearing_param(tmp_path: Path) -> None:
     """Route g, `g-param-called` shape: the loop body calls a spawn-bearing parameter of its
     enclosing function directly (leg 1's base case), tainted by a REAL call-site argument
     (leg 2) rather than a parameter default -- distinguishing this from route f, which
@@ -8711,7 +8712,7 @@ def test_route_g_positive_direct_call_of_spawn_bearing_param(tmp_path):
     assert matches[0].callee == "injected"
 
 
-def test_route_g_negative_invoked_without_taint(tmp_path):
+def test_route_g_negative_invoked_without_taint(tmp_path: Path) -> None:
     """Negative: leg 1 (invoked) without leg 2 (tainted) -- a parameter called directly inside
     the loop, but no real call site ever passes a spawner into it. Spawn-bearing requires BOTH
     legs; leg 1 alone would flag every dependency-injection seam regardless of what it is
@@ -8731,7 +8732,7 @@ def test_route_g_negative_invoked_without_taint(tmp_path):
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_route_g_negative_tainted_without_invocation(tmp_path):
+def test_route_g_negative_tainted_without_invocation(tmp_path: Path) -> None:
     """Negative: leg 2 (tainted) without leg 1 (invoked) -- a spawner flows into a parameter
     that the loop body never actually calls (referenced, not invoked). Not spawn-bearing."""
     (tmp_path / "tainted_only.py").write_text(
@@ -8751,7 +8752,7 @@ def test_route_g_negative_tainted_without_invocation(tmp_path):
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_route_g_negative_constant_literal_loop_not_flagged(tmp_path):
+def test_route_g_negative_constant_literal_loop_not_flagged(tmp_path: Path) -> None:
     """Discriminator 2 still suppresses route g: a spawn-bearing parameter called inside a
     loop over a module-level literal sequence is not flagged -- the loop-qualification
     discriminators apply ahead of every route, route g included."""
@@ -8774,7 +8775,7 @@ def test_route_g_negative_constant_literal_loop_not_flagged(tmp_path):
     assert find_unbatched_per_item_spawns((tmp_path,)) == []
 
 
-def test_route_g_pin_against_live_repo():
+def test_route_g_pin_against_live_repo() -> None:
     """GRADUATED 2026-08-19, the visible deliberate edit the prior revision of this docstring
     demanded rather than silent drift. This pinned exactly two keys --
     `directives_review._collect_discharging_range_shas` and its sibling
@@ -8801,7 +8802,7 @@ def test_route_g_pin_against_live_repo():
 # --------------------------------------------------------------------------
 
 
-def test_ordinal_anchor_survives_line_shift_and_an_unrelated_inserted_call(tmp_path):
+def test_ordinal_anchor_survives_line_shift_and_an_unrelated_inserted_call(tmp_path: Path) -> None:
     """AC2: the anchor is not a bare line number, proven three ways against the SAME fixture
     family -- a line inserted above the anchored call, the surrounding code reformatted, and an
     unrelated qualifying call to a DIFFERENT callee inserted in the same enclosing function. The
@@ -8871,7 +8872,7 @@ def test_ordinal_anchor_survives_line_shift_and_an_unrelated_inserted_call(tmp_p
     )
 
 
-def test_ordinal_assignment_refuses_a_duplicate_call_identity():
+def test_ordinal_assignment_refuses_a_duplicate_call_identity() -> None:
     """AC5: two qualifying calls that are genuinely indistinguishable under the widened anchor
     produce a loud, test-visible refusal -- never a silent double-suppression under one key.
     Exercised directly against `_assign_call_ordinals`, the one place the ordinal is actually
@@ -8892,7 +8893,7 @@ def test_ordinal_assignment_refuses_a_duplicate_call_identity():
         )
 
 
-def test_ordinal_assignment_independent_of_registration(tmp_path, monkeypatch):
+def test_ordinal_assignment_independent_of_registration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC10: the ordinal is assigned in a pass over ALL marked calls, independent of both
     suppression-registry membership and discriminator qualification outcome -- registering a
     suppression entry for one anchored call must not change any OTHER call's assigned anchor.
@@ -8945,7 +8946,7 @@ _SUMMARY_FIXTURE = (
 )
 
 
-def test_summary_fixed_point_equals_the_ast_projection_and_marshals(tmp_path):
+def test_summary_fixed_point_equals_the_ast_projection_and_marshals(tmp_path: Path) -> None:
     """The summary-form fixed point (`_merge_summaries`) and the AST projection
     (`_compute_spawn_bearing_params`) are one core over two inputs: they agree, and a summary
     survives marshal as plain tuples."""
@@ -8963,7 +8964,7 @@ def test_summary_fixed_point_equals_the_ast_projection_and_marshals(tmp_path):
     assert marshal.loads(marshal.dumps([dataclasses.astuple(s) for s in summaries]))
 
 
-def test_function_digest_covers_decorators_and_tracks_position(tmp_path):
+def test_function_digest_covers_decorators_and_tracks_position(tmp_path: Path) -> None:
     (tmp_path / "hop.py").write_text(_SUMMARY_FIXTURE, encoding="utf-8")
     (tmp_path / "shifted.py").write_text("\n" + _SUMMARY_FIXTURE, encoding="utf-8")
     (tmp_path / "plain.py").write_text(
@@ -9040,7 +9041,7 @@ def _review_prep_spawn_counts(root: pathlib.Path, n_paths: int, n_halted: int) -
     return prep, fhw
 
 
-def test_review_prep_git_spawns_do_not_grow_with_paths_or_halted_runs(tmp_path):
+def test_review_prep_git_spawns_do_not_grow_with_paths_or_halted_runs(tmp_path: Path) -> None:
     """``review.prep`` and ``foreign_halted_withheld`` spawn a constant number of processes however many
     declared paths and halted run records there are; a per-path or per-run spawn doubles the count."""
     (tmp_path / "small").mkdir()
@@ -9074,7 +9075,7 @@ def _rm_verdict_with_status_batch(tmp_path, monkeypatch, status_result):
     return dc.check_destructive_rm(f"rm -rf {repo / 'work'}", session_id="fail-closed", payload={"cwd": str(repo)})
 
 
-def test_destructive_rm_batched_status_failure_denies_and_clean_batch_allows(tmp_path, monkeypatch):
+def test_destructive_rm_batched_status_failure_denies_and_clean_batch_allows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A failed batched `git status` reads dirty (deny); a successful clean batch still allows."""
     failed = _rm_verdict_with_status_batch(tmp_path / "a", monkeypatch, (128, ""))
     assert failed is not None, "a failed batched git status let a recursive rm through (fail-open)"
@@ -9082,7 +9083,7 @@ def test_destructive_rm_batched_status_failure_denies_and_clean_batch_allows(tmp
     assert clean is None, "a clean batched status must still allow the rm"
 
 
-def test_destructive_rm_target_missing_from_batch_table_reads_dirty(tmp_path, monkeypatch):
+def test_destructive_rm_target_missing_from_batch_table_reads_dirty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A successful batch whose table lacks the target is unknown, never clean (deny)."""
     from coordinator_core.bash_guards import _dc_rm
 

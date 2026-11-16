@@ -10,6 +10,7 @@ import time
 import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = pytest.mark.spawns_process
 
@@ -21,7 +22,7 @@ DECLARED_NOT_WITHHELD = "src/ontology/extra.py"
 
 
 @pytest.fixture(autouse=True)
-def _hosts_state(monkeypatch):
+def _hosts_state(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import process_artifact_policy
 
     monkeypatch.setattr(process_artifact_policy, "hosts_coordinator_state", lambda root: True)
@@ -33,14 +34,14 @@ def _git(root, *args):
     ).stdout
 
 
-def _write(root, rel, text):
+def _write(root, rel, text) -> None:
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
 
 
 @pytest.fixture
-def root(tmp_path):
+def root(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(root, "init", "-q")
@@ -62,7 +63,7 @@ def root(tmp_path):
     return root
 
 
-def test_a_peer_is_not_refused_a_path_the_halted_run_declared_but_did_not_withhold(root):
+def test_a_peer_is_not_refused_a_path_the_halted_run_declared_but_did_not_withhold(root) -> None:
     """Peer-side premise only: drives sibling_claims, not the land-only declaration."""
     from coordinator_core.ops.dispatch_emit import sibling_claims
 
@@ -71,7 +72,7 @@ def test_a_peer_is_not_refused_a_path_the_halted_run_declared_but_did_not_withho
     assert {p: claims[p] for p in WITHHELD if p in claims} == {p: HALTED for p in WITHHELD}
 
 
-def test_a_land_only_ask_on_the_halted_run_commits_the_withheld_paths(root):
+def test_a_land_only_ask_on_the_halted_run_commits_the_withheld_paths(root) -> None:
     from coordinator_core.ops.dispatch_emit import land_run
 
     out = land_run._handler({"run_id": HALTED}, repo_root=root / ".git")
@@ -83,7 +84,7 @@ def test_a_land_only_ask_on_the_halted_run_commits_the_withheld_paths(root):
     assert DECLARED_NOT_WITHHELD not in landed
 
 
-def test_a_land_only_ask_on_a_halted_run_withholding_nothing_is_still_refused(root):
+def test_a_land_only_ask_on_a_halted_run_withholding_nothing_is_still_refused(root) -> None:
     from coordinator_core.ops.dispatch_emit import land_run
 
     marker = root / "state" / "warp" / HALTED / "halted.json"

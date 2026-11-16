@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.tests._size_l_plan import (
     build_size_l_plan,
     isolate_launch_dirs,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -20,7 +21,7 @@ BAR_MS = 500.0
 SESSION_ID = "26-row-budget-session"
 
 
-def _fixture(tmp_path, monkeypatch):
+def _fixture(tmp_path, monkeypatch) -> tuple[Path, str, str]:
     isolate_launch_dirs(monkeypatch, tmp_path)
     root = tmp_path / "repo"
     root.mkdir()
@@ -31,7 +32,7 @@ def _fixture(tmp_path, monkeypatch):
     return repo_root, plan_rel, run_id
 
 
-def test_26_row_dirty_stage_under_the_brightline(tmp_path, monkeypatch):
+def test_26_row_dirty_stage_under_the_brightline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root, plan_rel, run_id = _fixture(tmp_path, monkeypatch)
 
     def call():
@@ -42,7 +43,7 @@ def test_26_row_dirty_stage_under_the_brightline(tmp_path, monkeypatch):
     assert call().rows, "stage returned no rows: the figure above measured nothing"
 
 
-def test_26_row_dirty_handler_under_the_brightline(tmp_path, monkeypatch):
+def test_26_row_dirty_handler_under_the_brightline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root, plan_rel, run_id = _fixture(tmp_path, monkeypatch)
     params = {"run_id": run_id, "plan_path": plan_rel, "session_id": SESSION_ID}
 

@@ -346,7 +346,7 @@ def _landed_clean(record: Mapping[str, Any]) -> bool:
 def _write_atomic(path: Path, payload: Mapping[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_name(f"{path.name}.{os.getpid()}.tmp")
-    tmp.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8")
+    tmp.write_text(json.dumps(payload, sort_keys=True), encoding="utf-8", newline="\n")
     os.replace(tmp, path)
 
 

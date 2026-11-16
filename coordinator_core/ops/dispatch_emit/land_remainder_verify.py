@@ -56,7 +56,7 @@ def _read_verdict(path: Path) -> Optional[dict]:
 
 def _write_verdict(path: Path, record: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(record, indent=2), encoding="utf-8")
+    path.write_text(json.dumps(record, indent=2), encoding="utf-8", newline="\n")
 
 
 def _past_deadline(record: dict) -> bool:

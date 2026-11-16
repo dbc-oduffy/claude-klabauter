@@ -290,3 +290,113 @@ def test_git_grep_failure_is_undecidable_not_a_crash(tmp_path, monkeypatch):
     v = _judge(repo, "project_trace", "load_hookimpl")
     assert v.verdict == "undecidable"
     assert "git grep" in v.why
+
+
+def _capture_grep(monkeypatch):
+    calls: list[tuple[list[str], object]] = []
+    real = rct._index_def_hits
+
+    def _spy(root, syms, pathspec=None):
+        calls.append((list(syms), pathspec))
+        return real(root, syms, pathspec) if pathspec is not None else real(root, syms)
+
+    monkeypatch.setattr(rct, "_index_def_hits", _spy)
+    return calls
+
+
+def _count_popen(monkeypatch):
+    spawns: list[object] = []
+    real_popen = subprocess.Popen
+
+    class _Counting(real_popen):
+        def __init__(self, *a, **k):
+            spawns.append(a)
+            super().__init__(*a, **k)
+
+    monkeypatch.setattr(subprocess, "Popen", _Counting)
+    return spawns
+
+
+def _big_repo(tmp_path: Path, decoys: int = 12) -> Path:
+    files = dict(_R40)
+    for i in range(decoys):
+        files[f"decoy/d{i}.py"] = f"def decoy_{i}():\n    return {i}\n"
+    files["decoy/hooks_twin.py"] = "def load_hookimpl(q):\n    return q\n"
+    files["pkg/tools/lonely.py"] = "def lonely_fn(q):\n    return q\n"
+    return _repo(tmp_path, files, commit=True)
+
+
+def test_git_spawn_count_is_independent_of_the_number_of_landing_and_withheld_paths(tmp_path, monkeypatch):
+    repo = _big_repo(tmp_path)
+    for n in (1, 40):
+        landing = []
+        for i in range(n):
+            rel = f"pkg/tools/new_{n}_{i}.py"
+            (repo / rel).write_text(f"def fresh_{n}_{i}():\n    return {i}\n", encoding="utf-8")
+            landing.append(rel)
+        spawns = _count_popen(monkeypatch)
+        v = _judge(repo, "project_trace", "load_hookimpl", landing_paths=landing, withheld_paths=["pkg/lib/a.py"])
+        assert v.verdict == "unreachable", v.why
+        assert len(spawns) == 1, (n, len(spawns))
+        monkeypatch.undo()
+
+
+def test_qualified_symbols_grep_only_their_files_and_keep_the_verdict(tmp_path, monkeypatch):
+    repo = _big_repo(tmp_path)
+    calls = _capture_grep(monkeypatch)
+    v = _judge(repo, "pkg/tools/trace.py:project_trace", "pkg/lib/a.py:helper_a")
+    assert v.verdict == "reachable", v.why
+    (_, pathspec), = calls
+    assert pathspec == ["pkg/lib/a.py", "pkg/tools/trace.py"]
+
+
+def test_unqualified_symbols_under_the_cap_grep_the_whole_index(tmp_path, monkeypatch):
+    repo = _big_repo(tmp_path)
+    calls = _capture_grep(monkeypatch)
+    assert _judge(repo, "project_trace", "load_hookimpl").verdict == "unreachable"
+    (_, pathspec), = calls
+    assert pathspec is None
+
+
+def test_past_the_cap_the_grep_is_scoped_to_the_claims_directories_and_never_proves_unreachable(tmp_path, monkeypatch):
+    repo = _big_repo(tmp_path)
+    calls = _capture_grep(monkeypatch)
+    spawns = _count_popen(monkeypatch)
+    assert _judge(repo, "project_trace", "lonely_fn").verdict == "unreachable"  # whole index: still provable
+    calls.clear()
+    spawns.clear()
+    monkeypatch.setattr(rct, "INDEX_SCAN_FILE_CAP", 5)
+    v = _judge(repo, "project_trace", "lonely_fn", landing_paths=["pkg/tools/trace.py"])
+    assert v.verdict == "undecidable" and "scoped" in v.why
+    assert len(spawns) == 1
+    (_, pathspec), = calls
+    assert pathspec and all(p.startswith("pkg/tools/") for p in pathspec), pathspec
+    assert not any(p.startswith("decoy/") or p.startswith("*") for p in pathspec)
+
+
+def test_past_the_cap_a_reachable_claim_inside_the_scope_stays_reachable(tmp_path, monkeypatch):
+    repo = _big_repo(tmp_path)
+    monkeypatch.setattr(rct, "INDEX_SCAN_FILE_CAP", 5)
+    v = _judge(repo, "project_trace", "helper_a", landing_paths=["pkg/tools/trace.py", "pkg/lib/a.py"])
+    assert v.verdict == "reachable", v.why
+
+
+def test_claim_reachable_from_landing_definers_spawns_no_git(tmp_path, monkeypatch):
+    repo = _big_repo(tmp_path)
+    (repo / "pkg/tools/fresh.py").write_text("from pkg.lib.a import helper_a\n\n\ndef fresh_tool():\n    return helper_a(1)\n", encoding="utf-8")
+    (repo / "pkg/lib/a.py").write_text("def helper_a(q):\n    return q\n", encoding="utf-8")
+    calls = _capture_grep(monkeypatch)
+    spawns = _count_popen(monkeypatch)
+    v = _judge(repo, "fresh_tool", "helper_a", landing_paths=["pkg/tools/fresh.py", "pkg/lib/a.py"])
+    assert v.verdict == "reachable", v.why
+    assert calls == [] and spawns == []
+
+
+def test_past_the_cap_with_nothing_to_scope_runs_no_grep(tmp_path, monkeypatch):
+    repo = _big_repo(tmp_path)
+    monkeypatch.setattr(rct, "INDEX_SCAN_FILE_CAP", 5)
+    calls = _capture_grep(monkeypatch)
+    spawns = _count_popen(monkeypatch)
+    v = _judge(repo, "project_trace", "load_hookimpl")
+    assert v.verdict == "undecidable"
+    assert calls == [] and spawns == []

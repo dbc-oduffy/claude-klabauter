@@ -63,44 +63,44 @@ def _fm(receipt_id: str = "rcp-demo-a1b2c3", **over) -> dict:
 _JUDGE = {"identity": "execute-review", "observation_summary": "met", "judged_at": NOW}
 
 
-def test_ids_and_paths():
+def test_ids_and_paths() -> None:
     rid = mint_receipt_id("My Plan: Foo/Bar!")
     assert rid.startswith("rcp-my-plan-foo-bar-") and len(rid.rsplit("-", 1)[1]) == 6
     assert receipt_rel_path(rid, NOW) == f"state/completion-receipts/2026-10/{rid}.md"
 
 
-def test_valid_null_verdict():
+def test_valid_null_verdict() -> None:
     assert validate(_fm()) == []
 
 
-def test_valid_agent_delivered():
+def test_valid_agent_delivered() -> None:
     assert validate(_fm(verdict="agent-delivered", judge=_JUDGE)) == []
 
 
-def test_valid_human_approved():
+def test_valid_human_approved() -> None:
     fm = _fm(verdict="human-approved", judge=_JUDGE, supersedes="rcp-demo-ffffff", approved_by="pm")
     assert validate(fm) == []
 
 
-def test_agent_delivered_without_judge_fails():
+def test_agent_delivered_without_judge_fails() -> None:
     assert validate(_fm(verdict="agent-delivered", judge=None))
 
 
-def test_human_approved_without_supersedes_fails():
+def test_human_approved_without_supersedes_fails() -> None:
     assert validate(_fm(verdict="human-approved", approved_by="pm", supersedes=None))
 
 
-def test_baton_and_deliverable_both_null_fails():
+def test_baton_and_deliverable_both_null_fails() -> None:
     assert validate(_fm(baton_id=None, deliverable_id=None))
 
 
-def test_unknown_key_fails():
+def test_unknown_key_fails() -> None:
     fm = copy.deepcopy(_fm())
     fm["extra"] = 1
     assert validate(fm)
 
 
-def test_render_is_lf_only_and_roundtrips(tmp_path: Path):
+def test_render_is_lf_only_and_roundtrips(tmp_path: Path) -> None:
     rel = write_receipt(tmp_path, _fm(), "## What\r\nbody")
     raw = (tmp_path / rel).read_bytes()
     assert b"\r" not in raw
@@ -109,31 +109,31 @@ def test_render_is_lf_only_and_roundtrips(tmp_path: Path):
     assert validate({k: v for k, v in r.items() if k != "_path"}) == []
 
 
-def test_exclusive_create_refuses_existing(tmp_path: Path):
+def test_exclusive_create_refuses_existing(tmp_path: Path) -> None:
     write_receipt(tmp_path, _fm(), "p")
     with pytest.raises(ReceiptWriteError):
         write_receipt(tmp_path, _fm(), "p")
 
 
-def test_write_refuses_invalid_and_leaves_no_file(tmp_path: Path):
+def test_write_refuses_invalid_and_leaves_no_file(tmp_path: Path) -> None:
     with pytest.raises(ReceiptWriteError):
         write_receipt(tmp_path, _fm(verdict="agent-delivered", judge=None), "p")
     assert read_receipts(tmp_path) == []
 
 
-def test_write_refuses_mismatched_prose_ref(tmp_path: Path):
+def test_write_refuses_mismatched_prose_ref(tmp_path: Path) -> None:
     with pytest.raises(ReceiptWriteError):
         write_receipt(tmp_path, _fm(prose_ref="elsewhere.md"), "p")
 
 
-def test_read_month_filter_and_empty(tmp_path: Path):
+def test_read_month_filter_and_empty(tmp_path: Path) -> None:
     assert read_receipts(tmp_path) == []
     write_receipt(tmp_path, _fm(), "p")
     assert len(read_receipts(tmp_path, month="2026-10")) == 1
     assert read_receipts(tmp_path, month="2026-09") == []
 
 
-def test_current_heads_two_link_chain():
+def test_current_heads_two_link_chain() -> None:
     a = _fm("rcp-demo-aaaaaa")
     b = _fm("rcp-demo-bbbbbb", verdict="human-approved", judge=_JUDGE, supersedes="rcp-demo-aaaaaa", approved_by="pm")
     c = _fm("rcp-other-cccccc")
@@ -146,7 +146,7 @@ def _git(cwd: Path, *args: str) -> None:
 
 
 @pytest.mark.spawns_process
-def test_introducing_commits_one_spawn_for_three_paths(tmp_path: Path, monkeypatch):
+def test_introducing_commits_one_spawn_for_three_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@t")
     _git(tmp_path, "config", "user.name", "t")
@@ -164,7 +164,7 @@ def test_introducing_commits_one_spawn_for_three_paths(tmp_path: Path, monkeypat
     real_popen = subprocess.Popen
 
     class counting_popen(real_popen):
-        def __init__(self, *a, **kw):
+        def __init__(self, *a, **kw) -> None:
             calls.append(a[0])
             super().__init__(*a, **kw)
 
@@ -174,5 +174,5 @@ def test_introducing_commits_one_spawn_for_three_paths(tmp_path: Path, monkeypat
     assert got == {**shas, "missing.md": None}
 
 
-def test_introducing_commits_empty_spawns_nothing(tmp_path: Path):
+def test_introducing_commits_empty_spawns_nothing(tmp_path: Path) -> None:
     assert introducing_commits(tmp_path, []) == {}

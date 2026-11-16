@@ -7,6 +7,7 @@ import yaml
 
 from coordinator_core.ops.review_mint import share_stages
 from coordinator_core.ops.review_mint.share_stages import assemble_from_share
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -15,12 +16,12 @@ SHARE_REL = ".coordinator-local/subagent-share/sess-1"
 RUNNER_NAME = "coordinator-review-test-runner.t1.md"
 
 
-def _sc(share, name, **fm):
+def _sc(share, name, **fm) -> None:
     share.mkdir(parents=True, exist_ok=True)
     (share / name).write_text("---\n" + yaml.safe_dump(fm, sort_keys=False) + "---\nbody\n", encoding="utf-8")
 
 
-def _build(root, monkeypatch, sidecar_value):
+def _build(root, monkeypatch, sidecar_value) -> None:
     monkeypatch.setattr(share_stages, "_delivery_verifier_rostered", lambda _root: True)
     share = root / SHARE_REL
     _sc(share, "coordinator-code-reviewer.a1.md", agent_type="coordinator:code-reviewer", target_plan=PLAN)
@@ -42,7 +43,7 @@ def _assemble(root):
     )
 
 
-def test_relative_tests_sidecar_is_the_tests_stage_and_not_a_reviewer_wave(tmp_path, monkeypatch):
+def test_relative_tests_sidecar_is_the_tests_stage_and_not_a_reviewer_wave(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _build(tmp_path, monkeypatch, f"{SHARE_REL}/{RUNNER_NAME}")
     res = _assemble(tmp_path)
     assert res["used"]["tests"] == [f"{SHARE_REL}/{RUNNER_NAME}"]
@@ -51,7 +52,7 @@ def test_relative_tests_sidecar_is_the_tests_stage_and_not_a_reviewer_wave(tmp_p
     assert waves == ["coordinator-code-reviewer.a1.md"]
 
 
-def test_unrelated_tests_sidecar_leaves_the_runner_a_reviewer_wave(tmp_path, monkeypatch):
+def test_unrelated_tests_sidecar_leaves_the_runner_a_reviewer_wave(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _build(tmp_path, monkeypatch, f"{SHARE_REL}/other.md")
     waves = [p.name for p in _assemble(tmp_path)["wave_sidecar_paths"]]
     assert RUNNER_NAME in waves

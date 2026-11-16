@@ -12,13 +12,18 @@ from coordinator_core.backlog_grind_assemble import grind_rows, grind_undo
 from coordinator_core.contract.grind_vocab import encode_undo_paths
 from coordinator_core.session import scope
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import Popen
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 SID = "undo-test-session"
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> None:
     subprocess.run(
         ["git", "-C", str(repo), *args],
         check=True,
@@ -30,7 +35,7 @@ def _git(repo, *args):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     r = tmp_path / "repo"
     r.mkdir()
     _git(r, "init", "-q")
@@ -57,12 +62,12 @@ def repo(tmp_path, monkeypatch):
     return r
 
 
-def _claim(repo, *paths):
+def _claim(repo, *paths) -> None:
     for p in paths:
         scope.touch(SID, p, cwd=str(repo), root=str(repo))
 
 
-def _undo(repo, paths):
+def _undo(repo, paths) -> int:
     return grind_rows.main(["undo", "--paths-urlenc", encode_undo_paths(paths), "--repo-root", str(repo)])
 
 
@@ -79,7 +84,7 @@ def _count_spawns(monkeypatch):
     calls = []
     real = subprocess.Popen
 
-    def spy(*a, **k):
+    def spy(*a, **k) -> Popen[str]:
         calls.append(a[0] if a else k.get("args"))
         return real(*a, **k)
 
@@ -87,14 +92,14 @@ def _count_spawns(monkeypatch):
     return calls
 
 
-def test_undo_verb_is_registered(repo, capsys):
+def test_undo_verb_is_registered(repo, capsys: pytest.CaptureFixture[str]) -> None:
     assert "undo" in grind_rows._VERBS
     rc = grind_rows.main(["undo"])
     assert rc == 2
     assert "grind-row undo --paths-urlenc" in capsys.readouterr().err
 
 
-def test_restores_modified_deleted_and_removes_created(repo, capsys, monkeypatch):
+def test_restores_modified_deleted_and_removes_created(repo, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "mod.txt").write_bytes(b"changed")
     (repo / "gone.txt").unlink()
     (repo / "new.txt").write_text("created\n")
@@ -126,14 +131,14 @@ def test_restores_modified_deleted_and_removes_created(repo, capsys, monkeypatch
     assert status.strip() == ""
 
 
-def test_tracked_file_misfiled_as_created_is_restored(repo, capsys):
+def test_tracked_file_misfiled_as_created_is_restored(repo, capsys: pytest.CaptureFixture[str]) -> None:
     (repo / "other.txt").write_text("edited\n")
     _claim(repo, "other.txt")
     assert _undo(repo, ["other.txt"]) == 0
     assert (repo / "other.txt").read_text() == "other\n"
 
 
-def test_single_class_is_one_spawn(repo, monkeypatch):
+def test_single_class_is_one_spawn(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "new.txt").write_text("c\n")
     _claim(repo, "new.txt")
     calls = _count_spawns(monkeypatch)
@@ -141,13 +146,13 @@ def test_single_class_is_one_spawn(repo, monkeypatch):
     assert len(calls) == 1
 
 
-def test_already_absent_created_path_is_not_an_error(repo, capsys):
+def test_already_absent_created_path_is_not_an_error(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _claim(repo, "never.txt")
     assert _undo(repo, ["never.txt"]) == 0
     assert capsys.readouterr().out.strip() == '{"left": [], "removed": [], "restored": []}'
 
 
-def test_created_symlink_is_removed_and_its_target_kept(repo, capsys):
+def test_created_symlink_is_removed_and_its_target_kept(repo, capsys: pytest.CaptureFixture[str]) -> None:
     try:
         os.symlink("other.txt", repo / "link.txt")
     except (OSError, NotImplementedError):
@@ -159,7 +164,7 @@ def test_created_symlink_is_removed_and_its_target_kept(repo, capsys):
     assert (repo / "other.txt").read_text() == "other\n"
 
 
-def test_git_spawn_failure_is_a_refusal(repo, monkeypatch):
+def test_git_spawn_failure_is_a_refusal(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "mod.txt").write_bytes(b"changed")
     _claim(repo, "mod.txt")
 
@@ -171,7 +176,7 @@ def test_git_spawn_failure_is_a_refusal(repo, monkeypatch):
     assert (repo / "mod.txt").read_bytes() == b"changed"
 
 
-def test_staged_created_file_keeps_its_index_entry(repo):
+def test_staged_created_file_keeps_its_index_entry(repo) -> None:
     (repo / "new.txt").write_text("c\n")
     _git(repo, "add", "new.txt")
     _claim(repo, "new.txt")
@@ -185,7 +190,7 @@ def test_staged_created_file_keeps_its_index_entry(repo):
     assert ls.strip() == "new.txt"
 
 
-def _refused(repo, paths, monkeypatch, expect_rc=1, spawns=0):
+def _refused(repo, paths, monkeypatch, expect_rc: int = 1, spawns: int = 0) -> None:
     before = _tree_bytes(repo)
     calls = _count_spawns(monkeypatch)
     assert _undo(repo, paths) == expect_rc
@@ -197,7 +202,7 @@ def _out(capsys):
     return json.loads(capsys.readouterr().out)
 
 
-def test_undeclared_paths_are_restored_without_claims(repo, capsys):
+def test_undeclared_paths_are_restored_without_claims(repo, capsys: pytest.CaptureFixture[str]) -> None:
     (repo / "mod.txt").write_bytes(b"changed")
     (repo / "other.txt").write_text("edited\n")
     assert _undo(repo, ["mod.txt", "other.txt"]) == 0
@@ -205,7 +210,7 @@ def test_undeclared_paths_are_restored_without_claims(repo, capsys):
     assert (repo / "other.txt").read_text() == "other\n"
 
 
-def test_sixty_four_paths_restore_every_one(repo, capsys):
+def test_sixty_four_paths_restore_every_one(repo, capsys: pytest.CaptureFixture[str]) -> None:
     names = [f"hist/f{i}.md" for i in range(64)]
     (repo / "hist").mkdir()
     for n in names:
@@ -219,7 +224,7 @@ def test_sixty_four_paths_restore_every_one(repo, capsys):
     assert all((repo / n).read_text() == "h\n" for n in names)
 
 
-def test_one_contested_path_among_64_leaves_only_it(repo, capsys, monkeypatch):
+def test_one_contested_path_among_64_leaves_only_it(repo, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     names = [f"hist/f{i}.md" for i in range(64)]
     (repo / "hist").mkdir()
     for n in names:
@@ -239,7 +244,7 @@ def test_one_contested_path_among_64_leaves_only_it(repo, capsys, monkeypatch):
     assert (repo / "hist/f8.md").read_text() == "h\n"
 
 
-def test_failure_json_is_also_on_stderr(repo, capsys, monkeypatch):
+def test_failure_json_is_also_on_stderr(repo, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "mod.txt").write_bytes(b"changed")
     monkeypatch.setattr(scope, "contested_by_live_peers", lambda *a, **k: {"mod.txt": ["peer"]})
     assert _undo(repo, ["mod.txt"]) == 1
@@ -248,7 +253,7 @@ def test_failure_json_is_also_on_stderr(repo, capsys, monkeypatch):
     assert "live-peer:peer" in cap.err
 
 
-def test_baseline_dirty_path_is_left_and_other_restored(repo, capsys, tmp_path):
+def test_baseline_dirty_path_is_left_and_other_restored(repo, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     (repo / "mod.txt").write_bytes(b"pre-fire edit")
     (repo / "other.txt").write_text("edited\n")
     dec = tmp_path / "decisions.json"
@@ -264,7 +269,7 @@ def test_baseline_dirty_path_is_left_and_other_restored(repo, capsys, tmp_path):
     assert (repo / "mod.txt").read_bytes() == b"pre-fire edit"
 
 
-def test_kept_work_held_path_leaves_the_whole_row_untouched(repo, capsys):
+def test_kept_work_held_path_leaves_the_whole_row_untouched(repo, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.ops.dispatch_emit.tests._kept_fixture import hold_kept
 
     (repo / "mod.txt").write_bytes(b"kept edit")
@@ -284,7 +289,7 @@ def test_kept_work_held_path_leaves_the_whole_row_untouched(repo, capsys):
     assert (repo / "created.txt").read_text() == "new\n"
 
 
-def test_unreadable_decisions_file_restores_nothing(repo, capsys, tmp_path):
+def test_unreadable_decisions_file_restores_nothing(repo, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     (repo / "mod.txt").write_bytes(b"pre-fire edit")
     rc = grind_rows.main(
         ["undo", "--paths-urlenc", encode_undo_paths(["mod.txt"]),
@@ -295,40 +300,40 @@ def test_unreadable_decisions_file_restores_nothing(repo, capsys, tmp_path):
     assert (repo / "mod.txt").read_bytes() == b"pre-fire edit"
 
 
-def test_peer_held_path_refused(repo, monkeypatch):
+def test_peer_held_path_refused(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "mod.txt").write_bytes(b"changed")
     _claim(repo, "mod.txt")
     monkeypatch.setattr(scope, "contested_by_live_peers", lambda *a, **k: {"mod.txt": ["peer"]})
     _refused(repo, ["mod.txt"], monkeypatch)
 
 
-def test_unknown_contest_refused(repo, monkeypatch):
+def test_unknown_contest_refused(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "mod.txt").write_bytes(b"changed")
     _claim(repo, "mod.txt")
     monkeypatch.setattr(scope, "contested_by_live_peers", lambda *a, **k: None)
     _refused(repo, ["mod.txt"], monkeypatch)
 
 
-def test_unresolvable_session_refused(repo, monkeypatch):
+def test_unresolvable_session_refused(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "mod.txt").write_bytes(b"changed")
     _claim(repo, "mod.txt")
     monkeypatch.delenv("COORDINATOR_SESSION_ID")
     _refused(repo, ["mod.txt"], monkeypatch)
 
 
-def test_directory_refused(repo, monkeypatch):
+def test_directory_refused(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _claim(repo, "d")
     _refused(repo, ["d"], monkeypatch)
 
 
-def test_tree_at_head_refused(repo, monkeypatch):
+def test_tree_at_head_refused(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _claim(repo, "d")
     (repo / "d").rename(repo / "d_moved")
     (repo / "d").write_text("now a file\n")
     _refused(repo, ["d"], monkeypatch, spawns=1)
 
 
-def test_submodule_commit_at_head_refused(repo, monkeypatch):
+def test_submodule_commit_at_head_refused(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     sha = subprocess.run(
         ["git", "-C", str(repo), "rev-parse", "HEAD"],
         capture_output=True,
@@ -343,17 +348,17 @@ def test_submodule_commit_at_head_refused(repo, monkeypatch):
 
 
 @pytest.mark.parametrize("bad", ["../x", "sub/../../x"])
-def test_escaping_path_is_usage_error(repo, monkeypatch, bad):
+def test_escaping_path_is_usage_error(repo, monkeypatch: pytest.MonkeyPatch, bad) -> None:
     _refused(repo, [bad], monkeypatch, expect_rc=2)
 
 
-def test_absolute_path_elsewhere_is_usage_error(repo, tmp_path, monkeypatch):
+def test_absolute_path_elsewhere_is_usage_error(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     outside = tmp_path / "outside.txt"
     outside.write_text("keep\n")
     _refused(repo, [str(outside)], monkeypatch, expect_rc=2)
     assert outside.read_text() == "keep\n"
 
 
-def test_malformed_token_is_usage_error(repo):
+def test_malformed_token_is_usage_error(repo) -> None:
     rc = grind_rows.main(["undo", "--paths-urlenc", "%7Bnot-json", "--repo-root", str(repo)])
     assert rc == 2

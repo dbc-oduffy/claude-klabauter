@@ -21,7 +21,7 @@ _ACCEPTED = {"pm_quote": "yes", "on": "2026-10-02", "mode": "pm"}
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     Path(home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
@@ -31,7 +31,7 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _put(repo, tshirt="M", **over):
+def _put(repo, tshirt: str = "M", **over) -> None:
     doc = {
         "schema": "sizing-object",
         "name": "emit fixture",
@@ -51,7 +51,7 @@ def _put(repo, tshirt="M", **over):
     (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
 
 
-def _emit(repo, *argv):
+def _emit(repo, *argv) -> int:
     return cli.main(["--ask", "--sizing", REL, "--repo-root", str(repo), *argv])
 
 
@@ -59,7 +59,7 @@ def _mjs(repo):
     return list(repo.rglob("*.workflow.mjs")) + list(repo.rglob("*.emitted.json"))
 
 
-def test_scaffold_residue_in_a_settled_sizing_refused_naming_every_field_and_writes_nothing(repo, capsys):
+def test_scaffold_residue_in_a_settled_sizing_refused_naming_every_field_and_writes_nothing(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _put(
         repo,
         "XS",
@@ -74,7 +74,7 @@ def test_scaffold_residue_in_a_settled_sizing_refused_naming_every_field_and_wri
     assert _mjs(repo) == []
 
 
-def test_draft_sizing_is_sized_in_run_not_refused(repo):
+def test_draft_sizing_is_sized_in_run_not_refused(repo) -> None:
     _put(
         repo,
         "XS",
@@ -87,7 +87,7 @@ def test_draft_sizing_is_sized_in_run_not_refused(repo):
     assert len(scripts) == 1 and "phase('size')" in scripts[0].read_text(encoding="utf-8")
 
 
-def test_writes_outside_repo_root_refused_and_nothing_written(repo, capsys):
+def test_writes_outside_repo_root_refused_and_nothing_written(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _put(repo, "XS")
     outside = (repo.parent / "other-repo" / "a.py").as_posix()
     rc = _emit(repo, "--writes", outside)
@@ -95,19 +95,19 @@ def test_writes_outside_repo_root_refused_and_nothing_written(repo, capsys):
     assert _mjs(repo) == []
 
 
-def test_xs_without_writes_still_emits(repo):
+def test_xs_without_writes_still_emits(repo) -> None:
     _put(repo, "XS")
     assert _emit(repo) == 0
 
 
-def test_writes_without_ask_is_a_usage_error(repo, capsys):
+def test_writes_without_ask_is_a_usage_error(repo, capsys: pytest.CaptureFixture[str]) -> None:
     assert cli.main(["--plan", "x.md", "--writes", "a.py", "--repo-root", str(repo)]) != 0
     assert "--writes" in capsys.readouterr().err
 
 
 @pytest.mark.cadence
 @pytest.mark.spawns_process
-def test_accepted_m_receipt_carries_batons_and_uncommitted_and_planblitz_args(repo, capsys):
+def test_accepted_m_receipt_carries_batons_and_uncommitted_and_planblitz_args(repo, capsys: pytest.CaptureFixture[str]) -> None:
     subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
     _put(repo, "M")
     assert _emit(repo) == 0
@@ -128,7 +128,7 @@ def test_accepted_m_receipt_carries_batons_and_uncommitted_and_planblitz_args(re
     assert again["batons"] == [baton] and again["uncommitted"] == []
 
 
-def test_gate_halt_raises_refusal_naming_kind(repo):
+def test_gate_halt_raises_refusal_naming_kind(repo) -> None:
     from coordinator_core.ops.dispatch_emit.op import _gate_sizing_at_emit
 
     _put(repo, "M", route="pm-decision", xl_exit="accept_multi_session", interaction_mode="hands-on", exit_criterion={"statement": "done", "accepted": None})
@@ -137,7 +137,7 @@ def test_gate_halt_raises_refusal_naming_kind(repo):
     assert "touchpoint" in str(exc.value) and "sizing-accept-exit-criterion" in str(exc.value)
 
 
-def test_gate_refusal_names_the_refusing_field(repo):
+def test_gate_refusal_names_the_refusing_field(repo) -> None:
     from coordinator_core.ops.dispatch_emit.op import _gate_sizing_at_emit
 
     _put(repo, "M", status="shipped")
@@ -146,7 +146,7 @@ def test_gate_refusal_names_the_refusing_field(repo):
     assert "refusal" in str(exc.value) and "`status`" in str(exc.value)
 
 
-def test_engine_xl_hands_on_unaccepted_is_not_a_touchpoint_halt(repo, monkeypatch):
+def test_engine_xl_hands_on_unaccepted_is_not_a_touchpoint_halt(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import plan_blitz_args
     from coordinator_core.ops.dispatch_emit.op import _gate_sizing_at_emit
 
@@ -157,7 +157,7 @@ def test_engine_xl_hands_on_unaccepted_is_not_a_touchpoint_halt(repo, monkeypatc
 
 @pytest.mark.cadence
 @pytest.mark.spawns_process
-def test_blitz_call_carries_a_nonempty_provision_sidecar_cli(repo, capsys, monkeypatch):
+def test_blitz_call_carries_a_nonempty_provision_sidecar_cli(repo, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import plan_blitz_args
 
     monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")
@@ -173,7 +173,7 @@ def test_blitz_call_carries_a_nonempty_provision_sidecar_cli(repo, capsys, monke
 
 @pytest.mark.cadence
 @pytest.mark.spawns_process
-def test_unresolvable_sidecar_cli_refuses_at_emit_and_writes_nothing(repo, capsys, monkeypatch):
+def test_unresolvable_sidecar_cli_refuses_at_emit_and_writes_nothing(repo, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import plan_blitz_args
 
     monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: None)

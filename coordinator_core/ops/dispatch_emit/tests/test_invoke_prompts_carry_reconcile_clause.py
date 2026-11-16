@@ -15,6 +15,7 @@ from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose as _compose_ask
 from coordinator_core.ops.dispatch_emit.tests.test_emit_dag import _write_row
 from coordinator_core.ops.dispatch_emit.tests.test_grind_compose import _compose as _compose_grind
+from pathlib import Path
 
 _INVOKE_PATH = "bin/coordinator-invoke"
 _INVOKE_ANY = "coordinator-invoke"
@@ -51,16 +52,16 @@ def _assert_clause_everywhere(script: str, *, marker: str = _INVOKE_PATH) -> int
     return len(named)
 
 
-def test_clause_text_names_the_engine_contract_fields():
+def test_clause_text_names_the_engine_contract_fields() -> None:
     for token in ("-32004", "reconcile_command", "not_received", "finished", "exactly once", "executing"):
         assert token in _INDETERMINATE_RECONCILE_CLAUSE
 
 
-def test_ask_script_raw_prompt_arm():
+def test_ask_script_raw_prompt_arm() -> None:
     assert _assert_clause_everywhere(_compose_ask(in_run_commit=True), marker=_INVOKE_ANY) >= 3
 
 
-def test_ask_stage_prompts_carry_the_stage_clause_marker():
+def test_ask_stage_prompts_carry_the_stage_clause_marker() -> None:
     stage = [p for p in _prompts(_compose_ask(in_run_commit=True)) if OP_ASK_STAGE in p]
     assert stage
     for prompt in stage:
@@ -69,7 +70,7 @@ def test_ask_stage_prompts_carry_the_stage_clause_marker():
         assert _INDETERMINATE_RECONCILE_CLAUSE not in prompt
 
 
-def test_ask_script_sizing_arm(tmp_path):
+def test_ask_script_sizing_arm(tmp_path: Path) -> None:
     rel = "state/sizings/2026-10-12-existing.yaml"
     (tmp_path / "state/sizings").mkdir(parents=True)
     (tmp_path / rel).write_text(
@@ -79,7 +80,7 @@ def test_ask_script_sizing_arm(tmp_path):
     assert _assert_clause_everywhere(script, marker=_INVOKE_ANY) >= 1
 
 
-def test_plan_route_emit_committer_carries_the_clause():
+def test_plan_route_emit_committer_carries_the_clause() -> None:
     script = compose_script(
         [[_write_row("C1"), _write_row("C2")]],
         name="wf", description="d", session_id=_SESSION, expected_branch="work/run", **REVIEW_KW,
@@ -87,15 +88,15 @@ def test_plan_route_emit_committer_carries_the_clause():
     assert _assert_clause_everywhere(script, marker=_INVOKE_ANY) >= 1
 
 
-def test_grind_script():
+def test_grind_script() -> None:
     assert _assert_clause_everywhere(_compose_grind()) >= 1
 
 
-def test_clause_appears_once_per_prompt():
+def test_clause_appears_once_per_prompt() -> None:
     for prompt in _prompts(_compose_ask()):
         assert prompt.count(_INDETERMINATE_RECONCILE_CLAUSE) <= 1
         assert prompt.count(RECONCILE_CLAUSE) <= 1
 
 
-def test_no_prompt_tells_the_agent_to_read_git_log():
+def test_no_prompt_tells_the_agent_to_read_git_log() -> None:
     assert _STALE not in _compose_ask()

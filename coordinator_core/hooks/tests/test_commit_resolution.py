@@ -7,9 +7,10 @@ import subprocess
 import pytest
 
 from coordinator_core.hooks import commit_resolution as cr
+from pathlib import Path
 
 
-def _git(repo, *args, env=None):
+def _git(repo, *args, env=None) -> None:
     full_env = dict(os.environ)
     full_env.pop("GIT_INDEX_FILE", None)
     full_env.update(env or {})
@@ -23,7 +24,7 @@ def _git(repo, *args, env=None):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.delenv("GIT_INDEX_FILE", raising=False)
     monkeypatch.delenv("GIT_WORK_TREE", raising=False)
     root = tmp_path / "r"
@@ -37,11 +38,11 @@ def repo(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def spawns(monkeypatch):
+def spawns(monkeypatch: pytest.MonkeyPatch):
     log = []
     real = cr._run_git
 
-    def counting(args, timeout):
+    def counting(args, timeout) -> bytes:
         log.append(list(args))
         return real(args, timeout)
 
@@ -49,7 +50,7 @@ def spawns(monkeypatch):
     return log
 
 
-def test_second_call_with_unchanged_index_spawns_zero(repo, spawns):
+def test_second_call_with_unchanged_index_spawns_zero(repo, spawns) -> None:
     (repo / "a.txt").write_text("a\n")
     _git(repo, "add", "a.txt")
     git_dir = str(repo / ".git")
@@ -62,7 +63,7 @@ def test_second_call_with_unchanged_index_spawns_zero(repo, spawns):
     assert len(spawns) == 1
 
 
-def test_restaged_index_spawns_again(repo, spawns):
+def test_restaged_index_spawns_again(repo, spawns) -> None:
     git_dir = str(repo / ".git")
     (repo / "a.txt").write_text("a\n")
     _git(repo, "add", "a.txt")
@@ -73,7 +74,7 @@ def test_restaged_index_spawns_again(repo, spawns):
     assert len(spawns) == 2
 
 
-def test_git_index_file_yields_its_own_resolution(repo, spawns, monkeypatch):
+def test_git_index_file_yields_its_own_resolution(repo, spawns, monkeypatch: pytest.MonkeyPatch) -> None:
     git_dir = str(repo / ".git")
     (repo / "a.txt").write_text("a\n")
     _git(repo, "add", "a.txt")
@@ -93,7 +94,7 @@ def test_git_index_file_yields_its_own_resolution(repo, spawns, monkeypatch):
     assert len(spawns) == 2, "the shared index's entry survived the temp index's write"
 
 
-def test_moved_head_with_unchanged_index_misses(repo, spawns):
+def test_moved_head_with_unchanged_index_misses(repo, spawns) -> None:
     git_dir = str(repo / ".git")
     (repo / "a.txt").write_text("a\n")
     _git(repo, "add", "a.txt")
@@ -106,7 +107,7 @@ def test_moved_head_with_unchanged_index_misses(repo, spawns):
     assert os.stat(repo / ".git" / "index").st_mtime_ns >= index_before.st_mtime_ns
 
 
-def test_head_moved_alone_changes_key(repo):
+def test_head_moved_alone_changes_key(repo) -> None:
     git_dir = str(repo / ".git")
     key_a, _ = cr._cache_key(git_dir)
     (repo / "a.txt").write_text("a\n")
@@ -116,7 +117,7 @@ def test_head_moved_alone_changes_key(repo):
     assert key_a[-1] != key_b[-1]
 
 
-def test_packed_ref_head_resolves(repo):
+def test_packed_ref_head_resolves(repo) -> None:
     git_dir = str(repo / ".git")
     loose_oid = cr._head_oid(git_dir)
     _git(repo, "pack-refs", "--all")
@@ -124,7 +125,7 @@ def test_packed_ref_head_resolves(repo):
     assert len(loose_oid) in (40, 64)
 
 
-def test_unresolvable_head_is_a_miss_not_a_guess(tmp_path, monkeypatch):
+def test_unresolvable_head_is_a_miss_not_a_guess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GIT_INDEX_FILE", raising=False)
     root = tmp_path / "u"
     root.mkdir()
@@ -138,7 +139,7 @@ def test_unresolvable_head_is_a_miss_not_a_guess(tmp_path, monkeypatch):
     assert not [n for n in os.listdir(root / ".git") if n.startswith(cr._CACHE_PREFIX)]
 
 
-def test_corrupt_cache_falls_back_to_one_live_spawn(repo, spawns):
+def test_corrupt_cache_falls_back_to_one_live_spawn(repo, spawns) -> None:
     git_dir = str(repo / ".git")
     (repo / "a.txt").write_text("a\n")
     _git(repo, "add", "a.txt")
@@ -149,7 +150,7 @@ def test_corrupt_cache_falls_back_to_one_live_spawn(repo, spawns):
     assert len(spawns) == 2
 
 
-def test_rename_records_keep_phantom_delete_semantics(repo):
+def test_rename_records_keep_phantom_delete_semantics(repo) -> None:
     git_dir = str(repo / ".git")
     _git(repo, "mv", "base.txt", "moved.txt")
     recs = cr.staged_raw(git_dir)
@@ -160,7 +161,7 @@ def test_rename_records_keep_phantom_delete_semantics(repo):
     assert cr.names_filtered(git_dir, "D") == []
 
 
-def test_names_filtered_excludes_deletions(repo):
+def test_names_filtered_excludes_deletions(repo) -> None:
     git_dir = str(repo / ".git")
     _git(repo, "rm", "-q", "base.txt")
     (repo / "n.txt").write_text("n\n")
@@ -169,7 +170,7 @@ def test_names_filtered_excludes_deletions(repo):
     assert cr.names_filtered(git_dir, "D") == ["base.txt"]
 
 
-def test_stale_sibling_cache_for_a_gone_index_is_pruned(repo):
+def test_stale_sibling_cache_for_a_gone_index_is_pruned(repo) -> None:
     git_dir = str(repo / ".git")
     gone = repo / ".git" / "next-index-9.lock"
     (repo / "a.txt").write_text("a\n")
@@ -187,13 +188,13 @@ def test_stale_sibling_cache_for_a_gone_index_is_pruned(repo):
     assert len([n for n in os.listdir(git_dir) if n.startswith(cr._CACHE_PREFIX)]) == 1
 
 
-def test_toplevel_zero_spawn_for_plain_git_dir(repo, spawns):
+def test_toplevel_zero_spawn_for_plain_git_dir(repo, spawns) -> None:
     assert cr.toplevel(str(repo / ".git")) == os.path.realpath(repo)
     assert cr.toplevel(".git") == os.path.realpath(repo)
     assert spawns == []
 
 
-def test_toplevel_one_spawn_then_cached_for_linked_worktree(repo, spawns, monkeypatch):
+def test_toplevel_one_spawn_then_cached_for_linked_worktree(repo, spawns, monkeypatch: pytest.MonkeyPatch) -> None:
     wt = repo.parent / "wt"
     _git(repo, "worktree", "add", "-q", str(wt), "-b", "side")
     monkeypatch.chdir(wt)
@@ -207,7 +208,7 @@ def test_toplevel_one_spawn_then_cached_for_linked_worktree(repo, spawns, monkey
 _WORKTREE_TOUCHING = {"diff", "status", "update-index", "add", "--refresh", "ls-files"}
 
 
-def test_derivation_is_index_only_and_ignores_dirty_worktree_files(repo, spawns):
+def test_derivation_is_index_only_and_ignores_dirty_worktree_files(repo, spawns) -> None:
     for i in range(50):
         (repo / f"t{i}.txt").write_text("v1\n")
     _git(repo, "add", "-A")
@@ -222,7 +223,7 @@ def test_derivation_is_index_only_and_ignores_dirty_worktree_files(repo, spawns)
     assert not _WORKTREE_TOUCHING & set(argv)
 
 
-def test_unborn_head_diffs_against_the_empty_tree(tmp_path, monkeypatch, spawns):
+def test_unborn_head_diffs_against_the_empty_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, spawns) -> None:
     monkeypatch.delenv("GIT_INDEX_FILE", raising=False)
     root = tmp_path / "u"
     root.mkdir()
@@ -234,7 +235,7 @@ def test_unborn_head_diffs_against_the_empty_tree(tmp_path, monkeypatch, spawns)
     assert spawns[-1][-1] == cr._EMPTY_TREE
 
 
-def test_live_spawn_failure_raises_resolution_error(tmp_path, monkeypatch):
+def test_live_spawn_failure_raises_resolution_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("GIT_INDEX_FILE", raising=False)
     monkeypatch.chdir(tmp_path)
     with pytest.raises(cr.ResolutionError):

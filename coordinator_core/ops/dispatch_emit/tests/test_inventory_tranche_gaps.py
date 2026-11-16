@@ -21,6 +21,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_inventory_tranche_and_withhel
     _plan_text,
     _repo,
 )
+from pathlib import Path
 
 
 def _tranche(inv, budget, **kw):
@@ -29,7 +30,7 @@ def _tranche(inv, budget, **kw):
     return report, text, spine
 
 
-def test_coded_cross_plan_predecessor_counts_as_satisfied(tmp_path):
+def test_coded_cross_plan_predecessor_counts_as_satisfied(tmp_path: Path) -> None:
     dep = [
         _chunk(
             "D1",
@@ -47,7 +48,7 @@ def test_coded_cross_plan_predecessor_counts_as_satisfied(tmp_path):
     assert [s["plan"] for s in report["skipped"]] == ["pred"]
 
 
-def test_plans_writing_one_path_are_taken_together(tmp_path):
+def test_plans_writing_one_path_are_taken_together(tmp_path: Path) -> None:
     inv = _repo(
         tmp_path,
         {
@@ -68,7 +69,7 @@ def test_plans_writing_one_path_are_taken_together(tmp_path):
     assert report["plans"] == ["a", "b"]
 
 
-def test_append_only_shared_path_does_not_group(tmp_path):
+def test_append_only_shared_path_does_not_group(tmp_path: Path) -> None:
     inv = _repo(
         tmp_path,
         {
@@ -81,7 +82,7 @@ def test_append_only_shared_path_does_not_group(tmp_path):
     assert report["plans"] == ["a"]
 
 
-def test_plan_with_no_live_rows_is_skipped_and_reported(tmp_path):
+def test_plan_with_no_live_rows_is_skipped_and_reported(tmp_path: Path) -> None:
     held = [
         _chunk(
             "H1",
@@ -106,7 +107,7 @@ def test_plan_with_no_live_rows_is_skipped_and_reported(tmp_path):
     assert [w["plan"] for w in report["remaining"]["waiting_on_predecessors"]] == ["held"]
 
 
-def test_remaining_estimate_simulates_further_tranches(tmp_path):
+def test_remaining_estimate_simulates_further_tranches(tmp_path: Path) -> None:
     inv = _repo(
         tmp_path,
         {"a": _n_rows("A", 3), "b": _n_rows("B", 3), "c": _n_rows("C", 3), "d": _n_rows("D", 1)},
@@ -118,7 +119,7 @@ def test_remaining_estimate_simulates_further_tranches(tmp_path):
     assert report["remaining"] == {"passes_remaining": 2, "rows_remaining": 6}
 
 
-def test_tranche_writes_its_own_numbered_inventory(tmp_path):
+def test_tranche_writes_its_own_numbered_inventory(tmp_path: Path) -> None:
     inv = _repo(
         tmp_path,
         {"a": _n_rows("A", 2), "b": _n_rows("B", 2)},
@@ -149,12 +150,12 @@ def test_tranche_writes_its_own_numbered_inventory(tmp_path):
 
 
 @pytest.fixture
-def _review_loaders(monkeypatch):
+def _review_loaders(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(op_mod.review_mint_op, "load_fragment", lambda: _V5_FRAGMENT)
     monkeypatch.setattr(op_mod.review_mint_op, "load_stage_schemas", lambda: _V5_STAGE_SCHEMAS)
 
 
-def test_inventory_review_only_emits_review_without_rows(tmp_path, _review_loaders, monkeypatch):
+def test_inventory_review_only_emits_review_without_rows(tmp_path: Path, _review_loaders, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import emit as emit_mod
 
     monkeypatch.setattr(emit_mod, "_pin_review_terminal", lambda base, root: "f" * 40)
@@ -173,7 +174,7 @@ def test_inventory_review_only_emits_review_without_rows(tmp_path, _review_loade
     assert "Review-only: rows a.A0, a.A1, base abc1234def" in script
 
 
-def test_inventory_review_only_cli_requires_rows(tmp_path, capsys):
+def test_inventory_review_only_cli_requires_rows(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.ops.dispatch_emit import cli
 
     inv = _repo(tmp_path, {"a": _n_rows("A", 1)}, [("a", "—")])
@@ -195,7 +196,7 @@ def _consume_plan(tmp_path, rows):
 _HELD = {"plan": "docs/plans/pred.md", "chunk": "P1", "gate_kind": "output-consumption-runtime"}
 
 
-def test_withholding_propagates_along_consumes(tmp_path):
+def test_withholding_propagates_along_consumes(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / "docs" / "plans" / "pred.md").write_text(_plan_text([_chunk("P1", "src/p1.ts")]), encoding="utf-8")
@@ -218,7 +219,7 @@ def test_withholding_propagates_along_consumes(tmp_path):
     assert detail["S2"].startswith("withheld: consumes src/s1.ts written by withheld S1")
 
 
-def _hub_set(tmp_path, n=6, rows_each=2):
+def _hub_set(tmp_path, n: int = 6, rows_each: int = 2) -> tuple[Path, list[str]]:
     names = [f"p{k}" for k in range(n)]
     plans = {
         nm: [_chunk(f"{nm.upper()}H", "src/hub.py")] + _n_rows(nm.upper(), rows_each - 1)
@@ -227,7 +228,7 @@ def _hub_set(tmp_path, n=6, rows_each=2):
     return _repo(tmp_path, plans, [(nm, "—") for nm in names]), names
 
 
-def test_oversize_hub_group_splits_across_passes_and_estimate_counts_it(tmp_path):
+def test_oversize_hub_group_splits_across_passes_and_estimate_counts_it(tmp_path: Path) -> None:
     inv, names = _hub_set(tmp_path)  # six plans of 2 rows write src/hub.py: 12 rows
     report, _, _ = _tranche(inv, 5)
     assert report["plans"] == names[:2]
@@ -236,14 +237,14 @@ def test_oversize_hub_group_splits_across_passes_and_estimate_counts_it(tmp_path
     assert report["remaining"] == {"passes_remaining": 2, "rows_remaining": 8}
 
 
-def test_group_that_fits_stays_whole(tmp_path):
+def test_group_that_fits_stays_whole(tmp_path: Path) -> None:
     inv, names = _hub_set(tmp_path, n=3)
     report, _, _ = _tranche(inv, 6)
     assert report["plans"] == names
     assert report["remaining"]["passes_remaining"] == 0
 
 
-def test_only_a_single_over_budget_plan_is_unplaceable(tmp_path):
+def test_only_a_single_over_budget_plan_is_unplaceable(tmp_path: Path) -> None:
     inv = _repo(
         tmp_path,
         {
@@ -264,7 +265,7 @@ def test_only_a_single_over_budget_plan_is_unplaceable(tmp_path):
     assert "exceed row_budget 3 alone" in reasons["big"]
 
 
-def test_part_review_specs_cover_only_that_parts_plans(tmp_path, monkeypatch, _review_loaders):
+def test_part_review_specs_cover_only_that_parts_plans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, _review_loaders) -> None:
     inv = _repo(
         tmp_path,
         {nm: _n_rows(nm.upper(), 2) for nm in ("a", "b", "c", "d")},
@@ -290,7 +291,7 @@ def _cyclic_groups():
     return groups, size, prereqs, shared
 
 
-def test_groups_holding_each_others_prerequisites_are_taken_as_one_unit():
+def test_groups_holding_each_others_prerequisites_are_taken_as_one_unit() -> None:
     groups, size, prereqs, shared = _cyclic_groups()
     taken, deferred = im._pick_groups(groups, size, prereqs, shared, 8)
     assert sorted(taken) == ["a", "b", "c", "d"] and deferred == {}
@@ -300,7 +301,7 @@ def _edge_row(rid, *targets):
     return {"id": rid, "depends_on": [{"chunk": t, "gate_kind": "output-consumption-runtime"} for t in targets]}
 
 
-def test_two_plan_uncoded_predecessor_defers_dependent_under_row_budget(tmp_path):
+def test_two_plan_uncoded_predecessor_defers_dependent_under_row_budget(tmp_path: Path) -> None:
     dep = [_chunk("D1", "src/d1.py", depends_on_plan=[{**_HELD, "chunk": "P1"}]), _chunk("D2", "src/d2.py")]
     inv = _repo(
         tmp_path,
@@ -312,7 +313,7 @@ def test_two_plan_uncoded_predecessor_defers_dependent_under_row_budget(tmp_path
     assert [d["plan"] for d in report["deferred"]] == ["dep"]
 
 
-def test_edge_onto_unemitted_chunk_of_in_set_item_defers_dependent():
+def test_edge_onto_unemitted_chunk_of_in_set_item_defers_dependent() -> None:
     rows = [_edge_row("a.A0"), _edge_row("b.B0", "pred.P1"), _edge_row("b.B1", "b.B0")]
     selected, report = im.select_tranche(rows, ["a", "pred", "b"], 10)
     assert report["plans"] == ["a"]
@@ -321,21 +322,21 @@ def test_edge_onto_unemitted_chunk_of_in_set_item_defers_dependent():
     assert [r["id"] for r in selected] == ["a.A0"]
 
 
-def test_edge_onto_unknown_item_is_not_deferred_so_read_spine_still_refuses():
+def test_edge_onto_unknown_item_is_not_deferred_so_read_spine_still_refuses() -> None:
     rows = [_edge_row("b.B0", "ghost.G1")]
     selected, report = im.select_tranche(rows, ["b"], 10)
     assert report["plans"] == ["b"] and report["deferred"] == []
     assert [r["id"] for r in selected] == ["b.B0"]
 
 
-def test_edge_onto_mistyped_chunk_of_in_set_item_defers_dependent():
+def test_edge_onto_mistyped_chunk_of_in_set_item_defers_dependent() -> None:
     rows = [_edge_row("a.A0"), _edge_row("b.B0", "pred.TYPO")]
     selected, report = im.select_tranche(rows, ["a", "pred", "b"], 10)
     assert [d["plan"] for d in report["deferred"]] == ["b"]
     assert [r["id"] for r in selected] == ["a.A0"]
 
 
-def test_read_spine_still_refuses_an_unresolvable_predecessor(tmp_path):
+def test_read_spine_still_refuses_an_unresolvable_predecessor(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.spine_read import SpineReadError
 
     plan = tmp_path / "s.md"
@@ -347,14 +348,14 @@ def test_read_spine_still_refuses_an_unresolvable_predecessor(tmp_path):
         read_spine(plan)
 
 
-def test_an_over_budget_group_cycle_places_plan_by_plan():
+def test_an_over_budget_group_cycle_places_plan_by_plan() -> None:
     groups, size, prereqs, shared = _cyclic_groups()
     taken, deferred = im._pick_groups(groups, size, prereqs, shared, 4)
     assert sorted(taken) == ["b", "c"]
     assert set(deferred) == {"a", "d"}
 
 
-def _groups(*writes_per_item, under=None, appends=None):
+def _groups(*writes_per_item, under=None, appends=None) -> list[list[str]]:
     items = [f"p{n}" for n in range(len(writes_per_item))]
     rows = []
     for n, writes in enumerate(writes_per_item):
@@ -367,34 +368,34 @@ def _groups(*writes_per_item, under=None, appends=None):
     return im._shared_path_groups(rows, items, items)[0]
 
 
-def test_distinct_files_under_one_directory_do_not_group():
+def test_distinct_files_under_one_directory_do_not_group() -> None:
     assert _groups(["docs/plans/x.md"], ["docs/plans/y.md"], ["docs\\plans\\z.md"]) == [["p0"], ["p1"], ["p2"]]
 
 
-def test_one_file_written_by_two_plans_groups_them_across_spellings():
+def test_one_file_written_by_two_plans_groups_them_across_spellings() -> None:
     assert _groups(["docs/plans/x.md"], ["docs\\plans\\x.md"], ["docs/plans/y.md"]) == [["p0", "p1"], ["p2"]]
 
 
-def test_writes_under_prefix_groups_every_writer_beneath_it():
+def test_writes_under_prefix_groups_every_writer_beneath_it() -> None:
     groups = _groups(
         ["a.md"], ["docs/plans/x.md"], ["docs/plans/y.md"], ["src/z.py"], under=[["docs/plans/"], None, None, None]
     )
     assert groups == [["p0", "p1", "p2"], ["p3"]]
 
 
-def test_backslash_writes_under_prefix_covers_forward_slash_writers():
+def test_backslash_writes_under_prefix_covers_forward_slash_writers() -> None:
     groups = _groups(["a.md"], ["docs/plans/x.md"], under=[["docs\\plans\\"], None])
     assert groups == [["p0", "p1"]]
 
 
-def test_backslash_appends_exempts_a_forward_slash_hub_path():
+def test_backslash_appends_exempts_a_forward_slash_hub_path() -> None:
     groups = _groups(
         ["docs/hub.md"], ["docs\\hub.md"], appends=[["docs\\hub.md"], ["docs/hub.md"]]
     )
     assert groups == [["p0"], ["p1"]]
 
 
-def test_tranche_takes_plans_writing_distinct_files_under_one_directory_separately(tmp_path):
+def test_tranche_takes_plans_writing_distinct_files_under_one_directory_separately(tmp_path: Path) -> None:
     inv = _repo(
         tmp_path,
         {

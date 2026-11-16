@@ -21,7 +21,7 @@ _SCRIPT = "scratch/warp/a.workflow.mjs"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: str(tmp_path))
     monkeypatch.setattr(guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123")
@@ -51,24 +51,24 @@ def _params(token: str, run_id: str = "ask-1") -> dict:
     return {"script_path": _SCRIPT, "incomplete_chunks": [], "run_id": run_id, "run_token": token}
 
 
-def test_minted_token_admits_the_commit_agents_terminal_commit(repo):
+def test_minted_token_admits_the_commit_agents_terminal_commit(repo) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     assert _check(_cmd(_params(token))) is None
 
 
-def test_minted_token_admits_the_commit_agents_land_run(repo):
+def test_minted_token_admits_the_commit_agents_land_run(repo) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     assert _check(_cmd(_params(token), head="coordinator-invoke dispatch.land_run")) is None
 
 
-def test_heredoc_params_form_is_admitted(repo):
+def test_heredoc_params_form_is_admitted(repo) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     cmd = "coordinator-invoke dispatch.terminal_commit --params-file - <<'JSON'\n" + json.dumps(_params(token)) + "\nJSON"
     assert _check(cmd) is None
 
 
 @pytest.mark.parametrize("agent_type", ["coordinator:executor", "general-purpose", ""])
-def test_any_other_subagent_with_the_token_is_denied(repo, agent_type):
+def test_any_other_subagent_with_the_token_is_denied(repo, agent_type) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     assert _check(_cmd(_params(token)), agent_type=agent_type) is not None
 
@@ -87,12 +87,12 @@ def test_any_other_subagent_with_the_token_is_denied(repo, agent_type):
         lambda t: "bash -c " + json.dumps(_cmd(_params(t))),
     ],
 )
-def test_wrong_token_run_script_or_shape_is_denied(repo, mutate):
+def test_wrong_token_run_script_or_shape_is_denied(repo, mutate) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     assert _check(mutate(token)) is not None
 
 
-def test_the_guard_checks_without_claiming_so_a_failed_op_run_retries(repo):
+def test_the_guard_checks_without_claiming_so_a_failed_op_run_retries(repo) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     assert _check(_cmd(_params(token))) is None
     # The op never ran (its params parse failed): the retry is admitted too.
@@ -100,7 +100,7 @@ def test_the_guard_checks_without_claiming_so_a_failed_op_run_retries(repo):
     assert run_token.is_live(repo, "ask-1")
 
 
-def test_a_claimed_token_is_denied_until_released(repo):
+def test_a_claimed_token_is_denied_until_released(repo) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     assert run_token.redeem(repo, "ask-1", token, _SCRIPT)
     assert _check(_cmd(_params(token))) is not None
@@ -108,7 +108,7 @@ def test_a_claimed_token_is_denied_until_released(repo):
     assert _check(_cmd(_params(token))) is None
 
 
-def test_redeemed_token_no_longer_admits(repo):
+def test_redeemed_token_no_longer_admits(repo) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     assert run_token.redeem(repo, "ask-1", token, _SCRIPT)
     assert _check(_cmd(_params(token))) is not None
@@ -119,20 +119,20 @@ def _land(repo, token: str, run_id: str = "ask-1") -> None:
     run_token.consume(repo, run_id, landed={"sha": "abc123", "rows": [], "paths": []})
 
 
-def test_spent_token_with_a_receipt_admits_the_inline_form(repo):
+def test_spent_token_with_a_receipt_admits_the_inline_form(repo) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     _land(repo, token)
     assert _check(_cmd(_params(token))) is None
 
 
-def test_spent_token_with_a_receipt_admits_the_params_file_form(repo):
+def test_spent_token_with_a_receipt_admits_the_params_file_form(repo) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     _land(repo, token)
     assert _check_t(_file_cmd(repo), _spawn(repo, _params(token))) is None
 
 
 @pytest.mark.parametrize("case", ["wrong_token", "wrong_run", "wrong_script", "no_receipt", "expired"])
-def test_spent_receipt_does_not_admit_a_mismatched_invocation(repo, monkeypatch, case):
+def test_spent_receipt_does_not_admit_a_mismatched_invocation(repo, monkeypatch: pytest.MonkeyPatch, case) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     if case == "no_receipt":
         assert run_token.redeem(repo, "ask-1", token, _SCRIPT)
@@ -158,13 +158,13 @@ def test_spent_receipt_does_not_admit_a_mismatched_invocation(repo, monkeypatch,
         assert file_leg is not None
 
 
-def test_params_without_the_script_are_denied(repo):
+def test_params_without_the_script_are_denied(repo) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     params = {k: v for k, v in _params(token).items() if k != "script_path"}
     assert _check(_cmd(params)) is not None
 
 
-def test_expired_token_no_longer_admits(repo, monkeypatch):
+def test_expired_token_no_longer_admits(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     monkeypatch.setattr(run_token, "TTL_SECONDS", -1)
     assert _check(_cmd(_params(token))) is not None
@@ -202,7 +202,7 @@ def _check_t(cmd: str, transcript, agent_type: str = _COMMIT_AGENT):
     )
 
 
-def test_params_file_shape_is_admitted_and_the_guard_writes_the_file(repo):
+def test_params_file_shape_is_admitted_and_the_guard_writes_the_file(repo) -> None:
     from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 
     token = run_token.mint(repo, "ask-1", _SCRIPT)
@@ -215,7 +215,7 @@ def test_params_file_shape_is_admitted_and_the_guard_writes_the_file(repo):
     assert json.loads(path.read_text(encoding="utf-8")) == params
 
 
-def test_params_file_shape_posix_style_root_is_admitted(repo):
+def test_params_file_shape_posix_style_root_is_admitted(repo) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     tp = _spawn(repo, _params(token))
     assert _check_t(_file_cmd(repo), tp) is None
@@ -225,7 +225,7 @@ def test_params_file_shape_posix_style_root_is_admitted(repo):
     "case",
     ["other_path", "other_run_path", "outside_workflows", "missing", "no_block", "bad_token", "second_segment", "env_prefix", "other_agent"],
 )
-def test_params_file_shape_denials(repo, case):
+def test_params_file_shape_denials(repo, case) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     tp = _spawn(repo, _params("f" * 32 if case == "bad_token" else token))
     cmd = _file_cmd(repo)
@@ -262,14 +262,14 @@ def _session_payload_spawn(repo, params: dict, agent_id: str = "deadbeef0123") -
     return str(session)
 
 
-def test_parent_session_transcript_resolves_to_the_spawns_own(repo):
+def test_parent_session_transcript_resolves_to_the_spawns_own(repo) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     halted = {"halted": "ledger-check", "items": [{"id": "T1", "remaining": ["x" * 3000]}]}
     session = _session_payload_spawn(repo, {**_params(token), "halted_by": halted})
     assert _check_t(_file_cmd(repo), session) is None
 
 
-def test_parent_session_transcript_of_another_agent_is_denied(repo):
+def test_parent_session_transcript_of_another_agent_is_denied(repo) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     session = _session_payload_spawn(repo, _params(token), agent_id="cafe00000001")
     assert _check_t(_file_cmd(repo), session) is not None
@@ -290,13 +290,13 @@ def _relay_first(tmp_path, relay_text: str, spawn_params: dict | None, name: str
     return str(f)
 
 
-def test_relay_first_transcript_admits_the_params_of_record_one(repo):
+def test_relay_first_transcript_admits_the_params_of_record_one(repo) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     tp = _relay_first(repo, "land the halted run", _params(token))
     assert _check_t(_file_cmd(repo), tp) is None
 
 
-def test_params_block_quoted_only_in_the_relay_record_is_denied(repo):
+def test_params_block_quoted_only_in_the_relay_record_is_denied(repo) -> None:
     from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 
     token = run_token.mint(repo, "ask-1", _SCRIPT)
@@ -305,13 +305,13 @@ def test_params_block_quoted_only_in_the_relay_record_is_denied(repo):
     assert "unreadable or holds no params block" in _reason(_check_t(_file_cmd(repo), tp))
 
 
-def test_relay_first_transcript_of_another_run_is_denied_by_path(repo):
+def test_relay_first_transcript_of_another_run_is_denied_by_path(repo) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     tp = _relay_first(repo, "land", _params(token))
     assert "not the run's own params file" in _reason(_check_t(_file_cmd(repo, run_id="ask-2"), tp))
 
 
-def _plant_file_without_block(repo, token: str):
+def _plant_file_without_block(repo, token: str) -> str:
     from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 
     path = chan.params_path(repo, "ask-1")
@@ -322,13 +322,13 @@ def _plant_file_without_block(repo, token: str):
     return tp
 
 
-def test_runs_own_params_file_without_a_prompt_block_is_admitted(repo):
+def test_runs_own_params_file_without_a_prompt_block_is_admitted(repo) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     tp = _plant_file_without_block(repo, token)
     assert _check_t(_file_cmd(repo), tp) is None
 
 
-def test_params_file_without_a_prompt_block_and_an_unminted_token_is_denied(repo):
+def test_params_file_without_a_prompt_block_and_an_unminted_token_is_denied(repo) -> None:
     run_token.mint(repo, "ask-1", _SCRIPT)
     tp = _plant_file_without_block(repo, "f" * 32)
     assert _check_t(_file_cmd(repo), tp) is not None
@@ -338,28 +338,28 @@ def _reason(verdict) -> str:
     return verdict["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_token_leg_denial_names_the_token_leg_not_the_pathspec(repo):
+def test_token_leg_denial_names_the_token_leg_not_the_pathspec(repo) -> None:
     run_token.mint(repo, "ask-1", _SCRIPT)
     tp = _spawn(repo, _params("f" * 32))
     reason = _reason(_check_t(_file_cmd(repo), tp))
     assert "run token is spent" in reason and "pathspec" not in reason
 
 
-def test_refusal_names_no_block_when_the_prompt_holds_none(repo):
+def test_refusal_names_no_block_when_the_prompt_holds_none(repo) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     tp = _spawn(repo, _params(token), name="x.jsonl")
     Path(tp).write_text(json.dumps({"type": "user", "message": {"content": "hello"}}) + "\n", encoding="utf-8")
     assert "unreadable or holds no params block" in _reason(_check_t(_file_cmd(repo), tp))
 
 
-def test_refusal_names_the_path_when_it_is_not_the_runs_own(repo):
+def test_refusal_names_the_path_when_it_is_not_the_runs_own(repo) -> None:
     token = run_token.mint(repo, "ask-1", _SCRIPT)
     tp = _spawn(repo, _params(token))
     cmd = _file_cmd(repo).replace("terminal-commit-params.json", "evil.json")
     assert "not the run's own params file" in _reason(_check_t(cmd, tp))
 
 
-def test_refusal_names_the_write_when_the_file_cannot_be_written(repo, monkeypatch):
+def test_refusal_names_the_write_when_the_file_cannot_be_written(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
 
     token = run_token.mint(repo, "ask-1", _SCRIPT)
@@ -368,7 +368,7 @@ def test_refusal_names_the_write_when_the_file_cannot_be_written(repo, monkeypat
     assert "could not be written" in _reason(_check_t(_file_cmd(repo), tp))
 
 
-def test_record_stores_no_plain_token_and_lives_in_the_settings_home(repo):
+def test_record_stores_no_plain_token_and_lives_in_the_settings_home(repo) -> None:
     from coordinator_core.ops.dispatch_emit.engine_record_home import engine_record_dir
 
     token = run_token.mint(repo, "ask-1", _SCRIPT)

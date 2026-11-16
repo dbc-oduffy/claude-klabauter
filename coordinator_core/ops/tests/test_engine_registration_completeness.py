@@ -10,6 +10,8 @@ import coordinator_core.ops as ops_pkg
 from coordinator_core.authz.registration_quad import QuadViolation, _discover_all_ops
 from coordinator_core.ipc import _REGISTRY, dispatch_message
 from coordinator_core.ops import engine_registration_completeness as mod
+from pathlib import Path
+import pytest
 
 OP = "engine.registration_completeness"
 
@@ -23,7 +25,7 @@ def _v(op_key: str) -> QuadViolation:
     )
 
 
-def test_build_report_partitions_live_and_suspended():
+def test_build_report_partitions_live_and_suspended() -> None:
     report = mod.build_report(
         [_v("zz.live"), _v("zz.suspended")],
         suspended=frozenset({"zz.suspended"}),
@@ -37,7 +39,7 @@ def test_build_report_partitions_live_and_suspended():
     json.dumps(report)
 
 
-def test_build_report_complete_when_only_suspended_remain():
+def test_build_report_complete_when_only_suspended_remain() -> None:
     report = mod.build_report(
         [_v("zz.suspended")],
         suspended=frozenset({"zz.suspended"}),
@@ -48,7 +50,7 @@ def test_build_report_complete_when_only_suspended_remain():
     assert report["violations"] == []
 
 
-def test_build_report_names_poisoned_module_and_is_incomplete():
+def test_build_report_names_poisoned_module_and_is_incomplete() -> None:
     report = mod.build_report(
         [],
         suspended=frozenset(),
@@ -63,7 +65,7 @@ def test_build_report_names_poisoned_module_and_is_incomplete():
     json.dumps(report)
 
 
-def test_dispatch_reports_injected_poisoned_module_and_other_ops_still_dispatch(monkeypatch):
+def test_dispatch_reports_injected_poisoned_module_and_other_ops_still_dispatch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(ops_pkg._POISONED_MODULES, "zz.bad_mod", RuntimeError("boom"))
     d = asyncio.run(
         dispatch_message({"jsonrpc": "2.0", "id": 1, "method": OP, "params": {}})
@@ -75,20 +77,20 @@ def test_dispatch_reports_injected_poisoned_module_and_other_ops_still_dispatch(
     assert result["registered_op_count"] > 0
 
 
-def test_no_poisoned_modules_reports_empty_list():
+def test_no_poisoned_modules_reports_empty_list() -> None:
     result = mod._engine_registration_completeness({})
     assert result["poisoned_modules"] == []
     assert result["complete"] is True
 
 
-def test_eager_registry_equals_full_walk():
+def test_eager_registry_equals_full_walk() -> None:
     ops_pkg._eager_import_all()
     eager = set(_REGISTRY)
     _discover_all_ops()
     assert set(_REGISTRY) == eager
 
 
-def test_dispatch_returns_complete_and_self_clean():
+def test_dispatch_returns_complete_and_self_clean() -> None:
     msg = {"jsonrpc": "2.0", "id": 1, "method": OP, "params": {}}
     d = asyncio.run(dispatch_message(msg))
     result = d["result"]
@@ -99,7 +101,7 @@ def test_dispatch_returns_complete_and_self_clean():
     json.dumps(result)
 
 
-def test_handler_spawns_no_process(monkeypatch):
+def test_handler_spawns_no_process(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*a, **k):
         raise AssertionError("spawned a process")
 
@@ -107,7 +109,7 @@ def test_handler_spawns_no_process(monkeypatch):
     assert mod._engine_registration_completeness({})["complete"] is True
 
 
-def test_generation_reads_stamp_files(monkeypatch, tmp_path):
+def test_generation_reads_stamp_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     pkg = tmp_path / "coordinator_core"
     pkg.mkdir()
     (pkg / "_engine_stamp").write_text("sha:" + "ab" * 20 + "\n", encoding="utf-8")
@@ -119,7 +121,7 @@ def test_generation_reads_stamp_files(monkeypatch, tmp_path):
     assert gen["engine_root"] == tmp_path.as_posix()
 
 
-def test_generation_none_without_stamp_files(monkeypatch, tmp_path):
+def test_generation_none_without_stamp_files(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(mod, "_engine_root", lambda: tmp_path)
     gen = mod._generation()
     assert gen["stamp_sha"] is None

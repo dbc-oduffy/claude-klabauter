@@ -128,6 +128,43 @@ def test_a_missing_plan_is_refused_by_name(tmp_path):
         _gate({"plan": "docs/plans/nope.md"}, common)
 
 
+def _move_to_month_folder(root: Path) -> str:
+    src = root / "docs" / "plans" / "2026-09-07-fixture.md"
+    dest = root / "docs" / "plans" / "2026-09" / src.name
+    dest.parent.mkdir()
+    src.rename(dest)
+    return "docs/plans/2026-09/2026-09-07-fixture.md"
+
+
+def test_a_plan_moved_into_its_month_folder_is_gated_on_the_new_path(tmp_path):
+    common = _repo(tmp_path)
+    flat = _plan(tmp_path)
+    moved = _move_to_month_folder(tmp_path)
+    result = _gate({"plan": flat}, common)
+    assert result["plan"] == moved
+    assert result["verdict"] == pg.PREPPED
+    assert result["classes"]["SPINE"]["status"] != "DEFECT"
+
+
+def test_two_month_folder_twins_stay_a_missing_plan(tmp_path):
+    common = _repo(tmp_path)
+    flat = _plan(tmp_path)
+    _move_to_month_folder(tmp_path)
+    other = tmp_path / "docs" / "plans" / "2026-10"
+    other.mkdir()
+    (other / "2026-09-07-fixture.md").write_text("x", encoding="utf-8")
+    with pytest.raises(ValueError, match="no such plan"):
+        _gate({"plan": flat}, common)
+
+
+def test_a_month_twin_of_a_different_name_is_not_a_match(tmp_path):
+    common = _repo(tmp_path)
+    _plan(tmp_path)
+    _move_to_month_folder(tmp_path)
+    with pytest.raises(ValueError, match="no such plan"):
+        _gate({"plan": "docs/plans/2026-09-07-other.md"}, common)
+
+
 def test_a_clean_plan_reports_prepped_with_every_class(tmp_path):
     common = _repo(tmp_path)
     rel = _plan(tmp_path)

@@ -45,6 +45,7 @@ from .test_memo_send import (
 )
 from coordinator_core.ops.fleet.memo_send import _memo_send
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -53,7 +54,7 @@ def _budget() -> dict:
     return load_manifest()["overrides"]["memo.send"]["spawn_count_budget"]
 
 
-def test_green_path_spawn_count_matches_budget_and_is_attributed(tmp_path, monkeypatch):
+def test_green_path_spawn_count_matches_budget_and_is_attributed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
     claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -71,8 +72,8 @@ def test_green_path_spawn_count_matches_budget_and_is_attributed(tmp_path, monke
 
 
 def test_unspliceable_receiver_index_costs_no_spawn_and_is_left_byte_identical(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A v4 receiver index (a NATURAL fixture precondition) is refused by the
     in-process splice; the delivery never writes the receiver's index, so it
     costs the green-path count and the index bytes do not change."""
@@ -98,7 +99,7 @@ def test_unspliceable_receiver_index_costs_no_spawn_and_is_left_byte_identical(
     assert (receiver_repo / ".git" / "index").read_bytes() == index_before
 
 
-def test_unreadable_base_tree_refusal_costs_no_spawn(tmp_path, monkeypatch):
+def test_unreadable_base_tree_refusal_costs_no_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """PLANTED precondition: `read_tree_spine` monkeypatched to return `None`
     in both modules that bind it. No natural fixture makes it return `None`
     (that needs a corrupt base tree, not merely an absent path).
@@ -135,8 +136,8 @@ def test_unreadable_base_tree_refusal_costs_no_spawn(tmp_path, monkeypatch):
 
 
 def test_receiver_signing_enabled_spawn_count_matches_budget_and_reaches_write_signed_commit_object(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
     subprocess.run(

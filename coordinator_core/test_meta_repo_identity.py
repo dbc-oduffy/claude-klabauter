@@ -10,12 +10,13 @@ from coordinator_core.meta_repo_identity import (
     is_meta_repo,
 )
 from coordinator_core.testing import symlink_capability
+from pathlib import Path
 
 
 # --- explicit git_root, CLAUDE_HOME set (test-sandbox shape) --------------
 
 
-def test_true_when_git_root_equals_claude_home_meta_root(tmp_path, monkeypatch):
+def test_true_when_git_root_equals_claude_home_meta_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_home = tmp_path / "home"
     fake_meta = fake_home / ".claude"
     fake_meta.mkdir(parents=True)
@@ -25,7 +26,7 @@ def test_true_when_git_root_equals_claude_home_meta_root(tmp_path, monkeypatch):
     assert is_meta_repo(str(fake_meta)) is True
 
 
-def test_false_when_git_root_is_a_sibling_repo(tmp_path, monkeypatch):
+def test_false_when_git_root_is_a_sibling_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_home = tmp_path / "home"
     fake_meta = fake_home / ".claude"
     fake_meta.mkdir(parents=True)
@@ -38,7 +39,7 @@ def test_false_when_git_root_is_a_sibling_repo(tmp_path, monkeypatch):
 
 
 @symlink_capability.requires_symlink_capability
-def test_canonicalizes_symlinked_git_root(tmp_path, monkeypatch):
+def test_canonicalizes_symlinked_git_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_home = tmp_path / "home"
     fake_meta = fake_home / ".claude"
     fake_meta.mkdir(parents=True)
@@ -53,13 +54,13 @@ def test_canonicalizes_symlinked_git_root(tmp_path, monkeypatch):
 # --- CLAUDE_HOME precedence -------------------------------------------------
 
 
-def test_empty_claude_home_raises_resolution_error(monkeypatch, tmp_path):
+def test_empty_claude_home_raises_resolution_error(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CLAUDE_HOME", "")
     with pytest.raises(MetaRepoResolutionError):
         is_meta_repo(str(tmp_path))
 
 
-def test_falls_back_to_home_when_claude_home_unset(tmp_path, monkeypatch):
+def test_falls_back_to_home_when_claude_home_unset(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_home = tmp_path / "home"
     fake_meta = fake_home / ".claude"
     fake_meta.mkdir(parents=True)
@@ -69,14 +70,14 @@ def test_falls_back_to_home_when_claude_home_unset(tmp_path, monkeypatch):
     assert is_meta_repo(str(fake_meta)) is True
 
 
-def test_raises_when_cwd_is_not_a_git_repo(tmp_path, monkeypatch):
+def test_raises_when_cwd_is_not_a_git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "home"))
     monkeypatch.chdir(tmp_path)
     with pytest.raises(MetaRepoResolutionError):
         is_meta_repo(None)
 
 
-def test_raises_when_git_binary_missing(tmp_path, monkeypatch):
+def test_raises_when_git_binary_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "home"))
 
     def _boom(*args, **kwargs):
@@ -90,7 +91,7 @@ def test_raises_when_git_binary_missing(tmp_path, monkeypatch):
         is_meta_repo(None)
 
 
-def test_false_when_neither_side_exists_on_disk(tmp_path, monkeypatch):
+def test_false_when_neither_side_exists_on_disk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_home = tmp_path / "home-does-not-exist"
     monkeypatch.setenv("CLAUDE_HOME", str(fake_home))
     monkeypatch.delenv("HOME", raising=False)

@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.ask_fanout_contract import ParentRecord, SiblingRun, parent_record_rel
+from pathlib import Path
 
 RUN = "ask-20261016T000000-abc123"
 REL = "state/sizings/2026-10-16-peer.yaml"
@@ -29,7 +30,7 @@ def _sizing():
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / REL).write_text(yaml.safe_dump(_sizing(), sort_keys=False), encoding="utf-8")
@@ -44,11 +45,11 @@ def _view(repo):
     return (repo / RECORD_DIR_ROOT / RUN / rl.LEDGER_VIEW_FILE).read_text(encoding="utf-8")
 
 
-def test_from_is_an_accepted_param():
+def test_from_is_an_accepted_param() -> None:
     assert "from" in {f.name for f in rl._PARAMS}
 
 
-def test_bound_run_stamps_sender_on_row_and_renders_it(repo):
+def test_bound_run_stamps_sender_on_row_and_renders_it(repo) -> None:
     rl.start(repo, RUN)
     rl.bind(repo, RUN, REL, ask_text="a raw ask")
     reply = rl._handler({"run_id": RUN, "verbatim": "also cover X", "from": PEER}, repo_root=repo)
@@ -66,14 +67,14 @@ def test_bound_run_stamps_sender_on_row_and_renders_it(repo):
     assert all(i.at and " " not in i.at for i in ledger.items if i.origin == rl.ORIGIN_REVISION)
 
 
-def _seed_parent(repo, run_id=RUN):
+def _seed_parent(repo, run_id=RUN) -> None:
     parent = ParentRecord(parent_id="ask-parent", runs=(SiblingRun(run_id=run_id, label="a"),))
     path = repo / parent_record_rel("ask-parent")
     path.parent.mkdir(parents=True)
     path.write_text(json.dumps(parent.to_json()), encoding="utf-8")
 
 
-def test_unknown_run_id_is_refused_and_creates_no_directory(repo):
+def test_unknown_run_id_is_refused_and_creates_no_directory(repo) -> None:
     _seed_parent(repo)
     typo = "ask-20261016T000000-abc124"
     reply = rl._handler({"run_id": typo, "verbatim": "lost?", "from": PEER}, repo_root=repo)
@@ -81,7 +82,7 @@ def test_unknown_run_id_is_refused_and_creates_no_directory(repo):
     assert not (repo / RECORD_DIR_ROOT / typo).exists()
 
 
-def test_held_run_accepts_and_folds_at_emit(repo):
+def test_held_run_accepts_and_folds_at_emit(repo) -> None:
     _seed_parent(repo)
     reply = rl._handler({"run_id": RUN, "verbatim": "early steer", "from": PEER}, repo_root=repo)
     assert reply["ok"] is True and reply["held"] is True and reply["item"] == "Q1"
@@ -98,13 +99,13 @@ def test_held_run_accepts_and_folds_at_emit(repo):
     assert not (repo / RECORD_DIR_ROOT / RUN / rl.INBOX_FILE).exists()
 
 
-def test_held_run_still_refuses_flag_and_out_of_scope(repo):
+def test_held_run_still_refuses_flag_and_out_of_scope(repo) -> None:
     for params in ({"all_of_pm_ask": True}, {"verbatim": "x", "out_of_scope": ["R1"]}):
         reply = rl._handler({"run_id": RUN, **params}, repo_root=repo)
         assert "emit it first" in reply["error"]
 
 
-def test_both_ledger_clauses_name_peer_revisions():
+def test_both_ledger_clauses_name_peer_revisions() -> None:
     for clause in (ask_compose._LEDGER_CLAUSE, ask_compose._RELAYED_LEDGER_CLAUSE):
         assert "peer session" in clause and "workflow.revise" in clause and "same authority" in clause
     assert "relayed ask" in ask_compose._RELAYED_LEDGER_CLAUSE

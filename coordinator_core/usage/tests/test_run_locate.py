@@ -106,6 +106,56 @@ def test_dirs_older_than_the_run_stamp_are_never_read(tmp_path, monkeypatch):
     assert rl.locate_run_dir(session, "run-1") is None
 
 
+def _journal_reads(monkeypatch) -> list:
+    reads: list = []
+    real = Path.read_text
+
+    def spy(self, *a, **k):
+        if self.name == "journal.jsonl":
+            reads.append(self.parent.name)
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", spy)
+    return reads
+
+
+def test_wf_id_key_reads_only_that_dirs_journal(tmp_path, monkeypatch):
+    session = tmp_path / "s"
+    for i in range(300):
+        _wf(session, f"wf_other{i}", {f"o{i}": ("commit", "run-1")})
+    live = _wf(session, "wf_live", {"L": ("commit", "run-2")})
+    reads = _journal_reads(monkeypatch)
+    assert rl.locate_run_dir(session, "run-2", wf_id="wf_live") == live
+    assert reads == ["wf_live"]
+
+
+def test_wf_id_key_refuses_a_dir_that_is_not_the_runs_and_never_widens(tmp_path, monkeypatch):
+    session = tmp_path / "s"
+    _wf(session, "wf_a", {"a1": ("commit", "run-1")})
+    _wf(session, "wf_b", {"b1": ("commit", "run-2")})
+    reads = _journal_reads(monkeypatch)
+    assert rl.locate_run_dir(session, "run-1", wf_id="wf_b") is None
+    assert rl.locate_run_dir(session, "run-1", wf_id="../wf_a") is None
+    assert rl.locate_run_dir(session, "run-1", wf_id="nope") is None
+    assert reads == ["wf_b"]
+
+
+def test_resolved_dir_is_reused_without_a_rescan_and_dropped_when_it_stops_naming_the_run(tmp_path, monkeypatch):
+    session = tmp_path / "s"
+    for i in range(50):
+        _wf(session, f"wf_other{i}", {f"o{i}": ("commit", "run-9")})
+    live = _wf(session, "wf_live", {"L": ("commit", "run-1")})
+    assert rl.locate_run_dir(session, "run-1") == live
+    reads = _journal_reads(monkeypatch)
+    assert rl.locate_run_dir(session, "run-1") == live
+    assert reads == ["wf_live"]
+    (live / "journal.jsonl").write_text(
+        json.dumps({"type": "started", "agentId": "L"}) + "\n" + json.dumps({"type": "result", "agentId": "L"}) + "\n",
+        encoding="utf-8",
+    )
+    assert rl.locate_run_dir(session, "run-1") is None
+
+
 def test_path_shaped_ids_are_refused(tmp_path):
     assert rl.locate_run_dir(tmp_path, "../x") is None
     assert rl.session_dir_for("../x", tmp_path) is None

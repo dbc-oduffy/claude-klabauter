@@ -6,12 +6,17 @@ import importlib.util
 from pathlib import Path
 
 from coordinator_core.session import declared_writes
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _SCRIPT = Path(__file__).resolve().parents[1] / "mise-prep-upgrade.py"
 _PLAN = "---\ntitle: x\n---\nbody\n"
 
 
-def _load():
+def _load() -> ModuleType:
     spec = importlib.util.spec_from_file_location("mise_prep_upgrade_under_test", _SCRIPT)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -50,13 +55,13 @@ def _run(monkeypatch, tmp_path, argv_extra):
     return plan, seen
 
 
-def test_write_run_declares_exactly_the_rewritten_plan(monkeypatch, tmp_path):
+def test_write_run_declares_exactly_the_rewritten_plan(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     plan, seen = _run(monkeypatch, tmp_path, [])
     assert plan.read_text(encoding="utf-8") != _PLAN
     assert [Path(p) for p in seen] == [plan]
 
 
-def test_check_run_writes_and_declares_nothing(monkeypatch, tmp_path):
+def test_check_run_writes_and_declares_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     plan, seen = _run(monkeypatch, tmp_path, ["--check"])
     assert plan.read_text(encoding="utf-8") == _PLAN
     assert seen == []

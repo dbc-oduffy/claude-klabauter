@@ -9,24 +9,25 @@ import pytest
 from coordinator_core.git import merge_owner
 from coordinator_core.ops.dispatch_emit import merge_landing
 from coordinator_core.ops.dispatch_emit.merge_landing import FOREIGN_KEY, landing_plan
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
-def _git(repo, *args, check=True):
+def _git(repo, *args, check: bool = True):
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **_NOWIN
     )
 
 
-def _w(repo, name, text):
+def _w(repo, name, text) -> None:
     (repo / name).write_text(text, encoding="utf-8", newline="\n")
 
 
 @pytest.fixture()
-def merging(tmp_path):
+def merging(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "base")
@@ -49,18 +50,18 @@ def merging(tmp_path):
     return r
 
 
-def _own(repo, run_id="run-1"):
+def _own(repo, run_id: str = "run-1") -> None:
     mh = _git(repo, "rev-parse", "MERGE_HEAD").stdout.strip()
     h = _git(repo, "rev-parse", "HEAD").stdout.strip()
     merge_owner.record(repo, run_id, mh, h)
 
 
-def _resolve(repo):
+def _resolve(repo) -> None:
     _w(repo, "shared.txt", "resolved\n")
     _git(repo, "add", "shared.txt")
 
 
-def test_no_owner_plans_the_merge_paths_when_resolved(merging):
+def test_no_owner_plans_the_merge_paths_when_resolved(merging) -> None:
     _resolve(merging)
     got = landing_plan(merging, ["shared.txt", "extra.txt"], [], product={"shared.txt"})
     assert "shared.txt" in got["paths"] and "extra.txt" not in got["paths"]
@@ -68,13 +69,13 @@ def test_no_owner_plans_the_merge_paths_when_resolved(merging):
     assert got["artifacts"] == {"paths": ["extra.txt"], "deleted": []}
 
 
-def test_no_owner_refuses_with_markers(merging):
+def test_no_owner_refuses_with_markers(merging) -> None:
     got = landing_plan(merging, ["shared.txt"], [], product={"shared.txt"})
     assert got["refusal"].startswith("merge not finished, HEAD unmoved:")
     assert "shared.txt" in got["extra"]["merge_paths"]
 
 
-def test_no_owner_refuses_foreign_declared_path(merging):
+def test_no_owner_refuses_foreign_declared_path(merging) -> None:
     _resolve(merging)
     _w(merging, "elsewhere.txt", "x\n")
     got = landing_plan(
@@ -83,7 +84,7 @@ def test_no_owner_refuses_foreign_declared_path(merging):
     assert got["refusal"].startswith("merge not finished, HEAD unmoved:")
 
 
-def test_recorded_owner_gets_paths_and_artifacts(merging):
+def test_recorded_owner_gets_paths_and_artifacts(merging) -> None:
     _resolve(merging)
     _own(merging)
     got = landing_plan(
@@ -94,7 +95,7 @@ def test_recorded_owner_gets_paths_and_artifacts(merging):
     assert got["artifacts"]["paths"] == ["note.md"]
 
 
-def test_other_owner_is_foreign(merging):
+def test_other_owner_is_foreign(merging) -> None:
     _resolve(merging)
     _own(merging, "run-1")
     mh = _git(merging, "rev-parse", "MERGE_HEAD").stdout.strip()
@@ -102,12 +103,12 @@ def test_other_owner_is_foreign(merging):
     assert got == {FOREIGN_KEY: True, "merge_head": mh}
 
 
-def test_no_record_is_foreign(merging):
+def test_no_record_is_foreign(merging) -> None:
     got = landing_plan(merging, [], [], product=set(), owner_run_id="run-1")
     assert got[FOREIGN_KEY] is True and got["merge_head"]
 
 
-def test_no_merge_open_is_none(tmp_path):
+def test_no_merge_open_is_none(tmp_path: Path) -> None:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q")

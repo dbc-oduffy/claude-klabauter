@@ -18,6 +18,8 @@ from unittest import mock
 
 from coordinator_core.hooks import example_retrieval_repo_detect
 from coordinator_core.ops.rag_freshness import FreshnessVerdict
+from pathlib import Path
+import pytest
 
 _FORBIDDEN_SUBSTRINGS = (
     "coordinator-content-repo",
@@ -41,7 +43,7 @@ def _assert_clean(banner: str) -> None:
         assert hit.lower() not in lowered, f"banner names a repo codename/placeholder: {hit!r} in {banner!r}"
 
 
-def test_uninitialized_banner_names_no_repo(tmp_path):
+def test_uninitialized_banner_names_no_repo(tmp_path: Path) -> None:
     example_retrieval_repo_dir = tmp_path / ".project-rag"
     example_retrieval_repo_dir.mkdir()
     (example_retrieval_repo_dir / "state.json").write_text("{}")
@@ -62,7 +64,7 @@ def _make_marker(tmp_path):
     return example_retrieval_repo_dir
 
 
-def test_stale_banner_names_no_repo(tmp_path):
+def test_stale_banner_names_no_repo(tmp_path: Path) -> None:
     _make_marker(tmp_path)
 
     with mock.patch.object(example_retrieval_repo_detect, "_git", side_effect=["deadbeef", "5"]), mock.patch(
@@ -74,7 +76,7 @@ def test_stale_banner_names_no_repo(tmp_path):
     _assert_clean(banner)
 
 
-def test_stale_escalated_banner_names_no_repo(tmp_path):
+def test_stale_escalated_banner_names_no_repo(tmp_path: Path) -> None:
     _make_marker(tmp_path)
 
     with mock.patch.object(example_retrieval_repo_detect, "_git", side_effect=["deadbeef", "80"]), mock.patch(
@@ -88,15 +90,15 @@ def test_stale_escalated_banner_names_no_repo(tmp_path):
     _assert_clean(banner)
 
 
-def _stale_verdict(_root):
+def _stale_verdict(_root) -> FreshnessVerdict:
     return FreshnessVerdict(state="stale", remedy=("example-retrieval-repo-refresh",), source="stub")
 
 
-def _absent_verdict(_root):
+def _absent_verdict(_root) -> FreshnessVerdict:
     return FreshnessVerdict(state="absent", remedy=("example-retrieval-repo-refresh",), source="stub")
 
 
-def test_stale_banner_states_queued_refresh_and_spawns_once(tmp_path):
+def test_stale_banner_states_queued_refresh_and_spawns_once(tmp_path: Path) -> None:
     _make_marker(tmp_path)
     spawn = mock.Mock()
 
@@ -112,7 +114,7 @@ def test_stale_banner_states_queued_refresh_and_spawns_once(tmp_path):
     _assert_clean(banner)
 
 
-def test_absent_graph_db_states_queued_refresh_and_spawns_once(tmp_path):
+def test_absent_graph_db_states_queued_refresh_and_spawns_once(tmp_path: Path) -> None:
     example_retrieval_repo_dir = tmp_path / ".project-rag"
     example_retrieval_repo_dir.mkdir()
     (example_retrieval_repo_dir / "state.json").write_text("{}")
@@ -127,7 +129,7 @@ def test_absent_graph_db_states_queued_refresh_and_spawns_once(tmp_path):
     spawn.assert_called_once()
 
 
-def test_live_marker_states_already_queued_and_does_not_respawn(tmp_path):
+def test_live_marker_states_already_queued_and_does_not_respawn(tmp_path: Path) -> None:
     _make_marker(tmp_path)
     spawn = mock.Mock()
     kwargs = dict(verdict_fn=_stale_verdict, spawn_fn=spawn, marker_root=tmp_path / "m")
@@ -142,7 +144,7 @@ def test_live_marker_states_already_queued_and_does_not_respawn(tmp_path):
     spawn.assert_called_once()
 
 
-def test_fresh_index_queues_nothing(tmp_path):
+def test_fresh_index_queues_nothing(tmp_path: Path) -> None:
     _make_marker(tmp_path)
     spawn = mock.Mock()
 
@@ -157,7 +159,7 @@ def test_fresh_index_queues_nothing(tmp_path):
     spawn.assert_not_called()
 
 
-def test_settings_home_indexed_repo_is_not_silent(tmp_path, monkeypatch):
+def test_settings_home_indexed_repo_is_not_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = tmp_path / "home"
     repo = tmp_path / "my-repo"
     (repo / ".git").mkdir(parents=True)
@@ -179,7 +181,7 @@ def test_settings_home_indexed_repo_is_not_silent(tmp_path, monkeypatch):
     spawn.assert_called_once()
 
 
-def test_unindexed_repo_with_absent_verdict_queues_and_with_unknown_stays_silent(tmp_path, monkeypatch):
+def test_unindexed_repo_with_absent_verdict_queues_and_with_unknown_stays_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "home"))
     repo = tmp_path / "bare-repo"
     (repo / ".git").mkdir(parents=True)
@@ -195,7 +197,7 @@ def test_unindexed_repo_with_absent_verdict_queues_and_with_unknown_stays_silent
     spawn.assert_called_once()
 
 
-def test_all_rendered_banner_strings_in_module_are_repo_free():
+def test_all_rendered_banner_strings_in_module_are_repo_free() -> None:
     import inspect
 
     source = inspect.getsource(example_retrieval_repo_detect.detect_banner)

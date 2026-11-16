@@ -20,7 +20,7 @@ from coordinator_core.win_portability import no_console_creationflags
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
 
-def _m_plus_script(monkeypatch):
+def _m_plus_script(monkeypatch) -> str:
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "m_plus")
     return compose_ask_script(
         repo_root="REPO",
@@ -109,7 +109,7 @@ def _top_level_returns(script: str) -> list[int]:
     return positions
 
 
-def test_m_plus_script_has_one_return_and_it_is_the_terminal_one(monkeypatch):
+def test_m_plus_script_has_one_return_and_it_is_the_terminal_one(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _m_plus_script(monkeypatch)
     found = _top_level_returns(script)
     # The M+ and roadmap picks hand the run to a chained script and return its result; every other exit is the terminal one.
@@ -120,7 +120,7 @@ def test_m_plus_script_has_one_return_and_it_is_the_terminal_one(monkeypatch):
     assert script[terminal[0] :].startswith("return { arm:")
 
 
-def test_m_plus_prep_is_one_review_prep_call_and_the_no_op_exit_is_still_rewritten(monkeypatch):
+def test_m_plus_prep_is_one_review_prep_call_and_the_no_op_exit_is_still_rewritten(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _m_plus_script(monkeypatch)
     assert "review.prep" in script and "review.partition_slices" not in script
     assert "freeze-review-diff" not in script
@@ -128,7 +128,7 @@ def test_m_plus_prep_is_one_review_prep_call_and_the_no_op_exit_is_still_rewritt
     assert "_halted = { halted: 'no-op'," in script
 
 
-def test_prep_busy_and_review_missing_exits_assign_halted_and_skip_the_prep_bind(monkeypatch):
+def test_prep_busy_and_review_missing_exits_assign_halted_and_skip_the_prep_bind(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _m_plus_script(monkeypatch)
     assert "return { halted:" not in script
     for halt in (PREP_BUSY_HALT, PREP_MALFORMED_HALT, REVIEW_MISSING_HALT):
@@ -137,7 +137,7 @@ def test_prep_busy_and_review_missing_exits_assign_halted_and_skip_the_prep_bind
     assert "if (!_halted && _waveRaw.some(" in script
 
 
-def test_drifted_prep_busy_exit_refuses_composition():
+def test_drifted_prep_busy_exit_refuses_composition() -> None:
     blocks = [
         "return { halted: 'no-op', wave: null, integration: null }; }\n" + _REVIEW_SLICES_GUARD
     ]
@@ -145,11 +145,11 @@ def test_drifted_prep_busy_exit_refuses_composition():
         ask_compose._single_exit_review(blocks)
 
 
-def test_the_live_review_prep_block_is_rewritten_and_a_block_missing_a_halt_exit_is_refused(monkeypatch):
+def test_the_live_review_prep_block_is_rewritten_and_a_block_missing_a_halt_exit_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list[str] = []
     real = ask_compose._single_exit_review
 
-    def spy(blocks):
+    def spy(blocks) -> str:
         seen.append(blocks[0])
         return real(blocks)
 
@@ -162,7 +162,7 @@ def test_the_live_review_prep_block_is_rewritten_and_a_block_missing_a_halt_exit
         real([drifted])
 
 
-def test_m_plus_script_validates_with_zero_errors(monkeypatch):
+def test_m_plus_script_validates_with_zero_errors(monkeypatch: pytest.MonkeyPatch) -> None:
     findings = run_checks(_m_plus_script(monkeypatch))
     assert [f for f in findings if f.severity is Severity.ERROR] == []
 
@@ -174,7 +174,7 @@ def _merge_and_guard_fragment(script: str) -> str:
     return script[start:end]
 
 
-def test_ask_no_slices_guard_is_array_guarded_and_follows_the_slice_id_rebuild(monkeypatch):
+def test_ask_no_slices_guard_is_array_guarded_and_follows_the_slice_id_rebuild(monkeypatch: pytest.MonkeyPatch) -> None:
     fragment = _merge_and_guard_fragment(_m_plus_script(monkeypatch))
     rebuild = fragment.index("id.split('+')")
     guard = fragment.index("if (!_halted && (!_reviewPrep ||")
@@ -191,7 +191,7 @@ def test_ask_no_slices_guard_is_array_guarded_and_follows_the_slice_id_rebuild(m
     ("slice_id", "halts"),
     [("...b90a92-9c1affcf4e0d-prep-1+...-prep-2", False), ("", True)],
 )
-def test_ask_wave_review_naming_slices_prevents_the_no_slices_halt(monkeypatch, slice_id, halts):
+def test_ask_wave_review_naming_slices_prevents_the_no_slices_halt(monkeypatch: pytest.MonkeyPatch, slice_id, halts) -> None:
     fragment = _merge_and_guard_fragment(_m_plus_script(monkeypatch))
     harness = (
         "let _halted = null;\n"
@@ -214,7 +214,7 @@ def test_ask_wave_review_naming_slices_prevents_the_no_slices_halt(monkeypatch, 
         assert result["n"] == 2
 
 
-def test_single_exit_gates_the_later_review_blocks_on_an_already_delivered_close(monkeypatch):
+def test_single_exit_gates_the_later_review_blocks_on_an_already_delivered_close(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _m_plus_script(monkeypatch)
     assert "if (!_halted && !_alreadyDelivered) {" in script
     assert "await _alreadyDeliveredClose()" in script
@@ -255,7 +255,7 @@ def _run_ask_guard(monkeypatch, replies, review_paths):
 @pytest.mark.cadence
 @pytest.mark.skipif(shutil.which("node") is None, reason="node unavailable")
 @pytest.mark.parametrize("shape", sorted(_NO_PRODUCT_REPLIES))
-def test_ask_verification_wave_with_no_product_path_passes_review_empty_whatever_the_prep_reply(monkeypatch, shape):
+def test_ask_verification_wave_with_no_product_path_passes_review_empty_whatever_the_prep_reply(monkeypatch: pytest.MonkeyPatch, shape) -> None:
     result = _run_ask_guard(monkeypatch, _NO_PRODUCT_REPLIES[shape], _DOCS_ONLY_PATHS)
     assert result == {"halted": None, "verifyOnly": True}
 
@@ -264,7 +264,7 @@ def test_ask_verification_wave_with_no_product_path_passes_review_empty_whatever
 @pytest.mark.cadence
 @pytest.mark.skipif(shutil.which("node") is None, reason="node unavailable")
 @pytest.mark.parametrize("shape", sorted(_NO_PRODUCT_REPLIES))
-def test_ask_wave_with_a_declared_product_write_and_a_failed_prep_still_halts(monkeypatch, shape):
+def test_ask_wave_with_a_declared_product_write_and_a_failed_prep_still_halts(monkeypatch: pytest.MonkeyPatch, shape) -> None:
     result = _run_ask_guard(monkeypatch, _NO_PRODUCT_REPLIES[shape], _PRODUCT_PATHS)
     assert result["halted"].startswith(NO_SLICES_HALT)
     assert result["verifyOnly"] is False
@@ -273,7 +273,7 @@ def test_ask_wave_with_a_declared_product_write_and_a_failed_prep_still_halts(mo
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @pytest.mark.skipif(shutil.which("node") is None, reason="node unavailable")
-def test_ask_docs_only_wave_whose_prep_reports_product_or_a_partition_still_halts(monkeypatch):
+def test_ask_docs_only_wave_whose_prep_reports_product_or_a_partition_still_halts(monkeypatch: pytest.MonkeyPatch) -> None:
     for reply in (
         {"verdict": "PARTITION-MANDATORY", "basis": "", "error": "x", "product_files": 0, "slices": []},
         {"verdict": None, "basis": "", "error": "x", "product_files": 0, "slices": [], "foreign_claims": ["peer.py"]},
@@ -285,7 +285,7 @@ def test_ask_docs_only_wave_whose_prep_reports_product_or_a_partition_still_halt
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @pytest.mark.skipif(shutil.which("node") is None, reason="node unavailable")
-def test_ask_zero_file_reply_keeps_its_no_op_and_verify_only_outcomes(monkeypatch):
+def test_ask_zero_file_reply_keeps_its_no_op_and_verify_only_outcomes(monkeypatch: pytest.MonkeyPatch) -> None:
     """The clean zero-file reply keeps its no-op over docs-only paths and verify-only over a declared product write."""
     assert _run_ask_guard(monkeypatch, _ZERO_FILE_REPLY, _DOCS_ONLY_PATHS)["halted"] == "no-op"
     assert _run_ask_guard(monkeypatch, _ZERO_FILE_REPLY, _PRODUCT_PATHS) == {"halted": None, "verifyOnly": True}

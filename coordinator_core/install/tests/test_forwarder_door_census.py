@@ -22,6 +22,7 @@ import json
 import pytest
 
 from coordinator_core.install import forwarder_door_census as fdc
+from pathlib import Path
 
 
 def _write(tmp_path, name: str, body: str):
@@ -31,7 +32,7 @@ def _write(tmp_path, name: str, body: str):
 
 
 class TestAxisA:
-    def test_no_client_side_work_passes(self, tmp_path):
+    def test_no_client_side_work_passes(self, tmp_path: Path) -> None:
         _write(
             tmp_path,
             "clean.py",
@@ -41,7 +42,7 @@ class TestAxisA:
         assert v.op_equivalent is True
         assert v.op_equivalent_evidence == ()
 
-    def test_stat_call_fails_a(self, tmp_path):
+    def test_stat_call_fails_a(self, tmp_path: Path) -> None:
         _write(
             tmp_path,
             "statter.py",
@@ -51,7 +52,7 @@ class TestAxisA:
         assert v.op_equivalent is False
         assert any("os.stat" in e for e in v.op_equivalent_evidence)
 
-    def test_subprocess_call_fails_a(self, tmp_path):
+    def test_subprocess_call_fails_a(self, tmp_path: Path) -> None:
         _write(
             tmp_path,
             "shelling.py",
@@ -61,7 +62,7 @@ class TestAxisA:
         assert v.op_equivalent is False
         assert any("subprocess.run" in e for e in v.op_equivalent_evidence)
 
-    def test_glob_and_rglob_fail_a(self, tmp_path):
+    def test_glob_and_rglob_fail_a(self, tmp_path: Path) -> None:
         _write(
             tmp_path,
             "globber.py",
@@ -73,7 +74,7 @@ class TestAxisA:
 
 
 class TestAxisB:
-    def test_clean_module_passes_b(self, tmp_path):
+    def test_clean_module_passes_b(self, tmp_path: Path) -> None:
         _write(
             tmp_path,
             "clean.py",
@@ -83,7 +84,7 @@ class TestAxisB:
         assert v.warm_loadable is True
         assert v.warm_loadable_evidence == ()
 
-    def test_top_level_sys_path_insert_is_contained_not_disqualifying(self, tmp_path):
+    def test_top_level_sys_path_insert_is_contained_not_disqualifying(self, tmp_path: Path) -> None:
         """`sys.path.insert` at module scope is the engine bootstrap preamble
         every `coordinator/bin` entrypoint opens with. `_run_entrypoint`
         snapshots and restores `sys.path` around the module exec, so the shape
@@ -102,7 +103,7 @@ class TestAxisB:
         assert v.warm_loadable is True
         assert any("sys.path.insert" in e for e in v.warm_loadable_evidence)
 
-    def test_top_level_hard_sys_exit_is_contained_not_disqualifying(self, tmp_path):
+    def test_top_level_hard_sys_exit_is_contained_not_disqualifying(self, tmp_path: Path) -> None:
         _write(
             tmp_path,
             "hardexit.py",
@@ -112,7 +113,7 @@ class TestAxisB:
         assert v.warm_loadable is True
         assert any("sys.exit" in e for e in v.warm_loadable_evidence)
 
-    def test_main_guard_body_never_flagged(self, tmp_path):
+    def test_main_guard_body_never_flagged(self, tmp_path: Path) -> None:
         """`sys.exit(main())` inside the `if __name__ == "__main__":` guard
         never executes under `exec_module` -- must not be flagged."""
         _write(
@@ -123,7 +124,7 @@ class TestAxisB:
         v = fdc.classify_one("guarded", "guarded.py", bin_dir=tmp_path)
         assert v.warm_loadable is True
 
-    def test_module_level_call_expr_fails_b(self, tmp_path):
+    def test_module_level_call_expr_fails_b(self, tmp_path: Path) -> None:
         _write(
             tmp_path,
             "sideeffect.py",
@@ -132,7 +133,7 @@ class TestAxisB:
         v = fdc.classify_one("sideeffect", "sideeffect.py", bin_dir=tmp_path)
         assert v.warm_loadable is False
 
-    def test_global_at_top_level_fails_b(self, tmp_path):
+    def test_global_at_top_level_fails_b(self, tmp_path: Path) -> None:
         _write(
             tmp_path,
             "globaluse.py",
@@ -144,12 +145,12 @@ class TestAxisB:
 
 
 class TestBucketing:
-    def test_both_pass_is_door_eligible(self, tmp_path):
+    def test_both_pass_is_door_eligible(self, tmp_path: Path) -> None:
         _write(tmp_path, "clean.py", "def main(argv=None):\n    return 0\n")
         v = fdc.classify_one("clean", "clean.py", bin_dir=tmp_path)
         assert v.bucket == "door-eligible"
 
-    def test_a_failing_alone_is_still_door_eligible(self, tmp_path):
+    def test_a_failing_alone_is_still_door_eligible(self, tmp_path: Path) -> None:
         """Axis (a) does not gate coverage. `invoke.from_argv` runs the CLI's
         OWN `main(argv)` warm, so client-side work is done warm exactly as it
         is done cold — it just stops paying an interpreter start. Gating on
@@ -168,7 +169,7 @@ class TestBucketing:
         assert v.op_equivalent is False
         assert any("os.stat" in e for e in v.op_equivalent_evidence)
 
-    def test_uncontained_b_failure_is_needs_warm_safety(self, tmp_path):
+    def test_uncontained_b_failure_is_needs_warm_safety(self, tmp_path: Path) -> None:
         """Only an UNCONTAINED exec-time hazard disqualifies. `logging.
         basicConfig` mutates interpreter-global state no `finally` puts back,
         so unlike `sys.path.insert` it is not admitted."""
@@ -180,7 +181,7 @@ class TestBucketing:
         v = fdc.classify_one("sideeffect", "sideeffect.py", bin_dir=tmp_path)
         assert v.bucket == "needs-warm-safety"
 
-    def test_both_axes_failing_is_still_only_needs_warm_safety(self, tmp_path):
+    def test_both_axes_failing_is_still_only_needs_warm_safety(self, tmp_path: Path) -> None:
         """There is no both-fail bucket any more: (a) does not gate, so a row
         failing both axes lands wherever (b) puts it. `engine-unreachable` is
         now reached ONLY by a scan error (see the two tests below)."""
@@ -194,13 +195,13 @@ class TestBucketing:
         assert v.op_equivalent is False
         assert v.scan_error is None
 
-    def test_syntax_error_is_engine_unreachable(self, tmp_path):
+    def test_syntax_error_is_engine_unreachable(self, tmp_path: Path) -> None:
         _write(tmp_path, "broken.py", "def main(:\n    pass\n")
         v = fdc.classify_one("broken", "broken.py", bin_dir=tmp_path)
         assert v.bucket == "engine-unreachable"
         assert v.scan_error is not None
 
-    def test_missing_script_is_engine_unreachable(self, tmp_path):
+    def test_missing_script_is_engine_unreachable(self, tmp_path: Path) -> None:
         v = fdc.classify_one("ghost", "ghost.py", bin_dir=tmp_path)
         assert v.bucket == "engine-unreachable"
         assert v.scan_error is not None
@@ -216,7 +217,7 @@ class TestCrossRepoMemoCanonicalExample:
     rewritten to no longer do that stat pass, this test should be revisited
     alongside it, not silently left green on stale reasoning."""
 
-    def test_real_cross_repo_memo_fails_axis_a(self):
+    def test_real_cross_repo_memo_fails_axis_a(self) -> None:
         from pathlib import Path
 
         bin_dir = fdc._BIN_DIR
@@ -229,21 +230,21 @@ class TestCrossRepoMemoCanonicalExample:
 
 
 class TestRunCensus:
-    def test_run_census_classifies_every_derived_name(self, tmp_path):
+    def test_run_census_classifies_every_derived_name(self, tmp_path: Path) -> None:
         _write(tmp_path, "one.py", "def main(argv=None):\n    return 0\n")
         _write(tmp_path, "two.py", "import os\n\ndef main(argv=None):\n    os.stat('x')\n    return 0\n")
         verdicts = fdc.run_census(bin_dir=tmp_path)
         names = {v.name for v in verdicts}
         assert names == {"one", "two"}
 
-    def test_bucket_counts_sum_to_total(self, tmp_path):
+    def test_bucket_counts_sum_to_total(self, tmp_path: Path) -> None:
         _write(tmp_path, "one.py", "def main(argv=None):\n    return 0\n")
         _write(tmp_path, "two.py", "import os\n\ndef main(argv=None):\n    os.stat('x')\n    return 0\n")
         verdicts = fdc.run_census(bin_dir=tmp_path)
         counts = fdc.bucket_counts(verdicts)
         assert sum(counts.values()) == len(verdicts) == 2
 
-    def test_door_eligible_names_sorted(self, tmp_path):
+    def test_door_eligible_names_sorted(self, tmp_path: Path) -> None:
         _write(tmp_path, "b.py", "def main(argv=None):\n    return 0\n")
         _write(tmp_path, "a.py", "def main(argv=None):\n    return 0\n")
         verdicts = fdc.run_census(bin_dir=tmp_path)
@@ -251,14 +252,14 @@ class TestRunCensus:
 
 
 class TestRendering:
-    def test_to_json_round_trips_and_carries_counts(self, tmp_path):
+    def test_to_json_round_trips_and_carries_counts(self, tmp_path: Path) -> None:
         _write(tmp_path, "one.py", "def main(argv=None):\n    return 0\n")
         verdicts = fdc.run_census(bin_dir=tmp_path)
         payload = json.loads(fdc.to_json(verdicts))
         assert payload["counts"]["door-eligible"] == 1
         assert payload["rows"][0]["name"] == "one"
 
-    def test_render_table_states_performance_axis_disclaimer(self, tmp_path):
+    def test_render_table_states_performance_axis_disclaimer(self, tmp_path: Path) -> None:
         _write(tmp_path, "one.py", "def main(argv=None):\n    return 0\n")
         verdicts = fdc.run_census(bin_dir=tmp_path)
         table = fdc.render_table(verdicts)
@@ -267,7 +268,7 @@ class TestRendering:
 
 
 class TestAllowlistPopulation:
-    def test_write_allowlist_regenerates_and_drops_an_existing_seed(self, tmp_path):
+    def test_write_allowlist_regenerates_and_drops_an_existing_seed(self, tmp_path: Path) -> None:
         """The C2 fix (ae7edbe3fc, 2026-08-27) REVERSED this test's original
         premise and did not carry the test with it: `_write_allowlist` used to
         union with the file's prior content and now regenerates from THIS run's
@@ -307,7 +308,7 @@ class TestAllowlistPopulation:
         on_disk = json.loads(allowlist_path.read_text(encoding="utf-8"))
         assert set(on_disk["entrypoints"]) == set(merged)
 
-    def test_write_allowlist_preserves_door_eligible_entrypoints_on_regen(self, tmp_path):
+    def test_write_allowlist_preserves_door_eligible_entrypoints_on_regen(self, tmp_path: Path) -> None:
         # Pins that a regen after C13's
         # split does not silently DELETE the independently-editable door-
         # cutover key and its provenance comment; `_write_allowlist` only
@@ -335,7 +336,7 @@ class TestAllowlistPopulation:
         assert on_disk["$comment_split"] == "split provenance note"
         assert on_disk["door_eligible_entrypoints"] == ["eligible-one"]
 
-    def test_write_allowlist_creates_when_absent(self, tmp_path):
+    def test_write_allowlist_creates_when_absent(self, tmp_path: Path) -> None:
         allowlist_path = tmp_path / "fresh_allowlist.json"
         bin_dir = tmp_path / "bin"
         bin_dir.mkdir()
@@ -349,7 +350,7 @@ class TestAllowlistPopulation:
 
 
 class TestNegativeSpecNeverCountsInstalledFiles:
-    def test_run_census_never_touches_settings_home(self, tmp_path, monkeypatch):
+    def test_run_census_never_touches_settings_home(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Classification must derive from `bin_dir` (generator state) only
         -- pointing HOME at a directory with no settings-home bin/ must not
         raise or otherwise attempt to read an installed-files listing."""
@@ -384,7 +385,7 @@ class TestBareNameDoorReportReadsThePlatformsOwnDoor:
         monkeypatch.setenv("PATHEXT", ".EXE")
         return door
 
-    def test_the_platforms_installed_door_is_found_and_reported_ok(self, tmp_path, monkeypatch):
+    def test_the_platforms_installed_door_is_found_and_reported_ok(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         door = self._install_door(tmp_path, monkeypatch)
         monkeypatch.setenv("PATH", str(door.parent))
 
@@ -398,8 +399,8 @@ class TestBareNameDoorReportReadsThePlatformsOwnDoor:
         assert "OK -- the bare name reaches the native door." in joined, joined
 
     def test_a_ps1_beside_the_door_is_reported_through_a_symlinked_path_entry(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The door's bin reaching PATH through a symlink (`~/bin -> ...` on
         Linux, `/System/Volumes/Data/...` on macOS) must not suppress the
         `.ps1`-beside-the-door BROKEN finding. `Path(raw_dir) == door.parent` is
@@ -424,8 +425,8 @@ class TestBareNameDoorReportReadsThePlatformsOwnDoor:
         )
 
     def test_the_windows_arm_still_ranks_a_ps1_ahead_of_the_door(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Windows is the platform this surface already worked on, so its arm is
         driven here on every host rather than excused with a skip: `sys.platform`
         is read at call time, and the report must keep passing

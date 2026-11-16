@@ -4,9 +4,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.plugin_health import forwarder_drift as fd
+import pytest
 
 
-def test_extension_axis_skip_line_uses_generic_phrasing(tmp_path: Path, monkeypatch):
+def test_extension_axis_skip_line_uses_generic_phrasing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings_bin = tmp_path / "settings-bin"
     settings_bin.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(fd, "_is_windows_host", lambda: True)
@@ -20,7 +21,7 @@ def test_extension_axis_skip_line_uses_generic_phrasing(tmp_path: Path, monkeypa
     )
 
 
-def test_extension_axis_skip_line_never_names_content_root_literally(tmp_path: Path, monkeypatch):
+def test_extension_axis_skip_line_never_names_content_root_literally(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings_bin = tmp_path / "settings-bin"
     settings_bin.mkdir(parents=True, exist_ok=True)
     monkeypatch.setattr(fd, "_is_windows_host", lambda: True)

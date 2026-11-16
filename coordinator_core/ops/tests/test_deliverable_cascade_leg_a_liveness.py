@@ -22,6 +22,7 @@ from pathlib import Path
 
 import coordinator_core.ops.deliverable_cascade as cascade_mod
 import coordinator_core.ops.handoff_children as handoff_children_mod
+import pytest
 
 _LIVE_SID = "22222222-2222-2222-2222-222222222222"
 
@@ -55,7 +56,7 @@ async def _no_live_children(*args, **kwargs):
     return {"referenced": False, "children": [], "exit_code": 1}
 
 
-def test_leg_a_refuses_a_claimant_in_the_live_set(tmp_path, monkeypatch):
+def test_leg_a_refuses_a_claimant_in_the_live_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     handoff = _write_handoff(tmp_path)
     monkeypatch.setattr(cascade_mod, "_claimant", lambda *_a, **_k: _LIVE_SID)
     monkeypatch.setattr(cascade_mod, "resolve_live_session_ids", lambda: {_LIVE_SID})
@@ -71,7 +72,7 @@ def test_leg_a_refuses_a_claimant_in_the_live_set(tmp_path, monkeypatch):
     assert "claimed by live session" in reason
 
 
-def test_leg_a_clears_a_stale_claimant_not_in_the_live_set(tmp_path, monkeypatch):
+def test_leg_a_clears_a_stale_claimant_not_in_the_live_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     handoff = _write_handoff(tmp_path)
     monkeypatch.setattr(cascade_mod, "_claimant", lambda *_a, **_k: _LIVE_SID)
     monkeypatch.setattr(cascade_mod, "resolve_live_session_ids", lambda: set())
@@ -86,7 +87,7 @@ def test_leg_a_clears_a_stale_claimant_not_in_the_live_set(tmp_path, monkeypatch
     assert reason is None
 
 
-def test_leg_a_passes_with_no_claimant_and_never_checks_liveness(tmp_path, monkeypatch):
+def test_leg_a_passes_with_no_claimant_and_never_checks_liveness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     handoff = _write_handoff(tmp_path)
     monkeypatch.setattr(cascade_mod, "_claimant", lambda *_a, **_k: None)
 

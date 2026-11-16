@@ -5,13 +5,14 @@ import subprocess
 import pytest
 
 from coordinator_core.git import commit as gcommit
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
-def _git(repo, *args, check=True):
+def _git(repo, *args, check: bool = True):
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **_NOWIN
     )
@@ -29,7 +30,7 @@ def _repo(tmp_path):
     return repo
 
 
-def _write(repo, rel, text):
+def _write(repo, rel, text) -> None:
     (repo / rel).write_text(text, encoding="utf-8", newline="\n")
 
 
@@ -51,7 +52,7 @@ def _state(repo):
 
 
 class _SpawnCounter:
-    def __init__(self):
+    def __init__(self) -> None:
         self.argvs = []
 
     def __enter__(self):
@@ -64,7 +65,7 @@ class _SpawnCounter:
             return counter._run(*a, **k)
 
         class PopenSpy(counter._popen):  # type: ignore[misc,valid-type]
-            def __init__(self, *a, **k):
+            def __init__(self, *a, **k) -> None:
                 if a:
                     counter.argvs.append(a[0])
                 super().__init__(*a, **k)
@@ -72,12 +73,12 @@ class _SpawnCounter:
         subprocess.run, subprocess.Popen = run_spy, PopenSpy
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc) -> bool:
         subprocess.run, subprocess.Popen = self._run, self._popen
         return False
 
 
-def test_blob_match_lands(tmp_path):
+def test_blob_match_lands(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write(repo, "seed.txt", "edited\n")
     out = gcommit.commit_paths(
@@ -86,7 +87,7 @@ def test_blob_match_lands(tmp_path):
     assert _git(repo, "show", f"{out.sha}:seed.txt").stdout == "edited\n"
 
 
-def test_blob_mismatch_refuses_and_writes_nothing(tmp_path):
+def test_blob_mismatch_refuses_and_writes_nothing(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write(repo, "seed.txt", "reviewed\n")
     want = _blob(b"reviewed\n")
@@ -100,7 +101,7 @@ def test_blob_mismatch_refuses_and_writes_nothing(tmp_path):
     assert _state(repo) == before
 
 
-def test_content_match_and_mismatch(tmp_path):
+def test_content_match_and_mismatch(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write(repo, "seed.txt", "A\n")
     gcommit.commit_paths(
@@ -117,7 +118,7 @@ def test_content_match_and_mismatch(tmp_path):
     assert _state(repo) == before
 
 
-def test_a_crlf_only_difference_from_the_expectation_is_not_drift(tmp_path):
+def test_a_crlf_only_difference_from_the_expectation_is_not_drift(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _git(repo, "config", "core.autocrlf", "true")
     (repo / "seed.txt").write_bytes(b"A\r\nB\r\n")
@@ -132,7 +133,7 @@ def test_a_crlf_only_difference_from_the_expectation_is_not_drift(tmp_path):
         )
 
 
-def test_touch_hash_and_commit_digest_fold_crlf_alike(tmp_path):
+def test_touch_hash_and_commit_digest_fold_crlf_alike(tmp_path: Path) -> None:
     from coordinator_core.session.touch_record import compute_content_hash
 
     f = tmp_path / "f.txt"
@@ -140,7 +141,7 @@ def test_touch_hash_and_commit_digest_fold_crlf_alike(tmp_path):
     assert compute_content_hash(f) == _sha256(b"A\nB\n")
 
 
-def test_stale_expectation_on_a_path_equal_to_head_does_not_refuse(tmp_path):
+def test_stale_expectation_on_a_path_equal_to_head_does_not_refuse(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write(repo, "new.txt", "n\n")
     out = gcommit.commit_paths(
@@ -152,13 +153,13 @@ def test_stale_expectation_on_a_path_equal_to_head_does_not_refuse(tmp_path):
     assert _git(repo, "show", "--name-only", "--format=", out.sha).stdout.split() == ["new.txt"]
 
 
-def _stage_then_diverge(repo):
+def _stage_then_diverge(repo) -> None:
     _write(repo, "seed.txt", "STAGED\n")
     _git(repo, "add", "--", "seed.txt")
     _write(repo, "seed.txt", "WORKTREE\n")
 
 
-def test_prefer_staged_with_content_expectation_is_unverifiable(tmp_path):
+def test_prefer_staged_with_content_expectation_is_unverifiable(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _stage_then_diverge(repo)
     with pytest.raises(gcommit.BlobDriftRefused) as ei:
@@ -169,7 +170,7 @@ def test_prefer_staged_with_content_expectation_is_unverifiable(tmp_path):
     assert ei.value.drift[0].actual is None
 
 
-def test_prefer_staged_with_blob_expectation_compares_staged_blob(tmp_path):
+def test_prefer_staged_with_blob_expectation_compares_staged_blob(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _stage_then_diverge(repo)
     out = gcommit.commit_paths(
@@ -179,7 +180,7 @@ def test_prefer_staged_with_blob_expectation_compares_staged_blob(tmp_path):
     assert _git(repo, "show", f"{out.sha}:seed.txt").stdout == "STAGED\n"
 
 
-def test_deliberate_stage_substitution_content_unverifiable_blob_compares_substituted(tmp_path):
+def test_deliberate_stage_substitution_content_unverifiable_blob_compares_substituted(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _stage_then_diverge(repo)
     with pytest.raises(gcommit.BlobDriftRefused) as ei:
@@ -199,7 +200,7 @@ def test_deliberate_stage_substitution_content_unverifiable_blob_compares_substi
     )
 
 
-def test_supplied_blob_with_content_expectation_is_unverifiable(tmp_path):
+def test_supplied_blob_with_content_expectation_is_unverifiable(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write(repo, "seed.txt", "edited\n")
     with pytest.raises(gcommit.BlobDriftRefused) as ei:
@@ -210,7 +211,7 @@ def test_supplied_blob_with_content_expectation_is_unverifiable(tmp_path):
     assert ei.value.drift[0].actual is None
 
 
-def test_crlf_pinned_fallback_path_with_blob_expectation(tmp_path):
+def test_crlf_pinned_fallback_path_with_blob_expectation(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write(repo, ".gitattributes", "[attr]crlf text eol=crlf\n*.cmd crlf\n")
     _git(repo, "add", ".gitattributes")
@@ -245,7 +246,7 @@ def test_crlf_pinned_fallback_path_with_blob_expectation(tmp_path):
     assert out.sha and seen == [["a.cmd"]]
 
 
-def test_multi_path_drift_lists_all(tmp_path):
+def test_multi_path_drift_lists_all(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write(repo, "a.txt", "a\n")
     _write(repo, "b.txt", "b\n")
@@ -258,7 +259,7 @@ def test_multi_path_drift_lists_all(tmp_path):
     assert {d.path for d in ei.value.drift} == {"a.txt", "c.txt"}
 
 
-def test_key_outside_pathspec_refused(tmp_path):
+def test_key_outside_pathspec_refused(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write(repo, "a.txt", "a\n")
     with pytest.raises(gcommit.CommitRefused) as ei:
@@ -266,7 +267,7 @@ def test_key_outside_pathspec_refused(tmp_path):
     assert not isinstance(ei.value, gcommit.BlobDriftRefused)
 
 
-def test_deleted_path_key_refused(tmp_path):
+def test_deleted_path_key_refused(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "seed.txt").unlink()
     _write(repo, "a.txt", "a\n")
@@ -288,7 +289,7 @@ def test_deleted_path_key_refused(tmp_path):
         ("expected_content_sha256", "F" * 64),
     ],
 )
-def test_malformed_hex_refused(tmp_path, kwarg, value):
+def test_malformed_hex_refused(tmp_path: Path, kwarg, value) -> None:
     repo = _repo(tmp_path)
     _write(repo, "a.txt", "a\n")
     before = _state(repo)
@@ -298,7 +299,7 @@ def test_malformed_hex_refused(tmp_path, kwarg, value):
     assert _state(repo) == before
 
 
-def test_spawn_count_equal_with_and_without_expectations(tmp_path):
+def test_spawn_count_equal_with_and_without_expectations(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write(repo, ".gitattributes", "*.cmd text eol=crlf\n")
     _git(repo, "add", ".gitattributes")
@@ -308,7 +309,7 @@ def test_spawn_count_equal_with_and_without_expectations(tmp_path):
         subprocess.run(["git", "--version"], capture_output=True, **_NOWIN)
         return {p: _blob(b"x\n") for p in paths}
 
-    def run(with_exp, tag):
+    def run(with_exp, tag) -> int:
         _write(repo, f"p{tag}.txt", f"p{tag}\n")
         (repo / f"q{tag}.cmd").write_bytes(b"x\r\n")
         kw = {}

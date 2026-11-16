@@ -8,19 +8,20 @@ from coordinator_core.git import commit as gcommit
 from coordinator_core.git import rollback_check
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.git.git_state import head_sha as read_head_sha
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
-def _git(repo, *args, check=True):
+def _git(repo, *args, check: bool = True):
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **_NOWIN
     )
 
 
-def _repo(tmp_path, name="r"):
+def _repo(tmp_path, name: str = "r"):
     repo = tmp_path / name
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "work/z")
@@ -38,7 +39,7 @@ def _blob_sha(content: bytes) -> str:
 
 
 class _SpawnCounter:
-    def __init__(self):
+    def __init__(self) -> None:
         self.argvs = []
 
     def __enter__(self):
@@ -51,7 +52,7 @@ class _SpawnCounter:
             return counter._run(*a, **k)
 
         class PopenSpy(counter._popen):  # type: ignore[misc,valid-type]
-            def __init__(self, *a, **k):
+            def __init__(self, *a, **k) -> None:
                 if a:
                     counter.argvs.append(a[0])
                 super().__init__(*a, **k)
@@ -59,12 +60,12 @@ class _SpawnCounter:
         subprocess.run, subprocess.Popen = run_spy, PopenSpy
         return self
 
-    def __exit__(self, *exc):
+    def __exit__(self, *exc) -> bool:
         subprocess.run, subprocess.Popen = self._run, self._popen
         return False
 
 
-def _common(repo):
+def _common(repo) -> Path:
     return resolve_git_common_dir(repo)
 
 
@@ -75,7 +76,7 @@ def _commit(repo, path, content, msg):
     return outcome.sha
 
 
-def test_depth_2_single_path_rollback_refused(tmp_path):
+def test_depth_2_single_path_rollback_refused(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     v0_commit = _commit(repo, "p.txt", "v0\n", "v0")
     _commit(repo, "p.txt", "v1\n", "v1")
@@ -89,7 +90,7 @@ def test_depth_2_single_path_rollback_refused(tmp_path):
     assert rollback_check.refusal(findings) is True
 
 
-def test_lone_depth_1_revert_of_the_latest_change_allowed(tmp_path):
+def test_lone_depth_1_revert_of_the_latest_change_allowed(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _commit(repo, "p.txt", "v0\n", "v0")
     head = _commit(repo, "p.txt", "v1\n", "v1")
@@ -102,7 +103,7 @@ def test_lone_depth_1_revert_of_the_latest_change_allowed(tmp_path):
     assert rollback_check.refusal(findings) is False
 
 
-def test_depth_counts_versions_not_commits(tmp_path):
+def test_depth_counts_versions_not_commits(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _commit(repo, "p.txt", "v0\n", "v0")
     _commit(repo, "p.txt", "v1\n", "v1")
@@ -116,7 +117,7 @@ def test_depth_counts_versions_not_commits(tmp_path):
     assert [f.depth for f in findings] == [1]
 
 
-def test_breadth_3_depth_1_refused_on_breadth_alone(tmp_path):
+def test_breadth_3_depth_1_refused_on_breadth_alone(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     for name in ("a.txt", "b.txt", "c.txt"):
         _commit(repo, name, f"{name} old\n", f"{name} old")
@@ -131,7 +132,7 @@ def test_breadth_3_depth_1_refused_on_breadth_alone(tmp_path):
     assert rollback_check.refusal(findings) is True
 
 
-def test_status_d_revert_of_in_window_add_undeclared(tmp_path):
+def test_status_d_revert_of_in_window_add_undeclared(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     before_add = read_head_sha(repo)
     _commit(repo, "new.txt", "added\n", "add new.txt")
@@ -148,7 +149,7 @@ def test_status_d_revert_of_in_window_add_undeclared(tmp_path):
     assert rollback_check.refusal(findings) is True
 
 
-def test_deletion_refusal_names_deletion_and_pasteable_override(tmp_path):
+def test_deletion_refusal_names_deletion_and_pasteable_override(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _commit(repo, "new.txt", "added\n", "add new.txt")
     head = _commit(repo, "new.txt", "edited\n", "edit new.txt")
@@ -162,7 +163,7 @@ def test_deletion_refusal_names_deletion_and_pasteable_override(tmp_path):
     assert text.endswith("re-run with: --declared-revert new.txt")
 
 
-def test_unchanged_paths_are_never_findings(tmp_path):
+def test_unchanged_paths_are_never_findings(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "a.txt").write_text("a\n", encoding="utf-8", newline="\n")
     (repo / "b.txt").write_text("b\n", encoding="utf-8", newline="\n")
@@ -181,7 +182,7 @@ def test_unchanged_paths_are_never_findings(tmp_path):
     assert rollback_check.refusal(findings) is False
 
 
-def test_never_tracked_path_declared_absent_is_not_a_finding(tmp_path):
+def test_never_tracked_path_declared_absent_is_not_a_finding(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     head = _commit(repo, "p.txt", "v\n", "v")
 
@@ -192,7 +193,7 @@ def test_never_tracked_path_declared_absent_is_not_a_finding(tmp_path):
     assert findings == []
 
 
-def test_clean_multi_path_edit_no_findings(tmp_path):
+def test_clean_multi_path_edit_no_findings(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _commit(repo, "a.txt", "a0\n", "a0")
     _commit(repo, "b.txt", "b0\n", "b0")
@@ -208,7 +209,7 @@ def test_clean_multi_path_edit_no_findings(tmp_path):
     assert rollback_check.refusal(findings) is False
 
 
-def test_a_path_left_as_head_has_it_is_not_a_finding(tmp_path):
+def test_a_path_left_as_head_has_it_is_not_a_finding(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     head = _commit(repo, "p.txt", "cur\n", "cur")
 
@@ -219,7 +220,7 @@ def test_a_path_left_as_head_has_it_is_not_a_finding(tmp_path):
     assert findings == []
 
 
-def test_first_parent_only_side_branch_content_never_reported(tmp_path):
+def test_first_parent_only_side_branch_content_never_reported(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "p.txt").write_text("r\n", encoding="utf-8", newline="\n")
     _git(repo, "add", "-A")
@@ -257,14 +258,14 @@ def test_first_parent_only_side_branch_content_never_reported(tmp_path):
     assert findings_root[0].restores_commit == root_sha
 
 
-def test_default_window_is_1000_not_500():
+def test_default_window_is_1000_not_500() -> None:
     import inspect
 
     sig = inspect.signature(rollback_check.find_exact_blob_rollbacks)
     assert sig.parameters["window"].default == 1000
 
 
-def test_short_history_spawns_only_the_boundary_probe(tmp_path):
+def test_short_history_spawns_only_the_boundary_probe(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _commit(repo, "p.txt", "v0\n", "v0")
     head = _commit(repo, "p.txt", "v1\n", "v1")
@@ -278,7 +279,7 @@ def test_short_history_spawns_only_the_boundary_probe(tmp_path):
     assert set(verbs) == {"rev-parse"}, f"history shorter than window: expected only the probe, got {counter.argvs}"
 
 
-def test_values_along_equals_per_pair_walk(tmp_path):
+def test_values_along_equals_per_pair_walk(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _commit(repo, "a/b/x.txt", "1\n", "c1")
     _commit(repo, "a/y.txt", "1\n", "c2")

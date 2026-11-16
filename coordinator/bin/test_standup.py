@@ -7,6 +7,7 @@ import sys
 import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -39,13 +40,13 @@ def _run_helper(cwd):
     return r.returncode, r.stdout, r.stderr
 
 
-def test_no_bash_literal_in_source():
+def test_no_bash_literal_in_source() -> None:
     with open(HELPER, "r", encoding="utf-8") as fh:
         source = fh.read()
     assert '"bash"' not in source and "'bash'" not in source
 
 
-def test_not_a_git_repo_hard_errors(tmp_path):
+def test_not_a_git_repo_hard_errors(tmp_path: Path) -> None:
     nogit_dir = tmp_path / "nogit"
     nogit_dir.mkdir()
     code, so, se = _run_helper(str(nogit_dir))
@@ -53,7 +54,7 @@ def test_not_a_git_repo_hard_errors(tmp_path):
     assert "not inside a git repository" in se
 
 
-def test_fresh_git_repo_emits_all_sections(tmp_path):
+def test_fresh_git_repo_emits_all_sections(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _make_git_repo(str(repo))
     code, so, se = _run_helper(str(repo))

@@ -28,6 +28,7 @@ from pathlib import Path
 
 from coordinator_core.ops.learn_lessons_roots import resolve_roots
 from coordinator_core.testing.fake_machine_local import write_fake_machine_local
+import pytest
 
 
 def _write_fixture_machine_local(bin_dir: Path, repos: dict) -> Path:
@@ -64,8 +65,8 @@ class TestSettingsHomeRegistryEnumeration:
     `<CLAUDE_HOME>/.claude/bin`."""
 
     def test_registered_peers_enumerated_via_settings_home_only_install(
-        self, tmp_path: Path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         claude_home_parent = tmp_path / "home"
         claude_home = claude_home_parent / ".claude"
         claude_home.mkdir(parents=True)
@@ -93,7 +94,7 @@ class TestSettingsHomeRegistryEnumeration:
         assert str(peer_b) in roots, f"expected {peer_b} in {roots!r}"
         assert roots != [str(claude_home)]
 
-    def test_legacy_only_install_still_works(self, tmp_path: Path, monkeypatch):
+    def test_legacy_only_install_still_works(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Parity check: the pre-existing legacy rung (`<CLAUDE_HOME>/.claude/
         bin/machine-local`) still resolves when settings-home has no CLI --
         the fix adds a rung, it does not remove the old one."""
@@ -118,8 +119,8 @@ class TestSettingsHomeRegistryEnumeration:
         assert str(peer) in roots, f"expected {peer} in {roots!r}"
 
     def test_settings_home_rung_preferred_over_legacy_when_both_present(
-        self, tmp_path: Path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         claude_home_parent = tmp_path / "home"
         claude_home = claude_home_parent / ".claude"
         claude_home.mkdir(parents=True)
@@ -148,8 +149,8 @@ class TestSettingsHomeRegistryEnumeration:
         assert str(legacy_peer) not in roots
 
     def test_no_machine_local_anywhere_degrades_to_claude_home_only(
-        self, tmp_path: Path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         claude_home_parent = tmp_path / "home"
         claude_home = claude_home_parent / ".claude"
         claude_home.mkdir(parents=True)

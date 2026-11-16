@@ -8,11 +8,12 @@ import pytest
 
 from coordinator_core import dispatch_abandon
 from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
+from pathlib import Path
 
 SCRIPT = "scratch/warp/run1.workflow.mjs"
 
 
-def _held(monkeypatch, pending: bool):
+def _held(monkeypatch, pending: bool) -> None:
     monkeypatch.setattr(run_token, "redeem", lambda *a, **k: False)
     monkeypatch.setattr(run_token, "claim_pending", lambda *a, **k: pending)
     monkeypatch.setattr(
@@ -22,7 +23,7 @@ def _held(monkeypatch, pending: bool):
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds a held run-token claim that must reply within the budget instead of waiting")
-def test_held_claim_replies_within_budget_naming_leg(monkeypatch, tmp_path):
+def test_held_claim_replies_within_budget_naming_leg(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _held(monkeypatch, True)
     monkeypatch.setattr(dispatch_abandon, "remaining", lambda: 3600.0)
     start = time.monotonic()
@@ -33,7 +34,7 @@ def test_held_claim_replies_within_budget_naming_leg(monkeypatch, tmp_path):
     assert reply["committed"] is False
 
 
-def test_unmatched_token_is_still_refused_run_token(monkeypatch, tmp_path):
+def test_unmatched_token_is_still_refused_run_token(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _held(monkeypatch, False)
     reply = terminal_commit._redeem_or_answer(tmp_path, "run1", "t" * 32, SCRIPT)
     assert reply["refused"] == "run-token"

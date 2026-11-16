@@ -41,6 +41,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+import pytest
 
 _COORDINATOR_LIB = Path(__file__).resolve().parents[2]
 if str(_COORDINATOR_LIB) not in sys.path:
@@ -66,12 +67,12 @@ def _write_json(path: Path, data: object) -> str:
 # ---------------------------------------------------------------------------
 # 1 — _rewrite_manifest_json_value
 # ---------------------------------------------------------------------------
-def test_rewrite_value_replaces_string_leaf():
+def test_rewrite_value_replaces_string_leaf() -> None:
     out = publish_sync._rewrite_manifest_json_value("old/path", (("old", "new"),))
     assert out == "new/path"
 
 
-def test_rewrite_value_recurses_nested_dicts_and_lists():
+def test_rewrite_value_recurses_nested_dicts_and_lists() -> None:
     value = {
         "posix": "old/setup.py",
         "nested": {"windows": "old/setup.cmd", "list": ["old/a", "old/b"]},
@@ -83,13 +84,13 @@ def test_rewrite_value_recurses_nested_dicts_and_lists():
     }
 
 
-def test_rewrite_value_leaves_non_string_leaves_untouched():
+def test_rewrite_value_leaves_non_string_leaves_untouched() -> None:
     value = {"count": 3, "flag": True, "nothing": None, "ratio": 1.5}
     out = publish_sync._rewrite_manifest_json_value(value, (("old", "new"),))
     assert out == value
 
 
-def test_rewrite_value_applies_pairs_in_order():
+def test_rewrite_value_applies_pairs_in_order() -> None:
     out = publish_sync._rewrite_manifest_json_value("a", (("a", "b"), ("b", "c")))
     assert out == "c"
 
@@ -97,7 +98,7 @@ def test_rewrite_value_applies_pairs_in_order():
 # ---------------------------------------------------------------------------
 # 2 — apply_manifest_layout_rewrite
 # ---------------------------------------------------------------------------
-def test_apply_rewrite_empty_path_rewrites_is_a_true_no_op(tmp_path):
+def test_apply_rewrite_empty_path_rewrites_is_a_true_no_op(tmp_path: Path) -> None:
     dst_file = tmp_path / "manifest.json"
     original = _write_json(dst_file, {"a": "old/value"})
     before_mtime = dst_file.stat().st_mtime_ns
@@ -112,7 +113,7 @@ def test_apply_rewrite_empty_path_rewrites_is_a_true_no_op(tmp_path):
     assert dst_file.stat().st_mtime_ns == before_mtime
 
 
-def test_apply_rewrite_malformed_json_is_reported_and_untouched(tmp_path, capsys):
+def test_apply_rewrite_malformed_json_is_reported_and_untouched(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     dst_file = tmp_path / "manifest.json"
     _write(dst_file, "{not valid json")
 
@@ -128,7 +129,7 @@ def test_apply_rewrite_malformed_json_is_reported_and_untouched(tmp_path, capsys
     assert "could not parse as JSON" in capsys.readouterr().err
 
 
-def test_apply_rewrite_non_object_top_level_is_reported_and_untouched(tmp_path, capsys):
+def test_apply_rewrite_non_object_top_level_is_reported_and_untouched(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     dst_file = tmp_path / "manifest.json"
     original = _write_json(dst_file, ["old/value"])
 
@@ -144,7 +145,7 @@ def test_apply_rewrite_non_object_top_level_is_reported_and_untouched(tmp_path, 
     assert "not an object" in capsys.readouterr().err
 
 
-def test_apply_rewrite_excludes_named_top_level_fields(tmp_path):
+def test_apply_rewrite_excludes_named_top_level_fields(tmp_path: Path) -> None:
     dst_file = tmp_path / "manifest.json"
     _write_json(
         dst_file,
@@ -166,7 +167,7 @@ def test_apply_rewrite_excludes_named_top_level_fields(tmp_path):
     assert result["other_field"]["posix"] == "new/other.py"
 
 
-def test_apply_rewrite_applies_and_reports_changed(tmp_path, capsys):
+def test_apply_rewrite_applies_and_reports_changed(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     dst_file = tmp_path / "manifest.json"
     _write_json(dst_file, {"field": "old/value"})
 
@@ -181,7 +182,7 @@ def test_apply_rewrite_applies_and_reports_changed(tmp_path, capsys):
     assert json.loads(dst_file.read_text(encoding="utf-8"))["field"] == "new/value"
 
 
-def test_apply_rewrite_matching_nothing_reports_unchanged_and_does_not_rewrite(tmp_path):
+def test_apply_rewrite_matching_nothing_reports_unchanged_and_does_not_rewrite(tmp_path: Path) -> None:
     dst_file = tmp_path / "manifest.json"
     _write_json(dst_file, {"field": "unrelated/value"})
     before_mtime = dst_file.stat().st_mtime_ns
@@ -200,7 +201,7 @@ def test_apply_rewrite_matching_nothing_reports_unchanged_and_does_not_rewrite(t
 # ---------------------------------------------------------------------------
 # 3 — sync_flat_mirror wiring
 # ---------------------------------------------------------------------------
-def test_flat_mirror_default_manifest_layout_rewrite_is_a_true_no_op(tmp_path):
+def test_flat_mirror_default_manifest_layout_rewrite_is_a_true_no_op(tmp_path: Path) -> None:
     src_dir = tmp_path / "src" / "coordinator" / "docs" / "install"
     dst_dir = tmp_path / "dst"
     _write_json(src_dir / "manifest.json", {"field": "old/value"})
@@ -212,7 +213,7 @@ def test_flat_mirror_default_manifest_layout_rewrite_is_a_true_no_op(tmp_path):
     assert published["field"] == "old/value"
 
 
-def test_flat_mirror_fires_when_filename_and_suffix_both_match(tmp_path, capsys):
+def test_flat_mirror_fires_when_filename_and_suffix_both_match(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     src_dir = tmp_path / "src" / "coordinator" / "docs" / "install"
     dst_dir = tmp_path / "dst"
     _write_json(src_dir / "manifest.json", {"field": "old/value"})
@@ -232,7 +233,7 @@ def test_flat_mirror_fires_when_filename_and_suffix_both_match(tmp_path, capsys)
     assert "TRANSFORM: manifest.json layout rewrite applied" in capsys.readouterr().err
 
 
-def test_flat_mirror_does_not_fire_on_filename_mismatch(tmp_path, capsys):
+def test_flat_mirror_does_not_fire_on_filename_mismatch(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     src_dir = tmp_path / "src" / "coordinator" / "docs" / "install"
     dst_dir = tmp_path / "dst"
     _write_json(src_dir / "other.json", {"field": "old/value"})
@@ -251,7 +252,7 @@ def test_flat_mirror_does_not_fire_on_filename_mismatch(tmp_path, capsys):
     assert "TRANSFORM:" not in capsys.readouterr().err
 
 
-def test_flat_mirror_does_not_fire_on_src_dir_suffix_mismatch(tmp_path, capsys):
+def test_flat_mirror_does_not_fire_on_src_dir_suffix_mismatch(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     src_dir = tmp_path / "src" / "coordinator" / "docs" / "somewhere-else"
     dst_dir = tmp_path / "dst"
     _write_json(src_dir / "manifest.json", {"field": "old/value"})
@@ -270,7 +271,7 @@ def test_flat_mirror_does_not_fire_on_src_dir_suffix_mismatch(tmp_path, capsys):
     assert "TRANSFORM:" not in capsys.readouterr().err
 
 
-def test_flat_mirror_never_applies_transform_under_dry_run(tmp_path):
+def test_flat_mirror_never_applies_transform_under_dry_run(tmp_path: Path) -> None:
     src_dir = tmp_path / "src" / "coordinator" / "docs" / "install"
     dst_dir = tmp_path / "dst"
     _write_json(src_dir / "manifest.json", {"field": "old/value"})
@@ -287,7 +288,7 @@ def test_flat_mirror_never_applies_transform_under_dry_run(tmp_path):
     assert not (dst_dir / "manifest.json").exists()
 
 
-def test_flat_mirror_excluded_top_level_fields_survive_end_to_end(tmp_path):
+def test_flat_mirror_excluded_top_level_fields_survive_end_to_end(tmp_path: Path) -> None:
     src_dir = tmp_path / "src" / "coordinator" / "docs" / "install"
     dst_dir = tmp_path / "dst"
     _write_json(

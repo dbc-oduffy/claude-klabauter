@@ -11,10 +11,11 @@ import pytest
 from coordinator_core.codex_runner import roster
 from coordinator_core.session import harness_registry as hr
 from coordinator_core.session import peer_roster
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _home(tmp_path, monkeypatch):
+def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(roster, "settings_home", lambda: tmp_path)
     return tmp_path
 
@@ -28,7 +29,7 @@ def _dead_pid() -> int:
     return p.pid
 
 
-def test_write_then_live_record_roundtrip(tmp_path):
+def test_write_then_live_record_roundtrip(tmp_path: Path) -> None:
     path = roster.write_record(os.getpid(), "run1", "review", "/repo", "sess-1")
     assert path == tmp_path / "worker-roster" / f"{os.getpid()}.json"
     assert not list(path.parent.glob("*.tmp"))
@@ -37,7 +38,7 @@ def test_write_then_live_record_roundtrip(tmp_path):
     assert recs[0]["run_id"] == "run1" and recs[0]["parent_session_id"] == "sess-1"
 
 
-def test_dead_pid_record_dropped_and_remove_idempotent(tmp_path):
+def test_dead_pid_record_dropped_and_remove_idempotent(tmp_path: Path) -> None:
     pid = _dead_pid()
     roster.write_record(pid, "run2", "execute", "/repo")
     assert roster.live_records() == []
@@ -46,21 +47,21 @@ def test_dead_pid_record_dropped_and_remove_idempotent(tmp_path):
     assert not (tmp_path / "worker-roster" / f"{pid}.json").exists()
 
 
-def test_corrupt_record_skipped(tmp_path):
+def test_corrupt_record_skipped(tmp_path: Path) -> None:
     d = tmp_path / "worker-roster"
     d.mkdir()
     (d / "1.json").write_text("{not json", encoding="utf-8")
     assert roster.live_records() == []
 
 
-def _patch_harness(monkeypatch):
+def _patch_harness(monkeypatch) -> None:
     monkeypatch.setattr(hr, "snapshot", lambda: {"sid-a": hr.RegistryRecord(
         pid=1, start_epoch=1000.0, cwd="/repo", name="a-1",
         messaging_socket_path="/sock/a.sock", status=None)})
     monkeypatch.setattr(hr, "self_record", lambda: None)
 
 
-def test_live_worker_appears_as_codex_row_dead_does_not(monkeypatch):
+def test_live_worker_appears_as_codex_row_dead_does_not(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_harness(monkeypatch)
     roster.write_record(os.getpid(), "run3", "review", "/repo/sub")
     dead = _dead_pid()
@@ -73,14 +74,14 @@ def test_live_worker_appears_as_codex_row_dead_does_not(monkeypatch):
     assert [r.kind for r in rows if r.kind != "codex"] == ["claude"]
 
 
-def test_worker_outside_repo_filtered_unless_box_wide(monkeypatch):
+def test_worker_outside_repo_filtered_unless_box_wide(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_harness(monkeypatch)
     roster.write_record(os.getpid(), "run5", "execute", "/elsewhere")
     assert [r for r in peer_roster.build_roster("/repo") if r.kind == "codex"] == []
     assert len([r for r in peer_roster.build_roster("/repo", box_wide=True) if r.kind == "codex"]) == 1
 
 
-def test_worker_roster_failure_keeps_claude_rows(monkeypatch):
+def test_worker_roster_failure_keeps_claude_rows(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_harness(monkeypatch)
 
     def boom():

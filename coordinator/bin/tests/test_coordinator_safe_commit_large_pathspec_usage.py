@@ -21,11 +21,11 @@ def _usage_text() -> str:
     return stream.getvalue()
 
 
-def test_usage_names_the_params_file_route():
+def test_usage_names_the_params_file_route() -> None:
     text = _usage_text()
     assert "coordinator-invoke ceremony.commit_v2 --params-file <file>" in text
 
 
-def test_usage_states_a_subagent_is_denied_on_that_route():
+def test_usage_states_a_subagent_is_denied_on_that_route() -> None:
     text = " ".join(_usage_text().split())
     assert "A subagent is denied on that route" in text

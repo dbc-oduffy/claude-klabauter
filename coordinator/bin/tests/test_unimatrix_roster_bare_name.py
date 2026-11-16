@@ -5,13 +5,17 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 BIN = Path(__file__).resolve().parents[1]
 FAR = "/tmp/cc-socks/cc-msg-" + "a" * 32 + ".sock"
 
 
 @pytest.fixture
-def roster():
+def roster() -> "ModuleType":
     spec = importlib.util.spec_from_file_location("unimatrix_roster_bare", BIN / "unimatrix-roster.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -26,7 +30,7 @@ NAME = "example-game-workbench-repo-78"
 OLD = "/tmp/cc-socks/cc-msg-" + "b" * 32 + ".sock"
 
 
-def test_a_faces_own_earlier_entries_never_force_the_label(roster):
+def test_a_faces_own_earlier_entries_never_force_the_label(roster) -> None:
     remote = "me@macmini-lan"
     key = roster.mirror_scan_key(remote, FAR)
     scans = [
@@ -38,14 +42,14 @@ def test_a_faces_own_earlier_entries_never_force_the_label(roster):
         assert roster.mirror_name(NAME, remote, key, scan) == NAME
 
 
-def test_a_real_competitor_still_forces_the_label(roster):
+def test_a_real_competitor_still_forces_the_label(roster) -> None:
     remote = "me@macmini-lan"
     key = roster.mirror_scan_key(remote, FAR)
     for scan in ([(NAME, "/tmp/local.sock")], [(NAME, roster.mirror_scan_key("me@otherbox", OLD))]):
         assert roster.mirror_name(NAME, remote, key, scan) == f"{NAME}.macmini-lan"
 
 
-def test_the_mirror_entry_carries_the_far_sessions_refreshed_liveness(roster, tmp_path, monkeypatch):
+def test_the_mirror_entry_carries_the_far_sessions_refreshed_liveness(roster, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sess = tmp_path / "sessions"
     sess.mkdir()
     monkeypatch.setattr(roster, "sessions_dir", lambda: str(sess))

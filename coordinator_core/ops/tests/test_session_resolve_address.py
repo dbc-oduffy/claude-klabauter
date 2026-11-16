@@ -21,15 +21,17 @@ from coordinator_core.ops.session_resolve_address import _session_resolve_addres
 from coordinator_core.session import harness_registry as hr
 from coordinator_core.session import messaging_gate
 from coordinator_core.session import reachability
+from pathlib import Path
+import pytest
 
 
-def _record(name, socket, cwd="/repo"):
+def _record(name, socket, cwd: str = "/repo"):
     return hr.RegistryRecord(
         pid=1, start_epoch=1000.0, cwd=cwd, name=name, messaging_socket_path=socket
     )
 
 
-def test_reachable_shape(monkeypatch):
+def test_reachable_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     snap = {"sid-a": _record("claude-klabauter-57", "/sock/a.sock")}
     monkeypatch.setattr(hr, "snapshot", lambda: snap)
     monkeypatch.setattr(hr, "self_record", lambda: None)
@@ -47,7 +49,7 @@ def test_reachable_shape(monkeypatch):
     assert result["candidates"] == []
 
 
-def test_own_session_shape(monkeypatch):
+def test_own_session_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     snap = {"sid-self": _record("claude-klabauter-99", "/sock/self.sock")}
     monkeypatch.setattr(hr, "snapshot", lambda: snap)
     monkeypatch.setattr(hr, "self_record", lambda: ("sid-self", 1))
@@ -59,14 +61,14 @@ def test_own_session_shape(monkeypatch):
     assert result["candidates"] == []
 
 
-def test_missing_param_degrades_to_not_reachable():
+def test_missing_param_degrades_to_not_reachable() -> None:
     result = _session_resolve_address({})
     assert result["outcome"] == "not_reachable"
     assert result["address"] is None
     assert result["reason"] == reachability.NotReachableReason.NO_OWNER_ID
 
 
-def test_not_reachable_reason_reaches_the_wire(monkeypatch):
+def test_not_reachable_reason_reaches_the_wire(monkeypatch: pytest.MonkeyPatch) -> None:
     """A live-but-unaddressable peer and a nonexistent session are both
     `not_reachable`; only `reason` tells a JSON-RPC caller which it got."""
     snap = {"sid-live": _record("claude-klabauter-57", None)}
@@ -81,7 +83,7 @@ def test_not_reachable_reason_reaches_the_wire(monkeypatch):
     assert absent["reason"] == reachability.NotReachableReason.NO_LIVE_RECORD
 
 
-def test_fallback_channel_reaches_the_wire_and_is_repo_conditional(monkeypatch, tmp_path):
+def test_fallback_channel_reaches_the_wire_and_is_repo_conditional(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     this_repo = tmp_path / "this-repo"
     sibling_repo = tmp_path / "sibling-repo"
     (this_repo / "subdir").mkdir(parents=True)
@@ -99,7 +101,7 @@ def test_fallback_channel_reaches_the_wire_and_is_repo_conditional(monkeypatch, 
     assert cross_repo["fallback_channel"] == reachability.FallbackChannel.CROSS_REPO_MEMO
 
 
-def test_ambiguous_shape(monkeypatch):
+def test_ambiguous_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import session_resolve_address as mod
     from coordinator_core.session.reachability import Candidate, ResolveResult
 
@@ -122,7 +124,7 @@ def test_ambiguous_shape(monkeypatch):
     assert result["candidates"][0]["address"] == "claude-klabauter-a1 [ab]"
 
 
-def test_caller_messaging_gate_is_present_on_every_outcome(monkeypatch):
+def test_caller_messaging_gate_is_present_on_every_outcome(monkeypatch: pytest.MonkeyPatch) -> None:
     snap = {"sid-a": _record("claude-klabauter-57", "/sock/a.sock")}
     monkeypatch.setattr(hr, "snapshot", lambda: snap)
     monkeypatch.setattr(hr, "self_record", lambda: None)
@@ -142,7 +144,7 @@ def test_caller_messaging_gate_is_present_on_every_outcome(monkeypatch):
         }
 
 
-def test_caller_messaging_gate_separates_asked_and_unbound_from_never_asked(monkeypatch):
+def test_caller_messaging_gate_separates_asked_and_unbound_from_never_asked(monkeypatch: pytest.MonkeyPatch) -> None:
     snap = {"sid-live": _record("claude-klabauter-57", None)}
     monkeypatch.setattr(hr, "snapshot", lambda: snap)
     monkeypatch.setattr(hr, "self_record", lambda: None)
@@ -171,7 +173,7 @@ def test_caller_messaging_gate_separates_asked_and_unbound_from_never_asked(monk
     assert never_asked["caller_messaging_gate"]["state"] == messaging_gate.GateState.NOT_REQUESTED
 
 
-def test_caller_messaging_gate_does_not_change_outcome_reason_or_address(monkeypatch):
+def test_caller_messaging_gate_does_not_change_outcome_reason_or_address(monkeypatch: pytest.MonkeyPatch) -> None:
     snap = {"sid-a": _record("claude-klabauter-57", "/sock/a.sock")}
     monkeypatch.setattr(hr, "snapshot", lambda: snap)
     monkeypatch.setattr(hr, "self_record", lambda: None)

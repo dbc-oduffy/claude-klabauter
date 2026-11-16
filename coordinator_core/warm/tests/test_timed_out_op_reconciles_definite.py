@@ -20,7 +20,7 @@ _OP = "review.prep"
 
 
 @pytest.fixture
-def store(monkeypatch):
+def store(monkeypatch: pytest.MonkeyPatch):
     fresh = dispatch_ack.AckStore()
     monkeypatch.setattr(server, "_ack_store", fresh)
     return fresh
@@ -45,24 +45,24 @@ def _from_argv_reply(stdout: str, exit_code: int = 1) -> dict:
 
 
 class _Done:
-    def __init__(self, result):
+    def __init__(self, result) -> None:
         self._result = result
 
-    def cancelled(self):
+    def cancelled(self) -> bool:
         return False
 
-    def exception(self):
+    def exception(self) -> None:
         return None
 
     def result(self):
         return self._result
 
 
-def test_unknown_key_reads_not_received(store):
+def test_unknown_key_reads_not_received(store) -> None:
     assert server._store_poll({"key": dispatch_ack.mint_key()})["state"] == dispatch_ack.STATE_NOT_RECEIVED
 
 
-def test_wrapper_reply_carrying_the_nested_timeout_leaves_the_record_executing(store):
+def test_wrapper_reply_carrying_the_nested_timeout_leaves_the_record_executing(store) -> None:
     key = _admit(store)
     reply = _from_argv_reply(json.dumps(_indeterminate_envelope()) + "\n")
     server._stamp_pool_future(key, _Done(reply))
@@ -76,19 +76,19 @@ def test_wrapper_reply_carrying_the_nested_timeout_leaves_the_record_executing(s
     assert status["result"] == {"slices": 3}
 
 
-def test_wrapper_reply_with_an_ordinary_failure_still_finishes(store):
+def test_wrapper_reply_with_an_ordinary_failure_still_finishes(store) -> None:
     key = _admit(store)
     server._stamp_dispatch_outcome(key, _from_argv_reply('{"error": {"code": -32602}}\n'))
     assert store.status(key)["state"] == dispatch_ack.STATE_FINISHED
 
 
-def test_a_direct_indeterminate_envelope_still_stamps_abandoned(store):
+def test_a_direct_indeterminate_envelope_still_stamps_abandoned(store) -> None:
     key = _admit(store)
     server._stamp_dispatch_outcome(key, _indeterminate_envelope())
     assert store.status(key) == {"state": dispatch_ack.STATE_UNKNOWABLE, "reason": dispatch_ack.OUTCOME_ABANDONED}
 
 
-def test_timed_out_inline_op_reads_executing_then_finished(store, monkeypatch):
+def test_timed_out_inline_op_reads_executing_then_finished(store, monkeypatch: pytest.MonkeyPatch) -> None:
     key = _admit(store)
     seen: dict = {}
 
@@ -112,7 +112,7 @@ def test_timed_out_inline_op_reads_executing_then_finished(store, monkeypatch):
     assert status["result"] == {"slices": 2}
 
 
-def test_an_executing_record_that_never_completes_still_reads_terminal(monkeypatch):
+def test_an_executing_record_that_never_completes_still_reads_terminal(monkeypatch: pytest.MonkeyPatch) -> None:
     bounded = dispatch_ack.AckStore(executing_bound=lambda method: 1.0)
     key = _admit(bounded)
     bounded._records[key]["admitted_mono"] -= 10_000
@@ -120,7 +120,7 @@ def test_an_executing_record_that_never_completes_still_reads_terminal(monkeypat
     assert bounded.status(key) == {"state": dispatch_ack.STATE_UNKNOWABLE, "reason": dispatch_ack.OUTCOME_ABANDONED}
 
 
-def test_handler_still_running_is_false_without_a_timeout():
+def test_handler_still_running_is_false_without_a_timeout() -> None:
     late = ipc.LateCompletion()
     assert not server._handler_still_running(late)
     late.mark_timed_out(1)
@@ -148,7 +148,7 @@ class _StuckPipe:
 
 
 @pytest.fixture
-def stuck_warm(monkeypatch):
+def stuck_warm(monkeypatch: pytest.MonkeyPatch) -> _StuckPipe:
     monkeypatch.setattr(client, "is_warm_enabled", lambda: True)
     monkeypatch.setattr(client, "engine_token", lambda: "faketoken")
     monkeypatch.setattr(client.election, "pipe_name", lambda token: r"\\.\pipe\fake")
@@ -180,7 +180,7 @@ def _door_msg(*argv, entrypoint=None) -> dict:
         ("--bare", "review.prep"),
     ],
 )
-def test_door_form_review_prep_names_the_op_it_runs(argv):
+def test_door_form_review_prep_names_the_op_it_runs(argv) -> None:
     assert client._replay_op_name(_door_msg(*argv)) == _OP
 
 
@@ -193,23 +193,23 @@ def test_door_form_review_prep_names_the_op_it_runs(argv):
         {"jsonrpc": "2.0", "id": 1, "method": "invoke.from_argv", "params": {"argv": [3]}},
     ],
 )
-def test_other_door_frames_stay_the_wrapper_method(msg):
+def test_other_door_frames_stay_the_wrapper_method(msg) -> None:
     assert client._replay_op_name(msg) == "invoke.from_argv"
 
 
-def test_door_form_review_prep_expiry_goes_cold_once(stuck_warm):
+def test_door_form_review_prep_expiry_goes_cold_once(stuck_warm) -> None:
     response = client.try_warm_dispatch(_door_msg("review.prep", "{}", "--bare"))
     assert response is None
     assert len(stuck_warm.written) == 1
     assert client._last_cold_bucket == client.COLD_BUCKET_MUTATION_DEADLINE_COLD_REPLAY
 
 
-def test_door_form_other_op_expiry_still_returns_indeterminate(stuck_warm):
+def test_door_form_other_op_expiry_still_returns_indeterminate(stuck_warm) -> None:
     response = client.try_warm_dispatch(_door_msg("ceremony.scoped_git_commit", "{}"))
     assert response["error"]["code"] == client.WARM_DISPATCH_INDETERMINATE
 
 
-def test_replay_safe_entrypoint_expiry_goes_cold_once(stuck_warm, capsys):
+def test_replay_safe_entrypoint_expiry_goes_cold_once(stuck_warm, capsys: pytest.CaptureFixture[str]) -> None:
     response = client.try_warm_dispatch(_door_msg("brief", "--repo", "x", entrypoint="consolidate-assemble"))
     assert response is None
     assert len(stuck_warm.written) == 1
@@ -227,12 +227,12 @@ def test_replay_safe_entrypoint_expiry_goes_cold_once(stuck_warm, capsys):
         _door_msg("brief"),
     ],
 )
-def test_other_entrypoint_frames_expiry_still_returns_indeterminate(stuck_warm, msg):
+def test_other_entrypoint_frames_expiry_still_returns_indeterminate(stuck_warm, msg) -> None:
     response = client.try_warm_dispatch(msg)
     assert response["error"]["code"] == client.WARM_DISPATCH_INDETERMINATE
 
 
-def test_value_flag_set_matches_the_invoke_parser():
+def test_value_flag_set_matches_the_invoke_parser() -> None:
     from coordinator_core.invoke.__main__ import _build_arg_parser
 
     taking_a_value = {
@@ -245,6 +245,6 @@ def test_value_flag_set_matches_the_invoke_parser():
     assert client._FROM_ARGV_VALUE_FLAGS == taking_a_value
 
 
-def test_from_task_output_value_is_not_read_as_the_op():
+def test_from_task_output_value_is_not_read_as_the_op() -> None:
     msg = {"method": "invoke.from_argv", "params": {"argv": ["--from-task-output", "review.prep", "dispatch.land_run"]}}
     assert client._replay_op_name(msg) == "dispatch.land_run"

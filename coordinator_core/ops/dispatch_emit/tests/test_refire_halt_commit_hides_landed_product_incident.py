@@ -39,6 +39,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_met_refire_lands_its_own_prod
     _SID,
     _refire,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -92,7 +93,7 @@ def _fire3(root, fire2_run: str):
 
 
 @pytest.mark.parametrize("shape", sorted(FIRE2_RUN_IDS))
-def test_land_run_commits_a_met_refire_whose_product_landed_between_fires(halted, shape):  # noqa: F811
+def test_land_run_commits_a_met_refire_whose_product_landed_between_fires(halted, shape) -> None:  # noqa: F811
     h1, h2, resume, refire = _fire3(halted, FIRE2_RUN_IDS[shape])
     head = _git(halted, "rev-parse", "HEAD").strip()
 
@@ -107,7 +108,7 @@ def test_land_run_commits_a_met_refire_whose_product_landed_between_fires(halted
 
 
 @pytest.mark.parametrize("shape", sorted(FIRE2_RUN_IDS))
-def test_terminal_commit_since_halt_check_measures_from_the_first_halt(halted, shape):  # noqa: F811
+def test_terminal_commit_since_halt_check_measures_from_the_first_halt(halted, shape) -> None:  # noqa: F811
     h1, h2, resume, _ = _fire3(halted, FIRE2_RUN_IDS[shape])
     verdict = {"items": [{"id": "R1", "status": "met", "wired": True}]}
     detail: dict = {}
@@ -120,7 +121,7 @@ def test_terminal_commit_since_halt_check_measures_from_the_first_halt(halted, s
     assert detail.get("base", h1) == h1
 
 
-def test_a_resume_after_an_em_discharged_row_owes_no_replan_for_it(tmp_path):
+def test_a_resume_after_an_em_discharged_row_owes_no_replan_for_it(tmp_path: Path) -> None:
     plan = tmp_path / "docs/plans/p.md"
     plan.parent.mkdir(parents=True)
     plan.write_text(

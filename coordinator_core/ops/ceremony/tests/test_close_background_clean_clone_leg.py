@@ -9,6 +9,8 @@ from coordinator_core.ops.ceremony import close_background as cb
 from coordinator_core.ops.clean_clone_proof_contract import RUNNER_MODULE
 from coordinator_core.ops.dispatch_emit import run_close
 from coordinator_core.ops.dispatch_emit import terminal_commit_closeout as tcc
+from pathlib import Path
+import pytest
 
 SHA = "a" * 40
 
@@ -17,7 +19,7 @@ def _ctx(root, sha=SHA):
     return cb.JobContext(root, root / ".git", "run-x", (), None, terminal_sha=sha)
 
 
-def test_leg_is_ordered_after_close_commit_and_registered_in_both_ledgers():
+def test_leg_is_ordered_after_close_commit_and_registered_in_both_ledgers() -> None:
     legs = cb.BACKGROUND_LEGS
     assert legs.index("clean-clone-proof") == legs.index("close-commit") + 1
     assert "clean-clone-proof" in cb.DEFAULT_RUNNERS
@@ -25,13 +27,13 @@ def test_leg_is_ordered_after_close_commit_and_registered_in_both_ledgers():
     assert "clean-clone-proof" in run_close.RUN_BOUND_LEGS
 
 
-def test_no_terminal_sha_is_not_applicable_and_spawns_nothing(tmp_path, monkeypatch):
+def test_no_terminal_sha_is_not_applicable_and_spawns_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("spawned")))
     result = cb.DEFAULT_RUNNERS["clean-clone-proof"](_ctx(tmp_path, sha=None))
     assert result.status == "not-applicable"
 
 
-def test_terminal_sha_spawns_the_runner_module_detached(tmp_path, monkeypatch):
+def test_terminal_sha_spawns_the_runner_module_detached(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
     class _Proc:
@@ -53,7 +55,7 @@ def test_terminal_sha_spawns_the_runner_module_detached(tmp_path, monkeypatch):
         assert "creationflags" not in kw
 
 
-def test_a_spawn_failure_is_this_legs_failure(tmp_path, monkeypatch):
+def test_a_spawn_failure_is_this_legs_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise OSError("no exec")
 

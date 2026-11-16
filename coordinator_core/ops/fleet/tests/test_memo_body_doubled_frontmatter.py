@@ -62,11 +62,11 @@ def _fixture_body(name: str) -> str:
 
 class TestFixtureBodiesOpenFrontmatter:
     @pytest.mark.parametrize("name", _FIXTURE_FILES)
-    def test_fixture_body_lf_is_true(self, name):
+    def test_fixture_body_lf_is_true(self, name) -> None:
         assert body_opens_frontmatter(_fixture_body(name)) is True
 
     @pytest.mark.parametrize("name", _FIXTURE_FILES)
-    def test_fixture_body_crlf_is_true(self, name):
+    def test_fixture_body_crlf_is_true(self, name) -> None:
         crlf_body = _fixture_body(name).replace("\n", "\r\n")
         assert body_opens_frontmatter(crlf_body) is True
 
@@ -94,7 +94,7 @@ class TestRegressionBodiesDoNotOpenFrontmatter:
             pytest.param("", id="empty_body"),
         ],
     )
-    def test_predicate_is_false(self, body):
+    def test_predicate_is_false(self, body) -> None:
         assert body_opens_frontmatter(body) is False
 
     @pytest.mark.parametrize(
@@ -115,7 +115,7 @@ class TestRegressionBodiesDoNotOpenFrontmatter:
     )
     @pytest.mark.cadence
     @pytest.mark.spawns_process
-    def test_composes_cleanly_through_memo_compose(self, tmp_path, monkeypatch, body):
+    def test_composes_cleanly_through_memo_compose(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, body) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
@@ -142,7 +142,7 @@ class TestRegressionBodiesDoNotOpenFrontmatter:
 @pytest.mark.spawns_process
 class TestMemoComposeRefusesDoubledFrontmatterBody:
     @pytest.mark.parametrize("name", _FIXTURE_FILES)
-    def test_compose_refuses_and_draft_unchanged(self, tmp_path, monkeypatch, name):
+    def test_compose_refuses_and_draft_unchanged(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
@@ -166,7 +166,7 @@ class TestMemoComposeRefusesDoubledFrontmatterBody:
 @pytest.mark.spawns_process
 class TestMemoSendRefusesDoubledFrontmatterBody:
     @pytest.mark.parametrize("name", _FIXTURE_FILES)
-    def test_send_refuses_and_no_receiver_file(self, tmp_path, monkeypatch, name):
+    def test_send_refuses_and_no_receiver_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, name) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})

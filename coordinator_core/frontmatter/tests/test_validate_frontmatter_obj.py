@@ -16,6 +16,7 @@ from coordinator_core.frontmatter.schema_validate import (
     SchemaVersionError,
     validate_frontmatter_obj,
 )
+import pytest
 
 _JSON_SCHEMA_OBJ = {
     '_isJsonSchema': True,
@@ -43,11 +44,11 @@ _LEGACY_SCHEMA_OBJ = {
 
 
 class TestValidateFrontmatterObjJsonSchemaBacked:
-    def test_valid_fields_ok(self):
+    def test_valid_fields_ok(self) -> None:
         result = validate_frontmatter_obj({'title': 'A thing', 'status': 'open'}, _JSON_SCHEMA_OBJ)
         assert result == {'ok': True}
 
-    def test_missing_required_field_rejected(self):
+    def test_missing_required_field_rejected(self) -> None:
         result = validate_frontmatter_obj({'title': 'A thing'}, _JSON_SCHEMA_OBJ)
         assert result['ok'] is False
         assert any(
@@ -55,7 +56,7 @@ class TestValidateFrontmatterObjJsonSchemaBacked:
             for e in result['errors']
         )
 
-    def test_invalid_enum_value_rejected(self):
+    def test_invalid_enum_value_rejected(self) -> None:
         result = validate_frontmatter_obj(
             {'title': 'A thing', 'status': 'not-a-status'}, _JSON_SCHEMA_OBJ
         )
@@ -66,45 +67,45 @@ class TestValidateFrontmatterObjJsonSchemaBacked:
 
 class TestValidateFrontmatterObjTypeStringDateAcceptanceRegression:
 
-    def test_date_value_accepted_for_declared_type_string(self):
+    def test_date_value_accepted_for_declared_type_string(self) -> None:
         result = validate_frontmatter_obj(
             {'title': datetime.date(2026, 8, 6), 'status': 'open'}, _JSON_SCHEMA_OBJ
         )
         assert result == {'ok': True}
 
-    def test_datetime_value_accepted_for_declared_type_string(self):
+    def test_datetime_value_accepted_for_declared_type_string(self) -> None:
         result = validate_frontmatter_obj(
             {'title': datetime.datetime(2026, 8, 6, 12, 0, 0), 'status': 'open'}, _JSON_SCHEMA_OBJ
         )
         assert result == {'ok': True}
 
-    def test_int_value_rejected_for_declared_type_string(self):
+    def test_int_value_rejected_for_declared_type_string(self) -> None:
         result = validate_frontmatter_obj({'title': 42, 'status': 'open'}, _JSON_SCHEMA_OBJ)
         assert result['ok'] is False
 
-    def test_bool_value_rejected_for_declared_type_string(self):
+    def test_bool_value_rejected_for_declared_type_string(self) -> None:
         result = validate_frontmatter_obj({'title': True, 'status': 'open'}, _JSON_SCHEMA_OBJ)
         assert result['ok'] is False
 
-    def test_list_value_rejected_for_declared_type_string(self):
+    def test_list_value_rejected_for_declared_type_string(self) -> None:
         result = validate_frontmatter_obj({'title': ['a'], 'status': 'open'}, _JSON_SCHEMA_OBJ)
         assert result['ok'] is False
 
-    def test_dict_value_rejected_for_declared_type_string(self):
+    def test_dict_value_rejected_for_declared_type_string(self) -> None:
         result = validate_frontmatter_obj({'title': {'a': 'b'}, 'status': 'open'}, _JSON_SCHEMA_OBJ)
         assert result['ok'] is False
 
-    def test_float_value_rejected_for_declared_type_string(self):
+    def test_float_value_rejected_for_declared_type_string(self) -> None:
         result = validate_frontmatter_obj({'title': 4.2, 'status': 'open'}, _JSON_SCHEMA_OBJ)
         assert result['ok'] is False
 
 
 class TestValidateFrontmatterObjLegacyYamlDialect:
-    def test_valid_fields_ok(self):
+    def test_valid_fields_ok(self) -> None:
         result = validate_frontmatter_obj({'title': 'A bug', 'status': 'open'}, _LEGACY_SCHEMA_OBJ)
         assert result == {'ok': True}
 
-    def test_missing_required_field_rejected(self):
+    def test_missing_required_field_rejected(self) -> None:
         result = validate_frontmatter_obj({'title': 'A bug'}, _LEGACY_SCHEMA_OBJ)
         assert result['ok'] is False
         assert any(
@@ -112,7 +113,7 @@ class TestValidateFrontmatterObjLegacyYamlDialect:
             for e in result['errors']
         )
 
-    def test_optional_field_present_invalid_rejected(self):
+    def test_optional_field_present_invalid_rejected(self) -> None:
         result = validate_frontmatter_obj(
             {'title': 'A bug', 'status': 'open', 'severity': 'P9'}, _LEGACY_SCHEMA_OBJ
         )
@@ -129,7 +130,7 @@ class TestValidateFrontmatterObjUnstampedSchemaDispatch:
         k: v for k, v in _JSON_SCHEMA_OBJ.items() if k != '_isJsonSchema'
     }
 
-    def test_unstamped_json_schema_still_enforces_required(self):
+    def test_unstamped_json_schema_still_enforces_required(self) -> None:
         result = validate_frontmatter_obj({'title': 'A thing'}, self._UNSTAMPED_JSON_SCHEMA_OBJ)
         assert result['ok'] is False
         assert any(
@@ -137,56 +138,56 @@ class TestValidateFrontmatterObjUnstampedSchemaDispatch:
             for e in result['errors']
         )
 
-    def test_unstamped_json_schema_still_enforces_enums(self):
+    def test_unstamped_json_schema_still_enforces_enums(self) -> None:
         result = validate_frontmatter_obj(
             {'title': 'A thing', 'status': 'not-a-status'}, self._UNSTAMPED_JSON_SCHEMA_OBJ
         )
         assert result['ok'] is False
         assert any(e['field'] == 'status' for e in result['errors'])
 
-    def test_unstamped_json_schema_accepts_valid_fields(self):
+    def test_unstamped_json_schema_accepts_valid_fields(self) -> None:
         result = validate_frontmatter_obj(
             {'title': 'A thing', 'status': 'open'}, self._UNSTAMPED_JSON_SCHEMA_OBJ
         )
         assert result == {'ok': True}
 
-    def test_json_schema_without_top_level_required_is_not_a_blanket_pass_by_misroute(self):
+    def test_json_schema_without_top_level_required_is_not_a_blanket_pass_by_misroute(self) -> None:
         schema = {'type': 'object', 'properties': _JSON_SCHEMA_OBJ['properties']}
         assert validate_frontmatter_obj({'status': 'nope'}, schema)['ok'] is False
         assert validate_frontmatter_obj({'status': 'open'}, schema) == {'ok': True}
 
-    def test_legacy_yaml_dialect_still_routes_to_legacy_branch(self):
+    def test_legacy_yaml_dialect_still_routes_to_legacy_branch(self) -> None:
         result = validate_frontmatter_obj({'title': 'A bug', 'severity': 'P9'}, _LEGACY_SCHEMA_OBJ)
         assert result['ok'] is False
         assert any(e['hint'] == 'Add "status:" to frontmatter' for e in result['errors'])
 
-    def test_stamp_wins_over_shape_when_present(self):
+    def test_stamp_wins_over_shape_when_present(self) -> None:
         result = validate_frontmatter_obj({'anything': 'goes'}, {'_isJsonSchema': True})
         assert result == {'ok': True}
 
 
 class TestValidateFrontmatterObjNeverRaises:
-    def test_none_schema_obj_returns_error_result(self):
+    def test_none_schema_obj_returns_error_result(self) -> None:
         result = validate_frontmatter_obj({'title': 'x'}, None)
         assert result['ok'] is False
         assert result['errors'][0]['field'] == '_schema'
 
-    def test_non_dict_schema_obj_returns_error_result(self):
+    def test_non_dict_schema_obj_returns_error_result(self) -> None:
         result = validate_frontmatter_obj({'title': 'x'}, ['not', 'a', 'schema'])
         assert result['ok'] is False
         assert result['errors'][0]['field'] == '_schema'
 
-    def test_non_dict_fm_dict_returns_error_result(self):
+    def test_non_dict_fm_dict_returns_error_result(self) -> None:
         result = validate_frontmatter_obj('not-a-dict', _JSON_SCHEMA_OBJ)
         assert result['ok'] is False
         assert result['errors'][0]['field'] == '_schema'
 
-    def test_none_fm_dict_treated_as_empty_not_a_raise(self):
+    def test_none_fm_dict_treated_as_empty_not_a_raise(self) -> None:
         result = validate_frontmatter_obj(None, _JSON_SCHEMA_OBJ)
         assert result['ok'] is False
         assert any(e['error'] == 'required field missing' for e in result['errors'])
 
-    def test_no_recognizable_shape_returns_error_result_not_unconditional_pass(self):
+    def test_no_recognizable_shape_returns_error_result_not_unconditional_pass(self) -> None:
         # A dict matching neither dialect's tells is REJECTED, not dispatched
         # into the legacy branch (whose "no required block" == "everything
         # passes" negative-spec would return {'ok': True} for any document).
@@ -195,12 +196,12 @@ class TestValidateFrontmatterObjNeverRaises:
         assert result['ok'] is False
         assert result['errors'][0]['field'] == '_schema'
 
-    def test_empty_schema_obj_returns_error_result(self):
+    def test_empty_schema_obj_returns_error_result(self) -> None:
         result = validate_frontmatter_obj({'title': 'x'}, {})
         assert result['ok'] is False
         assert result['errors'][0]['field'] == '_schema'
 
-    def test_internal_exception_from_dispatch_caught_as_error_result(self, monkeypatch):
+    def test_internal_exception_from_dispatch_caught_as_error_result(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import coordinator_core.frontmatter.schema_validate as sv
 
         def _boom(schema, fields):
@@ -214,7 +215,7 @@ class TestValidateFrontmatterObjNeverRaises:
 
 
 class TestValidateFrontmatterObjNoDiskAccess:
-    def test_never_touches_claude_klabauter_vendored_schemas_dir(self, monkeypatch):
+    def test_never_touches_claude_klabauter_vendored_schemas_dir(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """schema_obj is caller-owned — validate_frontmatter_obj must never call
         load_schemas() or resolve _SCHEMAS_DIR itself. Patch load_schemas to
         raise if invoked; a passing call proves no schema-directory read

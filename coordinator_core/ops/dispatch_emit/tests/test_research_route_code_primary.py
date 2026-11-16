@@ -11,6 +11,7 @@ from coordinator_core.ops.dispatch_emit import op as op_module
 from coordinator_core.ops.dispatch_emit.tests.test_cli_research_route import _write_sizing
 from coordinator_core.ops.dispatch_emit.tests.test_research_emit_script_cap import _Admitted
 import coordinator_core.ops.dispatch_emit as _pkg
+import pytest
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 _DIR = Path("pipelines") / "deep-research"
@@ -45,7 +46,7 @@ def _emit(monkeypatch, tmp_path, capsys, refs, primary):
     return reply
 
 
-def test_primary_repo_orders_repo_segments_before_web_and_briefs_web_from_syntheses(monkeypatch, tmp_path, capsys):
+def test_primary_repo_orders_repo_segments_before_web_and_briefs_web_from_syntheses(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     reply = _emit(monkeypatch, tmp_path, capsys, ("alpha", "beta"), primary=True)
     assert [s["segment"] for s in reply["segments"]] == ["repo-1-alpha", "repo-2-beta", "repo-compare", "web"]
     script = Path(reply["path"]).read_text(encoding="utf-8")
@@ -59,12 +60,12 @@ def test_primary_repo_orders_repo_segments_before_web_and_briefs_web_from_synthe
     assert "Rank code claims above web claims" in synthesis_brief
 
 
-def test_primary_repo_with_one_target_gets_a_keyed_segment(monkeypatch, tmp_path, capsys):
+def test_primary_repo_with_one_target_gets_a_keyed_segment(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     reply = _emit(monkeypatch, tmp_path, capsys, ("alpha",), primary=True)
     assert [s["segment"] for s in reply["segments"]] == ["repo-1-alpha", "web"]
 
 
-def test_without_primary_a_lone_repo_stays_unkeyed_and_no_gap_brief_is_written(monkeypatch, tmp_path, capsys):
+def test_without_primary_a_lone_repo_stays_unkeyed_and_no_gap_brief_is_written(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     reply = _emit(monkeypatch, tmp_path, capsys, ("alpha",), primary=False)
     assert "repo-1-alpha" not in [s["segment"] for s in reply["segments"]]
     assert not (tmp_path / reply["scratch_dir"] / "web-after-repo").exists()

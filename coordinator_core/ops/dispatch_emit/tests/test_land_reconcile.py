@@ -9,6 +9,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.dispatch_emit.land_reconcile import reconcile_landing
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -16,14 +17,14 @@ _ENV = ["-c", "user.name=t", "-c", "user.email=t@example.invalid", "-c", "commit
 _EPOCH = [1_700_000_000]
 
 
-def _git(repo, *args, env=None):
+def _git(repo, *args, env=None) -> str:
     return subprocess.run(
         ["git", *_ENV, *args], cwd=repo, check=True, capture_output=True, text=True, env=env,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     ).stdout.strip()
 
 
-def _commit(repo, files, message="c"):
+def _commit(repo, files, message: str = "c") -> str:
     """Write ``files`` (path -> text | None to delete), commit with a strictly later date."""
     for name, text in files.items():
         target = repo / name
@@ -40,25 +41,25 @@ def _commit(repo, files, message="c"):
     return _git(repo, "rev-parse", "HEAD")
 
 
-def _blob(repo, name):
+def _blob(repo, name) -> str:
     return _git(repo, "rev-parse", f"HEAD:{name}")
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> tuple[Path, str]:
     _git(tmp_path, "init", "-q", "-b", "main")
     base = _commit(tmp_path, {"keep.txt": "keep", "old.txt": "old"}, "base")
     return tmp_path, base
 
 
-def test_committed_reports_landing_sha(repo):
+def test_committed_reports_landing_sha(repo) -> None:
     root, base = repo
     landing = _commit(root, {"a.txt": "a", "dir/b.txt": "b"})
     expected = {"a.txt": {"blob": _blob(root, "a.txt")}, "dir/b.txt": {"blob": _blob(root, "dir/b.txt")}}
     assert reconcile_landing(root, base, expected) == {"verdict": "committed", "sha": landing}
 
 
-def test_peer_commit_on_top_still_reports_landing_sha(repo):
+def test_peer_commit_on_top_still_reports_landing_sha(repo) -> None:
     root, base = repo
     landing = _commit(root, {"a.txt": "a"})
     expected = {"a.txt": {"blob": _blob(root, "a.txt")}}
@@ -67,7 +68,7 @@ def test_peer_commit_on_top_still_reports_landing_sha(repo):
     assert reconcile_landing(root, base, expected) == {"verdict": "committed", "sha": landing}
 
 
-def test_oldest_carrying_commit_wins_over_later_cumulative_commits(repo):
+def test_oldest_carrying_commit_wins_over_later_cumulative_commits(repo) -> None:
     root, base = repo
     landing = _commit(root, {"a.txt": "a"})
     expected = {"a.txt": {"blob": _blob(root, "a.txt")}}
@@ -76,7 +77,7 @@ def test_oldest_carrying_commit_wins_over_later_cumulative_commits(repo):
     assert reconcile_landing(root, base, expected)["sha"] == landing
 
 
-def test_sha256_expectation_matches_by_content(repo):
+def test_sha256_expectation_matches_by_content(repo) -> None:
     root, base = repo
     landing = _commit(root, {"a.txt": "alpha"})
     digest = hashlib.sha256(b"alpha").hexdigest()
@@ -87,27 +88,27 @@ def test_sha256_expectation_matches_by_content(repo):
     assert reconcile_landing(root, base, {"a.txt": {"sha256": wrong}})["verdict"] == "not_committed"
 
 
-def test_deletion_expected_absent(repo):
+def test_deletion_expected_absent(repo) -> None:
     root, base = repo
     landing = _commit(root, {"old.txt": None})
     assert reconcile_landing(root, base, {"old.txt": None}) == {"verdict": "committed", "sha": landing}
 
 
-def test_not_committed_when_no_commit_carries_the_set(repo):
+def test_not_committed_when_no_commit_carries_the_set(repo) -> None:
     root, base = repo
     _commit(root, {"peer.txt": "p"})
     expected = {"a.txt": {"blob": "1" * 40}}
     assert reconcile_landing(root, base, expected) == {"verdict": "not_committed", "sha": None}
 
 
-def test_not_committed_when_head_has_not_moved(repo):
+def test_not_committed_when_head_has_not_moved(repo) -> None:
     root, base = repo
     assert reconcile_landing(root, base, {"a.txt": {"blob": "1" * 40}}) == {
         "verdict": "not_committed", "sha": None,
     }
 
 
-def test_partial_names_commit_and_missing_paths(repo):
+def test_partial_names_commit_and_missing_paths(repo) -> None:
     root, base = repo
     part = _commit(root, {"a.txt": "a"})
     expected = {"a.txt": {"blob": _blob(root, "a.txt")}, "b.txt": {"blob": "2" * 40}, "c.txt": None}
@@ -118,7 +119,7 @@ def test_partial_names_commit_and_missing_paths(repo):
     assert result["missing"] == ["b.txt"]
 
 
-def test_path_unchanged_from_base_never_fakes_a_partial(repo):
+def test_path_unchanged_from_base_never_fakes_a_partial(repo) -> None:
     root, base = repo
     keep = {"blob": _blob(root, "keep.txt")}
     _commit(root, {"peer.txt": "p"})
@@ -127,7 +128,7 @@ def test_path_unchanged_from_base_never_fakes_a_partial(repo):
     }
 
 
-def test_path_unchanged_from_base_does_not_block_a_real_landing(repo):
+def test_path_unchanged_from_base_does_not_block_a_real_landing(repo) -> None:
     root, base = repo
     keep = {"blob": _blob(root, "keep.txt")}
     landing = _commit(root, {"a.txt": "a"})
@@ -135,7 +136,7 @@ def test_path_unchanged_from_base_does_not_block_a_real_landing(repo):
     assert reconcile_landing(root, base, expected) == {"verdict": "committed", "sha": landing}
 
 
-def test_unknown_without_evidence(repo):
+def test_unknown_without_evidence(repo) -> None:
     root, base = repo
     expected = {"a.txt": {"blob": "1" * 40}}
     assert reconcile_landing(root, None, expected) == {"verdict": "unknown"}
@@ -146,18 +147,18 @@ def test_unknown_without_evidence(repo):
     }
 
 
-def test_unknown_without_a_repo(tmp_path):
+def test_unknown_without_a_repo(tmp_path: Path) -> None:
     assert reconcile_landing(tmp_path, "a" * 40, {"a.txt": None}) == {"verdict": "unknown"}
 
 
-def test_commits_at_or_below_base_never_count(repo):
+def test_commits_at_or_below_base_never_count(repo) -> None:
     root, base = repo
     expected = {"keep.txt": {"blob": _blob(root, "keep.txt")}, "old.txt": {"blob": _blob(root, "old.txt")}}
     _commit(root, {"z.txt": "z"})
     assert reconcile_landing(root, base, expected)["verdict"] == "unknown"
 
 
-def test_spawns_nothing(repo, monkeypatch):
+def test_spawns_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, base = repo
     landing = _commit(root, {"a.txt": "a"})
     expected = {"a.txt": {"blob": _blob(root, "a.txt")}}

@@ -23,6 +23,10 @@ import sys
 import time
 import socket
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 try:
     import fcntl
@@ -34,14 +38,14 @@ VENDOR = "codex"
 NAME_RE = re.compile(r"[^A-Za-z0-9_-]+")
 
 
-def load_sibling(name):
+def load_sibling(name) -> "ModuleType":
     spec = importlib.util.spec_from_file_location(name.replace("-", "_"), HERE / f"{name}.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
 
 
-def checkout_name(cwd):
+def checkout_name(cwd) -> str:
     """Basename of the checkout holding cwd (nearest ancestor with .git), else of cwd itself."""
     path = Path(cwd)
     root = next((p for p in (path, *path.parents) if (p / ".git").exists()), path)
@@ -273,7 +277,7 @@ def _register(payload, peers_file=None, registry_dir=None):
     return {"systemMessage": f"unimatrix: peer {chosen[0]} bound to Codex thread {thread} ({status})"}
 
 
-def main():
+def main() -> int:
     try:
         payload = json.load(sys.stdin)
         out = run(payload) if isinstance(payload, dict) else None

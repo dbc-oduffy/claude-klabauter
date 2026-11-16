@@ -63,6 +63,7 @@ import pytest
 from coordinator_core.spawn_policy import SpawnParseError, is_test_tree_site
 from coordinator_core.spawn_policy.detect import DEFAULT_EXCLUDE, discover_source_files
 from coordinator_core.win_portability import leaf_spawn_creationflags
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -88,12 +89,12 @@ _NAMED_EXCLUSION_SITES: tuple[tuple[str, str], ...] = (
 )
 
 
-def test_leaf_spawn_creationflags_posix_is_empty(monkeypatch):
+def test_leaf_spawn_creationflags_posix_is_empty(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("coordinator_core.win_portability._is_windows", lambda: False)
     assert leaf_spawn_creationflags() == {}
 
 
-def test_leaf_spawn_creationflags_windows_uses_detached_process(monkeypatch):
+def test_leaf_spawn_creationflags_windows_uses_detached_process(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("coordinator_core.win_portability._is_windows", lambda: True)
     import subprocess as real_subprocess
 
@@ -104,7 +105,7 @@ def test_leaf_spawn_creationflags_windows_uses_detached_process(monkeypatch):
     assert result == {"creationflags": 0x00000008}
 
 
-def test_leaf_spawn_creationflags_windows_falls_back_when_constant_absent(monkeypatch):
+def test_leaf_spawn_creationflags_windows_falls_back_when_constant_absent(monkeypatch: pytest.MonkeyPatch) -> None:
     """Mirrors `no_console_creationflags()`'s own monkeypatch-seam self-test:
     `_is_windows()` patched True on a real POSIX host must not raise
     `AttributeError` reaching for the Windows-only `DETACHED_PROCESS`
@@ -119,7 +120,7 @@ def test_leaf_spawn_creationflags_windows_falls_back_when_constant_absent(monkey
     assert result == {"creationflags": 0}
 
 
-def test_leaf_spawn_creationflags_docstring_carries_subtree_hazard_and_named_sites():
+def test_leaf_spawn_creationflags_docstring_carries_subtree_hazard_and_named_sites() -> None:
     doc = leaf_spawn_creationflags.__doc__ or ""
     assert "no console" in doc.lower()
     assert "spawn-hidden.py" in doc and "_NO_WINDOW" in doc
@@ -249,7 +250,7 @@ def _find_both_flags_violations(
     return violations
 
 
-def test_no_detached_process_and_no_window_combined():
+def test_no_detached_process_and_no_window_combined() -> None:
     """Gate axis (a) -- see module docstring. Standing/fast-tier: must stay
     green now that `auto_push._windows_detached_flags` no longer composes
     both flags together (fixed 2026-08-21, see that function's own
@@ -259,7 +260,7 @@ def test_no_detached_process_and_no_window_combined():
     assert violations == [], "\n".join(f"{path}:{lineno}" for path, lineno in violations)
 
 
-def test_gate_axis_a_detects_a_planted_combined_flags_binop(tmp_path):
+def test_gate_axis_a_detects_a_planted_combined_flags_binop(tmp_path: Path) -> None:
     fixture = tmp_path / "planted_binop.py"
     fixture.write_text(
         "import subprocess\n"
@@ -271,7 +272,7 @@ def test_gate_axis_a_detects_a_planted_combined_flags_binop(tmp_path):
     assert violations[0][0].endswith("planted_binop.py")
 
 
-def test_gate_axis_a_detects_a_planted_combined_flags_augassign(tmp_path):
+def test_gate_axis_a_detects_a_planted_combined_flags_augassign(tmp_path: Path) -> None:
     fixture = tmp_path / "planted_augassign.py"
     fixture.write_text(
         "import subprocess\n"
@@ -288,7 +289,7 @@ def test_gate_axis_a_detects_a_planted_combined_flags_augassign(tmp_path):
     assert violations[0][0].endswith("planted_augassign.py")
 
 
-def test_gate_axis_a_ignores_a_single_flag(tmp_path):
+def test_gate_axis_a_ignores_a_single_flag(tmp_path: Path) -> None:
     fixture = tmp_path / "clean.py"
     fixture.write_text(
         "import subprocess\n"
@@ -410,7 +411,7 @@ def _find_leaf_spawn_uses(root: pathlib.Path) -> list[tuple[str, int, bool]]:
     return uses
 
 
-def test_every_leaf_spawn_creationflags_site_wires_stdio():
+def test_every_leaf_spawn_creationflags_site_wires_stdio() -> None:
     """Gate axis (b) -- see module docstring. Empty by construction: this
     chunk introduces the helper but migrates no call site onto it (that is
     a later wave's job), so there are zero sites to check yet."""
@@ -419,7 +420,7 @@ def test_every_leaf_spawn_creationflags_site_wires_stdio():
     assert unwired == [], "\n".join(f"{path}:{lineno} -- no stdio kwarg" for path, lineno in unwired)
 
 
-def test_gate_axis_b_detects_a_planted_unwired_leaf_spawn(tmp_path):
+def test_gate_axis_b_detects_a_planted_unwired_leaf_spawn(tmp_path: Path) -> None:
     fixture = tmp_path / "planted_unwired.py"
     fixture.write_text(
         "import subprocess\n"
@@ -435,7 +436,7 @@ def test_gate_axis_b_detects_a_planted_unwired_leaf_spawn(tmp_path):
     assert has_stdio is False
 
 
-def test_gate_axis_b_ignores_a_wired_leaf_spawn(tmp_path):
+def test_gate_axis_b_ignores_a_wired_leaf_spawn(tmp_path: Path) -> None:
     fixture = tmp_path / "planted_wired.py"
     fixture.write_text(
         "import subprocess\n"
@@ -460,7 +461,7 @@ def test_gate_axis_b_ignores_a_wired_leaf_spawn(tmp_path):
 # --------------------------------------------------------------------------
 
 
-def test_named_exclusion_sites_never_call_leaf_spawn_creationflags():
+def test_named_exclusion_sites_never_call_leaf_spawn_creationflags() -> None:
     """Gate axis (c) -- see module docstring. Checked two ways: (1) the
     named source files, if present on disk, must not reference the
     identifier `leaf_spawn_creationflags` anywhere at all (a stronger check

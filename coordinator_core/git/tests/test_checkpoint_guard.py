@@ -7,6 +7,7 @@ import pytest
 
 from coordinator_core.git import commit as gcommit
 from coordinator_core.git.commit import CommitRefused
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -31,12 +32,12 @@ title: p
 """
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> None:
     subprocess.run(["git", *args], cwd=str(repo), capture_output=True, check=True, **_NOWIN)
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     (r / "src").mkdir(parents=True)
     (r / "docs").mkdir()
@@ -50,7 +51,7 @@ def repo(tmp_path):
     return r
 
 
-def _message(base, rows="A1"):
+def _message(base, rows: str = "A1") -> str:
     n = len(rows.split(", "))
     return (
         f"checkpoint(wave 1): {n} rows — {rows}\n\n"
@@ -58,18 +59,18 @@ def _message(base, rows="A1"):
     )
 
 
-def _write(repo, path, text):
+def _write(repo, path, text) -> None:
     (repo / path).write_text(text, encoding="utf-8", newline="\n")
 
 
-def test_a_clean_checkpoint_lands(repo):
+def test_a_clean_checkpoint_lands(repo) -> None:
     base = gcommit.head_sha(repo)
     _write(repo, "src/a.py", "v1\n")
     assert gcommit.commit_paths(repo, ["src/a.py"], _message(base))
 
 
 @pytest.mark.parametrize("status", ["wont_do", "delivered_elsewhere"])
-def test_a_row_closed_on_the_spine_is_refused(repo, status):
+def test_a_row_closed_on_the_spine_is_refused(repo, status) -> None:
     base = gcommit.head_sha(repo)
     _write(repo, "docs/p.md", _PLAN.format(a1=status))
     gcommit.commit_paths(repo, ["docs/p.md"], f"plan: A1 {status}")
@@ -78,7 +79,7 @@ def test_a_row_closed_on_the_spine_is_refused(repo, status):
         gcommit.commit_paths(repo, ["src/a.py"], _message(base))
 
 
-def test_writes_reverted_outside_the_run_are_refused(repo):
+def test_writes_reverted_outside_the_run_are_refused(repo) -> None:
     base = gcommit.head_sha(repo)
     _write(repo, "src/a.py", "v1\n")
     gcommit.commit_paths(repo, ["src/a.py"], _message(base))
@@ -100,18 +101,18 @@ def _checkpoint_over_plan_commit(repo, plan_text, subject):
     return gcommit.commit_paths(repo, ["docs/p.md"], _message(base))
 
 
-def test_the_engine_frontmatter_stamp_is_not_outside_the_run(repo):
+def test_the_engine_frontmatter_stamp_is_not_outside_the_run(repo) -> None:
     stamped = _PLAN.format(a1="open").replace("title: p\n", "title: p\nmet: true\n")
     assert _checkpoint_over_plan_commit(repo, stamped, _STAMP)
 
 
-def test_a_same_session_body_edit_under_the_stamp_subject_is_refused(repo):
+def test_a_same_session_body_edit_under_the_stamp_subject_is_refused(repo) -> None:
     edited = _PLAN.format(a1="open").replace("title: a", "title: reverted")
     with pytest.raises(CommitRefused, match="changed outside this run: docs/p.md"):
         _checkpoint_over_plan_commit(repo, edited, _STAMP + "\n\nSession-Id: s1")
 
 
-def test_a_frontmatter_only_stamp_naming_another_plan_is_refused(repo):
+def test_a_frontmatter_only_stamp_naming_another_plan_is_refused(repo) -> None:
     stamped = _PLAN.format(a1="open").replace("title: p\n", "title: p\nmet: true\n")
     with pytest.raises(CommitRefused, match="changed outside this run: docs/p.md"):
         _checkpoint_over_plan_commit(
@@ -119,13 +120,13 @@ def test_a_frontmatter_only_stamp_naming_another_plan_is_refused(repo):
         )
 
 
-def test_a_frontmatter_only_edit_under_a_non_stamp_subject_is_refused(repo):
+def test_a_frontmatter_only_edit_under_a_non_stamp_subject_is_refused(repo) -> None:
     stamped = _PLAN.format(a1="open").replace("title: p\n", "title: p\nmet: true\n")
     with pytest.raises(CommitRefused, match="changed outside this run: docs/p.md"):
         _checkpoint_over_plan_commit(repo, stamped, "hand edit\n\nSession-Id: s1")
 
 
-def test_a_checkpoint_without_the_guard_lines_is_refused(repo):
+def test_a_checkpoint_without_the_guard_lines_is_refused(repo) -> None:
     _write(repo, "src/a.py", "v1\n")
     with pytest.raises(CommitRefused, match="re-emit"):
         gcommit.commit_paths(repo, ["src/a.py"], "checkpoint(wave 1): 1 rows — A1")
@@ -142,7 +143,7 @@ def test_a_checkpoint_without_the_guard_lines_is_refused(repo):
         ("review trail: stuff", []),
     ],
 )
-def test_plan_commit_row_ids(subject, ids):
+def test_plan_commit_row_ids(subject, ids) -> None:
     from coordinator_core.git.checkpoint_guard import plan_commit_row_ids
 
     assert plan_commit_row_ids(subject) == ids
@@ -157,13 +158,13 @@ def test_plan_commit_row_ids(subject, ids):
     ("C1: do it", False),
     ("plain", False),
 ])
-def test_is_checkpoint_commit(message, expected):
+def test_is_checkpoint_commit(message, expected) -> None:
     from coordinator_core.git.checkpoint_guard import is_checkpoint_commit
 
     assert is_checkpoint_commit(message) is expected
 
 
-def test_a_leading_id_subject_is_not_a_checkpoint_refusal(repo):
+def test_a_leading_id_subject_is_not_a_checkpoint_refusal(repo) -> None:
     from coordinator_core.git.checkpoint_guard import checkpoint_refusal, checkpoint_row_ids
 
     assert checkpoint_row_ids("C1: do it") == []
@@ -193,7 +194,7 @@ def _merged_head_with_base_on_second_parent(repo):
     return base
 
 
-def test_a_merge_that_leaves_the_declared_path_alone_is_not_outside_the_run(repo):
+def test_a_merge_that_leaves_the_declared_path_alone_is_not_outside_the_run(repo) -> None:
     from coordinator_core.git.checkpoint_guard import _moved_outside_run
 
     base = _merged_head_with_base_on_second_parent(repo)
@@ -204,7 +205,7 @@ def test_a_merge_that_leaves_the_declared_path_alone_is_not_outside_the_run(repo
     assert _moved_outside_run(repo / ".git", head, base, ["src/a.py"], "docs/p.md") == []
 
 
-def test_a_revert_after_a_merge_is_still_outside_the_run(repo):
+def test_a_revert_after_a_merge_is_still_outside_the_run(repo) -> None:
     from coordinator_core.git.checkpoint_guard import _moved_outside_run
 
     base = _merged_head_with_base_on_second_parent(repo)
@@ -216,7 +217,7 @@ def test_a_revert_after_a_merge_is_still_outside_the_run(repo):
     assert len(moved) == 1 and moved[0].startswith("src/a.py by ")
 
 
-def test_an_abbreviated_base_still_bounds_the_walk(repo):
+def test_an_abbreviated_base_still_bounds_the_walk(repo) -> None:
     from coordinator_core.git.checkpoint_guard import _moved_outside_run
 
     base = _merged_head_with_base_on_second_parent(repo)
@@ -224,6 +225,6 @@ def test_an_abbreviated_base_still_bounds_the_walk(repo):
     assert _moved_outside_run(repo / ".git", head, base[:8], ["src/a.py"], "docs/p.md") == []
 
 
-def test_an_ordinary_commit_is_untouched(repo):
+def test_an_ordinary_commit_is_untouched(repo) -> None:
     _write(repo, "src/a.py", "v1\n")
     assert gcommit.commit_paths(repo, ["src/a.py"], "fix a")

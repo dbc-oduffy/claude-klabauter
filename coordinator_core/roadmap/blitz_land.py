@@ -1695,6 +1695,7 @@ def land_wave(
 
     pulled: List[Any] = []
     pulled_without_plan: List[Any] = []
+    pulled_records: List[str] = []
     for entry in wave_result.get("pulled") or []:
         baton_id = entry.get("batonId")
         try:
@@ -1741,6 +1742,7 @@ def land_wave(
                 if not _carries_no_plan(entry.get("route")):
                     pulled_without_plan.append(baton_id)
             pulled.append(baton_id)
+            pulled_records.append(baton_path)
         except (LandingRefused, MutateAbort, OSError) as exc:
             refused.append({"baton": baton_id, "reason": str(exc)})
 
@@ -1850,6 +1852,9 @@ def land_wave(
         # The same batons when the match was ambiguous, absent or conflicted; `basis` says which.
         "xsUnlinked": xs_unlinked,
         "pulled": pulled,
+        # Repo-relative baton record path per pulled id: the landing commit's candidate
+        # collector reads state/handoffs paths, and a pulled record's stamps ride that commit.
+        "pulled_records": pulled_records,
         # Pulled batons on a plan-carrying route that named no plan: nothing was linked.
         "pulled_without_plan": pulled_without_plan,
         "surfaced_to_pm": [e.get("batonId") for e in wave_result.get("surfacedToPm") or []],

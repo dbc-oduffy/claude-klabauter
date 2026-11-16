@@ -7,12 +7,13 @@ import pytest
 
 from coordinator_core.bash_guards import _blanket_disarm as bd
 from coordinator_core.bash_guards.dispatch import GuardBand
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
 
 @pytest.fixture(autouse=True)
-def _isolated_marker(tmp_path, monkeypatch):
+def _isolated_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(bd, "settings_home", lambda: tmp_path)
     bd._cache.clear()
     yield
@@ -32,24 +33,24 @@ SUBAGENT_PAYLOAD = {"session_id": "sess-em-1", "agent_id": "agent-123", "agent_t
 
 
 class TestAbsentUnreadableEmptyMarker:
-    def test_no_marker_file_stays_armed(self):
+    def test_no_marker_file_stays_armed(self) -> None:
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
-    def test_directory_in_place_of_marker_stays_armed(self, tmp_path):
+    def test_directory_in_place_of_marker_stays_armed(self, tmp_path: Path) -> None:
         (tmp_path / bd.MARKER_BASENAME).mkdir()
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
-    def test_empty_marker_stays_armed(self, tmp_path):
+    def test_empty_marker_stays_armed(self, tmp_path: Path) -> None:
         _write_marker(tmp_path, "")
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
-    def test_whitespace_only_marker_stays_armed(self, tmp_path):
+    def test_whitespace_only_marker_stays_armed(self, tmp_path: Path) -> None:
         _write_marker(tmp_path, "   \n\n  ")
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
 
 class TestScopeFieldFailsClosed:
-    def test_missing_scope_stays_armed(self, tmp_path):
+    def test_missing_scope_stays_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -57,7 +58,7 @@ class TestScopeFieldFailsClosed:
         )
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
-    def test_unrecognised_scope_stays_armed(self, tmp_path):
+    def test_unrecognised_scope_stays_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -65,7 +66,7 @@ class TestScopeFieldFailsClosed:
         )
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
-    def test_blank_scope_stays_armed(self, tmp_path):
+    def test_blank_scope_stays_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -75,7 +76,7 @@ class TestScopeFieldFailsClosed:
 
 
 class TestTimeScope:
-    def test_positive_control_active_within_window(self, tmp_path):
+    def test_positive_control_active_within_window(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -85,33 +86,33 @@ class TestTimeScope:
         assert bd.blanket_disarm_active(EM_PAYLOAD) is True
         assert bd.blanket_disarm_active(SUBAGENT_PAYLOAD) is True
 
-    def test_missing_since_stays_armed(self, tmp_path):
+    def test_missing_since_stays_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(tmp_path, f"Scope: time\nExpires: {_iso(now + timedelta(hours=1))}\nReason: x\n")
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
-    def test_missing_expires_stays_armed(self, tmp_path):
+    def test_missing_expires_stays_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(tmp_path, f"Scope: time\nSince: {_iso(now)}\nReason: x\n")
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
-    def test_unparseable_expires_stays_armed(self, tmp_path):
+    def test_unparseable_expires_stays_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(tmp_path, f"Scope: time\nSince: {_iso(now)}\nExpires: not-a-date\nReason: x\n")
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
-    def test_unparseable_since_stays_armed(self, tmp_path):
+    def test_unparseable_since_stays_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(tmp_path, f"Scope: time\nSince: not-a-date\nExpires: {_iso(now + timedelta(hours=1))}\nReason: x\n")
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
-    def test_naive_timestamp_treated_as_unparseable(self, tmp_path):
+    def test_naive_timestamp_treated_as_unparseable(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         naive_expires = (now + timedelta(hours=1)).replace(tzinfo=None).isoformat()
         _write_marker(tmp_path, f"Scope: time\nSince: {_iso(now)}\nExpires: {naive_expires}\nReason: x\n")
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
-    def test_past_expiry_stays_armed(self, tmp_path):
+    def test_past_expiry_stays_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -119,7 +120,7 @@ class TestTimeScope:
         )
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
-    def test_expiry_equal_to_now_stays_armed(self, tmp_path):
+    def test_expiry_equal_to_now_stays_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -128,7 +129,7 @@ class TestTimeScope:
         result = bd._evaluate(now, session_id="", is_em=True)
         assert result.active is False
 
-    def test_beyond_cap_span_stays_armed(self, tmp_path):
+    def test_beyond_cap_span_stays_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -136,7 +137,7 @@ class TestTimeScope:
         )
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
-    def test_exactly_at_cap_span_is_active(self, tmp_path):
+    def test_exactly_at_cap_span_is_active(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -147,7 +148,7 @@ class TestTimeScope:
 
 
 class TestSessionScope:
-    def test_positive_control_matching_session_em_active(self, tmp_path):
+    def test_positive_control_matching_session_em_active(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -157,7 +158,7 @@ class TestSessionScope:
         )
         assert bd.blanket_disarm_active(EM_PAYLOAD) is True
 
-    def test_no_inherit_to_dispatched_subagent_stays_armed(self, tmp_path):
+    def test_no_inherit_to_dispatched_subagent_stays_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -166,7 +167,7 @@ class TestSessionScope:
         )
         assert bd.blanket_disarm_active(SUBAGENT_PAYLOAD) is False
 
-    def test_missing_session_field_stays_armed(self, tmp_path):
+    def test_missing_session_field_stays_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -174,7 +175,7 @@ class TestSessionScope:
         )
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
-    def test_mismatched_session_stays_armed(self, tmp_path):
+    def test_mismatched_session_stays_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -183,12 +184,12 @@ class TestSessionScope:
         )
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
-    def test_missing_expires_stays_armed(self, tmp_path):
+    def test_missing_expires_stays_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(tmp_path, f"Scope: session\nSession: sess-em-1\nSince: {_iso(now)}\nReason: x\n")
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
-    def test_beyond_cap_span_stays_armed(self, tmp_path):
+    def test_beyond_cap_span_stays_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -197,7 +198,7 @@ class TestSessionScope:
         )
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
-    def test_no_payload_at_all_stays_armed(self, tmp_path):
+    def test_no_payload_at_all_stays_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -208,7 +209,7 @@ class TestSessionScope:
 
 
 class TestMachineTotalScope:
-    def test_positive_control_em_standing_no_expiry_active(self, tmp_path):
+    def test_positive_control_em_standing_no_expiry_active(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -216,7 +217,7 @@ class TestMachineTotalScope:
         )
         assert bd.blanket_disarm_active(EM_PAYLOAD) is True
 
-    def test_subagent_never_disarmed_even_when_marker_valid(self, tmp_path):
+    def test_subagent_never_disarmed_even_when_marker_valid(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -224,16 +225,16 @@ class TestMachineTotalScope:
         )
         assert bd.blanket_disarm_active(SUBAGENT_PAYLOAD) is False
 
-    def test_no_payload_stays_armed(self, tmp_path):
+    def test_no_payload_stays_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(tmp_path, f"Scope: machine-total\nSince: {_iso(now)}\nReason: x\n")
         assert bd.blanket_disarm_active(None) is False
 
-    def test_missing_since_stays_armed(self, tmp_path):
+    def test_missing_since_stays_armed(self, tmp_path: Path) -> None:
         _write_marker(tmp_path, "Scope: machine-total\nReason: x\n")
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
-    def test_with_expiry_honoured_when_present_and_future(self, tmp_path):
+    def test_with_expiry_honoured_when_present_and_future(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -243,7 +244,7 @@ class TestMachineTotalScope:
         )
         assert bd.blanket_disarm_active(EM_PAYLOAD) is True
 
-    def test_with_past_expiry_stays_armed(self, tmp_path):
+    def test_with_past_expiry_stays_armed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -254,7 +255,7 @@ class TestMachineTotalScope:
 
 
 class TestBandsSuppression:
-    def test_absent_bands_suppresses_nothing(self, tmp_path):
+    def test_absent_bands_suppresses_nothing(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(tmp_path, f"Scope: machine-total\nSince: {_iso(now)}\nReason: x\n")
         status = bd.disarm_status(EM_PAYLOAD)
@@ -262,7 +263,7 @@ class TestBandsSuppression:
         assert status.bands == frozenset()
         assert bd.disarm_covers_band(GuardBand.ADVISORY_REWRITE, EM_PAYLOAD) is False
 
-    def test_positive_control_named_bands_suppressed(self, tmp_path):
+    def test_positive_control_named_bands_suppressed(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -276,7 +277,7 @@ class TestBandsSuppression:
         assert bd.disarm_covers_band(GuardBand.PLATFORM_CONDITIONED_DENY, EM_PAYLOAD) is True
         assert bd.disarm_covers_band(GuardBand.CONFINEMENT_DENY, EM_PAYLOAD) is False
 
-    def test_confinement_deny_named_rejects_whole_marker(self, tmp_path):
+    def test_confinement_deny_named_rejects_whole_marker(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -287,7 +288,7 @@ class TestBandsSuppression:
         status = bd.disarm_status(EM_PAYLOAD)
         assert status.bands is None
 
-    def test_confinement_deny_alone_rejects_whole_marker(self, tmp_path):
+    def test_confinement_deny_alone_rejects_whole_marker(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -295,7 +296,7 @@ class TestBandsSuppression:
         )
         assert bd.blanket_disarm_active(EM_PAYLOAD) is False
 
-    def test_unrecognised_band_token_suppresses_nothing(self, tmp_path):
+    def test_unrecognised_band_token_suppresses_nothing(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -305,7 +306,7 @@ class TestBandsSuppression:
         assert status.active is False
         assert status.bands == frozenset()
 
-    def test_partly_unrecognised_band_list_suppresses_nothing(self, tmp_path):
+    def test_partly_unrecognised_band_list_suppresses_nothing(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -316,14 +317,14 @@ class TestBandsSuppression:
         assert status.active is False
         assert status.bands == frozenset()
 
-    def test_empty_bands_field_suppresses_nothing(self, tmp_path):
+    def test_empty_bands_field_suppresses_nothing(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(tmp_path, f"Scope: machine-total\nSince: {_iso(now)}\nBands: \nReason: x\n")
         status = bd.disarm_status(EM_PAYLOAD)
         assert status.active is False
         assert status.bands == frozenset()
 
-    def test_time_and_session_scope_also_support_bands(self, tmp_path):
+    def test_time_and_session_scope_also_support_bands(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -346,7 +347,7 @@ class TestM18ActiveRequiresNamedBands:
     exact marker shape that exposed the bug.
     """
 
-    def test_default_shaped_time_marker_is_inert(self, tmp_path):
+    def test_default_shaped_time_marker_is_inert(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -359,7 +360,7 @@ class TestM18ActiveRequiresNamedBands:
         for band in GuardBand:
             assert bd.disarm_covers_band(band, EM_PAYLOAD) is False
 
-    def test_default_shaped_session_marker_is_inert(self, tmp_path):
+    def test_default_shaped_session_marker_is_inert(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -371,7 +372,7 @@ class TestM18ActiveRequiresNamedBands:
         assert status.bands == frozenset()
         assert "Bands" in status.detail
 
-    def test_default_shaped_machine_total_marker_is_inert(self, tmp_path):
+    def test_default_shaped_machine_total_marker_is_inert(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(tmp_path, f"Scope: machine-total\nSince: {_iso(now)}\nReason: mac dev box\n")
         status = bd.disarm_status(EM_PAYLOAD)
@@ -381,7 +382,7 @@ class TestM18ActiveRequiresNamedBands:
         for band in GuardBand:
             assert bd.disarm_covers_band(band, EM_PAYLOAD) is False
 
-    def test_default_shaped_machine_total_marker_with_expiry_is_still_inert(self, tmp_path):
+    def test_default_shaped_machine_total_marker_with_expiry_is_still_inert(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -392,7 +393,7 @@ class TestM18ActiveRequiresNamedBands:
         assert status.active is False
         assert status.bands == frozenset()
 
-    def test_adding_bands_line_flips_the_identical_marker_active(self, tmp_path):
+    def test_adding_bands_line_flips_the_identical_marker_active(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(tmp_path, f"Scope: machine-total\nSince: {_iso(now)}\nReason: mac dev box\n")
         assert bd.disarm_status(EM_PAYLOAD).active is False
@@ -407,7 +408,7 @@ class TestM18ActiveRequiresNamedBands:
 
 class TestC4CacheCannotOutliveExpiryOrMarkerEdit:
 
-    def test_cached_active_verdict_does_not_survive_its_own_expiry(self, tmp_path):
+    def test_cached_active_verdict_does_not_survive_its_own_expiry(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         expires_in = timedelta(seconds=2)
         _write_marker(
@@ -431,7 +432,7 @@ class TestC4CacheCannotOutliveExpiryOrMarkerEdit:
         _time.sleep(expires_in.total_seconds() + 0.5)
         assert bd.disarm_status(EM_PAYLOAD).active is False
 
-    def test_cache_key_changes_when_marker_is_edited_without_explicit_clear(self, tmp_path):
+    def test_cache_key_changes_when_marker_is_edited_without_explicit_clear(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         _write_marker(
             tmp_path,
@@ -448,7 +449,7 @@ class TestC4CacheCannotOutliveExpiryOrMarkerEdit:
         )
         assert bd.disarm_status(EM_PAYLOAD).active is False
 
-    def test_cache_key_changes_when_marker_is_deleted(self, tmp_path):
+    def test_cache_key_changes_when_marker_is_deleted(self, tmp_path: Path) -> None:
         now = datetime.now(timezone.utc)
         marker = tmp_path / bd.MARKER_BASENAME
         _write_marker(
@@ -466,13 +467,13 @@ class TestAC11NamedTeammateSessionIdAbsentIsNotEM:
     NAMED_AGENT_ID = "aReviewBot-0123456789abcdef"
 
     @pytest.mark.parametrize("session_id", [None, "short7"])
-    def test_named_agent_id_with_absent_or_short_session_id_is_not_em(self, session_id):
+    def test_named_agent_id_with_absent_or_short_session_id_is_not_em(self, session_id) -> None:
         payload = {"agent_id": self.NAMED_AGENT_ID, "session_id": session_id}
         assert bd._is_em_caller(payload, None) is False
 
 
 class TestDisarmResultDetailIsInformative:
-    def test_disarm_status_never_raises_on_garbage_marker(self, tmp_path):
+    def test_disarm_status_never_raises_on_garbage_marker(self, tmp_path: Path) -> None:
         _write_marker(tmp_path, "this is not key: value shaped garbage \x00\x01")
         result = bd.disarm_status(EM_PAYLOAD)
         assert result.active is False

@@ -6,9 +6,11 @@ import threading
 
 from coordinator_core import bounded_io
 from coordinator_core.warm import dispatch_ack, server
+from pathlib import Path
+import pytest
 
 
-def test_every_dropped_journal_outcome_is_named_on_stderr(monkeypatch, tmp_path, capsys):
+def test_every_dropped_journal_outcome_is_named_on_stderr(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     journal = str(tmp_path / "journal")
     release = threading.Event()
     monkeypatch.setattr(dispatch_ack, "journal_dir_beside", lambda claim_dir: journal)
@@ -32,7 +34,7 @@ def test_every_dropped_journal_outcome_is_named_on_stderr(monkeypatch, tmp_path,
             t.join(2.0)
 
 
-def test_a_landed_outcome_is_not_named_as_dropped(monkeypatch, tmp_path, capsys):
+def test_a_landed_outcome_is_not_named_as_dropped(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(dispatch_ack, "journal_dir_beside", lambda claim_dir: str(tmp_path / "j"))
     monkeypatch.setattr(server, "_op_may_mutate", lambda method: True)
     monkeypatch.setattr(server, "_effective_method", lambda msg: "x.y")

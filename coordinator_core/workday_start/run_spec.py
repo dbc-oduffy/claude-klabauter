@@ -309,5 +309,6 @@ SPEC = WorkdayStartSpec(
         directive_wanted=_directive_wanted,
         acting_dispositions=rules.ACTING_DISPOSITIONS,
         held_stages=rules.HELD_STAGES,
+        concurrent_stages=frozenset({"sentinels"}),
     ),
 )

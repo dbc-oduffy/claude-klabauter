@@ -94,28 +94,28 @@ def _dispositions(result: dict) -> dict:
 
 
 class TestValidateParams:
-    def test_missing_dry_run_is_setup_error(self):
+    def test_missing_dry_run_is_setup_error(self) -> None:
         assert _validate_params({})["exit_code"] == 1
 
-    def test_wrong_typed_dry_run_is_setup_error(self):
+    def test_wrong_typed_dry_run_is_setup_error(self) -> None:
         assert _validate_params({"dry_run": "yes"})["exit_code"] == 1
 
-    def test_unknown_param_is_setup_error(self):
+    def test_unknown_param_is_setup_error(self) -> None:
         """This op reconciles the whole outbox; a per-entry selector would be
         silently dropped rather than honoured, so it fails loud instead."""
         assert _validate_params({"dry_run": True, "topic": "x"})["exit_code"] == 1
 
-    def test_both_arms_of_dry_run_validate(self):
+    def test_both_arms_of_dry_run_validate(self) -> None:
         assert _validate_params({"dry_run": True}) is True
         assert _validate_params({"dry_run": False}) is False
 
 
 class TestRepoRoot:
-    def test_missing_repo_root_is_setup_error(self):
+    def test_missing_repo_root_is_setup_error(self) -> None:
         result = _memo_reconcile_outbox({"dry_run": True}, repo_root=None)
         assert result["exit_code"] == 1
 
-    def test_absent_outbox_is_a_clean_empty_result(self, worktree):
+    def test_absent_outbox_is_a_clean_empty_result(self, worktree) -> None:
         """Never drafted anything: an empty outbox is not an error."""
         result = _memo_reconcile_outbox({"dry_run": True}, repo_root=worktree)
         assert result["exit_code"] == 0
@@ -123,7 +123,7 @@ class TestRepoRoot:
 
 
 class TestSweep:
-    def test_frontmatter_less_fragment_is_reported_never_moved(self, worktree):
+    def test_frontmatter_less_fragment_is_reported_never_moved(self, worktree) -> None:
         frag = _write_memo(worktree, "orphan.body.md", None)
 
         result = _memo_reconcile_outbox({"dry_run": False}, repo_root=worktree)
@@ -134,7 +134,7 @@ class TestSweep:
         # so it can never vanish silently from the result.
         assert [s["disposition"] for s in result["skipped"]] == ["report"]
 
-    def test_statusless_frontmatter_is_left_in_place(self, worktree):
+    def test_statusless_frontmatter_is_left_in_place(self, worktree) -> None:
         path = _outbox_dir(worktree) / "no-status.md"
         path.write_text('---\ntitle: "t"\n---\n\nbody\n', encoding="utf-8")
 
@@ -143,7 +143,7 @@ class TestSweep:
         assert result["acted"] == []
         assert path.is_file()
 
-    def test_existing_sent_copy_is_never_clobbered(self, worktree):
+    def test_existing_sent_copy_is_never_clobbered(self, worktree) -> None:
         _write_memo(worktree, "dupe.md", "sent")
         sent = worktree.joinpath(*_NEW_SENT)
         sent.mkdir(parents=True)
@@ -164,7 +164,7 @@ class TestDeliveryWithoutASenderReceipt:
     in the outbox after delivery, but a delivery this repo has no committed
     record of. Example-retrieval-repo-em, 2026-09-11."""
 
-    def test_a_draft_with_an_archive_is_a_stale_duplicate_not_work(self, worktree):
+    def test_a_draft_with_an_archive_is_a_stale_duplicate_not_work(self, worktree) -> None:
         """memo_send's unlink degrades to a warning, so a send can archive a
         memo and leave its own original behind reading `status: draft`. Every
         reader of the outbox depth then counts a delivered memo as work, and
@@ -184,7 +184,7 @@ class TestDeliveryWithoutASenderReceipt:
         ), "reported, never moved onto the stamped copy"
         assert worktree.joinpath(*_OUTBOX, "dupe.md").is_file()
 
-    def test_a_draft_without_an_archive_is_still_just_a_draft(self, worktree):
+    def test_a_draft_without_an_archive_is_still_just_a_draft(self, worktree) -> None:
         """The negative half of the pair — the archive lookup must not turn
         every draft into a finding."""
         _write_memo(worktree, "live.md", "draft")
@@ -193,7 +193,7 @@ class TestDeliveryWithoutASenderReceipt:
 
         assert _dispositions(result) == {"live.md": "keep"}
 
-    def test_an_unreadable_head_reports_no_uncommitted_receipt(self, worktree):
+    def test_an_unreadable_head_reports_no_uncommitted_receipt(self, worktree) -> None:
         """`worktree` carries a bare `.git` dir with no HEAD, so the spine is
         unreadable. "Not in HEAD" and "no HEAD to ask" are different answers,
         and an archived memo here is NOT evidence of a missing receipt — every
@@ -208,7 +208,7 @@ class TestDeliveryWithoutASenderReceipt:
 
 
 class TestDryRun:
-    def test_dry_run_previews_dispositions_and_moves_nothing(self, worktree):
+    def test_dry_run_previews_dispositions_and_moves_nothing(self, worktree) -> None:
         _write_memo(worktree, "delivered.md", "sent")
         _write_memo(worktree, "live.md", "draft")
         _write_memo(worktree, "orphan.body.md", None)
@@ -231,7 +231,7 @@ class TestDryRun:
 
 
 class TestIdempotence:
-    def test_second_run_over_a_swept_outbox_is_a_clean_noop(self, worktree):
+    def test_second_run_over_a_swept_outbox_is_a_clean_noop(self, worktree) -> None:
         _write_memo(worktree, "delivered.md", "sent")
         _write_memo(worktree, "live.md", "draft")
 

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from coordinator_core.ops.handoff_carry_gate import evaluate_gate, main
+from pathlib import Path
+import pytest
 
 
-def _item(carry_id="cf-windows-validation-3f2a1c", disposition="carried", **overrides):
+def _item(carry_id: str = "cf-windows-validation-3f2a1c", disposition: str = "carried", **overrides):
     d = {
         "carry_id": carry_id,
         "description": "Windows validation",
@@ -13,38 +15,38 @@ def _item(carry_id="cf-windows-validation-3f2a1c", disposition="carried", **over
     return d
 
 
-def test_carried_item_is_allowed():
+def test_carried_item_is_allowed() -> None:
     result = evaluate_gate([_item()])
     assert result.ok
     assert result.violations == []
 
 
-def test_indefinite_carry_is_allowed():
+def test_indefinite_carry_is_allowed() -> None:
     for legacy_count in (1, 3, 8, 40):
         result = evaluate_gate([_item(carry_count=legacy_count)])
         assert result.ok, f"carry_count={legacy_count} must not be refused"
 
 
-def test_missing_carry_count_is_not_a_violation():
+def test_missing_carry_count_is_not_a_violation() -> None:
     result = evaluate_gate([{"carry_id": "cf-x-abc123", "description": "x", "disposition": "carried"}])
     assert result.ok
 
 
-def test_closed_disposition_with_detail_is_ok():
+def test_closed_disposition_with_detail_is_ok() -> None:
     result = evaluate_gate(
         [_item(disposition="closed", disposition_detail="assessed and deliberately left")]
     )
     assert result.ok
 
 
-def test_spun_off_disposition_with_detail_is_ok():
+def test_spun_off_disposition_with_detail_is_ok() -> None:
     result = evaluate_gate(
         [_item(disposition="spun_off", disposition_detail="state/handoffs/windows-validation.md")]
     )
     assert result.ok
 
 
-def test_blocked_disposition_with_detail_is_ok():
+def test_blocked_disposition_with_detail_is_ok() -> None:
     result = evaluate_gate(
         [
             _item(
@@ -56,25 +58,25 @@ def test_blocked_disposition_with_detail_is_ok():
     assert result.ok
 
 
-def test_terminal_disposition_without_detail_is_refused_not_a_free_bypass():
+def test_terminal_disposition_without_detail_is_refused_not_a_free_bypass() -> None:
     for disposition in ("closed", "spun_off", "blocked"):
         result = evaluate_gate([_item(disposition=disposition)])
         assert not result.ok, f"disposition={disposition} with no detail should be refused"
         assert "disposition_detail" in result.violations[0]
 
 
-def test_missing_carry_id_fails_loud():
+def test_missing_carry_id_fails_loud() -> None:
     result = evaluate_gate([{"description": "x", "disposition": "carried"}])
     assert not result.ok
     assert "carry_id" in result.violations[0]
 
 
-def test_unrecognized_disposition_fails_loud():
+def test_unrecognized_disposition_fails_loud() -> None:
     result = evaluate_gate([_item(disposition="ignored")])
     assert not result.ok
 
 
-def test_missing_disposition_fails_loud():
+def test_missing_disposition_fails_loud() -> None:
     result = evaluate_gate([{"carry_id": "cf-x-abc123", "description": "x"}])
     assert not result.ok
 
@@ -95,12 +97,12 @@ def _write_handoff(tmp_path, carried_items_yaml_block: str):
     return p
 
 
-def test_cli_exit_0_when_no_carried_items(tmp_path):
+def test_cli_exit_0_when_no_carried_items(tmp_path: Path) -> None:
     p = _write_handoff(tmp_path, "")
     assert main(["check", str(p)]) == 0
 
 
-def test_cli_exit_0_on_a_long_running_carry(tmp_path):
+def test_cli_exit_0_on_a_long_running_carry(tmp_path: Path) -> None:
     p = _write_handoff(
         tmp_path,
         "carried_items:\n"
@@ -111,7 +113,7 @@ def test_cli_exit_0_on_a_long_running_carry(tmp_path):
     assert main(["check", str(p)]) == 0
 
 
-def test_cli_exit_1_on_undeclared_disposition(tmp_path, capsys):
+def test_cli_exit_1_on_undeclared_disposition(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write_handoff(
         tmp_path,
         "carried_items:\n"
@@ -126,11 +128,11 @@ def test_cli_exit_1_on_undeclared_disposition(tmp_path, capsys):
     assert "cf-windows-validation-3f2a1c" in err
 
 
-def test_cli_exit_2_on_missing_path():
+def test_cli_exit_2_on_missing_path() -> None:
     assert main(["check", "/nonexistent/path/handoff.md"]) == 2
 
 
-def test_cli_exit_2_on_stale_override_reason_trailing_arg(tmp_path):
+def test_cli_exit_2_on_stale_override_reason_trailing_arg(tmp_path: Path) -> None:
     p = _write_handoff(
         tmp_path,
         "carried_items:\n"

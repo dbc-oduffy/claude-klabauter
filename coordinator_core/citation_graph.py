@@ -70,6 +70,7 @@ chunk W2-C3.
 
 from __future__ import annotations
 
+import os
 import random
 import re
 from dataclasses import dataclass, field
@@ -423,14 +424,44 @@ def load_wiki_index(wiki_root: Path = WIKI_ROOT) -> "dict[str, tuple[Path, ...]]
     return {name: tuple(paths) for name, paths in index.items()}
 
 
+def _git_markdown_files(repo_root: Path) -> "list[Path] | None":
+    """`*.md` files git knows (tracked or untracked-not-ignored)
+    under `repo_root`; `None` when `repo_root` is not a git root or the
+    listing fails."""
+    if not (repo_root / ".git").exists():
+        return None
+    from coordinator_core.git.run import run_git
+
+    base = ["-C", str(repo_root), "ls-files", "-z"]
+    try:
+        listed = run_git([*base, "--cached", "--others", "--exclude-standard", "--", "*.md"], binary=True)
+        deleted = run_git([*base, "--deleted", "--", "*.md"], binary=True)
+    except Exception:
+        return None
+    if listed.returncode != 0 or deleted.returncode != 0:
+        return None
+    gone = set(deleted.stdout_bytes.split(bytes(1)))
+    names = {n for n in listed.stdout_bytes.split(bytes(1)) if n and n not in gone}
+    return [repo_root / n.decode("utf-8", "surrogateescape") for n in sorted(names)]
+
+
 def load_repo_index(repo_root: Path = REPO_ROOT) -> "dict[str, tuple[Path, ...]]":
     """`basename -> (path, ...)` for every `*.md` file in the whole repo
     (used only for the cross-surface class -- a basename resolving here but
-    not in the wiki index is live-elsewhere, not rot)."""
+    not in the wiki index is live-elsewhere, not rot).
+
+    A git checkout is enumerated with one `git ls-files` (tracked plus
+    untracked-not-ignored), so ignored scratch/worktree markdown never enters
+    the index; a non-git root, or a failed listing, falls back to a full
+    `os.walk`."""
+    found = _git_markdown_files(Path(repo_root))
+    if found is None:
+        found = []
+        for dirpath, dirnames, filenames in os.walk(repo_root):
+            dirnames[:] = [d for d in dirnames if d != ".git"]
+            found.extend(Path(dirpath, f) for f in filenames if f.endswith(".md"))
     index: "dict[str, list[Path]]" = {}
-    for path in sorted(repo_root.rglob("*.md")):
-        if ".git" in path.parts:
-            continue
+    for path in sorted(found):
         index.setdefault(path.name, []).append(path)
     return {name: tuple(paths) for name, paths in index.items()}
 

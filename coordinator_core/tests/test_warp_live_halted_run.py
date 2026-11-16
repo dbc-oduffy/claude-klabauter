@@ -9,6 +9,7 @@ import pytest
 from coordinator_core import warp_live
 from coordinator_core.ops.dispatch_emit import halted_run, run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+from pathlib import Path
 
 SIZING = "state/sizings/mine.yaml"
 SCRIPT = "scratch/warp/run.workflow.mjs"
@@ -16,7 +17,7 @@ RUN = "warp-mine-20261021T191648-bb4d27"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     (root / ".git").mkdir(parents=True)
     managed = tmp_path / "managed"
@@ -39,29 +40,29 @@ def _live(root):
     )
 
 
-def _mark(root, status):
+def _mark(root, status) -> None:
     d = root / "state" / "warp" / RUN
     d.mkdir(parents=True, exist_ok=True)
     (d / halted_run.HALTED_FILE).write_text(json.dumps({"status": status}), encoding="utf-8")
 
 
-def test_unmarked_run_with_live_token_reads_live(repo):
+def test_unmarked_run_with_live_token_reads_live(repo) -> None:
     assert _live(repo) == (RUN, RUN)
 
 
 @pytest.mark.parametrize("status", ["halted", "landed"])
-def test_halted_or_landed_marker_overrides_a_stale_live_token(repo, status):
+def test_halted_or_landed_marker_overrides_a_stale_live_token(repo, status) -> None:
     _mark(repo, status)
     assert run_token.is_live(repo, RUN)
     assert _live(repo) == (None, None)
 
 
-def test_resumed_marker_still_reads_live(repo):
+def test_resumed_marker_still_reads_live(repo) -> None:
     _mark(repo, "resumed")
     assert _live(repo) == (RUN, RUN)
 
 
-def test_halted_agrees_with_revise_run_live(repo):
+def test_halted_agrees_with_revise_run_live(repo) -> None:
     _mark(repo, "halted")
     d = record_dir(repo, RUN)
     halted_run.mark_revised(d, "2026-10-21T19:30:00Z")

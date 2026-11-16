@@ -37,6 +37,7 @@ the two shapes this row ports.
 from __future__ import annotations
 
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write as guard
+import pytest
 
 SURFACES = [
     "global-doctrine/CLAUDE.md",
@@ -86,7 +87,7 @@ def test_has_write_marker_agrees_with_the_split_helpers() -> None:
         assert guard._has_write_marker(cmd) is expected, cmd
 
 
-def test_quoted_script_syntax_redirect_falls_back_to_non_redirect_marker(monkeypatch) -> None:
+def test_quoted_script_syntax_redirect_falls_back_to_non_redirect_marker(monkeypatch: pytest.MonkeyPatch) -> None:
     """DoE's quoted-redirect fallback: once the only `>` in the raw segment
     lives inside a quoted span (script syntax, not a real redirect), the
     point-3 write-marker leg must ask `_has_non_redirect_write_marker`

@@ -9,6 +9,7 @@ from coordinator_core.ops.ceremony import commit_path_legality, git_native
 from coordinator_core.win_portability import no_console_creationflags
 
 from .fixtures.real_git import real_git_repo
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -27,7 +28,7 @@ def _commit(root, path, content):
 
 
 @pytest.mark.parametrize("path", ["docs/plan: phase 2.md", "state/a:b/row.yaml", "notes/trailing."])
-def test_an_illegal_path_is_refused_and_nothing_lands(tmp_path, path):
+def test_an_illegal_path_is_refused_and_nothing_lands(tmp_path: Path, path) -> None:
     root = real_git_repo(tmp_path)
     before = _head(root)
     result = _commit(root, path, "body\n")
@@ -37,16 +38,16 @@ def test_an_illegal_path_is_refused_and_nothing_lands(tmp_path, path):
     assert _head(root) == before
 
 
-def test_a_legal_path_lands(tmp_path):
+def test_a_legal_path_lands(tmp_path: Path) -> None:
     root = real_git_repo(tmp_path)
     result = _commit(root, "docs/plan-phase-2.md", "body\n")
     assert result.ok, result.stderr
 
 
-def test_a_deletion_is_never_refused():
+def test_a_deletion_is_never_refused() -> None:
     assert commit_path_legality.illegal_path_refusal({"a:b.md": git_native._ABSENT}) is None
 
 
-def test_the_shared_override_key_disables_it(monkeypatch):
+def test_the_shared_override_key_disables_it(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_OVERRIDE_ILLEGAL_FILENAME", "1")
     assert commit_path_legality.illegal_path_refusal({"a:b.md": ("100644", "0" * 40)}) is None

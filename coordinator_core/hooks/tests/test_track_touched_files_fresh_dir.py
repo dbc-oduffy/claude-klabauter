@@ -79,6 +79,7 @@ from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.session import touch_record
 from coordinator_core.session_hub_path import hub_for_common, session_dir_for
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -108,7 +109,7 @@ def _decoded_paths(sink_path) -> list[str]:
 
 class TestHandlerWritesIntoFreshSessionDir:
 
-    def test_t_event_lands_when_session_dir_did_not_exist(self, tmp_path):
+    def test_t_event_lands_when_session_dir_did_not_exist(self, tmp_path: Path) -> None:
         repo = _make_repo(tmp_path)
         (repo / "src").mkdir()
         target = repo / "src" / "new.py"
@@ -145,7 +146,7 @@ class TestHandlerWritesIntoFreshSessionDir:
 
 class TestAppendTouchRecordSelfCreatesItsParentDir:
 
-    def test_append_creates_missing_parent_chain_and_lands_the_event(self, tmp_path):
+    def test_append_creates_missing_parent_chain_and_lands_the_event(self, tmp_path: Path) -> None:
         sink = tmp_path / "does" / "not" / "exist" / "yet" / "touch-record.jsonl"
         assert not sink.parent.exists(), (
             "test fixture leaked a pre-existing parent dir; the point of "
@@ -166,8 +167,8 @@ class TestAppendTouchRecordSelfCreatesItsParentDir:
 class TestSessionRecordSelfCreatesViaCoreInit:
 
     def test_meta_json_lands_via_core_init_mkdir_even_with_hooks_makedirs_disabled(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         repo = _make_repo(tmp_path)
         common_dir = git_common_dir(repo)
         session_id = "freshdirinit0001"

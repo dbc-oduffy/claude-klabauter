@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from pathlib import Path
 
 SKILL_INVOCATION = re.compile(
     r"following the [\w`:\- ]{0,40}skill|invoke the coordinator:|run /execute-plan|"
@@ -23,7 +24,7 @@ def _stub_wrap(text):
     return "  async function planBlitz(args) {\n    return { ready: [] };\n  }", ["Size", "Plan"]
 
 
-def _compose(**over):
+def _compose(**over) -> str:
     kw = dict(
         repo_root="REPO", prompt="add a thing", sizing_rel=None, run_id="run-1", session_id=None,
         wrap_stage=_stub_wrap, plan_blitz_text="stub", roadmap_blitz_text=_RB, **REVIEW_KW,
@@ -32,7 +33,7 @@ def _compose(**over):
     return compose_ask_script(**kw)
 
 
-def _root_with_skill(monkeypatch, tmp_path, *, with_file=True):
+def _root_with_skill(monkeypatch, tmp_path, *, with_file: bool = True) -> None:
     # plan-blitz reads the plugin root's review-signals contract; an empty one is enough here.
     (tmp_path / "contract").mkdir()
     (tmp_path / "contract" / "review-signals.json").write_text('{"signals": {}}', encoding="utf-8")
@@ -46,14 +47,14 @@ def _root_with_skill(monkeypatch, tmp_path, *, with_file=True):
     )
 
 
-def test_size_arm_names_the_sizing_skill_md_as_a_file_to_read(monkeypatch, tmp_path):
+def test_size_arm_names_the_sizing_skill_md_as_a_file_to_read(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _root_with_skill(monkeypatch, tmp_path)
     script = _compose()
     assert SKILL_INVOCATION.search(script) is None
     assert (tmp_path / "skills" / "sizing" / "SKILL.md").as_posix() in script
 
 
-def test_unresolved_root_drops_the_pointer_and_stays_skill_free(monkeypatch, tmp_path):
+def test_unresolved_root_drops_the_pointer_and_stays_skill_free(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _root_with_skill(monkeypatch, tmp_path, with_file=False)
     script = _compose()
     assert SKILL_INVOCATION.search(script) is None
@@ -62,7 +63,7 @@ def test_unresolved_root_drops_the_pointer_and_stays_skill_free(monkeypatch, tmp
 
 
 @pytest.mark.parametrize("over", [{}, {"prompt": None, "sizing_rel": "state/sizings/x.yaml"}])
-def test_no_arm_prompt_matches_a_skill_invocation_phrase(monkeypatch, tmp_path, over):
+def test_no_arm_prompt_matches_a_skill_invocation_phrase(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, over) -> None:
     _root_with_skill(monkeypatch, tmp_path)
     try:
         script = _compose(**over)

@@ -2,17 +2,18 @@
 import json
 
 from coordinator_core.host_hooks.ue_route import REQUIRED_TOOLS, probe_example_retrieval_repo
+from pathlib import Path
 
 
-def test_configured_connected_tools_and_serving_addon_are_required(tmp_path):
+def test_configured_connected_tools_and_serving_addon_are_required(tmp_path: Path) -> None:
     config=tmp_path/'config.toml';config.write_text('[mcp_servers.project-rag]\nurl="http://localhost/mcp"\n')
     calls=[]
     class Response:
         headers={}
-        def __init__(self, value):self.value=value
+        def __init__(self, value) -> None:self.value=value
         def __enter__(self):return self
         def __exit__(self,*args):pass
-        def read(self,*args):return json.dumps(self.value).encode()
+        def read(self,*args) -> bytes:return json.dumps(self.value).encode()
     def open(request,timeout):
         msg=json.loads(request.data);calls.append(msg['method'])
         if msg['method']=='tools/list':return Response({'result':{'tools':[{'name':n} for n in REQUIRED_TOOLS]}})
@@ -22,14 +23,14 @@ def test_configured_connected_tools_and_serving_addon_are_required(tmp_path):
     assert calls==['initialize','notifications/initialized','tools/list','tools/call']
 
 
-def test_installed_or_configured_without_serving_route_is_unverified(tmp_path):
+def test_installed_or_configured_without_serving_route_is_unverified(tmp_path: Path) -> None:
     config=tmp_path/'config.toml';config.write_text('[mcp_servers.project-rag]\nurl="http://localhost/mcp"\n')
     def offline(*args,**kwargs):raise TimeoutError('offline')
     assert probe_example_retrieval_repo(config_path=config,opener=offline)['ready'] is False
     assert probe_example_retrieval_repo(config_path=tmp_path/'missing')['ready'] is False
 
 
-def test_exhausted_probe_budget_performs_no_network(tmp_path):
+def test_exhausted_probe_budget_performs_no_network(tmp_path: Path) -> None:
     config = tmp_path / 'config.toml'
     config.write_text('[mcp_servers.project-rag]\nurl="http://localhost/mcp"\n')
     ticks = iter([0, 1])
@@ -40,7 +41,7 @@ def test_exhausted_probe_budget_performs_no_network(tmp_path):
     assert result['stage'] == 'initialize' and result['error_type'] == 'TimeoutError'
 
 
-def test_configured_tools_without_ue_capabilities_never_claim_solution(tmp_path):
+def test_configured_tools_without_ue_capabilities_never_claim_solution(tmp_path: Path) -> None:
     config = tmp_path / 'config.toml'
     config.write_text('[mcp_servers.project-rag]\nurl="http://localhost/mcp"\n')
     calls = []
@@ -56,15 +57,15 @@ def test_configured_tools_without_ue_capabilities_never_claim_solution(tmp_path)
     assert 'tools/call' not in calls
 
 
-def test_safe_stage_and_tool_evidence_never_reflect_credentials_or_claim_retrieval(tmp_path):
+def test_safe_stage_and_tool_evidence_never_reflect_credentials_or_claim_retrieval(tmp_path: Path) -> None:
     config = tmp_path / 'config.toml'
     config.write_text('[mcp_servers.project-rag]\nurl="https://alice:route-secret@example.invalid/mcp?token=query-secret"\nhttp_headers={Authorization="Bearer header-secret"}\n')
     class Response:
         headers = {}
-        def __init__(self, value): self.value = value
+        def __init__(self, value) -> None: self.value = value
         def __enter__(self): return self
         def __exit__(self, *args): pass
-        def read(self, *args): return json.dumps(self.value).encode()
+        def read(self, *args) -> bytes: return json.dumps(self.value).encode()
     def missing_tools(request, timeout):
         message = json.loads(request.data)
         return Response({'result': {'tools': [{'name': 'engine_domain_status'}]}} if message['method'] == 'tools/list' else {'result': {}})

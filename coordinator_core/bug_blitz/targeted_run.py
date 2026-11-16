@@ -295,7 +295,7 @@ def run(
     repo_root = Path(repo_root)
     row_id, _ = _load_row(Path(row_path))
 
-    def record(outcome, *, runner="", argv=(), selected=(), exit_code=None, failing=(), foreign_holders=()):
+    def record(outcome, *, runner: str = "", argv=(), selected=(), exit_code=None, failing=(), foreign_holders=()) -> RunnerRecord:
         return RunnerRecord(
             row_id=row_id,
             runner=runner,
@@ -379,7 +379,7 @@ def _judge_committed(repo_root, plans, timeout):
     return (OUTCOME_PASSED if worst == 0 else OUTCOME_FAILED), worst, failing, ()
 
 
-def _judge(repo_root, touched, plans, timeout, committed_head=False):
+def _judge(repo_root, touched, plans, timeout, committed_head: bool = False):
     """(outcome, exit code, failing ids, foreign holders): HEAD plus the row's own edits when foreign dirt exists.
 
     No foreign dirty path (or no HEAD tree obtainable): the live tree is judged as before. A pass at

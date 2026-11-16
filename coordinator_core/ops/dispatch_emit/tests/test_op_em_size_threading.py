@@ -10,12 +10,13 @@ import pytest
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
+from pathlib import Path
 
 _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
@@ -31,18 +32,18 @@ def _emit(repo, **extra):
     return result, script.read_text(encoding="utf-8")
 
 
-def test_em_size_is_accepted_and_rides_the_composed_script(repo):
+def test_em_size_is_accepted_and_rides_the_composed_script(repo) -> None:
     result, script = _emit(repo, em_size="m")
     assert "error" not in result
     assert 'em_size: "M"' in script
 
 
-def test_no_em_size_leaves_the_script_without_it(repo):
+def test_no_em_size_leaves_the_script_without_it(repo) -> None:
     _result, script = _emit(repo)
     assert "em_size:" not in script
 
 
-def test_em_size_outside_the_size_set_is_refused(repo):
+def test_em_size_outside_the_size_set_is_refused(repo) -> None:
     with pytest.raises(ValueError, match="em_size"):
         _emit(repo, em_size="HUGE")
     assert not list((repo / RUN_DIR_ROOT).glob("*.workflow.mjs"))

@@ -50,6 +50,37 @@ def _violations(repo: Path) -> list[tuple[str, str]]:
     return find_commit_module_attr_violations(repo, _git(repo, "rev-parse", "HEAD"))[1]
 
 
+def _would_be(repo: Path, overlay: dict):
+    from percolate.import_closure import find_would_be_tree_violations
+
+    def reader(sha: str):
+        return subprocess.run(
+            ["git", "-C", str(repo), "cat-file", "blob", sha], check=True, capture_output=True
+        ).stdout
+
+    return find_would_be_tree_violations(repo, _git(repo, "rev-parse", "HEAD"), overlay, reader)[1]
+
+
+def test_would_be_tree_refuses_staged_caller_when_overlay_lacks_the_attr(tmp_path):
+    repo = _repo(tmp_path, caller="from coordinator_core import ledger\n")
+    violations = _would_be(repo, {"coordinator_core/caller.py": _CALLER})
+    assert violations == [("coordinator_core/caller.py", "coordinator_core.ledger.advisory_text")]
+
+
+def test_would_be_tree_passes_when_overlay_defines_the_attr(tmp_path):
+    repo = _repo(tmp_path, caller="from coordinator_core import ledger\n")
+    overlay = {
+        "coordinator_core/caller.py": _CALLER,
+        "coordinator_core/ledger.py": "def advisory_text():\n    pass\n",
+    }
+    assert _would_be(repo, overlay) == []
+
+
+def test_would_be_tree_does_not_judge_unstaged_importers(tmp_path):
+    repo = _repo(tmp_path)  # committed caller is already broken but not in the overlay
+    assert _would_be(repo, {"coordinator_core/ledger.py": "def revise():\n    pass\n"}) == []
+
+
 def test_attr_missing_from_committed_module_is_refused_naming_file_and_attr(tmp_path):
     repo = _repo(tmp_path)
     examined, violations = find_commit_module_attr_violations(repo, _git(repo, "rev-parse", "HEAD"))

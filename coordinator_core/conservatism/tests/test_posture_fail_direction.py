@@ -32,11 +32,16 @@ import sys
 import pytest
 
 from coordinator_core.testing.content_root import resolve_content_root
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _ANCHOR = "precision"
 
 
-def _load_posture():
+def _load_posture() -> ModuleType:
     root = resolve_content_root()
     if not root:
         pytest.skip("coordinator-claude sibling root unresolvable on this box")
@@ -53,7 +58,7 @@ def _load_posture():
 
 
 @pytest.fixture()
-def posture(monkeypatch, tmp_path):
+def posture(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     module = _load_posture()
     try:
         home = tmp_path / "home"
@@ -70,11 +75,11 @@ def _resolve(module, repo_root):
     return module.resolve_posture(repo_root=str(repo_root))
 
 
-def test_anchor_constant_is_a_valid_posture(posture):
+def test_anchor_constant_is_a_valid_posture(posture) -> None:
     assert _ANCHOR in posture._VALID_POSTURES
 
 
-def test_control_a_valid_declaration_resolves_to_something_else(posture, tmp_path):
+def test_control_a_valid_declaration_resolves_to_something_else(posture, tmp_path: Path) -> None:
     root = tmp_path / "control"
     root.mkdir()
     (root / "coordinator.local.md").write_text(
@@ -84,20 +89,20 @@ def test_control_a_valid_declaration_resolves_to_something_else(posture, tmp_pat
     assert _resolve(posture, root) != _ANCHOR
 
 
-def test_absent_files_return_the_anchor(posture, tmp_path):
+def test_absent_files_return_the_anchor(posture, tmp_path: Path) -> None:
     root = tmp_path / "empty"
     root.mkdir()
     assert _resolve(posture, root) == _ANCHOR
 
 
-def test_present_file_without_the_key_returns_the_anchor(posture, tmp_path):
+def test_present_file_without_the_key_returns_the_anchor(posture, tmp_path: Path) -> None:
     root = tmp_path / "nokey"
     root.mkdir()
     (root / "coordinator.local.md").write_text("---\ntitle: something else\n---\n", encoding="utf-8")
     assert _resolve(posture, root) == _ANCHOR
 
 
-def test_value_outside_the_enum_returns_the_anchor(posture, tmp_path):
+def test_value_outside_the_enum_returns_the_anchor(posture, tmp_path: Path) -> None:
     root = tmp_path / "bogus"
     root.mkdir()
     (root / "coordinator.local.md").write_text(
@@ -106,7 +111,7 @@ def test_value_outside_the_enum_returns_the_anchor(posture, tmp_path):
     assert _resolve(posture, root) == _ANCHOR
 
 
-def test_unreadable_file_returns_the_anchor(posture, monkeypatch, tmp_path):
+def test_unreadable_file_returns_the_anchor(posture, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "unreadable"
     root.mkdir()
     (root / "coordinator.local.md").write_text(
@@ -140,14 +145,14 @@ class _ExplodingPathOs:
         def __getattr__(self, name):
             return getattr(os.path, name)
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.path = self._ExplodingPath()
 
     def __getattr__(self, name):
         return getattr(os, name)
 
 
-def test_arbitrary_exception_in_the_body_returns_the_anchor(posture, monkeypatch, tmp_path):
+def test_arbitrary_exception_in_the_body_returns_the_anchor(posture, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "explode"
     root.mkdir()
     monkeypatch.setattr(posture, "os", _ExplodingPathOs())

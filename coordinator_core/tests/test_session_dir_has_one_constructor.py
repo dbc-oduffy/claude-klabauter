@@ -73,6 +73,7 @@ from typing import List, Optional, Tuple
 import pytest
 
 from coordinator_core.session_hub_path import HUB_NAME
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -304,7 +305,7 @@ def find_session_dir_mkdirs(root: pathlib.Path, repo_root: pathlib.Path) -> List
     return found
 
 
-def test_no_module_mkdirs_a_session_directory():
+def test_no_module_mkdirs_a_session_directory() -> None:
     """The gate. Every session directory on this machine is created by
     ``session/core.py::ensure_session``, which produces the directory and its
     ``meta.json`` record together or neither."""
@@ -325,7 +326,7 @@ def test_no_module_mkdirs_a_session_directory():
     )
 
 
-def test_a_new_bare_mkdir_of_a_session_dir_is_caught(tmp_path):
+def test_a_new_bare_mkdir_of_a_session_dir_is_caught(tmp_path: Path) -> None:
     """Negative control: the gate must actually fire on the shape every
     converted site used, or it is decoration."""
     mod = tmp_path / "newwriter.py"
@@ -340,7 +341,7 @@ def test_a_new_bare_mkdir_of_a_session_dir_is_caught(tmp_path):
     assert found == ["newwriter.py:4::write_something"]
 
 
-def test_the_session_hub_path_resolvers_are_caught(tmp_path):
+def test_the_session_hub_path_resolvers_are_caught(tmp_path: Path) -> None:
     """The hub resolvers (``hub_for_common`` / ``hub_for_root``) and the
     session-dir resolver (``session_dir_for``) answer with the hub / a session
     dir, so a mkdir through them is a session-directory mkdir; a literal-named
@@ -366,7 +367,7 @@ def test_the_session_hub_path_resolvers_are_caught(tmp_path):
     ]
 
 
-def test_the_os_makedirs_spelling_is_caught_too(tmp_path):
+def test_the_os_makedirs_spelling_is_caught_too(tmp_path: Path) -> None:
     """Half the converted sites spelled it ``os.makedirs``, resolved through a
     ``session_dir()`` call rather than a literal hub component."""
     mod = tmp_path / "otherwriter.py"
@@ -382,7 +383,7 @@ def test_the_os_makedirs_spelling_is_caught_too(tmp_path):
     assert found == ["otherwriter.py:5::write_something"]
 
 
-def test_a_literal_named_hub_child_is_not_flagged(tmp_path):
+def test_a_literal_named_hub_child_is_not_flagged(tmp_path: Path) -> None:
     """Second half, and it matters as much as the first: ``logs``,
     ``.archive``, ``.agents`` and ``no-session`` are denylisted hub bookkeeping
     (``liveness._NON_SESSION_DIR_NAMES``), not sessions. A guard that flagged
@@ -401,7 +402,7 @@ def test_a_literal_named_hub_child_is_not_flagged(tmp_path):
     assert find_session_dir_mkdirs(tmp_path, tmp_path) == []
 
 
-def test_a_sibling_corpus_keyed_on_a_session_id_is_not_flagged(tmp_path):
+def test_a_sibling_corpus_keyed_on_a_session_id_is_not_flagged(tmp_path: Path) -> None:
     """``state/subagent-share/<sid>`` and the settings-home sidecars key a
     directory on a session id and are NOT sessions. Routing them through
     ``ensure_session`` would mint a session record for something that is not a
@@ -417,7 +418,7 @@ def test_a_sibling_corpus_keyed_on_a_session_id_is_not_flagged(tmp_path):
     assert find_session_dir_mkdirs(tmp_path, tmp_path) == []
 
 
-def test_a_test_module_is_never_scanned(tmp_path):
+def test_a_test_module_is_never_scanned(tmp_path: Path) -> None:
     """Fixtures legitimately build session dirs by hand in their own tmp trees.
     The live-hub litter they used to leave is a different guard's job
     (``conftest``'s ``_no_new_live_session_hub_entries``, pinned by
@@ -434,7 +435,7 @@ def test_a_test_module_is_never_scanned(tmp_path):
     assert find_session_dir_mkdirs(tmp_path, tmp_path) == []
 
 
-def test_named_exemption_still_describes_a_real_site():
+def test_named_exemption_still_describes_a_real_site() -> None:
     """Self-invalidating exemption (mirrors ``test_no_legacy_touch_record_
     literal.py``'s ``_PRODUCTION_EXEMPT_SITES`` discipline): each entry must
     still name a symbol that actually contains a session-directory mkdir at

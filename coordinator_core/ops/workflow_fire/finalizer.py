@@ -21,11 +21,11 @@ class FinalizerRefused(RuntimeError):
     pass
 
 
-def _json(value):
+def _json(value) -> str:
     return json.dumps(value, sort_keys=True, separators=(',', ':'))
 
 
-def _write(path, value):
+def _write(path, value) -> None:
     path = Path(path)
     temporary = path.with_name(path.name + '.' + str(os.getpid()) + '.tmp')
     with temporary.open('x', encoding='utf-8', newline='\n') as stream:
@@ -35,7 +35,7 @@ def _write(path, value):
     os.replace(temporary, path)
 
 
-def _git(repo, args):
+def _git(repo, args) -> str:
     from coordinator_core.git.run import run_git
     reply = run_git(args, cwd=str(repo))
     if not reply.ok:
@@ -43,7 +43,7 @@ def _git(repo, args):
     return reply.stdout.strip()
 
 
-def _position(repo):
+def _position(repo) -> dict[str, str]:
     return {'branch': _git(repo, ['symbolic-ref', '--quiet', 'HEAD']),
             'head': _git(repo, ['rev-parse', 'HEAD'])}
 
@@ -59,7 +59,7 @@ def snapshot_contract(repo, script):
     root = Path(repo).resolve(strict=True)
     files = {}
 
-    def read(path):
+    def read(path) -> str:
         path = Path(path)
         if not path.is_absolute():
             path = root / path
@@ -103,7 +103,7 @@ def snapshot_contract(repo, script):
             'has_request': request is not None}
 
 
-def verify_contract(repo, contract):
+def verify_contract(repo, contract) -> None:
     root = Path(repo).resolve(strict=True)
     script = contract.get('script_path')
     if (not isinstance(script, str) or not script or PureWindowsPath(script).drive
@@ -252,7 +252,7 @@ def _explicit_path(raw):
     return p
 
 
-def authorize_product(repo, paths, deleted, reviewed, host_metadata=None, *, supplied_blobs=None, merging=False):
+def authorize_product(repo, paths, deleted, reviewed, host_metadata=None, *, supplied_blobs=None, merging: bool = False) -> None:
     """Existing terminal guard hands its reviewed product and named own writes to Git guard.
 
     Only the producer calls this after its normal plan/review gates; model parameters cannot

@@ -11,20 +11,21 @@ from coordinator_core.session.touch_record import (
     encode_line,
     _last_verb_wins,
 )
+from pathlib import Path
 
 
-def test_compute_content_hash_matches_hashlib_sha256(tmp_path):
+def test_compute_content_hash_matches_hashlib_sha256(tmp_path: Path) -> None:
     target = tmp_path / "file.txt"
     target.write_bytes(b"hello world")
     expected = hashlib.sha256(b"hello world").hexdigest()
     assert compute_content_hash(target) == expected
 
 
-def test_compute_content_hash_returns_none_for_missing_file(tmp_path):
+def test_compute_content_hash_returns_none_for_missing_file(tmp_path: Path) -> None:
     assert compute_content_hash(tmp_path / "does-not-exist.txt") is None
 
 
-def test_compute_content_hash_differs_for_different_content(tmp_path):
+def test_compute_content_hash_differs_for_different_content(tmp_path: Path) -> None:
     a = tmp_path / "a.txt"
     b = tmp_path / "b.txt"
     a.write_bytes(b"same size a")
@@ -33,7 +34,7 @@ def test_compute_content_hash_differs_for_different_content(tmp_path):
     assert compute_content_hash(a) != compute_content_hash(b)
 
 
-def test_encode_decode_round_trips_content_hash():
+def test_encode_decode_round_trips_content_hash() -> None:
     digest = hashlib.sha256(b"payload").hexdigest()
     encoded = encode_line(
         session_id="sess-1",
@@ -46,7 +47,7 @@ def test_encode_decode_round_trips_content_hash():
     assert event.content_hash == digest
 
 
-def test_encode_omits_hash_field_when_none():
+def test_encode_omits_hash_field_when_none() -> None:
     encoded = encode_line(
         session_id="sess-1",
         agent_id=None,
@@ -56,7 +57,7 @@ def test_encode_omits_hash_field_when_none():
     assert b'"hash"' not in encoded
 
 
-def test_decode_line_content_hash_defaults_to_none_when_absent():
+def test_decode_line_content_hash_defaults_to_none_when_absent() -> None:
     encoded = encode_line(
         session_id="sess-1",
         agent_id=None,
@@ -67,7 +68,7 @@ def test_decode_line_content_hash_defaults_to_none_when_absent():
     assert event.content_hash is None
 
 
-def test_decode_line_rejects_non_string_hash():
+def test_decode_line_rejects_non_string_hash() -> None:
     import json
 
     record = {
@@ -87,7 +88,7 @@ def test_decode_line_rejects_non_string_hash():
         decode_line(line)
 
 
-def test_last_verb_wins_supersedes_earlier_hash_for_same_path():
+def test_last_verb_wins_supersedes_earlier_hash_for_same_path() -> None:
     h1 = hashlib.sha256(b"v1").hexdigest()
     h3 = hashlib.sha256(b"v3").hexdigest()
     event_v1 = decode_line(

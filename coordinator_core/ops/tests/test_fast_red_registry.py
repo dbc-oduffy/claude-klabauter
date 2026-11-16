@@ -10,6 +10,7 @@ from coordinator_core.ops.fast_red_registry import (
     load_registry,
     registry_problems,
 )
+from pathlib import Path
 
 TODAY = date(2026, 10, 1)
 
@@ -31,46 +32,46 @@ def _reg(**cluster_kw):
     return {"clusters": {"c": _cluster(**cluster_kw)}, "entries": {"a/t.py::t1": "c", "b/t.py::t2": "c"}}
 
 
-def _delta(failing, reg, platform="win32", scope=None):
+def _delta(failing, reg, platform: str = "win32", scope=None):
     return compute_delta(failing, reg, platform=platform, scope=scope)
 
 
-def test_unregistered_is_new():
+def test_unregistered_is_new() -> None:
     assert _delta(["z.py::t"], _reg()).new == ("z.py::t",)
 
 
-def test_registered_is_standing():
+def test_registered_is_standing() -> None:
     d = _delta(["a/t.py::t1"], _reg())
     assert d.standing == ("a/t.py::t1",) and d.new == ()
 
 
-def test_win32_cluster_as_linux_is_new():
+def test_win32_cluster_as_linux_is_new() -> None:
     d = _delta(["a/t.py::t1"], _reg(platforms=["win32"]), platform="linux")
     assert d.new == ("a/t.py::t1",)
 
 
-def test_intermittent_excluded_from_fixed():
+def test_intermittent_excluded_from_fixed() -> None:
     assert _delta([], _reg(intermittent=True)).fixed == ()
 
 
-def test_scope_prefix_limits_fixed():
+def test_scope_prefix_limits_fixed() -> None:
     assert _delta([], _reg(), scope=["a/"]).fixed == ("a/t.py::t1",)
 
 
-def test_scope_none_computes_fixed_over_all():
+def test_scope_none_computes_fixed_over_all() -> None:
     assert _delta([], _reg()).fixed == ("a/t.py::t1", "b/t.py::t2")
 
 
-def test_missing_registry_raises(tmp_path):
+def test_missing_registry_raises(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         load_registry(tmp_path / "nope.yaml")
 
 
-def _probs(reg, tmp_path):
+def _probs(reg, tmp_path) -> list[str]:
     return registry_problems(reg, today=TODAY, repo_root=tmp_path)
 
 
-def test_clean_registry(tmp_path):
+def test_clean_registry(tmp_path: Path) -> None:
     (tmp_path / "owner.md").write_text("x")
     assert _probs(_reg(), tmp_path) == []
 
@@ -86,12 +87,12 @@ def test_clean_registry(tmp_path):
         ({"review_by": "2026-09-30"}, "past"),
     ],
 )
-def test_problem_arms(tmp_path, kw, needle):
+def test_problem_arms(tmp_path: Path, kw, needle) -> None:
     (tmp_path / "owner.md").write_text("x")
     assert any(needle in p for p in _probs(_reg(**kw), tmp_path))
 
 
-def test_unknown_cluster_and_empty_cluster(tmp_path):
+def test_unknown_cluster_and_empty_cluster(tmp_path: Path) -> None:
     (tmp_path / "owner.md").write_text("x")
     reg = {"clusters": {"c": _cluster()}, "entries": {"n": "ghost"}}
     out = _probs(reg, tmp_path)

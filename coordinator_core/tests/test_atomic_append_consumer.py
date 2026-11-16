@@ -5,6 +5,7 @@ import time
 import pytest
 
 from coordinator_core import atomic_append
+from pathlib import Path
 
 _real_write = atomic_append.os.write
 
@@ -17,7 +18,7 @@ def _join_writer(sink) -> None:
             assert not t.is_alive()
 
 
-def test_writer_dying_after_a_job_leaves_no_dead_registry_entry(tmp_path, monkeypatch, capsys):
+def test_writer_dying_after_a_job_leaves_no_dead_registry_entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     sink = tmp_path / "s.jsonl"
     key = str(sink)
 
@@ -36,7 +37,7 @@ def test_writer_dying_after_a_job_leaves_no_dead_registry_entry(tmp_path, monkey
     assert sink.read_bytes() == b"a\nb\n"
 
 
-def test_jobs_queued_behind_a_dying_writer_are_failed_not_stranded(tmp_path, monkeypatch):
+def test_jobs_queued_behind_a_dying_writer_are_failed_not_stranded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = tmp_path / "s.jsonl"
     key = str(sink)
 
@@ -61,11 +62,11 @@ def test_jobs_queued_behind_a_dying_writer_are_failed_not_stranded(tmp_path, mon
 
 
 @pytest.mark.deliberate_wall_clock(reason="the caller must return at wait_secs while the writer is blocked")
-def test_wait_secs_returns_false_and_the_line_still_lands(tmp_path, monkeypatch):
+def test_wait_secs_returns_false_and_the_line_still_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sink = tmp_path / "s.jsonl"
     gate = threading.Event()
 
-    def write(fd, data):
+    def write(fd, data) -> int:
         if threading.current_thread().name.startswith("atomic-append-writer"):
             gate.wait(10)
         return _real_write(fd, data)
@@ -83,18 +84,18 @@ def test_wait_secs_returns_false_and_the_line_still_lands(tmp_path, monkeypatch)
     assert sink.read_bytes() == b"a\nb\n"
 
 
-def test_wait_secs_returns_true_when_the_line_lands_in_time(tmp_path):
+def test_wait_secs_returns_true_when_the_line_lands_in_time(tmp_path: Path) -> None:
     sink = tmp_path / "s.jsonl"
     assert atomic_append.append_line(sink, b"a\n", wait_secs=5) is True
     assert sink.read_bytes() == b"a\n"
 
 
-def test_bulk_claim_index_append_raises_instead_of_waiting_on_a_stalled_sink(tmp_path, monkeypatch):
+def test_bulk_claim_index_append_raises_instead_of_waiting_on_a_stalled_sink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import touch_record
 
     seen = {}
 
-    def stalled(path, data, *, wait_secs=None, **kw):
+    def stalled(path, data, *, wait_secs=None, **kw) -> bool:
         seen["wait_secs"] = wait_secs
         return False
 

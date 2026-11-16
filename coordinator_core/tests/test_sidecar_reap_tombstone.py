@@ -8,6 +8,8 @@ import time
 
 from coordinator_core.review_trail.sweep_tombstone import swept_sidecars
 from coordinator_core.sidecar_reap import reap_stale_sidecars
+from pathlib import Path
+import pytest
 
 OLD = time.time() - 40 * 86400
 HOMES = (".coordinator-local/subagent-share", "state/subagent-share")
@@ -25,7 +27,7 @@ def _seed(repo, sid):
     return paths
 
 
-def test_dead_tombstoned_live_spared(tmp_path):
+def test_dead_tombstoned_live_spared(tmp_path: Path) -> None:
     repo = str(tmp_path)
     dead = _seed(tmp_path, "dead-sid")
     live = _seed(tmp_path, "live-sid")
@@ -39,7 +41,7 @@ def test_dead_tombstoned_live_spared(tmp_path):
     assert swept_sidecars(repo, "live-sid") == ()
 
 
-def test_dry_run_writes_no_tombstone(tmp_path):
+def test_dry_run_writes_no_tombstone(tmp_path: Path) -> None:
     repo = str(tmp_path)
     dead = _seed(tmp_path, "dead-sid")
     reap_stale_sidecars(repo, lambda sid, cwd=None: False, dry_run=True, out=io.StringIO())
@@ -47,7 +49,7 @@ def test_dry_run_writes_no_tombstone(tmp_path):
     assert swept_sidecars(repo, "dead-sid") == ()
 
 
-def test_cadence_reap_clears_dead_untracked_without_a_sweep_and_without_git(tmp_path, monkeypatch):
+def test_cadence_reap_clears_dead_untracked_without_a_sweep_and_without_git(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import sidecar_reap
 
     def _no_git(*a, **k):
@@ -65,7 +67,7 @@ def test_cadence_reap_clears_dead_untracked_without_a_sweep_and_without_git(tmp_
     assert {r["path"] for r in swept_sidecars(repo, "dead-sid")} == {f"{HOMES[0]}/dead-sid/review.md"}
 
 
-def test_cadence_reap_is_throttled_then_due_again(tmp_path):
+def test_cadence_reap_is_throttled_then_due_again(tmp_path: Path) -> None:
     from coordinator_core import sidecar_reap
 
     repo = str(tmp_path)
@@ -80,7 +82,7 @@ def test_cadence_reap_is_throttled_then_due_again(tmp_path):
     assert not first[0].exists()
 
 
-def test_cadence_reap_spares_young_and_blocked_and_honours_batch_cap(tmp_path):
+def test_cadence_reap_spares_young_and_blocked_and_honours_batch_cap(tmp_path: Path) -> None:
     from coordinator_core import sidecar_reap
 
     repo = str(tmp_path)
@@ -102,13 +104,13 @@ def test_cadence_reap_spares_young_and_blocked_and_honours_batch_cap(tmp_path):
     assert sum(f.exists() for f in old) == 1
 
 
-def test_cadence_reap_with_no_share_root_is_a_noop(tmp_path):
+def test_cadence_reap_with_no_share_root_is_a_noop(tmp_path: Path) -> None:
     from coordinator_core import sidecar_reap
 
     assert sidecar_reap.reap_untracked_if_due(str(tmp_path), lambda sid, cwd=None: False) == 0
 
 
-def test_subagent_start_hook_kicks_the_cadence_reap_detached_and_only_when_due(tmp_path, monkeypatch):
+def test_subagent_start_hook_kicks_the_cadence_reap_detached_and_only_when_due(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import asyncio
 
     from coordinator_core import sidecar_reap
@@ -119,7 +121,7 @@ def test_subagent_start_hook_kicks_the_cadence_reap_detached_and_only_when_due(t
     (tmp_path / ".git").mkdir()
     dead = _seed(tmp_path, "dead-sid")
 
-    async def _kick_and_drain():
+    async def _kick_and_drain() -> None:
         hook._kick_untracked_reap(str(tmp_path))
         for _ in range(200):
             if not hook._REAP_INFLIGHT:
@@ -136,7 +138,7 @@ def test_subagent_start_hook_kicks_the_cadence_reap_detached_and_only_when_due(t
     assert again[0].exists()  # stamped within the interval: not due, nothing started
 
 
-def test_subagent_start_hook_without_cwd_never_reaps(monkeypatch):
+def test_subagent_start_hook_without_cwd_never_reaps(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks import cater_subagent_start as hook
 
     monkeypatch.setattr(hook, "_show_toplevel_no_spawn", lambda cwd: (_ for _ in ()).throw(AssertionError("walked")))

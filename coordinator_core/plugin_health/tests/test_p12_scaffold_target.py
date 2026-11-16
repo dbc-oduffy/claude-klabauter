@@ -18,6 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.plugin_health.sentinel import probe_p12
+import pytest
 
 
 class _FakeScaffoldResult:
@@ -28,12 +29,12 @@ class _FakeScaffoldResult:
         return 7
 
 
-def test_p12_returns_empty_even_when_scaffold_would_create_entries(tmp_path, monkeypatch):
+def test_p12_returns_empty_even_when_scaffold_would_create_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     claude_home = tmp_path / ".claude"
     sibling_bin_dir = tmp_path / "settings-home" / "bin"
     sibling_bin_dir.mkdir(parents=True)
 
-    def _fake_scaffold_canonical_structure(*_args, **_kwargs):
+    def _fake_scaffold_canonical_structure(*_args, **_kwargs) -> _FakeScaffoldResult:
         return _FakeScaffoldResult()
 
     monkeypatch.setattr(
@@ -50,11 +51,11 @@ def test_p12_returns_empty_even_when_scaffold_would_create_entries(tmp_path, mon
     )
 
 
-def test_p12_returns_empty_with_no_sibling_bin_dir(tmp_path):
+def test_p12_returns_empty_with_no_sibling_bin_dir(tmp_path: Path) -> None:
     assert probe_p12(None, tmp_path / ".claude") == []
 
 
-def test_p12_never_names_claude_home_or_canonical_structure_in_a_note():
+def test_p12_never_names_claude_home_or_canonical_structure_in_a_note() -> None:
     """Even a probe wired to something surprising must not resurrect the
     old amber wording naming the Claude home as a restore target."""
     notes = probe_p12(Path("/nonexistent/bin"), Path("/nonexistent/.claude"))

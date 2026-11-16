@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import _named_tagged, gated_paths, named_paths
+import pytest
 
 
 def _repo(tmp_path):
@@ -16,28 +17,28 @@ def _repo(tmp_path):
     return tmp_path
 
 
-def test_admits_existing_files(tmp_path):
+def test_admits_existing_files(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     assert named_paths(["edit docs/plans/x.md and CLAUDE.md"], root) == ["docs/plans/x.md", "CLAUDE.md"]
 
 
-def test_dedupes_across_texts(tmp_path):
+def test_dedupes_across_texts(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     assert named_paths(["CLAUDE.md", "CLAUDE.md docs/plans/x.md"], root) == ["CLAUDE.md", "docs/plans/x.md"]
 
 
-def test_drops_unnameable_tokens(tmp_path):
+def test_drops_unnameable_tokens(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     texts = ["nodir/absent.md scratch/a.py ../x.md /etc/passwd.txt README word"]
     assert named_paths(texts, root) == []
 
 
-def test_strips_line_suffix(tmp_path):
+def test_strips_line_suffix(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     assert named_paths(["docs/plans/x.md:12"], root) == ["docs/plans/x.md"]
 
 
-def test_spelling_called_once_canonicalizes_and_dedupes(tmp_path):
+def test_spelling_called_once_canonicalizes_and_dedupes(tmp_path: Path) -> None:
     calls = []
 
     def spelling(paths):
@@ -49,7 +50,7 @@ def test_spelling_called_once_canonicalizes_and_dedupes(tmp_path):
     assert len(calls) == 1 and calls[0] == ["a/Pub.py", "a/gone.py", "a/pub.py", "a"]
 
 
-def test_new_file_in_existing_dir_admitted_with_one_spelling_call(tmp_path):
+def test_new_file_in_existing_dir_admitted_with_one_spelling_call(tmp_path: Path) -> None:
     (tmp_path / "pkg").mkdir()
     calls = []
 
@@ -63,7 +64,7 @@ def test_new_file_in_existing_dir_admitted_with_one_spelling_call(tmp_path):
     assert calls == [["pkg/new.py", "nodir/new.py", "pkg", "nodir"]]
 
 
-def test_new_file_under_case_variant_dir_admitted_when_variant_is_not_a_dir(tmp_path, monkeypatch):
+def test_new_file_under_case_variant_dir_admitted_when_variant_is_not_a_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "pkg").mkdir()
     real_is_dir = Path.is_dir
 
@@ -84,7 +85,7 @@ def test_new_file_under_case_variant_dir_admitted_when_variant_is_not_a_dir(tmp_
     assert len(calls) == 1 and "Pkg" in calls[0]
 
 
-def test_spelling_ignores_disk_and_parent_dir_leg(tmp_path):
+def test_spelling_ignores_disk_and_parent_dir_leg(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     (root / "docs/plans/y.md").write_text("x")
     backed = {"docs/plans/y.md": "docs/plans/y.md"}
@@ -92,7 +93,7 @@ def test_spelling_ignores_disk_and_parent_dir_leg(tmp_path):
     assert out == ["docs/plans/y.md"]
 
 
-def test_gated_paths_selects_claude_md_class():
+def test_gated_paths_selects_claude_md_class() -> None:
     assert gated_paths(["CLAUDE.md", "docs/plans/x.md", "coordinator/CLAUDE.md", "docs/CLAUDE.md.bak"]) == [
         "CLAUDE.md",
         "coordinator/CLAUDE.md",

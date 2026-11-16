@@ -171,12 +171,38 @@ def test_notebooklm_targets_derive_or_halt(repo, with_questions):
         assert [p.name for p in (repo / "state" / "sizings").iterdir()] == [Path(REL).name]
 
 
-def test_build_doc_is_route_plan_and_research_doc_keeps_its_route():
+def test_build_doc_route_follows_its_tshirt_and_research_doc_keeps_its_route():
     from coordinator_core.ops.dispatch_emit.research_build_split import split_research_build
 
     research_doc, build_doc = split_research_build(_doc(RESEARCH), REL, WRITES)
-    assert build_doc["route"] == "plan" and "research" not in build_doc
+    assert build_doc["route"] == "spec-dispatch" and "research" not in build_doc
     assert research_doc["route"] == "spec-dispatch" and "research" in research_doc
+
+
+def test_build_route_per_tshirt_and_unknown_falls_back_to_plan():
+    from coordinator_core.ops.dispatch_emit.research_build_split import split_research_build
+
+    for tshirt, route in (("XS", "dispatch"), ("S", "spec-dispatch"), ("M", "plan"), ("L", "plan")):
+        src = _doc(RESEARCH)
+        src["estimate"] = {"tshirt": tshirt}
+        assert split_research_build(src, REL, WRITES)[1]["route"] == route
+    for estimate in ({"tshirt": "Q"}, {}, None):
+        src = _doc(RESEARCH)
+        src["estimate"] = estimate
+        assert split_research_build(src, REL, WRITES)[1]["route"] == "plan"
+
+
+def test_split_build_sizing_passes_the_arm_route_check_at_its_sized_arm():
+    from coordinator_core.ops.dispatch_emit.research_build_split import split_research_build
+    from coordinator_core.ops.dispatch_emit.sizing_fire import collect_fire_refusals, resolve_arm
+
+    for tshirt in ("XS", "S", "M"):
+        src = _doc(RESEARCH)
+        src["estimate"] = {"tshirt": tshirt}
+        build_doc = split_research_build(src, REL, WRITES)[1]
+        arm = resolve_arm(build_doc)
+        refusals = collect_fire_refusals(build_doc, sizing_rel=REL, arm=arm, writes=WRITES)
+        assert not [r for r in refusals if "fires only route" in r], refusals
 
 
 def test_split_copies_drop_inherited_ask_parent_and_keep_other_analysis():

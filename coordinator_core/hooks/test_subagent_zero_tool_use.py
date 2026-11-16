@@ -24,6 +24,7 @@ import json
 from pathlib import Path
 
 from coordinator_core.session_hub_path import hub_for_common
+import pytest
 
 
 def _run(coro):
@@ -157,7 +158,7 @@ class TestUnknownNeverZero:
         store = _store_path(tmp_path, sid)
         assert not store.exists(), "store file MUST NOT be created on UNKNOWN (unreadable)"
 
-    def test_unreadable_via_open_raising_oserror_is_unknown(self, tmp_path: Path, monkeypatch) -> None:
+    def test_unreadable_via_open_raising_oserror_is_unknown(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Monkeypatched open() raising OSError — a second, fully platform-neutral
         route to the UNKNOWN branch, independent of filesystem permission semantics."""
         import coordinator_core.hooks.subagent_zero_tool_use as mod
@@ -490,7 +491,7 @@ class TestStoreDirIsAnInitialisedSessionDir:
         )
 
     def test_failed_init_drops_the_record_rather_than_minting_the_dir(
-        self, tmp_path: Path, monkeypatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """Direction of the fail-open: losing one observability line is cheaper
         than a half-initialised session directory, which is invisible to every

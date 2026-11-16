@@ -5,10 +5,11 @@ import hashlib
 import pytest
 
 from coordinator_core.ops.workflow_fire import fire
+from pathlib import Path
 
 
 @pytest.fixture
-def target(tmp_path, monkeypatch):
+def target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     script = tmp_path / "flow.mjs"
     script.write_text("// emitted flow\n", encoding="utf-8")
     registry = tmp_path / "fires"
@@ -25,17 +26,17 @@ def target(tmp_path, monkeypatch):
     class Child:
         pid = 4242
 
-        def __init__(self, *a, **kw):
+        def __init__(self, *a, **kw) -> None:
             started.append(kw)
 
-        def poll(self):
+        def poll(self) -> None:
             return None
 
     monkeypatch.setattr(fire.subprocess, "Popen", Child)
     return script, hashlib.sha256(script.read_bytes()).hexdigest(), started
 
 
-def test_repeated_digest_returns_original_fire_without_spawning(target):
+def test_repeated_digest_returns_original_fire_without_spawning(target) -> None:
     script, digest, started = target
     first = fire.fire_workflow(str(script), expected=digest, notify_to="peer")
     second = fire.fire_workflow(str(script), expected=digest, notify_to="peer")
@@ -45,7 +46,7 @@ def test_repeated_digest_returns_original_fire_without_spawning(target):
     assert started[0]["cwd"] == str(script.parent)
 
 
-def test_concurrent_fires_share_a_reservation(target):
+def test_concurrent_fires_share_a_reservation(target) -> None:
     script, digest, started = target
     with ThreadPoolExecutor(max_workers=2) as pool:
         handles = list(pool.map(lambda _: fire.fire_workflow(str(script), expected=digest), range(2)))
@@ -53,7 +54,7 @@ def test_concurrent_fires_share_a_reservation(target):
     assert len(started) == 1
 
 
-def test_known_pre_execution_failure_can_be_fired_again(target):
+def test_known_pre_execution_failure_can_be_fired_again(target) -> None:
     script, digest, started = target
     previous = fire.fire_workflow(str(script), expected=digest)
     path = fire._record_path(fire._registry_dir(), previous["fire_id"])
@@ -62,7 +63,7 @@ def test_known_pre_execution_failure_can_be_fired_again(target):
     assert retried["fire_id"] != previous["fire_id"] and len(started) == 2
 
 
-def test_terminal_executed_driver_is_not_fired_twice(target):
+def test_terminal_executed_driver_is_not_fired_twice(target) -> None:
     script, digest, started = target
     previous = fire.fire_workflow(str(script), expected=digest)
     path = fire._record_path(fire._registry_dir(), previous["fire_id"])
@@ -71,7 +72,7 @@ def test_terminal_executed_driver_is_not_fired_twice(target):
     assert len(started) == 1
 
 
-def test_driver_prompt_quotes_windows_paths_with_spaces(monkeypatch):
+def test_driver_prompt_quotes_windows_paths_with_spaces(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(fire.sys, "platform", "win32")
     prompt = fire.render_prompt(r"E:\Team Work\O'Brien\flow.mjs")
     assert "--params-file 'E:/Team Work/O''Brien/flow.mjs.terminal-params.json'" in prompt
@@ -79,11 +80,11 @@ def test_driver_prompt_quotes_windows_paths_with_spaces(monkeypatch):
 
 
 @pytest.mark.parametrize("exit_code", [0, 7])
-def test_fast_terminal_child_keeps_digest_handle(target, monkeypatch, exit_code):
+def test_fast_terminal_child_keeps_digest_handle(target, monkeypatch: pytest.MonkeyPatch, exit_code) -> None:
     script, digest, started = target
     class FastChild:
         pid = 4242
-        def __init__(self, *a, **kw):
+        def __init__(self, *a, **kw) -> None:
             started.append(kw)
         def poll(self):
             return exit_code
@@ -95,7 +96,7 @@ def test_fast_terminal_child_keeps_digest_handle(target, monkeypatch, exit_code)
     assert len(started) == 1
 
 
-def test_expired_reservation_reports_execution_ambiguity_without_respawn(target):
+def test_expired_reservation_reports_execution_ambiguity_without_respawn(target) -> None:
     script, digest, started = target
     path = fire._record_path(fire._registry_dir(), "lost-spawner")
     fire._write_record(path, {"fire_id": "lost-spawner", "state": "pending", "reserved_at": 0,
@@ -106,7 +107,7 @@ def test_expired_reservation_reports_execution_ambiguity_without_respawn(target)
     assert result["already_fired"] and not started
 
 
-def test_cap_lock_never_routes_completion_messages(target, monkeypatch):
+def test_cap_lock_never_routes_completion_messages(target, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.agent_pipe import bridge
     script, digest, _ = target
     path = fire._record_path(fire._registry_dir(), "finished")

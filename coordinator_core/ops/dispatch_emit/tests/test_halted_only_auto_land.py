@@ -8,11 +8,12 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import halted_run_landed, land_run, peer_hunk_gate
 from coordinator_core.ops.dispatch_emit.tests import test_halted_hold_release as fx
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _armed(tmp_path, *, me_marker="halted"):
+def _armed(tmp_path, *, me_marker: str | None = "halted") -> tuple[Path, str, str]:
     root = fx._root(tmp_path)
     me, peer = fx._auto_land_fixture(root)
     if me_marker:
@@ -20,7 +21,7 @@ def _armed(tmp_path, *, me_marker="halted"):
     return root, me, peer
 
 
-def _no_siblings(monkeypatch, holds=()):
+def _no_siblings(monkeypatch, holds=()) -> None:
     monkeypatch.setattr(peer_hunk_gate, "co_declared_peer_holds", lambda *a, **k: list(holds))
 
 
@@ -28,13 +29,13 @@ def _release(root, me, peer):
     return land_run._halted_only_release(root, me, None, {"a.py": peer}, ["a.py"], None)
 
 
-def test_halted_only_holders_release_the_landing(tmp_path, monkeypatch):
+def test_halted_only_holders_release_the_landing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, me, peer = _armed(tmp_path)
     _no_siblings(monkeypatch, [("a.py", peer)])
     assert _release(root, me, peer) == [peer]
 
 
-def test_live_peer_holder_still_refuses(tmp_path, monkeypatch):
+def test_live_peer_holder_still_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, me, peer = _armed(tmp_path)
     live = fx._rid("ask", 200, "cccccc")
     fx._run(root, live, writes=("a.py",))
@@ -43,7 +44,7 @@ def test_live_peer_holder_still_refuses(tmp_path, monkeypatch):
     assert _release(root, me, peer) is None
 
 
-def test_a_peers_claim_never_gates_the_release_when_every_withholder_is_halted(tmp_path, monkeypatch):
+def test_a_peers_claim_never_gates_the_release_when_every_withholder_is_halted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, me, peer = _armed(tmp_path)
     _no_siblings(monkeypatch, [("a.py", "ask-live-sibling")])
     assert _release(root, me, peer) == [peer]
@@ -51,30 +52,30 @@ def test_a_peers_claim_never_gates_the_release_when_every_withholder_is_halted(t
     assert _release(root, me, peer) == [peer]
 
 
-def test_red_review_refuses(tmp_path, monkeypatch):
+def test_red_review_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, me, peer = _armed(tmp_path)
     fx._green(root, me, incomplete=["X1"])
     _no_siblings(monkeypatch, [("a.py", peer)])
     assert _release(root, me, peer) is None
 
 
-def test_run_without_halted_marker_keeps_the_refusal(tmp_path, monkeypatch):
+def test_run_without_halted_marker_keeps_the_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, me, peer = _armed(tmp_path, me_marker=None)
     _no_siblings(monkeypatch, [("a.py", peer)])
     assert _release(root, me, peer) is None
 
 
-def test_unreadable_halt_record_holder_keeps_the_refusal(tmp_path, monkeypatch):
+def test_unreadable_halt_record_holder_keeps_the_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, me, peer = _armed(tmp_path)
     _no_siblings(monkeypatch)
     assert land_run._halted_only_release(root, me, None, {"a.py": land_run.UNREADABLE_HALT_RECORD}, ["a.py"], None) is None
     assert land_run._halted_only_release(root, me, None, {}, ["a.py"], None) is None
 
 
-def test_record_goes_through_the_op_handler_with_the_landed_sha(tmp_path, monkeypatch):
+def test_record_goes_through_the_op_handler_with_the_landed_sha(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
 
-    def handler(params, repo_root=None):
+    def handler(params, repo_root=None) -> dict[str, bool]:
         seen.update(params)
         return {"ok": True}
 
@@ -84,7 +85,7 @@ def test_record_goes_through_the_op_handler_with_the_landed_sha(tmp_path, monkey
     assert seen == {"run_id": "ask-1", "sha": "abc1234"}
 
 
-def test_record_failure_is_reported_not_raised(tmp_path, monkeypatch):
+def test_record_failure_is_reported_not_raised(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(halted_run_landed, "_handler", lambda p, r=None: {"ok": False, "error": "nope"})
     assert land_run._record_halted_auto_landed(tmp_path, "ask-1", "abc1234", None) == {
         "run_id": "ask-1", "ok": False, "error": "nope",

@@ -27,6 +27,7 @@ from coordinator_core.write_guards import guard_doctrine_surface_edits as _doctr
 from coordinator_core.write_guards import (
     validate_frontmatter_schema_advisory as _advisory_guard,
 )
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -37,7 +38,7 @@ _NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
 @pytest.fixture
-def scratch_repo(tmp_path):
+def scratch_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", str(repo)], check=True, **_NO_CONSOLE)
@@ -52,19 +53,19 @@ def _clear_repo_root_memo():
 
 
 class TestSharedResolver:
-    def test_resolves_repo_root_for_a_real_repo(self, scratch_repo):
+    def test_resolves_repo_root_for_a_real_repo(self, scratch_repo) -> None:
         resolved = _repo_root.resolve_repo_root(str(scratch_repo))
         assert resolved is not None
         import os
 
         assert os.path.realpath(resolved) == os.path.realpath(str(scratch_repo))
 
-    def test_returns_none_outside_any_repo(self, tmp_path):
+    def test_returns_none_outside_any_repo(self, tmp_path: Path) -> None:
         outside = tmp_path / "not-a-repo"
         outside.mkdir()
         assert _repo_root.resolve_repo_root(str(outside)) is None
 
-    def test_ordinary_repo_walk_never_spawns(self, scratch_repo, monkeypatch):
+    def test_ordinary_repo_walk_never_spawns(self, scratch_repo, monkeypatch: pytest.MonkeyPatch) -> None:
         spawn_calls = []
         real_spawn = _git_repo_root._spawn_rev_parse
 
@@ -82,8 +83,8 @@ class TestSharedResolver:
         assert spawn_calls == []
 
     def test_walk_failure_resolves_to_none_without_ever_spawning(
-        self, scratch_repo, monkeypatch
-    ):
+        self, scratch_repo, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(_git_repo_root, "_walk_for_repo", lambda start: None)
 
         spawn_calls = []
@@ -111,8 +112,8 @@ class TestSharedResolver:
         ids=["show_prefix", "is_inside_work_tree"],
     )
     def test_spawning_forms_memoize_success_so_repeat_calls_spawn_once(
-        self, scratch_repo, monkeypatch, form
-    ):
+        self, scratch_repo, monkeypatch: pytest.MonkeyPatch, form
+    ) -> None:
         spawn_calls = []
         real_spawn = _git_repo_root._spawn_rev_parse
 
@@ -130,8 +131,8 @@ class TestSharedResolver:
         assert len(spawn_calls) == 1
 
     def test_successful_empty_show_prefix_is_memoized_not_treated_as_failure(
-        self, scratch_repo, monkeypatch
-    ):
+        self, scratch_repo, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         spawn_calls = []
         real_spawn = _git_repo_root._spawn_rev_parse
 
@@ -146,8 +147,8 @@ class TestSharedResolver:
         assert len(spawn_calls) == 1
 
     def test_failed_spawn_is_never_memoized_so_a_later_success_is_seen(
-        self, scratch_repo, monkeypatch
-    ):
+        self, scratch_repo, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         real_spawn = _git_repo_root._spawn_rev_parse
         outcomes = []
 
@@ -166,18 +167,18 @@ class TestSharedResolver:
 
 
 class TestMigratedGuardVerdictsUnchanged:
-    def test_doctrine_guard_git_root_resolves_inside_scratch_repo(self, scratch_repo, monkeypatch):
+    def test_doctrine_guard_git_root_resolves_inside_scratch_repo(self, scratch_repo, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(scratch_repo)
         root = _doctrine_guard._git_root()
         assert root is not None
 
-    def test_doctrine_guard_git_root_none_outside_repo(self, tmp_path, monkeypatch):
+    def test_doctrine_guard_git_root_none_outside_repo(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         outside = tmp_path / "not-a-repo"
         outside.mkdir()
         monkeypatch.chdir(outside)
         assert _doctrine_guard._git_root() is None
 
-    def test_doctrine_guard_allows_unprotected_file(self, scratch_repo):
+    def test_doctrine_guard_allows_unprotected_file(self, scratch_repo) -> None:
         payload = {
             "tool_name": "Write",
             "cwd": str(scratch_repo),
@@ -188,13 +189,13 @@ class TestMigratedGuardVerdictsUnchanged:
         }
         assert _doctrine_guard.check(payload) is None
 
-    def test_advisory_resolve_repo_root_returns_repo_root_for_real_repo(self, scratch_repo):
+    def test_advisory_resolve_repo_root_returns_repo_root_for_real_repo(self, scratch_repo) -> None:
         resolved = _advisory_guard.resolve_repo_root(str(scratch_repo))
         import os
 
         assert os.path.realpath(resolved) == os.path.realpath(str(scratch_repo))
 
-    def test_advisory_resolve_repo_root_falls_back_to_cwd_outside_repo(self, tmp_path):
+    def test_advisory_resolve_repo_root_falls_back_to_cwd_outside_repo(self, tmp_path: Path) -> None:
         outside = tmp_path / "not-a-repo"
         outside.mkdir()
         assert _advisory_guard.resolve_repo_root(str(outside)) == str(outside)
@@ -221,7 +222,7 @@ class TestC3bMigratedGuardVerdictsUnchanged:
             "bump_out_of_repo_tool_write",
         ],
     )
-    def test_resolve_git_root_resolves_inside_scratch_repo(self, guard_module, scratch_repo):
+    def test_resolve_git_root_resolves_inside_scratch_repo(self, guard_module, scratch_repo) -> None:
         import os
 
         resolved = guard_module._resolve_git_root(str(scratch_repo))
@@ -247,14 +248,14 @@ class TestC3bMigratedGuardVerdictsUnchanged:
             "bump_out_of_repo_tool_write",
         ],
     )
-    def test_resolve_git_root_none_outside_any_repo(self, guard_module, tmp_path):
+    def test_resolve_git_root_none_outside_any_repo(self, guard_module, tmp_path: Path) -> None:
         outside = tmp_path / "not-a-repo"
         outside.mkdir()
         assert guard_module._resolve_git_root(str(outside)) is None
 
     def test_memo_status_guard_git_common_dir_still_resolves_via_no_console_creationflags(
         self, scratch_repo
-    ):
+    ) -> None:
         import os
 
         resolved = _memo_status_guard._resolve_git_common_dir(str(scratch_repo))
@@ -265,14 +266,14 @@ class TestC3bMigratedGuardVerdictsUnchanged:
 
     def test_plan_body_guard_git_dir_still_resolves_via_no_console_creationflags(
         self, scratch_repo
-    ):
+    ) -> None:
         import os
 
         resolved = _plan_body_guard._resolve_git_root(str(scratch_repo))
         assert resolved is not None
         assert os.path.realpath(resolved) == os.path.realpath(str(scratch_repo))
 
-    def test_handoff_guard_allows_unprotected_write_outside_any_handoff(self, scratch_repo):
+    def test_handoff_guard_allows_unprotected_write_outside_any_handoff(self, scratch_repo) -> None:
         payload = {
             "tool_name": "Write",
             "cwd": str(scratch_repo),
@@ -283,7 +284,7 @@ class TestC3bMigratedGuardVerdictsUnchanged:
         }
         assert _handoff_guard.check(payload) is None
 
-    def test_archive_guard_allows_top_level_em_write(self, scratch_repo):
+    def test_archive_guard_allows_top_level_em_write(self, scratch_repo) -> None:
         payload = {
             "tool_name": "Write",
             "cwd": str(scratch_repo),
@@ -297,7 +298,7 @@ class TestC3bMigratedGuardVerdictsUnchanged:
 
 class TestD4MigratedGitDirResolversUnchanged:
 
-    def test_memo_status_common_dir_resolves_absolute_inside_repo(self, scratch_repo):
+    def test_memo_status_common_dir_resolves_absolute_inside_repo(self, scratch_repo) -> None:
         import os
 
         resolved = _memo_status_guard._resolve_git_common_dir(str(scratch_repo))
@@ -305,12 +306,12 @@ class TestD4MigratedGitDirResolversUnchanged:
         assert os.path.isabs(resolved)
         assert os.path.realpath(resolved) == os.path.realpath(str(scratch_repo / ".git"))
 
-    def test_memo_status_common_dir_none_outside_any_repo(self, tmp_path):
+    def test_memo_status_common_dir_none_outside_any_repo(self, tmp_path: Path) -> None:
         outside = tmp_path / "not-a-repo"
         outside.mkdir()
         assert _memo_status_guard._resolve_git_common_dir(str(outside)) is None
 
-    def test_plan_body_git_dir_resolves_absolute_inside_repo(self, scratch_repo):
+    def test_plan_body_git_dir_resolves_absolute_inside_repo(self, scratch_repo) -> None:
         import os
 
         resolved = _plan_body_guard._resolve_git_root(str(scratch_repo))
@@ -318,7 +319,7 @@ class TestD4MigratedGitDirResolversUnchanged:
         assert os.path.isabs(resolved)
         assert os.path.realpath(resolved) == os.path.realpath(str(scratch_repo))
 
-    def test_plan_body_git_dir_none_outside_any_repo(self, tmp_path):
+    def test_plan_body_git_dir_none_outside_any_repo(self, tmp_path: Path) -> None:
         outside = tmp_path / "not-a-repo"
         outside.mkdir()
         assert _plan_body_guard._resolve_git_root(str(outside)) is None

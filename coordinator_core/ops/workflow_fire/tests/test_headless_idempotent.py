@@ -5,10 +5,11 @@ import hashlib
 import pytest
 
 from coordinator_core.ops.workflow_fire import fire, headless, op
+from pathlib import Path
 
 
 @pytest.fixture
-def native(tmp_path, monkeypatch):
+def native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     from coordinator_core.ops.workflow_fire import authority
     monkeypatch.setattr(authority, 'caller_principal', lambda *a: authority.Principal('verified-test-em', 'em', {}))
     script = tmp_path / 'native.mjs'
@@ -24,15 +25,15 @@ def native(tmp_path, monkeypatch):
     calls = []
     class Child:
         pid = 424242
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *args, **kwargs) -> None:
             calls.append(kwargs)
-        def poll(self):
+        def poll(self) -> None:
             return None
     monkeypatch.setattr(headless.subprocess, 'Popen', Child)
     return script, hashlib.sha256(script.read_bytes()).hexdigest(), registry, calls
 
 
-def test_native_expected_digest_returns_existing_handle(native):
+def test_native_expected_digest_returns_existing_handle(native) -> None:
     script, digest, _, calls = native
     first = headless.start(str(script), expected=digest)
     second = headless.start(str(script), expected=digest)
@@ -42,7 +43,7 @@ def test_native_expected_digest_returns_existing_handle(native):
     assert first['execution_started'] is None  # only the worker can prove it passed the gate
 
 
-def test_concurrent_native_digest_calls_share_one_spawn(native):
+def test_concurrent_native_digest_calls_share_one_spawn(native) -> None:
     script, digest, _, calls = native
     with ThreadPoolExecutor(max_workers=2) as pool:
         handles = list(pool.map(lambda _: headless.start(str(script), expected=digest), range(2)))
@@ -51,7 +52,7 @@ def test_concurrent_native_digest_calls_share_one_spawn(native):
 
 
 @pytest.mark.parametrize('first_kind', ['headless', 'claude'])
-def test_both_executor_kinds_share_the_same_reservation(native, first_kind):
+def test_both_executor_kinds_share_the_same_reservation(native, first_kind) -> None:
     script, digest, _, calls = native
     starters = [headless.start, fire.fire_workflow]
     if first_kind == 'claude':
@@ -62,7 +63,7 @@ def test_both_executor_kinds_share_the_same_reservation(native, first_kind):
     assert second['already_fired'] and len(calls) == 1
 
 
-def test_native_started_terminal_failure_is_not_retryable(native):
+def test_native_started_terminal_failure_is_not_retryable(native) -> None:
     script, digest, registry, calls = native
     first = headless.start(str(script), expected=digest)
     fire._write_record(fire._record_path(registry, first['fire_id']), {
@@ -73,7 +74,7 @@ def test_native_started_terminal_failure_is_not_retryable(native):
     assert len(calls) == 1
 
 
-def test_native_known_failure_before_start_gate_is_retryable(native, monkeypatch):
+def test_native_known_failure_before_start_gate_is_retryable(native, monkeypatch: pytest.MonkeyPatch) -> None:
     script, digest, registry, calls = native
     def reject(*args):
         raise OSError('receipt refused before spawn')
@@ -87,7 +88,7 @@ def test_native_known_failure_before_start_gate_is_retryable(native, monkeypatch
     assert retry['fire_id'] != previous['fire_id'] and len(calls) == 1
 
 
-def test_native_expired_reservation_is_unknown_not_restarted(native):
+def test_native_expired_reservation_is_unknown_not_restarted(native) -> None:
     script, digest, registry, calls = native
     fire._write_record(fire._record_path(registry, 'lost-spawner'), {
         'fire_id': 'lost-spawner', 'state': 'pending', 'reserved_at': 0,
@@ -98,7 +99,7 @@ def test_native_expired_reservation_is_unknown_not_restarted(native):
     assert not calls
 
 
-def test_native_cap_arbitration_never_delivers_notifications(native, monkeypatch):
+def test_native_cap_arbitration_never_delivers_notifications(native, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.agent_pipe import bridge
     script, digest, registry, _ = native
     fire._write_record(fire._record_path(registry, 'old'), {
@@ -108,7 +109,7 @@ def test_native_cap_arbitration_never_delivers_notifications(native, monkeypatch
     assert headless.start(str(script), expected=digest)['state'] == 'running'
 
 
-def test_native_wire_expected_is_forwarded_to_shared_arbitration(native, monkeypatch):
+def test_native_wire_expected_is_forwarded_to_shared_arbitration(native, monkeypatch: pytest.MonkeyPatch) -> None:
     script, digest, _, _ = native
     captured = []
     monkeypatch.setattr(headless, 'start', lambda *a, **kw: captured.append(kw) or {'fire_id': 'captured'})
@@ -116,7 +117,7 @@ def test_native_wire_expected_is_forwarded_to_shared_arbitration(native, monkeyp
     assert captured[0]['expected'] == digest
 
 
-def test_native_duplicate_can_attach_late_notification_target(native):
+def test_native_duplicate_can_attach_late_notification_target(native) -> None:
     script, digest, registry, calls = native
     first = op._workflow_fire({'script_path': str(script), 'expected': digest, 'executor': 'headless'})
     second = op._workflow_fire({'script_path': str(script), 'expected': digest, 'executor': 'headless',
@@ -129,7 +130,7 @@ def test_native_duplicate_can_attach_late_notification_target(native):
     assert persisted['sha256'] == digest
 
 
-def test_explicit_codex_backend_never_falls_through_to_claude(native, monkeypatch):
+def test_explicit_codex_backend_never_falls_through_to_claude(native, monkeypatch: pytest.MonkeyPatch) -> None:
     script, digest, _, _ = native
     captured = []
     monkeypatch.setattr(headless, 'start', lambda *a, **kw: captured.append(kw) or {'fire_id': 'native'})
@@ -138,7 +139,7 @@ def test_explicit_codex_backend_never_falls_through_to_claude(native, monkeypatc
     assert reply['fire_id'] == 'native' and captured[0]['backend'] == 'codex'
 
 
-def test_contradictory_codex_backend_refuses_before_claude_spawn(native, monkeypatch):
+def test_contradictory_codex_backend_refuses_before_claude_spawn(native, monkeypatch: pytest.MonkeyPatch) -> None:
     script, digest, _, _ = native
     monkeypatch.setattr(fire, 'fire_workflow', lambda *a, **kw: pytest.fail('must refuse before spawn'))
     with pytest.raises(ValueError, match='cannot use the Claude executor'):
@@ -146,7 +147,7 @@ def test_contradictory_codex_backend_refuses_before_claude_spawn(native, monkeyp
 
 
 @pytest.mark.parametrize('failure', [ValueError, OSError])
-def test_malformed_private_contract_releases_reservation_before_any_worker(native, monkeypatch, failure):
+def test_malformed_private_contract_releases_reservation_before_any_worker(native, monkeypatch: pytest.MonkeyPatch, failure) -> None:
     import json
     from coordinator_core.ops.workflow_fire import finalizer
     script, digest, registry, calls = native

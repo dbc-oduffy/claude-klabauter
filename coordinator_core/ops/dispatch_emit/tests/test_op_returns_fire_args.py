@@ -4,6 +4,7 @@ from __future__ import annotations
 import textwrap
 
 from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
+from pathlib import Path
 
 _FIXTURE_PLAN = textwrap.dedent(
     """\
@@ -61,7 +62,7 @@ def _write_fixture_plan(tmp_path):
     return plan_path
 
 
-def test_fire_args_present_with_posix_root_for_plan_inside_git_tree(tmp_path):
+def test_fire_args_present_with_posix_root_for_plan_inside_git_tree(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     repo_root.mkdir()
     (repo_root / ".git").mkdir()
@@ -79,7 +80,7 @@ def test_fire_args_present_with_posix_root_for_plan_inside_git_tree(tmp_path):
     assert reply["fire_args"] == {"repoRoot": repo_root.resolve().as_posix()}
 
 
-def test_fire_args_absent_for_plan_with_no_git_ancestor(tmp_path):
+def test_fire_args_absent_for_plan_with_no_git_ancestor(tmp_path: Path) -> None:
     plan_path = _write_fixture_plan(tmp_path)
     output_path = tmp_path / "out.mjs"
 
@@ -94,7 +95,7 @@ def test_fire_args_absent_for_plan_with_no_git_ancestor(tmp_path):
     assert "fire_args" not in reply
 
 
-def test_fire_args_absent_on_queue_route(tmp_path):
+def test_fire_args_absent_on_queue_route(tmp_path: Path) -> None:
     repo_root = tmp_path / "repo"
     queue_dir = repo_root / "state" / "bug-backlog"
     run_dir = repo_root / "state" / "queue-grind" / "fixture" / "run-1"

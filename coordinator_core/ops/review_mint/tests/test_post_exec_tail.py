@@ -7,9 +7,10 @@ import dataclasses
 import pytest
 
 from coordinator_core.ops.review_mint import post_exec_tail as pet
+from pathlib import Path
 
 
-def test_three_wave_shared_file_quiescence_includes_later_row():
+def test_three_wave_shared_file_quiescence_includes_later_row() -> None:
     waves = [["A", "B"], ["C"], ["D"]]
     writes = {"A": ["x/a.py", "shared.py"], "B": ["x/b.py"], "C": ["c.py"], "D": ["shared.py"]}
     g = pet.review_groups(waves, writes)
@@ -21,31 +22,31 @@ def test_three_wave_shared_file_quiescence_includes_later_row():
     assert set(g[2].quiescence_rows) == {"A", "D"}
 
 
-def test_group_with_all_paths_in_later_wave_still_emitted():
+def test_group_with_all_paths_in_later_wave_still_emitted() -> None:
     g = pet.review_groups([["A"], ["B"]], {"A": ["f.py"], "B": ["f.py"]})
     assert len(g) == 2
     assert set(g[0].quiescence_rows) == {"A", "B"}
 
 
-def test_empty_waves_skipped_and_indices_dense():
+def test_empty_waves_skipped_and_indices_dense() -> None:
     g = pet.review_groups([[], ["A"], [], ["B"]], {"A": ["a"], "B": ["b"]})
     assert [x.index for x in g] == [0, 1]
     assert [x.rows for x in g] == [("A",), ("B",)]
 
 
-def test_windows_separators_normalised():
+def test_windows_separators_normalised() -> None:
     g = pet.review_groups([["A"], ["B"]], {"A": ["pkg\\m.py"], "B": ["pkg/m.py"]})
     assert g[0].paths == ("pkg/m.py",)
     assert set(g[0].quiescence_rows) == {"A", "B"}
 
 
-def test_group_is_frozen():
+def test_group_is_frozen() -> None:
     g = pet.review_groups([["A"]], {"A": ["a"]})[0]
     with pytest.raises(dataclasses.FrozenInstanceError):
         g.index = 5  # type: ignore[misc]
 
 
-def test_bounded_js_budget_once_and_label():
+def test_bounded_js_budget_once_and_label() -> None:
     js = pet.bounded_js("agent('t')", 300, "test leg")
     assert js.count("300000") == 1
     assert "test leg" in js
@@ -56,18 +57,18 @@ def test_bounded_js_budget_once_and_label():
     assert "reject" not in js
 
 
-def test_bounded_js_escapes_label():
+def test_bounded_js_escapes_label() -> None:
     assert '\\"q\\"' in pet.bounded_js("x", 1, 'a "q"')
 
 
-def test_group_slice_prefix_names_the_range_it_freezes():
+def test_group_slice_prefix_names_the_range_it_freezes() -> None:
     a, b = "a" * 40, "b" * 40
     assert pet.group_slice_prefix("k", 0, a) == f"k.g0-{'a' * 12}-prep"
     assert pet.group_slice_prefix("k", 0, a) == pet.group_slice_prefix("k", 0, a)
     assert pet.group_slice_prefix("k", 0, a) != pet.group_slice_prefix("k", 0, b)
 
 
-def _git(root, *args):
+def _git(root, *args) -> None:
     import subprocess
 
     from coordinator_core.win_portability import no_console_creationflags
@@ -75,7 +76,7 @@ def _git(root, *args):
     subprocess.run(["git", *args], cwd=str(root), check=True, capture_output=True, **no_console_creationflags())
 
 
-def test_group_prefix_refreezes_over_its_own_prior_attempt_but_a_generic_id_still_refuses(tmp_path):
+def test_group_prefix_refreezes_over_its_own_prior_attempt_but_a_generic_id_still_refuses(tmp_path: Path) -> None:
     from coordinator_core.ops import review_freeze_diff as rfd
 
     root = tmp_path / "repo"
@@ -111,7 +112,7 @@ def _head(root):
     ).stdout.strip()
 
 
-def test_budget_exceeds_invocation_budget_when_importable():
+def test_budget_exceeds_invocation_budget_when_importable() -> None:
     try:
         from coordinator_core.ops.hung_test_budget import INVOCATION_BUDGET_S
     except ImportError:

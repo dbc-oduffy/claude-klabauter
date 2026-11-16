@@ -6,6 +6,9 @@ definition shapes itself and names the indexed files defining a claimed symbol, 
 landing paths (scanned only on lines naming a symbol), and (for withheld paths only)
 `authoring_leaks.HeadView` blob reads. No other indexed file is read to find definitions; an indexed
 file dirty in the worktree but neither landing nor withheld is matched on its index content.
+The grep runs only for claims not already `reachable` from the landing/withheld definers, and is
+confined to the files a `file:symbol` claim names, or (past `INDEX_SCAN_FILE_CAP` indexed code
+files) to the claims' own directories, where `unreachable` degrades to `undecidable`.
 Definition shapes are single-line, in both the grep and the landing/withheld scan.
 
 Negative-spec:
@@ -22,16 +25,28 @@ from __future__ import annotations
 
 import os
 import re
+import threading
 from pathlib import Path
 from typing import Iterable, Mapping, Optional
 
+from coordinator_core.ops.dispatch_emit import land_deadline
 from coordinator_core.ops.dispatch_emit.reach_claims import ReachClaim, ReachVerdict
 from coordinator_core.ops.review_reachability import _CODE_EXT, _TEST_RE, _WORD
+
+#: Step name and cap of the definition grep inside a land scope; past either the op budget or the
+#: cap it raises `land_deadline.LandDeadlineExceeded(GREP_STEP, step=True)` and the landing parks.
+GREP_STEP = "reach_claims_tree.judge_reach_claims"
+GREP_STEP_SECS = 5.0
 
 # How many import hops from X's definition files a claim is traced before it is undecidable:
 # "does X's module pull in a file naming Y within this many imports". A path deeper than this is a
 # truncated closure, never a fully resolved one.
 REACH_CLOSURE_DEPTH = 3
+
+# Indexed production files up to which the definition grep covers the whole index (~30us per file
+# of blob inflate when idle, ~1.2s at the cap; the 25000-file budget census stays tree-wide); past
+# it the grep is scoped to the claims' own directories.
+INDEX_SCAN_FILE_CAP = 40000
 
 _JS_EXT = (".ts", ".tsx", ".js", ".jsx", ".mjs")
 _ASSET_EXT = (".css", ".scss", ".sass", ".less", ".json", ".svg", ".png", ".jpg", ".gif", ".md", ".html")
@@ -403,31 +418,125 @@ def judge_reach_claims(
                     syms.setdefault(sym, _def_re(sym))
     tokens = [(s.encode(), pat, s) for s, pat in syms.items()]
     defs: dict[str, list[str]] = {s: [] for s in syms}
-    if tokens:
-        direct = (landing | withheld_only) & files
-        hits = _index_def_hits(root, list(syms))
+    direct = (landing | withheld_only) & files
+    for f in direct:
+        b = tree.bytes(f)
+        found = False
+        for tok, pat, s in tokens:
+            if tok in b and _line_scan(b, tok, pat):
+                defs[s].append(f)
+                found = True
+        if not found:
+            tree.cache.pop(f, None)
+    for lst in defs.values():
+        lst.sort()
+    # A claim already `reachable` from the landing/withheld definers alone stays reachable with more
+    # definers, so only the rest pay the index grep.
+    verdicts: list[Optional[ReachVerdict]] = [None] * len(claims)
+    for i, c in enumerate(claims):
+        if _unhinted(c):
+            v = _judge_one(tree, c, defs)
+            if v.verdict == "reachable":
+                verdicts[i] = v
+    pending = tuple(c for c, v in zip(claims, verdicts) if v is None)
+    scoped = False
+    grep_syms = sorted({sym for c in pending for name in (c.source, c.target) for sym, _, _ in _candidates(name) if sym is not None})
+    if grep_syms:
+        pathspec, scoped = _grep_pathspec(pending, files, direct)
+        if pathspec is None:
+            hits = _index_def_hits(root, grep_syms)
+        elif pathspec:
+            hits = _index_def_hits(root, grep_syms, pathspec)
+        else:
+            hits = {}
         if hits is None:
             why = "tree index unsearchable (git grep failed)"
-            return tuple(ReachVerdict(c, "undecidable", why) for c in claims)
+            return tuple(v or ReachVerdict(c, "undecidable", why) for c, v in zip(claims, verdicts))
         for f, named in hits.items():
             if f in files and f not in direct:
                 for s in named:
                     defs[s].append(f)
-        for f in direct:
-            b = tree.bytes(f)
-            found = False
-            for tok, pat, s in tokens:
-                if tok in b and _line_scan(b, tok, pat):
-                    defs[s].append(f)
-                    found = True
-            if not found:
-                tree.cache.pop(f, None)
         for lst in defs.values():
             lst.sort()
-    return tuple(_judge_one(tree, c, defs) for c in claims)
+    out = tuple(v or _judge_one(tree, c, defs) for c, v in zip(claims, verdicts))
+    if scoped:
+        why = f"definition scan scoped past {INDEX_SCAN_FILE_CAP} indexed code files: no tree-wide proof"
+        out = tuple(ReachVerdict(v.claim, "undecidable", why) if v.verdict == "unreachable" else v for v in out)
+    return out
 
 
-def _index_def_hits(root: Path, syms: list[str]) -> Optional[dict[str, set[str]]]:
+def _unhinted(claim: ReachClaim) -> bool:
+    """True when neither side is a dotted module-hinted name, so a verdict from a subset of the
+    definers cannot be narrowed differently by a fuller set."""
+    return all(len(c := _candidates(n)) == 1 and c[0][2] is None for n in (claim.source, claim.target))
+
+
+def _grep_pathspec(
+    claims: tuple[ReachClaim, ...], files: set[str], direct: set[str]
+) -> tuple[Optional[list[str]], bool]:
+    """(pathspec for the definition grep, scoped) over the claims' symbols.
+
+    None = every indexed code file; [] = nothing to grep. A symbol named only as `file:symbol` can
+    only be defined in that file, so a claim set of such symbols greps just those files (exact). An
+    unqualified symbol needs the whole index; past `INDEX_SCAN_FILE_CAP` files that grep is scoped to
+    the top two directory levels of the landing, withheld and qualified paths and `scoped` is True,
+    so the caller cannot report `unreachable` from a partial definer set.
+    """
+    qualified: set[str] = set()
+    has_open = False
+    for c in claims:
+        for name in (c.source, c.target):
+            for sym, file, _ in _candidates(name):
+                if sym is None:
+                    continue
+                if file is None:
+                    has_open = True
+                else:
+                    qualified.add(file)
+    qualified &= files
+    if not has_open:
+        return sorted(qualified), False
+    if len(files) <= INDEX_SCAN_FILE_CAP:
+        return None, False
+    scope: set[str] = set()
+    for p in direct | qualified:
+        d = os.path.dirname(p)
+        scope.add("/".join(d.split("/")[:2]) + "/" if d else p)
+    pathspec: list[str] = []
+    for s in sorted(scope):
+        pathspec += [f"{s}*{ext}" for ext in _CODE_EXT] if s.endswith("/") else [s]
+    return pathspec, True
+
+
+def _run_git_in_step(run_git, args: list[str], payload: bytes):
+    """`run_git(args, input=payload)` inside the `GREP_STEP` step when a land scope is bound, else
+    unbounded as before. The step's seconds are `run_git`'s timeout, and the call runs on a daemon
+    thread the step abandons at its deadline (`run_git`'s wall bound lets a call outlive its timeout
+    by scheduling headroom), so a git that does not return parks the landing at the step cap."""
+    if not land_deadline.leg_costs():
+        return run_git(args, input=payload)
+    with land_deadline.step(GREP_STEP, GREP_STEP_SECS) as secs:
+        box: dict = {}
+
+        def work() -> None:
+            try:
+                box["res"] = run_git(args, input=payload, timeout=secs)
+            except BaseException as exc:  # noqa: BLE001 -- re-raised on the caller's thread
+                box["exc"] = exc
+
+        worker = threading.Thread(target=work, name="reach-claims-grep", daemon=True)
+        worker.start()
+        while worker.is_alive():
+            land_deadline.step_check()
+            worker.join(min(0.25, max(0.001, land_deadline.step_remaining() or 0.001)))
+        if "exc" in box:
+            raise box["exc"]
+        return box["res"]
+
+
+def _index_def_hits(
+    root: Path, syms: list[str], pathspec: Optional[list[str]] = None
+) -> Optional[dict[str, set[str]]]:
     """Indexed code file -> symbols it defines, from one `git grep --cached -o -P` that matches the
     definition shapes itself; None when git failed.
 
@@ -439,11 +548,10 @@ def _index_def_hits(root: Path, syms: list[str]) -> Optional[dict[str, set[str]]
 
     plain, named = _grep_patterns(syms)
     by_bytes = {s.encode(): s for s in syms}
-    pathspec = [f"*{ext}" for ext in _CODE_EXT]
-    res = run_git(
-        ["-C", str(root), "grep", "--cached", "-a", "-o", "-z", "-P", "-f", "-", "--", *pathspec],
-        input=plain + b"\n",
-    )
+    if pathspec is None:
+        pathspec = [f"*{ext}" for ext in _CODE_EXT]
+    args = ["-C", str(root), "grep", "--cached", "-a", "-o", "-z", "-P", "-f", "-", "--", *pathspec]
+    res = _run_git_in_step(run_git, args, plain + b"\n")
     if res.timed_out or res.returncode not in (0, 1):
         return None
     out: dict[str, set[str]] = {}

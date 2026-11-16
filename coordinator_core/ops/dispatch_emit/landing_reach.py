@@ -39,7 +39,7 @@ class _IndexView:
 
     __slots__ = ("raw", "names", "starts", "unmerged", "special")
 
-    def __init__(self, raw: bytes, names: frozenset, starts: Optional[Dict[str, int]], unmerged: Set[str]):
+    def __init__(self, raw: bytes, names: frozenset, starts: Optional[Dict[str, int]], unmerged: Set[str]) -> None:
         self.raw = raw
         self.names = names
         self.starts = starts

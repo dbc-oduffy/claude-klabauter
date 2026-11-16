@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import os
 
+from pathlib import Path
+
 import pytest
 
 from coordinator_core.codex_runner import sandbox_preflight
@@ -11,7 +13,7 @@ from coordinator_core.codex_runner.codex_spawn_env import place_installed_pwsh, 
 from coordinator_core.codex_runner.sandbox_preflight import SandboxSetupRefused
 
 
-def _dir_with_pwsh(root, *parts):
+def _dir_with_pwsh(root, *parts) -> str:
     d = root.joinpath(*parts)
     d.mkdir(parents=True)
     (d / "pwsh.exe").write_text("")
@@ -19,11 +21,11 @@ def _dir_with_pwsh(root, *parts):
 
 
 @pytest.fixture
-def win(monkeypatch):
+def win(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sandbox_preflight, "_is_windows", lambda: True)
 
 
-def _layout(tmp_path, *, ps7=True):
+def _layout(tmp_path, *, ps7: bool = True) -> tuple[dict[str, str], str, str, str]:
     pf = tmp_path / "ProgramFiles"
     ps7_dir = _dir_with_pwsh(pf, "PowerShell", "7") if ps7 else str(pf / "PowerShell" / "7")
     apps = _dir_with_pwsh(tmp_path, "WindowsApps")
@@ -36,7 +38,7 @@ def _path(env):
     return env["PATH"].split(os.pathsep)
 
 
-def test_windowsapps_first_gets_ps7_first_and_alias_dropped(tmp_path, win):
+def test_windowsapps_first_gets_ps7_first_and_alias_dropped(tmp_path: Path, win) -> None:
     environ, ps7, apps, _ = _layout(tmp_path)
     env = {"PATH": os.pathsep.join([apps, "other"])}
     out = shape_codex_child(env, writable_root=None, environ=environ, windows=True)
@@ -44,28 +46,28 @@ def test_windowsapps_first_gets_ps7_first_and_alias_dropped(tmp_path, win):
     assert _path(env) == [ps7, "other"]
 
 
-def test_leading_private_bin_stays_first(tmp_path, win):
+def test_leading_private_bin_stays_first(tmp_path: Path, win) -> None:
     environ, ps7, apps, private = _layout(tmp_path)
     env = {"PATH": os.pathsep.join([private, apps, "other"])}
     shape_codex_child(env, writable_root=None, environ=environ, windows=True)
     assert _path(env) == [private, ps7, "other"]
 
 
-def test_later_ps7_duplicate_dropped(tmp_path, win):
+def test_later_ps7_duplicate_dropped(tmp_path: Path, win) -> None:
     environ, ps7, apps, private = _layout(tmp_path)
     env = {"PATH": os.pathsep.join([private, apps, ps7])}
     shape_codex_child(env, writable_root=None, environ=environ, windows=True)
     assert _path(env) == [private, ps7]
 
 
-def test_ps7_already_first_holder_alias_still_dropped(tmp_path, win):
+def test_ps7_already_first_holder_alias_still_dropped(tmp_path: Path, win) -> None:
     environ, ps7, apps, private = _layout(tmp_path)
     env = {"PATH": os.pathsep.join([private, ps7, apps])}
     shape_codex_child(env, writable_root=None, environ=environ, windows=True)
     assert _path(env) == [private, ps7]
 
 
-def test_windowsapps_dir_without_pwsh_kept(tmp_path, win):
+def test_windowsapps_dir_without_pwsh_kept(tmp_path: Path, win) -> None:
     environ, ps7, _, _ = _layout(tmp_path)
     bare = tmp_path / "WindowsApps2" / "WindowsApps"
     bare.mkdir(parents=True)
@@ -74,42 +76,42 @@ def test_windowsapps_dir_without_pwsh_kept(tmp_path, win):
     assert _path(env) == [str(bare), ps7]
 
 
-def test_place_installed_pwsh_no_real_pwsh_leaves_env(tmp_path):
+def test_place_installed_pwsh_no_real_pwsh_leaves_env(tmp_path: Path) -> None:
     environ, _, apps, _ = _layout(tmp_path, ps7=False)
     env = {"PATH": apps}
     assert place_installed_pwsh(env, environ, windows=True) is env
     assert env == {"PATH": apps}
 
 
-def test_place_installed_pwsh_non_windows_leaves_env(tmp_path):
+def test_place_installed_pwsh_non_windows_leaves_env(tmp_path: Path) -> None:
     environ, _, apps, _ = _layout(tmp_path)
     env = {"PATH": apps}
     assert place_installed_pwsh(env, environ, windows=False) is env
     assert env == {"PATH": apps}
 
 
-def test_ps7_appended_when_no_entry_holds_pwsh(tmp_path, win):
+def test_ps7_appended_when_no_entry_holds_pwsh(tmp_path: Path, win) -> None:
     environ, ps7, _, private = _layout(tmp_path)
     env = {"PATH": private}
     shape_codex_child(env, writable_root=None, environ=environ, windows=True)
     assert _path(env) == [private, ps7]
 
 
-def test_path_key_case_preserved(tmp_path, win):
+def test_path_key_case_preserved(tmp_path: Path, win) -> None:
     environ, ps7, apps, _ = _layout(tmp_path)
     env = {"Path": apps}
     shape_codex_child(env, writable_root=None, environ=environ, windows=True)
     assert env["Path"].split(os.pathsep) == [ps7] and "PATH" not in env
 
 
-def test_no_ps7_with_windowsapps_only_refuses(tmp_path, win):
+def test_no_ps7_with_windowsapps_only_refuses(tmp_path: Path, win) -> None:
     environ, _, apps, _ = _layout(tmp_path, ps7=False)
     env = {"PATH": apps}
     with pytest.raises(SandboxSetupRefused):
         shape_codex_child(env, writable_root=None, environ=environ, windows=True)
 
 
-def test_writable_root_sets_existing_temp_tmp(tmp_path, win):
+def test_writable_root_sets_existing_temp_tmp(tmp_path: Path, win) -> None:
     environ, _, apps, _ = _layout(tmp_path)
     root = tmp_path / "repo"
     root.mkdir()
@@ -120,7 +122,7 @@ def test_writable_root_sets_existing_temp_tmp(tmp_path, win):
     assert env["TEMP"] == env["TMP"] == str(want)
 
 
-def test_writable_root_none_leaves_temp_tmp(tmp_path, win):
+def test_writable_root_none_leaves_temp_tmp(tmp_path: Path, win) -> None:
     environ, _, apps, _ = _layout(tmp_path)
     env = {"PATH": apps, "TEMP": "x", "TMP": "y"}
     shape_codex_child(env, writable_root=None, environ=environ, windows=True)
@@ -128,7 +130,7 @@ def test_writable_root_none_leaves_temp_tmp(tmp_path, win):
     assert not (tmp_path / "scratch").exists()
 
 
-def test_non_windows_leaves_path_untouched_but_sets_temp(tmp_path, monkeypatch):
+def test_non_windows_leaves_path_untouched_but_sets_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sandbox_preflight, "_is_windows", lambda: False)
     environ, _, apps, _ = _layout(tmp_path)
     env = {"PATH": apps}
@@ -137,7 +139,7 @@ def test_non_windows_leaves_path_untouched_but_sets_temp(tmp_path, monkeypatch):
     assert env["TEMP"] == str(tmp_path / "scratch" / "codex-tmp")
 
 
-def test_preflight_runs_last_on_shaped_env(tmp_path, monkeypatch):
+def test_preflight_runs_last_on_shaped_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     environ, ps7, apps, _ = _layout(tmp_path)
     seen = []
     monkeypatch.setattr(
@@ -177,7 +179,7 @@ def _isolated(tmp_path, real):
     return root / "scratch" / "codex-home", env
 
 
-def test_isolated_home_carries_hooks_and_rekeys_trust(tmp_path, monkeypatch):
+def test_isolated_home_carries_hooks_and_rekeys_trust(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sandbox_preflight, "_is_windows", lambda: False)
     real, hooks, other = _real_home(tmp_path)
     home, env = _isolated(tmp_path, real)
@@ -192,7 +194,7 @@ def test_isolated_home_carries_hooks_and_rekeys_trust(tmp_path, monkeypatch):
     assert 'trusted_hash = "sha256:aa"' in cfg
 
 
-def test_interactive_caller_keeps_real_home_and_gets_no_hooks_seed(tmp_path, monkeypatch):
+def test_interactive_caller_keeps_real_home_and_gets_no_hooks_seed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sandbox_preflight, "_is_windows", lambda: False)
     real, _, _ = _real_home(tmp_path)
     env = {"CODEX_HOME": str(real)}
@@ -200,7 +202,7 @@ def test_interactive_caller_keeps_real_home_and_gets_no_hooks_seed(tmp_path, mon
     assert env["CODEX_HOME"] == str(real)
 
 
-def test_worker_launch_always_gets_seeded_home_even_on_writable_real_home(tmp_path, monkeypatch):
+def test_worker_launch_always_gets_seeded_home_even_on_writable_real_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sandbox_preflight, "_is_windows", lambda: False)
     real, _, _ = _real_home(tmp_path)
     root = tmp_path / "repo"
@@ -211,7 +213,7 @@ def test_worker_launch_always_gets_seeded_home_even_on_writable_real_home(tmp_pa
     assert (root / "scratch" / "codex-home" / "hooks.json").is_file()
 
 
-def test_refreshed_config_is_rekeyed_again(tmp_path, monkeypatch):
+def test_refreshed_config_is_rekeyed_again(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sandbox_preflight, "_is_windows", lambda: False)
     real, hooks, _ = _real_home(tmp_path)
     home, _ = _isolated(tmp_path, real)
@@ -223,7 +225,7 @@ def test_refreshed_config_is_rekeyed_again(tmp_path, monkeypatch):
     assert f"[hooks.state.'{home / 'hooks.json'}:stop:0:0']" in (home / "config.toml").read_text()
 
 
-def test_stale_pre_rekey_home_is_rekeyed_in_place(tmp_path, monkeypatch):
+def test_stale_pre_rekey_home_is_rekeyed_in_place(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sandbox_preflight, "_is_windows", lambda: False)
     real, hooks, _ = _real_home(tmp_path)
     home = tmp_path / "repo" / "scratch" / "codex-home"

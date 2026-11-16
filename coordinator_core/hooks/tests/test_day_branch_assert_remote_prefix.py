@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 from coordinator_core.hooks.day_branch_assert import COMPLIANT, WARN, case_b_verdict
+from pathlib import Path
 
 
-def test_origin_prefixed_work_branch_warns_once_non_escalating(tmp_path):
+def test_origin_prefixed_work_branch_warns_once_non_escalating(tmp_path: Path) -> None:
     result = case_b_verdict(str(tmp_path), "origin/work/m/2026-09-22")
     assert result.outcome == WARN
     assert result.branch == "origin/work/m/2026-09-22"
@@ -14,21 +15,21 @@ def test_origin_prefixed_work_branch_warns_once_non_escalating(tmp_path):
     assert "is not a work/* branch" not in result.message
 
 
-def test_bare_work_branch_is_compliant(tmp_path):
+def test_bare_work_branch_is_compliant(tmp_path: Path) -> None:
     result = case_b_verdict(str(tmp_path), "work/m/2026-09-22")
     assert result.outcome == COMPLIANT
     assert result.branch == "work/m/2026-09-22"
     assert result.message == ""
 
 
-def test_recognized_long_lived_branch_gets_todays_warn(tmp_path):
+def test_recognized_long_lived_branch_gets_todays_warn(tmp_path: Path) -> None:
     result = case_b_verdict(str(tmp_path), "feature/foo")
     assert result.outcome == WARN
     assert result.branch == "feature/foo"
     assert "auto-push is off for feature/foo by doctrine" in result.message
 
 
-def test_random_branch_gets_the_banner_warn(tmp_path):
+def test_random_branch_gets_the_banner_warn(tmp_path: Path) -> None:
     result = case_b_verdict(str(tmp_path), "random")
     assert result.outcome == WARN
     assert result.branch == "random"

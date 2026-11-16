@@ -29,6 +29,8 @@ from typing import List
 
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.bash_guards.dispatch import GuardEntry
+from pathlib import Path
+import pytest
 
 _SIDE_EFFECT_ONLY_GUARD_NAMES = frozenset({"reap-stale-git-lock"})
 
@@ -46,7 +48,7 @@ def _dummy_chain() -> List[GuardEntry]:
     )
 
 
-def test_side_effect_only_guards_are_registered_in_the_chain():
+def test_side_effect_only_guards_are_registered_in_the_chain() -> None:
     names = [entry.name for entry in _dummy_chain()]
     for name in _SIDE_EFFECT_ONLY_GUARD_NAMES:
         assert name in names, (
@@ -55,7 +57,7 @@ def test_side_effect_only_guards_are_registered_in_the_chain():
         )
 
 
-def test_known_rewriting_guards_are_registered_in_the_chain():
+def test_known_rewriting_guards_are_registered_in_the_chain() -> None:
     names = [entry.name for entry in _dummy_chain()]
     for name in _KNOWN_REWRITING_GUARD_NAMES:
         assert name in names, (
@@ -64,7 +66,7 @@ def test_known_rewriting_guards_are_registered_in_the_chain():
         )
 
 
-def test_every_side_effect_only_guard_precedes_every_known_rewriting_guard():
+def test_every_side_effect_only_guard_precedes_every_known_rewriting_guard() -> None:
     chain = _dummy_chain()
     index_by_name = {entry.name: i for i, entry in enumerate(chain)}
 
@@ -92,7 +94,7 @@ def test_every_side_effect_only_guard_precedes_every_known_rewriting_guard():
 
 class TestGitStatusReachesReaperEndToEnd:
 
-    def test_stale_lock_is_reaped_for_git_status_despite_the_rewrite(self, tmp_path, monkeypatch):
+    def test_stale_lock_is_reaped_for_git_status_despite_the_rewrite(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")
         monkeypatch.setenv("COORDINATOR_LOCK_REAP_AGE_SEC", "10")
         git_dir = tmp_path / ".git"

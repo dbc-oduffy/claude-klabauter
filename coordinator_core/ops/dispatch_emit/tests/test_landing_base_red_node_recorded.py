@@ -31,17 +31,16 @@ def test_recorded_fail_without_baseline_names_the_node_the_retest_record_holds(t
 
     findings, check = li.landing_test_gate(tmp_path, _params(), RUN)
 
-    assert check == "failed" and findings
-    assert all(NODE in f.detail and ltt.NO_NODE_RECORDED not in f.detail for f in findings)
-    assert ltt.retest_step(list(findings), {})["nodes"] == [NODE]
+    assert check == ltt.UNKNOWN_ONLY and list(findings) == []
+    assert findings.unknown_ids == [NODE]
 
 
 def test_live_pass_failures_name_the_node_when_the_export_pass_names_none(tmp_path):
     _record(tmp_path, export={"status": "fail", "failed_tests": []}, live={"status": "fail", "failed_tests": [NODE]})
 
-    findings, _ = li.landing_test_gate(tmp_path, _params(), RUN)
+    findings, check = li.landing_test_gate(tmp_path, _params(), RUN)
 
-    assert findings and NODE in findings[0].detail and ltt.NO_NODE_RECORDED not in findings[0].detail
+    assert check == ltt.UNKNOWN_ONLY and list(findings) == [] and findings.unknown_ids == [NODE]
 
 
 def test_no_record_anywhere_still_says_no_node_recorded(tmp_path):
@@ -74,7 +73,7 @@ def test_node_green_at_base_and_red_after_still_refuses(tmp_path):
 
     findings, check = li.landing_test_gate(tmp_path, _params(failing_at_base=[OTHER]), RUN)
 
-    assert check == "failed" and NODE in findings[0].detail
+    assert check == ltt.UNKNOWN_ONLY and list(findings) == [] and findings.unknown_ids == [NODE]
     assert not getattr(findings, "foreign_evidence", None)
 
 
@@ -83,7 +82,7 @@ def test_one_base_red_node_beside_a_caused_one_still_refuses_naming_the_caused(t
 
     findings, check = li.landing_test_gate(tmp_path, _params(failing_at_base=[NODE]), RUN)
 
-    assert check == "failed" and any(OTHER in f.detail for f in findings)
+    assert check == ltt.UNKNOWN_ONLY and list(findings) == [] and findings.unknown_ids == [OTHER]
 
 
 def test_base_red_keys_name_the_self_correction_foreign_field():

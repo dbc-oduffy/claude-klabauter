@@ -35,7 +35,7 @@ def _write(root: Path, rel: str, text: str = "x\n") -> None:
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], root)
@@ -83,11 +83,11 @@ def _status(root: Path) -> dict:
     return {l[3:]: l[:2] for l in _git(["status", "--porcelain", "-uall"], root).splitlines()}
 
 
-def test_verb_is_registered():
+def test_verb_is_registered() -> None:
     assert grind_rows._VERBS["settle-run"] is grind_rows._cmd_settle_run
 
 
-def test_evidence_reconstruction_lands_declared_and_archive_and_drops_unlandable(repo, tmp_path, capsys):
+def test_evidence_reconstruction_lands_declared_and_archive_and_drops_unlandable(repo, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _finish_row(repo, "r1")
     _triage(repo, {"r1": ["a.py"]})
     code, reply = _run(capsys, _argv(tmp_path, repo))
@@ -103,7 +103,7 @@ def test_evidence_reconstruction_lands_declared_and_archive_and_drops_unlandable
     assert f"{EVIDENCE}/r1.done.md" not in status
 
 
-def test_reconstruction_picks_only_rows_with_done_evidence_and_on_disk_archive(repo, tmp_path):
+def test_reconstruction_picks_only_rows_with_done_evidence_and_on_disk_archive(repo, tmp_path: Path) -> None:
     _finish_row(repo, "r1")
     _write(repo, f"{ARCHIVE}/no-evidence.yaml")
     _write(repo, f"{EVIDENCE}/no-archive.done.md")
@@ -116,7 +116,7 @@ def test_reconstruction_picks_only_rows_with_done_evidence_and_on_disk_archive(r
     assert rows[0]["deleted_paths"] == [f"{QUEUE}/r1.yaml"]
 
 
-def test_fix_paths_record_lands_undeclared_fix_and_removal_with_the_archive(repo, tmp_path, capsys):
+def test_fix_paths_record_lands_undeclared_fix_and_removal_with_the_archive(repo, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.backlog_grind_assemble import grind_fix_paths
 
     _write(repo, "gone.py", "y = 1\n")
@@ -134,7 +134,7 @@ def test_fix_paths_record_lands_undeclared_fix_and_removal_with_the_archive(repo
     assert "other.py" in status
 
 
-def test_a_corrupt_fix_paths_record_reads_as_none(repo, tmp_path):
+def test_a_corrupt_fix_paths_record_reads_as_none(repo, tmp_path: Path) -> None:
     _finish_row(repo, "r1")
     run_dir = _triage(repo, {"r1": ["a.py"]})
     _write(run_dir, "fix-paths/r1.json", "{not json")
@@ -144,7 +144,7 @@ def test_a_corrupt_fix_paths_record_reads_as_none(repo, tmp_path):
     assert rows[0]["paths"] == ["a.py", f"{ARCHIVE}/r1.yaml"]
 
 
-def test_params_file_source_lands_its_rows(repo, tmp_path, capsys):
+def test_params_file_source_lands_its_rows(repo, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import params_path
 
     persisted = params_path(repo, RUN)
@@ -158,7 +158,7 @@ def test_params_file_source_lands_its_rows(repo, tmp_path, capsys):
     assert "b.py" not in _status(repo)
 
 
-def test_rows_file_overrides_params_file(repo, tmp_path, capsys):
+def test_rows_file_overrides_params_file(repo, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import params_path
 
     persisted = params_path(repo, RUN)
@@ -175,7 +175,7 @@ def test_rows_file_overrides_params_file(repo, tmp_path, capsys):
     assert "other.py" not in status and "b.py" in status
 
 
-def test_ledger_root_path_is_dropped_not_refused(repo, tmp_path, capsys):
+def test_ledger_root_path_is_dropped_not_refused(repo, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _finish_row(repo, "r1")
     rows_file = tmp_path / "rows.json"
     rows_file.write_text(
@@ -188,7 +188,7 @@ def test_ledger_root_path_is_dropped_not_refused(repo, tmp_path, capsys):
     assert f"{EVIDENCE}/r1.done.md" in _git(["ls-files"], repo).split()
 
 
-def test_default_settle_run_lands_the_run_evidence_and_not_another_runs(repo, tmp_path, capsys):
+def test_default_settle_run_lands_the_run_evidence_and_not_another_runs(repo, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _finish_row(repo, "r1")
     _write(repo, f"state/queue-grind/{PROFILE}/evidence/{RUN}/sub/r1.verify.md")
     other = f"state/queue-grind/{PROFILE}/evidence/20200101T000000Z/x.done.md"
@@ -201,7 +201,7 @@ def test_default_settle_run_lands_the_run_evidence_and_not_another_runs(repo, tm
     assert other not in tracked
 
 
-def test_a_row_whose_archive_is_already_committed_lands_nothing(repo, tmp_path, capsys):
+def test_a_row_whose_archive_is_already_committed_lands_nothing(repo, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _finish_row(repo, "r1")
     _git(["add", f"{ARCHIVE}/r1.yaml"], repo)
     _git(["commit", "-q", "-m", "archived"], repo)
@@ -210,7 +210,7 @@ def test_a_row_whose_archive_is_already_committed_lands_nothing(repo, tmp_path, 
     assert "a.py" in _status(repo)
 
 
-def test_dry_run_lands_nothing_and_lists_unclaimed_dirty(repo, tmp_path, capsys):
+def test_dry_run_lands_nothing_and_lists_unclaimed_dirty(repo, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _finish_row(repo, "r1")
     _triage(repo, {"r1": ["a.py"]})
     head = _git(["rev-parse", "HEAD"], repo)
@@ -224,7 +224,7 @@ def test_dry_run_lands_nothing_and_lists_unclaimed_dirty(repo, tmp_path, capsys)
     assert (repo / f"state/queue-grind/{PROFILE}/r1.jsonl").exists()
 
 
-def test_manifest_named_ledger_files_ride_in_the_grind_commit_and_peer_ledger_stays(repo, tmp_path, capsys):
+def test_manifest_named_ledger_files_ride_in_the_grind_commit_and_peer_ledger_stays(repo, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.ops.dispatch_emit import minted_records
 
     _finish_row(repo, "r1")
@@ -244,7 +244,7 @@ def test_manifest_named_ledger_files_ride_in_the_grind_commit_and_peer_ledger_st
     assert own not in status and peer in status
 
 
-def test_a_settled_row_ledger_named_by_the_manifest_is_unlinked_not_committed(repo, tmp_path, capsys):
+def test_a_settled_row_ledger_named_by_the_manifest_is_unlinked_not_committed(repo, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.ops.dispatch_emit import minted_records
 
     _finish_row(repo, "r1")
@@ -258,7 +258,7 @@ def test_a_settled_row_ledger_named_by_the_manifest_is_unlinked_not_committed(re
     assert not (repo / f"state/queue-grind/{PROFILE}/r1.jsonl").exists()
 
 
-def test_usage_error_without_a_queue(repo, tmp_path, capsys):
+def test_usage_error_without_a_queue(repo, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     code = grind_rows.main(
         ["settle-run", "--profile-dir", str(tmp_path / "profiles"), "--profile", PROFILE,
          "--run-id", RUN, "--repo-root", str(repo)]
@@ -270,7 +270,7 @@ def _ledger_line(run: str, row_id: str) -> str:
     return json.dumps({"row_id": row_id, "evidence_file": f"state/queue-grind/{PROFILE}/evidence/{run}/{row_id}.verify.md"}) + "\n"
 
 
-def test_unmanifested_run_ledgers_are_recorded_and_ride_the_commit_and_other_runs_stay(repo, tmp_path, capsys):
+def test_unmanifested_run_ledgers_are_recorded_and_ride_the_commit_and_other_runs_stay(repo, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _finish_row(repo, "r1")
     _triage(repo, {"r1": ["a.py"]})
     own = f"state/queue-grind/{PROFILE}/open-row.jsonl"
@@ -284,7 +284,7 @@ def test_unmanifested_run_ledgers_are_recorded_and_ride_the_commit_and_other_run
     assert own not in status and other in status
 
 
-def test_record_run_ledgers_names_nothing_for_a_run_with_no_ledger_citing_it(repo):
+def test_record_run_ledgers_names_nothing_for_a_run_with_no_ledger_citing_it(repo) -> None:
     from coordinator_core.ops.dispatch_emit import minted_records
 
     _write(repo, f"state/queue-grind/{PROFILE}/x.jsonl", _ledger_line("20200101T000000Z", "x"))

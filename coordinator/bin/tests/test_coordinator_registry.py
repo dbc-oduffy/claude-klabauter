@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+from pathlib import Path
 
 _TESTS_DIR = os.path.dirname(os.path.abspath(__file__))
 _BIN_DIR = os.path.dirname(_TESTS_DIR)
@@ -34,36 +35,36 @@ def _manifest_known_types() -> frozenset[str]:
 _EXPECTED_KNOWN_TYPES: frozenset[str] = _manifest_known_types()
 
 
-def test_known_types():
+def test_known_types() -> None:
     assert reg.KNOWN_TYPES == _EXPECTED_KNOWN_TYPES
 
 
-def test_known_types_count():
+def test_known_types_count() -> None:
     assert len(reg.KNOWN_TYPES) == len(_EXPECTED_KNOWN_TYPES) > 0
 
 
-def test_sidecar_types():
+def test_sidecar_types() -> None:
     assert reg.SIDECAR_TYPES == frozenset(
         {"review", "prior-art-check", "plan-coverage-check", "docs-check"}
     )
 
 
-def test_queue_types():
+def test_queue_types() -> None:
     assert reg.QUEUE_TYPES == frozenset(
         {"improvement-queue", "bug-backlog", "debt-backlog"}
     )
 
 
-def test_repo_aliases():
+def test_repo_aliases() -> None:
     assert reg.REPO_ALIASES == {"claude_unreal_holodeck": "example-game-repo"}
 
 
-def test_receiver_em_aliases():
+def test_receiver_em_aliases() -> None:
     # Inverse of REPO_ALIASES.
     assert reg.RECEIVER_EM_ALIASES == {"example-game-repo": "claude_unreal_holodeck"}
 
 
-def test_central_receiver_ids():
+def test_central_receiver_ids() -> None:
     ids = reg.CENTRAL_RECEIVER_IDS
     assert "coordinator-content-repo-em" in ids
     assert ids <= frozenset({"coordinator-content-repo-em", "content-root-em", "coordinator-content-repo-em"})
@@ -75,7 +76,7 @@ def test_central_receiver_ids():
 # The validate-frontmatter-schema.js consumer must be updated separately.
 
 
-def test_sidecar_suffixes():
+def test_sidecar_suffixes() -> None:
     # Review F2/F3 — new symbol replacing local _SIDECAR_SUFFIX.
     assert reg.SIDECAR_SUFFIXES == {
         "review": "review",
@@ -96,50 +97,50 @@ def test_sidecar_suffixes():
 # ---------------------------------------------------------------------------
 
 
-def test_repo_key_to_em_id_content_root_canonical():
+def test_repo_key_to_em_id_content_root_canonical() -> None:
     assert reg.repo_key_to_em_id("repos.content_root") == "coordinator-content-repo-em"
 
 
-def test_central_canonical_id():
+def test_central_canonical_id() -> None:
     assert reg._central_canonical_id() == "coordinator-content-repo-em"
 
 
-def test_repo_key_to_em_id_example_retrieval_repo():
+def test_repo_key_to_em_id_example_retrieval_repo() -> None:
     assert reg.repo_key_to_em_id("repos.project_rag") == "example-retrieval-repo-em"
 
 
-def test_repo_key_to_em_id_example_game_repo_alias():
+def test_repo_key_to_em_id_example_game_repo_alias() -> None:
     assert reg.repo_key_to_em_id("repos.claude_unreal_holodeck") == "example-game-repo-em"
 
 
 _CONTENT_ROOT_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
-def test_em_id_for_root_content_root_canonical():
+def test_em_id_for_root_content_root_canonical() -> None:
     assert reg.em_id_for_root(
         _CONTENT_ROOT_ROOT, {"repos.content_root": _CONTENT_ROOT_ROOT}
     ) == "coordinator-content-repo-em"
 
 
-def test_em_id_for_root_none():
+def test_em_id_for_root_none() -> None:
     assert reg.em_id_for_root(
         None, {"repos.content_root": _CONTENT_ROOT_ROOT}
     ) == "unknown-sender-em"
 
 
-def test_em_id_for_root_basename_fallback():
+def test_em_id_for_root_basename_fallback() -> None:
     fake_claude_home = os.path.expanduser("~/.claude")
     assert reg.em_id_for_root(fake_claude_home, {}) == ".claude-em"
 
 
-def test_em_id_for_root_registered_non_central_loop_step_3():
+def test_em_id_for_root_registered_non_central_loop_step_3() -> None:
     fake_example_game_repo_root = "/nonexistent/fake-example-game-repo-for-test"
     assert reg.em_id_for_root(
         fake_example_game_repo_root, {"repos.claude_unreal_holodeck": fake_example_game_repo_root}
     ) == "example-game-repo-em"
 
 
-def test_content_root_em_alias_in_central_receiver_ids():
+def test_content_root_em_alias_in_central_receiver_ids() -> None:
     assert "coordinator-content-repo-em" in reg.CENTRAL_RECEIVER_IDS
 
 
@@ -179,7 +180,7 @@ def _run_import_subprocess(env: dict) -> subprocess.CompletedProcess:
     )
 
 
-def test_bootstrap_import_succeeds_with_pointer_present():
+def test_bootstrap_import_succeeds_with_pointer_present() -> None:
     """Case (a): REPO_DOE_CLAUDE unset, real ambient pointer/registry
     state left intact — import must succeed via a codename-free rung (or the
     co-located rung, if this checkout happens to be co-located)."""
@@ -193,7 +194,7 @@ def test_bootstrap_import_succeeds_with_pointer_present():
     assert result.stdout.strip(), "expected _MANIFEST_PATH to print a non-empty path"
 
 
-def test_bootstrap_import_falls_back_to_vendored_manifest_with_pointer_unreachable():
+def test_bootstrap_import_falls_back_to_vendored_manifest_with_pointer_unreachable() -> None:
     """Case (b): REPO_DOE_CLAUDE unset AND HOME/CLAUDE_HOME/
     COORDINATOR_SETTINGS_HOME redirected to an empty temp dir — no LIVE rung
     can resolve, proving the file rungs are load-bearing (not merely present)
@@ -287,7 +288,7 @@ def _build_payload_shaped_fixture(root: str) -> tuple[str, str]:
     return payload_lib_dir, claude_home_dir
 
 
-def test_bootstrap_import_succeeds_on_payload_shaped_tree_under_oss_environment():
+def test_bootstrap_import_succeeds_on_payload_shaped_tree_under_oss_environment() -> None:
     with tempfile.TemporaryDirectory() as _tmp:
         _payload_lib_dir, _claude_home_dir = _build_payload_shaped_fixture(_tmp)
         _empty_home = os.path.join(_tmp, "empty-home")
@@ -342,7 +343,7 @@ import tempfile as _tempfile  # noqa: E402
 import pytest  # noqa: E402
 
 
-def _clear_content_root_env(monkeypatch):
+def _clear_content_root_env(monkeypatch) -> None:
     """Strip every env var content_root()'s legacy chain reads, and stub the
     codename rungs' pointer/marketplace-cache/registry helpers to '' / None,
     so a test can install exactly the one rung under test.
@@ -365,14 +366,14 @@ def _clear_content_root_env(monkeypatch):
     monkeypatch.setattr(reg, "_registry_machine_local_get", lambda key: None)
 
 
-def test_content_root_resolves_via_content_root_pointer_rung(monkeypatch):
+def test_content_root_resolves_via_content_root_pointer_rung(monkeypatch: pytest.MonkeyPatch) -> None:
     with _tempfile.TemporaryDirectory() as _fake_root:
         _clear_content_root_env(monkeypatch)
         monkeypatch.setattr(reg, "_mp_content_root_pointer_rung", lambda: _fake_root)
         assert reg.content_root() == _fake_root
 
 
-def test_content_root_resolves_via_marketplace_cache_rung(monkeypatch):
+def test_content_root_resolves_via_marketplace_cache_rung(monkeypatch: pytest.MonkeyPatch) -> None:
     """The real marketplace-cache install
     location resolves like the flat-layout rung: as-is, gated on
     `<cand>/state` being a directory (BLOCKER-2)."""
@@ -383,7 +384,7 @@ def test_content_root_resolves_via_marketplace_cache_rung(monkeypatch):
         assert reg.content_root() == _fake_root
 
 
-def test_mp_marketplace_cache_rung_excludes_unparseable_version_dirs(monkeypatch):
+def test_mp_marketplace_cache_rung_excludes_unparseable_version_dirs(monkeypatch: pytest.MonkeyPatch) -> None:
     with _tempfile.TemporaryDirectory() as _home:
         _cache_parent = os.path.join(_home, "plugins", "cache", "coordinator-claude", "coordinator")
         os.makedirs(os.path.join(_cache_parent, "0371a29ed35d"))
@@ -393,7 +394,7 @@ def test_mp_marketplace_cache_rung_excludes_unparseable_version_dirs(monkeypatch
         assert reg._mp_marketplace_cache_rung() == os.path.join(_cache_parent, "1.2.3")
 
 
-def test_content_root_resolves_via_flat_layout_probe_rung(monkeypatch):
+def test_content_root_resolves_via_flat_layout_probe_rung(monkeypatch: pytest.MonkeyPatch) -> None:
     """The flat marketplace-clone layout is the clone root directly
     (resolve_coordinator_clone.py::resolve_clone_root() treats it the same
     way) — used as-is, no conversion. Gated (Review: staff-eng BLOCKER-2) on
@@ -405,7 +406,7 @@ def test_content_root_resolves_via_flat_layout_probe_rung(monkeypatch):
         assert reg.content_root() == _fake_root
 
 
-def test_content_root_flat_layout_rejected_without_state_dir(monkeypatch):
+def test_content_root_flat_layout_rejected_without_state_dir(monkeypatch: pytest.MonkeyPatch) -> None:
     with _tempfile.TemporaryDirectory() as _fake_root:
         _clear_content_root_env(monkeypatch)
         monkeypatch.setattr(reg, "_mp_flat_layout_probe_rung", lambda: _fake_root)
@@ -413,7 +414,7 @@ def test_content_root_flat_layout_rejected_without_state_dir(monkeypatch):
             reg.content_root()
 
 
-def test_content_root_normalizes_claude_plugin_root_content_root_to_repo_root(monkeypatch):
+def test_content_root_normalizes_claude_plugin_root_content_root_to_repo_root(monkeypatch: pytest.MonkeyPatch) -> None:
     """Private/dev layout: CLAUDE_PLUGIN_ROOT is a CONTENT root
     (`<repo_root>/coordinator`), one level below the repo root content_root()
     must return — the plugin-root-vs-content-repo-root distinction this chunk exists
@@ -432,7 +433,7 @@ def test_content_root_normalizes_claude_plugin_root_content_root_to_repo_root(mo
         assert reg.content_root() == _repo_root
 
 
-def test_content_root_uses_claude_plugin_root_directly_in_oss_flat_layout(monkeypatch):
+def test_content_root_uses_claude_plugin_root_directly_in_oss_flat_layout(monkeypatch: pytest.MonkeyPatch) -> None:
     """OSS flat layout: CLAUDE_PLUGIN_ROOT already IS the repo root
     (manifest ships flat at plugin root, marker directly beside it) — no
     parent-climb, used as-is. Gated (Review: staff-eng BLOCKER-2) on
@@ -447,7 +448,7 @@ def test_content_root_uses_claude_plugin_root_directly_in_oss_flat_layout(monkey
         assert reg.content_root() == _flat_root
 
 
-def test_content_root_rejects_foreign_plugin_root_over_explicit_override(monkeypatch):
+def test_content_root_rejects_foreign_plugin_root_over_explicit_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """
     CLAUDE_PLUGIN_ROOT set to a DIFFERENT plugin's root (no
     .claude-plugin/plugin.json under it, since it belongs to a foreign
@@ -461,7 +462,7 @@ def test_content_root_rejects_foreign_plugin_root_over_explicit_override(monkeyp
         assert reg.content_root() == _correct_root
 
 
-def test_content_root_resolves_via_registry_live_path_rung(monkeypatch):
+def test_content_root_resolves_via_registry_live_path_rung(monkeypatch: pytest.MonkeyPatch) -> None:
     """machine-local
     plugin.mirrors.coordinator-claude.live_path is now routed through the
     same CLAUDE_PLUGIN_ROOT-shaped normalizer (not trusted as a repo root
@@ -480,7 +481,7 @@ def test_content_root_resolves_via_registry_live_path_rung(monkeypatch):
         assert reg.content_root() == _fake_root
 
 
-def test_content_root_rejects_live_path_content_root_without_git(monkeypatch):
+def test_content_root_rejects_live_path_content_root_without_git(monkeypatch: pytest.MonkeyPatch) -> None:
     with _tempfile.TemporaryDirectory() as _content_root:
         _clear_content_root_env(monkeypatch)
         monkeypatch.setattr(
@@ -492,13 +493,13 @@ def test_content_root_rejects_live_path_content_root_without_git(monkeypatch):
             reg.content_root()
 
 
-def test_content_root_falls_back_to_legacy_env_chain_when_codename_rungs_unreachable(monkeypatch):
+def test_content_root_falls_back_to_legacy_env_chain_when_codename_rungs_unreachable(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_content_root_env(monkeypatch)
     monkeypatch.setenv("REPO_DOE_CLAUDE", "/fake/coordinator-content-repo")
     assert reg.content_root() == "/fake/coordinator-content-repo"
 
 
-def test_content_root_env_override_wins_over_live_pointer_when_both_set(monkeypatch):
+def test_content_root_env_override_wins_over_live_pointer_when_both_set(monkeypatch: pytest.MonkeyPatch) -> None:
     """With a
     live content-root pointer AND an explicit REPO_DOE_CLAUDE
     override both present, the explicit override must win (it is an
@@ -511,13 +512,13 @@ def test_content_root_env_override_wins_over_live_pointer_when_both_set(monkeypa
         assert reg.content_root() == _override_root
 
 
-def test_content_root_raises_unresolvable_when_every_rung_including_codename_rungs_fails(monkeypatch):
+def test_content_root_raises_unresolvable_when_every_rung_including_codename_rungs_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_content_root_env(monkeypatch)
     with pytest.raises(reg._DoeUnresolvable):
         reg.content_root()
 
 
-def test_plugin_root_candidate_climbs_content_root_to_repo_root(tmp_path):
+def test_plugin_root_candidate_climbs_content_root_to_repo_root(tmp_path: Path) -> None:
     repo_root = tmp_path / "doe-repo"
     content_root = repo_root / "coordinator"
     content_root.mkdir(parents=True)
@@ -529,7 +530,7 @@ def test_plugin_root_candidate_climbs_content_root_to_repo_root(tmp_path):
     assert result == str(repo_root)
 
 
-def test_plugin_root_candidate_bare_drive_root_falls_through_unchanged(tmp_path, monkeypatch):
+def test_plugin_root_candidate_bare_drive_root_falls_through_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """KNOWN LATENT DIVERGENCE from coordinator_core's copy (B7): this call
     site uses drive_root_guard="normpath", which -- unlike the engine
     copy's drive_root_guard="preserve" -- truncates a bare Windows
@@ -553,7 +554,7 @@ def test_plugin_root_candidate_bare_drive_root_falls_through_unchanged(tmp_path,
     assert result == drive_root
 
 
-def test_plugin_root_candidate_basename_casefold_case_insensitive_on_any_platform(tmp_path):
+def test_plugin_root_candidate_basename_casefold_case_insensitive_on_any_platform(tmp_path: Path) -> None:
     """KNOWN DIVERGENCE from coordinator_core's copy: this call site uses
     basename_compare="casefold", which is case-insensitive on every
     platform (not just Windows, unlike the engine copy's normcase-based
@@ -569,7 +570,7 @@ def test_plugin_root_candidate_basename_casefold_case_insensitive_on_any_platfor
     assert result == str(repo_root)
 
 
-def test_plugin_root_candidate_no_manifest_relpath_fallback(tmp_path):
+def test_plugin_root_candidate_no_manifest_relpath_fallback(tmp_path: Path) -> None:
     repo_root = tmp_path / "doe-repo"
     content_root = repo_root / "coordinator"
     (content_root / "schemas").mkdir(parents=True)
@@ -580,7 +581,7 @@ def test_plugin_root_candidate_no_manifest_relpath_fallback(tmp_path):
     assert result == str(content_root)
 
 
-def test_plugin_root_candidate_allow_unchanged_fallback_true_returns_candidate(tmp_path):
+def test_plugin_root_candidate_allow_unchanged_fallback_true_returns_candidate(tmp_path: Path) -> None:
     candidate = str(tmp_path / "unrecognized")
     os.makedirs(candidate)
 
@@ -589,7 +590,7 @@ def test_plugin_root_candidate_allow_unchanged_fallback_true_returns_candidate(t
     assert result == candidate
 
 
-def test_plugin_root_candidate_allow_unchanged_fallback_false_returns_empty(tmp_path):
+def test_plugin_root_candidate_allow_unchanged_fallback_false_returns_empty(tmp_path: Path) -> None:
     candidate = str(tmp_path / "unrecognized")
     os.makedirs(candidate)
 

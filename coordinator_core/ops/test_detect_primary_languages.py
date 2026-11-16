@@ -35,6 +35,7 @@ from coordinator_core.ops.detect_primary_languages import (
     _detect_primary_languages,
     detect_primary_languages,
 )
+from pathlib import Path
 
 _OP_NAME = "detect.primary_languages"
 assert _OP_NAME in _REGISTRY, (
@@ -43,19 +44,19 @@ assert _OP_NAME in _REGISTRY, (
 )
 
 
-def _write(root, rel_path, content=""):
+def _write(root, rel_path, content: str = ""):
     path = root / rel_path
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
     return path
 
 
-def test_op_missing_target_root_raises_value_error():
+def test_op_missing_target_root_raises_value_error() -> None:
     with pytest.raises(ValueError, match="target_root"):
         _detect_primary_languages({})
 
 
-def test_op_invalid_top_n_raises_value_error(tmp_path):
+def test_op_invalid_top_n_raises_value_error(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     for bad in (0, -1, "3", 3.5, True):
@@ -64,7 +65,7 @@ def test_op_invalid_top_n_raises_value_error(tmp_path):
                 _detect_primary_languages({"target_root": str(root), "top_n": bad})
             
 
-def test_happy_path_ranks_by_count_then_name(tmp_path):
+def test_happy_path_ranks_by_count_then_name(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _write(root, "a.py")
@@ -85,7 +86,7 @@ def test_happy_path_ranks_by_count_then_name(tmp_path):
     assert result["primary"] == [".py", ".ts"]
 
 
-def test_ties_broken_by_extension_name_ascending(tmp_path):
+def test_ties_broken_by_extension_name_ascending(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _write(root, "a.ts")
@@ -101,7 +102,7 @@ def test_ties_broken_by_extension_name_ascending(tmp_path):
     ]
 
 
-def test_skip_dirs_excluded_from_tally(tmp_path):
+def test_skip_dirs_excluded_from_tally(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _write(root, "src/a.py")
@@ -114,7 +115,7 @@ def test_skip_dirs_excluded_from_tally(tmp_path):
     assert result["counts"] == [{"extension": ".py", "count": 1}]
 
 
-def test_extensionless_files_contribute_nothing(tmp_path):
+def test_extensionless_files_contribute_nothing(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _write(root, "Makefile")
@@ -126,7 +127,7 @@ def test_extensionless_files_contribute_nothing(tmp_path):
     assert result["primary"] == []
 
 
-def test_empty_target_root_yields_empty_result(tmp_path):
+def test_empty_target_root_yields_empty_result(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
 
@@ -135,7 +136,7 @@ def test_empty_target_root_yields_empty_result(tmp_path):
     assert result == {"counts": [], "primary": []}
 
 
-def test_default_top_n_is_three(tmp_path):
+def test_default_top_n_is_three(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _write(root, "a.py")
@@ -148,7 +149,7 @@ def test_default_top_n_is_three(tmp_path):
     assert result["primary"] == [".cpp", ".js", ".py"]
 
 
-def test_idempotent_repeated_invocation_returns_identical_result(tmp_path):
+def test_idempotent_repeated_invocation_returns_identical_result(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _write(root, "a.py")

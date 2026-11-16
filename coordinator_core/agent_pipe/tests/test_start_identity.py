@@ -5,10 +5,11 @@ import pytest
 from coordinator_core.agent_pipe import __main__ as relay
 from coordinator_core.ops import agent_pipe as ops
 from coordinator_core.session import core
+from pathlib import Path
 
 
 @pytest.mark.parametrize("agent,vendor", [("codex", "codex"), ("antigravity", "agy")])
-def test_start_projects_caller_then_scrubs_at_both_boundaries(tmp_path, monkeypatch, agent, vendor):
+def test_start_projects_caller_then_scrubs_at_both_boundaries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, agent, vendor) -> None:
     dirty = {"CODEX_THREAD_ID": "daemon", "CLAUDE_SESSION_ID": "daemon", "COORDINATOR_SESSION_ID": "daemon",
              "COORDINATOR_AGENT_ROLE": "em", "COORDINATOR_AGENT_MODEL": "parent-model", "PATH": "preserved"}
     monkeypatch.setattr(core, "subprocess_identity_env", lambda **kw: {**dirty, "CODEX_THREAD_ID": "actual-caller"})
@@ -38,7 +39,7 @@ def test_start_projects_caller_then_scrubs_at_both_boundaries(tmp_path, monkeypa
     assert all(k not in final for k in ("CODEX_THREAD_ID", "CLAUDE_SESSION_ID", "COORDINATOR_SESSION_ID", "COORDINATOR_AGENT_MODEL"))
 
 
-def test_existing_resume_keeps_identity_semantics(tmp_path, monkeypatch):
+def test_existing_resume_keeps_identity_semantics(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     current = {"CODEX_THREAD_ID": "existing-thread", "COORDINATOR_AGENT_ROLE": "em"}
     monkeypatch.setattr(relay.os, "environ", current)
     from coordinator_core.codex_runner import codex_spawn_env

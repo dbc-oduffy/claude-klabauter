@@ -34,12 +34,12 @@ def _commit(repo: Path, name: str) -> str:
 
 
 @pytest.fixture(autouse=True)
-def _no_launch(monkeypatch):
+def _no_launch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(op, "_launch", lambda root, run_id: True)
 
 
 @pytest.fixture
-def foreign_repo(tmp_path, monkeypatch):
+def foreign_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, str, str]:
     """A repo that is not the process cwd or the engine root, holding a halted run whose halt commit precedes two later commits."""
     repo = tmp_path / "target"
     repo.mkdir()
@@ -65,7 +65,7 @@ def _call(repo, **params):
     return op._handler({"run_id": RUN, **params}, repo)
 
 
-def test_met_by_after_the_halt_lands_a_run_in_another_repo(foreign_repo):
+def test_met_by_after_the_halt_lands_a_run_in_another_repo(foreign_repo) -> None:
     repo, marker, halt, after = foreign_repo
     assert Path(os.getcwd()).resolve() != repo.resolve()
     out = _call(repo, sha=after, met_by={"R1": after})
@@ -75,7 +75,7 @@ def test_met_by_after_the_halt_lands_a_run_in_another_repo(foreign_repo):
     assert op._halt_commit(repo, marker.parent) == (halt, None)
 
 
-def test_met_by_before_the_halt_still_refuses_in_another_repo(foreign_repo):
+def test_met_by_before_the_halt_still_refuses_in_another_repo(foreign_repo) -> None:
     repo, marker, halt, after = foreign_repo
     before = _git(repo, "rev-parse", f"{halt}~1")
     out = _call(repo, sha=after, met_by={"R1": before})
@@ -83,12 +83,12 @@ def test_met_by_before_the_halt_still_refuses_in_another_repo(foreign_repo):
     assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "halted"
 
 
-def test_halt_lookup_is_the_bounded_newest_add_query(foreign_repo, monkeypatch):
+def test_halt_lookup_is_the_bounded_newest_add_query(foreign_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, marker, _, _ = foreign_repo
     seen = []
     from coordinator_core import git_ancestry
 
-    def spy(args, **kw):
+    def spy(args, **kw) -> GitResult:
         seen.append(list(args))
         return real_run(args, **kw)
 
@@ -99,13 +99,13 @@ def test_halt_lookup_is_the_bounded_newest_add_query(foreign_repo, monkeypatch):
 
 
 @pytest.mark.parametrize("timed_out,returncode", [(True, -1), (False, 128)])
-def test_a_failed_halt_commit_read_is_reported_retryable_not_absent(foreign_repo, monkeypatch, timed_out, returncode):
+def test_a_failed_halt_commit_read_is_reported_retryable_not_absent(foreign_repo, monkeypatch: pytest.MonkeyPatch, timed_out, returncode) -> None:
     repo, marker, _, after = foreign_repo
     from coordinator_core import git_ancestry
 
     real_run = git_ancestry.run_git
 
-    def flaky(args, **kw):
+    def flaky(args, **kw) -> GitResult:
         if args[:1] == ["log"]:
             return GitResult(returncode, "", "", timed_out)
         return real_run(args, **kw)
@@ -118,13 +118,13 @@ def test_a_failed_halt_commit_read_is_reported_retryable_not_absent(foreign_repo
     assert json.loads(marker.read_text(encoding="utf-8"))["status"] == "halted"
 
 
-def test_an_uncommitted_halt_marker_still_reports_not_found(foreign_repo, monkeypatch):
+def test_an_uncommitted_halt_marker_still_reports_not_found(foreign_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, marker, _, after = foreign_repo
     from coordinator_core import git_ancestry
 
     real_run = git_ancestry.run_git
 
-    def empty(args, **kw):
+    def empty(args, **kw) -> GitResult:
         if args[:1] == ["log"]:
             return GitResult(0, "", "", False)
         return real_run(args, **kw)
@@ -134,7 +134,7 @@ def test_an_uncommitted_halt_marker_still_reports_not_found(foreign_repo, monkey
     assert not out["ok"] and "could not be found" in out["error"]
 
 
-def test_a_re_halted_run_places_met_by_after_its_newest_halt(foreign_repo):
+def test_a_re_halted_run_places_met_by_after_its_newest_halt(foreign_repo) -> None:
     repo, marker, first_halt, after = foreign_repo
     body = marker.read_text(encoding="utf-8")
     marker.unlink()

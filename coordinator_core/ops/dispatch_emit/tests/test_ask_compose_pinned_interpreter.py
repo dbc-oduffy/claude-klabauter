@@ -7,6 +7,7 @@ import sys
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import _TARGETED_TESTS_JS, _test_instruction_js
 from coordinator_core.ops.dispatch_emit.interpreter_pin import PORTABLE_CLAUSE
+from pathlib import Path
 
 
 def _repo(tmp_path, frontmatter: str) -> str:
@@ -14,7 +15,7 @@ def _repo(tmp_path, frontmatter: str) -> str:
     return str(tmp_path)
 
 
-def test_pinned_interpreter_reaches_the_test_instruction(tmp_path):
+def test_pinned_interpreter_reaches_the_test_instruction(tmp_path: Path) -> None:
     pin = sys.executable
     root = _repo(tmp_path, f'targeted_test_python: "{pin}"')
     text = _test_instruction_js("HEAD", root)
@@ -22,22 +23,22 @@ def test_pinned_interpreter_reaches_the_test_instruction(tmp_path):
     assert "falling back to" not in text
 
 
-def test_no_pin_keeps_the_portable_text(tmp_path):
+def test_no_pin_keeps_the_portable_text(tmp_path: Path) -> None:
     root = _repo(tmp_path, 'fast_test_cmd: "python3 -m pytest"')
     assert PORTABLE_CLAUSE in _test_instruction_js("HEAD", root)
 
 
-def test_unresolvable_pin_names_the_defect(tmp_path):
+def test_unresolvable_pin_names_the_defect(tmp_path: Path) -> None:
     root = _repo(tmp_path, 'targeted_test_python: "no-such-interpreter-xyz"')
     text = _test_instruction_js("HEAD", root)
     assert "no-such-interpreter-xyz" in text
     assert "interpreter-resolution-defect:" in text
 
 
-def test_default_repo_root_is_the_portable_text():
+def test_default_repo_root_is_the_portable_text() -> None:
     assert PORTABLE_CLAUSE in _test_instruction_js("HEAD")
 
 
-def test_targeted_tests_params_carry_tests_run():
+def test_targeted_tests_params_carry_tests_run() -> None:
     assert "tests_run: _testResult.tests_run ?? null" in _TARGETED_TESTS_JS
     assert ask_compose._TARGETED_TESTS_JS is _TARGETED_TESTS_JS

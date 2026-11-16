@@ -32,6 +32,7 @@ import pytest
 from coordinator_core.benchmarks import baseline_store, harness
 from coordinator_core.benchmarks.record import ConformanceRecord, Tolerance, compose_machine_id
 from coordinator_core.telemetry import op_latency
+from pathlib import Path
 
 _INTEGRATION_N = 3
 """Small timed-sample count -- keeps this test's runtime modest (each sample
@@ -103,7 +104,7 @@ def _assert_well_formed_record(record: ConformanceRecord, expected_n: int) -> No
     assert record.schema_version == 2
 
 
-def test_harness_run_stamps_machine_and_survives_baseline_store_query(tmp_path):
+def test_harness_run_stamps_machine_and_survives_baseline_store_query(tmp_path: Path) -> None:
     records = harness.run(ops=["ping"], n=1, warmup=1, floor_n=1)
     record = records[0]
 

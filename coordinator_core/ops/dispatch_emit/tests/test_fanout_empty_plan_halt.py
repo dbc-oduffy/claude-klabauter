@@ -5,9 +5,10 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit.land_run_fanout import _resolve_plans
+from pathlib import Path
 
 
-def _plan(root, name, text):
+def _plan(root, name, text) -> str:
     d = root / "docs" / "plans"
     d.mkdir(parents=True, exist_ok=True)
     (d / name).write_bytes(text.encode("utf-8"))
@@ -15,7 +16,7 @@ def _plan(root, name, text):
 
 
 @pytest.mark.parametrize("text", ["", "  \n\t\n"])
-def test_empty_plan_says_file_is_empty(tmp_path, text):
+def test_empty_plan_says_file_is_empty(tmp_path: Path, text) -> None:
     plan = _plan(tmp_path, "p.md", text)
     out, err = _resolve_plans(tmp_path, [plan])
     assert out is None
@@ -24,7 +25,7 @@ def test_empty_plan_says_file_is_empty(tmp_path, text):
     assert "cites no sizing_object" not in err["error"]
 
 
-def test_nonempty_plan_without_sizing_still_cites_no_sizing(tmp_path):
+def test_nonempty_plan_without_sizing_still_cites_no_sizing(tmp_path: Path) -> None:
     plan = _plan(tmp_path, "p.md", "---\ntitle: x\n---\n# body\n")
     out, err = _resolve_plans(tmp_path, [plan])
     assert out is None

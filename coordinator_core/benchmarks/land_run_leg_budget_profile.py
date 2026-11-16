@@ -346,7 +346,7 @@ def _install(profiler: Profiler):
     real_check, real_holds, real_spine = land_deadline.check, peer_hunk_gate.co_declared_peer_holds, getattr(peer_hunk_gate, spine_name)
     real_safe, real_load, real_init = yaml.safe_load, yaml.load, subprocess.Popen.__init__
 
-    def check(leg):
+    def check(leg) -> None:
         real_check(leg)
         profiler.mark(leg)
 

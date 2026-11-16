@@ -34,6 +34,7 @@ import time
 import pytest
 
 from coordinator_core.ops import handoff_transition as ht
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
@@ -43,17 +44,17 @@ def _clean_cache():
     ht._gate_evidence_leg_cache.clear()
 
 
-def _leg(leg_id, kind="frontmatter-field", repo="claude_klabauter", ref="a/b.md#field"):
+def _leg(leg_id, kind: str = "frontmatter-field", repo: str = "claude_klabauter", ref: str = "a/b.md#field"):
     return {"leg_id": leg_id, "kind": kind, "repo": repo, "ref": ref}
 
 
-def _observation(read_ok=True, observed="x", error=None):
+def _observation(read_ok: bool = True, observed: str = "x", error=None):
     return {"read_ok": read_ok, "observed": observed, "error": error}
 
 
 class TestSweepMemoization:
 
-    def test_same_request_two_different_leg_ids_hits_resolve_leg_once(self, monkeypatch):
+    def test_same_request_two_different_leg_ids_hits_resolve_leg_once(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = []
 
         def _fake_resolve_leg(request):
@@ -73,7 +74,7 @@ class TestSweepMemoization:
             "different leg_ids must share one resolve_leg call"
         )
 
-    def test_distinct_facts_each_pay_their_own_resolve_leg_call(self, monkeypatch):
+    def test_distinct_facts_each_pay_their_own_resolve_leg_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = []
 
         def _fake_resolve_leg(request):
@@ -88,8 +89,8 @@ class TestSweepMemoization:
         assert len(calls) == 2, "genuinely distinct facts must not collapse into one cache entry"
 
     def test_read_gate_evidence_resolved_across_many_handoffs_shares_one_call(
-        self, monkeypatch, tmp_path
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         calls = []
 
         def _fake_resolve_leg(request):
@@ -132,7 +133,7 @@ class TestSweepMemoization:
 
 
 class TestNonIoKindsNeverTouchTheCacheOrResolveLeg:
-    def test_human_leg_never_calls_resolve_leg(self, monkeypatch):
+    def test_human_leg_never_calls_resolve_leg(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = []
         monkeypatch.setattr(ht, "resolve_leg", lambda request: calls.append(request))
 
@@ -141,7 +142,7 @@ class TestNonIoKindsNeverTouchTheCacheOrResolveLeg:
         assert calls == []
         assert ht._gate_evidence_leg_cache == {}
 
-    def test_deadline_leg_never_calls_resolve_leg(self, monkeypatch):
+    def test_deadline_leg_never_calls_resolve_leg(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = []
         monkeypatch.setattr(ht, "resolve_leg", lambda request: calls.append(request))
 
@@ -154,7 +155,7 @@ class TestNonIoKindsNeverTouchTheCacheOrResolveLeg:
 
 
 class TestTtlExpiry:
-    def test_stale_entry_is_not_served_and_resolve_leg_is_called_again(self, monkeypatch):
+    def test_stale_entry_is_not_served_and_resolve_leg_is_called_again(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = []
 
         def _fake_resolve_leg(request):
@@ -172,7 +173,7 @@ class TestTtlExpiry:
 
         assert len(calls) == 2, "an expired entry must not be served as a cache hit"
 
-    def test_fresh_entry_within_ttl_is_served_from_cache(self, monkeypatch):
+    def test_fresh_entry_within_ttl_is_served_from_cache(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = []
 
         def _fake_resolve_leg(request):
@@ -190,7 +191,7 @@ class TestTtlExpiry:
 
 
 class TestSizeCapOverflow:
-    def test_overflow_clears_the_whole_cache_rather_than_growing_unboundedly(self, monkeypatch):
+    def test_overflow_clears_the_whole_cache_rather_than_growing_unboundedly(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(ht, "_GATE_EVIDENCE_LEG_CACHE_MAX_ENTRIES", 2)
 
         ht._gate_evidence_leg_cache_put(("a",), _observation())
@@ -205,7 +206,7 @@ class TestSizeCapOverflow:
 
 
 class TestCacheKeyExcludesLegId:
-    def test_key_is_identical_for_two_requests_differing_only_by_leg_id(self):
+    def test_key_is_identical_for_two_requests_differing_only_by_leg_id(self) -> None:
         key_a = ht._gate_evidence_leg_cache_key(
             {"leg_id": "leg-a", "kind": "frontmatter_field", "repo": "r", "path": "p", "field": "f"}
         )
@@ -215,7 +216,7 @@ class TestCacheKeyExcludesLegId:
 
         assert key_a == key_b
 
-    def test_key_differs_when_a_non_leg_id_field_differs(self):
+    def test_key_differs_when_a_non_leg_id_field_differs(self) -> None:
         key_a = ht._gate_evidence_leg_cache_key(
             {"leg_id": "leg-a", "kind": "frontmatter_field", "repo": "r", "path": "p", "field": "f"}
         )
@@ -228,7 +229,7 @@ class TestCacheKeyExcludesLegId:
 
 class TestReplaceFmArrayFieldBlockSequence:
 
-    def test_block_sequence_continuation_lines_are_removed_not_stranded(self):
+    def test_block_sequence_continuation_lines_are_removed_not_stranded(self) -> None:
         fm = "id: h1\nblocked_by:\n  - stub-a\n  - stub-b\nstatus: open\n"
 
         result = ht._replace_fm_array_field(fm, "blocked_by", [])
@@ -237,21 +238,21 @@ class TestReplaceFmArrayFieldBlockSequence:
         assert "- stub-a" not in result
         assert "- stub-b" not in result
 
-    def test_block_sequence_at_end_of_file_no_trailing_newline(self):
+    def test_block_sequence_at_end_of_file_no_trailing_newline(self) -> None:
         fm = "id: h1\nblocked_by:\n  - stub-a\n  - stub-b"
 
         result = ht._replace_fm_array_field(fm, "blocked_by", ["stub-c"])
 
         assert result == "id: h1\nblocked_by: ['stub-c']"
 
-    def test_ordinary_single_line_field_unaffected(self):
+    def test_ordinary_single_line_field_unaffected(self) -> None:
         fm = "id: h1\nblocked_by: ['stub-a']\nstatus: open\n"
 
         result = ht._replace_fm_array_field(fm, "blocked_by", ["stub-b"])
 
         assert result == "id: h1\nblocked_by: ['stub-b']\nstatus: open\n"
 
-    def test_crlf_document_keeps_crlf_line_endings(self):
+    def test_crlf_document_keeps_crlf_line_endings(self) -> None:
         fm = "id: h1\r\nblocked_by:\r\n  - stub-a\r\nstatus: open\r\n"
 
         result = ht._replace_fm_array_field(fm, "blocked_by", [])
@@ -261,7 +262,7 @@ class TestReplaceFmArrayFieldBlockSequence:
 
 class TestInsertFmArrayFieldBlockSequence:
 
-    def test_insert_lands_after_anchors_whole_block_sequence_not_inside_it(self):
+    def test_insert_lands_after_anchors_whole_block_sequence_not_inside_it(self) -> None:
         fm = "id: h1\nblocked_by:\n  - stub-a\n  - stub-b\nstatus: open\n"
 
         result = ht._insert_fm_array_field(fm, "no_longer_blocked_by", ["stub-a"], "blocked_by")
@@ -271,14 +272,14 @@ class TestInsertFmArrayFieldBlockSequence:
             "no_longer_blocked_by: ['stub-a']\nstatus: open\n"
         )
 
-    def test_insert_after_ordinary_single_line_anchor_unaffected(self):
+    def test_insert_after_ordinary_single_line_anchor_unaffected(self) -> None:
         fm = "id: h1\nblocked_by: []\nstatus: open\n"
 
         result = ht._insert_fm_array_field(fm, "no_longer_blocked_by", ["stub-a"], "blocked_by")
 
         assert result == "id: h1\nblocked_by: []\nno_longer_blocked_by: ['stub-a']\nstatus: open\n"
 
-    def test_insert_appends_when_anchor_absent(self):
+    def test_insert_appends_when_anchor_absent(self) -> None:
         fm = "id: h1\nstatus: open\n"
 
         result = ht._insert_fm_array_field(fm, "no_longer_blocked_by", ["stub-a"], "blocked_by")

@@ -55,7 +55,7 @@ _PENDING_SCHEMA = {
             "items": {
                 "type": "object",
                 "required": ["id", "text"],
-                "properties": {"id": {"type": "string"}, "text": {"type": "string"}},
+                "properties": {"id": {"type": "string"}, "text": {"type": "string"}, "kind": {"type": "string"}},
             },
         },
         "drift": {"type": "array", "items": {"type": "string"}},
@@ -97,17 +97,109 @@ def _plan_fm(plan_text: str) -> str:
     return split.fm_text if split is not None else ""
 
 
+NOTE_ROW_MARKER = "revise-note: "
+NOTE_KIND = "note"
+
+
+def _note_key(entry: dict, run_id: str) -> str:
+    """A note's id as a row names it: bare for this run's own, `<run>:<id>` for a predecessor's (note ids
+    are per-run ordinals, so two runs' `N1` would collide)."""
+    return entry["id"] if entry["run"] == run_id else f"{entry['run']}:{entry['id']}"
+
+
+def _spine_rows(plan_text: str) -> list[dict]:
+    import yaml
+
+    from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
+
+    try:
+        located = locate_fenced_block(plan_text)
+        rows = yaml.safe_load(located.body) if located.status is LocateStatus.LOCATED else None
+    except yaml.YAMLError:
+        return []
+    return [r for r in rows if isinstance(r, dict)] if isinstance(rows, list) else []
+
+
+def unexecuted_notes(root: Path, run_id: str, plan_text: str) -> list[dict]:
+    """`[{id, text, kind: "note"}]` for the run's live revise notes (its own and its `resumed_from`
+    chain's) that no spine row of `plan_text` executes, oldest first, `id` the `_note_key`. A note is
+    executed once a row's body carries `revise-note: <key>`, or the note names that row's id or one of
+    its `writes` (the kept-work rule that sends such a row back to run). Keyed by note, never by sizing."""
+    from coordinator_core.ops.dispatch_emit import run_notes
+
+    rows = _spine_rows(plan_text)
+    out: list[dict] = []
+    for entry in sorted(run_notes.live(rl.carried_notes(root, run_id)), key=lambda e: e["at"]):
+        key = _note_key(entry, run_id)
+        marker = re.compile(re.escape(NOTE_ROW_MARKER + key) + r"(?![A-Za-z0-9_:])")
+        text = entry["note"]
+        if any(_executes(row, marker, text) for row in rows):
+            continue
+        out.append({"id": key, "text": text, "kind": NOTE_KIND})
+    return out
+
+
+def _executes(row: dict, marker: "re.Pattern[str]", note: str) -> bool:
+    if marker.search(str(row.get("body") or "")):
+        return True
+    row_id = str(row.get("id") or "")
+    if row_id and re.search(r"(?<![A-Za-z0-9_])" + re.escape(row_id) + r"(?![A-Za-z0-9_])", note):
+        return True
+    return any(
+        isinstance(w, str) and w and re.search(r"(?<![A-Za-z0-9_./-])" + re.escape(w) + r"(?![A-Za-z0-9_])", note)
+        for w in row.get("writes") or ()
+    )
+
+
 @register_op(PENDING_REVISIONS_OP)
 def _pending_handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "workflow.pending_revisions": params `run_id`, `plan` (both required).
 
-    Replies `{rows: [{id, text}], drift: [ids], plan, sizing}`: register rows the plan's
-    `register_claims.rows` omit, minus rows a recorded out-of-scope ruling withholds, and the ids
+    Replies `{rows: [{id, text, kind?}], drift: [ids], plan, sizing}`: register rows the plan's
+    `register_claims.rows` omit, minus rows a recorded out-of-scope ruling withholds, then the run's
+    live revise notes no spine row executes (`kind: "note"`, see `unexecuted_notes`), and the ids
     whose pinned text drifted. Refuses `{"error": str}` for an unemitted run, a run with no bound
     sizing, a sizing with no readable plan edge, a `plan` that is not that edge, claims that name
     another sizing or carry no `rows` list, and a sizing with no register: never an empty reply
-    for an unreadable input.
+    for an unreadable input. When the plan is readable and notes are owed, they ride in `rows` even
+    under a register refusal, which is then carried as `register_refusal`.
     """
+    reply = _pending_register(params, repo_root)
+    if repo_root is None:
+        return reply
+    root = main_worktree_root(Path(repo_root))
+    plan = _run_plan(root, params)
+    if plan is None:
+        return reply
+    owed = unexecuted_notes(root, params["run_id"], plan[1])
+    if not owed:
+        return reply
+    if "error" in reply:
+        return {"rows": owed, "drift": [], "plan": plan[0], "sizing": plan[2], "register_refusal": reply["error"]}
+    reply["rows"] = [*reply["rows"], *owed]
+    return reply
+
+
+def _run_plan(root: Path, params: dict) -> Optional[tuple[str, str, str]]:
+    """`(plan_rel, plan_text, sizing_rel)` of the run's sizing edge when `params["plan"]` names it, else None."""
+    try:
+        run = rl.read_run(rl.run_dir(root, params["run_id"]))
+    except (rl.LedgerRefused, KeyError, TypeError):
+        return None
+    sizing_rel = (run or {}).get("sizing_rel")
+    if not (isinstance(sizing_rel, str) and sizing_rel):
+        return None
+    edge, plan, _ = rl._sizing_plan(root, sizing_rel)
+    if plan is None or _plan_key(edge) != _plan_key(params.get("plan")):
+        return None
+    try:
+        return edge, plan.read_text(encoding="utf-8", errors="replace"), sizing_rel
+    except OSError:
+        return None
+
+
+def _pending_register(params: dict, repo_root: Optional[Path]) -> dict:
+    """The register half of `_pending_handler`: unclaimed rows and drift, or the refusal."""
     if repo_root is None:
         return {"error": f"{PENDING_REVISIONS_OP} requires repo_root"}
     refusal = validate_params(PENDING_REVISIONS_OP, params, _PENDING_PARAMS)
@@ -284,9 +376,12 @@ def absorb_tail_js(
         f"Plan {plan_path} gained register rows the running plan does not claim. For each row in "
         "the rows below, add exactly one spine row with "
         f"`{invoke} plan.tasks.mutate` verb add-task (params plan_path={plan_path}, task): a "
-        "unique id, a title, declared `writes`, and `depends_on` only on rows already landed. Then "
-        f"run `{invoke} {CLAIM_ROWS_OP}` once with params "
-        f'{{"plan":"{plan_path}","rows":[<those register row ids>]}}. '
+        "unique id, a title, declared `writes`, and `depends_on` only on rows already landed. "
+        f"A row whose kind is `{NOTE_KIND}` is a revise note, not a register row: its spine row's `body` "
+        f"begins with the line `{NOTE_ROW_MARKER}<its id>` followed by the note text verbatim, and its "
+        "`writes` are the repo paths the note names. Then "
+        f"run `{invoke} {CLAIM_ROWS_OP}` once, when any row is not a note, with params "
+        f'{{"plan":"{plan_path}","rows":[<the register row ids, never a note id>]}}. '
         'Reply `{added: [{id, title, writes}]}` for the rows you added. Edit nothing else; never '
         "hand-edit the plan. Run each command with its command word exactly as written (a guard "
         "denies the prefix moved into a shell variable)."

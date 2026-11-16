@@ -14,6 +14,7 @@ import sys
 import pytest
 
 from coordinator_core.warm import pair_stop
+from pathlib import Path
 
 SRV = ("coordinator_core", "warm", "server.py")
 
@@ -27,7 +28,7 @@ class _AccessDenied(Exception):
 
 
 class _Proc:
-    def __init__(self, pid, argv):
+    def __init__(self, pid, argv) -> None:
         self.pid = pid
         self.info = {"pid": pid, "name": "python.exe"}
         self._argv = argv
@@ -42,12 +43,12 @@ class _RespawningWorld:
     NoSuchProcess = _NoSuchProcess
     AccessDenied = _AccessDenied
 
-    def __init__(self, script):
+    def __init__(self, script) -> None:
         self.script = script
         self.next_pid = 1000
         self.enumerations = 0
 
-    def process_iter(self, attrs=None):
+    def process_iter(self, attrs=None) -> list[_Proc]:
         self.enumerations += 1
         pid = self.next_pid
         self.next_pid += 1
@@ -58,13 +59,13 @@ class _RespawningWorld:
 
 
 @pytest.fixture(autouse=True)
-def _fast(monkeypatch):
+def _fast(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pair_stop, "_TERMINATE_GRACE_SECS", 0.02)
     monkeypatch.setattr(pair_stop, "_TERMINATE_POLL_INTERVAL_SECS", 0.005)
     monkeypatch.setattr(pair_stop, "_RESWEEP_DEADLINE_SECS", 0.05)
 
 
-def test_server_respawned_on_every_poll_does_not_leave_a_survivor(tmp_path):
+def test_server_respawned_on_every_poll_does_not_leave_a_survivor(tmp_path: Path) -> None:
     root = tmp_path / "mirror"
     world = _RespawningWorld(str(root.joinpath(*SRV)))
     result = pair_stop.stop_warm_pair(root, psutil_module=world)

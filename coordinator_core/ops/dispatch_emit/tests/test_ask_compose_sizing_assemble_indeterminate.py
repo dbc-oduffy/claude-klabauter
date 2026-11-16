@@ -21,6 +21,7 @@ from coordinator_core.ops.dispatch_emit.ask_compose import (
 from coordinator_core.ops.dispatch_emit.landing_targeted_tests import REVERIFY_INDETERMINATE
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.warp_fire import fire_command
+from pathlib import Path
 
 _SIZING = "state/sizings/x.yaml"
 _INDETERMINATE = (
@@ -32,7 +33,7 @@ def _stub_wrap(text):
     return "  async function planBlitz(args) {\n    return { ready: [] };\n  }", ["Size", "Plan"]
 
 
-def _compose(**over):
+def _compose(**over) -> str:
     kw = dict(
         repo_root="REPO", prompt="add a thing", sizing_rel=None, run_id="run-1", session_id=None,
         wrap_stage=_stub_wrap, plan_blitz_text="stub", **REVIEW_KW,
@@ -70,7 +71,7 @@ def _run_halt(scouted: dict, tmp_path) -> dict:
     return json.loads(out)
 
 
-def test_the_scout_prompt_carries_the_assemble_reconcile_clause_for_its_sizing_path():
+def test_the_scout_prompt_carries_the_assemble_reconcile_clause_for_its_sizing_path() -> None:
     script = _compose()
     assert "A -32004 is never itself the assemble" in script
     assert "retry it only as the -32004 clause" in script
@@ -78,7 +79,7 @@ def test_the_scout_prompt_carries_the_assemble_reconcile_clause_for_its_sizing_p
     assert _SIZING in clause and "exit_code 0" in clause
 
 
-def test_the_indeterminate_kind_is_an_existing_mechanical_kind_not_a_refusal():
+def test_the_indeterminate_kind_is_an_existing_mechanical_kind_not_a_refusal() -> None:
     assert REVERIFY_INDETERMINATE != "refusal"
     assert hrc.HALT_REMEDY[REVERIFY_INDETERMINATE][0] == hrc.MECHANICAL
 
@@ -86,7 +87,7 @@ def test_the_indeterminate_kind_is_an_existing_mechanical_kind_not_a_refusal():
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @pytest.mark.parametrize("field", ["stdout", "stderr"])
-def test_an_unconfirmed_indeterminate_assemble_halts_resumably_with_an_ask_refire(field, tmp_path):
+def test_an_unconfirmed_indeterminate_assemble_halts_resumably_with_an_ask_refire(field, tmp_path: Path) -> None:
     scouted = {"exit_code": 1, "stdout": "", "stderr": "", "sizing_present": False}
     scouted[field] = "error code -32004 " + _INDETERMINATE
     out = _run_halt(scouted, tmp_path)
@@ -99,7 +100,7 @@ def test_an_unconfirmed_indeterminate_assemble_halts_resumably_with_an_ask_refir
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_an_indeterminate_assemble_with_the_sizing_on_disk_refires_with_the_sizing(tmp_path):
+def test_an_indeterminate_assemble_with_the_sizing_on_disk_refires_with_the_sizing(tmp_path: Path) -> None:
     scouted = {"exit_code": 1, "stdout": _INDETERMINATE, "stderr": "", "sizing_present": True}
     out = _run_halt(scouted, tmp_path)
     assert out["halted"]["halted"] == REVERIFY_INDETERMINATE
@@ -109,7 +110,7 @@ def test_an_indeterminate_assemble_with_the_sizing_on_disk_refires_with_the_sizi
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_plain_assemble_failure_still_halts_as_a_refusal(tmp_path):
+def test_a_plain_assemble_failure_still_halts_as_a_refusal(tmp_path: Path) -> None:
     out = _run_halt({"exit_code": 2, "stdout": "bad exit_criterion", "stderr": "", "sizing_present": False}, tmp_path)
     assert out["halted"]["halted"] == "refusal"
     assert out["halted"]["reason"].startswith("sizing-assemble failed (exit 2)")
@@ -117,17 +118,17 @@ def test_a_plain_assemble_failure_still_halts_as_a_refusal(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_an_exit_zero_reply_naming_the_marker_is_not_halted_by_this_branch(tmp_path):
+def test_an_exit_zero_reply_naming_the_marker_is_not_halted_by_this_branch(tmp_path: Path) -> None:
     out = _run_halt({"exit_code": 0, "stdout": "-32004 reconciled", "stderr": "", "sizing_present": True}, tmp_path)
     assert out["halted"] is None
 
 
-def test_the_marker_regex_matches_both_reply_shapes():
+def test_the_marker_regex_matches_both_reply_shapes() -> None:
     assert SIZING_ASSEMBLE_INDETERMINATE_RE.startswith("/") and SIZING_ASSEMBLE_INDETERMINATE_RE.endswith("/i")
     assert "-32004" in SIZING_ASSEMBLE_INDETERMINATE_RE and "warm dispatch indeterminate" in SIZING_ASSEMBLE_INDETERMINATE_RE
 
 
-def test_the_door_indeterminate_text_names_the_landed_check():
+def test_the_door_indeterminate_text_names_the_landed_check() -> None:
     from pathlib import Path
 
     src = (Path(__file__).resolve().parents[3] / "warm" / "door" / "door_core.c").read_text(encoding="utf-8")
@@ -136,7 +137,7 @@ def test_the_door_indeterminate_text_names_the_landed_check():
     assert "git log -1 -- <path>" in body and "warm.request_status" in body
 
 
-def test_every_refusal_halt_site_on_a_sizing_submission_names_the_sizing_refire():
+def test_every_refusal_halt_site_on_a_sizing_submission_names_the_sizing_refire() -> None:
     script = _compose(prompt=None, sizing_rel=_SIZING)
     assert _refire_js(_SIZING) == _lit(fire_command(_SIZING))
     sizing_call = _lit(fire_command(_SIZING))
@@ -147,7 +148,7 @@ def test_every_refusal_halt_site_on_a_sizing_submission_names_the_sizing_refire(
     assert 'args: {"ask"' not in script
 
 
-def test_a_prompt_submission_falls_back_to_the_ask_refire_only_while_no_sizing_exists():
+def test_a_prompt_submission_falls_back_to_the_ask_refire_only_while_no_sizing_exists() -> None:
     script = _compose()
     assert "const _refireCmd = () => (_sizingRel ? " in script
     assert 'args: {"ask"' in script

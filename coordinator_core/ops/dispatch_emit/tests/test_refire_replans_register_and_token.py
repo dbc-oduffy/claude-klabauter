@@ -30,6 +30,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_refire_ledger_halted_sizing_r
 )
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import PLAN as STAGE_PLAN
 from coordinator_core.warp_fire import fire_command
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -41,7 +42,7 @@ _ROWS = [
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
 
-def _claim_plan(repo, claimed):
+def _claim_plan(repo, claimed) -> None:
     """The halted plan, now carrying a register_claims block over `claimed`."""
     body = (repo / PLAN_REL).read_text(encoding="utf-8")
     claims = f"register_claims:\n  sizing: {REL}\n  rows: [{', '.join(claimed)}]\n"
@@ -62,13 +63,13 @@ def _resume(repo, claimed):
     return verdict.resume_ledger
 
 
-def test_the_s_arm_resumes_a_refire_whose_plan_omits_register_rows_naming_them(repo):  # noqa: F811
+def test_the_s_arm_resumes_a_refire_whose_plan_omits_register_rows_naming_them(repo) -> None:  # noqa: F811
     verdict = _verdict(repo, ["R1"])
     assert verdict.halt is None
     assert verdict.resume_ledger["unclaimed_rows"] == ["R2", "R3"]
 
 
-def test_resume_ledger_names_none_when_the_plan_claims_every_row(repo):  # noqa: F811
+def test_resume_ledger_names_none_when_the_plan_claims_every_row(repo) -> None:  # noqa: F811
     assert _resume(repo, ["R1", "R2", "R3"]).get("unclaimed_rows", []) == []
 
 
@@ -81,7 +82,7 @@ def _compose(monkeypatch) -> str:
     )
 
 
-def test_unclaimed_rows_force_the_replan_leg_and_the_stage_claims_them(monkeypatch):
+def test_unclaimed_rows_force_the_replan_leg_and_the_stage_claims_them(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _compose(monkeypatch)
     owes = script.index("const _ledgerOwes")
     assert "_gate.resume_ledger.unclaimed_rows ?? []).length > 0" in script[owes:owes + 700]
@@ -106,7 +107,7 @@ def _stage_repo(tmp_path):
     return tmp_path
 
 
-def test_stage_claims_and_pins_the_omitted_rows_when_asked(tmp_path):
+def test_stage_claims_and_pins_the_omitted_rows_when_asked(tmp_path: Path) -> None:
     root = _stage_repo(tmp_path)
     stage(root, run_id="r1", plan_rel=PLAN_REL, claim_register_rows=True)
     text = (root / PLAN_REL).read_text(encoding="utf-8")
@@ -118,7 +119,7 @@ def test_stage_claims_and_pins_the_omitted_rows_when_asked(tmp_path):
     assert "id: C3" in text
 
 
-def test_stage_leaves_the_claims_alone_by_default(tmp_path):
+def test_stage_leaves_the_claims_alone_by_default(tmp_path: Path) -> None:
     root = _stage_repo(tmp_path)
     before = (root / PLAN_REL).read_text(encoding="utf-8")
     stage(root, run_id="r1", plan_rel=PLAN_REL)
@@ -131,20 +132,20 @@ def _token_repo(repo):  # noqa: F811
     return repo
 
 
-def test_refire_without_a_live_token_halts_at_the_gate_naming_the_fire_call(repo):  # noqa: F811
+def test_refire_without_a_live_token_halts_at_the_gate_naming_the_fire_call(repo) -> None:  # noqa: F811
     _token_repo(repo)
     out = ask_gate._handler({"sizing_path": REL, "run_id": RUN, "require_live_token": True}, repo)
     assert out["arm"] is None and out["halt"]["kind"] == "refusal"
     assert "run token" in out["halt"]["reason"] and fire_command(REL) in out["halt"]["reason"]
 
 
-def test_refire_with_a_live_token_passes_the_gate(repo):  # noqa: F811
+def test_refire_with_a_live_token_passes_the_gate(repo) -> None:  # noqa: F811
     _token_repo(repo)
     run_token.mint(repo, RUN, "x.mjs")
     out = ask_gate._handler({"sizing_path": REL, "run_id": RUN, "require_live_token": True}, repo)
     assert out["halt"] is None
 
 
-def test_the_composed_script_asks_the_gate_for_the_token_check_only_when_it_holds_a_token(monkeypatch):
+def test_the_composed_script_asks_the_gate_for_the_token_check_only_when_it_holds_a_token(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _compose(monkeypatch)
     assert "...(_RUN_TOKEN ? { require_live_token: true } : {})" in script

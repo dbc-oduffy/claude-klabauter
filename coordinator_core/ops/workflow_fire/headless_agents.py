@@ -19,6 +19,7 @@ from typing import Any, Callable
 
 import jsonschema
 
+from coordinator_core import tenant_priority
 from coordinator_core.agent_pipe.worker_mode import lock_and_gitdir_add_dir_argv, settings_home_add_dir_argv
 from coordinator_core.codex_runner.codex_spawn_env import shape_codex_child
 from coordinator_core.codex_runner.resolve import preflight_auth, resolve_codex
@@ -168,6 +169,7 @@ def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
             argv, cwd=repo_root, env=env, stdin=subprocess.PIPE,
             stdout=stdout, stderr=stderr, shell=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **tenant_priority.popen_kwargs(argv),
         )
         posted = admission_post.post("START", sid, pids=[proc.pid], run=key,
                                      declared_peak_mb=actual_peak_mb)

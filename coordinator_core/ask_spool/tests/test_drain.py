@@ -644,6 +644,14 @@ def test_plan_edge_naming_an_absent_file_withdraws(tmp_path, monkeypatch):
     assert engine.calls == 0 and "stale: plan" in _withdrawn(tmp_path, sid)["withdraw_reason"]
 
 
+def test_month_dir_plan_edge_with_no_plan_anywhere_withdraws(tmp_path, monkeypatch):
+    _no_popen(monkeypatch)
+    _write_sizing(tmp_path, plan="docs/plans/2026-11/2026-11-09-p1.md")
+    sid = _spool_sizing(tmp_path, "tuA")
+    assert drain.run(str(tmp_path), evaluate=Engine(tmp_path))["withdrawn"] == 1
+    assert "stale: plan docs/plans/2026-11/2026-11-09-p1.md is gone" in _withdrawn(tmp_path, sid)["withdraw_reason"]
+
+
 def test_all_closed_spine_withdraws(tmp_path, monkeypatch):
     _no_popen(monkeypatch)
     _write_sizing(tmp_path)

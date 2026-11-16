@@ -12,6 +12,10 @@ import pytest
 from coordinator_core.codex_runner import review
 from coordinator_core.codex_runner import workflow as agents
 from coordinator_core.ops.workflow_fire import headless_agents
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import Popen
 
 _REAL_ADMIT_BEFORE_SPAWN = agents.capacity.admit_before_spawn
 
@@ -21,7 +25,7 @@ SCHEMA = {"type": "object", "properties": {"ok": {"type": "boolean"}},
 
 
 @pytest.fixture(autouse=True)
-def admission(monkeypatch, tmp_path):
+def admission(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     """Every CLI probe stays hermetic: no real box ledger or Group EM messages."""
     events = []
     (tmp_path / '.git').mkdir(exist_ok=True)
@@ -29,7 +33,7 @@ def admission(monkeypatch, tmp_path):
                            read_recorded_peak=lambda *_a: None)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "01a1b63b-acfb-78d1-86f2-a74ad6ca4572")
     monkeypatch.setattr(agents.capacity, "_load_box_memory_host", lambda: host)
-    def admit(key, peak, **kwargs):
+    def admit(key, peak, **kwargs) -> SimpleNamespace:
         events.append(("reserve", {"key": key, "peak": peak, **kwargs}))
         return SimpleNamespace(admitted=True, peak_gib=peak, reason="test admitted")
     monkeypatch.setattr(agents.capacity, "admit_before_spawn", admit)
@@ -41,7 +45,7 @@ def admission(monkeypatch, tmp_path):
     return events, host
 
 
-def fake_cli(tmp_path, monkeypatch, *, result='{"ok":true}', exit_code=0, delay=0, events=None):
+def fake_cli(tmp_path, monkeypatch, *, result: str = '{"ok":true}', exit_code: int = 0, delay: int = 0, events=None):
     script = tmp_path / "cli.py"
     script.write_text(
         "import sys,json,os,time\n"
@@ -59,7 +63,7 @@ def fake_cli(tmp_path, monkeypatch, *, result='{"ok":true}', exit_code=0, delay=
     return tmp_path / "capture.json"
 
 
-def test_codex_schema_prompt_label_and_environment(tmp_path, monkeypatch):
+def test_codex_schema_prompt_label_and_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     capture = fake_cli(tmp_path, monkeypatch)
     monkeypatch.setenv("OPENAI_API_KEY", "never-forward")
     monkeypatch.setenv("CODEX_API_KEY", "never-forward")
@@ -95,13 +99,13 @@ def test_codex_schema_prompt_label_and_environment(tmp_path, monkeypatch):
     assert json.loads((tmp_path / "agent/process.json").read_text())["label"] == "size"
 
 
-def test_invalid_worker_schema_fails(tmp_path, monkeypatch):
+def test_invalid_worker_schema_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_cli(tmp_path, monkeypatch, result='{"ok":"false"}')
     with pytest.raises(agents.AgentFailed, match="schema-valid"):
         agents.run_agent("x", {"schema": SCHEMA}, repo_root=tmp_path, artifact_dir=tmp_path / "agent")
 
 
-def test_open_fire_args_preserves_dynamic_map_without_native_schema(tmp_path, monkeypatch):
+def test_open_fire_args_preserves_dynamic_map_without_native_schema(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     payload = {"fire_args": {"run_id": "run-1", "path": "state/run.mjs", "nested": {"flag": True}}}
     capture = fake_cli(tmp_path, monkeypatch, result=json.dumps(payload))
     schema = {"type": "object", "required": ["fire_args"], "properties": {"fire_args": {"type": "object"}}}
@@ -116,7 +120,7 @@ def test_open_fire_args_preserves_dynamic_map_without_native_schema(tmp_path, mo
 
 
 @pytest.mark.parametrize("payload", [{"ok": True}, {"ok": True, "optional": None}, {"ok": True, "optional": "value"}])
-def test_optional_nullable_fields_keep_original_semantics(tmp_path, monkeypatch, payload):
+def test_optional_nullable_fields_keep_original_semantics(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, payload) -> None:
     capture = fake_cli(tmp_path, monkeypatch, result=json.dumps(payload))
     schema = {"type": "object", "properties": {"ok": {"type": "boolean"}, "optional": {"type": ["string", "null"]}},
               "required": ["ok"], "additionalProperties": False}
@@ -124,7 +128,7 @@ def test_optional_nullable_fields_keep_original_semantics(tmp_path, monkeypatch,
     assert "--output-schema" not in json.loads(capture.read_text())["argv"]
 
 
-def test_closed_nullable_required_schema_stays_native(tmp_path, monkeypatch):
+def test_closed_nullable_required_schema_stays_native(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     capture = fake_cli(tmp_path, monkeypatch, result='{"value":null}')
     schema = {"type": "object", "properties": {"value": {"type": ["string", "null"]}},
               "required": ["value"], "additionalProperties": False}
@@ -132,29 +136,30 @@ def test_closed_nullable_required_schema_stays_native(tmp_path, monkeypatch):
     assert "--output-schema" in json.loads(capture.read_text())["argv"]
 
 
-def test_open_map_fallback_still_rejects_invalid_original_schema_result(tmp_path, monkeypatch):
+def test_open_map_fallback_still_rejects_invalid_original_schema_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_cli(tmp_path, monkeypatch, result='{"fire_args":"wrong"}')
     schema = {"type": "object", "required": ["fire_args"], "properties": {"fire_args": {"type": "object"}}}
     with pytest.raises(agents.AgentFailed, match="schema-valid"):
         agents.run_agent("x", {"schema": schema}, repo_root=tmp_path, artifact_dir=tmp_path / "agent")
 
 
-def test_nonzero_exit_fails_even_with_valid_result(tmp_path, monkeypatch):
+def test_nonzero_exit_fails_even_with_valid_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_cli(tmp_path, monkeypatch, exit_code=7)
     with pytest.raises(agents.AgentFailed, match="exited 7"):
         agents.run_agent("x", {"schema": SCHEMA}, repo_root=tmp_path, artifact_dir=tmp_path / "agent")
 
 
-def test_timeout_kills_worker(tmp_path, monkeypatch):
-    fake_cli(tmp_path, monkeypatch, delay=10)
+def test_timeout_kills_worker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The budget must outlast spawn latency under suite load: a deadline spent before communicate() reads as "deadline exhausted", not a worker timeout.
+    fake_cli(tmp_path, monkeypatch, delay=60)
     with pytest.raises(agents.AgentFailed, match="timed out"):
-        agents.run_agent("x", {}, repo_root=tmp_path, artifact_dir=tmp_path / "agent", timeout_s=1.0)
+        agents.run_agent("x", {}, repo_root=tmp_path, artifact_dir=tmp_path / "agent", timeout_s=4.0)
     process = json.loads((tmp_path / "agent/process.json").read_text())
     assert process["pid"] > 0 and process["exit_code"] != 0
     assert process["native_thread_id"] == "unknown"
 
 
-def test_persona_loaded_from_content_root(tmp_path, monkeypatch):
+def test_persona_loaded_from_content_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import content_root
     capture = fake_cli(tmp_path, monkeypatch)
     folder = tmp_path / "content/agents"
@@ -165,12 +170,12 @@ def test_persona_loaded_from_content_root(tmp_path, monkeypatch):
     assert "Write only the declared files" in json.loads(capture.read_text())["prompt"]
 
 
-def test_unknown_persona_fails_before_spawn(tmp_path, monkeypatch):
+def test_unknown_persona_fails_before_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(agents.AgentFailed, match="unsupported agentType"):
         agents.run_agent("x", {"agentType": "../../escape"}, repo_root=tmp_path, artifact_dir=tmp_path / "agent")
 
 
-def test_api_key_login_opt_in_not_admitted(tmp_path, monkeypatch):
+def test_api_key_login_opt_in_not_admitted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = tmp_path / "codex-home"
     home.mkdir()
     (home / "auth.json").write_text('{"auth_mode":"apikey"}')
@@ -181,13 +186,13 @@ def test_api_key_login_opt_in_not_admitted(tmp_path, monkeypatch):
         agents.run_agent("x", {}, repo_root=tmp_path, artifact_dir=tmp_path / "agent")
 
 
-def test_claude_alternate_structured_output(tmp_path, monkeypatch):
+def test_claude_alternate_structured_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Exercise command construction and structured envelope with a tiny CLI process.
     script = tmp_path / "fake-claude.py"
     script.write_text("import json,sys\nsys.stdin.read()\nprint(json.dumps({'is_error':False,'structured_output':{'ok':True}}))\n")
     original = agents.subprocess.Popen
     monkeypatch.setattr(agents.shutil, "which", lambda *_a, **_k: "claude")
-    def launch(argv, **kwargs):
+    def launch(argv, **kwargs) -> Popen[str]:
         assert argv[:4] == ["claude", "-p", "--output-format", "json"]
         assert "--json-schema" in argv
         return original([sys.executable, str(script)], **kwargs)
@@ -195,7 +200,7 @@ def test_claude_alternate_structured_output(tmp_path, monkeypatch):
     assert agents.run_agent("x", {"schema": SCHEMA}, repo_root=tmp_path, artifact_dir=tmp_path / "agent", backend="claude") == {"ok": True}
 
 
-def test_admission_reservation_spans_native_child_and_accounts_actual_pid(tmp_path, monkeypatch, admission):
+def test_admission_reservation_spans_native_child_and_accounts_actual_pid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, admission) -> None:
     events, _ = admission
     fake_cli(tmp_path, monkeypatch)
     native_pids = []
@@ -211,7 +216,7 @@ def test_admission_reservation_spans_native_child_and_accounts_actual_pid(tmp_pa
     assert events[-1][1] == (reserve["key"], os.getpid())
 
 
-def test_recorded_three_gib_peak_requests_and_rechecks_real_slot(tmp_path, monkeypatch, admission):
+def test_recorded_three_gib_peak_requests_and_rechecks_real_slot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, admission) -> None:
     events, host = admission
     fake_cli(tmp_path, monkeypatch)
     host.read_recorded_peak = lambda _path, key: 3.0 if key == "codex-workflow" else None
@@ -233,7 +238,7 @@ def test_recorded_three_gib_peak_requests_and_rechecks_real_slot(tmp_path, monke
     assert len(checks) == 2 and all(call[2]["peak_mb"] == 3072 for call in checks)
 
 
-def test_ungranted_large_peak_never_spawns_and_releases(tmp_path, monkeypatch, admission):
+def test_ungranted_large_peak_never_spawns_and_releases(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, admission) -> None:
     events, _ = admission
     capture = fake_cli(tmp_path, monkeypatch)
     with pytest.raises(agents.AgentFailed, match="slot admission refused"):
@@ -242,7 +247,7 @@ def test_ungranted_large_peak_never_spawns_and_releases(tmp_path, monkeypatch, a
     assert [name for name, _ in events] == ["reserve", "release"]
 
 
-def test_reservation_write_failure_is_fail_closed(tmp_path, monkeypatch, admission):
+def test_reservation_write_failure_is_fail_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, admission) -> None:
     from dataclasses import dataclass
     # Call the genuine checked reservation helper with a filesystem-failing host.
     @dataclass
@@ -265,7 +270,7 @@ def test_reservation_write_failure_is_fail_closed(tmp_path, monkeypatch, admissi
     assert not capture.exists()
 
 
-def test_start_delivery_failure_fails_open_and_records(tmp_path, monkeypatch, admission, capsys):
+def test_start_delivery_failure_fails_open_and_records(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, admission, capsys: pytest.CaptureFixture[str]) -> None:
     events, _ = admission
     fake_cli(tmp_path, monkeypatch)
     def post(phase, sid, **kwargs):
@@ -279,7 +284,7 @@ def test_start_delivery_failure_fails_open_and_records(tmp_path, monkeypatch, ad
     assert "undelivered" in capsys.readouterr().err
 
 
-def test_parallel_agents_use_distinct_reservation_keys(tmp_path, monkeypatch, admission):
+def test_parallel_agents_use_distinct_reservation_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, admission) -> None:
     events, _ = admission
     fake_cli(tmp_path, monkeypatch)
     for index in range(2):
@@ -288,7 +293,7 @@ def test_parallel_agents_use_distinct_reservation_keys(tmp_path, monkeypatch, ad
     assert len(set(reserved)) == 2
 
 
-def test_missing_parent_identity_fails_before_spawn(tmp_path, monkeypatch):
+def test_missing_parent_identity_fails_before_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     capture = fake_cli(tmp_path, monkeypatch)
     monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
     monkeypatch.delenv("CODEX_THREAD_ID", raising=False)
@@ -297,7 +302,7 @@ def test_missing_parent_identity_fails_before_spawn(tmp_path, monkeypatch):
     assert not capture.exists()
 
 
-def test_late_slot_grant_cannot_spawn_after_agent_deadline(tmp_path, monkeypatch, admission):
+def test_late_slot_grant_cannot_spawn_after_agent_deadline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, admission) -> None:
     events, _ = admission
     clock = [100.0]
     monkeypatch.setattr(agents, "time", SimpleNamespace(monotonic=lambda: clock[0]))
@@ -310,7 +315,7 @@ def test_late_slot_grant_cannot_spawn_after_agent_deadline(tmp_path, monkeypatch
         granted[0] = True
         return {"admitted": True, "reason": "granted"}
     monkeypatch.setattr(agents.slot_wait, "request_and_wait", wait)
-    def forbidden_spawn(*a, **kw):
+    def forbidden_spawn(*a, **kw) -> None:
         pytest.fail("a late admission grant must not spawn a native worker")
     monkeypatch.setattr(agents.subprocess, "Popen", forbidden_spawn)
     with pytest.raises(agents.AgentFailed, match="deadline exhausted"):
@@ -320,7 +325,7 @@ def test_late_slot_grant_cannot_spawn_after_agent_deadline(tmp_path, monkeypatch
     assert [name for name, _ in events] == ["reserve", "release"]
 
 
-def test_native_communicate_receives_only_budget_left_after_admission(tmp_path, monkeypatch, admission):
+def test_native_communicate_receives_only_budget_left_after_admission(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, admission) -> None:
     events, _ = admission
     clock = [100.0]
     monkeypatch.setattr(agents, "time", SimpleNamespace(monotonic=lambda: clock[0]))
@@ -333,10 +338,10 @@ def test_native_communicate_receives_only_budget_left_after_admission(tmp_path, 
     monkeypatch.setattr(agents.capacity, "admit_before_spawn", admit)
     original_popen = agents.subprocess.Popen
     timeouts = []
-    def popen(*args, **kwargs):
+    def popen(*args, **kwargs) -> Popen[str]:
         proc = original_popen(*args, **kwargs)
         original_communicate = proc.communicate
-        def communicate(*a, **kw):
+        def communicate(*a, **kw) -> tuple[str, str]:
             timeouts.append(kw.get("timeout"))
             return original_communicate(*a, **kw)
         proc.communicate = communicate
@@ -347,10 +352,10 @@ def test_native_communicate_receives_only_budget_left_after_admission(tmp_path, 
     assert [name for name, _ in events] == ["reserve", "START", "END", "release"]
 
 
-def test_mac_provider_helper_reinsertion_cannot_impersonate_parent(tmp_path, monkeypatch):
+def test_mac_provider_helper_reinsertion_cannot_impersonate_parent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     capture = fake_cli(tmp_path, monkeypatch)
     original = agents._unattended_env
-    def reinsert(*a, **kw):
+    def reinsert(*a, **kw) -> dict[str, str]:
         return {**original(*a, **kw), **{key: "parent-identity" for key in agents._OWN_IDENTITY_ENV}}
     monkeypatch.setattr(agents, "_unattended_env", reinsert)
     monkeypatch.setenv(agents.FIRE_TOKEN_ENV, "existing-fire-token")
@@ -366,7 +371,7 @@ def test_mac_provider_helper_reinsertion_cannot_impersonate_parent(tmp_path, mon
     assert env["COORDINATOR_AGENT_ROLE"] == "workflow-agent"
 
 
-def test_fire_token_is_never_minted_when_absent(tmp_path, monkeypatch):
+def test_fire_token_is_never_minted_when_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     capture = fake_cli(tmp_path, monkeypatch)
     monkeypatch.delenv(agents.FIRE_TOKEN_ENV, raising=False)
     agents.run_agent("x", {}, repo_root=tmp_path, artifact_dir=tmp_path / "agent")
@@ -374,7 +379,7 @@ def test_fire_token_is_never_minted_when_absent(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("tier", ["haiku", "sonnet", "opus"])
-def test_tier_model_reuses_shared_catalogue(tmp_path, monkeypatch, tier):
+def test_tier_model_reuses_shared_catalogue(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tier) -> None:
     capture = fake_cli(tmp_path, monkeypatch)
     monkeypatch.setattr(agents, "model_for_tier", lambda provider, requested: f"catalogue-{provider}-{requested}")
     agents.run_agent("x", {"model": tier}, repo_root=tmp_path, artifact_dir=tmp_path / "agent")
@@ -383,14 +388,14 @@ def test_tier_model_reuses_shared_catalogue(tmp_path, monkeypatch, tier):
 
 
 @pytest.mark.parametrize("tier", ["fable", "mythos", "unknown", "", 8])
-def test_explicit_unmapped_tier_fails_before_spawn(tmp_path, monkeypatch, tier):
+def test_explicit_unmapped_tier_fails_before_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tier) -> None:
     capture = fake_cli(tmp_path, monkeypatch)
     with pytest.raises(agents.AgentFailed, match="mapping|tier"):
         agents.run_agent("x", {"model": tier}, repo_root=tmp_path, artifact_dir=tmp_path / "agent")
     assert not capture.exists()
 
 
-def test_explicit_native_model_wins_and_absent_model_keeps_cli_default(tmp_path, monkeypatch):
+def test_explicit_native_model_wins_and_absent_model_keeps_cli_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     capture = fake_cli(tmp_path, monkeypatch)
     agents.run_agent("x", {"model": "unknown", "codexModel": "native-explicit"}, repo_root=tmp_path, artifact_dir=tmp_path / "explicit")
     argv = json.loads(capture.read_text())["argv"]
@@ -399,7 +404,7 @@ def test_explicit_native_model_wins_and_absent_model_keeps_cli_default(tmp_path,
     assert "--model" not in json.loads(capture.read_text())["argv"]
 
 
-def test_explicit_effort_catalogue_validation_and_native_flag(tmp_path, monkeypatch):
+def test_explicit_effort_catalogue_validation_and_native_flag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     capture = fake_cli(tmp_path, monkeypatch)
     codex_home = tmp_path / "codex-home"
     codex_home.mkdir()
@@ -412,7 +417,7 @@ def test_explicit_effort_catalogue_validation_and_native_flag(tmp_path, monkeypa
         agents.run_agent("x", {"codexModel": "test-model", "effort": "ultra"}, repo_root=tmp_path, artifact_dir=tmp_path / "bad")
 
 
-def test_process_provenance_uses_native_thread_and_observed_usage(tmp_path, monkeypatch):
+def test_process_provenance_uses_native_thread_and_observed_usage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     native = "01a1b82a-7064-7342-9eda-a5d50fcbf3eb"
     events = [
         {"type": "thread.started", "thread_id": native, "parent_thread_id": "not-the-native-thread"},
@@ -431,14 +436,14 @@ def test_process_provenance_uses_native_thread_and_observed_usage(tmp_path, monk
     assert "parent_thread_id" not in process
 
 
-def test_missing_native_provenance_stays_unknown(tmp_path, monkeypatch):
+def test_missing_native_provenance_stays_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_cli(tmp_path, monkeypatch, events=[{"type": "turn.started", "parent_thread_id": "01a1b82a-7064-7342-9eda-a5d50fcbf3eb"}])
     agents.run_agent("x", {"codexModel": "requested-model", "effort": "low"}, repo_root=tmp_path, artifact_dir=tmp_path / "agent")
     process = json.loads((tmp_path / "agent/process.json").read_text())
     assert all(process[key] == "unknown" for key in ("native_thread_id", "model", "effort", "usage"))
 
 
-def test_native_observer_callback_wiring_uses_protected_artifacts(tmp_path, monkeypatch):
+def test_native_observer_callback_wiring_uses_protected_artifacts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # This is synthetic CLI wiring, not actual-native provenance proof.
     sid='01a1b826-0012-72a0-a4d0-eae0ae828f4c'
     fake_cli(tmp_path, monkeypatch, events=[{'type':'thread.started','thread_id':sid}])
@@ -453,15 +458,15 @@ def test_native_observer_callback_wiring_uses_protected_artifacts(tmp_path, monk
     assert seen[0]['fire_id']=='fire-1' and seen[0]['request_id']==4
 
 
-def test_native_observer_binding_starts_after_start_delivery_and_pending_record(tmp_path,monkeypatch,admission):
+def test_native_observer_binding_starts_after_start_delivery_and_pending_record(tmp_path: Path,monkeypatch: pytest.MonkeyPatch,admission) -> None:
     sid='01a1b826-0012-72a0-a4d0-eae0ae828f4c'
     fake_cli(tmp_path,monkeypatch,events=[{'type':'thread.started','thread_id':sid}])
     monkeypatch.setattr(agents,'_native_child_facts',lambda *_: {})
     order=[]
-    def pending(pid):
+    def pending(pid) -> None:
         assert any(event[0]=='START' for event in admission[0])
         order.append('pending')
-    def ready(facts):
+    def ready(facts) -> None:
         assert order==['pending']
         order.append('ready')
     agents.run_agent('x',{'schema':SCHEMA},repo_root=tmp_path,artifact_dir=tmp_path/'.git/private-fire/agent',
@@ -469,7 +474,7 @@ def test_native_observer_binding_starts_after_start_delivery_and_pending_record(
     assert order==['pending','ready']
 
 
-def test_native_observer_callback_error_cannot_return_success(tmp_path, monkeypatch):
+def test_native_observer_callback_error_cannot_return_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fake_cli(tmp_path,monkeypatch,events=[{'type':'thread.started','thread_id':'01a1b826-0012-72a0-a4d0-eae0ae828f4c'}])
     monkeypatch.setattr(agents,'_native_child_facts',lambda *_: {})
     def failed(_):raise RuntimeError('binding callback failed')
@@ -479,8 +484,8 @@ def test_native_observer_callback_error_cannot_return_success(tmp_path, monkeypa
     assert not (tmp_path/'.git/private-fire/agent/result.json').exists()
 
 
-def test_native_observer_rejects_workspace_artifact_before_spawn(tmp_path,monkeypatch):
-    def unexpected(**_):pytest.fail('auth/spawn reached for unsafe artifacts')
+def test_native_observer_rejects_workspace_artifact_before_spawn(tmp_path: Path,monkeypatch: pytest.MonkeyPatch) -> None:
+    def unexpected(**_) -> None:pytest.fail('auth/spawn reached for unsafe artifacts')
     monkeypatch.setattr(agents,'preflight_auth',unexpected)
     with pytest.raises(agents.AgentFailed,match='protected repo .git'):
         agents.run_agent('x',{},repo_root=tmp_path,artifact_dir=tmp_path/'workspace',on_native_thread=lambda _:None)
@@ -510,11 +515,11 @@ def private_cli_fixture(tmp_path):
     return contract,args,sidecar,roster
 
 
-def test_private_cli_fake_wire_resolves_native_before_private_path(tmp_path,monkeypatch):
+def test_private_cli_fake_wire_resolves_native_before_private_path(tmp_path: Path,monkeypatch: pytest.MonkeyPatch) -> None:
     contract,kwargs,_,_=private_cli_fixture(tmp_path)
     capture=fake_cli(tmp_path,monkeypatch,events=[{'type':'thread.started','thread_id':'01a1b826-0012-72a0-a4d0-eae0ae828f4c'}])
     original=agents.resolve_codex;resolve_env=[]
-    def resolve(**kw):resolve_env.append(dict(kw['env']));return original(**kw)
+    def resolve(**kw) -> list[str]:resolve_env.append(dict(kw['env']));return original(**kw)
     monkeypatch.setattr(agents,'resolve_codex',resolve)
     monkeypatch.setattr(agents,'_native_child_facts',lambda *_:{})
     assert agents.run_agent('Preserve --params-file abc.json',{'schema':SCHEMA},**kwargs,
@@ -541,7 +546,7 @@ def test_private_cli_fake_wire_resolves_native_before_private_path(tmp_path,monk
 
 
 @pytest.mark.parametrize('case',['identity-env','warm','listener','path','request','owner','sidecar-extra','image','catalog','source','other-fire-bindings'])
-def test_private_cli_contract_rejects_authority_or_path_changes(tmp_path,case):
+def test_private_cli_contract_rejects_authority_or_path_changes(tmp_path: Path,case) -> None:
     contract,kwargs,sidecar,roster=private_cli_fixture(tmp_path)
     if case=='identity-env':contract['env']['COORDINATOR_SESSION_ID']='parent-spoof'
     elif case=='warm':contract['env']['COORDINATOR_WARM']='1'
@@ -562,7 +567,7 @@ def test_private_cli_contract_rejects_authority_or_path_changes(tmp_path,case):
 
 
 @pytest.mark.parametrize("environment", [agents._environment, headless_agents._environment])
-def test_windows_parent_env_reaches_headless_spawn_env(monkeypatch, environment):
+def test_windows_parent_env_reaches_headless_spawn_env(monkeypatch: pytest.MonkeyPatch, environment) -> None:
     keys = ("SYSTEMROOT", "SYSTEMDRIVE", "WINDIR", "TEMP", "TMP", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "COMSPEC")
     for k in keys:
         monkeypatch.setenv(k, f"v-{k}")
@@ -573,7 +578,7 @@ def test_windows_parent_env_reaches_headless_spawn_env(monkeypatch, environment)
     assert "OPENAI_API_KEY" not in env
 
 
-def test_model_options_cannot_select_private_cli(tmp_path,monkeypatch):
+def test_model_options_cannot_select_private_cli(tmp_path: Path,monkeypatch: pytest.MonkeyPatch) -> None:
     capture=fake_cli(tmp_path,monkeypatch)
     agents.run_agent('x',{'schema':SCHEMA,'private_cli':{'env':{'COORDINATOR_WARM':'1'}}},repo_root=tmp_path,artifact_dir=tmp_path/'agent')
     assert not (tmp_path/'agent/private-cli.json').exists()
@@ -611,7 +616,7 @@ def _headless_shape_rig(tmp_path, monkeypatch, *, ps7):
     return repo, seen, str(pf / "PowerShell" / "7"), str(apps)
 
 
-def test_headless_codex_spawn_env_has_ps7_first_windowsapps_dropped_and_writable_temp(tmp_path, monkeypatch):
+def test_headless_codex_spawn_env_has_ps7_first_windowsapps_dropped_and_writable_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, seen, ps7, apps = _headless_shape_rig(tmp_path, monkeypatch, ps7=True)
     with pytest.raises(_Spawned):
         headless_agents.run_agent("x", {}, repo_root=repo, artifact_dir=tmp_path / "agent")
@@ -621,7 +626,7 @@ def test_headless_codex_spawn_env_has_ps7_first_windowsapps_dropped_and_writable
     assert expected.is_dir() and env["TEMP"] == env["TMP"] == str(expected)
 
 
-def test_headless_codex_windowsapps_only_path_refuses_before_admission(tmp_path, monkeypatch):
+def test_headless_codex_windowsapps_only_path_refuses_before_admission(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, seen, _, _ = _headless_shape_rig(tmp_path, monkeypatch, ps7=False)
     with pytest.raises(headless_agents.AgentFailed, match="WindowsApps|pwsh"):
         headless_agents.run_agent("x", {}, repo_root=repo, artifact_dir=tmp_path / "agent")

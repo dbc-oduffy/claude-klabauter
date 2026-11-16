@@ -37,7 +37,7 @@ def _tree(tmp_path: Path, *, provider_has_def: bool) -> Path:
     return root
 
 
-def test_importer_of_a_missing_def_is_named(tmp_path):
+def test_importer_of_a_missing_def_is_named(tmp_path: Path) -> None:
     root = _tree(tmp_path, provider_has_def=False)
 
     failure = _mod._engine_import_failures(str(root), [f"{_PKG}/terminal_commit.py"])
@@ -45,7 +45,7 @@ def test_importer_of_a_missing_def_is_named(tmp_path):
     assert failure and "terminal_commit" in failure and "within_handoffs_home" in failure
 
 
-def test_importer_alone_is_checked_even_when_only_the_provider_changed(tmp_path):
+def test_importer_alone_is_checked_even_when_only_the_provider_changed(tmp_path: Path) -> None:
     root = _tree(tmp_path, provider_has_def=False)
 
     failure = _mod._engine_import_failures(str(root), [f"{_PKG}/halted_record_commit.py"])
@@ -53,14 +53,14 @@ def test_importer_alone_is_checked_even_when_only_the_provider_changed(tmp_path)
     assert failure and "terminal_commit" in failure
 
 
-def test_complete_tree_passes_and_writes_no_bytecode(tmp_path):
+def test_complete_tree_passes_and_writes_no_bytecode(tmp_path: Path) -> None:
     root = _tree(tmp_path, provider_has_def=True)
 
     assert _mod._engine_import_failures(str(root), [f"{_PKG}/halted_record_commit.py"]) is None
     assert not list(root.rglob("__pycache__"))
 
 
-def test_tests_and_foreign_paths_are_not_imported(tmp_path):
+def test_tests_and_foreign_paths_are_not_imported(tmp_path: Path) -> None:
     root = _tree(tmp_path, provider_has_def=True)
     (root / "coordinator_core" / "tests").mkdir()
     (root / "coordinator_core" / "tests" / "test_x.py").write_text("raise ImportError('x')\n", encoding="utf-8")
@@ -75,7 +75,7 @@ def test_tests_and_foreign_paths_are_not_imported(tmp_path):
     ]
 
 
-def test_one_interpreter_for_the_whole_list(tmp_path, monkeypatch):
+def test_one_interpreter_for_the_whole_list(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _tree(tmp_path, provider_has_def=True)
     calls = []
     real_run = _mod._run
@@ -88,14 +88,14 @@ def test_one_interpreter_for_the_whole_list(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
-def test_refusal_reason_carries_the_import_failure():
+def test_refusal_reason_carries_the_import_failure() -> None:
     reason = _mod._round_refusal_reason(
         real_returncode=0, declined_paths=[], has_review_warnings=False, engine_import_failure="boom"
     )
     assert reason == "boom"
 
 
-def test_round_does_not_push_when_import_gate_fails(tmp_path, monkeypatch):
+def test_round_does_not_push_when_import_gate_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import test_percolate_round as base  # same-directory harness
 
     monkeypatch.setattr(base._mod, "_engine_import_failures", lambda repo_root, pathspec: "mod -> ImportError: x")
@@ -111,7 +111,7 @@ def test_round_does_not_push_when_import_gate_fails(tmp_path, monkeypatch):
     assert not [c for c in spy.calls if c and str(c[0]) == "git" and "push" in [str(x) for x in c]]
 
 
-def test_entrypoints_and_package_level_tests_are_not_imported(tmp_path):
+def test_entrypoints_and_package_level_tests_are_not_imported(tmp_path: Path) -> None:
     """Importing `__main__` runs it; a `test_*` module may raise pytest's Skipped. Either
     used to kill the probe outright, which refused the push as 'probe did not run'."""
     root = _tree(tmp_path, provider_has_def=True)
@@ -129,7 +129,7 @@ def test_entrypoints_and_package_level_tests_are_not_imported(tmp_path):
     assert "coordinator_core.testing.test_y" not in names
 
 
-def test_a_base_exception_at_import_does_not_kill_the_probe(tmp_path):
+def test_a_base_exception_at_import_does_not_kill_the_probe(tmp_path: Path) -> None:
     root = _tree(tmp_path, provider_has_def=True)
     (root / "coordinator_core" / "boom.py").write_text("raise SystemExit(3)\n", encoding="utf-8")
 

@@ -5,29 +5,30 @@ import subprocess
 import pytest
 
 from coordinator_core import memo_corpus
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process]
 
 _INBOX = "state/cross-repo/inbox"
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> None:
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True, text=True,
                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
 
-def _memo(status):
+def _memo(status) -> str:
     return f"---\nstatus: {status}\n---\nbody\n"
 
 
-def _write(repo, rel, text):
+def _write(repo, rel, text) -> None:
     p = repo / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text, encoding="utf-8")
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "repo"
     r.mkdir()
     _git(r, "init", "-b", "work/me/2026-10-20")
@@ -50,7 +51,7 @@ def repo(tmp_path):
     return r
 
 
-def test_finds_only_open_unseen_memo_with_zero_spawns(repo, monkeypatch):
+def test_finds_only_open_unseen_memo_with_zero_spawns(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("spawn during scan")
 
@@ -64,7 +65,7 @@ def test_finds_only_open_unseen_memo_with_zero_spawns(repo, monkeypatch):
     assert len(found[0].blob_sha) == 40
 
 
-def test_head_tracking_ref_is_skipped(repo):
+def test_head_tracking_ref_is_skipped(repo) -> None:
     _git(repo, "update-ref", "-d", "refs/remotes/origin/work/other/2026-10-29")
     _write(repo, f"{_INBOX}/only-on-head.md", _memo("open"))
     _git(repo, "add", "-A")
@@ -74,13 +75,13 @@ def test_head_tracking_ref_is_skipped(repo):
     assert memo_corpus.stranded_inbox_memos(str(repo)) == []
 
 
-def test_packed_refs_are_read(repo):
+def test_packed_refs_are_read(repo) -> None:
     _git(repo, "pack-refs", "--all")
     found = memo_corpus.stranded_inbox_memos(str(repo))
     assert [m.filename for m in found] == ["stranded.md"]
 
 
-def test_no_remote_refs_returns_empty(tmp_path):
+def test_no_remote_refs_returns_empty(tmp_path: Path) -> None:
     r = tmp_path / "bare"
     r.mkdir()
     _git(r, "init")

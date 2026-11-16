@@ -11,6 +11,7 @@ import yaml
 
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 PLAN = "docs/plans/2026-11/p.md"
 REL = "state/sizings/2026-11-04-evidence.yaml"
@@ -18,7 +19,7 @@ NOW = datetime(2026, 11, 4, 12, 0, tzinfo=timezone.utc)
 EVIDENCE = {"command": "python -m x --census", "observed": "R1 reached: 3 consumers"}
 
 
-def _sizing_text(status="open"):
+def _sizing_text(status: str = "open"):
     row = {"id": "R1", "source_text": "wire it", "anchor": "wire it", "surface": "cli",
            "status": status, "claimed_by": [PLAN], "wired": False, "met_by": []}
     doc = {
@@ -45,27 +46,27 @@ def _register_row(item):
 
 @pytest.mark.parametrize("land", [_ledger_row, lambda _tmp, item: _register_row(item)], ids=["ledger", "register"])
 class TestBothWriters:
-    def test_wired_with_evidence_records_command_and_output(self, tmp_path, land):
+    def test_wired_with_evidence_records_command_and_output(self, tmp_path: Path, land) -> None:
         row = land(tmp_path, {"id": "R1", "status": "met", "wired": True, **EVIDENCE})
         assert row["status"] == "met" and row["wired"] is True
         assert row["wired_evidence"] == {"command": EVIDENCE["command"], "output": EVIDENCE["observed"]}
 
     @pytest.mark.parametrize("missing", [{"command": ""}, {"observed": "  "}, {"command": None}, {"observed": 3}])
-    def test_wired_with_incomplete_evidence_lands_unwired_partial(self, tmp_path, land, missing):
+    def test_wired_with_incomplete_evidence_lands_unwired_partial(self, tmp_path: Path, land, missing) -> None:
         row = land(tmp_path, {"id": "R1", "status": "met", "wired": True, **{**EVIDENCE, **missing}})
         assert row["status"] == "partial" and row["wired"] is False
         assert "wired_evidence" not in row
 
-    def test_wired_with_no_evidence_lands_unwired_partial(self, tmp_path, land):
+    def test_wired_with_no_evidence_lands_unwired_partial(self, tmp_path: Path, land) -> None:
         row = land(tmp_path, {"id": "R1", "status": "met", "wired": True})
         assert row["status"] == "partial" and row["wired"] is False
         assert "wired_evidence" not in row
 
-    def test_evidence_without_wired_true_records_nothing(self, tmp_path, land):
+    def test_evidence_without_wired_true_records_nothing(self, tmp_path: Path, land) -> None:
         row = land(tmp_path, {"id": "R1", "status": "met", "wired": False, **EVIDENCE})
         assert row["wired"] is False and "wired_evidence" not in row
 
 
-def test_wired_evidence_requires_both_non_empty_strings():
+def test_wired_evidence_requires_both_non_empty_strings() -> None:
     assert rr.wired_evidence(EVIDENCE) == {"command": EVIDENCE["command"], "output": EVIDENCE["observed"]}
     assert rr.wired_evidence({"command": "x"}) is None

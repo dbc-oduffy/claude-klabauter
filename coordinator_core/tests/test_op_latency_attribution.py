@@ -37,6 +37,8 @@ import json
 import coordinator_core.ipc as ipc
 from coordinator_core.ipc import _REGISTRY, dispatch_message
 from coordinator_core.session_hub_path import hub_for_common
+from pathlib import Path
+import pytest
 
 
 def _run(coro):
@@ -54,7 +56,7 @@ class _RegistryScope:
         _REGISTRY.update(self._handlers)
         return self
 
-    def __exit__(self, *_):
+    def __exit__(self, *_) -> None:
         for name, old in self._saved.items():
             if old is None:
                 _REGISTRY.pop(name, None)
@@ -69,11 +71,11 @@ def _sync_handler(params: dict, ctx=None, repo_root=None) -> dict:
 _TEST_HANDLERS = {"test.attribution_sync": _sync_handler}
 
 
-def _sink_for(fake_common_dir):
+def _sink_for(fake_common_dir) -> Path:
     return hub_for_common(fake_common_dir) / "logs" / "op-latency.jsonl"
 
 
-def test_none_scoped_op_served_warm_attributes_to_caller_not_server(tmp_path, monkeypatch):
+def test_none_scoped_op_served_warm_attributes_to_caller_not_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     caller_dir = tmp_path / "caller-repo"
     caller_dir.mkdir()
     caller_common_dir = caller_dir / ".git"
@@ -84,7 +86,7 @@ def test_none_scoped_op_served_warm_attributes_to_caller_not_server(tmp_path, mo
     server_common_dir = server_dir / ".git"
     server_common_dir.mkdir()
 
-    def _fake_git_common_dir(repo_root):
+    def _fake_git_common_dir(repo_root) -> Path:
         from pathlib import Path
         repo_root = Path(repo_root).resolve()
         if repo_root == caller_dir.resolve():
@@ -136,13 +138,13 @@ def test_none_scoped_op_served_warm_attributes_to_caller_not_server(tmp_path, mo
         assert line["repo_key"] == str(caller_common_dir)
 
 
-def test_resolve_caller_cwd_absent_field_returns_none():
+def test_resolve_caller_cwd_absent_field_returns_none() -> None:
     assert ipc.resolve_caller_cwd({}) is None
     assert ipc.resolve_caller_cwd({"_caller_cwd": ""}) is None
     assert ipc.resolve_caller_cwd({"_caller_cwd": 123}) is None
 
 
-def test_resolve_caller_cwd_present_field_returns_path():
+def test_resolve_caller_cwd_present_field_returns_path() -> None:
     from pathlib import Path
 
     assert ipc.resolve_caller_cwd({"_caller_cwd": "/some/dir"}) == Path("/some/dir")

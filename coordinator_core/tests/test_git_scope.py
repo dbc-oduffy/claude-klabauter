@@ -4,6 +4,11 @@ from __future__ import annotations
 import subprocess
 
 import pytest
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import Popen
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -39,7 +44,7 @@ def _init_repo_with_commit(path, filename: str = "seed.txt") -> str:
 
 
 @pytest.fixture
-def receiver(tmp_path):
+def receiver(tmp_path: Path):
     root = tmp_path / "receiver"
     sha = _init_repo_with_commit(root)
     if not sha:
@@ -48,7 +53,7 @@ def receiver(tmp_path):
 
 
 @pytest.fixture
-def sender(tmp_path):
+def sender(tmp_path: Path):
     root = tmp_path / "sender"
     sha = _init_repo_with_commit(root, filename="other.txt")
     if not sha:
@@ -56,7 +61,7 @@ def sender(tmp_path):
     return root, sha
 
 
-def test_scoped_env_strips_every_repo_scoping_var():
+def test_scoped_env_strips_every_repo_scoping_var() -> None:
     base = {var: "poison" for var in REPO_SCOPING_ENV_VARS}
     base["PATH"] = "/usr/bin"
     base["GIT_AUTHOR_NAME"] = "keep me"
@@ -74,7 +79,7 @@ def test_scoped_env_strips_every_repo_scoping_var():
     )
 
 
-def test_scoped_env_defaults_to_os_environ(monkeypatch):
+def test_scoped_env_defaults_to_os_environ(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GIT_DIR", "/somewhere/else/.git")
     monkeypatch.setenv("COORDINATOR_TEST_MARKER", "present")
 
@@ -84,7 +89,7 @@ def test_scoped_env_defaults_to_os_environ(monkeypatch):
     assert result.get("COORDINATOR_TEST_MARKER") == "present"
 
 
-def test_predicate_yes_for_a_resolvable_object(receiver):
+def test_predicate_yes_for_a_resolvable_object(receiver) -> None:
     root, sha = receiver
 
     verdict, reason = git_predicate(root, ["rev-parse", "--verify", "--quiet", f"{sha}^{{commit}}"])
@@ -93,7 +98,7 @@ def test_predicate_yes_for_a_resolvable_object(receiver):
     assert reason == "", "a determinate verdict carries no could-not-check reason"
 
 
-def test_predicate_no_for_an_absent_object_in_a_reachable_repo(receiver):
+def test_predicate_no_for_an_absent_object_in_a_reachable_repo(receiver) -> None:
     root, _sha = receiver
 
     verdict, reason = git_predicate(
@@ -105,7 +110,7 @@ def test_predicate_no_for_an_absent_object_in_a_reachable_repo(receiver):
     )
 
 
-def test_predicate_unknown_when_the_target_is_not_a_repo(tmp_path):
+def test_predicate_unknown_when_the_target_is_not_a_repo(tmp_path: Path) -> None:
     not_a_repo = tmp_path / "plain-directory"
     not_a_repo.mkdir()
 
@@ -120,14 +125,14 @@ def test_predicate_unknown_when_the_target_is_not_a_repo(tmp_path):
     assert reason, "an UNKNOWN must name git's own reason, or it is unreadable to an operator"
 
 
-def test_predicate_unknown_when_the_target_path_does_not_exist(tmp_path):
+def test_predicate_unknown_when_the_target_path_does_not_exist(tmp_path: Path) -> None:
     verdict, _reason = git_predicate(
         tmp_path / "no-such-directory", ["rev-parse", "--verify", "--quiet", "HEAD"]
     )
     assert verdict == PROBE_UNKNOWN
 
 
-def test_predicate_merge_base_is_ancestor_does_not_conflate_1_with_128(receiver, sender):
+def test_predicate_merge_base_is_ancestor_does_not_conflate_1_with_128(receiver, sender) -> None:
     r_root, r_sha = receiver
     s_root, s_sha = sender
 
@@ -151,7 +156,7 @@ def test_predicate_merge_base_is_ancestor_does_not_conflate_1_with_128(receiver,
     )
 
 
-def test_git_dir_poison_does_not_retarget_the_predicate(monkeypatch, receiver, sender):
+def test_git_dir_poison_does_not_retarget_the_predicate(monkeypatch: pytest.MonkeyPatch, receiver, sender) -> None:
     r_root, r_sha = receiver
     s_root, _s_sha = sender
     monkeypatch.setenv("GIT_DIR", str(s_root / ".git"))
@@ -175,7 +180,7 @@ def test_git_dir_poison_does_not_retarget_the_predicate(monkeypatch, receiver, s
     )
 
 
-def test_git_dir_poison_is_reported_as_unusable_not_as_a_verdict(monkeypatch, receiver, sender):
+def test_git_dir_poison_is_reported_as_unusable_not_as_a_verdict(monkeypatch: pytest.MonkeyPatch, receiver, sender) -> None:
     r_root, _ = receiver
     s_root, _ = sender
     monkeypatch.setenv("GIT_DIR", str(s_root / ".git"))
@@ -186,7 +191,7 @@ def test_git_dir_poison_is_reported_as_unusable_not_as_a_verdict(monkeypatch, re
     )
 
 
-def test_relative_git_dir_poison_does_not_make_a_real_repo_look_broken(monkeypatch, receiver):
+def test_relative_git_dir_poison_does_not_make_a_real_repo_look_broken(monkeypatch: pytest.MonkeyPatch, receiver) -> None:
     r_root, r_sha = receiver
     monkeypatch.setenv("GIT_DIR", ".")
 
@@ -196,7 +201,7 @@ def test_relative_git_dir_poison_does_not_make_a_real_repo_look_broken(monkeypat
 
 
 @pytest.mark.parametrize("var", REPO_SCOPING_ENV_VARS)
-def test_no_repo_scoping_var_leaks_into_a_probe(monkeypatch, receiver, var):
+def test_no_repo_scoping_var_leaks_into_a_probe(monkeypatch: pytest.MonkeyPatch, receiver, var) -> None:
     r_root, r_sha = receiver
     monkeypatch.setenv(var, "/nonexistent/poison")
 
@@ -209,28 +214,28 @@ def test_no_repo_scoping_var_leaks_into_a_probe(monkeypatch, receiver, var):
     assert verdict == PROBE_YES, f"{var} survived into the predicate probe ({reason})"
 
 
-def test_unusable_reason_is_none_for_a_real_repo(receiver):
+def test_unusable_reason_is_none_for_a_real_repo(receiver) -> None:
     root, _ = receiver
     assert foreign_repo_unusable_reason(root) is None
 
 
-def test_unusable_reason_names_a_plain_directory(tmp_path):
+def test_unusable_reason_names_a_plain_directory(tmp_path: Path) -> None:
     plain = tmp_path / "plain"
     plain.mkdir()
     reason = foreign_repo_unusable_reason(plain)
     assert reason, "a non-repo must be reported as unusable, never silently probed"
 
 
-def test_unusable_reason_names_a_missing_path(tmp_path):
+def test_unusable_reason_names_a_missing_path(tmp_path: Path) -> None:
     reason = foreign_repo_unusable_reason(tmp_path / "absent")
     assert reason
 
 
-def test_unusable_reason_rejects_an_empty_path():
+def test_unusable_reason_rejects_an_empty_path() -> None:
     assert foreign_repo_unusable_reason("")
 
 
-def test_unusable_reason_catches_a_git_dir_outside_the_target_tree(tmp_path, receiver):
+def test_unusable_reason_catches_a_git_dir_outside_the_target_tree(tmp_path: Path, receiver) -> None:
     r_root, _ = receiver
     impostor = tmp_path / "impostor"
     impostor.mkdir()
@@ -252,7 +257,7 @@ def test_unusable_reason_catches_a_git_dir_outside_the_target_tree(tmp_path, rec
     assert "outside" in reason
 
 
-def test_module_never_raises_when_git_is_missing(monkeypatch, tmp_path):
+def test_module_never_raises_when_git_is_missing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("PATH", str(tmp_path))
     assert foreign_repo_unusable_reason(tmp_path)
     verdict, reason = git_predicate(tmp_path, ["rev-parse", "--verify", "--quiet", "HEAD"])
@@ -260,7 +265,7 @@ def test_module_never_raises_when_git_is_missing(monkeypatch, tmp_path):
     assert reason
 
 
-def test_probe_verdict_constants_are_three_distinct_values():
+def test_probe_verdict_constants_are_three_distinct_values() -> None:
     assert len({PROBE_YES, PROBE_NO, PROBE_UNKNOWN}) == 3
 
 
@@ -275,7 +280,7 @@ from coordinator_core.git import run as _git_run
 def _swap_child(monkeypatch, code: str) -> None:
     real_popen = subprocess.Popen
 
-    def popen(argv, *args, **kwargs):
+    def popen(argv, *args, **kwargs) -> Popen[str]:
         return real_popen([sys.executable, "-c", code], *args, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", popen)
@@ -283,14 +288,14 @@ def _swap_child(monkeypatch, code: str) -> None:
 
 @pytest.mark.slow
 @pytest.mark.deliberate_wall_clock(reason="a child that outlives the old 2s wall cap must still be answered")
-def test_git_predicate_uses_the_answer_of_a_child_slower_than_the_old_wall_cap(monkeypatch, tmp_path):
+def test_git_predicate_uses_the_answer_of_a_child_slower_than_the_old_wall_cap(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _swap_child(monkeypatch, "import time; time.sleep(5)")
     assert git_predicate(tmp_path, ["rev-parse", "HEAD"]) == (PROBE_YES, "")
 
 
 @pytest.mark.slow
 @pytest.mark.deliberate_wall_clock(reason="a child that outlives the wall bound must be killed and named hung")
-def test_git_predicate_reports_a_wall_kill_as_hung(monkeypatch, tmp_path):
+def test_git_predicate_reports_a_wall_kill_as_hung(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(_git_run, "_SPAWN_SCHEDULING_HEADROOM_SECS", 0.0)
     _swap_child(monkeypatch, "import time; time.sleep(60)")
     verdict, reason = git_predicate(tmp_path, ["rev-parse", "HEAD"], timeout=0.3)
@@ -300,7 +305,7 @@ def test_git_predicate_reports_a_wall_kill_as_hung(monkeypatch, tmp_path):
 
 @pytest.mark.slow
 @pytest.mark.deliberate_wall_clock(reason="a child that outlives the wall bound must be killed and named hung")
-def test_foreign_repo_probe_reports_a_wall_kill_as_hung(monkeypatch, tmp_path):
+def test_foreign_repo_probe_reports_a_wall_kill_as_hung(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(_git_run, "_SPAWN_SCHEDULING_HEADROOM_SECS", 0.0)
     _swap_child(monkeypatch, "import time; time.sleep(60)")
     reason = _gs._probe_foreign_repo(str(tmp_path), 0.3)

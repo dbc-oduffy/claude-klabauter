@@ -12,7 +12,7 @@ from coordinator_core.ops.dispatch_emit.landing_integrity import SINCE_BASE_OVER
 OFF_CHAIN = "deadbeefdeadbeef"
 
 
-def _scenario(tmp_path: Path, message_for):
+def _scenario(tmp_path: Path, message_for) -> str:
     """Run base B0, peer commit P, then a commit adding one line whose message is
     ``message_for(P)``; the landing drops that line."""
     repo = _Repo(tmp_path)

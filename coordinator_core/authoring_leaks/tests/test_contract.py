@@ -11,10 +11,15 @@ import pytest
 
 from coordinator_core import authoring_leaks as al
 from coordinator_core.authoring_leaks import HeadView, LeakFinding, added_lines, leak_gate
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 
 @pytest.fixture(autouse=True)
-def _no_spawn(monkeypatch):
+def _no_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*a, **k):
         raise AssertionError("subprocess spawned")
 
@@ -23,7 +28,7 @@ def _no_spawn(monkeypatch):
 
 
 class _Det:
-    def __init__(self, name, cands=(), findings=(), exc=None):
+    def __init__(self, name, cands=(), findings=(), exc=None) -> None:
         self.name = name
         self._cands = list(cands)
         self._findings = list(findings)
@@ -44,16 +49,16 @@ def _blob_sha(data: bytes) -> str:
     return hashlib.sha1(b"blob %d\0" % len(data) + data).hexdigest()
 
 
-def test_empty_detectors_pass(tmp_path):
+def test_empty_detectors_pass(tmp_path: Path) -> None:
     out = leak_gate(tmp_path, ["a.py"], detectors=[])
     assert out.passed and out.diagnostics == []
 
 
-def test_empty_paths_pass(tmp_path):
+def test_empty_paths_pass(tmp_path: Path) -> None:
     assert leak_gate(tmp_path, [], detectors=[_Det("d")]).passed
 
 
-def test_injected_finding_refuses_with_format(tmp_path, monkeypatch):
+def test_injected_finding_refuses_with_format(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(al, "read_tree_spine", lambda *a, **k: {})
     det = _Det("d", findings=[LeakFinding("pkg/a.py", 3, "import_closure", "imports x from y")])
     out = leak_gate(tmp_path, ["pkg\\a.py"], detectors=[det])
@@ -62,7 +67,7 @@ def test_injected_finding_refuses_with_format(tmp_path, monkeypatch):
     assert out.diagnostics[1:] == ["Fix the listed items, or add the missing definer to this commit."]
 
 
-def test_findings_capped_at_max_rendered(tmp_path, monkeypatch):
+def test_findings_capped_at_max_rendered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(al, "read_tree_spine", lambda *a, **k: {})
     extra = 3
     fs = [LeakFinding("a.py", i, "k", "d") for i in range(1, al.MAX_RENDERED_FINDINGS + extra + 1)]
@@ -71,7 +76,7 @@ def test_findings_capped_at_max_rendered(tmp_path, monkeypatch):
     assert f"leak_gate: (+{extra} more)" in out.diagnostics
 
 
-def test_one_spine_read_for_all_detectors(tmp_path, monkeypatch):
+def test_one_spine_read_for_all_detectors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
     def fake(repo, paths):
@@ -88,19 +93,19 @@ def test_one_spine_read_for_all_detectors(tmp_path, monkeypatch):
     assert d1.seen_head is d2.seen_head is d3.seen_head
 
 
-def test_no_candidates_no_spine_read(tmp_path, monkeypatch):
+def test_no_candidates_no_spine_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(al, "read_tree_spine", lambda *a, **k: pytest.fail("read"))
     assert leak_gate(tmp_path, ["a.py"], detectors=[_Det("d")]).passed
 
 
-def test_raising_detector_refuses_naming_it(tmp_path, monkeypatch):
+def test_raising_detector_refuses_naming_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(al, "read_tree_spine", lambda *a, **k: {})
     out = leak_gate(tmp_path, ["a.py"], detectors=[_Det("boomer", exc=ValueError("bad"))])
     assert not out.passed
     assert "boomer" in out.diagnostics[0] and "ValueError" in out.diagnostics[0]
 
 
-def test_default_detector_import_failure_refuses(tmp_path, monkeypatch):
+def test_default_detector_import_failure_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(al, "WIRED_DETECTORS", ("no_such_detector_module",))
     out = leak_gate(tmp_path, ["a.py"])
     assert not out.passed
@@ -108,7 +113,7 @@ def test_default_detector_import_failure_refuses(tmp_path, monkeypatch):
     assert "failed to import" in out.diagnostics[0]
 
 
-def test_default_detectors_resolved_by_fixed_module_name(tmp_path, monkeypatch):
+def test_default_detectors_resolved_by_fixed_module_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mod = types.ModuleType("coordinator_core.authoring_leaks.fake_det")
     mod.candidates = lambda gp: []
     mod.detect = lambda root, gp, head: [LeakFinding("a.py", 1, "fake", "hit")]
@@ -118,7 +123,7 @@ def test_default_detectors_resolved_by_fixed_module_name(tmp_path, monkeypatch):
     assert not out.passed and "fake -- hit" in out.diagnostics[0]
 
 
-def test_added_lines_multiset():
+def test_added_lines_multiset() -> None:
     assert added_lines("a\nb\nc\n", "c\na\nb\n") == []
     assert added_lines("a\nb\n", "a\nb\nb\n") == [(3, "b")]
     assert added_lines("a\n", "a\nx\n") == [(2, "x")]
@@ -126,7 +131,7 @@ def test_added_lines_multiset():
     assert added_lines("a\nb\n", "a\n") == []
 
 
-def test_head_view_worktree_differs_and_entries(tmp_path, monkeypatch):
+def test_head_view_worktree_differs_and_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     same, changed = b"same\n", b"new\n"
     spine = {
         "": {"top.py": (0o100644, _blob_sha(same))},
@@ -147,13 +152,13 @@ def test_head_view_worktree_differs_and_entries(tmp_path, monkeypatch):
     assert head.worktree_differs("top.py")
 
 
-def test_head_view_unresolvable_head_is_empty(tmp_path, monkeypatch):
+def test_head_view_unresolvable_head_is_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(al, "read_tree_spine", lambda *a, **k: None)
     head = HeadView(tmp_path, ["a.py"])
     assert not head.in_head("a.py") and head.head_text("a.py") is None
 
 
-def test_head_text_reads_blob_once(tmp_path, monkeypatch):
+def test_head_text_reads_blob_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     data = "hello\n".encode()
     monkeypatch.setattr(al, "read_tree_spine", lambda *a, **k: {"": {"a.py": (0o100644, _blob_sha(data))}})
     monkeypatch.setattr(al, "resolve_git_common_dir", lambda root: tmp_path)
@@ -170,7 +175,7 @@ def test_head_text_reads_blob_once(tmp_path, monkeypatch):
     assert len(reads) == 1
 
 
-def test_publisher_only_detectors_unwired_without_the_publisher(monkeypatch):
+def test_publisher_only_detectors_unwired_without_the_publisher(monkeypatch: pytest.MonkeyPatch) -> None:
     real = al.importlib.util.find_spec
     monkeypatch.setattr(
         al.importlib.util,
@@ -183,7 +188,7 @@ def test_publisher_only_detectors_unwired_without_the_publisher(monkeypatch):
     assert names == set(al.WIRED_DETECTORS) - al.PUBLISHER_ONLY_DETECTORS
 
 
-def test_absent_publisher_only_modules_skipped_even_with_the_publisher(monkeypatch):
+def test_absent_publisher_only_modules_skipped_even_with_the_publisher(monkeypatch: pytest.MonkeyPatch) -> None:
     real = al.importlib.util.find_spec
     absent = {f"{al.__name__}.{n}" for n in al.PUBLISHER_ONLY_DETECTORS}
     monkeypatch.setattr(
@@ -194,7 +199,7 @@ def test_absent_publisher_only_modules_skipped_even_with_the_publisher(monkeypat
     assert [d.__name__.rsplit(".", 1)[-1] for d in detectors] == ["import_closure", "call_signature"]
 
 
-def test_absent_non_publisher_only_detector_still_refuses(monkeypatch):
+def test_absent_non_publisher_only_detector_still_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
     real = al.importlib.util.find_spec
     monkeypatch.setattr(
         al.importlib.util,
@@ -206,10 +211,10 @@ def test_absent_non_publisher_only_detector_still_refuses(monkeypatch):
     assert len(failures) == 1 and "import_closure" in failures[0]
 
 
-def test_present_publisher_only_module_failing_import_still_refuses(monkeypatch):
+def test_present_publisher_only_module_failing_import_still_refuses(monkeypatch: pytest.MonkeyPatch) -> None:
     real = al.importlib.import_module
 
-    def boom(name, *a):
+    def boom(name, *a) -> ModuleType:
         if name.endswith(".payload_locality"):
             raise ImportError("broken dependency")
         return real(name, *a)
@@ -219,7 +224,7 @@ def test_present_publisher_only_module_failing_import_still_refuses(monkeypatch)
     assert len(failures) == 1 and "payload_locality" in failures[0]
 
 
-def test_publisher_only_detectors_wired_with_the_publisher():
+def test_publisher_only_detectors_wired_with_the_publisher() -> None:
     detectors, failures = al._resolve_default_detectors(al.WIRED_DETECTORS)
     assert failures == []
     assert [d.__name__.rsplit(".", 1)[-1] for d in detectors] == list(al.WIRED_DETECTORS)

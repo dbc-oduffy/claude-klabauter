@@ -8,12 +8,13 @@ import subprocess
 import pytest
 
 from coordinator_core.bash_guards import block_subagent_destructive_action as guard
+from pathlib import Path
 
 RM = "r" + "m"
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     (root / ".git").mkdir(parents=True)
     (root / "scratch" / "x").mkdir(parents=True)
@@ -33,49 +34,49 @@ def _run(command, cwd):
     return guard.check(payload)
 
 
-def _denied(result):
+def _denied(result) -> bool:
     return bool(result) and "rm -r/-f" in str(result)
 
 
-def test_scratch_target_allowed_per_command_and_per_segment(repo):
+def test_scratch_target_allowed_per_command_and_per_segment(repo) -> None:
     assert not _denied(_run(f"{RM} -rf scratch/x", repo))
     assert not _denied(_run(f"echo ok && {RM} -rf scratch/x", repo))
     assert not _denied(_run(f"{RM} -rf scratch/x scratch/y", repo))
 
 
-def test_absolute_scratch_target_allowed(repo):
+def test_absolute_scratch_target_allowed(repo) -> None:
     assert not _denied(_run(f"{RM} -rf {repo.as_posix()}/scratch/x", repo / "src"))
 
 
-def test_glob_in_last_component_under_scratch_allowed(repo):
+def test_glob_in_last_component_under_scratch_allowed(repo) -> None:
     assert not _denied(_run(f"{RM} -rf scratch/*", repo))
 
 
-def test_dotdot_escape_denied_as_before(repo):
+def test_dotdot_escape_denied_as_before(repo) -> None:
     assert _denied(_run(f"{RM} -rf scratch/../src", repo))
     assert _denied(_run(f"{RM} -rf scratch/x/../../src", repo))
 
 
-def test_scratch_root_itself_and_non_scratch_denied(repo):
+def test_scratch_root_itself_and_non_scratch_denied(repo) -> None:
     assert _denied(_run(f"{RM} -rf scratch", repo))
     assert _denied(_run(f"{RM} -rf src", repo))
     assert _denied(_run(f"{RM} -rf scratch/x src", repo))
 
 
-def test_cd_before_rm_denied(repo):
+def test_cd_before_rm_denied(repo) -> None:
     assert _denied(_run(f"cd scratch && {RM} -rf x", repo))
 
 
-def test_unresolvable_operands_denied(repo):
+def test_unresolvable_operands_denied(repo) -> None:
     assert _denied(_run(f"{RM} -rf scratch/$X", repo))
     assert _denied(_run(f"{RM} -rf scratch/*/x", repo))
 
 
-def test_hidden_rm_in_another_segment_denied(repo):
+def test_hidden_rm_in_another_segment_denied(repo) -> None:
     assert _denied(_run(f"echo scratch/x | xargs {RM} -rf", repo))
 
 
-def test_link_under_scratch_pointing_outside_denied(repo):
+def test_link_under_scratch_pointing_outside_denied(repo) -> None:
     link = repo / "scratch" / "lnk"
     try:
         os.symlink(repo / "src", link, target_is_directory=True)
@@ -93,7 +94,7 @@ def test_link_under_scratch_pointing_outside_denied(repo):
     assert _denied(_run(f"{RM} -rf scratch/lnk/*", repo))
 
 
-def test_no_cwd_leaves_deny_unchanged(repo):
+def test_no_cwd_leaves_deny_unchanged(repo) -> None:
     payload = {
         "tool_name": "Bash",
         "tool_input": {"command": f"{RM} -rf scratch/x"},

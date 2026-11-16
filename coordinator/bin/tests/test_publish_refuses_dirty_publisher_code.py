@@ -1,11 +1,10 @@
-"""publish._main refuses, before any row syncs, when publisher code differs from the published sha."""
+"""publish._main runs from a commit clone, never refusing, when publisher code differs from the published sha."""
 from __future__ import annotations
 
 import importlib.util
-import os
-import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -18,6 +17,12 @@ _FILES = (
     "coordinator/bin/lib/helper.py",
     "coordinator/lib/percolate/targets.py",
     "coordinator_core/percolate/engine.py",
+)
+_STUB = (
+    "import sys\n"
+    "print('ran-from=' + __file__, file=sys.stderr)\n"
+    "print('argv=' + '|'.join(sys.argv[1:]), file=sys.stderr)\n"
+    "sys.exit(7)\n"
 )
 
 
@@ -51,6 +56,32 @@ def repo(tmp_path):
     return root
 
 
+@pytest.fixture()
+def isolated_runtime(tmp_path, monkeypatch):
+    """Clone cache under tmp_path; the in-process entry run's sys.path/sys.modules edits are undone."""
+    cache = tmp_path / "tmp"
+    cache.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(cache))
+    saved_path, saved_modules = list(sys.path), dict(sys.modules)
+    yield cache
+    sys.path[:] = saved_path
+    sys.modules.clear()
+    sys.modules.update(saved_modules)
+
+
+def _stub_commit(repo: Path) -> str:
+    (repo / "coordinator/bin/publish.py").write_text(_STUB)
+    _git(repo, "add", ".")
+    _git(repo, "commit", "-qm", "stub")
+    return _git(repo, "rev-parse", "HEAD")
+
+
+def _prep(pub, repo, monkeypatch):
+    monkeypatch.setattr(pub, "_REPO_ROOT", repo)
+    monkeypatch.setattr(pub, "_BOOTSTRAP_DONE", False)
+    monkeypatch.setattr(pub, "_bootstrap_engine", lambda: pytest.fail("reached bootstrap"))
+
+
 def test_clean_tree_has_no_dirty_paths(pub, repo):
     assert pub._dirty_publisher_paths(repo, _git(repo, "rev-parse", "HEAD")) == []
 
@@ -82,25 +113,84 @@ def test_non_publisher_dirt_is_ignored(pub, repo):
     assert pub._dirty_publisher_paths(repo, "HEAD") == []
 
 
-def test_main_refuses_dirty_publisher_before_any_sync(pub, repo, monkeypatch, capsys):
-    (repo / "coordinator/bin/publish.py").write_text("x = 2\n")
-    monkeypatch.setattr(pub, "_REPO_ROOT", repo)
-    monkeypatch.setattr(pub, "_BOOTSTRAP_DONE", False)
-    monkeypatch.setattr(pub, "_bootstrap_engine", lambda: pytest.fail("reached bootstrap"))
-    assert pub._main([]) == 1
+def test_dirty_publisher_delegates_to_a_commit_clone_without_refusing(
+    pub, repo, isolated_runtime, monkeypatch, capsys
+):
+    sha = _stub_commit(repo)
+    (repo / "coordinator/bin/publish.py").write_text("raise RuntimeError('dirty executed')\n")
+    _prep(pub, repo, monkeypatch)
+    assert pub._main(["--dry-run"]) == 7
     err = capsys.readouterr().err
-    assert "coordinator/bin/publish.py" in err
-    assert "commit them, or run from a clean export" in err
+    assert "publisher code differs" not in err
+    assert "dirty executed" not in err
+    ran = next(line for line in err.splitlines() if line.startswith("ran-from="))
+    ran_path = Path(ran[len("ran-from="):])
+    assert ran_path.is_relative_to(isolated_runtime)
+    assert ran_path.parents[2].name == sha and ran_path.parents[3].name == "claude-klabauter-commit-clone"
+    assert "argv=--dry-run" in err
+    assert (repo / "coordinator/bin/publish.py").read_text() == "raise RuntimeError('dirty executed')\n"
 
 
-def test_main_refuses_against_explicit_commit(pub, repo, monkeypatch, capsys):
-    sha = _git(repo, "rev-parse", "HEAD")
+def test_dirty_publisher_against_explicit_commit_delegates_with_the_commit_argv(
+    pub, repo, isolated_runtime, monkeypatch, capsys
+):
+    sha = _stub_commit(repo)
     (repo / "coordinator_core/percolate/engine.py").write_text("x = 3\n")
-    monkeypatch.setattr(pub, "_REPO_ROOT", repo)
+    _prep(pub, repo, monkeypatch)
+    assert pub._main(["--commit", sha]) == 7
+    err = capsys.readouterr().err
+    assert f"argv=--commit|{sha}" in err
+    assert "refused" not in err
+
+
+def test_failed_materialise_refuses_and_runs_no_live_publisher_code(pub, repo, monkeypatch, capsys):
+    _stub_commit(repo)
+    (repo / "coordinator/bin/publish.py").write_text("raise RuntimeError('dirty executed')\n")
+    _prep(pub, repo, monkeypatch)
+    cc = pub._commit_clone_module()
+
+    def _boom(*_a, **_k):
+        raise cc.CommitCloneError("injected; Retry: python commit_clone.py materialise")
+
+    monkeypatch.setattr(cc, "materialise_commit_clone", _boom)
+    monkeypatch.setattr(cc, "run_entry_from_clone", lambda *a, **k: pytest.fail("ran a clone"))
+    assert pub._main(["--dry-run"]) == 1
+    err = capsys.readouterr().err
+    assert "publish: refused" in err and "Retry:" in err
+    assert "dirty executed" not in err
+
+
+def test_a_commit_clone_is_not_delegated_again(pub, repo, isolated_runtime, monkeypatch):
+    sha = _stub_commit(repo)
+    clone = pub._commit_clone_module().materialise_commit_clone(repo, sha, isolated_runtime / "c")
+    (clone / "coordinator/bin/lib/helper.py").write_text("x = 2\n")
+
+    class _Reached(Exception):
+        pass
+
+    def _stop():
+        raise _Reached
+
+    monkeypatch.setattr(pub, "_REPO_ROOT", clone)
     monkeypatch.setattr(pub, "_BOOTSTRAP_DONE", False)
-    monkeypatch.setattr(pub, "_bootstrap_engine", lambda: pytest.fail("reached bootstrap"))
-    assert pub._main(["--commit", sha]) == 1
-    assert "coordinator_core/percolate/engine.py" in capsys.readouterr().err
+    monkeypatch.setattr(pub, "_bootstrap_engine", _stop)
+    with pytest.raises(_Reached):
+        pub._main([])
+
+
+def test_source_repo_is_the_live_repo_from_a_clone_and_the_root_otherwise(pub, repo, isolated_runtime, monkeypatch):
+    monkeypatch.setattr(pub, "_REPO_ROOT", repo)
+    assert pub._source_repo() == repo
+    sha = _git(repo, "rev-parse", "HEAD")
+    clone = pub._commit_clone_module().materialise_commit_clone(repo, sha, isolated_runtime / "c")
+    monkeypatch.setattr(pub, "_REPO_ROOT", clone)
+    assert pub._source_repo() == repo
+
+
+def test_unresolvable_explicit_commit_still_refuses(pub, repo, monkeypatch, capsys):
+    _prep(pub, repo, monkeypatch)
+    assert pub._main(["--commit", "no-such-ref"]) == 1
+    assert "refused" in capsys.readouterr().err
 
 
 def test_main_passes_the_gate_on_clean_tree(pub, repo, monkeypatch):
@@ -117,35 +207,5 @@ def test_main_passes_the_gate_on_clean_tree(pub, repo, monkeypatch):
         pub._main([])
 
 
-def _chain_export(tmp_path, repo):
-    """The shape `_export_chain_at_sha` leaves: both engine paths are links to a per-sha export."""
-    export = tmp_path / "engine_export"
-    for rel in pub_linked_paths():
-        shutil.copytree(repo / rel, export / rel)
-        shutil.rmtree(repo / rel)
-        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
-        try:
-            os.symlink(export / rel, repo / rel, target_is_directory=True)
-        except OSError:
-            pytest.skip("symlinks unavailable on this box")
-
-
-def pub_linked_paths():
-    return ("coordinator_core", "coordinator/lib")
-
-
-def test_chain_export_engine_links_are_not_dirty(pub, repo, tmp_path):
-    assert tuple(pub._SOURCE_REF_IMPORTED_PATHS) == pub_linked_paths()
-    _chain_export(tmp_path, repo)
-    assert pub._dirty_publisher_paths(repo, _git(repo, "rev-parse", "HEAD")) == []
-
-
-def test_chain_export_still_refuses_dirty_files_outside_the_links(pub, repo, tmp_path):
-    _chain_export(tmp_path, repo)
-    sha = _git(repo, "rev-parse", "HEAD")
-    (repo / "coordinator/bin/lib/helper.py").write_text("x = 2\n")
-    (repo / "coordinator/bin/lib/fresh.py").write_text("z = 1\n")
-    assert pub._dirty_publisher_paths(repo, sha) == [
-        "coordinator/bin/lib/fresh.py",
-        "coordinator/bin/lib/helper.py",
-    ]
+def test_the_refusal_text_is_gone_from_the_driver():
+    assert "publisher code differs" not in _PUBLISH.read_text(encoding="utf-8")

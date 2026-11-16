@@ -37,13 +37,18 @@ import pathlib
 import types
 
 import pytest
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _load_cli_module():
+def _load_cli_module() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "coordinator_safe_commit", str(_BIN_DIR / "coordinator-safe-commit.py")
     )
@@ -53,7 +58,7 @@ def _load_cli_module():
     return mod
 
 
-def _stub_session(mod, monkeypatch, *, session_id="mine", contested=None, raises=None):
+def _stub_session(mod, monkeypatch, *, session_id: str = "mine", contested=None, raises=None) -> None:
     """Stand in for `_import_session()`'s (core, liveness, scope, claims) tuple."""
 
     def _contested(paths, sid, cwd=None):
@@ -69,7 +74,7 @@ def _stub_session(mod, monkeypatch, *, session_id="mine", contested=None, raises
 
 
 class TestRefusal:
-    def test_contested_path_refuses_and_names_every_holder(self, monkeypatch, capsys):
+    def test_contested_path_refuses_and_names_every_holder(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         mod = _load_cli_module()
         _stub_session(
             mod,
@@ -88,7 +93,7 @@ class TestRefusal:
         # people who hold the file is the failure this replaces.
         assert "1ad288d0" in err and "d12e25cf" in err, err
 
-    def test_refusal_does_not_advertise_an_override(self, monkeypatch, capsys):
+    def test_refusal_does_not_advertise_an_override(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         """Message register (`docs/wiki/guard-messaging.md` § Register): one
         fact, once, plus a terse alternative -- never an override key."""
         mod = _load_cli_module()
@@ -103,13 +108,13 @@ class TestRefusal:
 
 
 class TestFailsOpen:
-    def test_uncontested_paths_return_without_exiting(self, monkeypatch):
+    def test_uncontested_paths_return_without_exiting(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mod = _load_cli_module()
         _stub_session(mod, monkeypatch, contested={})
 
         assert mod._refuse_contested_pathspec(["pkg/mod.py"], "/repo") is None
 
-    def test_unresolved_session_id_allows(self, monkeypatch):
+    def test_unresolved_session_id_allows(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """An identity this route never resolves for itself must not become a
         refusal -- `resolve_session_id`'s fail-CLOSED exit(1) is deliberately
         not reused here."""
@@ -120,13 +125,13 @@ class TestFailsOpen:
 
         assert mod._refuse_contested_pathspec(["pkg/mod.py"], "/repo") is None
 
-    def test_raising_claim_read_allows(self, monkeypatch):
+    def test_raising_claim_read_allows(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mod = _load_cli_module()
         _stub_session(mod, monkeypatch, raises=OSError("sink unreadable"))
 
         assert mod._refuse_contested_pathspec(["pkg/mod.py"], "/repo") is None
 
-    def test_unimportable_engine_allows(self, monkeypatch):
+    def test_unimportable_engine_allows(self, monkeypatch: pytest.MonkeyPatch) -> None:
         mod = _load_cli_module()
 
         def _boom():
@@ -136,7 +141,7 @@ class TestFailsOpen:
 
         assert mod._refuse_contested_pathspec(["pkg/mod.py"], "/repo") is None
 
-    def test_cannot_establish_contest_allows_but_warns(self, monkeypatch, capsys):
+    def test_cannot_establish_contest_allows_but_warns(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         """`contested_by_live_peers`'s `None` sentinel ("could not establish
         contest") must still allow the commit -- fail-open is unchanged --
         but must no longer be silent, unlike a genuine `{}` result."""
@@ -153,7 +158,7 @@ class TestFailsOpen:
         err = capsys.readouterr().err
         assert "could not complete" in err, err
 
-    def test_uncontested_result_allows_silently(self, monkeypatch, capsys):
+    def test_uncontested_result_allows_silently(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         """A genuine `{}` result (distinct from the `None` sentinel above)
         stays silent -- nothing was contested, so nothing to warn about."""
         mod = _load_cli_module()
@@ -163,7 +168,7 @@ class TestFailsOpen:
         assert capsys.readouterr().err == ""
 
 
-def test_do_pathspec_calls_the_gate_before_dispatching():
+def test_do_pathspec_calls_the_gate_before_dispatching() -> None:
     """The gate is worthless if it runs after `ceremony.commit_v2`. Asserts
     ORDER in the source, since the dispatch is what it must precede."""
     source = (_BIN_DIR / "coordinator-safe-commit.py").read_text(encoding="utf-8")
@@ -204,7 +209,7 @@ class TestCleanPathNarrowing:
     bypass the only exit. A path identical to its HEAD blob cannot carry the
     harm the refusal names, whoever holds it."""
 
-    def test_a_path_matching_head_no_longer_blocks_the_commit(self, tmp_path, monkeypatch):
+    def test_a_path_matching_head_no_longer_blocks_the_commit(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         mod = _load_cli_module()
         root = _tiny_repo(tmp_path)
         _stub_session(mod, monkeypatch, contested={"committed.py": ["peer-a"]})
@@ -213,7 +218,7 @@ class TestCleanPathNarrowing:
         # committing it lands nobody's work.
         assert mod._refuse_contested_pathspec(["committed.py"], str(root)) is None
 
-    def test_a_dirty_contested_path_still_refuses(self, tmp_path, monkeypatch, capsys):
+    def test_a_dirty_contested_path_still_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         mod = _load_cli_module()
         root = _tiny_repo(tmp_path)
         (root / "dirty.py").write_text("edited\n", encoding="utf-8")
@@ -224,8 +229,8 @@ class TestCleanPathNarrowing:
         assert "dirty.py" in capsys.readouterr().err
 
     def test_the_dirty_half_of_a_mixed_pathspec_still_refuses(
-        self, tmp_path, monkeypatch, capsys
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         """Narrowing the set is not the same as dropping the refusal."""
         mod = _load_cli_module()
         root = _tiny_repo(tmp_path)
@@ -242,7 +247,7 @@ class TestCleanPathNarrowing:
         assert "dirty.py" in err
         assert "committed.py" not in err, err
 
-    def test_an_untracked_contested_path_still_refuses(self, tmp_path, monkeypatch):
+    def test_an_untracked_contested_path_still_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """`diff HEAD` would call a brand-new file clean -- it is absent from
         HEAD -- while committing it lands exactly the peer's work. That is why
         the probe reads `status --porcelain`."""
@@ -254,7 +259,7 @@ class TestCleanPathNarrowing:
         with pytest.raises(SystemExit):
             mod._refuse_contested_pathspec(["brand-new.py"], str(root))
 
-    def test_an_undeterminable_answer_leaves_the_refusal_whole(self, tmp_path, monkeypatch):
+    def test_an_undeterminable_answer_leaves_the_refusal_whole(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Fails CLOSED. `I could not tell` must never become `safe to commit`."""
         mod = _load_cli_module()
         _stub_session(mod, monkeypatch, contested={"committed.py": ["peer-a"]})
@@ -264,7 +269,7 @@ class TestCleanPathNarrowing:
 
     @pytest.mark.spawns_process
     @pytest.mark.cadence
-    def test_a_backslash_path_dirty_content_still_refuses(self, tmp_path, monkeypatch, capsys):
+    def test_a_backslash_path_dirty_content_still_refuses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         """
         the subprocess argv used to receive the RAW `paths` argument while
         everything it was compared against was normalized (backslash ->
@@ -295,7 +300,7 @@ class TestCleanPathNarrowing:
             mod._refuse_contested_pathspec([backslash_path], str(root))
         assert backslash_path in capsys.readouterr().err
 
-    def test_the_probe_spends_one_process_for_the_whole_set(self, tmp_path, monkeypatch):
+    def test_the_probe_spends_one_process_for_the_whole_set(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Never one spawn per path -- the amplification gate's rule, and this
         runs ahead of every explicit-pathspec commit the fleet makes."""
         import subprocess as _subprocess
@@ -317,7 +322,7 @@ class TestCleanPathNarrowing:
 
 
 class TestOneRefusalNamesEveryBlocker:
-    def test_every_held_path_is_named_in_a_single_refusal(self, monkeypatch, capsys):
+    def test_every_held_path_is_named_in_a_single_refusal(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         mod = _load_cli_module()
         held = {f"pkg/m{i}.py": [f"peer-{i}"] for i in range(4)}
         _stub_session(mod, monkeypatch, contested=held)
@@ -332,8 +337,8 @@ class TestOneRefusalNamesEveryBlocker:
             assert path in err and holder in err, err
 
     def test_a_path_in_neither_worktree_nor_head_rides_the_same_refusal(
-        self, monkeypatch, capsys
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         mod = _load_cli_module()
         _stub_session(mod, monkeypatch, contested={"pkg/held.py": ["peer-a"]})
         monkeypatch.setattr(mod, "_paths_with_no_uncommitted_content", lambda p, r: set())
@@ -348,7 +353,7 @@ class TestOneRefusalNamesEveryBlocker:
 
 
 class TestCrlfPathList:
-    def test_trailing_cr_is_stripped_from_each_pathspec(self):
+    def test_trailing_cr_is_stripped_from_each_pathspec(self) -> None:
         mod = _load_cli_module()
 
         args = mod.parse_args(["subject text", "--", "pkg/a.py\r", "pkg/b.py\r"])

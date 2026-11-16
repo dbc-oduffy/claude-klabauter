@@ -9,6 +9,7 @@ import yaml
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+from pathlib import Path
 
 RUN_A = "ask-20261016T000000-aaaaaa"
 RUN_B = "warp-2026-10-16-oos-20261016T010000-bbbbbb"
@@ -31,7 +32,7 @@ def _repo(tmp_path, doc=None):
     return tmp_path
 
 
-def _rule_out(repo, ids=("R1",)):
+def _rule_out(repo, ids=("R1",)) -> None:
     out = rl._handler({"run_id": RUN_A, "verbatim": WORDS, "out_of_scope": list(ids)}, repo_root=repo)
     assert out["ok"]
 
@@ -46,7 +47,7 @@ def _ledger_under(repo, run_id):
     return rl.read_ledger(repo, repo / RECORD_DIR_ROOT / run_id)
 
 
-def test_ruling_recorded_under_run_a_withholds_under_run_b(tmp_path):
+def test_ruling_recorded_under_run_a_withholds_under_run_b(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _rule_out(repo)
     ledger = _ledger_under(repo, RUN_B)
@@ -55,7 +56,7 @@ def test_ruling_recorded_under_run_a_withholds_under_run_b(tmp_path):
     assert rl.ruled_out_ids(_rows(repo)) == ("R1",)
 
 
-def test_all_withheld_ledger_passes_an_empty_verdict_with_each_row_open(tmp_path):
+def test_all_withheld_ledger_passes_an_empty_verdict_with_each_row_open(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _rule_out(repo)
     got = rl.judge(_ledger_under(repo, RUN_B), {"items": []})
@@ -63,7 +64,7 @@ def test_all_withheld_ledger_passes_an_empty_verdict_with_each_row_open(tmp_path
     assert got["open"] == [{"id": "R1", "reason": "withheld by out-of-scope ruling"}]
 
 
-def test_all_withheld_ledger_ignores_a_verdict_naming_the_row(tmp_path):
+def test_all_withheld_ledger_ignores_a_verdict_naming_the_row(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _rule_out(repo)
     got = rl.judge(_ledger_under(repo, RUN_B), {"items": [{"id": "R1", "status": "met"}]})
@@ -76,7 +77,7 @@ def test_all_withheld_ledger_ignores_a_verdict_naming_the_row(tmp_path):
     {"source": "pm", "quote": "later", "ref": "workflow.revise::out_of_scope", "on": "2026-10-16"},
     {"source": "pm", "quote": "later", "ref": f"workflow.revise:{RUN_A}:", "on": "2026-10-16"},
 ])
-def test_deferred_row_without_a_revise_ruling_is_dropped_not_withheld(tmp_path, ruling):
+def test_deferred_row_without_a_revise_ruling_is_dropped_not_withheld(tmp_path: Path, ruling) -> None:
     repo = _repo(tmp_path)
 
     def edit(rows):
@@ -90,7 +91,7 @@ def test_deferred_row_without_a_revise_ruling_is_dropped_not_withheld(tmp_path, 
     assert rl.ruled_out_ids(_rows(repo)) == ()
 
 
-def test_legacy_revision_row_tail_still_withholds_across_runs(tmp_path):
+def test_legacy_revision_row_tail_still_withholds_across_runs(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     ruling = {"source": "pm", "quote": "q", "ref": f"workflow.revise:{RUN_A}:R2", "on": "2026-10-16"}
     rl._mutate_register(repo, REL, lambda rows: [{**rows[0], "status": "deferred", "ruling": ruling}])
@@ -98,7 +99,7 @@ def test_legacy_revision_row_tail_still_withholds_across_runs(tmp_path):
     assert ledger.withheld == ({"id": "R1", "reason": "withheld by revision R2"},)
 
 
-def test_truly_empty_register_still_fails(tmp_path):
+def test_truly_empty_register_still_fails(tmp_path: Path) -> None:
     repo = _repo(tmp_path, {**_DOC, "pm_verbatims": []})
     got = rl.judge(_ledger_under(repo, RUN_B), {"items": []})
     assert got["pass"] is False

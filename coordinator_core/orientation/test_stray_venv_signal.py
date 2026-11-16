@@ -10,6 +10,11 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from coordinator_core.orientation import stray_venv_signal as sig
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from os import _ScandirIterator
 
 
 def _cfg(path: Path) -> None:
@@ -17,50 +22,50 @@ def _cfg(path: Path) -> None:
     (path / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
 
 
-def test_no_repo_root_renders_nothing(tmp_path: Path):
+def test_no_repo_root_renders_nothing(tmp_path: Path) -> None:
     assert sig.emit_stray_venvs(tmp_path / "does-not-exist") == ""
 
 
-def test_clean_repo_renders_nothing(tmp_path: Path):
+def test_clean_repo_renders_nothing(tmp_path: Path) -> None:
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "main.py").write_text("print('hi')\n", encoding="utf-8")
     assert sig.emit_stray_venvs(tmp_path) == ""
 
 
-def test_conventional_venv_at_root_is_reported(tmp_path: Path):
+def test_conventional_venv_at_root_is_reported(tmp_path: Path) -> None:
     _cfg(tmp_path / ".venv")
     out = sig.emit_stray_venvs(tmp_path)
     assert ".venv/pyvenv.cfg" in out
 
 
-def test_pyvenv_cfg_at_repo_root_is_reported(tmp_path: Path):
+def test_pyvenv_cfg_at_repo_root_is_reported(tmp_path: Path) -> None:
     (tmp_path / "pyvenv.cfg").write_text("home = /usr/bin\n", encoding="utf-8")
     assert "`pyvenv.cfg`" in sig.emit_stray_venvs(tmp_path)
 
 
-def test_venv_one_level_down_is_reported(tmp_path: Path):
+def test_venv_one_level_down_is_reported(tmp_path: Path) -> None:
     _cfg(tmp_path / "tools" / "venv")
     assert "tools/venv/pyvenv.cfg" in sig.emit_stray_venvs(tmp_path)
 
 
-def test_unconventional_name_is_not_reported(tmp_path: Path):
+def test_unconventional_name_is_not_reported(tmp_path: Path) -> None:
     _cfg(tmp_path / "fleet-env")
     assert sig.emit_stray_venvs(tmp_path) == ""
 
 
-def test_vendor_git_and_node_modules_children_are_skipped(tmp_path: Path):
+def test_vendor_git_and_node_modules_children_are_skipped(tmp_path: Path) -> None:
     for d in ("vendor", ".git", "node_modules"):
         _cfg(tmp_path / d / ".venv")
     assert sig.emit_stray_venvs(tmp_path) == ""
 
 
-def test_deep_pyvenv_cfg_in_unlisted_directory_is_never_listed(tmp_path: Path, monkeypatch):
+def test_deep_pyvenv_cfg_in_unlisted_directory_is_never_listed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     deep = tmp_path / "scratch-hold" / "a" / "b"
     _cfg(deep / ".venv")
     listed: list[str] = []
     real_scandir = os.scandir
 
-    def _spy(path="."):
+    def _spy(path: str = ".") -> _ScandirIterator[str]:
         listed.append(os.fspath(path))
         return real_scandir(path)
 
@@ -69,7 +74,7 @@ def test_deep_pyvenv_cfg_in_unlisted_directory_is_never_listed(tmp_path: Path, m
     assert listed == [os.fspath(tmp_path)]
 
 
-def test_enumeration_is_capped_but_count_is_exact(tmp_path: Path):
+def test_enumeration_is_capped_but_count_is_exact(tmp_path: Path) -> None:
     for i in range(7):
         _cfg(tmp_path / f"d{i}" / ".venv")
     _cfg(tmp_path / "venv")
@@ -78,7 +83,7 @@ def test_enumeration_is_capped_but_count_is_exact(tmp_path: Path):
     assert "more" in out
 
 
-def test_unreadable_path_fails_open(tmp_path: Path, monkeypatch):
+def test_unreadable_path_fails_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*_a, **_kw):
         raise OSError("permission denied")
 

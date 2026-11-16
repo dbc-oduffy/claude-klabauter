@@ -23,7 +23,7 @@ def _context(tmp_path: Path, **overrides) -> PredicateContext:
     return PredicateContext(**defaults)
 
 
-def test_sizing_object_present_true(tmp_path):
+def test_sizing_object_present_true(tmp_path: Path) -> None:
     sizing_path = tmp_path / "state" / "sizings" / "ask.yaml"
     context = _context(
         tmp_path,
@@ -34,28 +34,28 @@ def test_sizing_object_present_true(tmp_path):
     assert result == {"present": True, "path": str(sizing_path)}
 
 
-def test_sizing_object_present_undetermined_when_no_sizing_path(tmp_path):
+def test_sizing_object_present_undetermined_when_no_sizing_path(tmp_path: Path) -> None:
     result = triage.sizing_object_present(_context(tmp_path))
     assert result["undetermined"] is True
     assert result["reason"]
 
 
-def test_sizing_object_arrival_fresh_inbound(tmp_path):
+def test_sizing_object_arrival_fresh_inbound(tmp_path: Path) -> None:
     context = _context(tmp_path, caller_flags={"arrival": "fresh_inbound"})
     assert triage.sizing_object_arrival(context) == {"arrival": "fresh_inbound"}
 
 
-def test_sizing_object_arrival_return_edge(tmp_path):
+def test_sizing_object_arrival_return_edge(tmp_path: Path) -> None:
     context = _context(tmp_path, caller_flags={"arrival": "return_edge"})
     assert triage.sizing_object_arrival(context) == {"arrival": "return_edge"}
 
 
-def test_sizing_object_arrival_undetermined_when_flag_absent(tmp_path):
+def test_sizing_object_arrival_undetermined_when_flag_absent(tmp_path: Path) -> None:
     result = triage.sizing_object_arrival(_context(tmp_path))
     assert result["undetermined"] is True
 
 
-def test_sizing_object_narrative_fields_verbatim(tmp_path):
+def test_sizing_object_narrative_fields_verbatim(tmp_path: Path) -> None:
     context = _context(
         tmp_path,
         sizing_frontmatter={"intent": "fix a bug", "estimate": "S"},
@@ -64,12 +64,12 @@ def test_sizing_object_narrative_fields_verbatim(tmp_path):
     assert result == {"intent": "fix a bug", "estimate": "S", "appetite": None}
 
 
-def test_sizing_object_narrative_fields_undetermined_when_no_frontmatter(tmp_path):
+def test_sizing_object_narrative_fields_undetermined_when_no_frontmatter(tmp_path: Path) -> None:
     result = triage.sizing_object_narrative_fields(_context(tmp_path))
     assert result["undetermined"] is True
 
 
-def test_route_surfaces_resolved_route(tmp_path):
+def test_route_surfaces_resolved_route(tmp_path: Path) -> None:
     context = _context(tmp_path, resolved_route="spec-dispatch")
     assert triage.route(context) == {"route": "spec-dispatch"}
 
@@ -84,16 +84,16 @@ def test_route_surfaces_resolved_route(tmp_path):
         ("pm-decision", True),
     ],
 )
-def test_roadmap_precondition_disqualified(tmp_path, resolved_route, expected):
+def test_roadmap_precondition_disqualified(tmp_path: Path, resolved_route, expected) -> None:
     context = _context(tmp_path, resolved_route=resolved_route)
     assert triage.roadmap_precondition(context) == {"disqualified": expected}
 
 
-def test_sizing_wall_fires_true_when_no_sizing_object(tmp_path):
+def test_sizing_wall_fires_true_when_no_sizing_object(tmp_path: Path) -> None:
     assert triage.sizing_wall_fires(_context(tmp_path)) == {"fires": True}
 
 
-def test_sizing_wall_fires_false_when_sizing_object_parses(tmp_path):
+def test_sizing_wall_fires_false_when_sizing_object_parses(tmp_path: Path) -> None:
     context = _context(
         tmp_path,
         sizing_object_path=tmp_path / "ask.yaml",
@@ -102,7 +102,7 @@ def test_sizing_wall_fires_false_when_sizing_object_parses(tmp_path):
     assert triage.sizing_wall_fires(context) == {"fires": False}
 
 
-def test_sizing_wall_fires_true_when_sizing_object_unparseable(tmp_path):
+def test_sizing_wall_fires_true_when_sizing_object_unparseable(tmp_path: Path) -> None:
     context = _context(
         tmp_path,
         sizing_object_path=tmp_path / "ask.yaml",
@@ -122,18 +122,18 @@ def test_sizing_wall_fires_true_when_sizing_object_unparseable(tmp_path):
         ("dispatch", "route_to_dispatch"),
     ],
 )
-def test_sizing_wall_disposition_table(tmp_path, resolved_route, expected):
+def test_sizing_wall_disposition_table(tmp_path: Path, resolved_route, expected) -> None:
     context = _context(tmp_path, resolved_route=resolved_route)
     assert triage.sizing_wall_disposition(context) == {"disposition": expected}
 
 
-def test_sizing_wall_disposition_undetermined_for_unmapped_route(tmp_path):
+def test_sizing_wall_disposition_undetermined_for_unmapped_route(tmp_path: Path) -> None:
     context = _context(tmp_path, resolved_route="not-a-real-route")
     result = triage.sizing_wall_disposition(context)
     assert result["undetermined"] is True
 
 
-def test_sizing_wall_via_memo_true_from_frontmatter_citation(tmp_path):
+def test_sizing_wall_via_memo_true_from_frontmatter_citation(tmp_path: Path) -> None:
     context = _context(
         tmp_path, plan_frontmatter={"source_memo": "2026-08-13-something.md"}
     )
@@ -141,7 +141,7 @@ def test_sizing_wall_via_memo_true_from_frontmatter_citation(tmp_path):
     assert result == {"via_memo": True, "source_memo": "2026-08-13-something.md"}
 
 
-def test_sizing_wall_via_memo_resolves_citation_to_inbox_path(tmp_path):
+def test_sizing_wall_via_memo_resolves_citation_to_inbox_path(tmp_path: Path) -> None:
     inbox = tmp_path / "cross-repo" / "inbox"
     inbox.mkdir(parents=True)
     (inbox / "2026-08-13-a-memo.md").write_text("memo body", encoding="utf-8")
@@ -153,7 +153,7 @@ def test_sizing_wall_via_memo_resolves_citation_to_inbox_path(tmp_path):
     assert result["source_memo"] == "cross-repo/inbox/2026-08-13-a-memo.md"
 
 
-def test_sizing_wall_via_memo_false_for_uncited_plan_despite_full_inbox(tmp_path):
+def test_sizing_wall_via_memo_false_for_uncited_plan_despite_full_inbox(tmp_path: Path) -> None:
     inbox = tmp_path / "cross-repo" / "inbox"
     inbox.mkdir(parents=True)
     (inbox / "2026-08-13-unrelated.md").write_text("not ours", encoding="utf-8")
@@ -165,7 +165,7 @@ def test_sizing_wall_via_memo_false_for_uncited_plan_despite_full_inbox(tmp_path
     }
 
 
-def test_sizing_wall_via_memo_keeps_citation_when_memo_already_archived(tmp_path):
+def test_sizing_wall_via_memo_keeps_citation_when_memo_already_archived(tmp_path: Path) -> None:
     context = _context(
         tmp_path, plan_frontmatter={"source_memo": "2026-08-13-swept.md"}
     )
@@ -173,7 +173,7 @@ def test_sizing_wall_via_memo_keeps_citation_when_memo_already_archived(tmp_path
     assert result == {"via_memo": True, "source_memo": "2026-08-13-swept.md"}
 
 
-def test_sizing_wall_via_memo_false_when_no_evidence(tmp_path):
+def test_sizing_wall_via_memo_false_when_no_evidence(tmp_path: Path) -> None:
     context = _context(tmp_path, plan_frontmatter={})
     assert triage.sizing_wall_via_memo(context) == {
         "via_memo": False,
@@ -181,27 +181,27 @@ def test_sizing_wall_via_memo_false_when_no_evidence(tmp_path):
     }
 
 
-def test_sizing_wall_via_memo_undetermined_when_no_plan_frontmatter(tmp_path):
+def test_sizing_wall_via_memo_undetermined_when_no_plan_frontmatter(tmp_path: Path) -> None:
     result = triage.sizing_wall_via_memo(_context(tmp_path))
     assert result["undetermined"] is True
 
 
-def test_sizing_wall_carveout_handoff_pickup(tmp_path):
+def test_sizing_wall_carveout_handoff_pickup(tmp_path: Path) -> None:
     context = _context(tmp_path, caller_flags={"claim_grant": {"verdict": "granted"}})
     assert triage.sizing_wall_carveout(context) == {"carveout": "handoff_pickup"}
 
 
-def test_sizing_wall_carveout_none(tmp_path):
+def test_sizing_wall_carveout_none(tmp_path: Path) -> None:
     context = _context(tmp_path, caller_flags={"claim_grant": None})
     assert triage.sizing_wall_carveout(context) == {"carveout": "none"}
 
 
-def test_sizing_wall_carveout_undetermined_when_flag_absent(tmp_path):
+def test_sizing_wall_carveout_undetermined_when_flag_absent(tmp_path: Path) -> None:
     result = triage.sizing_wall_carveout(_context(tmp_path))
     assert result["undetermined"] is True
 
 
-def test_handoff_prescribes_plan_true(tmp_path):
+def test_handoff_prescribes_plan_true(tmp_path: Path) -> None:
     handoff_path = tmp_path / "state" / "handoffs" / "h.md"
     handoff_path.parent.mkdir(parents=True)
     handoff_path.write_text(
@@ -216,7 +216,7 @@ def test_handoff_prescribes_plan_true(tmp_path):
     }
 
 
-def test_handoff_prescribes_plan_false(tmp_path):
+def test_handoff_prescribes_plan_false(tmp_path: Path) -> None:
     handoff_path = tmp_path / "state" / "handoffs" / "h.md"
     handoff_path.parent.mkdir(parents=True)
     handoff_path.write_text("Nothing prescriptive here.", encoding="utf-8")
@@ -229,20 +229,20 @@ def test_handoff_prescribes_plan_false(tmp_path):
     }
 
 
-def test_handoff_prescribes_plan_undetermined_when_no_plan_frontmatter(tmp_path):
+def test_handoff_prescribes_plan_undetermined_when_no_plan_frontmatter(tmp_path: Path) -> None:
     result = triage.handoff_prescribes_plan(_context(tmp_path))
     assert result["undetermined"] is True
 
 
 def test_handoff_prescribes_plan_undetermined_when_no_predecessor_handoff_key(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     context = _context(tmp_path, plan_frontmatter={})
     result = triage.handoff_prescribes_plan(context)
     assert result["undetermined"] is True
 
 
-def test_handoff_prescribes_plan_undetermined_when_handoff_unreadable(tmp_path):
+def test_handoff_prescribes_plan_undetermined_when_handoff_unreadable(tmp_path: Path) -> None:
     context = _context(
         tmp_path,
         plan_frontmatter={"predecessor_handoff": "state/handoffs/missing.md"},
@@ -251,7 +251,7 @@ def test_handoff_prescribes_plan_undetermined_when_handoff_unreadable(tmp_path):
     assert result["undetermined"] is True
 
 
-def test_handoff_prescribes_plan_literal_hit_wins_over_archive(tmp_path):
+def test_handoff_prescribes_plan_literal_hit_wins_over_archive(tmp_path: Path) -> None:
     live_path = tmp_path / "state" / "handoffs" / "h.md"
     live_path.parent.mkdir(parents=True)
     live_path.write_text(
@@ -269,7 +269,7 @@ def test_handoff_prescribes_plan_literal_hit_wins_over_archive(tmp_path):
     }
 
 
-def test_handoff_prescribes_plan_archive_fallback_fires(tmp_path):
+def test_handoff_prescribes_plan_archive_fallback_fires(tmp_path: Path) -> None:
     archived_path = tmp_path / "archive" / "handoffs" / "h.md"
     archived_path.parent.mkdir(parents=True)
     archived_path.write_text(
@@ -284,7 +284,7 @@ def test_handoff_prescribes_plan_archive_fallback_fires(tmp_path):
     }
 
 
-def test_handoff_prescribes_plan_archive_fallback_does_not_fire(tmp_path):
+def test_handoff_prescribes_plan_archive_fallback_does_not_fire(tmp_path: Path) -> None:
     archived_path = tmp_path / "archive" / "handoffs" / "h.md"
     archived_path.parent.mkdir(parents=True)
     archived_path.write_text("Nothing prescriptive here.", encoding="utf-8")
@@ -298,8 +298,8 @@ def test_handoff_prescribes_plan_archive_fallback_does_not_fire(tmp_path):
 
 
 def test_handoff_prescribes_plan_undetermined_when_genuinely_missing_everywhere(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     context = _context(
         tmp_path,
         plan_frontmatter={"predecessor_handoff": "state/handoffs/nowhere.md"},
@@ -309,8 +309,8 @@ def test_handoff_prescribes_plan_undetermined_when_genuinely_missing_everywhere(
 
 
 def test_handoff_prescribes_plan_undetermined_on_multi_hit_archive_ambiguity(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     for archive_dir in ("archive/handoffs", "archive/completed"):
         hit = tmp_path / archive_dir / "h.md"
         hit.parent.mkdir(parents=True)
@@ -325,12 +325,12 @@ def test_handoff_prescribes_plan_undetermined_on_multi_hit_archive_ambiguity(
     assert result["undetermined"] is True
 
 
-def test_admission_absent_everything_resolves_unsized_no_error(tmp_path):
+def test_admission_absent_everything_resolves_unsized_no_error(tmp_path: Path) -> None:
     result = triage.admission(_context(tmp_path))
     assert result == {"value": "unsized", "basis": None, "warning": None}
 
 
-def test_admission_resolves_execution_from_inbound_plan_frontmatter(tmp_path):
+def test_admission_resolves_execution_from_inbound_plan_frontmatter(tmp_path: Path) -> None:
     plan_path = tmp_path / "docs" / "plans" / "2026-08-20-a.md"
     plan_path.parent.mkdir(parents=True)
     plan_path.write_text(
@@ -351,8 +351,8 @@ def test_admission_resolves_execution_from_inbound_plan_frontmatter(tmp_path):
 
 
 def test_admission_resolves_sized_from_inbound_plan_frontmatter_sizing_object(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     sizing_path = tmp_path / "state" / "sizings" / "ask.yaml"
     sizing_path.parent.mkdir(parents=True)
     sizing_path.write_text("route: plan\n", encoding="utf-8")
@@ -368,7 +368,7 @@ def test_admission_resolves_sized_from_inbound_plan_frontmatter_sizing_object(
     }
 
 
-def test_admission_explicit_sizing_object_wins_over_inbound_plan_fk(tmp_path):
+def test_admission_explicit_sizing_object_wins_over_inbound_plan_fk(tmp_path: Path) -> None:
     plan_id_path = tmp_path / "docs" / "plans" / "2026-08-20-a.md"
     plan_id_path.parent.mkdir(parents=True)
     plan_id_path.write_text(
@@ -391,8 +391,8 @@ def test_admission_explicit_sizing_object_wins_over_inbound_plan_fk(tmp_path):
 
 
 def test_admission_explicit_unresolvable_sizing_object_is_unsized_with_warning(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     dangling_path = tmp_path / "state" / "sizings" / "does-not-exist.yaml"
     context = _context(tmp_path, sizing_object_path=dangling_path)
     result = triage.admission(context)

@@ -11,6 +11,11 @@ import coordinator_core.ipc as ipc
 from coordinator_core.group_em import box_transport
 from coordinator_core.invoke.__main__ import _dispatch_argv
 from coordinator_core.remote_engine import fallback, policy
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
 
 OP = "hooks.submit_engine_ask"
 SSH = {"kind": "ssh", "host": "h", "invoke": "/x/coordinator-invoke"}
@@ -22,16 +27,16 @@ FAR_REPLY = {"run_id": "ask-far", "branch": "work/far/2026-11-04"}
 
 
 class Runner:
-    def __init__(self):
+    def __init__(self) -> None:
         self.calls = []
 
-    def __call__(self, argv, timeout):
+    def __call__(self, argv, timeout) -> CompletedProcess[str]:
         self.calls.append((argv, timeout))
         return subprocess.CompletedProcess(argv, 0, json.dumps({"result": FAR_REPLY}), "")
 
 
 @pytest.fixture
-def runner(monkeypatch, tmp_path):
+def runner(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Runner:
     r = Runner()
     monkeypatch.setattr(box_transport, "_run", r)
     monkeypatch.setattr(fallback.box_registry, "read_boxes", lambda *a, **k: BOXES)
@@ -52,7 +57,7 @@ def _local_handler():
         ipc._REGISTRY[OP] = saved
 
 
-def _submit(monkeypatch, tmp_path, *, reason):
+def _submit(monkeypatch, tmp_path, *, reason) -> tuple[str, str, int]:
     monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", "5")
     monkeypatch.setattr(ipc, "_unstamped_dispatch_allowed", False)
     monkeypatch.delenv(ipc.PYTEST_UNSTAMPED_DISPATCH_ENV, raising=False)
@@ -66,14 +71,14 @@ def _submit(monkeypatch, tmp_path, *, reason):
     return _dispatch_argv([OP, "{}"], str(tmp_path), allow_warm=True)
 
 
-def test_submit_op_is_remote_safe_not_local_only():
+def test_submit_op_is_remote_safe_not_local_only() -> None:
     assert policy.remote_safe(OP)
     assert not policy.is_local_only(OP)
 
 
 def test_unreachable_local_door_launches_background_retry_and_never_runs_locally(
-    monkeypatch, tmp_path, runner
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, runner
+) -> None:
     from coordinator_core.remote_engine import background
 
     launched = []
@@ -93,7 +98,7 @@ def test_unreachable_local_door_launches_background_retry_and_never_runs_locally
     assert "handle key123" in stderr
 
 
-def test_no_registered_peer_keeps_the_local_path(monkeypatch, tmp_path, runner):
+def test_no_registered_peer_keeps_the_local_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, runner) -> None:
     monkeypatch.setattr(fallback.box_registry, "read_boxes", lambda *a, **k: BOXES[:1])
     stdout, _stderr, code = _submit(monkeypatch, tmp_path, reason="ENGINE_SKEW")
     assert runner.calls == []

@@ -25,7 +25,7 @@ _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: 
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     for name in ("CLAUDE_CODE_REMOTE", "CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_CONTAINER_ID",
                  "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_PLUGIN_ROOT", "DELIVERABLE_ID"):
         monkeypatch.delenv(name, raising=False)
@@ -71,7 +71,7 @@ def _deferred_emit(env: dict, root: Path) -> dict:
     return reply
 
 
-def test_a_preference_and_rationale_persist_in_the_run_record_and_reach_the_scout_prompt(repo):
+def test_a_preference_and_rationale_persist_in_the_run_record_and_reach_the_scout_prompt(repo) -> None:
     env = _submit(repo, {"ask": "make the exporter streaming", "source": "pm", "route_preference": "roadmap",
                          "em_rationale": RATIONALE})
 
@@ -86,7 +86,7 @@ def test_a_preference_and_rationale_persist_in_the_run_record_and_reach_the_scou
     assert "roadmap" in script and RATIONALE in script
 
 
-def test_a_submission_without_a_preference_writes_no_record_and_no_block(repo):
+def test_a_submission_without_a_preference_writes_no_record_and_no_block(repo) -> None:
     env = _submit(repo, {"ask": "make the exporter streaming", "source": "pm"})
 
     assert _hso(env)["permissionDecision"] == "allow", env
@@ -95,7 +95,7 @@ def test_a_submission_without_a_preference_writes_no_record_and_no_block(repo):
     assert "## EM route preference" not in Path(reply["path"]).read_text(encoding="utf-8")
 
 
-def test_an_invalid_preference_is_denied_naming_the_key_and_writes_nothing(repo):
+def test_an_invalid_preference_is_denied_naming_the_key_and_writes_nothing(repo) -> None:
     env = _submit(repo, {"ask": "x", "route_preference": "shape"})
 
     assert _hso(env)["permissionDecision"] == "deny"
@@ -103,7 +103,7 @@ def test_an_invalid_preference_is_denied_naming_the_key_and_writes_nothing(repo)
     assert not (repo / "scratch" / "warp").exists()
 
 
-def test_an_over_length_rationale_is_truncated_not_refused(repo):
+def test_an_over_length_rationale_is_truncated_not_refused(repo) -> None:
     env = _submit(repo, {"ask": VERBATIM, "source": "pm", "route_preference": "plan",
                          "em_rationale": "y" * 2001})
 

@@ -185,9 +185,12 @@ from coordinator_core.ops.dispatch_emit import ue_route_source as _ue_route_sour
 from coordinator_core.ops.dispatch_emit import halt_refire as _halt_refire
 from coordinator_core.ops.dispatch_emit.rag_use import (
     DEGRADED as RAG_DEGRADED,
+    NO_UE_PATHS_GAP,
     RAG_NOT_USED,
     RESTORE_MESSAGE,
     TRANSCRIPT_UNREADABLE,
+    UE_PATH_PATTERN,
+    touches_ue_path,
 )
 from coordinator_core.ops.dispatch_emit.halt_remedy_class import MAX_IN_RUN_REMEDY_ATTEMPTS
 from coordinator_core.ops.dispatch_emit import route_dispatch_js as _route_js
@@ -273,13 +276,26 @@ _OWNER_ROWS_JS = "_crossRepoRows"
 _WAVE_DIFF_RECONCILE_JS = (
     "  if (!_reviewReused && Array.isArray(_reviewReverify?.edited) && Array.isArray(_reviewWave)) { "
     "const n = (p) => String(p).split('\\\\').join('/').replace(/^\\.\\//, ''), "
-    "d = new Set([..._reviewReverify.edited, ...(_reviewReverify.created ?? [])].map(n)), sl = (typeof _reviewPrep !== 'undefined' && _reviewPrep?.slices) || [], "
+    "d = new Set([..._reviewReverify.edited, ...(_reviewReverify.created ?? []), ...(_reviewReverify.outside_declared ?? [])].map(n)), sl = (typeof _reviewPrep !== 'undefined' && _reviewPrep?.slices) || [], "
     "z = (w, r) => ({ ...w, applied_claimed: w.applied, applied: 0, unapplied_reason: r }); "
     "_reviewWave = _reviewWave.map((w) => { "
     "if (!(w?.applied > 0)) return w; "
     "if (!d.size) return z(w, 'not in run diff'); "
     "const f = String(w.slice_id ?? '').split('+').flatMap((id) => (sl.find((x) => x?.id === id)?.files ?? []).map(n)); "
     "return !f.length || f.some((x) => d.has(x)) ? w : z(w, 'not in run diff: ' + f.join(', ')); }); }"
+)
+HALT_TESTS_NOT_RUN = "tests_not_run"
+# A code-editing run whose manifest names no test target and records no reason for it (`no_test_target`),
+# with no passing, failing or indeterminate re-verify (an indeterminate one is the landing's targeted
+# retest, `halt_remedy_class`), ran no tests: it is flagged `tests_not_run` and halts as owed,
+# never committed as green. A degraded `no_test_target` run keeps its own narrated status.
+_TESTS_NOT_RUN_JS = (
+    "  if (!_halted && !_reviewReused && _codeReviewOwed && _reviewReverify && typeof _reviewReverify === 'object' "
+    "&& !['pass', 'fail', 'indeterminate'].includes(_reviewReverify.status_after) "
+    "&& _manifest && !(_manifest.test_targets ?? []).length && !_manifest.no_test_target) { "
+    "_reviewReverify.tests_not_run = true; _halted = { halted: " + json.dumps(HALT_TESTS_NOT_RUN) + ", "
+    "reason: 'no test was selected or run for a code-editing run; owed, not green', run_id: _runId, "
+    "plan: (typeof _planRel !== 'undefined' ? _planRel : null) }; }"
 )
 # Wave entries carrying a non-empty string verdict and a non-empty sidecar_path; mirrors
 # `review_floor.verdict_count` minus the file-exists check, which only the lander can make. An expression
@@ -729,6 +745,14 @@ def _ue_docs_checker(repo_root: str) -> tuple[bool, Optional[str]]:
         raise AskComposeRefused(f"stage agent routing refused: {exc}") from exc
 
 
+def _docs_skip_js(label: str, indent: str) -> str:
+    """JS line recording a docs-check leg skipped because the run touches no UE path: `_ragDegraded` gets a `no_ue_paths` gap."""
+    return (
+        f"{indent}_ragDegraded.push({{ leg: {_lit(label)}, gap: {_lit(NO_UE_PATHS_GAP)}, "
+        "reason: 'run writes and diff touch no UE path; UE-corpus docs-check not run' });"
+    )
+
+
 def _docs_gate_clause(label: str, repo_root: str) -> tuple[str, ...]:
     """`_cat` parts closing a docs-checker prompt: the checker runs `dispatch.docs_check_rag_gate` as its last act, reply in `gate`."""
     return (
@@ -813,6 +837,16 @@ _LEDGER_SERVE_SENTENCE = (
     " Every ledger item is one the plan's rows must serve; quote each in the row that serves it."
     " A sha reply or memo after the commit is carried by the ledger's post_commit_acts and is never a plan row."
 )
+#: Runtime plan-path follower: the latest path any leg reported for a plan file name (a move into
+#: its month folder changes the directory, never the name) is what every later leg is handed.
+_PLAN_FOLLOW_JS = (
+    "const _planMoves = {}; "
+    "const _planKey = (p) => String(p ?? '').split(/[\\\\/]/).pop(); "
+    "const _planSeen = (p) => (typeof p === 'string' && p && (_planMoves[_planKey(p)] = p), p); "
+    "const _planNow = (p) => _planMoves[_planKey(p)] || p;"
+)
+#: Appended to the prompts of legs that run the readiness op on a plan an earlier leg touched.
+_MOVED_PLAN_SENTENCE = " A plan moved to docs/plans/<YYYY-MM>/ is the same plan: use the moved path as plan_rel."
 #: Inserted ahead of the readiness-op sentence in the review and revise prompts.
 _ANCHOR_PREMISES_SENTENCE = (
     "Declare `anchor_premises:` in the plan's frontmatter: each premise the route rests on "
@@ -1067,7 +1101,9 @@ _LEDGER_ITEMS_RULES = (
     "(bug_close); the terminal commit writes all three "
     "lifecycle acts -- named in "
     "post_commit_acts from (" + ", ".join(POST_COMMIT_ACTS) + "); the run's change is uncommitted "
-    "by design, so such an act is never a reason for 'not_met'; otherwise 'not_met'. A 'not_met' item blocks "
+    "by design, so such an act is never a reason for 'not_met'; a verify or test leg that stalled or "
+    "timed out (no output within its window, zero or partial results) is inconclusive evidence, never "
+    "grounds for 'not_met': judge the item from the change itself; otherwise 'not_met'. A 'not_met' item blocks "
     "the close whatever its essential flag (the gate resets it to true); when the ledger "
     "says all_of_pm_ask yes, every item is mandatory. evidence is one "
     "or two sentences naming the file or behaviour. On every 'not_met' item return remaining: each "
@@ -1421,6 +1457,8 @@ def _stage_reply_js(launcher_child: bool = False) -> str:
 #: where a fold site runs, so it is read inside try.
 _STAGE_RECOVER_PARAMS_JS = (
     "  const _stageRecoverParams = () => {\n"
+    "    if (_stageRecoverParams.wave !== undefined) return { run_id: _runId, sizing_path: _sizingRel ?? '', "
+    "materialise_wave: String(_stageRecoverParams.wave) };\n"
     "    let _g = null;\n"
     "    try { _g = _gate; } catch (e) { _g = null; }\n"
     "    const _plan = _planRel || (_g && typeof _g.resume_plan === 'string' && _g.resume_plan ? _g.resume_plan : null);\n"
@@ -1641,7 +1679,12 @@ def _test_instruction_js(
     )
 
 
-_USAGE_LIMIT_RE = r"/(usage|session|rate|weekly|5-hour) limit|limit reached|resets \d{1,2}(:\d{2})?\s*(am|pm)?|quota/i"
+_USAGE_LIMIT_RE = (
+    r"/(usage|session|rate|weekly|5-hour) limit|limit reached"
+    r"|resets (?:[a-z]{3,9}\.? \d{1,2},? )?\d{1,2}(:\d{2})?\s*(am|pm)?|quota/i"
+)
+#: Captures the stated reset ("Nov 17, 3am") and its parenthesised zone ("Europe/London"); never converted.
+_USAGE_LIMIT_RESET_RE = r"/resets\s+((?:[a-z]{3,9}\.?\s+\d{1,2},?\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?)(?:\s*\(([^)]+)\))?/i"
 HALT_USAGE_LIMIT = "usage_limit"
 HALT_REVIEW_BLOCKED = "review_blocked"
 HALT_CRITERION_NOT_MET = "criterion_not_met"
@@ -2026,6 +2069,16 @@ def _test_verdict_empty_halt_js(sizing_rel: Optional[str]) -> str:
     )
 
 
+def _test_verdict_limit_route_js() -> str:
+    """Ahead of the empty-verdict halt: an owed test leg with no verdict whose returned text is a usage limit halts `usage_limit`."""
+    return (
+        "    if (!_halted && (TEST_GUARD) && !(_testResult && typeof _testResult.status === 'string' "
+        "&& _testResult.status && _testResult.status !== 'not_run' "
+        "&& typeof _testResult.sidecar_path === 'string' && _testResult.sidecar_path.trim())) "
+        "{ const _tvLimit = _limitTextIn(_testResult); if (_tvLimit) { _haltOnUsageLimit(_tvLimit); } }"
+    )
+
+
 _WAVE_TESTS_GATE_FN = "_waveTestsGreen"
 WAVE_REDS_VAR = "_waveReds"
 _WAVE_FAILING_IDS_CLAUSE = (
@@ -2107,9 +2160,19 @@ def _usage_limit_helper_js() -> str:
         "  function _haltOnUsageLimit(e) {\n"
         "    const msg = String((e && (e.message ?? e)) ?? '');\n"
         "    if (!_USAGE_LIMIT_RE.test(msg)) throw e;\n"
+        f"    const _rm = {_USAGE_LIMIT_RESET_RE}.exec(msg);\n"
         f"    _halted = {{ halted: {_lit(HALT_USAGE_LIMIT)}, run_id: _runId, detail: msg.slice(0, 300), "
-        "resume_from_run_id: 'this Workflow run id (wf_...)', "
-        f"next_action: {_lit(_USAGE_LIMIT_RESUME_CALL)} }};\n"
+        "reset: _rm ? _rm[1].trim() : null, reset_zone: _rm && _rm[2] ? _rm[2].trim() : null, "
+        "resume_from_run_id: 'this Workflow run id (wf_...)', next_action: '' };\n"
+        f"    _halted.next_action = {_usage_limit_resume_text('_halted')};\n"
+        "  }\n"
+        "  function _limitTextIn(...vals) {\n"
+        "    for (const v of vals) {\n"
+        "      let s = '';\n"
+        "      try { s = typeof v === 'string' ? v : JSON.stringify(v ?? ''); } catch (e) { s = ''; }\n"
+        "      if (_USAGE_LIMIT_RE.test(s)) return s;\n"
+        "    }\n"
+        "    return null;\n"
         "  }\n"
         "  function _usageHalted(e) {\n"
         "    if (!_USAGE_LIMIT_RE.test(String((e && e.message) ?? e))) return false;\n"
@@ -2119,13 +2182,21 @@ def _usage_limit_helper_js() -> str:
     )
 
 
-_USAGE_LIMIT_RESUME_CALL = "After the limit resets, call Workflow with this scriptPath and resumeFromRunId set to this run id."
+_USAGE_LIMIT_RESUME_TAIL = ", call Workflow with this scriptPath and resumeFromRunId set to this run id."
+
+
+def _usage_limit_resume_text(halted_expr: str) -> str:
+    """JS expression: the refire-after-reset instruction, naming the halt's stated reset and zone when it has them."""
+    return (
+        f"('After the limit resets' + ({halted_expr}.reset ? ' (' + {halted_expr}.reset + "
+        f"({halted_expr}.reset_zone ? ' ' + {halted_expr}.reset_zone : '') + ')' : '') + {_lit(_USAGE_LIMIT_RESUME_TAIL)})"
+    )
 
 
 def _refire_next_action_helper_js(sizing_rel: Optional[str]) -> str:
     """`_refireNextAction()`: finalises `_halted.next_action` into the one-refire envelope before `_halted` leaves the script."""
     return _halt_refire.refire_next_action_js(
-        call_js=f"(_hk === {_lit(HALT_USAGE_LIMIT)} ? {_lit(_USAGE_LIMIT_RESUME_CALL)} : {_refire_js(sizing_rel)})",
+        call_js=f"(_hk === {_lit(HALT_USAGE_LIMIT)} ? {_usage_limit_resume_text('_halted')} : {_refire_js(sizing_rel)})",
         legacy_js="_halted.next_action",
         kind_js="_halted.halted",
         detail_js="(typeof _legacy.detail === 'string' ? _legacy.detail : null)",
@@ -2322,7 +2393,7 @@ def _verify_call(
     )
     if test_result_var is None:
         tests_step = (
-            "(1) TESTS. Start the scoped tests first and let them run in the background while you do step 2. ",
+            "(1) TESTS. Run the scoped tests first, in the foreground, and let them exit before step 2. ",
             f"js:(_testWanted ? ({test_js}) : {_lit(_VERIFY_NO_TESTS)})",
         )
         return_test = "`test` (step 1's result, status and summary included; omit it when no tests ran), "
@@ -2550,10 +2621,15 @@ _LEDGER_RECOVER_JS = r"""
       const _remSplit = classifyReds(_remNodes, _ownPaths, { caused: bl.caused ?? [], foreign: bl.foreign ?? [], pre_existing: bl.pre_existing ?? [], reverted: null });
       const _foreignRem = new Set(_remSplit.foreign);
       _foreignReds = [...new Set([..._foreignReds, ..._split.foreign, ..._remSplit.foreign])];
+      const _rowWrites = mrows.flatMap((r) => (r.writes ?? []).map(_fpPosix));
+      const _proseForeign = (s) => {
+        const fs = findingFiles(s);
+        return fs.length > 0 && fs.every((f) => !mrows.some((r) => _fpOwns(r, f)) && !findingOwned(f, _rowWrites));
+      };
       const _stampForeign = () => {
         for (const i of _ledger.items ?? []) {
           const rem = i && i.status === 'not_met' && Array.isArray(i.remaining) ? i.remaining.map((s) => String(s).trim()) : [];
-          if (rem.length && rem.every((s) => _isNode(s) && _foreignRem.has(_fpPosix(s)))) i.foreign_only = true;
+          if (rem.length && rem.every((s) => _isNode(s) ? _foreignRem.has(_fpPosix(s)) : _proseForeign(s))) i.foreign_only = true;
         }
       };
       _stampForeign();
@@ -4181,7 +4257,7 @@ def _s_prep_gate_loop_js(
         f"      if (_pgRepairs >= {PREP_GATE_REPAIR_CAP}) {{ _pgHalt = String(_pg.message || _pg.verdict); break; }}",
         "      _pgRepairs++;",
         f"      const _pgRep = await {repair_call};",
-        "      if (_pgRep?.plan_rel) _planRel = _pgRep.plan_rel;",
+        "      if (_pgRep?.plan_rel) _planRel = _planSeen(_pgRep.plan_rel);",
         "      _pgSrc = _pgRep;",
     ]
     if fold_stage:
@@ -4498,6 +4574,7 @@ def compose_ask_script(
     b.append(f"  const _crossRepoApproved = {'true' if cross_repo_approved else 'false'};")
     b.append("  let _planRel = null;")
     b.append("  " + PLAN_PATH_JS)
+    b.append("  " + _PLAN_FOLLOW_JS)
     b.append("  let _gated = [];")
     b.append("  let _ragDegraded = [];")
     b.append("  let _manifest = null;")
@@ -4592,13 +4669,15 @@ def compose_ask_script(
         b.append(f"  let {_emit._FALSIFIER_RESULT_VAR} = null;")
         b.append(f"  const _judgeRules = {_emit._JUDGE_VERDICT_RULES_JS};")
 
-    def _gate_payload(record_js: str = "", sizing_js: str = "_sizingRel") -> str:
+    def _gate_payload(record_js: str = "", sizing_js: str = "_sizingRel", extra_js: str = "") -> str:
         return (
             "js:JSON.stringify({ sizing_path: " + sizing_js + ", run_id: _runId, writes: _writes"
             + (", baton: " + json.dumps(baton["path"]) if baton else "")
             + (", em_size: " + json.dumps(em_size) if em_size else "")
             + (f", record: {record_js}" if record_js else "")
+            + extra_js
             + ", ...(_RUN_TOKEN ? { require_live_token: true } : {}) })"
+            + (".split(\"'\").join(\"'\" + '\"' + \"'\" + '\"' + \"'\")" if extra_js else "")
         )
 
     fold_stage = not stop_after
@@ -4635,21 +4714,20 @@ def compose_ask_script(
         )
 
     def _gate_agent_call(label: str, phase_title: str, stage_act: bool = False) -> str:
+        extra_js = ""
+        if stage_act and fold_stage:
+            extra_js += ", stage_act: true, gated: _gated"
+        if stage_act and not blitz_fn:
+            extra_js += ", chain_emit: true, target_root: REPO_ROOT" + (f", stop_after: {_lit(stop_after)}" if stop_after else "")
+        if extra_js:
+            extra_js += ", cross_repo_approved: _crossRepoApproved, session_id: _SESSION_ID"
         gate_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
             f"Run `{_INVOKE} {OP_ASK_GATE} '",
-            _gate_payload(),
-            f"'{_repo_flag(repo_root)}` and return its JSON reply verbatim as arm, halt, baton and (when present) resume_plan, resume_rows, resume_ledger, pending_rulings and spine_plan, plus resume_ready, resume_phases, design_brief and design_route when present; "
+            _gate_payload(extra_js=extra_js),
+            f"'{_repo_flag(repo_root)}` and return its JSON reply verbatim; "
             "when the command is denied or fails, return halt {kind: 'refusal', reason: <its error text>}, never arm "
-            "and halt both null. Also read the sizing at ",
-            "js:_sizingRel",
-            " and return its estimate.tshirt as tshirt and its route as route.",
-            *(
-                _stage_act_parts(_stage_params_js("_sizingRel", "_gated"))
-                if stage_act and fold_stage
-                else ()
-            ),
-            *(_chain_emit_act(_chain_emit_params("_sizingRel")) if stage_act else ()),
+            "and halt both null.",
         )
         return _agent(
             gate_prompt, label=label, phase=phase_title, agent_type=_GATE_AGENT_TYPE,
@@ -5562,7 +5640,7 @@ def compose_ask_script(
         effort=_PLAN_AUTHOR_EFFORT, run_id=run_id,
     )
     b.append(f"    const _authored = await {plan_call};")
-    b.append("    _planRel = _authored.plan_rel;")
+    b.append("    _planRel = _planSeen(_authored.plan_rel);")
     if fold_stage:
         b.append("    let _pgReply = _authored.stage_reply;")
         if fold_falsifier:
@@ -5584,7 +5662,7 @@ def compose_ask_script(
             "js:" + _DESIGN_PREFIX_JS,
             f"{head}\n\n{anchor}\n\n",
             "The ask gate minted a dispatch spine from the sizing's concrete acceptance rows at ",
-            "js:_gate.spine_plan",
+            "js:_planNow(_gate.spine_plan)",
             ". Review it as the plan reviewer: every row's writes are real, bounded paths, its done "
             "condition is a runnable check, and together the rows serve the sizing's exit criterion. "
             "Apply every finding IN PLACE with Edit -- never scaffold a new plan, never change its "
@@ -5596,6 +5674,7 @@ def compose_ask_script(
             "(ids from this vocabulary, empty when none: "
             + ", ".join(sorted(signal_selects))
             + ") and return them as review_signals."
+            + _MOVED_PLAN_SENTENCE
             + ledger_clause,
             _LEDGER_SERVE_SENTENCE,
             *(plan_falsifier_parts if fold_falsifier else ()),
@@ -5613,12 +5692,13 @@ def compose_ask_script(
         )
         b.append("    let _spineFallback = null;")
         b.append("    if (_gate.spine_plan && !_gate.resume_plan) {")
-        if ue_repo:
+        plan_docs_leg = ue_repo and (not writes or touches_ue_path(writes))
+        if plan_docs_leg:
             def docs_call_for(docs_label: str) -> str:
                 docs_check_prompt = _cat(
                     f"{head}\n\n{anchor}\n\n",
                     "Docs-check the spine plan at ",
-                    "js:_gate.spine_plan",
+                    "js:_planNow(_gate.spine_plan)",
                     ": verify every Unreal Engine API, class, module and behavior claim it makes against the "
                     "engine docs and source (the code-index engine tools), and apply each correction IN PLACE with "
                     "Edit -- never scaffold a new plan, never change its path. Return its repo-relative path as "
@@ -5639,12 +5719,15 @@ def compose_ask_script(
                     plan_js="(_gate.spine_plan ?? null)",
                 )
             )
+            b.append("      _planSeen(_planDocsCheck?.plan_rel);")
             b.append(f"      let _spineReview = null;\n      if (!_halted) _spineReview = await {review_call};")
         else:
+            if ue_repo:
+                b.append(_docs_skip_js("plan-docs-check", "      "))
             b.append(f"      const _spineReview = await {review_call};")
         if fold_falsifier:
             b.append("      _planFalsifier = _asPlanFalsifier(_spineReview?.falsifier);")
-        b.append("      _spineFallback = _spineReview?.plan_rel || _gate.spine_plan;")
+        b.append("      _spineFallback = _planSeen(_spineReview?.plan_rel) || _planNow(_gate.spine_plan);")
         b.append(
             f"      const _signalSelects = {json.dumps(signal_selects, sort_keys=True)};"
         )
@@ -5762,13 +5845,13 @@ def compose_ask_script(
             f"{head}\n\n{anchor}\n\n",
             _authoring_constraints_part(),
             "plan-blitz pulled the plan at ",
-            "js:_pulledEntry.planPath",
+            "js:_planNow(_pulledEntry.planPath)",
             " at its prep gate. Revise that plan IN PLACE with Edit -- never scaffold a new one, never "
             "change its path -- so every finding below is resolved, then return its repo-relative path "
             "as plan_rel. A finding that carries a proposed before/after edit is applied exactly as "
             "proposed; never leave it for the EM."
             + _EDIT_IN_PLACE_NO_REREAD,
-            _carried_outputs_part("_pulledEntry.planPath"),
+            _carried_outputs_part("_planNow(_pulledEntry.planPath)"),
             " ",
             _ANCHOR_PREMISES_SENTENCE,
             "Then run the `plan.readiness_verdict` op on the revised plan, passing the "
@@ -5780,7 +5863,8 @@ def compose_ask_script(
             "would pull the plan again), and return that reply's pull_class and verdict "
             "alongside plan_rel. Also return that reply's rulings, blocking_findings and "
             "split_recommended verbatim; when the pull's coverage or reviews still stand unanswered "
-            "after your repairs, take them from the run that carried those values instead.",
+            "after your repairs, take them from the run that carried those values instead."
+            + _MOVED_PLAN_SENTENCE,
             "js:_pullData()",
             ledger_clause,
             _LEDGER_SERVE_SENTENCE,
@@ -5796,7 +5880,7 @@ def compose_ask_script(
         patch_prompt = _cat(
             f"{head}\n\n{anchor}\n\n",
             "plan-blitz pulled the plan at ",
-            "js:_pulledEntry.planPath",
+            "js:_planNow(_pulledEntry.planPath)",
             " at its prep gate, but its review did not find the plan unsaveable. Do not re-plan or "
             "rewrite it. Run the `plan.readiness_verdict` op on it, passing the pull's coverage and "
             "reviews values below when they are not null, apply every mechanical_repairs entry (first run "
@@ -5805,7 +5889,8 @@ def compose_ask_script(
             "anti-scope line, nothing more), then "
             "re-run the op with the plan alone and return that reply's pull_class and verdict "
             "alongside plan_rel (the plan's repo-relative path, unchanged). Also return that reply's "
-            "rulings, blocking_findings and split_recommended verbatim.",
+            "rulings, blocking_findings and split_recommended verbatim."
+            + _MOVED_PLAN_SENTENCE,
             "js:_pullData()",
             ledger_clause,
             *(
@@ -5841,7 +5926,7 @@ def compose_ask_script(
         b.append(f"      else {{ _revised = await {patch_call}; }}")
         b.append("      _replanLegs += 1;")
         b.append("      }")
-        b.append("      _pullPlan = _revised?.plan_rel || _pulledEntry.planPath;")
+        b.append("      _pullPlan = _planSeen(_revised?.plan_rel) || _planNow(_pulledEntry.planPath);")
         b.append(
             "      _pullRulings = Array.isArray(_revised?.rulings) && _revised.rulings.length ? _revised.rulings : "
             "(Array.isArray(_pulledEntry.blocking) ? _pulledEntry.blocking : []).map((f, i) => "
@@ -5850,7 +5935,7 @@ def compose_ask_script(
         b.append("      _pullBlocking = typeof _revised?.blocking_findings === 'number' ? _revised.blocking_findings : null;")
         b.append(
             "      if (_revised?.verdict === 'ready' && (_revised?.pull_class === 'mechanical' || _revised?.pull_class === 'none')) "
-            "{ _planRel = _revised.plan_rel || _pulledEntry.planPath;"
+            "{ _planRel = _pullPlan;"
             + (
                 " if (_planRel === _revised.plan_rel) { await _adoptStageReply(_revised.stage_reply); }"
                 if fold_stage
@@ -5880,7 +5965,7 @@ def compose_ask_script(
         )
         b.append("      }")
         b.append("      if (!_planRel && !_pullSplit && !_replanCapped) {")
-        b.append(f"      const _reblitz = {_blitz_call('_revised?.plan_rel || _pulledEntry.planPath')}")
+        b.append(f"      const _reblitz = {_blitz_call('_pullPlan')}")
         b.append("      const _reready = (_reblitz?.ready ?? [])[0];")
         if fold_stage:
             b.append(
@@ -6235,7 +6320,14 @@ def compose_ask_script(
     if routed:
         b.append(_route_js.routed_run_js())
         b.append(_ROUTE_ADAPTER_JS)
+    # Trap: the stage defers row brief files above LAZY_BRIEFS_ABOVE_ROWS rows; each wave's files must exist before its agents launch.
     b.append("  for (const w of _waves) {")
+    b.append(
+        f"    if (_manifest.rows.length > {_emit.LAZY_BRIEFS_ABOVE_ROWS} && typeof _stageRecover === 'function') "
+        "{ _stageRecoverParams.wave = w; const _mat = await _stageRecover(); delete _stageRecoverParams.wave; "
+        "if (!_mat) log('brief materialisation returned no reply for wave ' + w); "
+        "else if (_mat.stage_reply?.error) throw new Error('brief materialisation failed for wave ' + w + ': ' + String(_mat.stage_reply.error)); }"
+    )
     b.append("    for (const r of _manifest.rows.filter((x) => x.wave === w)) {")
     b.extend(_reviewer_row_js(anchor, work_label, run_id))
     routed_arm = f"r.route ? {_routed_row_js(work_label, exec_phase)} : " if routed else ""
@@ -6397,6 +6489,14 @@ def compose_ask_script(
             "  if (!_halted && !_reviewReused && !_noReviewPaths && "
             f"((_gate.arm !== {_lit(ARM_XS)} && !_xsTail) || _codeReviewOwed)) {{"
         )
+        b.append(
+            f"    const _uePathRe = new RegExp({json.dumps(UE_PATH_PATTERN)}, 'i');\n"
+            "    const _runTouchesUe = [..._reviewPaths, ...(_writes ?? [])]"
+            ".some((p) => _uePathRe.test(String(p).replace(/\\\\/g, '/')));\n"
+            "    if (!_runTouchesUe) {\n"
+            + _docs_skip_js("diff-docs-check", "      ")
+            + "\n    } else {"
+        )
         b.extend(
             _docs_check_gate_js(
                 check_call=diff_docs_call_for("diff-docs-check"), retry_call=diff_docs_call_for("diff-docs-check-retry"),
@@ -6405,6 +6505,7 @@ def compose_ask_script(
                 plan_js="(typeof _planRel !== 'undefined' ? _planRel : null)",
             )
         )
+        b.append("    }")
         b.append("  }")
     b.append(f"  {{ const agent = (p, o) => _reviewOuterAgent({_DESIGN_PREFIX_JS} + p, o);")
     b.append(
@@ -6433,6 +6534,7 @@ def compose_ask_script(
     # Self-correction reads the re-verify result, so the deferred re-verify joins before it.
     b.append("  if (!_reverifyJoined) { _reviewReverify = await _joinReverify(); _reverifyJoined = true; }")
     b.append(_WAVE_DIFF_RECONCILE_JS)
+    b.append(_TESTS_NOT_RUN_JS)
     b.append(
         _review_recover_js(
             head=head, anchor=anchor, session_tail=session_tail, record_dir=record_abs, run_id=run_id, stager=stager,
@@ -6596,7 +6698,10 @@ def compose_ask_script(
         "items: _verify.items, conflicts: Array.isArray(_verify.conflicts) ? _verify.conflicts : [] } : null;",
         "  }",
     ]
-    verify_lines[-1:-1] = [_test_verdict_empty_halt_js(sizing_rel).replace("TEST_GUARD", test_guard)]
+    verify_lines[-1:-1] = [
+        _test_verdict_limit_route_js().replace("TEST_GUARD", test_guard),
+        _test_verdict_empty_halt_js(sizing_rel).replace("TEST_GUARD", test_guard),
+    ]
     _rl = f"_gate.{RESUME_LEDGER_KEY}"
     # The leg's footprint is the only path set named; dispatch.land_run withholds a changed path outside it.
     remaining_prompt = _cat(
@@ -6832,9 +6937,12 @@ def compose_ask_script(
         "      _stopShort[_sid] = _short || _stopRet[_sid];\n"
         "    }\n"
         "    const _hs = String(_halted);\n"
-        "    if (Object.prototype.hasOwnProperty.call(_stopRet, _hs)) _halted = 'stop rule fired on ' + _hs + ': ' + _stopShort[_hs].replace(/\\s+/g, ' ').slice(0, 600);\n"
+        "    const _stopLimit = _limitTextIn(..._stoppedBy.map((_sid) => _stopRet[_sid]));\n"
+        "    if (_stopLimit) { _haltOnUsageLimit(_stopLimit); }\n"
+        "    else if (Object.prototype.hasOwnProperty.call(_stopRet, _hs)) _halted = 'stop rule fired on ' + _hs + ': ' + _stopShort[_hs].replace(/\\s+/g, ' ').slice(0, 600);\n"
         "    _consumedReturns = Object.assign({}, _stopRet, _consumedReturns);\n"
         "    _stoppedRows = _stoppedBy.slice();\n"
+        "    if (_halted && typeof _halted === 'object') _halted.stopped_rows = _stoppedRows;\n"
         "  }\n"
         "  if (_halted && typeof _halted !== 'object') { _halted = { halted: "
         f"(_haltedByHold ? {_lit(HALT_DEPENDENTS_UNSTARTED)} : {_lit(HALT_STOP_RULE)}), "

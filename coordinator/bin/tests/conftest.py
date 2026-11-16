@@ -8,6 +8,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
 
 _LIB_DIR = Path(__file__).resolve().parent.parent / "lib"
 if str(_LIB_DIR) not in sys.path:
@@ -24,7 +28,7 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 
 
 @pytest.fixture
-def stamped_engine_env(monkeypatch) -> str:
+def stamped_engine_env(monkeypatch: pytest.MonkeyPatch) -> str:
     root = _stamped_dispatch_root()
     if root is None:
         pytest.skip(
@@ -55,7 +59,7 @@ def _published_module_absent(name):
 
 
 @pytest.fixture(autouse=True)
-def _isolate_settings_home(request, tmp_path_factory):
+def _isolate_settings_home(request: pytest.FixtureRequest, tmp_path_factory: pytest.TempPathFactory):
     """Ships with these tests so every checkout and mirror isolates them; overrides the repo-root
     fixture of the same name. Body: unimatrix_test_home.isolated_settings_home. Opt out with
     @pytest.mark.real_home."""
@@ -68,7 +72,7 @@ def _isolate_settings_home(request, tmp_path_factory):
 
 
 @pytest.fixture(autouse=True)
-def _fail_on_live_registry_write(request, _isolate_settings_home):
+def _fail_on_live_registry_write(request: pytest.FixtureRequest, _isolate_settings_home):
     """Overrides coordinator/bin/conftest.py's tripwire of the same name only to pull the
     isolation up before it: the tripwire must snapshot and compare the isolated home, and the
     shared `monkeypatch` (set up after it) must unwind its settings-home edits before isolation
@@ -94,7 +98,7 @@ def _live_unimatrix_pair_state():
 
 
 @pytest.fixture(autouse=True)
-def _unimatrix_tests_never_write_a_real_pair_key(request, _isolate_settings_home):
+def _unimatrix_tests_never_write_a_real_pair_key(request: pytest.FixtureRequest, _isolate_settings_home):
     """A test that records a `unimatrix.keys.*` entry or mints under the real settings home
     leaves a stray key every later `request` could adopt; fail the test that did it.
     A concurrent real-box writer during the test also trips this; rerun before suspecting the test."""
@@ -111,7 +115,7 @@ _DESKTOP_NOTIFIERS = frozenset({"osascript", "notify-send"})
 
 
 @pytest.fixture(autouse=True)
-def _no_desktop_notifier(monkeypatch):
+def _no_desktop_notifier(monkeypatch: pytest.MonkeyPatch) -> None:
     """A test never raises a real desktop notification: unimatrix-membership's default notifier
     shells to osascript, and a test that forgets its stub pops a "join the unimatrix" alert on the
     PM's screen every run. A test that sets its own `shutil.which` stub still wins."""
@@ -212,7 +216,7 @@ class _ChildReaper:
         real_popen = subprocess.Popen
 
         class _Reaped(real_popen):
-            def __init__(self, *args, **kwargs):
+            def __init__(self, *args, **kwargs) -> None:
                 # `is not None`: an explicit start_new_session=False is the caller's choice and is kept.
                 if sys.platform != "win32" and not any(
                     kwargs.get(k) is not None for k in ("start_new_session", "process_group", "preexec_fn")
@@ -225,7 +229,7 @@ class _ChildReaper:
 
 
 @pytest.fixture(autouse=True)
-def _reap_test_spawned_children(monkeypatch):
+def _reap_test_spawned_children(monkeypatch: pytest.MonkeyPatch):
     """A process a test starts (a unimatrix bridge, an autolink) never outlives the test."""
     reaper = _ChildReaper()
     reaper.install(monkeypatch)
@@ -246,7 +250,7 @@ def _published_module_absent(name):
 
 
 @pytest.fixture(autouse=True)
-def _stub_fold_bar_verdict(request, monkeypatch):
+def _stub_fold_bar_verdict(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Round and publish tests drive fake trees with no recorded suite verdict. A module sets
     REAL_FOLD_BAR = True, or a test carries the fold_bar_real marker, to exercise the real fold bar."""
     if getattr(request.module, "REAL_FOLD_BAR", False) or request.node.get_closest_marker("fold_bar_real"):
@@ -279,7 +283,7 @@ def _stub_fold_bar_verdict(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _stub_registry_integrity(request, monkeypatch):
+def _stub_registry_integrity(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Round tests drive fixture source dirs whose commit carries no op registry and a fixed fake
     shipped sha, so the registry-integrity read would refuse unreadable. A module sets
     REAL_REGISTRY_INTEGRITY = True to exercise the real check."""
@@ -299,7 +303,7 @@ def _stub_registry_integrity(request, monkeypatch):
 
 
 @pytest.fixture(autouse=True)
-def _stub_source_preflight(request, monkeypatch):
+def _stub_source_preflight(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """The round's source-published gate runs real git and a real push; the
     round tests fake the source dir. A module sets REAL_SOURCE_PREFLIGHT = True
     to exercise the real gate."""
@@ -390,7 +394,7 @@ def _plan(
     return plan
 
 
-def _run(plan: Path, *extra: str):
+def _run(plan: Path, *extra: str) -> CompletedProcess[str]:
     return subprocess.run(
         [sys.executable, str(_SCRIPT), *extra, str(plan)],
         capture_output=True,
@@ -422,12 +426,12 @@ _LIVE_SOCK_DIRS = ("/tmp/cc-socks", "/private/tmp/cc-socks")
 
 
 @pytest.fixture(autouse=True)
-def _never_unlink_live_peer_sockets(monkeypatch, tmp_path_factory):
+def _never_unlink_live_peer_sockets(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
     """A test never unlinks a real peer socket: one unredirected roster reap on a live box cut
     every LAN peer (2026-11-14 16:18Z). Redirect LOOPBACK_SOCKS to tmp_path instead."""
     real_unlink, real_remove = os.unlink, os.remove
 
-    def _refuse(path):
+    def _refuse(path) -> None:
         text = os.fspath(path)
         if isinstance(text, bytes):
             text = text.decode(errors="replace")

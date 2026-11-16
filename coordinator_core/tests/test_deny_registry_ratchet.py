@@ -18,7 +18,7 @@ _CLASS_HARD_DENY = re.compile(r'^CLASS\s*=\s*["\']hard-deny["\']', re.M)
 
 
 @pytest.fixture(autouse=True)
-def _empty_registry(tmp_path, monkeypatch):
+def _empty_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     d = tmp_path / "reg"
     d.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(d))
@@ -38,7 +38,7 @@ def _denies(out):
     return spec.get("permissionDecision") == "deny" or out.get("decision") == "block"
 
 
-def _deny(event="PreToolUse"):
+def _deny(event: str = "PreToolUse") -> dict[str, dict[str, str]]:
     return {
         "hookSpecificOutput": {
             "hookEventName": event,
@@ -48,7 +48,7 @@ def _deny(event="PreToolUse"):
     }
 
 
-def _kebab_names_in_tree():
+def _kebab_names_in_tree() -> set[str]:
     names = {p.stem.replace("_", "-") for p in (ROOT / "write_guards").glob("*.py")}
     names |= {p.stem.replace("_", "-") for p in (ROOT / "hooks").rglob("*.py")}
     from coordinator_core.bash_guards.roster import guard_roster
@@ -57,22 +57,22 @@ def _kebab_names_in_tree():
     return names
 
 
-def test_registry_is_internally_consistent():
+def test_registry_is_internally_consistent() -> None:
     assert dr.registry_problems() == []
 
 
-def test_every_registered_guard_names_a_real_guard():
+def test_every_registered_guard_names_a_real_guard() -> None:
     known = _kebab_names_in_tree()
     unknown = sorted(n for n in (*dr.GUARD_DENY_CLASS, *dr.SUBAGENT_DENY_CLASS) if n not in known)
     assert not unknown, f"registry names no guard: {unknown}"
 
 
-def test_floor_views_derive_from_the_registry():
+def test_floor_views_derive_from_the_registry() -> None:
     assert mp.FLOOR_GUARDS == frozenset(dr.GUARD_DENY_CLASS)
     assert mp.SUBAGENT_FLOOR_GUARDS == frozenset(dr.SUBAGENT_DENY_CLASS)
 
 
-def test_registered_guard_keeps_its_deny_at_every_level_and_unregistered_never_denies(monkeypatch):
+def test_registered_guard_keeps_its_deny_at_every_level_and_unregistered_never_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     registered = sorted(dr.GUARD_DENY_CLASS)
     unregistered = sorted(n for n in _kebab_names_in_tree() if n not in dr.GUARD_DENY_CLASS)
     assert registered and unregistered
@@ -87,7 +87,7 @@ def test_registered_guard_keeps_its_deny_at_every_level_and_unregistered_never_d
             assert not _denies(mp.apply_guard_level(name, _deny("Stop"))), (name, level)
 
 
-def test_every_hard_deny_class_module_is_registered_or_clamped():
+def test_every_hard_deny_class_module_is_registered_or_clamped() -> None:
     declared = []
     for sub in ("bash_guards", "write_guards", "hooks"):
         for path in sorted((ROOT / sub).rglob("*.py")):
@@ -103,19 +103,19 @@ def test_every_hard_deny_class_module_is_registered_or_clamped():
         assert not _denies(mp.apply_guard_level(name, _deny())), name
 
 
-def test_every_op_refusal_is_classed_or_pending_a_named_fix():
+def test_every_op_refusal_is_classed_or_pending_a_named_fix() -> None:
     sites = dr.op_refusal_sites(ROOT / "ops")
     assert len({s.rsplit(":", 1)[0] for s in sites}) >= 20
     assert dr.registry_problems(refusal_sites=sites) == []
 
 
-def test_every_registered_op_refusal_still_exists():
+def test_every_registered_op_refusal_still_exists() -> None:
     sites = dr.op_refusal_sites(ROOT / "ops")
     stale = sorted(k for k in dr.OP_REFUSAL_CLASS if k not in sites)
     assert not stale, f"registry entries with no raise site: {stale}"
 
 
-def test_injected_unregistered_op_refusal_turns_the_ratchet_red(tmp_path):
+def test_injected_unregistered_op_refusal_turns_the_ratchet_red(tmp_path: Path) -> None:
     ops = tmp_path / "ops"
     ops.mkdir()
     (ops / "newop.py").write_text("def f():\n    raise NewThingRefused('x')\n", encoding="utf-8")
@@ -125,7 +125,7 @@ def test_injected_unregistered_op_refusal_turns_the_ratchet_red(tmp_path):
     assert [p[0] for p in problems] == list(sites)
 
 
-def test_injected_test_file_refusal_is_not_a_site(tmp_path):
+def test_injected_test_file_refusal_is_not_a_site(tmp_path: Path) -> None:
     ops = tmp_path / "ops"
     (ops / "tests").mkdir(parents=True)
     (ops / "tests" / "t.py").write_text("raise FooRefused()\n", encoding="utf-8")
@@ -133,7 +133,7 @@ def test_injected_test_file_refusal_is_not_a_site(tmp_path):
     assert dr.op_refusal_sites(ops) == {}
 
 
-def test_a_class_outside_the_closed_list_is_red():
+def test_a_class_outside_the_closed_list_is_red() -> None:
     bad_guard = {"block-new-thing": "convenience"}
     assert [p[0] for p in dr.registry_problems(guard_classes=bad_guard)] == ["block-new-thing"]
     bad_op = {"m:XRefused": "convenience", "m:YRefused": {"pending_fix": ""}, "m:ZRefused": {"owner": "C1"}}
@@ -144,7 +144,7 @@ def test_a_class_outside_the_closed_list_is_red():
     ]
 
 
-def test_lost_definition_landing_refusal_is_head_integrity_and_a_stray_class_is_red():
+def test_lost_definition_landing_refusal_is_head_integrity_and_a_stray_class_is_red() -> None:
     assert dr.LANDING_REFUSAL_CLASS == {"lost-definition": dr.HEAD_INTEGRITY}
     assert dr.HEAD_INTEGRITY in dr.IRREVERSIBLE_CLASSES
     assert dr.registry_problems(landing_classes={"lost-definition": dr.HEAD_INTEGRITY}) == []
@@ -152,20 +152,20 @@ def test_lost_definition_landing_refusal_is_head_integrity_and_a_stray_class_is_
     assert [p[0] for p in dr.registry_problems(landing_classes={"x-reason": dr.DISRUPTIVE})] == ["x-reason"]
 
 
-def test_every_landing_refusal_kind_is_classed_or_a_guard_owned_kind():
+def test_every_landing_refusal_kind_is_classed_or_a_guard_owned_kind() -> None:
     from coordinator_core.ops.dispatch_emit.landing_refusal_kinds import LANDING_REFUSAL_KINDS
 
     guard_owned = {"destructive-git", "secret-in-diff"}
     assert LANDING_REFUSAL_KINDS - guard_owned == set(dr.LANDING_REFUSAL_CLASS)
 
 
-def test_disruptive_is_a_guard_class_and_not_an_op_class():
+def test_disruptive_is_a_guard_class_and_not_an_op_class() -> None:
     assert dr.DISRUPTIVE in dr.GUARD_CLASSES
     assert dr.DISRUPTIVE not in dr.IRREVERSIBLE_CLASSES
     assert dr.registry_problems(op_classes={"m:XRefused": dr.DISRUPTIVE})
 
 
-def test_post_fire_and_foreign_write_guards_are_not_registered():
+def test_post_fire_and_foreign_write_guards_are_not_registered() -> None:
     gone = {
         "block-em-post-fire-product-write",
         "block-topic-branch",
@@ -178,7 +178,7 @@ def test_post_fire_and_foreign_write_guards_are_not_registered():
     assert not gone & (mp.FLOOR_GUARDS | mp.SUBAGENT_FLOOR_GUARDS)
 
 
-def test_blanket_git_add_denies_at_every_level_and_names_the_commit_op(monkeypatch, tmp_path):
+def test_blanket_git_add_denies_at_every_level_and_names_the_commit_op(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.bash_guards import _dc_git_probe, _dc_git_shared
     from coordinator_core.bash_guards import dispatch_checks as guard
     from coordinator_core.guard_messages.testing import envelope_of
@@ -189,7 +189,7 @@ def test_blanket_git_add_denies_at_every_level_and_names_the_commit_op(monkeypat
     monkeypatch.chdir(root)
     monkeypatch.setattr(_dc_git_shared, "_is_hazard_repo", lambda r: True)
 
-    def fake_git(args, cwd=None, timeout=2.0, extra_env=None):
+    def fake_git(args, cwd=None, timeout: float = 2.0, extra_env=None):
         if args[:2] == ["rev-parse", "--show-toplevel"]:
             return 0, str(root) + "\n"
         if args[:2] == ["add", "--dry-run"]:
@@ -207,7 +207,7 @@ def test_blanket_git_add_denies_at_every_level_and_names_the_commit_op(monkeypat
         assert mp.apply_guard_level("blanket-git-add", env) is env, level
 
 
-def test_subagent_destructive_action_denies_a_subagent_only(monkeypatch):
+def test_subagent_destructive_action_denies_a_subagent_only(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.bash_guards import block_subagent_destructive_action as guard
     from coordinator_core.guard_messages.testing import envelope_of
 
@@ -236,7 +236,7 @@ def test_subagent_destructive_action_denies_a_subagent_only(monkeypatch):
         "git update-ref refs/heads/x new old",
     ],
 )
-def test_subagent_destructive_action_never_denies_local_recoverable_git(command):
+def test_subagent_destructive_action_never_denies_local_recoverable_git(command) -> None:
     from coordinator_core.bash_guards import block_subagent_destructive_action as guard
     from coordinator_core.guard_messages.testing import envelope_of
 
@@ -250,7 +250,7 @@ def test_subagent_destructive_action_never_denies_local_recoverable_git(command)
     assert not _denies(envelope_of(guard.check(payload)))
 
 
-def test_subagent_destructive_action_still_denies_unguarded_ref_move():
+def test_subagent_destructive_action_still_denies_unguarded_ref_move() -> None:
     from coordinator_core.bash_guards import block_subagent_destructive_action as guard
     from coordinator_core.guard_messages.testing import envelope_of
 
@@ -264,25 +264,25 @@ def test_subagent_destructive_action_still_denies_unguarded_ref_move():
     assert _denies(envelope_of(guard.check(payload)))
 
 
-def test_drive_root_new_dir_guards_are_box_degrading_denies():
+def test_drive_root_new_dir_guards_are_box_degrading_denies() -> None:
     for name in ("block-drive-root-new-dir-write", "block-drive-root-new-dir-bash-write"):
         assert dr.GUARD_DENY_CLASS[name] == dr.BOX_DEGRADING
         assert name not in dr.ADVISORY_BY_RULING
 
 
-def test_malformed_request_is_op_only():
+def test_malformed_request_is_op_only() -> None:
     assert dr.MALFORMED_REQUEST not in dr.GUARD_CLASSES
     assert [p[0] for p in dr.registry_problems(guard_classes={"g": dr.MALFORMED_REQUEST})] == ["g"]
 
 
-def test_injected_unregistered_deny_is_clamped_to_a_log(monkeypatch):
+def test_injected_unregistered_deny_is_clamped_to_a_log(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setitem(dr.GUARD_DENY_CLASS, "block-injected-new-deny", dr.BOX_DEGRADING)
     assert "block-injected-new-deny" not in mp.FLOOR_GUARDS
     assert not _denies(mp.apply_guard_level("block-injected-new-deny", _deny()))
     assert not _denies(mp.apply_guard_level("block-injected-new-deny", _deny(), session_id="s"))
 
 
-def test_unregistered_deny_writes_a_record_and_no_context(tmp_path, monkeypatch):
+def test_unregistered_deny_writes_a_record_and_no_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".git").mkdir()
     shared = tmp_path / "share"
     monkeypatch.setattr(
@@ -294,7 +294,7 @@ def test_unregistered_deny_writes_a_record_and_no_context(tmp_path, monkeypatch)
     assert '"guard": "block-some-demoted-guard"' in record
 
 
-def test_a_failing_record_never_reaches_the_caller(monkeypatch):
+def test_a_failing_record_never_reaches_the_caller(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise OSError("disk full")
 
@@ -303,7 +303,7 @@ def test_a_failing_record_never_reaches_the_caller(monkeypatch):
     assert not _denies(out)
 
 
-def test_dispatch_drops_a_crashed_unregistered_guard_and_keeps_a_registered_one_denying():
+def test_dispatch_drops_a_crashed_unregistered_guard_and_keeps_a_registered_one_denying() -> None:
     from coordinator_core.bash_guards import dispatch
 
     crash = dispatch._crash_deny("block-some-demoted-guard", RuntimeError("x"))
@@ -313,7 +313,7 @@ def test_dispatch_drops_a_crashed_unregistered_guard_and_keeps_a_registered_one_
 
 
 @pytest.mark.parametrize("cmd", ["python -m pytest $FILES", "pytest $F -q", "python -m pytest $(cat list.txt)"])
-def test_unscheduled_suite_run_with_variable_held_paths_denies_at_every_level(monkeypatch, tmp_path, cmd):
+def test_unscheduled_suite_run_with_variable_held_paths_denies_at_every_level(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, cmd) -> None:
     import subprocess
 
     from coordinator_core.bash_guards import check_test_suite_invocation as guard
@@ -330,7 +330,7 @@ def test_unscheduled_suite_run_with_variable_held_paths_denies_at_every_level(mo
         assert mp.apply_guard_level("check-test-suite-invocation", env) is env, level
 
 
-def test_uncapped_pytest_plugin_guard_is_box_degrading_and_keeps_its_deny_at_every_level(monkeypatch):
+def test_uncapped_pytest_plugin_guard_is_box_degrading_and_keeps_its_deny_at_every_level(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.bash_guards import guard_uncapped_pytest_plugin as guard
 
     assert dr.GUARD_DENY_CLASS["guard-uncapped-pytest-plugin"] == dr.BOX_DEGRADING

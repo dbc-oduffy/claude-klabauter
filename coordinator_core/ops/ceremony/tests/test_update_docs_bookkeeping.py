@@ -7,21 +7,22 @@ import pytest
 
 import coordinator_core.ops.ceremony.update_docs_bookkeeping as ub
 from coordinator_core.ipc import _REGISTRY
+from pathlib import Path
 
 _OP = "ceremony.update_docs_bookkeeping"
 
 
-def test_op_registered():
+def test_op_registered() -> None:
     assert _OP in _REGISTRY
 
 
 @pytest.fixture
-def seen(monkeypatch, tmp_path):
+def seen(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     root = tmp_path / "repo"
     (root / ".git").mkdir(parents=True)
     calls: dict = {}
 
-    def worklist(params, repo_root=None):
+    def worklist(params, repo_root=None) -> dict[str, list[dict[str, str]]]:
         calls["worklist"] = (params, repo_root)
         return {"agent_worklist": [{"kind": "doc_drift_review"}]}
 
@@ -34,7 +35,7 @@ def seen(monkeypatch, tmp_path):
     return root, calls
 
 
-def test_default_call_reports_and_writes_nothing(seen):
+def test_default_call_reports_and_writes_nothing(seen) -> None:
     root, calls = seen
     out = ub._ceremony_update_docs_bookkeeping({}, repo_root=root / ".git")
     assert out == {
@@ -47,7 +48,7 @@ def test_default_call_reports_and_writes_nothing(seen):
     assert emit_params["target_root"] == str(root)
 
 
-def test_flags_route_to_the_owning_op(seen):
+def test_flags_route_to_the_owning_op(seen) -> None:
     root, calls = seen
     ub._ceremony_update_docs_bookkeeping(
         {"ack": True, "write": True, "rebaseline": True}, repo_root=root / ".git"
@@ -56,6 +57,6 @@ def test_flags_route_to_the_owning_op(seen):
     assert calls["emit"][0]["write"] is True and calls["emit"][0]["rebaseline"] is True
 
 
-def test_missing_repo_root_is_refused():
+def test_missing_repo_root_is_refused() -> None:
     with pytest.raises(ValueError, match="repo_root is None"):
         ub._ceremony_update_docs_bookkeeping({}, repo_root=None)

@@ -10,23 +10,24 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import stage_dirt_snapshot as snap
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = pytest.mark.spawns_process
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> None:
     subprocess.run(
         ["git", "-C", str(repo), *args], capture_output=True, text=True, check=True, **no_console_creationflags()
     )
 
 
-def _age(path, seconds=3600):
+def _age(path, seconds: int = 3600) -> None:
     t = time.time() - seconds
     os.utime(path, (t, t))
 
 
 @pytest.fixture
-def staged(tmp_path):
+def staged(tmp_path: Path) -> tuple[Path, Path]:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")
@@ -53,12 +54,12 @@ def staged(tmp_path):
     return repo, record
 
 
-def _edit(path, text="edited = 1\n"):
+def _edit(path, text: str = "edited = 1\n") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
 
 
-def test_run_edits_covers_tracked_untracked_and_new_dirs(staged):
+def test_run_edits_covers_tracked_untracked_and_new_dirs(staged) -> None:
     repo, record = staged
     _edit(repo / "pkg" / "b.py")
     _edit(repo / "pkg" / "c.py")
@@ -79,14 +80,14 @@ def test_run_edits_covers_tracked_untracked_and_new_dirs(staged):
     )
 
 
-def test_declared_paths_are_not_excluded(staged):
+def test_declared_paths_are_not_excluded(staged) -> None:
     repo, record = staged
     _edit(repo / "pkg" / "b.py")
     assert snap.run_edits(repo, record, ["pkg/b.py"]) == ["pkg/b.py"]
     assert snap.undeclared_edits(repo, record, ["pkg/b.py"]) == []
 
 
-def test_omits_pre_marker_dirt_scratch_record_dir_and_pycache(staged):
+def test_omits_pre_marker_dirt_scratch_record_dir_and_pycache(staged) -> None:
     repo, record = staged
     _edit(repo / "scratch" / "new.txt")
     _edit(repo / "pkg" / "__pycache__" / "b.cpython-311.pyc")
@@ -96,7 +97,7 @@ def test_omits_pre_marker_dirt_scratch_record_dir_and_pycache(staged):
     assert snap.run_edits(repo, record, []) == ["pkg/kept.py"]
 
 
-def test_record_dir_inside_the_repo_is_skipped(staged):
+def test_record_dir_inside_the_repo_is_skipped(staged) -> None:
     repo, _ = staged
     inside = repo / "recdir" / "run"
     assert snap.write_snapshot(repo, inside) is not None
@@ -104,7 +105,7 @@ def test_record_dir_inside_the_repo_is_skipped(staged):
     assert snap.run_edits(repo, inside, []) == ["pkg/kept.py"]
 
 
-def test_untracked_older_than_marker_is_not_a_run_edit(staged):
+def test_untracked_older_than_marker_is_not_a_run_edit(staged) -> None:
     repo, record = staged
     old = repo / "pkg" / "preexisting.py"
     _edit(old)
@@ -112,7 +113,7 @@ def test_untracked_older_than_marker_is_not_a_run_edit(staged):
     assert snap.run_edits(repo, record, []) == []
 
 
-def test_no_snapshot_or_no_index_reads_empty(staged, tmp_path):
+def test_no_snapshot_or_no_index_reads_empty(staged, tmp_path: Path) -> None:
     repo, record = staged
     _edit(repo / "pkg" / "b.py")
     assert snap.run_edits(repo, tmp_path / "missing", []) == []
@@ -120,7 +121,7 @@ def test_no_snapshot_or_no_index_reads_empty(staged, tmp_path):
     assert snap.run_edits(repo, record, []) == []
 
 
-def test_run_edits_spawns_no_process(staged, monkeypatch):
+def test_run_edits_spawns_no_process(staged, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, record = staged
     _edit(repo / "pkg" / "new_mod.py")
 

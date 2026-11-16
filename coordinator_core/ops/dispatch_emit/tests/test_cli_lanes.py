@@ -15,10 +15,11 @@ from coordinator_core.ops.dispatch_emit import admission, cli as cli_module, op
 
 from .conftest import REVIEW_KW
 from .test_op_lanes import RUN, _inventory, _write_master
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _stubs(monkeypatch):
+def _stubs(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(op, "_load_review_inputs", lambda route: tuple(REVIEW_KW.values()))
     monkeypatch.setattr(
         admission, "await_admission", lambda *a, **kw: {"verdict": "disabled", "reasons": [], "waited_s": 0}
@@ -39,12 +40,12 @@ def _stubs(monkeypatch):
         ["--inventory", "i.md", "--lanes", "--fire"],
     ],
 )
-def test_lane_flag_misuse_is_a_usage_error(argv, capsys):
+def test_lane_flag_misuse_is_a_usage_error(argv, capsys: pytest.CaptureFixture[str]) -> None:
     assert cli_module.main(argv) == cli_module.EXIT_USAGE
     assert "ERROR" in capsys.readouterr().err
 
 
-def test_lanes_prints_one_workflow_line_per_emitted_script(tmp_path, capsys):
+def test_lanes_prints_one_workflow_line_per_emitted_script(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     inv = _write_master(
         tmp_path,
         _inventory([("R1", "pkg/one.py", "-", "pending"), ("R2", "pkg/two.py", "-", "pending")]),

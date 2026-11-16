@@ -6,9 +6,10 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import run_truth_contract as rtc
 from coordinator_core.ops.dispatch_emit import stage_receipts as sr
+from pathlib import Path
 
 
-def test_write_then_read_roundtrip(tmp_path):
+def test_write_then_read_roundtrip(tmp_path: Path) -> None:
     run = tmp_path / "state" / "warp" / "r1"
     path = sr.write_receipt(run, "sizing", "ok", "state/sizings/x.yaml")
     assert path == run / "receipts" / "sizing.json"
@@ -21,21 +22,21 @@ def test_write_then_read_roundtrip(tmp_path):
     assert not sr.has_receipts(tmp_path / "state" / "warp" / "none")
 
 
-def test_unknown_stage_and_empty_verdict_refused(tmp_path):
+def test_unknown_stage_and_empty_verdict_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         sr.write_receipt(tmp_path, "skipped", "ok", None)
     with pytest.raises(ValueError):
         sr.write_receipt(tmp_path, "sizing", "", None)
 
 
-def test_malformed_receipt_counts_as_missing(tmp_path):
+def test_malformed_receipt_counts_as_missing(tmp_path: Path) -> None:
     (tmp_path / "receipts").mkdir()
     (tmp_path / "receipts" / "sizing.json").write_text("{not json", encoding="utf-8")
     (tmp_path / "receipts" / "execute.json").write_text(json.dumps({"stage": "review"}), encoding="utf-8")
     assert sr.present(tmp_path) == ()
 
 
-def test_missing_lists_unwritten_stages_for_the_arm(tmp_path):
+def test_missing_lists_unwritten_stages_for_the_arm(tmp_path: Path) -> None:
     for s in (rtc.STAGE_SIZING, rtc.STAGE_EXECUTE):
         sr.write_receipt(tmp_path, s, "ok", None)
     got = sr.missing(tmp_path, rtc.ARM_M_PLUS, "M")
@@ -43,19 +44,19 @@ def test_missing_lists_unwritten_stages_for_the_arm(tmp_path):
     assert rtc.STAGE_KIRA not in got
 
 
-def test_unknown_size_admits_every_mandatory_stage(tmp_path):
+def test_unknown_size_admits_every_mandatory_stage(tmp_path: Path) -> None:
     # The Kira bug: a staged resume seeds tshirt:null and the size gate excluded min_tshirt L.
     assert sr.missing(tmp_path, rtc.ARM_M_PLUS, None) == rtc.MANDATORY_STAGES
     assert rtc.STAGE_KIRA in sr.missing(tmp_path, rtc.ARM_M_PLUS, None)
 
 
-def test_review_tier_label_standard_on_L_still_requires_kira(tmp_path):
+def test_review_tier_label_standard_on_L_still_requires_kira(tmp_path: Path) -> None:
     # Register #20: L carries the 'standard' review-tier label; Kira keys on the t-shirt.
     assert rtc.STAGE_KIRA in sr.missing(tmp_path, rtc.ARM_M_PLUS, "L")
     assert sr.missing(tmp_path, rtc.ARM_M_PLUS, "standard") == rtc.MANDATORY_STAGES
 
 
-def test_replay_kira_gate_admits_a_null_fire_time_size():
+def test_replay_kira_gate_admits_a_null_fire_time_size() -> None:
     from coordinator_core.ops.review_mint.tests import test_execute_review as t
 
     block = t._wave_block(t._ratio_review(kira_min="L"), executor_rows=4, tshirt_js="_gate?.tshirt")
@@ -63,7 +64,7 @@ def test_replay_kira_gate_admits_a_null_fire_time_size():
     assert "coordinator:overengineering-reviewer" in block
 
 
-def test_op_writes_under_state_warp_and_refuses_bad_input(tmp_path):
+def test_op_writes_under_state_warp_and_refuses_bad_input(tmp_path: Path) -> None:
     out = sr._handler({"run_id": "r2", "stage": "kira", "verdict": "clean", "artifact": None}, repo_root=tmp_path)
     assert out == {"ok": True, "path": "state/warp/r2/receipts/kira.json"}
     assert not (tmp_path / "state" / "run-evidence").exists()

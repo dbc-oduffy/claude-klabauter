@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.ops import coordinator_complete_entry as cce
 from coordinator_core.workstream_complete import apply as ws_apply
+from pathlib import Path
 
 # _scaffold runs a real git init; needs a real process.
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -43,7 +44,7 @@ def _run(monkeypatch, tmp_path, entry, decisions):
     return ws_apply._execute_directives([directive], [], decisions)
 
 
-def test_decisions_fill_title_nature_prose(monkeypatch, tmp_path):
+def test_decisions_fill_title_nature_prose(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     entry = _scaffold(tmp_path)
     decisions = {
         "title": "Built the thing",
@@ -60,7 +61,7 @@ def test_decisions_fill_title_nature_prose(monkeypatch, tmp_path):
     assert _PROSE in text
 
 
-def test_missing_prose_is_refused_with_named_key(monkeypatch, tmp_path):
+def test_missing_prose_is_refused_with_named_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     entry = _scaffold(tmp_path)
     decisions = {"title": "Built the thing", "nature": "roadmap"}
     code, report = _run(monkeypatch, tmp_path, entry, decisions)
@@ -70,7 +71,7 @@ def test_missing_prose_is_refused_with_named_key(monkeypatch, tmp_path):
     assert "PLACEHOLDER" in entry.read_text(encoding="utf-8")  # untouched, not half-filled
 
 
-def test_authored_entry_is_left_alone(monkeypatch, tmp_path):
+def test_authored_entry_is_left_alone(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     entry = _scaffold(tmp_path)
     decisions = {"title": "T", "nature": "bugfix", "prose": _PROSE}
     _run(monkeypatch, tmp_path, entry, decisions)

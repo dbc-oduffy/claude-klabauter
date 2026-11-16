@@ -2,6 +2,7 @@
 
 from coordinator_core.ops.dispatch_emit import run_close
 from coordinator_core.ops.dispatch_emit.terminal_commit_closeout import _close_block
+from pathlib import Path
 
 
 def _ctx(tmp_path):
@@ -17,7 +18,7 @@ def _ctx(tmp_path):
     }
 
 
-def test_already_landed_refire_reads_not_applicable(tmp_path):
+def test_already_landed_refire_reads_not_applicable(tmp_path: Path) -> None:
     block = _close_block(_ctx(tmp_path), {"committed": False, "nothing_to_commit": True})
     for leg in ("review", "plan-reconciliation", "lessons", "post-close"):
         assert block["legs"][leg]["status"] == "not-applicable"
@@ -25,7 +26,7 @@ def test_already_landed_refire_reads_not_applicable(tmp_path):
     assert block["outstanding"] == []
 
 
-def test_refusal_still_fails(tmp_path):
+def test_refusal_still_fails(tmp_path: Path) -> None:
     reply = {"committed": False, "nothing_to_commit": True, "refused": "dirty"}
     block = _close_block(_ctx(tmp_path), reply)
     assert block["legs"]["review"]["status"] == "failed"
@@ -33,7 +34,7 @@ def test_refusal_still_fails(tmp_path):
     assert "review" in block["outstanding"]
 
 
-def test_no_commit_without_nothing_to_commit_still_fails(tmp_path):
+def test_no_commit_without_nothing_to_commit_still_fails(tmp_path: Path) -> None:
     block = _close_block(_ctx(tmp_path), {"committed": False})
     assert block["legs"]["review"]["status"] == "failed"
     assert block["legs"]["plan-reconciliation"]["status"] == "failed"

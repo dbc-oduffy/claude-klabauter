@@ -10,6 +10,7 @@ from __future__ import annotations
 import subprocess
 
 from coordinator_core.git import git_objects
+from pathlib import Path
 
 
 def _git(repo, *args) -> str:
@@ -24,7 +25,7 @@ def _repo(tmp_path):
     return repo
 
 
-def test_cas_ref_reflog_line_is_shown_by_git_reflog(tmp_path):
+def test_cas_ref_reflog_line_is_shown_by_git_reflog(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     old = _git(repo, "rev-parse", "HEAD")
     new = _git(repo, "-c", "user.name=t", "-c", "user.email=t@e", "commit-tree", f"{old}^{{tree}}", "-p", old, "-m", "x")
@@ -41,6 +42,6 @@ def test_cas_ref_reflog_line_is_shown_by_git_reflog(tmp_path):
     assert git_objects._DATED_IDENT_RE.search(last.split("\t", 1)[0]), last
 
 
-def test_an_already_dated_identity_is_kept_verbatim():
+def test_an_already_dated_identity_is_kept_verbatim() -> None:
     ident = "Engine <e@x> 1794007142 +0000"
     assert git_objects._reflog_identity(ident) == ident

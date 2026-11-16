@@ -34,6 +34,10 @@ import io
 import os
 import re
 import sys
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -47,7 +51,7 @@ def _source() -> str:
         return fh.read()
 
 
-def _load_sweep_boot():
+def _load_sweep_boot() -> ModuleType:
     spec = importlib.util.spec_from_file_location("sweep_boot_under_test", _SWEEP_BOOT_PATH)
     mod = importlib.util.module_from_spec(spec)
     assert spec.loader is not None
@@ -62,26 +66,26 @@ def _run_main_capturing(mod, argv):
     return rc, out.getvalue(), err.getvalue()
 
 
-def test_stdout_is_one_integer():
+def test_stdout_is_one_integer() -> None:
     mod = _load_sweep_boot()
     _rc, out, _err = _run_main_capturing(mod, [])
     assert out.strip() == "0", f"expected a bare integer, got {out!r}"
     assert re.fullmatch(r"\d+\s*", out), f"stdout must be one integer: {out!r}"
 
 
-def test_exit_is_always_zero():
+def test_exit_is_always_zero() -> None:
     mod = _load_sweep_boot()
     rc, _out, _err = _run_main_capturing(mod, [])
     assert rc == 0
 
 
-def test_no_warning_on_stderr():
+def test_no_warning_on_stderr() -> None:
     mod = _load_sweep_boot()
     _rc, _out, err = _run_main_capturing(mod, [])
     assert err.strip() == "", f"gravestone must be silent, got {err!r}"
 
 
-def test_the_killed_op_is_never_dispatched():
+def test_the_killed_op_is_never_dispatched() -> None:
     src = _source()
     dispatching = [
         ln for ln in src.splitlines()
@@ -90,7 +94,7 @@ def test_the_killed_op_is_never_dispatched():
     assert not dispatching, f"sweep-boot.py must not dispatch: {dispatching}"
 
 
-def test_killed_op_name_survives_only_as_prose():
+def test_killed_op_name_survives_only_as_prose() -> None:
     src = _source()
     live = [
         ln for ln in src.splitlines()
@@ -103,7 +107,7 @@ def test_killed_op_name_survives_only_as_prose():
     assert not live, f"{KILLED_OP} is still a live dispatch target: {live}"
 
 
-def test_writes_no_housekeeping_failure_record():
+def test_writes_no_housekeeping_failure_record() -> None:
     src = _source()
     calls = [
         ln for ln in src.splitlines()
@@ -114,13 +118,13 @@ def test_writes_no_housekeeping_failure_record():
     assert not calls, f"gravestone must record no failure: {calls}"
 
 
-def test_names_its_successors():
+def test_names_its_successors() -> None:
     src = _source()
     for successor in ("handoff.archive_transition", "fleet.archive_completed_handoffs"):
         assert successor in src, f"gravestone must name {successor}"
 
 
-def test_no_stage_commit_in_source():
+def test_no_stage_commit_in_source() -> None:
     src = _source()
     for forbidden in ("git add", "git commit", '"add"', '"commit"'):
         offenders = [
@@ -130,7 +134,7 @@ def test_no_stage_commit_in_source():
         assert not offenders, f"{forbidden!r} present: {offenders}"
 
 
-def test_help_still_exits_cleanly():
+def test_help_still_exits_cleanly() -> None:
     mod = _load_sweep_boot()
     rc, _out, _err = _run_main_capturing(mod, ["-h"])
     assert rc == 0

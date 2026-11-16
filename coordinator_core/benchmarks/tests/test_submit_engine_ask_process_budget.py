@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core.benchmarks import fixture_settings_home
 from coordinator_core.benchmarks import submit_engine_ask_process_budget as B
+from pathlib import Path
 
 
 @pytest.fixture(scope="module")
@@ -15,14 +16,14 @@ def report() -> dict:
     return B.measure(runs=1)
 
 
-def test_every_shape_reaches_the_emit_and_allows(report):
+def test_every_shape_reaches_the_emit_and_allows(report) -> None:
     assert set(report) == set(B.SHAPES)
     for shape, res in report.items():
         assert res["decision"] == "allow", (shape, res["reason"])
         assert res["reached_emit_or_launch"], shape
 
 
-def test_report_carries_process_ms_spawns_and_phase_split(report):
+def test_report_carries_process_ms_spawns_and_phase_split(report) -> None:
     sizing = report["sizing"]
     for key in ("cold_process_ms", "warm_process_ms", "spawns", "phases_ms", "other_ms"):
         assert key in sizing
@@ -31,7 +32,7 @@ def test_report_carries_process_ms_spawns_and_phase_split(report):
     assert "premint" in report["ask"]["phases_ms"]
 
 
-def test_cold_call_splits_into_legs_and_names_the_largest(report):
+def test_cold_call_splits_into_legs_and_names_the_largest(report) -> None:
     sizing = report["sizing"]
     for key in ("cold_phases_ms", "cold_imports_ms", "cold_largest_leg", "cold_spawns"):
         assert key in sizing
@@ -39,7 +40,7 @@ def test_cold_call_splits_into_legs_and_names_the_largest(report):
     assert sizing["cold_largest_leg"] not in B._UMBRELLA
 
 
-def test_asks_flag_reports_process_ms_spawns_and_counted_durable_writes():
+def test_asks_flag_reports_process_ms_spawns_and_counted_durable_writes() -> None:
     res = B.measure(runs=1, asks=3)["asks:3"]
     assert res["decision"] == "allow", res["reason"]
     for key in ("process_ms", "spawns", "durable_writes", "writes_by_primitive"):
@@ -52,7 +53,7 @@ def test_asks_flag_reports_process_ms_spawns_and_counted_durable_writes():
 RAW_ASK_SPAWN_CEILING = 0
 
 
-def test_raw_ask_premint_leg_is_premint_deferred_under_the_bar_and_the_spawn_ceiling(tmp_path):
+def test_raw_ask_premint_leg_is_premint_deferred_under_the_bar_and_the_spawn_ceiling(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     B.build_fixture(repo)
@@ -64,7 +65,7 @@ def test_raw_ask_premint_leg_is_premint_deferred_under_the_bar_and_the_spawn_cei
     assert res["spawns"] <= RAW_ASK_SPAWN_CEILING
 
 
-def test_a_phase_function_the_hook_lacks_is_skipped_not_fatal():
+def test_a_phase_function_the_hook_lacks_is_skipped_not_fatal() -> None:
     hook = types.SimpleNamespace(**{B.PHASES["emit"]: lambda: "emitted"})
     totals: dict = {}
     mp = pytest.MonkeyPatch()

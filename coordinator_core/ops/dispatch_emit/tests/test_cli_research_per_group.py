@@ -6,6 +6,7 @@ from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import cli as cli_module
 from coordinator_core.ops.dispatch_emit import research_groups as rg
+import pytest
 
 
 def _repo(tmp_path: Path, monkeypatch) -> Path:
@@ -33,7 +34,7 @@ def _stub_op(monkeypatch, tmp_path: Path, seen: list) -> None:
     monkeypatch.setattr(cli_module, "_dispatch_emit", _fake)
 
 
-def test_per_group_maps_params_and_prints_run_lines_in_priority_order(tmp_path, monkeypatch, capsys):
+def test_per_group_maps_params_and_prints_run_lines_in_priority_order(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _repo(tmp_path, monkeypatch)
     seen: list = []
     _stub_op(monkeypatch, tmp_path, seen)
@@ -46,7 +47,7 @@ def test_per_group_maps_params_and_prints_run_lines_in_priority_order(tmp_path, 
     assert json.loads(out)[rg.GROUPS_REPLY_KEY][0]["ref"] == "A"
 
 
-def test_group_implies_per_group_and_repeats(tmp_path, monkeypatch, capsys):
+def test_group_implies_per_group_and_repeats(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _repo(tmp_path, monkeypatch)
     seen: list = []
     _stub_op(monkeypatch, tmp_path, seen)
@@ -54,14 +55,14 @@ def test_group_implies_per_group_and_repeats(tmp_path, monkeypatch, capsys):
     assert seen[0][rg.PER_GROUP_PARAM] is True and seen[0][rg.GROUPS_PARAM] == ["B", "C"]
 
 
-def test_stdout_is_one_json_document(tmp_path, monkeypatch, capsys):
+def test_stdout_is_one_json_document(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _repo(tmp_path, monkeypatch)
     _stub_op(monkeypatch, tmp_path, [])
     assert cli_module.main(["--from-sizing", "s.yaml", "--per-group"]) == cli_module.EXIT_OK
     json.loads(capsys.readouterr().out)
 
 
-def test_per_group_without_from_sizing_is_refused(tmp_path, monkeypatch, capsys):
+def test_per_group_without_from_sizing_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _repo(tmp_path, monkeypatch)
     seen: list = []
     _stub_op(monkeypatch, tmp_path, seen)
@@ -71,7 +72,7 @@ def test_per_group_without_from_sizing_is_refused(tmp_path, monkeypatch, capsys)
     assert seen == []
 
 
-def test_per_group_with_out_is_refused(tmp_path, monkeypatch, capsys):
+def test_per_group_with_out_is_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _repo(tmp_path, monkeypatch)
     seen: list = []
     _stub_op(monkeypatch, tmp_path, seen)
@@ -81,7 +82,7 @@ def test_per_group_with_out_is_refused(tmp_path, monkeypatch, capsys):
     assert seen == []
 
 
-def test_without_flag_no_per_group_params(tmp_path, monkeypatch, capsys):
+def test_without_flag_no_per_group_params(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _repo(tmp_path, monkeypatch)
     seen: list = []
     _stub_op(monkeypatch, tmp_path, seen)

@@ -182,6 +182,11 @@ from typing import List, Optional, Tuple, Union
 from . import _command_tokenizer
 from ._verdict import record_silent
 from coordinator_core._settings_home import settings_home
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tree_sitter import Tree
+    from tree_sitter import Parser
 
 GENERATES = []
 
@@ -437,7 +442,7 @@ def probe_armed(
     return False, f"SILENT under {interpreter} -- cause: {cause} -- {reason}"
 
 
-def _parser():
+def _parser() -> Parser:
     global _parser_cache
     if _parser_cache is None:
         from tree_sitter import Language, Parser
@@ -448,7 +453,7 @@ def _parser():
     return _parser_cache
 
 
-def _parse_powershell(cmd_text: str):
+def _parse_powershell(cmd_text: str) -> Tree:
     parser = _parser()
     return parser.parse(cmd_text.encode("utf-8", errors="surrogateescape"))
 

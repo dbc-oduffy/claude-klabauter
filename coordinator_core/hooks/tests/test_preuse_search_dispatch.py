@@ -4,6 +4,7 @@ from __future__ import annotations
 import uuid
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -11,7 +12,7 @@ from coordinator_core.hooks import preuse_search_dispatch as m
 
 
 @pytest.fixture(autouse=True)
-def _isolated_settings_home(tmp_path_factory, monkeypatch):
+def _isolated_settings_home(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path_factory.mktemp("settings-home")))
 
 
@@ -20,7 +21,7 @@ def _ctx(envelope: dict) -> str:
 
 
 @pytest.fixture
-def indexed_repo(tmp_path):
+def indexed_repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     rag = tmp_path / ".project-rag"
     rag.mkdir()
@@ -29,7 +30,7 @@ def indexed_repo(tmp_path):
     return tmp_path
 
 
-def _payload(repo, tool="Grep", pattern="foo", session_id=None, agent_id=None, path=None):
+def _payload(repo, tool: str = "Grep", pattern: str = "foo", session_id=None, agent_id=None, path=None):
     tool_input = {"pattern": pattern}
     if path is not None:
         tool_input["path"] = path
@@ -44,7 +45,7 @@ def _payload(repo, tool="Grep", pattern="foo", session_id=None, agent_id=None, p
     return p
 
 
-def test_general_fires_once_per_agent(indexed_repo):
+def test_general_fires_once_per_agent(indexed_repo) -> None:
     sid = str(uuid.uuid4())
     first = _ctx(m._handler(_payload(indexed_repo, pattern="some text", session_id=sid)))
     assert "this repo has a code index" in first
@@ -53,7 +54,7 @@ def test_general_fires_once_per_agent(indexed_repo):
     assert "this repo has a code index" in sub
 
 
-def test_glob_gets_general_only(indexed_repo):
+def test_glob_gets_general_only(indexed_repo) -> None:
     out = _ctx(m._handler(_payload(indexed_repo, tool="Glob", pattern="_resolve_registry_key")))
     assert "this repo has a code index" in out
     assert "symbol_name" not in out
@@ -71,45 +72,45 @@ def test_glob_gets_general_only(indexed_repo):
         (r"^class\s+Foo", "definition: project_symbol"),
     ],
 )
-def test_shape_classifiers(indexed_repo, pattern, shape_text):
+def test_shape_classifiers(indexed_repo, pattern, shape_text) -> None:
     assert shape_text in _ctx(m._handler(_payload(indexed_repo, pattern=pattern)))
 
 
 @pytest.mark.parametrize("pattern", ["TODO", "import", "error", "foo.*bar", "a_b", "def"])
-def test_non_symbol_patterns_get_no_shape(indexed_repo, pattern):
+def test_non_symbol_patterns_get_no_shape(indexed_repo, pattern) -> None:
     assert "symbol_name" not in _ctx(m._handler(_payload(indexed_repo, pattern=pattern)))
 
 
-def test_shape_fires_once_per_agent(indexed_repo):
+def test_shape_fires_once_per_agent(indexed_repo) -> None:
     sid = str(uuid.uuid4())
     m._handler(_payload(indexed_repo, pattern="_alpha_beta", session_id=sid))
     assert _ctx(m._handler(_payload(indexed_repo, pattern="_gamma_delta", session_id=sid))) == ""
     assert "callers" in _ctx(m._handler(_payload(indexed_repo, pattern=r"gamma_delta\(", session_id=sid)))
 
 
-def test_search_path_resolves_index(indexed_repo, tmp_path_factory):
+def test_search_path_resolves_index(indexed_repo, tmp_path_factory: pytest.TempPathFactory) -> None:
     elsewhere = tmp_path_factory.mktemp("unindexed")
     out = _ctx(m._handler(_payload(elsewhere, pattern="x", path=str(indexed_repo / "pkg"))))
     assert "this repo has a code index" in out
 
 
-def test_unindexed_repo_is_silent(tmp_path):
+def test_unindexed_repo_is_silent(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / ".project-rag").mkdir()
     assert m._handler(_payload(tmp_path, pattern="_resolve_registry_key")) == m.no_advisory()
 
 
-def test_state_json_without_graph_db_is_silent(indexed_repo):
+def test_state_json_without_graph_db_is_silent(indexed_repo) -> None:
     (indexed_repo / ".project-rag" / "state.json").write_text("{}")
     (indexed_repo / ".project-rag" / "graph.db").unlink()
     assert m._handler(_payload(indexed_repo)) == m.no_advisory()
 
 
-def test_synthetic_session_id_is_silent(indexed_repo):
+def test_synthetic_session_id_is_silent(indexed_repo) -> None:
     assert m._handler(_payload(indexed_repo, session_id="probe")) == m.no_advisory()
 
 
-def test_other_tools_are_silent(indexed_repo):
+def test_other_tools_are_silent(indexed_repo) -> None:
     assert m._handler(_payload(indexed_repo, tool="Bash")) == m.no_advisory()
 
 
@@ -118,7 +119,7 @@ _GUARD_DENY = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permission
 
 
 @pytest.mark.parametrize("tool", ["Read", "Grep", "Glob"])
-def test_guard_deny_returned_before_advisories(indexed_repo, monkeypatch, tool):
+def test_guard_deny_returned_before_advisories(indexed_repo, monkeypatch: pytest.MonkeyPatch, tool) -> None:
     sid = str(uuid.uuid4())
     spent: list = []
     monkeypatch.setattr(m.guard_em_prefire_survey, "evaluate", lambda params: _GUARD_DENY)
@@ -133,7 +134,7 @@ def test_guard_deny_returned_before_advisories(indexed_repo, monkeypatch, tool):
             m._handler(_payload(indexed_repo, tool=tool, pattern="some text", session_id=sid)))
 
 
-def test_read_reaches_door_and_gets_no_rag_advice(indexed_repo, monkeypatch):
+def test_read_reaches_door_and_gets_no_rag_advice(indexed_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(m.guard_em_prefire_survey, "evaluate", lambda params: None)
     monkeypatch.setattr(m.nudge_em_turn_budget, "advisory_text", lambda params: _TURN)
     out = _ctx(m._handler(_payload(indexed_repo, tool="Read", pattern="_resolve_registry_key")))
@@ -142,7 +143,7 @@ def test_read_reaches_door_and_gets_no_rag_advice(indexed_repo, monkeypatch):
     assert m._handler(_payload(indexed_repo, tool="Read")) == m.no_advisory()
 
 
-def test_guard_exception_fails_open(indexed_repo, monkeypatch):
+def test_guard_exception_fails_open(indexed_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(params):
         raise RuntimeError("x")
 
@@ -153,14 +154,14 @@ def test_guard_exception_fails_open(indexed_repo, monkeypatch):
 _TURN = "[em-turn-budget] test signal"
 
 
-def test_turn_text_merges_with_example_retrieval_repo_parts(indexed_repo, monkeypatch):
+def test_turn_text_merges_with_example_retrieval_repo_parts(indexed_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(m.nudge_em_turn_budget, "advisory_text", lambda params: _TURN)
     out = _ctx(m._handler(_payload(indexed_repo, pattern="some text")))
     assert "this repo has a code index" in out
     assert out.endswith(_TURN)
 
 
-def test_turn_text_alone_when_example_retrieval_repo_already_fired(indexed_repo, monkeypatch):
+def test_turn_text_alone_when_example_retrieval_repo_already_fired(indexed_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     sid = str(uuid.uuid4())
     m._handler(_payload(indexed_repo, pattern="x", session_id=sid))
     monkeypatch.setattr(m.nudge_em_turn_budget, "advisory_text", lambda params: _TURN)
@@ -168,19 +169,19 @@ def test_turn_text_alone_when_example_retrieval_repo_already_fired(indexed_repo,
     assert _TURN in out and "this repo has a code index" not in out
 
 
-def test_turn_text_signals_in_repo_without_index(tmp_path, monkeypatch):
+def test_turn_text_signals_in_repo_without_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".git").mkdir()
     monkeypatch.setattr(m.nudge_em_turn_budget, "advisory_text", lambda params: _TURN)
     assert _TURN in _ctx(m._handler(_payload(tmp_path)))
 
 
-def test_turn_leg_not_reached_for_synthetic_session_or_other_tool(indexed_repo, monkeypatch):
+def test_turn_leg_not_reached_for_synthetic_session_or_other_tool(indexed_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(m.nudge_em_turn_budget, "advisory_text", lambda params: _TURN)
     assert m._handler(_payload(indexed_repo, session_id="probe")) == m.no_advisory()
     assert m._handler(_payload(indexed_repo, tool="Bash")) == m.no_advisory()
 
 
-def test_turn_leg_exception_keeps_example_retrieval_repo_advice(indexed_repo, monkeypatch):
+def test_turn_leg_exception_keeps_example_retrieval_repo_advice(indexed_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(params):
         raise RuntimeError("x")
 
@@ -188,7 +189,7 @@ def test_turn_leg_exception_keeps_example_retrieval_repo_advice(indexed_repo, mo
     assert "this repo has a code index" in _ctx(m._handler(_payload(indexed_repo)))
 
 
-def test_turn_leg_exception_without_index_is_no_advisory(tmp_path, monkeypatch):
+def test_turn_leg_exception_without_index_is_no_advisory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".git").mkdir()
 
     def boom(params):
@@ -198,12 +199,12 @@ def test_turn_leg_exception_without_index_is_no_advisory(tmp_path, monkeypatch):
     assert m._handler(_payload(tmp_path)) == m.no_advisory()
 
 
-def test_kill_switch(indexed_repo, monkeypatch):
+def test_kill_switch(indexed_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(m._KILL_SWITCH, "1")
     assert m._handler(_payload(indexed_repo)) == m.no_advisory()
 
 
-def test_advice_fits_message_register():
+def test_advice_fits_message_register() -> None:
     assert len(m._GENERAL_ADVICE) <= 280
     for shape in m.SHAPES:
         assert len(shape.advice.format(symbol="x" * 40, sidx=" Offline: .structural-index/symbols.ndjson.")) <= 280
@@ -219,16 +220,16 @@ def test_advice_fits_message_register():
         ("coordinator.dayBranch =", 'config key: project_symbol(symbol_name="coordinator.dayBranch")'),
     ],
 )
-def test_outline_and_config_key_shapes(indexed_repo, pattern, shape_text):
+def test_outline_and_config_key_shapes(indexed_repo, pattern, shape_text) -> None:
     assert shape_text in _ctx(m._handler(_payload(indexed_repo, pattern=pattern)))
 
 
 @pytest.mark.parametrize("pattern", ["TODO:", "Note:", "a:"])
-def test_prose_markers_are_not_config_keys(indexed_repo, pattern):
+def test_prose_markers_are_not_config_keys(indexed_repo, pattern) -> None:
     assert "config key" not in _ctx(m._handler(_payload(indexed_repo, pattern=pattern)))
 
 
-def _settings_index(monkeypatch, tmp_path_factory, repo_name):
+def _settings_index(monkeypatch, tmp_path_factory, repo_name) -> None:
     home = tmp_path_factory.mktemp("settings-index")
     root = home / "project-rag" / "indexes" / repo_name.replace("-", "_") / "root"
     root.mkdir(parents=True)
@@ -236,7 +237,7 @@ def _settings_index(monkeypatch, tmp_path_factory, repo_name):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
 
 
-def test_worker_gets_advisory_once_for_out_of_repo_index(tmp_path_factory, monkeypatch):
+def test_worker_gets_advisory_once_for_out_of_repo_index(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path_factory.mktemp("work") / "my-repo"
     (repo / ".git").mkdir(parents=True)
     (repo / "pkg").mkdir()
@@ -253,14 +254,14 @@ def test_worker_gets_advisory_once_for_out_of_repo_index(tmp_path_factory, monke
     )
 
 
-def test_out_of_repo_index_for_other_repo_is_silent(tmp_path_factory, monkeypatch):
+def test_out_of_repo_index_for_other_repo_is_silent(tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path_factory.mktemp("work") / "my-repo"
     (repo / ".git").mkdir(parents=True)
     _settings_index(monkeypatch, tmp_path_factory, "another-repo")
     assert m._handler(_payload(repo, pattern="some text", agent_id="w1")) == m.no_advisory()
 
 
-def test_structural_index_named_only_when_present(indexed_repo):
+def test_structural_index_named_only_when_present(indexed_repo) -> None:
     assert "symbols.ndjson" not in _ctx(m._handler(_payload(indexed_repo, pattern="def _alpha_beta")))
     sidx = indexed_repo / ".structural-index"
     sidx.mkdir()
@@ -268,12 +269,12 @@ def test_structural_index_named_only_when_present(indexed_repo):
     assert ".structural-index/symbols.ndjson" in _ctx(m._handler(_payload(indexed_repo, pattern="def _gamma_delta")))
 
 
-def test_slow_phase_names_the_leg_that_spent_the_time(indexed_repo, monkeypatch):
+def test_slow_phase_names_the_leg_that_spent_the_time(indexed_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     import time
 
     from coordinator_core.telemetry import op_row_fields
 
-    def _slow(_params):
+    def _slow(_params) -> str:
         time.sleep(0.08)
         return ""
 
@@ -285,7 +286,7 @@ def test_slow_phase_names_the_leg_that_spent_the_time(indexed_repo, monkeypatch)
     assert fields["spans"][0]["wall_ms"] >= 60
 
 
-def test_hook_deadline_stops_before_the_first_leg(indexed_repo, monkeypatch):
+def test_hook_deadline_stops_before_the_first_leg(indexed_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks import _preuse_phases
     from coordinator_core.telemetry import op_row_fields
 
@@ -299,7 +300,7 @@ def test_hook_deadline_stops_before_the_first_leg(indexed_repo, monkeypatch):
     assert not called
 
 
-def _count(repo, sid, suffix=""):
+def _count(repo, sid, suffix: str = "") -> int:
     from pathlib import Path
 
     from coordinator_core.hooks.support.git_common_dir import resolve_git_common_dir
@@ -310,7 +311,7 @@ def _count(repo, sid, suffix=""):
     return int(f.read_text()) if f.exists() else 0
 
 
-def test_grep_after_nudge_is_counted_never_denied(indexed_repo):
+def test_grep_after_nudge_is_counted_never_denied(indexed_repo) -> None:
     sid = str(uuid.uuid4())
     other = str(uuid.uuid4())
     assert _count(indexed_repo, sid) == 0
@@ -328,7 +329,7 @@ def test_grep_after_nudge_is_counted_never_denied(indexed_repo):
     assert _count(indexed_repo, sid) == 2
 
 
-def test_grep_count_write_failure_fails_open(indexed_repo, monkeypatch):
+def test_grep_count_write_failure_fails_open(indexed_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     sid = str(uuid.uuid4())
     m._handler(_payload(indexed_repo, pattern="a", session_id=sid))
     monkeypatch.setattr(m.Path, "write_text", lambda *a, **k: (_ for _ in ()).throw(OSError("x")))

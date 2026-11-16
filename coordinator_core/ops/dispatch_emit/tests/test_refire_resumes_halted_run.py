@@ -281,3 +281,40 @@ def test_the_submit_hook_resumes_the_named_run_for_a_moved_sizing(repo, monkeypa
     envelope, _ = hook._resume_route(repo, REL, payload, {"ask": True, "sizing_path": REL}, None, launch)
     assert envelope is not None and [c.run_id for c in launched] == [OLDER]
     assert "resume_run_id" in hook._ARGS_KEYS
+
+
+_KEPT_SIZING = "state/sizings/2026-10-16-foo.yaml"
+_KEPT_OLD, _KEPT_NEW = "ask-20261016T010000-aaaaaa", "ask-20261016T020000-bbbbbb"
+
+
+def _halt_kept(root, name, sizing_rel=_KEPT_SIZING):
+    from coordinator_core.ops.dispatch_emit import halted_run as hr
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    hr.write_halt_marker(root / RECORD_DIR_ROOT / name, halted="x", sizing_rel=sizing_rel)
+
+
+def test_refire_names_the_newest_of_two_halted_runs_with_no_kept_rows(tmp_path):
+    from coordinator_core.ops.dispatch_emit import sizing_fire
+
+    _halt_kept(tmp_path, _KEPT_OLD)
+    _halt_kept(tmp_path, _KEPT_NEW)
+    assert sizing_fire._kept_rows(tmp_path, _KEPT_SIZING, ["C1"]) == ((), _KEPT_NEW)
+
+
+def test_a_resumed_newest_run_leaves_the_older_halted_one_named(tmp_path):
+    from coordinator_core.ops.dispatch_emit import halted_run as hr
+    from coordinator_core.ops.dispatch_emit import sizing_fire
+    from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+
+    _halt_kept(tmp_path, _KEPT_OLD)
+    _halt_kept(tmp_path, _KEPT_NEW)
+    hr.mark_resumed(tmp_path / RECORD_DIR_ROOT / _KEPT_NEW)
+    assert sizing_fire._kept_rows(tmp_path, _KEPT_SIZING, ["C1"]) == ((), _KEPT_OLD)
+
+
+def test_no_halted_run_names_none(tmp_path):
+    from coordinator_core.ops.dispatch_emit import sizing_fire
+
+    _halt_kept(tmp_path, _KEPT_NEW, sizing_rel="state/sizings/2026-10-16-other.yaml")
+    assert sizing_fire._kept_rows(tmp_path, _KEPT_SIZING, ["C1"]) == ((), None)

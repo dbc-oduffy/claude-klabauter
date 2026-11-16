@@ -7,6 +7,7 @@ import yaml
 
 from coordinator_core.ops.dispatch_emit import ask_gate
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_BATON_FILE, read_run_baton, record_dir
+from pathlib import Path
 
 REL = "state/sizings/2026-10-01-gate.yaml"
 RUN = "warp-fixture-run"
@@ -19,12 +20,12 @@ class _FakeDocNew:
         pass
 
     @staticmethod
-    def mint_baton_from_sizing(sizing_rel, repo_root, baton=None):
+    def mint_baton_from_sizing(sizing_rel, repo_root, baton=None) -> dict[str, str]:
         return {"id": "baton-fixture", "path": BATON}
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
@@ -34,7 +35,7 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _put(repo, tshirt, route, accepted):
+def _put(repo, tshirt, route, accepted) -> None:
     doc = {
         "schema": "sizing-object",
         "name": "gate fixture",
@@ -53,35 +54,35 @@ def _put(repo, tshirt, route, accepted):
     (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
 
 
-def test_m_plus_verdict_with_run_id_records_the_baton(repo):
+def test_m_plus_verdict_with_run_id_records_the_baton(repo) -> None:
     _put(repo, "M", "plan", ACCEPTED)
     out = ask_gate._handler({"sizing_path": REL, "run_id": RUN}, repo_root=repo)
     assert out["arm"] == "m_plus" and out["baton"]["path"] == BATON
     assert read_run_baton(repo, RUN) == BATON
 
 
-def test_m_plus_verdict_without_run_id_records_nothing(repo):
+def test_m_plus_verdict_without_run_id_records_nothing(repo) -> None:
     _put(repo, "M", "plan", ACCEPTED)
     out = ask_gate._handler({"sizing_path": REL}, repo_root=repo)
     assert out["arm"] == "m_plus"
     assert not (repo / "state" / "warp").exists() or not list(repo.rglob(RUN_BATON_FILE))
 
 
-def test_s_verdict_with_run_id_records_no_baton(repo):
+def test_s_verdict_with_run_id_records_no_baton(repo) -> None:
     _put(repo, "S", "spec-dispatch", None)
     out = ask_gate._handler({"sizing_path": REL, "run_id": RUN}, repo_root=repo)
     assert out.get("baton") is None
     assert not (record_dir(repo, RUN) / RUN_BATON_FILE).exists()
 
 
-def test_halted_verdict_with_run_id_records_no_baton(repo):
+def test_halted_verdict_with_run_id_records_no_baton(repo) -> None:
     _put(repo, "XL", "pm-decision", {"pm_quote": "y"})
     out = ask_gate._handler({"sizing_path": REL, "run_id": RUN}, repo_root=repo)
     assert out["halt"]["kind"]
     assert not (record_dir(repo, RUN) / RUN_BATON_FILE).exists()
 
 
-def test_xs_verdict_with_baton_records_the_given_baton(repo):
+def test_xs_verdict_with_baton_records_the_given_baton(repo) -> None:
     _put(repo, "XS", "dispatch", ACCEPTED)
     doc = yaml.safe_load((repo / REL).read_text(encoding="utf-8"))
     doc["baton"] = BATON
@@ -91,14 +92,14 @@ def test_xs_verdict_with_baton_records_the_given_baton(repo):
     assert read_run_baton(repo, RUN) == BATON
 
 
-def test_xs_verdict_without_baton_records_nothing(repo):
+def test_xs_verdict_without_baton_records_nothing(repo) -> None:
     _put(repo, "XS", "dispatch", ACCEPTED)
     out = ask_gate._handler({"sizing_path": REL, "run_id": RUN, "writes": ["a.py"]}, repo_root=repo)
     assert out["arm"] == "xs"
     assert not (record_dir(repo, RUN) / RUN_BATON_FILE).exists()
 
 
-def test_xs_foreign_baton_is_dropped_and_records_nothing(repo):
+def test_xs_foreign_baton_is_dropped_and_records_nothing(repo) -> None:
     _put(repo, "XS", "dispatch", ACCEPTED)
     out = ask_gate._handler({"sizing_path": REL, "run_id": RUN, "baton": BATON, "writes": ["a.py"]}, repo_root=repo)
     # A foreign baton is dropped, not refused: the XS verdict arms and no baton is recorded.
@@ -106,7 +107,7 @@ def test_xs_foreign_baton_is_dropped_and_records_nothing(repo):
     assert not (record_dir(repo, RUN) / RUN_BATON_FILE).exists()
 
 
-def test_refused_write_leaves_the_verdict_standing(repo, monkeypatch):
+def test_refused_write_leaves_the_verdict_standing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise OSError("disk")
 

@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core import git_ancestry
 from coordinator_core.git_ancestry import ancestors_of, resolve_commit_prefixes
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -38,13 +39,13 @@ def _commit(repo, name):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     _git(tmp_path, "init", "-q", "-b", "main")
     return tmp_path
 
 
 @pytest.fixture
-def spawns(monkeypatch):
+def spawns(monkeypatch: pytest.MonkeyPatch):
     calls = []
     real = git_ancestry.run_git
 
@@ -56,7 +57,7 @@ def spawns(monkeypatch):
     return calls
 
 
-def test_ancestors_of_graph_shapes_one_spawn(repo, spawns):
+def test_ancestors_of_graph_shapes_one_spawn(repo, spawns) -> None:
     base = _commit(repo, "base")
     _git(repo, "checkout", "-q", "-b", "side")
     side = _commit(repo, "side")
@@ -80,18 +81,18 @@ def test_ancestors_of_graph_shapes_one_spawn(repo, spawns):
     assert len(spawns) == 1
 
 
-def test_ancestors_of_bad_ref_is_unreadable_not_negative(repo):
+def test_ancestors_of_bad_ref_is_unreadable_not_negative(repo) -> None:
     base = _commit(repo, "base")
     assert ancestors_of([base], "nosuchref", str(repo)) == (False, None)
 
 
-def test_empty_inputs_spawn_nothing(repo, spawns):
+def test_empty_inputs_spawn_nothing(repo, spawns) -> None:
     assert ancestors_of([], "HEAD", str(repo)) == (True, frozenset())
     assert resolve_commit_prefixes([], str(repo)) == ({}, None)
     assert spawns == []
 
 
-def test_resolve_unique_prefixes_one_spawn(repo, spawns):
+def test_resolve_unique_prefixes_one_spawn(repo, spawns) -> None:
     a = _commit(repo, "a")
     b = _commit(repo, "b")
     got, refusal = resolve_commit_prefixes([a[:10], b[:12]], str(repo))
@@ -100,14 +101,14 @@ def test_resolve_unique_prefixes_one_spawn(repo, spawns):
     assert len(spawns) == 1
 
 
-def test_resolve_unknown_prefix_refuses(repo):
+def test_resolve_unknown_prefix_refuses(repo) -> None:
     _commit(repo, "a")
     got, refusal = resolve_commit_prefixes(["deadbeefdead"], str(repo))
     assert got == {}
     assert "deadbeefdead" in refusal and "no commit" in refusal
 
 
-def test_resolve_prefix_shadowed_by_branch_refuses_ambiguous(repo):
+def test_resolve_prefix_shadowed_by_branch_refuses_ambiguous(repo) -> None:
     a = _commit(repo, "a")
     other = _commit(repo, "b")
     prefix = "beef"
@@ -118,7 +119,7 @@ def test_resolve_prefix_shadowed_by_branch_refuses_ambiguous(repo):
     assert prefix in refusal and "ambiguous" in refusal
 
 
-def test_resolve_ambiguous_prefix_refuses(repo):
+def test_resolve_ambiguous_prefix_refuses(repo) -> None:
     stream = []
     for i in range(1000):
         msg = f"c{i}"

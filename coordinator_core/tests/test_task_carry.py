@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from coordinator_core import task_carry
+import pytest
 
 
 def _write(store: Path, sid: str, n: int, **fields) -> None:
@@ -17,7 +18,7 @@ def _write(store: Path, sid: str, n: int, **fields) -> None:
     (d / f"{n}.json").write_text(json.dumps(rec), encoding="utf-8")
 
 
-def test_completed_excluded_numeric_order_and_edges_filtered(tmp_path):
+def test_completed_excluded_numeric_order_and_edges_filtered(tmp_path: Path) -> None:
     _write(tmp_path, "S", 10, blockedBy=["2", "3"])
     _write(tmp_path, "S", 2, status="in_progress")
     _write(tmp_path, "S", 3, status="completed")
@@ -28,7 +29,7 @@ def test_completed_excluded_numeric_order_and_edges_filtered(tmp_path):
     assert set(tasks[0]) == {"id", "subject", "description", "status", "blockedBy"}
 
 
-def test_empty_or_missing_dir(tmp_path):
+def test_empty_or_missing_dir(tmp_path: Path) -> None:
     assert task_carry.read_open_tasks("nope", tmp_path) == []
     (tmp_path / "E").mkdir()
     assert task_carry.read_open_tasks("E", tmp_path) == []
@@ -37,13 +38,13 @@ def test_empty_or_missing_dir(tmp_path):
     assert task_carry.render_tasks_section([]) == ""
 
 
-def test_default_store_root_uses_config_dir(tmp_path, monkeypatch):
+def test_default_store_root_uses_config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     _write(tmp_path / "tasks", "S", 1)
     assert [t["id"] for t in task_carry.read_open_tasks("S")] == ["1"]
 
 
-def test_render_parse_round_trip(tmp_path):
+def test_render_parse_round_trip(tmp_path: Path) -> None:
     _write(tmp_path, "S", 1, description="line: with colon\nand 'quotes' # hash")
     _write(tmp_path, "S", 2, status="in_progress", blockedBy=["1"])
     tasks = task_carry.read_open_tasks("S", tmp_path)
@@ -53,7 +54,7 @@ def test_render_parse_round_trip(tmp_path):
     assert task_carry.parse_tasks_block(text) == tasks
 
 
-def test_parse_absent_or_malformed_returns_empty():
+def test_parse_absent_or_malformed_returns_empty() -> None:
     assert task_carry.parse_tasks_block("") == []
     assert task_carry.parse_tasks_block("no block here") == []
     assert task_carry.parse_tasks_block("```yaml tasks\n: : [\n```\n") == []
@@ -61,7 +62,7 @@ def test_parse_absent_or_malformed_returns_empty():
     assert task_carry.parse_tasks_block("```yaml\n- id: '1'\n```\n") == []
 
 
-def test_recreate_directives_order_and_shape():
+def test_recreate_directives_order_and_shape() -> None:
     tasks = [
         {"id": "1", "subject": "a", "description": "da", "status": "pending", "blockedBy": []},
         {"id": "2", "subject": "b", "description": "db", "status": "in_progress", "blockedBy": ["1"]},

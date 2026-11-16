@@ -8,6 +8,7 @@ import tempfile
 import pytest
 
 from coordinator_core.bash_guards import dispatch, guard_uncapped_pytest_plugin as guard
+from pathlib import Path
 
 NAME = "guard-uncapped-pytest-plugin"
 
@@ -23,7 +24,7 @@ def _reason(cmd: str) -> str:
 
 
 @pytest.fixture(autouse=True)
-def _isolated_tmp(tmp_path, monkeypatch):
+def _isolated_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
 
 
@@ -39,12 +40,12 @@ def _isolated_tmp(tmp_path, monkeypatch):
         "python -X dev -W ignore -m pytest -p adhoc tests/",
     ],
 )
-def test_adhoc_plugin_run_is_denied_by_the_guard(cmd):
+def test_adhoc_plugin_run_is_denied_by_the_guard(cmd) -> None:
     rec = guard.check(_payload(cmd))
     assert rec is not None and rec.guard_name == NAME
 
 
-def test_adhoc_plugin_run_is_denied_box_degrading_through_the_dispatcher():
+def test_adhoc_plugin_run_is_denied_box_degrading_through_the_dispatcher() -> None:
     reason = _reason("python -m pytest -p myplugin tests/")
     assert f"`{NAME}`" in reason
     assert "scoped_pytest" in reason
@@ -65,16 +66,16 @@ def test_adhoc_plugin_run_is_denied_box_degrading_through_the_dispatcher():
         "",
     ],
 )
-def test_capped_or_unrelated_command_is_admitted(cmd):
+def test_capped_or_unrelated_command_is_admitted(cmd) -> None:
     assert guard.check(_payload(cmd)) is None
 
 
-def test_scoped_launcher_is_not_denied_by_this_guard_through_the_dispatcher():
+def test_scoped_launcher_is_not_denied_by_this_guard_through_the_dispatcher() -> None:
     cmd = "python -m coordinator_core.testing.scoped_pytest --allow tests -- -p myplugin tests/"
     assert f"`{NAME}`" not in _reason(cmd)
 
 
-def test_non_command_tool_is_ignored():
+def test_non_command_tool_is_ignored() -> None:
     p = _payload("pytest -p myplugin")
     p["tool_name"] = "Read"
     assert guard.check(p) is None

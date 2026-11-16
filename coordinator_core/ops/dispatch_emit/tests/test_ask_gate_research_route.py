@@ -8,6 +8,7 @@ import yaml
 from coordinator_core.ops._research_sizing import drop_research_block
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
 from coordinator_core.warp_fire import fire_command
+from pathlib import Path
 
 REL = "state/sizings/2026-10-16-research-gate.yaml"
 RESEARCH = {"value_class": "scouts", "appetite": "small", "sources": ["web"], "questions": ["why?"]}
@@ -15,7 +16,7 @@ ROUTE = {"XS": "dispatch", "S": "spec-dispatch", "M": "plan", "L": "spec-dispatc
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
@@ -24,7 +25,7 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _put(repo, tshirt, research=None, intent="answer a question"):
+def _put(repo, tshirt, research=None, intent: str = "answer a question") -> None:
     doc = {
         "schema": "sizing-object",
         "name": "research fixture",
@@ -46,7 +47,7 @@ def _put(repo, tshirt, research=None, intent="answer a question"):
 
 
 @pytest.mark.parametrize("tshirt", ["XS", "S", "M", "L", "XL"])
-def test_research_sizing_hands_back_at_every_tshirt(repo, tshirt):
+def test_research_sizing_hands_back_at_every_tshirt(repo, tshirt) -> None:
     _put(repo, tshirt, RESEARCH)
     v = gate(repo, REL)
     assert v.arm is None and v.baton is None
@@ -58,7 +59,7 @@ def test_research_sizing_hands_back_at_every_tshirt(repo, tshirt):
 
 
 @pytest.mark.parametrize("tshirt", ["XS", "M"])
-def test_research_plus_writes_splits_instead_of_refusing(repo, tshirt):
+def test_research_plus_writes_splits_instead_of_refusing(repo, tshirt) -> None:
     _put(repo, tshirt, RESEARCH)
     v = gate(repo, REL, writes=["a.py"])
     assert v.arm is None and v.halt["kind"] == "research"
@@ -69,7 +70,7 @@ def test_research_plus_writes_splits_instead_of_refusing(repo, tshirt):
 
 
 @pytest.mark.parametrize("tshirt", ["XS", "S"])
-def test_dropped_research_block_arms_with_writes(repo, tshirt):
+def test_dropped_research_block_arms_with_writes(repo, tshirt) -> None:
     _put(repo, tshirt, RESEARCH)
     assert drop_research_block(repo, REL) is not None
     v = gate(repo, REL, writes=["a.py"])
@@ -77,36 +78,36 @@ def test_dropped_research_block_arms_with_writes(repo, tshirt):
     assert v.arm is not None
 
 
-def test_pure_research_with_empty_writes_is_not_mixed(repo):
+def test_pure_research_with_empty_writes_is_not_mixed(repo) -> None:
     _put(repo, "S", RESEARCH)
     assert gate(repo, REL, writes=[]).halt["kind"] == "research"
 
 
-def test_pure_research_halt_carries_fire_and_no_split_the_chain_guard_keys_on(repo):
+def test_pure_research_halt_carries_fire_and_no_split_the_chain_guard_keys_on(repo) -> None:
     _put(repo, "S", RESEARCH)
     halt = gate(repo, REL).halt
     assert halt["fire"] and "split" not in halt
 
 
-def test_a_split_halt_carries_a_split_so_the_pure_research_leg_skips_it(repo):
+def test_a_split_halt_carries_a_split_so_the_pure_research_leg_skips_it(repo) -> None:
     _put(repo, "S", RESEARCH)
     assert "split" in gate(repo, REL, writes=["a.py"]).halt
 
 
-def test_sibling_synthesis_with_one_write_halts_on_research(repo):
+def test_sibling_synthesis_with_one_write_halts_on_research(repo) -> None:
     _put(repo, "S", RESEARCH, intent="A research synthesis over the 10 reports its sibling asks produced")
     v = gate(repo, REL, writes=["docs/seam-pass.md"])
     assert v.arm is None and v.halt["route"] == "research"
 
 
-def test_bounded_census_with_one_write_reaches_the_execute_arm(repo):
+def test_bounded_census_with_one_write_reaches_the_execute_arm(repo) -> None:
     _put(repo, "S", RESEARCH, intent="Classify the 10 reports in the folder")
     v = gate(repo, REL, writes=["docs/census.md"])
     assert v.halt is None and v.arm is not None
 
 
 @pytest.mark.parametrize("research", [None, {}])
-def test_non_research_sizing_keeps_its_arm(repo, research):
+def test_non_research_sizing_keeps_its_arm(repo, research) -> None:
     _put(repo, "S", research)
     v = gate(repo, REL, writes=["a.py"])
     assert v.arm == "s" and v.halt is None

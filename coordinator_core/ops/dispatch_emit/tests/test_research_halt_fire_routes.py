@@ -9,11 +9,13 @@ import yaml
 
 from coordinator_core.hooks import submit_engine_ask as mod
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
+from pathlib import Path
+import pytest
 
 REL = "state/sizings/2026-10-16-research-fire.yaml"
 
 
-def _put(root):
+def _put(root) -> None:
     doc = {
         "schema": "sizing-object",
         "name": "research fixture",
@@ -33,7 +35,7 @@ def _put(root):
     (root / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
 
 
-def test_research_halt_fire_emits_from_sizing(tmp_path, monkeypatch):
+def test_research_halt_fire_emits_from_sizing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for name in ("CLAUDE_CODE_REMOTE", "CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_CONTAINER_ID"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")

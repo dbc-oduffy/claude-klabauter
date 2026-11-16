@@ -31,7 +31,7 @@ from coordinator_core.win_portability import no_console_creationflags
 
 pytestmark = pytest.mark.complete
 
-_ENTRYPOINT = "hooks.submit_engine_ask"
+_ENTRYPOINT = "hooks.posttool_dispatch"
 _MODE_ENV = "COORDINATOR_DOOR_STDIN_MODE"
 _DOOR_DIR = Path(__file__).resolve().parents[1]
 

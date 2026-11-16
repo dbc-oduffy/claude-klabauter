@@ -16,17 +16,18 @@ from coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_commits_delivered
     _write,
     repo,  # noqa: F401  (fixture)
 )
+from pathlib import Path
 
 RUN = "run-1"
 KEYS = {"session_id", "started_at", "stage", "last_activity_at"}
 
 
 @pytest.fixture(autouse=True)
-def _session(monkeypatch):
+def _session(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "sess-1")
 
 
-def test_start_then_staged_then_halted(tmp_path):
+def test_start_then_staged_then_halted(tmp_path: Path) -> None:
     requirements_ledger.start(tmp_path, RUN)
     minted = c.read_run_stage(tmp_path, RUN)
     assert set(minted) == KEYS
@@ -44,7 +45,7 @@ def test_start_then_staged_then_halted(tmp_path):
     assert halted["session_id"] == "sess-1"
 
 
-def test_plan_phase_stamp_keeps_minted_and_is_idempotent_and_minted_only(tmp_path):
+def test_plan_phase_stamp_keeps_minted_and_is_idempotent_and_minted_only(tmp_path: Path) -> None:
     requirements_ledger.start(tmp_path, RUN)
     assert c.stamp_plan_phase(tmp_path, RUN) is True
     rec = c.read_run_stage(tmp_path, RUN)
@@ -57,7 +58,7 @@ def test_plan_phase_stamp_keeps_minted_and_is_idempotent_and_minted_only(tmp_pat
     assert c.stamp_plan_phase_at(c.record_dir(tmp_path, RUN)) is False
 
 
-def test_ask_stage_entry_stamps_the_plan_phase_on_a_minted_run(tmp_path):
+def test_ask_stage_entry_stamps_the_plan_phase_on_a_minted_run(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import ask_stage
 
     (tmp_path / ".git").mkdir()
@@ -68,12 +69,12 @@ def test_ask_stage_entry_stamps_the_plan_phase_on_a_minted_run(tmp_path):
     assert rec["stage"] == "minted" and rec["plan_started_at"] == rec["last_activity_at"]
 
 
-def test_plan_phase_stamp_refuses_absent_record_and_unsafe_id(tmp_path):
+def test_plan_phase_stamp_refuses_absent_record_and_unsafe_id(tmp_path: Path) -> None:
     assert c.stamp_plan_phase(tmp_path, RUN) is False
     assert c.stamp_plan_phase(tmp_path, "../evil") is False
 
 
-def test_a_remint_clears_the_plan_phase_stamp(tmp_path):
+def test_a_remint_clears_the_plan_phase_stamp(tmp_path: Path) -> None:
     requirements_ledger.start(tmp_path, RUN)
     c.stamp_plan_phase(tmp_path, RUN)
     requirements_ledger.start(tmp_path, RUN)
@@ -82,7 +83,7 @@ def test_a_remint_clears_the_plan_phase_stamp(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_reach_refused_terminal_commit_restores_the_prior_stage(repo):  # noqa: F811
+def test_reach_refused_terminal_commit_restores_the_prior_stage(repo) -> None:  # noqa: F811
     from coordinator_core.ops.dispatch_emit import reach_claims, terminal_commit
 
     _write(repo, "lib_apart.py", "def apart_fn():\n    return 2\n")
@@ -104,7 +105,7 @@ def test_reach_refused_terminal_commit_restores_the_prior_stage(repo):  # noqa: 
     assert c.read_run_stage(repo, LAND_RUN)["stage"] == "staged"
 
 
-def test_halted_then_landed(tmp_path):
+def test_halted_then_landed(tmp_path: Path) -> None:
     requirements_ledger.start(tmp_path, RUN)
     rec = c.record_dir(tmp_path, RUN)
     halted_run.write_halt_marker(rec, halted="x", sizing_rel=None)
@@ -112,7 +113,7 @@ def test_halted_then_landed(tmp_path):
     assert c.read_run_stage(tmp_path, RUN)["stage"] == "landed"
 
 
-def test_second_start_keeps_identity_and_run_json_keys(tmp_path, monkeypatch):
+def test_second_start_keeps_identity_and_run_json_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     requirements_ledger.start(tmp_path, RUN)
     first = c.read_run_stage(tmp_path, RUN)
     run_keys = set(json.loads((requirements_ledger.run_dir(tmp_path, RUN) / "run.json").read_text("utf-8")))
@@ -124,20 +125,20 @@ def test_second_start_keeps_identity_and_run_json_keys(tmp_path, monkeypatch):
     assert set(json.loads((requirements_ledger.run_dir(tmp_path, RUN) / "run.json").read_text("utf-8"))) == run_keys
 
 
-def test_unresolvable_session_is_null(tmp_path, monkeypatch):
+def test_unresolvable_session_is_null(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda cwd=None: "")
     c.write_run_stage(tmp_path, RUN, "minted")
     assert c.read_run_stage(tmp_path, RUN)["session_id"] is None
 
 
-def test_first_stamp_of_a_later_stage_still_sets_identity(tmp_path):
+def test_first_stamp_of_a_later_stage_still_sets_identity(tmp_path: Path) -> None:
     c.write_run_stage(tmp_path, RUN, "staged", steps_planned=2)
     staged = c.read_run_stage(tmp_path, RUN)
     assert set(staged) == KEYS | {"steps_planned", "staged_at"}
     assert staged["session_id"] == "sess-1"
 
 
-def test_bad_stage_and_unsafe_run_id_refused(tmp_path):
+def test_bad_stage_and_unsafe_run_id_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         c.write_run_stage(tmp_path, RUN, "done")
     with pytest.raises(ValueError):

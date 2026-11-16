@@ -45,6 +45,7 @@ from coordinator_core.bash_guards._command_tokenizer import (
     tokenize_full_command,
 )
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -123,7 +124,7 @@ class TestOverCeilingFailsClosed:
         )
         assert resolved[0].confidence is ResolutionConfidence.UNRESOLVED
 
-    def test_guard_still_denies_an_over_ceiling_bare_commit(self, monkeypatch) -> None:
+    def test_guard_still_denies_an_over_ceiling_bare_commit(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """End-to-end: the fail-closed claim is checked THROUGH a guard's
         public verdict, not asserted about the tokenizer in isolation.
 
@@ -153,7 +154,7 @@ class TestOverCeilingFailsClosed:
             "over-ceiling commit became MORE permissive"
         )
 
-    def test_the_same_command_under_the_ceiling_also_denies(self, monkeypatch) -> None:
+    def test_the_same_command_under_the_ceiling_also_denies(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Control for the test above: proves the seam is actually wired and
         the deny is not an artifact of a payload the guard ignores."""
         from coordinator_core.bash_guards import block_subagent_commit as guard
@@ -274,7 +275,7 @@ class TestEveryDirectShlexSiteInheritsTheCeiling:
     is not.
     """
 
-    def test_seg_forcing_form_scan_text_inherits_the_ceiling(self):
+    def test_seg_forcing_form_scan_text_inherits_the_ceiling(self) -> None:
         """The push-force narrowing site takes its OWN fail-closed branch
         past the ceiling, not a 600ms shlex walk.
 
@@ -747,7 +748,7 @@ class TestDialectAwareTokenizer:
         assert tokens is None
         assert was_silent("test-guard", silences)
 
-    def test_import_error_falls_back_to_silent(self, monkeypatch) -> None:
+    def test_import_error_falls_back_to_silent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """C8's mandated fallback, exercised ahead of C8 landing the
         dependency declaration: an unimportable grammar package must
         degrade to SILENT, never crash and never return a clean verdict."""
@@ -769,7 +770,7 @@ class TestDialectAwareTokenizer:
         assert was_silent("test-guard", silences)
 
     def test_import_error_writes_durable_dialect_parser_unavailable_log(
-        self, monkeypatch, tmp_path
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """The residual fix: an ImportError (the grammar package absent --
         an INSTALL property, disabling PowerShell classification for EVERY
@@ -802,7 +803,7 @@ class TestDialectAwareTokenizer:
         assert "/coordinator:install" in content
 
     def test_has_error_path_does_not_write_the_durable_log(
-        self, monkeypatch, tmp_path
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """The genuine per-command grammar-gap SILENT route
         (`root_node.has_error`) is dynamic, per-command residue, NOT an
@@ -826,7 +827,7 @@ class TestDialectAwareTokenizer:
         assert not log_path.exists()
 
     def test_durable_log_write_never_raises_when_log_dir_unwritable(
-        self, monkeypatch, tmp_path
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         """Mirrors `_log_fail_open`'s own never-raise contract: a broken
         observability path must never become the reason a guard fails to

@@ -7,6 +7,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.ceremony import commit_v2
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -21,7 +22,7 @@ def _git(repo, *args):
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/p")
@@ -37,7 +38,7 @@ def repo(tmp_path):
     return r
 
 
-def test_a_force_ignored_share_path_is_refused_and_head_holds(repo):
+def test_a_force_ignored_share_path_is_refused_and_head_holds(repo) -> None:
     head = _git(repo, "rev-parse", "HEAD")
     out = commit_v2._handler(
         {"paths": [_SHARE], "force_ignored": [_SHARE], "message": "m"}, repo_root=repo / ".git"

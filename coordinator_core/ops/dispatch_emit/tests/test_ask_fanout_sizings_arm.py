@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 import yaml
@@ -20,12 +21,12 @@ PLAN_B = "docs/plans/2026-10-16-b.md"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     return tmp_path
 
 
-def _plan(repo, rel):
+def _plan(repo, rel) -> None:
     path = repo / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -36,7 +37,7 @@ def _plan(repo, rel):
     )
 
 
-def _sizing(repo, name, plan=PLAN_A, marker=None, mode="pm"):
+def _sizing(repo, name, plan=PLAN_A, marker=None, mode: str | None = "pm") -> str:
     rec = intake_record(name=name, turn={"text": "do the thing", "turn": 1}, today="2026-10-16")
     if mode:
         rec["interaction_mode"] = mode
@@ -55,7 +56,7 @@ def _snapshot(repo):
     return {p.relative_to(repo).as_posix(): p.read_bytes() for p in repo.rglob("*") if p.is_file()}
 
 
-def test_disjoint_planned_sizings_go_ready_together(repo):
+def test_disjoint_planned_sizings_go_ready_together(repo) -> None:
     a, b = _sizing(repo, "a", PLAN_A), _sizing(repo, "b", PLAN_B)
     out = mod.fanout({"sizings": [
         {"sizing": a, "label": "a", "writes": ["pkg/a.py"]},
@@ -68,7 +69,7 @@ def test_disjoint_planned_sizings_go_ready_together(repo):
     assert len(out["fire"]) == 2 and all(rel in call for call, rel in zip(out["fire"], (a, b)))
 
 
-def test_overlapping_writes_chain_with_after(repo):
+def test_overlapping_writes_chain_with_after(repo) -> None:
     a, b = _sizing(repo, "a", PLAN_A), _sizing(repo, "b", PLAN_B)
     out = mod.fanout({"sizings": [
         {"sizing": a, "writes": ["pkg"]},
@@ -79,7 +80,7 @@ def test_overlapping_writes_chain_with_after(repo):
     assert [r["sizing"] for r in out["ready"]] == [a]
 
 
-def test_two_wave_fanout_orders_wave_one_after_wave_zero(repo):
+def test_two_wave_fanout_orders_wave_one_after_wave_zero(repo) -> None:
     a, b = _sizing(repo, "a", PLAN_A), _sizing(repo, "b", PLAN_B)
     out = mod.fanout({"sizings": [
         {"sizing": a, "writes": ["pkg/a.py"], "wave": 0},
@@ -91,7 +92,7 @@ def test_two_wave_fanout_orders_wave_one_after_wave_zero(repo):
 
 
 @pytest.mark.parametrize("bad", [True, "1", 1.5, -1])
-def test_bad_wave_refuses_by_name_and_writes_nothing(repo, bad):
+def test_bad_wave_refuses_by_name_and_writes_nothing(repo, bad) -> None:
     a, b = _sizing(repo, "a", PLAN_A), _sizing(repo, "b", PLAN_B)
     before = _snapshot(repo)
     out = mod.fanout({"sizings": [{"sizing": a, "wave": 0}, {"sizing": b, "wave": bad}]}, repo)
@@ -99,7 +100,7 @@ def test_bad_wave_refuses_by_name_and_writes_nothing(repo, bad):
     assert _snapshot(repo) == before
 
 
-def test_decreasing_waves_refuse_and_write_nothing(repo):
+def test_decreasing_waves_refuse_and_write_nothing(repo) -> None:
     a, b = _sizing(repo, "a", PLAN_A), _sizing(repo, "b", PLAN_B)
     before = _snapshot(repo)
     out = mod.fanout({"sizings": [{"sizing": a, "wave": 1}, {"sizing": b, "wave": 0}]}, repo)
@@ -107,7 +108,7 @@ def test_decreasing_waves_refuse_and_write_nothing(repo):
     assert _snapshot(repo) == before
 
 
-def test_sizing_without_plan_edge_refuses_and_writes_nothing(repo):
+def test_sizing_without_plan_edge_refuses_and_writes_nothing(repo) -> None:
     a, b = _sizing(repo, "a", PLAN_A), _sizing(repo, "b", plan=None)
     before = _snapshot(repo)
     out = mod.fanout({"sizings": [{"sizing": a, "writes": ["x"]}, {"sizing": b, "writes": ["y"]}]}, repo)
@@ -115,7 +116,7 @@ def test_sizing_without_plan_edge_refuses_and_writes_nothing(repo):
     assert _snapshot(repo) == before
 
 
-def test_conflicting_marker_refuses_and_writes_nothing(repo):
+def test_conflicting_marker_refuses_and_writes_nothing(repo) -> None:
     a = _sizing(repo, "a", PLAN_A)
     b = _sizing(repo, "b", PLAN_B, marker=c.ask_parent_marker("ask-parent-other", "ask-other"))
     before = _snapshot(repo)
@@ -124,13 +125,13 @@ def test_conflicting_marker_refuses_and_writes_nothing(repo):
     assert _snapshot(repo) == before
 
 
-def test_arms_are_exclusive(repo):
+def test_arms_are_exclusive(repo) -> None:
     a = _sizing(repo, "a")
     out = mod.fanout({"sizings": [{"sizing": a}], "asks": [{"ask": "x"}]}, repo)
     assert out["exit_code"] == 1 and "exactly one" in out["error"]
 
 
-def test_stamped_sizing_validates_and_resumes_its_plan(repo):
+def test_stamped_sizing_validates_and_resumes_its_plan(repo) -> None:
     _plan(repo, PLAN_A)
     a = _sizing(repo, "a", PLAN_A)
     out = mod.fanout({"sizings": [{"sizing": a, "writes": ["x"]}]}, repo)
@@ -148,7 +149,7 @@ def _doc(repo, rel):
     return yaml.safe_load((repo / rel).read_text(encoding="utf-8"))
 
 
-def test_interaction_mode_absent_is_stamped_from_the_inherited_param(repo):
+def test_interaction_mode_absent_is_stamped_from_the_inherited_param(repo) -> None:
     a = _sizing(repo, "a", PLAN_A, mode=None)
     out = mod.fanout({"sizings": [{"sizing": a}], c.INTERACTION_MODE_PARAM: "ceo"}, repo)
     assert out["exit_code"] == 0, out
@@ -157,14 +158,14 @@ def test_interaction_mode_absent_is_stamped_from_the_inherited_param(repo):
     assert validate_frontmatter(doc, mod._SIZING_SCHEMA_PATH) == []
 
 
-def test_interaction_mode_recorded_is_kept_never_overwritten(repo):
+def test_interaction_mode_recorded_is_kept_never_overwritten(repo) -> None:
     a = _sizing(repo, "a", PLAN_A, mode="hands-on")
     out = mod.fanout({"sizings": [{"sizing": a}], c.INTERACTION_MODE_PARAM: "ceo"}, repo)
     assert out["exit_code"] == 0, out
     assert _doc(repo, a)["interaction_mode"] == "hands-on"
 
 
-def test_interaction_mode_absent_everywhere_takes_the_fleet_mode(repo, monkeypatch):
+def test_interaction_mode_absent_everywhere_takes_the_fleet_mode(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import sizing_fire
 
     monkeypatch.setattr(sizing_fire, "_fleet_interaction_mode", lambda: "pm")
@@ -174,7 +175,7 @@ def test_interaction_mode_absent_everywhere_takes_the_fleet_mode(repo, monkeypat
     assert _doc(repo, a)["interaction_mode"] == "pm"
 
 
-def test_interaction_mode_unresolvable_anywhere_refuses_and_writes_nothing(repo, monkeypatch):
+def test_interaction_mode_unresolvable_anywhere_refuses_and_writes_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import sizing_fire
 
     monkeypatch.setattr(sizing_fire, "_fleet_interaction_mode", lambda: None)
@@ -187,7 +188,7 @@ def test_interaction_mode_unresolvable_anywhere_refuses_and_writes_nothing(repo,
 
 
 @pytest.mark.parametrize("bad", ["bogus", "", 3])
-def test_interaction_mode_bad_value_refuses_and_writes_nothing(repo, bad):
+def test_interaction_mode_bad_value_refuses_and_writes_nothing(repo, bad) -> None:
     a = _sizing(repo, "a", PLAN_A, mode=None)
     before = _snapshot(repo)
     out = mod.fanout({"sizings": [{"sizing": a}], c.INTERACTION_MODE_PARAM: bad}, repo)
@@ -201,7 +202,7 @@ HQ = [  # (label, blocked_by) in submission order; hq-01 is not in the batch
 ]
 
 
-def _hq_items(repo, waves=False):
+def _hq_items(repo, waves: bool = False):
     items = []
     for n, (label, blocked) in enumerate(HQ):
         rel = _sizing(repo, label, f"docs/plans/2026-10-16-{label}.md")
@@ -216,7 +217,7 @@ def _blocked_by_call(repo, items, **extra):
     return mod.fanout({"sizings": items, c.EDGES_FROM_PARAM: c.EDGES_FROM_BLOCKED_BY, **extra}, repo)
 
 
-def test_blocked_by_hq_batch_builds_edges_and_held_runs(repo):
+def test_blocked_by_hq_batch_builds_edges_and_held_runs(repo) -> None:
     out = _blocked_by_call(repo, _hq_items(repo))
     assert out["exit_code"] == 0, out
     by = {r["label"]: r for r in out["runs"]}
@@ -238,7 +239,7 @@ def test_blocked_by_hq_batch_builds_edges_and_held_runs(repo):
     assert len(out["fire"]) == 2
 
 
-def test_blocked_by_mode_wave_adds_no_edge(repo):
+def test_blocked_by_mode_wave_adds_no_edge(repo) -> None:
     out = _blocked_by_call(repo, _hq_items(repo, waves=True))
     assert out["exit_code"] == 0, out
     by = {r["label"]: r for r in out["runs"]}
@@ -246,7 +247,7 @@ def test_blocked_by_mode_wave_adds_no_edge(repo):
     assert by["hq-04"]["after"] == [by["hq-03"]["run_id"]]
 
 
-def test_blocked_by_absent_mode_is_legacy_with_empty_held(repo):
+def test_blocked_by_absent_mode_is_legacy_with_empty_held(repo) -> None:
     a, b = _sizing(repo, "a", PLAN_A), _sizing(repo, "b", PLAN_B)
     out = mod.fanout({"sizings": [
         {"sizing": a, "writes": ["pkg"], "ids": ["x"], "blocked_by": ["nope"]},
@@ -267,7 +268,7 @@ def test_blocked_by_absent_mode_is_legacy_with_empty_held(repo):
     ({}, {"blocked_by": [1]}, "sizings[0]: blocked_by must be"),
     ({}, {"ids": ["a"], "blocked_by": ["a"]}, "own id"),
 ])
-def test_blocked_by_bad_input_refuses_and_writes_nothing(repo, extra, item_patch, needle):
+def test_blocked_by_bad_input_refuses_and_writes_nothing(repo, extra, item_patch, needle) -> None:
     a, b = _sizing(repo, "a", PLAN_A), _sizing(repo, "b", PLAN_B)
     before = _snapshot(repo)
     items = [{"sizing": a, "writes": ["x"], "ids": ["a"], **item_patch}, {"sizing": b, "writes": ["y"], "ids": ["b"]}]
@@ -276,7 +277,7 @@ def test_blocked_by_bad_input_refuses_and_writes_nothing(repo, extra, item_patch
     assert _snapshot(repo) == before
 
 
-def test_blocked_by_cycle_refuses_and_writes_nothing(repo):
+def test_blocked_by_cycle_refuses_and_writes_nothing(repo) -> None:
     a, b = _sizing(repo, "a", PLAN_A), _sizing(repo, "b", PLAN_B)
     before = _snapshot(repo)
     out = _blocked_by_call(repo, [
@@ -287,7 +288,7 @@ def test_blocked_by_cycle_refuses_and_writes_nothing(repo):
     assert _snapshot(repo) == before
 
 
-def test_held_run_is_still_stamped_with_its_ask_parent_marker(repo):
+def test_held_run_is_still_stamped_with_its_ask_parent_marker(repo) -> None:
     a = _sizing(repo, "a", PLAN_A)
     out = _blocked_by_call(repo, [{"sizing": a, "writes": ["x"], "ids": ["a"], "blocked_by": ["gone"]}])
     assert out["exit_code"] == 0, out

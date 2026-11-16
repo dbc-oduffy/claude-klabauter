@@ -8,13 +8,14 @@ from types import SimpleNamespace
 import pytest
 
 from coordinator_core.idle_compact import contract, eligibility
+from pathlib import Path
 
 NOW = 10_000.0
 SID = "sid-1"
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SimpleNamespace:
     home = tmp_path / "home"
     home.mkdir()
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(home))
@@ -51,62 +52,62 @@ def _decide(e):
     return eligibility.decide(SID, e.record, str(e.transcript), NOW, e.armed)
 
 
-def test_eligible_injects(env):
+def test_eligible_injects(env) -> None:
     assert _decide(env) == eligibility.Decision("inject", "eligible")
 
 
-def test_not_allowlisted_absent_file(env):
+def test_not_allowlisted_absent_file(env) -> None:
     (env.home / "idle-compact-allowlist.json").unlink()
     assert _decide(env).reason == "not-allowlisted"
 
 
-def test_allowlist_matches_session_name(env):
+def test_allowlist_matches_session_name(env) -> None:
     (env.home / "idle-compact-allowlist.json").write_text('["repo-a-7"]', encoding="utf-8")
     env.record.cwd = str(env.hub / "other")
     assert _decide(env).action == "inject"
 
 
-def test_not_allowlisted_other_name(env):
+def test_not_allowlisted_other_name(env) -> None:
     (env.home / "idle-compact-allowlist.json").write_text('["zzz"]', encoding="utf-8")
     assert _decide(env).reason == "not-allowlisted"
 
 
-def test_opted_out(env):
+def test_opted_out(env) -> None:
     (env.hub / "optout").write_text("")
     assert _decide(env).reason == "opted-out"
 
 
-def test_compact_hold(env):
+def test_compact_hold(env) -> None:
     (env.hub / "hold").write_text("")
     assert _decide(env).reason == "compact-hold"
 
 
-def test_no_engine_ask(env):
+def test_no_engine_ask(env) -> None:
     env.state["fire_turn"] = None
     assert _decide(env).reason == "no-engine-ask"
 
 
-def test_not_idle_boundary(env):
+def test_not_idle_boundary(env) -> None:
     env.ctx["epoch"] = NOW - 299
     assert _decide(env).reason == "not-idle"
     env.ctx["epoch"] = NOW - 300
     assert _decide(env).action == "inject"
 
 
-def test_context_boundary_is_strictly_over(env):
+def test_context_boundary_is_strictly_over(env) -> None:
     env.ctx["pct"] = 18.0
     assert _decide(env).reason == "under-threshold"
     env.ctx["pct"] = 18.1
     assert _decide(env).action == "inject"
 
 
-def test_skip_order_allowlist_before_optout(env):
+def test_skip_order_allowlist_before_optout(env) -> None:
     (env.home / "idle-compact-allowlist.json").unlink()
     (env.hub / "optout").write_text("")
     assert _decide(env).reason == "not-allowlisted"
 
 
-def test_already_injected_until_transcript_grows(env):
+def test_already_injected_until_transcript_grows(env) -> None:
     eligibility.arm(env.armed, SID, 100)
     assert _decide(env).reason == "already-injected-this-stretch"
     env.transcript.write_bytes(b"x" * 150)
@@ -114,7 +115,7 @@ def test_already_injected_until_transcript_grows(env):
     assert _decide(env).action == "inject"
 
 
-def test_precompact_blocked_until_later_turn(env):
+def test_precompact_blocked_until_later_turn(env) -> None:
     eligibility.arm(env.armed, SID, 100)
     env.transcript.write_bytes(b"x" * 150)
     assert _decide(env).reason == "precompact-blocked"
@@ -123,7 +124,7 @@ def test_precompact_blocked_until_later_turn(env):
     assert _decide(env).action == "inject"
 
 
-def test_stale_sentinel_from_before_injection_does_not_count(env):
+def test_stale_sentinel_from_before_injection_does_not_count(env) -> None:
     eligibility.arm(env.armed, SID, 100)
     env.transcript.write_bytes(b"x" * 150)
     (env.sentinels / f"compaction-occurred-{SID}").write_text("50\n")

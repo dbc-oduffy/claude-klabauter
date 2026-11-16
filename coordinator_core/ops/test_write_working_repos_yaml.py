@@ -5,9 +5,11 @@ from __future__ import annotations
 import yaml
 
 from coordinator_core.ops import discover_working_repos as dwr
+from pathlib import Path
+import pytest
 
 
-def test_creates_a_loadable_file_with_one_entry_per_path(tmp_path, monkeypatch):
+def test_creates_a_loadable_file_with_one_entry_per_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     target = tmp_path / ".claude" / "working-repos.yaml"
     added = dwr.write_working_repos_yaml(["C:/coordinator-content-repo", "/home/u/claude-klabauter"], target)
@@ -16,7 +18,7 @@ def test_creates_a_loadable_file_with_one_entry_per_path(tmp_path, monkeypatch):
     assert [r["path"] for r in loaded["repos"]] == added
 
 
-def test_rerun_is_a_noop_and_preserves_operator_keys(tmp_path, monkeypatch):
+def test_rerun_is_a_noop_and_preserves_operator_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     target = tmp_path / "working-repos.yaml"
     target.write_text('repos:\n  - path: "/a"\n    github: o/a\n', encoding="utf-8")
@@ -27,14 +29,14 @@ def test_rerun_is_a_noop_and_preserves_operator_keys(tmp_path, monkeypatch):
     assert "github: o/a" in text and text.endswith('  - path: "/b"\n')
 
 
-def test_kill_switch_refuses_the_write(tmp_path, monkeypatch):
+def test_kill_switch_refuses_the_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
     target = tmp_path / "working-repos.yaml"
     assert dwr.write_working_repos_yaml(["/a"], target) == []
     assert not target.exists()
 
 
-def test_main_write_flag_persists_discovered_paths(tmp_path, monkeypatch, capsys):
+def test_main_write_flag_persists_discovered_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
     monkeypatch.setattr(dwr, "discover_repo_paths", lambda: ["/r1"])

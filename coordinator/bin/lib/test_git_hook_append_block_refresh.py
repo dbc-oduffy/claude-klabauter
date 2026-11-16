@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -101,7 +102,7 @@ def _ensure(tmp_path: Path, *, check_only: bool = False) -> str:
 # The emitter now stamps.
 # ---------------------------------------------------------------------------
 
-def test_the_stamp_sits_inside_our_own_markers():
+def test_the_stamp_sits_inside_our_own_markers() -> None:
     """Nothing downstream can compare currency if the emitter never states it
     -- that is the half of the defect which made the other half unfixable --
     and a stamp emitted outside the block's extent would be orphaned by the
@@ -114,7 +115,7 @@ def test_the_stamp_sits_inside_our_own_markers():
     assert lines.index(ghi._hook_gen_stamp_line()) < lines.index(end)
 
 
-def test_the_stamp_line_is_inert_shell():
+def test_the_stamp_line_is_inert_shell() -> None:
     """The block lands inside a foreign hook; a stamp that executed would be a
     behaviour change smuggled in by a currency mechanism."""
     stamp = ghi._hook_gen_stamp_line()
@@ -125,14 +126,14 @@ def test_the_stamp_line_is_inert_shell():
 # The branch now refreshes.
 # ---------------------------------------------------------------------------
 
-def test_current_block_is_left_alone(tmp_path):
+def test_current_block_is_left_alone(tmp_path: Path) -> None:
     hook = _plant(tmp_path, _current_append_block())
     before = hook.read_text(encoding="utf-8")
     assert _ensure(tmp_path) == "already-current"
     assert hook.read_text(encoding="utf-8") == before
 
 
-def test_stale_block_is_refreshed_in_place(tmp_path):
+def test_stale_block_is_refreshed_in_place(tmp_path: Path) -> None:
     """THE REGRESSION. A block one generation behind used to return
     `left-append-form` and keep its stale body forever."""
     stale = _current_append_block().replace(
@@ -146,7 +147,7 @@ def test_stale_block_is_refreshed_in_place(tmp_path):
     assert f"coordinator-hook-gen: {ghi._HOOK_GEN_STAMP - 1}" not in body
 
 
-def test_a_refresh_preserves_the_foreign_hook_around_it(tmp_path):
+def test_a_refresh_preserves_the_foreign_hook_around_it(tmp_path: Path) -> None:
     """The whole reason this branch refused to act: everything above the block
     is somebody else's, and everything below it may be too."""
     stale = _current_append_block().replace(
@@ -160,7 +161,7 @@ def test_a_refresh_preserves_the_foreign_hook_around_it(tmp_path):
     assert body.endswith(_FOREIGN_BELOW)
 
 
-def test_a_refresh_is_idempotent_and_adds_no_blank_lines(tmp_path):
+def test_a_refresh_is_idempotent_and_adds_no_blank_lines(tmp_path: Path) -> None:
     """A splice that re-adds the block's own leading newline grows the hook by
     one blank line per install run, forever."""
     stale = _current_append_block().replace(
@@ -174,7 +175,7 @@ def test_a_refresh_is_idempotent_and_adds_no_blank_lines(tmp_path):
     assert hook.read_text(encoding="utf-8") == first
 
 
-def test_check_only_classifies_without_writing(tmp_path):
+def test_check_only_classifies_without_writing(tmp_path: Path) -> None:
     """`check_only` reaches the same classification via the same predicate and
     performs no write -- the contract every other branch already honours."""
     stale = _current_append_block().replace(
@@ -187,7 +188,7 @@ def test_check_only_classifies_without_writing(tmp_path):
     assert hook.read_text(encoding="utf-8") == before
 
 
-def test_a_refresh_counts_as_healed_not_as_left_alone():
+def test_a_refresh_counts_as_healed_not_as_left_alone() -> None:
     """`refreshed-append-form` must reach the fleet report as a repair. The
     `left-*` states mean 'a foreign chain we deliberately did not touch', and a
     refresh is the opposite of not touching."""
@@ -198,7 +199,7 @@ def test_a_refresh_counts_as_healed_not_as_left_alone():
 # Ambiguity still refuses.
 # ---------------------------------------------------------------------------
 
-def test_legacy_block_without_an_end_marker_is_still_left_alone(tmp_path):
+def test_legacy_block_without_an_end_marker_is_still_left_alone(tmp_path: Path) -> None:
     """Unchanged behaviour, asserted so the refresh path cannot quietly grow
     into the one shape whose extent genuinely cannot be identified."""
     start, end = ghi._append_markers(_HEADER)
@@ -209,7 +210,7 @@ def test_legacy_block_without_an_end_marker_is_still_left_alone(tmp_path):
     assert hook.read_text(encoding="utf-8") == before
 
 
-def test_a_duplicated_start_marker_refuses_rather_than_guessing(tmp_path, capsys):
+def test_a_duplicated_start_marker_refuses_rather_than_guessing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     start, _end = ghi._append_markers(_HEADER)
     hook = _plant(tmp_path, _current_append_block(), below=f"{start}\n" + _FOREIGN_BELOW)
     before = hook.read_text(encoding="utf-8")
@@ -218,7 +219,7 @@ def test_a_duplicated_start_marker_refuses_rather_than_guessing(tmp_path, capsys
     assert "ambiguous" in capsys.readouterr().err
 
 
-def test_block_extent_returns_none_on_every_unidentifiable_shape():
+def test_block_extent_returns_none_on_every_unidentifiable_shape() -> None:
     start, end = ghi._append_markers(_HEADER)
     body = f"a\n{start}\nx\n{end}\nb\n"
     assert ghi._block_extent(body, start, end) == (1, 3)
@@ -228,7 +229,7 @@ def test_block_extent_returns_none_on_every_unidentifiable_shape():
     assert ghi._block_extent("nothing here\n", start, end) is None
 
 
-def test_block_extent_matches_markers_only_on_their_own_line():
+def test_block_extent_matches_markers_only_on_their_own_line() -> None:
     """A marker quoted inside a longer line is not a marker -- the same
     exact-line predicate `_has_line` uses."""
     start, end = ghi._append_markers(_HEADER)
@@ -264,7 +265,7 @@ def _normalize_baked_py(body: str) -> str:
     return re.sub(r'^(_PY=")[^"]*(")$', r"\1<BAKED-INTERPRETER>\2", body, flags=re.M)
 
 
-def test_stamp_bump_is_required_for_append_block_shape_changes(monkeypatch):
+def test_stamp_bump_is_required_for_append_block_shape_changes(monkeypatch: pytest.MonkeyPatch) -> None:
     import hashlib
 
     # Hermetic: the candidate rungs are machine state (a checkout or mirror

@@ -13,6 +13,7 @@ import pytest
 from coordinator_core.ops.plan_tasks_mutate import _handler
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ops.tests.test_plan_tasks_mutate import _make_git_repo, _seed_plan
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -61,7 +62,7 @@ def _rows(plan) -> dict:
     return {r["id"]: r for r in load_rows(plan.read_text(encoding="utf-8")).rows}
 
 
-def test_stamp_writes_em_inferred_authorization_and_read_returns_it(tmp_path):
+def test_stamp_writes_em_inferred_authorization_and_read_returns_it(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "auth-ok.md", _PLAN)
 
@@ -74,7 +75,7 @@ def test_stamp_writes_em_inferred_authorization_and_read_returns_it(tmp_path):
     assert "authorization" not in rows["C2"]
 
 
-def test_restamping_identical_authorization_is_a_no_op(tmp_path):
+def test_restamping_identical_authorization_is_a_no_op(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "auth-idem.md", _PLAN)
     assert _stamp(repo, plan, dict(_EM_INFERRED))["exit_code"] == 0
@@ -86,7 +87,7 @@ def test_restamping_identical_authorization_is_a_no_op(tmp_path):
     assert plan.read_bytes() == before
 
 
-def test_stamp_refuses_unknown_authorization_source_and_writes_nothing(tmp_path):
+def test_stamp_refuses_unknown_authorization_source_and_writes_nothing(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "auth-bad.md", _PLAN)
     original = plan.read_bytes()
@@ -98,7 +99,7 @@ def test_stamp_refuses_unknown_authorization_source_and_writes_nothing(tmp_path)
     assert plan.read_bytes() == original
 
 
-def test_stamp_refuses_bare_scalar_authorization_and_writes_nothing(tmp_path):
+def test_stamp_refuses_bare_scalar_authorization_and_writes_nothing(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "auth-scalar.md", _PLAN)
     original = plan.read_bytes()
@@ -115,7 +116,7 @@ def test_stamp_refuses_bare_scalar_authorization_and_writes_nothing(tmp_path):
     {"source": "g-em", "approver": "g-em-1", "ruling": "Approved.", "ruling_ref": "run-1", "on": "2026-10-14"},
     {"source": "uhura", "approver": "uhura-1", "ruling": "Approved.", "ruling_ref": "run-1", "on": "2026-10-14"},
 ])
-def test_stamp_refuses_signoff_arm_authorization_and_writes_nothing(tmp_path, signoff):
+def test_stamp_refuses_signoff_arm_authorization_and_writes_nothing(tmp_path: Path, signoff) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "auth-signoff.md", _PLAN)
     original = plan.read_bytes()

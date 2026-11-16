@@ -7,11 +7,12 @@ import pytest
 from coordinator_core.git import residue_classes as rc
 from coordinator_core.git.tests.test_residue_classes import _dirty
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _git(cwd, *args):
+def _git(cwd, *args) -> None:
     subprocess.run(
         ["git", *args], cwd=cwd, check=True, capture_output=True, **no_console_creationflags()
     )
@@ -27,7 +28,7 @@ def _repo(tmp_path):
     return tmp_path
 
 
-def test_dirty_residue_filters_sorts_and_excludes(tmp_path):
+def test_dirty_residue_filters_sorts_and_excludes(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _dirty(root, "state/sizings/a.yaml", "docs/plans/p.seam.yaml", "src/x.py", "docs/plans/p.md")
     out = rc.dirty_engine_residue(root, [])
@@ -36,13 +37,13 @@ def test_dirty_residue_filters_sorts_and_excludes(tmp_path):
     assert out == {"engine_residue": ["docs/plans/p.seam.yaml"]}
 
 
-def test_absent_root_is_not_a_gap(tmp_path):
+def test_absent_root_is_not_a_gap(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _dirty(root, "state/sizings/a.yaml")
     assert rc.dirty_engine_residue(root, []) == {"engine_residue": ["state/sizings/a.yaml"]}
 
 
-def test_cap_reports_total(tmp_path, monkeypatch):
+def test_cap_reports_total(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     monkeypatch.setattr(rc, "RESIDUE_CAP", 2)
     _dirty(root, *[f"state/sizings/{i}.yaml" for i in range(3)])

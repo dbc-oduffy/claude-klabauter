@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.ops.migrate_completion_log_legacy import main
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -29,7 +30,7 @@ def _git(args, cwd):
     return result
 
 
-def _make_fixture_repo(tmp_path, n=3):
+def _make_fixture_repo(tmp_path, n: int = 3):
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(["init", "-q"], repo)
@@ -50,7 +51,7 @@ def _make_fixture_repo(tmp_path, n=3):
     return repo
 
 
-def test_three_monoliths_produce_three_moves(tmp_path, capsys):
+def test_three_monoliths_produce_three_moves(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_fixture_repo(tmp_path, n=3)
 
     rc = main(["--root", str(repo)])
@@ -70,7 +71,7 @@ def test_three_monoliths_produce_three_moves(tmp_path, capsys):
         assert (repo / "archive" / "completed" / "legacy" / f"2026-{m}.md").exists()
 
 
-def test_rerun_after_commit_is_idempotent_noop(tmp_path, capsys):
+def test_rerun_after_commit_is_idempotent_noop(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_fixture_repo(tmp_path, n=3)
     main(["--root", str(repo)])
     _git(["commit", "-q", "-m", "migrate: move monoliths to legacy/"], repo)
@@ -86,7 +87,7 @@ def test_rerun_after_commit_is_idempotent_noop(tmp_path, capsys):
     assert staged == ""
 
 
-def test_missing_archive_completed_exits_1_with_remediation(tmp_path, capsys):
+def test_missing_archive_completed_exits_1_with_remediation(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = tmp_path / "bare_repo"
     repo.mkdir()
     _git(["init", "-q"], repo)
@@ -100,7 +101,7 @@ def test_missing_archive_completed_exits_1_with_remediation(tmp_path, capsys):
     assert "Remediation:" in err
 
 
-def test_zero_monoliths_present_is_clean_noop(tmp_path, capsys):
+def test_zero_monoliths_present_is_clean_noop(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_fixture_repo(tmp_path, n=0)
 
     rc = main(["--root", str(repo)])
@@ -110,7 +111,7 @@ def test_zero_monoliths_present_is_clean_noop(tmp_path, capsys):
     assert "Nothing to migrate" in out
 
 
-def test_nonexistent_root_path_exits_1(tmp_path, capsys):
+def test_nonexistent_root_path_exits_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--root", str(tmp_path / "does-not-exist")])
 
     assert rc == 1
@@ -118,7 +119,7 @@ def test_nonexistent_root_path_exits_1(tmp_path, capsys):
     assert "archive/completed/ not found" in err
 
 
-def test_partial_reentrant_run_skips_already_moved_files(tmp_path, capsys):
+def test_partial_reentrant_run_skips_already_moved_files(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_fixture_repo(tmp_path, n=2)
     legacy = repo / "archive" / "completed" / "legacy"
     legacy.mkdir()
@@ -132,7 +133,7 @@ def test_partial_reentrant_run_skips_already_moved_files(tmp_path, capsys):
     assert "MOVE: archive/completed/2026-02.md" in out
 
 
-def test_empty_root_flag_value_is_usage_error(tmp_path, capsys):
+def test_empty_root_flag_value_is_usage_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--root", ""])
 
     assert rc == 1
@@ -140,7 +141,7 @@ def test_empty_root_flag_value_is_usage_error(tmp_path, capsys):
     assert "--root requires a non-empty value" in err
 
 
-def test_empty_root_equals_form_is_usage_error(tmp_path, capsys):
+def test_empty_root_equals_form_is_usage_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--root="])
 
     assert rc == 1
@@ -148,7 +149,7 @@ def test_empty_root_equals_form_is_usage_error(tmp_path, capsys):
     assert "--root requires a non-empty value" in err
 
 
-def test_env_var_root_used_when_no_explicit_flag(tmp_path, capsys, monkeypatch):
+def test_env_var_root_used_when_no_explicit_flag(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _make_fixture_repo(tmp_path, n=1)
     monkeypatch.setenv("MIGRATION_REPO_ROOT", str(repo))
 
@@ -166,7 +167,7 @@ def test_env_var_root_used_when_no_explicit_flag(tmp_path, capsys, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_process_count_does_not_grow_with_the_set(tmp_path, capsys, monkeypatch):
+def test_process_count_does_not_grow_with_the_set(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.ops.migrate_completion_log_legacy as mcl
 
     spawns: list[list[str]] = []

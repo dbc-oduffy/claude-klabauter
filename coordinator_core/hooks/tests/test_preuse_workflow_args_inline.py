@@ -7,6 +7,8 @@ import subprocess
 
 from coordinator_core.distill import launch_args as la
 from coordinator_core.hooks.preuse_workflow_args_inline import handle
+from pathlib import Path
+import pytest
 
 
 def _built(tmp_path):
@@ -27,7 +29,7 @@ def _call(args, extra=None):
     return handle({"tool_name": "Workflow", "tool_input": {"scriptPath": "s.js", "args": args, **(extra or {})}})
 
 
-def test_stub_args_are_rewritten_to_the_file_content_verbatim(tmp_path):
+def test_stub_args_are_rewritten_to_the_file_content_verbatim(tmp_path: Path) -> None:
     built = _built(tmp_path)
 
     out = _call(la.stub(built["path"], built["sha256"]))
@@ -38,7 +40,7 @@ def test_stub_args_are_rewritten_to_the_file_content_verbatim(tmp_path):
     assert "permissionDecision" not in out["hookSpecificOutput"]
 
 
-def test_relative_args_file_resolves_against_cwd(tmp_path):
+def test_relative_args_file_resolves_against_cwd(tmp_path: Path) -> None:
     built = _built(tmp_path)
     out = handle({
         "tool_name": "Workflow",
@@ -48,7 +50,7 @@ def test_relative_args_file_resolves_against_cwd(tmp_path):
     assert out["hookSpecificOutput"]["updatedInput"]["args"] == built["args"]
 
 
-def test_sha_mismatch_leaves_the_call_unchanged_with_an_advisory_and_no_deny(tmp_path):
+def test_sha_mismatch_leaves_the_call_unchanged_with_an_advisory_and_no_deny(tmp_path: Path) -> None:
     built = _built(tmp_path)
 
     out = _call(la.stub(built["path"], "0" * 64))
@@ -58,20 +60,20 @@ def test_sha_mismatch_leaves_the_call_unchanged_with_an_advisory_and_no_deny(tmp
     assert "sha256 mismatch" in hso["additionalContext"]
 
 
-def test_missing_file_is_an_advisory_not_a_deny(tmp_path):
+def test_missing_file_is_an_advisory_not_a_deny(tmp_path: Path) -> None:
     out = _call(la.stub(str(tmp_path / "nope.json"), "0" * 64))
     hso = out["hookSpecificOutput"]
     assert "updatedInput" not in hso and "permissionDecision" not in hso
     assert "unreadable" in hso["additionalContext"]
 
 
-def test_file_edited_after_build_no_longer_expands(tmp_path):
+def test_file_edited_after_build_no_longer_expands(tmp_path: Path) -> None:
     built = _built(tmp_path)
     (tmp_path / "run" / la.ARGS_FILE_NAME).write_text(json.dumps({"tampered": True}), encoding="utf-8")
     assert "updatedInput" not in _call(la.stub(built["path"], built["sha256"]))["hookSpecificOutput"]
 
 
-def test_other_call_shapes_are_silent(tmp_path):
+def test_other_call_shapes_are_silent(tmp_path: Path) -> None:
     built = _built(tmp_path)
     assert _call({"runId": "typed-by-hand"}) == {}
     assert _call(None) == {}
@@ -80,7 +82,7 @@ def test_other_call_shapes_are_silent(tmp_path):
     assert handle({"tool_name": "Workflow", "tool_input": "x"}) == {}
 
 
-def test_hook_spawns_no_process(tmp_path, monkeypatch):
+def test_hook_spawns_no_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     built = _built(tmp_path)
 
     def boom(*a, **k):
@@ -91,7 +93,7 @@ def test_hook_spawns_no_process(tmp_path, monkeypatch):
     assert "updatedInput" in _call(la.stub(built["path"], built["sha256"]))["hookSpecificOutput"]
 
 
-def test_dispatch_passes_repo_root_and_the_handler_accepts_it(tmp_path):
+def test_dispatch_passes_repo_root_and_the_handler_accepts_it(tmp_path: Path) -> None:
     # Trap: the op dispatcher calls every hook handler with repo_root=; a handler without the
     # kwarg raised TypeError on every live Workflow call while the direct-call tests stayed green.
     built = _built(tmp_path)

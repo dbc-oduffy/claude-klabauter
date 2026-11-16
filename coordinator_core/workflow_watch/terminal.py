@@ -57,7 +57,7 @@ def _clean_task_id(raw: str) -> str:
 
 class TerminalWatcher:
 
-    def __init__(self, transcript_path: str, task_id: str):
+    def __init__(self, transcript_path: str, task_id: str) -> None:
         self._task_id = task_id
         self._reader = TailReader(transcript_path)
 

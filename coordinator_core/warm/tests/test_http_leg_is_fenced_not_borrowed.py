@@ -11,6 +11,7 @@ from typing import Optional
 from coordinator_core import ipc
 from coordinator_core.session.core import carried_session_id
 from coordinator_core.warm import cookie, hook_http, skew, supervisor
+import pytest
 
 _SID_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 _SID_B = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb"
@@ -51,8 +52,8 @@ def _bind_handler(tmp_path: Path):
 
 
 def test_two_concurrent_callers_each_resolve_their_own_identity_via_carried_session_id(
-    tmp_path: Path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     for name in _SESSION_ENV_NAMES:
         monkeypatch.delenv(name, raising=False)
     before_env = dict(os.environ)

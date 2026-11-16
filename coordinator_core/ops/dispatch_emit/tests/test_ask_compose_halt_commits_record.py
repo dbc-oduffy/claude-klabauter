@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
@@ -16,6 +18,7 @@ _FN = "async function _commitHaltRecord()"
 
 def _compose(monkeypatch, **over) -> str:
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "m_plus")
+    monkeypatch.setattr(ask_compose, "params_writer_bound", lambda *_a, **_k: True)
     kw = dict(
         repo_root="REPO",
         prompt=None,
@@ -66,6 +69,24 @@ def test_stop_rule_string_halt_is_typed_before_the_next_action_and_halt_commit(m
     assert script.index(norm) < script.index("\n  _nextAction = ")
     assert script.index(norm) < script.index("\n  const _mkRevise")
     assert script.index(norm) < script.index(_GATE)
+
+
+_INLINE_JSON_INVOKE = re.compile(r"coordinator-invoke\s+\S+\s+(?:--from-task-output\s+\S+\s+)?['\"]?\{")
+
+
+def test_halt_commit_command_names_only_the_params_file(monkeypatch):
+    for over in ({}, {"stop_after": STOP_AFTER_PLAN}):
+        script = _compose(monkeypatch, in_run_commit=True, **over)
+        fn = script[script.index(_FN) :].split("\n", 1)[0]
+        assert not _INLINE_JSON_INVOKE.search(fn)
+        m = re.search(r"coordinator-invoke dispatch\.land_run (--params-file \S+) --repo \S+", fn)
+        assert m is not None, "halt-commit leg must pass dispatch.land_run its params by file"
+        assert "run-1" in m.group(1)
+
+
+def test_inline_json_invoke_detector_flags_agent_quoted_params():
+    assert _INLINE_JSON_INVOKE.search("coordinator-invoke dispatch.land_run '{\"run_id\": \"x\"}'")
+    assert not _INLINE_JSON_INVOKE.search("coordinator-invoke dispatch.land_run --params-file a/b.json --repo r")
 
 
 def test_without_in_run_commit_no_halt_commit_is_composed(monkeypatch):

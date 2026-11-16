@@ -35,6 +35,7 @@ import pytest
 
 from coordinator_core.bash_guards import check_test_suite_invocation as guard
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -83,7 +84,7 @@ def _alternatives(message: str) -> List[str]:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "pyproject.toml").write_text(
         "[tool.pytest.ini_options]\n"
         'testpaths = ["coordinator_core", "coordinator/tests"]\n',
@@ -112,7 +113,7 @@ def _deny_messages() -> List[tuple]:
 
 @pytest.mark.parametrize("label,message,agent_id", _deny_messages(),
                          ids=lambda v: v if isinstance(v, str) and "\n" not in v else "")
-def test_offered_alternative_is_allowed_by_this_guard(label, message, agent_id, repo):
+def test_offered_alternative_is_allowed_by_this_guard(label, message, agent_id, repo) -> None:
     for alternative in _alternatives(message):
         assert not _refused(_enveloped(guard.check)(_payload(alternative, repo, agent_id))), (
             "%s deny text offers a command this guard refuses: %r" % (label, alternative)
@@ -122,7 +123,7 @@ def test_offered_alternative_is_allowed_by_this_guard(label, message, agent_id, 
 @pytest.mark.parametrize("label,message,agent_id", _deny_messages(),
                          ids=lambda v: v if isinstance(v, str) and "\n" not in v else "")
 def test_offered_alternative_captures_output_without_flipping_the_verdict(
-        label, message, agent_id, repo):
+        label, message, agent_id, repo) -> None:
     for alternative in _alternatives(message):
         piped = "%s 2>&1 | tail -20" % alternative
         assert not _refused(_enveloped(guard.check)(_payload(piped, repo, agent_id))), (
@@ -133,7 +134,7 @@ def test_offered_alternative_captures_output_without_flipping_the_verdict(
 
 @pytest.mark.parametrize("label,message,agent_id", _deny_messages(),
                          ids=lambda v: v if isinstance(v, str) and "\n" not in v else "")
-def test_offered_alternative_names_a_provisioned_entrypoint(label, message, agent_id):
+def test_offered_alternative_names_a_provisioned_entrypoint(label, message, agent_id) -> None:
     for alternative in _alternatives(message):
         head, _, rest = alternative.partition(" ")
         assert head in _GUARANTEED_INTERPRETERS and rest.startswith("-m "), (

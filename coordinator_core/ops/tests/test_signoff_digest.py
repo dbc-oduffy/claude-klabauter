@@ -2,25 +2,26 @@
 import textwrap
 
 from coordinator_core.ops.signoff_digest import _handler
+from pathlib import Path
 
 PM = {"source": "pm", "pm_quote": "yes", "on": "2026-10-09"}
 APM = {"source": "apm", "apm_ruling": "fine", "ruling_ref": "docs/decisions/x.md", "on": "2026-10-09"}
 
 
-def _plan(root, name, front, rows):
+def _plan(root, name, front, rows) -> None:
     spine = "```yaml plan-tasks\n" + rows + "\n```\n"
     p = root / "docs/plans" / name
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(f"---\n{front}\n---\n\n## Tasks\n\n{spine}", encoding="utf-8")
 
 
-def _sizing(root, name, accepted):
+def _sizing(root, name, accepted) -> None:
     p = root / "state/sizings" / name
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(f"exit_criterion:\n  statement: s\n  accepted: {accepted}\n", encoding="utf-8")
 
 
-def test_each_surface_each_bucket(tmp_path):
+def test_each_surface_each_bucket(tmp_path: Path) -> None:
     front = textwrap.dedent("""\
         plan_id: pln-1
         execution_authorized_by: PM
@@ -48,7 +49,7 @@ def test_each_surface_each_bucket(tmp_path):
     assert r["summary"]["pm_verified"].startswith("pm_verified: 3")
 
 
-def test_legacy_pm_approved_is_unrecorded_and_window_excludes_old(tmp_path):
+def test_legacy_pm_approved_is_unrecorded_and_window_excludes_old(tmp_path: Path) -> None:
     _plan(tmp_path, "2026-10-09-new.md", "plan_id: n", "- {id: A, pm_approved: true}")
     _plan(tmp_path, "2026-01-01-old.md", "plan_id: o", "- {id: A, pm_approved: true}")
     r = _handler({"since": "2026-10-01"}, tmp_path)
@@ -56,6 +57,6 @@ def test_legacy_pm_approved_is_unrecorded_and_window_excludes_old(tmp_path):
     assert r["pm_verified"] == [] and r["delegated"] == []
 
 
-def test_bad_since_and_missing_root(tmp_path):
+def test_bad_since_and_missing_root(tmp_path: Path) -> None:
     assert _handler({"since": "nope"}, tmp_path)["exit_code"] == 1
     assert _handler({}, None)["exit_code"] == 1

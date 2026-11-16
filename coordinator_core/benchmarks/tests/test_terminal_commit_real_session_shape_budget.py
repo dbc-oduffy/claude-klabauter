@@ -13,6 +13,7 @@ Process time only: wall clock measures peer load (CLAUDE.md, The brightline).
 
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
 import time
@@ -40,13 +41,37 @@ _SMALL_LANDING_PATHS = 40
 # (`dispatch_abandon`), so the op overruns in its post-landing tail, as the incident's did.
 _BUDGET = 6.0
 
+
+P95_PATHS = 16
+MAX_PATHS = 63
 _PENDING = pytest.mark.pending_fix(
     reason=(
-        "bug row 29d78c496834 (landing leg) was addressed but the 7.5k-path shape still measures 7796.9ms net "
-        "process time / 35 procs (bar 500ms); residual phase (per-path work in commit._checkin_bytes, pre_commit_gates) "
-        "awaits the residual bug row (id not yet filed); closing that row must remove this marker."
+        "the wired new path at the 7.5k-path synthetic tail measures 578ms net process time / 0 added procs "
+        "(bar 500ms) against 17703ms / 17 added procs on the old path; real landings (16 and 63 paths) pass "
+        "at 78-94ms and 94-141ms, so the marker stays until the G-EM rules on the 7.5k tail."
     )
 )
+# The cutover key is `new` explicitly: a missing key selects the old path until cutover.
+_NEW = ("--impl", "new")
+# One call at a real landing size; the call's own process time and spawn count (`measure_call`) go to
+# argv[3] as JSON, because a 320-dir fixture build dwarfs a 16-path call and cannot be subtracted.
+_SIZED_DRIVER = """
+import json, sys
+from pathlib import Path
+from coordinator_core.benchmarks import declare_benchmark_origin, fixture_settings_home
+from coordinator_core.benchmarks import terminal_commit_real_session_shape as s
+declare_benchmark_origin()
+root, n = Path(sys.argv[1]), int(sys.argv[2])
+with fixture_settings_home(root):
+    s.set_landing_impl("new")
+    repo, params = s.build_fixture(root, landing_paths=n)
+    s.stub_close_job(repo)
+    out, timer = s.measure_call(repo, params)
+    Path(sys.argv[3]).write_text(json.dumps({
+        "ms": timer.total_ms, "spawns": timer.total_spawns,
+        "landed": out.get("committed") is True and bool(out.get("sha")),
+    }))
+"""
 
 
 def test_the_shape_is_a_real_session(tmp_path):
@@ -70,8 +95,8 @@ def _min_sample(workdir, *extra: str) -> dict:
 
 @_PENDING
 def test_terminal_commit_at_real_session_shape_is_under_the_bar(tmp_path):
-    setup = _min_sample(tmp_path, "--setup-only")
-    full = _min_sample(tmp_path)
+    setup = _min_sample(tmp_path, "--setup-only", *_NEW)
+    full = _min_sample(tmp_path, *_NEW)
     net_ms = round(full["process_time_ms"] - setup["process_time_ms"], 3)
     detail = (
         f"{net_ms}ms net tree process time over {shape.WF_DIRS} wf_ dirs / {shape.AGENT_METAS} metas / "
@@ -82,6 +107,27 @@ def test_terminal_commit_at_real_session_shape_is_under_the_bar(tmp_path):
     )
     assert net_ms > 0, f"call cost not observed (full <= setup-only): {detail}"
     assert net_ms < BAR_MS, detail
+
+
+@pytest.mark.parametrize("paths", [P95_PATHS, MAX_PATHS], ids=["p95-16-paths", "max-63-paths"])
+def test_terminal_commit_at_real_landing_sizes_is_under_the_bar(tmp_path, paths):
+    samples = []
+    for i in range(SAMPLES):
+        result = tmp_path / f"result-{i}.json"
+        run = subprocess.run(
+            [sys.executable, "-c", _SIZED_DRIVER, str(tmp_path / f"fx-{i}"), str(paths), str(result)],
+            capture_output=True, text=True, **no_console_creationflags(),
+        )
+        assert run.returncode == 0, f"sized driver ({paths} paths) exited {run.returncode}: {run.stderr[-800:]}"
+        row = json.loads(result.read_text(encoding="utf-8"))
+        assert row["landed"], f"the {paths}-path landing did not land: {row!r}"
+        samples.append(row)
+    best = min(samples, key=lambda r: r["ms"])
+    detail = (
+        f"{best['ms']}ms process time / {best['spawns']} spawns for one {paths}-path landing over "
+        f"{shape.WF_DIRS} wf_ dirs (min of {SAMPLES}: {[r['ms'] for r in samples]})"
+    )
+    assert best["ms"] < BAR_MS, detail
 
 
 @pytest.fixture

@@ -20,6 +20,7 @@ import coordinator_core.ops.queue_cluster  # noqa: F401 -- registration is a lat
 # this module is not yet in _EAGER_OP_MODULES, so import it directly to fire its @register_op.
 
 from coordinator_core.ipc import _REGISTRY
+from pathlib import Path
 
 assert "queue.cluster" in _REGISTRY, (
     "import guard failed: 'queue.cluster' not in _REGISTRY -- "
@@ -139,7 +140,7 @@ def test_signal_enum_pinned() -> None:
 
 
 class TestAllThreeFamilies:
-    def test_debt_backlog_clusters_by_tag(self, tmp_path) -> None:
+    def test_debt_backlog_clusters_by_tag(self, tmp_path: Path) -> None:
         for i in range(3):
             _seed_debt(tmp_path, f"entry-{i}.yaml", title=f"Debt entry {i}", tags=["widget"])
         result = _handler({"family": "debt-backlog"}, repo_root=tmp_path)
@@ -148,7 +149,7 @@ class TestAllThreeFamilies:
         assert tag_clusters[0]["value"] == "widget"
         assert len(tag_clusters[0]["items"]) == 3
 
-    def test_improvement_queue_clusters_by_tag(self, tmp_path) -> None:
+    def test_improvement_queue_clusters_by_tag(self, tmp_path: Path) -> None:
         for i in range(3):
             _seed_improvement(tmp_path, f"entry-{i}.yaml", title=f"Improvement {i}", tags=["gadget"])
         result = _handler({"family": "improvement-queue"}, repo_root=tmp_path)
@@ -156,7 +157,7 @@ class TestAllThreeFamilies:
         assert len(tag_clusters) == 1
         assert tag_clusters[0]["value"] == "gadget"
 
-    def test_bug_backlog_clusters_by_tag(self, tmp_path) -> None:
+    def test_bug_backlog_clusters_by_tag(self, tmp_path: Path) -> None:
         for i in range(3):
             _seed_bug(tmp_path, f"entry-{i}.yaml", title=f"Bug {i}", tags=["sprocket"])
         result = _handler({"family": "bug-backlog"}, repo_root=tmp_path)
@@ -166,7 +167,7 @@ class TestAllThreeFamilies:
 
 
 class TestEnvelopeShape:
-    def test_item_carries_id_derived_from_filename_stem(self, tmp_path) -> None:
+    def test_item_carries_id_derived_from_filename_stem(self, tmp_path: Path) -> None:
         for i in range(3):
             _seed_debt(tmp_path, f"widget-entry-{i}.yaml", title=f"Widget entry {i}", tags=["shared"])
         result = _handler({"family": "debt-backlog"}, repo_root=tmp_path)
@@ -176,7 +177,7 @@ class TestEnvelopeShape:
         for item in cluster["items"]:
             assert set(item.keys()) == {"id", "path", "title"}
 
-    def test_empty_family_returns_empty_list_not_none(self, tmp_path) -> None:
+    def test_empty_family_returns_empty_list_not_none(self, tmp_path: Path) -> None:
         (tmp_path / "state" / "debt-backlog").mkdir(parents=True)
         result = _handler({"family": "debt-backlog"}, repo_root=tmp_path)
         assert result == []
@@ -193,7 +194,7 @@ class TestCommonDirRepoRootShape:
     the worktree-root shape every other test in this file uses.
     """
 
-    def test_handler_with_git_common_dir_finds_records(self, tmp_path) -> None:
+    def test_handler_with_git_common_dir_finds_records(self, tmp_path: Path) -> None:
         _init_repo(tmp_path)
         for i in range(3):
             _seed_debt(tmp_path, f"entry-{i}.yaml", title=f"Debt entry {i}", tags=["widget"])
@@ -221,7 +222,7 @@ class TestSignalSetParameter:
             "today's fixed-order behavior, byte-identical"
         )
 
-    def test_caller_supplied_subset_suppresses_directory_signal(self, tmp_path) -> None:
+    def test_caller_supplied_subset_suppresses_directory_signal(self, tmp_path: Path) -> None:
         records = [
             {"path": f"state/debt-backlog/e{i}.yaml", "frontmatter": {"title": "Shared topic keyword cluster", "tags": ["onetag"]}}
             for i in range(3)

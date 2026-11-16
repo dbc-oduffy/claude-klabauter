@@ -25,6 +25,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_land_run_met_over_footprint_b
 )
 from coordinator_core.ops.dispatch_emit.tests.test_ledger_remaining_leg_footprint_fence import _terminal_with
 from coordinator_core.ops.dispatch_emit.tests.test_met_refire_lands_its_own_product_changes import _composed
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -32,7 +33,7 @@ PEER_EDIT = "peer_edit.py"  # a measured path the commit omits: no chunk declare
 _VERDICT = {"items": [{"id": "R1", "status": "met", "wired": True, "met_by": ["C3"]}]}
 
 
-def _record(root, paths, removed=()):
+def _record(root, paths, removed=()) -> None:
     """Write the record where the producer does (`state/warp/<run>`)."""
     rec = measured_rev_record_path(root, RUN2)
     rec.parent.mkdir(parents=True, exist_ok=True)
@@ -51,7 +52,7 @@ def _stage(root):
     return resume, token
 
 
-def test_breach_path_the_record_omits_refuses_naming_it(halted):  # noqa: F811
+def test_breach_path_the_record_omits_refuses_naming_it(halted) -> None:  # noqa: F811
     resume, token = _stage(halted)
     _record(halted, [C3_PATH])
     head = _git(halted, "rev-parse", "HEAD")
@@ -65,7 +66,7 @@ def test_breach_path_the_record_omits_refuses_naming_it(halted):  # noqa: F811
     assert land_run._measured_rev_call(RUN2) in out["error"]
 
 
-def test_the_printed_remeasure_call_names_the_run_and_the_mismatch_remedy_carries_it(repo):  # noqa: F811
+def test_the_printed_remeasure_call_names_the_run_and_the_mismatch_remedy_carries_it(repo) -> None:  # noqa: F811
     call = land_run._measured_rev_call(RUN2)
     assert call == f"""coordinator-invoke dispatch.measured_rev '{{"run_id": "{RUN2}", "paths": []}}'"""
     _write(repo, "p.py", "p = 1\n")
@@ -73,7 +74,7 @@ def test_the_printed_remeasure_call_names_the_run_and_the_mismatch_remedy_carrie
     assert call in detail and "re-run dispatch.measured_rev" in detail
 
 
-def test_breach_path_the_record_carries_lands_and_is_disclosed(halted):  # noqa: F811
+def test_breach_path_the_record_carries_lands_and_is_disclosed(halted) -> None:  # noqa: F811
     resume, token = _stage(halted)
     _record(halted, [C3_PATH, C4_PATH, LANE, LANE_TEST])
 
@@ -85,7 +86,7 @@ def test_breach_path_the_record_carries_lands_and_is_disclosed(halted):  # noqa:
     assert {C3_PATH, LANE, LANE_TEST} <= landed
 
 
-def test_landing_a_declared_path_the_record_omits_refuses(halted):  # noqa: F811
+def test_landing_a_declared_path_the_record_omits_refuses(halted) -> None:  # noqa: F811
     resume, token = _stage(halted)
     _record(halted, [C3_PATH, LANE, LANE_TEST])
     head = _git(halted, "rev-parse", "HEAD")
@@ -97,7 +98,7 @@ def test_landing_a_declared_path_the_record_omits_refuses(halted):  # noqa: F811
     assert _git(halted, "rev-parse", "HEAD") == head
 
 
-def test_no_record_keeps_the_silent_withhold(halted):  # noqa: F811
+def test_no_record_keeps_the_silent_withhold(halted) -> None:  # noqa: F811
     resume, token = _stage(halted)
     measured_rev_record_path(halted, RUN2).parent.mkdir(parents=True, exist_ok=True)  # the dir the record would sit in
 
@@ -110,7 +111,7 @@ def test_no_record_keeps_the_silent_withhold(halted):  # noqa: F811
     assert LANE_TEST not in landed
 
 
-def test_export_dir_is_reaped_after_a_refusal(halted):  # noqa: F811
+def test_export_dir_is_reaped_after_a_refusal(halted) -> None:  # noqa: F811
     resume, token = _stage(halted)
     _record(halted, [C3_PATH])
     export = halted / "scratch" / "measured-rev" / RUN2
@@ -127,7 +128,7 @@ def _blob(root, rel):
     return commit.checkin_blob_sha(root, rel)
 
 
-def test_mismatch_pins_both_sides(repo):  # noqa: F811
+def test_mismatch_pins_both_sides(repo) -> None:  # noqa: F811
     _write(repo, "p.py", "p = 1\n")
     _write(repo, "q.py", "q = 1\n")
     record = {"blobs": {"p.py": _blob(repo, "p.py")}, "removed": []}
@@ -140,13 +141,13 @@ def test_mismatch_pins_both_sides(repo):  # noqa: F811
     assert land_run._measured_mismatch(repo, record, [], [], {}) == ["p.py"]
 
 
-def test_mismatch_tolerates_a_recorded_path_already_at_head(repo):  # noqa: F811
+def test_mismatch_tolerates_a_recorded_path_already_at_head(repo) -> None:  # noqa: F811
     record = {"blobs": {"README.md": _blob(repo, "README.md")}, "removed": []}
 
     assert land_run._measured_mismatch(repo, record, [], [], {}) == []
 
 
-def test_mismatch_compares_removals(repo):  # noqa: F811
+def test_mismatch_compares_removals(repo) -> None:  # noqa: F811
     record = {"blobs": {}, "removed": ["README.md"]}
 
     assert land_run._measured_mismatch(repo, record, [], ["README.md"], {}) == []
@@ -154,7 +155,7 @@ def test_mismatch_compares_removals(repo):  # noqa: F811
     assert land_run._measured_mismatch(repo, {"blobs": {}, "removed": []}, [], ["README.md"], {}) == ["README.md"]
 
 
-def test_omitted_path_holding_the_measured_bytes_is_satisfied_and_other_bytes_refuse_naming_the_omission(repo):  # noqa: F811
+def test_omitted_path_holding_the_measured_bytes_is_satisfied_and_other_bytes_refuse_naming_the_omission(repo) -> None:  # noqa: F811
     _write(repo, "p.py", "p = 1\n")
     blob = _blob(repo, "p.py")
     record = {"blobs": {"p.py": blob}, "removed": []}
@@ -170,7 +171,7 @@ def test_omitted_path_holding_the_measured_bytes_is_satisfied_and_other_bytes_re
     assert "the commit omits this path" in detail and "bytes are identical" in detail
 
 
-def test_detail_names_the_line_ending_cause_when_every_line_is_equal(repo):  # noqa: F811
+def test_detail_names_the_line_ending_cause_when_every_line_is_equal(repo) -> None:  # noqa: F811
     from coordinator_core.git import git_objects
     from coordinator_core.git.git_dir import resolve_git_common_dir
 
@@ -187,7 +188,7 @@ def test_detail_names_the_line_ending_cause_when_every_line_is_equal(repo):  # n
     assert "the trailing newline differs" in by_newline and "<end of file>" not in by_newline
 
 
-def test_equal_full_blob_id_in_the_landing_set_never_refuses(repo):  # noqa: F811
+def test_equal_full_blob_id_in_the_landing_set_never_refuses(repo) -> None:  # noqa: F811
     _write(repo, "p.py", "p = 1\n")
     blob = _blob(repo, "p.py")
     record = {"blobs": {"p.py": blob}, "removed": []}
@@ -196,14 +197,14 @@ def test_equal_full_blob_id_in_the_landing_set_never_refuses(repo):  # noqa: F81
     assert land_run._measured_mismatch(repo, record, ["p.py"], [], {}) == []
 
 
-def test_settled_blob_overrides_the_worktree_blob(repo):  # noqa: F811
+def test_settled_blob_overrides_the_worktree_blob(repo) -> None:  # noqa: F811
     _write(repo, "p.py", "p = 1\n")
     record = {"blobs": {"p.py": "a" * 40}, "removed": []}
 
     assert land_run._measured_mismatch(repo, record, ["p.py"], [], {"p.py": "a" * 40}) == []
 
 
-def test_omitted_path_a_live_peer_holds_names_the_peer_and_never_advises_a_whole_hand_commit(halted, monkeypatch):  # noqa: F811
+def test_omitted_path_a_live_peer_holds_names_the_peer_and_never_advises_a_whole_hand_commit(halted, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     resume, token = _stage(halted)
     _write(halted, PEER_EDIT, "peer = 1\n")
     _record(halted, [C3_PATH, C4_PATH, LANE, LANE_TEST, PEER_EDIT])
@@ -226,7 +227,7 @@ def test_omitted_path_a_live_peer_holds_names_the_peer_and_never_advises_a_whole
     assert _git(halted, "rev-parse", "HEAD") == head
 
 
-def test_omitted_path_no_live_peer_holds_still_refuses_with_the_remeasure_remedy(halted, monkeypatch):  # noqa: F811
+def test_omitted_path_no_live_peer_holds_still_refuses_with_the_remeasure_remedy(halted, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     resume, token = _stage(halted)
     _write(halted, PEER_EDIT, "peer = 1\n")
     _record(halted, [C3_PATH, C4_PATH, LANE, LANE_TEST, PEER_EDIT])
@@ -240,14 +241,14 @@ def test_omitted_path_no_live_peer_holds_still_refuses_with_the_remeasure_remedy
     assert land_run._measured_rev_call(RUN2) in out["error"] and out["paths"] == [PEER_EDIT]
 
 
-def test_live_peer_holders_names_the_run_from_the_claim_scan_else_the_session(tmp_path, monkeypatch):
+def test_live_peer_holders_names_the_run_from_the_claim_scan_else_the_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import warp_run_deliverable
 
     held = {"a.py": {"sid-b", "sid-a"}, "b.py": {"sid-c"}}
     monkeypatch.setattr(land_run, "_peer_held", lambda *a, **k: held)
     seen = {}
 
-    def scan(root, paths, *a):
+    def scan(root, paths, *a) -> dict[str, list[tuple[str, str, str]]]:
         seen["paths"] = list(paths)
         return {"a.py": [("t", "ask-2", "sid-a"), ("t", "ask-1", "sid-b")]}
 

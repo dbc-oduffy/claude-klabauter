@@ -3,22 +3,24 @@
 from __future__ import annotations
 
 from coordinator_core.tests import _amp_scan_store as s
+from pathlib import Path
+import pytest
 
 D = "digest-1"
 
 
-def test_content_key_is_sha1_hex():
+def test_content_key_is_sha1_hex() -> None:
     assert s.content_key(b"") == "da39a3ee5e6b4b0d3255bfef95601890afd80709"
 
 
-def test_same_size_edit_inside_racy_window_rehashes():
+def test_same_size_edit_inside_racy_window_rehashes() -> None:
     m = s.StatMemo()
     mt = 10_000_000_000
     m.record("a.py", 5, mt, "k", now_ns=mt + 1_000_000)
     assert m.trust("a.py", 5, mt) is None
 
 
-def test_old_unchanged_file_is_trusted_and_size_change_rehashes():
+def test_old_unchanged_file_is_trusted_and_size_change_rehashes() -> None:
     m = s.StatMemo()
     mt = 10_000_000_000
     m.record("a.py", 5, mt, "k", now_ns=mt + s.RACY_WINDOW_NS)
@@ -28,21 +30,21 @@ def test_old_unchanged_file_is_trusted_and_size_change_rehashes():
     assert m.trust("b.py", 5, mt) is None
 
 
-def test_roundtrip(tmp_path):
+def test_roundtrip(tmp_path: Path) -> None:
     s.save(tmp_path, {"x": 1}, {"k": [1, "a"]}, D)
     head = s.load_head(tmp_path, D)
     assert head["x"] == 1
     assert s.load_body(tmp_path, head) == {"k": [1, "a"]}
 
 
-def test_absent_and_digest_mismatch_are_none(tmp_path):
+def test_absent_and_digest_mismatch_are_none(tmp_path: Path) -> None:
     assert s.load_head(tmp_path, D) is None
     assert s.load_head(tmp_path / "nope", D) is None
     s.save(tmp_path, {}, {}, D)
     assert s.load_head(tmp_path, "other") is None
 
 
-def test_corrupt_blobs_read_none(tmp_path):
+def test_corrupt_blobs_read_none(tmp_path: Path) -> None:
     s.save(tmp_path, {}, {"a": 1}, D)
     head = s.load_head(tmp_path, D)
     body = next(tmp_path.glob("body-*.bin"))
@@ -53,7 +55,7 @@ def test_corrupt_blobs_read_none(tmp_path):
     assert s.load_body(tmp_path, None) is None
 
 
-def test_format_version_bump_reads_none(tmp_path, monkeypatch):
+def test_format_version_bump_reads_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     s.save(tmp_path, {}, {"a": 1}, D)
     head = s.load_head(tmp_path, D)
     monkeypatch.setattr(s, "FORMAT_VERSION", s.FORMAT_VERSION + 1)
@@ -61,7 +63,7 @@ def test_format_version_bump_reads_none(tmp_path, monkeypatch):
     assert s.load_body(tmp_path, head) is None
 
 
-def test_interleaved_writers_leave_consistent_pair(tmp_path):
+def test_interleaved_writers_leave_consistent_pair(tmp_path: Path) -> None:
     # Writer A's body lands, then B's whole save, then A's head.
     s.save(tmp_path, {"w": "B"}, {"w": "B"}, D)
     raw_a = s.marshal.dumps((s.FORMAT_VERSION, {"w": "A"}))
@@ -74,7 +76,7 @@ def test_interleaved_writers_leave_consistent_pair(tmp_path):
     assert s.load_body(tmp_path, head) == {"w": head["w"]}
 
 
-def test_unwritable_directory_is_noop(tmp_path, capsys):
+def test_unwritable_directory_is_noop(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     blocker = tmp_path / "file"
     blocker.write_bytes(b"x")
     s.save(blocker / "sub", {}, {}, D)
@@ -83,7 +85,7 @@ def test_unwritable_directory_is_noop(tmp_path, capsys):
     assert s.load_head(blocker / "sub", D) is None
 
 
-def test_analyzer_digest_tracks_source_and_extra(tmp_path):
+def test_analyzer_digest_tracks_source_and_extra(tmp_path: Path) -> None:
     f = tmp_path / "a.py"
     f.write_bytes(b"1")
     d1 = s.analyzer_digest([f], b"e")

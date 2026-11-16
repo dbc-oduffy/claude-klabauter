@@ -17,6 +17,7 @@ from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import ask_compose, emit, prompt_fragments
 from coordinator_core.subagent_sandbox.provision_report import resolve_plugin_root
+import pytest
 
 _CEILING = int(0.90 * emit._WORKFLOW_SCRIPT_BYTE_CAP)
 _REPO_ROOT = Path(__file__).resolve().parents[4]
@@ -41,7 +42,7 @@ def measured_bare_ask_bytes(monkeypatch) -> int:
     return n
 
 
-def test_bare_ask_stays_under_ninety_percent_of_the_runner_cap(monkeypatch):
+def test_bare_ask_stays_under_ninety_percent_of_the_runner_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     n = measured_bare_ask_bytes(monkeypatch)
     assert n <= _CEILING, f"bare ask is {n} bytes; ceiling is {_CEILING} (90% of the runner cap)"
 
@@ -80,15 +81,15 @@ def _composed_bytes(monkeypatch, *, arm, label) -> int:
     return n
 
 
-def test_raw_ask_with_279kb_plan_blitz_stays_under_ninety_percent(monkeypatch):
+def test_raw_ask_with_279kb_plan_blitz_stays_under_ninety_percent(monkeypatch: pytest.MonkeyPatch) -> None:
     n = _composed_bytes(monkeypatch, arm=None, label="raw-ask+279KB-blitz")
     assert n <= _CEILING, f"raw ask is {n} bytes; ceiling is {_CEILING} (90% of the runner cap)"
 
 
-def test_m_plus_ask_with_279kb_plan_blitz_stays_under_the_cap(monkeypatch):
+def test_m_plus_ask_with_279kb_plan_blitz_stays_under_the_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     n = _composed_bytes(monkeypatch, arm="m_plus", label="m_plus+279KB-blitz")
     assert n <= 524288, f"m_plus ask is {n} bytes; runner cap is 524288"
 
 
-def test_runner_cap_constant_is_unchanged():
+def test_runner_cap_constant_is_unchanged() -> None:
     assert emit._WORKFLOW_SCRIPT_BYTE_CAP == 524288

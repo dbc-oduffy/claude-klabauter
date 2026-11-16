@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 
 from coordinator_core.benchmarks import land_run_over_bar_census as census
+import pytest
 
 
 def _process(corr, t_start, ms, **extra):
@@ -36,7 +37,7 @@ def _record(tmp_path: Path, run_id: str, mtime: float, legs: dict) -> str:
     return str(target)
 
 
-def test_over_bar_join_and_per_leg_attribution(tmp_path):
+def test_over_bar_join_and_per_leg_attribution(tmp_path: Path) -> None:
     t0 = 1_000_000.0
     rows = [
         _process("a", t0, 900.0), _complete("a", t0, 2000.0),
@@ -52,7 +53,7 @@ def test_over_bar_join_and_per_leg_attribution(tmp_path):
     assert {r["corr_id"]: rec["legs"][1]["process_time_ms"] for r, rec in joined} == {"a": 700.0, "b": 1200.0}
 
 
-def test_unjoined_rows_are_counted_not_dropped(tmp_path):
+def test_unjoined_rows_are_counted_not_dropped(tmp_path: Path) -> None:
     t0 = 2_000_000.0
     rows = [
         _process("nocomplete", t0, 800.0),
@@ -63,7 +64,7 @@ def test_unjoined_rows_are_counted_not_dropped(tmp_path):
     assert joined == [] and len(unjoined) == 2
 
 
-def test_a_file_is_claimed_by_one_row_only(tmp_path):
+def test_a_file_is_claimed_by_one_row_only(tmp_path: Path) -> None:
     t0 = 3_000_000.0
     rows = [_process("x", t0, 800.0), _complete("x", t0, 1000.0),
             _process("y", t0 + 0.1, 800.0), _complete("y", t0 + 0.1, 1000.0)]
@@ -73,7 +74,7 @@ def test_a_file_is_claimed_by_one_row_only(tmp_path):
     assert len(joined) == 1 and len(unjoined) == 1
 
 
-def test_file_outside_the_row_window_does_not_join(tmp_path):
+def test_file_outside_the_row_window_does_not_join(tmp_path: Path) -> None:
     t0 = 4_000_000.0
     rows = [_process("x", t0, 800.0), _complete("x", t0, 1000.0)]
     _record(tmp_path, "late", t0 + 30.0, {"land_run.commit": 700.0})
@@ -82,7 +83,7 @@ def test_file_outside_the_row_window_does_not_join(tmp_path):
     assert joined == [] and len(unjoined) == 1
 
 
-def test_benchmark_origin_and_window_filter_rows(tmp_path):
+def test_benchmark_origin_and_window_filter_rows(tmp_path: Path) -> None:
     t0 = 5_000_000.0
     rows = [_process("p", t0, 900.0, origin="production"), _process("b", t0, 900.0, origin="benchmark"),
             _process("old", t0 - 10_000, 900.0)]
@@ -90,7 +91,7 @@ def test_benchmark_origin_and_window_filter_rows(tmp_path):
     assert [r["corr_id"] for r in process_rows] == ["p"]
 
 
-def test_census_totals_legs_and_unattributed(tmp_path, monkeypatch):
+def test_census_totals_legs_and_unattributed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     t0 = 6_000_000.0
     rows = [_process("a", t0, 1000.0), _complete("a", t0, 2000.0),
             _process("b", t0 + 100, 2000.0), _complete("b", t0 + 100, 3000.0),
@@ -112,7 +113,7 @@ def test_census_totals_legs_and_unattributed(tmp_path, monkeypatch):
     assert out["unattributed"] == {"rows": 2, "max_ms": 200.0, "p50_ms": 150.0}
 
 
-def test_parse_time_forms():
+def test_parse_time_forms() -> None:
     assert census.parse_time("2h", 10_000.0) == 10_000.0 - 7200.0
     assert census.parse_time("123.5", 0.0) == 123.5
     assert census.parse_time("2026-11-03T00:00:00+00:00", 0.0) == 1_793_664_000.0

@@ -45,7 +45,7 @@ def _handoff(root: Path, name: str, hid: str, extra: str = '') -> Path:
 
 
 @pytest.fixture
-def tree(tmp_path, monkeypatch):
+def tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     """A repo-shaped tree whose validator/schema fingerprint inputs are private copies."""
     (tmp_path / 'tree' / '.git').mkdir(parents=True)
     (tmp_path / 'tree' / '.git' / 'HEAD').write_text('ref: refs/heads/main\n', encoding='utf-8')
@@ -67,7 +67,7 @@ def tree(tmp_path, monkeypatch):
 
 
 class _Counters:
-    def __init__(self, monkeypatch):
+    def __init__(self, monkeypatch) -> None:
         self.validated = 0
         self.ref_checks = 0
         real_validate, real_refs = sv.validate_frontmatter_obj, sv._check_handoff_refs
@@ -83,12 +83,12 @@ class _Counters:
         monkeypatch.setattr(sv, 'validate_frontmatter_obj', validate)
         monkeypatch.setattr(sv, '_check_handoff_refs', refs)
 
-    def reset(self):
+    def reset(self) -> None:
         self.validated = self.ref_checks = 0
 
 
 @pytest.fixture
-def counts(monkeypatch):
+def counts(monkeypatch: pytest.MonkeyPatch) -> _Counters:
     return _Counters(monkeypatch)
 
 
@@ -113,7 +113,7 @@ def _by_file(out: dict) -> dict:
     return {v['file']: v for v in out['violations']}
 
 
-def test_warm_replay_reads_nothing_and_spawns_nothing(tree, capsys, monkeypatch):
+def test_warm_replay_reads_nothing_and_spawns_nothing(tree, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     _seed(tree)
     cold = _sweep(tree, capsys)
     assert cold['violations'] and cold['refWarnings']
@@ -139,7 +139,7 @@ def test_warm_replay_reads_nothing_and_spawns_nothing(tree, capsys, monkeypatch)
     assert opened == []
 
 
-def test_file_edit_revalidates_only_that_file(tree, capsys, counts):
+def test_file_edit_revalidates_only_that_file(tree, capsys: pytest.CaptureFixture[str], counts) -> None:
     _seed(tree)
     _sweep(tree, capsys)
     counts.reset()
@@ -149,7 +149,7 @@ def test_file_edit_revalidates_only_that_file(tree, capsys, counts):
     assert 'status' in json.dumps(_by_file(out)['docs/plans/p2.md'])
 
 
-def test_schema_edit_invalidates_only_that_schemas_files(tree, capsys, counts):
+def test_schema_edit_invalidates_only_that_schemas_files(tree, capsys: pytest.CaptureFixture[str], counts) -> None:
     _seed(tree)
     _sweep(tree, capsys)
     schema_path = tree.parent / 'schemas' / 'decision.schema.json'
@@ -161,7 +161,7 @@ def test_schema_edit_invalidates_only_that_schemas_files(tree, capsys, counts):
     assert counts.validated == 1  # docs/decisions/d1.md only
 
 
-def test_schema_touch_without_content_change_keeps_every_verdict(tree, capsys, counts):
+def test_schema_touch_without_content_change_keeps_every_verdict(tree, capsys: pytest.CaptureFixture[str], counts) -> None:
     _seed(tree)
     _sweep(tree, capsys)
     schema_path = tree.parent / 'schemas' / 'decision.schema.json'
@@ -172,7 +172,7 @@ def test_schema_touch_without_content_change_keeps_every_verdict(tree, capsys, c
     assert counts.validated == 0
 
 
-def test_validator_module_edit_revalidates_everything(tree, capsys, counts):
+def test_validator_module_edit_revalidates_everything(tree, capsys: pytest.CaptureFixture[str], counts) -> None:
     _seed(tree)
     _sweep(tree, capsys)
     counts.reset()
@@ -182,7 +182,7 @@ def test_validator_module_edit_revalidates_everything(tree, capsys, counts):
     assert counts.validated >= 5  # p1, p2, d1, a, b
 
 
-def test_roadmap_override_env_change_revalidates_everything(tree, capsys, counts, monkeypatch):
+def test_roadmap_override_env_change_revalidates_everything(tree, capsys: pytest.CaptureFixture[str], counts, monkeypatch: pytest.MonkeyPatch) -> None:
     _seed(tree)
     _sweep(tree, capsys)
     counts.reset()
@@ -191,7 +191,7 @@ def test_roadmap_override_env_change_revalidates_everything(tree, capsys, counts
     assert counts.validated >= 5
 
 
-def test_handoff_ref_target_created_then_deleted(tree, capsys, counts):
+def test_handoff_ref_target_created_then_deleted(tree, capsys: pytest.CaptureFixture[str], counts) -> None:
     _seed(tree)
     first = _sweep(tree, capsys)
     assert any('missing.md' in w['warning']['error'] for w in first['refWarnings'])
@@ -209,7 +209,7 @@ def test_handoff_ref_target_created_then_deleted(tree, capsys, counts):
     assert third['refWarnings'] == first['refWarnings']
 
 
-def test_strict_refs_promotes_stored_warnings_without_revalidating(tree, capsys, counts):
+def test_strict_refs_promotes_stored_warnings_without_revalidating(tree, capsys: pytest.CaptureFixture[str], counts) -> None:
     _seed(tree)
     loose = _sweep(tree, capsys)
     counts.reset()
@@ -221,7 +221,7 @@ def test_strict_refs_promotes_stored_warnings_without_revalidating(tree, capsys,
     assert loose['refWarnings'][0]['warning'] in a['errors']
 
 
-def test_handoff_id_change_elsewhere_revalidates_id_dependents(tree, capsys, counts):
+def test_handoff_id_change_elsewhere_revalidates_id_dependents(tree, capsys: pytest.CaptureFixture[str], counts) -> None:
     _seed(tree)
     _handoff(tree, 'c.md', 'id-c', 'predecessor_id: id-b\npredecessor: state/handoffs/b.md\n')
     first = _sweep(tree, capsys)
@@ -234,7 +234,7 @@ def test_handoff_id_change_elsewhere_revalidates_id_dependents(tree, capsys, cou
     assert counts.ref_checks >= 2  # b.md (edited) and c.md (id-index digest moved)
 
 
-def test_unrelated_handoff_id_change_leaves_id_free_entries_alone(tree, capsys, counts):
+def test_unrelated_handoff_id_change_leaves_id_free_entries_alone(tree, capsys: pytest.CaptureFixture[str], counts) -> None:
     _seed(tree)
     _handoff(tree, 'c.md', 'id-c', 'predecessor_id: id-b\npredecessor: state/handoffs/b.md\n')
     _sweep(tree, capsys)
@@ -244,7 +244,7 @@ def test_unrelated_handoff_id_change_leaves_id_free_entries_alone(tree, capsys, 
     assert counts.ref_checks == 2  # b.md (edited) and c.md (id ref); a.md carries no id ref
 
 
-def test_ref_tips_change_rechecks_history_negative_entries_only(tree, capsys, counts, monkeypatch):
+def test_ref_tips_change_rechecks_history_negative_entries_only(tree, capsys: pytest.CaptureFixture[str], counts, monkeypatch: pytest.MonkeyPatch) -> None:
     _seed(tree)
     tips = {'v': 'tips-a'}
     monkeypatch.setattr(git_state, 'ref_tips_digest', lambda repo: tips['v'])
@@ -262,7 +262,7 @@ def test_ref_tips_change_rechecks_history_negative_entries_only(tree, capsys, co
     assert counts.ref_checks == 0
 
 
-def test_unreadable_ref_tips_always_recheck_history_negative_entries(tree, capsys, counts, monkeypatch):
+def test_unreadable_ref_tips_always_recheck_history_negative_entries(tree, capsys: pytest.CaptureFixture[str], counts, monkeypatch: pytest.MonkeyPatch) -> None:
     _seed(tree)
     monkeypatch.setattr(git_state, 'ref_tips_digest', lambda repo: None)
     _sweep(tree, capsys)
@@ -271,7 +271,7 @@ def test_unreadable_ref_tips_always_recheck_history_negative_entries(tree, capsy
     assert counts.ref_checks == 1
 
 
-def test_non_ascii_and_nested_hints_round_trip_through_the_store(tree, capsys):
+def test_non_ascii_and_nested_hints_round_trip_through_the_store(tree, capsys: pytest.CaptureFixture[str]) -> None:
     _seed(tree)
     cold = _sweep(tree, capsys)
     stored = json.loads((tree / '.git' / lint_tree._STORE_NAME).read_text(encoding='utf-8'))
@@ -283,7 +283,7 @@ def test_non_ascii_and_nested_hints_round_trip_through_the_store(tree, capsys):
             assert set(err) >= {'field', 'error'}
 
 
-def test_outcome_that_does_not_round_trip_is_never_stored(tree, capsys, monkeypatch):
+def test_outcome_that_does_not_round_trip_is_never_stored(tree, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     _seed(tree)
     real = sv.validate_frontmatter_obj
 
@@ -307,7 +307,7 @@ def test_outcome_that_does_not_round_trip_is_never_stored(tree, capsys, monkeypa
     '{"v": 1, "env": 1, "code": {}, "sfiles": {}, "files": {}, "hids": {}}',
     '{"v": 1, "env": "0", "code": {}, "sfiles": {}, "files": {"docs/plans/p1.md": 7}, "hids": {}}',
 ])
-def test_corrupt_or_foreign_store_rebuilds_silently(tree, capsys, garbage):
+def test_corrupt_or_foreign_store_rebuilds_silently(tree, capsys: pytest.CaptureFixture[str], garbage) -> None:
     _seed(tree)
     cold = _sweep(tree, capsys)
     (tree / '.git' / lint_tree._STORE_NAME).write_text(garbage, encoding='utf-8')
@@ -317,7 +317,7 @@ def test_corrupt_or_foreign_store_rebuilds_silently(tree, capsys, garbage):
     json.loads((tree / '.git' / lint_tree._STORE_NAME).read_text(encoding='utf-8'))
 
 
-def test_foreign_code_fingerprint_rebuilds(tree, capsys, counts):
+def test_foreign_code_fingerprint_rebuilds(tree, capsys: pytest.CaptureFixture[str], counts) -> None:
     _seed(tree)
     cold = _sweep(tree, capsys)
     store = tree / '.git' / lint_tree._STORE_NAME
@@ -330,7 +330,7 @@ def test_foreign_code_fingerprint_rebuilds(tree, capsys, counts):
     assert counts.validated >= 5
 
 
-def test_inert_without_a_git_dir(tmp_path, capsys):
+def test_inert_without_a_git_dir(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     root = tmp_path / 'nogit'
     _seed(root)
     out = _sweep(root, capsys)
@@ -338,18 +338,18 @@ def test_inert_without_a_git_dir(tmp_path, capsys):
     assert list(root.glob('**/claude-klabauter-lint-tree.json')) == []
 
 
-def test_roadmap_env_name_matches_the_validator_constant():
+def test_roadmap_env_name_matches_the_validator_constant() -> None:
     assert lint_tree._ROADMAP_ENV == sv._ROADMAP_GRAPH_OVERRIDE_ENV_VAR
 
 
-def test_first_claim_wins_when_two_globs_match(tree, capsys):
+def test_first_claim_wins_when_two_globs_match(tree, capsys: pytest.CaptureFixture[str]) -> None:
     _seed(tree)
     out = _sweep(tree, capsys)
     files = [v['file'] for v in out['violations']]
     assert len(files) == len(set(files))
 
 
-def test_sidecars_yaml_and_directory_index_are_skipped(tree, capsys):
+def test_sidecars_yaml_and_directory_index_are_skipped(tree, capsys: pytest.CaptureFixture[str]) -> None:
     _write(tree, 'docs/plans/p1.prior-art-check.md', _record('x: 1\n'))
     _write(tree, 'docs/plans/data.yaml', 'a: 1\n')
     _write(tree, 'docs/plans/INDEX.md', 'no frontmatter\n')
@@ -357,7 +357,7 @@ def test_sidecars_yaml_and_directory_index_are_skipped(tree, capsys):
     assert out['ok'] and out['violations'] == []
 
 
-def test_redirects_index_is_skipped_by_the_tree_sweep(tree, capsys):
+def test_redirects_index_is_skipped_by_the_tree_sweep(tree, capsys: pytest.CaptureFixture[str]) -> None:
     # DoE 2026-11-15: --file skipped REDIRECTS.md but the --json tree walk still swept it.
     _write(tree, 'docs/plans/REDIRECTS.md', '# redirect index\n')
     _write(tree, 'state/handoffs/REDIRECTS.md', '# redirect index\n')
@@ -365,7 +365,7 @@ def test_redirects_index_is_skipped_by_the_tree_sweep(tree, capsys):
     assert not any(v['file'].endswith('REDIRECTS.md') for v in out['violations'])
 
 
-def test_plan_adjacent_evidence_yaml_is_not_swept_but_plan_md_is(tree, capsys):
+def test_plan_adjacent_evidence_yaml_is_not_swept_but_plan_md_is(tree, capsys: pytest.CaptureFixture[str]) -> None:
     _write(tree, 'docs/plans/2026-11/p1-8a0ad1.evidence.yaml', 'title: x\nstatus: bogus\n')
     _write(tree, 'docs/plans/2026-11/p1-8a0ad1.md', _record('title: "Plan"\nstatus: "bogué中"\n'))
     out = _sweep(tree, capsys)
@@ -374,7 +374,7 @@ def test_plan_adjacent_evidence_yaml_is_not_swept_but_plan_md_is(tree, capsys):
     assert not any(f.endswith('.evidence.yaml') for f in files)
 
 
-def test_human_output_and_exit_code(tree, capsys):
+def test_human_output_and_exit_code(tree, capsys: pytest.CaptureFixture[str]) -> None:
     _seed(tree)
     capsys.readouterr()
     rc = lint_tree.run(str(tree), as_json=False, strict_refs=False)
@@ -384,7 +384,7 @@ def test_human_output_and_exit_code(tree, capsys):
     assert 'dangling handoff-DAG ref warning(s)' in text
 
 
-def test_main_routes_non_tree_argv_to_schema_validate(monkeypatch):
+def test_main_routes_non_tree_argv_to_schema_validate(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
     monkeypatch.setattr(sv, 'main', lambda argv: seen.setdefault('argv', argv) and 7)
     assert lint_tree.main(['--file', 'x.md']) == 7
@@ -392,14 +392,14 @@ def test_main_routes_non_tree_argv_to_schema_validate(monkeypatch):
     assert lint_tree.main(['--root']) == 7
 
 
-def test_main_rejects_a_root_that_is_not_a_directory(tmp_path, capsys):
+def test_main_rejects_a_root_that_is_not_a_directory(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert lint_tree.main(['--root', str(tmp_path / 'absent'), '--json']) == 2
     assert 'does not resolve to a directory' in capsys.readouterr().err
 
 
 @pytest.mark.cadence
 @pytest.mark.spawns_process
-def test_warm_run_in_a_fresh_interpreter_never_imports_the_validator(tree, capsys):
+def test_warm_run_in_a_fresh_interpreter_never_imports_the_validator(tree, capsys: pytest.CaptureFixture[str]) -> None:
     _seed(tree)
     cold = _sweep(tree, capsys)
     probe = (

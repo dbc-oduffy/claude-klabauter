@@ -4,11 +4,16 @@ import contextlib
 import importlib.util
 import io
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
-def _load_module():
+def _load_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location(
         "workday_start_health_probes_under_test_gpc", _BIN_DIR / "workday-start-health-probes.py"
     )
@@ -38,7 +43,7 @@ def _fake_helpers(roots, classify):
     return registry_repo_roots, classify_target
 
 
-def _patch_helpers(monkeypatch, roots, classify):
+def _patch_helpers(monkeypatch, roots, classify) -> None:
     from coordinator_core.install import git_perf_config as gpc
 
     monkeypatch.setattr(
@@ -48,7 +53,7 @@ def _patch_helpers(monkeypatch, roots, classify):
     )
 
 
-def test_key_present_everywhere_is_exit_zero(tmp_path, monkeypatch):
+def test_key_present_everywhere_is_exit_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_a = tmp_path / "a"
     repo_b = tmp_path / "b"
     _write_config(repo_a, untracked_cache=True)
@@ -67,7 +72,7 @@ def test_key_present_everywhere_is_exit_zero(tmp_path, monkeypatch):
     assert err.getvalue() == ""
 
 
-def test_key_absent_in_one_repo_is_exit_one_naming_it(tmp_path, monkeypatch):
+def test_key_absent_in_one_repo_is_exit_one_naming_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_a = tmp_path / "a"
     repo_b = tmp_path / "b"
     _write_config(repo_a, untracked_cache=True)
@@ -87,7 +92,7 @@ def test_key_absent_in_one_repo_is_exit_one_naming_it(tmp_path, monkeypatch):
     assert "repos.b" in output
 
 
-def test_mirror_targets_are_skipped_silently(tmp_path, monkeypatch):
+def test_mirror_targets_are_skipped_silently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_mirror = tmp_path / "mirror"
     _write_config(repo_mirror, untracked_cache=None)
     _patch_helpers(
@@ -104,7 +109,7 @@ def test_mirror_targets_are_skipped_silently(tmp_path, monkeypatch):
     assert err.getvalue() == ""
 
 
-def test_missing_targets_are_reported(tmp_path, monkeypatch):
+def test_missing_targets_are_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     missing_path = str(tmp_path / "does-not-exist")
     _patch_helpers(
         monkeypatch,
@@ -121,7 +126,7 @@ def test_missing_targets_are_reported(tmp_path, monkeypatch):
     assert missing_path in err.getvalue()
 
 
-def test_gitlink_file_is_resolved_via_commondir(tmp_path, monkeypatch):
+def test_gitlink_file_is_resolved_via_commondir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     common = tmp_path / "common" / ".git"
     common.mkdir(parents=True)
     (common / "config").write_text("[core]\n\tuntrackedCache = true\n", encoding="utf-8")
@@ -147,7 +152,7 @@ def test_gitlink_file_is_resolved_via_commondir(tmp_path, monkeypatch):
     assert err.getvalue() == ""
 
 
-def test_unreadable_config_is_reported_not_silently_passed(tmp_path, monkeypatch):
+def test_unreadable_config_is_reported_not_silently_passed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "unreadable"
     (repo / ".git").mkdir(parents=True)
     broken = tmp_path / "broken-worktree"
@@ -169,7 +174,7 @@ def test_unreadable_config_is_reported_not_silently_passed(tmp_path, monkeypatch
     assert "unreadable" in err.getvalue()
 
 
-def test_bare_detector_is_zero_spawn(tmp_path, monkeypatch):
+def test_bare_detector_is_zero_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_a = tmp_path / "a"
     _write_config(repo_a, untracked_cache=True)
     _patch_helpers(
@@ -191,12 +196,12 @@ def test_bare_detector_is_zero_spawn(tmp_path, monkeypatch):
     assert rc == 0
 
 
-def test_fix_form_calls_apply_fleet_in_process(monkeypatch):
+def test_fix_form_calls_apply_fleet_in_process(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.install import git_perf_config as gpc
 
     calls = []
 
-    def _fake_apply_fleet(bin_dir, **kwargs):
+    def _fake_apply_fleet(bin_dir, **kwargs) -> list[str]:
         calls.append(bin_dir)
         return ["ok      core.untrackedCache = true (already set)", "fleet summary: swept 1 registered repo(s), applied to 1 worktree(s)."]
 
@@ -208,10 +213,10 @@ def test_fix_form_calls_apply_fleet_in_process(monkeypatch):
     assert len(calls) == 1
 
 
-def test_fix_form_reports_failed_lines_as_exit_one(monkeypatch):
+def test_fix_form_reports_failed_lines_as_exit_one(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.install import git_perf_config as gpc
 
-    def _fake_apply_fleet(bin_dir, **kwargs):
+    def _fake_apply_fleet(bin_dir, **kwargs) -> list[str]:
         return ["FAILED  repos.a: boom"]
 
     monkeypatch.setattr(gpc, "apply_fleet", _fake_apply_fleet)
@@ -221,7 +226,7 @@ def test_fix_form_reports_failed_lines_as_exit_one(monkeypatch):
     assert rc == 1
 
 
-def test_unrecognized_argument_is_usage_error():
+def test_unrecognized_argument_is_usage_error() -> None:
     err = io.StringIO()
     with contextlib.redirect_stderr(err):
         rc = _mod.cmd_git_perf_currency(["--bogus"])
@@ -236,7 +241,7 @@ def _run_bare() -> tuple[int, str]:
     return rc, buf.getvalue()
 
 
-def test_unavailable_registry_helpers_is_not_reported_as_a_current_fleet(monkeypatch):
+def test_unavailable_registry_helpers_is_not_reported_as_a_current_fleet(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.install import git_perf_config as gpc
 
     monkeypatch.setattr(gpc, "_git_hook_install_registry_helpers", lambda: None)
@@ -246,7 +251,7 @@ def test_unavailable_registry_helpers_is_not_reported_as_a_current_fleet(monkeyp
     assert "registry helpers unavailable" in err
 
 
-def test_registry_read_raising_is_not_reported_as_a_current_fleet(monkeypatch):
+def test_registry_read_raising_is_not_reported_as_a_current_fleet(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.install import git_perf_config as gpc
 
     def _raising_helpers():
@@ -261,29 +266,29 @@ def test_registry_read_raising_is_not_reported_as_a_current_fleet(monkeypatch):
     assert "could not read the repo registry" in err
 
 
-def test_empty_registry_is_explicit_not_success(monkeypatch):
+def test_empty_registry_is_explicit_not_success(monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_helpers(monkeypatch, [], lambda _root: "worktree")
     rc, err = _run_bare()
     assert rc == 1
     assert "not the same fact as" in err
 
 
-def test_bare_key_with_no_equals_is_implicit_true():
+def test_bare_key_with_no_equals_is_implicit_true() -> None:
     text = "[core]\n\tuntrackedCache\n"
     assert _mod._config_has_untracked_cache(text) is True
 
 
-def test_yes_on_1_spellings_are_recognized_as_true():
+def test_yes_on_1_spellings_are_recognized_as_true() -> None:
     for spelling in ("yes", "on", "1"):
         text = f"[core]\n\tuntrackedCache = {spelling}\n"
         assert _mod._config_has_untracked_cache(text) is True, spelling
 
 
-def test_trailing_inline_comment_on_value_is_stripped():
+def test_trailing_inline_comment_on_value_is_stripped() -> None:
     text = "[core]\n\tuntrackedCache = true ; comment\n"
     assert _mod._config_has_untracked_cache(text) is True
 
 
-def test_duplicate_core_blocks_last_one_wins():
+def test_duplicate_core_blocks_last_one_wins() -> None:
     text = "[core]\n\tuntrackedCache = true\n[core]\n\tuntrackedCache = false\n"
     assert _mod._config_has_untracked_cache(text) is False

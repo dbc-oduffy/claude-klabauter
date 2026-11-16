@@ -33,7 +33,7 @@ def _git(cwd, *args) -> str:
 
 
 @pytest.fixture(autouse=True)
-def _cadence(monkeypatch):
+def _cadence(monkeypatch: pytest.MonkeyPatch):
     push_cadence.reset_cadence_for_test()
     monkeypatch.setattr(push_cadence, "machine_profile", lambda: "author")
     yield
@@ -70,7 +70,7 @@ def _upstream_moves_on(tmp_path: Path, bare: Path, day: str, name: str) -> str:
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A receiver on its day branch, one commit behind upstream, with a dirty tree."""
     sender = _make_sender_git_repo(tmp_path)
     receiver = _make_receiver_git_repo(tmp_path)
@@ -91,7 +91,7 @@ def world(tmp_path, monkeypatch):
     }
 
 
-def test_behind_and_dirty_receiver_gets_the_memo_on_top_of_upstream_and_pushed(world):
+def test_behind_and_dirty_receiver_gets_the_memo_on_top_of_upstream_and_pushed(world) -> None:
     sender, receiver, bare, day = world["sender"], world["receiver"], world["bare"], world["day"]
     _write_draft(sender, "exit-topic")
     state_before = _checkout_state(receiver)
@@ -114,7 +114,7 @@ def test_behind_and_dirty_receiver_gets_the_memo_on_top_of_upstream_and_pushed(w
     assert _checkout_state(receiver) == state_before
 
 
-def test_a_failed_push_leaves_a_retryable_record_that_lands_on_the_next_tick(world):
+def test_a_failed_push_leaves_a_retryable_record_that_lands_on_the_next_tick(world) -> None:
     sender, receiver, bare, day = world["sender"], world["receiver"], world["bare"], world["day"]
     _write_draft(sender, "retry-topic")
     result = _memo_send({"dry_run": False, "topic": "retry-topic"}, repo_root=sender)
@@ -136,7 +136,7 @@ def test_a_failed_push_leaves_a_retryable_record_that_lands_on_the_next_tick(wor
     assert _pending_records(sender) == []
 
 
-def test_upstream_moving_after_the_send_is_rebuilt_onto_and_pushed(world):
+def test_upstream_moving_after_the_send_is_rebuilt_onto_and_pushed(world) -> None:
     sender, bare, day = world["sender"], world["bare"], world["day"]
     _write_draft(sender, "moved-topic")
     result = _memo_send({"dry_run": False, "topic": "moved-topic"}, repo_root=sender)

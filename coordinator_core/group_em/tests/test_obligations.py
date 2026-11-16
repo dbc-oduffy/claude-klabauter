@@ -6,15 +6,16 @@ import os
 
 from coordinator_core.group_em import obligations
 from coordinator_core.session import machinery_paths
+from pathlib import Path
 
 
-def _ledger_dir(repo_root, session_id):
+def _ledger_dir(repo_root, session_id) -> str:
     path = machinery_paths.share_dir(repo_root, session_id)
     os.makedirs(path, exist_ok=True)
     return path
 
 
-def _write_ledger(repo_root, session_id, records):
+def _write_ledger(repo_root, session_id, records) -> None:
     path = os.path.join(_ledger_dir(repo_root, session_id), "next-move-ledger.jsonl")
     with open(path, "w", encoding="utf-8") as handle:
         for record in records:
@@ -22,10 +23,10 @@ def _write_ledger(repo_root, session_id, records):
 
 
 class TestForPeerNoneVsEmpty:
-    def test_no_ledger_file_is_none(self, tmp_path):
+    def test_no_ledger_file_is_none(self, tmp_path: Path) -> None:
         assert obligations.for_peer(str(tmp_path), "peer-none") is None
 
-    def test_ledger_with_nothing_owed_is_empty_list(self, tmp_path):
+    def test_ledger_with_nothing_owed_is_empty_list(self, tmp_path: Path) -> None:
         repo_root = str(tmp_path)
         _write_ledger(
             repo_root,
@@ -34,12 +35,12 @@ class TestForPeerNoneVsEmpty:
         )
         assert obligations.for_peer(repo_root, "peer-empty") == []
 
-    def test_unsafe_session_id_is_none(self, tmp_path):
+    def test_unsafe_session_id_is_none(self, tmp_path: Path) -> None:
         assert obligations.for_peer(str(tmp_path), "../escape") is None
 
 
 class TestForPeerReturnsNames:
-    def test_returns_undischarged_unfired_records(self, tmp_path):
+    def test_returns_undischarged_unfired_records(self, tmp_path: Path) -> None:
         repo_root = str(tmp_path)
         _write_ledger(
             repo_root,
@@ -60,7 +61,7 @@ class TestForPeerReturnsNames:
         assert [r["obligation_id"] for r in rows] == ["obl-1"]
         assert rows[0]["next_action"] == "do the thing"
 
-    def test_malformed_lines_are_skipped(self, tmp_path):
+    def test_malformed_lines_are_skipped(self, tmp_path: Path) -> None:
         repo_root = str(tmp_path)
         path = os.path.join(_ledger_dir(repo_root, "peer-malformed"), "next-move-ledger.jsonl")
         with open(path, "w", encoding="utf-8") as handle:
@@ -71,10 +72,10 @@ class TestForPeerReturnsNames:
 
 
 class TestRecordAppendsIntakeRow:
-    def _intake_path(self, repo_root, session_id):
+    def _intake_path(self, repo_root, session_id) -> str:
         return machinery_paths.intake_path(repo_root, session_id)
 
-    def test_open_row_shape(self, tmp_path):
+    def test_open_row_shape(self, tmp_path: Path) -> None:
         repo_root = str(tmp_path)
         ok = obligations.record(
             repo_root,
@@ -99,17 +100,17 @@ class TestRecordAppendsIntakeRow:
         assert row["producer"] == "test"
         assert row["emitted_at"]
 
-    def test_open_missing_seam_or_next_action_rejected(self, tmp_path):
+    def test_open_missing_seam_or_next_action_rejected(self, tmp_path: Path) -> None:
         repo_root = str(tmp_path)
         assert obligations.record(repo_root, "sid-2", "open", "obl-y", producer="test") is False
         assert not os.path.exists(self._intake_path(repo_root, "sid-2"))
 
-    def test_blocked_missing_blocked_on_session_id_rejected(self, tmp_path):
+    def test_blocked_missing_blocked_on_session_id_rejected(self, tmp_path: Path) -> None:
         repo_root = str(tmp_path)
         assert obligations.record(repo_root, "sid-3", "blocked", "obl-z", producer="test") is False
         assert not os.path.exists(self._intake_path(repo_root, "sid-3"))
 
-    def test_blocked_row_shape(self, tmp_path):
+    def test_blocked_row_shape(self, tmp_path: Path) -> None:
         repo_root = str(tmp_path)
         ok = obligations.record(
             repo_root,
@@ -125,24 +126,24 @@ class TestRecordAppendsIntakeRow:
         assert rows[0]["blocked_on_session_id"] == "peer-abc"
         assert rows[0]["blocked_on_name"] == "peer-friendly-name"
 
-    def test_progress_and_discharge_do_not_require_seam(self, tmp_path):
+    def test_progress_and_discharge_do_not_require_seam(self, tmp_path: Path) -> None:
         repo_root = str(tmp_path)
         assert obligations.record(repo_root, "sid-5", "progress", "obl-v", producer="test") is True
         assert obligations.record(repo_root, "sid-5", "discharge", "obl-v", producer="test") is True
 
-    def test_unknown_op_rejected(self, tmp_path):
+    def test_unknown_op_rejected(self, tmp_path: Path) -> None:
         repo_root = str(tmp_path)
         assert obligations.record(repo_root, "sid-6", "frobnicate", "obl-u", producer="test") is False
 
-    def test_missing_producer_rejected(self, tmp_path):
+    def test_missing_producer_rejected(self, tmp_path: Path) -> None:
         repo_root = str(tmp_path)
         assert obligations.record(repo_root, "sid-7", "progress", "obl-t", producer="") is False
 
-    def test_unsafe_session_id_rejected(self, tmp_path):
+    def test_unsafe_session_id_rejected(self, tmp_path: Path) -> None:
         repo_root = str(tmp_path)
         assert obligations.record(repo_root, "../escape", "progress", "obl-s", producer="test") is False
 
-    def test_appends_rather_than_overwrites(self, tmp_path):
+    def test_appends_rather_than_overwrites(self, tmp_path: Path) -> None:
         repo_root = str(tmp_path)
         obligations.record(repo_root, "sid-8", "progress", "obl-r", producer="test")
         obligations.record(repo_root, "sid-8", "progress", "obl-r", producer="test")

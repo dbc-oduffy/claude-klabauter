@@ -6,6 +6,7 @@ from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_contract import CLAIM_PARAM
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+import pytest
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
@@ -25,13 +26,13 @@ def _script(monkeypatch) -> str:
     )
 
 
-def test_remaining_prompt_has_no_manifest_union_fallback(monkeypatch):
+def test_remaining_prompt_has_no_manifest_union_fallback(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert "flatMap((r) => r.writes" not in script
     assert "remaining_leg?.writes ?? []" in script or "?.writes ?? []).join(', ')" in script
 
 
-def test_halt_next_action_names_the_claim_param(monkeypatch):
+def test_halt_next_action_names_the_claim_param(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     start = script.index("halted: 'ledger-check'")
     text = script[start : script.index("}; }", start)]

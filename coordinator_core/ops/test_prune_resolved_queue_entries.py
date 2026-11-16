@@ -13,6 +13,7 @@ import stat
 import pytest
 
 from coordinator_core.ops.prune_resolved_queue_entries import main
+from pathlib import Path
 
 
 def _run(tmp_path, basename, content):
@@ -27,7 +28,7 @@ def _run(tmp_path, basename, content):
 # ---------------------------------------------------------------------------
 
 
-def test_rule2_resolved_section_dropped_to_next_h2(tmp_path):
+def test_rule2_resolved_section_dropped_to_next_h2(tmp_path: Path) -> None:
     rc, out = _run(
         tmp_path,
         "bug-backlog.md",
@@ -42,7 +43,7 @@ def test_rule2_resolved_section_dropped_to_next_h2(tmp_path):
     )
 
 
-def test_rule2_history_closed_archive_all_stripped(tmp_path):
+def test_rule2_history_closed_archive_all_stripped(tmp_path: Path) -> None:
     rc, out = _run(
         tmp_path,
         "bug-backlog.md",
@@ -58,7 +59,7 @@ def test_rule2_history_closed_archive_all_stripped(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_rule5_bracketed_dated_h3_block_dropped(tmp_path):
+def test_rule5_bracketed_dated_h3_block_dropped(tmp_path: Path) -> None:
     rc, out = _run(
         tmp_path,
         "bug-backlog.md",
@@ -81,7 +82,7 @@ def test_rule5_bracketed_dated_h3_block_dropped(tmp_path):
     )
 
 
-def test_rule5_mid_line_bracketed_status(tmp_path):
+def test_rule5_mid_line_bracketed_status(tmp_path: Path) -> None:
     rc, out = _run(
         tmp_path,
         "bug-backlog.md",
@@ -93,7 +94,7 @@ def test_rule5_mid_line_bracketed_status(tmp_path):
     assert out == "### BS-2026-05-18-OPEN [P3] still open\nOpen body.\n"
 
 
-def test_rule5_em_dash_suffix_closure(tmp_path):
+def test_rule5_em_dash_suffix_closure(tmp_path: Path) -> None:
     rc, out = _run(
         tmp_path,
         "bug-backlog.md",
@@ -105,7 +106,7 @@ def test_rule5_em_dash_suffix_closure(tmp_path):
     assert out == "### BS-2026-05-18-OPEN open entry\nOpen body.\n"
 
 
-def test_rule5_h3_closure_transitions_into_next_h3_closure(tmp_path):
+def test_rule5_h3_closure_transitions_into_next_h3_closure(tmp_path: Path) -> None:
     rc, out = _run(
         tmp_path,
         "bug-backlog.md",
@@ -117,7 +118,7 @@ def test_rule5_h3_closure_transitions_into_next_h3_closure(tmp_path):
     assert out == "### BS-C-OPEN still open\nBody C.\n"
 
 
-def test_rule5_non_closure_h3_entries_survive(tmp_path):
+def test_rule5_non_closure_h3_entries_survive(tmp_path: Path) -> None:
     content = (
         "### BS-PARTIAL [P2] partial fix in flight\nBody partial.\n\n"
         "### BS-WILL-BE-DONE [P3] should be done in v2\nBody forward-looking.\n"
@@ -132,7 +133,7 @@ def test_rule5_non_closure_h3_entries_survive(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_rule6_example_sim_repo_shape_strikethrough_row_dropped(tmp_path):
+def test_rule6_example_sim_repo_shape_strikethrough_row_dropped(tmp_path: Path) -> None:
     rc, out = _run(
         tmp_path,
         "bug-backlog.md",
@@ -150,7 +151,7 @@ def test_rule6_example_sim_repo_shape_strikethrough_row_dropped(tmp_path):
     )
 
 
-def test_rule6_non_closure_strikethrough_survives(tmp_path):
+def test_rule6_non_closure_strikethrough_survives(tmp_path: Path) -> None:
     content = (
         "Narrative line: ~~old approach~~ — we now use the new approach.\n"
         "Another line: ~~deprecated module~~ is the predecessor.\n"
@@ -165,7 +166,7 @@ def test_rule6_non_closure_strikethrough_survives(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_rule7_example_repo_row_dropped(tmp_path):
+def test_rule7_example_repo_row_dropped(tmp_path: Path) -> None:
     rc, out = _run(
         tmp_path,
         "bug-backlog.md",
@@ -179,7 +180,7 @@ def test_rule7_example_repo_row_dropped(tmp_path):
     assert out == "| BS-2026-05-18-OPEN | OPEN — needs work |\n"
 
 
-def test_rule7_narrative_fixed_in_later_column_survives(tmp_path):
+def test_rule7_narrative_fixed_in_later_column_survives(tmp_path: Path) -> None:
     content = "| BS-2026-05-18-OPEN | OPEN | should be FIXED in v2 | not yet |\n"
     rc, out = _run(tmp_path, "bug-backlog.md", content)
     assert rc == 0
@@ -191,7 +192,7 @@ def test_rule7_narrative_fixed_in_later_column_survives(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_rule1_resolution_resolved_drops_entry(tmp_path):
+def test_rule1_resolution_resolved_drops_entry(tmp_path: Path) -> None:
     rc, out = _run(
         tmp_path,
         "improvement-queue.md",
@@ -207,7 +208,7 @@ def test_rule1_resolution_resolved_drops_entry(tmp_path):
     )
 
 
-def test_rule1_closeout_subline_drops_entry(tmp_path):
+def test_rule1_closeout_subline_drops_entry(tmp_path: Path) -> None:
     rc, out = _run(
         tmp_path,
         "improvement-queue.md",
@@ -226,7 +227,7 @@ def test_rule1_closeout_subline_drops_entry(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_rule3_ceremony_lines_stripped_entry_kept(tmp_path):
+def test_rule3_ceremony_lines_stripped_entry_kept(tmp_path: Path) -> None:
     rc, out = _run(
         tmp_path,
         "improvement-queue.md",
@@ -244,7 +245,7 @@ def test_rule3_ceremony_lines_stripped_entry_kept(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_rule1_inactive_on_bug_backlog(tmp_path):
+def test_rule1_inactive_on_bug_backlog(tmp_path: Path) -> None:
     content = (
         "- 2026-05-15 | self | foo.md:10 | thing | proposed target: wiki\n"
         "  resolution: resolved 2026-05-16\n"
@@ -259,7 +260,7 @@ def test_rule1_inactive_on_bug_backlog(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_f1_rule7_keyword_in_col3_survives_col2_drops(tmp_path):
+def test_f1_rule7_keyword_in_col3_survives_col2_drops(tmp_path: Path) -> None:
     rc, out = _run(
         tmp_path,
         "bug-backlog.md",
@@ -272,7 +273,7 @@ def test_f1_rule7_keyword_in_col3_survives_col2_drops(tmp_path):
     )
 
 
-def test_f2_rule5_markdown_link_closed_survives(tmp_path):
+def test_f2_rule5_markdown_link_closed_survives(tmp_path: Path) -> None:
     rc, out = _run(
         tmp_path,
         "bug-backlog.md",
@@ -287,7 +288,7 @@ def test_f2_rule5_markdown_link_closed_survives(tmp_path):
     )
 
 
-def test_f3_rule8_closure_mid_entry_drops_whole_entry_and_orphans(tmp_path):
+def test_f3_rule8_closure_mid_entry_drops_whole_entry_and_orphans(tmp_path: Path) -> None:
     rc, out = _run(
         tmp_path,
         "improvement-queue.md",
@@ -302,7 +303,7 @@ def test_f3_rule8_closure_mid_entry_drops_whole_entry_and_orphans(tmp_path):
     )
 
 
-def test_f4_rule6_case_sensitive_lowercase_survives(tmp_path):
+def test_f4_rule6_case_sensitive_lowercase_survives(tmp_path: Path) -> None:
     rc, out = _run(
         tmp_path,
         "bug-backlog.md",
@@ -317,7 +318,7 @@ def test_f4_rule6_case_sensitive_lowercase_survives(tmp_path):
     )
 
 
-def test_f5_rule5_bare_keyword_at_eol_drops(tmp_path):
+def test_f5_rule5_bare_keyword_at_eol_drops(tmp_path: Path) -> None:
     rc, out = _run(
         tmp_path,
         "bug-backlog.md",
@@ -328,7 +329,7 @@ def test_f5_rule5_bare_keyword_at_eol_drops(tmp_path):
     assert out == "### BS-2026-05-18-Y [P3] still open\nOpen body.\n"
 
 
-def test_f6_rule7_tight_table_format_matches(tmp_path):
+def test_f6_rule7_tight_table_format_matches(tmp_path: Path) -> None:
     rc, out = _run(
         tmp_path,
         "bug-backlog.md",
@@ -339,14 +340,14 @@ def test_f6_rule7_tight_table_format_matches(tmp_path):
     assert out == "| BS-2026-05-18-B | OPEN — still working |\n"
 
 
-def test_f8_rule7_narrative_fixed_col3_survives(tmp_path):
+def test_f8_rule7_narrative_fixed_col3_survives(tmp_path: Path) -> None:
     content = "| BS-2026-05-18-OPEN | OPEN | should be FIXED in v2 | not yet |\n"
     rc, out = _run(tmp_path, "bug-backlog.md", content)
     assert rc == 0
     assert out == content
 
 
-def test_f9_h2_resolved_with_inner_h3_fixed_both_suppressed(tmp_path):
+def test_f9_h2_resolved_with_inner_h3_fixed_both_suppressed(tmp_path: Path) -> None:
     rc, out = _run(
         tmp_path,
         "bug-backlog.md",
@@ -372,7 +373,7 @@ def _idempotent(tmp_path, basename, content):
     return rc1, rc2, after_first, after_second
 
 
-def test_f7_rule5_idempotent_on_clean_h3_entries(tmp_path):
+def test_f7_rule5_idempotent_on_clean_h3_entries(tmp_path: Path) -> None:
     content = (
         "### BS-OPEN-1 [P2] still working\nBody 1.\n\n"
         "### BS-OPEN-2 [P3] also working\nBody 2.\n"
@@ -382,14 +383,14 @@ def test_f7_rule5_idempotent_on_clean_h3_entries(tmp_path):
     assert first == second == content
 
 
-def test_f7_rule6_idempotent_on_clean_strikethrough(tmp_path):
+def test_f7_rule6_idempotent_on_clean_strikethrough(tmp_path: Path) -> None:
     content = "Narrative: ~~old approach~~ — we now use the new way.\n"
     rc1, rc2, first, second = _idempotent(tmp_path, "bug-backlog.md", content)
     assert (rc1, rc2) == (0, 0)
     assert first == second == content
 
 
-def test_f7_rule7_idempotent_on_clean_table_rows(tmp_path):
+def test_f7_rule7_idempotent_on_clean_table_rows(tmp_path: Path) -> None:
     content = (
         "| BS-2026-05-18-OPEN-1 | OPEN | needs work |\n"
         "| BS-2026-05-18-OPEN-2 | P2 | also open |\n"
@@ -399,7 +400,7 @@ def test_f7_rule7_idempotent_on_clean_table_rows(tmp_path):
     assert first == second == content
 
 
-def test_rule4_idempotent_across_combined_ruleset(tmp_path):
+def test_rule4_idempotent_across_combined_ruleset(tmp_path: Path) -> None:
     content = (
         "# Header\n\n## Open\n- alpha\n\n## Resolved this run\n- old1\n\n"
         "### [FIXED 2026-05-16] BS-X closed\nBody suppressed.\n\n"
@@ -417,7 +418,7 @@ def test_rule4_idempotent_across_combined_ruleset(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_guard_rejects_non_allowlisted_basename(tmp_path, capsys):
+def test_guard_rejects_non_allowlisted_basename(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = tmp_path / "random-file.md"
     p.write_text("content\n")
     rc = main([str(p)])
@@ -426,7 +427,7 @@ def test_guard_rejects_non_allowlisted_basename(tmp_path, capsys):
     assert "only operates on improvement-queue.md or bug-backlog.md" in captured.err
 
 
-def test_guard_missing_file(tmp_path, capsys):
+def test_guard_missing_file(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     missing = tmp_path / "bug-backlog.md"
     rc = main([str(missing)])
     assert rc == 1
@@ -434,7 +435,7 @@ def test_guard_missing_file(tmp_path, capsys):
     assert "file not found" in captured.err
 
 
-def test_usage_error_wrong_arg_count(capsys):
+def test_usage_error_wrong_arg_count(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main([])
     assert rc == 1
     captured = capsys.readouterr()
@@ -449,7 +450,7 @@ def test_usage_error_wrong_arg_count(capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_multi_queue_prunes_every_file_in_one_call(tmp_path):
+def test_multi_queue_prunes_every_file_in_one_call(tmp_path: Path) -> None:
     a = tmp_path / "improvement-queue.md"
     b = tmp_path / "bug-backlog.md"
     a.write_text("## Open\n- alpha\n## Resolved\n- gone\n")
@@ -462,7 +463,7 @@ def test_multi_queue_prunes_every_file_in_one_call(tmp_path):
     assert b.read_text() == "## Open\n- beta\n"
 
 
-def test_multi_queue_single_positional_path_unchanged(tmp_path):
+def test_multi_queue_single_positional_path_unchanged(tmp_path: Path) -> None:
     p = tmp_path / "bug-backlog.md"
     p.write_text("## Open\n- alpha\n## Resolved\n- gone\n")
 
@@ -472,7 +473,7 @@ def test_multi_queue_single_positional_path_unchanged(tmp_path):
     assert p.read_text() == "## Open\n- alpha\n"
 
 
-def test_multi_queue_one_bad_file_reports_which_one_and_still_prunes_rest(tmp_path, capsys):
+def test_multi_queue_one_bad_file_reports_which_one_and_still_prunes_rest(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     good = tmp_path / "bug-backlog.md"
     good.write_text("## Open\n- alpha\n## Resolved\n- gone\n")
     bad = tmp_path / "not-allowlisted.md"
@@ -488,7 +489,7 @@ def test_multi_queue_one_bad_file_reports_which_one_and_still_prunes_rest(tmp_pa
     assert good.read_text() == "## Open\n- alpha\n"
 
 
-def test_multi_queue_missing_file_among_positionals_is_attributed(tmp_path, capsys):
+def test_multi_queue_missing_file_among_positionals_is_attributed(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     good = tmp_path / "improvement-queue.md"
     good.write_text("## Open\n- alpha\n")
     missing = tmp_path / "bug-backlog.md"
@@ -509,7 +510,7 @@ def test_multi_queue_missing_file_among_positionals_is_attributed(tmp_path, caps
 # ---------------------------------------------------------------------------
 
 
-def test_atomic_replace_does_not_use_tmpdir_env(tmp_path, monkeypatch):
+def test_atomic_replace_does_not_use_tmpdir_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("TMPDIR", raising=False)
     monkeypatch.delenv("TEMP", raising=False)
     monkeypatch.delenv("TMP", raising=False)
@@ -518,7 +519,7 @@ def test_atomic_replace_does_not_use_tmpdir_env(tmp_path, monkeypatch):
     assert out == "## Open\n- alpha\n"
 
 
-def test_no_orphan_tempfiles_left_behind(tmp_path):
+def test_no_orphan_tempfiles_left_behind(tmp_path: Path) -> None:
     _run(tmp_path, "bug-backlog.md", "## Open\n- alpha\n")
     leftovers = [
         f

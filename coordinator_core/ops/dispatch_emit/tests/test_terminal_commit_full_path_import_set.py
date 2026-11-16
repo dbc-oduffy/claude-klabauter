@@ -47,6 +47,12 @@ drv._prepare_close(repo)
 from coordinator_core.ops.dispatch_emit import process_artifact_policy as _pap
 _pap.hosts_coordinator_state = lambda root: True
 from coordinator_core.ops.dispatch_emit.tests import _legacy_terminal_commit_run as legacy
+# The completion gate stamps only a judge-authored, falsifier-backed, test-backed verdict.
+drv.INLINE_REVIEW["criterion"].update(
+    authored_by="coordinator:exit-criterion-judge",
+    falsifier={"verdict": "pass", "output": "1 passed"},
+)
+drv.INLINE_REVIEW["tests"].update(status="pass", run=1)
 out = legacy.run(repo, script)
 ok = out.get("review_stamp") == "minted" and out.get("plan_status") == "implemented"
 print("RESULT=" + json.dumps({"ok": ok, "loaded": [m for m in json.loads(sys.argv[2]) if m in sys.modules]}))

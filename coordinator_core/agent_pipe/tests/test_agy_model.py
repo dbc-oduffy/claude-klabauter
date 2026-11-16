@@ -7,9 +7,10 @@ from coordinator_core.agent_pipe.agy_model import (
     REPLY_INSTRUCTION,
     job_argv,
 )
+import pytest
 
 
-def test_default_argv_extends_adapter_spawn_argv(monkeypatch):
+def test_default_argv_extends_adapter_spawn_argv(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(MODEL_ENV, raising=False)
     argv = job_argv("do the thing")
     assert argv[: len(AgyAdapter().spawn_argv("x"))][1] == "-p"
@@ -18,18 +19,18 @@ def test_default_argv_extends_adapter_spawn_argv(monkeypatch):
     assert "--output-format" in argv and "stream-json" in argv
 
 
-def test_env_overrides_default_and_arg_overrides_env(monkeypatch):
+def test_env_overrides_default_and_arg_overrides_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(MODEL_ENV, "env-model")
     assert job_argv("p")[-2:] == ["--model", "env-model"]
     assert job_argv("p", model="arg-model")[-2:] == ["--model", "arg-model"]
 
 
-def test_empty_env_falls_back_to_default(monkeypatch):
+def test_empty_env_falls_back_to_default(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(MODEL_ENV, "")
     assert job_argv("p")[-1] == DEFAULT_MODEL
 
 
-def test_never_bypasses_permissions(monkeypatch):
+def test_never_bypasses_permissions(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(MODEL_ENV, raising=False)
     argv = job_argv("p")
     assert "--dangerously-skip-permissions" not in argv
@@ -39,14 +40,14 @@ def test_never_bypasses_permissions(monkeypatch):
     assert not {"command(python *)", "command(python3 *)", "command(git *)", "command(nohup *)"} & set(allow)
 
 
-def test_adapter_fresh_spawn_is_job_argv(monkeypatch):
+def test_adapter_fresh_spawn_is_job_argv(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.agent_pipe.agy_model import AgyModelAdapter
 
     monkeypatch.delenv(MODEL_ENV, raising=False)
     assert AgyModelAdapter().spawn_argv("job") == job_argv("job")
 
 
-def test_adapter_resume_is_unchanged(monkeypatch):
+def test_adapter_resume_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.agent_pipe.agy_model import AgyModelAdapter
 
     argv = AgyModelAdapter().spawn_argv("hi", conversation="c1")
@@ -54,7 +55,7 @@ def test_adapter_resume_is_unchanged(monkeypatch):
     assert "--model" not in argv
 
 
-def test_worker_loads_job_argv_adapter_via_env(monkeypatch):
+def test_worker_loads_job_argv_adapter_via_env(monkeypatch: pytest.MonkeyPatch) -> None:
     """The relay worker, given the adapter env override, builds its child argv from job_argv."""
     from coordinator_core.agent_pipe import __main__ as worker
 

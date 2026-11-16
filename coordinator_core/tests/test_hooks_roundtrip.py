@@ -24,6 +24,7 @@ import pytest
 
 from coordinator_core import _hook_envelope
 from coordinator_core.session_hub_path import hub_for_common, session_dir_for
+from pathlib import Path
 
 
 def _run(result):
@@ -311,7 +312,7 @@ def test_foreground_dispatch_reroutes_to_background() -> None:
     }
 
 
-def test_foreground_reroute_notice_fires_on_every_reroute(tmp_path) -> None:
+def test_foreground_reroute_notice_fires_on_every_reroute(tmp_path: Path) -> None:
     """The escape-hatch advisory rides EVERY reroute of a session, never just the first.
 
     Exercised through the real marker file (not module state) because each PreToolUse
@@ -348,7 +349,7 @@ def test_foreground_reroute_notice_fires_on_every_reroute(tmp_path) -> None:
     assert _hso(second)["updatedInput"]["run_in_background"] is True, "reroute still applies"
 
 
-def test_calibration_survives_a_fresh_process(tmp_path) -> None:
+def test_calibration_survives_a_fresh_process(tmp_path: Path) -> None:
     """D7b: an absent-key dispatch acts on calibration written by an EARLIER process.
 
     The regression this pins: calibration used to live only in a module-level set, on the
@@ -380,7 +381,7 @@ def test_calibration_survives_a_fresh_process(tmp_path) -> None:
     )
 
 
-def test_present_and_false_calibrates_for_later_absent_call(tmp_path) -> None:
+def test_present_and_false_calibrates_for_later_absent_call(tmp_path: Path) -> None:
     """D7b: a present-and-false call must durably calibrate too, not just present-and-true.
 
     Review Finding 1 (2026-07-31): the durable marker was written only inside the bg_true
@@ -419,7 +420,7 @@ def test_present_and_false_calibrates_for_later_absent_call(tmp_path) -> None:
     )
 
 
-def test_uncalibrated_absent_key_still_passes(tmp_path) -> None:
+def test_uncalibrated_absent_key_still_passes(tmp_path: Path) -> None:
     """Brick-proofing intact: with no calibration marker, an absent key passes untouched.
 
     On a build that never exposes run_in_background, EVERY dispatch omits it — acting on
@@ -437,7 +438,7 @@ def test_uncalibrated_absent_key_still_passes(tmp_path) -> None:
     assert result == {}
 
 
-def test_foreground_escape_hatch_passes_through_unrewritten(tmp_path) -> None:
+def test_foreground_escape_hatch_passes_through_unrewritten(tmp_path: Path) -> None:
     """.foreground-ok → the dispatch runs foreground as written; no rewrite, no notice."""
     from coordinator_core.hooks.nudge_foreground_agent_dispatch import _handler
 
@@ -775,7 +776,7 @@ def test_postuse_session_no_matching_sentinels_returns_no_advisory() -> None:
     _unlink_if_exists(state_path)
 
 
-def test_postuse_merge_contract_both_fire(tmp_path, monkeypatch) -> None:
+def test_postuse_merge_contract_both_fire(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Both checks fire → post_advisory with texts merged via blank-line separator.
 
     Tests the merge contract by injecting a compaction-occurred sentinel and a
@@ -863,7 +864,7 @@ def test_postuse_result_shape_is_post_advisory_when_fires() -> None:
     assert "cp advisory text" in _hso(result)["additionalContext"]
 
 
-def test_em_code_dispatch_nudge_ok_sentinel_suppresses(tmp_path) -> None:
+def test_em_code_dispatch_nudge_ok_sentinel_suppresses(tmp_path: Path) -> None:
     """Bypass 3: coordinator-dispatch-nudge-ok-{sid} sentinel present → no_advisory.
 
     Covers the production suppression path for
@@ -890,7 +891,7 @@ def test_em_code_dispatch_nudge_ok_sentinel_suppresses(tmp_path) -> None:
             p.unlink(missing_ok=True)
 
 
-def test_em_code_dispatch_autonomous_sentinel_suppresses(tmp_path) -> None:
+def test_em_code_dispatch_autonomous_sentinel_suppresses(tmp_path: Path) -> None:
     """Bypass 4: autonomous-run-{sid} sentinel present → no_advisory.
 
     Covers the autonomous-run suppression path;
@@ -910,7 +911,7 @@ def test_em_code_dispatch_autonomous_sentinel_suppresses(tmp_path) -> None:
         p.unlink(missing_ok=True)
 
 
-def test_unauthorized_handoff_command_tag_in_transcript_suppresses(tmp_path) -> None:
+def test_unauthorized_handoff_command_tag_in_transcript_suppresses(tmp_path: Path) -> None:
     """Authoring-skill <command-name> tag in transcript → no_advisory (suppressed).
 
     Covers _authoring_skill_active_sync check 1
@@ -930,7 +931,7 @@ def test_unauthorized_handoff_command_tag_in_transcript_suppresses(tmp_path) -> 
     assert result == {}
 
 
-def test_unauthorized_handoff_coordinator_skill_in_tail_suppresses(tmp_path) -> None:
+def test_unauthorized_handoff_coordinator_skill_in_tail_suppresses(tmp_path: Path) -> None:
     """coordinator:handoff skill invocation in transcript tail → no_advisory (suppressed).
 
     Covers _authoring_skill_active_sync check 2
@@ -964,7 +965,7 @@ def test_dispatch_nudge_ok_tmpdir_only_suppresses() -> None:
         p.unlink(missing_ok=True)
 
 
-def test_dispatch_nudge_ok_git_tree_only_does_not_suppress(tmp_path) -> None:
+def test_dispatch_nudge_ok_git_tree_only_does_not_suppress(tmp_path: Path) -> None:
     """.dispatch-nudge-ok: writing ONLY the (now-dead) git-tree home does NOT
     suppress — the load-bearing negative half. Regresses the instant an
     OR-branch re-checks a git-tree candidate for this sentinel."""
@@ -998,7 +999,7 @@ def test_autonomous_tmpdir_only_suppresses() -> None:
         p.unlink(missing_ok=True)
 
 
-def test_autonomous_git_tree_only_does_not_suppress(tmp_path) -> None:
+def test_autonomous_git_tree_only_does_not_suppress(tmp_path: Path) -> None:
     """.autonomous: writing ONLY the (now-dead) git-tree home does NOT
     suppress — the load-bearing negative half. Regresses the instant an
     OR-branch re-checks a git-tree candidate for this sentinel."""

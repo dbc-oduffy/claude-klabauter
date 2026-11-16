@@ -38,6 +38,7 @@ from coordinator_core.codex_runner.review import (
     USER_PROFILE_ENV,
     _unattended_env,
 )
+from coordinator_core import tenant_priority
 from coordinator_core.bash_guards import _heavy_command_class as capacity
 from coordinator_core.group_em import admission_post, slot_grant, slot_wait
 from coordinator_core.agent_pipe.agy import family_stage_argv
@@ -451,6 +452,7 @@ def _run_admitted(argv, prompt, *, env, repo_root, artifact_dir, backend,
             argv, cwd=repo_root, env=env, stdin=subprocess.PIPE,
             stdout=stdout, stderr=stderr, shell=False,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            **tenant_priority.popen_kwargs(argv),
         )
         posted = admission_post.post("START", sid, pids=[proc.pid], run=key,
                                      declared_peak_mb=actual_peak_mb)

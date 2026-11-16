@@ -186,7 +186,7 @@ if IS_WINDOWS:
             raise ctypes.WinError(err)
         return job
 
-    def _assign_to_job(job, process_handle):
+    def _assign_to_job(job, process_handle) -> None:
         ok = _kernel32.AssignProcessToJobObject(job, process_handle)
         if not ok:
             raise ctypes.WinError(ctypes.get_last_error())

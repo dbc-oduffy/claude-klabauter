@@ -17,6 +17,7 @@ import pytest
 
 from coordinator_core.git.run import GitResult
 from coordinator_core.p4 import runner, session_change, shelve, workspace
+from pathlib import Path
 
 # The package
 # used to re-export `workspace.session_change` under this same attribute
@@ -44,7 +45,7 @@ def _spawn_with_verb(spawned, verb):
 
 
 @pytest.fixture
-def sdir(tmp_path):
+def sdir(tmp_path: Path) -> Path:
     d = tmp_path / "session"
     d.mkdir()
     (d / "meta.json").write_text("{}", encoding="utf-8")
@@ -67,11 +68,11 @@ def _git_fail() -> GitResult:
 
 
 class TestHealthyBaseShelves:
-    def test_reconcile_revert_shelve_sequence(self, monkeypatch, tmp_path, sdir, identity):
+    def test_reconcile_revert_shelve_sequence(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sdir, identity) -> None:
         repo_root = str(tmp_path)
         spawned = []
 
-        def fake_run_git(args, **kw):
+        def fake_run_git(args, **kw) -> GitResult:
             if args[:2] == ["-C", repo_root] and "cat-file" in args:
                 return _git_ok()
             if "log" in args:
@@ -124,11 +125,11 @@ class TestHealthyBaseShelves:
         assert meta["p4_shelved_at"]
 
     def test_empty_path_set_is_a_success_with_zero_p4_spawns(
-        self, monkeypatch, tmp_path, sdir, identity
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sdir, identity
+    ) -> None:
         repo_root = str(tmp_path)
 
-        def fake_run_git(args, **kw):
+        def fake_run_git(args, **kw) -> GitResult:
             if "cat-file" in args:
                 return _git_ok()
             if "log" in args:
@@ -162,7 +163,7 @@ class TestP4ignoreAbsentDropsDashA:
         repo_root = str(tmp_path)
         spawned = []
 
-        def fake_run_git(args, **kw):
+        def fake_run_git(args, **kw) -> GitResult:
             if "cat-file" in args:
                 return _git_ok()
             if "log" in args:
@@ -186,23 +187,23 @@ class TestP4ignoreAbsentDropsDashA:
         assert outcome.ok
         return _spawn_with_verb(spawned, "reconcile")
 
-    def test_absent_drops_dash_a(self, monkeypatch, tmp_path, sdir, identity):
+    def test_absent_drops_dash_a(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sdir, identity) -> None:
         reconcile = self._run(monkeypatch, tmp_path, sdir, identity, p4ignore_absent=True)
         assert "-a" not in reconcile
         assert {"-e", "-d"} <= set(reconcile)
 
-    def test_present_keeps_dash_a(self, monkeypatch, tmp_path, sdir, identity):
+    def test_present_keeps_dash_a(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sdir, identity) -> None:
         reconcile = self._run(monkeypatch, tmp_path, sdir, identity, p4ignore_absent=False)
         assert {"-e", "-a", "-d"} <= set(reconcile)
 
 
 class TestUnreachableBaseReMints:
     def test_unreachable_base_falls_back_to_merge_base_and_remints(
-        self, monkeypatch, tmp_path, sdir, identity
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sdir, identity
+    ) -> None:
         repo_root = str(tmp_path)
 
-        def fake_run_git(args, **kw):
+        def fake_run_git(args, **kw) -> GitResult:
             if "cat-file" in args:
                 return _git_fail()  # base unreachable
             if "merge-base" in args:
@@ -243,11 +244,11 @@ class TestUnreachableBaseReMints:
         assert reconcile[reconcile.index("-c") + 1] == "202"
 
     def test_unreachable_base_with_no_upstream_merge_base_is_a_typed_refusal(
-        self, monkeypatch, tmp_path, sdir, identity
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sdir, identity
+    ) -> None:
         repo_root = str(tmp_path)
 
-        def fake_run_git(args, **kw):
+        def fake_run_git(args, **kw) -> GitResult:
             if "cat-file" in args:
                 return _git_fail()
             if "merge-base" in args:
@@ -271,10 +272,10 @@ class TestUnreachableBaseReMints:
 
 
 class TestTypedRefusalNeverRaises:
-    def test_reconcile_refusal_returns_typed_outcome(self, monkeypatch, tmp_path, sdir, identity):
+    def test_reconcile_refusal_returns_typed_outcome(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sdir, identity) -> None:
         repo_root = str(tmp_path)
 
-        def fake_run_git(args, **kw):
+        def fake_run_git(args, **kw) -> GitResult:
             if "cat-file" in args:
                 return _git_ok()
             if "log" in args:
@@ -308,14 +309,14 @@ class TestFstatRecordsAreKeyedByNameNeverByPosition:
     never produce a misaligned `ok=True`."""
 
     def test_fewer_records_than_paths_resolves_correctly_never_misaligned(
-        self, monkeypatch, tmp_path, sdir, identity
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sdir, identity
+    ) -> None:
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         for name in ("a.uasset", "b.uasset", "c.uasset"):
             (repo_root / name).write_text("x\n", encoding="utf-8")
 
-        def fake_run_git(args, **kw):
+        def fake_run_git(args, **kw) -> GitResult:
             if "cat-file" in args:
                 return _git_ok()
             if "log" in args:
@@ -366,13 +367,13 @@ class TestFstatRecordsAreKeyedByNameNeverByPosition:
         assert outcome.restored == 1
 
     def test_record_naming_an_unrequested_path_is_a_typed_refusal(
-        self, monkeypatch, tmp_path, sdir, identity
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, sdir, identity
+    ) -> None:
         repo_root = tmp_path / "repo"
         repo_root.mkdir()
         (repo_root / "a.uasset").write_text("x\n", encoding="utf-8")
 
-        def fake_run_git(args, **kw):
+        def fake_run_git(args, **kw) -> GitResult:
             if "cat-file" in args:
                 return _git_ok()
             if "log" in args:

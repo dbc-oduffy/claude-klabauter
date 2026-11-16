@@ -1,6 +1,7 @@
 """Tests for canvas_harvest.render: the SETTLED.md skeleton."""
 
 from coordinator_core.canvas_harvest import model, render
+from pathlib import Path
 
 
 def _lifted(threads):
@@ -8,7 +9,7 @@ def _lifted(threads):
     return model.Lifted(None, comments, None, None, None, None)
 
 
-def test_skeleton_with_threads_has_heading_and_no_list_item():
+def test_skeleton_with_threads_has_heading_and_no_list_item() -> None:
     text = render.settled_skeleton(["t1", "t2"])
     assert text.startswith(render.HEADING + "\n")
     assert "t1" in text and "t2" in text
@@ -17,13 +18,13 @@ def test_skeleton_with_threads_has_heading_and_no_list_item():
         assert not line.startswith(("- ", "* "))
 
 
-def test_skeleton_without_threads_is_only_the_no_threads_item():
+def test_skeleton_without_threads_is_only_the_no_threads_item() -> None:
     assert render.settled_skeleton([]) == f"{render.HEADING}\n\n- [no-threads]\n"
     lines = [ln for ln in render.settled_skeleton([]).splitlines() if ln.startswith("- ")]
     assert lines == ["- [no-threads]"]
 
 
-def test_write_is_byte_identical_on_second_call(tmp_path):
+def test_write_is_byte_identical_on_second_call(tmp_path: Path) -> None:
     assert render.write_settled_skeleton(_lifted([{"id": "a"}]), tmp_path) is True
     target = tmp_path / render.SETTLED_NAME
     target.write_bytes(target.read_bytes() + b"- [thread:a] decided\n")
@@ -32,6 +33,6 @@ def test_write_is_byte_identical_on_second_call(tmp_path):
     assert target.read_bytes() == before
 
 
-def test_no_comments_read_writes_no_threads_item(tmp_path):
+def test_no_comments_read_writes_no_threads_item(tmp_path: Path) -> None:
     render.write_settled_skeleton(_lifted(None), tmp_path)
     assert (tmp_path / render.SETTLED_NAME).read_text() == render.settled_skeleton([])

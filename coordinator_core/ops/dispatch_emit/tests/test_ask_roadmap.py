@@ -127,6 +127,7 @@ def test_roadmap_gate_leg_is_haiku_on_the_gate_type(repo):
     script = _compose(repo)
     gate_call = script[script.index("const _gate = await agent("):].split("\n", 1)[0]
     assert ask_compose._lit(ask_compose._GATE_AGENT_TYPE) in gate_call
+    assert ask_compose._lit("coordinator:test-runner") not in gate_call
     assert ask_compose._lit(ask_compose._MECHANICAL_MODEL) in gate_call
 
 

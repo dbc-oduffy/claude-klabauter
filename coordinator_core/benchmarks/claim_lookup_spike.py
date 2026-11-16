@@ -47,7 +47,7 @@ class _SpawnCount:
         self._orig = subprocess.Popen
 
         class _Counting(self._orig):  # type: ignore[misc, name-defined]
-            def __init__(self, *a, **k):
+            def __init__(self, *a, **k) -> None:
                 counter.n += 1
                 super().__init__(*a, **k)
 

@@ -11,6 +11,7 @@ import yaml
 
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import run_notes
+from pathlib import Path
 
 RUN = "warp-2026-10-30-x-75f803-20261030T101437-1e48f4"
 SIZING_REL = "state/sizings/s.yaml"
@@ -45,7 +46,7 @@ _C4 = """- id: C4
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     for rel in (INSIDE, ADDED, UNCOVERED):
         f = tmp_path / rel
@@ -70,12 +71,12 @@ def _call(repo, **params):
     return rl._handler({"run_id": RUN, **params}, repo)
 
 
-def _add_task(repo):
+def _add_task(repo) -> None:
     plan = repo / PLAN_REL
     plan.write_text(plan.read_text(encoding="utf-8").replace("```\n", _C4 + "```\n"), encoding="utf-8")
 
 
-def test_a_note_naming_an_uncovered_path_widens_the_footprint_through_an_engine_written_row(repo):
+def test_a_note_naming_an_uncovered_path_widens_the_footprint_through_an_engine_written_row(repo) -> None:
     note = f"add a constant to {ADDED}"
     before = _call(repo, note=note)
     assert "note" in before["applied"] and "footprint_widened" in before["applied"] and before["ok"] is True
@@ -89,14 +90,14 @@ def test_a_note_naming_an_uncovered_path_widens_the_footprint_through_an_engine_
     assert ADDED in brief
 
 
-def test_add_task_row_covering_the_path_needs_no_widening(repo):
+def test_add_task_row_covering_the_path_needs_no_widening(repo) -> None:
     _add_task(repo)
     after = _call(repo, note=f"add a constant to {ADDED}")
     assert "note" in after["applied"] and after["ok"] is True
     assert "footprint_widened" not in after["applied"] and "footprint_widened" not in after
 
 
-def test_a_run_with_no_readable_plan_refuses_the_note_naming_the_add_task_call(repo):
+def test_a_run_with_no_readable_plan_refuses_the_note_naming_the_add_task_call(repo) -> None:
     (repo / PLAN_REL).unlink()
     reply = _call(repo, note=f"add a constant to {ADDED}")
     assert "note" not in reply["applied"] and reply["ok"] is False
@@ -105,14 +106,14 @@ def test_a_run_with_no_readable_plan_refuses_the_note_naming_the_add_task_call(r
     assert entry["paths"] == [ADDED]
 
 
-def test_plan_row_writes_under_widens_the_footprint(repo):
+def test_plan_row_writes_under_widens_the_footprint(repo) -> None:
     _add_task(repo)
     files, dirs = rl.run_footprint(repo, rl.run_dir(repo, RUN), SIZING_REL)
     assert {INSIDE, ADDED} <= files and "gen/out" in dirs
     assert "note" in _call(repo, note="fix gen/out/g.py")["applied"]
 
 
-def test_a_path_no_plan_row_covers_is_widened_by_its_own_engine_row_after_add_task(repo):
+def test_a_path_no_plan_row_covers_is_widened_by_its_own_engine_row_after_add_task(repo) -> None:
     _add_task(repo)
     reply = _call(repo, note=f"add a field to {UNCOVERED}")
     assert "note" in reply["applied"] and "footprint_widened" in reply["applied"]
@@ -121,7 +122,7 @@ def test_a_path_no_plan_row_covers_is_widened_by_its_own_engine_row_after_add_ta
     assert reply["refused"] == []
 
 
-def test_run_without_a_readable_plan_keeps_the_manifest_footprint(repo):
+def test_run_without_a_readable_plan_keeps_the_manifest_footprint(repo) -> None:
     (repo / PLAN_REL).unlink()
     files, _ = rl.run_footprint(repo, rl.run_dir(repo, RUN), SIZING_REL)
     assert files == {INSIDE}

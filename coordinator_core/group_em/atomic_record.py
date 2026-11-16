@@ -8,6 +8,10 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Iterator, Optional
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 
 def settings_home() -> Path:
@@ -142,7 +146,7 @@ def holder_lock(
         os.close(fd)
 
 
-def load_by_path(name: str, path: Path):
+def load_by_path(name: str, path: Path) -> ModuleType:
     import importlib.util
 
     spec = importlib.util.spec_from_file_location(name, path)

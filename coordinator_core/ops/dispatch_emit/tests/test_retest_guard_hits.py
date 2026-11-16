@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from coordinator_core.ops.dispatch_emit import landing_export as le
 from coordinator_core.ops.dispatch_emit import retest_targeted as rt
 from coordinator_core.ops.dispatch_emit.always_run_guards import GUARD_HITS_KEY
+import pytest
 
 GUARD_FILE = "tests/test_guard.py"
 GUARD = f"{GUARD_FILE}::test_no_literal"
@@ -27,7 +28,7 @@ def _hits_lines(n: int) -> str:
     return "".join(f"{TOUCHED}:{i}: literal\n" for i in range(1, n + 1))
 
 
-def test_red_on_both_records_tree_and_head_counts(tmp_path):
+def test_red_on_both_records_tree_and_head_counts(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     export_log, head_log = tmp_path / "r.export.log", tmp_path / "r.head.log"
     export_log.write_text(_hits_lines(3) + RED_LINE, encoding="utf-8")
@@ -38,7 +39,7 @@ def test_red_on_both_records_tree_and_head_counts(tmp_path):
     assert got == {GUARD_HITS_KEY: {GUARD: {"tree": {TOUCHED: 3}, "head": {TOUCHED: 1}}}}
 
 
-def test_head_node_measure_reads_the_node_log(tmp_path):
+def test_head_node_measure_reads_the_node_log(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     export_log, head_log = tmp_path / "r.export.log", tmp_path / "r.head.log"
     export_log.write_text(_hits_lines(2) + RED_LINE, encoding="utf-8")
@@ -50,7 +51,7 @@ def test_head_node_measure_reads_the_node_log(tmp_path):
     assert got[GUARD_HITS_KEY][GUARD]["head"] == {TOUCHED: 2}
 
 
-def test_red_on_tree_only_records_zero_head_hits(tmp_path):
+def test_red_on_tree_only_records_zero_head_hits(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     export_log, head_log = tmp_path / "r.export.log", tmp_path / "r.head.log"
     export_log.write_text(_hits_lines(2) + RED_LINE, encoding="utf-8")
@@ -61,7 +62,7 @@ def test_red_on_tree_only_records_zero_head_hits(tmp_path):
     assert got[GUARD_HITS_KEY][GUARD] == {"tree": {TOUCHED: 2}, "head": {TOUCHED: 0}}
 
 
-def test_green_guard_records_no_key(tmp_path):
+def test_green_guard_records_no_key(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     export_log, head_log = tmp_path / "r.export.log", tmp_path / "r.head.log"
     export_log.write_text("FAILED tests/test_other.py::test_x - boom\n", encoding="utf-8")
@@ -70,7 +71,7 @@ def test_green_guard_records_no_key(tmp_path):
     assert rt._guard_hits(root, tmp_path / "export", export_log, head_log, {"baseline": {}}, [TOUCHED]) == {}
 
 
-def test_skipped_baseline_or_absent_head_log_records_no_entry(tmp_path):
+def test_skipped_baseline_or_absent_head_log_records_no_entry(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     export_log, head_log = tmp_path / "r.export.log", tmp_path / "r.head.log"
     export_log.write_text(_hits_lines(2) + RED_LINE, encoding="utf-8")
@@ -82,7 +83,7 @@ def test_skipped_baseline_or_absent_head_log_records_no_entry(tmp_path):
     assert rt._guard_hits(root, tmp_path / "export", export_log, head_log, {"baseline": {}}, [TOUCHED]) == {}
 
 
-def test_isolated_body_writes_the_key_into_the_record_and_runs_no_extra_session(tmp_path, monkeypatch):
+def test_isolated_body_writes_the_key_into_the_record_and_runs_no_extra_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     record = tmp_path / "scratch" / "r.json"
     passes = []
@@ -106,7 +107,7 @@ def test_isolated_body_writes_the_key_into_the_record_and_runs_no_extra_session(
     def write_dual(
         root_, path, log_path, export_log, run_id, tests, dropped, drop_note, meta, dirty, head_sha,
         export_pass, live_pass, fail, baseline=None,
-    ):
+    ) -> int:
         captured["baseline"] = baseline
         return 1
 

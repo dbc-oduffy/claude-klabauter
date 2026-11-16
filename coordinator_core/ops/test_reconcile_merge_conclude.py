@@ -10,11 +10,12 @@ import pytest
 from coordinator_core.git import reconcile_manifest as rm
 from coordinator_core.ops import reconcile_merge_conclude as conclude
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _g(repo, *args, check=True):
+def _g(repo, *args, check: bool = True):
     return subprocess.run(
         ["git", "-C", str(repo), *args], capture_output=True, text=True, check=check,
         **no_console_creationflags(),
@@ -22,7 +23,7 @@ def _g(repo, *args, check=True):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     r = tmp_path / "repo"
     r.mkdir()
     _g(r, "init", "-q", "-b", "main")
@@ -48,12 +49,12 @@ def repo(tmp_path, monkeypatch):
     return r
 
 
-def _open_manifest(repo, paths=("a.txt",)):
+def _open_manifest(repo, paths=("a.txt",)) -> None:
     head = rm.live_merge_head(repo)
     rm.write(repo, merge_head=head, branch="main", paths=paths)
 
 
-def test_no_merge_refused(tmp_path, monkeypatch, capsys):
+def test_no_merge_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     r = tmp_path / "r"
     r.mkdir()
     _g(r, "init", "-q")
@@ -62,18 +63,18 @@ def test_no_merge_refused(tmp_path, monkeypatch, capsys):
     assert rm.REFUSAL_NO_MERGE in capsys.readouterr().err
 
 
-def test_missing_manifest_refused(repo, capsys):
+def test_missing_manifest_refused(repo, capsys: pytest.CaptureFixture[str]) -> None:
     assert conclude.main([]) == 3
     assert rm.REFUSAL_MANIFEST_STALE in capsys.readouterr().err
 
 
-def test_stale_manifest_refused(repo, capsys):
+def test_stale_manifest_refused(repo, capsys: pytest.CaptureFixture[str]) -> None:
     rm.write(repo, merge_head="0" * 40, branch="main", paths=["a.txt"])
     assert conclude.main([]) == 3
     assert rm.REFUSAL_MANIFEST_STALE in capsys.readouterr().err
 
 
-def test_markers_refused(repo, capsys):
+def test_markers_refused(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _open_manifest(repo)
     assert "<<<<<<<" in (repo / "a.txt").read_text()
     assert conclude.main([]) == 3
@@ -82,7 +83,7 @@ def test_markers_refused(repo, capsys):
     assert rm.live_merge_head(repo) is not None
 
 
-def test_unmerged_refused(repo, capsys):
+def test_unmerged_refused(repo, capsys: pytest.CaptureFixture[str]) -> None:
     (repo / "a.txt").write_text("resolved\n")
     _open_manifest(repo, paths=("b.txt",))
     assert conclude.main([]) == 3
@@ -90,7 +91,7 @@ def test_unmerged_refused(repo, capsys):
     assert rm.REFUSAL_UNMERGED in err and "a.txt" in err
 
 
-def test_foreign_staged_refused(repo, capsys):
+def test_foreign_staged_refused(repo, capsys: pytest.CaptureFixture[str]) -> None:
     (repo / "a.txt").write_text("resolved\n")
     (repo / "peer.txt").write_text("peer\n")
     _g(repo, "add", "peer.txt")
@@ -101,7 +102,7 @@ def test_foreign_staged_refused(repo, capsys):
     assert rm.live_merge_head(repo) is not None
 
 
-def test_machine_local_staged_refused(repo, capsys):
+def test_machine_local_staged_refused(repo, capsys: pytest.CaptureFixture[str]) -> None:
     (repo / "a.txt").write_text("resolved\n")
     share = repo / ".coordinator-local" / "subagent-share"
     share.mkdir(parents=True)
@@ -117,7 +118,7 @@ def test_machine_local_staged_refused(repo, capsys):
     assert rm.live_merge_head(repo) is not None
 
 
-def test_success_commits_merge_and_removes_manifest(repo, capsys):
+def test_success_commits_merge_and_removes_manifest(repo, capsys: pytest.CaptureFixture[str]) -> None:
     (repo / "a.txt").write_text("resolved\n")
     _open_manifest(repo)
     assert conclude.main([]) == 0

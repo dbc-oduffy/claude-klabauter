@@ -1,4 +1,5 @@
 from __future__ import annotations
+from pathlib import Path
 """
 test_isolation_root_not_honoured_outside_tests.py — regression net for the
 inherited-test-knob misroute.
@@ -49,7 +50,7 @@ def _cli_shared():
     return cli_shared
 
 
-def test_override_honoured_when_under_test(monkeypatch, tmp_path) -> None:
+def test_override_honoured_when_under_test(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     cli_shared = _cli_shared()
     monkeypatch.setenv("QUEUE_APPEND_OUTPUT_ROOT", str(tmp_path))
     monkeypatch.setenv(cli_shared.UNDER_TEST_ENV, "some::test (call)")
@@ -59,7 +60,7 @@ def test_override_honoured_when_under_test(monkeypatch, tmp_path) -> None:
     assert resolved == str(tmp_path)
 
 
-def test_override_dropped_when_not_under_test(monkeypatch, tmp_path, capsys) -> None:
+def test_override_dropped_when_not_under_test(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     cli_shared = _cli_shared()
     monkeypatch.setattr(cli_shared, "_ISOLATION_ROOT_WARNED", set())
     monkeypatch.setenv("QUEUE_APPEND_OUTPUT_ROOT", str(tmp_path))
@@ -75,7 +76,7 @@ def test_override_dropped_when_not_under_test(monkeypatch, tmp_path, capsys) -> 
     )
 
 
-def test_unset_override_is_silent(monkeypatch) -> None:
+def test_unset_override_is_silent(monkeypatch: pytest.MonkeyPatch) -> None:
     cli_shared = _cli_shared()
     monkeypatch.setattr(cli_shared, "_ISOLATION_ROOT_WARNED", set())
     monkeypatch.delenv("QUEUE_APPEND_OUTPUT_ROOT", raising=False)

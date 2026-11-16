@@ -25,6 +25,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_ledger_resume_e2e import 
 )
 from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import repo  # noqa: F401
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -39,7 +40,7 @@ def _git(root, *a):
 
 
 @pytest.fixture
-def plain_repo(tmp_path):
+def plain_repo(tmp_path: Path):
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@t.example")
     _git(tmp_path, "config", "user.name", "t")
@@ -56,20 +57,20 @@ def _resume(halt, **extra):
     return {"run_id": "old", "halt_sha": halt, "blocking": ["R1"], "unlanded": ["C1"], **extra}
 
 
-def _checkpoint(root, name, text):
+def _checkpoint(root, name, text) -> None:
     (root / name).write_text(text, encoding="utf-8")
     _git(root, "add", name)
     _git(root, "commit", "-q", "-m", f"checkpoint {name}")
 
 
-def test_declared_path_committed_by_post_halt_checkpoint_with_clean_tree_passes(plain_repo):
+def test_declared_path_committed_by_post_halt_checkpoint_with_clean_tree_passes(plain_repo) -> None:
     root, manifest, halt = plain_repo
     _checkpoint(root, "prod.py", "x = 2\n")
     assert _git(root, "status", "--porcelain", "--untracked-files=no") == ""
     assert tc._unchanged_since_halt_failures(root, _resume(halt), MET, manifest) == []
 
 
-def test_post_halt_checkpoint_of_an_undeclared_path_still_refuses(plain_repo):
+def test_post_halt_checkpoint_of_an_undeclared_path_still_refuses(plain_repo) -> None:
     root, manifest, halt = plain_repo
     _checkpoint(root, "other.py", "y = 2\n")
     got = tc._unchanged_since_halt_failures(root, _resume(halt), MET, manifest)
@@ -77,7 +78,7 @@ def test_post_halt_checkpoint_of_an_undeclared_path_still_refuses(plain_repo):
 
 
 @pytest.fixture
-def halted_repo(tmp_path):
+def halted_repo(tmp_path: Path) -> tuple[Path, Path]:
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@t.example")
     _git(tmp_path, "config", "user.name", "t")
@@ -97,19 +98,19 @@ def _null_resume(**extra):
     return _resume(None, plan="docs/plans/p.md", **extra)
 
 
-def test_null_halt_sha_resolves_halt_commit_and_post_halt_checkpoint_passes(halted_repo):
+def test_null_halt_sha_resolves_halt_commit_and_post_halt_checkpoint_passes(halted_repo) -> None:
     root, manifest = halted_repo
     _checkpoint(root, "prod.py", "x = 2\n")
     assert tc._unchanged_since_halt_failures(root, _null_resume(), MET, manifest) == []
 
 
-def test_null_halt_sha_without_change_since_halt_still_refuses(halted_repo):
+def test_null_halt_sha_without_change_since_halt_still_refuses(halted_repo) -> None:
     root, manifest = halted_repo
     got = tc._unchanged_since_halt_failures(root, _null_resume(), MET, manifest)
     assert got == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
 
 
-def test_null_halt_sha_with_unresolvable_run_refuses(halted_repo):
+def test_null_halt_sha_with_unresolvable_run_refuses(halted_repo) -> None:
     root, manifest = halted_repo
     _checkpoint(root, "prod.py", "x = 2\n")
     resume = {**_null_resume(), "run_id": "never-halted"}
@@ -152,7 +153,7 @@ def _null_halt_resume(**extra):
     return {"run_id": RUN, "halt_sha": None, "plan": PLAN, "blocking": ["R1"], "unlanded": ["C1"], **extra}
 
 
-def test_terminal_commit_null_halt_sha_accepts_own_post_halt_checkpoint(halted):
+def test_terminal_commit_null_halt_sha_accepts_own_post_halt_checkpoint(halted) -> None:
     token = _second_run(halted)
     _declare_c1_writes_a_py(halted)
     _post_halt_checkpoint(halted)
@@ -160,7 +161,7 @@ def test_terminal_commit_null_halt_sha_accepts_own_post_halt_checkpoint(halted):
     assert out["committed"] is True, out
 
 
-def test_terminal_commit_null_halt_sha_without_run_id_refuses(halted):
+def test_terminal_commit_null_halt_sha_without_run_id_refuses(halted) -> None:
     token = _second_run(halted)
     _declare_c1_writes_a_py(halted)
     _post_halt_checkpoint(halted)
@@ -170,7 +171,7 @@ def test_terminal_commit_null_halt_sha_without_run_id_refuses(halted):
     assert out["ledger_failures"] == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
 
 
-def test_no_change_since_halt_still_refuses(plain_repo):
+def test_no_change_since_halt_still_refuses(plain_repo) -> None:
     root, manifest, halt = plain_repo
     got = tc._unchanged_since_halt_failures(root, _resume(halt), MET, manifest)
     assert got == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]

@@ -27,6 +27,7 @@ from coordinator_core.ops.extract_cited_sidecars import (
     _share_roots,
     _sidecar_filenames,
 )
+from pathlib import Path
 
 _OLD = os.path.join("state", "subagent-share")
 _NEW = os.path.join(".coordinator-local", "subagent-share")
@@ -51,7 +52,7 @@ def _seed(root: str) -> None:
 
 
 class TestShareRoots:
-    def test_names_both_roots_current_convention_first(self, tmp_path):
+    def test_names_both_roots_current_convention_first(self, tmp_path: Path) -> None:
         roots = _share_roots(str(tmp_path))
 
         assert len(roots) == 2
@@ -60,14 +61,14 @@ class TestShareRoots:
 
 
 class TestOnDiskSessionIds:
-    def test_finds_sessions_under_either_root(self, tmp_path):
+    def test_finds_sessions_under_either_root(self, tmp_path: Path) -> None:
         _seed(str(tmp_path))
 
         found = _on_disk_session_ids(str(tmp_path))
 
         assert {_SID_OLD, _SID_NEW, _SID_BOTH} <= found
 
-    def test_a_session_under_both_roots_appears_once(self, tmp_path):
+    def test_a_session_under_both_roots_appears_once(self, tmp_path: Path) -> None:
         """A set, not a list: the straddler must not be double-counted.
 
         This is the assertion a `list` return would fail, and the reason the
@@ -79,7 +80,7 @@ class TestOnDiskSessionIds:
 
         assert sorted(found).count(_SID_BOTH) == 1
 
-    def test_missing_root_is_not_an_error(self, tmp_path):
+    def test_missing_root_is_not_an_error(self, tmp_path: Path) -> None:
         """Only one root exists on a fresh checkout, and on every repo that
         has finished the relocation. A `listdir` on the absent one must not
         propagate."""
@@ -87,12 +88,12 @@ class TestOnDiskSessionIds:
 
         assert _on_disk_session_ids(str(tmp_path)) == {_SID_NEW}
 
-    def test_no_root_at_all_yields_empty(self, tmp_path):
+    def test_no_root_at_all_yields_empty(self, tmp_path: Path) -> None:
         assert _on_disk_session_ids(str(tmp_path)) == set()
 
 
 class TestSidecarFilenames:
-    def test_unions_filenames_across_both_roots(self, tmp_path):
+    def test_unions_filenames_across_both_roots(self, tmp_path: Path) -> None:
         """The straddling session's files live under different roots; naming
         only one root's would report the other's as absent -- the exact
         never-raises failure this union exists to prevent."""
@@ -102,19 +103,19 @@ class TestSidecarFilenames:
 
         assert names == ["straddler-new.md", "straddler-old.md"]
 
-    def test_resolves_a_session_present_under_only_the_legacy_root(self, tmp_path):
+    def test_resolves_a_session_present_under_only_the_legacy_root(self, tmp_path: Path) -> None:
         """The pre-move corpus. A new-root-only resolution reports every one
         of these as dangling."""
         _seed(str(tmp_path))
 
         assert _sidecar_filenames(str(tmp_path), _SID_OLD) == ["only-old.md"]
 
-    def test_resolves_a_session_present_under_only_the_machinery_root(self, tmp_path):
+    def test_resolves_a_session_present_under_only_the_machinery_root(self, tmp_path: Path) -> None:
         _seed(str(tmp_path))
 
         assert _sidecar_filenames(str(tmp_path), _SID_NEW) == ["only-new.md"]
 
-    def test_relative_paths_are_computed_per_root_not_per_repo(self, tmp_path):
+    def test_relative_paths_are_computed_per_root_not_per_repo(self, tmp_path: Path) -> None:
         """`os.path.relpath` is taken against each root's own session dir.
         Computing it against a single root would prefix the other root's
         files with `../..`-shaped noise instead of a bare nested name."""
@@ -126,7 +127,7 @@ class TestSidecarFilenames:
 
         assert names == ["nested/deep-new.md", "nested/deep-old.md"]
 
-    def test_unknown_session_yields_empty(self, tmp_path):
+    def test_unknown_session_yields_empty(self, tmp_path: Path) -> None:
         _seed(str(tmp_path))
 
         assert _sidecar_filenames(str(tmp_path), "dddddddd-0000-0000-0000-000000000000") == []

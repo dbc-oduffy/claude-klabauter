@@ -14,6 +14,7 @@ from coordinator_core.execute_plan_assemble.tests.test_close_out_and_stamp_remed
     _run_git,
     _seed_plan,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -35,7 +36,7 @@ def _build(root, *, rewrite: bool, same_subject: bool = True):
     return old
 
 
-def test_rewritten_ref_names_successor_and_command(tmp_path, monkeypatch):
+def test_rewritten_ref_names_successor_and_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     old = _build(tmp_path, rewrite=True)
     new = _run_git(["rev-parse", "HEAD~1"], tmp_path).stdout.strip()
     _code, result = _run_close_out(monkeypatch, tmp_path, "plan.md")
@@ -47,7 +48,7 @@ def test_rewritten_ref_names_successor_and_command(tmp_path, monkeypatch):
     ) in msg
 
 
-def test_no_successor_keeps_plain_refusal(tmp_path, monkeypatch):
+def test_no_successor_keeps_plain_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _build(tmp_path, rewrite=True, same_subject=False)
     _code, result = _run_close_out(monkeypatch, tmp_path, "plan.md")
     msg = result["message"]
@@ -55,7 +56,7 @@ def test_no_successor_keeps_plain_refusal(tmp_path, monkeypatch):
     assert "history rewrite" not in msg
 
 
-def test_successor_lookup_is_two_spawns_regardless_of_rows(tmp_path, monkeypatch):
+def test_successor_lookup_is_two_spawns_regardless_of_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     old = _build(tmp_path, rewrite=True)
     calls = []
     real = coas._run_git

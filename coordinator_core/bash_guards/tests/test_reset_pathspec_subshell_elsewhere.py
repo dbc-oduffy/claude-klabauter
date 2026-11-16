@@ -37,7 +37,7 @@ def _denied(cmd: str) -> bool:
         "git reset -q HEAD -- $(git ls-files -m)",
     ],
 )
-def test_subshell_elsewhere_is_not_the_reset_target(cmd):
+def test_subshell_elsewhere_is_not_the_reset_target(cmd) -> None:
     assert check_destructive_git_orphan(cmd) is None
 
 
@@ -52,11 +52,11 @@ def test_subshell_elsewhere_is_not_the_reset_target(cmd):
         "git reset -q HEAD -- a.py\ngit reset --hard $(git rev-parse origin/main)",
     ],
 )
-def test_subshell_in_reset_ref_position_still_denies(cmd):
+def test_subshell_in_reset_ref_position_still_denies(cmd) -> None:
     assert _denied(cmd)
 
 
-def test_ref_part_cuts_at_top_level_newline_and_dashdash_only():
+def test_ref_part_cuts_at_top_level_newline_and_dashdash_only() -> None:
     assert _reset_own_ref_part(" HEAD -- a\n$(x)") == " HEAD "
     assert _reset_own_ref_part(" HEAD\n$(x)") == " HEAD"
     assert _reset_own_ref_part(" $(a -- b\nc) -- p") == " $(a -- b\nc) "

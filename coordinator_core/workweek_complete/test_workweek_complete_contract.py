@@ -22,6 +22,7 @@ import os
 import pytest
 
 from coordinator_core.workweek_complete import brief as wwc_brief
+from pathlib import Path
 
 
 def _all_emitted_directive_clis() -> set[str]:
@@ -56,7 +57,7 @@ def test_every_manifest_entry_is_named_by_at_least_one_directive() -> None:
         )
 
 
-def test_repo_root_delegate_keeps_native_str_path_form(monkeypatch) -> None:
+def test_repo_root_delegate_keeps_native_str_path_form(monkeypatch: pytest.MonkeyPatch) -> None:
     from pathlib import Path
 
     posix = "/some/repo/root"
@@ -66,7 +67,7 @@ def test_repo_root_delegate_keeps_native_str_path_form(monkeypatch) -> None:
     assert wwc_brief._resolve_repo_root_for_doc_staleness() is None
 
 
-def test_version_consistency_directive_carries_resolved_repo_root(monkeypatch) -> None:
+def test_version_consistency_directive_carries_resolved_repo_root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         wwc_brief, "_resolve_repo_root_for_doc_staleness", lambda: "/resolved/repo/root"
     )
@@ -76,14 +77,14 @@ def test_version_consistency_directive_carries_resolved_repo_root(monkeypatch) -
     assert entry["args"] == ["--repo-root", "/resolved/repo/root"]
 
 
-def test_version_consistency_directive_omits_repo_root_when_unresolved(monkeypatch) -> None:
+def test_version_consistency_directive_omits_repo_root_when_unresolved(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wwc_brief, "_resolve_repo_root_for_doc_staleness", lambda: None)
     directives = {d["id"]: d for d in wwc_brief._build_directives()}
     entry = directives["d_step4b_4k_version_consistency"]
     assert entry["args"] == []
 
 
-def test_cruft_sweep_and_initiative_candidates_share_the_same_resolved_root(monkeypatch) -> None:
+def test_cruft_sweep_and_initiative_candidates_share_the_same_resolved_root(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = {"n": 0}
 
     def _once() -> str:
@@ -195,7 +196,7 @@ def test_pcli_drift_gate_is_never_a_directive() -> None:
         )
 
 
-def test_brief_envelope_preflight_consumes_manifest_matches_module_constant(tmp_path) -> None:
+def test_brief_envelope_preflight_consumes_manifest_matches_module_constant(tmp_path: Path) -> None:
     """The 8-key envelope's `preflight.consumes_manifest` field must be
     byte-identical to the module's own `CONSUMES_MANIFEST` constant --
     catches a `brief()` author hand-copying a stale list into the envelope

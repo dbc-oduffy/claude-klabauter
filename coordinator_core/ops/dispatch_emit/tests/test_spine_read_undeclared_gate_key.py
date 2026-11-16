@@ -7,6 +7,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     UndeclaredGateKeyError,
     read_spine,
 )
+from pathlib import Path
 
 _HEADER = "# fixture plan\n\n## Tasks\n\n"
 
@@ -17,7 +18,7 @@ def _write_plan(tmp_path, body: str):
     return path
 
 
-def test_row_level_awaiting_gate_refuses_rather_than_dispatching(tmp_path):
+def test_row_level_awaiting_gate_refuses_rather_than_dispatching(tmp_path: Path) -> None:
     body = (
         "- id: C2\n"
         "  title: row with a plausible-looking but unread gate key\n"
@@ -33,7 +34,7 @@ def test_row_level_awaiting_gate_refuses_rather_than_dispatching(tmp_path):
         read_spine(plan_path)
 
 
-def test_row_without_awaiting_gate_is_unaffected(tmp_path):
+def test_row_without_awaiting_gate_is_unaffected(tmp_path: Path) -> None:
     body = (
         "- id: C2\n"
         "  title: ordinary row\n"

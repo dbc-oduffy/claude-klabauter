@@ -14,6 +14,10 @@ from pathlib import Path
 from typing import Optional
 
 from coordinator_core.frontmatter.primitives import read_fm_field_unquoted, split_frontmatter
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from re import Pattern
 
 SCHEMA_ID = "design-registry/1"
 DEFAULT_PATH = "docs/design/registry.yaml"
@@ -276,7 +280,7 @@ def load(repo_root) -> tuple:
         return None, UNPARSEABLE
 
 
-def _segment_regex(segment: str):
+def _segment_regex(segment: str) -> Pattern[str]:
     parts = []
     for ch in segment:
         if ch == "*":

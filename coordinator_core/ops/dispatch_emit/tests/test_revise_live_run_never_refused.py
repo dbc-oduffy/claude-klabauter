@@ -10,6 +10,7 @@ import yaml
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+from pathlib import Path
 
 RUN = "ask-20261027T000000-def456"
 REL = "state/sizings/2026-10-27-revise-live.yaml"
@@ -30,7 +31,7 @@ def _repo(tmp_path, tshirt):
     return tmp_path
 
 
-def _brief(root):
+def _brief(root) -> None:
     manifest = {"rows": [{"id": "X1", "brief_path": "scratch/warp/x/briefs/X1.md"}]}
     (record_dir(root, RUN) / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
 
@@ -38,7 +39,7 @@ def _brief(root):
 @pytest.mark.parametrize("tshirt", ["S", "M"])
 @pytest.mark.parametrize("params", [{"verbatim": "also cover Windows"}, {"note": "drop the CLAUDE.md edit"}])
 @pytest.mark.parametrize("briefed", [False, True])
-def test_live_revise_never_refuses_a_row_or_note(tmp_path, monkeypatch, tshirt, params, briefed):
+def test_live_revise_never_refuses_a_row_or_note(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tshirt, params, briefed) -> None:
     root = _repo(tmp_path, tshirt)
     if briefed:
         _brief(root)
@@ -69,7 +70,7 @@ def test_briefed_live_revise_before_verify_names_the_late_row_leg_and_writes_no_
     assert "delta_cycle" not in out and not list(record_dir(root, RUN).glob("delta*"))
 
 
-def test_live_revise_after_verify_staged_lands_on_refire(tmp_path, monkeypatch):
+def test_live_revise_after_verify_staged_lands_on_refire(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path, "M")
     rl._late_rows_handler({"run_id": RUN, "verify_read": True}, repo_root=root)
     monkeypatch.setattr(run_token, "is_live", lambda *_a, **_k: True)
@@ -79,7 +80,7 @@ def test_live_revise_after_verify_staged_lands_on_refire(tmp_path, monkeypatch):
     assert "next stage claims" not in json.dumps(out)
 
 
-def test_live_revise_with_every_prompt_staged_but_no_verify_read_is_read_by_the_run(tmp_path, monkeypatch):
+def test_live_revise_with_every_prompt_staged_but_no_verify_read_is_read_by_the_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path, "M")
     prompts = record_dir(root, RUN) / "prompts"
     prompts.mkdir()
@@ -91,7 +92,7 @@ def test_live_revise_with_every_prompt_staged_but_no_verify_read_is_read_by_the_
     assert "late-row leg" in out["note"]
 
 
-def test_test_blockers_js_excludes_designed_red_nodes():
+def test_test_blockers_js_excludes_designed_red_nodes() -> None:
     from coordinator_core.ops.dispatch_emit.ask_compose import _test_blockers_js
 
     js = _test_blockers_js("_r", "_t")
@@ -99,7 +100,7 @@ def test_test_blockers_js_excludes_designed_red_nodes():
     assert "_tExcluded.has(n)" in js
 
 
-def test_unbriefed_live_revise_writes_no_delta_file(tmp_path, monkeypatch):
+def test_unbriefed_live_revise_writes_no_delta_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path, "S")
     monkeypatch.setattr(run_token, "is_live", lambda *_a, **_k: True)
     out = rl._handler({"run_id": RUN, "verbatim": "also cover Windows"}, repo_root=root)

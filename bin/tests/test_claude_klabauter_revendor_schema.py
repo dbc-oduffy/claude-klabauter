@@ -48,6 +48,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import SimpleNamespace
 
 # Real local git repos are load-bearing: run() is asserted end-to-end against
 # a real fake-clone repo, including that a real run writes vendored bytes AND
@@ -789,7 +793,7 @@ class TestVerifyIsOneBatch:
     cost does not grow with the number of schemas touched."""
 
     @staticmethod
-    def _plans(tmp_path: Path):
+    def _plans(tmp_path: Path) -> list[SimpleNamespace]:
         from types import SimpleNamespace
 
         return [
@@ -855,7 +859,7 @@ class TestHandoffEntrypointDelegates:
 
         seen: dict = {}
 
-        def _fake_run(**kwargs):
+        def _fake_run(**kwargs) -> int:
             seen.update(kwargs)
             return 0
 
@@ -986,7 +990,7 @@ _SCRUBBED_SCHEMA = (
 )
 
 
-def _plan_stub(path: Path, incoming: bytes):
+def _plan_stub(path: Path, incoming: bytes) -> SimpleNamespace:
     from types import SimpleNamespace
 
     return SimpleNamespace(vendored_path=path, incoming=incoming)

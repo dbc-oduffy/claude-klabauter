@@ -8,6 +8,7 @@ import os
 import pytest
 
 from coordinator_core.warm import breadcrumb, idle, lifecycle, server, supervisor
+from pathlib import Path
 
 
 class _FakeVersionState:
@@ -24,7 +25,7 @@ def _reset():
 
 
 @pytest.fixture
-def ladder(tmp_path, monkeypatch):
+def ladder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     monkeypatch.setenv(breadcrumb.RUNTIME_BASE_ENV, str(tmp_path / "rt"))
     root = tmp_path / "e-abc"
     root.mkdir()
@@ -36,19 +37,19 @@ def ladder(tmp_path, monkeypatch):
     return root, leases
 
 
-def _remove(leases):
+def _remove(leases) -> None:
     for child in leases.iterdir():
         child.unlink()
     leases.rmdir()
 
 
-def test_unscoped_root_has_no_ladder_predicate(tmp_path):
+def test_unscoped_root_has_no_ladder_predicate(tmp_path: Path) -> None:
     root = tmp_path / "plain"
     root.mkdir()
     assert idle.make_ladder_gone(root) is None
 
 
-def test_boot_with_lease_already_gone_still_yields_predicate(tmp_path):
+def test_boot_with_lease_already_gone_still_yields_predicate(tmp_path: Path) -> None:
     root = tmp_path / "e-old"
     root.mkdir()
     (tmp_path / "e-other.leases").mkdir()
@@ -57,14 +58,14 @@ def test_boot_with_lease_already_gone_still_yields_predicate(tmp_path):
     assert gone() is True
 
 
-def test_boot_with_sandbox_already_gone_yields_predicate(tmp_path):
+def test_boot_with_sandbox_already_gone_yields_predicate(tmp_path: Path) -> None:
     root = tmp_path / "e-vanished"
     gone = idle.make_ladder_gone(root)
     assert gone is not None
     assert gone() is True
 
 
-def test_ladder_predicate_true_only_after_lease_gone(ladder):
+def test_ladder_predicate_true_only_after_lease_gone(ladder) -> None:
     root, leases = ladder
     gone = idle.make_ladder_gone(root)
     assert gone is not None
@@ -73,7 +74,7 @@ def test_ladder_predicate_true_only_after_lease_gone(ladder):
     assert gone() is True
 
 
-def test_lease_of_dead_holder_counts_as_gone(ladder):
+def test_lease_of_dead_holder_counts_as_gone(ladder) -> None:
     root, leases = ladder
     gone = idle.make_ladder_gone(root)
     for child in leases.iterdir():
@@ -82,7 +83,7 @@ def test_lease_of_dead_holder_counts_as_gone(ladder):
     assert gone() is True
 
 
-def test_should_demote_fires_on_ladder_gone_without_any_deadline():
+def test_should_demote_fires_on_ladder_gone_without_any_deadline() -> None:
     assert idle.should_demote(
         served_count=lambda: 5, ladder_gone=lambda: True, idle_deadline_secs=10**9
     )
@@ -91,7 +92,7 @@ def test_should_demote_fires_on_ladder_gone_without_any_deadline():
     )
 
 
-def test_server_idle_tick_demotes_and_tombstones_when_ladder_gone(ladder, monkeypatch):
+def test_server_idle_tick_demotes_and_tombstones_when_ladder_gone(ladder, monkeypatch: pytest.MonkeyPatch) -> None:
     root, leases = ladder
     calls = []
     monkeypatch.setattr(idle, "demote_if_idle", lambda **kw: calls.append(kw["ladder_gone"]()))
@@ -114,7 +115,7 @@ def test_server_idle_tick_demotes_and_tombstones_when_ladder_gone(ladder, monkey
     assert idle.ladder_gone_tombstoned(root)
 
 
-def test_supervisor_tick_stops_and_tombstones_when_ladder_gone(ladder, monkeypatch):
+def test_supervisor_tick_stops_and_tombstones_when_ladder_gone(ladder, monkeypatch: pytest.MonkeyPatch) -> None:
     root, leases = ladder
     ctx = supervisor._ServerContext(
         httpd=None, engine_root=root, version_state=_FakeVersionState()
@@ -132,7 +133,7 @@ def test_supervisor_tick_stops_and_tombstones_when_ladder_gone(ladder, monkeypat
     assert idle.ladder_gone_tombstoned(root)
 
 
-def test_ensure_listener_does_not_spawn_for_tombstoned_root(ladder, monkeypatch):
+def test_ensure_listener_does_not_spawn_for_tombstoned_root(ladder, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _ = ladder
     spawned = []
     monkeypatch.setattr(supervisor, "is_engine_root", lambda r: True)
@@ -147,7 +148,7 @@ def test_ensure_listener_does_not_spawn_for_tombstoned_root(ladder, monkeypatch)
     assert spawned == []
 
 
-def test_server_and_supervisor_boot_refuse_for_tombstoned_root(ladder, monkeypatch, capsys):
+def test_server_and_supervisor_boot_refuse_for_tombstoned_root(ladder, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     root, _ = ladder
     idle.write_ladder_gone_tombstone(root)
     monkeypatch.setattr(server, "_engine_clone_root", lambda: root)
@@ -168,7 +169,7 @@ def test_server_and_supervisor_boot_refuse_for_tombstoned_root(ladder, monkeypat
     assert capsys.readouterr().err.count("ladder gone") == 2
 
 
-def test_client_spawn_once_does_not_respawn_for_tombstoned_root(ladder, monkeypatch):
+def test_client_spawn_once_does_not_respawn_for_tombstoned_root(ladder, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm import client
 
     root, _ = ladder

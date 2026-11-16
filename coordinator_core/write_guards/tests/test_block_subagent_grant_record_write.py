@@ -56,6 +56,7 @@ from coordinator_core.session.claude_md_grant import _GRANT_FILENAME
 from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.write_guards import block_subagent_grant_record_write as guard
 from coordinator_core.write_guards import engine
+import pytest
 
 
 def _payload(
@@ -91,7 +92,7 @@ def _deny(file_path, **kw):
     return result
 
 
-def _allow(file_path, **kw):
+def _allow(file_path, **kw) -> None:
     result = guard.check(_payload(file_path, **kw))
     assert result is None, f"expected ALLOW for: {file_path!r}, got {result!r}"
 
@@ -101,28 +102,28 @@ def _make_plain_clone(tmp_path):
     return tmp_path
 
 
-def _grant_path(repo_root, sid="sess-123"):
+def _grant_path(repo_root, sid: str = "sess-123") -> str:
     return str(session_dir_for(repo_root / ".git", sid) / _GRANT_FILENAME)
 
 
 class TestBaseCases:
-    def test_em_inline_write_allowed_no_agent_id(self, tmp_path):
+    def test_em_inline_write_allowed_no_agent_id(self, tmp_path: Path) -> None:
         repo_root = _make_plain_clone(tmp_path)
         _allow(_grant_path(repo_root), agent_id="", cwd=str(repo_root))
 
-    def test_subagent_write_denied(self, tmp_path):
+    def test_subagent_write_denied(self, tmp_path: Path) -> None:
         repo_root = _make_plain_clone(tmp_path)
         _deny(_grant_path(repo_root), tool_name="Write", cwd=str(repo_root))
 
-    def test_subagent_edit_denied(self, tmp_path):
+    def test_subagent_edit_denied(self, tmp_path: Path) -> None:
         repo_root = _make_plain_clone(tmp_path)
         _deny(_grant_path(repo_root), tool_name="Edit", cwd=str(repo_root))
 
-    def test_subagent_multiedit_denied(self, tmp_path):
+    def test_subagent_multiedit_denied(self, tmp_path: Path) -> None:
         repo_root = _make_plain_clone(tmp_path)
         _deny(_grant_path(repo_root), tool_name="MultiEdit", cwd=str(repo_root))
 
-    def test_subagent_notebookedit_denied(self, tmp_path):
+    def test_subagent_notebookedit_denied(self, tmp_path: Path) -> None:
         repo_root = _make_plain_clone(tmp_path)
         result = guard.check(
             _notebook_payload(
@@ -134,7 +135,7 @@ class TestBaseCases:
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_sibling_path_in_same_session_dir_allowed(self, tmp_path):
+    def test_sibling_path_in_same_session_dir_allowed(self, tmp_path: Path) -> None:
         repo_root = _make_plain_clone(tmp_path)
         sibling = str(
             session_dir_for(repo_root / ".git", "sess-123")
@@ -142,18 +143,18 @@ class TestBaseCases:
         )
         _allow(sibling, cwd=str(repo_root))
 
-    def test_similarly_named_file_outside_coordinator_sessions_allowed(self, tmp_path):
+    def test_similarly_named_file_outside_coordinator_sessions_allowed(self, tmp_path: Path) -> None:
         repo_root = _make_plain_clone(tmp_path)
         outside = str(repo_root / "somewhere" / "else" / _GRANT_FILENAME)
         _allow(outside, cwd=str(repo_root))
 
-    def test_non_matcher_tool_name_allowed(self, tmp_path):
+    def test_non_matcher_tool_name_allowed(self, tmp_path: Path) -> None:
         repo_root = _make_plain_clone(tmp_path)
         _allow(_grant_path(repo_root), tool_name="Read", cwd=str(repo_root))
 
 
 class TestScopeEqualsEnforcement:
-    def test_denies_exactly_the_grant_record_not_other_files_in_dir(self, tmp_path):
+    def test_denies_exactly_the_grant_record_not_other_files_in_dir(self, tmp_path: Path) -> None:
         repo_root = _make_plain_clone(tmp_path)
         _deny(_grant_path(repo_root, sid="sess-abc"), cwd=str(repo_root))
         _allow(
@@ -164,7 +165,7 @@ class TestScopeEqualsEnforcement:
             cwd=str(repo_root),
         )
 
-    def test_denies_regardless_of_specific_session_id_value(self, tmp_path):
+    def test_denies_regardless_of_specific_session_id_value(self, tmp_path: Path) -> None:
         """No NARROWER: the guard does not require a specific `<sid>` value
         -- it matches ANY session-id segment (the exactly-two-remaining-
         segments check `<sid>/<filename>`)."""
@@ -175,8 +176,8 @@ class TestScopeEqualsEnforcement:
 
 class TestLinkedWorktreeResolution:
     def test_subagent_write_through_worktree_resolves_to_common_dir_and_is_denied(
-        self, tmp_path
-    ):
+        self, tmp_path: Path
+    ) -> None:
         common_dir = tmp_path / "main" / ".git"
         private_gitdir = common_dir / "worktrees" / "wt"
         private_gitdir.mkdir(parents=True)
@@ -194,7 +195,7 @@ class TestLinkedWorktreeResolution:
 
         _deny(grant_path, cwd=str(repo_root))
 
-    def test_literal_worktree_dot_git_joined_path_is_not_the_check(self, tmp_path):
+    def test_literal_worktree_dot_git_joined_path_is_not_the_check(self, tmp_path: Path) -> None:
         common_dir = tmp_path / "main" / ".git"
         private_gitdir = common_dir / "worktrees" / "wt"
         private_gitdir.mkdir(parents=True)
@@ -225,7 +226,7 @@ class TestLinkedWorktreeResolution:
 
 
 class TestTraversalAndCaseFoldBypasses:
-    def test_traversal_segment_denied(self, tmp_path):
+    def test_traversal_segment_denied(self, tmp_path: Path) -> None:
         repo_root = _make_plain_clone(tmp_path)
         traversal_path = str(
             session_dir_for(repo_root / ".git", "sess-123")
@@ -235,7 +236,7 @@ class TestTraversalAndCaseFoldBypasses:
         )
         _deny(traversal_path, cwd=str(repo_root))
 
-    def test_differently_cased_candidate_denied(self, tmp_path):
+    def test_differently_cased_candidate_denied(self, tmp_path: Path) -> None:
         repo_root = _make_plain_clone(tmp_path)
         cased_path = (
             str(session_dir_for(repo_root / ".git", "SESS-123")).swapcase()
@@ -246,12 +247,12 @@ class TestTraversalAndCaseFoldBypasses:
 
 
 class TestUNCPathHandling:
-    def test_normalize_path_preserves_unc_leading_slash(self):
+    def test_normalize_path_preserves_unc_leading_slash(self) -> None:
         assert guard._normalize_path(
             r"\\server\share\.git\coordinator-sessions\sid\x.json"
         ) == "//server/share/.git/coordinator-sessions/sid/x.json"
 
-    def test_unc_shaped_common_dir_still_denies_subagent_write(self, monkeypatch):
+    def test_unc_shaped_common_dir_still_denies_subagent_write(self, monkeypatch: pytest.MonkeyPatch) -> None:
         unc_common_dir = r"\\fileserver\repos\claude-klabauter\.git"
         monkeypatch.setattr(
             guard, "_resolve_git_common_dir", lambda cwd: unc_common_dir
@@ -263,12 +264,12 @@ class TestUNCPathHandling:
 
 
 class TestTraversalResolutionScopeEqualsEnforcement:
-    def test_unrelated_traversal_path_allowed(self, tmp_path):
+    def test_unrelated_traversal_path_allowed(self, tmp_path: Path) -> None:
         repo_root = _make_plain_clone(tmp_path)
         unrelated = str(repo_root / "some" / "dir" / ".." / "other" / "file.py")
         _allow(unrelated, cwd=str(repo_root))
 
-    def test_traversal_path_resolving_onto_grant_record_denied(self, tmp_path):
+    def test_traversal_path_resolving_onto_grant_record_denied(self, tmp_path: Path) -> None:
         """A `..`-bearing candidate that RESOLVES onto the grant record
         must still DENY -- keeps the original bypass closed even after the
         over-deny fix (this is a second traversal shape from
@@ -287,7 +288,7 @@ class TestTraversalResolutionScopeEqualsEnforcement:
 
 
 class TestReachableThroughEngine:
-    def test_engine_check_advises_on_subagent_grant_record_write(self, tmp_path):
+    def test_engine_check_advises_on_subagent_grant_record_write(self, tmp_path: Path) -> None:
         """advisory-by-ruling (deny_registry.ADVISORY_BY_RULING): the engine answers allow plus
         one advisory line, never a deny."""
         repo_root = _make_plain_clone(tmp_path)

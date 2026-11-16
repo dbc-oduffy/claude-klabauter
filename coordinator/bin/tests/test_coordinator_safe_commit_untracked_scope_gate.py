@@ -16,13 +16,18 @@ import pathlib
 import subprocess
 
 import pytest
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _load_cli_module():
+def _load_cli_module() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "coordinator_safe_commit", str(_BIN_DIR / "coordinator-safe-commit.py")
     )
@@ -51,7 +56,7 @@ def _tiny_repo(tmp_path):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 class TestUndeclaredUntrackedSibling:
-    def test_new_untracked_module_beside_a_declared_edit_warns(self, tmp_path, capsys):
+    def test_new_untracked_module_beside_a_declared_edit_warns(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         """The exact shape from the issue: a fix touches an existing file and
         also creates a brand-new module in the same package, but the pathspec
         names only the edit."""
@@ -65,7 +70,7 @@ class TestUndeclaredUntrackedSibling:
         assert "pkg/_roundtrip.py" in err
         assert "WARNING" in err
 
-    def test_every_touched_file_declared_allows_silently(self, tmp_path, capsys):
+    def test_every_touched_file_declared_allows_silently(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         mod = _load_cli_module()
         root = _tiny_repo(tmp_path)
         (root / "pkg" / "existing.py").write_text("x = 2\n", encoding="utf-8")
@@ -79,7 +84,7 @@ class TestUndeclaredUntrackedSibling:
         )
         assert capsys.readouterr().err == ""
 
-    def test_untracked_file_in_an_unrelated_directory_does_not_block(self, tmp_path, capsys):
+    def test_untracked_file_in_an_unrelated_directory_does_not_block(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         """Scope is the DECLARED paths' own directories -- an untracked file
         elsewhere in the tree is not this commit's business."""
         mod = _load_cli_module()
@@ -94,7 +99,7 @@ class TestUndeclaredUntrackedSibling:
         )
         assert capsys.readouterr().err == ""
 
-    def test_untracked_file_in_a_deeper_subdirectory_does_not_block(self, tmp_path, capsys):
+    def test_untracked_file_in_a_deeper_subdirectory_does_not_block(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         """Regression: a directory git pathspec (`-- pkg`) matches every path
         under it AT ANY DEPTH, so an untracked file several levels below a
         declared path's own directory (a live peer's own unrelated work --
@@ -116,7 +121,7 @@ class TestUndeclaredUntrackedSibling:
         )
         assert capsys.readouterr().err == ""
 
-    def test_an_unresolvable_repo_fails_open(self, tmp_path):
+    def test_an_unresolvable_repo_fails_open(self, tmp_path: Path) -> None:
         """An unanswerable probe is an ADDITIONAL refusal on top of the
         committer's existing checks, not a new hard dependency -- it must not
         turn "cannot tell" into "always refuse"."""
@@ -131,7 +136,7 @@ class TestUndeclaredUntrackedSibling:
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_probe_is_exactly_one_batched_git_spawn_for_multiple_paths(tmp_path, monkeypatch):
+def test_probe_is_exactly_one_batched_git_spawn_for_multiple_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The docstring's "One batched git call" claim, pinned: multiple
     declared paths across multiple directories must still resolve via a
     SINGLE `git ls-files` spawn (one `--` pathspec list), never one call
@@ -157,7 +162,7 @@ def test_probe_is_exactly_one_batched_git_spawn_for_multiple_paths(tmp_path, mon
     assert len(calls) == 1
 
 
-def test_do_pathspec_calls_the_gate_before_dispatching():
+def test_do_pathspec_calls_the_gate_before_dispatching() -> None:
     source = (_BIN_DIR / "coordinator-safe-commit.py").read_text(encoding="utf-8")
     body = source.split("def do_pathspec(", 1)[1].split("\ndef ", 1)[0]
     assert "_warn_undeclared_untracked_siblings(" in body

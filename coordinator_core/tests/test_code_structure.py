@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from coordinator_core import code_structure
 from coordinator_core.architecture_survey.structure import StructureUnavailable
+from pathlib import Path
+import pytest
 
 
 def _repo(tmp_path):
@@ -29,14 +31,14 @@ def _down(url, payload, timeout_s):
 DOOR = "project_batched_structure"
 
 
-def _with_door(monkeypatch, cost_class="within"):
+def _with_door(monkeypatch, cost_class: str = "within") -> None:
     real = code_structure._load_costs()
     real["needs"][code_structure.NEED] = {"batched_door": DOOR}
     real["doors"][DOOR] = {"cost_class": cost_class}
     monkeypatch.setattr(code_structure, "_load_costs", lambda: real)
 
 
-def test_no_batched_door_in_cost_record_means_no_call(tmp_path, monkeypatch):
+def test_no_batched_door_in_cost_record_means_no_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     monkeypatch.chdir(root)
     calls: list = []
@@ -47,7 +49,7 @@ def test_no_batched_door_in_cost_record_means_no_call(tmp_path, monkeypatch):
     assert out["symbols"]["a.py"] == ["X", "f", "C"] and out["referencers"] == {"a.py": []}
 
 
-def test_over_bar_door_is_not_called(tmp_path, monkeypatch):
+def test_over_bar_door_is_not_called(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     monkeypatch.chdir(root)
     _with_door(monkeypatch, "over-bar")
@@ -56,7 +58,7 @@ def test_over_bar_door_is_not_called(tmp_path, monkeypatch):
     assert calls == [] and out["covered"] is False
 
 
-def test_fallback_without_rag(tmp_path, monkeypatch):
+def test_fallback_without_rag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     monkeypatch.chdir(root)
     _with_door(monkeypatch)
@@ -67,7 +69,7 @@ def test_fallback_without_rag(tmp_path, monkeypatch):
     assert out["referencers"]["a.py"] == []
 
 
-def test_rag_answer_is_covered_and_one_batched_call(tmp_path, monkeypatch):
+def test_rag_answer_is_covered_and_one_batched_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     monkeypatch.chdir(root)
     _with_door(monkeypatch)
@@ -82,7 +84,7 @@ def test_rag_answer_is_covered_and_one_batched_call(tmp_path, monkeypatch):
     assert all(c[2] <= 0.15 for c in calls)
 
 
-def test_foreign_project_and_degraded_are_uncovered(tmp_path, monkeypatch):
+def test_foreign_project_and_degraded_are_uncovered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     monkeypatch.chdir(root)
     _with_door(monkeypatch)
@@ -100,7 +102,7 @@ def test_foreign_project_and_degraded_are_uncovered(tmp_path, monkeypatch):
     assert out["covered"] is False and out["symbols"]["a.py"] == ["X", "f", "C"]
 
 
-def test_timeout_and_outside_cwd_never_raise(tmp_path, monkeypatch):
+def test_timeout_and_outside_cwd_never_raise(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _with_door(monkeypatch)
 

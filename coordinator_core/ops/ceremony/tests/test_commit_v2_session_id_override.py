@@ -18,6 +18,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.ceremony import commit_v2
+from pathlib import Path
 
 VALID_UUID = "0b4efa23-3132-4861-9b79-4bbfa64c0e17"
 
@@ -39,7 +40,7 @@ def _call(repo_root, params):
     return commit_v2._handler(params, repo_root=repo_root)
 
 
-def test_valid_session_id_reaches_apply_missing_trailers(monkeypatch, tmp_path):
+def test_valid_session_id_reaches_apply_missing_trailers(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen = _spy_apply_missing_trailers(monkeypatch)
     with pytest.raises(AssertionError, match="stop-after-capture"):
         _call(
@@ -49,7 +50,7 @@ def test_valid_session_id_reaches_apply_missing_trailers(monkeypatch, tmp_path):
     assert seen["session_id_override"] == VALID_UUID
 
 
-def test_absent_session_id_is_unchanged(monkeypatch, tmp_path):
+def test_absent_session_id_is_unchanged(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen = _spy_apply_missing_trailers(monkeypatch)
     with pytest.raises(AssertionError, match="stop-after-capture"):
         _call(tmp_path / ".git", {"paths": ["a.md"], "message": "m"})
@@ -68,8 +69,8 @@ def test_absent_session_id_is_unchanged(monkeypatch, tmp_path):
     ],
 )
 def test_malformed_session_id_is_refused_nothing_committed(
-    monkeypatch, tmp_path, bad_session_id
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, bad_session_id
+) -> None:
 
     def _must_not_be_called(*args, **kwargs):
         raise AssertionError("must not be called on a malformed session_id")
@@ -88,7 +89,7 @@ def test_malformed_session_id_is_refused_nothing_committed(
     assert "session_id" in result["error"]
 
 
-def test_case_insensitive_uuid_is_accepted(monkeypatch, tmp_path):
+def test_case_insensitive_uuid_is_accepted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen = _spy_apply_missing_trailers(monkeypatch)
     upper = VALID_UUID.upper()
     with pytest.raises(AssertionError, match="stop-after-capture"):
@@ -99,7 +100,7 @@ def test_case_insensitive_uuid_is_accepted(monkeypatch, tmp_path):
     assert seen["session_id_override"] == upper
 
 
-def test_trailing_cr_is_stripped_from_every_path_list(monkeypatch, tmp_path):
+def test_trailing_cr_is_stripped_from_every_path_list(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen: dict = {}
 
     def fake_ignored(worktree_root, paths):
@@ -115,7 +116,7 @@ def test_trailing_cr_is_stripped_from_every_path_list(monkeypatch, tmp_path):
     assert seen["paths"] == ["a.md", "b.md"]
 
 
-def test_ledger_uses_committed_explicit_session_without_ambient_identity(monkeypatch, tmp_path):
+def test_ledger_uses_committed_explicit_session_without_ambient_identity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.contract import apply_base
     seen = {}
     monkeypatch.setattr(apply_base, "record_ledger_entry", lambda *args, **kwargs: seen.update(kwargs))

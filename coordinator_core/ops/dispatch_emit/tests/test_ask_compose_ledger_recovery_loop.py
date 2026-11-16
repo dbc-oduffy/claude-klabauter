@@ -52,7 +52,7 @@ _DISK = {
 _MET = {"id": "R1", "status": "met", "wired": True}
 
 
-def _unmet(remaining, evidence="", rid="R1"):
+def _unmet(remaining, evidence: str = "", rid: str = "R1"):
     return {"id": rid, "status": "not_met", "essential": True, "remaining": remaining, "evidence": evidence}
 
 
@@ -137,7 +137,7 @@ _FIXED = {"status": "DONE", "paths": ["pkg/a.py"], "reason": "fixed"}
 _NAMED = _unmet(["C1: fix pkg/a.py"])
 
 
-def test_the_loop_composes_once_with_the_cap_rendered_from_the_constant(monkeypatch):
+def test_the_loop_composes_once_with_the_cap_rendered_from_the_constant(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert script.count("const _ledgerRecover = async") == 1
     assert script.count("await _ledgerRecover()") == 1
@@ -148,7 +148,7 @@ def test_the_loop_composes_once_with_the_cap_rendered_from_the_constant(monkeypa
     assert re.search(r"phases: \[[^\]]*'ledger-fix'", script)
 
 
-def test_an_xs_arm_composes_no_loop(monkeypatch):
+def test_an_xs_arm_composes_no_loop(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: ask_compose.ARM_XS)
     script = compose_ask_script(
         repo_root="REPO", prompt=None, sizing_rel=_SIZING, run_id="run-1", session_id=None,
@@ -159,7 +159,7 @@ def test_an_xs_arm_composes_no_loop(monkeypatch):
     assert "'ledger-fix'" not in script.split("phases: [", 1)[1].split("]", 1)[0]
 
 
-def test_a_named_chunk_is_fixed_and_the_run_commits_with_no_halt(monkeypatch):
+def test_a_named_chunk_is_fixed_and_the_run_commits_with_no_halt(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(
         _script(monkeypatch), items=[_NAMED],
         replies={"ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_MET]}},
@@ -174,7 +174,7 @@ def test_a_named_chunk_is_fixed_and_the_run_commits_with_no_halt(monkeypatch):
     assert RECOVERY_WITHHELD_PARAM not in _commit_prompt(out)
 
 
-def test_a_fix_that_progresses_but_never_finishes_stops_at_the_cap_and_withholds_the_chunk(monkeypatch):
+def test_a_fix_that_progresses_but_never_finishes_stops_at_the_cap_and_withholds_the_chunk(monkeypatch: pytest.MonkeyPatch) -> None:
     two = _unmet(["C1: part one", "C1: part two"])
     one = _unmet(["C1: part two"])
     out = _run(
@@ -191,7 +191,7 @@ def test_a_fix_that_progresses_but_never_finishes_stops_at_the_cap_and_withholds
     assert f'"{RECOVERY_WITHHELD_PARAM}":["C1"]' in _commit_prompt(out)
 
 
-def test_a_fix_whose_reverify_returns_the_same_remaining_is_one_attempt_then_no_progress(monkeypatch):
+def test_a_fix_whose_reverify_returns_the_same_remaining_is_one_attempt_then_no_progress(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(
         _script(monkeypatch), items=[_NAMED],
         replies={"ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_NAMED]}},
@@ -202,7 +202,7 @@ def test_a_fix_whose_reverify_returns_the_same_remaining_is_one_attempt_then_no_
     assert rec["last_reason"] == "self-correction-no-progress"
 
 
-def test_a_ledger_halt_after_recovery_carries_the_self_correction_record(monkeypatch):
+def test_a_ledger_halt_after_recovery_carries_the_self_correction_record(monkeypatch: pytest.MonkeyPatch) -> None:
     manifest = {**_DISK, "rulable_ids": ["R1"]}
     out = _run(
         _script(monkeypatch), items=[_NAMED, _unmet(["no owner"], rid="R2")], manifest=manifest,
@@ -213,7 +213,7 @@ def test_a_ledger_halt_after_recovery_carries_the_self_correction_record(monkeyp
     assert sc["phase"] == "ledger" and sc["attempts"] == 1 and sc["status"] == "blocked"
 
 
-def test_the_fix_leg_is_told_where_the_revise_notes_are(monkeypatch):
+def test_the_fix_leg_is_told_where_the_revise_notes_are(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(
         _script(monkeypatch), items=[_NAMED],
         replies={"ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_MET]}},
@@ -222,7 +222,7 @@ def test_the_fix_leg_is_told_where_the_revise_notes_are(monkeypatch):
     assert "/notes.jsonl" in prompt
 
 
-def test_a_blocked_fix_spends_no_more_attempts(monkeypatch):
+def test_a_blocked_fix_spends_no_more_attempts(monkeypatch: pytest.MonkeyPatch) -> None:
     blocked = {"status": "BLOCKED", "paths": [], "reason": "needs a path outside the footprint"}
     out = _run(_script(monkeypatch), items=[_NAMED], replies={"ledger-fix:C1": blocked})
     assert _fix_labels(out) == ["ledger-fix:C1"]
@@ -232,7 +232,7 @@ def test_a_blocked_fix_spends_no_more_attempts(monkeypatch):
     assert f'"{RECOVERY_WITHHELD_PARAM}":["C1"]' in _commit_prompt(out)
 
 
-def test_a_path_outside_the_footprint_blocks_the_chunk_and_is_recorded(monkeypatch):
+def test_a_path_outside_the_footprint_blocks_the_chunk_and_is_recorded(monkeypatch: pytest.MonkeyPatch) -> None:
     stray = {"status": "DONE", "paths": ["pkg/a.py", "pkg/_substrate.py"], "reason": "fixed"}
     out = _run(_script(monkeypatch), items=[_NAMED], replies={"ledger-fix:C1": stray})
     rec = _record(out)["chunks"]["C1"]
@@ -244,7 +244,7 @@ def test_a_path_outside_the_footprint_blocks_the_chunk_and_is_recorded(monkeypat
 _REPORTS = ".coordinator-local/subagent-share/dispatch-reports/plan-slug/"
 
 
-def test_a_fix_leg_reporting_its_own_dispatch_report_is_not_blocked(monkeypatch):
+def test_a_fix_leg_reporting_its_own_dispatch_report_is_not_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
     own = {"status": "DONE", "paths": ["pkg/a.py", _REPORTS + "C1.md"], "reason": "fixed"}
     out = _run(
         _script(monkeypatch), items=[_NAMED],
@@ -255,7 +255,7 @@ def test_a_fix_leg_reporting_its_own_dispatch_report_is_not_blocked(monkeypatch)
     assert rec["paths"] == []
 
 
-def test_a_fix_leg_reporting_a_peer_chunks_dispatch_report_is_still_blocked(monkeypatch):
+def test_a_fix_leg_reporting_a_peer_chunks_dispatch_report_is_still_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
     peer = {"status": "DONE", "paths": ["pkg/a.py", _REPORTS + "C2.md"], "reason": "fixed"}
     out = _run(_script(monkeypatch), items=[_NAMED], replies={"ledger-fix:C1": peer})
     rec = _record(out)["chunks"]["C1"]
@@ -263,20 +263,20 @@ def test_a_fix_leg_reporting_a_peer_chunks_dispatch_report_is_still_blocked(monk
     assert rec["paths"] == [_REPORTS + "C2.md"]
 
 
-def test_a_same_named_file_outside_the_reports_prefix_is_still_blocked(monkeypatch):
+def test_a_same_named_file_outside_the_reports_prefix_is_still_blocked(monkeypatch: pytest.MonkeyPatch) -> None:
     stray = {"status": "DONE", "paths": ["pkg/a.py", "elsewhere/C1.md"], "reason": "fixed"}
     out = _run(_script(monkeypatch), items=[_NAMED], replies={"ledger-fix:C1": stray})
     assert _record(out)["chunks"]["C1"]["status"] == "blocked"
 
 
-def test_an_unattributed_item_still_halts_exactly_as_today(monkeypatch):
+def test_an_unattributed_item_still_halts_exactly_as_today(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(_script(monkeypatch), items=[_unmet(["something no chunk owns"])])
     assert out["result"]["halted_by"]["halted"] == "ledger-check"
     assert _fix_labels(out) == []
     assert "ledger-recovery-record" not in _labels(out)
 
 
-def test_a_held_only_item_runs_no_fix_leg_and_is_withheld(monkeypatch):
+def test_a_held_only_item_runs_no_fix_leg_and_is_withheld(monkeypatch: pytest.MonkeyPatch) -> None:
     manifest = {**_DISK, "gated": [{"id": "C9", "reason": "depends_on_plan"}]}
     out = _run(_script(monkeypatch), items=[_unmet(["C9 waits on another plan"])], manifest=manifest)
     assert _fix_labels(out) == []
@@ -285,7 +285,7 @@ def test_a_held_only_item_runs_no_fix_leg_and_is_withheld(monkeypatch):
     assert out["result"]["halted_by"] is None
 
 
-def test_a_rulable_row_with_a_remaining_list_naming_a_chunks_file_runs_its_fix_leg(monkeypatch):
+def test_a_rulable_row_with_a_remaining_list_naming_a_chunks_file_runs_its_fix_leg(monkeypatch: pytest.MonkeyPatch) -> None:
     manifest = {**_DISK, "rulable_ids": ["R1"]}
     out = _run(
         _script(monkeypatch), items=[_NAMED], manifest=manifest,
@@ -295,21 +295,21 @@ def test_a_rulable_row_with_a_remaining_list_naming_a_chunks_file_runs_its_fix_l
     assert out["result"]["halted_by"] is None
 
 
-def test_a_rulable_row_with_empty_remaining_runs_no_fix_leg_and_halts_ledger_check(monkeypatch):
+def test_a_rulable_row_with_empty_remaining_runs_no_fix_leg_and_halts_ledger_check(monkeypatch: pytest.MonkeyPatch) -> None:
     manifest = {**_DISK, "rulable_ids": ["R1"]}
     out = _run(_script(monkeypatch), items=[_unmet([], "C1 pkg/a.py")], manifest=manifest)
     assert _fix_labels(out) == []
     assert out["result"]["halted_by"]["halted"] == "ledger-check"
 
 
-def test_a_row_whose_remaining_is_only_foreign_test_ids_runs_no_fix_leg_and_does_not_halt(monkeypatch):
+def test_a_row_whose_remaining_is_only_foreign_test_ids_runs_no_fix_leg_and_does_not_halt(monkeypatch: pytest.MonkeyPatch) -> None:
     foreign = _unmet(["other/test_x.py::test_a", "other/test_y.py::test_b"])
     out = _run(_script(monkeypatch), items=[foreign])
     assert _fix_labels(out) == []
     assert out["result"]["halted_by"] is None
 
 
-def test_foreign_ids_stay_out_of_the_failing_list_the_fix_leg_gets(monkeypatch):
+def test_foreign_ids_stay_out_of_the_failing_list_the_fix_leg_gets(monkeypatch: pytest.MonkeyPatch) -> None:
     test = {
         "status": "fail", "summary": "s",
         "baseline": {"caused": ["tests/test_a.py::test_own", "other/test_x.py::test_theirs"],
@@ -325,14 +325,14 @@ def test_foreign_ids_stay_out_of_the_failing_list_the_fix_leg_gets(monkeypatch):
     assert "old/test_p.py" not in prompt
 
 
-def test_an_owed_blocking_item_runs_no_fix_leg(monkeypatch):
+def test_an_owed_blocking_item_runs_no_fix_leg(monkeypatch: pytest.MonkeyPatch) -> None:
     owed = {**_NAMED, "owed_by": ["X1"]}
     manifest = {**_DISK, "owed": [{"id": "X1", "reason": "em", "detail": "d"}]}
     out = _run(_script(monkeypatch), items=[owed], manifest=manifest)
     assert _fix_labels(out) == []
 
 
-def test_a_test_file_one_chunk_owns_reopens_only_that_chunk_with_it_in_the_footprint(monkeypatch):
+def test_a_test_file_one_chunk_owns_reopens_only_that_chunk_with_it_in_the_footprint(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(
         _script(monkeypatch), items=[_unmet(["Fix the 2 failing tests in tests/test_a.py"])],
         replies={"ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_MET]}},
@@ -343,13 +343,13 @@ def test_a_test_file_one_chunk_owns_reopens_only_that_chunk_with_it_in_the_footp
     assert "pkg/b.py" not in prompt
 
 
-def test_two_chunks_claiming_the_row_are_not_both_reopened_without_a_name(monkeypatch):
+def test_two_chunks_claiming_the_row_are_not_both_reopened_without_a_name(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(_script(monkeypatch), items=[_unmet(["still red"])])
     assert _fix_labels(out) == []
     assert out["result"]["halted_by"]["halted"] == "ledger-check"
 
 
-def _snap(*writes, cid="C1", ok=True, truncated=False):
+def _snap(*writes, cid: str = "C1", ok: bool = True, truncated: bool = False):
     """The engine's `live-snap` legs' replies for one writing leg: `before` ok, `after` naming `writes`."""
     sfx = f":{cid}" if cid else ""
     extra = {"truncated": True} if truncated else {}
@@ -365,7 +365,7 @@ def _remnant_record(out: dict) -> dict:
     return json.loads(text)
 
 
-def test_a_fix_leg_that_reports_no_change_while_a_live_blob_changed_has_the_path_listed(monkeypatch):
+def test_a_fix_leg_that_reports_no_change_while_a_live_blob_changed_has_the_path_listed(monkeypatch: pytest.MonkeyPatch) -> None:
     liar = {"status": "DONE", "paths": [], "reason": "live tree unchanged"}
     out = _run(
         _script(monkeypatch), items=[_NAMED],
@@ -378,7 +378,7 @@ def test_a_fix_leg_that_reports_no_change_while_a_live_blob_changed_has_the_path
     assert rec["live_snapshot"].endswith("/live-C1.json")
 
 
-def test_a_fix_leg_with_unchanged_blobs_lists_no_write_and_keeps_its_reason(monkeypatch):
+def test_a_fix_leg_with_unchanged_blobs_lists_no_write_and_keeps_its_reason(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(
         _script(monkeypatch), items=[_NAMED],
         replies={"ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_MET]}, **_snap()},
@@ -388,7 +388,7 @@ def test_a_fix_leg_with_unchanged_blobs_lists_no_write_and_keeps_its_reason(monk
     assert rec["last_reason"] == "fixed"
 
 
-def test_a_fix_leg_whose_measurement_failed_records_the_write_as_unmeasured_not_unchanged(monkeypatch):
+def test_a_fix_leg_whose_measurement_failed_records_the_write_as_unmeasured_not_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(
         _script(monkeypatch), items=[_NAMED],
         replies={"ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_MET]}, **_snap(ok=False)},
@@ -398,7 +398,7 @@ def test_a_fix_leg_whose_measurement_failed_records_the_write_as_unmeasured_not_
     assert rec["last_reason"] == "fixed [live-tree write not measured]"
 
 
-def test_the_engine_brackets_each_fix_leg_with_its_own_measurement_and_the_leg_is_never_asked_to_probe(monkeypatch):
+def test_the_engine_brackets_each_fix_leg_with_its_own_measurement_and_the_leg_is_never_asked_to_probe(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(
         _script(monkeypatch), items=[_NAMED],
         replies={"ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_MET]}, **_snap()},
@@ -414,7 +414,7 @@ def test_the_engine_brackets_each_fix_leg_with_its_own_measurement_and_the_leg_i
 _ORPHAN = _unmet(["something no chunk owns"])
 
 
-def test_a_remnant_leg_that_changed_a_footprint_path_it_declared_records_it_and_proceeds(monkeypatch):
+def test_a_remnant_leg_that_changed_a_footprint_path_it_declared_records_it_and_proceeds(monkeypatch: pytest.MonkeyPatch) -> None:
     leg = {"status": "DONE", "paths": ["pkg/a.py"], "reason": "completed"}
     out = _run(
         _script(monkeypatch), items=[_ORPHAN],
@@ -425,7 +425,7 @@ def test_a_remnant_leg_that_changed_a_footprint_path_it_declared_records_it_and_
     assert rec["status"] == "fixed" and "remnant-reverify" in _labels(out)
 
 
-def test_a_remnant_leg_whose_report_leaves_out_a_changed_live_path_is_blocked_before_reverify(monkeypatch):
+def test_a_remnant_leg_whose_report_leaves_out_a_changed_live_path_is_blocked_before_reverify(monkeypatch: pytest.MonkeyPatch) -> None:
     leg = {"status": "DONE", "paths": [], "reason": "live tree unchanged"}
     out = _run(
         _script(monkeypatch), items=[_ORPHAN],
@@ -438,7 +438,7 @@ def test_a_remnant_leg_whose_report_leaves_out_a_changed_live_path_is_blocked_be
     assert "remnant-reverify" not in _labels(out)
 
 
-def test_a_remnant_leg_that_changed_a_path_outside_the_footprint_names_it_for_the_landing_fence(monkeypatch):
+def test_a_remnant_leg_that_changed_a_path_outside_the_footprint_names_it_for_the_landing_fence(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import ledger_recovery
 
     leg = {"status": "DONE", "paths": ["pkg/other.py"], "reason": "completed"}
@@ -452,7 +452,7 @@ def test_a_remnant_leg_that_changed_a_path_outside_the_footprint_names_it_for_th
 
 
 
-def test_a_fix_leg_that_changed_a_path_is_followed_by_the_engine_restore_before_reverify(monkeypatch):
+def test_a_fix_leg_that_changed_a_path_is_followed_by_the_engine_restore_before_reverify(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(
         _script(monkeypatch), items=[_NAMED],
         replies={
@@ -466,7 +466,7 @@ def test_a_fix_leg_that_changed_a_path_is_followed_by_the_engine_restore_before_
     assert rec["live_restored"] == ["pkg/a.py"] and rec["status"] != "blocked"
 
 
-def test_a_fix_leg_whose_write_the_engine_could_not_restore_is_blocked_not_fixed(monkeypatch):
+def test_a_fix_leg_whose_write_the_engine_could_not_restore_is_blocked_not_fixed(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(
         _script(monkeypatch), items=[_NAMED],
         replies={
@@ -479,7 +479,7 @@ def test_a_fix_leg_whose_write_the_engine_could_not_restore_is_blocked_not_fixed
     assert "could not restore" in rec["last_reason"]
 
 
-def test_a_fix_leg_over_a_truncated_directory_snapshot_is_recorded_as_unmeasured(monkeypatch):
+def test_a_fix_leg_over_a_truncated_directory_snapshot_is_recorded_as_unmeasured(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(
         _script(monkeypatch), items=[_NAMED],
         replies={"ledger-fix:C1": _FIXED, LEDGER_REVERIFY_LABEL: {"items": [_MET]}, **_snap(truncated=True)},
@@ -487,7 +487,7 @@ def test_a_fix_leg_over_a_truncated_directory_snapshot_is_recorded_as_unmeasured
     assert _record(out)["chunks"]["C1"]["live_tree_unmeasured"] is True
 
 
-def test_a_remnant_write_to_a_peer_held_path_is_not_blamed_as_unreported(monkeypatch):
+def test_a_remnant_write_to_a_peer_held_path_is_not_blamed_as_unreported(monkeypatch: pytest.MonkeyPatch) -> None:
     leg = {"status": "DONE", "paths": [], "reason": "live tree unchanged"}
     out = _run(
         _script(monkeypatch), items=[_ORPHAN],

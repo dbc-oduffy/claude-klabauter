@@ -7,6 +7,8 @@ import subprocess
 
 from coordinator_core.ops.dispatch_emit import halt_tree_check, halt_tree_evict, live_write_guard
 from coordinator_core.ops.dispatch_emit.halted_record_eviction import plan_tree_eviction
+from pathlib import Path
+import pytest
 
 REC = "state/warp/run-x"
 BAD = b"broken\n"
@@ -26,7 +28,7 @@ def _plan(tmp_path, monkeypatch):
     return root, ev, paths
 
 
-def _stage_run(root, run_id, baseline):
+def _stage_run(root, run_id, baseline) -> None:
     from coordinator_core.git import git_objects
     from coordinator_core.git.git_dir import resolve_git_common_dir
 
@@ -41,7 +43,7 @@ def _stage_run(root, run_id, baseline):
     )
 
 
-def test_every_target_refused_drops_unwritten_record_paths(tmp_path, monkeypatch):
+def test_every_target_refused_drops_unwritten_record_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, ev, paths = _plan(tmp_path, monkeypatch)
     assert ev is not None
     assert f"{REC}/{halt_tree_evict.EVICTED_FILE}" in paths
@@ -52,7 +54,7 @@ def test_every_target_refused_drops_unwritten_record_paths(tmp_path, monkeypatch
     assert not (root / REC / halt_tree_evict.EVICTED_FILE).exists()
 
 
-def test_written_record_paths_stay(tmp_path, monkeypatch):
+def test_written_record_paths_stay(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, ev, paths = _plan(tmp_path, monkeypatch)
     monkeypatch.setattr(live_write_guard, "check_live_write", lambda *a, **k: None)
     ev.apply()

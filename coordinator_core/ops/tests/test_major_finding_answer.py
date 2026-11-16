@@ -1,6 +1,7 @@
 """Pins the major-finding answer vocabulary: disclosure and PM waiver never clear."""
 
 from coordinator_core.ops._major_finding_answer import CLEARING_KINDS, MAJOR_SCOPES, unanswered
+from pathlib import Path
 
 SPINE = [
     {"id": "C1", "disposition": "open"},
@@ -17,24 +18,24 @@ def _row(answered_by=None, **kw):
     return row
 
 
-def test_constants():
+def test_constants() -> None:
     assert MAJOR_SCOPES == frozenset({"default-path", "user-visible"})
     assert CLEARING_KINDS == ("fix-row", "gem-scope-ruling")
 
 
-def test_absent_and_disclosure_stay_unanswered(tmp_path):
+def test_absent_and_disclosure_stay_unanswered(tmp_path: Path) -> None:
     for scope in MAJOR_SCOPES:
         absent = _row(scope=scope)
         disclosure = _row({"kind": "disclosure"}, scope=scope)
         assert unanswered([absent, disclosure], SPINE, tmp_path) == [absent, disclosure]
 
 
-def test_pm_waiver_and_malformed_stay_unanswered(tmp_path):
+def test_pm_waiver_and_malformed_stay_unanswered(tmp_path: Path) -> None:
     rows = [_row({"kind": "pm-waiver"}), _row("fix-row"), _row({"kind": "fix-row"})]
     assert unanswered(rows, SPINE, tmp_path) == rows
 
 
-def test_fix_row_clears_only_for_live_spine_row(tmp_path):
+def test_fix_row_clears_only_for_live_spine_row(tmp_path: Path) -> None:
     assert unanswered([_row({"kind": "fix-row", "row": "C1"})], SPINE, tmp_path) == []
     assert unanswered([_row({"kind": "fix-row", "row": "C2"})], SPINE, tmp_path) == []
     for ref in ("C3", "C9"):
@@ -44,7 +45,7 @@ def test_fix_row_clears_only_for_live_spine_row(tmp_path):
     assert unanswered([row], None, tmp_path) == [row]
 
 
-def test_gem_ruling_clears_only_for_existing_repo_relative_file(tmp_path):
+def test_gem_ruling_clears_only_for_existing_repo_relative_file(tmp_path: Path) -> None:
     (tmp_path / "state").mkdir()
     (tmp_path / "state" / "ruling.md").write_text("ruling")
     ok = _row({"kind": "gem-scope-ruling", "ref": "state/ruling.md"})
@@ -59,7 +60,7 @@ def test_gem_ruling_clears_only_for_existing_repo_relative_file(tmp_path):
     assert unanswered([ok], SPINE, None) == [ok]
 
 
-def test_non_major_rows_untouched(tmp_path):
+def test_non_major_rows_untouched(tmp_path: Path) -> None:
     rows = [
         {"id": "a"},
         _row(severity="minor"),

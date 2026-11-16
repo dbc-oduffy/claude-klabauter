@@ -11,21 +11,22 @@ import sys
 import pytest
 
 from coordinator_core.ask_spool import record
+from pathlib import Path
 
 
-def _spool(root, payload=b'{"a":1}', tuid="tu1", sid="s1"):
+def _spool(root, payload: bytes = b'{"a":1}', tuid: str | None = "tu1", sid: str = "s1") -> tuple[str, bool]:
     return record.spool_ask(
         str(root), payload, session_id=sid, tool_use_id=tuid, reason="engine_unreachable"
     )
 
 
-def test_spool_id_matches_sha1_hex16_of_concatenation():
+def test_spool_id_matches_sha1_hex16_of_concatenation() -> None:
     want = hashlib.sha1(b"s1tu1").hexdigest()[:16]
     assert record.spool_id_for("s1", "tu1", b"x") == want
     assert len(want) == 16
 
 
-def test_no_tool_use_id_hashes_payload():
+def test_no_tool_use_id_hashes_payload() -> None:
     a = record.spool_id_for("s1", None, b"one")
     b = record.spool_id_for("s1", None, b"two")
     assert a != b
@@ -34,7 +35,7 @@ def test_no_tool_use_id_hashes_payload():
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX modes")
-def test_entry_is_0600_and_roundtrips(tmp_path):
+def test_entry_is_0600_and_roundtrips(tmp_path: Path) -> None:
     sid, created = _spool(tmp_path, payload=b'{"x":"\xc3\xa9"}\nmore')
     assert created
     path = record.entry_path(str(tmp_path), sid)
@@ -49,7 +50,7 @@ def test_entry_is_0600_and_roundtrips(tmp_path):
     assert "spooled_at" in header
 
 
-def test_second_write_is_idempotent_and_keeps_first(tmp_path):
+def test_second_write_is_idempotent_and_keeps_first(tmp_path: Path) -> None:
     sid, first = _spool(tmp_path, payload=b"A")
     sid2, second = _spool(tmp_path, payload=b"B")
     assert (first, second) == (True, False)
@@ -58,14 +59,14 @@ def test_second_write_is_idempotent_and_keeps_first(tmp_path):
     assert payload == b"A"
 
 
-def test_distinct_asks_without_tool_use_id_do_not_collide(tmp_path):
+def test_distinct_asks_without_tool_use_id_do_not_collide(tmp_path: Path) -> None:
     a, _ = _spool(tmp_path, payload=b"one", tuid=None)
     b, _ = _spool(tmp_path, payload=b"two", tuid=None)
     assert a != b
     assert record.list_pending(str(tmp_path)) == sorted([a, b])
 
 
-def test_claim_is_single_winner_then_minted(tmp_path):
+def test_claim_is_single_winner_then_minted(tmp_path: Path) -> None:
     root = str(tmp_path)
     sid, _ = _spool(tmp_path)
     assert record.claim(root, sid) is not None
@@ -78,7 +79,7 @@ def test_claim_is_single_winner_then_minted(tmp_path):
     assert record.claim(root, sid) is None
 
 
-def test_release_returns_claim_to_pending(tmp_path):
+def test_release_returns_claim_to_pending(tmp_path: Path) -> None:
     root = str(tmp_path)
     sid, _ = _spool(tmp_path)
     record.claim(root, sid)
@@ -86,7 +87,7 @@ def test_release_returns_claim_to_pending(tmp_path):
     assert record.list_pending(root) == [sid]
 
 
-def test_spool_writes_via_tmp_then_replace(tmp_path, monkeypatch):
+def test_spool_writes_via_tmp_then_replace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = []
     real = os.replace
 
@@ -105,7 +106,7 @@ def test_spool_writes_via_tmp_then_replace(tmp_path, monkeypatch):
     assert record.list_pending(str(tmp_path)) == [sid]
 
 
-def test_claim_permission_error_is_not_claimed(tmp_path, monkeypatch):
+def test_claim_permission_error_is_not_claimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = str(tmp_path)
     sid, _ = _spool(tmp_path)
 
@@ -117,7 +118,7 @@ def test_claim_permission_error_is_not_claimed(tmp_path, monkeypatch):
     assert record.list_pending(root) == [sid]
 
 
-def test_release_file_exists_error_does_not_raise(tmp_path, monkeypatch):
+def test_release_file_exists_error_does_not_raise(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = str(tmp_path)
     sid, _ = _spool(tmp_path)
     record.claim(root, sid)
@@ -132,11 +133,11 @@ def test_release_file_exists_error_does_not_raise(tmp_path, monkeypatch):
     assert not os.path.exists(record.entry_path(root, sid, record.CLAIMED_SUFFIX))
 
 
-def test_list_pending_missing_dir(tmp_path):
+def test_list_pending_missing_dir(tmp_path: Path) -> None:
     assert record.list_pending(str(tmp_path)) == []
 
 
-def test_read_entry_rejects_malformed(tmp_path):
+def test_read_entry_rejects_malformed(tmp_path: Path) -> None:
     p = tmp_path / "bad.json"
     p.write_bytes(b"no newline")
     with pytest.raises(ValueError):
@@ -146,7 +147,7 @@ def test_read_entry_rejects_malformed(tmp_path):
         record.read_entry(str(p))
 
 
-def test_orphaned_tmp_is_reclaimed_but_a_fresh_tmp_still_suppresses(tmp_path):
+def test_orphaned_tmp_is_reclaimed_but_a_fresh_tmp_still_suppresses(tmp_path: Path) -> None:
     root = str(tmp_path)
     sid, _ = _spool(tmp_path)
     final = record.entry_path(root, sid)
@@ -162,7 +163,7 @@ def test_orphaned_tmp_is_reclaimed_but_a_fresh_tmp_still_suppresses(tmp_path):
     assert os.path.exists(final) and not os.path.exists(tmp)
 
 
-def test_writers_use_distinct_tmp_names_and_reclaim_spares_a_live_peer(tmp_path, monkeypatch):
+def test_writers_use_distinct_tmp_names_and_reclaim_spares_a_live_peer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = str(tmp_path)
     names = []
     real = os.replace
@@ -189,7 +190,7 @@ def test_writers_use_distinct_tmp_names_and_reclaim_spares_a_live_peer(tmp_path,
     assert os.path.exists(live) and not os.path.exists(orphan)
 
 
-def _windows_rename(monkeypatch):
+def _windows_rename(monkeypatch) -> None:
     real = os.rename
 
     def strict(src, dst):
@@ -200,7 +201,7 @@ def _windows_rename(monkeypatch):
     monkeypatch.setattr(record.os, "rename", strict)
 
 
-def test_claim_file_exists_error_is_not_claimed(tmp_path, monkeypatch):
+def test_claim_file_exists_error_is_not_claimed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = str(tmp_path)
     sid, _ = _spool(tmp_path)
 
@@ -212,17 +213,17 @@ def test_claim_file_exists_error_is_not_claimed(tmp_path, monkeypatch):
     assert record.list_pending(root) == [sid]
 
 
-def _age(path, seconds):
+def _age(path, seconds) -> None:
     old = os.stat(path).st_mtime - seconds
     os.utime(path, (old, old))
 
 
-def _holder(root, sid, pid):
+def _holder(root, sid, pid) -> None:
     with open(record.entry_path(root, sid, record.HOLDER_SUFFIX), "w", encoding="utf-8") as fh:
         fh.write(str(pid))
 
 
-def test_stale_claimed_with_dead_holder_is_reclaimed_but_a_fresh_one_is_not(tmp_path, monkeypatch):
+def test_stale_claimed_with_dead_holder_is_reclaimed_but_a_fresh_one_is_not(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = str(tmp_path)
     sid, _ = _spool(tmp_path)
     claimed = record.entry_path(root, sid, record.CLAIMED_SUFFIX)
@@ -240,7 +241,7 @@ def test_stale_claimed_with_dead_holder_is_reclaimed_but_a_fresh_one_is_not(tmp_
     assert not [n for n in os.listdir(record.spool_dir(root)) if "reclaim" in n]
 
 
-def test_live_or_unknown_holder_keeps_an_old_claim(tmp_path, monkeypatch):
+def test_live_or_unknown_holder_keeps_an_old_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = str(tmp_path)
     sid, _ = _spool(tmp_path)
     claimed = record.entry_path(root, sid, record.CLAIMED_SUFFIX)
@@ -256,12 +257,12 @@ def test_live_or_unknown_holder_keeps_an_old_claim(tmp_path, monkeypatch):
     assert os.path.exists(claimed)
 
 
-def test_pid_alive_is_true_for_self_and_for_a_non_positive_pid():
+def test_pid_alive_is_true_for_self_and_for_a_non_positive_pid() -> None:
     assert record._pid_alive(os.getpid())
     assert record._pid_alive(0)
 
 
-def test_respool_of_a_claimed_or_minted_id_is_a_noop(tmp_path):
+def test_respool_of_a_claimed_or_minted_id_is_a_noop(tmp_path: Path) -> None:
     root = str(tmp_path)
     sid, _ = _spool(tmp_path)
     record.claim(root, sid)
@@ -272,7 +273,7 @@ def test_respool_of_a_claimed_or_minted_id_is_a_noop(tmp_path):
     assert record.list_pending(root) == []
 
 
-def test_long_mint_is_not_stolen_by_a_respool(tmp_path, monkeypatch):
+def test_long_mint_is_not_stolen_by_a_respool(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = str(tmp_path)
     sid, _ = _spool(tmp_path)
     claimed = record.claim(root, sid)
@@ -287,10 +288,10 @@ def test_long_mint_is_not_stolen_by_a_respool(tmp_path, monkeypatch):
     assert not os.path.exists(record.entry_path(root, sid, record.HOLDER_SUFFIX))
 
 
-def test_only_file_exists_from_os_open_means_already_spooled(tmp_path, monkeypatch):
+def test_only_file_exists_from_os_open_means_already_spooled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     real = os.open
 
-    def deny(path, flags, mode=0o777):
+    def deny(path, flags, mode: int = 0o777) -> int:
         if str(path).endswith(record.TMP_SUFFIX):
             raise PermissionError(path)
         return real(path, flags, mode)
@@ -299,14 +300,14 @@ def test_only_file_exists_from_os_open_means_already_spooled(tmp_path, monkeypat
     with pytest.raises(PermissionError):
         _spool(tmp_path)
 
-    def exists(path, flags, mode=0o777):
+    def exists(path, flags, mode: int = 0o777):
         raise FileExistsError(path)
 
     monkeypatch.setattr(record.os, "open", exists)
     assert _spool(tmp_path)[1] is False
 
 
-def test_respool_recovers_an_ask_stranded_by_a_dead_claimer(tmp_path, monkeypatch):
+def test_respool_recovers_an_ask_stranded_by_a_dead_claimer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = str(tmp_path)
     sid, _ = _spool(tmp_path)
     claimed = record.claim(root, sid)
@@ -317,7 +318,7 @@ def test_respool_recovers_an_ask_stranded_by_a_dead_claimer(tmp_path, monkeypatc
     assert record.list_pending(root) == [sid]
 
 
-def test_pid_alive_reads_a_missing_process_as_dead(monkeypatch):
+def test_pid_alive_reads_a_missing_process_as_dead(monkeypatch: pytest.MonkeyPatch) -> None:
     def gone(pid, sig):
         raise ProcessLookupError(pid)
 
@@ -326,11 +327,11 @@ def test_pid_alive_reads_a_missing_process_as_dead(monkeypatch):
     assert record._pid_alive(424242) is False
 
 
-def _fake_ctypes(monkeypatch, *, handle, last_error=0, exit_code=259):
+def _fake_ctypes(monkeypatch, *, handle, last_error: int = 0, exit_code: int = 259) -> None:
     import types
 
     class _Code:
-        def __init__(self):
+        def __init__(self) -> None:
             self.value = 0
 
     k32 = types.SimpleNamespace(
@@ -348,7 +349,7 @@ def _fake_ctypes(monkeypatch, *, handle, last_error=0, exit_code=259):
     monkeypatch.setattr(record.sys, "platform", "win32")
 
 
-def test_pid_alive_windows_branch_dead_only_when_provably_gone(monkeypatch):
+def test_pid_alive_windows_branch_dead_only_when_provably_gone(monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_ctypes(monkeypatch, handle=0, last_error=87)
     assert record._pid_alive(999999) is False
     _fake_ctypes(monkeypatch, handle=0, last_error=5)  # access denied: doubt
@@ -359,7 +360,7 @@ def test_pid_alive_windows_branch_dead_only_when_provably_gone(monkeypatch):
     assert record._pid_alive(999999) is True
 
 
-def test_holder_file_is_0600(tmp_path):
+def test_holder_file_is_0600(tmp_path: Path) -> None:
     record.spool_ask(str(tmp_path), b"x", session_id="s", tool_use_id="t", reason="r")
     sid = record.list_pending(str(tmp_path))[0]
     record.claim(str(tmp_path), sid)
@@ -368,7 +369,7 @@ def test_holder_file_is_0600(tmp_path):
         assert mode == 0o600
 
 
-def test_withdraw_pending_records_reason_and_keeps_payload(tmp_path):
+def test_withdraw_pending_records_reason_and_keeps_payload(tmp_path: Path) -> None:
     root = str(tmp_path)
     sid, _ = _spool(tmp_path, payload=b'{"p":1}')
     out = record.withdraw(root, sid, "hand-done")
@@ -382,7 +383,7 @@ def test_withdraw_pending_records_reason_and_keeps_payload(tmp_path):
     assert record.list_pending(root) == []
 
 
-def test_withdraw_refuses_claimed_and_minted_by_em(tmp_path):
+def test_withdraw_refuses_claimed_and_minted_by_em(tmp_path: Path) -> None:
     root = str(tmp_path)
     sid, _ = _spool(tmp_path)
     record.claim(root, sid)
@@ -396,7 +397,7 @@ def test_withdraw_refuses_claimed_and_minted_by_em(tmp_path):
     assert not os.path.exists(record.entry_path(root, sid, record.WITHDRAWN_SUFFIX))
 
 
-def test_withdraw_by_drain_retires_the_claim_and_drops_holder(tmp_path):
+def test_withdraw_by_drain_retires_the_claim_and_drops_holder(tmp_path: Path) -> None:
     root = str(tmp_path)
     sid, _ = _spool(tmp_path)
     record.claim(root, sid)
@@ -408,7 +409,7 @@ def test_withdraw_by_drain_retires_the_claim_and_drops_holder(tmp_path):
     assert header["withdrawn_by"] == "drain"
 
 
-def test_withdraw_absent_and_reason_validation(tmp_path):
+def test_withdraw_absent_and_reason_validation(tmp_path: Path) -> None:
     root = str(tmp_path)
     assert record.withdraw(root, "0" * 16, "r") == {
         "spool_id": "0" * 16, "state": "absent", "withdrawn": False,
@@ -423,7 +424,7 @@ def test_withdraw_absent_and_reason_validation(tmp_path):
     assert len(header["withdraw_reason"]) == record.WITHDRAW_REASON_MAX
 
 
-def test_withdraw_by_hook_names_the_superseding_run_in_the_header(tmp_path):
+def test_withdraw_by_hook_names_the_superseding_run_in_the_header(tmp_path: Path) -> None:
     root = str(tmp_path)
     sid, _ = _spool(tmp_path)
     assert record.withdraw(root, sid, "superseded by ask-x", by="hook", superseded_by="ask-x")["withdrawn"] is True
@@ -431,7 +432,7 @@ def test_withdraw_by_hook_names_the_superseding_run_in_the_header(tmp_path):
     assert header["superseded_by"] == "ask-x" and header["withdrawn_by"] == "hook"
 
 
-def test_same_ask_matches_on_key_or_normalized_text_and_never_across_them():
+def test_same_ask_matches_on_key_or_normalized_text_and_never_across_them() -> None:
     def sizing(rel):
         return {"tool_input": {"args": {"sizing": rel}}}
 
@@ -446,12 +447,12 @@ def test_same_ask_matches_on_key_or_normalized_text_and_never_across_them():
     assert not record.same_ask({}, {})
 
 
-def test_supersede_pending_retires_only_the_matching_pending_entries(tmp_path):
+def test_supersede_pending_retires_only_the_matching_pending_entries(tmp_path: Path) -> None:
     import json
 
     root = str(tmp_path)
 
-    def entry(tuid, text):
+    def entry(tuid, text) -> str:
         body = json.dumps({"tool_input": {"args": {"ask": text}}}).encode()
         return record.spool_ask(root, body, session_id="s", tool_use_id=tuid, reason="r")[0]
 
@@ -464,14 +465,14 @@ def test_supersede_pending_retires_only_the_matching_pending_entries(tmp_path):
     assert record.supersede_pending(root, {"tool_input": {"args": {}}}, "ask-9") == []
 
 
-def test_withdraw_rejects_unknown_by(tmp_path):
+def test_withdraw_rejects_unknown_by(tmp_path: Path) -> None:
     sid, _ = _spool(tmp_path)
     with pytest.raises(ValueError):
         record.withdraw(str(tmp_path), sid, "r", by="peer")
     assert os.path.exists(record.entry_path(str(tmp_path), sid))
 
 
-def test_withdraw_header_rewrite_failure_propagates_after_the_rename(tmp_path, monkeypatch):
+def test_withdraw_header_rewrite_failure_propagates_after_the_rename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = str(tmp_path)
     sid, _ = _spool(tmp_path)
 
@@ -486,7 +487,7 @@ def test_withdraw_header_rewrite_failure_propagates_after_the_rename(tmp_path, m
     assert [n for n in os.listdir(record.spool_dir(root)) if n.endswith(record.TMP_SUFFIX)] == []
 
 
-def test_respool_of_withdrawn_id_is_noop(tmp_path):
+def test_respool_of_withdrawn_id_is_noop(tmp_path: Path) -> None:
     root = str(tmp_path)
     sid, _ = _spool(tmp_path)
     record.withdraw(root, sid, "r")
@@ -495,7 +496,7 @@ def test_respool_of_withdrawn_id_is_noop(tmp_path):
     assert record.list_pending(root) == []
 
 
-def test_respool_of_legacy_withdrawn_id_is_noop(tmp_path):
+def test_respool_of_legacy_withdrawn_id_is_noop(tmp_path: Path) -> None:
     root = str(tmp_path)
     sid = record.spool_id_for("s1", "tu1", b"x")
     os.makedirs(record.spool_dir(root))
@@ -511,13 +512,13 @@ def _payload(args):
     return {"tool_input": {"args": args}}
 
 
-def test_coalesce_key_sizing_normalises_path():
+def test_coalesce_key_sizing_normalises_path() -> None:
     rel = "state/sizings/2026-11/a.yaml"
     assert record.coalesce_key(_payload({"sizing": rel})) == "sizing:" + rel
     assert record.coalesce_key(_payload({"sizing": "./state\\sizings\\2026-11\\a.yaml"})) == "sizing:" + rel
 
 
-def test_coalesce_key_run_and_bare_ask():
+def test_coalesce_key_run_and_bare_ask() -> None:
     from coordinator_core.ops.dispatch_emit.ask_contract import RESUME_RUN_ID_ARG
 
     assert record.coalesce_key(_payload({RESUME_RUN_ID_ARG: "run-1"})) == "run:run-1"

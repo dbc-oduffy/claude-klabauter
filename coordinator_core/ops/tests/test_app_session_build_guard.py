@@ -8,12 +8,13 @@ from coordinator_core.ops._app_session_build_guard import (
     release_tree_lock,
     transfer_tree_lock,
 )
+from pathlib import Path
 
 ALIVE = lambda pid, ep: True  # noqa: E731
 DEAD = lambda pid, ep: False  # noqa: E731
 
 
-def test_of_two_acquirers_one_wins(tmp_path):
+def test_of_two_acquirers_one_wins(tmp_path: Path) -> None:
     wt = tmp_path / "wt"
     wt.mkdir()
     a = acquire_tree_lock(tmp_path / "h", wt, 1, 10.0, ALIVE)
@@ -22,7 +23,7 @@ def test_of_two_acquirers_one_wins(tmp_path):
     assert b.holder["pid"] == 1
 
 
-def test_stale_reclaim(tmp_path):
+def test_stale_reclaim(tmp_path: Path) -> None:
     wt = tmp_path / "wt"
     wt.mkdir()
     a = acquire_tree_lock(tmp_path / "h", wt, 1, 10.0, ALIVE)
@@ -32,7 +33,7 @@ def test_stale_reclaim(tmp_path):
     assert [p.name for p in b.path.parent.iterdir()] == [b.path.name]
 
 
-def test_transfer_then_release_by_new_holder(tmp_path):
+def test_transfer_then_release_by_new_holder(tmp_path: Path) -> None:
     wt = tmp_path / "wt"
     wt.mkdir()
     a = acquire_tree_lock(tmp_path / "h", wt, 1, 10.0, ALIVE)
@@ -43,7 +44,7 @@ def test_transfer_then_release_by_new_holder(tmp_path):
     assert not a.path.exists()
 
 
-def test_release_by_non_holder_is_noop(tmp_path):
+def test_release_by_non_holder_is_noop(tmp_path: Path) -> None:
     wt = tmp_path / "wt"
     wt.mkdir()
     a = acquire_tree_lock(tmp_path / "h", wt, 1, 10.0, ALIVE)
@@ -51,7 +52,7 @@ def test_release_by_non_holder_is_noop(tmp_path):
     assert a.path.exists()
 
 
-def test_conflict_on_same_cwd(tmp_path):
+def test_conflict_on_same_cwd(tmp_path: Path) -> None:
     wt = tmp_path / "wt"
     wt.mkdir()
     handles = {
@@ -63,14 +64,14 @@ def test_conflict_on_same_cwd(tmp_path):
     assert check_launch_conflicts(handles, wt, False, DEAD) == []
 
 
-def test_no_conflict_when_build_isolated(tmp_path):
+def test_no_conflict_when_build_isolated(tmp_path: Path) -> None:
     wt = tmp_path / "wt"
     wt.mkdir()
     handles = {"app": {"cwd": str(wt), "pid": 3, "start_epoch": 1.0}}
     assert check_launch_conflicts(handles, wt, True, ALIVE) == []
 
 
-def test_no_conflict_on_sibling_worktree(tmp_path):
+def test_no_conflict_on_sibling_worktree(tmp_path: Path) -> None:
     wt, sib = tmp_path / "wt", tmp_path / "sib"
     wt.mkdir()
     sib.mkdir()

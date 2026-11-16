@@ -19,7 +19,7 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 @pytest.fixture
-def cold(monkeypatch, tmp_path):
+def cold(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setattr(shim, "_budgeted", lambda request, budget: ({}, False))
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path / "registry"))
@@ -46,7 +46,7 @@ def _out(answer: dict) -> dict:
     return answer.get("hookSpecificOutput", {})
 
 
-def test_write_leg_em_gets_the_diy_nag_and_a_subagent_gets_none(cold):
+def test_write_leg_em_gets_the_diy_nag_and_a_subagent_gets_none(cold) -> None:
     args = {"path": str(cold / "a.py"), "old_string": "x = 1", "new_string": "x = 2"}
     em = _out(shim.decide("grok", _payload(cold, "edit_file", args, subagent=False)))
     assert em.get("permissionDecision") == "allow", em
@@ -55,7 +55,7 @@ def test_write_leg_em_gets_the_diy_nag_and_a_subagent_gets_none(cold):
     assert _NAG not in str(sub), sub
 
 
-def test_shell_leg_a_subagent_only_deny_fires_with_agent_id_and_not_without(cold):
+def test_shell_leg_a_subagent_only_deny_fires_with_agent_id_and_not_without(cold) -> None:
     args = {"command": "git clean -fdx"}
     sub = _out(shim.decide("grok", _payload(cold, "run_command", args, subagent=True)))
     assert sub.get("permissionDecision") == "deny", sub
@@ -63,7 +63,7 @@ def test_shell_leg_a_subagent_only_deny_fires_with_agent_id_and_not_without(cold
     assert _out(em).get("permissionDecision") != "deny", em
 
 
-def test_live_shape_child_payload_with_subagent_type_is_a_subagent_and_em_spawn_is_not(cold):
+def test_live_shape_child_payload_with_subagent_type_is_a_subagent_and_em_spawn_is_not(cold) -> None:
     child = {"hook_event_name": "PreToolUse", "session_id": "child-sess-1", "cwd": str(cold),
              "tool_name": "run_command", "tool_input": {"command": "git clean -fdx"}, "subagentType": "general"}
     assert _out(shim.decide("grok", child)).get("permissionDecision") == "deny"

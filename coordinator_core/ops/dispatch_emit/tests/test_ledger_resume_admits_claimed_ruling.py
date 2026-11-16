@@ -6,9 +6,11 @@ from types import SimpleNamespace
 
 from coordinator_core.ops.dispatch_emit import ask_contract, sizing_fire
 from coordinator_core.ops.dispatch_emit.ask_contract import LedgerHalt
+from pathlib import Path
+import pytest
 
 
-def _setup(monkeypatch, tmp_path, ruled, staged=("R1",)):
+def _setup(monkeypatch, tmp_path, ruled, staged=("R1",)) -> SimpleNamespace:
     pointer = LedgerHalt("run1", "plan.md", "sizing.yaml", ("R1",), ruled=tuple(ruled))
     record = SimpleNamespace(
         sizing_rel="sizing.yaml", plan_rel="plan.md", staged=frozenset(staged),
@@ -23,7 +25,7 @@ def _setup(monkeypatch, tmp_path, ruled, staged=("R1",)):
     return state
 
 
-def test_ruled_id_missing_from_staged_still_resumes_and_blocks(monkeypatch, tmp_path):
+def test_ruled_id_missing_from_staged_still_resumes_and_blocks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     state = _setup(monkeypatch, tmp_path, ("R9",))
     halt = sizing_fire._ledger_halt_for(
         tmp_path, "plan.md", "sizing.yaml", [], ["R1", "R9"], state
@@ -32,7 +34,7 @@ def test_ruled_id_missing_from_staged_still_resumes_and_blocks(monkeypatch, tmp_
     assert "R9" in halt.blocking and "R1" in halt.blocking
 
 
-def test_no_ruled_id_missing_from_staged_is_none(monkeypatch, tmp_path):
+def test_no_ruled_id_missing_from_staged_is_none(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     state = _setup(monkeypatch, tmp_path, ())
     assert sizing_fire._ledger_halt_for(
         tmp_path, "plan.md", "sizing.yaml", [], ["R1", "R9"], state

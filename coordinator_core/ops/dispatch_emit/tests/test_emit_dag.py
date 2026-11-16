@@ -12,6 +12,7 @@ from .conftest import REVIEW_KW, execute_section
 import re
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -24,7 +25,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 _JS_STRING_LITERAL_RE = re.compile(r"'((?:[^'\\]|\\.)*)'")
 
 
-def _write_row(id_, writes=None, depends_on=None, reads=None):
+def _write_row(id_, writes=None, depends_on=None, reads=None) -> WaveRow:
     return WaveRow(
         id=id_,
         title=f"title-{id_}",
@@ -35,7 +36,7 @@ def _write_row(id_, writes=None, depends_on=None, reads=None):
     )
 
 
-def test_no_commit_agent_no_preflight_no_commit_wave_phase_no_parallel_wrap():
+def test_no_commit_agent_no_preflight_no_commit_wave_phase_no_parallel_wrap() -> None:
     waves = [[_write_row("C1"), _write_row("C2")]]
     script = compose_script(waves, name="wf", description="two rows", **REVIEW_KW)
 
@@ -45,7 +46,7 @@ def test_no_commit_agent_no_preflight_no_commit_wave_phase_no_parallel_wrap():
     assert "parallel(" not in execute_section(script)
 
 
-def test_seven_disjoint_write_rows_emit_seven_rows_with_empty_after():
+def test_seven_disjoint_write_rows_emit_seven_rows_with_empty_after() -> None:
     waves = [[_write_row(f"C{i}") for i in range(1, 8)]]
     script = compose_script(waves, name="wf", description="seven disjoint rows", **REVIEW_KW)
 
@@ -53,7 +54,7 @@ def test_seven_disjoint_write_rows_emit_seven_rows_with_empty_after():
         assert f"_rows['C{i}'] = _runRow('C{i}', []," in script
 
 
-def test_seven_write_rows_run_with_no_slot_limit(monkeypatch):
+def test_seven_write_rows_run_with_no_slot_limit(monkeypatch: pytest.MonkeyPatch) -> None:
     """AC24: the retired ≤5 write-capable-executor cap leaves no runtime
     slot-limit machinery behind -- no `_writeSlots`-named binding, no
     write-capable/write-slot concept in the composed script at all."""
@@ -67,7 +68,7 @@ def test_seven_write_rows_run_with_no_slot_limit(monkeypatch):
     assert "WRITE_SLOT_CAP" not in script
 
 
-def test_each_rows_runRow_call_lists_exactly_its_after_ids():
+def test_each_rows_runRow_call_lists_exactly_its_after_ids() -> None:
     waves = [
         [_write_row("C1", writes=["pkg/shared.py"])],
         [_write_row("C2", writes=["pkg/shared.py"])],
@@ -78,7 +79,7 @@ def test_each_rows_runRow_call_lists_exactly_its_after_ids():
     assert "_rows['C2'] = _runRow('C2', [_rows['C1']]," in script
 
 
-def test_marker_paths_equal_commit_pathspec_or_none_after_gitignore_filter():
+def test_marker_paths_equal_commit_pathspec_or_none_after_gitignore_filter() -> None:
     waves = [[_write_row("C1", writes=["pkg/c1.py"])]]
     script = compose_script(
         waves,
@@ -96,13 +97,13 @@ def test_marker_paths_equal_commit_pathspec_or_none_after_gitignore_filter():
     assert request.deliverable_id == "deliv-1"
 
 
-def test_all_empty_writes_spine_carries_no_marker():
+def test_all_empty_writes_spine_carries_no_marker() -> None:
     waves = [[_write_row("C1", writes=[])]]
     script = compose_script(waves, name="wf", description="empty writes", **REVIEW_KW)
     assert parse_marker(script) is None
 
 
-def test_all_undeclared_spine_still_raises_no_writes_declared():
+def test_all_undeclared_spine_still_raises_no_writes_declared() -> None:
     from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
 
     waves = [[_write_row("C1", writes=UNDECLARED)]]
@@ -110,7 +111,7 @@ def test_all_undeclared_spine_still_raises_no_writes_declared():
         compose_script(waves, name="wf", description="undeclared writes", **REVIEW_KW)
 
 
-def test_run_base_sha_appears_in_the_prep_narration(monkeypatch, tmp_path):
+def test_run_base_sha_appears_in_the_prep_narration(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import emit as emit_mod
 
     monkeypatch.setattr(emit_mod, "head_sha", lambda repo: "deadbeefcafef00d")
@@ -120,7 +121,7 @@ def test_run_base_sha_appears_in_the_prep_narration(monkeypatch, tmp_path):
     assert "deadbeefcafef00d" in script
 
 
-def test_stop_rule_row_leaves_not_yet_started_rows_undispatched():
+def test_stop_rule_row_leaves_not_yet_started_rows_undispatched() -> None:
     waves = [
         [_write_row("C1", writes=["pkg/c1.py"])],
         [_write_row("C2", writes=["pkg/c2.py"], depends_on=["C1"])],
@@ -131,7 +132,7 @@ def test_stop_rule_row_leaves_not_yet_started_rows_undispatched():
     assert "BLOCKED: run halted by stop rule" in script
 
 
-def test_emitted_dag_fixture_passes_run_checks_with_zero_errors():
+def test_emitted_dag_fixture_passes_run_checks_with_zero_errors() -> None:
     waves = [[_write_row(f"C{i}") for i in range(1, 4)]]
     script = compose_script(waves, name="wf", description="run-checks fixture", **REVIEW_KW)
     findings = run_checks(script)
@@ -139,7 +140,7 @@ def test_emitted_dag_fixture_passes_run_checks_with_zero_errors():
     assert errors == []
 
 
-def test_verified_row_composes_no_verify_call_beside_the_terminal_test_leg(tmp_path):
+def test_verified_row_composes_no_verify_call_beside_the_terminal_test_leg(tmp_path: Path) -> None:
     target = tmp_path / "pkg" / "c1.py"
     target.parent.mkdir(parents=True)
     target.write_text("x = 1\n", encoding="utf-8")

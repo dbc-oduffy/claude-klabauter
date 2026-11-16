@@ -20,10 +20,11 @@ from coordinator_core.authz.classification import OpClass, classify
 from coordinator_core.warm.hook_http import HOOK_PATH, op_for_path
 
 import pytest
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _isolated_temp(tmp_path, monkeypatch):
+def _isolated_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path))
 
 
@@ -65,7 +66,7 @@ def test_op_suppresses_for_a_non_firing_payload() -> None:
     assert result == {}
 
 
-def test_op_returns_allow_advisory_shape_when_sentinel_present(tmp_path, monkeypatch) -> None:
+def test_op_returns_allow_advisory_shape_when_sentinel_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks.nudge_autonomous_askuserquestion import _handler
 
     session_id = "test-session-nudge-askuserquestion-fire"
@@ -99,7 +100,7 @@ def test_op_suppresses_on_agent_id() -> None:
     assert _handler({"payload": payload}) == {}
 
 
-def test_op_suppresses_on_override_env_from_payload_not_os_environ(tmp_path, monkeypatch) -> None:
+def test_op_suppresses_on_override_env_from_payload_not_os_environ(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks.nudge_autonomous_askuserquestion import _handler
 
     monkeypatch.delenv("COORDINATOR_AUTONOMOUS_ASK_OK", raising=False)
@@ -130,7 +131,7 @@ def _write_identity(base_dir, posture: str) -> None:
         handle.write(f"engagement_posture: {posture}\n")
 
 
-def test_claude_home_from_payload_env_is_read(tmp_path, monkeypatch) -> None:
+def test_claude_home_from_payload_env_is_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Payload env CLAUDE_HOME points at an identity file reading "default", and
     the quarantined platform home has no identity file at all -- posture must
     still resolve through the payload's CLAUDE_HOME."""
@@ -155,7 +156,7 @@ def test_claude_home_from_payload_env_is_read(tmp_path, monkeypatch) -> None:
     assert "posture=default" in hso["additionalContext"]
 
 
-def test_claude_home_wins_over_platform_home(tmp_path, monkeypatch) -> None:
+def test_claude_home_wins_over_platform_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """CLAUDE_HOME reads "precision" while the quarantined platform home reads
     "default" -- CLAUDE_HOME must win, so the op stays inert ({})."""
     from coordinator_core.hooks.nudge_autonomous_askuserquestion import _handler
@@ -177,7 +178,7 @@ def test_claude_home_wins_over_platform_home(tmp_path, monkeypatch) -> None:
     assert _handler({"payload": payload}) == {}
 
 
-def test_empty_claude_home_falls_through_to_platform_home(tmp_path, monkeypatch) -> None:
+def test_empty_claude_home_falls_through_to_platform_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """CLAUDE_HOME is set but empty in the payload env -- that counts as unset,
     so the reader must fall through to the (quarantined) platform home, which
     reads "default"."""
@@ -199,7 +200,7 @@ def test_empty_claude_home_falls_through_to_platform_home(tmp_path, monkeypatch)
     assert "posture=default" in hso["additionalContext"]
 
 
-def test_engine_process_os_environ_claude_home_is_never_read(tmp_path, monkeypatch) -> None:
+def test_engine_process_os_environ_claude_home_is_never_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The rung must read CLAUDE_HOME from the payload env, never from this
     process's own os.environ -- setting it there only, with no CLAUDE_HOME in
     the payload env, must not affect posture resolution at all."""

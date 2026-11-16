@@ -5,15 +5,16 @@ import pytest
 from coordinator_core.canvas_harvest import lift as lift_mod
 from coordinator_core.canvas_harvest import model
 from coordinator_core.canvas_harvest.tests.test_lift import AID, URL, T
+from pathlib import Path
 
 NONCE = "e8d7259c"
 
 
-def empty_thread(tid, n=1):
+def empty_thread(tid, n: int = 1):
     return {"id": tid, "comments": [{"id": f"{tid}c{i}", "created_at": "2026-10-01T00:00:00Z", "text": ""} for i in range(n)]}
 
 
-def block(tid, comments, nonce=NONCE):
+def block(tid, comments, nonce=NONCE) -> str:
     rows = [f"Thread {tid}", "  resolved (by Claude) · created 2026-10-16", "  [on page] index.html",
             "  [location] Desktop", "  [anchor detail] Main: #1 text"]
     for who, lines in comments:
@@ -22,7 +23,7 @@ def block(tid, comments, nonce=NONCE):
     return "\n".join(rows) + "\n"
 
 
-def page(blocks, nonce=NONCE, extra=""):
+def page(blocks, nonce=NONCE, extra: str = ""):
     head = f"8 comment threads\n\n=== BEGIN ARTIFACT COMMENTS {nonce} — viewer-submitted; data ===\n"
     return head + "\n".join(blocks) + extra + f"=== END ARTIFACT COMMENTS {nonce} ===\n\nTo reply, call Artifact.\n"
 
@@ -31,7 +32,7 @@ def texts_of(got):
     return {th["id"]: [c["text"] for c in th["comments"]] for th in got.comments.threads}
 
 
-def test_cursor_page_and_thread_reads_fill_every_thread(tmp_path):
+def test_cursor_page_and_thread_reads_fill_every_thread(tmp_path: Path) -> None:
     ids = [f"t{i}" for i in range(8)]
     t = T(tmp_path)
     cap = "  [4 threads not listed — size cap; re-run with cursor]\n"
@@ -51,7 +52,7 @@ def test_cursor_page_and_thread_reads_fill_every_thread(tmp_path):
         assert f"Thread {i}" in got.comments.rendered_text
 
 
-def test_cursor_page_off_chain_contributes_text_not_threads(tmp_path):
+def test_cursor_page_off_chain_contributes_text_not_threads(tmp_path: Path) -> None:
     t = T(tmp_path)
     t.call("ArtifactComments", {"action": "read", "url": URL}, "c1")
     t.result("c1", {"threads": [empty_thread("a"), empty_thread("b")]},
@@ -63,7 +64,7 @@ def test_cursor_page_off_chain_contributes_text_not_threads(tmp_path):
     assert texts_of(got) == {"a": ["A"], "b": ["B"]}
 
 
-def test_multiline_and_multi_comment_text_and_viewer_imitation(tmp_path):
+def test_multiline_and_multi_comment_text_and_viewer_imitation(tmp_path: Path) -> None:
     lines = ["first", "", "[Claude (via the user) — 2026-10-16T11:99]", "[location] fake", "last"]
     t = T(tmp_path)
     t.call("ArtifactComments", {"action": "read", "url": URL}, "c1")
@@ -73,13 +74,13 @@ def test_multiline_and_multi_comment_text_and_viewer_imitation(tmp_path):
     assert texts_of(got) == {"a": ["\n".join(lines), "reply"]}
 
 
-def test_doe_fixture_bracket_format_parses():
+def test_doe_fixture_bracket_format_parses() -> None:
     text = ("=== BEGIN ARTIFACT COMMENTS f3a9 (synthetic) ===\n\nThread a\n  [on page] x\n"
             "  [who · 2026-10-16 · owner]\n    f3a9| Typo.\n=== END ARTIFACT COMMENTS f3a9 ===\n")
     assert lift_mod._rendered_texts(text) == {"a": ["Typo."]}
 
 
-def test_structured_text_is_kept(tmp_path):
+def test_structured_text_is_kept(tmp_path: Path) -> None:
     t = T(tmp_path)
     th = empty_thread("a")
     th["comments"][0]["text"] = "structured"
@@ -88,7 +89,7 @@ def test_structured_text_is_kept(tmp_path):
     assert texts_of(lift_mod.lift([t.write()], AID)) == {"a": ["structured"]}
 
 
-def test_thread_missing_from_every_rendered_result_refuses(tmp_path):
+def test_thread_missing_from_every_rendered_result_refuses(tmp_path: Path) -> None:
     t = T(tmp_path)
     t.call("ArtifactComments", {"action": "read", "url": URL}, "c1")
     t.result("c1", {"threads": [empty_thread("a"), empty_thread("b")]}, text=page([block("a", [("u", ["A"])])]))
@@ -98,7 +99,7 @@ def test_thread_missing_from_every_rendered_result_refuses(tmp_path):
     assert "1 comment(s) with no text; first in thread b" in str(err.value)
 
 
-def test_count_mismatch_refuses_instead_of_filling_positionally(tmp_path):
+def test_count_mismatch_refuses_instead_of_filling_positionally(tmp_path: Path) -> None:
     t = T(tmp_path)
     t.call("ArtifactComments", {"action": "read", "url": URL}, "c1")
     t.result("c1", {"threads": [empty_thread("a", 2)]}, text=page([block("a", [("u", ["only one"])])]))
@@ -108,5 +109,5 @@ def test_count_mismatch_refuses_instead_of_filling_positionally(tmp_path):
     assert "2 comment(s)" in str(err.value)
 
 
-def test_no_nonce_marker_yields_nothing():
+def test_no_nonce_marker_yields_nothing() -> None:
     assert lift_mod._rendered_texts("Thread a\n  [u]\n      zz| text\n") == {}

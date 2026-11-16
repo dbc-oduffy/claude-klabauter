@@ -69,7 +69,7 @@ def _isolate_op_timeout_state():
 def _ceiling_against_the_live_dump(op: str) -> int:
     payload = {k: float(v) for k, v in _dump_op_timeouts().items()}
 
-    def _install(*_args, **_kwargs):
+    def _install(*_args, **_kwargs) -> None:
         _mod._OP_TIMEOUTS_STATE = "ok"
         _mod._OP_TIMEOUTS_MAP = payload
 
@@ -77,18 +77,18 @@ def _ceiling_against_the_live_dump(op: str) -> int:
         return _mod._op_timeout_ceiling(op, "/nonexistent", {})
 
 
-def test_the_ceiling_clears_the_wait_its_child_will_actually_perform():
+def test_the_ceiling_clears_the_wait_its_child_will_actually_perform() -> None:
     for op in _CEREMONY_OPS:
         assert _ceiling_against_the_live_dump(op) >= _mutation_deadline_for(op)
 
 
-def test_the_performance_budget_alone_would_not_have_cleared_it():
+def test_the_performance_budget_alone_would_not_have_cleared_it() -> None:
     payload = _dump_op_timeouts()
     for op in _CEREMONY_OPS:
         assert int(payload["__ceremony_budget__"]) + 2 < _mutation_deadline_for(op)
 
 
-def test_the_engine_publishes_the_transport_deadline_at_all():
+def test_the_engine_publishes_the_transport_deadline_at_all() -> None:
     payload = _dump_op_timeouts()
     assert payload["__ceremony_mutation_read_deadline__"] == _mutation_deadline_for(
         "ceremony.commit_v2"
@@ -96,7 +96,7 @@ def test_the_engine_publishes_the_transport_deadline_at_all():
     assert payload["__ceremony_mutation_read_deadline__"] > payload["__ceremony_budget__"]
 
 
-def test_an_engine_that_does_not_publish_it_degrades_to_the_budget():
+def test_an_engine_that_does_not_publish_it_degrades_to_the_budget() -> None:
     payload = {
         k: float(v)
         for k, v in _dump_op_timeouts().items()
@@ -105,7 +105,7 @@ def test_an_engine_that_does_not_publish_it_degrades_to_the_budget():
     payload.pop("__ceremony_mutation_read_deadline__")
     payload.pop("__warm_miss_wait__")
 
-    def _install(*_args, **_kwargs):
+    def _install(*_args, **_kwargs) -> None:
         _mod._OP_TIMEOUTS_STATE = "ok"
         _mod._OP_TIMEOUTS_MAP = payload
 
@@ -115,14 +115,14 @@ def test_an_engine_that_does_not_publish_it_degrades_to_the_budget():
         ) + 2
 
 
-def test_a_non_ceremony_op_is_untouched():
+def test_a_non_ceremony_op_is_untouched() -> None:
     payload = {k: float(v) for k, v in _dump_op_timeouts().items()}
     assert _ceiling_against_the_live_dump("session.boot_sweep") == int(
         payload.get("session.boot_sweep", payload["__default__"])
     ) + math.ceil(payload["__warm_miss_wait__"]) + 2
 
 
-def test_an_unlisted_ceremony_op_is_bounded_by_the_default_not_the_process_time_bar():
+def test_an_unlisted_ceremony_op_is_bounded_by_the_default_not_the_process_time_bar() -> None:
     """`OP_KEY_SCOPE` drives the dump's projection; `ipc._timeout_for`
     prefix-matches. So a `ceremony.*` op the dump omits is clamped to 2s
     server-side while its row is absent here -- and the caller used to fall
@@ -133,7 +133,7 @@ def test_an_unlisted_ceremony_op_is_bounded_by_the_default_not_the_process_time_
     unlisted = "ceremony.scoped_git_commit"
     assert unlisted not in payload, "fixture stale: this op is now listed by name"
 
-    def _install(*_args, **_kwargs):
+    def _install(*_args, **_kwargs) -> None:
         _mod._OP_TIMEOUTS_STATE = "ok"
         _mod._OP_TIMEOUTS_MAP = dict(payload)
 
@@ -141,7 +141,7 @@ def test_an_unlisted_ceremony_op_is_bounded_by_the_default_not_the_process_time_
     stripped.pop("__ceremony_mutation_read_deadline__")
     stripped.pop("__warm_miss_wait__")
 
-    def _install_stripped(*_args, **_kwargs):
+    def _install_stripped(*_args, **_kwargs) -> None:
         _mod._OP_TIMEOUTS_STATE = "ok"
         _mod._OP_TIMEOUTS_MAP = stripped
 
@@ -156,7 +156,7 @@ def test_an_unlisted_ceremony_op_is_bounded_by_the_default_not_the_process_time_
         )
 
 
-def test_the_client_learns_alias_membership_from_the_engine():
+def test_the_client_learns_alias_membership_from_the_engine() -> None:
     """`commit.exec_bit_change` and `review.snapshot_diff_and_head` are ceremony
     ops with no `ceremony.` prefix (`ipc._CEREMONY_PACKAGE_ALIASES`).
     `cc_invoke` cannot import `ipc` to find that out, so the engine says so with
@@ -164,7 +164,7 @@ def test_the_client_learns_alias_membership_from_the_engine():
     sized as ordinary ops -- and one of them commits."""
     payload = {k: float(v) for k, v in _dump_op_timeouts().items()}
 
-    def _install(*_args, **_kwargs):
+    def _install(*_args, **_kwargs) -> None:
         _mod._OP_TIMEOUTS_STATE = "ok"
         _mod._OP_TIMEOUTS_MAP = payload
 
@@ -181,7 +181,7 @@ def test_the_client_learns_alias_membership_from_the_engine():
             ) >= _mutation_deadline_for(alias)
 
 
-def test_membership_falls_back_to_the_prefix_when_no_dump_is_available():
+def test_membership_falls_back_to_the_prefix_when_no_dump_is_available() -> None:
     _mod._reset_op_timeout_cache()
     assert _mod._is_ceremony_op("ceremony.commit_v2")
     assert not _mod._is_ceremony_op("session.boot_sweep")
@@ -190,7 +190,7 @@ def test_membership_falls_back_to_the_prefix_when_no_dump_is_available():
 _ORDINARY_MUTATION = "queue.append"
 
 
-def test_the_ceiling_clears_a_warm_miss_plus_the_read():
+def test_the_ceiling_clears_a_warm_miss_plus_the_read() -> None:
     from coordinator_core.invoke.__main__ import _warm_boot_wait_deadline
     from coordinator_core.warm.client import READ_DEADLINE_SECS
 
@@ -202,7 +202,7 @@ def test_the_ceiling_clears_a_warm_miss_plus_the_read():
         ), op
 
 
-def test_the_published_miss_wait_follows_the_childs_own_env(monkeypatch):
+def test_the_published_miss_wait_follows_the_childs_own_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_WARM_BOOT_WAIT_SECS", "0")
     assert _dump_op_timeouts()["__warm_miss_wait__"] == 0.0
 

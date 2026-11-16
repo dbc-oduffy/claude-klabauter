@@ -12,9 +12,10 @@ from coordinator_core.session.touch_record import (
     append_event,
     read_stream_claims_and_held_kind,
 )
+from pathlib import Path
 
 
-def _put(sink, verb, path, kind=None, ts=1.0):
+def _put(sink, verb, path, kind=None, ts: float = 1.0) -> None:
     append_event(sink, session_id="s1", agent_id=None, verb=verb, path=path,
                  kind=kind, timestamp=ts, name=None)
 
@@ -29,27 +30,27 @@ def _held(tmp_path, steps):
 T, R = VERB_TOUCH, VERB_RELEASE
 
 
-def test_write_then_read_is_write(tmp_path):
+def test_write_then_read_is_write(tmp_path: Path) -> None:
     assert _held(tmp_path, [(T, "w"), (T, "r")]) == {"a.py": KIND_WRITE}
 
 
-def test_read_read_is_read(tmp_path):
+def test_read_read_is_read(tmp_path: Path) -> None:
     assert _held(tmp_path, [(T, "r"), (T, "r")]) == {"a.py": KIND_READ}
 
 
-def test_write_release_read_is_read(tmp_path):
+def test_write_release_read_is_read(tmp_path: Path) -> None:
     assert _held(tmp_path, [(T, "w"), (R, None), (T, "r")]) == {"a.py": KIND_READ}
 
 
-def test_kindless_then_read_is_none(tmp_path):
+def test_kindless_then_read_is_none(tmp_path: Path) -> None:
     assert _held(tmp_path, [(T, None), (T, "r")]) == {"a.py": None}
 
 
-def test_write_release_is_absent(tmp_path):
+def test_write_release_is_absent(tmp_path: Path) -> None:
     assert _held(tmp_path, [(T, "w"), (R, None)]) == {}
 
 
-def test_legacy_wrapper_unchanged_over_mixed_fixture(tmp_path):
+def test_legacy_wrapper_unchanged_over_mixed_fixture(tmp_path: Path) -> None:
     sink = tmp_path / "s1" / "record"
     _put(sink, T, "a.py", "w", 1.0)
     _put(sink, T, "b.py", "r", 2.0)
@@ -63,7 +64,7 @@ def test_legacy_wrapper_unchanged_over_mixed_fixture(tmp_path):
     assert not degraded
 
 
-def test_degraded_member_flags_both_projections(tmp_path):
+def test_degraded_member_flags_both_projections(tmp_path: Path) -> None:
     sink = tmp_path / "s1" / "record"
     _put(sink, T, "a.py", "w")
     with open(sink, "ab") as fh:

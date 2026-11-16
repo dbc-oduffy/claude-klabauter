@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit import run_withhold
+from coordinator_core.ops.dispatch_emit import run_artifacts, run_withhold
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record import (  # noqa: F401
     LEDGER,
@@ -33,7 +33,7 @@ def test_artifacts_only_ledger_halt_with_zero_review_verdicts_commits(repo):
     assert out.get("refused") != "review-floor"
     names = _landed(repo, out, "--name-only")
     assert "done.py" not in names
-    assert f"{RECORD_DIR_ROOT}/{RUN}/ask.md" in names
+    assert run_artifacts.outcome_rel(RUN) in names
 
 
 def test_withheld_dirty_declared_path_stays_out_of_the_halt_commit(repo):
@@ -49,6 +49,7 @@ def test_withheld_dirty_declared_path_stays_out_of_the_halt_commit(repo):
 
     out = _call(repo, LEDGER, **PASSING)
 
-    assert out["withheld"] == {"peer_owned.py": "owned by peer run d238dc", "done.py": "halt-record-only"}
+    # done.py passed review but the run recorded no write baseline for it, so hunk provenance holds it.
+    assert out["withheld"] == {"peer_owned.py": "owned by peer run d238dc", "done.py": "foreign-hunk-unproduced"}
     names = _landed(repo, out, "--name-only")
     assert "done.py" not in names and "peer_owned.py" not in names

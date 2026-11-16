@@ -10,6 +10,11 @@ import types
 from contextlib import redirect_stdout, redirect_stderr
 
 import pytest
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 
@@ -95,7 +100,7 @@ def _write_draft(sender_repo: pathlib.Path, topic: str, *, to: str) -> pathlib.P
     return draft_path
 
 
-def _load_cli_module():
+def _load_cli_module() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "cross_repo_memo_never_inbox_mirror", str(_BIN_DIR / "cross-repo-memo.py")
     )
@@ -113,8 +118,8 @@ def _load_cli_module():
     ],
 )
 def test_cli_send_refuses_mirror_via_real_engine_op(
-    tmp_path, monkeypatch, receiver_key, receiver_dir, to_id,
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, receiver_key, receiver_dir, to_id,
+) -> None:
     sender_repo = _make_sender_git_repo(tmp_path)
     mirror_repo = _make_mirror_git_repo(tmp_path, receiver_dir)
     claude_home = _make_claude_home(tmp_path, {receiver_key: mirror_repo})

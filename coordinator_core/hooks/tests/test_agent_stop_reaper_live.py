@@ -80,7 +80,7 @@ def _launch(parent_alive: bool):
 
 
 @pytest.fixture(autouse=True)
-def _home(tmp_path, monkeypatch):
+def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     yield
     for token in _spawned:
@@ -95,7 +95,7 @@ def _stop():
     return reaper._handler({"payload": {"session_id": SESSION, "agent_id": AGENT}})
 
 
-def test_orphaned_standin_grep_is_reaped_and_unrelated_process_survives():
+def test_orphaned_standin_grep_is_reaped_and_unrelated_process_survives() -> None:
     bystander = subprocess.Popen(
         [sys.executable, "-c", "import time; time.sleep(60)"],
         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -120,7 +120,7 @@ def test_orphaned_standin_grep_is_reaped_and_unrelated_process_survives():
         bystander.wait(timeout=10)
 
 
-def test_live_parent_tree_is_not_reaped():
+def test_live_parent_tree_is_not_reaped() -> None:
     token, mark, procs, bash = _launch(parent_alive=True)
     try:
         store.write_record(LaunchRecord(

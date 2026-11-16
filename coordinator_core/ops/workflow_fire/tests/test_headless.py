@@ -24,7 +24,7 @@ def record(tmp_path, script):
     return path
 
 
-def test_real_runtime_parallel_journal_and_terminal_handoff(tmp_path):
+def test_real_runtime_parallel_journal_and_terminal_handoff(tmp_path: Path) -> None:
     path = record(tmp_path, "export const meta={}; await phase('Execute'); const r=await parallel([()=>agent('one',{label:'A'}),()=>agent('two',{label:'B'})]); return {next_action:{op:'dispatch.terminal_commit',params:{run_id:'test'}},r};")
     calls, landings = [], []
     def worker(prompt, options, **kwargs):
@@ -43,18 +43,18 @@ def test_real_runtime_parallel_journal_and_terminal_handoff(tmp_path):
     assert events[-1]['type'] == 'completed'
 
 
-def test_agent_error_fails_workflow_without_landing(tmp_path):
+def test_agent_error_fails_workflow_without_landing(tmp_path: Path) -> None:
     path = record(tmp_path, "await agent('fail',{}); return {ok:true};")
     def worker(*args, **kwargs):
         raise RuntimeError('native worker failed')
-    def land(*args):
+    def land(*args) -> None:
         pytest.fail('failed workflow cannot land')
     result = headless.execute(path, agent_runner=worker, terminal_runner=land)
     assert result['exit_code'] == 1
     assert 'native worker failed' in result['error']
 
 
-def test_script_drift_refused_before_agent(tmp_path):
+def test_script_drift_refused_before_agent(tmp_path: Path) -> None:
     path = record(tmp_path, "return {}; ")
     (tmp_path / 'run.mjs').write_text('return {changed:true};')
     result = headless.execute(path, agent_runner=lambda *a, **k: pytest.fail('drift'))
@@ -62,14 +62,14 @@ def test_script_drift_refused_before_agent(tmp_path):
     assert 'changed after fire' in result['error']
 
 
-def test_terminal_refusal_is_not_success(tmp_path):
+def test_terminal_refusal_is_not_success(tmp_path: Path) -> None:
     path = record(tmp_path, 'return {next_action:{op:"dispatch.terminal_commit",params:{}}};')
     result = headless.execute(path, terminal_runner=lambda *a: {'refused': 'ledger'})
     assert result['exit_code'] == 1
     assert result['landing']['refused'] == 'ledger'
 
 
-def test_completion_delivery_is_durable(tmp_path, monkeypatch):
+def test_completion_delivery_is_durable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.agent_pipe import bridge
     from types import SimpleNamespace
     path = record(tmp_path, 'return {ok:true};')
@@ -84,12 +84,12 @@ def test_completion_delivery_is_durable(tmp_path, monkeypatch):
     assert json.loads(path.read_text())['notify_status'] == 'queued'
 
 
-def test_source_operation_retains_unstamped_guard(tmp_path):
+def test_source_operation_retains_unstamped_guard(tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match='not a published engine'):
         headless._invoke_source('dispatch.emit', {'ask': 'unused'}, str(tmp_path), tmp_path / 'operation', 15)
 
 
-def test_params_file_must_stay_inside_target_repo(tmp_path):
+def test_params_file_must_stay_inside_target_repo(tmp_path: Path) -> None:
     outside = tmp_path / 'outside.json'
     outside.write_text('{}')
     repo = tmp_path / 'repo'
@@ -111,7 +111,7 @@ def test_params_file_must_stay_inside_target_repo(tmp_path):
     {'schema': 'wake-digest', 'outcome': 'incomplete', 'completed': False},
     {'parent_id': 'fan', 'runs': [{'run_id': 'child', 'status': 'ok', 'result': {'halted': 'ledger'}}]},
 ])
-def test_returned_engine_failure_is_not_clean_exit(tmp_path, value):
+def test_returned_engine_failure_is_not_clean_exit(tmp_path: Path, value) -> None:
     path = record(tmp_path, 'return ' + json.dumps(value) + ';')
     result = headless.execute(path)
     assert result['exit_code'] == 1
@@ -128,7 +128,7 @@ def test_returned_engine_failure_is_not_clean_exit(tmp_path, value):
     {'committed': False, 'nothing_to_commit': True},
     {'committed': False, 'already_landed': True, 'sha': 'abc'},
 ])
-def test_normal_schema_and_successful_noop_are_preserved(tmp_path, value):
+def test_normal_schema_and_successful_noop_are_preserved(tmp_path: Path, value) -> None:
     path = record(tmp_path, 'return ' + json.dumps(value) + ';')
     result = headless.execute(path, terminal_runner=lambda *a: value if 'committed' in value else None)
     assert result['exit_code'] == 0, result
@@ -139,14 +139,14 @@ def test_normal_schema_and_successful_noop_are_preserved(tmp_path, value):
     {'committed': True, 'plan_status': 'not-stamped', 'plan_status_reason': 'criterion not met'},
     {'committed': True, 'criterion_status': 'indeterminate'},
 ])
-def test_noncomplete_landing_cannot_report_success(tmp_path, landing):
+def test_noncomplete_landing_cannot_report_success(tmp_path: Path, landing) -> None:
     path = record(tmp_path, 'return {next_action:{op:"dispatch.terminal_commit",params:{}}};')
     result = headless.execute(path, terminal_runner=lambda *a: landing)
     assert result['exit_code'] == 1
     assert result['landing'] == landing
 
 
-def test_fan_child_unrelayed_terminal_action_is_not_clean(tmp_path):
+def test_fan_child_unrelayed_terminal_action_is_not_clean(tmp_path: Path) -> None:
     value = {'parent_id': 'parent', 'runs': [{'run_id': 'child', 'status': 'ok', 'result': {
         'schema': 'wake-digest', 'outcome': 'completed', 'completed': True,
         'next_action': {'op': 'dispatch.land_run', 'params': {'run_id': 'child'}},
@@ -158,7 +158,7 @@ def test_fan_child_unrelayed_terminal_action_is_not_clean(tmp_path):
     assert result['result'] == value
 
 
-def test_deadline_never_dispatches_queued_agents_after_runtime_dies(tmp_path):
+def test_deadline_never_dispatches_queued_agents_after_runtime_dies(tmp_path: Path) -> None:
     import time
     path = record(tmp_path, "return await parallel(Array.from({length: 20}, (_, i) => () => agent(String(i))));")
     settings = json.loads(path.read_text())
@@ -177,7 +177,7 @@ def test_deadline_never_dispatches_queued_agents_after_runtime_dies(tmp_path):
     assert time.monotonic() - before < 2
 
 
-def test_unreleased_start_gate_persists_failed_record_and_notifies(tmp_path, monkeypatch):
+def test_unreleased_start_gate_persists_failed_record_and_notifies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     path = record(tmp_path, 'return {};')
     value = json.loads(path.read_text())
     value.update(timeout_s=.01, notify_to='parent')
@@ -194,7 +194,7 @@ def test_unreleased_start_gate_persists_failed_record_and_notifies(tmp_path, mon
     assert len(deliveries) == 1
 
 
-def test_start_receipt_failure_releases_reserved_record(tmp_path, monkeypatch):
+def test_start_receipt_failure_releases_reserved_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     source = tmp_path / 'workflow.mjs'
     source.write_text('export const meta={}; return {};')
     registry = tmp_path / 'registry'
@@ -217,7 +217,7 @@ def test_start_receipt_failure_releases_reserved_record(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize('backend', ['codex', 'claude', 'grok', 'agy'])
-def test_start_records_the_requested_backend_family(tmp_path, monkeypatch, backend):
+def test_start_records_the_requested_backend_family(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend) -> None:
     source = tmp_path / 'workflow.mjs'
     source.write_text('export const meta={}; return {};')
     registry = tmp_path / 'registry'
@@ -235,14 +235,14 @@ def test_start_records_the_requested_backend_family(tmp_path, monkeypatch, backe
     assert json.loads(next(registry.glob('*.json')).read_text())['backend'] == backend
 
 
-def test_start_refuses_an_unknown_backend_naming_the_set(tmp_path):
+def test_start_refuses_an_unknown_backend_naming_the_set(tmp_path: Path) -> None:
     source = tmp_path / 'workflow.mjs'
     source.write_text('export const meta={}; return {};')
     with pytest.raises(ValueError, match=r'codex\|claude\|grok\|agy'):
         headless.start(str(source), backend='gemini')
 
 
-def test_failed_gate_release_reaps_only_its_own_spawned_driver(tmp_path, monkeypatch):
+def test_failed_gate_release_reaps_only_its_own_spawned_driver(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from types import SimpleNamespace
     source = tmp_path / 'workflow.mjs'
     source.write_text('export const meta={}; return {};')

@@ -65,7 +65,7 @@ def _make_sender_git_repo(tmp_path: Path) -> Path:
     return root
 
 
-def _draft_first(tmp_path, topic="some-topic", **overrides) -> Path:
+def _draft_first(tmp_path, topic: str = "some-topic", **overrides) -> Path:
     """Create a sender repo + a real draft via memo.draft; return the sender root."""
     sender = _make_sender_git_repo(tmp_path)
     common_dir = sender / ".git"
@@ -89,35 +89,35 @@ def _draft_first(tmp_path, topic="some-topic", **overrides) -> Path:
 # ===========================================================================
 
 class TestDeriveProseSummary:
-    def test_heading_first_body_yields_prose_not_heading(self):
+    def test_heading_first_body_yields_prose_not_heading(self) -> None:
         body = "## Problem statement\n\nThe registry read silently degraded to {}.\nMore detail.\n"
         summary = derive_prose_summary(body)
         assert summary == "The registry read silently degraded to {}."
         assert not summary.startswith("#")
 
-    def test_blank_lines_skipped(self):
+    def test_blank_lines_skipped(self) -> None:
         body = "\n\n   \nActual prose sentence here.\n"
         assert derive_prose_summary(body) == "Actual prose sentence here."
 
-    def test_html_comment_only_lines_skipped(self):
+    def test_html_comment_only_lines_skipped(self) -> None:
         body = "<!-- compose your memo here -->\nReal content starts here.\n"
         assert derive_prose_summary(body) == "Real content starts here."
 
-    def test_multiple_headings_all_skipped(self):
+    def test_multiple_headings_all_skipped(self) -> None:
         body = "# Title\n## Subtitle\n### Sub-sub\nFinally, prose.\n"
         assert derive_prose_summary(body) == "Finally, prose."
 
-    def test_no_sentence_punctuation_falls_back_to_whole_line(self):
+    def test_no_sentence_punctuation_falls_back_to_whole_line(self) -> None:
         body = "no terminal punctuation on this line\nnext line\n"
         assert derive_prose_summary(body) == "no terminal punctuation on this line"
 
-    def test_truncates_long_summary(self):
+    def test_truncates_long_summary(self) -> None:
         long_sentence = ("x" * (_SUMMARY_MAX_CHARS + 30)) + "."
         result = derive_prose_summary(long_sentence + "\n")
         assert len(result) == _SUMMARY_MAX_CHARS
         assert result.endswith("…")
 
-    def test_all_blank_or_structural_body_yields_empty(self):
+    def test_all_blank_or_structural_body_yields_empty(self) -> None:
         body = "## Heading\n<!-- comment -->\n\n"
         assert derive_prose_summary(body) == ""
 
@@ -127,23 +127,23 @@ class TestDeriveProseSummary:
 # ===========================================================================
 
 class TestValidateComposeParams:
-    def test_missing_dry_run(self):
+    def test_missing_dry_run(self) -> None:
         result = _validate_compose_params({"topic": "t", "body": "b"})
         assert result["exit_code"] == 1
 
-    def test_bad_topic(self):
+    def test_bad_topic(self) -> None:
         result = _validate_compose_params({"dry_run": True, "topic": "Bad/../x", "body": "b"})
         assert result["exit_code"] == 1
 
-    def test_missing_body(self):
+    def test_missing_body(self) -> None:
         result = _validate_compose_params({"dry_run": True, "topic": "t"})
         assert result["exit_code"] == 1
 
-    def test_valid_params(self):
+    def test_valid_params(self) -> None:
         result = _validate_compose_params({"dry_run": False, "topic": "t", "body": "b", "summary": "s"})
         assert result == (False, "t", "b", "s", None, None)
 
-    def test_explicit_summary_over_cap_warns_and_substitutes(self, capsys):
+    def test_explicit_summary_over_cap_warns_and_substitutes(self, capsys: pytest.CaptureFixture[str]) -> None:
         """2026-08-07 PM ruling (AC9, supersedes AC7 — docs/plans/2026-08-07-
         memo-summary-cap-warn-at-draft.md § C4): an EXPLICITLY authored
         summary over _SUMMARY_MAX_CHARS no longer fails loud here — it is
@@ -159,7 +159,7 @@ class TestValidateComposeParams:
         assert str(_SUMMARY_MAX_CHARS) in advisory
         assert original == long_summary  # echoed back verbatim, in full
 
-    def test_explicit_summary_at_cap_passes(self):
+    def test_explicit_summary_at_cap_passes(self) -> None:
         """A summary exactly AT the cap is valid — the gate is strictly-greater-than."""
         at_cap_summary = "S" * _SUMMARY_MAX_CHARS
         result = _validate_compose_params(
@@ -167,7 +167,7 @@ class TestValidateComposeParams:
         )
         assert result == (False, "t", "b", at_cap_summary, None, None)
 
-    def test_placeholder_summary_resolves_to_absent(self):
+    def test_placeholder_summary_resolves_to_absent(self) -> None:
         """AC5: a placeholder-valued summary (memo.draft's ruler) is ABSENT,
         not an explicit value — validation resolves it to None so the handler
         falls through to derive_prose_summary(body) rather than length-checking
@@ -183,7 +183,7 @@ class TestValidateComposeParams:
 # ===========================================================================
 
 class TestNoExistingDraft:
-    def test_compose_without_prior_draft_fails_loud(self, tmp_path):
+    def test_compose_without_prior_draft_fails_loud(self, tmp_path: Path) -> None:
         sender = _make_sender_git_repo(tmp_path)
         common_dir = sender / ".git"
         result = _run(_memo_compose(
@@ -198,7 +198,7 @@ class TestNoExistingDraft:
 # ===========================================================================
 
 class TestDryRunPreview:
-    def test_dry_run_previews_derived_summary_without_writing(self, tmp_path):
+    def test_dry_run_previews_derived_summary_without_writing(self, tmp_path: Path) -> None:
         sender = _draft_first(tmp_path)
         common_dir = sender / ".git"
         target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
@@ -219,7 +219,7 @@ class TestDryRunPreview:
 # ===========================================================================
 
 class TestActRewritesDraft:
-    def test_act_writes_body_and_derived_summary(self, tmp_path):
+    def test_act_writes_body_and_derived_summary(self, tmp_path: Path) -> None:
         sender = _draft_first(tmp_path, kind="ask")
         common_dir = sender / ".git"
 
@@ -241,7 +241,7 @@ class TestActRewritesDraft:
         assert read_fm_field(split.fm_text, "kind") == '"ask"'
         assert "Actual prose summary sentence. More body." in split.body_with_leading_newline
 
-    def test_explicit_summary_wins_over_derivation(self, tmp_path):
+    def test_explicit_summary_wins_over_derivation(self, tmp_path: Path) -> None:
         sender = _draft_first(tmp_path)
         common_dir = sender / ".git"
 
@@ -259,7 +259,7 @@ class TestActRewritesDraft:
         split = split_frontmatter(target.read_text(encoding="utf-8"))
         assert read_fm_field(split.fm_text, "summary") == '"Explicit summary wins."'
 
-    def test_body_naming_owner_by_display_name_only_warns(self, tmp_path):
+    def test_body_naming_owner_by_display_name_only_warns(self, tmp_path: Path) -> None:
         sender = _draft_first(tmp_path)
         body = "example-retrieval-repo-26 is building the _index.md generator.\n"
         result = _run(_memo_compose(
@@ -270,7 +270,7 @@ class TestActRewritesDraft:
         advisory = result["acted"][0]["display_name_advisory"]
         assert advisory is not None and "example-retrieval-repo-26" in advisory
 
-    def test_body_display_name_with_session_id_does_not_warn(self, tmp_path):
+    def test_body_display_name_with_session_id_does_not_warn(self, tmp_path: Path) -> None:
         sender = _draft_first(tmp_path)
         body = (
             "example-retrieval-repo-26 (session 9e9a9d74-eea9-4d5b-a812-b70179ba5cf7) is "
@@ -283,7 +283,7 @@ class TestActRewritesDraft:
         assert result["exit_code"] == 0
         assert result["acted"][0]["display_name_advisory"] is None
 
-    def test_explicit_summary_over_cap_substitutes_and_warns(self, tmp_path):
+    def test_explicit_summary_over_cap_substitutes_and_warns(self, tmp_path: Path) -> None:
         """End-to-end (2026-08-07 PM ruling, AC9/AC10): _memo_compose SUCCEEDS
         on an over-cap explicit summary — the body-derived summary is written
         in its place, an advisory names the actual length and the cap, and
@@ -317,7 +317,7 @@ class TestActRewritesDraft:
         # the emitted summary field (substitution, not clamping).
         assert long_summary[:20] not in written_summary
 
-    def test_explicit_summary_over_cap_and_underivable_body_refuses(self, tmp_path, capsys):
+    def test_explicit_summary_over_cap_and_underivable_body_refuses(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         """C4: over-cap explicit summary + a body with no derivable prose has
         nothing to substitute — refuse (DEC-1), never deliver an empty
         summary, and name BOTH conditions in the message."""
@@ -341,7 +341,7 @@ class TestActRewritesDraft:
         assert "no derivable prose" in stderr
         assert target.read_text(encoding="utf-8") == before  # untouched
 
-    def test_status_not_draft_is_setup_error(self, tmp_path):
+    def test_status_not_draft_is_setup_error(self, tmp_path: Path) -> None:
         sender = _draft_first(tmp_path)
         common_dir = sender / ".git"
         target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
@@ -357,7 +357,7 @@ class TestActRewritesDraft:
         # left untouched
         assert target.read_text(encoding="utf-8") == content
 
-    def test_repeated_compose_calls_keep_status_draft(self, tmp_path):
+    def test_repeated_compose_calls_keep_status_draft(self, tmp_path: Path) -> None:
         sender = _draft_first(tmp_path)
         common_dir = sender / ".git"
         target = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
@@ -373,7 +373,7 @@ class TestActRewritesDraft:
         assert read_fm_field(split.fm_text, "status") == "draft"
         assert read_fm_field(split.fm_text, "summary") == '"Body version 2."'
 
-    def test_resolved_empty_summary_fails_loud_act(self, tmp_path):
+    def test_resolved_empty_summary_fails_loud_act(self, tmp_path: Path) -> None:
         """DEC-1 (2026-07-24 memo-ownership-and-redesign plan): a body with no
         derivable prose and no explicit summary resolves to an empty summary
         — compose must fail loud rather than write an empty summary field."""
@@ -389,7 +389,7 @@ class TestActRewritesDraft:
         assert result["exit_code"] == 1
         assert target.read_text(encoding="utf-8") == before  # untouched
 
-    def test_placeholder_summary_derives_from_derivable_body(self, tmp_path):
+    def test_placeholder_summary_derives_from_derivable_body(self, tmp_path: Path) -> None:
         """AC5/AC6 direction 1: placeholder summary + a derivable body →
         derived summary is written, the ruler never reaches the delivered
         draft."""
@@ -412,7 +412,7 @@ class TestActRewritesDraft:
         assert read_fm_field(split.fm_text, "summary") == '"A derivable prose sentence."'
         assert SUMMARY_PLACEHOLDER not in content
 
-    def test_placeholder_summary_with_underivable_body_still_refuses(self, tmp_path):
+    def test_placeholder_summary_with_underivable_body_still_refuses(self, tmp_path: Path) -> None:
         """AC5/AC6 direction 2: placeholder summary + an underivable body still
         hits DEC-1's resolved-empty refusal, unweakened — the sentinel routes
         to derivation, not around DEC-1."""
@@ -432,7 +432,7 @@ class TestActRewritesDraft:
         assert result["exit_code"] == 1
         assert target.read_text(encoding="utf-8") == before  # untouched
 
-    def test_resolved_empty_summary_fails_loud_dry_run(self, tmp_path):
+    def test_resolved_empty_summary_fails_loud_dry_run(self, tmp_path: Path) -> None:
         """Same gate on the preview path — dry_run must not green-light a
         compose that would fail on the real (act) call."""
         sender = _draft_first(tmp_path)
@@ -450,7 +450,7 @@ class TestActRewritesDraft:
 # ===========================================================================
 
 class TestNoMemoIndex:
-    def test_no_module_level_mutable_store(self):
+    def test_no_module_level_mutable_store(self) -> None:
         import coordinator_core.ops.fleet.memo_compose as memo_compose_mod
 
         module_globals = {
@@ -474,10 +474,10 @@ class TestNoMemoIndex:
             f"Found: {sorted(mutable_collections.keys())}"
         )
 
-    def test_handler_calls_do_not_mutate_module_state(self, tmp_path):
+    def test_handler_calls_do_not_mutate_module_state(self, tmp_path: Path) -> None:
         import coordinator_core.ops.fleet.memo_compose as memo_compose_mod
 
-        def _mutable_names():
+        def _mutable_names() -> frozenset[str]:
             return frozenset(
                 name for name, val in vars(memo_compose_mod).items()
                 if isinstance(val, (dict, list, set)) and not name.startswith("__")
@@ -532,31 +532,31 @@ class TestCarriedDraftFields:
         draft = sender / ".coordinator-local" / "memo-outbox" / "some-topic.md"
         return parse_yaml(split_frontmatter(draft.read_text(encoding="utf-8")).fm_text)
 
-    def test_scoped_to_survives_compose(self, tmp_path):
+    def test_scoped_to_survives_compose(self, tmp_path: Path) -> None:
         scoped_to = {"artifact": "memo_send.py", "sha": "abc1234", "seam": "memo-send"}
         fm = self._compose_and_reparse(tmp_path, scoped_to=scoped_to)
         assert fm["scoped_to"] == scoped_to
 
-    def test_in_reply_to_survives_compose(self, tmp_path):
+    def test_in_reply_to_survives_compose(self, tmp_path: Path) -> None:
         fm = self._compose_and_reparse(tmp_path, in_reply_to="2026-07-25-foo.md")
         assert fm["in_reply_to"] == "2026-07-25-foo.md"
 
-    def test_space_survives_compose(self, tmp_path):
+    def test_space_survives_compose(self, tmp_path: Path) -> None:
         fm = self._compose_and_reparse(tmp_path, space="gate-migration")
         assert fm["space"] == "gate-migration"
 
-    def test_supersedes_list_survives_compose(self, tmp_path):
+    def test_supersedes_list_survives_compose(self, tmp_path: Path) -> None:
         fm = self._compose_and_reparse(
             tmp_path, supersedes=["2026-07-20-a.md", "2026-07-21-b.md"],
         )
         assert fm["supersedes"] == ["2026-07-20-a.md", "2026-07-21-b.md"]
 
-    def test_absent_fields_are_not_invented(self, tmp_path):
+    def test_absent_fields_are_not_invented(self, tmp_path: Path) -> None:
         fm = self._compose_and_reparse(tmp_path)
         for key in ("scoped_to", "in_reply_to", "space", "supersedes"):
             assert key not in fm
 
-    def test_sent_by_not_carried_through_compose(self, tmp_path):
+    def test_sent_by_not_carried_through_compose(self, tmp_path: Path) -> None:
         """C7 ruling (docs/plans/2026-08-13-session-identity-earns-its-keep.md
         § C7): sent_by is resolved at SEND time, deliberately NOT a
         draft-staged field — draft time is not send time. A draft rewritten

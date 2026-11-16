@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_abandon_stalled_run import (
     PARENT, RUN, SIZING, _abandon, _chained, _closed,
 )
 from coordinator_core.ops.dispatch_emit.tests.test_fan_launcher import _write
+from pathlib import Path
 
 
 def _hop(tmp_path, workflow_js: str):
@@ -39,7 +40,7 @@ def _hop(tmp_path, workflow_js: str):
 
 
 @pytest.mark.spawns_process
-def test_hop_whose_first_start_threw_abandons_the_hop_run_with_chained_from(tmp_path):
+def test_hop_whose_first_start_threw_abandons_the_hop_run_with_chained_from(tmp_path: Path) -> None:
     result, prompts = _hop(tmp_path, "(() => { throw new Error('boom'); })()")
     assert result["status"] == "failed"
     leg = [p for p in prompts if p.startswith("abandon-batch")]
@@ -48,13 +49,13 @@ def test_hop_whose_first_start_threw_abandons_the_hop_run_with_chained_from(tmp_
 
 
 @pytest.mark.spawns_process
-def test_hop_that_started_is_never_abandoned(tmp_path):
+def test_hop_that_started_is_never_abandoned(tmp_path: Path) -> None:
     result, prompts = _hop(tmp_path, "n === 1 ? { stage_pending: { handle: { sha256: 'zz' } } } : { done: true }")
     assert result["status"] == "failed"
     assert not any("abandon_run" in p for p in prompts)
 
 
-def test_ask_chain_block_releases_the_child_only_when_the_first_start_threw():
+def test_ask_chain_block_releases_the_child_only_when_the_first_start_threw() -> None:
     script = "\n".join(ask_compose._chain_emit_start_lines(sizing_js="SZ", head="H", anchor="A", run_id="r1"))
     start = script.index("_why = 'start threw: '")
     abandon = script.index("chain-abandon")
@@ -65,7 +66,7 @@ def test_ask_chain_block_releases_the_child_only_when_the_first_start_threw():
     assert script.count("abandon_run: _chainRunId") == 1
 
 
-def test_released_child_no_longer_resolves_as_the_halted_run_to_resume(tmp_path):
+def test_released_child_no_longer_resolves_as_the_halted_run_to_resume(tmp_path: Path) -> None:
     rdir = _chained(tmp_path)
     assert not _closed(rdir)
     out = _abandon(tmp_path, session_id="s1", chained_from=PARENT)
@@ -74,7 +75,7 @@ def test_released_child_no_longer_resolves_as_the_halted_run_to_resume(tmp_path)
     assert halted_run.halted_run_to_resume(tmp_path, SIZING) != RUN
 
 
-def test_child_past_minted_stays_resolvable(tmp_path):
+def test_child_past_minted_stays_resolvable(tmp_path: Path) -> None:
     rdir = _chained(tmp_path, child_stage="staged")
     assert _abandon(tmp_path, session_id="s1", chained_from=PARENT)["abandoned"] is False
     assert not _closed(rdir)

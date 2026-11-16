@@ -7,6 +7,7 @@ from pathlib import Path
 
 from coordinator_core.roadmap import prep_gate as pg
 from coordinator_core.roadmap.tests.test_prep_gate import _CLEAN_SPINE, _write_plan
+import pytest
 
 SIZING = "state/sizings/2026-09-07-fixture.yaml"
 CLAUSE_A = "the XL r34 plan fails it"
@@ -142,7 +143,7 @@ def test_mapped_clause_carries_no_repair(tmp_path: Path) -> None:
     assert cls["status"] == "PASS" and cls["mechanical"] is False
 
 
-def test_predicate_spawns_no_subprocess(tmp_path: Path, monkeypatch) -> None:
+def test_predicate_spawns_no_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _sizing(tmp_path, _acceptance_sizing(CLAUSE_A))
     plan = _plan(tmp_path)
 

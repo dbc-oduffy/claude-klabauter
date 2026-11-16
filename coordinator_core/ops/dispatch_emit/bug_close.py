@@ -206,7 +206,7 @@ def close_rows(root, ids, sha: str) -> dict:
     result: dict = {"closed": {}, "already": {}, "refused": []}
     root = Path(root)
 
-    def refuse(bug_id, reason):
+    def refuse(bug_id, reason) -> None:
         result["refused"].append({"id": bug_id, "reason": reason})
 
     if not isinstance(sha, str) or not _SHA_RE.fullmatch(sha):

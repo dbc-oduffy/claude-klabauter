@@ -7,6 +7,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import cli as cli_module
 from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
 from coordinator_core.ops.tests.test_review_stamp_superseding_record import _git, _record, _repo
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -25,14 +26,14 @@ def _plan(repo):
     return plan
 
 
-def _argv(repo, plan, out):
+def _argv(repo, plan, out) -> list[str]:
     return [
         "--repo-root", str(repo), "--plan", str(plan), "--out", str(out),
         "--reverify-delivery", "",
     ]
 
 
-def test_empty_value_without_a_bookkeeping_record_refuses_naming_the_glob(tmp_path, capsys):
+def test_empty_value_without_a_bookkeeping_record_refuses_naming_the_glob(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _repo(tmp_path)
     plan = _plan(repo)
     out = repo / "docs" / "plans" / "p.reverify.workflow.mjs"
@@ -45,7 +46,7 @@ def test_empty_value_without_a_bookkeeping_record_refuses_naming_the_glob(tmp_pa
 
 
 @pytest.mark.usefixtures("verifier_roster")
-def test_empty_value_with_a_bookkeeping_record_emits_the_reverify_script(tmp_path, monkeypatch, capsys):
+def test_empty_value_with_a_bookkeeping_record_emits_the_reverify_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _repo(tmp_path)
     record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery=_FAIL)
     share = repo / ".coordinator-local" / "subagent-share" / "sid-1"
@@ -60,7 +61,7 @@ def test_empty_value_with_a_bookkeeping_record_emits_the_reverify_script(tmp_pat
     assert f"supersedes: .coordinator-local/subagent-share/sid-1/{_PLAN_ID}.review-wave-bookkeeping.md" in text
 
 
-def test_omitted_out_defaults_beside_the_plan(tmp_path, monkeypatch, capsys):
+def test_omitted_out_defaults_beside_the_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _repo(tmp_path)
     record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery=_FAIL)
     share = repo / ".coordinator-local" / "subagent-share" / "sid-1"
@@ -74,13 +75,13 @@ def test_omitted_out_defaults_beside_the_plan(tmp_path, monkeypatch, capsys):
     assert (repo / "docs" / "plans" / "p.workflow.mjs").exists()
 
 
-def test_reverify_without_a_plan_names_the_out_default(capsys):
+def test_reverify_without_a_plan_names_the_out_default(capsys: pytest.CaptureFixture[str]) -> None:
     rc = cli_module.main(["--reverify-delivery", ""])
     assert rc == cli_module.EXIT_USAGE
     assert "--out defaults to" in capsys.readouterr().err
 
 
-def test_completion_receipt_path_resolves_from_the_plan(tmp_path, monkeypatch, capsys):
+def test_completion_receipt_path_resolves_from_the_plan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _repo(tmp_path)
     record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery=_FAIL)
     share = repo / ".coordinator-local" / "subagent-share" / "sid-1"

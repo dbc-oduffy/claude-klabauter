@@ -84,19 +84,19 @@ def _stage(repo: Path, paths: tuple = ("a.py",)) -> None:
     _write(repo, f"{RUN_DIR_ROOT}/{RUN}/commit-request.txt", render_marker(request) + "\n")
 
 
-def _review() -> dict:
+def _review(slice_files: tuple = ("a.py",)) -> dict:
     return {
         "integration_stem": "rev-stem", "slices": 1, "fixes": 0,
         "wave_reviews": reviewed()["wave_reviews"],
-        "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": ["a.py"]},
+        "prep": {"run_base_sha": "a" * 40, "product_files": 1, "foreign_claims": [], "slice_files": list(slice_files)},
         "delivery": {"verdict": "PASS", "product_files": 1},
         "integration": {"sidecar": "s", "unresolved": [], "confinement_violations": 0},
     }
 
 
-def _call(repo: Path, verdict: dict) -> dict:
+def _call(repo: Path, verdict: dict, slice_files: tuple = ("a.py",)) -> dict:
     params = {
-        "script_path": "run.mjs", "incomplete_chunks": [], "inline_review": _review(),
+        "script_path": "run.mjs", "incomplete_chunks": [], "inline_review": _review(slice_files),
         "session_id": _SID, "ledger_verdict": verdict,
     }
     return terminal_commit._handler(params, repo_root=repo / ".git")
@@ -126,7 +126,7 @@ def test_met_row_file_cited_by_met_by_refuses_too(repo):
 def test_met_row_file_in_the_landed_set_commits(repo):
     _stage(repo, ("a.py", _SETTER))
     _write(repo, _SETTER, "new\n")
-    out = _call(repo, _met(root_read=_SETTER))
+    out = _call(repo, _met(root_read=_SETTER), ("a.py", _SETTER))
     assert out["committed"] is True, out
     assert _SETTER in _git(repo, "log", "--name-only", "--format=")
 

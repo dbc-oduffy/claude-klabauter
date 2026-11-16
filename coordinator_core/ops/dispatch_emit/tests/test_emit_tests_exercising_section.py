@@ -8,6 +8,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import dispatch_row_lint
 from coordinator_core.ops.dispatch_emit.emit import emit_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -15,7 +16,7 @@ HEAD = dispatch_row_lint.SECTION_HEAD
 OUTSIDE = "Outside your writes: run, do not edit:"
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> None:
     done = subprocess.run(
         ["git", *args],
         cwd=repo,
@@ -26,7 +27,7 @@ def _git(repo, *args):
     assert done.returncode == 0, (args, done.stderr)
 
 
-def _plan(rows):
+def _plan(rows) -> str:
     spine = "".join(
         f"- id: {rid}\n  title: {rid} row\n  writes: [{', '.join(writes)}]\n  disposition: open\n"
         f"  body: |\n    Do {rid}.\n"
@@ -50,13 +51,13 @@ def _repo(tmp_path, files, rows):
     return repo
 
 
-def _emit(repo):
+def _emit(repo) -> str:
     """The script text with the JS string escapes of newline and quote undone."""
     text = emit_script(repo / "p.md", repo_root=repo, **REVIEW_KW)
     return text.replace("\\n", "\n").replace("\\'", "'").replace("\\\\", "\\")
 
 
-def test_section_appears_for_py_write_a_test_imports(tmp_path):
+def test_section_appears_for_py_write_a_test_imports(tmp_path: Path) -> None:
     repo = _repo(
         tmp_path,
         {"pkg/foo.py": "x = 1\n", "pkg/tests/test_foo.py": "from pkg.foo import x\n"},
@@ -67,7 +68,7 @@ def test_section_appears_for_py_write_a_test_imports(tmp_path):
     assert "pkg/tests/test_foo.py" in script
 
 
-def test_test_naming_the_file_is_listed_outside_and_not_added_to_writes(tmp_path):
+def test_test_naming_the_file_is_listed_outside_and_not_added_to_writes(tmp_path: Path) -> None:
     repo = _repo(
         tmp_path,
         {"pkg/foo.py": "x = 1\n", "pkg/tests/test_named.py": 'PATH = "pkg/foo.py"\n'},
@@ -78,7 +79,7 @@ def test_test_naming_the_file_is_listed_outside_and_not_added_to_writes(tmp_path
     assert "'pkg/tests/test_named.py'" not in script
 
 
-def test_md_only_row_gets_no_section(tmp_path):
+def test_md_only_row_gets_no_section(tmp_path: Path) -> None:
     repo = _repo(
         tmp_path,
         {"pkg/tests/test_foo.py": "from pkg.foo import x\n", "notes.md": "foo.py\n"},
@@ -87,7 +88,7 @@ def test_md_only_row_gets_no_section(tmp_path):
     assert HEAD not in _emit(repo)
 
 
-def test_cap_message_carries_the_literal_query(tmp_path):
+def test_cap_message_carries_the_literal_query(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import emit
     from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
@@ -100,7 +101,7 @@ def test_cap_message_carries_the_literal_query(tmp_path):
     assert "`git grep -lE '" in widened.body
 
 
-def test_non_doe_layout_still_gets_the_section(tmp_path):
+def test_non_doe_layout_still_gets_the_section(tmp_path: Path) -> None:
     repo = _repo(
         tmp_path,
         {"lib/foo.py": "x = 1\n", "tests/test_x.py": "from lib.foo import x\n"},
@@ -111,7 +112,7 @@ def test_non_doe_layout_still_gets_the_section(tmp_path):
     assert "tests/test_x.py" in script
 
 
-def test_py_row_without_an_exercising_test_is_byte_identical_to_no_pattern(tmp_path, monkeypatch):
+def test_py_row_without_an_exercising_test_is_byte_identical_to_no_pattern(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(
         tmp_path,
         {"pkg/foo.py": "x = 1\n", "pkg/tests/test_other.py": "from pkg.bar import y\n"},

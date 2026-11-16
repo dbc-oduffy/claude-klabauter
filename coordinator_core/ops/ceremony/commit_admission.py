@@ -75,6 +75,10 @@ from coordinator_core.hooks.claude_md_ledger import (
     admission_check_for_surface,
     resolve_ledger_path,
 )
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 
 def _blob_text(common_dir: Path, sha: str) -> Optional[str]:
@@ -207,7 +211,7 @@ _SW_TAG = "[skill-weight-budget-guard]"
 _LOG = logging.getLogger(__name__)
 
 
-def _load_by_path(name: str, path: Path):
+def _load_by_path(name: str, path: Path) -> ModuleType:
     spec = importlib.util.spec_from_file_location(name, path)
     if spec is None or spec.loader is None:
         raise ImportError(f"cannot load {path}")

@@ -5,6 +5,7 @@ import subprocess
 from pathlib import Path
 
 from coordinator_core.architecture_survey import census_shape, tree_census
+import pytest
 
 
 def _repo(tmp_path: Path, paths: list[str]) -> Path:
@@ -21,7 +22,7 @@ def _by_id(payload: dict) -> dict[str, list[str]]:
     return {b["bucket_id"]: [f["path"] for f in b["files"]] for b in payload["censusShapedResults"]}
 
 
-def test_bucketing_nested_precedence_and_unbucketed(tmp_path):
+def test_bucketing_nested_precedence_and_unbucketed(tmp_path: Path) -> None:
     repo = _repo(tmp_path, ["a/x.py", "a/sub/y.py", "b/z.py", "README.md", "ab/w.py"])
     buckets = [
         {"bucketId": "A", "dirs": ["a"]},
@@ -45,7 +46,7 @@ def test_bucketing_nested_precedence_and_unbucketed(tmp_path):
     assert census_shape.validate(payload) == []
 
 
-def test_multiple_dirs_longest_across_buckets_wins(tmp_path):
+def test_multiple_dirs_longest_across_buckets_wins(tmp_path: Path) -> None:
     repo = _repo(tmp_path, ["a/x.py", "a/deep/y.py"])
     buckets = [
         {"bucketId": "Wide", "dirs": ["a", "zzz"]},
@@ -56,7 +57,7 @@ def test_multiple_dirs_longest_across_buckets_wins(tmp_path):
     assert got["Deep"] == ["a/deep/y.py"]
 
 
-def test_root_prefix_catches_rest_and_tie_goes_to_first(tmp_path):
+def test_root_prefix_catches_rest_and_tie_goes_to_first(tmp_path: Path) -> None:
     repo = _repo(tmp_path, ["a/x.py", "top.md"])
     buckets = [
         {"bucketId": "First", "dirs": ["a"]},
@@ -69,7 +70,7 @@ def test_root_prefix_catches_rest_and_tie_goes_to_first(tmp_path):
     assert got["Root"] == ["top.md"]
 
 
-def test_over_tier_bucket_splits_into_suffixed_sub_buckets_under_tier(tmp_path):
+def test_over_tier_bucket_splits_into_suffixed_sub_buckets_under_tier(tmp_path: Path) -> None:
     repo = _repo(tmp_path, ["big/a.txt", "big/b.txt", "big/c.txt", "small/s.txt"])
     for name in ("a", "b", "c"):
         (repo / "big" / f"{name}.txt").write_bytes(b"x" * 200_000)  # 50k tokens each
@@ -85,14 +86,14 @@ def test_over_tier_bucket_splits_into_suffixed_sub_buckets_under_tier(tmp_path):
     assert census_shape.validate(payload) == []
 
 
-def test_bucket_exactly_at_tier_is_not_split(tmp_path):
+def test_bucket_exactly_at_tier_is_not_split(tmp_path: Path) -> None:
     repo = _repo(tmp_path, ["a/x.txt"])
     (repo / "a" / "x.txt").write_bytes(b"x" * 400_000)
     got = _by_id(tree_census.build(repo, [{"bucketId": "A", "dirs": ["a"]}]))
     assert list(got) == ["A"]
 
 
-def test_split_buckets_feed_the_estimate_under_tier(tmp_path):
+def test_split_buckets_feed_the_estimate_under_tier(tmp_path: Path) -> None:
     from coordinator_core.architecture_survey import refresh_cost
 
     repo = _repo(tmp_path, ["big/a.txt", "big/b.txt"])
@@ -117,7 +118,7 @@ def _count_git_spawns(monkeypatch) -> list:
     return calls
 
 
-def test_exactly_one_git_spawn_for_one_and_many_files(tmp_path, monkeypatch):
+def test_exactly_one_git_spawn_for_one_and_many_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     small = _repo(tmp_path / "small", ["a/one.py"])
     big = _repo(tmp_path / "big", [f"a/f{i}.py" for i in range(500)])
     buckets = [{"bucketId": "A", "dirs": ["a"]}]

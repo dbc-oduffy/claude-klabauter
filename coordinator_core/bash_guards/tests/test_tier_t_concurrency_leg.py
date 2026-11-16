@@ -16,6 +16,7 @@ at once. Those assertions were right and the leg was wrong.
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -27,7 +28,7 @@ def _enveloped(check):
     return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
-def _payload(command, *, agent=True, cwd=None, tool="Bash"):
+def _payload(command, *, agent: bool = True, cwd=None, tool: str = "Bash"):
     p = {"tool_name": tool, "tool_input": {"command": command}}
     if cwd is not None:
         p["cwd"] = cwd
@@ -36,7 +37,7 @@ def _payload(command, *, agent=True, cwd=None, tool="Bash"):
     return p
 
 
-def _verdict(command, *, agent=True, cwd=None):
+def _verdict(command, *, agent: bool = True, cwd=None):
     return _enveloped(guard.check)(_payload(command, agent=agent, cwd=cwd))
 
 
@@ -52,14 +53,14 @@ def _rewrite(out):
     return out["hookSpecificOutput"].get("updatedInput", {}).get("command")
 
 
-def _slotted(command, *, cwd=None, agent=True):
+def _slotted(command, *, cwd=None, agent: bool = True):
     out = _verdict(command, agent=agent, cwd=cwd)
     assert _decision(out) != "deny", "this leg must never deny"
     return (_rewrite(out) or "").startswith("with-tier-t-slot -- ")
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> str:
     (tmp_path / "pyproject.toml").write_text(
         '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n', encoding="utf-8"
     )
@@ -74,11 +75,11 @@ def repo(tmp_path):
     "pytest tests/test_a.py",
     "pytest -k some_expression",
 ])
-def test_subagent_scoped_run_is_routed_through_the_slot_wrapper(command, repo):
+def test_subagent_scoped_run_is_routed_through_the_slot_wrapper(command, repo) -> None:
     assert _slotted(command, cwd=repo)
 
 
-def test_this_leg_never_denies(repo):
+def test_this_leg_never_denies(repo) -> None:
     """The property that keeps it a RESOURCE control rather than an authority one.
 
     If this ever fails, the leg has become a refusal and DR-088's Tier-T
@@ -89,19 +90,19 @@ def test_this_leg_never_denies(repo):
         assert _decision(_verdict(command, cwd=repo)) != "deny"
 
 
-def test_the_rewrite_preserves_the_callers_command_exactly(repo):
+def test_the_rewrite_preserves_the_callers_command_exactly(repo) -> None:
     out = _verdict("pytest tests/test_a.py::test_case -q", cwd=repo)
     assert _rewrite(out) == "with-tier-t-slot -- pytest tests/test_a.py::test_case -q"
 
 
-def test_the_note_says_nothing_is_refused(repo):
+def test_the_note_says_nothing_is_refused(repo) -> None:
     out = _verdict("pytest tests/test_a.py", cwd=repo)
     note = out["hookSpecificOutput"]["additionalContext"].lower()
     assert "nothing is being refused" in note
     assert "nothing to ask for" in note
 
 
-def test_a_chained_command_is_advised_not_rewritten(repo):
+def test_a_chained_command_is_advised_not_rewritten(repo) -> None:
     out = _verdict("cd sub && pytest tests/test_a.py", cwd=repo)
     assert _decision(out) == "allow"
     assert _rewrite(out) is None
@@ -114,11 +115,11 @@ def test_a_chained_command_is_advised_not_rewritten(repo):
     "cd sub && with-tier-t-slot -- pytest tests/test_a.py",
     "with-tier-t-slot --wait 60 -- pytest tests/test_a.py",
 ])
-def test_already_wrapped_runs_are_left_completely_alone(command, repo):
+def test_already_wrapped_runs_are_left_completely_alone(command, repo) -> None:
     assert _verdict(command, cwd=repo) is None
 
 
-def test_a_decoy_wrapped_segment_does_not_license_a_bare_runner(repo):
+def test_a_decoy_wrapped_segment_does_not_license_a_bare_runner(repo) -> None:
     out = _verdict("with-tier-t-slot -- true && pytest tests/test_a.py", cwd=repo)
     assert out is not None
     assert "with-tier-t-slot" in out["hookSpecificOutput"].get("additionalContext", "")
@@ -130,7 +131,7 @@ def test_a_decoy_wrapped_segment_does_not_license_a_bare_runner(repo):
     "ls tests/",
     "cat tests/test_a.py",
 ])
-def test_non_runner_commands_are_untouched(command, repo):
+def test_non_runner_commands_are_untouched(command, repo) -> None:
     assert _verdict(command, cwd=repo) is None
 
 
@@ -139,25 +140,25 @@ def test_non_runner_commands_are_untouched(command, repo):
     "python3 -m pytest tests/test_a.py::test_case",
     "pytest -k some_expression",
 ])
-def test_the_em_is_unaffected_by_this_leg(command, repo):
+def test_the_em_is_unaffected_by_this_leg(command, repo) -> None:
     assert _verdict(command, agent=False, cwd=repo) is None
 
 
-def test_scoped_runs_remain_permitted_for_subagents(repo):
+def test_scoped_runs_remain_permitted_for_subagents(repo) -> None:
     bare = "pytest tests/test_a.py::test_the_agent_did_not_author"
     out = _verdict(bare, cwd=repo)
     assert _decision(out) == "allow"
     assert _rewrite(out) == f"with-tier-t-slot -- {bare}"
 
 
-def test_leg_does_not_restate_a_deny_the_identity_leg_owns(repo):
+def test_leg_does_not_restate_a_deny_the_identity_leg_owns(repo) -> None:
     out = _enveloped(guard.check)(_payload("pytest", cwd=repo))
     assert out is not None
     text = out["hookSpecificOutput"]["permissionDecisionReason"]
     assert "with-tier-t-slot" not in text
 
 
-def test_override_env_var_does_not_disarm_the_slot_leg_for_a_subagent(repo):
+def test_override_env_var_does_not_disarm_the_slot_leg_for_a_subagent(repo) -> None:
     p = _payload("pytest tests/test_a.py", cwd=repo)
     p["env"] = {"COORDINATOR_OVERRIDE_TEST_SUITE_INVOCATION": "1"}
     out = _enveloped(guard.check)(p)
@@ -165,7 +166,7 @@ def test_override_env_var_does_not_disarm_the_slot_leg_for_a_subagent(repo):
     assert "with-tier-t-slot" in str(out)
 
 
-def test_powershell_dialect_is_classified_too(repo):
+def test_powershell_dialect_is_classified_too(repo) -> None:
     assert _slotted("pytest tests/test_a.py", cwd=repo)
     p = _payload("pytest tests/test_a.py", cwd=repo, tool="PowerShell")
     assert _enveloped(guard.check)(p) is not None

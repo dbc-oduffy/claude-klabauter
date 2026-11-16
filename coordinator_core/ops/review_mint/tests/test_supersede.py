@@ -13,6 +13,7 @@ from coordinator_core.ops.review_mint.supersede import (
     record_superseding_review,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -26,7 +27,7 @@ def _git(root, *args):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path):
     _git(tmp_path, "init", "-q")
     shas = []
     for i, trailer in enumerate(["", "\nSession-Id: other-session", ""]):
@@ -46,7 +47,7 @@ def _call(root, base, head, **kw):
     )
 
 
-def test_record_written_with_pinned_keys(repo):
+def test_record_written_with_pinned_keys(repo) -> None:
     root, s = repo
     res = _call(root, s[0], s[2], supersedes=s[1])
     fm = yaml.safe_load((root / res["record_path"]).read_text().split("---\n")[1])
@@ -57,14 +58,14 @@ def test_record_written_with_pinned_keys(repo):
     assert "integrated_from" in fm and "fixes_applied" in fm
 
 
-def test_second_write_refused(repo):
+def test_second_write_refused(repo) -> None:
     root, s = repo
     _call(root, s[0], s[2])
     with pytest.raises(SupersedeRefused):
         _call(root, s[0], s[2])
 
 
-def test_non_ancestor_head_refused(repo):
+def test_non_ancestor_head_refused(repo) -> None:
     root, s = repo
     _git(root, "checkout", "-q", "-b", "side", s[0])
     (root / "side.txt").write_text("x")
@@ -76,7 +77,7 @@ def test_non_ancestor_head_refused(repo):
         _call(root, s[0], side)
 
 
-def test_base_equals_head_and_reversed_refused(repo):
+def test_base_equals_head_and_reversed_refused(repo) -> None:
     root, s = repo
     with pytest.raises(SupersedeRefused):
         _call(root, s[1], s[1])
@@ -84,19 +85,19 @@ def test_base_equals_head_and_reversed_refused(repo):
         _call(root, s[2], s[0])
 
 
-def test_foreign_session_trailer_in_range_accepted(repo):
+def test_foreign_session_trailer_in_range_accepted(repo) -> None:
     root, s = repo
     assert "Session-Id: other-session" in _git(root, "log", "-1", "--format=%B", s[1])
     assert _call(root, s[0], s[2])["record_path"].endswith(".superseding.md")
 
 
-def test_spawn_count_at_most_two(repo, monkeypatch):
+def test_spawn_count_at_most_two(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, s = repo
     calls = []
     real = subprocess.Popen
 
     class counting(real):
-        def __init__(self, *a, **k):
+        def __init__(self, *a, **k) -> None:
             calls.append(a)
             super().__init__(*a, **k)
 
@@ -105,7 +106,7 @@ def test_spawn_count_at_most_two(repo, monkeypatch):
     assert len(calls) <= 2
 
 
-def test_plan_path_resolves_to_frontmatter_plan_id(repo):
+def test_plan_path_resolves_to_frontmatter_plan_id(repo) -> None:
     root, s = repo
     plan = root / "docs" / "plans" / "p.md"
     plan.parent.mkdir(parents=True)
@@ -120,7 +121,7 @@ def test_plan_path_resolves_to_frontmatter_plan_id(repo):
     assert "docs/plans" not in res["record_path"]
 
 
-def test_plan_path_without_plan_id_refused(repo):
+def test_plan_path_without_plan_id_refused(repo) -> None:
     root, s = repo
     (root / "p.md").write_text("---\ntitle: x\n---\n", encoding="utf-8")
     with pytest.raises(SupersedeRefused):
@@ -142,7 +143,7 @@ def _sc(share, name, **fm):
     return share / name
 
 
-def _full_share(root, plan=PLAN, suffix=""):
+def _full_share(root, plan=PLAN, suffix: str = ""):
     share = root / ".coordinator-local" / "subagent-share" / "sess-1"
     _sc(share, f"coordinator-code-reviewer.a1{suffix}.md", agent_type="coordinator:code-reviewer", target_plan=plan)
     _sc(share, f"coordinator-test-runner.p1{suffix}.md", agent_type="coordinator:test-runner",
@@ -165,7 +166,7 @@ def _share_call(root, s, **kw):
     )
 
 
-def test_from_share_full_set_assembles_and_records(repo):
+def test_from_share_full_set_assembles_and_records(repo) -> None:
     root, s = repo
     _full_share(root)
     res = _share_call(root, s)
@@ -179,7 +180,7 @@ def test_from_share_full_set_assembles_and_records(repo):
     assert res["used"]["reviewer"] == [".coordinator-local/subagent-share/sess-1/coordinator-code-reviewer.a1.md"]
 
 
-def test_from_share_missing_judge_refuses_and_names_it(repo):
+def test_from_share_missing_judge_refuses_and_names_it(repo) -> None:
     root, s = repo
     share = _full_share(root)
     (share / "coordinator-exit-criterion-judge.j1.md").unlink()
@@ -188,7 +189,7 @@ def test_from_share_missing_judge_refuses_and_names_it(repo):
     assert not (root / "state" / "superseding-reviews").exists()
 
 
-def test_from_share_judge_older_than_fix_commit_refuses(repo):
+def test_from_share_judge_older_than_fix_commit_refuses(repo) -> None:
     import os
     root, s = repo
     share = _full_share(root)
@@ -197,7 +198,7 @@ def test_from_share_judge_older_than_fix_commit_refuses(repo):
         _share_call(root, s)
 
 
-def test_from_share_ignores_other_plans_sidecars(repo):
+def test_from_share_ignores_other_plans_sidecars(repo) -> None:
     root, s = repo
     share = _full_share(root)
     (share / "coordinator-exit-criterion-judge.j1.md").unlink()
@@ -213,7 +214,7 @@ def test_from_share_ignores_other_plans_sidecars(repo):
     assert all("other" not in p for ps in res["used"].values() for p in ps)
 
 
-def test_from_share_not_met_judge_refuses(repo):
+def test_from_share_not_met_judge_refuses(repo) -> None:
     root, s = repo
     share = _full_share(root)
     _sc(share, "coordinator-exit-criterion-judge.j1.md",
@@ -222,7 +223,7 @@ def test_from_share_not_met_judge_refuses(repo):
         _share_call(root, s)
 
 
-def test_from_share_takes_the_judge_verdict_from_its_returned_json(repo):
+def test_from_share_takes_the_judge_verdict_from_its_returned_json(repo) -> None:
     """The judge is provisioned no sidecar (DoE 2026-10-02); its returned
     terminal-judge-result, with `sidecar_path: ""`, is the criterion stage."""
     root, s = repo
@@ -238,7 +239,7 @@ def test_from_share_takes_the_judge_verdict_from_its_returned_json(repo):
         _share_call(root, s, judge_result={"status": "not_met", "observation": "x", "sidecar_path": ""})
 
 
-def test_from_share_without_a_prep_stage_writes_the_range_prep(repo):
+def test_from_share_without_a_prep_stage_writes_the_range_prep(repo) -> None:
     """An ad-hoc post-run review has no emitted prep stage: the share holds only
     reviewer, test-runner and delivery sidecars plus the judge's returned JSON."""
     root, s = repo
@@ -258,7 +259,7 @@ def test_from_share_without_a_prep_stage_writes_the_range_prep(repo):
     assert record["prep_sidecar"] == prep
 
 
-def _reverify_share(root, s, *, verdict="PASS", head_sha=None, criterion=True):
+def _reverify_share(root, s, *, verdict: str = "PASS", head_sha=None, criterion: bool = True) -> None:
     """A share with reviewer + prep only; the delivery/criterion/tests live in a delivery-verdicts record."""
     share = root / ".coordinator-local" / "subagent-share" / "sess-1"
     _sc(share, "coordinator-code-reviewer.a1.md", agent_type="coordinator:code-reviewer", target_plan=PLAN)
@@ -278,7 +279,7 @@ def _reverify_share(root, s, *, verdict="PASS", head_sha=None, criterion=True):
     out.write_text("---\n" + yaml.safe_dump(rec, sort_keys=False) + "---\n", encoding="utf-8")
 
 
-def test_from_share_falls_back_to_the_delivery_verdicts_record(repo):
+def test_from_share_falls_back_to_the_delivery_verdicts_record(repo) -> None:
     root, s = repo
     _reverify_share(root, s)
     res = _share_call(root, s)
@@ -288,7 +289,7 @@ def test_from_share_falls_back_to_the_delivery_verdicts_record(repo):
     assert fm["tests"]["status"] == "pass"
 
 
-def test_from_share_fallback_fail_verdict_still_flows_through(repo):
+def test_from_share_fallback_fail_verdict_still_flows_through(repo) -> None:
     root, s = repo
     _reverify_share(root, s, verdict="FAIL")
     res = _share_call(root, s)
@@ -296,7 +297,7 @@ def test_from_share_fallback_fail_verdict_still_flows_through(repo):
     assert fm["delivery"]["verdict"] == "FAIL"
 
 
-def test_from_share_ignores_a_verdict_record_not_an_ancestor_of_head(repo):
+def test_from_share_ignores_a_verdict_record_not_an_ancestor_of_head(repo) -> None:
     root, s = repo
     _reverify_share(root, s, head_sha="f" * 40)
     with pytest.raises(SupersedeRefused, match="no criterion sidecar|no delivery sidecar"):
@@ -305,7 +306,7 @@ def test_from_share_ignores_a_verdict_record_not_an_ancestor_of_head(repo):
     assert _reverify_share_old.exists()
 
 
-def test_from_share_binds_the_run_bookkeeping_delivery_when_the_delivery_file_has_no_frontmatter(repo):
+def test_from_share_binds_the_run_bookkeeping_delivery_when_the_delivery_file_has_no_frontmatter(repo) -> None:
     root, s = repo
     share = _full_share(root)
     (share / "coordinator-delivery-verifier.d1.md").unlink()
@@ -318,7 +319,7 @@ def test_from_share_binds_the_run_bookkeeping_delivery_when_the_delivery_file_ha
     assert res["used"]["delivery"] == [f".coordinator-local/subagent-share/sess-1/{PLAN}.review-wave-bookkeeping.md"]
 
 
-def test_from_share_ignores_another_plans_bookkeeping_delivery(repo):
+def test_from_share_ignores_another_plans_bookkeeping_delivery(repo) -> None:
     root, s = repo
     share = _full_share(root)
     (share / "coordinator-delivery-verifier.d1.md").unlink()
@@ -328,7 +329,7 @@ def test_from_share_ignores_another_plans_bookkeeping_delivery(repo):
 
 
 @pytest.mark.parametrize("fields", [{}, {"product_files": 0}, {"product_files": []}])
-def test_hand_supplied_prep_with_no_product_files_is_refused(repo, fields):
+def test_hand_supplied_prep_with_no_product_files_is_refused(repo, fields) -> None:
     root, s = repo
     prep = root / "prep.md"
     prep.write_text("---\n" + yaml.safe_dump({"run_base_sha": s[0], **fields}) + "---\n", encoding="utf-8")
@@ -340,7 +341,7 @@ def test_hand_supplied_prep_with_no_product_files_is_refused(repo, fields):
     assert not (root / "state" / "superseding-reviews").exists()
 
 
-def test_hand_supplied_prep_with_product_files_is_accepted(repo):
+def test_hand_supplied_prep_with_product_files_is_accepted(repo) -> None:
     root, s = repo
     (root / "prep.md").write_text("---\nproduct_files: 2\n---\n", encoding="utf-8")
     res = record_superseding_review(
@@ -379,12 +380,12 @@ def _prep_call(root, s, text):
     )
 
 
-def test_prep_with_product_files_only_in_the_body_is_accepted(repo):
+def test_prep_with_product_files_only_in_the_body_is_accepted(repo) -> None:
     root, s = repo
     assert _prep_call(root, s, REAL_PREP.format(count=2))["record_path"]
 
 
-def test_body_form_product_files_zero_is_refused(repo):
+def test_body_form_product_files_zero_is_refused(repo) -> None:
     root, s = repo
     with pytest.raises(SupersedeRefused, match=r"prep\.md records no product_files"):
         _prep_call(root, s, REAL_PREP.format(count=0))
@@ -410,19 +411,19 @@ Verdict: single-reviewer-ok. whole_diff_path: `d.diff`. product_files: {count}. 
 """
 
 
-def test_verdict_line_form_in_the_run_report_is_accepted(repo):
+def test_verdict_line_form_in_the_run_report_is_accepted(repo) -> None:
     root, s = repo
     assert _prep_call(root, s, VERDICT_LINE_PREP.format(count=2))["record_path"]
 
 
-def test_launcher_quote_outside_the_run_report_is_not_the_count(repo):
+def test_launcher_quote_outside_the_run_report_is_not_the_count(repo) -> None:
     root, s = repo
     text = VERDICT_LINE_PREP.format(count=2).replace("product_files: 2.", "no count.")
     with pytest.raises(SupersedeRefused, match=r"prep\.md records no product_files"):
         _prep_call(root, s, text)
 
 
-def test_frontmatter_product_files_wins_over_the_body(repo):
+def test_frontmatter_product_files_wins_over_the_body(repo) -> None:
     root, s = repo
     text = REAL_PREP.format(count=5).replace("status: complete", "status: complete\nproduct_files: 0")
     with pytest.raises(SupersedeRefused, match=r"prep\.md records no product_files"):

@@ -81,14 +81,14 @@ def test_gate_passes_a_one_row_slice_register(tmp_path):
     assert _gate(root, dir_, {"items": [{"id": ledger.items[0].id, "status": "met"}]})[0] is None
 
 
-def test_refusal_names_every_non_register_id(tmp_path, monkeypatch):
+def test_advisory_names_every_non_register_id_and_the_gate_still_passes(tmp_path, monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: (_ for _ in ()).throw(AssertionError("spawn")))
     doc = {**_DOC, "pm_verbatims": [{"turn": 1, "text": "deliver the one thing"}]}
     root, dir_ = _repo(tmp_path, doc)
     rl.bind(root, RUN, REL)
     ghosts = [f"X{n}" for n in range(12)]
     verdict = {"items": [{"id": "R1", "status": "met"}] + [{"id": g, "status": "met"} for g in ghosts]}
-    out = _gate(root, dir_, verdict)[0]
-    assert out["refused"] == "ledger-unmet"
-    clause = out["error"].split("not register rows:")[1]
-    assert all(g in clause for g in ghosts)
+    advisories: list = []
+    out = land_run._ledger_gate(root, dir_, verdict, None, (), {}, None, {}, None, None, advisories=advisories)[0]
+    assert out is None
+    assert len(advisories) == 1 and all(g in advisories[0] for g in ghosts)

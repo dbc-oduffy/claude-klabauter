@@ -8,6 +8,11 @@ import time
 from pathlib import Path
 
 from coordinator_core.git import git_objects
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from os import _ScandirIterator
 
 _STUB_PACKS = 1200
 _COLD_BUDGET_S = 0.5
@@ -51,7 +56,7 @@ def _count_scandir(monkeypatch) -> dict[str, int]:
     counts: dict[str, int] = {}
     real = os.scandir
 
-    def counting(path="."):
+    def counting(path: str = ".") -> _ScandirIterator[str]:
         key = os.path.normcase(os.path.abspath(os.fspath(path)))
         counts[key] = counts.get(key, 0) + 1
         return real(path)
@@ -64,7 +69,7 @@ def _pack_scans(counts: dict[str, int], common: Path) -> int:
     return counts.get(os.path.normcase(os.path.abspath(common / "objects" / "pack")), 0)
 
 
-def test_repeated_lookups_scan_each_pack_dir_once(tmp_path, monkeypatch):
+def test_repeated_lookups_scan_each_pack_dir_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _clear()
     alt, clone, sha = _fixture(tmp_path)
     counts = _count_scandir(monkeypatch)
@@ -83,7 +88,7 @@ def test_repeated_lookups_scan_each_pack_dir_once(tmp_path, monkeypatch):
     assert cold < _COLD_BUDGET_S, f"cold lookup over {_STUB_PACKS + 1} packs took {cold:.3f}s process time"
 
 
-def test_no_revalidate_calls_never_touch_the_directory(tmp_path, monkeypatch):
+def test_no_revalidate_calls_never_touch_the_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _clear()
     alt, _clone, _sha = _fixture(tmp_path)
     git_objects._pack_listing(alt)
@@ -99,7 +104,7 @@ def test_no_revalidate_calls_never_touch_the_directory(tmp_path, monkeypatch):
     assert stats == []
 
 
-def test_revalidate_costs_a_stat_not_a_scan_while_generation_is_unchanged(tmp_path, monkeypatch):
+def test_revalidate_costs_a_stat_not_a_scan_while_generation_is_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _clear()
     alt, _clone, _sha = _fixture(tmp_path)
     git_objects._pack_listing(alt)
@@ -111,7 +116,7 @@ def test_revalidate_costs_a_stat_not_a_scan_while_generation_is_unchanged(tmp_pa
     assert _pack_scans(counts, alt) == 0
 
 
-def test_new_pack_is_visible_to_revalidating_callers_and_rescans_once(tmp_path, monkeypatch):
+def test_new_pack_is_visible_to_revalidating_callers_and_rescans_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _clear()
     alt, clone, _sha = _fixture(tmp_path)
     assert len(git_objects._pack_listing(alt)) == _STUB_PACKS + 1

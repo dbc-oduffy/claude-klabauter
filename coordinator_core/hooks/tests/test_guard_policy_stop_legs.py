@@ -13,12 +13,13 @@ from coordinator_core.hooks import (
     watchdog_undischarged_next_move,
 )
 from coordinator_core.hooks._envelope import deny
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 @pytest.fixture()
-def reg(tmp_path, monkeypatch):
+def reg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     d = tmp_path / "reg"
     d.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(d))
@@ -30,7 +31,7 @@ def reg(tmp_path, monkeypatch):
     mp.reset_cache()
 
 
-def _write(reg, text):
+def _write(reg, text) -> None:
     (reg / "registry.local.toml").write_text(text, encoding="utf-8")
     mp.reset_cache()
 
@@ -43,18 +44,18 @@ def _gated(name):
     return mp.apply_guard_level(name, deny("Stop", "BLOCK-TEXT"))
 
 
-def test_default_is_advisory_with_the_deny_text_as_context(reg):
+def test_default_is_advisory_with_the_deny_text_as_context(reg) -> None:
     result = _gated(guard_manufactured_blocker.GUARD_NAME)
     assert not _denies(result)
     assert "BLOCK-TEXT" in result["systemMessage"]
 
 
-def test_global_strict_denies(reg):
+def test_global_strict_denies(reg) -> None:
     _write(reg, '"coordinator.guard_level" = "strict"\n')
     assert _denies(_gated(guard_manufactured_blocker.GUARD_NAME))
 
 
-def test_per_guard_strict_hardens_only_that_guard(reg):
+def test_per_guard_strict_hardens_only_that_guard(reg) -> None:
     _write(
         reg,
         '"coordinator.guard_level" = "warn"\n'
@@ -72,5 +73,5 @@ def test_per_guard_strict_hardens_only_that_guard(reg):
         (watchdog_undischarged_next_move, "watchdog-undischarged-next-move"),
     ],
 )
-def test_guard_name_constant(mod, name):
+def test_guard_name_constant(mod, name) -> None:
     assert mod.GUARD_NAME == name

@@ -11,6 +11,7 @@ import pytest
 from coordinator_core.bash_guards import block_subagent_commit as guard
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+from pathlib import Path
 
 _COMMIT_AGENT = "coordinator:git-commit-agent"
 _SCRIPT = "scratch/warp/a.workflow.mjs"
@@ -19,7 +20,7 @@ _SESSION = "sess-1"
 
 
 @pytest.fixture
-def repos(tmp_path, monkeypatch):
+def repos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     a, b = tmp_path / "A", tmp_path / "B"
     for r in (a, b):
         (r / ".git").mkdir(parents=True)
@@ -39,7 +40,7 @@ def _transcript(tmp_path, params: dict) -> str:
     return str(f)
 
 
-def _argv(root, op="dispatch.land_run", repo=None) -> str:
+def _argv(root, op: str = "dispatch.land_run", repo=None) -> str:
     cmd = f"coordinator-invoke {op} --params-file {chan.params_path(root, _RUN).as_posix()}"
     return cmd + (f" --repo {repo.as_posix()}" if repo is not None else "")
 
@@ -63,7 +64,7 @@ def _params(token):
 
 
 @pytest.mark.parametrize("with_repo", [False, True])
-def test_run_held_in_b_is_admitted_from_a(repos, tmp_path, with_repo):
+def test_run_held_in_b_is_admitted_from_a(repos, tmp_path: Path, with_repo) -> None:
     a, b = repos
     token = run_token.mint(b, _RUN, _SCRIPT, session_id=_SESSION)
     cmd = _argv(b, repo=b if with_repo else None)
@@ -72,7 +73,7 @@ def test_run_held_in_b_is_admitted_from_a(repos, tmp_path, with_repo):
     assert not chan.params_path(a, _RUN).exists()
 
 
-def test_reconcile_rerun_after_redeem_with_only_a_spent_receipt_is_admitted(repos, tmp_path):
+def test_reconcile_rerun_after_redeem_with_only_a_spent_receipt_is_admitted(repos, tmp_path: Path) -> None:
     a, b = repos
     token = run_token.mint(b, _RUN, _SCRIPT, session_id=_SESSION)
     assert run_token.redeem(b, _RUN, token, _SCRIPT)
@@ -81,39 +82,39 @@ def test_reconcile_rerun_after_redeem_with_only_a_spent_receipt_is_admitted(repo
     assert _check(_argv(b, repo=b), _transcript(tmp_path, _params(token))) is None
 
 
-def test_repo_naming_the_cwd_repo_is_refused(repos, tmp_path):
+def test_repo_naming_the_cwd_repo_is_refused(repos, tmp_path: Path) -> None:
     a, b = repos
     token = run_token.mint(b, _RUN, _SCRIPT, session_id=_SESSION)
     assert _check(_argv(b, repo=a), _transcript(tmp_path, _params(token))) is not None
 
 
-def test_token_held_for_another_session_is_refused(repos, tmp_path):
+def test_token_held_for_another_session_is_refused(repos, tmp_path: Path) -> None:
     a, b = repos
     token = run_token.mint(b, _RUN, _SCRIPT, session_id="other")
     assert _check(_argv(b), _transcript(tmp_path, _params(token))) is not None
 
 
-def test_params_file_in_a_repo_without_a_token_is_refused(repos, tmp_path):
+def test_params_file_in_a_repo_without_a_token_is_refused(repos, tmp_path: Path) -> None:
     a, b = repos
     assert _check(_argv(b), _transcript(tmp_path, _params("never-minted"))) is not None
     assert not chan.params_path(b, _RUN).exists()
 
 
-def test_repo_before_the_op_is_refused(repos, tmp_path):
+def test_repo_before_the_op_is_refused(repos, tmp_path: Path) -> None:
     a, b = repos
     token = run_token.mint(b, _RUN, _SCRIPT, session_id=_SESSION)
     cmd = f"coordinator-invoke --repo {b.as_posix()} dispatch.land_run --params-file {chan.params_path(b, _RUN).as_posix()}"
     assert _check(cmd, _transcript(tmp_path, _params(token))) is not None
 
 
-def test_other_agent_types_are_refused_unchanged(repos, tmp_path):
+def test_other_agent_types_are_refused_unchanged(repos, tmp_path: Path) -> None:
     a, b = repos
     token = run_token.mint(b, _RUN, _SCRIPT, session_id=_SESSION)
     tp = _transcript(tmp_path, _params(token))
     assert _check(_argv(b, repo=b), tp, agent_type="general-purpose") is not None
 
 
-def test_same_repo_bare_form_is_still_admitted(repos, tmp_path):
+def test_same_repo_bare_form_is_still_admitted(repos, tmp_path: Path) -> None:
     a, b = repos
     token = run_token.mint(a, _RUN, _SCRIPT, session_id=_SESSION)
     assert _check(_argv(a), _transcript(tmp_path, _params(token))) is None

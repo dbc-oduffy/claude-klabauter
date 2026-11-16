@@ -21,7 +21,7 @@ def _ctx(record: dict) -> close_background.JobContext:
     return close_background.JobContext(Path("."), Path("."), "run", (), None, record=record)
 
 
-def test_one_release_names_the_session_and_every_landed_path(monkeypatch):
+def test_one_release_names_the_session_and_every_landed_path(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list = []
     monkeypatch.setattr(scope, "release_committed_claims_in_process_or_retain", lambda *a: seen.append(a))
 
@@ -32,7 +32,7 @@ def test_one_release_names_the_session_and_every_landed_path(monkeypatch):
     assert len(seen) == 1 and seen[0][1:] == (["a.py", "b.py"], "sid", "close_background")
 
 
-def test_a_record_without_a_session_or_paths_releases_nothing(monkeypatch):
+def test_a_record_without_a_session_or_paths_releases_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     seen: list = []
     monkeypatch.setattr(scope, "release_committed_claims_in_process_or_retain", lambda *a: seen.append(a))
 
@@ -42,7 +42,7 @@ def test_a_record_without_a_session_or_paths_releases_nothing(monkeypatch):
     assert seen == []
 
 
-def test_the_landing_records_its_paths_and_the_job_releases_them(tmp_path, monkeypatch):
+def test_the_landing_records_its_paths_and_the_job_releases_them(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import claims
 
     repo, script = driver.build_fixture(tmp_path)

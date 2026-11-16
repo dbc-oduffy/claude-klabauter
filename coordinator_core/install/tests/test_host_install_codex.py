@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.install import host_install_codex as hic
+from pathlib import Path
 
 
 def _env(tmp_path, **extra):
@@ -17,19 +18,19 @@ def _cfg(tmp_path):
 
 
 @pytest.fixture(autouse=True)
-def _mutation_allowed(monkeypatch):
+def _mutation_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
     # The suite sets COORDINATOR_DISABLE_MACHINE_MUTATION=1; these tests write only under tmp_path.
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
 
 
-def test_mutation_switch_refuses_the_host_config_write(tmp_path, monkeypatch):
+def test_mutation_switch_refuses_the_host_config_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_DISABLE_MACHINE_MUTATION", "1")
     with pytest.raises(hic.HostInstallRefused):
         hic.apply(tmp_path, _env(tmp_path))
     assert not _cfg(tmp_path).exists()
 
 
-def test_fresh_home_writes_block_only(tmp_path):
+def test_fresh_home_writes_block_only(tmp_path: Path) -> None:
     r = hic.apply(tmp_path, _env(tmp_path))
     assert r.mcp == hic.MCP_WRITTEN
     text = _cfg(tmp_path).read_text()
@@ -39,7 +40,7 @@ def test_fresh_home_writes_block_only(tmp_path):
     assert not hasattr(r, "fragment")
 
 
-def test_rerun_is_byte_identical(tmp_path):
+def test_rerun_is_byte_identical(tmp_path: Path) -> None:
     hic.apply(tmp_path, _env(tmp_path))
     first = _cfg(tmp_path).read_bytes()
     r = hic.apply(tmp_path, _env(tmp_path))
@@ -47,7 +48,7 @@ def test_rerun_is_byte_identical(tmp_path):
     assert _cfg(tmp_path).read_bytes() == first
 
 
-def test_foreign_keys_preserved_and_block_appended(tmp_path):
+def test_foreign_keys_preserved_and_block_appended(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     cfg.parent.mkdir(parents=True)
     original = 'model = "x"\n\n[mcp_servers.node_repl]\ncommand = "node"\n'
@@ -59,7 +60,7 @@ def test_foreign_keys_preserved_and_block_appended(tmp_path):
     assert text.endswith(hic.render_block("http://127.0.0.1:8767/mcp"))
 
 
-def test_foreign_equivalent_http_entry_is_present_and_untouched(tmp_path):
+def test_foreign_equivalent_http_entry_is_present_and_untouched(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     cfg.parent.mkdir(parents=True)
     original = '[mcp_servers.project-rag]\nurl = "http://127.0.0.1:8767/mcp"\n'
@@ -77,7 +78,7 @@ def test_foreign_equivalent_http_entry_is_present_and_untouched(tmp_path):
         '[mcp_servers]\nexample_retrieval_repo = { url = "http://elsewhere/mcp" }\n',
     ],
 )
-def test_foreign_differing_entry_is_drift_never_overwritten(tmp_path, original):
+def test_foreign_differing_entry_is_drift_never_overwritten(tmp_path: Path, original) -> None:
     cfg = _cfg(tmp_path)
     cfg.parent.mkdir(parents=True)
     cfg.write_bytes(original.encode())
@@ -86,7 +87,7 @@ def test_foreign_differing_entry_is_drift_never_overwritten(tmp_path, original):
     assert cfg.read_bytes() == original.encode()
 
 
-def test_stale_managed_block_is_rewritten_when_env_url_changes(tmp_path):
+def test_stale_managed_block_is_rewritten_when_env_url_changes(tmp_path: Path) -> None:
     hic.apply(tmp_path, _env(tmp_path))
     env = _env(tmp_path, EXAMPLE_RETRIEVAL_REPO_HTTP_PORT="9001")
     r = hic.apply(tmp_path, env)
@@ -95,14 +96,14 @@ def test_stale_managed_block_is_rewritten_when_env_url_changes(tmp_path):
     assert "9001" in text and "8767" not in text and text.count(hic.BLOCK_BEGIN) == 1
 
 
-def test_check_mode_writes_nothing(tmp_path):
+def test_check_mode_writes_nothing(tmp_path: Path) -> None:
     r = hic.apply(tmp_path, _env(tmp_path), check=True)
     assert r.mcp == hic.MCP_WOULD_WRITE
     assert not (tmp_path / ".codex").exists()
     assert not (tmp_path / ".coordinator-claude-settings").exists()
 
 
-def test_check_mode_on_installed_state_leaves_bytes(tmp_path):
+def test_check_mode_on_installed_state_leaves_bytes(tmp_path: Path) -> None:
     hic.apply(tmp_path, _env(tmp_path))
     before = _cfg(tmp_path).read_bytes()
     r = hic.apply(tmp_path, _env(tmp_path), check=True)
@@ -110,7 +111,7 @@ def test_check_mode_on_installed_state_leaves_bytes(tmp_path):
     assert _cfg(tmp_path).read_bytes() == before
 
 
-def test_malformed_toml_left_untouched(tmp_path):
+def test_malformed_toml_left_untouched(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     cfg.parent.mkdir(parents=True)
     cfg.write_bytes(b"[unterminated\n")
@@ -119,7 +120,7 @@ def test_malformed_toml_left_untouched(tmp_path):
     assert cfg.read_bytes() == b"[unterminated\n"
 
 
-def test_hooks_json_never_written(tmp_path):
+def test_hooks_json_never_written(tmp_path: Path) -> None:
     hooks = tmp_path / ".codex" / "hooks.json"
     hooks.parent.mkdir(parents=True)
     hooks.write_bytes(b'{"hooks": {"SessionStart": []}}')
@@ -127,14 +128,14 @@ def test_hooks_json_never_written(tmp_path):
     assert hooks.read_bytes() == b'{"hooks": {"SessionStart": []}}'
 
 
-def test_codex_home_env_redirects_config(tmp_path):
+def test_codex_home_env_redirects_config(tmp_path: Path) -> None:
     ch = tmp_path / "elsewhere"
     hic.apply(tmp_path, _env(tmp_path, CODEX_HOME=str(ch)))
     assert (ch / "config.toml").exists()
     assert not (tmp_path / ".codex").exists()
 
 
-def test_crlf_foreign_config_preserved(tmp_path):
+def test_crlf_foreign_config_preserved(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     cfg.parent.mkdir(parents=True)
     original = b'model = "x"\r\n'
@@ -143,7 +144,7 @@ def test_crlf_foreign_config_preserved(tmp_path):
     assert cfg.read_bytes().startswith(original)
 
 
-def test_begin_marker_without_end_is_malformed_and_untouched(tmp_path):
+def test_begin_marker_without_end_is_malformed_and_untouched(tmp_path: Path) -> None:
     cfg = _cfg(tmp_path)
     cfg.parent.mkdir(parents=True)
     body = f'{hic.BLOCK_BEGIN}\n[mcp_servers.{hic.MCP_SERVER_NAME}]\n'.encode()

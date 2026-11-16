@@ -10,11 +10,12 @@ import asyncio
 import pytest
 
 from coordinator_core.ops.session import reap
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def test_claim_reap_surface_is_deleted():
+def test_claim_reap_surface_is_deleted() -> None:
     for name in (
         "_reap_orphaned_claims",
         "_reap_claims_for_target",
@@ -24,7 +25,7 @@ def test_claim_reap_surface_is_deleted():
         assert not hasattr(reap, name), name
 
 
-def test_gated_fast_path_reaps_no_claims(tmp_path):
+def test_gated_fast_path_reaps_no_claims(tmp_path: Path) -> None:
     sessions_dir = tmp_path / HUB_NAME
     sessions_dir.mkdir(parents=True)
     marker = reap._last_reap_path(sessions_dir)
@@ -41,7 +42,7 @@ def test_gated_fast_path_reaps_no_claims(tmp_path):
     assert result["deferred"] == []
 
 
-def test_full_run_reaps_no_claims(tmp_path, monkeypatch):
+def test_full_run_reaps_no_claims(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sessions_dir = tmp_path / HUB_NAME
     sessions_dir.mkdir(parents=True)
 

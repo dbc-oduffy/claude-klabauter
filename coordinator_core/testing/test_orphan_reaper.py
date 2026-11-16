@@ -10,27 +10,28 @@ import psutil
 import pytest
 
 from coordinator_core.testing import orphan_reaper
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def test_is_worker_true_when_workerinput_present():
+def test_is_worker_true_when_workerinput_present() -> None:
     config = types.SimpleNamespace(workerinput={"workerid": "gw0"})
     assert orphan_reaper.is_worker(config) is True
 
 
-def test_is_worker_false_for_controller():
+def test_is_worker_false_for_controller() -> None:
     config = types.SimpleNamespace()
     assert orphan_reaper.is_worker(config) is False
 
 
-def test_get_basetemp_returns_none_and_never_creates_when_unset():
+def test_get_basetemp_returns_none_and_never_creates_when_unset() -> None:
     calls = []
 
     class _Factory:
         _basetemp = None
 
-        def getbasetemp(self):
+        def getbasetemp(self) -> str:
             calls.append("called")
             return "/should/not/be/created"
 
@@ -39,13 +40,13 @@ def test_get_basetemp_returns_none_and_never_creates_when_unset():
     assert calls == []
 
 
-def test_get_basetemp_returns_basetemp_when_set(tmp_path):
+def test_get_basetemp_returns_basetemp_when_set(tmp_path: Path) -> None:
     factory = types.SimpleNamespace(_basetemp=tmp_path)
     config = types.SimpleNamespace(_tmp_path_factory=factory)
     assert orphan_reaper.get_basetemp(config) == str(tmp_path)
 
 
-def test_get_basetemp_none_when_no_factory():
+def test_get_basetemp_none_when_no_factory() -> None:
     config = types.SimpleNamespace()
     assert orphan_reaper.get_basetemp(config) is None
 
@@ -61,25 +62,25 @@ def test_get_basetemp_none_when_no_factory():
         ("", ("/", "tmp", "pytest-2"), False),
     ],
 )
-def test_is_under_basetemp_path_component_boundary(path, basetemp, expected):
+def test_is_under_basetemp_path_component_boundary(path, basetemp, expected) -> None:
     assert orphan_reaper.is_under_basetemp(path, basetemp) is expected
 
 
-def test_is_under_basetemp_empty_basetemp_parts_never_matches():
+def test_is_under_basetemp_empty_basetemp_parts_never_matches() -> None:
     assert orphan_reaper.is_under_basetemp("/anything", ()) is False
 
 
-def test_collect_ancestor_pids_includes_parent():
+def test_collect_ancestor_pids_includes_parent() -> None:
     ancestors = orphan_reaper.collect_ancestor_pids(os.getpid())
     assert os.getppid() in ancestors
 
 
-def test_collect_ancestor_pids_empty_when_psutil_missing(monkeypatch):
+def test_collect_ancestor_pids_empty_when_psutil_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(orphan_reaper, "psutil", None)
     assert orphan_reaper.collect_ancestor_pids(os.getpid()) == set()
 
 
-def test_collect_ancestor_pids_fails_closed_on_psutil_error(monkeypatch):
+def test_collect_ancestor_pids_fails_closed_on_psutil_error(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(pid):
         raise psutil.AccessDenied(pid)
 
@@ -88,7 +89,7 @@ def test_collect_ancestor_pids_fails_closed_on_psutil_error(monkeypatch):
         orphan_reaper.collect_ancestor_pids(os.getpid())
 
 
-def test_find_orphans_propagates_ancestor_scan_failure(monkeypatch):
+def test_find_orphans_propagates_ancestor_scan_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(pid):
         raise psutil.AccessDenied(pid)
 
@@ -97,7 +98,7 @@ def test_find_orphans_propagates_ancestor_scan_failure(monkeypatch):
         orphan_reaper.find_orphans("/tmp/pytest-1", os.getpid(), 0.0, None)
 
 
-def test_sessionfinish_aborts_reap_when_ancestor_scan_fails(monkeypatch):
+def test_sessionfinish_aborts_reap_when_ancestor_scan_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(pid):
         raise psutil.AccessDenied(pid)
 
@@ -110,12 +111,12 @@ def test_sessionfinish_aborts_reap_when_ancestor_scan_fails(monkeypatch):
     assert reaped_calls == []
 
 
-def test_find_orphans_empty_when_psutil_missing(monkeypatch):
+def test_find_orphans_empty_when_psutil_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(orphan_reaper, "psutil", None)
     assert orphan_reaper.find_orphans("/tmp/pytest-1", os.getpid(), 0.0, None) == []
 
 
-def test_reap_processes_empty_when_psutil_missing(monkeypatch):
+def test_reap_processes_empty_when_psutil_missing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(orphan_reaper, "psutil", None)
     assert orphan_reaper.reap_processes([]) == []
 
@@ -125,7 +126,7 @@ class _StubbornProc:
 
     pid = 999_999_991
 
-    def cmdline(self):
+    def cmdline(self) -> list[str]:
         return ["stubborn"]
 
     def terminate(self):
@@ -135,7 +136,7 @@ class _StubbornProc:
         raise psutil.AccessDenied(self.pid)
 
 
-def test_reap_processes_omits_procs_still_alive_after_kill(monkeypatch):
+def test_reap_processes_omits_procs_still_alive_after_kill(monkeypatch: pytest.MonkeyPatch) -> None:
     stubborn = _StubbornProc()
     monkeypatch.setattr(
         orphan_reaper.psutil, "wait_procs", lambda procs, timeout=None: ([], list(procs))
@@ -143,11 +144,11 @@ def test_reap_processes_omits_procs_still_alive_after_kill(monkeypatch):
     assert orphan_reaper.reap_processes([stubborn]) == []
 
 
-def test_reap_processes_reports_only_confirmed_gone(monkeypatch):
+def test_reap_processes_reports_only_confirmed_gone(monkeypatch: pytest.MonkeyPatch) -> None:
     class _Dies:
         pid = 999_999_992
 
-        def cmdline(self):
+        def cmdline(self) -> list[str]:
             return ["dies"]
 
         def terminate(self):
@@ -164,7 +165,7 @@ def test_reap_processes_reports_only_confirmed_gone(monkeypatch):
     assert orphan_reaper.reap_processes([dies, stubborn]) == [(dies.pid, ["dies"])]
 
 
-def test_find_orphans_excludes_self_and_ancestors(monkeypatch):
+def test_find_orphans_excludes_self_and_ancestors(monkeypatch: pytest.MonkeyPatch) -> None:
     own_pid = os.getpid()
     own_proc = psutil.Process(own_pid)
     basetemp = own_proc.cwd()
@@ -179,7 +180,7 @@ def test_find_orphans_excludes_self_and_ancestors(monkeypatch):
     assert os.getppid() not in orphan_pids
 
 
-def test_find_orphans_prefilters_by_create_time(monkeypatch):
+def test_find_orphans_prefilters_by_create_time(monkeypatch: pytest.MonkeyPatch) -> None:
     own_pid = os.getpid()
     own_proc = psutil.Process(own_pid)
     basetemp = own_proc.cwd()
@@ -191,7 +192,7 @@ def test_find_orphans_prefilters_by_create_time(monkeypatch):
     assert orphans == []
 
 
-def test_pytest_sessionfinish_skips_workers_without_scanning(monkeypatch):
+def test_pytest_sessionfinish_skips_workers_without_scanning(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(
         orphan_reaper,
@@ -204,12 +205,12 @@ def test_pytest_sessionfinish_skips_workers_without_scanning(monkeypatch):
     assert calls == []
 
 
-def test_pytest_sessionfinish_never_raises_on_broken_config():
+def test_pytest_sessionfinish_never_raises_on_broken_config() -> None:
     session = types.SimpleNamespace(config=types.SimpleNamespace())
     orphan_reaper.pytest_sessionfinish(session, exitstatus=0)
 
 
-def test_pytest_sessionfinish_noop_when_basetemp_none():
+def test_pytest_sessionfinish_noop_when_basetemp_none() -> None:
     factory = types.SimpleNamespace(_basetemp=None)
     config = types.SimpleNamespace(_tmp_path_factory=factory)
     session = types.SimpleNamespace(config=config)
@@ -218,7 +219,7 @@ def test_pytest_sessionfinish_noop_when_basetemp_none():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_sessionfinish_reaps_a_detached_sleeper_under_basetemp(tmp_path, capsys):
+def test_sessionfinish_reaps_a_detached_sleeper_under_basetemp(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     fake_basetemp = tmp_path / "pytest-fakebase"
     fake_basetemp.mkdir()
 

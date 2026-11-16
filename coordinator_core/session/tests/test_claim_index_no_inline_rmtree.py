@@ -8,12 +8,13 @@ import types
 import pytest
 
 from coordinator_core.session import claim_index, touch_record
+from pathlib import Path
 
 SWEEPS = []
 
 
 @pytest.fixture(autouse=True)
-def _no_background_sweep(monkeypatch):
+def _no_background_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
     SWEEPS.clear()
     monkeypatch.setattr(claim_index, "_spawn_sweep", lambda index_dir: SWEEPS.append(index_dir))
 
@@ -22,7 +23,7 @@ def _sink(base, sid):
     return os.path.join(base, sid, "touch-record.jsonl")
 
 
-def _claim(base, sid, path):
+def _claim(base, sid, path) -> None:
     touch_record.append_event(
         _sink(base, sid),
         session_id=sid,
@@ -39,7 +40,7 @@ def _boom(*args, **kwargs):
     raise AssertionError("shutil.rmtree on the lookup path")
 
 
-def _deny_index_dir_rename(monkeypatch, index_dir):
+def _deny_index_dir_rename(monkeypatch, index_dir) -> None:
     """Refuse only the rename of the index directory itself, as a reader's open handle does."""
     real = os.replace
 
@@ -52,7 +53,7 @@ def _deny_index_dir_rename(monkeypatch, index_dir):
 
 
 @pytest.fixture
-def stale_build(tmp_path):
+def stale_build(tmp_path: Path) -> tuple[str, str, str, str]:
     """A built index whose COMPLETE stamp is gone, plus a stream naming a sink that no longer exists."""
     base = str(tmp_path / "sessions")
     _claim(base, "peer", "a.py")
@@ -66,7 +67,7 @@ def stale_build(tmp_path):
     return base, index_dir, complete, ghost
 
 
-def test_rebuild_over_prior_streams_never_calls_rmtree(stale_build, monkeypatch):
+def test_rebuild_over_prior_streams_never_calls_rmtree(stale_build, monkeypatch: pytest.MonkeyPatch) -> None:
     base, index_dir, complete, ghost = stale_build
     monkeypatch.setattr(claim_index, "shutil", types.SimpleNamespace(rmtree=_boom))
     _claim(base, "late", "b.py")
@@ -81,7 +82,7 @@ def test_rebuild_over_prior_streams_never_calls_rmtree(stale_build, monkeypatch)
     assert elapsed < 0.5
 
 
-def test_prior_index_is_retired_by_rename_and_swept_later(stale_build):
+def test_prior_index_is_retired_by_rename_and_swept_later(stale_build) -> None:
     base, index_dir, complete, ghost = stale_build
 
     claim_index.lookup(["a.py"], sessions_dir=base)
@@ -95,7 +96,7 @@ def test_prior_index_is_retired_by_rename_and_swept_later(stale_build):
     assert os.path.isdir(index_dir)
 
 
-def test_first_build_retires_nothing_and_spawns_no_sweep(tmp_path):
+def test_first_build_retires_nothing_and_spawns_no_sweep(tmp_path: Path) -> None:
     base = str(tmp_path / "sessions")
     _claim(base, "peer", "a.py")
 
@@ -104,7 +105,7 @@ def test_first_build_retires_nothing_and_spawns_no_sweep(tmp_path):
     assert SWEEPS == []
 
 
-def test_a_rename_refused_by_a_reader_handle_still_builds_and_serves_an_index(stale_build, monkeypatch):
+def test_a_rename_refused_by_a_reader_handle_still_builds_and_serves_an_index(stale_build, monkeypatch: pytest.MonkeyPatch) -> None:
     base, index_dir, complete, ghost = stale_build
     _deny_index_dir_rename(monkeypatch, index_dir)
     monkeypatch.setattr(claim_index, "shutil", types.SimpleNamespace(rmtree=_boom))
@@ -120,7 +121,7 @@ def test_a_rename_refused_by_a_reader_handle_still_builds_and_serves_an_index(st
     assert elapsed < 0.5
 
 
-def test_a_second_build_token_stops_the_first_build_stamping(stale_build, monkeypatch):
+def test_a_second_build_token_stops_the_first_build_stamping(stale_build, monkeypatch: pytest.MonkeyPatch) -> None:
     base, index_dir, complete, ghost = stale_build
     _deny_index_dir_rename(monkeypatch, index_dir)
     first = claim_index._begin_index(base, index_dir)

@@ -5,11 +5,12 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import held_revisions as hr
+import pytest
 
 SIZING = "state/sizings/2026-10-26-x-slice-2.yaml"
 
 
-def test_round_trip_and_drain(tmp_path):
+def test_round_trip_and_drain(tmp_path: Path) -> None:
     a = hr.hold(tmp_path, SIZING, "ask-1", text="recount", sender="peer")
     b = hr.hold(tmp_path, SIZING, "ask-1", note="check both arms")
     assert a["from"] == "peer" and "note" not in a and b["note"] == "check both arms"
@@ -19,32 +20,32 @@ def test_round_trip_and_drain(tmp_path):
     assert hr.unconsumed(tmp_path, SIZING) == []
 
 
-def test_second_drain_is_idempotent(tmp_path):
+def test_second_drain_is_idempotent(tmp_path: Path) -> None:
     hr.hold(tmp_path, SIZING, "ask-1", text="t")
     assert len(hr.drain(tmp_path, SIZING, "ask-2")) == 1
     assert hr.drain(tmp_path, SIZING, "ask-3") == []
 
 
-def test_pending_without_mark_stays_open(tmp_path):
+def test_pending_without_mark_stays_open(tmp_path: Path) -> None:
     hr.hold(tmp_path, SIZING, "ask-1", text="t")
     assert len(hr.pending(tmp_path, SIZING)) == 1
     assert len(hr.unconsumed(tmp_path, SIZING)) == 1
 
 
-def test_other_sizing_isolated_and_absent_file_empty(tmp_path):
+def test_other_sizing_isolated_and_absent_file_empty(tmp_path: Path) -> None:
     hr.hold(tmp_path, SIZING, "ask-1", text="t")
     assert hr.unconsumed(tmp_path, "state/sizings/other.yaml") == []
     assert hr.unconsumed(tmp_path / "nowhere", SIZING) == []
 
 
-def test_torn_tail_line_skipped(tmp_path):
+def test_torn_tail_line_skipped(tmp_path: Path) -> None:
     e = hr.hold(tmp_path, SIZING, "ask-1", text="t")
     with hr.store_path(tmp_path, SIZING).open("a", encoding="utf-8") as fh:
         fh.write('{"id": "H-torn", "te')
     assert [x["id"] for x in hr.pending(tmp_path, SIZING)] == [e["id"]]
 
 
-def test_path_computed_from_key_without_glob(tmp_path, monkeypatch):
+def test_path_computed_from_key_without_glob(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("glob used")
 
@@ -56,7 +57,7 @@ def test_path_computed_from_key_without_glob(tmp_path, monkeypatch):
     assert len(hr.store_path(tmp_path, SIZING).stem) == 16
 
 
-def test_hold_requires_content(tmp_path):
+def test_hold_requires_content(tmp_path: Path) -> None:
     import pytest
 
     with pytest.raises(ValueError):

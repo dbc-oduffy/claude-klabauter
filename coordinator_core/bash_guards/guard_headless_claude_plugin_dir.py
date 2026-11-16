@@ -19,6 +19,10 @@ from coordinator_core.bash_guards._command_tokenizer import (
     exceeds_tokenizable_ceiling,
     token_matches_binary,
 )
+from coordinator_core.bash_guards._dc_shell_text import (
+    _HEREDOC_INTRO_RE,
+    _strip_heredoc_bodies,
+)
 from coordinator_core.bash_guards._rewrite_support import (
     _advisory_record,
     _allow_rewrite_record,
@@ -34,6 +38,33 @@ _GUARD_NAME = "headless-claude-plugin-dir"
 _SEPARATORS = ";&|\n"
 _Word = Tuple[int, int, str]
 _HEADLESS_FLAGS = ("-p", "--print", "--bg")
+
+
+def _blank_heredoc_bodies(cmd: str) -> str:
+    """``cmd`` with heredoc body lines spaced out, so byte offsets stay valid.
+
+    The shared ``_strip_heredoc_bodies`` decides whether any body exists (it
+    leaves an unterminated heredoc alone); this only keeps the offsets."""
+    if _strip_heredoc_bodies(cmd) == cmd:
+        return cmd
+    out: List[str] = []
+    word: Optional[str] = None
+    strip_tabs = False
+    for line in cmd.split("\n"):
+        if word is None:
+            out.append(line)
+            m = _HEREDOC_INTRO_RE.search(line)
+            if m:
+                seg = m.group(0)
+                strip_tabs = len(seg) > 2 and seg[2] == "-"
+                word = seg[3:] if strip_tabs else seg[2:]
+                if word and word[0] in ("'", '"'):
+                    word = word[1:-1]
+            continue
+        if (line.lstrip("\t") if strip_tabs else line) == word:
+            word = None
+        out.append(" " * len(line))
+    return "\n".join(out)
 
 
 def _scan_segments(cmd: str) -> List[List[_Word]]:
@@ -133,7 +164,7 @@ def check_headless_claude_plugin_dir(
     if not cmd or "claude" not in cmd.lower():
         return None
     inserts: List[int] = []
-    for words in _scan_segments(cmd):
+    for words in _scan_segments(_blank_heredoc_bodies(cmd)):
         idx = _launch_index(words)
         if idx is None:
             continue

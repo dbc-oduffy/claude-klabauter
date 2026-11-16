@@ -356,7 +356,7 @@ def _served_since(st: _State, mark: int, phase: "str | None" = None) -> int:
     return sum(1 for o in st.ops[mark:] if o.outcome == "served" and (phase is None or o.phase_end == phase))
 
 
-def _run_handover(engine_root, spawned, state, monkeypatch, *, old_stamp, expect_served=True) -> dict:
+def _run_handover(engine_root, spawned, state, monkeypatch, *, old_stamp, expect_served: bool = True) -> dict:
     """The production handover, driven through `round.start_successor_pair_in_hold`, with clients
     deriving their token from the stamp file exactly as production does. The copy lands NEW_STAMP
     first; `old_stamp` is what the holder captured before the copy (None: no make-before-break flip)."""
@@ -368,7 +368,7 @@ def _run_handover(engine_root, spawned, state, monkeypatch, *, old_stamp, expect
     monkeypatch.setattr(supervisor, "ensure_listener", lambda *_a, **_k: None)
     successor_boot: dict = {}
 
-    def _spawn(_root, _script, args=None, env_extra=None):
+    def _spawn(_root, _script, args=None, env_extra=None) -> bool:
         successor_boot.update(
             _boot_server(
                 engine_root,
@@ -399,7 +399,7 @@ def _run_handover(engine_root, spawned, state, monkeypatch, *, old_stamp, expect
                 run.paused.clear()
             real_replace = skew.replace_engine_stamp_bytes
 
-            def _replace_then_resume(*a, **k):
+            def _replace_then_resume(*a, **k) -> None:
                 real_replace(*a, **k)
                 run.paused.clear()
 
@@ -423,7 +423,7 @@ def _run_handover(engine_root, spawned, state, monkeypatch, *, old_stamp, expect
 
 
 def test_swap_keeps_the_old_pair_answering_until_the_successor_answers_with_zero_fail_open(
-    engine_root, spawned, state, monkeypatch
+    engine_root, spawned, state, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """R2: across copy, successor boot, flip and old-pair stop, every guard request gets an evaluated
     answer: no cold (fail-open) verdict, no error. The stamp reads NEW only after the successor answers."""
@@ -441,7 +441,7 @@ def test_swap_keeps_the_old_pair_answering_until_the_successor_answers_with_zero
 
 
 def test_the_stamp_flip_before_the_successor_answers_does_fail_open(
-    engine_root, spawned, state, monkeypatch
+    engine_root, spawned, state, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Control: without the pre-copy stamp the holder cannot keep clients on the old token, so guards
     fall open between the copy's stamp write and the successor's first answer."""
@@ -467,7 +467,7 @@ def test_stopping_the_old_pair_before_a_successor_answers_does_fail_open(
 
 
 @pytest.mark.parametrize("dispatch_timeout", ["2", "30", "120"])
-def test_drain_ceiling_outlasts_every_deadline_a_waiting_caller_holds(monkeypatch, dispatch_timeout) -> None:
+def test_drain_ceiling_outlasts_every_deadline_a_waiting_caller_holds(monkeypatch: pytest.MonkeyPatch, dispatch_timeout) -> None:
     """Mechanism (a) cannot cut an op whose caller is still waiting: the ceiling is the dispatch
     timeout plus a margin, and the client's own read deadlines are bounded by the dispatch timeout."""
     monkeypatch.setenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", dispatch_timeout)
@@ -509,7 +509,7 @@ def _flipping_client(monkeypatch, tmp_path, tokens: list, served: set):
     opened: list = []
     pipes: list = []
 
-    def open_pipe(name):
+    def open_pipe(name) -> _AnsweringPipe:
         opened.append(name)
         if name not in served:
             raise FileNotFoundError(2, "no pipe")
@@ -524,7 +524,7 @@ def _flipping_client(monkeypatch, tmp_path, tokens: list, served: set):
 _PING = {"jsonrpc": "2.0", "id": 1, "method": "ping", "params": {}}
 
 
-def test_a_stamp_flip_between_token_read_and_open_is_answered_on_the_new_pipe(monkeypatch, tmp_path) -> None:
+def test_a_stamp_flip_between_token_read_and_open_is_answered_on_the_new_pipe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     opened, pipes = _flipping_client(monkeypatch, tmp_path, ["old", "new"], served={"pipe-new"})
     response = client.try_warm_dispatch(_PING)
     assert response == {"jsonrpc": "2.0", "id": 1, "result": {}}
@@ -532,7 +532,7 @@ def test_a_stamp_flip_between_token_read_and_open_is_answered_on_the_new_pipe(mo
     assert b'"_engine_token": "new"' in pipes[0].written[0]
 
 
-def test_a_missing_pipe_under_an_unchanged_token_is_not_retried_on_another_name(monkeypatch, tmp_path) -> None:
+def test_a_missing_pipe_under_an_unchanged_token_is_not_retried_on_another_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     spawns: list = []
     monkeypatch.setattr(client, "_spawn_once", lambda: spawns.append(1))
     opened, _ = _flipping_client(monkeypatch, tmp_path, ["old"], served=set())
@@ -548,7 +548,7 @@ class _ClosedPipe(_AnsweringPipe):
 def _closing_old_generation(monkeypatch, tmp_path, tokens: list):
     opened, pipes = _flipping_client(monkeypatch, tmp_path, tokens, served={"pipe-old", "pipe-new"})
 
-    def open_pipe(name):
+    def open_pipe(name) -> _AnsweringPipe:
         opened.append(name)
         pipe = _ClosedPipe() if name == "pipe-old" else _AnsweringPipe()
         pipes.append(pipe)
@@ -560,7 +560,7 @@ def _closing_old_generation(monkeypatch, tmp_path, tokens: list):
 
 
 def test_a_compute_only_op_closed_unserviced_by_a_draining_generation_is_resent_on_the_new_token(
-    monkeypatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     opened, _ = _closing_old_generation(monkeypatch, tmp_path, ["old", "new"])
     monkeypatch.setattr(client, "_op_may_mutate", lambda name: False)
@@ -568,14 +568,14 @@ def test_a_compute_only_op_closed_unserviced_by_a_draining_generation_is_resent_
     assert opened == ["pipe-old", "pipe-new"]
 
 
-def test_a_closed_unserviced_op_under_an_unchanged_token_goes_cold_without_a_resend(monkeypatch, tmp_path) -> None:
+def test_a_closed_unserviced_op_under_an_unchanged_token_goes_cold_without_a_resend(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     opened, _ = _closing_old_generation(monkeypatch, tmp_path, ["old"])
     monkeypatch.setattr(client, "_op_may_mutate", lambda name: False)
     assert client.try_warm_dispatch(_PING) is None
     assert opened == ["pipe-old"]
 
 
-def test_a_mutating_op_closed_unserviced_is_resent_on_the_new_token_like_a_read(monkeypatch, tmp_path) -> None:
+def test_a_mutating_op_closed_unserviced_is_resent_on_the_new_token_like_a_read(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     opened, _ = _closing_old_generation(monkeypatch, tmp_path, ["old", "new"])
     monkeypatch.setattr(client, "_op_may_mutate", lambda name: True)
     assert client.try_warm_dispatch(_PING) == {"jsonrpc": "2.0", "id": 1, "result": {}}

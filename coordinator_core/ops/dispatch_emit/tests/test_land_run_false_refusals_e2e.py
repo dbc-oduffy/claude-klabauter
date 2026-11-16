@@ -72,7 +72,7 @@ def _write(root: Path, rel: str, text: str) -> None:
 
 
 @pytest.fixture
-def stale_repo(tmp_path, monkeypatch):
+def stale_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], root)
@@ -119,7 +119,7 @@ def _land(root: Path, base: str) -> dict:
     )
 
 
-def test_a_sibling_commit_since_base_on_a_shared_file_the_run_only_adds_to_lands(stale_repo):
+def test_a_sibling_commit_since_base_on_a_shared_file_the_run_only_adds_to_lands(stale_repo) -> None:
     base = _stale_run(stale_repo, SIBLING_TEXT + "run = 4\n")
 
     out = _land(stale_repo, base)
@@ -129,7 +129,7 @@ def test_a_sibling_commit_since_base_on_a_shared_file_the_run_only_adds_to_lands
     assert SHARED in _git(["show", "--name-only", "--format=", out["sha"]], stale_repo).split()
 
 
-def test_a_landing_that_drops_the_siblings_line_still_refuses(stale_repo):
+def test_a_landing_that_drops_the_siblings_line_still_refuses(stale_repo) -> None:
     base = _stale_run(stale_repo, "a = 1\nb = 2\nrun = 4\n")
     head = _git(["rev-parse", "HEAD"], stale_repo)
 
@@ -149,7 +149,7 @@ def _dirty_reach(root, verdict):
     return resume, token
 
 
-def test_peer_dirt_in_the_verified_reach_lands_on_a_green_overlay_verdict(halted):  # noqa: F811
+def test_peer_dirt_in_the_verified_reach_lands_on_a_green_overlay_verdict(halted) -> None:  # noqa: F811
     resume, token = _dirty_reach(halted, "green")
 
     out = _terminal_with(halted, token, resume, reach._VERDICT)
@@ -157,7 +157,7 @@ def test_peer_dirt_in_the_verified_reach_lands_on_a_green_overlay_verdict(halted
     _landed_over_dirt(halted, out)
 
 
-def test_peer_dirt_in_the_verified_reach_refuses_on_a_red_verdict(halted):  # noqa: F811
+def test_peer_dirt_in_the_verified_reach_refuses_on_a_red_verdict(halted) -> None:  # noqa: F811
     resume, token = _dirty_reach(halted, "red")
     head = _rgit(halted, "rev-parse", "HEAD")
 
@@ -166,7 +166,7 @@ def test_peer_dirt_in_the_verified_reach_refuses_on_a_red_verdict(halted):  # no
     _refused(halted, head, out, land_run.VERIFY_OVERLAY_RED)
 
 
-def test_peer_dirt_in_the_verified_reach_lands_with_an_advisory_when_no_verdict_was_written(halted):  # noqa: F811
+def test_peer_dirt_in_the_verified_reach_lands_with_an_advisory_when_no_verdict_was_written(halted) -> None:  # noqa: F811
     """A verdict the engine never produced lands with an `Overlay: missing` trailer."""
     resume, token = _dirty_reach(halted, None)
 
@@ -176,7 +176,7 @@ def test_peer_dirt_in_the_verified_reach_lands_with_an_advisory_when_no_verdict_
     assert _rgit(halted, "log", "-1", "--format=%(trailers:key=Overlay,valueonly)").strip().startswith("missing")
 
 
-def test_peer_dirt_in_the_verified_reach_refuses_as_unverified_on_an_inconclusive_verdict(halted):  # noqa: F811
+def test_peer_dirt_in_the_verified_reach_refuses_as_unverified_on_an_inconclusive_verdict(halted) -> None:  # noqa: F811
     resume, token = _dirty_reach(halted, "inconclusive")
     head = _rgit(halted, "rev-parse", "HEAD")
 

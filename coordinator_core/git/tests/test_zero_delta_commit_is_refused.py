@@ -5,6 +5,7 @@ import pytest
 
 from coordinator_core.git import commit as gcommit
 from coordinator_core.git.commit import CommitRefused, NothingToCommit, PhantomDeletionDeclared
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -19,7 +20,7 @@ def _git(repo, *args):
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/z")
@@ -39,7 +40,7 @@ def _head(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_unmodified_tracked_paths_are_refused_and_head_is_unmoved(repo):
+def test_unmodified_tracked_paths_are_refused_and_head_is_unmoved(repo) -> None:
     before = _head(repo)
 
     with pytest.raises(NothingToCommit):
@@ -50,7 +51,7 @@ def test_unmodified_tracked_paths_are_refused_and_head_is_unmoved(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_allow_empty_still_lands_a_deliberate_marker_commit(repo):
+def test_allow_empty_still_lands_a_deliberate_marker_commit(repo) -> None:
     before = _head(repo)
 
     outcome = gcommit.commit_paths(repo, ["seed.txt"], "marker", allow_empty=True)
@@ -62,7 +63,7 @@ def test_allow_empty_still_lands_a_deliberate_marker_commit(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_one_real_change_among_unmodified_paths_still_commits(repo):
+def test_one_real_change_among_unmodified_paths_still_commits(repo) -> None:
     (repo / "nested" / "deep.txt").write_text("moved\n", encoding="utf-8", newline="\n")
 
     outcome = gcommit.commit_paths(repo, ["seed.txt", "nested/deep.txt"], "one change")
@@ -72,7 +73,7 @@ def test_one_real_change_among_unmodified_paths_still_commits(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_deletion_of_an_already_absent_path_is_refused(repo):
+def test_a_deletion_of_an_already_absent_path_is_refused(repo) -> None:
     before = _head(repo)
     (repo / "seed.txt").unlink()
     gcommit.commit_paths(repo, [], "drop seed", deleted_paths=["seed.txt"])
@@ -85,13 +86,13 @@ def test_a_deletion_of_an_already_absent_path_is_refused(repo):
     assert _head(repo) == landed
 
 
-def test_nothing_to_commit_is_a_commit_refused():
+def test_nothing_to_commit_is_a_commit_refused() -> None:
     assert issubclass(NothingToCommit, CommitRefused)
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_declared_path_that_contributed_nothing_is_named(repo):
+def test_a_declared_path_that_contributed_nothing_is_named(repo) -> None:
     (repo / "seed.txt").write_text("changed\n", encoding="utf-8", newline="\n")
 
     outcome = gcommit.commit_paths(repo, ["seed.txt", "nested/deep.txt"], "k of n")
@@ -104,7 +105,7 @@ def test_a_declared_path_that_contributed_nothing_is_named(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_fully_delivered_commit_names_nothing(repo):
+def test_a_fully_delivered_commit_names_nothing(repo) -> None:
     (repo / "seed.txt").write_text("changed\n", encoding="utf-8", newline="\n")
     (repo / "nested" / "deep.txt").write_text("also\n", encoding="utf-8", newline="\n")
 

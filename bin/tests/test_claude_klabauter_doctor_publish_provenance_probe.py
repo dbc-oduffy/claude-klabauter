@@ -56,7 +56,7 @@ def _is_parseable_probe_result(r: object) -> bool:
     )
 
 
-def _git(*args, cwd):
+def _git(*args, cwd) -> str:
     result = subprocess.run(
         ["git", *args],
         cwd=str(cwd),

@@ -75,6 +75,7 @@ from coordinator_core.tests.test_no_bare_hot_path_spawn import (
 )
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -428,7 +429,7 @@ def _format(site: OutputSwallowingSite) -> str:
     )
 
 
-def test_no_output_swallowing_no_console_spawn():
+def test_no_output_swallowing_no_console_spawn() -> None:
     """Standing gate: no production spawn may suppress the console while
     specifying no std stream."""
     violations = [
@@ -439,7 +440,7 @@ def test_no_output_swallowing_no_console_spawn():
     assert violations == [], "\n\n".join(_format(site) for site in violations)
 
 
-def test_scan_roots_cover_the_sibling_gates_population():
+def test_scan_roots_cover_the_sibling_gates_population() -> None:
     """Every root the sibling no-console gate counts suppressed/bare spawns in
     must also be walked here. A root the sibling gate walks but this one does
     not reads green on both axes while its console-suppressed spawns lose
@@ -452,7 +453,7 @@ def test_scan_roots_cover_the_sibling_gates_population():
     )
 
 
-def test_deferred_sites_are_still_broken():
+def test_deferred_sites_are_still_broken() -> None:
     """Keeps `_DEFERRED` honest: an entry that no longer violates (fixed, or
     moved) must be deleted or re-pointed, not left as a standing exemption.
 
@@ -486,7 +487,7 @@ def _plant_and_scan(tmp_path: pathlib.Path, body: str) -> list[OutputSwallowingS
     return sites
 
 
-def test_gate_detects_a_planted_output_swallowing_spawn(tmp_path, monkeypatch):
+def test_gate_detects_a_planted_output_swallowing_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Teeth. Without this, a clean tree would make the gate sound by absence
     rather than by verification."""
     monkeypatch.setattr(
@@ -496,7 +497,7 @@ def test_gate_detects_a_planted_output_swallowing_spawn(tmp_path, monkeypatch):
     assert [s.enclosing for s in sites] == ["go"]
 
 
-def test_gate_ignores_a_spawn_that_captures_output(tmp_path, monkeypatch):
+def test_gate_ignores_a_spawn_that_captures_output(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.tests.test_no_output_swallowing_no_console_spawn.REPO_ROOT", tmp_path
     )
@@ -507,7 +508,7 @@ def test_gate_ignores_a_spawn_that_captures_output(tmp_path, monkeypatch):
     assert sites == []
 
 
-def test_gate_ignores_a_spawn_specifying_only_stdout(tmp_path, monkeypatch):
+def test_gate_ignores_a_spawn_specifying_only_stdout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Partial specification is genuinely safe -- CPython fills the
     unspecified handles from the parent's real ones once
     STARTF_USESTDHANDLES is set. Measured; see module docstring."""
@@ -521,7 +522,7 @@ def test_gate_ignores_a_spawn_specifying_only_stdout(tmp_path, monkeypatch):
     assert sites == []
 
 
-def test_gate_ignores_an_unsuppressed_spawn(tmp_path, monkeypatch):
+def test_gate_ignores_an_unsuppressed_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A spawn with no creationflags at all is the SIBLING gate's business
     (`test_no_bare_hot_path_spawn`), not this one's -- flagging it here would
     make the two gates' failure messages ambiguous over the same site."""
@@ -532,7 +533,7 @@ def test_gate_ignores_an_unsuppressed_spawn(tmp_path, monkeypatch):
     assert sites == []
 
 
-def test_gate_ignores_a_passthrough_helper_spawn(tmp_path, monkeypatch):
+def test_gate_ignores_a_passthrough_helper_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The sanctioned fix shape must read as compliant, or the gate would
     push callers straight back off it."""
     monkeypatch.setattr(
@@ -551,7 +552,7 @@ def test_gate_ignores_a_passthrough_helper_spawn(tmp_path, monkeypatch):
     assert find_output_swallowing_spawns([pkg]) == []
 
 
-def test_gate_ignores_a_composed_kwargs_dict_carrying_a_stream(tmp_path, monkeypatch):
+def test_gate_ignores_a_composed_kwargs_dict_carrying_a_stream(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The compose-then-splat shape reads by what the mapping CONTAINS.
 
     `_collect_compliant_kwargs_names`'s reason for existing: the splat's own
@@ -573,7 +574,7 @@ def test_gate_ignores_a_composed_kwargs_dict_carrying_a_stream(tmp_path, monkeyp
     assert sites == []
 
 
-def test_gate_still_flags_a_composed_kwargs_dict_with_no_stream(tmp_path, monkeypatch):
+def test_gate_still_flags_a_composed_kwargs_dict_with_no_stream(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The teeth on the arm above: composing the mapping is not itself a fix.
 
     Same shape, minus the stream kwargs -- this must stay red, or
@@ -591,7 +592,7 @@ def test_gate_still_flags_a_composed_kwargs_dict_with_no_stream(tmp_path, monkey
     assert [s.enclosing for s in sites] == ["go"]
 
 
-def test_gate_ignores_a_stream_added_by_subscript_assignment(tmp_path, monkeypatch):
+def test_gate_ignores_a_stream_added_by_subscript_assignment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`NAME["stderr"] = PIPE` inside one branch is how a caller adds a stream
     conditionally -- the shape `coordinator-lesson-add.py :: main` uses."""
     monkeypatch.setattr(
@@ -607,7 +608,7 @@ def test_gate_ignores_a_stream_added_by_subscript_assignment(tmp_path, monkeypat
     assert sites == []
 
 
-def test_gate_honours_the_last_resort_exemption_tag(tmp_path, monkeypatch):
+def test_gate_honours_the_last_resort_exemption_tag(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.tests.test_no_output_swallowing_no_console_spawn.REPO_ROOT", tmp_path
     )
@@ -618,7 +619,7 @@ def test_gate_honours_the_last_resort_exemption_tag(tmp_path, monkeypatch):
     assert sites == []
 
 
-def test_gate_ignores_an_unrelated_dot_run_call(tmp_path, monkeypatch):
+def test_gate_ignores_an_unrelated_dot_run_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.tests.test_no_output_swallowing_no_console_spawn.REPO_ROOT", tmp_path
     )

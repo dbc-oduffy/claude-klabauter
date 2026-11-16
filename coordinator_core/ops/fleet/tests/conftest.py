@@ -7,7 +7,7 @@ from coordinator_core.testing.fleet_pin import assume_an_author_machine  # noqa:
 
 
 @pytest.fixture(autouse=True)
-def _resync_sinks_write_only_under_basetemp(monkeypatch, tmp_path_factory):
+def _resync_sinks_write_only_under_basetemp(monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory) -> None:
     """The resync failure sinks (bug-row filer, pending store) write only under pytest's basetemp.
 
     Trap: many resync tests pass a fictional root like `Path("/repo")`, which on Windows resolves
@@ -22,11 +22,11 @@ def _resync_sinks_write_only_under_basetemp(monkeypatch, tmp_path_factory):
 
     persist, record = _common._persist_index_resync_failure, _common.record_pending
 
-    def _persist(**kwargs):
+    def _persist(**kwargs) -> None:
         if _inside(kwargs["worktree_root"]):
             persist(**kwargs)
 
-    def _record(worktree_root, records):
+    def _record(worktree_root, records) -> None:
         if _inside(worktree_root):
             record(worktree_root, records)
 

@@ -29,6 +29,7 @@ from coordinator_core.bash_guards._write_bump_session_start import (
     write_session_start_record,
 )
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -49,7 +50,7 @@ def _set_anchor(monkeypatch, home_dir, anchor_dir, session_id: str) -> None:
     write_session_start_record(session_id, launch_cwd=str(anchor_dir))
 
 
-def test_ac6_powershell_out_file_payload_reaches_the_powershell_leg(tmp_path, monkeypatch):
+def test_ac6_powershell_out_file_payload_reaches_the_powershell_leg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     original = guard._check_bump_outside_repo_write_powershell
 
@@ -79,7 +80,7 @@ def test_ac6_powershell_out_file_payload_reaches_the_powershell_leg(tmp_path, mo
     )
 
 
-def test_ac6_bash_payload_never_reaches_the_powershell_leg(tmp_path, monkeypatch):
+def test_ac6_bash_payload_never_reaches_the_powershell_leg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     original = guard._check_bump_outside_repo_write_powershell
 
@@ -118,8 +119,8 @@ def test_ac6_bash_payload_never_reaches_the_powershell_leg(tmp_path, monkeypatch
 
 
 def test_ac9_powershell_set_content_payload_reaches_the_foreign_repo_powershell_leg(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     calls = []
     original = foreign_guard._check_bump_foreign_repo_write_powershell
 
@@ -161,7 +162,7 @@ def test_ac9_powershell_set_content_payload_reaches_the_foreign_repo_powershell_
     )
 
 
-def test_ac9_bash_payload_never_reaches_the_foreign_repo_powershell_leg(tmp_path, monkeypatch):
+def test_ac9_bash_payload_never_reaches_the_foreign_repo_powershell_leg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     original = foreign_guard._check_bump_foreign_repo_write_powershell
 
@@ -218,7 +219,7 @@ _BASH_CORPUS = [
 ]
 
 
-def test_ac7_bash_still_admitted_by_the_real_registered_matchers(tmp_path, monkeypatch):
+def test_ac7_bash_still_admitted_by_the_real_registered_matchers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """
     the prior version of this test compared `"Bash" in ("Bash",)` against
     `"Bash" in COMMAND_TOOL_NAMES`, both trivially True regardless of what
@@ -258,8 +259,8 @@ def test_ac7_bash_still_admitted_by_the_real_registered_matchers(tmp_path, monke
 
 @pytest.mark.parametrize("template", _BASH_CORPUS)
 def test_ac7_bash_payload_verdict_unchanged_by_tool_name_widening(
-    template, tmp_path, monkeypatch
-):
+    template, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The detection FUNCTION itself (`check_bump_outside_repo_write`) never
     reads `matchers` -- it reads `payload["tool_name"]` only to pick a
     dialect. Widening the registration cannot change what this function
@@ -302,8 +303,8 @@ _FOREIGN_BASH_CORPUS = [
 
 
 def test_no_bash_regression_foreign_repo_write_admitted_by_the_real_registered_matchers(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Sibling sweep (coordinator-authorized, `state/lessons/2026-07-23-
     one-fail-open-in-a-file-predicts-sibling-69e0f386c861.yaml`) of
     `test_ac7_bash_still_admitted_by_the_real_registered_matchers` --
@@ -342,8 +343,8 @@ def test_no_bash_regression_foreign_repo_write_admitted_by_the_real_registered_m
 
 @pytest.mark.parametrize("template", _FOREIGN_BASH_CORPUS)
 def test_no_bash_regression_foreign_repo_write_verdict_unchanged_by_tool_name_widening(
-    template, tmp_path, monkeypatch
-):
+    template, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """`bump-foreign-repo-write`'s own C5 counterpart to AC7's Bash-verdict-
     identity assertion above: the detection FUNCTION (`check_bump_foreign_
     repo_write`) never reads `matchers` -- it reads `payload["tool_name"]`
@@ -436,8 +437,8 @@ _UNPARSEABLE_SEGMENT_TEMPLATES = _NO_CANDIDATE_TEMPLATES
 @pytest.mark.parametrize("guard_leg_name", list(_GUARD_LEGS))
 @pytest.mark.parametrize("segment_template", _UNPARSEABLE_SEGMENT_TEMPLATES)
 def test_ac11_unparseable_segment_never_denies(
-    guard_leg_name, segment_template, tmp_path, monkeypatch
-):
+    guard_leg_name, segment_template, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     home = tmp_path / "home"
     home.mkdir()
     anchor = tmp_path / "anchor"
@@ -481,7 +482,7 @@ def test_ac11_unparseable_segment_never_denies(
 
 
 @pytest.mark.parametrize("segment_template", _EXTRACTS_LITERAL_TARGET_TEMPLATES)
-def test_ac11_extracted_literal_target_does_bump(segment_template, tmp_path, monkeypatch):
+def test_ac11_extracted_literal_target_does_bump(segment_template, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     guard_leg_name = "bump-foreign-repo-write"
     home = tmp_path / "home"
     home.mkdir()
@@ -535,8 +536,8 @@ _FULLY_UNPARSEABLE_SEGMENT_TEMPLATES = [
 @pytest.mark.parametrize("guard_leg_name", list(_GUARD_LEGS))
 @pytest.mark.parametrize("segment_template", _FULLY_UNPARSEABLE_SEGMENT_TEMPLATES)
 def test_ac11_fully_unparseable_segment_yields_no_candidates_at_all(
-    guard_leg_name, segment_template, tmp_path, monkeypatch
-):
+    guard_leg_name, segment_template, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     home = tmp_path / "home"
     home.mkdir()
     anchor = tmp_path / "anchor"

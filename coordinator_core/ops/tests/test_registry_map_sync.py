@@ -174,12 +174,12 @@ _UNMAPPED_OP_SUBPROCESS_SCRIPT = textwrap.dedent(
         "params": {"name": "demo-workflow", "description": "a demo workflow"},
     }
     resp = asyncio.new_event_loop().run_until_complete(ipc.dispatch_message(msg))
-    assert "result" in resp, (
-        f"workflow.scaffold dispatch must still succeed via the SAFE FALLBACK "
-        f"(whole-package import) even with its OP_MODULE_MAP entry deliberately "
-        f"removed (never-worse invariant); got {resp!r}"
+    assert resp.get("error", {}).get("code") == -32601, (
+        f"an unmapped op must answer not-found, never import the whole op tree; got {resp!r}"
     )
-    assert "script" in resp["result"]
+    assert "coordinator_core.ops.handoff_children" not in sys.modules, (
+        "an unmapped op miss must not import the whole op tree on the request thread"
+    )
     print("UNMAPPED_OP_FALLBACK_OK")
     """
 )
@@ -243,7 +243,7 @@ def test_mapped_op_dispatch_imports_only_its_module():
     assert "MAPPED_OP_TARGETED_IMPORT_OK" in result.stdout
 
 
-def test_unmapped_op_dispatch_falls_back_to_whole_package_import():
+def test_unmapped_op_dispatch_answers_not_found_without_whole_package_import():
     result = _run_subprocess_script(_UNMAPPED_OP_SUBPROCESS_SCRIPT)
     assert result.returncode == 0, (
         f"subprocess failed (stdout={result.stdout!r}, stderr={result.stderr!r})"

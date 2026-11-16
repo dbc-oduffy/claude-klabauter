@@ -26,11 +26,12 @@ from coordinator_core.write_guards._case_fold_path import (
     casefold_path,
     strip_extended_length_prefix,
 )
+from pathlib import Path
 
 _SYNTHETIC_DRIVE_LETTER = "".join(["Z", ":"])
 
 
-def test_casefold_path_plain_extended_length_prefix_matches_bare_form():
+def test_casefold_path_plain_extended_length_prefix_matches_bare_form() -> None:
     bare_raw = _SYNTHETIC_DRIVE_LETTER + "\\Widgets\\Sub\\repo"
     prefixed_raw = "\\\\?\\" + bare_raw
     prefixed = casefold_path(prefixed_raw)
@@ -38,60 +39,60 @@ def test_casefold_path_plain_extended_length_prefix_matches_bare_form():
     assert prefixed == bare == bare_raw.replace("\\", "/").casefold()
 
 
-def test_casefold_path_unc_extended_length_prefix_matches_bare_unc_form():
+def test_casefold_path_unc_extended_length_prefix_matches_bare_unc_form() -> None:
     prefixed = casefold_path("\\\\?\\UNC\\srv\\share\\dir")
     bare = casefold_path("\\\\srv\\share\\dir")
     assert prefixed == bare == "//srv/share/dir"
 
 
-def test_casefold_path_forward_slash_extended_length_prefix_also_strips():
+def test_casefold_path_forward_slash_extended_length_prefix_also_strips() -> None:
     bare_raw = _SYNTHETIC_DRIVE_LETTER + "\\Widgets\\Sub\\repo"
     slash_prefixed = "//?/" + bare_raw.replace("\\", "/")
     assert casefold_path(slash_prefixed) == bare_raw.replace("\\", "/").casefold()
     assert casefold_path("//?/UNC/srv/share/dir") == "//srv/share/dir"
 
 
-def test_casefold_path_idempotent_on_already_stripped_result():
+def test_casefold_path_idempotent_on_already_stripped_result() -> None:
     once = casefold_path("\\\\?\\" + _SYNTHETIC_DRIVE_LETTER + "\\Widgets\\Sub\\repo")
     twice = casefold_path(once)
     assert once == twice
 
 
-def test_casefold_path_noop_on_posix_shaped_input():
+def test_casefold_path_noop_on_posix_shaped_input() -> None:
     assert casefold_path("/already/posix/style") == "/already/posix/style"
 
 
-def test_strip_extended_length_prefix_direct_plain_form():
+def test_strip_extended_length_prefix_direct_plain_form() -> None:
     bare = _SYNTHETIC_DRIVE_LETTER + "\\Widgets\\Foo"
     assert strip_extended_length_prefix("\\\\?\\" + bare) == bare
 
 
-def test_strip_extended_length_prefix_direct_unc_form():
+def test_strip_extended_length_prefix_direct_unc_form() -> None:
     assert (
         strip_extended_length_prefix("\\\\?\\UNC\\server\\share")
         == "\\\\server\\share"
     )
 
 
-def test_strip_extended_length_prefix_direct_posix_noop():
+def test_strip_extended_length_prefix_direct_posix_noop() -> None:
     assert strip_extended_length_prefix("/already/posix/style") == "/already/posix/style"
 
 
 # --- repo_relative ---------------------------------------------------------
 
 
-def test_repo_relative_inside_and_outside():
+def test_repo_relative_inside_and_outside() -> None:
     assert repo_relative("/repo/state/a.md", "/repo") == "state/a.md"
     assert repo_relative("C:\\repo\\state\\a.md", "C:\\repo") == "state/a.md"
     assert repo_relative("/other/a.md", "/repo") is None
 
 
-def test_repo_relative_prefix_is_not_containment():
+def test_repo_relative_prefix_is_not_containment() -> None:
     assert repo_relative("/repo2/state/a.md", "/repo") is None
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="symlink creation needs privilege")
-def test_repo_relative_sees_through_a_symlinked_path(tmp_path):
+def test_repo_relative_sees_through_a_symlinked_path(tmp_path: Path) -> None:
     real = tmp_path / "real"
     (real / "state").mkdir(parents=True)
     link = tmp_path / "link"

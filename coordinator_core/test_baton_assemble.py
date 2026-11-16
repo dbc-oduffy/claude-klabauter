@@ -3015,6 +3015,7 @@ class TestApplyBaseClosedDispatchRejection:
             "handoff.supersede_predecessor",
             "handoff-carry-gate",
             "baton-stamp-carried-ids",
+            "baton-stamp-task-list",
         }
 
 
@@ -5465,7 +5466,7 @@ class TestCleanFirstRunIsUnchanged:
         exit_code, report = harness.run()
 
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
-        assert report["landed"] == ["d7", "d1", "d2", "d5", "d6"]
+        assert report["landed"] == ["d7", "d1", "d1t", "d2", "d5", "d6"]
         assert report["replayed"] == []
         assert all(not r["already_satisfied"] for r in report["results"])
         assert report["commit_sha"]
@@ -5566,7 +5567,7 @@ class TestD6AlreadySupersededWedge:
         exit_code, report = harness.run()
 
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
-        assert report["landed"] == ["d7", "d1", "d2", "d5", "d6"]
+        assert report["landed"] == ["d7", "d1", "d1t", "d2", "d5", "d6"]
         assert [e["directive_id"] for e in report["replayed"]] == ["d1"]
         assert successor in report["replayed"][0]["reason"]
         # No duplicate mutation: one successor, same bytes, same edge.
@@ -5625,7 +5626,7 @@ class TestReplayAfterPartialAbortBeforeD6:
         exit_code, report = harness.run()
 
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
-        assert report["landed"] == ["d7", "d1", "d2", "d5", "d6"]
+        assert report["landed"] == ["d7", "d1", "d1t", "d2", "d5", "d6"]
         # A clean re-run, not a replay -- there was no residue to resume.
         assert report["replayed"] == []
         assert harness.archived_predecessor() is not None
@@ -7230,7 +7231,7 @@ class TestStandaloneHandoffApplyEndToEnd:
         )
 
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
-        assert report["landed"] == ["d1", "d2"]
+        assert report["landed"] == ["d1", "d1t", "d2"]
         assert d1_calls == [f"state/handoffs/{today[:7]}/{today}-some-title-here.md"]
         assert (repo / "state" / "handoffs" / today[:7] / f"{today}-some-title-here.md").is_file()
 
@@ -7478,7 +7479,7 @@ class TestD7ApplyEndToEnd:
             ],
         )
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
-        assert report["landed"] == ["d7", "d1", "d2", "d5", "d6"]
+        assert report["landed"] == ["d7", "d1", "d1t", "d2", "d5", "d6"]
         assert report["degraded"] == []
 
     def test_predecessor_with_no_carried_items_leaves_apply_unchanged(
@@ -7490,7 +7491,7 @@ class TestD7ApplyEndToEnd:
             ["handoff_id: hnd-pred-1a2b4c", 'predecessor: "none"'],
         )
         assert exit_code == ba_apply.APPLY_EXIT_OK, report
-        assert report["landed"] == ["d7", "d1", "d2", "d5", "d6"]
+        assert report["landed"] == ["d7", "d1", "d1t", "d2", "d5", "d6"]
         assert report["degraded"] == []
 
     def test_undeclared_state_predecessor_aborts_the_whole_apply(self, tmp_path, monkeypatch):

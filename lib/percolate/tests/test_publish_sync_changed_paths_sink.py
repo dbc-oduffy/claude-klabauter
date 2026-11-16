@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+import pytest
 
 _COORDINATOR_LIB = Path(__file__).resolve().parents[2]
 if str(_COORDINATOR_LIB) not in sys.path:
@@ -58,7 +59,7 @@ def _write(path: Path, text: str) -> None:
 # ---------------------------------------------------------------------------
 # sync_flat_mirror
 # ---------------------------------------------------------------------------
-def test_flat_mirror_changed_paths_populated_on_real_copy(tmp_path):
+def test_flat_mirror_changed_paths_populated_on_real_copy(tmp_path: Path) -> None:
     src, dst = tmp_path / "src", tmp_path / "dst"
     _write(src / "a.txt", "payload")
     changed: "set[str]" = set()
@@ -67,7 +68,7 @@ def test_flat_mirror_changed_paths_populated_on_real_copy(tmp_path):
     assert (dst / "a.txt").read_text(encoding="utf-8") == "payload"
 
 
-def test_flat_mirror_changed_paths_empty_only_on_genuine_no_change(tmp_path, capsys):
+def test_flat_mirror_changed_paths_empty_only_on_genuine_no_change(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """An empty structured set must mean the sweep genuinely determined
     nothing changed — not "we couldn't tell". Seed dst identically to src
     first, then sync again: zero copy decisions were made, so the sink must
@@ -85,7 +86,7 @@ def test_flat_mirror_changed_paths_empty_only_on_genuine_no_change(tmp_path, cap
     assert "UPDATE:" not in out
 
 
-def test_flat_mirror_changed_paths_excludes_deletions(tmp_path):
+def test_flat_mirror_changed_paths_excludes_deletions(tmp_path: Path) -> None:
     """A REMOVE (dst file absent from src) is not new content — must not
     land in the structured sink, matching the pre-existing NEW:/UPDATE:-only
     printed-line contract. `keep.txt` keeps the source non-empty so the
@@ -102,7 +103,7 @@ def test_flat_mirror_changed_paths_excludes_deletions(tmp_path):
     assert changed == set()
 
 
-def test_flat_mirror_changed_paths_survives_a_hostile_print_format(tmp_path, monkeypatch):
+def test_flat_mirror_changed_paths_survives_a_hostile_print_format(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The regression this fix exists for: prove the structured sink does
     NOT depend on parsing this module's own printed text. Monkeypatch
     `print` inside publish_sync to emit an unrecognisable format (what a
@@ -127,7 +128,7 @@ def test_flat_mirror_changed_paths_survives_a_hostile_print_format(tmp_path, mon
 # ---------------------------------------------------------------------------
 # sync_mirror — top-level files + per-plugin files
 # ---------------------------------------------------------------------------
-def test_mirror_changed_paths_top_level_file(tmp_path):
+def test_mirror_changed_paths_top_level_file(tmp_path: Path) -> None:
     src, dst = tmp_path / "src", tmp_path / "dst"
     _write(src / "README.md", "hello")
     changed: "set[str]" = set()
@@ -135,7 +136,7 @@ def test_mirror_changed_paths_top_level_file(tmp_path):
     assert changed == {"README.md"}
 
 
-def test_mirror_changed_paths_per_plugin_file_is_prefixed(tmp_path):
+def test_mirror_changed_paths_per_plugin_file_is_prefixed(tmp_path: Path) -> None:
     src, dst = tmp_path / "src", tmp_path / "dst"
     _write(src / "pluginA" / "file.txt", "payload")
     changed: "set[str]" = set()
@@ -143,7 +144,7 @@ def test_mirror_changed_paths_per_plugin_file_is_prefixed(tmp_path):
     assert changed == {"pluginA/file.txt"}
 
 
-def test_mirror_changed_paths_agrees_with_printed_output_on_normal_sync(tmp_path, capsys):
+def test_mirror_changed_paths_agrees_with_printed_output_on_normal_sync(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """The structured signal and the printed NEW:/UPDATE: lines must agree
     on a normal sync: every rel_path landing in `changed_paths` has a
     corresponding printed line, and vice versa."""
@@ -172,7 +173,7 @@ def test_mirror_changed_paths_agrees_with_printed_output_on_normal_sync(tmp_path
             assert qualified in changed
 
 
-def test_mirror_changed_paths_excludes_orphan_removal(tmp_path, monkeypatch):
+def test_mirror_changed_paths_excludes_orphan_removal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The orphan-plugin-dir sweep (REMOVE DIR) is a deletion, not new
     content — must not land in the structured sink. `keptPlugin` keeps a
     real top-level dir on both sides so this isn't the empty-source case;
@@ -192,7 +193,7 @@ def test_mirror_changed_paths_excludes_orphan_removal(tmp_path, monkeypatch):
     assert changed == set()
 
 
-def test_mirror_changed_paths_default_none_is_a_no_op(tmp_path):
+def test_mirror_changed_paths_default_none_is_a_no_op(tmp_path: Path) -> None:
     """Every pre-existing call site (no `changed_paths` arg) must see
     identical behaviour to before this param existed — no crash, no implicit
     tracking object created."""

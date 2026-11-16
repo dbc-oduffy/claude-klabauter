@@ -411,7 +411,7 @@ def _all_findings() -> list[tuple[str, int, str, str]]:
     return findings
 
 
-def test_no_shell_paste_hazard_in_docstrings_or_comments():
+def test_no_shell_paste_hazard_in_docstrings_or_comments() -> None:
     """Standing gate: live Python docs contain no shell-pasteable redirect.
 
     A finding here is one of two things. Either the line documents a real bash
@@ -430,7 +430,7 @@ def test_no_shell_paste_hazard_in_docstrings_or_comments():
     )
 
 
-def test_baseline_contains_no_stale_entries():
+def test_baseline_contains_no_stale_entries() -> None:
     """The grandfathered baseline must shrink, never rot.
 
     Every entry has to still match a real hazard line. When someone fixes or
@@ -455,7 +455,7 @@ def test_baseline_contains_no_stale_entries():
     )
 
 
-def test_gate_detects_the_original_settings_home_regression(tmp_path):
+def test_gate_detects_the_original_settings_home_regression(tmp_path: Path) -> None:
     """The exact 2026-07-28 span, replanted. Without this the gate would only be
     passing by absence and could not prove it catches a reintroduction."""
     fixture = tmp_path / "fixture_settings_home.py"
@@ -479,7 +479,7 @@ def test_gate_detects_the_original_settings_home_regression(tmp_path):
     assert hazard == "shell-expansion-with-redirect"
 
 
-def test_gate_detects_a_planted_comment_hazard(tmp_path):
+def test_gate_detects_a_planted_comment_hazard(tmp_path: Path) -> None:
     """`#` comments are scanned too -- the hazard is the paste, not the quoting."""
     fixture = tmp_path / "fixture_comment.py"
     fixture.write_text(
@@ -495,7 +495,7 @@ def test_gate_detects_a_planted_comment_hazard(tmp_path):
     assert findings[0][2] == "shell-expansion-with-redirect"
 
 
-def test_gate_detects_a_backticked_version_constraint(tmp_path):
+def test_gate_detects_a_backticked_version_constraint(tmp_path: Path) -> None:
     """The `>=3.11` sibling class: paste-dangerous with no `$` present.
 
     shell-doc-ok: the fixture below must contain the literal hazardous spelling.
@@ -509,7 +509,7 @@ def test_gate_detects_a_backticked_version_constraint(tmp_path):
     assert findings[0][2] == "backticked-version-constraint"
 
 
-def test_gate_ignores_code_prose_and_type_hints(tmp_path):
+def test_gate_ignores_code_prose_and_type_hints(tmp_path: Path) -> None:
     """Negative control -- the exact noise this gate must NOT flag.
 
     Return annotations in real code and quoted in docstrings, `>=` comparisons in
@@ -543,7 +543,7 @@ def test_gate_ignores_code_prose_and_type_hints(tmp_path):
     assert findings == []
 
 
-def test_suppression_requires_a_reason(tmp_path):
+def test_suppression_requires_a_reason(tmp_path: Path) -> None:
     """A bare marker does not suppress; `shell-doc-ok: <reason>` does."""
     bare = tmp_path / "bare"
     bare.mkdir()
@@ -565,7 +565,7 @@ def test_suppression_requires_a_reason(tmp_path):
     assert find_paste_hazards(justified) == []
 
 
-def test_suppression_is_block_scoped_not_file_scoped(tmp_path):
+def test_suppression_is_block_scoped_not_file_scoped(tmp_path: Path) -> None:
     """A justification in one docstring must not silence a hazard in another."""
     fixture = tmp_path / "fixture_two_blocks.py"
     fixture.write_text(

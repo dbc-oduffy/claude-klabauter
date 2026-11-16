@@ -7,6 +7,10 @@ Run: python -m pytest coordinator/bin/tests/test_publish_repo_key_literal_gate.p
 from __future__ import annotations
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = pytest.mark.complete
 
@@ -18,7 +22,7 @@ from types import SimpleNamespace
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
-def _load_publish_module():
+def _load_publish_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location("publish_repo_key_gate_under_test", _BIN_DIR / "publish.py")
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -42,7 +46,7 @@ def _run(tmp_path: Path, section: dict) -> bool:
     return publish.dispatch_end_of_run_repo_key_literal_gate(ctx, [(target, section)])
 
 
-def test_renaming_row_fails_and_prints_literal(tmp_path, capsys):
+def test_renaming_row_fails_and_prints_literal(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     section = {"hooks": ["substitute"], "substitute": [{"key": "repos.x", "value": "repos.y"}]}
     assert _run(tmp_path, section) is False
     err = capsys.readouterr().err
@@ -50,7 +54,7 @@ def test_renaming_row_fails_and_prints_literal(tmp_path, capsys):
     assert "FAILED" in err
 
 
-def test_declared_rename_passes_gate(tmp_path):
+def test_declared_rename_passes_gate(tmp_path: Path) -> None:
     (tmp_path / "mod.py").write_text('KEY = "repos.claude_klabauter"\n', encoding="utf-8")
     section = {
         "hooks": ["substitute"],
@@ -61,7 +65,7 @@ def test_declared_rename_passes_gate(tmp_path):
     assert publish.dispatch_end_of_run_repo_key_literal_gate(ctx, [(target, section)]) is True
 
 
-def test_other_dotted_key_rename_still_fails_gate(tmp_path, capsys):
+def test_other_dotted_key_rename_still_fails_gate(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "mod.py").write_text('KEY = "repos.doe_claude"\n', encoding="utf-8")
     section = {
         "hooks": ["substitute"],
@@ -73,7 +77,7 @@ def test_other_dotted_key_rename_still_fails_gate(tmp_path, capsys):
     assert "repos.doe_claude" in capsys.readouterr().err
 
 
-def test_bare_quoted_codename_in_export_fails_and_prints_count(tmp_path, capsys):
+def test_bare_quoted_codename_in_export_fails_and_prints_count(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "mod.py").write_text('X = "claude_klabauter"\n', encoding="utf-8")
     target = SimpleNamespace(name=_KROW, source_dir=tmp_path)
     ctx = SimpleNamespace(engine_claude_klabauter=object())
@@ -84,7 +88,7 @@ def test_bare_quoted_codename_in_export_fails_and_prints_count(tmp_path, capsys)
     assert "mod.py: \"claude_klabauter\"" in captured.err
 
 
-def test_a_non_klabauter_row_carries_codenames_by_design(tmp_path, capsys):
+def test_a_non_klabauter_row_carries_codenames_by_design(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "mod.py").write_text('X = "claude-klabauter"\n', encoding="utf-8")
     target = SimpleNamespace(name="coordinator-claude", source_dir=tmp_path)
     ctx = SimpleNamespace(engine_claude_klabauter=object())
@@ -92,7 +96,7 @@ def test_a_non_klabauter_row_carries_codenames_by_design(tmp_path, capsys):
     assert "codename" not in capsys.readouterr().out
 
 
-def test_clean_export_reports_zero_residuals_and_passes(tmp_path, capsys):
+def test_clean_export_reports_zero_residuals_and_passes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "mod.py").write_text(_SOURCE, encoding="utf-8")
     target = SimpleNamespace(name=_KROW, source_dir=tmp_path)
     ctx = SimpleNamespace(engine_claude_klabauter=object())
@@ -110,7 +114,7 @@ def _forbid_transform(monkeypatch) -> None:
     def boom(*args, **kwargs):
         raise AssertionError("content transform ran on a cached, unchanged tree")
 
-    def identity(params):
+    def identity(params) -> str:
         pct_engine._apply_content_transforms = real_apply
         try:
             return real_identity(params)
@@ -121,7 +125,7 @@ def _forbid_transform(monkeypatch) -> None:
     monkeypatch.setattr(pct_engine, "_transform_identity", identity)
 
 
-def test_gate_second_run_is_served_from_the_destination_git_dir_and_still_fails_a_rename(tmp_path, monkeypatch):
+def test_gate_second_run_is_served_from_the_destination_git_dir_and_still_fails_a_rename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     src, dest = tmp_path / "src", tmp_path / "dest"
     (dest / ".git").mkdir(parents=True)
     src.mkdir()
@@ -139,7 +143,7 @@ def test_gate_second_run_is_served_from_the_destination_git_dir_and_still_fails_
     assert publish.dispatch_end_of_run_repo_key_literal_gate(ctx, [(target, renaming)]) is False
 
 
-def test_commit_module_attr_gate_second_run_is_served_from_the_destination_git_dir(tmp_path, monkeypatch):
+def test_commit_module_attr_gate_second_run_is_served_from_the_destination_git_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     dest = tmp_path / "dest"
     (dest / ".git").mkdir(parents=True)
     target = SimpleNamespace(name="row", source_dir=tmp_path / "src", dest_dir=dest)
@@ -172,23 +176,23 @@ def test_commit_module_attr_gate_second_run_is_served_from_the_destination_git_d
     assert publish._commit_module_attr_gate(bare, "abc123") is False
 
 
-def test_identity_row_passes(tmp_path):
+def test_identity_row_passes(tmp_path: Path) -> None:
     assert _run(tmp_path, {"hooks": []}) is True
 
 
-def test_unloadable_transform_fails_closed(tmp_path, capsys):
+def test_unloadable_transform_fails_closed(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     section = {"hooks": ["substitute"], "substitute": 5}
     assert _run(tmp_path, section) is False
     assert "raised" in capsys.readouterr().err
 
 
-def test_engine_pin_without_census_module_still_judged(tmp_path, capsys, monkeypatch):
+def test_engine_pin_without_census_module_still_judged(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     """A `--commit` pin predating repo_key_literals must not disable the gate."""
     import builtins
 
     real_import = builtins.__import__
 
-    def no_census(name, globals=None, locals=None, fromlist=(), level=0):
+    def no_census(name, globals=None, locals=None, fromlist=(), level: int = 0) -> ModuleType:
         if name == "coordinator_core.percolate" and fromlist and "repo_key_literals" in fromlist:
             raise ImportError("cannot import name 'repo_key_literals'")
         return real_import(name, globals, locals, fromlist, level)
@@ -209,7 +213,7 @@ def _waiver_file(tmp_path: Path, published: int) -> Path:
     return p
 
 
-def test_exact_waiver_passes_and_is_printed(tmp_path, capsys, monkeypatch):
+def test_exact_waiver_passes_and_is_printed(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     src = tmp_path / "src"
     src.mkdir()
     monkeypatch.setattr(publish._load_repo_key_waivers, "__defaults__", (_waiver_file(tmp_path, 0),))
@@ -218,7 +222,7 @@ def test_exact_waiver_passes_and_is_printed(tmp_path, capsys, monkeypatch):
     assert "WAIVED" in capsys.readouterr().out
 
 
-def test_waiver_with_other_count_still_fails(tmp_path, monkeypatch):
+def test_waiver_with_other_count_still_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     src = tmp_path / "src"
     src.mkdir()
     monkeypatch.setattr(publish._load_repo_key_waivers, "__defaults__", (_waiver_file(tmp_path, 3),))
@@ -234,12 +238,12 @@ def _allowlisted_run(tmp_path: Path, allowlist: str) -> bool:
     return publish.dispatch_end_of_run_repo_key_literal_gate(ctx, [(target, {"hooks": []})])
 
 
-def test_codename_in_a_file_the_allowlist_withholds_is_not_counted(tmp_path, capsys):
+def test_codename_in_a_file_the_allowlist_withholds_is_not_counted(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert _allowlisted_run(tmp_path, "pub.py") is True
     assert "codename residuals for claude-klabauter-row: 0" in capsys.readouterr().out
 
 
-def test_codename_in_a_published_file_still_fails_under_an_allowlist(tmp_path, capsys):
+def test_codename_in_a_published_file_still_fails_under_an_allowlist(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     assert _allowlisted_run(tmp_path, "pub.py,held.py") is False
     assert "codename residuals for claude-klabauter-row: 1" in capsys.readouterr().out
 
@@ -264,27 +268,27 @@ def _install_md_run(src: Path, allowlist: str = "INSTALL.md") -> bool:
     return publish.dispatch_end_of_run_repo_key_literal_gate(ctx, [(target, section)])
 
 
-def test_gitignored_scratch_copy_is_not_scanned_on_a_dot_source_install_md_row(tmp_path):
+def test_gitignored_scratch_copy_is_not_scanned_on_a_dot_source_install_md_row(tmp_path: Path) -> None:
     src = _git_source(tmp_path, {"INSTALL.md": "hello\n", ".gitignore": "scratch/\n"})
     (src / "scratch").mkdir()
     (src / "scratch" / "_engine_root.py").write_text(_SOURCE, encoding="utf-8")
     assert _install_md_run(src) is True
 
 
-def test_untracked_drifting_file_is_not_scanned(tmp_path):
+def test_untracked_drifting_file_is_not_scanned(tmp_path: Path) -> None:
     src = _git_source(tmp_path, {"INSTALL.md": "hello\n"})
     (src / "other.py").write_text(_SOURCE, encoding="utf-8")
     assert _install_md_run(src) is True
 
 
-def test_tracked_allowlisted_drift_still_fails(tmp_path, capsys):
+def test_tracked_allowlisted_drift_still_fails(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     src = _git_source(tmp_path, {"INSTALL.md": "hello\n", "mod.py": _SOURCE})
     assert _install_md_run(src, "INSTALL.md,mod.py") is False
     err = capsys.readouterr().err
     assert "repos.x" in err and "mod.py" in err
 
 
-def test_tracked_file_the_allowlist_withholds_is_not_scanned(tmp_path):
+def test_tracked_file_the_allowlist_withholds_is_not_scanned(tmp_path: Path) -> None:
     src = _git_source(tmp_path, {"INSTALL.md": "hello\n", "held.py": _SOURCE})
     assert _install_md_run(src) is True
 
@@ -306,7 +310,7 @@ def _many_rows(tmp_path: Path, count: int) -> "tuple[list, SimpleNamespace]":
     return rows, SimpleNamespace(engine_claude_klabauter=object())
 
 
-def test_a_round_of_many_rows_is_served_from_cache_with_identical_verdicts(tmp_path, monkeypatch):
+def test_a_round_of_many_rows_is_served_from_cache_with_identical_verdicts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rows, ctx = _many_rows(tmp_path, 14)
     clean = rows[1:]
     assert publish.dispatch_end_of_run_repo_key_literal_gate(ctx, clean) is True
@@ -317,7 +321,7 @@ def test_a_round_of_many_rows_is_served_from_cache_with_identical_verdicts(tmp_p
     assert publish.dispatch_end_of_run_repo_key_literal_gate(ctx, rows) is False
 
 
-def test_allowlist_denial_matches_path_covers_for_every_shape(tmp_path):
+def test_allowlist_denial_matches_path_covers_for_every_shape(tmp_path: Path) -> None:
     allowlist = "docs/,pub.py,lib/keep,!docs/secret,!lib/keep/old.py"
     target = SimpleNamespace(allowlist=allowlist)
     rels = [

@@ -1,5 +1,6 @@
-"""dispatch.land_run refuses at its terminal commit a DONE chunk whose plan ADDS an absolute machine path,
-through `ceremony.commit_v2`'s in-process abs-path gate; the clean variant lands.
+"""dispatch.land_run lands a DONE chunk whose plan ADDS an absolute machine path and reports the gate's
+diagnostics as `abs_path_advisory` (false-refusal probe: no deny-registry entry covers it); the clean variant
+lands with no advisory.
 
 Path literals are built from parts so this file carries none.
 """
@@ -30,7 +31,7 @@ def _head(repo: Path) -> str:
 
 
 @pytest.fixture
-def run(tmp_path, monkeypatch):
+def run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A built run whose one DONE chunk writes `a.py` and the plan `docs/plans/q.md`; returns `(repo, land)`."""
     repo, script = driver.build_fixture(tmp_path)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", driver.SESSION_ID)
@@ -57,22 +58,22 @@ def run(tmp_path, monkeypatch):
     return repo, land
 
 
-def test_a_chunk_plan_adding_an_absolute_path_is_refused_at_the_terminal_commit(run):
+def test_a_chunk_plan_adding_an_absolute_path_lands_with_an_advisory(run):
     repo, land = run
     (repo / _CHUNK_PLAN).write_text("# q\nsee " + _DRIVE + "\n", encoding="utf-8")
     before = _head(repo)
 
     out = land()
 
-    assert out["committed"] is False, out
-    text = str(out.get("error") or out)
-    assert "abs_path_citation_gate" in text, out
-    assert f"{_CHUNK_PLAN}:2" in text
+    assert out["committed"] is True, out
+    assert out.get("refused") is None, out
+    assert _head(repo) != before
+    text = " ".join(out["abs_path_advisory"])
+    assert f"{_CHUNK_PLAN}:2" in text, out
     assert "abs-path-ok" in text
-    assert _head(repo) == before
 
 
-def test_the_clean_chunk_plan_lands(run):
+def test_the_clean_chunk_plan_lands(run) -> None:
     repo, land = run
     (repo / _CHUNK_PLAN).write_text("# q\nclean prose\n", encoding="utf-8")
     before = _head(repo)
@@ -80,4 +81,5 @@ def test_the_clean_chunk_plan_lands(run):
     out = land()
 
     assert out["committed"] is True, out
+    assert "abs_path_advisory" not in out, out
     assert _head(repo) != before

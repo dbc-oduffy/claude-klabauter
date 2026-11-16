@@ -8,22 +8,26 @@ from coordinator_core.ops.dispatch_emit.pathspec import (
     collapse_test_scope,
 )
 from coordinator_core.ops.dispatch_emit.spine_read import _is_memo_send_row
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from re import Pattern
 
 
-def test_memo_send_row_is_detected_by_brief_kind_and_outbox_write():
+def test_memo_send_row_is_detected_by_brief_kind_and_outbox_write() -> None:
     assert not _is_memo_send_row({"brief": "run `cross-repo-memo send` to the peer"})
     assert _is_memo_send_row({"kind": "memo-send"})
     assert not _is_memo_send_row({"brief": "edit a module", "writes": ["a.py"]})
 
 
-def test_a_memo_outbox_directory_surface_or_writes_under_is_a_memo_send_row():
+def test_a_memo_outbox_directory_surface_or_writes_under_is_a_memo_send_row() -> None:
     # example-game-repo-d2 idk-01 C13: doc-edit, writes: [], writes_under the outbox, a "memo lane" body.
     assert _is_memo_send_row({"surface": "state/memo-outbox/", "writes": [], "writes_under": ["state/memo-outbox/"]})
     assert _is_memo_send_row({"writes_under": [".coordinator-local/memo-outbox"]})
     assert not _is_memo_send_row({"surface": "state/memo-outbox-notes/", "writes_under": ["docs/"]})
 
 
-def test_memo_send_row_is_narrated_as_an_em_step():
+def test_memo_send_row_is_narrated_as_an_em_step() -> None:
     out = emit._excluded_rows_narration(
         [{"id": "C9", "reason": "em-performed", "detail": "EM STEP: cross-repo memo send"}]
     )
@@ -31,7 +35,7 @@ def test_memo_send_row_is_narrated_as_an_em_step():
     assert "OWED WORK" in out
 
 
-def test_verification_row_head_drops_the_write_tool_only_rule():
+def test_verification_row_head_drops_the_write_tool_only_rule() -> None:
     assert emit._WRITE_TOOL_ONLY_CLAUSE in emit._prompt_head(None)
     assert "harness itself denies the Write tool" in emit._WRITE_TOOL_ONLY_CLAUSE
     assert "orphan" not in emit._WRITE_TOOL_ONLY_CLAUSE
@@ -42,7 +46,7 @@ def test_verification_row_head_drops_the_write_tool_only_rule():
     assert not emit._is_verification_row(type("R", (), {"change_kind": "code"})())
 
 
-def test_test_candidate_prefers_the_existing_sibling_tests_dir(tmp_path: Path):
+def test_test_candidate_prefers_the_existing_sibling_tests_dir(tmp_path: Path) -> None:
     (tmp_path / "pkg" / "sub" / "tests").mkdir(parents=True)
     (tmp_path / "tests").mkdir()
     assert candidate_test_additions(["pkg/sub/mod.py"], tmp_path) == [
@@ -50,7 +54,7 @@ def test_test_candidate_prefers_the_existing_sibling_tests_dir(tmp_path: Path):
     ]
 
 
-def test_test_candidate_falls_to_an_ancestor_tests_dir_when_no_sibling(tmp_path: Path):
+def test_test_candidate_falls_to_an_ancestor_tests_dir_when_no_sibling(tmp_path: Path) -> None:
     (tmp_path / "pkg" / "sub").mkdir(parents=True)
     (tmp_path / "tests").mkdir()
     assert candidate_test_additions(["pkg/sub/mod.py"], tmp_path) == [
@@ -58,14 +62,14 @@ def test_test_candidate_falls_to_an_ancestor_tests_dir_when_no_sibling(tmp_path:
     ]
 
 
-def test_test_candidate_is_skipped_when_the_test_is_already_declared(tmp_path: Path):
+def test_test_candidate_is_skipped_when_the_test_is_already_declared(tmp_path: Path) -> None:
     (tmp_path / "pkg" / "tests").mkdir(parents=True)
     assert candidate_test_additions(
         ["pkg/mod.py", "tests/test_mod.py"], tmp_path
     ) == []
 
 
-def test_test_candidate_uses_pytest_testpaths(tmp_path: Path):
+def test_test_candidate_uses_pytest_testpaths(tmp_path: Path) -> None:
     (tmp_path / "pkg").mkdir()
     (tmp_path / "suite").mkdir()
     (tmp_path / "pyproject.toml").write_text(
@@ -74,7 +78,7 @@ def test_test_candidate_uses_pytest_testpaths(tmp_path: Path):
     assert candidate_test_additions(["pkg/mod.py"], tmp_path) == ["suite/test_mod.py"]
 
 
-def test_test_runner_scope_collapses_a_name_twin_to_the_one_on_disk(tmp_path: Path):
+def test_test_runner_scope_collapses_a_name_twin_to_the_one_on_disk(tmp_path: Path) -> None:
     (tmp_path / "tests").mkdir()
     (tmp_path / "tests" / "test_mod.py").write_text("", encoding="utf-8")
     assert collapse_test_scope(
@@ -86,13 +90,13 @@ def test_test_runner_scope_collapses_a_name_twin_to_the_one_on_disk(tmp_path: Pa
     assert "pkg/tests/test_mod.py" not in brief
 
 
-def test_every_row_head_carries_the_heavy_launch_floor():
+def test_every_row_head_carries_the_heavy_launch_floor() -> None:
     # The subagent heavy-UE guard denies these launches everywhere, so the brief says so up front.
     assert emit._HEAVY_LAUNCH_FLOOR_CLAUSE in emit._prompt_head(None)
     assert emit._HEAVY_LAUNCH_FLOOR_CLAUSE in emit._prompt_head(None, verification=True)
 
 
-def test_every_row_head_carries_the_heavy_probe_declared_clause():
+def test_every_row_head_carries_the_heavy_probe_declared_clause() -> None:
     clause = emit._HEAVY_PROBE_DECLARED_CLAUSE
     assert "peak" in clause and "GO" in clause and "stop and report" in clause
     for required in ("4 GiB", "live store", "STOP report", "spawn_in_capped_job", "uncapped `python -`"):
@@ -104,13 +108,13 @@ def test_every_row_head_carries_the_heavy_probe_declared_clause():
     assert clause in emit._prompt_head(None, verification=True)
 
 
-def _js_re(rx: str):
+def _js_re(rx: str) -> "Pattern[str]":
     import re
 
     return re.compile(rx[1 : rx.rindex("/")].replace(r"<\/", "</"))
 
 
-def test_a_blocked_status_after_prose_is_not_read_as_done():
+def test_a_blocked_status_after_prose_is_not_read_as_done() -> None:
     import json
 
     non_done, blocked = _js_re(emit._NON_DONE_STATUS_JS_RE), _js_re(emit._BLOCKED_STATUS_JS_RE)
@@ -129,24 +133,24 @@ def _memo_row(**kw):
     return WaveRow("C9", "send the memo", "s", (), [], [], body="send it", **kw)
 
 
-def test_a_memo_send_row_routes_to_the_executor_whatever_its_change_kind():
+def test_a_memo_send_row_routes_to_the_executor_whatever_its_change_kind() -> None:
     for kind in ("doc-edit", "wiki-new", None):
         row = _memo_row(memo_send=_MEMO_FIELDS, change_kind=kind)
         assert emit._row_agent_type(row) == "coordinator:executor"
 
 
-def test_a_memo_send_row_declared_agent_type_wins():
+def test_a_memo_send_row_declared_agent_type_wins() -> None:
     row = _memo_row(memo_send=_MEMO_FIELDS, agent_type="coordinator:workflow-maker")
     assert emit._row_agent_type(row) == "coordinator:workflow-maker"
 
 
-def test_a_memo_send_row_prompt_names_the_send_verb_slug_and_receipt():
+def test_a_memo_send_row_prompt_names_the_send_verb_slug_and_receipt() -> None:
     prompt = emit._row_prompt(_memo_row(memo_send=_MEMO_FIELDS), "docs/plans/p.md")
     assert "cross-repo-memo send peer-note" in prompt
     assert "sent/peer-note.md" in prompt
 
 
-def test_a_row_without_memo_send_prompts_byte_identically():
+def test_a_row_without_memo_send_prompts_byte_identically() -> None:
     plain = emit._row_prompt(_memo_row(), "docs/plans/p.md")
     assert plain == emit._row_prompt(_memo_row(memo_send=None), "docs/plans/p.md")
     assert "Memo send for row" not in plain

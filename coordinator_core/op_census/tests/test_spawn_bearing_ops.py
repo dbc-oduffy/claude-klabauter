@@ -9,10 +9,11 @@ from coordinator_core.op_census import spawn_bearing_ops
 from coordinator_core.op_census.spawn_bearing_ops import OpEntrypoint, RegistryDivergence
 from coordinator_core.tests import test_no_uncounted_spawn_on_budgeted_path as _gate
 from coordinator_core.tests import test_no_unbatched_per_item_git_spawn as _gate_scope
+from pathlib import Path
 
 
 def _fake_handler(module_name: str, func_name: str):
-    def _fn():
+    def _fn() -> None:
         return None
 
     _fn.__module__ = module_name
@@ -20,20 +21,20 @@ def _fake_handler(module_name: str, func_name: str):
     return _fn
 
 
-def test_live_registry_op_names_is_a_superset_including_ping():
+def test_live_registry_op_names_is_a_superset_including_ping() -> None:
     names = spawn_bearing_ops.live_registry_op_names()
     assert isinstance(names, frozenset)
     assert "ping" in names
     assert len(names) > 100
 
 
-def test_fast_path_op_names_matches_registry_map_module():
+def test_fast_path_op_names_matches_registry_map_module() -> None:
     from coordinator_core.ops._registry_map import OP_MODULE_MAP
 
     assert spawn_bearing_ops.fast_path_op_names() == frozenset(OP_MODULE_MAP.keys())
 
 
-def test_registry_divergence_agrees_property():
+def test_registry_divergence_agrees_property() -> None:
     agreeing = RegistryDivergence(only_in_live=frozenset(), only_in_fast_path=frozenset())
     assert agreeing.agrees
 
@@ -44,7 +45,7 @@ def test_registry_divergence_agrees_property():
     assert not fast_only.agrees
 
 
-def test_registry_divergence_computes_real_symmetric_difference():
+def test_registry_divergence_computes_real_symmetric_difference() -> None:
     divergence = spawn_bearing_ops.registry_divergence()
     live = spawn_bearing_ops.live_registry_op_names()
     fast = spawn_bearing_ops.fast_path_op_names()
@@ -52,7 +53,7 @@ def test_registry_divergence_computes_real_symmetric_difference():
     assert divergence.only_in_fast_path == frozenset(fast - live)
 
 
-def test_resolve_op_entrypoints_resolves_a_real_live_op():
+def test_resolve_op_entrypoints_resolves_a_real_live_op() -> None:
     live_ops = spawn_bearing_ops.live_registry_op_names()
     assert "ping" in live_ops
     entrypoints = spawn_bearing_ops.resolve_op_entrypoints(["ping"])
@@ -64,7 +65,7 @@ def test_resolve_op_entrypoints_resolves_a_real_live_op():
     assert ep.unresolved_reason is None
 
 
-def test_resolve_op_entrypoints_unknown_op_name_is_evidence_not_a_crash():
+def test_resolve_op_entrypoints_unknown_op_name_is_evidence_not_a_crash() -> None:
     entrypoints = spawn_bearing_ops.resolve_op_entrypoints(
         ["not.a.real.op"], registry={"ping": _fake_handler("coordinator_core.ops.ping", "_ping")}
     )
@@ -74,7 +75,7 @@ def test_resolve_op_entrypoints_unknown_op_name_is_evidence_not_a_crash():
     assert "not present in registry" in ep.unresolved_reason
 
 
-def test_resolve_op_entrypoints_module_with_no_file_attribute():
+def test_resolve_op_entrypoints_module_with_no_file_attribute() -> None:
     handler = _fake_handler("no_such_module_in_sys_modules_registry_test", "some_fn")
     entrypoints = spawn_bearing_ops.resolve_op_entrypoints(["x.op"], registry={"x.op": handler})
     ep = entrypoints["x.op"]
@@ -83,7 +84,7 @@ def test_resolve_op_entrypoints_module_with_no_file_attribute():
     assert "no resolvable __file__" in ep.unresolved_reason
 
 
-def test_resolve_op_entrypoints_never_raises_on_a_bare_object_handler():
+def test_resolve_op_entrypoints_never_raises_on_a_bare_object_handler() -> None:
     class _NoNameAttr:
         pass
 
@@ -95,7 +96,7 @@ def test_resolve_op_entrypoints_never_raises_on_a_bare_object_handler():
     assert ep.relpath is not None
 
 
-def test_spawn_sites_by_relpath_over_synthetic_tree(tmp_path, monkeypatch):
+def test_spawn_sites_by_relpath_over_synthetic_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(spawn_bearing_ops, "_REPO_ROOT", tmp_path)
 
     spawning = tmp_path / "spawning.py"
@@ -114,13 +115,13 @@ def test_spawn_sites_by_relpath_over_synthetic_tree(tmp_path, monkeypatch):
     assert result["quiet.py"] == ()
 
 
-def test_spawn_sites_by_relpath_missing_file_resolves_to_empty(tmp_path, monkeypatch):
+def test_spawn_sites_by_relpath_missing_file_resolves_to_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(spawn_bearing_ops, "_REPO_ROOT", tmp_path)
     result = spawn_bearing_ops.spawn_sites_by_relpath(["does_not_exist.py"])
     assert result == {"does_not_exist.py": ()}
 
 
-def test_spawn_sites_by_relpath_unparseable_file_resolves_to_empty(tmp_path, monkeypatch):
+def test_spawn_sites_by_relpath_unparseable_file_resolves_to_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(spawn_bearing_ops, "_REPO_ROOT", tmp_path)
     broken = tmp_path / "broken.py"
     broken.write_text("def (((( not python\n", encoding="utf-8")
@@ -128,7 +129,7 @@ def test_spawn_sites_by_relpath_unparseable_file_resolves_to_empty(tmp_path, mon
     assert result == {"broken.py": ()}
 
 
-def test_ops_with_spawn_evidence_module_granularity(tmp_path, monkeypatch):
+def test_ops_with_spawn_evidence_module_granularity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(spawn_bearing_ops, "_REPO_ROOT", tmp_path)
 
     shared = tmp_path / "shared.py"
@@ -155,7 +156,7 @@ def test_ops_with_spawn_evidence_module_granularity(tmp_path, monkeypatch):
     assert evidence["op.a"] == evidence["op.b"]
 
 
-def test_ops_with_spawn_evidence_empty_when_no_module_spawns(tmp_path, monkeypatch):
+def test_ops_with_spawn_evidence_empty_when_no_module_spawns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(spawn_bearing_ops, "_REPO_ROOT", tmp_path)
     quiet = tmp_path / "quiet.py"
     quiet.write_text("def handler():\n    return None\n", encoding="utf-8")
@@ -187,7 +188,7 @@ def _synthetic_scope(monkeypatch, tmp_path):
     return root
 
 
-def test_ops_with_spawn_evidence_function_granular_keys_on_op_site_pair(tmp_path, monkeypatch):
+def test_ops_with_spawn_evidence_function_granular_keys_on_op_site_pair(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _synthetic_scope(monkeypatch, tmp_path)
     shared = root / "shared.py"
     shared.write_text(
@@ -213,7 +214,7 @@ def test_ops_with_spawn_evidence_function_granular_keys_on_op_site_pair(tmp_path
     assert function_granular["op.a"][0].enclosing == "handler_a"
 
 
-def test_ops_with_spawn_evidence_function_granular_follows_transitive_call(tmp_path, monkeypatch):
+def test_ops_with_spawn_evidence_function_granular_follows_transitive_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _synthetic_scope(monkeypatch, tmp_path)
     mod = root / "chain.py"
     mod.write_text(
@@ -231,8 +232,8 @@ def test_ops_with_spawn_evidence_function_granular_follows_transitive_call(tmp_p
 
 
 def test_ops_with_spawn_evidence_function_granular_unresolvable_entry_is_omitted_not_widened(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     root = _synthetic_scope(monkeypatch, tmp_path)
     shared = root / "shared2.py"
     shared.write_text(
@@ -254,8 +255,8 @@ def test_ops_with_spawn_evidence_function_granular_unresolvable_entry_is_omitted
 
 
 def test_ops_with_spawn_evidence_function_granular_nested_site_attributes_to_top_level(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """AC3 pin on shipped behaviour: a spawn nested inside a closure still
     attributes to its TOP-LEVEL enclosing function
     (`site.enclosing.split(".")[0]`, the C-13 gate's own reused predicate),
@@ -278,7 +279,7 @@ def test_ops_with_spawn_evidence_function_granular_nested_site_attributes_to_top
     assert result["op.nested"][0].enclosing == "outer._inner"
 
 
-def test_ops_with_spawn_evidence_function_granular_follows_to_thread_hop(tmp_path, monkeypatch):
+def test_ops_with_spawn_evidence_function_granular_follows_to_thread_hop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _synthetic_scope(monkeypatch, tmp_path)
     mod = root / "thread_hop.py"
     mod.write_text(
@@ -301,7 +302,7 @@ def test_ops_with_spawn_evidence_function_granular_follows_to_thread_hop(tmp_pat
     assert function_granular["op.thread_hop"][0].enclosing == "helper"
 
 
-def test_ops_with_spawn_evidence_function_granular_follows_run_in_executor_hop(tmp_path, monkeypatch):
+def test_ops_with_spawn_evidence_function_granular_follows_run_in_executor_hop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _synthetic_scope(monkeypatch, tmp_path)
     mod = root / "executor_hop.py"
     mod.write_text(
@@ -323,8 +324,8 @@ def test_ops_with_spawn_evidence_function_granular_follows_run_in_executor_hop(t
 
 
 def test_ops_with_spawn_evidence_function_granular_unresolvable_thread_hop_is_counted(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """AC15's own residual-gap requirement: a thread-hop call whose callee argument is not
     statically resolvable (here, a `getattr`-shaped dynamic dispatch) yields no edge -- the
     site stays invisible to `function_granular` exactly as before C8 -- but the gap is COUNTED
@@ -349,7 +350,7 @@ def test_ops_with_spawn_evidence_function_granular_unresolvable_thread_hop_is_co
 
 
 @pytest.mark.cadence
-def test_function_granular_width_probe_timing():
+def test_function_granular_width_probe_timing() -> None:
     live_ops = sorted(spawn_bearing_ops.live_registry_op_names())
     all_entrypoints = spawn_bearing_ops.resolve_op_entrypoints(live_ops)
     resolved = [
@@ -377,7 +378,7 @@ def test_function_granular_width_probe_timing():
     assert single_closure_s >= 0
 
 
-def test_ops_with_spawn_evidence_function_granular_follows_a_dispatch_table(tmp_path, monkeypatch):
+def test_ops_with_spawn_evidence_function_granular_follows_a_dispatch_table(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Synthetic mirror of the D8 oracle at `ops_with_spawn_evidence` level: `handler_a` spawns
     only by LOADING a module-level dict of function references and handing it BY REFERENCE to
     `runner.execute`, which invokes it by runtime key lookup -- never a literal `ast.Call` on the
@@ -429,7 +430,7 @@ def test_ops_with_spawn_evidence_function_granular_follows_a_dispatch_table(tmp_
 
 # cadence: whole-repo transitive spawn scan (~41s); the by-reference dispatch edge is unit-covered by the synthetic function_granular test above.
 @pytest.mark.cadence
-def test_merge_assemble_apply_measures_non_empty_at_function_granularity():
+def test_merge_assemble_apply_measures_non_empty_at_function_granularity() -> None:
     """AC21b -- the exact oracle the bug-backlog row names: `merge_assemble.apply` dispatches
     every one of its subprocess-spawning handlers through its own closed `_CLI_DISPATCH` dict,
     passed BY REFERENCE into `apply_base.execute_directives`. Derives the count live against the

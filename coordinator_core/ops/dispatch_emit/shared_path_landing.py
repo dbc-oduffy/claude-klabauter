@@ -20,12 +20,24 @@ LEDGER_WITHHELD_PRODUCT = "ledger_withheld_product"
 _PEER_HELD = "peer-held"
 
 
+def _same_sizing(root: Path, holder: str, own_run_id: Optional[str]) -> bool:
+    """True when ``holder`` is an earlier run (run ids sort by mint time) recording the same non-empty
+    sizing as ``own_run_id``: one lineage never holds against its own successor, and a later run never
+    escapes an earlier live one."""
+    if not own_run_id or holder >= own_run_id:
+        return False
+    from coordinator_core.ops import warp_run_deliverable
+
+    sizing = warp_run_deliverable.record_sizing_rel(root, holder)
+    return bool(sizing) and sizing == warp_run_deliverable.record_sizing_rel(root, own_run_id)
+
+
 def released_holder(root: Path, holder: str, own_run_id: Optional[str], own_plan: Optional[str] = None) -> bool:
     """True when ``holder`` names a run record whose claim no longer holds against ``own_run_id``'s landing.
 
     A halted or resumed run that ``halted_hold_release.release_reason`` frees (successor, superseded or
     shipped sizing, recorded landed) is released, and so is a run with no halt marker whose
-    ``run-stage.json`` reads ``landed``; a holder that is not a run record (a session id) or
+    ``run-stage.json`` reads ``landed`` or that records ``own_run_id``'s own sizing; a holder that is not a run record (a session id) or
     whose record is unreadable (OSError or ValueError) is not."""
     try:
         from coordinator_core.ops.dispatch_emit import halted_hold_release
@@ -33,7 +45,7 @@ def released_holder(root: Path, holder: str, own_run_id: Optional[str], own_plan
 
         if not (record_dir(Path(root), holder) / "halted.json").is_file():
             stage = read_run_stage(Path(root), holder)
-            return bool(stage) and stage.get("stage") == "landed"
+            return (bool(stage) and stage.get("stage") == "landed") or _same_sizing(Path(root), holder, own_run_id)
         return halted_hold_release.release_reason(Path(root), holder, own_run_id, own_plan) is not None
     except (OSError, ValueError):  # unreadable record: the holder holds
         return False

@@ -23,6 +23,8 @@ from __future__ import annotations
 import json
 
 from coordinator_core.warm import supervisor
+from pathlib import Path
+import pytest
 
 
 def _svc(monkeypatch, tmp_path):
@@ -33,22 +35,22 @@ def _svc(monkeypatch, tmp_path):
 
 
 class TestTheFiveAnswersAreDistinguishable:
-    def test_absent_is_its_own_cause(self, monkeypatch, tmp_path):
+    def test_absent_is_its_own_cause(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         _svc(monkeypatch, tmp_path)
         record, cause = supervisor.read_discovery_with_cause()
         assert record is None
         assert cause == supervisor.CAUSE_RECORD_ABSENT
 
     def test_a_well_formed_record_reports_present_and_returns_itself(
-        self, monkeypatch, tmp_path
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         path = _svc(monkeypatch, tmp_path)
         path.write_text(json.dumps({"port": 1234, "pid": 9}), encoding="utf-8")
         record, cause = supervisor.read_discovery_with_cause()
         assert cause == supervisor.CAUSE_RECORD_PRESENT
         assert record == {"port": 1234, "pid": 9}
 
-    def test_a_torn_parse_is_not_reported_as_absent(self, monkeypatch, tmp_path):
+    def test_a_torn_parse_is_not_reported_as_absent(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         path = _svc(monkeypatch, tmp_path)
         path.write_text('{"port": 12', encoding="utf-8")
         record, cause = supervisor.read_discovery_with_cause()
@@ -56,15 +58,15 @@ class TestTheFiveAnswersAreDistinguishable:
         assert cause == supervisor.CAUSE_RECORD_UNPARSEABLE
 
     def test_valid_json_that_is_not_an_object_is_malformed_not_torn(
-        self, monkeypatch, tmp_path
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         path = _svc(monkeypatch, tmp_path)
         path.write_text("[1, 2, 3]", encoding="utf-8")
         record, cause = supervisor.read_discovery_with_cause()
         assert record is None
         assert cause == supervisor.CAUSE_RECORD_MALFORMED
 
-    def test_an_unreadable_record_is_not_reported_as_absent(self, monkeypatch, tmp_path):
+    def test_an_unreadable_record_is_not_reported_as_absent(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         path = _svc(monkeypatch, tmp_path)
         path.write_text("{}", encoding="utf-8")
 
@@ -76,7 +78,7 @@ class TestTheFiveAnswersAreDistinguishable:
         assert record is None
         assert cause == supervisor.CAUSE_RECORD_UNREADABLE
 
-    def test_every_cause_returned_is_a_declared_one(self, monkeypatch, tmp_path):
+    def test_every_cause_returned_is_a_declared_one(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """No cause string reaches a caller that `READ_CAUSES` does not name --
         the same closed-set discipline `telemetry.record_degrade` holds for its
         own kinds, so nothing downstream has to attribute an unknown token."""
@@ -93,12 +95,12 @@ class TestTheFiveAnswersAreDistinguishable:
 
 class TestReadDiscoveryIsUnchangedByTheSplit:
 
-    def test_it_still_returns_the_bare_record(self, monkeypatch, tmp_path):
+    def test_it_still_returns_the_bare_record(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         path = _svc(monkeypatch, tmp_path)
         path.write_text(json.dumps({"port": 7}), encoding="utf-8")
         assert supervisor.read_discovery() == {"port": 7}
 
-    def test_it_still_returns_none_for_every_failure_shape(self, monkeypatch, tmp_path):
+    def test_it_still_returns_none_for_every_failure_shape(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         path = _svc(monkeypatch, tmp_path)
         for content in ["{oops", "[1]", '"a string"']:
             path.write_text(content, encoding="utf-8")
@@ -108,26 +110,26 @@ class TestReadDiscoveryIsUnchangedByTheSplit:
 
 
 class TestDiagnoseNamesWhereItLooked:
-    def test_present_says_the_engine_side_is_not_the_problem(self, monkeypatch, tmp_path):
+    def test_present_says_the_engine_side_is_not_the_problem(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         path = _svc(monkeypatch, tmp_path)
         path.write_text(json.dumps({"port": 4321, "pid": 5}), encoding="utf-8")
         out = supervisor.diagnose_no_backend()
         assert out["cause"] == supervisor.CAUSE_RECORD_PRESENT
         assert out["record"]["port"] == 4321
 
-    def test_it_always_names_the_file_it_consulted(self, monkeypatch, tmp_path):
+    def test_it_always_names_the_file_it_consulted(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         path = _svc(monkeypatch, tmp_path)
         out = supervisor.diagnose_no_backend()
         assert out["discovery_path"] == str(path)
         assert out["svc_dir"] == str(path.parent)
 
-    def test_two_engine_roots_resolve_two_records(self, tmp_path):
+    def test_two_engine_roots_resolve_two_records(self, tmp_path: Path) -> None:
         a = supervisor.diagnose_no_backend(tmp_path / "root-a")
         b = supervisor.diagnose_no_backend(tmp_path / "root-b")
         assert a["svc_dir"] != b["svc_dir"]
         assert a["engine_root"] != b["engine_root"]
 
-    def test_it_reports_rather_than_raises_when_the_root_will_not_resolve(self):
+    def test_it_reports_rather_than_raises_when_the_root_will_not_resolve(self) -> None:
 
         def _boom(*_args, **_kwargs):
             raise RuntimeError("no root")
@@ -136,7 +138,7 @@ class TestDiagnoseNamesWhereItLooked:
         assert out["cause"] == "engine_root_unresolvable"
         assert "no root" in out["detail"]
 
-    def test_the_result_is_json_serialisable(self, monkeypatch, tmp_path):
+    def test_the_result_is_json_serialisable(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         path = _svc(monkeypatch, tmp_path)
         path.write_text(json.dumps({"port": 1}), encoding="utf-8")
         json.dumps(supervisor.diagnose_no_backend())
@@ -144,7 +146,7 @@ class TestDiagnoseNamesWhereItLooked:
 
 class TestOneReaderServesBothDoors:
 
-    def test_both_doors_delegate_to_the_one_reader(self, monkeypatch, tmp_path):
+    def test_both_doors_delegate_to_the_one_reader(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         from coordinator_core.warm import breadcrumb, front_door
 
         seen = []
@@ -160,14 +162,14 @@ class TestOneReaderServesBothDoors:
         assert len(seen) == 2
         assert seen[0] != seen[1]
 
-    def test_the_two_doors_read_different_files(self, tmp_path):
+    def test_the_two_doors_read_different_files(self, tmp_path: Path) -> None:
         from coordinator_core.warm import front_door
 
         assert supervisor.discovery_path(tmp_path) != front_door.discovery_path(tmp_path)
 
     def test_front_door_read_discovery_still_returns_a_bare_record(
-        self, monkeypatch, tmp_path
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         from coordinator_core.warm import front_door
 
         path = tmp_path / "warm-front-door.json"
@@ -178,8 +180,8 @@ class TestOneReaderServesBothDoors:
         assert front_door.read_discovery() is None
 
     def test_diagnose_can_explain_the_front_door_without_a_second_copy(
-        self, monkeypatch, tmp_path
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         from coordinator_core.warm import front_door
 
         path = tmp_path / "warm-front-door.json"
@@ -192,7 +194,7 @@ class TestOneReaderServesBothDoors:
         assert out["discovery_path"] == str(path)
         assert out["record"]["port"] == 47623
 
-    def test_the_cause_vocabulary_has_exactly_one_definition(self):
+    def test_the_cause_vocabulary_has_exactly_one_definition(self) -> None:
         from coordinator_core.warm import breadcrumb
 
         assert supervisor.READ_CAUSES is breadcrumb.READ_CAUSES

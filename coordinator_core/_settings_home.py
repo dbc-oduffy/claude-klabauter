@@ -353,7 +353,7 @@ def _is_windows() -> bool:
     return os.name == "nt"
 
 
-def normalize_native_path(raw):
+def normalize_native_path(raw) -> Path:
     return Path(native_path_form(raw))
 
 

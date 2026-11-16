@@ -10,6 +10,7 @@ from coordinator_core.completion_receipts.model import validate
 from coordinator_core.completion_receipts.store import ReceiptWriteError
 from coordinator_core.ops.dispatch_emit import completion_receipt as cr
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest
+from pathlib import Path
 
 NOW = "2026-10-01T18:00:00Z"
 SID = "d7b9dc1a-1455-43e8-922f-87e734b5634e"
@@ -36,13 +37,13 @@ def _plan(deliverable: str, rows: list[tuple[str, str]], extra: str = "") -> str
     )
 
 
-def _write(root, rel, text):
+def _write(root, rel, text) -> None:
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
-def _baton(root, name, deliverable, handoff_id):
+def _baton(root, name, deliverable, handoff_id) -> None:
     _write(
         root,
         f"state/handoffs/{name}",
@@ -51,7 +52,7 @@ def _baton(root, name, deliverable, handoff_id):
 
 
 @pytest.fixture(autouse=True)
-def _isolate(monkeypatch):
+def _isolate(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(cr, "_actual_loe", lambda root, sid: "S")
     claimed: list = []
     monkeypatch.setattr(
@@ -76,7 +77,7 @@ def _build(root, request, *, done, incomplete=(), record=_GOOD_RECORD):
     )
 
 
-def _plan_request(plan_rel="docs/plans/p.md", deliverable=DLV_A):
+def _plan_request(plan_rel: str = "docs/plans/p.md", deliverable=DLV_A) -> CommitRequest:
     return CommitRequest(
         chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",)),),
         deliverable_id=deliverable,
@@ -84,7 +85,7 @@ def _plan_request(plan_rel="docs/plans/p.md", deliverable=DLV_A):
     )
 
 
-def _plan_repo(root, rows=(("C1", "open"),), sizing=True):
+def _plan_repo(root, rows=(("C1", "open"),), sizing: bool = True) -> None:
     extra = 'sizing_object: "state/sizings/s.yaml"\n' if sizing else ""
     _write(root, "docs/plans/p.md", _plan(DLV_A, list(rows), extra))
     if sizing:
@@ -96,7 +97,7 @@ def _plan_repo(root, rows=(("C1", "open"),), sizing=True):
     _write(root, "docs/specs/run1.workflow.mjs.emitted.json", '{"emitted_at": "2026-10-01T17:00:00"}')
 
 
-def test_plan_mode_with_claimed_baton(tmp_path, _isolate):
+def test_plan_mode_with_claimed_baton(tmp_path: Path, _isolate) -> None:
     _plan_repo(tmp_path)
     _baton(tmp_path, "claimed.md", DLV_A, "hnd-claimed-111111")
     _baton(tmp_path, "other.md", DLV_B, "hnd-other-222222")
@@ -115,7 +116,7 @@ def test_plan_mode_with_claimed_baton(tmp_path, _isolate):
     assert "## Concluded\n\nC1" in prose and "## Remains\n\nnone" in prose
 
 
-def test_handoff_claims_name_flat_and_sharded_batons(tmp_path, _isolate):
+def test_handoff_claims_name_flat_and_sharded_batons(tmp_path: Path, _isolate) -> None:
     _baton(tmp_path, "2026-10-05-flat.md", DLV_A, "hnd-flat-111111")
     _write(
         tmp_path,
@@ -131,14 +132,14 @@ def test_handoff_claims_name_flat_and_sharded_batons(tmp_path, _isolate):
     ]
 
 
-def test_plan_mode_no_claim_falls_back_to_sizing_baton(tmp_path):
+def test_plan_mode_no_claim_falls_back_to_sizing_baton(tmp_path: Path) -> None:
     _plan_repo(tmp_path)
     _baton(tmp_path, "sized.md", DLV_A, "hnd-sized-333333")
     built = _build(tmp_path, _plan_request(), done=["C1"])
     assert [fm["baton_id"] for fm, _ in built] == ["hnd-sized-333333"]
 
 
-def test_plan_mode_with_neither_writes_null_baton(tmp_path):
+def test_plan_mode_with_neither_writes_null_baton(tmp_path: Path) -> None:
     _plan_repo(tmp_path)
     built = _build(tmp_path, _plan_request(), done=["C1"])
     assert len(built) == 1
@@ -146,7 +147,7 @@ def test_plan_mode_with_neither_writes_null_baton(tmp_path):
     assert fm["baton_id"] is None and fm["deliverable_id"] == DLV_A
 
 
-def test_plan_mode_with_no_deliverable_builds_nothing(tmp_path):
+def test_plan_mode_with_no_deliverable_builds_nothing(tmp_path: Path) -> None:
     _write(tmp_path, "docs/plans/p.md", "---\ntitle: p\n---\n\n```yaml plan-tasks\n- id: C1\n```\n")
     request = CommitRequest(
         chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",)),), plan_path="docs/plans/p.md"
@@ -154,7 +155,7 @@ def test_plan_mode_with_no_deliverable_builds_nothing(tmp_path):
     assert _build(tmp_path, request, done=["C1"]) == []
 
 
-def test_not_met_criterion_gives_null_verdict(tmp_path):
+def test_not_met_criterion_gives_null_verdict(tmp_path: Path) -> None:
     _plan_repo(tmp_path)
     record = dict(_GOOD_RECORD, criterion={"status": "not_met", "observation": "still red"})
     ((fm, prose),) = _build(tmp_path, _plan_request(), done=["C1"], record=record)
@@ -162,21 +163,21 @@ def test_not_met_criterion_gives_null_verdict(tmp_path):
     assert "exit criterion is not_met" in prose
 
 
-def test_incomplete_row_gives_null_verdict(tmp_path):
+def test_incomplete_row_gives_null_verdict(tmp_path: Path) -> None:
     _plan_repo(tmp_path, rows=(("C1", "open"), ("C2", "open")))
     ((fm, prose),) = _build(tmp_path, _plan_request(), done=["C1"], incomplete=["C2"])
     assert fm["verdict"] is None
     assert "## Remains\n\nC2" in prose
 
 
-def test_no_record_gives_null_verdict(tmp_path):
+def test_no_record_gives_null_verdict(tmp_path: Path) -> None:
     _plan_repo(tmp_path)
     ((fm, prose),) = _build(tmp_path, _plan_request(), done=["C1"], record=None)
     assert fm["verdict"] is None
     assert "no review record" in prose
 
 
-def _inventory_repo(root):
+def _inventory_repo(root) -> None:
     _write(root, "docs/plans/a.md", _plan(DLV_A, [("R1", "open")]))
     _write(root, "docs/plans/b.md", _plan(DLV_B, [("R1", "open"), ("R2", "open")]))
     _write(
@@ -198,7 +199,7 @@ def _inventory_repo(root):
     _baton(root, "src.md", "dlv-source-cccccc", "hnd-src-cccccc")
 
 
-def test_inventory_mode_two_batons_one_landed_one_incomplete(tmp_path, _isolate):
+def test_inventory_mode_two_batons_one_landed_one_incomplete(tmp_path: Path, _isolate) -> None:
     _inventory_repo(tmp_path)
     _isolate.extend(["baton-a.md", "baton-b.md"])
     request = CommitRequest(
@@ -220,7 +221,7 @@ def test_inventory_mode_two_batons_one_landed_one_incomplete(tmp_path, _isolate)
     assert all(fm["run"]["kind"] == "mise-en-place" for fm in by_baton.values())
 
 
-def test_every_built_receipt_validates(tmp_path, _isolate):
+def test_every_built_receipt_validates(tmp_path: Path, _isolate) -> None:
     _inventory_repo(tmp_path)
     _isolate.extend(["baton-a.md", "baton-b.md"])
     request = CommitRequest(
@@ -234,7 +235,7 @@ def test_every_built_receipt_validates(tmp_path, _isolate):
         assert validate(fm) == []
 
 
-def test_build_spawns_no_subprocess(tmp_path, _isolate, monkeypatch):
+def test_build_spawns_no_subprocess(tmp_path: Path, _isolate, monkeypatch: pytest.MonkeyPatch) -> None:
     _plan_repo(tmp_path)
     _baton(tmp_path, "claimed.md", DLV_A, "hnd-claimed-111111")
     _isolate.append("claimed.md")
@@ -242,7 +243,7 @@ def test_build_spawns_no_subprocess(tmp_path, _isolate, monkeypatch):
     real = subprocess.Popen
 
     class Spy(real):
-        def __init__(self, *a, **k):
+        def __init__(self, *a, **k) -> None:
             spawned.append(a)
             super().__init__(*a, **k)
 
@@ -251,7 +252,7 @@ def test_build_spawns_no_subprocess(tmp_path, _isolate, monkeypatch):
     assert spawned == []
 
 
-def test_write_run_receipts_writes_then_cleans_up_on_failure(tmp_path):
+def test_write_run_receipts_writes_then_cleans_up_on_failure(tmp_path: Path) -> None:
     _plan_repo(tmp_path)
     good_a = _build(tmp_path, _plan_request(), done=["C1"])[0]
     good_b = _build(tmp_path, _plan_request(), done=["C1"])[0]

@@ -9,6 +9,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import land_run, landing_integrity as li
 from coordinator_core.ops.dispatch_emit.tests.test_landing_integrity import _w
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]  # repo setup only; the calls under test are spawn-guarded
 
@@ -20,7 +21,7 @@ INCIDENTS = [
 ]
 
 
-def _git(root, *args):
+def _git(root, *args) -> None:
     subprocess.run(
         ["git", "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", *args],
         cwd=root, check=True, capture_output=True, **no_console_creationflags(),
@@ -38,11 +39,11 @@ def _repo(tmp_path, module, attr):
 
 
 @pytest.fixture
-def no_spawn(monkeypatch):
+def no_spawn(monkeypatch: pytest.MonkeyPatch):
     def boom(*a, **k):
         raise AssertionError("git/process spawn in lost_definition_findings")
 
-    def arm():
+    def arm() -> None:
         monkeypatch.setattr(subprocess, "Popen", boom)
         monkeypatch.setattr(subprocess, "run", boom)
 
@@ -51,8 +52,8 @@ def no_spawn(monkeypatch):
 
 @pytest.mark.parametrize("module,attr,caller", INCIDENTS)
 def test_caller_of_an_attribute_only_the_dirty_definition_has_is_a_lost_definition(
-    tmp_path, module, attr, caller, no_spawn,
-):
+    tmp_path: Path, module, attr, caller, no_spawn,
+) -> None:
     root = _repo(tmp_path, module, attr)
     _w(root, "caller.py", caller)
     no_spawn()
@@ -62,7 +63,7 @@ def test_caller_of_an_attribute_only_the_dirty_definition_has_is_a_lost_definiti
 
 
 @pytest.mark.parametrize("module,attr,caller", INCIDENTS)
-def test_a_landing_that_carries_the_definition_is_clean(tmp_path, module, attr, caller, no_spawn):
+def test_a_landing_that_carries_the_definition_is_clean(tmp_path: Path, module, attr, caller, no_spawn) -> None:
     root = _repo(tmp_path, module, attr)
     _w(root, "caller.py", caller)
     no_spawn()
@@ -70,19 +71,19 @@ def test_a_landing_that_carries_the_definition_is_clean(tmp_path, module, attr, 
     assert li.lost_definition_findings(root, ["caller.py"], [], carried=[module]) == []
 
 
-def test_a_caller_of_an_attribute_head_already_has_is_clean(tmp_path, no_spawn):
+def test_a_caller_of_an_attribute_head_already_has_is_clean(tmp_path: Path, no_spawn) -> None:
     root = _repo(tmp_path, "pkg/m.py", "added")
     _w(root, "caller.py", "from pkg.m import other\n")
     no_spawn()
     assert li.lost_definition_findings(root, ["caller.py"], []) == []
 
 
-def test_lost_definition_is_not_a_claim_provenance_reason():
+def test_lost_definition_is_not_a_claim_provenance_reason() -> None:
     assert li.LOST_DEFINITION not in li.CLAIM_PROVENANCE_REASONS
 
 
 @pytest.mark.parametrize("module,attr,caller", INCIDENTS)
-def test_carry_drops_a_non_test_caller_whose_target_stays_out(tmp_path, module, attr, caller, monkeypatch):
+def test_carry_drops_a_non_test_caller_whose_target_stays_out(tmp_path: Path, module, attr, caller, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path, module, attr)
     _w(root, "caller.py", caller)
     prov = li.import_closure_findings(root, ["caller.py"], [])
@@ -96,7 +97,7 @@ def test_carry_drops_a_non_test_caller_whose_target_stays_out(tmp_path, module, 
     assert dropped == {"caller.py": f"{li.LOST_DEFINITION}: {module}"}
 
 
-def test_carry_keeps_a_free_target_and_lands_both(tmp_path, monkeypatch):
+def test_carry_keeps_a_free_target_and_lands_both(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     module, attr, caller = INCIDENTS[0]
     root = _repo(tmp_path, module, attr)
     _w(root, "caller.py", caller)
@@ -111,7 +112,7 @@ def test_carry_keeps_a_free_target_and_lands_both(tmp_path, monkeypatch):
     assert dropped == {}
 
 
-def test_carry_still_names_a_test_caller_test_without_source(tmp_path):
+def test_carry_still_names_a_test_caller_test_without_source(tmp_path: Path) -> None:
     module, attr, caller = INCIDENTS[0]
     root = _repo(tmp_path, module, attr)
     _w(root, "tests/test_caller.py", caller)

@@ -18,7 +18,7 @@ _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _SCOUT_EVIDENCE_CLAUSE = "`scout_evidence` entries, if it has any, before deriving the spine"
 
 
-def _compose(**over):
+def _compose(**over) -> str:
     kw = dict(
         repo_root="REPO",
         prompt="add a thing",
@@ -37,7 +37,7 @@ def _blitz_call(script):
     return script.split("await planBlitz(", 1)[1].split("\n", 1)[0]
 
 
-def test_args_land_inside_the_planblitz_call_before_the_pinned_keys():
+def test_args_land_inside_the_planblitz_call_before_the_pinned_keys() -> None:
     args = {"scoutEvidence": ["a.md"], "pluginAgentsAvailable": True, "extra": 1}
     call = _blitz_call(_compose(plan_blitz_args=args))
     for key in args:
@@ -46,14 +46,14 @@ def test_args_land_inside_the_planblitz_call_before_the_pinned_keys():
     assert call.index("mode: 'single'") < call.index("repoRoot: REPO_ROOT")
 
 
-def test_none_and_empty_writes_leave_the_script_unchanged():
+def test_none_and_empty_writes_leave_the_script_unchanged() -> None:
     base = _compose()
     assert _compose(plan_blitz_args=None, writes=()) == base
     assert "  let _writes = [];" in base
     assert _SCOUT_EVIDENCE_CLAUSE not in base
 
 
-def test_writes_with_quote_and_backslash_round_trip_through_the_literal():
+def test_writes_with_quote_and_backslash_round_trip_through_the_literal() -> None:
     writes = ['a"b.py', "c\\d.py"]
     script = _compose(writes=writes)
     line = next(ln for ln in script.splitlines() if ln.startswith("  let _writes = "))
@@ -61,7 +61,7 @@ def test_writes_with_quote_and_backslash_round_trip_through_the_literal():
     assert json.loads(literal) == writes
 
 
-def test_plan_author_prompt_reads_scout_evidence_when_args_given():
+def test_plan_author_prompt_reads_scout_evidence_when_args_given() -> None:
     assert _SCOUT_EVIDENCE_CLAUSE in _compose(plan_blitz_args={"k": 1})
 
 
@@ -69,7 +69,7 @@ def _blitz_calls(script):
     return [seg.split("\n", 1)[0] for seg in script.split("await planBlitz(")[1:]]
 
 
-def test_both_planblitz_calls_carry_the_stage_ready_op_without_plan_path():
+def test_both_planblitz_calls_carry_the_stage_ready_op_without_plan_path() -> None:
     calls = _blitz_calls(_compose())
     assert len(calls) == 2
     for call in calls:
@@ -86,7 +86,7 @@ def test_both_planblitz_calls_carry_the_stage_ready_op_without_plan_path():
             assert key in params
 
 
-def test_a_stop_after_script_carries_no_ready_op():
+def test_a_stop_after_script_carries_no_ready_op() -> None:
     from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN
 
     script = _compose(stop_after=STOP_AFTER_PLAN)

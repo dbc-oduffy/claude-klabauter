@@ -12,6 +12,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import grind_commit_contract as gcc
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 
 def _good() -> dict:
@@ -25,7 +26,7 @@ def _good() -> dict:
     }
 
 
-def test_split_record_segment_strips_wrap_and_indent_damage_but_digest_still_gates():
+def test_split_record_segment_strips_wrap_and_indent_damage_but_digest_still_gates() -> None:
     """Run 20261030T185854Z arrived 9631 chars vs 9626 sent (and 20261030T172043Z 4352 vs 4347): the
     reader re-joined the transcript's wrapped lines with newlines, adding chars to a token that holds
     none. The original agent transcripts were not on disk to confirm; whitespace is the inferred cause."""
@@ -40,13 +41,13 @@ def test_split_record_segment_strips_wrap_and_indent_damage_but_digest_still_gat
     assert gcc.split_record_segment(f"{n}  {h}\n{token}") is None
 
 
-def test_reply_keys_are_pinned_and_documented():
+def test_reply_keys_are_pinned_and_documented() -> None:
     assert gcc.ALREADY_LANDED_KEY == "already_landed"
     assert gcc.UNLANDED_KEY == "unlanded"
     assert gcc.ALREADY_LANDED_KEY in gcc.__doc__ and gcc.UNLANDED_KEY in gcc.__doc__
 
 
-def test_landing_constants_are_pinned_and_documented():
+def test_landing_constants_are_pinned_and_documented() -> None:
     assert gcc.DROP_PEER_HUNKS_CONFLICT == "peer-hunks-conflict"
     assert gcc.DROP_UNATTRIBUTED_SHARED == "unattributed-shared"
     assert gcc.REFUSED_IMPORT_CLOSURE == "import-closure"
@@ -58,7 +59,7 @@ def test_landing_constants_are_pinned_and_documented():
         assert const in gcc.__doc__
 
 
-def test_row_images_rel_joins_safe_segments():
+def test_row_images_rel_joins_safe_segments() -> None:
     assert gcc.row_images_rel("run1", "C1") == ".coordinator-local/grind-row-images/run1/C1"
 
 
@@ -66,16 +67,16 @@ def test_row_images_rel_joins_safe_segments():
     "run_id,row_id",
     [("..", "a"), ("r", ".."), ("r/x", "a"), ("r", "a/b"), ("", "a"), ("r", ""), ("r\\x", "a"), ("C:", "a"), ("/r", "a")],
 )
-def test_row_images_rel_refuses_unsafe_segment(run_id, row_id):
+def test_row_images_rel_refuses_unsafe_segment(run_id, row_id) -> None:
     with pytest.raises(ValueError):
         gcc.row_images_rel(run_id, row_id)
 
 
-def test_accepts_well_formed_params():
+def test_accepts_well_formed_params() -> None:
     assert gcc.validate_grind_params(_good()) is None
 
 
-def test_halted_str_and_absent_accepted():
+def test_halted_str_and_absent_accepted() -> None:
     g = _good()
     g["halted"] = "budget-exhausted"
     assert gcc.validate_grind_params(g) is None
@@ -83,11 +84,11 @@ def test_halted_str_and_absent_accepted():
     assert gcc.validate_grind_params(g) is None
 
 
-def test_trailer_collapses_whitespace():
+def test_trailer_collapses_whitespace() -> None:
     assert gcc.render_row_trailer("a  b\n", " committed\t") == "Grind-Row: a b committed"
 
 
-def test_is_grind_call():
+def test_is_grind_call() -> None:
     assert gcc.is_grind_call({gcc.GRIND_COMMIT_PARAM: {"rows": []}})
     assert not gcc.is_grind_call({gcc.GRIND_COMMIT_PARAM: {"rows": "x"}})
     assert not gcc.is_grind_call({gcc.GRIND_COMMIT_PARAM: []})
@@ -123,29 +124,29 @@ def _mutated(fn) -> dict:
         lambda g: g.update(halted=7),
     ],
 )
-def test_refuses_each_rule(mutate):
+def test_refuses_each_rule(mutate) -> None:
     assert isinstance(gcc.validate_grind_params(_mutated(mutate)), str)
 
 
 _EVIDENCE = "state/queue-grind/bug/evidence/run1/a.done.md"
 
 
-def test_validate_accepts_ledger_root_path():
+def test_validate_accepts_ledger_root_path() -> None:
     g = _mutated(lambda g: g["rows"][0].update(paths=["src/a.py", _EVIDENCE]))
     assert gcc.validate_grind_params(g) is None
 
 
-def test_partition_splits_ledger_root_and_keeps_order():
+def test_partition_splits_ledger_root_and_keeps_order() -> None:
     kept, dropped = gcc.partition_ledger_paths(["src/z.py", _EVIDENCE, "src/a.py"])
     assert kept == ["src/z.py", "src/a.py"]
     assert dropped == [_EVIDENCE]
 
 
-def test_refuses_non_dict():
+def test_refuses_non_dict() -> None:
     assert isinstance(gcc.validate_grind_params([]), str)
 
 
-def test_run_close_names_are_pinned():
+def test_run_close_names_are_pinned() -> None:
     assert gcc.DECLARED_FLAG == "declared-urlenc"
     assert gcc.DECISIONS_FLAG == "decisions-file"
     assert gcc.QUEUE_FLAG == "queue"
@@ -159,7 +160,7 @@ def test_run_close_names_are_pinned():
     )
 
 
-def test_run_write_roots():
+def test_run_write_roots() -> None:
     roots = gcc.run_write_roots("bug", ["state/bug-backlog", "state/other/"])
     assert roots == (
         "state/bug-backlog/", "state/other/", "state/queue-grind/bug/",
@@ -169,7 +170,7 @@ def test_run_write_roots():
     assert gcc.run_write_roots("bug", ["state/sizings/"]).count("state/sizings/") == 1
 
 
-def test_under_roots():
+def test_under_roots() -> None:
     roots = gcc.run_write_roots("bug", ["state/bug-backlog"])
     assert gcc.under_roots("state/bug-backlog/x.md", roots)
     assert gcc.under_roots("state/sizings/s.yaml", roots)
@@ -181,26 +182,26 @@ def test_under_roots():
     "state/warp/run/x.md", "docs/plans/p.md", "state/handoffs/h.md",
     "state/sizings/s.yaml", "docs/decisions/DR-1.md",
 ])
-def test_historical_records_refused(path):
+def test_historical_records_refused(path) -> None:
     assert gcc.is_historical_record(path)
 
 
 @pytest.mark.parametrize("path", ["state/bug-backlog/a.md", "src/a.py", "state/warpish/x", "docs/plans"])
-def test_work_product_not_historical(path):
+def test_work_product_not_historical(path) -> None:
     assert not gcc.is_historical_record(path)
 
 
 @pytest.mark.parametrize("paths", [
     ["a/b.py"], [], ["it's/x.md", "state/sizings/café.yaml", "a b/c%d.md"],
 ])
-def test_declared_paths_round_trip(paths):
+def test_declared_paths_round_trip(paths) -> None:
     token = gcc.encode_declared_paths(paths)
     assert "'" not in token and " " not in token
     assert gcc.decode_declared_paths(token) == sorted(set(paths))
 
 
 @pytest.mark.parametrize("token", ["%7B", "%5B%5D", "%7B%22paths%22%3A%20%5B1%5D%7D", "%7B%22x%22%3A%201%7D"])
-def test_decode_refuses_malformed(token):
+def test_decode_refuses_malformed(token) -> None:
     with pytest.raises(ValueError):
         gcc.decode_declared_paths(token)
 
@@ -211,23 +212,23 @@ def _token() -> str:
     return quote(json.dumps({"a": {"b": "x" * 40}}), safe="")
 
 
-def test_relay_digest_known_vector():
+def test_relay_digest_known_vector() -> None:
     assert gcc.relay_digest("abc") == (
         3, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
 
 
-def test_relay_digest_refuses_non_ascii():
+def test_relay_digest_refuses_non_ascii() -> None:
     with pytest.raises(ValueError):
         gcc.relay_digest("café")
 
 
-def test_check_relay_accepts_match():
+def test_check_relay_accepts_match() -> None:
     tok = _token()
     n, h = gcc.relay_digest(tok)
     assert gcc.check_relay("record-urlenc", tok, str(n), h) is None
 
 
-def test_check_relay_refuses_dropped_char_in_closing_braces():
+def test_check_relay_refuses_dropped_char_in_closing_braces() -> None:
     tok = _token()
     assert tok.endswith("%7D%7D")
     n, h = gcc.relay_digest(tok)
@@ -240,24 +241,24 @@ def test_check_relay_refuses_dropped_char_in_closing_braces():
 
 @pytest.mark.parametrize("length,sha", [("x", "0" * 64), ("-1", "0" * 64), ("", "0" * 64),
                                         ("3", "ABC"), ("3", "g" * 64), ("3", "")])
-def test_check_relay_reports_malformed_digest_without_raising(length, sha):
+def test_check_relay_reports_malformed_digest_without_raising(length, sha) -> None:
     msg = gcc.check_relay("declared-urlenc", "abc", length, sha)
     assert msg is not None and msg.startswith(gcc.RELAY_CORRUPT_HEAD)
 
 
-def test_check_relay_reports_non_ascii_token_without_raising():
+def test_check_relay_reports_non_ascii_token_without_raising() -> None:
     msg = gcc.check_relay("record-urlenc", "café", "4", "0" * 64)
     assert msg is not None and msg.startswith(gcc.RELAY_CORRUPT_HEAD)
 
 
 @pytest.mark.parametrize("word", ["crypto", "Date", "Math.random", "require", "import"])
-def test_relay_sha256_js_uses_no_unsupplied_global(word):
+def test_relay_sha256_js_uses_no_unsupplied_global(word) -> None:
     assert word not in gcc.RELAY_SHA256_JS
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_relay_sha256_js_matches_hashlib_under_node(tmp_path):
+def test_relay_sha256_js_matches_hashlib_under_node(tmp_path: Path) -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
@@ -277,7 +278,7 @@ def test_relay_sha256_js_matches_hashlib_under_node(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_import_adds_no_non_stdlib_module():
+def test_import_adds_no_non_stdlib_module() -> None:
     code = (
         "import sys\n"
         "before = set(sys.modules)\n"

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from coordinator_core.hooks import submit_engine_ask as mod
 from coordinator_core.ops.dispatch_emit import live_run_index
+import pytest
 
 TOOL_INPUT = {"args": {"writes": ["pkg/mod.py"]}}
 
@@ -26,7 +27,7 @@ def _held(root: Path) -> set:
     return set(index) if isinstance(index, dict) else set()
 
 
-def test_resumed_and_dirless_rows_deny_nothing_and_leave_the_index(tmp_path):
+def test_resumed_and_dirless_rows_deny_nothing_and_leave_the_index(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     _row(tmp_path, "run-resumed")
     _row(tmp_path, "run-ghost")
@@ -35,7 +36,7 @@ def test_resumed_and_dirless_rows_deny_nothing_and_leave_the_index(tmp_path):
     assert not (_held(tmp_path) & {"run-resumed", "run-ghost"})
 
 
-def test_superseded_landed_and_closed_rows_are_dropped(tmp_path):
+def test_superseded_landed_and_closed_rows_are_dropped(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     for status in ("superseded", "landed", "closed"):
         run_id = f"run-{status}"
@@ -45,7 +46,7 @@ def test_superseded_landed_and_closed_rows_are_dropped(tmp_path):
     assert not _held(tmp_path)
 
 
-def test_a_live_run_still_refuses_and_keeps_its_row(tmp_path, monkeypatch):
+def test_a_live_run_still_refuses_and_keeps_its_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import warp_live
 
     monkeypatch.setattr(warp_live, "_token_records", lambda root: iter([{"run_id": "run-live", "minted_at": 1.0}]))
@@ -60,7 +61,7 @@ def test_a_live_run_still_refuses_and_keeps_its_row(tmp_path, monkeypatch):
     assert "run-live" in _held(tmp_path)
 
 
-def test_a_halted_run_denies_nothing_but_keeps_its_resumable_row(tmp_path):
+def test_a_halted_run_denies_nothing_but_keeps_its_resumable_row(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     _row(tmp_path, "run-halted")
     _marker(tmp_path, "run-halted", "halted")

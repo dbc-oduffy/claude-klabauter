@@ -8,6 +8,7 @@ import os
 from coordinator_core.workflow_watch import stall
 from coordinator_core.workflow_watch.stamp import stamp_terminal
 from coordinator_core.workflow_watch.terminal import TerminalRecord
+from pathlib import Path
 
 NOW = 2_000_000_000.0
 OLD = NOW - stall.STALL_BOUND_SECONDS - 600
@@ -30,11 +31,11 @@ def _journal(tmp_path):
     return journal
 
 
-def _unsettled(journal):
+def _unsettled(journal) -> list[tuple[str, str]]:
     return stall._unsettled(journal.read_text(encoding="utf-8"))
 
 
-def test_scan_names_k2_and_writes_nothing(tmp_path):
+def test_scan_names_k2_and_writes_nothing(tmp_path: Path) -> None:
     journal = _journal(tmp_path)
     before = journal.read_bytes()
     found = stall.scan_for_stall(str(journal), NOW)
@@ -42,7 +43,7 @@ def test_scan_names_k2_and_writes_nothing(tmp_path):
     assert journal.read_bytes() == before
 
 
-def test_stamp_terminal_does_not_settle_k2(tmp_path):
+def test_stamp_terminal_does_not_settle_k2(tmp_path: Path) -> None:
     journal = _journal(tmp_path)
     assert stamp_terminal(str(journal), "task1", TerminalRecord(status="killed")) is True
     stamped = json.loads(journal.read_text(encoding="utf-8").strip().split("\n")[-1])
@@ -50,12 +51,12 @@ def test_stamp_terminal_does_not_settle_k2(tmp_path):
     assert _unsettled(journal) == [("a2", "L-a2")]
 
 
-def test_k1_is_settled_so_resume_replays_it(tmp_path):
+def test_k1_is_settled_so_resume_replays_it(tmp_path: Path) -> None:
     journal = _journal(tmp_path)
     assert ("a1", "L-a1") not in _unsettled(journal)
 
 
-def test_resumed_started_then_result_settles_k2(tmp_path):
+def test_resumed_started_then_result_settles_k2(tmp_path: Path) -> None:
     journal = _journal(tmp_path)
     with open(journal, "a", encoding="utf-8") as handle:
         handle.write(json.dumps({"type": "started", "agentId": "a3", "label": "L-a3", "key": "K2"}) + "\n")

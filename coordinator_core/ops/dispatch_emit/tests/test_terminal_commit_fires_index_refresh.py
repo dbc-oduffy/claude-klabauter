@@ -18,6 +18,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ledger_halt_commits_delivered
     RUN,
     repo,  # noqa: F401  (fixture)
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -29,13 +30,13 @@ def _arm(monkeypatch) -> None:
 
 
 @pytest.fixture
-def spawns(monkeypatch):
+def spawns(monkeypatch: pytest.MonkeyPatch):
     calls: list = []
     monkeypatch.setattr(terminal_commit, "_spawn_index_refresh", lambda root: calls.append(root) or True)
     return calls
 
 
-def test_a_landed_commit_fires_exactly_one_refresh(repo, spawns, monkeypatch):  # noqa: F811
+def test_a_landed_commit_fires_exactly_one_refresh(repo, spawns, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _arm(monkeypatch)
     _declare_prefix_chunk(repo)
     _seed_dir(repo)
@@ -46,7 +47,7 @@ def test_a_landed_commit_fires_exactly_one_refresh(repo, spawns, monkeypatch):  
     assert len(spawns) == 1
 
 
-def test_a_refused_commit_fires_none(repo, spawns, monkeypatch):  # noqa: F811
+def test_a_refused_commit_fires_none(repo, spawns, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _arm(monkeypatch)
     _declare_prefix_chunk(repo)
     _seed_dir(repo)
@@ -63,7 +64,7 @@ def test_a_refused_commit_fires_none(repo, spawns, monkeypatch):  # noqa: F811
     assert spawns == []
 
 
-def test_a_raising_spawn_leaves_the_verdict_unchanged(repo, monkeypatch):  # noqa: F811
+def test_a_raising_spawn_leaves_the_verdict_unchanged(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _arm(monkeypatch)
     monkeypatch.setattr(
         terminal_commit, "_spawn_index_refresh", lambda root: (_ for _ in ()).throw(OSError("boom"))
@@ -76,7 +77,7 @@ def test_a_raising_spawn_leaves_the_verdict_unchanged(repo, monkeypatch):  # noq
     assert out["committed"] is True, out
 
 
-def test_opt_out_env_and_pytest_default_fire_none(repo, monkeypatch):  # noqa: F811
+def test_opt_out_env_and_pytest_default_fire_none(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     calls: list = []
     monkeypatch.setattr(terminal_commit, "_spawn_index_refresh", lambda root: calls.append(root) or True)
     _declare_prefix_chunk(repo)
@@ -87,10 +88,10 @@ def test_opt_out_env_and_pytest_default_fire_none(repo, monkeypatch):  # noqa: F
     assert calls == []
 
 
-def test_child_argv_runs_the_admitted_refresh_through_the_manifest_entry(monkeypatch, tmp_path):
+def test_child_argv_runs_the_admitted_refresh_through_the_manifest_entry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen: dict = {}
 
-    def fake_popen(argv, **kw):
+    def fake_popen(argv, **kw) -> None:
         seen["argv"] = argv
         seen["kw"] = kw
 

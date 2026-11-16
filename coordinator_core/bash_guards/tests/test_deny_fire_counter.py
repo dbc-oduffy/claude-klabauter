@@ -22,9 +22,10 @@ from pathlib import Path
 from coordinator_core.bash_guards import dispatch
 from coordinator_core.guard_messages.alternative_record import AlternativeRecord, ReadyCommand
 from coordinator_core.session.machinery_paths import share_dir
+import pytest
 
 
-def test_stalled_deny_counter_write_drops_within_the_deadline(tmp_path, monkeypatch):
+def test_stalled_deny_counter_write_drops_within_the_deadline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import threading
     import time
 
@@ -58,7 +59,7 @@ _DENY_RECORD = AlternativeRecord(
 )
 
 
-def _payload(session_id="sess-c6-bash-deny", cwd=None):
+def _payload(session_id: str = "sess-c6-bash-deny", cwd=None):
     p = {
         "tool_name": "Bash",
         "tool_input": {"command": "echo hi"},
@@ -69,7 +70,7 @@ def _payload(session_id="sess-c6-bash-deny", cwd=None):
     return p
 
 
-def _fake_chain(name="block-stash-destruction"):
+def _fake_chain(name: str = "block-stash-destruction"):
     return [
         dispatch.GuardEntry(
             name,
@@ -80,12 +81,12 @@ def _fake_chain(name="block-stash-destruction"):
     ]
 
 
-def _deny_counts_path(git_root, session_id):
+def _deny_counts_path(git_root, session_id) -> Path:
     return Path(share_dir(str(git_root), session_id)) / "deny-fire-counts.jsonl"
 
 
 class TestUnclearedHardDenyProducesOneRecord:
-    def test_one_uncleared_record_appended_and_deny_still_returned(self, tmp_path, monkeypatch):
+    def test_one_uncleared_record_appended_and_deny_still_returned(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: _fake_chain())
         monkeypatch.setattr(dispatch, "_consume_unlock", lambda session_id, guard_name: False)
         monkeypatch.setattr(
@@ -106,7 +107,7 @@ class TestUnclearedHardDenyProducesOneRecord:
         assert record["session"] == "sess-c6-bash-deny"
         assert record["cleared"] is False
 
-    def test_no_record_when_session_id_unresolvable(self, tmp_path, monkeypatch):
+    def test_no_record_when_session_id_unresolvable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: _fake_chain())
         monkeypatch.setattr(
             "coordinator_core.guard_advisory_counter.resolve_git_root_cheap",
@@ -121,7 +122,7 @@ class TestUnclearedHardDenyProducesOneRecord:
 
 
 class TestClearedHardDenyProducesOneRecordAndChainContinues:
-    def test_cleared_record_appended_and_chain_continues(self, tmp_path, monkeypatch):
+    def test_cleared_record_appended_and_chain_continues(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(dispatch, "_build_guard_chain", lambda *a, **k: _fake_chain())
         monkeypatch.setattr(dispatch, "_consume_unlock", lambda session_id, guard_name: True)
         monkeypatch.setattr(
@@ -144,7 +145,7 @@ class TestClearedHardDenyProducesOneRecordAndChainContinues:
 
 
 class TestDenyCounterNeverReadBack:
-    def test_module_source_has_no_read_of_deny_counts_file(self):
+    def test_module_source_has_no_read_of_deny_counts_file(self) -> None:
         import inspect
 
         src = inspect.getsource(dispatch)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -17,7 +18,7 @@ def _spool(root) -> str:
     return sid
 
 
-def test_withdraw_pending_records_reason_through_the_handler(tmp_path):
+def test_withdraw_pending_records_reason_through_the_handler(tmp_path: Path) -> None:
     sid = _spool(tmp_path)
     out = op._handler({"spool_id": sid, "reason": "hand-done"}, tmp_path)
     assert out == {"spool_id": sid, "state": "withdrawn", "withdrawn": True}
@@ -26,13 +27,13 @@ def test_withdraw_pending_records_reason_through_the_handler(tmp_path):
     assert record.list_pending(str(tmp_path)) == []
 
 
-def test_repo_root_param_wins_over_the_dispatcher_root(tmp_path):
+def test_repo_root_param_wins_over_the_dispatcher_root(tmp_path: Path) -> None:
     sid = _spool(tmp_path)
     out = op._handler({"spool_id": sid, "reason": "r", "repo_root": str(tmp_path)}, None)
     assert out["withdrawn"] is True
 
 
-def test_absent_and_claimed_entries_are_reported_not_retired(tmp_path):
+def test_absent_and_claimed_entries_are_reported_not_retired(tmp_path: Path) -> None:
     assert op._handler({"spool_id": "0" * 16, "reason": "r"}, tmp_path)["state"] == "absent"
     sid = _spool(tmp_path)
     record.claim(str(tmp_path), sid)
@@ -41,25 +42,25 @@ def test_absent_and_claimed_entries_are_reported_not_retired(tmp_path):
 
 
 @pytest.mark.parametrize("bad", ["", "xyz", "A" * 16, "0" * 15, "0" * 17, "../" + "0" * 13])
-def test_a_malformed_spool_id_is_refused(tmp_path, bad):
+def test_a_malformed_spool_id_is_refused(tmp_path: Path, bad) -> None:
     with pytest.raises(CallerFacingValidationError):
         op._handler({"spool_id": bad, "reason": "r"}, tmp_path)
 
 
-def test_blank_reason_and_missing_root_are_refused(tmp_path):
+def test_blank_reason_and_missing_root_are_refused(tmp_path: Path) -> None:
     with pytest.raises(CallerFacingValidationError):
         op._handler({"spool_id": "0" * 16, "reason": "   "}, tmp_path)
     with pytest.raises(CallerFacingValidationError):
         op._handler({"spool_id": "0" * 16, "reason": "r"}, None)
 
 
-def test_param_set_is_closed():
+def test_param_set_is_closed() -> None:
     assert op._SCHEMA["additionalProperties"] is False
     assert set(op._SCHEMA["properties"]) == {"spool_id", "reason", "repo_root"}
     assert set(op._SCHEMA["required"]) == {"spool_id", "reason"}
 
 
-def test_op_is_registered_classified_and_scoped():
+def test_op_is_registered_classified_and_scoped() -> None:
     from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass
     from coordinator_core.op_scopes import _OP_KEY_SCOPE
 

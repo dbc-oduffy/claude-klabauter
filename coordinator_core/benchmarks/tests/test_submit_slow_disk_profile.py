@@ -7,9 +7,10 @@ import os
 import pytest
 
 from coordinator_core.benchmarks import submit_slow_disk_profile as prof
+from pathlib import Path
 
 
-def test_charger_counts_repo_io_and_skips_outside(tmp_path):
+def test_charger_counts_repo_io_and_skips_outside(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     (root / "sub").mkdir(parents=True)
     outside = tmp_path / "outside.txt"
@@ -27,7 +28,7 @@ def test_charger_counts_repo_io_and_skips_outside(tmp_path):
     assert [s["bulk"] for s in charger.report() if s["kind"] == "scandir"] == [True]
 
 
-def test_charger_restores_patched_seams(tmp_path):
+def test_charger_restores_patched_seams(tmp_path: Path) -> None:
     import builtins
 
     real = (builtins.open, os.scandir)
@@ -37,7 +38,7 @@ def test_charger_restores_patched_seams(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_default_ask_reports_answer_run_id_and_ordered_sites():
+def test_default_ask_reports_answer_run_id_and_ordered_sites() -> None:
     result = prof.measure(2.0)
     assert result["answer_kind"] == "allow", result["reason"]
     assert result["run_id"]

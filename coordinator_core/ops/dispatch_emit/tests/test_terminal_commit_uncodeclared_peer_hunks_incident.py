@@ -126,7 +126,7 @@ def _flag_out_of_ask(root: Path) -> None:
     )
 
 
-def test_an_undeclared_live_peers_hunk_in_the_landing_path_is_never_committed(tmp_path, monkeypatch):
+def test_an_undeclared_live_peers_hunk_in_the_landing_path_is_never_committed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _build(tmp_path, monkeypatch, peer_hunk=True)
     seed_blob = _git(["show", f"HEAD:{P}"], root)
 
@@ -140,8 +140,8 @@ def test_an_undeclared_live_peers_hunk_in_the_landing_path_is_never_committed(tm
 
 
 def test_an_out_of_ask_finding_on_a_path_with_a_live_declaring_peer_withholds_it_naming_the_peer(
-    tmp_path, monkeypatch,
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     root = _build(tmp_path, monkeypatch, peer_hunk=True, peer_declares=True)
     _flag_out_of_ask(root)
     seed = _git(["rev-parse", "HEAD"], root)
@@ -155,8 +155,8 @@ def test_an_out_of_ask_finding_on_a_path_with_a_live_declaring_peer_withholds_it
 
 
 def test_an_out_of_ask_finding_with_an_undeclared_peer_withholds_it_naming_a_run_or_the_reviewer(
-    tmp_path, monkeypatch,
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
     root = _build(tmp_path, monkeypatch, peer_hunk=True)
     _flag_out_of_ask(root)
     seed = _git(["rev-parse", "HEAD"], root)
@@ -169,7 +169,7 @@ def test_an_out_of_ask_finding_with_an_undeclared_peer_withholds_it_naming_a_run
     assert PEER_MARK in (root / P).read_text(encoding="utf-8")
 
 
-def test_a_landing_with_no_foreign_hunk_and_no_finding_commits_the_whole_file(tmp_path, monkeypatch):
+def test_a_landing_with_no_foreign_hunk_and_no_finding_commits_the_whole_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _build(tmp_path, monkeypatch, peer_hunk=False)
 
     out = _fire(root)

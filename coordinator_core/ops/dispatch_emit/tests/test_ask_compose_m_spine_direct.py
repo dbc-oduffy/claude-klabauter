@@ -17,13 +17,14 @@ from coordinator_core.ops.dispatch_emit.ask_compose import (
 )
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import AskPlanBlitzRefused
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from pathlib import Path
 
 pytestmark = pytest.mark.usefixtures("m_plus_known_arm")
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
 
-def _compose(**over):
+def _compose(**over) -> str:
     kw = dict(
         repo_root="REPO",
         prompt="add a thing",
@@ -43,11 +44,11 @@ def _m_branch(script):
     return script[start : script.index("\n  }\n", start)]
 
 
-def test_gate_schema_carries_spine_plan():
+def test_gate_schema_carries_spine_plan() -> None:
     assert "spine_plan" in _GATE_SCHEMA["properties"]
 
 
-def test_plan_review_agent_is_guarded_by_spine_plan():
+def test_plan_review_agent_is_guarded_by_spine_plan() -> None:
     branch = _m_branch(_compose())
     assert "if (_gate.spine_plan && !_gate.resume_plan) {" in branch
     review = branch.index("label: 'plan-review'")
@@ -57,14 +58,14 @@ def test_plan_review_agent_is_guarded_by_spine_plan():
     assert "plan.readiness_verdict" in branch
 
 
-def test_blitz_is_reached_only_when_the_review_left_no_plan():
+def test_blitz_is_reached_only_when_the_review_left_no_plan() -> None:
     branch = _m_branch(_compose())
     assert branch.index("if (_spineReview?.verdict === 'ready')") < branch.index("if (!_planRel && !_halted) {")
     assert branch.index("if (!_planRel && !_halted) {") < branch.index("await planBlitz(")
     assert "_gate.resume_plan ?? _spineFallback ?? null" in branch
 
 
-def test_not_ready_review_halts_with_its_verdict_and_skips_blitz():
+def test_not_ready_review_halts_with_its_verdict_and_skips_blitz() -> None:
     branch = _m_branch(_compose())
     assert "reason: 'spine plan review verdict '" in branch
     assert branch.index("if (_spineReview?.verdict === 'ready')") < branch.index("spine plan review verdict")
@@ -72,7 +73,7 @@ def test_not_ready_review_halts_with_its_verdict_and_skips_blitz():
     assert "review: _spineReview" in branch
 
 
-def _plugin(tmp_path, signals=None, raw=None):
+def _plugin(tmp_path, signals=None, raw=None) -> str:
     contract = tmp_path / "contract"
     contract.mkdir()
     text = raw if raw is not None else json.dumps({"signals": signals})
@@ -80,7 +81,7 @@ def _plugin(tmp_path, signals=None, raw=None):
     return str(tmp_path)
 
 
-def _with_contract(monkeypatch, tmp_path, signals=None, raw=None):
+def _with_contract(monkeypatch, tmp_path, signals=None, raw=None) -> None:
     root = _plugin(tmp_path, signals, raw)
     monkeypatch.setattr(
         "coordinator_core.warm.caller_context.resolve_caller_context",
@@ -94,7 +95,7 @@ _FIXTURE = {
 }
 
 
-def test_branch_embeds_the_selects_literal_read_from_the_contract(monkeypatch, tmp_path):
+def test_branch_embeds_the_selects_literal_read_from_the_contract(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _with_contract(monkeypatch, tmp_path, _FIXTURE)
     branch = _m_branch(_compose())
     literal = json.dumps({s: e["selects"] for s, e in _FIXTURE.items()}, sort_keys=True)
@@ -103,14 +104,14 @@ def test_branch_embeds_the_selects_literal_read_from_the_contract(monkeypatch, t
     assert "const _signalSelects" not in _compose().split("_gate.arm === 'm_plus') {")[0]
 
 
-def test_spine_review_schema_carries_review_signals_and_plan_revise_does_not():
+def test_spine_review_schema_carries_review_signals_and_plan_revise_does_not() -> None:
     assert "review_signals" in _SPINE_REVIEW_SCHEMA["properties"]
     assert "review_signals" in _SPINE_REVIEW_STAGED_SCHEMA["properties"]
     assert "review_signals" not in _REVISE_SCHEMA["properties"]
     assert "review_signals" not in _REVISE_STAGED_SCHEMA["properties"]
 
 
-def test_signalled_spine_leads_to_blitz_and_never_stages(monkeypatch, tmp_path):
+def test_signalled_spine_leads_to_blitz_and_never_stages(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _with_contract(monkeypatch, tmp_path, _FIXTURE)
     branch = _m_branch(_compose())
     wrong = branch.index("const _wrongReviewer")
@@ -124,7 +125,7 @@ def test_signalled_spine_leads_to_blitz_and_never_stages(monkeypatch, tmp_path):
     assert "_stagedManifest" not in branch[wrong:ready]
 
 
-def test_architecture_signal_selecting_staff_eng_keeps_the_ready_halt_path(monkeypatch, tmp_path):
+def test_architecture_signal_selecting_staff_eng_keeps_the_ready_halt_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _with_contract(monkeypatch, tmp_path, _FIXTURE)
     branch = _m_branch(_compose())
     assert '"architecture": "coordinator:staff-eng"' in branch
@@ -135,7 +136,7 @@ def test_architecture_signal_selecting_staff_eng_keeps_the_ready_halt_path(monke
     assert "spine plan review verdict" in branch[branch.index("if (!_wrongReviewer) {") :]
 
 
-def test_unknown_signal_is_not_a_wrong_reviewer(monkeypatch, tmp_path):
+def test_unknown_signal_is_not_a_wrong_reviewer(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _with_contract(monkeypatch, tmp_path, _FIXTURE)
     branch = _m_branch(_compose())
     wrong = branch.index("const _wrongReviewer")
@@ -143,7 +144,7 @@ def test_unknown_signal_is_not_a_wrong_reviewer(monkeypatch, tmp_path):
     assert "_signalSelects[s] !== undefined &&" in predicate
 
 
-def test_missing_or_unparseable_contract_refuses_by_name(monkeypatch, tmp_path):
+def test_missing_or_unparseable_contract_refuses_by_name(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     root = tmp_path / "none"
     root.mkdir()
     monkeypatch.setattr(
@@ -159,7 +160,7 @@ def test_missing_or_unparseable_contract_refuses_by_name(monkeypatch, tmp_path):
         _compose()
 
 
-def test_s_and_xs_arms_carry_no_spine_text():
+def test_s_and_xs_arms_carry_no_spine_text() -> None:
     script = _compose()
     m_start = script.index("_gate.arm === 'm_plus') {")
     assert "spine_plan" not in script[:m_start].split("_gate.arm === 's')", 1)[-1].split("_gate.arm === 'm_plus'")[0]

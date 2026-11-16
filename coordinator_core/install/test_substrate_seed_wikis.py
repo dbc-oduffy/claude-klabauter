@@ -22,6 +22,8 @@ from coordinator_core.install.substrate import (
     _install_seed_wikis,
     _load_seed_wiki_manifest,
 )
+from pathlib import Path
+import pytest
 
 
 def _write_manifest(plugin_root, pages) -> None:
@@ -32,7 +34,7 @@ def _write_manifest(plugin_root, pages) -> None:
     )
 
 
-def _write_wiki_page(plugin_root, name, content="content\n") -> None:
+def _write_wiki_page(plugin_root, name, content: str = "content\n") -> None:
     wiki = plugin_root / "docs" / "wiki"
     wiki.mkdir(parents=True, exist_ok=True)
     (wiki / name).write_text(content, encoding="utf-8")
@@ -41,7 +43,7 @@ def _write_wiki_page(plugin_root, name, content="content\n") -> None:
 # --- happy path --------------------------------------------------------
 
 
-def test_happy_path_copies_exactly_the_manifest_pages(tmp_path):
+def test_happy_path_copies_exactly_the_manifest_pages(tmp_path: Path) -> None:
     plugin_root = tmp_path / "plugin_root"
     settings_home = tmp_path / "settings_home"
     pages = ["daily-branch-discipline.md", "scoped-safety-commits.md"]
@@ -64,7 +66,7 @@ def test_happy_path_copies_exactly_the_manifest_pages(tmp_path):
 # --- page listed but missing on disk ------------------------------------
 
 
-def test_page_listed_but_missing_on_disk_is_reported_and_others_still_install(tmp_path, capsys):
+def test_page_listed_but_missing_on_disk_is_reported_and_others_still_install(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     plugin_root = tmp_path / "plugin_root"
     settings_home = tmp_path / "settings_home"
     _write_manifest(plugin_root, ["present.md", "ghost.md"])
@@ -84,7 +86,7 @@ def test_page_listed_but_missing_on_disk_is_reported_and_others_still_install(tm
 # --- malformed / absent manifest ----------------------------------------
 
 
-def test_absent_manifest_raises_fatal(tmp_path):
+def test_absent_manifest_raises_fatal(tmp_path: Path) -> None:
     plugin_root = tmp_path / "plugin_root"
     settings_home = tmp_path / "settings_home"
     plugin_root.mkdir()
@@ -96,7 +98,7 @@ def test_absent_manifest_raises_fatal(tmp_path):
         assert "seed-wikis.json not found" in str(exc)
 
 
-def test_malformed_json_raises_fatal(tmp_path):
+def test_malformed_json_raises_fatal(tmp_path: Path) -> None:
     plugin_root = tmp_path / "plugin_root"
     settings_home = tmp_path / "settings_home"
     schemas = plugin_root / "schemas"
@@ -110,7 +112,7 @@ def test_malformed_json_raises_fatal(tmp_path):
         assert "malformed" in str(exc)
 
 
-def test_manifest_missing_seed_wikis_key_raises_fatal(tmp_path):
+def test_manifest_missing_seed_wikis_key_raises_fatal(tmp_path: Path) -> None:
     plugin_root = tmp_path / "plugin_root"
     schemas = plugin_root / "schemas"
     schemas.mkdir(parents=True)
@@ -123,7 +125,7 @@ def test_manifest_missing_seed_wikis_key_raises_fatal(tmp_path):
         assert "seed_wikis" in str(exc)
 
 
-def test_manifest_empty_seed_wikis_list_raises_fatal(tmp_path):
+def test_manifest_empty_seed_wikis_list_raises_fatal(tmp_path: Path) -> None:
     plugin_root = tmp_path / "plugin_root"
     _write_manifest(plugin_root, [])
 
@@ -137,7 +139,7 @@ def test_manifest_empty_seed_wikis_list_raises_fatal(tmp_path):
 # --- check_only writes nothing -------------------------------------------
 
 
-def test_check_only_writes_nothing(tmp_path, capsys):
+def test_check_only_writes_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     plugin_root = tmp_path / "plugin_root"
     settings_home = tmp_path / "settings_home"
     _write_manifest(plugin_root, ["a.md"])
@@ -152,7 +154,7 @@ def test_check_only_writes_nothing(tmp_path, capsys):
     assert "a.md" in out
 
 
-def test_check_only_reports_missing_page_without_writing(tmp_path, capsys):
+def test_check_only_reports_missing_page_without_writing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     plugin_root = tmp_path / "plugin_root"
     settings_home = tmp_path / "settings_home"
     _write_manifest(plugin_root, ["ghost.md"])
@@ -167,7 +169,7 @@ def test_check_only_reports_missing_page_without_writing(tmp_path, capsys):
 # --- idempotent re-run ----------------------------------------------------
 
 
-def test_idempotent_rerun_overwrites_stale_seed_copy(tmp_path):
+def test_idempotent_rerun_overwrites_stale_seed_copy(tmp_path: Path) -> None:
     """Seed wiki copies are a derived cache, not operator-customized content
     (unlike coordinator-whoami) — a re-run must overwrite a stale
     destination rather than preserving it."""
@@ -190,7 +192,7 @@ def test_idempotent_rerun_overwrites_stale_seed_copy(tmp_path):
     assert dst.read_text(encoding="utf-8") == "version two\n"
 
 
-def test_rerun_is_noop_when_already_up_to_date(tmp_path):
+def test_rerun_is_noop_when_already_up_to_date(tmp_path: Path) -> None:
     plugin_root = tmp_path / "plugin_root"
     settings_home = tmp_path / "settings_home"
     _write_manifest(plugin_root, ["a.md"])
@@ -216,7 +218,7 @@ def _routes_fixture(tmp_path):
     return engine_tree, tmp_path / "home", dst
 
 
-def test_guard_routes_mirror_copies_and_removes_stale(tmp_path):
+def test_guard_routes_mirror_copies_and_removes_stale(tmp_path: Path) -> None:
     engine_tree, home, dst = _routes_fixture(tmp_path)
     dst.mkdir(parents=True)
     (dst / "dead.md").write_text("stale\n", encoding="utf-8")
@@ -228,7 +230,7 @@ def test_guard_routes_mirror_copies_and_removes_stale(tmp_path):
     assert (dst / "sec-a.md").read_text(encoding="utf-8") == "a\n"
 
 
-def test_guard_routes_check_only_writes_and_removes_nothing(tmp_path, capsys):
+def test_guard_routes_check_only_writes_and_removes_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     engine_tree, home, dst = _routes_fixture(tmp_path)
     dst.mkdir(parents=True)
     (dst / "dead.md").write_text("stale\n", encoding="utf-8")
@@ -239,7 +241,7 @@ def test_guard_routes_check_only_writes_and_removes_nothing(tmp_path, capsys):
     assert "would: mirror" in capsys.readouterr().out
 
 
-def test_guard_routes_up_to_date_is_noop(tmp_path, capsys):
+def test_guard_routes_up_to_date_is_noop(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     engine_tree, home, dst = _routes_fixture(tmp_path)
     _install_claude_klabauter_guard_routes_folder(engine_tree, home, check_only=False)
     capsys.readouterr()
@@ -249,7 +251,7 @@ def test_guard_routes_up_to_date_is_noop(tmp_path, capsys):
     assert "up to date" in capsys.readouterr().out
 
 
-def test_guard_routes_missing_source_warns_and_touches_nothing(tmp_path, capsys):
+def test_guard_routes_missing_source_warns_and_touches_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     home = tmp_path / "home"
     _install_claude_klabauter_guard_routes_folder(tmp_path / "claude-klabauter", home, check_only=False)
 

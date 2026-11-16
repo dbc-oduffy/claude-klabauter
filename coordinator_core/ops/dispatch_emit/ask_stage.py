@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from json.encoder import encode_basestring_ascii as _json_ascii
 import os
 import re
 import shlex
@@ -91,6 +92,7 @@ from coordinator_core.ops.dispatch_emit.falsifier_integrity_phase import (
     review_specs,
 )
 from coordinator_core.ops.dispatch_emit.emit import (
+    LAZY_BRIEFS_ABOVE_ROWS,
     resolve_agent_model,
     _EXECUTOR_AGENT_TYPE,
     _dispatch_report_path,
@@ -156,7 +158,11 @@ _PARAMS = (
     Field("session_id", "str"),
     Field("only_rows", "str_list"),
     Field("claim_register_rows", "bool"),
+    Field("materialise_wave", "str"),
 )
+
+#: One file under the run dir holding every deferred row brief (a JSON line per file: wave, repo-relative path, text).
+BRIEFS_BATCH_FILE = "briefs.batch.jsonl"
 
 __all__ = ["AskStageError", "stage", "scaffold_markers", "pm_intent_block", "relayed_ask_block", "manifest_payload"]
 
@@ -331,23 +337,29 @@ def _reviewable(declared: Sequence[str], root: Optional[Path] = None) -> tuple[s
     )
 
 
-def _widen_with_existing_tests(paths: Sequence[str], root: Path) -> list[str]:
+def _widen_with_existing_tests(paths: Sequence[str], root: Path, probes: Optional[dict] = None) -> list[str]:
     """`paths` verbatim, plus each stem-derived test candidate that is a file in the tree.
-    A candidate absent from the tree is never emitted: only a declared path may name a file to be created."""
+    A candidate absent from the tree is never emitted: only a declared path may name a file to be created.
+    `probes` is the caller's call-scoped stat memo: a per-row caller shares one dict across the batch."""
+    from coordinator_core.ops.dispatch_emit.pathspec import _memo_is_file
+
+    probes = {} if probes is None else probes
+    root_s = str(root)
     declared = list(paths)
     keep = set(declared)
     return [
-        p for p in _widen_with_test_candidates(declared, root)
-        if p in keep or (root / strip_literal_pathspec(p)).is_file()
+        p for p in _widen_with_test_candidates(declared, root, probes)
+        if p in keep or _memo_is_file(root_s, strip_literal_pathspec(p), probes)
     ]
 
 
-def _test_scope(waves, root: Path) -> tuple[tuple[str, ...], Optional[dict]]:
+def _test_scope(waves, root: Path, probes: Optional[dict] = None) -> tuple[tuple[str, ...], Optional[dict]]:
     """(test targets, None), or ((), the typed no-target record) when the locator maps no
     testable write to a runnable target -- e.g. a .ts-only spine in a repo whose tests it cannot
-    see. Never a crash and never a silent pass: the run reads its tests as degraded."""
+    see. Never a crash and never a silent pass: the run reads its tests as degraded.
+    `probes` is the caller's call-scoped stat memo, shared with the other test-scope passes."""
     try:
-        return tuple(terminal_test_scope(waves, repo_root=root)), None
+        return tuple(terminal_test_scope(waves, repo_root=root, probes=probes)), None
     except NoTestTargetError as exc:
         return (), {
             "reason": str(exc),
@@ -358,14 +370,60 @@ def _test_scope(waves, root: Path) -> tuple[tuple[str, ...], Optional[dict]]:
         return (), {"reason": str(exc), "unmapped_paths": [], "testable_omissions": []}
 
 
-def _wave_test_scopes(waves, root: Path) -> dict[str, tuple[str, ...]]:
+def _wave_test_scopes(waves, root: Path, probes: Optional[dict] = None) -> dict[str, tuple[str, ...]]:
     """Cumulative declared test scope per non-last wave, keyed by the wave number rows carry.
-    A wave whose cumulative scope is empty has no key: nothing to wait on before its checkpoint."""
+    A wave whose cumulative scope is empty has no key: nothing to wait on before its checkpoint.
+    `probes` is the caller's call-scoped stat memo, shared with `_widen_with_existing_tests`."""
+    from coordinator_core.ops.dispatch_emit.pathspec import (
+        _candidate_target_strings, _declared_paths, _is_test_file, _memo_is_file,
+    )
+    from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
+    from coordinator_core.ops.doc_registry import resolve_test_locator_config
+
+    # Each written path's test target is a step function of the prefix: resolved once, replayed per
+    # wave. Equals `terminal_test_scope(waves[:k+1])` per prefix (pinned by test_ask_stage).
+    n = len(waves) - 1
+    first_wave: dict[str, int] = {}
+    first_decl = None
+    for i, wave in enumerate(waves[:n]):
+        for row in wave:
+            if first_decl is None and row.writes is not UNDECLARED:
+                first_decl = i
+            for p in _declared_paths(row):
+                first_wave.setdefault(p, i)
+    if first_decl is None:
+        return {}
+    suffixes = tuple(resolve_test_locator_config(str(root)).test_locator_suffixes)
+    stripped = tuple(s.lstrip("*") for s in suffixes)
+    root_s, memo = str(root), ({} if probes is None else probes)
+    events: dict[int, list[tuple[str, Optional[str]]]] = {}
+    for path, fw in first_wave.items():
+        candidate = PurePosixPath(path)
+        if _is_test_file(candidate) or any(path.endswith(s) for s in stripped):
+            steps = [(fw, candidate.as_posix())]
+        else:
+            avail = []
+            for idx, c in enumerate(_candidate_target_strings(candidate, suffixes)):
+                a = 0 if _memo_is_file(root_s, c, memo) else first_wave.get(c)
+                if a is not None:
+                    avail.append((max(a, fw), idx, c))
+            steps, best = [(fw, None)], None
+            for t in sorted({a for a, _, _ in avail}):
+                pick = min((idx, c) for a, idx, c in avail if a <= t)
+                if pick != best:
+                    best = pick
+                    steps.append((t, pick[1]))
+        for t, target in steps:
+            events.setdefault(t, []).append((path, target))
+    cur: dict[str, Optional[str]] = {}
     out: dict[str, tuple[str, ...]] = {}
-    for i in range(len(waves) - 1):
-        scope = _test_scope(waves[: i + 1], root)[0]
-        if scope:
-            out[str(i)] = scope
+    for k in range(n):
+        for path, target in events.get(k, ()):
+            cur[path] = target
+        if k >= first_decl:
+            scope = tuple(dict.fromkeys(t for t in cur.values() if t is not None))
+            if scope:
+                out[str(k)] = scope
     return out
 
 
@@ -409,6 +467,27 @@ def _write(path: Path, text: str) -> None:
             view = view[os.write(fd, view):]
     finally:
         os.close(fd)
+
+
+def materialise_briefs(root: Path, run_id: str, wave: int) -> int:
+    """Write the per-row brief files the stage deferred for `wave` from the run's batched file, byte-identical to
+    an eager write; returns the count written (0: nothing deferred). Idempotent."""
+    run_dir = contained_path(root / RUN_DIR_ROOT / run_id, [root / RUN_DIR_ROOT])
+    if run_dir is None:
+        raise ValueError(f"run dir for {run_id!r} escapes {RUN_DIR_ROOT}")
+    try:
+        raw = (run_dir / BRIEFS_BATCH_FILE).read_bytes().decode("utf-8")
+    except FileNotFoundError:
+        return 0
+    written = 0
+    for line in raw.split("\n"):
+        if not line:
+            continue
+        rec = json.loads(line)
+        if rec["wave"] == wave:
+            _write(root / rec["path"], rec["text"])
+            written += 1
+    return written
 
 
 # Resolved roots and directories are memoized per `stage` call (cleared at its entry): a directory
@@ -665,19 +744,22 @@ def _sibling_owner_rows(plan_rows: Sequence[Mapping], sibling_roots: Mapping[str
 
 
 def _only_rows(
-    rows: list, exclusions: list, keep: frozenset, snap: Optional[resume_snapshot.Snapshot] = None
+    rows: list, exclusions: list, keep: frozenset, snap: Optional[resume_snapshot.Snapshot] = None,
+    revise_ids: frozenset = frozenset(),
 ) -> tuple[list, list, tuple[str, ...], list]:
     """The resume subset of a spine read, the resume rows a re-plan retired, and the dispatchable
     rows dropped as landed: `keep` rows only,
     edges onto the dropped (landed) rows stripped, and only `keep` rows among the owed/gated
     exclusions. With `snap` (the gate's snapshot), every known row outside `snap.not_to_run` is
     kept, rows a re-plan added included. A `keep` id the spine lacks but `snap.resume_rows` names
-    is retired: reported, never staged, never refused. Any other missing id refuses."""
+    is retired: reported, never staged, never refused. `revise_ids` (a ledger resume's register
+    row ids) retire the same way, snapshot or not. Any other missing id refuses."""
     known = {r.id for r in rows} | {e.get("id") for e in exclusions}
     missing = keep - known
-    retired: tuple[str, ...] = ()
+    retired: tuple[str, ...] = tuple(sorted(missing & revise_ids))
+    missing = missing - revise_ids
     if snap is not None:
-        retired = tuple(sorted(missing & snap.resume_rows))
+        retired = tuple(sorted({*retired, *(missing & snap.resume_rows)}))
         missing = missing - snap.resume_rows
     if missing:
         raise AskStageError(f"resume row id(s) not in the plan's spine: {sorted(missing)}")
@@ -1121,15 +1203,30 @@ LIVE_OVERLAP_DEADLINE_S = 0.5
 _STAMP_DATE_RE = re.compile(r"^(?P<head>.*-)\d{8}(?P<tail>T\d{6}-[0-9a-f]{6})$")
 
 
-def _recorded_run_ids(root: Path, hits: Mapping[str, list[str]]) -> dict[str, list[str]]:
-    """`hits` re-keyed by each run's exact recorded id (the run-token record's), so a pasted
-    `dispatch.release_run_token` finds it. A hit id with no record whose only difference from exactly
-    one held record is the stamp's date digits maps to that record; any other id stays as given."""
+def _held_token_records(root: Path) -> Optional[list[dict]]:
+    """`run_token.held_records(root)` read once for an overlap check; None when the listing is unreadable."""
     from coordinator_core.ops.dispatch_emit import run_token
 
     try:
-        held = [r["run_id"] for r in run_token.held_records(root)]
+        return run_token.held_records(root)
     except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _recorded_run_ids(
+    root: Path, hits: Mapping[str, list[str]], held_records: Optional[list[dict]] = None
+) -> dict[str, list[str]]:
+    """`hits` re-keyed by each run's exact recorded id (the run-token record's), so a pasted
+    `dispatch.release_run_token` finds it. A hit id with no record whose only difference from exactly
+    one held record is the stamp's date digits maps to that record; any other id stays as given.
+    `held_records` is the caller's one read of the token listing (`_held_token_records`)."""
+    if held_records is None:
+        held_records = _held_token_records(root)
+    if held_records is None:
+        return dict(hits)
+    try:
+        held = [r["run_id"] for r in held_records]
+    except (KeyError, TypeError):
         return dict(hits)
     known = set(held)
     out: dict[str, list[str]] = {}
@@ -1145,6 +1242,7 @@ def _recorded_run_ids(root: Path, hits: Mapping[str, list[str]]) -> dict[str, li
                 exact = next(iter(near))
         out.setdefault(exact, []).extend(p for p in paths if p not in out.get(exact, ()))
     return out
+
 
 
 _chain_kin = run_lineage.chain_kin
@@ -1245,8 +1343,9 @@ def _refuse_live_write_overlap(root: Path, run_id: str, writes: Sequence[str]) -
             if not live_run_index.run_is_stale(root, rid)
         }
     if hits:
-        hits = _recorded_run_ids(root, hits)
-        kin = _chain_kin(root, run_id, hits)
+        held = _held_token_records(root)
+        hits = _recorded_run_ids(root, hits, held)
+        kin = _chain_kin(root, run_id, hits, held)
         hits = {rid: paths for rid, paths in hits.items() if rid not in kin}
     if not hits:
         stage_wait.clear(root, run_id)
@@ -1542,8 +1641,13 @@ def stage(
     resume_dropped: list[str] = []
     if only_rows is not None:
         full_rows, full_exclusions = rows, exclusions
+        register = ((run_sizing or {}).get("requirement_register") or {}).get("rows") or []
+        revise_ids = (
+            frozenset(str(r.get("id")) for r in register if isinstance(r, Mapping) and r.get("id"))
+            if ledger_resume else frozenset()
+        )
         rows, exclusions, retired_resume, dropped_landed = _only_rows(
-            rows, exclusions, frozenset(only_rows), resume_snap
+            rows, exclusions, frozenset(only_rows), resume_snap, revise_ids
         )
         if not ledger_resume and not rows and _draft_resume_without_evidence(
             plan_text, dropped_landed, resume_snap
@@ -1693,9 +1797,10 @@ def stage(
     em_block = em_brief_block(run_sizing, root)
     if em_block:
         intent = intent + ("\n" if intent else "") + em_block
+    widen_probes: dict = {}
     with leg("test_scope"):
-        test_targets, no_test_target = _test_scope(waves, root)
-        wave_test_targets = _wave_test_scopes(waves, root)
+        test_targets, no_test_target = _test_scope(waves, root, widen_probes)
+        wave_test_targets = _wave_test_scopes(waves, root, widen_probes)
 
     after = {node.row.id: tuple(node.after) for node in dag_from_waves(waves).nodes}
     premise_ids = _premise_row_ids(raw_by_id)
@@ -1726,6 +1831,24 @@ def stage(
         if isinstance(exc, AskStageError):
             raise
         raise AskStageError(f"sizing {run_sizing_rel or ''}: {exc}") from exc
+    briefs_rel = _rel_dir(root, run_dir / "briefs")
+    try:
+        with os.scandir(run_dir / "briefs") as _listing:
+            brief_links = frozenset(e.name for e in _listing if e.is_symlink())
+    except OSError:
+        brief_links = frozenset()
+    lazy_briefs = sum(len(w) for w in waves) > LAZY_BRIEFS_ABOVE_ROWS
+    deferred_briefs: list[str] = []
+
+    def _put_brief(name: str, rel: str, text: str, wave_no: int) -> None:
+        if lazy_briefs:
+            # Byte-identical to json.dumps({"wave", "path", "text"}); the C string encoder skips the per-row encoder setup.
+            deferred_briefs.append(
+                f'{{"wave": {wave_no}, "path": {_json_ascii(rel)}, "text": {_json_ascii(text)}}}'
+            )
+        else:
+            _write(run_dir / "briefs" / name, text)
+
     prior_fingerprint = None
     if refire_prior:
         from coordinator_core.ops.dispatch_emit import refire_unchanged
@@ -1762,7 +1885,12 @@ def stage(
                     row = row._replace(agent_model=None)  # a pinned type takes its pin; the override is dropped
                 _model_opt(agent_type, row.agent_model)  # raises on bad model grammar of an unpinned override
                 model = resolve_agent_model(agent_type, row.agent_model)
-                brief = run_dir / "briefs" / f"{row.id}.md"
+                brief_name = f"{row.id}.md"
+                brief_rel = (
+                    _rel(root, run_dir / "briefs" / brief_name)
+                    if "/" in row.id or "\\" in row.id or brief_name in brief_links
+                    else briefs_rel + brief_name
+                )
                 report_rel = _dispatch_report_path(plan_posix, row.id)
                 kept_from = (
                     resume_snap.kept_run
@@ -1815,26 +1943,26 @@ def stage(
                 manifest_stage_role = row.stage_role
                 routed_family = row_family if row_family != "claude" else role_family
                 if routed_family and not kept_from:
-                    fallback_file = run_dir / "briefs" / f"{row.id}.fallback.md"
-                    _write(fallback_file, text)
-                    fallback_rel, fallback_agent = _rel(root, fallback_file), _EXECUTOR_AGENT_TYPE
+                    fallback_name = f"{row.id}.fallback.md"
+                    fallback_rel, fallback_agent = _rel(root, run_dir / "briefs" / fallback_name), _EXECUTOR_AGENT_TYPE
+                    _put_brief(fallback_name, fallback_rel, text, wave_no)
                     if row_family != "claude":
                         fam_paths = [w for w in row.writes if isinstance(w, str)] if isinstance(row.writes, list) else []
                         manifest_stage_role = "write" if fam_paths else "other"
                         runner = stage_family.runner_brief(
-                            row_family, manifest_stage_role, _rel(root, brief),
+                            row_family, manifest_stage_role, brief_rel,
                             stage_family.family_scratch_dir(row.id, run_id), fam_paths,
                         )
                     else:
                         runner = stage_family.runner_brief(
-                            role_family, row.stage_role, _rel(root, brief),
+                            role_family, row.stage_role, brief_rel,
                             stage_family.family_scratch_dir(row.id, run_id),
                         )
                     text = runner + "\n" + text
                 text = text.replace(stage_family.RUN_ID_TOKEN, run_id)
-                _write(brief, text)
+                _put_brief(brief_name, brief_rel, text, wave_no)
                 brief_sizes[row.id] = len(text.encode("utf-8"))
-                paths = _widen_with_existing_tests(commit_pathspec_or_none([row]) or [], root)
+                paths = _widen_with_existing_tests(commit_pathspec_or_none([row]) or [], root, widen_probes)
                 declared.extend(paths)
                 if not kept_from:
                     fresh_rows[row.id] = (tuple(paths), text.replace(prior_line, "") if prior_line else text)
@@ -1850,7 +1978,7 @@ def stage(
                         agent_type=agent_type,
                         model=model,
                         effort=row.effort,
-                        brief_path=_rel(root, brief),
+                        brief_path=brief_rel,
                         writes=tuple(paths),
                         wave=wave_no,
                         deps=after.get(row.id, ()),
@@ -1877,6 +2005,8 @@ def stage(
                     )
                 )
 
+    if deferred_briefs:
+        _write(run_dir / BRIEFS_BATCH_FILE, "\n".join(deferred_briefs) + "\n")
     if refire_prior:
         from coordinator_core.ops.dispatch_emit import refire_unchanged
 
@@ -1984,7 +2114,7 @@ def stage(
         # Twin of emit.py prior_landed_rows -> prior_surface. Trap: the review base is the halted
         # run's base, so a dropped row landed before that base adds no hunk.
         for row in dropped_landed:
-            review_paths.extend(_widen_with_existing_tests(commit_pathspec_or_none([row]) or [], root))
+            review_paths.extend(_widen_with_existing_tests(commit_pathspec_or_none([row]) or [], root, widen_probes))
 
     register_rows = [
         r for r in ((run_sizing or {}).get("requirement_register") or {}).get("rows") or [] if isinstance(r, Mapping)
@@ -2357,11 +2487,12 @@ def _stage_write_baseline(
         if isinstance(recorded, Mapping):
             prior = recorded
     paths: list[str] = []
+    root_s = str(root)
     for r in rows:
         if r.adopts_stranded:
             continue
         for w in r.writes:
-            if any(ch in w for ch in "*?[") or w.endswith("/") or (root / w).is_dir():
+            if any(ch in w for ch in "*?[") or w.endswith("/") or os.path.isdir(os.path.join(root_s, w)):
                 continue
             paths.append(w)
     wanted = _dedupe_preserve_order(paths)
@@ -2813,6 +2944,11 @@ def _run_ask_stage(params: dict, repo_root: Optional[Path]) -> dict:
     writes = params.get("writes") or []
     run_id = params["run_id"]
     root = main_worktree_root(Path(repo_root))
+    if params.get("materialise_wave") is not None:
+        try:
+            return {"materialised": materialise_briefs(root, run_id, int(params["materialise_wave"]))}
+        except (ValueError, OSError) as exc:
+            return {"error": f"materialise_wave: {exc}"}
     stamp_plan_phase(root, run_id)
     park_source = _consume_park_marker(root, run_id)
     if park_source is not None:

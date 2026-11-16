@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit import halted_run
 from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, UNCHANGED_SINCE_HALT_REASON
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -34,7 +35,7 @@ def _commit(root, text, msg):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path):
     """HEAD reverted prod.py after the halt commit; the worktree holds the halt commit's bytes."""
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@t.example")
@@ -52,32 +53,32 @@ def _resume(halt, **extra):
     return {"run_id": RUN, "halt_sha": halt, "blocking": ["R1"], "unlanded": ["C1"], **extra}
 
 
-def _record_halt(root, withheld):
+def _record_halt(root, withheld) -> None:
     record_dir = root / RECORD_DIR_ROOT / RUN
     record_dir.mkdir(parents=True)
     halted_run.write_halt_marker(record_dir, halted="ledger-check", sizing_rel=None)
     halted_run.record_withheld(record_dir, withheld)
 
 
-def test_dirty_path_the_halt_withheld_counts_as_work_to_land(repo):
+def test_dirty_path_the_halt_withheld_counts_as_work_to_land(repo) -> None:
     root, manifest, halt = repo
     _record_halt(root, {"prod.py": "halt-record-only"})
     assert tc._unchanged_since_halt_failures(root, _resume(halt), MET, manifest) == []
 
 
-def test_withheld_path_carried_on_the_resume_counts_too(repo):
+def test_withheld_path_carried_on_the_resume_counts_too(repo) -> None:
     root, manifest, halt = repo
     resume = _resume(halt, run_artifacts={"withheld": {"prod.py": "halt-record-only"}})
     assert tc._unchanged_since_halt_failures(root, resume, MET, manifest) == []
 
 
-def test_same_dirty_path_without_a_withheld_record_still_refuses(repo):
+def test_same_dirty_path_without_a_withheld_record_still_refuses(repo) -> None:
     root, manifest, halt = repo
     got = tc._unchanged_since_halt_failures(root, _resume(halt), MET, manifest)
     assert got == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
 
 
-def test_withheld_path_that_is_clean_still_refuses(repo):
+def test_withheld_path_that_is_clean_still_refuses(repo) -> None:
     root, manifest, halt = repo
     _git(root, "reset", "-q", "--hard", halt)
     _record_halt(root, {"prod.py": "halt-record-only"})

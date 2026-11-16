@@ -11,12 +11,13 @@ from coordinator_core import machine_profile as mp
 from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write
 from coordinator_core.write_guards import guard_doctrine_surface_edits
+from pathlib import Path
 
 GATE_ENV = "MACHINE_LOCAL_COORDINATOR_FEATURE_DOCTRINE_EDIT_GATE"
 
 
 @pytest.fixture()
-def author_box(tmp_path, monkeypatch):
+def author_box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     reg = tmp_path / "reg"
     reg.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
@@ -39,7 +40,7 @@ def author_box(tmp_path, monkeypatch):
     mp.reset_cache()
 
 
-def _set_gate(monkeypatch, value):
+def _set_gate(monkeypatch, value) -> None:
     if value is None:
         monkeypatch.delenv(GATE_ENV, raising=False)
     else:
@@ -65,28 +66,28 @@ def _is_deny(result):
 
 
 @pytest.mark.parametrize("profile", ["author", "consumer"])
-def test_defaults_on_with_no_config(author_box, monkeypatch, profile):
+def test_defaults_on_with_no_config(author_box, monkeypatch: pytest.MonkeyPatch, profile) -> None:
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_MACHINE_PROFILE", profile)
     mp.reset_cache()
     assert mp.feature_enabled("doctrine_edit_gate") is True
     assert _is_deny(guard_doctrine_surface_edits.check(_edit_payload(author_box)))
 
 
-def test_defaults_on_an_author_profile(author_box):
+def test_defaults_on_an_author_profile(author_box) -> None:
     assert mp.machine_profile() == "author"
     assert mp.feature_enabled("doctrine_edit_gate") is True
     assert mp.feature_enabled("publishing") is True
     assert mp.feature_enabled("cross_repo_memos") is True
 
 
-def test_explicit_on_enables_and_off_disables(author_box, monkeypatch):
+def test_explicit_on_enables_and_off_disables(author_box, monkeypatch: pytest.MonkeyPatch) -> None:
     _set_gate(monkeypatch, "on")
     assert mp.feature_enabled("doctrine_edit_gate") is True
     _set_gate(monkeypatch, "off")
     assert mp.feature_enabled("doctrine_edit_gate") is False
 
 
-def test_every_enforcement_point_is_quiet_when_off(author_box, monkeypatch):
+def test_every_enforcement_point_is_quiet_when_off(author_box, monkeypatch: pytest.MonkeyPatch) -> None:
     _set_gate(monkeypatch, "off")
     assert guard_doctrine_surface_edits.check(_edit_payload(author_box)) is None
     assert not _is_deny(
@@ -94,7 +95,7 @@ def test_every_enforcement_point_is_quiet_when_off(author_box, monkeypatch):
     )
 
 
-def test_enforcement_points_when_on(author_box, monkeypatch):
+def test_enforcement_points_when_on(author_box, monkeypatch: pytest.MonkeyPatch) -> None:
     _set_gate(monkeypatch, "on")
     assert _is_deny(guard_doctrine_surface_edits.check(_edit_payload(author_box)))
     (author_box / "CLAUDE.md").write_text("x\n", encoding="utf-8")

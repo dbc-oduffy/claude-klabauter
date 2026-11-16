@@ -75,7 +75,7 @@ def _run(monkeypatch, tmp_path, source: Path, *extra: str):
     return _mod._cmd_round(args), reached, published
 
 
-def test_registry_naming_an_absent_module_refuses_before_publish_and_staging(monkeypatch, tmp_path, capsys):
+def test_registry_naming_an_absent_module_refuses_before_publish_and_staging(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     source = _source(tmp_path, with_module=False)
 
     rc, reached, published = _run(monkeypatch, tmp_path, source)
@@ -87,7 +87,7 @@ def test_registry_naming_an_absent_module_refuses_before_publish_and_staging(mon
     assert published == []
 
 
-def test_complete_registry_reaches_the_round(monkeypatch, tmp_path):
+def test_complete_registry_reaches_the_round(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     source = _source(tmp_path, with_module=True)
 
     rc, reached, published = _run(monkeypatch, tmp_path, source)
@@ -96,7 +96,7 @@ def test_complete_registry_reaches_the_round(monkeypatch, tmp_path):
     assert len(reached) == 1 and len(published) == 1
 
 
-def test_untracked_module_in_the_worktree_does_not_count(monkeypatch, tmp_path, capsys):
+def test_untracked_module_in_the_worktree_does_not_count(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     source = _source(tmp_path, with_module=False)
     (source / "coordinator_core" / "ops" / "widget.py").write_text("X = 1\n", encoding="utf-8")
 
@@ -107,7 +107,7 @@ def test_untracked_module_in_the_worktree_does_not_count(monkeypatch, tmp_path, 
     assert reached == []
 
 
-def test_source_ref_is_judged_not_head(monkeypatch, tmp_path):
+def test_source_ref_is_judged_not_head(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     source = _source(tmp_path, with_module=True)
     good = _mod._resolve_shipped_sha(source, "HEAD")
     (source / "coordinator_core" / "ops" / "widget.py").unlink()
@@ -120,7 +120,7 @@ def test_source_ref_is_judged_not_head(monkeypatch, tmp_path):
     assert len(reached) == 1
 
 
-def test_unresolvable_ref_refuses_with_its_reason(monkeypatch, tmp_path, capsys):
+def test_unresolvable_ref_refuses_with_its_reason(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     source = _source(tmp_path, with_module=True)
 
     rc, reached, published = _run(monkeypatch, tmp_path, source, "--source-ref", "no-such-ref")
@@ -131,7 +131,7 @@ def test_unresolvable_ref_refuses_with_its_reason(monkeypatch, tmp_path, capsys)
     assert reached == [] and published == []
 
 
-def test_unreadable_blob_refuses_never_passes(monkeypatch, tmp_path):
+def test_unreadable_blob_refuses_never_passes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     source = _source(tmp_path, with_module=True)
     sha = _mod._resolve_shipped_sha(source, "HEAD")
     from coordinator_core.git import git_objects
@@ -143,7 +143,7 @@ def test_unreadable_blob_refuses_never_passes(monkeypatch, tmp_path):
     assert refusal is not None and "registry-incomplete" in refusal and "unreadable" in refusal
 
 
-def test_round_resolves_the_shipped_sha_once(monkeypatch, tmp_path):
+def test_round_resolves_the_shipped_sha_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     source = _source(tmp_path, with_module=True)
     calls = []
     real = _mod._resolve_shipped_sha

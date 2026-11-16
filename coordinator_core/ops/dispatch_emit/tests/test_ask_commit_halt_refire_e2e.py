@@ -48,7 +48,7 @@ _HALT = {"halted": "commit", "plan": PLAN, "sizing": SIZING, "refused": "since-b
 
 
 @pytest.fixture
-def halted(repo, monkeypatch):  # noqa: F811
+def halted(repo, monkeypatch: pytest.MonkeyPatch):  # noqa: F811
     """Every plan row checkpoint-landed (a.py, b.py) and run `RUN` halted at commit with its review verdict."""
     monkeypatch.chdir(repo)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", _SID)
@@ -118,7 +118,7 @@ def _commit(root, token: str, inline_review: dict) -> dict:
     )
 
 
-def test_commit_halted_run_refires_and_the_new_run_lands_the_residual_reviewer_edit(halted, monkeypatch):
+def test_commit_halted_run_refires_and_the_new_run_lands_the_residual_reviewer_edit(halted, monkeypatch: pytest.MonkeyPatch) -> None:
     pointer = read_ledger_halt(ledger_halt_path(halted, PLAN))
     assert (pointer.run_id, pointer.halted, pointer.blocking) == (RUN, "commit", ())
     assert read_run_outcome(halted, RUN)["inline_review"] == _REVIEWED
@@ -133,7 +133,7 @@ def test_commit_halted_run_refires_and_the_new_run_lands_the_residual_reviewer_e
 
     calls: list = []
 
-    def review_wrote(root, sid, since):
+    def review_wrote(root, sid, since) -> dict[str, str]:
         calls.append(since)
         return {RESIDUE: "reviewer"}
 
@@ -152,7 +152,7 @@ def test_commit_halted_run_refires_and_the_new_run_lands_the_residual_reviewer_e
     assert "revise_and_refire" not in json.dumps(out)
 
 
-def test_a_closed_run_does_not_resume_again(halted, monkeypatch):
+def test_a_closed_run_does_not_resume_again(halted, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(halted, RESIDUE, "b = 2  # reworded by the reviewer\n")
     inline_review = gate(halted, SIZING).resume_ledger["inline_review"]
     monkeypatch.setattr(review_edits, "review_writes", lambda root, sid, since: {RESIDUE: "reviewer"})

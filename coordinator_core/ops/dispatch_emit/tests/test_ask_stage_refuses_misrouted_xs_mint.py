@@ -42,6 +42,13 @@ def test_s_arm_dangling_plan_edge_with_writes_is_refused_as_dangling(tmp_path):
         stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
 
 
+def test_dangling_edge_refusal_names_the_edge(tmp_path):
+    _sizing(tmp_path, plan="docs/plans/2026-10/2026-10-16-fixture.md")
+    with pytest.raises(AskStageError, match="^PLAN-EDGE-DANGLING: ") as exc:
+        stage(tmp_path, run_id="r1", sizing_rel=SIZING_REL, writes=["pkg/a.py"])
+    assert "docs/plans/2026-10/2026-10-16-fixture.md" in str(exc.value)
+
+
 def test_xs_sizing_with_empty_writes_is_refused_by_name(tmp_path):
     _sizing(tmp_path, plan=None, estimate={"tshirt": "XS"})
     with pytest.raises(AskStageError, match="^XS-MINT-NO-WRITES: "):

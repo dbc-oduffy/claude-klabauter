@@ -112,6 +112,14 @@ def test_sizing_with_neither_opt_in_omits_the_leg(monkeypatch):
     assert ask_compose._family_enabled("REPO", "sizing.yaml") is False
 
 
+def test_row_without_a_fallback_brief_keeps_the_family_attempt_and_never_reruns_on_an_empty_brief(monkeypatch):
+    fn = _family_fn(_script(monkeypatch, {"family": "codex"}))
+    guard = fn.index("if (!r.fallback_brief_path) {")
+    assert guard < fn.index("brief_path: r.fallback_brief_path")
+    assert "return 'BLOCKED: ' + r.id + ' via ' + _fam.family" in fn[guard : fn.index("brief_path: r.fallback_brief_path")]
+    assert fn.count("await agent(") == 2
+
+
 def test_unminted_sizing_path_carries_the_leg(monkeypatch):
     def _missing(root, rel):
         raise FileNotFoundError(rel)

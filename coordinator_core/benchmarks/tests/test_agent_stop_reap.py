@@ -11,6 +11,7 @@ import pytest
 
 from coordinator_core.benchmarks import agent_stop_reap as bench
 from coordinator_core.benchmarks import fixture_settings_home
+from pathlib import Path
 
 _WIN = pytest.mark.skipif(sys.platform != "win32", reason="Windows-only: Git Bash orphan trees")
 
@@ -22,7 +23,7 @@ def _good():
     }
 
 
-def test_seed_unrelated_writes_old_records_and_no_markers(tmp_path):
+def test_seed_unrelated_writes_old_records_and_no_markers(tmp_path: Path) -> None:
     from coordinator_core.bash_guards import _taskstop_launch_store as store
 
     with fixture_settings_home(tmp_path):
@@ -34,7 +35,7 @@ def test_seed_unrelated_writes_old_records_and_no_markers(tmp_path):
         assert store.records_for_agent(bench._SESSION, bench._AGENT) == []
 
 
-def test_spawn_counter_counts_only_inside_the_block():
+def test_spawn_counter_counts_only_inside_the_block() -> None:
     with bench.SpawnCounter() as sc:
         subprocess.run([sys.executable, "-c", "pass"], check=True)
     assert sc.n == 1
@@ -45,20 +46,20 @@ def test_spawn_counter_counts_only_inside_the_block():
 @pytest.mark.parametrize("field,value", [
     ("orphan_alive", 1), ("live_alive", 0), ("recycled_killed", 1), ("process_ms", 500.5), ("spawns", 1),
 ])
-def test_verdict_refuses_each_broken_pin(field, value):
+def test_verdict_refuses_each_broken_pin(field, value) -> None:
     assert bench.verdict(_good())
     row = _good()
     row[field] = value
     assert not bench.verdict(row)
 
 
-def test_verdict_accepts_exactly_the_bar():
+def test_verdict_accepts_exactly_the_bar() -> None:
     row = _good()
     row["process_ms"] = bench.BAR_MS
     assert bench.verdict(row)
 
 
-def test_format_reaper_names_every_pin():
+def test_format_reaper_names_every_pin() -> None:
     line = bench.format_reaper(_good())
     for key in ("orphan_alive=0", "live_alive=1", "recycled_killed=0", "process_ms=12.5", "spawns=0"):
         assert key in line
@@ -66,7 +67,7 @@ def test_format_reaper_names_every_pin():
 
 @_WIN
 @pytest.mark.spawns_process
-def test_recorder_half_writes_the_record_without_spawning(tmp_path):
+def test_recorder_half_writes_the_record_without_spawning(tmp_path: Path) -> None:
     with fixture_settings_home(tmp_path):
         bench.seed_unrelated(20)
         row = bench.measure_recorder(20, reps=2)
@@ -76,7 +77,7 @@ def test_recorder_half_writes_the_record_without_spawning(tmp_path):
 @_WIN
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_default_fixture_meets_the_pins_through_the_production_op(tmp_path):
+def test_default_fixture_meets_the_pins_through_the_production_op(tmp_path: Path) -> None:
     with fixture_settings_home(tmp_path):
         row = bench.measure_reaper(5)
     if "ambiguous" in str(row["outcomes"]):
@@ -88,7 +89,7 @@ def test_default_fixture_meets_the_pins_through_the_production_op(tmp_path):
 @_WIN
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_main_exit_code_follows_the_verdict(tmp_path, monkeypatch, capsys):
+def test_main_exit_code_follows_the_verdict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(bench, "measure_recorder", lambda n, reps=20: {
         "records": n, "process_ms": 1.0, "spawns": 0, "wrote": True, "platform": "win32"})
     rows = iter([dict(_good(), orphan_alive=1), _good()])

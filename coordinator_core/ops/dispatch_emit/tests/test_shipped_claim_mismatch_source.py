@@ -17,6 +17,7 @@ from coordinator_core.ops.dispatch_emit.shipped_claims import (
     shipped_gate,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -24,11 +25,11 @@ GRADE = "executor PARTIAL: one optional test could not be built"
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
 
-    def git(*args):
+    def git(*args) -> None:
         subprocess.run(
             ["git", *args], cwd=str(root), check=True, capture_output=True, **no_console_creationflags()
         )
@@ -46,7 +47,7 @@ def repo(tmp_path):
     return root
 
 
-def _note(*paths):
+def _note(*paths) -> str:
     return "## What shipped\n" + "".join(f"- `{p}` delivered\n" for p in paths)
 
 
@@ -54,12 +55,12 @@ def _verdicts(root, *paths, **kw):
     return {v.claim.path: v for v in judge_shipped_claims(root, [ShippedClaim(p, f"`{p}`") for p in paths], **kw)}
 
 
-def test_new_verdicts_are_declared_and_not_in_the_unbacked_set():
+def test_new_verdicts_are_declared_and_not_in_the_unbacked_set() -> None:
     assert ROW_GRADE_OWED == "partial-row-grade-owed"
     assert {"peer-owned", "row-ungraded"} <= set(SHIPPED_VERDICTS)
 
 
-def test_legacy_call_keeps_leading_refusal_text_and_reply_keys(repo):
+def test_legacy_call_keeps_leading_refusal_text_and_reply_keys(repo) -> None:
     refusal, reply = shipped_gate(repo, _note("new.py", "tracked.py"))
     assert refusal.startswith("shipped-claim-unbacked: `new.py` is untracked: ")
     assert "re-fire the same sizing" in refusal
@@ -71,7 +72,7 @@ def test_legacy_call_keeps_leading_refusal_text_and_reply_keys(repo):
     "path,withheld",
     [("tracked.py", ()), ("new.py", ()), ("held.py", ["held.py"])],
 )
-def test_row_of_reroutes_a_would_refuse_claim_to_row_ungraded(repo, path, withheld):
+def test_row_of_reroutes_a_would_refuse_claim_to_row_ungraded(repo, path, withheld) -> None:
     refusal, reply = shipped_gate(
         repo, _note(path), withheld_paths=withheld, row_of={path: ("C3", GRADE)}, run_id="run-1"
     )
@@ -83,7 +84,7 @@ def test_row_of_reroutes_a_would_refuse_claim_to_row_ungraded(repo, path, withhe
     assert refused_code(reply) == ROW_GRADE_OWED
 
 
-def test_a_reasoned_withhold_on_a_row_path_keeps_refusing_unbacked(repo):
+def test_a_reasoned_withhold_on_a_row_path_keeps_refusing_unbacked(repo) -> None:
     refusal, reply = shipped_gate(
         repo, _note("held.py"), withheld_paths={"held.py": "never-commit"}, row_of={"held.py": ("C3", GRADE)}
     )
@@ -93,10 +94,10 @@ def test_a_reasoned_withhold_on_a_row_path_keeps_refusing_unbacked(repo):
     assert refused_code(reply) == SHIPPED_CLAIM_REFUSED
 
 
-def test_owners_is_called_once_with_only_non_own_non_row_would_refuse_paths(repo):
+def test_owners_is_called_once_with_only_non_own_non_row_would_refuse_paths(repo) -> None:
     calls = []
 
-    def owners(paths):
+    def owners(paths) -> dict[str, str]:
         calls.append(list(paths))
         return {"peer.py": "run-sib"}
 
@@ -111,13 +112,13 @@ def test_owners_is_called_once_with_only_non_own_non_row_would_refuse_paths(repo
     assert reply["dropped_foreign"] == ["new.py"]
 
 
-def test_peer_owned_alone_does_not_refuse(repo):
+def test_peer_owned_alone_does_not_refuse(repo) -> None:
     refusal, reply = shipped_gate(repo, _note("peer.py"), owners=lambda paths: {"peer.py": "run-sib"})
     assert refusal is None
     assert reply["peer_owned"] == [{"path": "peer.py", "owner": "run-sib"}] and reply["unbacked"] == []
 
 
-def test_owners_is_not_called_on_a_passing_note_or_with_no_candidate(repo):
+def test_owners_is_not_called_on_a_passing_note_or_with_no_candidate(repo) -> None:
     def boom(paths):
         raise AssertionError("owners called")
 
@@ -126,7 +127,7 @@ def test_owners_is_not_called_on_a_passing_note_or_with_no_candidate(repo):
     shipped_gate(repo, _note("tracked.py"), row_of={"tracked.py": ("C3", GRADE)}, owners=boom)
 
 
-def test_an_owners_that_raises_leaves_the_refusal(repo):
+def test_an_owners_that_raises_leaves_the_refusal(repo) -> None:
     def boom(paths):
         raise RuntimeError("index unreadable")
 
@@ -134,7 +135,7 @@ def test_an_owners_that_raises_leaves_the_refusal(repo):
     assert refusal.startswith(SHIPPED_CLAIM_REFUSED) and "peer_owned" not in reply
 
 
-def test_every_refusing_claim_is_named_with_source_and_reason_unbacked_first(repo):
+def test_every_refusing_claim_is_named_with_source_and_reason_unbacked_first(repo) -> None:
     refusal, reply = shipped_gate(
         repo, _note("tracked.py", "new.py", "held.py"),
         withheld_paths={"held.py": "never-commit"}, own_paths={"tracked.py", "held.py"},
@@ -150,7 +151,7 @@ def test_every_refusing_claim_is_named_with_source_and_reason_unbacked_first(rep
     assert len(reply["unbacked"]) == 1 and len(reply["row_grade_owed"]) == 1
 
 
-def test_left_out_reason_per_verdict(repo):
+def test_left_out_reason_per_verdict(repo) -> None:
     got = _verdicts(repo, "new.py", "other.py", "held.py", own_paths={"other.py"}, withheld_paths={"held.py": "peer-held"})
     assert got["new.py"].left_out == NOT_DECLARED
     assert got["other.py"].left_out == got["other.py"].why

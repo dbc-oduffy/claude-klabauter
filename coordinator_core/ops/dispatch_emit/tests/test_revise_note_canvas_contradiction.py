@@ -7,13 +7,14 @@ import yaml
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import run_notes
 from coordinator_core.ops.dispatch_emit.tests.test_revise_reused_sizing import REL, _bound, repo  # noqa: F401
+import pytest
 
 MODAL_ASK = "Connect should open a dismissable connect-accounts modal"
 INCIDENT = "Connect (to /welcome) is the click path"
 FINE = "Connect opens the connect-accounts modal"
 
 
-def _with_pm_words(repo):
+def _with_pm_words(repo) -> None:
     path = repo / REL
     doc = yaml.safe_load(path.read_text(encoding="utf-8"))
     doc["pm_verbatims"] = [{"text": MODAL_ASK}]
@@ -25,7 +26,7 @@ def _notes(repo, run_id):
     return dir_, run_notes.entries(dir_ / rl.NOTES_FILE, run_id)
 
 
-def test_emitted_run_note_contradicting_the_pm_words_is_flagged_and_stored(repo):
+def test_emitted_run_note_contradicting_the_pm_words_is_flagged_and_stored(repo) -> None:
     _with_pm_words(repo)
     _bound(repo, "run-one", ask="first ask")
     reply = rl._handler({"run_id": "run-one", "note": INCIDENT}, repo_root=repo)
@@ -39,7 +40,7 @@ def test_emitted_run_note_contradicting_the_pm_words_is_flagged_and_stored(repo)
     assert "(flagged: contradicts " in rendered and INCIDENT in rendered
 
 
-def test_a_consistent_note_replies_with_neither_key_and_no_flag(repo):
+def test_a_consistent_note_replies_with_neither_key_and_no_flag(repo) -> None:
     _with_pm_words(repo)
     _bound(repo, "run-one", ask="first ask")
     reply = rl._handler({"run_id": "run-one", "note": FINE}, repo_root=repo)
@@ -50,19 +51,19 @@ def test_a_consistent_note_replies_with_neither_key_and_no_flag(repo):
     assert "flagged" not in "\n".join(run_notes.render_section(items))
 
 
-def _held(repo, monkeypatch, run_id):
+def _held(repo, monkeypatch, run_id) -> None:
     monkeypatch.setattr(rl, "_parent_lists_run", lambda root, rid: True)
     assert rl.read_run(rl.run_dir(repo, run_id)) is None
 
 
-def test_held_run_note_is_queued_unflagged_when_no_source_governs(repo, monkeypatch):
+def test_held_run_note_is_queued_unflagged_when_no_source_governs(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _held(repo, monkeypatch, "run-held")
     reply = rl._handler({"run_id": "run-held", "note": INCIDENT}, repo_root=repo)
     assert reply["ok"] is True and "canvas_conflicts" not in reply and "warning" not in reply
     assert len(_notes(repo, "run-held")[1]) == 1
 
 
-def test_held_run_note_is_flagged_and_queued_when_pm_words_govern(repo, monkeypatch):
+def test_held_run_note_is_flagged_and_queued_when_pm_words_govern(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import canvas_contradiction as cc
 
     _held(repo, monkeypatch, "run-held")

@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core import machine_profile
 from coordinator_core.session import em_guard_grant as eg
+from pathlib import Path
 
 _FLAG_ENV = "MACHINE_LOCAL_COORDINATOR_FEATURE_OUT_OF_REPO_WRITE_BLOCK"
 
@@ -25,7 +26,7 @@ def _seam(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("guard", sorted(eg._GRANTABLE_GUARDS))
-def test_grant_refused_under_flag_and_nothing_written(monkeypatch, tmp_path, guard):
+def test_grant_refused_under_flag_and_nothing_written(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, guard) -> None:
     _set_flag(monkeypatch, "on")
     sdir, sentinel = _seam(monkeypatch, tmp_path)
     with pytest.raises(ValueError, match="not grantable on this box"):
@@ -34,7 +35,7 @@ def test_grant_refused_under_flag_and_nothing_written(monkeypatch, tmp_path, gua
     assert not sentinel.exists()
 
 
-def test_cli_grant_exits_2_under_flag(monkeypatch, tmp_path, capsys):
+def test_cli_grant_exits_2_under_flag(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _set_flag(monkeypatch, "on")
     _seam(monkeypatch, tmp_path)
     assert eg.main(["grant", "bump-foreign-repo-write", "because"]) == 2
@@ -44,7 +45,7 @@ def test_cli_grant_exits_2_under_flag(monkeypatch, tmp_path, capsys):
 
 
 @pytest.mark.parametrize("guard", sorted(eg._GRANTABLE_GUARDS))
-def test_grant_succeeds_with_flag_off(monkeypatch, tmp_path, guard):
+def test_grant_succeeds_with_flag_off(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, guard) -> None:
     _set_flag(monkeypatch, "off")
     sdir, sentinel = _seam(monkeypatch, tmp_path)
     assert eg.write_em_guard_grant(guard, "because") is True
@@ -52,7 +53,7 @@ def test_grant_succeeds_with_flag_off(monkeypatch, tmp_path, guard):
     assert sentinel.exists()
 
 
-def test_grantable_set_unchanged():
+def test_grantable_set_unchanged() -> None:
     assert eg._GRANTABLE_GUARDS == frozenset(
         {"bump-foreign-repo-write", "bump-outside-repo-write"}
     )

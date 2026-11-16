@@ -754,6 +754,21 @@ def write_register_text(sizing_text: str, block: Mapping[str, Any], now: datetim
     """`sizing_text` with the top-level register block replaced (appended at EOF when absent).
     The block written is `block` minus its rollup, then the rows, then a rollup recomputed at
     `now`; every byte outside the block is kept, line endings included."""
+    return write_register_text_and_body(sizing_text, block, now)[0]
+
+
+def without_register_block(sizing_text: str) -> str:
+    """`sizing_text` minus its top-level register block (all of it when the key is absent)."""
+    lines = sizing_text.replace("\r\n", "\n").split("\n")
+    span = _block_span(lines)
+    return sizing_text if span is None else "\n".join(lines[:span[0]] + lines[span[1]:])
+
+
+def write_register_text_and_body(
+    sizing_text: str, block: Mapping[str, Any], now: datetime
+) -> tuple[str, dict[str, Any]]:
+    """`(write_register_text(...), body)`: `body` is the register mapping the text carries (rows,
+    recomputed rollup, the rest of `block`), so a caller can check it without parsing the text back."""
     import yaml
 
     nl = "\r\n" if "\r\n" in sizing_text else "\n"
@@ -762,16 +777,16 @@ def write_register_text(sizing_text: str, block: Mapping[str, Any], now: datetim
     body = {k: v for k, v in block.items() if k not in (ROLLUP_KEY, ROWS_KEY)}
     body[ROWS_KEY] = rows
     body[ROLLUP_KEY] = rollup(rows, now)
-    dumped = yaml.safe_dump(
-        {REGISTER_KEY: body}, sort_keys=False, allow_unicode=True, default_flow_style=False,
-        width=1_000_000,
+    dumped = yaml.dump(
+        {REGISTER_KEY: body}, Dumper=getattr(yaml, "CSafeDumper", yaml.SafeDumper), sort_keys=False,
+        allow_unicode=True, default_flow_style=False, width=1_000_000,
     ).rstrip("\n").split("\n")
     span = _block_span(lines)
     if span is not None:
-        return nl.join(lines[:span[0]] + dumped + lines[span[1]:])
+        return nl.join(lines[:span[0]] + dumped + lines[span[1]:]), body
     if lines and lines[-1] == "":
-        return nl.join(lines[:-1] + dumped + [""])
-    return nl.join(lines + dumped + [""])
+        return nl.join(lines[:-1] + dumped + [""]), body
+    return nl.join(lines + dumped + [""]), body
 
 
 def load_register_yaml(text: str) -> Any:

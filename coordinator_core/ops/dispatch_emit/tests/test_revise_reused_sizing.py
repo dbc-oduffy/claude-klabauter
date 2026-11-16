@@ -7,12 +7,13 @@ import yaml
 
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 REL = "state/sizings/2026-10-01-reuse.yaml"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
@@ -37,7 +38,7 @@ def _bound(repo, run_id, *, ask=None, relayed=None):
     return rl.bind(repo, run_id, REL, ask_text=ask, relayed_text=relayed)
 
 
-def test_second_ask_on_a_reused_sizing_lands_as_a_revision(repo):
+def test_second_ask_on_a_reused_sizing_lands_as_a_revision(repo) -> None:
     _bound(repo, "run-one", ask="first ask")
     ledger = _bound(repo, "run-two", ask="second ask")
     assert [(r["source_text"], r["anchor"].split("@")[0]) for r in _rows(repo)] == [
@@ -50,19 +51,19 @@ def test_second_ask_on_a_reused_sizing_lands_as_a_revision(repo):
     assert rl.judge(ledger, verdict)["pass"] is True
 
 
-def test_second_relayed_ask_on_a_reused_sizing_lands_as_a_revision(repo):
+def test_second_relayed_ask_on_a_reused_sizing_lands_as_a_revision(repo) -> None:
     _bound(repo, "run-one", relayed="first relay")
     _bound(repo, "run-two", relayed="second relay")
     assert [r["anchor"].split("@")[0] for r in _rows(repo)] == ["relayed", "revision"]
 
 
-def test_rebinding_the_same_ask_adds_no_row(repo):
+def test_rebinding_the_same_ask_adds_no_row(repo) -> None:
     _bound(repo, "run-one", ask="first ask")
     _bound(repo, "run-two", ask="first ask")
     assert [r["anchor"] for r in _rows(repo)] == ["ask"]
 
 
-def test_revise_after_the_ledger_check_adds_a_row_the_cached_verdict_leaves_unjudged(repo):
+def test_revise_after_the_ledger_check_adds_a_row_the_cached_verdict_leaves_unjudged(repo) -> None:
     ledger = _bound(repo, "run-one", ask="first ask")
     verdict = {"items": [{"id": i.id, "status": "met"} for i in ledger.items]}
     assert rl.judge(ledger, verdict)["pass"] is True
@@ -73,7 +74,7 @@ def test_revise_after_the_ledger_check_adds_a_row_the_cached_verdict_leaves_unju
     assert outcome["pass"] is False and outcome["failures"][0]["reason"].startswith("unjudged")
 
 
-def test_revise_on_a_finished_run_names_a_refire_whose_fresh_run_rereads_and_rejudges_the_ledger(repo):
+def test_revise_on_a_finished_run_names_a_refire_whose_fresh_run_rereads_and_rejudges_the_ledger(repo) -> None:
     ledger = _bound(repo, "run-one", ask="first ask")
     cached = {"items": [{"id": i.id, "status": "met"} for i in ledger.items]}
     reply = rl._handler({"run_id": "run-one", "verbatim": "also do this"}, repo_root=repo)

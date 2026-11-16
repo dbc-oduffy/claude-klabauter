@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit import co_declared_settle
 from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
 from coordinator_core.ops.dispatch_emit import hunk_provenance as hp
 from coordinator_core.ops.dispatch_emit import kept_work, peer_hunk_gate
+from pathlib import Path
 
 PATH = "src/target.py"
 OLD_SIZING = "state/sizings/2026-11/2026-11-15-head-bake-resolution-53a9c1.yaml"
@@ -26,7 +27,7 @@ def _text(edits: dict) -> bytes:
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     blobs: dict = {}
 
     def put(data: bytes) -> str:
@@ -75,21 +76,21 @@ def _refire(world) -> None:
     world.run(REFIRE, sizing_rel=NEW_SIZING, earlier_sizings=[OLD_SIZING])
 
 
-def test_first_fire_ask_bound_to_an_earlier_sizing_is_own(world):
+def test_first_fire_ask_bound_to_an_earlier_sizing_is_own(world) -> None:
     _refire(world)
     world.run(FIRST_FIRE, sizing_rel=OLD_SIZING)
     world.kept(FIRST_FIRE, _text({2: "FIRST"}))
     assert hp.peer_split(world.root, REFIRE, [PATH]) == ({}, {})
 
 
-def test_first_fire_ask_with_no_recorded_sizing_is_own_by_its_hex(world):
+def test_first_fire_ask_with_no_recorded_sizing_is_own_by_its_hex(world) -> None:
     _refire(world)
     world.run(FIRST_FIRE)
     world.kept(FIRST_FIRE, _text({2: "FIRST"}))
     assert hp.peer_split(world.root, REFIRE, [PATH]) == ({}, {})
 
 
-def test_resumed_from_warp_id_with_its_own_sizing_is_own(world):
+def test_resumed_from_warp_id_with_its_own_sizing_is_own(world) -> None:
     prior = "warp-2026-11-15-something-else-aaaaaa-20261115T075000-aaaaaa"
     world.run(REFIRE, sizing_rel=NEW_SIZING, resumed_from=prior)
     world.run(prior, sizing_rel="state/sizings/2026-11/unrelated-name.yaml")
@@ -97,7 +98,7 @@ def test_resumed_from_warp_id_with_its_own_sizing_is_own(world):
     assert hp.peer_split(world.root, REFIRE, [PATH]) == ({}, {})
 
 
-def test_unrelated_ask_hunks_still_split(world):
+def test_unrelated_ask_hunks_still_split(world) -> None:
     _refire(world)
     world.run(UNRELATED, sizing_rel="state/sizings/2026-11/2026-11-15-other-work-bbbbbb.yaml")
     world.kept(UNRELATED, _text({2: "FIRST"}))
@@ -105,7 +106,7 @@ def test_unrelated_ask_hunks_still_split(world):
     assert set(split) | set(unsettled) == {PATH}
 
 
-def test_unrecorded_ask_with_a_foreign_hex_is_not_kin(world):
+def test_unrecorded_ask_with_a_foreign_hex_is_not_kin(world) -> None:
     _refire(world)
     world.run(UNRELATED)
     world.kept(UNRELATED, _text({2: "FIRST"}))
@@ -113,7 +114,7 @@ def test_unrecorded_ask_with_a_foreign_hex_is_not_kin(world):
     assert set(split) | set(unsettled) == {PATH}
 
 
-def test_first_fire_hunks_split_without_the_lineage_record(world):
+def test_first_fire_hunks_split_without_the_lineage_record(world) -> None:
     _refire(world)
     split, unsettled = hp.peer_split(world.root, REFIRE, [PATH])
     assert set(split) | set(unsettled) == {PATH}

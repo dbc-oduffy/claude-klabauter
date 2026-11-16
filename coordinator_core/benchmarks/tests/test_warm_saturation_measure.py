@@ -7,14 +7,16 @@ import json
 
 from coordinator_core.benchmarks import warm_saturation_measure as m
 from coordinator_core.session_hub_path import hub_for_common
+from pathlib import Path
+import pytest
 
 
-def _proc(op, ms, route="warm_server", spawns=0, sid="s1", **kw):
+def _proc(op, ms, route: str = "warm_server", spawns: int = 0, sid: str | None = "s1", **kw):
     return {"kind": "process_time", "op": op, "route": route, "process_ms": ms, "spawns": spawns,
             "t_start": 1000.0, "sid": sid, **kw}
 
 
-def test_read_rows_filters_window_and_junk(tmp_path):
+def test_read_rows_filters_window_and_junk(tmp_path: Path) -> None:
     sink = hub_for_common(tmp_path / "a" / ".git") / "logs" / "op-latency.jsonl"
     sink.parent.mkdir(parents=True)
     lines = [
@@ -30,12 +32,12 @@ def test_read_rows_filters_window_and_junk(tmp_path):
     assert rows[0]["_sink"] == "a"
 
 
-def test_session_counts_with_and_without_sid():
+def test_session_counts_with_and_without_sid() -> None:
     rows = [{"sid": "a"}, {"sid": "a"}, {"sid": "b"}, {"sid": None}, {}]
     assert m._session_counts(rows) == (2, 2)
 
 
-def test_op_table_bar_comparison_and_handler_dedup():
+def test_op_table_bar_comparison_and_handler_dedup() -> None:
     rows = [
         _proc("hooks.x", 100.0),
         _proc("hooks.x", 600.0, spawns=2),
@@ -50,11 +52,11 @@ def test_op_table_bar_comparison_and_handler_dedup():
     assert t["process_ms"]["max"] == 600.0
 
 
-def test_op_table_skips_non_production_origin():
+def test_op_table_skips_non_production_origin() -> None:
     assert m._op_table([_proc("hooks.x", 900.0, origin="benchmark")]) == {}
 
 
-def test_occupancy_counts_distinct_pids_with_open_intervals():
+def test_occupancy_counts_distinct_pids_with_open_intervals() -> None:
     def pair(corr, pid, t, dur_ms):
         return [
             {"kind": "started", "route": "warm_server", "corr_id": corr, "t_start": t, "pid": pid, "op": "o"},
@@ -69,11 +71,11 @@ def test_occupancy_counts_distinct_pids_with_open_intervals():
     assert occ["seconds_at_or_over_heavy_cap"] == 0.0
 
 
-def test_occupancy_empty():
+def test_occupancy_empty() -> None:
     assert m._occupancy([], 0.0, 1.0) == {"intervals": 0}
 
 
-def test_occupancy_heavy_cap_reached_by_four_pids():
+def test_occupancy_heavy_cap_reached_by_four_pids() -> None:
     rows = []
     for i in range(4):
         rows += [
@@ -85,7 +87,7 @@ def test_occupancy_heavy_cap_reached_by_four_pids():
     assert occ["seconds_at_or_over_heavy_cap"] == 5.0
 
 
-def test_main_report_carries_bar_and_sid_keys(tmp_path, capsys):
+def test_main_report_carries_bar_and_sid_keys(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     git = tmp_path / "repo" / ".git"
     logs = hub_for_common(git) / "logs"
     git.mkdir(parents=True)

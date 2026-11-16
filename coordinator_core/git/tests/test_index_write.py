@@ -7,6 +7,7 @@ import pytest
 
 from coordinator_core.git import index_write
 from coordinator_core.git.git_objects import write_object
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -14,7 +15,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 
 
-def _git(repo, *args, check=True):
+def _git(repo, *args, check: bool = True):
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **_NOWIN
     )
@@ -36,7 +37,7 @@ def _status(repo):
     return _git(repo, "status", "--porcelain").stdout
 
 
-def test_spliced_new_file_reads_staged_to_real_git(tmp_path):
+def test_spliced_new_file_reads_staged_to_real_git(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "added.txt").write_text("new content\n", encoding="utf-8", newline="\n")
 
@@ -48,7 +49,7 @@ def test_spliced_new_file_reads_staged_to_real_git(tmp_path):
     _git(repo, "fsck", "--strict")
 
 
-def test_untouched_entries_survive_verbatim(tmp_path):
+def test_untouched_entries_survive_verbatim(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "added.txt").write_text("x\n", encoding="utf-8", newline="\n")
 
@@ -59,7 +60,7 @@ def test_untouched_entries_survive_verbatim(tmp_path):
     assert "seed.txt" not in status, status
 
 
-def test_commit_then_splice_leaves_a_clean_tree(tmp_path):
+def test_commit_then_splice_leaves_a_clean_tree(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "landed.txt").write_text("landed\n", encoding="utf-8", newline="\n")
     blob = write_object(repo / ".git", b"blob", b"landed\n")
@@ -72,21 +73,21 @@ def test_commit_then_splice_leaves_a_clean_tree(tmp_path):
     assert show == "landed\n", show
 
 
-def test_absent_sentinel_stages_a_deletion(tmp_path):
+def test_absent_sentinel_stages_a_deletion(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "seed.txt").unlink()
     index_write.splice_index(repo, {"seed.txt": index_write.ABSENT})
     assert _status(repo).strip() == "D  seed.txt", _status(repo)
 
 
-def test_lock_is_refused_never_stolen(tmp_path):
+def test_lock_is_refused_never_stolen(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / ".git" / "index.lock").write_bytes(b"partial index bytes")
     with pytest.raises(index_write.IndexWriteLockBusy):
         index_write.splice_index(repo, {"seed.txt": index_write.ABSENT})
 
 
-def test_orphaned_stale_lock_is_reaped_before_the_splice(tmp_path, monkeypatch):
+def test_orphaned_stale_lock_is_reaped_before_the_splice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")
     monkeypatch.chdir(repo)
@@ -102,7 +103,7 @@ def test_orphaned_stale_lock_is_reaped_before_the_splice(tmp_path, monkeypatch):
     assert _status(repo).strip() == "D  seed.txt", _status(repo)
 
 
-def test_absolute_key_refused_before_writing(tmp_path):
+def test_absolute_key_refused_before_writing(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     before = (repo / ".git" / "index").read_bytes()
     abs_key = str(repo / "seed.txt")
@@ -114,7 +115,7 @@ def test_absolute_key_refused_before_writing(tmp_path):
     assert after == before
 
 
-def test_drive_letter_key_refused_before_writing(tmp_path):
+def test_drive_letter_key_refused_before_writing(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     before = (repo / ".git" / "index").read_bytes()
     drive_key = "C:/claude-klabauter/seed.txt"
@@ -126,7 +127,7 @@ def test_drive_letter_key_refused_before_writing(tmp_path):
     assert after == before
 
 
-def test_scale_the_splice_does_not_rewrite_untouched_entries(tmp_path):
+def test_scale_the_splice_does_not_rewrite_untouched_entries(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     for i in range(300):
         (repo / f"f{i:04d}.txt").write_text(f"{i}\n", encoding="utf-8", newline="\n")
@@ -144,7 +145,7 @@ def test_scale_the_splice_does_not_rewrite_untouched_entries(tmp_path):
     _git(repo, "fsck", "--strict")
 
 
-def test_the_index_read_happens_under_the_lock(tmp_path):
+def test_the_index_read_happens_under_the_lock(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     lock_path = repo / ".git" / "index.lock"
     (repo / "ours.txt").write_text("ours\n", encoding="utf-8", newline="\n")
@@ -178,7 +179,7 @@ def test_the_index_read_happens_under_the_lock(tmp_path):
     _git(repo, "fsck", "--strict")
 
 
-def _reference_splice_bytes(raw, replacements):
+def _reference_splice_bytes(raw, replacements) -> bytes:
     """Oracle: parse every entry, splice replacements, sort by name, rehash."""
     import hashlib
     import struct
@@ -208,7 +209,7 @@ def _reference_splice_bytes(raw, replacements):
     return body + hashlib.sha1(body).digest()
 
 
-def test_splice_is_byte_identical_to_the_reference_algorithm(tmp_path):
+def test_splice_is_byte_identical_to_the_reference_algorithm(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     for d in range(20):
         (repo / f"d{d:02d}").mkdir()
@@ -224,7 +225,7 @@ def test_splice_is_byte_identical_to_the_reference_algorithm(tmp_path):
     (repo / "d05" / "f050b.txt").write_text("ins\n", encoding="utf-8", newline="\n")
     (repo / "d10" / "f010.txt").unlink()
 
-    def sha(text):
+    def sha(text) -> str:
         return write_object(repo / ".git", b"blob", text)
 
     updates = {
@@ -257,7 +258,7 @@ def test_splice_is_byte_identical_to_the_reference_algorithm(tmp_path):
     assert "d10/f010.txt" in status and "000-first.txt" in status, status
 
 
-def test_missing_key_absent_keeps_the_entry_block_verbatim(tmp_path):
+def test_missing_key_absent_keeps_the_entry_block_verbatim(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     index_path = repo / ".git" / "index"
     before = index_path.read_bytes()
@@ -270,7 +271,7 @@ def test_missing_key_absent_keeps_the_entry_block_verbatim(tmp_path):
     assert _status(repo).strip() == ""
 
 
-def test_splice_index_refuses_dotgit_component(tmp_path):
+def test_splice_index_refuses_dotgit_component(tmp_path: Path) -> None:
     import pytest
     from coordinator_core.git import index_write
 
@@ -279,7 +280,7 @@ def test_splice_index_refuses_dotgit_component(tmp_path):
             index_write.splice_index(tmp_path, {name: index_write.ABSENT})
 
 
-def test_stat_fallback_splices_a_path_whose_worktree_file_is_gone(tmp_path):
+def test_stat_fallback_splices_a_path_whose_worktree_file_is_gone(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "kept.txt").write_bytes(b"kept\n")
     kept = write_object(repo / ".git", b"blob", b"kept\n")
@@ -310,7 +311,7 @@ def _conflicted_repo(tmp_path):
     return repo
 
 
-def test_collapse_unmerged_resolves_named_path_and_refuses_the_rest(tmp_path):
+def test_collapse_unmerged_resolves_named_path_and_refuses_the_rest(tmp_path: Path) -> None:
     repo = _conflicted_repo(tmp_path)
     (repo / "a.txt").write_text("resolved\n", encoding="utf-8", newline="\n")
     sha = write_object(repo / ".git", b"blob", b"resolved\n")
@@ -341,7 +342,7 @@ def test_collapse_unmerged_resolves_named_path_and_refuses_the_rest(tmp_path):
     _git(repo, "fsck", "--strict")
 
 
-def test_collapse_unmerged_leaves_other_conflicts_refused(tmp_path):
+def test_collapse_unmerged_leaves_other_conflicts_refused(tmp_path: Path) -> None:
     repo = _conflicted_repo(tmp_path)
     (repo / "a.txt").write_text("resolved\n", encoding="utf-8", newline="\n")
     sha = write_object(repo / ".git", b"blob", b"resolved\n")

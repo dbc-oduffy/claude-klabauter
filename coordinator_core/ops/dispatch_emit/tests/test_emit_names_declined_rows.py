@@ -6,9 +6,11 @@ from coordinator_core.ops.dispatch_emit import queue_emit
 from .conftest import REVIEW_KW
 from .test_queue_emit import _FIXTURE_PROFILE_DIR, _setup_repo, _write_row
 from .test_queue_select import _lesson_gate
+from pathlib import Path
+import pytest
 
 
-def test_receipt_and_stderr_name_a_declined_stem_mismatched_titleless_row(tmp_path, monkeypatch, capsys):
+def test_receipt_and_stderr_name_a_declined_stem_mismatched_titleless_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo_root, queue_dir, run_dir = _setup_repo(tmp_path, n_rows=0)
     _write_row(queue_dir / "file-stem.yaml", id="a-different-id", status="open", created="2026-09-21", severity="P0")
     _write_row(queue_dir / "ok.yaml", id="ok", status="open", created="2026-09-21", title="t", body="b",

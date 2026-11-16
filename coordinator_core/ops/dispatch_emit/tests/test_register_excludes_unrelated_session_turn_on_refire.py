@@ -12,6 +12,7 @@ from coordinator_core.ops import baton_pm_turns as pm_turns
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.session_baton import store
+from pathlib import Path
 
 RUN = "ask-20261017T000000-aaaaaa"
 REL = "state/sizings/2026-10-17-refire.yaml"
@@ -21,7 +22,7 @@ TURNS = (ASK, UNRELATED)
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     sdir = session_dir_for(tmp_path / ".git", "sid-rf")
@@ -45,7 +46,7 @@ def _register(repo):
     return rr.read_register((repo / REL).read_text(encoding="utf-8"))
 
 
-def test_a_later_unrelated_session_turn_sharing_a_word_is_listed_not_seeded(repo):
+def test_a_later_unrelated_session_turn_sharing_a_word_is_listed_not_seeded(repo) -> None:
     rl.bind(repo, RUN, REL, ask_text=ASK)
     reg = _register(repo)
     assert UNRELATED not in [r["source_text"] for r in reg.rows]
@@ -53,7 +54,7 @@ def test_a_later_unrelated_session_turn_sharing_a_word_is_listed_not_seeded(repo
     assert not [r for r in reg.rows if r["status"] == rr.STATUS_OPEN and r["source_text"] == UNRELATED]
 
 
-def test_rebinding_is_idempotent_and_a_revision_still_binds(repo):
+def test_rebinding_is_idempotent_and_a_revision_still_binds(repo) -> None:
     rl.bind(repo, RUN, REL, ask_text=ASK)
     rl.revise(repo, RUN, verbatim="also keep the sizing shippable")
     rl.bind(repo, RUN, REL, ask_text=ASK)
@@ -63,6 +64,6 @@ def test_rebinding_is_idempotent_and_a_revision_still_binds(repo):
     assert len(reg.raw[rr.UNRELATED_TURNS_KEY]) == 1
 
 
-def test_a_relayed_run_binds_the_relayed_text_only(repo):
+def test_a_relayed_run_binds_the_relayed_text_only(repo) -> None:
     rl.bind(repo, RUN, REL, relayed_text="relayed fix text for the register")
     assert [r["source_text"] for r in _register(repo).rows] == ["relayed fix text for the register"]

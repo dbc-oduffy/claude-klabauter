@@ -8,9 +8,10 @@ absent, times out, or emits unparseable output: None means "unknown", never "zer
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 DANGER_CALLS = 0
 # Provisional: recalibrate from host meter rows once example-retrieval-repo usage lands.
@@ -132,6 +133,18 @@ def is_ue_repo(root: str | Path) -> bool:
     from coordinator_core.ops.dispatch_emit.ue_route_source import is_ue_repo as _is_ue_repo
 
     return _is_ue_repo(root)
+
+
+#: A path the UE-corpus docs-check serves: control/plugin/**, Source/**, *.cpp, *.h, *.uasset.
+#: One source for the Python predicate and the composed JS test; keep it free of Python-only syntax.
+UE_PATH_PATTERN = r"(?:^|/)(?:control/plugin/|Source/)|\.(?:cpp|h|uasset)$"
+UE_PATH_RE = re.compile(UE_PATH_PATTERN, re.IGNORECASE)
+NO_UE_PATHS_GAP = "no_ue_paths"
+
+
+def touches_ue_path(paths: Iterable[str]) -> bool:
+    """True when any of `paths` is a UE path (`UE_PATH_PATTERN`); backslashes read as `/`."""
+    return any(UE_PATH_RE.search(str(p).replace("\\", "/")) for p in paths)
 
 
 def rag_installed(repo_root: str | Path) -> bool:

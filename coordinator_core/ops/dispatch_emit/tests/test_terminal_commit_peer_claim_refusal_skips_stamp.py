@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import refusal_coded_stamp, terminal_commit
+import pytest
 
 PLAN = "docs/plans/p.md"
 
@@ -10,7 +11,7 @@ PLAN = "docs/plans/p.md"
 def _spy(monkeypatch):
     calls = []
 
-    def fake(*args, **kwargs):
+    def fake(*args, **kwargs) -> dict[str, bool]:
         calls.append(args)
         return {"stamped": True}
 
@@ -19,7 +20,7 @@ def _spy(monkeypatch):
     return calls
 
 
-def test_peer_claim_refusal_naming_the_plan_skips_the_stamp(monkeypatch):
+def test_peer_claim_refusal_naming_the_plan_skips_the_stamp(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _spy(monkeypatch)
     reply = {"refused": "peer-claim", "peer_claims": [{"path": PLAN}]}
 
@@ -27,7 +28,7 @@ def test_peer_claim_refusal_naming_the_plan_skips_the_stamp(monkeypatch):
     assert calls == []
 
 
-def test_peer_claim_refusal_naming_other_paths_still_stamps(monkeypatch):
+def test_peer_claim_refusal_naming_other_paths_still_stamps(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _spy(monkeypatch)
     reply = {"refused": "peer-claim", "peer_claims": [{"path": "other.py"}]}
 

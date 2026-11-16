@@ -8,12 +8,12 @@ ROLES = frozenset({"em", "worker", "workflow-agent", "reviewer", "unknown"})
 SOURCES = frozenset({"startup", "resume", "clear", "compact", "fork"})
 
 
-def _engine_issued_contract(env):
+def _engine_issued_contract(env) -> bool:
     """True when env carries what `independent_child_env` stamps on an engine child."""
     return bool(env.get(ROLE_ENV) or env.get("COORDINATOR_PARENT_SESSION_ID"))
 
 
-def classify(payload, env, *, native_main=False, exec_worker=False, native_role=None):
+def classify(payload, env, *, native_main: bool = False, exec_worker: bool = False, native_role=None):
     if payload.get("hook_event_name") == "SubagentStart" or payload.get("agent_id"):
         return "worker"
     if str(env.get("COORDINATOR_AGENT_WORKER", "")).lower() in ("1", "true", "yes"):

@@ -9,6 +9,7 @@ from contextlib import redirect_stderr, redirect_stdout
 import pytest
 
 from coordinator_core.ops import verify_no_console_flash as vncf
+from pathlib import Path
 
 
 def _write(tmp_path, rel: str, content: str) -> str:
@@ -18,14 +19,14 @@ def _write(tmp_path, rel: str, content: str) -> str:
     return str(p)
 
 
-def test_grep_file_returns_hits_for_readable_file(tmp_path):
+def test_grep_file_returns_hits_for_readable_file(tmp_path: Path) -> None:
     path = _write(tmp_path, "clean.sh", "python3 -c 'print(1)'\n")
     hits = vncf._grep_file(path, vncf._PY_NODE_MATCH)
     assert hits
     assert hits[0].startswith(f"{path}:1:")
 
 
-def test_grep_file_raises_on_unreadable_file(tmp_path):
+def test_grep_file_raises_on_unreadable_file(tmp_path: Path) -> None:
     path = _write(tmp_path, "unreadable.sh", "python3 -c 'print(1)'\n")
     os.chmod(path, 0o000)
     try:
@@ -37,7 +38,7 @@ def test_grep_file_raises_on_unreadable_file(tmp_path):
         os.chmod(path, stat.S_IRUSR | stat.S_IWUSR)
 
 
-def test_scan_collects_unreadable_paths_and_still_scans_readable_siblings(tmp_path):
+def test_scan_collects_unreadable_paths_and_still_scans_readable_siblings(tmp_path: Path) -> None:
     good = _write(tmp_path, "good.sh", "python3 -c 'print(1)'\n")
     bad = _write(tmp_path, "bad.sh", "python3 -c 'print(2)'\n")
     os.chmod(bad, 0o000)
@@ -55,7 +56,7 @@ def test_scan_collects_unreadable_paths_and_still_scans_readable_siblings(tmp_pa
         os.chmod(bad, stat.S_IRUSR | stat.S_IWUSR)
 
 
-def test_main_fails_closed_when_a_candidate_file_is_unreadable(tmp_path, monkeypatch):
+def test_main_fails_closed_when_a_candidate_file_is_unreadable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     coord_root = tmp_path / "coordinator-claude"
     bin_dir = coord_root / "bin"
     bin_dir.mkdir(parents=True)
@@ -77,7 +78,7 @@ def test_main_fails_closed_when_a_candidate_file_is_unreadable(tmp_path, monkeyp
         os.chmod(str(unreadable_path), stat.S_IRUSR | stat.S_IWUSR)
 
 
-def test_main_clean_when_no_violations_and_all_files_readable(tmp_path):
+def test_main_clean_when_no_violations_and_all_files_readable(tmp_path: Path) -> None:
     coord_root = tmp_path / "coordinator-claude"
     bin_dir = coord_root / "bin"
     bin_dir.mkdir(parents=True)

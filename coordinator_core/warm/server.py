@@ -615,16 +615,39 @@ _GUARD_LANE_THREADS = 4
 _GUARD_LANE_READ_WAIT_SECS = 0.25
 
 
-def _line_ready_within(io: Any, secs: float) -> bool:
-    """False only when `io` has a selectable fd and nothing is readable within `secs`; other io kinds read as ready."""
-    try:
-        if os.name == "nt":
+#: Gap between non-blocking `PeekNamedPipe` polls in `_pipe_readable_within`.
+_PIPE_POLL_SECS = 0.005
+
+
+def _pipe_readable_within(handle: int, secs: float) -> bool:
+    """Windows named pipe: True once bytes are pending or the peer is gone (a read then returns at once)."""
+    import _winapi
+
+    deadline = time.monotonic() + secs
+    while True:
+        try:
+            if _winapi.PeekNamedPipe(handle, 0)[0] > 0:
+                return True
+        except OSError:
             return True
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return False
+        time.sleep(min(_PIPE_POLL_SECS, remaining))
+
+
+def _line_ready_within(io: Any, secs: float) -> bool:
+    """False only when `io` is a socket or named-pipe file object with nothing readable within `secs`;
+    other io kinds (test fakes) read as ready. Pipe readiness sees OS bytes only, so it is valid for the first line of a connection."""
+    try:
+        handle = getattr(io, "_pipe_handle", None)
+        if handle is not None:
+            return _pipe_readable_within(handle, secs)
         import select
 
         fd = getattr(io, "_select_fd", None)
         return fd is None or bool(select.select([fd], [], [], secs)[0])
-    except Exception:  # noqa: BLE001 -- no selectable fd (fake or pipe io): read blockingly as before
+    except Exception:  # noqa: BLE001 -- unprobeable io: read blockingly as before
         return True
 
 
@@ -1753,7 +1776,10 @@ def _after_first_pool_answer(work: Callable[[], None], name: str) -> None:
 def _note_pool_progress(future: "concurrent.futures.Future") -> None:
     """Count a settled pool future toward the hang watchdog's progress signal. A broken pool or a
     cancelled future is a dead lane, not completed work: it must not suppress a restart."""
-    if not future.done() or future.cancelled():
+    try:
+        if future.cancelled() or not future.done():
+            return
+    except AttributeError:
         return
     if isinstance(future.exception(), concurrent.futures.BrokenExecutor):
         return
@@ -3455,6 +3481,30 @@ def _worker_process_init(stderr_dir=None, stall_dir=None, forward_queue=None) ->
     _worker_pristine_environ = dict(os.environ)
 
 
+#: Seconds an ambient `plugin_root` resolution is reused; the uncached probe re-parses the machine registry per request.
+_AMBIENT_PLUGIN_ROOT_TTL_SECS = 30.0
+_ambient_plugin_root: "tuple[float, Optional[str]] | None" = None
+
+
+def _with_cached_plugin_root(payload: Optional[Mapping]) -> Optional[Mapping]:
+    """`payload` with an ambient `plugin_root` joined on when the caller sent none, so
+    `resolve_caller_context` skips its per-call registry probe. A caller-sent root wins untouched."""
+    global _ambient_plugin_root
+    if isinstance(payload, Mapping):
+        sent = payload.get("plugin_root")
+        if isinstance(sent, str) and sent:
+            return payload
+    cached = _ambient_plugin_root
+    now = time.monotonic()
+    if cached is None or now - cached[0] > _AMBIENT_PLUGIN_ROOT_TTL_SECS:
+        from coordinator_core.subagent_sandbox.provision_report import resolve_plugin_root
+
+        cached = _ambient_plugin_root = (now, resolve_plugin_root())
+    if cached[1] is None:
+        return payload
+    return {**(payload if isinstance(payload, Mapping) else {}), "plugin_root": cached[1]}
+
+
 def _strip_ambient_pid(
     caller: CallerContext, caller_payload: object
 ) -> CallerContext:
@@ -3839,7 +3889,7 @@ def _serve_line(
     client_token = msg.pop("_engine_token", None)
     caller_payload = msg.pop("_caller", None)
     caller = caller_context.resolve_caller_context(
-        caller_payload if isinstance(caller_payload, Mapping) else None
+        _with_cached_plugin_root(caller_payload if isinstance(caller_payload, Mapping) else None)
     )
     caller = _strip_ambient_pid(caller, caller_payload)
 
@@ -4231,7 +4281,9 @@ def _wrap_handle(handle: int) -> Any:
     import msvcrt
 
     fd = msvcrt.open_osfhandle(handle, os.O_RDWR | os.O_BINARY)
-    return os.fdopen(fd, "r+b")
+    io = os.fdopen(fd, "r+b")
+    io._pipe_handle = handle  # the guard lane peeks this handle for readiness
+    return io
 
 
 def _wrap_socket(conn: Any) -> Any:
@@ -4309,8 +4361,13 @@ def _refuse_pipe_while_draining(handle: int, *, server_sha: Optional[str]) -> No
 
         def _cancel_read() -> None:
             with gate:
-                if not closed[0]:
-                    _cancel_pending_io(handle)
+                if closed[0]:
+                    return
+                _cancel_pending_io(handle)
+            # A cancel that lands before the read is issued cancels nothing; re-arm until closed.
+            retry = threading.Timer(_DRAIN_REFUSAL_READ_SECS, _cancel_read)
+            retry.daemon = True
+            retry.start()
 
         timer = threading.Timer(_DRAIN_REFUSAL_READ_SECS, _cancel_read)
         timer.daemon = True
@@ -5779,6 +5836,7 @@ class _ServerContext:
             thread.start()
             self._worker_threads.append(thread)
         self._pool_size = pool_size
+        threading.Thread(target=_with_cached_plugin_root, args=(None,), daemon=True).start()
         for _ in range(_GUARD_LANE_THREADS):
             thread = threading.Thread(target=self._guard_lane_loop, daemon=True)
             thread.start()

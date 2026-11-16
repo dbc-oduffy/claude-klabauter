@@ -34,7 +34,7 @@ def _git(args, cwd: Path) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], root)
@@ -102,7 +102,7 @@ def _halt_params(token: str) -> dict:
     return {"script_path": "run.mjs", "run_id": RUN, "run_token": token, HALTED_RECORD_PARAM: HALTED_BY}
 
 
-def test_halt_commit_behind_a_relay_record_is_admitted_and_lands_with_its_sizing(repo):
+def test_halt_commit_behind_a_relay_record_is_admitted_and_lands_with_its_sizing(repo) -> None:
     token = run_token.mint(repo, RUN, "run.mjs")
     command = _halt_command(repo)
     assert chan.params_path(repo, RUN).as_posix() in command
@@ -118,14 +118,14 @@ def test_halt_commit_behind_a_relay_record_is_admitted_and_lands_with_its_sizing
     assert SIZING in names
 
 
-def test_grind_shaped_block_behind_a_relay_record_is_admitted(repo):
+def test_grind_shaped_block_behind_a_relay_record_is_admitted(repo) -> None:
     token = run_token.mint(repo, RUN, _SCRIPT)
     params = {"script_path": _SCRIPT, "run_id": RUN, "run_token": token, "rows": [{"id": "R1"}]}
     command = f"coordinator-invoke dispatch.land_run --params-file {chan.params_path(repo, RUN).as_posix()}"
     assert _check(command, _relay_spawn(repo, params, command=command)) is None
 
 
-def test_block_only_inside_the_relay_record_is_denied(repo):
+def test_block_only_inside_the_relay_record_is_denied(repo) -> None:
     token = run_token.mint(repo, RUN, "run.mjs")
     command = _halt_command(repo)
     transcript = _relay_spawn(repo, _halt_params(token), relay_block=True, command=command)
@@ -134,7 +134,7 @@ def test_block_only_inside_the_relay_record_is_denied(repo):
     assert "unreadable or holds no params block" in verdict["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_forged_token_behind_a_relay_record_is_denied(repo):
+def test_forged_token_behind_a_relay_record_is_denied(repo) -> None:
     run_token.mint(repo, RUN, "run.mjs")
     command = _halt_command(repo)
     transcript = _relay_spawn(repo, _halt_params("forged-token"), command=command)
@@ -142,7 +142,7 @@ def test_forged_token_behind_a_relay_record_is_denied(repo):
     assert "run token is spent" in verdict["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_another_agents_transcript_behind_a_relay_record_is_denied(repo):
+def test_another_agents_transcript_behind_a_relay_record_is_denied(repo) -> None:
     token = run_token.mint(repo, RUN, "run.mjs")
     command = _halt_command(repo)
     transcript = _relay_spawn(repo, _halt_params(token), command=command)

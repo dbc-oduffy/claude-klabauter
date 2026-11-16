@@ -80,7 +80,7 @@ def _delete_and_commit(repo: Path, relpath: str, message: str) -> str:
     return _git(repo, "rev-parse", "HEAD").stdout.strip()
 
 
-def _anchor_for(common_dir: Path, filename: str):
+def _anchor_for(common_dir: Path, filename: str) -> list[tuple[str, str, str]]:
     return [t for t in anchor_names(common_dir) if t[0] == filename]
 
 
@@ -89,18 +89,18 @@ def _anchor_for(common_dir: Path, filename: str):
 # ---------------------------------------------------------------------------
 
 
-def test_dry_run_must_be_bool():
+def test_dry_run_must_be_bool() -> None:
     result = _memo_heal_inbox({"dry_run": "yes"}, repo_root="/tmp/x")
     assert result["exit_code"] == 1
 
 
-def test_unknown_param_rejected(tmp_path):
+def test_unknown_param_rejected(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     result = _memo_heal_inbox({"dry_run": True, "topic": "x"}, repo_root=_common_dir(repo))
     assert result["exit_code"] == 1
 
 
-def test_missing_repo_root_is_a_setup_error():
+def test_missing_repo_root_is_a_setup_error() -> None:
     result = _memo_heal_inbox({"dry_run": True}, repo_root=None)
     assert result["exit_code"] == 1
 
@@ -110,7 +110,7 @@ def test_missing_repo_root_is_a_setup_error():
 # ---------------------------------------------------------------------------
 
 
-def test_no_op_path_makes_zero_spawns(tmp_path, monkeypatch):
+def test_no_op_path_makes_zero_spawns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _make_repo(tmp_path)
 
     def _forbidden(*a, **k):
@@ -128,7 +128,7 @@ def test_no_op_path_makes_zero_spawns(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_restore_anchor_whose_commit_is_gone_is_committed_with_matching_bytes(tmp_path):
+def test_restore_anchor_whose_commit_is_gone_is_committed_with_matching_bytes(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     common_dir = _common_dir(repo)
     body = "Lost memo body.\n"
@@ -153,7 +153,7 @@ def test_restore_anchor_whose_commit_is_gone_is_committed_with_matching_bytes(tm
 # ---------------------------------------------------------------------------
 
 
-def test_anchor_reachable_from_head_is_retired_not_restored(tmp_path):
+def test_anchor_reachable_from_head_is_retired_not_restored(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     common_dir = _common_dir(repo)
     head, blob = _commit_file(repo, "state/cross-repo/inbox/gone.md", "body\n", "deliver gone.md")
@@ -172,7 +172,7 @@ def test_anchor_reachable_from_head_is_retired_not_restored(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_anchor_unreachable_from_head_but_reachable_from_another_branch_is_left_alone(tmp_path):
+def test_anchor_unreachable_from_head_but_reachable_from_another_branch_is_left_alone(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     common_dir = _common_dir(repo)
     _git(repo, "checkout", "-b", "side")
@@ -193,7 +193,7 @@ def test_anchor_unreachable_from_head_but_reachable_from_another_branch_is_left_
 # ---------------------------------------------------------------------------
 
 
-def test_anchor_unreachable_from_any_branch_is_restored(tmp_path):
+def test_anchor_unreachable_from_any_branch_is_restored(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     common_dir = _common_dir(repo)
     _git(repo, "checkout", "-b", "side")
@@ -214,7 +214,7 @@ def test_anchor_unreachable_from_any_branch_is_restored(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_archived_and_not_in_inbox_anchor_is_retired_loose(tmp_path):
+def test_archived_and_not_in_inbox_anchor_is_retired_loose(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     common_dir = _common_dir(repo)
     head, blob = _commit_file(
@@ -228,7 +228,7 @@ def test_archived_and_not_in_inbox_anchor_is_retired_loose(tmp_path):
     assert _anchor_for(common_dir, "old.md") == []
 
 
-def test_archived_and_not_in_inbox_anchor_is_retired_packed(tmp_path):
+def test_archived_and_not_in_inbox_anchor_is_retired_packed(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     common_dir = _common_dir(repo)
     head, blob = _commit_file(
@@ -250,7 +250,7 @@ def test_archived_and_not_in_inbox_anchor_is_retired_packed(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_unanchored_tracked_matching_inbox_memo_is_adopted_with_zero_object_writes(tmp_path, monkeypatch):
+def test_unanchored_tracked_matching_inbox_memo_is_adopted_with_zero_object_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _make_repo(tmp_path)
     common_dir = _common_dir(repo)
     head, blob = _commit_file(
@@ -270,7 +270,7 @@ def test_unanchored_tracked_matching_inbox_memo_is_adopted_with_zero_object_writ
     assert _anchor_for(common_dir, "fresh.md") == [("fresh.md", head, blob)]
 
 
-def test_a_memo_git_checked_out_as_crlf_is_still_adopted(tmp_path):
+def test_a_memo_git_checked_out_as_crlf_is_still_adopted(tmp_path: Path) -> None:
     # Every other adopt test writes LF by hand, so none of them sees what git
     # itself leaves on disk under `core.autocrlf=true`: an LF blob checked out
     # as CRLF. Git calls that file clean; a raw-bytes hash calls it dirty, and
@@ -292,7 +292,7 @@ def test_a_memo_git_checked_out_as_crlf_is_still_adopted(tmp_path):
     assert _anchor_for(common_dir, "checked-out.md") == [("checked-out.md", head, blob)]
 
 
-def test_ref_illegal_filename_is_refused_without_poisoning_the_other_candidates(tmp_path):
+def test_ref_illegal_filename_is_refused_without_poisoning_the_other_candidates(tmp_path: Path) -> None:
     # An on-disk inbox filename is untrusted
     # input to the ref namespace. A single ref-illegal filename in the
     # SAME batch as a legitimate candidate must not fail the whole
@@ -320,7 +320,7 @@ def test_ref_illegal_filename_is_refused_without_poisoning_the_other_candidates(
     assert _anchor_for(common_dir, "bad file.md") == []
 
 
-def test_untracked_inbox_memo_is_not_adopted_and_is_counted(tmp_path):
+def test_untracked_inbox_memo_is_not_adopted_and_is_counted(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     inbox = repo / "state" / "cross-repo" / "inbox"
     inbox.mkdir(parents=True)
@@ -333,7 +333,7 @@ def test_untracked_inbox_memo_is_not_adopted_and_is_counted(tmp_path):
     assert skip_rows and skip_rows[0]["count"] == 1
 
 
-def test_dirty_inbox_memo_is_not_adopted_and_is_counted(tmp_path):
+def test_dirty_inbox_memo_is_not_adopted_and_is_counted(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     _commit_file(repo, "state/cross-repo/inbox/dirty.md", "original\n", "deliver dirty.md")
     (repo / "state" / "cross-repo" / "inbox" / "dirty.md").write_text(
@@ -352,7 +352,7 @@ def test_dirty_inbox_memo_is_not_adopted_and_is_counted(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_present_and_anchored_memo_is_left_alone(tmp_path):
+def test_present_and_anchored_memo_is_left_alone(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     common_dir = _common_dir(repo)
     head, blob = _commit_file(
@@ -372,7 +372,7 @@ def test_present_and_anchored_memo_is_left_alone(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_dry_run_mutates_nothing(tmp_path):
+def test_dry_run_mutates_nothing(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     common_dir = _common_dir(repo)
     blob_sha = write_anchor(common_dir, "preview.md", _FAKE_SHA_A, b"preview body\n")
@@ -390,7 +390,7 @@ def test_dry_run_mutates_nothing(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_declined_restore_commit_rolls_back_the_written_file(tmp_path):
+def test_declined_restore_commit_rolls_back_the_written_file(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     common_dir = _common_dir(repo)
     # A CR byte makes `commit_authored_new_file` refuse outright (it cannot
@@ -412,7 +412,7 @@ def test_declined_restore_commit_rolls_back_the_written_file(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_eexist_on_restore_write_is_reported_restored_by_peer_not_a_failure(tmp_path):
+def test_eexist_on_restore_write_is_reported_restored_by_peer_not_a_failure(tmp_path: Path) -> None:
     """The race the full handler cannot express single-threaded: a peer's
     O_EXCL write lands BETWEEN this call's present-set read and its own
     O_EXCL attempt. Exercised directly against `_restore_one`, the unit the
@@ -440,7 +440,7 @@ def test_eexist_on_restore_write_is_reported_restored_by_peer_not_a_failure(tmp_
 # ---------------------------------------------------------------------------
 
 
-def test_refused_transaction_is_reported_without_retrying(tmp_path, monkeypatch):
+def test_refused_transaction_is_reported_without_retrying(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _make_repo(tmp_path)
     common_dir = _common_dir(repo)
     _commit_file(repo, "state/cross-repo/inbox/refused.md", "body\n", "deliver refused.md")
@@ -472,7 +472,7 @@ def test_refused_transaction_is_reported_without_retrying(tmp_path, monkeypatch)
 # ---------------------------------------------------------------------------
 
 
-def test_restore_rekeys_so_a_deliberate_later_delete_is_retired_not_restored_again(tmp_path):
+def test_restore_rekeys_so_a_deliberate_later_delete_is_retired_not_restored_again(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     common_dir = _common_dir(repo)
     write_anchor(common_dir, "twice.md", _FAKE_SHA_A, b"twice body\n")
@@ -503,7 +503,7 @@ def test_restore_rekeys_so_a_deliberate_later_delete_is_retired_not_restored_aga
 # ---------------------------------------------------------------------------
 
 
-def test_adopt_cap_leaves_the_remainder_for_a_later_run(tmp_path):
+def test_adopt_cap_leaves_the_remainder_for_a_later_run(tmp_path: Path) -> None:
     repo = _make_repo(tmp_path)
     common_dir = _common_dir(repo)
     n = ADOPT_CAP_PER_RUN + 5

@@ -47,6 +47,16 @@ def test_the_twin_macros_equal_the_shared_header_bounds(source):
     assert _define(text, "DOOR_HOOK_SUBMIT_READ_DEADLINE_MS") == _define(header, "DOOR_HOOK_LIVE_READ_MS")
 
 
+def test_the_twins_answer_identical_static_submit_envelopes():
+    def macro(text: str, name: str) -> str:
+        block = text[text.index(f"#define {name}"):]
+        return "".join(re.findall(r'"((?:[^"\\]|\\.)*)"', block[: block.index("\n\n")]))
+
+    win, posix = _text(DOOR_WINDOWS_C), _text(DOOR_POSIX_C)
+    for name in ("DOOR_SUBMIT_UNSPOOLED_ADVISORY", "DOOR_SUBMIT_SPOOLED_ADVISORY"):
+        assert macro(win, name) == macro(posix, name) != ""
+
+
 def test_the_windows_twin_probes_the_pipe_and_the_server_process():
     text = _text(DOOR_WINDOWS_C)
     assert "PeekNamedPipe(" in text and "GetNamedPipeServerProcessId(" in text

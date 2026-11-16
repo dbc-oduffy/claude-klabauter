@@ -6,6 +6,7 @@ from pathlib import Path
 
 from coordinator_core.backlog.changelog_walk import iso_week_key, walk_changelogs
 from coordinator_core.backlog.record_schema import WeekEntry
+import pytest
 
 
 def _w(root: Path, rel: str, text: str) -> Path:
@@ -30,14 +31,14 @@ def _by_week(entries: list[WeekEntry]) -> dict[str, WeekEntry]:
     return {e.week: e for e in entries}
 
 
-def test_week_key_is_iso_monday():
+def test_week_key_is_iso_monday() -> None:
     from datetime import date
     assert iso_week_key(date(2026, 5, 21)) == "2026-05-18"
     assert iso_week_key(date(2026, 5, 24)) == "2026-05-18"
     assert iso_week_key(date(2026, 5, 25)) == "2026-05-25"
 
 
-def test_unflagged_change_plan_never_opened_and_flagged_one_cited_unopened(tmp_path, monkeypatch):
+def test_unflagged_change_plan_never_opened_and_flagged_one_cited_unopened(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plan = _w(tmp_path, "docs/plans/2026-05/unflagged-plan.md", "# plan\n")
     flagged = _w(tmp_path, "docs/plans/2026-05/flagged-plan.md", "# plan\n")
     _week_summary(tmp_path, "2026-05-25", "2026-05-31")
@@ -49,7 +50,7 @@ def test_unflagged_change_plan_never_opened_and_flagged_one_cited_unopened(tmp_p
     opened: list[str] = []
     real = Path.read_text
 
-    def spy(self, *a, **k):
+    def spy(self, *a, **k) -> str:
         opened.append(self.as_posix())
         return real(self, *a, **k)
 
@@ -65,7 +66,7 @@ def test_unflagged_change_plan_never_opened_and_flagged_one_cited_unopened(tmp_p
     assert ledger["weeks_without_summary"] == 0
 
 
-def test_week_with_dailies_but_no_summary_counts_and_walks(tmp_path):
+def test_week_with_dailies_but_no_summary_counts_and_walks(tmp_path: Path) -> None:
     _week_summary(tmp_path, "2026-05-25", "2026-05-31")
     _daily(tmp_path, "2026-05-27", "2026-05-27", ["**A**: one (`aaaaaaa`)"])
     _daily(tmp_path, "2026-06-10", "2026-06-10", ["**B**: two (`bbbbbbb`)"])
@@ -82,7 +83,7 @@ def test_week_with_dailies_but_no_summary_counts_and_walks(tmp_path):
     assert ledger["weeks_without_source"] == 1
 
 
-def test_weeks_total_spans_dailies_earlier_than_first_summary(tmp_path):
+def test_weeks_total_spans_dailies_earlier_than_first_summary(tmp_path: Path) -> None:
     _daily(tmp_path, "2026-04-02", "2026-04-02", ["**Early**: x (`1111111`)"])
     _week_summary(tmp_path, "2026-05-25", "2026-05-31")
     _, ledger = walk_changelogs(tmp_path)
@@ -90,7 +91,7 @@ def test_weeks_total_spans_dailies_earlier_than_first_summary(tmp_path):
     assert ledger["weeks_walked"] == ledger["weeks_total"]
 
 
-def test_two_machine_summaries_sharing_a_commit_are_one_record(tmp_path):
+def test_two_machine_summaries_sharing_a_commit_are_one_record(tmp_path: Path) -> None:
     _daily(tmp_path, "2026-05-27-machine-a", "2026-05-27", ["**Fix**: shipped (`abc1234`)", "**Solo**: only here (`fff1111`)"])
     _daily(tmp_path, "2026-05-27-machine-b", "2026-05-27", ["**Fix**: shipped again (`abc1234`, `def5678`)"])
     entries, _ = walk_changelogs(tmp_path)
@@ -101,7 +102,7 @@ def test_two_machine_summaries_sharing_a_commit_are_one_record(tmp_path):
     assert fix.day == "2026-05-27"
 
 
-def test_ids_resolve_by_listing_and_unresolved_is_recorded(tmp_path):
+def test_ids_resolve_by_listing_and_unresolved_is_recorded(tmp_path: Path) -> None:
     _w(tmp_path, "docs/decisions/DR-344-the-brightline.md", "x")
     _w(tmp_path, "state/handoffs/2026-07/2026-07-01-thing-1b2c3d.md", "x")
     _w(tmp_path, "archive/completed/2026-05/entry-9f8e7d.md", "x")
@@ -119,13 +120,13 @@ def test_ids_resolve_by_listing_and_unresolved_is_recorded(tmp_path):
     assert all(u["day"] == "2026-07-01" for u in ledger["unresolved"])
 
 
-def test_only_work_completed_bullets_are_flagged(tmp_path):
+def test_only_work_completed_bullets_are_flagged(tmp_path: Path) -> None:
     _daily(tmp_path, "2026-05-27", "2026-05-27", ["**Real**: yes (`abc1234`)"])
     entries, _ = walk_changelogs(tmp_path)
     titles = [c.title for e in entries for c in e.flagged]
     assert titles == ["Real"]
 
 
-def test_empty_root_walks_nothing(tmp_path):
+def test_empty_root_walks_nothing(tmp_path: Path) -> None:
     entries, ledger = walk_changelogs(tmp_path)
     assert entries == [] and ledger["weeks_total"] == 0

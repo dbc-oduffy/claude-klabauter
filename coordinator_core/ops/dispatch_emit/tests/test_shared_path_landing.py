@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -16,12 +17,12 @@ UNLANDED = [
 ]
 
 
-def test_sibling_held_product_keeps_only_peer_held_sorted_with_holders():
+def test_sibling_held_product_keeps_only_peer_held_sorted_with_holders() -> None:
     held = spl.sibling_held_product(UNLANDED, {"a/x.py": ["s2", "s1"], "c/z.py": ["s3"]})
     assert held == [("C1", "a/x.py", ["s1", "s2"]), ("C2", "a/x.py", ["s1", "s2"]), ("C3", "c/z.py", ["s3"])]
 
 
-def test_sibling_held_product_unknown_path_has_empty_holders_and_malformed_triple_raises():
+def test_sibling_held_product_unknown_path_has_empty_holders_and_malformed_triple_raises() -> None:
     assert spl.sibling_held_product([("C1", "q", "peer-held")], {}) == [("C1", "q", [])]
     assert spl.sibling_held_product(None, None) == []
     with pytest.raises(ValueError):
@@ -32,7 +33,7 @@ class _Found(dict):
     recorded_kind: dict = {}
 
 
-def _claims(monkeypatch, holders):
+def _claims(monkeypatch, holders) -> None:
     from coordinator_core.session import claim_index, liveness, touch_record
 
     found = _Found({"a/x.py": list(holders)})
@@ -42,7 +43,7 @@ def _claims(monkeypatch, holders):
     monkeypatch.setattr(liveness, "session_abandoned", lambda sid, cwd: False)
 
 
-def test_touch_claim_by_firing_session_is_self_and_a_sibling_claim_still_holds(tmp_path, monkeypatch):
+def test_touch_claim_by_firing_session_is_self_and_a_sibling_claim_still_holds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import land_run
 
     _claims(monkeypatch, ["fire", "sib"])
@@ -53,14 +54,14 @@ def test_touch_claim_by_firing_session_is_self_and_a_sibling_claim_still_holds(t
     assert land_run._peer_held(tmp_path, ["a/x.py"], "driver", "r1", None) == {"a/x.py": ["fire"]}
 
 
-def test_firing_sessions_names_caller_and_run_token_session(tmp_path):
+def test_firing_sessions_names_caller_and_run_token_session(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import land_run
 
     assert land_run._firing_sessions(tmp_path, None, "sess-1") == {"sess-1"}
     assert land_run._firing_sessions(tmp_path, "no-such-run", None) == set()
 
 
-def test_firing_sessions_includes_recorded_emitter_and_peer_claim_by_emitter_is_self(tmp_path, monkeypatch):
+def test_firing_sessions_includes_recorded_emitter_and_peer_claim_by_emitter_is_self(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import halted_run, land_run
 
     monkeypatch.setattr(halted_run, "recorded_emitter", lambda root, rid: "lead-1" if rid == "r1" else None)
@@ -77,7 +78,7 @@ LANDED_RUN = "ask-20260101T000000-aaaaaa"
 OWN_RUN = "ask-20260101T000000-bbbbbb"
 
 
-def _record(root, run_id, *, marker=None, stage=None):
+def _record(root, run_id, *, marker=None, stage=None) -> None:
     import json
 
     rdir = root / "state" / "warp" / run_id
@@ -88,37 +89,37 @@ def _record(root, run_id, *, marker=None, stage=None):
         (rdir / "run-stage.json").write_text(json.dumps({"stage": stage}), encoding="utf-8")
 
 
-def _held_by(root, holder):
+def _held_by(root, holder) -> list[tuple[str, str, list[str]]]:
     return spl.sibling_held_product(
         [("C1", "a/x.py", "peer-held")], {"a/x.py": [holder]}, root=root, own_run_id=OWN_RUN,
     )
 
 
-def test_a_landed_marker_holder_is_dropped_from_sibling_held_product(tmp_path):
+def test_a_landed_marker_holder_is_dropped_from_sibling_held_product(tmp_path: Path) -> None:
     _record(tmp_path, LANDED_RUN, marker={"status": "landed"}, stage="landed")
     assert spl.released_holder(tmp_path, LANDED_RUN, OWN_RUN)
     assert not spl.holds_path(tmp_path, LANDED_RUN, "a/x.py", OWN_RUN)
     assert _held_by(tmp_path, LANDED_RUN) == []
 
 
-def test_a_run_with_no_marker_whose_stage_reads_landed_is_dropped(tmp_path):
+def test_a_run_with_no_marker_whose_stage_reads_landed_is_dropped(tmp_path: Path) -> None:
     _record(tmp_path, LANDED_RUN, stage="landed")
     assert _held_by(tmp_path, LANDED_RUN) == []
 
 
-def test_a_run_neither_halted_nor_landed_still_holds(tmp_path):
+def test_a_run_neither_halted_nor_landed_still_holds(tmp_path: Path) -> None:
     _record(tmp_path, LANDED_RUN, stage="staged")
     assert _held_by(tmp_path, LANDED_RUN) == [("C1", "a/x.py", [LANDED_RUN])]
     assert _held_by(tmp_path, "sess-1") == [("C1", "a/x.py", ["sess-1"])]
 
 
-def test_withheld_product_paths_all_reasons_unique_sorted():
+def test_withheld_product_paths_all_reasons_unique_sorted() -> None:
     assert spl.withheld_product_paths(UNLANDED) == ["a/x.py", "b/y.py", "c/z.py"]
     assert spl.withheld_product_paths([]) == []
     assert spl.withheld_product_paths(None) == []
 
 
-def test_refusal_message_names_path_row_holder_and_both_routes(tmp_path):
+def test_refusal_message_names_path_row_holder_and_both_routes(tmp_path: Path) -> None:
     msg = spl.refusal_message([("C1", "a/x.py", ["s1"])], "ask-1", root=tmp_path)
     assert msg.startswith(spl.SHARED_PATH_SIBLING_HELD)
     assert "a/x.py (row C1) held by s1" in msg
@@ -126,13 +127,13 @@ def test_refusal_message_names_path_row_holder_and_both_routes(tmp_path):
     assert peer_claim_contract.WITHHOLD_CALL.format(run_id="ask-1") in msg
 
 
-def test_refusal_message_without_root_or_holders():
+def test_refusal_message_without_root_or_holders() -> None:
     msg = spl.refusal_message([("C1", "a/x.py", [])], "ask-1")
     assert "held by a live sibling" in msg
     assert "re-fire." in msg
 
 
-def test_reply_keys_gain_the_two_members():
+def test_reply_keys_gain_the_two_members() -> None:
     assert spl.LEDGER_WITHHELD_PRODUCT in land_run_contract.REPLY_KEYS
     assert "exit_criterion_not_stamped" in land_run_contract.REPLY_KEYS
 
@@ -155,34 +156,34 @@ ME = "ask-20261025T000000-aaaaaa"
 JUNIOR = "ask-20261026T000000-cccccc"
 
 
-def _mint(root, run_id, *, claim=False):
+def _mint(root, run_id, *, claim: bool = False) -> None:
     token = run_token.mint(root, run_id, f"{run_id}.mjs", session_id=SELF)
     if claim:
         assert run_token.redeem(root, run_id, token, f"{run_id}.mjs")
 
 
-def _mint_pair(root, *run_ids, own):
+def _mint_pair(root, *run_ids, own) -> None:
     for run_id in run_ids:
         _declare(root, run_id, HPATH)
         _mint(root, run_id, claim=run_id == own)
         time.sleep(0.01)
 
 
-def test_refusal_names_the_senior_run_not_the_shared_session(repo):
+def test_refusal_names_the_senior_run_not_the_shared_session(repo) -> None:
     _mint_pair(repo, SENIOR, ME, own=ME)
     msg = spl.refusal_message([("C1", HPATH, [SELF])], ME, root=repo)
     assert f"held by {SENIOR} (minted " in msg
     assert f"held by {SELF}" not in msg
 
 
-def test_a_junior_is_never_named_as_holder_of_a_senior(repo):
+def test_a_junior_is_never_named_as_holder_of_a_senior(repo) -> None:
     _mint_pair(repo, SENIOR, JUNIOR, own=SENIOR)
     msg = spl.refusal_message([("C1", HPATH, [SELF])], SENIOR, root=repo)
     assert JUNIOR not in msg
     assert f"held by {SELF}" in msg
 
 
-def test_refusal_lists_senior_holders_oldest_first_and_keeps_a_touch_session(repo):
+def test_refusal_lists_senior_holders_oldest_first_and_keeps_a_touch_session(repo) -> None:
     older = "ask-20261023T000000-dddddd"
     _mint_pair(repo, older, SENIOR, ME, own=ME)
     msg = spl.refusal_message([("C1", HPATH, [SELF, "touch-sid"])], ME, root=repo)
@@ -190,12 +191,12 @@ def test_refusal_lists_senior_holders_oldest_first_and_keeps_a_touch_session(rep
     assert "touch-sid" in msg
 
 
-def _text(edits):
+def _text(edits) -> str:
     return "".join(f"{edits.get(i, f'line{i}')}\n" for i in range(1, 11))
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     blobs: dict[str, bytes] = {}
     baselines: dict[str, dict] = {}
     claims: dict = {"value": {HPATH: [(1.0, SENIOR, "sid-senior")]}}
@@ -215,23 +216,23 @@ def world(tmp_path, monkeypatch):
         claim = claims
 
         @staticmethod
-        def tree(edits):
+        def tree(edits) -> None:
             (tmp_path / "src").mkdir(exist_ok=True)
             (tmp_path / HPATH).write_bytes(_text(edits).encode())
 
         @staticmethod
-        def baseline(run, edits):
+        def baseline(run, edits) -> None:
             sha = f"{len(blobs):040x}"
             blobs[sha] = _text(edits).encode()
             baselines[run] = {HPATH: sha}
 
         @staticmethod
-        def tree_bytes(data):
+        def tree_bytes(data) -> None:
             (tmp_path / "src").mkdir(exist_ok=True)
             (tmp_path / HPATH).write_bytes(data)
 
         @staticmethod
-        def baseline_bytes(run, data):
+        def baseline_bytes(run, data) -> None:
             sha = f"{len(blobs):040x}"
             blobs[sha] = data
             baselines[run] = {HPATH: sha}
@@ -239,15 +240,15 @@ def world(tmp_path, monkeypatch):
     return World
 
 
-def _h(line, old_len=1, new_len=1):
+def _h(line, old_len: int = 1, new_len: int = 1):
     return rhc.Hunk(HPATH, line, old_len, line, new_len)
 
 
-def _diff(*hunks):
+def _diff(*hunks) -> dict[str, PathDiff]:
     return {HPATH: PathDiff("0" * 40, b"", tuple(hunks))}
 
 
-def test_disjoint_hunks_stage_only_the_own_hunk(world):
+def test_disjoint_hunks_stage_only_the_own_hunk(world) -> None:
     world.tree({2: "A", 9: "B"})
     world.baseline(ME, {2: "A"})
     world.baseline(SENIOR, {9: "B"})
@@ -256,7 +257,7 @@ def test_disjoint_hunks_stage_only_the_own_hunk(world):
     assert still == []
 
 
-def test_overlapping_hunks_stay_held(world):
+def test_overlapping_hunks_stay_held(world) -> None:
     world.tree({3: "m3", 4: "s4"})
     world.baseline(ME, {4: "s4"})
     world.baseline(SENIOR, {3: "m3"})
@@ -266,7 +267,7 @@ def test_overlapping_hunks_stay_held(world):
     assert still == [HPATH]
 
 
-def test_an_unattributed_hunk_holds_the_path(world):
+def test_an_unattributed_hunk_holds_the_path(world) -> None:
     world.tree({2: "A", 9: "B"})
     world.baseline(ME, {})
     world.baseline(SENIOR, {})
@@ -274,7 +275,7 @@ def test_an_unattributed_hunk_holds_the_path(world):
     assert stage == {} and still == [HPATH]
 
 
-def test_a_holder_no_senior_run_accounts_for_holds_and_unknown_claims_hold(world):
+def test_a_holder_no_senior_run_accounts_for_holds_and_unknown_claims_hold(world) -> None:
     world.tree({2: "A", 9: "B"})
     world.baseline(ME, {2: "A"})
     world.baseline(SENIOR, {9: "B"})
@@ -286,11 +287,11 @@ def test_a_holder_no_senior_run_accounts_for_holds_and_unknown_claims_hold(world
     assert spl.hunk_landable(world.root, ME, {HPATH: ["sid-senior"]}, {}) == ({}, [HPATH])
 
 
-def _numbered(n, edits=()):
+def _numbered(n, edits=()) -> bytes:
     return "".join(f"{'EDIT' if i in edits else 'line'}{i}\n" for i in range(1, n + 1)).encode()
 
 
-def test_an_over_bound_senior_and_the_lander_editing_one_interior_hunk_stay_held(world):
+def test_an_over_bound_senior_and_the_lander_editing_one_interior_hunk_stay_held(world) -> None:
     n = rhc.MAX_MATCHED_MIDDLE + 50
     mid = n // 2
     world.tree_bytes(_numbered(n, {1, mid, n}))
@@ -300,7 +301,7 @@ def test_an_over_bound_senior_and_the_lander_editing_one_interior_hunk_stay_held
     assert stage == {} and still == [HPATH]
 
 
-def _worst_bytes(middle):
+def _worst_bytes(middle) -> tuple[bytes, bytes]:
     """Identical repeated lines (the quadratic case), edits at both ends, `middle` lines trimmed per side."""
     old = [b"head\n", *([b"    x\n"] * (middle - 2)), b"tail\n"]
     new = list(old)
@@ -309,7 +310,7 @@ def _worst_bytes(middle):
     return b"".join(old), b"".join(new)
 
 
-def test_the_worst_case_through_hunk_landable_is_under_the_bar_in_process_time(world):
+def test_the_worst_case_through_hunk_landable_is_under_the_bar_in_process_time(world) -> None:
     old, new = _worst_bytes(rhc.MAX_MATCHED_MIDDLE)  # the largest middle still matched, for both claimants
     world.tree_bytes(new)
     world.baseline_bytes(ME, old)

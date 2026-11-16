@@ -6,19 +6,20 @@ import pytest
 
 from coordinator_core.group_em import send_pass
 from coordinator_core.ops import group_em_resolve_addressee as op
+from pathlib import Path
 
 
 @pytest.mark.parametrize("params", [{}, None, {"peer_session_id": ""}, {"peer_session_id": 7}])
-def test_missing_or_bad_peer_session_id_is_named_refusal(params):
+def test_missing_or_bad_peer_session_id_is_named_refusal(params) -> None:
     result = op._groupem_resolve_addressee(params)
     assert "peer_session_id" in result["error"]
     assert "name" not in result
 
 
-def test_valid_call_unchanged(monkeypatch, tmp_path):
+def test_valid_call_unchanged(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen = {}
 
-    def fake(root, sid):
+    def fake(root, sid) -> str:
         seen["args"] = (root, sid)
         return "group-em-ad"
 

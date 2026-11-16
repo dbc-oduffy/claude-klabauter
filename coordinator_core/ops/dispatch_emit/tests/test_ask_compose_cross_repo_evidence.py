@@ -8,6 +8,7 @@ from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import _V5_ROSTER_FRAGMENT, _V5_STAGE_SCHEMAS
 from coordinator_core.ops.review_mint import execute_review as er
+import pytest
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _ROSTER = copy.deepcopy(_V5_ROSTER_FRAGMENT)
@@ -38,7 +39,7 @@ def _verdict_text_def(script: str) -> str:
     return script[start : script.index("\n", start)]
 
 
-def test_binding_is_declared_then_set_from_gated_rows_after_stage(monkeypatch):
+def test_binding_is_declared_then_set_from_gated_rows_after_stage(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     decl = script.index("let _crossRepoRows = [];")
     stage = script.index("if (_stagedManifest) { _manifest = _stagedManifest; }")
@@ -47,11 +48,11 @@ def test_binding_is_declared_then_set_from_gated_rows_after_stage(monkeypatch):
     assert "owner_root: g.owner_root ?? ''" in script
 
 
-def test_manifest_schema_carries_owner_root():
+def test_manifest_schema_carries_owner_root() -> None:
     assert '"owner_root"' in str(ask_compose._MANIFEST_SCHEMA).replace("'", '"')
 
 
-def test_verify_leg_and_delivery_verifier_both_carry_the_clause(monkeypatch):
+def test_verify_leg_and_delivery_verifier_both_carry_the_clause(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     verify_start = script.index("phase: Verify")
     verify = script[verify_start : script.index("label: 'verify'", verify_start)]
@@ -61,7 +62,7 @@ def test_verify_leg_and_delivery_verifier_both_carry_the_clause(monkeypatch):
     assert "_crossRepoRows" in script[script.index("Review wave") :]
 
 
-def test_engine_rows_join_the_cross_repo_rows_after_stage(monkeypatch):
+def test_engine_rows_join_the_cross_repo_rows_after_stage(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assign = script.index("_crossRepoRows = (_manifest.gated ?? [])")
     assert ".concat(_manifest.engine_rows ?? [])" in script[assign : assign + 400]
@@ -69,7 +70,7 @@ def test_engine_rows_join_the_cross_repo_rows_after_stage(monkeypatch):
     assert "engine_rows" not in ask_compose._MANIFEST_SCHEMA["required"]
 
 
-def test_ledger_schema_and_prompt_ask_for_root_read(monkeypatch):
+def test_ledger_schema_and_prompt_ask_for_root_read(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     item = ask_compose._LEDGER_CHECK_SCHEMA["properties"]["items"]["items"]
     assert "root_read" in item["properties"]
@@ -79,7 +80,7 @@ def test_ledger_schema_and_prompt_ask_for_root_read(monkeypatch):
     assert "root_read" in _verdict_text_def(script)
 
 
-def test_criterion_judge_expression_carries_the_owner_clause(monkeypatch):
+def test_criterion_judge_expression_carries_the_owner_clause(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "m_plus")
     roster = copy.deepcopy(_ROSTER)
     roster["execute_review"]["stages"].append(
@@ -100,13 +101,13 @@ def test_criterion_judge_expression_carries_the_owner_clause(monkeypatch):
     assert script.count(_CLAUSE) >= 2
 
 
-def test_clause_names_git_c_owner_root_and_unreadable_fallback():
+def test_clause_names_git_c_owner_root_and_unreadable_fallback() -> None:
     assert "git -C {root}" in er._OWNER_OWNED
     assert "Deliverable-Id" in er._OWNER_CLOSURE
     assert "unreadable" in er._OWNER_ABSENT and "never report not_met" in er._OWNER_ABSENT
 
 
-def test_compose_execute_review_keyword_is_opt_in():
+def test_compose_execute_review_keyword_is_opt_in() -> None:
     import inspect
 
     default = inspect.signature(er.compose_execute_review).parameters["owner_rows_js"].default

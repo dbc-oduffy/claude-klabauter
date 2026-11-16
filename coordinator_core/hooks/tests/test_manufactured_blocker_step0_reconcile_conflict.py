@@ -7,11 +7,13 @@ from __future__ import annotations
 import json
 
 from coordinator_core.hooks import guard_manufactured_blocker as gmb
+from pathlib import Path
+import pytest
 
 ASK = "Reconcile hit a conflict on main. Option A, B or C? This needs you to pick."
 
 
-def _write(path, entries):
+def _write(path, entries) -> None:
     path.write_text("\n".join(json.dumps(e) for e in entries) + "\n", encoding="utf-8")
 
 
@@ -47,7 +49,7 @@ def _run(tmp_path, monkeypatch, entries):
     return gmb._handler({"payload": payload, **payload})
 
 
-def test_step0_reconcile_conflict_ask_is_not_flagged(tmp_path, monkeypatch):
+def test_step0_reconcile_conflict_ask_is_not_flagged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(
         tmp_path,
         monkeypatch,
@@ -60,12 +62,12 @@ def test_step0_reconcile_conflict_ask_is_not_flagged(tmp_path, monkeypatch):
     assert not out
 
 
-def test_same_ask_without_step0_outcome_still_fires(tmp_path, monkeypatch):
+def test_same_ask_without_step0_outcome_still_fires(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(tmp_path, monkeypatch, [_user("go"), _assistant(ASK)])
     assert out
 
 
-def test_prior_turn_reconcile_conflict_does_not_exempt(tmp_path, monkeypatch):
+def test_prior_turn_reconcile_conflict_does_not_exempt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(
         tmp_path,
         monkeypatch,

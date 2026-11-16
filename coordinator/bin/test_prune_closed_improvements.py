@@ -7,6 +7,10 @@ import os
 import sys
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 
@@ -29,7 +33,7 @@ def _fail(label: str, detail: str = "") -> None:
     pytest.fail(f"{label}: {detail}" if detail else label, pytrace=False)
 
 
-def _load_module():
+def _load_module() -> ModuleType:
     path = os.path.join(SCRIPT_DIR, "prune-closed-improvements.py")
     spec = importlib.util.spec_from_file_location("prune_closed_improvements_under_test", path)
     mod = importlib.util.module_from_spec(spec)
@@ -55,10 +59,10 @@ def _run_main_capturing(mod, argv=None, fake_load_records=None, fake_route=None)
     return rc, out.getvalue(), err.getvalue()
 
 
-def test_empty_candidates_skips_all_calls():
+def test_empty_candidates_skips_all_calls() -> None:
     mod = _load_module()
 
-    def fake_load_records(family, repo_root, where=None, since=None, limit=0):
+    def fake_load_records(family, repo_root, where=None, since=None, limit: int = 0):
         assert family == "improvement-queue"
         assert where == "status = closed"
         return []
@@ -89,11 +93,11 @@ def test_empty_candidates_skips_all_calls():
         _fail("empty candidates: 'nothing to prune' message printed", f"stdout: {out!r}")
 
 
-def test_two_call_batch_shape():
+def test_two_call_batch_shape() -> None:
     mod = _load_module()
     calls = []
 
-    def fake_load_records(family, repo_root, where=None, since=None, limit=0):
+    def fake_load_records(family, repo_root, where=None, since=None, limit: int = 0):
         return [
             {"path": "state/improvement-queue/2026-01-01-a.yaml", "frontmatter": {"status": "closed"}},
             {"path": "state/improvement-queue/2026-01-02-b.yaml", "frontmatter": {"status": "closed"}},
@@ -156,10 +160,10 @@ def test_two_call_batch_shape():
         _pass("two-call-batch: no WARN on full success")
 
 
-def test_dry_run_mode_skips_act_calls():
+def test_dry_run_mode_skips_act_calls() -> None:
     mod = _load_module()
 
-    def fake_load_records(family, repo_root, where=None, since=None, limit=0):
+    def fake_load_records(family, repo_root, where=None, since=None, limit: int = 0):
         return [{"path": "state/improvement-queue/2026-01-01-a.yaml", "frontmatter": {"status": "closed"}}]
 
     act_called = {"n": 0}
@@ -192,11 +196,11 @@ def test_dry_run_mode_skips_act_calls():
         _fail("dry-run mode: preview message printed", f"stdout: {out!r}")
 
 
-def test_preview_failure_drops_candidate():
+def test_preview_failure_drops_candidate() -> None:
     mod = _load_module()
     act_entry_paths = []
 
-    def fake_load_records(family, repo_root, where=None, since=None, limit=0):
+    def fake_load_records(family, repo_root, where=None, since=None, limit: int = 0):
         return [
             {"path": "state/improvement-queue/2026-01-01-a.yaml", "frontmatter": {"status": "closed"}},
             {"path": "state/improvement-queue/2026-01-02-b.yaml", "frontmatter": {"status": "closed"}},
@@ -247,10 +251,10 @@ def test_preview_failure_drops_candidate():
         _fail("preview failure: surviving candidate still archived", f"stdout: {out!r}")
 
 
-def test_discovery_failure_is_non_blocking():
+def test_discovery_failure_is_non_blocking() -> None:
     mod = _load_module()
 
-    def fake_load_records(family, repo_root, where=None, since=None, limit=0):
+    def fake_load_records(family, repo_root, where=None, since=None, limit: int = 0):
         raise RuntimeError("simulated discovery failure")
 
     rc, out, err = _run_main_capturing(mod, argv=[], fake_load_records=fake_load_records)
@@ -277,10 +281,10 @@ def test_discovery_failure_is_non_blocking():
 # while the rest landed) is named AND makes the process exit NON-ZERO --
 # never swallowed into a WARN-only exit 0.
 # ===========================================================================
-def test_partial_act_failure_is_named_and_nonzero():
+def test_partial_act_failure_is_named_and_nonzero() -> None:
     mod = _load_module()
 
-    def fake_load_records(family, repo_root, where=None, since=None, limit=0):
+    def fake_load_records(family, repo_root, where=None, since=None, limit: int = 0):
         return [
             {"path": "state/improvement-queue/2026-01-01-a.yaml", "frontmatter": {"status": "closed"}},
             {"path": "state/improvement-queue/2026-01-02-b.yaml", "frontmatter": {"status": "closed"}},
@@ -323,10 +327,10 @@ def test_partial_act_failure_is_named_and_nonzero():
         _fail("partial act failure: surviving entry still reported archived", f"stdout: {out!r}")
 
 
-def test_batch_dispatch_transport_failure_is_nonzero():
+def test_batch_dispatch_transport_failure_is_nonzero() -> None:
     mod = _load_module()
 
-    def fake_load_records(family, repo_root, where=None, since=None, limit=0):
+    def fake_load_records(family, repo_root, where=None, since=None, limit: int = 0):
         return [{"path": "state/improvement-queue/2026-01-01-a.yaml", "frontmatter": {"status": "closed"}}]
 
     def fake_route(op, params, repo_root, legacy_fn):
@@ -352,10 +356,10 @@ def test_batch_dispatch_transport_failure_is_nonzero():
         _fail("batch transport failure: reason surfaced on stderr", f"stderr: {err!r}")
 
 
-def test_idempotent_noop_is_not_a_failure():
+def test_idempotent_noop_is_not_a_failure() -> None:
     mod = _load_module()
 
-    def fake_load_records(family, repo_root, where=None, since=None, limit=0):
+    def fake_load_records(family, repo_root, where=None, since=None, limit: int = 0):
         return [{"path": "state/improvement-queue/2026-01-01-a.yaml", "frontmatter": {"status": "closed"}}]
 
     def fake_route(op, params, repo_root, legacy_fn):

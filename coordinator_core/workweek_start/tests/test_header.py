@@ -5,9 +5,10 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.workweek_start import header as h
+from pathlib import Path
 
 
-def test_bootstrap_writes_once(tmp_path):
+def test_bootstrap_writes_once(tmp_path: Path) -> None:
     assert h.bootstrap(tmp_path) is True
     path = tmp_path / "state" / "week-changelog" / "HEADER.md"
     first = path.read_bytes()
@@ -17,7 +18,7 @@ def test_bootstrap_writes_once(tmp_path):
     assert path.read_bytes() == first + b"extra\n"
 
 
-def test_reset_moves_dailies_and_fragments_keeps_header_and_pending(tmp_path):
+def test_reset_moves_dailies_and_fragments_keeps_header_and_pending(tmp_path: Path) -> None:
     h.bootstrap(tmp_path)
     d = tmp_path / "state" / "week-changelog"
     (d / "HEADER.md").write_text(
@@ -46,7 +47,7 @@ def test_reset_moves_dailies_and_fragments_keeps_header_and_pending(tmp_path):
     assert not list(d.glob("HEADER.priorities.*"))
 
 
-def test_reset_archives_each_missed_week_and_keeps_current_week(tmp_path):
+def test_reset_archives_each_missed_week_and_keeps_current_week(tmp_path: Path) -> None:
     d = tmp_path / "state" / "week-changelog"
     d.mkdir(parents=True)
     (d / "HEADER.md").write_text(
@@ -77,7 +78,7 @@ def _dailies(tmp_path, *names):
     return d
 
 
-def test_missed_weeks_unset_anchor_lists_each_unarchived_completed_week(tmp_path):
+def test_missed_weeks_unset_anchor_lists_each_unarchived_completed_week(tmp_path: Path) -> None:
     h.bootstrap(tmp_path)
     _dailies(
         tmp_path, "2026-09-29-a.md", "2026-10-07-a.md", "2026-10-08-pending-release.md",
@@ -86,25 +87,25 @@ def test_missed_weeks_unset_anchor_lists_each_unarchived_completed_week(tmp_path
     assert h.missed_weeks(tmp_path, "2026-10-15") == ("2026-09-28", "2026-10-05")
 
 
-def test_missed_weeks_unset_anchor_skips_archived_week_and_uses_its_chain(tmp_path):
+def test_missed_weeks_unset_anchor_skips_archived_week_and_uses_its_chain(tmp_path: Path) -> None:
     _dailies(tmp_path, "2026-09-29-a.md", "2026-10-07-a.md")
     (tmp_path / "archive" / "week-changelogs" / "2026-09-29").mkdir(parents=True)
     assert h.missed_weeks(tmp_path, "2026-10-20") == ("2026-10-06",)
 
 
-def test_missed_weeks_unset_anchor_without_dated_files_is_empty(tmp_path):
+def test_missed_weeks_unset_anchor_without_dated_files_is_empty(tmp_path: Path) -> None:
     h.bootstrap(tmp_path)
     assert h.missed_weeks(tmp_path, "2026-10-15") == ()
 
 
-def test_missed_weeks_stale_anchor_adds_unarchived_pre_anchor_weeks_only(tmp_path):
+def test_missed_weeks_stale_anchor_adds_unarchived_pre_anchor_weeks_only(tmp_path: Path) -> None:
     d = _dailies(tmp_path, "2026-09-15-a.md", "2026-09-22-a.md")
     (d / "HEADER.md").write_text("**Week starting:** 2026-09-28\n", encoding="utf-8")
     (tmp_path / "archive" / "week-changelogs" / "2026-09-21").mkdir(parents=True)
     assert h.missed_weeks(tmp_path, "2026-10-14") == ("2026-09-14", "2026-09-28")
 
 
-def test_reset_inside_header_week_archives_nothing(tmp_path):
+def test_reset_inside_header_week_archives_nothing(tmp_path: Path) -> None:
     d = tmp_path / "state" / "week-changelog"
     d.mkdir(parents=True)
     (d / "HEADER.md").write_text("**Week starting:** 2026-10-05\n", encoding="utf-8")
@@ -116,21 +117,21 @@ def test_reset_inside_header_week_archives_nothing(tmp_path):
     assert "**Week starting:** 2026-10-05" in (d / "HEADER.md").read_text(encoding="utf-8")
 
 
-def test_current_week_start_uses_header_then_archive_chain(tmp_path):
+def test_current_week_start_uses_header_then_archive_chain(tmp_path: Path) -> None:
     h.bootstrap(tmp_path)
     assert h.current_week_start(tmp_path, "2026-10-08") == "2026-10-08"
     (tmp_path / "archive" / "week-changelogs" / "2026-09-28").mkdir(parents=True)
     assert h.current_week_start(tmp_path, "2026-10-08") == "2026-10-05"
 
 
-def test_reset_on_sentinel_raises(tmp_path):
+def test_reset_on_sentinel_raises(tmp_path: Path) -> None:
     h.bootstrap(tmp_path)
     with pytest.raises(h.WeekUnsetError):
         h.reset_week(tmp_path, "2026-10-05")
     assert not (tmp_path / "archive").exists()
 
 
-def test_update_touches_one_line(tmp_path):
+def test_update_touches_one_line(tmp_path: Path) -> None:
     h.bootstrap(tmp_path)
     path = tmp_path / "state" / "week-changelog" / "HEADER.md"
     before = path.read_text(encoding="utf-8").splitlines()
@@ -141,7 +142,7 @@ def test_update_touches_one_line(tmp_path):
     assert diff == [("**Last /workweek-start:** (none)", "**Last /workweek-start:** 2026-10-12")]
 
 
-def test_update_appends_line_when_absent(tmp_path):
+def test_update_appends_line_when_absent(tmp_path: Path) -> None:
     path = tmp_path / "state" / "week-changelog" / "HEADER.md"
     path.parent.mkdir(parents=True)
     path.write_bytes(b"# Week Changelog\n**Week starting:** 2026-10-05")
@@ -149,20 +150,20 @@ def test_update_appends_line_when_absent(tmp_path):
     assert path.read_text(encoding="utf-8").splitlines()[-1] == "**Last /workweek-start:** 2026-10-12"
 
 
-def test_fragment_writer_rejects_path_like_sid(tmp_path):
+def test_fragment_writer_rejects_path_like_sid(tmp_path: Path) -> None:
     for bad in ("../x", "a/b", "", "a.b"):
         with pytest.raises(ValueError):
             h.write_priorities_fragment(tmp_path, bad, [])
 
 
-def test_fragment_writer_leaves_peer_untouched(tmp_path):
+def test_fragment_writer_leaves_peer_untouched(tmp_path: Path) -> None:
     peer = h.write_priorities_fragment(tmp_path, "peer01", [("P", "g/p.yaml")])
     before = peer.read_bytes()
     h.write_priorities_fragment(tmp_path, "mine01", [("M", "g/m.yaml")])
     assert peer.read_bytes() == before
 
 
-def test_unfinished_priorities_round_trip(tmp_path):
+def test_unfinished_priorities_round_trip(tmp_path: Path) -> None:
     assert h.unfinished_priorities(tmp_path) == []
     frag = h.write_priorities_fragment(
         tmp_path, "abc123", [("One", "g/1.yaml"), ("Two — dash", "g/2.yaml"), ("Three", "g/3.yaml")]

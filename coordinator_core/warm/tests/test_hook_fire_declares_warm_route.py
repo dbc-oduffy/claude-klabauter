@@ -43,9 +43,10 @@ from coordinator_core.warm.tests.test_supervisor_hook_serves_real_guard import (
     _bind_handler,
     _post,
 )
+import pytest
 
 
-def test_a_hook_fire_through_a_declared_server_stamps_warm_server_route(tmp_path: Path, monkeypatch):
+def test_a_hook_fire_through_a_declared_server_stamps_warm_server_route(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # The op-latency row falls back to the process cwd's sink; a tmp repo keeps it
     # off the live hub, which the autouse conftest guard drops rows for.
     repo = tmp_path / "repo"
@@ -93,7 +94,7 @@ def test_a_hook_fire_through_a_declared_server_stamps_warm_server_route(tmp_path
     assert own_rows[-1]["route"] == op_latency.WARM_SERVER
 
 
-def test_stamp_gate_constant_is_wired_into_the_refusal_it_names():
+def test_stamp_gate_constant_is_wired_into_the_refusal_it_names() -> None:
     assert ipc.UNSTAMPED_ENGINE_ROOT_ERROR == -32005
 
     envelope = ipc._unstamped_dispatch_refusal(request_id=7)

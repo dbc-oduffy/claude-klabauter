@@ -33,6 +33,7 @@ from coordinator_core.ops.ceremony import commit_admission, git_native
 from coordinator_core.win_portability import no_console_creationflags
 
 from .fixtures.real_git import real_git_repo
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -69,7 +70,7 @@ def _committed(root, path):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = real_git_repo(tmp_path)
     (root / "CLAUDE.md").write_text(_CLAUDE, encoding="utf-8")
     ledger = root / "state" / "audits" / "claude-classification.md"
@@ -86,7 +87,7 @@ def _commit(root, path, content):
     return git_native.commit_authored_content(path, content, msg, root)
 
 
-def test_unclassified_growth_is_refused_and_nothing_lands(repo):
+def test_unclassified_growth_is_refused_and_nothing_lands(repo) -> None:
     before = _head(repo)
     grown = _CLAUDE.replace("beta body\n", "beta body\n\nan op added this paragraph\n")
     result = _commit(repo, "CLAUDE.md", grown)
@@ -97,21 +98,21 @@ def test_unclassified_growth_is_refused_and_nothing_lands(repo):
     assert _committed(repo, "CLAUDE.md") == _CLAUDE
 
 
-def test_classified_growth_under_the_watermark_lands(repo):
+def test_classified_growth_under_the_watermark_lands(repo) -> None:
     grown = _CLAUDE.replace("alpha body\n", "alpha body, slightly longer\n")
     result = _commit(repo, "CLAUDE.md", grown)
     assert result.ok, result.stderr
     assert _committed(repo, "CLAUDE.md") == grown
 
 
-def test_shrinking_a_governed_surface_lands(repo):
+def test_shrinking_a_governed_surface_lands(repo) -> None:
     shrunk = _CLAUDE.replace("\n## Beta\n\nbeta body\n", "")
     result = _commit(repo, "CLAUDE.md", shrunk)
     assert result.ok, result.stderr
     assert _committed(repo, "CLAUDE.md") == shrunk
 
 
-def test_a_surface_with_no_ledger_is_not_enforced_here(repo):
+def test_a_surface_with_no_ledger_is_not_enforced_here(repo) -> None:
     _git(["rm", "-q", "state/audits/claude-classification.md"], repo)
     _git(["commit", "-q", "-m", "drop ledger"], repo)
     grown = _CLAUDE + "\n## Gamma\n\nunledgered repo growth\n"
@@ -119,12 +120,12 @@ def test_a_surface_with_no_ledger_is_not_enforced_here(repo):
     assert result.ok, result.stderr
 
 
-def test_an_ungoverned_path_is_unaffected(repo):
+def test_an_ungoverned_path_is_unaffected(repo) -> None:
     result = _commit(repo, "seed.txt", "seed\nmore\n")
     assert result.ok, result.stderr
 
 
-def test_the_refusal_also_stops_the_plumbing_ladder(repo, monkeypatch):
+def test_the_refusal_also_stops_the_plumbing_ladder(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(git_native, "_resolve_commit_identity", lambda _root: None)
     before = _head(repo)
     grown = _CLAUDE.replace("beta body\n", "beta body\n\nan op added this paragraph\n")
@@ -137,7 +138,7 @@ def test_the_refusal_also_stops_the_plumbing_ladder(repo, monkeypatch):
 _GROWN_UNCLASSIFIED = _CLAUDE.replace("beta body\n", "beta body\n\nan op added this paragraph\n")
 
 
-def test_uncommitted_refused_growth_is_reported(repo):
+def test_uncommitted_refused_growth_is_reported(repo) -> None:
     (repo / "CLAUDE.md").write_text(_GROWN_UNCLASSIFIED, encoding="utf-8")
     refusals = commit_admission.uncommitted_surface_refusals(repo)
     assert len(refusals) == 1
@@ -145,13 +146,13 @@ def test_uncommitted_refused_growth_is_reported(repo):
     assert "## Beta" in refusals[0]
 
 
-def test_uncommitted_admitted_edits_and_a_clean_tree_are_quiet(repo):
+def test_uncommitted_admitted_edits_and_a_clean_tree_are_quiet(repo) -> None:
     assert commit_admission.uncommitted_surface_refusals(repo) == []
     (repo / "CLAUDE.md").write_text(_CLAUDE.replace("alpha body\n", "alpha body, longer\n"), encoding="utf-8")
     assert commit_admission.uncommitted_surface_refusals(repo) == []
 
 
-def test_write_refusal_answers_before_an_op_writes(repo):
+def test_write_refusal_answers_before_an_op_writes(repo) -> None:
     assert commit_admission.governed_write_refusal(repo, "CLAUDE.md", _CLAUDE, _GROWN_UNCLASSIFIED)
     assert commit_admission.governed_write_refusal(repo, "CLAUDE.md", _GROWN_UNCLASSIFIED, _CLAUDE) is None
     assert commit_admission.governed_write_refusal(repo, "notes.md", "", "anything\n") is None

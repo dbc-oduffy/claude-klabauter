@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import bug_close, terminal_commit
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest
+from pathlib import Path
 
 ID = "0123456789ab"
 MARK = bug_close.marker_line(ID)
@@ -21,33 +22,33 @@ def _run(tmp_path, report_text):
     return [c.id for c in out], withheld
 
 
-def test_partial_with_a_marker_is_delivered_and_never_withheld(tmp_path):
+def test_partial_with_a_marker_is_delivered_and_never_withheld(tmp_path: Path) -> None:
     delivered, withheld = _run(tmp_path, f"PARTIAL: X1\n{MARK}\n<exit-status>PARTIAL</exit-status>\n")
     assert delivered == ["X1"] and withheld == {}
 
 
-def test_partial_with_status_field_and_a_marker_is_delivered(tmp_path):
+def test_partial_with_status_field_and_a_marker_is_delivered(tmp_path: Path) -> None:
     delivered, withheld = _run(tmp_path, f"status: PARTIAL\n- {MARK}\n")
     assert delivered == ["X1"] and withheld == {}
 
 
-def test_partial_with_only_the_prose_stays_stranded_and_withheld(tmp_path):
+def test_partial_with_only_the_prose_stays_stranded_and_withheld(tmp_path: Path) -> None:
     delivered, withheld = _run(tmp_path, F8207B)
     assert delivered == [] and list(withheld) == ["X1"]
 
 
-def test_partial_marker_with_a_gate_blocker_keeps_todays_handling(tmp_path):
+def test_partial_marker_with_a_gate_blocker_keeps_todays_handling(tmp_path: Path) -> None:
     delivered, withheld = _run(
         tmp_path, f"PARTIAL: X1\n{MARK}\ngate-blocker: outside-footprint: x\n"
     )
     assert delivered == [] and list(withheld) == ["X1"]
 
 
-def test_blocked_with_a_marker_stays_stranded(tmp_path):
+def test_blocked_with_a_marker_stays_stranded(tmp_path: Path) -> None:
     delivered, withheld = _run(tmp_path, f"BLOCKED on: X1\n{MARK}\n<exit-status>BLOCKED</exit-status>\n")
     assert delivered == [] and withheld == {}
 
 
-def test_done_still_lands(tmp_path):
+def test_done_still_lands(tmp_path: Path) -> None:
     delivered, _ = _run(tmp_path, "DONE: X1\n<exit-status>DONE</exit-status>\n")
     assert delivered == ["X1"]

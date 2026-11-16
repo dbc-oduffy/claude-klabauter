@@ -18,6 +18,8 @@ Interface:
   ``cite`` is ``{chunk, verdict, ref}`` (``verdict`` is ``"no"`` or ``"absent"``) for
   ``close_wont_do``; ``{chunk}`` for ``wait``; ``{chunk, reason: "legacy-absent"}`` for a
   ``dispatch`` reached with the verdict absent (``verdict-absent`` when opted in); ``None`` for any other ``dispatch``.
+* A recorded verdict is keyed by premise row id alone: no plan-text fingerprint is read, so a
+  run's own edit to another row never voids a recorded ``yes``.
 * ``PREMISE_RECORD_BRIEF_LINE``: the one line ask_stage appends to a premise row's brief.
 
 Decision per row, over its epistemic-premise edges only: any edge whose premise row is finished

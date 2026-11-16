@@ -9,6 +9,7 @@ from pathlib import Path
 from coordinator_core import launch_records, warp_live
 from coordinator_core.hooks import nudge_em_code_dispatch as dispatch
 from coordinator_core.ops.dispatch_emit import run_token
+import pytest
 
 SESSION = "sess-1"
 RUN_ID = "ask-20261016T000000-abcdef"
@@ -66,7 +67,7 @@ def _edit(root: Path, session_transcript: Path, agent_id: str, rel: str = "pkg/m
     })
 
 
-def test_size_stage_spawn_write_under_scratch_is_advised(tmp_path, monkeypatch):
+def test_size_stage_spawn_write_under_scratch_is_advised(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, session_transcript, run_dir = _session(tmp_path, monkeypatch)
     _touch(run_dir / f"agent-{AGENT_A}.jsonl")
 
@@ -77,7 +78,7 @@ def test_size_stage_spawn_write_under_scratch_is_advised(tmp_path, monkeypatch):
     assert _edit(root, session_transcript, AGENT_A, "scratch/x.py") is None
 
 
-def test_run_agent_is_advised_and_unrelated_executor_is_allowed(tmp_path, monkeypatch):
+def test_run_agent_is_advised_and_unrelated_executor_is_allowed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, session_transcript, run_dir = _session(tmp_path, monkeypatch)
     _touch(run_dir / f"agent-{AGENT_A}.jsonl")
     _touch(tmp_path / SESSION / "subagents" / f"agent-{AGENT_B}.jsonl")
@@ -93,7 +94,7 @@ def test_run_agent_is_advised_and_unrelated_executor_is_allowed(tmp_path, monkey
     assert _edit(root, session_transcript, AGENT_C) is None
 
 
-def test_run_agent_is_allowed_once_the_run_binds_a_sizing(tmp_path, monkeypatch):
+def test_run_agent_is_allowed_once_the_run_binds_a_sizing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, session_transcript, run_dir = _session(tmp_path, monkeypatch)
     _touch(run_dir / f"agent-{AGENT_A}.jsonl")
 

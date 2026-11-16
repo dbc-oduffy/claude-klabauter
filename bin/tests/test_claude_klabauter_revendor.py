@@ -181,7 +181,7 @@ _ENTITY_SCHEMA_V250_WIDEN = {
 # ---------------------------------------------------------------------------
 
 @pytest.fixture
-def isolated_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+def isolated_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     """Redirect _VENDOR_CONTRACT, PIN_SHA_FILE to isolated tmp dirs.
 
     Returns a dict with 'vendor', 'pin' keys for test convenience.
@@ -205,7 +205,7 @@ def isolated_paths(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture
-def base_fake_clone(tmp_path: Path):
+def base_fake_clone(tmp_path: Path) -> tuple[Path, str]:
     """Fake DoE clone with v2.4.0 schema committed; returns (clone_path, sha_v240).
 
     Negative-spec (2026-07-21): no src/ tree — upstream commit 7cca4d4c deleted the

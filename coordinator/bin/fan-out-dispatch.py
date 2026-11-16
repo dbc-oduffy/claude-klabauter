@@ -337,27 +337,10 @@ def _provision_sidecars(
 
 
 def _machine_local_get(key: str) -> str:
-    """Best-effort `machine-local get <key>`; empty string on any failure.
+    """Best-effort machine-local read of <key> through the engine's bounded reader; "" on any failure.
 
-    `shutil.which` is bareword ("machine-local", no extension) intentionally —
-    it IS PATHEXT-aware on Windows and resolves `machine-local.cmd` on PATH
-    unassisted, so this is not the F7 hazard (unlike the extensionless-path
-    probes in the other three defects fixed alongside this one). What WAS
-    broken here is the bare `except Exception: pass`: it cannot distinguish
-    "machine-local not installed" (expected, degrade silently) from "the
-    subprocess call itself crashed" (the exact ambiguity that made the
-    original F7 bugs invisible for weeks) — narrowed to the exceptions
-    `subprocess.run` can actually raise here, with a stderr breadcrumb on the
-    crash path. Still degrades to empty string either way — never fatal.
-
-    `SubprocessError` (not just `TimeoutExpired`) future-proofs against other
-    subprocess-family exceptions; `UnicodeDecodeError` is caught separately
-    because `text=True` decodes child stdout/stderr using the locale
-    encoding and can raise on non-UTF-8 output from a third-party binary —
-    neither is a subclass of the other. (Review: code-reviewer — Finding 3,
-    2026-07-22: the prior `(OSError, subprocess.TimeoutExpired)` tuple did
-    not catch `UnicodeDecodeError`, silently reopening the "unexpected
-    exception propagates" failure mode this docstring says doesn't exist.)
+    An unset key, an unresolvable engine or a failed read all degrade to "" (never fatal); an
+    exception is reported on stderr so a crash stays distinguishable from an unset key.
     """
     try:
         claude_klabauter_root = _resolve_claude_klabauter_root_silent()

@@ -54,6 +54,7 @@ import pytest
 
 from coordinator_core.benchmarks import budget
 from coordinator_core.ops import discover_working_repos as m
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -76,7 +77,7 @@ def _write_registry(reg_dir, repos: dict, mirrors: dict) -> None:
     (reg_dir / "registry.toml").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def _seeded_registry(tmp_path, monkeypatch):
+def _seeded_registry(tmp_path, monkeypatch) -> None:
     """Shared fixture setup: 5 `repos.*` keys (real `.git` dirs) + 3
     `publish.mirrors.*.path` keys, registered via `MACHINE_LOCAL_REGISTRY_DIR`
     so `_merged_flat_registry()` reads them without any CLI spawn."""
@@ -99,7 +100,7 @@ def _seeded_registry(tmp_path, monkeypatch):
 
 
 def test_merged_flat_registry_eliminates_machine_local_cli_spawns(
-    tmp_path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     budget_entry = _manifest_spawn_budget()
     assert budget_entry["machine_local_cli_elimination_calls"] == 0
@@ -135,7 +136,7 @@ def test_merged_flat_registry_eliminates_machine_local_cli_spawns(
 
 
 def test_tier_a5_and_publish_mirror_keys_real_spawn_count(
-    tmp_path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     budget_entry = _manifest_spawn_budget()
     assert budget_entry["per_call"] == 1

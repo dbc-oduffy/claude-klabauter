@@ -37,38 +37,39 @@ import os
 from pathlib import Path
 
 from coordinator_core.ops._path_guard import contained_path, safe_id
+import pytest
 
 
-def test_safe_id_accepts_plain_alphanumeric():
+def test_safe_id_accepts_plain_alphanumeric() -> None:
     assert safe_id("abc123") is True
 
 
-def test_safe_id_accepts_dots_underscores_hyphens():
+def test_safe_id_accepts_dots_underscores_hyphens() -> None:
     assert safe_id("2026-07-08_test.file-name") is True
 
 
-def test_safe_id_rejects_forward_slash():
+def test_safe_id_rejects_forward_slash() -> None:
     assert safe_id("../secret") is False
     assert safe_id("a/b") is False
 
 
-def test_safe_id_rejects_backslash():
+def test_safe_id_rejects_backslash() -> None:
     assert safe_id("a\\b") is False
 
 
-def test_safe_id_rejects_bare_double_dot():
+def test_safe_id_rejects_bare_double_dot() -> None:
     assert safe_id("..") is False
 
 
-def test_safe_id_rejects_bare_single_dot():
+def test_safe_id_rejects_bare_single_dot() -> None:
     assert safe_id(".") is False
 
 
-def test_safe_id_rejects_empty_string():
+def test_safe_id_rejects_empty_string() -> None:
     assert safe_id("") is False
 
 
-def test_contained_path_accepts_candidate_under_root(tmp_path):
+def test_contained_path_accepts_candidate_under_root(tmp_path: Path) -> None:
     root = tmp_path / "allowed"
     root.mkdir()
     candidate = root / "file.md"
@@ -78,7 +79,7 @@ def test_contained_path_accepts_candidate_under_root(tmp_path):
     assert result == candidate.resolve()
 
 
-def test_contained_path_rejects_candidate_outside_all_roots(tmp_path):
+def test_contained_path_rejects_candidate_outside_all_roots(tmp_path: Path) -> None:
     root = tmp_path / "allowed"
     root.mkdir()
     outside = tmp_path / "elsewhere" / "secret.md"
@@ -89,7 +90,7 @@ def test_contained_path_rejects_candidate_outside_all_roots(tmp_path):
     assert result is None
 
 
-def test_contained_path_accepts_candidate_under_second_of_multiple_roots(tmp_path):
+def test_contained_path_accepts_candidate_under_second_of_multiple_roots(tmp_path: Path) -> None:
     root_a = tmp_path / "root_a"
     root_a.mkdir()
     root_b = tmp_path / "root_b"
@@ -101,7 +102,7 @@ def test_contained_path_accepts_candidate_under_second_of_multiple_roots(tmp_pat
     assert result == candidate.resolve()
 
 
-def test_contained_path_symlink_escape_is_rejected(tmp_path):
+def test_contained_path_symlink_escape_is_rejected(tmp_path: Path) -> None:
     root = tmp_path / "allowed"
     root.mkdir()
     outside_target = tmp_path / "elsewhere" / "secret.md"
@@ -119,7 +120,7 @@ def test_contained_path_symlink_escape_is_rejected(tmp_path):
     assert result is None, "symlink escaping the allowed root must be rejected"
 
 
-def test_contained_path_macos_tmp_resolve_symmetry(tmp_path):
+def test_contained_path_macos_tmp_resolve_symmetry(tmp_path: Path) -> None:
     root = tmp_path / "state" / "handoffs"
     root.mkdir(parents=True)
     candidate = root / "h.md"
@@ -130,7 +131,7 @@ def test_contained_path_macos_tmp_resolve_symmetry(tmp_path):
     assert str(result) == os.path.realpath(candidate)
 
 
-def test_contained_path_extended_length_prefix_on_candidate_only_still_contained(tmp_path, monkeypatch):
+def test_contained_path_extended_length_prefix_on_candidate_only_still_contained(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "allowed"
     root.mkdir()
     candidate = root / "file.md"
@@ -154,7 +155,7 @@ def test_contained_path_extended_length_prefix_on_candidate_only_still_contained
     assert str(result).startswith("\\\\?\\")
 
 
-def test_contained_path_extended_length_prefix_on_root_only_still_contained(tmp_path, monkeypatch):
+def test_contained_path_extended_length_prefix_on_root_only_still_contained(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "allowed"
     root.mkdir()
     candidate = root / "file.md"
@@ -181,13 +182,13 @@ def _has_extended_length_prefix(path: Path) -> bool:
     return text.startswith("\\\\?\\") or text.startswith("//?/")
 
 
-def test_contained_path_unc_prefix_asymmetry_also_still_contained(monkeypatch):
+def test_contained_path_unc_prefix_asymmetry_also_still_contained(monkeypatch: pytest.MonkeyPatch) -> None:
     root = Path("root-marker")
     candidate = Path("candidate-marker")
     bare_unc = "//server/share/dir"
     prefixed_unc_candidate = "//?/unc/server/share/dir/file.md"
 
-    def fake_resolve(self, *a, **kw):
+    def fake_resolve(self, *a, **kw) -> Path:
         if self == root:
             return Path(bare_unc)
         if self == candidate:
@@ -203,7 +204,7 @@ def test_contained_path_unc_prefix_asymmetry_also_still_contained(monkeypatch):
     assert _has_extended_length_prefix(result)
 
 
-def test_contained_path_genuinely_long_windows_path_return_value_keeps_prefix(tmp_path, monkeypatch):
+def test_contained_path_genuinely_long_windows_path_return_value_keeps_prefix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The load-bearing negative named in the brief: a real >MAX_PATH
     Windows path where the extended-length prefix is NOT cosmetic. The
     returned Path must retain it — a caller doing real filesystem work with
@@ -244,7 +245,7 @@ def _count_root_resolves(monkeypatch, root):
     return calls
 
 
-def test_contained_path_root_resolved_once_inside_scope(tmp_path, monkeypatch):
+def test_contained_path_root_resolved_once_inside_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import call_io_scope
 
     root = tmp_path / "allowed"
@@ -258,7 +259,7 @@ def test_contained_path_root_resolved_once_inside_scope(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
-def test_contained_path_root_resolved_every_call_outside_scope(tmp_path, monkeypatch):
+def test_contained_path_root_resolved_every_call_outside_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "allowed"
     root.mkdir()
     cand = root / "f.md"
@@ -269,7 +270,7 @@ def test_contained_path_root_resolved_every_call_outside_scope(tmp_path, monkeyp
     assert len(calls) == 5
 
 
-def test_contained_path_root_oserror_is_retried_not_memoised(tmp_path, monkeypatch):
+def test_contained_path_root_oserror_is_retried_not_memoised(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import call_io_scope
 
     root = tmp_path / "allowed"

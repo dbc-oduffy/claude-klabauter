@@ -16,12 +16,13 @@ from coordinator_core.ops.fleet.tests.test_memo_send import (
     _make_sender_git_repo,
     _write_draft,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 @pytest.fixture()
-def sender_and_receiver(tmp_path, monkeypatch):
+def sender_and_receiver(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
     claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -36,7 +37,7 @@ def _inbox_files(receiver_repo):
     ]
 
 
-def test_delivery_path_equals_wire_target(sender_and_receiver):
+def test_delivery_path_equals_wire_target(sender_and_receiver) -> None:
     sender_repo, receiver_repo = sender_and_receiver
     _write_draft(sender_repo, "wire-topic")
 
@@ -61,7 +62,7 @@ def test_delivery_path_equals_wire_target(sender_and_receiver):
     assert target.inbox_dir == receiver_repo / "cross-repo" / "inbox"
 
 
-def test_empty_slug_from_is_a_setup_error_and_writes_nothing(sender_and_receiver, capsys):
+def test_empty_slug_from_is_a_setup_error_and_writes_nothing(sender_and_receiver, capsys: pytest.CaptureFixture[str]) -> None:
     sender_repo, receiver_repo = sender_and_receiver
     draft = _write_draft(sender_repo, "punct-from-topic")
     draft.write_text(

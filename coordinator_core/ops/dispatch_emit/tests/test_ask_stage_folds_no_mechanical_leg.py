@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import STOP_AFTER_PLAN
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle import stage_root  # noqa: F401
 from coordinator_core.ops.dispatch_emit.tests.test_leg_register_ratchet import _ask, _ask_scripts
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 _RETIRED = ("manifest-read", "ledger-restage", "ready-restage", "run-base")
 _BLITZ_LEG = "blitz-stage-read"
@@ -26,13 +27,13 @@ def _labels(script: str) -> set[str]:
     return set(re.findall(r"label: '([^']*)'", script))
 
 
-def test_no_ask_script_composes_a_retired_mechanical_leg(tmp_path):
+def test_no_ask_script_composes_a_retired_mechanical_leg(tmp_path: Path) -> None:
     for script in _ask_scripts(tmp_path):
         assert not set(_RETIRED) & _labels(script), _labels(script)
         assert "rev-parse HEAD" not in script
 
 
-def test_the_blitz_stage_read_leg_composes_only_with_the_plan_blitz_fold(tmp_path):  # noqa: D103
+def test_the_blitz_stage_read_leg_composes_only_with_the_plan_blitz_fold(tmp_path: Path) -> None:  # noqa: D103
     scripts = _ask_scripts(tmp_path)
     # Every ask script composes the stage-recover re-ask under this label; the plan-blitz arm adds the readyOp-miss read.
     assert any("const _blitzStageRead" in s for s in scripts), "no composed ask script carries the plan-blitz arm's leg"
@@ -47,7 +48,7 @@ def test_the_blitz_stage_read_leg_composes_only_with_the_plan_blitz_fold(tmp_pat
         assert script.count(f"label: '{_BLITZ_LEG}'") == recovers + int(roadmap) + int(has_fold)
 
 
-def test_the_leg_is_called_only_when_readyop_never_ran(tmp_path):
+def test_the_leg_is_called_only_when_readyop_never_ran(tmp_path: Path) -> None:
     for script in _ask_scripts(tmp_path):
         for call in re.finditer(r"await _blitzStageRead\(\)", script):
             lines = script[: call.end()].splitlines()
@@ -61,7 +62,7 @@ def test_the_leg_is_called_only_when_readyop_never_ran(tmp_path):
             ), branch
 
 
-def test_every_engine_owned_fold_site_returns_the_stage_reply_under_the_stage_reply_schema():
+def test_every_engine_owned_fold_site_returns_the_stage_reply_under_the_stage_reply_schema() -> None:
     schema_of = ask_compose.STAGE_REPLY_SCHEMA
     assert set(schema_of["properties"]) == {
         "manifest_handle", "error", "owed_em_ids", "owed_plan", "parked", "plan_path",
@@ -90,7 +91,7 @@ def _node(program: str) -> dict:
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_the_run_base_is_the_relayed_manifests_head_sha_and_a_missing_one_is_empty():
+def test_the_run_base_is_the_relayed_manifests_head_sha_and_a_missing_one_is_empty() -> None:
     script = _ask()
     line = next(ln.strip() for ln in script.splitlines() if ln.strip().startswith("_runBase = /^[0-9a-f]{40}$/"))
     for manifest, want in (({"head_sha": _SHA}, _SHA), ({"head_sha": None}, ""), ({"head_sha": "HEAD"}, "")):
@@ -100,7 +101,7 @@ def test_the_run_base_is_the_relayed_manifests_head_sha_and_a_missing_one_is_emp
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_trimmed_engine_manifest_halts_by_name_and_a_whole_one_proceeds():
+def test_a_trimmed_engine_manifest_halts_by_name_and_a_whole_one_proceeds() -> None:
     from coordinator_core.ops.dispatch_emit.tests.test_ask_fold_reads_disk_manifest_e2e import (
         _TRIMMED, _WHOLE, fold_manifest,
     )

@@ -13,6 +13,7 @@ from coordinator_core.benchmarks.interleave import (
     run_interleaved,
 )
 from coordinator_core.telemetry import op_latency
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
@@ -38,29 +39,29 @@ def _counting_primitive(name: str, values: list) -> Primitive:
     return Primitive(name=name, invoke=lambda: next(it))
 
 
-def test_run_interleaved_refuses_single_primitive():
+def test_run_interleaved_refuses_single_primitive() -> None:
     with pytest.raises(ValueError, match="need >=2 primitives"):
         run_interleaved([_const_primitive("only_one", 1.0)], n=5)
 
 
-def test_run_interleaved_refuses_empty_primitives():
+def test_run_interleaved_refuses_empty_primitives() -> None:
     with pytest.raises(ValueError, match="need >=2 primitives"):
         run_interleaved([], n=5)
 
 
-def test_run_interleaved_refuses_n_less_than_one():
+def test_run_interleaved_refuses_n_less_than_one() -> None:
     primitives = [_const_primitive("a", 1.0), _const_primitive("b", 2.0)]
     with pytest.raises(ValueError, match="n must be >= 1"):
         run_interleaved(primitives, n=0)
 
 
-def test_run_interleaved_refuses_duplicate_names():
+def test_run_interleaved_refuses_duplicate_names() -> None:
     primitives = [_const_primitive("dup", 1.0), _const_primitive("dup", 2.0)]
     with pytest.raises(ValueError, match="duplicate primitive names"):
         run_interleaved(primitives, n=3)
 
 
-def test_run_interleaved_collects_n_samples_per_primitive():
+def test_run_interleaved_collects_n_samples_per_primitive() -> None:
     primitives = [_const_primitive("a", 10.0), _const_primitive("b", 20.0)]
     stats = run_interleaved(primitives, n=7, rng=random.Random(0))
 
@@ -72,7 +73,7 @@ def test_run_interleaved_collects_n_samples_per_primitive():
     assert stats["b"].p90_ms == 20.0
 
 
-def test_run_interleaved_reports_median_and_p90_distinctly():
+def test_run_interleaved_reports_median_and_p90_distinctly() -> None:
     values = [1.0, 2.0, 3.0, 4.0, 100.0]
     primitive_a = _counting_primitive("a", list(values))
     primitive_b = _const_primitive("b", 0.0)
@@ -85,7 +86,7 @@ def test_run_interleaved_reports_median_and_p90_distinctly():
     assert stats["a"].p90_ms <= 100.0
 
 
-def test_run_interleaved_draw_order_is_not_grouped_by_primitive():
+def test_run_interleaved_draw_order_is_not_grouped_by_primitive() -> None:
     call_log = []
 
     def _logging_invoke(name):
@@ -108,7 +109,7 @@ def test_run_interleaved_draw_order_is_not_grouped_by_primitive():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_default_baseline_primitives_are_interleavable_on_this_box():
+def test_default_baseline_primitives_are_interleavable_on_this_box() -> None:
     primitives = default_baseline_primitives()
     names = {p.name for p in primitives}
     assert names == {
@@ -128,7 +129,7 @@ def test_default_baseline_primitives_are_interleavable_on_this_box():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_default_baseline_primitives_respects_explicit_repo_root(tmp_path):
+def test_default_baseline_primitives_respects_explicit_repo_root(tmp_path: Path) -> None:
     primitives = default_baseline_primitives(repo_root=str(tmp_path.parent))
     names = {p.name for p in primitives}
     assert "git_rev_parse_show_toplevel" in names

@@ -1,9 +1,7 @@
 """Every command-word guard in coordinator_core.bash_guards matches executing command words only.
 
 CLASSIFICATION audits each non-test entry-point module; GUARD_CASES drives one
-(heredoc-body, quoted-argument, real-command) triple per command-word guard. Cases
-for guards owned by plan rows C1-C3 carry pending_fix + xfail(strict=True) until
-they are routed through the shared strip/split helper.
+(heredoc-body, quoted-argument, real-command) triple per command-word guard.
 """
 
 from __future__ import annotations
@@ -51,7 +49,6 @@ GUARDS_DIR = Path(__file__).resolve().parent.parent
 
 FIXED = "calls _strip_heredoc_bodies / _awk_quote_aware_split before matching"
 TOKENIZED = "matches through the quote-aware tokenizer / segment resolver; pinned by its GUARD_CASES row"
-NEEDS_HELPER = "matches command words on raw text; owned by plan rows C1-C3"
 EXEMPT = {
     "block_approval_sentinel_creation": "matches file-write targets of the sentinel name, not a command word",
     "block_external_workspace_vcs_write": "classifies the cwd workspace, not command words",
@@ -74,13 +71,14 @@ EXEMPT = {
     "guard_uncapped_pytest_plugin": "matches pytest flags through resolve_command_positions",
     "block_noncanonical_branch_creation": "tokenized via resolve_command_positions; needs live repo state to fire",
     "block_topic_branch": "tokenized via resolve_command_positions; needs live repo state to fire",
+    "block_held_push": "tokenized via resolve_command_positions; needs a held branch in repo state to fire",
     "block_push_pr_non_owned_remote": "tokenized via resolve_command_positions; needs a remote registry to fire",
     "block_home_root_bash_write": "tokenized; fires on the machine home root, so no portable real command",
     "block_drive_root_new_dir_bash_write": "tokenized and already strips heredocs; fires on a machine drive root",
     "guard_grep_via_bash": "tokenized via segments_from_tokens; fires only on Windows hosts",
     "guard_multiprobe_banner": "tokenized via the shape classifier; fires only on Windows hosts",
     "roster": "guard registry; matches nothing",
-    "p4_verb_fence":"already strips heredocs; fires only with a p4 fence configured",
+    "p4_verb_fence": "already strips heredocs; fires only with a p4 fence configured",
     "commit_tripwires": "seven tripwires over staged state; the one command-reading check calls _awk_quote_aware_split",
 }
 
@@ -111,12 +109,12 @@ CLASSIFICATION: Dict[str, str] = {
     "guard_no_optional_locks": TOKENIZED,
     "guard_offer_git_c": TOKENIZED,
     "guard_plumbing_and_loops": TOKENIZED,
-    "guard_reap_stale_git_lock": NEEDS_HELPER,
-    "guard_headless_claude_plugin_dir": NEEDS_HELPER,
-    "guard_move_from_inside_cwd": NEEDS_HELPER,
-    "guard_offer_invoke_params_stdin": NEEDS_HELPER,
-    "guard_piped_pytest_exit": NEEDS_HELPER,
-    "guard_trailing_background_ampersand": NEEDS_HELPER,
+    "guard_reap_stale_git_lock": TOKENIZED,
+    "guard_headless_claude_plugin_dir": TOKENIZED,
+    "guard_move_from_inside_cwd": TOKENIZED,
+    "guard_offer_invoke_params_stdin": TOKENIZED,
+    "guard_piped_pytest_exit": TOKENIZED,
+    "guard_trailing_background_ampersand": TOKENIZED,
     "multiprobe_banner_rewrite": TOKENIZED,
     "rewrite_repo_root_search": TOKENIZED,
     **{name: f"EXEMPT: {why}" for name, why in EXEMPT.items()},
@@ -271,39 +269,24 @@ GUARD_CASES = [
 ]
 
 
-def _cmd(case: GuardCase, text: str, e: Env) -> str:
+def _cmd(text: str, e: Env) -> str:
     return text.replace("{ROOT}", e.root.as_posix())
 
 
-# Guards whose heredoc/quoted case is red at HEAD; the owning plan row routes them through the helper.
-PENDING_FIX = frozenset(
-    {"headless_claude_plugin_dir", "piped_pytest_exit", "offer_invoke_params_stdin", "move_from_inside_cwd"}
-)
-
-
-def _param(case: GuardCase):
-    if case.guard_id not in PENDING_FIX:
-        return pytest.param(case, id=case.guard_id)
-    return pytest.param(
-        case,
-        id=case.guard_id,
-        marks=[
-            pytest.mark.pending_fix,
-            pytest.mark.xfail(strict=True, reason=f"{case.owner}: not yet routed through the shared helper"),
-        ],
-    )
-
-
-@pytest.mark.spawns_process
 @pytest.mark.parametrize("case", [pytest.param(c, id=c.guard_id) for c in GUARD_CASES])
 def test_real_command_fires(case: GuardCase, env: Env):
-    assert case.call(_cmd(case, case.real_cmd, env), env), f"{case.guard_id}: real command no longer fires"
+    assert case.call(_cmd(case.real_cmd, env), env), f"{case.guard_id}: real command no longer fires"
 
 
-@pytest.mark.spawns_process
-@pytest.mark.parametrize("case", [_param(c) for c in GUARD_CASES])
+@pytest.mark.parametrize("case", [pytest.param(c, id=c.guard_id) for c in GUARD_CASES])
 def test_trigger_words_in_heredoc_and_quotes_do_not_fire(case: GuardCase, env: Env):
-    heredoc = _cmd(case, case.trigger_cmd_in_heredoc, env)
-    quoted = _cmd(case, case.trigger_cmd_in_quotes, env)
+    heredoc = _cmd(case.trigger_cmd_in_heredoc, env)
+    quoted = _cmd(case.trigger_cmd_in_quotes, env)
     assert not case.call(quoted, env), f"{case.guard_id}: fired on a quoted literal"
     assert not case.call(heredoc, env), f"{case.guard_id}: fired on a heredoc body"
+
+
+@pytest.mark.parametrize("case", [pytest.param(c, id=c.guard_id) for c in GUARD_CASES if c.owner])
+def test_trigger_words_in_comment_tail_do_not_fire(case: GuardCase, env: Env):
+    tail = "echo hi  # " + _cmd(case.real_cmd, env)
+    assert not case.call(tail, env), f"{case.guard_id}: fired on a comment tail"

@@ -5,10 +5,11 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core import machine_resolver
+from pathlib import Path
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     settings = tmp_path / "settings"
     reg = tmp_path / "registry"
     settings.mkdir()
@@ -20,14 +21,14 @@ def env(tmp_path, monkeypatch):
     return settings, reg
 
 
-def test_default_home(env):
+def test_default_home(env) -> None:
     settings, _ = env
     home = settings / "group-em"
     home.mkdir()
     assert machine_resolver.em_id_for_root(str(home), {}) == "group-em-em"
 
 
-def test_configured_home(env, tmp_path):
+def test_configured_home(env, tmp_path: Path) -> None:
     _, reg = env
     home = tmp_path / "gem-box"
     home.mkdir()
@@ -37,14 +38,14 @@ def test_configured_home(env, tmp_path):
     assert machine_resolver.em_id_for_root(str(home), {}) == "group-em-em"
 
 
-def test_legacy_home(env):
+def test_legacy_home(env) -> None:
     settings, _ = env
     home = settings / "general-work"
     home.mkdir()
     assert machine_resolver.em_id_for_root(str(home), {}) == "group-em-em"
 
 
-def test_unregistered_non_home_keeps_basename(env, tmp_path):
+def test_unregistered_non_home_keeps_basename(env, tmp_path: Path) -> None:
     other = tmp_path / "some-repo"
     other.mkdir()
     assert machine_resolver.em_id_for_root(str(other), {}) == "some-repo-em"

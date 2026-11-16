@@ -23,9 +23,10 @@ from coordinator_core.resolve_validation_cmd import (
     cs_read_local_md_mapping,
 )
 from coordinator_core.ops._git_root_util import git_root_zero_spawn
+import pytest
 
 
-def test_mapping_basic_nested_block(tmp_path):
+def test_mapping_basic_nested_block(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "---\n"
         "app_session:\n"
@@ -44,25 +45,25 @@ def test_mapping_basic_nested_block(tmp_path):
     }
 
 
-def test_mapping_missing_file_returns_empty_dict(tmp_path):
+def test_mapping_missing_file_returns_empty_dict(tmp_path: Path) -> None:
     assert cs_read_local_md_mapping(str(tmp_path), "app_session") == {}
 
 
-def test_mapping_missing_key_returns_empty_dict(tmp_path):
+def test_mapping_missing_key_returns_empty_dict(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "---\nfast_test_cmd: pytest\n---\n"
     )
     assert cs_read_local_md_mapping(str(tmp_path), "app_session") == {}
 
 
-def test_mapping_key_present_but_no_indented_block_returns_empty_dict(tmp_path):
+def test_mapping_key_present_but_no_indented_block_returns_empty_dict(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "---\napp_session:\nfast_test_cmd: pytest\n---\n"
     )
     assert cs_read_local_md_mapping(str(tmp_path), "app_session") == {}
 
 
-def test_mapping_never_raises_on_malformed_block(tmp_path):
+def test_mapping_never_raises_on_malformed_block(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "---\n"
         "app_session:\n"
@@ -74,7 +75,7 @@ def test_mapping_never_raises_on_malformed_block(tmp_path):
     assert isinstance(result, dict)
 
 
-def test_mapping_strips_wrapping_quotes_on_leaf_values(tmp_path):
+def test_mapping_strips_wrapping_quotes_on_leaf_values(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "---\n"
         "app_session:\n"
@@ -86,7 +87,7 @@ def test_mapping_strips_wrapping_quotes_on_leaf_values(tmp_path):
     assert result["desktop"]["command"] == "pnpm dev --flag 'x'"
 
 
-def test_mapping_does_not_match_key_appearing_indented(tmp_path):
+def test_mapping_does_not_match_key_appearing_indented(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "---\n"
         "other:\n"
@@ -96,7 +97,7 @@ def test_mapping_does_not_match_key_appearing_indented(tmp_path):
     assert cs_read_local_md_mapping(str(tmp_path), "app_session") == {}
 
 
-def test_read_local_md_key_byte_identical_after_mapping_reader_added(tmp_path):
+def test_read_local_md_key_byte_identical_after_mapping_reader_added(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "---\nfull_test_cmd: pytest -q\n---\n"
     )
@@ -104,7 +105,7 @@ def test_read_local_md_key_byte_identical_after_mapping_reader_added(tmp_path):
     assert cs_read_local_md_key(str(tmp_path), "missing_key") == ""
 
 
-def test_mapping_and_flat_key_coexist_in_same_file(tmp_path):
+def test_mapping_and_flat_key_coexist_in_same_file(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "---\n"
         "fast_test_cmd: pytest -q\n"
@@ -119,7 +120,7 @@ def test_mapping_and_flat_key_coexist_in_same_file(tmp_path):
     }
 
 
-def test_root_resolver_finds_git_directory(tmp_path):
+def test_root_resolver_finds_git_directory(tmp_path: Path) -> None:
     repo = tmp_path / "consuming-repo"
     (repo / ".git").mkdir(parents=True)
     nested = repo / "a" / "b"
@@ -127,7 +128,7 @@ def test_root_resolver_finds_git_directory(tmp_path):
     assert git_root_zero_spawn(nested) == str(repo)
 
 
-def test_root_resolver_finds_git_file_in_worktree(tmp_path):
+def test_root_resolver_finds_git_file_in_worktree(tmp_path: Path) -> None:
     repo = tmp_path / "worktree-repo"
     repo.mkdir(parents=True)
     (repo / ".git").write_text("gitdir: /somewhere/else/.git/worktrees/x\n")
@@ -136,13 +137,13 @@ def test_root_resolver_finds_git_file_in_worktree(tmp_path):
     assert git_root_zero_spawn(nested) == str(repo)
 
 
-def test_root_resolver_returns_none_when_no_git_entry_found(tmp_path):
+def test_root_resolver_returns_none_when_no_git_entry_found(tmp_path: Path) -> None:
     lone = tmp_path / "no-repo-here"
     lone.mkdir()
     assert git_root_zero_spawn(lone) is None
 
 
-def test_root_resolver_honours_claude_project_dir_first(tmp_path, monkeypatch):
+def test_root_resolver_honours_claude_project_dir_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     real_repo = tmp_path / "real-repo"
     (real_repo / ".git").mkdir(parents=True)
     decoy = tmp_path / "decoy-repo"
@@ -153,8 +154,8 @@ def test_root_resolver_honours_claude_project_dir_first(tmp_path, monkeypatch):
 
 
 def test_root_resolver_ignores_claude_project_dir_if_not_a_real_directory(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo = tmp_path / "consuming-repo"
     (repo / ".git").mkdir(parents=True)
 
@@ -162,7 +163,7 @@ def test_root_resolver_ignores_claude_project_dir_if_not_a_real_directory(
     assert git_root_zero_spawn(repo) == str(repo)
 
 
-def test_root_resolver_spawns_no_subprocess(tmp_path, monkeypatch):
+def test_root_resolver_spawns_no_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "consuming-repo"
     (repo / ".git").mkdir(parents=True)
 
@@ -177,7 +178,7 @@ def test_root_resolver_spawns_no_subprocess(tmp_path, monkeypatch):
     assert calls == []
 
 
-def test_root_resolver_fixture_repo_root_is_unrelated_to_code_location(tmp_path):
+def test_root_resolver_fixture_repo_root_is_unrelated_to_code_location(tmp_path: Path) -> None:
     import coordinator_core
 
     code_root = Path(coordinator_core.__file__).resolve().parent

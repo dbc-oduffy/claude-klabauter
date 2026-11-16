@@ -8,10 +8,11 @@ import pytest
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import ask_contract as c
 from coordinator_core.ops.dispatch_emit.emit import _DISPATCH_REPORT_DIR
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _no_subprocess(monkeypatch):
+def _no_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("subprocess spawned")
 
@@ -22,14 +23,14 @@ def _halt():
     return c.LedgerHalt("run-1", "docs/plans/p.md", "state/sizings/s.yaml", ("R1", "R2"))
 
 
-def test_halt_round_trip(tmp_path):
+def test_halt_round_trip(tmp_path: Path) -> None:
     path = c.ledger_halt_path(tmp_path, "docs/plans/p.md")
     assert path == tmp_path / _DISPATCH_REPORT_DIR / "p" / c.LEDGER_HALT_FILE
     c.write_ledger_halt(path, _halt())
     assert c.read_ledger_halt(path) == _halt()
 
 
-def test_missing_and_malformed_read_none(tmp_path):
+def test_missing_and_malformed_read_none(tmp_path: Path) -> None:
     assert c.read_ledger_halt(tmp_path / "absent.json") is None
     bad = tmp_path / "bad.json"
     bad.write_text("{not json", encoding="utf-8")
@@ -40,19 +41,19 @@ def test_missing_and_malformed_read_none(tmp_path):
 
 
 @pytest.mark.parametrize("plan", ["/etc/p.md", "../p.md", "a/../../p.md"])
-def test_unsafe_plan_rel_reads_none(tmp_path, plan):
+def test_unsafe_plan_rel_reads_none(tmp_path: Path, plan) -> None:
     p = tmp_path / "h.json"
     p.write_text(json.dumps(c.LedgerHalt("r", plan, "s.yaml", ()).to_json()), encoding="utf-8")
     assert c.read_ledger_halt(p) is None
 
 
-def test_unsafe_run_id_reads_none(tmp_path):
+def test_unsafe_run_id_reads_none(tmp_path: Path) -> None:
     p = tmp_path / "h.json"
     p.write_text(json.dumps(c.LedgerHalt("../r", "p.md", "s.yaml", ()).to_json()), encoding="utf-8")
     assert c.read_ledger_halt(p) is None
 
 
-def test_rulable_ids():
+def test_rulable_ids() -> None:
     rows = [
         {rr.ROW_ID: "R1", rr.ROW_STATUS: rr.STATUS_OPEN},
         {rr.ROW_ID: "R2", rr.ROW_STATUS: rr.STATUS_PARTIAL},
@@ -63,7 +64,7 @@ def test_rulable_ids():
     assert c.rulable_ids(rows) == ("R1", "R2", "R5")
 
 
-def test_manifest_rulable_ids_round_trip():
+def test_manifest_rulable_ids_round_trip() -> None:
     m = c.StageManifest("d", (), (), "m", rulable_ids=("R1", "R2"))
     out = json.loads(json.dumps(m.to_json()))
     assert out["rulable_ids"] == ["R1", "R2"]
@@ -72,17 +73,17 @@ def test_manifest_rulable_ids_round_trip():
     assert c.StageManifest.from_json(out).rulable_ids == ()
 
 
-def test_verdict_resume_ledger_only_when_set():
+def test_verdict_resume_ledger_only_when_set() -> None:
     assert c.RESUME_LEDGER_KEY not in c.GateVerdict("a", None).to_json()
     v = c.GateVerdict("a", None, resume_ledger=_halt().to_json())
     assert v.to_json()[c.RESUME_LEDGER_KEY] == _halt().to_json()
 
 
-def test_resume_plan_ledger_defaults_none():
+def test_resume_plan_ledger_defaults_none() -> None:
     assert c.ResumePlan("p.md", ("C1",)).ledger is None
 
 
-def _write_record(tmp_path, halted_extra):
+def _write_record(tmp_path, halted_extra) -> None:
     base = tmp_path / "state" / "warp" / "run-1"
     base.mkdir(parents=True)
     halted = {"halted": "ledger-check", "sizing_rel": "state/sizings/s.yaml", "blocking": ["R1"], **halted_extra}
@@ -90,19 +91,19 @@ def _write_record(tmp_path, halted_extra):
     (base / "manifest.json").write_text(json.dumps({"rows": [{"id": "C1"}]}), encoding="utf-8")
 
 
-def test_read_halt_record_reads_remaining(tmp_path):
+def test_read_halt_record_reads_remaining(tmp_path: Path) -> None:
     items = [{"id": "R1", "remaining": ["fix x", 3], "evidence": "falsifier failed"}, {"id": 4}, "junk"]
     _write_record(tmp_path, {c.HALT_BLOCKING_ITEMS_FIELD: items})
     rec = c.read_halt_record(tmp_path, "run-1")
     assert rec.remaining == {"R1": {"remaining": ["fix x"], "evidence": "falsifier failed"}}
 
 
-def test_read_halt_record_without_key_has_empty_remaining(tmp_path):
+def test_read_halt_record_without_key_has_empty_remaining(tmp_path: Path) -> None:
     _write_record(tmp_path, {})
     assert dict(c.read_halt_record(tmp_path, "run-1").remaining) == {}
 
 
-def test_ledger_halt_defaults_keep_four_arg_constructor():
+def test_ledger_halt_defaults_keep_four_arg_constructor() -> None:
     halt = _halt()
     assert halt.halt_sha is None
     assert dict(halt.remaining) == {}
@@ -115,13 +116,13 @@ def _all_landed():
     return c.LedgerHalt("none", "docs/plans/p.md", "state/sizings/s.yaml", ("R1",), halted=c.ALL_LANDED_HALT_KIND)
 
 
-def test_all_landed_kind_values():
+def test_all_landed_kind_values() -> None:
     assert c.ALL_LANDED_HALT_KIND == "all-landed"
     assert c.RESUME_LEDGER_KIND_FIELD == "kind"
     assert c.ALL_LANDED_HALT_KIND not in (c.LEDGER_HALT_KIND, "commit")
 
 
-def test_write_ledger_halt_never_persists_all_landed(tmp_path):
+def test_write_ledger_halt_never_persists_all_landed(tmp_path: Path) -> None:
     path = c.ledger_halt_path(tmp_path, "docs/plans/p.md")
     with pytest.raises(ValueError):
         c.write_ledger_halt(path, _all_landed())
@@ -130,7 +131,7 @@ def test_write_ledger_halt_never_persists_all_landed(tmp_path):
         _all_landed().to_json()
 
 
-def test_all_landed_pointer_on_disk_reads_none(tmp_path):
+def test_all_landed_pointer_on_disk_reads_none(tmp_path: Path) -> None:
     p = tmp_path / "h.json"
     p.write_text(
         json.dumps({"run_id": "r", "plan": "p.md", "sizing": "s.yaml", "blocking": [], "halted": "all-landed"}),
@@ -139,7 +140,7 @@ def test_all_landed_pointer_on_disk_reads_none(tmp_path):
     assert c.read_ledger_halt(p) is None
 
 
-def test_resume_field_names_are_distinct():
+def test_resume_field_names_are_distinct() -> None:
     names = {
         c.RESUME_LEDGER_HALT_SHA_FIELD,
         c.RESUME_LEDGER_REMAINING_FIELD,
@@ -171,7 +172,7 @@ _NEW = _rec(
 )
 
 
-def test_read_halt_record_reads_rulable_and_met(tmp_path):
+def test_read_halt_record_reads_rulable_and_met(tmp_path: Path) -> None:
     _write_record(tmp_path, {"blocking": ["R3"]})
     base = tmp_path / "state" / "warp" / "run-1"
     (base / "manifest.json").write_text(json.dumps({"rulable_ids": ["T2", "R2", "R3", 7]}), encoding="utf-8")
@@ -180,14 +181,14 @@ def test_read_halt_record_reads_rulable_and_met(tmp_path):
     assert rec.met == {"T2", "R2"}
 
 
-def test_met_empty_without_rulable_or_blocking(tmp_path):
+def test_met_empty_without_rulable_or_blocking(tmp_path: Path) -> None:
     _write_record(tmp_path, {})
     assert c.read_halt_record(tmp_path, "run-1").rulable == frozenset()
     assert _rec("r", None).met == frozenset()
     assert _rec("r", ["R1"], rulable=()).met == frozenset()
 
 
-def test_carry_forward_incident_chain():
+def test_carry_forward_incident_chain() -> None:
     blocking, remaining, carried = c.carry_forward((_NEW, False), [(_OLD, True)])
     assert blocking == ("R3",)
     assert carried == ("T2", "R2")
@@ -196,13 +197,13 @@ def test_carry_forward_incident_chain():
     assert "T2" not in remaining
 
 
-def test_carry_forward_landing_newest_carries_nothing():
+def test_carry_forward_landing_newest_carries_nothing() -> None:
     blocking, _, carried = c.carry_forward((_NEW, True), [(_OLD, True)])
     assert blocking == ("T2", "R2", "R3")
     assert carried == ()
 
 
-def test_carry_forward_stops_at_first_landing_halt():
+def test_carry_forward_stops_at_first_landing_halt() -> None:
     older = _rec("old", ["T2", "R2", "R3"], rulable=("T2", "R2", "R3"))
     blocking, _, carried = c.carry_forward((_NEW, False), [(_OLD, True), (older, False)])
     assert carried == ("T2", "R2")
@@ -212,7 +213,7 @@ def test_carry_forward_stops_at_first_landing_halt():
     assert carried == ()
 
 
-def test_carry_forward_requires_blocking_in_every_newer_halt():
+def test_carry_forward_requires_blocking_in_every_newer_halt() -> None:
     mid = _rec("mid", ["R3"])
     _, _, carried = c.carry_forward((_NEW, False), [(mid, False), (_OLD, True)])
     assert carried == ("T2", "R2")
@@ -222,7 +223,7 @@ def test_carry_forward_requires_blocking_in_every_newer_halt():
     assert carried == ("T2",)
 
 
-def test_ledger_halt_carried_met_not_persisted():
+def test_ledger_halt_carried_met_not_persisted() -> None:
     halt = c.LedgerHalt("r", "p.md", "s.yaml", ("R3",), carried_met=("T2",))
     assert "carried_met" not in halt.to_json()
     assert c.LedgerHalt("r", "p.md", "s.yaml", ()).carried_met == ()

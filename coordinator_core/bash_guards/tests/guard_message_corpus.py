@@ -436,6 +436,17 @@ def _git_repo_setup(cmd_template: str) -> Callable[[Path, pytest.MonkeyPatch], D
     return setup
 
 
+def _held_push_setup(scratch_dir: Path, mp: pytest.MonkeyPatch) -> Dict[str, str]:
+    """`block-held-push` denies a push to a branch carrying a push hold; hold one in a plain-file repo."""
+    git = scratch_dir / "held-push-repo" / ".git"
+    git.mkdir(parents=True, exist_ok=True)
+    (git / "HEAD").write_text("ref: refs/heads/work/probe/day\n", encoding="utf-8")
+    (git / "config").write_text(
+        '[branch "work/probe/day"]\n\tcoordinatorPushHold = probe hold\n', encoding="utf-8"
+    )
+    return {_CWD_OVERRIDE_KEY: str(git.parent)}
+
+
 def _stale_write_setup(make_stale: bool) -> Callable[[Path, pytest.MonkeyPatch], Dict[str, str]]:
     from coordinator_core.session import touch_record as _tr
 
@@ -1438,6 +1449,14 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         False,
     ),
     CorpusRow(
+        "block-held-push",
+        "block-held-push-control",
+        "git status",
+        False,
+        _DENY,
+        False,
+    ),
+    CorpusRow(
         "block-push-pr-non-owned-remote",
         "block-push-pr-non-owned-remote-control",
         "git fetch upstream",
@@ -1712,6 +1731,15 @@ CONFINEMENT_ROWS: List[CorpusRow] = [
         True,
         _DENY,
         False,
+    ),
+    CorpusRow(
+        "block-held-push",
+        "block-held-push-fire",
+        "git push origin HEAD",
+        True,
+        _DENY,
+        False,
+        setup=_held_push_setup,
     ),
     CorpusRow(
         "block-push-pr-non-owned-remote",

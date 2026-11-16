@@ -5,11 +5,12 @@ from __future__ import annotations
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+import pytest
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
 
-def _script(monkeypatch, script_path="scratch/warp/run-1.workflow.mjs") -> str:
+def _script(monkeypatch, script_path: str | None = "scratch/warp/run-1.workflow.mjs") -> str:
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "m_plus")
     return compose_ask_script(
         repo_root="REPO",
@@ -25,7 +26,7 @@ def _script(monkeypatch, script_path="scratch/warp/run-1.workflow.mjs") -> str:
     )
 
 
-def test_own_close_key_precedes_commit_and_close_reads(monkeypatch):
+def test_own_close_key_precedes_commit_and_close_reads(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     key = script.index("const _ownCloseKey = ")
     assert key < script.index("_commit = await")
@@ -36,7 +37,7 @@ def test_own_close_key_precedes_commit_and_close_reads(monkeypatch):
     assert "scratch/warp/run-1.workflow.mjs" in decl
 
 
-def test_replacement_keeps_relayed_id_and_guards_empty_key(monkeypatch):
+def test_replacement_keeps_relayed_id_and_guards_empty_key(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     fix = script[script.index("if (_ownCloseKey && _commit"):]
     fix = fix[: fix.index("_blockedRows")]
@@ -46,13 +47,13 @@ def test_replacement_keeps_relayed_id_and_guards_empty_key(monkeypatch):
     assert "relayed_run_id: _commit.close.run_id" in fix
 
 
-def test_replacement_precedes_first_close_read(monkeypatch):
+def test_replacement_precedes_first_close_read(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     fix = script.index("run_id: _ownCloseKey")
     assert fix < script.index("_commit.close?.siblings")
 
 
-def test_no_script_path_leaves_empty_literal_so_key_guard_applies(monkeypatch):
+def test_no_script_path_leaves_empty_literal_so_key_guard_applies(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch, script_path=None)
     decl = script[script.index("const _ownCloseKey = ") :]
     assert "?? \"\")" in decl[: decl.index(";")] or "?? ''" in decl[: decl.index(";")]

@@ -6,6 +6,7 @@ from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.halted_run_route import ROUTE_OP
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+import pytest
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
@@ -30,7 +31,7 @@ def _halt_text(script: str) -> str:
     return script[start : script.index("}; }", start)]
 
 
-def test_ledger_halt_names_revise_run_id_and_scope(monkeypatch):
+def test_ledger_halt_names_revise_run_id_and_scope(monkeypatch: pytest.MonkeyPatch) -> None:
     text = _halt_text(_script(monkeypatch))
     assert "coordinator-invoke workflow.revise" in text
     assert "_runId" in text
@@ -42,7 +43,7 @@ def test_ledger_halt_names_revise_run_id_and_scope(monkeypatch):
     assert "or fix the change" not in text
 
 
-def test_ledger_halt_names_add_task_when_remaining_paths_are_uncovered(monkeypatch):
+def test_ledger_halt_names_add_task_when_remaining_paths_are_uncovered(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     text = _halt_text(script)
     assert "_gate.resume_ledger?.remaining_leg?.unwritable ?? []" in script
@@ -52,7 +53,7 @@ def test_ledger_halt_names_add_task_when_remaining_paths_are_uncovered(monkeypat
     assert text.count("_addTaskRemedy") == 1
 
 
-def test_ledger_halt_names_landed_close_route_in_both_rulable_branches(monkeypatch):
+def test_ledger_halt_names_landed_close_route_in_both_rulable_branches(monkeypatch: pytest.MonkeyPatch) -> None:
     text = _halt_text(_script(monkeypatch))
     assert text.count(f"'{ROUTE_OP}'") == 2
     assert text.count("{run_id: ' + _runId + ', sha: <the halt commit>}.") == 2

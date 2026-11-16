@@ -15,7 +15,7 @@ pytestmark = [pytest.mark.cadence]
 _ABANDONED = {"state": dispatch_ack.STATE_UNKNOWABLE, "reason": dispatch_ack.OUTCOME_ABANDONED}
 
 
-def test_withdrawn_record_reads_abandoned_before_any_bound_elapses():
+def test_withdrawn_record_reads_abandoned_before_any_bound_elapses() -> None:
     store = AckStore(executing_bound=lambda _m: 30.0)
     key = dispatch_ack.mint_key()
     store.admit(key, "ceremony.commit_v2")
@@ -24,7 +24,7 @@ def test_withdrawn_record_reads_abandoned_before_any_bound_elapses():
     assert store.status(key) == _ABANDONED
 
 
-def test_late_result_and_late_error_still_land_on_a_withdrawn_record():
+def test_late_result_and_late_error_still_land_on_a_withdrawn_record() -> None:
     store = AckStore()
     ok, bad = dispatch_ack.mint_key(), dispatch_ack.mint_key()
     for key in (ok, bad):
@@ -37,7 +37,7 @@ def test_late_result_and_late_error_still_land_on_a_withdrawn_record():
     assert store.status(bad)["state"] == dispatch_ack.STATE_FINISHED
 
 
-def test_unwithdrawn_record_and_non_admitted_keys_are_unaffected():
+def test_unwithdrawn_record_and_non_admitted_keys_are_unaffected() -> None:
     store = AckStore()
     live = dispatch_ack.mint_key()
     store.admit(live, "m")
@@ -50,7 +50,7 @@ def test_unwithdrawn_record_and_non_admitted_keys_are_unaffected():
     assert store.status(done)["state"] == dispatch_ack.STATE_FINISHED
 
 
-def test_wait_returns_at_once_when_the_record_is_withdrawn():
+def test_wait_returns_at_once_when_the_record_is_withdrawn() -> None:
     store = AckStore()
     key = dispatch_ack.mint_key()
     store.admit(key, "m")
@@ -62,22 +62,22 @@ class _RunningFuture:
     def result(self, timeout=None):
         raise concurrent.futures.TimeoutError()
 
-    def cancel(self):
+    def cancel(self) -> bool:
         return False
 
     def add_done_callback(self, fn):
         pass
 
-    def cancelled(self):
+    def cancelled(self) -> bool:
         return False
 
 
 class _Pool:
-    def submit(self, *_a, **_k):
+    def submit(self, *_a, **_k) -> _RunningFuture:
         return _RunningFuture()
 
 
-def test_server_timeout_branch_withdraws_the_request_and_status_reads_abandoned(monkeypatch):
+def test_server_timeout_branch_withdraws_the_request_and_status_reads_abandoned(monkeypatch: pytest.MonkeyPatch) -> None:
     store = AckStore(boot_ns=0, executing_bound=lambda _m: 30.0)
     monkeypatch.setattr(server, "_ack_store", store)
     key = dispatch_ack.mint_key()
@@ -96,14 +96,14 @@ def test_server_timeout_branch_withdraws_the_request_and_status_reads_abandoned(
     assert store.status(key)["state"] == dispatch_ack.STATE_FINISHED
 
 
-def test_cancel_won_still_reads_not_dispatched(monkeypatch):
+def test_cancel_won_still_reads_not_dispatched(monkeypatch: pytest.MonkeyPatch) -> None:
     store = AckStore(boot_ns=0)
     monkeypatch.setattr(server, "_ack_store", store)
     key = dispatch_ack.mint_key()
     store.admit(key, "ceremony.commit_v2")
 
     class _Cancellable(_RunningFuture):
-        def cancel(self):
+        def cancel(self) -> bool:
             return True
 
     class _P:

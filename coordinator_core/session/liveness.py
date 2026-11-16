@@ -358,7 +358,7 @@ _SID_ALLOWED_CHARS = frozenset(
 # ---------------------------------------------------------------------------
 
 
-def is_session_live(pid="", elapsed_sec=0) -> bool:
+def is_session_live(pid: str | int = "", elapsed_sec: int | str = 0) -> bool:
     """Port of ``_cs_is_session_live <pid> <elapsed_sec>``.
 
     Pure Layer-2 recency gate: live iff ``elapsed_sec < 30*60``. The signature

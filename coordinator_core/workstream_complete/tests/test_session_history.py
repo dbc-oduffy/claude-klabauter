@@ -11,6 +11,7 @@ import pytest
 from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import session_history as sh
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -26,7 +27,7 @@ def _git(root, *args):
     return out.stdout.strip()
 
 
-def _commit(root, rel, text, sid=None, extra=""):
+def _commit(root, rel, text, sid=None, extra: str = ""):
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text, encoding="utf-8")
@@ -39,14 +40,14 @@ def _commit(root, rel, text, sid=None, extra=""):
     return _git(root, "rev-parse", "HEAD")
 
 
-def _floor(root, value, sid=SID):
+def _floor(root, value, sid=SID) -> None:
     d = hub_for_common(root / ".git") / sid
     d.mkdir(parents=True, exist_ok=True)
     (d / "head_at_start").write_text(value + "\n", encoding="utf-8")
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "r"
     root.mkdir()
     _git(root, "init", "-q", "-b", "main")
@@ -56,12 +57,12 @@ def repo(tmp_path):
 
 
 @pytest.fixture
-def spawns(monkeypatch):
+def spawns(monkeypatch: pytest.MonkeyPatch):
     calls = []
     real = subprocess.Popen
 
     class Counting(real):
-        def __init__(self, args, *a, **k):
+        def __init__(self, args, *a, **k) -> None:
             calls.append(args)
             super().__init__(args, *a, **k)
 
@@ -69,7 +70,7 @@ def spawns(monkeypatch):
     return calls
 
 
-def test_own_commits_oldest_first_with_parents_trailers_and_renames(repo, spawns):
+def test_own_commits_oldest_first_with_parents_trailers_and_renames(repo, spawns) -> None:
     floor = _git(repo, "rev-parse", "HEAD")
     _floor(repo, floor)
     a = _commit(repo, "docs/a.md", "one\ntwo\n", SID, extra="Deliverable-Id: D-1\n")
@@ -89,7 +90,7 @@ def test_own_commits_oldest_first_with_parents_trailers_and_renames(repo, spawns
     assert h.head == last.sha
 
 
-def test_merge_carrying_sid_has_two_parents_and_no_files(repo):
+def test_merge_carrying_sid_has_two_parents_and_no_files(repo) -> None:
     base = _git(repo, "rev-parse", "HEAD")
     _floor(repo, base)
     _git(repo, "checkout", "-q", "-b", "side")
@@ -108,7 +109,7 @@ def test_merge_carrying_sid_has_two_parents_and_no_files(repo):
     [(None, "floor-missing"), ("unknown", "floor-unknown"), ("abc123", "floor-malformed"),
      ("A" * 40, "floor-malformed")],
 )
-def test_floor_decides_with_zero_spawns(repo, spawns, value, reason):
+def test_floor_decides_with_zero_spawns(repo, spawns, value, reason) -> None:
     if value is not None:
         _floor(repo, value)
     else:
@@ -119,14 +120,14 @@ def test_floor_decides_with_zero_spawns(repo, spawns, value, reason):
     assert spawns == []
 
 
-def test_empty_sid_is_no_session_dir_without_spawn(repo, spawns):
+def test_empty_sid_is_no_session_dir_without_spawn(repo, spawns) -> None:
     spawns.clear()
     h = sh.read_session_history(repo, "")
     assert (h.resolved, h.reason, h.window) == (False, "no-session-dir", ())
     assert spawns == []
 
 
-def test_floor_not_an_ancestor_is_unresolved(repo):
+def test_floor_not_an_ancestor_is_unresolved(repo) -> None:
     _git(repo, "checkout", "-q", "-b", "other")
     off = _commit(repo, "off.txt", "o\n")
     _git(repo, "checkout", "-q", "main")
@@ -136,7 +137,7 @@ def test_floor_not_an_ancestor_is_unresolved(repo):
     assert not h.resolved and h.reason == "floor-not-ancestor" and h.window == ()
 
 
-def test_floor_absent_from_object_store_is_git_exit(repo):
+def test_floor_absent_from_object_store_is_git_exit(repo) -> None:
     _floor(repo, "d" * 40)
     _commit(repo, "m.txt", "m\n", SID)
     h = sh.read_session_history(repo, SID)
@@ -147,7 +148,7 @@ def test_floor_absent_from_object_store_is_git_exit(repo):
     "exc,reason",
     [(subprocess.TimeoutExpired("git", 15), "git-timeout"), (FileNotFoundError("git"), "git-spawn-failed")],
 )
-def test_spawn_failure_is_unresolved_never_an_empty_window(repo, monkeypatch, exc, reason):
+def test_spawn_failure_is_unresolved_never_an_empty_window(repo, monkeypatch: pytest.MonkeyPatch, exc, reason) -> None:
     _floor(repo, _git(repo, "rev-parse", "HEAD"))
     _commit(repo, "m.txt", "m\n", SID)
 
@@ -159,7 +160,7 @@ def test_spawn_failure_is_unresolved_never_an_empty_window(repo, monkeypatch, ex
     assert not h.resolved and h.reason == reason and h.window == ()
 
 
-def test_empty_window_is_resolved_without_spawn(repo, spawns):
+def test_empty_window_is_resolved_without_spawn(repo, spawns) -> None:
     _floor(repo, _git(repo, "rev-parse", "HEAD"))
     spawns.clear()
     h = sh.read_session_history(repo, SID)
@@ -167,7 +168,7 @@ def test_empty_window_is_resolved_without_spawn(repo, spawns):
     assert spawns == []
 
 
-def test_commit_before_head_at_start_is_absent(repo):
+def test_commit_before_head_at_start_is_absent(repo) -> None:
     _commit(repo, "early.txt", "e\n", SID)
     _floor(repo, _git(repo, "rev-parse", "HEAD"))
     late = _commit(repo, "late.txt", "l\n", SID)
@@ -175,7 +176,7 @@ def test_commit_before_head_at_start_is_absent(repo):
     assert [c.sha for c in h.window] == [late]
 
 
-def test_no_backslash_path_and_crlf_output_parse_identically(repo):
+def test_no_backslash_path_and_crlf_output_parse_identically(repo) -> None:
     _floor(repo, _git(repo, "rev-parse", "HEAD"))
     _commit(repo, "a/b/c.txt", "x\n", SID)
     h = sh.read_session_history(repo, SID)
@@ -185,7 +186,7 @@ def test_no_backslash_path_and_crlf_output_parse_identically(repo):
     assert sh._parse_commit(chunk + lf[2:]) == sh._parse_commit((chunk + lf[2:]).replace("\n", "\r\n"))
 
 
-def test_binary_row_has_none_counts(repo):
+def test_binary_row_has_none_counts(repo) -> None:
     _floor(repo, _git(repo, "rev-parse", "HEAD"))
     p = repo / "bin.dat"
     p.write_bytes(b"\x00\x01\x02")
@@ -195,14 +196,14 @@ def test_binary_row_has_none_counts(repo):
     assert (f.status, f.added, f.deleted) == ("A", None, None)
 
 
-def test_demoted_session_id_line_is_still_attributed(repo):
+def test_demoted_session_id_line_is_still_attributed(repo) -> None:
     _floor(repo, _git(repo, "rev-parse", "HEAD"))
     _commit(repo, "x.txt", "x\n", SID, extra="\nTrailing paragraph.\n")
     assert len(sh.read_session_history(repo, SID).own) == 1
 
 
-def test_public_shape_is_pinned():
-    def names(cls):
+def test_public_shape_is_pinned() -> None:
+    def names(cls) -> list[str]:
         return [f.name for f in dataclasses.fields(cls)]
 
     assert names(sh.FileChange) == ["path", "status", "added", "deleted"]

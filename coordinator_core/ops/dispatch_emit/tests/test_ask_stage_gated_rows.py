@@ -6,6 +6,8 @@ import time
 
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
+from pathlib import Path
+import pytest
 
 PLAN_REL = "docs/plans/2026-10-03-gated.md"
 
@@ -59,7 +61,7 @@ def _gate(requires: str, blocks: str | None = None) -> str:
     return f"  external_gate:\n    - owner_repo: other\n      requires: {requires}\n{b}".rstrip("\n")
 
 
-def test_landed_work_gate_withholds_row_into_manifest(tmp_path):
+def test_landed_work_gate_withholds_row_into_manifest(tmp_path: Path) -> None:
     start = time.process_time()
     reply = _stage(tmp_path, _plan(_gate("landed-work")))
     assert (time.process_time() - start) * 1000 < 500
@@ -68,13 +70,13 @@ def test_landed_work_gate_withholds_row_into_manifest(tmp_path):
     assert [(g["id"], g["reason"]) for g in reply["gated"]] == [("G1", "external_gate")]
 
 
-def test_commit_in_owner_repo_gate_behaves_identically(tmp_path):
+def test_commit_in_owner_repo_gate_behaves_identically(tmp_path: Path) -> None:
     reply = _stage(tmp_path, _plan(_gate("commit-in-owner-repo")))
     assert [r["id"] for r in reply["rows"]] == ["U1", "T1"]
     assert [g["id"] for g in reply["gated"]] == ["G1"]
 
 
-def test_ac_closure_gate_is_staged_as_an_ordinary_row(tmp_path):
+def test_ac_closure_gate_is_staged_as_an_ordinary_row(tmp_path: Path) -> None:
     reply = _stage(tmp_path, _plan(_gate("landed-work", "ac-closure")))
     assert "G1" in [r["id"] for r in reply["rows"]]
     assert reply["gated"] == []
@@ -84,7 +86,7 @@ def _owned_gate(owner: str) -> str:
     return f"  external_gate:\n    - owner_repo: {owner}\n      requires: landed-work"
 
 
-def _patch_registry(monkeypatch, table, aliases=None):
+def _patch_registry(monkeypatch, table, aliases=None) -> None:
     import coordinator_core.machine_resolver as mr
     import coordinator_core.ops.fleet._memo_resolver as memo
 
@@ -92,19 +94,19 @@ def _patch_registry(monkeypatch, table, aliases=None):
     monkeypatch.setattr(memo, "read_receiver_aliases", lambda: aliases or {})
 
 
-def test_gated_row_carries_the_registered_owner_root(tmp_path, monkeypatch):
+def test_gated_row_carries_the_registered_owner_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_registry(monkeypatch, {"repos.claude_klabauter": "OWNER/ROOT"})
     reply = _stage(tmp_path, _plan(_owned_gate("claude-klabauter")))
     assert [(g["id"], g["owner_root"]) for g in reply["gated"]] == [("G1", "OWNER/ROOT")]
 
 
-def test_gated_row_without_a_registry_entry_has_empty_owner_root(tmp_path, monkeypatch):
+def test_gated_row_without_a_registry_entry_has_empty_owner_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_registry(monkeypatch, {})
     reply = _stage(tmp_path, _plan(_owned_gate("claude-klabauter")))
     assert reply["gated"][0]["owner_root"] == ""
 
 
-def test_aliased_owner_resolves_through_the_alias_key(tmp_path, monkeypatch):
+def test_aliased_owner_resolves_through_the_alias_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _patch_registry(
         monkeypatch, {"repos.claude_unreal_holodeck": "HOLO/ROOT"}, {"example-game-repo": "claude_unreal_holodeck"}
     )
@@ -112,7 +114,7 @@ def test_aliased_owner_resolves_through_the_alias_key(tmp_path, monkeypatch):
     assert reply["gated"][0]["owner_root"] == "HOLO/ROOT"
 
 
-def test_owner_root_resolution_spawns_no_process(tmp_path, monkeypatch):
+def test_owner_root_resolution_spawns_no_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     _patch_registry(monkeypatch, {"repos.claude_klabauter": "OWNER/ROOT"})
@@ -125,7 +127,7 @@ def test_owner_root_resolution_spawns_no_process(tmp_path, monkeypatch):
     assert reply["gated"][0]["owner_root"] == "OWNER/ROOT"
 
 
-def test_owner_root_round_trips_through_json():
+def test_owner_root_round_trips_through_json() -> None:
     from coordinator_core.ops.dispatch_emit.ask_contract import GatedRow
 
     row = GatedRow(id="G1", reason="external_gate", gate="g", owner_repo="x", owner_root="R")
@@ -179,7 +181,7 @@ title: fixture
 """
 
 
-def test_em_owned_rows_land_in_owed_not_gated(tmp_path):
+def test_em_owned_rows_land_in_owed_not_gated(tmp_path: Path) -> None:
     # C4's write target must exist: spine_read classes a memo-send row with an unbuilt non-memo write
     # as em-performed, so an absent pkg/memo.md would stop C4 being a bare memo-send row.
     reply = _stage(tmp_path, _em_plan(), existing_files=("pkg/memo.md",))
@@ -192,12 +194,12 @@ def test_em_owned_rows_land_in_owed_not_gated(tmp_path):
     assert reply["gated"] == []
 
 
-def test_plan_without_em_owned_rows_writes_empty_owed(tmp_path):
+def test_plan_without_em_owned_rows_writes_empty_owed(tmp_path: Path) -> None:
     reply = _stage(tmp_path, _plan(_gate("landed-work")))
     assert reply["owed"] == []
 
 
-def test_zero_waves_error_names_owed_rows(tmp_path):
+def test_zero_waves_error_names_owed_rows(tmp_path: Path) -> None:
     full = _em_plan()
     only_em = full[: full.index("- id: U1")] + full[full.index("- id: C3") : full.index("- id: C5")] + "```\n"
     reply = _stage(tmp_path, only_em)
@@ -206,7 +208,7 @@ def test_zero_waves_error_names_owed_rows(tmp_path):
     assert reply["owed_plan"]
 
 
-def test_dependent_of_gated_row_is_gated_transitively(tmp_path):
+def test_dependent_of_gated_row_is_gated_transitively(tmp_path: Path) -> None:
     reply = _stage(tmp_path, _plan(_gate("landed-work"), extra_dep=True))
     assert [r["id"] for r in reply["rows"]] == ["U1"]
     assert [(g["id"], g["reason"]) for g in reply["gated"]] == [

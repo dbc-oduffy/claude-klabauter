@@ -21,7 +21,11 @@ PHASE_LABELS: dict[str, str] = {
     "repo_key_literal": "dispatch_end_of_run_repo_key_literal_gate",
     "pre_ci": "dispatch_percolate_pre_ci",
     "mirror_like": "dispatch_mirror_like",
+    "content_transform_sweep": "content_transform_sweep",
 }
+
+# Reported, never gated: a sub-span of post_rsync (which gates), absent from logs that predate it.
+INFORMATIONAL_PHASES = frozenset({"content_transform_sweep"})
 
 RATIO_THRESHOLD = 1.5
 REPO_KEY_LITERAL_ABSOLUTE_S = 10.0
@@ -67,7 +71,10 @@ def compare(
     regressed: list[str] = []
     for phase in PHASE_LABELS:
         a, b = after[phase], baseline[phase]
-        if phase == "repo_key_literal":
+        if phase in INFORMATIONAL_PHASES:
+            bad = False
+            bound = "informational"
+        elif phase == "repo_key_literal":
             bad = a > REPO_KEY_LITERAL_ABSOLUTE_S
             bound = f"abs<={REPO_KEY_LITERAL_ABSOLUTE_S:.1f}s"
         else:

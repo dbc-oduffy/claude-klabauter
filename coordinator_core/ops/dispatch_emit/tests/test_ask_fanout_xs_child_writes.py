@@ -9,12 +9,13 @@ from coordinator_core.ops import baton_pm_turns as PT
 from coordinator_core.ops.dispatch_emit import ask_fanout as mod
 from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS, collect_fire_refusals
 from coordinator_core.session_baton import store
+from pathlib import Path
 
 SID = "sid-xs-child-writes"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "hub" / SID).mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
@@ -28,12 +29,12 @@ def _children(repo, asks):
     return [yaml.safe_load((repo / r["sizing"]).read_text(encoding="utf-8")) for r in out["ready"]]
 
 
-def _xs_refusals(sizing, writes=()):
+def _xs_refusals(sizing, writes=()) -> list[str]:
     refusals = collect_fire_refusals(sizing, sizing_rel="s.yaml", arm=ARM_XS, writes=list(writes))
     return [r for r in refusals if r.startswith("XS needs `writes`")]
 
 
-def test_entry_writes_clear_the_xs_footprint_check_for_that_child_only(repo):
+def test_entry_writes_clear_the_xs_footprint_check_for_that_child_only(repo) -> None:
     with_writes, without = _children(repo, [
         {"ask": "fix a", "writes": ["a.py", "b.py"]},
         {"ask": "fix b"},
@@ -42,6 +43,6 @@ def test_entry_writes_clear_the_xs_footprint_check_for_that_child_only(repo):
     assert len(_xs_refusals(without)) == 1
 
 
-def test_explicit_args_writes_still_clear_a_child_without_entry_writes(repo):
+def test_explicit_args_writes_still_clear_a_child_without_entry_writes(repo) -> None:
     _, without = _children(repo, [{"ask": "fix a", "writes": ["a.py"]}, {"ask": "fix b"}])
     assert _xs_refusals(without, writes=["b.py"]) == []

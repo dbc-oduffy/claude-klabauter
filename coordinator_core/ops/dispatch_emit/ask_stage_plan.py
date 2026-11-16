@@ -41,10 +41,37 @@ def _set_aside_prior_report(root: Path, report_rel: str) -> Optional[str]:
     return _rel(root, prior)
 
 
-def _kept_row_holds(root: Path, snap: Optional[resume_snapshot.Snapshot], row_id: str, report_rel: str) -> bool:
+def stranded_after_restore(root: Path, run_dir: Path) -> list:
+    """`[{path, run, kind, reason}]` the kept run's record leaves stranded after the restore.
+
+    The record paths whose HEAD blob already is the run blob are the landing; each other changed path
+    is a stranded sibling. Advisory: callers report the hits and the refire proceeds. No touched-blobs
+    record or an unreadable HEAD: `[]`."""
+    from coordinator_core.git import git_state
+    from coordinator_core.ops.dispatch_emit import stranded_sibling
+
+    rec = stranded_sibling.read(run_dir)
+    if not rec:
+        return []
+    try:
+        heads = {p: sha for p, (_mode, sha) in git_state.head_blobs(root, list(rec)).items()}
+    except Exception:  # noqa: BLE001 - an unreadable HEAD makes every head None: no landing, no claim
+        return []
+    landing = [p for p, e in rec.items() if e["run"] != e["base"] and heads.get(p) == e["run"]]
+    return stranded_sibling.stranded(root, run_dir, landing, heads)
+
+
+def _kept_row_holds(
+    root: Path,
+    snap: Optional[resume_snapshot.Snapshot],
+    row_id: str,
+    report_rel: str,
+    stranded_out: Optional[list] = None,
+) -> bool:
     """True when the gate's snapshot names `row_id` kept, the kept run's `kept.json` fingerprints
     still match the tree, no live note names the row, and the row's report reads DONE.
-    Never raises: any unreadable fact is False and the row stages as a fresh execute."""
+    Never raises: any unreadable fact is False and the row stages as a fresh execute.
+    `stranded_out`, when given, is extended with the stranded siblings found after the restore."""
     if snap is None or not snap.kept_run or row_id not in snap.kept:
         return False
     try:
@@ -52,6 +79,8 @@ def _kept_row_holds(root: Path, snap: Optional[resume_snapshot.Snapshot], row_id
         # evicted bytes back first: kept.json fingerprints read them
         if halt_tree_evict.restore_for_run(root, run_dir, snap.kept_run)["refused"]:
             return False  # a fenced path stays evicted: the row stages as a fresh execute
+        if stranded_out is not None:
+            stranded_out.extend(stranded_after_restore(root, run_dir))
         entry = kept_work.read(run_dir)["chunks"].get(row_id)
         if not kept_work.still_kept(root, entry, requirements_ledger.read_notes(run_dir), row_id, record_dir=run_dir):
             return False

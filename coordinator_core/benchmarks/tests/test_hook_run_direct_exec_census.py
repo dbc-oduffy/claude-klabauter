@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from coordinator_core.benchmarks import hook_run_direct_exec_census as h
+from pathlib import Path
+import pytest
 
 LOADER = ["-c", "import os,sys;SEAM", "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/door_launch.py"]
 BOOT = "${CLAUDE_PLUGIN_ROOT}/hooks/scripts/_hook_boot.py"
@@ -26,7 +28,7 @@ def _doc() -> dict:
     }}
 
 
-def test_door_registrations_become_direct_exec_and_others_stay():
+def test_door_registrations_become_direct_exec_and_others_stay() -> None:
     out, count = h.rewrite_hooks(_doc(), STAGED)
     assert count == 3
     stop = out["hooks"]["Stop"][0]["hooks"][0]
@@ -39,20 +41,20 @@ def test_door_registrations_become_direct_exec_and_others_stay():
     assert other == {"type": "command", "command": "python3", "args": ["-c", "print(1)", "other.py"]}
 
 
-def test_rewrite_leaves_the_source_document_untouched():
+def test_rewrite_leaves_the_source_document_untouched() -> None:
     doc = _doc()
     before = repr(doc)
     h.rewrite_hooks(doc, STAGED)
     assert repr(doc) == before
 
 
-def test_non_door_document_rewrites_nothing():
+def test_non_door_document_rewrites_nothing() -> None:
     doc = {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "python3", "args": ["x.py"]}]}]}}
     out, count = h.rewrite_hooks(doc, STAGED)
     assert count == 0 and out == doc
 
 
-def test_missing_census_is_a_typed_refusal_naming_the_flag(tmp_path):
+def test_missing_census_is_a_typed_refusal_naming_the_flag(tmp_path: Path) -> None:
     hooks = tmp_path / "hooks.json"
     hooks.write_text("{}", encoding="utf-8")
     for kwargs, flag in (({"census_path": None, "hooks_json": hooks}, "--census"),
@@ -66,13 +68,13 @@ def test_missing_census_is_a_typed_refusal_naming_the_flag(tmp_path):
             raise AssertionError(f"{flag} refusal expected")
 
 
-def test_main_maps_refusal_to_exit_2(capsys, monkeypatch):
+def test_main_maps_refusal_to_exit_2(capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(h, "declare_benchmark_origin", lambda: None)
     assert h.main([]) == 2
     assert "--census" in capsys.readouterr().err
 
 
-def test_stage_image_names_it_hook_run_and_carries_the_sidecar(tmp_path):
+def test_stage_image_names_it_hook_run_and_carries_the_sidecar(tmp_path: Path) -> None:
     image = tmp_path / "door-w.exe"
     image.write_bytes(b"MZ")
     (tmp_path / "door.engine-root.txt").write_text("E:/engine\n", encoding="utf-8")

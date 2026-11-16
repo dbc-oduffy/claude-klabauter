@@ -10,6 +10,7 @@ from coordinator_core.workweek_complete.brief import (
     brief,
 )
 from coordinator_core.contract.decision_object.judgment import partition_reportable
+from pathlib import Path
 
 _EXPECTED_REPORTED_IDS: set[str] = set()
 
@@ -21,7 +22,7 @@ _EXPECTED_ACTION_CLASS_IDS = {
 
 
 @pytest.fixture
-def operator_env(tmp_path):
+def operator_env(tmp_path: Path) -> dict[str, str]:
     """Env that resolves the operator-config anchors inside `tmp_path`, so `brief()` needs no
     machine registry."""
     settings_home = tmp_path / "settings-home"
@@ -38,7 +39,7 @@ def _built_directives_and_points():
     return directives, points
 
 
-def test_predicate_classification_matches_known_pair():
+def test_predicate_classification_matches_known_pair() -> None:
     directives, points = _built_directives_and_points()
     recommendation_carrying = [p for p in points if p.get("recommendation") is not None]
     _, reported = partition_reportable(recommendation_carrying, directives)
@@ -50,28 +51,28 @@ def test_predicate_classification_matches_known_pair():
     )
 
 
-def test_action_class_point_carries_explicit_reportable_false():
+def test_action_class_point_carries_explicit_reportable_false() -> None:
     _, points = _built_directives_and_points()
     by_id = {p["id"]: p for p in points}
     assert by_id["jp_step4_triage_dispatch"]["reportable"] is False
     assert by_id["jp_step7b_observer_dispatch"]["reportable"] is False
 
 
-def test_reported_points_absent_from_judgment_points(operator_env):
+def test_reported_points_absent_from_judgment_points(operator_env) -> None:
     exit_code, envelope = brief(env=operator_env)
     assert exit_code == 0, envelope
     ids = {p["id"] for p in envelope["judgment_points"]}
     assert ids.isdisjoint(_EXPECTED_REPORTED_IDS)
 
 
-def test_action_class_point_stays_asked(operator_env):
+def test_action_class_point_stays_asked(operator_env) -> None:
     exit_code, envelope = brief(env=operator_env)
     assert exit_code == 0, envelope
     ids = {p["id"] for p in envelope["judgment_points"]}
     assert _EXPECTED_ACTION_CLASS_IDS <= ids
 
 
-def test_no_point_is_demoted_into_narration_today(operator_env):
+def test_no_point_is_demoted_into_narration_today(operator_env) -> None:
     exit_code, envelope = brief(env=operator_env)
     assert exit_code == 0, envelope
     narration = envelope["narration"]
@@ -79,7 +80,7 @@ def test_no_point_is_demoted_into_narration_today(operator_env):
         assert point_id not in narration
 
 
-def test_narration_renderer_still_carries_question_and_rationale():
+def test_narration_renderer_still_carries_question_and_rationale() -> None:
     rendered = _reported_narration(
         [
             {
@@ -95,7 +96,7 @@ def test_narration_renderer_still_carries_question_and_rationale():
     assert _reported_narration([]) == ""
 
 
-def test_tier3_no_recommendation_points_stay_asked(operator_env):
+def test_tier3_no_recommendation_points_stay_asked(operator_env) -> None:
     exit_code, envelope = brief(env=operator_env, conclude=True)
     assert exit_code == 0, envelope
     ids = {p["id"] for p in envelope["judgment_points"]}
@@ -111,7 +112,7 @@ def test_tier3_no_recommendation_points_stay_asked(operator_env):
         assert tier3_id in ids
 
 
-def test_semver_point_with_recommendation_stays_in_judgment_points():
+def test_semver_point_with_recommendation_stays_in_judgment_points() -> None:
     recommendation = {"disposition": "minor", "rationale": "1 roadmap entry"}
     directives = _build_directives()
     points = _build_judgment_points(version_recommendation=recommendation)
@@ -122,5 +123,5 @@ def test_semver_point_with_recommendation_stays_in_judgment_points():
     assert "jp_step10_semver_judgment" not in {p["id"] for p in reported}
 
 
-def test_reported_narration_helper_empty_on_no_reported_points():
+def test_reported_narration_helper_empty_on_no_reported_points() -> None:
     assert _reported_narration([]) == ""

@@ -14,12 +14,12 @@ REMOTE = "example-operator@far-box.example"
 class Bridge:
     pid = 4242
 
-    def poll(self):
+    def poll(self) -> None:
         return None
 
 
 @pytest.fixture
-def roster(tmp_path, monkeypatch):
+def roster(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     spec = importlib.util.spec_from_file_location("unimatrix_roster_rebind", BIN / "unimatrix-roster.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -43,12 +43,12 @@ def roster(tmp_path, monkeypatch):
     return mod
 
 
-def run_sync(roster, bridges, lines):
+def run_sync(roster, bridges, lines) -> None:
     cfg = Namespace(remote=REMOTE)
     roster.sync(bridges, {FAR: {"entry": {"name": "n", "messagingSocketPath": FAR}}}, cfg, lines.append)
 
 
-def test_live_bridge_whose_socket_vanished_is_unmirrored_and_rebuilt(roster):
+def test_live_bridge_whose_socket_vanished_is_unmirrored_and_rebuilt(roster) -> None:
     b = Bridge()
     bridges = {FAR: b}
     roster.BOUND_SINCE[b.pid] = time.time() - 3600
@@ -59,7 +59,7 @@ def test_live_bridge_whose_socket_vanished_is_unmirrored_and_rebuilt(roster):
     assert any("socket" in m and "re-mirror" in m for m in lines)
 
 
-def test_live_bridge_with_its_socket_present_is_left_alone(roster):
+def test_live_bridge_with_its_socket_present_is_left_alone(roster) -> None:
     b = Bridge()
     bridges = {FAR: b}
     roster.BOUND_SINCE[b.pid] = time.time() - 3600
@@ -68,7 +68,7 @@ def test_live_bridge_with_its_socket_present_is_left_alone(roster):
     assert roster.unmirrored == [] and roster.mirrored == []
 
 
-def test_a_bridge_still_inside_its_bind_grace_is_not_rebuilt(roster):
+def test_a_bridge_still_inside_its_bind_grace_is_not_rebuilt(roster) -> None:
     b = Bridge()
     roster.BOUND_SINCE[b.pid] = time.time()
     run_sync(roster, {FAR: b}, [])
@@ -107,7 +107,7 @@ def _bound_bridge_socket(box):
     return srv, path, os.stat(path).st_ino
 
 
-def test_bridge_socket_lost_is_false_while_the_bound_inode_stands(box):
+def test_bridge_socket_lost_is_false_while_the_bound_inode_stands(box) -> None:
     srv, path, ino = _bound_bridge_socket(box)
     try:
         assert bridge.socket_lost(path, ino) is False
@@ -115,7 +115,7 @@ def test_bridge_socket_lost_is_false_while_the_bound_inode_stands(box):
         srv.close()
 
 
-def test_bridge_socket_lost_when_deleted_or_swapped(box):
+def test_bridge_socket_lost_when_deleted_or_swapped(box) -> None:
     srv, path, ino = _bound_bridge_socket(box)
     try:
         os.unlink(path)
@@ -126,11 +126,11 @@ def test_bridge_socket_lost_when_deleted_or_swapped(box):
         srv.close()
 
 
-def test_bridge_socket_lost_is_false_before_anything_is_bound(box):
+def test_bridge_socket_lost_is_false_before_anything_is_bound(box) -> None:
     assert bridge.socket_lost(str(box / "never.sock"), None) is False
 
 
-def test_bridge_watch_exits_without_unlinking_a_foreign_socket(box, monkeypatch):
+def test_bridge_watch_exits_without_unlinking_a_foreign_socket(box, monkeypatch: pytest.MonkeyPatch) -> None:
     srv, path, ino = _bound_bridge_socket(box)
     exited = _threading.Event()
     try:

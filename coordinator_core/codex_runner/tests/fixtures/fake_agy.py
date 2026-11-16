@@ -37,7 +37,7 @@ def _turns(path):
     return turns
 
 
-def main(argv):
+def main(argv) -> int:
     out = os.environ.get("FAKE_AGY_ARGV_OUT")
     if out:
         with open(out, "w", encoding="utf-8") as f:

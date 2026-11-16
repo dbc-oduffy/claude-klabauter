@@ -44,18 +44,18 @@ _QUALIFIERS = frozenset({"coordinator-content-repo", "project-rag", "claude-klab
 # ---------------------------------------------------------------------------
 
 class TestRepoQualifierNames:
-    def test_registry_key_lowercased_and_underscore_to_hyphen(self):
+    def test_registry_key_lowercased_and_underscore_to_hyphen(self) -> None:
         names = _repo_qualifier_names({"project_rag": "/some/path/receiver-repo"})
         assert "project-rag" in names
 
-    def test_basename_of_registry_path_included(self):
+    def test_basename_of_registry_path_included(self) -> None:
         names = _repo_qualifier_names({"project_rag": "/some/path/receiver-repo"})
         assert "receiver-repo" in names
 
-    def test_empty_registry_yields_empty_set(self):
+    def test_empty_registry_yields_empty_set(self) -> None:
         assert _repo_qualifier_names({}) == frozenset()
 
-    def test_none_registry_yields_empty_set(self):
+    def test_none_registry_yields_empty_set(self) -> None:
         assert _repo_qualifier_names(None) == frozenset()
 
 
@@ -64,47 +64,47 @@ class TestRepoQualifierNames:
 # ---------------------------------------------------------------------------
 
 class TestUnqualifiedPathCitations:
-    def test_repo_colon_path_form_not_flagged(self):
+    def test_repo_colon_path_form_not_flagged(self) -> None:
         body = "See coordinator-content-repo coordinator/docs/wiki/x.md for detail."
         hits = _unqualified_path_citations(body, _QUALIFIERS)
         assert hits == []
 
-    def test_repo_colon_path_with_line_number_not_flagged(self):
+    def test_repo_colon_path_with_line_number_not_flagged(self) -> None:
         body = "example-retrieval-repo:mcp/x.py:12 has the bug."
         hits = _unqualified_path_citations(body, _QUALIFIERS)
         assert hits == []
 
-    def test_repo_name_backticked_path_not_flagged(self):
+    def test_repo_name_backticked_path_not_flagged(self) -> None:
         body = "claude-klabauter `coordinator/bin/x` is the file."
         hits = _unqualified_path_citations(body, _QUALIFIERS)
         assert hits == []
 
-    def test_url_form_not_flagged(self):
+    def test_url_form_not_flagged(self) -> None:
         body = "https://github.com/o/r/blob/main/docs/x.md is the link."
         hits = _unqualified_path_citations(body, _QUALIFIERS)
         assert hits == []
 
-    def test_bare_docs_path_flagged(self):
+    def test_bare_docs_path_flagged(self) -> None:
         body = "See docs/x.md for detail."
         hits = _unqualified_path_citations(body, _QUALIFIERS)
         assert hits == ["docs/x.md"]
 
-    def test_bare_state_path_flagged(self):
+    def test_bare_state_path_flagged(self) -> None:
         body = "state/lessons/y.md has the note."
         hits = _unqualified_path_citations(body, _QUALIFIERS)
         assert hits == ["state/lessons/y.md"]
 
-    def test_unknown_preceding_name_does_not_qualify(self):
+    def test_unknown_preceding_name_does_not_qualify(self) -> None:
         body = "see docs/x.md for detail."
         hits = _unqualified_path_citations(body, _QUALIFIERS)
         assert hits == ["docs/x.md"]
 
-    def test_repeated_path_reported_once(self):
+    def test_repeated_path_reported_once(self) -> None:
         body = "docs/x.md is discussed. Also read docs/x.md again."
         hits = _unqualified_path_citations(body, _QUALIFIERS)
         assert hits == ["docs/x.md"]
 
-    def test_does_not_read_files(self, tmp_path, monkeypatch):
+    def test_does_not_read_files(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         # Negative-spec smoke: a body naming a path that does not exist on
         # disk still runs to completion (no file read attempted).
         monkeypatch.chdir(tmp_path)
@@ -117,23 +117,23 @@ class TestUnqualifiedPathCitations:
 # ---------------------------------------------------------------------------
 
 class TestQualifyUnqualifiedCitations:
-    def test_bare_path_gets_sender_qualified(self):
+    def test_bare_path_gets_sender_qualified(self) -> None:
         body = "See docs/x.md for detail."
         out = _qualify_unqualified_citations(body, _QUALIFIERS, "project-rag")
         assert out == "See example-retrieval-repo:docs/x.md for detail."
 
-    def test_already_qualified_path_untouched(self):
+    def test_already_qualified_path_untouched(self) -> None:
         body = "See claude-klabauter coordinator/bin/x for detail."
         out = _qualify_unqualified_citations(body, _QUALIFIERS, "project-rag")
         assert out == body
 
-    def test_multiple_bare_paths_all_qualified(self):
+    def test_multiple_bare_paths_all_qualified(self) -> None:
         body = "docs/x.md and state/y.md both matter."
         out = _qualify_unqualified_citations(body, _QUALIFIERS, "project-rag")
         assert out == "example-retrieval-repo:docs/x.md and example-retrieval-repo:state/y.md both matter."
 
     @pytest.mark.parametrize("fence", ["```", "~~~", "  ```", "    ~~~~"])
-    def test_fenced_block_byte_identical_prose_still_qualified(self, fence):
+    def test_fenced_block_byte_identical_prose_still_qualified(self, fence) -> None:
         block = (
             f"{fence}\npython scripts/x.py --out state/xl_exit/w.json\n{fence.lstrip()}\n"
         )
@@ -146,11 +146,11 @@ class TestQualifyUnqualifiedCitations:
         )
         assert _unqualified_path_citations(body, _QUALIFIERS) == ["docs/a.md", "state/b.md"]
 
-    def test_unclosed_fence_protects_to_end(self):
+    def test_unclosed_fence_protects_to_end(self) -> None:
         body = "```\ncat docs/x.md\n"
         assert _qualify_unqualified_citations(body, _QUALIFIERS, "project-rag") == body
 
-    def test_no_candidates_returns_body_unchanged(self):
+    def test_no_candidates_returns_body_unchanged(self) -> None:
         body = "Nothing path-shaped here."
         out = _qualify_unqualified_citations(body, _QUALIFIERS, "project-rag")
         assert out == body
@@ -164,7 +164,7 @@ pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 @pytest.fixture()
-def sender_and_receiver(tmp_path, monkeypatch):
+def sender_and_receiver(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
     claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -191,7 +191,7 @@ def _send_and_read(sender_repo, receiver_repo, topic, body):
 
 
 class TestCitationOwnerDecisionTable:
-    def test_sender_only_qualified_as_sender(self, sender_and_receiver):
+    def test_sender_only_qualified_as_sender(self, sender_and_receiver) -> None:
         sender_repo, receiver_repo = sender_and_receiver
         _touch(sender_repo, "docs/s.md")
         acted, delivered = _send_and_read(
@@ -200,7 +200,7 @@ class TestCitationOwnerDecisionTable:
         assert "claude-klabauter-engine:docs/s.md" in delivered
         assert "citations_unresolved" not in acted
 
-    def test_receiver_only_no_sender_ancestor_qualified_as_receiver(self, sender_and_receiver):
+    def test_receiver_only_no_sender_ancestor_qualified_as_receiver(self, sender_and_receiver) -> None:
         sender_repo, receiver_repo = sender_and_receiver
         _touch(receiver_repo, "docs/r.md")
         acted, delivered = _send_and_read(
@@ -210,7 +210,7 @@ class TestCitationOwnerDecisionTable:
         assert "claude-klabauter-engine:docs/r.md" not in delivered
         assert "citations_unresolved" not in acted
 
-    def test_receiver_only_with_sender_ancestor_qualified_as_receiver(self, sender_and_receiver):
+    def test_receiver_only_with_sender_ancestor_qualified_as_receiver(self, sender_and_receiver) -> None:
         sender_repo, receiver_repo = sender_and_receiver
         (sender_repo / "state" / "queue-grind" / "bug").mkdir(parents=True)
         _touch(receiver_repo, "state/queue-grind/bug/runs/r.json")
@@ -222,7 +222,7 @@ class TestCitationOwnerDecisionTable:
         assert "claude-klabauter-engine:state" not in delivered
         assert "citations_unresolved" not in acted
 
-    def test_explicit_peer_qualifier_untouched(self, sender_and_receiver):
+    def test_explicit_peer_qualifier_untouched(self, sender_and_receiver) -> None:
         sender_repo, receiver_repo = sender_and_receiver
         _touch(receiver_repo, "docs/q.md")
         _, delivered = _send_and_read(
@@ -231,7 +231,7 @@ class TestCitationOwnerDecisionTable:
         assert "See example-retrieval-repo:docs/q.md here." in delivered
         assert "claude-klabauter-engine:" not in delivered
 
-    def test_both_left_bare_and_reported(self, sender_and_receiver):
+    def test_both_left_bare_and_reported(self, sender_and_receiver) -> None:
         sender_repo, receiver_repo = sender_and_receiver
         _touch(sender_repo, "docs/b.md")
         _touch(receiver_repo, "docs/b.md")
@@ -242,7 +242,7 @@ class TestCitationOwnerDecisionTable:
         assert acted["citations_ambiguous"] == ["docs/b.md"]
         assert "citations_unresolved" not in acted
 
-    def test_neither_left_bare_and_reported(self, sender_and_receiver):
+    def test_neither_left_bare_and_reported(self, sender_and_receiver) -> None:
         sender_repo, receiver_repo = sender_and_receiver
         acted, delivered = _send_and_read(
             sender_repo, receiver_repo, "owner-neither", "See docs/n.md here.\n",
@@ -250,7 +250,7 @@ class TestCitationOwnerDecisionTable:
         assert "See docs/n.md here." in delivered
         assert acted["citations_unresolved"] == ["docs/n.md"]
 
-    def test_one_tree_path_in_neither_list(self, sender_and_receiver):
+    def test_one_tree_path_in_neither_list(self, sender_and_receiver) -> None:
         sender_repo, receiver_repo = sender_and_receiver
         _touch(sender_repo, "docs/one.md")
         acted, delivered = _send_and_read(
@@ -261,8 +261,8 @@ class TestCitationOwnerDecisionTable:
         assert "citations_ambiguous" not in acted
 
     def test_neither_tree_with_sender_ancestor_left_bare_and_warned(
-        self, sender_and_receiver, caplog,
-    ):
+        self, sender_and_receiver, caplog: pytest.LogCaptureFixture,
+    ) -> None:
         sender_repo, receiver_repo = sender_and_receiver
         (sender_repo / "state" / "queue-grind" / "bug").mkdir(parents=True)
         with caplog.at_level("WARNING"):
@@ -275,7 +275,7 @@ class TestCitationOwnerDecisionTable:
         assert acted["citations_unresolved"] == ["state/queue-grind/bug/runs/z.json"]
         assert "held by neither repo" in caplog.text
 
-    def test_notice_names_per_path_owner(self):
+    def test_notice_names_per_path_owner(self) -> None:
         from coordinator_core.ops.fleet.memo_send import _citation_lint_notice
         notice = _citation_lint_notice(
             ["docs/a.md", "docs/b.md"], "snd", {"docs/a.md": "snd", "docs/b.md": "rcv"},
@@ -284,7 +284,7 @@ class TestCitationOwnerDecisionTable:
         assert "docs/b.md -> rcv:docs/b.md" in notice
         assert "as the sender's" not in notice
 
-    def test_send_names_sender_receipt_path(self, sender_and_receiver):
+    def test_send_names_sender_receipt_path(self, sender_and_receiver) -> None:
         sender_repo, receiver_repo = sender_and_receiver
         acted, _ = _send_and_read(
             sender_repo, receiver_repo, "owner-receipt", "No paths.\n",
@@ -294,7 +294,7 @@ class TestCitationOwnerDecisionTable:
 
 
 class TestCitationLintQualifiesInsteadOfHolding:
-    def test_bare_path_qualified_and_delivered_on_first_call(self, sender_and_receiver):
+    def test_bare_path_qualified_and_delivered_on_first_call(self, sender_and_receiver) -> None:
         sender_repo, receiver_repo = sender_and_receiver
         _touch(sender_repo, "docs/x.md")
         _write_draft(
@@ -312,7 +312,7 @@ class TestCitationLintQualifiesInsteadOfHolding:
         delivered = inbox[0].read_text(encoding="utf-8")
         assert "claude-klabauter-engine:docs/x.md" in delivered
 
-    def test_qualified_path_delivers_first_call(self, sender_and_receiver):
+    def test_qualified_path_delivers_first_call(self, sender_and_receiver) -> None:
         sender_repo, receiver_repo = sender_and_receiver
         _write_draft(
             sender_repo, "qualified-path-topic",
@@ -322,7 +322,7 @@ class TestCitationLintQualifiesInsteadOfHolding:
         result = _memo_send({"dry_run": False, "topic": "qualified-path-topic"}, repo_root=sender_repo)
         assert result["exit_code"] == 0, result
 
-    def test_self_send_bare_path_delivers_first_call(self, tmp_path, monkeypatch):
+    def test_self_send_bare_path_delivers_first_call(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         (sender_repo / "cross-repo" / "inbox").mkdir(parents=True)
         (sender_repo / "cross-repo" / "inbox" / ".gitkeep").write_text("", encoding="utf-8")
@@ -336,7 +336,7 @@ class TestCitationLintQualifiesInsteadOfHolding:
         result = _memo_send({"dry_run": False, "topic": "self-send-topic"}, repo_root=sender_repo)
         assert result["exit_code"] == 0, result
 
-    def test_c2_holds_while_c3_qualifies_silently_in_the_background(self, sender_and_receiver, caplog):
+    def test_c2_holds_while_c3_qualifies_silently_in_the_background(self, sender_and_receiver, caplog: pytest.LogCaptureFixture) -> None:
         # C2 (duplicate reply) still holds and refuses; C3 (citation lint) no
         # longer holds — it qualifies the body and logs a notice, so the
         # SAME first call that C2 refuses already carries the fixed body

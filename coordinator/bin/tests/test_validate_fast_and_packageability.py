@@ -70,6 +70,7 @@ from unittest import mock
 from coordinator_core.win_portability import no_console_creationflags
 
 import pytest
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -85,7 +86,7 @@ _REPO = ""
 
 
 @pytest.fixture(autouse=True)
-def _hermetic_mutex_and_repo(tmp_path, monkeypatch):
+def _hermetic_mutex_and_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Mutex lock and suite-run records live under tmp_path; repo root is a tmp_path dir."""
     home = tmp_path / "settings-home"
     repo = tmp_path / "repo"

@@ -11,13 +11,15 @@ import subprocess
 import time
 
 from coordinator_core.warm import server
+from pathlib import Path
+import pytest
 
 
 def _ctx():
     return server._ServerContext.__new__(server._ServerContext)
 
 
-def _track(ctx, op, root, age, guard=False):
+def _track(ctx, op, root, age, guard: bool = False):
     fut = concurrent.futures.Future()
     ctx._track_pool_task(fut, op, f"key-{op}", guard=guard, repo_root=root)
     row = ctx._pool_tasks[fut]
@@ -36,28 +38,28 @@ def _probe(monkeypatch, ms_by_root):
     return calls
 
 
-def test_slow_drive_holder_is_io_wait(monkeypatch):
+def test_slow_drive_holder_is_io_wait(monkeypatch: pytest.MonkeyPatch) -> None:
     ctx = _ctx()
     _track(ctx, "a", "root-c", server.STALL_DUMP_SECS + 5)
     _probe(monkeypatch, {"root-c": server._SLOW_DRIVE_PROBE_MS + 1})
     assert ctx._classify_stalled_holders() == ([], ["a"])
 
 
-def test_healthy_drive_holder_is_hung(monkeypatch):
+def test_healthy_drive_holder_is_hung(monkeypatch: pytest.MonkeyPatch) -> None:
     ctx = _ctx()
     _track(ctx, "a", "root-c", server.STALL_DUMP_SECS + 5)
     _probe(monkeypatch, {"root-c": 1.0})
     assert ctx._classify_stalled_holders() == (["a"], [])
 
 
-def test_slow_drive_holder_past_ceiling_is_hung(monkeypatch):
+def test_slow_drive_holder_past_ceiling_is_hung(monkeypatch: pytest.MonkeyPatch) -> None:
     ctx = _ctx()
     _track(ctx, "a", "root-c", server._IO_WAIT_MAX_SECS + 1)
     _probe(monkeypatch, {"root-c": 5000.0})
     assert ctx._classify_stalled_holders() == (["a"], [])
 
 
-def test_unknown_root_or_unknown_probe_is_hung(monkeypatch):
+def test_unknown_root_or_unknown_probe_is_hung(monkeypatch: pytest.MonkeyPatch) -> None:
     ctx = _ctx()
     _track(ctx, "norepo", None, server.STALL_DUMP_SECS + 5)
     _track(ctx, "noprobe", "root-d", server.STALL_DUMP_SECS + 5)
@@ -66,7 +68,7 @@ def test_unknown_root_or_unknown_probe_is_hung(monkeypatch):
     assert sorted(hung) == ["noprobe", "norepo"] and io_wait == []
 
 
-def test_same_set_as_stalled_holders_guard_and_young_excluded(monkeypatch):
+def test_same_set_as_stalled_holders_guard_and_young_excluded(monkeypatch: pytest.MonkeyPatch) -> None:
     ctx = _ctx()
     _track(ctx, "old", "root-c", server.STALL_DUMP_SECS + 5)
     _track(ctx, "young", "root-c", 0.0)
@@ -76,7 +78,7 @@ def test_same_set_as_stalled_holders_guard_and_young_excluded(monkeypatch):
     assert sorted(hung + io_wait) == sorted(ctx._stalled_holders()) == ["old"]
 
 
-def test_four_holders_on_one_drive_probe_once_and_spawn_nothing(monkeypatch):
+def test_four_holders_on_one_drive_probe_once_and_spawn_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     ctx = _ctx()
     for i in range(4):
         _track(ctx, f"op{i}", "root-c", server.STALL_DUMP_SECS + 5)
@@ -88,12 +90,12 @@ def test_four_holders_on_one_drive_probe_once_and_spawn_nothing(monkeypatch):
     assert calls == ["root-c"] and spawned == []
 
 
-def test_real_probe_on_a_tmp_dir_is_healthy(tmp_path):
+def test_real_probe_on_a_tmp_dir_is_healthy(tmp_path: Path) -> None:
     ms = server._holder_drive_probe_ms(tmp_path)
     assert ms is not None and ms < server._SLOW_DRIVE_PROBE_MS
 
 
-def test_real_probe_cost_on_a_healthy_drive_stays_inside_the_brightline(tmp_path):
+def test_real_probe_cost_on_a_healthy_drive_stays_inside_the_brightline(tmp_path: Path) -> None:
     server._holder_drive_probe_ms(tmp_path)
     t0 = time.perf_counter()
     for _ in range(5):
@@ -101,7 +103,7 @@ def test_real_probe_cost_on_a_healthy_drive_stays_inside_the_brightline(tmp_path
     assert (time.perf_counter() - t0) / 5 < 0.05
 
 
-def test_drive_verdict_stall_reads_as_infinitely_slow(monkeypatch):
+def test_drive_verdict_stall_reads_as_infinitely_slow(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "_drive_verdict", lambda root: {"case": "drive_stall"})
     assert server._holder_drive_probe_ms("root-x") == float("inf")
     monkeypatch.setattr(server, "_drive_verdict", lambda root: {"case": "enospc"})

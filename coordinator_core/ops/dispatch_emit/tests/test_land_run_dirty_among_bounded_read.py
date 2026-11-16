@@ -20,6 +20,11 @@ import pytest
 from coordinator_core.git import commit
 from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.win_portability import no_console_creationflags
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from os import stat_result
+    from subprocess import Popen
 
 pytestmark = [pytest.mark.spawns_process]
 
@@ -31,7 +36,7 @@ def _git(args, cwd: Path) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], root)
@@ -48,7 +53,7 @@ def _fake_stat(monkeypatch, target: Path, *, mode=None, size=None) -> None:
     real = os.stat
     want = os.path.normcase(str(target))
 
-    def stat(path, *a, **kw):
+    def stat(path, *a, **kw) -> stat_result:
         st = real(path, *a, **kw)
         if os.path.normcase(str(path)) != want:
             return st
@@ -62,7 +67,7 @@ def _fake_stat(monkeypatch, target: Path, *, mode=None, size=None) -> None:
     monkeypatch.setattr(os, "stat", stat)
 
 
-def test_non_regular_stat_is_filtered_without_reading_bytes(repo, monkeypatch):
+def test_non_regular_stat_is_filtered_without_reading_bytes(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "dev.txt").write_bytes(b"would-be-read\n")
     _fake_stat(monkeypatch, repo / "dev.txt", mode=stat_mod.S_IFCHR | 0o600)
     token = commit.bind_byte_counter()
@@ -76,7 +81,7 @@ def test_non_regular_stat_is_filtered_without_reading_bytes(repo, monkeypatch):
     assert land_run._hashed_blob(repo, "dev.txt") is land_run._FILTERED
 
 
-def test_size_mismatching_bytes_are_filtered(repo, monkeypatch):
+def test_size_mismatching_bytes_are_filtered(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "grow.txt").write_bytes(b"abc\n")
     _fake_stat(monkeypatch, repo / "grow.txt", size=2)
     assert commit.checkin_blob_sha(repo, "grow.txt") is None
@@ -85,7 +90,7 @@ def test_size_mismatching_bytes_are_filtered(repo, monkeypatch):
 
 
 @pytest.mark.skipif(not hasattr(os, "mkfifo"), reason="needs a POSIX named pipe")
-def test_fifo_without_writer_returns_promptly(repo):
+def test_fifo_without_writer_returns_promptly(repo) -> None:
     os.mkfifo(repo / "pipe.txt")
     t0 = time.monotonic()
     changed, _i, _h = land_run._dirty_among(repo, ["pipe.txt"])
@@ -93,7 +98,7 @@ def test_fifo_without_writer_returns_promptly(repo):
     assert "pipe.txt" in changed
 
 
-def test_regular_file_keeps_checkin_form_hash(repo):
+def test_regular_file_keeps_checkin_form_hash(repo) -> None:
     (repo / "plain.txt").write_bytes(b"hello\n")
     import hashlib
 
@@ -101,7 +106,7 @@ def test_regular_file_keeps_checkin_form_hash(repo):
     assert commit.checkin_blob_sha(repo, "base.txt") == _git(["rev-parse", "HEAD:base.txt"], repo).strip()
 
 
-def test_200_path_scan_spawns_nothing_and_stays_under_200ms(repo, monkeypatch):
+def test_200_path_scan_spawns_nothing_and_stays_under_200ms(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     paths = []
     for i in range(200):
         rel = f"d/f{i}.txt"
@@ -111,7 +116,7 @@ def test_200_path_scan_spawns_nothing_and_stays_under_200ms(repo, monkeypatch):
     spawns: list = []
     real_popen = subprocess.Popen
 
-    def counting_popen(*a, **kw):
+    def counting_popen(*a, **kw) -> Popen[str]:
         spawns.append(a)
         return real_popen(*a, **kw)
 

@@ -102,6 +102,35 @@ def test_unmeasured_after_failed_fetch_is_error_not_zero_counts():
     assert "engine_origin" not in entry and "could not measure" in entry["engine_origin_error"]
 
 
+def test_import_resolves_nothing_and_leaves_sys_path_unchanged(monkeypatch):
+    import sys
+
+    calls = []
+    real_home = Path.home
+
+    def spy_home():
+        calls.append("home")
+        return real_home()
+
+    monkeypatch.setattr(Path, "home", spy_home)
+    before = list(sys.path)
+    spec = importlib.util.spec_from_file_location(
+        "copy_currency_refresh_inert", Path(__file__).resolve().parents[1] / "copy-currency-refresh.py"
+    )
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    assert sys.path == before
+    assert calls == []
+    assert mod._SCRIPTS_DIR is None
+
+
+def test_bootstrap_resolves_scripts_dir_once_via_resolve_scripts_dir(monkeypatch, tmp_path):
+    monkeypatch.setattr(ccr, "_SCRIPTS_DIR", None)
+    monkeypatch.setattr(ccr, "resolve_scripts_dir", lambda: tmp_path)
+    ccr._bootstrap()
+    assert ccr._SCRIPTS_DIR == tmp_path
+
+
 def test_import_origin_still_recorded():
     entry = ccr._engine_entry(FakePo([]), _ctx(), _lag, 0.0, lambda: {"package_dir": "p"}, lambda r: _result())
     assert entry["import_origin"] == {"package_dir": "p"}

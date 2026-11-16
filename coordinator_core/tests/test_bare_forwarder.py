@@ -23,9 +23,10 @@ import os
 import pytest
 
 from coordinator_core import bare_forwarder
+from pathlib import Path
 
 
-def test_falls_back_to_legacy_when_settings_home_absent(tmp_path, monkeypatch):
+def test_falls_back_to_legacy_when_settings_home_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
 
@@ -55,7 +56,7 @@ def test_falls_back_to_legacy_when_settings_home_absent(tmp_path, monkeypatch):
     assert captured["args"] == [str(legacy), "--help"]
 
 
-def test_falls_back_to_legacy_via_userprofile_when_home_absent(tmp_path, monkeypatch):
+def test_falls_back_to_legacy_via_userprofile_when_home_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Native-Windows condition (home-resolution-lint bare_home_or_chain fix,
     2026-07-29): CLAUDE_HOME/HOME both absent. `forward()`'s legacy candidate
     now resolves via `_settings_home.home_dir()` instead of a hand-rolled
@@ -103,7 +104,7 @@ def test_falls_back_to_legacy_via_userprofile_when_home_absent(tmp_path, monkeyp
     assert captured["path"] == str(legacy)
 
 
-def test_resolves_settings_home_first_even_when_legacy_present(tmp_path, monkeypatch):
+def test_resolves_settings_home_first_even_when_legacy_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     settings_home_dir = tmp_path / "settings-home"
     settings_home_bin = settings_home_dir / "bin" / "widget"
     settings_home_bin.parent.mkdir(parents=True)
@@ -141,7 +142,7 @@ def test_resolves_settings_home_first_even_when_legacy_present(tmp_path, monkeyp
     assert captured["args"] == [str(settings_home_bin), "get", "repos.foo"]
 
 
-def test_exits_127_when_neither_rung_executable(tmp_path, monkeypatch, capsys):
+def test_exits_127_when_neither_rung_executable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
     monkeypatch.setattr(bare_forwarder, "is_executable", lambda path: False)

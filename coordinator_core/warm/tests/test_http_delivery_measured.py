@@ -47,6 +47,7 @@ import pytest
 
 from coordinator_core.warm import cookie, skew, supervisor
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.skipif(
@@ -91,7 +92,7 @@ def _median(values):
 
 
 @pytest.fixture
-def credentialed_listener(tmp_path):
+def credentialed_listener(tmp_path: Path):
     skew.write_engine_stamp(tmp_path, "sha-test")
     cookie.ensure(tmp_path)
     ctx = supervisor._ServerContext(
@@ -111,7 +112,7 @@ def credentialed_listener(tmp_path):
 
 def test_curl_reaches_the_credentialed_listener_using_only_the_config(
     credentialed_listener,
-):
+) -> None:
     """THE DELIVERY PROPERTY, ASSERTED BEFORE ANY TIMING. The credential must
     arrive from the config file alone -- no header on the command line, no
     interpreter reading the cookie first. If this fails, the numbers below
@@ -140,7 +141,7 @@ def test_curl_reaches_the_credentialed_listener_using_only_the_config(
 
 def test_an_uncredentialed_curl_is_refused_by_the_same_listener(
     credentialed_listener,
-):
+) -> None:
     port, _root = credentialed_listener
     proc = subprocess.run(
         [
@@ -162,8 +163,8 @@ def test_an_uncredentialed_curl_is_refused_by_the_same_listener(
 
 
 def test_the_delivery_costs_one_spawn_and_stays_under_the_brightline(
-    credentialed_listener, capsys
-):
+    credentialed_listener, capsys: pytest.CaptureFixture[str]
+) -> None:
     """AC7's number, against a brightline rather than a peer leg.
 
     ONE SPAWN: curl, once. The bare-interpreter figure is still sampled and
@@ -232,8 +233,8 @@ def test_the_delivery_costs_one_spawn_and_stays_under_the_brightline(
 
 
 def test_a_curl_leg_slower_than_the_interpreter_leg_does_not_fail_the_case(
-    credentialed_listener, capsys, monkeypatch
-):
+    credentialed_listener, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+) -> None:
     def fake_elapsed(argv, **_kwargs):
         return 169.88 if argv[0] == "curl" else 83.81
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from coordinator_core.ops.emit import deliverable_status
+from pathlib import Path
 
 
 def _continued_handoff(deliverable_id: str, path: str, continued_into: str | None) -> dict:
@@ -234,7 +235,7 @@ class TestBridgedIdsOptionalParameter:
 
 class TestStampThreadsBridgedIds:
 
-    def test_stamp_populates_caller_supplied_bridged_ids(self, tmp_path) -> None:
+    def test_stamp_populates_caller_supplied_bridged_ids(self, tmp_path: Path) -> None:
         handoffs = [
             _continued_handoff(
                 "dlv-stamp-threaded-777777",
@@ -249,7 +250,7 @@ class TestStampThreadsBridgedIds:
         assert handoffs[0]["deliverable_status"] == "in-progress"
         assert "dlv-stamp-threaded-777777" in bridged_ids
 
-    def test_stamp_omitting_bridged_ids_still_works(self, tmp_path) -> None:
+    def test_stamp_omitting_bridged_ids_still_works(self, tmp_path: Path) -> None:
         handoffs = [
             _continued_handoff(
                 "dlv-stamp-no-collector-888888",

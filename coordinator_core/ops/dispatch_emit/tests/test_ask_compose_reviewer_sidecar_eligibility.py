@@ -9,6 +9,7 @@ from coordinator_core.ops.dispatch_emit.ask_compose import AskComposeRefused
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose import _compose
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_agent_routing import _named_fragment
 from coordinator_core.subagent_sandbox.engine import POLICY_ENV_VAR
+from pathlib import Path
 
 ROUTED = "game-dev:staff-game-dev"
 PLAN_DEFAULT = "coordinator:staff-eng"
@@ -16,7 +17,7 @@ CODE_DEFAULT = "coordinator:code-reviewer"
 
 
 @pytest.fixture(autouse=True)
-def _isolate(monkeypatch):
+def _isolate(monkeypatch: pytest.MonkeyPatch):
     from coordinator_core.ops.dispatch_emit import ue_route_source
 
     monkeypatch.setattr(agent_route, "_model_of", lambda agent_type, defs, override=None: "opus")
@@ -26,12 +27,12 @@ def _isolate(monkeypatch):
     ue_route_source.clear_caches()
 
 
-def _ue_repo(tmp_path):
+def _ue_repo(tmp_path) -> str:
     (tmp_path / "coordinator.local.md").write_text("---\nproject_type: unreal-engine\n---\n", encoding="utf-8")
     return str(tmp_path)
 
 
-def _policy(tmp_path, monkeypatch, listed):
+def _policy(tmp_path, monkeypatch, listed) -> str:
     path = tmp_path / "policy" / "subagent-sandbox-policy.yaml"
     path.parent.mkdir()
     path.write_text("report_sidecar:\n" + "".join(f"  - {a}\n" for a in listed), encoding="utf-8")
@@ -39,7 +40,7 @@ def _policy(tmp_path, monkeypatch, listed):
     return str(path)
 
 
-def test_ineligible_routed_reviewer_falls_back_and_is_named(tmp_path, monkeypatch):
+def test_ineligible_routed_reviewer_falls_back_and_is_named(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _ue_repo(tmp_path)
     policy = _policy(tmp_path, monkeypatch, [PLAN_DEFAULT, CODE_DEFAULT])
     notes: list[str] = []
@@ -52,7 +53,7 @@ def test_ineligible_routed_reviewer_falls_back_and_is_named(tmp_path, monkeypatc
     assert "Reviewer routing fallback" in script and f"fell back to {PLAN_DEFAULT}" in script
 
 
-def test_ineligible_reviewer_and_default_refuses_naming_agent_and_policy(tmp_path, monkeypatch):
+def test_ineligible_reviewer_and_default_refuses_naming_agent_and_policy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _ue_repo(tmp_path)
     policy = _policy(tmp_path, monkeypatch, ["coordinator:executor"])
     with pytest.raises(AskComposeRefused) as exc:
@@ -60,7 +61,7 @@ def test_ineligible_reviewer_and_default_refuses_naming_agent_and_policy(tmp_pat
     assert ROUTED in str(exc.value) and policy in str(exc.value)
 
 
-def test_eligible_routed_reviewer_composes_unchanged(tmp_path, monkeypatch):
+def test_eligible_routed_reviewer_composes_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _ue_repo(tmp_path)
     _policy(tmp_path, monkeypatch, [ROUTED, PLAN_DEFAULT, CODE_DEFAULT])
     notes: list[str] = []
@@ -70,7 +71,7 @@ def test_eligible_routed_reviewer_composes_unchanged(tmp_path, monkeypatch):
     assert "Reviewer routing fallback" not in _compose(repo_root=root, **_named_fragment())
 
 
-def test_absent_policy_file_stays_fail_open(tmp_path, monkeypatch):
+def test_absent_policy_file_stays_fail_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _ue_repo(tmp_path)
     monkeypatch.setenv(POLICY_ENV_VAR, str(tmp_path / "nope.yaml"))
     notes: list[str] = []
@@ -78,7 +79,7 @@ def test_absent_policy_file_stays_fail_open(tmp_path, monkeypatch):
     assert types["code_review"] == ROUTED and routed and notes == []
 
 
-def test_non_sid_ineligible_routed_reviewer_gets_same_treatment(tmp_path, monkeypatch):
+def test_non_sid_ineligible_routed_reviewer_gets_same_treatment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "coordinator.local.md").write_text("---\nreview_routing: coordinator:apm\n---\n", encoding="utf-8")
     _policy(tmp_path, monkeypatch, [PLAN_DEFAULT, CODE_DEFAULT])
     notes: list[str] = []

@@ -7,11 +7,12 @@ import sys
 import pytest
 
 from coordinator_core.benchmarks import prefire_launch_lookup_cost as cost
+from pathlib import Path
 
 _SCRIPT = os.path.join(os.path.dirname(cost.__file__), "prefire_launch_lookup_cost.py")
 
 
-def test_lookup_lists_no_tempdir_entries(tmp_path):
+def test_lookup_lists_no_tempdir_entries(tmp_path: Path) -> None:
     proc = subprocess.run(
         [sys.executable, _SCRIPT, "--unrelated", "2000", "--repeats", "3", "--workdir", str(tmp_path)],
         capture_output=True, text=True, timeout=120,
@@ -23,6 +24,6 @@ def test_lookup_lists_no_tempdir_entries(tmp_path):
     assert int(match.group(1)) == 0
 
 
-def test_probe_finds_the_launch_records(tmp_path):
+def test_probe_finds_the_launch_records(tmp_path: Path) -> None:
     result = cost.measure(20, str(tmp_path), repeats=1)
     assert result["engine_ids"] == cost.LAUNCH_RECORDS

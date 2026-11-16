@@ -7,11 +7,13 @@ import pytest
 
 from coordinator_core.install import runtime_ignore_apply as mod
 from coordinator_core.install.runtime_ignore_apply import HEADER, apply_runtime_ignore
+from coordinator_core.workday_start.runtime_ignore_set import ENGINE_RUNTIME_IGNORE_RULES
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 TEMPLATE = "# managed\n.coordinator-local/\nstate/watch.json\nscratch/\n"
 WARP = "state/warp/*/prompts/"
+RECEIPTS = ENGINE_RUNTIME_IGNORE_RULES
 
 
 def _git(root: Path, *args: str) -> str:
@@ -51,7 +53,7 @@ def _tracked(root: Path) -> set[str]:
 def test_appends_only_missing_and_second_run_is_noop(repo, template):
     _write(repo, ".gitignore", "scratch/\n")
     res = apply_runtime_ignore(repo, template)
-    assert res.appended == (".coordinator-local/", "state/watch.json", WARP)
+    assert res.appended == (".coordinator-local/", "state/watch.json", WARP, *RECEIPTS)
     text = (repo / ".gitignore").read_text(encoding="utf-8")
     assert text.count(HEADER) == 1
     assert text.count("scratch/") == 1
@@ -99,7 +101,7 @@ UNREAL_TEMPLATE = TEMPLATE + "Intermediate/\n"
 def test_non_unreal_repo_gets_no_unreal_rule_and_gitignore_unchanged(repo, tmp_path):
     tmpl = tmp_path / "tmpl-unreal"
     tmpl.write_text(UNREAL_TEMPLATE, encoding="utf-8")
-    original = f".coordinator-local/\nstate/watch.json\nscratch/\n{WARP}\n"
+    original = f".coordinator-local/\nstate/watch.json\nscratch/\n{WARP}\n" + "\n".join(RECEIPTS) + "\n"
     (repo / ".gitignore").write_bytes(original.encode())
     res = apply_runtime_ignore(repo, tmpl)
     assert res.appended == ()
@@ -131,15 +133,15 @@ def test_template_none_still_applies_engine_rule(repo, monkeypatch):
     _git(repo, "add", "-f", "-A")
     res = apply_runtime_ignore(repo)
     assert res.skipped == "template not found"
-    assert res.appended == (WARP,)
+    assert res.appended == (WARP, *RECEIPTS)
     assert res.untracked == ("state/warp/run1/prompts/a.md",)
     assert WARP in (repo / ".gitignore").read_text(encoding="utf-8")
 
 
-def test_warp_prompts_ignored_and_untracked_keeping_other_run_artifacts(repo, template):
+def test_warp_prompts_ignored_and_untracked_keeping_other_state(repo, template):
     _write(repo, "state/warp/run1/prompts/reword.md")
     _write(repo, "state/warp/run1/prompts/sub/b.md")
-    _write(repo, "state/warp/run1/halted.json", "{}\n")
+    _write(repo, "state/plans/p.md")
     _git(repo, "add", "-f", "-A")
     res = apply_runtime_ignore(repo, template)
     assert WARP in res.appended
@@ -147,7 +149,7 @@ def test_warp_prompts_ignored_and_untracked_keeping_other_run_artifacts(repo, te
         "state/warp/run1/prompts/reword.md",
         "state/warp/run1/prompts/sub/b.md",
     }
-    assert "state/warp/run1/halted.json" in _tracked(repo)
+    assert "state/plans/p.md" in _tracked(repo)
     assert (repo / "state/warp/run1/prompts/reword.md").exists()
     assert apply_runtime_ignore(repo, template).appended == ()
 
@@ -157,6 +159,47 @@ def test_warp_rule_not_duplicated_when_template_carries_it(repo, tmp_path):
     tmpl.write_text(TEMPLATE + WARP + "\n", encoding="utf-8")
     apply_runtime_ignore(repo, tmpl)
     assert (repo / ".gitignore").read_text(encoding="utf-8").count(WARP) == 1
+
+
+RECEIPT_PATHS = (
+    "state/test-runs/r1/receipt.json",
+    "state/warp/clean-clone-proofs/p1.json",
+    "state/queue-grind/q1/evidence/e.md",
+)
+
+
+def test_receipt_rules_appended_and_ignore_each_receipt(repo, template):
+    res = apply_runtime_ignore(repo, template)
+    for rule in RECEIPTS:
+        assert rule in res.appended
+    for rel in RECEIPT_PATHS:
+        assert _git(repo, "check-ignore", rel).strip() == rel
+
+
+def test_receipts_untracked_but_sibling_state_stays(repo, template):
+    for rel in (*RECEIPT_PATHS, "state/queue-grind/q1/summary.md"):
+        _write(repo, rel)
+    _git(repo, "add", "-f", "-A")
+    res = apply_runtime_ignore(repo, template)
+    assert set(res.untracked) == set(RECEIPT_PATHS)
+    assert "state/queue-grind/q1/summary.md" in _tracked(repo)
+
+
+def test_warp_run_state_ignored_and_untracked_other_state_kept(repo, template):
+    for rel in ("state/warp/run1/halted.json", "state/warp/run1/receipt.json", "state/plans/p.md"):
+        _write(repo, rel)
+    _git(repo, "add", "-f", "-A")
+    res = apply_runtime_ignore(repo, template)
+    assert {"state/warp/run1/halted.json", "state/warp/run1/receipt.json"} <= set(res.untracked)
+    assert "state/plans/p.md" in _tracked(repo)
+    assert _git(repo, "check-ignore", "state/warp/run2/halted.json").strip() == "state/warp/run2/halted.json"
+
+
+def test_receipt_rule_not_duplicated_when_template_carries_it(repo, tmp_path):
+    tmpl = tmp_path / "tmpl-receipts"
+    tmpl.write_text(TEMPLATE + "state/test-runs/\n", encoding="utf-8")
+    apply_runtime_ignore(repo, tmpl)
+    assert (repo / ".gitignore").read_text(encoding="utf-8").count("state/test-runs/") == 1
 
 
 def test_one_git_spawn_when_tracked(repo, template, monkeypatch):

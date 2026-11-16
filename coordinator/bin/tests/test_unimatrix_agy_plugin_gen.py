@@ -40,12 +40,12 @@ HOOKS = {
 }
 
 
-def _agent(name, model):
+def _agent(name, model) -> str:
     return f"---\r\nname: {name}\r\nmodel: {model}\r\ntools: [Read]\r\n---\r\nbody ${{CLAUDE_PLUGIN_ROOT}}/x\r\n"
 
 
 @pytest.fixture
-def plugin(tmp_path):
+def plugin(tmp_path: Path):
     root = tmp_path / "src" / "plugin"
     for n, m in (("a-opus", "opus"), ("a-sonnet", "sonnet"), ("a-haiku", "haiku"), ("a-odd", "gpt-9")):
         (root / "agents").mkdir(parents=True, exist_ok=True)
@@ -77,7 +77,7 @@ def _unmapped(report):
     return {(u["kind"], u["source"]) for u in report["unmapped"]}
 
 
-def test_tiers_translated_and_unknown_model_dropped_and_reported(plugin, tmp_path):
+def test_tiers_translated_and_unknown_model_dropped_and_reported(plugin, tmp_path: Path) -> None:
     out = tmp_path / "out"
     report = gen.generate(plugin, out, "agy")
     t = _tree(out)
@@ -89,7 +89,7 @@ def test_tiers_translated_and_unknown_model_dropped_and_reported(plugin, tmp_pat
     assert b"${PLUGIN_ROOT}/x" in t["agents/a-opus.md"] and b"CLAUDE_PLUGIN_ROOT" not in t["agents/a-opus.md"]
 
 
-def test_null_tier_drops_model_and_reports(plugin, tmp_path, monkeypatch):
+def test_null_tier_drops_model_and_reports(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     table = gen.load_table()
     table["agy"]["tiers"]["haiku"] = None
     monkeypatch.setattr(gen, "load_table", lambda: table)
@@ -98,7 +98,7 @@ def test_null_tier_drops_model_and_reports(plugin, tmp_path, monkeypatch):
     assert ("agent-model", "agents/a-haiku.md") in _unmapped(report)
 
 
-def test_hooks_at_root_schema_matchers_and_plugin_root(plugin, tmp_path):
+def test_hooks_at_root_schema_matchers_and_plugin_root(plugin, tmp_path: Path) -> None:
     out = tmp_path / "out"
     report = gen.generate(plugin, out, "agy")
     assert not (out / "hooks" / "hooks.json").exists()
@@ -113,7 +113,7 @@ def test_hooks_at_root_schema_matchers_and_plugin_root(plugin, tmp_path):
     assert {("matcher", "hooks/hooks.json"), ("hook-event", "hooks/hooks.json")} <= _unmapped(report)
 
 
-def test_hooks_json_is_keyed_by_hook_name_with_count_matching_source_events(plugin, tmp_path):
+def test_hooks_json_is_keyed_by_hook_name_with_count_matching_source_events(plugin, tmp_path: Path) -> None:
     hooks = json.loads((plugin / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     hooks["hooks"]["SessionStart"] = [{"hooks": [{"type": "command", "command": "s"}]}]
     hooks["hooks"]["PostToolUse"] = [{"matcher": "Bash", "hooks": [{"type": "command", "command": "p"}]}]
@@ -130,7 +130,7 @@ def test_hooks_json_is_keyed_by_hook_name_with_count_matching_source_events(plug
         assert event in supported and isinstance(body[event], list) and body[event], name
 
 
-def test_claude_only_tool_names_are_rewritten_in_matchers(plugin, tmp_path):
+def test_claude_only_tool_names_are_rewritten_in_matchers(plugin, tmp_path: Path) -> None:
     claude_only = {"Read", "Grep", "Glob", "MultiEdit", "NotebookEdit"}
     hooks = {"hooks": {"PreToolUse": [
         {"matcher": "Read|Grep|Glob", "hooks": [{"type": "command", "command": "a"}]},
@@ -151,7 +151,7 @@ def test_claude_only_tool_names_are_rewritten_in_matchers(plugin, tmp_path):
     assert not any(u["kind"] == "matcher" and any(f"'{t}'" in u["reason"] for t in claude_only) for u in report["unmapped"])
 
 
-def test_non_tool_events_are_flat_command_handlers_and_tool_events_stay_grouped(plugin, tmp_path):
+def test_non_tool_events_are_flat_command_handlers_and_tool_events_stay_grouped(plugin, tmp_path: Path) -> None:
     hooks = json.loads((plugin / "hooks" / "hooks.json").read_text(encoding="utf-8"))
     hooks["hooks"]["SessionStart"] = [{"matcher": "startup", "hooks": [
         {"type": "command", "command": "s1"}, {"type": "command", "command": "s2"}]}]
@@ -171,7 +171,7 @@ def test_non_tool_events_are_flat_command_handlers_and_tool_events_stay_grouped(
     assert any(u["kind"] == "matcher" and "SessionStart" in u["reason"] for u in report["unmapped"])
 
 
-def test_manifest_written_at_root_from_source_manifest(plugin, tmp_path):
+def test_manifest_written_at_root_from_source_manifest(plugin, tmp_path: Path) -> None:
     (plugin / ".claude-plugin").mkdir()
     (plugin / ".claude-plugin" / "plugin.json").write_text(json.dumps(
         {"name": "coord", "version": "4.6.17", "description": "D", "logo": "assets/logo.png", "author": "x"}), encoding="utf-8")
@@ -185,7 +185,7 @@ def test_manifest_written_at_root_from_source_manifest(plugin, tmp_path):
     assert ("surface", ".claude-plugin") not in _unmapped(report)
 
 
-def test_manifest_without_source_has_no_logo_and_reports(plugin, tmp_path):
+def test_manifest_without_source_has_no_logo_and_reports(plugin, tmp_path: Path) -> None:
     out = tmp_path / "out"
     report = gen.generate(plugin, out, "agy")
     manifest = json.loads((out / "plugin.json").read_text(encoding="utf-8"))
@@ -193,7 +193,7 @@ def test_manifest_without_source_has_no_logo_and_reports(plugin, tmp_path):
     assert ("manifest", ".claude-plugin/plugin.json") in _unmapped(report)
 
 
-def test_agy_plugin_validate_accepts_generated_tree(plugin, tmp_path):
+def test_agy_plugin_validate_accepts_generated_tree(plugin, tmp_path: Path) -> None:
     agy = shutil.which("agy")
     if not agy:
         pytest.skip("agy not on PATH (validate proves the tree loads, not that a hook fires: "
@@ -224,7 +224,7 @@ def test_agy_plugin_validate_accepts_generated_tree(plugin, tmp_path):
     assert re.search(r'"findings"\s*:\s*\[\s*\]', proc.stdout), proc.stdout
 
 
-def test_commands_become_skills_and_skill_folder_matches_frontmatter_name(plugin, tmp_path):
+def test_commands_become_skills_and_skill_folder_matches_frontmatter_name(plugin, tmp_path: Path) -> None:
     out = tmp_path / "out"
     report = gen.generate(plugin, out, "agy")
     t = _tree(out)
@@ -236,7 +236,7 @@ def test_commands_become_skills_and_skill_folder_matches_frontmatter_name(plugin
     assert ("skill", "skills/flat.md") in _unmapped(report)
 
 
-def test_rules_written_at_table_path_and_unknown_surface_reported(plugin, tmp_path):
+def test_rules_written_at_table_path_and_unknown_surface_reported(plugin, tmp_path: Path) -> None:
     out = tmp_path / "out"
     report = gen.generate(plugin, out, "agy")
     rules = gen.load_table()["agy"]["rules_path"]
@@ -245,7 +245,7 @@ def test_rules_written_at_table_path_and_unknown_surface_reported(plugin, tmp_pa
     assert json.loads((out / "UNMAPPED.json").read_text(encoding="utf-8"))["unmapped"] == report["unmapped"]
 
 
-def test_oversize_skill_is_reported_and_not_written(plugin, tmp_path):
+def test_oversize_skill_is_reported_and_not_written(plugin, tmp_path: Path) -> None:
     (plugin / "skills" / "big").mkdir()
     (plugin / "skills" / "big" / "SKILL.md").write_bytes(b"---\nname: big\n---\n" + b"x" * 24001)
     report = gen.generate(plugin, tmp_path / "out", "agy")
@@ -254,7 +254,7 @@ def test_oversize_skill_is_reported_and_not_written(plugin, tmp_path):
 
 
 @pytest.mark.parametrize("host", ["codex", "grok"])
-def test_empty_host_maps_report_every_item_unmappable(plugin, tmp_path, host):
+def test_empty_host_maps_report_every_item_unmappable(plugin, tmp_path: Path, host) -> None:
     out = tmp_path / "out"
     report = gen.generate(plugin, out, host)
     assert report["written"] == ["UNMAPPED.json"]
@@ -264,12 +264,12 @@ def test_empty_host_maps_report_every_item_unmappable(plugin, tmp_path, host):
         f"agents/{n}.md" for n in ("a-opus", "a-sonnet", "a-haiku", "a-odd")}
 
 
-def test_unknown_host_raises(plugin, tmp_path):
+def test_unknown_host_raises(plugin, tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         gen.generate(plugin, tmp_path / "out", "nope")
 
 
-def test_every_text_file_is_lf_and_order_is_sorted(plugin, tmp_path):
+def test_every_text_file_is_lf_and_order_is_sorted(plugin, tmp_path: Path) -> None:
     (plugin / "hooks" / "scripts" / "blob.bin").write_bytes(b"\x00\r\n\xff")
     out = tmp_path / "out"
     report = gen.generate(plugin, out, "agy")
@@ -287,7 +287,7 @@ def test_every_text_file_is_lf_and_order_is_sorted(plugin, tmp_path):
     assert raw == json.dumps(json.loads(raw), indent=2, sort_keys=True) + "\n"
 
 
-def test_symlinks_in_source_are_not_followed_or_created(plugin, tmp_path):
+def test_symlinks_in_source_are_not_followed_or_created(plugin, tmp_path: Path) -> None:
     try:
         (plugin / "agents" / "link.md").symlink_to(plugin / "agents" / "a-opus.md")
     except (OSError, NotImplementedError):
@@ -298,7 +298,7 @@ def test_symlinks_in_source_are_not_followed_or_created(plugin, tmp_path):
     assert "agents/link.md" not in _tree(out)
 
 
-def test_out_dir_policy_clears_prior_run_and_refuses_foreign_dirs(plugin, tmp_path):
+def test_out_dir_policy_clears_prior_run_and_refuses_foreign_dirs(plugin, tmp_path: Path) -> None:
     out = tmp_path / "out"
     gen.generate(plugin, out, "agy")
     (out / "stale.txt").write_text("old", encoding="utf-8")
@@ -314,7 +314,7 @@ def test_out_dir_policy_clears_prior_run_and_refuses_foreign_dirs(plugin, tmp_pa
         gen.generate(plugin, plugin / "inside", "agy")
 
 
-def test_generator_imports_only_stdlib_and_no_subprocess():
+def test_generator_imports_only_stdlib_and_no_subprocess() -> None:
     tree = ast.parse((_BIN / "unimatrix-plugin-gen.py").read_text(encoding="utf-8"))
     mods = set()
     for node in ast.walk(tree):
@@ -326,7 +326,7 @@ def test_generator_imports_only_stdlib_and_no_subprocess():
     assert "subprocess" not in mods
 
 
-def test_twice_byte_identical(plugin, tmp_path):
+def test_twice_byte_identical(plugin, tmp_path: Path) -> None:
     a, b = tmp_path / "a", tmp_path / "b"
     for d in (a, b):
         buf = io.StringIO()
@@ -342,7 +342,7 @@ def test_twice_byte_identical(plugin, tmp_path):
     assert any(k.startswith("skills/") and k.endswith("/SKILL.md") for k in ta)
 
 
-def test_out_without_install_seeds_nothing_and_generator_failure_is_partial(plugin, tmp_path):
+def test_out_without_install_seeds_nothing_and_generator_failure_is_partial(plugin, tmp_path: Path) -> None:
     hooks = tmp_path / "agy-hooks.json"
     buf = io.StringIO()
     assert ui.main(["--hosts", "agy", "--out", str(tmp_path / "t"), "--plugin-root", str(plugin)],
@@ -362,7 +362,7 @@ _DOOR = '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/h
 _PASS2 = "; rc=$?; [ $rc -eq 2 ] && rc=0; exit $rc"
 
 
-def _door_hooks(plugin, commands):
+def _door_hooks(plugin, commands) -> None:
     groups = [{"matcher": "Bash", "hooks": [{"type": "command", "shell": "bash", "timeout": 5, "command": c}]}
               for c in commands]
     (plugin / "hooks" / "hooks.json").write_text(json.dumps({"hooks": {"PreToolUse": groups}}), encoding="utf-8")
@@ -374,7 +374,7 @@ def _load_shim(tree):
     return ns["main"], ns
 
 
-def test_agy_door_hook_commands_are_shell_neutral_and_keep_semantics(plugin, tmp_path):
+def test_agy_door_hook_commands_are_shell_neutral_and_keep_semantics(plugin, tmp_path: Path) -> None:
     cmds = [
         f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.preuse_bash_dispatch",
         f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} --advisory hooks.x_check 2>/dev/null{_PASS2}",
@@ -402,14 +402,14 @@ def test_agy_door_hook_commands_are_shell_neutral_and_keep_semantics(plugin, tmp
     assert "hook-command" not in {u["kind"] for u in report["unmapped"]}
 
 
-def test_unrecognised_bash_only_hook_command_is_reported_not_silently_shipped(plugin, tmp_path):
+def test_unrecognised_bash_only_hook_command_is_reported_not_silently_shipped(plugin, tmp_path: Path) -> None:
     _door_hooks(plugin, ["FOO=1 some-tool 2>/dev/null"])
     report = gen.generate(plugin, tmp_path / "out", "agy")
     assert "hook-command" in {u["kind"] for u in report["unmapped"]}
     assert not (tmp_path / "out" / "hooks" / "agy-hook-run.py").exists()
 
 
-def test_shim_sets_stdin_mode_resolves_settings_home_and_maps_exit(plugin, tmp_path, monkeypatch):
+def test_shim_sets_stdin_mode_resolves_settings_home_and_maps_exit(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a"])
     out = tmp_path / "out"
     gen.generate(plugin, out, "agy")
@@ -417,7 +417,7 @@ def test_shim_sets_stdin_mode_resolves_settings_home_and_maps_exit(plugin, tmp_p
     calls = []
 
     class _R:
-        def __init__(self, rc):
+        def __init__(self, rc) -> None:
             self.returncode = rc
 
     rcs = iter([2, 2, 0, 5])
@@ -450,7 +450,7 @@ def test_shim_sets_stdin_mode_resolves_settings_home_and_maps_exit(plugin, tmp_p
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="door stand-in is a POSIX script; the mocked leg covers Windows")
-def test_shim_runs_end_to_end_with_a_real_child_process(plugin, tmp_path):
+def test_shim_runs_end_to_end_with_a_real_child_process(plugin, tmp_path: Path) -> None:
     _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a"])
     out = tmp_path / "out"
     gen.generate(plugin, out, "agy")
@@ -473,7 +473,7 @@ def _stub_home(tmp_path, body):
     return home
 
 
-def test_shim_hands_its_stdin_to_a_real_door_child_on_every_os(plugin, tmp_path, monkeypatch, capfd):
+def test_shim_hands_its_stdin_to_a_real_door_child_on_every_os(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]) -> None:
     _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a"])
     out = tmp_path / "out"
     gen.generate(plugin, out, "agy")
@@ -497,7 +497,7 @@ def test_shim_hands_its_stdin_to_a_real_door_child_on_every_os(plugin, tmp_path,
     assert cap.out == "hook:EVT" and cap.err == ""
 
 
-def test_shim_passes_a_full_agy_pretooluse_payload_whole_on_every_os(plugin, tmp_path, monkeypatch, capfd):
+def test_shim_passes_a_full_agy_pretooluse_payload_whole_on_every_os(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]) -> None:
     # A real agy PreToolUse event is large and nested; a payload past the 64KiB pipe buffer is where an
     # inherited or half-forwarded stdin deadlocks, so this one is ~256KiB and must arrive byte-identical.
     _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a"])
@@ -523,7 +523,7 @@ def test_shim_passes_a_full_agy_pretooluse_payload_whole_on_every_os(plugin, tmp
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="door stand-in is a POSIX script")
-def test_shim_pipes_payload_to_door_and_returns_promptly_with_open_stdin(plugin, tmp_path):
+def test_shim_pipes_payload_to_door_and_returns_promptly_with_open_stdin(plugin, tmp_path: Path) -> None:
     _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a"])
     out = tmp_path / "out"
     gen.generate(plugin, out, "agy")
@@ -535,7 +535,7 @@ def test_shim_pipes_payload_to_door_and_returns_promptly_with_open_stdin(plugin,
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="door stand-in is a POSIX script")
-def test_door_stderr_surfaces_without_quiet_and_not_with_it(plugin, tmp_path):
+def test_door_stderr_surfaces_without_quiet_and_not_with_it(plugin, tmp_path: Path) -> None:
     _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a"])
     out = tmp_path / "out"
     gen.generate(plugin, out, "agy")
@@ -576,7 +576,7 @@ def _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, door_py, argv=("hooks.a"
     return rc, cap.out, cap.err, json.loads(seen.read_text(encoding="utf-8")) if seen.exists() else None
 
 
-def test_shim_translates_real_agy_coordinator_invoke_payload_and_prints_explicit_allow(plugin, tmp_path, monkeypatch, capfd):
+def test_shim_translates_real_agy_coordinator_invoke_payload_and_prints_explicit_allow(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]) -> None:
     rc, out, err, door_in = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "sys.stdout.write('{}')\n")
     assert rc == 0 and json.loads(out) == {"decision": "allow"} and err == ""
     assert door_in == {
@@ -585,7 +585,7 @@ def test_shim_translates_real_agy_coordinator_invoke_payload_and_prints_explicit
     }
 
 
-def test_shim_agy_cwd_falls_back_to_top_level_cwd_and_other_tools_keep_their_args(plugin, tmp_path, monkeypatch, capfd):
+def test_shim_agy_cwd_falls_back_to_top_level_cwd_and_other_tools_keep_their_args(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]) -> None:
     ev = {"cwd": "/w", "toolCall": {"name": "view_file", "args": {"AbsolutePath": "/w/a"}}}
     rc, out, _, door_in = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "", event=ev)
     assert rc == 0 and json.loads(out) == {"decision": "allow"}
@@ -600,12 +600,12 @@ def test_shim_agy_cwd_falls_back_to_top_level_cwd_and_other_tools_keep_their_arg
     ("sys.stderr.write('stderr why'); sys.exit(2)", "stderr why"),
     ("sys.exit(2)", "denied by coordinator guard"),
 ])
-def test_shim_agy_deny_always_carries_a_non_empty_reason(plugin, tmp_path, monkeypatch, capfd, door_py, reason):
+def test_shim_agy_deny_always_carries_a_non_empty_reason(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], door_py, reason) -> None:
     rc, out, _, _ = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "import json\n" + door_py + "\n")
     assert rc == 0 and json.loads(out) == {"decision": "deny", "reason": reason}
 
 
-def test_shim_agy_ask_passes_through_and_door_failure_keeps_its_exit(plugin, tmp_path, monkeypatch, capfd):
+def test_shim_agy_ask_passes_through_and_door_failure_keeps_its_exit(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]) -> None:
     rc, out, _, _ = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd,
                                   "sys.stdout.write('{\"decision\": \"ask\", \"reason\": \"sure?\"}')\n")
     assert rc == 0 and json.loads(out) == {"decision": "ask", "reason": "sure?"}
@@ -613,7 +613,7 @@ def test_shim_agy_ask_passes_through_and_door_failure_keeps_its_exit(plugin, tmp
     assert rc == 1 and out == "" and err == "boom"
 
 
-def test_shim_agy_pass_2_allows_a_door_exit_2_and_quiet_drops_stderr(plugin, tmp_path, monkeypatch, capfd):
+def test_shim_agy_pass_2_allows_a_door_exit_2_and_quiet_drops_stderr(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]) -> None:
     rc, out, err, _ = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "sys.stderr.write('x'); sys.exit(2)\n",
                                     argv=("--quiet", "--pass-2", "hooks.a"))
     assert rc == 0 and json.loads(out) == {"decision": "allow"} and err == ""
@@ -623,7 +623,7 @@ def test_shim_agy_pass_2_allows_a_door_exit_2_and_quiet_drops_stderr(plugin, tmp
     {"hookEventName": "PostToolUse", "toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}}},
     {"toolCall": {"name": "run_command", "args": {"CommandLine": "ls"}}, "toolResult": {"exitCode": 0}},
 ])
-def test_shim_posttooluse_reply_carries_no_decision_key(plugin, tmp_path, monkeypatch, capfd, event):
+def test_shim_posttooluse_reply_carries_no_decision_key(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], event) -> None:
     rc, out, _, door_in = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "sys.stdout.write('{}')\n", event=event)
     assert rc == 0 and "decision" not in json.loads(out)
     assert door_in["hook_event_name"] == "PostToolUse"
@@ -631,18 +631,18 @@ def test_shim_posttooluse_reply_carries_no_decision_key(plugin, tmp_path, monkey
     assert rc == 0 and json.loads(out) == {}
 
 
-def test_shim_pretooluse_reply_still_carries_a_decision(plugin, tmp_path, monkeypatch, capfd):
+def test_shim_pretooluse_reply_still_carries_a_decision(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]) -> None:
     rc, out, _, door_in = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "sys.stdout.write('{}')\n")
     assert json.loads(out) == {"decision": "allow"} and door_in["hook_event_name"] == "PreToolUse"
 
 
-def test_shim_keeps_a_claude_shaped_payload_and_its_empty_verdict_unchanged(plugin, tmp_path, monkeypatch, capfd):
+def test_shim_keeps_a_claude_shaped_payload_and_its_empty_verdict_unchanged(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]) -> None:
     ev = {"tool_name": "Bash", "tool_input": {"command": "coordinator-invoke x"}, "cwd": "work\\repo"}
     rc, out, _, door_in = _agy_shim_run(plugin, tmp_path, monkeypatch, capfd, "sys.stdout.write('{}')\n", event=ev)
     assert rc == 0 and out == "{}" and door_in == ev
 
 
-def test_default_agy_pretooluse_routes_through_host_guard_and_keeps_bash_dispatch(plugin, tmp_path):
+def test_default_agy_pretooluse_routes_through_host_guard_and_keeps_bash_dispatch(plugin, tmp_path: Path) -> None:
     _door_hooks(plugin, [f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.preuse_bash_dispatch",
                          f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.guard_turn_intent 2>/dev/null{_PASS2}"])
     out = tmp_path / "out"
@@ -660,7 +660,7 @@ def _guard_stub(tmp_path, answer):
     return stub
 
 
-def _guarded(plugin, tmp_path, monkeypatch, capfd, answer, engine=True):
+def _guarded(plugin, tmp_path, monkeypatch, capfd, answer, engine: bool = True):
     """Run the generated shim in --host-guard mode against a stub guard; door stub answers an explicit allow."""
     root = tmp_path / "engine"
     (root / "coordinator_core").mkdir(parents=True, exist_ok=True)
@@ -674,25 +674,25 @@ def _guarded(plugin, tmp_path, monkeypatch, capfd, answer, engine=True):
                          argv=("--host-guard", str(stub), "--host", "agy", "hooks.a"))
 
 
-def test_host_guard_deny_and_reasoned_ask_are_the_answer_and_skip_the_door(plugin, tmp_path, monkeypatch, capfd):
+def test_host_guard_deny_and_reasoned_ask_are_the_answer_and_skip_the_door(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]) -> None:
     for answer in ({"decision": "deny", "reason": "no"}, {"decision": "ask", "reason": "nag"}):
         rc, out, _, door_in = _guarded(plugin, tmp_path, monkeypatch, capfd, answer)
         assert rc == 0 and json.loads(out) == answer and door_in is None
 
 
 @pytest.mark.parametrize("answer", [{"decision": "ask"}, {"decision": "allow"}])
-def test_host_guard_neutral_answer_falls_through_to_the_door(plugin, tmp_path, monkeypatch, capfd, answer):
+def test_host_guard_neutral_answer_falls_through_to_the_door(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str], answer) -> None:
     rc, out, _, door_in = _guarded(plugin, tmp_path, monkeypatch, capfd, answer)
     assert rc == 0 and json.loads(out) == {"decision": "allow"} and door_in["tool_name"] == "Bash"
 
 
-def test_host_guard_without_an_engine_root_falls_through_to_the_door(plugin, tmp_path, monkeypatch, capfd):
+def test_host_guard_without_an_engine_root_falls_through_to_the_door(plugin, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]) -> None:
     rc, out, _, door_in = _guarded(plugin, tmp_path, monkeypatch, capfd, {"decision": "deny", "reason": "no"}, engine=False)
     assert rc == 0 and json.loads(out) == {"decision": "allow"} and door_in["tool_name"] == "Bash"
 
 
 @pytest.mark.parametrize("os_name,exe", [("nt", "python"), ("posix", "python3")])
-def test_agy_launcher_interpreter_is_the_one_the_os_resolves(monkeypatch, os_name, exe, tmp_path):
+def test_agy_launcher_interpreter_is_the_one_the_os_resolves(monkeypatch: pytest.MonkeyPatch, os_name, exe, tmp_path: Path) -> None:
     monkeypatch.setattr(gen.os, "name", os_name)
     cmd = gen._agy_hook_command(f"COORDINATOR_DOOR_STDIN_MODE=hook {_DOOR} hooks.a", tmp_path)
     assert cmd.startswith(exe + " ")
@@ -714,7 +714,7 @@ def _run_generated(command, payload):
                           capture_output=True, text=True, timeout=60)
 
 
-def test_args_form_hook_entries_run_their_script_not_the_stdin_payload(plugin, tmp_path):
+def test_args_form_hook_entries_run_their_script_not_the_stdin_payload(plugin, tmp_path: Path) -> None:
     (plugin / "hooks" / "scripts" / "pre.py").write_text(
         "import json, sys\nd = json.load(sys.stdin)\nprint('RAN', sys.argv[1:], d['a'], d['b'], d['c'])\n",
         encoding="utf-8")
@@ -733,14 +733,14 @@ def test_args_form_hook_entries_run_their_script_not_the_stdin_payload(plugin, t
         assert "RAN ['boot arg'] True False None" in r.stdout
 
 
-def test_a_command_with_args_that_is_not_a_bare_interpreter_is_left_alone():
+def test_a_command_with_args_that_is_not_a_bare_interpreter_is_left_alone() -> None:
     assert gen._fold_args("python3 -u", ["x.py"]) is None
     assert gen._fold_args("python3", None) is None
     assert gen._fold_args("python3", []) is None
 
 
 @pytest.mark.parametrize("argv", [["-c", 'print("a b")', "C:\\dir\\", 'q"x', ""]])
-def test_windows_cmdline_quoting_round_trips_through_the_runtime_parser(argv):
+def test_windows_cmdline_quoting_round_trips_through_the_runtime_parser(argv) -> None:
     cmd = gen._win_cmdline(["python", *argv])
     if gen.os.name != "nt":
         pytest.skip("CommandLineToArgvW is Windows-only")

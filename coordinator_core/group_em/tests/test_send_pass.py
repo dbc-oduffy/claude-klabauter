@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 import os
@@ -14,12 +15,12 @@ from coordinator_core.session.machinery_paths import share_dir as _share_dir
 
 def _verdict(
     session_id,
-    reason="turn-ended",
-    candidate=True,
-    state="paused",
-    source="reader",
+    reason: str = "turn-ended",
+    candidate: bool = True,
+    state: str = "paused",
+    source: str = "reader",
     cwd=None,
-    contradicted=False,
+    contradicted: bool = False,
 ):
     return {
         "session_id": session_id,
@@ -32,7 +33,7 @@ def _verdict(
     }
 
 
-def test_emitting_entry_arms_cooldown_same_call(tmp_path):
+def test_emitting_entry_arms_cooldown_same_call(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     roster = [_verdict("peer-one")]
 
@@ -49,7 +50,7 @@ def test_emitting_entry_arms_cooldown_same_call(tmp_path):
     assert reasons["peer-one"] == "cooldown"
 
 
-def test_digest_carries_as_of_struck_from_the_same_now(tmp_path):
+def test_digest_carries_as_of_struck_from_the_same_now(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     roster = [_verdict("peer-as-of")]
 
@@ -58,7 +59,7 @@ def test_digest_carries_as_of_struck_from_the_same_now(tmp_path):
     assert digest["as_of"] == "2023-11-14T22:13:20Z"
 
 
-def test_unrecorded_on_failed_cooldown_write(tmp_path, monkeypatch):
+def test_unrecorded_on_failed_cooldown_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = str(tmp_path)
     roster = [_verdict("peer-two")]
 
@@ -70,7 +71,7 @@ def test_unrecorded_on_failed_cooldown_write(tmp_path, monkeypatch):
     assert digest["unrecorded"] == ["peer-two"]
 
 
-def test_away_excluded_by_name_ahead_of_bookkeeping(tmp_path):
+def test_away_excluded_by_name_ahead_of_bookkeeping(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     peer_dir = _share_dir(repo_root, "peer-away")
     os.makedirs(peer_dir, exist_ok=True)
@@ -87,7 +88,7 @@ def test_away_excluded_by_name_ahead_of_bookkeeping(tmp_path):
     assert digest["suppressed"][0]["session_id"] == "peer-away"
 
 
-def test_none_obligations_ranks_without_excluding(tmp_path):
+def test_none_obligations_ranks_without_excluding(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     ledger_dir = _share_dir(repo_root, "peer-with-ledger")
     os.makedirs(ledger_dir, exist_ok=True)
@@ -104,7 +105,7 @@ def test_none_obligations_ranks_without_excluding(tmp_path):
     assert no_ledger_entry["undischarged_obligations"] is None
 
 
-def test_max_entries_ceiling_reports_truncated(tmp_path):
+def test_max_entries_ceiling_reports_truncated(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     roster = [_verdict(f"peer-{i}") for i in range(7)]
 
@@ -121,7 +122,7 @@ def test_max_entries_ceiling_reports_truncated(tmp_path):
     assert len(rate_ceiling_ids) == 4
 
 
-def test_record_offers_batches_under_holder_key_with_nudger_attribution(tmp_path):
+def test_record_offers_batches_under_holder_key_with_nudger_attribution(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
 
     unrecorded = send_pass.record_offers(
@@ -144,7 +145,7 @@ def test_record_offers_batches_under_holder_key_with_nudger_attribution(tmp_path
     assert send_pass.read_send_log(repo_root, "nudger-one") == []
 
 
-def test_record_offers_offer_key_derives_from_holder_not_nudger(tmp_path):
+def test_record_offers_offer_key_derives_from_holder_not_nudger(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
 
     send_pass.record_offers(repo_root, "holder-two", ["peer-x"], "nudger-two", now=1000.0)
@@ -154,7 +155,7 @@ def test_record_offers_offer_key_derives_from_holder_not_nudger(tmp_path):
     assert log[0]["offer_key"] != send_pass.offer_key("nudger-two", "peer-x")
 
 
-def test_record_offers_refuses_malformed_id_in_any_position(tmp_path):
+def test_record_offers_refuses_malformed_id_in_any_position(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
 
     unrecorded = send_pass.record_offers(
@@ -177,12 +178,12 @@ def test_record_offers_refuses_malformed_id_in_any_position(tmp_path):
     assert log[0]["offer_key"] == send_pass.offer_key("holder-four", "peer-good")
 
 
-def test_record_offers_single_write_call(tmp_path, monkeypatch):
+def test_record_offers_single_write_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = str(tmp_path)
     calls: list[bytes] = []
     real_append_claimed_line = send_pass.append_claimed_line
 
-    def _counting_append(path, encoded):
+    def _counting_append(path, encoded) -> Path:
         calls.append(encoded)
         return real_append_claimed_line(path, encoded)
 
@@ -196,7 +197,7 @@ def test_record_offers_single_write_call(tmp_path, monkeypatch):
     assert calls[0].decode("utf-8").count("offer_key") == 3
 
 
-def test_record_offer_row_without_attribution_still_suppresses(tmp_path):
+def test_record_offer_row_without_attribution_still_suppresses(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     roster = [_verdict("peer-plain")]
 
@@ -212,7 +213,7 @@ def test_record_offer_row_without_attribution_still_suppresses(tmp_path):
     assert reasons["peer-plain"] == "cooldown"
 
 
-def test_log_key_is_open_excludes_attributed_rows(tmp_path):
+def test_log_key_is_open_excludes_attributed_rows(tmp_path: Path) -> None:
     key = send_pass.offer_key("holder-six", "peer-six")
     attributed_log = [
         {"outcome": "offer", "offer_key": key, "offered_at": 1000.0, "offered_by": "nudger-six"},
@@ -225,7 +226,7 @@ def test_log_key_is_open_excludes_attributed_rows(tmp_path):
     assert send_pass._log_key_is_open(plain_log, key) is True
 
 
-def test_log_key_is_open_ac8b_end_to_end_via_build_send_digest(tmp_path):
+def test_log_key_is_open_ac8b_end_to_end_via_build_send_digest(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     send_pass.record_offers(
         repo_root, "holder-seven", ["peer-seven"], "nudger-seven", now=1000.0
@@ -236,7 +237,7 @@ def test_log_key_is_open_ac8b_end_to_end_via_build_send_digest(tmp_path):
     assert "peer-seven" not in digest["open_obligations"]
 
 
-def test_no_per_peer_public_entry_point():
+def test_no_per_peer_public_entry_point() -> None:
     public_names = [n for n in dir(send_pass) if not n.startswith("_")]
     forbidden_substrings = ("send_one", "send_peer", "offer_peer", "nudge_peer")
     for name in public_names:
@@ -245,12 +246,12 @@ def test_no_per_peer_public_entry_point():
 
 
 class _FakeRow:
-    def __init__(self, session_id, name):
+    def __init__(self, session_id, name) -> None:
         self.session_id = session_id
         self.name = name
 
 
-def test_resolve_addressee_returns_live_name(tmp_path):
+def test_resolve_addressee_returns_live_name(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     rows = [_FakeRow("peer-sid", "claude-klabauter-e0")]
 
@@ -261,7 +262,7 @@ def test_resolve_addressee_returns_live_name(tmp_path):
     assert name == "claude-klabauter-e0"
 
 
-def test_resolve_addressee_refuses_on_repoint(tmp_path):
+def test_resolve_addressee_refuses_on_repoint(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     # The live roster now shows a DIFFERENT session id under that peer's old
     # slot -- the queried (now-stale) session id is absent entirely.
@@ -274,7 +275,7 @@ def test_resolve_addressee_refuses_on_repoint(tmp_path):
     assert name is None
 
 
-def test_resolve_addressee_refuses_when_session_absent(tmp_path):
+def test_resolve_addressee_refuses_when_session_absent(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
 
     name = send_pass.resolve_addressee(
@@ -284,7 +285,7 @@ def test_resolve_addressee_refuses_when_session_absent(tmp_path):
     assert name is None
 
 
-def test_resolve_addressee_refuses_when_row_has_no_name(tmp_path):
+def test_resolve_addressee_refuses_when_row_has_no_name(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     rows = [_FakeRow("peer-sid", None)]
 
@@ -295,7 +296,7 @@ def test_resolve_addressee_refuses_when_row_has_no_name(tmp_path):
     assert name is None
 
 
-def test_resolve_addressee_refuses_on_unsafe_session_id(tmp_path):
+def test_resolve_addressee_refuses_on_unsafe_session_id(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
 
     name = send_pass.resolve_addressee(
@@ -305,7 +306,7 @@ def test_resolve_addressee_refuses_on_unsafe_session_id(tmp_path):
     assert name is None
 
 
-def test_resolve_addressee_refuses_on_roster_read_failure(tmp_path):
+def test_resolve_addressee_refuses_on_roster_read_failure(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
 
     def _raise(repo_root):
@@ -316,7 +317,7 @@ def test_resolve_addressee_refuses_on_roster_read_failure(tmp_path):
     assert name is None
 
 
-def test_resolve_addressee_never_caches_across_calls(tmp_path):
+def test_resolve_addressee_never_caches_across_calls(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     calls = {"rows": [_FakeRow("peer-sid", "claude-klabauter-e0")]}
 
@@ -331,7 +332,7 @@ def test_resolve_addressee_never_caches_across_calls(tmp_path):
     assert second is None
 
 
-def test_offer_row_carries_outcome_discriminator(tmp_path):
+def test_offer_row_carries_outcome_discriminator(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     roster = [_verdict("peer-disc")]
 
@@ -342,7 +343,7 @@ def test_offer_row_carries_outcome_discriminator(tmp_path):
     assert log[0]["outcome"] == "offer"
 
 
-def test_decline_writes_declination_row_same_log(tmp_path):
+def test_decline_writes_declination_row_same_log(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
 
     ok = send_pass.decline(
@@ -359,7 +360,7 @@ def test_decline_writes_declination_row_same_log(tmp_path):
     assert row["offer_key"] == send_pass.offer_key("caller-six", "peer-six")
 
 
-def test_decline_refuses_bad_gate(tmp_path):
+def test_decline_refuses_bad_gate(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
 
     ok = send_pass.decline(repo_root, "caller-seven", "peer-seven", "gate3", "reason", now=1.0)
@@ -368,7 +369,7 @@ def test_decline_refuses_bad_gate(tmp_path):
     assert send_pass.read_send_log(repo_root, "caller-seven") == []
 
 
-def test_decline_refuses_empty_reason(tmp_path):
+def test_decline_refuses_empty_reason(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
 
     ok = send_pass.decline(repo_root, "caller-eight", "peer-eight", "gate2", "  ", now=1.0)
@@ -376,7 +377,7 @@ def test_decline_refuses_empty_reason(tmp_path):
     assert ok is False
 
 
-def test_decline_never_arms_cooldown(tmp_path):
+def test_decline_never_arms_cooldown(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     roster = [_verdict("peer-nine")]
 
@@ -386,7 +387,7 @@ def test_decline_never_arms_cooldown(tmp_path):
     assert [e["session_id"] for e in digest["entries"]] == ["peer-nine"]
 
 
-def test_entries_carry_dwell_seconds_key(tmp_path):
+def test_entries_carry_dwell_seconds_key(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     roster = [_verdict("peer-dwell")]
 
@@ -395,7 +396,7 @@ def test_entries_carry_dwell_seconds_key(tmp_path):
     assert digest["entries"][0]["dwell_seconds"] is None
 
 
-def test_dwell_seconds_derived_from_receiver_state_stamp(tmp_path, monkeypatch):
+def test_dwell_seconds_derived_from_receiver_state_stamp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = str(tmp_path)
     monkeypatch.setattr(
         send_pass.read_pass,
@@ -417,7 +418,7 @@ def test_dwell_seconds_derived_from_receiver_state_stamp(tmp_path, monkeypatch):
     assert digest["entries"][0]["dwell_seconds"] == 500.0
 
 
-def test_dwell_seconds_uses_peer_cwd_not_repo_root(tmp_path, monkeypatch):
+def test_dwell_seconds_uses_peer_cwd_not_repo_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = str(tmp_path)
     peer_cwd = str(tmp_path / "nested-worktree")
 
@@ -443,7 +444,7 @@ def test_dwell_seconds_uses_peer_cwd_not_repo_root(tmp_path, monkeypatch):
     assert repo_root not in seen_cwds
 
 
-def test_dwell_seconds_prefers_more_recent_of_stamp_and_transcript(tmp_path, monkeypatch):
+def test_dwell_seconds_prefers_more_recent_of_stamp_and_transcript(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from datetime import datetime, timezone
 
     repo_root = str(tmp_path)
@@ -479,7 +480,7 @@ def test_dwell_seconds_prefers_more_recent_of_stamp_and_transcript(tmp_path, mon
     assert digest2["entries"][0]["dwell_seconds"] == 500.0
 
 
-def test_open_obligations_includes_freshly_emitted_entries(tmp_path):
+def test_open_obligations_includes_freshly_emitted_entries(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     roster = [_verdict("peer-open")]
 
@@ -488,7 +489,7 @@ def test_open_obligations_includes_freshly_emitted_entries(tmp_path):
     assert digest["open_obligations"] == ["peer-open"]
 
 
-def test_open_obligations_survive_cooldown_suppression_until_declined(tmp_path):
+def test_open_obligations_survive_cooldown_suppression_until_declined(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     roster = [_verdict("peer-ten")]
 
@@ -511,14 +512,14 @@ def test_open_obligations_survive_cooldown_suppression_until_declined(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_empty_roster_declines_the_obligation_to_look(tmp_path):
+def test_empty_roster_declines_the_obligation_to_look(tmp_path: Path) -> None:
     digest = send_pass.build_send_digest(str(tmp_path), [], "caller-empty", now=1000.0)
     assert digest["declined"], "an empty-roster tick closed with no declination"
     assert any(row["reason"].startswith("roster-empty") for row in digest["declined"])
     assert all(row.get("obligation") and row.get("reason") for row in digest["declined"])
 
 
-def test_every_suppressed_peer_gets_its_own_declination(tmp_path):
+def test_every_suppressed_peer_gets_its_own_declination(tmp_path: Path) -> None:
     roster = [_verdict("peer-away", reason="away", state="away")]
     digest = send_pass.build_send_digest(str(tmp_path), roster, "caller-sup", now=1000.0)
     assert not digest["entries"]
@@ -528,7 +529,7 @@ def test_every_suppressed_peer_gets_its_own_declination(tmp_path):
     assert by_peer["peer-away"]["obligation"] == "message peer peer-away"
 
 
-def test_full_roster_none_eligible_still_declines_the_tick(tmp_path):
+def test_full_roster_none_eligible_still_declines_the_tick(tmp_path: Path) -> None:
     roster = [_verdict("peer-a", reason="away", state="away"),
               _verdict("peer-b", reason="away", state="away")]
     digest = send_pass.build_send_digest(str(tmp_path), roster, "caller-none", now=1000.0)
@@ -538,14 +539,14 @@ def test_full_roster_none_eligible_still_declines_the_tick(tmp_path):
     assert "2" in tick_rows[0]["reason"], "the declination should name how many were considered"
 
 
-def test_a_tick_that_sends_declines_only_what_it_held_back(tmp_path):
+def test_a_tick_that_sends_declines_only_what_it_held_back(tmp_path: Path) -> None:
     roster = [_verdict("peer-live")]
     digest = send_pass.build_send_digest(str(tmp_path), roster, "caller-live", now=1000.0)
     assert digest["entries"]
     assert [row for row in digest["declined"] if row["session_id"] is None] == []
 
 
-def test_cooldown_declination_carries_dwell_so_the_hold_is_weighable(tmp_path, monkeypatch):
+def test_cooldown_declination_carries_dwell_so_the_hold_is_weighable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = str(tmp_path)
     roster = [_verdict("peer-held")]
     send_pass.build_send_digest(repo_root, roster, "caller-dw", now=1000.0)
@@ -558,7 +559,7 @@ def test_cooldown_declination_carries_dwell_so_the_hold_is_weighable(tmp_path, m
     assert held[0]["dwell_seconds"] == 624.0
 
 
-def test_non_cooldown_declinations_do_not_pay_for_dwell(tmp_path, monkeypatch):
+def test_non_cooldown_declinations_do_not_pay_for_dwell(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         send_pass, "_dwell_seconds", lambda *a: pytest.fail("dwell computed for a non-cooldown hold")
     )
@@ -569,7 +570,7 @@ def test_non_cooldown_declinations_do_not_pay_for_dwell(tmp_path, monkeypatch):
     assert all("dwell_seconds" in r for r in digest["suppressed"])
 
 
-def test_an_untrusted_transcript_clock_never_wins_the_dwell_max(tmp_path, monkeypatch):
+def test_an_untrusted_transcript_clock_never_wins_the_dwell_max(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from datetime import datetime, timezone
 
     repo_root = str(tmp_path)
@@ -594,8 +595,8 @@ def test_an_untrusted_transcript_clock_never_wins_the_dwell_max(tmp_path, monkey
 
 
 def test_an_untrusted_transcript_clock_is_still_used_when_it_is_the_only_source(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo_root = str(tmp_path)
     monkeypatch.setattr(send_pass.read_pass, "read_receiver_state", lambda sid, root: None)
     monkeypatch.setattr(
@@ -609,7 +610,7 @@ def test_an_untrusted_transcript_clock_is_still_used_when_it_is_the_only_source(
     assert digest["entries"][0]["dwell_seconds"] == 500.0
 
 
-def test_the_share_paths_are_one_owners_answer_not_three_copies(tmp_path):
+def test_the_share_paths_are_one_owners_answer_not_three_copies(tmp_path: Path) -> None:
     import json
 
     from coordinator_core.group_em import obligations
@@ -636,7 +637,7 @@ def test_the_share_paths_are_one_owners_answer_not_three_copies(tmp_path):
     ]
 
 
-def test_an_unsafe_session_id_is_still_refused_a_path(tmp_path):
+def test_an_unsafe_session_id_is_still_refused_a_path(tmp_path: Path) -> None:
     from coordinator_core.session import machinery_paths
 
     assert machinery_paths.safe_session_id("sess-1") is True
@@ -644,7 +645,7 @@ def test_an_unsafe_session_id_is_still_refused_a_path(tmp_path):
         assert machinery_paths.safe_session_id(bad) is False
 
 
-def test_contradicted_peer_reaches_suppressed_with_gate_named_live_busy(tmp_path):
+def test_contradicted_peer_reaches_suppressed_with_gate_named_live_busy(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     roster = [
         _verdict(
@@ -665,7 +666,7 @@ def test_contradicted_peer_reaches_suppressed_with_gate_named_live_busy(tmp_path
     assert row["reason"] == "live-busy-contradicts-paused"
 
 
-def test_contradicted_peer_reaches_suppressed_with_gate_named_stale_snapshot(tmp_path):
+def test_contradicted_peer_reaches_suppressed_with_gate_named_stale_snapshot(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     roster = [
         _verdict(
@@ -686,7 +687,7 @@ def test_contradicted_peer_reaches_suppressed_with_gate_named_stale_snapshot(tmp
     assert row["reason"] == "stale-snapshot-contradicts-paused"
 
 
-def test_digest_counts_sum_to_population_classified_including_contradicted(tmp_path):
+def test_digest_counts_sum_to_population_classified_including_contradicted(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     roster = [
         _verdict("peer-normal"),
@@ -714,12 +715,12 @@ def test_digest_counts_sum_to_population_classified_including_contradicted(tmp_p
 
 
 class _Row:
-    def __init__(self, session_id, name):
+    def __init__(self, session_id, name) -> None:
         self.session_id = session_id
         self.name = name
 
 
-def test_resolve_addressee_refuses_a_name_two_live_sessions_answer_to(tmp_path):
+def test_resolve_addressee_refuses_a_name_two_live_sessions_answer_to(tmp_path: Path) -> None:
     rows = [_Row("peer-sid", "twin"), _Row("other-sid", "twin")]
     got = send_pass.resolve_addressee(
         str(tmp_path), "peer-sid", build_roster=lambda repo_root=None: rows
@@ -727,7 +728,7 @@ def test_resolve_addressee_refuses_a_name_two_live_sessions_answer_to(tmp_path):
     assert got is None
 
 
-def test_resolve_addressee_returns_the_name_when_it_is_unique(tmp_path):
+def test_resolve_addressee_returns_the_name_when_it_is_unique(tmp_path: Path) -> None:
     rows = [_Row("peer-sid", "alpha"), _Row("other-sid", "beta")]
     got = send_pass.resolve_addressee(
         str(tmp_path), "peer-sid", build_roster=lambda repo_root=None: rows
@@ -735,7 +736,7 @@ def test_resolve_addressee_returns_the_name_when_it_is_unique(tmp_path):
     assert got == "alpha"
 
 
-def test_resolve_addressee_raises_on_the_wrong_build_roster(tmp_path):
+def test_resolve_addressee_raises_on_the_wrong_build_roster(tmp_path: Path) -> None:
     dict_rows = [{"session_id": "peer-sid", "name": "alpha"}]
     import pytest
 
@@ -745,7 +746,7 @@ def test_resolve_addressee_raises_on_the_wrong_build_roster(tmp_path):
         )
 
 
-def _write_snapshot(directory, box_id, sessions, fetched_at=None, ok=True):
+def _write_snapshot(directory, box_id, sessions, fetched_at=None, ok: bool = True) -> None:
     import time
 
     d = directory / "remote-roster"
@@ -770,26 +771,26 @@ def _remote(tmp_path, key, **kw):
     )
 
 
-def test_resolve_addressee_remote_name_held_by_local_session_refused(tmp_path):
+def test_resolve_addressee_remote_name_held_by_local_session_refused(tmp_path: Path) -> None:
     _write_snapshot(tmp_path, "mac1", [{"session_id": "s1", "name": "alpha"}])
     rows = [_Row("local-sid", "alpha")]
     assert _remote(tmp_path, "mac1:s1", build_roster=lambda repo_root=None: rows) is None
 
 
-def test_resolve_addressee_remote_name_held_on_third_box_refused(tmp_path):
+def test_resolve_addressee_remote_name_held_on_third_box_refused(tmp_path: Path) -> None:
     _write_snapshot(tmp_path, "mac1", [{"session_id": "s1", "name": "alpha"}])
     _write_snapshot(tmp_path, "dp2", [{"session_id": "s9", "name": "alpha"}])
     assert _remote(tmp_path, "mac1:s1") is None
 
 
-def test_resolve_addressee_remote_unique_name_resolves_despite_other_boxes(tmp_path):
+def test_resolve_addressee_remote_unique_name_resolves_despite_other_boxes(tmp_path: Path) -> None:
     _write_snapshot(tmp_path, "mac1", [{"session_id": "s1", "name": "alpha"}])
     _write_snapshot(tmp_path, "dp2", [{"session_id": "s9", "name": "beta"}])
     rows = [_Row("local-sid", "gamma")]
     assert _remote(tmp_path, "mac1:s1", build_roster=lambda repo_root=None: rows) == "alpha"
 
 
-def test_resolve_addressee_remote_unreadable_local_roster_refused(tmp_path):
+def test_resolve_addressee_remote_unreadable_local_roster_refused(tmp_path: Path) -> None:
     _write_snapshot(tmp_path, "mac1", [{"session_id": "s1", "name": "alpha"}])
 
     def boom(repo_root=None):
@@ -798,12 +799,12 @@ def test_resolve_addressee_remote_unreadable_local_roster_refused(tmp_path):
     assert _remote(tmp_path, "mac1:s1", build_roster=boom) is None
 
 
-def test_resolve_addressee_remote_key_resolves_to_snapshot_name(tmp_path):
+def test_resolve_addressee_remote_key_resolves_to_snapshot_name(tmp_path: Path) -> None:
     _write_snapshot(tmp_path, "mac1", [{"session_id": "s1", "name": "alpha"}])
     assert _remote(tmp_path, "mac1:s1") == "alpha"
 
 
-def test_resolve_addressee_remote_ambiguous_name_refused(tmp_path):
+def test_resolve_addressee_remote_ambiguous_name_refused(tmp_path: Path) -> None:
     _write_snapshot(
         tmp_path,
         "mac1",
@@ -812,7 +813,7 @@ def test_resolve_addressee_remote_ambiguous_name_refused(tmp_path):
     assert _remote(tmp_path, "mac1:s1") is None
 
 
-def test_resolve_addressee_remote_unknown_box_stale_or_absent_session_refused(tmp_path):
+def test_resolve_addressee_remote_unknown_box_stale_or_absent_session_refused(tmp_path: Path) -> None:
     _write_snapshot(tmp_path, "mac1", [{"session_id": "s1", "name": "alpha"}])
     _write_snapshot(tmp_path, "old", [{"session_id": "s1", "name": "a"}], fetched_at=1.0)
     assert _remote(tmp_path, "nope:s1") is None
@@ -820,7 +821,7 @@ def test_resolve_addressee_remote_unknown_box_stale_or_absent_session_refused(tm
     assert _remote(tmp_path, "mac1:zzz") is None
 
 
-def test_resolve_addressee_local_prefixed_key_and_bare_sid_use_local_roster(tmp_path):
+def test_resolve_addressee_local_prefixed_key_and_bare_sid_use_local_roster(tmp_path: Path) -> None:
     rows = [_FakeRow("peer-sid", "local-name")]
     _write_snapshot(tmp_path, "mac1", [{"session_id": "peer-sid", "name": "remote-name"}])
     roster = lambda repo_root=None: rows
@@ -841,7 +842,7 @@ def test_resolve_addressee_local_prefixed_key_and_bare_sid_use_local_roster(tmp_
 
 
 class _SpyTransport:
-    def __init__(self):
+    def __init__(self) -> None:
         self.calls = []
 
     def send(self, box, to_session, text, from_session=None):
@@ -858,7 +859,7 @@ def _peer(tmp_path, monkeypatch, transport=None):
     spy = _SpyTransport()
     seen = []
 
-    def _select(box, directory=None, runner=None):
+    def _select(box, directory=None, runner=None) -> _SpyTransport:
         seen.append(box["box_id"])
         return spy
 
@@ -866,7 +867,7 @@ def _peer(tmp_path, monkeypatch, transport=None):
     return spy, seen
 
 
-def test_send_to_peer_routes_remote_key_through_seam_with_from_session(tmp_path, monkeypatch):
+def test_send_to_peer_routes_remote_key_through_seam_with_from_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     spy, seen = _peer(tmp_path, monkeypatch)
     res = send_pass.send_to_peer(
         "mac1:s1", "hi", from_session="me", directory=tmp_path, local_id="here"
@@ -876,7 +877,7 @@ def test_send_to_peer_routes_remote_key_through_seam_with_from_session(tmp_path,
     assert spy.calls == [("mac1", "s1", "hi", "me")]
 
 
-def test_send_to_peer_local_bare_and_prefixed_keys_are_not_routed(tmp_path, monkeypatch):
+def test_send_to_peer_local_bare_and_prefixed_keys_are_not_routed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     spy, seen = _peer(tmp_path, monkeypatch)
     for key in ("s1", "here:s1"):
         res = send_pass.send_to_peer(key, "hi", directory=tmp_path, local_id="here")
@@ -884,7 +885,7 @@ def test_send_to_peer_local_bare_and_prefixed_keys_are_not_routed(tmp_path, monk
     assert seen == [] and spy.calls == []
 
 
-def test_send_to_peer_refuses_unknown_box_and_unsafe_session(tmp_path, monkeypatch):
+def test_send_to_peer_refuses_unknown_box_and_unsafe_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     spy, _ = _peer(tmp_path, monkeypatch)
     nobox = send_pass.send_to_peer("nope:s1", "hi", directory=tmp_path, local_id="here")
     assert nobox == {"ok": False, "reason": "unknown_box"}
@@ -893,7 +894,7 @@ def test_send_to_peer_refuses_unknown_box_and_unsafe_session(tmp_path, monkeypat
     assert spy.calls == []
 
 
-def test_send_to_peer_unknown_transport_kind_replies_not_ok_never_raises(tmp_path):
+def test_send_to_peer_unknown_transport_kind_replies_not_ok_never_raises(tmp_path: Path) -> None:
     from coordinator_core.group_em import box_registry
 
     box_registry.register(

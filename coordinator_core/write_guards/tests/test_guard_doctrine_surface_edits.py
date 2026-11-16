@@ -16,12 +16,13 @@ import pytest
 from coordinator_core.session import harness_registry as hr
 from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.write_guards import guard_doctrine_surface_edits as guard
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence]
 
 
 @pytest.fixture(autouse=True)
-def _sentinel_admitted(monkeypatch):
+def _sentinel_admitted(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "sentinel_present", lambda cwd: True)
 
 
@@ -65,7 +66,7 @@ def _make_repo(root) -> None:
     (root / ".git").mkdir(parents=True, exist_ok=True)
 
 
-def _patch_pid_env(monkeypatch, pid, create_time=0.0):
+def _patch_pid_env(monkeypatch, pid, create_time: float = 0.0) -> None:
     monkeypatch.setattr(
         "coordinator_core.session.core._resolve_claude_pid_from_env",
         lambda: ((pid, create_time), "env-hit"),
@@ -89,7 +90,7 @@ def _mismatch_box(tmp_path, monkeypatch, session_id, pid):
     return repo_root
 
 
-def test_advisory_log_records_mismatch_and_decision_is_unchanged(tmp_path, monkeypatch):
+def test_advisory_log_records_mismatch_and_decision_is_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A real repo-identity MISMATCH is recorded AND `check()`'s decision for an
     unprotected file (None) is unchanged by it."""
     repo_root = _mismatch_box(tmp_path, monkeypatch, "sess-mismatch", 9001)
@@ -115,7 +116,7 @@ def test_advisory_log_records_mismatch_and_decision_is_unchanged(tmp_path, monke
     assert "verdict=MISMATCH" in contents
 
 
-def test_advisory_log_mismatch_does_not_change_the_advisory_on_a_protected_file(tmp_path, monkeypatch):
+def test_advisory_log_mismatch_does_not_change_the_advisory_on_a_protected_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = _mismatch_box(tmp_path, monkeypatch, "sess-mismatch-2", 9002)
     protected = repo_root / "CLAUDE.md"
     protected.write_text("doctrine\n", encoding="utf-8")
@@ -133,7 +134,7 @@ def test_advisory_log_mismatch_does_not_change_the_advisory_on_a_protected_file(
     assert "gates.repo_identity" not in context
 
 
-def test_advisory_log_not_written_without_repo_root(monkeypatch):
+def test_advisory_log_not_written_without_repo_root(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(
         "coordinator_core.write_guards.guard_doctrine_surface_edits.compute_repo_identity_gate",
@@ -151,7 +152,7 @@ def test_advisory_log_not_written_without_repo_root(monkeypatch):
     assert calls == []
 
 
-def test_advisory_log_never_creates_a_session_dir(tmp_path, monkeypatch):
+def test_advisory_log_never_creates_a_session_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An advisory log line must never MINT session state: `live_session_ids`
     enumerates every child of the session hub as a session."""
     repo_root = _mismatch_box(tmp_path, monkeypatch, "sess-phantom", 9002)
@@ -182,7 +183,7 @@ _DOE_ONLY_RELATIVES = [
 
 
 @pytest.fixture
-def two_roots(tmp_path, monkeypatch):
+def two_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A DoE root and an unrelated session repo, with the pointer resolved to
     the former and `_git_root()` to the latter. Clears the module's
     per-process content-root memo before and after."""
@@ -213,12 +214,12 @@ def _verdict(target) -> str:
 
 
 @pytest.mark.parametrize("relative", _DOE_ONLY_RELATIVES)
-def test_doe_only_surfaces_are_protected_from_a_foreign_session(two_roots, relative):
+def test_doe_only_surfaces_are_protected_from_a_foreign_session(two_roots, relative) -> None:
     doe, _session_repo = two_roots
     assert _verdict(doe.joinpath(*relative)) == "advisory"
 
 
-def test_unresolvable_doe_pointer_lands_on_the_per_repo_protected_set(two_roots, monkeypatch):
+def test_unresolvable_doe_pointer_lands_on_the_per_repo_protected_set(two_roots, monkeypatch: pytest.MonkeyPatch) -> None:
     """Fail-quiet, not fail-error: an unresolvable pointer drops the DoE-anchored
     entries and leaves the per-repo entries protected."""
     doe, session_repo = two_roots
@@ -233,7 +234,7 @@ def test_unresolvable_doe_pointer_lands_on_the_per_repo_protected_set(two_roots,
 
 
 @pytest.mark.parametrize("name", ["CLAUDE.md", "coordinator.local.md"])
-def test_per_repo_surfaces_still_anchor_on_the_session_repo(two_roots, name):
+def test_per_repo_surfaces_still_anchor_on_the_session_repo(two_roots, name) -> None:
     _doe, session_repo = two_roots
     assert _verdict(session_repo / name) == "advisory"
     entry_roots = {
@@ -244,13 +245,13 @@ def test_per_repo_surfaces_still_anchor_on_the_session_repo(two_roots, name):
     assert entry_roots == {None}
 
 
-def test_content_root_is_resolved_once_per_process(two_roots, monkeypatch):
+def test_content_root_is_resolved_once_per_process(two_roots, monkeypatch: pytest.MonkeyPatch) -> None:
     """The memo keeps a registry read plus two file reads off every Write/Edit."""
     doe, session_repo = two_roots
     guard._content_root_memo.clear()
     calls = []
 
-    def _counted():
+    def _counted() -> str:
         calls.append(1)
         return str(doe)
 
@@ -267,7 +268,7 @@ def test_content_root_is_resolved_once_per_process(two_roots, monkeypatch):
 
 
 @pytest.fixture
-def foreign_third_repo(tmp_path, monkeypatch):
+def foreign_third_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     session_repo = tmp_path / "project-rag"
     third_repo = tmp_path / "example-retrieval-repo-ue-addon"
     _make_repo(session_repo)
@@ -284,12 +285,12 @@ def foreign_third_repo(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("name", ["CLAUDE.md", "coordinator.local.md"])
-def test_foreign_third_repo_root_doctrine_is_protected(foreign_third_repo, name):
+def test_foreign_third_repo_root_doctrine_is_protected(foreign_third_repo, name) -> None:
     _session_repo, third_repo = foreign_third_repo
     assert _verdict(third_repo / name) == "advisory"
 
 
-def test_nested_claude_md_in_a_foreign_repo_stays_unprotected(foreign_third_repo):
+def test_nested_claude_md_in_a_foreign_repo_stays_unprotected(foreign_third_repo) -> None:
     """Exact-match, not substring/basename: a CLAUDE.md below a foreign repo's root does not match."""
     _session_repo, third_repo = foreign_third_repo
     nested = third_repo / "coordinator" / "tests" / "CLAUDE.md"
@@ -302,27 +303,27 @@ def test_nested_claude_md_in_a_foreign_repo_stays_unprotected(foreign_third_repo
 # ---------------------------------------------------------------------------
 
 
-def _write(target, content, tool="Write"):
+def _write(target, content, tool: str = "Write"):
     key = "content" if tool == "Write" else "new_string"
     return guard.check(
         {"tool_name": tool, "session_id": "t", "tool_input": {"file_path": str(target), key: content}}
     )
 
 
-def test_first_time_create_of_missing_claude_md_is_quiet(two_roots):
+def test_first_time_create_of_missing_claude_md_is_quiet(two_roots) -> None:
     _doe, repo = two_roots
     target = repo / "CLAUDE.md"
     target.unlink(missing_ok=True)
     assert _write(target, "# Project\n") is None
 
 
-def test_write_over_existing_claude_md_advises(two_roots):
+def test_write_over_existing_claude_md_advises(two_roots) -> None:
     _doe, repo = two_roots
     (repo / "CLAUDE.md").write_text("x", encoding="utf-8")
     assert "always-loaded doctrine" in _context(_write(repo / "CLAUDE.md", "# y\n"))
 
 
-def test_project_type_only_local_config_write_is_quiet(two_roots):
+def test_project_type_only_local_config_write_is_quiet(two_roots) -> None:
     _doe, repo = two_roots
     assert _write(repo / "coordinator.local.md", "project_type: general\n") is None
 
@@ -330,28 +331,28 @@ def test_project_type_only_local_config_write_is_quiet(two_roots):
 @pytest.mark.parametrize(
     "line", ["fast_test_cmd: pytest", "fast_tier_unscoped_reason: x", "b_post_command: y"]
 )
-def test_local_config_with_privileged_key_advises(two_roots, line):
+def test_local_config_with_privileged_key_advises(two_roots, line) -> None:
     _doe, repo = two_roots
     context = _context(_write(repo / "coordinator.local.md", f"project_type: general\n{line}\n"))
     assert "Tier-U" in context
 
 
-def test_write_dropping_existing_privileged_key_advises(two_roots):
+def test_write_dropping_existing_privileged_key_advises(two_roots) -> None:
     _doe, repo = two_roots
     (repo / "coordinator.local.md").write_text("fast_test_cmd: pytest\n", encoding="utf-8")
     assert "Tier-U" in _context(_write(repo / "coordinator.local.md", "project_type: general\n"))
 
 
-def test_local_config_path_matches_the_protected_entry(two_roots):
+def test_local_config_path_matches_the_protected_entry(two_roots) -> None:
     _doe, repo = two_roots
     assert guard._local_config_path(str(repo)) in guard._protected_paths(str(repo))
 
 
-def test_local_config_path_is_none_without_a_repo_root():
+def test_local_config_path_is_none_without_a_repo_root() -> None:
     assert guard._local_config_path(None) is None
 
 
-def test_advisory_text_carries_no_human_unlock(two_roots):
+def test_advisory_text_carries_no_human_unlock(two_roots) -> None:
     _doe, repo = two_roots
     (repo / "CLAUDE.md").write_text("x", encoding="utf-8")
     context = _context(_write(repo / "CLAUDE.md", "# y\n"))

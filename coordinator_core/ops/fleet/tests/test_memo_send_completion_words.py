@@ -16,41 +16,42 @@ from coordinator_core.ops.fleet.tests.test_memo_send import (
     _make_sender_git_repo,
     _write_draft,
 )
+from pathlib import Path
 
 
 class TestCompletionClaims:
-    def test_bare_claim_flagged(self):
+    def test_bare_claim_flagged(self) -> None:
         assert _completion_claims("The HRN mapping is done and wired.\n") == ["done", "wired"]
 
-    def test_case_insensitive_and_distinct(self):
+    def test_case_insensitive_and_distinct(self) -> None:
         assert _completion_claims("Done. DONE. Handled.\n") == ["done", "handled"]
 
-    def test_whole_word_only(self):
+    def test_whole_word_only(self) -> None:
         assert _completion_claims("abandoned, undone, landed-ish unlandedness\n") == ["landed"]
         assert _completion_claims("abandoned undone wiredness\n") == []
 
-    def test_no_words_empty(self):
+    def test_no_words_empty(self) -> None:
         assert _completion_claims("Plain prose.\n") == []
 
-    def test_word_inside_fence_ignored(self):
+    def test_word_inside_fence_ignored(self) -> None:
         body = "Status.\n```\nstatus: done\n```\n"
         assert _completion_claims(body) == []
 
-    def test_command_and_output_block_clears_claim(self):
+    def test_command_and_output_block_clears_claim(self) -> None:
         body = "It is wired.\n\n```\n$ census --check\nOK 3/3\n```\n"
         assert _completion_claims(body) == []
 
-    def test_single_line_block_does_not_clear_claim(self):
+    def test_single_line_block_does_not_clear_claim(self) -> None:
         body = "It is wired.\n\n```\n$ census --check\n```\n"
         assert _completion_claims(body) == ["wired"]
 
-    def test_unclosed_two_line_block_clears_claim(self):
+    def test_unclosed_two_line_block_clears_claim(self) -> None:
         body = "Handled.\n```\n$ cmd\noutput\n"
         assert _completion_claims(body) == []
 
 
 @pytest.fixture()
-def sender_and_receiver(tmp_path, monkeypatch):
+def sender_and_receiver(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     sender_repo = _make_sender_git_repo(tmp_path)
     receiver_repo = _make_receiver_git_repo(tmp_path)
     claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -61,7 +62,7 @@ def sender_and_receiver(tmp_path, monkeypatch):
 @pytest.mark.cadence
 @pytest.mark.spawns_process
 class TestOpAdvisory:
-    def test_claim_without_block_advises_and_still_delivers(self, sender_and_receiver):
+    def test_claim_without_block_advises_and_still_delivers(self, sender_and_receiver) -> None:
         sender_repo, receiver_repo = sender_and_receiver
         _write_draft(sender_repo, "claim-topic", body="HRN is handled and wired.\n")
         result = _memo_send({"dry_run": False, "topic": "claim-topic"}, repo_root=sender_repo)
@@ -71,7 +72,7 @@ class TestOpAdvisory:
         assert "command-and-output" in acted["completion_advisory"]
         assert acted["written"] is True
 
-    def test_claim_with_command_and_output_not_advised(self, sender_and_receiver):
+    def test_claim_with_command_and_output_not_advised(self, sender_and_receiver) -> None:
         sender_repo, receiver_repo = sender_and_receiver
         body = "HRN is wired.\n\n```\n$ census\nOK\n```\n"
         _write_draft(sender_repo, "proof-topic", body=body)

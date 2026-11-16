@@ -9,10 +9,11 @@ import pytest
 from coordinator_core.agent_pipe import mailbox
 from coordinator_core.agent_pipe.contract import PipeMessage, mailbox_path, run_dir, session_lock_path
 from coordinator_core.workflow_watch.mailbox_line import wait_for_line
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _home(tmp_path, monkeypatch):
+def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
 
 
@@ -21,19 +22,19 @@ def _msg(i: int, session: str = "sess-1", content: str = "hello") -> PipeMessage
 
 
 @pytest.mark.parametrize("bad", ["", ".", "..", "a/b", "a\\b", "../x", "a\0b"])
-def test_ids_that_escape_are_rejected(bad):
+def test_ids_that_escape_are_rejected(bad) -> None:
     with pytest.raises(ValueError):
         run_dir(bad)
     with pytest.raises(ValueError):
         mailbox_path(bad)
 
 
-def test_paths_live_under_settings_home(tmp_path):
+def test_paths_live_under_settings_home(tmp_path: Path) -> None:
     assert run_dir("r1").is_relative_to(tmp_path / "agent-pipe")
     assert mailbox_path("s1").is_relative_to(tmp_path / "agent-pipe")
 
 
-def test_session_lock_path_under_home_and_rejects_escape(tmp_path):
+def test_session_lock_path_under_home_and_rejects_escape(tmp_path: Path) -> None:
     p = session_lock_path("codex", "conv-1")
     assert p == tmp_path / "agent-pipe" / "sessions" / "codex" / "conv-1.lock"
     for bad in ("../x", "a/b", ".."):
@@ -43,7 +44,7 @@ def test_session_lock_path_under_home_and_rejects_escape(tmp_path):
             session_lock_path(bad, "conv-1")
 
 
-def test_json_line_without_origin_is_the_six_key_line():
+def test_json_line_without_origin_is_the_six_key_line() -> None:
     line = _msg(1).to_json_line()
     assert list(json.loads(line)) == ["id", "sender_agent", "sender_conversation", "to_session", "content", "ts"]
     assert line == (
@@ -52,25 +53,25 @@ def test_json_line_without_origin_is_the_six_key_line():
     )
 
 
-def test_json_line_with_origin_carries_it():
+def test_json_line_with_origin_carries_it() -> None:
     m = PipeMessage("m1", "antigravity", "c", "s", "x", "t", origin="agent-initiated")
     assert json.loads(m.to_json_line())["origin"] == "agent-initiated"
 
 
-def test_json_line_is_single_line_and_round_trips():
+def test_json_line_is_single_line_and_round_trips() -> None:
     m = _msg(1, content="a\nb")
     line = m.to_json_line()
     assert "\n" not in line
     assert json.loads(line)["content"] == "a\nb"
 
 
-def test_append_then_wait_for_line_returns_it():
+def test_append_then_wait_for_line_returns_it() -> None:
     mailbox.append(_msg(1))
     got = wait_for_line(str(mailbox_path("sess-1")), from_start=True, poll_seconds=0.05)
     assert json.loads(got)["id"] == "m1"
 
 
-def test_wait_for_line_armed_before_append_wakes_on_it():
+def test_wait_for_line_armed_before_append_wakes_on_it() -> None:
     path = mailbox_path("sess-1")
     path.parent.mkdir(parents=True)
     path.write_text("")
@@ -78,7 +79,7 @@ def test_wait_for_line_armed_before_append_wakes_on_it():
     assert json.loads(wait_for_line(str(path), poll_seconds=0.05))["id"] == "m2"
 
 
-def test_concurrent_appenders_never_interleave():
+def test_concurrent_appenders_never_interleave() -> None:
     n = 8
     per = 25
     big = "x" * 3000
@@ -97,7 +98,7 @@ def test_concurrent_appenders_never_interleave():
     assert len({json.loads(line)["id"] for line in lines}) == n * per
 
 
-def test_drain_returns_lines_and_next_append_starts_fresh_file():
+def test_drain_returns_lines_and_next_append_starts_fresh_file() -> None:
     mailbox.append(_msg(1))
     mailbox.append(_msg(2))
     lines = mailbox.drain("sess-1")

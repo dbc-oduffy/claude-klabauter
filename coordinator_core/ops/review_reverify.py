@@ -20,11 +20,15 @@ restores bytes older than HEAD. With no HEAD the baseline is always the snapshot
 anchor tree is unreadable, revert mode returns ``error`` and writes nothing (fail closed); list mode
 keeps the snapshot baseline and adds ``"head_unreadable": true``.
 
-List mode (no ``failing``): ``{"edited", "created", "foreign", "tripwires", "snapshot", "error"}``,
+List mode (no ``failing``): ``{"edited", "created", "foreign", "outside_declared", "tripwires", "snapshot", "error"}``,
 plus ``head_unreadable`` when applicable. When review changed nothing (``edited`` and ``created`` both
 empty), they are derived from the run diff instead: manifest paths whose bytes differ from the ``base``
 commit's blob (``edited``) or that base lacks (``created``), using HEAD instead for paths moved
 since the snapshot, with ``"derived_from": "run_diff"``.
+``outside_declared`` is the sorted tracked paths (tracked in the snapshot base commit) the session's review stage wrote
+that the manifest does not name, no other live run declared, written after the snapshot by an agent this run's own
+record names: a review fix outside the declared writes. Spawn-free (the same session write record as ``created``);
+revert mode treats them as ``foreign``, so they are never reverted.
 ``tripwires`` is the sorted tracked test modules (not already edited or created) whose source holds a string
 literal naming an edited or created path; empty for an empty edit set. When the tracked-file index cannot
 be read, ``tripwires`` is empty and ``error`` is ``"tripwire scan unavailable: <reason>"``; the other
@@ -83,6 +87,11 @@ twice. An id no closed probe re-ran is never honoured as ``failing_before``.
 Optional ``base_export_path`` names a saved baseline_export output: its ``FAILED``/``ERROR`` ids join
 ``failing_at_base`` when its trailing JSON line has ``export`` "ok" and ``runner_exit`` 0, 1 or 4. A missing or invalid file sets ``base_unmeasured`` and moves the
 ``unattributed`` ids to ``unmeasured``: not pre_existing (they still block), not the run's own. File read only.
+Optional ``export_failing_path`` names a saved ``clean_overlay_verify --export-run`` output of the failing ids
+(HEAD plus the run's declared paths), judged by the ``base_export_path`` validity rule: a failing id absent
+from its reds (green with peer dirt removed) and not otherwise skipped lands in ``peer_dirt``, never reverted
+or ``unattributed``. A missing or invalid file sets ``export_unmeasured`` and classes nothing. ``peer_dirt``
+is merged into the record.
 Optional ``run_key`` names a run whose ``owned_red.jsonl`` ids join ``failing_at_base``: a failing id
 recorded there (and not in ``failing_at_base``) is reported in the ``owned_red`` bucket, never reverted or
 ``unattributed``. The same ``run_key`` also names the EM's pre-existing ruling (``ruled_pre_existing``:
@@ -157,8 +166,8 @@ def _fail(message: str, revert: bool, probe: Optional[str] = None) -> dict:
         return {"restored": [], "rerun": [], "error": message}
     if revert:
         return {
-            "reverted": [], "unattributed": [], "pre_existing": [], "owned_red": [], "kept": [],
-            "record": None, "error": message,
+            "reverted": [], "unattributed": [], "pre_existing": [], "owned_red": [], "peer_dirt": [],
+            "kept": [], "record": None, "error": message,
         }
     return {"edited": [], "created": [], "snapshot": None, "error": message}
 
@@ -208,13 +217,17 @@ def _since(recorded_at: object) -> Optional[float]:
 
 
 def _created(
-    repo_root: Path, session: str, manifest: dict, share: Path, slice_prefix: str = ""
+    repo_root: Path, session: str, manifest: dict, share: Path, slice_prefix: str = "",
+    outside_sink: Optional[List[str]] = None,
 ) -> Tuple[List[str], List[str]]:
     """(created, foreign). The session's write record spans every run the session fired, so a
     path is this run's only when no other live run declared it, it was written after the
     snapshot, its writing agent wrote no foreign path, and that agent is named by this run's own
     record (``_run_agents``); anything else, an unattributable write included, is foreign and is
-    never reverted."""
+    never reverted. An ``outside_declared`` path is one tracked at the snapshot base that the
+    manifest does not name, no sibling declared, written after the snapshot by this run's own
+    agent: a review fix outside the declared writes, never created or reverted here. It extends
+    ``outside_sink`` when given, else counts as ``foreign``."""
     from coordinator_core.ops.dispatch_emit import review_edits
 
     since = _since(manifest.get("recorded_at"))
@@ -230,6 +243,7 @@ def _created(
     foreign: Set[str] = set()
     foreign_agents: Set[str] = set()
     candidates: List[Tuple[str, str]] = []
+    tracked_candidates: List[Tuple[str, str]] = []
     for raw in writes:
         rel = _rel(raw, repo_root)
         if rel in known or rel.startswith(_MACHINERY_PREFIXES) or rel.startswith(share_rel + "/"):
@@ -239,15 +253,25 @@ def _created(
             continue
         if rel.startswith("scratch/"):
             foreign.add(rel)
-        elif rel in sibling or rel in tracked or _predates(target, since):
+        elif rel in sibling or _predates(target, since):
             foreign.add(rel)
             foreign_agents.add(writes[raw])
+        elif rel in tracked:
+            foreign_agents.add(writes[raw])
+            tracked_candidates.append((rel, writes[raw]))
         else:
             candidates.append((rel, writes[raw]))
     members = _run_agents(repo_root, session, since, share_rel, slice_prefix)
     for rel, agent in candidates:
         own = agent not in foreign_agents and agent in members
         (out if own else foreign).add(rel)
+    outside: Set[str] = set()
+    for rel, agent in tracked_candidates:
+        (outside if agent in members else foreign).add(rel)
+    if outside_sink is None:
+        foreign |= outside
+    else:
+        outside_sink.extend(sorted(outside))
     return sorted(out), sorted(foreign)
 
 
@@ -548,7 +572,7 @@ def _load_record(record: Path) -> dict:
         data = None
     if not isinstance(data, dict):
         data = {}
-    for key in ("reverted", "unattributed", "pre_existing", "owned_red", "kept"):
+    for key in ("reverted", "unattributed", "pre_existing", "owned_red", "peer_dirt", "kept"):
         data.setdefault(key, [])
     return data
 
@@ -832,6 +856,7 @@ def review_reverify(
     failing_output: Optional[Dict[str, str]] = None,
     run_key: str = "",
     base_export_path: str = "",
+    export_failing_path: str = "",
 ) -> dict:
     """List the review edits since the snapshot, or (``failing`` given) invert the findings those
     tests implicate; ``probe`` opens or closes the pre-review probe. See the module docstring."""
@@ -865,8 +890,9 @@ def review_reverify(
     rels = [_norm(p) for p in manifest["files"]]
     if not _contained(repo_root, rels):
         return _fail("a snapshot path escapes the worktree", revert, shape)
-    created, foreign = _created(repo_root, session, manifest, share, slice_prefix)
-    if not _contained(repo_root, created):
+    outside: List[str] = []
+    created, foreign = _created(repo_root, session, manifest, share, slice_prefix, outside_sink=outside)
+    if not _contained(repo_root, [*created, *outside]):
         return _fail("a review-written path escapes the worktree", revert, shape)
     view = _view(repo_root, manifest, sorted({*rels, *created}))
     if view.state == "unreadable" and (revert or probe):
@@ -897,6 +923,7 @@ def review_reverify(
             "edited": edited,
             "created": created,
             "foreign": foreign,
+            "outside_declared": outside,
             "tripwires": tripwires,
             "snapshot": snapshot_rel,
             "error": scan_error,
@@ -906,9 +933,11 @@ def review_reverify(
         if unreadable:
             out["head_unreadable"] = True
         return out
+    foreign = sorted({*foreign, *outside})
 
     ids = [str(i) for i in failing if isinstance(i, str) and i.strip()]
     base_unmeasured = False
+    export_unmeasured = False
     created_set = set(created)
     side = list(sidecars or [])
     record_path = snapshot_dir / _RECORD
@@ -944,10 +973,19 @@ def review_reverify(
             and NOT_FOUND_RE.search(str((failing_output or {}).get(n) or ""))
         )
         skip = set(pre_existing) | set(owned_red) | set(not_base_red) | set(renamed_node)
+        peer_dirt: List[str] = []
+        if export_failing_path:
+            export_red = _read_base_export(repo_root, export_failing_path)
+            if export_red is None:
+                export_unmeasured = True
+            else:
+                peer_dirt = sorted(n for n in ids if n not in skip and n not in export_red)
+                skip |= set(peer_dirt)
         base_measured = (failing_at_base is not None or bool(base_export_path)) and not base_unmeasured
         base_green = {n for n in ids if base_measured and n not in skip}
     else:
         pre_existing, owned_red, not_base_red, renamed_node, skip, base_green = [], [], [], [], set(), set()
+        peer_dirt = []
         ruled = {}
     foreign_set, foreign_ids = set(foreign), []  # type: Set[str], List[str]
     foreign_node = {n for n in ids if n not in skip and n not in base_green and _node_file(n) in foreign_set}
@@ -1109,6 +1147,7 @@ def review_reverify(
         "unattributed": sorted(set(prior["unattributed"]) | set(unattributed)),
         "pre_existing": sorted(set(prior["pre_existing"]) | set(pre_existing)),
         "owned_red": sorted(set(prior["owned_red"]) | set(owned_red)),
+        "peer_dirt": sorted(set(prior["peer_dirt"]) | set(peer_dirt)),
         "kept": [*prior["kept"], *kept],
     }
     atomic_write_bytes(record_path, (json.dumps(merged, indent=2, sort_keys=True) + "\n").encode("utf-8"))
@@ -1118,6 +1157,7 @@ def review_reverify(
         "unattributed": unattributed,
         "pre_existing": pre_existing,
         "owned_red": owned_red,
+        "peer_dirt": peer_dirt,
         "renamed_node": renamed_node,
         "recollect": sorted({_node_file(n) for n in renamed_node}),
         "ruled_pre_existing": {n: ruled[n] for n in pre_existing if n in ruled},
@@ -1130,6 +1170,7 @@ def review_reverify(
         "record": _rel(str(record_path), repo_root),
         "error": None,
         **({"base_unmeasured": base_unmeasured, "unmeasured": unmeasured} if base_export_path else {}),
+        **({"export_unmeasured": export_unmeasured} if export_failing_path else {}),
     }
 
 
@@ -1165,6 +1206,10 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     if base_export_path is not None and not isinstance(base_export_path, str):
         return _fail("review.reverify base_export_path must be a path string", revert, shape)
     base_export_path = base_export_path or ""
+    export_failing_path = params.get("export_failing_path")
+    if export_failing_path is not None and not isinstance(export_failing_path, str):
+        return _fail("review.reverify export_failing_path must be a path string", revert, shape)
+    export_failing_path = export_failing_path or ""
     if sidecars is not None and not isinstance(sidecars, list):
         return _fail("review.reverify sidecars must be a list of paths", revert, shape)
     cause_files = params.get("cause_files")
@@ -1191,4 +1236,5 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         plan_path=str(params.get("plan_path") or ""),
         run_key=str(params.get("run_key") or ""),
         base_export_path=base_export_path,
+        export_failing_path=export_failing_path,
     )

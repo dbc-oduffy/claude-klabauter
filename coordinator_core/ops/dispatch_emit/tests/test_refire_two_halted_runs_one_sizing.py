@@ -28,7 +28,7 @@ BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
@@ -62,20 +62,20 @@ def _halt(root: Path, run_id: str, owner: str, notes: bool = False) -> str:
     return run_id
 
 
-def test_the_callers_newer_run_wins_over_an_older_foreign_one_at_default_arguments(repo):
+def test_the_callers_newer_run_wins_over_an_older_foreign_one_at_default_arguments(repo) -> None:
     _halt(repo, OLDER_WARP, FOREIGN)
     _halt(repo, NEWER_ASK, CALLER, notes=True)
     assert hr.halted_run_to_resume(repo, REL, caller_session=CALLER) == NEWER_ASK
     assert hr.halted_run_to_resume(repo, REL, build=False, caller_session=CALLER) == NEWER_ASK
 
 
-def test_the_callers_older_run_wins_over_a_newer_foreign_one(repo):
+def test_the_callers_older_run_wins_over_a_newer_foreign_one(repo) -> None:
     _halt(repo, OLDER_WARP, CALLER)
     _halt(repo, NEWER_ASK, FOREIGN)
     assert hr.halted_run_to_resume(repo, REL, caller_session=CALLER) == OLDER_WARP
 
 
-def test_two_halted_asks_resume_the_callers_newest(repo):
+def test_two_halted_asks_resume_the_callers_newest(repo) -> None:
     older = _halt(repo, "ask-20261112T070648-cc36f8", FOREIGN)
     _halt(repo, "ask-20261112T100000-aaaaaa", CALLER)
     newest_mine = _halt(repo, NEWER_ASK, CALLER)
@@ -83,7 +83,7 @@ def test_two_halted_asks_resume_the_callers_newest(repo):
     assert hr.halted_run_to_resume(repo, REL, caller_session=CALLER) == newest_mine
 
 
-def test_no_candidate_owned_by_the_caller_and_distinct_owners_refuses_naming_every_run(repo):
+def test_no_candidate_owned_by_the_caller_and_distinct_owners_refuses_naming_every_run(repo) -> None:
     _halt(repo, OLDER_WARP, FOREIGN)
     _halt(repo, NEWER_ASK, OTHER)
     with pytest.raises(hr.AmbiguousHaltedRuns) as raised:
@@ -92,7 +92,7 @@ def test_no_candidate_owned_by_the_caller_and_distinct_owners_refuses_naming_eve
     assert OLDER_WARP in str(raised.value) and NEWER_ASK in str(raised.value)
 
 
-def test_ambiguity_refusal_reaches_the_caller_as_invalid_params_naming_every_run(repo):
+def test_ambiguity_refusal_reaches_the_caller_as_invalid_params_naming_every_run(repo) -> None:
     from coordinator_core import ipc
 
     _halt(repo, OLDER_WARP, FOREIGN)
@@ -104,26 +104,26 @@ def test_ambiguity_refusal_reaches_the_caller_as_invalid_params_naming_every_run
     assert OLDER_WARP in error["message"] and NEWER_ASK in error["message"]
 
 
-def test_a_revised_stamp_breaks_a_tie_the_caller_does_not_own(repo):
+def test_a_revised_stamp_breaks_a_tie_the_caller_does_not_own(repo) -> None:
     _halt(repo, OLDER_WARP, FOREIGN)
     _halt(repo, NEWER_ASK, OTHER)
     assert hr.mark_revised(record_dir(repo, OLDER_WARP), "2026-11-12T13:00:00Z")
     assert hr.halted_run_to_resume(repo, REL, caller_session=CALLER) == OLDER_WARP
 
 
-def test_without_a_caller_session_the_newest_run_is_chosen_never_the_older(repo):
+def test_without_a_caller_session_the_newest_run_is_chosen_never_the_older(repo) -> None:
     _halt(repo, OLDER_WARP, FOREIGN)
     _halt(repo, NEWER_ASK, OTHER)
     assert hr.halted_run_to_resume(repo, REL) == NEWER_ASK
 
 
-def test_a_single_halted_run_resolves_unchanged(repo):
+def test_a_single_halted_run_resolves_unchanged(repo) -> None:
     _halt(repo, OLDER_WARP, FOREIGN)
     assert hr.halted_run_to_resume(repo, REL, caller_session=CALLER) == OLDER_WARP
     assert hr.preferred_halted_run(repo, REL, caller_session=CALLER) is None
 
 
-def test_a_default_dispatch_emit_resumes_the_callers_newer_run_with_its_notes(repo):
+def test_a_default_dispatch_emit_resumes_the_callers_newer_run_with_its_notes(repo) -> None:
     _halt(repo, OLDER_WARP, FOREIGN)
     _halt(repo, NEWER_ASK, CALLER, notes=True)
     reply = op._dispatch_emit({"ask": True, "sizing_path": REL}, repo_root=repo)
@@ -133,7 +133,7 @@ def test_a_default_dispatch_emit_resumes_the_callers_newer_run_with_its_notes(re
     assert [e["note"] for e in rl.carried_notes(repo, reply["run_id"])] == [NOTE]
 
 
-def test_a_default_dispatch_emit_refuses_and_leaves_both_runs_halted(repo):
+def test_a_default_dispatch_emit_refuses_and_leaves_both_runs_halted(repo) -> None:
     _halt(repo, OLDER_WARP, FOREIGN)
     _halt(repo, NEWER_ASK, OTHER)
     with pytest.raises(hr.AmbiguousHaltedRuns, match="ask-20261112T121655-67ede5"):
@@ -142,7 +142,7 @@ def test_a_default_dispatch_emit_refuses_and_leaves_both_runs_halted(repo):
         assert hr._read(record_dir(repo, run_id))["status"] == hr.STATUS_HALTED
 
 
-def test_the_submit_hook_route_refuses_naming_every_candidate(repo):
+def test_the_submit_hook_route_refuses_naming_every_candidate(repo) -> None:
     _halt(repo, OLDER_WARP, FOREIGN)
     _halt(repo, NEWER_ASK, OTHER)
     envelope, result = hook._resume_route(repo, REL, {"tool_input": {}}, {}, CALLER, None)

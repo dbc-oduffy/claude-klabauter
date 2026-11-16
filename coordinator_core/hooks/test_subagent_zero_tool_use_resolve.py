@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from coordinator_core.session_hub_path import hub_for_common
+import pytest
 
 
 def _run(coro):
@@ -164,7 +165,7 @@ class TestUnknownStoreOrRecordAbsent:
         assert "agent-1" in result["reason"]
         assert "trigger-loss" in result["reason"]
 
-    def test_unreadable_store_resolves_unknown_names_reason(self, tmp_path: Path, monkeypatch) -> None:
+    def test_unreadable_store_resolves_unknown_names_reason(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.hooks import subagent_zero_tool_use_resolve as mod
         ctx = _ctx(tmp_path)
         sid = "sess-unreadable-01"

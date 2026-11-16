@@ -11,6 +11,7 @@ import yaml
 from coordinator_core.ops.dispatch_emit import ask_compose, ask_stage, reply_sidecar
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from pathlib import Path
 
 SIZING_REL = "state/sizings/2026-10-22-xs-plan-less.yaml"
 WRITES = ["src/x.py"]
@@ -28,7 +29,7 @@ _RUNTIME_VALUES = {
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     for d in (".git", "state/sizings", "src"):
         (tmp_path / d).mkdir(parents=True)
     doc = {
@@ -77,7 +78,7 @@ def _composed_stage_params(monkeypatch) -> dict:
     return params
 
 
-def test_plan_less_xs_stage_params_reach_a_manifest_handle(repo, monkeypatch):
+def test_plan_less_xs_stage_params_reach_a_manifest_handle(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     params = _composed_stage_params(monkeypatch)
     assert params.get("sizing_path") == SIZING_REL
     assert "plan_path" not in params
@@ -90,6 +91,6 @@ def test_plan_less_xs_stage_params_reach_a_manifest_handle(repo, monkeypatch):
     assert set(WRITES) <= set(row["writes"])
 
 
-def test_stage_without_sizing_path_still_refuses(repo):
+def test_stage_without_sizing_path_still_refuses(repo) -> None:
     reply = ask_stage._handler({"run_id": "xs-plan-less-2", "writes": WRITES}, repo_root=repo)
     assert reply == {"error": "name exactly one of plan_rel and sizing_rel"}

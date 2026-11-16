@@ -28,7 +28,7 @@ OPEN_REGISTER = {"rows": [{"id": "R1", "status": "open"}, {"id": "R2", "status":
 MET_REGISTER = {"rows": [{"id": "R1", "status": "met"}, {"id": "R2", "status": "waived"}]}
 
 
-def test_all_coded_rows_with_an_open_register_row_resume_all_landed(repo):  # noqa: F811
+def test_all_coded_rows_with_an_open_register_row_resume_all_landed(repo) -> None:  # noqa: F811
     _put_s(repo, requirement_register=OPEN_REGISTER)
     _landed_repo(repo, CODED)
     v = gate(repo, REL)
@@ -40,7 +40,7 @@ def test_all_coded_rows_with_an_open_register_row_resume_all_landed(repo):  # no
     assert v.resume_rows is None and v.resume_plan is None
 
 
-def test_the_handler_stages_a_whole_zero_row_manifest(repo):  # noqa: F811
+def test_the_handler_stages_a_whole_zero_row_manifest(repo) -> None:  # noqa: F811
     _put_s(repo, requirement_register=OPEN_REGISTER)
     _landed_repo(repo, CODED)
     out = _handler({"sizing_path": REL, "run_id": "ask-20261018T000000-aaaaaa"}, repo_root=repo)
@@ -49,7 +49,7 @@ def test_the_handler_stages_a_whole_zero_row_manifest(repo):  # noqa: F811
     assert out["resume_ledger"][RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND
 
 
-def test_a_register_all_met_or_waived_resumes_with_no_blocking_rows(repo):  # noqa: F811
+def test_a_register_all_met_or_waived_resumes_with_no_blocking_rows(repo) -> None:  # noqa: F811
     _put_s(repo, requirement_register=MET_REGISTER)
     _landed_repo(repo, CODED)
     plan = resumable_plan(_load(repo), REL, repo, "s")
@@ -60,7 +60,7 @@ def test_a_register_all_met_or_waived_resumes_with_no_blocking_rows(repo):  # no
     assert v.resume_ledger[RESUME_LEDGER_KIND_FIELD] == ALL_LANDED_HALT_KIND and v.resume_ledger["blocking"] == []
 
 
-def test_a_not_met_recorded_outcome_resumes_even_with_a_settled_register(repo):  # noqa: F811
+def test_a_not_met_recorded_outcome_resumes_even_with_a_settled_register(repo) -> None:  # noqa: F811
     _put_s(repo, requirement_register=MET_REGISTER)
     _landed_repo(repo, CODED)
     _pointer(repo, blocking=())
@@ -73,7 +73,7 @@ def test_a_not_met_recorded_outcome_resumes_even_with_a_settled_register(repo): 
     assert plan.ledger.blocking == ()
 
 
-def test_a_met_recorded_outcome_resumes_with_no_blocking_rows(repo):  # noqa: F811
+def test_a_met_recorded_outcome_resumes_with_no_blocking_rows(repo) -> None:  # noqa: F811
     _put_s(repo, requirement_register=MET_REGISTER)
     _landed_repo(repo, CODED)
     _pointer(repo, blocking=())
@@ -86,7 +86,7 @@ def test_a_met_recorded_outcome_resumes_with_no_blocking_rows(repo):  # noqa: F8
     assert plan.ledger.run_id == "run-1" and plan.ledger.blocking == ()
 
 
-def _example_game_repo_shape(repo, discharged):  # noqa: F811
+def _example_game_repo_shape(repo, discharged) -> None:  # noqa: F811
     """Every plan row `open`: A1/A2 landed by one checkpoint commit, E1/E2 `performer: em` and
     discharged in the evidence sidecar for the ids in `discharged`. M sizing, rulable register rows."""
     _put(
@@ -113,7 +113,7 @@ def _example_game_repo_shape(repo, discharged):  # noqa: F811
     sidecar.write_text(f"em_discharged:\n{entries}" if entries else "rows: {}\n", encoding="utf-8", newline="\n")
 
 
-def test_em_discharged_rows_count_landed_and_the_gate_resumes_at_the_ledger(repo):  # noqa: F811
+def test_em_discharged_rows_count_landed_and_the_gate_resumes_at_the_ledger(repo) -> None:  # noqa: F811
     _example_game_repo_shape(repo, ["E1", "E2"])
     v = gate(repo, REL)
     assert v.halt is None and v.arm == "m_plus"
@@ -125,14 +125,14 @@ def test_em_discharged_rows_count_landed_and_the_gate_resumes_at_the_ledger(repo
     assert read_reply(repo, out["manifest_handle"])["rows"] is not None
 
 
-def test_an_undischarged_em_row_keeps_the_row_resume(repo):  # noqa: F811
+def test_an_undischarged_em_row_keeps_the_row_resume(repo) -> None:  # noqa: F811
     _example_game_repo_shape(repo, ["E1"])
     v = gate(repo, REL)
     assert v.arm == "m_plus" and v.resume_ledger is None
     assert list(v.resume_rows) == ["E2"]
 
 
-def test_the_all_landed_resume_is_never_persisted(repo):  # noqa: F811
+def test_the_all_landed_resume_is_never_persisted(repo) -> None:  # noqa: F811
     from coordinator_core.ops.dispatch_emit.ask_contract import ledger_halt_path
 
     _put_s(repo, requirement_register=OPEN_REGISTER)

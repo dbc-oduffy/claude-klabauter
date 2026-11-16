@@ -23,11 +23,16 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import pathlib
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _load_cli_module():
+def _load_cli_module() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "cross_repo_memo", str(_BIN_DIR / "cross-repo-memo.py")
     )
@@ -45,7 +50,7 @@ def _legacy_root(repo: pathlib.Path) -> pathlib.Path:
     return repo / "state" / "memo-outbox"
 
 
-def test_draft_at_canonical_root_resolves_there(tmp_path):
+def test_draft_at_canonical_root_resolves_there(tmp_path: Path) -> None:
     mod = _load_cli_module()
     target = _new_root(tmp_path) / "a-topic.md"
     target.parent.mkdir(parents=True)
@@ -56,7 +61,7 @@ def test_draft_at_canonical_root_resolves_there(tmp_path):
     ) == target
 
 
-def test_draft_at_retired_root_still_resolves(tmp_path):
+def test_draft_at_retired_root_still_resolves(tmp_path: Path) -> None:
     """The migration window's whole purpose — drafts staged before the repoint
     are reachable, or the fallback is decorative."""
     mod = _load_cli_module()
@@ -69,7 +74,7 @@ def test_draft_at_retired_root_still_resolves(tmp_path):
     ) == target
 
 
-def test_canonical_root_wins_when_a_topic_sits_at_both(tmp_path):
+def test_canonical_root_wins_when_a_topic_sits_at_both(tmp_path: Path) -> None:
     mod = _load_cli_module()
     for root in (_new_root(tmp_path), _legacy_root(tmp_path)):
         root.mkdir(parents=True)
@@ -80,7 +85,7 @@ def test_canonical_root_wins_when_a_topic_sits_at_both(tmp_path):
     ) == _new_root(tmp_path) / "c-topic.md"
 
 
-def test_absent_topic_falls_back_to_the_canonical_root(tmp_path):
+def test_absent_topic_falls_back_to_the_canonical_root(tmp_path: Path) -> None:
     """The create case: `draft`'s reconcile key and `compose`'s not-found
     message both name a path for a file that does not exist yet, and naming
     the retired one there is how a caller is sent to look in the wrong place."""
@@ -91,7 +96,7 @@ def test_absent_topic_falls_back_to_the_canonical_root(tmp_path):
     ) == _new_root(tmp_path) / "d-topic.md"
 
 
-def test_write_path_never_resolves_to_the_retired_root(tmp_path):
+def test_write_path_never_resolves_to_the_retired_root(tmp_path: Path) -> None:
     """`memo.draft` O_EXCL-creates at the canonical root unconditionally. A
     reconcile that followed the READ resolution would stat a legacy file the
     op never touched and report the write as pre-existing."""
@@ -105,7 +110,7 @@ def test_write_path_never_resolves_to_the_retired_root(tmp_path):
     ) == _new_root(tmp_path) / "e-topic.md"
 
 
-def test_no_verb_carries_its_own_spelling_of_an_outbox_root():
+def test_no_verb_carries_its_own_spelling_of_an_outbox_root() -> None:
     """The literal `os.path.join(..., "state", "memo-outbox", ...)` is what
     made four of five verbs agree and one disagree. Path construction belongs
     to `memo_draft`; the one surviving mention here is the tracked-vs-ignored

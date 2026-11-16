@@ -1,6 +1,8 @@
-"""dispatch.land_run on an un-rerun repo-wide invariant: the refusal hands the run a retest step (the
-landing spawns nothing), a fresh passing record lands it, a failing one past the attempt budget refuses
-naming the invariant node, and the emitted commit stage runs the retest and re-invokes the landing."""
+"""dispatch.land_run on an un-rerun repo-wide invariant: the landing spawns no pytest, only the detached
+``retest_targeted`` launcher (once, for exactly the unrun nodes, when a params source exists); without a
+source the refusal hands the run a retest step. A fresh passing record lands it, a failing one past the
+attempt budget refuses naming the invariant node, a node red at base lands as reported, and the emitted
+commit stage runs the retest and re-invokes the landing."""
 
 from __future__ import annotations
 
@@ -66,6 +68,78 @@ def test_an_unrerun_invariant_refuses_with_a_retest_step_and_spawns_no_pytest(ow
     assert INV in out["integrity"][0]["detail"]
     assert not [a for a in argvs if "pytest" in a]
     assert _git(["rev-parse", "HEAD"], owed).strip() == head
+
+
+@pytest.fixture
+def spawned(owed, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import retest_targeted
+    from coordinator_core.ops.dispatch_emit.terminal_commit_params_channel import params_path
+
+    calls: list = []
+    monkeypatch.setattr(retest_targeted, "spawn_detached", lambda *a, **k: calls.append(a) or True)
+    path = params_path(owed, RUN)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps({"run_id": RUN, "script_path": ""}), encoding="utf-8")
+    return calls
+
+
+def test_an_unrun_invariant_launches_one_detached_retest_and_answers_retest_running(owed, spawned):
+    head = _git(["rev-parse", "HEAD"], owed).strip()
+
+    out = _land(owed)
+
+    assert out["committed"] is False and out["refused"] == "targeted-tests-failed", out
+    assert out["awaiting"]["awaiting"] == "retest" and out["remedy_step"]["nodes"] == [INV], out
+    assert len(spawned) == 1 and "--detached-child" in spawned[0][2] and INV in spawned[0][2]
+    record = landing_retest._retest_record(owed, RUN)
+    assert record["status"] == landing_retest.RETEST_RUNNING and record["tests"] == [INV]
+    assert _git(["rev-parse", "HEAD"], owed).strip() == head
+
+    again = _land(owed)
+
+    assert again["committed"] is False and again["awaiting"]["awaiting"] == "retest" and len(spawned) == 1, again
+
+
+def test_the_reinvoked_landing_commits_once_the_launched_retest_wrote_a_pass(owed, spawned):
+    _land(owed)
+    _record(owed, "pass")
+
+    out = _land(owed)
+
+    assert out["committed"] is True, out
+    assert len(spawned) == 1
+
+
+def test_a_fresh_record_for_every_owed_node_launches_nothing(owed, spawned):
+    _record(owed, "pass")
+
+    out = _land(owed)
+
+    assert out["committed"] is True and spawned == [], out
+
+
+def test_a_spent_budget_never_launches_a_retest(owed, spawned):
+    out = _land(owed, retest_attempts=MAX_IN_RUN_REMEDY_ATTEMPTS)
+
+    assert out["refused"] == "invariant-unmeasured" and spawned == [], out
+
+
+def test_an_unrun_node_beside_a_caused_red_refuses_without_a_launch(owed, spawned):
+    _record(
+        owed, "fail", tests_failed=1, failed_tests=["other/test_x.py::t"],
+        baseline={"caused": ["other/test_x.py::t"], "pre_existing": [], "unverified": []},
+    )
+
+    out = _land(owed)
+
+    assert out["committed"] is False and out["refused"] == "targeted-tests-failed" and spawned == [], out
+    assert "awaiting" not in out
+
+
+def test_a_node_the_run_records_red_at_base_lands_reported_and_launches_nothing(owed, spawned):
+    out = _land(owed, failing_at_base=[INV])
+
+    assert out["committed"] is True and spawned == [], out
 
 
 def test_a_fresh_passing_retest_lets_the_reinvoked_landing_commit(owed):

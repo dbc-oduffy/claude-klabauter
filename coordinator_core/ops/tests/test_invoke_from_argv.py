@@ -103,27 +103,27 @@ def _assert_only_known_cli_notices(stderr: str) -> None:
     assert not unexpected, f"stderr carries more than the known notices: {unexpected!r}"
 
 
-def test_argv_must_be_a_list_of_strings():
+def test_argv_must_be_a_list_of_strings() -> None:
     with pytest.raises(ValueError, match="params.argv"):
         _invoke_from_argv({"argv": "ping", "cwd": _PROJECT_ROOT})
 
 
-def test_argv_must_be_a_list_of_strings_not_mixed_types():
+def test_argv_must_be_a_list_of_strings_not_mixed_types() -> None:
     with pytest.raises(ValueError, match="params.argv"):
         _invoke_from_argv({"argv": ["ping", 1], "cwd": _PROJECT_ROOT})
 
 
-def test_cwd_must_be_a_non_empty_string():
+def test_cwd_must_be_a_non_empty_string() -> None:
     with pytest.raises(ValueError, match="params.cwd"):
         _invoke_from_argv({"argv": ["ping"], "cwd": ""})
 
 
-def test_cwd_must_be_present():
+def test_cwd_must_be_present() -> None:
     with pytest.raises(ValueError, match="params.cwd"):
         _invoke_from_argv({"argv": ["ping"]})
 
 
-def test_dump_op_timeouts_byte_identical_to_cli():
+def test_dump_op_timeouts_byte_identical_to_cli() -> None:
     served = _invoke_from_argv({"argv": ["--dump-op-timeouts"], "cwd": _PROJECT_ROOT})
     cli = _run_cli("--dump-op-timeouts", cwd=_PROJECT_ROOT)
 
@@ -135,7 +135,7 @@ def test_dump_op_timeouts_byte_identical_to_cli():
     assert served["stderr"] == cli.stderr == ""
 
 
-def test_ping_matches_cli_structurally():
+def test_ping_matches_cli_structurally() -> None:
     served = _invoke_from_argv({"argv": ["ping", "{}"], "cwd": _PROJECT_ROOT})
     cli = _run_cli("--allow-unstamped-dispatch", "ping", "{}", cwd=_PROJECT_ROOT)
 
@@ -150,7 +150,7 @@ def test_ping_matches_cli_structurally():
     assert served_parsed["result"]["ok"] is cli_parsed["result"]["ok"] is True
 
 
-def test_bare_ping_matches_cli_structurally():
+def test_bare_ping_matches_cli_structurally() -> None:
     served = _invoke_from_argv({"argv": ["--bare", "ping", "{}"], "cwd": _PROJECT_ROOT})
     cli = _run_cli("--allow-unstamped-dispatch", "--bare", "ping", "{}", cwd=_PROJECT_ROOT)
 
@@ -163,7 +163,7 @@ def test_bare_ping_matches_cli_structurally():
     assert served_parsed["ok"] is cli_parsed["ok"] is True
 
 
-def test_invalid_params_json_byte_identical_to_cli():
+def test_invalid_params_json_byte_identical_to_cli() -> None:
     served = _invoke_from_argv({"argv": ["ping", "not json"], "cwd": _PROJECT_ROOT})
     cli = _run_cli("ping", "not json", cwd=_PROJECT_ROOT)
 
@@ -173,7 +173,7 @@ def test_invalid_params_json_byte_identical_to_cli():
     assert served["stderr"], "expected a non-empty error envelope on stderr"
 
 
-def test_dump_op_timeouts_default_matches_live_process_resolution():
+def test_dump_op_timeouts_default_matches_live_process_resolution() -> None:
     """--dump-op-timeouts's `__default__` reads coordinator_core.ipc.
     DISPATCH_TIMEOUT_SECS, a module-level constant resolved ONCE at
     coordinator_core.ipc import time — not re-read from the environment per
@@ -204,7 +204,7 @@ def test_dump_op_timeouts_default_matches_live_process_resolution():
     )
 
 
-def test_served_dispatch_never_checks_warm_enabled():
+def test_served_dispatch_never_checks_warm_enabled() -> None:
     with mock.patch(
         "coordinator_core.warm.settings.is_warm_enabled",
         side_effect=AssertionError("is_warm_enabled must not be called on the served path"),
@@ -214,7 +214,7 @@ def test_served_dispatch_never_checks_warm_enabled():
     assert json.loads(result["stdout"])["result"]["ok"] is True
 
 
-def test_worktree_scoped_op_resolves_repo_root_from_cwd_param_not_process_cwd(tmp_path):
+def test_worktree_scoped_op_resolves_repo_root_from_cwd_param_not_process_cwd(tmp_path: Path) -> None:
     """A worktree-scoped op (handoff.blocked_by_dependents — handoff.has_live_children's
     sibling in the same module and same `candidate`-param shape, swapped in because
     has_live_children was killed under DR-344 2026-08-30 and dropped out of
@@ -262,7 +262,7 @@ def _open_event_loop_count() -> int:
     )
 
 
-def test_repeated_served_dispatch_does_not_leak_event_loops():
+def test_repeated_served_dispatch_does_not_leak_event_loops() -> None:
     gc.disable()
     try:
         counts = []
@@ -283,7 +283,7 @@ def test_repeated_served_dispatch_does_not_leak_event_loops():
     )
 
 
-def test_repeated_served_dispatch_thread_count_stays_bounded():
+def test_repeated_served_dispatch_thread_count_stays_bounded() -> None:
     before = threading.active_count()
     for _ in range(50):
         result = _invoke_from_argv({"argv": ["ping", "{}"], "cwd": _PROJECT_ROOT})
@@ -301,7 +301,7 @@ def test_repeated_served_dispatch_thread_count_stays_bounded():
     )
 
 
-def test_concurrent_entrypoint_calls_do_not_race_the_shared_process_cwd(tmp_path):
+def test_concurrent_entrypoint_calls_do_not_race_the_shared_process_cwd(tmp_path: Path) -> None:
     """Two `_run_entrypoint` calls with DIFFERENT `cwd`s, started concurrently
     on separate threads, must not interleave their `os.chdir` spans. Each
     call's fake CLI records the cwd it observed on entry and on exit — if
@@ -380,7 +380,7 @@ def test_concurrent_entrypoint_calls_do_not_race_the_shared_process_cwd(tmp_path
         del builtins._ENTRYPOINT_CWD_RACE_RECORD
 
 
-def test_entrypoint_lock_is_uncontended_across_pool_workers():
+def test_entrypoint_lock_is_uncontended_across_pool_workers() -> None:
     """`_ENTRYPOINT_CWD_LOCK` is per-process, and the warm server never runs
     `invoke.from_argv` anywhere but a single-task pool worker process, so
     sessions do not queue on each other behind it. Pins the two facts that
@@ -477,7 +477,7 @@ def _run_session_env_probe(tmp_path, monkeypatch, *, carried, server_env):
     return seen, after
 
 
-def test_served_cli_reads_the_callers_session_id_not_the_servers(tmp_path, monkeypatch):
+def test_served_cli_reads_the_callers_session_id_not_the_servers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen, _ = _run_session_env_probe(
         tmp_path,
         monkeypatch,
@@ -492,7 +492,7 @@ def test_served_cli_reads_the_callers_session_id_not_the_servers(tmp_path, monke
     assert seen["CLAUDE_CODE_SESSION_ID"] is None
 
 
-def test_warm_request_carrying_no_identity_shows_the_cli_none(tmp_path, monkeypatch):
+def test_warm_request_carrying_no_identity_shows_the_cli_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen, _ = _run_session_env_probe(
         tmp_path,
         monkeypatch,
@@ -592,7 +592,7 @@ def _write_delegating_entrypoint(bin_dir: Path, name: str, *, real_help_branch: 
     (bin_dir / f"{name}.py").write_text(body, encoding="utf-8")
 
 
-def test_help_delegates_to_a_full_shaped_targets_own_real_usage(tmp_path):
+def test_help_delegates_to_a_full_shaped_targets_own_real_usage(tmp_path: Path) -> None:
     import builtins
 
     name = "fake-entrypoint-full-shape-help"
@@ -624,7 +624,7 @@ def test_help_delegates_to_a_full_shaped_targets_own_real_usage(tmp_path):
         del builtins._ENTRYPOINT_OP_ENTERED
 
 
-def test_help_delegates_for_a_tail_shaped_target_without_leaking_the_parse_error(tmp_path):
+def test_help_delegates_for_a_tail_shaped_target_without_leaking_the_parse_error(tmp_path: Path) -> None:
     """`plan-assemble` has no explicit `--help` branch of its own and falls
     through to its hand-rolled parser's usage/parse-error path — the exact
     trap that already cost C1 a round (usage on stderr ALONGSIDE a genuine
@@ -675,7 +675,7 @@ def _write_subparser_entrypoint(bin_dir: Path, name: str) -> None:
     (bin_dir / f"{name}.py").write_text(body, encoding="utf-8")
 
 
-def test_help_after_a_declared_subcommand_renders_that_subcommands_usage(tmp_path):
+def test_help_after_a_declared_subcommand_renders_that_subcommands_usage(tmp_path: Path) -> None:
     import builtins
 
     name = "fake-entrypoint-subparser-help"
@@ -704,7 +704,7 @@ def test_help_after_a_declared_subcommand_renders_that_subcommands_usage(tmp_pat
         del builtins._ENTRYPOINT_OP_ENTERED
 
 
-def test_help_synthesizes_only_for_the_argv_shape_none_entrypoint():
+def test_help_synthesizes_only_for_the_argv_shape_none_entrypoint() -> None:
     """Positive assertion naming the shape, not an absence: synthesis is
     used ONLY for `workday-start-inbox-blitz-assemble` (the real
     ARGV_SHAPE_NONE member — its own `main()` takes no argv and always runs
@@ -734,7 +734,7 @@ def test_help_synthesizes_only_for_the_argv_shape_none_entrypoint():
     assert result["stdout"] == f"usage: {name} [--help]\n"
 
 
-def test_a_none_shape_that_reads_its_argv_renders_its_own_verbs():
+def test_a_none_shape_that_reads_its_argv_renders_its_own_verbs() -> None:
     name = "handoff-archive-transition"
     script = Path(invoke_from_argv._ENGINE_ROOT) / "coordinator" / "bin" / f"{name}.py"
     from coordinator_core.warm import serve_classifier
@@ -749,7 +749,7 @@ def test_a_none_shape_that_reads_its_argv_renders_its_own_verbs():
     assert result["stdout"] != f"usage: {name} [--help]\n"
 
 
-def test_an_accepted_then_deleted_argv_is_not_a_readable_one():
+def test_an_accepted_then_deleted_argv_is_not_a_readable_one() -> None:
     bin_dir = Path(invoke_from_argv._ENGINE_ROOT) / "coordinator" / "bin"
     assert (
         invoke_from_argv._none_shape_main_reads_argv(
@@ -759,7 +759,7 @@ def test_an_accepted_then_deleted_argv_is_not_a_readable_one():
     )
 
 
-def test_help_wins_after_a_subcommand_token(tmp_path):
+def test_help_wins_after_a_subcommand_token(tmp_path: Path) -> None:
     import builtins
 
     name = "fake-entrypoint-help-subcommand"
@@ -782,7 +782,7 @@ def test_help_wins_after_a_subcommand_token(tmp_path):
         del builtins._ENTRYPOINT_OP_ENTERED
 
 
-def test_short_help_flag_also_delegates(tmp_path):
+def test_short_help_flag_also_delegates(tmp_path: Path) -> None:
     name = "fake-entrypoint-help-short"
     bin_dir = tmp_path / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
@@ -797,7 +797,7 @@ def test_short_help_flag_also_delegates(tmp_path):
     assert "brief <kind>" in result["stdout"]
 
 
-def test_normal_invocation_still_reaches_main_fn(tmp_path):
+def test_normal_invocation_still_reaches_main_fn(tmp_path: Path) -> None:
     bin_dir = tmp_path / "coordinator" / "bin"
     bin_dir.mkdir(parents=True)
     name = "fake-entrypoint-normal-invocation"
@@ -829,7 +829,7 @@ def test_normal_invocation_still_reaches_main_fn(tmp_path):
         del builtins._ENTRYPOINT_NORMAL_INVOCATION_SEEN
 
 
-def test_the_servers_own_session_env_is_restored_after_the_call(tmp_path, monkeypatch):
+def test_the_servers_own_session_env_is_restored_after_the_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, after = _run_session_env_probe(
         tmp_path,
         monkeypatch,
@@ -844,7 +844,7 @@ def test_the_servers_own_session_env_is_restored_after_the_call(tmp_path, monkey
     }
 
 
-def test_loader_registers_module_so_dataclass_with_future_annotations_loads(tmp_path):
+def test_loader_registers_module_so_dataclass_with_future_annotations_loads(tmp_path: Path) -> None:
     script = tmp_path / "dc-entry.py"
     script.write_text(
         "from __future__ import annotations\n"
@@ -865,7 +865,7 @@ def test_loader_registers_module_so_dataclass_with_future_annotations_loads(tmp_
     sys.modules.pop("_invoke_from_argv_entrypoint_dc_entry", None)
 
 
-def test_loader_leaves_no_sys_modules_entry_when_the_body_raises(tmp_path):
+def test_loader_leaves_no_sys_modules_entry_when_the_body_raises(tmp_path: Path) -> None:
     script = tmp_path / "boom-entry.py"
     script.write_text("raise RuntimeError('boom')\n", encoding="utf-8")
     with pytest.raises(RuntimeError, match="boom"):

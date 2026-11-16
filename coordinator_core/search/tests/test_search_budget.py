@@ -8,11 +8,12 @@ import pytest
 
 from coordinator_core.search import engine
 from coordinator_core.search.engine import GrepSource, SearchSpec, Unanswerable, run
+from pathlib import Path
 
 pytestmark = pytest.mark.cadence
 
 
-def test_budget_is_process_time_not_wall_clock(tmp_path, monkeypatch):
+def test_budget_is_process_time_not_wall_clock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A search whose SLEEP dominates wall clock but consumes ~no CPU must not
     trip the budget -- pins the instrument against a silent revert to
     `time.perf_counter()` (wall clock), which the docstring-comment above
@@ -26,7 +27,7 @@ def test_budget_is_process_time_not_wall_clock(tmp_path, monkeypatch):
     real_process_time = time.process_time
     calls = {"n": 0}
 
-    def sleepy_process_time():
+    def sleepy_process_time() -> float:
         calls["n"] += 1
         if calls["n"] == 2:
             time.sleep(0.3)
@@ -42,7 +43,7 @@ def test_budget_is_process_time_not_wall_clock(tmp_path, monkeypatch):
     assert any("alpha" in line for line in result.lines)
 
 
-def test_budget_exceeded_declines_not_truncates(tmp_path, monkeypatch):
+def test_budget_exceeded_declines_not_truncates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "f.txt"
     target.write_text("alpha\n" * 50)
 
@@ -57,5 +58,5 @@ def test_budget_exceeded_declines_not_truncates(tmp_path, monkeypatch):
         source.execute(cwd=str(tmp_path), stop_after=None)
 
 
-def test_budget_constant_is_dr344_brightline():
+def test_budget_constant_is_dr344_brightline() -> None:
     assert engine.MAX_PROCESS_SECONDS == 0.5

@@ -20,6 +20,7 @@ from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
     _clean_bump_env,  # noqa: F401 -- reused fixture
 )
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -43,7 +44,7 @@ def _anchored_in(monkeypatch, repos, clone):  # noqa: F811
     return nested
 
 
-def test_scratch_clone_session_may_commit_in_enclosing_repo(repos, monkeypatch):  # noqa: F811
+def test_scratch_clone_session_may_commit_in_enclosing_repo(repos, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     clone = _clone_into(repos["foreign"] / "scratch", "merge-clone", repos["foreign"])
     nested = _anchored_in(monkeypatch, repos, clone)
 
@@ -51,7 +52,7 @@ def test_scratch_clone_session_may_commit_in_enclosing_repo(repos, monkeypatch):
     assert _run(nested, f"cd {_posix(repos['foreign'])} && git add a.txt") is None
 
 
-def test_clone_nested_outside_scratch_stays_foreign(repos, monkeypatch):  # noqa: F811
+def test_clone_nested_outside_scratch_stays_foreign(repos, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     clone = _clone_into(repos["foreign"] / "vendor", "other-clone", repos["foreign"])
     nested = _anchored_in(monkeypatch, repos, clone)
 
@@ -60,7 +61,7 @@ def test_clone_nested_outside_scratch_stays_foreign(repos, monkeypatch):  # noqa
     assert result is not None
 
 
-def test_unrelated_repo_stays_foreign_for_scratch_clone_session(repos, monkeypatch, tmp_path):  # noqa: F811
+def test_unrelated_repo_stays_foreign_for_scratch_clone_session(repos, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:  # noqa: F811
     clone = _clone_into(repos["foreign"] / "scratch", "merge-clone", repos["foreign"])
     nested = _anchored_in(monkeypatch, repos, clone)
     other = _init_repo(tmp_path, "other")
@@ -70,7 +71,7 @@ def test_unrelated_repo_stays_foreign_for_scratch_clone_session(repos, monkeypat
     assert result is not None
 
 
-def test_cross_repo_commit_is_allowed_with_a_warning(repos, monkeypatch, capsys):  # noqa: F811
+def test_cross_repo_commit_is_allowed_with_a_warning(repos, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:  # noqa: F811
     _set_anchor(monkeypatch, repos, SID)
     foreign = _posix(repos["foreign"])
 
@@ -84,7 +85,7 @@ def test_cross_repo_commit_is_allowed_with_a_warning(repos, monkeypatch, capsys)
     assert _run(repos, f"git -C {foreign} tag t1") is not None
 
 
-def test_anchor_repo_beside_scratch_is_not_enclosed(repos, monkeypatch):  # noqa: F811
+def test_anchor_repo_beside_scratch_is_not_enclosed(repos, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     assert guard._anchor_is_scratch_clone_of(str(repos["anchor"]), str(repos["foreign"])) is False
     assert guard._anchor_is_scratch_clone_of(None, str(repos["foreign"])) is False
     assert guard._anchor_is_scratch_clone_of(str(repos["foreign"] / "scratch2" / "c"), str(repos["foreign"])) is False

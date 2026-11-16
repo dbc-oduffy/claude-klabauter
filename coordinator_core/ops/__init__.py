@@ -23,17 +23,14 @@ A two-channel flag (`COORDINATOR_CORE_LAZY_OPS` env var / `sys._coordinator_core
 in-process attribute) used to gate this package's eager-import block; both
 channels, and the writers that armed the in-process one, are retired — every
 consumer of a bare `import coordinator_core.ops` (including the ~50 test modules
-that assert the registry at import time) now goes through the targeted-import or
-SAFE FALLBACK paths below instead of relying on package-init to populate the
+that assert the registry at import time) now goes through the targeted-import path in
+ipc.py instead of relying on package-init to populate the
 registry as a side effect.
 
-_eager_import_all() is also exposed for ipc.py's registry-miss SAFE FALLBACK: if
-an op is absent from OP_MODULE_MAP (or a mapped import didn't register it — map
-drift), the fallback calls this function directly to force full registration
-regardless of the lazy flag or of whatever partial state this package is
-already in — idempotent, since re-importing an already-imported submodule is a
-cheap no-op. This is what makes an incomplete/stale map degrade to today's
-correctness rather than to a broken dispatch.
+_eager_import_all() is exposed for callers that deliberately want full registration
+(census enumerators, tests); ipc.py's registry-miss path never calls it on the
+request thread — an op absent from OP_MODULE_MAP is answered not-found, and
+test_registry_miss_never_eager_imports_on_request pins map completeness.
 
 Resilient-and-loud per-module import (2026-07-21 break-class fix — one op
 module's ImportError used to abort ALL ~80 modules' registration in one shot;
@@ -50,17 +47,16 @@ re-surfaces the ORIGINAL exception instead of a generic "Method not found" —
 see coordinator_core/ipc.py's METHOD_NOT_FOUND branch for that half of the fix.
 
 Failure-mode analysis (why this design, not a stricter one):
-  - The _eager_import_all() path is the one reached by ipc.py's registry-miss
-    SAFE FALLBACK and by the handful of callers that force full registration
-    explicitly (the census enumerators, the warm server's preload) — this is
+  - The _eager_import_all() path is the one reached by the handful of callers
+    that force full registration explicitly (the census enumerators, the warm
+    server's preload) — this is
     exactly the path the reported defect broke, so it MUST be resilient: one
     broken module must never take ~8000 unrelated tests down with it. Before
     2026-08-22 this was the package-init default, reached whenever neither lazy
     channel was armed; package-init now registers nothing at all.
   - The actual PRODUCTION dispatch path (the one-shot CLI, DR-215) does a
     TARGETED import via OP_MODULE_MAP — it needs no arming, since lazy is the
-    only mode; it reaches _eager_import_all() only via the SAFE FALLBACK, and
-    only for the one op being dispatched. Making package-init "fail hard"
+    only mode, and never reaches _eager_import_all(). Making package-init "fail hard"
     would not make production stricter (production doesn't take that path);
     it would only reintroduce the test-collision collapse this fix removes.
   - Production strictness instead lives at the DISPATCH boundary: an op whose
@@ -176,6 +172,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.handoff_discharge_landed", 'registers "handoff.discharge_landed"'),
     ("coordinator_core.ops.dispatch_emit.terminal_commit", 'registers "dispatch.terminal_commit"'),
     ("coordinator_core.ops.dispatch_emit.land_run", 'registers "dispatch.land_run"'),
+    ("coordinator_core.ops.dispatch_emit.land_blobs", 'registers "dispatch.land_blobs"'),
     ("coordinator_core.ops.dispatch_emit.docs_check_gate_op", 'registers "dispatch.docs_check_rag_gate"'),
     ("coordinator_core.ops.dispatch_emit.minted_run", 'registers "dispatch.minted_run"'),
     ("coordinator_core.ops.dispatch_emit.reemit", 'registers "dispatch.reemit"'),
@@ -204,6 +201,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.dispatch_emit.release_halted_path", 'registers "dispatch.release_halted_path"'),
     ("coordinator_core.ops.dispatch_emit.checkpoint_reds", 'registers "dispatch.checkpoint_reds"'),
     ("coordinator_core.ops.dispatch_emit.requirements_ledger", 'registers "workflow.revise"'),
+    ("coordinator_core.ops.dispatch_emit.run_cancel", 'registers "workflow.cancel"'),
     ("coordinator_core.ops.dispatch_emit.revise_absorb", 'registers "workflow.pending_revisions"'),
     ("coordinator_core.ops.dispatch_emit.objective_calibrate", 'registers "dispatch.objective_calibrate"'),
     ("coordinator_core.ops.dispatch_emit.objective_check", 'registers "dispatch.objective_check"'),
@@ -238,6 +236,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
     ("coordinator_core.ops.landing_guard_selection", 'registers "landing.guard_selection"'),
     ("coordinator_core.ops.plan_readiness_verdict", 'registers "plan.readiness_verdict"'),
     ("coordinator_core.ops.plan_set_code_done", 'registers "plan.set_code_done"'),
+    ("coordinator_core.ops.plan_status_done", 'registers "plan.status_done"'),
     ("coordinator_core.ops.repo_setup", 'registers "repo.setup"'),
     ("coordinator_core.ops.plan_premise_carry", 'registers "plan.premise_scope", "plan.premise_record"'),
     ("coordinator_core.ops.plan_backfill_warp_executing", 'registers "plan.backfill_warp_executing"'),
@@ -430,7 +429,7 @@ _EAGER_OP_MODULES: List[Tuple[str, str]] = [
         'registers "p4.register_workspace" (C7). Lives under coordinator_core/p4/, '
         "not coordinator_core/ops/ — a module outside this package is reachable "
         "for DISPATCH through OP_MODULE_MAP's targeted import, which is why the "
-        "op resolves, but reachability for the registry-miss SAFE FALLBACK and "
+        "op resolves, but reachability for the registry-miss path and "
         "for every census enumerator comes from THIS list alone. Same shape as "
         "`sizing.read_object_fields` above: the p4 suites stayed green because "
         "they import the module directly.",

@@ -80,7 +80,7 @@ class FreshnessVerdict:
 class FreshnessRefusal(Exception):
     """Typed refusal: ``key`` names the settings-home key that is missing."""
 
-    def __init__(self, key: str, detail: str = ""):
+    def __init__(self, key: str, detail: str = "") -> None:
         self.key = key
         super().__init__(f"missing settings-home key {key}" + (f": {detail}" if detail else ""))
 

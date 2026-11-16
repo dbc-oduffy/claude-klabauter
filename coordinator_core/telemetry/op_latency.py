@@ -135,6 +135,10 @@ from typing import Optional
 
 from coordinator_core import atomic_append
 from coordinator_core.session_hub_path import hub_for_common
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from logging import Logger
 
 _DISABLE_ENV = "COORDINATOR_OP_LATENCY_DISABLE"
 
@@ -274,7 +278,7 @@ def double_routed_corr_ids(entries) -> set:
 _logger = None
 
 
-def _log():
+def _log() -> Logger:
     global _logger
     if _logger is None:
         import logging

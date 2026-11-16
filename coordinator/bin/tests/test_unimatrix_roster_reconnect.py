@@ -4,11 +4,15 @@ import json
 from pathlib import Path
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 BIN = Path(__file__).resolve().parents[1]
 
 
-def load():
+def load() -> "ModuleType":
     spec = importlib.util.spec_from_file_location("unimatrix_roster_rc", BIN / "unimatrix-roster.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -52,7 +56,7 @@ def drive(mod, monkeypatch, tmp_path, outcomes, reap=None):
     monkeypatch.setattr(mod, "fetch_roster", fetch)
     sleeps = []
 
-    def sleep(s):
+    def sleep(s) -> None:
         sleeps.append(s)
         clock["t"] += s
         if len(sleeps) >= len(outcomes):
@@ -65,7 +69,7 @@ def drive(mod, monkeypatch, tmp_path, outcomes, reap=None):
     return log.read_text(encoding="utf-8"), sleeps, synced, fetched
 
 
-def test_far_down_for_n_cycles_then_back_relinks_without_a_trigger(monkeypatch, tmp_path):
+def test_far_down_for_n_cycles_then_back_relinks_without_a_trigger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     mod = load()
     text, sleeps, synced, _ = drive(mod, monkeypatch, tmp_path, [True] + [False] * 6 + [True, True])
     assert text.count("LINK-DOWN") == 1 and text.count("LINK-UP") == 1
@@ -75,16 +79,16 @@ def test_far_down_for_n_cycles_then_back_relinks_without_a_trigger(monkeypatch, 
     assert rec["state"] == "up"
 
 
-def test_a_single_failed_poll_is_not_a_link_flap_and_syncing_continues(monkeypatch, tmp_path):
+def test_a_single_failed_poll_is_not_a_link_flap_and_syncing_continues(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     mod = load()
     text, _, synced, _ = drive(mod, monkeypatch, tmp_path, [True, False, True, True])
     assert "LINK-" not in text and len(synced) == 3
 
 
-def test_a_raise_in_the_failure_branch_reap_does_not_end_the_loop(monkeypatch, tmp_path):
+def test_a_raise_in_the_failure_branch_reap_does_not_end_the_loop(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     mod = load()
 
-    def reap(remote, say, unbacked=False, keep=()):
+    def reap(remote, say, unbacked: bool = False, keep=()) -> None:
         if unbacked:
             raise FileNotFoundError("session file already removed")
 
@@ -93,7 +97,7 @@ def test_a_raise_in_the_failure_branch_reap_does_not_end_the_loop(monkeypatch, t
     assert text.count("LINK-UP") == 1 and len(synced) == 2
 
 
-def test_a_raise_that_is_not_in_the_old_catch_list_is_retried(monkeypatch, tmp_path):
+def test_a_raise_that_is_not_in_the_old_catch_list_is_retried(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     mod = load()
     monkeypatch.setattr(mod, "mirrorable", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")))
     text, _, _, fetched = drive(mod, monkeypatch, tmp_path, [True, True, True, True])
@@ -101,7 +105,7 @@ def test_a_raise_that_is_not_in_the_old_catch_list_is_retried(monkeypatch, tmp_p
     assert len(fetched) >= 2, "a failed roster fetch is retried after its backoff"
 
 
-def test_backoff_doubles_to_one_poll_multiple_cap_and_resets(monkeypatch, tmp_path):
+def test_backoff_doubles_to_one_poll_multiple_cap_and_resets(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     mod = load()
     P = mod.POLL_SECONDS
     assert [mod.backoff_seconds(n) for n in (1, 2, 3, 4, 9)] == [P, 2 * P, 4 * P, 4 * P, 4 * P]
@@ -111,7 +115,7 @@ def test_backoff_doubles_to_one_poll_multiple_cap_and_resets(monkeypatch, tmp_pa
     assert fetched == [0, P, 3 * P, 7 * P, 8 * P, 9 * P]
 
 
-def test_drop_session_files_tolerates_a_file_the_bridge_already_removed(monkeypatch, tmp_path):
+def test_drop_session_files_tolerates_a_file_the_bridge_already_removed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     mod = load()
     sess = tmp_path / "sess"
     sess.mkdir()

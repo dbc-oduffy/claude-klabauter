@@ -43,6 +43,7 @@ from coordinator_core.distill.wiki_log_migrate import (
     migrate_wiki_log,
     render_tombstone,
 )
+from pathlib import Path
 
 WIKI_LOG_FIXTURE = """\
 # Distill Harvest-Debt Ledger
@@ -67,7 +68,7 @@ archive/specs/2026-07/2026-07-05-single-writer-queue-mutating-dispatch.md  # sup
 """
 
 
-def test_migrate_wiki_log_parses_all_three_sections(tmp_path):
+def test_migrate_wiki_log_parses_all_three_sections(tmp_path: Path) -> None:
     wiki_log_path = tmp_path / ".distill-log.md"
     wiki_log_path.write_text(WIKI_LOG_FIXTURE, encoding="utf-8")
     canonical_log_path = tmp_path / "distillation-log.md"
@@ -79,7 +80,7 @@ def test_migrate_wiki_log_parses_all_three_sections(tmp_path):
     assert dispositions == ["DISTILLED", "DISTILLED", "DISTILLED", "SKIP", "SKIP"]
 
 
-def test_migrate_wiki_log_run_id_extraction(tmp_path):
+def test_migrate_wiki_log_run_id_extraction(tmp_path: Path) -> None:
     wiki_log_path = tmp_path / ".distill-log.md"
     wiki_log_path.write_text(WIKI_LOG_FIXTURE, encoding="utf-8")
     canonical_log_path = tmp_path / "distillation-log.md"
@@ -102,7 +103,7 @@ def test_migrate_wiki_log_run_id_extraction(tmp_path):
     )
 
 
-def test_migrate_wiki_log_fate_text_shapes(tmp_path):
+def test_migrate_wiki_log_fate_text_shapes(tmp_path: Path) -> None:
     wiki_log_path = tmp_path / ".distill-log.md"
     wiki_log_path.write_text(WIKI_LOG_FIXTURE, encoding="utf-8")
     canonical_log_path = tmp_path / "distillation-log.md"
@@ -128,7 +129,7 @@ def test_migrate_wiki_log_fate_text_shapes(tmp_path):
     assert skipped_fate == "superseded (migrated from docs/wiki/.distill-log.md)"
 
 
-def test_migrate_wiki_log_rows_round_trip_through_canonical_parser(tmp_path):
+def test_migrate_wiki_log_rows_round_trip_through_canonical_parser(tmp_path: Path) -> None:
     wiki_log_path = tmp_path / ".distill-log.md"
     wiki_log_path.write_text(WIKI_LOG_FIXTURE, encoding="utf-8")
     canonical_log_path = tmp_path / "distillation-log.md"
@@ -145,7 +146,7 @@ def test_migrate_wiki_log_rows_round_trip_through_canonical_parser(tmp_path):
         assert canon.run_id == row.run_id
 
 
-def test_migrate_wiki_log_backs_up_original_verbatim(tmp_path):
+def test_migrate_wiki_log_backs_up_original_verbatim(tmp_path: Path) -> None:
     wiki_log_path = tmp_path / ".distill-log.md"
     wiki_log_path.write_text(WIKI_LOG_FIXTURE, encoding="utf-8")
     canonical_log_path = tmp_path / "distillation-log.md"
@@ -157,7 +158,7 @@ def test_migrate_wiki_log_backs_up_original_verbatim(tmp_path):
     assert backup_path.read_text(encoding="utf-8") == WIKI_LOG_FIXTURE
 
 
-def test_migrate_wiki_log_writes_tombstone_over_source(tmp_path):
+def test_migrate_wiki_log_writes_tombstone_over_source(tmp_path: Path) -> None:
     wiki_log_path = tmp_path / ".distill-log.md"
     wiki_log_path.write_text(WIKI_LOG_FIXTURE, encoding="utf-8")
     canonical_log_path = tmp_path / "distillation-log.md"
@@ -170,7 +171,7 @@ def test_migrate_wiki_log_writes_tombstone_over_source(tmp_path):
     assert not (tmp_path / ".distill-log.md.tmp").exists()
 
 
-def test_migrate_wiki_log_refuses_rerun_against_tombstoned_file(tmp_path):
+def test_migrate_wiki_log_refuses_rerun_against_tombstoned_file(tmp_path: Path) -> None:
     wiki_log_path = tmp_path / ".distill-log.md"
     wiki_log_path.write_text(render_tombstone(), encoding="utf-8")
     canonical_log_path = tmp_path / "distillation-log.md"
@@ -181,7 +182,7 @@ def test_migrate_wiki_log_refuses_rerun_against_tombstoned_file(tmp_path):
     assert not canonical_log_path.exists()
 
 
-def test_migrate_wiki_log_refuses_stale_backup_sibling(tmp_path):
+def test_migrate_wiki_log_refuses_stale_backup_sibling(tmp_path: Path) -> None:
     wiki_log_path = tmp_path / ".distill-log.md"
     wiki_log_path.write_text(WIKI_LOG_FIXTURE, encoding="utf-8")
     canonical_log_path = tmp_path / "distillation-log.md"
@@ -196,7 +197,7 @@ def test_migrate_wiki_log_refuses_stale_backup_sibling(tmp_path):
     assert not canonical_log_path.exists()
 
 
-def test_migrate_wiki_log_malformed_row_raises_and_writes_nothing(tmp_path):
+def test_migrate_wiki_log_malformed_row_raises_and_writes_nothing(tmp_path: Path) -> None:
     wiki_log_path = tmp_path / ".distill-log.md"
     malformed_fixture = (
         "## Harvested — 2026-07 claude-klabauter cohort (run 2026-07-08-pass1)\n\n"
@@ -214,7 +215,7 @@ def test_migrate_wiki_log_malformed_row_raises_and_writes_nothing(tmp_path):
     assert wiki_log_path.read_text(encoding="utf-8") == malformed_fixture
 
 
-def test_migrate_wiki_log_appends_to_existing_canonical_log(tmp_path):
+def test_migrate_wiki_log_appends_to_existing_canonical_log(tmp_path: Path) -> None:
     wiki_log_path = tmp_path / ".distill-log.md"
     wiki_log_path.write_text(WIKI_LOG_FIXTURE, encoding="utf-8")
     canonical_log_path = tmp_path / "distillation-log.md"

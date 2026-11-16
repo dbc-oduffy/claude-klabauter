@@ -97,8 +97,23 @@ def _resolve_plan(raw: str, worktree_root: Path) -> Path:
     if contained_path(candidate, [worktree_root]) is None:
         raise ValueError(f"plan escapes the resolved worktree: {raw!r}")
     if not candidate.is_file():
-        raise ValueError(f"no such plan: {raw!r}")
+        candidate = _month_folder_twin(candidate, worktree_root)
+        if candidate is None:
+            raise ValueError(f"no such plan: {raw!r}")
     return candidate
+
+
+def _month_folder_twin(missing: Path, worktree_root: Path) -> Optional[Path]:
+    """The one ``<dir>/YYYY-MM/<name>`` file a plan moved into its month folder leaves behind;
+    ``None`` for zero or several twins, or a twin that escapes the worktree."""
+    twins = [
+        p
+        for p in missing.parent.glob(f"[0-9][0-9][0-9][0-9]-[0-9][0-9]/{missing.name}")
+        if p.is_file()
+    ]
+    if len(twins) != 1 or contained_path(twins[0], [worktree_root]) is None:
+        return None
+    return twins[0]
 
 
 @register_op("plan.prep_gate")

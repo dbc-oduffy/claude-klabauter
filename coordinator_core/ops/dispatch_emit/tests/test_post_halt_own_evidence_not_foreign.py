@@ -51,7 +51,7 @@ def _build(tmp_path: Path) -> Path:
     return root
 
 
-def test_evidence_beside_the_located_plan_is_in_the_runs_plan_evidence(tmp_path):
+def test_evidence_beside_the_located_plan_is_in_the_runs_plan_evidence(tmp_path: Path) -> None:
     root = _build(tmp_path)
     owned = own.own_artifact_paths(root, RUN)
     assert LOCATED_EVIDENCE in owned.plan_evidence, (
@@ -61,12 +61,12 @@ def test_evidence_beside_the_located_plan_is_in_the_runs_plan_evidence(tmp_path)
     assert owned.covers(LOCATED_EVIDENCE)
 
 
-def test_another_plans_evidence_stays_foreign(tmp_path):
+def test_another_plans_evidence_stays_foreign(tmp_path: Path) -> None:
     root = _build(tmp_path)
     assert not own.own_artifact_paths(root, RUN).covers(OTHER_EVIDENCE)
 
 
-def test_post_halt_append_on_the_located_evidence_yields_no_foreign_hunk(tmp_path):
+def test_post_halt_append_on_the_located_evidence_yields_no_foreign_hunk(tmp_path: Path) -> None:
     root = _build(tmp_path)
     for rel in (LOCATED_EVIDENCE, OTHER_EVIDENCE):
         (root / rel).write_text("criterion_evidence: {C4: ok}\n", encoding="utf-8")

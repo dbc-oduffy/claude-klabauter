@@ -7,6 +7,7 @@ import json
 
 from .test_seam_leg_executes_declared_paths import _test_row_waves
 from .test_seam_wave_boundary import CLEAN_REPLY, P1, P2, P3, _NODE, _compose, _refused, _row, _run_script
+from pathlib import Path
 
 FALLBACK_PLAN = "state/mise-inventory/x.spine.md"
 
@@ -41,7 +42,7 @@ def _run(tmp_path, replies, repair, waves=None):
 
 
 @_NODE
-def test_a_landed_repair_commits_rechecks_and_dispatches_the_held_row(tmp_path):
+def test_a_landed_repair_commits_rechecks_and_dispatches_the_held_row(tmp_path: Path) -> None:
     out = _run(tmp_path, [_failed("tests/test_a.py"), CLEAN_REPLY], _done(["a.py"]))
     assert _count(out, "seam-fix:wave-1") == 1
     assert _count(out, "commit:wave-1") == 2
@@ -55,7 +56,7 @@ def test_a_landed_repair_commits_rechecks_and_dispatches_the_held_row(tmp_path):
 
 
 @_NODE
-def test_a_flake_repair_with_no_paths_rechecks_without_a_second_commit(tmp_path):
+def test_a_flake_repair_with_no_paths_rechecks_without_a_second_commit(tmp_path: Path) -> None:
     out = _run(tmp_path, [_failed("tests/test_a.py"), CLEAN_REPLY], _done([]))
     assert _count(out, "commit:wave-1") == 1
     assert _count(out, "seam:wave-1") == 2
@@ -64,7 +65,7 @@ def test_a_flake_repair_with_no_paths_rechecks_without_a_second_commit(tmp_path)
 
 
 @_NODE
-def test_a_blocked_repair_halts_the_plan_with_its_reason(tmp_path):
+def test_a_blocked_repair_halts_the_plan_with_its_reason(tmp_path: Path) -> None:
     repair = {"status": "BLOCKED", "paths": [], "reason": "cannot reproduce the red"}
     out = _run(tmp_path, [_failed("tests/test_a.py"), CLEAN_REPLY], repair)
     assert _count(out, "seam:wave-1") == 1
@@ -75,7 +76,7 @@ def test_a_blocked_repair_halts_the_plan_with_its_reason(tmp_path):
 
 
 @_NODE
-def test_a_repair_that_does_not_clear_the_drift_halts_after_exactly_one_round(tmp_path):
+def test_a_repair_that_does_not_clear_the_drift_halts_after_exactly_one_round(tmp_path: Path) -> None:
     out = _run(tmp_path, [_failed("tests/test_a.py")] * 3, _done(["a.py"]))
     assert _count(out, "seam-fix:wave-1") == 1
     assert _count(out, "seam:wave-1") == 2
@@ -83,7 +84,7 @@ def test_a_repair_that_does_not_clear_the_drift_halts_after_exactly_one_round(tm
 
 
 @_NODE
-def test_a_repair_outside_the_footprint_is_never_committed(tmp_path):
+def test_a_repair_outside_the_footprint_is_never_committed(tmp_path: Path) -> None:
     out = _run(tmp_path, [_failed("tests/test_a.py"), CLEAN_REPLY], _done(["elsewhere.py"]))
     assert _count(out, "commit:wave-1") == 1
     assert _count(out, "seam:wave-1") == 1
@@ -92,7 +93,7 @@ def test_a_repair_outside_the_footprint_is_never_committed(tmp_path):
 
 
 @_NODE
-def test_an_unreachable_finding_beside_an_execution_failed_one_is_not_repairable(tmp_path):
+def test_an_unreachable_finding_beside_an_execution_failed_one_is_not_repairable(tmp_path: Path) -> None:
     reply = _failed("tests/test_a.py", extra=[{"class": "unreachable", "path": "a.py", "blocking": True}])
     out = _run(tmp_path, [reply, CLEAN_REPLY], _done(["a.py"]))
     assert _count(out, "seam-fix:") == 0
@@ -100,7 +101,7 @@ def test_an_unreachable_finding_beside_an_execution_failed_one_is_not_repairable
 
 
 @_NODE
-def test_an_infra_refusal_is_never_routed_into_repair(tmp_path):
+def test_an_infra_refusal_is_never_routed_into_repair(tmp_path: Path) -> None:
     refused = _refused("ETIMEDOUT reaching the engine")
     out = _run(tmp_path, [refused, refused], _done(["a.py"]))
     assert _count(out, "seam-fix:") == 0
@@ -108,7 +109,7 @@ def test_an_infra_refusal_is_never_routed_into_repair(tmp_path):
 
 
 @_NODE
-def test_a_two_plan_fix_attributes_to_the_committed_rows_plans_never_the_fallback(tmp_path):
+def test_a_two_plan_fix_attributes_to_the_committed_rows_plans_never_the_fallback(tmp_path: Path) -> None:
     waves = [
         [_row("P1-C1", ["a.py", "tests/test_a.py"], P1), _row("P3-C1", ["z.py", "tests/test_z.py"], P3)],
         [_row("P2-C1", ["b.py"], P2, reads=["a.py"])],

@@ -21,6 +21,7 @@ from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
     _clean_bump_env,  # noqa: F401 -- reused fixture
 )
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -32,7 +33,7 @@ def _row(name: str, dest_sigil: str, source: str = "dist/klabauter-toplevel") ->
     return f"{name}|flat-mirror|{dest_sigil}|{source}|"
 
 
-def _setup(monkeypatch, tmp_path, repos, *, rows, mirror_root=None, portable=True):  # noqa: F811
+def _setup(monkeypatch, tmp_path, repos, *, rows, mirror_root=None, portable: bool = True) -> None:  # noqa: F811
     """Anchor repo carries the portable rows; the registry maps `claude_klabauter` to `mirror_root`."""
     _set_anchor(monkeypatch, repos, SID)
     monkeypatch.setenv(FLAG_ENV, "on")
@@ -62,13 +63,13 @@ def _reason(result) -> str:
 OWN_ROW = [_row("klabauter-top", "publish-mirror:claude_klabauter")]
 
 
-def test_git_apply_into_own_row_tree_is_allowed(repos, monkeypatch, tmp_path):  # noqa: F811
+def test_git_apply_into_own_row_tree_is_allowed(repos, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:  # noqa: F811
     _setup(monkeypatch, tmp_path, repos, rows=OWN_ROW)
 
     assert _run(repos, f"git -C {_posix(repos['foreign'])} apply patch.diff") is None
 
 
-def test_engine_stamp_write_into_own_row_tree_is_allowed(repos, monkeypatch, tmp_path):  # noqa: F811
+def test_engine_stamp_write_into_own_row_tree_is_allowed(repos, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:  # noqa: F811
     _setup(monkeypatch, tmp_path, repos, rows=OWN_ROW)
     (repos["foreign"] / "coordinator_core").mkdir()
     stamp = _posix(repos["foreign"] / "coordinator_core" / "_engine_stamp")
@@ -85,7 +86,7 @@ def test_engine_stamp_write_into_own_row_tree_is_allowed(repos, monkeypatch, tmp
         "cp {m}/a {m}/coordinator_core/other.py",
     ],
 )
-def test_same_tree_from_a_non_publisher_command_is_denied(repos, monkeypatch, tmp_path, template):  # noqa: F811
+def test_same_tree_from_a_non_publisher_command_is_denied(repos, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, template) -> None:  # noqa: F811
     _setup(monkeypatch, tmp_path, repos, rows=OWN_ROW)
     (repos["foreign"] / "coordinator_core").mkdir()
 
@@ -99,7 +100,7 @@ def test_same_tree_from_a_non_publisher_command_is_denied(repos, monkeypatch, tm
     "template",
     ["git -C {o} apply patch.diff", "echo abc > {o}/coordinator_core/_engine_stamp"],
 )
-def test_another_foreign_repo_is_denied(repos, monkeypatch, tmp_path, template):  # noqa: F811
+def test_another_foreign_repo_is_denied(repos, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, template) -> None:  # noqa: F811
     _setup(monkeypatch, tmp_path, repos, rows=OWN_ROW)
     other = _init_repo(tmp_path, "other")
     (other / "coordinator_core").mkdir()
@@ -114,7 +115,7 @@ def test_another_foreign_repo_is_denied(repos, monkeypatch, tmp_path, template):
     "template",
     ["git -C {m} apply patch.diff", "echo abc > {m}/coordinator_core/_engine_stamp"],
 )
-def test_tree_that_is_no_rows_destination_is_denied(repos, monkeypatch, tmp_path, template):  # noqa: F811
+def test_tree_that_is_no_rows_destination_is_denied(repos, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, template) -> None:  # noqa: F811
     other = _init_repo(tmp_path, "elsewhere")
     _setup(monkeypatch, tmp_path, repos, rows=OWN_ROW, mirror_root=other)
     (repos["foreign"] / "coordinator_core").mkdir()
@@ -125,7 +126,7 @@ def test_tree_that_is_no_rows_destination_is_denied(repos, monkeypatch, tmp_path
     assert _reason(result) == "Advisory: " + CROSS_REPO_WARN_RISK
 
 
-def test_row_whose_source_is_another_repo_is_denied(repos, monkeypatch, tmp_path):  # noqa: F811
+def test_row_whose_source_is_another_repo_is_denied(repos, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:  # noqa: F811
     rows = [_row("klabauter-top", "publish-mirror:claude_klabauter", source="plugin-source:other/bin")]
     _setup(monkeypatch, tmp_path, repos, rows=rows)
 
@@ -134,7 +135,7 @@ def test_row_whose_source_is_another_repo_is_denied(repos, monkeypatch, tmp_path
     assert result is not None
 
 
-def test_session_without_a_portable_file_is_denied(repos, monkeypatch, tmp_path):  # noqa: F811
+def test_session_without_a_portable_file_is_denied(repos, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:  # noqa: F811
     _setup(monkeypatch, tmp_path, repos, rows=OWN_ROW, portable=False)
 
     result = _run(repos, f"git -C {_posix(repos['foreign'])} apply patch.diff")
@@ -142,7 +143,7 @@ def test_session_without_a_portable_file_is_denied(repos, monkeypatch, tmp_path)
     assert result is not None
 
 
-def test_deny_remedy_does_not_end_in_ask_the_operator(repos, monkeypatch, tmp_path):  # noqa: F811
+def test_deny_remedy_does_not_end_in_ask_the_operator(repos, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:  # noqa: F811
     _setup(monkeypatch, tmp_path, repos, rows=OWN_ROW)
 
     result = _run(repos, f"echo x > {_posix(repos['foreign'])}/foo.py")

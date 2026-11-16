@@ -9,6 +9,7 @@ from coordinator_core.write_guards._guard_level import (
     DOCTRINE_SURFACE_ADVISORY,
     doctrine_surface_advisory,
 )
+import pytest
 
 
 def _init_git_dir(root: Path) -> None:
@@ -21,7 +22,7 @@ def _write_payload(tool_name: str, file_path: str, **tool_input_extra):
 
 
 class TestUngovernedSurfaceNeverDenied:
-    def test_repo_root_claude_md_without_manifest_is_not_governed(self, tmp_path):
+    def test_repo_root_claude_md_without_manifest_is_not_governed(self, tmp_path: Path) -> None:
         _init_git_dir(tmp_path)
         target = tmp_path / "CLAUDE.md"
 
@@ -33,7 +34,7 @@ class TestUngovernedSurfaceNeverDenied:
 
 
 class TestFlatHardLimitStillApplies:
-    def test_dev_repo_coordinator_claude_md_over_hard_limit_denied(self, tmp_path):
+    def test_dev_repo_coordinator_claude_md_over_hard_limit_denied(self, tmp_path: Path) -> None:
         _init_git_dir(tmp_path)
         (tmp_path / DEV_REPO_SENTINEL).write_text("sentinel", encoding="utf-8")
         coord_dir = tmp_path / "coordinator"
@@ -49,7 +50,7 @@ class TestFlatHardLimitStillApplies:
         assert out["permissionDecision"] == "deny"
         assert out["permissionDecisionReason"]
 
-    def test_dev_repo_coordinator_claude_md_under_hard_limit_allowed(self, tmp_path):
+    def test_dev_repo_coordinator_claude_md_under_hard_limit_allowed(self, tmp_path: Path) -> None:
         _init_git_dir(tmp_path)
         (tmp_path / DEV_REPO_SENTINEL).write_text("sentinel", encoding="utf-8")
         coord_dir = tmp_path / "coordinator"
@@ -62,7 +63,7 @@ class TestFlatHardLimitStillApplies:
 
 
 class TestAudienceManifestWidensGovernance:
-    def test_manifest_named_surface_of_any_filename_becomes_governed(self, tmp_path):
+    def test_manifest_named_surface_of_any_filename_becomes_governed(self, tmp_path: Path) -> None:
         _init_git_dir(tmp_path)
         coord_dir = tmp_path / "coordinator"
         coord_dir.mkdir()
@@ -82,7 +83,7 @@ class TestAudienceManifestWidensGovernance:
         assert out["permissionDecision"] == "deny"
         assert out["permissionDecisionReason"]
 
-    def test_surface_absent_from_manifest_stays_ungoverned(self, tmp_path):
+    def test_surface_absent_from_manifest_stays_ungoverned(self, tmp_path: Path) -> None:
         _init_git_dir(tmp_path)
         coord_dir = tmp_path / "coordinator"
         coord_dir.mkdir()
@@ -124,14 +125,14 @@ class TestRatchetWatermarkEnforced:
             encoding="utf-8",
         )
 
-    def test_unarmed_ratchet_only_the_flat_hard_limit_applies(self, tmp_path):
+    def test_unarmed_ratchet_only_the_flat_hard_limit_applies(self, tmp_path: Path) -> None:
         target = self._governed_target(tmp_path)
 
         result = guard.check(_write_payload("Write", str(target), content="x" * 100))
 
         assert result == doctrine_surface_advisory()
 
-    def test_growing_past_armed_watermark_denied_even_under_hard_limit(self, tmp_path):
+    def test_growing_past_armed_watermark_denied_even_under_hard_limit(self, tmp_path: Path) -> None:
         target = self._governed_target(tmp_path)
         self._arm_watermark(tmp_path, bytes_val=6000, reason="post-cut arming, C7b")
 
@@ -143,7 +144,7 @@ class TestRatchetWatermarkEnforced:
         assert "6000" in out["permissionDecisionReason"]
         assert "post-cut arming, C7b" in out["permissionDecisionReason"]
 
-    def test_holding_at_armed_watermark_allowed(self, tmp_path):
+    def test_holding_at_armed_watermark_allowed(self, tmp_path: Path) -> None:
         target = self._governed_target(tmp_path)
         self._arm_watermark(tmp_path, bytes_val=6000, reason="post-cut arming, C7b")
 
@@ -151,7 +152,7 @@ class TestRatchetWatermarkEnforced:
 
         assert result == doctrine_surface_advisory()
 
-    def test_shrinking_under_armed_watermark_allowed(self, tmp_path):
+    def test_shrinking_under_armed_watermark_allowed(self, tmp_path: Path) -> None:
         target = self._governed_target(tmp_path)
         self._arm_watermark(tmp_path, bytes_val=6000, reason="post-cut arming, C7b")
 
@@ -159,7 +160,7 @@ class TestRatchetWatermarkEnforced:
 
         assert result == doctrine_surface_advisory()
 
-    def test_malformed_watermark_does_not_deny_and_names_ledger_path(self, tmp_path, capsys):
+    def test_malformed_watermark_does_not_deny_and_names_ledger_path(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         # Fix for the wedge-with-no-escape-hatch defect: a malformed ledger
         # is auxiliary-bookkeeping corruption, not a statement about
         # whether THIS edit is legitimate -- this module carries zero
@@ -178,7 +179,7 @@ class TestRatchetWatermarkEnforced:
         err = capsys.readouterr().err
         assert str(ledger_path) in err
 
-    def test_malformed_watermark_hard_limit_breach_still_denies(self, tmp_path):
+    def test_malformed_watermark_hard_limit_breach_still_denies(self, tmp_path: Path) -> None:
         # Regression: the malformed-ledger fail-open must not swallow the
         # OTHER, unrelated deny leg -- an actual HARD_LIMIT_BYTES breach
         # still denies exactly as before.
@@ -197,7 +198,7 @@ class TestRatchetWatermarkEnforced:
         assert out["permissionDecision"] == "deny"
         assert out["permissionDecisionReason"]
 
-    def test_over_watermark_shrink_is_admitted(self, tmp_path):
+    def test_over_watermark_shrink_is_admitted(self, tmp_path: Path) -> None:
         target = self._governed_target(tmp_path)
         self._arm_watermark(tmp_path, bytes_val=6000, reason="post-cut arming, C7b")
         target.write_text("x" * 8000, encoding="utf-8")
@@ -206,7 +207,7 @@ class TestRatchetWatermarkEnforced:
 
         assert result == doctrine_surface_advisory()
 
-    def test_over_watermark_growth_is_still_denied(self, tmp_path):
+    def test_over_watermark_growth_is_still_denied(self, tmp_path: Path) -> None:
         target = self._governed_target(tmp_path)
         self._arm_watermark(tmp_path, bytes_val=6000, reason="post-cut arming, C7b")
         target.write_text("x" * 8000, encoding="utf-8")
@@ -217,7 +218,7 @@ class TestRatchetWatermarkEnforced:
         out = result["hookSpecificOutput"]
         assert "6000" in out["permissionDecisionReason"]
 
-    def test_over_watermark_same_size_is_still_denied(self, tmp_path):
+    def test_over_watermark_same_size_is_still_denied(self, tmp_path: Path) -> None:
         target = self._governed_target(tmp_path)
         self._arm_watermark(tmp_path, bytes_val=6000, reason="post-cut arming, C7b")
         target.write_text("x" * 8000, encoding="utf-8")
@@ -228,7 +229,7 @@ class TestRatchetWatermarkEnforced:
         out = result["hookSpecificOutput"]
         assert "6000" in out["permissionDecisionReason"]
 
-    def test_over_watermark_shrink_via_edit_is_admitted(self, tmp_path):
+    def test_over_watermark_shrink_via_edit_is_admitted(self, tmp_path: Path) -> None:
         target = self._governed_target(tmp_path)
         self._arm_watermark(tmp_path, bytes_val=6000, reason="post-cut arming, C7b")
         target.write_text("PREFIX" + ("x" * 8000), encoding="utf-8")
@@ -241,7 +242,7 @@ class TestRatchetWatermarkEnforced:
 
         assert result == doctrine_surface_advisory()
 
-    def test_genuine_ratchet_failure_still_denies(self, tmp_path):
+    def test_genuine_ratchet_failure_still_denies(self, tmp_path: Path) -> None:
         # Regression: a well-formed watermark whose ratchet check genuinely
         # fails (growth past the recorded watermark) still denies exactly
         # as before -- only the PARSE-FAILURE branch changed.
@@ -257,7 +258,7 @@ class TestRatchetWatermarkEnforced:
 
 
 class TestDoctrineSurfaceAdvisoryParity:
-    def test_within_budget_governed_edit_carries_the_shared_advisory(self, tmp_path):
+    def test_within_budget_governed_edit_carries_the_shared_advisory(self, tmp_path: Path) -> None:
         _init_git_dir(tmp_path)
         (tmp_path / DEV_REPO_SENTINEL).write_text("")
         target = tmp_path / "coordinator" / "CLAUDE.md"

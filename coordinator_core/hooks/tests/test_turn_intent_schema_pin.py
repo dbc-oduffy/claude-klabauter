@@ -5,9 +5,10 @@ import os
 import uuid
 
 from coordinator_core.hooks.support import turn_intent
+from pathlib import Path
 
 
-def test_written_record_keeps_the_schema_1_keys(tmp_path):
+def test_written_record_keeps_the_schema_1_keys(tmp_path: Path) -> None:
     session_id = str(uuid.uuid4())
     directory = turn_intent.session_dir(str(tmp_path), session_id)
     assert turn_intent.write_record(directory, session_id, True, "ok?", "marker", 123.5)

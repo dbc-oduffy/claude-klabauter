@@ -12,13 +12,14 @@ import pytest
 from coordinator_core.agent_pipe import bridge, codex_app_server, mailbox, roster
 from coordinator_core.agent_pipe.contract import mailbox_path
 from coordinator_core.agent_pipe.tests.fixtures.fake_app_server import SCRIPT
+from pathlib import Path
 
 THREAD = "01a1a3e1-30c3-71c1-9eab-aae86f8bfb81"
 LABEL = "[from a (claude) via bridge]"
 
 
 @pytest.fixture(autouse=True)
-def _home(tmp_path, monkeypatch):
+def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
 
 
@@ -26,7 +27,7 @@ def _mail(session: str) -> list[dict]:
     return [json.loads(x) for x in mailbox.drain(session)]
 
 
-def test_claude_leg_writes_labelled_line_with_provenance():
+def test_claude_leg_writes_labelled_line_with_provenance() -> None:
     roster.bind("a", "claude", "sess-a")
     roster.bind("b", "claude", "sess-b")
     res = bridge.route(bridge.make_message("a", "b", "hello"))
@@ -37,10 +38,10 @@ def test_claude_leg_writes_labelled_line_with_provenance():
     assert line["to_session"] == "sess-b"
 
 
-def test_codex_leg_delivers_labelled_text(monkeypatch):
+def test_codex_leg_delivers_labelled_text(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
 
-    def fake_deliver(argv, thread_id, text, timeout=0):
+    def fake_deliver(argv, thread_id, text, timeout: int = 0):
         seen.update(argv=argv, thread=thread_id, text=text)
         yield "ok"
 
@@ -53,7 +54,7 @@ def test_codex_leg_delivers_labelled_text(monkeypatch):
     assert seen == {"argv": ["x", "proxy"], "thread": THREAD, "text": f"{LABEL}\nping"}
 
 
-def test_codex_leg_against_fake_app_server_completes_without_failure():
+def test_codex_leg_against_fake_app_server_completes_without_failure() -> None:
     roster.bind("a", "claude", "sess-a")
     roster.bind("cx", "codex", THREAD, argv=[sys.executable, SCRIPT, "owner"])
     res = bridge.route(bridge.make_message("a", "cx", "ping"))
@@ -62,10 +63,10 @@ def test_codex_leg_against_fake_app_server_completes_without_failure():
     assert not bridge.log_path().exists()
 
 
-def test_codex_leg_does_not_hold_the_caller_for_the_remote_turn(monkeypatch):
+def test_codex_leg_does_not_hold_the_caller_for_the_remote_turn(monkeypatch: pytest.MonkeyPatch) -> None:
     gate = threading.Event()
 
-    def slow(argv, thread_id, text, timeout=0):
+    def slow(argv, thread_id, text, timeout: int = 0):
         gate.wait(10)
         yield "late"
 
@@ -78,14 +79,14 @@ def test_codex_leg_does_not_hold_the_caller_for_the_remote_turn(monkeypatch):
     res.wait(5)
 
 
-def test_codex_binding_without_argv_is_unroutable_and_logged():
+def test_codex_binding_without_argv_is_unroutable_and_logged() -> None:
     roster.bind("cx", "codex", THREAD)
     res = bridge.route(bridge.make_message("a", "cx", "ping"))
     assert res.status == "unroutable"
     assert json.loads(bridge.log_path().read_text().splitlines()[-1])["event"] == "unroutable"
 
 
-def test_agy_leg_resumes_conversation_with_labelled_text(monkeypatch, tmp_path):
+def test_agy_leg_resumes_conversation_with_labelled_text(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     out = tmp_path / "argv.json"
     script = f"import sys,json;open({str(out)!r},'w').write(json.dumps(sys.argv[1:]))"
 
@@ -106,11 +107,11 @@ def _last_log() -> dict:
     return json.loads(bridge.log_path().read_text().splitlines()[-1])
 
 
-def test_agy_quota_error_line_is_logged_with_cause(monkeypatch):
+def test_agy_quota_error_line_is_logged_with_cause(monkeypatch: pytest.MonkeyPatch) -> None:
     line = json.dumps({"event": "error", "error": {"message": "quota exceeded"}})
 
     class FakeAgy:
-        def resume_argv(self, conversation, text):
+        def resume_argv(self, conversation, text) -> list[str]:
             return [sys.executable, "-c", f"print({line!r})"]
 
     monkeypatch.setattr(bridge, "AgyAdapter", FakeAgy)
@@ -121,14 +122,14 @@ def test_agy_quota_error_line_is_logged_with_cause(monkeypatch):
     assert row["event"] == "leg-failed" and row["cause"] == "quota_exhausted"
 
 
-def test_codex_leg_failures_log_cause(monkeypatch):
+def test_codex_leg_failures_log_cause(monkeypatch: pytest.MonkeyPatch) -> None:
     errors = iter([
         codex_app_server.AppServerError(-1, "turn failed: usage limit reached"),
         codex_app_server.AppServerError(-1, "timed out waiting for the app-server"),
         codex_app_server.AppServerUnreachable(-1, "timed out waiting for the app-server"),
     ])
 
-    def fake_deliver(argv, thread_id, text, timeout=0):
+    def fake_deliver(argv, thread_id, text, timeout: int = 0):
         raise next(errors)
         yield
 
@@ -142,14 +143,14 @@ def test_codex_leg_failures_log_cause(monkeypatch):
     assert causes == ["quota_exhausted", "turn_timeout", "handshake_timeout"]
 
 
-def test_classify_exit_ignores_agent_text_and_unknown_failures():
+def test_classify_exit_ignores_agent_text_and_unknown_failures() -> None:
     from coordinator_core.agent_pipe.contract import classify_exit
     assert classify_exit('{"type":"item.completed","item":{"text":"rate limit"}}') is None
     assert classify_exit("boom") is None
     assert classify_exit("") is None
 
 
-def test_paused_pair_is_refused_and_logged_default_allows():
+def test_paused_pair_is_refused_and_logged_default_allows() -> None:
     roster.bind("a", "claude", "sess-a")
     roster.bind("b", "claude", "sess-b")
     assert bridge.route(bridge.make_message("a", "b", "one")).status == "delivered"
@@ -162,7 +163,7 @@ def test_paused_pair_is_refused_and_logged_default_allows():
     assert bridge.route(bridge.make_message("a", "b", "three")).status == "delivered"
 
 
-def test_pause_wildcard_and_mute():
+def test_pause_wildcard_and_mute() -> None:
     roster.bind("a", "claude", "sess-a")
     roster.bind("b", "claude", "sess-b")
     bridge.set_pause("*", "b")
@@ -175,18 +176,18 @@ def test_pause_wildcard_and_mute():
     assert bridge.route(bridge.make_message("a", "b", "x")).status == "delivered"
 
 
-def test_loop_guard_refuses_reply_bodies():
+def test_loop_guard_refuses_reply_bodies() -> None:
     roster.bind("b", "claude", "sess-b")
     res = bridge.route(bridge.make_message("a", "b", "[reply to a] thanks"))
     assert res.status == "refused" and res.reason == "loop-guard"
     assert not mailbox_path("sess-b").exists()
 
 
-def test_unbound_target_is_unroutable():
+def test_unbound_target_is_unroutable() -> None:
     assert bridge.route(bridge.make_message("a", "ghost", "x")).status == "unroutable"
 
 
-def test_line_queued_before_rebind_reaches_new_binding():
+def test_line_queued_before_rebind_reaches_new_binding() -> None:
     roster.bind("a", "claude", "sess-a")
     roster.bind("b", "claude", "sess-old", token="t1")
     bridge.enqueue(bridge.make_message("a", "b", "queued"))
@@ -198,7 +199,7 @@ def test_line_queued_before_rebind_reaches_new_binding():
     assert line["content"].endswith("queued")
 
 
-def test_serve_drains_inbox_and_stops():
+def test_serve_drains_inbox_and_stops() -> None:
     roster.bind("a", "claude", "sess-a")
     roster.bind("b", "claude", "sess-b")
     stop = threading.Event()
@@ -214,7 +215,7 @@ def test_serve_drains_inbox_and_stops():
     assert _mail("sess-b")[0]["content"].endswith("via serve")
 
 
-def test_malformed_inbox_line_is_skipped():
+def test_malformed_inbox_line_is_skipped() -> None:
     bridge.inbox_path().parent.mkdir(parents=True, exist_ok=True)
     bridge.inbox_path().write_text("not json\n", encoding="utf-8")
     assert bridge.drain_once() == []
@@ -234,7 +235,7 @@ def _wire_rows(wire) -> "list[dict]":
     return [json.loads(x) for x in wire.read_text(encoding="utf-8").splitlines()]
 
 
-def test_grok_binding_is_delivered_not_refused_via_resume_then_prompt(tmp_path, monkeypatch):
+def test_grok_binding_is_delivered_not_refused_via_resume_then_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     wire = _grok_wire(tmp_path, monkeypatch)
     roster.bind("a", "claude", "sess-a")
     roster.bind("gk", "grok", "gsess-1", argv=FAKE_ACP)
@@ -251,7 +252,7 @@ def test_grok_binding_is_delivered_not_refused_via_resume_then_prompt(tmp_path, 
     assert prompt["params"] == {"sessionId": "gsess-1", "prompt": [{"type": "text", "text": f"{LABEL}\nping"}]}
 
 
-def test_grok_leg_rejects_permission_requests_by_default(tmp_path, monkeypatch):
+def test_grok_leg_rejects_permission_requests_by_default(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     wire = _grok_wire(tmp_path, monkeypatch)
     roster.bind("a", "claude", "sess-a")
     roster.bind("gk", "grok", "gsess-1", argv=FAKE_ACP)
@@ -260,7 +261,7 @@ def test_grok_leg_rejects_permission_requests_by_default(tmp_path, monkeypatch):
     assert answer["result"]["outcome"] == {"outcome": "selected", "optionId": "reject-once"}
 
 
-def test_grok_quota_error_is_logged_with_cause(tmp_path, monkeypatch):
+def test_grok_quota_error_is_logged_with_cause(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _grok_wire(tmp_path, monkeypatch)
     roster.bind("a", "claude", "sess-a")
     roster.bind("gk", "grok", "gsess-1", argv=FAKE_ACP)
@@ -269,7 +270,7 @@ def test_grok_quota_error_is_logged_with_cause(tmp_path, monkeypatch):
     assert row["event"] == "leg-failed" and row["cause"] == "quota_exhausted"
 
 
-def test_grok_binding_with_missing_binary_logs_failure_not_raise(monkeypatch):
+def test_grok_binding_with_missing_binary_logs_failure_not_raise(monkeypatch: pytest.MonkeyPatch) -> None:
     roster.bind("a", "claude", "sess-a")
     roster.bind("gk", "grok", "gsess-1", argv=["/nonexistent/grok-binary"])
     res = bridge.route(bridge.make_message("a", "gk", "x"))
@@ -277,11 +278,11 @@ def test_grok_binding_with_missing_binary_logs_failure_not_raise(monkeypatch):
     assert res.status == "handed-off" and _last_log()["event"] == "leg-failed"
 
 
-def test_grok_kind_has_a_leg():
+def test_grok_kind_has_a_leg() -> None:
     assert "grok" in bridge._LEGS
 
 
-def test_no_token_check_on_any_delivery_path():
+def test_no_token_check_on_any_delivery_path() -> None:
     roster.bind("a", "claude", "sess-a", token="tok-a")
     roster.bind("b", "claude", "sess-b", token="tok-b")
     roster.bind("b", "claude", "sess-b", token="rotated")

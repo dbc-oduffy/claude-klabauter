@@ -70,6 +70,15 @@ def test_turn_budget_and_prefire_texts_follow_host(tmp_path):
     assert "Workflow" in g.prefire_advisory_text(9, 8)
 
 
+def test_truncated_edit_size_reads_at_least_and_an_exact_count_does_not(tmp_path):
+    cut = warp_fire.nag_text("t1", state_dir=tmp_path, host="grok", edit_size=(3, 16), edit_size_truncated=True)
+    assert "at least 3 files / 16 lines" in cut
+    exact = warp_fire.nag_text("t2", state_dir=tmp_path, host="grok", edit_size=(3, 16))
+    assert "is 3 files / 16 lines" in exact and "at least" not in exact
+    again = warp_fire.nag_text("t1", state_dir=tmp_path, host="grok", edit_size=(3, 16), edit_size_truncated=True)
+    assert again.startswith(warp_fire.NAG_REPEAT_PREFIX) and "at least 3 files / 16 lines" in again
+
+
 def test_unwritable_store_still_returns_text(tmp_path):
     blocker = tmp_path / "f"
     blocker.write_text("x")

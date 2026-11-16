@@ -4,9 +4,10 @@ import pytest
 
 from coordinator_core.ops import poll_scratch_dir
 from coordinator_core.ops.poll_scratch_dir import _poll_scratch_dir
+from pathlib import Path
 
 
-def _params(scratch_dir, min_count=1, timeout_seconds=0.2, poll_interval_seconds=0.01):
+def _params(scratch_dir, min_count: int = 1, timeout_seconds: float = 0.2, poll_interval_seconds: float = 0.01):
     return {
         "scratch_dir": str(scratch_dir),
         "min_count": min_count,
@@ -15,7 +16,7 @@ def _params(scratch_dir, min_count=1, timeout_seconds=0.2, poll_interval_seconds
     }
 
 
-def test_count_already_reached_returns_immediately(tmp_path):
+def test_count_already_reached_returns_immediately(tmp_path: Path) -> None:
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     (scratch / "a.json").write_text("{}", encoding="utf-8")
@@ -28,7 +29,7 @@ def test_count_already_reached_returns_immediately(tmp_path):
     assert result["elapsed_seconds"] >= 0.0
 
 
-def test_min_count_zero_on_empty_dir(tmp_path):
+def test_min_count_zero_on_empty_dir(tmp_path: Path) -> None:
     scratch = tmp_path / "scratch"
     scratch.mkdir()
 
@@ -38,7 +39,7 @@ def test_min_count_zero_on_empty_dir(tmp_path):
     assert result["count"] == 0
 
 
-def test_timeout_reports_last_count(tmp_path):
+def test_timeout_reports_last_count(tmp_path: Path) -> None:
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     (scratch / "only.json").write_text("{}", encoding="utf-8")
@@ -52,7 +53,7 @@ def test_timeout_reports_last_count(tmp_path):
     assert result["elapsed_seconds"] >= 0.05
 
 
-def test_missing_scratch_dir_structured_error_not_zero_count(tmp_path):
+def test_missing_scratch_dir_structured_error_not_zero_count(tmp_path: Path) -> None:
     ghost = tmp_path / "never-created"
 
     result = _poll_scratch_dir(_params(ghost))
@@ -61,7 +62,7 @@ def test_missing_scratch_dir_structured_error_not_zero_count(tmp_path):
     assert "does not exist" in result["error"]
 
 
-def test_scratch_dir_is_a_file_structured_error(tmp_path):
+def test_scratch_dir_is_a_file_structured_error(tmp_path: Path) -> None:
     not_a_dir = tmp_path / "file.txt"
     not_a_dir.write_text("x", encoding="utf-8")
 
@@ -82,11 +83,11 @@ def test_scratch_dir_is_a_file_structured_error(tmp_path):
         {"scratch_dir": "s", "min_count": 1, "timeout_seconds": 1},
     ],
 )
-def test_invalid_params_structured_error(bad):
+def test_invalid_params_structured_error(bad) -> None:
     assert "error" in _poll_scratch_dir(bad)
 
 
-def test_double_invocation_identical_verdict(tmp_path):
+def test_double_invocation_identical_verdict(tmp_path: Path) -> None:
     scratch = tmp_path / "scratch"
     scratch.mkdir()
     (scratch / "r1.json").write_text("{}", encoding="utf-8")
@@ -100,7 +101,7 @@ def test_double_invocation_identical_verdict(tmp_path):
     assert second["elapsed_seconds"] >= 0.0
 
 
-def test_registered_under_op_key():
+def test_registered_under_op_key() -> None:
     from coordinator_core.ipc import get_op_handler
 
     assert get_op_handler("fanout.poll_scratch_dir") is _poll_scratch_dir
@@ -121,14 +122,14 @@ class _FakeClock:
 
 
 @pytest.fixture
-def fake_clock(monkeypatch) -> _FakeClock:
+def fake_clock(monkeypatch: pytest.MonkeyPatch) -> _FakeClock:
     clock = _FakeClock()
     monkeypatch.setattr(poll_scratch_dir.time, "monotonic", clock.monotonic)
     monkeypatch.setattr(poll_scratch_dir.time, "sleep", clock.sleep)
     return clock
 
 
-def test_over_ceiling_timeout_is_clamped(tmp_path, fake_clock):
+def test_over_ceiling_timeout_is_clamped(tmp_path: Path, fake_clock) -> None:
     scratch = tmp_path / "scratch"
     scratch.mkdir()
 
@@ -144,7 +145,7 @@ def test_over_ceiling_timeout_is_clamped(tmp_path, fake_clock):
     )
 
 
-def test_over_ceiling_poll_interval_is_clamped(tmp_path, fake_clock):
+def test_over_ceiling_poll_interval_is_clamped(tmp_path: Path, fake_clock) -> None:
     scratch = tmp_path / "scratch"
     scratch.mkdir()
 
@@ -156,7 +157,7 @@ def test_over_ceiling_poll_interval_is_clamped(tmp_path, fake_clock):
     assert max(fake_clock.sleep_calls) <= poll_scratch_dir.MAX_POLL_INTERVAL_SECONDS
 
 
-def test_sleep_never_overshoots_the_deadline(tmp_path, fake_clock):
+def test_sleep_never_overshoots_the_deadline(tmp_path: Path, fake_clock) -> None:
     scratch = tmp_path / "scratch"
     scratch.mkdir()
 
@@ -169,7 +170,7 @@ def test_sleep_never_overshoots_the_deadline(tmp_path, fake_clock):
     assert fake_clock.sleep_calls == [5.0]
 
 
-def test_under_ceiling_timeout_is_honoured(tmp_path, fake_clock):
+def test_under_ceiling_timeout_is_honoured(tmp_path: Path, fake_clock) -> None:
     scratch = tmp_path / "scratch"
     scratch.mkdir()
 

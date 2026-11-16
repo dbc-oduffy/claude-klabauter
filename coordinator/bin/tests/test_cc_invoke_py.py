@@ -2882,3 +2882,13 @@ def test_op_timeout_map_is_computed_in_process_without_a_probe_spawn(tmp_path):
     root = str(Path(__file__).resolve().parents[3])
     assert _mod._dump_op_timeouts_in_process(root) == _dump_op_timeouts()
     assert _mod._dump_op_timeouts_in_process(str(tmp_path)) is None
+
+
+def test_place_engine_root_on_path_moves_a_tail_root_to_the_front_once(monkeypatch, tmp_path):
+    root = str(tmp_path / "engine-root")
+    monkeypatch.setattr(sys, "path", ["", "/a", "/b", root])
+
+    assert _mod.place_engine_root_on_path(root) == root
+    assert sys.path[0] == root
+    assert sys.path.count(root) == 1
+    assert sys.path[1:] == ["", "/a", "/b"]

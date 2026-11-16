@@ -7,16 +7,18 @@ import subprocess
 
 from coordinator_core.ops.dispatch_emit import kept_work, run_token, run_write_prints
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+from pathlib import Path
+import pytest
 
 A, B = "runA", "runB"
 
 
-def _live(monkeypatch, *run_ids, session="S1"):
+def _live(monkeypatch, *run_ids, session: str = "S1") -> None:
     records = [{"run_id": r, "session_id": session} for r in run_ids]
     monkeypatch.setattr(run_token, "live_records", lambda root: iter(records))
 
 
-def _manifest(root, run_id, *writes):
+def _manifest(root, run_id, *writes) -> None:
     d = record_dir(root, run_id)
     d.mkdir(parents=True, exist_ok=True)
     (d / "manifest.json").write_text(json.dumps({"rows": [{"writes": list(writes)}]}), encoding="utf-8")
@@ -26,7 +28,7 @@ def _agents(root, run_id):
     return json.loads((record_dir(root, run_id) / "agent_runs.json").read_text(encoding="utf-8"))
 
 
-def _two_runs(tmp_path, monkeypatch):
+def _two_runs(tmp_path, monkeypatch) -> None:
     _live(monkeypatch, A, B)
     _manifest(tmp_path, A, "a.txt")
     _manifest(tmp_path, B, "b.txt")
@@ -34,7 +36,7 @@ def _two_runs(tmp_path, monkeypatch):
         (tmp_path / name).write_bytes(name.encode() + b"\n")
 
 
-def test_each_edit_prints_under_its_own_run(tmp_path, monkeypatch):
+def test_each_edit_prints_under_its_own_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _two_runs(tmp_path, monkeypatch)
 
     assert run_write_prints.record_write(tmp_path, "S1", "agentA", "a.txt") == A
@@ -44,7 +46,7 @@ def test_each_edit_prints_under_its_own_run(tmp_path, monkeypatch):
     assert run_write_prints.read(tmp_path, B) == {"b.txt": kept_work.blob_sha(b"b.txt\n")}
 
 
-def test_binding_carries_an_undeclared_path_to_the_same_run(tmp_path, monkeypatch):
+def test_binding_carries_an_undeclared_path_to_the_same_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _two_runs(tmp_path, monkeypatch)
     run_write_prints.record_write(tmp_path, "S1", "agentA", "a.txt")
 
@@ -56,7 +58,7 @@ def test_binding_carries_an_undeclared_path_to_the_same_run(tmp_path, monkeypatc
     assert not (record_dir(tmp_path, B) / "agent_runs.json").exists()
 
 
-def test_undeclared_path_without_binding_is_ambiguous(tmp_path, monkeypatch):
+def test_undeclared_path_without_binding_is_ambiguous(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _two_runs(tmp_path, monkeypatch)
 
     assert run_write_prints.record_write(tmp_path, "S1", "agentC", "free.txt") is None
@@ -66,7 +68,7 @@ def test_undeclared_path_without_binding_is_ambiguous(tmp_path, monkeypatch):
     assert not (record_dir(tmp_path, A) / "agent_runs.json").exists()
 
 
-def test_path_in_both_footprints_without_binding_records_nothing(tmp_path, monkeypatch):
+def test_path_in_both_footprints_without_binding_records_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _live(monkeypatch, A, B)
     _manifest(tmp_path, A, "a.txt")
     _manifest(tmp_path, B, "a.txt")
@@ -77,7 +79,7 @@ def test_path_in_both_footprints_without_binding_records_nothing(tmp_path, monke
     assert run_write_prints.read(tmp_path, B) is None
 
 
-def test_binding_beats_a_shared_footprint(tmp_path, monkeypatch):
+def test_binding_beats_a_shared_footprint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _live(monkeypatch, A, B)
     _manifest(tmp_path, A, "a.txt")
     _manifest(tmp_path, B, "a.txt", "b.txt")
@@ -90,7 +92,7 @@ def test_binding_beats_a_shared_footprint(tmp_path, monkeypatch):
     assert run_write_prints.read(tmp_path, A) is None
 
 
-def test_a_single_live_run_is_bound_and_still_prints(tmp_path, monkeypatch):
+def test_a_single_live_run_is_bound_and_still_prints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _live(monkeypatch, A)
     (tmp_path / "x.txt").write_bytes(b"x\n")
 
@@ -98,14 +100,14 @@ def test_a_single_live_run_is_bound_and_still_prints(tmp_path, monkeypatch):
     assert _agents(tmp_path, A) == {"agentA": True}
 
 
-def test_another_sessions_run_is_never_chosen(tmp_path, monkeypatch):
+def test_another_sessions_run_is_never_chosen(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _live(monkeypatch, A, session="S2")
     (tmp_path / "x.txt").write_bytes(b"x\n")
 
     assert run_write_prints.resolve_run(tmp_path, "S1", "agentA", "x.txt") is None
 
 
-def test_unreadable_binding_or_manifest_never_raises(tmp_path, monkeypatch):
+def test_unreadable_binding_or_manifest_never_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _live(monkeypatch, A, B)
     for run in (A, B):
         d = record_dir(tmp_path, run)
@@ -116,7 +118,7 @@ def test_unreadable_binding_or_manifest_never_raises(tmp_path, monkeypatch):
     assert run_write_prints.resolve_run(tmp_path, "S1", "agentA", "a.txt") is None
 
 
-def test_resolution_and_print_spawn_nothing(tmp_path, monkeypatch):
+def test_resolution_and_print_spawn_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _two_runs(tmp_path, monkeypatch)
     spawned = []
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: spawned.append(a) or (_ for _ in ()).throw(OSError()))
@@ -127,7 +129,7 @@ def test_resolution_and_print_spawn_nothing(tmp_path, monkeypatch):
     assert spawned == []
 
 
-def test_concurrent_binds_keep_every_agent(tmp_path):
+def test_concurrent_binds_keep_every_agent(tmp_path: Path) -> None:
     import threading
 
     record_dir(tmp_path, A).mkdir(parents=True, exist_ok=True)

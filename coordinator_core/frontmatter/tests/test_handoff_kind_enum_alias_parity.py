@@ -39,6 +39,7 @@ from coordinator_core.frontmatter.schema_validate import (
 from coordinator_core.write_guards.validate_frontmatter_schema_deny import (
     _evaluate_handoff_kind_enum,
 )
+from pathlib import Path
 
 _CANONICAL_KIND_VALUES = [
     'session-handoff',
@@ -94,7 +95,7 @@ _ALL_KIND_VALUES = _CANONICAL_KIND_VALUES + list(_PRE_RENAME_ALIASES.keys()) + _
 
 class TestHandoffKindEnumAliasParity:
     @pytest.mark.parametrize('raw_kind', _ALL_KIND_VALUES)
-    def test_schema_validate_and_deny_path_agree(self, raw_kind):
+    def test_schema_validate_and_deny_path_agree(self, raw_kind) -> None:
         schema_validate_verdict = _schema_validate_accepts(raw_kind)
         deny_path_verdict = _deny_path_accepts(raw_kind)
         assert schema_validate_verdict == deny_path_verdict, (
@@ -103,17 +104,17 @@ class TestHandoffKindEnumAliasParity:
             'checks have diverged.'
         )
 
-    def test_canonical_values_accepted_by_both(self):
+    def test_canonical_values_accepted_by_both(self) -> None:
         for raw_kind in _CANONICAL_KIND_VALUES:
             assert _schema_validate_accepts(raw_kind)
             assert _deny_path_accepts(raw_kind)
 
-    def test_pre_rename_aliases_accepted_by_both(self):
+    def test_pre_rename_aliases_accepted_by_both(self) -> None:
         for raw_kind in _PRE_RENAME_ALIASES:
             assert _schema_validate_accepts(raw_kind)
             assert _deny_path_accepts(raw_kind)
 
-    def test_garbage_values_rejected_by_both(self):
+    def test_garbage_values_rejected_by_both(self) -> None:
         for raw_kind in _GARBAGE_KIND_VALUES:
             assert not _schema_validate_accepts(raw_kind)
             assert not _deny_path_accepts(raw_kind)
@@ -122,7 +123,7 @@ class TestHandoffKindEnumAliasParity:
 class TestLintReadPathParity:
 
     @pytest.mark.parametrize('raw_kind', _ALL_KIND_VALUES)
-    def test_lint_read_path_matches_main_read_path(self, raw_kind):
+    def test_lint_read_path_matches_main_read_path(self, raw_kind) -> None:
         main_verdict = _schema_validate_accepts(raw_kind)
         lint_verdict = _lint_obj_path_accepts(raw_kind)
         assert lint_verdict == main_verdict, (
@@ -131,7 +132,7 @@ class TestLintReadPathParity:
             'have diverged on the handoff kind vocabulary.'
         )
 
-    def test_every_alias_the_main_path_tolerates_is_tolerated_by_lint(self):
+    def test_every_alias_the_main_path_tolerates_is_tolerated_by_lint(self) -> None:
         for raw_kind in _PRE_RENAME_ALIASES:
             assert _schema_validate_accepts(raw_kind)
             assert _lint_obj_path_accepts(raw_kind), (
@@ -139,12 +140,12 @@ class TestLintReadPathParity:
                 'by the lint read path'
             )
 
-    def test_garbage_rejected_by_both_read_paths(self):
+    def test_garbage_rejected_by_both_read_paths(self) -> None:
         for raw_kind in _GARBAGE_KIND_VALUES:
             assert not _schema_validate_accepts(raw_kind)
             assert not _lint_obj_path_accepts(raw_kind)
 
-    def test_lint_adapter_leaves_non_kind_errors_untouched(self):
+    def test_lint_adapter_leaves_non_kind_errors_untouched(self) -> None:
         frontmatter = {'kind': 'spinoff-roadmap', 'title': 123}
         schema = {
             'x-schema-name': 'handoff',
@@ -192,7 +193,7 @@ def _write_handoff(repo_root, raw_kind: str, extra_frontmatter: str = ''):
 
 class TestLintFileEndToEnd:
 
-    def test_file_mode_accepts_legacy_spinoff_roadmap(self, tmp_path, capsys):
+    def test_file_mode_accepts_legacy_spinoff_roadmap(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         path = _write_handoff(tmp_path, 'spinoff-roadmap')
         exit_code = _run_single_file_check(str(tmp_path), str(path), False)
         captured = capsys.readouterr()
@@ -201,7 +202,7 @@ class TestLintFileEndToEnd:
             f'{captured.out}{captured.err}'
         )
 
-    def test_file_mode_still_rejects_a_genuinely_invalid_kind(self, tmp_path, capsys):
+    def test_file_mode_still_rejects_a_genuinely_invalid_kind(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         # A declared kind no schema registers opts out of path-glob routing
         # (match_schema), so `type: handoff` routes the record to the handoff
         # schema, where the kind enum is what rejects the garbage value.
@@ -217,7 +218,7 @@ class TestLintFileEndToEnd:
 
 class TestSpinoffRoadmapRegression:
 
-    def test_spinoff_roadmap_validates_clean_against_real_schema(self):
+    def test_spinoff_roadmap_validates_clean_against_real_schema(self) -> None:
         schema_path = _SCHEMAS_DIR / 'handoff.schema.json'
         fm_dict = {
             'title': 'test handoff',

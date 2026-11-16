@@ -8,6 +8,8 @@ from types import SimpleNamespace
 
 from coordinator_core.ops.dispatch_emit import land_run, measured_rev, own_checkpoint_paths, requirements_ledger
 from coordinator_core.ops.dispatch_emit import write_baseline as wb
+from pathlib import Path
+import pytest
 
 PRED = "ask-20261027T135906-d0f621"
 REFIRE = "warp-2026-10-27-american-spelling-ui-d0f621-20261027T143416-633153"
@@ -27,17 +29,17 @@ def _records(root, outcome):
 SLICE = {"inline_review": {"prep": {"slice_files": ["a.py"]}, "tests": {"edited": ["t.py"], "created": ["n.py"]}}}
 
 
-def test_prior_pass_written_credits_predecessor_slice_and_tests(tmp_path):
+def test_prior_pass_written_credits_predecessor_slice_and_tests(tmp_path: Path) -> None:
     run = _records(tmp_path, SLICE)
     assert {"a.py", "t.py", "n.py"} <= wb.prior_pass_written(tmp_path, run)
 
 
-def test_include_predecessors_false_drops_predecessor_slice(tmp_path):
+def test_include_predecessors_false_drops_predecessor_slice(tmp_path: Path) -> None:
     run = _records(tmp_path, SLICE)
     assert not {"a.py", "t.py", "n.py"} & wb.prior_pass_written(tmp_path, run, include_predecessors=False)
 
 
-def test_unsafe_run_name_credits_no_predecessor(tmp_path):
+def test_unsafe_run_name_credits_no_predecessor(tmp_path: Path) -> None:
     _records(tmp_path, SLICE)
     odd = tmp_path / "odd name"
     odd.mkdir()
@@ -61,13 +63,13 @@ def _land_gate(tmp_path, monkeypatch, paths, run_dir, own=()):
     )[0]
 
 
-def test_gate_passes_predecessor_recorded_write(tmp_path, monkeypatch):
+def test_gate_passes_predecessor_recorded_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run = _records(tmp_path, SLICE)
     (tmp_path / "a.py").write_text("x\n")
     assert _land_gate(tmp_path, monkeypatch, ["a.py"], run) is None
 
 
-def test_gate_still_refuses_foreign_dirt_beside_predecessor_write(tmp_path, monkeypatch):
+def test_gate_still_refuses_foreign_dirt_beside_predecessor_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run = _records(tmp_path, SLICE)
     for n in ("a.py", "foreign.py"):
         (tmp_path / n).write_text("x\n")
@@ -86,13 +88,13 @@ def _commit_halted_predecessor(root, baseline):
     return run
 
 
-def test_gate_credits_path_the_commit_halted_predecessor_wrote(tmp_path, monkeypatch):
+def test_gate_credits_path_the_commit_halted_predecessor_wrote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run = _commit_halted_predecessor(tmp_path, {"a.py": "blob-before"})
     (tmp_path / "a.py").write_text("after\n")
     assert _land_gate(tmp_path, monkeypatch, ["a.py"], run) is None
 
 
-def test_gate_still_refuses_dirt_the_commit_halted_predecessor_never_baselined(tmp_path, monkeypatch):
+def test_gate_still_refuses_dirt_the_commit_halted_predecessor_never_baselined(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run = _commit_halted_predecessor(tmp_path, {"a.py": "blob-before"})
     for n in ("a.py", "foreign.py"):
         (tmp_path / n).write_text("after\n")
@@ -102,12 +104,12 @@ def test_gate_still_refuses_dirt_the_commit_halted_predecessor_never_baselined(t
     assert "pre-existing-dirt: a.py" not in json.dumps(out)
 
 
-def test_absent_path_is_not_dirt(tmp_path, monkeypatch):
+def test_absent_path_is_not_dirt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run = _records(tmp_path, SLICE)
     assert _land_gate(tmp_path, monkeypatch, ["absent_test.py"], run) is None
 
 
-def test_path_written_by_own_checkpoint_is_not_dirt(tmp_path, monkeypatch):
+def test_path_written_by_own_checkpoint_is_not_dirt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run = _records(tmp_path, {})
     (tmp_path / "c.py").write_text("x\n")
     assert _land_gate(tmp_path, monkeypatch, ["c.py"], run, own=["c.py"]) is None

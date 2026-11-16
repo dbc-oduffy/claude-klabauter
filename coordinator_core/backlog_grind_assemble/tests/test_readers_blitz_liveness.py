@@ -4,6 +4,7 @@ from pathlib import Path
 
 from coordinator_core.backlog_grind_assemble import readers_blitz
 from coordinator_core.ops.dispatch_emit import queue_select
+import pytest
 
 
 def test_is_item_live_true_for_existing_file(tmp_path: Path) -> None:
@@ -43,7 +44,7 @@ def test_bare_cited_surface_rejects_compound_and_prose_surfaces() -> None:
 
 
 def test_read_backlog_readiness_evidence_reports_open_item_count(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(readers_blitz, "_repo_root", lambda: str(tmp_path))
     monkeypatch.setattr(

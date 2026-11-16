@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit.cross_repo_write_refusal import (
     provisioned_sibling_roots,
 )
 from coordinator_core.ops.review_mint.execute_review import owner_repo_clause
+from pathlib import Path
 
 PLAN_REL = "docs/plans/2026-10-20-provisioned.md"
 OWNER = "vaultguide"
@@ -50,7 +51,7 @@ title: fixture
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
     home = tmp_path / "home"
     sibling = tmp_path / OWNER
@@ -71,7 +72,7 @@ def _stage(home, plan, **params):
     return read_stage_reply(home, _handler({"run_id": "r1", "plan_path": PLAN_REL, **params}, repo_root=home))
 
 
-def test_unapproved_run_stages_the_row_with_no_approval_touchpoint_and_no_grant(world):
+def test_unapproved_run_stages_the_row_with_no_approval_touchpoint_and_no_grant(world) -> None:
     home, sibling = world
     reply = _stage(home, _plan(), session_id="s1")
     assert "error" not in reply
@@ -84,20 +85,20 @@ def test_unapproved_run_stages_the_row_with_no_approval_touchpoint_and_no_grant(
     assert f"git -C {sibling.as_posix()}" in clause
 
 
-def test_row_writing_inside_the_target_is_refused_with_the_route_remedy_even_when_approved(world):
+def test_row_writing_inside_the_target_is_refused_with_the_route_remedy_even_when_approved(world) -> None:
     home, _ = world
     reply = _stage(home, _plan(target=f"../{OWNER}/README.md"), cross_repo_approved=True)
     assert reply["error"].endswith(contract.ROUTE_REMEDY)
 
 
-def test_commit_request_keeps_the_staged_row_writes_under_this_repo(world):
+def test_commit_request_keeps_the_staged_row_writes_under_this_repo(world) -> None:
     home, _ = world
     reply = _stage(home, _plan())
     row = next(r for r in reply["rows"] if r["id"] == "G1")
     assert row["writes"] == ["pkg/manifest.json"]
 
 
-def test_sibling_with_a_remote_is_gated_as_before(world):
+def test_sibling_with_a_remote_is_gated_as_before(world) -> None:
     home, sibling = world
     (sibling / ".git" / "config").write_text('[remote "origin"]\n\turl = x\n', encoding="utf-8")
     reply = _stage(home, _plan())
@@ -105,20 +106,20 @@ def test_sibling_with_a_remote_is_gated_as_before(world):
     assert reply["engine_rows"] == []
 
 
-def test_landed_work_gate_on_the_same_owner_is_still_gated(world):
+def test_landed_work_gate_on_the_same_owner_is_still_gated(world) -> None:
     home, _ = world
     reply = _stage(home, _plan("landed-work"))
     assert [g["id"] for g in reply["gated"]] == ["G1"]
 
 
-def test_unmarked_sibling_is_gated(world):
+def test_unmarked_sibling_is_gated(world) -> None:
     home, sibling = world
     (sibling / ".git" / contract.MARKER_NAME).unlink()
     reply = _stage(home, _plan())
     assert [g["id"] for g in reply["gated"]] == ["G1"]
 
 
-def test_provisioned_sibling_roots_names_only_commit_gates_on_siblings(world):
+def test_provisioned_sibling_roots_names_only_commit_gates_on_siblings(world) -> None:
     home, _ = world
     rows = [{"id": "G1", "external_gate": [{"owner_repo": OWNER, "requires": "commit-in-owner-repo"}]}]
     assert set(provisioned_sibling_roots(rows, home)) == {OWNER}
@@ -133,7 +134,7 @@ class _Row:
     writes_under = ()
 
 
-def test_unreachable_write_to_an_absent_sibling_names_the_provision_op(tmp_path):
+def test_unreachable_write_to_an_absent_sibling_names_the_provision_op(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     with pytest.raises(CrossRepoWriteError) as exc:
@@ -141,7 +142,7 @@ def test_unreachable_write_to_an_absent_sibling_names_the_provision_op(tmp_path)
     assert "repo.provision_local" in str(exc.value) and "newrepo" in str(exc.value)
 
 
-def test_unreachable_absolute_write_to_an_absent_sibling_names_the_provision_op(tmp_path):
+def test_unreachable_absolute_write_to_an_absent_sibling_names_the_provision_op(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
 
@@ -155,7 +156,7 @@ def test_unreachable_absolute_write_to_an_absent_sibling_names_the_provision_op(
     assert "repo.provision_local" in str(exc.value)
 
 
-def test_unreachable_write_to_an_existing_plain_dir_gets_no_alternative(tmp_path):
+def test_unreachable_write_to_an_existing_plain_dir_gets_no_alternative(tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     (tmp_path / "newrepo").mkdir()

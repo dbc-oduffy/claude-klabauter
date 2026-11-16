@@ -7,6 +7,7 @@ from pathlib import Path
 
 from coordinator_core.install.door_install import named_forwarder_path
 from coordinator_core.plugin_health import forwarder_drift
+import pytest
 
 
 def _write_manifest(bin_dir: Path, names: list[str]) -> None:
@@ -32,7 +33,7 @@ def test_manifest_name_with_no_file_stays_missing(tmp_path: Path) -> None:
     assert forwarder_drift._native_forwarder_names(bin_dir) == set()
 
 
-def test_one_new_bin_entry_is_healed_without_full_setup(tmp_path: Path, monkeypatch) -> None:
+def test_one_new_bin_entry_is_healed_without_full_setup(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.install import forwarder_self_heal as heal
 
     engine = tmp_path / "engine"

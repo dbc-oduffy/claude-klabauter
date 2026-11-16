@@ -1,6 +1,9 @@
 """run_stages: one terminal ledger row per step, gates, rules, budget, admission."""
 from __future__ import annotations
 
+import dataclasses
+import threading
+
 import pytest
 
 from coordinator_core.composition_budget import CompositionBudget
@@ -214,6 +217,40 @@ def test_ledger_rows_carry_exactly_the_contract_keys(tmp_path):
 
     _, rows = _run(tmp_path, [_step("a")], Fake())
     assert tuple(rows[0]) == LEDGER_ROW_KEYS
+    assert LEDGER_ROW_KEYS.index("wall_ms") == LEDGER_ROW_KEYS.index("spawns") + 1
+
+
+def test_every_dispatched_row_carries_a_float_wall_ms_the_runner_measured(tmp_path):
+    import time
+
+    fake = Fake()
+    table = fake.table()
+    inner = table["cli"]
+
+    def slow(step, *, repo_root, run_dir, deadline_s):
+        time.sleep(0.05)
+        return inner(step, repo_root=repo_root, run_dir=run_dir, deadline_s=deadline_s)
+
+    results = run_stages(
+        [_step("a"), _step("b", target="beta")], ceremony="demo", repo_root=tmp_path, run_dir=tmp_path / "run",
+        dispatch={**table, "cli": slow}, rules={},
+    )
+    assert all(isinstance(r["wall_ms"], float) and r["wall_ms"] >= 45.0 for r in ledger.read(tmp_path / "run"))
+    assert all(isinstance(r.wall_ms, float) for r in results)
+
+
+def test_wall_ms_survives_the_rule_and_launch_reconstructions(tmp_path):
+    fake = Fake(codes={"g": 7})
+    steps = [_step("g", gates=True, on_exit={7: "r1"})]
+    results, rows = _run(tmp_path, steps, fake, rules={"r1": lambda *a, **k: True})
+    assert rows[0]["reason"] == "resolved-by:r1" and isinstance(rows[0]["wall_ms"], float)
+    launched = runner._launch_result(runner.dataclasses.replace(results[0], reason="", stdout='{"run_id": "x"}'))
+    assert launched.wall_ms == results[0].wall_ms
+
+
+def test_a_step_that_started_no_child_has_no_wall_ms(tmp_path):
+    _, rows = _run(tmp_path, [_step("a", satisfied=True)], Fake())
+    assert rows[0]["wall_ms"] is None
 
 
 def test_cold_measure_reports_exit_and_output(tmp_path):
@@ -392,3 +429,91 @@ def test_failed_reason_prefers_the_drift_line_over_a_leading_ok_line():
 def test_failed_reason_without_a_marker_line_keeps_the_first_line():
     result = runner._result_from(_step("a"), ChildOutcome(exit_code=1, stdout="first\nsecond\n"))
     assert result.reason == "exit 1: first"
+
+
+def _sstep(id_, *, gates=False, kind="cli", stage="s", stdin_from=None):
+    return dataclasses.replace(
+        _wide(id_, gates=gates, stdin_from=stdin_from), kind=kind, stage=stage
+    )
+
+
+class Overlap:
+    """A cli table whose steps wait on a two-party barrier: only overlapping steps pass."""
+
+    def __init__(self, waiters):
+        self.barrier = threading.Barrier(2)
+        self.waiters = set(waiters)
+        self.threads: dict[str, str] = {}
+
+    def table(self):
+        def run(step, *, repo_root, run_dir, deadline_s, stdin_text=None):
+            self.threads[step.id] = threading.current_thread().name
+            if step.id in self.waiters:
+                try:
+                    self.barrier.wait(timeout=5)
+                except threading.BrokenBarrierError:
+                    return ChildOutcome(exit_code=9, process_ms=1.0, spawns=1, stderr="serial")
+            return ChildOutcome(exit_code=0, process_ms=1.0, spawns=1)
+
+        return {"cli": run, "op": run, "inproc": run, "rule-child": lambda *a, **k: ChildOutcome(0)}
+
+
+def test_a_concurrent_stage_overlaps_its_steps_and_keeps_step_order(tmp_path):
+    steps = [_sstep("a"), _sstep("b"), _sstep("c")]
+    ov = Overlap({"a", "c"})
+    run_dir = tmp_path / "run"
+    results = run_stages(
+        steps, ceremony="demo", repo_root=tmp_path, run_dir=run_dir, dispatch=ov.table(),
+        concurrent_stages=frozenset({"s"}),
+    )
+    assert [r.status for r in results] == ["ran"] * 3
+    assert [r["id"] for r in ledger.read(run_dir)] == ["a", "b", "c"]
+    assert all(isinstance(r["wall_ms"], float) for r in ledger.read(run_dir))
+
+
+def test_without_the_seam_the_same_steps_run_serially(tmp_path):
+    ov = Overlap({"a", "c"})
+    ov.barrier = threading.Barrier(2, timeout=0.2)
+    results = run_stages(
+        [_sstep("a"), _sstep("b"), _sstep("c")], ceremony="demo", repo_root=tmp_path, run_dir=tmp_path / "run",
+        dispatch=ov.table(),
+    )
+    assert results[0].status == "failed" and "serial" in results[0].reason + results[0].stderr
+
+
+def test_ineligible_steps_stay_serial_on_the_calling_thread(tmp_path):
+    ov = Overlap(set())
+    steps = [
+        _sstep("a"), _sstep("g", gates=True), _sstep("i", kind="inproc"),
+        _sstep("o", kind="op"), _sstep("s", stdin_from="a"), _sstep("other", stage="t"),
+    ]
+    results = run_stages(
+        steps, ceremony="demo", repo_root=tmp_path, run_dir=tmp_path / "run", dispatch=ov.table(),
+        concurrent_stages=frozenset({"s"}),
+    )
+    assert [r.id for r in results] == ["a", "g", "i", "o", "s", "other"]
+    assert set(ov.threads.values()) == {threading.current_thread().name}
+
+
+def test_a_group_charges_the_budget_per_step_and_refuses_past_the_cap(tmp_path):
+    steps = [_sstep(x) for x in "abcd"]
+    rec = Recorder()
+    budget = CompositionBudget(composition_id="t", max_invocations=2)
+    results = run_stages(
+        steps, ceremony="demo", repo_root=tmp_path, run_dir=tmp_path / "run", dispatch=rec.table(),
+        budget=budget, concurrent_stages=frozenset({"s"}),
+    )
+    statuses = [r.status for r in results]
+    assert statuses.count("ran") == 2 and statuses.count("not-composed") == 2
+    assert [r.status for r in results[:2]] == ["ran", "ran"]
+
+
+def test_a_raising_member_is_a_failed_row_and_the_rest_still_run(tmp_path):
+    fake = Fake(raises={"b"})
+    run_dir = tmp_path / "run"
+    results = run_stages(
+        [_sstep("a"), _sstep("b"), _sstep("c")], ceremony="demo", repo_root=tmp_path, run_dir=run_dir,
+        dispatch=fake.table(), concurrent_stages=frozenset({"s"}),
+    )
+    assert [r.status for r in results] == ["ran", "failed", "ran"]
+    assert "boom" in results[1].reason

@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.benchmarks import land_run_leg_budget_profile as prof
 from coordinator_core.ops.dispatch_emit import halted_withheld_index, peer_hunk_gate, run_token
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -16,7 +17,7 @@ SIBLINGS = 6
 
 
 @pytest.fixture(scope="module")
-def rows(tmp_path_factory) -> dict:
+def rows(tmp_path_factory: pytest.TempPathFactory) -> dict:
     out = prof.run(tmp_path_factory.mktemp("lrlb"), SIBLINGS, prof.DEFAULT_TRACKED, prof.DEFAULT_CHAIN, attribute=False)
     return {r.axis: r for r in out}
 
@@ -47,7 +48,7 @@ OWN = "plan-20200101T000000-aaaaaa"
 
 
 @pytest.fixture(autouse=True)
-def _sessions_live(monkeypatch) -> None:
+def _sessions_live(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import touch_record
 
     monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
@@ -83,7 +84,7 @@ def _count_parses(monkeypatch) -> dict:
     return calls
 
 
-def test_indexed_sibling_is_named_from_the_index_with_no_per_sibling_parse(tmp_path, monkeypatch) -> None:
+def test_indexed_sibling_is_named_from_the_index_with_no_per_sibling_parse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     halted_withheld_index.rebuild(tmp_path)
     siblings = [prof.sibling_run_id(i) for i in range(SIBLINGS)]
     for run_id in siblings:
@@ -96,14 +97,14 @@ def test_indexed_sibling_is_named_from_the_index_with_no_per_sibling_parse(tmp_p
     assert calls == {"manifest": SIBLINGS, "spine": 0}
 
 
-def test_indexed_sibling_declaring_another_path_holds_nothing(tmp_path) -> None:
+def test_indexed_sibling_declaring_another_path_holds_nothing(tmp_path: Path) -> None:
     halted_withheld_index.rebuild(tmp_path)
     _live_sibling(tmp_path, prof.sibling_run_id(0), "pkg/other.py", indexed=True)
 
     assert peer_hunk_gate.co_declared_peer_holds(tmp_path, OWN, [PATH], [PATH]) == []
 
 
-def test_unindexed_sibling_still_reads_its_own_records(tmp_path, monkeypatch) -> None:
+def test_unindexed_sibling_still_reads_its_own_records(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     halted_withheld_index.rebuild(tmp_path)
     run_id = prof.sibling_run_id(0)
     _live_sibling(tmp_path, run_id, PATH, indexed=False)
@@ -125,7 +126,7 @@ def _record(root, name: str, sizing: str) -> None:
     (home / "run.json").write_text('{"sizing_rel": "%s"}' % sizing, encoding="utf-8")
 
 
-def test_superseded_scan_hands_only_earlier_same_sizing_records_to_the_parser(tmp_path, monkeypatch) -> None:
+def test_superseded_scan_hands_only_earlier_same_sizing_records_to_the_parser(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import land_run, run_artifacts
 
     _record(tmp_path, "warp-a-20261029T100000-aaaaaa", SIZING)
@@ -158,7 +159,7 @@ def _handed_to_parser(tmp_path, monkeypatch, sizing: str) -> list:
     return sorted(p.split("/")[2] for p in seen[0]) if seen else []  # seen[0]: run.json paths handed on
 
 
-def test_superseded_scan_skips_records_older_than_the_sizing_but_keeps_zone_slack(tmp_path, monkeypatch) -> None:
+def test_superseded_scan_skips_records_older_than_the_sizing_but_keeps_zone_slack(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _record(tmp_path, "warp-old-20261020T100000-111111", SIZING)
     _record(tmp_path, "warp-eve-20261028T230000-222222", SIZING)
     _record(tmp_path, "warp-day-20261029T010000-333333", SIZING)
@@ -168,7 +169,7 @@ def test_superseded_scan_skips_records_older_than_the_sizing_but_keeps_zone_slac
     ]
 
 
-def test_superseded_scan_reads_every_earlier_record_for_an_undated_sizing(tmp_path, monkeypatch) -> None:
+def test_superseded_scan_reads_every_earlier_record_for_an_undated_sizing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     undated = "state/sizings/some-sizing.yaml"
     _record(tmp_path, "warp-old-20261020T100000-111111", undated)
 
@@ -198,7 +199,7 @@ def _git_repo(root) -> None:
     _commit(root, {"a/x.py": "a/x.py", "a/b/y.py": "a/b/y.py", "c/z.py": "c/z.py"})
 
 
-def test_head_tree_directories_are_read_once_across_path_sets(tmp_path, monkeypatch) -> None:
+def test_head_tree_directories_are_read_once_across_path_sets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import git_state
     from coordinator_core.ops.dispatch_emit import land_run
 
@@ -222,7 +223,7 @@ def test_head_tree_directories_are_read_once_across_path_sets(tmp_path, monkeypa
     assert land_run._head_entries(tmp_path, ["a/x.py", "c/z.py"]) == git_state.head_blobs(tmp_path, ["a/x.py", "c/z.py"])
 
 
-def test_head_entries_keys_on_head_so_a_new_commit_is_re_read(tmp_path, monkeypatch) -> None:
+def test_head_entries_keys_on_head_so_a_new_commit_is_re_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import land_run
 
     _git_repo(tmp_path)
@@ -233,7 +234,7 @@ def test_head_entries_keys_on_head_so_a_new_commit_is_re_read(tmp_path, monkeypa
     assert land_run._head_entries(tmp_path, ["a/x.py"])["a/x.py"] != before["a/x.py"]
 
 
-def test_sizing_stamp_floor_refuses_an_impossible_date(tmp_path) -> None:
+def test_sizing_stamp_floor_refuses_an_impossible_date(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import land_run
 
     assert land_run._sizing_stamp_floor("2026-13-45-x.yaml") == ""
@@ -248,7 +249,7 @@ def _twelve_halted_runs(root) -> tuple:
 
     from coordinator_core.win_portability import no_console_creationflags
 
-    def git(*args, stdin=""):
+    def git(*args, stdin: str = ""):
         return subprocess.run(
             ["git", "-c", "user.name=t", "-c", "user.email=t@t", *args], cwd=root, input=stdin,
             capture_output=True, text=True, check=True, **no_console_creationflags(),
@@ -285,7 +286,7 @@ def _twelve_halted_runs(root) -> tuple:
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_halted_hold_pass_costs_one_index_walk_and_no_git_however_many_runs_hold(tmp_path, monkeypatch) -> None:
+def test_halted_hold_pass_costs_one_index_walk_and_no_git_however_many_runs_hold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import git_index
     from coordinator_core.git import run as git_run
     from coordinator_core.ops.dispatch_emit import halted_hold_release, sibling_claims

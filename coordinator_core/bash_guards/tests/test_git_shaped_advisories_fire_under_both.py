@@ -31,6 +31,7 @@ import pytest
 
 from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.bash_guards import dispatch
+from pathlib import Path
 
 
 def _chain(cmd, session_id, cwd, tool_name, extra_payload=None):
@@ -62,13 +63,13 @@ def _entry(chain, name):
 class TestGitNoOptionalLocksBothDialects:
     NAME = "git-no-optional-locks"
 
-    def test_matchers_declare_both_dialects(self, tmp_path):
+    def test_matchers_declare_both_dialects(self, tmp_path: Path) -> None:
         chain = _chain("git status", "sess-a", str(tmp_path), "Bash")
         entry = _entry(chain, self.NAME)
         assert "Bash" in entry.matchers
         assert "PowerShell" in entry.matchers
 
-    def test_rewrite_fires_identically_under_both_dialects(self, tmp_path):
+    def test_rewrite_fires_identically_under_both_dialects(self, tmp_path: Path) -> None:
         bash_entry = _entry(_chain("git status", "sess-a", str(tmp_path), "Bash"), self.NAME)
         ps_entry = _entry(_chain("git status", "sess-b", str(tmp_path), "PowerShell"), self.NAME)
 
@@ -98,7 +99,7 @@ class TestReapStaleGitLockBothDialects:
         os.utime(lock, (old, old))
         return str(root), lock
 
-    def test_matchers_declare_both_dialects(self, tmp_path):
+    def test_matchers_declare_both_dialects(self, tmp_path: Path) -> None:
         root, _ = self._aged_lock_repo(tmp_path, "repo0")
         chain = _chain("git commit -m x", "sess-a", root, "Bash")
         entry = _entry(chain, self.NAME)
@@ -106,8 +107,8 @@ class TestReapStaleGitLockBothDialects:
         assert "PowerShell" in entry.matchers
 
     def test_reap_side_effect_fires_identically_under_both_dialects(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("COORDINATOR_LOCK_REAP_NO_SLEEP", "1")
         monkeypatch.setenv("COORDINATOR_LOCK_REAP_AGE_SEC", "10")
 
@@ -135,7 +136,7 @@ class TestBlockDevRepoSentinelRemovalBothDialects:
     NAME = "block-dev-repo-sentinel-removal"
     SENTINEL = ".coordinator-dev-repo"
 
-    def test_matchers_declare_both_dialects(self, tmp_path):
+    def test_matchers_declare_both_dialects(self, tmp_path: Path) -> None:
         chain = _chain(
             "git rm %s" % self.SENTINEL, "sess-a", str(tmp_path), "Bash"
         )
@@ -143,7 +144,7 @@ class TestBlockDevRepoSentinelRemovalBothDialects:
         assert "Bash" in entry.matchers
         assert "PowerShell" in entry.matchers
 
-    def test_git_rm_sentinel_denies_identically_under_both_dialects(self, tmp_path):
+    def test_git_rm_sentinel_denies_identically_under_both_dialects(self, tmp_path: Path) -> None:
         cmd = "git rm %s" % self.SENTINEL
         bash_entry = _entry(_chain(cmd, "sess-a", str(tmp_path), "Bash"), self.NAME)
         ps_entry = _entry(_chain(cmd, "sess-b", str(tmp_path), "PowerShell"), self.NAME)

@@ -24,6 +24,7 @@ from coordinator_core.install.write_surface import (
 from coordinator_core.install.uninstall_legs import uninstall_reverse_git_config_group
 import coordinator_core.ops.configure_git as configure_git
 from coordinator_core.ops.configure_git import GitSetting
+from pathlib import Path
 
 
 def _entry(**kwargs) -> WriteSurfaceEntry:
@@ -33,7 +34,7 @@ def _entry(**kwargs) -> WriteSurfaceEntry:
 
 
 class TestClassifyEntryDisposition:
-    def test_attempted_ok_true_is_reversed(self):
+    def test_attempted_ok_true_is_reversed(self) -> None:
         record = classify_entry_disposition(
             _entry(kind="git-config-key", key="gc.autoDetach"),
             attempted_ok=True,
@@ -41,7 +42,7 @@ class TestClassifyEntryDisposition:
         )
         assert record.disposition == DISPOSITION_REVERSED
 
-    def test_attempted_ok_false_is_cannot_reverse_safely(self):
+    def test_attempted_ok_false_is_cannot_reverse_safely(self) -> None:
         record = classify_entry_disposition(
             _entry(kind="file-path", path="/tmp/hand-modified"),
             attempted_ok=False,
@@ -51,7 +52,7 @@ class TestClassifyEntryDisposition:
         assert record.disposition == DISPOSITION_CANNOT_SAFELY
         assert record.manual_command == "rm -i /tmp/hand-modified"
 
-    def test_attempted_ok_none_is_deliberately_not_reversed(self):
+    def test_attempted_ok_none_is_deliberately_not_reversed(self) -> None:
         record = classify_entry_disposition(
             _entry(kind="file-path", path="/some/coordinator-content-repo/checkout"),
             attempted_ok=None,
@@ -59,7 +60,7 @@ class TestClassifyEntryDisposition:
         )
         assert record.disposition == DISPOSITION_DELIBERATE
 
-    def test_absent_on_legacy_installs_forces_cannot_reverse_safely_rc_block(self):
+    def test_absent_on_legacy_installs_forces_cannot_reverse_safely_rc_block(self) -> None:
         entry = _entry(
             kind="rc-block",
             path="~/.ssh/config",
@@ -72,7 +73,7 @@ class TestClassifyEntryDisposition:
         assert "begin_marker" not in record.manual_command
         assert entry.begin_marker in record.manual_command
 
-    def test_absent_on_legacy_installs_overrides_even_a_successful_attempt(self):
+    def test_absent_on_legacy_installs_overrides_even_a_successful_attempt(self) -> None:
         entry = _entry(
             kind="hook-gate-region",
             path="~/.claude/settings.json",
@@ -82,7 +83,7 @@ class TestClassifyEntryDisposition:
         record = classify_entry_disposition(entry, attempted_ok=True, reason="claimed reversed")
         assert record.disposition == DISPOSITION_CANNOT_SAFELY
 
-    def test_none_end_marker_on_hook_gate_region_is_not_uncertainty(self):
+    def test_none_end_marker_on_hook_gate_region_is_not_uncertainty(self) -> None:
         """Rule 2: `end_marker=None` on a `hook-gate-region` is the
         structural-terminator case, distinct from `ABSENT_ON_LEGACY_INSTALLS`
         — it routes from the caller-supplied outcome like any other kind,
@@ -96,7 +97,7 @@ class TestClassifyEntryDisposition:
         record = classify_entry_disposition(entry, attempted_ok=True, reason="gate stripped")
         assert record.disposition == DISPOSITION_REVERSED
 
-    def test_none_end_marker_on_rc_block_is_not_forced_either(self):
+    def test_none_end_marker_on_rc_block_is_not_forced_either(self) -> None:
         # The prior version passed
         # attempted_ok=False and asserted DISPOSITION_CANNOT_SAFELY, which
         # is exactly what the ordinary (unforced) path already produces for
@@ -109,7 +110,7 @@ class TestClassifyEntryDisposition:
         record = classify_entry_disposition(entry, attempted_ok=True, reason="stripped")
         assert record.disposition == DISPOSITION_REVERSED
 
-    def test_non_bool_non_none_attempted_ok_raises(self):
+    def test_non_bool_non_none_attempted_ok_raises(self) -> None:
         entry = _entry(kind="file-path", path="/tmp/x")
         with pytest.raises(TypeError):
             classify_entry_disposition(entry, attempted_ok="yes", reason="bad caller")
@@ -128,14 +129,14 @@ class TestClassifyEntryDisposition:
             "line-membership",
         ],
     )
-    def test_every_kind_and_outcome_lands_in_exactly_one_disposition(self, kind, outcome):
+    def test_every_kind_and_outcome_lands_in_exactly_one_disposition(self, kind, outcome) -> None:
         entry = _entry(kind=kind, key="k" if kind != "file-path" else None, path=None if kind != "file-path" else "/p")
         record = classify_entry_disposition(entry, attempted_ok=outcome, reason="r")
         assert record.disposition in UNINSTALL_DISPOSITIONS
 
 
 class TestBuildDispositionReportTotalCoverage:
-    def test_mixed_report_covers_every_record_exactly_once(self):
+    def test_mixed_report_covers_every_record_exactly_once(self) -> None:
         records = [
             classify_entry_disposition(
                 _entry(kind="git-config-key", key="gc.autoDetach"),
@@ -164,19 +165,19 @@ class TestBuildDispositionReportTotalCoverage:
         assert len(report.by_disposition(DISPOSITION_CANNOT_SAFELY)) == 1
         report.assert_total_coverage()
 
-    def test_manually_constructed_bad_disposition_fails_total_coverage(self):
+    def test_manually_constructed_bad_disposition_fails_total_coverage(self) -> None:
         from coordinator_core.install.uninstall_legs import DispositionRecord
 
         with pytest.raises(ValueError):
             DispositionRecord(entry=_entry(), disposition="reverted-partially", reason="bad")
 
-    def test_empty_report_is_trivially_total(self):
+    def test_empty_report_is_trivially_total(self) -> None:
         report = build_disposition_report([])
         report.assert_total_coverage()
 
 
 class TestRenderDispositionReport:
-    def test_dry_run_labels_as_preview(self):
+    def test_dry_run_labels_as_preview(self) -> None:
         report = build_disposition_report(
             [
                 classify_entry_disposition(
@@ -190,7 +191,7 @@ class TestRenderDispositionReport:
         assert "DRY RUN" in text
         assert "reversed" in text
 
-    def test_entry_label_falls_back_to_begin_marker(self):
+    def test_entry_label_falls_back_to_begin_marker(self) -> None:
         entry = _entry(
             kind="hook-gate-region",
             path=None,
@@ -204,7 +205,7 @@ class TestRenderDispositionReport:
         assert "# gate: shell-init" in text
         assert "<hook-gate-region entry>" not in text
 
-    def test_cannot_reverse_safely_prints_manual_command(self):
+    def test_cannot_reverse_safely_prints_manual_command(self) -> None:
         entry = _entry(
             kind="rc-block",
             path="~/.ssh/config",
@@ -220,15 +221,15 @@ class TestRenderDispositionReport:
 
 
 class TestRenderUninstallDryRunReport:
-    def test_none_receipt_is_honest_unknown(self):
+    def test_none_receipt_is_honest_unknown(self) -> None:
         text = render_uninstall_dry_run_report(None)
         assert "no install receipt found" in text
 
-    def test_empty_receipt_is_honest_unknown(self):
+    def test_empty_receipt_is_honest_unknown(self) -> None:
         text = render_uninstall_dry_run_report(InstallReceipt(entries=()))
         assert "no install receipt found" in text
 
-    def test_populated_receipt_renders_dispositions_without_attempting(self):
+    def test_populated_receipt_renders_dispositions_without_attempting(self) -> None:
         receipt = InstallReceipt(
             entries=(
                 ReceiptEntry(writer_id="w", kind="git-config-key", key="gc.autoDetach"),
@@ -241,7 +242,7 @@ class TestRenderUninstallDryRunReport:
         assert "gc.autoDetach" in text
         assert "deliberately-not-reversed (0):" in text
 
-    def test_would_reverse_and_genuinely_deliberate_render_distinguishably(self):
+    def test_would_reverse_and_genuinely_deliberate_render_distinguishably(self) -> None:
         would_reverse = classify_entry_disposition(
             _entry(kind="git-config-key", key="gc.autoDetach"),
             attempted_ok=True,
@@ -261,7 +262,7 @@ class TestRenderUninstallDryRunReport:
         assert "/some/coordinator-content-repo/checkout" in text
         assert would_reverse.disposition != genuinely_deliberate.disposition
 
-    def test_marker_rule_2_override_still_fires_in_preview(self):
+    def test_marker_rule_2_override_still_fires_in_preview(self) -> None:
         receipt = InstallReceipt(
             entries=(
                 ReceiptEntry(
@@ -281,8 +282,8 @@ class TestOrchestrateUninstallDryRunWiring:
     @pytest.mark.spawns_process
     @pytest.mark.cadence
     def test_dry_run_with_no_receipt_prints_honest_message_and_mutates_nothing(
-        self, monkeypatch, capsys, tmp_path
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], tmp_path: Path
+    ) -> None:
         monkeypatch.setattr(uninstall_legs, "_load_install_receipt", lambda: None)
         for leg_name in (
             "uninstall_strip_settings_hooks",
@@ -305,8 +306,8 @@ class TestOrchestrateUninstallDryRunWiring:
     @pytest.mark.spawns_process
     @pytest.mark.cadence
     def test_dry_run_with_populated_receipt_prints_report_and_mutates_nothing(
-        self, monkeypatch, capsys
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    ) -> None:
         receipt = InstallReceipt(
             entries=(ReceiptEntry(writer_id="w", kind="git-config-key", key="gc.autoDetach"),)
         )
@@ -333,20 +334,20 @@ class TestOrchestrateUninstallDryRunWiring:
 
 class TestLoadInstallReceiptReadSide:
 
-    def _isolate_settings_home(self, monkeypatch, tmp_path):
+    def _isolate_settings_home(self, monkeypatch, tmp_path) -> None:
         for var in ("CLAUDE_HOME", "HOME", "USERPROFILE"):
             monkeypatch.delenv(var, raising=False)
         monkeypatch.setenv("CLAUDE_HOME", str(tmp_path))
         monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
         monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
 
-    def test_absent_receipt_preserves_honest_unknown(self, monkeypatch, tmp_path):
+    def test_absent_receipt_preserves_honest_unknown(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         self._isolate_settings_home(monkeypatch, tmp_path)
         assert uninstall_legs._load_install_receipt() is None
         text = render_uninstall_dry_run_report(uninstall_legs._load_install_receipt())
         assert "no install receipt found" in text
 
-    def test_populated_receipt_loads_for_real(self, monkeypatch, tmp_path):
+    def test_populated_receipt_loads_for_real(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         self._isolate_settings_home(monkeypatch, tmp_path)
         receipt = InstallReceipt(
             entries=(ReceiptEntry(writer_id="w", kind="git-config-key", key="gc.autoDetach"),),
@@ -359,7 +360,7 @@ class TestLoadInstallReceiptReadSide:
         assert loaded.reported("w") is True
         assert any(e.key == "gc.autoDetach" for e in loaded.entries)
 
-    def test_malformed_receipt_still_degrades_to_honest_unknown(self, monkeypatch, tmp_path):
+    def test_malformed_receipt_still_degrades_to_honest_unknown(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         self._isolate_settings_home(monkeypatch, tmp_path)
         settings_home = tmp_path / ".coordinator-claude-settings"
         settings_home.mkdir(parents=True, exist_ok=True)
@@ -372,7 +373,7 @@ class TestLoadInstallReceiptReadSide:
 
 class TestUnreportedWriterRendersAsCoverageUnknown:
 
-    def test_unreported_writer_is_not_rendered_as_empty_or_nothing_to_remove(self):
+    def test_unreported_writer_is_not_rendered_as_empty_or_nothing_to_remove(self) -> None:
         receipt = InstallReceipt(
             entries=(),
             reported_writer_ids=frozenset(),
@@ -385,7 +386,7 @@ class TestUnreportedWriterRendersAsCoverageUnknown:
         assert "did not report" in text
         assert "coverage" in text.lower()
 
-    def test_unreported_writer_lands_in_cannot_reverse_safely_bucket(self):
+    def test_unreported_writer_lands_in_cannot_reverse_safely_bucket(self) -> None:
         receipt = InstallReceipt(
             entries=(),
             unreported_writer_ids=frozenset({"configure_git"}),
@@ -393,7 +394,7 @@ class TestUnreportedWriterRendersAsCoverageUnknown:
         text = render_uninstall_dry_run_report(receipt)
         assert "cannot-reverse-safely (1):" in text
 
-    def test_three_way_distinguishability_would_reverse_deliberate_unknown(self):
+    def test_three_way_distinguishability_would_reverse_deliberate_unknown(self) -> None:
         would_reverse = classify_entry_disposition(
             _entry(kind="git-config-key", key="gc.autoDetach"),
             attempted_ok=True,
@@ -425,7 +426,7 @@ class TestUnreportedWriterRendersAsCoverageUnknown:
         }
         assert len(dispositions) == 3
 
-    def test_unreported_writer_placeholder_carries_synthetic_marker(self, monkeypatch):
+    def test_unreported_writer_placeholder_carries_synthetic_marker(self, monkeypatch: pytest.MonkeyPatch) -> None:
         assert _entry(kind="file-path", path="<writer:configure_git>").synthetic is False
 
         seen_entries = []
@@ -447,7 +448,7 @@ class TestUnreportedWriterRendersAsCoverageUnknown:
         assert len(placeholder_entries) == 1
         assert placeholder_entries[0].synthetic is True
 
-    def test_unreported_writer_alongside_reported_entries_both_appear(self):
+    def test_unreported_writer_alongside_reported_entries_both_appear(self) -> None:
         receipt = InstallReceipt(
             entries=(ReceiptEntry(writer_id="reported_writer", kind="git-config-key", key="gc.autoDetach"),),
             reported_writer_ids=frozenset({"reported_writer"}),
@@ -472,7 +473,7 @@ HELP_BROWSER_SETTINGS = tuple(
 )
 
 
-def test_declaration_order_is_the_safe_unset_order():
+def test_declaration_order_is_the_safe_unset_order() -> None:
     """The leg walks `_SETTINGS` in declaration order, so that order IS the
     degradation ladder: unsetting `web.browser` before `browser.noop.cmd`
     is what keeps `web.browser=noop` from ever outliving the command it
@@ -487,7 +488,7 @@ def test_declaration_order_is_the_safe_unset_order():
 
 class _FakeGitStore:
 
-    def __init__(self, initial):
+    def __init__(self, initial) -> None:
         self._store = dict(initial)
         self.get_calls = []
         self.unset_calls = []
@@ -498,7 +499,7 @@ class _FakeGitStore:
         self.get_calls.append((scope, key))
         return self._store.get((scope, key))
 
-    def unset(self, scope, key):
+    def unset(self, scope, key) -> int:
         scope = tuple(scope)
         self.unset_calls.append((scope, key))
         if self.fail_on_key == key:
@@ -520,7 +521,7 @@ def _fully_configured_store() -> _FakeGitStore:
 
 
 class TestUninstallReverseGitConfigGroup:
-    def test_all_three_reversed_in_declared_order(self):
+    def test_all_three_reversed_in_declared_order(self) -> None:
         store = _fully_configured_store()
         records = uninstall_reverse_git_config_group(
             "help-browser",
@@ -540,14 +541,14 @@ class TestUninstallReverseGitConfigGroup:
             (("--global",), "browser.noop.cmd"),
         ]
 
-    def test_scope_flag_omitted_run_never_classifies_as_reversed(self):
+    def test_scope_flag_omitted_run_never_classifies_as_reversed(self) -> None:
         calls = []
 
-        def spy_unset(scope, key):
+        def spy_unset(scope, key) -> int:
             calls.append(tuple(scope))
             return 5
 
-        def matching_get(scope, key):
+        def matching_get(scope, key) -> str:
             setting = next(s for s in HELP_BROWSER_SETTINGS if s.key == key)
             return setting.value
 
@@ -566,7 +567,7 @@ class TestUninstallReverseGitConfigGroup:
         )
         assert all(r.disposition == DISPOSITION_REVERSED for r in records)
 
-    def test_no_prefix_strands_web_browser_without_noop_cmd(self):
+    def test_no_prefix_strands_web_browser_without_noop_cmd(self) -> None:
         for prefix_len in range(0, len(HELP_BROWSER_SETTINGS) + 1):
             store = _fully_configured_store()
             for setting in HELP_BROWSER_SETTINGS[:prefix_len]:
@@ -581,7 +582,7 @@ class TestUninstallReverseGitConfigGroup:
                 "browser' and open the default browser"
             )
 
-    def test_exit_5_in_declared_scope_is_success(self):
+    def test_exit_5_in_declared_scope_is_success(self) -> None:
         store = _FakeGitStore(
             {
                 (("--global",), "browser.noop.cmd"): "echo not-opening-browser-for:",
@@ -597,7 +598,7 @@ class TestUninstallReverseGitConfigGroup:
         assert records[0].disposition == DISPOSITION_REVERSED
         assert records[0].disposition != DISPOSITION_CANNOT_SAFELY
 
-    def test_mid_group_failure_aborts_remainder_as_cannot_reverse_safely(self):
+    def test_mid_group_failure_aborts_remainder_as_cannot_reverse_safely(self) -> None:
         store = _fully_configured_store()
         store.fail_on_key = "web.browser"
         records = uninstall_reverse_git_config_group(
@@ -612,7 +613,7 @@ class TestUninstallReverseGitConfigGroup:
         assert records[2].manual_command is not None
         assert (("--global",), "browser.noop.cmd") not in store.unset_calls
 
-    def test_value_match_skip_does_not_abort_group(self):
+    def test_value_match_skip_does_not_abort_group(self) -> None:
         store = _fully_configured_store()
         store._store[(("--global",), "web.browser")] = "firefox"
         records = uninstall_reverse_git_config_group(
@@ -626,7 +627,7 @@ class TestUninstallReverseGitConfigGroup:
         assert records[2].disposition == DISPOSITION_REVERSED
         assert (("--global",), "browser.noop.cmd") in store.unset_calls
 
-    def test_assert_total_coverage_holds_with_group_bearing_entries(self):
+    def test_assert_total_coverage_holds_with_group_bearing_entries(self) -> None:
         store = _fully_configured_store()
         store.fail_on_key = "web.browser"
         records = uninstall_reverse_git_config_group(
@@ -642,7 +643,7 @@ class TestUninstallReverseGitConfigGroup:
 
 class TestUninstallStripCmdAutorunLeg:
 
-    def test_success_returns_true(self, monkeypatch):
+    def test_success_returns_true(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import coordinator_core.ops.cmd_autorun_guard as cmd_autorun_guard
 
         monkeypatch.setattr(
@@ -652,7 +653,7 @@ class TestUninstallStripCmdAutorunLeg:
         )
         assert uninstall_legs.uninstall_strip_cmd_autorun() is True
 
-    def test_absent_autorun_is_a_clean_noop_success(self, monkeypatch):
+    def test_absent_autorun_is_a_clean_noop_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import coordinator_core.ops.cmd_autorun_guard as cmd_autorun_guard
 
         monkeypatch.setattr(
@@ -662,12 +663,12 @@ class TestUninstallStripCmdAutorunLeg:
         )
         assert uninstall_legs.uninstall_strip_cmd_autorun() is True
 
-    def test_foreign_autorun_is_a_clean_noop_success_and_not_clobbered(self, monkeypatch):
+    def test_foreign_autorun_is_a_clean_noop_success_and_not_clobbered(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import coordinator_core.ops.cmd_autorun_guard as cmd_autorun_guard
 
         calls = []
 
-        def _fake_strip(check_only=False):
+        def _fake_strip(check_only: bool = False):
             calls.append(check_only)
             return {"classification": "foreign_present", "modified": False, "would_modify": False}
 
@@ -675,7 +676,7 @@ class TestUninstallStripCmdAutorunLeg:
         assert uninstall_legs.uninstall_strip_cmd_autorun() is True
         assert calls == [False]
 
-    def test_non_windows_is_a_clean_noop_success(self, monkeypatch):
+    def test_non_windows_is_a_clean_noop_success(self, monkeypatch: pytest.MonkeyPatch) -> None:
         import coordinator_core.ops.cmd_autorun_guard as cmd_autorun_guard
 
         monkeypatch.setattr(
@@ -685,10 +686,10 @@ class TestUninstallStripCmdAutorunLeg:
         )
         assert uninstall_legs.uninstall_strip_cmd_autorun() is True
 
-    def test_unexpected_registry_error_fails_loud(self, monkeypatch, capsys):
+    def test_unexpected_registry_error_fails_loud(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         import coordinator_core.ops.cmd_autorun_guard as cmd_autorun_guard
 
-        def _boom(check_only=False):
+        def _boom(check_only: bool = False):
             raise OSError("registry access denied")
 
         monkeypatch.setattr(cmd_autorun_guard, "strip_cmd_autorun_guard", _boom)
@@ -698,7 +699,7 @@ class TestUninstallStripCmdAutorunLeg:
 
 class TestOrchestrateUninstallCmdAutorunComposition:
 
-    def _stub_other_legs_ok(self, monkeypatch):
+    def _stub_other_legs_ok(self, monkeypatch) -> None:
         monkeypatch.setattr(uninstall_legs, "uninstall_strip_settings_hooks", lambda *a, **kw: True)
         monkeypatch.setattr(uninstall_legs, "uninstall_remove_shim", lambda *a, **kw: True)
         monkeypatch.setattr(uninstall_legs, "uninstall_remove_substrate", lambda *a, **kw: True)
@@ -706,7 +707,7 @@ class TestOrchestrateUninstallCmdAutorunComposition:
 
     @pytest.mark.spawns_process
     @pytest.mark.cadence
-    def test_autorun_leg_runs_between_remove_shim_and_remove_substrate(self, monkeypatch):
+    def test_autorun_leg_runs_between_remove_shim_and_remove_substrate(self, monkeypatch: pytest.MonkeyPatch) -> None:
         order = []
         self._stub_other_legs_ok(monkeypatch)
         monkeypatch.setattr(
@@ -745,7 +746,7 @@ class TestOrchestrateUninstallCmdAutorunComposition:
 
     @pytest.mark.spawns_process
     @pytest.mark.cadence
-    def test_autorun_leg_failure_fails_loud_and_stops_sequencing(self, monkeypatch, capsys):
+    def test_autorun_leg_failure_fails_loud_and_stops_sequencing(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         self._stub_other_legs_ok(monkeypatch)
         monkeypatch.setattr(uninstall_legs, "uninstall_strip_cmd_autorun", lambda *a, **kw: False)
 
@@ -762,7 +763,7 @@ class TestOrchestrateUninstallCmdAutorunComposition:
 
     @pytest.mark.spawns_process
     @pytest.mark.cadence
-    def test_dry_run_never_calls_the_autorun_leg(self, monkeypatch, capsys):
+    def test_dry_run_never_calls_the_autorun_leg(self, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         monkeypatch.setattr(uninstall_legs, "_load_install_receipt", lambda: None)
 
         def _boom(*a, **kw):

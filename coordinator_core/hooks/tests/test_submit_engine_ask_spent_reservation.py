@@ -2,9 +2,10 @@
 from coordinator_core.hooks import submit_engine_ask
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 from coordinator_core.ops.dispatch_emit.ask_gate import TOKEN_SPENT_FILE
+from pathlib import Path
 
 
-def test_spent_reservation_is_detected(tmp_path):
+def test_spent_reservation_is_detected(tmp_path: Path) -> None:
     run_id = "ask-20261102T215153-eda465"
     rd = record_dir(tmp_path, run_id)
     rd.mkdir(parents=True)
@@ -13,5 +14,5 @@ def test_spent_reservation_is_detected(tmp_path):
     assert submit_engine_ask._reserved_token_spent(tmp_path, run_id) is True
 
 
-def test_unsafe_run_id_reads_not_spent(tmp_path):
+def test_unsafe_run_id_reads_not_spent(tmp_path: Path) -> None:
     assert submit_engine_ask._reserved_token_spent(tmp_path, "../escape") is False

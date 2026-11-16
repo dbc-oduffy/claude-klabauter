@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from coordinator_core.group_em import box_registry, placement
+from pathlib import Path
 
 
 def _two_boxes(tmp_path):
@@ -14,7 +15,7 @@ def _two_boxes(tmp_path):
     return primary, small, big, a, b
 
 
-def test_picks_satisfying_box_and_intake_returns_it(tmp_path):
+def test_picks_satisfying_box_and_intake_returns_it(tmp_path: Path) -> None:
     primary, small, big, a, b = _two_boxes(tmp_path)
     res = placement.place_run("run/1", {"min_ram_mb": 32000, "os": "linux"}, brief="go", directory=primary)
     assert res["ok"] and res["placement"]["box_id"] == b["box_id"]
@@ -25,13 +26,13 @@ def test_picks_satisfying_box_and_intake_returns_it(tmp_path):
     assert (big / "state" / "group-em" / "box" / "placements" / "run_1.json").is_file()
 
 
-def test_first_satisfying_in_id_order(tmp_path):
+def test_first_satisfying_in_id_order(tmp_path: Path) -> None:
     primary, small, big, a, b = _two_boxes(tmp_path)
     res = placement.place_run("r", {"os": "linux"}, directory=primary)
     assert res["placement"]["box_id"] == min(a["box_id"], b["box_id"])
 
 
-def test_explicit_box_wins_but_must_satisfy(tmp_path):
+def test_explicit_box_wins_but_must_satisfy(tmp_path: Path) -> None:
     primary, small, big, a, b = _two_boxes(tmp_path)
     ok = placement.place_run("r", {"min_ram_mb": 1}, box_id=a["box_id"], directory=primary)
     assert ok["ok"] and ok["placement"]["box_id"] == a["box_id"]
@@ -40,7 +41,7 @@ def test_explicit_box_wins_but_must_satisfy(tmp_path):
     assert placement.read_intake(small)[0]["run"] == "r"
 
 
-def test_refusals_never_raise(tmp_path):
+def test_refusals_never_raise(tmp_path: Path) -> None:
     primary, small, big, a, b = _two_boxes(tmp_path)
     assert placement.place_run("r", {"os": "darwin"}, directory=primary)["reason"] == "unsatisfied"
     assert placement.place_run("r", {}, box_id="nope", directory=primary)["reason"] == "no_box"
@@ -49,7 +50,7 @@ def test_refusals_never_raise(tmp_path):
     assert placement.place_run("r", {"min_ram_mb": "x"}, directory=primary)["reason"] == "unsatisfied"
 
 
-def test_read_intake_skips_malformed_and_missing(tmp_path):
+def test_read_intake_skips_malformed_and_missing(tmp_path: Path) -> None:
     assert placement.read_intake(tmp_path) == []
     d = tmp_path / "state" / "group-em" / "box" / "placements"
     d.mkdir(parents=True)
@@ -58,7 +59,7 @@ def test_read_intake_skips_malformed_and_missing(tmp_path):
     assert placement.read_intake(tmp_path) == []
 
 
-def test_distinct_runs_sharing_a_safe_filename_refuse_and_keep_the_first(tmp_path):
+def test_distinct_runs_sharing_a_safe_filename_refuse_and_keep_the_first(tmp_path: Path) -> None:
     primary, small, big, a, b = _two_boxes(tmp_path)
     first = placement.place_run("run/1", {"os": "linux"}, brief="first", directory=primary)
     assert first["ok"]

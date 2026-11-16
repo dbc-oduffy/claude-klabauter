@@ -21,7 +21,7 @@ _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: 
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     (root / ".git" / "objects").mkdir(parents=True)
     (root / ".git" / "refs").mkdir()
@@ -60,7 +60,7 @@ def _prompts_dir(result: dict, root: Path) -> Path:
     return next((root / "state" / "warp").glob("*")) / PROMPTS_DIR
 
 
-def test_staged_prompt_is_absent_until_whole_and_never_partial(repo, monkeypatch):
+def test_staged_prompt_is_absent_until_whole_and_never_partial(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     real_replace = atomic_replace._replace_with_retry
     at_swap: list[tuple[bool, bytes]] = []
 
@@ -83,7 +83,7 @@ def test_staged_prompt_is_absent_until_whole_and_never_partial(repo, monkeypatch
     assert not [p for p in _prompts_dir(result, repo).iterdir() if p.suffix != ".md"]
 
 
-def test_failed_write_leaves_no_partial_prompt(repo, monkeypatch):
+def test_failed_write_leaves_no_partial_prompt(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     real = atomic_replace._replace_with_retry
 
     def boom(src, dst):

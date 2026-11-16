@@ -84,7 +84,7 @@ def test_profile_land_counts_reads_per_leg_and_leaves_counter_disarmed(tmp_path:
     assert lb._ReadCounter.armed is False
 
 
-def test_live_siblings_json_covers_every_census_leg(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_live_siblings_json_covers_every_census_leg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _bind_env(monkeypatch)
     lb.main(["--live-siblings", "2", "--tracked", "20", "--chain", "3", "--json", "--dir", str(tmp_path)])
     rows = json.loads(capsys.readouterr().out)
@@ -103,7 +103,7 @@ def test_live_siblings_json_covers_every_census_leg(tmp_path: Path, monkeypatch,
     assert reached == ({s["leg"] for s in whole["legs"]} | {s["to"] for s in whole["legs"]}) - {"start"}
 
 
-def test_live_siblings_attribute_profiles_per_leg(tmp_path: Path, monkeypatch) -> None:
+def test_live_siblings_attribute_profiles_per_leg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _bind_env(monkeypatch)
     rows = lb.run_live(tmp_path, 1, 0, tracked=20, chain=3, attribute=True)
     script_read = next(r for r in rows if r.axis == lb.LEG_AXIS_PREFIX + lb.LEG_SCRIPT_READ)
@@ -126,7 +126,7 @@ def test_kill_gate_pins_both_sides() -> None:
     assert lb.kill_gate(under) is False
 
 
-def test_rows_over_small_fixture(tmp_path: Path, monkeypatch) -> None:
+def test_rows_over_small_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for name in ("COORDINATOR_INVOCATION_ORIGIN", "COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
         monkeypatch.setenv(name, "x")
     siblings = 2
@@ -144,7 +144,7 @@ def test_rows_over_small_fixture(tmp_path: Path, monkeypatch) -> None:
     assert whole.attribution["sizing_parses"] >= siblings and whole.attribution["plan_parses"] >= siblings
 
 
-def test_script_mode_mints_no_token_into_the_outer_settings_home(tmp_path: Path, monkeypatch, capsys) -> None:
+def test_script_mode_mints_no_token_into_the_outer_settings_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """The fixture's sibling tokens land in the run's own settings home under the workdir;
     before, 56 script runs left 28000 tokens in the real machine-local engine-records store."""
     _bind_env(monkeypatch)

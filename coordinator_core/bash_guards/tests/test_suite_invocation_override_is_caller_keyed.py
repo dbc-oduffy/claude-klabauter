@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from coordinator_core.bash_guards import check_test_suite_invocation as guard
 from coordinator_core.guard_messages.testing import envelope_of
+import pytest
 
 
 def _enveloped(check):
@@ -22,19 +23,19 @@ def _payload(env: dict | None = None) -> dict:
 
 
 class TestOverrideIsCallerKeyed:
-    def test_the_callers_override_disarms_the_guard(self, monkeypatch):
+    def test_the_callers_override_disarms_the_guard(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv(guard._OVERRIDE_ENV_VAR, raising=False)
 
         assert _enveloped(guard.check)(_payload({guard._OVERRIDE_ENV_VAR: "1"})) is None
 
     def test_the_host_processs_own_override_does_not_reach_a_caller_who_set_none(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv(guard._OVERRIDE_ENV_VAR, "1")
 
         assert _enveloped(guard.check)(_payload({})) is not None
 
-    def test_a_payload_with_no_env_key_still_falls_back_to_ambient(self, monkeypatch):
+    def test_a_payload_with_no_env_key_still_falls_back_to_ambient(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv(guard._OVERRIDE_ENV_VAR, "1")
 
         assert _enveloped(guard.check)(_payload()) is None
@@ -49,24 +50,24 @@ class TestSubagentIdentityFailsClosed:
         p.update(extra)
         return p
 
-    def test_override_never_reaches_a_subagent(self):
+    def test_override_never_reaches_a_subagent(self) -> None:
         assert _enveloped(guard.check)(self._sub(agent_id="a0123456789abcdef")) is not None
 
-    def test_agent_type_alone_is_a_subagent(self):
+    def test_agent_type_alone_is_a_subagent(self) -> None:
         assert _enveloped(guard.check)(self._sub(agent_type="coordinator:executor")) is not None
 
-    def test_subagent_transcript_path_alone_is_a_subagent(self):
+    def test_subagent_transcript_path_alone_is_a_subagent(self) -> None:
         tp = "/h/projects/p/sess/subagents/agent-a1.jsonl"
         assert _enveloped(guard.check)(self._sub(transcript_path=tp)) is not None
 
-    def test_non_string_agent_id_is_not_absent(self):
+    def test_non_string_agent_id_is_not_absent(self) -> None:
         assert _enveloped(guard.check)(self._sub(agent_id=7)) is not None
 
-    def test_main_transcript_path_is_not_a_subagent(self):
+    def test_main_transcript_path_is_not_a_subagent(self) -> None:
         p = self._sub(transcript_path="/h/projects/p/sess.jsonl")
         assert _enveloped(guard.check)(p) is None
 
-    def test_subagent_deny_offers_no_override(self):
+    def test_subagent_deny_offers_no_override(self) -> None:
         r = _enveloped(guard.check)(self._sub(agent_id="a1", env={}))
         text = r["hookSpecificOutput"]["permissionDecisionReason"]
         assert guard._OVERRIDE_ENV_VAR not in text
@@ -82,7 +83,7 @@ class TestCloudBoxAllowsBroadSuiteForEm:
             "env": env,
         }
 
-    def test_cloud_em_runs_with_no_grant(self, monkeypatch):
+    def test_cloud_em_runs_with_no_grant(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Pin the machine rung: the cloud basis needs a cloud machine, and the host running
         # this test usually isn't one.
         from coordinator_core import env_locality
@@ -94,6 +95,6 @@ class TestCloudBoxAllowsBroadSuiteForEm:
         payload["tool_input"]["command"] = "with-suite-mutex -- " + _CMD
         assert _enveloped(guard.check)(payload) is None
 
-    def test_local_em_without_grant_is_denied(self, monkeypatch):
+    def test_local_em_without_grant_is_denied(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(guard, "_tier_u_grant", lambda cwd: (False, None))
         assert _enveloped(guard.check)(self._em({})) is not None

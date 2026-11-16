@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
+from pathlib import Path
 
 PLAN_REL = "docs/plans/2026-11-09-owed-kinds.md"
 _SENT = ".coordinator-local/memo-outbox/sent"
@@ -57,7 +58,7 @@ def _next_action(manifest: dict) -> str:
     return subprocess.run(["node", "-e", js], capture_output=True, text=True, check=True).stdout
 
 
-def test_refusal_carries_the_route_for_memo_rows_only(tmp_path):
+def test_refusal_carries_the_route_for_memo_rows_only(tmp_path: Path) -> None:
     reply = _refuse(tmp_path)
     assert reply["owed_em_ids"] == ["C3", "C4"]
     assert [m["id"] for m in reply["owed_memo_rows"]] == ["C3"]
@@ -67,7 +68,7 @@ def test_refusal_carries_the_route_for_memo_rows_only(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node unavailable")
-def test_next_action_branches_per_row_kind(tmp_path):
+def test_next_action_branches_per_row_kind(tmp_path: Path) -> None:
     reply = _refuse(tmp_path)
     text = _next_action({k: reply[k] for k in ("owed_em_ids", "owed_plan", "owed_memo_rows")})
     memo_part, em_part = text.split("; coordinator-invoke", 1)
@@ -78,7 +79,7 @@ def test_next_action_branches_per_row_kind(tmp_path):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node unavailable")
-def test_unknown_kind_keeps_the_em_discharge_default():
+def test_unknown_kind_keeps_the_em_discharge_default() -> None:
     text = _next_action({"owed_em_ids": ["C9"], "owed_plan": "p.md"})
     assert '"verb":"em-discharge"' in text and '"id":"C9"' in text
     assert "delivered_elsewhere" not in text

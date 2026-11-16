@@ -6,6 +6,7 @@ import time
 import pytest
 
 from coordinator_core import atomic_append
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -14,7 +15,7 @@ _LINES_PER_SINK = 3
 
 
 @pytest.fixture(autouse=True)
-def _no_spurious_wedge_discount(monkeypatch):
+def _no_spurious_wedge_discount(monkeypatch: pytest.MonkeyPatch) -> None:
     """Steady-state bound tests must not see a GIL-starved write counted as wedged; wedge tests override this."""
     monkeypatch.setattr(atomic_append, "APPEND_DEADLINE_SECS", 30.0)
 
@@ -32,7 +33,7 @@ def _settles_to_pool_bound() -> bool:
     return False
 
 
-def test_distinct_sinks_never_exceed_the_pool_bound_and_keep_order(tmp_path):
+def test_distinct_sinks_never_exceed_the_pool_bound_and_keep_order(tmp_path: Path) -> None:
     sinks = [tmp_path / f"s{i}.txt" for i in range(_N_SINKS)]
     peak = 0
     for n in range(_LINES_PER_SINK):
@@ -44,7 +45,7 @@ def test_distinct_sinks_never_exceed_the_pool_bound_and_keep_order(tmp_path):
         assert sink.read_bytes() == b"0\n1\n2\n"
 
 
-def test_unwaited_burst_to_many_sinks_stays_bounded(tmp_path):
+def test_unwaited_burst_to_many_sinks_stays_bounded(tmp_path: Path) -> None:
     sinks = [tmp_path / f"b{i}.txt" for i in range(_N_SINKS)]
     peak = 0
     for sink in sinks:
@@ -62,7 +63,7 @@ def _wedge_pool(tmp_path, monkeypatch):
     entered = threading.Semaphore(0)
     real_write = atomic_append._write_once
 
-    def gated(sink_str, encoded):
+    def gated(sink_str, encoded) -> None:
         if os.path.basename(sink_str).startswith("wedge"):
             entered.release()
             release.wait(10)
@@ -78,7 +79,7 @@ def _wedge_pool(tmp_path, monkeypatch):
     return release, wedged
 
 
-def test_pool_size_wedged_sinks_do_not_starve_a_ninth_droppable_sink(tmp_path, monkeypatch):
+def test_pool_size_wedged_sinks_do_not_starve_a_ninth_droppable_sink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     release, wedged = _wedge_pool(tmp_path, monkeypatch)
     ninth = tmp_path / "ninth.txt"
     try:
@@ -95,7 +96,7 @@ def test_pool_size_wedged_sinks_do_not_starve_a_ninth_droppable_sink(tmp_path, m
     assert _settles_to_pool_bound()
 
 
-def test_unwaited_sink_queued_behind_young_wedge_is_rescued(tmp_path, monkeypatch):
+def test_unwaited_sink_queued_behind_young_wedge_is_rescued(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     release, wedged = _wedge_pool(tmp_path, monkeypatch)
     ninth = tmp_path / "ninth.txt"
     try:
@@ -111,7 +112,7 @@ def test_unwaited_sink_queued_behind_young_wedge_is_rescued(tmp_path, monkeypatc
     assert _settles_to_pool_bound()
 
 
-def test_failure_on_one_sink_does_not_affect_others(tmp_path):
+def test_failure_on_one_sink_does_not_affect_others(tmp_path: Path) -> None:
     with pytest.raises(OSError):
         atomic_append.append_line(tmp_path / "missing" / "s.txt", b"a\n", wait_secs=None)
     good = tmp_path / "good.txt"

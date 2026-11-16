@@ -5,7 +5,8 @@ Folded: guard family 11 of the
 its subject / lessons-path helpers.
 
 Imports only the shared ``_dc_*`` layer and pre-existing sibling modules,
-never the ``dispatch_checks`` facade or another family module.
+never the ``dispatch_checks`` facade or another family module, bar the shared
+``_dc_blanket_add._awk_quote_aware_split`` helper.
 
 KNOWN PORTING GAPS (surfaced, not silently patched):
   - ``check_validate_commit`` ports Check 7 (CLAUDE.md budget, deny-capable),
@@ -59,6 +60,7 @@ from coordinator_core.bash_guards._command_tokenizer import (
     token_matches_binary as _bt_token_matches_binary,
     tokenize_full_command as _bt_tokenize_full_command,
 )
+from coordinator_core.bash_guards._dc_blanket_add import _awk_quote_aware_split
 from coordinator_core.bash_guards._dc_commit_named_stage import (
     named_set_refusal,
     named_stage_paths,
@@ -332,13 +334,10 @@ def check_validate_commit(
     # unchanged.
     _cwd = _bt_leading_cd_prefix_cwd(command, cwd or None) or cwd or None
 
-    contains_git_commit = bool(re.match(r"^git\s+commit(\s|$)", command))
-    if not contains_git_commit:
-        for tok in re.split(r"&&|\|\||;", command):
-            tok = tok.lstrip()
-            if re.match(r"^git\s+commit(\s|$)", tok):
-                contains_git_commit = True
-                break
+    contains_git_commit = any(
+        re.match(r"^git\s+commit(\s|$)", seg.lstrip())
+        for seg in _awk_quote_aware_split(command)
+    )
     if not contains_git_commit:
         return None
 

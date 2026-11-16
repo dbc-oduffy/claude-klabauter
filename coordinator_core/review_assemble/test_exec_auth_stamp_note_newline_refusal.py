@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from coordinator_core.review_assemble import exec_auth_stamp
+from pathlib import Path
+import pytest
 
 
-def test_note_with_embedded_newline_is_refused(tmp_path, capsys) -> None:
+def test_note_with_embedded_newline_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     plan = tmp_path / "plan.md"
     plan.write_text("---\nstatus: draft\n---\nbody\n", encoding="utf-8")
 
@@ -17,7 +19,7 @@ def test_note_with_embedded_newline_is_refused(tmp_path, capsys) -> None:
     assert "newline" in err
 
 
-def test_append_note_with_embedded_newline_is_refused(tmp_path, capsys) -> None:
+def test_append_note_with_embedded_newline_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     plan = tmp_path / "plan.md"
     plan.write_text("---\nstatus: draft\n---\nbody\n", encoding="utf-8")
 

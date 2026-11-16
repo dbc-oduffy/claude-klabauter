@@ -17,11 +17,11 @@ GATE = {"plan": PLAN_REL, "plan_sha256": "0" * 64, "reviews": [], "coverage": No
 
 
 @pytest.fixture(autouse=True)
-def _no_bind(monkeypatch):
+def _no_bind(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_gate, "_bind_run", lambda *a, **k: None)
 
 
-def _halt_refusal(repo, *, executed=True):
+def _halt_refusal(repo, *, executed: bool = True) -> None:
     _put(repo, tshirt="S", route="spec-dispatch")
     _plan(repo, rows=[("C1", "coded"), ("C2", "open")])
     record = repo / RECORD_DIR_ROOT / HALTED
@@ -43,7 +43,7 @@ def _minted(repo):
     return sorted(os.listdir(repo / RECORD_DIR_ROOT))
 
 
-def test_refusal_after_execute_stays_bound_and_credits_plan_and_execute(repo, monkeypatch):  # noqa: F811
+def test_refusal_after_execute_stays_bound_and_credits_plan_and_execute(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _halt_refusal(repo)
     monkeypatch.setattr(ask_gate, "_plan_gate_resume_ready", lambda *a: True)
     assert halted_run.halted_run_to_resume(repo, REL) == HALTED
@@ -54,7 +54,7 @@ def test_refusal_after_execute_stays_bound_and_credits_plan_and_execute(repo, mo
     assert [n for n in _minted(repo) if n not in before and n != NEW_RUN] == []
 
 
-def test_refusal_at_the_plan_gate_still_reruns_execute(repo, monkeypatch):  # noqa: F811
+def test_refusal_at_the_plan_gate_still_reruns_execute(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _halt_refusal(repo, executed=False)
     monkeypatch.setattr(ask_gate, "_plan_gate_resume_ready", lambda *a: True)
     phases = _refire(repo)["resume_phases"]
@@ -62,7 +62,7 @@ def test_refusal_at_the_plan_gate_still_reruns_execute(repo, monkeypatch):  # no
     assert "plan_gate_rulings" in phases["reuse"] or "plan_gate_rulings" in phases["rerun"]
 
 
-def test_refusal_after_execute_credits_the_plan_without_the_readiness_check(repo, monkeypatch):  # noqa: F811
+def test_refusal_after_execute_credits_the_plan_without_the_readiness_check(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _halt_refusal(repo)
     monkeypatch.setattr(ask_gate, "_plan_gate_resume_ready", lambda *a: False)
     phases = _refire(repo)["resume_phases"]

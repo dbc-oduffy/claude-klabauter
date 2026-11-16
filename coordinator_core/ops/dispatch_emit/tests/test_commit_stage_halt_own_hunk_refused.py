@@ -12,13 +12,14 @@ from coordinator_core.ops.dispatch_emit.tests.test_commit_stage_halt import (
     _record_dir,
     _started,
 )
+from pathlib import Path
 
 
 def _result(result):
     return {"type": "result", "agentId": "a1", "key": "k1", "result": result}
 
 
-def test_own_hunk_refusal_on_a_completed_task_writes_the_halt_marker(tmp_path):
+def test_own_hunk_refusal_on_a_completed_task_writes_the_halt_marker(tmp_path: Path) -> None:
     record_dir = _record_dir(tmp_path)
     refused = {"committed": False, "refused": "own-hunk-stage-refused", "error": "own-hunk staging refused: x"}
     journal = _journal(tmp_path, [_started("commit"), _result(json.dumps(refused))])
@@ -28,7 +29,7 @@ def test_own_hunk_refusal_on_a_completed_task_writes_the_halt_marker(tmp_path):
     assert "own-hunk-stage-refused" in marker["reason"]
 
 
-def test_other_refusal_and_bare_uncommitted_on_a_completed_task_write_no_marker(tmp_path):
+def test_other_refusal_and_bare_uncommitted_on_a_completed_task_write_no_marker(tmp_path: Path) -> None:
     record_dir = _record_dir(tmp_path)
     for reply in ({"committed": False, "refused": "verify-overlay-unverified", "error": "e"}, {"committed": False}):
         journal = _journal(tmp_path, [_started("commit"), _result(reply)])
@@ -36,7 +37,7 @@ def test_other_refusal_and_bare_uncommitted_on_a_completed_task_write_no_marker(
     assert not (record_dir / halted_run.HALTED_FILE).exists()
 
 
-def test_committed_reply_on_a_completed_task_writes_no_marker(tmp_path):
+def test_committed_reply_on_a_completed_task_writes_no_marker(tmp_path: Path) -> None:
     record_dir = _record_dir(tmp_path)
     journal = _journal(tmp_path, [_started("commit"), _result({"committed": True, "sha": "abc"})])
     assert _land(record_dir, journal, status="completed") is None

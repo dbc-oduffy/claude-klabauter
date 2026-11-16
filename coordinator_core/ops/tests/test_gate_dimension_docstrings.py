@@ -42,6 +42,7 @@ from coordinator_core.ops.tests._dod_gate_test_helpers import (
     available as _available,
     unavailable as _unavailable,
 )
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
@@ -56,7 +57,7 @@ def test_self_registration_replaces_stub() -> None:
     assert _DIMENSION_REGISTRY["docstrings"] is doc_dim._check_docstrings
 
 
-def test_ruff_unavailable_degrades_to_unavailable(monkeypatch) -> None:
+def test_ruff_unavailable_degrades_to_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         doc_dim,
         "resolve_tool",
@@ -69,7 +70,7 @@ def test_ruff_unavailable_degrades_to_unavailable(monkeypatch) -> None:
     assert "ruff" in result.detail
 
 
-def test_interrogate_unavailable_degrades_to_unavailable(monkeypatch) -> None:
+def test_interrogate_unavailable_degrades_to_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         doc_dim,
         "resolve_tool",
@@ -82,14 +83,14 @@ def test_interrogate_unavailable_degrades_to_unavailable(monkeypatch) -> None:
     assert "interrogate" in result.detail
 
 
-def test_missing_fragment_is_unavailable(monkeypatch, tmp_path) -> None:
+def test_missing_fragment_is_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(doc_dim, "resolve_tool", lambda tool: _available(tool))
     result = doc_dim._check_docstrings([], None, tmp_path)
     assert result.verdict is Verdict.UNAVAILABLE
     assert "ported-ops-paths.txt" in result.detail
 
 
-def test_stale_fragment_all_missing_is_unavailable(monkeypatch, tmp_path) -> None:
+def test_stale_fragment_all_missing_is_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(doc_dim, "resolve_tool", lambda tool: _available(tool))
     github_dir = tmp_path / ".github"
     github_dir.mkdir()
@@ -101,7 +102,7 @@ def test_stale_fragment_all_missing_is_unavailable(monkeypatch, tmp_path) -> Non
     assert "stale" in result.detail.lower()
 
 
-def test_missing_floor_file_is_unavailable(monkeypatch, tmp_path) -> None:
+def test_missing_floor_file_is_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(doc_dim, "resolve_tool", lambda tool: _available(tool))
     github_dir = tmp_path / ".github"
     github_dir.mkdir()
@@ -125,7 +126,7 @@ def _seed_repo(tmp_path, fail_under: float = 50.0):
     return tmp_path
 
 
-def test_both_tools_pass_is_pass(monkeypatch, tmp_path) -> None:
+def test_both_tools_pass_is_pass(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _seed_repo(tmp_path)
     monkeypatch.setattr(doc_dim, "resolve_tool", lambda tool: _available(tool))
     monkeypatch.setattr(doc_dim, "_run_ruff", lambda *a, **k: (0, "All checks passed!", ""))
@@ -136,7 +137,7 @@ def test_both_tools_pass_is_pass(monkeypatch, tmp_path) -> None:
     assert result.verdict is Verdict.PASS
 
 
-def test_ruff_rc1_is_fail(monkeypatch, tmp_path) -> None:
+def test_ruff_rc1_is_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _seed_repo(tmp_path)
     monkeypatch.setattr(doc_dim, "resolve_tool", lambda tool: _available(tool))
     monkeypatch.setattr(
@@ -150,7 +151,7 @@ def test_ruff_rc1_is_fail(monkeypatch, tmp_path) -> None:
     assert "D100" in result.detail
 
 
-def test_interrogate_rc1_is_fail(monkeypatch, tmp_path) -> None:
+def test_interrogate_rc1_is_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _seed_repo(tmp_path)
     monkeypatch.setattr(doc_dim, "resolve_tool", lambda tool: _available(tool))
     monkeypatch.setattr(doc_dim, "_run_ruff", lambda *a, **k: (0, "All checks passed!", ""))
@@ -164,7 +165,7 @@ def test_interrogate_rc1_is_fail(monkeypatch, tmp_path) -> None:
     assert "FAILED" in result.detail
 
 
-def test_ruff_broken_rc_is_unavailable_not_fail(monkeypatch, tmp_path) -> None:
+def test_ruff_broken_rc_is_unavailable_not_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _seed_repo(tmp_path)
     monkeypatch.setattr(doc_dim, "resolve_tool", lambda tool: _available(tool))
     monkeypatch.setattr(doc_dim, "_run_ruff", lambda *a, **k: (2, "", "fatal: bad config"))
@@ -176,7 +177,7 @@ def test_ruff_broken_rc_is_unavailable_not_fail(monkeypatch, tmp_path) -> None:
     assert "fatal: bad config" in result.detail
 
 
-def test_interrogate_broken_rc_is_unavailable_not_fail(monkeypatch, tmp_path) -> None:
+def test_interrogate_broken_rc_is_unavailable_not_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _seed_repo(tmp_path)
     monkeypatch.setattr(doc_dim, "resolve_tool", lambda tool: _available(tool))
     monkeypatch.setattr(doc_dim, "_run_ruff", lambda *a, **k: (0, "All checks passed!", ""))
@@ -188,7 +189,7 @@ def test_interrogate_broken_rc_is_unavailable_not_fail(monkeypatch, tmp_path) ->
     assert "usage error" in result.detail
 
 
-def test_timeout_is_unavailable_not_fail(tmp_path) -> None:
+def test_timeout_is_unavailable_not_fail(tmp_path: Path) -> None:
     def _raise_timeout(*args, **kwargs):
         raise subprocess.TimeoutExpired(cmd="ruff", timeout=120)
 
@@ -202,7 +203,7 @@ def test_timeout_is_unavailable_not_fail(tmp_path) -> None:
         subprocess.run = orig_run
 
 
-def test_run_dimension_wraps_docstrings_check(monkeypatch, tmp_path) -> None:
+def test_run_dimension_wraps_docstrings_check(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         doc_dim,
         "resolve_tool",
@@ -213,7 +214,7 @@ def test_run_dimension_wraps_docstrings_check(monkeypatch, tmp_path) -> None:
     assert result.verdict is Verdict.UNAVAILABLE
 
 
-def test_live_smoke_never_raises(tmp_path) -> None:
+def test_live_smoke_never_raises(tmp_path: Path) -> None:
     result = doc_dim._check_docstrings([], None, None)
     assert result.verdict in (
         Verdict.PASS,

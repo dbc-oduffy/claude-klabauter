@@ -57,7 +57,6 @@ def test_a_passing_verdict_carries_no_remedy_step(repo):
 
 
 @pytest.mark.parametrize("verdict, expect", [
-    ({"status": "fail", "tests_failed": 3, "baseline": None}, ltt.NO_NODE_RECORDED),
     ({"status": "fail", "tests_failed": 3, "baseline": None, "failed_tests": ["t/test_a.py::test_x"]},
      "t/test_a.py::test_x"),
     ({"status": "error", "tests_failed": 0, "baseline": None}, ltt.NO_NODE_RECORDED),
@@ -69,6 +68,46 @@ def test_unattributed_findings_name_a_node_or_say_none_recorded(verdict, expect)
 
     assert check == "failed" and findings
     assert all(f.path == "" and expect in f.detail for f in findings)
+
+
+@pytest.mark.parametrize("status", ["fail", "error"])
+def test_a_failure_count_with_no_node_is_a_retest_clearable_harness_error(status):
+    findings, check = ltt.failed_targeted_tests({"status": status, "tests_failed": 1, "baseline": None})
+
+    assert check == "failed"
+    assert [f.reason for f in findings] == [ltt.ZERO_FAIL_UNATTRIBUTED]
+    assert ltt.ZERO_FAIL_UNATTRIBUTED in ltt.TEST_EVIDENCE_REASONS
+    assert "counts only" in findings[0].detail and ltt.NO_NODE_RECORDED in findings[0].detail
+    assert ltt.retest_step(findings, {})["kind"] == ltt.ZERO_FAIL_UNATTRIBUTED
+
+
+@pytest.mark.parametrize("verdict", [
+    {"status": "fail", "tests_failed": 1, "baseline": None, "failed_tests": ["t/test_a.py::test_x"]},
+    {"status": "error", "tests_failed": 2, "baseline": None, "failed_tests": ["t/test_a.py::test_x"]},
+    {"status": "fail", "tests_failed": 1, "baseline": {"caused": ["t/test_a.py::test_x"]}},
+])
+def test_a_red_with_a_real_node_still_refuses(verdict):
+    findings, check = ltt.failed_targeted_tests(verdict)
+
+    assert check == "failed" and findings
+    assert {f.reason for f in findings} == {ltt.TARGETED_TESTS_FAILED}
+    assert "t/test_a.py::test_x" in findings[0].detail
+
+
+def test_a_failure_count_with_a_nodes_argument_still_refuses():
+    findings, check = ltt.failed_targeted_tests(
+        {"status": "fail", "tests_failed": 1, "baseline": None}, nodes=["a/test_b.py::test_c"],
+    )
+
+    assert check == "failed" and [f.reason for f in findings] == [ltt.TARGETED_TESTS_FAILED]
+
+
+@pytest.mark.parametrize("done", [0, 1, MAX_IN_RUN_REMEDY_ATTEMPTS, MAX_IN_RUN_REMEDY_ATTEMPTS + 1, 7])
+def test_retest_step_attempt_never_exceeds_max_attempts(done):
+    step = ltt.retest_step([ltt.zero_fail_finding("d")], {ltt.RETEST_ATTEMPTS_PARAM: done})
+
+    assert step["attempt"] <= step["max_attempts"]
+    assert step["exhausted"] is (done >= MAX_IN_RUN_REMEDY_ATTEMPTS)
 
 
 def test_nodes_argument_names_the_failures_of_an_unattributed_verdict():

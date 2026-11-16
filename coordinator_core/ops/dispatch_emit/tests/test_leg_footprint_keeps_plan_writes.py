@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit.ask_contract import LEG_DISPATCH
 from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import plan_rows_serving, remaining_leg_plan
+from pathlib import Path
 
 _FM = '---\nregister_claims:\n  rows: ["R1"]\n---\n'
 
@@ -14,15 +15,15 @@ def _plan(tmp_path, writes_yaml):
     return p
 
 
-def test_scalar_writes_is_one_path_not_its_characters(tmp_path):
+def test_scalar_writes_is_one_path_not_its_characters(tmp_path: Path) -> None:
     assert plan_rows_serving(_plan(tmp_path, "writes: pkg/new.py"), ["R1"]) == ["pkg/new.py"]
 
 
-def test_list_writes_unchanged(tmp_path):
+def test_list_writes_unchanged(tmp_path: Path) -> None:
     assert plan_rows_serving(_plan(tmp_path, "writes: [a.py, b.py]"), ["R1"]) == ["a.py", "b.py"]
 
 
-def test_leg_keeps_plan_write_in_declared_form_and_tracked_spelling(tmp_path):
+def test_leg_keeps_plan_write_in_declared_form_and_tracked_spelling(tmp_path: Path) -> None:
     spelling = lambda paths: {p: ("pkg/Mod.py" if p == "Pkg/mod.py" else None) for p in paths}
     plan = remaining_leg_plan(
         {"R1": {"remaining": ["do the thing"]}}, ["finish"], [], ["R1"], [], None, tmp_path,

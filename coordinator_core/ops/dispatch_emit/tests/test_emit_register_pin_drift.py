@@ -9,6 +9,7 @@ from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import emit
 
 from .conftest import REVIEW_KW
+from pathlib import Path
 
 _SPINE = """
 ## Tasks
@@ -27,7 +28,7 @@ _SPINE = """
 _SIZING_REL = "state/sizings/s.yaml"
 
 
-def _sizing(tmp_path, text):
+def _sizing(tmp_path, text) -> None:
     p = tmp_path / _SIZING_REL
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(
@@ -50,17 +51,17 @@ def _plan(tmp_path, pins):
 
 
 @pytest.fixture(autouse=True)
-def _no_fidelity(monkeypatch):
+def _no_fidelity(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(emit._FIDELITY_MARKER_ENV, raising=False)
 
 
-def test_matching_pins_emit(tmp_path):
+def test_matching_pins_emit(tmp_path: Path) -> None:
     _sizing(tmp_path, "do the thing")
     plan = _plan(tmp_path, rr.row_pin("do the thing"))
     assert emit.emit_script(plan, repo_root=tmp_path, **REVIEW_KW)
 
 
-def test_edited_row_refuses_naming_the_row(tmp_path):
+def test_edited_row_refuses_naming_the_row(tmp_path: Path) -> None:
     _sizing(tmp_path, "do the thing")
     plan = _plan(tmp_path, rr.row_pin("do the thing"))
     _sizing(tmp_path, "do another thing")
@@ -68,14 +69,14 @@ def test_edited_row_refuses_naming_the_row(tmp_path):
         emit.emit_script(plan, repo_root=tmp_path, **REVIEW_KW)
 
 
-def test_whitespace_only_edit_emits(tmp_path):
+def test_whitespace_only_edit_emits(tmp_path: Path) -> None:
     _sizing(tmp_path, "do the thing")
     plan = _plan(tmp_path, rr.row_pin("do the thing"))
     _sizing(tmp_path, "do   the\nthing")
     assert emit.emit_script(plan, repo_root=tmp_path, **REVIEW_KW)
 
 
-def test_plan_without_pins_emits(tmp_path):
+def test_plan_without_pins_emits(tmp_path: Path) -> None:
     _sizing(tmp_path, "anything")
     plan = _plan(tmp_path, None)
     assert emit.emit_script(plan, repo_root=tmp_path, **REVIEW_KW)

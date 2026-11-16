@@ -7,9 +7,11 @@ import json
 import time
 
 from coordinator_core.warm import server
+from pathlib import Path
+import pytest
 
 
-def _wait_for(predicate, timeout=5.0):
+def _wait_for(predicate, timeout: float = 5.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
@@ -18,7 +20,7 @@ def _wait_for(predicate, timeout=5.0):
     return False
 
 
-def _stall(tmp_path, monkeypatch, key="k1"):
+def _stall(tmp_path, monkeypatch, key: str = "k1"):
     stall_dir = tmp_path / "stall-dumps"
     claim_dir = tmp_path / "dispatch-claims"
     claim_dir.mkdir(exist_ok=True)
@@ -32,7 +34,7 @@ def _stall(tmp_path, monkeypatch, key="k1"):
     return stall_dir, claim_dir, claim
 
 
-def test_record_holds_threads_and_leg_and_survives_prune_and_release(tmp_path, monkeypatch):
+def test_record_holds_threads_and_leg_and_survives_prune_and_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stall_dir, claim_dir, claim = _stall(tmp_path, monkeypatch)
     (record,) = stall_dir.glob("*.txt")
     text = record.read_text(encoding="utf-8")
@@ -50,7 +52,7 @@ def test_record_holds_threads_and_leg_and_survives_prune_and_release(tmp_path, m
     assert not list(stall_dir.glob("*.tmp"))
 
 
-def test_diagnosis_names_the_record_and_recovers_the_leg_after_release(tmp_path, monkeypatch):
+def test_diagnosis_names_the_record_and_recovers_the_leg_after_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stall_dir, claim_dir, claim = _stall(tmp_path, monkeypatch)
     (record,) = stall_dir.glob("*.txt")
     # Rename to the pid the claim records, as a real worker's record would carry.
@@ -66,7 +68,7 @@ def test_diagnosis_names_the_record_and_recovers_the_leg_after_release(tmp_path,
     assert other["stall_dump"].endswith("4242.log")
 
 
-def test_retention_keeps_the_newest(tmp_path, monkeypatch):
+def test_retention_keeps_the_newest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stall_dir = tmp_path / "stall-dumps"
     stall_dir.mkdir()
     for i in range(server.STALL_DUMP_KEEP + 5):

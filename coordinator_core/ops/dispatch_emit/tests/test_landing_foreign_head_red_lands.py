@@ -38,8 +38,14 @@ def test_dirt_red_is_evidenced_clear_for_the_invariant_gate(tmp_path):
 
 def test_carried_verdict_gets_no_dirt_credit(tmp_path):
     record = _dual(tmp_path, export_summary=True, baseline=_base(), live_red=[RATCHET, DIRT])
+    assert ltt.failed_targeted_tests(record, measured=False) == ([], ltt.UNRUN_OWED)
+
+    record["baseline"]["head_red"] = []
     findings, check = ltt.failed_targeted_tests(record, measured=False)
     assert check == "failed" and {f.path for f in findings} == {"test_a.py", "test_b.py"}
+
+    record["baseline"]["head_red"] = [RATCHET, DIRT]
+    assert ltt.failed_targeted_tests(record, measured=False) == ([], "pre-existing-only")
 
 
 def test_foreign_id_without_evidence_or_dirt_reason_refuses():

@@ -77,6 +77,7 @@ from coordinator_core.bash_guards import guard_plumbing_and_loops as guard
 from coordinator_core.bash_guards._helpers import OVERRIDE_KEYS_DOC_DISPLAY as OVERRIDE_KEYS_DOC
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -172,23 +173,23 @@ def _advisory_context(out):
 
 
 class TestNonBashOrEmpty:
-    def test_non_bash_tool_allows(self):
+    def test_non_bash_tool_allows(self) -> None:
         payload = {"tool_name": "Edit", "tool_input": {"file_path": "x"}}
         assert _enveloped(guard.check)(payload) is None
 
-    def test_empty_command_allows(self):
+    def test_empty_command_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("")) is None
 
-    def test_malformed_tool_input_allows(self):
+    def test_malformed_tool_input_allows(self) -> None:
         payload = {"tool_name": "Bash", "tool_input": "not-a-dict"}
         assert _enveloped(guard.check)(payload) is None
 
-    def test_plain_command_allows(self):
+    def test_plain_command_allows(self) -> None:
         assert _enveloped(guard.check)(_payload("git status")) is None
 
 
 class TestHeadTailPlumbing:
-    def test_advises_even_with_windows_forced(self):
+    def test_advises_even_with_windows_forced(self) -> None:
         # RETARGETED (DR-280, 2026-08-07): was `test_denies_on_windows`,
         # asserting a deny envelope under `host_is_windows=True`. This
         # guard's own deny branch is retired as structurally unreachable --
@@ -199,7 +200,7 @@ class TestHeadTailPlumbing:
         assert "head-tail-plumbing" in ctx
         assert guard._pl_python3_invocation() in ctx
 
-    def test_advises_on_macos(self):
+    def test_advises_on_macos(self) -> None:
         out = _enveloped(guard.check)(_payload(_HEAD_TAIL_UNSERVED_CMD), host_is_windows=False)
         ctx = _advisory_context(out)
         assert "head-tail-plumbing" in ctx
@@ -207,7 +208,7 @@ class TestHeadTailPlumbing:
 
     @pytest.mark.parametrize("host_is_windows", [True, False])
     @pytest.mark.parametrize("cmd", _HEAD_TAIL_SINGLE_PROCESS_CMDS)
-    def test_single_process_upstream_is_silent(self, cmd, host_is_windows):
+    def test_single_process_upstream_is_silent(self, cmd, host_is_windows) -> None:
         assert _enveloped(guard.check)(_payload(cmd), host_is_windows=host_is_windows) is None
 
     @pytest.mark.parametrize(
@@ -219,17 +220,17 @@ class TestHeadTailPlumbing:
             "cat file.txt | tail -n +2 | sort | uniq -c",
         ],
     )
-    def test_multi_spawn_generator_still_advises(self, cmd):
+    def test_multi_spawn_generator_still_advises(self, cmd) -> None:
         assert _enveloped(guard.check)(_payload(cmd)) is not None
 
-    def test_single_process_upstream_keeps_label_echo_advisory(self):
+    def test_single_process_upstream_keeps_label_echo_advisory(self) -> None:
         ctx = _advisory_context(
             _enveloped(guard.check)(_payload('git log | head -3; echo "--- done ---"'))
         )
         assert "label-or-exit-echo" in ctx
         assert "head-tail-plumbing" not in ctx
 
-    def test_advisory_message_names_its_escape_hatch(self):
+    def test_advisory_message_names_its_escape_hatch(self) -> None:
         # RETARGETED (DR-280, 2026-08-07): was
         # `test_deny_message_names_its_escape_hatch`, reading `_deny_reason`
         # under `host_is_windows=True`. This guard never denies any more --
@@ -256,7 +257,7 @@ class TestSeamConfirmedOutletMessageShape:
     silently reintroduce either defect with nothing to catch it.
     """
 
-    def test_summary_is_self_contained_not_a_dangling_placeholder(self):
+    def test_summary_is_self_contained_not_a_dangling_placeholder(self) -> None:
         # RETARGETED (DR-280, 2026-08-07): this guard's deny branch is
         # retired as structurally unreachable, so there is no deny template
         # left to read -- was asserting "Use instead: ..." (the DENY
@@ -274,7 +275,7 @@ class TestSeamConfirmedOutletMessageShape:
         assert "use the seam-confirmed single-process rewrite" in ctx
         assert "below." not in ctx.split("use the seam-confirmed")[1].split("\n")[0]
 
-    def test_override_note_lands_in_example_cue_window_not_consider_sentence(self):
+    def test_override_note_lands_in_example_cue_window_not_consider_sentence(self) -> None:
         # RETARGETED (DR-280, 2026-08-07): was `test_override_note_lands_
         # in_example_cue_window_not_use_instead_sentence`, reading
         # `_deny_reason` -- the deny template's "Use instead:" sentence no
@@ -298,7 +299,7 @@ class TestSeamConfirmedOutletMessageShape:
         override_idx = ctx.index(OVERRIDE_KEYS_DOC)
         assert override_idx > example_idx
 
-    def test_advisory_summary_reads_sensibly_on_macos_too(self):
+    def test_advisory_summary_reads_sensibly_on_macos_too(self) -> None:
         out = _enveloped(guard.check)(_payload(_HEAD_TAIL_CMD), host_is_windows=False)
         ctx = _advisory_context(out)
         assert "use the seam-confirmed single-process rewrite" in ctx
@@ -316,7 +317,7 @@ class TestForLoopWrappingFindExec:
     confirms a full-command outlet, so no deny points at one.
     """
 
-    def test_stays_advisory_on_windows_no_confirmed_outlet(self):
+    def test_stays_advisory_on_windows_no_confirmed_outlet(self) -> None:
         out = _enveloped(guard.check)(_payload(_FOR_LOOP_FIND_EXEC_CMD), host_is_windows=True)
         hso = out["hookSpecificOutput"]
         assert hso["permissionDecision"] == "allow"
@@ -325,7 +326,7 @@ class TestForLoopWrappingFindExec:
         assert "for-loop" in ctx
         assert "subprocess per iteration" in ctx
 
-    def test_advises_on_macos_too(self):
+    def test_advises_on_macos_too(self) -> None:
         out = _enveloped(guard.check)(_payload(_FOR_LOOP_FIND_EXEC_CMD), host_is_windows=False)
         ctx = _advisory_context(out)
         assert "for-loop" in ctx
@@ -333,24 +334,24 @@ class TestForLoopWrappingFindExec:
 
 
 class TestForLoopBareGlobStaysAdvisoryOnly:
-    def test_advises_even_when_windows_is_forced(self):
+    def test_advises_even_when_windows_is_forced(self) -> None:
         out = _enveloped(guard.check)(_payload(_FOR_LOOP_BARE_GLOB_CMD), host_is_windows=True)
         hso = out["hookSpecificOutput"]
         assert hso["permissionDecision"] == "allow"
         assert "permissionDecisionReason" not in hso
 
-    def test_advisory_names_no_confirmed_outlet(self):
+    def test_advisory_names_no_confirmed_outlet(self) -> None:
         out = _enveloped(guard.check)(_payload(_FOR_LOOP_BARE_GLOB_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         assert "for-loop" in ctx
         assert "subprocess per iteration" in ctx
 
-    def test_advises_on_macos_too(self):
+    def test_advises_on_macos_too(self) -> None:
         out = _enveloped(guard.check)(_payload(_FOR_LOOP_BARE_GLOB_CMD), host_is_windows=False)
         assert out is not None
         assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
 
-    def test_generic_example_stays_a_skeleton_not_a_fabricated_translation(self):
+    def test_generic_example_stays_a_skeleton_not_a_fabricated_translation(self) -> None:
         """Worklist Row P4: the bare-glob for-loop fallback is
         architecturally capped at a generic skeleton, decided explicitly
         (see `_FOR_LOOP_GENERIC_SUMMARY`'s own comment block) rather than
@@ -366,7 +367,7 @@ class TestForLoopBareGlobStaysAdvisoryOnly:
         assert 'rm "$f"' not in example_line
         assert "..." in example_line or "'..." in ctx
 
-    def test_example_names_the_resolved_interpreter_not_a_bare_literal(self):
+    def test_example_names_the_resolved_interpreter_not_a_bare_literal(self) -> None:
         out = _enveloped(guard.check)(_payload(_FOR_LOOP_BARE_GLOB_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         assert guard._pl_python3_invocation() in ctx
@@ -377,24 +378,24 @@ class TestWhileReadLoop:
     classifier-nev.md § C2/C3/AC-4). No seam is consulted for this shape --
     always `_generic_advisory`, never a deny, on every platform."""
 
-    def test_advisory_never_deny_on_windows(self):
+    def test_advisory_never_deny_on_windows(self) -> None:
         out = _enveloped(guard.check)(_payload(_WHILE_READ_CMD), host_is_windows=True)
         hso = out["hookSpecificOutput"]
         assert hso["permissionDecision"] == "allow"
         assert "permissionDecisionReason" not in hso
 
-    def test_advisory_never_deny_on_macos(self):
+    def test_advisory_never_deny_on_macos(self) -> None:
         out = _enveloped(guard.check)(_payload(_WHILE_READ_CMD), host_is_windows=False)
         hso = out["hookSpecificOutput"]
         assert hso["permissionDecision"] == "allow"
         assert "permissionDecisionReason" not in hso
 
-    def test_message_names_the_while_read_shape(self):
+    def test_message_names_the_while_read_shape(self) -> None:
         out = _enveloped(guard.check)(_payload(_WHILE_READ_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         assert "while-read-loop" in ctx
 
-    def test_advisory_names_its_escape_hatch(self):
+    def test_advisory_names_its_escape_hatch(self) -> None:
         # RETARGETED (2026-08-17, override-key message-register ruling):
         # see `TestHeadTailPlumbing.test_advisory_message_names_its_escape_
         # hatch` above for the same fix on this guard's other shape -- the
@@ -403,7 +404,7 @@ class TestWhileReadLoop:
         ctx = _advisory_context(out)
         assert OVERRIDE_KEYS_DOC in ctx
 
-    def test_example_names_the_resolved_interpreter_not_a_bare_literal(self):
+    def test_example_names_the_resolved_interpreter_not_a_bare_literal(self) -> None:
         out = _enveloped(guard.check)(_payload(_WHILE_READ_CMD), host_is_windows=True)
         ctx = _advisory_context(out)
         assert guard._pl_python3_invocation() in ctx
@@ -415,7 +416,7 @@ class TestBareSeamAdvisoryNeverDenies:
     treated identically to a `None` return, never as a licensed deny
     target, on EITHER shape."""
 
-    def test_head_tail_unrecognized_upstream_never_denies(self):
+    def test_head_tail_unrecognized_upstream_never_denies(self) -> None:
         out = _enveloped(guard.check)(
             _payload(_HEAD_TAIL_UNRECOGNIZED_UPSTREAM_CMD), host_is_windows=True
         )
@@ -424,13 +425,13 @@ class TestBareSeamAdvisoryNeverDenies:
         assert "permissionDecisionReason" not in hso
         assert "head-tail-plumbing" in hso["additionalContext"]
 
-    def test_head_tail_long_chain_never_denies(self):
+    def test_head_tail_long_chain_never_denies(self) -> None:
         out = _enveloped(guard.check)(_payload(_HEAD_TAIL_LONG_CHAIN_CMD), host_is_windows=True)
         hso = out["hookSpecificOutput"]
         assert hso["permissionDecision"] == "allow"
         assert "permissionDecisionReason" not in hso
 
-    def test_for_loop_untranslatable_exec_verb_never_denies(self):
+    def test_for_loop_untranslatable_exec_verb_never_denies(self) -> None:
         out = _enveloped(guard.check)(
             _payload(_FOR_LOOP_FIND_EXEC_UNTRANSLATABLE_VERB_CMD), host_is_windows=True
         )
@@ -439,7 +440,7 @@ class TestBareSeamAdvisoryNeverDenies:
         assert "permissionDecisionReason" not in hso
         assert "for-loop" in hso["additionalContext"]
 
-    def test_head_tail_unrecognized_upstream_advises_on_macos_too(self):
+    def test_head_tail_unrecognized_upstream_advises_on_macos_too(self) -> None:
         out = _enveloped(guard.check)(
             _payload(_HEAD_TAIL_UNRECOGNIZED_UPSTREAM_CMD), host_is_windows=False
         )
@@ -448,14 +449,14 @@ class TestBareSeamAdvisoryNeverDenies:
 
 
 class TestPrecedence:
-    def test_grep_via_bash_precedence_stays_silent(self):
+    def test_grep_via_bash_precedence_stays_silent(self) -> None:
         # Simultaneously grep-via-Bash and head/tail-plumbing:
         # GREP_VIA_BASH outranks HEAD_TAIL_PLUMBING in SHAPE_PRECEDENCE, so
         # this guard must not fire (AC-7).
         cmd = "grep -rn TODO src/ | head -n 5"
         assert _enveloped(guard.check)(_payload(cmd), host_is_windows=True) is None
 
-    def test_multi_probe_banner_precedence_stays_silent_for_for_loop(self):
+    def test_multi_probe_banner_precedence_stays_silent_for_for_loop(self) -> None:
         # A banner-echoed command followed by several probes, immediately
         # followed by a for-loop -- MULTI_PROBE_BANNER outranks FOR_LOOP.
         cmd = (
@@ -468,7 +469,7 @@ class TestPrecedence:
         assert "label-or-exit-echo" in ctx
         assert "`for-loop`" not in ctx
 
-    def test_for_loop_precedence_fires_for_loop_arm_over_while_read(self):
+    def test_for_loop_precedence_fires_for_loop_arm_over_while_read(self) -> None:
         # A command that is both FOR_LOOP and WHILE_READ_LOOP shaped fires
         # this guard's FOR_LOOP arm (its own "for-loop" summary), never the
         # while-read arm -- FOR_LOOP outranks WHILE_READ_LOOP in
@@ -493,7 +494,7 @@ class TestCrashPropagatesForFailClosed:
     `check()` now propagates all the way out (uncaught), the same as
     `guard_grep_via_bash.check`."""
 
-    def test_classify_command_crash_propagates(self, monkeypatch):
+    def test_classify_command_crash_propagates(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _boom(cmd):
             raise RuntimeError("boom")
 
@@ -520,7 +521,7 @@ class TestVerbatimHeadTailAlternativeIsRealAndEquivalent:
     shortcut this workstream's own source plans call out as insufficient).
     """
 
-    def _run(self, cmd):
+    def _run(self, cmd) -> str:
         # The commands are bash grammar (single-quote escapes); cmd.exe via
         # shell=True cannot parse them.
         return subprocess.run(
@@ -529,7 +530,7 @@ class TestVerbatimHeadTailAlternativeIsRealAndEquivalent:
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         ).stdout
 
-    def _alternative_stdout(self, original_cmd):
+    def _alternative_stdout(self, original_cmd) -> str:
         alt_cmd = guard._verbatim_head_tail_alternative(original_cmd)
         assert alt_cmd is not None, "expected a concrete alternative, got None"
         assert alt_cmd.count("|") == 0, (
@@ -538,31 +539,31 @@ class TestVerbatimHeadTailAlternativeIsRealAndEquivalent:
         )
         return self._run(alt_cmd)
 
-    def test_unrecognized_generator_head(self, tmp_path):
+    def test_unrecognized_generator_head(self, tmp_path: Path) -> None:
         f = tmp_path / "lines.txt"
         f.write_text("a\nb\nc\nd\ne\n")
         cmd = "cat %s | head -n 3" % f.as_posix()
         assert self._run(cmd) == self._alternative_stdout(cmd)
 
-    def test_unrecognized_generator_tail(self, tmp_path):
+    def test_unrecognized_generator_tail(self, tmp_path: Path) -> None:
         f = tmp_path / "lines2.txt"
         f.write_text("1\n2\n3\n4\n5\n6\n")
         cmd = "cat %s | tail -n 2" % f.as_posix()
         assert self._run(cmd) == self._alternative_stdout(cmd)
 
-    def test_quoting_hazard_apostrophe_in_filename(self, tmp_path):
+    def test_quoting_hazard_apostrophe_in_filename(self, tmp_path: Path) -> None:
         f = tmp_path / "it's a file.txt"
         f.write_text("alpha\nbeta\ngamma\ndelta\n")
         cmd = 'cat "%s" | tail -n 2' % f.as_posix()
         assert self._run(cmd) == self._alternative_stdout(cmd)
 
-    def test_no_alternative_for_long_chain(self):
+    def test_no_alternative_for_long_chain(self) -> None:
         assert (
             guard._verbatim_head_tail_alternative(_HEAD_TAIL_LONG_CHAIN_CMD)
             is None
         )
 
-    def test_no_alternative_for_unparseable_count(self):
+    def test_no_alternative_for_unparseable_count(self) -> None:
         assert (
             guard._verbatim_head_tail_alternative("cat file.txt | head -c 100")
             is None
@@ -570,18 +571,18 @@ class TestVerbatimHeadTailAlternativeIsRealAndEquivalent:
 
 
 class TestOverrideEscapeHatch:
-    def test_override_env_suppresses_head_tail_deny(self, monkeypatch):
+    def test_override_env_suppresses_head_tail_deny(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS", "1")
         assert _enveloped(guard.check)(_payload(_HEAD_TAIL_CMD), host_is_windows=True) is None
 
-    def test_override_env_suppresses_for_loop_deny(self, monkeypatch):
+    def test_override_env_suppresses_for_loop_deny(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS", "1")
         assert (
             _enveloped(guard.check)(_payload(_FOR_LOOP_FIND_EXEC_CMD), host_is_windows=True)
             is None
         )
 
-    def test_override_env_suppresses_bare_glob_advisory(self, monkeypatch):
+    def test_override_env_suppresses_bare_glob_advisory(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS", "1")
         assert _enveloped(guard.check)(_payload(_FOR_LOOP_BARE_GLOB_CMD)) is None
 
@@ -601,7 +602,7 @@ class TestPowerShellDialect:
     `check_head_tail_plumbing_rewrite`; FOR_LOOP has no PowerShell grammar
     analogue at all and must declare SILENT rather than assert clean."""
 
-    def test_head_tail_plumbing_advises_on_powershell_even_with_windows_forced(self):
+    def test_head_tail_plumbing_advises_on_powershell_even_with_windows_forced(self) -> None:
         # RETARGETED (DR-280, 2026-08-07): was `test_head_tail_plumbing_
         # rewrites_on_powershell`, asserting `permissionDecision == "deny"`
         # -- this guard's deny branch (including its PowerShell leg, which
@@ -617,7 +618,7 @@ class TestPowerShellDialect:
         assert hso["permissionDecision"] == "allow"
         assert "permissionDecisionReason" not in hso
 
-    def test_non_head_tail_powershell_command_fires_no_advisory(self):
+    def test_non_head_tail_powershell_command_fires_no_advisory(self) -> None:
         # A no-shape-matched PowerShell command must not fire an advisory --
         # that is this test's load-bearing assertion, and it is unchanged.
         #
@@ -640,7 +641,7 @@ class TestPowerShellDialect:
         assert result is None
         assert was_silent("guard_plumbing_and_loops", silences)
 
-    def test_empty_powershell_command_allows_no_silent(self):
+    def test_empty_powershell_command_allows_no_silent(self) -> None:
         from coordinator_core.bash_guards._verdict import collecting, was_silent
 
         with collecting() as silences:
@@ -658,7 +659,7 @@ class TestPowerShellForLoopAndPipelineForeachObject:
     classification path (AC11)."""
 
     @requires_powershell_grammar
-    def test_powershell_for_loop_advises_not_silent(self):
+    def test_powershell_for_loop_advises_not_silent(self) -> None:
         # Row-14 superseding note (D2): `foreach ($x in $y) { git log -1 $x }`
         # now classifies as a real FOR_LOOP match and gets the same generic
         # advisory the bash leg's bare-glob FOR_LOOP fallback renders.
@@ -676,7 +677,7 @@ class TestPowerShellForLoopAndPipelineForeachObject:
         assert "do ... done" not in ctx and " do \n" not in ctx
 
     @requires_powershell_grammar
-    def test_powershell_pipeline_foreach_object_advises(self):
+    def test_powershell_pipeline_foreach_object_advises(self) -> None:
         out = _enveloped(guard.check)(
             _ps_payload("Get-ChildItem *.py | ForEach-Object { python3 lint.py $_.FullName }"),
             host_is_windows=True,
@@ -688,7 +689,7 @@ class TestPowerShellForLoopAndPipelineForeachObject:
         assert "xargs" not in ctx
 
     @requires_powershell_grammar
-    def test_powershell_percent_alias_for_foreach_object_advises(self):
+    def test_powershell_percent_alias_for_foreach_object_advises(self) -> None:
         out = _enveloped(guard.check)(
             _ps_payload("Get-ChildItem -Recurse | % { git log -1 $_ }"),
             host_is_windows=False,
@@ -706,12 +707,12 @@ class TestPowerShellForLoopAndPipelineForeachObject:
             "Get-ChildItem | ForEach-Object { Get-Content $_ | Select-Object -First 1 }",
         ],
     )
-    def test_cmdlet_only_foreach_object_block_is_silent(self, command):
+    def test_cmdlet_only_foreach_object_block_is_silent(self, command) -> None:
         out = _enveloped(guard.check)(_ps_payload(command), host_is_windows=True)
         assert out is None
 
     @requires_powershell_grammar
-    def test_native_call_in_foreach_object_block_still_advises(self):
+    def test_native_call_in_foreach_object_block_still_advises(self) -> None:
         out = _enveloped(guard.check)(
             _ps_payload("Get-ChildItem | ForEach-Object { git log -1 $_ }"),
             host_is_windows=True,
@@ -719,7 +720,7 @@ class TestPowerShellForLoopAndPipelineForeachObject:
         assert out is not None
         assert "pipeline-foreach-object" in out["hookSpecificOutput"]["additionalContext"]
 
-    def test_no_private_shape_precedence_walk_remains(self):
+    def test_no_private_shape_precedence_walk_remains(self) -> None:
         # AC11: `_verdict_powershell` must classify via
         # `_shape_classifier.classify_command` -- the module-level
         # `classify_command` name it calls is that same function, not a
@@ -745,7 +746,7 @@ class TestBtPython3InvocationLeavesTheAdvisoryHotPath:
     memoizing the resolved invocation to an on-disk, cross-process cache."""
 
     @pytest.fixture(autouse=True)
-    def _isolated_cache(self, tmp_path, monkeypatch):
+    def _isolated_cache(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.bash_guards import _rewrite_support as dc
 
         cache_file = tmp_path / "bt-python3-invocation-cache.json"
@@ -753,7 +754,7 @@ class TestBtPython3InvocationLeavesTheAdvisoryHotPath:
         self.dc = dc
         self.cache_file = cache_file
 
-    def test_half_a_validate_interpreter_skips_the_spawn_for_self(self, monkeypatch):
+    def test_half_a_validate_interpreter_skips_the_spawn_for_self(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core import pyresolve as pr
 
         pr.clear_resolution_cache()
@@ -768,7 +769,7 @@ class TestBtPython3InvocationLeavesTheAdvisoryHotPath:
         assert pr._validate_interpreter(sys.executable) is True
         assert calls["n"] == 0
 
-    def test_half_a_still_probes_a_different_path(self, monkeypatch):
+    def test_half_a_still_probes_a_different_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core import pyresolve as pr
 
         pr.clear_resolution_cache()
@@ -783,7 +784,7 @@ class TestBtPython3InvocationLeavesTheAdvisoryHotPath:
         pr._validate_interpreter("this-binary-does-not-exist-xyz")
         assert calls["n"] == 1
 
-    def test_half_b_second_call_reads_the_cache_not_a_fresh_resolve(self, monkeypatch):
+    def test_half_b_second_call_reads_the_cache_not_a_fresh_resolve(self, monkeypatch: pytest.MonkeyPatch) -> None:
         first = self.dc._bt_python3_invocation()
         assert self.cache_file.is_file()
 
@@ -797,12 +798,12 @@ class TestBtPython3InvocationLeavesTheAdvisoryHotPath:
 
         assert second == first
 
-    def test_half_b_cache_is_a_torn_or_missing_file_falls_open(self):
+    def test_half_b_cache_is_a_torn_or_missing_file_falls_open(self) -> None:
         self.cache_file.write_text("not valid json {{{", encoding="utf-8")
         result = self.dc._bt_python3_invocation()
         assert isinstance(result, str) and result
 
-    def test_half_b_cache_key_changes_with_coordinator_python_env(self, monkeypatch):
+    def test_half_b_cache_key_changes_with_coordinator_python_env(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("COORDINATOR_PYTHON", raising=False)
         key_before = self.dc._bt_python3_invocation_cache_key()
         monkeypatch.setenv("COORDINATOR_PYTHON", "some-other-interpreter")
@@ -810,7 +811,7 @@ class TestBtPython3InvocationLeavesTheAdvisoryHotPath:
         if key_before is not None and key_after is not None:
             assert key_before != key_after
 
-    def test_half_b_cache_key_folds_the_resolved_machine_local_impl(self, monkeypatch):
+    def test_half_b_cache_key_folds_the_resolved_machine_local_impl(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core import _claude_klabauter_root
         from coordinator_core.bash_guards import _rewrite_support
 
@@ -818,7 +819,7 @@ class TestBtPython3InvocationLeavesTheAdvisoryHotPath:
         key = _rewrite_support._bt_python3_invocation_cache_key()
         assert key is not None and key[0] == "/nonexistent/impl-A.py"
 
-    def test_half_b_write_is_atomic_replace_not_truncate(self):
+    def test_half_b_write_is_atomic_replace_not_truncate(self) -> None:
         import inspect
 
         source = inspect.getsource(self.dc._bt_python3_invocation)
@@ -834,30 +835,30 @@ class TestLabelOrExitEcho:
     _HEAD_TAIL_PLUS_LABEL = 'xargs -n1 stat | head -n 5; echo "--- done ---"'
     _BANNER_PLUS_LABEL = 'echo "=== a ==="; grep foo f.txt; git status; echo "--- b"'
 
-    def test_label_only_fires_own_advisory(self):
+    def test_label_only_fires_own_advisory(self) -> None:
         ctx = _advisory_context(_enveloped(guard.check)(_payload(self._LABEL_ONLY)))
         assert "label-or-exit-echo" in ctx
 
-    def test_exit_readout_fires_own_advisory(self):
+    def test_exit_readout_fires_own_advisory(self) -> None:
         ctx = _advisory_context(_enveloped(guard.check)(_payload(self._EXIT_READOUT)))
         assert "label-or-exit-echo" in ctx
 
-    def test_primary_description_stays_first_and_echo_line_is_appended(self):
+    def test_primary_description_stays_first_and_echo_line_is_appended(self) -> None:
         ctx = _advisory_context(_enveloped(guard.check)(_payload(self._HEAD_TAIL_PLUS_LABEL)))
         assert ctx.index("head-tail-plumbing") < ctx.index("Echo cost:")
         assert ctx.count("BASH-SPAWN ADVISORY") == 1
 
-    def test_echo_line_sits_outside_the_example_cue_window(self):
+    def test_echo_line_sits_outside_the_example_cue_window(self) -> None:
         ctx = _advisory_context(_enveloped(guard.check)(_payload(self._HEAD_TAIL_PLUS_LABEL)))
         before, after = ctx.split("Echo cost:")
         assert before.rstrip(" ").endswith("\n")
 
-    def test_other_guards_primary_shape_still_gets_own_echo_advisory(self):
+    def test_other_guards_primary_shape_still_gets_own_echo_advisory(self) -> None:
         out = _enveloped(guard.check)(_payload(self._BANNER_PLUS_LABEL))
         assert out is not None
         assert "label-or-exit-echo" in _advisory_context(out)
 
-    def test_override_key_not_named_in_echo_line(self):
+    def test_override_key_not_named_in_echo_line(self) -> None:
         assert "COORDINATOR_" not in guard._LABEL_ECHO_APPENDED_LINE
 
     @pytest.mark.parametrize(
@@ -871,19 +872,19 @@ class TestLabelOrExitEcho:
             "echo x | cat; ls",
         ],
     )
-    def test_not_the_shape_is_silent(self, cmd):
+    def test_not_the_shape_is_silent(self, cmd) -> None:
         assert _enveloped(guard.check)(_payload(cmd)) is None
 
-    def test_override_suppresses(self, monkeypatch):
+    def test_override_suppresses(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("COORDINATOR_OVERRIDE_PLUMBING_AND_LOOPS", "1")
         assert _enveloped(guard.check)(_payload(self._LABEL_ONLY)) is None
 
     @pytest.mark.parametrize("host_is_windows", [True, False])
-    def test_never_denies(self, host_is_windows):
+    def test_never_denies(self, host_is_windows) -> None:
         out = _enveloped(guard.check)(_payload(self._LABEL_ONLY), host_is_windows=host_is_windows)
         assert out["hookSpecificOutput"]["permissionDecision"] == "allow"
 
-    def test_powershell_leg_stays_silent_for_write_host(self):
+    def test_powershell_leg_stays_silent_for_write_host(self) -> None:
         payload = {
             "tool_name": "PowerShell",
             "tool_input": {"command": 'Write-Host "--- x ---"; Get-Location; git status'},
@@ -915,7 +916,7 @@ class TestAdvisoryVolumeBenignShapes:
             "cat a.txt | head -1",
         ],
     )
-    def test_benign_shape_stays_silent(self, cmd):
+    def test_benign_shape_stays_silent(self, cmd) -> None:
         assert _enveloped(guard.check)(_payload(cmd)) is None
 
     @pytest.mark.parametrize(
@@ -926,5 +927,5 @@ class TestAdvisoryVolumeBenignShapes:
             ("ls | head", "head-tail-plumbing"),
         ],
     )
-    def test_target_shape_still_advises(self, cmd, shape):
+    def test_target_shape_still_advises(self, cmd, shape) -> None:
         assert shape in _advisory_context(_enveloped(guard.check)(_payload(cmd)))

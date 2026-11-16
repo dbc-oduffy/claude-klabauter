@@ -29,14 +29,14 @@ from coordinator_core.codex_runner import workflow
 
 
 @pytest.fixture(autouse=True)
-def scratch_usage_home(tmp_path, monkeypatch):
+def scratch_usage_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('COORDINATOR_SETTINGS_HOME', str(tmp_path / 'settings'))
     monkeypatch.setenv('COORDINATOR_LOCK_ROOT', str(tmp_path / 'locks'))
     (tmp_path / 'codex-home').mkdir()
     monkeypatch.setenv('CODEX_HOME', str(tmp_path / 'codex-home'))
 
 
-def test_recorded_native_exec_shape_has_thread_and_cache_usage_only(tmp_path):
+def test_recorded_native_exec_shape_has_thread_and_cache_usage_only(tmp_path: Path) -> None:
     # Shape observed in the installed Windows exec smoke; no turn/model fields.
     path = tmp_path / "stdout.jsonl"
     path.write_text('\n'.join(json.dumps(event) for event in [
@@ -54,7 +54,7 @@ def test_recorded_native_exec_shape_has_thread_and_cache_usage_only(tmp_path):
         assert observed[field] == "unknown"
 
 
-def test_identical_unidentified_turn_counters_are_not_guessed_duplicates(tmp_path):
+def test_identical_unidentified_turn_counters_are_not_guessed_duplicates(tmp_path: Path) -> None:
     path = tmp_path / "stdout.jsonl"
     event = {"type": "turn.completed", "usage": {"input_tokens": 10, "cached_input_tokens": 5}}
     path.write_text(json.dumps(event) + '\n' + json.dumps(event), encoding="utf-8")
@@ -64,7 +64,7 @@ def test_identical_unidentified_turn_counters_are_not_guessed_duplicates(tmp_pat
     assert observed["native_total_usage"] == "unknown"
 
 
-def test_process_receipt_distinguishes_broker_lineage_from_native_identity(tmp_path):
+def test_process_receipt_distinguishes_broker_lineage_from_native_identity(tmp_path: Path) -> None:
     (tmp_path / "stdout.jsonl").write_text('', encoding="utf-8")
     workflow._save_process(tmp_path, SimpleNamespace(pid=12, returncode=0), "codex", {}, "requested",
         broker_root_session_id="broker-root", broker_request_id=7, broker_fire_id="fire-a")
@@ -76,7 +76,7 @@ def test_process_receipt_distinguishes_broker_lineage_from_native_identity(tmp_p
     assert receipt["model"] == "unknown" and receipt["requested_model"] == "requested"
 
 
-def test_process_receipt_uses_recorded_admission_root_when_not_explicit(tmp_path):
+def test_process_receipt_uses_recorded_admission_root_when_not_explicit(tmp_path: Path) -> None:
     (tmp_path / "admission.json").write_text(json.dumps({"session_id": "admitted-root"}))
     workflow._save_process(tmp_path, SimpleNamespace(pid=12, returncode=1), "codex", {}, None)
     receipt = json.loads((tmp_path / "process.json").read_text())
@@ -97,7 +97,7 @@ def complete_receipt():
     }
 
 
-def test_canonical_usage_subtracts_cached_and_does_not_double_reasoning(tmp_path):
+def test_canonical_usage_subtracts_cached_and_does_not_double_reasoning(tmp_path: Path) -> None:
     first = workflow._append_canonical_usage(complete_receipt())
     second = workflow._append_canonical_usage(complete_receipt())
     assert first['status'] == 'appended' and second['status'] == 'duplicate'
@@ -114,7 +114,7 @@ def test_canonical_usage_subtracts_cached_and_does_not_double_reasoning(tmp_path
     assert 'native_turn_id' not in payload and 'native_total_usage' not in payload
 
 
-def test_save_process_twice_produces_one_usage_event(tmp_path):
+def test_save_process_twice_produces_one_usage_event(tmp_path: Path) -> None:
     receipt = complete_receipt()
     events = [{'type': 'thread.started', 'thread_id': receipt['native_thread_id']},
               {'type': 'turn.completed', 'usage': receipt['usage_events'][0]}]
@@ -129,7 +129,7 @@ def test_save_process_twice_produces_one_usage_event(tmp_path):
 
 
 @pytest.mark.parametrize('missing', ['input_tokens', 'output_tokens', 'cached_input_tokens', 'cache_write_input_tokens'])
-def test_incomplete_native_counters_are_not_fabricated(tmp_path, missing):
+def test_incomplete_native_counters_are_not_fabricated(tmp_path: Path, missing) -> None:
     receipt = complete_receipt()
     del receipt['usage_events'][0][missing]
     result = workflow._append_canonical_usage(receipt)
@@ -137,7 +137,7 @@ def test_incomplete_native_counters_are_not_fabricated(tmp_path, missing):
     assert not (tmp_path / 'settings' / 'state' / 'codex-usage').exists()
 
 
-def test_canonical_append_failure_is_recorded_without_worker_failure(tmp_path, monkeypatch):
+def test_canonical_append_failure_is_recorded_without_worker_failure(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def refused(*args, **kwargs):
         raise OSError('test lock unavailable')
     monkeypatch.setattr(workflow, 'held_lock', refused)
@@ -145,7 +145,7 @@ def test_canonical_append_failure_is_recorded_without_worker_failure(tmp_path, m
     assert result['status'] == 'failed' and 'test lock unavailable' in result['reason']
 
 
-def test_claude_counters_are_already_uncached_and_keep_cache_writes(tmp_path):
+def test_claude_counters_are_already_uncached_and_keep_cache_writes(tmp_path: Path) -> None:
     receipt = complete_receipt()
     receipt['backend'] = 'claude'
     receipt['usage_events'] = [{'input_tokens': 40, 'output_tokens': 12,
@@ -157,7 +157,7 @@ def test_claude_counters_are_already_uncached_and_keep_cache_writes(tmp_path):
     assert payload['provider'] == 'claude'
 
 
-def test_invalid_native_cache_total_is_incomplete(tmp_path):
+def test_invalid_native_cache_total_is_incomplete(tmp_path: Path) -> None:
     receipt = complete_receipt()
     receipt['usage_events'][0]['cached_input_tokens'] = 101
     result = workflow._append_canonical_usage(receipt)
@@ -165,7 +165,7 @@ def test_invalid_native_cache_total_is_incomplete(tmp_path):
     assert 'exceeds input' in result['reason']
 
 
-def test_kernel_lock_deduplicates_across_real_processes(tmp_path):
+def test_kernel_lock_deduplicates_across_real_processes(tmp_path: Path) -> None:
     script = ('import json; from coordinator_core.codex_runner.workflow import _append_canonical_usage; '
               f'print(json.dumps(_append_canonical_usage({complete_receipt()!r})))')
     processes = [subprocess.Popen([sys.executable, '-c', script], stdout=subprocess.PIPE,
@@ -184,7 +184,7 @@ def test_kernel_lock_deduplicates_across_real_processes(tmp_path):
     assert sorted(row['status'] for row in results) == ['appended', 'duplicate', 'duplicate']
 
 
-def test_observer_partial_repeated_events_preserve_actual_child_uuid(tmp_path):
+def test_observer_partial_repeated_events_preserve_actual_child_uuid(tmp_path: Path) -> None:
     import time
     path = tmp_path / 'events.jsonl'; path.write_bytes(b'')
     sid = '01a1b826-0012-72a0-a4d0-eae0ae828f4c'
@@ -205,7 +205,7 @@ def test_observer_partial_repeated_events_preserve_actual_child_uuid(tmp_path):
 @pytest.mark.parametrize('payload', [b'not json\n', b'{"type":"thread.started","thread_id":"bad"}\n',
     b'{"type":"thread.started","thread_id":"01A1B826-0012-72A0-A4D0-EAE0AE828F4C"}\n',
     b'x'*65537+b'\n', b''], ids=['malformed-json', 'invalid-uuid', 'uppercase-uuid', 'oversized-line', 'missing'])
-def test_observer_invalid_or_missing_identity_fails(tmp_path, payload):
+def test_observer_invalid_or_missing_identity_fails(tmp_path: Path, payload) -> None:
     path=tmp_path/'events.jsonl';path.write_bytes(payload)
     aborted=[];observer=workflow._NativeThreadObserver(path, {}, lambda _: None, lambda: aborted.append(True))
     observer.start()
@@ -214,7 +214,7 @@ def test_observer_invalid_or_missing_identity_fails(tmp_path, payload):
     assert aborted
 
 
-def test_observer_conflicting_uuid_fails(tmp_path):
+def test_observer_conflicting_uuid_fails(tmp_path: Path) -> None:
     path=tmp_path/'events.jsonl'
     path.write_text('\n'.join(json.dumps({'type':'thread.started','thread_id':sid}) for sid in
         ['01a1b826-0012-72a0-a4d0-eae0ae828f4c','01a1b826-0012-72a0-a4d0-eae0ae828f4d'])+'\n')
@@ -224,7 +224,7 @@ def test_observer_conflicting_uuid_fails(tmp_path):
     assert len(calls)==1
 
 
-def test_observer_callback_failure_is_worker_failure(tmp_path):
+def test_observer_callback_failure_is_worker_failure(tmp_path: Path) -> None:
     path=tmp_path/'events.jsonl';path.write_text(json.dumps({'type':'thread.started','thread_id':'01a1b826-0012-72a0-a4d0-eae0ae828f4c'})+'\n')
     def refused(_): raise RuntimeError('binding refused')
     observer=workflow._NativeThreadObserver(path, {}, refused, lambda: None);observer.start()
@@ -232,7 +232,7 @@ def test_observer_callback_failure_is_worker_failure(tmp_path):
         observer.finish()
 
 
-def test_observer_discovery_cap_does_not_limit_later_total_output(tmp_path):
+def test_observer_discovery_cap_does_not_limit_later_total_output(tmp_path: Path) -> None:
     path=tmp_path/'events.jsonl'
     path.write_text(json.dumps({'type':'thread.started','thread_id':'01a1b826-0012-72a0-a4d0-eae0ae828f4c'})+'\n'+
         (json.dumps({'type':'item.completed','content':'x'*10000})+'\n')*110)
@@ -240,7 +240,7 @@ def test_observer_discovery_cap_does_not_limit_later_total_output(tmp_path):
     assert len(calls)==1
 
 
-def test_observer_protected_artifacts_only(tmp_path):
+def test_observer_protected_artifacts_only(tmp_path: Path) -> None:
     (tmp_path/'.git').mkdir()
     workflow._protected_observer_path(tmp_path, tmp_path/'.git/private-fire/step1')
     for unsafe in [tmp_path/'workspace-artifacts', tmp_path/'.git', tmp_path/'other/../.git/private']:
@@ -249,7 +249,7 @@ def test_observer_protected_artifacts_only(tmp_path):
     with pytest.raises(workflow.AgentFailed):workflow._protected_observer_path(tmp_path,tmp_path/'.git/private-file/step')
 
 
-def test_observer_rejects_existing_reparse_ancestor(tmp_path, monkeypatch):
+def test_observer_rejects_existing_reparse_ancestor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path/'.git').mkdir()
     original=Path.lstat
     def fake(path,*args,**kwargs):
@@ -261,7 +261,7 @@ def test_observer_rejects_existing_reparse_ancestor(tmp_path, monkeypatch):
         workflow._protected_observer_path(tmp_path,tmp_path/'.git/private/step')
 
 
-def test_native_child_facts_hashes_exact_expected_executable(tmp_path, monkeypatch):
+def test_native_child_facts_hashes_exact_expected_executable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Synthetic process metadata tests validation logic, not native execution.
     import psutil
     executable=tmp_path/'codex.exe';executable.write_bytes(b'trusted-native-binary-fixture')
@@ -276,7 +276,7 @@ def test_native_child_facts_hashes_exact_expected_executable(tmp_path, monkeypat
     assert facts['role']=='workflow-agent'
 
 
-def test_native_child_facts_rejects_same_basename_different_binary(tmp_path,monkeypatch):
+def test_native_child_facts_rejects_same_basename_different_binary(tmp_path: Path,monkeypatch: pytest.MonkeyPatch) -> None:
     import psutil
     expected=tmp_path/'trusted/codex.exe';expected.parent.mkdir();expected.write_bytes(b'trusted')
     actual=tmp_path/'untrusted/codex.exe';actual.parent.mkdir();actual.write_bytes(b'untrusted')
@@ -293,7 +293,7 @@ _SCHEMA = {'type': 'object', 'properties': {'a': {'type': 'integer'}}, 'required
 def _stub_family(monkeypatch, tmp_path, *, stdout_text, returncode: int = 0):
     calls = []
 
-    def fake_run(argv, prompt, *, stdout, stderr, **kwargs):
+    def fake_run(argv, prompt, *, stdout, stderr, **kwargs) -> SimpleNamespace:
         calls.append((list(argv), prompt))
         stdout.write(stdout_text.encode())
         return SimpleNamespace(pid=7, returncode=returncode)
@@ -309,7 +309,7 @@ def _run(tmp_path, backend, schema=_SCHEMA):
                               artifact_dir=tmp_path / 'art', backend=backend, parent_session_id='sid')
 
 
-def test_grok_stage_spawns_resolved_binary_and_parses_envelope(tmp_path, monkeypatch):
+def test_grok_stage_spawns_resolved_binary_and_parses_envelope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _stub_family(monkeypatch, tmp_path, stdout_text=json.dumps({'text': '{"a": 1}', 'stopReason': 'end_turn'}, indent=2))
     assert _run(tmp_path, 'grok') == {'a': 1}
     argv, stdin = calls[0]
@@ -323,19 +323,19 @@ def test_grok_stage_spawns_resolved_binary_and_parses_envelope(tmp_path, monkeyp
     'Looking at it {not json} now.\n\n{"a": 3}',
     'Narration.\n```json\n{"a": 3}\n```',
 ])
-def test_grok_narration_then_trailing_json_object_is_the_result(tmp_path, monkeypatch, text):
+def test_grok_narration_then_trailing_json_object_is_the_result(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text) -> None:
     _stub_family(monkeypatch, tmp_path, stdout_text=json.dumps({'text': text}))
     assert _run(tmp_path, 'grok') == {'a': 3}
 
 
-def test_grok_narration_without_trailing_json_or_with_trailing_prose_fails(tmp_path, monkeypatch):
+def test_grok_narration_without_trailing_json_or_with_trailing_prose_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for text in ('only narration', '{"a": 3}\nand then more prose'):
         _stub_family(monkeypatch, tmp_path, stdout_text=json.dumps({'text': text}))
         with pytest.raises(workflow.AgentFailed, match='no schema-valid result'):
             _run(tmp_path, 'grok')
 
 
-def test_agy_stage_spawns_resolved_binary_and_parses_result_event(tmp_path, monkeypatch):
+def test_agy_stage_spawns_resolved_binary_and_parses_result_event(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stream = '\n'.join(json.dumps(e) for e in [
         {'event': 'step_update', 'step_update': {}},
         {'event': 'result', 'result': {'status': 'SUCCESS', 'response': '```json\n{"a": 2}\n```'}}])
@@ -347,7 +347,7 @@ def test_agy_stage_spawns_resolved_binary_and_parses_result_event(tmp_path, monk
     assert json.loads(stdin)['event'] == 'user' and 'do it' in json.loads(stdin)['message']['content']
 
 
-def test_family_text_result_without_schema_and_empty_agy_response_fails(tmp_path, monkeypatch):
+def test_family_text_result_without_schema_and_empty_agy_response_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_family(monkeypatch, tmp_path, stdout_text=json.dumps({'text': 'plain'}))
     assert _run(tmp_path, 'grok', schema=None) == 'plain'
     _stub_family(monkeypatch, tmp_path, stdout_text=json.dumps({'event': 'result', 'result': {'status': 'SUCCESS', 'response': ''}}))
@@ -356,7 +356,7 @@ def test_family_text_result_without_schema_and_empty_agy_response_fails(tmp_path
 
 
 @pytest.mark.parametrize('backend', ['grok', 'agy'])
-def test_family_schema_violation_and_nonzero_exit_fail(tmp_path, monkeypatch, backend):
+def test_family_schema_violation_and_nonzero_exit_fail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend) -> None:
     body = json.dumps({'text': '{"a": "x"}'}) if backend == 'grok' else json.dumps(
         {'event': 'result', 'result': {'status': 'SUCCESS', 'response': '{"a": "x"}'}})
     _stub_family(monkeypatch, tmp_path, stdout_text=body)
@@ -368,7 +368,7 @@ def test_family_schema_violation_and_nonzero_exit_fail(tmp_path, monkeypatch, ba
 
 
 @pytest.mark.parametrize('backend', ['grok', 'agy'])
-def test_family_missing_binary_raises_agent_failed(tmp_path, monkeypatch, backend):
+def test_family_missing_binary_raises_agent_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend) -> None:
     from coordinator_core.codex_runner.agy import AgyUnavailable
     from coordinator_core.codex_runner.grok import GrokUnavailable
     _stub_family(monkeypatch, tmp_path, stdout_text='')
@@ -378,19 +378,19 @@ def test_family_missing_binary_raises_agent_failed(tmp_path, monkeypatch, backen
         _run(tmp_path, backend)
 
 
-def test_unknown_backend_still_refused(tmp_path):
+def test_unknown_backend_still_refused(tmp_path: Path) -> None:
     with pytest.raises(workflow.AgentFailed, match='unknown agent backend: gemini'):
         _run(tmp_path, 'gemini')
 
 
-def test_family_receipt_is_written_without_crashing_provenance(tmp_path, monkeypatch):
+def test_family_receipt_is_written_without_crashing_provenance(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_family(monkeypatch, tmp_path, stdout_text=json.dumps({'text': '{"a": 1}'}))
     _run(tmp_path, 'grok')
     receipt = json.loads((tmp_path / 'art' / 'process.json').read_text())
     assert receipt['backend'] == 'grok' and receipt['canonical_usage']['status'] == 'incomplete'
 
 
-def test_builtin_workspace_policy_has_no_custom_permission_selector():
+def test_builtin_workspace_policy_has_no_custom_permission_selector() -> None:
     import inspect
     source=inspect.getsource(workflow.run_agent)
     assert '\"--sandbox\", \"workspace-write\"' in source
@@ -416,7 +416,7 @@ def _unelevated_home(tmp_path, monkeypatch):
     return home
 
 
-def test_codex_stage_runs_when_unelevated_root_unproven_and_probes_once(tmp_path, monkeypatch):
+def test_codex_stage_runs_when_unelevated_root_unproven_and_probes_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.codex_runner import sandbox_preflight as sp
     _unelevated_home(tmp_path, monkeypatch)
     monkeypatch.setattr(sp, '_is_windows', lambda: True)
@@ -431,7 +431,7 @@ def test_codex_stage_runs_when_unelevated_root_unproven_and_probes_once(tmp_path
     assert seen['codex_argv'] == ['/bin/codex-x'] and calls
 
 
-def test_codex_stage_argv_unchanged_without_unelevated_config(tmp_path, monkeypatch):
+def test_codex_stage_argv_unchanged_without_unelevated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _stub_codex(monkeypatch, tmp_path)
     from coordinator_core.codex_runner import sandbox_preflight as sp
     monkeypatch.setattr(sp, '_is_windows', lambda: True)
@@ -463,27 +463,27 @@ _AGY_RESULT = {'event': 'result', 'result': {'status': 'SUCCESS', 'response': '{
 @pytest.mark.parametrize('init', [
     {'event': 'init', 'conversation_id': 'c', 'init': {'cwd': '/x', 'model': 'gemini-4-argon-medium'}},
     {'event': 'init', 'conversation_id': 'c', 'model': 'gemini-4-argon-medium'}])
-def test_agy_process_json_records_model_the_cli_reported(tmp_path, monkeypatch, init):
+def test_agy_process_json_records_model_the_cli_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, init) -> None:
     assert _family_model(tmp_path, monkeypatch, 'agy', [init, _AGY_RESULT]) == 'gemini-4-argon-medium'
 
 
-def test_agy_result_event_model_is_recorded(tmp_path, monkeypatch):
+def test_agy_result_event_model_is_recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     done = {'event': 'result', 'result': {'status': 'SUCCESS', 'response': '{"a": 2}', 'model': 'gemini-3.8-flash-low'}}
     assert _family_model(tmp_path, monkeypatch, 'agy', [{'event': 'init', 'init': {}}, done]) == 'gemini-3.8-flash-low'
 
 
-def test_grok_process_json_records_model_the_cli_reported(tmp_path, monkeypatch):
+def test_grok_process_json_records_model_the_cli_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert _family_model(tmp_path, monkeypatch, 'grok', [{'text': '{"a": 1}', 'model': 'grok-build-1'}]) == 'grok-build-1'
 
 
 @pytest.mark.parametrize('backend,events', [
     ('agy', [{'event': 'init', 'init': {'cwd': '/x'}}, _AGY_RESULT]),
     ('grok', [{'text': '{"a": 1}'}])])
-def test_family_without_model_evidence_stays_unknown(tmp_path, monkeypatch, backend, events):
+def test_family_without_model_evidence_stays_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, backend, events) -> None:
     assert _family_model(tmp_path, monkeypatch, backend, events) == 'unknown'
 
 
-def test_family_blank_or_nonstring_model_stays_unknown(tmp_path, monkeypatch):
+def test_family_blank_or_nonstring_model_stays_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     events = [{'event': 'init', 'init': {'model': '  '}}, {'event': 'init', 'model': 7}, _AGY_RESULT]
     assert _family_model(tmp_path, monkeypatch, 'agy', events) == 'unknown'
 
@@ -500,19 +500,19 @@ _AGY_LOG = ('I1110 11:51:22.688106 1 printmode.go:208] Print mode: starting (pro
             'I1110 11:51:22.691619 1 model_config_manager.go:375] Propagating selected model override to backend: label="Gemini 4 Argon (Low)"\n')
 
 
-def test_grok_real_envelope_modelusage_key_is_the_recorded_model(tmp_path, monkeypatch):
+def test_grok_real_envelope_modelusage_key_is_the_recorded_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_family(monkeypatch, tmp_path, stdout_text=json.dumps(_GROK_REAL, indent=2))
     _run(tmp_path, 'grok')
     assert json.loads((tmp_path / 'art' / 'process.json').read_text())['model'] == 'grok-4.6-build'
 
 
-def test_grok_multi_model_usage_records_the_most_called(tmp_path):
+def test_grok_multi_model_usage_records_the_most_called(tmp_path: Path) -> None:
     env = {'modelUsage': {'a': {'modelCalls': 1}, 'b': {'modelCalls': 4}}}
     (tmp_path / 's.jsonl').write_text(json.dumps(env), encoding='utf-8')
     assert workflow._event_provenance(tmp_path / 's.jsonl', 'grok')['model'] == 'b'
 
 
-def test_agy_real_stream_model_comes_from_its_log_file(tmp_path, monkeypatch):
+def test_agy_real_stream_model_comes_from_its_log_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _stub_family(monkeypatch, tmp_path, stdout_text='\n'.join(json.dumps(e) for e in _AGY_REAL))
     inner = workflow._run_admitted
 
@@ -526,7 +526,7 @@ def test_agy_real_stream_model_comes_from_its_log_file(tmp_path, monkeypatch):
     assert json.loads((tmp_path / 'art' / 'process.json').read_text())['model'] == 'Gemini 4 Argon (Low)'
 
 
-def test_agy_without_log_model_line_stays_unknown(tmp_path, monkeypatch):
+def test_agy_without_log_model_line_stays_unknown(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert _family_model(tmp_path, monkeypatch, 'agy', _AGY_REAL) == 'unknown'
     (tmp_path / 'art' / 'agy.log').write_text('model=""\n', encoding='utf-8')
     assert workflow._event_provenance(tmp_path / 'art' / 'stdout.jsonl', 'agy')['model'] == 'unknown'

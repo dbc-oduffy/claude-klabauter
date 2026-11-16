@@ -5,11 +5,12 @@ import pytest
 
 from coordinator_core.ops import review_stamp as rs
 from coordinator_core.ops.ceremony import close_background as cb
+from pathlib import Path
 
 SHA = "a" * 40
 
 
-def _ctx(root, plan_rel="docs/plans/p.md", sha=SHA, inputs=None):
+def _ctx(root, plan_rel: str | None = "docs/plans/p.md", sha=SHA, inputs=None):
     record = {"inputs": inputs or {}}
     if plan_rel is not None:
         record["plan_rel"] = plan_rel
@@ -17,23 +18,23 @@ def _ctx(root, plan_rel="docs/plans/p.md", sha=SHA, inputs=None):
 
 
 @pytest.fixture(autouse=True)
-def _opted_in(monkeypatch):
+def _opted_in(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cb, "_not_opted_in", lambda ctx: False)
 
 
-def test_no_plan_is_skipped(tmp_path):
+def test_no_plan_is_skipped(tmp_path: Path) -> None:
     got = cb._review_stamp(_ctx(tmp_path, plan_rel=None))
     assert got.status == "not-applicable"
     assert got.detail.startswith("review skipped: no-plan")
 
 
-def test_no_terminal_sha_is_skipped(tmp_path):
+def test_no_terminal_sha_is_skipped(tmp_path: Path) -> None:
     got = cb._review_stamp(_ctx(tmp_path, sha=None))
     assert got.status == "not-applicable"
     assert got.detail.startswith("review skipped: no-terminal-commit")
 
 
-def test_not_opted_in_is_skipped(tmp_path, monkeypatch):
+def test_not_opted_in_is_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cb, "_not_opted_in", lambda ctx: True)
     got = cb._review_stamp(_ctx(tmp_path))
     assert got.status == "not-applicable"
@@ -41,13 +42,13 @@ def test_not_opted_in_is_skipped(tmp_path, monkeypatch):
     assert cb._NOT_OPTED_IN in got.detail
 
 
-def test_spine_without_inventory_record_is_skipped(tmp_path):
+def test_spine_without_inventory_record_is_skipped(tmp_path: Path) -> None:
     got = cb._review_stamp(_ctx(tmp_path, plan_rel="docs/plans/p.spine.md"))
     assert got.status == "not-applicable"
     assert got.detail.startswith("review skipped: no-inventory-record")
 
 
-def test_plan_escaping_worktree_is_unminted(tmp_path):
+def test_plan_escaping_worktree_is_unminted(tmp_path: Path) -> None:
     root = tmp_path / "wt"
     root.mkdir()
     got = cb._review_stamp(_ctx(root, plan_rel="../outside.md"))
@@ -55,7 +56,7 @@ def test_plan_escaping_worktree_is_unminted(tmp_path):
     assert got.detail.startswith("review ran, stamp not minted: plan path escapes the worktree")
 
 
-def test_unreadable_review_record_is_unminted(tmp_path):
+def test_unreadable_review_record_is_unminted(tmp_path: Path) -> None:
     got = cb._review_stamp(_ctx(tmp_path, inputs={"review_record": "docs/missing-record.md"}))
     assert got.status == "failed"
     assert got.detail.startswith(
@@ -63,12 +64,12 @@ def test_unreadable_review_record_is_unminted(tmp_path):
     )
 
 
-def _xs_spine(root):
+def _xs_spine(root) -> None:
     (root / "state/warp/r1").mkdir(parents=True)
     (root / "state/warp/r1/p.md").write_text("---\nrun_id: r1\nreview_stamp: x\n---\n", encoding="utf-8")
 
 
-def test_mint_refusal_is_unminted(tmp_path, monkeypatch):
+def test_mint_refusal_is_unminted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def refuse(*args, **kwargs):
         raise rs.MintRefusal("no review record for the plan")
 
@@ -80,7 +81,7 @@ def test_mint_refusal_is_unminted(tmp_path, monkeypatch):
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("ignored", [True, False])
-def test_mirror_follows_a_real_gitignore(tmp_path, monkeypatch, ignored):
+def test_mirror_follows_a_real_gitignore(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ignored) -> None:
     import subprocess
 
     from coordinator_core.win_portability import no_console_creationflags

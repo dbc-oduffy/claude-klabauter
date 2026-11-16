@@ -22,9 +22,10 @@ from coordinator_core.ops.dispatch_emit.tests.test_reserved_refire_reads_halt_re
     SLICE,
     _slice_sizing,
 )
+import pytest
 
 
-def _retire(repo):
+def _retire(repo) -> None:
     rl.start(repo, SLICE)
     rl.bind(repo, SLICE, REL, ask_text="the ask")
     (record_dir(repo, SLICE) / TOKEN_SPENT_FILE).write_text("{}\n", encoding="utf-8")
@@ -37,7 +38,7 @@ def _fire(repo):
     return op._dispatch_emit({"ask": True, "sizing_path": REL, "reserved_run_id": SLICE}, repo_root=repo)
 
 
-def test_a_spent_reserved_run_mints_a_fresh_id_carrying_its_notes(repo, monkeypatch):  # noqa: F811
+def test_a_spent_reserved_run_mints_a_fresh_id_carrying_its_notes(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     seen = _spy_texts(monkeypatch)
     _slice_sizing(repo)
     _retire(repo)
@@ -49,7 +50,7 @@ def test_a_spent_reserved_run_mints_a_fresh_id_carrying_its_notes(repo, monkeypa
     assert f"{SLICE}.workflow.mjs" not in str(reply.get("output_path", ""))
 
 
-def test_a_spent_reserved_run_without_notes_still_mints_fresh_and_names_it(repo, composed):  # noqa: F811
+def test_a_spent_reserved_run_without_notes_still_mints_fresh_and_names_it(repo, composed) -> None:  # noqa: F811
     _slice_sizing(repo)
     _retire(repo)
     reply = _fire(repo)
@@ -57,7 +58,7 @@ def test_a_spent_reserved_run_without_notes_still_mints_fresh_and_names_it(repo,
     assert rl.read_run(rl.run_dir(repo, reply["run_id"]))[rl.RESUMED_FROM_FIELD] == SLICE
 
 
-def test_an_unspent_reserved_run_keeps_its_id(repo, composed):  # noqa: F811
+def test_an_unspent_reserved_run_keeps_its_id(repo, composed) -> None:  # noqa: F811
     _slice_sizing(repo)
     rl.start(repo, SLICE)
     reply = _fire(repo)

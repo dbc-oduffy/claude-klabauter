@@ -5,6 +5,7 @@ from __future__ import annotations
 from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
 from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
+from pathlib import Path
 
 PLAN_REL = "docs/plans/2026-10-01-fixture.md"
 
@@ -39,12 +40,12 @@ def _repo(tmp_path):
     return tmp_path
 
 
-def _targets(repo, session):
+def _targets(repo, session) -> list[str]:
     path = session_dir_for(repo / ".git", session) / "review-targets.txt"
     return path.read_text(encoding="utf-8").split()
 
 
-def test_staged_plan_path_is_a_review_target_but_not_a_review_diff_path(tmp_path):
+def test_staged_plan_path_is_a_review_target_but_not_a_review_diff_path(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     m = stage(repo, run_id="r1", plan_rel=PLAN_REL, session_id="sess-1")
     targets = _targets(repo, "sess-1")

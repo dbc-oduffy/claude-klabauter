@@ -13,18 +13,19 @@ from coordinator_core.ops.dispatch_emit.emit import (
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW, execute_section
 from coordinator_core.ops.dispatch_emit.tests.test_emit_dag import _write_row
 from coordinator_core.testing.git_write import write_seen_by_git
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
 _SESSION = "9d860631-c114-462a-a6ee-f685cc671ced"
 
 
-def _script(rows=None, **kw):
+def _script(rows=None, **kw) -> str:
     rows = rows or [_write_row("C1"), _write_row("C2")]
     return compose_script([rows], name="wf", description="d", session_id=_SESSION, **REVIEW_KW, **kw)
 
 
-def test_each_row_with_declared_paths_registers_a_commit_request():
+def test_each_row_with_declared_paths_registers_a_commit_request() -> None:
     script = _script(expected_branch="work/run")
 
     assert "_runRow('C1', [], null, async () =>" in script
@@ -38,14 +39,14 @@ def test_each_row_with_declared_paths_registers_a_commit_request():
     )
 
 
-def test_row_without_declared_paths_registers_no_commit():
+def test_row_without_declared_paths_registers_no_commit() -> None:
     script = _script([_write_row("C1", writes=[])], expected_branch="work/run")
 
     row_line = script.split("_runRow('C1'", 1)[1].split("\n", 1)[0]
     assert row_line.endswith(", null);")
 
 
-def test_commit_leg_uses_the_sanctioned_route_and_never_raw_git_commit():
+def test_commit_leg_uses_the_sanctioned_route_and_never_raw_git_commit() -> None:
     script = _script(expected_branch="work/run")
 
     assert "coordinator-invoke\" ceremony.commit_v2" in script
@@ -54,7 +55,7 @@ def test_commit_leg_uses_the_sanctioned_route_and_never_raw_git_commit():
     assert "agentType: 'coordinator:git-commit-agent'" in script
 
 
-def test_one_committer_per_wave_not_per_row():
+def test_one_committer_per_wave_not_per_row() -> None:
     script = _script(expected_branch="work/run")
 
     assert script.count("agentType: 'coordinator:git-commit-agent'") == 1
@@ -65,7 +66,7 @@ def test_one_committer_per_wave_not_per_row():
     assert "_landed[id] = commit;" in script
 
 
-def test_two_waves_register_two_wave_commits_chained_serially():
+def test_two_waves_register_two_wave_commits_chained_serially() -> None:
     script = compose_script(
         [[_write_row("C1")], [_write_row("C2", writes=["pkg/other.py"])]],
         name="wf", description="d", session_id=_SESSION, expected_branch="work/run", **REVIEW_KW,
@@ -76,7 +77,7 @@ def test_two_waves_register_two_wave_commits_chained_serially():
     assert "_commitChain = _commitChain.then(() => _commitWave(n, ids));" in script
 
 
-def test_wave_commit_is_not_awaited_by_rows_or_later_waves():
+def test_wave_commit_is_not_awaited_by_rows_or_later_waves() -> None:
     script = _script(expected_branch="work/run")
 
     run_row = script.split("async function _runRow", 1)[1].split("\n  }\n", 1)[0]
@@ -88,7 +89,7 @@ def test_wave_commit_is_not_awaited_by_rows_or_later_waves():
     assert execute.index("await _commitChain;") < execute.index("if (_commitFailures.length) log(")
 
 
-def test_wave_with_no_done_row_emits_no_commit_leg():
+def test_wave_with_no_done_row_emits_no_commit_leg() -> None:
     script = _script(expected_branch="work/run")
 
     assert "if (!done.length) return;" in script
@@ -97,7 +98,7 @@ def test_wave_with_no_done_row_emits_no_commit_leg():
     assert "_waveCommit(1," not in no_paths
 
 
-def test_a_work_branch_run_composes_the_wave_commit_and_no_push_leg():
+def test_a_work_branch_run_composes_the_wave_commit_and_no_push_leg() -> None:
     for branch in ("work/machine-b/2026-10-02", "main", None):
         script = _script(expected_branch=branch)
 
@@ -108,7 +109,7 @@ def test_a_work_branch_run_composes_the_wave_commit_and_no_push_leg():
         assert "ceremony.commit_v2" in script
 
 
-def test_row_over_the_path_threshold_is_left_to_the_terminal_commit():
+def test_row_over_the_path_threshold_is_left_to_the_terminal_commit() -> None:
     paths = [f"pkg/many_{i}.py" for i in range(_SHARED_PATH_ARRAY_THRESHOLD + 1)]
     script = _script([_write_row("C1", writes=paths)], expected_branch="work/run")
 
@@ -117,7 +118,7 @@ def test_row_over_the_path_threshold_is_left_to_the_terminal_commit():
     assert "_waveCommit(1," not in script
 
 
-def test_committer_passes_the_declared_list_verbatim_with_skip_missing():
+def test_committer_passes_the_declared_list_verbatim_with_skip_missing() -> None:
     script = _script(expected_branch="work/run")
 
     assert "Pass the list VERBATIM as `paths` with `skip_missing` and `gone_tracked_as_deleted` true" in script
@@ -127,7 +128,7 @@ def test_committer_passes_the_declared_list_verbatim_with_skip_missing():
     assert "git status --porcelain" not in script
 
 
-def test_committer_prompt_disowns_foreign_staged_paths():
+def test_committer_prompt_disowns_foreign_staged_paths() -> None:
     script = _script(expected_branch="work/run")
 
     assert (
@@ -136,13 +137,13 @@ def test_committer_prompt_disowns_foreign_staged_paths():
     ) in script
 
 
-def test_skip_missing_commits_existing_declared_paths_and_reports_the_missing(tmp_path):
+def test_skip_missing_commits_existing_declared_paths_and_reports_the_missing(tmp_path: Path) -> None:
     import subprocess
 
     from coordinator_core.ops.ceremony import commit_v2
 
 
-    def git(*args):
+    def git(*args) -> str:
         return subprocess.run(
             ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
         ).stdout
@@ -172,13 +173,13 @@ def test_skip_missing_commits_existing_declared_paths_and_reports_the_missing(tm
     assert "never_written.ts" not in landed
 
 
-def test_skip_missing_keeps_a_tracked_path_gone_from_disk_for_the_engine_to_refuse(tmp_path):
+def test_skip_missing_keeps_a_tracked_path_gone_from_disk_for_the_engine_to_refuse(tmp_path: Path) -> None:
     import subprocess
 
     from coordinator_core.ops.ceremony import commit_v2
 
 
-    def git(*args):
+    def git(*args) -> str:
         return subprocess.run(
             ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
         ).stdout
@@ -200,12 +201,12 @@ def test_skip_missing_keeps_a_tracked_path_gone_from_disk_for_the_engine_to_refu
     assert "gone from the worktree but still tracked" in out["error"]
 
 
-def test_gone_tracked_as_deleted_lands_a_row_deletion_beside_a_modification(tmp_path):
+def test_gone_tracked_as_deleted_lands_a_row_deletion_beside_a_modification(tmp_path: Path) -> None:
     import subprocess
 
     from coordinator_core.ops.ceremony import commit_v2
 
-    def git(*args):
+    def git(*args) -> str:
         return subprocess.run(
             ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
         ).stdout
@@ -238,7 +239,7 @@ def test_gone_tracked_as_deleted_lands_a_row_deletion_beside_a_modification(tmp_
     assert "Removes: gone.ts" in git("log", "-1", "--format=%B")
 
 
-def test_gone_tracked_as_deleted_must_be_a_boolean(tmp_path):
+def test_gone_tracked_as_deleted_must_be_a_boolean(tmp_path: Path) -> None:
     from coordinator_core.ops.ceremony import commit_v2
 
     out = commit_v2._handler(
@@ -252,13 +253,13 @@ def test_gone_tracked_as_deleted_must_be_a_boolean(tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_checkpoint_route_commits_modified_and_untracked_declared_paths_only(tmp_path):
+def test_checkpoint_route_commits_modified_and_untracked_declared_paths_only(tmp_path: Path) -> None:
     import subprocess
 
     from coordinator_core.ops.ceremony import commit_v2
 
 
-    def git(*args):
+    def git(*args) -> str:
         return subprocess.run(
             ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
         ).stdout

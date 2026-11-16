@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_plan_route import (  # noqa: 
     _run,
     _write_set_reads_clean,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -28,7 +29,7 @@ def _plan(body: str) -> str:
     return _CONJOINED.replace("BODY", body)
 
 
-def test_conjoined_spine_prints_the_offer_and_exit_is_unchanged(tmp_path, capsys):
+def test_conjoined_spine_prints_the_offer_and_exit_is_unchanged(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo, plan = _repo(tmp_path, _plan("Write both."))
     assert _run(repo, plan) == plan_route.EXIT_OK
     captured = capsys.readouterr()
@@ -37,13 +38,13 @@ def test_conjoined_spine_prints_the_offer_and_exit_is_unchanged(tmp_path, capsys
     assert json.loads(captured.out)["ok"] is True
 
 
-def test_coherence_line_quiets_the_offer(tmp_path, capsys):
+def test_coherence_line_quiets_the_offer(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo, plan = _repo(tmp_path, _plan("Coherence: one change.\n    Write both."))
     assert _run(repo, plan) == plan_route.EXIT_OK
     assert _OFFER_MARK not in capsys.readouterr().err
 
 
-def test_offer_does_not_change_script_bytes_or_receipt(tmp_path, monkeypatch):
+def test_offer_does_not_change_script_bytes_or_receipt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, plan = _repo(tmp_path, _plan("Write both."))
     out = repo / "out" / "p.workflow.mjs"
     receipt_path = out.with_name(out.name + ".emitted.json")
@@ -57,7 +58,7 @@ def test_offer_does_not_change_script_bytes_or_receipt(tmp_path, monkeypatch):
     assert seen[0] == seen[1]
 
 
-def test_offer_pass_adds_no_read_spine_call_and_unreadable_spine_prints_none(tmp_path, monkeypatch, capsys):
+def test_offer_pass_adds_no_read_spine_call_and_unreadable_spine_prints_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo, plan = _repo(tmp_path, _plan("Write both."))
     calls = []
     real = plan_route.read_spine

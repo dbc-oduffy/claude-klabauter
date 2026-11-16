@@ -22,6 +22,7 @@ import os
 import pytest
 
 from coordinator_core.install import check_install_singularity as sut
+from pathlib import Path
 
 
 def _make_tree(path):
@@ -33,7 +34,7 @@ def _make_tree(path):
 
 
 @pytest.fixture
-def home(tmp_path, monkeypatch):
+def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     """Build a minimal ~/.claude tree under tmp_path/home plus a SEPARATE
     settings-home tree under tmp_path/settings-home, scrub all
     coordinator-resolution env vars, and point HOME/COORDINATOR_SETTINGS_HOME
@@ -67,7 +68,7 @@ def home(tmp_path, monkeypatch):
     }
 
 
-def _run():
+def _run() -> tuple[int, str]:
     rc, out, err = sut.run()
     return rc, out + err
 
@@ -75,14 +76,14 @@ def _run():
 # ===========================================================================
 # T1 — .claude-suffixed CLAUDE_HOME -> FAIL
 # ===========================================================================
-def test_t1_claude_home_suffix_guard_fails(home, monkeypatch):
+def test_t1_claude_home_suffix_guard_fails(home, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_HOME", str(home["fake_home"] / ".claude"))
     rc, text = _run()
     assert rc != 0
     assert "remediation" in text.lower()
 
 
-def test_t2_doubled_venv_pin_fails(home):
+def test_t2_doubled_venv_pin_fails(home) -> None:
     home["reg_file"].write_text(
         '[coordinator]\npython = "/home/user/.claude/.claude/.coordinator-venv/bin/python"\n',
         encoding="utf-8",
@@ -92,7 +93,7 @@ def test_t2_doubled_venv_pin_fails(home):
     assert "remediation" in text.lower()
 
 
-def test_t3_multiple_trees_fails(home, tmp_path):
+def test_t3_multiple_trees_fails(home, tmp_path: Path) -> None:
     extra_tree = tmp_path / "extra" / "coordinator-claude" / "coordinator"
     _make_tree(extra_tree)
     home["reg_file"].write_text(
@@ -103,7 +104,7 @@ def test_t3_multiple_trees_fails(home, tmp_path):
     assert "remediation" in text.lower()
 
 
-def test_t4_settings_disagree_fails(home, tmp_path):
+def test_t4_settings_disagree_fails(home, tmp_path: Path) -> None:
     canonical_path = str(home["flat_path"])
     other_path = tmp_path / "other" / "coordinator-claude"
     _make_tree(other_path)
@@ -131,7 +132,7 @@ def test_t4_settings_disagree_fails(home, tmp_path):
     assert "remediation" in text.lower()
 
 
-def test_t5_live_path_matches_flat_dedupes_to_zero(home):
+def test_t5_live_path_matches_flat_dedupes_to_zero(home) -> None:
     coord_subdir = home["flat_path"] / "coordinator"
     _make_tree(coord_subdir)
     home["reg_file"].write_text(
@@ -141,12 +142,12 @@ def test_t5_live_path_matches_flat_dedupes_to_zero(home):
     assert rc == 0, text
 
 
-def test_t6_single_tree_ok(home):
+def test_t6_single_tree_ok(home) -> None:
     rc, text = _run()
     assert rc == 0, text
 
 
-def test_registry_local_wins_over_tracked_for_live_path(home):
+def test_registry_local_wins_over_tracked_for_live_path(home) -> None:
     coord_subdir = home["flat_path"] / "coordinator"
     _make_tree(coord_subdir)
     tracked = home["settings_home_dir"] / "machine-local" / "registry.toml"
@@ -158,14 +159,14 @@ def test_registry_local_wins_over_tracked_for_live_path(home):
     assert rc == 0, text
 
 
-def test_empty_string_tracked_declaration_is_a_miss_not_a_second_tree(home, tmp_path):
+def test_empty_string_tracked_declaration_is_a_miss_not_a_second_tree(home, tmp_path: Path) -> None:
     tracked = home["settings_home_dir"] / "machine-local" / "registry.toml"
     tracked.write_text('"plugin.mirrors.coordinator-claude.live_path" = ""\n', encoding="utf-8")
     rc, text = _run()
     assert rc == 0, text
 
 
-def test_t7_absent_local_settings_concordant(home):
+def test_t7_absent_local_settings_concordant(home) -> None:
     home["settings_json"].write_text(
         json.dumps(
             {
@@ -194,7 +195,7 @@ def test_t7_absent_local_settings_concordant(home):
 # ===========================================================================
 # T8 — single COORDINATOR_CLONE (.git-backed) -> exempt -> exit 0
 # ===========================================================================
-def test_t8_coordinator_clone_exempt(home, tmp_path, monkeypatch):
+def test_t8_coordinator_clone_exempt(home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     clone_dir = tmp_path / "clone" / "coordinator-claude"
     _make_tree(clone_dir)
     (clone_dir / ".git").mkdir(parents=True)
@@ -207,7 +208,7 @@ def test_t8_coordinator_clone_exempt(home, tmp_path, monkeypatch):
 # ===========================================================================
 # T9 — single COORDINATOR_ROOT (parent .git-backed) -> exempt -> exit 0
 # ===========================================================================
-def test_t9_coordinator_root_exempt(home, tmp_path, monkeypatch):
+def test_t9_coordinator_root_exempt(home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root_plugin = tmp_path / "root_plugin" / "coordinator-claude"
     _make_tree(root_plugin)
     (root_plugin / ".git").mkdir(parents=True)
@@ -220,7 +221,7 @@ def test_t9_coordinator_root_exempt(home, tmp_path, monkeypatch):
 # ===========================================================================
 # T10 — CLAUDE_PLUGIN_ROOT is NOT exempt (harness-injected)
 # ===========================================================================
-def test_t10_claude_plugin_root_not_exempt(home, tmp_path, monkeypatch):
+def test_t10_claude_plugin_root_not_exempt(home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cpr_dir = tmp_path / "cpr" / "coordinator-claude"
     _make_tree(cpr_dir)
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", str(cpr_dir))
@@ -231,20 +232,20 @@ def test_t10_claude_plugin_root_not_exempt(home, tmp_path, monkeypatch):
 # ===========================================================================
 # T12 — CLAUDE_HOME already .claude-suffixed (sentinel leakage shape) -> FAIL
 # ===========================================================================
-def test_t12_claude_home_leakage_shape_fails(home, monkeypatch):
+def test_t12_claude_home_leakage_shape_fails(home, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_HOME", str(home["fake_home"] / ".claude" / ".claude"))
     rc, text = _run()
     assert rc != 0, text
 
 
-def test_main_returns_zero_on_clean_install(home, capsys):
+def test_main_returns_zero_on_clean_install(home, capsys: pytest.CaptureFixture[str]) -> None:
     rc = sut.main([])
     assert rc == 0
     captured = capsys.readouterr()
     assert "singularity OK" in captured.out
 
 
-def test_main_returns_one_on_split(home, tmp_path, monkeypatch, capsys):
+def test_main_returns_one_on_split(home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     extra_tree = tmp_path / "extra" / "coordinator-claude" / "coordinator"
     _make_tree(extra_tree)
     home["reg_file"].write_text(
@@ -256,32 +257,32 @@ def test_main_returns_one_on_split(home, tmp_path, monkeypatch, capsys):
     assert "remediation" in captured.err.lower()
 
 
-def test_main_help_returns_zero(capsys):
+def test_main_help_returns_zero(capsys: pytest.CaptureFixture[str]) -> None:
     rc = sut.main(["--help"])
     assert rc == 0
 
 
-def test_to_plugin_root_bare_coordinator_unchanged():
+def test_to_plugin_root_bare_coordinator_unchanged() -> None:
     assert sut._to_plugin_root("coordinator") == "coordinator"
 
 
-def test_to_plugin_root_strips_trailing_coordinator_component():
+def test_to_plugin_root_strips_trailing_coordinator_component() -> None:
     assert sut._to_plugin_root("/foo/bar/coordinator") == "/foo/bar"
 
 
-def test_to_plugin_root_leaves_non_coordinator_basename():
+def test_to_plugin_root_leaves_non_coordinator_basename() -> None:
     assert sut._to_plugin_root("/foo/bar/coordinator-claude") == "/foo/bar/coordinator-claude"
 
 
-def test_has_parent_child_pair_detects_offset_shape():
+def test_has_parent_child_pair_detects_offset_shape() -> None:
     assert sut._has_parent_child_pair(["C:/coordinator-content-repo", "C:/coordinator-content-repo/coordinator"])
 
 
-def test_has_parent_child_pair_false_for_genuinely_distinct_trees():
+def test_has_parent_child_pair_false_for_genuinely_distinct_trees() -> None:
     assert not sut._has_parent_child_pair(["C:/coordinator-content-repo", "C:/other/coordinator-claude"])
 
 
-def test_parent_child_split_remediation_names_offset_shape_not_deletion(home, monkeypatch):
+def test_parent_child_split_remediation_names_offset_shape_not_deletion(home, monkeypatch: pytest.MonkeyPatch) -> None:
     parent = str(home["fake_home"] / ".claude" / "plugins" / "coordinator-claude")
     child = parent + "/coordinator/extra"
 
@@ -298,7 +299,7 @@ def test_parent_child_split_remediation_names_offset_shape_not_deletion(home, mo
     assert "do not remove" in text.lower()
 
 
-def test_no_offset_note_for_genuinely_distinct_trees(home, monkeypatch):
+def test_no_offset_note_for_genuinely_distinct_trees(home, monkeypatch: pytest.MonkeyPatch) -> None:
     tree_a = str(home["fake_home"] / ".claude" / "plugins" / "coordinator-claude")
     tree_b = str(home["fake_home"].parent / "unrelated" / "coordinator-claude")
 
@@ -326,25 +327,25 @@ def test_no_offset_note_for_genuinely_distinct_trees(home, monkeypatch):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only separator normalization")
-def test_to_plugin_root_windows_backslash_normalizes_like_forward_slash():
+def test_to_plugin_root_windows_backslash_normalizes_like_forward_slash() -> None:
     forward = sut._to_plugin_root("C:/coordinator-content-repo/coordinator")
     backslash = sut._to_plugin_root("C:\\coordinator-content-repo\\coordinator")
     assert backslash == forward == "C:/coordinator-content-repo"
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only separator normalization")
-def test_to_plugin_root_windows_double_trailing_backslash_not_stripped():
+def test_to_plugin_root_windows_double_trailing_backslash_not_stripped() -> None:
     assert sut._to_plugin_root("C:\\foo\\coordinator\\\\") == "C:/foo/coordinator/"
 
 
 @pytest.mark.skipif(os.name == "nt", reason="backslash is a legal POSIX filename character")
-def test_to_plugin_root_posix_backslash_left_untouched():
+def test_to_plugin_root_posix_backslash_left_untouched() -> None:
     raw = "/foo/bar\\coordinator"
     assert sut._to_plugin_root(raw) == raw
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows-only separator normalization")
-def test_windows_backslash_claude_plugin_root_dedupes_with_forward_slash_live_path(home, monkeypatch):
+def test_windows_backslash_claude_plugin_root_dedupes_with_forward_slash_live_path(home, monkeypatch: pytest.MonkeyPatch) -> None:
     """Full-gate regression: the registry's live_path is stored
     forward-slashed while CLAUDE_PLUGIN_ROOT (harness-injected, native
     Windows) names the SAME tree with backslashes. Both must normalize to

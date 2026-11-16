@@ -13,11 +13,12 @@ from coordinator_core.hooks.day_branch_assert import (
     assert_day_branch,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = pytest.mark.spawns_process
 
 
-def _run(argv):
+def _run(argv) -> None:
     subprocess.run(argv, check=True, **no_console_creationflags())
 
 
@@ -30,7 +31,7 @@ def _init_repo(tmp_path, branch: str):
     return repo
 
 
-def test_designated_branch_already_configured_is_compliant_silent(tmp_path):
+def test_designated_branch_already_configured_is_compliant_silent(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path, "claude/compassionate-pascal-98ncw7")
     _run(["git", "-C", str(repo), "config", "coordinator.dayBranch",
           "claude/compassionate-pascal-98ncw7"])
@@ -39,7 +40,7 @@ def test_designated_branch_already_configured_is_compliant_silent(tmp_path):
     assert result.message == ""
 
 
-def test_non_repo_root_is_silent_not_a_repo_not_detached_head_warn(tmp_path):
+def test_non_repo_root_is_silent_not_a_repo_not_detached_head_warn(tmp_path: Path) -> None:
     """F7 (GH #71): a `repo_root` with no `.git` at all (a multi-repo
     container's session root, e.g.) must not read as a genuine "detached
     HEAD / crash insurance NOT in force" finding -- it is silent, same as
@@ -51,7 +52,7 @@ def test_non_repo_root_is_silent_not_a_repo_not_detached_head_warn(tmp_path):
     assert result.message == ""
 
 
-def test_cloud_session_learns_and_records_designation(tmp_path, monkeypatch):
+def test_cloud_session_learns_and_records_designation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path, "claude/compassionate-pascal-98ncw7")
     assert read_configured_day_branch(repo) is None
 
@@ -62,7 +63,7 @@ def test_cloud_session_learns_and_records_designation(tmp_path, monkeypatch):
     assert read_configured_day_branch(repo) == "claude/compassionate-pascal-98ncw7"
 
 
-def test_non_cloud_session_does_not_learn_a_designation(tmp_path, monkeypatch):
+def test_non_cloud_session_does_not_learn_a_designation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path, "some-workstream-branch")
     monkeypatch.delenv("CLAUDE_CODE_REMOTE", raising=False)
 
@@ -72,7 +73,7 @@ def test_non_cloud_session_does_not_learn_a_designation(tmp_path, monkeypatch):
     assert result.outcome == WARN
 
 
-def test_configured_branch_survives_a_second_boot_without_the_cloud_env(tmp_path, monkeypatch):
+def test_configured_branch_survives_a_second_boot_without_the_cloud_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Once learned, the designation is honoured even if a later boot in
     the same tree does not carry CLAUDE_CODE_REMOTE (e.g. a shell
     re-invoking the assert directly) -- the record on disk is the source,
@@ -87,8 +88,8 @@ def test_configured_branch_survives_a_second_boot_without_the_cloud_env(tmp_path
 
 
 def test_cloud_container_root_records_designation_in_each_claude_branch_checkout(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Cloud cwd is the dir above all checkouts (not a repo): each child
     checkout on a `claude/` branch gets dayBranch; others are left alone."""
     container = tmp_path / "container"
@@ -110,7 +111,7 @@ def test_cloud_container_root_records_designation_in_each_claude_branch_checkout
     assert read_configured_day_branch(container / "c") is None
 
 
-def test_non_cloud_container_root_records_nothing(tmp_path, monkeypatch):
+def test_non_cloud_container_root_records_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     container = tmp_path / "container"
     container.mkdir()
     repo = container / "a"

@@ -11,44 +11,46 @@ from coordinator_core.bash_guards._heavy_admission_contract import (
     LeaseRecord,
     ProcRow,
 )
+from pathlib import Path
+import pytest
 
 
 class _Prims:
-    def __init__(self, live):
+    def __init__(self, live) -> None:
         self.live = set(live)
 
-    def alive(self, pid, ctime):
+    def alive(self, pid, ctime) -> bool:
         return (pid, ctime) in self.live
 
 
-def _rec(holder=(10, 100), session=(10, 100), at=1000.0, cls="build"):
+def _rec(holder=(10, 100), session=(10, 100), at: float = 1000.0, cls="build") -> LeaseRecord:
     return LeaseRecord(holder[0], holder[1], session[0], session[1], cls, at)
 
 
-def test_write_lease_roundtrip(tmp_path):
+def test_write_lease_roundtrip(tmp_path: Path) -> None:
     path = store.write_lease(_rec(), tmp_path)
     assert path.parent == tmp_path
     assert store.live_leases(tmp_path) == [_rec()]
     assert not [p for p in tmp_path.iterdir() if p.suffix != ".json"]
 
 
-def test_reap_dead_pid(tmp_path):
+def test_reap_dead_pid(tmp_path: Path) -> None:
     store.write_lease(_rec(holder=(10, 100), session=(5, 50)), tmp_path)
     assert store.reap(_Prims([]), tmp_path, now=lambda: 1001.0) == 1
     assert store.live_leases(tmp_path) == []
 
 
-def test_reap_pid_reuse_ctime_mismatch(tmp_path):
+def test_reap_pid_reuse_ctime_mismatch(tmp_path: Path) -> None:
     store.write_lease(_rec(holder=(10, 100), session=(5, 50)), tmp_path)
     assert store.reap(_Prims([(10, 999)]), tmp_path, now=lambda: 1001.0) == 1
 
 
-def test_live_attributed_lease_survives_past_ttl(tmp_path):
+def test_live_attributed_lease_survives_past_ttl(tmp_path: Path) -> None:
     store.write_lease(_rec(holder=(10, 100), session=(5, 50)), tmp_path)
     assert store.reap(_Prims([(10, 100)]), tmp_path, now=lambda: 1000.0 + 10 * LEASE_ATTRIBUTION_TTL_S) == 0
 
 
-def test_unattributed_ttl(tmp_path):
+def test_unattributed_ttl(tmp_path: Path) -> None:
     store.write_lease(_rec(), tmp_path)
     prims = _Prims([(10, 100)])
     assert store.reap(prims, tmp_path, now=lambda: 1000.0 + LEASE_ATTRIBUTION_TTL_S) == 0
@@ -57,7 +59,7 @@ def test_unattributed_ttl(tmp_path):
     assert store.unattributed_count(tmp_path) == 0
 
 
-def test_unattributed_count_excludes_the_named_session(tmp_path):
+def test_unattributed_count_excludes_the_named_session(tmp_path: Path) -> None:
     store.write_lease(_rec(holder=(10, 100), session=(10, 100)), tmp_path)
     store.write_lease(_rec(holder=(20, 200), session=(20, 200)), tmp_path)
     now = lambda: 1001.0
@@ -65,7 +67,7 @@ def test_unattributed_count_excludes_the_named_session(tmp_path):
     assert store.unattributed_count(tmp_path, now=now, exclude_session=(10, 100)) == 1
 
 
-def test_corrupt_file_skipped_and_removed(tmp_path):
+def test_corrupt_file_skipped_and_removed(tmp_path: Path) -> None:
     bad = tmp_path / "bad.json"
     bad.write_text("{not json", encoding="utf-8")
     assert store.live_leases(tmp_path) == []
@@ -74,13 +76,13 @@ def test_corrupt_file_skipped_and_removed(tmp_path):
     assert not bad.exists()
 
 
-def test_holders_names_pid_and_class(tmp_path):
+def test_holders_names_pid_and_class(tmp_path: Path) -> None:
     store.write_lease(_rec(holder=(77, 1), session=(5, 50), cls="typecheck"), tmp_path)
     (line,) = store.holders(tmp_path)
     assert "77" in line and "typecheck" in line and "unattributed" not in line
 
 
-def test_attribute_narrows_only_matching_session(tmp_path):
+def test_attribute_narrows_only_matching_session(tmp_path: Path) -> None:
     store.write_lease(LeaseRecord(10, 100, 10, 100, "build", 1000.0, 50), tmp_path)
     store.write_lease(_rec(holder=(20, 200), session=(20, 200)), tmp_path)
     assert store.attribute(10, 100, [_tree(33, 330, heavy=("pnpm", "node"))], tmp_path) == 1
@@ -90,56 +92,56 @@ def test_attribute_narrows_only_matching_session(tmp_path):
 
 
 class TestAttribute:
-    def test_a_typecheck_lease_never_binds_a_python_tree(self, tmp_path):
+    def test_a_typecheck_lease_never_binds_a_python_tree(self, tmp_path: Path) -> None:
         path = write_lease(_open(launch=100), tmp_path)
         sourcer = _tree(70, 150, heavy=("python3",))
         assert store.attribute(1, 10, [sourcer], tmp_path) == 0
         assert json.loads(path.read_text(encoding="utf-8"))["holder_pid"] == 1
 
-    def test_a_lease_binds_its_own_tree_not_the_newest(self, tmp_path):
+    def test_a_lease_binds_its_own_tree_not_the_newest(self, tmp_path: Path) -> None:
         path = write_lease(_open(launch=100), tmp_path)
         tsc = _tree(40, 110, heavy=("node", "tsc"))
         later = _tree(50, 140, heavy=("node",))
         assert store.attribute(1, 10, [later, tsc], tmp_path) == 1
         assert json.loads(path.read_text(encoding="utf-8"))["holder_pid"] == 40
 
-    def test_a_tree_created_before_the_launch_is_not_bound(self, tmp_path):
+    def test_a_tree_created_before_the_launch_is_not_bound(self, tmp_path: Path) -> None:
         write_lease(_open(launch=100), tmp_path)
         assert store.attribute(1, 10, [_tree(40, 90, heavy=("node",))], tmp_path) == 0
 
-    def test_a_lease_without_a_launch_mark_binds_no_tree(self, tmp_path):
+    def test_a_lease_without_a_launch_mark_binds_no_tree(self, tmp_path: Path) -> None:
         path = write_lease(_open(launch=0), tmp_path)
         assert store.attribute(1, 10, [_tree(40, 500, heavy=("node", "tsc"))], tmp_path) == 0
         assert json.loads(path.read_text(encoding="utf-8"))["holder_pid"] == 1
 
-    def test_a_held_tree_is_not_bound_twice(self, tmp_path):
+    def test_a_held_tree_is_not_bound_twice(self, tmp_path: Path) -> None:
         write_lease(LeaseRecord(40, 110, 1, 10, "typecheck", time.time(), 100), tmp_path)
         write_lease(_open(launch=105), tmp_path)
         assert store.attribute(1, 10, [_tree(40, 110, heavy=("node",))], tmp_path) == 0
 
 
 class TestRelease:
-    def test_release_frees_only_the_sessions_leases(self, tmp_path):
+    def test_release_frees_only_the_sessions_leases(self, tmp_path: Path) -> None:
         write_lease(_open(launch=100, session=(1, 10)), tmp_path)
         write_lease(_open(launch=100, session=(2, 20)), tmp_path)
         assert store.release(1, 10, directory=tmp_path) == 1
         assert [(r.session_pid) for r in live_leases(tmp_path)] == [2]
 
-    def test_release_by_holder_leaves_the_sessions_other_leases(self, tmp_path):
+    def test_release_by_holder_leaves_the_sessions_other_leases(self, tmp_path: Path) -> None:
         write_lease(LeaseRecord(40, 110, 1, 10, "typecheck", 1000.0, 100), tmp_path)
         write_lease(LeaseRecord(41, 111, 1, 10, "build", 1000.0, 100), tmp_path)
         assert store.release(1, 10, holder_pid=40, directory=tmp_path) == 1
         assert [r.holder_pid for r in live_leases(tmp_path)] == [41]
 
-    def test_a_dead_holders_lease_is_reaped_a_live_one_is_not(self, tmp_path):
+    def test_a_dead_holders_lease_is_reaped_a_live_one_is_not(self, tmp_path: Path) -> None:
         write_lease(LeaseRecord(40, 110, 1, 10, "typecheck", 1000.0, 100), tmp_path)
         write_lease(LeaseRecord(41, 111, 1, 10, "build", 1000.0, 100), tmp_path)
         assert store.reap(_Prims([(41, 111)]), tmp_path, now=lambda: 1001.0) == 1
         assert [r.holder_pid for r in live_leases(tmp_path)] == [41]
 
 
-def test_two_writers_racing(tmp_path):
-    def w(i):
+def test_two_writers_racing(tmp_path: Path) -> None:
+    def w(i) -> None:
         store.write_lease(_rec(holder=(10, 100), session=(10, 100), at=float(i)), tmp_path)
 
     threads = [threading.Thread(target=w, args=(i,)) for i in range(16)]
@@ -150,7 +152,7 @@ def test_two_writers_racing(tmp_path):
     assert len(store.live_leases(tmp_path)) == 16
 
 
-def test_default_dir_under_settings_home(tmp_path, monkeypatch):
+def test_default_dir_under_settings_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     store.write_lease(_rec())
     assert (tmp_path / "heavy-admission" / "leases").is_dir()
@@ -166,19 +168,19 @@ def _tree(pid, ctime, heavy=("node",)):
     return OrphanTree(root, rows)
 
 
-def _open(launch, cls="typecheck", session=(1, 10), at=None):
+def _open(launch, cls="typecheck", session=(1, 10), at=None) -> LeaseRecord:
     return LeaseRecord(session[0], session[1], session[0], session[1], cls, time.time() if at is None else at, launch)
 
 
 class TestReleaseFinished:
     ROWS = [ProcRow(1, 0, 10, "claude.exe"), ProcRow(7, 1, 30, "bash.exe")]
 
-    def test_a_lease_whose_launch_shell_is_gone_and_has_no_tree_is_freed(self, tmp_path):
+    def test_a_lease_whose_launch_shell_is_gone_and_has_no_tree_is_freed(self, tmp_path: Path) -> None:
         write_lease(_open(launch=20, cls="test_tier"), tmp_path)
         assert store.release_finished(1, 10, self.ROWS, [], tmp_path) == 1
         assert live_leases(tmp_path) == []
 
-    def test_a_live_launch_shell_a_fitting_tree_a_missing_mark_or_another_session_keep_it(self, tmp_path):
+    def test_a_live_launch_shell_a_fitting_tree_a_missing_mark_or_another_session_keep_it(self, tmp_path: Path) -> None:
         write_lease(_open(launch=30, cls="test_tier"), tmp_path)
         write_lease(_open(launch=0, cls="test_tier"), tmp_path)
         write_lease(_open(launch=21, cls="test_tier"), tmp_path)
@@ -190,44 +192,44 @@ class TestReleaseFinished:
 
 
 class TestClaimOrphans:
-    def test_a_lease_claims_the_tree_created_soonest_after_its_launch(self, tmp_path):
+    def test_a_lease_claims_the_tree_created_soonest_after_its_launch(self, tmp_path: Path) -> None:
         path = write_lease(_open(launch=100), tmp_path)
         assert claim_orphans([_tree(50, 130), _tree(40, 110), _tree(30, 90)], window=60, directory=tmp_path) == 1
         rec = json.loads(path.read_text(encoding="utf-8"))
         assert (rec["holder_pid"], rec["holder_ctime"], rec["launch_ctime"]) == (40, 110, 100)
 
-    def test_outside_the_window_or_before_the_launch_nothing_is_claimed(self, tmp_path):
+    def test_outside_the_window_or_before_the_launch_nothing_is_claimed(self, tmp_path: Path) -> None:
         write_lease(_open(launch=100), tmp_path)
         assert claim_orphans([_tree(30, 99), _tree(40, 161)], window=60, directory=tmp_path) == 0
 
-    def test_a_tree_without_an_image_of_the_class_is_not_claimed(self, tmp_path):
+    def test_a_tree_without_an_image_of_the_class_is_not_claimed(self, tmp_path: Path) -> None:
         write_lease(_open(launch=100, cls="typecheck"), tmp_path)
         assert claim_orphans([_tree(40, 110, heavy=("python",))], window=60, directory=tmp_path) == 0
 
-    def test_a_tree_whose_command_is_another_class_is_not_claimed_for_a_later_image(self, tmp_path):
+    def test_a_tree_whose_command_is_another_class_is_not_claimed_for_a_later_image(self, tmp_path: Path) -> None:
         # Live 2026-10-10: a typecheck lease whose tsc had exited claimed a peer's UE python run.
         write_lease(_open(launch=100, cls="typecheck"), tmp_path)
         assert claim_orphans([_tree(40, 110, heavy=("python", "node"))], window=60, directory=tmp_path) == 0
 
-    def test_two_leases_take_two_trees_in_launch_order(self, tmp_path):
+    def test_two_leases_take_two_trees_in_launch_order(self, tmp_path: Path) -> None:
         a = write_lease(_open(launch=100, session=(1, 10)), tmp_path)
         b = write_lease(_open(launch=105, session=(2, 20)), tmp_path)
         assert claim_orphans([_tree(40, 103), _tree(50, 108)], window=60, directory=tmp_path) == 2
         assert json.loads(a.read_text(encoding="utf-8"))["holder_pid"] == 40
         assert json.loads(b.read_text(encoding="utf-8"))["holder_pid"] == 50
 
-    def test_a_held_tree_is_never_claimed_twice(self, tmp_path):
+    def test_a_held_tree_is_never_claimed_twice(self, tmp_path: Path) -> None:
         write_lease(LeaseRecord(40, 110, 1, 10, "typecheck", time.time(), 90), tmp_path)
         write_lease(_open(launch=100), tmp_path)
         assert claim_orphans([_tree(40, 110)], window=60, directory=tmp_path) == 0
 
-    def test_a_lease_without_a_launch_mark_or_past_the_ttl_is_never_claimed(self, tmp_path):
+    def test_a_lease_without_a_launch_mark_or_past_the_ttl_is_never_claimed(self, tmp_path: Path) -> None:
         write_lease(_open(launch=0), tmp_path)
         write_lease(_open(launch=100, at=time.time() - 10_000), tmp_path)
         assert claim_orphans([_tree(40, 110)], window=60, directory=tmp_path) == 0
         assert oldest_open_launch(tmp_path) is None
 
-    def test_an_old_lease_file_without_launch_ctime_still_reads(self, tmp_path):
+    def test_an_old_lease_file_without_launch_ctime_still_reads(self, tmp_path: Path) -> None:
         p = tmp_path / "1-10-x.json"
         p.write_text(json.dumps({"holder_pid": 1, "holder_ctime": 10, "session_pid": 1, "session_ctime": 10,
                                  "heavy_class": "build", "admitted_at": 1.0}), encoding="utf-8")

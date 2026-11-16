@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle impo
     readers_cfg,
     stage_root,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -26,7 +27,7 @@ _ANCHOR = "design-registry:gsd-tiled-chrome"
 _NO_SHA = "met_by: the commit sha that carries the credited work"
 
 
-def _resume(*, notes, r2_evidence, r1_evidence="no sha here"):
+def _resume(*, notes, r2_evidence, r1_evidence: str = "no sha here"):
     return {
         "run_id": "ask-prior", "plan": _RESUME["plan"], "blocking": ["R1", "R2"], "halt_sha": "a" * 40,
         "unlanded": [], "revise_notes": notes,
@@ -48,7 +49,7 @@ def _r2(out):
     return next(i for i in out["result"]["halted_by"]["items"] if i["id"] == "R2")
 
 
-def test_a_design_row_met_by_its_review_file_stays_met_when_the_revise_note_names_the_shas(monkeypatch, tmp_path):
+def test_a_design_row_met_by_its_review_file_stays_met_when_the_revise_note_names_the_shas(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     review = tmp_path / _REVIEW
     review.parent.mkdir(parents=True)
     review.write_text("senior-front-end review\n", encoding="utf-8")
@@ -61,7 +62,7 @@ def test_a_design_row_met_by_its_review_file_stays_met_when_the_revise_note_name
     assert "commit" in _labels(out)
 
 
-def test_a_file_met_by_credited_only_by_the_row_evidence_stays_met(monkeypatch):
+def test_a_file_met_by_credited_only_by_the_row_evidence_stays_met(monkeypatch: pytest.MonkeyPatch) -> None:
     resume = _resume(
         notes=["R1 and R2 are ruled met by the landed work"],
         r1_evidence=f"landed in {_WORK}",
@@ -72,7 +73,7 @@ def test_a_file_met_by_credited_only_by_the_row_evidence_stays_met(monkeypatch):
     assert "commit" in _labels(out)
 
 
-def test_a_file_met_by_with_no_sha_in_note_or_evidence_is_still_demoted(monkeypatch):
+def test_a_file_met_by_with_no_sha_in_note_or_evidence_is_still_demoted(monkeypatch: pytest.MonkeyPatch) -> None:
     resume = _resume(notes=["R1 and R2 are ruled met by the landed work"], r2_evidence="no sha here")
     out = _run(_script(monkeypatch), verify=_verdict([_REVIEW]), resume=resume)
     assert out["result"]["halted_by"]["halted"] == "ledger-check"
@@ -81,7 +82,7 @@ def test_a_file_met_by_with_no_sha_in_note_or_evidence_is_still_demoted(monkeypa
     assert "commit" not in _labels(out)
 
 
-def test_a_design_row_with_no_met_by_is_still_demoted_for_the_missing_file(monkeypatch):
+def test_a_design_row_with_no_met_by_is_still_demoted_for_the_missing_file(monkeypatch: pytest.MonkeyPatch) -> None:
     resume = _resume(notes=[f"R2 met_by {_WORK}"], r2_evidence=f"the review in {_WORK}")
     out = _run(_script(monkeypatch), verify=_verdict("none"), resume=resume)
     assert _r2(out)["status"] == "not_met"

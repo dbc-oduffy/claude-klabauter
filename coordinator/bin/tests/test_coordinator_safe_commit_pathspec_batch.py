@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType, SimpleNamespace
 
 pytestmark = pytest.mark.complete
 
@@ -12,7 +17,7 @@ import types
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _load_cli_module():
+def _load_cli_module() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "coordinator_safe_commit", str(_BIN_DIR / "coordinator-safe-commit.py")
     )
@@ -22,11 +27,11 @@ def _load_cli_module():
     return mod
 
 
-def test_all_valid_pathspecs_is_one_subprocess_call(monkeypatch):
+def test_all_valid_pathspecs_is_one_subprocess_call(monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_cli_module()
     calls: list[list[str]] = []
 
-    def _fake_run(cmd, **_kwargs):
+    def _fake_run(cmd, **_kwargs) -> SimpleNamespace:
         calls.append(cmd)
         return types.SimpleNamespace(returncode=0, stdout="", stderr="")
 
@@ -44,11 +49,11 @@ def test_all_valid_pathspecs_is_one_subprocess_call(monkeypatch):
     ]
 
 
-def test_one_invalid_pathspec_falls_back_to_per_item_and_names_it(monkeypatch):
+def test_one_invalid_pathspec_falls_back_to_per_item_and_names_it(monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_cli_module()
     calls: list[list[str]] = []
 
-    def _fake_run(cmd, **_kwargs):
+    def _fake_run(cmd, **_kwargs) -> SimpleNamespace:
         calls.append(cmd)
         pathspecs = cmd[3:]
         if len(pathspecs) > 1:
@@ -65,7 +70,7 @@ def test_one_invalid_pathspec_falls_back_to_per_item_and_names_it(monkeypatch):
     assert len(calls) == 3
 
 
-def test_empty_pathspec_list_is_a_zero_spawn_noop(monkeypatch):
+def test_empty_pathspec_list_is_a_zero_spawn_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_cli_module()
     calls = []
     monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: calls.append(1))
@@ -76,7 +81,7 @@ def test_empty_pathspec_list_is_a_zero_spawn_noop(monkeypatch):
     assert calls == []
 
 
-def test_pathspec_dry_run_never_dispatches_do_pathspec(monkeypatch, tmp_path):
+def test_pathspec_dry_run_never_dispatches_do_pathspec(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     mod = _load_cli_module()
     monkeypatch.chdir(tmp_path)
     (tmp_path / "somefile.py").write_text("x = 1\n", encoding="utf-8")
@@ -89,8 +94,8 @@ def test_pathspec_dry_run_never_dispatches_do_pathspec(monkeypatch, tmp_path):
 
 
 def test_pathspec_dry_run_preview_matches_split_paths_including_deletion(
-    monkeypatch, tmp_path, capsys
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     mod = _load_cli_module()
     monkeypatch.chdir(tmp_path)
     (tmp_path / "present.py").write_text("x = 1\n", encoding="utf-8")

@@ -53,26 +53,26 @@ def _halt(sha: str | None = None) -> LedgerHalt:
     )
 
 
-def test_since_sha_rides_the_verdict_beside_halt_sha(tmp_path):
+def test_since_sha_rides_the_verdict_beside_halt_sha(tmp_path: Path) -> None:
     _plan(tmp_path, [_row("C25", "[R1]", "em")])
     out = _resume_ledger(SIZING, _halt("a" * 40), tmp_path)
     assert out[RESUME_LEDGER_SINCE_SHA_FIELD] == "a" * 40
     assert _resume_ledger(SIZING, _halt(None), tmp_path)[RESUME_LEDGER_SINCE_SHA_FIELD] is None
 
 
-def test_discharged_em_performed_serving_row_owes_no_replan(tmp_path):
+def test_discharged_em_performed_serving_row_owes_no_replan(tmp_path: Path) -> None:
     _plan(tmp_path, [_row("C25", "[R1]", "em")], discharged=("C25",))
     rem = _resume_ledger(SIZING, _halt(), tmp_path)[RESUME_LEDGER_REMAINING_FIELD]
     assert rem["R1"]["remaining"] == []
 
 
-def test_undischarged_em_performed_serving_row_still_owes(tmp_path):
+def test_undischarged_em_performed_serving_row_still_owes(tmp_path: Path) -> None:
     _plan(tmp_path, [_row("C25", "[R1]", "em")])
     rem = _resume_ledger(SIZING, _halt(), tmp_path)[RESUME_LEDGER_REMAINING_FIELD]
     assert rem["R1"]["remaining"] == ["confirm and commit"]
 
 
-def test_a_non_em_serving_row_keeps_the_owed_remaining(tmp_path):
+def test_a_non_em_serving_row_keeps_the_owed_remaining(tmp_path: Path) -> None:
     _plan(tmp_path, [_row("C25", "[R1]", "em"), _row("C26", "[R1]", None)], discharged=("C25",))
     rem = _resume_ledger(SIZING, _halt(), tmp_path)[RESUME_LEDGER_REMAINING_FIELD]
     assert rem["R1"]["remaining"] == ["confirm and commit"]
@@ -81,7 +81,7 @@ def test_a_non_em_serving_row_keeps_the_owed_remaining(tmp_path):
 MIXED = [_row("C25", "[R1]", "em"), _row("C26", "[R1]", None), _row("C28", "[R1]", "em")]
 
 
-def test_stage_omits_an_em_performed_duplicate_of_a_discharged_row(tmp_path):
+def test_stage_omits_an_em_performed_duplicate_of_a_discharged_row(tmp_path: Path) -> None:
     _plan(tmp_path, MIXED, discharged=("C25",))
     write_run_scripts(tmp_path, "r1")
     manifest = stage(tmp_path, run_id="r1", plan_rel=PLAN_REL, only_rows=["C26", "C28"], ledger_resume=True)
@@ -89,14 +89,14 @@ def test_stage_omits_an_em_performed_duplicate_of_a_discharged_row(tmp_path):
     assert "C28" in manifest.retired_resume_rows
 
 
-def test_stage_admits_the_non_em_row_alone(tmp_path):
+def test_stage_admits_the_non_em_row_alone(tmp_path: Path) -> None:
     _plan(tmp_path, MIXED, discharged=("C25",))
     write_run_scripts(tmp_path, "r1")
     manifest = stage(tmp_path, run_id="r1", plan_rel=PLAN_REL, only_rows=["C26"], ledger_resume=True)
     assert [r.id for r in manifest.rows] == ["C26"]
 
 
-def test_stage_without_ledger_resume_never_applies_the_refusal(tmp_path):
+def test_stage_without_ledger_resume_never_applies_the_refusal(tmp_path: Path) -> None:
     _plan(tmp_path, MIXED, discharged=("C25",))
     write_run_scripts(tmp_path, "r1")
     manifest = stage(tmp_path, run_id="r1", plan_rel=PLAN_REL, only_rows=["C26", "C28"])
@@ -107,7 +107,7 @@ def _dep_row(rid: str, regs: str, performer: str | None, deps: list[str]) -> str
     return _row(rid, regs, performer) + "  depends_on:\n" + "".join(f"    - chunk: {d}\n" for d in deps)
 
 
-def test_em_row_depending_transitively_on_a_discharged_row_is_staged(tmp_path):
+def test_em_row_depending_transitively_on_a_discharged_row_is_staged(tmp_path: Path) -> None:
     rows = [
         _row("S2", "[R1]", "em"),
         _dep_row("B1", "[R2]", None, ["S2"]),
@@ -121,7 +121,7 @@ def test_em_row_depending_transitively_on_a_discharged_row_is_staged(tmp_path):
     assert _drop_reminted_em_rows(plan, unchained, frozenset({"R1x"})) == ("R1x",)
 
 
-def test_guard_still_admits_an_em_row_serving_a_new_register_row(tmp_path):
+def test_guard_still_admits_an_em_row_serving_a_new_register_row(tmp_path: Path) -> None:
     plan = _plan(tmp_path, [_row("C25", "[R1]", "em"), _row("C28", "[R1, R2]", "em")], discharged=("C25",))
     raw = {r["id"]: r for r in yaml.safe_load(plan.read_text().split("```yaml plan-tasks\n")[1].split("```")[0])}
     assert _drop_reminted_em_rows(plan, raw, frozenset({"C28"})) == ()

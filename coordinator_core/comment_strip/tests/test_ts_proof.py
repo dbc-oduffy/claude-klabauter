@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.comment_strip import engine
+from pathlib import Path
 
 pytestmark = pytest.mark.skipif(
     engine._find_ts_pkg() is None, reason="no vendored typescript package available"
@@ -28,7 +29,7 @@ def _plan(tmp_path, name: str, text: str):
         engine._TsWarmProc.close_all()
 
 
-def test_template_substitution_tail_not_mistaken_for_comment(tmp_path):
+def test_template_substitution_tail_not_mistaken_for_comment(tmp_path: Path) -> None:
     # The `//not-a-comment` text lives inside the template's substitution tail; a real
     # removable comment sits elsewhere so a plan is actually attempted. A raw-scanner
     # implementation loses template context right after `${a}` and treats the `//` as a
@@ -45,7 +46,7 @@ def test_template_substitution_tail_not_mistaken_for_comment(tmp_path):
     assert "a real comment to remove" not in res.new_text
 
 
-def test_jsdoc_after_template_substitution_not_eaten(tmp_path):
+def test_jsdoc_after_template_substitution_not_eaten(tmp_path: Path) -> None:
     # A template with a `${...}` substitution desyncs a raw scanner (no `reScanTemplateToken`
     # in the loop): after `}`, the next backtick it meets is (wrongly) read as opening a NEW
     # template that runs to EOF, swallowing this JSDoc, the function body and the trailing
@@ -71,7 +72,7 @@ def test_jsdoc_after_template_substitution_not_eaten(tmp_path):
     assert "function f() { return 1; }" in res.new_text
 
 
-def test_ordinary_comment_near_template_still_removed(tmp_path):
+def test_ordinary_comment_near_template_still_removed(tmp_path: Path) -> None:
     # Sanity check the fix doesn't just refuse everything touching a template literal.
     text = (
         "// header comment\n"
@@ -84,7 +85,7 @@ def test_ordinary_comment_near_template_still_removed(tmp_path):
     assert "`https://example.com/${path}`" in res.new_text
 
 
-def test_vitest_environment_directive_survives_while_prose_strips(tmp_path):
+def test_vitest_environment_directive_survives_while_prose_strips(tmp_path: Path) -> None:
     text = (
         "// @vitest-environment jsdom\n"
         "// why this test exists, per some ruling\n"

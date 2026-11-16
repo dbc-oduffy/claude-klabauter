@@ -11,6 +11,8 @@ from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 from coordinator_core.ops.dispatch_emit import write_baseline as wb
 from coordinator_core.ops.dispatch_emit.ask_contract import ManifestRow, StageManifest
 from coordinator_core.ops.dispatch_emit.emit import _dispatch_report_path
+from pathlib import Path
+import pytest
 
 PLAN = "docs/plans/2026-11/p.md"
 OWN = "own.py"
@@ -19,7 +21,7 @@ LEDGER = SimpleNamespace(items=(1,), all_of_pm_ask=False)
 VERDICT = {"items": [{"id": "R1", "status": "met"}]}
 
 
-def _tree(root, report_lines, *, prior=True):
+def _tree(root, report_lines, *, prior: bool = True):
     for n in (OWN, FOREIGN):
         (root / n).write_text("x\n")
     live = root / _dispatch_report_path(PLAN, "C1")
@@ -58,32 +60,32 @@ def _land(root, monkeypatch, run, paths):
     )[0]
 
 
-def test_terminal_commit_credits_path_the_earlier_attempt_reported(tmp_path, monkeypatch):
+def test_terminal_commit_credits_path_the_earlier_attempt_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tc, "_plan_checkpoint_touched", lambda *_a: frozenset())
     run = _tree(tmp_path, [OWN])
     assert _terminal(tmp_path, run, [OWN]) is None
 
 
-def test_terminal_commit_still_refuses_foreign_dirt_beside_it(tmp_path, monkeypatch):
+def test_terminal_commit_still_refuses_foreign_dirt_beside_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tc, "_plan_checkpoint_touched", lambda *_a: frozenset())
     run = _tree(tmp_path, [OWN])
     out = _terminal(tmp_path, run, [OWN, FOREIGN])
     assert out["ledger_failures"][0]["reason"] == "pre-existing-dirt: foreign.py"
 
 
-def test_terminal_commit_without_a_prior_report_the_path_is_dirt(tmp_path, monkeypatch):
+def test_terminal_commit_without_a_prior_report_the_path_is_dirt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(tc, "_plan_checkpoint_touched", lambda *_a: frozenset())
     run = _tree(tmp_path, [OWN], prior=False)
     out = _terminal(tmp_path, run, [OWN])
     assert out["ledger_failures"][0]["reason"] == "pre-existing-dirt: own.py"
 
 
-def test_land_run_gate_credits_path_the_earlier_attempt_reported(tmp_path, monkeypatch):
+def test_land_run_gate_credits_path_the_earlier_attempt_reported(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run = _tree(tmp_path, [OWN])
     assert _land(tmp_path, monkeypatch, run, [OWN]) is None
 
 
-def test_land_run_gate_still_refuses_foreign_dirt_beside_it(tmp_path, monkeypatch):
+def test_land_run_gate_still_refuses_foreign_dirt_beside_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     run = _tree(tmp_path, [OWN])
     out = _land(tmp_path, monkeypatch, run, [OWN, FOREIGN])
     assert out is not None and out["refused"] == "ledger-unmet"
@@ -91,7 +93,7 @@ def test_land_run_gate_still_refuses_foreign_dirt_beside_it(tmp_path, monkeypatc
     assert "pre-existing-dirt: own.py" not in json.dumps(out)
 
 
-def test_report_naming_a_path_outside_the_rows_declared_writes_credits_nothing(tmp_path):
+def test_report_naming_a_path_outside_the_rows_declared_writes_credits_nothing(tmp_path: Path) -> None:
     _tree(tmp_path, [OWN, FOREIGN])
     assert wb.prior_attempt_reported(tmp_path, PLAN, [("C1", [OWN])]) == {OWN}
     assert wb.prior_attempt_reported(tmp_path, PLAN, [("C2", [OWN])]) == frozenset()

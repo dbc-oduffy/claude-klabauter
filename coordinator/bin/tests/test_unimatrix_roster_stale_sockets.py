@@ -6,6 +6,10 @@ import time
 from pathlib import Path
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 BIN = Path(__file__).resolve().parents[1]
 HEX_LIVE = "a" * 32
@@ -17,7 +21,7 @@ REMOTE = "example-operator@192.168.0.174"
 
 
 @pytest.fixture
-def roster(tmp_path, monkeypatch):
+def roster(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> "ModuleType":
     spec = importlib.util.spec_from_file_location("unimatrix_roster_stale", BIN / "unimatrix-roster.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -33,7 +37,7 @@ def roster(tmp_path, monkeypatch):
     return mod
 
 
-def sock(roster, hexname, age=3600):
+def sock(roster, hexname, age: int = 3600):
     p = roster.socks / f"cc-msg-{hexname}.sock"
     p.write_text("")
     old = time.time() - age
@@ -53,7 +57,7 @@ def live_entry(roster, name, endpoint):
     return entry(roster, me, name, endpoint, procStart=roster.proc_start(me))
 
 
-def test_socket_with_no_listed_owner_is_unlinked_and_a_listed_one_kept(roster):
+def test_socket_with_no_listed_owner_is_unlinked_and_a_listed_one_kept(roster) -> None:
     live, dead, orphan = sock(roster, HEX_LIVE), sock(roster, HEX_DEAD), sock(roster, HEX_ORPHAN)
     live_entry(roster, "me", live)
     entry(roster, 999981, "gone", dead, procStart="gone")
@@ -64,13 +68,13 @@ def test_socket_with_no_listed_owner_is_unlinked_and_a_listed_one_kept(roster):
     assert sum("unlinked stale socket" in m for m in lines) == 2
 
 
-def test_a_young_socket_is_spared_while_its_entry_may_not_exist_yet(roster):
+def test_a_young_socket_is_spared_while_its_entry_may_not_exist_yet(roster) -> None:
     young = sock(roster, HEX_NEW, age=0)
     roster.reap_orphaned_mirrors(REMOTE, lambda m: None)
     assert young.exists()
 
 
-def test_a_non_harness_name_is_never_unlinked(roster):
+def test_a_non_harness_name_is_never_unlinked(roster) -> None:
     other = roster.socks / "something-else.sock"
     other.write_text("")
     old = time.time() - 3600
@@ -79,14 +83,14 @@ def test_a_non_harness_name_is_never_unlinked(roster):
     assert other.exists()
 
 
-def test_unreadable_session_file_suspends_every_unlink(roster):
+def test_unreadable_session_file_suspends_every_unlink(roster) -> None:
     orphan = sock(roster, HEX_ORPHAN)
     (roster.sess / "1234.json").write_text("{not json", encoding="utf-8")
     roster.reap_orphaned_mirrors(REMOTE, lambda m: None)
     assert orphan.exists()
 
 
-def test_unknown_liveness_owner_is_marked_stale_and_its_socket_kept(roster):
+def test_unknown_liveness_owner_is_marked_stale_and_its_socket_kept(roster) -> None:
     held = sock(roster, HEX_UNKNOWN)
     path = roster.sess / "777.json"
     path.write_text(json.dumps({"pid": "x", "name": "odd", "messagingSocketPath": str(held)}), encoding="utf-8")
@@ -96,7 +100,7 @@ def test_unknown_liveness_owner_is_marked_stale_and_its_socket_kept(roster):
     assert d["unimatrixStale"] is True and not roster.entry_listed(d)
 
 
-def test_win32_pipe_entry_without_a_live_owner_is_marked_stale_not_deleted(roster):
+def test_win32_pipe_entry_without_a_live_owner_is_marked_stale_not_deleted(roster) -> None:
     pipe = "\\\\.\\pipe\\LOCAL\\cc-msg-" + HEX_DEAD
     path = entry(roster, 999982, "ghost", pipe, procStart="gone")
     roster.reap_orphaned_mirrors(REMOTE, lambda m: None)
@@ -104,21 +108,21 @@ def test_win32_pipe_entry_without_a_live_owner_is_marked_stale_not_deleted(roste
     assert d["unimatrixStale"] is True and not roster.entry_listed(d)
 
 
-def test_a_live_pipe_entry_is_not_marked_stale(roster):
+def test_a_live_pipe_entry_is_not_marked_stale(roster) -> None:
     pipe = "\\\\.\\pipe\\LOCAL\\cc-msg-" + HEX_LIVE
     path = live_entry(roster, "me", pipe)
     roster.reap_orphaned_mirrors(REMOTE, lambda m: None)
     assert "unimatrixStale" not in json.loads(path.read_text())
 
 
-def test_win32_never_unlinks_a_socket_file(roster, monkeypatch):
+def test_win32_never_unlinks_a_socket_file(roster, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(roster, "_is_win", lambda platform=None: True)
     orphan = sock(roster, HEX_ORPHAN)
     roster.reap_orphaned_mirrors(REMOTE, lambda m: None)
     assert orphan.exists()
 
 
-def test_a_live_unbacked_mirror_of_another_roster_keeps_its_socket(roster):
+def test_a_live_unbacked_mirror_of_another_roster_keeps_its_socket(roster) -> None:
     held = sock(roster, HEX_UNKNOWN)
     me = os.getpid()
     entry(roster, me, "far-mirror", held, procStart=roster.proc_start(me), unimatrixRemote="other@box",

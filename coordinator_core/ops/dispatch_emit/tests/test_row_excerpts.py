@@ -4,15 +4,17 @@ from coordinator_core.ops.dispatch_emit.executor_economy import (
     EXCERPT_MAX_BYTES,
     EXCERPT_MAX_SYMBOLS_PER_FILE,
 )
+from pathlib import Path
+import pytest
 
 SAMPLE = "import os\n\ndef a():\n    return 1\n\nclass B:\n    def inner(self):\n        pass\n\nasync def c():\n    pass\n"
 
 
-def test_symbol_spans_top_level_only():
+def test_symbol_spans_top_level_only() -> None:
     assert re_.symbol_spans(SAMPLE) == [("a", 3, 5), ("B", 6, 9), ("c", 10, 11)]
 
 
-def test_block_lists_spans_and_named_first(tmp_path):
+def test_block_lists_spans_and_named_first(tmp_path: Path) -> None:
     (tmp_path / "m.py").write_text(SAMPLE, encoding="utf-8")
     out = re_.excerpt_block("touch c please", ["m.py"], tmp_path, "abc123", {})
     assert out.startswith(EXCERPT_HEADING)
@@ -21,12 +23,12 @@ def test_block_lists_spans_and_named_first(tmp_path):
     assert "abc123" in out
 
 
-def test_missing_and_non_py_list_path_only(tmp_path):
+def test_missing_and_non_py_list_path_only(tmp_path: Path) -> None:
     out = re_.excerpt_block("x", ["gone.py", "notes.md"], tmp_path, "h", {})
     assert "\ngone.py\n" in out and "\nnotes.md\n" in out
 
 
-def test_cache_scans_each_file_once(tmp_path, monkeypatch):
+def test_cache_scans_each_file_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "m.py").write_text(SAMPLE, encoding="utf-8")
     calls = []
     real = re_.symbol_spans
@@ -37,19 +39,19 @@ def test_cache_scans_each_file_once(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
-def test_byte_cap_truncates(tmp_path):
+def test_byte_cap_truncates(tmp_path: Path) -> None:
     out = re_.excerpt_block("y" * 5000, [], tmp_path, "h", {}, "docs/plans/p.md", "C1")
     assert len(out.encode("utf-8")) <= EXCERPT_MAX_BYTES
     assert "`docs/plans/p.md` row `C1`" in out
 
 
-def test_long_body_keeps_symbol_spans(tmp_path):
+def test_long_body_keeps_symbol_spans(tmp_path: Path) -> None:
     (tmp_path / "m.py").write_text(SAMPLE, encoding="utf-8")
     out = re_.excerpt_block("y" * 5000, ["m.py"], tmp_path, "h", {})
     assert "m.py: a L3-5" in out
 
 
-def test_symbol_cap(tmp_path):
+def test_symbol_cap(tmp_path: Path) -> None:
     src = "".join(f"def f{i}():\n    pass\n" for i in range(EXCERPT_MAX_SYMBOLS_PER_FILE + 10))
     (tmp_path / "big.py").write_text(src, encoding="utf-8")
     line = re_._file_line("big.py", tmp_path, "", {})

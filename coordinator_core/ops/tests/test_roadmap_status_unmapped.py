@@ -9,15 +9,16 @@ must emit a WARN naming the offending record.
 import logging
 
 from coordinator_core.ops.records_query import _normalize_roadmap_status
+import pytest
 
 
-def test_unmapped_status_defaults_to_planning():
+def test_unmapped_status_defaults_to_planning() -> None:
     fm = {"status": "some-unmapped-value"}
     _normalize_roadmap_status(fm, "roadmap")
     assert fm["status"] == "planning"
 
 
-def test_unmapped_status_emits_warn(caplog):
+def test_unmapped_status_emits_warn(caplog: pytest.LogCaptureFixture) -> None:
     fm = {"id": "roadmap-example", "status": "some-unmapped-value"}
     with caplog.at_level(logging.WARNING, logger="coordinator_core.ops.records_query"):
         _normalize_roadmap_status(fm, "roadmap")
@@ -27,7 +28,7 @@ def test_unmapped_status_emits_warn(caplog):
     )
 
 
-def test_mapped_status_emits_no_warn(caplog):
+def test_mapped_status_emits_no_warn(caplog: pytest.LogCaptureFixture) -> None:
     fm = {"id": "roadmap-example", "status": "draft"}
     with caplog.at_level(logging.WARNING, logger="coordinator_core.ops.records_query"):
         _normalize_roadmap_status(fm, "roadmap")

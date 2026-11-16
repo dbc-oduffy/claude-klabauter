@@ -34,6 +34,7 @@ from pathlib import Path
 
 from coordinator_core.ops.session import guard_settings_integrity as gsi
 from coordinator_core.resolve_coordinator_clone import ResolveCoordinatorCloneError
+import pytest
 
 
 def _raise_unresolvable() -> str:
@@ -87,7 +88,7 @@ def _settings_hooks_block(commands) -> dict:
     }
 
 
-def test_plugin_only_is_quiet(tmp_path, monkeypatch):
+def test_plugin_only_is_quiet(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
     _write_hooks_json(content_root, ["hooks/scripts/foo.py", "hooks/scripts/bar.py"])
@@ -122,7 +123,7 @@ def test_plugin_only_is_quiet(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_settings_only_with_unresolvable_root_is_indeterminate(tmp_path, monkeypatch):
+def test_settings_only_with_unresolvable_root_is_indeterminate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gsi, "resolve_content_root", _raise_unresolvable)
 
     script = tmp_path / "scripts" / "baked-foo.py"
@@ -154,7 +155,7 @@ def test_settings_only_with_unresolvable_root_is_indeterminate(tmp_path, monkeyp
     assert "no coordinator content root on this (test) machine" in banner
 
 
-def test_neither_present_is_quiet(tmp_path, monkeypatch):
+def test_neither_present_is_quiet(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gsi, "resolve_content_root", _raise_unresolvable)
 
     config_dir = tmp_path / "config"
@@ -171,7 +172,7 @@ def test_neither_present_is_quiet(tmp_path, monkeypatch):
     assert gsi.evaluate_hook_delivery_duplication(config_dir) == ""
 
 
-def test_full_overlap_is_double_fire(tmp_path, monkeypatch):
+def test_full_overlap_is_double_fire(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
     _write_hooks_json(content_root, ["hooks/scripts/foo.py", "hooks/scripts/bar.py"])
@@ -225,7 +226,7 @@ def test_full_overlap_is_double_fire(tmp_path, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_overlap_detected_across_two_distinct_resolvable_roots(tmp_path, monkeypatch):
+def test_overlap_detected_across_two_distinct_resolvable_roots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plugin_root = tmp_path / "plugin-root"
     plugin_root.mkdir()
     _write_hooks_json(plugin_root, ["hooks/scripts/foo.py", "hooks/scripts/bar.py"])
@@ -270,7 +271,7 @@ def test_overlap_detected_across_two_distinct_resolvable_roots(tmp_path, monkeyp
 # ---------------------------------------------------------------------------
 
 
-def test_partial_overlap_reports_honestly(tmp_path, monkeypatch):
+def test_partial_overlap_reports_honestly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
     _write_hooks_json(
@@ -311,7 +312,7 @@ def test_partial_overlap_reports_honestly(tmp_path, monkeypatch):
     assert "declared ONLY in settings.json" in banner
 
 
-def test_detect_and_evaluate_never_write_anything(tmp_path, monkeypatch):
+def test_detect_and_evaluate_never_write_anything(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
     _write_hooks_json(content_root, ["hooks/scripts/foo.py"])
@@ -342,7 +343,7 @@ def test_detect_and_evaluate_never_write_anything(tmp_path, monkeypatch):
     assert not kill_switch.exists()
 
 
-def test_settings_only_script_reported_and_excluded_from_duplicated(tmp_path, monkeypatch):
+def test_settings_only_script_reported_and_excluded_from_duplicated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
     _write_hooks_json(content_root, ["hooks/scripts/foo.py"])
@@ -371,7 +372,7 @@ def test_settings_only_script_reported_and_excluded_from_duplicated(tmp_path, mo
     assert str(only_settings_script.resolve()) not in report.duplicated_scripts
 
 
-def test_double_fire_unchanged_by_settings_only_presence(tmp_path, monkeypatch):
+def test_double_fire_unchanged_by_settings_only_presence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
     _write_hooks_json(content_root, ["hooks/scripts/foo.py"])
@@ -418,7 +419,7 @@ def test_double_fire_unchanged_by_settings_only_presence(tmp_path, monkeypatch):
     assert report2.double_fire is False
 
 
-def test_banner_renders_settings_only_danger_when_disjoint(tmp_path, monkeypatch):
+def test_banner_renders_settings_only_danger_when_disjoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
     _write_hooks_json(content_root, ["hooks/scripts/bar.py"])
@@ -450,7 +451,7 @@ def test_banner_renders_settings_only_danger_when_disjoint(tmp_path, monkeypatch
     assert "HOOKS ARE FIRING TWICE" not in banner
 
 
-def test_banner_with_settings_only_omits_remove_instruction(tmp_path, monkeypatch):
+def test_banner_with_settings_only_omits_remove_instruction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
     _write_hooks_json(content_root, ["hooks/scripts/foo.py"])
@@ -482,7 +483,7 @@ def test_banner_with_settings_only_omits_remove_instruction(tmp_path, monkeypatc
     assert "DO NOT DELETE" in banner
 
 
-def test_banner_without_settings_only_keeps_original_removal_instruction(tmp_path, monkeypatch):
+def test_banner_without_settings_only_keeps_original_removal_instruction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
     _write_hooks_json(content_root, ["hooks/scripts/foo.py", "hooks/scripts/bar.py"])
@@ -549,8 +550,8 @@ def _write_hooks_json_with_manifest(
 
 
 def test_carrier_delivered_settings_entries_are_double_fire_not_settings_only(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
     manifest_block = {
@@ -608,8 +609,8 @@ def test_carrier_delivered_settings_entries_are_double_fire_not_settings_only(
 
 
 def test_no_manifest_result_fields_byte_identical_to_filename_comparison(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
     _write_hooks_json(
@@ -644,7 +645,7 @@ def test_no_manifest_result_fields_byte_identical_to_filename_comparison(
     assert report.resurrected_decisions == ()
 
 
-def test_degraded_banner_applicable_mirrors_indeterminate_shape(tmp_path, monkeypatch):
+def test_degraded_banner_applicable_mirrors_indeterminate_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
     _write_hooks_json(content_root, ["hooks/scripts/foo.py"])
@@ -660,8 +661,8 @@ def test_degraded_banner_applicable_mirrors_indeterminate_shape(tmp_path, monkey
 
 
 def test_degraded_banner_renders_when_no_manifest_and_no_other_finding(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
     _write_hooks_json(content_root, ["hooks/scripts/foo.py"])
@@ -686,7 +687,7 @@ def test_degraded_banner_renders_when_no_manifest_and_no_other_finding(
     assert report.degraded is True
 
 
-def test_standalone_degraded_banner_when_nothing_else_to_report(tmp_path, monkeypatch):
+def test_standalone_degraded_banner_when_nothing_else_to_report(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # This test previously
     # asserted the standalone-degraded state was "not achievable without
     # settings entries" and unit-tested `format_hook_delivery_banner`
@@ -721,7 +722,7 @@ def test_standalone_degraded_banner_when_nothing_else_to_report(tmp_path, monkey
     assert "DETECT-ONLY" in banner
 
 
-def test_standalone_degraded_banner_reachable_end_to_end(tmp_path, monkeypatch):
+def test_standalone_degraded_banner_reachable_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
     _write_hooks_json(content_root, ["hooks/scripts/foo.py"])
@@ -755,7 +756,7 @@ def test_standalone_degraded_banner_reachable_end_to_end(tmp_path, monkeypatch):
     assert "DETECT-ONLY" in banner
 
 
-def test_stale_manifest_names_unaccounted_command(tmp_path, monkeypatch):
+def test_stale_manifest_names_unaccounted_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
     manifest_block = {"version": 1, "carriers": {}, "direct": [], "retired": []}
@@ -790,7 +791,7 @@ def test_stale_manifest_names_unaccounted_command(tmp_path, monkeypatch):
     )
 
 
-def test_standalone_stale_banner_names_unaccounted_command():
+def test_standalone_stale_banner_names_unaccounted_command() -> None:
     report = gsi.HookDeliveryReport(
         plugin_present=True,
         plugin_resolvable=True,
@@ -811,7 +812,7 @@ def test_standalone_stale_banner_names_unaccounted_command():
     assert "nothing is firing twice today" not in banner
 
 
-def test_standalone_stale_banner_reachable_end_to_end(tmp_path, monkeypatch):
+def test_standalone_stale_banner_reachable_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
     manifest_block = {"version": 1, "carriers": {}, "direct": [], "retired": []}
@@ -846,8 +847,8 @@ def test_standalone_stale_banner_reachable_end_to_end(tmp_path, monkeypatch):
 
 
 def test_resurrected_decision_reported_distinct_from_duplicate_and_settings_only(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
     manifest_block = {
@@ -895,7 +896,7 @@ def test_resurrected_decision_reported_distinct_from_duplicate_and_settings_only
     assert "NOT the" in banner and "kill-switch" in banner
 
 
-def test_settings_only_scripts_defaults_empty_when_surfaces_not_both_present(tmp_path, monkeypatch):
+def test_settings_only_scripts_defaults_empty_when_surfaces_not_both_present(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gsi, "resolve_content_root", _raise_unresolvable)
 
     script = tmp_path / "scripts" / "baked-foo.py"
@@ -938,8 +939,8 @@ def _shared_double_fire_fixture(tmp_path, monkeypatch) -> Path:
 
 
 def test_double_fire_banner_and_kill_switch_detail_agree_on_shared_fixture(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     config_dir = _shared_double_fire_fixture(tmp_path, monkeypatch)
 
     report = gsi.detect_hook_delivery_duplication(config_dir)
@@ -954,7 +955,7 @@ def test_double_fire_banner_and_kill_switch_detail_agree_on_shared_fixture(
     assert "could not be checked" not in kill_switch_detail_line
 
 
-def test_plugin_live_branch_agrees_with_generate_s_own_refusal(tmp_path, monkeypatch):
+def test_plugin_live_branch_agrees_with_generate_s_own_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.install import gen_settings_hooks
 
     content_root = tmp_path / "plugin-root"
@@ -997,8 +998,8 @@ def test_plugin_live_branch_agrees_with_generate_s_own_refusal(tmp_path, monkeyp
 
 
 def test_resurrected_decision_renders_additively_alongside_double_fire(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     content_root = tmp_path / "plugin-root"
     content_root.mkdir()
     manifest_block = {

@@ -64,6 +64,7 @@ from coordinator_core.tests.test_no_uncounted_spawn_on_budgeted_path import (
 from coordinator_core.tests.test_no_unbatched_per_item_git_spawn import (
     find_unbatched_per_item_spawns,
 )
+from pathlib import Path
 
 #: Sized only to separate this module's own two planted fixtures (six unrolled spawns vs. one
 #: batched spawn) -- see module docstring's "NON-GATING, PENDING AC11" section. Never AC11's
@@ -128,7 +129,7 @@ def _plant_batched_form(tmp_path: pathlib.Path) -> None:
     )
 
 
-def test_loop_free_amplification_exceeds_budget_and_the_loop_gate_is_blind_to_it(tmp_path):
+def test_loop_free_amplification_exceeds_budget_and_the_loop_gate_is_blind_to_it(tmp_path: Path) -> None:
     """AC7. The red fixture's summed composition cost exceeds `_FIXTURE_SPAWN_BUDGET` with no
     loop anywhere in `entry.py` -- and `find_unbatched_per_item_spawns`, the shipped per-item-loop
     gate, returns EMPTY for the same fixture. That single assertion is what converts "the shipped
@@ -150,7 +151,7 @@ def test_loop_free_amplification_exceeds_budget_and_the_loop_gate_is_blind_to_it
     )
 
 
-def test_batched_form_clears_the_same_budget(tmp_path):
+def test_batched_form_clears_the_same_budget(tmp_path: Path) -> None:
     """AC8. The negative control: identical work, batched into one invocation, clears
     `_FIXTURE_SPAWN_BUDGET` -- proving the instrument discriminates rather than merely firing on
     any spawn-bearing fixture."""

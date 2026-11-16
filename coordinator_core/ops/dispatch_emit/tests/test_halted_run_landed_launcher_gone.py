@@ -27,12 +27,12 @@ def _git(repo: Path, *args: str) -> str:
 
 
 @pytest.fixture(autouse=True)
-def _no_launch(monkeypatch):
+def _no_launch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(op, "_launch", lambda root, run_id: True)
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> tuple[Path, str]:
     _git(tmp_path, "init", "-q")
     (tmp_path / "one").write_text("one", encoding="utf-8")
     _git(tmp_path, "add", "--", "one")
@@ -48,7 +48,7 @@ def _status(root: Path) -> str:
     return json.loads((root / c.status_rel(RID)).read_text(encoding="utf-8"))["status"]
 
 
-def test_running_without_live_token_records_landed(repo):
+def test_running_without_live_token_records_landed(repo) -> None:
     root, sha = repo
     assert not run_token.is_live(root, RID)
     out = op._handler({"run_id": RID, "sha": sha}, root)
@@ -56,7 +56,7 @@ def test_running_without_live_token_records_landed(repo):
     assert _status(root) == "landed"
 
 
-def test_running_with_live_token_still_refuses(repo):
+def test_running_with_live_token_still_refuses(repo) -> None:
     root, sha = repo
     run_token.mint(root, RID, "scratch/x.py")
     assert run_token.is_live(root, RID)
@@ -65,7 +65,7 @@ def test_running_with_live_token_still_refuses(repo):
     assert _status(root) == "running"
 
 
-def test_gone_launcher_still_needs_a_reachable_sha(repo):
+def test_gone_launcher_still_needs_a_reachable_sha(repo) -> None:
     root, _ = repo
     out = op._handler({"run_id": RID, "sha": "f" * 40}, root)
     assert not out["ok"]
@@ -80,7 +80,7 @@ def _stage(root: Path, stage: str) -> None:
     (d / "run-stage.json").write_text(json.dumps({"stage": stage}), encoding="utf-8")
 
 
-def test_running_with_live_token_but_halted_stage_records_landed(repo):
+def test_running_with_live_token_but_halted_stage_records_landed(repo) -> None:
     root, sha = repo
     run_token.mint(root, RID, "scratch/x.py")
     _stage(root, "halted")
@@ -90,7 +90,7 @@ def test_running_with_live_token_but_halted_stage_records_landed(repo):
     assert _status(root) == "landed"
 
 
-def test_running_with_live_token_and_staged_stage_still_refuses(repo):
+def test_running_with_live_token_and_staged_stage_still_refuses(repo) -> None:
     root, sha = repo
     run_token.mint(root, RID, "scratch/x.py")
     _stage(root, "staged")

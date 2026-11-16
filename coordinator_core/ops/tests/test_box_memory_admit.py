@@ -22,51 +22,51 @@ class _Status:
 class _Host:
     GIB = GIB
 
-    def __init__(self, avail_gib, reserved_gib=0.0):
+    def __init__(self, avail_gib, reserved_gib: float = 0.0) -> None:
         self.status = _Status(int(avail_gib * GIB))
         self.reserved = int(reserved_gib * GIB)
         self.rows = {}
         self.locked = 0
 
-    def admission_file(self):
+    def admission_file(self) -> str:
         return "fake-admission"
 
-    def read_recorded_peak(self, path, key):
+    def read_recorded_peak(self, path, key) -> None:
         return None
 
-    def read_memory_status(self):
+    def read_memory_status(self) -> _Status:
         return self.status
 
     def admission_lock(self, path):
         host = self
 
         class _Lock:
-            def __enter__(self):
+            def __enter__(self) -> None:
                 host.locked += 1
 
-            def __exit__(self, *a):
+            def __exit__(self, *a) -> bool:
                 return False
 
         return _Lock()
 
-    def reserved_bytes(self, path):
+    def reserved_bytes(self, path) -> int:
         return self.reserved
 
-    def admit(self, peak_bytes, status):
+    def admit(self, peak_bytes, status) -> SimpleNamespace:
         return SimpleNamespace(admit=status.avail_phys >= peak_bytes, need_avail=peak_bytes)
 
     def top_holders(self, path, n):
         return []
 
-    def register_command(self, path, key, pid, peak_gib):
+    def register_command(self, path, key, pid, peak_gib) -> None:
         self.rows[(key, pid)] = peak_gib
 
-    def release_command(self, path, key, pid):
+    def release_command(self, path, key, pid) -> None:
         self.rows.pop((key, pid), None)
 
 
 @pytest.fixture
-def host(monkeypatch):
+def host(monkeypatch: pytest.MonkeyPatch) -> _Host:
     h = _Host(avail_gib=8)
     monkeypatch.setattr(hcc, "_load_box_memory_host", lambda: h)
     return h
@@ -78,7 +78,7 @@ _REAL = hcc._load_box_memory_host()
 class _CpuHost(_Host):
     """The fake host plus the real CPU-axis fold, over a fixed reserved-cores sum."""
 
-    def __init__(self, reserved_cores=0, **kw):
+    def __init__(self, reserved_cores: int = 0, **kw) -> None:
         super().__init__(**kw)
         self.reserved_core_sum = reserved_cores
         self.rows_cores = {}
@@ -87,32 +87,32 @@ class _CpuHost(_Host):
         ok = status.avail_phys >= peak_bytes
         return _REAL.AdmitVerdict(admit=ok, need_avail=peak_bytes, avail_ok=ok, commit_ok=True)
 
-    def reserved_cores(self, path):
+    def reserved_cores(self, path) -> int:
         return self.reserved_core_sum
 
     def _with_cpu_axis(self, verdict, declared, reserved, budget):
         return _REAL._with_cpu_axis(verdict, declared, reserved, budget)
 
-    def register_command(self, path, key, pid, peak_gib, cores=1):
+    def register_command(self, path, key, pid, peak_gib, cores: int = 1) -> None:
         self.rows[(key, pid)] = peak_gib
         self.rows_cores[(key, pid)] = cores
 
 
 @pytest.fixture
-def cpu_host(monkeypatch):
+def cpu_host(monkeypatch: pytest.MonkeyPatch) -> _CpuHost:
     h = _CpuHost(avail_gib=8, reserved_cores=3)
     monkeypatch.setattr(hcc, "_load_box_memory_host", lambda: h)
     monkeypatch.setattr(_REAL, "default_cpu_budget", lambda: 4)
     return h
 
 
-def test_admit_holds_on_the_cpu_axis_when_declared_plus_reserved_exceed_the_budget(cpu_host):
+def test_admit_holds_on_the_cpu_axis_when_declared_plus_reserved_exceed_the_budget(cpu_host) -> None:
     r = _call("box_memory.admit", {"key": "k", "default_peak_gib": 1.0, "register_pid": 9, "cores": 2})["result"]
     assert r["admitted"] is False and r["reason"].startswith("HOLD k: cpu: declared 2 + reserved 3")
     assert cpu_host.rows == {}
 
 
-def test_admit_at_the_cpu_budget_admits_and_records_the_declared_cores(cpu_host):
+def test_admit_at_the_cpu_budget_admits_and_records_the_declared_cores(cpu_host) -> None:
     r = _call("box_memory.admit", {"key": "k", "default_peak_gib": 1.0, "register_pid": 9, "cores": 1})["result"]
     assert r["admitted"] is True and cpu_host.rows_cores == {("k", 9): 1}
     cpu_host.reserved_core_sum = 2
@@ -120,7 +120,7 @@ def test_admit_at_the_cpu_budget_admits_and_records_the_declared_cores(cpu_host)
     assert r["admitted"] is True and cpu_host.rows_cores[("j", 8)] == 2
 
 
-def test_admit_without_cores_counts_as_one_core(cpu_host):
+def test_admit_without_cores_counts_as_one_core(cpu_host) -> None:
     cpu_host.reserved_core_sum = 4
     r = _call("box_memory.admit", {"key": "k", "default_peak_gib": 1.0})["result"]
     assert r["admitted"] is False and "declared 1 + reserved 4" in r["reason"]
@@ -128,7 +128,7 @@ def test_admit_without_cores_counts_as_one_core(cpu_host):
     assert _call("box_memory.admit", {"key": "k", "default_peak_gib": 1.0})["result"]["admitted"] is True
 
 
-def test_admit_rejects_a_non_positive_cores(cpu_host):
+def test_admit_rejects_a_non_positive_cores(cpu_host) -> None:
     assert "error" in _call("box_memory.admit", {"key": "k", "default_peak_gib": 1.0, "cores": 0})
 
 
@@ -137,7 +137,7 @@ def _call(method, params):
     return asyncio.run(ipc.dispatch_message(msg))
 
 
-def test_every_op_is_registered_in_every_registry():
+def test_every_op_is_registered_in_every_registry() -> None:
     from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass
     from coordinator_core.op_scopes import _OP_KEY_SCOPE
     from coordinator_core.ops import _EAGER_OP_MODULES
@@ -152,7 +152,7 @@ def test_every_op_is_registered_in_every_registry():
         assert OP_CLASSIFICATION[op] is OpClass.MUTATING
 
 
-def test_admit_returns_the_measured_verdict_and_writes_the_reservation(host):
+def test_admit_returns_the_measured_verdict_and_writes_the_reservation(host) -> None:
     d = _call("box_memory.admit", {"key": "k", "default_peak_gib": 1.0, "register_pid": 9})
     assert "error" not in d
     r = d["result"]
@@ -162,26 +162,26 @@ def test_admit_returns_the_measured_verdict_and_writes_the_reservation(host):
     assert host.locked == 1
 
 
-def test_admit_without_register_pid_writes_nothing(host):
+def test_admit_without_register_pid_writes_nothing(host) -> None:
     r = _call("box_memory.admit", {"key": "k", "default_peak_gib": 1.0})["result"]
     assert r["admitted"] is True and host.rows == {}
 
 
-def test_admit_refuses_with_a_hold_when_headroom_is_short_and_writes_nothing(host):
+def test_admit_refuses_with_a_hold_when_headroom_is_short_and_writes_nothing(host) -> None:
     host.reserved = int(7.5 * GIB)
     r = _call("box_memory.admit", {"key": "k", "default_peak_gib": 4.0, "register_pid": 9})["result"]
     assert r["admitted"] is False and r["measured"] is True and r["reason"].startswith("HOLD k")
     assert host.rows == {}
 
 
-def test_admit_never_waits_for_a_slot(host, monkeypatch):
+def test_admit_never_waits_for_a_slot(host, monkeypatch: pytest.MonkeyPatch) -> None:
     host.status = _Status(0)
     monkeypatch.setattr(hcc, "_wait_for_slot", lambda *a, **k: pytest.fail("slot wait inside the engine"))
     r = _call("box_memory.admit", {"key": "k", "default_peak_gib": 64.0, "register_pid": 9, "session_id": "s"})["result"]
     assert r["admitted"] is False
 
 
-def test_a_host_permission_error_is_an_error_envelope_not_an_admit(host, monkeypatch):
+def test_a_host_permission_error_is_an_error_envelope_not_an_admit(host, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom():
         raise PermissionError("denied")
 
@@ -199,19 +199,19 @@ def test_a_host_permission_error_is_an_error_envelope_not_an_admit(host, monkeyp
     {"key": "k", "default_peak_gib": 1.0, "register_pid": True},
     {"key": "k", "default_peak_gib": 0},
 ])
-def test_admit_rejects_malformed_params(host, params):
+def test_admit_rejects_malformed_params(host, params) -> None:
     d = _call("box_memory.admit", params)
     assert "error" in d and host.rows == {}
 
 
-def test_register_then_release_round_trip(host):
+def test_register_then_release_round_trip(host) -> None:
     assert _call("box_memory.register", {"key": "k", "peak_gib": 2.0, "pid": 5})["result"] == {"ok": True}
     assert host.rows == {("k", 5): 2.0}
     assert _call("box_memory.release", {"key": "k", "pid": 5})["result"] == {"ok": True}
     assert host.rows == {}
 
 
-def test_register_reports_a_write_failure_as_not_ok(host, monkeypatch):
+def test_register_reports_a_write_failure_as_not_ok(host, monkeypatch: pytest.MonkeyPatch) -> None:
     def fail(*a):
         raise OSError("disk")
 
@@ -219,7 +219,7 @@ def test_register_reports_a_write_failure_as_not_ok(host, monkeypatch):
     assert _call("box_memory.register", {"key": "k", "peak_gib": 2.0, "pid": 5})["result"] == {"ok": False}
 
 
-def test_release_of_an_unwritable_file_still_reports_ok(host, monkeypatch):
+def test_release_of_an_unwritable_file_still_reports_ok(host, monkeypatch: pytest.MonkeyPatch) -> None:
     def fail(*a):
         raise OSError("disk")
 
@@ -228,7 +228,7 @@ def test_release_of_an_unwritable_file_still_reports_ok(host, monkeypatch):
 
 
 @pytest.fixture
-def dials(monkeypatch):
+def dials(monkeypatch: pytest.MonkeyPatch):
     calls, rows = [], []
     monkeypatch.setattr(hcc, "_engine_call", lambda method, params: calls.append(method))
     from coordinator_core.warm import telemetry
@@ -241,7 +241,7 @@ def _deny(*a):
     raise PermissionError("sandbox denied")
 
 
-def test_in_engine_admit_with_a_denied_reservation_write_never_dials_the_engine(host, monkeypatch, dials):
+def test_in_engine_admit_with_a_denied_reservation_write_never_dials_the_engine(host, monkeypatch: pytest.MonkeyPatch, dials) -> None:
     calls, rows = dials
     monkeypatch.setattr(host, "register_command", _deny)
     r = _call("box_memory.admit", {"key": "k", "default_peak_gib": 1.0, "register_pid": 9})["result"]
@@ -250,7 +250,7 @@ def test_in_engine_admit_with_a_denied_reservation_write_never_dials_the_engine(
     assert rows == [{"key": "k", "pid": 9}]
 
 
-def test_in_engine_register_and_release_permission_errors_never_dial_the_engine(host, monkeypatch, dials):
+def test_in_engine_register_and_release_permission_errors_never_dial_the_engine(host, monkeypatch: pytest.MonkeyPatch, dials) -> None:
     calls, rows = dials
     monkeypatch.setattr(host, "register_command", _deny)
     monkeypatch.setattr(host, "release_command", _deny)
@@ -261,7 +261,7 @@ def test_in_engine_register_and_release_permission_errors_never_dial_the_engine(
     assert len(rows) == 2
 
 
-def test_in_engine_admit_before_spawn_takes_the_advisory_arm(host, monkeypatch, dials):
+def test_in_engine_admit_before_spawn_takes_the_advisory_arm(host, monkeypatch: pytest.MonkeyPatch, dials) -> None:
     calls, rows = dials
     monkeypatch.setattr(host, "read_memory_status", _deny)
     with hcc.in_engine():
@@ -271,7 +271,7 @@ def test_in_engine_admit_before_spawn_takes_the_advisory_arm(host, monkeypatch, 
     assert rows == [{"key": "k", "pid": 9}]
 
 
-def test_outside_the_engine_the_permission_error_arms_still_dial(host, monkeypatch, dials):
+def test_outside_the_engine_the_permission_error_arms_still_dial(host, monkeypatch: pytest.MonkeyPatch, dials) -> None:
     calls, rows = dials
     monkeypatch.setattr(host, "register_command", _deny)
     monkeypatch.setattr(host, "release_command", _deny)

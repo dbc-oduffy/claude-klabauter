@@ -12,9 +12,10 @@ from coordinator_core.bash_guards._heavy_admission_contract import (
     KEY_SESSION_HEAVY_CAP,
     MACHINE_LOCAL_KEYS,
 )
+import pytest
 
 
-def test_small_laptop_total():
+def test_small_laptop_total() -> None:
     d = seed.derive_defaults(16 * 1024)
     assert set(d) == set(MACHINE_LOCAL_KEYS)
     assert d[KEY_FREE_RAM_FLOOR_MB] == 1638
@@ -23,11 +24,11 @@ def test_small_laptop_total():
     assert d[KEY_LEASE_RESERVE_MB] == 1024
 
 
-def test_tiny_total_floors_at_minimum():
+def test_tiny_total_floors_at_minimum() -> None:
     assert seed.derive_defaults(4 * 1024)[KEY_FREE_RAM_FLOOR_MB] == 1536
 
 
-def test_96gb_total():
+def test_96gb_total() -> None:
     d = seed.derive_defaults(96 * 1024)
     assert d[KEY_FREE_RAM_FLOOR_MB] == 8192
     assert d[KEY_SESSION_HEAVY_CAP] == 3
@@ -35,14 +36,14 @@ def test_96gb_total():
     assert d[KEY_LEASE_RESERVE_MB] == 2048
 
 
-def test_seeds_all_when_absent():
+def test_seeds_all_when_absent() -> None:
     store: dict = {}
     written = seed.seed_if_absent(32 * 1024, get=lambda: dict(store), put=lambda k, v: store.update({k: v}))
     assert set(written) == set(MACHINE_LOCAL_KEYS)
     assert store[KEY_SESSION_HEAVY_CAP] == "2"
 
 
-def test_never_overwrites_operator_value():
+def test_never_overwrites_operator_value() -> None:
     store = {KEY_FREE_RAM_FLOOR_MB: "99999"}
     written = seed.seed_if_absent(32 * 1024, get=lambda: dict(store), put=lambda k, v: store.update({k: v}))
     assert KEY_FREE_RAM_FLOOR_MB not in written
@@ -50,21 +51,21 @@ def test_never_overwrites_operator_value():
     assert set(written) == set(MACHINE_LOCAL_KEYS) - {KEY_FREE_RAM_FLOOR_MB}
 
 
-def test_unreadable_total_writes_nothing(monkeypatch):
+def test_unreadable_total_writes_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(seed, "_host_total_mb", lambda: None)
     calls: list = []
     assert seed.seed_if_absent(get=dict, put=lambda k, v: calls.append(k)) == {}
     assert calls == []
 
 
-def test_write_failure_skips_key():
+def test_write_failure_skips_key() -> None:
     def put(k, v):
         raise OSError("ro")
 
     assert seed.seed_if_absent(16 * 1024, get=dict, put=put) == {}
 
 
-def test_no_spawn(monkeypatch):
+def test_no_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("spawned")
 

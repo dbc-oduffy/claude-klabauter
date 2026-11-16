@@ -9,6 +9,7 @@ import subprocess
 from pathlib import Path
 
 from coordinator_core.ops import weekly_picker
+import pytest
 
 MONDAY = datetime.date(2026, 11, 9)
 
@@ -36,7 +37,7 @@ def _make_db(path: Path, rows: list, previews: dict) -> None:
     conn.close()
 
 
-def _view_fixture(tmp_path: Path):
+def _view_fixture(tmp_path: Path) -> tuple[Path, Path]:
     repo = tmp_path / "repo"
     repo.mkdir()
     _daily(repo, "2026-11-09", ["- [S] `docs/plans/small.md` did a small thing"])
@@ -59,7 +60,7 @@ def _view_fixture(tmp_path: Path):
     return repo, db
 
 
-def test_ranks_by_sizing_then_date_with_unsized_after_xs(tmp_path):
+def test_ranks_by_sizing_then_date_with_unsized_after_xs(tmp_path: Path) -> None:
     repo, db = _view_fixture(tmp_path)
     packet = weekly_picker.build_packet(repo, MONDAY, index_path=db)
     assert [c["plan"] for c in packet["candidates"]] == [
@@ -69,7 +70,7 @@ def test_ranks_by_sizing_then_date_with_unsized_after_xs(tmp_path):
     assert first["sha"] == "b2" and "big thing" in first["daily_line"]
 
 
-def test_preview_capped_and_unmatched_counted(tmp_path):
+def test_preview_capped_and_unmatched_counted(tmp_path: Path) -> None:
     repo, db = _view_fixture(tmp_path)
     packet = weekly_picker.build_packet(repo, MONDAY, index_path=db)
     assert all(len(c["preview"]) <= 10000 for c in packet["candidates"])
@@ -77,7 +78,7 @@ def test_preview_capped_and_unmatched_counted(tmp_path):
     assert packet["unmatched"] == 1  # unnamed.md completed but in no daily line
 
 
-def test_tokens_and_chars_reported_and_nudge_present(tmp_path):
+def test_tokens_and_chars_reported_and_nudge_present(tmp_path: Path) -> None:
     repo, db = _view_fixture(tmp_path)
     packet = weekly_picker.build_packet(repo, MONDAY, index_path=db)
     assert packet["tokens"] > 0 and packet["chars"] > 10000
@@ -87,14 +88,14 @@ def test_tokens_and_chars_reported_and_nudge_present(tmp_path):
     assert "skim" in packet["nudge"].lower()
 
 
-def test_days_outside_the_week_are_not_read(tmp_path):
+def test_days_outside_the_week_are_not_read(tmp_path: Path) -> None:
     repo, db = _view_fixture(tmp_path)
     _daily(repo, "2026-11-16", ["- [XL] `docs/plans/nextweek.md` out of window"])
     packet = weekly_picker.build_packet(repo, MONDAY, index_path=db)
     assert "docs/plans/nextweek.md" not in [c["plan"] for c in packet["candidates"]]
 
 
-def test_git_fallback_builds_packet_with_deleted_plan(tmp_path):
+def test_git_fallback_builds_packet_with_deleted_plan(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     (repo / "docs" / "plans").mkdir(parents=True)
     _git(repo.parent, "init", str(repo))  # git -C <parent> init <repo>
@@ -114,12 +115,12 @@ def test_git_fallback_builds_packet_with_deleted_plan(tmp_path):
     assert cand["sizing"] is None and len(cand["preview"]) <= 10000
 
 
-def test_default_week_is_last_monday():
+def test_default_week_is_last_monday() -> None:
     assert weekly_picker.default_week(datetime.date(2026, 11, 13)) == datetime.date(2026, 11, 9)
     assert weekly_picker.default_week(datetime.date(2026, 11, 16)) == datetime.date(2026, 11, 9)
 
 
-def test_cli_emits_json(tmp_path, capsys):
+def test_cli_emits_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo, db = _view_fixture(tmp_path)
     rc = weekly_picker.main(["--week", "2026-11-09", "--repo", str(repo), "--index-path", str(db)])
     out = json.loads(capsys.readouterr().out)

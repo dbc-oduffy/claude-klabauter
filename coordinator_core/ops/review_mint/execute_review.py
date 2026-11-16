@@ -624,6 +624,30 @@ _PREP_BUSY_RETRIES = 5
 _PREP_INDETERMINATE_RETRIES = 2
 PREP_BUSY_HALT = "review.prep stayed busy after retries"
 PREP_MALFORMED_HALT = "review.prep reply carried a non-array slices"
+
+#: Total prep asks (first plus re-asks) for a reply with a null error, an empty slices array and
+#: product files: a transient empty freeze, not a refusal. Exhausting it halts with EMPTY_PREP_HALT.
+_PREP_EMPTY_ATTEMPTS = 4
+EMPTY_PREP_HALT = "review prep returned empty slices with a null error"
+_EMPTY_PREP_REFUSAL = (
+    "review prep kept returning an empty slices list with no error over a diff with product files; "
+    "refusing to continue unreviewed. Re-run the review prep, then resume."
+)
+
+#: Follows the prep binding. `_reviewPrep` is a const, so a re-ask replaces its fields in place.
+_PREP_EMPTY_RETRY_JS = (
+    "  const _prepEmptyNullError = (p) => !!(p && p.error == null && Array.isArray(p.slices) && !p.slices.length && "
+    "p.verdict !== 'single-reviewer-ok' && (p.product_files ?? 0) > 0);\n"
+    "  let _prepEmptyAttempts = 1;\n"
+    f"  while (_prepEmptyNullError(_reviewPrep) && _prepEmptyAttempts < {_PREP_EMPTY_ATTEMPTS}) {{ "
+    "_prepEmptyAttempts++; const _prepAgain = await _prepAsk(); if (!_prepAgain) break; "
+    "for (const k of Object.keys(_reviewPrep)) delete _reviewPrep[k]; Object.assign(_reviewPrep, _prepAgain); }\n"
+    "  if (_prepEmptyNullError(_reviewPrep)) "
+    f"return {{ halted: {_js_string_literal(EMPTY_PREP_HALT)} + ' (' + _prepEmptyAttempts + ' attempts; product_files: ' + "
+    "_reviewPrep.product_files + ')', "
+    f"reason: {_js_string_literal(_EMPTY_PREP_REFUSAL)}, "
+    "prep: _reviewPrep, wave: null, integration: null };\n"
+)
 REVIEW_MISSING_HALT = "review wave reply carried no review beside a successful prep"
 _PREP_BUSY_REFUSAL = (
     "A review-wave agent's review.prep call stayed busy past its retries, so its slice group was "
@@ -1044,13 +1068,41 @@ def _base_export_file(run_key: str, run_id: str, prep_slice_id: str) -> str:
     return f"scratch/reverify-base-export-{token}.txt"
 
 
-def _base_measure_clause(base_ref: str, owned_red_path: str = "", export_path: str = "") -> str:
+def _export_failing_file(run_key: str, run_id: str, prep_slice_id: str) -> str:
+    """Run-scoped scratch file the clean-export rerun output is saved to for ``export_failing_path``."""
+    token = re.sub(r"[^A-Za-z0-9._-]", "_", run_key or run_id or prep_slice_id) or "run"
+    return f"scratch/reverify-export-{token}.txt"
+
+
+def _export_rerun_clause(run_id: str, repo_root: Optional[str], export_failing_path: str) -> str:
+    """Prompt step re-running the failing ids ONCE in the run's clean export (HEAD plus its declared paths),
+    saving the output to ``export_failing_path``. Empty without a run id, so the prompt stays unchanged."""
+    if not run_id or not export_failing_path:
+        return ""
+    from coordinator_core.ops.dispatch_emit.ask_compose import _OVERLAY_VERIFY_MODULE, engine_module_command
+
+    root = repo_root or "."
+    command = engine_module_command(
+        _OVERLAY_VERIFY_MODULE, root, f"--export-run --run-id {run_id} --repo-root {Path(root).as_posix()} --"
+    )
+    return (
+        "First re-run the failing ids ONCE in the run's clean export, never the whole re-verify: "
+        f"`{command} python -m pytest -rf <the failing ids above>`, its combined output saved to "
+        f"`{export_failing_path}` (create `scratch/` first if absent; run it once). "
+        "An id that passes there is peer dirt in the shared tree, not a failure of this run. "
+    )
+
+
+def _base_measure_clause(
+    base_ref: str, owned_red_path: str = "", export_path: str = "", export_rerun: str = ""
+) -> str:
     """Prompt step measuring ``failing_at_base``: one reverify_base_measure run over the failing ids at the
     snapshot base (and HEAD), writing ``export_path`` (revert calls pass it as ``base_export_path``).
-    Empty-set fallback when the base is the unset placeholder.
+    ``export_rerun`` (the clean-export rerun step) leads the clause. Empty-set fallback when the base is
+    the unset placeholder.
 
     Its id placeholder must differ from step 4's "<all failing node ids>", which must appear exactly once."""
-    owned = _owned_red_clause(owned_red_path)
+    owned = export_rerun + _owned_red_clause(owned_red_path)
     if base_ref == "run_base_sha":
         return (
             "The run base is unset: pass `\"failing_at_base\":[]` on every revert call. "
@@ -1114,6 +1166,9 @@ def _reverify_phase(
     sidecars_js = _REVERIFY_SIDECARS_JS
     export_path = _base_export_file(run_key, run_id, prep_slice_id)
     base_path_arg = "" if base_ref == "run_base_sha" else f',"base_export_path":"{export_path}"'
+    export_failing_path = _export_failing_file(run_key, run_id, prep_slice_id) if run_id else ""
+    base_path_arg += f',"export_failing_path":"{export_failing_path}"' if export_failing_path else ""
+    export_rerun = _export_rerun_clause(run_id, repo_root, export_failing_path)
     if group_prefixes:
         prefixes = [*group_prefixes, prep_slice_id]
         list_calls = "; ".join(
@@ -1174,7 +1229,7 @@ def _reverify_phase(
             f"'{{{sliced},\"probe\":\"close\"}}'{repo_pin}`, even when that run errored. If close "
             "returns an error, return it as the sidecar's finding and do not call revert for that "
             "prefix.\n"
-            f"4. {_base_measure_clause(base_ref, owned_red_path, export_path)}"
+            f"4. {_base_measure_clause(base_ref, owned_red_path, export_path, export_rerun)}"
             f"Call review.reverify in revert mode for EVERY prefix, each time with the same "
             f"failing set (all failing node ids) and the same `failing_at_base`: `{invoke} review.reverify '{{{sliced},"
             f"\"failing\":[<all failing node ids>],\"failing_before\":[<that prefix's "
@@ -1230,7 +1285,7 @@ def _reverify_phase(
         f"Then ALWAYS call `{invoke} review.reverify "
         f"'{{{base_args},\"probe\":\"close\"}}'{repo_pin}`, even when that run errored. If close "
         "returns an error, return it as the sidecar's finding and do not call revert.\n"
-        f"4. {_base_measure_clause(base_ref, owned_red_path, export_path)}"
+        f"4. {_base_measure_clause(base_ref, owned_red_path, export_path, export_rerun)}"
         f"Call review.reverify in revert mode: `{invoke} review.reverify "
         f"'{{{base_args},\"failing\":[<failing node ids>],\"failing_before\":[<failing_before "
         f"ids>],\"failing_at_base\":[<failing_at_base ids>]{base_path_arg},\"failing_output\":{{<node id>:<its failing_detail message>}},\"sidecars\":[<the review_sidecars paths below>]}}'{repo_pin}` (add `session_id` "
@@ -1779,7 +1834,9 @@ def compose_execute_review(
                 prep_phase,
                 f"  phase({_js_string_literal(prep_phase)});\n"
                 + group_await
-                + f"  const _reviewPrep = await {_degrading(prep_call)};\n"
+                + f"  const _prepAsk = () => {_degrading(prep_call)};\n"
+                + "  const _reviewPrep = await _prepAsk();\n"
+                + _PREP_EMPTY_RETRY_JS
                 + (
                     f"  if (Array.isArray({slice_filter_js}) && {slice_filter_js}.length && _reviewPrep && "
                     f"Array.isArray(_reviewPrep.slices) && _reviewPrep.slices.some(s => {slice_filter_js}.includes(s?.id))) "

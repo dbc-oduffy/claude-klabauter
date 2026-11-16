@@ -9,6 +9,7 @@ reports it, so a submit-time caller does not refuse on a run it cannot read.
 from __future__ import annotations
 
 import contextlib
+import os
 import time
 from pathlib import Path, PurePosixPath
 from typing import Iterator, Mapping, Optional, Sequence
@@ -19,6 +20,21 @@ from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 
 def _norm(path: str) -> PurePosixPath:
     return PurePosixPath(path.replace("\\", "/").strip("/"))
+
+
+def _norm_s(path: str) -> str:
+    """`str(_norm(path))`; the pathlib object is built only for a path it would normalize."""
+    p = path.replace("\\", "/").strip("/")
+    if not p or "//" in p or "/./" in p or p.startswith("./") or p.endswith("/."):
+        return str(PurePosixPath(p))
+    return p
+
+
+def _ancestors_s(n: str) -> Iterator[str]:
+    """`n`'s parents nearest first, ending in `.` (none for `.`): `PurePosixPath(n).parents` as strings."""
+    while n != ".":
+        n = n.rpartition("/")[0] or "."
+        yield n
 
 
 def _footprint(root: Path, run_id: str) -> Optional[frozenset[str]]:
@@ -40,23 +56,51 @@ def manifest_footprint(manifest: Mapping) -> frozenset[str]:
 _INDEX_LOCK_SECONDS = 2.0
 
 
+def _stable_lock_target(index: Path) -> Path:
+    """A never-created sibling of `index` to key the lock on. `held_lock` keys its sidecar on
+    `realpath(target)`, and on Windows the realpath of a file a peer is atomically replacing comes
+    back `\\\\?\\`-prefixed: two peers then lock different sidecars and exclude nothing."""
+    return index.with_name(index.name + ".rmw")
+
+
 @contextlib.contextmanager
-def _index_lock(root: Path) -> Iterator[None]:
+def _index_lock(root: Path) -> Iterator[bool]:
     """Cross-process exclusion for an index read-modify-write, so a peer's concurrent add or
-    remove is never overwritten. A lock that cannot be taken in time proceeds unlocked: a late
-    index beats a lost run."""
+    remove is never overwritten. Yields whether the lock is held; a lock that cannot be taken in
+    time yields False and the caller decides (`_apply_indexed` re-checks the landed entry)."""
     from coordinator_core import locked_write
     from coordinator_core.ops.dispatch_emit import live_run_index
 
     path = live_run_index.index_path(root)
     stack = contextlib.ExitStack()
+    held = False
     if path is not None:
         try:
-            stack.enter_context(locked_write.held_lock(path, timeout=_INDEX_LOCK_SECONDS))
+            stack.enter_context(locked_write.held_lock(_stable_lock_target(path), timeout=_INDEX_LOCK_SECONDS))
+            held = True
         except (locked_write.LockTimeout, locked_write.LockAnchorError, OSError):
             pass
     with stack:
-        yield
+        yield held
+
+
+def _apply_indexed(root: Path, mutate, landed) -> None:
+    """Run `mutate` under the index lock. An unlocked write can be overwritten by a peer's
+    read-modify-write, so when the lock was not held and `landed()` finds the entry absent, redo
+    it once under a fresh lock wait. Never raises."""
+    from coordinator_core.ops.dispatch_emit import live_run_index
+
+    for _ in range(2):
+        try:
+            with _index_lock(root) as held:
+                mutate()
+            if held:
+                return
+            path = live_run_index.index_path(root)
+            if path is None or landed(live_run_index._load(root, path)):
+                return
+        except Exception:  # noqa: BLE001
+            return
 
 
 def index_mint(root: Path, run_id: str, minted_at: float) -> None:
@@ -64,34 +108,31 @@ def index_mint(root: Path, run_id: str, minted_at: float) -> None:
     the same run id left. Never raises: the index is a read cache of the token records."""
     from coordinator_core.ops.dispatch_emit import live_run_index
 
-    try:
-        with _index_lock(root):
-            live_run_index.remove(root, run_id)
-            live_run_index.add(root, run_id, minted_at)
-    except Exception:  # noqa: BLE001
-        pass
+    def mutate() -> None:
+        live_run_index.remove(root, run_id)
+        live_run_index.add(root, run_id, minted_at)
+
+    _apply_indexed(root, mutate, lambda runs: run_id in runs)
 
 
 def index_stage(root: Path, run_id: str, manifest: Mapping, minted_at: Optional[float] = None) -> None:
     """Record a run's staged footprint. Never raises."""
     from coordinator_core.ops.dispatch_emit import live_run_index
 
-    try:
-        with _index_lock(root):
-            live_run_index.stage(root, run_id, manifest_footprint(manifest), minted_at)
-    except Exception:  # noqa: BLE001
-        pass
+    footprint = sorted(manifest_footprint(manifest))
+
+    def landed(runs: dict) -> bool:
+        entry = runs.get(run_id)
+        return isinstance(entry, dict) and entry.get("footprint") == footprint
+
+    _apply_indexed(root, lambda: live_run_index.stage(root, run_id, footprint, minted_at), landed)
 
 
 def index_remove(root: Path, run_id: str) -> None:
     """Drop a consumed or discarded run. Never raises."""
     from coordinator_core.ops.dispatch_emit import live_run_index
 
-    try:
-        with _index_lock(root):
-            live_run_index.remove(root, run_id)
-    except Exception:  # noqa: BLE001
-        pass
+    _apply_indexed(root, lambda: live_run_index.remove(root, run_id), lambda runs: run_id not in runs)
 
 
 def prune_index(root: Path, *, deep: bool = False, now: Optional[float] = None) -> list[str]:
@@ -156,12 +197,13 @@ def file_claims(root: Path, writes: Sequence[str]) -> list[str]:
     Trap: `overlaps` reads a path as covering its descendants, so a declared directory (a gap-closing
     row's `tools/pkg`) would claim every peer file under it; a run's claim is its files, and the
     files it writes under a directory are declared by name."""
-    root = Path(root)
+    root_s = str(Path(root))
     out: list[str] = []
     for w in writes:
         if not w:
             continue
-        if _norm(w) == PurePosixPath(".") or (root / _norm(w)).is_dir():
+        n = _norm_s(w)
+        if n == "." or os.path.isdir(os.path.join(root_s, n)):
             continue
         out.append(w)
     return out
@@ -170,15 +212,15 @@ def file_claims(root: Path, writes: Sequence[str]) -> list[str]:
 def overlaps(writes: Sequence[str], footprints: Mapping[str, Optional[frozenset[str]]]) -> dict[str, list[str]]:
     """Run id -> the footprint paths that equal, contain or sit under one of `writes`. A None
     footprint, and a run with no overlap, are absent."""
-    mine = {_norm(w) for w in writes if w}
-    mine_ancestors = {a for w in mine for a in w.parents}
+    mine = {_norm_s(w) for w in writes if w}
+    mine_ancestors = {a for w in mine for a in _ancestors_s(w)}
     cache: dict[str, bool] = {}
 
     def touches(p: str) -> bool:
         hit = cache.get(p)
         if hit is None:
-            n = _norm(p)
-            hit = n in mine or n in mine_ancestors or any(a in mine for a in n.parents)
+            n = _norm_s(p)
+            hit = n in mine or n in mine_ancestors or any(a in mine for a in _ancestors_s(n))
             cache[p] = hit
         return hit
 

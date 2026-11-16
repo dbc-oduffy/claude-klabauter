@@ -2,8 +2,11 @@
 production publish handover and the report timestamps every phase of the swap.
 
 A fixture engine root (a hard-linked copy of this checkout) gets a warm pair in a throwaway
-`COORDINATOR_WARM_RUNTIME_BASE`. One caller process (a hook is a process of its own) sends `client.try_warm_dispatch` hook frames
-(`hook_path=True`) with no pause from before the marker take to `TAIL_AFTER_RELEASE_SECS` after the
+`COORDINATOR_WARM_RUNTIME_BASE`. One caller process (a hook is a process of its own) spawns the native
+door in hook mode per request, the live PreToolUse path, where a door image ships (Windows); elsewhere,
+or with `--caller client`, it sends `client.try_warm_dispatch` hook frames (`hook_path=True`). A door
+fail-open advisory ('no response within Nms of delivery', 'connection closed ... after delivery')
+counts as `no_response`. Requests go with no pause from before the marker take to `TAIL_AFTER_RELEASE_SECS` after the
 marker release, resolving the token and endpoint from the fixture root's live stamp on every request
 as a client does. The swap side is `land_swap_hook_window.production_handover`, which runs
 `round.start_successor_pair_in_hold`; phase epochs come from wrapping `breadcrumb.hold_publish_marker`,
@@ -13,7 +16,8 @@ and `pair_stop.stop_warm_pair` for the length of the swap.
 Units. `max_gap_ms` is wall between consecutive answers. `p50_ms` is the median wall round trip of
 answered requests. `max_process_ms` is the largest per-request CPU time of the calling thread
 (`time.thread_time`): the DR-344 bar is process time, never wall. It is the caller's own cost;
-server-side CPU is not in it. `no_response` counts requests that got no evaluated answer.
+server-side CPU is not in it. For a door caller it is the spawned door's own user plus kernel CPU
+(`GetProcessTimes`); the parent-side `CreateProcess` cost is not in it. `no_response` counts requests that got no evaluated answer.
 
 Run: `python -m coordinator_core.benchmarks.swap_continuous_caller [--duration-s N] [--assert-budget]`.
 """
@@ -22,12 +26,16 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import json
 import os
+import re
+import shutil
 import statistics
+import subprocess
 import sys
 import threading
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Iterator, Optional, Sequence
 from unittest import mock
@@ -55,6 +63,12 @@ MISS_BACKOFF_SECS = 0.001
 GAP_BUDGET_MS = 500.0
 PROCESS_BUDGET_MS = 200.0
 HOOK_METHOD = "warm_guard.evaluate"
+DOOR_HOOK_ENTRYPOINT = "hooks.preuse_bash_dispatch"
+#: The door's one-line fail-open advisory (`door_engine_failure_allow_envelope`): the guard did not run.
+DOOR_FAIL_OPEN_MARKER = "guard not evaluated"
+#: A door that has not exited by now is a no response; the door's own live bound is 8000ms.
+DOOR_CALL_TIMEOUT_SECS = 15.0
+_DOOR_DIR = Path(__file__).resolve().parents[1] / "warm" / "door"
 
 #: One hook round trip: its response (None when nothing answered) and the token it was stamped with.
 Dispatch = Callable[[], "tuple[Optional[dict], str]"]
@@ -68,6 +82,7 @@ class Request:
     answer_epoch: Optional[float]
     process_ms: float
     token: str
+    failure: str = ""
 
 
 @dataclass(frozen=True)
@@ -77,6 +92,7 @@ class SwapReport:
     requests: tuple
     phases: dict = field(default_factory=dict)
     successor_answered_before_release: Optional[bool] = None
+    caller_kind: str = "client"
 
     @property
     def answered(self) -> list:
@@ -111,9 +127,50 @@ class SwapReport:
         return (
             f"swap_continuous_caller: max_gap_ms={self.max_gap_ms:g} no_response={self.no_response} "
             f"max_process_ms={self.max_process_ms:g} p50_ms={self.p50_ms:g} "
-            f"requests={len(self.requests)} "
+            f"requests={len(self.requests)} caller={self.caller_kind} "
             f"successor_answered_before_release={self.successor_answered_before_release}"
         )
+
+    def gap_locus(self) -> str:
+        """Where the longest gap between answers sits, in ms since `marker_take` and the phases it spans."""
+        epochs = sorted(r.answer_epoch for r in self.answered)
+        origin = self.phases.get("marker_take")
+        if len(epochs) < 2 or origin is None:
+            return "  longest gap: n/a"
+        start, end = max(zip(epochs, epochs[1:]), key=lambda pair: pair[1] - pair[0])
+        inside = [n for n in PHASES if start <= self.phases.get(n, float("inf")) <= end]
+        return (
+            f"  longest gap: +{(start - origin) * 1000.0:.1f}ms to +{(end - origin) * 1000.0:.1f}ms "
+            f"phases inside: {', '.join(inside) or 'none'}"
+        )
+
+    def flip_window_gaps(self) -> "tuple[float, float]":
+        """(max gap ms between answers that overlap token_flip..old_pair_stop_done, max gap ms of
+        every other pair of answers): tells a gap the handover causes from one the box has anyway.
+        The first is 0.0 when the window was not reached."""
+        start = self.phases.get("token_flip")
+        end = self.phases.get("old_pair_stop_done", self.phases.get("marker_release"))
+        epochs = sorted(r.answer_epoch for r in self.answered)
+        inside = outside = 0.0
+        for a, b in zip(epochs, epochs[1:]):
+            gap = (b - a) * 1000.0
+            if start is not None and end is not None and a <= end and b >= start:
+                inside = max(inside, gap)
+            else:
+                outside = max(outside, gap)
+        return round(inside, 1), round(outside, 1)
+
+    def flip_window_line(self) -> str:
+        inside, outside = self.flip_window_gaps()
+        return f"  max gap across token_flip..old_pair_stop: {inside:g}ms; elsewhere in the run: {outside:g}ms"
+
+    def failure_lines(self) -> list:
+        """One line per distinct failure text of an unanswered request, with its count."""
+        counts: dict = {}
+        for r in self.requests:
+            if r.answer_epoch is None:
+                counts[r.failure or "no answer"] = counts.get(r.failure or "no answer", 0) + 1
+        return [f"  unanswered x{n}: {text[:160]}" for text, n in sorted(counts.items(), key=lambda kv: -kv[1])]
 
     def timeline_lines(self) -> list:
         """One line per phase: ms since `marker_take`; `old_pair_stop` also names its end."""
@@ -148,8 +205,16 @@ class PhaseClock:
                 self.epochs[name] = self._now()
 
     @contextlib.contextmanager
-    def wrapped(self) -> Iterator[None]:
-        """Wrap the swap's primitives for the length of the block. Each wrapper calls the original."""
+    def wrapped(self, root: Optional[Path] = None) -> Iterator[None]:
+        """Wrap the swap's primitives for the length of the block. Each wrapper calls the original.
+        With `root`, a stamp write of the bytes `root` held on entry (a pin back to the old token)
+        is no flip: only a write of different bytes stamps `token_flip`."""
+        old_stamp: Optional[bytes] = None
+        if root is not None:
+            try:
+                old_stamp = skew.read_engine_stamp_bytes(root)
+            except Exception:  # noqa: BLE001 -- no readable stamp: every write counts, as without a root
+                old_stamp = None
         orig_marker = breadcrumb.hold_publish_marker
         orig_spawn = client.spawn_detached
         orig_wait = breadcrumb.wait_for_successor_answer
@@ -163,7 +228,7 @@ class PhaseClock:
                 yield path
             self.mark("marker_release")
 
-        def spawn(*args, **kwargs):
+        def spawn(*args, **kwargs) -> bool:
             self.mark("successor_spawn")
             return orig_spawn(*args, **kwargs)
 
@@ -175,7 +240,9 @@ class PhaseClock:
 
         def stamp(*args, **kwargs):
             result = orig_stamp(*args, **kwargs)
-            self.mark("token_flip", last=True)
+            written = args[1] if len(args) > 1 else kwargs.get("data")
+            if old_stamp is None or written != old_stamp:
+                self.mark("token_flip", last=True)
             return result
 
         def stop(*args, **kwargs):
@@ -203,8 +270,14 @@ def _caller(dispatch: Dispatch, stop: threading.Event, out: list) -> None:
         cpu0 = time.thread_time()
         response, token = dispatch()
         process_ms = (time.thread_time() - cpu0) * 1000.0
+        child_ms = getattr(dispatch, "child_process_ms", None)
+        if child_ms is not None:
+            process_ms = child_ms()
         answered = isinstance(response, dict) and "error" not in response
-        out.append(Request(send, time.time() if answered else None, process_ms, token))
+        failure = ""
+        if not answered and isinstance(response, dict):
+            failure = str(response.get("error"))
+        out.append(Request(send, time.time() if answered else None, process_ms, token, failure))
         if not answered:
             stop.wait(MISS_BACKOFF_SECS)
 
@@ -229,14 +302,19 @@ class ThreadCaller:
         return self._records
 
 
-def _caller_process_main(root: str, ready, stop, out) -> None:
-    """Body of the `ProcessCaller` child: aim `client` at `root`, signal ready, loop until `stop`."""
+def _caller_process_main(root: str, ready, stop, out, door: Optional[str] = None) -> None:
+    """Body of the `ProcessCaller` child: with `door`, spawn that native door in hook mode per
+    request; else aim `client` at `root`. Signal ready, loop until `stop`."""
     path = Path(root)
-    dispatch = hook_dispatch(path)
     records: list = []
-    with client_pointed_at(path, dispatch):
+    if door is not None:
         ready.set()
-        _caller(dispatch, stop, records)
+        _caller(door_dispatch(path, Path(door)), stop, records)
+    else:
+        dispatch = hook_dispatch(path)
+        with client_pointed_at(path, dispatch):
+            ready.set()
+            _caller(dispatch, stop, records)
     out.put(records)
 
 
@@ -245,7 +323,7 @@ class ProcessCaller:
     enumeration under the publisher's GIL) never shares an interpreter with the requests it is
     measured against, so a gap is the swap's effect on a client and not a GIL stall of this harness."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, door: Optional[Path] = None) -> None:
         import multiprocessing
 
         ctx = multiprocessing.get_context("spawn")
@@ -254,7 +332,7 @@ class ProcessCaller:
         self._out = ctx.Queue()
         self._proc = ctx.Process(
             target=_caller_process_main,
-            args=(str(root), self._ready, self._stop, self._out),
+            args=(str(root), self._ready, self._stop, self._out, None if door is None else str(door)),
             daemon=True,
         )
 
@@ -342,6 +420,99 @@ def hook_dispatch(root: Path) -> Dispatch:
     return dispatch
 
 
+def door_binary(root: Path) -> Optional[Path]:
+    """The native door installed under its default entrypoint name in `root`, as production installs
+    it; None where no door image is shipped for this platform (the caller then uses `client`)."""
+    if sys.platform != "win32":
+        return None
+    image = _DOOR_DIR / "door.exe"
+    source = (_DOOR_DIR / "door.c").read_text(encoding="utf-8")
+    match = re.search(r'^#define\s+DOOR_DEFAULT_ENTRYPOINT_W\s+L"([^"]+)"\s*$', source, re.MULTILINE)
+    if not image.is_file() or match is None:
+        return None
+    installed = root / (match.group(1) + ".exe")
+    if not installed.exists():
+        shutil.copy2(image, installed)
+    return installed
+
+
+def _child_cpu_ms(proc: "subprocess.Popen") -> float:
+    """User plus kernel CPU of an exited child, in ms (process time, the DR-344 axis); 0.0 where
+    the platform gives none."""
+    if sys.platform != "win32":
+        return 0.0
+    import ctypes
+    from ctypes import wintypes
+
+    times = [wintypes.FILETIME() for _ in range(4)]
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.GetProcessTimes.argtypes = [wintypes.HANDLE] + [ctypes.POINTER(wintypes.FILETIME)] * 4
+    if not kernel32.GetProcessTimes(int(proc._handle), *(ctypes.byref(t) for t in times)):  # type: ignore[attr-defined]
+        return 0.0
+    ticks = sum((t.dwHighDateTime << 32) | t.dwLowDateTime for t in times[2:])
+    return ticks / 10_000.0
+
+
+def _run_door(argv, *, input: bytes, timeout: float, **kw) -> "tuple[subprocess.CompletedProcess, float]":
+    """`subprocess.run` that also returns the child's own CPU ms."""
+    with subprocess.Popen(
+        argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, **kw
+    ) as proc:
+        try:
+            out, err = proc.communicate(input, timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.communicate()
+            raise
+        return subprocess.CompletedProcess(argv, proc.returncode, out, err), _child_cpu_ms(proc)
+
+
+def door_dispatch(root: Path, door: Path) -> Dispatch:
+    """The dispatch that spawns `door` as the coordinator PreToolUse hook does: one process per
+    request, hook stdin mode, a `PreToolUse` Bash payload on stdin. A request is answered only by a
+    zero exit whose stdout is not the door's fail-open advisory, so 'no response within Nms of
+    delivery' and 'connection closed or read failed after delivery' count as `no_response`."""
+    from coordinator_core.win_portability import no_console_creationflags
+
+    env = {**os.environ, "COORDINATOR_DOOR_ENGINE_ROOT": str(root), "COORDINATOR_DOOR_STDIN_MODE": "hook"}
+    payload = json.dumps(
+        {
+            "hook_event_name": "PreToolUse",
+            "session_id": "swap-continuous-caller",
+            "tool_name": "Bash",
+            "tool_input": {"command": "echo ok"},
+            "cwd": str(root),
+        }
+    ).encode("utf-8")
+
+    last_cpu_ms = threading.local()
+
+    def dispatch() -> tuple:
+        last_cpu_ms.value = 0.0
+        try:
+            proc, last_cpu_ms.value = _run_door(
+                [str(door), DOOR_HOOK_ENTRYPOINT],
+                input=payload,
+                env=env,
+                cwd=str(root),
+                timeout=DOOR_CALL_TIMEOUT_SECS,
+                **no_console_creationflags(),
+            )
+        except subprocess.TimeoutExpired:
+            return {"error": f"door still running after {DOOR_CALL_TIMEOUT_SECS:g}s"}, ""
+        try:
+            token = skew.compute_client_token(root)
+        except Exception:  # noqa: BLE001 -- the stamp is mid-swap; the token is a label only
+            token = "unversioned"
+        out = proc.stdout.decode("utf-8", errors="replace")
+        if proc.returncode != 0 or DOOR_FAIL_OPEN_MARKER in out:
+            return {"error": out.strip() or f"exit {proc.returncode}: {proc.stderr[:200]!r}"}, token
+        return {"jsonrpc": "2.0", "id": 1, "result": out}, token
+
+    dispatch.child_process_ms = lambda: getattr(last_cpu_ms, "value", 0.0)  # type: ignore[attr-defined]
+    return dispatch
+
+
 @contextlib.contextmanager
 def client_pointed_at(root: Path, dispatch: Optional[Dispatch] = None) -> Iterator[None]:
     """Aim `client` at `root`: token from its live stamp each request, its endpoint, no spawn, no
@@ -410,19 +581,23 @@ def run(
     work_dir: Optional[Path] = None,
     source_root: Optional[Path] = None,
     caller_in_process: bool = False,
+    use_door: bool = True,
 ) -> SwapReport:
     """One production handover against a real pair in a throwaway engine root, with a continuous
     hook-shaped caller across it. `duration_s` is a floor on the caller's total run time. The
     caller is its own process (`ProcessCaller`) unless `caller_in_process`, which a unit test uses
-    to stand in for the client."""
+    to stand in for the client. With `use_door` (default) and a door image for this platform, each
+    request is a spawn of the native door in hook mode, the path the live PreToolUse hook takes;
+    otherwise `client.try_warm_dispatch(hook_path=True)`."""
     source = source_root if source_root is not None else Path(__file__).resolve().parents[2]
     base = work_dir if work_dir is not None else source / "scratch"
     with fixture_pair(base, source) as root:
         dispatch = hook_dispatch(root)
         clock = PhaseClock()
-        caller = None if caller_in_process else ProcessCaller(root)
+        door = None if caller_in_process or not use_door else door_binary(root)
+        caller = None if caller_in_process else ProcessCaller(root, door)
         aim = client_pointed_at(root, dispatch) if caller_in_process else contextlib.nullcontext()
-        with aim, clock.wrapped():
+        with aim, clock.wrapped(root):
             report = observe(
                 dispatch,
                 lambda: lw.production_handover(root, copy_secs=copy_secs),
@@ -430,7 +605,7 @@ def run(
                 duration_s=duration_s,
                 caller=caller,
             )
-    return report
+    return replace(report, caller_kind="door" if door is not None else "client")
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -439,10 +614,21 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     parser.add_argument("--copy-secs", type=float, default=lw.DEFAULT_COPY_SECS)
     parser.add_argument("--work-dir", type=Path, default=None)
     parser.add_argument("--assert-budget", action="store_true")
+    parser.add_argument("--caller", choices=("door", "client"), default="door")
     args = parser.parse_args(list(sys.argv[1:] if argv is None else argv))
-    report = run(duration_s=args.duration_s, copy_secs=args.copy_secs, work_dir=args.work_dir)
+    report = run(
+        duration_s=args.duration_s,
+        copy_secs=args.copy_secs,
+        work_dir=args.work_dir,
+        use_door=args.caller == "door",
+    )
     print(report.falsifier_line())
-    for line in report.timeline_lines():
+    for line in (
+        *report.timeline_lines(),
+        report.gap_locus(),
+        report.flip_window_line(),
+        *report.failure_lines(),
+    ):
         print(line)
     return 1 if args.assert_budget and not report.within_budget() else 0
 

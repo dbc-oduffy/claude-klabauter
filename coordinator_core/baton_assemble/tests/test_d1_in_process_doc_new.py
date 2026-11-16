@@ -10,6 +10,7 @@ import sys
 import pytest
 
 from coordinator_core.baton_assemble import apply as ba_apply
+from pathlib import Path
 
 
 def _make_repo(tmp_path):
@@ -19,7 +20,7 @@ def _make_repo(tmp_path):
     return repo
 
 
-def _no_spawn(monkeypatch):
+def _no_spawn(monkeypatch) -> None:
     def boom(*a, **k):
         raise AssertionError(f"child process spawned: {a!r}")
 
@@ -37,7 +38,7 @@ def _d1_args(out: str) -> list[str]:
     ]
 
 
-def test_d1_scaffolds_in_process_and_reports_sharded_path(tmp_path, monkeypatch):
+def test_d1_scaffolds_in_process_and_reports_sharded_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _make_repo(tmp_path)
     _no_spawn(monkeypatch)
     cwd_before, argv_before = os.getcwd(), list(sys.argv)
@@ -55,7 +56,7 @@ def test_d1_scaffolds_in_process_and_reports_sharded_path(tmp_path, monkeypatch)
     assert module._resolve_state_root is not ba_apply._state_root_in_process
 
 
-def test_state_root_in_process_degrades_to_none(monkeypatch):
+def test_state_root_in_process_degrades_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.state_root as sr
 
     def refuse(**_kw):
@@ -65,7 +66,7 @@ def test_state_root_in_process_degrades_to_none(monkeypatch):
     assert ba_apply._state_root_in_process(central=True) is None
 
 
-def test_d1_failure_raises_and_restores_process_state(tmp_path, monkeypatch):
+def test_d1_failure_raises_and_restores_process_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _make_repo(tmp_path)
     _no_spawn(monkeypatch)
     cwd_before, argv_before = os.getcwd(), list(sys.argv)

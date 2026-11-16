@@ -10,20 +10,21 @@ from coordinator_core.port_owner import (
     owner_from_pidfile,
     parse_owner_pid,
 )
+from pathlib import Path
 
 
 @pytest.mark.parametrize("raw", [0, "0", "NONE", "none", "", "  ", None, -3, "abc", b"0", True])
-def test_unknown_owner_raises(raw):
+def test_unknown_owner_raises(raw) -> None:
     with pytest.raises(OwnerUnknown):
         parse_owner_pid(raw)
 
 
 @pytest.mark.parametrize("raw,expected", [(1234, 1234), ("42\n", 42), (b"7", 7)])
-def test_real_pid_resolves(raw, expected):
+def test_real_pid_resolves(raw, expected) -> None:
     assert parse_owner_pid(raw) == expected
 
 
-def test_pidfile_resolves_and_fails_loud(tmp_path):
+def test_pidfile_resolves_and_fails_loud(tmp_path: Path) -> None:
     good = tmp_path / "a.pid"
     good.write_text("555\n", encoding="utf-8")
     assert owner_from_pidfile(good) == 555
@@ -35,7 +36,7 @@ def test_pidfile_resolves_and_fails_loud(tmp_path):
         owner_from_pidfile(tmp_path / "missing.pid")
 
 
-def test_child_record():
+def test_child_record() -> None:
     assert owner_from_child_record({"pid": 9}) == 9
     for bad in (None, {}, {"pid": 0}, {"pid": "NONE"}):
         with pytest.raises(OwnerUnknown):

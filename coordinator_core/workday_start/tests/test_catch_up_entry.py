@@ -34,7 +34,7 @@ class _Git:
         self.calls: list[list[str]] = []
         out = "\n".join(str(_commit_ts(d)) for d in days)
 
-        def fake(args, **kw):
+        def fake(args, **kw) -> GitResult:
             self.calls.append(list(args))
             return GitResult(returncode=rc, stdout=out, stderr="", timed_out=False)
 

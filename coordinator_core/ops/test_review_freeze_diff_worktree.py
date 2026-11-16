@@ -515,3 +515,68 @@ def test_non_prep_slice_id_collision_still_refuses(tmp_path):
     freeze_diff(tmp_path, base, "generic", ["a.py"], worktree=True)
     (tmp_path / "a.py").write_text("a = 2\n")
     assert "already names a frozen diff" in freeze_diff(tmp_path, base, "generic", ["a.py"], worktree=True)["error"]
+
+
+def test_repeated_worktree_freezes_parse_the_index_once_until_it_is_replaced(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _init_repo(tmp_path)
+    base = _commit(tmp_path, "tracked.txt", "one\n", "add tracked.txt")
+    (tmp_path / "tracked.txt").write_text("one\ntwo\n")
+
+    parses = []
+    real_parse = review_freeze_diff.parse_index_stat
+
+    def _counting_parse(repo):
+        parses.append(repo)
+        return real_parse(repo)
+
+    monkeypatch.setattr(review_freeze_diff, "parse_index_stat", _counting_parse)
+    review_freeze_diff._INDEX_SNAPSHOT.set(None)
+
+    for n in range(3):
+        r = freeze_diff(tmp_path, base, f"slice-{n}", ["tracked.txt", "nope.txt"], worktree=True)
+        assert r["error"] is None, r["error"]
+    assert len(parses) == 1, f"index parsed {len(parses)}x across 3 freezes"
+
+    # Other side: a replaced index (git renames a new file in) must re-parse.
+    _commit(tmp_path, "other.txt", "x\n", "add other.txt")
+    freeze_diff(tmp_path, base, "slice-after", ["tracked.txt"], worktree=True)
+    assert len(parses) == 2
+
+
+def test_diff_targets_batch_writes_every_slice_registration_in_one_targets_add(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = []
+    monkeypatch.setattr(review_freeze_diff, "resolve_session_id", lambda: "sess-batch")
+    monkeypatch.setattr(review_freeze_diff, "targets_add", lambda root, sid, paths: calls.append((sid, list(paths))))
+    diff_a = "diff --git a/z.py b/z.py\n--- a/z.py\n+++ b/z.py\n@@ -1 +1 @@\n-a\n+b\n"
+    diff_b = "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-a\n+b\n"
+
+    with review_freeze_diff.diff_targets_batch(tmp_path):
+        review_freeze_diff.register_diff_targets(tmp_path, diff_a)
+        review_freeze_diff.register_diff_targets(tmp_path, diff_b)
+        assert calls == [], "queued registrations are not written before the scope exits"
+    assert calls == [("sess-batch", ["z.py", "a.py"])]
+
+    # Other side: outside the scope each registration is its own targets_add.
+    calls.clear()
+    review_freeze_diff.register_diff_targets(tmp_path, diff_a)
+    review_freeze_diff.register_diff_targets(tmp_path, diff_b)
+    assert calls == [("sess-batch", ["z.py"]), ("sess-batch", ["a.py"])]
+
+
+def test_diff_targets_batch_still_registers_when_the_body_raises(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    calls = []
+    monkeypatch.setattr(review_freeze_diff, "resolve_session_id", lambda: "sess-batch")
+    monkeypatch.setattr(review_freeze_diff, "targets_add", lambda root, sid, paths: calls.append(list(paths)))
+    diff = "diff --git a/a.py b/a.py\n--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-a\n+b\n"
+
+    with pytest.raises(RuntimeError):
+        with review_freeze_diff.diff_targets_batch(tmp_path):
+            review_freeze_diff.register_diff_targets(tmp_path, diff)
+            raise RuntimeError("boom")
+    assert calls == [["a.py"]]

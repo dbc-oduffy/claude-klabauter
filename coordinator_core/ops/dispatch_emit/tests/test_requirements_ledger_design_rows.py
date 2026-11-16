@@ -9,6 +9,7 @@ from coordinator_core.ops.dispatch_emit import design_conformance as dc
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+from pathlib import Path
 
 
 def _ledger_gate(root, run_dir, verdict, *, plan_text=None):
@@ -21,7 +22,7 @@ HIT = {"id": "settings", "board_url": BOARD, "artboards": ["A1"], "status": "des
 
 
 @pytest.fixture
-def run(tmp_path):
+def run(tmp_path: Path):
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     doc = {
@@ -46,7 +47,7 @@ def _verdict(ledger, design, **item):
     return {"items": items}
 
 
-def _review(root, name="review.md", reviewer="coordinator:senior-front-end", verdict="APPROVED"):
+def _review(root, name: str = "review.md", reviewer: str = "coordinator:senior-front-end", verdict: str = "APPROVED") -> str:
     path = root / name
     path.write_text(
         f"---\nagent_type: {reviewer}\nverdict: {verdict}\n---\nChecked {BOARD}\n{_shot(root)}", encoding="utf-8"
@@ -54,20 +55,20 @@ def _review(root, name="review.md", reviewer="coordinator:senior-front-end", ver
     return name
 
 
-def _shot(root):
+def _shot(root) -> str:
     """A real side-by-side image under `root`, returned as the `Side-by-side:` record line."""
     (root / "shots").mkdir(exist_ok=True)
     (root / "shots" / "sbs.png").write_bytes(b"\x89PNG\r\n")
     return "Side-by-side: shots/sbs.png\n"
 
 
-def test_met_with_senior_front_end_record_passes(run):
+def test_met_with_senior_front_end_record_passes(run) -> None:
     root, ledger, design, _ = run
     out = rl.judge(ledger, _verdict(ledger, design, status="met", met_by=_review(root)), repo_root=root)
     assert out["pass"], out
 
 
-def test_met_with_ratified_deviation_passes(run):
+def test_met_with_ratified_deviation_passes(run) -> None:
     root, ledger, design, _ = run
     (root / "ratify.md").write_text("PM ratified\n", encoding="utf-8")
     plan = "```yaml design-deviation\n- entry: settings\n  ratified_by: ratify.md\n```\n"
@@ -77,7 +78,7 @@ def test_met_with_ratified_deviation_passes(run):
     assert out["pass"], out
 
 
-def test_met_with_neither_fails(run):
+def test_met_with_neither_fails(run) -> None:
     root, ledger, design, _ = run
     out = rl.judge(ledger, _verdict(ledger, design, status="met"), repo_root=root)
     assert not out["pass"] and out["failures"][0]["id"] == design.id
@@ -86,36 +87,36 @@ def test_met_with_neither_fails(run):
     assert not out["pass"]
 
 
-def test_met_without_repo_root_fails(run):
+def test_met_without_repo_root_fails(run) -> None:
     root, ledger, design, _ = run
     out = rl.judge(ledger, _verdict(ledger, design, status="met", met_by=_review(root)))
     assert not out["pass"]
 
 
-def test_not_met_marked_non_essential_still_fails(run):
+def test_not_met_marked_non_essential_still_fails(run) -> None:
     _root, ledger, design, _ = run
     out = rl.judge(ledger, _verdict(ledger, design, status="not_met", essential=False))
     assert not out["pass"] and out["failures"][0]["reason"] == "not met"
 
 
-def test_post_commit_cannot_meet_a_design_row(run):
+def test_post_commit_cannot_meet_a_design_row(run) -> None:
     _root, ledger, design, _ = run
     out = rl.judge(ledger, _verdict(ledger, design, status="not_met", remaining=["commit"]))
     assert not out["pass"]
 
 
-def test_not_met_withheld_by_gated_chunk_passes_open(run):
+def test_not_met_withheld_by_gated_chunk_passes_open(run) -> None:
     _root, ledger, design, _ = run
     out = rl.judge(ledger, _verdict(ledger, design, status="not_met", withheld_by="G1"), gated=["G1"])
     assert out["pass"] and out["open"] == [{"id": design.id, "reason": "withheld_by G1"}]
 
 
-def test_render_labels_design_row_by_origin(run):
+def test_render_labels_design_row_by_origin(run) -> None:
     _root, ledger, design, _ = run
     assert f"## {design.id} (design registry)" in rl.render(ledger, RUN)
 
 
-def test_judge_wave_review_and_noted_path_meet_a_design_row(run):
+def test_judge_wave_review_and_noted_path_meet_a_design_row(run) -> None:
     root, ledger, design, _ = run
     (root / "wave.md").write_text(f"Board: {BOARD}\n{_shot(root)}", encoding="utf-8")
     wave = [{"agent_type": "coordinator:senior-front-end", "sidecar_path": "wave.md", "verdict": "APPROVED"}]
@@ -127,7 +128,7 @@ def test_judge_wave_review_and_noted_path_meet_a_design_row(run):
     assert not rl.judge(ledger, _verdict(ledger, design, status="met"), repo_root=root)["pass"]
 
 
-def test_ledger_gate_supplies_root_and_plan_text(run):
+def test_ledger_gate_supplies_root_and_plan_text(run) -> None:
     root, ledger, design, _ = run
     run_dir = root / RECORD_DIR_ROOT / RUN
     bad = _ledger_gate(root, run_dir, _verdict(ledger, design, status="met"))[0]

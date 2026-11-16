@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.bash_guards import block_push_pr_non_owned_remote as guard
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -25,7 +26,7 @@ _CONFIG = """\
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     (root / ".git").mkdir(parents=True)
     (root / ".git" / "config").write_text(_CONFIG, encoding="utf-8")
@@ -34,12 +35,12 @@ def repo(tmp_path):
 
 
 @pytest.fixture
-def registry(tmp_path, monkeypatch):
+def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     reg = tmp_path / "registry"
     reg.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
 
-    def arm(entries):
+    def arm(entries) -> None:
         listed = ", ".join(f'"{e}"' for e in entries)
         (reg / "registry.local.toml").write_text(
             f"[policy]\nnon_owned_remotes = [{listed}]\n", encoding="utf-8"
@@ -60,7 +61,7 @@ def _denied(out) -> bool:
     )
 
 
-def _set_branch(repo, name):
+def _set_branch(repo, name) -> None:
     (repo / ".git" / "HEAD").write_text(f"ref: refs/heads/{name}\n", encoding="utf-8")
 
 
@@ -78,39 +79,39 @@ def _set_branch(repo, name):
         "gh pr create --repo theirs/repo --fill",
     ],
 )
-def test_denied_when_armed(repo, registry, cmd):
+def test_denied_when_armed(repo, registry, cmd) -> None:
     registry(["github.com/theirs/"])
     assert _denied(_run(cmd, repo))
 
 
 @pytest.mark.parametrize("tool,cmd", [("PowerShell", "& git push upstream main"), ("PowerShell", "git.exe push upstream main")])
-def test_powershell_forms_denied(repo, registry, tool, cmd):
+def test_powershell_forms_denied(repo, registry, tool, cmd) -> None:
     registry(["github.com/theirs/"])
     assert _denied(_run(cmd, repo, tool))
 
 
-def test_push_with_no_remote_follows_branch_remote(repo, registry):
+def test_push_with_no_remote_follows_branch_remote(repo, registry) -> None:
     registry(["github.com/theirs/repo"])
     _set_branch(repo, "feat")
     assert _denied(_run("git push", repo))
 
 
-def test_push_with_no_remote_defaults_to_origin(repo, registry):
+def test_push_with_no_remote_defaults_to_origin(repo, registry) -> None:
     registry(["github.com/mine/engine"])
     assert _denied(_run("git push", repo))
 
 
-def test_dash_c_dir_names_the_repo(tmp_path, repo, registry):
+def test_dash_c_dir_names_the_repo(tmp_path: Path, repo, registry) -> None:
     registry(["github.com/theirs/"])
     assert _denied(_run(f"git -C {repo} push upstream main", tmp_path))
 
 
-def test_pr_create_defaults_to_first_present_remote(repo, registry):
+def test_pr_create_defaults_to_first_present_remote(repo, registry) -> None:
     registry(["github.com/theirs/repo"])
     assert _denied(_run("gh pr create --fill", repo))
 
 
-def test_pr_create_default_remote_owned_is_allowed(repo, registry):
+def test_pr_create_default_remote_owned_is_allowed(repo, registry) -> None:
     registry(["github.com/other/"])
     assert _run("gh pr create --fill", repo) is None
 
@@ -130,37 +131,37 @@ def test_pr_create_default_remote_owned_is_allowed(repo, registry):
         "git commit -m x",
     ],
 )
-def test_allowed_when_armed(repo, registry, cmd):
+def test_allowed_when_armed(repo, registry, cmd) -> None:
     registry(["github.com/theirs/"])
     assert _run(cmd, repo) is None
 
 
-def test_owned_remote_pr_is_allowed(repo, registry):
+def test_owned_remote_pr_is_allowed(repo, registry) -> None:
     registry(["github.com/theirs/"])
     assert _run("gh pr create -R mine/engine", repo) is None
 
 
-def test_entry_matches_whole_segment_only(repo, registry):
+def test_entry_matches_whole_segment_only(repo, registry) -> None:
     registry(["github.com/theirs/rep"])
     assert _run("git push upstream main", repo) is None
 
 
 @pytest.mark.parametrize("cmd", ["git push upstream main", "gh pr create -R theirs/repo"])
-def test_off_with_no_registry_entry(repo, registry, cmd):
+def test_off_with_no_registry_entry(repo, registry, cmd) -> None:
     assert _run(cmd, repo) is None
 
 
-def test_off_with_empty_list(repo, registry):
+def test_off_with_empty_list(repo, registry) -> None:
     registry([])
     assert _run("git push upstream main", repo) is None
 
 
-def test_host_port_entry(repo, registry):
+def test_host_port_entry(repo, registry) -> None:
     registry(["p4.example.com:1666"])
     assert _denied(_run("git push ssh://git@P4.example.com:1666/depot main", repo))
 
 
-def test_unreadable_registry_denies(repo, monkeypatch):
+def test_unreadable_registry_denies(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import machine_resolver
 
     def boom():
@@ -171,7 +172,7 @@ def test_unreadable_registry_denies(repo, monkeypatch):
     assert _run("git status", repo) is None
 
 
-def test_unreadable_registry_leaves_non_push_commands_alone(repo, monkeypatch):
+def test_unreadable_registry_leaves_non_push_commands_alone(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import machine_resolver
 
     monkeypatch.setattr(machine_resolver, "registry_dir", lambda: (_ for _ in ()).throw(OSError("x")))
@@ -187,5 +188,5 @@ def test_unreadable_registry_leaves_non_push_commands_alone(repo, monkeypatch):
         ("p4.example.com:1666", "p4.example.com:1666"),
     ],
 )
-def test_normalize_remote(raw, expected):
+def test_normalize_remote(raw, expected) -> None:
     assert guard.normalize_remote(raw) == expected

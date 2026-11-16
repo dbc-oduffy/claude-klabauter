@@ -6,12 +6,13 @@ from coordinator_core.ops._workflow_contract import Severity, run_checks
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+import pytest
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _BATON = {"path": "state/handoffs/b.md", "deliverable_id": "dlv-1"}
 
 
-def _compose(**over):
+def _compose(**over) -> str:
     kw = dict(
         repo_root="REPO",
         prompt="add a thing",
@@ -31,7 +32,7 @@ def _accept_section(script: str) -> str:
     return script[start : script.index("if (_gate.halt || !_gate.arm)", start)]
 
 
-def test_raw_ask_accept_phase_follows_gate():
+def test_raw_ask_accept_phase_follows_gate() -> None:
     script = _compose()
     assert script.index("phase('gate')") < script.index("phase('accept')") < script.index("phase('plan')")
     section = _accept_section(script)
@@ -45,7 +46,7 @@ def test_raw_ask_accept_phase_follows_gate():
     assert "'accept'" in script.split("phases: [", 1)[1].split("]", 1)[0]
 
 
-def test_pm_only_or_failed_record_leaves_touchpoint_halt():
+def test_pm_only_or_failed_record_leaves_touchpoint_halt() -> None:
     script = _compose()
     section = _accept_section(script)
     guard = section[section.index("if (_apm && _apm.verdict === 'ruled'") :]
@@ -59,19 +60,19 @@ def test_pm_only_or_failed_record_leaves_touchpoint_halt():
     assert "halt: { ..._gate.halt, apm:" in section
 
 
-def test_sizing_entry_without_pending_has_no_accept_phase():
+def test_sizing_entry_without_pending_has_no_accept_phase() -> None:
     script = _compose(prompt=None, sizing_rel="state/sizings/x.yaml")
     assert "phase('accept')" not in script
     assert "'accept'" not in script.split("phases: [", 1)[1].split("]", 1)[0]
 
 
-def test_accept_pending_composes_accept_for_existing_sizing():
+def test_accept_pending_composes_accept_for_existing_sizing() -> None:
     script = _compose(prompt=None, sizing_rel="state/sizings/x.yaml", accept_pending=True)
     assert "phase('accept')" in script
     assert "'accept'" in script.split("phases: [", 1)[1].split("]", 1)[0]
 
 
-def test_baton_threads_into_size_and_gate():
+def test_baton_threads_into_size_and_gate() -> None:
     with_baton = _compose(baton=_BATON)
     assert "--deliverable-id dlv-1" in with_baton
     assert 'baton: "state/handoffs/b.md"' in with_baton
@@ -79,7 +80,7 @@ def test_baton_threads_into_size_and_gate():
     assert "--deliverable-id" not in plain and "baton: \"" not in plain
 
 
-def test_accept_prompt_stages_xs_after_regate(monkeypatch):
+def test_accept_prompt_stages_xs_after_regate(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "_known_arm", lambda *_: "xs")
     kw = dict(prompt=None, sizing_rel="state/sizings/x.yaml", accept_pending=True, writes=["a.py"])
     script = _compose(**kw)
@@ -94,7 +95,7 @@ def test_accept_prompt_stages_xs_after_regate(monkeypatch):
     assert "_adoptStageReply(_apm.stage_reply)" not in stopped
 
 
-def test_contract_linter_stays_clean():
+def test_contract_linter_stays_clean() -> None:
     for kw in ({}, {"baton": _BATON}, {"prompt": None, "sizing_rel": "state/sizings/x.yaml", "accept_pending": True}):
         findings = run_checks(_compose(**kw))
         assert not [f for f in findings if f.severity == Severity.ERROR], findings

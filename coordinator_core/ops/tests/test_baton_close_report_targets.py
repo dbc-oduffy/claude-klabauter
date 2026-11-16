@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.ops import baton_close_report_targets as t
+import pytest
 
 
 def _h(**kw):
@@ -27,7 +28,7 @@ def _run(root, **kw):
     return t.target_evidence(str(root), {"b": _h(**kw)}).get("b")
 
 
-def test_plan_done_not_done_missing_unreadable(tmp_path):
+def test_plan_done_not_done_missing_unreadable(tmp_path: Path) -> None:
     _w(tmp_path, "docs/plans/a.md", "---\ntitle: x\nstatus: implemented  # note\n---\nbody\n")
     _w(tmp_path, "docs/plans/b.md", "---\nstatus: draft\n---\n")
     _w(tmp_path, "docs/plans/c.md", "---\ntitle: x\n---\n")
@@ -38,38 +39,38 @@ def test_plan_done_not_done_missing_unreadable(tmp_path):
     assert ev["target_status"] == t.STATUS_MISSING and not ev["done"]
 
 
-def test_plan_landed_is_not_done(tmp_path):
+def test_plan_landed_is_not_done(tmp_path: Path) -> None:
     _w(tmp_path, "docs/plans/a.md", "---\nstatus: landed\n---\n")
     (ev,) = _run(tmp_path, governing_plan="docs/plans/a.md")
     assert ev["target_status"] == "landed" and ev["done"] is False
 
 
-def test_archived_governing_plan_resolves_with_archived_status(tmp_path):
+def test_archived_governing_plan_resolves_with_archived_status(tmp_path: Path) -> None:
     _w(tmp_path, "archive/specs/2026-09/a.md", "---\nstatus: implemented\n---\n")
     (ev,) = _run(tmp_path, governing_plan="docs/plans/a.md")
     assert (ev["target_path"], ev["target_status"], ev["done"]) == ("docs/plans/a.md", "implemented", True)
 
 
-def test_live_plan_wins_over_archived_copy(tmp_path):
+def test_live_plan_wins_over_archived_copy(tmp_path: Path) -> None:
     _w(tmp_path, "docs/plans/a.md", "---\nstatus: draft\n---\n")
     _w(tmp_path, "archive/specs/2026-09/a.md", "---\nstatus: implemented\n---\n")
     (ev,) = _run(tmp_path, governing_plan="docs/plans/a.md")
     assert ev["target_status"] == "draft" and ev["done"] is False
 
 
-def test_plan_in_neither_place_still_target_missing(tmp_path):
+def test_plan_in_neither_place_still_target_missing(tmp_path: Path) -> None:
     _w(tmp_path, "archive/specs/2026-09/other.md", "---\nstatus: implemented\n---\n")
     (ev,) = _run(tmp_path, governing_plan="docs/plans/a.md")
     assert ev["target_status"] == t.STATUS_MISSING and ev["done"] is False
 
 
-def test_archived_plan_resolved_by_origin_plan_id(tmp_path):
+def test_archived_plan_resolved_by_origin_plan_id(tmp_path: Path) -> None:
     _w(tmp_path, "archive/specs/2026-09/a.md", "---\nplan_id: pln-a\nstatus: implemented\n---\n")
     (ev,) = _run(tmp_path, origin_plan_id="pln-a")
     assert (ev["target_path"], ev["done"]) == ("docs/plans/a.md", True)
 
 
-def test_open_permission_error_reads_unreadable_not_missing(tmp_path, monkeypatch):
+def test_open_permission_error_reads_unreadable_not_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _w(tmp_path, "docs/plans/a.md", "---\nstatus: implemented\n---\n")
 
     def deny(file, *a, **k):
@@ -81,19 +82,19 @@ def test_open_permission_error_reads_unreadable_not_missing(tmp_path, monkeypatc
     assert ev["done"] is False
 
 
-def test_legacy_unfenced_prose_status_is_none_not_done(tmp_path):
+def test_legacy_unfenced_prose_status_is_none_not_done(tmp_path: Path) -> None:
     _w(tmp_path, "docs/plans/a.md", "# Plan\n\n> **Status:** SHIPPED\n\nbody\n")
     (ev,) = _run(tmp_path, governing_plan="docs/plans/a.md")
     assert ev["target_status"] is None and ev["done"] is False
 
 
-def test_plan_status_outside_frontmatter_ignored(tmp_path):
+def test_plan_status_outside_frontmatter_ignored(tmp_path: Path) -> None:
     _w(tmp_path, "docs/plans/a.md", "---\ntitle: x\n---\nstatus: landed\n")
     (ev,) = _run(tmp_path, governing_plan="docs/plans/a.md")
     assert ev["target_status"] is None and not ev["done"]
 
 
-def test_sizing_done_and_indented_status_ignored(tmp_path):
+def test_sizing_done_and_indented_status_ignored(tmp_path: Path) -> None:
     _w(tmp_path, "state/sizings/a.yaml", "schema: s\nstatus: shipped  # draft | sized\n")
     _w(tmp_path, "state/sizings/b.yaml", "schema: s\nem_analysis:\n  status: shipped\n")
     (ev,) = _run(tmp_path, sizing_object="state/sizings/a.yaml")
@@ -102,7 +103,7 @@ def test_sizing_done_and_indented_status_ignored(tmp_path):
     assert not ev["done"] and ev["target_status"] is None
 
 
-def test_roadmap_done_and_not_done(tmp_path):
+def test_roadmap_done_and_not_done(tmp_path: Path) -> None:
     _w(tmp_path, "state/roadmap/r1/OVERVIEW.md", "---\nroadmap_id: r1\nstatus: shipped\n---\n")
     _w(tmp_path, "state/roadmap/r2/OVERVIEW.md", "---\nstatus: final-approved\n---\n")
     (ev,) = _run(tmp_path, roadmap_id="r1")
@@ -115,7 +116,7 @@ def test_roadmap_done_and_not_done(tmp_path):
     assert not ev["done"]
 
 
-def test_goal_resolved_by_id_field_not_filename(tmp_path):
+def test_goal_resolved_by_id_field_not_filename(tmp_path: Path) -> None:
     _w(tmp_path, "state/goals/2026-07-10-file-name.yaml",
        'schema: goal\nid: "goal-a"\nstatus: active\n')
     evs = _run(tmp_path, origin_goal_id=["goal-a", "goal-zz"])
@@ -124,14 +125,14 @@ def test_goal_resolved_by_id_field_not_filename(tmp_path):
     assert evs[1]["target_status"] == t.STATUS_MISSING
 
 
-def test_goal_done_when_vocabulary_names_it(tmp_path, monkeypatch):
+def test_goal_done_when_vocabulary_names_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(t, "GOAL_DONE", frozenset({"achieved"}))
     _w(tmp_path, "state/goals/g.yaml", "id: goal-a\nstatus: achieved\n")
     (ev,) = _run(tmp_path, origin_goal_id=["goal-a"])
     assert ev["done"]
 
 
-def test_origin_plan_id_resolved_through_plan_id_pass(tmp_path):
+def test_origin_plan_id_resolved_through_plan_id_pass(tmp_path: Path) -> None:
     _w(tmp_path, "docs/plans/a.md", '---\nplan_id: "pln-1"\nstatus: implemented\n---\n')
     (ev,) = _run(tmp_path, origin_plan_id="pln-1")
     assert ev["field"] == "origin_plan_id" and ev["target_path"] == "docs/plans/a.md" and ev["done"]
@@ -139,30 +140,30 @@ def test_origin_plan_id_resolved_through_plan_id_pass(tmp_path):
     assert ev["target_status"] == t.STATUS_MISSING and not ev["done"]
 
 
-def test_same_plan_by_both_fields_yields_one_item(tmp_path):
+def test_same_plan_by_both_fields_yields_one_item(tmp_path: Path) -> None:
     _w(tmp_path, "docs/plans/a.md", '---\nplan_id: pln-1\nstatus: implemented\n---\n')
     evs = _run(tmp_path, governing_plan="docs/plans/a.md", origin_plan_id="pln-1")
     assert len(evs) == 1
 
 
-def test_crlf_records(tmp_path):
+def test_crlf_records(tmp_path: Path) -> None:
     _w(tmp_path, "docs/plans/a.md", "---\nstatus: implemented\n---\n", crlf=True)
     _w(tmp_path, "state/sizings/a.yaml", "status: shipped\n", crlf=True)
     assert _run(tmp_path, governing_plan="docs/plans/a.md")[0]["done"]
     assert _run(tmp_path, sizing_object="state/sizings/a.yaml")[0]["done"]
 
 
-def test_quoted_status_unquoted(tmp_path):
+def test_quoted_status_unquoted(tmp_path: Path) -> None:
     _w(tmp_path, "state/sizings/a.yaml", "status: 'shipped'\n")
     assert _run(tmp_path, sizing_object="state/sizings/a.yaml")[0]["done"]
 
 
-def test_target_cited_by_two_batons_read_once(tmp_path, monkeypatch):
+def test_target_cited_by_two_batons_read_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _w(tmp_path, "docs/plans/a.md", "---\nstatus: implemented\n---\n")
     opened: list[str] = []
     real = t._read_prefix
 
-    def spy(file, *a, **k):
+    def spy(file, *a, **k) -> bytes:
         opened.append(str(file))
         return real(file, *a, **k)
 
@@ -173,7 +174,7 @@ def test_target_cited_by_two_batons_read_once(tmp_path, monkeypatch):
     assert sum(p.endswith("a.md") for p in opened) == 1
 
 
-def test_no_citation_absent_and_path_escape_not_read(tmp_path):
+def test_no_citation_absent_and_path_escape_not_read(tmp_path: Path) -> None:
     assert t.target_evidence(str(tmp_path), {"b": _h()}) == {}
     (ev,) = _run(tmp_path, governing_plan="../outside.md")
     assert ev["target_status"] == t.STATUS_MISSING
@@ -188,7 +189,7 @@ B1 = "state/handoffs/b1.md"
 B2 = "state/handoffs/b2.md"
 
 
-def test_reverse_deliverable_implemented_and_landed(tmp_path):
+def test_reverse_deliverable_implemented_and_landed(tmp_path: Path) -> None:
     _w(tmp_path, "docs/plans/a.md", '---\nstatus: implemented\ndeliverable_id: "dlv-x"\n---\n')
     out = _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x"}})
     (ev,) = out[B1]
@@ -198,7 +199,7 @@ def test_reverse_deliverable_implemented_and_landed(tmp_path):
     assert ev["target_status"] == "landed" and ev["done"] is False
 
 
-def test_reverse_predecessor_handoff_incl_backslash_and_crlf(tmp_path):
+def test_reverse_predecessor_handoff_incl_backslash_and_crlf(tmp_path: Path) -> None:
     backslashed = B1.replace("/", chr(92))
     _w(tmp_path, "docs/plans/a.md",
        f"---\nstatus: implemented\npredecessor_handoff: {backslashed}\n---\n", crlf=True)
@@ -207,31 +208,31 @@ def test_reverse_predecessor_handoff_incl_backslash_and_crlf(tmp_path):
     assert B2 not in _batons(tmp_path, **{B2: {}})
 
 
-def test_reverse_spinoff_gains_deliverable_item(tmp_path):
+def test_reverse_spinoff_gains_deliverable_item(tmp_path: Path) -> None:
     _w(tmp_path, "docs/plans/a.md", "---\nstatus: implemented\ndeliverable_id: dlv-x\n---\n")
     (ev,) = _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x", "kind": "spinoff"}})[B1]
     assert ev["field"] == "plan.deliverable_id" and ev["done"]
 
 
-def test_reverse_two_plans_one_deliverable_yield_two_items(tmp_path):
+def test_reverse_two_plans_one_deliverable_yield_two_items(tmp_path: Path) -> None:
     _w(tmp_path, "docs/plans/a.md", "---\nstatus: implemented\ndeliverable_id: dlv-x\n---\n")
     _w(tmp_path, "docs/plans/b.md", "---\nstatus: draft\ndeliverable_id: dlv-x\n---\n")
     evs = _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x"}})[B1]
     assert sorted(e["done"] for e in evs) == [False, True]
 
 
-def test_reverse_deliverable_shared_by_two_batons_gives_no_item(tmp_path):
+def test_reverse_deliverable_shared_by_two_batons_gives_no_item(tmp_path: Path) -> None:
     _w(tmp_path, "docs/plans/a.md", "---\nstatus: implemented\ndeliverable_id: dlv-x\n---\n")
     assert _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x"}, B2: {"deliverable_id": "dlv-x"}}) == {}
 
 
-def test_reverse_forward_and_reverse_to_same_plan_dedupe_and_open_once(tmp_path, monkeypatch):
+def test_reverse_forward_and_reverse_to_same_plan_dedupe_and_open_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _w(tmp_path, "docs/plans/a.md", "---\nplan_id: pln-1\nstatus: implemented\ndeliverable_id: dlv-x\n---\n")
     _w(tmp_path, "docs/plans/c.md", "---\nstatus: draft\n---\n")
     opened: list[str] = []
     real = t._read_prefix
 
-    def spy(file, *a, **k):
+    def spy(file, *a, **k) -> bytes:
         opened.append(str(file))
         return real(file, *a, **k)
 
@@ -243,14 +244,14 @@ def test_reverse_forward_and_reverse_to_same_plan_dedupe_and_open_once(tmp_path,
     assert len(plan_opens) == len(set(plan_opens)) == 2
 
 
-def test_reverse_long_frontmatter_closing_fence_past_first_read(tmp_path):
+def test_reverse_long_frontmatter_closing_fence_past_first_read(tmp_path: Path) -> None:
     pad = "".join(f"k{i}: {'x' * 60}\n" for i in range(80))
     _w(tmp_path, "docs/plans/a.md", f"---\n{pad}status: implemented\ndeliverable_id: dlv-x\n---\n")
     (ev,) = _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x"}})[B1]
     assert ev["done"]
 
 
-def test_plan_frontmatter_cuts_at_closing_fence_variants(tmp_path):
+def test_plan_frontmatter_cuts_at_closing_fence_variants(tmp_path: Path) -> None:
     body = "status: x\n  ---\nbody ---\n"
     cases = {
         "crlf": ("---\r\nstatus: a\r\n---\r\nstatus: b\r\n", ["status: a"]),
@@ -266,7 +267,7 @@ def test_plan_frontmatter_cuts_at_closing_fence_variants(tmp_path):
         ], name
 
 
-def test_plan_frontmatter_unfenced_keeps_first_window(tmp_path):
+def test_plan_frontmatter_unfenced_keeps_first_window(tmp_path: Path) -> None:
     _w(tmp_path, "docs/plans/a.md", "# Plan\n" + "x\n" * 3000 + "status: implemented\n")
     lines = t._plan_frontmatter(str(tmp_path / "docs/plans/a.md"))
     assert "status: implemented" not in lines
@@ -275,7 +276,7 @@ def test_plan_frontmatter_unfenced_keeps_first_window(tmp_path):
 SZ = "state/sizings/s.yaml"
 
 
-def _sizing_tree(root, plan_status="implemented", with_plan=True, extra_sizing_naming_b1=False):
+def _sizing_tree(root, plan_status: str = "implemented", with_plan: bool = True, extra_sizing_naming_b1: bool = False) -> None:
     _w(root, SZ, f"schema: sizing-object\nscout_evidence:\n  - {B1}\n")
     if with_plan:
         _w(root, "docs/plans/p.md", f'---\nstatus: {plan_status}\nsizing_object: "{SZ}"\n---\n')
@@ -284,7 +285,7 @@ def _sizing_tree(root, plan_status="implemented", with_plan=True, extra_sizing_n
         _w(root, "docs/plans/q.md", '---\nstatus: implemented\nsizing_object: "state/sizings/s2.yaml"\n---\n')
 
 
-def test_sizing_hop_baton_named_by_sizing_gains_plan_item(tmp_path):
+def test_sizing_hop_baton_named_by_sizing_gains_plan_item(tmp_path: Path) -> None:
     _sizing_tree(tmp_path)
     (ev,) = _batons(tmp_path, **{B1: {}})[B1]
     assert ev["field"] == "plan.sizing_object" and ev["done"]
@@ -292,35 +293,35 @@ def test_sizing_hop_baton_named_by_sizing_gains_plan_item(tmp_path):
     assert B2 not in _batons(tmp_path, **{B2: {}})
 
 
-def test_sizing_hop_undelivered_plan_is_not_done(tmp_path):
+def test_sizing_hop_undelivered_plan_is_not_done(tmp_path: Path) -> None:
     _sizing_tree(tmp_path, plan_status="draft")
     (ev,) = _batons(tmp_path, **{B1: {}})[B1]
     assert ev["field"] == "plan.sizing_object" and ev["done"] is False
 
 
-def test_sizing_hop_escaping_sizing_path_adds_none(tmp_path):
+def test_sizing_hop_escaping_sizing_path_adds_none(tmp_path: Path) -> None:
     _w(tmp_path, "docs/plans/p.md", '---\nstatus: implemented\nsizing_object: "../s.yaml"\n---\n')
     _w(tmp_path, "s.yaml", f"- {B1}\n")
     assert B1 not in _batons(tmp_path, **{B1: {}})
 
 
-def test_sizing_hop_sizing_without_plan_adds_none(tmp_path):
+def test_sizing_hop_sizing_without_plan_adds_none(tmp_path: Path) -> None:
     _sizing_tree(tmp_path, with_plan=False)
     assert B1 not in _batons(tmp_path, **{B1: {}})
 
 
-def test_sizing_hop_baton_named_by_two_sizings_adds_none(tmp_path):
+def test_sizing_hop_baton_named_by_two_sizings_adds_none(tmp_path: Path) -> None:
     _sizing_tree(tmp_path, extra_sizing_naming_b1=True)
     assert B1 not in _batons(tmp_path, **{B1: {}})
 
 
-def test_archived_reverse_deliverable_gains_item(tmp_path):
+def test_archived_reverse_deliverable_gains_item(tmp_path: Path) -> None:
     _w(tmp_path, "archive/specs/2026-09/a.md", "---\nstatus: implemented\ndeliverable_id: dlv-x\n---\n")
     (ev,) = _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x"}})[B1]
     assert (ev["field"], ev["target_path"], ev["done"]) == ("plan.deliverable_id", "docs/plans/a.md", True)
 
 
-def test_archived_reverse_predecessor_and_sizing_join(tmp_path):
+def test_archived_reverse_predecessor_and_sizing_join(tmp_path: Path) -> None:
     _w(tmp_path, SZ, f"baton: {B1}\n")
     _w(tmp_path, "archive/specs/2026-09/a.md", f"---\nstatus: implemented\npredecessor_handoff: {B2}\n---\n")
     _w(tmp_path, "archive/specs/2026-09/p.md", f'---\nstatus: implemented\nsizing_object: "{SZ}"\n---\n')
@@ -330,28 +331,28 @@ def test_archived_reverse_predecessor_and_sizing_join(tmp_path):
     assert ev["field"] == "plan.sizing_object" and ev["target_path"] == "docs/plans/p.md" and ev["done"]
 
 
-def test_archived_reverse_live_copy_wins(tmp_path):
+def test_archived_reverse_live_copy_wins(tmp_path: Path) -> None:
     _w(tmp_path, "docs/plans/a.md", "---\nstatus: draft\ndeliverable_id: dlv-x\n---\n")
     _w(tmp_path, "archive/specs/2026-09/a.md", "---\nstatus: implemented\ndeliverable_id: dlv-x\n---\n")
     (ev,) = _batons(tmp_path, **{B1: {"deliverable_id": "dlv-x"}})[B1]
     assert ev["target_status"] == "draft" and ev["done"] is False
 
 
-def test_sizing_prose_mention_adds_none(tmp_path):
+def test_sizing_prose_mention_adds_none(tmp_path: Path) -> None:
     _w(tmp_path, SZ, f"schema: sizing-object\npremise:\n  evidence: |\n    see {B1} for context\n"
                      f"finding: \"the baton {B1} is stale\"\n  note: {B1}\n")
     _w(tmp_path, "docs/plans/p.md", f'---\nstatus: implemented\nsizing_object: "{SZ}"\n---\n')
     assert B1 not in _batons(tmp_path, **{B1: {}})
 
 
-def test_sizing_baton_key_still_joins(tmp_path):
+def test_sizing_baton_key_still_joins(tmp_path: Path) -> None:
     _w(tmp_path, SZ, f'schema: sizing-object\nbaton: "{B1}"\n')
     _w(tmp_path, "docs/plans/p.md", f'---\nstatus: implemented\nsizing_object: "{SZ}"\n---\n')
     (ev,) = _batons(tmp_path, **{B1: {}})[B1]
     assert ev["field"] == "plan.sizing_object" and ev["done"]
 
 
-def test_module_imports_no_yaml_or_subprocess():
+def test_module_imports_no_yaml_or_subprocess() -> None:
     import ast
 
     tree = ast.parse(Path(t.__file__).read_text(encoding="utf-8"))
@@ -364,7 +365,7 @@ def test_module_imports_no_yaml_or_subprocess():
     assert not mods & {"yaml", "subprocess"}
 
 
-def test_target_evidence_appends_run_item_after_sizing_item(tmp_path):
+def test_target_evidence_appends_run_item_after_sizing_item(tmp_path: Path) -> None:
     import json
     _w(tmp_path, "state/sizings/s.yaml", "status: draft\n")
     _w(tmp_path, "state/warp/r1/run.json", json.dumps({"sizing_rel": "state/sizings/s.yaml"}))
@@ -377,25 +378,25 @@ def test_target_evidence_appends_run_item_after_sizing_item(tmp_path):
     assert got[1]["ship_ref"] == "d" * 40
 
 
-def _delivered_plan(status, extra_row=""):
+def _delivered_plan(status, extra_row: str = "") -> str:
     return (f"---\nstatus: {status}\n---\n\n## Tasks\n\n```yaml plan-tasks\n"
             f"- id: C1\n  title: t\n  disposition: coded\n  disposition_ref: {'d' * 40}\n{extra_row}```\n")
 
 
-def test_implemented_plan_with_open_row_is_not_done_whichever_field_cites_it(tmp_path):
+def test_implemented_plan_with_open_row_is_not_done_whichever_field_cites_it(tmp_path: Path) -> None:
     _w(tmp_path, "docs/plans/a.md",
        _delivered_plan("implemented", "- id: C2\n  title: u\n  disposition: open\n"))
     (ev,) = _run(tmp_path, governing_plan="docs/plans/a.md")
     assert ev["target_status"] == "implemented" and ev["done"] is False and ev["ship_ref"] is None
 
 
-def test_delivered_plan_item_carries_ship_ref(tmp_path):
+def test_delivered_plan_item_carries_ship_ref(tmp_path: Path) -> None:
     _w(tmp_path, "docs/plans/a.md", _delivered_plan("implemented"))
     (ev,) = _run(tmp_path, governing_plan="docs/plans/a.md")
     assert ev["done"] is True and ev["ship_ref"] == "d" * 40
 
 
-def test_target_evidence_open_non_spinoff_gets_no_run_item(tmp_path):
+def test_target_evidence_open_non_spinoff_gets_no_run_item(tmp_path: Path) -> None:
     import json
     _w(tmp_path, "state/warp/r1/run.json", json.dumps({"sizing_rel": "state/sizings/s.yaml"}))
     got = _run(tmp_path, sizing_object="state/sizings/s.yaml", kind="build")

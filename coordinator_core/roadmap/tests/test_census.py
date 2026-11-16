@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.roadmap import census, prep_gate
+from pathlib import Path
 
 # The repo fixture runs real git; needs a real process.
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -34,7 +35,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
         "env | grep -c HOME",
     ],
 )
-def test_a_read_clears_the_screen(command):
+def test_a_read_clears_the_screen(command) -> None:
     assert census.screen(command) is None
 
 
@@ -70,7 +71,7 @@ def test_a_read_clears_the_screen(command):
         "printenv | tee o",
     ],
 )
-def test_a_write_or_unscreenable_form_is_refused(command):
+def test_a_write_or_unscreenable_form_is_refused(command) -> None:
     assert census.screen(command)
 
 
@@ -85,16 +86,16 @@ def test_a_write_or_unscreenable_form_is_refused(command):
         (0, "", "MATCH"),
     ],
 )
-def test_a_structured_count_is_always_decidable(count, stdout, state):
+def test_a_structured_count_is_always_decidable(count, stdout, state) -> None:
     assert census.compare_count(count, stdout)["state"] == state
 
 
 @pytest.mark.parametrize("value", ["12", -1, True, 1.5, None])
-def test_a_count_that_is_not_a_non_negative_int_is_named(value):
+def test_a_count_that_is_not_a_non_negative_int_is_named(value) -> None:
     assert census.count_defect({"count": value})
 
 
-def test_an_absent_count_is_not_a_defect():
+def test_an_absent_count_is_not_a_defect() -> None:
     assert census.count_defect({"result": "12 (prose)"}) is None
 
 
@@ -102,7 +103,7 @@ def _census_class(entries):
     return prep_gate._census({"census": entries})
 
 
-def test_prep_refuses_a_command_the_revalidator_would_refuse_and_names_the_allowed_form():
+def test_prep_refuses_a_command_the_revalidator_would_refuse_and_names_the_allowed_form() -> None:
     verdict = _census_class(
         [{"question": "q", "command": "python -c 'print(1)'", "result": "1"}]
     )
@@ -111,7 +112,7 @@ def test_prep_refuses_a_command_the_revalidator_would_refuse_and_names_the_allow
     assert census.ALLOWED_FORM in verdict["detail"]
 
 
-def test_prep_refuses_a_malformed_count():
+def test_prep_refuses_a_malformed_count() -> None:
     verdict = _census_class(
         [{"question": "q", "command": "grep -c x f", "result": "1", "count": "1"}]
     )
@@ -119,7 +120,7 @@ def test_prep_refuses_a_malformed_count():
     assert "count" in verdict["detail"]
 
 
-def test_prep_passes_a_screenable_entry_carrying_a_count():
+def test_prep_passes_a_screenable_entry_carrying_a_count() -> None:
     verdict = _census_class(
         [{"question": "q", "command": "grep -c x f", "result": "12 (prose)", "count": 12}]
     )
@@ -127,7 +128,7 @@ def test_prep_passes_a_screenable_entry_carrying_a_count():
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     import subprocess
 
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -140,7 +141,7 @@ def repo(tmp_path):
 
 
 @pytest.mark.parametrize("command", ["python tool.py", "python3 -u ./tool.py | wc -l", "python -m pkg"])
-def test_a_tracked_python_target_clears_the_screen(repo, command):
+def test_a_tracked_python_target_clears_the_screen(repo, command) -> None:
     assert census.screen(command, repo) is None
 
 
@@ -161,15 +162,15 @@ def test_a_tracked_python_target_clears_the_screen(repo, command):
         "python",
     ],
 )
-def test_an_untracked_or_dynamic_python_target_is_refused(repo, command):
+def test_an_untracked_or_dynamic_python_target_is_refused(repo, command) -> None:
     assert census.screen(command, repo)
 
 
-def test_python_without_repo_context_stays_pure_string_screened():
+def test_python_without_repo_context_stays_pure_string_screened() -> None:
     assert census.screen("python anything.py") is None
 
 
-def test_prep_resolves_every_python_target_in_one_ls_files_spawn(repo, monkeypatch):
+def test_prep_resolves_every_python_target_in_one_ls_files_spawn(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import run as git_run
 
     calls = []
@@ -198,12 +199,12 @@ def test_prep_resolves_every_python_target_in_one_ls_files_spawn(repo, monkeypat
         (None, "count 12; v", "w", None),  # genuinely different value: left to the count compare
     ],
 )
-def test_same_value_normalises_the_count_prefix(count, recorded, observed, state):
+def test_same_value_normalises_the_count_prefix(count, recorded, observed, state) -> None:
     verdict = census.same_value(count, recorded, observed)
     assert (verdict["state"] if verdict else None) == state
 
 
-def _typed(claims=715, **over):
+def _typed(claims: int = 715, **over):
     entry = {"question": "q", "kind": "next-free-number", "dir": "supabase/migrations",
              "claims": claims, "result": str(claims)}
     entry.update(over)
@@ -229,35 +230,35 @@ def _mig(tmp_path, *names):
         (("notes.md", "714_c.sql"), 715, "MATCH"),
     ],
 )
-def test_evaluate_typed_verdicts(tmp_path, files, claims, state):
+def test_evaluate_typed_verdicts(tmp_path: Path, files, claims, state) -> None:
     got = census.evaluate_typed(_typed(claims), _mig(tmp_path, *files))
     assert got["state"] == state
     if state == "DRIFT":
         assert "next free" in got["basis"]
 
 
-def test_evaluate_typed_drift_names_colliding_file(tmp_path):
+def test_evaluate_typed_drift_names_colliding_file(tmp_path: Path) -> None:
     got = census.evaluate_typed(_typed(715), _mig(tmp_path, "715_a.sql", "714_z.sql"))
     assert "715_a.sql" in got["basis"] and got["observed"] == "next free 716"
 
 
-def test_evaluate_typed_missing_dir_is_unrunnable(tmp_path):
+def test_evaluate_typed_missing_dir_is_unrunnable(tmp_path: Path) -> None:
     assert census.evaluate_typed(_typed(), tmp_path)["state"] == "UNRUNNABLE"
 
 
-def test_evaluate_typed_dir_is_a_file_is_unrunnable(tmp_path):
+def test_evaluate_typed_dir_is_a_file_is_unrunnable(tmp_path: Path) -> None:
     (tmp_path / "supabase").mkdir()
     (tmp_path / "supabase" / "migrations").write_text("x")
     assert census.evaluate_typed(_typed(), tmp_path)["state"] == "UNRUNNABLE"
 
 
-def test_evaluate_typed_subdirectory_is_not_taken(tmp_path):
+def test_evaluate_typed_subdirectory_is_not_taken(tmp_path: Path) -> None:
     root = _mig(tmp_path)
     (root / "supabase" / "migrations" / "715_dir").mkdir()
     assert census.evaluate_typed(_typed(715), root)["state"] == "MATCH"
 
 
-def test_evaluate_typed_defect_is_refused(tmp_path):
+def test_evaluate_typed_defect_is_refused(tmp_path: Path) -> None:
     assert census.evaluate_typed(_typed(dir="/abs"), tmp_path)["state"] == "REFUSED"
 
 
@@ -280,30 +281,30 @@ def test_evaluate_typed_defect_is_refused(tmp_path):
         {"count": 1},
     ],
 )
-def test_typed_defect_cases(over):
+def test_typed_defect_cases(over) -> None:
     assert census.typed_defect(_typed(**over))
 
 
 @pytest.mark.parametrize("missing", ["dir", "claims"])
-def test_typed_defect_missing_field(missing):
+def test_typed_defect_missing_field(missing) -> None:
     entry = _typed()
     del entry[missing]
     assert missing in census.typed_defect(entry)
 
 
-def test_typed_defect_clean_and_helpers():
+def test_typed_defect_clean_and_helpers() -> None:
     assert census.typed_defect(_typed()) is None
     assert census.is_typed(_typed()) and not census.is_typed({"command": "ls"})
     assert census.describe_typed(_typed()) == "next-free-number supabase/migrations claims 715"
 
 
-def test_not_run_outcome_shape_and_is_no_revalidation_state():
+def test_not_run_outcome_shape_and_is_no_revalidation_state() -> None:
     assert census.not_run_outcome("deleted") == {"state": census.NOT_RUN, "entries": [], "detail": "deleted"}
     assert census.NOT_RUN == "NOT-RUN"
     assert census.NOT_RUN not in {"MATCH", "DRIFT", "UNDECIDABLE", "REFUSED", "UNRUNNABLE"}
 
 
-def test_evaluate_typed_spawns_nothing(tmp_path, monkeypatch):
+def test_evaluate_typed_spawns_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     def boom(*a, **k):

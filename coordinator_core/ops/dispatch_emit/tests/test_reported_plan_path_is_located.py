@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.sizing_fire import PLAN_PATH_JS, s_plan_located, s_plan_path
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.usefixtures("m_plus_known_arm"),
@@ -54,7 +55,7 @@ def _drive(root, ready_js: str) -> str | None:
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     located = s_plan_path(SIZING)
     (tmp_path / located).parent.mkdir(parents=True)
     (tmp_path / located).write_text("# plan\n", encoding="utf-8")
@@ -63,7 +64,7 @@ def repo(tmp_path):
 
 
 @pytest.mark.parametrize("shape", ["object", "bare-string"])
-def test_planrel_is_the_located_path_when_the_planner_returns_a_non_located_string(repo, shape):
+def test_planrel_is_the_located_path_when_the_planner_returns_a_non_located_string(repo, shape) -> None:
     ready = json.dumps({"planPath": PLANNER_STRING}) if shape == "object" else json.dumps(PLANNER_STRING)
     got = _drive(repo, ready)
     assert got == s_plan_located(repo, SIZING), (
@@ -72,6 +73,6 @@ def test_planrel_is_the_located_path_when_the_planner_returns_a_non_located_stri
     )
 
 
-def test_planrel_stays_the_planners_path_when_that_path_is_the_located_one(repo):
+def test_planrel_stays_the_planners_path_when_that_path_is_the_located_one(repo) -> None:
     located = s_plan_located(repo, SIZING)
     assert _drive(repo, json.dumps({"planPath": located})) == located

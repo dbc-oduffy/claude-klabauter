@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 from coordinator_core import baton_assemble
 from coordinator_core.baton_assemble import apply as baton_apply
 from coordinator_core.session import record_homes
+import pytest
 
 _H1_REL = Path(record_homes.record_path("", "handoffs", "h1.md")).as_posix()
 _SID = "11111111-2222-3333-4444-555555555555"
@@ -22,14 +23,14 @@ def _completed(stdout: str = "") -> MagicMock:
     return done
 
 
-def test_brief_spawns_no_session_id_log(tmp_path: Path, monkeypatch) -> None:
+def test_brief_spawns_no_session_id_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
     handoff = tmp_path / _H1_REL
     handoff.parent.mkdir(parents=True)
     handoff.write_text("---\ntitle: h1\n---\n\n# h1\n", encoding="utf-8")
     argvs: list[list[str]] = []
 
-    def _record_run(argv, *args, **kwargs):
+    def _record_run(argv, *args, **kwargs) -> MagicMock:
         argvs.append(list(argv))
         return _completed("")
 
@@ -51,7 +52,7 @@ def test_brief_spawns_no_session_id_log(tmp_path: Path, monkeypatch) -> None:
     assert not hasattr(baton_assemble, "_print_commits_into_baton")
 
 
-def test_apply_write_path_merges_session_commits(tmp_path: Path, monkeypatch) -> None:
+def test_apply_write_path_merges_session_commits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(baton_apply, "_resolve_current_session_id", lambda: _SID)
     with patch(
         "coordinator_core.ops.session_commits.resolve_session_commits",
@@ -62,7 +63,7 @@ def test_apply_write_path_merges_session_commits(tmp_path: Path, monkeypatch) ->
     merge.assert_called_once_with(_SID, cwd=str(tmp_path), commits=["a" * 40, "b" * 40])
 
 
-def test_apply_write_path_is_fail_open(tmp_path: Path, monkeypatch) -> None:
+def test_apply_write_path_is_fail_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(baton_apply, "_resolve_current_session_id", lambda: _SID)
     with patch(
         "coordinator_core.ops.session_commits.resolve_session_commits",

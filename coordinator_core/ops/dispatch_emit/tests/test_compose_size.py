@@ -5,13 +5,14 @@ from __future__ import annotations
 import json
 
 from coordinator_core.ops.dispatch_emit.compose_size import cap_refusal, component_sizes
+import pytest
 
 
-def test_component_sizes_counts_utf8_bytes_descending():
+def test_component_sizes_counts_utf8_bytes_descending() -> None:
     assert component_sizes({"a": "xx", "b": "é" * 3, "c": ""}) == [("b", 6), ("a", 2), ("c", 0)]
 
 
-def test_cap_refusal_names_total_cap_and_largest_component():
+def test_cap_refusal_names_total_cap_and_largest_component() -> None:
     msg = cap_refusal(600, 524288, component_sizes({"base": "x" * 5, "blitz": "x" * 9}))
     assert msg == (
         "composed ask script is over the Workflow runner's 524288-byte cap: 600 bytes; "
@@ -19,11 +20,11 @@ def test_cap_refusal_names_total_cap_and_largest_component():
     )
 
 
-def test_cap_refusal_without_components_still_states_the_cap():
+def test_cap_refusal_without_components_still_states_the_cap() -> None:
     assert cap_refusal(7, 5, []).endswith("5-byte cap: 7 bytes")
 
 
-def test_probe_prints_json_and_exits_zero(capsys):
+def test_probe_prints_json_and_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
     import pytest
 
     from coordinator_core.ops.dispatch_emit import compose_size_probe

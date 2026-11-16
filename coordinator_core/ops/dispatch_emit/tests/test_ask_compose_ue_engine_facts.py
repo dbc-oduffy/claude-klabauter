@@ -6,12 +6,13 @@ from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.ue_engine_facts import CLAUSE
+import pytest
 
 _MARK = "your training data on UE5 APIs is stale"
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
 
-def _compose():
+def _compose() -> str:
     return compose_ask_script(
         repo_root="REPO",
         prompt="add a thing",
@@ -25,7 +26,7 @@ def _compose():
     )
 
 
-def test_served_repo_briefs_carry_the_clause_in_each_role(monkeypatch):
+def test_served_repo_briefs_carry_the_clause_in_each_role(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "ue_engine_facts_clause", lambda root: CLAUSE)
     script = _compose()
     plan_author = script.split("Author the plan for the sizing at ", 1)[0]
@@ -36,20 +37,20 @@ def test_served_repo_briefs_carry_the_clause_in_each_role(monkeypatch):
     assert "project_engine_list_modules" in script
 
 
-def test_unserved_repo_briefs_carry_no_clause(monkeypatch):
+def test_unserved_repo_briefs_carry_no_clause(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "ue_engine_facts_clause", lambda root: "")
     script = _compose()
     assert _MARK not in script
     assert "project_engine_session_primer" not in script
 
 
-def test_unserved_compose_omits_every_clause_line(monkeypatch):
+def test_unserved_compose_omits_every_clause_line(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "ue_engine_facts_clause", lambda root: "")
     script = _compose()
     assert "project_engine_list_modules" not in script
     assert "validate_ue_api" not in script
 
 
-def test_real_reader_on_a_bare_repo_yields_no_clause():
+def test_real_reader_on_a_bare_repo_yields_no_clause() -> None:
     # "REPO" has no example-retrieval-repo index, so the real reader answers "" and nothing is emitted.
     assert _MARK not in _compose()

@@ -10,6 +10,7 @@ import subprocess
 import tempfile
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -26,7 +27,7 @@ GUARD = _em_post_fire.GUARD_NAME
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     sys_tmp = tmp_path / "sys-tmp"
     sys_tmp.mkdir()
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(sys_tmp))
@@ -43,13 +44,13 @@ def repo(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def fires(monkeypatch):
+def fires(monkeypatch: pytest.MonkeyPatch):
     seen = []
     monkeypatch.setattr(counter, "record_advisory_fire", lambda name, sid, cwd=None: seen.append(name))
     return seen
 
 
-def _fire(monkeypatch, runs):
+def _fire(monkeypatch, runs) -> None:
     monkeypatch.setattr(flag_em_poll_in_flight, "session_workflow_run_ids", lambda sid: runs)
 
 
@@ -113,7 +114,7 @@ UNLOGGED = (
 
 
 @pytest.mark.parametrize("cmd", UNLOGGED)
-def test_fired_session_read_only_scratch_and_commit_forms_are_not_recorded(repo, monkeypatch, tmp_path, fires, cmd):
+def test_fired_session_read_only_scratch_and_commit_forms_are_not_recorded(repo, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fires, cmd) -> None:
     _fire(monkeypatch, ["run-1"])
     # Bash eats an unquoted backslash, so a native Windows path would name a different file.
     cmd = cmd.format(scratch=(tmp_path / "sys-tmp" / "n.txt").as_posix())
@@ -122,7 +123,7 @@ def test_fired_session_read_only_scratch_and_commit_forms_are_not_recorded(repo,
 
 
 @pytest.mark.parametrize("cmd", LOGGED)
-def test_fired_session_product_write_is_admitted_and_recorded_not_denied(repo, monkeypatch, fires, cmd):
+def test_fired_session_product_write_is_admitted_and_recorded_not_denied(repo, monkeypatch: pytest.MonkeyPatch, fires, cmd) -> None:
     _fire(monkeypatch, ["run-1"])
     out = _dispatch(repo, cmd)
     assert _decision(out) != "deny", out
@@ -130,19 +131,19 @@ def test_fired_session_product_write_is_admitted_and_recorded_not_denied(repo, m
     assert fires == [GUARD]
 
 
-def test_hit_returns_none_even_with_a_recorded_fire(repo, monkeypatch, fires):
+def test_hit_returns_none_even_with_a_recorded_fire(repo, monkeypatch: pytest.MonkeyPatch, fires) -> None:
     _fire(monkeypatch, ["run-1"])
     assert _check(repo, "echo x > a.py") is None
     assert fires == [GUARD]
 
 
-def test_commit_mixed_with_a_write_is_still_recorded(repo, monkeypatch, fires):
+def test_commit_mixed_with_a_write_is_still_recorded(repo, monkeypatch: pytest.MonkeyPatch, fires) -> None:
     _fire(monkeypatch, ["run-1"])
     assert _check(repo, "git add a.py && echo x > a.py") is None
     assert fires == [GUARD]
 
 
-def test_em_scoped_commit_of_state_run_records_is_admitted_unrecorded(repo, monkeypatch, fires):
+def test_em_scoped_commit_of_state_run_records_is_admitted_unrecorded(repo, monkeypatch: pytest.MonkeyPatch, fires) -> None:
     _fire(monkeypatch, ["run-1"])
     rec = "state/warp/ask-20261027T225221-904da8/notes.jsonl"
     assert _check(repo, f"git add {rec} && git commit -m 'warp: record' -- {rec}") is None
@@ -150,7 +151,7 @@ def test_em_scoped_commit_of_state_run_records_is_admitted_unrecorded(repo, monk
     assert fires == []
 
 
-def test_fired_session_claude_md_write_is_recorded_and_the_text_names_the_grant_route(repo, monkeypatch, fires):
+def test_fired_session_claude_md_write_is_recorded_and_the_text_names_the_grant_route(repo, monkeypatch: pytest.MonkeyPatch, fires) -> None:
     from coordinator_core.session.claude_md_grant import GRANT_CLI_NAME
 
     _fire(monkeypatch, ["run-1"])
@@ -170,20 +171,20 @@ def test_fired_session_claude_md_write_is_recorded_and_the_text_names_the_grant_
         "git push origin main",
     ),
 )
-def test_fired_session_non_product_command_is_not_recorded(repo, monkeypatch, fires, cmd):
+def test_fired_session_non_product_command_is_not_recorded(repo, monkeypatch: pytest.MonkeyPatch, fires, cmd) -> None:
     _fire(monkeypatch, ["run-1"])
     assert _check(repo, cmd) is None
     assert fires == []
 
 
-def test_fired_session_scratch_write_is_not_recorded(repo, monkeypatch, tmp_path, fires):
+def test_fired_session_scratch_write_is_not_recorded(repo, monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fires) -> None:
     _fire(monkeypatch, ["run-1"])
     scratch = tmp_path / "sys-tmp" / "n.txt"
     assert _check(repo, f"echo x > {scratch}") is None
     assert fires == []
 
 
-def test_fired_session_write_to_a_path_no_run_owns_is_not_recorded(repo, monkeypatch, fires):
+def test_fired_session_write_to_a_path_no_run_owns_is_not_recorded(repo, monkeypatch: pytest.MonkeyPatch, fires) -> None:
     _fire(monkeypatch, ["run-1"])
     assert _check(repo, "echo x > unowned.py") is None
     assert fires == []
@@ -191,25 +192,25 @@ def test_fired_session_write_to_a_path_no_run_owns_is_not_recorded(repo, monkeyp
     assert fires == [GUARD]
 
 
-def test_subagent_payload_is_never_recorded(repo, monkeypatch, fires):
+def test_subagent_payload_is_never_recorded(repo, monkeypatch: pytest.MonkeyPatch, fires) -> None:
     _fire(monkeypatch, ["run-1"])
     assert guard.check("echo x > a.py", SID, str(repo), {"cwd": str(repo), "agent_id": "a1"}) is None
     assert fires == []
 
 
-def test_unfired_session_is_not_recorded(repo, monkeypatch, fires):
+def test_unfired_session_is_not_recorded(repo, monkeypatch: pytest.MonkeyPatch, fires) -> None:
     _fire(monkeypatch, [])
     assert _check(repo, "echo x > a.py") is None
     assert fires == []
 
 
-def test_empty_session_id_is_not_recorded(repo, monkeypatch, fires):
+def test_empty_session_id_is_not_recorded(repo, monkeypatch: pytest.MonkeyPatch, fires) -> None:
     _fire(monkeypatch, ["run-1"])
     assert guard.check("echo x > a.py", "", str(repo), {"cwd": str(repo)}) is None
     assert fires == []
 
 
-def test_unfired_check_reads_once_and_never_parses(repo, monkeypatch):
+def test_unfired_check_reads_once_and_never_parses(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _fire(monkeypatch, [])
     import coordinator_core.bash_guards._shell_write_projection as proj
 
@@ -220,7 +221,7 @@ def test_unfired_check_reads_once_and_never_parses(repo, monkeypatch):
     assert _check(repo, "echo x > a.py") is None
 
 
-def test_fired_check_spawns_no_process(repo, monkeypatch, fires):
+def test_fired_check_spawns_no_process(repo, monkeypatch: pytest.MonkeyPatch, fires) -> None:
     _fire(monkeypatch, ["run-1"])
 
     def boom(*a, **k):
@@ -232,7 +233,7 @@ def test_fired_check_spawns_no_process(repo, monkeypatch, fires):
     assert fires == [GUARD]
 
 
-def test_a_crash_admits(repo, monkeypatch, fires):
+def test_a_crash_admits(repo, monkeypatch: pytest.MonkeyPatch, fires) -> None:
     _fire(monkeypatch, ["run-1"])
     import coordinator_core.bash_guards._shell_write_projection as proj
 
@@ -244,7 +245,7 @@ def test_a_crash_admits(repo, monkeypatch, fires):
     assert fires == []
 
 
-def _write_index(root, paths):
+def _write_index(root, paths) -> None:
     body = b"DIRC" + (2).to_bytes(4, "big") + len(paths).to_bytes(4, "big")
     for p in paths:
         name = p.encode()
@@ -253,7 +254,7 @@ def _write_index(root, paths):
     (root / ".git" / "index").write_bytes(body + b"\x00" * 20)
 
 
-def test_rm_of_empty_untracked_file_is_admitted_unrecorded(repo, monkeypatch, fires):
+def test_rm_of_empty_untracked_file_is_admitted_unrecorded(repo, monkeypatch: pytest.MonkeyPatch, fires) -> None:
     _fire(monkeypatch, ["run-1"])
     _write_index(repo, ["a.py"])
     (repo / "=").write_bytes(b"")
@@ -274,7 +275,7 @@ def test_rm_of_empty_untracked_file_is_admitted_unrecorded(repo, monkeypatch, fi
         ("untracked", "rm = | tee f.py"),
     ),
 )
-def test_rm_outside_the_empty_untracked_case_is_recorded_and_admitted(repo, monkeypatch, fires, setup, cmd):
+def test_rm_outside_the_empty_untracked_case_is_recorded_and_admitted(repo, monkeypatch: pytest.MonkeyPatch, fires, setup, cmd) -> None:
     _fire(monkeypatch, ["run-1"])
     _write_index(repo, ["a.py", "="] if setup == "tracked" else ["a.py"])
     (repo / "=").write_bytes(b"x" if setup == "nonempty" else b"")
@@ -282,7 +283,7 @@ def test_rm_outside_the_empty_untracked_case_is_recorded_and_admitted(repo, monk
     assert fires == [GUARD]
 
 
-def _record_touch(repo, rel):
+def _record_touch(repo, rel) -> None:
     from pathlib import Path
 
     from coordinator_core.session import touch_record
@@ -292,7 +293,7 @@ def _record_touch(repo, rel):
 
 
 @pytest.mark.parametrize("cmd", ("git checkout -- a.py b.py", "git restore a.py b.py", "git restore -- a.py"))
-def test_pathspec_revert_of_own_written_paths_is_unrecorded(repo, monkeypatch, fires, cmd):
+def test_pathspec_revert_of_own_written_paths_is_unrecorded(repo, monkeypatch: pytest.MonkeyPatch, fires, cmd) -> None:
     _fire(monkeypatch, ["run-1"])
     _record_touch(repo, "a.py")
     _record_touch(repo, "b.py")
@@ -310,7 +311,7 @@ def test_pathspec_revert_of_own_written_paths_is_unrecorded(repo, monkeypatch, f
         "git checkout -- a.py && echo x > a.py",
     ),
 )
-def test_revert_outside_the_own_written_pathspec_case_is_recorded(repo, monkeypatch, fires, cmd):
+def test_revert_outside_the_own_written_pathspec_case_is_recorded(repo, monkeypatch: pytest.MonkeyPatch, fires, cmd) -> None:
     _fire(monkeypatch, ["run-1"])
     _record_touch(repo, "a.py")
     _record_touch(repo, "b.py")
@@ -318,13 +319,13 @@ def test_revert_outside_the_own_written_pathspec_case_is_recorded(repo, monkeypa
     assert fires == [GUARD]
 
 
-def test_pathspec_revert_without_a_touch_record_is_recorded(repo, monkeypatch, fires):
+def test_pathspec_revert_without_a_touch_record_is_recorded(repo, monkeypatch: pytest.MonkeyPatch, fires) -> None:
     _fire(monkeypatch, ["run-1"])
     assert _check(repo, "git checkout -- a.py") is None
     assert fires == [GUARD]
 
 
-def test_pathspec_revert_with_a_backslash_path_is_unrecorded(repo, monkeypatch, fires):
+def test_pathspec_revert_with_a_backslash_path_is_unrecorded(repo, monkeypatch: pytest.MonkeyPatch, fires) -> None:
     _fire(monkeypatch, ["run-1"])
     (repo / "pkg").mkdir()
     _record_touch(repo, "pkg/a.py")
@@ -335,20 +336,20 @@ def test_pathspec_revert_with_a_backslash_path_is_unrecorded(repo, monkeypatch, 
     assert fires == [GUARD]
 
 
-def test_envelope_is_advisory_allow_and_records_the_fire(fires):
+def test_envelope_is_advisory_allow_and_records_the_fire(fires) -> None:
     env = _em_post_fire.deny_envelope(SID, "/x")
     assert env["hookSpecificOutput"]["permissionDecision"] == "allow"
     assert env["guardLevel"] == "log"
     assert fires == [GUARD]
 
 
-def test_message_is_an_engine_route_not_a_prohibition():
+def test_message_is_an_engine_route_not_a_prohibition() -> None:
     text = _em_post_fire._POST_FIRE_DENY
     assert "workflow.revise" in text and "engine-ask" in text and "em_context" in text
     assert "belong to the run" not in text
 
 
-def _launch_wf_run(repo, monkeypatch, tmp_path, engine_id, harness_id, plan_text):
+def _launch_wf_run(repo, monkeypatch, tmp_path, engine_id, harness_id, plan_text) -> None:
     """A harness `wf_` run id launched by `SID`, whose engine run dir holds a spine with `plan_text`."""
     tmpdir = tmp_path / "managed-tmp"
     tmpdir.mkdir()
@@ -368,7 +369,7 @@ def _launch_wf_run(repo, monkeypatch, tmp_path, engine_id, harness_id, plan_text
 _SPINE = "- id: R1\n  performer: em\n  disposition: open\n  writes:\n    - src/em_owned.py\n"
 
 
-def test_wf_run_id_resolves_to_the_ask_run_dir_for_a_performer_em_row(repo, monkeypatch, tmp_path):
+def test_wf_run_id_resolves_to_the_ask_run_dir_for_a_performer_em_row(repo, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _launch_wf_run(repo, monkeypatch, tmp_path, "ask-20261027T000000-abcdef", "wf_9", _SPINE)
     _fire(monkeypatch, ["wf_9"])
     target = str(repo / "src" / "em_owned.py")
@@ -377,7 +378,7 @@ def test_wf_run_id_resolves_to_the_ask_run_dir_for_a_performer_em_row(repo, monk
     assert _em_post_fire.is_product_path(str(repo / "src" / "other.py"), str(repo), SID) is True
 
 
-def test_unmappable_wf_run_id_comes_back_unchanged(repo, monkeypatch, tmp_path):
+def test_unmappable_wf_run_id_comes_back_unchanged(repo, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(flag_em_poll_in_flight, "_tmpdir", lambda: str(tmp_path))
     assert _em_post_fire._engine_run_id("wf_none", SID) == "wf_none"
     assert _em_post_fire._engine_run_id("ask-1", SID) == "ask-1"
@@ -390,11 +391,11 @@ def test_unmappable_wf_run_id_comes_back_unchanged(repo, monkeypatch, tmp_path):
      "warp-x-20261030T000000-c98511"),
     ("E:/r/scratch/warp/notes.md", None),
 ])
-def test_a_resume_script_or_launcher_maps_to_the_run_it_resumes(script, engine_id):
+def test_a_resume_script_or_launcher_maps_to_the_run_it_resumes(script, engine_id) -> None:
     assert _em_post_fire._engine_id_of_script(script) == engine_id
 
 
-def test_a_landed_run_is_not_reread_and_a_halted_one_can_resume(repo, monkeypatch):
+def test_a_landed_run_is_not_reread_and_a_halted_one_can_resume(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import warp_run_deliverable as wrd
 
     landed_reads = []

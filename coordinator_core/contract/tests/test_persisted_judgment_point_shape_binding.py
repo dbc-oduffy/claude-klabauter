@@ -38,6 +38,7 @@ from coordinator_core.contract.decision_object.judgment import (
     build_judgment_point,
 )
 from coordinator_core.pickup_assemble import apply as pickup_apply
+from pathlib import Path
 
 _JP_ID = "j-kind"
 _DIRECTIVE_ID = "d-action-memo"
@@ -85,7 +86,7 @@ def _built_decision_object() -> dict:
 
 
 @pytest.fixture
-def repo_root(tmp_path):
+def repo_root(tmp_path: Path) -> Path:
     artifact = tmp_path / _ARTIFACT_REL
     artifact.parent.mkdir(parents=True)
     artifact.write_text(
@@ -105,7 +106,7 @@ class TestPickupReaderReadsTheWritersOutput:
     docstring.
     """
 
-    def test_pickups_persisted_reader_finds_the_same_point(self, repo_root):
+    def test_pickups_persisted_reader_finds_the_same_point(self, repo_root) -> None:
         decision_object = _built_decision_object()
         decision_object["judgment_points"][0]["disposition"] = "adopt"
         path = pickup_apply._session_decision_file_path(
@@ -126,5 +127,5 @@ class TestMalformedPersistedShapeDegradesRatherThanRaising:
     @pytest.mark.parametrize(
         "judgment_points", [None, {}, "judgment_points", [None, "x", {}, {"id": ""}]]
     )
-    def test_index_degrades_to_empty(self, judgment_points):
+    def test_index_degrades_to_empty(self, judgment_points) -> None:
         assert judgment_points_by_id({"judgment_points": judgment_points}) == {}

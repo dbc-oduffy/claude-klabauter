@@ -11,14 +11,15 @@ import pytest
 from coordinator_core.agent_pipe import mailbox, post
 from coordinator_core.agent_pipe.contract import mailbox_path
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _home(tmp_path, monkeypatch):
+def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
 
 
-def test_post_line_carries_provenance(capsys):
+def test_post_line_carries_provenance(capsys: pytest.CaptureFixture[str]) -> None:
     assert post.main(["--to", "sess-1", "--from-conversation", "conv-9", "hi there"]) == 0
     assert capsys.readouterr().out.strip() == str(mailbox_path("sess-1"))
     (line,) = mailbox.drain("sess-1")
@@ -30,19 +31,19 @@ def test_post_line_carries_provenance(capsys):
     assert obj["content"] == "hi there"
 
 
-def test_dash_reads_stdin(monkeypatch):
+def test_dash_reads_stdin(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "stdin", io.StringIO("multi\nline"))
     assert post.main(["--to", "s", "--from-conversation", "c", "-"]) == 0
     assert json.loads(mailbox.drain("s")[0])["content"] == "multi\nline"
 
 
 @pytest.mark.parametrize("bad", ["../x", "a/b", ".."])
-def test_invalid_to_is_refused_with_exit_2(bad, tmp_path):
+def test_invalid_to_is_refused_with_exit_2(bad, tmp_path: Path) -> None:
     assert post.main(["--to", bad, "--from-conversation", "c", "x"]) == 2
     assert not (tmp_path / "agent-pipe" / "mailboxes").exists()
 
 
-def test_name_addressing_queues_labelled_bridge_message(capsys):
+def test_name_addressing_queues_labelled_bridge_message(capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.agent_pipe import bridge, roster
 
     roster.bind("a", "codex", "t-1", argv=["x"])
@@ -56,7 +57,7 @@ def test_name_addressing_queues_labelled_bridge_message(capsys):
     assert obj["provenance"]["from_identity"] == "a"
 
 
-def test_name_addressing_queues_before_rebind_delivers_to_new_id():
+def test_name_addressing_queues_before_rebind_delivers_to_new_id() -> None:
     from coordinator_core.agent_pipe import bridge, roster
 
     roster.bind("b", "claude", "old")
@@ -67,17 +68,17 @@ def test_name_addressing_queues_before_rebind_delivers_to_new_id():
     assert len(mailbox.drain("new")) == 1
 
 
-def test_invalid_name_is_refused_with_exit_2():
+def test_invalid_name_is_refused_with_exit_2() -> None:
     assert post.main(["--from", "../x", "--to", "b", "hi"]) == 2
 
 
-def test_neither_sender_form_is_a_usage_error():
+def test_neither_sender_form_is_a_usage_error() -> None:
     with pytest.raises(SystemExit) as exc:
         post.main(["--to", "b", "hi"])
     assert exc.value.code == 2
 
 
-def test_cli_roster_and_bridge_send(capsys):
+def test_cli_roster_and_bridge_send(capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.agent_pipe import __main__ as cli, bridge
 
     assert cli.main(["roster", "bind", "b", "--kind", "claude", "--id", "s1"]) == 0
@@ -92,7 +93,7 @@ def test_cli_roster_and_bridge_send(capsys):
     assert bridge.inbox_path().exists() is False
 
 
-def test_cli_route_pause_refuses_delivery():
+def test_cli_route_pause_refuses_delivery() -> None:
     from coordinator_core.agent_pipe import __main__ as cli
 
     cli.main(["roster", "bind", "b", "--kind", "claude", "--id", "s2"])
@@ -104,7 +105,7 @@ def test_cli_route_pause_refuses_delivery():
     assert len(mailbox.drain("s2")) == 1
 
 
-def test_cli_roster_bind_live(monkeypatch, capsys):
+def test_cli_roster_bind_live(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.agent_pipe import __main__ as cli, live, roster
 
     monkeypatch.setattr(live, "find_live", lambda *a, **k: {"sessions": [{"agent": "antigravity", "pid": 1, "cwd": "/", "conversation": "conv-7"}]})
@@ -114,7 +115,7 @@ def test_cli_roster_bind_live(monkeypatch, capsys):
     assert cli.main(["roster", "bind", "g", "--live"]) == 1
 
 
-def test_post_imports_neither_ipc_nor_ops():
+def test_post_imports_neither_ipc_nor_ops() -> None:
     code = (
         "import sys; import coordinator_core.agent_pipe.post;"
         "bad=[m for m in sys.modules if m=='coordinator_core.ipc' or m=='coordinator_core.ops' or m.startswith('coordinator_core.ops.')];"

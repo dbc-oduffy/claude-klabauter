@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_stage_resume_added_rows i
     _row,
     _stage,
 )
+from pathlib import Path
 
 CREDITED = ["C0", "C2", "C3"]
 GATE_ROWS = ["C4", "C7", "C5", "C8", "C9"]
@@ -32,7 +33,7 @@ def _new_plan() -> str:
     )
 
 
-def test_refire_after_replan_stages_new_rows_and_retires_the_old_one(tmp_path):
+def test_refire_after_replan_stages_new_rows_and_retires_the_old_one(tmp_path: Path) -> None:
     _plan(tmp_path, _old_plan())
     resume_snapshot.write(tmp_path, RUN, PLAN_REL, CREDITED, GATE_ROWS, reasons={r: "landed" for r in CREDITED})
     first = _stage(tmp_path, GATE_ROWS)
@@ -52,7 +53,7 @@ def test_refire_after_replan_stages_new_rows_and_retires_the_old_one(tmp_path):
     assert receipt is not None and receipt.get("spine_sha")
 
 
-def test_refire_with_an_unchanged_plan_still_replies_already_staged(tmp_path):
+def test_refire_with_an_unchanged_plan_still_replies_already_staged(tmp_path: Path) -> None:
     _plan(tmp_path, _old_plan())
     resume_snapshot.write(tmp_path, RUN, PLAN_REL, CREDITED, GATE_ROWS, reasons={r: "landed" for r in CREDITED})
     _stage(tmp_path, GATE_ROWS)

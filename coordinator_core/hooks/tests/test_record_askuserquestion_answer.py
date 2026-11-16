@@ -10,6 +10,7 @@ from coordinator_core.ops import baton_pm_turns
 from coordinator_core.session_baton import store
 from coordinator_core.session_hub_path import HUB_NAME
 from coordinator_core.warm.hook_http import HOOK_PATH, op_for_path
+import pytest
 
 SID = "sid-auq"
 QUESTION = "Publish klabauter now?"
@@ -48,7 +49,7 @@ def test_registered_routable_and_classified_mutating() -> None:
     assert classify("hooks.record_askuserquestion_answer") is OpClass.MUTATING
 
 
-def test_answer_is_read_back_through_pm_turns_with_question_referent(tmp_path, monkeypatch):
+def test_answer_is_read_back_through_pm_turns_with_question_referent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch)
     assert _handler({"payload": _payload({QUESTION: "Yes"})}) == {}
 
@@ -62,7 +63,7 @@ def test_answer_is_read_back_through_pm_turns_with_question_referent(tmp_path, m
     assert "Yes; No" in turn["referent"]["excerpt"]
 
 
-def test_one_turn_per_answered_question_and_multiselect_joined(tmp_path, monkeypatch):
+def test_one_turn_per_answered_question_and_multiselect_joined(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch)
     payload = _payload({QUESTION: "Yes", "Which targets?": ["a", "b"]})
     _handler({"payload": payload})
@@ -71,19 +72,19 @@ def test_one_turn_per_answered_question_and_multiselect_joined(tmp_path, monkeyp
     assert turns[1]["referent"]["excerpt"] == "Which targets?"
 
 
-def test_flat_params_shape_is_accepted(tmp_path, monkeypatch):
+def test_flat_params_shape_is_accepted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch)
     _handler(_payload({QUESTION: "No"}))
     assert baton_pm_turns.read_turns(SID)["text"] == "No"
 
 
-def test_subagent_payload_records_nothing(tmp_path, monkeypatch):
+def test_subagent_payload_records_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sdir = _session(tmp_path, monkeypatch)
     assert _handler({"payload": _payload({QUESTION: "Yes"}, agent_id="sub-1")}) == {}
     assert not (sdir / baton_pm_turns.PM_TURNS_FILENAME).exists()
 
 
-def test_no_answer_records_nothing(tmp_path, monkeypatch):
+def test_no_answer_records_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sdir = _session(tmp_path, monkeypatch)
     for response in ({"answers": {}}, {"answers": {QUESTION: ""}}, {}, None, "declined"):
         payload = _payload({})
@@ -92,7 +93,7 @@ def test_no_answer_records_nothing(tmp_path, monkeypatch):
     assert not (sdir / baton_pm_turns.PM_TURNS_FILENAME).exists()
 
 
-def test_missing_session_id_records_nothing_and_never_raises(tmp_path, monkeypatch):
+def test_missing_session_id_records_nothing_and_never_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sdir = _session(tmp_path, monkeypatch)
     payload = _payload({QUESTION: "Yes"})
     del payload["session_id"]

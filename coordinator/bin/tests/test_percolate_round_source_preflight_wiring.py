@@ -51,6 +51,11 @@ def _source_with_origin(tmp_path: Path) -> Path:
     return repo
 
 
+def _stamp_mirror_at(tmp_path: Path, source: Path) -> None:
+    """Mirror whose last publish stamped the source's own HEAD: nothing to roll back."""
+    _stamp_mirror_with_foreign_head(tmp_path, _out(["rev-parse", "--short=12", "HEAD"], source))
+
+
 def _run(monkeypatch, tmp_path, source: Path, *extra: str):
     reached = []
     (tmp_path / "root").mkdir(exist_ok=True)
@@ -75,6 +80,7 @@ def test_unpushable_source_refuses_before_the_round(monkeypatch, tmp_path, capsy
 
 def test_pushed_source_reaches_the_round(monkeypatch, tmp_path):
     source = _source_with_origin(tmp_path)
+    _stamp_mirror_at(tmp_path, source)
 
     rc, reached = _run(monkeypatch, tmp_path, source)
 
@@ -82,7 +88,7 @@ def test_pushed_source_reaches_the_round(monkeypatch, tmp_path):
     assert len(reached) == 1
 
 
-def _stamp_mirror_with_foreign_head(tmp_path: Path) -> None:
+def _stamp_mirror_with_foreign_head(tmp_path: Path, head: str = "deadbeefcafe") -> None:
     dest = tmp_path / "dest"
     dest.mkdir()
     _git(["init", "-q"], dest)
@@ -90,7 +96,7 @@ def _stamp_mirror_with_foreign_head(tmp_path: Path) -> None:
     _git(["config", "user.name", "t"], dest)
     (dest / "f.txt").write_text("x", encoding="utf-8")
     _git(["add", "--", "f.txt"], dest)
-    _git(["commit", "-q", "-m", "publish [source-head deadbeefcafe]"], dest)
+    _git(["commit", "-q", "-m", f"publish [source-head {head}]"], dest)
 
 
 def test_source_lacking_the_mirror_stamp_refuses_before_the_round(monkeypatch, tmp_path, capsys):
@@ -102,6 +108,16 @@ def test_source_lacking_the_mirror_stamp_refuses_before_the_round(monkeypatch, t
     assert rc == _mod._EXIT_FAIL
     assert reached == []
     assert "deadbeefcafe" in capsys.readouterr().err
+
+
+def test_unstamped_mirror_refuses_before_the_round(monkeypatch, tmp_path, capsys):
+    source = _source_with_origin(tmp_path)
+
+    rc, reached = _run(monkeypatch, tmp_path, source)
+
+    assert rc == _mod._EXIT_FAIL
+    assert reached == []
+    assert "carries no [source-head <sha>] stamp" in capsys.readouterr().err
 
 
 def test_allow_source_rollback_flag_reaches_the_round(monkeypatch, tmp_path):
@@ -143,6 +159,7 @@ def _shared_and_clone(tmp_path: Path):
 
 def test_private_clone_commit_on_candidate_source_ref_reaches_the_round(monkeypatch, tmp_path):
     shared, clone, sha = _shared_and_clone(tmp_path)
+    _stamp_mirror_at(tmp_path, clone)
     _git(["config", "receive.denyCurrentBranch", "ignore"], shared)
     _git(["push", "-q", "origin", f"{sha}:refs/heads/candidate-source"], clone)
     before = _out(["rev-parse", "work/shared"], shared)
@@ -162,6 +179,7 @@ def test_private_clone_commit_on_candidate_source_ref_reaches_the_round(monkeypa
 
 def test_unpublished_source_ref_refuses_before_the_round(monkeypatch, tmp_path, capsys):
     _shared, clone, sha = _shared_and_clone(tmp_path)
+    _stamp_mirror_at(tmp_path, clone)
 
     rc, reached = _run(monkeypatch, tmp_path, clone, "--source-ref", sha)
 
@@ -193,6 +211,7 @@ def test_withholding_refusal_refuses_before_the_round(monkeypatch, tmp_path, cap
     from coordinator_core.percolate.source_preflight import Withholding
 
     source = _source_with_origin(tmp_path)
+    _stamp_mirror_at(tmp_path, source)
     _stub_withholding(monkeypatch, Withholding(refusal="overlap on y.py"))
 
     rc, reached = _run(monkeypatch, tmp_path, source)
@@ -202,10 +221,84 @@ def test_withholding_refusal_refuses_before_the_round(monkeypatch, tmp_path, cap
     assert "percolate-round: refused: overlap on y.py" in capsys.readouterr().err
 
 
+def _record_probe_calls(monkeypatch, calls: list) -> None:
+    """Every later stage is stubbed to record: any `_run` argv, the early engine-import
+    probe (raising=False: absent until the wiring row lands), and the round body."""
+    monkeypatch.setattr(_mod, "_run", lambda cmd, **k: calls.append(("_run", list(cmd))) or 0)
+    monkeypatch.setattr(
+        _mod, "_early_engine_import_refusal", lambda *a, **k: calls.append(("early_import", a)), raising=False
+    )
+
+
+def _names_publish(calls: list) -> bool:
+    return any(kind == "_run" and any("publish.py" in str(part) for part in payload) for kind, payload in calls)
+
+
+def test_withholding_refusal_returns_before_any_publish_argv_or_import_probe(monkeypatch, tmp_path, capsys):
+    from coordinator_core.percolate.source_preflight import Withholding
+
+    source = _source_with_origin(tmp_path)
+    _stamp_mirror_at(tmp_path, source)
+    _stub_withholding(monkeypatch, Withholding(refusal="overlap on y.py"))
+    calls: list = []
+    _record_probe_calls(monkeypatch, calls)
+
+    rc, reached = _run(monkeypatch, tmp_path, source)
+
+    assert rc == _mod._EXIT_FAIL
+    assert reached == []
+    assert calls == []
+    assert not _names_publish(calls)
+    assert "percolate-round: refused: overlap on y.py" in capsys.readouterr().err
+
+
+def test_unpublished_source_refusal_returns_before_withholding_is_computed(monkeypatch, tmp_path):
+    from coordinator_core.percolate import source_preflight
+
+    source = _source_with_origin(tmp_path)
+    _git(["checkout", "-q", "-b", "work/no-upstream"], source)
+    computed: list = []
+    monkeypatch.setattr(source_preflight, "source_withholding", lambda *a, **k: computed.append(a))
+    calls: list = []
+    _record_probe_calls(monkeypatch, calls)
+
+    rc, reached = _run(monkeypatch, tmp_path, source)
+
+    assert rc == _mod._EXIT_FAIL
+    assert reached == []
+    assert computed == []
+    assert calls == []
+
+
+def test_clean_withholding_reaches_the_round_after_the_source_preflights(monkeypatch, tmp_path):
+    """Order pin: published-check, then withholding, then the round body."""
+    from coordinator_core.percolate import source_preflight
+    from coordinator_core.percolate.source_preflight import Withholding
+
+    source = _source_with_origin(tmp_path)
+    _stamp_mirror_at(tmp_path, source)
+    order: list = []
+    real_check = source_preflight.check_source_published
+
+    def check(*a, **k):
+        order.append("published")
+        return real_check(*a, **k)
+
+    monkeypatch.setattr(source_preflight, "check_source_published", check)
+    monkeypatch.setattr(source_preflight, "source_withholding", lambda *a, **k: order.append("withholding") or Withholding())
+
+    rc, reached = _run(monkeypatch, tmp_path, source)
+
+    assert rc == 0
+    assert len(reached) == 1
+    assert order == ["published", "withholding"]
+
+
 def test_non_empty_withholding_prints_advisory_and_reaches_the_round_with_the_verdict(monkeypatch, tmp_path, capsys):
     from coordinator_core.percolate.source_preflight import Withholding
 
     source = _source_with_origin(tmp_path)
+    _stamp_mirror_at(tmp_path, source)
     verdict = Withholding(paths={"tests/x.py": None, "y.py": "a" * 40}, walk_base="a" * 40)
     _stub_withholding(monkeypatch, verdict)
     seen = {}
@@ -260,6 +353,7 @@ def test_empty_withholding_reaches_the_round_with_no_paths(monkeypatch, tmp_path
     from coordinator_core.percolate.source_preflight import Withholding
 
     source = _source_with_origin(tmp_path)
+    _stamp_mirror_at(tmp_path, source)
     _stub_withholding(monkeypatch, Withholding())
     seen = {}
     monkeypatch.setattr(_mod, "_cmd_round_default", lambda *a, **k: seen.update(k) or 0)

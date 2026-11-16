@@ -14,6 +14,7 @@ from coordinator_core.contract.cockpit_schema.entities import (
     SnapshotEnvelope,
     WorkflowRun,
 )
+from pathlib import Path
 
 SIZING = {
     "path": "state/sizings/2026-10-24-x.yaml",
@@ -80,20 +81,20 @@ MODELS = {
 
 
 @pytest.mark.parametrize("name", list(MODELS))
-def test_registered_and_round_trips(name):
+def test_registered_and_round_trips(name) -> None:
     model, fixture = MODELS[name]
     assert ENTITY_SCHEMAS[name] is model
     parsed = model.model_validate(fixture)
     assert model.model_validate(parsed.model_dump(by_alias=True)) == parsed
 
 
-def test_fenceless_ruling_all_optional_keys_null():
+def test_fenceless_ruling_all_optional_keys_null() -> None:
     r = RulingSummary.model_validate(RULING_FENCELESS)
     assert r.title is None and r.from_ is None and r.pm_must_see is None
 
 
 @pytest.mark.parametrize("name", list(MODELS))
-def test_extra_key_refused(name):
+def test_extra_key_refused(name) -> None:
     model, fixture = MODELS[name]
     with pytest.raises(ValidationError):
         model.model_validate({**fixture, "appetite": "x"})
@@ -107,12 +108,12 @@ def test_extra_key_refused(name):
         (WorkflowRun, RUN, {"started_at": "yesterday"}),
     ],
 )
-def test_invalid_refused(model, fixture, patch):
+def test_invalid_refused(model, fixture, patch) -> None:
     with pytest.raises(ValidationError):
         model.model_validate({**fixture, **patch})
 
 
-def test_emitted_required_is_exactly_the_pinned_set(tmp_path):
+def test_emitted_required_is_exactly_the_pinned_set(tmp_path: Path) -> None:
     emit_schemas({n: m for n, (m, _) in MODELS.items()}, out_dir=tmp_path)
     for name, pinned in PINNED_REQUIRED.items():
         doc = json.loads((tmp_path / f"{name}.schema.json").read_text(encoding="utf-8"))
@@ -120,7 +121,7 @@ def test_emitted_required_is_exactly_the_pinned_set(tmp_path):
         assert doc["additionalProperties"] is False
 
 
-def test_envelope_arrays_optional_and_verdicts_rulings_absent(tmp_path):
+def test_envelope_arrays_optional_and_verdicts_rulings_absent(tmp_path: Path) -> None:
     emit_schemas({"snapshot-envelope": SnapshotEnvelope}, out_dir=tmp_path)
     doc = json.loads((tmp_path / "snapshot-envelope.schema.json").read_text(encoding="utf-8"))
     for key in ("sizings", "workflow_runs"):

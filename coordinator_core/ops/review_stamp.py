@@ -193,6 +193,12 @@ def _run_git(args: List[str], cwd: str) -> str:
     return result.stdout
 
 
+def is_product_path(path: str) -> bool:
+    """True when the repo-relative POSIX `path` is outside every `PRODUCT_FILE_EXCLUDED_PREFIXES`
+    prefix: the one product-file rule prep, the review floor and the stored-reply match read."""
+    return not path.replace("\\", "/").removeprefix("./").startswith(PRODUCT_FILE_EXCLUDED_PREFIXES)
+
+
 def product_files(diff_path: Path) -> List[str]:
     """The product (non-bookkeeping) files named in a unified diff at
     `diff_path` — one home for the product-file rule (§ module docstring).
@@ -209,9 +215,8 @@ def product_files(diff_path: Path) -> List[str]:
             if path in ("dev/null",) or path in seen:
                 continue
             seen.add(path)
-            if any(path.startswith(prefix) for prefix in PRODUCT_FILE_EXCLUDED_PREFIXES):
-                continue
-            files.append(path)
+            if is_product_path(path):
+                files.append(path)
     return files
 
 

@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.ops import review_stamp as m
 from coordinator_core.ops.tests.test_review_stamp_superseding import _git, _plan, _record, _repo, _test_runner
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -28,7 +29,7 @@ def _landed(repo, head):
     return (head, record_path, {**m._load_sidecar(record_path), "delivery": {"verdict": "PASS", "unbacked": []}})
 
 
-def test_known_tree_spawns_one_fewer_git_child_and_writes_an_identical_stamp(tmp_path, monkeypatch):
+def test_known_tree_spawns_one_fewer_git_child_and_writes_an_identical_stamp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, head = _repo(tmp_path)
     tree = _git(repo, "rev-parse", f"{head}^{{tree}}")
 
@@ -45,7 +46,7 @@ def test_known_tree_spawns_one_fewer_git_child_and_writes_an_identical_stamp(tmp
     assert m.check(_plan(repo), repo) is None
 
 
-def test_a_superseding_record_reads_its_own_tree_and_ignores_the_callers(tmp_path, monkeypatch):
+def test_a_superseding_record_reads_its_own_tree_and_ignores_the_callers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, head = _repo(tmp_path)
     tree = _git(repo, "rev-parse", f"{head}^{{tree}}")
 

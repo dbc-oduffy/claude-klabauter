@@ -12,6 +12,7 @@ import pytest
 
 from coordinator_core.git.run import run_git
 from coordinator_core.install import git_perf_config as gpc
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -38,7 +39,7 @@ def _config_get(repo, key):
     return proc.stdout.strip() or None
 
 
-def test_idempotence(tmp_path):
+def test_idempotence(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     if not gpc.filesystem_supports_untracked_cache(repo):
         pytest.skip("filesystem failed git's untracked-cache mtime probe")
@@ -57,7 +58,7 @@ def test_idempotence(tmp_path):
     assert _config_get(repo, "core.untrackedCache") == "true"
 
 
-def test_does_not_clobber_a_differing_value(tmp_path):
+def test_does_not_clobber_a_differing_value(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _git(repo, "config", "core.untrackedCache", "false")
 
@@ -73,7 +74,7 @@ def test_does_not_clobber_a_differing_value(tmp_path):
     assert "not overwritten" in matching[0]
 
 
-def test_every_setting_produces_a_report_line_always(tmp_path):
+def test_every_setting_produces_a_report_line_always(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
 
     expected = 1 + len(gpc._MAINTENANCE_KEYS)
@@ -88,7 +89,7 @@ def test_every_setting_produces_a_report_line_always(tmp_path):
     assert len(again_report) == expected, again_report
 
 
-def test_three_maintenance_keys_land_in_the_repo(tmp_path):
+def test_three_maintenance_keys_land_in_the_repo(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
 
     gpc.apply(repo)
@@ -98,7 +99,7 @@ def test_three_maintenance_keys_land_in_the_repo(tmp_path):
     assert _config_get(repo, "maintenance.prefetch.enabled") == "false"
 
 
-def test_gc_auto_pinned_and_in_write_surface(tmp_path):
+def test_gc_auto_pinned_and_in_write_surface(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
 
     gpc.apply(repo)
@@ -108,7 +109,7 @@ def test_gc_auto_pinned_and_in_write_surface(tmp_path):
     assert {"gc.auto", "maintenance.auto"} <= declared
 
 
-def test_maintenance_keys_land_when_untracked_cache_early_returns(tmp_path):
+def test_maintenance_keys_land_when_untracked_cache_early_returns(tmp_path: Path) -> None:
     # A differing core.untrackedCache makes the untracked-cache step return
     # early; the pack-rewriting suppression keys must still be written.
     repo = _init_repo(tmp_path)
@@ -122,7 +123,7 @@ def test_maintenance_keys_land_when_untracked_cache_early_returns(tmp_path):
     assert any(line.startswith("set     maintenance.auto") for line in report), report
 
 
-def test_maintenance_register_is_never_invoked(tmp_path, monkeypatch):
+def test_maintenance_register_is_never_invoked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     invoked = []
     real_run_git = gpc.run_git
@@ -137,7 +138,7 @@ def test_maintenance_register_is_never_invoked(tmp_path, monkeypatch):
     assert not any(args[:1] == ("maintenance",) for args in invoked), invoked
 
 
-def test_a_differing_maintenance_value_is_reported_not_overwritten(tmp_path):
+def test_a_differing_maintenance_value_is_reported_not_overwritten(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _git(repo, "config", "maintenance.strategy", "none")
 
@@ -147,7 +148,7 @@ def test_a_differing_maintenance_value_is_reported_not_overwritten(tmp_path):
     assert any("left" in line and "maintenance.strategy" in line for line in report), report
 
 
-def test_dry_run_writes_nothing(tmp_path):
+def test_dry_run_writes_nothing(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
 
     report = gpc.apply(repo, dry_run=True)
@@ -156,7 +157,7 @@ def test_dry_run_writes_nothing(tmp_path):
     assert _config_get(repo, "core.untrackedCache") is None
 
 
-def test_index_is_actually_extended_not_just_config_key(tmp_path):
+def test_index_is_actually_extended_not_just_config_key(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     if not gpc.filesystem_supports_untracked_cache(repo):
         pytest.skip("filesystem failed git's untracked-cache mtime probe")
@@ -175,7 +176,7 @@ def test_index_is_actually_extended_not_just_config_key(tmp_path):
     ), second_report
 
 
-def test_fsmonitor_never_set(tmp_path):
+def test_fsmonitor_never_set(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
 
     gpc.apply(repo)
@@ -193,7 +194,7 @@ def _fake_registry_helpers(roots, classify):
     return registry_repo_roots, classify_target
 
 
-def test_apply_fleet_applies_to_multiple_repos_and_is_idempotent(tmp_path, monkeypatch):
+def test_apply_fleet_applies_to_multiple_repos_and_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "a").mkdir()
     (tmp_path / "b").mkdir()
     repo_a = _init_repo(tmp_path / "a")
@@ -220,7 +221,7 @@ def test_apply_fleet_applies_to_multiple_repos_and_is_idempotent(tmp_path, monke
     assert any("repos.b: ok      core.untrackedCache" in line for line in second), second
 
 
-def test_apply_fleet_reports_missing_without_raising(tmp_path, monkeypatch):
+def test_apply_fleet_reports_missing_without_raising(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     missing_path = str(tmp_path / "does-not-exist")
     roots = [("repos.gone", missing_path)]
     monkeypatch.setattr(
@@ -235,7 +236,7 @@ def test_apply_fleet_reports_missing_without_raising(tmp_path, monkeypatch):
     assert any(line.startswith("fleet summary:") for line in report), report
 
 
-def test_apply_fleet_skips_mirrors_silently(tmp_path, monkeypatch):
+def test_apply_fleet_skips_mirrors_silently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "mirror").mkdir()
     repo_mirror = _init_repo(tmp_path / "mirror")
     roots = [("repos.mirror", str(repo_mirror))]
@@ -251,7 +252,7 @@ def test_apply_fleet_skips_mirrors_silently(tmp_path, monkeypatch):
     assert any(line.startswith("fleet summary:") for line in report), report
 
 
-def test_apply_fleet_empty_fleet_is_explicit_not_success(tmp_path, monkeypatch):
+def test_apply_fleet_empty_fleet_is_explicit_not_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         gpc,
         "_git_hook_install_registry_helpers",
@@ -265,7 +266,7 @@ def test_apply_fleet_empty_fleet_is_explicit_not_success(tmp_path, monkeypatch):
     assert "not the same fact as 'every repo is current'" in report[0]
 
 
-def test_apply_fleet_one_repo_raising_does_not_discard_the_others(tmp_path, monkeypatch):
+def test_apply_fleet_one_repo_raising_does_not_discard_the_others(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "a").mkdir()
     (tmp_path / "c").mkdir()
     repo_a = _init_repo(tmp_path / "a")
@@ -279,7 +280,7 @@ def test_apply_fleet_one_repo_raising_does_not_discard_the_others(tmp_path, monk
         ("repos.c", str(repo_c)),
     ]
 
-    def classify(root):
+    def classify(root) -> str:
         if root == "unreachable-mid-fleet":
             raise FileNotFoundError("git not found on PATH")
         return "worktree"
@@ -298,7 +299,7 @@ def test_apply_fleet_one_repo_raising_does_not_discard_the_others(tmp_path, monk
     assert any(line.startswith("fleet summary:") for line in report), report
 
 
-def test_apply_fleet_helper_import_unavailable_degrades_to_advisory(tmp_path, monkeypatch):
+def test_apply_fleet_helper_import_unavailable_degrades_to_advisory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(gpc, "_git_hook_install_registry_helpers", lambda: None)
 
     report = gpc.apply_fleet(tmp_path)

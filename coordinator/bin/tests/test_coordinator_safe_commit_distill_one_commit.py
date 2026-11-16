@@ -8,6 +8,11 @@ import pathlib
 import subprocess
 
 import pytest
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -15,7 +20,7 @@ _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 _PATHS = ["docs" + "/wiki/x.md", "state/y.json"]
 
 
-def _load_cli_module():
+def _load_cli_module() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "coordinator_safe_commit", str(_BIN_DIR / "coordinator-safe-commit.py")
     )
@@ -25,14 +30,14 @@ def _load_cli_module():
     return mod
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> str:
     return subprocess.run(
         ["git", *args], cwd=repo, check=True, capture_output=True, text=True
     ).stdout
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@example.invalid")
     _git(tmp_path, "config", "user.name", "t")
@@ -56,11 +61,11 @@ def _run(mod, argv):
     return 0
 
 
-def _new_commit_subjects(repo, seed_sha):
+def _new_commit_subjects(repo, seed_sha) -> list[str]:
     return [s for s in _git(repo, "log", "--format=%s", f"{seed_sha}..HEAD").splitlines() if s]
 
 
-def test_distill_invoking_command_lands_one_commit_without_process_subject(repo):
+def test_distill_invoking_command_lands_one_commit_without_process_subject(repo) -> None:
     mod = _load_cli_module()
     seed = _git(repo, "rev-parse", "HEAD").strip()
 
@@ -72,7 +77,7 @@ def test_distill_invoking_command_lands_one_commit_without_process_subject(repo)
     assert sorted(_git(repo, "show", "--name-only", "--pretty=format:", "HEAD").split()) == sorted(_PATHS)
 
 
-def test_without_distill_the_same_mixed_set_still_lands_two_commits(repo):
+def test_without_distill_the_same_mixed_set_still_lands_two_commits(repo) -> None:
     mod = _load_cli_module()
     seed = _git(repo, "rev-parse", "HEAD").strip()
 

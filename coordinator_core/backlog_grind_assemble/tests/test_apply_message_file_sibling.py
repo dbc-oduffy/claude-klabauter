@@ -4,9 +4,10 @@ from pathlib import Path
 from unittest import mock
 
 from coordinator_core.backlog_grind_assemble import apply as bga_apply
+import pytest
 
 
-def test_message_file_round_trips_multiline_body_byte_exact(tmp_path: Path, capsys) -> None:
+def test_message_file_round_trips_multiline_body_byte_exact(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     body = "subject\n\nmulti-line body\nsecond body line\n"
     message_file = tmp_path / "msg.txt"
     message_file.write_text(body, encoding="utf-8")
@@ -38,7 +39,7 @@ def test_message_file_round_trips_multiline_body_byte_exact(tmp_path: Path, caps
     assert directives[0]["message"] == body
 
 
-def test_message_and_message_file_are_mutually_exclusive(tmp_path: Path, capsys) -> None:
+def test_message_and_message_file_are_mutually_exclusive(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     message_file = tmp_path / "msg.txt"
     message_file.write_text("a body\n", encoding="utf-8")
 

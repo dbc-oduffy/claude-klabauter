@@ -50,6 +50,7 @@ import pytest
 from coordinator_core.search import sources_powershell as sp
 from coordinator_core.search.engine import Unanswerable
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -110,7 +111,7 @@ def _write_bytes(path, data: bytes) -> None:
 
 
 @pytest.fixture()
-def tree(tmp_path):
+def tree(tmp_path: Path) -> Path:
     _write_bytes(tmp_path / "crlf.txt", b"one\r\ntwo\r\nthree\r\n")
     _write_bytes(tmp_path / "lf.txt", b"one\ntwo\nthree\n")
     _write_bytes(tmp_path / "notrail.txt", b"one\ntwo\nthree")
@@ -143,21 +144,21 @@ def _assert_matches_real(cmd: str, ps_cmd: str, tokens, cwd) -> None:
 
 
 @requires_powershell
-def test_get_content_crlf_source(tree):
+def test_get_content_crlf_source(tree) -> None:
     _assert_matches_real(
         "Get-Content crlf.txt", "Get-Content crlf.txt", ["Get-Content", "crlf.txt"], tree
     )
 
 
 @requires_powershell
-def test_get_content_lf_source(tree):
+def test_get_content_lf_source(tree) -> None:
     _assert_matches_real(
         "Get-Content lf.txt", "Get-Content lf.txt", ["Get-Content", "lf.txt"], tree
     )
 
 
 @requires_powershell
-def test_get_content_no_trailing_newline(tree):
+def test_get_content_no_trailing_newline(tree) -> None:
     _assert_matches_real(
         "Get-Content notrail.txt",
         "Get-Content notrail.txt",
@@ -167,14 +168,14 @@ def test_get_content_no_trailing_newline(tree):
 
 
 @requires_powershell
-def test_get_content_empty_file(tree):
+def test_get_content_empty_file(tree) -> None:
     _assert_matches_real(
         "Get-Content empty.txt", "Get-Content empty.txt", ["Get-Content", "empty.txt"], tree
     )
 
 
 @requires_powershell
-def test_get_content_utf8_no_bom(tree):
+def test_get_content_utf8_no_bom(tree) -> None:
     _assert_matches_real(
         "Get-Content utf8_nobom.txt",
         "Get-Content utf8_nobom.txt",
@@ -184,7 +185,7 @@ def test_get_content_utf8_no_bom(tree):
 
 
 @requires_powershell
-def test_get_content_utf8_with_bom(tree):
+def test_get_content_utf8_with_bom(tree) -> None:
     """A real PowerShell host auto-detects and strips a UTF-8 BOM (it uses
     the BOM to select the decode codec, then excludes it from the emitted
     content) -- this is compared for AGREEMENT, not hand-coded, per module
@@ -199,7 +200,7 @@ def test_get_content_utf8_with_bom(tree):
 
 
 @requires_powershell
-def test_get_content_totalcount(tree):
+def test_get_content_totalcount(tree) -> None:
     _assert_matches_real(
         "Get-Content -TotalCount 3 many.txt",
         "Get-Content -TotalCount 3 many.txt",
@@ -209,7 +210,7 @@ def test_get_content_totalcount(tree):
 
 
 @requires_powershell
-def test_get_content_tail(tree):
+def test_get_content_tail(tree) -> None:
     _assert_matches_real(
         "Get-Content -Tail 2 many.txt",
         "Get-Content -Tail 2 many.txt",
@@ -218,13 +219,13 @@ def test_get_content_tail(tree):
     )
 
 
-def test_get_content_nonexistent_operand_declines(tree):
+def test_get_content_nonexistent_operand_declines(tree) -> None:
     with pytest.raises(Unanswerable):
         sp.parse_content_segment(["Get-Content", "nope.txt"]).produce(str(tree))
 
 
 @pytest.fixture()
-def lsdir(tmp_path):
+def lsdir(tmp_path: Path) -> Path:
     d = tmp_path / "lsdir"
     d.mkdir()
     (d / "apple.txt").write_text("a\n")
@@ -235,7 +236,7 @@ def lsdir(tmp_path):
 
 @requires_powershell
 @pytest.mark.skipif(sys.platform != "win32", reason="run_childitem enumeration order is only reproduced on win32")
-def test_get_childitem_ordering(lsdir):
+def test_get_childitem_ordering(lsdir) -> None:
     spec = sp.parse_childitem_segment(["Get-ChildItem", "lsdir"])
     ours = sp.run_childitem(spec, cwd=str(lsdir))
     _rc, theirs = run_real_powershell(
@@ -252,7 +253,7 @@ def test_get_childitem_ordering(lsdir):
 
 @requires_powershell
 @pytest.mark.skipif(sys.platform != "win32", reason="run_childitem enumeration order is only reproduced on win32")
-def test_get_childitem_composed_pipe_count(lsdir):
+def test_get_childitem_composed_pipe_count(lsdir) -> None:
     spec = sp.parse_childitem_segment(["Get-ChildItem", "lsdir"])
     ours = sp.run_childitem(spec, cwd=str(lsdir))
     _rc, theirs = run_real_powershell(

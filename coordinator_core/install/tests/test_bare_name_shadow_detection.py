@@ -33,6 +33,7 @@ from coordinator_core.install.path_resolution_report import (
     PathResolutionReport,
     _detect_bare_name_shadows,
 )
+import pytest
 
 _DOOR = door_install.DOOR_INSTALLED_NAME
 _SHADOW = door_install.BARE_FORWARDER_NAME + door_install._SHADOWING_SIBLING_SUFFIXES[0]
@@ -56,7 +57,7 @@ def test_shadow_beside_an_installed_door_is_reported(tmp_path: Path) -> None:
     assert _DOOR in warnings[0]
 
 
-def test_no_door_means_no_warning(tmp_path: Path, monkeypatch) -> None:
+def test_no_door_means_no_warning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The fallback-forwarder state, not a defect: with no door installed the
     `.ps1` is what keeps the bare name answering at all. Warning here would tell
     an operator to delete the only thing still serving the name.

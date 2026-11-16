@@ -7,6 +7,7 @@ import sys
 import tempfile
 
 import pytest
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -38,7 +39,7 @@ def _restore_sys_path():
         sys.path.remove(_REPO_ROOT)
 
 
-def test_resolve_repo_path_candidates_settings_home_before_mirror(monkeypatch, tmp_path):
+def test_resolve_repo_path_candidates_settings_home_before_mirror(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     settings_home = tmp_path / "settings-home"
     claude_home = tmp_path / "claude-home"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
@@ -60,7 +61,7 @@ def test_resolve_repo_path_candidates_settings_home_before_mirror(monkeypatch, t
     )
 
 
-def test_resolve_repo_path_mirror_still_reachable_when_settings_home_absent(monkeypatch, tmp_path):
+def test_resolve_repo_path_mirror_still_reachable_when_settings_home_absent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     settings_home = tmp_path / "settings-home"
     claude_home = tmp_path / "claude-home"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
@@ -73,7 +74,7 @@ def test_resolve_repo_path_mirror_still_reachable_when_settings_home_absent(monk
     )
 
 
-def test_resolve_repo_path_fails_open_with_breadcrumb_when_no_candidate_exists(monkeypatch, tmp_path, capsys):
+def test_resolve_repo_path_fails_open_with_breadcrumb_when_no_candidate_exists(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     settings_home = tmp_path / "settings-home"
     claude_home = tmp_path / "claude-home"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(settings_home))
@@ -159,7 +160,7 @@ def _base_env(empty_home: str) -> dict:
     return env
 
 
-def test_coordinator_registry_split_repo_fallback_settings_home_wins_over_mirror():
+def test_coordinator_registry_split_repo_fallback_settings_home_wins_over_mirror() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         empty_home = os.path.join(tmp, "empty-home")
         os.makedirs(empty_home)
@@ -188,7 +189,7 @@ def test_coordinator_registry_split_repo_fallback_settings_home_wins_over_mirror
         )
 
 
-def test_coordinator_registry_split_repo_fallback_mirror_reachable_when_settings_home_absent():
+def test_coordinator_registry_split_repo_fallback_mirror_reachable_when_settings_home_absent() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         empty_home = os.path.join(tmp, "empty-home")
         os.makedirs(empty_home)

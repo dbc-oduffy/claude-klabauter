@@ -20,7 +20,7 @@ class TailReader:
     false-closing.
     """
 
-    def __init__(self, path: str, *, seek_to_tail: bool = False):
+    def __init__(self, path: str, *, seek_to_tail: bool = False) -> None:
         self._path = path
         self._offset = 0
         self._buffer = ""

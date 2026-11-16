@@ -308,7 +308,7 @@ def test_replayed_stop_payload_fires_blocker_at_most_once(tmp_path, monkeypatch)
     for _ in range(2):
         _mod, result = _aggregate(dict(payload))
         assert "decision" not in result
-        if "PM-handoff" in result.get("systemMessage", ""):
+        if "hands the PM nothing actionable" in result.get("systemMessage", ""):
             fired += 1
     assert fired == 1
 

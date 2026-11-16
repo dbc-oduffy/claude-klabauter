@@ -7,6 +7,7 @@ import time
 import pytest
 
 from coordinator_core.ops.dispatch_emit import land_run, run_token
+from pathlib import Path
 
 RUN_ID = "ask-1"
 SCRIPT = "scratch/warp/ask-1.workflow.mjs"
@@ -14,26 +15,26 @@ BUDGET = 30.0
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.setattr(land_run, "_claim_budget_secs", lambda: BUDGET)
     return tmp_path
 
 
-def _claim(repo, token, state):
+def _claim(repo, token, state) -> None:
     assert land_run._redeem_or_answer(repo, RUN_ID, token, SCRIPT, state) is None
     state["claim"] = (repo, RUN_ID, token, SCRIPT)
 
 
-def test_a_second_land_inside_the_budget_is_refused_in_flight(repo):
+def test_a_second_land_inside_the_budget_is_refused_in_flight(repo) -> None:
     token = run_token.mint(repo, RUN_ID, SCRIPT)
     _claim(repo, token, {})
     reply = land_run._redeem_or_answer(repo, RUN_ID, token, SCRIPT, {})
     assert reply["refused"] == "run-token-in-flight"
 
 
-def test_a_second_land_past_the_budget_adopts_and_the_late_settle_is_a_noop(repo, monkeypatch):
+def test_a_second_land_past_the_budget_adopts_and_the_late_settle_is_a_noop(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     token = run_token.mint(repo, RUN_ID, SCRIPT)
     first: dict = {}
     _claim(repo, token, first)

@@ -9,13 +9,14 @@ import pytest
 from coordinator_core.bash_guards import _taskstop_launch_store as store
 from coordinator_core.bash_guards._taskstop_contract import ProcRow
 from coordinator_core.hooks import taskstop_launch_recorder as rec
+from pathlib import Path
 
 BATCH = 100
 BAR_MS = 500
 
 
 @pytest.fixture(autouse=True)
-def _home(tmp_path, monkeypatch):
+def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     monkeypatch.setattr(rec.sys, "platform", "win32")
     return tmp_path
@@ -33,14 +34,14 @@ def _payload(**over):
     return p
 
 
-def test_background_launch_writes_record():
+def test_background_launch_writes_record() -> None:
     assert rec._handler({"payload": _payload()}) == {}
     r = store.read_record("bg1abc")
     assert (r.session_id, r.tool_use_id, r.command) == ("sess1", "tu1", "sleep 3001")
     assert abs((r.mark - rec.FILETIME_UNIX_EPOCH) / 1e7 - time.time()) < 60
 
 
-def test_background_launch_stamps_agent_id_not_timed_out():
+def test_background_launch_stamps_agent_id_not_timed_out() -> None:
     rec._handler({"payload": _payload(agent_id="agA")})
     r = store.read_record("bg1abc")
     assert (r.agent_id, r.timed_out) == ("agA", False)
@@ -48,7 +49,7 @@ def test_background_launch_stamps_agent_id_not_timed_out():
     assert store.read_record("bg2abc").agent_id == ""
 
 
-def test_bare_params_without_payload_wrapper():
+def test_bare_params_without_payload_wrapper() -> None:
     rec._handler(_payload())
     assert store.read_record("bg1abc") is not None
 
@@ -66,25 +67,25 @@ def test_bare_params_without_payload_wrapper():
         _payload(tool_name="Read"),
     ],
 )
-def test_non_launch_writes_nothing(payload):
+def test_non_launch_writes_nothing(payload) -> None:
     assert rec._handler({"payload": payload}) == {}
     assert store.all_records() == []
 
 
-def test_non_windows_is_a_noop(monkeypatch):
+def test_non_windows_is_a_noop(monkeypatch: pytest.MonkeyPatch) -> None:
     for plat in ("linux", "darwin"):
         monkeypatch.setattr(rec.sys, "platform", plat)
         assert rec._handler({"payload": _payload()}) == {}
         assert store.all_records() == []
 
 
-def test_never_raises_on_garbage():
+def test_never_raises_on_garbage() -> None:
     for params in (None, 5, [], {"payload": 3}, {"payload": {"tool_name": "Bash", "tool_input": 1}}):
         assert rec._handler(params) == {}
     assert store.all_records() == []
 
 
-def test_store_failure_is_swallowed(monkeypatch):
+def test_store_failure_is_swallowed(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(_r):
         raise RuntimeError("disk")
 
@@ -99,26 +100,26 @@ _LIVE = ProcRow(1, 0, _S, "claude.exe")
 
 
 class _Kill:
-    def __init__(self):
+    def __init__(self) -> None:
         self.calls = []
         self.cmd = "grep -rn x ."
 
-    def terminate_verified(self, pid, ctime):
+    def terminate_verified(self, pid, ctime) -> bool:
         self.calls.append((pid, ctime))
         return True
 
-    def command_line(self, pid, ctime):
+    def command_line(self, pid, ctime) -> str:
         return self.cmd
 
 
-def _tree(root):
+def _tree(root) -> list[ProcRow]:
     return [
         ProcRow(root, 999, _MARK - _S // 10, "bash.exe"),
         ProcRow(root + 1, root, _MARK - _S // 10 + 1, "grep.exe"),
     ]
 
 
-def _timed_out_payload(command="grep -rn x .", **over):
+def _timed_out_payload(command: str = "grep -rn x .", **over):
     return _payload(
         tool_input={"command": command},
         tool_response={"backgroundTaskId": "bgto1", "timedOutAfterMs": _MS, "interrupted": False},
@@ -127,12 +128,12 @@ def _timed_out_payload(command="grep -rn x .", **over):
 
 
 @pytest.fixture
-def seams(monkeypatch):
+def seams(monkeypatch: pytest.MonkeyPatch):
     kill = _Kill()
     snaps = []
     state = {"rows": [_LIVE, *_tree(10)]}
 
-    def snapshot():
+    def snapshot() -> list[ProcRow]:
         snaps.append(1)
         return state["rows"]
 
@@ -142,7 +143,7 @@ def seams(monkeypatch):
     return kill, snaps, state
 
 
-def test_timed_out_non_search_stamps_agent_id_and_timed_out_and_indexes_it(seams):
+def test_timed_out_non_search_stamps_agent_id_and_timed_out_and_indexes_it(seams) -> None:
     rec._handler({"payload": _timed_out_payload("pytest x", agent_id="agB")})
     r = store.read_record("bgto1")
     assert (r.agent_id, r.timed_out) == ("agB", True)
@@ -150,20 +151,20 @@ def test_timed_out_non_search_stamps_agent_id_and_timed_out_and_indexes_it(seams
     assert store.records_for_agent("sess1", "agC") == []
 
 
-def test_timed_out_record_without_agent_id_is_not_indexed(seams):
+def test_timed_out_record_without_agent_id_is_not_indexed(seams) -> None:
     rec._handler({"payload": _timed_out_payload("pytest x")})
     r = store.read_record("bgto1")
     assert (r.agent_id, r.timed_out) == ("", True)
 
 
-def test_timed_out_read_only_search_is_killed_and_leaves_no_record(seams):
+def test_timed_out_read_only_search_is_killed_and_leaves_no_record(seams) -> None:
     kill, snaps, _ = seams
     assert rec._handler({"payload": _timed_out_payload()}) == {}
     assert {p for p, _c in kill.calls} == {10, 11}
     assert store.read_record("bgto1") is None
 
 
-def test_timed_out_read_only_search_ambiguous_kills_nothing_and_keeps_record(seams):
+def test_timed_out_read_only_search_ambiguous_kills_nothing_and_keeps_record(seams) -> None:
     kill, snaps, state = seams
     state["rows"] = [_LIVE, *_tree(10), *_tree(20)]
     rec._handler({"payload": _timed_out_payload()})
@@ -171,14 +172,14 @@ def test_timed_out_read_only_search_ambiguous_kills_nothing_and_keeps_record(sea
     assert store.read_record("bgto1").mark == _MARK
 
 
-def test_timed_out_read_only_search_incomplete_kill_keeps_record(seams):
+def test_timed_out_read_only_search_incomplete_kill_keeps_record(seams) -> None:
     kill, snaps, _ = seams
     kill.terminate_verified = lambda pid, ctime: False
     rec._handler({"payload": _timed_out_payload()})
     assert store.read_record("bgto1") is not None
 
 
-def test_timed_out_reap_opens_only_records_inside_the_window(seams, monkeypatch, _home):
+def test_timed_out_reap_opens_only_records_inside_the_window(seams, monkeypatch: pytest.MonkeyPatch, _home) -> None:
     kill, snaps, state = seams
     old = time.time() - 3600
     for i in range(300):
@@ -195,7 +196,7 @@ def test_timed_out_reap_opens_only_records_inside_the_window(seams, monkeypatch,
     assert store.read_record("bgto1") is not None
 
 
-def test_timed_out_read_only_search_no_candidate_keeps_record(seams):
+def test_timed_out_read_only_search_no_candidate_keeps_record(seams) -> None:
     kill, snaps, state = seams
     state["rows"] = [_LIVE]
     rec._handler({"payload": _timed_out_payload()})
@@ -206,7 +207,7 @@ def test_timed_out_read_only_search_no_candidate_keeps_record(seams):
     "command",
     ["echo a; sleep 600; echo b", "grep x f | xargs rm", "find . -delete"],
 )
-def test_timed_out_non_search_is_recorded_only_with_start_mark(seams, command):
+def test_timed_out_non_search_is_recorded_only_with_start_mark(seams, command) -> None:
     kill, snaps, _ = seams
     rec._handler({"payload": _timed_out_payload(command)})
     r = store.read_record("bgto1")
@@ -214,7 +215,7 @@ def test_timed_out_non_search_is_recorded_only_with_start_mark(seams, command):
     assert snaps == [] and kill.calls == []
 
 
-def test_timed_out_run_in_background_is_recorded_as_before_and_never_reaped(seams):
+def test_timed_out_run_in_background_is_recorded_as_before_and_never_reaped(seams) -> None:
     kill, snaps, _ = seams
     p = _payload(
         tool_response={"backgroundTaskId": "bgto1", "timedOutAfterMs": _MS},
@@ -234,20 +235,20 @@ def test_timed_out_run_in_background_is_recorded_as_before_and_never_reaped(seam
         {"backgroundTaskId": "../evil", "timedOutAfterMs": _MS},
     ],
 )
-def test_timed_out_predicate_refuses_non_timed_out_foreground(seams, response):
+def test_timed_out_predicate_refuses_non_timed_out_foreground(seams, response) -> None:
     kill, snaps, _ = seams
     rec._handler({"payload": _payload(tool_input={"command": "grep -r x ."}, tool_response=response)})
     assert store.all_records() == [] and snaps == [] and kill.calls == []
 
 
-def test_timed_out_non_windows_makes_no_snapshot_and_writes_nothing(seams, monkeypatch):
+def test_timed_out_non_windows_makes_no_snapshot_and_writes_nothing(seams, monkeypatch: pytest.MonkeyPatch) -> None:
     kill, snaps, _ = seams
     monkeypatch.setattr(rec.sys, "platform", "linux")
     rec._handler({"payload": _timed_out_payload()})
     assert store.all_records() == [] and snaps == []
 
 
-def test_timed_out_powershell_search_is_reaped(seams):
+def test_timed_out_powershell_search_is_reaped(seams) -> None:
     kill, snaps, _ = seams
     kill.cmd = "rg -n x ."
     rec._handler({"payload": _timed_out_payload(kill.cmd, tool_name="PowerShell")})
@@ -274,7 +275,7 @@ def test_timed_out_powershell_search_is_reaped(seams):
         ("", False),
     ],
 )
-def test_timed_out_read_only_search_truth_table(command, expected):
+def test_timed_out_read_only_search_truth_table(command, expected) -> None:
     assert rec._read_only_search(command) is expected
 
 
@@ -282,7 +283,7 @@ def _spawn_trap(*_a, **_k):
     raise AssertionError("recorder spawned a process")
 
 
-def test_cost_zero_spawns_and_under_bar(monkeypatch, capsys):
+def test_cost_zero_spawns_and_under_bar(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(subprocess, "Popen", _spawn_trap)
     monkeypatch.setattr(os, "system", _spawn_trap)
     monkeypatch.setattr(os, "popen", _spawn_trap)

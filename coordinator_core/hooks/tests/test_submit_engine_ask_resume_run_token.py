@@ -14,12 +14,14 @@ from coordinator_core.hooks.tests.test_submit_engine_ask_resume_record import (
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
+from pathlib import Path
+import pytest
 
 COMMIT_LEG_SCRIPT = f"{RUN_DIR_ROOT}/{HALTED_ID}.workflow.mjs"
 LANDED = {"sha": "d" * 40, "rows": [], "paths": []}
 
 
-def test_stored_script_comes_with_a_token_the_commit_leg_is_admitted_by(tmp_path, seams):
+def test_stored_script_comes_with_a_token_the_commit_leg_is_admitted_by(tmp_path: Path, seams) -> None:
     root = _repo(tmp_path)
     env, result = mod._resume_route(root, SIZING_REL, _payload(root), {}, "s1", None)
     assert env is None and result["path"] == str(root / STORED_REL)
@@ -30,7 +32,7 @@ def test_stored_script_comes_with_a_token_the_commit_leg_is_admitted_by(tmp_path
     assert not run_token.admits(root, HALTED_ID, args["runToken"], "scratch/warp/other.workflow.mjs")
 
 
-def test_the_token_reaches_the_launch_args_and_never_the_printed_reply(tmp_path, seams):
+def test_the_token_reaches_the_launch_args_and_never_the_printed_reply(tmp_path: Path, seams) -> None:
     _, _, emit = seams
     root = _repo(tmp_path)
     env = mod.evaluate(_payload(root), emit=emit)
@@ -41,7 +43,7 @@ def test_the_token_reaches_the_launch_args_and_never_the_printed_reply(tmp_path,
     assert token not in (root / STORED_REL).read_text(encoding="utf-8")
 
 
-def test_a_mint_that_cannot_bind_fires_the_script_without_a_token(tmp_path, seams, monkeypatch):
+def test_a_mint_that_cannot_bind_fires_the_script_without_a_token(tmp_path: Path, seams, monkeypatch: pytest.MonkeyPatch) -> None:
     def refuse(*a, **k):
         raise ValueError("no git common dir")
 
@@ -66,21 +68,21 @@ def _launcher_resume(root, escrow_in_launch: bool = False):
     return run_token.escrowed(root, HALTED_ID)
 
 
-def _halt_again(root):
+def _halt_again(root) -> None:
     write_halt_marker(
         root / RECORD_DIR_ROOT / HALTED_ID, halted="review_blocked", sizing_rel=SIZING_REL, plan_rel=PLAN_REL,
         run_base_sha="a" * 40,
     )
 
 
-def test_a_launcher_resume_leaves_a_live_escrowed_token_bound_to_the_commit_leg(tmp_path, seams):
+def test_a_launcher_resume_leaves_a_live_escrowed_token_bound_to_the_commit_leg(tmp_path: Path, seams) -> None:
     root = _repo(tmp_path, record=False)
     token = _launcher_resume(root)
     assert token is not None and run_token.admits(root, HALTED_ID, token, COMMIT_LEG_SCRIPT)
     assert not run_token.admits(root, HALTED_ID, token, "scratch/warp/other.workflow.mjs")
 
 
-def test_a_token_the_launch_already_escrowed_is_left_alone(tmp_path, seams):
+def test_a_token_the_launch_already_escrowed_is_left_alone(tmp_path: Path, seams) -> None:
     root = _repo(tmp_path, record=False)
     first = _launcher_resume(root, escrow_in_launch=True)
     assert first is not None
@@ -88,7 +90,7 @@ def test_a_token_the_launch_already_escrowed_is_left_alone(tmp_path, seams):
     assert again == first
 
 
-def test_a_launcher_refire_after_a_landed_halt_commit_lands_its_second_halt_commit(tmp_path, seams):
+def test_a_launcher_refire_after_a_landed_halt_commit_lands_its_second_halt_commit(tmp_path: Path, seams) -> None:
     root = _repo(tmp_path, record=False)
     spent = _launcher_resume(root)
     assert run_token.redeem(root, HALTED_ID, spent, COMMIT_LEG_SCRIPT)
@@ -103,7 +105,7 @@ def test_a_launcher_refire_after_a_landed_halt_commit_lands_its_second_halt_comm
     assert not run_token.redeem(root, HALTED_ID, fresh, COMMIT_LEG_SCRIPT)
 
 
-def test_a_stored_script_refire_after_a_landed_halt_commit_lands_its_second_halt_commit(tmp_path, seams):
+def test_a_stored_script_refire_after_a_landed_halt_commit_lands_its_second_halt_commit(tmp_path: Path, seams) -> None:
     root = _repo(tmp_path)
     _, first = mod._resume_route(root, SIZING_REL, _payload(root), {}, "s1", None)
     spent = first["fire_args"]["runToken"]
@@ -117,7 +119,7 @@ def test_a_stored_script_refire_after_a_landed_halt_commit_lands_its_second_halt
     assert run_token.redeem(root, HALTED_ID, fresh, COMMIT_LEG_SCRIPT)
 
 
-def test_a_stalled_mint_on_a_launcher_resume_detaches_and_still_answers_the_envelope(tmp_path, seams, monkeypatch):
+def test_a_stalled_mint_on_a_launcher_resume_detaches_and_still_answers_the_envelope(tmp_path: Path, seams, monkeypatch: pytest.MonkeyPatch) -> None:
     import threading
 
     root = _repo(tmp_path, record=False)
@@ -132,7 +134,7 @@ def test_a_stalled_mint_on_a_launcher_resume_detaches_and_still_answers_the_enve
     assert run_token.escrowed(root, HALTED_ID) is None
 
 
-def test_a_stalled_mint_with_the_read_budget_spent_detaches_within_the_spent_window_join(tmp_path, seams, monkeypatch):
+def test_a_stalled_mint_with_the_read_budget_spent_detaches_within_the_spent_window_join(tmp_path: Path, seams, monkeypatch: pytest.MonkeyPatch) -> None:
     import threading
     import time
 

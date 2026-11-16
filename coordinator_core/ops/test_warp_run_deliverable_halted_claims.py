@@ -7,6 +7,7 @@ import time
 from calendar import timegm
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -22,7 +23,7 @@ JOB = "tools/runpod-jobs/job.py"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     # stale_release reads the wall clock against the run-id mint stamp: fixed 2026-10-19 ids would
     # all release as stale-not-live once real time passes them by STALE_HOLD_BOUND_SECONDS.
@@ -54,58 +55,58 @@ def _claims(repo, paths, **kw):
     return wrd.halted_run_write_claims(repo, paths, now=NOW, **kw)
 
 
-def test_withheld_write_maps_to_run_id(repo):
+def test_withheld_write_maps_to_run_id(repo) -> None:
     _record(repo, HALTED_ID, writes=[JOB], withheld=[JOB])
     assert _claims(repo, [JOB, "src/other.py"]) == {JOB: [HALTED_ID]}
 
 
-def test_declared_but_not_withheld_path_is_not_held(repo):
+def test_declared_but_not_withheld_path_is_not_held(repo) -> None:
     _record(repo, HALTED_ID, writes=[JOB, "src/other.py"], withheld=["src/other.py"])
     assert _claims(repo, [JOB, "src/other.py"]) == {"src/other.py": [HALTED_ID]}
 
 
-def test_halt_without_any_withheld_holds_nothing(repo):
+def test_halt_without_any_withheld_holds_nothing(repo) -> None:
     _record(repo, HALTED_ID, writes=[JOB])
     assert _claims(repo, [JOB]) == {}
 
 
-def test_backslash_path_is_normalized(repo):
+def test_backslash_path_is_normalized(repo) -> None:
     _record(repo, HALTED_ID, withheld=["docs/a.md"])
     assert _claims(repo, ["docs\\a.md"]) == {"docs/a.md": [HALTED_ID]}
 
 
-def test_two_halted_runs_both_named(repo):
+def test_two_halted_runs_both_named(repo) -> None:
     _record(repo, HALTED_ID, withheld=[JOB])
     _record(repo, OTHER_ID, withheld=[JOB])
     assert _claims(repo, [JOB]) == {JOB: sorted([HALTED_ID, OTHER_ID])}
 
 
-def test_resumed_marker_yields_empty(repo):
+def test_resumed_marker_yields_empty(repo) -> None:
     _record(repo, HALTED_ID, withheld=[JOB], status="resumed")
     assert _claims(repo, [JOB]) == {}
 
 
-def test_no_marker_yields_empty(repo):
+def test_no_marker_yields_empty(repo) -> None:
     _record(repo, HALTED_ID, writes=[JOB], status=None)
     assert _claims(repo, [JOB]) == {}
 
 
-def test_out_of_window_stamp_yields_empty(repo):
+def test_out_of_window_stamp_yields_empty(repo) -> None:
     _record(repo, OLD_ID, withheld=[JOB])
     assert _claims(repo, [JOB]) == {}
 
 
-def test_exclude_run_yields_empty(repo):
+def test_exclude_run_yields_empty(repo) -> None:
     _record(repo, HALTED_ID, withheld=[JOB])
     assert _claims(repo, [JOB], exclude_run=HALTED_ID) == {}
 
 
-def test_unreadable_manifest_does_not_hide_a_withheld_hold(repo):
+def test_unreadable_manifest_does_not_hide_a_withheld_hold(repo) -> None:
     _record(repo, HALTED_ID, withheld=[JOB], manifest_text="{not json")
     assert _claims(repo, [JOB]) == {JOB: [HALTED_ID]}
 
 
-def test_unstamped_name_skipped_without_read(repo, monkeypatch):
+def test_unstamped_name_skipped_without_read(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _record(repo, "no-stamp-here", withheld=[JOB])
 
     def boom(*a, **k):
@@ -119,7 +120,7 @@ SIZING = "state/sizings/s.yaml"
 PLAN = "docs/plans/p.md"
 
 
-def _bind(repo, run_id, *, sizing=SIZING, plan=None, marker=STATUS_HALTED):
+def _bind(repo, run_id, *, sizing=SIZING, plan=None, marker=STATUS_HALTED) -> None:
     rec = repo / "state/warp" / run_id
     (rec / "run.json").write_text(json.dumps({"sizing_rel": sizing}), encoding="utf-8")
     body = {"status": marker, "sizing_rel": sizing}
@@ -132,20 +133,20 @@ def _bind(repo, run_id, *, sizing=SIZING, plan=None, marker=STATUS_HALTED):
     (rec / halted_run.HALTED_FILE).write_text(json.dumps(body), encoding="utf-8")
 
 
-def _sizing(repo, rel, status="open", deliverable=""):
+def _sizing(repo, rel, status: str = "open", deliverable: str = "") -> None:
     path = repo / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(f"status: {status}\n" + (f"deliverable_id: {deliverable}\n" if deliverable else ""), encoding="utf-8")
 
 
-def test_superseded_sizing_halted_run_claims_nothing(repo):
+def test_superseded_sizing_halted_run_claims_nothing(repo) -> None:
     _sizing(repo, SIZING, "superseded")
     _record(repo, HALTED_ID, writes=[JOB])
     _bind(repo, HALTED_ID)
     assert _claims(repo, [JOB], exclude_run=OTHER_ID) == {}
 
 
-def test_same_sizing_successor_releases_and_unrelated_halted_still_holds(repo):
+def test_same_sizing_successor_releases_and_unrelated_halted_still_holds(repo) -> None:
     _sizing(repo, SIZING)
     _sizing(repo, "state/sizings/u.yaml")
     _record(repo, HALTED_ID, writes=[JOB], withheld=[JOB])
@@ -157,7 +158,7 @@ def test_same_sizing_successor_releases_and_unrelated_halted_still_holds(repo):
     assert _claims(repo, [JOB], exclude_run=OTHER_ID) == {JOB: [HALTED_ID]}
 
 
-def test_same_deliverable_successor_releases(repo):
+def test_same_deliverable_successor_releases(repo) -> None:
     _sizing(repo, SIZING, deliverable="dlv-x")
     _sizing(repo, "state/sizings/t.yaml", deliverable="dlv-x")
     _record(repo, HALTED_ID, writes=[JOB])
@@ -167,7 +168,7 @@ def test_same_deliverable_successor_releases(repo):
     assert _claims(repo, [JOB], exclude_run=OTHER_ID) == {}
 
 
-def test_own_plan_landing_releases_and_other_plan_holds(repo):
+def test_own_plan_landing_releases_and_other_plan_holds(repo) -> None:
     _sizing(repo, SIZING)
     _record(repo, HALTED_ID, writes=[JOB], withheld=[JOB])
     _bind(repo, HALTED_ID, plan=PLAN)
@@ -176,12 +177,12 @@ def test_own_plan_landing_releases_and_other_plan_holds(repo):
     assert _claims(repo, [JOB], exclude_run=None) == {JOB: [HALTED_ID]}
 
 
-def test_no_candidates_or_no_state_dir(repo):
+def test_no_candidates_or_no_state_dir(repo) -> None:
     assert _claims(repo, []) == {}
     assert _claims(repo, [JOB]) == {}
 
 
-def _baselined(repo, run_id, baseline, *, halted_at=None, started_at=None):
+def _baselined(repo, run_id, baseline, *, halted_at=None, started_at=None) -> None:
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_STAGE_FILE
 
     rec = repo / "state/warp" / run_id
@@ -196,13 +197,13 @@ def _baselined(repo, run_id, baseline, *, halted_at=None, started_at=None):
     (rec / RUN_STAGE_FILE).write_text(json.dumps(stage), encoding="utf-8")
 
 
-def _dirty_job(repo, text="landing run edit\n"):
+def _dirty_job(repo, text: str = "landing run edit\n") -> None:
     path = repo / JOB
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
 
 
-def _blob(text):
+def _blob(text) -> str:
     from coordinator_core.ops.dispatch_emit.kept_work import blob_sha
 
     return blob_sha(text.encode("utf-8"))
@@ -212,33 +213,33 @@ HALT_AT = "2026-10-19T10:30:00Z"
 START_AT = "2026-10-19T11:00:00Z"
 
 
-def _two_runs(repo, b_h, b_l):
+def _two_runs(repo, b_h, b_l) -> None:
     _record(repo, HALTED_ID, writes=[JOB])
     _baselined(repo, HALTED_ID, {JOB: b_h}, halted_at=HALT_AT)
     _record(repo, OTHER_ID, status=None)
     _baselined(repo, OTHER_ID, {JOB: b_l}, started_at=START_AT)
 
 
-def test_halted_holder_with_no_hunks_in_dirty_path_releases(repo):
+def test_halted_holder_with_no_hunks_in_dirty_path_releases(repo) -> None:
     base = _blob("base\n")
     _two_runs(repo, base, base)
     _dirty_job(repo)
     assert _claims(repo, [JOB], exclude_run=OTHER_ID, dirty=lambda: {JOB}) == {}
 
 
-def test_halted_holder_with_hunks_in_dirty_path_holds(repo):
+def test_halted_holder_with_hunks_in_dirty_path_holds(repo) -> None:
     _two_runs(repo, _blob("base\n"), _blob("landing base\n"))
     _dirty_job(repo)
     assert _claims(repo, [JOB], exclude_run=OTHER_ID, dirty=lambda: {JOB}) == {JOB: [HALTED_ID]}
 
 
-def test_halted_holder_without_write_baseline_holds_dirty_path(repo):
+def test_halted_holder_without_write_baseline_holds_dirty_path(repo) -> None:
     _record(repo, HALTED_ID, writes=[JOB])
     _dirty_job(repo)
     assert _claims(repo, [JOB], exclude_run=OTHER_ID, dirty=lambda: {JOB}) == {JOB: [HALTED_ID]}
 
 
-def test_withheld_path_holds_even_when_tree_equals_baseline(repo):
+def test_withheld_path_holds_even_when_tree_equals_baseline(repo) -> None:
     base = _blob("base\n")
     _record(repo, HALTED_ID, writes=[JOB], withheld=[JOB])
     _baselined(repo, HALTED_ID, {JOB: base}, halted_at=HALT_AT)
@@ -246,14 +247,14 @@ def test_withheld_path_holds_even_when_tree_equals_baseline(repo):
     assert _claims(repo, [JOB], exclude_run=OTHER_ID, dirty=lambda: {JOB}) == {JOB: [HALTED_ID]}
 
 
-def test_default_now_uses_wall_clock(repo):
+def test_default_now_uses_wall_clock(repo) -> None:
     stamp = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
     run_id = f"ask-{stamp}-abcdef"
     _record(repo, run_id, withheld=[JOB])
     assert wrd.halted_run_write_claims(repo, [JOB], exclude_run=None) == {JOB: [run_id]}
 
 
-def test_b9002c_replay_superseded_sizing_halted_run_claims_nothing_for_a_landing_on_another_sizing(repo):
+def test_b9002c_replay_superseded_sizing_halted_run_claims_nothing_for_a_landing_on_another_sizing(repo) -> None:
     _sizing(repo, SIZING, "superseded")
     _sizing(repo, "state/sizings/land.yaml")
     _record(repo, HALTED_ID, writes=[JOB], withheld=[JOB])
@@ -264,7 +265,7 @@ def test_b9002c_replay_superseded_sizing_halted_run_claims_nothing_for_a_landing
     assert _claims(repo, [JOB], exclude_run=OTHER_ID) == {}
 
 
-def _live_run(repo, run_id, session, writes):
+def _live_run(repo, run_id, session, writes) -> None:
     from coordinator_core.ops.dispatch_emit import run_token
 
     rec = repo / "state/warp" / run_id
@@ -273,7 +274,7 @@ def _live_run(repo, run_id, session, writes):
     run_token.mint(repo, run_id, "s.mjs", session_id=session)
 
 
-def test_scan_lists_each_declarer_oldest_first_and_session_reader_dedupes(repo, monkeypatch):
+def test_scan_lists_each_declarer_oldest_first_and_session_reader_dedupes(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import touch_record
 
     monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
@@ -290,7 +291,7 @@ def test_scan_lists_each_declarer_oldest_first_and_session_reader_dedupes(repo, 
     assert wrd.live_run_write_claims(repo, [JOB], exclude_session=me) == {JOB: [peer]}
 
 
-def test_scan_halted_run_is_not_a_holder(repo, monkeypatch):
+def test_scan_halted_run_is_not_a_holder(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import touch_record
 
     monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
@@ -306,37 +307,37 @@ def _corrupt(repo, run_id, *, writes=(JOB,)):
     return rec
 
 
-def test_corrupt_marker_is_a_holding_halt(repo):
+def test_corrupt_marker_is_a_holding_halt(repo) -> None:
     _corrupt(repo, HALTED_ID)
     assert wrd._halted(repo, HALTED_ID) is True
 
 
-def test_absent_marker_is_not_halted_or_landed(repo):
+def test_absent_marker_is_not_halted_or_landed(repo) -> None:
     _record(repo, HALTED_ID, status=None)
     assert wrd._halted(repo, HALTED_ID) is False
     assert wrd._landed(repo, HALTED_ID) is False
     assert wrd.halted_withheld_paths(repo, HALTED_ID) == set()
 
 
-def test_a_claim_reason_string_is_not_a_run_id_and_is_neither_halted_nor_landed(repo):
+def test_a_claim_reason_string_is_not_a_run_id_and_is_neither_halted_nor_landed(repo) -> None:
     reason = f"unreadable-halt-record:{HALTED_ID}"
     assert wrd._halted(repo, reason) is False
     assert wrd._landed(repo, reason) is False
 
 
-def test_corrupt_marker_is_not_landed_and_not_released(repo):
+def test_corrupt_marker_is_not_landed_and_not_released(repo) -> None:
     _corrupt(repo, HALTED_ID)
     assert wrd._landed(repo, HALTED_ID) is False
     assert wrd.resumed_run_released(repo, HALTED_ID, None) is False
 
 
-def test_corrupt_marker_claims_every_wanted_path_with_run_reason(repo):
+def test_corrupt_marker_claims_every_wanted_path_with_run_reason(repo) -> None:
     _corrupt(repo, HALTED_ID)
     reason = f"unreadable-halt-record:{HALTED_ID}"
     assert _claims(repo, [JOB, "src/other.py"]) == {JOB: [reason], "src/other.py": [reason]}
 
 
-def test_corrupt_marker_withheld_paths_raise_with_run_reason(repo):
+def test_corrupt_marker_withheld_paths_raise_with_run_reason(repo) -> None:
     _corrupt(repo, HALTED_ID)
     with pytest.raises(halted_run.UnreadableHaltRecord) as exc:
         wrd.halted_withheld_paths(repo, HALTED_ID)
@@ -355,7 +356,7 @@ def _count_parses(monkeypatch):
     return calls
 
 
-def test_manifest_declared_parses_once_per_run_inside_a_scope(repo, monkeypatch):
+def test_manifest_declared_parses_once_per_run_inside_a_scope(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import halted_hold_release
 
     _record(repo, HALTED_ID, writes=[JOB])
@@ -367,7 +368,7 @@ def test_manifest_declared_parses_once_per_run_inside_a_scope(repo, monkeypatch)
     assert calls == [HALTED_ID]
 
 
-def test_manifest_declared_caches_nothing_outside_a_scope(repo, monkeypatch):
+def test_manifest_declared_caches_nothing_outside_a_scope(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _record(repo, HALTED_ID, writes=[JOB])
     calls = _count_parses(monkeypatch)
     wrd._manifest_declared(HALTED_ID, repo)
@@ -375,7 +376,7 @@ def test_manifest_declared_caches_nothing_outside_a_scope(repo, monkeypatch):
     assert calls == [HALTED_ID, HALTED_ID]
 
 
-def test_unreadable_manifest_still_flags_unreadable_when_memoised(repo):
+def test_unreadable_manifest_still_flags_unreadable_when_memoised(repo) -> None:
     from coordinator_core.ops.dispatch_emit import halted_hold_release
 
     _record(repo, HALTED_ID, manifest_text="{not json")

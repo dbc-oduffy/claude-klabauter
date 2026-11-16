@@ -42,7 +42,7 @@ def _git(args, cwd: Path) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], root)
@@ -119,7 +119,7 @@ def _assert_record_landed(root: Path, out: dict) -> None:
     assert outcome_rel(RUN) in names, names
 
 
-def test_aged_live_token_admits_guard_and_lands_halt(repo, tmp_path):
+def test_aged_live_token_admits_guard_and_lands_halt(repo, tmp_path: Path) -> None:
     token = run_token.mint(repo, RUN, SCRIPT)
     _age_live_record(repo)
 
@@ -128,7 +128,7 @@ def test_aged_live_token_admits_guard_and_lands_halt(repo, tmp_path):
 
 
 @RETIRERS
-def test_guard_admits_params_after_live_token_retired(repo, tmp_path, retire):
+def test_guard_admits_params_after_live_token_retired(repo, tmp_path: Path, retire) -> None:
     token = _aged_retired_token(repo, retire)
 
     leg = _admit_leg(repo, tmp_path, token)
@@ -138,7 +138,7 @@ def test_guard_admits_params_after_live_token_retired(repo, tmp_path, retire):
 
 
 @RETIRERS
-def test_halted_terminal_commit_lands_completed_rows_after_token_retired(repo, retire):
+def test_halted_terminal_commit_lands_completed_rows_after_token_retired(repo, retire) -> None:
     token = _aged_retired_token(repo, retire)
 
     out = _halt(repo, token)
@@ -147,7 +147,7 @@ def test_halted_terminal_commit_lands_completed_rows_after_token_retired(repo, r
 
 
 @RETIRERS
-def test_product_commit_with_retired_token_still_refused(repo, retire):
+def test_product_commit_with_retired_token_still_refused(repo, retire) -> None:
     token = _aged_retired_token(repo, retire)
 
     out = terminal_commit._handler(

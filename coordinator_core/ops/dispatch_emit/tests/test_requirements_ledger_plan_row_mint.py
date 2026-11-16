@@ -11,7 +11,7 @@ from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 
 RUN = "ask-20261021T000000-abc123"
-PLAN_REL = "docs/plans/2026-10-21-mint.md"
+PLAN_REL = "docs/plans/2026-10/2026-10-21-mint.md"
 SIZING_REL = "state/sizings/2026-10-21-mint.yaml"
 
 PLAN = """---
@@ -61,7 +61,7 @@ def _row(rid: str, status: str = "open", anchor: str = "ask") -> dict:
 
 def _setup(tmp_path, register):
     (tmp_path / ".git").mkdir()
-    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / "docs" / "plans" / "2026-10").mkdir(parents=True)
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / PLAN_REL).write_text(PLAN, encoding="utf-8", newline="\n")
     (tmp_path / SIZING_REL).write_text(yaml.safe_dump(_sizing(register), sort_keys=False), encoding="utf-8")

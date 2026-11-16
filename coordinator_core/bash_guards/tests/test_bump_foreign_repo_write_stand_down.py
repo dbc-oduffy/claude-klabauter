@@ -37,6 +37,11 @@ from coordinator_core.bash_guards.tests.test_bump_outside_repo_write import (
     _clean_bump_env,  # noqa: F401 -- reused fixture, the isolation both guards' suites need.
 )
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 
 def _enveloped(check):
@@ -44,7 +49,7 @@ def _enveloped(check):
 
 
 @pytest.fixture()
-def fleet_machine(monkeypatch, tmp_path):
+def fleet_machine(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A durable host with coordinator installed — the environment every line
     of this guard was written for."""
     home = tmp_path / "settings-home"
@@ -57,24 +62,24 @@ def fleet_machine(monkeypatch, tmp_path):
 
 
 @pytest.fixture()
-def cloud_container(monkeypatch):
+def cloud_container(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_CAP_FLEET_PRESENT", raising=False)
     monkeypatch.setenv("CLAUDE_CODE_ENTRYPOINT", "remote")
 
 
-def test_fleet_machine_enforces_exactly_as_before(fleet_machine):
+def test_fleet_machine_enforces_exactly_as_before(fleet_machine) -> None:
     """Property 3. The stand-down must be invisible where the premise holds."""
     assert guard._environment_stands_the_bump_down() is None
 
 
-def test_cloud_container_stands_the_bump_down(cloud_container):
+def test_cloud_container_stands_the_bump_down(cloud_container) -> None:
     stood = guard._environment_stands_the_bump_down()
     assert stood is not None
     assert stood.value is False
     assert stood.evidence.strip()
 
 
-def test_stand_down_returns_none_so_the_guard_chain_continues(cloud_container, capsys):
+def test_stand_down_returns_none_so_the_guard_chain_continues(cloud_container, capsys: pytest.CaptureFixture[str]) -> None:
     """Property 1, REWRITTEN after the first version of it missed a critical.
 
     The original asserted only that the advisory carried no
@@ -97,7 +102,7 @@ def test_stand_down_returns_none_so_the_guard_chain_continues(cloud_container, c
     )
 
 
-def test_stand_down_writes_a_durable_audit_line(cloud_container, tmp_path):
+def test_stand_down_writes_a_durable_audit_line(cloud_container, tmp_path: Path) -> None:
     """Property 2. Without this line the downgrade is indistinguishable from
     deleting the guard."""
     git_root = tmp_path / "repo"
@@ -116,7 +121,7 @@ def test_stand_down_writes_a_durable_audit_line(cloud_container, tmp_path):
     assert "no fleet on this host" in body
 
 
-def test_an_unwritable_audit_log_still_lets_the_write_proceed(cloud_container, capsys):
+def test_an_unwritable_audit_log_still_lets_the_write_proceed(cloud_container, capsys: pytest.CaptureFixture[str]) -> None:
     """Fail-open, but LOUDLY: an unrecorded stand-down is a visibility defect
     worth a line on stderr, never a reason to block the operator's write."""
     guard._log_environment_stand_down(
@@ -126,21 +131,21 @@ def test_an_unwritable_audit_log_still_lets_the_write_proceed(cloud_container, c
     # the contract under test is that it returned rather than raising.
 
 
-def test_the_override_restores_enforcement(cloud_container, monkeypatch):
+def test_the_override_restores_enforcement(cloud_container, monkeypatch: pytest.MonkeyPatch) -> None:
     """A host that DOES carry a fleet but reads as remote must be correctable
     by the operator, or the heuristic becomes the new impossible ask."""
     monkeypatch.setenv("COORDINATOR_CAP_FLEET_PRESENT", "1")
     assert guard._environment_stands_the_bump_down() is None
 
 
-def test_a_broken_capability_layer_leaves_the_guard_untouched(cloud_container, monkeypatch):
+def test_a_broken_capability_layer_leaves_the_guard_untouched(cloud_container, monkeypatch: pytest.MonkeyPatch) -> None:
     """Fail open toward TODAY'S behaviour: if the capability module cannot be
     consulted, the bump enforces exactly as it did before it existed."""
     import builtins
 
     real_import = builtins.__import__
 
-    def exploding_import(name, *args, **kwargs):
+    def exploding_import(name, *args, **kwargs) -> ModuleType:
         if name == "coordinator_core.environment":
             raise ImportError("boom")
         return real_import(name, *args, **kwargs)
@@ -164,7 +169,7 @@ def test_a_broken_capability_layer_leaves_the_guard_untouched(cloud_container, m
 
 
 @pytest.fixture()
-def exploding_capability(monkeypatch):
+def exploding_capability(monkeypatch: pytest.MonkeyPatch) -> None:
     """The capability layer itself unhappy. Patched at
     `coordinator_core.environment.capability`, the attribute
     `_write_bump_stand_down` imports inside its own function body, so the
@@ -183,8 +188,8 @@ def _foreign_commit_cmd(repos) -> str:
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_guard_stands_down_end_to_end_on_a_host_with_no_fleet(
-    repos, monkeypatch, capsys, _clean_bump_env
-):
+    repos, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], _clean_bump_env
+) -> None:
     """The `git commit` into a granted sibling that this guard has allowed on
     a cloud container since 2026-09-05 -- pinned through the entry point, not
     the predicate."""
@@ -210,8 +215,8 @@ def test_guard_stands_down_end_to_end_on_a_host_with_no_fleet(
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_guard_still_bumps_end_to_end_where_the_premise_holds(
-    repos, monkeypatch, _clean_bump_env
-):
+    repos, monkeypatch: pytest.MonkeyPatch, _clean_bump_env
+) -> None:
     """Property 3 of this file's header, through the entry point: on a fleet
     machine the stand-down must be invisible."""
     _set_anchor(monkeypatch, repos, "sess-c4-sd-fleet")
@@ -229,8 +234,8 @@ def test_guard_still_bumps_end_to_end_where_the_premise_holds(
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 def test_guard_bumps_end_to_end_when_the_capability_layer_raises(
-    repos, monkeypatch, cloud_container, exploding_capability, _clean_bump_env
-):
+    repos, monkeypatch: pytest.MonkeyPatch, cloud_container, exploding_capability, _clean_bump_env
+) -> None:
     """Fail open toward TODAY'S behaviour: venue markers say "stand down",
     the capability layer cannot answer, the guard denies as it did before the
     mechanism existed."""

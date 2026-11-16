@@ -7,12 +7,13 @@ import tempfile
 import pytest
 
 from coordinator_core.bash_guards import block_subagent_destructive_action as guard
+from pathlib import Path
 
 SESSION = "sess-g3"
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path, Path]:
     temp = tmp_path / "tmp"
     pad = temp / "claude" / "proj" / SESSION / "scratchpad"
     pad.mkdir(parents=True)
@@ -38,14 +39,14 @@ def _run(command, cwd, session_id=SESSION):
     )
 
 
-def test_init_under_the_session_scratchpad_is_allowed(world):
+def test_init_under_the_session_scratchpad_is_allowed(world) -> None:
     pad, repo, _ = world
     assert _run(f"git init {pad / 'fixture'}", repo) is None
     assert _run("git init fixture", pad) is None
     assert _run("git init", pad / "fixture") is None
 
 
-def test_init_under_a_uid_suffixed_claude_root_is_allowed(world):
+def test_init_under_a_uid_suffixed_claude_root_is_allowed(world) -> None:
     _pad, repo, temp = world
     uid_pad = temp / "claude-501" / "proj" / SESSION / "scratchpad"
     uid_pad.mkdir(parents=True)
@@ -57,13 +58,13 @@ def test_init_under_a_uid_suffixed_claude_root_is_allowed(world):
     assert _run(f"git init {temp / 'claudex' / 'proj' / SESSION / 'scratchpad' / 'f'}", repo) is not None
 
 
-def test_init_inside_the_tracked_tree_is_denied(world):
+def test_init_inside_the_tracked_tree_is_denied(world) -> None:
     _pad, repo, _ = world
     assert _run(f"git init {repo / 'tracked' / 'x'}", repo) is not None
     assert _run("git init", repo) is not None
 
 
-def test_init_under_another_sessions_scratchpad_is_denied(world):
+def test_init_under_another_sessions_scratchpad_is_denied(world) -> None:
     pad, repo, temp = world
     other = temp / "claude" / "proj" / "other-sess" / "scratchpad"
     other.mkdir(parents=True)
@@ -71,18 +72,18 @@ def test_init_under_another_sessions_scratchpad_is_denied(world):
     assert _run(f"git init {pad / 'f'}", repo, session_id="") is not None
 
 
-def test_init_nested_in_an_existing_scratchpad_repo_is_denied(world):
+def test_init_nested_in_an_existing_scratchpad_repo_is_denied(world) -> None:
     pad, repo, _ = world
     (pad / "fixture" / ".git").mkdir(parents=True)
     assert _run(f"git init {pad / 'fixture' / 'sub'}", repo) is not None
 
 
-def test_init_after_a_cd_is_denied(world):
+def test_init_after_a_cd_is_denied(world) -> None:
     pad, repo, _ = world
     assert _run(f"cd {repo} && git init", pad) is not None
 
 
-def test_add_commit_config_dash_c_into_a_scratchpad_repo_are_allowed(world):
+def test_add_commit_config_dash_c_into_a_scratchpad_repo_are_allowed(world) -> None:
     pad, repo, _ = world
     fx = pad / "fixture"
     (fx / ".git").mkdir(parents=True)
@@ -91,14 +92,14 @@ def test_add_commit_config_dash_c_into_a_scratchpad_repo_are_allowed(world):
     assert _run(f"git -C {fx} config user.email a@b.c", repo) is None
 
 
-def test_dash_c_into_the_real_repo_is_denied(world):
+def test_dash_c_into_the_real_repo_is_denied(world) -> None:
     pad, repo, _ = world
     assert _run(f"git -C {repo} add -A", pad) is not None
     assert _run(f"git -C {repo} commit -m x", pad) is not None
     assert _run(f"git -C {repo} config user.name x", pad) is not None
 
 
-def test_scratchpad_repo_config_is_limited_to_identity_keys(world):
+def test_scratchpad_repo_config_is_limited_to_identity_keys(world) -> None:
     pad, repo, _ = world
     fx = pad / "fixture"
     (fx / ".git").mkdir(parents=True)

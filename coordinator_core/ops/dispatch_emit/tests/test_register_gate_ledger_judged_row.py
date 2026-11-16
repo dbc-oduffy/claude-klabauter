@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit.register_gate import register_gate
 from coordinator_core.ops.dispatch_emit.run_close_completion import completion_entry_leg
+from pathlib import Path
 
 _SIZING = "state/sizings/2026-10-21-derive.yaml"
 _PLAN = "docs/plans/2026-10-21-derive.md"
@@ -33,14 +34,14 @@ def _review(**row):
     return {"criterion": {"status": "met", "observation": "ok", "completion_summary": _SUMMARY, "register_rows": [judged]}}
 
 
-def test_ledger_judged_met_row_without_observed_ref_keeps_the_criterion_met(tmp_path):
+def test_ledger_judged_met_row_without_observed_ref_keeps_the_criterion_met(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     review = _review()
     assert register_gate(root, _PLAN, review, ["R1"]) is None
     assert review["criterion"]["status"] == "met"
 
 
-def test_same_row_without_a_ledger_still_demotes(tmp_path):
+def test_same_row_without_a_ledger_still_demotes(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     review = _review()
     reason = register_gate(root, _PLAN, review)
@@ -48,14 +49,14 @@ def test_same_row_without_a_ledger_still_demotes(tmp_path):
     assert review["criterion"]["status"] == "not_met"
 
 
-def test_ledger_judged_row_the_judge_calls_not_met_still_demotes(tmp_path):
+def test_ledger_judged_row_the_judge_calls_not_met_still_demotes(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     review = _review(status="partial")
     reason = register_gate(root, _PLAN, review, ["R1"])
     assert reason is not None and "not met" in reason
 
 
-def test_all_met_ledger_run_gets_its_completion_entry(tmp_path):
+def test_all_met_ledger_run_gets_its_completion_entry(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     review = _review()
     assert register_gate(root, _PLAN, review, ["R1"]) is None
@@ -64,7 +65,7 @@ def test_all_met_ledger_run_gets_its_completion_entry(tmp_path):
     assert (root / written[0]).is_file()
 
 
-def test_demoted_criterion_is_what_failed_the_completion_entry(tmp_path):
+def test_demoted_criterion_is_what_failed_the_completion_entry(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     review = _review()
     register_gate(root, _PLAN, review)

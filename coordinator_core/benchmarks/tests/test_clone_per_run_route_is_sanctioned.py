@@ -26,7 +26,7 @@ HARNESS_COMMAND = "python -I coordinator_core/benchmarks/commit_leg_profile.py /
 
 
 @pytest.fixture
-def armed_repo(monkeypatch, tmp_path):
+def armed_repo(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """A tmp repo whose session has a dispatched executor behind it, as test_post_executor_verification builds one."""
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
     (tmp_path / "tmp").mkdir()

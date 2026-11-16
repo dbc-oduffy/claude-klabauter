@@ -254,7 +254,14 @@ _LEGS = (
     ("guard_hook_generation_self_probe", _START_CLEAR_COMPACT, "_leg_self_probe"),
     ("compact_summary_constraints", _COMPACT, "_leg_compact_summary_constraints"),
     ("objective_resume", _COMPACT, "_leg_objective_resume"),
+    ("peer_identity", _START_CLEAR_COMPACT, "_leg_peer_identity"),
 )
+
+
+def _leg_peer_identity(payload):
+    from coordinator_core.hooks.peer_identity import identity_text
+
+    return identity_text(payload)
 
 
 def _leg_project_orientation(payload):

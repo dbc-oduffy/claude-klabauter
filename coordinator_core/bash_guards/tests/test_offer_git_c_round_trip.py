@@ -5,6 +5,8 @@ import shlex
 
 from coordinator_core.bash_guards import guard_offer_git_c as g
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
+import pytest
 
 
 def _enveloped(check):
@@ -13,19 +15,19 @@ def _enveloped(check):
 MSG = 'feat: x\n\nbody with && and ; and "quotes"\n\nmore'
 
 
-def test_round_trip_accepts_a_faithful_rewrite():
+def test_round_trip_accepts_a_faithful_rewrite() -> None:
     orig = "cd /r && git commit -m %s" % shlex.quote(MSG)
     good = "git -C /r commit -m %s" % shlex.quote(MSG)
     assert g._offer_round_trips(orig, good, ["/r"])
 
 
-def test_round_trip_rejects_a_message_spliced_into_the_path():
+def test_round_trip_rejects_a_message_spliced_into_the_path() -> None:
     orig = "cd /r && git commit -m %s" % shlex.quote(MSG)
     bad = "git -C /r feat: x commit -m body"
     assert not g._offer_round_trips(orig, bad, ["/r"])
 
 
-def test_multiline_commit_message_suggestion_round_trips(tmp_path):
+def test_multiline_commit_message_suggestion_round_trips(tmp_path: Path) -> None:
     (tmp_path / "r" / ".git").mkdir(parents=True)
     cmd = "cd %s/r && git commit -m %s" % (tmp_path, shlex.quote(MSG))
     out = _enveloped(g.check_offer_git_c)(cmd, "s", str(tmp_path))
@@ -35,7 +37,7 @@ def test_multiline_commit_message_suggestion_round_trips(tmp_path):
     assert shlex.split(suggestion) == ["git", "-C", "%s/r" % tmp_path, "commit", "-m", MSG]
 
 
-def test_unfaithful_suggestion_is_omitted(tmp_path, monkeypatch):
+def test_unfaithful_suggestion_is_omitted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "r" / ".git").mkdir(parents=True)
     monkeypatch.setattr(g, "_offer_round_trips", lambda *a: False)
     cmd = "cd %s/r && git commit -m %s" % (tmp_path, shlex.quote(MSG))

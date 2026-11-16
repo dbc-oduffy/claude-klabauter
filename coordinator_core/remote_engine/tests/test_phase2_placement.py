@@ -6,6 +6,11 @@ import subprocess
 from pathlib import Path
 
 from coordinator_core.remote_engine import fallback, policy
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
 
 SSH = {"kind": "ssh", "host": "h", "invoke": "/x/coordinator-invoke"}
 BOXES = [
@@ -23,16 +28,16 @@ def _snapshot(root: Path) -> dict[str, str]:
 
 
 class Runner:
-    def __init__(self, reply):
+    def __init__(self, reply) -> None:
         self.calls = []
         self.reply = reply
 
-    def __call__(self, argv, timeout):
+    def __call__(self, argv, timeout) -> "CompletedProcess[str]":
         self.calls.append(argv)
         return subprocess.CompletedProcess(argv, 0, json.dumps({"result": self.reply}), "")
 
 
-def _env(tmp_path, monkeypatch):
+def _env(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     monkeypatch.setattr(fallback.box_registry, "read_boxes", lambda *a, **k: BOXES)
     fallback.box_transport._reset_limits()
@@ -40,7 +45,7 @@ def _env(tmp_path, monkeypatch):
     monkeypatch.setattr(fallback, "telemetry_path", lambda: tmp_path / "telemetry" / "t.jsonl")
 
 
-def test_mutating_op_served_remotely_leaves_caller_state_untouched(tmp_path, monkeypatch):
+def test_mutating_op_served_remotely_leaves_caller_state_untouched(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     state = tmp_path / "caller" / "state"
     (state / "runs").mkdir(parents=True)
@@ -66,7 +71,7 @@ def test_mutating_op_served_remotely_leaves_caller_state_untouched(tmp_path, mon
     assert _snapshot(state) == before
 
 
-def test_every_allowlisted_op_routes_and_names_placement(tmp_path, monkeypatch):
+def test_every_allowlisted_op_routes_and_names_placement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     for op in sorted(policy.PHASE2_MUTATING_ALLOWLIST):
         out = fallback.try_remote(
@@ -76,7 +81,7 @@ def test_every_allowlisted_op_routes_and_names_placement(tmp_path, monkeypatch):
         assert policy.placement(op, "serving", out["reply"])["branch"] == "b"
 
 
-def test_mutating_op_not_on_allowlist_never_routes(tmp_path, monkeypatch):
+def test_mutating_op_not_on_allowlist_never_routes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     runner = Runner({})
     assert (
@@ -86,7 +91,7 @@ def test_mutating_op_not_on_allowlist_never_routes(tmp_path, monkeypatch):
     assert runner.calls == []
 
 
-def test_trim_never_routes_even_when_allowlisted(tmp_path, monkeypatch):
+def test_trim_never_routes_even_when_allowlisted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     monkeypatch.setattr(policy, "PHASE2_MUTATING_ALLOWLIST", frozenset({"trim-file-cache"}))
     runner = Runner({})
@@ -97,7 +102,7 @@ def test_trim_never_routes_even_when_allowlisted(tmp_path, monkeypatch):
     assert runner.calls == []
 
 
-def test_hook_context_never_routes_mutating(tmp_path, monkeypatch):
+def test_hook_context_never_routes_mutating(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     monkeypatch.setenv(fallback.HOOK_ENV, "0")
     runner = Runner({})
@@ -108,5 +113,5 @@ def test_hook_context_never_routes_mutating(tmp_path, monkeypatch):
     assert runner.calls == []
 
 
-def test_placement_empty_for_read_only_op():
+def test_placement_empty_for_read_only_op() -> None:
     assert policy.placement("ping", "serving", {"branch": "b"}) == {}

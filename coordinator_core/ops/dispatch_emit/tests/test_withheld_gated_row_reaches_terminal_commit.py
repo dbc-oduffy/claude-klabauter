@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.ask_stage import _handler as stage
 from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -49,12 +50,12 @@ title: fixture
 """
 
 
-def _git(args, cwd):
+def _git(args, cwd) -> None:
     subprocess.run(["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
                    **no_console_creationflags())
 
 
-def test_gated_em_row_is_withheld_and_listed_incomplete(tmp_path):
+def test_gated_em_row_is_withheld_and_listed_incomplete(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     (root / "docs" / "plans").mkdir(parents=True)
     _git(["init", "-q"], root)

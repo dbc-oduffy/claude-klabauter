@@ -8,6 +8,7 @@ from coordinator_core.bash_guards import block_subagent_destructive_action as gu
 from coordinator_core.ops.dispatch_emit import falsifier_integrity_phase as fip
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
+import pytest
 
 PLAN_REL = "docs/plans/p.md"
 RUN = "r1"
@@ -31,23 +32,23 @@ def _stage(tmp_path: Path) -> dict:
     return {r["id"]: (tmp_path / r["brief_path"]).read_text(encoding="utf-8") for r in reply["rows"]}
 
 
-def _channel_live(monkeypatch):
+def _channel_live(monkeypatch) -> None:
     monkeypatch.setattr(guard, "_DECLARED_DELETE_CHANNEL_LIVE", True)
 
 
-def test_executor_brief_carries_marker_with_run_and_row_id(tmp_path, monkeypatch):
+def test_executor_brief_carries_marker_with_run_and_row_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _channel_live(monkeypatch)
     briefs = _stage(tmp_path)
     assert MARKER + "C1 git rm" in briefs["C1"]
 
 
-def test_dormant_channel_brief_has_no_marker(tmp_path):
+def test_dormant_channel_brief_has_no_marker(tmp_path: Path) -> None:
     assert guard._DECLARED_DELETE_CHANNEL_LIVE is False
     briefs = _stage(tmp_path)
     assert "COORDINATOR_DISPATCH_ROW" not in briefs["C1"]
 
 
-def test_scratch_only_row_gets_no_marker(tmp_path):
+def test_scratch_only_row_gets_no_marker(tmp_path: Path) -> None:
     briefs = _stage(tmp_path)
     assert "COORDINATOR_DISPATCH_ROW" not in briefs["C2"]
 
@@ -60,7 +61,7 @@ _REVIEWED = (
 )
 
 
-def test_reviewer_brief_has_no_marker(tmp_path, tmp_path_factory, monkeypatch):
+def test_reviewer_brief_has_no_marker(tmp_path: Path, tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch) -> None:
     rubric = tmp_path_factory.mktemp("rubric") / "falsifier-integrity-reviewer.md"
     rubric.write_text("rubric A\n", encoding="utf-8")
     monkeypatch.setattr(fip, "_reviewer_rubric_path", lambda: rubric)

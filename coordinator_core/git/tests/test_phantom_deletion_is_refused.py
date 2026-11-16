@@ -5,6 +5,7 @@ import pytest
 
 from coordinator_core.git import commit as gcommit
 from coordinator_core.git.commit import CommitRefused
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -19,7 +20,7 @@ def _git(repo, *args):
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/p")
@@ -38,7 +39,7 @@ def _head(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_present_path_declared_deleted_is_refused_and_head_is_unmoved(repo):
+def test_a_present_path_declared_deleted_is_refused_and_head_is_unmoved(repo) -> None:
     before = _head(repo)
     (repo / "keep.txt").write_text("edited\n", encoding="utf-8", newline="\n")
 
@@ -55,7 +56,7 @@ def test_a_present_path_declared_deleted_is_refused_and_head_is_unmoved(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_genuinely_removed_path_still_commits_its_deletion(repo):
+def test_a_genuinely_removed_path_still_commits_its_deletion(repo) -> None:
     (repo / "gone.txt").unlink()
 
     out = gcommit.commit_paths(repo, [], "real deletion", deleted_paths=["gone.txt"])
@@ -68,7 +69,7 @@ def test_a_genuinely_removed_path_still_commits_its_deletion(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_an_ordinary_commit_declares_no_deletion_and_is_unaffected(repo):
+def test_an_ordinary_commit_declares_no_deletion_and_is_unaffected(repo) -> None:
     (repo / "keep.txt").write_text("edited\n", encoding="utf-8", newline="\n")
 
     out = gcommit.commit_paths(repo, ["keep.txt"], "ordinary")
@@ -79,7 +80,7 @@ def test_an_ordinary_commit_declares_no_deletion_and_is_unaffected(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_an_untracked_path_leaves_head_and_the_index_and_stays_on_disk(repo):
+def test_an_untracked_path_leaves_head_and_the_index_and_stays_on_disk(repo) -> None:
     _git(repo, "rm", "--cached", "-q", "gone.txt")
 
     out = gcommit.commit_paths(
@@ -95,7 +96,7 @@ def test_an_untracked_path_leaves_head_and_the_index_and_stays_on_disk(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_an_untracked_path_needs_no_prior_rm_cached(repo):
+def test_an_untracked_path_needs_no_prior_rm_cached(repo) -> None:
     out = gcommit.commit_paths(
         repo, ["keep.txt"], "untrack gone.txt", untracked_paths=["gone.txt"]
     )
@@ -107,7 +108,7 @@ def test_an_untracked_path_needs_no_prior_rm_cached(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_an_untracked_path_that_head_never_carried_is_refused(repo):
+def test_an_untracked_path_that_head_never_carried_is_refused(repo) -> None:
     before = _head(repo)
     (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
 
@@ -121,7 +122,7 @@ def test_an_untracked_path_that_head_never_carried_is_refused(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_phantom_untracked_path_refusal_names_untracked_paths_not_deleted_paths(repo):
+def test_phantom_untracked_path_refusal_names_untracked_paths_not_deleted_paths(repo) -> None:
     (repo / "new.txt").write_text("new\n", encoding="utf-8", newline="\n")
 
     with pytest.raises(gcommit.PhantomDeletionDeclared) as excinfo:
@@ -133,7 +134,7 @@ def test_phantom_untracked_path_refusal_names_untracked_paths_not_deleted_paths(
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_phantom_deleted_path_refusal_still_names_deleted_paths(repo):
+def test_phantom_deleted_path_refusal_still_names_deleted_paths(repo) -> None:
     with pytest.raises(gcommit.PhantomDeletionDeclared) as excinfo:
         gcommit.commit_paths(repo, ["keep.txt"], "x", deleted_paths=["never.txt"])
 
@@ -142,7 +143,7 @@ def test_phantom_deleted_path_refusal_still_names_deleted_paths(repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_declaring_the_same_present_path_deleted_is_still_refused(repo):
+def test_declaring_the_same_present_path_deleted_is_still_refused(repo) -> None:
     with pytest.raises(CommitRefused) as excinfo:
         gcommit.commit_paths(
             repo, [], "untrack gone.txt",

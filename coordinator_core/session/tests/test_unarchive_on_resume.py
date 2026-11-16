@@ -9,21 +9,22 @@ import pytest
 
 from coordinator_core.hooks import sessionstart_dispatch as sd
 from coordinator_core.session import core, scope
+from pathlib import Path
 
 SID = "sess-abc"
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     return tmp_path
 
 
-def _base(repo):
+def _base(repo) -> str:
     return core.sessions_dir(str(repo))
 
 
-def _mkarchive(repo, date, content="x"):
+def _mkarchive(repo, date, content: str = "x") -> str:
     d = os.path.join(_base(repo), ".archive", f"{SID}-{date}")
     os.makedirs(d)
     with open(os.path.join(d, "marker.txt"), "w", encoding="utf-8") as fh:
@@ -31,18 +32,18 @@ def _mkarchive(repo, date, content="x"):
     return d
 
 
-def _live(repo):
+def _live(repo) -> str:
     return os.path.join(_base(repo), SID)
 
 
-def test_restores_on_resume(repo):
+def test_restores_on_resume(repo) -> None:
     _mkarchive(repo, "2026-10-01")
     assert scope.unarchive_on_resume(SID, str(repo)) is True
     assert os.path.isfile(os.path.join(_live(repo), "marker.txt"))
     assert not os.listdir(os.path.join(_base(repo), ".archive"))
 
 
-def test_picks_latest_of_multiple(repo):
+def test_picks_latest_of_multiple(repo) -> None:
     _mkarchive(repo, "2026-09-30", "old")
     _mkarchive(repo, "2026-10-02", "new")
     assert scope.unarchive_on_resume(SID, str(repo))
@@ -51,7 +52,7 @@ def test_picks_latest_of_multiple(repo):
     assert os.listdir(os.path.join(_base(repo), ".archive")) == [f"{SID}-2026-09-30"]
 
 
-def test_merges_into_live_dir_live_wins(repo):
+def test_merges_into_live_dir_live_wins(repo) -> None:
     arch = _mkarchive(repo, "2026-10-01", "archived")
     with open(os.path.join(arch, "dispatched-agents.txt"), "w", encoding="utf-8") as fh:
         fh.write("ledger")
@@ -65,16 +66,16 @@ def test_merges_into_live_dir_live_wins(repo):
     assert os.listdir(arch) == ["marker.txt"]
 
 
-def test_other_sid_prefix_not_claimed(repo):
+def test_other_sid_prefix_not_claimed(repo) -> None:
     os.makedirs(os.path.join(_base(repo), ".archive", f"{SID}-extra-2026-10-01"))
     assert scope.unarchive_on_resume(SID, str(repo)) is False
 
 
-def test_no_archive_is_noop(repo):
+def test_no_archive_is_noop(repo) -> None:
     assert scope.unarchive_on_resume(SID, str(repo)) is False
 
 
-def test_fail_open_on_rename_error(repo, monkeypatch):
+def test_fail_open_on_rename_error(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     arch = _mkarchive(repo, "2026-10-01")
 
     def boom(*a, **k):
@@ -88,7 +89,7 @@ def test_fail_open_on_rename_error(repo, monkeypatch):
 @pytest.mark.parametrize("source,restored", [
     ("resume", True), ("startup", False), ("clear", False), ("compact", False), ("fork", False),
 ])
-def test_dispatch_leg_gates_on_resume(repo, source, restored):
+def test_dispatch_leg_gates_on_resume(repo, source, restored) -> None:
     # The real session-start record writer runs first and recreates the live dir;
     # the restore must still land (stubbing it out hid exactly that ordering).
     _mkarchive(repo, "2026-10-01")
@@ -97,7 +98,7 @@ def test_dispatch_leg_gates_on_resume(repo, source, restored):
     assert os.path.isfile(os.path.join(_live(repo), "marker.txt")) is restored
 
 
-def test_end_to_end_guard_rearms(repo, monkeypatch):
+def test_end_to_end_guard_rearms(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.bash_guards import guard_post_executor_verification as g
 
     monkeypatch.setattr(

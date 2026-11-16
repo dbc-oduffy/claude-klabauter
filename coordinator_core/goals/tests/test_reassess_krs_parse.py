@@ -8,6 +8,7 @@ from coordinator_core.goals.reassess_krs import (
     process_kr_entry,
     strip_inline_comment,
 )
+from pathlib import Path
 
 SCAFFOLDED_GOAL = """schema: goal
 id: "goal-scaffolded"
@@ -23,30 +24,30 @@ key_results:
 """
 
 
-def test_strip_inline_comment_drops_the_enum_hint():
+def test_strip_inline_comment_drops_the_enum_hint() -> None:
     assert (
         strip_inline_comment("not-started  # not-started | in-progress | met | at-risk")
         == "not-started"
     )
 
 
-def test_strip_inline_comment_keeps_a_hash_inside_quotes():
+def test_strip_inline_comment_keeps_a_hash_inside_quotes() -> None:
     assert strip_inline_comment('"close out issue #143"') == '"close out issue #143"'
 
 
-def test_strip_inline_comment_keeps_a_hash_with_no_leading_whitespace():
+def test_strip_inline_comment_keeps_a_hash_with_no_leading_whitespace() -> None:
     assert strip_inline_comment("colour#ff0000") == "colour#ff0000"
 
 
-def test_strip_inline_comment_handles_a_whole_line_comment_value():
+def test_strip_inline_comment_handles_a_whole_line_comment_value() -> None:
     assert strip_inline_comment("# nothing but a comment") == ""
 
 
-def test_strip_inline_comment_is_a_no_op_without_a_comment():
+def test_strip_inline_comment_is_a_no_op_without_a_comment() -> None:
     assert strip_inline_comment("in-progress") == "in-progress"
 
 
-def test_scaffolded_status_parses_to_the_bare_enum_member():
+def test_scaffolded_status_parses_to_the_bare_enum_member() -> None:
     entries = parse_kr_block(extract_key_results(SCAFFOLDED_GOAL))
     assert len(entries) == 1
     kr_id, kr_text, kr_status, kr_weekly = entries[0]
@@ -57,7 +58,7 @@ def test_scaffolded_status_parses_to_the_bare_enum_member():
     assert kr_text == '"ship the widget pipeline"'
 
 
-def test_scaffolded_goal_can_reach_in_progress_on_movement():
+def test_scaffolded_goal_can_reach_in_progress_on_movement() -> None:
     _, _, kr_status, kr_weekly = parse_kr_block(extract_key_results(SCAFFOLDED_GOAL))[0]
     result = process_kr_entry(
         "kr-1", "ship the widget pipeline", kr_status, kr_weekly, "shipped the widget pipeline"
@@ -68,7 +69,7 @@ def test_scaffolded_goal_can_reach_in_progress_on_movement():
     assert result["anomalies"] == []
 
 
-def test_off_enum_status_is_reported_not_passed_through():
+def test_off_enum_status_is_reported_not_passed_through() -> None:
     result = process_kr_entry("kr-1", "ship it", "not-started  # hint", "true", "shipped it")
     assert result is not None
     assert len(result["anomalies"]) == 1
@@ -76,21 +77,21 @@ def test_off_enum_status_is_reported_not_passed_through():
     assert "OFF-ENUM FIELD" in result["report_line"]
 
 
-def test_non_boolean_weekly_perceptible_is_reported():
+def test_non_boolean_weekly_perceptible_is_reported() -> None:
     result = process_kr_entry("kr-1", "ship it", "not-started", "true  # bool", "no signal here")
     assert result is not None
     assert any("weekly_perceptible" in a for a in result["anomalies"])
     assert "OFF-ENUM FIELD" in result["report_line"]
 
 
-def test_clean_kr_reports_no_anomalies():
+def test_clean_kr_reports_no_anomalies() -> None:
     result = process_kr_entry("kr-1", "ship it", "in-progress", "false", "")
     assert result is not None
     assert result["anomalies"] == []
     assert "OFF-ENUM FIELD" not in result["report_line"]
 
 
-def test_inline_dash_line_fields_are_comment_stripped():
+def test_inline_dash_line_fields_are_comment_stripped() -> None:
     block = extract_key_results(
         "key_results:\n  - id: kr-2  # the second one\n    status: met  # done\n"
     )
@@ -99,7 +100,7 @@ def test_inline_dash_line_fields_are_comment_stripped():
     assert kr_status == "met"
 
 
-def test_off_enum_anomaly_reaches_the_op_warnings(tmp_path):
+def test_off_enum_anomaly_reaches_the_op_warnings(tmp_path: Path) -> None:
     from coordinator_core.goals.reassess_krs import reassess
 
     goals_dir = tmp_path / "goals"

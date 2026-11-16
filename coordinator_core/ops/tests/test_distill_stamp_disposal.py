@@ -101,7 +101,7 @@ def _write_manifest_to(worktree_root: Path, manifest: dict) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def test_stamp_round_trip():
+def test_stamp_round_trip() -> None:
     manifest = _fresh_manifest()
     expected_sha = _schema.compute_manifest_sha(manifest)
 
@@ -118,7 +118,7 @@ def test_stamp_round_trip():
     assert result.manifest["rows"] == manifest["rows"]
 
 
-def test_stamp_idempotent_when_equal():
+def test_stamp_idempotent_when_equal() -> None:
     manifest = _fresh_manifest()
     first = stamp_disposal_manifest(manifest, by="pm", at="2026-07-23T10:00:00Z", note="approved")
     assert first.applied is True
@@ -131,7 +131,7 @@ def test_stamp_idempotent_when_equal():
     assert second.manifest == first.manifest
 
 
-def test_refuse_restamp_with_different_values():
+def test_refuse_restamp_with_different_values() -> None:
     manifest = _fresh_manifest()
     first = stamp_disposal_manifest(manifest, by="pm", at="2026-07-23T10:00:00Z", note="approved")
 
@@ -141,7 +141,7 @@ def test_refuse_restamp_with_different_values():
         )
 
 
-def test_sha_drift_detection_after_manifest_edit():
+def test_sha_drift_detection_after_manifest_edit() -> None:
     manifest = _fresh_manifest()
     first = stamp_disposal_manifest(manifest, by="pm", at="2026-07-23T10:00:00Z", note="approved")
 
@@ -160,12 +160,12 @@ def test_sha_drift_detection_after_manifest_edit():
 # ---------------------------------------------------------------------------
 
 
-def test_load_disposal_manifest_absent_file_raises(tmp_path: Path):
+def test_load_disposal_manifest_absent_file_raises(tmp_path: Path) -> None:
     with pytest.raises(DisposalStampError, match="not found on disk"):
         load_disposal_manifest(tmp_path / "does-not-exist.json")
 
 
-def test_load_disposal_manifest_schema_invalid_raises(tmp_path: Path):
+def test_load_disposal_manifest_schema_invalid_raises(tmp_path: Path) -> None:
     path = tmp_path / "bad-manifest.json"
     path.write_text(json.dumps({"schema_version": 1, "run_id": "x"}), encoding="utf-8")
     with pytest.raises(DisposalStampError, match="schema validation"):
@@ -177,7 +177,7 @@ def test_load_disposal_manifest_schema_invalid_raises(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_write_stamped_manifest_atomic_in_place(tmp_path: Path):
+def test_write_stamped_manifest_atomic_in_place(tmp_path: Path) -> None:
     manifest = _fresh_manifest()
     path = _write_manifest_to(tmp_path, manifest)
 
@@ -195,7 +195,7 @@ def test_write_stamped_manifest_atomic_in_place(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_handler_raises_on_repo_root_none():
+def test_handler_raises_on_repo_root_none() -> None:
     with pytest.raises(ValueError, match="_origin_worktree"):
         _handler(
             {"run_id": "2026-07-23-01h00", "by": "pm", "at": "2026-07-23T10:00:00Z", "note": "ok"},
@@ -203,7 +203,7 @@ def test_handler_raises_on_repo_root_none():
         )
 
 
-def test_handler_raises_on_missing_run_id(tmp_path: Path):
+def test_handler_raises_on_missing_run_id(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     with pytest.raises(ValueError, match="distill.assemble_disposal_manifest"):
         _handler(
@@ -212,13 +212,13 @@ def test_handler_raises_on_missing_run_id(tmp_path: Path):
         )
 
 
-def test_handler_raises_on_missing_by_at_note(tmp_path: Path):
+def test_handler_raises_on_missing_by_at_note(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     with pytest.raises(ValueError, match=r"by.*at.*note|non-empty params"):
         _handler({"run_id": "2026-07-23-01h00"}, repo_root=tmp_path / ".git")
 
 
-def test_handler_refuses_injected_sha_param(tmp_path: Path):
+def test_handler_refuses_injected_sha_param(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     with pytest.raises(ValueError, match="refuses caller-supplied"):
         _handler(
@@ -233,7 +233,7 @@ def test_handler_refuses_injected_sha_param(tmp_path: Path):
         )
 
 
-def test_handler_refuses_injected_disposal_authorized_sha_param(tmp_path: Path):
+def test_handler_refuses_injected_disposal_authorized_sha_param(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     with pytest.raises(ValueError, match="refuses caller-supplied"):
         _handler(
@@ -249,7 +249,7 @@ def test_handler_refuses_injected_disposal_authorized_sha_param(tmp_path: Path):
 
 
 @_requires_rg
-def test_handler_end_to_end_dispatch_message_smoke(tmp_path: Path):
+def test_handler_end_to_end_dispatch_message_smoke(tmp_path: Path) -> None:
     """assemble (C12) then stamp (C13) via the REAL registered wiring
     (ops/__init__.py eager import + _registry_map.py + op_scopes.py + the
     @register_op decorator)."""

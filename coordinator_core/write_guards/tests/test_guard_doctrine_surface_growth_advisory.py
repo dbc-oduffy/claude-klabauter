@@ -11,12 +11,13 @@ import json
 import pytest
 
 from coordinator_core.write_guards import guard_doctrine_surface_edits as guard
+from pathlib import Path
 
 _SURFACE = "coordinator/snippets/surface.md"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     (root / ".git").mkdir(parents=True)
     (root / "coordinator" / "snippets").mkdir(parents=True)
@@ -27,13 +28,13 @@ def repo(tmp_path, monkeypatch):
     return root
 
 
-def _baseline(root, ceilings=None):
+def _baseline(root, ceilings=None) -> None:
     path = root / "coordinator" / "tests" / "baselines" / "always-loaded-surface-bytes.json"
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps({"ceilings": ceilings or {_SURFACE: 10}}), encoding="utf-8")
 
 
-def _surface(root, text="0123456789"):
+def _surface(root, text: str = "0123456789"):
     path = root / _SURFACE
     path.write_text(text, encoding="utf-8")
     return path
@@ -51,7 +52,7 @@ def _write(path, content):
     return {"tool_name": "Write", "tool_input": {"file_path": str(path), "content": content}, "session_id": "s"}
 
 
-def test_growing_edit_emits_one_advisory_and_no_deny(repo):
+def test_growing_edit_emits_one_advisory_and_no_deny(repo) -> None:
     _baseline(repo)
     path = _surface(repo)
 
@@ -64,7 +65,7 @@ def test_growing_edit_emits_one_advisory_and_no_deny(repo):
     assert "hook, skill or wiki page" in out["additionalContext"]
 
 
-def test_growing_write_emits_advisory(repo):
+def test_growing_write_emits_advisory(repo) -> None:
     _baseline(repo)
     path = _surface(repo)
 
@@ -74,14 +75,14 @@ def test_growing_write_emits_advisory(repo):
 
 
 @pytest.mark.parametrize("new", ["abcdefghij", "012"])
-def test_equal_or_shrinking_write_emits_nothing(repo, new):
+def test_equal_or_shrinking_write_emits_nothing(repo, new) -> None:
     _baseline(repo)
     path = _surface(repo)
 
     assert guard.check(_write(path, new)) is None
 
 
-def test_unlisted_file_emits_nothing(repo):
+def test_unlisted_file_emits_nothing(repo) -> None:
     _baseline(repo)
     other = repo / "coordinator" / "snippets" / "other.md"
     other.write_text("x", encoding="utf-8")
@@ -89,13 +90,13 @@ def test_unlisted_file_emits_nothing(repo):
     assert guard.check(_write(other, "x" * 500)) is None
 
 
-def test_missing_baseline_is_no_advisory_and_no_crash(repo):
+def test_missing_baseline_is_no_advisory_and_no_crash(repo) -> None:
     path = _surface(repo)
 
     assert guard.check(_write(path, "x" * 500)) is None
 
 
-def test_malformed_baseline_is_no_advisory(repo):
+def test_malformed_baseline_is_no_advisory(repo) -> None:
     path = repo / "coordinator" / "tests" / "baselines" / "always-loaded-surface-bytes.json"
     path.parent.mkdir(parents=True)
     path.write_text("{not json", encoding="utf-8")

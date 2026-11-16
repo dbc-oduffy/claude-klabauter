@@ -7,6 +7,7 @@ import asyncio
 import pytest
 
 from coordinator_core.hooks import sessionstart_async_dispatch as mod
+from pathlib import Path
 
 ALL_FIVE = {"startup", "resume", "clear", "compact", "fork"}
 
@@ -39,7 +40,7 @@ def _run(payload):
 
 
 @pytest.fixture
-def calls(monkeypatch, tmp_path):
+def calls(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> list[str]:
     rec: list[str] = []
 
     def make(key):
@@ -53,17 +54,17 @@ def calls(monkeypatch, tmp_path):
     return rec
 
 
-def test_pinned_leg_list_and_sources():
+def test_pinned_leg_list_and_sources() -> None:
     assert [(k, set(s)) for k, s, _ in mod._LEGS] == PINNED_LEGS
 
 
 @pytest.mark.parametrize("source", sorted(ALL_FIVE))
-def test_source_gate_matrix(calls, tmp_path, source):
+def test_source_gate_matrix(calls, tmp_path: Path, source) -> None:
     _run({"source": source, "cwd": str(tmp_path)})
     assert calls == [k for k, s in PINNED_LEGS if source in s]
 
 
-def test_startup_only_leg_runs_on_startup_not_resume(calls, tmp_path):
+def test_startup_only_leg_runs_on_startup_not_resume(calls, tmp_path: Path) -> None:
     _run({"source": "startup", "cwd": str(tmp_path)})
     assert "session_start_repair_prepare_commit_msg_hook" in calls
     calls.clear()
@@ -71,7 +72,7 @@ def test_startup_only_leg_runs_on_startup_not_resume(calls, tmp_path):
     assert "session_start_repair_prepare_commit_msg_hook" not in calls
 
 
-def test_retention_run_leg_swallows_spawn_failure(monkeypatch):
+def test_retention_run_leg_swallows_spawn_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(_root):
         raise RuntimeError("x")
 
@@ -79,19 +80,19 @@ def test_retention_run_leg_swallows_spawn_failure(monkeypatch):
     assert mod._retention_run_leg({}) is None
 
 
-def test_missing_source_runs_nothing(calls, tmp_path):
+def test_missing_source_runs_nothing(calls, tmp_path: Path) -> None:
     assert _run({"cwd": str(tmp_path)}) == {}
     assert calls == []
 
 
-def test_unmatched_source_breadcrumb(calls, tmp_path):
+def test_unmatched_source_breadcrumb(calls, tmp_path: Path) -> None:
     out = _run({"source": "bogus", "cwd": str(tmp_path)})
     assert calls == []
     ctx = out["hookSpecificOutput"]["additionalContext"]
     assert "source='bogus' matches no guard in REGISTRY" in ctx
 
 
-def test_raising_leg_does_not_drop_others(calls, monkeypatch, tmp_path):
+def test_raising_leg_does_not_drop_others(calls, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     def boom(params):
         raise RuntimeError("x")
 
@@ -108,7 +109,7 @@ def _fresh_mod():
     return klabauter_freshness
 
 
-def test_freshness_leg_surfaces_only_a_newly_surfaced_tree(monkeypatch):
+def test_freshness_leg_surfaces_only_a_newly_surfaced_tree(monkeypatch: pytest.MonkeyPatch) -> None:
     fresh = _fresh_mod()
     monkeypatch.setattr(fresh, "run_freshness", lambda: {
         "surfaced": True, "action": "surface_dirty", "hostname": "box",
@@ -121,7 +122,7 @@ def test_freshness_leg_surfaces_only_a_newly_surfaced_tree(monkeypatch):
     assert mod._klabauter_freshness_leg({}) is None
 
 
-def test_freshness_leg_swallows_failure(monkeypatch):
+def test_freshness_leg_swallows_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom():
         raise RuntimeError("x")
 
@@ -135,10 +136,10 @@ def _authoring_mod():
     return authoring_checkout_freshness
 
 
-def test_authoring_leg_joins_advisories_and_fetches(monkeypatch):
+def test_authoring_leg_joins_advisories_and_fetches(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = []
 
-    def fake_run(do_fetch=False):
+    def fake_run(do_fetch: bool = False) -> dict[str, list[str]]:
         seen.append(do_fetch)
         return {"advisories": ["a-line", "b-line"]}
 
@@ -151,15 +152,15 @@ def test_authoring_leg_joins_advisories_and_fetches(monkeypatch):
     assert mod._authoring_checkout_freshness_leg({}) is None
 
 
-def test_authoring_leg_swallows_failure(monkeypatch):
-    def boom(do_fetch=False):
+def test_authoring_leg_swallows_failure(monkeypatch: pytest.MonkeyPatch) -> None:
+    def boom(do_fetch: bool = False):
         raise RuntimeError("x")
 
     monkeypatch.setattr(_authoring_mod(), "run", boom)
     assert mod._authoring_checkout_freshness_leg({}) is None
 
 
-def test_freshness_op_passes_fetch_flag(monkeypatch):
+def test_freshness_op_passes_fetch_flag(monkeypatch: pytest.MonkeyPatch) -> None:
     fresh = _fresh_mod()
     seen = []
     monkeypatch.setattr(fresh, "run_freshness", lambda do_fetch=True: seen.append(do_fetch) or {"action": "current"})

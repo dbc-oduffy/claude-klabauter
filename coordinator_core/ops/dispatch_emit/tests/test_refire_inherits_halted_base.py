@@ -12,6 +12,7 @@ from coordinator_core.ops.dispatch_emit import ask_compose, op
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 from coordinator_core.ops.dispatch_emit.halted_run import HALTED_FILE, write_halt_marker
+from pathlib import Path
 
 REL = "state/sizings/2026-10-16-refire-c3b.yaml"
 WARP = "warp-2026-10-16-refire-c3b-20260101T000000-aaaaaa"
@@ -22,7 +23,7 @@ BASE = "a" * 40
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
@@ -42,11 +43,11 @@ def repo(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def composed(monkeypatch):
+def composed(monkeypatch: pytest.MonkeyPatch):
     seen = []
     real = ask_compose.compose_ask_script
 
-    def spy(**kw):
+    def spy(**kw) -> str:
         seen.append(kw.get("run_base_sha"))
         return real(**kw)
 
@@ -54,7 +55,7 @@ def composed(monkeypatch):
     return seen
 
 
-def _halt(repo, run_id, base):
+def _halt(repo, run_id, base) -> None:
     rl.start(repo, run_id)
     rl.bind(repo, run_id, REL, ask_text="the ask")
     write_halt_marker(record_dir(repo, run_id), halted="criterion", sizing_rel=REL, run_base_sha=base)
@@ -68,7 +69,7 @@ def _fire(repo):
     return op._dispatch_emit({"ask": True, "sizing_path": REL}, repo_root=repo)
 
 
-def test_a_rebound_refire_with_the_scratch_base_gone_composes_against_the_marker_base(repo, composed):
+def test_a_rebound_refire_with_the_scratch_base_gone_composes_against_the_marker_base(repo, composed) -> None:
     _halt(repo, WARP, BASE)
     assert op._recorded_run_base(repo, WARP) is None
     assert _fire(repo)["run_id"] == WARP
@@ -76,7 +77,7 @@ def test_a_rebound_refire_with_the_scratch_base_gone_composes_against_the_marker
     assert op._recorded_run_base(repo, WARP) == BASE
 
 
-def test_a_halted_ask_run_predecessor_yields_a_fresh_warp_run_on_its_base(repo, composed):
+def test_a_halted_ask_run_predecessor_yields_a_fresh_warp_run_on_its_base(repo, composed) -> None:
     _halt(repo, ASK, BASE)
     reply = _fire(repo)
     assert reply["run_id"] != ASK and reply["run_id"].startswith("warp-2026-10-16-refire-c3b-")
@@ -85,14 +86,14 @@ def test_a_halted_ask_run_predecessor_yields_a_fresh_warp_run_on_its_base(repo, 
     assert _status(repo, ASK) == "resumed"
 
 
-def test_a_halted_ask_run_without_a_base_falls_back_to_head(repo, composed):
+def test_a_halted_ask_run_without_a_base_falls_back_to_head(repo, composed) -> None:
     _halt(repo, ASK, None)
     reply = _fire(repo)
     assert composed == [None]
     assert op._recorded_run_base(repo, reply["run_id"]) == HEAD
 
 
-def test_a_fresh_fire_composes_against_head(repo, composed):
+def test_a_fresh_fire_composes_against_head(repo, composed) -> None:
     reply = _fire(repo)
     assert composed == [None]
     assert op._recorded_run_base(repo, reply["run_id"]) == HEAD

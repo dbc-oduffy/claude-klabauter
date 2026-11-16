@@ -21,7 +21,7 @@ FREE = "pkg/free.py"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "repo"
     (root / ".git").mkdir(parents=True)
     (root / "pkg").mkdir()
@@ -64,34 +64,34 @@ def _no_deny(result) -> bool:
     return not (result and result["hookSpecificOutput"].get("permissionDecision") == "deny")
 
 
-def test_live_run_owned_path_is_recorded_not_denied(repo):
+def test_live_run_owned_path_is_recorded_not_denied(repo) -> None:
     result = mod.op(_edit(repo, OWNED))
     assert _no_deny(result)
     assert _post_fire_recorded(result)
 
 
-def test_live_run_does_not_guard_a_path_it_does_not_own(repo):
+def test_live_run_does_not_guard_a_path_it_does_not_own(repo) -> None:
     result = mod.op(_edit(repo, FREE))
     assert _no_deny(result) and not _post_fire_recorded(result)
 
 
 @pytest.mark.parametrize("status", ["landed", "halted"])
-def test_ended_run_releases_its_owned_path_for_edit(repo, status):
+def test_ended_run_releases_its_owned_path_for_edit(repo, status) -> None:
     _end(repo, status)
     result = mod.op(_edit(repo, OWNED))
     assert _no_deny(result) and not _post_fire_recorded(result)
 
 
-def test_live_run_owned_shell_write_is_recorded(repo, monkeypatch):
+def test_live_run_owned_shell_write_is_recorded(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     assert _shell_hits(monkeypatch, repo, f"cp /dev/null {OWNED}") == 1
 
 
-def test_live_run_free_shell_write_is_not_recorded(repo, monkeypatch):
+def test_live_run_free_shell_write_is_not_recorded(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     assert _shell_hits(monkeypatch, repo, f"cp /dev/null {FREE}") == 0
 
 
 @pytest.mark.parametrize("status", ["landed", "halted"])
-def test_ended_run_releases_shell_write_and_merge_commit(repo, monkeypatch, status):
+def test_ended_run_releases_shell_write_and_merge_commit(repo, monkeypatch: pytest.MonkeyPatch, status) -> None:
     _end(repo, status)
     (repo / ".git" / "MERGE_HEAD").write_text("0" * 40 + "\n")
     assert _shell_hits(monkeypatch, repo, f"cp /dev/null {OWNED}") == 0

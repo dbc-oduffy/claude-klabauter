@@ -10,6 +10,7 @@ from coordinator_core.frontmatter.schema_validate import validate_frontmatter
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import design_conformance as dc
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -33,7 +34,7 @@ def _sizing():
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "shots").mkdir()
     (tmp_path / "shots" / "sbs.png").write_bytes(b"\x89PNG\r\n")
@@ -60,7 +61,7 @@ def _write(repo, rel, text):
     return rel
 
 
-def _record(repo, rel="reviews/fe.md", *, reviewer=None, agent_type=None, verdict="APPROVED", body=BOARD):
+def _record(repo, rel: str = "reviews/fe.md", *, reviewer=None, agent_type=None, verdict: str = "APPROVED", body=BOARD):
     fm = []
     if reviewer:
         fm.append(f"reviewer: {reviewer}")
@@ -71,19 +72,19 @@ def _record(repo, rel="reviews/fe.md", *, reviewer=None, agent_type=None, verdic
     return _write(repo, rel, "---\n" + "\n".join(fm) + f"\n---\nReviewed {body}\n{SBS}")
 
 
-def test_constants_and_vocabulary():
+def test_constants_and_vocabulary() -> None:
     assert dc.ANCHOR_PREFIX == "design-registry:" and dc.DESIGN_BRIEF_KEY == "design_brief"
     assert dc.DESIGN_SURFACE in rr.SURFACES
     assert rv.SENIOR_FRONT_END in rv.DELEGATE_REVIEWERS
 
 
-def test_bare_agent_type():
+def test_bare_agent_type() -> None:
     assert rv.bare_agent_type("coordinator:senior-front-end") == "senior-front-end"
     assert rv.bare_agent_type("senior-front-end") == "senior-front-end"
     assert rv.bare_agent_type(None) is None and rv.bare_agent_type(3) is None
 
 
-def test_brief_text_hits_pointer_and_absent_registry():
+def test_brief_text_hits_pointer_and_absent_registry() -> None:
     text = dc.brief_text([HIT], "docs/design/registry.yaml")
     for part in (BOARD, "Desktop, Mobile", "designed", "docs/design/settings/harvest.json",
                  "src/app/(app)/settings/page.tsx", "harvest.json", "design-deviation", "front-end",
@@ -94,7 +95,7 @@ def test_brief_text_hits_pointer_and_absent_registry():
     assert dc.brief_text([HIT], None) == "" and dc.brief_text([], "") == ""
 
 
-def test_brief_text_names_mint_route_for_missing_harvest():
+def test_brief_text_names_mint_route_for_missing_harvest() -> None:
     bare = {k: v for k, v in HIT.items() if k != "harvest_path"}
     bare["harvest_expected_path"] = "docs/design/settings/harvest/harvest.json"
     text = dc.brief_text([bare], "r.yaml")
@@ -102,12 +103,12 @@ def test_brief_text_names_mint_route_for_missing_harvest():
     assert "absent" in text and "not a blocking gate" in text
 
 
-def test_brief_text_omits_harvest_when_absent():
+def test_brief_text_omits_harvest_when_absent() -> None:
     bare = {k: v for k, v in HIT.items() if k != "harvest_path"}
     assert "Harvest:" not in dc.brief_text([bare], "r.yaml")
 
 
-def test_mint_is_idempotent_and_the_register_validates(repo):
+def test_mint_is_idempotent_and_the_register_validates(repo) -> None:
     before = len(_rows(repo))
     added = dc.mint_rows(repo, REL, [HIT, {**HIT, "id": "billing"}])
     assert len(added) == 2 and len(_rows(repo)) == before + 2
@@ -120,26 +121,26 @@ def test_mint_is_idempotent_and_the_register_validates(repo):
     assert validate_frontmatter(doc, rl._SIZING_SCHEMA) == []
 
 
-def test_sidecar_by_reviewer_passes(repo):
+def test_sidecar_by_reviewer_passes(repo) -> None:
     row = _row(repo)
     rec = _record(repo, reviewer="senior-front-end")
     assert dc.evidence_refusal(repo, row, {"met_by": [rec]}, None) is None
 
 
-def test_sidecar_by_agent_type_only_passes(repo):
+def test_sidecar_by_agent_type_only_passes(repo) -> None:
     row = _row(repo)
     rec = _record(repo, agent_type="coordinator:senior-front-end", verdict="APPROVED_WITH_NOTES")
     assert dc.evidence_refusal(repo, row, {"met_by": rec}, None) is None
 
 
-def test_wrong_reviewer_fails(repo):
+def test_wrong_reviewer_fails(repo) -> None:
     row = _row(repo)
     rec = _record(repo, reviewer="staff-eng")
     assert "senior-front-end" in dc.evidence_refusal(repo, row, {"met_by": [rec]}, None)
 
 
 @pytest.mark.parametrize("verdict", ["REJECTED", "requires-changes", "BLOCKED", "PIVOT", None])
-def test_refusing_or_absent_verdict_fails(repo, verdict):
+def test_refusing_or_absent_verdict_fails(repo, verdict) -> None:
     row = _row(repo)
     rec = _record(repo, reviewer="senior-front-end", verdict=verdict)
     assert "verdict" in dc.evidence_refusal(repo, row, {"met_by": [rec]}, None)
@@ -151,72 +152,72 @@ def _body_record(repo, section, fm_verdict=None):
 
 
 @pytest.mark.parametrize("section", ["## Verdict\n\n**APPROVED**", "## Verdict\n\nApproved with notes: tidy up"])
-def test_body_verdict_section_meets_row(repo, section):
+def test_body_verdict_section_meets_row(repo, section) -> None:
     row = _row(repo)
     assert dc.evidence_refusal(repo, row, {"met_by": [_body_record(repo, section)]}, None) is None
 
 
 @pytest.mark.parametrize("section", ["## Verdict\n\n**REJECTED**", "## Verdict\n\nRequires changes before merge", "## Notes\n\nfine"])
-def test_body_verdict_refusing_or_absent_refused(repo, section):
+def test_body_verdict_refusing_or_absent_refused(repo, section) -> None:
     row = _row(repo)
     assert "verdict" in dc.evidence_refusal(repo, row, {"met_by": [_body_record(repo, section)]}, None)
 
 
-def test_frontmatter_verdict_wins_over_body(repo):
+def test_frontmatter_verdict_wins_over_body(repo) -> None:
     row = _row(repo)
     rec = _body_record(repo, "## Verdict\n\nAPPROVED", fm_verdict="REJECTED")
     assert "REJECTED" in dc.evidence_refusal(repo, row, {"met_by": [rec]}, None)
 
 
-def test_a_different_board_fails(repo):
+def test_a_different_board_fails(repo) -> None:
     row = _row(repo)
     rec = _record(repo, reviewer="senior-front-end", body=OTHER_BOARD)
     assert "board" in dc.evidence_refusal(repo, row, {"met_by": [rec]}, None)
 
 
-def test_missing_file_and_empty_met_by_fail(repo):
+def test_missing_file_and_empty_met_by_fail(repo) -> None:
     row = _row(repo)
     assert "no file" in dc.evidence_refusal(repo, row, {"met_by": ["reviews/none.md"]}, None)
     assert "met_by" in dc.evidence_refusal(repo, row, {}, None)
     assert dc.evidence_refusal(repo, row, {"met_by": ["../escape.md"]}, None) is not None
 
 
-def test_status_in_the_registry_never_meets_the_row(repo):
+def test_status_in_the_registry_never_meets_the_row(repo) -> None:
     row = _row(repo)
     assert dc.evidence_refusal(repo, row, {"status": "met", "met_by": []}, None) is not None
 
 
-def _deviation(path):
+def _deviation(path) -> str:
     return f"# plan\n\n```yaml design-deviation\n- entry: settings\n  ratified_by: {path}\n```\n"
 
 
-def test_ratified_deviation_in_plan_text_passes(repo):
+def test_ratified_deviation_in_plan_text_passes(repo) -> None:
     row = _row(repo)
     pm = _write(repo, "state/pm/ratify.md", "PM: the deviation stands.\n")
     assert dc.evidence_refusal(repo, row, {"met_by": [pm]}, _deviation(pm)) is None
 
 
-def test_ratification_cited_for_another_entry_fails(repo):
+def test_ratification_cited_for_another_entry_fails(repo) -> None:
     row = _row(repo)
     pm = _write(repo, "state/pm/ratify.md", "PM: ok\n")
     text = _deviation(pm).replace("entry: settings", "entry: billing")
     assert dc.evidence_refusal(repo, row, {"met_by": [pm]}, text) is not None
 
 
-def test_uncited_ratification_file_fails(repo):
+def test_uncited_ratification_file_fails(repo) -> None:
     row = _row(repo)
     pm = _write(repo, "state/pm/ratify.md", "PM: ok\n")
     assert dc.evidence_refusal(repo, row, {"met_by": [pm]}, None) is not None
 
 
-def test_ratification_under_docs_plans_fails(repo):
+def test_ratification_under_docs_plans_fails(repo) -> None:
     row = _row(repo)
     plan = _write(repo, "docs/plans/self.md", "the plan ratifies itself\n")
     why = dc.evidence_refusal(repo, row, {"met_by": [plan]}, _deviation(plan))
     assert why is not None and "plan" in why
 
 
-def test_registry_entry_ratification_passes(repo, monkeypatch):
+def test_registry_entry_ratification_passes(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     row = _row(repo)
     pm = _write(repo, "state/pm/ratify.md", "PM: ok\n")
     monkeypatch.setattr(dc, "_registry_ratification", lambda root, eid: pm if eid == "settings" else None)
@@ -225,18 +226,18 @@ def test_registry_entry_ratification_passes(repo, monkeypatch):
     assert dc.evidence_refusal(repo, row, {"met_by": [other]}, None) is not None
 
 
-def _wave(path, agent_type="coordinator:senior-front-end", verdict="APPROVED"):
+def _wave(path, agent_type: str | None = "coordinator:senior-front-end", verdict: str = "APPROVED"):
     return {"agent_type": agent_type, "sidecar_path": path, "verdict": verdict}
 
 
-def test_wave_default_passes_without_met_by(repo):
+def test_wave_default_passes_without_met_by(repo) -> None:
     row = _row(repo)
     side = _write(repo, "reviews/wave.md", f"agent_type: review-findings\nBoard: {BOARD}\n{SBS}")
     assert dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(side)]) is None
     assert dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(side, verdict="approved")]) is None
 
 
-def test_wave_return_without_agent_type_falls_back_to_sidecar_frontmatter(repo):
+def test_wave_return_without_agent_type_falls_back_to_sidecar_frontmatter(repo) -> None:
     row = _row(repo)
     sfe = _write(repo, "reviews/sfe.md", f"---\nagent_type: coordinator:senior-front-end\n---\nBoard: {BOARD}\n{SBS}")
     code = _write(repo, "reviews/code.md", f"---\nagent_type: coordinator:code-reviewer\n---\nBoard: {BOARD}\n{SBS}")
@@ -248,14 +249,14 @@ def test_wave_return_without_agent_type_falls_back_to_sidecar_frontmatter(repo):
     {"verdict": "REQUIRES_CHANGES"}, {"verdict": "REJECTED"}, {"verdict": None},
     {"agent_type": "coordinator:code-reviewer"}, {"agent_type": None},
 ])
-def test_wave_default_refusals(repo, kw):
+def test_wave_default_refusals(repo, kw) -> None:
     row = _row(repo)
     side = _write(repo, "reviews/wave.md", f"Board: {BOARD}\n{SBS}")
     why = dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(side, **kw)])
     assert why is not None and "met_by names no file" in why
 
 
-def test_wave_sidecar_under_plans_or_wrong_board_refuses(repo):
+def test_wave_sidecar_under_plans_or_wrong_board_refuses(repo) -> None:
     row = _row(repo)
     plan = _write(repo, "docs/plans/p.md", f"Board: {BOARD}\n{SBS}")
     other = _write(repo, "reviews/other.md", f"Board: {OTHER_BOARD}\n")
@@ -265,7 +266,7 @@ def test_wave_sidecar_under_plans_or_wrong_board_refuses(repo):
     assert dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave("reviews/none.md")]) is not None
 
 
-def test_noted_path_meets_row_with_record_checks(repo):
+def test_noted_path_meets_row_with_record_checks(repo) -> None:
     row = _row(repo)
     rec = _record(repo, reviewer="coordinator:senior-front-end")
     bad = _record(repo, "reviews/bad.md", reviewer="coordinator:code-reviewer")
@@ -274,7 +275,7 @@ def test_noted_path_meets_row_with_record_checks(repo):
     assert dc.evidence_refusal(repo, row, {}, None, noted_paths=["reviews/none.md"]) is not None
 
 
-def test_failed_met_by_does_not_end_the_search(repo):
+def test_failed_met_by_does_not_end_the_search(repo) -> None:
     row = _row(repo)
     bad = _record(repo, "reviews/bad.md", reviewer="coordinator:code-reviewer")
     side = _write(repo, "reviews/wave.md", f"Board: {BOARD}\n{SBS}")
@@ -283,11 +284,11 @@ def test_failed_met_by_does_not_end_the_search(repo):
     assert "senior-front-end" in why and "no revise-noted review" in why
 
 
-def test_brief_text_asks_for_board_line():
+def test_brief_text_asks_for_board_line() -> None:
     assert "Board: <url>" in dc.brief_text([HIT], "docs/design/registry.yaml")
 
 
-def test_harvest_self_citation_refused_even_when_cited(repo):
+def test_harvest_self_citation_refused_even_when_cited(repo) -> None:
     row = _row(repo)
     harvest = _write(repo, "docs/design/settings/harvest.json", "{}\n")
     why = dc.evidence_refusal(repo, row, {"met_by": [harvest]}, _deviation(harvest))
@@ -299,7 +300,7 @@ def test_harvest_self_citation_refused_even_when_cited(repo):
     assert "judged against" in dc.evidence_refusal(repo, row, {}, None, noted_paths=[harvest])
 
 
-def test_harvest_citation_does_not_block_a_review_or_ratifier(repo):
+def test_harvest_citation_does_not_block_a_review_or_ratifier(repo) -> None:
     row = _row(repo)
     harvest = _write(repo, "docs/design/settings/harvest.json", "{}\n")
     rec = _record(repo, reviewer="senior-front-end")
@@ -308,17 +309,17 @@ def test_harvest_citation_does_not_block_a_review_or_ratifier(repo):
     assert dc.evidence_refusal(repo, row, {"met_by": [harvest, pm]}, _deviation(pm)) is None
 
 
-def test_refusal_is_one_sentence_naming_the_row(repo):
+def test_refusal_is_one_sentence_naming_the_row(repo) -> None:
     row = _row(repo)
     why = dc.evidence_refusal(repo, row, {"met_by": []}, None)
     assert row[rr.ROW_ID] in why and "settings" in why
 
 
-def _fe(repo, extra, rel="reviews/r.md", board=BOARD):
+def _fe(repo, extra, rel: str = "reviews/r.md", board=BOARD):
     return _write(repo, rel, f"---\nreviewer: senior-front-end\nverdict: APPROVED\n---\nReviewed {board}\n{extra}")
 
 
-def test_no_side_by_side_line_is_refused(repo):
+def test_no_side_by_side_line_is_refused(repo) -> None:
     row = _row(repo)
     rec = _fe(repo, "")
     assert "Side-by-side" in dc.evidence_refusal(repo, row, {"met_by": [rec]}, None)
@@ -327,7 +328,7 @@ def test_no_side_by_side_line_is_refused(repo):
 
 
 @pytest.mark.parametrize("path", ["shots/missing.png", "shots/note.txt", "shots", "../escape.png", "docs/plans/x.png"])
-def test_side_by_side_must_be_an_existing_contained_image(repo, path):
+def test_side_by_side_must_be_an_existing_contained_image(repo, path) -> None:
     row = _row(repo)
     _write(repo, "shots/note.txt", "x\n")
     _write(repo, "docs/plans/x.png", "x\n")
@@ -336,7 +337,7 @@ def test_side_by_side_must_be_an_existing_contained_image(repo, path):
     assert "no image file under the repo root" in why and path in why
 
 
-def test_side_by_side_png_suffix_without_image_bytes_is_refused(repo):
+def test_side_by_side_png_suffix_without_image_bytes_is_refused(repo) -> None:
     row = _row(repo)
     _write(repo, "shots/fake.png", "not an image\n")
     rec = _fe(repo, "Side-by-side: shots/fake.png\n")
@@ -346,20 +347,20 @@ def test_side_by_side_png_suffix_without_image_bytes_is_refused(repo):
 @pytest.mark.parametrize("name,head", [
     ("a.png", b"\x89PNG\r\n\x1a\n"), ("b.jpg", b"\xff\xd8\xff\xe0"), ("c.webp", b"RIFF\x00\x00\x00\x00WEBP"),
 ])
-def test_side_by_side_with_image_signature_is_accepted(repo, name, head):
+def test_side_by_side_with_image_signature_is_accepted(repo, name, head) -> None:
     row = _row(repo)
     (repo / "shots" / name).write_bytes(head)
     rec = _fe(repo, f"Side-by-side: shots/{name}\n")
     assert dc.evidence_refusal(repo, row, {"met_by": [rec]}, None) is None
 
 
-def test_every_side_by_side_path_must_resolve(repo):
+def test_every_side_by_side_path_must_resolve(repo) -> None:
     row = _row(repo)
     rec = _fe(repo, SBS + "Side-by-side: shots/gone.png\n")
     assert "shots/gone.png" in dc.evidence_refusal(repo, row, {"met_by": [rec]}, None)
 
 
-def test_harvest_directory_image_is_not_a_side_by_side(repo):
+def test_harvest_directory_image_is_not_a_side_by_side(repo) -> None:
     row = _row(repo)
     _write(repo, "docs/design/settings/frame.png", "x\n")
     rec = _fe(repo, "Side-by-side: docs/design/settings/frame.png\n")
@@ -367,7 +368,7 @@ def test_harvest_directory_image_is_not_a_side_by_side(repo):
 
 
 @pytest.mark.parametrize("tier", ["web-only", "desktop-only"])
-def test_single_tier_needs_a_render_path(repo, tier):
+def test_single_tier_needs_a_render_path(repo, tier) -> None:
     row = _row(repo)
     rec = _fe(repo, f"{SBS}Tier: {tier}\n")
     assert "Render path" in dc.evidence_refusal(repo, row, {"met_by": [rec]}, None)
@@ -377,14 +378,14 @@ def test_single_tier_needs_a_render_path(repo, tier):
     assert dc.evidence_refusal(repo, row, {"met_by": [ok]}, None) is None
 
 
-def test_single_tier_declared_on_the_row_needs_a_render_path(repo):
+def test_single_tier_declared_on_the_row_needs_a_render_path(repo) -> None:
     row = _row(repo)
     row = {**row, rr.ROW_TEXT: row[rr.ROW_TEXT] + "\nTier: web-only"}
     rec = _fe(repo, SBS)
     assert "Render path" in dc.evidence_refusal(repo, row, {"met_by": [rec]}, None)
 
 
-def test_wave_single_tier_needs_a_render_path(repo):
+def test_wave_single_tier_needs_a_render_path(repo) -> None:
     row = _row(repo)
     bad = _write(repo, "reviews/w1.md", f"Board: {BOARD}\n{SBS}Tier: web-only\n")
     good = _write(repo, "reviews/w2.md", f"Board: {BOARD}\n{SBS}Tier: web-only\nRender path: headless chrome\n")
@@ -392,6 +393,6 @@ def test_wave_single_tier_needs_a_render_path(repo):
     assert dc.evidence_refusal(repo, row, {}, None, wave_reviews=[_wave(good)]) is None
 
 
-def test_brief_text_asks_for_render_lines():
+def test_brief_text_asks_for_render_lines() -> None:
     text = dc.brief_text([HIT], "docs/design/registry.yaml")
     assert "Side-by-side: <" in text and "Render path: <" in text

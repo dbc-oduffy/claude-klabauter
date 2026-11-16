@@ -23,6 +23,8 @@ Grep anchors: THE-SPAWNING-TEST-NUDGE-OFFERS-ONLY-REGISTERED-MARKERS, R27
 from __future__ import annotations
 
 from coordinator_core.write_guards import nudge_unmarked_spawning_test as guard
+from pathlib import Path
+import pytest
 
 _UNMARKED_SPAWN_TEST = (
     "import subprocess\n"
@@ -35,7 +37,7 @@ def _payload(file_path: str, content: str) -> dict:
     return {"tool_name": "Write", "tool_input": {"file_path": file_path, "content": content}}
 
 
-def test_no_markers_list_anywhere_stays_silent(tmp_path, monkeypatch):
+def test_no_markers_list_anywhere_stays_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "pyproject.toml").write_text('[tool.pytest.ini_options]\n', encoding="utf-8")
     monkeypatch.setattr(guard, "resolve_repo_root", lambda cwd=None: str(tmp_path))
 
@@ -46,7 +48,7 @@ def test_no_markers_list_anywhere_stays_silent(tmp_path, monkeypatch):
     assert result is None
 
 
-def test_markers_registered_but_not_spawns_process_stays_silent(tmp_path, monkeypatch):
+def test_markers_registered_but_not_spawns_process_stays_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "pyproject.toml").write_text(
         "[tool.pytest.ini_options]\n"
         'markers = [\n    "slow: marks tests as slow",\n]\n',
@@ -61,7 +63,7 @@ def test_markers_registered_but_not_spawns_process_stays_silent(tmp_path, monkey
     assert result is None
 
 
-def test_spawns_process_registered_in_pyproject_fires(tmp_path, monkeypatch):
+def test_spawns_process_registered_in_pyproject_fires(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "pyproject.toml").write_text(
         "[tool.pytest.ini_options]\n"
         'markers = [\n'
@@ -84,7 +86,7 @@ def test_spawns_process_registered_in_pyproject_fires(tmp_path, monkeypatch):
     assert "spawns_process" in hso["additionalContext"]
 
 
-def test_spawns_process_registered_in_ini_shaped_pytest_ini_fires(tmp_path, monkeypatch):
+def test_spawns_process_registered_in_ini_shaped_pytest_ini_fires(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "pytest.ini").write_text(
         "[pytest]\n"
         "markers =\n"

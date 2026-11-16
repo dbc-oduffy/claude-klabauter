@@ -9,6 +9,7 @@ import yaml
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+from pathlib import Path
 
 RUN = "ask-20261015T000000-abc123"
 REL = "state/sizings/2026-10-15-oos.yaml"
@@ -25,7 +26,7 @@ def _sizing():
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / REL).write_text(yaml.safe_dump(_sizing(), sort_keys=False), encoding="utf-8")
@@ -50,20 +51,20 @@ def _met(ids):
     return {"items": [{"id": i, "status": "met", "wired": True} for i in ids]}
 
 
-def test_out_of_scope_without_verbatim_refuses(repo):
+def test_out_of_scope_without_verbatim_refuses(repo) -> None:
     out = _revise(repo, out_of_scope=["R1"])
     assert "error" in out and "verbatim" in out["error"]
     assert _rows(repo)[0]["status"] == "open"
 
 
-def test_unknown_id_refuses_and_writes_nothing(repo):
+def test_unknown_id_refuses_and_writes_nothing(repo) -> None:
     before = (repo / REL).read_text(encoding="utf-8")
     out = _revise(repo, verbatim=WORDS, out_of_scope=["R9"])
     assert "R9" in out["error"]
     assert (repo / REL).read_text(encoding="utf-8") == before
 
 
-def test_named_row_reads_deferred_with_ruling_and_leaves_items(repo):
+def test_named_row_reads_deferred_with_ruling_and_leaves_items(repo) -> None:
     out = _revise(repo, verbatim=WORDS, out_of_scope=["R1"])
     assert out["ok"] and out["withheld"] == ["R1"]
     rows = _rows(repo)
@@ -79,7 +80,7 @@ def test_named_row_reads_deferred_with_ruling_and_leaves_items(repo):
     assert "Out of scope" in view and "R1: withheld by out-of-scope ruling" in view
 
 
-def test_judge_passes_verdict_that_omits_it_and_lists_it_open(repo):
+def test_judge_passes_verdict_that_omits_it_and_lists_it_open(repo) -> None:
     _revise(repo, verbatim=WORDS, out_of_scope=["R1"])
     ledger = _ledger(repo)
     got = rl.judge(ledger, _met([i.id for i in ledger.items]))
@@ -87,7 +88,7 @@ def test_judge_passes_verdict_that_omits_it_and_lists_it_open(repo):
     assert got["open"] == [{"id": "R1", "reason": "withheld by out-of-scope ruling"}]
 
 
-def test_judge_tolerates_verdict_that_judges_it(repo):
+def test_judge_tolerates_verdict_that_judges_it(repo) -> None:
     _revise(repo, verbatim=WORDS, out_of_scope=["R1"])
     ledger = _ledger(repo)
     verdict = _met([i.id for i in ledger.items])
@@ -97,20 +98,20 @@ def test_judge_tolerates_verdict_that_judges_it(repo):
     assert [o["id"] for o in got["open"]] == ["R1"]
 
 
-def test_met_row_cannot_be_withheld(repo):
+def test_met_row_cannot_be_withheld(repo) -> None:
     rl._mutate_register(repo, REL, lambda rows: [{**rows[0], "status": "met"}, *rows[1:]])
     out = _revise(repo, verbatim=WORDS, out_of_scope=["R1"])
     assert "already met" in out["error"]
 
 
-def test_regression_unmet_essential_row_still_fails(repo):
+def test_regression_unmet_essential_row_still_fails(repo) -> None:
     ledger = _ledger(repo)
     got = rl.judge(ledger, {"items": [{"id": "R1", "status": "not_met"}, {"id": "R2", "status": "met"}]})
     assert got["pass"] is False and got["failures"][0]["id"] == "R1"
     assert got["open"] == []
 
 
-def test_regression_gated_withheld_row_behaves_as_before(repo):
+def test_regression_gated_withheld_row_behaves_as_before(repo) -> None:
     ledger = _ledger(repo)
     verdict = {"items": [{"id": "R1", "status": "not_met", "withheld_by": "C9"}, {"id": "R2", "status": "met"}]}
     assert rl.judge(ledger, verdict, gated=["C9"]) == {

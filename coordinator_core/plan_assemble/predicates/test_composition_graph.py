@@ -12,6 +12,7 @@ from coordinator_core.plan_assemble.predicates.composition_graph import (
     path_rename_or_move,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.cadence,
@@ -43,20 +44,20 @@ def _write_spine_plan(path, spine_body: str, frontmatter: str = "") -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def test_chunk_overlap_no_plan_undetermined(tmp_path):
+def test_chunk_overlap_no_plan_undetermined(tmp_path: Path) -> None:
     result = chunk_overlap(_ctx(tmp_path))
     assert result["undetermined"] is True
     assert "no --plan" in result["reason"]
 
 
-def test_chunk_overlap_unreadable_spine_undetermined(tmp_path):
+def test_chunk_overlap_unreadable_spine_undetermined(tmp_path: Path) -> None:
     plan_path = tmp_path / "plan.md"
     plan_path.write_text("# no task-spine block here\n", encoding="utf-8")
     result = chunk_overlap(_ctx(tmp_path, plan_path=plan_path))
     assert result["undetermined"] is True
 
 
-def test_chunk_overlap_reports_pairwise_intersection(tmp_path):
+def test_chunk_overlap_reports_pairwise_intersection(tmp_path: Path) -> None:
     spine = """\
 - id: C1
   title: writes a shared dir
@@ -87,7 +88,7 @@ def test_chunk_overlap_reports_pairwise_intersection(tmp_path):
     ]
 
 
-def test_chunk_overlap_skips_undeclared_writes(tmp_path):
+def test_chunk_overlap_skips_undeclared_writes(tmp_path: Path) -> None:
     spine = """\
 - id: C1
   title: undeclared writes
@@ -104,12 +105,12 @@ def test_chunk_overlap_skips_undeclared_writes(tmp_path):
     assert result["pairs"] == []
 
 
-def test_path_rename_or_move_no_plan_undetermined(tmp_path):
+def test_path_rename_or_move_no_plan_undetermined(tmp_path: Path) -> None:
     result = path_rename_or_move(_ctx(tmp_path))
     assert result["undetermined"] is True
 
 
-def test_path_rename_or_move_no_cited_paths(tmp_path):
+def test_path_rename_or_move_no_cited_paths(tmp_path: Path) -> None:
     spine = """\
 - id: C1
   title: no writes or reads
@@ -121,7 +122,7 @@ def test_path_rename_or_move_no_cited_paths(tmp_path):
     assert result == {"fires": False, "paths": []}
 
 
-def test_path_rename_or_move_detects_a_real_rename(tmp_path):
+def test_path_rename_or_move_detects_a_real_rename(tmp_path: Path) -> None:
     repo = tmp_path
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **_NO_CONSOLE)
     subprocess.run(
@@ -156,7 +157,7 @@ def test_path_rename_or_move_detects_a_real_rename(tmp_path):
     assert result["paths"] == ["new_name.py"]
 
 
-def test_path_rename_or_move_process_count_does_not_grow_with_the_set(tmp_path, monkeypatch):
+def test_path_rename_or_move_process_count_does_not_grow_with_the_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **_NO_CONSOLE)
     subprocess.run(
@@ -208,7 +209,7 @@ def test_path_rename_or_move_process_count_does_not_grow_with_the_set(tmp_path, 
     assert len(calls) == 1, f"3 cited paths cost {len(calls)} `_run_git` calls: {calls}"
 
 
-def test_path_rename_or_move_git_timeout_is_undetermined(tmp_path, monkeypatch):
+def test_path_rename_or_move_git_timeout_is_undetermined(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     spine = """\
 - id: C1
   title: cites a path
@@ -231,7 +232,7 @@ def test_path_rename_or_move_git_timeout_is_undetermined(tmp_path, monkeypatch):
     assert "git log --diff-filter=R failed" in result["reason"]
 
 
-def test_path_rename_or_move_git_oserror_is_undetermined(tmp_path, monkeypatch):
+def test_path_rename_or_move_git_oserror_is_undetermined(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     spine = """\
 - id: C1
   title: cites a path
@@ -254,17 +255,17 @@ def test_path_rename_or_move_git_oserror_is_undetermined(tmp_path, monkeypatch):
     assert "git log --diff-filter=R failed" in result["reason"]
 
 
-def test_cross_plan_conflict_no_plan_undetermined(tmp_path):
+def test_cross_plan_conflict_no_plan_undetermined(tmp_path: Path) -> None:
     result = cross_plan_conflict(_ctx(tmp_path))
     assert result["undetermined"] is True
 
 
-def test_cross_plan_conflict_no_own_scope_returns_empty(tmp_path):
+def test_cross_plan_conflict_no_own_scope_returns_empty(tmp_path: Path) -> None:
     result = cross_plan_conflict(_ctx(tmp_path, plan_frontmatter={}))
     assert result == {"hits": []}
 
 
-def test_cross_plan_conflict_finds_scope_overlap(tmp_path):
+def test_cross_plan_conflict_finds_scope_overlap(tmp_path: Path) -> None:
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)
 
@@ -352,7 +353,7 @@ scope:
 """
 
 
-def test_cross_plan_conflict_sees_a_write_site_only_the_spine_declares(tmp_path):
+def test_cross_plan_conflict_sees_a_write_site_only_the_spine_declares(tmp_path: Path) -> None:
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)
 
@@ -380,7 +381,7 @@ def test_cross_plan_conflict_sees_a_write_site_only_the_spine_declares(tmp_path)
     ]
 
 
-def test_cross_plan_conflict_sees_a_write_site_only_an_ac_body_names(tmp_path):
+def test_cross_plan_conflict_sees_a_write_site_only_an_ac_body_names(tmp_path: Path) -> None:
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)
 
@@ -405,7 +406,7 @@ def test_cross_plan_conflict_sees_a_write_site_only_an_ac_body_names(tmp_path):
     ]
 
 
-def test_cross_plan_conflict_ignores_paths_cited_outside_the_ac_section(tmp_path):
+def test_cross_plan_conflict_ignores_paths_cited_outside_the_ac_section(tmp_path: Path) -> None:
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)
 
@@ -425,7 +426,7 @@ def test_cross_plan_conflict_ignores_paths_cited_outside_the_ac_section(tmp_path
     assert cross_plan_conflict(ctx)["hits"] == []
 
 
-def test_cross_plan_conflict_survives_a_siblings_malformed_spine(tmp_path):
+def test_cross_plan_conflict_survives_a_siblings_malformed_spine(tmp_path: Path) -> None:
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)
 
@@ -447,7 +448,7 @@ def test_cross_plan_conflict_survives_a_siblings_malformed_spine(tmp_path):
     assert result["hits"][0]["overlapping_paths"] == ["pkg/mod.py"]
 
 
-def test_cross_plan_conflict_finds_overlap_when_sibling_site_carries_dot_slash(tmp_path):
+def test_cross_plan_conflict_finds_overlap_when_sibling_site_carries_dot_slash(tmp_path: Path) -> None:
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)
 
@@ -477,7 +478,7 @@ def test_cross_plan_conflict_finds_overlap_when_sibling_site_carries_dot_slash(t
     ]
 
 
-def test_cross_plan_conflict_finds_overlap_when_own_site_carries_dot_slash(tmp_path):
+def test_cross_plan_conflict_finds_overlap_when_own_site_carries_dot_slash(tmp_path: Path) -> None:
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)
 
@@ -507,7 +508,7 @@ def test_cross_plan_conflict_finds_overlap_when_own_site_carries_dot_slash(tmp_p
     ]
 
 
-def test_cross_plan_conflict_stops_ac_section_at_malformed_next_heading(tmp_path):
+def test_cross_plan_conflict_stops_ac_section_at_malformed_next_heading(tmp_path: Path) -> None:
     """`_NEXT_H2_RE` bounds the AC section on ANY `##` line regardless of
     spacing — early truncation is the priced failure mode, not over-running
     a malformed heading (`##Anti-scope`, no space) into the next section and
@@ -541,7 +542,7 @@ def test_cross_plan_conflict_stops_ac_section_at_malformed_next_heading(tmp_path
     assert cross_plan_conflict(ctx)["hits"] == []
 
 
-def test_cross_plan_conflict_skips_closed_sibling(tmp_path):
+def test_cross_plan_conflict_skips_closed_sibling(tmp_path: Path) -> None:
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)
 
@@ -563,12 +564,12 @@ def test_cross_plan_conflict_skips_closed_sibling(tmp_path):
     assert result["hits"] == []
 
 
-def test_amends_assumption_no_plan_undetermined(tmp_path):
+def test_amends_assumption_no_plan_undetermined(tmp_path: Path) -> None:
     result = amends_assumption(_ctx(tmp_path))
     assert result["undetermined"] is True
 
 
-def test_amends_assumption_no_table_undetermined(tmp_path):
+def test_amends_assumption_no_table_undetermined(tmp_path: Path) -> None:
     plan_path = tmp_path / "plan.md"
     result = amends_assumption(
         _ctx(tmp_path, plan_path=plan_path, plan_body="# just prose, no table\n")
@@ -577,7 +578,7 @@ def test_amends_assumption_no_table_undetermined(tmp_path):
     assert "Cross-plan coordination" in result["reason"]
 
 
-def test_amends_assumption_finds_a_text_match(tmp_path):
+def test_amends_assumption_finds_a_text_match(tmp_path: Path) -> None:
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)
 
@@ -609,7 +610,7 @@ def test_amends_assumption_finds_a_text_match(tmp_path):
     assert result["matched_plan"] == "docs/plans/sibling-plan.md"
 
 
-def test_amends_assumption_no_match_returns_false(tmp_path):
+def test_amends_assumption_no_match_returns_false(tmp_path: Path) -> None:
     plans_dir = tmp_path / "docs" / "plans"
     plans_dir.mkdir(parents=True)
 

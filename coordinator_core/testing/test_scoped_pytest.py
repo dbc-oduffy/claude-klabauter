@@ -19,6 +19,10 @@ from coordinator_core.testing import spawn_depth
 from coordinator_core.testing import scoped_pytest as sp
 from coordinator_core.testing import watch_parent
 from coordinator_core.win_portability import no_console_creationflags
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import SimpleNamespace
 
 pytestmark = pytest.mark.complete
 
@@ -27,7 +31,7 @@ _GIB = 1 << 30
 
 
 @pytest.fixture(autouse=True)
-def _top_level_depth(monkeypatch):
+def _top_level_depth(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ambient depth is whatever launched this suite (scoped-pytest makes it 1); pin it to 0 so
     the launcher under test sees a top-level caller."""
     monkeypatch.setenv("COORDINATOR_PYTEST_DEPTH", "0")
@@ -41,7 +45,7 @@ def _host(avail_gib):
     )
     log = []
 
-    def admit(peak, st, floor=0):
+    def admit(peak, st, floor: int = 0) -> SimpleNamespace:
         need = max(peak * 1.25, floor + peak)
         return types.SimpleNamespace(admit=need <= st.avail_phys, need_avail=need)
 
@@ -59,14 +63,14 @@ def _host(avail_gib):
     return host, log
 
 
-def _no_spawn(monkeypatch):
+def _no_spawn(monkeypatch) -> None:
     def boom(argv):
         raise AssertionError("spawned")
 
     monkeypatch.setattr(sp, "_spawn", boom)
 
 
-def test_refused_admission_exits_75_without_spawn(monkeypatch, tmp_path, capsys):
+def test_refused_admission_exits_75_without_spawn(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _no_spawn(monkeypatch)
     monkeypatch.chdir(tmp_path)
     host, _ = _host(avail_gib=0.1)
@@ -75,7 +79,7 @@ def test_refused_admission_exits_75_without_spawn(monkeypatch, tmp_path, capsys)
     assert "HOLD" in capsys.readouterr().err
 
 
-def test_out_of_allow_target_exits_64_naming_it(monkeypatch, tmp_path, capsys):
+def test_out_of_allow_target_exits_64_naming_it(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _no_spawn(monkeypatch)
     monkeypatch.chdir(tmp_path)
     host, _ = _host(avail_gib=99)
@@ -84,14 +88,14 @@ def test_out_of_allow_target_exits_64_naming_it(monkeypatch, tmp_path, capsys):
     assert "test_b.py" in capsys.readouterr().err
 
 
-def test_no_path_target_is_refused(monkeypatch, tmp_path):
+def test_no_path_target_is_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _no_spawn(monkeypatch)
     monkeypatch.chdir(tmp_path)
     host, _ = _host(avail_gib=99)
     assert sp.main(["--allow", "test_a.py", "--", "-k", "foo"], host=host) == sp.EXIT_TARGET_REFUSED
 
 
-def test_allowed_nodeid_and_directory_pass_the_check(tmp_path, monkeypatch):
+def test_allowed_nodeid_and_directory_pass_the_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     (tmp_path / "pkg").mkdir()
     assert sp.check_allowed(["test_a.py"], ["-q", "-k", "foo", "test_a.py::test_x"]) is None
@@ -100,7 +104,7 @@ def test_allowed_nodeid_and_directory_pass_the_check(tmp_path, monkeypatch):
 
 
 @pytest.mark.spawns_process
-def test_admitted_run_registers_and_returns_pytest_exit_code(tmp_path, monkeypatch):
+def test_admitted_run_registers_and_returns_pytest_exit_code(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "test_ok.py").write_text("def test_ok():\n    assert True\n")
     (tmp_path / "test_bad.py").write_text("def test_bad():\n    assert False\n")
     monkeypatch.chdir(tmp_path)
@@ -112,7 +116,7 @@ def test_admitted_run_registers_and_returns_pytest_exit_code(tmp_path, monkeypat
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("body,rc", [("assert False, 'MARKER_FAIL'", 1), ("assert True", 0)])
-def test_child_pytest_output_reaches_redirected_files(tmp_path, body, rc):
+def test_child_pytest_output_reaches_redirected_files(tmp_path: Path, body, rc) -> None:
     (tmp_path / "test_x.py").write_text("def test_x():\n    %s\n" % body)
     out, err = tmp_path / "out.txt", tmp_path / "err.txt"
     with open(out, "wb") as fo, open(err, "wb") as fe:
@@ -129,14 +133,14 @@ def test_child_pytest_output_reaches_redirected_files(tmp_path, body, rc):
     assert proc.returncode == rc
 
 
-def test_ancestor_chain_records_watch_parent_clock():
+def test_ancestor_chain_records_watch_parent_clock() -> None:
     chain = sp.ancestor_chain()
     assert chain and chain[0][0] == os.getppid()
     for pid, created in chain:
         assert created == watch_parent.process_create_time(pid)
 
 
-def test_watch_parent_fires_on_mismatched_create_time_and_not_on_matching():
+def test_watch_parent_fires_on_mismatched_create_time_and_not_on_matching() -> None:
     pid, created = sp.ancestor_chain()[0]
     fired = threading.Event()
     watch_parent.watch_parent(pid, created + 1000.0, fired.set, 0.05)
@@ -148,7 +152,7 @@ def test_watch_parent_fires_on_mismatched_create_time_and_not_on_matching():
 
 @pytest.mark.spawns_process
 @pytest.mark.deliberate_wall_clock(reason="bounds that the watcher kills a sleeping pytest tree instead of waiting out its sleep, a wait CPU time cannot see")
-def test_pid_reuse_of_an_ancestor_kills_the_pytest_tree(tmp_path, monkeypatch):
+def test_pid_reuse_of_an_ancestor_kills_the_pytest_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "test_sleep.py").write_text("import time\n\ndef test_sleep():\n    time.sleep(120)\n")
     monkeypatch.chdir(tmp_path)
     pid, created = sp.ancestor_chain()[0]
@@ -199,7 +203,7 @@ def _tagged(token):
     return out
 
 
-def _pytest_child_running(token):
+def _pytest_child_running(token) -> bool:
     for p in _tagged(token):
         cl = p.info["cmdline"] or []
         if "-m" in cl and "pytest" in cl:
@@ -244,11 +248,11 @@ def _parent_death_survivors(tmp_path, depth):
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("depth", [1, 2])
-def test_parent_death_kills_the_pytest_tree(tmp_path, depth):
+def test_parent_death_kills_the_pytest_tree(tmp_path: Path, depth) -> None:
     assert _parent_death_survivors(tmp_path, depth) == []
 
 
-def test_nested_depth_exits_64_without_spawn(monkeypatch, tmp_path, capsys):
+def test_nested_depth_exits_64_without_spawn(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _no_spawn(monkeypatch)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COORDINATOR_PYTEST_DEPTH", "1")
@@ -258,7 +262,7 @@ def test_nested_depth_exits_64_without_spawn(monkeypatch, tmp_path, capsys):
 
 
 @pytest.mark.parametrize("target", ["tests/test_self.py", "tests/test_self.py::test_x", "tests", "."])
-def test_selection_holding_the_calling_test_exits_64_without_spawn(monkeypatch, tmp_path, capsys, target):
+def test_selection_holding_the_calling_test_exits_64_without_spawn(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], target) -> None:
     _no_spawn(monkeypatch)
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("COORDINATOR_PYTEST_DEPTH", raising=False)
@@ -269,7 +273,7 @@ def test_selection_holding_the_calling_test_exits_64_without_spawn(monkeypatch, 
     assert "includes the calling test" in capsys.readouterr().err
 
 
-def test_other_selection_inside_a_test_is_spawned_with_child_env(monkeypatch, tmp_path):
+def test_other_selection_inside_a_test_is_spawned_with_child_env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.chdir(tmp_path)
     monkeypatch.delenv("COORDINATOR_PYTEST_DEPTH", raising=False)
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "tests/test_self.py::test_x (call)")
@@ -302,11 +306,11 @@ def _spawned_argv(monkeypatch, tmp_path, pytest_args):
 
 
 @pytest.fixture
-def _no_run_root(monkeypatch):
+def _no_run_root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sp.machine_resolver, "registry_get", lambda key: None)
 
 
-def test_default_run_gets_unique_per_run_basetemp_under_temp(monkeypatch, tmp_path, _no_run_root):
+def test_default_run_gets_unique_per_run_basetemp_under_temp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, _no_run_root) -> None:
     from coordinator_core import temp_layout
 
     first = _spawned_argv(monkeypatch, tmp_path, ["test_a.py"])
@@ -320,13 +324,13 @@ def test_default_run_gets_unique_per_run_basetemp_under_temp(monkeypatch, tmp_pa
 
 
 @pytest.mark.parametrize("given", [["--basetemp", "X"], ["--basetemp=X"]])
-def test_caller_basetemp_is_passed_through_and_none_added(monkeypatch, tmp_path, given):
+def test_caller_basetemp_is_passed_through_and_none_added(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, given) -> None:
     argv = _spawned_argv(monkeypatch, tmp_path, [*given, "test_a.py"])
     assert [a for a in argv if a.startswith("--basetemp")] == [given[0]]
     assert argv[-len(given) - 1:] == [*given, "test_a.py"]
 
 
-def test_spawn_target_resolves_unpatched_on_contained_run():
+def test_spawn_target_resolves_unpatched_on_contained_run() -> None:
     """The launcher's call target must exist on the real module and accept the kwarg it passes;
     the monkeypatched tests below would only say so by accident."""
     import inspect
@@ -340,7 +344,7 @@ def test_spawn_target_resolves_unpatched_on_contained_run():
     assert params["popen_kwargs"].kind is inspect.Parameter.KEYWORD_ONLY
 
 
-def test_spawn_passes_child_env_to_popen(monkeypatch):
+def test_spawn_passes_child_env_to_popen(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_PYTEST_DEPTH", "0")
     monkeypatch.setenv("PYTEST_CURRENT_TEST", "t.py::t (call)")
     from coordinator_core.diagnostics import contained_run as cr
@@ -360,7 +364,7 @@ def test_spawn_passes_child_env_to_popen(monkeypatch):
         assert seen["creationflags"] & subprocess.CREATE_NEW_PROCESS_GROUP
 
 
-def test_registry_run_root_is_used_when_absolute_and_ignored_when_relative(monkeypatch, tmp_path):
+def test_registry_run_root_is_used_when_absolute_and_ignored_when_relative(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core import temp_layout
 
     monkeypatch.setattr(sp.machine_resolver, "registry_get", lambda key: str(tmp_path / "ptbase") if key == sp.RUN_ROOT_KEY else None)
@@ -369,7 +373,7 @@ def test_registry_run_root_is_used_when_absolute_and_ignored_when_relative(monke
     assert sp.per_run_root(tmp_path) == temp_layout.pytest_basetemp_root(tmp_path)
 
 
-def test_per_run_dirs_are_disjoint_per_slug_and_tmp_env_points_under_them(monkeypatch, tmp_path):
+def test_per_run_dirs_are_disjoint_per_slug_and_tmp_env_points_under_them(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(sp.machine_resolver, "registry_get", lambda key: str(tmp_path / "ptbase"))
     holder_a, bt_a, tmp_a = sp.per_run_dirs(tmp_path, "run-a")
     holder_b, bt_b, tmp_b = sp.per_run_dirs(tmp_path, "run-b")

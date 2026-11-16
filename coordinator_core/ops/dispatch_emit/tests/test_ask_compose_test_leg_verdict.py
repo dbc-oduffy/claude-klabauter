@@ -155,5 +155,12 @@ def test_test_verdict_empty_halt_names_the_refire_not_journal_replay():
     assert fire_command(_SIZING) in js.replace('\\"', '"')
 
 
+def test_ledger_judge_rules_a_stalled_leg_inconclusive_never_not_met():
+    rules = ask_compose._LEDGER_ITEMS_RULES
+    assert "stalled or timed out" in rules
+    assert "inconclusive evidence, never grounds for 'not_met'" in rules.replace("\n", " ")
+    assert rules.index("inconclusive evidence") < rules.index("otherwise 'not_met'")
+
+
 def test_usage_limit_halt_still_names_journal_replay():
     assert "resumeFromRunId" in _usage_limit_helper_js()

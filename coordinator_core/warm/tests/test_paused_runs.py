@@ -6,9 +6,10 @@ import pytest
 
 from coordinator_core.warm import paused_runs as pr
 from coordinator_core.workflow_watch.stall import render_resume_call
+from pathlib import Path
 
 
-def test_round_trip_record_fields(tmp_path):
+def test_round_trip_record_fields(tmp_path: Path) -> None:
     path = pr.write_paused(tmp_path, run_id="run-1", script_path="/s/wf.js",
                            args={"a": 1}, task_id="t1", session_id="s1")
     assert path == tmp_path / ".coordinator-local" / "paused-runs" / "run-1.json"
@@ -20,7 +21,7 @@ def test_round_trip_record_fields(tmp_path):
     assert rec["args"] == {"a": 1} and rec["repo"] == str(tmp_path)
 
 
-def test_mark_resumed_removes_from_pending_and_keeps_record(tmp_path):
+def test_mark_resumed_removes_from_pending_and_keeps_record(tmp_path: Path) -> None:
     pr.write_paused(tmp_path, run_id="r1", script_path="/s.js", args=None)
     pr.write_paused(tmp_path, run_id="r2", script_path="/s.js", args=None)
     assert pr.mark_resumed(tmp_path, "r1") is True
@@ -28,11 +29,11 @@ def test_mark_resumed_removes_from_pending_and_keeps_record(tmp_path):
     assert pr.read_paused(tmp_path, "r1")["resumed_at"]
 
 
-def test_mark_resumed_missing_record_is_false(tmp_path):
+def test_mark_resumed_missing_record_is_false(tmp_path: Path) -> None:
     assert pr.mark_resumed(tmp_path, "nope") is False
 
 
-def test_list_pending_empty_and_skips_markers_and_garbage(tmp_path):
+def test_list_pending_empty_and_skips_markers_and_garbage(tmp_path: Path) -> None:
     assert pr.list_pending(tmp_path) == []
     pr.request_pause(tmp_path)
     pr.mark_handover_complete(tmp_path)
@@ -41,7 +42,7 @@ def test_list_pending_empty_and_skips_markers_and_garbage(tmp_path):
     assert [r["run_id"] for r in pr.list_pending(tmp_path)] == ["ok"]
 
 
-def test_markers_are_plain_files_and_clearable(tmp_path):
+def test_markers_are_plain_files_and_clearable(tmp_path: Path) -> None:
     assert pr.pause_requested(tmp_path) is None
     p = pr.request_pause(tmp_path, requested_by="publish")
     assert p == pr.paused_dir(tmp_path) / "pause-request.json"
@@ -56,13 +57,13 @@ def test_markers_are_plain_files_and_clearable(tmp_path):
 
 
 @pytest.mark.parametrize("bad", ["../x", "a/b", "", "pause request", "a.json"])
-def test_unsafe_run_id_refused(tmp_path, bad):
+def test_unsafe_run_id_refused(tmp_path: Path, bad) -> None:
     with pytest.raises(ValueError):
         pr.write_paused(tmp_path, run_id=bad, script_path=None, args=None)
     assert not pr.paused_dir(tmp_path).exists()
 
 
-def test_marker_name_cannot_be_a_run_id(tmp_path):
+def test_marker_name_cannot_be_a_run_id(tmp_path: Path) -> None:
     pr.request_pause(tmp_path)
     for name in ("pause-request", "handover-complete"):
         with pytest.raises(ValueError):
@@ -70,7 +71,7 @@ def test_marker_name_cannot_be_a_run_id(tmp_path):
     assert pr.pause_requested(tmp_path) is not None
 
 
-def test_resume_call_renders_from_record(tmp_path):
+def test_resume_call_renders_from_record(tmp_path: Path) -> None:
     pr.write_paused(tmp_path, run_id="r9", script_path="/s/wf.js", args={"k": "v"}, task_id="t9")
     rec = pr.list_pending(tmp_path)[0]
     call = render_resume_call(rec["run_id"], rec["script_path"], rec["args"], rec["task_id"])

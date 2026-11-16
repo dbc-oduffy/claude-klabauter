@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import sys
+import pytest
 
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 if _THIS_DIR not in sys.path:
@@ -12,7 +13,7 @@ from sweep_argv import parse_repo_root_argv  # noqa: E402
 _USAGE = "usage: python3 prog.py [-h] [<repo_root>]"
 
 
-def test_help_returns_exit_zero_and_prints_usage(capsys):
+def test_help_returns_exit_zero_and_prints_usage(capsys: pytest.CaptureFixture[str]) -> None:
     positional, flags, early_exit = parse_repo_root_argv([], prog="prog.py", usage=_USAGE)
     assert early_exit is None
     assert positional == []
@@ -25,12 +26,12 @@ def test_help_returns_exit_zero_and_prints_usage(capsys):
     assert _USAGE in captured.out
 
 
-def test_short_help_flag_also_exits_zero(capsys):
+def test_short_help_flag_also_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
     _positional, _flags, early_exit = parse_repo_root_argv(["-h"], prog="prog.py", usage=_USAGE)
     assert early_exit == 0
 
 
-def test_unrecognized_leading_dash_arg_rejected(capsys):
+def test_unrecognized_leading_dash_arg_rejected(capsys: pytest.CaptureFixture[str]) -> None:
     positional, flags, early_exit = parse_repo_root_argv(
         ["--bogus"], prog="prog.py", usage=_USAGE
     )
@@ -41,7 +42,7 @@ def test_unrecognized_leading_dash_arg_rejected(capsys):
     assert positional == []
 
 
-def test_known_flag_recorded_not_rejected():
+def test_known_flag_recorded_not_rejected() -> None:
     positional, flags, early_exit = parse_repo_root_argv(
         ["--dry-run", "/tmp/repo"],
         prog="prog.py",
@@ -53,7 +54,7 @@ def test_known_flag_recorded_not_rejected():
     assert positional == ["/tmp/repo"]
 
 
-def test_bare_positional_passes_through():
+def test_bare_positional_passes_through() -> None:
     positional, flags, early_exit = parse_repo_root_argv(
         ["/tmp/some-repo"], prog="prog.py", usage=_USAGE
     )
@@ -62,7 +63,7 @@ def test_bare_positional_passes_through():
     assert flags == set()
 
 
-def test_too_many_positionals_rejected(capsys):
+def test_too_many_positionals_rejected(capsys: pytest.CaptureFixture[str]) -> None:
     positional, flags, early_exit = parse_repo_root_argv(
         ["/tmp/a", "/tmp/b"], prog="prog.py", usage=_USAGE, max_positional=1
     )

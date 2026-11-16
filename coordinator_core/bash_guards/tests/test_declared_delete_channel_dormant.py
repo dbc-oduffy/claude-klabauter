@@ -9,13 +9,14 @@ from coordinator_core.bash_guards.tests.test_destructive_action_declared_git_rm 
     _check,
     repo,  # noqa: F401  (fixture)
 )
+import pytest
 
 
-def test_flag_defaults_off():
+def test_flag_defaults_off() -> None:
     assert guard._DECLARED_DELETE_CHANNEL_LIVE is False
 
 
-def test_off_declared_git_rm_is_default_denied_and_bare_rm_is_not_tracked_denied(repo, monkeypatch):  # noqa: F811
+def test_off_declared_git_rm_is_default_denied_and_bare_rm_is_not_tracked_denied(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     monkeypatch.setattr(guard, "_DECLARED_DELETE_CHANNEL_LIVE", False)
     assert _check(repo, f"{MARK} git rm -q -- {DECLARED}") is not None
     assert _check(repo, f"{MARK} rm {DECLARED}") is None

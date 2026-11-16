@@ -67,13 +67,13 @@ def node():
     return exe
 
 
-def _halt_prompt(node, repo, token) -> str:
+def _halt_prompt(node, repo, token, halted=_HALTED_BY) -> str:
     fn = ask_compose._halt_record_commit_fn(
         head="H", anchor="A", script_path=_SCRIPT, repo_root=str(repo), run_id=_RUN_ID
     )
     prog = (
         chan.PARAMS_BLOCK_JS
-        + _NODE_PROLOGUE % {"run_id": json.dumps(_RUN_ID), "token": json.dumps(token), "halted": json.dumps(_HALTED_BY)}
+        + _NODE_PROLOGUE % {"run_id": json.dumps(_RUN_ID), "token": json.dumps(token), "halted": json.dumps(halted)}
         + "(async () => {\n"
         + fn
         + "\nawait _commitHaltRecord();\nprocess.stdout.write(JSON.stringify(captured));\n})();"
@@ -131,6 +131,43 @@ def test_hostile_halted_by_reaches_land_run_byte_exact_through_the_params_file(n
     assert received["run_id"] == _RUN_ID and received["run_token"] == token
 
 
+def _verify_overlay_halted_by(extra: int) -> dict:
+    """A commit-stage halt whose error is a TimeoutExpired repr over escaped Windows paths."""
+    paths = [f"repo\\coordinator_core\\ops\\dispatch_emit\\tests\\test_{i}.py" for i in range(extra)]
+    timeout = subprocess.TimeoutExpired(["git", "-C", "repo\\sub", "ls-files", "--", *paths], 5)
+    return {
+        "halted": "commit",
+        "refused": "verify-overlay-unverified",
+        "error": f"overlay verdict none: {timeout!r} :: {timeout}",
+        "reason": "verify-overlay-unverified: overlay verdict none",
+        "run_id": _RUN_ID,
+    }
+
+
+def _land_through_the_default_entry(node, repo, monkeypatch, token, halted) -> dict:
+    prompt = _halt_prompt(node, repo, token, halted)
+    path = chan.params_path(repo, _RUN_ID)
+    context = cater_subagent_start.compose_catering(_spawn_payload(repo, prompt), cwd=str(repo))
+    assert "params file not written" not in context
+    json.loads(path.read_text(encoding="utf-8"))
+    return _landed_params(monkeypatch, repo, path)
+
+
+def test_a_long_windows_path_halt_then_a_shorter_one_leaves_exactly_one_json_document(node, repo, monkeypatch):
+    token = run_token.mint(repo, _RUN_ID, _SCRIPT)
+    long_halt, short_halt = _verify_overlay_halted_by(30), _verify_overlay_halted_by(1)
+    assert len(json.dumps(long_halt)) > 2796 > len(json.dumps(short_halt))
+
+    first = _land_through_the_default_entry(node, repo, monkeypatch, token, long_halt)
+    second = _land_through_the_default_entry(node, repo, monkeypatch, token, short_halt)
+
+    assert first[ask_compose.HALTED_RECORD_PARAM] == long_halt
+    assert second[ask_compose.HALTED_RECORD_PARAM] == short_halt
+    text = chan.params_path(repo, _RUN_ID).read_text(encoding="utf-8")
+    document, end = json.JSONDecoder().raw_decode(text)
+    assert text[end:].strip() == "" and document[ask_compose.HALTED_RECORD_PARAM] == short_halt
+
+
 def test_the_halt_commit_brief_asks_the_agent_for_one_path_and_no_json(node, repo):
     token = run_token.mint(repo, _RUN_ID, _SCRIPT)
     prompt = _halt_prompt(node, repo, token)
@@ -142,6 +179,18 @@ def test_the_halt_commit_brief_asks_the_agent_for_one_path_and_no_json(node, rep
     )
     assert prompt.count(f"coordinator-invoke {OP_NAME}") == 1
     assert "'{" not in prompt
+
+
+def test_an_apostrophe_and_windows_path_halt_brief_carries_params_file_and_no_inline_json(node, repo, monkeypatch):
+    token = run_token.mint(repo, _RUN_ID, _SCRIPT)
+    halted = _verify_overlay_halted_by(2)
+    halted["error"] += " :: C5's base, run's withheld paths repo\\sub\\x"
+    prompt = _halt_prompt(node, repo, token, halted)
+
+    assert re.findall(r"coordinator-invoke \S+ [^\n]*", prompt)[0].startswith(f"coordinator-invoke {OP_NAME} --params-file ")
+    assert prompt.count(f"coordinator-invoke {OP_NAME}") == 1 and "'{" not in prompt
+    landed = _land_through_the_default_entry(node, repo, monkeypatch, token, halted)
+    assert landed[ask_compose.HALTED_RECORD_PARAM] == halted
 
 
 def test_a_halt_whose_token_is_refused_writes_nothing_and_names_the_leg(node, repo):

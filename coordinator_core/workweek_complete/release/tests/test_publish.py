@@ -7,6 +7,7 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workweek_complete.release.publish import evaluate, publish_params
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -28,7 +29,7 @@ def _commit(root, msg):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path):
     _g(tmp_path, "init", "-q")
     (tmp_path / "archive" / "release-notes").mkdir(parents=True)
     (tmp_path / NOTES).write_text(BODY)
@@ -44,14 +45,14 @@ def _ev(root, sha, **kw):
     return evaluate(str(root), **args)
 
 
-def test_passes_with_no_tag(repo):
+def test_passes_with_no_tag(repo) -> None:
     root, sha = repo
     r = _ev(root, sha)
     assert r.passed and r.evidence["tag_existed"] is False
     assert r.evidence["merge_sha"] == sha and r.evidence["tag"] == "v1"
 
 
-def test_merge_not_on_main(repo):
+def test_merge_not_on_main(repo) -> None:
     root, sha = repo
     (root / "x").write_text("x")
     other = _commit(root, "off main")
@@ -59,14 +60,14 @@ def test_merge_not_on_main(repo):
     assert not r.passed and r.reason == "merge-not-on-main"
 
 
-def test_tag_on_merge_sha_passes_annotated(repo):
+def test_tag_on_merge_sha_passes_annotated(repo) -> None:
     root, sha = repo
     _g(root, "-c", "user.name=t", "-c", "user.email=t@t", "tag", "-a", "v1", "-m", "m", sha)
     r = _ev(root, sha)
     assert r.passed and r.evidence["tag_existed"] is True
 
 
-def test_tag_on_other_commit(repo):
+def test_tag_on_other_commit(repo) -> None:
     root, sha = repo
     _g(root, "tag", "v1", sha)
     (root / "x").write_text("x")
@@ -76,30 +77,30 @@ def test_tag_on_other_commit(repo):
     assert not r.passed and r.reason == "tag-on-other-commit"
 
 
-def test_notes_changed(repo):
+def test_notes_changed(repo) -> None:
     root, sha = repo
     r = _ev(root, sha, notes_sha256="0" * 64)
     assert not r.passed and r.reason == "notes-changed"
 
 
-def test_notes_absent_at_merge_sha(repo):
+def test_notes_absent_at_merge_sha(repo) -> None:
     root, sha = repo
     r = _ev(root, sha, notes_path="archive/release-notes/missing.md")
     assert not r.passed and r.reason == "notes-changed"
 
 
-def test_publish_params_gh_release():
+def test_publish_params_gh_release() -> None:
     op, p = publish_params("gh-release", repo_root="/r", merge_sha="abc", tag="v1", notes_text="n")
     assert op == "release.cut_tag_and_publish"
     assert p == {"repo_root": "/r", "merge_sha": "abc", "tag_prefix": "v1", "release_notes": "n"}
 
 
-def test_publish_params_git_tag():
+def test_publish_params_git_tag() -> None:
     op, p = publish_params("git-tag", repo_root="/r", merge_sha="abc", tag="v1", notes_text="n")
     assert op == "release.cut_tag"
     assert p == {"repo_root": "/r", "merge_sha": "abc", "tag_prefix": "v1"}
 
 
-def test_publish_params_none_refused():
+def test_publish_params_none_refused() -> None:
     with pytest.raises(ValueError):
         publish_params("none", repo_root="/r", merge_sha="a", tag="v1", notes_text="")

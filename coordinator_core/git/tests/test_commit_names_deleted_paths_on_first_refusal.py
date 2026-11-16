@@ -12,6 +12,7 @@ import pytest
 
 from coordinator_core.git import commit as gcommit
 from coordinator_core.git.commit import CommitRefused
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -25,7 +26,7 @@ def _git(repo, *args):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     repo = tmp_path / "r"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "work/z")
@@ -39,13 +40,13 @@ def repo(tmp_path):
     return repo
 
 
-def test_unstaged_removal_names_deleted_paths(repo):
+def test_unstaged_removal_names_deleted_paths(repo) -> None:
     (repo / "sub/gone.txt").unlink()
     with pytest.raises(CommitRefused, match="deleted_paths"):
         gcommit.commit_paths(repo, ["sub/gone.txt"], "m")
 
 
-def test_staged_removal_names_deleted_paths(repo):
+def test_staged_removal_names_deleted_paths(repo) -> None:
     _git(repo, "rm", "-q", "--", "sub/gone.txt")
     before = gcommit.head_sha(repo)
     with pytest.raises(CommitRefused, match="deleted_paths"):
@@ -53,13 +54,13 @@ def test_staged_removal_names_deleted_paths(repo):
     assert gcommit.head_sha(repo) == before
 
 
-def test_untracked_missing_path_keeps_errno_message(repo):
+def test_untracked_missing_path_keeps_errno_message(repo) -> None:
     with pytest.raises(CommitRefused, match="cannot read") as exc_info:
         gcommit.commit_paths(repo, ["never-existed.txt"], "m")
     assert "deleted_paths" not in str(exc_info.value)
 
 
-def test_declared_staged_removal_still_lands(repo):
+def test_declared_staged_removal_still_lands(repo) -> None:
     _git(repo, "rm", "-q", "--", "sub/gone.txt")
     gcommit.commit_paths(repo, [], "remove sub/gone.txt", deleted_paths=["sub/gone.txt"])
     assert not (repo / "sub/gone.txt").exists()

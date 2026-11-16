@@ -169,17 +169,17 @@ def _valid_plan(**overrides) -> dict:
 # ---------------------------------------------------------------------------
 
 class TestSchemaFilesExist:
-    def test_handoff_schema_present(self):
+    def test_handoff_schema_present(self) -> None:
         assert _HANDOFF_SCHEMA.exists(), f'Schema not found: {_HANDOFF_SCHEMA}'
 
-    def test_handoff_archived_schema_present(self):
+    def test_handoff_archived_schema_present(self) -> None:
         assert _HANDOFF_ARCHIVED_SCHEMA.exists(), f'Schema not found: {_HANDOFF_ARCHIVED_SCHEMA}'
 
-    def test_handoff_schema_is_valid_json(self):
+    def test_handoff_schema_is_valid_json(self) -> None:
         data = json.loads(_HANDOFF_SCHEMA.read_text())
         assert data.get('x-schema-name') == 'handoff'
 
-    def test_handoff_archived_schema_is_valid_json(self):
+    def test_handoff_archived_schema_is_valid_json(self) -> None:
         data = json.loads(_HANDOFF_ARCHIVED_SCHEMA.read_text())
         assert data.get('x-schema-name') == 'handoff-archived'
 
@@ -189,21 +189,21 @@ class TestSchemaFilesExist:
 # ---------------------------------------------------------------------------
 
 class TestValidateFrontmatterHappyPath:
-    def test_minimal_valid_handoff(self):
+    def test_minimal_valid_handoff(self) -> None:
         errors = validate_frontmatter(_valid_handoff(), _HANDOFF_SCHEMA)
         assert errors == []
 
-    def test_spinoff_valid(self):
+    def test_spinoff_valid(self) -> None:
         """A valid spinoff: predecessor=none, kind=spinoff."""
         fm = _valid_handoff(kind='spinoff', predecessor='none')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == []
 
-    def test_minimal_valid_archived(self):
+    def test_minimal_valid_archived(self) -> None:
         errors = validate_frontmatter(_valid_archived_handoff(), _HANDOFF_ARCHIVED_SCHEMA)
         assert errors == []
 
-    def test_extra_optional_fields_ok(self):
+    def test_extra_optional_fields_ok(self) -> None:
         fm = _valid_handoff(
             deployment_state='ready_to_fire',
             pickup_ready=True,
@@ -212,7 +212,7 @@ class TestValidateFrontmatterHappyPath:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == []
 
-    def test_pre_cutoff_handoff_no_category_required(self):
+    def test_pre_cutoff_handoff_no_category_required(self) -> None:
         """Handoffs before 2026-05-29 do not require category/summary."""
         fm = {
             'title': 'Old handoff',
@@ -226,7 +226,7 @@ class TestValidateFrontmatterHappyPath:
 
 
 class TestHandoffIdIndexAliases:
-    def _repo(self, tmp_path, files):
+    def _repo(self, tmp_path, files) -> dict[str, str]:
         from coordinator_core.frontmatter.schema_validate import _build_handoff_id_index
 
         for rel, text in files.items():
@@ -235,7 +235,7 @@ class TestHandoffIdIndexAliases:
             p.write_text(text, encoding='utf-8')
         return _build_handoff_id_index(str(tmp_path))
 
-    def test_alias_maps_to_holder_logical_key(self, tmp_path):
+    def test_alias_maps_to_holder_logical_key(self, tmp_path: Path) -> None:
         index = self._repo(tmp_path, {
             'state/handoffs/a.md': '---\nhandoff_id: hnd-new-bbbbbb\nhandoff_id_aliases:\n  - hnd-old-aaaaaa\n---\nb\n',
             'archive/handoffs/2026-10/z.md': '---\nhandoff_id: hnd-arc-cccccc\nhandoff_id_aliases: [hnd-oldarc-dddddd]\n---\nb\n',
@@ -244,7 +244,7 @@ class TestHandoffIdIndexAliases:
         assert index['hnd-old-aaaaaa'] == 'state/handoffs/a.md'
         assert index['hnd-oldarc-dddddd'] == 'state/handoffs/z.md'
 
-    def test_live_id_outranks_alias_and_warns_not(self, tmp_path, capsys):
+    def test_live_id_outranks_alias_and_warns_not(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         index = self._repo(tmp_path, {
             'state/handoffs/a.md': '---\nhandoff_id: hnd-new-bbbbbb\nhandoff_id_aliases:\n  - hnd-old-aaaaaa\n---\nb\n',
             'archive/handoffs/2026-10/z.md': '---\nhandoff_id: hnd-old-aaaaaa\n---\nb\n',
@@ -252,7 +252,7 @@ class TestHandoffIdIndexAliases:
         assert index['hnd-old-aaaaaa'] == 'state/handoffs/z.md'
         assert capsys.readouterr().err == ''
 
-    def test_alias_only_record_still_indexed(self, tmp_path):
+    def test_alias_only_record_still_indexed(self, tmp_path: Path) -> None:
         index = self._repo(tmp_path, {'state/handoffs/a.md': '---\nhandoff_id_aliases:\n  - hnd-old-aaaaaa\n---\nb\n'})
         assert index == {'hnd-old-aaaaaa': 'state/handoffs/a.md'}
 
@@ -264,12 +264,12 @@ class TestHandoffIdPlaceholderPatternNarrow:
     a normal id still passes, so a future accidental widen of the pattern (or
     a refactor dropping the lookahead) would have no automated signal."""
 
-    def test_placeholder_shaped_handoff_id_rejected(self):
+    def test_placeholder_shaped_handoff_id_rejected(self) -> None:
         fm = _valid_handoff(handoff_id='hnd-placeholder-replace-with-x-abc123')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors != []
 
-    def test_normal_handoff_id_accepted(self):
+    def test_normal_handoff_id_accepted(self) -> None:
         fm = _valid_handoff(handoff_id='hnd-foo-bar-abc123')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == []
@@ -287,42 +287,42 @@ class TestHandoffIdPlaceholderPatternNarrow:
 # ---------------------------------------------------------------------------
 
 class TestPatternKeyword:
-    def test_negative_lookahead_placeholder_rejected(self):
+    def test_negative_lookahead_placeholder_rejected(self) -> None:
         """hnd-placeholder-replace-with-x-abc123 must be REJECTED (lookahead)."""
         fm = _valid_handoff(handoff_id='hnd-placeholder-replace-with-x-abc123')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors != []
 
-    def test_negative_lookahead_real_title_accepted(self):
+    def test_negative_lookahead_real_title_accepted(self) -> None:
         """hnd-real-title-abc123 must be ACCEPTED (does not trip the lookahead)."""
         fm = _valid_handoff(handoff_id='hnd-real-title-abc123')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == []
 
-    def test_top_level_scalar_execution_authorized_sha_accept(self):
+    def test_top_level_scalar_execution_authorized_sha_accept(self) -> None:
         fm = _valid_handoff(execution_authorized_sha='a' * 40)
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == []
 
-    def test_top_level_scalar_execution_authorized_sha_reject(self):
+    def test_top_level_scalar_execution_authorized_sha_reject(self) -> None:
         fm = _valid_handoff(execution_authorized_sha='not-a-sha!')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         fields = [e['field'] for e in errors]
         assert 'execution_authorized_sha' in fields
 
-    def test_array_item_blocked_by_accept(self):
+    def test_array_item_blocked_by_accept(self) -> None:
         fm = _valid_handoff(blocked_by=['some-token'])
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == []
 
-    def test_array_item_blocked_by_reject_path_shaped(self):
+    def test_array_item_blocked_by_reject_path_shaped(self) -> None:
         """blocked_by items must not look like a repo-relative .md path."""
         fm = _valid_handoff(blocked_by=['state/handoffs/2026-07-04-prior.md'])
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         fields = [e['field'] for e in errors]
         assert any(f.startswith('blocked_by') for f in fields)
 
-    def test_nested_gate_evidence_ref_accept(self):
+    def test_nested_gate_evidence_ref_accept(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{
@@ -335,7 +335,7 @@ class TestPatternKeyword:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == []
 
-    def test_nested_gate_evidence_ref_reject(self):
+    def test_nested_gate_evidence_ref_reject(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{
@@ -349,18 +349,18 @@ class TestPatternKeyword:
         fields = [e['field'] for e in errors]
         assert any('gate_evidence' in f for f in fields)
 
-    def test_non_string_value_ignored(self):
+    def test_non_string_value_ignored(self) -> None:
         """A non-string value is not a pattern violation — it is ignored."""
         schema = {'type': ['string', 'null'], 'pattern': r'^[0-9]+$'}
         errors = _validate_json_schema_node(None, schema, schema, 'field')
         assert errors == []
 
-    def test_uncompilable_pattern_fails_loud(self):
+    def test_uncompilable_pattern_fails_loud(self) -> None:
         schema = {'type': 'string', 'pattern': '[unterminated'}
         with pytest.raises(ValueError):
             _validate_json_schema_node('anything', schema, schema, 'field')
 
-    def test_unanchored_partial_match_semantics(self):
+    def test_unanchored_partial_match_semantics(self) -> None:
         """pattern is unanchored per spec — a bare substring pattern with no
         ^/$ matches anywhere in the string (mirrors gate_evidence's
         test-node-id `::` pattern, which asserts containment, not shape)."""
@@ -386,17 +386,17 @@ class TestUniqueItemsKeyword:
     keyword in a shipped schema validates as a silent no-op — the same
     decorative-keyword failure this whole section exists to close."""
 
-    def test_duplicate_items_reject(self):
+    def test_duplicate_items_reject(self) -> None:
         schema = {'type': 'array', 'uniqueItems': True}
         errors = _validate_json_schema_node(['a', 'b', 'a'], schema, schema, 'field')
         assert errors != []
         assert any('uniqueItems' in e['error'] for e in errors)
 
-    def test_distinct_items_accept(self):
+    def test_distinct_items_accept(self) -> None:
         schema = {'type': 'array', 'uniqueItems': True}
         assert _validate_json_schema_node(['a', 'b'], schema, schema, 'field') == []
 
-    def test_unhashable_members_compare_by_value(self):
+    def test_unhashable_members_compare_by_value(self) -> None:
         """Dict members must not raise on the set-based duplicate check —
         they compare by canonical JSON form, and key ORDER is not identity."""
         schema = {'type': 'array', 'uniqueItems': True}
@@ -404,11 +404,11 @@ class TestUniqueItemsKeyword:
         assert _validate_json_schema_node(dupes, schema, schema, 'field') != []
         assert _validate_json_schema_node([{'k': 1}, {'k': 2}], schema, schema, 'field') == []
 
-    def test_absent_or_false_keyword_is_inert(self):
+    def test_absent_or_false_keyword_is_inert(self) -> None:
         for schema in ({'type': 'array'}, {'type': 'array', 'uniqueItems': False}):
             assert _validate_json_schema_node(['a', 'a'], schema, schema, 'field') == []
 
-    def test_non_array_value_ignored(self):
+    def test_non_array_value_ignored(self) -> None:
         schema = {'type': ['array', 'null'], 'uniqueItems': True}
         assert _validate_json_schema_node(None, schema, schema, 'field') == []
 
@@ -433,39 +433,39 @@ class TestContainsKeyword:
         }
     }
 
-    def test_one_matching_item_among_others_accepts(self):
+    def test_one_matching_item_among_others_accepts(self) -> None:
         """The arm that distinguishes existential from universal: the
         non-matching sibling must not make this fail."""
         value = [{'brightline': 'work-vs-question-ratio'}, {'brightline': 'multi-os-first-class'}]
         assert _validate_json_schema_node(value, self._BRIGHTLINE, self._BRIGHTLINE, 'field') == []
 
-    def test_no_matching_item_rejects(self):
+    def test_no_matching_item_rejects(self) -> None:
         value = [{'brightline': 'work-vs-question-ratio'}]
         errors = _validate_json_schema_node(value, self._BRIGHTLINE, self._BRIGHTLINE, 'field')
         assert errors != []
         assert any('contains' in e['error'] for e in errors)
 
-    def test_empty_array_rejects(self):
+    def test_empty_array_rejects(self) -> None:
         """An empty array satisfies no existential claim -- and this is the
         shape a plan that omits every brightline actually authors."""
         errors = _validate_json_schema_node([], self._BRIGHTLINE, self._BRIGHTLINE, 'field')
         assert errors != []
 
-    def test_item_missing_the_required_key_does_not_match(self):
+    def test_item_missing_the_required_key_does_not_match(self) -> None:
         value = [{'other': 'multi-os-first-class'}]
         assert _validate_json_schema_node(value, self._BRIGHTLINE, self._BRIGHTLINE, 'field') != []
 
-    def test_absent_keyword_is_inert(self):
+    def test_absent_keyword_is_inert(self) -> None:
         schema = {'type': 'array'}
         assert _validate_json_schema_node([{'brightline': 'anything'}], schema, schema, 'field') == []
 
-    def test_non_array_value_ignored(self):
+    def test_non_array_value_ignored(self) -> None:
         schema = dict(self._BRIGHTLINE, type=['array', 'null'])
         assert _validate_json_schema_node(None, schema, schema, 'field') == []
 
 
 class TestMinLengthKeyword:
-    def test_top_level_scalar_accept(self):
+    def test_top_level_scalar_accept(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{'leg_id': 'leg-1', 'kind': 'human', 'reason': 'not yet resolvable'}],
@@ -473,7 +473,7 @@ class TestMinLengthKeyword:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any('reason' in e['field'] and 'minLength' in e['error'] for e in errors)
 
-    def test_nested_array_item_reject_empty_string(self):
+    def test_nested_array_item_reject_empty_string(self) -> None:
         """gate_evidence.legs[].leg_id carries minLength: 1 — an empty string
         must be rejected at the nested array-item path."""
         fm = _valid_handoff(gate_evidence={
@@ -484,20 +484,20 @@ class TestMinLengthKeyword:
         fields = [e['field'] for e in errors]
         assert any('leg_id' in f for f in fields)
 
-    def test_non_string_value_ignored(self):
+    def test_non_string_value_ignored(self) -> None:
         """A non-string value is not a minLength violation — it is ignored."""
         schema = {'type': ['string', 'null'], 'minLength': 1}
         errors = _validate_json_schema_node(None, schema, schema, 'field')
         assert errors == []
 
-    def test_direct_accept_and_reject(self):
+    def test_direct_accept_and_reject(self) -> None:
         schema = {'type': 'string', 'minLength': 3}
         assert _validate_json_schema_node('abc', schema, schema, 'field') == []
         assert _validate_json_schema_node('ab', schema, schema, 'field') != []
 
 
 class TestMinItemsKeyword:
-    def test_top_level_array_accept(self):
+    def test_top_level_array_accept(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{'leg_id': 'leg-1', 'kind': 'human', 'reason': 'not yet resolvable'}],
@@ -505,25 +505,25 @@ class TestMinItemsKeyword:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any('legs' in e['field'] and 'minItems' in e['error'] for e in errors)
 
-    def test_top_level_array_reject_empty(self):
+    def test_top_level_array_reject_empty(self) -> None:
         """gate_evidence.legs carries minItems: 1 — an empty array must reject."""
         fm = _valid_handoff(gate_evidence={'covers_prose': True, 'legs': []})
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         fields = [e['field'] for e in errors]
         assert any('legs' in f for f in fields)
 
-    def test_non_array_value_ignored(self):
+    def test_non_array_value_ignored(self) -> None:
         """A non-array value is not a minItems violation — it is ignored."""
         schema = {'type': ['array', 'null'], 'minItems': 1}
         errors = _validate_json_schema_node(None, schema, schema, 'field')
         assert errors == []
 
-    def test_direct_accept_and_reject(self):
+    def test_direct_accept_and_reject(self) -> None:
         schema = {'type': 'array', 'minItems': 2}
         assert _validate_json_schema_node([1, 2], schema, schema, 'field') == []
         assert _validate_json_schema_node([1], schema, schema, 'field') != []
 
-    def test_max_items(self):
+    def test_max_items(self) -> None:
         schema = {'type': 'array', 'maxItems': 2}
         assert _validate_json_schema_node([1, 2], schema, schema, 'field') == []
         errors = _validate_json_schema_node([1, 2, 3], schema, schema, 'field')
@@ -548,24 +548,24 @@ class TestMinimumKeyword:
         },
     }
 
-    def test_nested_array_item_accept(self):
+    def test_nested_array_item_accept(self) -> None:
         errors = _validate_json_schema_node({'rows': [{'n': 1}]}, self._NESTED, self._NESTED, 'fm')
         assert errors == []
 
-    def test_nested_array_item_reject(self):
+    def test_nested_array_item_reject(self) -> None:
         errors = _validate_json_schema_node({'rows': [{'n': 0}]}, self._NESTED, self._NESTED, 'fm')
         fields = [e['field'] for e in errors]
         assert any('n' in f for f in fields)
         assert any('minimum' in e['error'] for e in errors)
 
-    def test_bool_value_ignored(self):
+    def test_bool_value_ignored(self) -> None:
         """A bool is not a minimum violation — JSON Schema numbers exclude
         booleans even though Python's bool subclasses int."""
         schema = {'type': ['boolean', 'integer'], 'minimum': 1}
         errors = _validate_json_schema_node(False, schema, schema, 'field')
         assert errors == []
 
-    def test_direct_accept_and_reject(self):
+    def test_direct_accept_and_reject(self) -> None:
         schema = {'type': 'integer', 'minimum': 1}
         assert _validate_json_schema_node(1, schema, schema, 'field') == []
         assert _validate_json_schema_node(0, schema, schema, 'field') != []
@@ -574,14 +574,14 @@ class TestMinimumKeyword:
     # (validate_frontmatter + a real vendored schema) that the rewrite above
     # lost. research-synthesis.schema.json's `coverage_score` (minimum: 1,
     # maximum: 5) is the vendored `minimum` usage exercised here.
-    def test_via_validate_frontmatter_real_schema_reject(self):
+    def test_via_validate_frontmatter_real_schema_reject(self) -> None:
         errors = validate_frontmatter(
             {'coverage_score': 0}, _RESEARCH_SYNTHESIS_SCHEMA,
         )
         fields = [e['field'] for e in errors]
         assert any('coverage_score' in f for f in fields)
 
-    def test_via_validate_frontmatter_real_schema_accept(self):
+    def test_via_validate_frontmatter_real_schema_accept(self) -> None:
         errors = validate_frontmatter(
             {'coverage_score': 3}, _RESEARCH_SYNTHESIS_SCHEMA,
         )
@@ -589,7 +589,7 @@ class TestMinimumKeyword:
 
 
 class TestPropertyNamesKeyword:
-    def test_nested_array_item_accept(self):
+    def test_nested_array_item_accept(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{'leg_id': 'leg-1', 'kind': 'human', 'reason': 'not yet resolvable'}],
@@ -597,7 +597,7 @@ class TestPropertyNamesKeyword:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any('propertyNames' in e.get('error', '') for e in errors)
 
-    def test_nested_array_item_reject_forbidden_key(self):
+    def test_nested_array_item_reject_forbidden_key(self) -> None:
         """gate_evidence.legs[] is propertyNames-blocked from carrying the
         four resolver-only keys (read_ok/observed/error/elapsed) — an author
         writing one directly must be rejected."""
@@ -612,7 +612,7 @@ class TestPropertyNamesKeyword:
         fields = [e['field'] for e in errors]
         assert any('observed' in f for f in fields)
 
-    def test_direct_accept_and_reject(self):
+    def test_direct_accept_and_reject(self) -> None:
         schema = {'type': 'object', 'propertyNames': {'not': {'enum': ['forbidden']}}}
         assert _validate_json_schema_node({'ok': 1}, schema, schema, 'field') == []
         assert _validate_json_schema_node({'forbidden': 1}, schema, schema, 'field') != []
@@ -624,21 +624,21 @@ class TestSiblingSchemaRef:
 
     _REF = 'https://coordinator.local/schemas/plan-tasks.schema.json#/properties/change_kind'
 
-    def test_sibling_ref_enforces_the_target(self):
+    def test_sibling_ref_enforces_the_target(self) -> None:
         schema = {'type': 'object', 'properties': {'k': {'$ref': self._REF}}}
         assert validate_frontmatter_obj({'k': 'code-edit'}, schema) == {'ok': True}
         bad = validate_frontmatter_obj({'k': 'bogus-kind'}, schema)
         assert [e['field'] for e in bad['errors']] == ['k']
         assert 'invalid enum value' in bad['errors'][0]['error']
 
-    def test_plan_with_row_build_gate_validates(self):
+    def test_plan_with_row_build_gate_validates(self) -> None:
         def gate(kind):
             return _valid_plan(row_build_gate=[{'when': {'change_kind': kind}, 'command': 'make'}])
         assert validate_frontmatter(gate('hook-edit'), _PLAN_SCHEMA) == []
         fields = [e['field'] for e in validate_frontmatter(gate('bogus-kind'), _PLAN_SCHEMA)]
         assert fields == ['row_build_gate[0].when.change_kind']
 
-    def test_missing_pointer_and_unknown_file_fail_loud(self):
+    def test_missing_pointer_and_unknown_file_fail_loud(self) -> None:
         for ref in (
             'https://coordinator.local/schemas/plan-tasks.schema.json#/properties/no_such',
             'https://coordinator.local/schemas/no-such.schema.json#/properties/x',
@@ -653,42 +653,42 @@ class TestSiblingSchemaRef:
 # ---------------------------------------------------------------------------
 
 class TestRequiredFields:
-    def test_missing_title(self):
+    def test_missing_title(self) -> None:
         fm = _valid_handoff()
         del fm['title']
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         fields = [e['field'] for e in errors]
         assert 'title' in fields
 
-    def test_missing_created(self):
+    def test_missing_created(self) -> None:
         fm = _valid_handoff()
         del fm['created']
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         fields = [e['field'] for e in errors]
         assert 'created' in fields
 
-    def test_missing_branch(self):
+    def test_missing_branch(self) -> None:
         fm = _valid_handoff()
         del fm['branch']
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         fields = [e['field'] for e in errors]
         assert 'branch' in fields
 
-    def test_missing_status(self):
+    def test_missing_status(self) -> None:
         fm = _valid_handoff()
         del fm['status']
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         fields = [e['field'] for e in errors]
         assert 'status' in fields
 
-    def test_missing_predecessor(self):
+    def test_missing_predecessor(self) -> None:
         fm = _valid_handoff()
         del fm['predecessor']
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         fields = [e['field'] for e in errors]
         assert 'predecessor' in fields
 
-    def test_predecessor_null_is_valid(self):
+    def test_predecessor_null_is_valid(self) -> None:
         """predecessor: null is allowed (nullable per anyOf)."""
         fm = _valid_handoff(kind='spinoff', predecessor=None)
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
@@ -701,22 +701,22 @@ class TestRequiredFields:
 # ---------------------------------------------------------------------------
 
 class TestEnumValidation:
-    def test_invalid_status(self):
+    def test_invalid_status(self) -> None:
         fm = _valid_handoff(status='invalid_status')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'status' for e in errors)
 
-    def test_invalid_kind(self):
+    def test_invalid_kind(self) -> None:
         fm = _valid_handoff(kind='unknown-kind')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'kind' for e in errors)
 
-    def test_invalid_deployment_state(self):
+    def test_invalid_deployment_state(self) -> None:
         fm = _valid_handoff(deployment_state='invalid_state')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'deployment_state' for e in errors)
 
-    def test_invalid_category(self):
+    def test_invalid_category(self) -> None:
         """Out-of-enum category fails exactly once (the JSON-schema enum node, not a
         duplicate cross-field rule) and its hint names the legal values, so a
         present-but-wrong value (e.g. "feature") is diagnosable from the message alone.
@@ -731,7 +731,7 @@ class TestEnumValidation:
         for legal in ['roadmap', 'infra', 'bug', 'docs', 'research', 'refactor', 'uncategorized', 'queue-derived-baton']:
             assert legal in hint, f'Expected hint to name "{legal}", got: {hint}'
 
-    def test_valid_kind_values(self):
+    def test_valid_kind_values(self) -> None:
         """Covers all six D1 canonical kinds (baton-kind-vocabulary-one-axis-per-field C10) —
         session-handoff/spinoff/recovery were already covered pre-migration; roadmap-baton,
         goal-seed, and roadmap-seed are the D1 target names that replaced the retired
@@ -764,12 +764,12 @@ class TestEnumValidation:
 # ---------------------------------------------------------------------------
 
 class TestTypeValidation:
-    def test_pickup_ready_must_be_boolean(self):
+    def test_pickup_ready_must_be_boolean(self) -> None:
         fm = _valid_handoff(pickup_ready='yes')  # string, not bool
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'pickup_ready' for e in errors)
 
-    def test_scope_must_be_array(self):
+    def test_scope_must_be_array(self) -> None:
         fm = _valid_handoff(scope='not-a-list')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any('scope' in e['field'] for e in errors)
@@ -780,25 +780,25 @@ class TestTypeValidation:
 # ---------------------------------------------------------------------------
 
 class TestSummaryLengthCap:
-    def test_summary_within_140_chars(self):
+    def test_summary_within_140_chars(self) -> None:
         fm = _valid_handoff(summary='x' * 140)
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'summary' for e in errors)
 
-    def test_summary_exactly_141_chars_fails(self):
+    def test_summary_exactly_141_chars_fails(self) -> None:
         """Over-140-char summary is the canonical use case for post-mutation validation."""
         fm = _valid_handoff(summary='x' * 141)
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'summary' and '140' in e['error'] for e in errors)
 
-    def test_summary_200_chars_fails_with_count(self):
+    def test_summary_200_chars_fails_with_count(self) -> None:
         fm = _valid_handoff(summary='a' * 200)
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         summary_errors = [e for e in errors if e['field'] == 'summary' and 'exceeds' in e['error']]
         assert summary_errors
         assert '200' in summary_errors[0]['error']
 
-    def test_summary_cap_skipped_pre_cutoff(self):
+    def test_summary_cap_skipped_pre_cutoff(self) -> None:
         """Pre-cutoff handoffs exempt from summary length rule."""
         fm = {
             'title': 'Old',
@@ -817,19 +817,19 @@ class TestSummaryLengthCap:
 # ---------------------------------------------------------------------------
 
 class TestPostCutoffRequired:
-    def test_category_required_post_cutoff(self):
+    def test_category_required_post_cutoff(self) -> None:
         fm = _valid_handoff()
         del fm['category']
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'category' for e in errors)
 
-    def test_summary_required_post_cutoff(self):
+    def test_summary_required_post_cutoff(self) -> None:
         fm = _valid_handoff()
         del fm['summary']
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'summary' for e in errors)
 
-    def test_category_empty_string_fails(self):
+    def test_category_empty_string_fails(self) -> None:
         fm = _valid_handoff(category='')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'category' for e in errors)
@@ -840,55 +840,55 @@ class TestPostCutoffRequired:
 # ---------------------------------------------------------------------------
 
 class TestDeploymentStateGates:
-    def test_awaiting_gate_requires_dependency(self):
+    def test_awaiting_gate_requires_dependency(self) -> None:
         fm = _valid_handoff(deployment_state='awaiting_gate')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'gate_dependency' and 'awaiting_gate' in e['error'] for e in errors)
 
-    def test_awaiting_gate_with_dependency_ok(self):
+    def test_awaiting_gate_with_dependency_ok(self) -> None:
         fm = _valid_handoff(deployment_state='awaiting_gate', gate_dependency='pcore-01 landing')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'gate_dependency' for e in errors)
 
-    def test_awaiting_gate_with_blocked_by_ok(self):
+    def test_awaiting_gate_with_blocked_by_ok(self) -> None:
         """C3: an awaiting_gate baton with an empty gate_dependency but a non-empty
         blocked_by list validates -- blocked_by is one of the three gate-naming fields."""
         fm = _valid_handoff(deployment_state='awaiting_gate', blocked_by=['stub-1'])
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'gate_dependency' for e in errors)
 
-    def test_awaiting_gate_with_blocking_notes_ok(self):
+    def test_awaiting_gate_with_blocking_notes_ok(self) -> None:
         """C3: an awaiting_gate baton with an empty gate_dependency but a non-empty
         blocking_notes string validates -- the migration target field."""
         fm = _valid_handoff(deployment_state='awaiting_gate', blocking_notes='waiting on pcore-01')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'gate_dependency' for e in errors)
 
-    def test_awaiting_gate_with_gate_notes_ok(self):
+    def test_awaiting_gate_with_gate_notes_ok(self) -> None:
         """gate_notes is blocking_notes' current name (handoff schema 8.11.0); a baton
         authored with it names its gate and must validate."""
         fm = _valid_handoff(deployment_state='awaiting_gate', gate_notes='waiting on pcore-01')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'gate_dependency' for e in errors)
 
-    def test_awaiting_gate_with_none_of_the_three_fails(self):
+    def test_awaiting_gate_with_none_of_the_three_fails(self) -> None:
         """C3: an awaiting_gate baton with none of gate_dependency, blocked_by, or
         blocking_notes still fails -- the whole point of the rule surviving relaxation."""
         fm = _valid_handoff(deployment_state='awaiting_gate', blocked_by=[], blocking_notes='')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'gate_dependency' and 'awaiting_gate' in e['error'] for e in errors)
 
-    def test_ready_to_fire_with_dependency_fails(self):
+    def test_ready_to_fire_with_dependency_fails(self) -> None:
         fm = _valid_handoff(deployment_state='ready_to_fire', gate_dependency='some-condition')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'gate_dependency' and 'ready_to_fire' in e['error'] for e in errors)
 
-    def test_ready_to_fire_no_dependency_ok(self):
+    def test_ready_to_fire_no_dependency_ok(self) -> None:
         fm = _valid_handoff(deployment_state='ready_to_fire')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'gate_dependency' for e in errors)
 
-    def test_ready_to_fire_with_gate_evidence_fails(self):
+    def test_ready_to_fire_with_gate_evidence_fails(self) -> None:
         """C7 (AC10): parallels test_ready_to_fire_with_dependency_fails --
         gate_evidence is a gate-naming field exactly like gate_dependency, and
         must not survive onto a ready_to_fire record either."""
@@ -899,12 +899,12 @@ class TestDeploymentStateGates:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'gate_evidence' and 'ready_to_fire' in e['error'] for e in errors)
 
-    def test_ready_to_fire_no_gate_evidence_ok(self):
+    def test_ready_to_fire_no_gate_evidence_ok(self) -> None:
         fm = _valid_handoff(deployment_state='ready_to_fire')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'gate_evidence' for e in errors)
 
-    def test_the_gating_remedy_names_pickup_ready_when_it_would_violate_next(self):
+    def test_the_gating_remedy_names_pickup_ready_when_it_would_violate_next(self) -> None:
         """A remedy that implies further co-required changes states the whole
         resulting state. Adding a blocker to a ready_to_fire + pickup_ready baton
         used to cost three edits for one semantic change: the pickup_ready rule was
@@ -918,7 +918,7 @@ class TestDeploymentStateGates:
         assert 'awaiting_gate' in hint
         assert 'pickup_ready=false' in hint
 
-    def test_the_gating_remedy_stays_quiet_about_a_field_that_is_not_at_issue(self):
+    def test_the_gating_remedy_stays_quiet_about_a_field_that_is_not_at_issue(self) -> None:
         """The co-required half is named only when it would actually fire next —
         a record with no pickup_ready gets the plain two-option remedy, not a
         third field to think about."""
@@ -928,7 +928,7 @@ class TestDeploymentStateGates:
         assert 'awaiting_gate' in hint
         assert 'pickup_ready' not in hint
 
-    def test_shipped_without_shipped_in_fails(self):
+    def test_shipped_without_shipped_in_fails(self) -> None:
         fm = _valid_handoff(deployment_state='shipped')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'shipped_in' for e in errors)
@@ -939,7 +939,7 @@ class TestDeploymentStateGates:
 # ---------------------------------------------------------------------------
 
 class TestGateDependencyNotPathShaped:
-    def test_gate_dependency_containing_tasks_slash_fails(self):
+    def test_gate_dependency_containing_tasks_slash_fails(self) -> None:
         fm = _valid_handoff(deployment_state='awaiting_gate', gate_dependency='tasks/foo/todo.md')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(
@@ -947,7 +947,7 @@ class TestGateDependencyNotPathShaped:
             for e in errors
         )
 
-    def test_gate_dependency_containing_archive_slash_fails(self):
+    def test_gate_dependency_containing_archive_slash_fails(self) -> None:
         fm = _valid_handoff(
             deployment_state='awaiting_gate',
             gate_dependency='archive/completed/2026-07/some-handoff.md',
@@ -958,7 +958,7 @@ class TestGateDependencyNotPathShaped:
             for e in errors
         )
 
-    def test_gate_dependency_ending_in_md_fails(self):
+    def test_gate_dependency_ending_in_md_fails(self) -> None:
         fm = _valid_handoff(
             deployment_state='awaiting_gate',
             gate_dependency='state/handoffs/2026-07-27-some-handoff.md',
@@ -969,19 +969,19 @@ class TestGateDependencyNotPathShaped:
             for e in errors
         )
 
-    def test_gate_dependency_ordinary_prose_ok(self):
+    def test_gate_dependency_ordinary_prose_ok(self) -> None:
         """Ordinary advisory prose (no path markers) still validates."""
         fm = _valid_handoff(deployment_state='awaiting_gate', gate_dependency='pcore-01 landing')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'gate_dependency' for e in errors)
 
-    def test_gate_dependency_slug_shaped_ok(self):
+    def test_gate_dependency_slug_shaped_ok(self) -> None:
         """A slug-shaped gate_dependency (the blocked_by-style form) still validates."""
         fm = _valid_handoff(deployment_state='awaiting_gate', gate_dependency='pcore-01-landing')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'gate_dependency' for e in errors)
 
-    def test_shipped_with_shipped_in_ok(self):
+    def test_shipped_with_shipped_in_ok(self) -> None:
         fm = _valid_handoff(deployment_state='shipped', shipped_in='abc1234')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'shipped_in' for e in errors)
@@ -1023,7 +1023,7 @@ class TestReadyToFireIfThenSchemaLevel:
         schema = json.loads(_HANDOFF_SCHEMA.read_text(encoding='utf-8'))
         return _validate_json_schema_node(fm, schema, schema, '')
 
-    def test_if_then_construct_present_and_allof_nested(self):
+    def test_if_then_construct_present_and_allof_nested(self) -> None:
         """The schema declares its conditionals nested under `allOf`, not top-level
         `if`/`then` (DR-084 P4 narrow, d652253c) — `_validate_json_schema_node` now
         recurses into `allOf`, so these ARE visible to the shape-only validator."""
@@ -1041,7 +1041,7 @@ class TestReadyToFireIfThenSchemaLevel:
             'construct may have been dropped upstream, revisit'
         )
 
-    def test_gate_dependency_at_ready_to_fire_rejected_at_schema_level(self):
+    def test_gate_dependency_at_ready_to_fire_rejected_at_schema_level(self) -> None:
         """The allOf-nested if/then now fires at the shape layer (see class docstring) —
         redundant with, not a replacement for, `_cf_ready_to_fire_no_dependency` (Python
         cross-field layer), which remains the primary enforcement covered separately."""
@@ -1052,17 +1052,17 @@ class TestReadyToFireIfThenSchemaLevel:
             f'is dispatched; got {errors!r}'
         )
 
-    def test_if_then_allows_no_gate_dependency_at_ready_to_fire(self):
+    def test_if_then_allows_no_gate_dependency_at_ready_to_fire(self) -> None:
         fm = _valid_handoff(deployment_state='ready_to_fire')
         errors = self._schema_shape_errors(fm)
         assert not any('must NOT match the negated schema' in e['error'] for e in errors)
 
-    def test_if_then_does_not_fire_at_other_deployment_states(self):
+    def test_if_then_does_not_fire_at_other_deployment_states(self) -> None:
         fm = _valid_handoff(deployment_state='awaiting_gate', gate_dependency='some-condition')
         errors = self._schema_shape_errors(fm)
         assert not any('must NOT match the negated schema' in e['error'] for e in errors)
 
-    def test_if_then_does_not_fire_when_deployment_state_absent(self):
+    def test_if_then_does_not_fire_when_deployment_state_absent(self) -> None:
         fm = _valid_handoff(gate_dependency='some-condition')
         fm.pop('deployment_state', None)
         errors = self._schema_shape_errors(fm)
@@ -1089,13 +1089,13 @@ class TestLastGateRecheckSchemaDeclaration:
     losing the declaration again.
     """
 
-    def test_last_gate_recheck_valid_date_ok(self):
+    def test_last_gate_recheck_valid_date_ok(self) -> None:
         fm = _valid_handoff(deployment_state='awaiting_gate', gate_dependency='x',
                              last_gate_recheck='2026-07-13')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'last_gate_recheck' for e in errors)
 
-    def test_last_gate_recheck_invalid_date_rejected_at_schema_level(self):
+    def test_last_gate_recheck_invalid_date_rejected_at_schema_level(self) -> None:
         fm = _valid_handoff(deployment_state='awaiting_gate', gate_dependency='x',
                              last_gate_recheck='not-a-date')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
@@ -1104,7 +1104,7 @@ class TestLastGateRecheckSchemaDeclaration:
             'declared with format: date); got no last_gate_recheck error'
         )
 
-    def test_last_gate_recheck_declared_as_schema_property(self):
+    def test_last_gate_recheck_declared_as_schema_property(self) -> None:
         schema = json.loads(_HANDOFF_SCHEMA.read_text(encoding='utf-8'))
         assert 'last_gate_recheck' in schema['properties'], (
             'handoff.schema.json no longer declares last_gate_recheck — this test\'s '
@@ -1113,17 +1113,17 @@ class TestLastGateRecheckSchemaDeclaration:
 
 
 class TestSpinoffPredecessor:
-    def test_spinoff_with_non_none_predecessor_fails(self):
+    def test_spinoff_with_non_none_predecessor_fails(self) -> None:
         fm = _valid_handoff(kind='spinoff', predecessor='state/handoffs/2026-07-04-prior.md')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'predecessor' and 'none' in e['error'] for e in errors)
 
-    def test_spinoff_with_none_predecessor_ok(self):
+    def test_spinoff_with_none_predecessor_ok(self) -> None:
         fm = _valid_handoff(kind='spinoff', predecessor='none')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'predecessor' for e in errors)
 
-    def test_spinoff_with_null_predecessor_ok(self):
+    def test_spinoff_with_null_predecessor_ok(self) -> None:
         fm = _valid_handoff(kind='spinoff', predecessor=None)
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'predecessor' for e in errors)
@@ -1134,7 +1134,7 @@ class TestSpinoffPredecessor:
 # ---------------------------------------------------------------------------
 
 class TestClaimedByRequired:
-    def test_claimed_with_claimed_at_needs_claimed_by(self):
+    def test_claimed_with_claimed_at_needs_claimed_by(self) -> None:
         fm = _valid_handoff(
             status='claimed',
             claimed_at='2026-07-05T10:00:00Z',
@@ -1142,7 +1142,7 @@ class TestClaimedByRequired:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'claimed_by' for e in errors)
 
-    def test_claimed_with_claimed_at_and_claimed_by_ok(self):
+    def test_claimed_with_claimed_at_and_claimed_by_ok(self) -> None:
         fm = _valid_handoff(
             status='claimed',
             claimed_at='2026-07-05T10:00:00Z',
@@ -1151,7 +1151,7 @@ class TestClaimedByRequired:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'claimed_by' for e in errors)
 
-    def test_claimed_without_claimed_at_no_claimed_by_needed(self):
+    def test_claimed_without_claimed_at_no_claimed_by_needed(self) -> None:
         """status=claimed without claimed_at: pre-tool claim, no claimed_by required."""
         fm = _valid_handoff(status='claimed')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
@@ -1163,23 +1163,23 @@ class TestClaimedByRequired:
 # ---------------------------------------------------------------------------
 
 class TestClosedReasonRequired:
-    def test_closed_without_closed_reason_errors(self):
+    def test_closed_without_closed_reason_errors(self) -> None:
         fm = _valid_handoff(deployment_state='closed')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'closed_reason' for e in errors)
 
-    def test_closed_with_closed_reason_ok(self):
+    def test_closed_with_closed_reason_ok(self) -> None:
         fm = _valid_handoff(deployment_state='closed', closed_reason='cancelled')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'closed_reason' for e in errors)
 
-    def test_closed_reason_without_closed_state_errors(self):
+    def test_closed_reason_without_closed_state_errors(self) -> None:
         """closed_reason set but deployment_state != closed: forbidden (bidirectional)."""
         fm = _valid_handoff(deployment_state='in_flight', closed_reason='stale')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'closed_reason' for e in errors)
 
-    def test_no_closed_reason_no_closed_state_ok(self):
+    def test_no_closed_reason_no_closed_state_ok(self) -> None:
         fm = _valid_handoff(deployment_state='in_flight')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'closed_reason' for e in errors)
@@ -1190,12 +1190,12 @@ class TestClosedReasonRequired:
 # ---------------------------------------------------------------------------
 
 class TestContinuedIntoRequired:
-    def test_continued_without_continued_into_errors(self):
+    def test_continued_without_continued_into_errors(self) -> None:
         fm = _valid_handoff(deployment_state='continued')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'continued_into' for e in errors)
 
-    def test_continued_with_continued_into_ok(self):
+    def test_continued_with_continued_into_ok(self) -> None:
         fm = _valid_handoff(
             deployment_state='continued',
             continued_into='hnd-successor-abc123',
@@ -1203,7 +1203,7 @@ class TestContinuedIntoRequired:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'continued_into' for e in errors)
 
-    def test_other_deployment_state_no_continued_into_needed(self):
+    def test_other_deployment_state_no_continued_into_needed(self) -> None:
         fm = _valid_handoff(deployment_state='in_flight')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'continued_into' for e in errors)
@@ -1214,18 +1214,18 @@ class TestContinuedIntoRequired:
 # ---------------------------------------------------------------------------
 
 class TestCostEnum:
-    def test_valid_cost_values(self):
+    def test_valid_cost_values(self) -> None:
         for cost in ['T0', 'T1', 'T2', 'T3']:
             fm = _valid_handoff(cost=cost)
             errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
             assert not any(e['field'] == 'cost' for e in errors), f'cost={cost} should be valid'
 
-    def test_invalid_cost_value(self):
+    def test_invalid_cost_value(self) -> None:
         fm = _valid_handoff(cost='T4')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'cost' for e in errors)
 
-    def test_absent_cost_ok(self):
+    def test_absent_cost_ok(self) -> None:
         """cost is optional — absent is valid."""
         fm = _valid_handoff()
         assert 'cost' not in fm
@@ -1238,25 +1238,25 @@ class TestCostEnum:
 # ---------------------------------------------------------------------------
 
 class TestLoeBand:
-    def test_valid_loe_values(self):
+    def test_valid_loe_values(self) -> None:
         for loe in ['XS', 'S', 'M', 'L', 'XL']:
             fm = _valid_handoff(loe=loe)
             errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
             assert not any(e['field'] == 'loe' for e in errors), f'loe={loe} should be valid'
 
-    def test_invalid_loe_value(self):
+    def test_invalid_loe_value(self) -> None:
         fm = _valid_handoff(loe='T1')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'loe' for e in errors)
 
-    def test_absent_loe_ok(self):
+    def test_absent_loe_ok(self) -> None:
         """loe is optional — absent is valid."""
         fm = _valid_handoff()
         assert 'loe' not in fm
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'loe' for e in errors)
 
-    def test_cost_and_loe_both_stay_valid(self):
+    def test_cost_and_loe_both_stay_valid(self) -> None:
         """`cost:` stays valid alongside `loe:` — the rename does not
         retire `_cf_cost_enum` (docs/plans/2026-09-11-roadmap-audits-
         readiness-views-and-recor.md C3 body: 8 handoff records carry
@@ -1271,19 +1271,19 @@ class TestLoeBand:
 # ---------------------------------------------------------------------------
 
 class TestGraphFieldsKindGate:
-    def test_blocks_on_non_roadmap_kind_ok(self):
+    def test_blocks_on_non_roadmap_kind_ok(self) -> None:
         """AC1(a): blocks/blocked_by are permitted on any kind, not just roadmap-baton."""
         fm = _valid_handoff(blocks=['stub-1'])
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'blocks' for e in errors)
 
-    def test_blocked_by_on_non_roadmap_kind_ok(self):
+    def test_blocked_by_on_non_roadmap_kind_ok(self) -> None:
         """AC1(a): blocks/blocked_by are permitted on any kind, not just roadmap-baton."""
         fm = _valid_handoff(blocked_by=['stub-2'])
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'blocked_by' for e in errors)
 
-    def test_roadmap_id_is_not_kind_gated(self):
+    def test_roadmap_id_is_not_kind_gated(self) -> None:
         """DR-198(b): roadmap_id is REFERENTIAL, not kind-gated. Both rules that
         refused it on a non-baton kind are deleted (see the gravestone above
         `_ROADMAP_GRAPH_OVERRIDE_ENV_VAR`). Measured population: example-retrieval-repo-
@@ -1294,7 +1294,7 @@ class TestGraphFieldsKindGate:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any('roadmap_id' in e['field'] for e in errors)
 
-    def test_a_roadmap_baton_still_owes_its_serialization_order(self):
+    def test_a_roadmap_baton_still_owes_its_serialization_order(self) -> None:
         """The negative spec for the deletion above: membership stops being
         kind-gated, the baton REQUIREMENT does not move. A record claiming
         `kind: roadmap-baton` still owes wave and its graph edges."""
@@ -1303,13 +1303,13 @@ class TestGraphFieldsKindGate:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any('wave' in e['field'] for e in errors)
 
-    def test_roadmap_baton_missing_required_fields_fails(self):
+    def test_roadmap_baton_missing_required_fields_fails(self) -> None:
         fm = _valid_handoff(kind='roadmap-baton', predecessor=None, roadmap_id='r-001')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         # Missing stub_id, wave, blocks, blocked_by
         assert any('stub_id' in e['field'] or 'wave' in e['field'] for e in errors)
 
-    def test_roadmap_baton_legacy_alias_missing_required_fields_fails(self):
+    def test_roadmap_baton_legacy_alias_missing_required_fields_fails(self) -> None:
         """Legacy-alias coverage (baton-kind-vocabulary-one-axis-per-field D1): the
         cross-field graph-primitives rule still fires identically for the retired
         `spinoff-roadmap` spelling — dual acceptance is enforced at the cross-field
@@ -1321,7 +1321,7 @@ class TestGraphFieldsKindGate:
         # Missing stub_id, wave, blocks, blocked_by
         assert any('stub_id' in e['field'] or 'wave' in e['field'] for e in errors)
 
-    def test_roadmap_baton_complete_ok(self):
+    def test_roadmap_baton_complete_ok(self) -> None:
         fm = _valid_handoff(
             kind='roadmap-baton',
             predecessor=None,
@@ -1337,7 +1337,7 @@ class TestGraphFieldsKindGate:
             e['field'] in ('roadmap_id', 'stub_id', 'wave') for e in errors
         )
 
-    def test_roadmap_baton_legacy_alias_graph_fields_ok(self):
+    def test_roadmap_baton_legacy_alias_graph_fields_ok(self) -> None:
         """Legacy-alias coverage: cross-field graph-primitives rule accepts the retired
         `spinoff-roadmap` spelling identically to `roadmap-baton`. Filters on the
         graph-field errors only (not `kind`) because the JSON-schema enum rejects the
@@ -1370,12 +1370,12 @@ class TestHandoffPhaseKindGate:
     alone would never fire on one.
     """
 
-    def test_session_handoff_ok(self):
+    def test_session_handoff_ok(self) -> None:
         fm = _valid_handoff(handoff_phase='continuation')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'handoff_phase' for e in errors)
 
-    def test_roadmap_baton_canonical_ok(self):
+    def test_roadmap_baton_canonical_ok(self) -> None:
         fm = _valid_handoff(
             kind='roadmap-baton',
             predecessor=None,
@@ -1389,7 +1389,7 @@ class TestHandoffPhaseKindGate:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'handoff_phase' for e in errors)
 
-    def test_roadmap_baton_retired_alias_ok(self):
+    def test_roadmap_baton_retired_alias_ok(self) -> None:
         """Filters on `handoff_phase` only — the JSON-schema `kind` enum rejects the
         retired spelling outright, which this assertion deliberately does not check
         for (same posture as `TestGraphFieldsKindGate`'s alias cases)."""
@@ -1410,7 +1410,7 @@ class TestHandoffPhaseKindGate:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'handoff_phase' for e in errors)
 
-    def test_a_spinoff_carries_the_phase(self):
+    def test_a_spinoff_carries_the_phase(self) -> None:
         """Admitted at schema 10.5.0 (DoE ruling, 2026-09-11) — a plan-blitz mints
         every replan baton as a spinoff, so the S lane could not be expressed on
         any baton it produces. This test asserted the refusal before the widen."""
@@ -1418,13 +1418,13 @@ class TestHandoffPhaseKindGate:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'handoff_phase' for e in errors)
 
-    def test_unrelated_kind_still_fails(self):
+    def test_unrelated_kind_still_fails(self) -> None:
         """The widen admitted one kind, not the axis."""
         fm = _valid_handoff(kind='goal-seed', predecessor=None, handoff_phase='continuation')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'handoff_phase' for e in errors)
 
-    def test_unset_kind_still_fails(self):
+    def test_unset_kind_still_fails(self) -> None:
         fm = _valid_handoff(handoff_phase='continuation')
         fm.pop('kind')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
@@ -1437,14 +1437,14 @@ class TestRetiredSuccessorlessKind:
     which are retired-but-renamed. A pre-existing on-disk record still carrying
     `kind: spike-result` must pass post-mutation (read-side) validation."""
 
-    def test_spike_result_kind_enum_error_tolerated(self):
+    def test_spike_result_kind_enum_error_tolerated(self) -> None:
         fm = _valid_handoff(kind='spike-result', predecessor=None)
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(
             e['field'] == 'kind' and 'invalid enum value' in e['error'] for e in errors
         )
 
-    def test_other_unknown_kind_still_rejected(self):
+    def test_other_unknown_kind_still_rejected(self) -> None:
         """The widen names one retired, successor-less value — not the axis."""
         fm = _valid_handoff(kind='not-a-real-kind', predecessor=None)
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
@@ -1458,41 +1458,41 @@ class TestRetiredSuccessorlessKind:
 # ---------------------------------------------------------------------------
 
 class TestKindGatedFields:
-    def test_supersedes_on_non_spinoff_fails(self):
+    def test_supersedes_on_non_spinoff_fails(self) -> None:
         fm = _valid_handoff(supersedes='some/older/baton.md')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'supersedes' and 'spinoff' in e['error'] for e in errors)
 
-    def test_supersedes_on_spinoff_ok(self):
+    def test_supersedes_on_spinoff_ok(self) -> None:
         fm = _valid_handoff(kind='spinoff', predecessor='none', supersedes='state/handoffs/old.md')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'supersedes' for e in errors)
 
-    def test_forked_from_on_non_spinoff_fails(self):
+    def test_forked_from_on_non_spinoff_fails(self) -> None:
         fm = _valid_handoff(forked_from='state/handoffs/fork-point.md')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'forked_from' for e in errors)
 
-    def test_forked_from_on_spinoff_ok(self):
+    def test_forked_from_on_spinoff_ok(self) -> None:
         fm = _valid_handoff(kind='spinoff', predecessor='none', forked_from='state/handoffs/fork.md')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'forked_from' for e in errors)
 
-    def test_forked_from_on_goal_seed_fails(self):
+    def test_forked_from_on_goal_seed_fails(self) -> None:
         """Negative-spec: goal-seed is a fork kind (predecessor:none) but is excluded
         from the forked_from allowlist — PM-directive origin, no baton branch-point."""
         fm = _valid_handoff(kind='goal-seed', predecessor='none', forked_from='state/handoffs/fork.md')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'forked_from' for e in errors)
 
-    def test_forked_from_on_goal_seed_legacy_alias_fails(self):
+    def test_forked_from_on_goal_seed_legacy_alias_fails(self) -> None:
         """Legacy-alias coverage: the retired `spinoff-goal` spelling is excluded from
         forked_from identically to `goal-seed` — cross-field dual acceptance."""
         fm = _valid_handoff(kind='spinoff-goal', predecessor='none', forked_from='state/handoffs/fork.md')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'forked_from' for e in errors)
 
-    def test_forked_from_on_roadmap_seed_fails(self):
+    def test_forked_from_on_roadmap_seed_fails(self) -> None:
         """Negative-spec: roadmap-seed likewise excluded from forked_from."""
         fm = _valid_handoff(
             kind='roadmap-seed', predecessor='none', forked_from='state/handoffs/fork.md'
@@ -1500,7 +1500,7 @@ class TestKindGatedFields:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'forked_from' for e in errors)
 
-    def test_forked_from_on_roadmap_seed_legacy_alias_fails(self):
+    def test_forked_from_on_roadmap_seed_legacy_alias_fails(self) -> None:
         """Legacy-alias coverage: the retired `spinoff-roadmap-creator` spelling is
         excluded from forked_from identically to `roadmap-seed`."""
         fm = _valid_handoff(
@@ -1511,17 +1511,17 @@ class TestKindGatedFields:
 
 
 class TestRecoversSessionGate:
-    def test_recovers_session_on_non_recovery_fails(self):
+    def test_recovers_session_on_non_recovery_fails(self) -> None:
         fm = _valid_handoff(recovers_session='aa1626ec-221a-4d6c-9c16-e8ac86ff93bb')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'recovers_session' and 'recovery' in e['error'] for e in errors)
 
-    def test_recovers_session_on_recovery_ok(self):
+    def test_recovers_session_on_recovery_ok(self) -> None:
         fm = _valid_handoff(kind='recovery', recovers_session='aa1626ec-221a-4d6c-9c16-e8ac86ff93bb')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'recovers_session' for e in errors)
 
-    def test_null_recovers_session_on_non_recovery_ok(self):
+    def test_null_recovers_session_on_non_recovery_ok(self) -> None:
         fm = _valid_handoff(recovers_session=None)
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'recovers_session' for e in errors)
@@ -1536,41 +1536,41 @@ class TestForkKindsPredecessorNoneGate:
     names for the retired spinoff-goal/spinoff-roadmap-creator spellings, both of
     which remain permanently-accepted aliases at the cross-field layer)."""
 
-    def test_goal_seed_with_non_none_predecessor_fails(self):
+    def test_goal_seed_with_non_none_predecessor_fails(self) -> None:
         fm = _valid_handoff(kind='goal-seed', predecessor='state/handoffs/prior.md')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'predecessor' and 'goal-seed' in e['error'] for e in errors)
 
-    def test_goal_seed_legacy_alias_with_non_none_predecessor_fails(self):
+    def test_goal_seed_legacy_alias_with_non_none_predecessor_fails(self) -> None:
         fm = _valid_handoff(kind='spinoff-goal', predecessor='state/handoffs/prior.md')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'predecessor' and 'spinoff-goal' in e['error'] for e in errors)
 
-    def test_goal_seed_with_none_predecessor_ok(self):
+    def test_goal_seed_with_none_predecessor_ok(self) -> None:
         fm = _valid_handoff(kind='goal-seed', predecessor='none')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'predecessor' for e in errors)
 
-    def test_roadmap_seed_with_non_none_predecessor_fails(self):
+    def test_roadmap_seed_with_non_none_predecessor_fails(self) -> None:
         fm = _valid_handoff(kind='roadmap-seed', predecessor='state/handoffs/prior.md')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(
             e['field'] == 'predecessor' and 'roadmap-seed' in e['error'] for e in errors
         )
 
-    def test_roadmap_seed_legacy_alias_with_non_none_predecessor_fails(self):
+    def test_roadmap_seed_legacy_alias_with_non_none_predecessor_fails(self) -> None:
         fm = _valid_handoff(kind='spinoff-roadmap-creator', predecessor='state/handoffs/prior.md')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(
             e['field'] == 'predecessor' and 'spinoff-roadmap-creator' in e['error'] for e in errors
         )
 
-    def test_roadmap_seed_with_none_predecessor_ok(self):
+    def test_roadmap_seed_with_none_predecessor_ok(self) -> None:
         fm = _valid_handoff(kind='roadmap-seed', predecessor='none')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'predecessor' for e in errors)
 
-    def test_roadmap_seed_with_null_predecessor_ok(self):
+    def test_roadmap_seed_with_null_predecessor_ok(self) -> None:
         fm = _valid_handoff(kind='roadmap-seed', predecessor=None)
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'predecessor' for e in errors)
@@ -1606,17 +1606,17 @@ def _base_spinoff_with_origin(**overrides) -> dict:
 class TestOriginAxisC21WellFormedness:
     """Rule C2-1: kind-prefixed id well-formedness."""
 
-    def test_well_formed_origin_fields_on_spinoff_pass(self):
+    def test_well_formed_origin_fields_on_spinoff_pass(self) -> None:
         fm = _base_spinoff_with_origin()
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == [], f'Errors: {errors}'
 
-    def test_origin_fields_absent_are_noop(self):
+    def test_origin_fields_absent_are_noop(self) -> None:
         fm = _valid_handoff(kind='session-handoff')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == []
 
-    def test_all_origin_fields_null_pass(self):
+    def test_all_origin_fields_null_pass(self) -> None:
         """backfill=null policy: explicit nulls are valid."""
         fm = _base_spinoff_with_origin(
             origin_session=None, origin_handoff=None, origin_plan_id=None, origin_goal_id=None,
@@ -1624,47 +1624,47 @@ class TestOriginAxisC21WellFormedness:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == [], f'Errors: {errors}'
 
-    def test_origin_plan_id_without_prefix_rejected(self):
+    def test_origin_plan_id_without_prefix_rejected(self) -> None:
         fm = _base_spinoff_with_origin(origin_plan_id='plan-some-slug')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         err = next((e for e in errors if e['field'] == 'origin_plan_id'), None)
         assert err is not None, f'Errors: {errors}'
         assert 'C2-1' in err['error']
 
-    def test_origin_handoff_not_state_handoffs_path_rejected(self):
+    def test_origin_handoff_not_state_handoffs_path_rejected(self) -> None:
         fm = _base_spinoff_with_origin(origin_handoff='archive/handoffs/2026-07-06-old.md')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         err = next((e for e in errors if e['field'] == 'origin_handoff'), None)
         assert err is not None, f'Errors: {errors}'
         assert 'C2-1' in err['error']
 
-    def test_origin_session_empty_string_rejected(self):
+    def test_origin_session_empty_string_rejected(self) -> None:
         fm = _base_spinoff_with_origin(origin_session='   ')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         err = next((e for e in errors if e['field'] == 'origin_session'), None)
         assert err is not None, f'Errors: {errors}'
         assert 'C2-1' in err['error']
 
-    def test_origin_goal_id_entry_without_goal_prefix_rejected(self):
+    def test_origin_goal_id_entry_without_goal_prefix_rejected(self) -> None:
         fm = _base_spinoff_with_origin(origin_goal_id=['gol-legibility', 'goal-shipping-velocity'])
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         err = next((e for e in errors if e['field'] == 'origin_goal_id'), None)
         assert err is not None, f'Errors: {errors}'
         assert 'C2-1' in err['error']
 
-    def test_origin_goal_id_entry_with_old_g_prefix_rejected(self):
+    def test_origin_goal_id_entry_with_old_g_prefix_rejected(self) -> None:
         fm = _base_spinoff_with_origin(origin_goal_id=['g-legibility'])
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'origin_goal_id' for e in errors)
 
-    def test_origin_goal_id_multiple_valid_entries_pass(self):
+    def test_origin_goal_id_multiple_valid_entries_pass(self) -> None:
         fm = _base_spinoff_with_origin(
             origin_goal_id=['goal-shipping-velocity', 'goal-legibility-system'],
         )
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'origin_goal_id' for e in errors)
 
-    def test_origin_goal_id_empty_array_passes(self):
+    def test_origin_goal_id_empty_array_passes(self) -> None:
         fm = _base_spinoff_with_origin(origin_goal_id=[])
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'origin_goal_id' for e in errors)
@@ -1673,40 +1673,40 @@ class TestOriginAxisC21WellFormedness:
 class TestOriginAxisC22Cardinality:
     """Rule C2-2: explicit per-kind cardinality."""
 
-    def test_origin_session_array_rejected(self):
+    def test_origin_session_array_rejected(self) -> None:
         fm = _base_spinoff_with_origin(origin_session=['a1b2c3d4-e5f6-7890-abcd-ef1234567890'])
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         err = next((e for e in errors if e['field'] == 'origin_session' and 'C2-2' in e['error']), None)
         assert err is not None, f'Errors: {errors}'
         assert 'scalar string (not an array)' in err['error']
 
-    def test_origin_handoff_array_rejected(self):
+    def test_origin_handoff_array_rejected(self) -> None:
         fm = _base_spinoff_with_origin(origin_handoff=['state/handoffs/2026-07-06-parent-baton.md'])
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         err = next((e for e in errors if e['field'] == 'origin_handoff' and 'C2-2' in e['error']), None)
         assert err is not None, f'Errors: {errors}'
         assert 'scalar string (not an array)' in err['error']
 
-    def test_origin_plan_id_array_rejected(self):
+    def test_origin_plan_id_array_rejected(self) -> None:
         fm = _base_spinoff_with_origin(origin_plan_id=['pln-structured-originating-session-8b505c'])
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         err = next((e for e in errors if e['field'] == 'origin_plan_id' and 'C2-2' in e['error']), None)
         assert err is not None, f'Errors: {errors}'
         assert 'scalar string (not an array)' in err['error']
 
-    def test_origin_goal_id_bare_scalar_rejected(self):
+    def test_origin_goal_id_bare_scalar_rejected(self) -> None:
         fm = _base_spinoff_with_origin(origin_goal_id='goal-shipping-velocity')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         err = next((e for e in errors if e['field'] == 'origin_goal_id' and 'C2-2' in e['error']), None)
         assert err is not None, f'Errors: {errors}'
         assert 'not a bare scalar' in err['error']
 
-    def test_origin_session_as_string_passes(self):
+    def test_origin_session_as_string_passes(self) -> None:
         fm = _base_spinoff_with_origin(origin_session='a1b2c3d4-e5f6-7890-abcd-ef1234567890')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'origin_session' for e in errors)
 
-    def test_origin_goal_id_as_array_passes(self):
+    def test_origin_goal_id_as_array_passes(self) -> None:
         fm = _base_spinoff_with_origin(origin_goal_id=['goal-shipping-velocity'])
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'origin_goal_id' for e in errors)
@@ -1715,7 +1715,7 @@ class TestOriginAxisC22Cardinality:
 class TestOriginAxisC23SelfReference:
     """Rule C2-3: direct self-reference rejection (best-effort via _filePath sentinel)."""
 
-    def test_origin_handoff_equals_own_path_rejected(self):
+    def test_origin_handoff_equals_own_path_rejected(self) -> None:
         own_path = 'state/handoffs/2026-07-07-my-spinoff.md'
         fm = _base_spinoff_with_origin(origin_handoff=own_path, _filePath=own_path)
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
@@ -1724,7 +1724,7 @@ class TestOriginAxisC23SelfReference:
         assert "equals the record's own path" in err['error']
         assert 'C2-3' in err['error']
 
-    def test_origin_handoff_different_from_own_path_passes(self):
+    def test_origin_handoff_different_from_own_path_passes(self) -> None:
         fm = _base_spinoff_with_origin(
             origin_handoff='state/handoffs/2026-07-06-parent-baton.md',
             _filePath='state/handoffs/2026-07-07-my-spinoff.md',
@@ -1732,7 +1732,7 @@ class TestOriginAxisC23SelfReference:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'origin_handoff' for e in errors)
 
-    def test_origin_handoff_present_no_file_path_sentinel_is_noop(self):
+    def test_origin_handoff_present_no_file_path_sentinel_is_noop(self) -> None:
         """Without _filePath, the self-reference check cannot fire (partial acyclicity)."""
         fm = _base_spinoff_with_origin(origin_handoff='state/handoffs/2026-07-07-same-as-own.md')
         fm.pop('_filePath', None)
@@ -1759,7 +1759,7 @@ class TestOriginAxisC23SelfReference:
     # adds additionalProperties: false to the real schema without also declaring '_filePath'
     # in properties, every handoff record's C2-3 self-reference check will start failing
     # shape validation, and this test will already be red as an early warning.
-    def test_file_path_sentinel_trips_additional_properties_false_schema(self, tmp_path):
+    def test_file_path_sentinel_trips_additional_properties_false_schema(self, tmp_path: Path) -> None:
         minimal_schema = {
             '$schema': 'https://json-schema.org/draft/2020-12/schema',
             'x-schema-name': 'handoff',
@@ -1794,17 +1794,17 @@ class TestOriginAxisC23SelfReference:
 class TestOriginAxisC24PredecessorNoneInvariant:
     """Rule C2-4: predecessor:none invariant preserved even when origin_* present."""
 
-    def test_spinoff_with_origin_and_predecessor_none_passes(self):
+    def test_spinoff_with_origin_and_predecessor_none_passes(self) -> None:
         fm = _base_spinoff_with_origin(predecessor='none')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == [], f'Errors: {errors}'
 
-    def test_spinoff_with_origin_and_predecessor_null_passes(self):
+    def test_spinoff_with_origin_and_predecessor_null_passes(self) -> None:
         fm = _base_spinoff_with_origin(predecessor=None)
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == [], f'Errors: {errors}'
 
-    def test_spinoff_with_origin_and_non_none_predecessor_rejected(self):
+    def test_spinoff_with_origin_and_non_none_predecessor_rejected(self) -> None:
         fm = _base_spinoff_with_origin(predecessor='state/handoffs/2026-07-06-prior.md')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         c24_err = next(
@@ -1813,7 +1813,7 @@ class TestOriginAxisC24PredecessorNoneInvariant:
         assert c24_err is not None, f'Errors: {errors}'
         assert 'predecessor:none invariant' in c24_err['error']
 
-    def test_goal_seed_with_origin_and_predecessor_none_passes(self):
+    def test_goal_seed_with_origin_and_predecessor_none_passes(self) -> None:
         fm = {
             'title': 'Goal spinoff with origin provenance',
             'created': '2026-07-07',
@@ -1830,7 +1830,7 @@ class TestOriginAxisC24PredecessorNoneInvariant:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == [], f'Errors: {errors}'
 
-    def test_goal_seed_legacy_alias_with_origin_and_predecessor_none_passes_at_cross_field_layer(self):
+    def test_goal_seed_legacy_alias_with_origin_and_predecessor_none_passes_at_cross_field_layer(self) -> None:
         """The retired `spinoff-goal` spelling is cross-field-clean under the
         origin-axis C2-4 rule — same as goal-seed — and now also validates
         clean at the `kind` enum layer: `_tolerate_handoff_kind_aliases`
@@ -1854,7 +1854,7 @@ class TestOriginAxisC24PredecessorNoneInvariant:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == [], f'Errors: {errors}'
 
-    def test_roadmap_seed_with_origin_and_predecessor_none_passes(self):
+    def test_roadmap_seed_with_origin_and_predecessor_none_passes(self) -> None:
         fm = {
             'title': 'Roadmap-creator spinoff with origin provenance',
             'created': '2026-07-07',
@@ -1870,7 +1870,7 @@ class TestOriginAxisC24PredecessorNoneInvariant:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == [], f'Errors: {errors}'
 
-    def test_roadmap_seed_legacy_alias_with_origin_and_predecessor_none_passes_at_cross_field_layer(self):
+    def test_roadmap_seed_legacy_alias_with_origin_and_predecessor_none_passes_at_cross_field_layer(self) -> None:
         """The retired `spinoff-roadmap-creator` spelling is cross-field-clean
         under C2-4 and now also validates clean at the `kind` enum layer — see
         the goal-seed sibling test above for the full explanation."""
@@ -1889,7 +1889,7 @@ class TestOriginAxisC24PredecessorNoneInvariant:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == [], f'Errors: {errors}'
 
-    def test_session_handoff_with_origin_fields_does_not_trigger_c24(self):
+    def test_session_handoff_with_origin_fields_does_not_trigger_c24(self) -> None:
         fm = _valid_handoff(
             kind='session-handoff',
             origin_session='a1b2c3d4-e5f6-7890-abcd-ef1234567890',
@@ -1898,7 +1898,7 @@ class TestOriginAxisC24PredecessorNoneInvariant:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == [], f'Errors: {errors}'
 
-    def test_spinoff_with_no_origin_fields_does_not_trigger_c24(self):
+    def test_spinoff_with_no_origin_fields_does_not_trigger_c24(self) -> None:
         fm = {
             'title': 'Ordinary spinoff without origin provenance',
             'created': '2026-07-07',
@@ -1916,7 +1916,7 @@ class TestOriginAxisC24PredecessorNoneInvariant:
 class TestOriginAxisC25ForkedFromEquality:
     """Rule C2-5: forked_from / origin_handoff never-silently-disagree invariant."""
 
-    def test_forked_from_and_origin_handoff_equal_passes(self):
+    def test_forked_from_and_origin_handoff_equal_passes(self) -> None:
         fm = _base_spinoff_with_origin(
             forked_from='state/handoffs/2026-07-06-parent-baton.md',
             origin_handoff='state/handoffs/2026-07-06-parent-baton.md',
@@ -1924,7 +1924,7 @@ class TestOriginAxisC25ForkedFromEquality:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == [], f'Errors: {errors}'
 
-    def test_forked_from_backslashes_origin_handoff_forward_slashes_same_file_passes(self):
+    def test_forked_from_backslashes_origin_handoff_forward_slashes_same_file_passes(self) -> None:
         """Normalisation fires: backslash vs forward-slash naming the same file is not divergence."""
         fm = _base_spinoff_with_origin(
             forked_from='state\\handoffs\\2026-07-06-parent-baton.md',
@@ -1933,7 +1933,7 @@ class TestOriginAxisC25ForkedFromEquality:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == [], f'Errors: {errors}'
 
-    def test_forked_from_and_origin_handoff_disagree_rejected(self):
+    def test_forked_from_and_origin_handoff_disagree_rejected(self) -> None:
         fm = _base_spinoff_with_origin(
             forked_from='state/handoffs/2026-07-06-parent-baton.md',
             origin_handoff='state/handoffs/2026-07-05-different-baton.md',
@@ -1944,7 +1944,7 @@ class TestOriginAxisC25ForkedFromEquality:
         assert 'lineage-integrity divergence' in err['error']
         assert 'C2-5' in err['error']
 
-    def test_origin_handoff_set_forked_from_absent_on_goal_seed_passes(self):
+    def test_origin_handoff_set_forked_from_absent_on_goal_seed_passes(self) -> None:
         """No presence-coupling: forked_from is validation-illegal on goal-seed, but
         origin_handoff alone is legal and must not trip C2-5."""
         fm = {
@@ -1964,7 +1964,7 @@ class TestOriginAxisC25ForkedFromEquality:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == [], f'Errors: {errors}'
 
-    def test_origin_handoff_set_forked_from_absent_on_goal_seed_legacy_alias_passes_at_cross_field_layer(self):
+    def test_origin_handoff_set_forked_from_absent_on_goal_seed_legacy_alias_passes_at_cross_field_layer(self) -> None:
         """The retired `spinoff-goal` spelling is cross-field-clean under C2-5
         (no presence-coupling error) and now also validates clean at the
         `kind` enum layer — same de-aliasing as the C2-4 legacy-alias tests
@@ -1986,7 +1986,7 @@ class TestOriginAxisC25ForkedFromEquality:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == [], f'Errors: {errors}'
 
-    def test_forked_from_set_origin_handoff_absent_on_spinoff_passes(self):
+    def test_forked_from_set_origin_handoff_absent_on_spinoff_passes(self) -> None:
         fm = {
             'title': 'Spinoff with forked_from but no origin_handoff',
             'created': '2026-07-07',
@@ -2019,16 +2019,16 @@ _OWNERSHIP_AXIS_FIELDS = (
 class TestIsUnowned:
     """the Data Science Reviewer F1: is_unowned(v) treats absent/None/whitespace-only as equivalent."""
 
-    def test_none_is_unowned(self):
+    def test_none_is_unowned(self) -> None:
         assert is_unowned(None) is True
 
-    def test_empty_string_is_unowned(self):
+    def test_empty_string_is_unowned(self) -> None:
         assert is_unowned('') is True
 
-    def test_whitespace_only_string_is_unowned(self):
+    def test_whitespace_only_string_is_unowned(self) -> None:
         assert is_unowned('   ') is True
 
-    def test_real_slug_is_not_unowned(self):
+    def test_real_slug_is_not_unowned(self) -> None:
         assert is_unowned('em-machine-a') is False
 
 
@@ -2039,25 +2039,25 @@ class TestOwnerAxisScalar:
     TestClaimedByRequired's shape.
     """
 
-    def test_absent_owner_axes_pass(self):
+    def test_absent_owner_axes_pass(self) -> None:
         """Boundary: every ownership axis absent (the N=1 solo-inert default) is valid."""
         fm = _valid_handoff()
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] in _OWNERSHIP_AXIS_FIELDS for e in errors)
 
-    def test_explicit_null_owner_axes_pass(self):
+    def test_explicit_null_owner_axes_pass(self) -> None:
         fm = _valid_handoff(**{field: None for field in _OWNERSHIP_AXIS_FIELDS})
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] in _OWNERSHIP_AXIS_FIELDS for e in errors)
 
-    def test_explicit_owner_slug_passes(self):
+    def test_explicit_owner_slug_passes(self) -> None:
         """ok: a real slug on every axis is valid — the explicit-owner case."""
         fm = _valid_handoff(**{field: 'em-machine-a' for field in _OWNERSHIP_AXIS_FIELDS})
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] in _OWNERSHIP_AXIS_FIELDS for e in errors)
 
     @pytest.mark.parametrize('field', _OWNERSHIP_AXIS_FIELDS)
-    def test_empty_string_owner_axis_rejected(self, field):
+    def test_empty_string_owner_axis_rejected(self, field) -> None:
         """needs: an empty-string ownership axis is the malformed in-between the rule exists
         to catch — reject-with-hint, not silent normalization."""
         fm = _valid_handoff(**{field: ''})
@@ -2068,7 +2068,7 @@ class TestOwnerAxisScalar:
         assert 'is_unowned' in err['error']
 
     @pytest.mark.parametrize('field', _OWNERSHIP_AXIS_FIELDS)
-    def test_whitespace_only_owner_axis_rejected(self, field):
+    def test_whitespace_only_owner_axis_rejected(self, field) -> None:
         """needs: whitespace-only is equally malformed under is_unowned's .trim() semantics.
 
         The message must name the whitespace-only
@@ -2088,7 +2088,7 @@ class TestOwnerAxisScalar:
 # ---------------------------------------------------------------------------
 
 class TestAdditionalPredecessors:
-    def test_no_duplicate_entries(self):
+    def test_no_duplicate_entries(self) -> None:
         fm = _valid_handoff(
             additional_predecessors=[
                 'state/handoffs/a.md',
@@ -2098,7 +2098,7 @@ class TestAdditionalPredecessors:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'additional_predecessors' and 'duplicate' in e['error'] for e in errors)
 
-    def test_no_entry_duplicating_primary_predecessor(self):
+    def test_no_entry_duplicating_primary_predecessor(self) -> None:
         fm = _valid_handoff(
             predecessor='state/handoffs/primary.md',
             additional_predecessors=['state/handoffs/primary.md'],
@@ -2106,7 +2106,7 @@ class TestAdditionalPredecessors:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'additional_predecessors' and 'primary' in e['error'] for e in errors)
 
-    def test_valid_additional_predecessors(self):
+    def test_valid_additional_predecessors(self) -> None:
         fm = _valid_handoff(
             predecessor='state/handoffs/a.md',
             additional_predecessors=['state/handoffs/b.md', 'state/handoffs/c.md'],
@@ -2120,32 +2120,32 @@ class TestAdditionalPredecessors:
 # ---------------------------------------------------------------------------
 
 class TestDeliverableSpineFields:
-    def test_deliverable_id_without_prefix_fails(self):
+    def test_deliverable_id_without_prefix_fails(self) -> None:
         fm = _valid_handoff(deliverable_id='my-deliverable')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'deliverable_id' and 'dlv-' in e['error'] for e in errors)
 
-    def test_deliverable_id_with_prefix_ok(self):
+    def test_deliverable_id_with_prefix_ok(self) -> None:
         fm = _valid_handoff(deliverable_id='dlv-foo-abc123')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'deliverable_id' for e in errors)
 
-    def test_deliverable_id_null_ok(self):
+    def test_deliverable_id_null_ok(self) -> None:
         fm = _valid_handoff(deliverable_id=None)
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'deliverable_id' for e in errors)
 
-    def test_initiative_empty_string_fails(self):
+    def test_initiative_empty_string_fails(self) -> None:
         fm = _valid_handoff(initiative='')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'initiative' and 'non-empty' in e['error'] for e in errors)
 
-    def test_initiative_valid_string_ok(self):
+    def test_initiative_valid_string_ok(self) -> None:
         fm = _valid_handoff(initiative='example-fleet-pro-launch')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'initiative' for e in errors)
 
-    def test_initiative_null_ok(self):
+    def test_initiative_null_ok(self) -> None:
         fm = _valid_handoff(initiative=None)
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'initiative' for e in errors)
@@ -2165,7 +2165,7 @@ class TestDeliverableSpineFields:
 # ---------------------------------------------------------------------------
 
 class TestBatonUnificationSchemaBump:
-    def test_singular_only_still_validates(self):
+    def test_singular_only_still_validates(self) -> None:
         """The pre-bump shape -- deliverable_id/origin_plan_id, no plural
         siblings -- is the AC2 back-compat proof for the schema itself
         (the on-disk-corpus proof is a separate test below)."""
@@ -2176,7 +2176,7 @@ class TestBatonUnificationSchemaBump:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == []
 
-    def test_plural_only_validates(self):
+    def test_plural_only_validates(self) -> None:
         fm = _valid_handoff(
             plan_ids=['pln-foo-abc123', 'pln-bar-def456'],
             deliverable_ids=['dlv-foo-abc123', 'dlv-bar-def456'],
@@ -2184,7 +2184,7 @@ class TestBatonUnificationSchemaBump:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == []
 
-    def test_singular_and_plural_both_present_validates(self):
+    def test_singular_and_plural_both_present_validates(self) -> None:
         """No cross-field allOf coupling is imposed -- a record may carry
         either, both, or neither."""
         fm = _valid_handoff(
@@ -2196,7 +2196,7 @@ class TestBatonUnificationSchemaBump:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == []
 
-    def test_on_disk_corpus_record_with_singular_fields_still_passes(self):
+    def test_on_disk_corpus_record_with_singular_fields_still_passes(self) -> None:
         """AC2's back-compat proof: real corpus records carrying only the
         singular deliverable_id/origin_plan_id still validate unchanged
         against the bumped schema."""
@@ -2225,23 +2225,23 @@ class TestBatonUnificationSchemaBump:
         assert checked, f'no singular-field corpus record under {archive_dir}'
         assert any(errors == [] for _name, errors in checked), checked
 
-    def test_baton_role_work_validates(self):
+    def test_baton_role_work_validates(self) -> None:
         fm = _valid_handoff(baton_role='work')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'baton_role' for e in errors)
 
-    def test_baton_role_record_validates(self):
+    def test_baton_role_record_validates(self) -> None:
         fm = _valid_handoff(baton_role='record')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'baton_role' for e in errors)
 
-    def test_baton_role_absent_ok(self):
+    def test_baton_role_absent_ok(self) -> None:
         """Absence means unknown, never a defaulted 'work' -- see the field
         description's positive-match rule."""
         errors = validate_frontmatter(_valid_handoff(), _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'baton_role' for e in errors)
 
-    def test_baton_role_invalid_value_rejected(self):
+    def test_baton_role_invalid_value_rejected(self) -> None:
         """'execution' is handoff_phase's value, not baton_role's -- the two
         axes must not be conflated (field description, D-C)."""
         fm = _valid_handoff(baton_role='execution')
@@ -2257,32 +2257,32 @@ class TestBatonUnificationSchemaBump:
 # ---------------------------------------------------------------------------
 
 class TestSizingObjectField:
-    def test_absent_ok(self):
+    def test_absent_ok(self) -> None:
         """The common case pre-convention: no sizing_object key at all."""
         errors = validate_frontmatter(_valid_plan(), _PLAN_SCHEMA)
         assert not any(e['field'] == 'sizing_object' for e in errors)
 
-    def test_null_ok(self):
+    def test_null_ok(self) -> None:
         fm = _valid_plan(sizing_object=None)
         errors = validate_frontmatter(fm, _PLAN_SCHEMA)
         assert not any(e['field'] == 'sizing_object' for e in errors)
 
-    def test_valid_path_ok(self):
+    def test_valid_path_ok(self) -> None:
         fm = _valid_plan(sizing_object='state/sizings/2026-08-06-example.yaml')
         errors = validate_frontmatter(fm, _PLAN_SCHEMA)
         assert not any(e['field'] == 'sizing_object' for e in errors)
 
-    def test_path_outside_state_sizings_rejected(self):
+    def test_path_outside_state_sizings_rejected(self) -> None:
         fm = _valid_plan(sizing_object='state/other/2026-08-06-example.yaml')
         errors = validate_frontmatter(fm, _PLAN_SCHEMA)
         assert any(e['field'] == 'sizing_object' for e in errors)
 
-    def test_non_yaml_suffix_rejected(self):
+    def test_non_yaml_suffix_rejected(self) -> None:
         fm = _valid_plan(sizing_object='state/sizings/2026-08-06-example.yml')
         errors = validate_frontmatter(fm, _PLAN_SCHEMA)
         assert any(e['field'] == 'sizing_object' for e in errors)
 
-    def test_bare_filename_rejected(self):
+    def test_bare_filename_rejected(self) -> None:
         fm = _valid_plan(sizing_object='2026-08-06-example.yaml')
         errors = validate_frontmatter(fm, _PLAN_SCHEMA)
         assert any(e['field'] == 'sizing_object' for e in errors)
@@ -2335,47 +2335,47 @@ class TestSizingObjectDeliverableSpineFields:
         fm.update(overrides)
         return fm
 
-    def test_writes_array_of_paths_ok(self):
+    def test_writes_array_of_paths_ok(self) -> None:
         fm = self._minimal_sizing_object(writes=['a.py'])
         errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
         assert not any(e['field'] == 'writes' for e in errors), errors
 
-    def test_writes_non_array_rejected(self):
+    def test_writes_non_array_rejected(self) -> None:
         fm = self._minimal_sizing_object(writes='a.py')
         errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
         assert any(e['field'] == 'writes' for e in errors), errors
 
-    def test_writes_non_string_item_rejected(self):
+    def test_writes_non_string_item_rejected(self) -> None:
         fm = self._minimal_sizing_object(writes=[1])
         errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
         assert any(e['field'].startswith('writes') for e in errors), errors
 
-    def test_deliverable_id_valid_pattern_ok(self):
+    def test_deliverable_id_valid_pattern_ok(self) -> None:
         fm = self._minimal_sizing_object(deliverable_id='dlv-example-abc123')
         errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
         assert not any(e['field'] == 'deliverable_id' for e in errors), errors
 
-    def test_deliverable_id_null_ok(self):
+    def test_deliverable_id_null_ok(self) -> None:
         fm = self._minimal_sizing_object(deliverable_id=None)
         errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
         assert not any(e['field'] == 'deliverable_id' for e in errors), errors
 
-    def test_deliverable_id_absent_ok(self):
+    def test_deliverable_id_absent_ok(self) -> None:
         fm = self._minimal_sizing_object()
         errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
         assert not any(e['field'] == 'deliverable_id' for e in errors), errors
 
-    def test_plan_fk_valid_path_ok(self):
+    def test_plan_fk_valid_path_ok(self) -> None:
         fm = self._minimal_sizing_object(plan='docs/plans/2026-08-10-example.md')
         errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
         assert not any(e['field'] == 'plan' for e in errors), errors
 
-    def test_status_shipped_ok(self):
+    def test_status_shipped_ok(self) -> None:
         fm = self._minimal_sizing_object(status='shipped')
         errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
         assert not any(e['field'] == 'status' for e in errors), errors
 
-    def test_status_declined_ok(self):
+    def test_status_declined_ok(self) -> None:
         """2026-08-10 (docs/plans/2026-08-10-a-terminal-status-for-a-declined-sizing.md
         § C1): `declined` — routed, then the spend was refused — is a valid
         terminal status value alongside `shipped`/`superseded`."""
@@ -2383,14 +2383,14 @@ class TestSizingObjectDeliverableSpineFields:
         errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
         assert not any(e['field'] == 'status' for e in errors), errors
 
-    def test_status_invalid_value_rejected(self):
+    def test_status_invalid_value_rejected(self) -> None:
         """Regression guard for the AC1 addition: the enum must still reject
         an arbitrary string — declined is a member, not a widening to any string."""
         fm = self._minimal_sizing_object(status='declined-forever')
         errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
         assert any(e['field'] == 'status' for e in errors), errors
 
-    def test_reported_file_validates_clean(self):
+    def test_reported_file_validates_clean(self) -> None:
         """The exact repro from the bug entry: a real on-disk sizing-object
         carrying deliverable_id must validate with zero errors."""
         repo_root = Path(__file__).resolve().parents[3]
@@ -2404,7 +2404,7 @@ class TestSizingObjectDeliverableSpineFields:
         errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
         assert not errors, errors
 
-    def test_x_schema_version_at_least_1_8_0(self):
+    def test_x_schema_version_at_least_1_8_0(self) -> None:
         # DoE's cross-repo
         # parity gate compares shapes ONLY when both sides' x-schema-version
         # are equal; an unequal-version divergence compares nothing and is
@@ -2416,24 +2416,24 @@ class TestSizingObjectDeliverableSpineFields:
         version = tuple(int(p) for p in schema['x-schema-version'].split('.'))
         assert version >= (1, 8, 0), schema['x-schema-version']
 
-    def test_name_valid_short_label_ok(self):
+    def test_name_valid_short_label_ok(self) -> None:
         fm = self._minimal_sizing_object(name='Deliverable spine name check')
         errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
         assert not any(e['field'] == 'name' for e in errors), errors
 
-    def test_name_absent_ok(self):
+    def test_name_absent_ok(self) -> None:
         """name is NOT in `required` -- absence means no label was written,
         never that the sizing is unnamed-by-policy."""
         fm = self._minimal_sizing_object()
         errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
         assert not any(e['field'] == 'name' for e in errors), errors
 
-    def test_name_over_60_chars_rejected(self):
+    def test_name_over_60_chars_rejected(self) -> None:
         fm = self._minimal_sizing_object(name='x' * 61)
         errors = validate_frontmatter(fm, _SIZING_OBJECT_SCHEMA)
         assert any(e['field'] == 'name' for e in errors), errors
 
-    def test_name_null_rejected(self):
+    def test_name_null_rejected(self) -> None:
         """Unlike the required-and-nullable fork/xl_exit, name has no null
         arm -- null is a type violation, not a valid absence encoding."""
         fm = self._minimal_sizing_object(name=None)
@@ -2455,7 +2455,7 @@ class TestPlanCorpusValidatesAgainstBumpedSchema:
     the latter.
     """
 
-    def test_no_regression_vs_pre_bump_schema(self):
+    def test_no_regression_vs_pre_bump_schema(self) -> None:
         repo_root = Path(__file__).resolve().parents[3]
         plans_dir = repo_root / 'docs' / 'plans'
         if not plans_dir.is_dir():
@@ -2496,7 +2496,7 @@ class TestPlanCorpusValidatesAgainstBumpedSchema:
             # Sanity: the bump should not have caused everything to silently no-op.
             assert validated_bumped > 0
 
-    def test_sizing_object_bearing_plans_validate(self):
+    def test_sizing_object_bearing_plans_validate(self) -> None:
         """The 17 plans the memo found carrying `sizing_object:` as an
         unvalidated extension key now validate under the declared field."""
         repo_root = Path(__file__).resolve().parents[3]
@@ -2534,11 +2534,11 @@ class TestCarriedItemsShape:
     # keep it only as inert legacy data (see test_legacy_carry_count_is_inert):
     # `carried_items[]` has no `additionalProperties: false`, so its presence
     # or absence is schema-neutral. No fixture here relies on it being present.
-    def test_absent_carried_items_ok(self):
+    def test_absent_carried_items_ok(self) -> None:
         errors = validate_frontmatter(_valid_handoff(), _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'carried_items' for e in errors)
 
-    def test_valid_carried_entry_ok(self):
+    def test_valid_carried_entry_ok(self) -> None:
         fm = _valid_handoff(carried_items=[
             {
                 'carry_id': 'cf-windows-validation-3f2a1c', 'description': 'x',
@@ -2548,7 +2548,7 @@ class TestCarriedItemsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'carried_items' for e in errors)
 
-    def test_legacy_carry_count_is_inert(self):
+    def test_legacy_carry_count_is_inert(self) -> None:
         """A carry_count left behind in an older handoff is neither required
         nor rejected — the field is gone from the schema, not forbidden."""
         fm = _valid_handoff(carried_items=[
@@ -2557,14 +2557,14 @@ class TestCarriedItemsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'carried_items' for e in errors)
 
-    def test_terminal_disposition_without_detail_fails(self):
+    def test_terminal_disposition_without_detail_fails(self) -> None:
         fm = _valid_handoff(carried_items=[
             {'carry_id': 'cf-x-111111', 'description': 'x', 'carry_count': 1, 'disposition': 'closed'},
         ])
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'carried_items' and 'disposition_detail' in e['error'] for e in errors)
 
-    def test_terminal_disposition_with_detail_ok(self):
+    def test_terminal_disposition_with_detail_ok(self) -> None:
         fm = _valid_handoff(carried_items=[
             {
                 'carry_id': 'cf-x-111111', 'description': 'x', 'carry_count': 1,
@@ -2574,7 +2574,7 @@ class TestCarriedItemsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'carried_items' for e in errors)
 
-    def test_carried_items_unaffected_by_plan_tasks_case_against_gate(self):
+    def test_carried_items_unaffected_by_plan_tasks_case_against_gate(self) -> None:
         """`case_against` is a plan-tasks-only leg, homed in
         `_cf_plan_tasks_disposition_shape` — NOT in the shared
         `_cf_disposition_shape` both callers reuse. A carried_items entry
@@ -2591,7 +2591,7 @@ class TestCarriedItemsShape:
         assert not any(e['field'] == 'carried_items' for e in errors)
         assert not any(e['field'] == 'case_against' for e in errors)
 
-    def test_cf_carried_items_shape_direct_no_carry_count_no_error(self):
+    def test_cf_carried_items_shape_direct_no_carry_count_no_error(self) -> None:
         """Direct unit test of `_cf_carried_items_shape` — the cross-field rule
         itself, called directly rather than through `validate_frontmatter` —
         proving an entry with NO `carry_count` returns no error from this rule.
@@ -2604,7 +2604,7 @@ class TestCarriedItemsShape:
         ]}
         assert _cf_carried_items_shape(fm) is None
 
-    def test_non_list_carried_items_fails(self):
+    def test_non_list_carried_items_fails(self) -> None:
         fm = _valid_handoff(carried_items='not-a-list')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'carried_items' for e in errors)
@@ -2630,17 +2630,17 @@ def _valid_plan_task_row(**overrides) -> dict:
 
 
 class TestPlanTasksPerformer:
-    def test_performer_em_validates(self):
+    def test_performer_em_validates(self) -> None:
         errors = validate_frontmatter(_valid_plan_task_row(performer='em'), _PLAN_TASKS_SCHEMA)
         assert not any(e['field'] == 'performer' for e in errors)
 
-    def test_performer_bogus_rejected(self):
+    def test_performer_bogus_rejected(self) -> None:
         errors = validate_frontmatter(_valid_plan_task_row(performer='bogus'), _PLAN_TASKS_SCHEMA)
         assert any(e['field'] == 'performer' for e in errors)
 
 
 class TestPlanTasksNotRuleNamesBranch:
-    def test_legacy_reads_with_reads_at_head_names_allof_and_quotes_comment(self):
+    def test_legacy_reads_with_reads_at_head_names_allof_and_quotes_comment(self) -> None:
         row = _valid_plan_task_row(reads=['a.py'], reads_at_head=['b.py'])
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         hits = [e for e in errors if e['error'].startswith('value must NOT match the negated schema')]
@@ -2654,7 +2654,7 @@ class TestPlanTasksNotRuleNamesBranch:
         assert any(f'allOf[{branch}]' in e['error'] for e in hits)
         assert any('Cross-field rule (C1' in e['hint'] for e in hits)
 
-    def test_commentless_not_branch_keeps_generic_hint(self, tmp_path):
+    def test_commentless_not_branch_keeps_generic_hint(self, tmp_path: Path) -> None:
         schema_path = tmp_path / 's.schema.json'
         schema_path.write_text(
             json.dumps({'allOf': [{'not': {'required': ['a']}}]}), encoding='utf-8'
@@ -2663,7 +2663,7 @@ class TestPlanTasksNotRuleNamesBranch:
         assert [e['error'] for e in errors] == ['value must NOT match the negated schema']
         assert not errors[0]['hint'].startswith('allOf[')
 
-    def test_commentless_not_branch_hint_names_fields_and_index(self, tmp_path):
+    def test_commentless_not_branch_hint_names_fields_and_index(self, tmp_path: Path) -> None:
         schema_path = tmp_path / 's.schema.json'
         schema_path.write_text(
             json.dumps({'allOf': [{'not': {'required': ['a', 'b']}}]}), encoding='utf-8'
@@ -2673,31 +2673,31 @@ class TestPlanTasksNotRuleNamesBranch:
         assert 'a, b' in errors[0]['hint'] and 'allOf[0]' in errors[0]['hint']
         assert not validate_frontmatter({'a': 1}, schema_path)
 
-    def test_handoff_gate_notes_with_blocking_notes_names_both(self):
+    def test_handoff_gate_notes_with_blocking_notes_names_both(self) -> None:
         errors = validate_frontmatter(
             {'gate_notes': 'x', 'blocking_notes': 'y'}, _HANDOFF_SCHEMA
         )
         hits = [e for e in errors if e['error'].startswith('value must NOT match')]
         assert any('gate_notes, blocking_notes' in e['hint'] for e in hits), errors
 
-    def test_handoff_ready_to_fire_with_gate_dependency_names_field(self):
+    def test_handoff_ready_to_fire_with_gate_dependency_names_field(self) -> None:
         errors = validate_frontmatter(
             {'deployment_state': 'ready_to_fire', 'gate_dependency': 'g'}, _HANDOFF_SCHEMA
         )
         hits = [e for e in errors if e['error'].startswith('value must NOT match')]
         assert any('gate_dependency' in e['hint'] for e in hits), errors
 
-    def test_clean_row_has_no_not_refusal(self):
+    def test_clean_row_has_no_not_refusal(self) -> None:
         errors = validate_frontmatter(_valid_plan_task_row(reads=['a.py']), _PLAN_TASKS_SCHEMA)
         assert not any('NOT match' in e['error'] for e in errors)
 
 
 class TestPlanTasksDispositionShape:
-    def test_default_open_row_ok(self):
+    def test_default_open_row_ok(self) -> None:
         errors = validate_frontmatter(_valid_plan_task_row(), _PLAN_TASKS_SCHEMA)
         assert not any(e['field'] in ('disposition', 'disposition_ref', 'pm_approved') for e in errors)
 
-    def test_coded_with_valid_sha_and_detail_ok(self):
+    def test_coded_with_valid_sha_and_detail_ok(self) -> None:
         row = _valid_plan_task_row(
             disposition='coded',
             disposition_ref='a1b2c3d',
@@ -2706,7 +2706,7 @@ class TestPlanTasksDispositionShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert not any(e['field'] in ('disposition', 'disposition_ref', 'pm_approved') for e in errors)
 
-    def test_coded_with_no_detail_ok(self):
+    def test_coded_with_no_detail_ok(self) -> None:
         """Regression: `close_out_and_stamp.py`'s `_auto_resolve_committed_open_rows`
         writes `disposition: coded` + `disposition_ref` and NO
         `disposition_detail` — plan-tasks.schema.json's `$comment` on the
@@ -2720,7 +2720,7 @@ class TestPlanTasksDispositionShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert not any(e['field'] == 'disposition' and 'disposition_detail' in e['error'] for e in errors)
 
-    def test_coded_requires_no_pm_approved(self):
+    def test_coded_requires_no_pm_approved(self) -> None:
         """D3: coded is evidence of work, not a scope decision — no PM gate."""
         row = _valid_plan_task_row(
             disposition='coded',
@@ -2731,7 +2731,7 @@ class TestPlanTasksDispositionShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert not any(e['field'] == 'pm_approved' for e in errors)
 
-    def test_coded_bad_sha_shape_rejected(self):
+    def test_coded_bad_sha_shape_rejected(self) -> None:
         row = _valid_plan_task_row(
             disposition='coded',
             disposition_ref='not-a-sha!,also-a-range..x',
@@ -2740,20 +2740,20 @@ class TestPlanTasksDispositionShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert any(e['field'] == 'disposition_ref' and 'hex SHA' in e['error'] for e in errors)
 
-    def test_coded_repo_key_qualified_sha_ok(self):
+    def test_coded_repo_key_qualified_sha_ok(self) -> None:
         """plan-tasks 3.4.0: `<repo_key>:<sha>` names another repo's commit."""
         row = _valid_plan_task_row(disposition='coded', disposition_ref='claude_klabauter:7730d18f1b')
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert not any(e['field'] == 'disposition_ref' for e in errors), errors
 
     @pytest.mark.parametrize('ref', ['c:7730d18f1b', 'Claude-Klabauter:7730d18f1b', 'a:b:7730d18f1b', 'claude_klabauter:'])
-    def test_coded_malformed_repo_key_rejected(self, ref):
+    def test_coded_malformed_repo_key_rejected(self, ref) -> None:
         """A one-character key (a drive letter), uppercase, a double prefix, or a bare key all refuse."""
         row = _valid_plan_task_row(disposition='coded', disposition_ref=ref)
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert any(e['field'] == 'disposition_ref' and 'hex SHA' in e['error'] for e in errors)
 
-    def test_depends_on_plan_row_ok(self):
+    def test_depends_on_plan_row_ok(self) -> None:
         """plan-tasks 3.4.0's cross-plan predecessor edge validates clean."""
         row = _valid_plan_task_row(depends_on_plan=[
             {'plan': 'docs/plans/2026-09-23-sibling.md', 'chunk': 'C1', 'gate_kind': 'epistemic-premise'},
@@ -2761,12 +2761,12 @@ class TestPlanTasksDispositionShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert not any(e['field'].startswith('depends_on') for e in errors), errors
 
-    def test_coded_missing_ref_rejected(self):
+    def test_coded_missing_ref_rejected(self) -> None:
         row = _valid_plan_task_row(disposition='coded', disposition_detail='no ref given')
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert any(e['field'] == 'disposition' and 'disposition_ref' in e['error'] for e in errors)
 
-    def test_spun_off_no_longer_requires_pm_approved(self):
+    def test_spun_off_no_longer_requires_pm_approved(self) -> None:
         """DoE's 2026-08-05 ruling relaxed spun_off's pm_approved gate: moving
         a row to another plan drops no work, so there is no scope cut for the
         PM to ratify — the EM self-issues it now."""
@@ -2778,7 +2778,7 @@ class TestPlanTasksDispositionShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert not any(e['field'] == 'pm_approved' for e in errors)
 
-    def test_spun_off_with_pm_approved_ok(self):
+    def test_spun_off_with_pm_approved_ok(self) -> None:
         row = _valid_plan_task_row(
             disposition='spun_off',
             disposition_ref='docs/plans/2026-07-27-successor.md',
@@ -2788,7 +2788,7 @@ class TestPlanTasksDispositionShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert not any(e['field'] in ('disposition', 'disposition_ref', 'pm_approved') for e in errors)
 
-    def test_backlogged_ref_rejects_comma_list(self):
+    def test_backlogged_ref_rejects_comma_list(self) -> None:
         row = _valid_plan_task_row(
             disposition='backlogged',
             disposition_ref='state/improvement-queue/a.yaml, state/improvement-queue/b.yaml',
@@ -2799,7 +2799,7 @@ class TestPlanTasksDispositionShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert any(e['field'] == 'disposition_ref' and 'repo-relative path' in e['error'] for e in errors)
 
-    def test_backlogged_ref_rejects_range(self):
+    def test_backlogged_ref_rejects_range(self) -> None:
         row = _valid_plan_task_row(
             disposition='backlogged',
             disposition_ref='state/improvement-queue/a..b.yaml',
@@ -2810,7 +2810,7 @@ class TestPlanTasksDispositionShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert any(e['field'] == 'disposition_ref' and 'repo-relative path' in e['error'] for e in errors)
 
-    def test_wont_do_with_detail_and_no_ref_and_pm_approved_ok(self):
+    def test_wont_do_with_detail_and_no_ref_and_pm_approved_ok(self) -> None:
         row = _valid_plan_task_row(
             disposition='wont_do',
             disposition_detail='declined — out of scope',
@@ -2820,7 +2820,7 @@ class TestPlanTasksDispositionShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert not any(e['field'] in ('disposition', 'disposition_ref', 'pm_approved') for e in errors)
 
-    def test_wont_do_requires_pm_approved(self):
+    def test_wont_do_requires_pm_approved(self) -> None:
         row = _valid_plan_task_row(
             disposition='wont_do',
             disposition_detail='declined — out of scope',
@@ -2828,7 +2828,7 @@ class TestPlanTasksDispositionShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert any(e['field'] == 'pm_approved' for e in errors)
 
-    def test_wont_do_carrying_ref_rejected(self):
+    def test_wont_do_carrying_ref_rejected(self) -> None:
         row = _valid_plan_task_row(
             disposition='wont_do',
             disposition_detail='declined — out of scope',
@@ -2839,7 +2839,7 @@ class TestPlanTasksDispositionShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert any(e['field'] == 'disposition' and 'disposition_ref' in e['error'] for e in errors)
 
-    def test_non_open_missing_detail_rejected(self):
+    def test_non_open_missing_detail_rejected(self) -> None:
         row = _valid_plan_task_row(
             disposition='spun_off',
             disposition_ref='docs/plans/successor.md',
@@ -2848,7 +2848,7 @@ class TestPlanTasksDispositionShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert any(e['field'] == 'disposition' and 'disposition_detail' in e['error'] for e in errors)
 
-    def test_legacy_deferred_true_pm_approved_false_rejected(self):
+    def test_legacy_deferred_true_pm_approved_false_rejected(self) -> None:
         """allOf[0] on a LEGACY plan: `deferred: true` + `pm_approved: false`
         is HARD-REJECTED at the schema layer, not merely flagged by DoE's
         plan-coverage-checker (P119-C1's tightening — truthiness, not
@@ -2857,7 +2857,7 @@ class TestPlanTasksDispositionShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert any(e['field'] == 'pm_approved' for e in errors)
 
-    def test_legacy_deferred_true_pm_approved_true_still_validates(self):
+    def test_legacy_deferred_true_pm_approved_true_still_validates(self) -> None:
         """The other verdict on the same leg: a properly-ratified legacy
         deferral still passes — the tightening narrows, it does not
         newly reject the correct shape."""
@@ -2879,24 +2879,24 @@ class TestPlanTasksWritesDeclared:
     _POST_CUTOFF = '2026-08-19'
     _PRE_CUTOFF = '2026-07-01'
 
-    def test_absent_writes_on_open_row_fails(self):
+    def test_absent_writes_on_open_row_fails(self) -> None:
         row = _valid_plan_task_row()
         error = _cf_plan_tasks_writes_declared(row, plan_created=self._POST_CUTOFF)
         assert error is not None
         assert error['field'] == 'writes'
         assert 'C1' in error['error']
 
-    def test_empty_writes_list_passes(self):
+    def test_empty_writes_list_passes(self) -> None:
         row = _valid_plan_task_row(writes=[])
         error = _cf_plan_tasks_writes_declared(row, plan_created=self._POST_CUTOFF)
         assert error is None
 
-    def test_deferred_row_passes_regardless_of_writes(self):
+    def test_deferred_row_passes_regardless_of_writes(self) -> None:
         row = _valid_plan_task_row(deferred=True)
         error = _cf_plan_tasks_writes_declared(row, plan_created=self._POST_CUTOFF)
         assert error is None
 
-    def test_coded_row_passes_regardless_of_writes(self):
+    def test_coded_row_passes_regardless_of_writes(self) -> None:
         row = _valid_plan_task_row(
             disposition='coded',
             disposition_ref='a1b2c3d',
@@ -2904,12 +2904,12 @@ class TestPlanTasksWritesDeclared:
         error = _cf_plan_tasks_writes_declared(row, plan_created=self._POST_CUTOFF)
         assert error is None
 
-    def test_pre_cutoff_plan_passes(self):
+    def test_pre_cutoff_plan_passes(self) -> None:
         row = _valid_plan_task_row()
         error = _cf_plan_tasks_writes_declared(row, plan_created=self._PRE_CUTOFF)
         assert error is None
 
-    def test_unforwarded_plan_created_passes(self):
+    def test_unforwarded_plan_created_passes(self) -> None:
         """A caller that does not wire `plan_created` through (both write
         guards' `_plan_tasks_spine_errors` now do; this covers any other
         caller that doesn't) must not reject — see the function's own
@@ -2919,7 +2919,7 @@ class TestPlanTasksWritesDeclared:
         error = _cf_plan_tasks_writes_declared(row)
         assert error is None
 
-    def test_absent_writes_passes_on_an_epistemic_premise_gated_row(self):
+    def test_absent_writes_passes_on_an_epistemic_premise_gated_row(self) -> None:
         """The one sanctioned omission. `spine_read`'s AC2 gives an ABSENT
         key the UNDECLARED sentinel ("unknown, collides with everything"),
         which is what forces wave separation and lets
@@ -2934,7 +2934,7 @@ class TestPlanTasksWritesDeclared:
         error = _cf_plan_tasks_writes_declared(row, plan_created=self._POST_CUTOFF)
         assert error is None
 
-    def test_absent_writes_still_fails_on_a_runtime_gated_row(self):
+    def test_absent_writes_still_fails_on_a_runtime_gated_row(self) -> None:
         """The carve-out is scoped to `epistemic-premise` alone. An
         `output-consumption-runtime` edge means the predecessor's artifact
         must exist at runtime — the surface is knowable, so the omission has
@@ -2946,7 +2946,7 @@ class TestPlanTasksWritesDeclared:
         assert error is not None
         assert error['field'] == 'writes'
 
-    def test_absent_writes_still_fails_on_a_malformed_bare_id_edge(self):
+    def test_absent_writes_still_fails_on_a_malformed_bare_id_edge(self) -> None:
         """A bare-chunk-id `depends_on` entry is not a valid edge (the schema
         requires objects with chunk/gate_kind), so it cannot earn the
         carve-out. Belt-and-braces against the shorthand that broke a real
@@ -2955,7 +2955,7 @@ class TestPlanTasksWritesDeclared:
         error = _cf_plan_tasks_writes_declared(row, plan_created=self._POST_CUTOFF)
         assert error is not None
 
-    def test_null_writes_value_fails_same_as_absent_key(self):
+    def test_null_writes_value_fails_same_as_absent_key(self) -> None:
         """`writes: null` (or a bare `writes:` with nothing after it) parses
         to `None`, exactly like an absent key. `spine_read.read_spine`'s AC2
         collapses BOTH spellings to the UNDECLARED sentinel (see
@@ -2969,7 +2969,7 @@ class TestPlanTasksWritesDeclared:
         assert error is not None
         assert error['field'] == 'writes'
 
-    def test_null_writes_passes_on_an_epistemic_premise_gated_row(self):
+    def test_null_writes_passes_on_an_epistemic_premise_gated_row(self) -> None:
         """The null spelling earns the same epistemic-premise carve-out as
         the absent-key spelling -- both are UNDECLARED to `spine_read`."""
         row = _valid_plan_task_row(
@@ -2979,7 +2979,7 @@ class TestPlanTasksWritesDeclared:
         error = _cf_plan_tasks_writes_declared(row, plan_created=self._POST_CUTOFF)
         assert error is None
 
-    def test_hint_does_not_offer_writes_empty_list_as_the_omission_remedy(self):
+    def test_hint_does_not_offer_writes_empty_list_as_the_omission_remedy(self) -> None:
         """Regression pin for the exact prior inversion: the first version of
         this rule told authors to write `writes: []` to fix an omission,
         which is the un-alibi'd-omission bug wearing a colon (see this
@@ -2996,7 +2996,7 @@ class TestPlanTasksWritesDeclared:
         assert not hint.startswith("Write 'writes: []'")
         assert "omit 'writes' only on a row gated" in hint.lower()
 
-    def test_epistemic_premise_carve_out_matches_the_schema_enum_member(self):
+    def test_epistemic_premise_carve_out_matches_the_schema_enum_member(self) -> None:
         """`_cf_plan_tasks_writes_declared` hardcodes the literal
         `'epistemic-premise'`; `wave_map` independently names it
         `_EPISTEMIC_PREMISE`. Neither derives from
@@ -3025,7 +3025,7 @@ class TestPlanTasksCaseAgainstShape:
     `case_against` field at all.
     """
 
-    def test_backlogged_absent_case_against_rejected(self):
+    def test_backlogged_absent_case_against_rejected(self) -> None:
         row = _valid_plan_task_row(
             disposition='backlogged',
             disposition_detail='deferred to backlog',
@@ -3035,7 +3035,7 @@ class TestPlanTasksCaseAgainstShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert any(e['field'] == 'case_against' for e in errors)
 
-    def test_backlogged_whitespace_case_against_rejected(self):
+    def test_backlogged_whitespace_case_against_rejected(self) -> None:
         row = _valid_plan_task_row(
             disposition='backlogged',
             disposition_detail='deferred to backlog',
@@ -3046,7 +3046,7 @@ class TestPlanTasksCaseAgainstShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert any(e['field'] == 'case_against' for e in errors)
 
-    def test_wont_do_absent_case_against_rejected(self):
+    def test_wont_do_absent_case_against_rejected(self) -> None:
         row = _valid_plan_task_row(
             disposition='wont_do',
             disposition_detail='declined — out of scope',
@@ -3055,7 +3055,7 @@ class TestPlanTasksCaseAgainstShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert any(e['field'] == 'case_against' for e in errors)
 
-    def test_wont_do_whitespace_case_against_rejected(self):
+    def test_wont_do_whitespace_case_against_rejected(self) -> None:
         row = _valid_plan_task_row(
             disposition='wont_do',
             disposition_detail='declined — out of scope',
@@ -3065,7 +3065,7 @@ class TestPlanTasksCaseAgainstShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert any(e['field'] == 'case_against' for e in errors)
 
-    def test_wont_do_non_blank_case_against_ok(self):
+    def test_wont_do_non_blank_case_against_ok(self) -> None:
         row = _valid_plan_task_row(
             disposition='wont_do',
             disposition_detail='declined — out of scope',
@@ -3075,7 +3075,7 @@ class TestPlanTasksCaseAgainstShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert not any(e['field'] == 'case_against' for e in errors)
 
-    def test_spun_off_never_requires_case_against(self):
+    def test_spun_off_never_requires_case_against(self) -> None:
         """spun_off is deliberately excluded — nothing leaves the corpus on
         a spinoff, so there is no scope cut to argue against (DoE
         2026-08-05 ruling)."""
@@ -3087,7 +3087,7 @@ class TestPlanTasksCaseAgainstShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert not any(e['field'] == 'case_against' for e in errors)
 
-    def test_coded_never_requires_case_against(self):
+    def test_coded_never_requires_case_against(self) -> None:
         row = _valid_plan_task_row(
             disposition='coded',
             disposition_ref='a1b2c3d',
@@ -3096,7 +3096,7 @@ class TestPlanTasksCaseAgainstShape:
         errors = validate_frontmatter(row, _PLAN_TASKS_SCHEMA)
         assert not any(e['field'] == 'case_against' for e in errors)
 
-    def test_case_against_gate_survives_governed_suppression(self):
+    def test_case_against_gate_survives_governed_suppression(self) -> None:
         """governed=True suppresses the pm_approved leg only — case_against
         argues the scope cut itself, independent of which authorization
         mechanism ratified it, so it must still fire."""
@@ -3122,7 +3122,7 @@ class TestPlanTasksGovernedSchemaStillStripsAllOf0:
     rows that carry no `pm_approved` key at all. This is the only way that
     trap gets caught by a test rather than by a peer."""
 
-    def test_governed_schema_still_lacks_allof0(self):
+    def test_governed_schema_still_lacks_allof0(self) -> None:
         legacy_required_branches = [
             b for b in _PLAN_TASKS_SCHEMA_DICT['allOf']
             if 'pm_approved' in b.get('then', {}).get('required', [])
@@ -3137,7 +3137,7 @@ class TestPlanTasksGovernedSchemaStillStripsAllOf0:
         )
         assert governed_required_branches == []
 
-    def test_governed_closed_row_with_no_pm_approved_key_still_passes(self):
+    def test_governed_closed_row_with_no_pm_approved_key_still_passes(self) -> None:
         """A governed closed row (backlogged, detailed) with NO `pm_approved`
         key at all must still validate against the governed schema — the
         strip trap's actual failure mode."""
@@ -3173,7 +3173,7 @@ class TestPlanTasksSchemaWithoutPmApprovedRequiredIsNonMutating:
     than only indirectly via the write-guard tests.
     """
 
-    def test_source_schema_is_byte_identical_after_derivation(self):
+    def test_source_schema_is_byte_identical_after_derivation(self) -> None:
         import copy
 
         source = copy.deepcopy(_PLAN_TASKS_SCHEMA_DICT)
@@ -3185,7 +3185,7 @@ class TestPlanTasksSchemaWithoutPmApprovedRequiredIsNonMutating:
             "here would silently corrupt every other reader sharing this object"
         )
 
-    def test_returned_variant_is_a_distinct_object_not_an_alias(self):
+    def test_returned_variant_is_a_distinct_object_not_an_alias(self) -> None:
         source = {"allOf": [{"then": {"required": ["pm_approved"]}}]}
         variant = _plan_tasks_schema_without_pm_approved_required(source)
         assert variant is not source
@@ -3194,7 +3194,7 @@ class TestPlanTasksSchemaWithoutPmApprovedRequiredIsNonMutating:
         assert source["allOf"] == [{"then": {"required": ["pm_approved"]}}]
         assert variant["allOf"] == []
 
-    def test_default_arg_derivation_does_not_mutate_module_level_dict(self):
+    def test_default_arg_derivation_does_not_mutate_module_level_dict(self) -> None:
         """`_PLAN_TASKS_SCHEMA_GOVERNED_DICT` is derived once at import time
         by calling this function with no `schema` argument (defaulting to
         `_PLAN_TASKS_SCHEMA_DICT`). Calling it again here (as a write guard
@@ -3236,7 +3236,7 @@ def _plan_source(tasks_yaml: str, *, heading: str = '## Tasks') -> str:
 
 
 class TestPlanTasksOrdering:
-    def test_all_open_ok(self):
+    def test_all_open_ok(self) -> None:
         source = _plan_source(
             "- id: C1\n"
             "  title: one\n"
@@ -3245,7 +3245,7 @@ class TestPlanTasksOrdering:
         )
         assert check_plan_tasks_ordering(source) is None
 
-    def test_all_closed_ok(self):
+    def test_all_closed_ok(self) -> None:
         source = _plan_source(
             "- id: C1\n"
             "  title: one\n"
@@ -3256,7 +3256,7 @@ class TestPlanTasksOrdering:
         )
         assert check_plan_tasks_ordering(source) is None
 
-    def test_open_rows_before_closed_rows_ok(self):
+    def test_open_rows_before_closed_rows_ok(self) -> None:
         """Valid D5 shape: every open row precedes every closed row."""
         source = _plan_source(
             "- id: C1\n"
@@ -3270,7 +3270,7 @@ class TestPlanTasksOrdering:
         )
         assert check_plan_tasks_ordering(source) is None
 
-    def test_open_row_after_coded_row_ok(self):
+    def test_open_row_after_coded_row_ok(self) -> None:
         """Order inside `do` is free (DoE ruling 2026-10-09 retired the 2026-07-29
         open-above-coded sub-order): coding a row must never force it to move."""
         source = _plan_source(
@@ -3282,7 +3282,7 @@ class TestPlanTasksOrdering:
         )
         assert check_plan_tasks_ordering(source) is None
 
-    def test_coded_row_after_open_row_ok(self):
+    def test_coded_row_after_open_row_ok(self) -> None:
         """The correct order within `do`: open before coded."""
         source = _plan_source(
             "- id: C1\n"
@@ -3293,7 +3293,7 @@ class TestPlanTasksOrdering:
         )
         assert check_plan_tasks_ordering(source) is None
 
-    def test_do_row_after_defer_row_rejected(self):
+    def test_do_row_after_defer_row_rejected(self) -> None:
         source = _plan_source(
             "- id: C1\n"
             "  title: one\n"
@@ -3308,7 +3308,7 @@ class TestPlanTasksOrdering:
         assert "'C2'" in error['error']
         assert "'C1'" in error['error']
 
-    def test_defer_row_after_ruled_out_row_rejected(self):
+    def test_defer_row_after_ruled_out_row_rejected(self) -> None:
         """The third group is ordered too — ruled_out sorts below defer."""
         source = _plan_source(
             "- id: C1\n"
@@ -3322,7 +3322,7 @@ class TestPlanTasksOrdering:
         assert error is not None
         assert "'C2'" in error['error']
 
-    def test_three_groups_in_order_ok(self):
+    def test_three_groups_in_order_ok(self) -> None:
         source = _plan_source(
             "- id: C1\n"
             "  title: one\n"
@@ -3341,7 +3341,7 @@ class TestPlanTasksOrdering:
         )
         assert check_plan_tasks_ordering(source) is None
 
-    def test_four_way_grouping_order_accepted(self):
+    def test_four_way_grouping_order_accepted(self) -> None:
         """C3 (2026-08-05): `_PLAN_TASKS_GROUPING_ORDER` is the four-way
         ('do', 'spun_off', 'defer', 'ruled_out') -- spun_off split out of
         'defer' into its own grouping, sorting between live 'do' work and
@@ -3367,7 +3367,7 @@ class TestPlanTasksOrdering:
         )
         assert check_plan_tasks_ordering(source) is None
 
-    def test_backlogged_before_spun_off_now_rejected(self):
+    def test_backlogged_before_spun_off_now_rejected(self) -> None:
         """Old (pre-C3) three-way order treated spun_off and backlogged as
         interchangeable members of the same 'defer' grouping -- their
         relative order was free. Post-C3, spun_off has its own grouping
@@ -3385,7 +3385,7 @@ class TestPlanTasksOrdering:
         assert error is not None
         assert "'C2'" in error['error']
 
-    def test_spun_off_before_backlogged_ok(self):
+    def test_spun_off_before_backlogged_ok(self) -> None:
         """The correct order under the C3 four-way split: spun_off precedes
         backlogged (both differ from the pre-C3 same-grouping tolerance
         exercised in the sibling rejected case above)."""
@@ -3399,7 +3399,7 @@ class TestPlanTasksOrdering:
         )
         assert check_plan_tasks_ordering(source) is None
 
-    def test_open_row_interleaved_among_closed_rows_rejected(self):
+    def test_open_row_interleaved_among_closed_rows_rejected(self) -> None:
         source = _plan_source(
             "- id: C1\n"
             "  title: one\n"
@@ -3414,7 +3414,7 @@ class TestPlanTasksOrdering:
         assert error is not None
         assert "'C2'" in error['error']
 
-    def test_default_open_when_disposition_absent(self):
+    def test_default_open_when_disposition_absent(self) -> None:
         """A row with no disposition key defaults to 'open' (D1) for
         ordering purposes too, not just schema validation."""
         source = _plan_source(
@@ -3428,16 +3428,16 @@ class TestPlanTasksOrdering:
         assert error is not None
         assert "'C2'" in error['error']
 
-    def test_empty_spine_ok(self):
+    def test_empty_spine_ok(self) -> None:
         source = _plan_source("[]")
         assert check_plan_tasks_ordering(source) is None
 
-    def test_absent_spine_returns_none(self):
+    def test_absent_spine_returns_none(self) -> None:
         """No ```yaml plan-tasks``` fence at all — nothing to check."""
         source = "# A plan\n\nNo tasks here.\n"
         assert check_plan_tasks_ordering(source) is None
 
-    def test_malformed_spine_returns_none(self):
+    def test_malformed_spine_returns_none(self) -> None:
         """Two fences with the same info-string anywhere in the doc ->
         body_blocks MALFORMED — this lint defers to that surface rather than
         raising its own error."""
@@ -3450,11 +3450,11 @@ class TestPlanTasksOrdering:
         )
         assert check_plan_tasks_ordering(source) is None
 
-    def test_unparseable_yaml_returns_none(self):
+    def test_unparseable_yaml_returns_none(self) -> None:
         source = _plan_source("not: valid: yaml: [unterminated")
         assert check_plan_tasks_ordering(source) is None
 
-    def test_non_list_body_returns_none(self):
+    def test_non_list_body_returns_none(self) -> None:
         source = _plan_source("just_a_string")
         assert check_plan_tasks_ordering(source) is None
 
@@ -3464,7 +3464,7 @@ class TestPlanTasksOrdering:
 # ---------------------------------------------------------------------------
 
 class TestHandoffArchivedSchema:
-    def test_archived_no_cross_field_rules(self):
+    def test_archived_no_cross_field_rules(self) -> None:
         """handoff-archived schema applies no cross-field rules (by design)."""
         # This would fail cross-field rules if applied against the handoff schema
         fm = _valid_archived_handoff(
@@ -3474,20 +3474,20 @@ class TestHandoffArchivedSchema:
         # No cross-field error expected for awaiting_gate without gate_dependency
         assert not any(e['field'] == 'gate_dependency' for e in errors)
 
-    def test_archived_required_fields_enforced(self):
+    def test_archived_required_fields_enforced(self) -> None:
         """Required fields are still enforced on archived handoffs."""
         fm = _valid_archived_handoff()
         del fm['title']
         errors = validate_frontmatter(fm, _HANDOFF_ARCHIVED_SCHEMA)
         assert any(e['field'] == 'title' for e in errors)
 
-    def test_archived_enum_status_enforced(self):
+    def test_archived_enum_status_enforced(self) -> None:
         """Status enum is still enforced on archived handoffs."""
         fm = _valid_archived_handoff(status='bad_status')
         errors = validate_frontmatter(fm, _HANDOFF_ARCHIVED_SCHEMA)
         assert any(e['field'] == 'status' for e in errors)
 
-    def test_archived_allows_superseded_status(self):
+    def test_archived_allows_superseded_status(self) -> None:
         """handoff-archived allows 'superseded' status (legacy tolerance)."""
         fm = _valid_archived_handoff(status='superseded')
         errors = validate_frontmatter(fm, _HANDOFF_ARCHIVED_SCHEMA)
@@ -3505,14 +3505,14 @@ class TestArchivePathPrecedence:
     is itself a handoff-family kind — see match_schema's kind-gate
     negative-spec."""
 
-    def test_archived_path_with_handoff_kind_resolves_to_handoff_archived(self):
+    def test_archived_path_with_handoff_kind_resolves_to_handoff_archived(self) -> None:
         schemas = load_schemas(_CLAUDE_KLABAUTER_SCHEMAS_DIR)
         fm = {'kind': 'session-handoff'}
         resolved = match_schema('archive/handoffs/2026-07-05-foo.md', fm, schemas)
         assert resolved is not None
         assert resolved['schemaName'] == 'handoff-archived'
 
-    def test_live_path_with_handoff_kind_resolves_to_live_handoff_schema(self):
+    def test_live_path_with_handoff_kind_resolves_to_live_handoff_schema(self) -> None:
         """Same kind, live (non-archive) path — resolves to the CURRENT
         vocabulary schema, not handoff-archived. Pins the archive-path
         check as path-scoped, not a blanket kind-first inversion."""
@@ -3522,7 +3522,7 @@ class TestArchivePathPrecedence:
         assert resolved is not None
         assert resolved['schemaName'] == 'handoff'
 
-    def test_archived_path_with_non_handoff_kind_does_not_force_handoff_archived(self):
+    def test_archived_path_with_non_handoff_kind_does_not_force_handoff_archived(self) -> None:
         """Finding 2: a misfiled non-handoff record under archive/handoffs/
         must NOT be force-validated against handoff-archived — its own
         declared kind wins. Uses a synthetic schemas dict (rather than the
@@ -3542,7 +3542,7 @@ class TestArchivePathPrecedence:
         assert resolved is not None
         assert resolved['schemaName'] == 'other-schema'
 
-    def test_archived_path_with_no_kind_still_forces_handoff_archived(self):
+    def test_archived_path_with_no_kind_still_forces_handoff_archived(self) -> None:
         """No declared kind at all — path-only fallback still routes to
         handoff-archived (kind-gate only excludes a kind that resolves
         elsewhere, it does not require a kind to be present)."""
@@ -3551,7 +3551,7 @@ class TestArchivePathPrecedence:
         assert resolved is not None
         assert resolved['schemaName'] == 'handoff-archived'
 
-    def test_retired_status_passes_archived_fails_live(self):
+    def test_retired_status_passes_archived_fails_live(self) -> None:
         """Finding 3(c): retired vocabulary tolerated by handoff-archived
         must still fail the live handoff schema, pinning the intended
         precedence behavior end-to-end through match_schema.
@@ -3585,12 +3585,12 @@ class TestUnregisteredKindSkipsGlobFallback:
 
     _VERDICT_PATH = 'docs/research/spikes/x/verdict.md'
 
-    def test_unregistered_kind_on_verdict_path_resolves_to_none(self):
+    def test_unregistered_kind_on_verdict_path_resolves_to_none(self) -> None:
         schemas = load_schemas(_CLAUDE_KLABAUTER_SCHEMAS_DIR)
         fm = {'title': 't', 'kind': 'spike-inconclusive'}
         assert match_schema(self._VERDICT_PATH, fm, schemas) is None
 
-    def test_no_kind_on_verdict_path_still_resolves_and_fails_verdict_fields(self):
+    def test_no_kind_on_verdict_path_still_resolves_and_fails_verdict_fields(self) -> None:
         schemas = load_schemas(_CLAUDE_KLABAUTER_SCHEMAS_DIR)
         fm = {'title': 't'}
         resolved = match_schema(self._VERDICT_PATH, fm, schemas)
@@ -3599,7 +3599,7 @@ class TestUnregisteredKindSkipsGlobFallback:
         missing = {e['field'] for e in (result.get('errors') or [])}
         assert {'verdict', 'mechanism'} <= missing
 
-    def test_registered_kind_still_resolves_by_kind(self):
+    def test_registered_kind_still_resolves_by_kind(self) -> None:
         schemas = load_schemas(_CLAUDE_KLABAUTER_SCHEMAS_DIR)
         resolved = match_schema(self._VERDICT_PATH, {'kind': 'session-handoff'}, schemas)
         assert resolved is not None
@@ -3617,12 +3617,12 @@ class TestUnregisteredKindSkipsGlobFallback:
             'verdict': {'x': 'verdict'},
         }
 
-    def test_memo_with_unregistered_kind_still_routes_by_glob(self):
+    def test_memo_with_unregistered_kind_still_routes_by_glob(self) -> None:
         resolved = match_schema('cross-repo/doe/m.md', {'kind': 'fyi'}, self._delivery_shape_schemas())
         assert resolved is not None
         assert resolved['schemaName'] == 'cross-repo-memo'
 
-    def test_non_memo_glob_still_skipped_for_unregistered_kind(self):
+    def test_non_memo_glob_still_skipped_for_unregistered_kind(self) -> None:
         schemas = self._delivery_shape_schemas()
         assert match_schema(self._VERDICT_PATH, {'kind': 'fyi'}, schemas) is None
 
@@ -3634,24 +3634,24 @@ class TestPlansIndexRoutingExclusion:
     glob-fallback — when they carry no declared `kind:`. See match_schema's
     second-amendment docstring."""
 
-    def test_index_md_no_frontmatter_resolves_to_none(self):
+    def test_index_md_no_frontmatter_resolves_to_none(self) -> None:
         schemas = load_schemas(_CLAUDE_KLABAUTER_SCHEMAS_DIR)
         resolved = match_schema('docs/plans/INDEX.md', None, schemas)
         assert resolved is None
 
-    def test_readme_md_no_frontmatter_resolves_to_none(self):
+    def test_readme_md_no_frontmatter_resolves_to_none(self) -> None:
         schemas = load_schemas(_CLAUDE_KLABAUTER_SCHEMAS_DIR)
         resolved = match_schema('docs/plans/README.md', None, schemas)
         assert resolved is None
 
-    def test_real_plan_still_resolves_to_plan_schema(self):
+    def test_real_plan_still_resolves_to_plan_schema(self) -> None:
         """Regression guard: an ordinary plan file is unaffected."""
         schemas = load_schemas(_CLAUDE_KLABAUTER_SCHEMAS_DIR)
         resolved = match_schema('docs/plans/2026-01-01-a-real-plan.md', None, schemas)
         assert resolved is not None
         assert resolved['schemaName'] == 'plan'
 
-    def test_plan_adjacent_evidence_yaml_resolves_to_none(self):
+    def test_plan_adjacent_evidence_yaml_resolves_to_none(self) -> None:
         schemas = load_schemas(_CLAUDE_KLABAUTER_SCHEMAS_DIR)
         for path in (
             'docs/plans/2026-11/2026-11-05-x-8a0ad1.evidence.yaml',
@@ -3660,13 +3660,13 @@ class TestPlansIndexRoutingExclusion:
             assert match_schema(path, None, schemas) is None
             assert match_schema(path, {'title': 'x'}, schemas) is None
 
-    def test_plan_md_beside_evidence_yaml_still_resolves_to_plan(self):
+    def test_plan_md_beside_evidence_yaml_still_resolves_to_plan(self) -> None:
         schemas = load_schemas(_CLAUDE_KLABAUTER_SCHEMAS_DIR)
         resolved = match_schema('docs/plans/2026-11/2026-11-05-x-8a0ad1.md', None, schemas)
         assert resolved is not None
         assert resolved['schemaName'] == 'plan'
 
-    def test_evidence_yaml_helper_is_the_lint_tree_exclusion(self):
+    def test_evidence_yaml_helper_is_the_lint_tree_exclusion(self) -> None:
         from coordinator_core.frontmatter.schema_validate import _is_plan_dir_index_routing_excluded
         assert _is_plan_dir_index_routing_excluded('docs/plans/2026-11/a.evidence.yaml', None)
         assert not _is_plan_dir_index_routing_excluded('docs/plans/2026-11/a.md', None)
@@ -3674,7 +3674,7 @@ class TestPlansIndexRoutingExclusion:
             'docs/plans/2026-11/a.evidence.yaml', {'kind': 'plan'}
         )
 
-    def test_problems_index_md_no_frontmatter_resolves_to_none(self):
+    def test_problems_index_md_no_frontmatter_resolves_to_none(self) -> None:
         """`_RECORD_DIR_INDEX_PREFIXES` also covers `docs/problems/` — an
         INDEX.md there with no declared `kind:` is routing-excluded the same
         way as docs/plans/ and docs/decisions/."""
@@ -3682,7 +3682,7 @@ class TestPlansIndexRoutingExclusion:
         resolved = match_schema('docs/problems/INDEX.md', None, schemas)
         assert resolved is None
 
-    def test_index_md_with_declared_kind_still_routes_via_kind(self):
+    def test_index_md_with_declared_kind_still_routes_via_kind(self) -> None:
         """Kind-gate: a docs/plans/INDEX.md that DOES declare a `kind:`
         resolving via `_byKind` is not routing-excluded — it still routes
         to that kind's schema, mirroring the archive-path kind-gate."""
@@ -3702,7 +3702,7 @@ class TestTreeWalkArchiveGlobCollection:
     nested archive/handoffs/<month>/*.md files that the vendored
     single-star applies_to glob cannot."""
 
-    def test_nested_month_dir_reached_by_override_glob(self, tmp_path, capsys):
+    def test_nested_month_dir_reached_by_override_glob(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         from coordinator_core.frontmatter import lint_tree
 
         nested = tmp_path / 'archive' / 'handoffs' / '2026-07'
@@ -3713,7 +3713,7 @@ class TestTreeWalkArchiveGlobCollection:
         out = json.loads(capsys.readouterr().out)
         assert 'archive/handoffs/2026-07/foo.md' in {v['file'] for v in out['violations']}
 
-    def test_vendored_glob_now_matches_override(self, tmp_path):
+    def test_vendored_glob_now_matches_override(self, tmp_path: Path) -> None:
         """Schema 2.1.0 widened the vendored (DoE-owned SSOT) applies_to
         glob for handoff-archived from single-star to
         'archive/handoffs/**/*.md', closing the nested-month-dir gap
@@ -3729,7 +3729,7 @@ class TestTreeWalkArchiveGlobCollection:
         vendored = json.loads(_HANDOFF_ARCHIVED_SCHEMA.read_text(encoding='utf-8'))
         assert vendored['applies_to'] == _GLOB_OVERRIDES['handoff-archived']
 
-    def test_override_scoped_to_handoff_archived_only(self):
+    def test_override_scoped_to_handoff_archived_only(self) -> None:
         """Finding 1: the override dict must be consulted by literal key,
         never by iterating every loaded schema name — a future schema
         literally named 'cross-repo-memo' must not silently inherit the
@@ -3746,26 +3746,26 @@ class TestTreeWalkArchiveGlobCollection:
 # ---------------------------------------------------------------------------
 
 class TestSchemaVersionGate:
-    def test_no_schema_version_in_record_is_ok(self):
+    def test_no_schema_version_in_record_is_ok(self) -> None:
         """Records without schema_version field are not gated (opt-in)."""
         fm = _valid_handoff()
         assert 'schema_version' not in fm
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == []
 
-    def test_compatible_schema_version_ok(self):
+    def test_compatible_schema_version_ok(self) -> None:
         """Record schema_version major == schema major → ok."""
         fm = _valid_handoff(schema_version='1.0.0')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == []
 
-    def test_compatible_minor_bump_ok(self):
+    def test_compatible_minor_bump_ok(self) -> None:
         """Record schema_version minor > schema minor is OK (minor is back-compat)."""
         fm = _valid_handoff(schema_version='1.9.0')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == []
 
-    def test_newer_major_raises_schema_version_error(self):
+    def test_newer_major_raises_schema_version_error(self) -> None:
         """Record schema_version major must be one PAST the live schema major, so the
         gate actually fires — derived from the live schema's `x-schema-version` here
         rather than a hardcoded literal.
@@ -3790,7 +3790,7 @@ class TestSchemaVersionGate:
         with pytest.raises(SchemaVersionError, match='major'):
             validate_frontmatter(fm, _HANDOFF_SCHEMA)
 
-    def test_schema_without_version_and_record_with_version_raises(self, tmp_path):
+    def test_schema_without_version_and_record_with_version_raises(self, tmp_path: Path) -> None:
         """If schema lacks x-schema-version but record declares schema_version → fail loud."""
         schema_no_version = {
             '$schema': 'https://json-schema.org/draft/2020-12/schema',
@@ -3811,7 +3811,7 @@ class TestSchemaVersionGate:
 # ---------------------------------------------------------------------------
 
 class TestDriftCheck:
-    def test_handoff_schema_matches_doe_head_after_dr084_revendor(self):
+    def test_handoff_schema_matches_doe_head_after_dr084_revendor(self) -> None:
         """Vendored handoff.schema.json is byte-parity with DoE HEAD again, and both
         sides carry last_gate_recheck + the if/then construct as upstream-owned DoE
         constructs.
@@ -3916,13 +3916,13 @@ class TestDriftCheck:
             're-verify against current DoE HEAD, this test\'s premise may be stale'
         )
 
-    def test_handoff_archived_schema_matches_doe_head(self):
+    def test_handoff_archived_schema_matches_doe_head(self) -> None:
         """Vendored handoff-archived.schema.json must match DoE HEAD."""
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         check_schema_drift(_HANDOFF_ARCHIVED_SCHEMA, _DOE_REPO)  # should not raise
 
-    def test_drift_detected_on_modified_schema(self, tmp_path):
+    def test_drift_detected_on_modified_schema(self, tmp_path: Path) -> None:
         """SchemaDriftError raised when vendored schema content differs from DoE HEAD."""
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
@@ -3934,14 +3934,14 @@ class TestDriftCheck:
         with pytest.raises(SchemaDriftError, match='diverges'):
             check_schema_drift(modified_path, _DOE_REPO)
 
-    def test_drift_check_invalid_doe_repo_raises(self, tmp_path):
+    def test_drift_check_invalid_doe_repo_raises(self, tmp_path: Path) -> None:
         """SchemaDriftError raised when doe_repo_path is not a valid git repo."""
         not_a_repo = tmp_path / 'not_a_repo'
         not_a_repo.mkdir()
         with pytest.raises(SchemaDriftError):
             check_schema_drift(_HANDOFF_SCHEMA, not_a_repo)
 
-    def test_plan_tasks_schema_matches_doe_head(self):
+    def test_plan_tasks_schema_matches_doe_head(self) -> None:
         """Vendored plan-tasks.schema.json is byte-parity with DoE HEAD — no
         divergence, ratified or otherwise.
 
@@ -3996,7 +3996,7 @@ class TestDriftCheck:
             'DoE 1.5.0 closed.'
         )
 
-    def test_plan_schema_matches_doe_head_and_homes_grouping_approvals(self):
+    def test_plan_schema_matches_doe_head_and_homes_grouping_approvals(self) -> None:
         """Vendored plan.schema.json is byte-parity with DoE HEAD, and is the home
         of the grouping-approval contract.
 
@@ -4030,7 +4030,7 @@ class TestDriftCheck:
             'see the grouping_approvals assertion above.'
         )
 
-    def test_plan_tasks_drift_detected_on_modified_schema(self, tmp_path):
+    def test_plan_tasks_drift_detected_on_modified_schema(self, tmp_path: Path) -> None:
         """SchemaDriftError raised when vendored plan-tasks schema content differs from DoE HEAD."""
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
@@ -4658,16 +4658,16 @@ def _signoff_errors(signoff: dict) -> list:
 @pytest.mark.parametrize('current,prior', [
     (_SO_GEM, _SO_GEM), (_SO_GEM, _SO_APM), (_SO_APM, _SO_APM), (_SO_APM, _SO_PM),
 ])
-def test_signoff_history_admitted_on_delegated_records(current, prior):
+def test_signoff_history_admitted_on_delegated_records(current, prior) -> None:
     assert _signoff_errors({**current, 'history': [prior]}) == []
 
 
-def test_signoff_history_admits_pm_record_with_and_without_ruling_ref():
+def test_signoff_history_admits_pm_record_with_and_without_ruling_ref() -> None:
     bare = {k: v for k, v in _SO_PM.items() if k != 'ruling_ref'}
     assert _signoff_errors({**_SO_GEM, 'history': [_SO_PM, bare]}) == []
 
 
-def test_signoff_history_still_refuses_what_it_refused():
+def test_signoff_history_still_refuses_what_it_refused() -> None:
     # validate_frontmatter does not enforce `properties: {k: false}` inside allOf/then,
     # so the forbidden-key refusals are pinned through jsonschema on $defs.signoff.
     import jsonschema
@@ -5374,7 +5374,7 @@ class TestPinnedQueueSchemaDrift:
     drift must not be maskable by the other seven passing.
     """
 
-    def test_bug_backlog_matches_pinned_sha(self):
+    def test_bug_backlog_matches_pinned_sha(self) -> None:
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         _skip_if_probe_unavailable(
@@ -5384,7 +5384,7 @@ class TestPinnedQueueSchemaDrift:
             ref=_QUEUE_SCHEMA_PINS['bug-backlog'],
         )
 
-    def test_cross_repo_commitment_matches_pinned_sha(self):
+    def test_cross_repo_commitment_matches_pinned_sha(self) -> None:
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         _skip_if_probe_unavailable(
@@ -5394,7 +5394,7 @@ class TestPinnedQueueSchemaDrift:
             ref=_QUEUE_SCHEMA_PINS['cross-repo-commitment'],
         )
 
-    def test_debt_backlog_matches_pinned_sha(self):
+    def test_debt_backlog_matches_pinned_sha(self) -> None:
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         _skip_if_probe_unavailable(
@@ -5404,7 +5404,7 @@ class TestPinnedQueueSchemaDrift:
             ref=_QUEUE_SCHEMA_PINS['debt-backlog'],
         )
 
-    def test_improvement_queue_matches_pinned_sha(self):
+    def test_improvement_queue_matches_pinned_sha(self) -> None:
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         _skip_if_probe_unavailable(
@@ -5414,7 +5414,7 @@ class TestPinnedQueueSchemaDrift:
             ref=_QUEUE_SCHEMA_PINS['improvement-queue'],
         )
 
-    def test_lesson_entry_matches_pinned_sha(self):
+    def test_lesson_entry_matches_pinned_sha(self) -> None:
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         _skip_if_probe_unavailable(
@@ -5424,7 +5424,7 @@ class TestPinnedQueueSchemaDrift:
             ref=_QUEUE_SCHEMA_PINS['lesson-entry'],
         )
 
-    def test_lessons_outbox_matches_pinned_sha(self):
+    def test_lessons_outbox_matches_pinned_sha(self) -> None:
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         _skip_if_probe_unavailable(
@@ -5434,7 +5434,7 @@ class TestPinnedQueueSchemaDrift:
             ref=_QUEUE_SCHEMA_PINS['lessons-outbox'],
         )
 
-    def test_review_findings_matches_pinned_sha(self):
+    def test_review_findings_matches_pinned_sha(self) -> None:
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         _skip_if_probe_unavailable(
@@ -5444,7 +5444,7 @@ class TestPinnedQueueSchemaDrift:
             ref=_QUEUE_SCHEMA_PINS['review-findings'],
         )
 
-    def test_review_trail_matches_pinned_sha(self):
+    def test_review_trail_matches_pinned_sha(self) -> None:
         # Was an ahead-pin for a few hours on 2026-08-10 while claude-klabauter led DoE
         # on the scope_kind enum close. DoE vendored it themselves at their
         # 6baac04a3 ("review-trail: adopt the scope_kind enum from the
@@ -5463,7 +5463,7 @@ class TestPinnedQueueSchemaDrift:
             ref=_QUEUE_SCHEMA_PINS['review-trail'],
         )
 
-    def test_priority_ledger_matches_pinned_sha(self):
+    def test_priority_ledger_matches_pinned_sha(self) -> None:
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         _skip_if_probe_unavailable(
@@ -5473,7 +5473,7 @@ class TestPinnedQueueSchemaDrift:
             ref=_QUEUE_SCHEMA_PINS['priority-ledger'],
         )
 
-    def test_priority_intent_matches_pinned_sha(self):
+    def test_priority_intent_matches_pinned_sha(self) -> None:
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         _skip_if_probe_unavailable(
@@ -5495,35 +5495,35 @@ class TestHeadTrackedQueueSchemaDrift:
     --list` already declares for these schemas -- there is no pin to name.
     """
 
-    def test_initiative_matches_doe_head(self):
+    def test_initiative_matches_doe_head(self) -> None:
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         _skip_if_probe_unavailable(
             check_schema_drift, _SCHEMAS_DIR / 'initiative.schema.json', _DOE_REPO
         )
 
-    def test_orientation_cache_matches_doe_head(self):
+    def test_orientation_cache_matches_doe_head(self) -> None:
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         _skip_if_probe_unavailable(
             check_schema_drift, _SCHEMAS_DIR / 'orientation-cache.schema.json', _DOE_REPO
         )
 
-    def test_roadmap_matches_doe_head(self):
+    def test_roadmap_matches_doe_head(self) -> None:
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         _skip_if_probe_unavailable(
             check_schema_drift, _SCHEMAS_DIR / 'roadmap.schema.json', _DOE_REPO
         )
 
-    def test_run_report_matches_doe_head(self):
+    def test_run_report_matches_doe_head(self) -> None:
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         _skip_if_probe_unavailable(
             check_schema_drift, _SCHEMAS_DIR / 'run-report.schema.json', _DOE_REPO
         )
 
-    def test_sizing_object_matches_doe_head(self):
+    def test_sizing_object_matches_doe_head(self) -> None:
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         _skip_if_probe_unavailable(
@@ -5532,14 +5532,14 @@ class TestHeadTrackedQueueSchemaDrift:
             _SCHEMAS_DIR / 'sizing-object.schema.json',
         )
 
-    def test_workstream_event_matches_doe_head(self):
+    def test_workstream_event_matches_doe_head(self) -> None:
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         _skip_if_probe_unavailable(
             check_schema_drift, _SCHEMAS_DIR / 'workstream-event.schema.json', _DOE_REPO
         )
 
-    def test_workstream_matches_doe_head(self):
+    def test_workstream_matches_doe_head(self) -> None:
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         _skip_if_probe_unavailable(
@@ -5557,7 +5557,7 @@ class TestAheadPinRegistryRouting:
 
     """
 
-    def test_every_ahead_pin_entry_is_routed_and_passes(self):
+    def test_every_ahead_pin_entry_is_routed_and_passes(self) -> None:
         if _DOE_REPO is None or not _DOE_REPO.exists():
             pytest.skip(f'DoE repo not found at {_DOE_REPO}')
         names = [*_QUEUE_SCHEMA_AHEAD_PINS, *_RESERVED_CLAUDE_KLABAUTER_FIRST_PINS]
@@ -5915,7 +5915,7 @@ class TestRoundTripValidation:
         fm_text = '\n'.join(fm_lines) + '\n'
         return f'---\n{fm_text}---\n# Body\n'
 
-    def test_valid_handoff_after_claim_transition(self):
+    def test_valid_handoff_after_claim_transition(self) -> None:
         """Simulate the claim transition: status→claimed, insert claimed_at + claimed_by."""
         doc = self._make_handoff_doc(
             title='Test handoff',
@@ -5946,7 +5946,7 @@ class TestRoundTripValidation:
         errors = validate_frontmatter(fm_dict, _HANDOFF_SCHEMA)
         assert errors == [], f'Unexpected errors after claim transition: {errors}'
 
-    def test_over_140_char_summary_fails_post_mutation(self):
+    def test_over_140_char_summary_fails_post_mutation(self) -> None:
         """The canonical post-mutation gate: summary exceeds 140 chars → rejected."""
         long_summary = 'A' * 141  # 141 chars — just over the limit
         doc = self._make_handoff_doc(
@@ -5965,7 +5965,7 @@ class TestRoundTripValidation:
         errors = validate_frontmatter(fm_dict, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'summary' and '141' in e['error'] for e in errors)
 
-    def test_exactly_140_char_summary_passes_post_mutation(self):
+    def test_exactly_140_char_summary_passes_post_mutation(self) -> None:
         """Summary of exactly 140 chars is the boundary — must pass."""
         exact_summary = 'B' * 140
         doc = self._make_handoff_doc(
@@ -5984,7 +5984,7 @@ class TestRoundTripValidation:
         errors = validate_frontmatter(fm_dict, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'summary' for e in errors)
 
-    def test_insert_category_then_validate(self):
+    def test_insert_category_then_validate(self) -> None:
         """Simulate the normalize flow: insert category field, then validate."""
         doc = self._make_handoff_doc(
             title='Test handoff',
@@ -6010,7 +6010,7 @@ class TestRoundTripValidation:
         errors = validate_frontmatter(fm_dict, _HANDOFF_SCHEMA)
         assert errors == [], f'Unexpected errors after normalize insert: {errors}'
 
-    def test_missing_category_after_mutation_caught(self):
+    def test_missing_category_after_mutation_caught(self) -> None:
         """If category is never inserted (missing on post-cutoff doc), validator catches it."""
         doc = self._make_handoff_doc(
             title='Test',
@@ -6027,7 +6027,7 @@ class TestRoundTripValidation:
         errors = validate_frontmatter(fm_dict, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'category' for e in errors)
 
-    def test_archived_handoff_round_trip_no_cross_field_errors(self):
+    def test_archived_handoff_round_trip_no_cross_field_errors(self) -> None:
         """Archived handoff with deployment_state=awaiting_gate: no cross-field errors."""
         doc = self._make_handoff_doc(
             title='Archived',
@@ -6063,58 +6063,58 @@ def _valid_memo(**overrides) -> dict:
 
 
 class TestMemoValidatorHappyPath:
-    def test_minimal_open_memo_valid(self):
+    def test_minimal_open_memo_valid(self) -> None:
         errors = validate_memo_cross_fields(_valid_memo())
         assert errors == []
 
-    def test_in_progress_with_picked_up_by_valid(self):
+    def test_in_progress_with_picked_up_by_valid(self) -> None:
         fm = _valid_memo(status='in_progress', picked_up_by='sess-abc123')
         errors = validate_memo_cross_fields(fm)
         assert errors == []
 
-    def test_actioned_decision_accepted_with_path_realized_by_valid(self):
+    def test_actioned_decision_accepted_with_path_realized_by_valid(self) -> None:
         fm = _valid_memo(status='actioned', decision='accepted', realized_by='docs/plans/2026-06-01-foo.md')
         errors = validate_memo_cross_fields(fm)
         assert errors == []
 
-    def test_actioned_decision_accepted_with_inline_realized_by_valid(self):
+    def test_actioned_decision_accepted_with_inline_realized_by_valid(self) -> None:
         fm = _valid_memo(status='actioned', decision='accepted', realized_by='inline')
         errors = validate_memo_cross_fields(fm)
         assert errors == []
 
-    def test_actioned_decision_accepted_with_sha_realized_by_valid(self):
+    def test_actioned_decision_accepted_with_sha_realized_by_valid(self) -> None:
         fm = _valid_memo(status='actioned', decision='accepted', realized_by='abc1234')
         errors = validate_memo_cross_fields(fm)
         assert errors == []
 
-    def test_actioned_decision_declined_no_realized_by_valid(self):
+    def test_actioned_decision_declined_no_realized_by_valid(self) -> None:
         """decision=declined is exempt from realized_by requirement."""
         fm = _valid_memo(status='actioned', decision='declined')
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'realized_by' for e in errors)
 
-    def test_kind_absent_valid(self):
+    def test_kind_absent_valid(self) -> None:
         fm = _valid_memo()
         assert 'kind' not in fm
         errors = validate_memo_cross_fields(fm)
         assert errors == []
 
-    def test_kind_null_valid(self):
+    def test_kind_null_valid(self) -> None:
         fm = _valid_memo(kind=None)
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'kind' for e in errors)
 
-    def test_kind_fyi_valid(self):
+    def test_kind_fyi_valid(self) -> None:
         fm = _valid_memo(kind='fyi')
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'kind' for e in errors)
 
-    def test_summary_at_cap_valid(self):
+    def test_summary_at_cap_valid(self) -> None:
         fm = _valid_memo(summary='x' * 120)
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'summary' for e in errors)
 
-    def test_central_only_with_to_valid(self):
+    def test_central_only_with_to_valid(self) -> None:
         fm = _valid_memo(delivery_mode='central-only', to='doe-em')
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'to' for e in errors)
@@ -6123,7 +6123,7 @@ class TestMemoValidatorHappyPath:
 class TestMemoGrandfatherSkip:
     """Pre-cutoff memos (created < 2026-05-22) skip ALL cross-field checks."""
 
-    def test_pre_cutoff_skip_returns_no_errors(self):
+    def test_pre_cutoff_skip_returns_no_errors(self) -> None:
         """A memo with created < 2026-05-22 passes validation regardless of fields."""
         fm = {
             'created': '2026-05-01',
@@ -6133,7 +6133,7 @@ class TestMemoGrandfatherSkip:
         errors = validate_memo_cross_fields(fm)
         assert errors == []
 
-    def test_pre_cutoff_exact_boundary_skips(self):
+    def test_pre_cutoff_exact_boundary_skips(self) -> None:
         """created = 2026-05-21 (one day before cutoff) is still grandfathered."""
         fm = {
             'created': '2026-05-21',
@@ -6144,7 +6144,7 @@ class TestMemoGrandfatherSkip:
         errors = validate_memo_cross_fields(fm)
         assert errors == []
 
-    def test_post_cutoff_exact_boundary_does_not_skip(self):
+    def test_post_cutoff_exact_boundary_does_not_skip(self) -> None:
         """created = 2026-05-22 is NOT grandfathered — rules apply."""
         fm = {
             'created': '2026-05-22',
@@ -6154,7 +6154,7 @@ class TestMemoGrandfatherSkip:
         errors = validate_memo_cross_fields(fm)
         assert any(e['field'] == 'picked_up_by' for e in errors)
 
-    def test_no_created_field_does_not_skip(self):
+    def test_no_created_field_does_not_skip(self) -> None:
         """Absent created field: grandfather rule returns None (no skip), rules apply."""
         fm = {
             'status': 'in_progress',
@@ -6170,7 +6170,7 @@ class TestMemoBareDateCoercion:
     The validator must coerce before comparing strings — a date < str raises TypeError.
     """
 
-    def test_bare_date_created_coerced_post_cutoff(self):
+    def test_bare_date_created_coerced_post_cutoff(self) -> None:
         """datetime.date created value is coerced to ISO string before comparison."""
         fm = {
             'created': datetime.date(2026, 6, 1),  # PyYAML would yield this from bare date
@@ -6181,7 +6181,7 @@ class TestMemoBareDateCoercion:
         errors = validate_memo_cross_fields(fm)
         assert any(e['field'] == 'picked_up_by' for e in errors)
 
-    def test_bare_date_created_coerced_pre_cutoff_skips(self):
+    def test_bare_date_created_coerced_pre_cutoff_skips(self) -> None:
         """datetime.date pre-cutoff value is coerced then grandfather fires → skip."""
         fm = {
             'created': datetime.date(2026, 5, 1),  # pre-cutoff as datetime.date
@@ -6190,7 +6190,7 @@ class TestMemoBareDateCoercion:
         errors = validate_memo_cross_fields(fm)
         assert errors == []
 
-    def test_datetime_created_coerced(self):
+    def test_datetime_created_coerced(self) -> None:
         """datetime.datetime created value is coerced to ISO string (handles TZ-naive)."""
         fm = {
             'created': datetime.datetime(2026, 6, 1, 12, 0, 0),
@@ -6201,57 +6201,57 @@ class TestMemoBareDateCoercion:
 
 
 class TestMemoRuleInProgressNeedsPickedUpBy:
-    def test_in_progress_without_picked_up_by_fails(self):
+    def test_in_progress_without_picked_up_by_fails(self) -> None:
         fm = _valid_memo(status='in_progress')
         errors = validate_memo_cross_fields(fm)
         assert any(e['field'] == 'picked_up_by' and 'in_progress' in e['error'] for e in errors)
 
-    def test_in_progress_with_empty_picked_up_by_fails(self):
+    def test_in_progress_with_empty_picked_up_by_fails(self) -> None:
         fm = _valid_memo(status='in_progress', picked_up_by='   ')
         errors = validate_memo_cross_fields(fm)
         assert any(e['field'] == 'picked_up_by' for e in errors)
 
-    def test_open_status_no_picked_up_by_ok(self):
+    def test_open_status_no_picked_up_by_ok(self) -> None:
         fm = _valid_memo(status='open')
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'picked_up_by' for e in errors)
 
 
 class TestMemoRuleActionedRequiresRealizedBy:
-    def test_actioned_accepted_missing_realized_by_fails(self):
+    def test_actioned_accepted_missing_realized_by_fails(self) -> None:
         fm = _valid_memo(status='actioned', decision='accepted')
         errors = validate_memo_cross_fields(fm)
         assert any(e['field'] == 'realized_by' and 'required' in e['error'] for e in errors)
 
-    def test_actioned_partial_missing_realized_by_fails(self):
+    def test_actioned_partial_missing_realized_by_fails(self) -> None:
         fm = _valid_memo(status='actioned', decision='partial')
         errors = validate_memo_cross_fields(fm)
         assert any(e['field'] == 'realized_by' and 'required' in e['error'] for e in errors)
 
-    def test_actioned_accepted_malformed_realized_by_fails(self):
+    def test_actioned_accepted_malformed_realized_by_fails(self) -> None:
         fm = _valid_memo(status='actioned', decision='accepted', realized_by='bareword')
         errors = validate_memo_cross_fields(fm)
         assert any(e['field'] == 'realized_by' and 'malformed' in e['error'] for e in errors)
 
-    def test_actioned_accepted_sha_realized_by_valid(self):
+    def test_actioned_accepted_sha_realized_by_valid(self) -> None:
         """7-char hex SHA is well-formed."""
         fm = _valid_memo(status='actioned', decision='accepted', realized_by='abc1234')
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'realized_by' for e in errors)
 
-    def test_actioned_accepted_long_sha_valid(self):
+    def test_actioned_accepted_long_sha_valid(self) -> None:
         """40-char hex SHA (full git SHA) is well-formed."""
         fm = _valid_memo(status='actioned', decision='accepted', realized_by='a' * 40)
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'realized_by' for e in errors)
 
-    def test_actioned_accepted_uppercase_hex_sha_valid(self):
+    def test_actioned_accepted_uppercase_hex_sha_valid(self) -> None:
         """Uppercase hex SHA is well-formed (case-insensitive per oracle F1 review note)."""
         fm = _valid_memo(status='actioned', decision='accepted', realized_by='ABC1234')
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'realized_by' for e in errors)
 
-    def test_actioned_fyi_no_decision_no_realized_by_ok(self):
+    def test_actioned_fyi_no_decision_no_realized_by_ok(self) -> None:
         """decision=fyi (absent from accepted/partial) — realized_by not required."""
         fm = _valid_memo(status='actioned', decision='fyi')
         errors = validate_memo_cross_fields(fm)
@@ -6259,7 +6259,7 @@ class TestMemoRuleActionedRequiresRealizedBy:
 
 
 class TestMemoRuleActionTakenRequiresCompanions:
-    def test_action_taken_missing_both_fails(self):
+    def test_action_taken_missing_both_fails(self) -> None:
         # Assert both missing companion field names are named
         # in the error field, so a regression that flags only one of them still fails.
         fm = _valid_memo(status='action_taken')
@@ -6267,17 +6267,17 @@ class TestMemoRuleActionTakenRequiresCompanions:
         assert any('action_taken_at' in e['field'] for e in errors)
         assert any('decision' in e['field'] for e in errors)
 
-    def test_action_taken_missing_action_taken_at_fails(self):
+    def test_action_taken_missing_action_taken_at_fails(self) -> None:
         fm = _valid_memo(status='action_taken', decision='accepted')
         errors = validate_memo_cross_fields(fm)
         assert any('action_taken_at' in e['field'] for e in errors)
 
-    def test_action_taken_missing_decision_fails(self):
+    def test_action_taken_missing_decision_fails(self) -> None:
         fm = _valid_memo(status='action_taken', action_taken_at='2026-06-01T10:00:00Z')
         errors = validate_memo_cross_fields(fm)
         assert any('decision' in e['field'] for e in errors)
 
-    def test_action_taken_complete_ok(self):
+    def test_action_taken_complete_ok(self) -> None:
         fm = _valid_memo(
             status='action_taken',
             action_taken_at='2026-06-01T10:00:00Z',
@@ -6288,7 +6288,7 @@ class TestMemoRuleActionTakenRequiresCompanions:
 
 
 class TestMemoRuleClosedRequiresCompanions:
-    def test_closed_missing_all_fails(self):
+    def test_closed_missing_all_fails(self) -> None:
         # Assert all three missing companion field names are
         # named in the errors, so a regression flagging only one or the wrong field fails.
         fm = _valid_memo(status='closed')
@@ -6297,7 +6297,7 @@ class TestMemoRuleClosedRequiresCompanions:
         assert any('action_taken_at' in e['field'] for e in errors)
         assert any('decision' in e['field'] for e in errors)
 
-    def test_closed_complete_ok(self):
+    def test_closed_complete_ok(self) -> None:
         fm = _valid_memo(
             status='closed',
             closed_at='2026-06-02T10:00:00Z',
@@ -6309,34 +6309,34 @@ class TestMemoRuleClosedRequiresCompanions:
 
 
 class TestMemoRuleSupersededRequiresSupersededBy:
-    def test_superseded_without_superseded_by_fails(self):
+    def test_superseded_without_superseded_by_fails(self) -> None:
         fm = _valid_memo(status='superseded')
         errors = validate_memo_cross_fields(fm)
         assert any(e['field'] == 'superseded_by' for e in errors)
 
-    def test_superseded_with_superseded_by_ok(self):
+    def test_superseded_with_superseded_by_ok(self) -> None:
         fm = _valid_memo(status='superseded', superseded_by='cross-repo/inbox/2026-06-01-new.md')
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'superseded_by' for e in errors)
 
 
 class TestMemoRuleCentralOnlyRequiresTo:
-    def test_central_only_without_to_fails(self):
+    def test_central_only_without_to_fails(self) -> None:
         fm = _valid_memo(delivery_mode='central-only')
         errors = validate_memo_cross_fields(fm)
         assert any(e['field'] == 'to' and 'central-only' in e['error'] for e in errors)
 
-    def test_central_only_with_empty_to_fails(self):
+    def test_central_only_with_empty_to_fails(self) -> None:
         fm = _valid_memo(delivery_mode='central-only', to='')
         errors = validate_memo_cross_fields(fm)
         assert any(e['field'] == 'to' for e in errors)
 
-    def test_other_delivery_mode_no_to_ok(self):
+    def test_other_delivery_mode_no_to_ok(self) -> None:
         fm = _valid_memo(delivery_mode='routed')
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'to' for e in errors)
 
-    def test_absent_delivery_mode_no_to_ok(self):
+    def test_absent_delivery_mode_no_to_ok(self) -> None:
         fm = _valid_memo()
         assert 'delivery_mode' not in fm
         errors = validate_memo_cross_fields(fm)
@@ -6344,17 +6344,17 @@ class TestMemoRuleCentralOnlyRequiresTo:
 
 
 class TestMemoRuleSummaryLengthCap:
-    def test_summary_at_240_chars_valid(self):
+    def test_summary_at_240_chars_valid(self) -> None:
         fm = _valid_memo(summary='x' * 240)
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'summary' for e in errors)
 
-    def test_summary_at_241_chars_fails(self):
+    def test_summary_at_241_chars_fails(self) -> None:
         fm = _valid_memo(summary='x' * 241)
         errors = validate_memo_cross_fields(fm)
         assert any(e['field'] == 'summary' and '240' in e['error'] for e in errors)
 
-    def test_summary_absent_ok(self):
+    def test_summary_absent_ok(self) -> None:
         fm = _valid_memo()
         assert 'summary' not in fm
         errors = validate_memo_cross_fields(fm)
@@ -6362,27 +6362,27 @@ class TestMemoRuleSummaryLengthCap:
 
 
 class TestMemoRuleKindEnum:
-    def test_valid_kind_ask(self):
+    def test_valid_kind_ask(self) -> None:
         fm = _valid_memo(kind='ask')
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'kind' for e in errors)
 
-    def test_valid_kind_consult(self):
+    def test_valid_kind_consult(self) -> None:
         fm = _valid_memo(kind='consult')
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'kind' for e in errors)
 
-    def test_valid_kind_fyi(self):
+    def test_valid_kind_fyi(self) -> None:
         fm = _valid_memo(kind='fyi')
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'kind' for e in errors)
 
-    def test_valid_kind_proposal(self):
+    def test_valid_kind_proposal(self) -> None:
         fm = _valid_memo(kind='proposal')
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'kind' for e in errors)
 
-    def test_valid_kind_bug(self):
+    def test_valid_kind_bug(self) -> None:
         # 'bug' was added to _memo_compose
         # and _outbox_frontmatter_rules but not here; a memo drafted with
         # --kind bug passed the sender and was then rejected by this validator.
@@ -6390,13 +6390,13 @@ class TestMemoRuleKindEnum:
         errors = validate_memo_cross_fields(fm)
         assert not any(e['field'] == 'kind' for e in errors)
 
-    def test_invalid_kind_ack_fails(self):
+    def test_invalid_kind_ack_fails(self) -> None:
         """'ack' is NOT a valid kind — acknowledgement is receipt-state."""
         fm = _valid_memo(kind='ack')
         errors = validate_memo_cross_fields(fm)
         assert any(e['field'] == 'kind' and 'ack' in e['error'] for e in errors)
 
-    def test_invalid_kind_arbitrary_fails(self):
+    def test_invalid_kind_arbitrary_fails(self) -> None:
         fm = _valid_memo(kind='unknown-kind')
         errors = validate_memo_cross_fields(fm)
         assert any(e['field'] == 'kind' for e in errors)
@@ -6407,12 +6407,12 @@ class TestMemoRuleDispositionSupersededRequiresCompanions:
     superseded_at + status already actioned/superseded — the append-only
     supersede-disposition mechanism's presence-triggered completeness gate."""
 
-    def test_absent_disposition_superseded_ok(self):
+    def test_absent_disposition_superseded_ok(self) -> None:
         fm = _valid_memo(status='actioned', decision='accepted', realized_by='inline')
         errors = validate_memo_cross_fields(fm)
         assert not any('superseding' in e['field'] or 'superseded_at' in e['field'] for e in errors)
 
-    def test_disposition_superseded_missing_all_companions_fails(self):
+    def test_disposition_superseded_missing_all_companions_fails(self) -> None:
         fm = _valid_memo(
             status='actioned', decision='accepted', realized_by='inline',
             disposition_superseded=True,
@@ -6422,7 +6422,7 @@ class TestMemoRuleDispositionSupersededRequiresCompanions:
         assert any('superseding_realized_by' in e['field'] for e in errors)
         assert any('superseded_at' in e['field'] for e in errors)
 
-    def test_disposition_superseded_complete_ok(self):
+    def test_disposition_superseded_complete_ok(self) -> None:
         fm = _valid_memo(
             status='actioned', decision='accepted', realized_by='inline',
             disposition_superseded=True,
@@ -6433,7 +6433,7 @@ class TestMemoRuleDispositionSupersededRequiresCompanions:
         errors = validate_memo_cross_fields(fm)
         assert errors == []
 
-    def test_disposition_superseded_true_but_status_open_fails(self):
+    def test_disposition_superseded_true_but_status_open_fails(self) -> None:
         """Can't supersede a disposition that was never made."""
         fm = _valid_memo(
             status='open',
@@ -6445,7 +6445,7 @@ class TestMemoRuleDispositionSupersededRequiresCompanions:
         errors = validate_memo_cross_fields(fm)
         assert any('status' in e['field'] for e in errors)
 
-    def test_disposition_superseded_falsy_ok_even_without_companions(self):
+    def test_disposition_superseded_falsy_ok_even_without_companions(self) -> None:
         fm = _valid_memo(status='open', disposition_superseded=False)
         errors = validate_memo_cross_fields(fm)
         assert not any('superseding' in e['field'] for e in errors)
@@ -6469,7 +6469,7 @@ class TestParseYamlLegacyDialect:
 
     _LEGACY_YAML_FIXTURES_DIR = Path(__file__).parent / 'fixtures' / 'legacy_yaml_schemas'
 
-    def test_parse_yaml_bug_backlog_nested_mapping_and_inline_list(self):
+    def test_parse_yaml_bug_backlog_nested_mapping_and_inline_list(self) -> None:
         text = (self._LEGACY_YAML_FIXTURES_DIR / 'bug-backlog.yaml').read_text(encoding='utf-8')
         expected = {
             'schema': 'bug-backlog',
@@ -6505,7 +6505,7 @@ class TestParseYamlLegacyDialect:
         }
         assert parse_yaml(text) == expected
 
-    def test_parse_yaml_review_findings_block_scalar_with_comments(self):
+    def test_parse_yaml_review_findings_block_scalar_with_comments(self) -> None:
         text = (self._LEGACY_YAML_FIXTURES_DIR / 'review-findings.yaml').read_text(encoding='utf-8')
         expected = {
             'schema': 'review-findings',
@@ -6528,7 +6528,7 @@ class TestParseYamlLegacyDialect:
     # ON a list item's dash line had its body parsed as a sibling mapping, so any colon
     # in the body minted a key. Negative-spec: the body is a scalar, never a mapping —
     # a colon inside it is content, not a key separator.
-    def test_block_scalar_on_dash_line_keeps_its_body_and_invents_no_keys(self):
+    def test_block_scalar_on_dash_line_keeps_its_body_and_invents_no_keys(self) -> None:
         text = (
             'probes:\n'
             '  - rationale: >-\n'
@@ -6542,7 +6542,7 @@ class TestParseYamlLegacyDialect:
         assert item['route'] == 'plan'
         assert 'each re-derives it.' in item['rationale']
 
-    def test_literal_block_on_dash_line_preserves_blank_line_paragraphs(self):
+    def test_literal_block_on_dash_line_preserves_blank_line_paragraphs(self) -> None:
         text = (
             'probes:\n'
             '  - body: |\n'
@@ -6560,14 +6560,14 @@ class TestParseYamlLegacyDialect:
     # as the bare list itself, discarding every scalar key already parsed
     # (including ones AFTER the sequence). parse_frontmatter then saw a list,
     # not a dict, and reported every required field as missing on a valid file.
-    def test_unindented_block_sequence_of_mappings_as_last_key(self):
+    def test_unindented_block_sequence_of_mappings_as_last_key(self) -> None:
         text = 'title: x\ncarried_items:\n- carry_id: a\n  disposition: carried\n'
         assert parse_yaml(text) == {
             'title': 'x',
             'carried_items': [{'carry_id': 'a', 'disposition': 'carried'}],
         }
 
-    def test_unindented_block_sequence_of_mappings_as_middle_key(self):
+    def test_unindented_block_sequence_of_mappings_as_middle_key(self) -> None:
         text = 'title: x\ncarried_items:\n- carry_id: a\n  disposition: carried\nsummary: y\n'
         assert parse_yaml(text) == {
             'title': 'x',
@@ -6575,26 +6575,26 @@ class TestParseYamlLegacyDialect:
             'summary': 'y',
         }
 
-    def test_unindented_block_sequence_of_scalars(self):
+    def test_unindented_block_sequence_of_scalars(self) -> None:
         text = 'scope:\n- a\n- b\ntitle: y\n'
         assert parse_yaml(text) == {'scope': ['a', 'b'], 'title': 'y'}
 
-    def test_indented_block_sequence_of_scalars_still_works(self):
+    def test_indented_block_sequence_of_scalars_still_works(self) -> None:
         text = 'scope:\n  - a\n  - b\ntitle: y\n'
         assert parse_yaml(text) == {'scope': ['a', 'b'], 'title': 'y'}
 
-    def test_flow_mapping_value_reads_as_the_mapping_pyyaml_reads(self):
+    def test_flow_mapping_value_reads_as_the_mapping_pyyaml_reads(self) -> None:
         text = 'divergence: {"diverged": false}\nroutes: { CLOSE: 3, ESCALATE: 13 }\ntitle: y\n'
         assert parse_yaml(text) == yaml.safe_load(text)
 
-    def test_flow_mapping_pyyaml_rejects_stays_the_scalar_string(self):
+    def test_flow_mapping_pyyaml_rejects_stays_the_scalar_string(self) -> None:
         text = 'verdicts: {a: b: c}\ntitle: y\n'
         assert parse_yaml(text) == {'verdicts': '{a: b: c}', 'title': 'y'}
 
-    def test_flow_mapping_nested_date_keeps_string_leniency(self):
+    def test_flow_mapping_nested_date_keeps_string_leniency(self) -> None:
         assert parse_yaml('when: {at: 2026-08-14}\n') == {'when': {'at': '2026-08-14'}}
 
-    def test_run_report_flow_mapping_divergence_is_not_a_type_error(self):
+    def test_run_report_flow_mapping_divergence_is_not_a_type_error(self) -> None:
         schema = {
             'type': 'object',
             'properties': {
@@ -6608,11 +6608,11 @@ class TestParseYamlLegacyDialect:
         assert fm == {'divergence': {'diverged': False}}
         assert _validate_json_schema_node(fm, schema, schema) == []
 
-    def test_nested_mapping_with_unindented_sequence_value(self):
+    def test_nested_mapping_with_unindented_sequence_value(self) -> None:
         text = 'outer:\n  inner_seq:\n  - a\n  - b\ntitle: y\n'
         assert parse_yaml(text) == {'outer': {'inner_seq': ['a', 'b']}, 'title': 'y'}
 
-    def test_real_handoff_carried_items_round_trips_with_scalar_keys_intact(self):
+    def test_real_handoff_carried_items_round_trips_with_scalar_keys_intact(self) -> None:
         fixture = Path(__file__).parent / 'fixtures' / 'legacy-dialect-carried-items-handoff.md'
         fm = parse_frontmatter(fixture.read_text(encoding='utf-8'))['frontmatter']
         assert isinstance(fm, dict)
@@ -6627,7 +6627,7 @@ class TestDescribeBehavioralCases:
     oracle: an empty optional list must be [] (not a missing key), and a schema
     with no applies_to must yield None (not a KeyError, not an absent key)."""
 
-    def test_zero_optional_fields_is_empty_list_not_missing_key(self):
+    def test_zero_optional_fields_is_empty_list_not_missing_key(self) -> None:
         # review-findings.schema.json v2.1.0 added the optional `reviewed_range`
         # array (2026-08-13 re-vendor), and v3.2.0 added `reviewed_targets`
         # (2026-08-14 re-vendor, DoE 359e41da5 — the non-committed review-target
@@ -6657,13 +6657,13 @@ class TestDescribeBehavioralCases:
             'findings_count',
         ]
 
-    def test_no_applies_to_returns_none_not_missing_key(self):
+    def test_no_applies_to_returns_none_not_missing_key(self) -> None:
         # percolate-store.schema.json declares no applies_to glob.
         result = describe('percolate-store')
         assert 'applies_to' in result
         assert result['applies_to'] is None
 
-    def test_unknown_schema_name_raises_value_error(self):
+    def test_unknown_schema_name_raises_value_error(self) -> None:
         with pytest.raises(ValueError, match='unknown schema'):
             describe('does-not-exist')
 
@@ -6705,11 +6705,11 @@ class TestValidateJsonSchemaBackedDispatch:
     """validate() against a JSON-Schema-backed vendored queue schema (all 8 queue
     schemas + handoff/percolate-store are this kind)."""
 
-    def test_valid_fields_ok(self):
+    def test_valid_fields_ok(self) -> None:
         result = validate('bug-backlog', _valid_bug_backlog_fields())
         assert result == {'ok': True}
 
-    def test_missing_required_field_rejected(self):
+    def test_missing_required_field_rejected(self) -> None:
         fields = _valid_bug_backlog_fields()
         del fields['severity']
         result = validate('bug-backlog', fields)
@@ -6719,20 +6719,20 @@ class TestValidateJsonSchemaBackedDispatch:
             for e in result['errors']
         )
 
-    def test_invalid_enum_value_rejected(self):
+    def test_invalid_enum_value_rejected(self) -> None:
         result = validate('bug-backlog', _valid_bug_backlog_fields(severity='P9'))
         assert result['ok'] is False
         assert any(e['field'] == 'severity' for e in result['errors'])
 
-    def test_unknown_schema_name_raises_value_error(self):
+    def test_unknown_schema_name_raises_value_error(self) -> None:
         with pytest.raises(ValueError, match='unknown schema'):
             validate('does-not-exist', {})
 
-    def test_valid_improvement_queue_fields_ok(self):
+    def test_valid_improvement_queue_fields_ok(self) -> None:
         result = validate('improvement-queue', _valid_improvement_queue_fields())
         assert result == {'ok': True}
 
-    def test_improvement_queue_invalid_change_kind_rejected(self):
+    def test_improvement_queue_invalid_change_kind_rejected(self) -> None:
         result = validate(
             'improvement-queue', _valid_improvement_queue_fields(change_kind='not-a-kind')
         )
@@ -6746,7 +6746,7 @@ class TestValidateEnumErrorShapeParity:
     not merely a boolean reject — DoE's queue ops consume the shape, so shape drift
     is silent breakage."""
 
-    def test_type_valid_enum_invalid_produces_full_error_dict_shape(self):
+    def test_type_valid_enum_invalid_produces_full_error_dict_shape(self) -> None:
         # 'not-a-real-status' is a well-typed string (passes `type: string`) but is
         # not a member of status's enum — isolates the enum branch from the type branch.
         result = validate('bug-backlog', _valid_bug_backlog_fields(status='not-a-real-status'))
@@ -6770,19 +6770,19 @@ class TestJsonSchemaNodeEnumHintParity:
     with a minimal enum-only schema, same pattern as TestSchemaShapeAllOfConditionalInert
     above."""
 
-    def test_enum_violation_hint_has_trailing_period(self):
+    def test_enum_violation_hint_has_trailing_period(self) -> None:
         schema = {'enum': ['open', 'closed']}
         errors = _validate_json_schema_node('pending', schema, schema, 'status')
         assert len(errors) == 1
         assert errors[0]['hint'] == 'Allowed values: open, closed.'
 
-    def test_enum_near_miss_ratified_suggests_accepted(self):
+    def test_enum_near_miss_ratified_suggests_accepted(self) -> None:
         schema = {'enum': ['accepted', 'declined', 'partial']}
         errors = _validate_json_schema_node('ratified', schema, schema, 'decision')
         assert len(errors) == 1
         assert errors[0]['hint'] == "Allowed values: accepted, declined, partial. Did you mean 'accepted'?"
 
-    def test_enum_near_miss_suppressed_when_canonical_not_in_allowed(self):
+    def test_enum_near_miss_suppressed_when_canonical_not_in_allowed(self) -> None:
         schema = {'enum': ['open', 'closed']}
         errors = _validate_json_schema_node('ratified', schema, schema, 'status')
         assert len(errors) == 1
@@ -6803,19 +6803,19 @@ class TestJsonSchemaNodeEnumHintParity:
 
 
 class TestAllOfKeyword:
-    def test_all_subschemas_pass_ok(self):
+    def test_all_subschemas_pass_ok(self) -> None:
         schema = {'allOf': [{'type': 'object'}, {'required': ['a']}]}
         errors = _validate_json_schema_node({'a': 1}, schema, schema, '')
         assert errors == []
 
-    def test_one_subschema_fails_rejected(self):
+    def test_one_subschema_fails_rejected(self) -> None:
         schema = {'allOf': [{'required': ['a']}, {'required': ['b']}]}
         errors = _validate_json_schema_node({'a': 1}, schema, schema, '')
         assert len(errors) == 1
         assert errors[0]['field'] == 'b'
         assert errors[0]['error'] == 'required field missing'
 
-    def test_multiple_failing_subschemas_collect_all_errors(self):
+    def test_multiple_failing_subschemas_collect_all_errors(self) -> None:
         # Conjunction, not short-circuit: every failing allOf branch's errors surface,
         # not just the first — a schema author needs to see everything wrong at once.
         schema = {'allOf': [{'required': ['a']}, {'required': ['b']}]}
@@ -6823,7 +6823,7 @@ class TestAllOfKeyword:
         fields = {e['field'] for e in errors}
         assert fields == {'a', 'b'}
 
-    def test_previously_silently_passing_document_now_rejected(self):
+    def test_previously_silently_passing_document_now_rejected(self) -> None:
         # Mirrors the DoE memo's motivating case (strategic-self-description's
         # coordinator-root-path-omitted.json): a constraint expressed ONLY inside an
         # allOf branch, with no top-level `required`. Before this fix, allOf was not a
@@ -6841,12 +6841,12 @@ class TestAllOfKeyword:
 
 
 class TestAnyOfKeyword:
-    def test_matching_branch_passes(self):
+    def test_matching_branch_passes(self) -> None:
         schema = {'anyOf': [{'type': 'string'}, {'type': 'null'}]}
         assert _validate_json_schema_node('x', schema, schema, 'field') == []
         assert _validate_json_schema_node(None, schema, schema, 'field') == []
 
-    def test_genuine_type_mismatch_names_every_branch_type(self):
+    def test_genuine_type_mismatch_names_every_branch_type(self) -> None:
         # No branch's own `type` matches — the real "wrong shape entirely"
         # case, where the generic "expected X or Y (got Z)" message is
         # correct and must be kept.
@@ -6857,7 +6857,7 @@ class TestAnyOfKeyword:
             'value does not match any allowed schema; expected string or null (got int)'
         )
 
-    def test_type_matched_but_pattern_failed_names_the_pattern_not_the_type(self):
+    def test_type_matched_but_pattern_failed_names_the_pattern_not_the_type(self) -> None:
         # DoE memo's motivating case: predecessor_id's `anyOf: [{type: string,
         # pattern: ...}, {type: null}]` on a wrong-shaped-but-still-a-string
         # value. Before this fix this reported "expected string or null (got
@@ -6879,7 +6879,7 @@ class TestAnyOfKeyword:
         assert 'does not match pattern' in errors[0]['error']
         assert 'not-a-handoff-id' in errors[0]['error']
 
-    def test_type_matched_but_enum_failed_names_the_enum_not_the_type(self):
+    def test_type_matched_but_enum_failed_names_the_enum_not_the_type(self) -> None:
         # Same discriminator, different narrower constraint — proves the fix
         # is general (any sibling keyword the type-matched branch fails on),
         # not special-cased to `pattern`.
@@ -6889,7 +6889,7 @@ class TestAnyOfKeyword:
         assert 'does not match any allowed schema' not in errors[0]['error']
         assert 'invalid enum value' in errors[0]['error']
 
-    def test_sibling_keywords_still_checked_after_a_successful_anyof_match(self):
+    def test_sibling_keywords_still_checked_after_a_successful_anyof_match(self) -> None:
         # Fall-through discipline (mirrors the analogous oneOf test below):
         # a satisfied anyOf must not short-circuit the node's own sibling
         # keywords.
@@ -6904,19 +6904,19 @@ class TestAnyOfKeyword:
 
 
 class TestOneOfKeyword:
-    def test_exactly_one_match_ok(self):
+    def test_exactly_one_match_ok(self) -> None:
         schema = {'oneOf': [{'type': 'string'}, {'type': 'number'}]}
         errors = _validate_json_schema_node('x', schema, schema, '')
         assert errors == []
 
-    def test_zero_matches_rejected_with_distinguishing_message(self):
+    def test_zero_matches_rejected_with_distinguishing_message(self) -> None:
         schema = {'oneOf': [{'type': 'string'}, {'type': 'number'}]}
         errors = _validate_json_schema_node(True, schema, schema, '')
         assert len(errors) == 1
         assert 'does not match any allowed schema' in errors[0]['error']
         assert 'oneOf requires exactly one match' in errors[0]['error']
 
-    def test_multiple_matches_rejected_with_distinguishing_message(self):
+    def test_multiple_matches_rejected_with_distinguishing_message(self) -> None:
         # 'abc' satisfies BOTH {'type': 'string'} and {'enum': ['abc']} — overlapping
         # branches, the case a bare "oneOf failed" message cannot distinguish from
         # zero-matched.
@@ -6927,14 +6927,14 @@ class TestOneOfKeyword:
         assert 'requires exactly one match' in errors[0]['error']
         assert 'does not match any allowed schema' not in errors[0]['error']
 
-    def test_zero_vs_multiple_error_text_is_distinct(self):
+    def test_zero_vs_multiple_error_text_is_distinct(self) -> None:
         zero_schema = {'oneOf': [{'type': 'string'}, {'type': 'number'}]}
         multi_schema = {'oneOf': [{'type': 'string'}, {'enum': ['abc']}]}
         zero_errors = _validate_json_schema_node(True, zero_schema, zero_schema, '')
         multi_errors = _validate_json_schema_node('abc', multi_schema, multi_schema, '')
         assert zero_errors[0]['error'] != multi_errors[0]['error']
 
-    def test_sibling_keywords_still_checked_after_a_successful_match(self):
+    def test_sibling_keywords_still_checked_after_a_successful_match(self) -> None:
         # Fall-through discipline: a satisfied oneOf must not short-circuit the
         # node's own sibling keywords. Reinstated from the retired JS unit
         # (plugin-ecosystem/schema.test.js) whose subject `bin/lib/schema.js` was
@@ -6950,18 +6950,18 @@ class TestOneOfKeyword:
 
 
 class TestConstKeyword:
-    def test_exact_match_ok(self):
+    def test_exact_match_ok(self) -> None:
         schema = {'const': 'ready_to_fire'}
         assert _validate_json_schema_node('ready_to_fire', schema, schema, 'status') == []
 
-    def test_mismatch_rejected(self):
+    def test_mismatch_rejected(self) -> None:
         schema = {'const': 'ready_to_fire'}
         errors = _validate_json_schema_node('open', schema, schema, 'status')
         assert len(errors) == 1
         assert errors[0]['field'] == 'status'
         assert 'does not match const "ready_to_fire"' in errors[0]['error']
 
-    def test_type_mismatched_but_string_equal_value_is_rejected(self):
+    def test_type_mismatched_but_string_equal_value_is_rejected(self) -> None:
         # The JS oracle needed an explicit type-mismatch note here because `==`
         # would coerce `false` and `"false"` together; Python's `!=` rejects on
         # its own. Pinned so a future rewrite toward looser comparison (or a
@@ -6982,12 +6982,12 @@ class TestSchemaValuedAdditionalPropertiesKeyword:
     left unsupported.
     """
 
-    def test_conforming_undeclared_value_ok(self):
+    def test_conforming_undeclared_value_ok(self) -> None:
         schema = {'type': 'object', 'additionalProperties': {'type': 'string'}}
         errors = _validate_json_schema_node({'answers': 'yes'}, schema, schema, 'pm_resolution')
         assert errors == []
 
-    def test_nested_object_in_string_slot_rejected(self):
+    def test_nested_object_in_string_slot_rejected(self) -> None:
         schema = {'type': 'object', 'additionalProperties': {'type': 'string'}}
         errors = _validate_json_schema_node(
             {'answers': {'q1': 'yes'}}, schema, schema, 'pm_resolution'
@@ -6995,20 +6995,20 @@ class TestSchemaValuedAdditionalPropertiesKeyword:
         assert len(errors) == 1
         assert errors[0]['field'] == 'pm_resolution.answers'
 
-    def test_int_value_rejected(self):
+    def test_int_value_rejected(self) -> None:
         schema = {'type': 'object', 'additionalProperties': {'type': 'string'}}
         errors = _validate_json_schema_node({'answers': 7}, schema, schema, 'pm_resolution')
         assert len(errors) == 1
         assert errors[0]['field'] == 'pm_resolution.answers'
         assert 'expected string, got int' in errors[0]['error']
 
-    def test_list_value_rejected(self):
+    def test_list_value_rejected(self) -> None:
         schema = {'type': 'object', 'additionalProperties': {'type': 'string'}}
         errors = _validate_json_schema_node({'answers': ['a', 'b']}, schema, schema, 'pm_resolution')
         assert len(errors) == 1
         assert errors[0]['field'] == 'pm_resolution.answers'
 
-    def test_declared_properties_still_validated_by_properties_not_additional(self):
+    def test_declared_properties_still_validated_by_properties_not_additional(self) -> None:
         # A declared key is checked against `properties`, never re-checked
         # against `additionalProperties` — only undeclared keys go through
         # the additionalProperties subschema.
@@ -7020,7 +7020,7 @@ class TestSchemaValuedAdditionalPropertiesKeyword:
         errors = _validate_json_schema_node({'kind': 5, 'extra': 'ok'}, schema, schema, '')
         assert errors == []
 
-    def test_boolean_false_still_rejects_undeclared_keys_unchanged(self):
+    def test_boolean_false_still_rejects_undeclared_keys_unchanged(self) -> None:
         schema = {'type': 'object', 'properties': {'a': {'type': 'string'}}, 'additionalProperties': False}
         errors = _validate_json_schema_node({'a': 'x', 'b': 'y'}, schema, schema, '')
         assert len(errors) == 1
@@ -7029,12 +7029,12 @@ class TestSchemaValuedAdditionalPropertiesKeyword:
 
 
 class TestUnevaluatedPropertiesKeyword:
-    def test_true_is_a_no_op(self):
+    def test_true_is_a_no_op(self) -> None:
         schema = {'type': 'object', 'unevaluatedProperties': True}
         errors = _validate_json_schema_node({'anything': 1}, schema, schema, '')
         assert errors == []
 
-    def test_false_rejects_undeclared_key(self):
+    def test_false_rejects_undeclared_key(self) -> None:
         schema = {
             'type': 'object',
             'properties': {'a': {'type': 'string'}},
@@ -7045,7 +7045,7 @@ class TestUnevaluatedPropertiesKeyword:
         assert errors[0]['field'] == 'b'
         assert errors[0]['error'] == 'unevaluated property "b" not allowed'
 
-    def test_false_allows_key_evaluated_via_allof_branch(self):
+    def test_false_allows_key_evaluated_via_allof_branch(self) -> None:
         schema = {
             'type': 'object',
             'properties': {'a': {'type': 'string'}},
@@ -7055,7 +7055,7 @@ class TestUnevaluatedPropertiesKeyword:
         errors = _validate_json_schema_node({'a': 'x', 'b': 'y'}, schema, schema, '')
         assert errors == []
 
-    def test_false_still_rejects_key_outside_allof_branch(self):
+    def test_false_still_rejects_key_outside_allof_branch(self) -> None:
         schema = {
             'type': 'object',
             'properties': {'a': {'type': 'string'}},
@@ -7066,7 +7066,7 @@ class TestUnevaluatedPropertiesKeyword:
         assert len(errors) == 1
         assert errors[0]['field'] == 'c'
 
-    def test_false_allows_key_evaluated_via_matched_if_then_branch(self):
+    def test_false_allows_key_evaluated_via_matched_if_then_branch(self) -> None:
         schema = {
             'type': 'object',
             'properties': {'kind': {'type': 'string'}},
@@ -7077,7 +7077,7 @@ class TestUnevaluatedPropertiesKeyword:
         errors = _validate_json_schema_node({'kind': 'x', 'detail': 'y'}, schema, schema, '')
         assert errors == []
 
-    def test_true_additional_properties_evaluates_everything(self):
+    def test_true_additional_properties_evaluates_everything(self) -> None:
         schema = {
             'type': 'object',
             'properties': {'a': {'type': 'string'}},
@@ -7087,12 +7087,12 @@ class TestUnevaluatedPropertiesKeyword:
         errors = _validate_json_schema_node({'a': 'x', 'b': 'y'}, schema, schema, '')
         assert errors == []
 
-    def test_non_boolean_value_fails_loud(self):
+    def test_non_boolean_value_fails_loud(self) -> None:
         schema = {'type': 'object', 'unevaluatedProperties': {'type': 'string'}}
         with pytest.raises(ValueError, match='only boolean'):
             _validate_json_schema_node({'a': 1}, schema, schema, '')
 
-    def test_fails_loud_when_combined_with_pattern_properties(self):
+    def test_fails_loud_when_combined_with_pattern_properties(self) -> None:
         schema = {
             'type': 'object',
             'patternProperties': {'^x': {'type': 'string'}},
@@ -7101,7 +7101,7 @@ class TestUnevaluatedPropertiesKeyword:
         with pytest.raises(ValueError, match='patternProperties'):
             _validate_json_schema_node({'a': 1}, schema, schema, '')
 
-    def test_fails_loud_when_combined_with_one_of_at_same_node(self):
+    def test_fails_loud_when_combined_with_one_of_at_same_node(self) -> None:
         schema = {
             'type': 'object',
             'oneOf': [{'required': ['a']}, {'required': ['z']}],
@@ -7110,7 +7110,7 @@ class TestUnevaluatedPropertiesKeyword:
         with pytest.raises(ValueError, match='oneOf/anyOf'):
             _validate_json_schema_node({'a': 1}, schema, schema, '')
 
-    def test_fails_loud_on_schema_valued_additional_properties(self):
+    def test_fails_loud_on_schema_valued_additional_properties(self) -> None:
         schema = {
             'type': 'object',
             'additionalProperties': {'type': 'string'},
@@ -7119,7 +7119,7 @@ class TestUnevaluatedPropertiesKeyword:
         with pytest.raises(ValueError, match='schema-valued'):
             _validate_json_schema_node({'a': 1}, schema, schema, '')
 
-    def test_fails_loud_on_nested_composition_inside_allof_branch(self):
+    def test_fails_loud_on_nested_composition_inside_allof_branch(self) -> None:
         schema = {
             'type': 'object',
             'allOf': [{'oneOf': [{'required': ['a']}]}],
@@ -7143,10 +7143,10 @@ class TestUnevaluatedPropertiesKeyword:
 
 
 class TestValidateLegacyField:
-    def test_bare_string_type_string_ok(self):
+    def test_bare_string_type_string_ok(self) -> None:
         assert _validate_legacy_field('title', 'hello', 'string') == []
 
-    def test_bare_string_type_string_wrong_type_rejected(self):
+    def test_bare_string_type_string_wrong_type_rejected(self) -> None:
         errors = _validate_legacy_field('title', 42, 'string')
         assert len(errors) == 1
         assert errors[0] == {
@@ -7155,35 +7155,35 @@ class TestValidateLegacyField:
             'hint': 'Provide a string value for "title"',
         }
 
-    def test_iso_date_ok(self):
+    def test_iso_date_ok(self) -> None:
         assert _validate_legacy_field('created', '2026-07-05', 'iso-date') == []
 
-    def test_iso_date_malformed_rejected(self):
+    def test_iso_date_malformed_rejected(self) -> None:
         errors = _validate_legacy_field('created', 'not-a-date', 'iso-date')
         assert len(errors) == 1
         assert errors[0]['field'] == 'created'
         assert 'expected ISO date' in errors[0]['error']
 
-    def test_boolean_wrong_type_rejected(self):
+    def test_boolean_wrong_type_rejected(self) -> None:
         errors = _validate_legacy_field('pickup_ready', 'yes', 'boolean')
         assert len(errors) == 1
         assert errors[0]['error'] == 'expected boolean, got string'
 
-    def test_number_wrong_type_rejected(self):
+    def test_number_wrong_type_rejected(self) -> None:
         errors = _validate_legacy_field('wave', 'one', 'number')
         assert len(errors) == 1
         assert errors[0]['error'] == 'expected number, got string'
 
-    def test_number_bool_is_not_a_number(self):
+    def test_number_bool_is_not_a_number(self) -> None:
         """JS typeof true === 'boolean', not 'number' — bool must not pass a number spec."""
         errors = _validate_legacy_field('wave', True, 'number')
         assert len(errors) == 1
 
-    def test_enum_valid_value_ok(self):
+    def test_enum_valid_value_ok(self) -> None:
         spec = {'type': 'enum', 'values': ['open', 'closed']}
         assert _validate_legacy_field('status', 'open', spec) == []
 
-    def test_enum_invalid_value_rejected_with_full_shape(self):
+    def test_enum_invalid_value_rejected_with_full_shape(self) -> None:
         spec = {'type': 'enum', 'values': ['open', 'closed']}
         errors = _validate_legacy_field('status', 'pending', spec)
         assert len(errors) == 1
@@ -7192,7 +7192,7 @@ class TestValidateLegacyField:
         assert errors[0]['error'] == 'invalid enum value "pending"'
         assert errors[0]['hint'] == 'Allowed values: open, closed.'
 
-    def test_enum_near_miss_ratified_suggests_accepted(self):
+    def test_enum_near_miss_ratified_suggests_accepted(self) -> None:
         """Port of schema.js NEAR_MISS_CANONICAL: 'ratified' -> 'accepted' when
         'accepted' is itself a legal enum member."""
         spec = {'type': 'enum', 'values': ['accepted', 'declined', 'partial']}
@@ -7200,7 +7200,7 @@ class TestValidateLegacyField:
         assert len(errors) == 1
         assert "Did you mean 'accepted'?" in errors[0]['hint']
 
-    def test_enum_near_miss_suppressed_when_canonical_not_in_allowed(self):
+    def test_enum_near_miss_suppressed_when_canonical_not_in_allowed(self) -> None:
         """The near-miss suggestion only fires when the canonical replacement is
         itself a legal member of THIS field's enum — must stay silent otherwise."""
         spec = {'type': 'enum', 'values': ['open', 'closed']}
@@ -7208,66 +7208,66 @@ class TestValidateLegacyField:
         assert len(errors) == 1
         assert 'Did you mean' not in errors[0]['hint']
 
-    def test_string_or_null_accepts_null(self):
+    def test_string_or_null_accepts_null(self) -> None:
         assert _validate_legacy_field('workstream', None, {'type': 'string-or-null'}) == []
 
-    def test_string_or_null_bare_string_form_accepts_null(self):
+    def test_string_or_null_bare_string_form_accepts_null(self) -> None:
         assert _validate_legacy_field('workstream', None, 'string-or-null') == []
 
-    def test_string_or_null_rejects_non_string_non_null(self):
+    def test_string_or_null_rejects_non_string_non_null(self) -> None:
         errors = _validate_legacy_field('workstream', 42, {'type': 'string-or-null'})
         assert len(errors) == 1
         assert errors[0]['error'] == 'expected string or null, got number'
 
-    def test_number_or_null_accepts_null(self):
+    def test_number_or_null_accepts_null(self) -> None:
         assert _validate_legacy_field('wave', None, {'type': 'number-or-null'}) == []
 
-    def test_number_or_null_rejects_non_number_non_null(self):
+    def test_number_or_null_rejects_non_number_non_null(self) -> None:
         errors = _validate_legacy_field('wave', 'one', {'type': 'number-or-null'})
         assert len(errors) == 1
         assert errors[0]['error'] == 'expected number or null, got string'
 
-    def test_list_of_string_ok(self):
+    def test_list_of_string_ok(self) -> None:
         assert _validate_legacy_field('tags', ['a', 'b'], {'type': 'list-of-string'}) == []
 
-    def test_list_of_string_rejects_non_list(self):
+    def test_list_of_string_rejects_non_list(self) -> None:
         errors = _validate_legacy_field('tags', 'not-a-list', {'type': 'list-of-string'})
         assert len(errors) == 1
         assert errors[0]['error'] == 'expected a list'
 
-    def test_list_of_string_rejects_non_string_items(self):
+    def test_list_of_string_rejects_non_string_items(self) -> None:
         errors = _validate_legacy_field('tags', ['a', 42], {'type': 'list-of-string'})
         assert len(errors) == 1
         assert errors[0]['error'] == 'list contains non-string items'
 
-    def test_object_type_ok_no_subfields_spec(self):
+    def test_object_type_ok_no_subfields_spec(self) -> None:
         assert _validate_legacy_field('system', {'created_by_session': 'sess-1'}, {'type': 'object'}) == []
 
-    def test_object_type_rejects_non_object(self):
+    def test_object_type_rejects_non_object(self) -> None:
         errors = _validate_legacy_field('system', 'not-an-object', {'type': 'object'})
         assert len(errors) == 1
         assert errors[0]['error'] == 'expected object, got string'
 
-    def test_object_type_rejects_array_as_array_not_object(self):
+    def test_object_type_rejects_array_as_array_not_object(self) -> None:
         errors = _validate_legacy_field('system', ['a'], {'type': 'object'})
         assert len(errors) == 1
         assert errors[0]['error'] == 'expected object, got array'
 
-    def test_object_type_recurses_into_declared_subfields(self):
+    def test_object_type_recurses_into_declared_subfields(self) -> None:
         spec = {'type': 'object', 'fields': {'tshirt': {'type': 'enum', 'values': ['S', 'M', 'L']}}}
         errors = _validate_legacy_field('loe', {'tshirt': 'XL'}, spec)
         assert len(errors) == 1
         assert errors[0]['field'] == 'loe.tshirt'
 
-    def test_object_type_subfield_null_is_tolerated(self):
+    def test_object_type_subfield_null_is_tolerated(self) -> None:
         spec = {'type': 'object', 'fields': {'tshirt': {'type': 'enum', 'values': ['S', 'M', 'L']}}}
         assert _validate_legacy_field('loe', {'tshirt': None}, spec) == []
 
-    def test_object_type_subfield_missing_is_tolerated(self):
+    def test_object_type_subfield_missing_is_tolerated(self) -> None:
         spec = {'type': 'object', 'fields': {'tshirt': {'type': 'enum', 'values': ['S', 'M', 'L']}}}
         assert _validate_legacy_field('loe', {}, spec) == []
 
-    def test_unknown_type_tag_falls_through_to_check_type_silently_passes(self):
+    def test_unknown_type_tag_falls_through_to_check_type_silently_passes(self) -> None:
         assert _validate_legacy_field('mystery', 'anything', {'type': 'totally-unknown'}) == []
 
 
@@ -7286,47 +7286,47 @@ _LEGACY_BUG_SCHEMA = {
 
 
 class TestValidateLegacyYamlFrontmatter:
-    def test_no_required_block_is_unconditionally_valid(self):
+    def test_no_required_block_is_unconditionally_valid(self) -> None:
         assert _validate_legacy_yaml_frontmatter({'anything': 'goes'}, {}) == {'ok': True}
         assert _validate_legacy_yaml_frontmatter(None, {'applies_to': 'state/x/*.yaml'}) == {'ok': True}
 
-    def test_missing_frontmatter_entirely_rejected(self):
+    def test_missing_frontmatter_entirely_rejected(self) -> None:
         result = _validate_legacy_yaml_frontmatter(None, _LEGACY_BUG_SCHEMA)
         assert result['ok'] is False
         assert result['errors'][0]['field'] == '(frontmatter)'
 
-    def test_valid_frontmatter_ok(self):
+    def test_valid_frontmatter_ok(self) -> None:
         fm = {'title': 'A bug', 'created': '2026-07-05', 'status': 'open'}
         assert _validate_legacy_yaml_frontmatter(fm, _LEGACY_BUG_SCHEMA) == {'ok': True}
 
-    def test_missing_required_field_rejected(self):
+    def test_missing_required_field_rejected(self) -> None:
         fm = {'title': 'A bug', 'status': 'open'}
         result = _validate_legacy_yaml_frontmatter(fm, _LEGACY_BUG_SCHEMA)
         assert result['ok'] is False
         assert any(e['field'] == 'created' and e['error'] == 'required field missing' for e in result['errors'])
 
-    def test_required_field_present_but_invalid_shape_rejected(self):
+    def test_required_field_present_but_invalid_shape_rejected(self) -> None:
         fm = {'title': 'A bug', 'created': '2026-07-05', 'status': 'not-a-status'}
         result = _validate_legacy_yaml_frontmatter(fm, _LEGACY_BUG_SCHEMA)
         assert result['ok'] is False
         assert any(e['field'] == 'status' for e in result['errors'])
 
-    def test_optional_field_absent_ok(self):
+    def test_optional_field_absent_ok(self) -> None:
         fm = {'title': 'A bug', 'created': '2026-07-05', 'status': 'open'}
         assert 'severity' not in fm
         assert _validate_legacy_yaml_frontmatter(fm, _LEGACY_BUG_SCHEMA) == {'ok': True}
 
-    def test_optional_field_present_invalid_rejected(self):
+    def test_optional_field_present_invalid_rejected(self) -> None:
         fm = {'title': 'A bug', 'created': '2026-07-05', 'status': 'open', 'severity': 'P9'}
         result = _validate_legacy_yaml_frontmatter(fm, _LEGACY_BUG_SCHEMA)
         assert result['ok'] is False
         assert any(e['field'] == 'severity' for e in result['errors'])
 
-    def test_optional_field_present_null_ok(self):
+    def test_optional_field_present_null_ok(self) -> None:
         fm = {'title': 'A bug', 'created': '2026-07-05', 'status': 'open', 'workstream': None}
         assert _validate_legacy_yaml_frontmatter(fm, _LEGACY_BUG_SCHEMA) == {'ok': True}
 
-    def test_no_cross_field_rules_registered_for_legacy_schema_own_name(self):
+    def test_no_cross_field_rules_registered_for_legacy_schema_own_name(self) -> None:
         """The schema's own 'schema' name is not in _CROSS_FIELD_RULES_BY_SCHEMA
         (that registry only has handoff/handoff-archived/cross-repo-memo) — no
         cross-field errors should ever surface for this fixture, matching
@@ -7345,11 +7345,11 @@ class TestValidateLegacyYamlFrontmatter:
 # ---------------------------------------------------------------------------
 
 class TestGateEvidenceLegsShape:
-    def test_absent_gate_evidence_ok(self):
+    def test_absent_gate_evidence_ok(self) -> None:
         errors = validate_frontmatter(_valid_handoff(), _HANDOFF_SCHEMA)
         assert not any(e['field'].startswith('gate_evidence') for e in errors)
 
-    def test_valid_human_leg_ok(self):
+    def test_valid_human_leg_ok(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{'leg_id': 'l1', 'kind': 'human', 'reason': 'no machine-checkable predicate exists'}],
@@ -7357,7 +7357,7 @@ class TestGateEvidenceLegsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'].startswith('gate_evidence') for e in errors)
 
-    def test_valid_file_exists_leg_ok(self):
+    def test_valid_file_exists_leg_ok(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{
@@ -7369,7 +7369,7 @@ class TestGateEvidenceLegsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'].startswith('gate_evidence') for e in errors)
 
-    def test_valid_frontmatter_field_leg_ok(self):
+    def test_valid_frontmatter_field_leg_ok(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{
@@ -7380,7 +7380,7 @@ class TestGateEvidenceLegsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'].startswith('gate_evidence') for e in errors)
 
-    def test_valid_commit_ancestor_leg_ok(self):
+    def test_valid_commit_ancestor_leg_ok(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{
@@ -7391,7 +7391,7 @@ class TestGateEvidenceLegsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'].startswith('gate_evidence') for e in errors)
 
-    def test_valid_probe_command_leg_ok(self):
+    def test_valid_probe_command_leg_ok(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': False,
             'legs': [{
@@ -7403,7 +7403,7 @@ class TestGateEvidenceLegsShape:
         assert not any(e['field'].startswith('gate_evidence') for e in errors)
 
     @pytest.mark.parametrize('ref', ['/abs/probe.py', 'C:/probe.py', '../probe.py', 'a/../probe.py'])
-    def test_probe_command_leg_rejects_non_repo_relative_ref(self, ref):
+    def test_probe_command_leg_rejects_non_repo_relative_ref(self, ref) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': False,
             'legs': [{'leg_id': 'l1', 'kind': 'probe-command', 'repo': 'project_rag', 'ref': ref, 'note': 'n'}],
@@ -7411,7 +7411,7 @@ class TestGateEvidenceLegsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'].startswith('gate_evidence') for e in errors)
 
-    def test_probe_command_leg_requires_note(self):
+    def test_probe_command_leg_requires_note(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': False,
             'legs': [{'leg_id': 'l1', 'kind': 'probe-command', 'repo': 'project_rag', 'ref': 'p.py'}],
@@ -7419,7 +7419,7 @@ class TestGateEvidenceLegsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'].startswith('gate_evidence') for e in errors)
 
-    def test_valid_deadline_leg_ok(self):
+    def test_valid_deadline_leg_ok(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': False,
             'legs': [{'leg_id': 'l1', 'kind': 'deadline', 'ref': '2026-08-01'}],
@@ -7427,7 +7427,7 @@ class TestGateEvidenceLegsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'].startswith('gate_evidence') for e in errors)
 
-    def test_valid_test_node_id_leg_ok(self):
+    def test_valid_test_node_id_leg_ok(self) -> None:
         """The four kinds carried verbatim from cutover.schema.json reuse the
         SAME _verified_by_ref_shape_error dispatch as _cutover_cf_verified_by_kind_and_ref_shape."""
         fm = _valid_handoff(gate_evidence={
@@ -7440,7 +7440,7 @@ class TestGateEvidenceLegsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'].startswith('gate_evidence') for e in errors)
 
-    def test_missing_repo_rejected(self):
+    def test_missing_repo_rejected(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{'leg_id': 'l1', 'kind': 'commit-ancestor', 'ref': 'abc1234@refs/heads/main'}],
@@ -7451,7 +7451,7 @@ class TestGateEvidenceLegsShape:
             for e in errors
         )
 
-    def test_human_leg_missing_reason_rejected(self):
+    def test_human_leg_missing_reason_rejected(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{'leg_id': 'l1', 'kind': 'human'}],
@@ -7459,7 +7459,7 @@ class TestGateEvidenceLegsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'gate_evidence.legs[0].reason' for e in errors)
 
-    def test_deadline_leg_with_repo_rejected(self):
+    def test_deadline_leg_with_repo_rejected(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': False,
             'legs': [{'leg_id': 'l1', 'kind': 'deadline', 'ref': '2026-08-01', 'repo': 'content_root'}],
@@ -7470,7 +7470,7 @@ class TestGateEvidenceLegsShape:
             for e in errors
         )
 
-    def test_deadline_leg_relative_ref_rejected(self):
+    def test_deadline_leg_relative_ref_rejected(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': False,
             'legs': [{'leg_id': 'l1', 'kind': 'deadline', 'ref': 'in 2 weeks'}],
@@ -7478,7 +7478,7 @@ class TestGateEvidenceLegsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'gate_evidence.legs[0].ref' for e in errors)
 
-    def test_file_exists_leg_missing_note_rejected(self):
+    def test_file_exists_leg_missing_note_rejected(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{
@@ -7489,7 +7489,7 @@ class TestGateEvidenceLegsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'gate_evidence.legs[0].note' for e in errors)
 
-    def test_frontmatter_field_leg_null_expected_rejected(self):
+    def test_frontmatter_field_leg_null_expected_rejected(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [{
@@ -7500,7 +7500,7 @@ class TestGateEvidenceLegsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'gate_evidence.legs[0].expected' for e in errors)
 
-    def test_commit_ancestor_bare_sha_rejected(self):
+    def test_commit_ancestor_bare_sha_rejected(self) -> None:
         """A bare SHA with no '@' re-opens the silent-wrong-tree failure the
         mandatory repo: rule exists to prevent — ref must name both ends."""
         fm = _valid_handoff(gate_evidence={
@@ -7510,7 +7510,7 @@ class TestGateEvidenceLegsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'gate_evidence.legs[0].ref' for e in errors)
 
-    def test_invalid_kind_enum_rejected(self):
+    def test_invalid_kind_enum_rejected(self) -> None:
         """Snake_case is not the ratified authoring form -- kebab is (Finding 4)."""
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
@@ -7522,7 +7522,7 @@ class TestGateEvidenceLegsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'gate_evidence.legs[0].kind' and 'invalid enum value' in e['error'] for e in errors)
 
-    def test_duplicate_leg_id_rejected(self):
+    def test_duplicate_leg_id_rejected(self) -> None:
         fm = _valid_handoff(gate_evidence={
             'covers_prose': True,
             'legs': [
@@ -7533,7 +7533,7 @@ class TestGateEvidenceLegsShape:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'gate_evidence.legs[1].leg_id' and 'duplicate' in e['error'] for e in errors)
 
-    def test_non_list_legs_ok_shape_only(self):
+    def test_non_list_legs_ok_shape_only(self) -> None:
         """Base shape validation (not this cross-field rule) rejects a
         non-list legs -- this rule guards against a crash on the malformed
         input, not a duplicate error."""
@@ -7551,7 +7551,7 @@ class TestLintSidecarRePlanReviewCheck:
     plan-derivable lenses.
     """
 
-    def test_plan_review_check_sidecar_is_exempt(self):
+    def test_plan_review_check_sidecar_is_exempt(self) -> None:
         assert _lint_is_sidecar_file('state/plan-sidecars/foo.plan-review-check.md') is True
 
 
@@ -7562,10 +7562,10 @@ class TestLintSidecarReExecutionRecord:
     frontmatter falsely declaring it one.
     """
 
-    def test_execution_record_is_exempt(self):
+    def test_execution_record_is_exempt(self) -> None:
         assert _lint_is_sidecar_file('docs/plans/2026-09-10-foo.execution-record.md') is True
 
-    def test_plain_plan_is_not_exempt(self):
+    def test_plain_plan_is_not_exempt(self) -> None:
         assert _lint_is_sidecar_file('docs/plans/2026-09-10-execution-record-cleanup.md') is False
 
 
@@ -7578,7 +7578,7 @@ class TestCfAwaitingGateNotPickupReady:
     cross-repo/inbox/2026-08-06-example-market-data-repo-em-pickup-ready-true-under-unmet-gate.md
     """
 
-    def test_awaiting_gate_pickup_ready_true_rejected(self):
+    def test_awaiting_gate_pickup_ready_true_rejected(self) -> None:
         fm = _valid_handoff(
             deployment_state='awaiting_gate',
             blocking_notes='waiting on upstream dependency',
@@ -7587,7 +7587,7 @@ class TestCfAwaitingGateNotPickupReady:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'pickup_ready' for e in errors)
 
-    def test_awaiting_gate_pickup_ready_absent_ok(self):
+    def test_awaiting_gate_pickup_ready_absent_ok(self) -> None:
         fm = _valid_handoff(
             deployment_state='awaiting_gate',
             blocking_notes='waiting on upstream dependency',
@@ -7595,7 +7595,7 @@ class TestCfAwaitingGateNotPickupReady:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'pickup_ready' for e in errors)
 
-    def test_awaiting_gate_pickup_ready_false_ok(self):
+    def test_awaiting_gate_pickup_ready_false_ok(self) -> None:
         fm = _valid_handoff(
             deployment_state='awaiting_gate',
             blocking_notes='waiting on upstream dependency',
@@ -7604,7 +7604,7 @@ class TestCfAwaitingGateNotPickupReady:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'pickup_ready' for e in errors)
 
-    def test_ready_to_fire_pickup_ready_true_still_ok(self):
+    def test_ready_to_fire_pickup_ready_true_still_ok(self) -> None:
         """The three coherent arms (session-handoff, recovery, spinoff) pair
         pickup_ready: true with ready_to_fire -- this rule must not fire there."""
         fm = _valid_handoff(deployment_state='ready_to_fire', pickup_ready=True)
@@ -7619,17 +7619,17 @@ class TestCfReadyToFireNoUnresolvedBlockedBy:
     derives-readiness.md § Problem).
     """
 
-    def test_ready_to_fire_with_unresolved_blocked_by_rejected(self):
+    def test_ready_to_fire_with_unresolved_blocked_by_rejected(self) -> None:
         fm = _valid_handoff(deployment_state='ready_to_fire', blocked_by=['stub-1'])
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'blocked_by' for e in errors)
 
-    def test_ready_to_fire_no_blocked_by_ok(self):
+    def test_ready_to_fire_no_blocked_by_ok(self) -> None:
         fm = _valid_handoff(deployment_state='ready_to_fire')
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'blocked_by' for e in errors)
 
-    def test_ready_to_fire_blocked_by_cleared_via_no_longer_blocked_by_ok(self):
+    def test_ready_to_fire_blocked_by_cleared_via_no_longer_blocked_by_ok(self) -> None:
         fm = _valid_handoff(
             deployment_state='ready_to_fire',
             blocked_by=['stub-1'],
@@ -7638,7 +7638,7 @@ class TestCfReadyToFireNoUnresolvedBlockedBy:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'blocked_by' for e in errors)
 
-    def test_ready_to_fire_blocked_by_cleared_via_gate_cleared_by_ok(self):
+    def test_ready_to_fire_blocked_by_cleared_via_gate_cleared_by_ok(self) -> None:
         fm = _valid_handoff(
             deployment_state='ready_to_fire',
             blocked_by=['stub-1'],
@@ -7651,7 +7651,7 @@ class TestCfReadyToFireNoUnresolvedBlockedBy:
         'abcdef1',
         'pm-turn:4d47f5c4-9b93-49c0-bbbf-a67e580e5bc0#12',
     ])
-    def test_gate_cleared_by_item_form_accepted(self, item):
+    def test_gate_cleared_by_item_form_accepted(self, item) -> None:
         fm = _valid_handoff(gate_cleared_by=[item])
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any('gate_cleared_by' in e['field'] for e in errors)
@@ -7664,12 +7664,12 @@ class TestCfReadyToFireNoUnresolvedBlockedBy:
         'pm-turn:sess#3 ',
         'stub-1',
     ])
-    def test_gate_cleared_by_item_form_rejected(self, item):
+    def test_gate_cleared_by_item_form_rejected(self, item) -> None:
         fm = _valid_handoff(gate_cleared_by=[item])
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any('gate_cleared_by' in e['field'] for e in errors)
 
-    def test_awaiting_gate_with_blocked_by_still_ok(self):
+    def test_awaiting_gate_with_blocked_by_still_ok(self) -> None:
         """This rule only guards ready_to_fire -- awaiting_gate keeps
         blocked_by as its own valid gate-naming field (C3)."""
         fm = _valid_handoff(deployment_state='awaiting_gate', blocked_by=['stub-1'])
@@ -7691,7 +7691,7 @@ class TestCfAwaitingGateNotPickupReadyBackstop:
     rule firing, so a deletion would have gone green.
     """
 
-    def test_awaiting_gate_with_pickup_ready_true_is_refused(self):
+    def test_awaiting_gate_with_pickup_ready_true_is_refused(self) -> None:
         fm = _valid_handoff(deployment_state='awaiting_gate', pickup_ready=True)
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert any(e['field'] == 'pickup_ready' for e in errors), (
@@ -7699,12 +7699,12 @@ class TestCfAwaitingGateNotPickupReadyBackstop:
             'inconsistent write -- AC5 regression'
         )
 
-    def test_awaiting_gate_with_pickup_ready_false_is_accepted(self):
+    def test_awaiting_gate_with_pickup_ready_false_is_accepted(self) -> None:
         fm = _valid_handoff(deployment_state='awaiting_gate', pickup_ready=False)
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'pickup_ready' for e in errors)
 
-    def test_ready_to_fire_with_pickup_ready_true_is_accepted(self):
+    def test_ready_to_fire_with_pickup_ready_true_is_accepted(self) -> None:
         fm = _valid_handoff(deployment_state='ready_to_fire', pickup_ready=True)
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert not any(e['field'] == 'pickup_ready' for e in errors)
@@ -7719,7 +7719,7 @@ class TestReconcileDispositionFields:
     dispositioned handoff, or one carrying neither field, validates cleanly.
     """
 
-    def test_both_fields_present_valid_on_live_handoff(self):
+    def test_both_fields_present_valid_on_live_handoff(self) -> None:
         fm = _valid_handoff(
             reconcile_disposition='surfaced-and-actioned',
             reconcile_disposition_reason='Reconciled manually against the successor baton.',
@@ -7727,11 +7727,11 @@ class TestReconcileDispositionFields:
         errors = validate_frontmatter(fm, _HANDOFF_SCHEMA)
         assert errors == []
 
-    def test_both_fields_absent_valid_on_live_handoff(self):
+    def test_both_fields_absent_valid_on_live_handoff(self) -> None:
         errors = validate_frontmatter(_valid_handoff(), _HANDOFF_SCHEMA)
         assert errors == []
 
-    def test_both_fields_present_valid_on_archived_handoff(self):
+    def test_both_fields_present_valid_on_archived_handoff(self) -> None:
         fm = _valid_archived_handoff(
             reconcile_disposition='surfaced-and-actioned',
             reconcile_disposition_reason='Reconciled manually against the successor baton.',
@@ -7739,7 +7739,7 @@ class TestReconcileDispositionFields:
         errors = validate_frontmatter(fm, _HANDOFF_ARCHIVED_SCHEMA)
         assert errors == []
 
-    def test_both_fields_absent_valid_on_archived_handoff(self):
+    def test_both_fields_absent_valid_on_archived_handoff(self) -> None:
         errors = validate_frontmatter(_valid_archived_handoff(), _HANDOFF_ARCHIVED_SCHEMA)
         assert errors == []
 
@@ -7829,7 +7829,7 @@ class TestQueueDeferralGrantConditional:
         return fm
 
     @pytest.mark.parametrize('family', _FAMILIES)
-    def test_conditional_branch_is_declared(self, family):
+    def test_conditional_branch_is_declared(self, family) -> None:
         """The vendored schema carries the deferred branch at all — a re-vendor that
         silently dropped it would otherwise leave every test below passing vacuously,
         since a record with all five fields present validates fine against no branch."""
@@ -7840,7 +7840,7 @@ class TestQueueDeferralGrantConditional:
         )
 
     @pytest.mark.parametrize('family', _FAMILIES)
-    def test_branch_carries_the_presence_only_comment(self, family):
+    def test_branch_carries_the_presence_only_comment(self, family) -> None:
         """A conditional without the house-style `$comment` reads as an enforcement
         point it is not — the reason C2 required the prose to land in DoE's same commit."""
         blob = json.dumps(self._deferred_branch(family))
@@ -7848,7 +7848,7 @@ class TestQueueDeferralGrantConditional:
 
     @pytest.mark.parametrize('family', _FAMILIES)
     @pytest.mark.parametrize('missing', _GRANT_FIELDS)
-    def test_deferred_without_each_grant_field_is_rejected(self, family, missing):
+    def test_deferred_without_each_grant_field_is_rejected(self, family, missing) -> None:
         fm = self._granted_record(family)
         fm.pop(missing)
         errors = validate_frontmatter(fm, self._schema_path(family))
@@ -7858,12 +7858,12 @@ class TestQueueDeferralGrantConditional:
         )
 
     @pytest.mark.parametrize('family', _FAMILIES)
-    def test_fully_granted_deferred_record_passes(self, family):
+    def test_fully_granted_deferred_record_passes(self, family) -> None:
         errors = validate_frontmatter(self._granted_record(family), self._schema_path(family))
         assert errors == [], f'{family}: a fully-granted deferral should validate; got {errors!r}'
 
     @pytest.mark.parametrize('family', _FAMILIES)
-    def test_conditional_does_not_fire_on_a_non_deferred_record(self, family):
+    def test_conditional_does_not_fire_on_a_non_deferred_record(self, family) -> None:
         """An `open` record owes none of the five fields — the branch must key on
         status, not apply the requirement corpus-wide."""
         fm = {
@@ -7876,7 +7876,7 @@ class TestQueueDeferralGrantConditional:
         )
 
     @pytest.mark.parametrize('family', _FAMILIES)
-    def test_case_against_stays_optional_at_top_level(self, family):
+    def test_case_against_stays_optional_at_top_level(self, family) -> None:
         """DoE's vendor constraint, asserted so a future parity pass cannot quietly
         promote it to top-level required. See the class docstring for why the two
         deliberately disagree."""
@@ -7891,7 +7891,7 @@ class TestQueueDeferralGrantConditional:
         )
 
     @pytest.mark.parametrize('family', _FAMILIES)
-    def test_presence_only_a_hollow_grant_still_passes_this_layer(self, family):
+    def test_presence_only_a_hollow_grant_still_passes_this_layer(self, family) -> None:
         """Negative spec, pinning the layer boundary: `pm_approved: false` with a blank
         `case_against` is a hollow grant and the SCHEMA (presence-only) layer ACCEPTS
         it — isolated here via `_validate_json_schema_node` directly rather than
@@ -7945,7 +7945,7 @@ class TestQueueDeferralHollowGrantRejection:
         return fm
 
     @pytest.mark.parametrize('family', _FAMILIES)
-    def test_pm_approved_false_is_rejected(self, family):
+    def test_pm_approved_false_is_rejected(self, family) -> None:
         fm = self._granted_record(family, pm_approved=False)
         errors = validate_frontmatter(fm, self._schema_path(family))
         assert any(e.get('field') == 'pm_approved' for e in errors), (
@@ -7953,7 +7953,7 @@ class TestQueueDeferralHollowGrantRejection:
         )
 
     @pytest.mark.parametrize('family', _FAMILIES)
-    def test_pm_approved_absent_is_rejected(self, family):
+    def test_pm_approved_absent_is_rejected(self, family) -> None:
         fm = self._granted_record(family)
         fm.pop('pm_approved')
         errors = validate_frontmatter(fm, self._schema_path(family))
@@ -7962,7 +7962,7 @@ class TestQueueDeferralHollowGrantRejection:
         )
 
     @pytest.mark.parametrize('family', _FAMILIES)
-    def test_whitespace_only_case_against_is_rejected(self, family):
+    def test_whitespace_only_case_against_is_rejected(self, family) -> None:
         fm = self._granted_record(family, case_against='   ')
         errors = validate_frontmatter(fm, self._schema_path(family))
         assert any(e.get('field') == 'case_against' for e in errors), (
@@ -7971,7 +7971,7 @@ class TestQueueDeferralHollowGrantRejection:
         )
 
     @pytest.mark.parametrize('family', _FAMILIES)
-    def test_whitespace_only_why_blocked_is_rejected(self, family):
+    def test_whitespace_only_why_blocked_is_rejected(self, family) -> None:
         fm = self._granted_record(family, why_blocked='   ')
         errors = validate_frontmatter(fm, self._schema_path(family))
         assert any(e.get('field') == 'why_blocked' for e in errors), (
@@ -7980,7 +7980,7 @@ class TestQueueDeferralHollowGrantRejection:
         )
 
     @pytest.mark.parametrize('family', _FAMILIES)
-    def test_a_condition_form_deferred_until_is_accepted(self, family):
+    def test_a_condition_form_deferred_until_is_accepted(self, family) -> None:
         """The ISO-date-only refusal was WITHDRAWN 2026-08-29.
 
         It refused the one record on disk that was doing the right thing: a real
@@ -8006,7 +8006,7 @@ class TestQueueDeferralHollowGrantRejection:
         )
 
     @pytest.mark.parametrize('family', _FAMILIES)
-    def test_blank_deferred_until_is_still_rejected(self, family):
+    def test_blank_deferred_until_is_still_rejected(self, family) -> None:
         """Widening to accept a condition must not accept nothing at all."""
         fm = self._granted_record(family, deferred_until='   ')
         errors = validate_frontmatter(fm, self._schema_path(family))
@@ -8015,7 +8015,7 @@ class TestQueueDeferralHollowGrantRejection:
         )
 
     @pytest.mark.parametrize('family', _FAMILIES)
-    def test_empty_deferred_by_is_rejected(self, family):
+    def test_empty_deferred_by_is_rejected(self, family) -> None:
         fm = self._granted_record(family, deferred_by='')
         errors = validate_frontmatter(fm, self._schema_path(family))
         assert any(e.get('field') == 'deferred_by' for e in errors), (
@@ -8023,7 +8023,7 @@ class TestQueueDeferralHollowGrantRejection:
         )
 
     @pytest.mark.parametrize('family', _FAMILIES)
-    def test_fully_granted_deferred_record_passes_this_layer(self, family):
+    def test_fully_granted_deferred_record_passes_this_layer(self, family) -> None:
         fm = self._granted_record(family)
         errors = validate_frontmatter(fm, self._schema_path(family))
         assert errors == [], (
@@ -8032,7 +8032,7 @@ class TestQueueDeferralHollowGrantRejection:
         )
 
     @pytest.mark.parametrize('family', _FAMILIES)
-    def test_rule_does_not_fire_on_a_non_deferred_record(self, family):
+    def test_rule_does_not_fire_on_a_non_deferred_record(self, family) -> None:
         fm = {
             k: v for k, v in self._granted_record(family, status='open').items()
             if k not in TestQueueDeferralGrantConditional._GRANT_FIELDS
@@ -8043,7 +8043,7 @@ class TestQueueDeferralHollowGrantRejection:
         )
 
     @pytest.mark.parametrize('family', _FAMILIES)
-    def test_error_message_shape_comes_from_shared_primitive(self, family):
+    def test_error_message_shape_comes_from_shared_primitive(self, family) -> None:
         """Pins the reuse: dropping why_blocked (routed through
         `_cf_disposition_shape`'s non-open-needs-detail leg) produces the SAME error
         shape the primitive emits for plan-tasks' disposition_detail leg — 'has
@@ -8098,18 +8098,18 @@ class TestQueueRuleIsClaudeKlabauterScoped:
         # deliberately no case_against — DoE's ceremony does not stamp it
     }
 
-    def test_rule_is_inert_without_the_opt_in(self):
+    def test_rule_is_inert_without_the_opt_in(self) -> None:
         """Default false is the fail-safe direction — a caller that does not
         declare it is treated as a foreign corpus, never as claude-klabauter's."""
         assert _cf_queue_disposition_shape(dict(self._CEREMONY_PARK)) is None
 
-    def test_rule_fires_when_opted_in(self):
+    def test_rule_fires_when_opted_in(self) -> None:
         violation = _cf_queue_disposition_shape(
             dict(self._CEREMONY_PARK), local_queue_corpus=True
         )
         assert violation is not None and violation['field'] == 'case_against'
 
-    def test_foreign_schema_object_seam_does_not_get_our_rule(self):
+    def test_foreign_schema_object_seam_does_not_get_our_rule(self) -> None:
         """`validate_frontmatter_obj` is the seam DoE's port was given. Whatever
         their own schema says is theirs to enforce; OUR cross-field rule must
         contribute nothing through it."""
@@ -8126,7 +8126,7 @@ class TestQueueRuleIsClaudeKlabauterScoped:
             f'the queue cross-field rule fired through the foreign-schema seam: {ours!r}'
         )
 
-    def test_claude_klabauter_vendored_path_still_enforces(self):
+    def test_claude_klabauter_vendored_path_still_enforces(self) -> None:
         """The other half of the scoping: narrowing it must not have made the
         rule inert on claude-klabauter's own corpus, which is the whole point of C3."""
         hollow = dict(self._CEREMONY_PARK, case_against='   ')
@@ -8135,7 +8135,7 @@ class TestQueueRuleIsClaudeKlabauterScoped:
             f'a hollow grant passed claude-klabauter\'s own validation path; got {errors!r}'
         )
 
-    def test_provenance_predicate_rejects_a_foreign_path(self):
+    def test_provenance_predicate_rejects_a_foreign_path(self) -> None:
         assert _is_claude_klabauter_vendored_schema(_SCHEMAS_DIR / 'debt-backlog.schema.json') is True
         assert _is_claude_klabauter_vendored_schema('/nowhere/debt-backlog.schema.json') is False
 
@@ -8154,7 +8154,7 @@ class TestMemoCorpusRoots:
         ('cross-repo/archive/2026-09-11-a-memo.md', 'archived-memo'),
         ('state/cross-repo/archive/2026-09-11-a-memo.md', 'archived-memo'),
     ])
-    def test_memo_path_resolves_under_either_root(self, path, expected):
+    def test_memo_path_resolves_under_either_root(self, path, expected) -> None:
         schemas = load_schemas(str(_DOE_REPO / 'coordinator' / 'schemas'))
         resolved = match_schema(path, None, schemas)
         assert resolved is not None
@@ -8173,7 +8173,7 @@ class TestMultiLineQuotedScalars:
     """
 
     @pytest.mark.parametrize('quote', ['"', "'"])
-    def test_a_continuation_line_is_not_read_as_a_key(self, quote):
+    def test_a_continuation_line_is_not_read_as_a_key(self, quote) -> None:
         doc = (
             '---\n'
             'title: t\n'
@@ -8190,7 +8190,7 @@ class TestMultiLineQuotedScalars:
         )
         assert fm['tail'] == 3, 'folding must stop at the closing quote'
 
-    def test_the_fold_agrees_with_pyyaml(self):
+    def test_the_fold_agrees_with_pyyaml(self) -> None:
         """DoE's mise-prep-gate reads these records through PyYAML. A parser that
         disagrees with the one enforcing the schema produces findings nobody can act
         on — the memo's actual complaint."""
@@ -8206,7 +8206,7 @@ class TestMultiLineQuotedScalars:
 
         assert parsed == yaml.safe_load(block)
 
-    def test_an_unterminated_scalar_is_left_alone(self):
+    def test_an_unterminated_scalar_is_left_alone(self) -> None:
         """A record whose quote never closes is malformed, not a licence to swallow
         the document: the fold declines and the line parses as it always did."""
         doc = '---\ntitle: t\nstatement: "never closed\nn: 1\n---\n\nbody\n'
@@ -8217,7 +8217,7 @@ class TestMultiLineQuotedScalars:
         assert fm['n'] == 1
 
 
-def test_prose_carve_out_is_scoped_by_position():
+def test_prose_carve_out_is_scoped_by_position() -> None:
     from coordinator_core.frontmatter.schema_validate import _is_prose_annotation_path
 
     assert _is_prose_annotation_path(("description",))
@@ -8248,13 +8248,13 @@ class TestAnyOfConstDiscriminatorPicksBranchErrors:
         ]}},
     }
 
-    def test_apm_arm_missing_ruling_ref_reports_ruling_ref(self):
+    def test_apm_arm_missing_ruling_ref_reports_ruling_ref(self) -> None:
         result = validate_frontmatter_obj({'accepted': {'source': 'apm'}}, self._SCHEMA)
         assert result['ok'] is False
         text = ' '.join(e['hint'] for e in result['errors'])
         assert 'ruling_ref' in text and 'pm_quote' not in text
 
-    def test_undiscriminated_instance_keeps_first_branch_error_and_still_rejects(self):
+    def test_undiscriminated_instance_keeps_first_branch_error_and_still_rejects(self) -> None:
         result = validate_frontmatter_obj({'accepted': {'source': 'other'}}, self._SCHEMA)
         assert result['ok'] is False
         assert 'pm_quote' in ' '.join(e['hint'] for e in result['errors'])
@@ -8268,7 +8268,7 @@ class TestCheckSchemaDriftBatch:
     "the comparison never ran" kept distinct from "the schema drifted"."""
 
     @staticmethod
-    def _git(repo, *args):
+    def _git(repo, *args) -> None:
         subprocess.run(
             ['git', '-C', str(repo), *args],
             check=True, capture_output=True, text=True, timeout=30,
@@ -8277,7 +8277,7 @@ class TestCheckSchemaDriftBatch:
         )
 
     @pytest.fixture()
-    def fake_doe(self, tmp_path):
+    def fake_doe(self, tmp_path: Path) -> Path:
         repo = tmp_path / 'DoE-fake'
         schemas = repo / 'coordinator' / 'schemas'
         schemas.mkdir(parents=True)
@@ -8294,7 +8294,7 @@ class TestCheckSchemaDriftBatch:
         return repo
 
     @pytest.fixture()
-    def vendored(self, tmp_path):
+    def vendored(self, tmp_path: Path) -> Path:
         directory = tmp_path / 'vendored'
         directory.mkdir()
         for name in ('a.schema.json', 'b.schema.json', 'c.schema.json'):
@@ -8303,8 +8303,8 @@ class TestCheckSchemaDriftBatch:
         return directory
 
     def test_spawn_count_is_two_whatever_the_set_size(
-        self, fake_doe, vendored, monkeypatch
-    ):
+        self, fake_doe, vendored, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         reset_foreign_repo_probe_memo()
         spawns = []
         real_run = subprocess.run
@@ -8330,14 +8330,14 @@ class TestCheckSchemaDriftBatch:
         assert len(spawns) == 2, f'three schemas: {spawns}'
         assert spawns[1][-2:] == ['cat-file', '--batch']
 
-    def test_empty_set_spawns_nothing(self, fake_doe, monkeypatch):
+    def test_empty_set_spawns_nothing(self, fake_doe, monkeypatch: pytest.MonkeyPatch) -> None:
         def refuse(*_a, **_k):
             raise AssertionError('an empty batch must not spawn')
 
         monkeypatch.setattr(subprocess, 'run', refuse)
         assert check_schema_drift_batch([], fake_doe) == []
 
-    def test_crlf_blob_is_not_drift(self, fake_doe, vendored):
+    def test_crlf_blob_is_not_drift(self, fake_doe, vendored) -> None:
         reset_foreign_repo_probe_memo()
         assert check_schema_drift_batch(
             [(vendored / 'crlf.schema.json', 'HEAD')], fake_doe
@@ -8345,7 +8345,7 @@ class TestCheckSchemaDriftBatch:
 
     def test_verdicts_align_with_inputs_and_one_drift_does_not_hide_the_rest(
         self, fake_doe, vendored
-    ):
+    ) -> None:
         reset_foreign_repo_probe_memo()
         (vendored / 'b.schema.json').write_text('{"title": "tampered"}\n', encoding='utf-8')
         results = check_schema_drift_batch(
@@ -8359,7 +8359,7 @@ class TestCheckSchemaDriftBatch:
         assert not isinstance(results[1], SchemaProbeUnavailableError)
         assert 'diverges' in str(results[1])
 
-    def test_missing_object_is_that_entrys_drift_error(self, fake_doe, vendored):
+    def test_missing_object_is_that_entrys_drift_error(self, fake_doe, vendored) -> None:
         reset_foreign_repo_probe_memo()
         absent = vendored / 'not-in-doe.schema.json'
         absent.write_text('{}\n', encoding='utf-8')
@@ -8371,7 +8371,7 @@ class TestCheckSchemaDriftBatch:
         assert not isinstance(results[1], SchemaProbeUnavailableError)
         assert 'no such object' in str(results[1])
 
-    def test_unreadable_clone_raises_probe_unavailable(self, tmp_path, vendored):
+    def test_unreadable_clone_raises_probe_unavailable(self, tmp_path: Path, vendored) -> None:
         reset_foreign_repo_probe_memo()
         not_a_repo = tmp_path / 'not_a_repo'
         not_a_repo.mkdir()
@@ -8379,8 +8379,8 @@ class TestCheckSchemaDriftBatch:
             check_schema_drift_batch([(vendored / 'a.schema.json', 'HEAD')], not_a_repo)
 
     def test_incomplete_batch_raises_probe_unavailable(
-        self, fake_doe, vendored, monkeypatch
-    ):
+        self, fake_doe, vendored, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         reset_foreign_repo_probe_memo()
         monkeypatch.setattr(
             'coordinator_core.frontmatter.schema_validate.scoped_cat_file_batch',
@@ -8389,7 +8389,7 @@ class TestCheckSchemaDriftBatch:
         with pytest.raises(SchemaProbeUnavailableError, match='NOT a drift finding'):
             check_schema_drift_batch([(vendored / 'a.schema.json', 'HEAD')], fake_doe)
 
-    def test_check_schema_drift_is_the_one_element_call(self, fake_doe, vendored):
+    def test_check_schema_drift_is_the_one_element_call(self, fake_doe, vendored) -> None:
         reset_foreign_repo_probe_memo()
         check_schema_drift(vendored / 'a.schema.json', fake_doe)
         (vendored / 'a.schema.json').write_text('{}\n', encoding='utf-8')
@@ -8404,7 +8404,7 @@ class TestTreeWalkResultCache:
         lint_main(['--root', str(root), '--json'])
         return json.loads(capsys.readouterr().out)
 
-    def test_cached_verdict_is_replayed_and_invalidated_by_an_edit(self, tmp_path, capsys):
+    def test_cached_verdict_is_replayed_and_invalidated_by_an_edit(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         (tmp_path / '.git').mkdir()
         plan = tmp_path / 'docs' / 'plans' / '2026-10-12-x.md'
         plan.parent.mkdir(parents=True)
@@ -8432,13 +8432,13 @@ class TestArchiveSizingsGlobAlias:
     _ARCHIVED = 'archive/sizings/2026-08/2026-08-06-example.yaml'
     _HOT = 'state/sizings/2026-08-06-example.yaml'
 
-    def test_json_schema_loader_path_selects_sizing_object(self):
+    def test_json_schema_loader_path_selects_sizing_object(self) -> None:
         schemas = load_schemas(_SCHEMAS_DIR)
         for path in (self._ARCHIVED, self._HOT):
             matched = match_schema(path, None, schemas)
             assert matched is not None and matched['schemaName'] == 'sizing-object', path
 
-    def test_yaml_loader_path_selects_schema(self, tmp_path):
+    def test_yaml_loader_path_selects_schema(self, tmp_path: Path) -> None:
         (tmp_path / 'sizing-object.yaml').write_text(
             'schema: sizing-object\napplies_to: state/sizings/**/*.yaml\nrequired: []\n', encoding='utf-8')
         schemas = load_schemas(tmp_path)
@@ -8448,17 +8448,17 @@ class TestArchiveSizingsGlobAlias:
         matched = match_schema(self._ARCHIVED, None, schemas)
         assert matched is not None and matched['schemaName'] == 'sizing-object'
 
-    def test_unrelated_archive_path_unmatched(self):
+    def test_unrelated_archive_path_unmatched(self) -> None:
         schemas = load_schemas(_SCHEMAS_DIR)
         matched = match_schema('archive/sizings/2026-08/sub/x.yaml', None, schemas)
         assert matched is None or matched['schemaName'] != 'sizing-object'
 
-    def test_list_applies_to_still_fails_loud(self, tmp_path):
+    def test_list_applies_to_still_fails_loud(self, tmp_path: Path) -> None:
         (tmp_path / 'bad.yaml').write_text(
             'schema: bad\napplies_to:\n  - state/sizings/*.yaml\n', encoding='utf-8')
         with pytest.raises(ValueError, match='applies_to must be a string'):
             load_schemas(tmp_path)
 
-    def test_type_to_glob_keeps_primary_glob(self):
+    def test_type_to_glob_keeps_primary_glob(self) -> None:
         from coordinator_core.frontmatter.schema_validate import build_type_to_glob
         assert build_type_to_glob(_SCHEMAS_DIR)['sizing-object'] == 'state/sizings/**/*.yaml'

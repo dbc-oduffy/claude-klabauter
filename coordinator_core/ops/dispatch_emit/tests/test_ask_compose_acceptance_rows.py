@@ -27,18 +27,18 @@ def _compose() -> str:
     )
 
 
-def test_scout_prompt_holds_the_clause():
+def test_scout_prompt_holds_the_clause() -> None:
     assert ACCEPTANCE_ROWS_CLAUSE in _compose()
 
 
-def test_assemble_command_holds_the_helper_expression():
+def test_assemble_command_holds_the_helper_expression() -> None:
     expr = acceptance_rows_assemble_flags_js("_asmFields", "_q")
     assert expr in _compose()
     assert "--acceptance-rows-json" in expr
     assert "length > 0" in expr
 
 
-def test_helper_is_empty_unless_rows_are_a_non_empty_array():
+def test_helper_is_empty_unless_rows_are_a_non_empty_array() -> None:
     expr = acceptance_rows_assemble_flags_js("s", "q")
     assert expr.startswith(" + ")
     assert expr.endswith(": '')")

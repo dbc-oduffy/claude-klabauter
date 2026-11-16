@@ -625,7 +625,7 @@ class _StringKeyLoader(yaml.SafeLoader):
     round-trips `on:` into `true:`. Values keep the stock resolution.
     """
 
-    def construct_mapping(self, node, deep=False):
+    def construct_mapping(self, node, deep: bool = False):
         if isinstance(node, yaml.MappingNode):
             self.flatten_mapping(node)
             for key_node, _ in node.value:

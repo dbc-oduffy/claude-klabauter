@@ -35,7 +35,7 @@ def _write(repo: Path, rel: str, text: str) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _isolated_system_temp(tmp_path, monkeypatch):
+def _isolated_system_temp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The persistent mirror lives under the system Temp's coordinator root; every test gets its own."""
     import tempfile
 
@@ -44,7 +44,7 @@ def _isolated_system_temp(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     """A committed base; the run's declared files and a peer's module are uncommitted in the worktree."""
     root = tmp_path / "repo"
     root.mkdir()
@@ -70,7 +70,7 @@ def _verdict(root: Path) -> dict:
     return json.loads(cov.verdict_path(root, RUN).read_text(encoding="utf-8"))
 
 
-def test_a_run_importing_an_uncommitted_peer_module_goes_red_on_the_clean_export(repo, capsys):
+def test_a_run_importing_an_uncommitted_peer_module_goes_red_on_the_clean_export(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _measure(repo)
     assert (repo / PEER_MOD).is_file()
     assert _git(repo, "ls-files", "--", PEER_MOD).strip() == ""
@@ -82,7 +82,7 @@ def test_a_run_importing_an_uncommitted_peer_module_goes_red_on_the_clean_export
     assert PEER_MOD.removesuffix(".py") in _verdict(repo)["detail"]
 
 
-def test_a_collection_time_import_of_an_uncommitted_peer_module_is_never_green(repo):
+def test_a_collection_time_import_of_an_uncommitted_peer_module_is_never_green(repo) -> None:
     _write(repo, RUN_MOD, _COLLECTION_TIME_IMPORT)
     _measure(repo)
 
@@ -93,14 +93,14 @@ def test_a_collection_time_import_of_an_uncommitted_peer_module_is_never_green(r
     assert "No module named 'peer_mod'" in verdict["detail"], verdict
 
 
-def test_the_same_run_is_green_when_the_peer_module_is_part_of_it(repo):
+def test_the_same_run_is_green_when_the_peer_module_is_part_of_it(repo) -> None:
     mr.measured_rev(RUN, [RUN_MOD, RUN_TEST, PEER_MOD], repo_root=repo)
 
     assert cov.main(["--run-id", RUN, "--repo-root", str(repo)]) == 0
     assert _verdict(repo)["verdict"] == "green"
 
 
-def test_a_verify_timeout_exits_inconclusive_and_the_detail_names_the_timeout(repo, monkeypatch):
+def test_a_verify_timeout_exits_inconclusive_and_the_detail_names_the_timeout(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _measure(repo)
     monkeypatch.setattr(cov, "TEST_TIMEOUT_S", 0.001)
 

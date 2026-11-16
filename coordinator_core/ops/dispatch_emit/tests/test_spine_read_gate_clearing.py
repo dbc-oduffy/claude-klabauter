@@ -4,6 +4,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
+from pathlib import Path
 
 _HEADER = "# fixture plan\n\n## Tasks\n\n"
 
@@ -55,7 +56,7 @@ def _write_plan(tmp_path, body: str):
         ),
     ],
 )
-def test_four_clearing_shapes(tmp_path, case_id, gate_entry_yaml, expect_dispatchable):
+def test_four_clearing_shapes(tmp_path: Path, case_id, gate_entry_yaml, expect_dispatchable) -> None:
     body = (
         "- id: C1\n"
         f"  title: {case_id}\n"
@@ -70,7 +71,7 @@ def test_four_clearing_shapes(tmp_path, case_id, gate_entry_yaml, expect_dispatc
     assert ids == ({"C1"} if expect_dispatchable else set())
 
 
-def test_blocks_ac_closure_never_withholds_regardless_of_cleared(tmp_path):
+def test_blocks_ac_closure_never_withholds_regardless_of_cleared(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: only an acceptance criterion is gated
@@ -88,8 +89,8 @@ def test_blocks_ac_closure_never_withholds_regardless_of_cleared(tmp_path):
 
 @pytest.mark.parametrize("blocks_value", [None, "typo-value"])
 def test_absent_or_unrecognized_blocks_resolves_to_execution_and_withholds(
-    tmp_path, blocks_value
-):
+    tmp_path: Path, blocks_value
+) -> None:
     blocks_line = "" if blocks_value is None else f"      blocks: {blocks_value}\n"
     body = (
         "- id: C1\n"
@@ -130,14 +131,14 @@ def _klabauter_gated(writes: list[str]) -> str:
         ["coordinator/bin/x.py"],
     ],
 )
-def test_mirror_only_klabauter_gate_is_dropped_and_writes_resolve_to_claude_klabauter(tmp_path, writes):
+def test_mirror_only_klabauter_gate_is_dropped_and_writes_resolve_to_claude_klabauter(tmp_path: Path, writes) -> None:
     rows = read_spine(_write_plan(tmp_path, _klabauter_gated(writes)))
 
     assert [r.id for r in rows] == ["C1"]
     assert all(w.startswith("coordinator/bin/") for w in rows[0].writes)
 
 
-def test_klabauter_only_path_keeps_the_gate_and_withholds(tmp_path):
+def test_klabauter_only_path_keeps_the_gate_and_withholds(tmp_path: Path) -> None:
     body = _klabauter_gated(
         ["C:/dev/claude-klabauter/coordinator/bin/x.py", "C:/dev/claude-klabauter/README.md"]
     )

@@ -9,9 +9,10 @@ from coordinator_core.ops.dispatch_emit.tests.test_inventory_tranche_and_withhel
     _n_rows,
     _repo,
 )
+from pathlib import Path
 
 
-def _inventory(tmp_path):
+def _inventory(tmp_path) -> Path:
     em_row = _chunk("A1", "docs/a1.md", performer="em", change_kind="doc-edit")
     gate_row = _chunk("B1", "src/b1.py", external_gate=[{"id": "owner-lands-first"}])
     ordinary = _chunk(
@@ -43,7 +44,7 @@ def _inventory(tmp_path):
     )
 
 
-def test_tranche_report_names_em_owed_holds_and_their_stalled_dependents(tmp_path):
+def test_tranche_report_names_em_owed_holds_and_their_stalled_dependents(tmp_path: Path) -> None:
     report: dict = {}
     im.mint_spine(str(_inventory(tmp_path)), row_budget=10, tranche_out=report)
 
@@ -55,7 +56,7 @@ def test_tranche_report_names_em_owed_holds_and_their_stalled_dependents(tmp_pat
     assert owed["b"]["stalls"] == []
 
 
-def test_ordinary_predecessor_hold_and_its_dependents_stay_out_of_the_list(tmp_path):
+def test_ordinary_predecessor_hold_and_its_dependents_stay_out_of_the_list(tmp_path: Path) -> None:
     report: dict = {}
     im.mint_spine(str(_inventory(tmp_path)), row_budget=10, tranche_out=report, withheld_out={})
 
@@ -66,7 +67,7 @@ def test_ordinary_predecessor_hold_and_its_dependents_stay_out_of_the_list(tmp_p
     assert report["plans"] == ["free"]
 
 
-def test_no_em_owed_key_when_nothing_is_em_owed(tmp_path):
+def test_no_em_owed_key_when_nothing_is_em_owed(tmp_path: Path) -> None:
     inv = _repo(tmp_path, {"free": _n_rows("F", 2), "g": _n_rows("G", 1)}, [("free", "—"), ("g", "—")])
     report: dict = {}
     im.mint_spine(str(inv), row_budget=2, tranche_out=report)

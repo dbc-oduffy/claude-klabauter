@@ -69,7 +69,7 @@ def _git(root: Path, *args: str) -> None:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     for name in ("CLAUDE_CODE_REMOTE", "CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_CONTAINER_ID",
                  "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_PLUGIN_ROOT", "DELIVERABLE_ID"):
         monkeypatch.delenv(name, raising=False)
@@ -144,7 +144,7 @@ def _stamp_plan_for(root: Path, sizing_rel: str) -> Path:
     return plan
 
 
-def test_a_halted_predecessor_closed_by_stamp_implemented_releases_the_successor(repo, capsys):
+def test_a_halted_predecessor_closed_by_stamp_implemented_releases_the_successor(repo, capsys: pytest.CaptureFixture[str]) -> None:
     first, second = _sequenced_pair(repo)
 
     denied = _submit(repo, {"sizing": second.slice_sizing})
@@ -164,7 +164,7 @@ def test_a_halted_predecessor_closed_by_stamp_implemented_releases_the_successor
     assert _status(repo, second.run_id) == "running"
 
 
-def test_a_superseded_held_slice_is_reported_not_released_and_its_fire_is_denied(repo, capsys):
+def test_a_superseded_held_slice_is_reported_not_released_and_its_fire_is_denied(repo, capsys: pytest.CaptureFixture[str]) -> None:
     first, second = _sequenced_pair(repo)
 
     fresh = _submit(repo, {"ask": "two, resubmitted", "source": "relayed", "supersedes": second.run_id})

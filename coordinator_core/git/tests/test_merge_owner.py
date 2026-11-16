@@ -9,23 +9,24 @@ import pytest
 
 from coordinator_core.git import merge_owner
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _git(repo, *args, check=True):
+def _git(repo, *args, check: bool = True):
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check,
         **no_console_creationflags(),
     )
 
 
-def _w(repo, name, text):
+def _w(repo, name, text) -> None:
     (repo / name).write_text(text, encoding="utf-8", newline="\n")
 
 
 @pytest.fixture()
-def merging(tmp_path):
+def merging(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "base")
@@ -52,25 +53,25 @@ def _shas(r):
     )
 
 
-def test_round_trip(merging):
+def test_round_trip(merging) -> None:
     mh, h = _shas(merging)
     path = merge_owner.record(merging, "run-1", mh, h)
     assert path == merging / ".git" / "coordinator-merge" / "owner.json"
     assert merge_owner.owner(merging) == "run-1"
 
 
-def test_no_file_is_none(merging):
+def test_no_file_is_none(merging) -> None:
     assert merge_owner.owner(merging) is None
 
 
-def test_malformed_json_is_none(merging):
+def test_malformed_json_is_none(merging) -> None:
     p = merging / ".git" / "coordinator-merge" / "owner.json"
     p.parent.mkdir()
     p.write_text("{not json", encoding="utf-8")
     assert merge_owner.owner(merging) is None
 
 
-def _tamper(repo, **over):
+def _tamper(repo, **over) -> None:
     mh, h = _shas(repo)
     p = merge_owner.record(repo, "run-1", mh, h)
     data = json.loads(p.read_text(encoding="utf-8"))
@@ -82,32 +83,32 @@ def _tamper(repo, **over):
     "over",
     [{"schema": 2}, {"merge_head": "0" * 40}, {"head": "1" * 40}, {"run_id": ""}],
 )
-def test_mismatched_record_is_none(merging, over):
+def test_mismatched_record_is_none(merging, over) -> None:
     _tamper(merging, **over)
     assert merge_owner.owner(merging) is None
 
 
-def test_no_merge_head_is_none(merging):
+def test_no_merge_head_is_none(merging) -> None:
     mh, h = _shas(merging)
     merge_owner.record(merging, "run-1", mh, h)
     (merging / ".git" / "MERGE_HEAD").unlink()
     assert merge_owner.owner(merging) is None
 
 
-def test_octopus_merge_head_is_none(merging):
+def test_octopus_merge_head_is_none(merging) -> None:
     mh, h = _shas(merging)
     merge_owner.record(merging, "run-1", mh, h)
     (merging / ".git" / "MERGE_HEAD").write_text(f"{mh}\n{h}\n", encoding="utf-8")
     assert merge_owner.owner(merging) is None
 
 
-def test_record_rejects_empty_fields(merging):
+def test_record_rejects_empty_fields(merging) -> None:
     for args in (("", "a", "b"), ("r", "", "b"), ("r", "a", "")):
         with pytest.raises(ValueError):
             merge_owner.record(merging, *args)
 
 
-def test_clear_removes_file_and_tolerates_absence(merging):
+def test_clear_removes_file_and_tolerates_absence(merging) -> None:
     mh, h = _shas(merging)
     p = merge_owner.record(merging, "run-1", mh, h)
     merge_owner.clear(merging)
@@ -115,7 +116,7 @@ def test_clear_removes_file_and_tolerates_absence(merging):
     merge_owner.clear(merging)
 
 
-def test_owner_spawns_nothing(merging, monkeypatch):
+def test_owner_spawns_nothing(merging, monkeypatch: pytest.MonkeyPatch) -> None:
     mh, h = _shas(merging)
     merge_owner.record(merging, "run-1", mh, h)
     calls = []
@@ -126,7 +127,7 @@ def test_owner_spawns_nothing(merging, monkeypatch):
         return real_run(*a, **k)
 
     class PopenSpy(real_popen):
-        def __init__(self, *a, **k):
+        def __init__(self, *a, **k) -> None:
             calls.append(a)
             super().__init__(*a, **k)
 

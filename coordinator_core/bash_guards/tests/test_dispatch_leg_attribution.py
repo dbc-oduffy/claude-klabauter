@@ -12,6 +12,7 @@ import coordinator_core.ipc as ipc
 from coordinator_core.bash_guards import dispatch as chain
 from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.hooks import preuse_bash_dispatch  # noqa: F401  (registers the op)
+from pathlib import Path
 
 _OP = "hooks.preuse_bash_dispatch"
 
@@ -22,7 +23,7 @@ def _burn(ms: float) -> None:
         pass
 
 
-def _call(tmp_path, monkeypatch, command="ls"):
+def _call(tmp_path, monkeypatch, command: str = "ls"):
     common = tmp_path / ".git"
     common.mkdir()
     monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common)
@@ -47,7 +48,7 @@ def _one_guard(fn):
     return lambda *a, **k: [entry]
 
 
-def test_forced_slow_guard_is_named_in_the_row_through_to_thread(tmp_path, monkeypatch):
+def test_forced_slow_guard_is_named_in_the_row_through_to_thread(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(chain, "_build_guard_chain", _one_guard(lambda: (_burn(80.0), None)[1]))
     rows = _call(tmp_path, monkeypatch)
     assert len(rows) == 1
@@ -58,7 +59,7 @@ def test_forced_slow_guard_is_named_in_the_row_through_to_thread(tmp_path, monke
     assert row["handler_thread_ms"] >= row["legs"][0]["ms"]
 
 
-def test_fast_call_carries_handler_thread_ms_and_no_legs(tmp_path, monkeypatch):
+def test_fast_call_carries_handler_thread_ms_and_no_legs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(chain, "_build_guard_chain", _one_guard(lambda: None))
     rows = _call(tmp_path, monkeypatch)
     assert len(rows) == 1
@@ -66,23 +67,23 @@ def test_fast_call_carries_handler_thread_ms_and_no_legs(tmp_path, monkeypatch):
     assert rows[0]["handler_thread_ms"] >= 0.0
 
 
-def test_slow_claims_phase_is_named(tmp_path, monkeypatch):
+def test_slow_claims_phase_is_named(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(chain, "_build_guard_chain", _one_guard(lambda: None))
     monkeypatch.setattr(chain, "_record_bash_write_claims", lambda raw, result: _burn(80.0))
     rows = _call(tmp_path, monkeypatch)
     assert rows[0]["legs"][0]["name"] == "claims"
 
 
-def test_slow_guard_stops_later_guards_at_the_hook_deadline_and_is_named(tmp_path, monkeypatch):
+def test_slow_guard_stops_later_guards_at_the_hook_deadline_and_is_named(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks import _preuse_phases as pp
 
     ran: list[str] = []
 
-    def slow():
+    def slow() -> None:
         ran.append("slow-guard")
         time.sleep(0.2)
 
-    def later():
+    def later() -> None:
         ran.append("later-guard")
 
     band = list(chain.GuardBand)[0]
@@ -100,7 +101,7 @@ def test_slow_guard_stops_later_guards_at_the_hook_deadline_and_is_named(tmp_pat
     assert row["spans"][0]["wall_ms"] >= 150
 
 
-def test_guard_within_the_deadline_is_not_stopped(tmp_path, monkeypatch):
+def test_guard_within_the_deadline_is_not_stopped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks import _preuse_phases as pp
 
     ran: list[str] = []
@@ -116,7 +117,7 @@ def test_guard_within_the_deadline_is_not_stopped(tmp_path, monkeypatch):
     assert "deadline_stop" not in rows[0]
 
 
-def test_other_ops_rows_carry_no_attribution_fields(tmp_path, monkeypatch):
+def test_other_ops_rows_carry_no_attribution_fields(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     async def handler(params, repo_root=None):
         return {}
 

@@ -179,12 +179,12 @@ def _seed_handoff(
 # ---------------------------------------------------------------------------
 
 
-def test_ac5_kind_descriptor_raises_on_unknown_kind():
+def test_ac5_kind_descriptor_raises_on_unknown_kind() -> None:
     with pytest.raises(ValueError, match="unknown target kind"):
         cascade_mod._kind_descriptor("bogus-kind")
 
 
-def test_ac5_handler_raises_not_empty_result_on_unknown_target_kind(tmp_path):
+def test_ac5_handler_raises_not_empty_result_on_unknown_target_kind(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
     with pytest.raises(ValueError, match="unknown target kind"):
@@ -204,7 +204,7 @@ def test_ac5_handler_raises_not_empty_result_on_unknown_target_kind(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_ac6_matching_deliverable_id_yields_nonempty_candidates(tmp_path):
+def test_ac6_matching_deliverable_id_yields_nonempty_candidates(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_sizing(repo, "20260101-a.yaml", deliverable_id="dlv-match-000000")
@@ -218,7 +218,7 @@ def test_ac6_matching_deliverable_id_yields_nonempty_candidates(tmp_path):
     assert unreadable == []
 
 
-def test_ac6_nonmatching_deliverable_id_yields_empty_candidates(tmp_path):
+def test_ac6_nonmatching_deliverable_id_yields_empty_candidates(tmp_path: Path) -> None:
     """The discrimination arm — an over-matching reader that returns every
     record must fail this."""
     repo = tmp_path / "repo"
@@ -239,7 +239,7 @@ def test_ac6_nonmatching_deliverable_id_yields_empty_candidates(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_ac6a_unreadable_record_reports_scan_incomplete_not_clean_zero(tmp_path):
+def test_ac6a_unreadable_record_reports_scan_incomplete_not_clean_zero(tmp_path: Path) -> None:
     """A corpus with only a genuinely-empty match set (AC6's discrimination
     arm) must report scan_incomplete=False/unreadable=[]. A corpus whose only
     record is unparseable must be distinguishable from that — this is exactly
@@ -261,7 +261,7 @@ def test_ac6a_unreadable_record_reports_scan_incomplete_not_clean_zero(tmp_path)
     assert unreadable[0]["reason"]
 
 
-def test_ac6a_non_mapping_record_reports_scan_incomplete(tmp_path):
+def test_ac6a_non_mapping_record_reports_scan_incomplete(tmp_path: Path) -> None:
     """A sizing 'record' that parses as valid YAML but not a mapping (e.g. a
     bare scalar/list) must also route into scan_incomplete, not a silent
     drop — `_read_sizing_meta` raises ValueError on this, not just on a
@@ -281,7 +281,7 @@ def test_ac6a_non_mapping_record_reports_scan_incomplete(tmp_path):
     assert len(unreadable) == 1
 
 
-def test_ac6a_clean_empty_corpus_is_distinguishable_from_unreadable(tmp_path):
+def test_ac6a_clean_empty_corpus_is_distinguishable_from_unreadable(tmp_path: Path) -> None:
     """The discrimination this AC names: a genuinely-empty match set (no
     records at all) must NOT set scan_incomplete — the two states this AC
     exists to keep apart."""
@@ -298,7 +298,7 @@ def test_ac6a_clean_empty_corpus_is_distinguishable_from_unreadable(tmp_path):
     assert unreadable == []
 
 
-def test_missing_corpus_dir_reports_scan_incomplete_not_clean_zero(tmp_path):
+def test_missing_corpus_dir_reports_scan_incomplete_not_clean_zero(tmp_path: Path) -> None:
     """2026-08-10 fix: a `base_dir` that does not exist at all (e.g. a
     misresolved worktree_root, or a corpus that has genuinely never been
     created) must NOT read the same as a corpus dir that exists and legitimately
@@ -324,7 +324,7 @@ def test_missing_corpus_dir_reports_scan_incomplete_not_clean_zero(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_ac2_end_to_end_sizing_flips_to_shipped_through_registered_op(tmp_path):
+def test_ac2_end_to_end_sizing_flips_to_shipped_through_registered_op(tmp_path: Path) -> None:
     """K-104 killed `deliverable.cascade_terminal`'s registration, so
     `ipc_mod.get_op_handler` now raises `OpSuspendedError` for it. This
     routes against the LIBRARY instead -- importing `_handler` directly, as
@@ -367,7 +367,7 @@ def test_ac2_end_to_end_sizing_flips_to_shipped_through_registered_op(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_ac3_readside_second_run_returns_zero_candidates(tmp_path):
+def test_ac3_readside_second_run_returns_zero_candidates(tmp_path: Path) -> None:
     """Read-side terminal-exclusion, in isolation: once a sizing is shipped,
     a fresh read-side scan for the same deliverable_id must return zero
     candidates — the record no longer advertises as live."""
@@ -382,7 +382,7 @@ def test_ac3_readside_second_run_returns_zero_candidates(tmp_path):
     assert matches == []
 
 
-def test_ac3_writeside_floor_is_byte_identical_on_already_terminal_record(tmp_path):
+def test_ac3_writeside_floor_is_byte_identical_on_already_terminal_record(tmp_path: Path) -> None:
     """Write-side floor, in isolation: `_advance_one_sizing` on an
     already-terminal record must produce BYTE-IDENTICAL file content —
     read-before/read-after equality, not merely an already-advanced flag."""
@@ -404,7 +404,7 @@ def test_ac3_writeside_floor_is_byte_identical_on_already_terminal_record(tmp_pa
     assert after == before
 
 
-def test_ac3_writeside_floor_holds_for_a_quoted_on_disk_status(tmp_path):
+def test_ac3_writeside_floor_holds_for_a_quoted_on_disk_status(tmp_path: Path) -> None:
     """The idempotency-floor comparison must
     read through `read_fm_field_unquoted`, not the raw on-disk bytes — a
     record carrying `status: 'shipped'` (single-quoted) must still be
@@ -430,7 +430,7 @@ def test_ac3_writeside_floor_holds_for_a_quoted_on_disk_status(tmp_path):
     assert after == before
 
 
-def test_ac3_writeside_floor_crlf_document_has_no_mixed_line_endings(tmp_path):
+def test_ac3_writeside_floor_crlf_document_has_no_mixed_line_endings(tmp_path: Path) -> None:
     """Every fixture in this suite is
     LF-authored and every assertion reads through `Path.read_text`
     (universal newlines) or `yaml.safe_load`, both of which normalize CRLF
@@ -473,7 +473,7 @@ def test_ac3_writeside_floor_crlf_document_has_no_mixed_line_endings(tmp_path):
         assert bare_lf == 0, "mixed CRLF and bare LF in the same document"
 
 
-def test_ac3_full_cascade_second_run_is_a_clean_noop(tmp_path):
+def test_ac3_full_cascade_second_run_is_a_clean_noop(tmp_path: Path) -> None:
     """Both layers together, through the real entrypoint: run the cascade
     twice against the same live sizing; the second run must find zero
     candidates (exit_code 1, nothing advanced) and must not have touched the
@@ -507,7 +507,7 @@ def test_ac3_full_cascade_second_run_is_a_clean_noop(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_ac4_cascade_terminal_op_has_exactly_one_registrant_the_v2_op():
+def test_ac4_cascade_terminal_op_has_exactly_one_registrant_the_v2_op() -> None:
     """K-104 killed the library's registration of `deliverable.cascade_terminal`;
     the v2 rebuild in `cascade_terminal_op` is the sole registrant. Importing it
     here makes the assertion independent of test order (the v2 module registers
@@ -527,7 +527,7 @@ def test_ac4_cascade_terminal_op_has_exactly_one_registrant_the_v2_op():
 # ---------------------------------------------------------------------------
 
 
-def test_ac9_planless_sizing_is_unkeyed_not_ambiguous(tmp_path):
+def test_ac9_planless_sizing_is_unkeyed_not_ambiguous(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
     _seed_sizing(repo, "20260101-noworkstream.yaml", status="routed", deliverable_id="")
@@ -549,7 +549,7 @@ def test_ac9_planless_sizing_is_unkeyed_not_ambiguous(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_ac10_vendored_sizing_schema_version_is_pinned():
+def test_ac10_vendored_sizing_schema_version_is_pinned() -> None:
     """Discharge for the prohibition (not the prohibition itself): a version
     bump reds this loudly, with the DoE coordinate to check named in the
     failure message, rather than relying on an executor remembering the
@@ -632,7 +632,7 @@ _VENDORED_SCHEMA_VERSION_PINS = (
 
 
 @pytest.mark.parametrize("filename,pinned,doe_coordinate", _VENDORED_SCHEMA_VERSION_PINS)
-def test_ac10_vendored_schema_versions_are_pinned(filename, pinned, doe_coordinate):
+def test_ac10_vendored_schema_versions_are_pinned(filename, pinned, doe_coordinate) -> None:
     schema_path = Path(__file__).parent.parent.parent / "frontmatter" / "schemas" / filename
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     assert schema["x-schema-version"] == pinned, (
@@ -647,7 +647,7 @@ def test_ac10_vendored_schema_versions_are_pinned(filename, pinned, doe_coordina
 # ---------------------------------------------------------------------------
 
 
-def test_ac11_predicate_leg_shape_is_closed_vocabulary():
+def test_ac11_predicate_leg_shape_is_closed_vocabulary() -> None:
     for kind in (cascade_mod._HANDOFF_KIND, cascade_mod._SIZING_KIND):
         for leg_name, leg in kind.predicate_legs.items():
             assert leg_name in ("a", "b", "c", "d")
@@ -657,13 +657,13 @@ def test_ac11_predicate_leg_shape_is_closed_vocabulary():
                 assert leg.reason
 
 
-def test_ac11_sizing_leg_b_is_exempt_with_recorded_reason():
+def test_ac11_sizing_leg_b_is_exempt_with_recorded_reason() -> None:
     leg_b = cascade_mod._SIZING_KIND.predicate_legs["b"]
     assert leg_b.applies is False
     assert leg_b.reason
 
 
-def test_ac11_live_claimed_sizing_target_is_refused_not_flipped(tmp_path, monkeypatch):
+def test_ac11_live_claimed_sizing_target_is_refused_not_flipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.claim_state as claim_state_mod
     from unittest import mock
 
@@ -701,7 +701,7 @@ def test_ac11_live_claimed_sizing_target_is_refused_not_flipped(tmp_path, monkey
     assert doc["status"] == "routed"
 
 
-def test_ac11_already_terminal_sizing_target_is_refused_leg_c(tmp_path):
+def test_ac11_already_terminal_sizing_target_is_refused_leg_c(tmp_path: Path) -> None:
     """A sizing target past its terminal status (leg c) is refused with a
     named reason, matching `_predicate_refusal`'s existing refuse-and-name
     contract — reached via the predicate directly (not the write-side floor
@@ -728,7 +728,7 @@ def test_ac11_already_terminal_sizing_target_is_refused_leg_c(tmp_path):
     assert "is not live-and-advanceable" in reason
 
 
-def test_ac11_superseded_sizing_target_is_refused_leg_c(tmp_path):
+def test_ac11_superseded_sizing_target_is_refused_leg_c(tmp_path: Path) -> None:
     """'s own named regression test: a
     `superseded` sizing is not terminal (`_SIZING_TERMINAL_STATUS` is
     `{shipped, declined}`, per 2026-08-10's `declined` addition) but is also
@@ -765,7 +765,7 @@ def test_ac11_superseded_sizing_target_is_refused_leg_c(tmp_path):
     assert doc["status"] == "superseded"
 
 
-def test_declined_sizing_is_excluded_from_live_candidates(tmp_path):
+def test_declined_sizing_is_excluded_from_live_candidates(tmp_path: Path) -> None:
     """2026-08-10 (docs/plans/2026-08-10-a-terminal-status-for-a-declined-sizing.md
     § C2): `declined` was folded into `_SIZING_TERMINAL_STATUS` alongside `shipped`
     — a declined sizing must never even reach the candidate set (unlike
@@ -799,7 +799,7 @@ def test_declined_sizing_is_excluded_from_live_candidates(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_handoff_kind_end_to_end_still_advances_unchanged(tmp_path, monkeypatch):
+def test_handoff_kind_end_to_end_still_advances_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     session_id = "44444444-4444-4444-4444-444444444444"
     monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
@@ -861,7 +861,7 @@ _DOC_NEW_CLI = (
 
 
 @pytest.mark.skipif(not _DOC_NEW_CLI.is_file(), reason="coordinator-doc-new CLI not found at expected path")
-def test_ac7_coordinator_doc_new_writes_reverse_edge_end_to_end(tmp_path):
+def test_ac7_coordinator_doc_new_writes_reverse_edge_end_to_end(tmp_path: Path) -> None:
     """The end-to-end leg C4's executor could not exercise (its sandbox denied
     creating a scratch git repo). Runs the REAL CLI as a subprocess against a
     real git repo, proving the plan-creation write-back actually lands on
@@ -914,7 +914,7 @@ def test_ac7_coordinator_doc_new_writes_reverse_edge_end_to_end(tmp_path):
 
 
 @pytest.mark.skipif(not _DOC_NEW_CLI.is_file(), reason="coordinator-doc-new CLI not found at expected path")
-def test_ac7_mutate_sizing_reverse_edge_preserves_crlf():
+def test_ac7_mutate_sizing_reverse_edge_preserves_crlf() -> None:
     """Unlike the
     cascade's write side, `_mutate_sizing_reverse_edge` is a PURE text
     function — no `locked_rmw`/universal-newline read in between when called
@@ -942,7 +942,7 @@ def test_ac7_mutate_sizing_reverse_edge_preserves_crlf():
 
 
 @pytest.mark.skipif(not _DOC_NEW_CLI.is_file(), reason="coordinator-doc-new CLI not found at expected path")
-def test_ac7_reverse_edge_write_precedes_plan_write_and_reverts_on_failure(tmp_path):
+def test_ac7_reverse_edge_write_precedes_plan_write_and_reverts_on_failure(tmp_path: Path) -> None:
     """The write-order + revert-on-failure mechanism, exercised directly
     (not through the CLI, whose plan-write step has no easy induced-failure
     hook): a failing plan-file write must leave the sizing reverted to its
@@ -987,7 +987,7 @@ def test_ac7_reverse_edge_write_precedes_plan_write_and_reverts_on_failure(tmp_p
 # ---------------------------------------------------------------------------
 
 
-def test_ac1_plan_trigger_never_stamps_source_paths_own_flip_commit_as_shipped_in(tmp_path, monkeypatch):
+def test_ac1_plan_trigger_never_stamps_source_paths_own_flip_commit_as_shipped_in(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC1: on the plan trigger, `_advance_one` must not call
     `resolve_source_ship_sha` against `source_path` at all. Regression
     scenario: `source_path` (the plan document) is committed by a
@@ -1065,7 +1065,7 @@ def test_ac1_plan_trigger_never_stamps_source_paths_own_flip_commit_as_shipped_i
     assert shipped_in == feature_sha[:8]
 
 
-def test_ac3_plan_trigger_no_scope_derived_evidence_refuses_without_shipped_in(tmp_path):
+def test_ac3_plan_trigger_no_scope_derived_evidence_refuses_without_shipped_in(tmp_path: Path) -> None:
     """AC3: on the plan trigger, when Position A (scope-derived, against the
     CANDIDATE's own scope:) resolves nothing, the candidate is refused via
     the existing named "no commit evidence resolvable" outcome and
@@ -1131,7 +1131,7 @@ def _seed_scoped_handoff(repo, scope_path: str, did: str, trailer: str = ""):
     return handoff
 
 
-def test_plan_trigger_ship_sha_is_the_fallback_when_nothing_else_resolves(tmp_path):
+def test_plan_trigger_ship_sha_is_the_fallback_when_nothing_else_resolves(tmp_path: Path) -> None:
     repo = tmp_path / "repo"
     _init_repo(repo)
     handoff = _seed_scoped_handoff(repo, "never-committed.txt", "dlv-fb-000000")
@@ -1154,7 +1154,7 @@ def test_plan_trigger_ship_sha_is_the_fallback_when_nothing_else_resolves(tmp_pa
     assert read_fm_field(split.fm_text, "deployment_state") == "shipped"
 
 
-def test_plan_trigger_ship_sha_never_outranks_scope_derived_evidence(tmp_path, monkeypatch):
+def test_plan_trigger_ship_sha_never_outranks_scope_derived_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     session_id = "88888888-8888-8888-8888-888888888888"
     monkeypatch.setenv("CLAUDE_SESSION_ID", session_id)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
@@ -1184,7 +1184,7 @@ def test_plan_trigger_ship_sha_never_outranks_scope_derived_evidence(tmp_path, m
     assert read_fm_field_unquoted(split.fm_text, "shipped_in") == feature_sha[:8]
 
 
-def test_ac4_handoff_trigger_still_resolves_source_ship_sha_first(tmp_path, monkeypatch):
+def test_ac4_handoff_trigger_still_resolves_source_ship_sha_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC4: on the handoff trigger, Position 1 (`resolve_source_ship_sha`
     against `source_path`) must still run and still take priority over
     Position A (the candidate's own scope-derived evidence) -- byte-
@@ -1278,7 +1278,7 @@ def _porcelain_status(repo: Path) -> str:
     return _git(repo, "status", "--porcelain").stdout
 
 
-def test_ac5_ac6_advanced_candidate_is_committed_scoped_to_exactly_its_path(tmp_path, monkeypatch):
+def test_ac5_ac6_advanced_candidate_is_committed_scoped_to_exactly_its_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC5/AC6: a cascade that advances one candidate leaves a clean worktree
     for that candidate's path, and the follow-up commit's pathspec contains
     exactly the mutated path -- no `git add -A`/`.`/`-a` sweep of anything
@@ -1338,7 +1338,7 @@ def test_ac5_ac6_advanced_candidate_is_committed_scoped_to_exactly_its_path(tmp_
     assert _porcelain_status(repo) == ""
 
 
-def test_ac7_cascade_advancing_nothing_performs_no_commit(tmp_path):
+def test_ac7_cascade_advancing_nothing_performs_no_commit(tmp_path: Path) -> None:
     """AC7: a cascade that mutates nothing (zero candidates matched) performs
     no commit and returns cleanly -- HEAD is untouched and no `commit_error`
     is surfaced.
@@ -1365,8 +1365,8 @@ def test_ac7_cascade_advancing_nothing_performs_no_commit(tmp_path):
 
 
 def test_ac6_ac8_refused_candidate_contributes_no_path_advanced_still_commits_exit_0(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """AC6/AC8: a cascade advancing one candidate and refusing a second
     (same deliverable_id) commits only the advanced one's path -- the
     refused candidate contributes nothing to the commit's pathspec -- and
@@ -1446,8 +1446,8 @@ def test_ac6_ac8_refused_candidate_contributes_no_path_advanced_still_commits_ex
 
 
 def test_ac8_commit_scoped_failure_surfaces_commit_error_without_flipping_exit_code(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """AC8: when the follow-up commit itself fails (`commit_paths` raises
     `ok=False`), the cascade surfaces `result["commit_error"]` with the
     failure text -- and `exit_code` is untouched, staying keyed off
@@ -1515,8 +1515,8 @@ def test_ac8_commit_scoped_failure_surfaces_commit_error_without_flipping_exit_c
 
 
 def test_c3_landed_commit_with_nonempty_stderr_surfaces_commit_notice(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """C3/AC7: a follow-up commit that LANDS (ok=True) but carries non-empty
     `stderr` (the shape `commit_scoped`'s private-index-branch exclusion
     notice produces on a diverged staged path) surfaces that text as
@@ -1578,7 +1578,7 @@ def test_c3_landed_commit_with_nonempty_stderr_surfaces_commit_notice(
     assert result["commit_notice"] == notice
 
 
-def test_c3_landed_commit_with_empty_stderr_carries_no_commit_notice(tmp_path, monkeypatch):
+def test_c3_landed_commit_with_empty_stderr_carries_no_commit_notice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """C3: the ordinary landed-commit path (`commit_scoped`'s own AGREE
     branch, empty `stderr`) carries no `commit_notice` key -- absence, not a
     falsy/empty-string presence, matching the pre-existing `commit_error`
@@ -1629,7 +1629,7 @@ def test_c3_landed_commit_with_empty_stderr_carries_no_commit_notice(tmp_path, m
     assert "commit_notice" not in result
 
 
-def test_commit_mutated_paths_leaves_index_agreeing_with_head(tmp_path):
+def test_commit_mutated_paths_leaves_index_agreeing_with_head(tmp_path: Path) -> None:
     from coordinator_core.ops.ceremony.tests.test_commit_leaves_index_agreeing_with_head import (
         assert_commit_leaves_index_agreeing_with_head,
     )
@@ -1641,7 +1641,7 @@ def test_commit_mutated_paths_leaves_index_agreeing_with_head(tmp_path):
     target.write_text("body\n", encoding="utf-8")
     rel = "state/handoffs/h.md"
 
-    def commit_fn():
+    def commit_fn() -> None:
         err, notice = cascade_mod._commit_mutated_paths([rel], repo, "dlv-idx-000")
         assert err is None and notice is None
 

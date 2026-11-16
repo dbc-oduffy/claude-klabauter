@@ -14,6 +14,7 @@ from coordinator_core.bash_guards._stale_index_base import (
     _RECENT_COMMITS,
     stale_base_reverted_paths,
 )
+import pytest
 
 _IDENT = {
     "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
@@ -62,7 +63,7 @@ def _probe(repo: Path, idx: Path):
     return stale_base_reverted_paths(str(idx), str(repo), _run_git)
 
 
-def test_race_peer_commit_after_index_build_is_named(tmp_path):
+def test_race_peer_commit_after_index_build_is_named(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     idx = _temp_index(repo, tmp_path)
     _commit(repo, "p.txt", "p-peer\n", "peer lands p")
@@ -70,14 +71,14 @@ def test_race_peer_commit_after_index_build_is_named(tmp_path):
     assert _probe(repo, idx) == ["p.txt"]
 
 
-def test_no_race_control_is_empty(tmp_path):
+def test_no_race_control_is_empty(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     idx = _temp_index(repo, tmp_path)
     _stage_own_hunk(repo, idx)
     assert _probe(repo, idx) == []
 
 
-def test_index_older_than_two_peer_commits_to_one_path_is_still_named(tmp_path):
+def test_index_older_than_two_peer_commits_to_one_path_is_still_named(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     idx = _temp_index(repo, tmp_path)
     _commit(repo, "p.txt", "p-peer1\n", "peer 1")
@@ -86,7 +87,7 @@ def test_index_older_than_two_peer_commits_to_one_path_is_still_named(tmp_path):
     assert _probe(repo, idx) == ["p.txt"]
 
 
-def test_peer_added_file_missing_from_stale_index_is_named(tmp_path):
+def test_peer_added_file_missing_from_stale_index_is_named(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     idx = _temp_index(repo, tmp_path)
     _commit(repo, "new.txt", "peer new\n", "peer adds")
@@ -94,7 +95,7 @@ def test_peer_added_file_missing_from_stale_index_is_named(tmp_path):
     assert _probe(repo, idx) == ["new.txt"]
 
 
-def test_ordinary_staged_change_is_not_a_revert(tmp_path):
+def test_ordinary_staged_change_is_not_a_revert(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _commit(repo, "p.txt", "p-peer\n", "peer lands p")
     idx = _temp_index(repo, tmp_path)
@@ -103,7 +104,7 @@ def test_ordinary_staged_change_is_not_a_revert(tmp_path):
     assert _probe(repo, idx) == []
 
 
-def test_commit_older_than_window_is_not_flagged(tmp_path):
+def test_commit_older_than_window_is_not_flagged(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     idx = _temp_index(repo, tmp_path)
     _commit(repo, "p.txt", "p-peer\n", "peer lands p")
@@ -113,18 +114,18 @@ def test_commit_older_than_window_is_not_flagged(tmp_path):
     assert _probe(repo, idx) == []
 
 
-def test_probe_failure_fails_open(tmp_path):
+def test_probe_failure_fails_open(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     idx = _temp_index(repo, tmp_path)
     assert stale_base_reverted_paths(str(idx), str(repo), lambda *a, **k: (1, "")) is None
 
 
-def test_clean_index_spawns_once(tmp_path):
+def test_clean_index_spawns_once(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     idx = _temp_index(repo, tmp_path)
     calls: list = []
 
-    def counting(args, cwd, **kw):
+    def counting(args, cwd, **kw) -> tuple[int, str]:
         calls.append(args[0])
         return _run_git(args, cwd, **kw)
 
@@ -147,7 +148,7 @@ def _hand_commit(idx: Path) -> str:
     return 'GIT_INDEX_FILE=%s git commit -m "mine"' % str(idx).replace("\\", "/")
 
 
-def test_dispatch_denies_a_hand_commit_of_a_stale_index_naming_the_path(tmp_path):
+def test_dispatch_denies_a_hand_commit_of_a_stale_index_naming_the_path(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     idx = _temp_index(repo, tmp_path)
     _commit(repo, "p.txt", "p-peer\n", "peer lands p")
@@ -156,14 +157,14 @@ def test_dispatch_denies_a_hand_commit_of_a_stale_index_naming_the_path(tmp_path
     assert text is not None and "p.txt" in text and "deny" in text
 
 
-def test_dispatch_is_silent_on_a_current_index(tmp_path):
+def test_dispatch_is_silent_on_a_current_index(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     idx = _temp_index(repo, tmp_path)
     _stage_own_hunk(repo, idx)
     assert _stale_deny_text(_dispatch(repo, _hand_commit(idx))) is None
 
 
-def test_dispatch_without_git_index_file_spawns_no_stale_probe(tmp_path, monkeypatch):
+def test_dispatch_without_git_index_file_spawns_no_stale_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     _commit(repo, "p.txt", "p-peer\n", "peer lands p")
     calls: list = []
@@ -175,5 +176,5 @@ def test_dispatch_without_git_index_file_spawns_no_stale_probe(tmp_path, monkeyp
     assert calls == []
 
 
-def test_stale_temp_index_base_is_disruptive_class():
+def test_stale_temp_index_base_is_disruptive_class() -> None:
     assert deny_registry.GUARD_DENY_CLASS["stale-temp-index-base"] == deny_registry.DISRUPTIVE

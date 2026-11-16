@@ -23,6 +23,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_refuses_blob_
     _sha,
     repo,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -31,7 +32,7 @@ def _commit_calls(seen: list) -> list:
     return [s.get("expected_content_sha256") for s in seen]
 
 
-def test_the_runs_own_earlier_write_is_re_measured_and_lands(repo, monkeypatch):
+def test_the_runs_own_earlier_write_is_re_measured_and_lands(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """Cases (a)/(b): the review read A, the run's own write B predates the review stamp, so the
     first expectation is A and the first commit_v2 refuses; B is the session's newest write."""
     (repo / "a.py").write_text("B\n", encoding="utf-8", newline="")
@@ -43,7 +44,7 @@ def test_the_runs_own_earlier_write_is_re_measured_and_lands(repo, monkeypatch):
     assert _commit_calls(seen) == [{"a.py": _sha("A\n")}, {"a.py": _sha("B\n")}]
 
 
-def test_a_foreign_rewrite_after_the_runs_last_write_still_refuses(repo, monkeypatch):
+def test_a_foreign_rewrite_after_the_runs_last_write_still_refuses(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "a.py").write_text("C\n", encoding="utf-8", newline="")
     _record_at(repo, "a.py", _sha("A\n"), 900.0)
     _record_at(repo, "a.py", _sha("B\n"), 1000.0)
@@ -57,7 +58,7 @@ def test_a_foreign_rewrite_after_the_runs_last_write_still_refuses(repo, monkeyp
     assert _git(["rev-parse", "HEAD"], repo) == head
 
 
-def test_a_path_with_no_run_write_on_record_still_refuses(repo, monkeypatch):
+def test_a_path_with_no_run_write_on_record_still_refuses(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "a.py").write_text("C\n", encoding="utf-8", newline="")
     _review(repo, {"a.py": _sha("A\n")}, 2000.0)
     out, seen = _fire(repo, monkeypatch, _WITH_BASE)
@@ -65,7 +66,7 @@ def test_a_path_with_no_run_write_on_record_still_refuses(repo, monkeypatch):
     assert len(seen) == 1
 
 
-def test_only_the_run_owned_path_is_re_measured_in_a_mixed_drift(repo):
+def test_only_the_run_owned_path_is_re_measured_in_a_mixed_drift(repo) -> None:
     (repo / "a.py").write_text("B\n", encoding="utf-8", newline="")
     (repo / "b.py").write_text("FOREIGN\n", encoding="utf-8", newline="")
     _record_at(repo, "a.py", _sha("B\n"), 1000.0)
@@ -79,7 +80,7 @@ def test_only_the_run_owned_path_is_re_measured_in_a_mixed_drift(repo):
     assert got == {"a.py": _sha("B\n")}
 
 
-def test_a_refire_keeps_the_runs_write_older_than_the_refire_start(repo, tmp_path):
+def test_a_refire_keeps_the_runs_write_older_than_the_refire_start(repo, tmp_path: Path) -> None:
     """The run record's `started_at` is the refire's; the run's own earlier write still counts."""
     run_dir = repo / "state" / "warp" / "run-1"
     run_dir.mkdir(parents=True)
@@ -93,7 +94,7 @@ def test_a_refire_keeps_the_runs_write_older_than_the_refire_start(repo, tmp_pat
     assert got == {"a.py": _sha("B\n")}
 
 
-def test_the_fix_pass_agents_are_named_to_the_attribution(repo, monkeypatch):
+def test_the_fix_pass_agents_are_named_to_the_attribution(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import drift_attribution
 
     seen: dict = {}
@@ -111,7 +112,7 @@ def test_the_fix_pass_agents_are_named_to_the_attribution(repo, monkeypatch):
     assert seen["session_id"] == SID
 
 
-def test_bytes_the_review_read_land_though_the_ledger_names_older_bytes(repo, monkeypatch):
+def test_bytes_the_review_read_land_though_the_ledger_names_older_bytes(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """The executor's final write is in no ledger; the session's newest hashed event (B) is the
     expectation, the disk holds the bytes the review read (A)."""
     (repo / "a.py").write_text("A\n", encoding="utf-8", newline="")
@@ -123,7 +124,7 @@ def test_bytes_the_review_read_land_though_the_ledger_names_older_bytes(repo, mo
     assert _commit_calls(seen) == [{"a.py": _sha("B\n")}, {"a.py": _sha("A\n")}]
 
 
-def test_bytes_the_review_did_not_read_still_refuse_with_a_newer_ledger_event(repo, monkeypatch):
+def test_bytes_the_review_did_not_read_still_refuse_with_a_newer_ledger_event(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "a.py").write_text("C\n", encoding="utf-8", newline="")
     os.utime(repo / "a.py", (2500.0, 2500.0))
     _review(repo, {"a.py": _sha("A\n")}, 2000.0)
@@ -136,7 +137,7 @@ def test_bytes_the_review_did_not_read_still_refuse_with_a_newer_ledger_event(re
     assert _git(["rev-parse", "HEAD"], repo) == head
 
 
-def test_review_read_equal_is_per_path_in_a_mixed_drift(repo):
+def test_review_read_equal_is_per_path_in_a_mixed_drift(repo) -> None:
     drift = [
         {"path": "a.py", "basis": "content-sha256", "expected": _sha("X\n"), "actual": _sha("A\n")},
         {"path": "b.py", "basis": "content-sha256", "expected": _sha("X\n"), "actual": _sha("FOREIGN\n")},

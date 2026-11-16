@@ -42,6 +42,7 @@ import pytest
 from coordinator_core.hooks import check_claude_md_size as ccms
 from coordinator_core.hooks import derive_global_doctrine_live_copy as dgdlc
 from coordinator_core.hooks import derive_setup_copies as dsc
+from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
@@ -59,7 +60,7 @@ from coordinator_core.hooks import derive_setup_copies as dsc
         "coordinator_core.hooks.guard_doctrine_surface_ratio_precommit",
     ],
 )
-def test_cold_import_is_fast(mod_name):
+def test_cold_import_is_fast(mod_name) -> None:
     sys.modules.pop(mod_name, None)
     start = time.process_time()
     __import__(mod_name)
@@ -72,25 +73,25 @@ def test_cold_import_is_fast(mod_name):
 # ---------------------------------------------------------------------------
 
 
-def test_check_claude_md_size_registers_its_op():
+def test_check_claude_md_size_registers_its_op() -> None:
     from coordinator_core.ipc import _REGISTRY
 
     assert "hooks.check_claude_md_size" in _REGISTRY
 
 
-def test_derive_global_doctrine_live_copy_registers_its_op():
+def test_derive_global_doctrine_live_copy_registers_its_op() -> None:
     from coordinator_core.ipc import _REGISTRY
 
     assert "hooks.derive_global_doctrine_live_copy" in _REGISTRY
 
 
-def test_derive_setup_copies_registers_its_op():
+def test_derive_setup_copies_registers_its_op() -> None:
     from coordinator_core.ipc import _REGISTRY
 
     assert "hooks.derive_setup_copies" in _REGISTRY
 
 
-def test_guard_doctrine_surface_ratio_precommit_is_not_a_hook_op():
+def test_guard_doctrine_surface_ratio_precommit_is_not_a_hook_op() -> None:
     """Native git pre-commit hook -- no `register_op`, same shape as its
     W4-C7 sibling `guard_phantom_staged_deletion_precommit.py`."""
     from coordinator_core.hooks import guard_doctrine_surface_ratio_precommit as gdsrp
@@ -104,7 +105,7 @@ def test_guard_doctrine_surface_ratio_precommit_is_not_a_hook_op():
 # ---------------------------------------------------------------------------
 
 
-def test_check_claude_md_size_allows_ungoverned_write():
+def test_check_claude_md_size_allows_ungoverned_write() -> None:
     result = ccms.evaluate(
         {
             "tool_name": "Write",
@@ -114,11 +115,11 @@ def test_check_claude_md_size_allows_ungoverned_write():
     assert result is None
 
 
-def test_check_claude_md_size_non_write_tool_is_noop():
+def test_check_claude_md_size_non_write_tool_is_noop() -> None:
     assert ccms.evaluate({"tool_name": "Read", "tool_input": {}}) is None
 
 
-def test_check_claude_md_size_bootstrap_admission_denies_growth(tmp_path):
+def test_check_claude_md_size_bootstrap_admission_denies_growth(tmp_path: Path) -> None:
     target = tmp_path / "CLAUDE.md"
     result = ccms.evaluate(
         {
@@ -137,13 +138,13 @@ def test_check_claude_md_size_bootstrap_admission_denies_growth(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_derive_global_doctrine_live_copy_noop_without_dev_sentinel(tmp_path, monkeypatch):
+def test_derive_global_doctrine_live_copy_noop_without_dev_sentinel(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dgdlc, "_resolve_doctrine_repo_root", lambda: tmp_path)
     result = dgdlc.evaluate({"hook_event_name": "SessionStart"})
     assert result is None
 
 
-def test_derive_global_doctrine_live_copy_session_start_derives(tmp_path, monkeypatch):
+def test_derive_global_doctrine_live_copy_session_start_derives(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".coordinator-dev-repo").write_text("", encoding="utf-8")
     (tmp_path / "global-doctrine").mkdir()
     (tmp_path / "global-doctrine" / "CLAUDE.md").write_text("tracked content", encoding="utf-8")
@@ -158,7 +159,7 @@ def test_derive_global_doctrine_live_copy_session_start_derives(tmp_path, monkey
     )
 
 
-def test_derive_global_doctrine_live_copy_already_synced_is_silent(tmp_path, monkeypatch):
+def test_derive_global_doctrine_live_copy_already_synced_is_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".coordinator-dev-repo").write_text("", encoding="utf-8")
     (tmp_path / "global-doctrine").mkdir()
     (tmp_path / "global-doctrine" / "CLAUDE.md").write_text("same", encoding="utf-8")
@@ -179,7 +180,7 @@ def _shell_payload(command: str) -> dict:
     return {"tool_name": "Bash", "tool_input": {"command": command}}
 
 
-def test_derive_global_doctrine_live_copy_rederives_on_a_bash_write(tmp_path, monkeypatch):
+def test_derive_global_doctrine_live_copy_rederives_on_a_bash_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".coordinator-dev-repo").write_text("", encoding="utf-8")
     (tmp_path / "global-doctrine").mkdir()
     (tmp_path / "global-doctrine" / "CLAUDE.md").write_text("edited by heredoc", encoding="utf-8")
@@ -197,8 +198,8 @@ def test_derive_global_doctrine_live_copy_rederives_on_a_bash_write(tmp_path, mo
 
 
 def test_derive_global_doctrine_live_copy_ignores_a_bash_command_off_the_authoring_tree(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def _boom():
         raise AssertionError("filesystem probe on an unrelated Bash call")
 
@@ -211,7 +212,7 @@ def test_derive_global_doctrine_live_copy_ignores_a_bash_command_off_the_authori
 # ---------------------------------------------------------------------------
 
 
-def test_derive_setup_copies_noop_without_repo_root(monkeypatch):
+def test_derive_setup_copies_noop_without_repo_root(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dsc, "_resolve_doctrine_repo_root", lambda: None)
     result = dsc.evaluate(
         {"tool_input": {"file_path": "/some/setup/percolate-hooks/percolate-store.yaml"}}
@@ -219,7 +220,7 @@ def test_derive_setup_copies_noop_without_repo_root(monkeypatch):
     assert result is None
 
 
-def test_derive_setup_copies_derived_write_is_advised_not_overwritten(tmp_path, monkeypatch):
+def test_derive_setup_copies_derived_write_is_advised_not_overwritten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dsc, "_resolve_doctrine_repo_root", lambda: tmp_path)
     derived = tmp_path / "coordinator" / "templates" / "setup" / "publish_sync.py"
     derived.parent.mkdir(parents=True)
@@ -231,7 +232,7 @@ def test_derive_setup_copies_derived_write_is_advised_not_overwritten(tmp_path, 
     assert derived.read_text(encoding="utf-8") == "hand-maintained"
 
 
-def test_derive_setup_copies_byte_copy_row_re_derives(tmp_path, monkeypatch):
+def test_derive_setup_copies_byte_copy_row_re_derives(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(dsc, "_resolve_doctrine_repo_root", lambda: tmp_path)
     canonical = tmp_path / "setup" / "percolate-hooks" / "percolate-store.yaml"
     canonical.parent.mkdir(parents=True)

@@ -10,13 +10,14 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import run_close as rc
 from coordinator_core.ops.dispatch_emit.run_close import LegResult
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
 T0 = datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc)
 
 
-def test_missing_leg_becomes_failed_and_outstanding():
+def test_missing_leg_becomes_failed_and_outstanding() -> None:
     block = rc.build_close_block("r1", True, {"review": LegResult("ran")})
     assert block["legs"]["post-close"] == {"status": "failed", "detail": "leg did not run"}
     assert block["legs"]["review"]["status"] == "ran"
@@ -24,14 +25,14 @@ def test_missing_leg_becomes_failed_and_outstanding():
     assert block["legs"]["session-shape"]["status"] == "session-bound"
 
 
-def test_unrun_symbol_knowledge_leg_is_failed_and_outstanding():
+def test_unrun_symbol_knowledge_leg_is_failed_and_outstanding() -> None:
     legs = {leg: LegResult("ran") for leg in rc.RUN_BOUND_LEGS if leg != "symbol-knowledge"}
     block = rc.build_close_block("r1", True, legs)
     assert block["legs"]["symbol-knowledge"] == {"status": "failed", "detail": "leg did not run"}
     assert block["outstanding"] == ["symbol-knowledge"]
 
 
-def test_unrun_scratch_reap_leg_is_failed_and_outstanding():
+def test_unrun_scratch_reap_leg_is_failed_and_outstanding() -> None:
     legs = {leg: LegResult("ran") for leg in rc.RUN_BOUND_LEGS if leg != "scratch-reap"}
     block = rc.build_close_block("r1", True, legs)
     assert block["legs"]["scratch-reap"] == {"status": "failed", "detail": "leg did not run"}
@@ -39,7 +40,7 @@ def test_unrun_scratch_reap_leg_is_failed_and_outstanding():
     assert rc.RUN_BOUND_LEGS.index("scratch-reap") == rc.RUN_BOUND_LEGS.index("symbol-knowledge") + 1
 
 
-def test_outstanding_equals_failed_set():
+def test_outstanding_equals_failed_set() -> None:
     legs = {leg: LegResult("ran") for leg in rc.RUN_BOUND_LEGS}
     legs["lessons"] = LegResult("failed", "boom")
     legs["completion-entry"] = LegResult("failed", "no judge summary")
@@ -49,13 +50,13 @@ def test_outstanding_equals_failed_set():
     assert block["run_id"] == "r1" and block["applies"] is True
 
 
-def test_queued_is_not_outstanding():
+def test_queued_is_not_outstanding() -> None:
     legs = {leg: LegResult("ran") for leg in rc.RUN_BOUND_LEGS}
     legs["baton-drain"] = LegResult("queued", "job record .coordinator-local/close-jobs/r1.json")
     assert rc.build_close_block("r1", True, legs)["outstanding"] == []
 
 
-def test_not_applies_marks_every_run_bound_leg_not_applicable():
+def test_not_applies_marks_every_run_bound_leg_not_applicable() -> None:
     block = rc.build_close_block("r1", False, {})
     assert block["outstanding"] == []
     assert {block["legs"][leg]["status"] for leg in rc.RUN_BOUND_LEGS} == {"not-applicable"}
@@ -65,34 +66,34 @@ def test_not_applies_marks_every_run_bound_leg_not_applicable():
     "detail",
     ["see C:\\w\\f.md", "see C:/w/f", "wrote /abs/f", "state\\a.md", "(/abs/path)"],  # abs-path-ok: refusal fixtures
 )
-def test_non_relative_path_in_detail_is_refused(detail):
+def test_non_relative_path_in_detail_is_refused(detail) -> None:
     with pytest.raises(ValueError):
         LegResult("ran", detail)
 
 
-def test_repo_relative_forward_slash_detail_is_accepted():
+def test_repo_relative_forward_slash_detail_is_accepted() -> None:
     LegResult("ran", "wrote state/lessons-outbox/a.md and/or b")
 
 
-def test_unknown_status_refused():
+def test_unknown_status_refused() -> None:
     with pytest.raises(ValueError):
         LegResult("pending")
 
 
-def test_kind_defaults_to_plan_run_and_is_present_in_every_block():
+def test_kind_defaults_to_plan_run_and_is_present_in_every_block() -> None:
     assert rc.build_close_block("r1", True, {})["kind"] == "plan-run"
     assert rc.build_close_block("r1", False, {})["kind"] == "plan-run"
     for kind in rc.CLOSE_KINDS:
         assert rc.build_close_block("r1", True, {}, kind=kind)["kind"] == kind
 
 
-def test_mise_run_presets_plan_reconciliation_and_memo_lifecycle():
+def test_mise_run_presets_plan_reconciliation_and_memo_lifecycle() -> None:
     presets = rc.kind_presets("mise-run", plan_governs=False)
     assert set(presets) == {"plan-reconciliation", "memo-lifecycle"}
     assert {p.status for p in presets.values()} == {"not-applicable"}
 
 
-def test_xs_s_run_preset_depends_on_a_governing_plan():
+def test_xs_s_run_preset_depends_on_a_governing_plan() -> None:
     ungoverned = rc.kind_presets("xs-s-run", plan_governs=False)
     assert set(ungoverned) == {"plan-reconciliation"}
     assert ungoverned["plan-reconciliation"].status == "not-applicable"
@@ -101,11 +102,11 @@ def test_xs_s_run_preset_depends_on_a_governing_plan():
 
 @pytest.mark.parametrize("kind", ["plan-run", "run-less-xs-s"])
 @pytest.mark.parametrize("governs", [True, False])
-def test_kinds_owing_every_leg_have_no_presets(kind, governs):
+def test_kinds_owing_every_leg_have_no_presets(kind, governs) -> None:
     assert rc.kind_presets(kind, plan_governs=governs) == {}
 
 
-def test_every_preset_reason_is_hygienic_and_capped():
+def test_every_preset_reason_is_hygienic_and_capped() -> None:
     for kind in rc.CLOSE_KINDS:
         for governs in (True, False):
             for leg, result in rc.kind_presets(kind, plan_governs=governs).items():
@@ -114,21 +115,21 @@ def test_every_preset_reason_is_hygienic_and_capped():
                 rc.check_path_hygiene(result.detail)
 
 
-def test_unknown_kind_refused_by_presets_and_block():
+def test_unknown_kind_refused_by_presets_and_block() -> None:
     with pytest.raises(ValueError):
         rc.kind_presets("queue-grind", plan_governs=True)
     with pytest.raises(ValueError):
         rc.build_close_block("r1", True, {}, kind="queue-grind")
 
 
-def test_review_skip_reasons_vocabulary():
+def test_review_skip_reasons_vocabulary() -> None:
     assert rc.REVIEW_SKIP_REASONS == (
         "no-plan", "no-terminal-commit", "not-opted-in",
         "no-inventory-record", "not-queued", "no-review-outcome",
     )
 
 
-def test_review_skipped_prefixes_and_refuses_unknown_reason():
+def test_review_skipped_prefixes_and_refuses_unknown_reason() -> None:
     assert rc.review_skipped("no-plan") == LegResult("not-applicable", "review skipped: no-plan")
     assert rc.review_skipped("no-plan", "x y") == LegResult(
         "not-applicable", "review skipped: no-plan: x y"
@@ -137,13 +138,13 @@ def test_review_skipped_prefixes_and_refuses_unknown_reason():
         rc.review_skipped("because")
 
 
-def test_review_unminted_is_failed_with_refusal():
+def test_review_unminted_is_failed_with_refusal() -> None:
     assert rc.review_unminted("no sidecar") == LegResult(
         "failed", "review ran, stamp not minted: no sidecar"
     )
 
 
-def test_review_helpers_cap_and_scrub_paths(tmp_path):
+def test_review_helpers_cap_and_scrub_paths(tmp_path: Path) -> None:
     long = rc.review_skipped("no-plan", "z" * 500)
     assert len(long.detail) == rc.DETAIL_CAP
     assert rc.review_unminted("see C:\\Users\\x\\f.md").detail.endswith("<path>")  # abs-path-ok: scrub fixture
@@ -151,22 +152,22 @@ def test_review_helpers_cap_and_scrub_paths(tmp_path):
     assert rc.review_skipped("no-plan", inside, root=tmp_path).detail.endswith(": a/b.md")
 
 
-def test_build_close_block_unqueued_review_stamp_reads_not_queued():
+def test_build_close_block_unqueued_review_stamp_reads_not_queued() -> None:
     legs = rc.build_close_block("r1", True, {})["legs"]
     assert legs["review-stamp"] == {"status": "not-applicable", "detail": "review skipped: not-queued"}
     assert legs["coded-stamp"]["detail"] == "paid only by a deferred close job"
 
 
-def test_close_job_path_is_forward_slash_relative():
+def test_close_job_path_is_forward_slash_relative() -> None:
     assert rc.close_job_path("r1") == ".coordinator-local/close-jobs/r1.json"
 
 
-def test_read_close_job_missing_record_is_failed(tmp_path):
+def test_read_close_job_missing_record_is_failed(tmp_path: Path) -> None:
     got = rc.read_close_job(tmp_path, "r1", T0, legs=["baton-drain"])
     assert got == {"baton-drain": LegResult("failed", "job record missing")}
 
 
-def test_read_close_job_late_job_is_failed(tmp_path):
+def test_read_close_job_late_job_is_failed(tmp_path: Path) -> None:
     rc.write_close_job(tmp_path, "r1", ["baton-drain", "post-close"], T0 + timedelta(seconds=5))
     rc.record_leg_outcome(tmp_path, "r1", "post-close", "ran", "done")
     got = rc.read_close_job(tmp_path, "r1", T0 + timedelta(seconds=6))
@@ -175,20 +176,20 @@ def test_read_close_job_late_job_is_failed(tmp_path):
     assert got["baton-drain"].detail.startswith("job not finished by ")
 
 
-def test_read_close_job_before_deadline_stays_queued(tmp_path):
+def test_read_close_job_before_deadline_stays_queued(tmp_path: Path) -> None:
     rc.write_close_job(tmp_path, "r1", ["baton-drain"], T0 + timedelta(seconds=5))
     got = rc.read_close_job(tmp_path, "r1", T0)
     assert got["baton-drain"].status == "queued"
     assert ".coordinator-local/close-jobs/r1.json" in got["baton-drain"].detail
 
 
-def test_record_is_json_with_relative_return(tmp_path):
+def test_record_is_json_with_relative_return(tmp_path: Path) -> None:
     rel = rc.write_close_job(tmp_path, "r1", ["memo-lifecycle"], T0)
     data = json.loads((tmp_path / rel).read_text(encoding="utf-8"))
     assert data["legs"] == {"memo-lifecycle": {"status": "queued", "detail": ""}}
 
 
-def test_record_leg_outcome_rejects_unqueued_leg_and_missing_record(tmp_path):
+def test_record_leg_outcome_rejects_unqueued_leg_and_missing_record(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         rc.record_leg_outcome(tmp_path, "r1", "post-close", "ran")
     rc.write_close_job(tmp_path, "r1", ["post-close"], T0)
@@ -196,7 +197,7 @@ def test_record_leg_outcome_rejects_unqueued_leg_and_missing_record(tmp_path):
         rc.record_leg_outcome(tmp_path, "r1", "baton-drain", "ran")
 
 
-def test_corrupt_record_reads_as_missing(tmp_path):
+def test_corrupt_record_reads_as_missing(tmp_path: Path) -> None:
     (tmp_path / rc.close_job_path("r1")).parent.mkdir(parents=True)
     (tmp_path / rc.close_job_path("r1")).write_text("{not json", encoding="utf-8")
     got = rc.read_close_job(tmp_path, "r1", T0, legs=["post-close"])
@@ -207,11 +208,11 @@ SID = "d2946a18-f3c8-4c68-afbf-4d67a1113e41"
 FUTURE = T0 + timedelta(hours=1)
 
 
-def _write(tmp_path, run_id, sid=SID, queued=("baton-drain",), **kw):
+def _write(tmp_path, run_id, sid=SID, queued=("baton-drain",), **kw) -> None:
     rc.write_close_job(tmp_path, run_id, queued, FUTURE, session_id=sid, **kw)
 
 
-def test_record_round_trips_every_new_field(tmp_path):
+def test_record_round_trips_every_new_field(tmp_path: Path) -> None:
     rel = rc.write_close_job(
         tmp_path, "r1", ["post-close"], FUTURE,
         session_id=SID, plan_rel="docs/plans/p.md", source_memo="m.md",
@@ -232,7 +233,7 @@ def test_record_round_trips_every_new_field(tmp_path):
     assert close.legs["baton-ship"].status == "ran" and close.legs["post-close"].status == "ran"
 
 
-def test_settled_detail_with_windows_path_is_refused(tmp_path):
+def test_settled_detail_with_windows_path_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         LegResult("ran", "see C:\\w\\f.md")  # abs-path-ok: refusal fixture
     with pytest.raises(ValueError):
@@ -241,20 +242,20 @@ def test_settled_detail_with_windows_path_is_refused(tmp_path):
         )
 
 
-def test_ws1_shaped_record_is_never_attributed(tmp_path):
+def test_ws1_shaped_record_is_never_attributed(tmp_path: Path) -> None:
     rc.write_close_job(tmp_path, "r1", ["baton-drain"], FUTURE)
     assert rc.session_run_closes(tmp_path, SID, T0) == ([], [])
     assert rc.session_run_closes(tmp_path, "other", T0) == ([], [])
 
 
-def test_other_sessions_records_are_filtered_out(tmp_path):
+def test_other_sessions_records_are_filtered_out(tmp_path: Path) -> None:
     _write(tmp_path, "mine")
     _write(tmp_path, "theirs", sid="someone-else")
     closes, _ = rc.session_run_closes(tmp_path, SID, T0)
     assert [c.run_id for c in closes] == ["mine"]
 
 
-def test_since_skips_old_files_by_stat(tmp_path):
+def test_since_skips_old_files_by_stat(tmp_path: Path) -> None:
     _write(tmp_path, "old")
     path = tmp_path / rc.close_job_path("old")
     os.utime(path, (1000, 1000))
@@ -262,7 +263,7 @@ def test_since_skips_old_files_by_stat(tmp_path):
     assert len(rc.session_run_closes(tmp_path, SID, T0, since=500.0)[0]) == 1
 
 
-def test_malformed_record_is_unreadable_and_verdict_indeterminate(tmp_path):
+def test_malformed_record_is_unreadable_and_verdict_indeterminate(tmp_path: Path) -> None:
     _write(tmp_path, "good", settled={"completion-entry": LegResult("ran")}, queued=())
     bad = tmp_path / rc.close_job_path("bad")
     bad.write_text("{not json", encoding="utf-8")
@@ -285,7 +286,7 @@ def _leg_of(d):
     return {"d-a": "baton-drain", "d-b": "post-close"}.get(d["id"])
 
 
-def test_late_queued_leg_does_not_discharge(tmp_path):
+def test_late_queued_leg_does_not_discharge(tmp_path: Path) -> None:
     rc.write_close_job(tmp_path, "r1", ["baton-drain"], T0, session_id=SID)
     (close,), _ = rc.session_run_closes(tmp_path, SID, T0 + timedelta(seconds=1))
     assert close.legs["baton-drain"].status == "failed"
@@ -295,33 +296,33 @@ def test_late_queued_leg_does_not_discharge(tmp_path):
 
 
 @pytest.mark.parametrize("status", ["not-applicable", "queued", "failed", "session-bound"])
-def test_non_paying_statuses_do_not_discharge(status):
+def test_non_paying_statuses_do_not_discharge(status) -> None:
     ds = _directives("d-a")
     rc.discharge(ds, _leg_of, [_close("r1", **{"baton-drain": status})])
     assert ds[0][rc.DISCHARGED_BY_KEY] is None
 
 
 @pytest.mark.parametrize("status", sorted(rc.DISCHARGING_STATUSES))
-def test_paying_statuses_discharge(status):
+def test_paying_statuses_discharge(status) -> None:
     ds = _directives("d-a")
     payload = rc.discharge(ds, _leg_of, [_close("r1", **{"baton-drain": status})])
     assert ds[0][rc.DISCHARGED_BY_KEY] == "r1" and payload["discharged"] == {"d-a": "r1"}
 
 
-def test_latest_close_wins():
+def test_latest_close_wins() -> None:
     ds = _directives("d-a")
     rc.discharge(ds, _leg_of, [_close("r1", **{"baton-drain": "ran"}), _close("r2", **{"baton-drain": "ran"})])
     assert ds[0][rc.DISCHARGED_BY_KEY] == "r2"
 
 
-def test_eligible_filters_and_falls_back_to_earlier_close():
+def test_eligible_filters_and_falls_back_to_earlier_close() -> None:
     ds = _directives("d-a")
     closes = [_close("r1", **{"baton-drain": "ran"}), _close("r2", **{"baton-drain": "ran"})]
     rc.discharge(ds, _leg_of, closes, eligible=lambda d, c: c.run_id == "r1")
     assert ds[0][rc.DISCHARGED_BY_KEY] == "r1"
 
 
-def test_outstanding_is_exactly_mapped_undischarged_while_applies():
+def test_outstanding_is_exactly_mapped_undischarged_while_applies() -> None:
     ds = _directives("d-a", "d-b", "d-unmapped")
     payload = rc.discharge(ds, _leg_of, [_close("r1", **{"baton-drain": "ran", "post-close": "failed"})])
     assert payload["applies"] is True and payload["verdict"] == "applicable"
@@ -329,15 +330,15 @@ def test_outstanding_is_exactly_mapped_undischarged_while_applies():
     assert [d[rc.DISCHARGED_BY_KEY] for d in ds] == ["r1", None, None]
 
 
-def test_no_closes_means_not_applicable_and_nothing_outstanding():
+def test_no_closes_means_not_applicable_and_nothing_outstanding() -> None:
     ds = _directives("d-a")
     payload = rc.discharge(ds, _leg_of, [])
     assert payload["applies"] is False and payload["outstanding"] == []
     assert payload["verdict"] == "not-applicable" and ds[0][rc.DISCHARGED_BY_KEY] is None
 
 
-def _entry(tmp_path, sid, name="20261013-adhoc", month="202610", authored=None, run_id=None,
-           filled=True):
+def _entry(tmp_path, sid, name: str = "20261013-adhoc", month: str = "202610", authored=None, run_id=None,
+           filled: bool = True):
     folder = tmp_path / "archive" / "completed" / month
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f"{name}-{sid[-6:]}.md"
@@ -353,7 +354,7 @@ def _entry(tmp_path, sid, name="20261013-adhoc", month="202610", authored=None, 
     return path
 
 
-def test_run_less_close_keyed_on_filled_entry_path(tmp_path):
+def test_run_less_close_keyed_on_filled_entry_path(tmp_path: Path) -> None:
     _entry(tmp_path, SID)
     close = rc.run_less_close(tmp_path, SID)
     assert close is not None
@@ -363,7 +364,7 @@ def test_run_less_close_keyed_on_filled_entry_path(tmp_path):
     assert "\\" not in close.run_id and ":" not in close.run_id
 
 
-def test_run_less_close_refuses_scaffold_run_entry_and_foreign_author(tmp_path):
+def test_run_less_close_refuses_scaffold_run_entry_and_foreign_author(tmp_path: Path) -> None:
     assert rc.run_less_close(tmp_path, SID) is None
     path = _entry(tmp_path, SID, filled=False)
     assert rc.run_less_close(tmp_path, SID) is None
@@ -375,7 +376,7 @@ def test_run_less_close_refuses_scaffold_run_entry_and_foreign_author(tmp_path):
     assert rc.run_less_close(tmp_path, SID) is None
 
 
-def test_run_less_close_pays_only_completion_entry():
+def test_run_less_close_pays_only_completion_entry() -> None:
     close = rc.RunClose(run_id="e.md", legs={"completion-entry": LegResult("ran")})
     ds = _directives("d-a", "d-ce")
     rc.discharge(ds, lambda d: {"d-a": "baton-drain", "d-ce": "completion-entry"}[d["id"]], [close])
@@ -386,7 +387,7 @@ BASE = "a" * 40
 TERM = "b" * 40
 
 
-def test_review_receipt_and_shas_round_trip(tmp_path):
+def test_review_receipt_and_shas_round_trip(tmp_path: Path) -> None:
     _write(tmp_path, "r1", review_receipt="state/mise-inventory/r.md",
            run_base_sha=BASE, terminal_sha=TERM)
     (close,), _ = rc.session_run_closes(tmp_path, SID, T0)
@@ -394,7 +395,7 @@ def test_review_receipt_and_shas_round_trip(tmp_path):
     assert (close.run_base_sha, close.terminal_sha) == (BASE, TERM)
 
 
-def test_ws2_shaped_record_parses_new_fields_as_none(tmp_path):
+def test_ws2_shaped_record_parses_new_fields_as_none(tmp_path: Path) -> None:
     _write(tmp_path, "r1")
     path = tmp_path / rc.close_job_path("r1")
     data = json.loads(path.read_text(encoding="utf-8"))
@@ -407,23 +408,23 @@ def test_ws2_shaped_record_parses_new_fields_as_none(tmp_path):
 
 
 @pytest.mark.parametrize("kw", [{"run_base_sha": "abc123"}, {"terminal_sha": "G" * 40}])
-def test_short_or_non_hex_sha_is_refused(tmp_path, kw):
+def test_short_or_non_hex_sha_is_refused(tmp_path: Path, kw) -> None:
     with pytest.raises(ValueError):
         _write(tmp_path, "r1", **kw)
     assert not (tmp_path / rc.close_job_path("r1")).exists()
 
 
-def test_backslashed_review_receipt_is_refused(tmp_path):
+def test_backslashed_review_receipt_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         _write(tmp_path, "r1", review_receipt="state\\mise-inventory\\r.md")
 
 
-def _shas(n):
+def _shas(n) -> list[str]:
     return [f"{i:02x}" * 20 for i in range(n)]
 
 
 @pytest.mark.parametrize("n", [0, 1, 8, 50])
-def test_render_unreceipted_is_capped_and_names_newest(n):
+def test_render_unreceipted_is_capped_and_names_newest(n) -> None:
     shas = _shas(n)
     text = rc.render_unreceipted(shas, truncated=False, cap=500)
     assert len(text) <= 160
@@ -437,7 +438,7 @@ def test_render_unreceipted_is_capped_and_names_newest(n):
     LegResult("failed", text)
 
 
-def test_render_unreceipted_truncated_form():
+def test_render_unreceipted_truncated_form() -> None:
     shas = _shas(50)
     text = rc.render_unreceipted(shas, truncated=True, cap=500)
     assert len(text) <= 160
@@ -446,11 +447,11 @@ def test_render_unreceipted_truncated_form():
     assert "truncated" in rc.render_unreceipted([], truncated=True, cap=200)
 
 
-def _rec(tmp_path, run_id="r1"):
+def _rec(tmp_path, run_id: str = "r1"):
     return json.loads((tmp_path / rc.close_job_path(run_id)).read_text(encoding="utf-8"))
 
 
-def test_criterion_and_falsifier_round_trip(tmp_path):
+def test_criterion_and_falsifier_round_trip(tmp_path: Path) -> None:
     crit = {"verdict": "met", "evidence": "see /abs/path ok"}
     rc.write_close_job(tmp_path, "r1", [], T0, criterion=crit, falsifier_broken=[])
     rec = _rec(tmp_path)
@@ -459,21 +460,21 @@ def test_criterion_and_falsifier_round_trip(tmp_path):
     assert _rec(tmp_path, "r2")["falsifier_broken"] == ["a", "b"]
 
 
-def test_absent_arguments_write_null(tmp_path):
+def test_absent_arguments_write_null(tmp_path: Path) -> None:
     rc.write_close_job(tmp_path, "r1", [], T0)
     rec = _rec(tmp_path)
     assert rec["criterion"] is None and rec["falsifier_broken"] is None
 
 
 @pytest.mark.parametrize("kw", [{"criterion": "met"}, {"falsifier_broken": "x"}, {"falsifier_broken": [1]}])
-def test_bad_criterion_or_falsifier_refused(tmp_path, kw):
+def test_bad_criterion_or_falsifier_refused(tmp_path: Path, kw) -> None:
     with pytest.raises(ValueError):
         rc.write_close_job(tmp_path, "r1", [], T0, **kw)
     with pytest.raises(ValueError):
         rc.amend_close_job(tmp_path, "r1", **kw)
 
 
-def test_amend_changes_one_field_only(tmp_path):
+def test_amend_changes_one_field_only(tmp_path: Path) -> None:
     rc.write_close_job(tmp_path, "r1", ["post-close"], T0, plan_rel="p.md", session_id="s")
     before = _rec(tmp_path)
     rc.amend_close_job(tmp_path, "r1", criterion={"verdict": "met"})
@@ -483,7 +484,7 @@ def test_amend_changes_one_field_only(tmp_path):
     assert after == before
 
 
-def test_amend_falsifier_none_vs_unchanged(tmp_path):
+def test_amend_falsifier_none_vs_unchanged(tmp_path: Path) -> None:
     rc.write_close_job(tmp_path, "r1", [], T0)
     path = tmp_path / rc.close_job_path("r1")
     rec = _rec(tmp_path)
@@ -497,12 +498,12 @@ def test_amend_falsifier_none_vs_unchanged(tmp_path):
     assert _rec(tmp_path)["falsifier_broken"] == ["t"]
 
 
-def test_amend_absent_record_raises(tmp_path):
+def test_amend_absent_record_raises(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="r9"):
         rc.amend_close_job(tmp_path, "r9", criterion={})
 
 
-def test_amend_settled_and_receipt(tmp_path):
+def test_amend_settled_and_receipt(tmp_path: Path) -> None:
     rc.write_close_job(tmp_path, "r1", ["post-close"], T0)
     rc.amend_close_job(
         tmp_path, "r1", review_receipt="a/b.md", settled={"review": LegResult("ran", "ok")}
@@ -518,7 +519,7 @@ def test_amend_settled_and_receipt(tmp_path):
         rc.amend_close_job(tmp_path, "r1", settled={"nope": LegResult("ran")})
 
 
-def test_amend_queue_requires_deadline(tmp_path):
+def test_amend_queue_requires_deadline(tmp_path: Path) -> None:
     rc.write_close_job(tmp_path, "r1", [], T0)
     with pytest.raises(ValueError):
         rc.amend_close_job(tmp_path, "r1", queue=["lessons"])
@@ -528,7 +529,7 @@ def test_amend_queue_requires_deadline(tmp_path):
         )
 
 
-def test_amend_queue_fails_stale_queued_and_queues_named(tmp_path):
+def test_amend_queue_fails_stale_queued_and_queues_named(tmp_path: Path) -> None:
     past = datetime(2020, 1, 1, tzinfo=timezone.utc)
     rc.write_close_job(tmp_path, "r1", ["baton-drain"], past)
     new = datetime(2999, 1, 1, tzinfo=timezone.utc)
@@ -540,64 +541,64 @@ def test_amend_queue_fails_stale_queued_and_queues_named(tmp_path):
     assert _rec(tmp_path)["deadline"] == new.isoformat()
 
 
-def test_scrub_removes_every_path_shape():
+def test_scrub_removes_every_path_shape() -> None:
     text = "a " + "C" + ":\\x\\y b /abs/p c rel\\back d ok/rel"
     out = rc.scrub_detail(text)
     rc.check_path_hygiene(out)
     assert "ok/rel" in out
 
 
-def test_scrub_rewrites_in_root_windows_spelling_to_repo_relative(tmp_path):
+def test_scrub_rewrites_in_root_windows_spelling_to_repo_relative(tmp_path: Path) -> None:
     win = str(tmp_path).replace("/", "\\")
     out = rc.scrub_detail(f"refused {win}\\docs\\plans\\p.md now", tmp_path)
     assert out == "refused docs/plans/p.md now"
     rc.check_path_hygiene(out)
 
 
-def test_scrub_rewrites_in_root_posix_spelling_and_folds_case(tmp_path):
+def test_scrub_rewrites_in_root_posix_spelling_and_folds_case(tmp_path: Path) -> None:
     posix = tmp_path.as_posix()
     out = rc.scrub_detail(f"see {posix.upper()}/docs/x.md and {posix}/y.md", tmp_path)
     assert out == "see docs/x.md and y.md"
 
 
-def test_scrub_sibling_prefix_root_does_not_match(tmp_path):
+def test_scrub_sibling_prefix_root_does_not_match(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     other = f"{tmp_path.as_posix()}/repo-other/x.md"
     assert rc.scrub_detail(f"at {other}", root) == "at <path>"
 
 
-def test_scrub_out_of_root_and_foreign_drive_become_path_token(tmp_path):
+def test_scrub_out_of_root_and_foreign_drive_become_path_token(tmp_path: Path) -> None:
     out = rc.scrub_detail("cites " + "D" + ":/coordinator-content-repo/coordinator/x.md ok", tmp_path)
     assert out == "cites <path> ok"
 
 
-def test_scrub_leaves_repo_relative_tokens_and_caps(tmp_path):
+def test_scrub_leaves_repo_relative_tokens_and_caps(tmp_path: Path) -> None:
     assert rc.scrub_detail("docs/plans/x.md", tmp_path) == "docs/plans/x.md"
     assert len(rc.scrub_detail("w " * 200, tmp_path)) == rc.DETAIL_CAP
 
 
-def _put_record(root, stem):
+def _put_record(root, stem) -> None:
     rc._write_atomic(root / rc.close_job_path(stem), {"legs": {}})
 
 
-def test_resolve_stem_bare_record(tmp_path):
+def test_resolve_stem_bare_record(tmp_path: Path) -> None:
     _put_record(tmp_path, "r1")
     assert rc.resolve_close_job_stem(tmp_path, "r1") == "r1"
 
 
-def test_resolve_stem_workflow_record(tmp_path):
+def test_resolve_stem_workflow_record(tmp_path: Path) -> None:
     _put_record(tmp_path, "r1.workflow")
     assert rc.resolve_close_job_stem(tmp_path, "r1") == "r1.workflow"
     assert rc.resolve_close_job_stem(tmp_path, "r1.workflow") == "r1.workflow"
 
 
-def test_resolve_stem_bare_wins(tmp_path):
+def test_resolve_stem_bare_wins(tmp_path: Path) -> None:
     _put_record(tmp_path, "r1")
     _put_record(tmp_path, "r1.workflow")
     assert rc.resolve_close_job_stem(tmp_path, "r1") == "r1"
 
 
-def test_resolve_stem_neither(tmp_path):
+def test_resolve_stem_neither(tmp_path: Path) -> None:
     assert rc.resolve_close_job_stem(tmp_path, "r1") is None
     assert rc.resolve_close_job_stem(tmp_path, "r1.workflow") is None
 
@@ -611,7 +612,7 @@ def _bind(root, run_id):
     return status
 
 
-def test_stalled_status_write_returns_named_outcome_and_releases_nothing(tmp_path, monkeypatch):
+def test_stalled_status_write_returns_named_outcome_and_releases_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import threading
     import time
 
@@ -631,7 +632,7 @@ def test_stalled_status_write_returns_named_outcome_and_releases_nothing(tmp_pat
     assert out["released"] == [] and out["blocked"] == []
 
 
-def test_stalled_status_read_returns_named_outcome(tmp_path, monkeypatch):
+def test_stalled_status_read_returns_named_outcome(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import threading
 
     gate = threading.Event()
@@ -644,14 +645,14 @@ def test_stalled_status_read_returns_named_outcome(tmp_path, monkeypatch):
     assert out["status_write"] == "deadline-missed" and out["phase"] == "read"
 
 
-def test_healthy_status_write_is_unchanged(tmp_path):
+def test_healthy_status_write_is_unchanged(tmp_path: Path) -> None:
     status = _bind(tmp_path, "run-healthy")
     assert rc.sibling_release(tmp_path, "run-healthy", None) is None  # no parent record
     assert '"halted"' in status.read_text(encoding="utf-8")
     assert rc.sibling_release(tmp_path, "run-absent", None) is None
 
 
-def test_close_block_decides_receipts_through_stage_receipts(tmp_path, monkeypatch):
+def test_close_block_decides_receipts_through_stage_receipts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import stage_receipts
 
     seen = []

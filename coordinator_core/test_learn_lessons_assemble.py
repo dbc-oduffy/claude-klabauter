@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import coordinator_core.learn_lessons_assemble as lla
+import pytest
 
 
 def _write(path: Path, text: str) -> Path:
@@ -13,7 +14,7 @@ def _write(path: Path, text: str) -> Path:
 
 
 class TestEnvelopeShape:
-    def test_brief_returns_exactly_the_8_canonical_keys(self, tmp_path):
+    def test_brief_returns_exactly_the_8_canonical_keys(self, tmp_path: Path) -> None:
         target = _write(tmp_path / "wiki.md", "# Heading\n\nSome unrelated body text.\n")
         result = lla.brief(str(target), "totally unrelated incoming text")
         assert set(result.decision_object.keys()) == {
@@ -30,7 +31,7 @@ class TestEnvelopeShape:
 
 
 class TestPhraseOverlapSignal:
-    def test_fires_on_a_shared_phrase(self, tmp_path):
+    def test_fires_on_a_shared_phrase(self, tmp_path: Path) -> None:
         target = _write(
             tmp_path / "wiki.md",
             (
@@ -48,7 +49,7 @@ class TestPhraseOverlapSignal:
         assert "scope its commits" in hit["excerpt"]
         assert meta["phrase_overlap_count"] >= 1
 
-    def test_does_not_fire_below_the_ngram_size(self, tmp_path):
+    def test_does_not_fire_below_the_ngram_size(self, tmp_path: Path) -> None:
         target = _write(tmp_path / "wiki.md", "# Heading\n\nShort match: the paths it.\n")
         # Shares only a 3-token run ("the paths it"), below _PHRASE_NGRAM_SIZE=5.
         candidates, _ = lla.generate_candidates(str(target), "somewhere the paths it elsewhere")
@@ -56,7 +57,7 @@ class TestPhraseOverlapSignal:
 
 
 class TestPhraseOverlapPrecisionRegression:
-    def test_does_not_fire_on_a_generic_recurring_phrase_alone(self, tmp_path):
+    def test_does_not_fire_on_a_generic_recurring_phrase_alone(self, tmp_path: Path) -> None:
         target = _write(
             tmp_path / "wiki.md",
             (
@@ -76,7 +77,7 @@ class TestPhraseOverlapPrecisionRegression:
         assert not any(c["signal"] == "phrase-overlap" for c in candidates)
         assert meta["phrase_overlap_count"] == 0
 
-    def test_still_fires_when_a_genuinely_long_run_is_shared(self, tmp_path):
+    def test_still_fires_when_a_genuinely_long_run_is_shared(self, tmp_path: Path) -> None:
         target = _write(
             tmp_path / "wiki.md",
             (
@@ -102,7 +103,7 @@ class TestPhraseOverlapPrecisionRegression:
     # the anecdote's vocabulary), and a distinct rare long shared run -- so passing
     # both is evidence the fix generalizes rather than evidence it fits one file.
 
-    def test_does_not_fire_on_generic_coordinator_jargon_alone(self, tmp_path):
+    def test_does_not_fire_on_generic_coordinator_jargon_alone(self, tmp_path: Path) -> None:
         target = _write(
             tmp_path / "wiki.md",
             (
@@ -125,7 +126,7 @@ class TestPhraseOverlapPrecisionRegression:
         assert not any(c["signal"] == "phrase-overlap" for c in candidates)
         assert meta["phrase_overlap_count"] == 0
 
-    def test_still_fires_on_a_rare_shared_long_run_amid_generic_jargon(self, tmp_path):
+    def test_still_fires_on_a_rare_shared_long_run_amid_generic_jargon(self, tmp_path: Path) -> None:
         target = _write(
             tmp_path / "wiki.md",
             (
@@ -148,7 +149,7 @@ class TestPhraseOverlapPrecisionRegression:
 
 
 class TestHeadingDuplicateSignal:
-    def test_fires_on_near_duplicate_headings(self, tmp_path):
+    def test_fires_on_near_duplicate_headings(self, tmp_path: Path) -> None:
         target = _write(
             tmp_path / "wiki.md",
             (
@@ -164,7 +165,7 @@ class TestHeadingDuplicateSignal:
         lines = {c["line"] for c in heading_hits}
         assert lines == {1, 5}
 
-    def test_does_not_fire_on_dissimilar_headings(self, tmp_path):
+    def test_does_not_fire_on_dissimilar_headings(self, tmp_path: Path) -> None:
         target = _write(
             tmp_path / "wiki.md",
             "# Alpha Topic\n\nBody.\n\n## Something Entirely Else\n\nBody.\n",
@@ -173,7 +174,7 @@ class TestHeadingDuplicateSignal:
         assert not any(c["signal"] == "heading-duplicate" for c in candidates)
         assert meta["heading_duplicate_count"] == 0
 
-    def test_does_not_fire_on_generic_repeated_headings(self, tmp_path):
+    def test_does_not_fire_on_generic_repeated_headings(self, tmp_path: Path) -> None:
         target = _write(
             tmp_path / "wiki.md",
             (
@@ -185,7 +186,7 @@ class TestHeadingDuplicateSignal:
         assert not any(c["signal"] == "heading-duplicate" for c in candidates)
         assert meta["heading_duplicate_count"] == 0
 
-    def test_still_fires_when_one_heading_has_topical_content(self, tmp_path):
+    def test_still_fires_when_one_heading_has_topical_content(self, tmp_path: Path) -> None:
         target = _write(
             tmp_path / "wiki.md",
             (
@@ -200,7 +201,7 @@ class TestHeadingDuplicateSignal:
 
 
 class TestNoCandidatesCase:
-    def test_unrelated_text_and_no_duplicate_headings_yields_empty(self, tmp_path):
+    def test_unrelated_text_and_no_duplicate_headings_yields_empty(self, tmp_path: Path) -> None:
         target = _write(
             tmp_path / "wiki.md",
             "# Alpha Topic\n\nCompletely unrelated body content here.\n",
@@ -211,13 +212,13 @@ class TestNoCandidatesCase:
 
 
 class TestNonexistentTargetPath:
-    def test_missing_file_returns_gracefully_not_an_exception(self, tmp_path):
+    def test_missing_file_returns_gracefully_not_an_exception(self, tmp_path: Path) -> None:
         missing = tmp_path / "does" / "not" / "exist.md"
         candidates, meta = lla.generate_candidates(str(missing), "some incoming text")
         assert candidates == []
         assert meta["target_exists"] is False
 
-    def test_missing_file_brief_still_produces_a_valid_envelope(self, tmp_path):
+    def test_missing_file_brief_still_produces_a_valid_envelope(self, tmp_path: Path) -> None:
         missing = tmp_path / "nope.md"
         result = lla.brief(str(missing), "some incoming text")
         assert result.exit_code == lla.EXIT_OK
@@ -248,7 +249,7 @@ _ALLOWED_CANDIDATE_KEYS = {
 
 
 class TestGeneratorNeverAdjudicates:
-    def test_no_directives_and_no_judgment_points_ever(self, tmp_path):
+    def test_no_directives_and_no_judgment_points_ever(self, tmp_path: Path) -> None:
         target = _write(
             tmp_path / "wiki.md",
             "# Scoped Safety Commits\n\nEvery session must scope its commits to the paths it touched.\n",
@@ -258,7 +259,7 @@ class TestGeneratorNeverAdjudicates:
         assert result.decision_object["directives"] == []
         assert result.decision_object["judgment_points"] == []
 
-    def test_no_candidate_record_carries_a_verdict_shaped_field(self, tmp_path):
+    def test_no_candidate_record_carries_a_verdict_shaped_field(self, tmp_path: Path) -> None:
         target = _write(
             tmp_path / "wiki.md",
             (
@@ -278,7 +279,7 @@ class TestGeneratorNeverAdjudicates:
             assert "line" in candidate
             assert "excerpt" in candidate
 
-    def test_envelope_contains_no_verdict_shaped_key_anywhere_in_gates(self, tmp_path):
+    def test_envelope_contains_no_verdict_shaped_key_anywhere_in_gates(self, tmp_path: Path) -> None:
         target = _write(
             tmp_path / "wiki.md",
             "# Scoped Safety Commits\n\nEvery session must scope its commits to the paths it touched.\n",
@@ -290,18 +291,18 @@ class TestGeneratorNeverAdjudicates:
 
 class TestCliSmoke:
 
-    def test_cli_prints_a_valid_decision_object(self, tmp_path, capsys):
+    def test_cli_prints_a_valid_decision_object(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         target = _write(tmp_path / "wiki.md", "# Heading\n\nSome body text.\n")
         exit_code = lla.main([str(target), "unrelated text"])
         assert exit_code == lla.EXIT_OK
         decision = json.loads(capsys.readouterr().out)
         assert decision["directives"] == []
 
-    def test_cli_usage_error_on_no_args(self):
+    def test_cli_usage_error_on_no_args(self) -> None:
         exit_code = lla.main([])
         assert exit_code == lla.EXIT_USAGE
 
-    def test_cli_text_file_flag(self, tmp_path, capsys):
+    def test_cli_text_file_flag(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         target = _write(tmp_path / "wiki.md", "# Heading\n\nSome body text.\n")
         text_file = _write(tmp_path / "incoming.txt", "some incoming text")
         exit_code = lla.main([str(target), "--text-file", str(text_file)])

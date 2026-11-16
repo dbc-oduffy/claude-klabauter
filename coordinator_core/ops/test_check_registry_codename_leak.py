@@ -7,27 +7,28 @@ import os
 import pytest
 
 from coordinator_core.ops.check_registry_codename_leak import _is_kept, _resolve_registry_keys, main
+from pathlib import Path
 
 
-def _env(**overrides):
+def _env(**overrides) -> dict[str, str]:
     base = dict(os.environ)
     base.update(overrides)
     return base
 
 
-def test_usage_error_no_args(capsys):
+def test_usage_error_no_args(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main([], env=_env())
     assert rc == 2
     captured = capsys.readouterr()
     assert "Usage: check-registry-codename-leak.sh <target-dir>" in captured.err
 
 
-def test_usage_error_too_many_args(capsys):
+def test_usage_error_too_many_args(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["a", "b"], env=_env())
     assert rc == 2
 
 
-def test_missing_target_dir(tmp_path, capsys):
+def test_missing_target_dir(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     missing = tmp_path / "does-not-exist"
     rc = main([str(missing)], env=_env())
     assert rc == 2
@@ -35,7 +36,7 @@ def test_missing_target_dir(tmp_path, capsys):
     assert "target-dir not found" in captured.err
 
 
-def test_positive_leak_underscore_and_hyphen_forms(tmp_path, capsys):
+def test_positive_leak_underscore_and_hyphen_forms(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     d = tmp_path / "pos"
     d.mkdir()
     (d / "notes.md").write_text(
@@ -52,7 +53,7 @@ def test_positive_leak_underscore_and_hyphen_forms(tmp_path, capsys):
     assert "project_zolithane" in captured.err
 
 
-def test_negative_clean_tree(tmp_path, capsys):
+def test_negative_clean_tree(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     d = tmp_path / "neg"
     d.mkdir()
     (d / "notes.md").write_text(
@@ -68,7 +69,7 @@ def test_negative_clean_tree(tmp_path, capsys):
     assert "clean" in captured.err
 
 
-def test_keepset_experiments_not_flagged(tmp_path, capsys):
+def test_keepset_experiments_not_flagged(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     d = tmp_path / "kept"
     d.mkdir()
     (d / "notes.md").write_text("See docs/experiments/2026-07-09-batch-results.md.\n")
@@ -76,7 +77,7 @@ def test_keepset_experiments_not_flagged(tmp_path, capsys):
     assert rc == 0
 
 
-def test_keepset_fleet_root_not_flagged(tmp_path, capsys):
+def test_keepset_fleet_root_not_flagged(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """repos.fleet_root names the fleet's container dir, not a private repo.
 
     Regression for the claude-klabauter-coordinator-bin post_rsync
@@ -92,11 +93,11 @@ def test_keepset_fleet_root_not_flagged(tmp_path, capsys):
     assert rc == 0
 
 
-def test_is_kept_fleet_root():
+def test_is_kept_fleet_root() -> None:
     assert _is_kept("fleet_root") is True
 
 
-def test_keepset_prefix_match_coordinator_claude(tmp_path):
+def test_keepset_prefix_match_coordinator_claude(tmp_path: Path) -> None:
     d = tmp_path / "kept2"
     d.mkdir()
     (d / "notes.md").write_text("coordinator_claude is our system vocabulary.\n")
@@ -104,7 +105,7 @@ def test_keepset_prefix_match_coordinator_claude(tmp_path):
     assert rc == 0
 
 
-def test_machine_local_absent_no_override_warns_and_exits_zero(tmp_path, capsys, monkeypatch):
+def test_machine_local_absent_no_override_warns_and_exits_zero(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.ops.check_registry_codename_leak._merged_flat_registry",
         lambda: {},
@@ -125,7 +126,7 @@ def _write_registry_toml(path, *, repos_key: str) -> None:
     path.write_text(f'[repos]\n{repos_key} = "x"\n')
 
 
-def test_settings_home_rung_wins_over_legacy_home(tmp_path, monkeypatch):
+def test_settings_home_rung_wins_over_legacy_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """``merged_flat_registry()`` resolves the registry directory via
     ``coordinator_core._settings_home.machine_local_dir()`` — the
     settings-home ladder only (``COORDINATOR_SETTINGS_HOME`` override, else
@@ -150,7 +151,7 @@ def test_settings_home_rung_wins_over_legacy_home(tmp_path, monkeypatch):
     assert keys == ["repos.from_settings_home"]
 
 
-def test_legacy_home_rung_is_not_consulted_when_settings_home_empty(tmp_path, monkeypatch):
+def test_legacy_home_rung_is_not_consulted_when_settings_home_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The legacy ``~/.claude/machine-local`` rung is retired, not a fallback:
     when ``COORDINATOR_SETTINGS_HOME`` resolves to a directory with no
     registry file, resolution reports an empty registry rather than falling
@@ -170,7 +171,7 @@ def test_legacy_home_rung_is_not_consulted_when_settings_home_empty(tmp_path, mo
     assert keys == []
 
 
-def test_excludes_git_and_backup_files(tmp_path):
+def test_excludes_git_and_backup_files(tmp_path: Path) -> None:
     d = tmp_path / "excl"
     d.mkdir()
     (d / ".git").mkdir()
@@ -185,7 +186,7 @@ def test_excludes_git_and_backup_files(tmp_path):
 
 
 @pytest.mark.skipif(os.name == "nt", reason="chmod-based unreadable-file fixture is POSIX-only")
-def test_unreadable_file_fails_closed_even_if_no_leak_found(tmp_path, capsys):
+def test_unreadable_file_fails_closed_even_if_no_leak_found(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """BEHAVIOUR CHANGE regression (2026-07-22): this guard's own docstring
     declares fail-closed intent; an unreadable file must not let a clean-
     looking scan report success. Previously returned 0 here."""
@@ -225,7 +226,7 @@ def _content_root_fixture(tmp_path):
     return d
 
 
-def test_no_exempt_absent_content_root_still_exempt_today(tmp_path, capsys):
+def test_no_exempt_absent_content_root_still_exempt_today(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     d = _content_root_fixture(tmp_path)
     rc = main([str(d)], env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS=_KEEPSET_SLUG_KEY))
     assert rc == 0
@@ -233,7 +234,7 @@ def test_no_exempt_absent_content_root_still_exempt_today(tmp_path, capsys):
     assert "no private codenames to check" in captured.err
 
 
-def test_no_exempt_flag_reveals_content_root_leak(tmp_path, capsys):
+def test_no_exempt_flag_reveals_content_root_leak(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     d = _content_root_fixture(tmp_path)
     rc = main(
         ["--no-exempt", "content_root", str(d)],
@@ -255,7 +256,7 @@ def _example_doctrine_repo_fixture(tmp_path):
     return d
 
 
-def test_example_doctrine_repo_stays_exempt_default(tmp_path, capsys):
+def test_example_doctrine_repo_stays_exempt_default(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     d = _example_doctrine_repo_fixture(tmp_path)
     rc = main(
         [str(d)],
@@ -266,7 +267,7 @@ def test_example_doctrine_repo_stays_exempt_default(tmp_path, capsys):
     assert "no private codenames to check" in captured.err
 
 
-def test_no_exempt_flag_reveals_example_doctrine_repo_leak(tmp_path, capsys):
+def test_no_exempt_flag_reveals_example_doctrine_repo_leak(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     d = _example_doctrine_repo_fixture(tmp_path)
     rc = main(
         ["--no-exempt", "example_doctrine_repo", str(d)],
@@ -279,7 +280,7 @@ def test_no_exempt_flag_reveals_example_doctrine_repo_leak(tmp_path, capsys):
     assert hit_line in captured.err
 
 
-def test_no_exempt_env_var_reveals_content_root_leak(tmp_path, capsys):
+def test_no_exempt_env_var_reveals_content_root_leak(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """AC2: COORDINATOR_CODENAME_NO_EXEMPT env channel re-admits the slug ->
     exit 1, hit report cites the file in path:lineno:line shape."""
     d = _content_root_fixture(tmp_path)
@@ -297,7 +298,7 @@ def test_no_exempt_env_var_reveals_content_root_leak(tmp_path, capsys):
     assert hit_line in captured.err
 
 
-def test_no_exempt_flag_and_env_var_union(tmp_path, capsys):
+def test_no_exempt_flag_and_env_var_union(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     d = _content_root_fixture(tmp_path)
     rc = main(
         ["--no-exempt", "content_root", str(d)],
@@ -309,7 +310,7 @@ def test_no_exempt_flag_and_env_var_union(tmp_path, capsys):
     assert rc == 1
 
 
-def test_no_exempt_slug_not_in_keepset_raises_and_names_keepset(tmp_path, capsys):
+def test_no_exempt_slug_not_in_keepset_raises_and_names_keepset(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     d = _content_root_fixture(tmp_path)
     rc = main(
         ["--no-exempt", "coordinator-content-repo", str(d)],
@@ -324,7 +325,7 @@ def test_no_exempt_slug_not_in_keepset_raises_and_names_keepset(tmp_path, capsys
     assert "coordinator" in captured.err
 
 
-def test_no_exempt_env_var_slug_not_in_keepset_raises(tmp_path, capsys):
+def test_no_exempt_env_var_slug_not_in_keepset_raises(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     d = _content_root_fixture(tmp_path)
     rc = main(
         [str(d)],
@@ -339,7 +340,7 @@ def test_no_exempt_env_var_slug_not_in_keepset_raises(tmp_path, capsys):
     assert "not_a_real_keepset_slug" in captured.err
 
 
-def test_unknown_flag_exits_two(tmp_path, capsys):
+def test_unknown_flag_exits_two(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     d = tmp_path / "unk"
     d.mkdir()
     rc = main(["--bogus-flag", str(d)], env=_env())
@@ -348,14 +349,14 @@ def test_unknown_flag_exits_two(tmp_path, capsys):
     assert "Usage: check-registry-codename-leak.sh <target-dir>" in captured.err
 
 
-def test_no_exempt_flag_missing_value_exits_two(capsys):
+def test_no_exempt_flag_missing_value_exits_two(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--no-exempt"], env=_env())
     assert rc == 2
     captured = capsys.readouterr()
     assert "Usage: check-registry-codename-leak.sh <target-dir>" in captured.err
 
 
-def test_extra_positional_after_no_exempt_exits_two(tmp_path, capsys):
+def test_extra_positional_after_no_exempt_exits_two(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     d = tmp_path / "extra"
     d.mkdir()
     rc = main(["--no-exempt", "content_root", str(d), "extra-positional"], env=_env())
@@ -372,7 +373,7 @@ def _tree_with(tmp_path, text):
     return d
 
 
-def _no_override_env():
+def _no_override_env() -> dict[str, str]:
     env = _env()
     env.pop("COORDINATOR_CODENAME_REGISTRY_KEYS", None)
     return env
@@ -385,14 +386,14 @@ def _no_override_env():
         "/".join(["some-repo", "scratch", "tmp.abc123", "my_pkg"]),
     ],
 )
-def test_scratch_rooted_key_derives_no_codename(tmp_path, monkeypatch, capsys, value):
+def test_scratch_rooted_key_derives_no_codename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], value) -> None:
     monkeypatch.setattr(_REGISTRY_PATCH, lambda: {"repos.zolithane_probe": value})
     d = _tree_with(tmp_path, "see zolithane_probe and zolithane-probe here\n")
     assert _resolve_registry_keys(_no_override_env()) == []
     assert main([str(d)], env=_no_override_env()) == 0
 
 
-def test_os_temp_root_key_derives_no_codename(tmp_path, monkeypatch):
+def test_os_temp_root_key_derives_no_codename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import tempfile
 
     monkeypatch.setattr(
@@ -403,13 +404,13 @@ def test_os_temp_root_key_derives_no_codename(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("slug", ["probe", "demo", "test"])
-def test_common_word_slug_not_flagged(tmp_path, monkeypatch, slug):
+def test_common_word_slug_not_flagged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, slug) -> None:
     monkeypatch.setattr(_REGISTRY_PATCH, lambda: {f"repos.{slug}": "/srv/real/place"})
     d = _tree_with(tmp_path, f"claude-klabauter-doctor-{slug}.py\n")
     assert main([str(d)], env=_no_override_env()) == 0
 
 
-def test_common_word_key_not_resolved_for_percolate_callers(monkeypatch):
+def test_common_word_key_not_resolved_for_percolate_callers(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         _REGISTRY_PATCH,
         lambda: {"repos.probe": "/srv/real/place", "repos.project_zolithane": "/srv/real/z"},
@@ -417,12 +418,12 @@ def test_common_word_key_not_resolved_for_percolate_callers(monkeypatch):
     assert _resolve_registry_keys(_no_override_env()) == ["repos.project_zolithane"]
 
 
-def test_common_word_slug_not_flagged_via_env_override(tmp_path):
+def test_common_word_slug_not_flagged_via_env_override(tmp_path: Path) -> None:
     d = _tree_with(tmp_path, "doctor-probe\n")
     assert main([str(d)], env=_env(COORDINATOR_CODENAME_REGISTRY_KEYS="repos.probe")) == 0
 
 
-def test_real_private_key_at_real_path_still_flags(tmp_path, monkeypatch, capsys):
+def test_real_private_key_at_real_path_still_flags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(
         _REGISTRY_PATCH, lambda: {"repos.project_zolithane": "/srv/real/place"}
     )

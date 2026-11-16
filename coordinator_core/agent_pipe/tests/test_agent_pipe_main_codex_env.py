@@ -7,6 +7,7 @@ import pytest
 
 from coordinator_core.agent_pipe import __main__ as relay
 from coordinator_core.codex_runner import codex_spawn_env, sandbox_preflight
+from pathlib import Path
 
 
 def _run(tmp_path, monkeypatch, agent, request_extra=None):
@@ -34,31 +35,31 @@ def _run(tmp_path, monkeypatch, agent, request_extra=None):
     return (captured[0]["env"] if captured else None), shaped, cwd
 
 
-def test_fresh_codex_spawn_env_is_the_shape_codex_child_result_rooted_at_cwd(tmp_path, monkeypatch):
+def test_fresh_codex_spawn_env_is_the_shape_codex_child_result_rooted_at_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env, shaped, cwd = _run(tmp_path, monkeypatch, "codex")
     assert env["SHAPED"] == "1"
     assert shaped == [str(cwd)]
 
 
-def test_antigravity_spawn_env_is_unshaped(tmp_path, monkeypatch):
+def test_antigravity_spawn_env_is_unshaped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env, shaped, _ = _run(tmp_path, monkeypatch, "antigravity")
     assert "SHAPED" not in env and shaped == []
 
 
-def test_codex_resume_env_is_shaped_but_keeps_the_inherited_identity(tmp_path, monkeypatch):
+def test_codex_resume_env_is_shaped_but_keeps_the_inherited_identity(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env, shaped, cwd = _run(tmp_path, monkeypatch, "codex", {"conversation": "c", "text": "t"})
     assert env["SHAPED"] == "1"
     assert shaped == [str(cwd)]
     assert env == {"PATH": os.environ.get("PATH", ""), "SHAPED": "1"}
 
 
-def test_antigravity_resume_env_is_unshaped(tmp_path, monkeypatch):
+def test_antigravity_resume_env_is_unshaped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     env, shaped, _ = _run(tmp_path, monkeypatch, "antigravity", {"conversation": "c", "text": "t"})
     assert "SHAPED" not in env and shaped == []
 
 
 @pytest.mark.parametrize("extra", [{}, {"conversation": "c", "text": "t"}])
-def test_shape_refusal_returns_a_failed_result_and_never_spawns(tmp_path, monkeypatch, extra):
+def test_shape_refusal_returns_a_failed_result_and_never_spawns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra) -> None:
     cwd = tmp_path / "work"
     cwd.mkdir()
     monkeypatch.chdir(cwd)
@@ -77,7 +78,7 @@ def test_shape_refusal_returns_a_failed_result_and_never_spawns(tmp_path, monkey
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="PATH shaping is Windows-only")
-def test_codex_windowsapps_only_path_refused_before_popen(tmp_path, monkeypatch):
+def test_codex_windowsapps_only_path_refused_before_popen(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     apps = tmp_path / "WindowsApps"
     apps.mkdir()
     (apps / "pwsh.exe").write_text("")

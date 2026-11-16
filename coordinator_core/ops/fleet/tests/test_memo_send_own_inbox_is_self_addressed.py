@@ -13,11 +13,12 @@ from coordinator_core.ops.fleet.tests.test_memo_send import (
     _make_sender_git_repo,
     _write_draft,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
-def _seed_self_send(tmp_path, monkeypatch, topic):
+def _seed_self_send(tmp_path, monkeypatch, topic) -> tuple[Path, Path]:
     sender_repo = _make_sender_git_repo(tmp_path)
     inbox = sender_repo / "cross-repo" / "inbox"
     inbox.mkdir(parents=True)
@@ -28,7 +29,7 @@ def _seed_self_send(tmp_path, monkeypatch, topic):
     return sender_repo, inbox
 
 
-def test_self_addressed_draft_delivers_into_own_inbox(tmp_path, monkeypatch):
+def test_self_addressed_draft_delivers_into_own_inbox(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sender_repo, inbox = _seed_self_send(tmp_path, monkeypatch, "own-inbox-topic")
 
     result = _memo_send({"dry_run": False, "topic": "own-inbox-topic"}, repo_root=sender_repo)
@@ -38,7 +39,7 @@ def test_self_addressed_draft_delivers_into_own_inbox(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("extra", ["to", "receiver"])
-def test_extra_target_param_is_refused_and_writes_nothing(tmp_path, monkeypatch, caplog, extra):
+def test_extra_target_param_is_refused_and_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture, extra) -> None:
     sender_repo, inbox = _seed_self_send(tmp_path, monkeypatch, "own-inbox-topic")
     draft = sender_repo / "state" / "memo-outbox" / "own-inbox-topic.md"
 

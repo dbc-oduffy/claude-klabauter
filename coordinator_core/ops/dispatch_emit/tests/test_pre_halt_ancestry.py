@@ -10,6 +10,7 @@ from coordinator_core.ops.dispatch_emit import pre_halt_ancestry as mod
 from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import (
     MAX_CITED,
     cited_at_or_before,
+    landed_met_credit,
     verified_post_commit_credit,
 )
 
@@ -183,3 +184,46 @@ def test_no_spawn_when_no_token_and_at_most_two_otherwise(repo, monkeypatch):
     got = _run(repo, items, ids=("R1", "R2", "R3"))
     assert got == {"R1": repo[1]["B"], "R2": repo[1]["A"]}
     assert len(calls) == 2
+
+
+def test_landed_met_credit_drops_an_empty_commit_and_keeps_a_real_one(repo):
+    root, sh = repo
+    _g(root, "commit", "-q", "--allow-empty", "-m", "empty")
+    empty = _g(root, "rev-parse", "HEAD")
+    items = [_item("R1", sh["C"]), _item("R2", empty)]
+    assert landed_met_credit(root, items, ["R1", "R2"]) == frozenset({"R1"})
+
+
+def test_landed_met_credit_git_failure_in_changed_files_probe_credits_no_row(repo, monkeypatch):
+    root, sh = repo
+    real = mod.run_git
+
+    def failing(args, **kw):
+        if args and args[0] == "log":
+            return subprocess.CompletedProcess(args, 1, "", "boom")
+        return real(args, **kw)
+
+    monkeypatch.setattr(mod, "run_git", failing)
+    assert landed_met_credit(root, [_item("R1", sh["C"])], ["R1"]) == frozenset()
+
+
+def test_landed_met_credit_exception_in_probe_credits_no_row(repo, monkeypatch):
+    root, sh = repo
+    real = mod.run_git
+
+    def raising(args, **kw):
+        if args and args[0] == "log":
+            raise OSError("boom")
+        return real(args, **kw)
+
+    monkeypatch.setattr(mod, "run_git", raising)
+    assert landed_met_credit(root, [_item("R1", sh["C"])], ["R1"]) == frozenset()
+
+
+def test_landed_met_credit_no_spawn_when_nothing_cited_and_cited_detail_stands(repo, monkeypatch):
+    root, sh = repo
+    calls: list = []
+    monkeypatch.setattr(mod, "run_git", lambda args, **kw: calls.append(args))
+    assert landed_met_credit(root, [_item("R1", "no sha")], ["R1"]) == frozenset()
+    assert landed_met_credit(root, [_item("R1", sh["C"])], ["R1"], {mod.CITED_DETAIL_KEY: {}}) == frozenset()
+    assert calls == []

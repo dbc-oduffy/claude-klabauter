@@ -11,6 +11,7 @@ import yaml
 
 from coordinator_core.frontmatter.body_blocks import LocateStatus, locate_fenced_block
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 RUN = "warp-2026-11-02-x-6fcf46-20261102T200256-bf0de2"
 SIZING_REL = "state/sizings/s.yaml"
@@ -67,12 +68,12 @@ def _make(tmp_path, *, plan: bool):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path):
     return _make(tmp_path, plan=True)
 
 
 @pytest.fixture
-def bare_repo(tmp_path):
+def bare_repo(tmp_path: Path):
     return _make(tmp_path, plan=False)
 
 
@@ -90,7 +91,7 @@ def _footprint(repo):
     return rl.run_footprint(repo, rl.run_dir(repo, RUN), SIZING_REL)
 
 
-def test_note_naming_an_outside_file_writes_a_row_and_is_stored(repo):
+def test_note_naming_an_outside_file_writes_a_row_and_is_stored(repo) -> None:
     reply = _call(repo, note=f"also fix {OUTSIDE}")
     assert reply["ok"] is True and "note" in reply["applied"]
     assert not [r for r in reply["refused"] if r.get("input") == "note"]
@@ -101,7 +102,7 @@ def test_note_naming_an_outside_file_writes_a_row_and_is_stored(repo):
     assert OUTSIDE in _footprint(repo)[0]
 
 
-def test_add_paths_outside_widens_the_same_way(repo):
+def test_add_paths_outside_widens_the_same_way(repo) -> None:
     reply = _call(repo, add_paths=[OUTSIDE])
     assert reply["ok"] is True
     (row,) = [r for r in _spine(repo) if r["id"] != "C1"]
@@ -110,7 +111,7 @@ def test_add_paths_outside_widens_the_same_way(repo):
     assert OUTSIDE in _footprint(repo)[0]
 
 
-def test_withhold_paths_outside_widens_the_same_way(repo):
+def test_withhold_paths_outside_widens_the_same_way(repo) -> None:
     reply = _call(repo, withhold_paths=[{"path": OUTSIDE, "reason": "peer hunks"}])
     assert reply["ok"] is True and "withhold_paths" in reply["applied"]
     (row,) = [r for r in _spine(repo) if r["id"] != "C1"]
@@ -118,27 +119,27 @@ def test_withhold_paths_outside_widens_the_same_way(repo):
     assert (rl.run_dir(repo, RUN) / "withhold.jsonl").is_file()
 
 
-def test_a_covered_note_writes_no_row(repo):
+def test_a_covered_note_writes_no_row(repo) -> None:
     reply = _call(repo, note=f"also fix {INSIDE}")
     assert reply["ok"] is True and "footprint_widened" not in reply
     assert [r["id"] for r in _spine(repo)] == ["C1"]
 
 
-def test_two_widenings_mint_distinct_row_ids(repo):
+def test_two_widenings_mint_distinct_row_ids(repo) -> None:
     _call(repo, note=f"also fix {OUTSIDE}")
     _call(repo, note=f"also fix {OTHER}")
     ids = [r["id"] for r in _spine(repo)]
     assert len(ids) == 3 and len(set(ids)) == 3
 
 
-def test_no_plan_still_refuses_note_with_the_route(bare_repo):
+def test_no_plan_still_refuses_note_with_the_route(bare_repo) -> None:
     reply = _call(bare_repo, note=f"also fix {OUTSIDE}")
     (entry,) = [r for r in reply["refused"] if r.get("input") == "note"]
     assert entry["paths"] == [OUTSIDE] and "add-task" in entry["reason"]
     assert rl.read_notes(rl.run_dir(bare_repo, RUN)) == []
 
 
-def test_no_plan_still_refuses_add_paths_and_withhold(bare_repo):
+def test_no_plan_still_refuses_add_paths_and_withhold(bare_repo) -> None:
     assert "new ask" in _call(bare_repo, add_paths=[OUTSIDE])["error"]
     with pytest.raises(rl.LedgerRefused, match="follow-up ask"):
         rl.revise(bare_repo, RUN, withhold_paths=[{"path": OUTSIDE, "reason": "r"}])

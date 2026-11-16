@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit.shipped_claims import (
     shipped_gate,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -24,7 +25,7 @@ def _paths(note: str) -> list[str]:
     return [c.path for c in extract_shipped_claims(note)]
 
 
-def test_extraction_reads_shipped_sections_only():
+def test_extraction_reads_shipped_sections_only() -> None:
     note = (
         "# A hand-shipped sizing\n`outside.py`\n"
         "## What shipped\n- `a/b.py:12` and `c\\d.py#frag`\n- `a/b.py` again\n"
@@ -38,17 +39,17 @@ def test_extraction_reads_shipped_sections_only():
     assert _paths(note) == ["a/b.py", "c/d.py", "deep.py", "op_scopes.py"]
 
 
-def test_a_heading_that_only_contains_the_word_is_not_a_shipped_section():
+def test_a_heading_that_only_contains_the_word_is_not_a_shipped_section() -> None:
     assert _paths("# hand-shipped sizings\n`x.py`\n") == []
     assert _paths("## R1 unshipped\n`x.py`\n") == []
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
 
-    def git(*args):
+    def git(*args) -> None:
         subprocess.run(
             ["git", *args], cwd=str(root), check=True, capture_output=True, **no_console_creationflags()
         )
@@ -72,12 +73,12 @@ def repo(tmp_path):
     return root
 
 
-def _judge(root, *paths, **kw):
+def _judge(root, *paths, **kw) -> dict[str, str]:
     claims = [ShippedClaim(p, f"`{p}`") for p in paths]
     return {v.claim.path: v.verdict for v in judge_shipped_claims(root, claims, **kw)}
 
 
-def test_a_recorded_widen_counts_as_declared_and_an_outside_path_stays_undeclared(repo):
+def test_a_recorded_widen_counts_as_declared_and_an_outside_path_stays_undeclared(repo) -> None:
     from coordinator_core.ops.dispatch_emit.shipped_claims import NOT_DECLARED
 
     claims = [ShippedClaim(p, f"`{p}`") for p in ("new.py", "dirty.py")]
@@ -86,27 +87,27 @@ def test_a_recorded_widen_counts_as_declared_and_an_outside_path_stays_undeclare
     assert vs["dirty.py"].left_out == NOT_DECLARED
 
 
-def test_a_foreign_dirty_path_no_row_declares_is_dropped_not_refused(repo):
+def test_a_foreign_dirty_path_no_row_declares_is_dropped_not_refused(repo) -> None:
     note = "## What shipped\n- `new.py`\n- `dirty.py`\n- `clean.py`\n"
     refusal, reply = shipped_gate(repo, note, own_paths={"x.py"})
     assert refusal is None
     assert reply["dropped_foreign"] == ["new.py", "dirty.py"] and reply["unbacked"] == []
 
 
-def test_a_declared_dirty_path_still_refuses_beside_a_dropped_foreign_one(repo):
+def test_a_declared_dirty_path_still_refuses_beside_a_dropped_foreign_one(repo) -> None:
     note = "## What shipped\n- `new.py`\n- `dirty.py`\n"
     refusal, reply = shipped_gate(repo, note, own_paths={"dirty.py"})
     assert refusal and refusal.startswith(SHIPPED_CLAIM_REFUSED) and "`dirty.py`" in refusal
     assert "`new.py`" not in refusal and reply["dropped_foreign"] == ["new.py"]
 
 
-def test_a_withheld_undeclared_path_still_refuses(repo):
+def test_a_withheld_undeclared_path_still_refuses(repo) -> None:
     note = "## What shipped\n- `held.py`\n"
     refusal, _ = shipped_gate(repo, note, own_paths={"x.py"}, withheld_paths={"held.py": "never-commit"})
     assert refusal and refusal.startswith(SHIPPED_CLAIM_REFUSED)
 
 
-def test_a_widened_claim_skips_the_peer_owner_lookup(repo):
+def test_a_widened_claim_skips_the_peer_owner_lookup(repo) -> None:
     seen = []
 
     def owners(paths):
@@ -118,7 +119,7 @@ def test_a_widened_claim_skips_the_peer_owner_lookup(repo):
     assert seen == ["dirty.py"]
 
 
-def test_each_verdict_with_zero_subprocess_calls(repo, monkeypatch):
+def test_each_verdict_with_zero_subprocess_calls(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("subprocess spawned")
 
@@ -143,13 +144,13 @@ def test_each_verdict_with_zero_subprocess_calls(repo, monkeypatch):
     assert set(got.values()) <= set(SHIPPED_VERDICTS)
 
 
-def _write(root, rel, text="n\n"):
+def _write(root, rel, text: str = "n\n") -> None:
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text, encoding="utf-8", newline="\n")
 
 
-def test_an_undeclared_directory_is_a_mention_never_a_claim(repo):
+def test_an_undeclared_directory_is_a_mention_never_a_claim(repo) -> None:
     for f in ("run/a.txt", "run/sub/b.txt"):
         _write(repo, f)
     _write(repo, "pkg/m.py", "changed\n")
@@ -160,7 +161,7 @@ def test_an_undeclared_directory_is_a_mention_never_a_claim(repo):
     assert _judge(repo, "empty", "ghost") == {"empty": "unresolved", "ghost": "unresolved"}
 
 
-def test_a_directory_the_landing_declares_is_backed_or_withheld(repo):
+def test_a_directory_the_landing_declares_is_backed_or_withheld(repo) -> None:
     _write(repo, "run/a.txt")
     _write(repo, "run/untracked_peer.txt")
     assert _judge(repo, "run", landing_paths=["run/a.txt"]) == {"run": "backed"}
@@ -169,7 +170,7 @@ def test_a_directory_the_landing_declares_is_backed_or_withheld(repo):
     assert _judge(repo, "run", deleted_paths=["run/a.txt"]) == {"run": "backed"}
 
 
-def test_directory_claims_cost_no_spawn(repo, monkeypatch):
+def test_directory_claims_cost_no_spawn(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import run as git_run
 
     calls = []
@@ -180,16 +181,16 @@ def test_directory_claims_cost_no_spawn(repo, monkeypatch):
     assert calls == []
 
 
-def test_a_deleted_landing_path_is_backed(repo):
+def test_a_deleted_landing_path_is_backed(repo) -> None:
     assert _judge(repo, "gone.py", deleted_paths=["gone.py"]) == {"gone.py": "backed"}
 
 
-def test_a_filtered_tracked_file_is_unresolved_not_not_in_commit(repo, monkeypatch):
+def test_a_filtered_tracked_file_is_unresolved_not_not_in_commit(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(land_run, "_worktree_blob", lambda root, rel: land_run._FILTERED)
     assert _judge(repo, "clean.py", "new.py") == {"clean.py": "unresolved", "new.py": "untracked"}
 
 
-def test_gate_refuses_an_untracked_claim_and_names_it(repo):
+def test_gate_refuses_an_untracked_claim_and_names_it(repo) -> None:
     note = "## What shipped\n- `new.py`\n- `op_scopes.py`\n- `clean.py`\n"
     refusal, reply = shipped_gate(repo, note)
     assert refusal and refusal.startswith(SHIPPED_CLAIM_REFUSED) and "`new.py`" in refusal
@@ -199,13 +200,13 @@ def test_gate_refuses_an_untracked_claim_and_names_it(repo):
     assert len(reply["unresolved"]) == 1 and "op_scopes.py" in reply["unresolved"][0]
 
 
-def test_gate_lands_backed_and_unresolved_claims(repo):
+def test_gate_lands_backed_and_unresolved_claims(repo) -> None:
     refusal, reply = shipped_gate(repo, "## What shipped\n`clean.py`, `op_scopes.py`\n")
     assert refusal is None
     assert reply == {"checked": 2, "unbacked": [], "unresolved": [reply["unresolved"][0]]}
 
 
-def test_a_backticked_directory_in_a_shipped_note_is_not_refused_but_an_undelivered_file_is(repo):
+def test_a_backticked_directory_in_a_shipped_note_is_not_refused_but_an_undelivered_file_is(repo) -> None:
     _write(repo, "run/a.txt")
     note = "## What shipped\n- `clean.py`\n- test case: redirect into `run`, and `run/` again\n"
     refusal, reply = shipped_gate(repo, note)
@@ -217,6 +218,6 @@ def test_a_backticked_directory_in_a_shipped_note_is_not_refused_but_an_undelive
     assert shipped_gate(repo, "## What shipped\nWrote `new.py` here.\n")[0].startswith(SHIPPED_CLAIM_REFUSED)
 
 
-def test_gate_is_empty_without_a_note_or_a_shipped_heading(repo):
+def test_gate_is_empty_without_a_note_or_a_shipped_heading(repo) -> None:
     assert shipped_gate(repo, None) == (None, {})
     assert shipped_gate(repo, "## Summary\n`new.py`\n") == (None, {})

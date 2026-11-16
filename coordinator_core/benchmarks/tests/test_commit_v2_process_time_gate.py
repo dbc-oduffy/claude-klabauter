@@ -378,7 +378,7 @@ def _mean(values: List[float]) -> float:
     return round(statistics.mean(values), 3)
 
 
-def test_c6_commit_v2_process_time_gate(warm_root, tmp_path_factory) -> None:
+def test_c6_commit_v2_process_time_gate(warm_root, tmp_path_factory: pytest.TempPathFactory) -> None:
     warm_root_path, server_pid = warm_root
     door = _INSTALLED_DOOR_EXE
     if not door.exists():

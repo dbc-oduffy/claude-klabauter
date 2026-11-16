@@ -26,9 +26,10 @@ import pytest
 
 from coordinator_core.contract.cockpit_schema import ENTITY_SCHEMAS
 from coordinator_core.contract.cockpit_schema.emit_schema import emit_schemas
+from pathlib import Path
 
 
-def test_orphaned_schema_file_is_refused(tmp_path):
+def test_orphaned_schema_file_is_refused(tmp_path: Path) -> None:
     out_dir = tmp_path / "schema"
     emit_schemas(ENTITY_SCHEMAS, out_dir=out_dir)
 
@@ -41,7 +42,7 @@ def test_orphaned_schema_file_is_refused(tmp_path):
     assert "file-attribution.schema.json" in str(excinfo.value)
 
 
-def test_refusal_does_not_delete_the_orphan(tmp_path):
+def test_refusal_does_not_delete_the_orphan(tmp_path: Path) -> None:
     out_dir = tmp_path / "schema"
     emit_schemas(ENTITY_SCHEMAS, out_dir=out_dir)
 
@@ -54,13 +55,13 @@ def test_refusal_does_not_delete_the_orphan(tmp_path):
     assert orphan.exists(), "the generator must not delete a file it did not write"
 
 
-def test_clean_emit_is_not_refused(tmp_path):
+def test_clean_emit_is_not_refused(tmp_path: Path) -> None:
     out_dir = tmp_path / "schema"
     emit_schemas(ENTITY_SCHEMAS, out_dir=out_dir)
     emit_schemas(ENTITY_SCHEMAS, out_dir=out_dir)
 
 
-def test_non_schema_files_are_left_alone(tmp_path):
+def test_non_schema_files_are_left_alone(tmp_path: Path) -> None:
     out_dir = tmp_path / "schema"
     emit_schemas(ENTITY_SCHEMAS, out_dir=out_dir)
     (out_dir / "README.md").write_text("not a schema\n", encoding="utf-8")

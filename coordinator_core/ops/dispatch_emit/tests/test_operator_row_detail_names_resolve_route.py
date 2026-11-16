@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
 from coordinator_core.ops.plan_tasks_mutate import _em_discharge
+from pathlib import Path
 
 _BODY = (
     "- id: O1\n  title: t\n  surface: s\n  performer: em\n"
@@ -21,7 +22,7 @@ def _plan(tmp_path):
     return path
 
 
-def test_operator_exclusion_detail_names_resolve_coded_route(tmp_path):
+def test_operator_exclusion_detail_names_resolve_coded_route(tmp_path: Path) -> None:
     exclusions: list = []
     read_spine(_plan(tmp_path), exclusions)
     (entry,) = [e for e in exclusions if e["id"] == "O1"]
@@ -34,7 +35,7 @@ def test_operator_exclusion_detail_names_resolve_coded_route(tmp_path):
     assert "\n" not in detail
 
 
-def test_em_discharge_still_refuses_the_operator_row(tmp_path):
+def test_em_discharge_still_refuses_the_operator_row(tmp_path: Path) -> None:
     path = _plan(tmp_path)
     out = _em_discharge(str(path), "O1", "done", tmp_path, tmp_path)
     assert "execution_mode: operator" in str(out)

@@ -309,7 +309,7 @@ class FleetWalkResult:
 
     __slots__ = ("ok", "reason", "detail", "roots_count", "items")
 
-    def __init__(self, *, ok, reason=None, detail=None, roots_count=0, items=None):
+    def __init__(self, *, ok, reason=None, detail=None, roots_count: int = 0, items=None) -> None:
         self.ok = ok
         self.reason = reason
         self.detail = detail

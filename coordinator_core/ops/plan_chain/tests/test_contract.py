@@ -17,16 +17,16 @@ def _schema() -> dict:
     return json.loads(SCHEMA.read_text(encoding="utf-8"))
 
 
-def test_stages_equal_schema_chain_stage_enum():
+def test_stages_equal_schema_chain_stage_enum() -> None:
     assert list(contract.STAGES) == _schema()["$defs"]["chain_stage"]["enum"]
 
 
-def test_halts_values_are_stages_or_sentinel():
+def test_halts_values_are_stages_or_sentinel() -> None:
     for halt_id, stage in contract.HALTS.items():
         assert stage in contract.STAGES or stage == contract.STAGE_RELATIVE, halt_id
 
 
-def test_halts_cover_c0_table():
+def test_halts_cover_c0_table() -> None:
     expected = {
         "plan-no-digest", "ready-gate-not-ready", "stamp-stale-substantive",
         "roadmap-gate-shut", "peer-claim", "spine-check-failed",
@@ -38,7 +38,7 @@ def test_halts_cover_c0_table():
     assert set(contract.HALTS) == expected
 
 
-def test_vendored_schema_sha256_pinned():
+def test_vendored_schema_sha256_pinned() -> None:
     actual = hashlib.sha256(SCHEMA.read_bytes()).hexdigest()
     assert actual == SCHEMA_SHA256, (
         "doe-wake-digest.schema.json drifted from coordinator-content-repo@178e0baa9f "
@@ -46,20 +46,20 @@ def test_vendored_schema_sha256_pinned():
     )
 
 
-def test_halt_truncates_reason_and_rejects_unknown_stage():
+def test_halt_truncates_reason_and_rejects_unknown_stage() -> None:
     assert len(contract.Halt("plan", "x" * 500).reason) == contract.HALT_REASON_MAX
     with pytest.raises(ValueError):
         contract.Halt("bogus", "r")
 
 
-def test_stage_relative_halt_takes_running_stage():
+def test_stage_relative_halt_takes_running_stage() -> None:
     assert contract.halt("usage-limit", "r", running_stage="execute").halted_at == "execute"
     with pytest.raises(ValueError):
         contract.halt("usage-limit", "r")
     assert contract.halt("plan-no-digest", "r").halted_at == "plan"
 
 
-def test_manifest_round_trips_through_json():
+def test_manifest_round_trips_through_json() -> None:
     m = contract.ChainManifest(
         sizing_object="state/sizings/s.yaml", baton="b", deliverable_id=None,
         interaction_mode="pm", repo_root="r", trail_dir="t",
@@ -68,25 +68,25 @@ def test_manifest_round_trips_through_json():
     assert contract.ChainManifest.from_json(m.to_json()) == m
 
 
-def test_manifest_path_and_constants():
+def test_manifest_path_and_constants() -> None:
     assert contract.manifest_path("trail", 3, "b.d") == Path("trail") / "chain-3-b.d.json"
     assert contract.CHAIN_BIN == "plan-chain-run"
     assert contract.CHAIN_FLAG == "--chain"
 
 
-def _manifest(sizing, baton="b", deliverable=None):
+def _manifest(sizing, baton: str = "b", deliverable=None):
     return contract.ChainManifest(
         sizing_object=sizing, baton=baton, deliverable_id=deliverable, interaction_mode="pm",
         repo_root="r", trail_dir="t", wave_args={}, script_source="s.mjs",
     )
 
 
-def test_chain_key_keys_on_baton_and_deliverable():
+def test_chain_key_keys_on_baton_and_deliverable() -> None:
     assert contract.chain_key("hnd-1") == "hnd-1"
     assert contract.chain_key("hnd-1", "D 2") == "hnd-1.D_2"
 
 
-def test_write_manifest_is_idempotent_for_one_chain_and_refuses_another(tmp_path):
+def test_write_manifest_is_idempotent_for_one_chain_and_refuses_another(tmp_path: Path) -> None:
     p = tmp_path / "chain-0-b.json"
     contract.write_manifest(p, _manifest("s1.yaml"))
     contract.write_manifest(p, _manifest("s1.yaml"))

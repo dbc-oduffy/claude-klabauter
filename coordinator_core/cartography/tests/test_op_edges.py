@@ -26,7 +26,7 @@ def _write(tmp_path, rel, content):
     return path
 
 
-def test_register_op_decorator_and_direct_call_forms(tmp_path):
+def test_register_op_decorator_and_direct_call_forms(tmp_path: Path) -> None:
     _write(
         tmp_path,
         "producer.py",
@@ -45,7 +45,7 @@ def test_register_op_decorator_and_direct_call_forms(tmp_path):
     assert sorted(entry["registrations"]) == ["demo.decorator", "demo.direct"]
 
 
-def test_get_op_handler_literal_recorded_nonliteral_ignored(tmp_path):
+def test_get_op_handler_literal_recorded_nonliteral_ignored(tmp_path: Path) -> None:
     _write(
         tmp_path,
         "consumer.py",
@@ -59,7 +59,7 @@ def test_get_op_handler_literal_recorded_nonliteral_ignored(tmp_path):
     assert entry["lookups"] == ["demo.decorator"]
 
 
-def test_dispatch_message_inline_literal_recorded_variable_ignored(tmp_path):
+def test_dispatch_message_inline_literal_recorded_variable_ignored(tmp_path: Path) -> None:
     _write(
         tmp_path,
         "dispatcher.py",
@@ -71,7 +71,7 @@ def test_dispatch_message_inline_literal_recorded_variable_ignored(tmp_path):
     assert entry["dispatches"] == ["demo.decorator"]
 
 
-def test_dedup_op_names_vs_raw_registration_site_count(tmp_path):
+def test_dedup_op_names_vs_raw_registration_site_count(tmp_path: Path) -> None:
     _write(
         tmp_path,
         "a.py",
@@ -99,7 +99,7 @@ def test_dedup_op_names_vs_raw_registration_site_count(tmp_path):
     assert result["static_only"] is True
 
 
-def test_producer_consumer_edge_join_across_and_within_files(tmp_path):
+def test_producer_consumer_edge_join_across_and_within_files(tmp_path: Path) -> None:
     _write(
         tmp_path,
         "producer.py",
@@ -136,7 +136,7 @@ def test_producer_consumer_edge_join_across_and_within_files(tmp_path):
 
 
 @pytest.mark.parametrize("seam_name", ["reentrant_dispatch", "reentrant_dispatch_async"])
-def test_reentrant_dispatch_literal_recorded_as_get_op_handler_edge(tmp_path, seam_name):
+def test_reentrant_dispatch_literal_recorded_as_get_op_handler_edge(tmp_path: Path, seam_name) -> None:
     _write(
         tmp_path,
         "producer.py",
@@ -155,7 +155,7 @@ def test_reentrant_dispatch_literal_recorded_as_get_op_handler_edge(tmp_path, se
     assert edges == {("demo.seam", "producer.py", "consumer.py", "get_op_handler")}
 
 
-def test_op_with_no_registration_site_produces_no_edge(tmp_path):
+def test_op_with_no_registration_site_produces_no_edge(tmp_path: Path) -> None:
     _write(
         tmp_path,
         "consumer.py",
@@ -167,14 +167,14 @@ def test_op_with_no_registration_site_produces_no_edge(tmp_path):
     assert result["op_names"] == []
 
 
-def test_syntax_error_captured_not_raised(tmp_path):
+def test_syntax_error_captured_not_raised(tmp_path: Path) -> None:
     _write(tmp_path, "bad.py", "def f(:\n    pass\n")
     entry = op_edges_for_file(tmp_path, "bad.py")
     assert entry["registrations"] == []
     assert "SyntaxError" in entry["error"]
 
 
-def test_path_escape_raises(tmp_path):
+def test_path_escape_raises(tmp_path: Path) -> None:
     outside = tmp_path.parent / "outside_op_edges_test.py"
     outside.write_text("x = 1\n", encoding="utf-8")
     try:
@@ -184,14 +184,14 @@ def test_path_escape_raises(tmp_path):
         outside.unlink()
 
 
-def test_op_handler_missing_params_raise_value_error(tmp_path):
+def test_op_handler_missing_params_raise_value_error(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="target_root"):
         _cartography_op_edges({"files": ["a.py"]})
     with pytest.raises(ValueError, match="files"):
         _cartography_op_edges({"target_root": str(tmp_path)})
 
 
-def test_op_handler_happy_path_delegates(tmp_path):
+def test_op_handler_happy_path_delegates(tmp_path: Path) -> None:
     _write(
         tmp_path,
         "producer.py",
@@ -206,7 +206,7 @@ def test_op_handler_happy_path_delegates(tmp_path):
     assert result["static_only"] is True
 
 
-def test_module_scope_name_resolved_for_register_op_get_op_handler_dispatch(tmp_path):
+def test_module_scope_name_resolved_for_register_op_get_op_handler_dispatch(tmp_path: Path) -> None:
     _write(
         tmp_path,
         "named.py",
@@ -231,7 +231,7 @@ def test_module_scope_name_resolved_for_register_op_get_op_handler_dispatch(tmp_
     assert entry["dispatches"] == ["demo.name_a"]
 
 
-def test_for_target_over_module_collection_yields_one_edge_per_member(tmp_path):
+def test_for_target_over_module_collection_yields_one_edge_per_member(tmp_path: Path) -> None:
     _write(
         tmp_path,
         "roster.py",
@@ -248,7 +248,7 @@ def test_for_target_over_module_collection_yields_one_edge_per_member(tmp_path):
     assert sorted(entry["lookups"]) == ["demo.roster_a", "demo.roster_b", "demo.roster_c"]
 
 
-def test_negative_call_bound_name_yields_no_edge(tmp_path):
+def test_negative_call_bound_name_yields_no_edge(tmp_path: Path) -> None:
     _write(
         tmp_path,
         "neg_call_bound.py",
@@ -265,7 +265,7 @@ def test_negative_call_bound_name_yields_no_edge(tmp_path):
     assert entry["lookups"] == []
 
 
-def test_negative_fstring_yields_no_edge(tmp_path):
+def test_negative_fstring_yields_no_edge(tmp_path: Path) -> None:
     _write(
         tmp_path,
         "neg_fstring.py",
@@ -278,7 +278,7 @@ def test_negative_fstring_yields_no_edge(tmp_path):
     assert entry["lookups"] == []
 
 
-def test_negative_concatenation_yields_no_edge(tmp_path):
+def test_negative_concatenation_yields_no_edge(tmp_path: Path) -> None:
     _write(
         tmp_path,
         "neg_concat.py",
@@ -291,7 +291,7 @@ def test_negative_concatenation_yields_no_edge(tmp_path):
     assert entry["lookups"] == []
 
 
-def test_negative_imported_name_yields_no_edge(tmp_path):
+def test_negative_imported_name_yields_no_edge(tmp_path: Path) -> None:
     _write(
         tmp_path,
         "neg_import.py",
@@ -305,7 +305,7 @@ def test_negative_imported_name_yields_no_edge(tmp_path):
     assert entry["lookups"] == []
 
 
-def test_negative_function_parameter_yields_no_edge(tmp_path):
+def test_negative_function_parameter_yields_no_edge(tmp_path: Path) -> None:
     _write(
         tmp_path,
         "neg_param.py",
@@ -318,7 +318,7 @@ def test_negative_function_parameter_yields_no_edge(tmp_path):
     assert entry["lookups"] == []
 
 
-def test_negative_function_local_assignment_yields_no_edge(tmp_path):
+def test_negative_function_local_assignment_yields_no_edge(tmp_path: Path) -> None:
     _write(
         tmp_path,
         "neg_local.py",
@@ -335,7 +335,7 @@ def test_negative_function_local_assignment_yields_no_edge(tmp_path):
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
 
-def test_oracle_post_commit_tail_resolves_named_ops():
+def test_oracle_post_commit_tail_resolves_named_ops() -> None:
     entry = op_edges_for_file(_REPO_ROOT, "coordinator_core/ops/ceremony/post_commit_tail.py")
     # Op names here live in module-scope constants used only as skip/fail labels
     # (OP_CLOSE_ORIGIN_STUB, OP_COMPLETION_ENTRY_FOLD), so none is a lookup edge;
@@ -344,7 +344,7 @@ def test_oracle_post_commit_tail_resolves_named_ops():
     assert entry["dispatches"] == []
 
 
-def test_oracle_guard_roster_ops_resolves_ported_advisory_hook_names():
+def test_oracle_guard_roster_ops_resolves_ported_advisory_hook_names() -> None:
     entry = op_edges_for_file(_REPO_ROOT, "coordinator_core/ops/session/guard_roster_ops.py")
     expected = {
         "hooks.nudge_foreground_agent_dispatch",

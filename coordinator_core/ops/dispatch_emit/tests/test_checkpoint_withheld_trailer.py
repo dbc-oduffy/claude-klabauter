@@ -8,18 +8,19 @@ import pytest
 import yaml
 
 from coordinator_core.ops.dispatch_emit import checkpoint_stamp as cs
+from pathlib import Path
 
 _NOWIN = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 _PLAN = "docs/plans/p.md"
 
 
-def test_renderer_is_sorted_forward_slash_and_distinct():
+def test_renderer_is_sorted_forward_slash_and_distinct() -> None:
     lines = cs.checkpoint_withheld_trailer_lines(["b\\y.py", "a/x.py", "./a/x.py", "", "  "])
     assert lines == ["Checkpoint-Withheld: a/x.py", "Checkpoint-Withheld: b/y.py"]
     assert cs.CHECKPOINT_WITHHELD_TRAILER == "Checkpoint-Withheld"
 
 
-def test_parser_round_trips_and_ignores_other_lines():
+def test_parser_round_trips_and_ignores_other_lines() -> None:
     body = "checkpoint(wave 0): 1 row — C1\n\nCheckpoint-Plan: p.md\n" + "\n".join(
         cs.checkpoint_withheld_trailer_lines(["a/x.py", "src/with space.py"])
     )
@@ -48,7 +49,7 @@ def _dispositions(repo) -> dict:
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     (r / "docs/plans").mkdir(parents=True)
     _git(r, "init", "-q", "-b", "work/p")
@@ -66,12 +67,12 @@ def repo(tmp_path):
     return r
 
 
-def _message(extra=""):
+def _message(extra: str = "") -> str:
     return f"checkpoint(wave 0): 2 rows — C1, C2\n\nCheckpoint-Plan: {_PLAN}\n{extra}"
 
 
 @pytest.mark.spawns_process
-def test_stamp_skips_the_row_whose_declared_path_was_withheld(repo):
+def test_stamp_skips_the_row_whose_declared_path_was_withheld(repo) -> None:
     sha = _git(repo, "rev-parse", "HEAD")
     extra = "\n".join(cs.checkpoint_withheld_trailer_lines(["some/C1.py"])) + "\n"
 
@@ -82,7 +83,7 @@ def test_stamp_skips_the_row_whose_declared_path_was_withheld(repo):
 
 
 @pytest.mark.spawns_process
-def test_stamp_flips_every_row_when_nothing_was_withheld(repo):
+def test_stamp_flips_every_row_when_nothing_was_withheld(repo) -> None:
     sha = _git(repo, "rev-parse", "HEAD")
 
     out = cs.stamp_checkpoint(repo, _message(), sha)
@@ -90,7 +91,7 @@ def test_stamp_flips_every_row_when_nothing_was_withheld(repo):
     assert out["rows_coded"] == {_PLAN: ["C1", "C2"]}
 
 
-def test_stamp_flips_nothing_when_every_row_was_withheld(repo):
+def test_stamp_flips_nothing_when_every_row_was_withheld(repo) -> None:
     sha = _git(repo, "rev-parse", "HEAD")
     extra = "\n".join(cs.checkpoint_withheld_trailer_lines(["some/C1.py", "some\\C2.py"])) + "\n"
 

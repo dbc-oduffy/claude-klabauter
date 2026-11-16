@@ -37,7 +37,7 @@ def _doe_model(agents_dir, agent_type):
     return match.group(1)
 
 
-def test_table_equals_doe_model_frontmatter():
+def test_table_equals_doe_model_frontmatter() -> None:
     agents_dir = _doe_agents_dir()
     if agents_dir is None:
         pytest.skip("no coordinator-content-repo checkout (set CONTENT_ROOT_ROOT or place it beside this repo)")
@@ -47,7 +47,7 @@ def test_table_equals_doe_model_frontmatter():
 
 
 @pytest.mark.parametrize("agent_type", sorted(emit._AGENT_MODELS))
-def test_override_changing_a_pinned_model_is_refused(agent_type):
+def test_override_changing_a_pinned_model_is_refused(agent_type) -> None:
     pinned = emit._AGENT_MODELS[agent_type]
     other = "opus" if pinned != "opus" else "haiku"
     with pytest.raises(emit.MalformedAgentOverrideError):
@@ -76,12 +76,12 @@ def _str_leaves(node):
     return [] if literal is None else [literal]
 
 
-def _is_untyped(node):
+def _is_untyped(node) -> bool:
     leaves = _str_leaves(node)
     return bool(leaves) and all(v in _UNTYPED for v in leaves) and not isinstance(node, ast.Name)
 
 
-def _composer_literal_models():
+def _composer_literal_models() -> list[str]:
     """Sites in dispatch_emit composers that name a model by literal for a typed agent call."""
     hits = []
     for path in sorted(Path(emit.__file__).parent.glob("*.py")):
@@ -113,7 +113,7 @@ def _composer_literal_models():
     return hits
 
 
-def test_no_composer_names_a_literal_model_for_a_typed_call():
+def test_no_composer_names_a_literal_model_for_a_typed_call() -> None:
     assert not _composer_literal_models()
 
 
@@ -136,12 +136,12 @@ def _composer_agent_types():
     return found
 
 
-def test_every_composer_agent_type_has_a_table_entry():
+def test_every_composer_agent_type_has_a_table_entry() -> None:
     missing = {t: w for t, w in _composer_agent_types().items() if t not in emit._AGENT_MODELS}
     assert not missing
 
 
-def test_agent_type_scan_catches_an_unlisted_type(tmp_path, monkeypatch):
+def test_agent_type_scan_catches_an_unlisted_type(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "composer.py").write_text(
         "f(agent_type='coordinator:nope' if x else 'general-purpose')\n", encoding="utf-8"
     )
@@ -149,7 +149,7 @@ def test_agent_type_scan_catches_an_unlisted_type(tmp_path, monkeypatch):
     assert set(_composer_agent_types()) == {"coordinator:nope"}
 
 
-def test_literal_scan_walks_conditional_branches(tmp_path, monkeypatch):
+def test_literal_scan_walks_conditional_branches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / "composer.py").write_text(
         "f(agent_type='coordinator:apm', agent_model='opus' if x else 'sonnet')\n",
         encoding="utf-8",
@@ -158,7 +158,7 @@ def test_literal_scan_walks_conditional_branches(tmp_path, monkeypatch):
     assert len(_composer_literal_models()) == 1
 
 
-def test_literal_scan_catches_a_typed_literal(tmp_path, monkeypatch):
+def test_literal_scan_catches_a_typed_literal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     src = tmp_path / "composer.py"
     src.write_text(
         "_X_MODEL = 'opus'\n"
@@ -170,7 +170,7 @@ def test_literal_scan_catches_a_typed_literal(tmp_path, monkeypatch):
     assert len(_composer_literal_models()) == 2
 
 
-def test_unpinned_type_takes_its_override_and_refuses_without_one():
+def test_unpinned_type_takes_its_override_and_refuses_without_one() -> None:
     assert emit.resolve_agent_model("coordinator:workflow-maker", "opus") == "opus"
     with pytest.raises(emit.MalformedAgentOverrideError):
         emit.resolve_agent_model("coordinator:workflow-maker")

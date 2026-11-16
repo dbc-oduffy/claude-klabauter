@@ -36,17 +36,17 @@ def _call(ledger=None, rows=(), owed=(), gated=(), derived=(), leg=None):
     return identical_rehalt_reason(_ledger() if ledger is None else ledger, rows, owed, gated, derived, leg)
 
 
-def test_dd822d_second_refire_shape_is_identical_rehalt():
+def test_dd822d_second_refire_shape_is_identical_rehalt() -> None:
     reason = _call(leg={"action": LEG_SKIP})
     assert reason is not None
     assert "R1" in reason and SHA[:10] in reason and "workflow.revise" in reason
 
 
-def test_all_landed_kind_also_true():
+def test_all_landed_kind_also_true() -> None:
     assert _call(_ledger(**{RESUME_LEDGER_KIND_FIELD: "all-landed"})) is not None
 
 
-def test_no_leg_is_true():
+def test_no_leg_is_true() -> None:
     assert _call(leg=None) is not None
 
 
@@ -66,19 +66,19 @@ def test_no_leg_is_true():
         {"ledger": _ledger(**{RESUME_LEDGER_KIND_FIELD: "commit"})},
     ],
 )
-def test_each_release_condition_is_none(kwargs):
+def test_each_release_condition_is_none(kwargs) -> None:
     assert _call(**kwargs) is None
 
 
-def test_a_blocking_id_the_register_has_since_ruled_releases_the_noop():
+def test_a_blocking_id_the_register_has_since_ruled_releases_the_noop() -> None:
     assert _call(_ledger(rulable_ids=["R2"])) is None
 
 
-def test_a_blocking_id_still_rulable_keeps_the_noop():
+def test_a_blocking_id_still_rulable_keeps_the_noop() -> None:
     assert _call(_ledger(rulable_ids=["R1", "R2"])) is not None
 
 
-def test_no_resume_ledger_is_none():
+def test_no_resume_ledger_is_none() -> None:
     assert identical_rehalt_reason(None, (), (), (), (), None) is None
 
 
@@ -86,18 +86,18 @@ def _unserved(ledger=None, serving=()):
     return unserved_blocking_reason(_ledger() if ledger is None else ledger, serving)
 
 
-def test_no_serving_row_refuses_naming_the_id_and_the_add_task_step():
+def test_no_serving_row_refuses_naming_the_id_and_the_add_task_step() -> None:
     reason = _unserved()
     assert reason is not None
     assert "R1" in reason and "plan.tasks.mutate" in reason and "workflow.revise" in reason
 
 
 @pytest.mark.parametrize("disposition", ["coded", "done", "wont_do", "spun_off", "backlogged"])
-def test_only_closed_serving_rows_still_refuse(disposition):
+def test_only_closed_serving_rows_still_refuse(disposition) -> None:
     assert _unserved(serving=[{"id": "C1", "disposition": disposition}]) is not None
 
 
-def test_an_em_discharged_open_row_still_refuses():
+def test_an_em_discharged_open_row_still_refuses() -> None:
     ledger = _ledger(em_discharged={"C1": "done by hand"})
     assert _unserved(ledger, serving=[{"id": "C1", "disposition": "open"}]) is not None
 
@@ -114,12 +114,12 @@ def test_an_em_discharged_open_row_still_refuses():
         {"ledger": None, "serving": []},
     ],
 )
-def test_unserved_release_conditions_are_none(kwargs):
+def test_unserved_release_conditions_are_none(kwargs) -> None:
     ledger = kwargs.get("ledger", _ledger())
     assert unserved_blocking_reason(ledger, kwargs.get("serving", ())) is None
 
 
-def _gate_repo(repo, row_disposition, register_rows):
+def _gate_repo(repo, row_disposition, register_rows) -> None:
     from coordinator_core.ops.dispatch_emit.tests.test_ask_gate import REL
     from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume import PLAN_REL
     from coordinator_core.ops.dispatch_emit.tests.test_ask_gate_resume_ledger_remaining_leg import _halted
@@ -132,7 +132,7 @@ def _gate_repo(repo, row_disposition, register_rows):
     plan.write_text(text, encoding="utf-8", newline="\n")
 
 
-def test_gate_refuses_before_a_manifest_handle_when_no_open_row_serves(repo, monkeypatch):  # noqa: F811
+def test_gate_refuses_before_a_manifest_handle_when_no_open_row_serves(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     from coordinator_core.ops.dispatch_emit import ask_gate
     from coordinator_core.ops.dispatch_emit.ask_contract import HALT_REFUSAL, LEG_DISPATCH, RESUME_LEDGER_LEG_FIELD
     from coordinator_core.ops.dispatch_emit.tests.test_refire_after_ledger_halt_executes_unmet_rows_incident import (
@@ -151,7 +151,7 @@ def test_gate_refuses_before_a_manifest_handle_when_no_open_row_serves(repo, mon
     assert "manifest_handle" not in out
 
 
-def test_gate_stages_when_an_open_row_serves_the_blocking_id(repo, monkeypatch):  # noqa: F811
+def test_gate_stages_when_an_open_row_serves_the_blocking_id(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     from coordinator_core.ops.dispatch_emit import ask_gate
     from coordinator_core.ops.dispatch_emit.tests.test_refire_after_ledger_halt_executes_unmet_rows_incident import (
         REFIRE_RUN,

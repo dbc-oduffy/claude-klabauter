@@ -1381,6 +1381,11 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #   3. Opens any file for write? No.  4. Shared mutable state? No.
     #   5. Persistent state changes observable across processes? No.
     "plan.set_code_done": OpClass.COMPUTE_ONLY,
+    # plan.status_done — MUTATING: moves one plan's status to implemented through
+    # plan_status_transition's stamp-implemented (write, commit, cascade) once no row is open.
+    #   1. Writes, deletes, or reorders any state? Yes (the plan file, git, handoff/sizing).
+    #   3. Opens any file for write? Yes.  5. Observable across processes? Yes.
+    "plan.status_done": OpClass.MUTATING,
     # repo.setup — MUTATING: creates files/dirs, edits .gitignore and installs the
     # prepare-commit-msg hook and git config inside the caller-supplied root.
     #   1. Writes, deletes, or reorders any state? Yes (target repo files).
@@ -2707,6 +2712,20 @@ OP_CLASSIFICATION: types.MappingProxyType[str, OpClass] = types.MappingProxyType
     #      The in-flight run's later stages read the appended revision.
     # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
     "workflow.revise": OpClass.MUTATING,
+    # workflow.cancel — MUTATING: writes the run's halted.json (halted="cancelled") and drops the run from the
+    # live-run index, unlinking its claim markers (ops/dispatch_emit/run_cancel.py); nothing else.
+    # DR-208 five-question affirmation (citing workflow.cancel handler):
+    #   1. Writes, deletes, or reorders any state file, queue, or git object?  YES.
+    #      The run's halted.json, the live-run index row and its claim markers; no git object.
+    #   2. Writes into rag's relational store?                                 No.
+    #   3. Opens any file for write (including sentinel creation)?             YES.
+    #      halted.json under the record dir named by a safe_id run_id.
+    #   4. Mutates shared mutable state outside its own module?                No.
+    #      The marker and index row belong to the one run named.
+    #   5. Persistent state changes observable across process boundaries?     YES.
+    #      dispatch.ask_stage and a refire read the marker; peers' overlap checks read the index.
+    # Authority: docs/decisions/DR-208-invoke-op-authz-model.md § 5
+    "workflow.cancel": OpClass.MUTATING,
     # workflow.pending_revisions — COMPUTE_ONLY: replies the unclaimed register rows of a run's
     # plan; writes nothing (ops/dispatch_emit/revise_absorb.py).
     "workflow.pending_revisions": OpClass.COMPUTE_ONLY,

@@ -9,6 +9,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import emit
 from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_wave_barrier import _script
 from coordinator_core.testing.git_write import write_seen_by_git
+from pathlib import Path
 
 CARRY = "(_sizingRel && !_sizingCarried ? [_sizingRel] : [])"
 PATHS_LINE = "const paths = [...new Set([..._carried, ...done].flatMap((i) => _landed[i].paths).concat(_carryPaths))];"
@@ -20,7 +21,7 @@ def _checkpoint(**kw) -> str:
     return emit._checkpoint_commit_js(None, repo_root="REPO", session_id=None, **kw)
 
 
-def test_ask_script_commit_wave_carries_the_bound_sizing():
+def test_ask_script_commit_wave_carries_the_bound_sizing() -> None:
     script = _script()
     assert f"const _carryPaths = {CARRY};" in script
     assert PATHS_LINE in script
@@ -28,7 +29,7 @@ def test_ask_script_commit_wave_carries_the_bound_sizing():
     assert script.index("let _sizingCarried") < script.index("async function _commitWave")
 
 
-def test_sizing_carried_set_only_after_a_committed_reply_that_did_not_withhold_it():
+def test_sizing_carried_set_only_after_a_committed_reply_that_did_not_withhold_it() -> None:
     script = _script()
     assert script.count("_sizingCarried = true;") == 1
     refused = script.index("if (!r || r.outcome !== 'committed') {")
@@ -38,7 +39,7 @@ def test_sizing_carried_set_only_after_a_committed_reply_that_did_not_withhold_i
     assert "return;" in script[refused:withheld]
 
 
-def test_none_emits_byte_identically():
+def test_none_emits_byte_identically() -> None:
     plain = _checkpoint()
     assert "_carryPaths" not in plain and "_sizingCarried" not in plain
     assert PLAIN_PATHS in plain
@@ -49,10 +50,10 @@ def test_none_emits_byte_identically():
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @pytest.mark.parametrize("sizing_on_disk", [True, False])
-def test_checkpoint_route_lands_untracked_sizing_with_the_rows(tmp_path, sizing_on_disk):
+def test_checkpoint_route_lands_untracked_sizing_with_the_rows(tmp_path: Path, sizing_on_disk) -> None:
     from coordinator_core.ops.ceremony import commit_v2
 
-    def git(*args):
+    def git(*args) -> str:
         return subprocess.run(
             ["git", *args], cwd=str(tmp_path), capture_output=True, text=True, check=True,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),

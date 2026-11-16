@@ -113,8 +113,8 @@ def _write_sizing(root, **over):
 def test_sizing_memo_parses_once_per_scope_and_hands_out_independent_copies(tmp_path, monkeypatch):
     _write_sizing(tmp_path)
     parses: list = []
-    real = sf.yaml.safe_load
-    monkeypatch.setattr(sf.yaml, "safe_load", lambda text: parses.append(1) or real(text))
+    real = sf._yaml_safe_load
+    monkeypatch.setattr(sf, "_yaml_safe_load", lambda text: parses.append(1) or real(text))
     with sf.sizing_memo():
         first = sf.load_sizing(tmp_path, "state/sizings/a.yaml")
         first["route"] = "mutated"

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -25,7 +26,7 @@ def _make_repo_root(tmp_path) -> str:
     return str(repo_root)
 
 
-def test_t1_write_creates_stamp_with_correct_version(tmp_path):
+def test_t1_write_creates_stamp_with_correct_version(tmp_path: Path) -> None:
     repo = _make_repo_root(tmp_path)
     plugin = _make_plugin_root(tmp_path, "1")
     cc.coordinator_currency_write(repo, plugin)
@@ -35,7 +36,7 @@ def test_t1_write_creates_stamp_with_correct_version(tmp_path):
     assert cc.coordinator_currency_read(repo) == "1"
 
 
-def test_t2_second_write_same_version_is_byte_identical_noop(tmp_path):
+def test_t2_second_write_same_version_is_byte_identical_noop(tmp_path: Path) -> None:
     repo = _make_repo_root(tmp_path)
     plugin = _make_plugin_root(tmp_path, "1")
     cc.coordinator_currency_write(repo, plugin)
@@ -54,7 +55,7 @@ def test_t2_second_write_same_version_is_byte_identical_noop(tmp_path):
     assert mtime_after == mtime_before, "idempotent write touched the file even though version was unchanged"
 
 
-def test_t3_write_overwrites_stamp_on_version_bump(tmp_path):
+def test_t3_write_overwrites_stamp_on_version_bump(tmp_path: Path) -> None:
     repo = _make_repo_root(tmp_path)
     plugin_v1 = _make_plugin_root(tmp_path, "1")
     cc.coordinator_currency_write(repo, plugin_v1)
@@ -67,7 +68,7 @@ def test_t3_write_overwrites_stamp_on_version_bump(tmp_path):
     assert cc.coordinator_currency_read(repo) == "2"
 
 
-def test_t4_read_returns_stamped_version(tmp_path):
+def test_t4_read_returns_stamped_version(tmp_path: Path) -> None:
     repo2 = tmp_path / "repo2"
     (repo2 / "docs").mkdir(parents=True)
     (repo2 / "docs" / "coordinator-currency.yaml").write_text(
@@ -76,13 +77,13 @@ def test_t4_read_returns_stamped_version(tmp_path):
     assert cc.coordinator_currency_read(str(repo2)) == "3"
 
 
-def test_t5_read_returns_none_on_absent_stamp(tmp_path):
+def test_t5_read_returns_none_on_absent_stamp(tmp_path: Path) -> None:
     repo3 = tmp_path / "repo3"
     repo3.mkdir()
     assert cc.coordinator_currency_read(str(repo3)) is None
 
 
-def test_write_raises_currency_error_on_unreadable_schema_constant(tmp_path):
+def test_write_raises_currency_error_on_unreadable_schema_constant(tmp_path: Path) -> None:
     repo = _make_repo_root(tmp_path)
     plugin_no_version = tmp_path / "plugin_no_version"
     plugin_no_version.mkdir()

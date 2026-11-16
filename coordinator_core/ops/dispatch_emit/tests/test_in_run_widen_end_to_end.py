@@ -25,6 +25,7 @@ from .test_ask_run_product_commit import RUN, repo  # noqa: F401 -- fixture
 from .test_sizing_fire_in_run_resize import REL, _apply, _seed
 from .test_terminal_commit_xs_over_budget import _call, _git, _new_files, root  # noqa: F401 -- fixture
 from .test_vitest_cap_and_row_local_block import _BLOCK, _go
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence, pytest.mark.xs_gate_live]
 
@@ -52,7 +53,7 @@ def _fence(tmp_path, monkeypatch, widened):
     return land_run._footprint_fence(tmp_path, run, {"blocking": []}, None, None)
 
 
-def test_1_an_in_ask_row_local_block_widens_redispatches_and_lands(tmp_path, monkeypatch):
+def test_1_an_in_ask_row_local_block_widens_redispatches_and_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     script = _emitted_script()
     assert "function classifyBlock(" in script and "_widened" in script
     assert f"if ({emit._STOP_RULE_JS_RE}.test(_text) && !{emit._ROW_LOCAL_BLOCK_JS_RE}.test(_text))" in script
@@ -69,7 +70,7 @@ def test_1_an_in_ask_row_local_block_widens_redispatches_and_lands(tmp_path, mon
     assert recorded == {"recorded": True, "breach": []}
 
 
-def test_2_an_xs_run_over_budget_resizes_and_lands(root):  # noqa: F811
+def test_2_an_xs_run_over_budget_resizes_and_lands(root) -> None:  # noqa: F811
     head = _git(root, "rev-parse", "HEAD")
     reply, _ = _call(root, _new_files(root, 3, 14))
 
@@ -78,13 +79,13 @@ def test_2_an_xs_run_over_budget_resizes_and_lands(root):  # noqa: F811
     assert _git(root, "rev-parse", "HEAD") != head
 
 
-def test_2b_an_unmeasurable_xs_diff_still_refuses(root):  # noqa: F811
+def test_2b_an_unmeasurable_xs_diff_still_refuses(root) -> None:  # noqa: F811
     reply, _ = _call(root, _new_files(root, 1, 1), base="0" * 40)
 
     assert reply["refused"] == "xs-over-budget" and "unmeasurable" in reply["error"]
 
 
-def test_3_a_review_leg_adjacent_test_edit_is_backed_by_the_recorded_widen(tmp_path, root):  # noqa: F811
+def test_3_a_review_leg_adjacent_test_edit_is_backed_by_the_recorded_widen(tmp_path: Path, root) -> None:  # noqa: F811
     adjacent = "pkg/tests/test_mod.py"
     (root / "pkg" / "tests").mkdir(parents=True)
     (root / adjacent).write_text("def test_a():\n    assert True\n", encoding="utf-8")
@@ -112,21 +113,21 @@ def test_3_a_review_leg_adjacent_test_edit_is_backed_by_the_recorded_widen(tmp_p
     assert refusal is None and reply["dropped_foreign"] == [adjacent]
 
 
-def test_4_an_s_sizing_reported_l_mid_planning_continues(tmp_path):
+def test_4_an_s_sizing_reported_l_mid_planning_continues(tmp_path: Path) -> None:
     repo = _seed(tmp_path, "S")
     arm, amended, _ = _apply(repo, "L")
 
     assert arm == sf.ARM_M_PLUS and amended["estimate"]["tshirt"] == "L"
 
 
-def test_5_an_out_of_ask_row_local_block_halts():
+def test_5_an_out_of_ask_row_local_block_halts() -> None:
     for value in ("state/handoffs/x.md", "../outside.py", ".claude/rules/x.md"):
         out = _go({"A": [_BLOCK % value, "DONE: a"]})
         assert out["calls"] == ["A"] and out["widened"] == [], value
         assert out["incomplete"] == ["A"], value
 
 
-def test_6_a_stop_rule_reply_halts_without_widening():
+def test_6_a_stop_rule_reply_halts_without_widening() -> None:
     out = _go({"A": ["DONE: x\nSTOP-RULE-FIRED: premise refuted"]})
 
     assert out["calls"] == ["A"] and out["widened"] == []
@@ -134,7 +135,7 @@ def test_6_a_stop_rule_reply_halts_without_widening():
 
 
 @pytest.mark.parametrize("old,new", [("S", "XXL"), ("XS", "XL"), ("L", "XXL"), ("M", "XXL")])
-def test_7_a_ballooning_resize_flags_to_the_em_and_leaves_the_sizing(tmp_path, old, new):
+def test_7_a_ballooning_resize_flags_to_the_em_and_leaves_the_sizing(tmp_path: Path, old, new) -> None:
     repo = _seed(tmp_path, old)
     with pytest.raises(sf.SizingFireRefused, match="possible engine error"):
         _apply(repo, new)
@@ -142,7 +143,7 @@ def test_7_a_ballooning_resize_flags_to_the_em_and_leaves_the_sizing(tmp_path, o
     assert sf.load_sizing(repo, REL)["estimate"]["tshirt"] == old
 
 
-def test_8_a_review_blocked_run_with_in_ask_warn_findings_is_fixed_in_run_and_lands():
+def test_8_a_review_blocked_run_with_in_ask_warn_findings_is_fixed_in_run_and_lands() -> None:
     out = _drive(
         reverify=_green(), wave=_WARN, replies={HALT_FIX_LABEL: [_done(_OWN)], HALT_REVERIFY_LABEL: [_CLEAR]}
     )
@@ -153,8 +154,8 @@ def test_8_a_review_blocked_run_with_in_ask_warn_findings_is_fixed_in_run_and_la
 
 
 def test_9_the_scripts_returned_widened_list_is_persisted_by_terminal_commit_and_admitted_by_the_fence(
-    repo, monkeypatch  # noqa: F811
-):
+    repo, monkeypatch: pytest.MonkeyPatch  # noqa: F811
+) -> None:
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT
 
     run_dir = repo / RUN_DIR_ROOT / RUN

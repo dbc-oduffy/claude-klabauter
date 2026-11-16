@@ -77,7 +77,7 @@ _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 _FIXTURE_COMMENT = "# posix-exec-" + "fixture"
 
 
-def _git(root, *args):
+def _git(root, *args) -> None:
     subprocess.run(
         ["git", "-C", str(root)] + list(args),
         capture_output=True,
@@ -127,7 +127,7 @@ def _stage_by_name(repo: Path, relpath: str, text: str = "fixture\n") -> None:
 # Class 1: env-stripped shebang.
 # ---------------------------------------------------------------------------
 
-def test_scan_detects_env_shebang_violation(tmp_path):
+def test_scan_detects_env_shebang_violation(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     victim = repo / "tool.sh"
     victim.write_text("#!/usr/bin/env bash\necho hi\n")
@@ -138,7 +138,7 @@ def test_scan_detects_env_shebang_violation(tmp_path):
     assert "tool.sh" in result["env_shebang"]
 
 
-def test_scan_does_not_flag_direct_shebang(tmp_path):
+def test_scan_does_not_flag_direct_shebang(tmp_path: Path) -> None:
     """A direct (non-env) shebang like `#!/bin/bash` is NOT this class --
     negative control proving the detector isn't over-broad."""
     repo = _init_repo(tmp_path)
@@ -154,7 +154,7 @@ def test_scan_does_not_flag_direct_shebang(tmp_path):
 # Class 2: extensionless #!-executable.
 # ---------------------------------------------------------------------------
 
-def test_scan_detects_extensionless_exec_violation(tmp_path):
+def test_scan_detects_extensionless_exec_violation(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "my-cli").write_text("#!/bin/sh\necho hi\n")
     _commit_all(repo)
@@ -164,7 +164,7 @@ def test_scan_detects_extensionless_exec_violation(tmp_path):
     assert "my-cli" in result["extensionless_exec"]
 
 
-def test_scan_does_not_flag_extensioned_shebang_file(tmp_path):
+def test_scan_does_not_flag_extensioned_shebang_file(tmp_path: Path) -> None:
     """A `.py`/`.sh`-suffixed shebang file is NOT this class -- negative
     control: this is exactly the gap check-windows-python-shebang.sh's
     *.py-only glob left open (it never scanned extensionless CLIs), inverted
@@ -178,7 +178,7 @@ def test_scan_does_not_flag_extensioned_shebang_file(tmp_path):
     assert "my-cli.sh" not in result["extensionless_exec"]
 
 
-def test_scan_does_not_flag_extensionless_non_shebang_file(tmp_path):
+def test_scan_does_not_flag_extensionless_non_shebang_file(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "README").write_text("just a readme, no shebang\n")
     _commit_all(repo)
@@ -192,7 +192,7 @@ def test_scan_does_not_flag_extensionless_non_shebang_file(tmp_path):
 # Class 3: git mode 100755.
 # ---------------------------------------------------------------------------
 
-def test_scan_detects_mode_100755_violation(tmp_path):
+def test_scan_detects_mode_100755_violation(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     victim = repo / "data.txt"
     victim.write_text("not even a script\n")
@@ -203,7 +203,7 @@ def test_scan_detects_mode_100755_violation(tmp_path):
     assert "data.txt" in result["mode_100755"]
 
 
-def test_scan_does_not_flag_mode_100644(tmp_path):
+def test_scan_does_not_flag_mode_100644(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "data.txt").write_text("not a script\n")
     _commit_all(repo)
@@ -213,7 +213,7 @@ def test_scan_does_not_flag_mode_100644(tmp_path):
     assert "data.txt" not in result["mode_100755"]
 
 
-def test_scan_all_three_classes_are_independent_tells(tmp_path):
+def test_scan_all_three_classes_are_independent_tells(tmp_path: Path) -> None:
     """A single file can trip more than one class at once (e.g. an
     extensionless env-shebang executable at mode 100755) -- classes are not
     mutually exclusive categories, matching the module docstring."""
@@ -234,7 +234,7 @@ def test_scan_all_three_classes_are_independent_tells(tmp_path):
 # ---------------------------------------------------------------------------
 
 @symlink_capability.requires_symlink_capability
-def test_scan_detects_symlink_in_index(tmp_path):
+def test_scan_detects_symlink_in_index(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "target.txt").write_text("real file\n")
     (repo / "link.txt").symlink_to("target.txt")
@@ -245,7 +245,7 @@ def test_scan_detects_symlink_in_index(tmp_path):
     assert "link.txt" in result["symlink_in_index"]
 
 
-def test_scan_does_not_flag_regular_file_as_symlink(tmp_path):
+def test_scan_does_not_flag_regular_file_as_symlink(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "plain.txt").write_text("not a symlink\n")
     _commit_all(repo)
@@ -255,7 +255,7 @@ def test_scan_does_not_flag_regular_file_as_symlink(tmp_path):
     assert "plain.txt" not in result["symlink_in_index"]
 
 
-def test_scan_detects_case_collision(tmp_path):
+def test_scan_detects_case_collision(tmp_path: Path) -> None:
     """Two blobs added directly to the git index under case-differing
     names -- writing both through the filesystem doesn't work as a fixture
     on a case-insensitive host filesystem (macOS/Windows), where the second
@@ -280,7 +280,7 @@ def test_scan_detects_case_collision(tmp_path):
     assert "readme.md" in result["case_collision"]
 
 
-def test_scan_does_not_flag_distinct_names_as_case_collision(tmp_path):
+def test_scan_does_not_flag_distinct_names_as_case_collision(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "readme.md").write_text("one\n")
     (repo / "changelog.md").write_text("two\n")
@@ -292,7 +292,7 @@ def test_scan_does_not_flag_distinct_names_as_case_collision(tmp_path):
     assert "changelog.md" not in result["case_collision"]
 
 
-def test_scan_detects_reserved_device_name(tmp_path):
+def test_scan_detects_reserved_device_name(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage_by_name(repo, "con.txt")
     _git(repo, "commit", "-q", "-m", "seed")
@@ -302,7 +302,7 @@ def test_scan_detects_reserved_device_name(tmp_path):
     assert "con.txt" in result["reserved_filename"]
 
 
-def test_scan_detects_reserved_device_name_in_subdirectory(tmp_path):
+def test_scan_detects_reserved_device_name_in_subdirectory(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage_by_name(repo, "logs/aux", "reserved component, not just basename\n")
     _git(repo, "commit", "-q", "-m", "seed")
@@ -312,7 +312,7 @@ def test_scan_detects_reserved_device_name_in_subdirectory(tmp_path):
     assert "logs/aux" in result["reserved_filename"]
 
 
-def test_scan_detects_forbidden_path_character(tmp_path):
+def test_scan_detects_forbidden_path_character(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _stage_by_name(repo, "report<final>.txt", "forbidden char on Windows\n")
     _git(repo, "commit", "-q", "-m", "seed")
@@ -322,7 +322,7 @@ def test_scan_detects_forbidden_path_character(tmp_path):
     assert "report<final>.txt" in result["reserved_filename"]
 
 
-def test_scan_does_not_flag_ordinary_filename_as_reserved(tmp_path):
+def test_scan_does_not_flag_ordinary_filename_as_reserved(tmp_path: Path) -> None:
     """Negative control: a name merely CONTAINING a reserved word (e.g.
     'console.py') must not be flagged -- only the exact stem matches."""
     repo = _init_repo(tmp_path)
@@ -334,7 +334,7 @@ def test_scan_does_not_flag_ordinary_filename_as_reserved(tmp_path):
     assert "console.py" not in result["reserved_filename"]
 
 
-def test_scan_detects_path_too_long(tmp_path):
+def test_scan_detects_path_too_long(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     long_name = "x" * 220
     _stage_by_name(repo, long_name, "too long once a clone root is prepended\n")
@@ -345,7 +345,7 @@ def test_scan_detects_path_too_long(tmp_path):
     assert long_name in result["path_too_long"]
 
 
-def test_scan_does_not_flag_short_path(tmp_path):
+def test_scan_does_not_flag_short_path(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "short.txt").write_text("fine\n")
     _commit_all(repo)
@@ -355,7 +355,7 @@ def test_scan_does_not_flag_short_path(tmp_path):
     assert "short.txt" not in result["path_too_long"]
 
 
-def test_check_tier_a_zero_tolerance_passes_on_clean_repo(tmp_path):
+def test_check_tier_a_zero_tolerance_passes_on_clean_repo(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "fine.txt").write_text("nothing wrong here\n")
     _commit_all(repo)
@@ -366,7 +366,7 @@ def test_check_tier_a_zero_tolerance_passes_on_clean_repo(tmp_path):
     assert "OK" in msg
 
 
-def test_check_tier_a_zero_tolerance_fails_on_any_violation_no_baseline_needed(tmp_path):
+def test_check_tier_a_zero_tolerance_fails_on_any_violation_no_baseline_needed(tmp_path: Path) -> None:
     """Tier A has NO baseline concept -- a single violation fails
     immediately, unlike CLASSES/REPORT_ONLY_CLASSES which compare against a
     frozen baseline file."""
@@ -402,7 +402,7 @@ def test_check_tier_a_zero_tolerance_fails_on_any_violation_no_baseline_needed(t
 # those method names (a ~400-hit false-positive probe on this fleet).
 # ---------------------------------------------------------------------------
 
-def test_scan_detects_implicit_encoding(tmp_path):
+def test_scan_detects_implicit_encoding(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "def read(p):\n    with open(p, 'r') as f:\n        return f.read()\n"
@@ -414,7 +414,7 @@ def test_scan_detects_implicit_encoding(tmp_path):
     assert "tool.py" in result["implicit_encoding"]
 
 
-def test_scan_detects_implicit_encoding_default_mode(tmp_path):
+def test_scan_detects_implicit_encoding_default_mode(tmp_path: Path) -> None:
     """No mode argument at all -- default 'r' is text, still a violation."""
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
@@ -427,7 +427,7 @@ def test_scan_detects_implicit_encoding_default_mode(tmp_path):
     assert "tool.py" in result["implicit_encoding"]
 
 
-def test_scan_does_not_flag_open_with_encoding(tmp_path):
+def test_scan_does_not_flag_open_with_encoding(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "def read(p):\n    with open(p, 'r', encoding='utf-8') as f:\n        return f.read()\n"
@@ -439,7 +439,7 @@ def test_scan_does_not_flag_open_with_encoding(tmp_path):
     assert "tool.py" not in result["implicit_encoding"]
 
 
-def test_scan_does_not_flag_binary_mode_open(tmp_path):
+def test_scan_does_not_flag_binary_mode_open(tmp_path: Path) -> None:
     """Negative control: 'rb'/'wb' are byte streams -- encoding is
     meaningless there, not a violation."""
     repo = _init_repo(tmp_path)
@@ -453,7 +453,7 @@ def test_scan_does_not_flag_binary_mode_open(tmp_path):
     assert "tool.py" not in result["implicit_encoding"]
 
 
-def test_scan_does_not_flag_pathlib_open_attribute_call(tmp_path):
+def test_scan_does_not_flag_pathlib_open_attribute_call(tmp_path: Path) -> None:
     """Deliberate scope boundary: `Path(...).open()` (an attribute call,
     not a bare `open()` Name call) is NOT matched -- this class is
     scoped to the builtin `open()` form only, precisely because matching
@@ -471,7 +471,7 @@ def test_scan_does_not_flag_pathlib_open_attribute_call(tmp_path):
     assert "tool.py" not in result["implicit_encoding"]
 
 
-def test_scan_does_not_flag_open_with_variable_mode_argument(tmp_path):
+def test_scan_does_not_flag_open_with_variable_mode_argument(tmp_path: Path) -> None:
     """Negative-spec pinning the 2026-08-03 narrowing: a mode passed through
     a variable cannot be classified as binary or text at all, so it must
     never produce a finding -- the pre-fix behaviour treated an unresolved
@@ -489,7 +489,7 @@ def test_scan_does_not_flag_open_with_variable_mode_argument(tmp_path):
     assert "tool.py" not in result["implicit_encoding"]
 
 
-def test_scan_does_not_flag_open_with_variable_mode_keyword(tmp_path):
+def test_scan_does_not_flag_open_with_variable_mode_keyword(tmp_path: Path) -> None:
     """Same narrowing, keyword-argument spelling (`open(p, mode=m)`)."""
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
@@ -502,7 +502,7 @@ def test_scan_does_not_flag_open_with_variable_mode_keyword(tmp_path):
     assert "tool.py" not in result["implicit_encoding"]
 
 
-def test_check_implicit_encoding_zero_tolerance_passes_on_clean_repo(tmp_path):
+def test_check_implicit_encoding_zero_tolerance_passes_on_clean_repo(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "def read(p):\n    with open(p, 'r', encoding='utf-8') as f:\n        return f.read()\n"
@@ -515,7 +515,7 @@ def test_check_implicit_encoding_zero_tolerance_passes_on_clean_repo(tmp_path):
     assert "OK" in msg
 
 
-def test_check_implicit_encoding_zero_tolerance_fails_on_any_violation(tmp_path):
+def test_check_implicit_encoding_zero_tolerance_fails_on_any_violation(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "def read(p):\n    with open(p) as f:\n        return f.read()\n"
@@ -533,7 +533,7 @@ def test_check_implicit_encoding_zero_tolerance_fails_on_any_violation(tmp_path)
 # Class 4: hardcoded path separator.
 # ---------------------------------------------------------------------------
 
-def test_scan_does_not_flag_path_separator_replace_normalization_hack(tmp_path):
+def test_scan_does_not_flag_path_separator_replace_normalization_hack(tmp_path: Path) -> None:
     """2026-08-14 (C1): the `.replace('/', '\\\\')` arm was DROPPED
     OUTRIGHT as measured-noise-dominant (07-31 lesson: 27/28 ratchet hits
     false positives) rather than restated as a dataflow-dependent property
@@ -552,7 +552,7 @@ def test_scan_does_not_flag_path_separator_replace_normalization_hack(tmp_path):
     assert "tool.py" not in result["path_separator"]
 
 
-def test_scan_does_not_flag_path_separator_literal_backslash_concat(tmp_path):
+def test_scan_does_not_flag_path_separator_literal_backslash_concat(tmp_path: Path) -> None:
     """2026-08-14 (C1): the literal `'\\\\'` string-concatenation arm was
     dropped outright -- see
     test_scan_does_not_flag_path_separator_replace_normalization_hack's
@@ -570,7 +570,7 @@ def test_scan_does_not_flag_path_separator_literal_backslash_concat(tmp_path):
     assert "tool.py" not in result["path_separator"]
 
 
-def test_scan_does_not_flag_path_separator_manual_split(tmp_path):
+def test_scan_does_not_flag_path_separator_manual_split(tmp_path: Path) -> None:
     """2026-08-14 (C1): the `.split('\\\\')` arm was dropped outright --
     see test_scan_does_not_flag_path_separator_replace_normalization_hack's
     docstring for why. Was test_scan_detects_path_separator_manual_split, a
@@ -586,7 +586,7 @@ def test_scan_does_not_flag_path_separator_manual_split(tmp_path):
     assert "tool.py" not in result["path_separator"]
 
 
-def test_scan_does_not_flag_os_path_join(tmp_path):
+def test_scan_does_not_flag_os_path_join(tmp_path: Path) -> None:
     """Negative control: os.path.join is THE FIX, not the violation -- must
     be structurally invisible to the path_separator detector."""
     repo = _init_repo(tmp_path)
@@ -600,7 +600,7 @@ def test_scan_does_not_flag_os_path_join(tmp_path):
     assert "tool.py" not in result["path_separator"]
 
 
-def test_scan_does_not_flag_pathlib_usage(tmp_path):
+def test_scan_does_not_flag_pathlib_usage(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "from pathlib import Path\n\ndef build(a, b):\n    return Path(a) / b\n"
@@ -612,7 +612,7 @@ def test_scan_does_not_flag_pathlib_usage(tmp_path):
     assert "tool.py" not in result["path_separator"]
 
 
-def test_scan_does_not_flag_os_sep(tmp_path):
+def test_scan_does_not_flag_os_sep(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "import os\n\ndef build(a, b):\n    return a + os.sep + b\n"
@@ -637,7 +637,7 @@ def test_scan_does_not_flag_os_sep(tmp_path):
 # `ALL_CLASSES` at all) -- these tests only pass now that the detector does.
 # ---------------------------------------------------------------------------
 
-def test_scan_detects_posix_path_assumption_comparison(tmp_path):
+def test_scan_detects_posix_path_assumption_comparison(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "import os\n\ndef is_root_component(part):\n    return part == os.sep\n"
@@ -649,7 +649,7 @@ def test_scan_detects_posix_path_assumption_comparison(tmp_path):
     assert "tool.py" in result["posix_path_assumption"]
 
 
-def test_scan_detects_posix_path_assumption_in_comparison(tmp_path):
+def test_scan_detects_posix_path_assumption_in_comparison(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "import os\n\ndef looks_like_a_path(s):\n    return os.sep in s\n"
@@ -661,7 +661,7 @@ def test_scan_detects_posix_path_assumption_in_comparison(tmp_path):
     assert "tool.py" in result["posix_path_assumption"]
 
 
-def test_scan_detects_posix_path_assumption_split(tmp_path):
+def test_scan_detects_posix_path_assumption_split(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "import os\n\ndef parts(stored_path):\n    return stored_path.split(os.sep)\n"
@@ -673,7 +673,7 @@ def test_scan_detects_posix_path_assumption_split(tmp_path):
     assert "tool.py" in result["posix_path_assumption"]
 
 
-def test_scan_does_not_flag_forward_slash_joined_construction(tmp_path):
+def test_scan_does_not_flag_forward_slash_joined_construction(tmp_path: Path) -> None:
     """Negative control (AC1, review-struck scope): a `"/"`-joined path
     construction is valid, unmodified, on Windows and is deliberately NOT
     part of this class -- only `os.sep` compared/split against a path is."""
@@ -688,7 +688,7 @@ def test_scan_does_not_flag_forward_slash_joined_construction(tmp_path):
     assert "tool.py" not in result["posix_path_assumption"]
 
 
-def test_scan_does_not_flag_os_path_join_embedded_separator(tmp_path):
+def test_scan_does_not_flag_os_path_join_embedded_separator(tmp_path: Path) -> None:
     """Negative control (AC1, review-struck scope): `os.path.join` is
     valid, unmodified, on Windows regardless of the separator embedded in
     its implementation -- it is the fix, never a `posix_path_assumption`
@@ -704,7 +704,7 @@ def test_scan_does_not_flag_os_path_join_embedded_separator(tmp_path):
     assert "tool.py" not in result["posix_path_assumption"]
 
 
-def test_scan_does_not_flag_os_sep_guarded_comparison(tmp_path):
+def test_scan_does_not_flag_os_sep_guarded_comparison(tmp_path: Path) -> None:
     """Same platform-guard recognition `path_separator`/`posix_mode_bits`
     get -- an `os.sep` comparison structurally unreachable on Windows is
     correct cross-platform code, not debt."""
@@ -723,7 +723,7 @@ def test_scan_does_not_flag_os_sep_guarded_comparison(tmp_path):
     assert "tool.py" not in result["posix_path_assumption"]
 
 
-def test_posix_path_assumption_is_report_only_not_blocking(tmp_path):
+def test_posix_path_assumption_is_report_only_not_blocking(tmp_path: Path) -> None:
     """AC1: landed as a NEW, SEPARATE, REPORT-ONLY class -- not merged into
     `path_separator`'s existing gate behavior, and never blocking on its
     own until a future, separately-reviewed promotion."""
@@ -731,7 +731,7 @@ def test_posix_path_assumption_is_report_only_not_blocking(tmp_path):
     assert "posix_path_assumption" not in CLASSES
 
 
-def test_posix_path_assumption_never_fails_check_against_baseline(tmp_path):
+def test_posix_path_assumption_never_fails_check_against_baseline(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "import os\n\ndef check(part):\n    return part == os.sep\n"
@@ -753,7 +753,7 @@ def test_posix_path_assumption_never_fails_check_against_baseline(tmp_path):
 # three testable constraints rather than as a per-file EXEMPTIONS grant.
 # ---------------------------------------------------------------------------
 
-def test_fixture_marker_admissibility_honoured_in_test_path_file(tmp_path):
+def test_fixture_marker_admissibility_honoured_in_test_path_file(tmp_path: Path) -> None:
     """Constraint 1: the marker suppresses the annotated finding when the
     file matches the repo's test-path predicate (here, a `test_*.py`
     basename)."""
@@ -770,7 +770,7 @@ def test_fixture_marker_admissibility_honoured_in_test_path_file(tmp_path):
     assert "test_tool.py" not in result["posix_path_assumption"]
 
 
-def test_fixture_marker_admissibility_not_honoured_outside_test_path(tmp_path):
+def test_fixture_marker_admissibility_not_honoured_outside_test_path(tmp_path: Path) -> None:
     """Constraint 1 (negative control): the identical marker, on the
     identical shape, in a file `_is_test_path` does NOT admit (no
     `test_`/`tests/` marker) must still fire -- the marker is never honoured
@@ -788,7 +788,7 @@ def test_fixture_marker_admissibility_not_honoured_outside_test_path(tmp_path):
     assert "production_tool.py" in result["posix_path_assumption"]
 
 
-def test_fixture_marker_suppresses_only_its_own_line(tmp_path):
+def test_fixture_marker_suppresses_only_its_own_line(tmp_path: Path) -> None:
     """Constraint 2 (minimum scope): a marker on one line does not suppress
     a second, unmarked violation elsewhere in the SAME test file -- it is
     not a file-scope grant."""
@@ -808,7 +808,7 @@ def test_fixture_marker_suppresses_only_its_own_line(tmp_path):
     assert "test_tool.py" in result["posix_path_assumption"]
 
 
-def test_check_no_stale_fixture_markers_passes_when_marker_suppresses_a_hit(tmp_path):
+def test_check_no_stale_fixture_markers_passes_when_marker_suppresses_a_hit(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "test_tool.py").write_text(
         "import os\n\n"
@@ -822,7 +822,7 @@ def test_check_no_stale_fixture_markers_passes_when_marker_suppresses_a_hit(tmp_
     assert ok is True
 
 
-def test_check_no_stale_fixture_markers_fails_on_marker_suppressing_nothing(tmp_path):
+def test_check_no_stale_fixture_markers_fails_on_marker_suppressing_nothing(tmp_path: Path) -> None:
     """Constraint 3 (staleness): a marker on a line that produces no finding
     at all -- e.g. ordinary, non-violation-shaped code -- fails red, same
     discipline `check_no_stale_exempt_prefixes` holds `EXEMPT_PREFIXES` to."""
@@ -839,7 +839,7 @@ def test_check_no_stale_fixture_markers_fails_on_marker_suppressing_nothing(tmp_
     assert "test_tool.py" in msg
 
 
-def test_check_no_stale_fixture_markers_passes_with_no_markers_declared(tmp_path):
+def test_check_no_stale_fixture_markers_passes_with_no_markers_declared(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "test_tool.py").write_text("def noop():\n    pass\n")
     _commit_all(repo)
@@ -853,7 +853,7 @@ def test_check_no_stale_fixture_markers_passes_with_no_markers_declared(tmp_path
 # Class 5: runtime POSIX permission-bit reasoning.
 # ---------------------------------------------------------------------------
 
-def test_scan_detects_os_access_x_ok_bare_name_form(tmp_path):
+def test_scan_detects_os_access_x_ok_bare_name_form(tmp_path: Path) -> None:
     """`from os import X_OK` -> bare-`Name` `X_OK` reference, distinct from
     the `os.X_OK` attribute form already covered above -- both are matched
     by `_is_owner_attr`'s sibling `isinstance(arg, ast.Name)` check."""
@@ -869,7 +869,7 @@ def test_scan_detects_os_access_x_ok_bare_name_form(tmp_path):
     assert "tool.py" in result["posix_mode_bits"]
 
 
-def test_scan_detects_os_access_x_ok(tmp_path):
+def test_scan_detects_os_access_x_ok(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "import os\n\ndef check(p):\n    return os.access(p, os.X_OK)\n"
@@ -881,7 +881,7 @@ def test_scan_detects_os_access_x_ok(tmp_path):
     assert "tool.py" in result["posix_mode_bits"]
 
 
-def test_scan_detects_os_chmod_with_exec_bit(tmp_path):
+def test_scan_detects_os_chmod_with_exec_bit(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "import os\n\ndef make_exec(p):\n    os.chmod(p, 0o755)\n"
@@ -893,7 +893,7 @@ def test_scan_detects_os_chmod_with_exec_bit(tmp_path):
     assert "tool.py" in result["posix_mode_bits"]
 
 
-def test_scan_detects_st_mode_exec_bit_test(tmp_path):
+def test_scan_detects_st_mode_exec_bit_test(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "import os\n\ndef is_exec(p):\n    return os.stat(p).st_mode & 0o111 != 0\n"
@@ -905,7 +905,7 @@ def test_scan_detects_st_mode_exec_bit_test(tmp_path):
     assert "tool.py" in result["posix_mode_bits"]
 
 
-def test_scan_detects_stat_module_exec_constant(tmp_path):
+def test_scan_detects_stat_module_exec_constant(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "import os\nimport stat\n\ndef make_exec(p):\n    os.chmod(p, stat.S_IRWXU | stat.S_IXGRP)\n"
@@ -917,7 +917,7 @@ def test_scan_detects_stat_module_exec_constant(tmp_path):
     assert "tool.py" in result["posix_mode_bits"]
 
 
-def test_scan_does_not_flag_os_chmod_without_exec_bit(tmp_path):
+def test_scan_does_not_flag_os_chmod_without_exec_bit(tmp_path: Path) -> None:
     """Negative control: 0o644 (rw-r--r--) sets no exec bit -- correct form,
     not a violation."""
     repo = _init_repo(tmp_path)
@@ -931,7 +931,7 @@ def test_scan_does_not_flag_os_chmod_without_exec_bit(tmp_path):
     assert "tool.py" not in result["posix_mode_bits"]
 
 
-def test_scan_does_not_flag_unrelated_bitand(tmp_path):
+def test_scan_does_not_flag_unrelated_bitand(tmp_path: Path) -> None:
     """Negative control: a bitwise-AND that has nothing to do with
     .st_mode must not trip the detector."""
     repo = _init_repo(tmp_path)
@@ -951,7 +951,7 @@ def test_scan_does_not_flag_unrelated_bitand(tmp_path):
 # Windows -- that is the correct cross-platform shape, not debt.
 # ---------------------------------------------------------------------------
 
-def test_scan_does_not_flag_os_access_inside_nested_if_guard(tmp_path):
+def test_scan_does_not_flag_os_access_inside_nested_if_guard(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "import os\n\n"
@@ -967,7 +967,7 @@ def test_scan_does_not_flag_os_access_inside_nested_if_guard(tmp_path):
     assert "tool.py" not in result["posix_mode_bits"]
 
 
-def test_scan_does_not_flag_os_access_in_skipif_windows_decorated_function(tmp_path):
+def test_scan_does_not_flag_os_access_in_skipif_windows_decorated_function(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "import os\nimport pytest\n\n"
@@ -982,7 +982,7 @@ def test_scan_does_not_flag_os_access_in_skipif_windows_decorated_function(tmp_p
     assert "tool.py" not in result["posix_mode_bits"]
 
 
-def test_scan_flags_os_access_under_a_skipif_that_does_not_name_windows(tmp_path):
+def test_scan_flags_os_access_under_a_skipif_that_does_not_name_windows(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "import os\nimport pytest\n\n"
@@ -997,7 +997,7 @@ def test_scan_flags_os_access_under_a_skipif_that_does_not_name_windows(tmp_path
     assert "tool.py" in result["posix_mode_bits"]
 
 
-def test_scan_does_not_flag_os_access_inside_and_chain_guard(tmp_path):
+def test_scan_does_not_flag_os_access_inside_and_chain_guard(tmp_path: Path) -> None:
     """The real shape found in retire-claude-bin.py: the platform check and
     the guarded call are short-circuit operands of the SAME boolean
     expression, not a separate nested If."""
@@ -1016,7 +1016,7 @@ def test_scan_does_not_flag_os_access_inside_and_chain_guard(tmp_path):
     assert "tool.py" not in result["posix_mode_bits"]
 
 
-def test_scan_still_flags_os_access_when_windows_branch_calls_it(tmp_path):
+def test_scan_still_flags_os_access_when_windows_branch_calls_it(tmp_path: Path) -> None:
     """Positive control: if the platform check is inverted so the guarded
     call is in the WINDOWS-only branch, it's real debt -- the guard must
     not blanket-suppress every branch of an if/else."""
@@ -1035,7 +1035,7 @@ def test_scan_still_flags_os_access_when_windows_branch_calls_it(tmp_path):
     assert "tool.py" in result["posix_mode_bits"]
 
 
-def test_scan_does_not_flag_path_separator_replace_inside_guard(tmp_path):
+def test_scan_does_not_flag_path_separator_replace_inside_guard(tmp_path: Path) -> None:
     """Covers the explicit if/else branch shape (a nested `If.orelse`). The
     sibling bare early-return shape -- `if sys.platform.startswith('win'):
     return p` followed by the guarded code as the NEXT sibling statement, no
@@ -1058,7 +1058,7 @@ def test_scan_does_not_flag_path_separator_replace_inside_guard(tmp_path):
     assert "tool.py" not in result["path_separator"]
 
 
-def test_scan_does_not_flag_path_separator_replace_after_bare_early_return_guard(tmp_path):
+def test_scan_does_not_flag_path_separator_replace_after_bare_early_return_guard(tmp_path: Path) -> None:
     """2026-08-13 gap closure: the bare, `else:`-less early-return guard
     clause (`if sys.platform.startswith('win'): return p` followed by the
     guarded code as the next SIBLING statement, not a nested `If.orelse`)
@@ -1078,7 +1078,7 @@ def test_scan_does_not_flag_path_separator_replace_after_bare_early_return_guard
     assert "tool.py" not in result["path_separator"]
 
 
-def test_scan_still_flags_bare_early_return_with_unrecognized_windows_test(tmp_path):
+def test_scan_still_flags_bare_early_return_with_unrecognized_windows_test(tmp_path: Path) -> None:
     """False-negative control: a bare, else-less early-return guard clause
     that is structurally IDENTICAL to the now-recognized shape, except its
     test is a project-local wrapper function rather than one of
@@ -1113,7 +1113,7 @@ def test_scan_still_flags_bare_early_return_with_unrecognized_windows_test(tmp_p
     assert "tool.py" in result["posix_path_assumption"]
 
 
-def test_scan_still_flags_bare_early_return_guard_whose_body_does_not_exit(tmp_path):
+def test_scan_still_flags_bare_early_return_guard_whose_body_does_not_exit(tmp_path: Path) -> None:
     """False-negative control: a bare, else-less `if <windows-test>:` clause
     whose body does NOT unconditionally exit (no return/raise/sys.exit) does
     not actually make the following sibling statement unreachable on
@@ -1137,7 +1137,7 @@ def test_scan_still_flags_bare_early_return_guard_whose_body_does_not_exit(tmp_p
     assert "tool.py" in result["posix_path_assumption"]
 
 
-def test_scan_still_flags_ungated_os_access(tmp_path):
+def test_scan_still_flags_ungated_os_access(tmp_path: Path) -> None:
     """Positive control: the original unguarded fixture must still fire --
     the platform-guard fix narrows the detector, it must not disable it."""
     repo = _init_repo(tmp_path)
@@ -1156,8 +1156,8 @@ def test_scan_still_flags_ungated_os_access(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_scan_detects_unresolved_cross_path_current_machine_home_macos(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A literal matching THIS machine's operator-home (macOS shape) is the
     class's genuine subject -- narrowed 2026-08-13, Q2.1 ruling."""
     monkeypatch.setenv("HOME", "/Users/alice")
@@ -1173,8 +1173,8 @@ def test_scan_detects_unresolved_cross_path_current_machine_home_macos(
 
 
 def test_scan_does_not_flag_synthetic_home_literal_off_current_machine(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A synthetic `/Users/alice` fixture literal that does NOT match the
     CURRENT machine's own `$HOME` is test data, not a leak -- the narrowing
     this ruling adds, distinct from the drive-letter drop. Same shape as
@@ -1193,7 +1193,7 @@ def test_scan_does_not_flag_synthetic_home_literal_off_current_machine(
     assert "tool.py" not in result["unresolved_cross_path"]
 
 
-def test_scan_does_not_flag_windows_drive_letter_literal(tmp_path, monkeypatch):
+def test_scan_does_not_flag_windows_drive_letter_literal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The `<drive-letter>:[\\/]` arm was DROPPED ENTIRELY 2026-08-13
     (Q2.1 ruling): a live re-measurement found it responsible for 127/178
     findings, almost all this repo's own correct Windows-portability code
@@ -1214,7 +1214,7 @@ def test_scan_does_not_flag_windows_drive_letter_literal(tmp_path, monkeypatch):
     assert "tool.py" not in result["unresolved_cross_path"]
 
 
-def test_scan_does_not_flag_settings_home_resolved_path(tmp_path):
+def test_scan_does_not_flag_settings_home_resolved_path(tmp_path: Path) -> None:
     """Negative control: resolving via COORDINATOR_SETTINGS_HOME / os.environ
     is the fix -- no hardcoded cross-machine literal appears in the AST."""
     repo = _init_repo(tmp_path)
@@ -1231,7 +1231,7 @@ def test_scan_does_not_flag_settings_home_resolved_path(tmp_path):
     assert "tool.py" not in result["unresolved_cross_path"]
 
 
-def test_scan_does_not_flag_cross_path_literal_in_docstring(tmp_path, monkeypatch):
+def test_scan_does_not_flag_cross_path_literal_in_docstring(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Negative control: a documented example path in a module docstring is
     documentation, not a hardcoded runtime assumption. `$HOME` is pinned to
     match the literal so this is a genuine test of the docstring exclusion,
@@ -1250,8 +1250,8 @@ def test_scan_does_not_flag_cross_path_literal_in_docstring(tmp_path, monkeypatc
 
 
 def test_scan_detects_unresolved_cross_path_current_machine_home_linux(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A literal matching THIS machine's operator-home (Linux shape)."""
     monkeypatch.setenv("HOME", "/home/alice")
     repo = _init_repo(tmp_path)
@@ -1265,7 +1265,7 @@ def test_scan_detects_unresolved_cross_path_current_machine_home_linux(
     assert "tool.py" in result["unresolved_cross_path"]
 
 
-def test_scan_does_not_flag_unc_share_literal(tmp_path):
+def test_scan_does_not_flag_unc_share_literal(tmp_path: Path) -> None:
     """UNC (`\\\\server\\share`) is not a home-rooted literal and was never
     part of the narrowed, kept "home-rooted arm" (Q2.1 ruling) -- it never
     starts with a `$HOME` value either, so it cannot pass the
@@ -1280,7 +1280,7 @@ def test_scan_does_not_flag_unc_share_literal(tmp_path):
     assert "tool.py" not in result["unresolved_cross_path"]
 
 
-def test_scan_does_not_flag_url_with_single_letter_looking_scheme(tmp_path):
+def test_scan_does_not_flag_url_with_single_letter_looking_scheme(tmp_path: Path) -> None:
     """Negative control: a naive UNANCHORED `[A-Za-z]:[/\\\\]` matches the
     "s:" inside "https://" -- a drive-letter false-positive this fleet has
     hit before. The detector's pattern is anchored to the absolute start of
@@ -1298,7 +1298,7 @@ def test_scan_does_not_flag_url_with_single_letter_looking_scheme(tmp_path):
     assert "tool.py" not in result["unresolved_cross_path"]
 
 
-def test_scan_does_not_flag_short_scheme_url_variants(tmp_path):
+def test_scan_does_not_flag_short_scheme_url_variants(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "def endpoints():\n"
@@ -1317,7 +1317,7 @@ def test_scan_does_not_flag_short_scheme_url_variants(tmp_path):
 # Report-only class: unclassified residual.
 # ---------------------------------------------------------------------------
 
-def test_scan_detects_unclassified_os_fork(tmp_path):
+def test_scan_detects_unclassified_os_fork(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "import os\n\ndef spawn():\n    return os.fork()\n"
@@ -1329,7 +1329,7 @@ def test_scan_detects_unclassified_os_fork(tmp_path):
     assert "tool.py" in result["unclassified"]
 
 
-def test_scan_detects_unclassified_posix_signal(tmp_path):
+def test_scan_detects_unclassified_posix_signal(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         "import signal\n\ndef handler():\n    return signal.SIGHUP\n"
@@ -1355,7 +1355,7 @@ def test_scan_detects_unclassified_posix_signal(tmp_path):
         "grp.getgrgid(0)",
     ],
 )
-def test_scan_detects_unclassified_call_targets_beyond_os_fork(tmp_path, call_expr):
+def test_scan_detects_unclassified_call_targets_beyond_os_fork(tmp_path: Path, call_expr) -> None:
     """`_UNCLASSIFIED_CALL_TARGETS` had every entry beyond `os.fork` with
     zero fixture coverage -- each of these is one of the untested arms
     (review 2026-07-28 Finding 4)."""
@@ -1372,7 +1372,7 @@ def test_scan_detects_unclassified_call_targets_beyond_os_fork(tmp_path, call_ex
 
 
 @pytest.mark.parametrize("signal_name", ["SIGUSR1", "SIGUSR2", "SIGCHLD"])
-def test_scan_detects_unclassified_signal_names_beyond_sighup(tmp_path, signal_name):
+def test_scan_detects_unclassified_signal_names_beyond_sighup(tmp_path: Path, signal_name) -> None:
     """`_UNCLASSIFIED_SIGNAL_NAMES` had only `SIGHUP` exercised -- the other
     three names were untested detector arms (review 2026-07-28 Finding 4)."""
     repo = _init_repo(tmp_path)
@@ -1386,7 +1386,7 @@ def test_scan_detects_unclassified_signal_names_beyond_sighup(tmp_path, signal_n
     assert "tool.py" in result["unclassified"]
 
 
-def test_scan_detects_unclassified_hardcoded_tmp(tmp_path):
+def test_scan_detects_unclassified_hardcoded_tmp(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.py").write_text(
         'def scratch():\n    return "/tmp/scratch.txt"\n'
@@ -1398,7 +1398,7 @@ def test_scan_detects_unclassified_hardcoded_tmp(tmp_path):
     assert "tool.py" in result["unclassified"]
 
 
-def test_scan_does_not_flag_tempfile_gettempdir(tmp_path):
+def test_scan_does_not_flag_tempfile_gettempdir(tmp_path: Path) -> None:
     """Negative control: tempfile.gettempdir() is the fix, not a
     violation -- no hardcoded /tmp/ literal appears in the AST."""
     repo = _init_repo(tmp_path)
@@ -1416,7 +1416,7 @@ def test_scan_does_not_flag_tempfile_gettempdir(tmp_path):
 # Report-only contract: never gates the build.
 # ---------------------------------------------------------------------------
 
-def test_report_only_classes_never_fail_check_against_baseline(tmp_path):
+def test_report_only_classes_never_fail_check_against_baseline(tmp_path: Path) -> None:
     """A report-only violation with NOTHING in the baseline must still
     report ok=True -- report-only classes are scanned/printed but never
     gate check_against_baseline.
@@ -1440,7 +1440,7 @@ def test_report_only_classes_never_fail_check_against_baseline(tmp_path):
     assert "unclassified" in msg
 
 
-def test_report_only_classes_excluded_from_baseline_growth_check(tmp_path):
+def test_report_only_classes_excluded_from_baseline_growth_check(tmp_path: Path) -> None:
     """Growing a report-only class's count between scans must never trip
     assert_baseline_not_grown -- only the blocking CLASSES are diffed, and
     report-only classes are never persisted into the baseline file at all.
@@ -1467,7 +1467,7 @@ def test_report_only_classes_excluded_from_baseline_growth_check(tmp_path):
     assert ok is True
 
 
-def test_unresolved_cross_path_is_not_report_only():
+def test_unresolved_cross_path_is_not_report_only() -> None:
     """Anti-regrowth lock (2026-08-13, Q2.1 ruling): `unresolved_cross_path`
     was promoted to BLOCKING (`CLASSES`) and MUST NOT be in
     `REPORT_ONLY_CLASSES`. Nothing procedural stops a future author
@@ -1478,7 +1478,7 @@ def test_unresolved_cross_path_is_not_report_only():
     assert "unresolved_cross_path" not in REPORT_ONLY_CLASSES
 
 
-def test_scan_returns_every_class(tmp_path):
+def test_scan_returns_every_class(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "unrelated.txt").write_text("nothing to see here\n")
     _commit_all(repo)
@@ -1496,7 +1496,7 @@ def test_scan_returns_every_class(tmp_path):
 # Ratchet: check_against_baseline.
 # ---------------------------------------------------------------------------
 
-def test_check_against_baseline_reds_on_new_violation_with_empty_baseline(tmp_path):
+def test_check_against_baseline_reds_on_new_violation_with_empty_baseline(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.sh").write_text("#!/usr/bin/env bash\n")
     _commit_all(repo)
@@ -1510,7 +1510,7 @@ def test_check_against_baseline_reds_on_new_violation_with_empty_baseline(tmp_pa
     assert "NEW POSIX-exec-assumption violation" in msg
 
 
-def test_check_against_baseline_leads_with_early_return_escape_for_guard_aware_classes(tmp_path):
+def test_check_against_baseline_leads_with_early_return_escape_for_guard_aware_classes(tmp_path: Path) -> None:
     """Design-as-offers (PM ask): a NEW posix_mode_bits/path_separator
     violation's failure message must LEAD with the known early-return-gap
     EXEMPTIONS escape, not just the generic port-away-from-POSIX text --
@@ -1533,7 +1533,7 @@ def test_check_against_baseline_leads_with_early_return_escape_for_guard_aware_c
     assert idx_escape < idx_generic_fix, "the EXEMPTIONS escape must come BEFORE the generic fix text"
 
 
-def test_check_against_baseline_does_not_lead_with_escape_for_non_guard_aware_classes(tmp_path):
+def test_check_against_baseline_does_not_lead_with_escape_for_non_guard_aware_classes(tmp_path: Path) -> None:
     """Negative control: env_shebang (no platform-guard concept at all)
     must not get the early-return escape hint -- it's specific to the two
     AST-scanned classes that actually have a recognized guard gap."""
@@ -1549,7 +1549,7 @@ def test_check_against_baseline_does_not_lead_with_escape_for_non_guard_aware_cl
     assert "IS recognized by `_is_windows_guarded()`" not in msg
 
 
-def test_check_against_baseline_passes_when_violation_is_baselined(tmp_path):
+def test_check_against_baseline_passes_when_violation_is_baselined(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.sh").write_text("#!/usr/bin/env bash\n")
     _commit_all(repo)
@@ -1567,7 +1567,7 @@ def test_check_against_baseline_passes_when_violation_is_baselined(tmp_path):
     assert "OK" in msg
 
 
-def test_check_against_baseline_reds_on_violation_outside_baselined_set(tmp_path):
+def test_check_against_baseline_reds_on_violation_outside_baselined_set(tmp_path: Path) -> None:
     """A NEW violation must fail even when OTHER violations are baselined --
     the ratchet is per-violation, not a total-count threshold."""
     repo = _init_repo(tmp_path)
@@ -1593,7 +1593,7 @@ def test_check_against_baseline_reds_on_violation_outside_baselined_set(tmp_path
 # Append-forbidden: assert_baseline_not_grown.
 # ---------------------------------------------------------------------------
 
-def test_assert_baseline_not_grown_passes_on_first_introduction(tmp_path):
+def test_assert_baseline_not_grown_passes_on_first_introduction(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     baseline_dir = repo / "state"
     baseline_dir.mkdir()
@@ -1607,7 +1607,7 @@ def test_assert_baseline_not_grown_passes_on_first_introduction(tmp_path):
     assert "first introduction" in msg
 
 
-def test_assert_baseline_not_grown_reds_when_baseline_widened(tmp_path):
+def test_assert_baseline_not_grown_reds_when_baseline_widened(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     baseline_dir = repo / "state"
     baseline_dir.mkdir()
@@ -1627,7 +1627,7 @@ def test_assert_baseline_not_grown_reds_when_baseline_widened(tmp_path):
     assert "sneaky-new-violation.sh" in msg
 
 
-def test_assert_baseline_not_grown_reds_even_after_widening_is_committed(tmp_path):
+def test_assert_baseline_not_grown_reds_even_after_widening_is_committed(tmp_path: Path) -> None:
     """Proves the fix for the 2026-07-28 review finding: a `HEAD`-relative
     diff is structurally unable to catch a widening once it has landed in
     its own commit, because at that point `current == HEAD` trivially. This
@@ -1656,7 +1656,7 @@ def test_assert_baseline_not_grown_reds_even_after_widening_is_committed(tmp_pat
     assert "sneaky-new-violation.sh" in msg
 
 
-def test_assert_baseline_not_grown_honors_explicit_frozen_as_of_sha_override(tmp_path):
+def test_assert_baseline_not_grown_honors_explicit_frozen_as_of_sha_override(tmp_path: Path) -> None:
     """An explicit `_frozen_as_of_sha` metadata key re-anchors the growth
     check to that commit instead of the file's original introducing commit
     -- the re-freeze mechanism landing this fix used on both repos' real
@@ -1705,7 +1705,7 @@ def test_assert_baseline_not_grown_honors_explicit_frozen_as_of_sha_override(tmp
     assert "old-pre-fix-debt.sh" not in msg
 
 
-def test_assert_baseline_not_grown_passes_when_baseline_shrinks(tmp_path):
+def test_assert_baseline_not_grown_passes_when_baseline_shrinks(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     baseline_dir = repo / "state"
     baseline_dir.mkdir()
@@ -1723,7 +1723,7 @@ def test_assert_baseline_not_grown_passes_when_baseline_shrinks(tmp_path):
     assert ok is True
 
 
-def test_assert_baseline_not_grown_passes_when_baseline_file_absent(tmp_path):
+def test_assert_baseline_not_grown_passes_when_baseline_file_absent(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "unrelated.txt").write_text("no baseline file in this repo\n")
     _commit_all(repo, "repo with no baseline file at all")
@@ -1770,7 +1770,7 @@ def _repo_named(tmp_path: Path, dir_name: str, identity: "str | None" = None) ->
     return repo
 
 
-def test_exemption_granted_for_one_repo_does_not_exempt_that_relpath_in_another(tmp_path):
+def test_exemption_granted_for_one_repo_does_not_exempt_that_relpath_in_another(tmp_path: Path) -> None:
     """The break-class case: a sibling repo's own defective file at a relpath
     claude-klabauter happens to hold an exemption for must still be REPORTED."""
     sibling = _repo_named(tmp_path, "some-unrelated-sibling")
@@ -1782,7 +1782,7 @@ def test_exemption_granted_for_one_repo_does_not_exempt_that_relpath_in_another(
     assert _EXEMPTED_IN_CLAUDE_KLABAUTER in result["mode_100755"]
 
 
-def test_renamed_clone_scans_identically_to_the_canonically_named_one(tmp_path):
+def test_renamed_clone_scans_identically_to_the_canonically_named_one(tmp_path: Path) -> None:
     """The key is the repo's remote identity, never its folder name: the same
     claude-klabauter repo under an unrelated folder keeps every exemption."""
     canonical = _repo_named(tmp_path, "claude-klabauter")
@@ -1794,11 +1794,11 @@ def test_renamed_clone_scans_identically_to_the_canonically_named_one(tmp_path):
     assert _exempt_prefixes_for(renamed) == _exempt_prefixes_for(canonical)
 
 
-def _exempt_prefixes_for(repo: Path):
+def _exempt_prefixes_for(repo: Path) -> dict[str, str]:
     return check_posix_exec_assumptions._exempt_prefixes(repo_key_for_root(repo), repo)
 
 
-def test_folder_named_like_a_repo_without_that_identity_gets_no_grants(tmp_path):
+def test_folder_named_like_a_repo_without_that_identity_gets_no_grants(tmp_path: Path) -> None:
     """Both sides of the decision: a folder called claude-klabauter whose remote
     is another repo is not claude-klabauter."""
     impostor = _repo_named(tmp_path, "claude-klabauter", identity="some-unrelated-sibling")
@@ -1807,7 +1807,7 @@ def test_folder_named_like_a_repo_without_that_identity_gets_no_grants(tmp_path)
     assert _EXEMPTED_IN_CLAUDE_KLABAUTER in scan(impostor)["env_shebang"]
 
 
-def test_no_remote_falls_back_to_the_empty_key_and_over_reports(tmp_path):
+def test_no_remote_falls_back_to_the_empty_key_and_over_reports(tmp_path: Path) -> None:
     """No remote, no identity: the documented fallback is the grant-less empty
     key, so the guard over-reports rather than silently exempting."""
     bare = _repo_named(tmp_path, "claude-klabauter", identity="")
@@ -1825,7 +1825,7 @@ def test_no_remote_falls_back_to_the_empty_key_and_over_reports(tmp_path):
         "..\\repos\\claude-klabauter.git",
     ],
 )
-def test_remote_url_shapes_all_derive_the_same_key(tmp_path, url):
+def test_remote_url_shapes_all_derive_the_same_key(tmp_path: Path, url) -> None:
     repo = tmp_path / "anything"
     repo.mkdir()
     _git(repo, "init", "-q")
@@ -1834,7 +1834,7 @@ def test_remote_url_shapes_all_derive_the_same_key(tmp_path, url):
     assert repo_key_for_root(repo) == REPO_PROJECT_MAKIMA
 
 
-def test_origin_wins_over_other_remotes(tmp_path):
+def test_origin_wins_over_other_remotes(tmp_path: Path) -> None:
     repo = tmp_path / "anything"
     repo.mkdir()
     _git(repo, "init", "-q")
@@ -1844,7 +1844,7 @@ def test_origin_wins_over_other_remotes(tmp_path):
     assert repo_key_for_root(repo) == REPO_PROJECT_MAKIMA
 
 
-def test_scan_both_matches_two_independent_scans_on_both_sides_of_the_exemption(tmp_path):
+def test_scan_both_matches_two_independent_scans_on_both_sides_of_the_exemption(tmp_path: Path) -> None:
     """`scan_both` shares one walk between the exempted and un-exempted
     views: the exempted view hides the grant, the raw view shows it, and each
     equals the standalone `scan` call."""
@@ -1858,7 +1858,7 @@ def test_scan_both_matches_two_independent_scans_on_both_sides_of_the_exemption(
     assert _EXEMPTED_IN_CLAUDE_KLABAUTER in raw["env_shebang"]
 
 
-def test_exemption_granted_for_one_repo_still_applies_in_that_repo(tmp_path):
+def test_exemption_granted_for_one_repo_still_applies_in_that_repo(tmp_path: Path) -> None:
     """The other half of the pair: repo-scoping must not silently revoke the
     grant in the repo it was actually granted for. The control file at a
     non-exempted relpath proves the detector still fires in this fixture."""
@@ -1873,7 +1873,7 @@ def test_exemption_granted_for_one_repo_still_applies_in_that_repo(tmp_path):
     assert "coordinator/scripts/control.py" in result["mode_100755"]
 
 
-def test_every_exemption_repo_key_is_a_canonical_fleet_repo_key():
+def test_every_exemption_repo_key_is_a_canonical_fleet_repo_key() -> None:
     """Repo keys are the fleet's `repos.<key>` machine-local vocabulary, not
     a private spelling -- a key that is not the normalized form of some clone
     directory name would be silently inert (it can never match a scanned
@@ -1886,7 +1886,7 @@ def test_every_exemption_repo_key_is_a_canonical_fleet_repo_key():
             )
 
 
-def test_every_exemption_carries_a_written_reason():
+def test_every_exemption_carries_a_written_reason() -> None:
     """Same bar as EXEMPT_PREFIXES' analogous
     `test_every_exempt_prefix_carries_a_written_reason`: a per-file grant
     must state which admission test it passes, not merely exist."""
@@ -1899,7 +1899,7 @@ def test_every_exemption_carries_a_written_reason():
                 )
 
 
-def test_module_docstring_states_the_third_admission_test():
+def test_module_docstring_states_the_third_admission_test() -> None:
     """The permanent-artifact-shape-irreducibility admission test
     (2026-08-13 eng-director ruling) must be discoverable in the module's
     own docstring, the same place the two-leg-pair and EXEMPT_PREFIXES
@@ -1914,13 +1914,13 @@ def test_module_docstring_states_the_third_admission_test():
 
 
 @pytest.fixture(scope="session")
-def real_tree_scans():
+def real_tree_scans() -> tuple[dict[str, list[str]], dict[str, list[str]]]:
     """`(exempted, raw)` scans of THIS repo from one walk, shared by every
     `test_real_tree_*` test in the session."""
     return check_posix_exec_assumptions.scan_both(_REPO_ROOT)
 
 
-def test_real_tree_every_claude_klabauter_exemption_is_actually_subtracted(real_tree_scans):
+def test_real_tree_every_claude_klabauter_exemption_is_actually_subtracted(real_tree_scans) -> None:
     """Repo-scoping must leave claude-klabauter's OWN scan result unchanged:
     every relpath exempted under the claude_klabauter key is still invisible in
     a real-tree scan of this repo. Guards the ratchet from the other side to
@@ -1941,7 +1941,7 @@ def test_real_tree_every_claude_klabauter_exemption_is_actually_subtracted(real_
 # Real-tree wiring: this repo's own committed baseline must ratchet clean.
 # ---------------------------------------------------------------------------
 
-def test_real_tree_ratchets_clean_against_committed_baseline(real_tree_scans):
+def test_real_tree_ratchets_clean_against_committed_baseline(real_tree_scans) -> None:
     """Wiring proof for claude-klabauter's own test tier: scanning THIS repo
     against its own committed state/posix-exec-baseline.json must currently
     pass (no new violations beyond what the baseline enumerates) and the
@@ -2016,7 +2016,7 @@ def _repo_with_preserved_tree(tmp_path: Path, dir_name: str, prefix: str) -> Pat
     return repo
 
 
-def test_prefix_exclusion_hides_a_preserved_tree_from_every_non_tier_a_class(tmp_path):
+def test_prefix_exclusion_hides_a_preserved_tree_from_every_non_tier_a_class(tmp_path: Path) -> None:
     """The 8 klabauter CI scripts' shape: a verbatim foreign tree trips
     env_shebang (and path_separator, and implicit_encoding) in files nobody
     here may edit. One prefix must cover all of it -- that wholesale property
@@ -2031,7 +2031,7 @@ def test_prefix_exclusion_hides_a_preserved_tree_from_every_non_tier_a_class(tmp
         assert inside not in result[cls], f"{inside} leaked into class {cls}"
 
 
-def test_prefix_exclusion_does_not_swallow_a_similarly_named_sibling_path(tmp_path):
+def test_prefix_exclusion_does_not_swallow_a_similarly_named_sibling_path(tmp_path: Path) -> None:
     """The narrowness proof, and why every prefix must end in `/`: a
     non-snapshot file one character outside the preserved tree
     (`...-scratch/`) is ordinary live code and stays fully visible. Without
@@ -2047,7 +2047,7 @@ def test_prefix_exclusion_does_not_swallow_a_similarly_named_sibling_path(tmp_pa
     assert not is_prefix_excluded(outside, REPO_PROJECT_MAKIMA)
 
 
-def test_prefix_exclusion_never_suppresses_tier_a_checkout_breakers(tmp_path):
+def test_prefix_exclusion_never_suppresses_tier_a_checkout_breakers(tmp_path: Path) -> None:
     """The deliberate scope limit: a MAX_PATH-busting path inside a frozen
     snapshot tree still breaks `git clone` on Windows for the WHOLE repo. That
     failure is about the repo, not about the file's own executability, so no
@@ -2065,7 +2065,7 @@ def test_prefix_exclusion_never_suppresses_tier_a_checkout_breakers(tmp_path):
     assert long_rel in msg
 
 
-def test_prefix_exclusion_is_repo_scoped(tmp_path):
+def test_prefix_exclusion_is_repo_scoped(tmp_path: Path) -> None:
     """Same repo-scoping contract as EXEMPTIONS: `state/review-trail/` and
     `state/` paths generally exist in more than one fleet repo, so a grant to
     one must never silently cover a sibling's genuinely-live file."""
@@ -2078,7 +2078,7 @@ def test_prefix_exclusion_is_repo_scoped(tmp_path):
     assert inside in result["posix_path_assumption"]
 
 
-def test_migrated_m8_snapshot_entries_are_still_excluded_after_migration(tmp_path):
+def test_migrated_m8_snapshot_entries_are_still_excluded_after_migration(tmp_path: Path) -> None:
     """Migration proof: the three hand-listed DoE m8-baseline `path_separator`
     entries were deleted from EXEMPTIONS in favour of one prefix. The class
     they named must still be invisible -- migrating a carve-out must not
@@ -2125,7 +2125,7 @@ def _repo_with_mirrored_bin(tmp_path: Path, dir_name: str) -> Path:
     return repo
 
 
-def test_doe_scan_skips_the_mirrored_claude_klabauter_bin_but_still_sees_its_own_code(tmp_path):
+def test_doe_scan_skips_the_mirrored_claude_klabauter_bin_but_still_sees_its_own_code(tmp_path: Path) -> None:
     repo = _repo_with_mirrored_bin(tmp_path, "coordinator-content-repo")
 
     result = scan(repo)
@@ -2136,7 +2136,7 @@ def test_doe_scan_skips_the_mirrored_claude_klabauter_bin_but_still_sees_its_own
     assert "coordinator/lib/live.py" in result["posix_mode_bits"]
 
 
-def test_claude_klabauter_scan_still_covers_coordinator_bin(tmp_path):
+def test_claude_klabauter_scan_still_covers_coordinator_bin(tmp_path: Path) -> None:
     repo = _repo_with_mirrored_bin(tmp_path, "claude-klabauter")
 
     result = scan(repo)
@@ -2147,7 +2147,7 @@ def test_claude_klabauter_scan_still_covers_coordinator_bin(tmp_path):
     assert "coordinator/bin/lib/mirrored.py" in result["posix_mode_bits"]
 
 
-def test_real_tree_mirrored_bin_files_are_judged_on_claude_klabauter_side(real_tree_scans):
+def test_real_tree_mirrored_bin_files_are_judged_on_claude_klabauter_side(real_tree_scans) -> None:
     """python_interp.py and unimatrix-install.py both trip posix_mode_bits in
     claude-klabauter's own scan; each is covered by a live EXEMPTIONS grant, so neither
     surfaces in the post-exemption result."""
@@ -2161,7 +2161,7 @@ def test_real_tree_mirrored_bin_files_are_judged_on_claude_klabauter_side(real_t
         assert relpath not in result["posix_mode_bits"]
 
 
-def test_stale_exempt_prefix_is_red(tmp_path):
+def test_stale_exempt_prefix_is_red(tmp_path: Path) -> None:
     """Same discipline as `test_no_parity_exemption_is_stale`: a prefix
     matching no tracked file excuses nothing and would silently cover whatever
     lands at that path next -- strictly worse for a directory-wide grant than
@@ -2184,7 +2184,7 @@ def test_stale_exempt_prefix_is_red(tmp_path):
     assert "shrink-only" in msg
 
 
-def test_stale_prefix_check_is_green_when_the_preserved_tree_exists(tmp_path):
+def test_stale_prefix_check_is_green_when_the_preserved_tree_exists(tmp_path: Path) -> None:
     """Positive control for the staleness gate: it must not fire merely
     because prefixes are declared. `check_no_stale_exempt_prefixes` checks
     EVERY prefix registered under the scanned repo's key, not just the one
@@ -2207,7 +2207,7 @@ def test_stale_prefix_check_is_green_when_the_preserved_tree_exists(tmp_path):
     assert ok is True, msg
 
 
-def test_every_exempt_prefix_is_directory_scoped_and_repo_relative():
+def test_every_exempt_prefix_is_directory_scoped_and_repo_relative() -> None:
     """Shape bar. A prefix without a trailing `/` swallows sibling paths that
     merely share a name stem; a backslash or leading-slash spelling can never
     match a `git ls-files` relpath and is silently inert."""
@@ -2219,7 +2219,7 @@ def test_every_exempt_prefix_is_directory_scoped_and_repo_relative():
             assert ".." not in prefix, f"{repo_key}: {prefix!r} must not escape the repo"
 
 
-def test_every_exempt_prefix_carries_a_written_reason():
+def test_every_exempt_prefix_carries_a_written_reason() -> None:
     """A directory-scope exclusion is a bigger hammer than a per-file one, so
     the rationale bar is higher than EXEMPTIONS' -- it has to state which
     admission test the tree passes, not merely assert it does."""
@@ -2231,7 +2231,7 @@ def test_every_exempt_prefix_carries_a_written_reason():
             )
 
 
-def test_every_exempt_prefix_repo_key_is_a_canonical_fleet_repo_key():
+def test_every_exempt_prefix_repo_key_is_a_canonical_fleet_repo_key() -> None:
     """Same inert-key trap EXEMPTIONS' own key test closes: a key that is not
     the normalized form of a clone directory name can never match a scanned
     root, so the grant would silently never apply."""
@@ -2242,7 +2242,7 @@ def test_every_exempt_prefix_repo_key_is_a_canonical_fleet_repo_key():
         )
 
 
-def test_real_tree_mirror_native_files_are_prefix_excluded(real_tree_scans):
+def test_real_tree_mirror_native_files_are_prefix_excluded(real_tree_scans) -> None:
     """Real-tree wiring for the case that motivated this mechanism: the
     klabauter CI harness homed under dist/mirror-native/ by 720d56204, whose 8
     `#!/usr/bin/env python3` scripts (also 100755, deliberately — the mirror's
@@ -2281,7 +2281,7 @@ def test_real_tree_mirror_native_files_are_prefix_excluded(real_tree_scans):
             assert relpath not in result[cls]
 
 
-def test_no_per_file_exemption_is_subsumed_by_a_prefix():
+def test_no_per_file_exemption_is_subsumed_by_a_prefix() -> None:
     """The two mechanisms must not silently overlap. A hand-listed EXEMPTIONS
     relpath sitting under one of its own repo's prefixes is already invisible,
     so its written reason is never read and never re-examined -- the residue
@@ -2321,7 +2321,7 @@ def _write_file_exempt_prefixes(repo: Path, entries: dict) -> None:
     prefixes_path.write_text(json.dumps(entries), encoding="utf-8")
 
 
-def test_file_exempt_prefix_hides_matching_tracked_file_from_scan(tmp_path):
+def test_file_exempt_prefix_hides_matching_tracked_file_from_scan(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     victim = repo / "vendor/thing/tool.py"
     victim.parent.mkdir(parents=True)
@@ -2335,7 +2335,7 @@ def test_file_exempt_prefix_hides_matching_tracked_file_from_scan(tmp_path):
     assert "vendor/thing/tool.py" not in result["implicit_encoding"]
 
 
-def test_file_exempt_prefix_absent_leaves_scan_unaffected(tmp_path):
+def test_file_exempt_prefix_absent_leaves_scan_unaffected(tmp_path: Path) -> None:
     """Positive control: no declared file means no additional exclusions --
     the common case, since most repos declare none."""
     repo = _init_repo(tmp_path)
@@ -2349,7 +2349,7 @@ def test_file_exempt_prefix_absent_leaves_scan_unaffected(tmp_path):
     assert "vendor/thing/tool.py" in result["env_shebang"]
 
 
-def test_file_exempt_prefix_malformed_json_degrades_to_no_exclusions(tmp_path):
+def test_file_exempt_prefix_malformed_json_degrades_to_no_exclusions(tmp_path: Path) -> None:
     """Negative-spec: corrupt JSON must never crash the scan, and must never
     silently exclude anything -- a broken declaration widens visible debt,
     it does not swallow it."""
@@ -2367,7 +2367,7 @@ def test_file_exempt_prefix_malformed_json_degrades_to_no_exclusions(tmp_path):
     assert "vendor/thing/tool.py" in result["env_shebang"]
 
 
-def test_file_exempt_prefix_missing_trailing_slash_is_ignored(tmp_path):
+def test_file_exempt_prefix_missing_trailing_slash_is_ignored(tmp_path: Path) -> None:
     """Same shape bar as EXEMPT_PREFIXES: a prefix without a trailing `/`
     would swallow a similarly-named sibling, so a malformed entry is dropped
     rather than honored."""
@@ -2383,7 +2383,7 @@ def test_file_exempt_prefix_missing_trailing_slash_is_ignored(tmp_path):
     assert "vendor/thing/tool.py" in result["env_shebang"]
 
 
-def test_file_exempt_prefix_empty_reason_is_ignored(tmp_path):
+def test_file_exempt_prefix_empty_reason_is_ignored(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     victim = repo / "vendor/thing/tool.py"
     victim.parent.mkdir(parents=True)
@@ -2396,7 +2396,7 @@ def test_file_exempt_prefix_empty_reason_is_ignored(tmp_path):
     assert "vendor/thing/tool.py" in result["env_shebang"]
 
 
-def test_file_exempt_prefix_never_suppresses_tier_a(tmp_path):
+def test_file_exempt_prefix_never_suppresses_tier_a(tmp_path: Path) -> None:
     """Same scope limit as the in-code mechanism: Tier A is a fact about the
     whole repo's checkout, never suppressed by a prefix of either kind."""
     repo = _init_repo(tmp_path)
@@ -2413,7 +2413,7 @@ def test_file_exempt_prefix_never_suppresses_tier_a(tmp_path):
     assert long_rel in msg
 
 
-def test_file_exempt_prefix_is_scoped_to_its_own_root(tmp_path):
+def test_file_exempt_prefix_is_scoped_to_its_own_root(tmp_path: Path) -> None:
     """The file lives inside the repo it exempts -- scanning a DIFFERENT
     root must never pick up another repo's declared file."""
     (tmp_path / "repo-a").mkdir()
@@ -2438,14 +2438,14 @@ def test_file_exempt_prefix_is_scoped_to_its_own_root(tmp_path):
     assert "vendor/thing/tool.py" in result_b["env_shebang"]
 
 
-def test_is_prefix_excluded_backward_compatible_without_root():
+def test_is_prefix_excluded_backward_compatible_without_root() -> None:
     """Every pre-existing call site (this suite's own EXEMPT_PREFIXES tests
     among them) calls `is_prefix_excluded(relpath, repo_key)` with no `root`
     -- that must keep answering from the in-code EXEMPT_PREFIXES alone."""
     assert is_prefix_excluded("dist/mirror-native/thing.py", REPO_PROJECT_MAKIMA)
 
 
-def test_check_no_stale_exempt_prefixes_flags_stale_file_based_prefix(tmp_path):
+def test_check_no_stale_exempt_prefixes_flags_stale_file_based_prefix(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "coordinator").mkdir()
     (repo / "coordinator" / "live.py").write_text("x = 1\n", encoding="utf-8")
@@ -2463,7 +2463,7 @@ def test_check_no_stale_exempt_prefixes_flags_stale_file_based_prefix(tmp_path):
 # for CI tooling that would otherwise have to text-scrape stdout.
 # ---------------------------------------------------------------------------
 
-def test_main_json_flag_emits_valid_json_with_expected_top_level_keys(tmp_path, capsys):
+def test_main_json_flag_emits_valid_json_with_expected_top_level_keys(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _init_repo(tmp_path)
     (repo / "clean.py").write_text("x = 1\n", encoding="utf-8")
     _commit_all(repo)
@@ -2491,7 +2491,7 @@ def test_main_json_flag_emits_valid_json_with_expected_top_level_keys(tmp_path, 
     assert "env_shebang" in payload["scan"]
 
 
-def test_main_json_flag_reports_new_violation_as_not_ok(tmp_path, capsys):
+def test_main_json_flag_reports_new_violation_as_not_ok(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.sh").write_text("#!/usr/bin/env bash\necho hi\n", encoding="utf-8")
     _commit_all(repo)
@@ -2509,7 +2509,7 @@ def test_main_json_flag_reports_new_violation_as_not_ok(tmp_path, capsys):
     assert "tool.sh" in payload["scan"]["env_shebang"]
 
 
-def test_main_without_json_flag_prints_human_readable_text_not_json(tmp_path, capsys):
+def test_main_without_json_flag_prints_human_readable_text_not_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _init_repo(tmp_path)
     (repo / "clean.py").write_text("x = 1\n", encoding="utf-8")
     _commit_all(repo)
@@ -2526,7 +2526,7 @@ def test_main_without_json_flag_prints_human_readable_text_not_json(tmp_path, ca
         json.loads(out)
 
 
-def test_main_flags_stale_exemption_through_the_wired_check(tmp_path, capsys):
+def test_main_flags_stale_exemption_through_the_wired_check(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """AC13's wiring proof at the main() boundary, not just the direct
     function call: `test_check_no_stale_exemptions_flags_a_grant_whose_
     file_no_longer_offends` above proves the function's own logic, but
@@ -2565,17 +2565,17 @@ def test_main_flags_stale_exemption_through_the_wired_check(tmp_path, capsys):
     assert "coordinator/fixed-tool.py" in payload["checks"]["stale_exemptions"]["message"]
 
 
-def test_real_tree_has_no_stale_exempt_prefix():
+def test_real_tree_has_no_stale_exempt_prefix() -> None:
     ok, msg = check_no_stale_exempt_prefixes(_REPO_ROOT)
     assert ok, msg
 
 
-def test_real_tree_passes_tier_a_zero_tolerance(real_tree_scans):
+def test_real_tree_passes_tier_a_zero_tolerance(real_tree_scans) -> None:
     ok, msg = check_tier_a_zero_tolerance(_REPO_ROOT, precomputed=real_tree_scans[0])
     assert ok, msg
 
 
-def test_real_tree_passes_implicit_encoding_zero_tolerance(real_tree_scans):
+def test_real_tree_passes_implicit_encoding_zero_tolerance(real_tree_scans) -> None:
     ok, msg = check_implicit_encoding_zero_tolerance(
         _REPO_ROOT, precomputed=real_tree_scans[0]
     )
@@ -2588,7 +2588,7 @@ def test_real_tree_passes_implicit_encoding_zero_tolerance(real_tree_scans):
 # conflate with the baseline file's own total.
 # ---------------------------------------------------------------------------
 
-def test_debt_line_states_current_and_baseline_totals_distinctly_on_desync(tmp_path):
+def test_debt_line_states_current_and_baseline_totals_distinctly_on_desync(tmp_path: Path) -> None:
     """Crafted baseline (2 entries, one of them stale) vs crafted scan (1
     live violation, 1 NEW) driven through `check_against_baseline` -- the
     same code path `main()` uses. The debt line must name BOTH totals
@@ -2622,7 +2622,7 @@ def test_debt_line_states_current_and_baseline_totals_distinctly_on_desync(tmp_p
     assert "stale baseline entry(ies)" in msg
 
 
-def test_debt_line_omits_desync_explanation_when_totals_match(tmp_path):
+def test_debt_line_omits_desync_explanation_when_totals_match(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.sh").write_text("#!/usr/bin/env bash\n")
     _commit_all(repo)
@@ -2646,7 +2646,7 @@ def test_debt_line_omits_desync_explanation_when_totals_match(tmp_path):
 # check_no_stale_baseline_entries: stale grandfather slots.
 # ---------------------------------------------------------------------------
 
-def test_check_no_stale_baseline_entries_is_green_when_baseline_is_subset_of_scan(tmp_path):
+def test_check_no_stale_baseline_entries_is_green_when_baseline_is_subset_of_scan(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "tool.sh").write_text("#!/usr/bin/env bash\n")
     _commit_all(repo)
@@ -2664,7 +2664,7 @@ def test_check_no_stale_baseline_entries_is_green_when_baseline_is_subset_of_sca
     assert "OK" in msg
 
 
-def test_check_no_stale_baseline_entries_reds_on_path_absent_from_scan(tmp_path):
+def test_check_no_stale_baseline_entries_reds_on_path_absent_from_scan(tmp_path: Path) -> None:
     """A baseline entry naming a path the current scan does not produce for
     that class -- deleted, renamed, or fixed -- is a dead grandfather slot
     that must be surfaced RED, named, and attributed to its class."""
@@ -2690,7 +2690,7 @@ def test_check_no_stale_baseline_entries_reds_on_path_absent_from_scan(tmp_path)
     assert "shrink-only" in msg
 
 
-def test_check_no_stale_baseline_entries_isolates_per_class(tmp_path):
+def test_check_no_stale_baseline_entries_isolates_per_class(tmp_path: Path) -> None:
     """A stale entry in one class must not be misattributed to another, and
     a class with no stale entries must not appear in the stale listing."""
     repo = _init_repo(tmp_path)
@@ -2715,7 +2715,7 @@ def test_check_no_stale_baseline_entries_isolates_per_class(tmp_path):
     assert env_shebang_idx == -1 or "stale entry" not in msg[env_shebang_idx:env_shebang_idx + 40]
 
 
-def test_check_no_stale_baseline_entries_reads_committed_state_not_working_tree(tmp_path):
+def test_check_no_stale_baseline_entries_reads_committed_state_not_working_tree(tmp_path: Path) -> None:
     """`state/posix-exec-baseline.json` records COMMITTED reality, not this
     session's uncommitted edits. A path present (and genuinely violating) at
     HEAD but deleted only from the working tree -- e.g. a peer's uncommitted
@@ -2747,7 +2747,7 @@ def test_check_no_stale_baseline_entries_reads_committed_state_not_working_tree(
     assert "tool.sh" not in msg
 
 
-def test_check_no_stale_baseline_entries_still_reds_when_genuinely_gone_at_head(tmp_path):
+def test_check_no_stale_baseline_entries_still_reds_when_genuinely_gone_at_head(tmp_path: Path) -> None:
     """The committed-state re-check must not blanket-suppress every
     "missing from scan" candidate -- a path that is ALSO gone (or no longer
     violating) at HEAD stays a genuine dead grandfather slot."""
@@ -2792,7 +2792,7 @@ _ADMISSION_TEST_MARKERS = (
 )
 
 
-def test_every_exemption_names_an_admission_test():
+def test_every_exemption_names_an_admission_test() -> None:
     """AC7: no EXEMPTIONS entry can exist without its reason text naming
     which of the three admission tests (module docstring) it invokes --
     not a description of what the file does. This is the mechanism the C6
@@ -2819,7 +2819,7 @@ _DECISION_RECORD_CITATION = re.compile(
 )
 
 
-def test_every_admission_test_edit_cites_a_resolvable_decision_record():
+def test_every_admission_test_edit_cites_a_resolvable_decision_record() -> None:
     """Eng-director extension (2026-08-14, his own review of the overturned
     C4c1 grant): the module docstring cites the third admission test's
     ruling by relpath, but nothing previously checked that relpath
@@ -2858,7 +2858,7 @@ _THIRD_TEST_EVIDENCE_ITEMS = (
 )
 
 
-def test_module_docstring_third_admission_test_states_all_four_evidence_items():
+def test_module_docstring_third_admission_test_states_all_four_evidence_items() -> None:
     """Eng-director extension: a third-test grant carries its four evidence
     items plus the elimination-target clause, or no grant -- same
     discipline as every other EXEMPTIONS bar in this module. The
@@ -2885,7 +2885,7 @@ def test_module_docstring_third_admission_test_states_all_four_evidence_items():
     )
 
 
-def test_no_third_test_exemption_entry_lacks_all_four_evidence_markers():
+def test_no_third_test_exemption_entry_lacks_all_four_evidence_markers() -> None:
     """Per-entry backstop: any EXEMPTIONS entry that invokes the third
     admission test (names 'permanent artifact-shape irreducibility' or is
     filed as an 'IRREDUCIBILITY_REASON') must itself carry markers for all
@@ -2929,7 +2929,7 @@ def test_no_third_test_exemption_entry_lacks_all_four_evidence_markers():
         "contingent on any peer artifact's shape."
     )
 
-    def _missing_markers(reason: str):
+    def _missing_markers(reason: str) -> list[str]:
         lowered = reason.lower()
         return [m for m in markers if m not in lowered]
 
@@ -2950,7 +2950,7 @@ def test_no_third_test_exemption_entry_lacks_all_four_evidence_markers():
 # coordinator_core/test_bin_launcher_parity.py.
 # ---------------------------------------------------------------------------
 
-def test_check_no_stale_exemptions_passes_with_no_exemptions_declared(tmp_path):
+def test_check_no_stale_exemptions_passes_with_no_exemptions_declared(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "clean.py").write_text("x = 1\n", encoding="utf-8")
     _commit_all(repo)
@@ -2961,7 +2961,7 @@ def test_check_no_stale_exemptions_passes_with_no_exemptions_declared(tmp_path):
     assert "no EXEMPTIONS entries declared" in msg
 
 
-def test_check_no_stale_exemptions_flags_a_grant_whose_file_no_longer_offends(tmp_path):
+def test_check_no_stale_exemptions_flags_a_grant_whose_file_no_longer_offends(tmp_path: Path) -> None:
     """Synthetic repro of exactly what AC13 caught on the real tree: a
     tracked file that once had mode 100755 and an env_shebang line, whose
     EXEMPTIONS grant survived after the file was fixed (mode dropped,
@@ -2989,7 +2989,7 @@ def test_check_no_stale_exemptions_flags_a_grant_whose_file_no_longer_offends(tm
     assert "coordinator/fixed-tool.py" in msg
 
 
-def test_check_no_stale_exemptions_passes_when_file_still_offends(tmp_path):
+def test_check_no_stale_exemptions_passes_when_file_still_offends(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     (repo / "coordinator").mkdir()
     live = repo / "coordinator" / "still-live.py"
@@ -3010,7 +3010,7 @@ def test_check_no_stale_exemptions_passes_when_file_still_offends(tmp_path):
     assert ok is True, msg
 
 
-def test_check_no_stale_exemptions_is_repo_scoped(tmp_path):
+def test_check_no_stale_exemptions_is_repo_scoped(tmp_path: Path) -> None:
     """A grant declared for a different repo key must never be checked
     against `repo`'s own tree, same repo-scoping discipline as
     check_no_stale_exempt_prefixes."""
@@ -3031,7 +3031,7 @@ def test_check_no_stale_exemptions_is_repo_scoped(tmp_path):
     assert "no EXEMPTIONS entries declared" in msg
 
 
-def test_scan_apply_exemptions_false_ignores_exemptions_but_keeps_prefix_exclusion(tmp_path):
+def test_scan_apply_exemptions_false_ignores_exemptions_but_keeps_prefix_exclusion(tmp_path: Path) -> None:
     """`scan(root, apply_exemptions=False)` must skip per-file EXEMPTIONS
     subtraction while still honoring EXEMPT_PREFIXES -- the two mechanisms
     are deliberately independent (module docstring), and
@@ -3079,7 +3079,7 @@ def _has_shebang(relpath: str) -> bool:
         return fh.read(2) == b"#!"
 
 
-def test_tracked_bin_scripts_agree_with_exec_bit_policy():
+def test_tracked_bin_scripts_agree_with_exec_bit_policy() -> None:
     """Policy: coordinator/bin and benchmarks `.py` scripts are
     run as `python <path>`, so a shebang is vestigial and the exec bit stays
     off. A shebang survives only as a named env_shebang EXEMPTION (e.g. the
@@ -3103,7 +3103,7 @@ def test_tracked_bin_scripts_agree_with_exec_bit_policy():
     assert not bitten, f"100755 script with no shebang: {bitten}"
 
 
-def test_real_tree_no_stale_exemptions(real_tree_scans):
+def test_real_tree_no_stale_exemptions(real_tree_scans) -> None:
     """AC13's real-tree wiring proof, mirroring
     test_real_tree_ratchets_clean_against_committed_baseline and
     test_check_no_stale_exempt_prefixes_flags_stale_file_based_prefix's
@@ -3129,7 +3129,7 @@ _ENTRYPOINT_SRC = (
 )
 
 
-def _seed_entrypoint_shape(tmp_path: Path, relpath: str, text: str = _ENTRYPOINT_SRC):
+def _seed_entrypoint_shape(tmp_path: Path, relpath: str, text: str = _ENTRYPOINT_SRC) -> dict[str, list[str]]:
     repo = _init_repo(tmp_path)
     target = repo / relpath
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -3139,28 +3139,28 @@ def _seed_entrypoint_shape(tmp_path: Path, relpath: str, text: str = _ENTRYPOINT
 
 
 @pytest.mark.parametrize("parent", ["coordinator/bin", "bin", "scripts"])
-def test_py_entrypoint_is_not_env_shebang_or_mode_100755(tmp_path, parent):
+def test_py_entrypoint_is_not_env_shebang_or_mode_100755(tmp_path: Path, parent) -> None:
     result = _seed_entrypoint_shape(tmp_path, f"{parent}/x.py")
 
     assert f"{parent}/x.py" not in result["env_shebang"]
     assert f"{parent}/x.py" not in result["mode_100755"]
 
 
-def test_py_entrypoint_test_prefixed_file_is_still_a_violation(tmp_path):
+def test_py_entrypoint_test_prefixed_file_is_still_a_violation(tmp_path: Path) -> None:
     result = _seed_entrypoint_shape(tmp_path, "coordinator/bin/test_x.py")
 
     assert "coordinator/bin/test_x.py" in result["env_shebang"]
     assert "coordinator/bin/test_x.py" in result["mode_100755"]
 
 
-def test_py_entrypoint_nested_file_is_still_a_violation(tmp_path):
+def test_py_entrypoint_nested_file_is_still_a_violation(tmp_path: Path) -> None:
     result = _seed_entrypoint_shape(tmp_path, "coordinator/bin/sub/x.py")
 
     assert "coordinator/bin/sub/x.py" in result["env_shebang"]
     assert "coordinator/bin/sub/x.py" in result["mode_100755"]
 
 
-def test_py_entrypoint_without_main_guard_is_still_a_violation(tmp_path):
+def test_py_entrypoint_without_main_guard_is_still_a_violation(tmp_path: Path) -> None:
     result = _seed_entrypoint_shape(
         tmp_path, "coordinator/bin/x.py", "#!/usr/bin/env python3\nprint('x')\n"
     )
@@ -3169,21 +3169,21 @@ def test_py_entrypoint_without_main_guard_is_still_a_violation(tmp_path):
     assert "coordinator/bin/x.py" in result["mode_100755"]
 
 
-def test_py_entrypoint_outside_the_three_dirs_is_still_a_violation(tmp_path):
+def test_py_entrypoint_outside_the_three_dirs_is_still_a_violation(tmp_path: Path) -> None:
     result = _seed_entrypoint_shape(tmp_path, "tools/x.py")
 
     assert "tools/x.py" in result["env_shebang"]
     assert "tools/x.py" in result["mode_100755"]
 
 
-def test_py_entrypoint_exemption_does_not_reach_extensionless_exec(tmp_path):
+def test_py_entrypoint_exemption_does_not_reach_extensionless_exec(tmp_path: Path) -> None:
     result = _seed_entrypoint_shape(tmp_path, "bin/x", _ENTRYPOINT_SRC)
 
     assert "bin/x" in result["extensionless_exec"]
     assert "bin/x" in result["env_shebang"]
 
 
-def test_is_py_entrypoint_predicate_edges():
+def test_is_py_entrypoint_predicate_edges() -> None:
     from coordinator_core.ops.check_posix_exec_assumptions import is_py_entrypoint
 
     guard = 'if __name__ == "__main__":\n    pass\n'
@@ -3209,7 +3209,7 @@ def _find_git_bash():
     return None
 
 
-def test_shebanged_script_run_by_bare_path_in_bash_runs_python_or_fails_loud(tmp_path):
+def test_shebanged_script_run_by_bare_path_in_bash_runs_python_or_fails_loud(tmp_path: Path) -> None:
     """On a box where `env python3` resolves to a Store alias stub or nothing,
     a bare-path run must fail non-zero with a message, never exit 0 silently."""
     bash = _find_git_bash()

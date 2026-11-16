@@ -15,6 +15,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_land_run_declared_write_left_
     CODE, _git, _write, repo,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -44,17 +45,17 @@ def _halted_977c47(repo, age: int) -> str:
     return holder
 
 
-def test_a_halt_past_the_bound_with_no_live_token_does_not_withhold(repo):
+def test_a_halt_past_the_bound_with_no_live_token_does_not_withhold(repo) -> None:
     _halted_977c47(repo, PAST)
     assert land_run.foreign_halted_withheld(repo, LANDER, None, [CODE]) == {}
 
 
-def test_a_halt_inside_the_bound_still_withholds(repo):
+def test_a_halt_inside_the_bound_still_withholds(repo) -> None:
     holder = _halted_977c47(repo, 300)
     assert land_run.foreign_halted_withheld(repo, LANDER, None, [CODE]) == {CODE: holder}
 
 
-def test_a_halt_past_the_bound_with_a_live_token_of_its_own_still_withholds(repo):
+def test_a_halt_past_the_bound_with_a_live_token_of_its_own_still_withholds(repo) -> None:
     holder = _halted_977c47(repo, PAST)
     run_token.mint(repo, holder, "wf/x.mjs", sizing_rel=HOLDER_SIZING)
     assert land_run.foreign_halted_withheld(repo, LANDER, None, [CODE]) == {CODE: holder}
@@ -109,7 +110,7 @@ def _record_files_opened_by_the_release_leg(tmp_path) -> tuple:
     armed = [True]
     prefix = os.path.normcase(str((tmp_path / "state/warp").resolve())) + os.sep
 
-    def hook(event, args):
+    def hook(event, args) -> None:
         if armed[0] and event == "open" and args and isinstance(args[0], (str, os.PathLike)):
             path = os.path.abspath(os.fspath(args[0]))
             if os.path.normcase(path).startswith(prefix):
@@ -125,22 +126,22 @@ def _record_files_opened_by_the_release_leg(tmp_path) -> tuple:
     return lander, holder, decoys, seen
 
 
-def test_the_release_leg_reads_this_runs_and_its_holders_records(tmp_path):
+def test_the_release_leg_reads_this_runs_and_its_holders_records(tmp_path: Path) -> None:
     lander, holder, _, seen = _record_files_opened_by_the_release_leg(tmp_path)
     assert "halted.json" in seen[lander] and "halted.json" in seen[holder]
 
 
-def test_the_release_leg_reads_no_marker_manifest_or_outcome_of_an_unrelated_run(tmp_path):
+def test_the_release_leg_reads_no_marker_manifest_or_outcome_of_an_unrelated_run(tmp_path: Path) -> None:
     _, _, decoys, seen = _record_files_opened_by_the_release_leg(tmp_path)
     assert {d: seen[d] - {"run.json"} for d in decoys if seen[d] - {"run.json"}} == {}
 
 
-def test_the_release_leg_opens_no_record_file_of_a_run_other_than_its_own_and_its_holders(tmp_path):
+def test_the_release_leg_opens_no_record_file_of_a_run_other_than_its_own_and_its_holders(tmp_path: Path) -> None:
     lander, holder, decoys, seen = _record_files_opened_by_the_release_leg(tmp_path)
     assert {r for r in seen if seen[r]} <= {lander, holder}
 
 
-def test_a_landed_twin_of_the_holders_sizing_still_releases_it_from_the_sizing_index(tmp_path):
+def test_a_landed_twin_of_the_holders_sizing_still_releases_it_from_the_sizing_index(tmp_path: Path) -> None:
     """The other side: a cached binding is still honored, and a twin is found without scanning every dir."""
     (tmp_path / ".git").mkdir()
     holder, twin = _mint_id(600, "bbbbbb"), _mint_id(100, "cccccc")

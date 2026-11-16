@@ -14,6 +14,7 @@ from coordinator_core.ops.dispatch_emit.ask_compose import _repo_flag, compose_a
 from coordinator_core.ops.dispatch_emit.ask_roadmap import ROADMAP_STAGE_FN, compose_roadmap_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 _RUN_ID = "warp-test-20261027T000000-abc123"
 _LEG = re.compile(r"coordinator-invoke\"? dispatch\.ask_(?:gate|stage) \\+'")
@@ -30,7 +31,7 @@ def _legs_without_repo(script: str, repo_root: str) -> list[str]:
     ]
 
 
-def test_every_composed_ask_leg_carries_repo():
+def test_every_composed_ask_leg_carries_repo() -> None:
     script = compose_ask_script(
         repo_root="REPO", prompt="add a thing", sizing_rel=None, run_id="run-1", session_id=None,
         wrap_stage=lambda _t: (_BLITZ_FN, ["Size", "Plan"]), plan_blitz_text="stub",
@@ -40,7 +41,7 @@ def test_every_composed_ask_leg_carries_repo():
     assert _legs_without_repo(script, "REPO") == []
 
 
-def test_roadmap_gate_leg_carries_repo():
+def test_roadmap_gate_leg_carries_repo() -> None:
     script = compose_roadmap_script(
         repo_root="/repo", sizing_rel="state/sizings/x.yaml", run_id="run-1", interaction_mode=None,
         roadmap_text="stub", plan_blitz_fn="  async function planBlitz() { return {}; }",
@@ -51,7 +52,7 @@ def test_roadmap_gate_leg_carries_repo():
     assert _legs_without_repo(script, "/repo") == []
 
 
-def test_repo_flag_quotes_a_path_with_spaces():
+def test_repo_flag_quotes_a_path_with_spaces() -> None:
     assert _repo_flag("my repo") == " --repo 'my repo'"
 
 
@@ -68,7 +69,7 @@ def _fire_gate(cwd, *extra: str) -> str:
 
 
 @pytest.mark.spawns_process
-def test_gate_fired_from_another_repo_passes_the_token_check_only_when_pinned(tmp_path):
+def test_gate_fired_from_another_repo_passes_the_token_check_only_when_pinned(tmp_path: Path) -> None:
     target, other = _git_init(tmp_path / "target"), _git_init(tmp_path / "other")
     run_token.mint(target, _RUN_ID, "scratch/warp/run.workflow.mjs")
 

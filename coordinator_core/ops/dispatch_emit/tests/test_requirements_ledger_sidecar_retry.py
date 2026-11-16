@@ -9,12 +9,13 @@ import yaml
 
 from coordinator_core import locked_write
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 REL = "state/sizings/2026-10-01-retry.yaml"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
@@ -23,11 +24,11 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _fake_rmw(monkeypatch, fail_times):
+def _fake_rmw(monkeypatch, fail_times) -> dict[str, int]:
     calls = {"n": 0}
     real = locked_write.locked_rmw
 
-    def fake(path, mutate, **kw):
+    def fake(path, mutate, **kw) -> str:
         calls["n"] += 1
         if fail_times is None or calls["n"] <= fail_times:
             raise locked_write.LockTimeout("Could not open coordinator lock sidecar (filesystem stalled)")
@@ -37,14 +38,14 @@ def _fake_rmw(monkeypatch, fail_times):
     return calls
 
 
-def test_stall_once_then_clear_proceeds(repo, monkeypatch):
+def test_stall_once_then_clear_proceeds(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = _fake_rmw(monkeypatch, fail_times=1)
     rows = rl._mutate_register(repo, REL, lambda rows: rows)
     assert rows == []
     assert calls["n"] == 2
 
 
-def test_persistent_stall_refuses_within_budget(repo, monkeypatch):
+def test_persistent_stall_refuses_within_budget(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(rl, "SIDECAR_RETRY_BUDGET_SECS", 0.3)
     calls = _fake_rmw(monkeypatch, fail_times=None)
     started = time.monotonic()

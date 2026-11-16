@@ -8,6 +8,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.ceremony import commit_v2
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -20,13 +21,13 @@ def _git(repo, *args):
     ).stdout.strip()
 
 
-def _w(path, text="x\n"):
+def _w(path, text: str = "x\n") -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/p")
@@ -41,7 +42,7 @@ def repo(tmp_path):
 
 
 @pytest.fixture()
-def spawns(monkeypatch):
+def spawns(monkeypatch: pytest.MonkeyPatch):
     seen: list = []
     real = commit_v2.run_git
 
@@ -61,21 +62,21 @@ def _verbs(spawns):
     return {a for args in spawns for a in args if a in ("check-ignore", "ls-tree")}
 
 
-def test_supplied_set_spawns_no_check_ignore_and_commit_lands(repo, spawns):
+def test_supplied_set_spawns_no_check_ignore_and_commit_lands(repo, spawns) -> None:
     _w(repo / "keep.txt", "changed\n")
     out = _call(repo, paths=["keep.txt"], message="edit keep", ignored_untracked=[])
     assert out["committed"] is True
     assert _verbs(spawns) == set()
 
 
-def test_without_the_param_check_ignore_still_runs(repo, spawns):
+def test_without_the_param_check_ignore_still_runs(repo, spawns) -> None:
     _w(repo / "new.txt")
     out = _call(repo, paths=["new.txt"], message="add new")
     assert out["committed"] is True
     assert "check-ignore" in _verbs(spawns)
 
 
-def test_supplied_ignored_path_is_refused_like_a_detected_one(repo, spawns):
+def test_supplied_ignored_path_is_refused_like_a_detected_one(repo, spawns) -> None:
     _w(repo / "secret.env")
     out = _call(repo, paths=["secret.env"], message="x", ignored_untracked=["secret.env"])
     assert out["committed"] is False
@@ -83,14 +84,14 @@ def test_supplied_ignored_path_is_refused_like_a_detected_one(repo, spawns):
     assert "check-ignore" not in _verbs(spawns)
 
 
-def test_a_malformed_supplied_set_is_refused(repo):
+def test_a_malformed_supplied_set_is_refused(repo) -> None:
     _w(repo / "keep.txt", "c\n")
     out = _call(repo, paths=["keep.txt"], message="x", ignored_untracked="keep.txt")
     assert out["committed"] is False
     assert "ignored_untracked" in out["error"]
 
 
-def test_reply_tree_equals_the_landed_commits_tree(repo):
+def test_reply_tree_equals_the_landed_commits_tree(repo) -> None:
     _w(repo / "keep.txt", "changed\n")
     out = _call(repo, paths=["keep.txt"], message="edit keep")
     assert out["tree"] == _git(repo, "rev-parse", f"{out['sha']}^{{tree}}")

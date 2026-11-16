@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 from coordinator_core.workflow_watch.terminal import TerminalWatcher
+from pathlib import Path
+import pytest
 
 
-def _write(path, text):
+def _write(path, text) -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def test_task_notification_completed_matches(tmp_path):
+def test_task_notification_completed_matches(tmp_path: Path) -> None:
     p = tmp_path / "transcript.txt"
     _write(
         p,
@@ -19,7 +21,7 @@ def test_task_notification_completed_matches(tmp_path):
     assert watcher.check_record().status == "completed"
 
 
-def test_task_notification_failed_matches(tmp_path):
+def test_task_notification_failed_matches(tmp_path: Path) -> None:
     p = tmp_path / "transcript.txt"
     _write(
         p,
@@ -30,7 +32,7 @@ def test_task_notification_failed_matches(tmp_path):
     assert watcher.check_record().status == "failed"
 
 
-def test_task_notification_killed_matches(tmp_path):
+def test_task_notification_killed_matches(tmp_path: Path) -> None:
     p = tmp_path / "transcript.txt"
     _write(
         p,
@@ -41,7 +43,7 @@ def test_task_notification_killed_matches(tmp_path):
     assert watcher.check_record().status == "killed"
 
 
-def test_task_notification_stopped_matches(tmp_path):
+def test_task_notification_stopped_matches(tmp_path: Path) -> None:
     p = tmp_path / "transcript.txt"
     _write(
         p,
@@ -52,14 +54,14 @@ def test_task_notification_stopped_matches(tmp_path):
     assert watcher.check_record().status == "stopped"
 
 
-def test_task_stop_result_matches(tmp_path):
+def test_task_stop_result_matches(tmp_path: Path) -> None:
     p = tmp_path / "transcript.txt"
     _write(p, "Successfully stopped task: tid-1")
     watcher = TerminalWatcher(str(p), "tid-1")
     assert watcher.check_record().status == "stopped"
 
 
-def test_notification_for_different_task_id_does_not_match(tmp_path):
+def test_notification_for_different_task_id_does_not_match(tmp_path: Path) -> None:
     p = tmp_path / "transcript.txt"
     _write(
         p,
@@ -70,14 +72,14 @@ def test_notification_for_different_task_id_does_not_match(tmp_path):
     assert watcher.check_record() is None
 
 
-def test_task_stop_for_different_task_id_does_not_match(tmp_path):
+def test_task_stop_for_different_task_id_does_not_match(tmp_path: Path) -> None:
     p = tmp_path / "transcript.txt"
     _write(p, "Successfully stopped task: sibling-tid")
     watcher = TerminalWatcher(str(p), "tid-1")
     assert watcher.check_record() is None
 
 
-def test_own_task_matches_among_sibling_notifications(tmp_path):
+def test_own_task_matches_among_sibling_notifications(tmp_path: Path) -> None:
     p = tmp_path / "transcript.txt"
     _write(
         p,
@@ -90,7 +92,7 @@ def test_own_task_matches_among_sibling_notifications(tmp_path):
     assert watcher.check_record().status == "failed"
 
 
-def test_terminal_block_split_across_two_polls(tmp_path):
+def test_terminal_block_split_across_two_polls(tmp_path: Path) -> None:
     p = tmp_path / "transcript.txt"
     first_half = "<task-notification><task-id>tid-1</task-id>"
     second_half = "<status>completed</status></task-notification>"
@@ -104,7 +106,7 @@ def test_terminal_block_split_across_two_polls(tmp_path):
     assert watcher.check_record().status == "completed"
 
 
-def test_terminal_record_survives_transcript_shrink(tmp_path):
+def test_terminal_record_survives_transcript_shrink(tmp_path: Path) -> None:
     p = tmp_path / "transcript.txt"
     _write(p, "noise " * 200)
     watcher = TerminalWatcher(str(p), "tid-1")
@@ -118,7 +120,7 @@ def test_terminal_record_survives_transcript_shrink(tmp_path):
     assert watcher.check_record().status == "completed"
 
 
-def test_no_terminal_record_keeps_returning_none(tmp_path):
+def test_no_terminal_record_keeps_returning_none(tmp_path: Path) -> None:
     p = tmp_path / "transcript.txt"
     _write(p, "some unrelated transcript content with no terminal shape")
     watcher = TerminalWatcher(str(p), "tid-1")
@@ -127,7 +129,7 @@ def test_no_terminal_record_keeps_returning_none(tmp_path):
     assert watcher.check_record() is None
 
 
-def test_journal_style_imbalance_text_does_not_terminate(tmp_path):
+def test_journal_style_imbalance_text_does_not_terminate(tmp_path: Path) -> None:
     p = tmp_path / "transcript.txt"
     _write(
         p,
@@ -138,7 +140,7 @@ def test_journal_style_imbalance_text_does_not_terminate(tmp_path):
     assert watcher.check_record() is None
 
 
-def test_watch_on_a_completed_run_with_a_committed_commit_leg_leaves_no_halt_marker(tmp_path, monkeypatch):
+def test_watch_on_a_completed_run_with_a_committed_commit_leg_leaves_no_halt_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import json
 
     from coordinator_core import workflow_watch

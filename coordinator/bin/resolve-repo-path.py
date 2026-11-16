@@ -40,8 +40,8 @@ claude-central wiki exception (FOLLOW-UP, carried over from the bash oracle):
   override lookup here (e.g. `machine-local get wiki_layout.<key>`) before the
   default composition.
 
-Negative-spec: does NOT spawn a shell (subprocess.run with an argv list, never a
-  shell string) and does NOT swallow a genuine internal usage error into the
+Negative-spec: does NOT spawn a shell (reads go through the engine's bounded
+  machine_local_spawn reader, never a shell string) and does NOT swallow a genuine internal usage error into the
   skip-to-empty/exit-0 path.
 """
 from __future__ import annotations
@@ -91,8 +91,8 @@ def _machine_local_path_candidates() -> list[str]:
 
 
 def _resolve_registry_value(key: str) -> str:
-    """Call the machine-local CLI directly (its own shebang, no shell). Any
-    failure (binary absent, non-zero exit, spawn error) degrades to empty —
+    """Read the key through the engine's bounded machine-local reader. Any
+    failure (kernel absent, failed read, ceiling hit) degrades to empty —
     mirrors the bash oracle's `"$MACHINE_LOCAL" get "$KEY" 2>/dev/null || true`.
     A stderr breadcrumb is emitted when NO candidate resolves, so "feature
     silently inert" (the original Windows failure mode) becomes diagnosable

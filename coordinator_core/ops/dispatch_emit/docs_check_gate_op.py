@@ -14,16 +14,75 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+import subprocess
+import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from coordinator_core.ipc import register_op
 from coordinator_core.ops import rag_freshness
 from coordinator_core.ops.dispatch_emit.ask_contract import HALT_CITATION_UNBACKED
 from coordinator_core.ops.dispatch_emit import docs_check_citations, rag_use
+from coordinator_core.win_portability import no_console_creationflags
 
 OP_NAME = "dispatch.docs_check_rag_gate"
 _HEAD_BYTES = 65536
+# One CLI name for probe and halt text: `rag_use` owns it, so no second literal can drift or be scrubbed.
+_CORPUS = rag_use._CLI
+_REPROBE_BACKOFF_S = (0.1,)
+_PROBE_TIMEOUT_S = 0.4
+_RAW_LIMIT = 300
+
+
+def _cli_runner(argv: list[str]) -> Optional[str]:
+    """Stdout of `argv`, or None when the CLI is absent, fails or times out."""
+    if shutil.which(argv[0]) is None:
+        return None
+    try:
+        done = subprocess.run(
+            argv, capture_output=True, text=True, timeout=_PROBE_TIMEOUT_S,
+            **no_console_creationflags(),
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+# Module-level seams: tests replace them; production probes the real CLI.
+_probe_runner: Callable[[list[str]], Optional[str]] = _cli_runner
+_sleep: Callable[[float], None] = time.sleep
+
+
+def _reprobe() -> tuple[bool, str]:
+    """(recovered, raw probe output): the daemon is re-probed with a short backoff.
+
+    Recovered only when a probe answers state ok or degraded; an absent or unreadable
+    probe is never recovery, so an unreachable CLI keeps the down verdict.
+    """
+    raw = ""
+    for delay in _REPROBE_BACKOFF_S:
+        _sleep(delay)
+        out = _probe_runner([_CORPUS, "probe-reachability", "--json"])
+        raw = (out or "").strip()[:_RAW_LIMIT] or raw
+        state = rag_use.probe(runner=lambda _argv, _out=out: _out)
+        if state is not None and state.state in ("ok", "degraded"):
+            return True, raw
+    return False, raw
+
+
+def _down_message(branch: str, raw: str) -> str:
+    """Halt text naming the real corpus, the probe that failed, its raw output and the restorer."""
+    probe = (
+        "engine_domain_status engine_queryable=false" if branch == "engine_queryable_false"
+        else "docs-checker project calls all refused (connection refused)"
+    )
+    shown = raw or "no output (probe CLI absent or silent)"
+    return (
+        f"{_CORPUS} engine corpus is down: probe {probe}; re-probe {_CORPUS} probe-reachability "
+        f"returned: {shown}. UE work will not succeed without it. "
+        f"Ask the {_CORPUS} owner session to restore it, then refire this run."
+    )
 
 
 def _head(path: Path, nbytes: int) -> str:
@@ -112,7 +171,12 @@ def _unreadable(branch: str, reason: str, queryable: Any) -> dict:
     Unknown is never an outage; only an explicit engine_queryable False is a definite down.
     """
     if queryable is False:
-        return {"verdict": rag_use.HALT_RAG_CORPUS_DOWN, "message": rag_use.RESTORE_MESSAGE,
+        recovered, raw = _reprobe()
+        if recovered:
+            return {"verdict": rag_use.DEGRADED, "reason": reason, "branch": "reprobe_recovered",
+                    "probe": raw}
+        return {"verdict": rag_use.HALT_RAG_CORPUS_DOWN,
+                "message": _down_message("engine_queryable_false", raw),
                 "reason": reason, "branch": "engine_queryable_false"}
     return {"verdict": rag_use.TRANSCRIPT_UNREADABLE, "reason": reason, "branch": branch}
 
@@ -190,9 +254,16 @@ def _verdict(params: dict, repo_root: Optional[Path] = None) -> dict:
         "rag_timeouts": timeouts, "rag_refused": refused,
     }
     if verdict == rag_use.HALT_RAG_CORPUS_DOWN:
-        out["message"] = rag_use.RESTORE_MESSAGE
-        out["branch"] = "engine_queryable_false" if queryable is False else "all_calls_refused"
-        return out
+        branch = "engine_queryable_false" if queryable is False else "all_calls_refused"
+        recovered, raw = _reprobe()
+        if recovered:
+            out["verdict"] = rag_use.DEGRADED
+            out["branch"] = "reprobe_recovered"
+            out["probe"] = raw
+        else:
+            out["message"] = _down_message(branch, raw)
+            out["branch"] = branch
+            return out
     if verdict == rag_use.RAG_NOT_USED:
         out["branch"] = "zero_rag_calls"
     missing = _unbacked_citations(Path(run_dir), agent_id)

@@ -13,6 +13,7 @@ import pytest
 from coordinator_core.bash_guards import dispatch_checks
 from coordinator_core.win_portability import no_console_passthrough_kwargs
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -22,7 +23,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 @pytest.fixture
-def repos(tmp_path, monkeypatch):
+def repos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     # The guard resolves its repo from the process cwd and records touch claims under it.
     here, other = tmp_path / "here", tmp_path / "other"
     for root in (here, other):
@@ -39,13 +40,13 @@ def _verdict(cmd: str, cwd):
 
 
 @pytest.mark.parametrize("sep", ["\n", "; ", "\n\n"])
-def test_rm_then_cd_to_another_repo_is_allowed(repos, sep):
+def test_rm_then_cd_to_another_repo_is_allowed(repos, sep) -> None:
     here, other = repos
     cmd = f"rm scratch.txt{sep}cd {other.as_posix()} && git log -1"
     assert _verdict(cmd, here) is None
 
 
-def test_rm_of_a_repo_root_on_a_later_line_still_denies(repos):
+def test_rm_of_a_repo_root_on_a_later_line_still_denies(repos) -> None:
     here, other = repos
     cmd = f"echo hi\nrm -rf {other.as_posix()}"
     verdict = _verdict(cmd, here)

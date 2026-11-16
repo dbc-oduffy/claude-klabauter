@@ -63,7 +63,7 @@ _DIRECTIVES: list[dict[str, Any]] = [
 
 
 @pytest.fixture(autouse=True)
-def _admit_stamp_op(monkeypatch):
+def _admit_stamp_op(monkeypatch: pytest.MonkeyPatch) -> None:
     """`execute_directives` pre-validates EVERY directive (including the
     `op` one) before dispatching any of them — `resolve_op` calls
     `assert_dispatchable`, which default-denies until C5 registers
@@ -122,7 +122,7 @@ def _run(monkeypatch, tmp_path: Path, fake: _FakeDispatch) -> tuple[int, dict[st
     return llp_apply.apply(tmp_path)
 
 
-def test_a_failing_verify_halts_before_drain_sweep_and_stamp(monkeypatch, tmp_path):
+def test_a_failing_verify_halts_before_drain_sweep_and_stamp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fake = _FakeDispatch(fail_on=frozenset({"verify"}))
     exit_code, report = _run(monkeypatch, tmp_path, fake)
 
@@ -136,7 +136,7 @@ def test_a_failing_verify_halts_before_drain_sweep_and_stamp(monkeypatch, tmp_pa
     assert "stamp-run-complete" not in dispatched_names
 
 
-def test_b_all_green_run_lands_all_seven_ids_in_emitted_order(monkeypatch, tmp_path):
+def test_b_all_green_run_lands_all_seven_ids_in_emitted_order(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fake = _FakeDispatch(fail_on=frozenset())
     exit_code, report = _run(monkeypatch, tmp_path, fake)
 
@@ -144,7 +144,7 @@ def test_b_all_green_run_lands_all_seven_ids_in_emitted_order(monkeypatch, tmp_p
     assert report["landed"] == [d["id"] for d in _DIRECTIVES]
 
 
-def test_c_failing_age_sweep_leaves_the_run_unstamped(monkeypatch, tmp_path):
+def test_c_failing_age_sweep_leaves_the_run_unstamped(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fake = _FakeDispatch(fail_on=frozenset({"sweep"}))
     exit_code, report = _run(monkeypatch, tmp_path, fake)
 
@@ -161,7 +161,7 @@ def test_c_failing_age_sweep_leaves_the_run_unstamped(monkeypatch, tmp_path):
     assert "stamp-run-complete" not in dispatched_names
 
 
-def test_cli_dispatch_matches_consumes_manifest_and_run_stamp_is_in_neither():
+def test_cli_dispatch_matches_consumes_manifest_and_run_stamp_is_in_neither() -> None:
     assert set(llp_apply._CLI_DISPATCH) == set(CONSUMES_MANIFEST)
     assert "run_stamp" not in llp_apply._CLI_DISPATCH
     assert "run_stamp" not in llp_apply._OP_DISPATCH
@@ -170,7 +170,7 @@ def test_cli_dispatch_matches_consumes_manifest_and_run_stamp_is_in_neither():
     assert "mechanical-close" in llp_apply._OP_DISPATCH
 
 
-def test_a_failing_mechanical_close_halts_before_age_sweep_and_stamp(monkeypatch, tmp_path):
+def test_a_failing_mechanical_close_halts_before_age_sweep_and_stamp(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fake = _FakeDispatch(fail_on=frozenset({"mechanical-close"}))
     fake_table = fake.table()
     fake_table["mechanical-close"] = lambda args, repo_root: (_ for _ in ()).throw(RuntimeError("boom"))
@@ -195,7 +195,7 @@ def _lesson(root: Path, name: str, *, title: str, body: str, scope: str = "proje
     return path
 
 
-def test_default_apply_closes_mechanical_rows_ages_and_reports_tokens(monkeypatch, tmp_path):
+def test_default_apply_closes_mechanical_rows_ages_and_reports_tokens(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     keep = _lesson(tmp_path, "a-keep.yaml", title="Keep", body="A substantive lesson body about shared trees.")
     dup = _lesson(tmp_path, "b-dup.yaml", title="Keep", body="A substantive lesson body about shared trees.",
                   created="2026-02-01")
@@ -230,7 +230,7 @@ def test_default_apply_closes_mechanical_rows_ages_and_reports_tokens(monkeypatc
     assert "state/lessons/b-dup.yaml" in evidence and "state/lessons/d-local.yaml" in evidence
 
 
-def test_unknown_op_raises_rather_than_dispatching(monkeypatch):
+def test_unknown_op_raises_rather_than_dispatching(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         apply_base,
         "ASSEMBLER_DISPATCHABLE",
@@ -242,7 +242,7 @@ def test_unknown_op_raises_rather_than_dispatching(monkeypatch):
         )
 
 
-def test_real_load_of_age_sweep_lessons_exercises_the_bin_import_path(tmp_path):
+def test_real_load_of_age_sweep_lessons_exercises_the_bin_import_path(tmp_path: Path) -> None:
     llp_apply._LOADED_MODULES.pop("age-sweep-lessons", None)
     with pytest.raises(RuntimeError, match=r"age-sweep-lessons exited"):
         llp_apply._dispatch_age_sweep_lessons([], tmp_path)
@@ -302,7 +302,7 @@ def _record_finish(monkeypatch, tail: dict[str, Any]) -> list[dict[str, Any]]:
     return seen
 
 
-def test_default_param_apply_ends_in_post_run_finish_with_a_clean_run_scope(monkeypatch, tmp_path):
+def test_default_param_apply_ends_in_post_run_finish_with_a_clean_run_scope(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
     _seed_repo(tmp_path)
     fake = _WritingDispatch(tmp_path)
@@ -323,7 +323,7 @@ def test_default_param_apply_ends_in_post_run_finish_with_a_clean_run_scope(monk
     assert porcelain == []
 
 
-def test_the_tail_takes_wiki_pages_as_touched_and_other_declared_writes_as_evidence(monkeypatch, tmp_path):
+def test_the_tail_takes_wiki_pages_as_touched_and_other_declared_writes_as_evidence(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen = _record_finish(monkeypatch, {"exit_code": 0})
     exit_code, _report = _run(monkeypatch, tmp_path, _WritingDispatch(tmp_path))
 
@@ -338,7 +338,7 @@ def test_the_tail_takes_wiki_pages_as_touched_and_other_declared_writes_as_evide
     }
 
 
-def test_a_non_zero_apply_exit_skips_the_tail(monkeypatch, tmp_path):
+def test_a_non_zero_apply_exit_skips_the_tail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen = _record_finish(monkeypatch, {"exit_code": 0})
     exit_code, report = _run(monkeypatch, tmp_path, _FakeDispatch(fail_on=frozenset({"sweep"})))
 
@@ -346,7 +346,7 @@ def test_a_non_zero_apply_exit_skips_the_tail(monkeypatch, tmp_path):
     assert seen == [] and "post_run" not in report
 
 
-def test_a_tail_that_does_not_finish_clean_is_a_partial_mutation(monkeypatch, tmp_path):
+def test_a_tail_that_does_not_finish_clean_is_a_partial_mutation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _record_finish(monkeypatch, {"exit_code": 1, "error": "commit refused"})
     exit_code, report = _run(monkeypatch, tmp_path, _FakeDispatch())
 

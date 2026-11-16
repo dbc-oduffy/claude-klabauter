@@ -77,7 +77,7 @@ def test_symlink_escape_out_of_scratch_stays_denied(repo):
     assert _check(f"rm -rf {link}") is not None
 
 
-def test_nested_repo_root_with_a_commit_in_scratch_stays_denied(repo):
+def test_nested_repo_root_with_a_commit_in_scratch_passes(repo):
     probe = repo / "scratch" / "probe"
     probe.mkdir()
     _git("init", "-q", cwd=str(probe))
@@ -86,4 +86,4 @@ def test_nested_repo_root_with_a_commit_in_scratch_stays_denied(repo):
     (probe / "f.txt").write_text("x\n")
     _git("add", "f.txt", cwd=str(probe))
     _git("commit", "-qm", "c", cwd=str(probe))
-    assert _check(f"rm -rf {probe}") is not None
+    assert _check(f"rm -rf {probe}") is None

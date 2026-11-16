@@ -4,6 +4,7 @@ from pathlib import Path
 
 from coordinator_core.ops._sizing_citation import resolve_sizing_citation
 from coordinator_core.ops.assert_plan_sizing_citation import main
+import pytest
 
 _CITED = "state/sizings/2026-08-01-example.yaml"
 _SIZING_BODY = "schema: sizing-object\nestimate:\n  tshirt: M\n"
@@ -29,25 +30,25 @@ def _write_plan(root: Path, cited: str | None = _CITED) -> None:
     )
 
 
-def test_live_path_resolves(tmp_path: Path):
+def test_live_path_resolves(tmp_path: Path) -> None:
     live = _write(tmp_path, _CITED, _SIZING_BODY)
     assert resolve_sizing_citation(tmp_path, _CITED) == live.resolve()
 
 
-def test_archived_namesake_resolves_when_live_path_is_absent(tmp_path: Path):
+def test_archived_namesake_resolves_when_live_path_is_absent(tmp_path: Path) -> None:
     archived = _write(
         tmp_path, "archive/sizings/2026-08/2026-08-01-example.yaml", _SIZING_BODY
     )
     assert resolve_sizing_citation(tmp_path, _CITED) == archived.resolve()
 
 
-def test_live_wins_over_an_archived_namesake(tmp_path: Path):
+def test_live_wins_over_an_archived_namesake(tmp_path: Path) -> None:
     live = _write(tmp_path, _CITED, _SIZING_BODY)
     _write(tmp_path, "archive/sizings/2026-08/2026-08-01-example.yaml", _SIZING_BODY)
     assert resolve_sizing_citation(tmp_path, _CITED) == live.resolve()
 
 
-def test_month_dir_probe_resolves_without_rglob(tmp_path: Path, monkeypatch):
+def test_month_dir_probe_resolves_without_rglob(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     archived = _write(
         tmp_path, "archive/sizings/2026-08/2026-08-01-example.yaml", _SIZING_BODY
     )
@@ -59,31 +60,31 @@ def test_month_dir_probe_resolves_without_rglob(tmp_path: Path, monkeypatch):
     assert resolve_sizing_citation(tmp_path, _CITED) == archived.resolve()
 
 
-def test_misfiled_month_falls_back_to_rglob(tmp_path: Path):
+def test_misfiled_month_falls_back_to_rglob(tmp_path: Path) -> None:
     archived = _write(
         tmp_path, "archive/sizings/2026-07/2026-08-01-example.yaml", _SIZING_BODY
     )
     assert resolve_sizing_citation(tmp_path, _CITED) == archived.resolve()
 
 
-def test_neither_path_resolves_returns_none(tmp_path: Path):
+def test_neither_path_resolves_returns_none(tmp_path: Path) -> None:
     (tmp_path / "archive" / "sizings" / "2026-08").mkdir(parents=True)
     assert resolve_sizing_citation(tmp_path, _CITED) is None
 
 
-def test_ambiguous_archive_match_refuses(tmp_path: Path):
+def test_ambiguous_archive_match_refuses(tmp_path: Path) -> None:
     for month in ("2026-06", "2026-07"):
         _write(tmp_path, f"archive/sizings/{month}/2026-08-01-example.yaml", _SIZING_BODY)
     assert resolve_sizing_citation(tmp_path, _CITED) is None
 
 
-def test_month_dir_hit_wins_over_a_misfiled_namesake(tmp_path: Path):
+def test_month_dir_hit_wins_over_a_misfiled_namesake(tmp_path: Path) -> None:
     hit = _write(tmp_path, "archive/sizings/2026-08/2026-08-01-example.yaml", _SIZING_BODY)
     _write(tmp_path, "archive/sizings/2026-07/2026-08-01-example.yaml", _SIZING_BODY)
     assert resolve_sizing_citation(tmp_path, _CITED) == hit.resolve()
 
 
-def test_traversal_outside_the_root_refuses(tmp_path: Path):
+def test_traversal_outside_the_root_refuses(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     outside = tmp_path / "outside"
@@ -92,7 +93,7 @@ def test_traversal_outside_the_root_refuses(tmp_path: Path):
     assert resolve_sizing_citation(root, "../outside/escape.yaml") is None
 
 
-def test_absolute_citation_refuses(tmp_path: Path):
+def test_absolute_citation_refuses(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     outside = tmp_path / "outside"
@@ -102,7 +103,7 @@ def test_absolute_citation_refuses(tmp_path: Path):
     assert resolve_sizing_citation(root, absolute.as_posix()) is None
 
 
-def test_gate_passes_on_a_citation_whose_sizing_was_archived(tmp_path: Path, capsys):
+def test_gate_passes_on_a_citation_whose_sizing_was_archived(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write(tmp_path, "archive/sizings/2026-08/2026-08-01-example.yaml", _SIZING_BODY)
     _write_plan(tmp_path)
     rc = main(["--root", str(tmp_path)])
@@ -110,7 +111,7 @@ def test_gate_passes_on_a_citation_whose_sizing_was_archived(tmp_path: Path, cap
     assert "OK: no dangling" in capsys.readouterr().out
 
 
-def test_gate_still_fails_when_the_record_resolves_nowhere(tmp_path: Path, capsys):
+def test_gate_still_fails_when_the_record_resolves_nowhere(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _write_plan(tmp_path)
     rc = main(["--root", str(tmp_path)])
     captured = capsys.readouterr()
@@ -119,7 +120,7 @@ def test_gate_still_fails_when_the_record_resolves_nowhere(tmp_path: Path, capsy
     assert "nor under archive/sizings/" in captured.err
 
 
-def test_gate_still_fails_on_an_ambiguous_archive_match(tmp_path: Path, capsys):
+def test_gate_still_fails_on_an_ambiguous_archive_match(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     for month in ("2026-06", "2026-07"):
         _write(tmp_path, f"archive/sizings/{month}/2026-08-01-example.yaml", _SIZING_BODY)
     _write_plan(tmp_path)
@@ -128,30 +129,30 @@ def test_gate_still_fails_on_an_ambiguous_archive_match(tmp_path: Path, capsys):
     assert "FAIL: 1 dangling" in capsys.readouterr().err
 
 
-def test_flat_cite_resolves_a_sharded_sizing(tmp_path: Path):
+def test_flat_cite_resolves_a_sharded_sizing(tmp_path: Path) -> None:
     shard = _write(tmp_path, "state/sizings/2026-08/2026-08-01-example.yaml", _SIZING_BODY)
     assert resolve_sizing_citation(tmp_path, _CITED) == shard.resolve()
 
 
-def test_flat_file_wins_over_shard_and_archive(tmp_path: Path):
+def test_flat_file_wins_over_shard_and_archive(tmp_path: Path) -> None:
     flat = _write(tmp_path, _CITED, _SIZING_BODY)
     _write(tmp_path, "state/sizings/2026-08/2026-08-01-example.yaml", _SIZING_BODY)
     _write(tmp_path, "archive/sizings/2026-08/2026-08-01-example.yaml", _SIZING_BODY)
     assert resolve_sizing_citation(tmp_path, _CITED) == flat.resolve()
 
 
-def test_shard_wins_over_archive_and_archive_still_resolves(tmp_path: Path):
+def test_shard_wins_over_archive_and_archive_still_resolves(tmp_path: Path) -> None:
     arch = _write(tmp_path, "archive/sizings/2026-08/2026-08-01-example.yaml", _SIZING_BODY)
     assert resolve_sizing_citation(tmp_path, _CITED) == arch.resolve()
     shard = _write(tmp_path, "state/sizings/2026-08/2026-08-01-example.yaml", _SIZING_BODY)
     assert resolve_sizing_citation(tmp_path, _CITED) == shard.resolve()
 
 
-def test_absent_everywhere_is_none(tmp_path: Path):
+def test_absent_everywhere_is_none(tmp_path: Path) -> None:
     assert resolve_sizing_citation(tmp_path, _CITED) is None
 
 
-def test_plan_path_bridge_extracts_a_sharded_plan_path():
+def test_plan_path_bridge_extracts_a_sharded_plan_path() -> None:
     from coordinator_core.hooks.support.plan_path_bridge import extract_plan_path
 
     assert (
@@ -161,7 +162,7 @@ def test_plan_path_bridge_extracts_a_sharded_plan_path():
     assert extract_plan_path("Execute docs/plans/2026-11-03-x.md now") == "docs/plans/2026-11-03-x.md"
 
 
-def test_import_defers_archive_sizings_until_the_archive_probe():
+def test_import_defers_archive_sizings_until_the_archive_probe() -> None:
     import subprocess
     import sys
 

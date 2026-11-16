@@ -11,6 +11,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     HALT_REFUSAL,
 )
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+import pytest
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _GUARD = (
@@ -39,24 +40,24 @@ def _refusal_statement(script: str) -> str:
     return script[start : script.index("}; }", start)]
 
 
-def test_the_refusal_statement_precedes_the_ledger_check_halt(monkeypatch):
+def test_the_refusal_statement_precedes_the_ledger_check_halt(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert script.index(_GUARD) < script.index("halted: 'ledger-check'")
 
 
-def test_the_refusal_is_guarded_on_an_unset_halt(monkeypatch):
+def test_the_refusal_is_guarded_on_an_unset_halt(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert "if (!_halted && " + _GUARD in script
 
 
-def test_the_refusal_carries_the_refusal_kind_and_the_register_text(monkeypatch):
+def test_the_refusal_carries_the_refusal_kind_and_the_register_text(monkeypatch: pytest.MonkeyPatch) -> None:
     text = _refusal_statement(_script(monkeypatch))
     assert f"halted: {_lit(HALT_REFUSAL)}" in text
     assert _lit(EMPTY_REGISTER_REASON + EMPTY_REGISTER_REFUSAL_HEAD) + " + _sizingRel + " + _lit(EMPTY_REGISTER_REFUSAL_TAIL) in text
     assert "sizing: _sizingRel" in text and "run_id: _runId" in text
 
 
-def test_the_ledger_check_halt_clause_is_untouched(monkeypatch):
+def test_the_ledger_check_halt_clause_is_untouched(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     start = script.index("halted: 'ledger-check'")
     clause = script[start : script.index("}; }", start)]

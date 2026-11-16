@@ -140,7 +140,7 @@ def _commit_env(tmp_path: Path, shim_dir: Path, log: Path) -> dict:
 
 
 @pytest.fixture()
-def rig(tmp_path):
+def rig(tmp_path: Path):
     repo = tmp_path / "repo"
     repo.mkdir()
     _real_git(["init", "-q"], repo)
@@ -189,7 +189,7 @@ def _assert_hooks_really_ran(rig, proc) -> None:
     assert not (rig.repo / ".git" / "hooks" / "commit-msg").exists(), "a commit-msg hook is installed"
 
 
-def test_default_commit_resolves_staged_set_once(rig):
+def test_default_commit_resolves_staged_set_once(rig) -> None:
     rig.install()
     (rig.repo / "a.txt").write_text("a2\n", encoding="utf-8")
     _real_git(["add", "a.txt"], rig.repo)
@@ -200,7 +200,7 @@ def test_default_commit_resolves_staged_set_once(rig):
     assert counts["toplevel"] <= 1, counts
 
 
-def test_pathspec_commit_on_a_temporary_index_resolves_staged_set_once(rig):
+def test_pathspec_commit_on_a_temporary_index_resolves_staged_set_once(rig) -> None:
     rig.install()
     (rig.repo / "a.txt").write_text("a2\n", encoding="utf-8")
     (rig.repo / "b.txt").write_text("b2\n", encoding="utf-8")
@@ -213,7 +213,7 @@ def test_pathspec_commit_on_a_temporary_index_resolves_staged_set_once(rig):
     assert _real_git(["show", "--name-only", "--format=", "HEAD"], rig.repo).stdout.split() == ["a.txt"]
 
 
-def test_restaging_in_pre_commit_forces_a_fresh_resolution(rig):
+def test_restaging_in_pre_commit_forces_a_fresh_resolution(rig) -> None:
     rig.install(restage_file="b.txt")
     (rig.repo / "a.txt").write_text("a2\n", encoding="utf-8")
     (rig.repo / "b.txt").write_text("b2\n", encoding="utf-8")

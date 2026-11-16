@@ -9,6 +9,11 @@ import pathlib
 import subprocess
 
 import pytest
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -20,7 +25,7 @@ _PEER_START_EPOCH = 1577836800
 _ORPHAN_MTIME = 1262304000  # 2010-01-01
 
 
-def _load_cli_module():
+def _load_cli_module() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "coordinator_safe_commit", str(_BIN_DIR / "coordinator-safe-commit.py")
     )
@@ -30,14 +35,14 @@ def _load_cli_module():
     return mod
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> str:
     return subprocess.run(
         ["git", *args], cwd=repo, check=True, capture_output=True, text=True
     ).stdout
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@example.invalid")
     _git(tmp_path, "config", "user.name", "t")
@@ -52,7 +57,7 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _arm_live_peer(repo, monkeypatch, started_at: str):
+def _arm_live_peer(repo, monkeypatch, started_at: str) -> None:
     from coordinator_core.session import core as cs_core
     from coordinator_core.session import liveness as cs_liveness
 
@@ -62,7 +67,7 @@ def _arm_live_peer(repo, monkeypatch, started_at: str):
     monkeypatch.setattr(cs_liveness, "live_session_ids", lambda cwd=None: frozenset({_SELF, _PEER}))
 
 
-def _write(repo, name, mtime=None):
+def _write(repo, name, mtime=None) -> None:
     p = repo / name
     p.write_text(name, encoding="utf-8")
     if mtime is not None:
@@ -78,11 +83,11 @@ def _run_blanket(mod):
     return 0
 
 
-def _committed(repo):
+def _committed(repo) -> list[str]:
     return _git(repo, "show", "--name-only", "--pretty=format:", "HEAD").split()
 
 
-def test_path_written_after_a_live_peer_started_is_withheld_and_orphan_lands(repo, monkeypatch, capsys):
+def test_path_written_after_a_live_peer_started_is_withheld_and_orphan_lands(repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     mod = _load_cli_module()
     _arm_live_peer(repo, monkeypatch, _PEER_START)
     _write(repo, "orphan.md", _ORPHAN_MTIME)
@@ -97,7 +102,7 @@ def test_path_written_after_a_live_peer_started_is_withheld_and_orphan_lands(rep
     assert "peer-dirty.md" in err
 
 
-def test_withhold_leaves_nothing_to_commit_when_every_path_is_a_peer_window_path(repo, monkeypatch, capsys):
+def test_withhold_leaves_nothing_to_commit_when_every_path_is_a_peer_window_path(repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     mod = _load_cli_module()
     _arm_live_peer(repo, monkeypatch, _PEER_START)
     _write(repo, "peer-dirty.md")
@@ -109,7 +114,7 @@ def test_withhold_leaves_nothing_to_commit_when_every_path_is_a_peer_window_path
     assert "peer-dirty.md" in _git(repo, "status", "--porcelain")
 
 
-def test_no_live_peer_commits_everything(repo, monkeypatch):
+def test_no_live_peer_commits_everything(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import liveness as cs_liveness
 
     mod = _load_cli_module()
@@ -124,7 +129,7 @@ def test_no_live_peer_commits_everything(repo, monkeypatch):
     assert _committed(repo) == ["a.md"]
 
 
-def test_accept_foreign_escape_hatch_skips_the_withhold(repo, monkeypatch):
+def test_accept_foreign_escape_hatch_skips_the_withhold(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     mod = _load_cli_module()
     monkeypatch.setenv("COORDINATOR_BLANKET_ACCEPT_FOREIGN", "1")
     _arm_live_peer(repo, monkeypatch, _PEER_START)

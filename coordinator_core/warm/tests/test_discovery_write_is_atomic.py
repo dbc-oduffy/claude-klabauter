@@ -30,6 +30,7 @@ import threading
 from pathlib import Path
 
 from coordinator_core.warm import supervisor
+import pytest
 
 
 def _write(root: Path, port: int, sha: str) -> None:
@@ -117,7 +118,7 @@ class TestNoTempFileResidue:
         assert leftovers == [], leftovers
 
     def test_the_temp_file_is_created_in_the_targets_own_directory(
-        self, tmp_path: Path, monkeypatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """`os.replace` is atomic only within a filesystem. A temp file created
         anywhere but the target's own directory degrades the replace to a copy
@@ -144,7 +145,7 @@ class TestContentionFallback:
     """
 
     def test_exhaustion_publishes_when_there_is_no_record_to_damage(
-        self, tmp_path: Path, monkeypatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """With NO prior record, losing every replace must still publish. A raise
         here would leave the clone with no discovery file at all, so every hook
@@ -159,7 +160,7 @@ class TestContentionFallback:
         assert rec["port"] == 5601
 
     def test_exhaustion_leaves_an_existing_record_intact_rather_than_tearing_it(
-        self, tmp_path: Path, monkeypatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         """With a record ALREADY on disk, exhaustion must skip the rotation
         rather than fall back to a truncating in-place write.
@@ -190,7 +191,7 @@ class TestContentionFallback:
         )
 
     def test_the_fallback_leaves_no_temp_file_behind(
-        self, tmp_path: Path, monkeypatch
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _write(tmp_path, 5700, "3" * 16)
         monkeypatch.setattr(supervisor, "_replace_with_retry", lambda *_a, **_kw: False)

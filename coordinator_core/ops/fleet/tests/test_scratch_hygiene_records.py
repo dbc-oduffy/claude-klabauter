@@ -18,26 +18,26 @@ NAG_KEYS = ["op", "kind", "repo", "path", "bytes", "age_days", "readme", "findin
 SUMMARY_KEYS = ["op", "summary", "entries", "bytes", "applied", "capabilities"]
 
 
-def test_action_enum_is_the_contracts_seven():
+def test_action_enum_is_the_contracts_seven() -> None:
     assert rec.ACTIONS == (
         "deleted", "would-delete", "skipped-live", "skipped-unverified", "skipped-young", "skipped-link",
         "skipped-hold-pending", "skipped-budget",
     )
 
 
-def test_purge_record_keys_and_order():
+def test_purge_record_keys_and_order() -> None:
     r = rec.purge_record("repo", "scratch/e", "would-delete", bytes=3, files=1, age_days=2.5)
     assert list(r) == PURGE_KEYS
     assert r["op"] == "fleet.scratch_hygiene" and r["kind"] == "purge" and r["reason"] == ""
     json.dumps(r)
 
 
-def test_purge_record_rejects_action_outside_enum():
+def test_purge_record_rejects_action_outside_enum() -> None:
     with pytest.raises(ValueError):
         rec.purge_record("repo", "scratch/e", "open-handle")
 
 
-def test_hold_nag_record_keys_and_null_readme():
+def test_hold_nag_record_keys_and_null_readme() -> None:
     r = rec.hold_nag_record("repo", "scratch-hold/e", finding="missing-readme")
     assert list(r) == NAG_KEYS
     assert r["readme"] is None and r["kind"] == "hold-nag"
@@ -45,7 +45,7 @@ def test_hold_nag_record_keys_and_null_readme():
         rec.hold_nag_record("repo", "scratch-hold/e", finding="stale")
 
 
-def test_summary_record_keys_and_totals():
+def test_summary_record_keys_and_totals() -> None:
     records = [
         rec.purge_record("r", "scratch/a", "would-delete", bytes=10),
         rec.purge_record("r", "scratch/b", "skipped-live", bytes=99),
@@ -56,7 +56,7 @@ def test_summary_record_keys_and_totals():
     assert (s["entries"], s["bytes"], s["applied"]) == (3, 10, False)
 
 
-def test_path_is_repo_relative_and_forward_slashed(tmp_path):
+def test_path_is_repo_relative_and_forward_slashed(tmp_path: Path) -> None:
     p = tmp_path / "repo" / "scratch" / "a" / "b"
     r = rec.purge_record("repo", p, "deleted", repo_root=tmp_path / "repo")
     assert r["path"] == "scratch/a/b"
@@ -75,7 +75,7 @@ def test_path_is_repo_relative_and_forward_slashed(tmp_path):
         ([rec.hold_nag_record("r", "scratch-hold/a", finding="missing-readme")], 1),
     ],
 )
-def test_contract_exit_mapping(records, expected):
+def test_contract_exit_mapping(records, expected) -> None:
     assert rec.contract_exit(records) == expected
 
 
@@ -93,15 +93,15 @@ def _p(action):
         ([_p("would-delete"), _p("skipped-budget"), rec.hold_nag_record("r", "scratch-hold/a", finding="hold-pending")], 1),
     ],
 )
-def test_contract_exit_budget_deferral_is_failure_only_when_nothing_walked(records, expected):
+def test_contract_exit_budget_deferral_is_failure_only_when_nothing_walked(records, expected) -> None:
     assert rec.contract_exit(records) == expected
 
 
-def test_contract_exit_ignores_summary_record():
+def test_contract_exit_ignores_summary_record() -> None:
     assert rec.contract_exit([rec.summary_record([], applied=False)]) == 0
 
 
-def test_two_root_fixture_shape(tmp_path, monkeypatch):
+def test_two_root_fixture_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     fx = build_two_root_fixture(tmp_path, monkeypatch)
     try:
         assert fx.temp_root == coordinator_temp_root(fx.repo_root)

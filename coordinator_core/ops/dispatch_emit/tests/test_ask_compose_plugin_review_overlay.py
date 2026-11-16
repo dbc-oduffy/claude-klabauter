@@ -6,6 +6,7 @@ from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import plugin_review_overlay as overlay
 from coordinator_core.ops.dispatch_emit.ask_compose import load_review_signal_selects
+import pytest
 
 _BASE = {"signals": {"docs": {"selects": "coordinator:staff-eng"}}}
 
@@ -37,7 +38,7 @@ def _install(monkeypatch, tmp_path: Path, *roots: Path) -> None:
 _UNREAL = {"id": "unreal", "selects": "game-dev:staff-game-dev", "prose_terms": ["x"], "write_triggers": []}
 
 
-def test_overlay_signal_listed_and_mapped_base_unchanged(monkeypatch, tmp_path):
+def test_overlay_signal_listed_and_mapped_base_unchanged(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _install(monkeypatch, tmp_path, _plugin(tmp_path, "game-dev", [_UNREAL]))
     assert load_review_signal_selects(_base_root(tmp_path)) == {
         "docs": "coordinator:staff-eng",
@@ -45,12 +46,12 @@ def test_overlay_signal_listed_and_mapped_base_unchanged(monkeypatch, tmp_path):
     }
 
 
-def test_no_overlay_installed_returns_base_only(monkeypatch, tmp_path):
+def test_no_overlay_installed_returns_base_only(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _install(monkeypatch, tmp_path)
     assert load_review_signal_selects(_base_root(tmp_path)) == {"docs": "coordinator:staff-eng"}
 
 
-def test_overlay_cannot_shadow_base_or_name_foreign_agent(monkeypatch, tmp_path):
+def test_overlay_cannot_shadow_base_or_name_foreign_agent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     bad = [
         {"id": "docs", "selects": "game-dev:evil"},
         {"id": "other", "selects": "coordinator:staff-eng"},
@@ -60,12 +61,12 @@ def test_overlay_cannot_shadow_base_or_name_foreign_agent(monkeypatch, tmp_path)
     assert load_review_signal_selects(_base_root(tmp_path)) == {"docs": "coordinator:staff-eng"}
 
 
-def test_wrong_schema_overlay_skipped(monkeypatch, tmp_path):
+def test_wrong_schema_overlay_skipped(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _install(monkeypatch, tmp_path, _plugin(tmp_path, "game-dev", [_UNREAL], schema="nope"))
     assert load_review_signal_selects(_base_root(tmp_path)) == {"docs": "coordinator:staff-eng"}
 
 
-def test_overlay_read_once_per_compose(monkeypatch, tmp_path):
+def test_overlay_read_once_per_compose(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _install(monkeypatch, tmp_path, _plugin(tmp_path, "game-dev", [_UNREAL]))
     calls = []
     real = overlay.installed_plugin_roots

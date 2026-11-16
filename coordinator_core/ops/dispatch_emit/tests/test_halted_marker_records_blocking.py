@@ -57,6 +57,8 @@ def repo(tmp_path):
     _git(["config", "user.email", "t@example.com"], root)
     _git(["config", "user.name", "t"], root)
     (root / "seed.txt").write_text("seed\n", encoding="utf-8")
+    (root / PLAN).parent.mkdir(parents=True)
+    (root / PLAN).write_text("# plan\n", encoding="utf-8")
     _git(["add", "."], root)
     _git(["commit", "-q", "-m", "seed"], root)
     rec = root / RECORD_DIR_ROOT / RUN

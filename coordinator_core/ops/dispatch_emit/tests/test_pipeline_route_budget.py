@@ -10,6 +10,7 @@ from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import op as op_module
 from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
+import pytest
 
 _FIXTURE = Path(__file__).parent / "fixtures" / "pipeline_structured"
 _BUDGET_S = 0.5
@@ -25,7 +26,7 @@ def _params(tmp_path, name):
             "output_path": str(tmp_path / name)}
 
 
-def test_pipeline_emit_is_spawn_free_and_under_budget(monkeypatch, tmp_path):
+def test_pipeline_emit_is_spawn_free_and_under_budget(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(op_module, "read_content_root", lambda: "doe")
     monkeypatch.setattr(op_module, "content_root_for", lambda _root: _FIXTURE)
 

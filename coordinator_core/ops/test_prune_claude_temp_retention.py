@@ -6,12 +6,13 @@ import time
 import pytest
 
 from coordinator_core.ops import prune_claude_temp as pct
+from pathlib import Path
 
 HOUR = 3600
 
 
 @pytest.fixture
-def troot(tmp_path, monkeypatch):
+def troot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "claude"
     root.mkdir()
     monkeypatch.setattr(pct, "claude_temp_root", lambda: root)
@@ -30,19 +31,19 @@ def _session(root, sid, idle_hours):
     return d
 
 
-def test_dead_session_idle_49h_deleted(troot):
+def test_dead_session_idle_49h_deleted(troot) -> None:
     d = _session(troot, "dead", 49)
     assert pct.prune(roots=[(troot, 2, 7)], live_session_ids=frozenset()) == 1
     assert not d.exists()
 
 
-def test_session_idle_47h_kept(troot):
+def test_session_idle_47h_kept(troot) -> None:
     d = _session(troot, "recent", 47)
     assert pct.prune(roots=[(troot, 2, 7)], live_session_ids=frozenset()) == 0
     assert d.exists()
 
 
-def test_live_noncurrent_session_idle_49h_kept(troot):
+def test_live_noncurrent_session_idle_49h_kept(troot) -> None:
     live = _session(troot, "live-other", 49)
     dead = _session(troot, "dead", 49)
     assert pct.prune("cur", roots=[(troot, 2, 7)], live_session_ids=frozenset({"live-other"})) == 1
@@ -50,13 +51,13 @@ def test_live_noncurrent_session_idle_49h_kept(troot):
     assert not dead.exists()
 
 
-def test_liveness_exception_keeps_every_dir(troot):
+def test_liveness_exception_keeps_every_dir(troot) -> None:
     d = _session(troot, "dead", 49)
     assert pct.prune(roots=[(troot, 2, 7)], live_session_ids=None) == 0
     assert d.exists()
 
 
-def test_main_liveness_exception_keeps_every_dir(troot, monkeypatch):
+def test_main_liveness_exception_keeps_every_dir(troot, monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.session.liveness as liveness
 
     def boom(*_a, **_k):
@@ -68,7 +69,7 @@ def test_main_liveness_exception_keeps_every_dir(troot, monkeypatch):
     assert d.exists()
 
 
-def test_other_root_keeps_seven_day_retention(troot, tmp_path):
+def test_other_root_keeps_seven_day_retention(troot, tmp_path: Path) -> None:
     other = tmp_path / "other"
     old = other / "p" / "s"
     old.mkdir(parents=True)
@@ -78,7 +79,7 @@ def test_other_root_keeps_seven_day_retention(troot, tmp_path):
     assert old.exists()
 
 
-def test_default_roots_claude_retention_reads_max_age_hours(monkeypatch, tmp_path):
+def test_default_roots_claude_retention_reads_max_age_hours(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import coordinator_core.machine_resolver as mr
 
     monkeypatch.setattr(mr, "registry_get", lambda key: "24")
@@ -87,7 +88,7 @@ def test_default_roots_claude_retention_reads_max_age_hours(monkeypatch, tmp_pat
     assert pct._claude_retention_days() == 2.0
 
 
-def test_long_path_tree_deleted(troot):
+def test_long_path_tree_deleted(troot) -> None:
     d = _session(troot, "deep", 49)
     t = time.time() - 49 * HOUR
     cur = d
@@ -103,7 +104,7 @@ def test_long_path_tree_deleted(troot):
     assert not os.path.exists(pct._long(str(d)))
 
 
-def test_readonly_file_removed_by_chmod_retry(troot):
+def test_readonly_file_removed_by_chmod_retry(troot) -> None:
     import stat
 
     d = _session(troot, "ro", 49)
@@ -113,11 +114,11 @@ def test_readonly_file_removed_by_chmod_retry(troot):
     assert not d.exists()
 
 
-def test_vanished_path_is_not_fresh(troot):
+def test_vanished_path_is_not_fresh(troot) -> None:
     assert pct._has_fresh_entry(str(troot / "missing-dir"), time.time()) is False
 
 
-def test_live_session_scratch_children_pruned_after_48h(troot):
+def test_live_session_scratch_children_pruned_after_48h(troot) -> None:
     live = _session(troot, "live", 1)
     old = live / "scratchpad" / "old"
     new = live / "scratchpad" / "new"

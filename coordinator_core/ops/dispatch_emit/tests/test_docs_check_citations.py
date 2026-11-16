@@ -1,9 +1,10 @@
 import json
 
 from coordinator_core.ops.dispatch_emit import docs_check_citations as dc
+from pathlib import Path
 
 
-def test_parse_rag_and_live():
+def test_parse_rag_and_live() -> None:
     got = dc.parse("x [rag: project_cpp_symbol AActor] y [live: inspect L_Main]")
     assert got == [
         dc.Citation("rag", "project_cpp_symbol", "AActor"),
@@ -11,7 +12,7 @@ def test_parse_rag_and_live():
     ]
 
 
-def test_parse_ignores_other_forms():
+def test_parse_ignores_other_forms() -> None:
     assert dc.parse("[web: x y] [rag:] plain") == []
 
 
@@ -22,7 +23,7 @@ def _transcript(tmp_path, blocks):
     return p
 
 
-def test_tool_calls_skips_garbage_and_non_tool_blocks(tmp_path):
+def test_tool_calls_skips_garbage_and_non_tool_blocks(tmp_path: Path) -> None:
     p = _transcript(
         tmp_path,
         [
@@ -34,7 +35,7 @@ def test_tool_calls_skips_garbage_and_non_tool_blocks(tmp_path):
     assert dc.tool_calls(tmp_path / "missing") == []
 
 
-def test_backed_by_exact_final_segment_and_subject():
+def test_backed_by_exact_final_segment_and_subject() -> None:
     calls = [("mcp__project-rag__project_cpp_symbol", json.dumps({"name": "AActor"}))]
     ok = dc.Citation("rag", "project_cpp_symbol", "AActor")
     wrong_subject = dc.Citation("rag", "project_cpp_symbol", "UObject")
@@ -42,13 +43,13 @@ def test_backed_by_exact_final_segment_and_subject():
     assert dc.unbacked([ok, wrong_subject, suffix_only], calls) == [wrong_subject, suffix_only]
 
 
-def test_live_backed_and_nonascii_subject():
+def test_live_backed_and_nonascii_subject() -> None:
     calls = [("mcp__example_game_repo-control__inspect", json.dumps({"level": "L_Mäin"}, ensure_ascii=False))]
     assert dc.unbacked([dc.Citation("live", "inspect", "L_Mäin")], calls) == []
     assert dc.unbacked([dc.Citation("live", "inspect", "L_Other")], calls) != []
 
 
-def test_same_tool_call_without_the_subject_does_not_back():
+def test_same_tool_call_without_the_subject_does_not_back() -> None:
     calls = [("mcp__x__inspect", json.dumps({"target": "L_Main"}))]
     assert dc.unbacked([dc.Citation("live", "inspect", "L_Other")], calls) != []
     assert dc.unbacked([dc.Citation("live", "inspect", "L_Main")], calls) == []

@@ -6,15 +6,16 @@ import pytest
 
 from coordinator_core.canvas_harvest import lift as lift_mod
 from coordinator_core.canvas_harvest import model
+from pathlib import Path
 
 URL = "https://claude.ai/artifact/QiKJeVwbA9aE4sWUPVgY6x"
 AID = model.artifact_id_from_url(URL)
 
 
-def _transcript(tmp_path, *, version_read=True, comments_read=True):
+def _transcript(tmp_path, *, version_read: bool = True, comments_read: bool = True):
     rows = []
 
-    def call(tid, name, inp, result, text, ts):
+    def call(tid, name, inp, result, text, ts) -> None:
         rows.append({"timestamp": ts, "message": {"content": [{"type": "tool_use", "id": tid, "name": name, "input": inp}]}})
         rows.append({
             "timestamp": ts,
@@ -42,22 +43,22 @@ def _transcript(tmp_path, *, version_read=True, comments_read=True):
     return path
 
 
-def test_artifact_read_version_and_empty_comments_lift(tmp_path):
+def test_artifact_read_version_and_empty_comments_lift(tmp_path: Path) -> None:
     lifted = lift_mod.lift([_transcript(tmp_path)], AID, require_frames=False)
     assert lifted.version is not None and lifted.version.version == "1792714957-e4db"
     assert lifted.comments is not None and list(lifted.comments.threads) == []
 
 
-def test_missing_comments_read_leaves_comments_none(tmp_path):
+def test_missing_comments_read_leaves_comments_none(tmp_path: Path) -> None:
     lifted = lift_mod.lift([_transcript(tmp_path, comments_read=False)], AID, require_frames=False)
     assert lifted.version is not None and lifted.comments is None
 
 
-def test_missing_version_read_leaves_version_none(tmp_path):
+def test_missing_version_read_leaves_version_none(tmp_path: Path) -> None:
     lifted = lift_mod.lift([_transcript(tmp_path, version_read=False)], AID, require_frames=False)
     assert lifted.version is None and lifted.comments is not None
 
 
-def test_no_reads_still_refuses(tmp_path):
+def test_no_reads_still_refuses(tmp_path: Path) -> None:
     with pytest.raises(model.HarvestError):
         lift_mod.lift([_transcript(tmp_path, version_read=False, comments_read=False)], AID, require_frames=False)

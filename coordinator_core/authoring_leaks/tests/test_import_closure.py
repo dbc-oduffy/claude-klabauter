@@ -13,7 +13,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     _git(tmp_path, "init", "-q")
     _write(tmp_path, "pkg/__init__.py", "")
     _write(tmp_path, "pkg/b.py", "def old_fn():\n    pass\n")
@@ -27,7 +27,7 @@ def _gate(root, paths):
     return leak_gate(root, paths, detectors=[import_closure])
 
 
-def test_falsifier_import_of_uncommitted_name_refuses(repo):
+def test_falsifier_import_of_uncommitted_name_refuses(repo) -> None:
     _write(repo, "pkg/b.py", "def old_fn():\n    pass\n\ndef new_fn():\n    pass\n")
     _write(repo, "pkg/a.py", "from pkg.b import new_fn\n")
     out = _gate(repo, ["pkg/a.py"])
@@ -36,18 +36,18 @@ def test_falsifier_import_of_uncommitted_name_refuses(repo):
     assert "pkg/a.py:1" in out.diagnostics[0]
 
 
-def test_definer_in_commit_passes(repo):
+def test_definer_in_commit_passes(repo) -> None:
     _write(repo, "pkg/b.py", "def old_fn():\n    pass\n\ndef new_fn():\n    pass\n")
     _write(repo, "pkg/a.py", "from pkg.b import new_fn\n")
     assert _gate(repo, ["pkg/a.py", "pkg/b.py"]).passed
 
 
-def test_existing_name_at_head_passes(repo):
+def test_existing_name_at_head_passes(repo) -> None:
     _write(repo, "pkg/a.py", "from pkg.b import old_fn\n")
     assert _gate(repo, ["pkg/a.py"]).passed
 
 
-def test_new_untracked_module_refuses(repo):
+def test_new_untracked_module_refuses(repo) -> None:
     _write(repo, "pkg/c.py", "y = 1\n")
     _write(repo, "pkg/a.py", "import pkg.c\n")
     out = _gate(repo, ["pkg/a.py"])
@@ -55,13 +55,13 @@ def test_new_untracked_module_refuses(repo):
     assert "pkg/c.py is uncommitted in the worktree" in out.diagnostics[0]
 
 
-def test_new_untracked_module_in_commit_passes(repo):
+def test_new_untracked_module_in_commit_passes(repo) -> None:
     _write(repo, "pkg/c.py", "y = 1\n")
     _write(repo, "pkg/a.py", "import pkg.c\n")
     assert _gate(repo, ["pkg/a.py", "pkg/c.py"]).passed
 
 
-def test_submodule_from_import(repo):
+def test_submodule_from_import(repo) -> None:
     _write(repo, "pkg/c.py", "y = 1\n")
     _write(repo, "pkg/a.py", "from pkg import c\n")
     assert not _gate(repo, ["pkg/a.py"]).passed
@@ -70,7 +70,7 @@ def test_submodule_from_import(repo):
     assert _gate(repo, ["pkg/a.py"]).passed
 
 
-def test_deleted_target_refuses(repo):
+def test_deleted_target_refuses(repo) -> None:
     (repo / "pkg/b.py").unlink()
     _write(repo, "pkg/a.py", "import pkg.b\n")
     out = _gate(repo, ["pkg/a.py", "pkg/b.py"])
@@ -78,14 +78,14 @@ def test_deleted_target_refuses(repo):
     assert "deleted by this commit" in out.diagnostics[0]
 
 
-def test_relative_import(repo):
+def test_relative_import(repo) -> None:
     _write(repo, "pkg/b.py", "def old_fn():\n    pass\n\ndef new_fn():\n    pass\n")
     _write(repo, "pkg/a.py", "from .b import new_fn\n")
     out = _gate(repo, ["pkg/a.py"])
     assert not out.passed and "imports new_fn from pkg.b" in out.diagnostics[0]
 
 
-def test_binding_forms_satisfy(repo):
+def test_binding_forms_satisfy(repo) -> None:
     _write(
         repo, "pkg/b.py",
         "import os\nfrom typing import Any as T\nA = 1\nB: int = 2\nclass K: ...\n"
@@ -97,7 +97,7 @@ def test_binding_forms_satisfy(repo):
     assert _gate(repo, ["pkg/a.py"]).passed
 
 
-def test_star_import_and_getattr_satisfy(repo):
+def test_star_import_and_getattr_satisfy(repo) -> None:
     _write(repo, "pkg/b.py", "from os.path import *\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "star")
@@ -109,7 +109,7 @@ def test_star_import_and_getattr_satisfy(repo):
     assert _gate(repo, ["pkg/a.py"]).passed
 
 
-def test_name_missing_everywhere_is_absent_from_head(repo):
+def test_name_missing_everywhere_is_absent_from_head(repo) -> None:
     # b.py is edited in the worktree only, so the target is parsed and the name is nowhere.
     _write(repo, "pkg/b.py", "def old_fn():\n    pass\n\n# edited\n")
     _write(repo, "pkg/a.py", "from pkg.b import nowhere\n")
@@ -118,23 +118,23 @@ def test_name_missing_everywhere_is_absent_from_head(repo):
     assert "pkg/b.py is absent from HEAD" in out.diagnostics[0]
 
 
-def test_third_party_and_stdlib_ignored(repo):
+def test_third_party_and_stdlib_ignored(repo) -> None:
     _write(repo, "pkg/a.py", "import os\nimport yaml\nfrom collections import nope\n")
     assert _gate(repo, ["pkg/a.py"]).passed
 
 
-def test_type_checking_branch_skipped(repo):
+def test_type_checking_branch_skipped(repo) -> None:
     _write(repo, "pkg/b.py", "def old_fn():\n    pass\n\ndef new_fn():\n    pass\n")
     _write(repo, "pkg/a.py", "from typing import TYPE_CHECKING\nif TYPE_CHECKING:\n    from pkg.b import new_fn\n")
     assert _gate(repo, ["pkg/a.py"]).passed
 
 
-def test_syntax_error_skipped(repo):
+def test_syntax_error_skipped(repo) -> None:
     _write(repo, "pkg/a.py", "from pkg.b import (\n")
     assert _gate(repo, ["pkg/a.py"]).passed
 
 
-def test_no_added_import_line_or_dirty_alias_read_skips_parse(repo, monkeypatch):
+def test_no_added_import_line_or_dirty_alias_read_skips_parse(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(repo, "pkg/a.py", "x = 2\n")
 
     def _boom(*a, **k):
@@ -144,7 +144,7 @@ def test_no_added_import_line_or_dirty_alias_read_skips_parse(repo, monkeypatch)
     assert _gate(repo, ["pkg/a.py"]).passed
 
 
-def _falsifier_repo(repo, caller_body="    return li.old_fn() + li.new_fn()\n", head_body="    return li.old_fn()\n", imp="from pkg import li"):
+def _falsifier_repo(repo, caller_body: str = "    return li.old_fn() + li.new_fn()\n", head_body: str = "    return li.old_fn()\n", imp: str = "from pkg import li") -> None:
     _write(repo, "pkg/caller.py", f"def run():\n    {imp}\n{head_body}")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "caller")
@@ -152,7 +152,7 @@ def _falsifier_repo(repo, caller_body="    return li.old_fn() + li.new_fn()\n", 
     _write(repo, "pkg/caller.py", f"def run():\n    {imp}\n{caller_body}")
 
 
-def test_attribute_read_of_uncommitted_name_refuses(repo):
+def test_attribute_read_of_uncommitted_name_refuses(repo) -> None:
     _write(repo, "pkg/li.py", "def old_fn():\n    pass\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "li")
@@ -164,7 +164,7 @@ def test_attribute_read_of_uncommitted_name_refuses(repo):
     assert "pkg/caller.py:3" in out.diagnostics[0]
 
 
-def test_attribute_read_with_definer_in_gate_passes(repo):
+def test_attribute_read_with_definer_in_gate_passes(repo) -> None:
     _falsifier_repo(repo)
     assert _gate(repo, ["pkg/caller.py", "pkg/li.py"]).passed
 
@@ -177,7 +177,7 @@ def test_attribute_read_with_definer_in_gate_passes(repo):
         ("from . import li", "    return li.new_fn()\n"),
     ],
 )
-def test_attribute_read_import_forms_refuse(repo, imp, body):
+def test_attribute_read_import_forms_refuse(repo, imp, body) -> None:
     _write(repo, "pkg/li.py", "def old_fn():\n    pass\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "li")
@@ -187,7 +187,7 @@ def test_attribute_read_import_forms_refuse(repo, imp, body):
     assert "references new_fn from pkg.li" in out.diagnostics[0]
 
 
-def test_attribute_read_of_unchanged_target_does_not_parse(repo, monkeypatch):
+def test_attribute_read_of_unchanged_target_does_not_parse(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(repo, "pkg/li.py", "def old_fn():\n    pass\n")
     _write(repo, "pkg/caller.py", "def run():\n    from pkg import li\n    return li.old_fn()\n")
     _git(repo, "add", "-A")
@@ -201,7 +201,7 @@ def test_attribute_read_of_unchanged_target_does_not_parse(repo, monkeypatch):
     assert _gate(repo, ["pkg/caller.py"]).passed
 
 
-def test_attribute_name_absent_everywhere_is_not_reported(repo):
+def test_attribute_name_absent_everywhere_is_not_reported(repo) -> None:
     _write(repo, "pkg/li.py", "def old_fn():\n    pass\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "li")
@@ -210,7 +210,7 @@ def test_attribute_name_absent_everywhere_is_not_reported(repo):
     assert _gate(repo, ["pkg/caller.py"]).passed
 
 
-def test_shadowed_alias_is_not_reported(repo):
+def test_shadowed_alias_is_not_reported(repo) -> None:
     _write(repo, "pkg/li.py", "def old_fn():\n    pass\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "li")
@@ -219,18 +219,18 @@ def test_shadowed_alias_is_not_reported(repo):
     assert _gate(repo, ["pkg/caller.py"]).passed
 
 
-def test_package_attribute_that_is_a_committed_submodule_passes(repo):
+def test_package_attribute_that_is_a_committed_submodule_passes(repo) -> None:
     _write(repo, "pkg/__init__.py", "# edited\n")
     _write(repo, "pkg/caller.py", "import pkg\n\ndef run():\n    return pkg.b.old_fn()\n")
     assert _gate(repo, ["pkg/caller.py"]).passed
 
 
-def test_non_py_and_missing_worktree_paths_ignored(repo):
+def test_non_py_and_missing_worktree_paths_ignored(repo) -> None:
     _write(repo, "notes.md", "from pkg.b import new_fn\n")
     assert _gate(repo, ["notes.md", "pkg/gone.py"]).passed
 
 
-def test_parenthesised_import_continuation_triggers(repo):
+def test_parenthesised_import_continuation_triggers(repo) -> None:
     _write(repo, "pkg/a.py", "from pkg.b import (\n    old_fn,\n)\n")
     _git(repo, "add", "-A")
     _git(repo, "commit", "-q", "-m", "paren")
@@ -244,7 +244,7 @@ _LAZY = "def f():\n    from coordinator_core.guard_messages.alternative_record i
 
 
 @pytest.fixture
-def cc_repo(tmp_path):
+def cc_repo(tmp_path: Path) -> Path:
     _git(tmp_path, "init", "-q")
     _write(tmp_path, "coordinator_core/__init__.py", "")
     _write(tmp_path, "coordinator_core/guard.py", "def f():\n    return 1\n")
@@ -260,22 +260,22 @@ def _detect(root, paths, **kw):
     return import_closure.detect(root, paths, HeadView(root, import_closure.candidates(paths)), **kw)
 
 
-def test_function_local_import_of_untracked_package_is_found(cc_repo):
+def test_function_local_import_of_untracked_package_is_found(cc_repo) -> None:
     out = _detect(cc_repo, ["coordinator_core/guard.py"])
     assert len(out) == 1 and "guard_messages" in out[0].detail
 
 
-def test_landed_text_without_the_import_yields_none(cc_repo):
+def test_landed_text_without_the_import_yields_none(cc_repo) -> None:
     assert _detect(cc_repo, ["coordinator_core/guard.py"], landed_text=lambda rel: "def f():\n    return 1\n") == []
 
 
-def test_landed_text_with_the_import_is_judged_over_the_worktree(cc_repo):
+def test_landed_text_with_the_import_is_judged_over_the_worktree(cc_repo) -> None:
     _write(cc_repo, "coordinator_core/guard.py", "def f():\n    return 1\n")
     assert _detect(cc_repo, ["coordinator_core/guard.py"]) == []
     assert len(_detect(cc_repo, ["coordinator_core/guard.py"], landed_text=lambda rel: _LAZY)) == 1
 
 
-def test_publish_gate_reports_the_same_module_over_the_committed_tree(cc_repo, tmp_path_factory):
+def test_publish_gate_reports_the_same_module_over_the_committed_tree(cc_repo, tmp_path_factory: pytest.TempPathFactory) -> None:
     import importlib.util
 
     gate_path = Path(__file__).resolve().parents[3] / "coordinator" / "lib" / "percolate" / "import_closure.py"
@@ -290,10 +290,10 @@ def test_publish_gate_reports_the_same_module_over_the_committed_tree(cc_repo, t
     assert any("guard_messages" in f.detail for f in _detect(cc_repo, ["coordinator_core/guard.py"]))
 
 
-def test_owned_finding_is_suffixed_with_run_id_in_one_batched_call(repo, monkeypatch):
+def test_owned_finding_is_suffixed_with_run_id_in_one_batched_call(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
-    def fake(root, paths, **kw):
+    def fake(root, paths, **kw) -> dict[str, str]:
         calls.append(list(paths))
         return {"pkg/c.py": "run-xyz"}
 
@@ -309,7 +309,7 @@ def test_owned_finding_is_suffixed_with_run_id_in_one_batched_call(repo, monkeyp
     assert "pkg/d.py is uncommitted in the worktree; owned" not in joined
 
 
-def test_unowned_finding_is_unchanged(repo, monkeypatch):
+def test_unowned_finding_is_unchanged(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(import_closure.run_owner, "owning_runs", lambda *a, **k: {})
     _write(repo, "pkg/c.py", "y = 1\n")
     _write(repo, "pkg/a.py", "import pkg.c\n")
@@ -318,7 +318,7 @@ def test_unowned_finding_is_unchanged(repo, monkeypatch):
     assert "owned by" not in out.diagnostics[0]
 
 
-def test_no_finding_never_calls_owning_runs(repo, monkeypatch):
+def test_no_finding_never_calls_owning_runs(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("owning_runs called")
 
@@ -328,7 +328,7 @@ def test_no_finding_never_calls_owning_runs(repo, monkeypatch):
 
 
 @pytest.fixture
-def bare(tmp_path):
+def bare(tmp_path: Path) -> Path:
     _git(tmp_path, "init", "-q")
     _write(tmp_path, "README.md", "x\n")
     _git(tmp_path, "add", "-A")
@@ -336,7 +336,7 @@ def bare(tmp_path):
     return tmp_path
 
 
-def test_flat_scripts_sibling_untracked_is_found(bare):
+def test_flat_scripts_sibling_untracked_is_found(bare) -> None:
     _write(bare, "scripts/helper.py", "y = 1\n")
     _write(bare, "scripts/a.py", "import helper\n")
     out = _gate(bare, ["scripts/a.py"])
@@ -345,13 +345,13 @@ def test_flat_scripts_sibling_untracked_is_found(bare):
     assert "scripts/helper.py is uncommitted in the worktree" in out.diagnostics[0]
 
 
-def test_flat_scripts_sibling_in_commit_passes(bare):
+def test_flat_scripts_sibling_in_commit_passes(bare) -> None:
     _write(bare, "scripts/helper.py", "y = 1\n")
     _write(bare, "scripts/a.py", "from helper import y\n")
     assert _gate(bare, ["scripts/a.py", "scripts/helper.py"]).passed
 
 
-def test_src_layout_untracked_module_is_found(bare):
+def test_src_layout_untracked_module_is_found(bare) -> None:
     _write(bare, "src/mypkg/__init__.py", "")
     _git(bare, "add", "-A")
     _git(bare, "commit", "-q", "-m", "pkg")
@@ -362,7 +362,7 @@ def test_src_layout_untracked_module_is_found(bare):
     assert "src/mypkg/new.py is uncommitted in the worktree" in out.diagnostics[0]
 
 
-def test_a33de71574_shape_namespace_package_untracked_module(bare):
+def test_a33de71574_shape_namespace_package_untracked_module(bare) -> None:
     _write(bare, "example_retrieval_repo_core/x.py", "z = 1\n")
     _git(bare, "add", "-A")
     _git(bare, "commit", "-q", "-m", "x")
@@ -374,13 +374,13 @@ def test_a33de71574_shape_namespace_package_untracked_module(bare):
     assert "example_retrieval_repo_core/x.py:2" in out.diagnostics[0]
 
 
-def test_stdlib_and_third_party_yield_no_finding_in_flat_layout(bare):
+def test_stdlib_and_third_party_yield_no_finding_in_flat_layout(bare) -> None:
     _write(bare, "scripts/helper.py", "y = 1\n")
     _write(bare, "scripts/a.py", "import json\nimport yaml\nfrom os import path\n")
     assert _gate(bare, ["scripts/a.py"]).passed
 
 
-def test_public_discovery_helpers(tmp_path):
+def test_public_discovery_helpers(tmp_path: Path) -> None:
     assert import_closure.module_files("a.b", ("", "src/")) == ["a/b.py", "a/b/__init__.py", "src/a/b.py", "src/a/b/__init__.py"]
     assert import_closure.prefixes("pkg/x.py") == ("", "pkg/", "src/")
     assert import_closure.read_text(tmp_path / "absent.py") is None

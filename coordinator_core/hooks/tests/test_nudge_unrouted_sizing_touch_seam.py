@@ -10,11 +10,12 @@ from coordinator_core.hooks import nudge_unrouted_sizing as m
 from coordinator_core.session import touch_record
 from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
-def _git_init(repo):
+def _git_init(repo) -> None:
     subprocess.run(["git", "init", "-q"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     subprocess.run(["git", "config", "user.email", "t@example.com"], cwd=repo, check=True, **no_console_passthrough_kwargs())
     subprocess.run(["git", "config", "user.name", "t"], cwd=repo, check=True, **no_console_passthrough_kwargs())
@@ -23,18 +24,18 @@ def _git_init(repo):
     subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True, **no_console_passthrough_kwargs())
 
 
-def _session_dir(repo, session_id):
+def _session_dir(repo, session_id) -> Path:
     d = session_dir_for(repo / ".git", session_id)
     os.makedirs(d, exist_ok=True)
     return d
 
 
-def _write_legacy_touched(repo, session_id, *rel_paths):
+def _write_legacy_touched(repo, session_id, *rel_paths) -> None:
     d = _session_dir(repo, session_id)
     (d / "touched.txt").write_text("\n".join(rel_paths) + "\n", encoding="utf-8")
 
 
-def _append_jsonl_touch(repo, session_id, rel_path):
+def _append_jsonl_touch(repo, session_id, rel_path) -> None:
     d = _session_dir(repo, session_id)
     touch_record.append_event(
         d / m._TOUCH_RECORD_FILENAME,
@@ -46,26 +47,26 @@ def _append_jsonl_touch(repo, session_id, rel_path):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     _git_init(tmp_path)
     return tmp_path
 
 
-def test_legacy_only_touched_txt_no_longer_reads(repo):
+def test_legacy_only_touched_txt_no_longer_reads(repo) -> None:
     session_id = "sess-legacy"
     _write_legacy_touched(repo, session_id, "state/sizings/a.yaml")
 
     assert m._session_touched_lines(session_id, str(repo)) == []
 
 
-def test_jsonl_only_family_reads_via_seam(repo):
+def test_jsonl_only_family_reads_via_seam(repo) -> None:
     session_id = "sess-jsonl"
     _append_jsonl_touch(repo, session_id, "state/sizings/b.yaml")
 
     assert m._session_touched_lines(session_id, str(repo)) == ["state/sizings/b.yaml"]
 
 
-def test_legacy_touched_txt_ignored_when_jsonl_family_present(repo):
+def test_legacy_touched_txt_ignored_when_jsonl_family_present(repo) -> None:
     session_id = "sess-union"
     _write_legacy_touched(repo, session_id, "state/sizings/legacy.yaml")
     _append_jsonl_touch(repo, session_id, "state/sizings/jsonl.yaml")
@@ -75,13 +76,13 @@ def test_legacy_touched_txt_ignored_when_jsonl_family_present(repo):
     ]
 
 
-def test_no_record_at_all_returns_empty(repo):
+def test_no_record_at_all_returns_empty(repo) -> None:
     session_id = "sess-absent"
 
     assert m._session_touched_lines(session_id, str(repo)) == []
 
 
-def test_degraded_read_returns_empty(repo, monkeypatch):
+def test_degraded_read_returns_empty(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     session_id = "sess-degraded"
     _write_legacy_touched(repo, session_id, "state/sizings/a.yaml")
 
@@ -92,14 +93,14 @@ def test_degraded_read_returns_empty(repo, monkeypatch):
     assert m._session_touched_lines(session_id, str(repo)) == []
 
 
-def test_unresolvable_repo_root_never_raises(tmp_path):
+def test_unresolvable_repo_root_never_raises(tmp_path: Path) -> None:
     no_git_dir = tmp_path / "no-git-here"
     no_git_dir.mkdir()
 
     assert m._session_touched_lines("sess-x", str(no_git_dir)) == []
 
 
-def test_downstream_sizing_filter_still_works_through_the_seam(repo):
+def test_downstream_sizing_filter_still_works_through_the_seam(repo) -> None:
     session_id = "sess-filter"
     _append_jsonl_touch(repo, session_id, "state/sizings/c.yaml")
     _append_jsonl_touch(repo, session_id, "docs/plans/unrelated.md")

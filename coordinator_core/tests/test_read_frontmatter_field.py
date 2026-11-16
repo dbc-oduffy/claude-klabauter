@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from coordinator_core.ops.read_frontmatter_field import main, read_frontmatter_field
+from pathlib import Path
+import pytest
 
 
 def _write(tmp_path, name: str, content: str) -> str:
@@ -10,12 +12,12 @@ def _write(tmp_path, name: str, content: str) -> str:
     return str(path)
 
 
-def test_t1_double_quoted_no_comment(tmp_path):
+def test_t1_double_quoted_no_comment(tmp_path: Path) -> None:
     p = _write(tmp_path, "t1.md", '---\ndeliverable_id: "dlv-abc-1"\ntitle: "test"\n---\n\n# Body\n')
     assert read_frontmatter_field(p, "deliverable_id") == "dlv-abc-1"
 
 
-def test_t2_double_quoted_with_trailing_comment(tmp_path):
+def test_t2_double_quoted_with_trailing_comment(tmp_path: Path) -> None:
     p = _write(
         tmp_path,
         "t2.md",
@@ -24,7 +26,7 @@ def test_t2_double_quoted_with_trailing_comment(tmp_path):
     assert read_frontmatter_field(p, "initiative") == "init-7"
 
 
-def test_t3_null_with_trailing_comment(tmp_path):
+def test_t3_null_with_trailing_comment(tmp_path: Path) -> None:
     p = _write(
         tmp_path,
         "t3.md",
@@ -33,51 +35,51 @@ def test_t3_null_with_trailing_comment(tmp_path):
     assert read_frontmatter_field(p, "initiative") == ""
 
 
-def test_t4_bare_null(tmp_path):
+def test_t4_bare_null(tmp_path: Path) -> None:
     p = _write(tmp_path, "t4.md", '---\ntitle: "test"\ninitiative: null\n---\n\n# Body\n')
     assert read_frontmatter_field(p, "initiative") == ""
 
 
-def test_t5_bare_unquoted_value(tmp_path):
+def test_t5_bare_unquoted_value(tmp_path: Path) -> None:
     p = _write(tmp_path, "t5.md", "---\ndeliverable_id: dlv-bare-2\n---\n\n# Body\n")
     assert read_frontmatter_field(p, "deliverable_id") == "dlv-bare-2"
 
 
-def test_t6_single_quoted_value(tmp_path):
+def test_t6_single_quoted_value(tmp_path: Path) -> None:
     p = _write(tmp_path, "t6.md", "---\nworkstream: 'foo-bar'\n---\n\n# Body\n")
     assert read_frontmatter_field(p, "workstream") == "foo-bar"
 
 
-def test_t7_absent_field(tmp_path):
+def test_t7_absent_field(tmp_path: Path) -> None:
     p = _write(tmp_path, "t7.md", '---\ntitle: "some plan"\nworkstream: "my-ws"\n---\n\n# Body\n')
     assert read_frontmatter_field(p, "deliverable_id") == ""
 
 
-def test_t8_nonexistent_file(tmp_path):
+def test_t8_nonexistent_file(tmp_path: Path) -> None:
     missing = str(tmp_path / "does-not-exist-at-all.md")
     assert read_frontmatter_field(missing, "deliverable_id") == ""
 
 
-def test_t9_double_quoted_null_literal(tmp_path):
+def test_t9_double_quoted_null_literal(tmp_path: Path) -> None:
     p = _write(tmp_path, "t9.md", '---\ninitiative: "null"\n---\n\n# Body\n')
     assert read_frontmatter_field(p, "initiative") == ""
 
 
-def test_t10_explicitly_empty_double_quoted(tmp_path):
+def test_t10_explicitly_empty_double_quoted(tmp_path: Path) -> None:
     p = _write(tmp_path, "t10.md", '---\ndeliverable_id: ""\n---\n\n# Body\n')
     assert read_frontmatter_field(p, "deliverable_id") == ""
 
 
-def test_hash_with_no_preceding_space_still_strips(tmp_path):
+def test_hash_with_no_preceding_space_still_strips(tmp_path: Path) -> None:
     p = _write(tmp_path, "t11.md", "---\nworkstream: foo#bar\n---\n\n# Body\n")
     assert read_frontmatter_field(p, "workstream") == "foo"
 
 
-def test_missing_file_path_argument():
+def test_missing_file_path_argument() -> None:
     assert read_frontmatter_field("", "deliverable_id") == ""
 
 
-def test_main_cli_entry_returns_zero_and_writes_stdout(tmp_path, capsys):
+def test_main_cli_entry_returns_zero_and_writes_stdout(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "t12.md", "---\ndeliverable_id: dlv-cli-1\n---\n")
     rc = main([p, "deliverable_id"])
     captured = capsys.readouterr()
@@ -85,7 +87,7 @@ def test_main_cli_entry_returns_zero_and_writes_stdout(tmp_path, capsys):
     assert captured.out == "dlv-cli-1"
 
 
-def test_main_cli_entry_missing_args_returns_zero(capsys):
+def test_main_cli_entry_missing_args_returns_zero(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main([])
     captured = capsys.readouterr()
     assert rc == 0

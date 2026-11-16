@@ -5,11 +5,12 @@ from __future__ import annotations
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.ask_compose import ARM_M_PLUS, compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+import pytest
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
 
-def _compose():
+def _compose() -> str:
     return compose_ask_script(
         repo_root="REPO",
         prompt="add a thing",
@@ -22,7 +23,7 @@ def _compose():
     )
 
 
-def test_s_arm_stages_resume_plan_and_authors_only_without_one():
+def test_s_arm_stages_resume_plan_and_authors_only_without_one() -> None:
     script = _compose()
     start = script.index("_gate.arm === 's') {\n    if (_resumeLedger)")
     s_arm = script[start:script.index("_gate.arm === 'm_plus'", start)]
@@ -33,14 +34,14 @@ def test_s_arm_stages_resume_plan_and_authors_only_without_one():
     assert "label: 'plan-prep-repair'" in s_arm
 
 
-def test_m_plus_baton_revises_the_resumed_plan(m_plus_known_arm, monkeypatch):
+def test_m_plus_baton_revises_the_resumed_plan(m_plus_known_arm, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "_intake_sizing", lambda *_: None)
     script = _compose()
     assert "planPath: _gate.resume_plan ?? _spineFallback ?? null" in script
     assert "planPath: null" not in script
 
 
-def test_resume_rows_ride_the_gate_into_the_folded_stage_calls():
+def test_resume_rows_ride_the_gate_into_the_folded_stage_calls() -> None:
     script = _compose()
     assert "resume_rows: _reworded.resume_rows ?? null" in script
     assert "resume_rows: _scouted.resume_rows ?? null" in script
@@ -50,6 +51,6 @@ def test_resume_rows_ride_the_gate_into_the_folded_stage_calls():
     assert "only_rows" not in rest
 
 
-def test_gate_reply_schema_carries_resume_plan():
+def test_gate_reply_schema_carries_resume_plan() -> None:
     script = _compose()
     assert "resume_plan: { type: ['string', 'null'] }" in script or '"resume_plan"' in script

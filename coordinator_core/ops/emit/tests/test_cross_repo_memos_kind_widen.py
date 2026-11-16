@@ -15,6 +15,7 @@ from coordinator_core.contract.cockpit_schema.entities.cross_repo_memo_summary i
     CrossRepoMemoSummary,
 )
 from coordinator_core.ops.emit.sections.cross_repo_memos import _collect_bucket
+from pathlib import Path
 
 _QUERY_TARGET = "coordinator_core.ops.emit.sections.cross_repo_memos._query_records"
 _NAMED = ("ask", "consult", "fyi", "friction", "bug", "proposal", "notice", "reply")
@@ -58,37 +59,37 @@ def _emit(tmp_path, kinds):
 
 
 @pytest.mark.parametrize("kind", _NAMED + _OPEN)
-def test_every_kind_emits_and_validates(tmp_path, kind):
+def test_every_kind_emits_and_validates(tmp_path: Path, kind) -> None:
     records, malformed = _emit(tmp_path, [kind])
     assert malformed == []
     assert [r["kind"] for r in records] == [kind]
     jsonschema.validate(records[0], build_entity_schema(CrossRepoMemoSummary))
 
 
-def test_absent_kind_defaults_to_ask(tmp_path):
+def test_absent_kind_defaults_to_ask(tmp_path: Path) -> None:
     records, malformed = _emit(tmp_path, [None])
     assert malformed == [] and records[0]["kind"] == "ask"
 
 
 @pytest.mark.parametrize("kind", ["", 7, ["bug"]])
-def test_non_string_or_empty_kind_is_still_quarantined(tmp_path, kind):
+def test_non_string_or_empty_kind_is_still_quarantined(tmp_path: Path, kind) -> None:
     records, malformed = _emit(tmp_path, [kind])
     assert records == [] and len(malformed) == 1
 
 
-def test_schema_names_the_enum_and_falls_back_to_string():
+def test_schema_names_the_enum_and_falls_back_to_string() -> None:
     branches = build_entity_schema(CrossRepoMemoSummary)["properties"]["kind"]["anyOf"]
     assert set(branches[0]["enum"]) == set(_NAMED)
     assert branches[1]["type"] == "string"
 
 
 @pytest.mark.parametrize("kind", ["", 7, ["bug"]])
-def test_generated_schema_rejects_empty_or_non_string_kind(tmp_path, kind):
+def test_generated_schema_rejects_empty_or_non_string_kind(tmp_path: Path, kind) -> None:
     records, _ = _emit(tmp_path, ["ask"])
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({**records[0], "kind": kind}, build_entity_schema(CrossRepoMemoSummary))
 
 
-def test_contract_version_is_bumped_above_4_11_0():
+def test_contract_version_is_bumped_above_4_11_0() -> None:
     parts = tuple(int(p) for p in CONTRACT_VERSION.split("."))
     assert parts > (4, 11, 0)

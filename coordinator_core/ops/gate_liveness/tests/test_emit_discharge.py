@@ -11,91 +11,92 @@ from coordinator_core.ops.gate_liveness.emit_discharge import (
     validate_discharges_block,
     validate_landed_at,
 )
+from pathlib import Path
 
 _VALID_CLOSURE_KEY = {"kind": "memo-thread", "id": "2026-08-21-some-memo.md"}
 
 
 class TestValidateClosureKey:
-    def test_valid_memo_thread(self):
+    def test_valid_memo_thread(self) -> None:
         assert validate_closure_key({"kind": "memo-thread", "id": "x"}) is None
 
-    def test_valid_deliverable(self):
+    def test_valid_deliverable(self) -> None:
         assert validate_closure_key({"kind": "deliverable", "id": "dlv-abc"}) is None
 
-    def test_rejects_non_mapping(self):
+    def test_rejects_non_mapping(self) -> None:
         error = validate_closure_key("not-a-dict")
         assert error is not None
         assert "mapping" in error
 
-    def test_rejects_unknown_subkey(self):
+    def test_rejects_unknown_subkey(self) -> None:
         error = validate_closure_key({"kind": "deliverable", "id": "x", "extra": "y"})
         assert error is not None
         assert "unrecognized" in error
 
-    def test_rejects_bad_kind(self):
+    def test_rejects_bad_kind(self) -> None:
         error = validate_closure_key({"kind": "commit", "id": "x"})
         assert error is not None
         assert "kind" in error
 
-    def test_rejects_missing_id(self):
+    def test_rejects_missing_id(self) -> None:
         error = validate_closure_key({"kind": "deliverable", "id": ""})
         assert error is not None
         assert "id" in error
 
-    def test_closed_enum_is_exactly_two_members(self):
+    def test_closed_enum_is_exactly_two_members(self) -> None:
         assert CLOSURE_KEY_KINDS == ("deliverable", "memo-thread")
 
 
 class TestValidateDischargeEvidence:
-    def test_accepts_sentinel_inline(self):
+    def test_accepts_sentinel_inline(self) -> None:
         assert validate_discharge_evidence("inline") is None
 
-    def test_accepts_path(self):
+    def test_accepts_path(self) -> None:
         assert validate_discharge_evidence("docs/plans/2026-08-21-foo.md") is None
 
-    def test_accepts_hex_sha(self):
+    def test_accepts_hex_sha(self) -> None:
         assert validate_discharge_evidence("72f56b1f") is None
         assert validate_discharge_evidence("a" * 40) is None
 
-    def test_rejects_bare_word(self):
+    def test_rejects_bare_word(self) -> None:
         error = validate_discharge_evidence("done")
         assert error is not None
 
-    def test_rejects_empty(self):
+    def test_rejects_empty(self) -> None:
         error = validate_discharge_evidence("")
         assert error is not None
 
-    def test_rejects_non_string(self):
+    def test_rejects_non_string(self) -> None:
         error = validate_discharge_evidence(12345)
         assert error is not None
         assert "string" in error
 
 
 class TestValidateLandedAt:
-    def test_accepts_date(self):
+    def test_accepts_date(self) -> None:
         assert validate_landed_at("2026-08-21") is None
 
-    def test_rejects_non_date_string(self):
+    def test_rejects_non_date_string(self) -> None:
         assert validate_landed_at("2026/08/21") is not None
 
-    def test_rejects_non_string(self):
+    def test_rejects_non_string(self) -> None:
         assert validate_landed_at(20260821) is not None
 
-    def test_rejects_empty(self):
+    def test_rejects_empty(self) -> None:
         assert validate_landed_at("") is not None
 
 
 class TestValidateDischargesBlock:
-    def test_all_valid_returns_empty(self):
+    def test_all_valid_returns_empty(self) -> None:
         assert validate_discharges_block(_VALID_CLOSURE_KEY, "inline", "2026-08-21") == []
 
-    def test_all_invalid_reports_every_field(self):
+    def test_all_invalid_reports_every_field(self) -> None:
         errors = validate_discharges_block("bad", "bad", "bad")
         assert len(errors) == 3
 
 
 class TestRenderDischargesBlock:
-    def test_renders_nested_mapping(self):
+    def test_renders_nested_mapping(self) -> None:
         fragment = render_discharges_block(_VALID_CLOSURE_KEY, "inline", "2026-08-21")
         assert fragment.startswith("discharges:")
         assert "closure_key:" in fragment
@@ -115,7 +116,7 @@ class TestEmitDischarge:
         today="2026-08-21",
     )
 
-    def test_composes_schema_valid_memo_with_discharges_block(self):
+    def test_composes_schema_valid_memo_with_discharges_block(self) -> None:
         composed = emit_discharge(
             closure_key=_VALID_CLOSURE_KEY,
             evidence="inline",
@@ -132,7 +133,7 @@ class TestEmitDischarge:
         assert "discharges:" in front
         assert "discharges:" not in rest
 
-    def test_no_kind_discharge_enum_member_emitted(self):
+    def test_no_kind_discharge_enum_member_emitted(self) -> None:
         composed = emit_discharge(
             closure_key=_VALID_CLOSURE_KEY,
             evidence="inline",
@@ -141,7 +142,7 @@ class TestEmitDischarge:
         )
         assert 'kind: "discharge"' not in composed
 
-    def test_invalid_closure_key_raises_value_error(self):
+    def test_invalid_closure_key_raises_value_error(self) -> None:
         with pytest.raises(ValueError, match="closure_key"):
             emit_discharge(
                 closure_key={"kind": "commit", "id": "x"},
@@ -150,7 +151,7 @@ class TestEmitDischarge:
                 **self._BASE_KWARGS,
             )
 
-    def test_invalid_evidence_raises_value_error(self):
+    def test_invalid_evidence_raises_value_error(self) -> None:
         with pytest.raises(ValueError, match="evidence"):
             emit_discharge(
                 closure_key=_VALID_CLOSURE_KEY,
@@ -159,7 +160,7 @@ class TestEmitDischarge:
                 **self._BASE_KWARGS,
             )
 
-    def test_invalid_landed_at_raises_value_error(self):
+    def test_invalid_landed_at_raises_value_error(self) -> None:
         with pytest.raises(ValueError, match="landed_at"):
             emit_discharge(
                 closure_key=_VALID_CLOSURE_KEY,
@@ -168,7 +169,7 @@ class TestEmitDischarge:
                 **self._BASE_KWARGS,
             )
 
-    def test_never_writes_or_sends(self, tmp_path, monkeypatch):
+    def test_never_writes_or_sends(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         emit_discharge(
             closure_key=_VALID_CLOSURE_KEY,

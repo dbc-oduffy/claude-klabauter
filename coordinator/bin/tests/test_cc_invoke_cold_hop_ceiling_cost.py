@@ -12,6 +12,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
 
 _LIB_DIR = Path(__file__).resolve().parent.parent / "lib"
 if str(_LIB_DIR) not in sys.path:
@@ -26,7 +30,7 @@ _REQUIRED_KEYS = ("__default__", "__ceremony_budget__", "__warm_miss_wait__")
 
 
 @pytest.fixture
-def isolated(monkeypatch, tmp_path):
+def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv(_mod._ROUTE_UNREACHABLE_BASE_ENV, str(tmp_path))
     monkeypatch.delitem(sys.modules, "coordinator_core.ops._registry_map", raising=False)
     _mod._reset_op_timeout_cache()
@@ -34,7 +38,7 @@ def isolated(monkeypatch, tmp_path):
     _mod._reset_op_timeout_cache()
 
 
-def _forbid_compute(monkeypatch):
+def _forbid_compute(monkeypatch) -> None:
     def _boom(*a, **k):
         raise AssertionError("map recomputed or probe spawned despite a valid cache entry")
 
@@ -42,7 +46,7 @@ def _forbid_compute(monkeypatch):
     monkeypatch.setattr(subprocess, "run", _boom)
 
 
-def test_cache_hit_spawns_nothing_and_keeps_every_key(isolated, monkeypatch):
+def test_cache_hit_spawns_nothing_and_keeps_every_key(isolated, monkeypatch: pytest.MonkeyPatch) -> None:
     _mod._resolve_op_timeouts(_ROOT, {}, 10)
     first = dict(_mod._OP_TIMEOUTS_MAP)
     assert _mod._OP_TIMEOUTS_STATE == "ok"
@@ -61,11 +65,11 @@ def test_cache_hit_spawns_nothing_and_keeps_every_key(isolated, monkeypatch):
         assert key in first
 
 
-def test_foreign_engine_map_is_cached_after_one_probe_spawn(isolated, monkeypatch):
+def test_foreign_engine_map_is_cached_after_one_probe_spawn(isolated, monkeypatch: pytest.MonkeyPatch) -> None:
     spawns = []
     payload = '{"__default__": 30.0, "__ceremony_budget__": 0.5, "__warm_miss_wait__": 3.0}'
 
-    def _fake_run(argv, **kw):
+    def _fake_run(argv, **kw) -> CompletedProcess[str]:
         spawns.append(argv)
         return subprocess.CompletedProcess(argv, 0, stdout=payload, stderr="")
 
@@ -80,7 +84,7 @@ def test_foreign_engine_map_is_cached_after_one_probe_spawn(isolated, monkeypatc
     assert _mod._OP_TIMEOUTS_STATE == "ok"
 
 
-def test_failed_probe_is_never_cached(isolated, monkeypatch):
+def test_failed_probe_is_never_cached(isolated, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_mod, "_dump_op_timeouts_in_process", lambda root: None)
     monkeypatch.setattr(
         subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(argv, 1, stdout="", stderr="boom")
@@ -90,7 +94,7 @@ def test_failed_probe_is_never_cached(isolated, monkeypatch):
     assert not list(isolated.rglob("op-timeouts-*.json"))
 
 
-def test_env_knob_change_invalidates_the_cache(isolated, monkeypatch):
+def test_env_knob_change_invalidates_the_cache(isolated, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_DISPATCH_TIMEOUT_SECS", raising=False)
     _mod._resolve_op_timeouts(_ROOT, {}, 10)
     wide = _mod._OP_TIMEOUTS_MAP["__default__"]
@@ -100,7 +104,7 @@ def test_env_knob_change_invalidates_the_cache(isolated, monkeypatch):
     assert wide != _mod._OP_TIMEOUTS_MAP["__default__"] == 0.5
 
 
-def test_source_fingerprint_mismatch_is_a_miss(isolated):
+def test_source_fingerprint_mismatch_is_a_miss(isolated) -> None:
     key = _mod._op_timeout_map_cache_key(_ROOT)
     path = _mod._op_timeout_map_cache_path(key)
     stale = [key[0], ["coordinator_core/ipc.py", 1, 1], *key[2:]]
@@ -109,7 +113,7 @@ def test_source_fingerprint_mismatch_is_a_miss(isolated):
     assert _mod._read_cached_op_timeout_map(path, stale) == {"__default__": 1.0}
 
 
-def test_unwritable_cache_still_resolves(isolated, monkeypatch):
+def test_unwritable_cache_still_resolves(isolated, monkeypatch: pytest.MonkeyPatch) -> None:
     blocker = isolated / "blocker"
     blocker.write_text("a file where the cache directory must go", encoding="utf-8")
     monkeypatch.setenv(_mod._ROUTE_UNREACHABLE_BASE_ENV, str(blocker))

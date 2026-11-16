@@ -17,6 +17,7 @@ import threading
 import uuid
 
 import pytest
+from pathlib import Path
 load_ssh_private_key = pytest.importorskip(
     "cryptography.hazmat.primitives.serialization"
 ).load_ssh_private_key
@@ -32,11 +33,11 @@ _HAS_UNIX = hasattr(socket, "AF_UNIX")
 
 
 @pytest.fixture(autouse=True)
-def _isolated_slots(tmp_path, monkeypatch):
+def _isolated_slots(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sshsig, "_SLOT_DIR", tmp_path / "slots")
 
 
-def _git(repo, *args, check=True):
+def _git(repo, *args, check: bool = True):
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **_NOWIN
     )
@@ -49,7 +50,7 @@ def _s(b: bytes) -> bytes:
 class FakeAgent:
     """Answers request-identities and sign-request for the keys it holds."""
 
-    def __init__(self, private_key, pub_blob: bytes):
+    def __init__(self, private_key, pub_blob: bytes) -> None:
         self.key = private_key
         self.pub = pub_blob
         self.requests: "list[int]" = []
@@ -72,7 +73,7 @@ class FakeAgent:
 
 
 class UnixServer:
-    def __init__(self, path: str, agent: FakeAgent):
+    def __init__(self, path: str, agent: FakeAgent) -> None:
         self.path = path
         self.agent = agent
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -81,7 +82,7 @@ class UnixServer:
         self.closed = False
         threading.Thread(target=self._accept, daemon=True).start()
 
-    def _accept(self):
+    def _accept(self) -> None:
         while not self.closed:
             try:
                 conn, _ = self.sock.accept()
@@ -89,7 +90,7 @@ class UnixServer:
                 return
             threading.Thread(target=self._serve, args=(conn,), daemon=True).start()
 
-    def _serve(self, conn):
+    def _serve(self, conn) -> None:
         with conn:
             while True:
                 head = self._read(conn, 4)
@@ -111,7 +112,7 @@ class UnixServer:
             out += chunk
         return out
 
-    def close(self):
+    def close(self) -> None:
         self.closed = True
         self.sock.close()
 
@@ -119,7 +120,7 @@ class UnixServer:
 class PipeServer:
     """Win32 named-pipe agent: one instance per connection, so clients also see pipe-busy windows."""
 
-    def __init__(self, name: str, agent: FakeAgent):
+    def __init__(self, name: str, agent: FakeAgent) -> None:
         import ctypes
         from ctypes import wintypes
 
@@ -139,7 +140,7 @@ class PipeServer:
         self._ct, self._D = ctypes, D
         threading.Thread(target=self._accept, daemon=True).start()
 
-    def _accept(self):
+    def _accept(self) -> None:
         k = self.k
         while not self.closed:
             h = k.CreateNamedPipeW(self.name, 3, 0, 255, 65536, 65536, 0, None)
@@ -161,7 +162,7 @@ class PipeServer:
             out += buf.raw[:got.value]
         return out
 
-    def _serve(self, h):
+    def _serve(self, h) -> None:
         k = self.k
         try:
             while True:
@@ -179,7 +180,7 @@ class PipeServer:
             k.DisconnectNamedPipe(h)
             k.CloseHandle(h)
 
-    def close(self):
+    def close(self) -> None:
         self.closed = True
         try:
             open(self.name, "r+b", buffering=0).close()
@@ -188,7 +189,7 @@ class PipeServer:
 
 
 @pytest.fixture(autouse=True)
-def _isolated(tmp_path, monkeypatch):
+def _isolated(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "global-gitconfig"))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
@@ -203,7 +204,7 @@ def _isolated(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def key(tmp_path):
+def key(tmp_path: Path):
     keyfile = tmp_path / "signing_key"
     made = subprocess.run(
         ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(keyfile), "-q"],
@@ -215,7 +216,7 @@ def key(tmp_path):
     return keyfile, private, pub_text, base64.b64decode(pub_text.split()[1])
 
 
-def _repo(tmp_path, keyfile, pub_text, *, fmt="ssh"):
+def _repo(tmp_path, keyfile, pub_text, *, fmt: str = "ssh"):
     repo = tmp_path / "r"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "work/z")
@@ -241,7 +242,7 @@ def _spawn_spies(monkeypatch):
     real_popen = subprocess.Popen
 
     class Spy(real_popen):  # type: ignore[misc,valid-type]
-        def __init__(self, cmd, *a, **kw):
+        def __init__(self, cmd, *a, **kw) -> None:
             popens.append(cmd)
             super().__init__(cmd, *a, **kw)
 
@@ -281,7 +282,7 @@ def _git_made_signed(repo, keyfile, monkeypatch):
     return out.stdout.strip()
 
 
-def _assert_agent_commit(repo, outcome, keyfile, monkeypatch, popens, git_calls):
+def _assert_agent_commit(repo, outcome, keyfile, monkeypatch, popens, git_calls) -> None:
     assert outcome.sign_warning is None, outcome.sign_warning
     assert popens == [], f"agent signing spawned {popens}"
     assert not any(c[:1] == ["commit-tree"] for c in git_calls)
@@ -299,7 +300,7 @@ def _assert_agent_commit(repo, outcome, keyfile, monkeypatch, popens, git_calls)
 
 
 @pytest.mark.skipif(not _HAS_UNIX, reason="no AF_UNIX in this Python")
-def test_agent_path_signs_verifies_and_spawns_nothing(tmp_path, key, monkeypatch):
+def test_agent_path_signs_verifies_and_spawns_nothing(tmp_path: Path, key, monkeypatch: pytest.MonkeyPatch) -> None:
     keyfile, private, pub_text, blob = key
     agent = FakeAgent(private, blob)
     sock = str(tmp_path / "a.sock")
@@ -317,7 +318,7 @@ def test_agent_path_signs_verifies_and_spawns_nothing(tmp_path, key, monkeypatch
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="named pipes exist only on Windows")
-def test_agent_path_over_windows_named_pipe(tmp_path, key, monkeypatch):
+def test_agent_path_over_windows_named_pipe(tmp_path: Path, key, monkeypatch: pytest.MonkeyPatch) -> None:
     keyfile, private, pub_text, blob = key
     agent = FakeAgent(private, blob)
     name = "\\\\.\\pipe\\claude-klabauter-test-agent-" + uuid.uuid4().hex
@@ -334,7 +335,7 @@ def test_agent_path_over_windows_named_pipe(tmp_path, key, monkeypatch):
         server.close()
 
 
-def test_no_agent_falls_back_to_git_commit_tree(tmp_path, key, monkeypatch):
+def test_no_agent_falls_back_to_git_commit_tree(tmp_path: Path, key, monkeypatch: pytest.MonkeyPatch) -> None:
     keyfile, _, pub_text, _ = key
     repo = _repo(tmp_path, keyfile, pub_text)
     monkeypatch.setenv("SSH_AUTH_SOCK", str(tmp_path / "absent.sock"))
@@ -346,7 +347,7 @@ def test_no_agent_falls_back_to_git_commit_tree(tmp_path, key, monkeypatch):
 
 
 @pytest.mark.skipif(not _HAS_UNIX, reason="no AF_UNIX in this Python")
-def test_key_missing_from_agent_falls_back(tmp_path, key, monkeypatch):
+def test_key_missing_from_agent_falls_back(tmp_path: Path, key, monkeypatch: pytest.MonkeyPatch) -> None:
     keyfile, private, pub_text, blob = key
     other = subprocess.run(
         ["ssh-keygen", "-t", "ed25519", "-N", "", "-f", str(tmp_path / "other"), "-q"],
@@ -371,7 +372,7 @@ def test_key_missing_from_agent_falls_back(tmp_path, key, monkeypatch):
 
 
 @pytest.mark.skipif(not _HAS_UNIX, reason="no AF_UNIX in this Python")
-def test_non_ssh_format_never_contacts_the_agent(tmp_path, key, monkeypatch):
+def test_non_ssh_format_never_contacts_the_agent(tmp_path: Path, key, monkeypatch: pytest.MonkeyPatch) -> None:
     keyfile, private, pub_text, blob = key
     agent = FakeAgent(private, blob)
     sock = str(tmp_path / "c.sock")
@@ -388,7 +389,7 @@ def test_non_ssh_format_never_contacts_the_agent(tmp_path, key, monkeypatch):
         server.close()
 
 
-def test_sshsig_encoding_matches_the_wire_format(key):
+def test_sshsig_encoding_matches_the_wire_format(key) -> None:
     _, private, _, blob = key
     data = b"tree 0\n\nmsg\n"
     signed = sshsig.sshsig_signed_blob(data)
@@ -409,7 +410,7 @@ def test_sshsig_encoding_matches_the_wire_format(key):
     private.public_key().verify(private.sign(signed), signed)
 
 
-def test_public_key_parsing_and_config_sections(tmp_path, key, monkeypatch):
+def test_public_key_parsing_and_config_sections(tmp_path: Path, key, monkeypatch: pytest.MonkeyPatch) -> None:
     keyfile, _, pub_text, blob = key
     assert sshsig.parse_public_key(pub_text) == blob
     assert sshsig.parse_public_key("key::" + pub_text) == blob
@@ -428,7 +429,7 @@ def test_public_key_parsing_and_config_sections(tmp_path, key, monkeypatch):
     }
 
 
-def test_include_or_env_config_defers_to_git(tmp_path, key, monkeypatch):
+def test_include_or_env_config_defers_to_git(tmp_path: Path, key, monkeypatch: pytest.MonkeyPatch) -> None:
     keyfile, _, pub_text, _ = key
     repo = tmp_path / "inc"
     (repo / ".git").mkdir(parents=True)
@@ -447,7 +448,7 @@ def test_include_or_env_config_defers_to_git(tmp_path, key, monkeypatch):
     assert commit_mod._sign_commit_in_process(repo, "0" * 40, None, "t", "t@l", "1 +0000", "m\n") is None
 
 
-def test_wrong_signature_algorithm_is_refused(key, monkeypatch):
+def test_wrong_signature_algorithm_is_refused(key, monkeypatch: pytest.MonkeyPatch) -> None:
     _, _, _, blob = key
     monkeypatch.setattr(
         sshsig, "_exchange",
@@ -468,7 +469,7 @@ _RFC8032_1 = (
 )
 
 
-def test_ed25519_verify_matches_rfc8032_vector_and_rejects_tamper():
+def test_ed25519_verify_matches_rfc8032_vector_and_rejects_tamper() -> None:
     pub, msg, sig = _RFC8032_1
     assert sshsig.ed25519_verify(pub, msg, sig)
     assert not sshsig.ed25519_verify(pub, b"x", sig)
@@ -476,7 +477,7 @@ def test_ed25519_verify_matches_rfc8032_vector_and_rejects_tamper():
     assert not sshsig.ed25519_verify(pub, msg, sig[:10])
 
 
-def test_verify_ssh_signature_ed25519_and_cost(key):
+def test_verify_ssh_signature_ed25519_and_cost(key) -> None:
     import time
 
     _, private, _, blob = key
@@ -491,7 +492,7 @@ def test_verify_ssh_signature_ed25519_and_cost(key):
     assert not sshsig.verify_ssh_signature(_s(b"ecdsa-sha2-nistp256") + _s(b"x"), good, signed)
 
 
-def test_verify_ssh_signature_rsa_sha2_512_and_cost():
+def test_verify_ssh_signature_rsa_sha2_512_and_cost() -> None:
     import time
 
     from cryptography.hazmat.primitives import hashes
@@ -516,7 +517,7 @@ def test_verify_ssh_signature_rsa_sha2_512_and_cost():
     assert not sshsig.verify_ssh_signature(blob, _s(b"ssh-rsa") + _s(raw), signed)
 
 
-def test_tampered_agent_signature_is_refused(key, monkeypatch):
+def test_tampered_agent_signature_is_refused(key, monkeypatch: pytest.MonkeyPatch) -> None:
     _, private, _, blob = key
     data = b"tree 0\n\nmsg\n"
     request = bytes([13]) + _s(blob) + _s(sshsig.sshsig_signed_blob(data)) + struct.pack(">I", 0)
@@ -531,14 +532,14 @@ def test_tampered_agent_signature_is_refused(key, monkeypatch):
         sshsig._sign_locked("addr", blob, request, 1.0)
 
 
-def test_unverifiable_key_type_never_contacts_the_agent(monkeypatch):
+def test_unverifiable_key_type_never_contacts_the_agent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sshsig, "_exchange", lambda *a, **k: pytest.fail("agent contacted"))
     ecdsa = _s(b"ecdsa-sha2-nistp256") + _s(b"nistp256") + _s(b"point")
     with pytest.raises(sshsig.AgentUnavailable):
         sshsig.sign_via_agent(b"x", ecdsa, env={"SSH_AUTH_SOCK": "/nowhere"})
 
 
-def test_relative_signingkey_goes_to_git(tmp_path, key, monkeypatch):
+def test_relative_signingkey_goes_to_git(tmp_path: Path, key, monkeypatch: pytest.MonkeyPatch) -> None:
     keyfile, _, pub_text, blob = key
     monkeypatch.chdir(keyfile.parent)
     assert sshsig.load_signing_key(keyfile.name) is None
@@ -556,7 +557,7 @@ def test_relative_signingkey_goes_to_git(tmp_path, key, monkeypatch):
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="named pipes exist only on Windows")
-def test_absent_pipe_fails_fast():
+def test_absent_pipe_fails_fast() -> None:
     import time
 
     name = "\\\\.\\pipe\\claude-klabauter-test-absent-" + uuid.uuid4().hex
@@ -573,7 +574,7 @@ def _program_repo(tmp_path, keyfile, pub_text, program):
     return repo
 
 
-def _serve_as_onepassword(monkeypatch, address):
+def _serve_as_onepassword(monkeypatch, address) -> None:
     monkeypatch.setattr(sshsig, "onepassword_agent_address", lambda: address)
 
 
@@ -583,7 +584,7 @@ def _serve_as_onepassword(monkeypatch, address):
     "C:\\Users\\x\\AppData\\Local\\1Password\\app\\8\\op-ssh-sign.exe",
     "op-ssh-sign",
 ])
-def test_onepassword_signer_signs_in_process_with_zero_spawns(tmp_path, key, monkeypatch, program):
+def test_onepassword_signer_signs_in_process_with_zero_spawns(tmp_path: Path, key, monkeypatch: pytest.MonkeyPatch, program) -> None:
     keyfile, private, pub_text, blob = key
     agent, other = FakeAgent(private, blob), FakeAgent(private, blob)
     op_sock, env_sock = str(tmp_path / "op.sock"), str(tmp_path / "env.sock")
@@ -606,7 +607,7 @@ def test_onepassword_signer_signs_in_process_with_zero_spawns(tmp_path, key, mon
 
 @pytest.mark.skipif(not _HAS_UNIX, reason="no AF_UNIX in this Python")
 @pytest.mark.parametrize("program", ["/usr/local/bin/my-signer", "/opt/op-ssh-sign-wsl", "op-ssh-sign-wsl.exe"])
-def test_other_ssh_program_still_goes_to_git(tmp_path, key, monkeypatch, program):
+def test_other_ssh_program_still_goes_to_git(tmp_path: Path, key, monkeypatch: pytest.MonkeyPatch, program) -> None:
     keyfile, private, pub_text, blob = key
     agent = FakeAgent(private, blob)
     sock = str(tmp_path / "d.sock")
@@ -623,7 +624,7 @@ def test_other_ssh_program_still_goes_to_git(tmp_path, key, monkeypatch, program
         server.close()
 
 
-def test_onepassword_agent_absent_falls_back_to_git(tmp_path, key, monkeypatch):
+def test_onepassword_agent_absent_falls_back_to_git(tmp_path: Path, key, monkeypatch: pytest.MonkeyPatch) -> None:
     keyfile, _, pub_text, _ = key
     repo = _program_repo(tmp_path, keyfile, pub_text, "op-ssh-sign")
     _serve_as_onepassword(monkeypatch, str(tmp_path / "absent.sock"))
@@ -633,7 +634,7 @@ def test_onepassword_agent_absent_falls_back_to_git(tmp_path, key, monkeypatch):
     assert sshsig._UNREACHABLE
 
 
-def test_onepassword_without_a_platform_socket_falls_back_to_git(tmp_path, key, monkeypatch):
+def test_onepassword_without_a_platform_socket_falls_back_to_git(tmp_path: Path, key, monkeypatch: pytest.MonkeyPatch) -> None:
     keyfile, _, pub_text, _ = key
     repo = _program_repo(tmp_path, keyfile, pub_text, "op-ssh-sign")
     _serve_as_onepassword(monkeypatch, None)
@@ -645,7 +646,7 @@ def test_onepassword_without_a_platform_socket_falls_back_to_git(tmp_path, key, 
 
 
 @pytest.mark.skipif(not _HAS_UNIX, reason="no AF_UNIX in this Python")
-def test_deadline_cut_timeout_reaches_the_exchange_on_the_onepassword_route(tmp_path, key, monkeypatch):
+def test_deadline_cut_timeout_reaches_the_exchange_on_the_onepassword_route(tmp_path: Path, key, monkeypatch: pytest.MonkeyPatch) -> None:
     keyfile, private, pub_text, blob = key
     agent = FakeAgent(private, blob)
     sock = str(tmp_path / "e.sock")
@@ -656,7 +657,7 @@ def test_deadline_cut_timeout_reaches_the_exchange_on_the_onepassword_route(tmp_
         monkeypatch.setattr(commit_mod, "_signing_budget", lambda: 6.0)
         seen, real = [], sshsig._exchange
 
-        def spy(address, requests, timeout):
+        def spy(address, requests, timeout) -> list[bytes]:
             seen.append((address, timeout))
             return real(address, requests, timeout)
 
@@ -669,7 +670,7 @@ def test_deadline_cut_timeout_reaches_the_exchange_on_the_onepassword_route(tmp_
         server.close()
 
 
-def test_onepassword_signer_recognition_and_platform_defaults(tmp_path, monkeypatch):
+def test_onepassword_signer_recognition_and_platform_defaults(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for yes in ("op-ssh-sign", "OP-SSH-SIGN.EXE", '"/a b/op-ssh-sign"', "C:\\x\\op-ssh-sign.exe"):
         assert sshsig.is_onepassword_signer(yes)
     for no in ("op-ssh-sign-wsl", "op-ssh-sign-wsl.exe", "ssh-keygen", "/x/op-ssh-sign.sh"):

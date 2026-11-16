@@ -2,9 +2,10 @@ import json
 
 from coordinator_core.ops.dispatch_emit import halted_record_commit as hrc
 from coordinator_core.ops.dispatch_emit import kept_work as k
+from pathlib import Path
 
 
-def _setup(tmp_path):
+def _setup(tmp_path) -> tuple[dict[str, str], dict[str, str], dict[str, str]]:
     (tmp_path / "a").write_bytes(b"a0")
     (tmp_path / "b").write_bytes(b"b0")
     owner = {"a": "C1", "b": "C2"}
@@ -13,26 +14,26 @@ def _setup(tmp_path):
     return owner, withheld, baseline
 
 
-def test_kept_work_unwritten(tmp_path):
+def test_kept_work_unwritten(tmp_path: Path) -> None:
     owner, withheld, baseline = _setup(tmp_path)
     (tmp_path / "b").write_bytes(b"b1")
     out = k.kept_chunks(tmp_path, owner, withheld, baseline)
     assert list(out) == ["C2"]
 
 
-def test_absent_baseline_keeps_both(tmp_path):
+def test_absent_baseline_keeps_both(tmp_path: Path) -> None:
     owner, withheld, _ = _setup(tmp_path)
     assert sorted(k.kept_chunks(tmp_path, owner, withheld)) == ["C1", "C2"]
     assert sorted(k.kept_chunks(tmp_path, owner, withheld, {})) == ["C1", "C2"]
 
 
-def test_path_missing_from_baseline_is_kept(tmp_path):
+def test_path_missing_from_baseline_is_kept(tmp_path: Path) -> None:
     owner, withheld, baseline = _setup(tmp_path)
     del baseline["a"]
     assert list(k.kept_chunks(tmp_path, owner, withheld, baseline)) == ["C1"]
 
 
-def test_record_kept_reads_manifest_baseline(tmp_path):
+def test_record_kept_reads_manifest_baseline(tmp_path: Path) -> None:
     owner, withheld, baseline = _setup(tmp_path)
     (tmp_path / "b").write_bytes(b"b1")
     (tmp_path / ".git" / "objects").mkdir(parents=True)

@@ -3,6 +3,7 @@
 import pytest
 
 from coordinator_core.canvas_harvest import model
+from pathlib import Path
 
 NOT_FOUND_TEXT = (
     "artifact not found — it may have been deleted, or it has not been shared with you. "
@@ -14,25 +15,25 @@ NEEDS_APPROVAL_TEXT = (
 )
 
 
-def test_dump_json_bytes_and_key_order():
+def test_dump_json_bytes_and_key_order() -> None:
     out = model.dump_json({"b": 1, "a": ["é", {"z": None}]})
     assert out == '{\n  "b": 1,\n  "a": [\n    "é",\n    {\n      "z": null\n    }\n  ]\n}\n'.encode("utf-8")
     assert b"\r" not in out
 
 
 @pytest.mark.parametrize("name", ["/abs", "../x", "a/../../x", "", "a//b", "a:b", "a\\b", "CON", "nul.txt", "COM1", "x.", "x ", "a\x01b", "C:x"])
-def test_safe_child_refuses(tmp_path, name):
+def test_safe_child_refuses(tmp_path: Path, name) -> None:
     with pytest.raises(model.HarvestError) as exc:
         model.safe_child(tmp_path, name)
     assert exc.value.reason == model.UNSAFE_PATH
 
 
-def test_safe_child_accepts_nested(tmp_path):
+def test_safe_child_accepts_nested(tmp_path: Path) -> None:
     assert model.safe_child(tmp_path, "frames/a/b.html") == tmp_path / "frames/a/b.html"
     assert model.safe_child(tmp_path, "threads/3b1f-6a52.json") == tmp_path / "threads/3b1f-6a52.json"
 
 
-def test_safe_child_refuses_symlink_escape(tmp_path):
+def test_safe_child_refuses_symlink_escape(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
     base = tmp_path / "base"
@@ -43,7 +44,7 @@ def test_safe_child_refuses_symlink_escape(tmp_path):
     assert exc.value.reason == model.UNSAFE_PATH
 
 
-def test_markers_over_fixture_texts():
+def test_markers_over_fixture_texts() -> None:
     assert model.classify_error(NOT_FOUND_TEXT) == model.NOT_FOUND
     assert model.classify_error("Error: " + NOT_FOUND_TEXT) == model.NOT_FOUND
     assert model.classify_error(NEEDS_APPROVAL_TEXT) == model.NEEDS_APPROVAL
@@ -51,7 +52,7 @@ def test_markers_over_fixture_texts():
     assert model.classify_error("") is None
 
 
-def test_reader_not_named_is_distinct_from_every_other_reason():
+def test_reader_not_named_is_distinct_from_every_other_reason() -> None:
     reasons = [
         value
         for name, value in vars(model).items()
@@ -62,7 +63,7 @@ def test_reader_not_named_is_distinct_from_every_other_reason():
     assert len(reasons) == len(set(reasons))
 
 
-def test_comments_text_missing_is_named_once_among_the_reasons():
+def test_comments_text_missing_is_named_once_among_the_reasons() -> None:
     reasons = [
         value
         for name, value in vars(model).items()
@@ -73,7 +74,7 @@ def test_comments_text_missing_is_named_once_among_the_reasons():
     assert model.HarvestError(model.COMMENTS_TEXT_MISSING, "1 comment(s) with no text").reason == "comments-text-missing"
 
 
-def test_artifact_id_from_url():
+def test_artifact_id_from_url() -> None:
     assert model.artifact_id_from_url("https://claude.ai/artifact/Qz7LmPx2NcVt9RkHdYw3Fe") == "Qz7LmPx2NcVt9RkHdYw3Fe"
     assert model.artifact_id_from_url("claude.ai/artifact/Qz7LmPx2NcVt9RkHdYw3Fe?x=1") == "Qz7LmPx2NcVt9RkHdYw3Fe"
     assert model.artifact_id_from_url("Qz7LmPx2NcVt9RkHdYw3Fe") == "Qz7LmPx2NcVt9RkHdYw3Fe"
@@ -87,7 +88,7 @@ THREADS = [
 ]
 
 
-def test_thread_ids_and_latest_comment_at():
+def test_thread_ids_and_latest_comment_at() -> None:
     assert model.thread_ids(THREADS) == ["t1", "t2"]
     assert model.latest_comment_at(THREADS) == "2026-10-03T15:30:42Z"
     assert model.latest_comment_at([{"id": "x", "comments": []}]) is None
@@ -98,9 +99,9 @@ def test_thread_ids_and_latest_comment_at():
     "path,expected",
     [("project/a.html", True), ("project/", False), ("project", False), ("xproject/a", False), ("app.js", False), (None, False)],
 )
-def test_is_project_file(path, expected):
+def test_is_project_file(path, expected) -> None:
     assert model.is_project_file(path) is expected
 
 
-def test_record_file_ceiling():
+def test_record_file_ceiling() -> None:
     assert model.MAX_RECORD_FILES == 48

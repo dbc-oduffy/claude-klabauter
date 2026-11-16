@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core.hooks import em_report_altitude as m
 from coordinator_core.session_hub_path import hub_for_common
+from pathlib import Path
 
 
 def _payload(cwd, **over):
@@ -21,12 +22,12 @@ def _payload(cwd, **over):
 
 
 @pytest.fixture(autouse=True)
-def _no_env_hatch(monkeypatch):
+def _no_env_hatch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_EM_REPORT_ALTITUDE_OFF", raising=False)
 
 
 @pytest.fixture(autouse=True)
-def _tally_isolation(monkeypatch, tmp_path):
+def _tally_isolation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Redirect the has-fired sentinel into a per-test tmp dir via the env override.
 
     Without this, sentinel-writing tests would walk up from `cwd` looking for
@@ -42,31 +43,31 @@ def _tally_isolation(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     os.makedirs(tmp_path / ".git")
     return tmp_path
 
 
-def test_d1_fires_above_200_words(tmp_path):
+def test_d1_fires_above_200_words(tmp_path: Path) -> None:
     text = " ".join(["word"] * 201)
     result = m.op(_payload(tmp_path, last_assistant_message=text))
     assert result is not None
     assert "201 words" in result["message"]
 
 
-def test_d1_does_not_fire_at_200_words(tmp_path):
+def test_d1_does_not_fire_at_200_words(tmp_path: Path) -> None:
     text = " ".join(["word"] * 200)
     result = m.op(_payload(tmp_path, last_assistant_message=text))
     assert result is None
 
 
-def test_d1_does_not_fire_below_200_words(tmp_path):
+def test_d1_does_not_fire_below_200_words(tmp_path: Path) -> None:
     text = " ".join(["word"] * 50)
     result = m.op(_payload(tmp_path, last_assistant_message=text))
     assert result is None
 
 
-def test_fenced_code_exclusion_prevents_false_fire(tmp_path):
+def test_fenced_code_exclusion_prevents_false_fire(tmp_path: Path) -> None:
     code_block = "```\n" + "\n".join(["x = 1"] * 380) + "\n```"
     prose = " ".join(["done"] * 15)
     text = f"{prose}\n\n{code_block}"
@@ -75,7 +76,7 @@ def test_fenced_code_exclusion_prevents_false_fire(tmp_path):
     assert result is None
 
 
-def test_table_row_exclusion_lowers_count(tmp_path):
+def test_table_row_exclusion_lowers_count(tmp_path: Path) -> None:
     table = "\n".join(
         ["| a | b |", "|---|---|"] + [f"| item-{i} | value-{i} |" for i in range(60)]
     )
@@ -86,7 +87,7 @@ def test_table_row_exclusion_lowers_count(tmp_path):
     assert result is None
 
 
-def test_unclosed_fence_counts_as_prose(tmp_path):
+def test_unclosed_fence_counts_as_prose(tmp_path: Path) -> None:
     """An unclosed ``` fence has no matching close, so _FENCED_CODE_RE (which
     requires a closing ```) never matches it — its content is counted as
     ordinary prose. This is the safe-direction gap: it can only cause an
@@ -99,7 +100,7 @@ def test_unclosed_fence_counts_as_prose(tmp_path):
     assert result is not None
 
 
-def test_pipeless_table_data_rows_count_but_separator_excluded(tmp_path):
+def test_pipeless_table_data_rows_count_but_separator_excluded(tmp_path: Path) -> None:
     """A GFM table without outer pipes (`a | b` rather than `| a | b |`) is
     not recognized as table rows by _TABLE_ROW_RE (it requires leading and
     trailing pipes) — so its data rows count as prose. Only the separator
@@ -117,7 +118,7 @@ def test_pipeless_table_data_rows_count_but_separator_excluded(tmp_path):
     assert sep not in stripped
 
 
-def test_indented_code_block_counts_as_prose(tmp_path):
+def test_indented_code_block_counts_as_prose(tmp_path: Path) -> None:
     """A 4-space-indented code block (the other markdown code-block form,
     alongside fenced ```) is not recognized by _FENCED_CODE_RE (fence-only)
     or _is_table_row — so it counts as prose."""
@@ -126,20 +127,20 @@ def test_indented_code_block_counts_as_prose(tmp_path):
     assert word_count > 200
 
 
-def test_d2_fires_on_two_citations(tmp_path):
+def test_d2_fires_on_two_citations(tmp_path: Path) -> None:
     text = "See coordinator_core/hooks/foo.py:42 and also /Users/alice/X/bar.py for context."
     result = m.op(_payload(tmp_path, last_assistant_message=text))
     assert result is not None
     assert "citations" in result["message"]
 
 
-def test_d2_does_not_fire_on_one_citation(tmp_path):
+def test_d2_does_not_fire_on_one_citation(tmp_path: Path) -> None:
     text = "See coordinator_core/hooks/foo.py:42 for details."
     result = m.op(_payload(tmp_path, last_assistant_message=text))
     assert result is None
 
 
-def test_d2_file_line_regex_ignores_host_port(tmp_path):
+def test_d2_file_line_regex_ignores_host_port(tmp_path: Path) -> None:
     text = "The service listens on example.com:8080 and also 127.0.0.1:5432 for the DB."
     file_line, abs_path = m._citation_count(text)
     assert file_line == 0
@@ -148,7 +149,7 @@ def test_d2_file_line_regex_ignores_host_port(tmp_path):
     assert result is None
 
 
-def test_d2_file_line_regex_matches_bare_and_pathed_source_files(tmp_path):
+def test_d2_file_line_regex_matches_bare_and_pathed_source_files(tmp_path: Path) -> None:
     for token in (
         "foo.py:42",
         "path/to/foo.py:42",
@@ -158,19 +159,19 @@ def test_d2_file_line_regex_matches_bare_and_pathed_source_files(tmp_path):
         assert file_line == 1, token
 
 
-def test_d2_recognizes_linux_home_and_opt_paths(tmp_path):
+def test_d2_recognizes_linux_home_and_opt_paths(tmp_path: Path) -> None:
     text = "See /home/alice/repo/foo.py and /opt/tooling/bar.sh for context and one more note."
     file_line, abs_path = m._citation_count(text)
     assert abs_path == 2
 
 
-def test_d2_windows_drive_letter_does_not_match_url_scheme(tmp_path):
+def test_d2_windows_drive_letter_does_not_match_url_scheme(tmp_path: Path) -> None:
     text = "See https://example.com/docs for the reference doc, thanks."
     _, abs_path = m._citation_count(text)
     assert abs_path == 0
 
 
-def test_d2_fires_independent_of_length_short_message(tmp_path):
+def test_d2_fires_independent_of_length_short_message(tmp_path: Path) -> None:
     text = "Relayed to /Users/alice/X/claude-klabauter/state/a.md and /Users/alice/X/coordinator-content-repo/cross-repo/b.md."
     assert m._word_count(text) < 20
     result = m.op(_payload(tmp_path, last_assistant_message=text))
@@ -178,7 +179,7 @@ def test_d2_fires_independent_of_length_short_message(tmp_path):
     assert "citations" in result["message"]
 
 
-def test_both_detectors_trip_together(tmp_path):
+def test_both_detectors_trip_together(tmp_path: Path) -> None:
     long_prose = " ".join(["word"] * 210)
     text = (
         f"{long_prose} See coordinator_core/hooks/foo.py:42 and "
@@ -190,7 +191,7 @@ def test_both_detectors_trip_together(tmp_path):
     assert "citations" in result["message"]
 
 
-def test_both_detectors_trip_on_the_one_fire_carries_both_measurements(repo):
+def test_both_detectors_trip_on_the_one_fire_carries_both_measurements(repo) -> None:
     long_prose = " ".join(["word"] * 210)
     text = (
         f"{long_prose} See coordinator_core/hooks/foo.py:42 and "
@@ -206,26 +207,26 @@ def test_both_detectors_trip_on_the_one_fire_carries_both_measurements(repo):
     assert again is None
 
 
-def test_stop_hook_active_suppresses(tmp_path):
+def test_stop_hook_active_suppresses(tmp_path: Path) -> None:
     text = " ".join(["word"] * 300)
     result = m.op(_payload(tmp_path, stop_hook_active=True, last_assistant_message=text))
     assert result is None
 
 
-def test_env_off_switch_suppresses(tmp_path, monkeypatch):
+def test_env_off_switch_suppresses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_EM_REPORT_ALTITUDE_OFF", "1")
     text = " ".join(["word"] * 300)
     result = m.op(_payload(tmp_path, last_assistant_message=text))
     assert result is None
 
 
-def test_subagent_stop_suppresses(tmp_path):
+def test_subagent_stop_suppresses(tmp_path: Path) -> None:
     text = " ".join(["word"] * 300)
     result = m.op(_payload(tmp_path, agent_id="agent-1", last_assistant_message=text))
     assert result is None
 
 
-def test_meta_discussion_suppressed(tmp_path):
+def test_meta_discussion_suppressed(tmp_path: Path) -> None:
     text = (
         "hooks.em_report_altitude fired because the message exceeded 200 words "
         + " ".join(["word"] * 210)
@@ -234,23 +235,23 @@ def test_meta_discussion_suppressed(tmp_path):
     assert result is None
 
 
-def test_malformed_payload_returns_none():
+def test_malformed_payload_returns_none() -> None:
     assert m.op(["not", "a", "dict"]) is None
     assert m.op(None) is None
     assert m.op("also not a dict") is None
 
 
-def test_unreadable_transcript_path_returns_none(tmp_path):
+def test_unreadable_transcript_path_returns_none(tmp_path: Path) -> None:
     result = m.op(_payload(tmp_path, transcript_path=str(tmp_path)))
     assert result is None
 
 
-def test_no_message_and_no_transcript_returns_none(tmp_path):
+def test_no_message_and_no_transcript_returns_none(tmp_path: Path) -> None:
     result = m.op(_payload(tmp_path))
     assert result is None
 
 
-def test_sentinel_dir_override_used_when_set(repo, tmp_path):
+def test_sentinel_dir_override_used_when_set(repo, tmp_path: Path) -> None:
     """COORDINATOR_EM_REPORT_ALTITUDE_TALLY_DIR (set by the autouse isolation
     fixture) redirects the sentinel away from the repo's own .git entirely —
     the write must land under the override dir, not under repo/.git."""
@@ -265,7 +266,7 @@ def test_sentinel_dir_override_used_when_set(repo, tmp_path):
     assert not hub_for_common(repo / ".git").exists()
 
 
-def test_sentinel_falls_back_to_git_common_dir_when_env_unset(repo, monkeypatch):
+def test_sentinel_falls_back_to_git_common_dir_when_env_unset(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_EM_REPORT_ALTITUDE_TALLY_DIR", raising=False)
     text = " ".join(["word"] * 300)
     session_id = "fallback-sess"
@@ -278,14 +279,14 @@ def test_sentinel_falls_back_to_git_common_dir_when_env_unset(repo, monkeypatch)
     assert fallback_path.is_file()
 
 
-def test_first_firing_emits(repo):
+def test_first_firing_emits(repo) -> None:
     text = " ".join(["word"] * 300)
     result = m.op(_payload(repo, session_id="bark-once", last_assistant_message=text))
     assert result is not None
     assert "let it stand" in result["message"]
 
 
-def test_second_and_third_firing_emit_nothing(repo):
+def test_second_and_third_firing_emit_nothing(repo) -> None:
     text = " ".join(["word"] * 300)
     first = m.op(_payload(repo, session_id="bark-once-2", last_assistant_message=text))
     assert first is not None
@@ -295,7 +296,7 @@ def test_second_and_third_firing_emit_nothing(repo):
     assert third is None
 
 
-def test_fresh_session_fires_again(repo):
+def test_fresh_session_fires_again(repo) -> None:
     text = " ".join(["word"] * 300)
     a = m.op(_payload(repo, session_id="sess-a", last_assistant_message=text))
     b = m.op(_payload(repo, session_id="sess-b", last_assistant_message=text))
@@ -305,7 +306,7 @@ def test_fresh_session_fires_again(repo):
     assert "let it stand" in b["message"]
 
 
-def test_sentinel_write_failure_does_not_change_return_value(repo, monkeypatch):
+def test_sentinel_write_failure_does_not_change_return_value(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     path = m._tally_path(_payload(repo, session_id="broken-sentinel"))
     os.makedirs(os.path.dirname(path))
     os.chmod(os.path.dirname(path), 0o500)
@@ -318,7 +319,7 @@ def test_sentinel_write_failure_does_not_change_return_value(repo, monkeypatch):
         os.chmod(os.path.dirname(path), 0o700)
 
 
-def test_stale_sentinel_content_does_not_matter(repo):
+def test_stale_sentinel_content_does_not_matter(repo) -> None:
     path = m._tally_path(_payload(repo, session_id="stale-sentinel"))
     os.makedirs(os.path.dirname(path))
     with open(path, "w", encoding="utf-8") as fh:
@@ -328,32 +329,32 @@ def test_stale_sentinel_content_does_not_matter(repo):
     assert result is None
 
 
-def test_comms_prefix_not_altitude(tmp_path):
+def test_comms_prefix_not_altitude(tmp_path: Path) -> None:
     text = " ".join(["word"] * 300)
     result = m.op(_payload(tmp_path, last_assistant_message=text))
     assert "[comms]" in result["message"]
     assert "[altitude]" not in result["message"]
 
 
-def test_d1_firing_full_form(tmp_path):
+def test_d1_firing_full_form(tmp_path: Path) -> None:
     text = " ".join(["word"] * 300)
     result = m.op(_payload(tmp_path, last_assistant_message=text))
     assert "let it stand" in result["message"]
 
 
-def test_d2_firing_full_form(tmp_path):
+def test_d2_firing_full_form(tmp_path: Path) -> None:
     text = "See coordinator_core/hooks/foo.py:42 and also /Users/alice/X/bar.py for context."
     result = m.op(_payload(tmp_path, last_assistant_message=text))
     assert "Ignore this if intentional" in result["message"]
 
 
-def test_full_form_contains_release_clause(tmp_path):
+def test_full_form_contains_release_clause(tmp_path: Path) -> None:
     text = " ".join(["word"] * 300)
     result = m.op(_payload(tmp_path, last_assistant_message=text))
     assert "if this one earned the length, let it stand" in result["message"].lower()
 
 
-def test_corpus_shape_353_word_status_report_fires_d1(tmp_path):
+def test_corpus_shape_353_word_status_report_fires_d1(tmp_path: Path) -> None:
     sentence = (
         "Verified the fix lands cleanly and the regression suite stays green "
         "across every touched module in this pass today "
@@ -367,7 +368,7 @@ def test_corpus_shape_353_word_status_report_fires_d1(tmp_path):
     assert "citations" not in result["message"]
 
 
-def test_corpus_shape_10_word_reply_two_absolute_paths_fires_d2_only(tmp_path):
+def test_corpus_shape_10_word_reply_two_absolute_paths_fires_d2_only(tmp_path: Path) -> None:
     text = "Relayed the memo to /Users/alice/X/claude-klabauter/state/a.md and /Users/alice/X/coordinator-content-repo/b.md"
     word_count = m._word_count(text)
     assert word_count <= 20
@@ -377,7 +378,7 @@ def test_corpus_shape_10_word_reply_two_absolute_paths_fires_d2_only(tmp_path):
     assert "citations" in result["message"]
 
 
-def test_corpus_shape_29_word_reply_file_line_plus_citation_fires_d2(tmp_path):
+def test_corpus_shape_29_word_reply_file_line_plus_citation_fires_d2(tmp_path: Path) -> None:
     text = (
         "Fixed the precedence bug after tracing it through "
         "coordinator_core/hooks/foo.py:142 and confirmed the same regression "
@@ -390,7 +391,7 @@ def test_corpus_shape_29_word_reply_file_line_plus_citation_fires_d2(tmp_path):
     assert "citations" in result["message"]
 
 
-def test_falls_back_to_transcript_when_field_absent(tmp_path):
+def test_falls_back_to_transcript_when_field_absent(tmp_path: Path) -> None:
     path = tmp_path / "transcript.jsonl"
     long_text = " ".join(["word"] * 250)
     with open(path, "w", encoding="utf-8") as fh:

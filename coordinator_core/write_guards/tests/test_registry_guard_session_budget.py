@@ -16,6 +16,10 @@ from types import SimpleNamespace
 import pytest
 
 from coordinator_core.conftest import snapshot_engine_records
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _GUARD_PATH = _REPO_ROOT / "drive_root_write_guard.py"
@@ -52,7 +56,7 @@ def _count_files(root: Path) -> int:
     return sum(len(files) for _dirpath, _dirs, files in os.walk(root))
 
 
-def _load_guard():
+def _load_guard() -> ModuleType:
     """A private copy of the guard module, so the live plugin's globals stay untouched."""
     spec = importlib.util.spec_from_file_location("drive_root_write_guard_budget_probe", _GUARD_PATH)
     module = importlib.util.module_from_spec(spec)
@@ -63,19 +67,19 @@ def _load_guard():
 
 
 @pytest.fixture(scope="module")
-def big_registry(tmp_path_factory):
+def big_registry(tmp_path_factory: pytest.TempPathFactory) -> Path:
     settings_home = tmp_path_factory.mktemp("settings")
     written = _build_registry(settings_home)
     assert written == _TOTAL_FILES
     return settings_home
 
 
-def test_registry_fixture_is_30k_files(big_registry):
+def test_registry_fixture_is_30k_files(big_registry) -> None:
     assert _count_files(big_registry / "machine-local") == _TOTAL_FILES
     assert len(os.listdir(big_registry / "machine-local" / "engine-records")) == _KEY_DIRS
 
 
-def test_session_hooks_stay_under_budget_at_30k_files(big_registry, monkeypatch):
+def test_session_hooks_stay_under_budget_at_30k_files(big_registry, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(big_registry))
     guard = _load_guard()
     session = SimpleNamespace(exitstatus=0, config=SimpleNamespace())

@@ -9,10 +9,11 @@ import pytest
 
 from coordinator_core import atomic_append
 from coordinator_core.warm import polite_io, server
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _restore_worker_globals(monkeypatch):
+def _restore_worker_globals(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(server, "_worker_pristine_environ", None)
     monkeypatch.setattr(server, "_WORKER_STALL_DIR", None)
     monkeypatch.setattr(atomic_append, "_forwarder", None)
@@ -21,7 +22,7 @@ def _restore_worker_globals(monkeypatch):
     atomic_append.set_forwarder(None)
 
 
-def _stub_heavy_init(monkeypatch):
+def _stub_heavy_init(monkeypatch) -> None:
     monkeypatch.setattr(polite_io, "lower_own_priority", lambda: None)
     monkeypatch.setattr(server, "_bind_null_std_streams", lambda: None)
     monkeypatch.setattr(server, "_bind_worker_stderr_log", lambda d: None)
@@ -30,7 +31,7 @@ def _stub_heavy_init(monkeypatch):
     monkeypatch.setattr(server, "_prewarm_emit_chain", lambda: None)
 
 
-def _wait_for(predicate, timeout=5.0):
+def _wait_for(predicate, timeout: float = 5.0) -> bool:
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if predicate():
@@ -39,7 +40,7 @@ def _wait_for(predicate, timeout=5.0):
     return False
 
 
-def test_worker_init_forwards_droppable_telemetry_to_the_queue(monkeypatch, tmp_path):
+def test_worker_init_forwards_droppable_telemetry_to_the_queue(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _stub_heavy_init(monkeypatch)
     q = multiprocessing.get_context().Queue(maxsize=server._FORWARD_QUEUE_MAX)
     server._worker_process_init(None, None, q)
@@ -51,7 +52,7 @@ def test_worker_init_forwards_droppable_telemetry_to_the_queue(monkeypatch, tmp_
     assert not (tmp_path / "sink.jsonl").exists(), "worker opened the sink itself"
 
 
-def test_worker_init_without_a_queue_keeps_in_process_writes(monkeypatch, tmp_path):
+def test_worker_init_without_a_queue_keeps_in_process_writes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _stub_heavy_init(monkeypatch)
     server._worker_process_init()
 
@@ -62,7 +63,7 @@ def test_worker_init_without_a_queue_keeps_in_process_writes(monkeypatch, tmp_pa
 
 
 @pytest.mark.deliberate_wall_clock(reason="block bound: a full forward queue must drop, never block the writer")
-def test_full_forward_queue_drops_and_counts_never_blocks(monkeypatch, tmp_path):
+def test_full_forward_queue_drops_and_counts_never_blocks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _stub_heavy_init(monkeypatch)
 
     class _Full:
@@ -81,7 +82,7 @@ def test_full_forward_queue_drops_and_counts_never_blocks(monkeypatch, tmp_path)
     assert not (tmp_path / "s.jsonl").exists()
 
 
-def test_parent_drain_hands_lines_to_append_line_bounded(monkeypatch):
+def test_parent_drain_hands_lines_to_append_line_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
     got = []
     monkeypatch.setattr(atomic_append, "append_line_bounded", lambda s, e, r=False: got.append((s, e, r)))
     q = multiprocessing.get_context().Queue(maxsize=8)
@@ -95,7 +96,7 @@ def test_parent_drain_hands_lines_to_append_line_bounded(monkeypatch):
         stop.set()
 
 
-def test_drain_stops_when_its_event_is_set(monkeypatch):
+def test_drain_stops_when_its_event_is_set(monkeypatch: pytest.MonkeyPatch) -> None:
     got = []
     monkeypatch.setattr(atomic_append, "append_line_bounded", lambda s, e, r=False: got.append(s))
     monkeypatch.setattr(server, "_FORWARD_DRAIN_POLL_SECS", 0.05)
@@ -110,7 +111,7 @@ def test_drain_stops_when_its_event_is_set(monkeypatch):
 
 
 class _FakePool:
-    def __init__(self, **kwargs):
+    def __init__(self, **kwargs) -> None:
         self.kwargs = kwargs
 
 
@@ -125,7 +126,7 @@ def _bare_context(monkeypatch, tmp_path):
     return ctx
 
 
-def test_pool_is_built_with_the_forward_queue_as_third_initarg(monkeypatch, tmp_path):
+def test_pool_is_built_with_the_forward_queue_as_third_initarg(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     ctx = _bare_context(monkeypatch, tmp_path)
     pool = ctx._ensure_dispatch_pool()
     try:
@@ -139,7 +140,7 @@ def test_pool_is_built_with_the_forward_queue_as_third_initarg(monkeypatch, tmp_
         ctx._telemetry_drain_stop.set()
 
 
-def test_rebuilding_the_pool_rebuilds_the_queue_and_stops_the_old_drain(monkeypatch, tmp_path):
+def test_rebuilding_the_pool_rebuilds_the_queue_and_stops_the_old_drain(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     ctx = _bare_context(monkeypatch, tmp_path)
     first = ctx._ensure_dispatch_pool()
     first_stop = ctx._telemetry_drain_stop

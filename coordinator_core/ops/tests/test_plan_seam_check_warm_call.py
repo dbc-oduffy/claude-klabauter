@@ -7,9 +7,11 @@ import json
 from coordinator_core.ops import plan_seam_check as op
 from coordinator_core.ops.dispatch_emit import spine_read
 from coordinator_core.ops.tests.test_plan_seam_check import _plan, _root, _row, git  # noqa: F401
+from pathlib import Path
+import pytest
 
 
-def _set(root):
+def _set(root) -> list[str]:
     return [
         _plan(root, "a", _row("A1", "[a.py]") + _row("A2", "[shared.py]")),
         _plan(root, "b", _row("B1", "[b.py]") + _row("B2", "[shared.py]")),
@@ -17,13 +19,13 @@ def _set(root):
     ]
 
 
-def _reply(root, plans):
+def _reply(root, plans) -> str:
     reply = op._check_handler({"plans": plans, "phase": "prep", "named_set": False}, repo_root=root)
     reply.pop("checked_at_sha", None)
     return json.dumps(reply, sort_keys=True, default=str)
 
 
-def test_a_plan_text_is_split_once_across_every_reader(tmp_path, git, monkeypatch):
+def test_a_plan_text_is_split_once_across_every_reader(tmp_path: Path, git, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path)
     plans = _set(root)
     spine_read._FM_SPLITS.clear()
@@ -40,7 +42,7 @@ def test_a_plan_text_is_split_once_across_every_reader(tmp_path, git, monkeypatc
     assert len(calls) == len(set(calls)) == len(plans)
 
 
-def test_a_plan_read_by_many_read_spine_calls_is_parsed_once(tmp_path, monkeypatch):
+def test_a_plan_read_by_many_read_spine_calls_is_parsed_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path)
     rel = _plan(root, "solo", _row("S1", "[s.py]"))
     spine_read._ROWS_MEMO.clear()
@@ -57,7 +59,7 @@ def test_a_plan_read_by_many_read_spine_calls_is_parsed_once(tmp_path, monkeypat
     assert len(parses) == 1
 
 
-def test_reply_equals_the_uncut_reply(tmp_path, git, monkeypatch):
+def test_reply_equals_the_uncut_reply(tmp_path: Path, git, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path)
     plans = _set(root)
     cut = _reply(root, plans)

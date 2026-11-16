@@ -4,6 +4,7 @@ from pathlib import Path
 
 from coordinator_core.git import git_state
 from coordinator_core.git.call_io_scope import HEAD_NAMESPACE, call_io_scope, invalidate
+import pytest
 
 
 def _repo(tmp_path: Path, sha: str) -> Path:
@@ -18,7 +19,7 @@ def _count_reads(monkeypatch):
     calls = []
     real = Path.read_text
 
-    def spy(self, *a, **k):
+    def spy(self, *a, **k) -> str:
         calls.append(self.name)
         return real(self, *a, **k)
 
@@ -29,7 +30,7 @@ def _count_reads(monkeypatch):
 A, B = "a" * 40, "b" * 40
 
 
-def test_scope_reads_head_and_ref_once(tmp_path, monkeypatch):
+def test_scope_reads_head_and_ref_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path, A)
     calls = _count_reads(monkeypatch)
     with call_io_scope():
@@ -37,7 +38,7 @@ def test_scope_reads_head_and_ref_once(tmp_path, monkeypatch):
     assert calls == ["HEAD", "main"]
 
 
-def test_invalidate_observes_peer_write(tmp_path):
+def test_invalidate_observes_peer_write(tmp_path: Path) -> None:
     repo = _repo(tmp_path, A)
     with call_io_scope():
         assert git_state.head_sha(repo) == A
@@ -47,7 +48,7 @@ def test_invalidate_observes_peer_write(tmp_path):
         assert git_state.head_sha(repo) == B
 
 
-def test_fresh_always_reads_and_never_populates(tmp_path, monkeypatch):
+def test_fresh_always_reads_and_never_populates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path, A)
     calls = _count_reads(monkeypatch)
     with call_io_scope():
@@ -60,7 +61,7 @@ def test_fresh_always_reads_and_never_populates(tmp_path, monkeypatch):
         assert len(calls) == 8
 
 
-def test_outside_scope_every_call_reads(tmp_path, monkeypatch):
+def test_outside_scope_every_call_reads(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path, A)
     calls = _count_reads(monkeypatch)
     for _ in range(3):

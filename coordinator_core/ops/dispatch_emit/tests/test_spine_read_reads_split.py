@@ -17,6 +17,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     read_spine,
 )
 from coordinator_core.ops.dispatch_emit.wave_map import build_waves
+from pathlib import Path
 
 _HEADER = "# fixture plan\n\n## Tasks\n\n"
 
@@ -27,7 +28,7 @@ def _write_plan(tmp_path, body: str):
     return path
 
 
-def test_reads_at_head_defaults_to_empty_tuple(tmp_path):
+def test_reads_at_head_defaults_to_empty_tuple(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: no reads_at_head declared
@@ -39,7 +40,7 @@ def test_reads_at_head_defaults_to_empty_tuple(tmp_path):
     assert rows["C1"].reads == []
 
 
-def test_consumes_populates_ordering_reads(tmp_path):
+def test_consumes_populates_ordering_reads(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: consumes some path
@@ -53,7 +54,7 @@ def test_consumes_populates_ordering_reads(tmp_path):
     assert rows["C1"].reads_at_head == ()
 
 
-def test_reads_and_consumes_union_into_ordering_set(tmp_path):
+def test_reads_and_consumes_union_into_ordering_set(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: both reads and consumes
@@ -68,7 +69,7 @@ def test_reads_and_consumes_union_into_ordering_set(tmp_path):
     assert rows["C1"].reads == ["a.py", "b.py"]
 
 
-def test_reads_at_head_declared_and_never_orders(tmp_path):
+def test_reads_at_head_declared_and_never_orders(tmp_path: Path) -> None:
     body = """\
 - id: writer
   title: writes the file
@@ -93,7 +94,7 @@ def test_reads_at_head_declared_and_never_orders(tmp_path):
     assert any({"writer", "head_reader"} <= ids for ids in wave_ids)
 
 
-def test_consumes_still_orders_after_writer(tmp_path):
+def test_consumes_still_orders_after_writer(tmp_path: Path) -> None:
     body = """\
 - id: writer
   title: writes the file
@@ -116,7 +117,7 @@ def test_consumes_still_orders_after_writer(tmp_path):
     assert wave_of["writer"] < wave_of["consumer"]
 
 
-def test_same_path_in_reads_at_head_and_consumes_raises(tmp_path):
+def test_same_path_in_reads_at_head_and_consumes_raises(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: contradiction
@@ -131,7 +132,7 @@ def test_same_path_in_reads_at_head_and_consumes_raises(tmp_path):
         read_spine(plan_path)
 
 
-def test_same_path_in_reads_at_head_and_reads_raises(tmp_path):
+def test_same_path_in_reads_at_head_and_reads_raises(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: contradiction via legacy reads
@@ -146,11 +147,11 @@ def test_same_path_in_reads_at_head_and_reads_raises(tmp_path):
         read_spine(plan_path)
 
 
-def test_contradictory_read_declaration_is_a_field_type_error_subclass():
+def test_contradictory_read_declaration_is_a_field_type_error_subclass() -> None:
     assert issubclass(ContradictoryReadDeclarationError, InvalidFieldTypeError)
 
 
-def test_reads_at_head_scalar_raises_invalid_field_type(tmp_path):
+def test_reads_at_head_scalar_raises_invalid_field_type(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: scalar reads_at_head
@@ -162,7 +163,7 @@ def test_reads_at_head_scalar_raises_invalid_field_type(tmp_path):
         read_spine(plan_path)
 
 
-def test_consumes_scalar_raises_invalid_field_type(tmp_path):
+def test_consumes_scalar_raises_invalid_field_type(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: scalar consumes
@@ -174,7 +175,7 @@ def test_consumes_scalar_raises_invalid_field_type(tmp_path):
         read_spine(plan_path)
 
 
-def test_reads_key_logs_deprecation_warning(tmp_path, caplog):
+def test_reads_key_logs_deprecation_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     body = """\
 - id: C1
   title: uses legacy reads key
@@ -191,7 +192,7 @@ def test_reads_key_logs_deprecation_warning(tmp_path, caplog):
     assert "reads:" in warnings[0].getMessage()
 
 
-def test_reads_key_absent_logs_no_warning(tmp_path, caplog):
+def test_reads_key_absent_logs_no_warning(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     body = """\
 - id: C1
   title: no legacy reads key
@@ -206,7 +207,7 @@ def test_reads_key_absent_logs_no_warning(tmp_path, caplog):
     assert not warnings
 
 
-def test_warning_names_every_row_using_reads_key(tmp_path, caplog):
+def test_warning_names_every_row_using_reads_key(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     body = """\
 - id: C1
   title: legacy reads
@@ -259,14 +260,14 @@ _SHAPE = """\
 """
 
 
-def test_later_withheld_writer_and_coded_producer_do_not_withhold_consumers(tmp_path):
+def test_later_withheld_writer_and_coded_producer_do_not_withhold_consumers(tmp_path: Path) -> None:
     exclusions: list = []
     rows = read_spine(_write_plan(tmp_path, _SHAPE), exclusions=exclusions)
     assert [r.id for r in rows] == ["S7", "S9"]
     assert {e["id"]: e["reason"] for e in exclusions} == {"S5": "disposition", "S16": "deferred"}
 
 
-def test_earlier_withheld_writer_still_withholds_consumer(tmp_path):
+def test_earlier_withheld_writer_still_withholds_consumer(tmp_path: Path) -> None:
     body = """\
 - id: W
   title: early writer
@@ -284,7 +285,7 @@ def test_earlier_withheld_writer_still_withholds_consumer(tmp_path):
     assert {e["id"]: e["reason"] for e in exclusions}["R"] == "withheld_by_consumed_path"
 
 
-def test_writer_declared_after_consumer_does_not_withhold_even_when_listed_first(tmp_path):
+def test_writer_declared_after_consumer_does_not_withhold_even_when_listed_first(tmp_path: Path) -> None:
     body = """\
 - id: W
   title: writer that depends on the reader
@@ -302,7 +303,7 @@ def test_writer_declared_after_consumer_does_not_withhold_even_when_listed_first
     assert [r.id for r in read_spine(_write_plan(tmp_path, body))] == ["R"]
 
 
-def test_describe_exclusions_names_each_dropped_row_and_reason(tmp_path):
+def test_describe_exclusions_names_each_dropped_row_and_reason(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.spine_read import describe_exclusions
 
     body = """\

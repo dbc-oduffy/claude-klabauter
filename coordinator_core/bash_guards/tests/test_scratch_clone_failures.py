@@ -12,11 +12,12 @@ from coordinator_core.bash_guards._unborn_scratch_repo import (
     UNREADABLE,
     scratch_clone_failures,
 )
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
 
-def _scratch_repo(tmp_path):
+def _scratch_repo(tmp_path) -> str:
     (tmp_path / ".git").mkdir()
     clone = tmp_path / "scratch" / "c"
     (clone / ".git").mkdir(parents=True)
@@ -24,12 +25,12 @@ def _scratch_repo(tmp_path):
     return str(clone)
 
 
-def test_nonzero_rc_is_unreadable(tmp_path):
+def test_nonzero_rc_is_unreadable(tmp_path: Path) -> None:
     root = _scratch_repo(tmp_path)
     assert scratch_clone_failures(root, lambda args, cwd: (128, "")) == [UNREADABLE]
 
 
-def test_raised_oserror_is_unreadable(tmp_path):
+def test_raised_oserror_is_unreadable(tmp_path: Path) -> None:
     root = _scratch_repo(tmp_path)
 
     def boom(args, cwd):
@@ -38,12 +39,12 @@ def test_raised_oserror_is_unreadable(tmp_path):
     assert scratch_clone_failures(root, boom) == [UNREADABLE]
 
 
-def test_clean_repo_has_no_failures(tmp_path):
+def test_clean_repo_has_no_failures(tmp_path: Path) -> None:
     root = _scratch_repo(tmp_path)
     assert scratch_clone_failures(root, lambda args, cwd: (0, "")) == []
 
 
-def _real_git(args, cwd):
+def _real_git(args, cwd) -> tuple[int, str]:
     out = subprocess.run(
         ["git", *args], cwd=cwd, capture_output=True, text=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -51,7 +52,7 @@ def _real_git(args, cwd):
     return out.returncode, out.stdout
 
 
-def _g(cwd, *args):
+def _g(cwd, *args) -> str:
     rc, out = _real_git(
         ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
          "-c", "tag.gpgsign=false", *args], str(cwd))
@@ -71,13 +72,13 @@ def _origin_and_clone(tmp_path):
     return origin, clone
 
 
-def test_detached_head_at_pushed_commit_is_recoverable(tmp_path):
+def test_detached_head_at_pushed_commit_is_recoverable(tmp_path: Path) -> None:
     _, clone = _origin_and_clone(tmp_path)
     _g(clone, "checkout", "-q", "--detach", "HEAD")
     assert scratch_clone_failures(str(clone), _real_git) == []
 
 
-def test_local_tag_on_remote_but_not_under_remotes_is_recoverable(tmp_path):
+def test_local_tag_on_remote_but_not_under_remotes_is_recoverable(tmp_path: Path) -> None:
     origin, clone = _origin_and_clone(tmp_path)
     _g(clone, "checkout", "-q", "--detach", "HEAD")
     _g(clone, "commit", "-q", "--allow-empty", "-m", "side")
@@ -88,13 +89,13 @@ def test_local_tag_on_remote_but_not_under_remotes_is_recoverable(tmp_path):
     assert scratch_clone_failures(str(clone), _real_git) == []
 
 
-def test_unpushed_commit_stays_unpushed(tmp_path):
+def test_unpushed_commit_stays_unpushed(tmp_path: Path) -> None:
     _, clone = _origin_and_clone(tmp_path)
     _g(clone, "commit", "-q", "--allow-empty", "-m", "local")
     assert scratch_clone_failures(str(clone), _real_git) == [UNPUSHED]
 
 
-def test_unpushed_tag_stays_unpushed(tmp_path):
+def test_unpushed_tag_stays_unpushed(tmp_path: Path) -> None:
     _, clone = _origin_and_clone(tmp_path)
     _g(clone, "checkout", "-q", "--detach", "HEAD")
     _g(clone, "commit", "-q", "--allow-empty", "-m", "side")
@@ -103,7 +104,7 @@ def test_unpushed_tag_stays_unpushed(tmp_path):
     assert scratch_clone_failures(str(clone), _real_git) == [UNPUSHED]
 
 
-def test_annotated_tag_on_remote_is_recoverable(tmp_path):
+def test_annotated_tag_on_remote_is_recoverable(tmp_path: Path) -> None:
     _, clone = _origin_and_clone(tmp_path)
     _g(clone, "checkout", "-q", "--detach", "HEAD")
     _g(clone, "commit", "-q", "--allow-empty", "-m", "side")
@@ -113,7 +114,7 @@ def test_annotated_tag_on_remote_is_recoverable(tmp_path):
     assert scratch_clone_failures(str(clone), _real_git) == []
 
 
-def test_unreachable_origin_stays_unpushed(tmp_path):
+def test_unreachable_origin_stays_unpushed(tmp_path: Path) -> None:
     _, clone = _origin_and_clone(tmp_path)
     _g(clone, "checkout", "-q", "--detach", "HEAD")
     _g(clone, "commit", "-q", "--allow-empty", "-m", "side")
@@ -142,14 +143,14 @@ def _clone_verdict(cwd):
     return None if result is None else result.summary
 
 
-def test_clone_denial_into_occupied_dir_outside_repo_names_no_placeholder(tmp_path):
+def test_clone_denial_into_occupied_dir_outside_repo_names_no_placeholder(tmp_path: Path) -> None:
     verdict = _clone_verdict(tmp_path)
     assert verdict is not None
     assert "<repo>" not in verdict
     assert "empty or absent" in verdict
 
 
-def test_clone_denial_into_occupied_dir_inside_repo_names_no_placeholder(tmp_path):
+def test_clone_denial_into_occupied_dir_inside_repo_names_no_placeholder(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     verdict = _clone_verdict(tmp_path)
     assert verdict is not None

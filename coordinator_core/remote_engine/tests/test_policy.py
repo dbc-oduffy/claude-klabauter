@@ -2,6 +2,7 @@
 
 from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass
 from coordinator_core.remote_engine import policy
+import pytest
 
 
 def _compute_op() -> str:
@@ -16,35 +17,35 @@ def _mutating_op() -> str:
     return next(o for o, c in OP_CLASSIFICATION.items() if c is OpClass.MUTATING)
 
 
-def test_compute_only_op_is_remote_safe():
+def test_compute_only_op_is_remote_safe() -> None:
     assert policy.remote_safe(_compute_op())
     assert policy.remote_safe("ping")
 
 
-def test_mutating_op_refused_until_allowlisted(monkeypatch):
+def test_mutating_op_refused_until_allowlisted(monkeypatch: pytest.MonkeyPatch) -> None:
     op = _mutating_op()
     assert not policy.remote_safe(op)
     monkeypatch.setattr(policy, "PHASE2_MUTATING_ALLOWLIST", frozenset({op}))
     assert policy.remote_safe(op)
 
 
-def test_unclassified_op_refused():
+def test_unclassified_op_refused() -> None:
     assert not policy.remote_safe("no.such.op.anywhere")
 
 
-def test_trim_never_remote_even_if_allowlisted(monkeypatch):
+def test_trim_never_remote_even_if_allowlisted(monkeypatch: pytest.MonkeyPatch) -> None:
     for op in ("trim-file-cache", "BoxCacheTrim", "governor.view"):
         monkeypatch.setattr(policy, "PHASE2_MUTATING_ALLOWLIST", frozenset({op}))
         assert not policy.remote_safe(op)
 
 
-def test_local_only_compute_op_refused(monkeypatch):
+def test_local_only_compute_op_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     op = _compute_op()
     monkeypatch.setattr(policy, "LOCAL_ONLY", frozenset({op}))
     assert not policy.remote_safe(op)
 
 
-def test_phase2_allowlist_is_mint_land_only_and_classified_mutating():
+def test_phase2_allowlist_is_mint_land_only_and_classified_mutating() -> None:
     assert policy.PHASE2_MUTATING_ALLOWLIST == {
         "hooks.submit_engine_ask",
         "dispatch.emit",
@@ -56,12 +57,12 @@ def test_phase2_allowlist_is_mint_land_only_and_classified_mutating():
         assert not policy.is_local_only(op)
 
 
-def test_unlisted_mutating_op_still_refused():
+def test_unlisted_mutating_op_still_refused() -> None:
     assert not policy.remote_safe("ceremony.commit_v2")
     assert not policy.remote_safe("dispatch.terminal_commit")
 
 
-def test_far_result_indeterminate_both_sides():
+def test_far_result_indeterminate_both_sides() -> None:
     bad = {"ok": False, "state": "unknown", "reason": "timeout"}
     good = {"ok": True, "reply": {"a": 1}}
     assert policy.far_result_indeterminate("dispatch.emit", bad)
@@ -73,7 +74,7 @@ def test_far_result_indeterminate_both_sides():
     assert not policy.is_phase2_mutating("ping")
 
 
-def test_carries_local_path_flags_path_keys_only():
+def test_carries_local_path_flags_path_keys_only() -> None:
     assert policy.carries_local_path({"cwd": "C" + ":\\w\\x"})
     assert policy.carries_local_path({"cwd": "E" + ":/w"})
     assert policy.carries_local_path({"p_path": "/abs"})
@@ -85,7 +86,7 @@ def test_carries_local_path_flags_path_keys_only():
     assert not policy.carries_local_path({"cwd": "relative/dir", "prompt": "/x"})
 
 
-def test_carries_local_path_plural_tilde_bare_drive():
+def test_carries_local_path_plural_tilde_bare_drive() -> None:
     assert policy.carries_local_path({"paths": ["rel/a", "/abs/b"]})
     assert policy.carries_local_path({"files": ["ok", "C" + ":\\x"]})
     assert policy.carries_local_path({"target_paths": ["~/x"]})
@@ -98,7 +99,7 @@ def test_carries_local_path_plural_tilde_bare_drive():
     assert not policy.carries_local_path({"notes": ["/abs", "E" + ":"]})
 
 
-def test_reply_envelope():
+def test_reply_envelope() -> None:
     assert policy.reply_envelope("machine-a", 12) == {
         "served_by": "machine-a",
         "latency_ms": 12.0,

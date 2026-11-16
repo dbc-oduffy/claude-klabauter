@@ -7,10 +7,15 @@ import sys
 import pytest
 
 from coordinator_core.install import engine_interpreter as ei
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
 
 
-def _fake_pip(calls, *, rc=0, populate=True):
-    def run(argv, **kwargs):
+def _fake_pip(calls, *, rc: int = 0, populate: bool = True):
+    def run(argv, **kwargs) -> CompletedProcess[str]:
         calls.append(argv)
         if populate and "--target" in argv:
             target = argv[argv.index("--target") + 1]
@@ -20,13 +25,13 @@ def _fake_pip(calls, *, rc=0, populate=True):
     return run
 
 
-def test_site_dir_is_under_given_home_and_defaults_to_settings_home(tmp_path, monkeypatch):
+def test_site_dir_is_under_given_home_and_defaults_to_settings_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert ei.engine_site_dir(tmp_path) == tmp_path / "engine-site"
     monkeypatch.setattr(ei._settings_home, "settings_home", lambda: tmp_path)
     assert ei.engine_site_dir() == tmp_path / "engine-site"
 
 
-def test_stamp_none_when_absent_and_zero_spawn(tmp_path, monkeypatch):
+def test_stamp_none_when_absent_and_zero_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("spawn")
 
@@ -34,7 +39,7 @@ def test_stamp_none_when_absent_and_zero_spawn(tmp_path, monkeypatch):
     assert ei.stamp(tmp_path) is None
 
 
-def test_ensure_installs_with_one_pip_target_spawn_and_stamps(tmp_path, monkeypatch):
+def test_ensure_installs_with_one_pip_target_spawn_and_stamps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(subprocess, "run", _fake_pip(calls))
     out = ei.ensure(sys.executable, ["PyYAML>=6"], tmp_path)
@@ -48,7 +53,7 @@ def test_ensure_installs_with_one_pip_target_spawn_and_stamps(tmp_path, monkeypa
     assert ei.stamp(tmp_path) == tuple(sys.version_info[:2])
 
 
-def test_ensure_is_idempotent_with_zero_spawn_when_stamp_matches(tmp_path, monkeypatch):
+def test_ensure_is_idempotent_with_zero_spawn_when_stamp_matches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(subprocess, "run", _fake_pip(calls))
     ei.ensure(sys.executable, ["PyYAML>=6"], tmp_path)
@@ -56,7 +61,7 @@ def test_ensure_is_idempotent_with_zero_spawn_when_stamp_matches(tmp_path, monke
     assert len(calls) == 1
 
 
-def test_ensure_reprovisions_when_stamp_names_another_interpreter(tmp_path, monkeypatch):
+def test_ensure_reprovisions_when_stamp_names_another_interpreter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(subprocess, "run", _fake_pip(calls))
     site = ei.engine_site_dir(tmp_path)
@@ -70,7 +75,7 @@ def test_ensure_reprovisions_when_stamp_names_another_interpreter(tmp_path, monk
     assert ei.stamp(tmp_path) == tuple(sys.version_info[:2])
 
 
-def test_ensure_reprovisions_when_declared_specs_change(tmp_path, monkeypatch):
+def test_ensure_reprovisions_when_declared_specs_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(subprocess, "run", _fake_pip(calls))
     ei.ensure(sys.executable, ["PyYAML>=6"], tmp_path)
@@ -78,14 +83,14 @@ def test_ensure_reprovisions_when_declared_specs_change(tmp_path, monkeypatch):
     assert len(calls) == 2
 
 
-def test_ensure_failure_raises_and_leaves_no_stamp(tmp_path, monkeypatch):
+def test_ensure_failure_raises_and_leaves_no_stamp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subprocess, "run", _fake_pip([], rc=1, populate=False))
     with pytest.raises(RuntimeError, match="engine-site install failed"):
         ei.ensure(sys.executable, ["PyYAML>=6"], tmp_path)
     assert ei.stamp(tmp_path) is None
 
 
-def test_ensure_probes_a_foreign_interpreter_version_once(tmp_path, monkeypatch):
+def test_ensure_probes_a_foreign_interpreter_version_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
     def run(argv, **kwargs):
@@ -99,7 +104,7 @@ def test_ensure_probes_a_foreign_interpreter_version_once(tmp_path, monkeypatch)
     assert ei.stamp(tmp_path) == (3, 9)
 
 
-def _stamped(tmp_path, minor, *, with_yaml=True):
+def _stamped(tmp_path, minor, *, with_yaml: bool = True) -> None:
     """Write an engine-site stamp for ``minor`` (and a yaml dir unless told not to)."""
     site = ei.engine_site_dir(tmp_path)
     site.mkdir(parents=True)
@@ -108,14 +113,14 @@ def _stamped(tmp_path, minor, *, with_yaml=True):
         (site / "yaml").mkdir()
 
 
-def _interp(tmp_path, name):
+def _interp(tmp_path, name) -> str:
     path = tmp_path / "bin" / name
     path.parent.mkdir(exist_ok=True)
     path.write_text("")
     return str(path)
 
 
-def test_health_ok_mismatch_missing_yaml_absent_unknown_with_zero_spawn(tmp_path, monkeypatch):
+def test_health_ok_mismatch_missing_yaml_absent_unknown_with_zero_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("spawn")
 
@@ -131,12 +136,12 @@ def test_health_ok_mismatch_missing_yaml_absent_unknown_with_zero_spawn(tmp_path
     assert ei.health(_interp(tmp_path, "python.exe"), tmp_path).status == "unknown"
 
 
-def test_health_yaml_absent_when_stamp_matches_but_dir_gone(tmp_path):
+def test_health_yaml_absent_when_stamp_matches_but_dir_gone(tmp_path: Path) -> None:
     _stamped(tmp_path, "3.15", with_yaml=False)
     assert ei.health(_interp(tmp_path, "python3.15"), tmp_path).status == "yaml-absent"
 
 
-def test_health_reads_minor_through_a_symlink_realpath(tmp_path):
+def test_health_reads_minor_through_a_symlink_realpath(tmp_path: Path) -> None:
     real = _interp(tmp_path, "python3.15")
     link = tmp_path / "python3"
     try:

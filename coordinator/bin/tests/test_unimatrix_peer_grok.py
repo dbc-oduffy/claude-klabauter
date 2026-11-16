@@ -9,6 +9,10 @@ import sys
 from pathlib import Path
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
 
 pytestmark = pytest.mark.complete
 
@@ -30,12 +34,12 @@ def box():
 
 
 @pytest.mark.parametrize("host", ["Machine-b.local", "machine-b", "Machine-b"])
-def test_peer_name_suffix_is_one_box_across_hostname_spellings(monkeypatch, host):
+def test_peer_name_suffix_is_one_box_across_hostname_spellings(monkeypatch: pytest.MonkeyPatch, host) -> None:
     monkeypatch.setattr(socket, "gethostname", lambda: host)
     assert pg.peer_name(SID, "/nowhere/myrepo") == "grok-myrepo-01a1c000-on-machine-b"
 
 
-def test_live_entry_yields_named_grok_peer(tmp_path):
+def test_live_entry_yields_named_grok_peer(tmp_path: Path) -> None:
     repo = tmp_path / "myrepo"
     (repo / ".git").mkdir(parents=True)
     sub = repo / "pkg"
@@ -46,12 +50,12 @@ def test_live_entry_yields_named_grok_peer(tmp_path):
                       "target": SID, "cwd": str(sub)}]
 
 
-def test_dead_pid_yields_no_peer(tmp_path):
+def test_dead_pid_yields_no_peer(tmp_path: Path) -> None:
     home = registry(tmp_path, [{"session_id": SID, "pid": 4242, "cwd": str(tmp_path)}])
     assert pg.discover_peers(home, pid_alive=lambda pid: False) == []
 
 
-def test_default_liveness_uses_real_pid_check(tmp_path):
+def test_default_liveness_uses_real_pid_check(tmp_path: Path) -> None:
     rows = [{"session_id": SID, "pid": os.getpid(), "cwd": str(tmp_path)}]
     assert [p["target"] for p in pg.discover_peers(registry(tmp_path, rows))] == [SID]
     proc = subprocess.Popen([sys.executable, "-c", "pass"])
@@ -62,28 +66,28 @@ def test_default_liveness_uses_real_pid_check(tmp_path):
 
 @pytest.mark.parametrize("content", ["not json", "{}", "[1, 'x', {\"session_id\": 3}]",
                                      '[{"session_id": "a", "cwd": "/x", "pid": "9"}]'])
-def test_malformed_registry_yields_no_peers(tmp_path, content):
+def test_malformed_registry_yields_no_peers(tmp_path: Path, content) -> None:
     (tmp_path / "active_sessions.json").write_text(content, encoding="utf-8")
     assert pg.discover_peers(tmp_path, pid_alive=lambda pid: True) == []
 
 
-def test_absent_registry_yields_no_peers(tmp_path):
+def test_absent_registry_yields_no_peers(tmp_path: Path) -> None:
     assert pg.discover_peers(tmp_path, pid_alive=lambda pid: True) == []
 
 
-def test_taken_name_and_target_are_skipped(tmp_path):
+def test_taken_name_and_target_are_skipped(tmp_path: Path) -> None:
     home = registry(tmp_path, [{"session_id": SID, "pid": 1, "cwd": str(tmp_path)}])
     name = pg.peer_name(SID, str(tmp_path))
     assert pg.discover_peers(home, lambda p: True, taken_names={name}) == []
     assert pg.discover_peers(home, lambda p: True, taken_targets={SID}) == []
 
 
-def test_grok_home_honours_env(tmp_path, monkeypatch):
+def test_grok_home_honours_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("GROK_HOME", str(tmp_path))
     assert pg.grok_home() == tmp_path
 
 
-def test_argv_is_cwd_pinned_without_add_dir_or_fork(tmp_path):
+def test_argv_is_cwd_pinned_without_add_dir_or_fork(tmp_path: Path) -> None:
     argv = pg.resume_argv("grok", SID, "hello", str(tmp_path))
     assert argv[argv.index("--cwd") + 1] == str(tmp_path)
     assert argv[argv.index("-r") + 1] == SID
@@ -91,14 +95,14 @@ def test_argv_is_cwd_pinned_without_add_dir_or_fork(tmp_path):
     assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
 
 
-def run_turn(runner, tmp_path, timeout=5):
+def run_turn(runner, tmp_path, timeout: int = 5):
     return asyncio.run(pg.grok_turn(SID, str(tmp_path), "hi", timeout=timeout, binary="grok", runner=runner))
 
 
-def test_turn_returns_reply_and_pins_cwd(tmp_path):
+def test_turn_returns_reply_and_pins_cwd(tmp_path: Path) -> None:
     seen = {}
 
-    def runner(argv, **kw):
+    def runner(argv, **kw) -> "CompletedProcess[str]":
         seen.update(argv=argv, **kw)
         return subprocess.CompletedProcess(argv, 0, json.dumps({"text": "pong", "sessionId": SID}), "")
 
@@ -107,7 +111,7 @@ def test_turn_returns_reply_and_pins_cwd(tmp_path):
     assert "--cwd" in seen["argv"] and "--add-dir" not in seen["argv"]
 
 
-def test_turn_timeout_nonzero_and_garbage_return_no_reply(tmp_path):
+def test_turn_timeout_nonzero_and_garbage_return_no_reply(tmp_path: Path) -> None:
     def timeout(argv, **kw):
         raise subprocess.TimeoutExpired(argv, 1)
 
@@ -117,27 +121,27 @@ def test_turn_timeout_nonzero_and_garbage_return_no_reply(tmp_path):
     assert run_turn(lambda a, **k: (_ for _ in ()).throw(FileNotFoundError()), tmp_path) == pg.NO_REPLY
 
 
-def test_own_session_matches_an_ancestor_pid_to_the_registry_pid(tmp_path):
+def test_own_session_matches_an_ancestor_pid_to_the_registry_pid(tmp_path: Path) -> None:
     home = registry(tmp_path, [{"session_id": SID, "pid": 100, "cwd": str(tmp_path)}])
     parents = {900: 500, 500: 100, 100: 1}
     peer = pg.own_session(home, pid_alive=lambda p: True, parent_of=parents.get, start=900)
     assert peer["target"] == SID and peer["name"] == pg.peer_name(SID, str(tmp_path))
 
 
-def test_own_session_none_when_no_ancestor_is_a_registry_pid(tmp_path):
+def test_own_session_none_when_no_ancestor_is_a_registry_pid(tmp_path: Path) -> None:
     home = registry(tmp_path, [{"session_id": SID, "pid": 100, "cwd": str(tmp_path)}])
     parents = {900: 500, 500: 1}
     assert pg.own_session(home, pid_alive=lambda p: True, parent_of=parents.get, start=900) is None
 
 
-def test_own_session_ignores_a_dead_registry_row_and_survives_a_parent_cycle(tmp_path):
+def test_own_session_ignores_a_dead_registry_row_and_survives_a_parent_cycle(tmp_path: Path) -> None:
     home = registry(tmp_path, [{"session_id": SID, "pid": 100, "cwd": str(tmp_path)}])
     assert pg.own_session(home, pid_alive=lambda p: False, parent_of={900: 100}.get, start=900) is None
     live = registry(tmp_path, [{"session_id": SID, "pid": 7, "cwd": str(tmp_path)}])
     assert pg.own_session(live, pid_alive=lambda p: True, parent_of={900: 500, 500: 900}.get, start=900) is None
 
 
-def test_own_session_empty_registry_never_walks_processes(tmp_path):
+def test_own_session_empty_registry_never_walks_processes(tmp_path: Path) -> None:
     def boom(pid):
         raise AssertionError("walked")
 
@@ -145,11 +149,11 @@ def test_own_session_empty_registry_never_walks_processes(tmp_path):
     assert pg.own_session(tmp_path / "missing", parent_of=boom, start=1) is None
 
 
-def test_real_parent_pid_finds_this_processes_parent():
+def test_real_parent_pid_finds_this_processes_parent() -> None:
     assert pg.parent_pid(os.getpid()) == os.getppid()
 
 
-def test_own_session_real_walk_from_a_child_process_finds_the_registered_ancestor(tmp_path):
+def test_own_session_real_walk_from_a_child_process_finds_the_registered_ancestor(tmp_path: Path) -> None:
     home = registry(tmp_path, [{"session_id": SID, "pid": os.getpid(), "cwd": str(tmp_path)}])
     code = ("import importlib.util,sys;"
             f"s=importlib.util.spec_from_file_location('g',r'{BIN / 'unimatrix-peer-grok.py'}');"

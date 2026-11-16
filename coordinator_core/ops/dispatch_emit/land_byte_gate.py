@@ -12,7 +12,8 @@ is a no-op, since `held_lock` itself deadlocks on a same-process re-acquire. It 
 across threads and processes for the same non-empty holder label (the run id): a contended gate
 whose recorded holder is that label and a live pid admits at once without taking or releasing the
 lock. With no caller wait, a contended gate is queued behind for as long as the recorded holder's
-pid is alive (the dispatcher clamp still bounds it); an unreadable record gets DEFAULT_WAIT_SECS.
+pid is alive, up to `GATE_STEP_SECS` (then `land_deadline.LandDeadlineExceeded` parks the landing;
+the dispatcher clamp bounds it sooner); an unreadable record gets DEFAULT_WAIT_SECS.
 An explicit wait is a fixed bound. Acquisition is try-once first, so a dead holder's OS-freed
 lock is taken immediately.
 """
@@ -20,7 +21,7 @@ lock is taken immediately.
 from __future__ import annotations
 
 import time
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, contextmanager, nullcontext
 from contextvars import ContextVar
 from pathlib import Path
 from typing import Iterator, Optional
@@ -28,9 +29,16 @@ from typing import Iterator, Optional
 from coordinator_core import dispatch_abandon
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.locked_write import LockTimeout, held_lock
+from coordinator_core.ops.dispatch_emit import land_deadline
 
 #: Admission wait when neither the caller nor a bound dispatch deadline names one.
 DEFAULT_WAIT_SECS = 20.0
+
+#: Step name and cap of a queue wait with no caller wait: past the cap `admit` raises
+#: `land_deadline.LandDeadlineExceeded(GATE_STEP, step=True)` instead of following the holder on.
+#: Cap plus `LAND_BUDGET_SECS` plus `RESERVE_SECS` stays under `WALL_HANG_CEILING_SECS`.
+GATE_STEP = "land_byte_gate.admit"
+GATE_STEP_SECS = 8.0
 
 _LOCK_NAME = "land-byte-gate"
 
@@ -119,38 +127,41 @@ def admit(
     target = common / _LOCK_NAME
     own_run = False
     with ExitStack() as stack:
+        wait_step = land_deadline.step(GATE_STEP, GATE_STEP_SECS) if follow_holder else nullcontext()
         try:
-            try:
-                stack.enter_context(
-                    held_lock(target, anchor_root=anchor_root, timeout=0, holder_label=holder_label)
-                )
-            except LockTimeout as busy:
-                latest = busy
-                own_run = _held_by_own_run(busy, holder_label)
-                while not own_run:
-                    if follow_holder:
-                        now = time.monotonic()
-                        if _holder_alive(latest):
-                            unreadable_since = None
-                            left = _clamp_to_dispatcher(float("inf"))
+            with wait_step:
+                try:
+                    stack.enter_context(
+                        held_lock(target, anchor_root=anchor_root, timeout=0, holder_label=holder_label)
+                    )
+                except LockTimeout as busy:
+                    latest = busy
+                    own_run = _held_by_own_run(busy, holder_label)
+                    while not own_run:
+                        if follow_holder:
+                            now = time.monotonic()
+                            if _holder_alive(latest):
+                                unreadable_since = None
+                                left = _clamp_to_dispatcher(float("inf"))
+                            else:
+                                unreadable_since = now if unreadable_since is None else unreadable_since
+                                left = _clamp_to_dispatcher(DEFAULT_WAIT_SECS - (now - unreadable_since))
                         else:
-                            unreadable_since = now if unreadable_since is None else unreadable_since
-                            left = _clamp_to_dispatcher(DEFAULT_WAIT_SECS - (now - unreadable_since))
-                    else:
-                        left = max(0.0, wait - (time.monotonic() - started))
-                    try:
-                        stack.enter_context(
-                            held_lock(
-                                target, anchor_root=anchor_root,
-                                timeout=min(left, _RECHECK_SECS), holder_label=holder_label,
+                            left = max(0.0, wait - (time.monotonic() - started))
+                        try:
+                            stack.enter_context(
+                                held_lock(
+                                    target, anchor_root=anchor_root,
+                                    timeout=min(left, _RECHECK_SECS), holder_label=holder_label,
+                                )
                             )
-                        )
-                        break
-                    except LockTimeout as again:
-                        if left <= _RECHECK_SECS:
-                            raise
-                        latest = again
-                        own_run = _held_by_own_run(again, holder_label)
+                            break
+                        except LockTimeout as again:
+                            land_deadline.step_check()
+                            if left <= _RECHECK_SECS:
+                                raise
+                            latest = again
+                            own_run = _held_by_own_run(again, holder_label)
         except LockTimeout as exc:
             raise LandAdmissionTimeout(Path(root), time.monotonic() - started, str(exc)) from None
         if own_run:

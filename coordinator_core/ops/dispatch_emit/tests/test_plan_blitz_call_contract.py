@@ -15,6 +15,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import cli, plan_blitz_args
 from coordinator_core.ops.dispatch_emit.tests.test_op_sizing_emit import REL, _mjs, _put, repo  # noqa: F401
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 # Real git repo built in _arrange; needs a real process.
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -43,7 +44,7 @@ _ROUTE_PARAMS = [
 ]
 
 
-def _arrange(repo, route):
+def _arrange(repo, route) -> None:
     if route == "ask":
         return
     subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
@@ -51,7 +52,7 @@ def _arrange(repo, route):
 
 
 @pytest.fixture
-def resolvable(monkeypatch):
+def resolvable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: "/x/provision-sidecar")
     monkeypatch.setattr(plan_blitz_args, "_default_spine_check_cli", lambda *a: "/x/plan-spine-check")
     monkeypatch.setattr(plan_blitz_args, "_default_arming_check_cli", lambda *a: "/x/can-report-red")
@@ -65,7 +66,7 @@ def _blitz_call(capsys) -> str:
 
 
 @pytest.mark.parametrize("route", _ROUTE_PARAMS)
-def test_planblitz_call_carries_every_required_key(repo, capsys, resolvable, route):  # noqa: F811
+def test_planblitz_call_carries_every_required_key(repo, capsys: pytest.CaptureFixture[str], resolvable, route) -> None:  # noqa: F811
     _arrange(repo, route)
     assert cli.main(_ROUTES[route](repo)) == 0
     if route == "ask":
@@ -82,7 +83,7 @@ def test_planblitz_call_carries_every_required_key(repo, capsys, resolvable, rou
 
 
 @pytest.mark.parametrize("route", ["sizing", "ask-sizing"])
-def test_planblitz_baton_carries_title_and_sizing_exit_criterion(repo, capsys, resolvable, route):  # noqa: F811
+def test_planblitz_baton_carries_title_and_sizing_exit_criterion(repo, capsys: pytest.CaptureFixture[str], resolvable, route) -> None:  # noqa: F811
     _arrange(repo, route)
     assert cli.main(_ROUTES[route](repo)) == 0
     call = _blitz_call(capsys)
@@ -92,7 +93,7 @@ def test_planblitz_baton_carries_title_and_sizing_exit_criterion(repo, capsys, r
 
 
 @pytest.mark.parametrize("route", ["sizing", "ask-sizing"])
-def test_planblitz_baton_falls_back_to_sizing_tshirt_and_route(repo, capsys, resolvable, route):  # noqa: F811
+def test_planblitz_baton_falls_back_to_sizing_tshirt_and_route(repo, capsys: pytest.CaptureFixture[str], resolvable, route) -> None:  # noqa: F811
     """A chained or staged-resume gate seeds route null; the baton still carries the sizing's tshirt and route."""
     _arrange(repo, route)
     assert cli.main(_ROUTES[route](repo)) == 0
@@ -102,7 +103,7 @@ def test_planblitz_baton_falls_back_to_sizing_tshirt_and_route(repo, capsys, res
     assert 'route: _gate.baton?.route ?? _gate.route ?? "plan"' in call
 
 
-def test_default_resolve_carries_parallel_review_chatty_does_not(monkeypatch, tmp_path):
+def test_default_resolve_carries_parallel_review_chatty_does_not(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     roster = {"plan_review": {
         "tiers": {"XXL": {"reviewers": [{"agentType": "a:x", "model": "m"}]}},
         "revise": {"step": "merged"},
@@ -118,7 +119,7 @@ def test_default_resolve_carries_parallel_review_chatty_does_not(monkeypatch, tm
 
 
 @pytest.mark.parametrize("route", _ROUTE_PARAMS)
-def test_unresolvable_sidecar_refuses_at_emit_on_every_route(repo, capsys, monkeypatch, route):  # noqa: F811
+def test_unresolvable_sidecar_refuses_at_emit_on_every_route(repo, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch, route) -> None:  # noqa: F811
     monkeypatch.setattr(plan_blitz_args, "_default_sidecar_cli", lambda *a, **k: None)
     _arrange(repo, route)
     assert cli.main(_ROUTES[route](repo)) != 0

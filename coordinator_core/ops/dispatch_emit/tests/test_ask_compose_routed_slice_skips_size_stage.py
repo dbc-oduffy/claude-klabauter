@@ -6,12 +6,13 @@ import yaml
 
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from pathlib import Path
 
 REL = "state/sizings/2026-10-23-slice.yaml"
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
 
-def _put(repo, *, status):
+def _put(repo, *, status) -> None:
     doc = {
         "status": status,
         "estimate": {"tshirt": "M", "provisional": True},
@@ -23,14 +24,14 @@ def _put(repo, *, status):
     (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
 
 
-def _compose(repo):
+def _compose(repo) -> str:
     return compose_ask_script(
         repo_root=str(repo), prompt=None, sizing_rel=REL, run_id="ask-20261023T010101-bbbbbb",
         session_id=None, wrap_stage=lambda text: (_BLITZ_FN, ["Plan"]), plan_blitz_text="stub", **REVIEW_KW,
     )
 
 
-def test_routed_non_intake_slice_composes_no_size_phase_and_no_accept_leg(tmp_path):
+def test_routed_non_intake_slice_composes_no_size_phase_and_no_accept_leg(tmp_path: Path) -> None:
     _put(tmp_path, status="routed")
     script = _compose(tmp_path)
     assert "phase('size')" not in script
@@ -38,6 +39,6 @@ def test_routed_non_intake_slice_composes_no_size_phase_and_no_accept_leg(tmp_pa
     assert "label: 'accept'" not in script
 
 
-def test_draft_slice_still_composes_the_size_phase(tmp_path):
+def test_draft_slice_still_composes_the_size_phase(tmp_path: Path) -> None:
     _put(tmp_path, status="draft")
     assert "phase('size')" in _compose(tmp_path)

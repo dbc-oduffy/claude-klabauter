@@ -759,7 +759,7 @@ def _target_hits(g: _Gate, rec: _Rec) -> Set[str]:
     return {t for t in g.targets if t == rec.rel or t in ids or _norm_target(t) in ids}
 
 
-def _candidates(g: _Gate):
+def _candidates(g: _Gate) -> tuple[dict[str, list[_Rec]], set[str]]:
     """``(records_by_state, matched_targets)`` over the selector-narrowed live records."""
     by_state: Dict[str, List[_Rec]] = {"candidate": [], "held": [], "untracked": []}
     matched: Set[str] = set()

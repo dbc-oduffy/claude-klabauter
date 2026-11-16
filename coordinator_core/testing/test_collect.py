@@ -56,6 +56,9 @@ _REAL_TEST_MODULES = {
     "test_git_write.py",  # real unit test of testing/git_write.py
     "test_baseline_cache.py",  # real unit test of testing/baseline_cache.py
     "test_nested_session_guard.py",  # real unit test of the nested pytest-session guard
+    "test_owner_watchdog.py",  # real unit test of the owner-death watchdog plugin
+    "test_peak_rss.py",  # real unit test of the per-file peak-memory measurer
+    "test_scoped_file_peak_rss_bound.py",  # peak-memory bound guard over the scoped test files
     "test_pytest_child_private_commit.py",  # real unit test of the pytest child's private commit
     "test_pytest_depth_sentinel_entry_points.py",  # real unit test of the pytest depth sentinel's entry points
     "test_pytest_spawners_capped.py",  # real unit test of the capped pytest spawners

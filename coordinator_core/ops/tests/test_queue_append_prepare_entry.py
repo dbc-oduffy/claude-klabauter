@@ -7,6 +7,7 @@ import os
 import pytest
 
 from coordinator_core.ops.queue_append import append_queue_entry, prepare_queue_entry
+from pathlib import Path
 
 _KW = dict(
     title="Prepare entry probe",
@@ -21,11 +22,11 @@ _KW = dict(
 )
 
 
-def _env(tmp_path, monkeypatch):
+def _env(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("QUEUE_APPEND_OUTPUT_ROOT", str(tmp_path))
 
 
-def test_prepare_writes_nothing(tmp_path, monkeypatch):
+def test_prepare_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     prepared = prepare_queue_entry("debt-backlog", session_id="s1", **_KW)
     assert not os.path.exists(prepared.out_path)
@@ -34,7 +35,7 @@ def test_prepare_writes_nothing(tmp_path, monkeypatch):
     assert prepared.digest12 and prepared.slug and prepared.yaml_content
 
 
-def test_append_matches_prepare_bytes_and_path(tmp_path, monkeypatch):
+def test_append_matches_prepare_bytes_and_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     prepared = prepare_queue_entry("debt-backlog", session_id="s1", **_KW)
     result = append_queue_entry("debt-backlog", session_id="s1", **_KW)
@@ -44,7 +45,7 @@ def test_append_matches_prepare_bytes_and_path(tmp_path, monkeypatch):
         assert fh.read() == prepared.yaml_content
 
 
-def test_prepare_validates_like_append(tmp_path, monkeypatch):
+def test_prepare_validates_like_append(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     bad = dict(_KW, status="not-a-status")
     with pytest.raises(ValueError):

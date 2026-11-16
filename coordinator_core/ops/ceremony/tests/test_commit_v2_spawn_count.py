@@ -12,6 +12,7 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.ceremony import commit_v2
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -24,13 +25,13 @@ def _git(repo, *args):
     ).stdout
 
 
-def _w(path, text):
+def _w(path, text) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/p")
@@ -43,7 +44,7 @@ def repo(tmp_path):
     return r
 
 
-def test_two_plain_landings_make_zero_run_git_calls(repo, monkeypatch):
+def test_two_plain_landings_make_zero_run_git_calls(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list = []
     real = commit_v2.run_git
 
@@ -67,7 +68,7 @@ def test_two_plain_landings_make_zero_run_git_calls(repo, monkeypatch):
     assert calls == []
 
 
-def test_a_new_file_held_by_the_index_needs_no_check_ignore(repo, monkeypatch):
+def test_a_new_file_held_by_the_index_needs_no_check_ignore(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list = []
     real = commit_v2.run_git
 
@@ -85,7 +86,7 @@ def test_a_new_file_held_by_the_index_needs_no_check_ignore(repo, monkeypatch):
     assert calls == []
 
 
-def test_a_new_file_outside_the_index_costs_exactly_one_check_ignore(repo, monkeypatch):
+def test_a_new_file_outside_the_index_costs_exactly_one_check_ignore(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     calls: list = []
     real = commit_v2.run_git
 

@@ -23,7 +23,7 @@ CODED = (("A1", "coded"), ("A2", "coded"))
 SETTLED = {"rows": [{"id": "R1", "status": "met"}, {"id": "R2", "status": "waived"}]}
 
 
-def _link(repo, note=NOTE):  # noqa: F811
+def _link(repo, note=NOTE) -> None:  # noqa: F811
     prev_dir = rl.run_dir(repo, PREV)
     prev_dir.mkdir(parents=True, exist_ok=True)
     (prev_dir / rl.NOTES_FILE).write_text(json.dumps({"note": note, "at": NOTE_AT}) + "\n", encoding="utf-8")
@@ -37,7 +37,7 @@ def _assert_all_landed_resume(v, notes) -> None:
     assert v.resume_ledger["blocking"] == [] and v.resume_ledger["revise_notes"] == notes
 
 
-def test_all_landed_refire_with_a_live_note_resumes_carrying_the_note(repo):  # noqa: F811
+def test_all_landed_refire_with_a_live_note_resumes_carrying_the_note(repo) -> None:  # noqa: F811
     _put_s(repo, requirement_register=SETTLED)
     _landed_repo(repo, CODED)
     _link(repo)
@@ -45,7 +45,7 @@ def test_all_landed_refire_with_a_live_note_resumes_carrying_the_note(repo):  # 
     _assert_all_landed_resume(v, [NOTE])
 
 
-def test_the_handler_resumes_that_refire_with_no_rows_staged(repo):  # noqa: F811
+def test_the_handler_resumes_that_refire_with_no_rows_staged(repo) -> None:  # noqa: F811
     _put_s(repo, requirement_register=SETTLED)
     _landed_repo(repo, CODED)
     _link(repo)
@@ -55,7 +55,7 @@ def test_the_handler_resumes_that_refire_with_no_rows_staged(repo):  # noqa: F81
     assert out["resume_ledger"]["revise_notes"] == [NOTE]
 
 
-def test_a_retracted_note_resumes_carrying_no_notes(repo):  # noqa: F811
+def test_a_retracted_note_resumes_carrying_no_notes(repo) -> None:  # noqa: F811
     _put_s(repo, requirement_register=SETTLED)
     _landed_repo(repo, CODED)
     _link(repo)
@@ -65,7 +65,7 @@ def test_a_retracted_note_resumes_carrying_no_notes(repo):  # noqa: F811
     _assert_all_landed_resume(v, [])
 
 
-def test_notes_of_two_runs_are_named_by_distinct_ids(repo):  # noqa: F811
+def test_notes_of_two_runs_are_named_by_distinct_ids(repo) -> None:  # noqa: F811
     from coordinator_core.ops.dispatch_emit import op
 
     _link(repo)
@@ -78,7 +78,7 @@ def test_notes_of_two_runs_are_named_by_distinct_ids(repo):  # noqa: F811
     assert len(set(ids)) == len(ids)
 
 
-def test_no_note_resumes_carrying_no_notes(repo):  # noqa: F811
+def test_no_note_resumes_carrying_no_notes(repo) -> None:  # noqa: F811
     _put_s(repo, requirement_register=SETTLED)
     _landed_repo(repo, CODED)
     rl.start(repo, NEW)

@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import sys
+from pathlib import Path
 
 
 def _script_path() -> str:
@@ -40,7 +41,7 @@ def _manifest_spawn_budget() -> dict:
     return entry["spawn_count_budget"]
 
 
-def test_evidence_directory_scan_runs_once_per_harvest_not_per_row(tmp_path):
+def test_evidence_directory_scan_runs_once_per_harvest_not_per_row(tmp_path: Path) -> None:
     module = _load_harvest_module()
 
     scan_dir = tmp_path / "improvement-queue"

@@ -7,16 +7,17 @@ import pytest
 
 from coordinator_core.guard_messages.testing import envelope_of
 from coordinator_core.write_guards import block_hand_authored_handoff_creation as guard
+from pathlib import Path
 
 _OVERRIDE_ENV = "COORDINATOR_OVERRIDE_HAND_HANDOFF_WRITE"
 
 
 @pytest.fixture(autouse=True)
-def _clear_override(monkeypatch):
+def _clear_override(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(_OVERRIDE_ENV, raising=False)
 
 
-def _write(tmp_path, rel, *, tool="Write", existing=False):
+def _write(tmp_path, rel, *, tool: str = "Write", existing: bool = False):
     target = tmp_path / rel
     target.parent.mkdir(parents=True, exist_ok=True)
     if existing:
@@ -34,43 +35,43 @@ def _denied(result):
     return result is not None and result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_write_in_claude_handoffs_is_denied(tmp_path):
+def test_write_in_claude_handoffs_is_denied(tmp_path: Path) -> None:
     result = guard.check(_write(tmp_path, ".claude/handoffs/2026-10-06-x.md"))
     assert _denied(result)
     assert "not by hand" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_new_file_in_state_handoffs_is_denied(tmp_path):
+def test_new_file_in_state_handoffs_is_denied(tmp_path: Path) -> None:
     assert _denied(guard.check(_write(tmp_path, "state/handoffs/2026-10-06-x.md")))
 
 
-def test_edit_to_existing_handoff_passes(tmp_path):
+def test_edit_to_existing_handoff_passes(tmp_path: Path) -> None:
     payload = _write(tmp_path, "state/handoffs/2026-10-06-x.md", tool="Edit", existing=True)
     assert guard.check(payload) is None
 
 
-def test_existing_file_in_claude_handoffs_passes(tmp_path):
+def test_existing_file_in_claude_handoffs_passes(tmp_path: Path) -> None:
     payload = _write(tmp_path, ".claude/handoffs/2026-10-06-x.md", existing=True)
     assert guard.check(payload) is None
 
 
-def test_unrelated_path_passes(tmp_path):
+def test_unrelated_path_passes(tmp_path: Path) -> None:
     assert guard.check(_write(tmp_path, "docs/plans/p.md")) is None
 
 
-def test_override_env_bypasses(tmp_path, monkeypatch):
+def test_override_env_bypasses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(_OVERRIDE_ENV, "1")
     assert guard.check(_write(tmp_path, "state/handoffs/x.md")) is None
 
 
-def test_recovery_scaffold_then_body_edit_passes(tmp_path):
+def test_recovery_scaffold_then_body_edit_passes(tmp_path: Path) -> None:
     # The sanctioned route writes the scaffold with open() inside the engine;
     # the body fill is an Edit of that now-existing path.
     payload = _write(tmp_path, "state/handoffs/2026-10-06-r.md", tool="Edit", existing=True)
     assert guard.check(payload) is None
 
 
-def test_edit_of_existing_emitted_baton_passes(tmp_path):
+def test_edit_of_existing_emitted_baton_passes(tmp_path: Path) -> None:
     payload = _write(tmp_path, "state/handoffs/2026-10-06-emitted-baton.md", tool="Edit", existing=True)
     target = tmp_path / "state/handoffs/2026-10-06-emitted-baton.md"
     target.write_text(

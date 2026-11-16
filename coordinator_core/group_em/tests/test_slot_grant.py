@@ -5,6 +5,7 @@ import json
 import pytest
 
 from coordinator_core.group_em import nomination, session_registry, slot_grant
+from pathlib import Path
 
 NOW = 1_800_000_000.0
 HOLDER, PEER = "sid-holder", "sid-peer"
@@ -16,7 +17,7 @@ def _row(sid, name, cwd):
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     repo = tmp_path / "repo"
     repo.mkdir()
     records = tmp_path / "group-em"
@@ -37,7 +38,7 @@ def env(tmp_path, monkeypatch):
     return {"dir": records, "live": live, "mp": monkeypatch}
 
 
-def _issue(env, grantee=PEER, run=RUN, peak=4096, **kw):
+def _issue(env, grantee=PEER, run=RUN, peak: int = 4096, **kw):
     return slot_grant.issue_slot_grant(grantee, run, peak, "slot ruled", directory=env["dir"], now=NOW, **kw)
 
 
@@ -49,7 +50,7 @@ def _files(env):
     return list((env["dir"] / "slot-grants").rglob("*.json"))
 
 
-def test_issue_then_check_granted(env):
+def test_issue_then_check_granted(env) -> None:
     result = _issue(env)
     assert result.ok and result.record["kind"] == slot_grant.KIND
     assert result.record["run"] == RUN and result.record["declared_peak_mb"] == 4096.0
@@ -57,22 +58,22 @@ def test_issue_then_check_granted(env):
     assert granted and record["grantee_session_id"] == PEER
 
 
-def test_no_record_fails_closed(env):
+def test_no_record_fails_closed(env) -> None:
     assert _check(env) == (False, None)
 
 
-def test_grant_smaller_than_requested_peak_not_granted(env):
+def test_grant_smaller_than_requested_peak_not_granted(env) -> None:
     _issue(env, peak=4096)
     assert slot_grant.check_slot_grant(PEER, RUN, env["dir"], NOW + 60, peak_mb=4096)[0] is True
     assert slot_grant.check_slot_grant(PEER, RUN, env["dir"], NOW + 60, peak_mb=8192)[0] is False
 
 
-def test_other_run_not_granted(env):
+def test_other_run_not_granted(env) -> None:
     _issue(env)
     assert _check(env, run="run-2")[0] is False
 
 
-def test_non_holder_issue_refused_writes_nothing(env):
+def test_non_holder_issue_refused_writes_nothing(env) -> None:
     env["mp"].setenv("COORDINATOR_SESSION_ID", PEER)
     result = _issue(env)
     assert (result.ok, result.reason) == (False, slot_grant.NOT_GROUP_EM)
@@ -80,26 +81,26 @@ def test_non_holder_issue_refused_writes_nothing(env):
 
 
 @pytest.mark.parametrize("peak", [-1, True, "big", float("nan"), 10**12])
-def test_invalid_peak_refused(env, peak):
+def test_invalid_peak_refused(env, peak) -> None:
     result = _issue(env, peak=peak)
     assert (result.ok, result.reason) == (False, slot_grant.PEAK_INVALID)
 
 
-def test_bad_run_refused(env):
+def test_bad_run_refused(env) -> None:
     assert _issue(env, run="a/b").reason == slot_grant.RUN_INVALID
 
 
-def test_expired_not_granted_but_record_returned(env):
+def test_expired_not_granted_but_record_returned(env) -> None:
     _issue(env, ttl_minutes=1)
     granted, record = _check(env, now=NOW + 61)
     assert granted is False and record is not None
 
 
-def test_ttl_above_ceiling_refused_at_issue(env):
+def test_ttl_above_ceiling_refused_at_issue(env) -> None:
     assert _issue(env, ttl_minutes=slot_grant.TTL_CEILING_MINUTES + 1).reason == slot_grant.TTL_OUT_OF_RANGE
 
 
-def test_hand_edited_ttl_beyond_ceiling_ungranted(env):
+def test_hand_edited_ttl_beyond_ceiling_ungranted(env) -> None:
     _issue(env)
     path = _files(env)[0]
     rec = json.loads(path.read_text())
@@ -108,36 +109,36 @@ def test_hand_edited_ttl_beyond_ceiling_ungranted(env):
     assert _check(env)[0] is False
 
 
-def test_malformed_record_ungranted_never_raises(env):
+def test_malformed_record_ungranted_never_raises(env) -> None:
     _issue(env)
     _files(env)[0].write_text("{not json")
     assert _check(env) == (False, None)
 
 
-def test_grantee_not_live_ungranted(env):
+def test_grantee_not_live_ungranted(env) -> None:
     _issue(env)
     env["live"].discard(PEER)
     assert _check(env)[0] is False
 
 
-def test_displaced_holder_grant_stops_authorizing(env):
+def test_displaced_holder_grant_stops_authorizing(env) -> None:
     _issue(env)
     env["live"].discard(HOLDER)
     assert _check(env)[0] is False
 
 
-def test_revoke_removes_and_is_idempotent(env):
+def test_revoke_removes_and_is_idempotent(env) -> None:
     _issue(env)
     assert slot_grant.revoke_slot_grant(PEER, RUN, directory=env["dir"]).reason == "revoked"
     assert _check(env) == (False, None)
     assert slot_grant.revoke_slot_grant(PEER, RUN, directory=env["dir"]).reason == "absent"
 
 
-def test_unsafe_session_id_ungranted(env):
+def test_unsafe_session_id_ungranted(env) -> None:
     assert _check(env, sid="../x") == (False, None)
 
 
-def _stamp(env, box_id):
+def _stamp(env, box_id) -> None:
     path = _files(env)[0]
     rec = json.loads(path.read_text())
     if box_id is None:
@@ -147,13 +148,13 @@ def _stamp(env, box_id):
     path.write_text(json.dumps(rec))
 
 
-def test_issue_stamps_local_box_id(env):
+def test_issue_stamps_local_box_id(env) -> None:
     env["mp"].setattr(slot_grant.box_registry, "local_box_id", lambda home=None: "box-aaaa1111")
     assert _issue(env).record["box_id"] == "box-aaaa1111"
     assert _check(env)[0] is True
 
 
-def test_grant_from_another_box_ungranted_but_record_returned(env):
+def test_grant_from_another_box_ungranted_but_record_returned(env) -> None:
     env["mp"].setattr(slot_grant.box_registry, "local_box_id", lambda home=None: "box-aaaa1111")
     _issue(env)
     _stamp(env, "box-bbbb2222")
@@ -162,7 +163,7 @@ def test_grant_from_another_box_ungranted_but_record_returned(env):
 
 
 @pytest.mark.parametrize("stamped", [None, "local"])
-def test_unstamped_or_local_grant_stays_valid_after_identity_minted(env, stamped):
+def test_unstamped_or_local_grant_stays_valid_after_identity_minted(env, stamped) -> None:
     _issue(env)
     _stamp(env, stamped)
     env["mp"].setattr(slot_grant.box_registry, "local_box_id", lambda home=None: "box-aaaa1111")

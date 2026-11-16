@@ -345,6 +345,7 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "plan.prep_gate":                        "common_dir",
     "plan.readiness_verdict":                "common_dir",
     "plan.set_code_done":                    "common_dir",
+    "plan.status_done":                      "common_dir",
     "plan.premise_scope":                    "common_dir",
     "plan.premise_record":                   "common_dir",
     "plan.backfill_warp_executing":          "common_dir",
@@ -842,6 +843,9 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     # dispatch.land_run — MUTATING: lands a run's product and record in one scoped commit via
     # git.commit.commit_paths; the caller's own worktree, never a params override.
     "dispatch.land_run":                        "common_dir",
+    # dispatch.land_blobs — MUTATING: index-only declared-blob landing;
+    # the caller's own worktree, never a params override.
+    "dispatch.land_blobs":                      "common_dir",
     # dispatch.land_credited — MUTATING: commits a run's credited paths via git.commit.commit_paths (CAS ref move);
     # the caller's own worktree, never a params override.
     "dispatch.land_credited":                   "common_dir",
@@ -893,6 +897,8 @@ _OP_KEY_SCOPE: Dict[str, str] = {
     "dispatch.adopt_orphaned_run":              "common_dir",
     # workflow.revise — appends to a warp run's ledger under the caller's own worktree's run dir.
     "workflow.revise":                          "common_dir",
+    # workflow.cancel — marks a warp run cancelled in the caller's own worktree's record dir and live-run index.
+    "workflow.cancel":                          "common_dir",
     # workflow.late_rows — reads the caller's worktree run ledger (verify_read stamps its marker); scope lets --repo supply repo_root.
     "workflow.late_rows":                       "common_dir",
     # workflow.pending_revisions / plan.claim_register_rows — read and claim register rows of the

@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import pytest
 
-from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+from coordinator_core.ops.dispatch_emit import run_artifacts
+
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_halted_record import (  # noqa: F401
     LEDGER,
     RUN,
@@ -131,7 +132,7 @@ def test_no_verdict_withholds_chunks_as_record_only_and_says_so(repo):
     assert "landed_chunks" not in out
     assert out["targeted_tests"] == {"check": "no-verdict", "findings": []}
     names = _landed(repo, out, "--name-only")
-    assert f"{RECORD_DIR_ROOT}/{RUN}/ask.md" in names
+    assert run_artifacts.outcome_rel(RUN) in names
     assert "good.py" not in names and "c1.py" not in names
 
 

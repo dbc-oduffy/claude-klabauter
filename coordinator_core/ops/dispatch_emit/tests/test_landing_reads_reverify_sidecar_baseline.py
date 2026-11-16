@@ -11,6 +11,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import landing_integrity as li
 from coordinator_core.ops.dispatch_emit import landing_retest as lr
 from coordinator_core.ops.dispatch_emit import landing_targeted_tests as ltt
+from pathlib import Path
 
 RUN = "r1"
 RECORD_REL = "share/slice.pre-review/reverify.json"
@@ -19,7 +20,7 @@ OTHER = "pkg/tests/test_other.py::test_other"
 
 
 @pytest.fixture(autouse=True)
-def _fixed_head(monkeypatch):
+def _fixed_head(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.git import git_state
 
     monkeypatch.setattr(git_state, "head_sha", lambda *_a, **_k: "h1")
@@ -45,7 +46,7 @@ def _fresh(root, tests, unverified) -> None:
     }), encoding="utf-8")
 
 
-def test_sidecar_failing_at_base_clears_a_fresh_red_the_retest_did_not_run(tmp_path):
+def test_sidecar_failing_at_base_clears_a_fresh_red_the_retest_did_not_run(tmp_path: Path) -> None:
     _sidecar(tmp_path, failing_at_base=[NODE])
     _fresh(tmp_path, ["pkg/tests/test_ran.py"], [NODE])
 
@@ -55,7 +56,7 @@ def test_sidecar_failing_at_base_clears_a_fresh_red_the_retest_did_not_run(tmp_p
     assert findings.foreign_evidence == {NODE: [li.FAILING_AT_BASE]}
 
 
-def test_sidecar_pre_existing_clears_a_recorded_fail(tmp_path):
+def test_sidecar_pre_existing_clears_a_recorded_fail(tmp_path: Path) -> None:
     _sidecar(tmp_path, pre_existing=[NODE])
     lr.fresh_verdict_path(tmp_path, RUN).parent.mkdir(parents=True, exist_ok=True)
     lr.fresh_verdict_path(tmp_path, RUN).write_text(json.dumps(
@@ -69,7 +70,7 @@ def test_sidecar_pre_existing_clears_a_recorded_fail(tmp_path):
     assert findings.foreign_evidence == {NODE: [li.FAILING_AT_BASE]}
 
 
-def test_red_absent_from_the_sidecar_still_refuses(tmp_path):
+def test_red_absent_from_the_sidecar_still_refuses(tmp_path: Path) -> None:
     _sidecar(tmp_path, failing_at_base=[OTHER])
     _fresh(tmp_path, ["pkg/tests/test_ran.py"], [NODE])
 
@@ -78,7 +79,7 @@ def test_red_absent_from_the_sidecar_still_refuses(tmp_path):
     assert check == "failed" and NODE in findings[0].detail
 
 
-def test_sidecar_naming_nothing_changes_nothing(tmp_path):
+def test_sidecar_naming_nothing_changes_nothing(tmp_path: Path) -> None:
     _sidecar(tmp_path)
     _fresh(tmp_path, ["pkg/tests/test_ran.py"], [NODE])
 
@@ -87,7 +88,7 @@ def test_sidecar_naming_nothing_changes_nothing(tmp_path):
     assert check == "failed"
 
 
-def test_record_outside_the_worktree_is_ignored(tmp_path):
+def test_record_outside_the_worktree_is_ignored(tmp_path: Path) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "reverify.json").write_text(json.dumps({"failing_at_base": [NODE]}), encoding="utf-8")

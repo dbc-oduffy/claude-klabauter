@@ -15,12 +15,13 @@ from coordinator_core.group_em import box_registry, box_send, watch
 from coordinator_core.op_scopes import OP_KEY_SCOPE
 from coordinator_core.ops import _registry_map
 from coordinator_core.ops import group_em_box_federation as op
+from pathlib import Path
 
 _OPS = ("box_register", "box_place", "box_send", "box_roster", "suite_grant_receive", "box_key_pin")
 
 
 @pytest.mark.parametrize("name", _OPS)
-def test_registration_quad(name):
+def test_registration_quad(name) -> None:
     key = f"groupem.{name}"
     assert ipc._REGISTRY.get(key) is not None
     assert _registry_map.OP_MODULE_MAP[key] == "coordinator_core.ops.group_em_box_federation"
@@ -30,7 +31,7 @@ def test_registration_quad(name):
 
 
 @pytest.fixture()
-def homes(tmp_path, monkeypatch):
+def homes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     a, b = tmp_path / "a", tmp_path / "b"
     a.mkdir()
     b.mkdir()
@@ -38,7 +39,7 @@ def homes(tmp_path, monkeypatch):
     return a, b
 
 
-def test_register_returns_record_and_probes_when_no_capability(homes):
+def test_register_returns_record_and_probes_when_no_capability(homes) -> None:
     _, b = homes
     out = op._groupem_box_register({"root": str(b)})
     assert out["registered"] is True
@@ -48,19 +49,19 @@ def test_register_returns_record_and_probes_when_no_capability(homes):
     assert [x["box_id"] for x in box_registry.read_boxes()] == [box["box_id"]]
 
 
-def test_register_explicit_capability_wins(homes):
+def test_register_explicit_capability_wins(homes) -> None:
     _, b = homes
     out = op._groupem_box_register({"root": str(b), "capability": {"gpu": "5090"}})
     assert out["box"]["capability"] == {"gpu": "5090"}
 
 
-def test_register_refuses_bad_params(homes):
+def test_register_refuses_bad_params(homes) -> None:
     assert "error" in op._groupem_box_register({})
     assert "error" in op._groupem_box_register({"root": "x", "capability": "no"})
     assert "error" in op._groupem_box_register(None)
 
 
-def test_place_both_sides(homes):
+def test_place_both_sides(homes) -> None:
     _, b = homes
     box = op._groupem_box_register({"root": str(b), "capability": {"ram_mb": 64000}})["box"]
     ok = op._groupem_box_place({"run": "r1", "requirement": {"min_ram_mb": 32000}})
@@ -71,12 +72,12 @@ def test_place_both_sides(homes):
     assert op._groupem_box_place({"run": "r3", "box_id": "nope"})["reason"] == "no_box"
 
 
-def test_place_refuses_bad_params(homes):
+def test_place_refuses_bad_params(homes) -> None:
     assert "error" in op._groupem_box_place({})
     assert "error" in op._groupem_box_place({"run": "r", "requirement": []})
 
 
-def test_send_appends_to_target_inbox_and_refuses_unknown(homes):
+def test_send_appends_to_target_inbox_and_refuses_unknown(homes) -> None:
     _, b = homes
     box = op._groupem_box_register({"root": str(b), "capability": {}})["box"]
     out = op._groupem_box_send({"box_id": box["box_id"], "to_session": "em1", "text": "hi"})
@@ -90,7 +91,7 @@ def test_send_appends_to_target_inbox_and_refuses_unknown(homes):
     assert "error" in op._groupem_box_send({"box_id": box["box_id"], "to_session": "em1"})
 
 
-def test_local_send_stamps_sender_only_when_signed_by_the_pinned_box(homes):
+def test_local_send_stamps_sender_only_when_signed_by_the_pinned_box(homes) -> None:
     from coordinator_core.group_em import box_key
 
     a, b = homes
@@ -120,7 +121,7 @@ def test_local_send_stamps_sender_only_when_signed_by_the_pinned_box(homes):
         assert bad["from_box"] == own and "from_session" not in bad
 
 
-def test_roster_wraps_remote_box_rows(homes, monkeypatch):
+def test_roster_wraps_remote_box_rows(homes, monkeypatch: pytest.MonkeyPatch) -> None:
     _, b = homes
     box = op._groupem_box_register({"root": str(b), "capability": {}})["box"]
     rows = [{"box_id": box["box_id"], "session_id": "s", "run": "r1", "live": True}]
@@ -129,7 +130,7 @@ def test_roster_wraps_remote_box_rows(homes, monkeypatch):
     assert out == {"boxes": [box["box_id"]], "rows": rows}
 
 
-def test_roster_never_raises(homes, monkeypatch):
+def test_roster_never_raises(homes, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(directory=None):
         raise RuntimeError("x")
 
@@ -137,7 +138,7 @@ def test_roster_never_raises(homes, monkeypatch):
     assert "error" in op._groupem_box_roster({})
 
 
-def test_box_key_pin_writes_the_peer_key_and_refuses_bad_params(homes):
+def test_box_key_pin_writes_the_peer_key_and_refuses_bad_params(homes) -> None:
     import base64
 
     a, _ = homes
@@ -153,7 +154,7 @@ def test_box_key_pin_writes_the_peer_key_and_refuses_bad_params(homes):
     assert "error" in op._groupem_box_key_pin(None)
 
 
-def test_suite_grant_receive_refuses_a_non_object_and_an_unpinned_issuer(homes):
+def test_suite_grant_receive_refuses_a_non_object_and_an_unpinned_issuer(homes) -> None:
     assert "error" in op._groupem_suite_grant_receive({})
     assert "error" in op._groupem_suite_grant_receive({"envelope": "x"})
     out = op._groupem_suite_grant_receive({"envelope": {"issuer_box_id": "box-unpinned", "sig": "ab"}})

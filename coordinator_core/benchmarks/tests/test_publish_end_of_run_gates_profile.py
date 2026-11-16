@@ -11,6 +11,11 @@ import pytest
 
 from coordinator_core.benchmarks import budget
 from coordinator_core.benchmarks import publish_end_of_run_gates_profile as prof
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _SOURCE = (
     "import os\n"
@@ -31,16 +36,16 @@ class _Clock:
 
 
 @pytest.fixture(scope="module")
-def publish():
+def publish() -> ModuleType:
     return prof.load_publish_module()
 
 
-def _tree(tmp_path):
+def _tree(tmp_path) -> SimpleNamespace:
     (tmp_path / "mod.py").write_text(_SOURCE, encoding="utf-8")
     return SimpleNamespace(name="row", source_dir=tmp_path)
 
 
-def test_inject_rules_prepends_and_activates_hook_without_mutating():
+def test_inject_rules_prepends_and_activates_hook_without_mutating() -> None:
     section = {"hooks": [], "substitute": [{"key": "a", "value": "b", "match_mode": "plain"}]}
     out = prof.inject_rules(section, [("x", "y")])
     assert out["substitute"][0] == {"key": "x", "value": "y", "match_mode": "plain"}
@@ -48,14 +53,14 @@ def test_inject_rules_prepends_and_activates_hook_without_mutating():
     assert section["hooks"] == [] and len(section["substitute"]) == 1
 
 
-def test_manifest_carries_a_500ms_entry_per_gate():
+def test_manifest_carries_a_500ms_entry_per_gate() -> None:
     overrides = budget.load_manifest()["overrides"]
     for gate in prof.GATES:
         assert overrides[prof.BUDGET_KEYS[gate]]["target_ms"] == 500
         assert prof.bar_for(gate) == 500.0
 
 
-def test_profile_gate_cold_then_warm_average():
+def test_profile_gate_cold_then_warm_average() -> None:
     calls = []
     meter = _Clock(0.0, 300.0, 300.0, 310.0, 310.0, 350.0)
     p = prof.profile_gate(meter, "g", lambda: calls.append(1) or True, warm_repeat=3)
@@ -65,7 +70,7 @@ def test_profile_gate_cold_then_warm_average():
     assert p.warm_within_bar
 
 
-def test_profile_gate_does_not_repeat_a_warm_call_over_the_ceiling():
+def test_profile_gate_does_not_repeat_a_warm_call_over_the_ceiling() -> None:
     calls = []
     meter = _Clock(0.0, 5000.0, 5000.0, 12000.0)
     p = prof.profile_gate(meter, "g", lambda: calls.append(1) or True, warm_repeat=3)
@@ -73,11 +78,11 @@ def test_profile_gate_does_not_repeat_a_warm_call_over_the_ceiling():
     assert p.warm.process_ms == 7000.0 and not p.warm_within_bar
 
 
-def _profile(cold_ok=True, warm_ok=True, warm_ms=100.0, gate="argv_parity"):
+def _profile(cold_ok: bool = True, warm_ok: bool = True, warm_ms: float = 100.0, gate: str = "argv_parity"):
     return prof.GateProfile(gate, prof.Leg(10.0, cold_ok), prof.Leg(warm_ms, warm_ok, 3))
 
 
-def test_verdict_passes_only_when_every_gate_is_in_bar_and_ok():
+def test_verdict_passes_only_when_every_gate_is_in_bar_and_ok() -> None:
     caught = prof.DriftProbe(caught={g: True for g in prof.LITERAL_GATES})
     assert prof.verdict([_profile()], caught) is True
     assert prof.verdict([_profile(warm_ms=501.0)], caught) is False
@@ -85,14 +90,14 @@ def test_verdict_passes_only_when_every_gate_is_in_bar_and_ok():
     assert prof.verdict([_profile(cold_ok=False)], caught) is False
 
 
-def test_verdict_fails_when_a_literal_gate_misses_the_drift():
+def test_verdict_fails_when_a_literal_gate_misses_the_drift() -> None:
     missed = prof.DriftProbe(caught={"repo_key_literal": True, "live_identifier": False})
     assert prof.verdict([_profile()], missed) is False
     assert prof.verdict([_profile()], prof.DriftProbe()) is False
     assert "DRIFT MISSED" in prof.render([_profile()], missed, "x")
 
 
-def test_find_drift_rules_picks_a_repo_key_and_an_env_var(tmp_path):
+def test_find_drift_rules_picks_a_repo_key_and_an_env_var(tmp_path: Path) -> None:
     from coordinator_core.percolate import engine as pct_engine
     from coordinator_core.percolate import live_identifiers as live
     from coordinator_core.percolate import repo_key_literals as rkl
@@ -104,7 +109,7 @@ def test_find_drift_rules_picks_a_repo_key_and_an_env_var(tmp_path):
     assert [r["key"] for r in section["substitute"]] == ["repos.zz_probe_key", "ZZ_PROBE_HOME"]
 
 
-def test_find_drift_rules_skips_a_literal_the_row_protects(tmp_path):
+def test_find_drift_rules_skips_a_literal_the_row_protects(tmp_path: Path) -> None:
     from coordinator_core.percolate import engine as pct_engine
     from coordinator_core.percolate import live_identifiers as live
     from coordinator_core.percolate import repo_key_literals as rkl
@@ -113,7 +118,7 @@ def test_find_drift_rules_skips_a_literal_the_row_protects(tmp_path):
     assert prof.find_drift_rules([(_tree(tmp_path), protected)], pct_engine, rkl, live) is None
 
 
-def test_drift_probe_makes_both_literal_gates_false_and_the_clean_tree_passes(publish, tmp_path):
+def test_drift_probe_makes_both_literal_gates_false_and_the_clean_tree_passes(publish, tmp_path: Path) -> None:
     target = _tree(tmp_path)
     ctx = SimpleNamespace(engine_claude_klabauter=object())
     clean = prof.gate_calls(publish, ctx, [(target, _SECTION)], tmp_path, tmp_path)
@@ -125,14 +130,14 @@ def test_drift_probe_makes_both_literal_gates_false_and_the_clean_tree_passes(pu
     assert probe.passed
 
 
-def test_isolated_gate_cache_is_per_work_dir_and_the_cap_override_decides_whether_a_round_hits(tmp_path, monkeypatch):
+def test_isolated_gate_cache_is_per_work_dir_and_the_cap_override_decides_whether_a_round_hits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.percolate import gate_result_cache as grc
 
     monkeypatch.setattr(grc, "_IDENTITIES_KEEP", grc._IDENTITIES_KEEP)
     gate_module = SimpleNamespace(__file__=str(tmp_path / "gate.py"))
     (tmp_path / "gate.py").write_text("x = 1\n", encoding="utf-8")
 
-    def round_hits(keep, cache_dir):
+    def round_hits(keep, cache_dir) -> int:
         pub = SimpleNamespace()
         prof.isolate_gate_cache(pub, cache_dir, keep)
         hits = 0

@@ -280,6 +280,9 @@ extern char **environ;
 /* The one hook op that does real work in-line (mints and emits runs); every
  * other hook read is a guard verdict held to the 500ms bar. */
 #define DOOR_HOOK_SUBMIT_READ_DEADLINE_MS 8000
+/* One clock for every leg of the submit door (drain, dial, delivery, read), started at call entry; the
+ * answer must be on stdout inside it. Below the harness's 12s hook timeout, which kills a door silently. */
+#define DOOR_HOOK_SUBMIT_TOTAL_MS 10000
 
 
 #define DOOR_RESPONSE_CEILING (16u << 20)
@@ -295,6 +298,15 @@ static int remaining_ms(long long started, int total_ms) {
     long long elapsed = monotonic_ms() - started;
     if (elapsed >= (long long)total_ms) return 0;
     return (int)((long long)total_ms - elapsed);
+}
+
+/* Ms the submit op may still spend before its answer is due; INT_MAX for every other op, which keeps
+ * its per-leg bounds. Defined with the hook globals below. */
+static int door_hook_total_left_ms(void);
+
+static int door_hook_clamp_to_total(int want_ms) {
+    int left = door_hook_total_left_ms();
+    return want_ms < left ? want_ms : left;
 }
 
 
@@ -791,7 +803,7 @@ static int connect_socket(const char *path) {
             close(fd);
             return -1;
         }
-        int budget = remaining_ms(started, DOOR_WRITE_DEADLINE_MS);
+        int budget = door_hook_clamp_to_total(remaining_ms(started, DOOR_WRITE_DEADLINE_MS));
         if (budget == 0) { close(fd); return -1; }
 
         struct pollfd pfd;
@@ -833,7 +845,7 @@ static int write_frame_bounded(int fd, const char *data, size_t len) {
     send_flags = MSG_NOSIGNAL;
 #endif
     while (off < len) {
-        int budget = remaining_ms(started, DOOR_WRITE_DEADLINE_MS);
+        int budget = door_hook_clamp_to_total(remaining_ms(started, DOOR_WRITE_DEADLINE_MS));
         if (budget == 0) return 0;
 
         struct pollfd pfd;
@@ -999,15 +1011,20 @@ static int hook_engine_alive(int fd) {
 static int read_hook_line(int fd, buf_t *resp) {
     int first = door_hook_first_read_ms(g_hook_op);
     g_hook_read_total_ms = first;
-    int state = read_line_bounded(fd, resp, first);
+    int state = read_line_bounded(fd, resp, door_hook_clamp_to_total(first));
     if (state != READ_DEADLINE) return state;
     int more = door_hook_read_plan(g_hook_op, hook_peer_open(fd), hook_engine_alive(fd));
     if (more <= 0) return READ_DEADLINE;
     g_hook_read_total_ms = first + more;
-    return read_line_bounded(fd, resp, more);
+    return read_line_bounded(fd, resp, door_hook_clamp_to_total(more));
 }
 
 static long long g_call_started_ms = 0;
+
+static int door_hook_total_left_ms(void) {
+    if (!g_door_hook_mode || strcmp(g_hook_op, DOOR_SUBMIT_ASK_OP) != 0 || !g_call_started_ms) return INT_MAX;
+    return remaining_ms(g_call_started_ms, DOOR_HOOK_SUBMIT_TOTAL_MS);
+}
 /* The warm-call leg in flight (connect, deliver, read; "-" before the socket is touched) and when
  * it began; door_log_fail_open reports both so a freeze names its leg. */
 static const char *g_leg = "-";
@@ -1066,10 +1083,10 @@ static int spool_submit_ask(const char *reason, char id[17]) {
  * allocation failure can leave stdout empty. */
 #define DOOR_SUBMIT_UNSPOOLED_ADVISORY \
     "{\"systemMessage\":\"coordinator: the engine gave no answer and the ask could not be spooled; " \
-    "nothing was minted - re-submit, or check state/warp for a minted run.\",\"suppressOutput\":false," \
+    "nothing was minted - list recent runs under state/warp, then re-submit if none.\",\"suppressOutput\":false," \
     "\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"coordinator: " \
-    "the engine gave no answer and the ask could not be spooled; nothing was minted - re-submit, " \
-    "or check state/warp for a minted run.\"}}\n"
+    "the engine gave no answer and the ask could not be spooled; nothing was minted - list recent runs " \
+    "under state/warp, then re-submit if none.\"}}\n"
 
 static int hook_op_is_submit_ask(void) {
     return strcmp(g_hook_op, DOOR_SUBMIT_ASK_OP) == 0;
@@ -1408,10 +1425,11 @@ static int door_publish_marker_held(const char *svc_dir) {
 static int door_drain_publish_hold(const char *svc_dir) {
     if (!door_publish_marker_held(svc_dir)) return 0;
     long long started = monotonic_ms();
+    int wait_ms = door_hook_clamp_to_total(DOOR_DRAIN_WAIT_MS);
     for (;;) {
         (void)poll(NULL, 0, DOOR_DRAIN_POLL_MS);
         if (!door_publish_marker_held(svc_dir)) return 1;
-        if (monotonic_ms() - started >= DOOR_DRAIN_WAIT_MS) return 0;
+        if (monotonic_ms() - started >= wait_ms) return 0;
     }
 }
 
@@ -2208,10 +2226,17 @@ int main(int argc, char **argv) {
         }
 
         char detail[160];
-        snprintf(detail, sizeof(detail),
-                 "no response within %ums of delivery -- the door stopped "
-                 "waiting, the engine did not stop working",
-                 (unsigned)(g_door_hook_mode ? g_hook_read_total_ms : DOOR_READ_DEADLINE_MS));
+        if (door_hook_total_left_ms() == 0 && g_hook_read_total_ms > 0) {
+            snprintf(detail, sizeof(detail),
+                     "no response within the %ums submit budget -- the door stopped "
+                     "waiting, the engine did not stop working",
+                     (unsigned)DOOR_HOOK_SUBMIT_TOTAL_MS);
+        } else {
+            snprintf(detail, sizeof(detail),
+                     "no response within %ums of delivery -- the door stopped "
+                     "waiting, the engine did not stop working",
+                     (unsigned)(g_door_hook_mode ? g_hook_read_total_ms : DOOR_READ_DEADLINE_MS));
+        }
         int rc = emit_post_delivery_failure(detail, argc, argv, engine_root);
         free(engine_root);
         return rc;

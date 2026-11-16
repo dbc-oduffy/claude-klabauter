@@ -27,6 +27,7 @@ import os
 import sys
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.cadence
 
@@ -52,10 +53,10 @@ from coordinator_core.hooks.day_branch_assert import (  # noqa: E402
 )
 
 
-def test_main_routes_day_branch_assert_subcommand(monkeypatch):
+def test_main_routes_day_branch_assert_subcommand(monkeypatch: pytest.MonkeyPatch) -> None:
     called = {"hit": False}
 
-    def fake_cmd(args):
+    def fake_cmd(args) -> int:
         called["hit"] = True
         assert args.subcommand == "day-branch-assert"
         return 0
@@ -68,10 +69,10 @@ def test_main_routes_day_branch_assert_subcommand(monkeypatch):
     assert called["hit"] is True
 
 
-def test_day_branch_assert_calls_the_shared_engine_dispatch(monkeypatch, tmp_path):
+def test_day_branch_assert_calls_the_shared_engine_dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls = []
 
-    def fake_assert(repo_root, machine, today, **kwargs):
+    def fake_assert(repo_root, machine, today, **kwargs) -> DayBranchAssertResult:
         calls.append((repo_root, machine, today))
         return DayBranchAssertResult(CUT, "work/host/2026-08-18", "day-branch: cut work/host/2026-08-18")
 
@@ -90,7 +91,7 @@ def test_day_branch_assert_calls_the_shared_engine_dispatch(monkeypatch, tmp_pat
 
 
 @pytest.mark.parametrize("outcome,branch", [(ADOPTED, "work/host/2026-08-18"), (INHERITED, "work/host/2026-08-18")])
-def test_day_branch_assert_settled_outcomes_exit_zero(monkeypatch, tmp_path, outcome, branch):
+def test_day_branch_assert_settled_outcomes_exit_zero(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, outcome, branch) -> None:
     monkeypatch.setattr(
         "coordinator_core.hooks.day_branch_assert.assert_day_branch",
         lambda *a, **k: DayBranchAssertResult(outcome, branch, f"day-branch: {outcome.lower()} {branch}"),
@@ -103,7 +104,7 @@ def test_day_branch_assert_settled_outcomes_exit_zero(monkeypatch, tmp_path, out
     assert rc == 0
 
 
-def test_day_branch_assert_failed_outcome_exits_nonzero(monkeypatch, tmp_path, capsys):
+def test_day_branch_assert_failed_outcome_exits_nonzero(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     fail_message = banner(
         headline="day-branch NOT cut — tree is still on main",
         detail="the cut was attempted and failed",
@@ -127,7 +128,7 @@ def test_day_branch_assert_failed_outcome_exits_nonzero(monkeypatch, tmp_path, c
     assert "day-branch NOT cut" in out
 
 
-def test_day_branch_assert_warn_message_is_bannerrendered_verbatim(monkeypatch, tmp_path, capsys):
+def test_day_branch_assert_warn_message_is_bannerrendered_verbatim(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     warn_message = banner(
         headline="detached HEAD",
         detail="auto-push cannot run and crash insurance is NOT in force",
@@ -147,7 +148,7 @@ def test_day_branch_assert_warn_message_is_bannerrendered_verbatim(monkeypatch, 
     assert warn_message in out
 
 
-def test_day_branch_assert_defaults_repo_root_to_cwd(monkeypatch, tmp_path):
+def test_day_branch_assert_defaults_repo_root_to_cwd(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     calls = []
     monkeypatch.setattr(
         "coordinator_core.hooks.day_branch_assert.assert_day_branch",
@@ -177,10 +178,10 @@ def test_day_branch_assert_defaults_repo_root_to_cwd(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_day_branch_assert_publishes_after_asserting(monkeypatch, capsys):
+def test_day_branch_assert_publishes_after_asserting(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     calls = {}
 
-    def _fake_assert(repo_root, machine, today, **kw):
+    def _fake_assert(repo_root, machine, today, **kw) -> DayBranchAssertResult:
         return DayBranchAssertResult(CUT, "work/m/2026-09-02", "day-branch: cut work/m/2026-09-02")
 
     def _fake_publish(repo_root, **kw):
@@ -203,7 +204,7 @@ def test_day_branch_assert_publishes_after_asserting(monkeypatch, capsys):
     assert "day-branch: published" in out
 
 
-def test_day_branch_assert_publish_is_attempted_even_when_the_cut_failed(monkeypatch):
+def test_day_branch_assert_publish_is_attempted_even_when_the_cut_failed(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.hooks.day_branch_assert.assert_day_branch",
         lambda *a, **kw: DayBranchAssertResult(FAILED, "main", "banner text"),

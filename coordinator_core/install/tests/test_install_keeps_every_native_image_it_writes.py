@@ -11,12 +11,13 @@ from coordinator_core.install.substrate import (
     _load_bin_templates_manifest,
     _resolve_bin_templates_manifest_root,
 )
+import pytest
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _NAME = "chunk-commits"
 
 
-def test_a_native_image_outside_the_allowlist_survives_its_own_install(tmp_path, monkeypatch):
+def test_a_native_image_outside_the_allowlist_survives_its_own_install(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert _NAME in _derive_agent_helper_target_map(_REPO_ROOT / "coordinator" / "bin"), (
         f"{_NAME} is no longer a derived CLI -- pick another name outside door_eligible_entrypoints"
     )

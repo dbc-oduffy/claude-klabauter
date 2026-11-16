@@ -15,6 +15,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_inventory_mint_accounting imp
 )
 from coordinator_core.ops.dispatch_emit.tests.test_landed_reconcile import _PLAN, _SHA
 from coordinator_core.session.record_homes import home_dir
+import pytest
 
 
 def _emit(tmp_path, monkeypatch, inventory, **extra):
@@ -31,7 +32,7 @@ def _emit(tmp_path, monkeypatch, inventory, **extra):
     )
 
 
-def test_dogfood_shaped_reply_counts_sum_to_the_inventory(tmp_path, monkeypatch):
+def test_dogfood_shaped_reply_counts_sum_to_the_inventory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inv = _dogfood_inventory(tmp_path)
     (tmp_path / ".git" / "HEAD").write_text(_SHA + "\n", encoding="utf-8")
 
@@ -48,7 +49,7 @@ def test_dogfood_shaped_reply_counts_sum_to_the_inventory(tmp_path, monkeypatch)
     assert skipped["m58"] == "dependency m51 routed out"
 
 
-def test_tranche_reply_accounts_the_deferred_items_too(tmp_path, monkeypatch):
+def test_tranche_reply_accounts_the_deferred_items_too(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inv = _dogfood_inventory(tmp_path)
 
     reply = _emit(tmp_path, monkeypatch, inv, row_budget=20)
@@ -59,7 +60,7 @@ def test_tranche_reply_accounts_the_deferred_items_too(tmp_path, monkeypatch):
     assert any(e["reason"].startswith("deferred to a later tranche") for e in acc["skipped"])
 
 
-def test_part_reply_marks_the_sibling_parts_items_in_another_part(tmp_path, monkeypatch):
+def test_part_reply_marks_the_sibling_parts_items_in_another_part(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inv = _dogfood_inventory(tmp_path)
 
     reply = _emit(tmp_path, monkeypatch, inv, inventory_part=[1, 2], max_rows=100)
@@ -69,7 +70,7 @@ def test_part_reply_marks_the_sibling_parts_items_in_another_part(tmp_path, monk
     assert any(e["reason"] == "in another part" for e in acc["skipped"])
 
 
-def test_already_fixed_plan_edit_is_reported_beside_the_accounting(tmp_path, monkeypatch):
+def test_already_fixed_plan_edit_is_reported_beside_the_accounting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     git = tmp_path / ".git"
     git.mkdir()
     (git / "HEAD").write_text(_SHA + "\n", encoding="utf-8")
@@ -99,7 +100,7 @@ def test_already_fixed_plan_edit_is_reported_beside_the_accounting(tmp_path, mon
     assert [e["id"] for e in acc["skipped"]] == ["P1"]
 
 
-def test_operator_mode_item_is_refused_with_its_reason(tmp_path, monkeypatch):
+def test_operator_mode_item_is_refused_with_its_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     git = tmp_path / ".git"
     git.mkdir()
     (git / "HEAD").write_text(_SHA + "\n", encoding="utf-8")

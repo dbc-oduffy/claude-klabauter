@@ -63,24 +63,25 @@ def _run(waves: list[dict], verdicts: dict, targets: dict, extra: str = "", term
     node = shutil.which("node")
     if node is None:
         pytest.skip("node not on PATH")
-    machinery = _checkpoint_js(pre_commit_gate_js=_GATE, runtime_plan_js="'p.md'")
+    machinery = _checkpoint_js(pre_commit_gate_js=_GATE, runtime_plan_js="'p.md'", reds_var=ask_compose.WAVE_REDS_VAR)
     gate = ask_compose._wave_tests_green_js(None, repo_root=None, run_id="r1")
     source = f"""
 let _halted = null; let _terminalTestsWanted = {json.dumps(terminal)}; const _runId = 'r1'; const _repoRoot = '/r'; const _runBase = 'b';
 const _gateOwed = {{}}; const _stoppedBy = []; const _rows = {{}}; const _ROW_VERIFY_SCHEMA = {{}};
 const _seamRelease = {{}}; const _seamHeldPlans = {{}}; const _seamGates = {{}};
 const _manifest = {{ wave_test_targets: {json.dumps(targets)} }};
-const _verdicts = {json.dumps(verdicts)}; const spawned = [];
+const _verdicts = {json.dumps(verdicts)}; const spawned = []; const prompts = {{}};
 const log = () => {{}};
 async function agent(prompt, opts) {{
-  spawned.push(opts.label);
+  spawned.push(opts.label); prompts[opts.label] = prompt;
   if (opts.label.startsWith('verify:wave-')) {{
     const v = _verdicts[opts.label.slice('verify:wave-'.length)];
     if (v === 'throw') throw new Error('boom');
     if (v === 'limit') throw new Error('usage limit reached');
     return v;
   }}
-  return {{ outcome: 'committed', sha: 'sha-' + opts.label }};
+  const reds = prompt.includes('dispatch.checkpoint_reds');
+  return {{ outcome: 'committed', sha: 'sha-' + opts.label, ...(reds ? {{ fix_ids: ['fx-' + opts.label] }} : {{}}) }};
 }}
 {ask_compose._usage_limit_helper_js()}
 {machinery}
@@ -93,7 +94,7 @@ async function agent(prompt, opts) {{
   }}
   {extra}
   console.log(JSON.stringify({{ spawned, shas: _checkpointShas, carried: _carried, withheld: _checkpointWithheld,
-    failures: _commitFailures, halted: _halted }}));
+    failures: _commitFailures, halted: _halted, prompts, fixIds: _checkpointFixIds }}));
 }})();
 """
     proc = subprocess.run(
@@ -124,6 +125,40 @@ def test_red_or_unproven_verdict_is_recorded_but_never_blocks_the_commit(reply):
     assert out["carried"] == []
     assert [w["wave"] for w in out["withheld"]] == [0]
     assert out["failures"] == [] and out["halted"] is None
+    assert out["fixIds"] == ["fx-commit:wave-0"]
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_red_wave_commit_prompt_lists_each_failing_id_and_names_the_checkpoint_reds_op():
+    reply = {**_verdict("fail"), "failing_ids": ["t_a.py::test_one", "t_b.py::test_two"]}
+    prompt = _run(_W0, {"0": reply}, {"0": ["t_a.py"]})["prompts"]["commit:wave-0"]
+    assert "dispatch.checkpoint_reds" in prompt
+    assert '"failing":["t_a.py::test_one","t_b.py::test_two"]' in prompt
+    assert '"base_red":[]' in prompt and '"run_id":"r1"' in prompt
+    assert "fix_paths" in prompt and "commit_block" in prompt
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_red_verdict_without_failing_ids_lists_the_wave_as_one_unnamed_red():
+    prompt = _run(_W0, {"0": _verdict("fail")}, {"0": ["t_a.py"]})["prompts"]["commit:wave-0"]
+    assert '"failing":["<unnamed wave 0>"]' in prompt
+
+
+@pytest.mark.spawns_process
+@pytest.mark.cadence
+def test_green_wave_commit_prompt_never_names_the_checkpoint_reds_op():
+    out = _run(_W0, {"0": _verdict("pass")}, {"0": ["t_a.py"]})
+    assert "dispatch.checkpoint_reds" not in out["prompts"]["commit:wave-0"]
+    assert out["fixIds"] == []
+
+
+def test_default_composed_ask_script_wires_reds_and_surfaces_fix_ids_in_the_result():
+    script = _script()
+    assert "dispatch.checkpoint_reds" in script
+    assert "checkpoint_fix_ids: _checkpointFixIds" in script
+    assert _checkpoint_js().count("checkpoint_reds") == 0
 
 
 def test_wave_verify_prompts_carry_the_deadline_and_the_no_investigate_hang_report():

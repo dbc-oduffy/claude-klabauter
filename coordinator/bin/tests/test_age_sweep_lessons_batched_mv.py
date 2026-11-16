@@ -4,11 +4,17 @@ import importlib.machinery
 import importlib.util
 import pathlib
 import types
+from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType, SimpleNamespace
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _load_cli_module():
+def _load_cli_module() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "age_sweep_lessons", str(_BIN_DIR / "age-sweep-lessons.py")
     )
@@ -18,11 +24,11 @@ def _load_cli_module():
     return mod
 
 
-def test_multi_item_batch_is_one_subprocess_call(monkeypatch, tmp_path):
+def test_multi_item_batch_is_one_subprocess_call(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     mod = _load_cli_module()
     calls: list[list[str]] = []
 
-    def _fake_run(cmd, **_kwargs):
+    def _fake_run(cmd, **_kwargs) -> SimpleNamespace:
         calls.append(cmd)
         return types.SimpleNamespace(returncode=0, stderr=b"")
 
@@ -40,12 +46,12 @@ def test_multi_item_batch_is_one_subprocess_call(monkeypatch, tmp_path):
     assert cmd[2:-1] == [str(s) for s in srcs]
 
 
-def test_byte_budget_chunk_boundary_splits_into_multiple_calls(monkeypatch, tmp_path):
+def test_byte_budget_chunk_boundary_splits_into_multiple_calls(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     mod = _load_cli_module()
     monkeypatch.setattr(mod, "_GIT_MV_BATCH_BUDGET", 40)
     calls: list[list[str]] = []
 
-    def _fake_run(cmd, **_kwargs):
+    def _fake_run(cmd, **_kwargs) -> SimpleNamespace:
         calls.append(cmd)
         return types.SimpleNamespace(returncode=0, stderr=b"")
 
@@ -65,10 +71,10 @@ def test_byte_budget_chunk_boundary_splits_into_multiple_calls(monkeypatch, tmp_
     assert seen == [str(s) for s in srcs]
 
 
-def test_batch_failure_aborts_and_reports_none(monkeypatch, tmp_path):
+def test_batch_failure_aborts_and_reports_none(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     mod = _load_cli_module()
 
-    def _fake_run(cmd, **_kwargs):
+    def _fake_run(cmd, **_kwargs) -> SimpleNamespace:
         return types.SimpleNamespace(returncode=1, stderr=b"boom")
 
     monkeypatch.setattr(mod.subprocess, "run", _fake_run)
@@ -79,7 +85,7 @@ def test_batch_failure_aborts_and_reports_none(monkeypatch, tmp_path):
     assert result is None
 
 
-def test_empty_source_list_is_a_zero_spawn_noop(monkeypatch, tmp_path):
+def test_empty_source_list_is_a_zero_spawn_noop(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     mod = _load_cli_module()
     calls = []
     monkeypatch.setattr(mod.subprocess, "run", lambda *a, **k: calls.append(1))

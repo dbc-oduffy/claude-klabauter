@@ -131,8 +131,8 @@ def _write_draft(
     ],
 )
 def test_to_leg_refuses_mirror_regardless_of_registry_state(
-    tmp_path, monkeypatch, receiver_key, receiver_dir, to_id,
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, receiver_key, receiver_dir, to_id,
+) -> None:
     sender_repo = _make_sender_git_repo(tmp_path)
     mirror_repo = _make_mirror_git_repo(tmp_path, receiver_dir)
     claude_home = _make_claude_home(tmp_path, {receiver_key: mirror_repo})
@@ -164,8 +164,8 @@ def test_to_leg_refuses_mirror_regardless_of_registry_state(
     ],
 )
 def test_cc_leg_refuses_mirror_regardless_of_registry_state(
-    tmp_path, monkeypatch, receiver_key, receiver_dir, cc_id,
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, receiver_key, receiver_dir, cc_id,
+) -> None:
     sender_repo = _make_sender_git_repo(tmp_path)
     real_receiver = _make_mirror_git_repo(tmp_path, "real-receiver")
     mirror_repo = _make_mirror_git_repo(tmp_path, receiver_dir)

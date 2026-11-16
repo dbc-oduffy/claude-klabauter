@@ -17,6 +17,7 @@ import pytest
 
 from coordinator_core.ipc import get_op_handler
 from coordinator_core.ops import copy_plugin_template as mod
+from pathlib import Path
 
 _PASSING_TEMPLATE = "def test_tripwire_placeholder():\n    assert True\n"
 _FAILING_TEMPLATE = "def test_tripwire_placeholder():\n    assert False\n"
@@ -27,7 +28,7 @@ _CUSTOMIZED = (
 
 
 @pytest.fixture
-def template(tmp_path):
+def template(tmp_path: Path) -> Path:
     path = tmp_path / "template-src" / "test_no_bare_console_subprocess.py"
     path.parent.mkdir()
     path.write_text(_PASSING_TEMPLATE, encoding="utf-8")
@@ -35,17 +36,17 @@ def template(tmp_path):
 
 
 @pytest.fixture
-def target(tmp_path):
+def target(tmp_path: Path) -> Path:
     root = tmp_path / "consuming-repo"
     root.mkdir()
     return root
 
 
-def _no_pytest(monkeypatch, result=True):
+def _no_pytest(monkeypatch, result: bool = True):
     """Stub the pytest verification spawn for branch tests that don't need it."""
     calls = []
 
-    def fake(dest, cwd):
+    def fake(dest, cwd) -> bool:
         calls.append((dest, cwd))
         return result
 
@@ -53,14 +54,14 @@ def _no_pytest(monkeypatch, result=True):
     return calls
 
 
-def test_dest_absent_copies_and_verifies(template, target):
+def test_dest_absent_copies_and_verifies(template, target) -> None:
     result = mod.copy_console_subprocess_tripwire(str(target), template_path=template)
     dest = target / "tests" / "test_no_bare_console_subprocess.py"
     assert result == {"copied": True, "skipped_existing": False, "test_passed": True}
     assert dest.read_bytes() == template.read_bytes()
 
 
-def test_double_invocation_is_content_idempotent_no_op(template, target, monkeypatch):
+def test_double_invocation_is_content_idempotent_no_op(template, target, monkeypatch: pytest.MonkeyPatch) -> None:
     """CC-4: second call with identical inputs is a safe no-op — no write,
     documented no-op shape, destination bytes untouched."""
     calls = _no_pytest(monkeypatch)
@@ -75,7 +76,7 @@ def test_double_invocation_is_content_idempotent_no_op(template, target, monkeyp
     assert len(calls) == 2  # verification runs on both invocations
 
 
-def test_differing_dest_skip_and_report_never_clobbers(template, target, monkeypatch):
+def test_differing_dest_skip_and_report_never_clobbers(template, target, monkeypatch: pytest.MonkeyPatch) -> None:
     _no_pytest(monkeypatch)
     dest = target / "tests" / "test_no_bare_console_subprocess.py"
     dest.parent.mkdir()
@@ -88,7 +89,7 @@ def test_differing_dest_skip_and_report_never_clobbers(template, target, monkeyp
     assert dest.read_text(encoding="utf-8") == _CUSTOMIZED
 
 
-def test_failing_tripwire_reports_test_passed_false(target, tmp_path):
+def test_failing_tripwire_reports_test_passed_false(target, tmp_path: Path) -> None:
     template = tmp_path / "failing-template.py"
     template.write_text(_FAILING_TEMPLATE, encoding="utf-8")
     result = mod.copy_console_subprocess_tripwire(str(target), template_path=template)
@@ -96,19 +97,19 @@ def test_failing_tripwire_reports_test_passed_false(target, tmp_path):
     assert result["test_passed"] is False
 
 
-def test_missing_target_root_raises_structured_error(template, tmp_path):
+def test_missing_target_root_raises_structured_error(template, tmp_path: Path) -> None:
     missing = tmp_path / "no-such-repo"
     with pytest.raises(mod.TripwireCopyError, match="target_repo_root"):
         mod.copy_console_subprocess_tripwire(str(missing), template_path=template)
 
 
-def test_missing_template_raises_structured_error(target, tmp_path):
+def test_missing_template_raises_structured_error(target, tmp_path: Path) -> None:
     missing = tmp_path / "no-such-template.py"
     with pytest.raises(mod.TripwireCopyError, match="template"):
         mod.copy_console_subprocess_tripwire(str(target), template_path=missing)
 
 
-def test_dest_is_directory_raises_structured_error(template, target, monkeypatch):
+def test_dest_is_directory_raises_structured_error(template, target, monkeypatch: pytest.MonkeyPatch) -> None:
     _no_pytest(monkeypatch)
     dest = target / "tests" / "test_no_bare_console_subprocess.py"
     dest.mkdir(parents=True)
@@ -116,20 +117,20 @@ def test_dest_is_directory_raises_structured_error(template, target, monkeypatch
         mod.copy_console_subprocess_tripwire(str(target), template_path=template)
 
 
-def test_unresolvable_content_root_raises_structured_error(target, monkeypatch):
+def test_unresolvable_content_root_raises_structured_error(target, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod, "read_content_root", lambda: "")
     with pytest.raises(mod.TripwireCopyError, match="unresolvable"):
         mod.copy_console_subprocess_tripwire(str(target))
 
 
-def test_op_registered_and_handler_requires_param():
+def test_op_registered_and_handler_requires_param() -> None:
     handler = get_op_handler("repo_setup.copy_console_subprocess_tripwire")
     assert handler is not None
     with pytest.raises(mod.TripwireCopyError, match="target_repo_root"):
         handler({}, None)
 
 
-def test_handler_delegates_to_pure_function(template, target, monkeypatch):
+def test_handler_delegates_to_pure_function(template, target, monkeypatch: pytest.MonkeyPatch) -> None:
     _no_pytest(monkeypatch)
     monkeypatch.setattr(mod, "_resolve_template_path", lambda: template)
     handler = get_op_handler("repo_setup.copy_console_subprocess_tripwire")

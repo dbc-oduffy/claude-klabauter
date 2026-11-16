@@ -261,19 +261,37 @@ def notify_sender(line, target, error):
     The notice is stamped from this bridge's own endpoint: the inbox accepts it because
     this process is the one the mirror entry vouches for.
     """
+    _tell_sender(line, f"Delivery failed: your message to {target} did not reach the far box ({error}). It was not delivered.")
+
+
+def _tell_sender(line, text):
+    """Write `text` into the inbox of `line`'s sender, stamped from this bridge's endpoint; a failed write is logged."""
     try:
         sender = json.loads(line).get("from", "").removeprefix("uds:")
     except (ValueError, AttributeError):
         sender = ""
     if not sender:
-        log.write("delivery-failure notice: sender unknown\n")
+        log.write("sender notice: sender unknown\n")
         return
-    text = f"Delivery failed: your message to {target} did not reach the far box ({error}). It was not delivered."
     frame = json.dumps({"from": "uds:" + cfg.endpoint, "message": text}).encode() + b"\n"
     try:
         write_local(sender, frame)
     except Exception as e:  # pywintypes.error is not an OSError subclass
-        log.write(f"delivery-failure notice not delivered: {e}\n")
+        log.write(f"sender notice not delivered: {e}\n")
+
+
+def ack_sender(line, target, reached, reached_box):
+    """Tell the sender which far session its message was written to; `reached` is None for a far relay that does not name it."""
+    if reached:
+        text = f"Delivered to {reached} on {reached_box or 'the far box'}."
+    else:
+        text = f"Delivered to {target}; receiver unconfirmed (far relay does not name it)."
+    _tell_sender(line, text)
+
+
+def notify_misdelivered(line, target, reached, reached_box):
+    """Tell the sender its message was written to a far session other than the addressed one."""
+    _tell_sender(line, f"Misdelivered: your message to {target} was written to {reached} on {reached_box or 'the far box'}, not the addressed session.")
 
 
 def delivery_status(limit=10):
@@ -396,6 +414,12 @@ def relay_send(conn):
     marked = False
     for i, (line, (ok, unacked)) in enumerate(zip(lines, acks)):
         error = None
+        reached = reached_box = None
+        if ok and i < len(replies):
+            reached = replies[i].get("reached") if isinstance(replies[i].get("reached"), str) else None
+            reached_box = replies[i].get("reached_box") if isinstance(replies[i].get("reached_box"), str) else None
+        if reached and not _roster_wrote_name(reached, far_name, cfg.remote, mine.get("box")):
+            error = f"{TARGET_MISMATCH}: delivered to {reached} on {reached_box or 'the far box'}, addressed {far_name}"
         if not ok:
             if i < len(replies):
                 error = f"relay: {replies[i].get('error', 'delivery refused')}" if replies[i].get("ok") is False else unacked
@@ -407,7 +431,8 @@ def relay_send(conn):
         if error and TARGET_MISMATCH in error and not marked:
             _mark_misroute()
             marked = True
-        _record_outcome(line, target, ts, ms, error, box, transport, ref)
+        _record_outcome(line, target, ts, ms, error, box, transport, ref, reached=reached, reached_box=reached_box,
+                        acked=ok, misdelivered=bool(error and reached))
 
 
 def _caps():
@@ -502,21 +527,31 @@ def _batch_replies(stdout):
     return replies
 
 
-def _record_outcome(line, target, ts, ms, error, box="unknown", transport="none", ref=None):
+def _record_outcome(line, target, ts, ms, error, box="unknown", transport="none", ref=None,
+                    reached=None, reached_box=None, acked=False, misdelivered=False):
     """Record one line's outcome; `digest` is the sha256 the far relay's receipt row carries for the same line.
 
     `box` is the mirror row's BOX_FIELD; `transport` is the leg label: `ssh`, `tunnel`, or `none` when refused before any ssh.
-    `ref` is the `<bare>.<box>` address the far box resolves; the failure notice leads with it."""
+    `ref` is the `<bare>.<box>` address the far box resolves; the failure notice leads with it.
+    `reached`/`reached_box` name the far session the relay wrote to. `acked` is a far-confirmed write: with no
+    error the sender gets a delivery ack; with `misdelivered` it gets the wrong-session notice, not the not-delivered one."""
     row = {"ts": ts, "at": time.time(), "target": target, "ok": not error, "ms": ms, "box": box, "transport": transport,
            "digest": hashlib.sha256(line.rstrip(b"\n")).hexdigest()}
     if ref:
         row["ref"] = ref
+    if reached:
+        row["reached"] = reached
     if error:
         row["error"] = error
     record_delivery(row)
-    if error:
-        shown = f"{ref} ({target})" if ref else target
-        notify_sender(line, shown if box in (None, "", "unknown") else f"{shown} on box {box}", error)
+    shown = f"{ref} ({target})" if ref else target
+    shown = shown if box in (None, "", "unknown") else f"{shown} on box {box}"
+    if misdelivered:
+        notify_misdelivered(line, shown, reached, reached_box)
+    elif error:
+        notify_sender(line, shown, error)
+    elif acked:
+        ack_sender(line, shown, reached, reached_box)
 
 
 def pump_local_to_sock(conn, s):

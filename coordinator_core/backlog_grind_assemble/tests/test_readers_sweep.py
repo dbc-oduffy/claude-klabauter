@@ -3,6 +3,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.backlog_grind_assemble import readers_sweep
+import pytest
 
 
 def _collect_bug_sweep(tmp_path: Path, monkeypatch) -> object:
@@ -25,7 +26,7 @@ def _grant_check_directive(result, directive_id: str) -> dict:
     raise AssertionError(f"{directive_id} not found")
 
 
-def test_grant_flow_present_for_bug_sweep_cadence(tmp_path: Path, monkeypatch) -> None:
+def test_grant_flow_present_for_bug_sweep_cadence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     result = _collect_bug_sweep(tmp_path, monkeypatch)
     write_directive = _grant_write_directive(result)
     pre_check = _grant_check_directive(
@@ -45,7 +46,7 @@ def test_grant_flow_present_for_bug_sweep_cadence(tmp_path: Path, monkeypatch) -
     assert "j-bug-sweep-tier-u-grant" in jp_ids
 
 
-def test_grant_flow_absent_for_every_other_cadence(tmp_path: Path, monkeypatch) -> None:
+def test_grant_flow_absent_for_every_other_cadence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         readers_sweep, "_resolve_state_root", lambda: str(tmp_path / "state")
     )
@@ -57,7 +58,7 @@ def test_grant_flow_absent_for_every_other_cadence(tmp_path: Path, monkeypatch) 
 
 
 def test_both_rechecks_depend_on_the_grant_write_directive(
-    tmp_path: Path, monkeypatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     result = _collect_bug_sweep(tmp_path, monkeypatch)
     write_directive = _grant_write_directive(result)
@@ -71,7 +72,7 @@ def test_both_rechecks_depend_on_the_grant_write_directive(
     assert post_check["depends_on"] == write_directive["id"]
 
 
-def test_rechecks_carry_no_second_judgment_point(tmp_path: Path, monkeypatch) -> None:
+def test_rechecks_carry_no_second_judgment_point(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     result = _collect_bug_sweep(tmp_path, monkeypatch)
     grant_jp_ids = [
         jp["id"] for jp in result.judgment_points if jp["id"] == "j-bug-sweep-tier-u-grant"
@@ -87,7 +88,7 @@ def test_rechecks_carry_no_second_judgment_point(tmp_path: Path, monkeypatch) ->
     )
 
 
-def test_rechecks_carry_no_already_satisfied(tmp_path: Path, monkeypatch) -> None:
+def test_rechecks_carry_no_already_satisfied(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     result = _collect_bug_sweep(tmp_path, monkeypatch)
     pre_check = _grant_check_directive(
         result, "d-bug-sweep-tier-u-grant-check-pre-track-b"
@@ -99,7 +100,7 @@ def test_rechecks_carry_no_already_satisfied(tmp_path: Path, monkeypatch) -> Non
     assert "already_satisfied" not in post_check
 
 
-def test_two_rechecks_are_two_distinct_directives(tmp_path: Path, monkeypatch) -> None:
+def test_two_rechecks_are_two_distinct_directives(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     result = _collect_bug_sweep(tmp_path, monkeypatch)
     check_ids = {
         d["id"] for d in result.directives if d["cli"] == "tier-u-grant-cli" and d["args"] == ["check"]

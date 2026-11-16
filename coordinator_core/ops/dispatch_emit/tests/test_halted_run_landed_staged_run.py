@@ -41,7 +41,7 @@ def _commit(repo: Path, files: dict, message: str) -> str:
     return _git(repo, "rev-parse", "HEAD")
 
 
-def _repo(tmp_path: Path, stage):
+def _repo(tmp_path: Path, stage) -> tuple[str, str]:
     """A run whose wave checkpoint committed ``pkg/a.py`` and the plan, then a hand-land that touches only ``pkg/b.py``."""
     _git(tmp_path, "init", "-q")
     base = _commit(tmp_path, {"one": "one"}, "one")
@@ -59,11 +59,11 @@ def _repo(tmp_path: Path, stage):
 
 
 @pytest.fixture(autouse=True)
-def _no_launch(monkeypatch):
+def _no_launch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(op, "_launch", lambda root, run_id: True)
 
 
-def test_staged_run_with_no_halt_record_is_recorded_and_its_checkpoint_closed(tmp_path):
+def test_staged_run_with_no_halt_record_is_recorded_and_its_checkpoint_closed(tmp_path: Path) -> None:
     # percolate is not in klabauter's restricted publish tree; the import-closure gate refuses a top-level import.
     _open_checkpoints = pytest.importorskip("coordinator_core.percolate.source_preflight")._open_checkpoints
     base, land = _repo(tmp_path, "staged")
@@ -75,7 +75,7 @@ def test_staged_run_with_no_halt_record_is_recorded_and_its_checkpoint_closed(tm
     assert _open_checkpoints(tmp_path, base) == []
 
 
-def test_run_that_never_staged_still_refuses_a_landing_that_misses_the_checkpoint_paths(tmp_path):
+def test_run_that_never_staged_still_refuses_a_landing_that_misses_the_checkpoint_paths(tmp_path: Path) -> None:
     _, land = _repo(tmp_path, None)
     head = _git(tmp_path, "rev-parse", "HEAD")
     out = op._handler({"run_id": RUN, "sha": land}, tmp_path)
@@ -83,7 +83,7 @@ def test_run_that_never_staged_still_refuses_a_landing_that_misses_the_checkpoin
     assert _git(tmp_path, "rev-parse", "HEAD") == head
 
 
-def test_staged_run_with_an_unverifiable_sha_closes_nothing(tmp_path):
+def test_staged_run_with_an_unverifiable_sha_closes_nothing(tmp_path: Path) -> None:
     _repo(tmp_path, "staged")
     head = _git(tmp_path, "rev-parse", "HEAD")
     out = op._handler({"run_id": RUN, "sha": "0" * 40}, tmp_path)
@@ -91,7 +91,7 @@ def test_staged_run_with_an_unverifiable_sha_closes_nothing(tmp_path):
     assert _git(tmp_path, "rev-parse", "HEAD") == head
 
 
-def test_run_with_no_record_at_all_keeps_the_never_ran_refusal(tmp_path):
+def test_run_with_no_record_at_all_keeps_the_never_ran_refusal(tmp_path: Path) -> None:
     _git(tmp_path, "init", "-q")
     only = _commit(tmp_path, {"one": "one"}, "one")
     out = op._handler({"run_id": RUN, "sha": only}, tmp_path)

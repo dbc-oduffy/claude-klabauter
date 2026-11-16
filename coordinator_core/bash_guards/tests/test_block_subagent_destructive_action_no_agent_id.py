@@ -11,6 +11,7 @@ import pytest
 
 from coordinator_core.bash_guards import block_subagent_destructive_action as guard
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 LEGS = [
     ("Bash", "git reset --hard HEAD~1"),
@@ -30,7 +31,7 @@ def _payload(tool, command, **extra):
 
 
 @pytest.mark.parametrize("tool,command", LEGS)
-def test_no_identity_keys_is_main_thread_and_logs_new_label(tool, command, tmp_path, monkeypatch):
+def test_no_identity_keys_is_main_thread_and_logs_new_label(tool, command, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     log_path = tmp_path / "fail-open.log"
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
     assert envelope_of(guard.check(_payload(tool, command))) is None
@@ -41,7 +42,7 @@ def test_no_identity_keys_is_main_thread_and_logs_new_label(tool, command, tmp_p
 
 
 @pytest.mark.parametrize("tool,command", LEGS)
-def test_agent_type_without_agent_id_is_never_main_thread(tool, command, tmp_path, monkeypatch):
+def test_agent_type_without_agent_id_is_never_main_thread(tool, command, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     log_path = tmp_path / "fail-open.log"
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
     result = envelope_of(guard.check(_payload(tool, command, agent_type="coordinator:executor")))
@@ -50,7 +51,7 @@ def test_agent_type_without_agent_id_is_never_main_thread(tool, command, tmp_pat
 
 
 @pytest.mark.parametrize("tool,command", LEGS)
-def test_subagent_type_without_agent_id_is_never_main_thread(tool, command, tmp_path, monkeypatch):
+def test_subagent_type_without_agent_id_is_never_main_thread(tool, command, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     log_path = tmp_path / "fail-open.log"
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
     result = envelope_of(guard.check(_payload(tool, command, subagent_type="coordinator:executor")))
@@ -58,7 +59,7 @@ def test_subagent_type_without_agent_id_is_never_main_thread(tool, command, tmp_
     assert not log_path.exists() or "main-thread-out-of-scope" not in log_path.read_text(encoding="utf-8")
 
 
-def test_other_fail_open_sites_keep_their_label(tmp_path, monkeypatch):
+def test_other_fail_open_sites_keep_their_label(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     log_path = tmp_path / "fail-open.log"
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
     guard._log_fail_open("kind-unresolved-unparseable-agent-id", {"session_id": "s1"}, "rm -rf /")
@@ -66,7 +67,7 @@ def test_other_fail_open_sites_keep_their_label(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("tool", ["Bash", "PowerShell"])
-def test_main_thread_pid_kill_not_denied(tool, tmp_path, monkeypatch):
+def test_main_thread_pid_kill_not_denied(tool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: tmp_path / "fail-open.log")
     cmd = "kill -9 12345" if tool == "Bash" else "Stop-Process -Id 12345 -Force"
     assert envelope_of(guard.check(_payload(tool, cmd))) is None
@@ -89,7 +90,7 @@ EM_KILL_COMMANDS = [
 
 
 @pytest.mark.parametrize("tool,command", EM_KILL_COMMANDS)
-def test_em_numeric_kill_verbs_never_denied(tool, command, tmp_path, monkeypatch):
+def test_em_numeric_kill_verbs_never_denied(tool, command, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: tmp_path / "fail-open.log")
     assert envelope_of(guard.check(_payload(tool, command))) is None
 
@@ -98,14 +99,14 @@ def test_em_numeric_kill_verbs_never_denied(tool, command, tmp_path, monkeypatch
     ("Bash", "kill 12345"),
     ("PowerShell", "Stop-Process -Id 12345 -Force"),
 ])
-def test_em_orphan_kill_never_denied_even_when_ownership_unprovable(tool, command, tmp_path, monkeypatch):
+def test_em_orphan_kill_never_denied_even_when_ownership_unprovable(tool, command, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """An orphan reparented to ppid 1 has no ledger entry; the EM kill is still allowed."""
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: tmp_path / "fail-open.log")
     monkeypatch.setattr(guard, "_all_pids_owned_by_agent", lambda *a, **k: False)
     assert envelope_of(guard.check(_payload(tool, command))) is None
 
 
-def test_subagent_kill_denial_names_em_route(tmp_path, monkeypatch):
+def test_subagent_kill_denial_names_em_route(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: tmp_path / "fail-open.log")
     result = envelope_of(guard.check(_payload("Bash", "kill 12345", agent_type="coordinator:executor")))
     assert result is not None

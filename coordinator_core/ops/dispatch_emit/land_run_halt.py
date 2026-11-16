@@ -133,8 +133,8 @@ def within_handoffs_home(worktree_root: Path, artifacts: run_artifacts.RunArtifa
 
 
 def _run_request(worktree_root: Path, script_path: object):
-    """``(commit request, manifest-withheld chunk ids)`` an emitted script promises; ``(None, set())``
-    when nothing is readable."""
+    """``(commit request, manifest-withheld chunk ids, manifest staged rows)`` an emitted script
+    promises; ``(None, set(), ())`` when nothing is readable. An inline marker has no rows."""
     from coordinator_core.ops.dispatch_emit.ask_contract import RUN_DIR_ROOT, StageManifest
     from coordinator_core.ops.dispatch_emit.commit_request import (
         MalformedCommitRequestError,
@@ -143,28 +143,56 @@ def _run_request(worktree_root: Path, script_path: object):
     )
 
     if not isinstance(script_path, str) or not script_path:
-        return None, set()
+        return None, set(), ()
     script = contained_path(worktree_root / script_path, [worktree_root])
     if script is None:
-        return None, set()
+        return None, set(), ()
     try:
         text = script.read_text(encoding="utf-8")
         manifest_rel = parse_manifest_marker(text)
         if manifest_rel is None:
-            return parse_marker(text), set()
+            return parse_marker(text), set(), ()
         manifest_abs = contained_path(
             worktree_root / manifest_rel, [worktree_root / RECORD_DIR_ROOT, worktree_root / RUN_DIR_ROOT]
         )
         if manifest_abs is None:
-            return None, set()
+            return None, set(), ()
         manifest = StageManifest.from_json(json.loads(manifest_abs.read_text(encoding="utf-8")))
         marker = contained_path(worktree_root / manifest.marker_path, [worktree_root / RUN_DIR_ROOT])
         if marker is None:
-            return None, set()
+            return None, set(), ()
         withheld = {g.id for g in manifest.gated} | {o.id for o in manifest.owed}
-        return parse_marker(marker.read_text(encoding="utf-8")), withheld
+        return parse_marker(marker.read_text(encoding="utf-8")), withheld, tuple(manifest.rows)
     except (OSError, ValueError, KeyError, TypeError, MalformedCommitRequestError):
-        return None, set()
+        return None, set(), ()
+
+
+def unexecuted_withholds(worktree_root: Path, script_path: object, halted: dict, record_dir_rel: str) -> dict:
+    """``{path: message}`` for every request chunk's product path while a staged row never ran.
+
+    A row ran when its report file exists (any status) or the halt lists it in ``stopped_rows``.
+    Staged rows come from the script's manifest, else the record dir's ``manifest.json``.
+    Empty when no staged row is unexecuted.
+    """
+    from coordinator_core.ops.dispatch_emit import unexecuted_plan_rows as upr
+    from coordinator_core.ops.dispatch_emit.ask_contract import StageManifest
+
+    request, _withheld, rows = _run_request(worktree_root, script_path)
+    if request is None:
+        return {}
+    if not rows:
+        try:
+            doc = json.loads((worktree_root / record_dir_rel / "manifest.json").read_text(encoding="utf-8"))
+            rows = tuple(StageManifest.from_json(doc).rows)
+        except (OSError, ValueError, KeyError, TypeError):
+            return {}
+    ran = {c.id for c in request.chunks if c.report and (worktree_root / c.report).is_file()}
+    ran.update(i for i in (halted.get("stopped_rows") or ()) if isinstance(i, str))
+    ids = upr.unexecuted_plan_rows(rows, ran)
+    if not ids:
+        return {}
+    text = upr.message(ids)
+    return {p: text for c in request.chunks for p in c.paths}
 
 
 def _report_text(worktree_root: Path, rel: str, cache: dict) -> Optional[str]:
@@ -194,7 +222,7 @@ def done_chunks(worktree_root: Path, params: dict) -> list:
     """The chunks a halted run finished. With ``params.incomplete_chunks`` the rest are done; without
     it a chunk is done only when its own report reads DONE and not PARTIAL/BLOCKED. A
     manifest-withheld chunk and an unreadable request are never done."""
-    request, withheld = _run_request(worktree_root, params.get("script_path"))
+    request, withheld, _rows = _run_request(worktree_root, params.get("script_path"))
     if request is None:
         return []
     listed = params.get("incomplete_chunks")
@@ -783,7 +811,8 @@ def _land(
 
     land_deadline.check("land_run_halt._land.integrity")
     # A halt commit carries no product: a resumed run lands it, and its bytes may be a peer's.
-    withheld.update({p: HALT_RECORD_ONLY for p in product + removed if p not in withheld})
+    unexecuted = unexecuted_withholds(root, params.get("script_path"), halted, record_dir_rel)
+    withheld.update({p: unexecuted.get(p, HALT_RECORD_ONLY) for p in product + removed if p not in withheld})
     paths = paths + art_paths
     deleted = deleted + art_deleted
     # Final allowlist, applied to the commit's whole path list: own record-dir files or a run-doc class.
@@ -866,6 +895,7 @@ def _land(
         NothingToCommit,
         commit_paths,
         hash_worktree_blobs_via_spawn,
+        sync_report,
     )
 
     owned_merge = _run_owned_merge_reply(root, run_id, halted, base)
@@ -881,7 +911,7 @@ def _land(
     except CommitRefused as exc:
         return _error(str(exc), refused="commit-refused", **base)
     _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
-    out: dict = {"committed": True, "sha": outcome.sha, "error": None, "refused": None, **peer_held_by, **baton_reply, **kept_reply}
+    out: dict = {"committed": True, "sha": outcome.sha, "error": None, "refused": None, **peer_held_by, **baton_reply, **kept_reply, **sync_report(outcome)}
     left_over = run_artifacts.residue(artifacts, changed - set(paths) - set(deleted), paths + deleted, withheld)
     if left_over:
         out["run_artifact_residue"] = left_over

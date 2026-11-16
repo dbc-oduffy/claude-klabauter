@@ -103,7 +103,7 @@ def _make_repo(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_file_valid_exits_zero(tmp_path, capsys):
+def test_file_valid_exits_zero(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     target = repo / "state" / "handoffs" / "valid.md"
     target.write_text(_VALID_HANDOFF, encoding="utf-8")
@@ -115,7 +115,7 @@ def test_file_valid_exits_zero(tmp_path, capsys):
     assert "valid [handoff]" in out
 
 
-def test_file_invalid_exits_one_with_errors(tmp_path, capsys):
+def test_file_invalid_exits_one_with_errors(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     target = repo / "state" / "handoffs" / "invalid.md"
     target.write_text(_INVALID_HANDOFF, encoding="utf-8")
@@ -133,7 +133,7 @@ def test_file_invalid_exits_one_with_errors(tmp_path, capsys):
     assert "status" in fields
 
 
-def test_file_missing_path_exits_two(tmp_path, capsys):
+def test_file_missing_path_exits_two(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     missing = repo / "state" / "handoffs" / "nope.md"
 
@@ -144,26 +144,26 @@ def test_file_missing_path_exits_two(tmp_path, capsys):
     assert "file not found" in err
 
 
-def test_file_requires_path_argument(capsys):
+def test_file_requires_path_argument(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--file"])
     assert rc == 2
 
 
-def test_unknown_flag_exits_two(capsys):
+def test_unknown_flag_exits_two(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--bogus"])
     assert rc == 2
     err = capsys.readouterr().err
     assert "unknown argument" in err
 
 
-def test_unported_flag_fails_loud(capsys):
+def test_unported_flag_fails_loud(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--list-schemas"])
     assert rc == 2
     err = capsys.readouterr().err
     assert "not ported" in err
 
 
-def test_tree_walk_json_shape_clean_tree(tmp_path, capsys):
+def test_tree_walk_json_shape_clean_tree(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     (repo / "state" / "handoffs" / "valid.md").write_text(_VALID_HANDOFF, encoding="utf-8")
 
@@ -174,7 +174,7 @@ def test_tree_walk_json_shape_clean_tree(tmp_path, capsys):
     assert payload == {"ok": True, "violations": [], "refWarnings": []}
 
 
-def test_tree_walk_json_shape_with_violation(tmp_path, capsys):
+def test_tree_walk_json_shape_with_violation(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     (repo / "state" / "handoffs" / "invalid.md").write_text(_INVALID_HANDOFF, encoding="utf-8")
 
@@ -187,7 +187,7 @@ def test_tree_walk_json_shape_with_violation(tmp_path, capsys):
     assert payload["violations"][0]["file"] == "state/handoffs/invalid.md"
 
 
-def test_strict_refs_promotes_dangling_ref_to_violation(tmp_path, capsys):
+def test_strict_refs_promotes_dangling_ref_to_violation(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     (repo / "state" / "handoffs" / "dangling.md").write_text(_DANGLING_REF_HANDOFF, encoding="utf-8")
 
@@ -202,7 +202,7 @@ def test_strict_refs_promotes_dangling_ref_to_violation(tmp_path, capsys):
     assert payload["refWarnings"] == []
 
 
-def test_file_mode_dangling_ref_is_warning_not_error(tmp_path, capsys):
+def test_file_mode_dangling_ref_is_warning_not_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     target = repo / "state" / "handoffs" / "dangling.md"
     target.write_text(_DANGLING_REF_HANDOFF, encoding="utf-8")
@@ -217,7 +217,7 @@ def test_file_mode_dangling_ref_is_warning_not_error(tmp_path, capsys):
     assert payload["warnings"][0]["field"] == "predecessor"
 
 
-def test_non_strict_refs_demotes_dangling_ref_to_warning(tmp_path, capsys):
+def test_non_strict_refs_demotes_dangling_ref_to_warning(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     (repo / "state" / "handoffs" / "dangling.md").write_text(_DANGLING_REF_HANDOFF, encoding="utf-8")
 
@@ -231,7 +231,7 @@ def test_non_strict_refs_demotes_dangling_ref_to_warning(tmp_path, capsys):
     assert payload["refWarnings"][0]["warning"]["field"] == "predecessor"
 
 
-def test_strict_refs_promotes_dangling_forked_from_to_violation(tmp_path, capsys):
+def test_strict_refs_promotes_dangling_forked_from_to_violation(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     (repo / "state" / "handoffs" / "dangling-forked-from.md").write_text(
         _DANGLING_FORKED_FROM_HANDOFF, encoding="utf-8"
@@ -246,7 +246,7 @@ def test_strict_refs_promotes_dangling_forked_from_to_violation(tmp_path, capsys
     assert "forked_from" in fields
 
 
-def test_strict_refs_promotes_dangling_additional_predecessor_to_violation(tmp_path, capsys):
+def test_strict_refs_promotes_dangling_additional_predecessor_to_violation(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     (repo / "state" / "handoffs" / "dangling-additional.md").write_text(
         _DANGLING_ADDITIONAL_PREDECESSORS_HANDOFF, encoding="utf-8"
@@ -261,7 +261,7 @@ def test_strict_refs_promotes_dangling_additional_predecessor_to_violation(tmp_p
     assert "additional_predecessors[0]" in fields
 
 
-def test_strict_refs_promotes_dangling_predecessor_id_to_violation(tmp_path, capsys):
+def test_strict_refs_promotes_dangling_predecessor_id_to_violation(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     (repo / "state" / "handoffs" / "dangling-id.md").write_text(
         _DANGLING_PREDECESSOR_ID_HANDOFF, encoding="utf-8"
@@ -276,7 +276,7 @@ def test_strict_refs_promotes_dangling_predecessor_id_to_violation(tmp_path, cap
     assert "predecessor_id" in fields
 
 
-def test_non_strict_demotes_dangling_predecessor_id_to_warning(tmp_path, capsys):
+def test_non_strict_demotes_dangling_predecessor_id_to_warning(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     (repo / "state" / "handoffs" / "dangling-id.md").write_text(
         _DANGLING_PREDECESSOR_ID_HANDOFF, encoding="utf-8"
@@ -292,7 +292,7 @@ def test_non_strict_demotes_dangling_predecessor_id_to_warning(tmp_path, capsys)
     assert "predecessor_id" in warning_fields
 
 
-def test_file_mode_dangling_predecessor_id_is_warning_not_error(tmp_path, capsys):
+def test_file_mode_dangling_predecessor_id_is_warning_not_error(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     target = repo / "state" / "handoffs" / "dangling-id.md"
     target.write_text(_DANGLING_PREDECESSOR_ID_HANDOFF, encoding="utf-8")
@@ -307,7 +307,7 @@ def test_file_mode_dangling_predecessor_id_is_warning_not_error(tmp_path, capsys
     assert "predecessor_id" in warning_fields
 
 
-def test_predecessor_id_disagreement_is_always_error_even_non_strict(tmp_path, capsys):
+def test_predecessor_id_disagreement_is_always_error_even_non_strict(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Never-silently-disagree: predecessor_id resolves to a DIFFERENT
     artifact than predecessor names — an error regardless of --strict-refs
     (mirrors checkReferentialIntegrity's unconditional errors.push, not
@@ -341,7 +341,7 @@ Body text.
     assert "never-silently-disagree" in error_text
 
 
-def test_predecessor_id_agreement_resolves_cleanly(tmp_path, capsys):
+def test_predecessor_id_agreement_resolves_cleanly(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     (repo / "state" / "handoffs" / "target.md").write_text(_TARGET_WITH_HANDOFF_ID, encoding="utf-8")
     agreeing = """---
@@ -365,7 +365,7 @@ Body text.
     assert payload["refWarnings"] == []
 
 
-def test_file_mode_predecessor_id_disagreement_is_always_error_even_non_strict(tmp_path, capsys):
+def test_file_mode_predecessor_id_disagreement_is_always_error_even_non_strict(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_repo(tmp_path)
     (repo / "state" / "handoffs" / "target.md").write_text(_TARGET_WITH_HANDOFF_ID, encoding="utf-8")
     (repo / "state" / "handoffs" / "different-target.md").write_text(
@@ -396,7 +396,7 @@ Body text.
     assert "never-silently-disagree" in error_text
 
 
-def test_archived_handoff_id_indexed_at_logical_path(tmp_path, capsys):
+def test_archived_handoff_id_indexed_at_logical_path(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A handoff_id belonging to an ARCHIVED handoff resolves against its
     stable logical path (state/handoffs/<basename>), not its on-disk archive
     path — mirrors buildHandoffIdIndex's logical-key indexing so a live
@@ -427,7 +427,7 @@ Body text.
     assert payload["violations"] == []
 
 
-def test_cli_clean_tree_stderr_has_no_setpgid_and_only_the_engine_split_advisory(tmp_path):
+def test_cli_clean_tree_stderr_has_no_setpgid_and_only_the_engine_split_advisory(tmp_path: Path) -> None:
     import subprocess
     import sys
 

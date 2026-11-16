@@ -11,6 +11,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_cli_research_route import (  
     _write_sizing,
     repo,
 )
+import pytest
 
 _TWO = (
     "--research-class", "corpus", "--research-appetite", "medium", "--research-source", "notebooklm",
@@ -33,7 +34,7 @@ def _brief_text(repo, script):
     return (repo / paths[0]).read_text(encoding="utf-8")
 
 
-def test_two_notebook_roster_is_stated_in_the_members_brief(repo, capsys):
+def test_two_notebook_roster_is_stated_in_the_members_brief(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _, script, _ = _emit(repo, capsys, *_TWO)
     brief = _brief_text(repo, script)
     assert "## Notebooks roster" in brief
@@ -41,7 +42,7 @@ def test_two_notebook_roster_is_stated_in_the_members_brief(repo, capsys):
     assert "`worker_count` = 2" in brief and "`notebooks` listing exactly" in brief
 
 
-def test_halt_guard_trips_on_a_one_scope_reply_and_passes_a_two_scope_reply(repo, capsys):
+def test_halt_guard_trips_on_a_one_scope_reply_and_passes_a_two_scope_reply(repo, capsys: pytest.CaptureFixture[str]) -> None:
     _, script, _ = _emit(repo, capsys, *_TWO)
     assert "disagrees with the 2-entry notebooks roster (" in script
     lines = script.splitlines()
@@ -52,7 +53,7 @@ def test_halt_guard_trips_on_a_one_scope_reply_and_passes_a_two_scope_reply(repo
     assert "!== 1" not in condition
 
 
-def test_no_notebooklm_leaves_the_brief_unchanged(tmp_path):
+def test_no_notebooklm_leaves_the_brief_unchanged(tmp_path: Path) -> None:
     (tmp_path / "scratch/run-1").mkdir(parents=True)
     ask = tmp_path / "scratch/run-1/ask.md"
     ask.write_text("ask\n", encoding="utf-8")
@@ -60,14 +61,14 @@ def test_no_notebooklm_leaves_the_brief_unchanged(tmp_path):
     assert ask.read_text(encoding="utf-8") == "ask\n"
 
 
-def test_roster_precedence_given_then_targets_then_question_defaults():
+def test_roster_precedence_given_then_targets_then_question_defaults() -> None:
     targets = [{"source": "notebooklm", "ref": "A"}, {"source": "web", "ref": "x"}, {"source": "notebooklm", "ref": "B"}]
     assert re_.notebooks_roster(targets, ["Z"], ["q"]) == ("Z",)
     assert re_.notebooks_roster(targets, [], ["q"]) == ("A", "B")
     assert re_.notebooks_roster([], [], ["q1", "q2"]) == ("A", "B")
 
 
-def test_a_sizing_brief_is_wrapped_never_edited(tmp_path):
+def test_a_sizing_brief_is_wrapped_never_edited(tmp_path: Path) -> None:
     sizing = tmp_path / "state/sizings/s.yaml"
     sizing.parent.mkdir(parents=True)
     sizing.write_text("x: 1\n", encoding="utf-8")

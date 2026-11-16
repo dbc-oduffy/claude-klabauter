@@ -6,6 +6,7 @@ import json
 import pytest
 
 from coordinator_core.p4 import workspace
+from pathlib import Path
 
 
 def _write_local_md(repo_root, vcs_mirror: str | None) -> None:
@@ -17,27 +18,27 @@ def _write_local_md(repo_root, vcs_mirror: str | None) -> None:
 
 
 class TestIsP4Repo:
-    def test_marker_present_p4(self, tmp_path):
+    def test_marker_present_p4(self, tmp_path: Path) -> None:
         _write_local_md(tmp_path, "p4")
         assert workspace.is_p4_repo(str(tmp_path)) is True
 
-    def test_marker_absent_returns_false_no_spawn(self, tmp_path):
+    def test_marker_absent_returns_false_no_spawn(self, tmp_path: Path) -> None:
         assert workspace.is_p4_repo(str(tmp_path)) is False
 
-    def test_marker_key_absent_from_file_returns_false(self, tmp_path):
+    def test_marker_key_absent_from_file_returns_false(self, tmp_path: Path) -> None:
         _write_local_md(tmp_path, None)
         assert workspace.is_p4_repo(str(tmp_path)) is False
 
-    def test_marker_present_but_not_p4_returns_false(self, tmp_path):
+    def test_marker_present_but_not_p4_returns_false(self, tmp_path: Path) -> None:
         _write_local_md(tmp_path, "git")
         assert workspace.is_p4_repo(str(tmp_path)) is False
 
-    def test_module_never_imports_runner_at_top_level(self):
+    def test_module_never_imports_runner_at_top_level(self) -> None:
         assert "runner" not in vars(workspace)
 
 
 class TestIdentity:
-    def test_full_row_present(self, monkeypatch):
+    def test_full_row_present(self, monkeypatch: pytest.MonkeyPatch) -> None:
         values = {
             "p4.studio/repo.port": "ssl:p4.example.com:1666",
             "p4.studio/repo.user": "agent",
@@ -51,13 +52,13 @@ class TestIdentity:
         assert ident.client == "agent-ws"
         assert ident.client_root == "C:/p4-workspace"
 
-    def test_no_machine_local_row_raises_typed_error(self, monkeypatch):
+    def test_no_machine_local_row_raises_typed_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(workspace, "registry_get", lambda key: None)
         with pytest.raises(workspace.P4WorkspaceUnregistered) as exc_info:
             workspace.identity("studio/repo")
         assert exc_info.value.repo_key == "studio/repo"
 
-    def test_partial_row_raises_typed_error(self, monkeypatch):
+    def test_partial_row_raises_typed_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
         values = {
             "p4.studio/repo.port": "ssl:p4.example.com:1666",
             "p4.studio/repo.user": "agent",
@@ -66,7 +67,7 @@ class TestIdentity:
         with pytest.raises(workspace.P4WorkspaceUnregistered):
             workspace.identity("studio/repo")
 
-    def test_missing_client_root_does_not_raise(self, monkeypatch):
+    def test_missing_client_root_does_not_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
         values = {
             "p4.studio/repo.port": "ssl:p4.example.com:1666",
             "p4.studio/repo.user": "agent",
@@ -78,7 +79,7 @@ class TestIdentity:
 
 
 class TestSessionChange:
-    def test_all_fields_present(self, tmp_path):
+    def test_all_fields_present(self, tmp_path: Path) -> None:
         meta = {
             "p4_change": 41,
             "p4_base_sha": "abc123",
@@ -94,7 +95,7 @@ class TestSessionChange:
             "p4_shelved_sha": "def456",
         }
 
-    def test_absent_meta_json_returns_all_none(self, tmp_path):
+    def test_absent_meta_json_returns_all_none(self, tmp_path: Path) -> None:
         result = workspace.session_change(str(tmp_path))
         assert result == {
             "p4_change": None,
@@ -103,13 +104,13 @@ class TestSessionChange:
             "p4_shelved_sha": None,
         }
 
-    def test_absent_fields_return_none(self, tmp_path):
+    def test_absent_fields_return_none(self, tmp_path: Path) -> None:
         (tmp_path / "meta.json").write_text(json.dumps({}), encoding="utf-8")
         result = workspace.session_change(str(tmp_path))
         assert result["p4_change"] is None
         assert result["p4_base_sha"] is None
 
-    def test_p4_change_written_as_string_still_coerces_to_int(self, tmp_path):
+    def test_p4_change_written_as_string_still_coerces_to_int(self, tmp_path: Path) -> None:
         (tmp_path / "meta.json").write_text(
             json.dumps({"p4_change": "41"}), encoding="utf-8"
         )

@@ -13,6 +13,8 @@ import copy
 import re
 from typing import Mapping, Optional, Sequence
 
+from coordinator_core.sizing_route_table import _BASE_ROUTE_BY_TSHIRT
+
 _NOTEBOOKLM = "notebooklm"
 _DATE_PREFIX = re.compile(r"^(\d{4}-\d{2})-\d{2}-")
 
@@ -45,7 +47,7 @@ def split_research_build(
     research_doc["research"].pop("then_build", None)
     build_doc = copy.deepcopy(dict(sizing))
     build_doc.pop("research", None)
-    build_doc["route"] = "plan"
+    build_doc["route"] = _build_route(build_doc)
     kept = [str(w).strip() for w in writes if str(w).strip()]
     if kept:
         build_doc["writes"] = kept
@@ -54,6 +56,14 @@ def split_research_build(
     for doc in (research_doc, build_doc):
         _drop_ask_parent(doc)
     return research_doc, build_doc
+
+
+def _build_route(build_doc: Mapping) -> str:
+    """The route its own `estimate.tshirt` sizes the build to, so the sized arm accepts it unedited.
+    A missing or unknown tshirt falls back to `plan`."""
+    estimate = build_doc.get("estimate")
+    tshirt = estimate.get("tshirt") if isinstance(estimate, Mapping) else None
+    return _BASE_ROUTE_BY_TSHIRT.get(tshirt, "plan")
 
 
 def _drop_ask_parent(doc: dict) -> None:

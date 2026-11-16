@@ -77,7 +77,7 @@ def _record_footprint(root, writes) -> None:
     target.write_text(json.dumps({"action": "dispatch", "writes": list(writes)}), encoding="utf-8")
 
 
-def test_out_of_footprint_path_is_withheld_and_named_while_the_in_footprint_path_lands(halted):  # noqa: F811
+def test_out_of_footprint_path_is_withheld_and_named_while_the_in_footprint_path_lands(halted) -> None:  # noqa: F811
     resume = _composed(halted)
     token = _stage_refire(halted, change_in=True, change_out=True)
     _record_footprint(halted, ["a.py"])
@@ -92,7 +92,7 @@ def test_out_of_footprint_path_is_withheld_and_named_while_the_in_footprint_path
     assert (halted / B).read_text(encoding="utf-8") == "b = 2\n"
 
 
-def test_out_of_footprint_change_alone_is_not_work_since_the_halt(halted):  # noqa: F811
+def test_out_of_footprint_change_alone_is_not_work_since_the_halt(halted) -> None:  # noqa: F811
     resume = _composed(halted)
     token = _stage_refire(halted, change_in=False, change_out=True)
     _record_footprint(halted, ["a.py"])
@@ -105,7 +105,7 @@ def test_out_of_footprint_change_alone_is_not_work_since_the_halt(halted):  # no
     assert _git(halted, "rev-parse", "HEAD") == head
 
 
-def test_absent_footprint_artifact_reports_unrecorded_and_withholds_nothing_on_that_ground(halted):  # noqa: F811
+def test_absent_footprint_artifact_reports_unrecorded_and_withholds_nothing_on_that_ground(halted) -> None:  # noqa: F811
     resume = _composed(halted)
     token = _stage_refire(halted, change_in=True, change_out=True)
 
@@ -137,7 +137,7 @@ def _terminal_with(root, token: str, resume: dict, verdict: dict) -> dict:
     )
 
 
-def test_row_appended_to_the_plan_after_the_footprint_was_recorded_lands(halted):  # noqa: F811
+def test_row_appended_to_the_plan_after_the_footprint_was_recorded_lands(halted) -> None:  # noqa: F811
     resume = _composed(halted)
     token = _stage_refire(halted, change_in=True, change_out=True)
     _record_footprint(halted, ["a.py"])
@@ -152,7 +152,7 @@ def test_row_appended_to_the_plan_after_the_footprint_was_recorded_lands(halted)
     assert "Row-Unlanded" not in _git(halted, "show", "-s", "--format=%B", out["sha"])
 
 
-def test_met_resting_on_a_breach_path_refuses_and_leaves_it_dirty(halted):  # noqa: F811
+def test_met_resting_on_a_breach_path_refuses_and_leaves_it_dirty(halted) -> None:  # noqa: F811
     from coordinator_core.ops.dispatch_emit import footprint_breach
 
     resume = _composed(halted)
@@ -172,7 +172,7 @@ def test_met_resting_on_a_breach_path_refuses_and_leaves_it_dirty(halted):  # no
     assert B in _git(halted, "status", "--porcelain", "--", B)
 
 
-def test_fence_reply_keys():
+def test_fence_reply_keys() -> None:
     assert land_run._fence_reply({}) == {}
     assert land_run._fence_reply({"recorded": False}) == {"footprint": "unrecorded"}
     assert land_run._fence_reply({"recorded": True, "breach": []}) == {}

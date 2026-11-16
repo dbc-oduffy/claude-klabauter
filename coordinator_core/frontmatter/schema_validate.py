@@ -7580,8 +7580,13 @@ def build_type_to_glob(schemas_dir: str | Path) -> dict[str, str]:
 # a NEW write of a retired spelling is not endorsed by the schema. `the Staff Engineer-review`
 # left review-sidecar's `kinds` at 2.0.0 (persona-named wire literal); two
 # archived sidecars still declare it and sit outside the `applies_to` glob.
-# Retire an entry when the fleet census of that `kind:` reads 0.
-_LEGACY_KIND_ALIASES: dict[str, str] = {'patrik-review': 'staff-eng-review'}
+# The pre-rename handoff kinds are spread in from `baton_class._PRE_RENAME_ALIASES`
+# so that pairing stays declared once. Retire an entry when the fleet census of
+# that `kind:` reads 0.
+_LEGACY_KIND_ALIASES: dict[str, str] = {
+    'patrik-review': 'staff-eng-review',
+    **_HANDOFF_KIND_PRE_RENAME_ALIASES,
+}
 
 
 def _schema_name_for_kind(schemas: dict, kind_value: str) -> str | None:

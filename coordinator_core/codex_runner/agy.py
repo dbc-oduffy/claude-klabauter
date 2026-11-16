@@ -12,6 +12,7 @@ Google calls wrapping agy on consumer plans unsupported (DoE W5.8); the PM accep
 """
 from __future__ import annotations
 
+from coordinator_core import tenant_priority
 from coordinator_core.codex_runner.identity_env import provider_identity_env
 
 import json
@@ -187,11 +188,13 @@ class AgyConversation:
         self._events_fh = open(self.run_dir / EVENTS_FILE, "wb")
         self._stderr_fh = open(self.stderr_path, "wb")
         flags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if sys.platform.startswith("win") else 0
+        argv = build_argv(prefix, self._schema, bool(self._api_key))
         try:
             self.proc = subprocess.Popen(
-                build_argv(prefix, self._schema, bool(self._api_key)), cwd=str(self.run_dir),
+                argv, cwd=str(self.run_dir),
                 env=_build_env(api_key=self._api_key), shell=False,
                 stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=self._stderr_fh, creationflags=flags,
+                **tenant_priority.popen_kwargs(argv),
             )
         except OSError as exc:
             self._close_files()

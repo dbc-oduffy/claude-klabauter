@@ -253,7 +253,7 @@ def _scan_commit_argv_producers() -> dict:
     return found
 
 
-def test_commit_argv_producers_are_the_pinned_set():
+def test_commit_argv_producers_are_the_pinned_set() -> None:
     """Every file containing a literal commit-creating git argv element is
     either wired to the ledger or explicitly exempted -- a new file
     introducing one (an unenumerated commit path) fails this test until it
@@ -278,7 +278,7 @@ def test_commit_argv_producers_are_the_pinned_set():
     )
 
 
-def test_every_wired_producer_references_record_ledger_entry():
+def test_every_wired_producer_references_record_ledger_entry() -> None:
     """Each `_WIRED_PRODUCERS` file actually references
     `record_ledger_entry` (a call, or -- for `git_native.py` -- the
     deferred import plus call) -- catching a wiring regression (the call
@@ -291,7 +291,7 @@ def test_every_wired_producer_references_record_ledger_entry():
         )
 
 
-def test_producers_never_import_commit_ledger_at_module_level():
+def test_producers_never_import_commit_ledger_at_module_level() -> None:
     """`commit_ledger.store`/`classify` import back into `coordinator_core.ops`
     (`resolve_swept_baton`, `review_brightline_gate`), so a MODULE-LEVEL
     `commit_ledger` import in a producer closes a cycle: anything importing
@@ -326,7 +326,7 @@ def test_producers_never_import_commit_ledger_at_module_level():
         )
 
 
-def test_apply_base_never_imports_coordinator_core_ops_at_module_level():
+def test_apply_base_never_imports_coordinator_core_ops_at_module_level() -> None:
     """`contract/apply_base.py` must not import anything under
     `coordinator_core.ops` at module level.
 
@@ -373,7 +373,7 @@ def test_apply_base_never_imports_coordinator_core_ops_at_module_level():
     )
 
 
-def test_git_native_commit_tree_functions_are_ledgered_or_named_exempt():
+def test_git_native_commit_tree_functions_are_ledgered_or_named_exempt() -> None:
     """`git_native.py` is whole-file listed in `_WIRED_PRODUCERS`, so the
     per-file argv scan cannot see a `commit-tree` function inside it that
     writes no ledger row. Pin them per function: every one is either in
@@ -399,7 +399,7 @@ def test_git_native_commit_tree_functions_are_ledgered_or_named_exempt():
     assert set(_EXEMPT_COMMIT_TREE_FUNCTIONS) == {(rel, "commit_tree_merge")}
 
 
-def test_commit_tree_merge_has_only_the_exempt_push_ladder_caller():
+def test_commit_tree_merge_has_only_the_exempt_push_ladder_caller() -> None:
     """The `commit_tree_merge` exemption rests on its sole caller being the
     push ladder's divergence recovery; a second caller voids the reason."""
     import ast

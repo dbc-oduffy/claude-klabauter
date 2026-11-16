@@ -7,6 +7,7 @@ import pytest
 
 from coordinator_core.canvas_harvest import model, probe_stamp
 from coordinator_core.session import declared_writes
+from pathlib import Path
 
 AID = "abc123"
 T_HARVEST = "2026-01-01T10:00:00Z"
@@ -15,14 +16,14 @@ NOW = "2026-01-01T11:05:00Z"
 
 
 @pytest.fixture(autouse=True)
-def _config_dir(tmp_path, monkeypatch):
+def _config_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     cfg = tmp_path / "cfg"
     cfg.mkdir()
     monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg))
     return cfg
 
 
-def _login(cfg, email):
+def _login(cfg, email) -> None:
     (cfg / ".claude.json").write_text(json.dumps({"oauthAccount": {"emailAddress": email}}), encoding="utf-8")
 
 
@@ -31,7 +32,7 @@ def _unreadable(out, kind=model.NOT_FOUND):
     return json.loads((out / "harvest.json").read_text())["probe"]
 
 
-def test_readable_probe_stamps_account_and_never_backfills(tmp_path, _config_dir):
+def test_readable_probe_stamps_account_and_never_backfills(tmp_path: Path, _config_dir) -> None:
     _login(_config_dir, "me@x")
     out = _setup(tmp_path, _record())
     probe_stamp.stamp_probe(_lifted(), out, "s1", NOW)
@@ -52,7 +53,7 @@ def test_readable_probe_stamps_account_and_never_backfills(tmp_path, _config_dir
         ("a@x", "b@x", model.NEEDS_APPROVAL, "needs-approval"),
     ],
 )
-def test_unreadable_reason_by_accounts(tmp_path, _config_dir, held, login, kind, expected):
+def test_unreadable_reason_by_accounts(tmp_path: Path, _config_dir, held, login, kind, expected) -> None:
     if login:
         _login(_config_dir, login)
     rec = _record()
@@ -63,12 +64,12 @@ def test_unreadable_reason_by_accounts(tmp_path, _config_dir, held, login, kind,
     assert probe["account"] == login
 
 
-def test_record_committed_false_when_not_in_git(tmp_path):
+def test_record_committed_false_when_not_in_git(tmp_path: Path) -> None:
     out = _setup(tmp_path, _record())
     assert _unreadable(out)["record_committed"] is False
 
 
-def _record(probe=None, n_files=0):
+def _record(probe=None, n_files: int = 0):
     rec = {
         "schema": model.SCHEMA,
         "artifact": {"url": f"claude.ai/artifact/{AID}", "id": AID, "title": "T", "type": "canvas"},
@@ -122,13 +123,13 @@ def _snapshot(out):
     return snap
 
 
-def _refused(reason, fn, *args, **kwargs):
+def _refused(reason, fn, *args, **kwargs) -> None:
     with pytest.raises(model.HarvestError) as exc:
         fn(*args, **kwargs)
     assert exc.value.reason == reason
 
 
-def test_only_probe_differs(tmp_path):
+def test_only_probe_differs(tmp_path: Path) -> None:
     out = _setup(tmp_path, _record())
     before = json.loads((out / "harvest.json").read_text())
     snap = _snapshot(out)
@@ -150,7 +151,7 @@ def test_only_probe_differs(tmp_path):
     assert _snapshot(out) == snap
 
 
-def test_second_probe_replaces_first(tmp_path):
+def test_second_probe_replaces_first(tmp_path: Path) -> None:
     out = _setup(tmp_path, _record())
     probe_stamp.stamp_probe(_lifted(), out, "s1", NOW)
     later = "2026-01-01T12:00:00Z"
@@ -159,7 +160,7 @@ def test_second_probe_replaces_first(tmp_path):
     assert probe["session_id"] == "s2" and probe["probed_at"] == "2026-01-01T12:01:00Z"
 
 
-def test_second_probe_with_old_reads_is_stale(tmp_path):
+def test_second_probe_with_old_reads_is_stale(tmp_path: Path) -> None:
     out = _setup(tmp_path, _record())
     probe_stamp.stamp_probe(_lifted(), out, "s1", NOW)
     raw = (out / "harvest.json").read_bytes()
@@ -168,7 +169,7 @@ def test_second_probe_with_old_reads_is_stale(tmp_path):
 
 
 @pytest.mark.parametrize("which", ["version", "comments"])
-def test_stale_read_refused_and_record_untouched(tmp_path, which):
+def test_stale_read_refused_and_record_untouched(tmp_path: Path, which) -> None:
     out = _setup(tmp_path, _record())
     raw = (out / "harvest.json").read_bytes()
     kw = {"version_at": T_HARVEST} if which == "version" else {"comments_at": "2026-01-01T09:00:00Z"}
@@ -176,21 +177,21 @@ def test_stale_read_refused_and_record_untouched(tmp_path, which):
     assert (out / "harvest.json").read_bytes() == raw
 
 
-def test_no_record(tmp_path):
+def test_no_record(tmp_path: Path) -> None:
     out = _setup(tmp_path)
     _refused(model.NO_HARVEST_RECORD, probe_stamp.stamp_probe, _lifted(), out, "s1", NOW)
     assert not (out / "harvest.json").exists()
 
 
 @pytest.mark.parametrize("raw", [b"{not json", b"[1, 2]", b"{}"])
-def test_unparseable_record(tmp_path, raw):
+def test_unparseable_record(tmp_path: Path, raw) -> None:
     out = _setup(tmp_path, raw=raw)
     _refused(model.RECORD_UNPARSEABLE, probe_stamp.stamp_probe, _lifted(), out, "s1", NOW)
     _refused(model.RECORD_UNPARSEABLE, probe_stamp.stamp_unreadable, model.ReadError("not-found", "x", NOW), AID, out, "s1", NOW)
     assert (out / "harvest.json").read_bytes() == raw
 
 
-def test_artifact_mismatch_both_functions(tmp_path):
+def test_artifact_mismatch_both_functions(tmp_path: Path) -> None:
     out = _setup(tmp_path, _record())
     raw = (out / "harvest.json").read_bytes()
     other = _lifted()
@@ -203,7 +204,7 @@ def test_artifact_mismatch_both_functions(tmp_path):
     assert (out / "harvest.json").read_bytes() == raw
 
 
-def test_no_session_id(tmp_path):
+def test_no_session_id(tmp_path: Path) -> None:
     out = _setup(tmp_path, _record())
     raw = (out / "harvest.json").read_bytes()
     _refused(model.NO_SESSION_ID, probe_stamp.stamp_probe, _lifted(), out, "", NOW)
@@ -212,7 +213,7 @@ def test_no_session_id(tmp_path):
 
 
 @pytest.mark.parametrize("kind", [model.NOT_FOUND, model.NEEDS_APPROVAL])
-def test_unreadable_over_record(tmp_path, kind):
+def test_unreadable_over_record(tmp_path: Path, kind) -> None:
     prior = {"probed_at": T_AFTER, "session_id": "old", "readable": True, "unreadable_reason": None,
              "version": "v1", "thread_ids": ["t1"], "latest_comment_at": None}
     out = _setup(tmp_path, _record(probe=prior))
@@ -230,14 +231,14 @@ def test_unreadable_over_record(tmp_path, kind):
     assert _snapshot(out) == snap
 
 
-def test_unreadable_unclassified_writes_nothing(tmp_path):
+def test_unreadable_unclassified_writes_nothing(tmp_path: Path) -> None:
     out = _setup(tmp_path, _record())
     raw = (out / "harvest.json").read_bytes()
     _refused(model.READ_ERROR_UNCLASSIFIED, probe_stamp.stamp_unreadable, model.ReadError(None, "odd", NOW), AID, out, "s1", NOW)
     assert (out / "harvest.json").read_bytes() == raw
 
 
-def test_unreadable_without_record_creates_nothing(tmp_path):
+def test_unreadable_without_record_creates_nothing(tmp_path: Path) -> None:
     out = tmp_path / "harvest"
     assert probe_stamp.stamp_unreadable(model.ReadError("not-found", "x", NOW), AID, out, "s1", NOW) is None
     assert not out.exists()
@@ -246,7 +247,7 @@ def test_unreadable_without_record_creates_nothing(tmp_path):
     assert os.listdir(out) == []
 
 
-def test_each_declares_exactly_harvest_json_at_max_record(tmp_path):
+def test_each_declares_exactly_harvest_json_at_max_record(tmp_path: Path) -> None:
     out = _setup(tmp_path, _record(n_files=model.MAX_RECORD_FILES))
     target = str(out / "harvest.json")
     with declared_writes.collecting() as got:

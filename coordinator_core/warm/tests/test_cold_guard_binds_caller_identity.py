@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from coordinator_core.session import core as session_core
 from coordinator_core.warm import hook_http
+import pytest
 
 _CALLER_SID = "e641c238-68e3-480a-9e44-3ed73e8c5c94"
 _HOST_SID = "747f89ba-b778-4690-8278-a02c053cb3c8"
@@ -44,7 +45,7 @@ def _event(cmd: str = "echo hello", *, session_id: str | None = _CALLER_SID) -> 
 def _identity_seen_by_chain(monkeypatch, event: dict) -> list:
     seen: list = []
 
-    def _probe(_raw, **_kwargs):
+    def _probe(_raw, **_kwargs) -> None:
         seen.append(session_core.resolve_session_id(None))
         return None
 
@@ -56,7 +57,7 @@ def _identity_seen_by_chain(monkeypatch, event: dict) -> list:
 
 
 class TestColdRungBindsTheCaller:
-    def test_the_chain_sees_the_events_session_not_the_hosts(self, monkeypatch):
+    def test_the_chain_sees_the_events_session_not_the_hosts(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # The host process's own environ names a DIFFERENT session -- the shape a
         # resident forwarder or server always has, and the one the ambient read
         # silently returned.
@@ -67,8 +68,8 @@ class TestColdRungBindsTheCaller:
         assert _identity_seen_by_chain(monkeypatch, _event()) == [_CALLER_SID]
 
     def test_an_event_with_no_session_id_degrades_to_ambient_rather_than_fabricating(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _HOST_SID)
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
@@ -77,7 +78,7 @@ class TestColdRungBindsTheCaller:
             monkeypatch, _event(session_id=None)
         ) == [_HOST_SID]
 
-    def test_the_bind_does_not_leak_past_the_call(self, monkeypatch):
+    def test_the_bind_does_not_leak_past_the_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _HOST_SID)
         monkeypatch.delenv("COORDINATOR_SESSION_ID", raising=False)
         monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)

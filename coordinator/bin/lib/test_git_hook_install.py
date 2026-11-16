@@ -8,6 +8,10 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -74,14 +78,14 @@ def _with_unresolvable_interpreter(body: str) -> str:
     return re.sub(r'^(_PY=")[^"]*(")$', r"\1" + _UNRESOLVABLE_BAKED_PY + r"\2", body, flags=re.M)
 
 
-def test_shim_body_missing_interpreter_message_present_in_source():
+def test_shim_body_missing_interpreter_message_present_in_source() -> None:
     body = _shim_body("/fake/coord/bin", "coordinator-auto-push", 'exec "$_PY" "$SCRIPT" "$@"')
     assert "no python3/python/py interpreter found on PATH" in body
     assert "commits are NOT being auto-pushed / annotated by this hook" in body
     assert 'exit 0; }' in body
 
 
-def test_shim_body_missing_interpreter_blocks_loudly_at_runtime(tmp_path):
+def test_shim_body_missing_interpreter_blocks_loudly_at_runtime(tmp_path: Path) -> None:
     body = _shim_body("/fake/coord/bin", "coordinator-auto-push", 'exec "$_PY" "$SCRIPT" "$@"')
     hook = tmp_path / "post-commit"
     hook.write_text(_with_unresolvable_interpreter(body), encoding="utf-8")
@@ -95,7 +99,7 @@ def test_shim_body_missing_interpreter_blocks_loudly_at_runtime(tmp_path):
     assert "no python3/python/py interpreter found on PATH" in result.stderr
 
 
-def test_shim_body_missing_interpreter_and_missing_script_read_the_same_shape():
+def test_shim_body_missing_interpreter_and_missing_script_read_the_same_shape() -> None:
     body = _shim_body("/fake/coord/bin", "coordinator-auto-push", 'exec "$_PY" "$SCRIPT" "$@"')
     assert body.count("[coordinator] WARNING: hook installed but") == 2
     assert body.count("commits are NOT being auto-pushed / annotated by this hook") == 2
@@ -141,7 +145,7 @@ def _normalize_baked_py(body: str) -> str:
     return re.sub(r"(?<=/)\.[a-z]+(?:-[a-z]+)*-root\b", ".<ROOT-POINTER>", body)
 
 
-def test_hook_gen_stamp_bump_is_required_for_shape_changes(monkeypatch):
+def test_hook_gen_stamp_bump_is_required_for_shape_changes(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda bin_dir, script_name: None)
     monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda script_name: None)
     body = _shim_body("/fake/coord/bin", "coordinator-auto-push", 'exec "$_PY" "$SCRIPT" "$@"')
@@ -155,7 +159,7 @@ def test_hook_gen_stamp_bump_is_required_for_shape_changes(monkeypatch):
     assert ghi._hook_gen_stamp_line() in body
 
 
-def test_interpreter_rung_costs_no_unconditional_subshell():
+def test_interpreter_rung_costs_no_unconditional_subshell() -> None:
     """The emitted hook must not spend a process resolving its interpreter.
 
     `prepare-commit-msg` and `post-commit` fire on every NON-ENGINE commit —
@@ -208,7 +212,7 @@ def test_interpreter_rung_costs_no_unconditional_subshell():
         )
 
 
-def test_append_block_missing_interpreter_message_present_in_source():
+def test_append_block_missing_interpreter_message_present_in_source() -> None:
     block = _append_block(
         "/fake/coord/bin",
         "coordinator-auto-push",
@@ -219,7 +223,7 @@ def test_append_block_missing_interpreter_message_present_in_source():
     assert "commits are NOT being auto-pushed / annotated by this hook" in block
 
 
-def test_append_block_missing_interpreter_blocks_loudly_at_runtime(tmp_path):
+def test_append_block_missing_interpreter_blocks_loudly_at_runtime(tmp_path: Path) -> None:
     block = _append_block(
         "/fake/coord/bin",
         "coordinator-auto-push",
@@ -242,7 +246,7 @@ def test_append_block_missing_interpreter_blocks_loudly_at_runtime(tmp_path):
     assert "no python3/python/py interpreter found on PATH" in result.stderr
 
 
-def test_append_block_missing_interpreter_and_missing_script_both_warn():
+def test_append_block_missing_interpreter_and_missing_script_both_warn() -> None:
     block = _append_block(
         "/fake/coord/bin",
         "coordinator-auto-push",
@@ -268,7 +272,7 @@ def _run_resolution_hook(tmp_path, body, *, settings_script: bool):
     return coord_bin, subprocess.run([_sh(), str(hook)], capture_output=True, text=True, env=env)
 
 
-def test_shim_body_notices_when_a_fallback_candidate_wins(tmp_path):
+def test_shim_body_notices_when_a_fallback_candidate_wins(tmp_path: Path) -> None:
     coord_bin = tmp_path / "coord-bin"
     body = _shim_body(coord_bin.as_posix(), "tool", "echo ran")
     _, result = _run_resolution_hook(tmp_path, body, settings_script=False)
@@ -277,14 +281,14 @@ def test_shim_body_notices_when_a_fallback_candidate_wins(tmp_path):
     assert (coord_bin / "tool").as_posix() in result.stderr
 
 
-def test_shim_body_is_silent_when_the_settings_home_candidate_wins(tmp_path):
+def test_shim_body_is_silent_when_the_settings_home_candidate_wins(tmp_path: Path) -> None:
     body = _shim_body((tmp_path / "coord-bin").as_posix(), "tool", "echo ran")
     _, result = _run_resolution_hook(tmp_path, body, settings_script=True)
     assert "ran" in result.stdout
     assert "resolved via fallback" not in result.stderr
 
 
-def test_append_block_notices_when_a_fallback_candidate_wins(tmp_path):
+def test_append_block_notices_when_a_fallback_candidate_wins(tmp_path: Path) -> None:
     coord_bin = tmp_path / "coord-bin"
     block = _append_block(coord_bin.as_posix(), "tool", "coordinator tool", "echo ran")
     _, result = _run_resolution_hook(tmp_path, "#!/bin/sh\n" + block + "\n", settings_script=False)
@@ -292,7 +296,7 @@ def test_append_block_notices_when_a_fallback_candidate_wins(tmp_path):
     assert result.stderr.count("tool hook resolved via fallback") == 1
 
 
-def test_append_block_is_silent_when_the_settings_home_candidate_wins(tmp_path):
+def test_append_block_is_silent_when_the_settings_home_candidate_wins(tmp_path: Path) -> None:
     block = _append_block((tmp_path / "coord-bin").as_posix(), "tool", "coordinator tool", "echo ran")
     _, result = _run_resolution_hook(tmp_path, "#!/bin/sh\n" + block + "\n", settings_script=True)
     assert "ran" in result.stdout
@@ -308,7 +312,7 @@ pytestmark = [
 
 
 @pytest.mark.skipif(os.name != "nt", reason="WinError 193 exec defect is Windows-only")
-def test_ml_get_resolves_via_cmd_twin_on_windows(tmp_path):
+def test_ml_get_resolves_via_cmd_twin_on_windows(tmp_path: Path) -> None:
     ml_bin = tmp_path / "machine-local"
     ml_bin.write_text("#!/usr/bin/env python3\nraise SystemExit(1)\n", encoding="utf-8")
     ml_cmd = tmp_path / "machine-local.cmd"
@@ -323,7 +327,7 @@ def test_ml_get_resolves_via_cmd_twin_on_windows(tmp_path):
     assert result == "dummy-resolved-value"
 
 
-def test_ml_get_exec_failure_warns_to_stderr_and_returns_none(tmp_path, capsys):
+def test_ml_get_exec_failure_warns_to_stderr_and_returns_none(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     unlaunchable = tmp_path
 
     result = _ml_get(str(unlaunchable), "some.key")
@@ -333,7 +337,7 @@ def test_ml_get_exec_failure_warns_to_stderr_and_returns_none(tmp_path, capsys):
     assert "could not execute machine-local resolver" in captured.err
 
 
-def test_container_registry_keys_are_not_heal_targets(monkeypatch, tmp_path):
+def test_container_registry_keys_are_not_heal_targets(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fleet_root = tmp_path / "fleet"
     (fleet_root / "claude-klabauter").mkdir(parents=True)
     monkeypatch.setattr(
@@ -380,7 +384,7 @@ def _make_worktree(tmp_path: Path, name: str = "wt") -> Path:
     return wt_root
 
 
-def test_resolve_git_hooks_dir_follows_worktree_gitfile_indirection(tmp_path):
+def test_resolve_git_hooks_dir_follows_worktree_gitfile_indirection(tmp_path: Path) -> None:
     wt_root = _make_worktree(tmp_path)
 
     resolved = ghi._resolve_git_hooks_dir(str(wt_root))
@@ -392,14 +396,14 @@ def test_resolve_git_hooks_dir_follows_worktree_gitfile_indirection(tmp_path):
     )
 
 
-def test_classify_target_admits_a_worktree_checkout(tmp_path):
+def test_classify_target_admits_a_worktree_checkout(tmp_path: Path) -> None:
     wt_root = _make_worktree(tmp_path)
     (wt_root / "CLAUDE.md").write_text("x", encoding="utf-8")
 
     assert ghi._classify_target(str(wt_root)) == "worktree"
 
 
-def test_ensure_hook_installs_into_worktree_common_dir(tmp_path, monkeypatch):
+def test_ensure_hook_installs_into_worktree_common_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     wt_root = _make_worktree(tmp_path)
     coord_bin = tmp_path / "bin"
     coord_bin.mkdir()
@@ -418,7 +422,7 @@ def test_ensure_hook_installs_into_worktree_common_dir(tmp_path, monkeypatch):
     )
 
 
-def test_ensure_hooks_fleet_one_bad_repo_does_not_abort_the_rest(tmp_path, monkeypatch, capsys):
+def test_ensure_hooks_fleet_one_bad_repo_does_not_abort_the_rest(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     good_root = tmp_path / "zzz-good"
     good_root.mkdir()
     (good_root / ".git").mkdir()
@@ -436,7 +440,7 @@ def test_ensure_hooks_fleet_one_bad_repo_does_not_abort_the_rest(tmp_path, monke
         "worktree" if root == str(good_root) else "worktree"
     ))
 
-    def _fake_ensure(bin_dir, root=None, outcome=None, check_only=False):
+    def _fake_ensure(bin_dir, root=None, outcome=None, check_only: bool = False) -> int:
         if root == "/definitely/not/a/real/path":
             raise OSError("simulated: unreadable .git")
         if outcome is not None:
@@ -457,8 +461,8 @@ def test_ensure_hooks_fleet_one_bad_repo_does_not_abort_the_rest(tmp_path, monke
 
 
 def test_ensure_hooks_fleet_default_never_fails_even_when_owned_hook_missing(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     owned_root = tmp_path / "owned"
     owned_root.mkdir()
     (owned_root / ".git").mkdir()
@@ -469,7 +473,7 @@ def test_ensure_hooks_fleet_default_never_fails_even_when_owned_hook_missing(
     )
     monkeypatch.setattr(ghi, "_classify_target", lambda root: "worktree")
 
-    def _fake_ensure_no_write(bin_dir, root=None, outcome=None, check_only=False):
+    def _fake_ensure_no_write(bin_dir, root=None, outcome=None, check_only: bool = False) -> int:
         if outcome is not None:
             outcome.append("installed-absent")
         return 0
@@ -482,7 +486,7 @@ def test_ensure_hooks_fleet_default_never_fails_even_when_owned_hook_missing(
     assert not (owned_root / ".git" / "hooks" / "prepare-commit-msg").exists()
 
 
-def test_ensure_hooks_fleet_strict_fails_when_owned_hook_missing(tmp_path, monkeypatch, capsys):
+def test_ensure_hooks_fleet_strict_fails_when_owned_hook_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     owned_root = tmp_path / "owned"
     owned_root.mkdir()
     (owned_root / ".git").mkdir()
@@ -493,7 +497,7 @@ def test_ensure_hooks_fleet_strict_fails_when_owned_hook_missing(tmp_path, monke
     )
     monkeypatch.setattr(ghi, "_classify_target", lambda root: "worktree")
 
-    def _fake_ensure_no_write(bin_dir, root=None, outcome=None, check_only=False):
+    def _fake_ensure_no_write(bin_dir, root=None, outcome=None, check_only: bool = False) -> int:
         if outcome is not None:
             outcome.append("installed-absent")
         return 0
@@ -509,8 +513,8 @@ def test_ensure_hooks_fleet_strict_fails_when_owned_hook_missing(tmp_path, monke
 
 
 def test_ensure_hooks_fleet_strict_stays_clean_when_hook_actually_lands(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     owned_root = tmp_path / "owned"
     owned_root.mkdir()
     (owned_root / ".git" / "hooks").mkdir(parents=True)
@@ -524,7 +528,7 @@ def test_ensure_hooks_fleet_strict_stays_clean_when_hook_actually_lands(
     )
     monkeypatch.setattr(ghi, "_classify_target", lambda root: "worktree")
 
-    def _fake_ensure_real_write(bin_dir, root=None, outcome=None, check_only=False):
+    def _fake_ensure_real_write(bin_dir, root=None, outcome=None, check_only: bool = False) -> int:
         if outcome is not None:
             outcome.append("already-current")
         return 0
@@ -536,7 +540,7 @@ def test_ensure_hooks_fleet_strict_stays_clean_when_hook_actually_lands(
     assert rc == 0
 
 
-def test_ensure_hooks_fleet_strict_ignores_mirror_absence(tmp_path, monkeypatch):
+def test_ensure_hooks_fleet_strict_ignores_mirror_absence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     mirror_root = tmp_path / "mirror"
     mirror_root.mkdir()
     (mirror_root / ".git").mkdir()
@@ -573,7 +577,7 @@ def _disposition_fleet(tmp_path, monkeypatch, kind):
     return hook
 
 
-def test_fleet_check_only_reports_stale_and_does_not_touch_the_hook(tmp_path, monkeypatch, capsys):
+def test_fleet_check_only_reports_stale_and_does_not_touch_the_hook(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     hook = _disposition_fleet(tmp_path, monkeypatch, "mirror")
 
     rc = ghi.ensure_hooks_fleet(str(tmp_path), check_only=True)
@@ -585,7 +589,7 @@ def test_fleet_check_only_reports_stale_and_does_not_touch_the_hook(tmp_path, mo
     assert "coordinator-hook-disposition: stale repos.clone post-commit synthetic-retired" in err
 
 
-def test_fleet_repair_removes_with_backup_on_a_mirror_target(tmp_path, monkeypatch, capsys):
+def test_fleet_repair_removes_with_backup_on_a_mirror_target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     hook = _disposition_fleet(tmp_path, monkeypatch, "mirror")
 
     rc = ghi.ensure_hooks_fleet(str(tmp_path))
@@ -596,7 +600,7 @@ def test_fleet_repair_removes_with_backup_on_a_mirror_target(tmp_path, monkeypat
     assert "repos.clone post-commit: removed (synthetic-retired)" in capsys.readouterr().err
 
 
-def test_fleet_repair_reports_busy_in_the_errored_style(tmp_path, monkeypatch, capsys):
+def test_fleet_repair_reports_busy_in_the_errored_style(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     hook = _disposition_fleet(tmp_path, monkeypatch, "mirror")
     from coordinator_core.git import hook_dispositions as hd
 
@@ -609,7 +613,7 @@ def test_fleet_repair_reports_busy_in_the_errored_style(tmp_path, monkeypatch, c
     assert "repos.clone post-commit: busy (synthetic-retired)" in capsys.readouterr().err
 
 
-def test_fleet_skips_disposition_for_missing_targets(tmp_path, monkeypatch, capsys):
+def test_fleet_skips_disposition_for_missing_targets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     hook = _disposition_fleet(tmp_path, monkeypatch, "missing")
 
     rc = ghi.ensure_hooks_fleet(str(tmp_path))
@@ -618,7 +622,7 @@ def test_fleet_skips_disposition_for_missing_targets(tmp_path, monkeypatch, caps
     assert hook.exists()
 
 
-def test_no_commit_path_caller_reaches_the_repairing_disposition_walk():
+def test_no_commit_path_caller_reaches_the_repairing_disposition_walk() -> None:
     """Only `ensure_hooks_fleet` (via `_apply_dispositions`) may call
     `apply_repo`; the per-repo installers and commit-path callers may not."""
     import ast
@@ -654,7 +658,7 @@ def test_no_commit_path_caller_reaches_the_repairing_disposition_walk():
 # The no-session gate is GENERATED from the ladder, never hand-copied.
 # ---------------------------------------------------------------------------
 
-def test_session_gate_is_generated_from_the_ladder():
+def test_session_gate_is_generated_from_the_ladder() -> None:
     """The emitted no-session gate must name exactly SESSION_ENV_PRECEDENCE.
 
     This is the artifact that makes `skip_if_all_unset` safe to exist. The
@@ -688,7 +692,7 @@ def test_session_gate_is_generated_from_the_ladder():
     )
 
 
-def test_session_gate_resolves_before_any_interpreter_resolution():
+def test_session_gate_resolves_before_any_interpreter_resolution() -> None:
     from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
 
     body = _shim_body(
@@ -709,7 +713,7 @@ def test_session_gate_resolves_before_any_interpreter_resolution():
     )
 
 
-def test_post_commit_never_carries_the_no_session_gate():
+def test_post_commit_never_carries_the_no_session_gate() -> None:
     """auto-push is the SOLE PUBLISHER on a non-engine commit.
 
     A no-session commit is precisely when nothing else will push it, so gating
@@ -735,7 +739,7 @@ _APPEND_BLOCK_ARGS = (
 )
 
 
-def test_append_block_defines_every_helper_it_calls():
+def test_append_block_defines_every_helper_it_calls() -> None:
     block = _append_block(*_APPEND_BLOCK_ARGS)
     assert "_have_py " in block, "no _have_py call at all — the rungs regressed to [ -f ]"
     assert '_have_py() {' in block, (
@@ -745,13 +749,13 @@ def test_append_block_defines_every_helper_it_calls():
     assert block.index('_have_py() {') < block.index('_have_py "')
 
 
-def test_append_block_resolution_rungs_never_use_bare_dash_f():
+def test_append_block_resolution_rungs_never_use_bare_dash_f() -> None:
     block = _append_block(*_APPEND_BLOCK_ARGS)
     assert '[ -f "$_T" ]' not in block
     assert '[ ! -f "$_T" ]' not in block
 
 
-def test_append_block_runs_an_installed_exe_forwarder_directly(tmp_path):
+def test_append_block_runs_an_installed_exe_forwarder_directly(tmp_path: Path) -> None:
     settings_home = tmp_path / "settings-home"
     (settings_home / "bin").mkdir(parents=True)
     forwarder = settings_home / "bin" / "coordinator-prepare-commit-msg.exe"
@@ -780,7 +784,7 @@ def test_append_block_runs_an_installed_exe_forwarder_directly(tmp_path):
     assert "WARNING" not in result.stderr
 
 
-def test_append_block_emits_no_shell_errors_when_nothing_resolves(tmp_path, monkeypatch):
+def test_append_block_emits_no_shell_errors_when_nothing_resolves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda bin_dir, script_name: None)
     monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda script_name: None)
     hook = tmp_path / "post-commit"
@@ -802,7 +806,7 @@ def test_append_block_emits_no_shell_errors_when_nothing_resolves(tmp_path, monk
         assert "[coordinator] WARNING" in line, f"unexpected shell error: {line!r}"
 
 
-def test_both_hook_emitters_normalise_msys_drive_letters():
+def test_both_hook_emitters_normalise_msys_drive_letters() -> None:
     shim = _shim_body("/fake/coord/bin", "coordinator-prepare-commit-msg", "hdr")
     append = _append_block(*_APPEND_BLOCK_ARGS)
 
@@ -819,7 +823,7 @@ def test_both_hook_emitters_normalise_msys_drive_letters():
         )
 
 
-def test_append_block_msys_normalisation_actually_transforms_the_path():
+def test_append_block_msys_normalisation_actually_transforms_the_path() -> None:
     sh = _sh()
     if not sh:
         import pytest
@@ -845,7 +849,7 @@ def test_append_block_msys_normalisation_actually_transforms_the_path():
     )
 
 
-def test_append_block_msys_normalisation_leaves_a_windows_path_alone():
+def test_append_block_msys_normalisation_leaves_a_windows_path_alone() -> None:
     sh = _sh()
     if not sh:
         import pytest
@@ -863,7 +867,7 @@ def test_append_block_msys_normalisation_leaves_a_windows_path_alone():
     assert result.stdout == "C:" + "/Users/someone/bin/tool"
 
 
-def test_shim_body_execs_a_posix_native_forwarder_instead_of_the_interpreter():
+def test_shim_body_execs_a_posix_native_forwarder_instead_of_the_interpreter() -> None:
     body = _shim_body(
         "/fake/coord/bin",
         "coordinator-prepare-commit-msg",
@@ -874,7 +878,7 @@ def test_shim_body_execs_a_posix_native_forwarder_instead_of_the_interpreter():
     assert body.index('_native "$_fwd" && exec') < body.index('SCRIPT=')
 
 
-def test_append_block_defines_the_native_probe_it_calls():
+def test_append_block_defines_the_native_probe_it_calls() -> None:
     block = _append_block(*_APPEND_BLOCK_ARGS)
     assert "_native() {" in block, (
         "_append_block calls _native without emitting its definition. The block "
@@ -883,7 +887,7 @@ def test_append_block_defines_the_native_probe_it_calls():
     assert block.index("_native() {") < block.index('_native "')
 
 
-def test_native_probe_costs_no_subprocess():
+def test_native_probe_costs_no_subprocess() -> None:
     body = _shim_body(
         "/fake/coord/bin",
         "coordinator-prepare-commit-msg",
@@ -895,7 +899,7 @@ def test_native_probe_costs_no_subprocess():
         assert spawner not in probe.group(0), f"native probe spawns via {spawner!r}"
 
 
-def test_native_probe_leaves_a_genuine_python_script_to_the_interpreter(tmp_path):
+def test_native_probe_leaves_a_genuine_python_script_to_the_interpreter(tmp_path: Path) -> None:
     sh = _sh()
     if not sh:
         import pytest
@@ -919,7 +923,7 @@ def test_native_probe_leaves_a_genuine_python_script_to_the_interpreter(tmp_path
     assert result.stdout == "script"
 
 
-def test_native_probe_misclassifies_an_executable_shebangless_non_native_file(tmp_path):
+def test_native_probe_misclassifies_an_executable_shebangless_non_native_file(tmp_path: Path) -> None:
     """PINS THE ACCEPTED RESIDUAL (code-review finding, 2026-09-02) -- this is
     NOT the behaviour we want, it is the behaviour we have and have chosen not
     to change this pass. See the "KNOWN RESIDUAL, ACCEPTED IN WRITING" comment
@@ -1022,7 +1026,7 @@ def _install_native_image_as_this_platform_does(tmp_path, script_name):
     return tmp_path / "settings-home", image
 
 
-def _run_both_emitted_hooks(tmp_path, settings_home):
+def _run_both_emitted_hooks(tmp_path, settings_home) -> dict[str, CompletedProcess[str]]:
     bodies = {
         "shim": _shim_body(
             "/fake/coord/bin",
@@ -1044,7 +1048,7 @@ def _run_both_emitted_hooks(tmp_path, settings_home):
     return results
 
 
-def test_a_cut_over_bin_survives_both_hook_emitters(tmp_path):
+def test_a_cut_over_bin_survives_both_hook_emitters(tmp_path: Path) -> None:
     if not _sh():
         import pytest
 
@@ -1067,7 +1071,7 @@ def test_a_cut_over_bin_survives_both_hook_emitters(tmp_path):
         )
 
 
-def test_pair_fixture_goes_red_without_the_native_probe(tmp_path, monkeypatch):
+def test_pair_fixture_goes_red_without_the_native_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """THE NEGATIVE CONTROL — the reason the pair test has teeth.
 
     Remove the native probe and the same fixture must reproduce the incident.
@@ -1123,7 +1127,7 @@ def _real_clone(tmp_path: Path) -> Path:
     return clone
 
 
-def test_ensure_hook_skipped_no_root_is_loud_on_stderr(tmp_path, monkeypatch, capsys):
+def test_ensure_hook_skipped_no_root_is_loud_on_stderr(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """state/bug-backlog/2026-08-25-hook-emitters-exit-0-having-installed-no-
     *.yaml: `_ensure_hook`'s "skipped-no-root" branch used to return rc 0
     with EMPTY stderr when the checked resolver came back UNRESOLVED --
@@ -1181,7 +1185,7 @@ def test_ensure_hook_skipped_no_root_is_loud_on_stderr(tmp_path, monkeypatch, ca
     assert "WARNING" in captured.err
 
 
-def _run_shim(body, home, tmp_path):
+def _run_shim(body, home, tmp_path) -> CompletedProcess[str]:
     hook = tmp_path / "hook"
     hook.write_text(body, encoding="utf-8")
     hook.chmod(0o755)
@@ -1189,7 +1193,7 @@ def _run_shim(body, home, tmp_path):
     return subprocess.run([_sh(), str(hook)], env=env, capture_output=True, text=True)
 
 
-def test_shim_resolves_the_installed_cache_root_at_run_time(tmp_path, monkeypatch):
+def test_shim_resolves_the_installed_cache_root_at_run_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda b, s: None)
     monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda s: None)
     home = tmp_path / "home"
@@ -1203,7 +1207,7 @@ def test_shim_resolves_the_installed_cache_root_at_run_time(tmp_path, monkeypatc
     assert r.returncode == 0 and "cache-ran" in r.stdout
 
 
-def test_shim_exits_zero_when_no_root_resolves(tmp_path, monkeypatch):
+def test_shim_exits_zero_when_no_root_resolves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda b, s: None)
     monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda s: None)
     home = tmp_path / "home"
@@ -1228,7 +1232,7 @@ def _plant_cache_script(home, name):
     return cbin / name
 
 
-def test_shim_names_the_fallback_rung_it_resolved_through(tmp_path, monkeypatch):
+def test_shim_names_the_fallback_rung_it_resolved_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda b, s: None)
     monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda s: None)
     home = tmp_path / "home"
@@ -1243,7 +1247,7 @@ def test_shim_names_the_fallback_rung_it_resolved_through(tmp_path, monkeypatch)
     assert "WARNING" not in r.stderr
 
 
-def test_shim_is_silent_when_the_first_rung_resolves(tmp_path, monkeypatch):
+def test_shim_is_silent_when_the_first_rung_resolves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda b, s: None)
     monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda s: None)
     home = tmp_path / "home"
@@ -1258,14 +1262,14 @@ def test_shim_is_silent_when_the_first_rung_resolves(tmp_path, monkeypatch):
     assert r.stderr == ""
 
 
-def _run_append_block(block, home, tmp_path):
+def _run_append_block(block, home, tmp_path) -> CompletedProcess[str]:
     hook = tmp_path / "foreign-hook"
     hook.write_text("#!/bin/sh\necho foreign\n" + block + "\n", encoding="utf-8")
     env = {"PATH": os.environ["PATH"], "HOME": str(home), "COORDINATOR_SETTINGS_HOME": str(home / "nosettings")}
     return subprocess.run([_sh(), str(hook)], env=env, capture_output=True, text=True)
 
 
-def test_append_block_names_the_fallback_rung_it_resolved_through(tmp_path, monkeypatch):
+def test_append_block_names_the_fallback_rung_it_resolved_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda b, s: None)
     monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda s: None)
     home = tmp_path / "home"
@@ -1279,7 +1283,7 @@ def test_append_block_names_the_fallback_rung_it_resolved_through(tmp_path, monk
     assert "WARNING" not in r.stderr
 
 
-def test_append_block_total_miss_warns_without_the_notice(tmp_path, monkeypatch):
+def test_append_block_total_miss_warns_without_the_notice(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda b, s: None)
     monkeypatch.setattr(ghi, "_resolve_klabauter_bin_sh", lambda s: None)
     home = tmp_path / "home"
@@ -1289,7 +1293,7 @@ def test_append_block_total_miss_warns_without_the_notice(tmp_path, monkeypatch)
     assert "WARNING" in r.stderr and "NOTICE" not in r.stderr
 
 
-def test_append_to_a_shebangless_hook_gains_a_shebang(tmp_path, monkeypatch):
+def test_append_to_a_shebangless_hook_gains_a_shebang(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ghi, "_resolve_coord_bin", lambda b, s: str(tmp_path))
     monkeypatch.setattr(ghi, "_helper_present", lambda d, s: True)
     monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda b, s: None)
@@ -1301,7 +1305,7 @@ def test_append_to_a_shebangless_hook_gains_a_shebang(tmp_path, monkeypatch):
     assert (hooks / "prepare-commit-msg").read_text().startswith("#!/bin/sh\necho foreign")
 
 
-def test_fleet_heals_an_unregistered_repo_whose_hook_names_a_coordinator_path(tmp_path, monkeypatch):
+def test_fleet_heals_an_unregistered_repo_whose_hook_names_a_coordinator_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ghi, "_resolve_coord_bin", lambda b, s: str(tmp_path))
     monkeypatch.setattr(ghi, "_helper_present", lambda d, s: True)
     monkeypatch.setattr(ghi, "_resolve_claude_klabauter_bin_sh", lambda b, s: None)
@@ -1318,7 +1322,7 @@ def test_fleet_heals_an_unregistered_repo_whose_hook_names_a_coordinator_path(tm
     assert ghi._hook_gen_stamp_line() in healed
 
 
-def test_no_session_gate_refuses_inside_claude_code_and_passes_a_human_commit():
+def test_no_session_gate_refuses_inside_claude_code_and_passes_a_human_commit() -> None:
     """Inside Claude Code a missing session id is refused and named, never a
     silent unattributed commit; outside it (no CLAUDECODE) the gate exits 0."""
     from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
@@ -1335,7 +1339,7 @@ def test_no_session_gate_refuses_inside_claude_code_and_passes_a_human_commit():
     assert gate.endswith('[ -z "$COORDINATOR_AGENT_PROVIDER$COORDINATOR_AGENT_VENDOR" ] && exit 0; }')
 
 
-def test_generated_prepare_gate_executes_native_and_provider_only_identities(tmp_path):
+def test_generated_prepare_gate_executes_native_and_provider_only_identities(tmp_path: Path) -> None:
     """Execute the actual emitted gate with sh, without installing any hook."""
     import shutil
     from coordinator_core.session.core import SESSION_ENV_PRECEDENCE
@@ -1364,7 +1368,7 @@ def test_generated_prepare_gate_executes_native_and_provider_only_identities(tmp
     invalid = subprocess.run([shell, str(script)], env={**clean, 'CLAUDECODE':'1',
                              'COORDINATOR_AGENT_PROVIDER':'unregistered'}, capture_output=True, text=True)
     assert invalid.returncode == 1 and 'Session-Id' in invalid.stderr
-def test_fleet_check_only_header_says_found_stale_not_repaired(tmp_path, monkeypatch, capsys):
+def test_fleet_check_only_header_says_found_stale_not_repaired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(ghi, "_registry_repo_roots", lambda bin_dir: [("repos.clone", str(tmp_path))])
     monkeypatch.setattr(ghi, "_classify_target", lambda r: "mirror")
     monkeypatch.setattr(ghi, "_unregistered_hooked_repos", lambda registered: [])
@@ -1380,7 +1384,7 @@ def test_fleet_check_only_header_says_found_stale_not_repaired(tmp_path, monkeyp
     assert "repaired or flagged" not in err
 
 
-def test_registry_repo_roots_skips_slugs_urls_and_non_strings(monkeypatch, tmp_path):
+def test_registry_repo_roots_skips_slugs_urls_and_non_strings(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(
         ghi,
         "_merged_flat_registry",

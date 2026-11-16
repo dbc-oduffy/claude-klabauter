@@ -13,6 +13,7 @@ from coordinator_core.benchmarks import gate_v2_sweep_profile as prof
 from coordinator_core.ops import roadmap_plan_gate as op
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -27,7 +28,7 @@ BASE_DIGESTS = {
 }
 
 
-def test_synthetic_corpus_is_live_shaped_and_never_spawns(tmp_path, monkeypatch):
+def test_synthetic_corpus_is_live_shaped_and_never_spawns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = prof.build_corpus(tmp_path, N)
     assert len(list((root / "state" / "handoffs").glob("*.md"))) == N
 
@@ -45,11 +46,11 @@ def test_synthetic_corpus_is_live_shaped_and_never_spawns(tmp_path, monkeypatch)
     assert any(r["sized"] for r in rows), "no sized baton: sizing resolution never ran"
 
 
-def test_shape_reports_match_the_base_digests(tmp_path):
+def test_shape_reports_match_the_base_digests(tmp_path: Path) -> None:
     assert prof.report_digests(prof.build_corpus(tmp_path, N)) == BASE_DIGESTS
 
 
-def test_digests_distinguish_a_changed_report(tmp_path):
+def test_digests_distinguish_a_changed_report(tmp_path: Path) -> None:
     root = prof.build_corpus(tmp_path, N)
     victim = next((root / "state" / "handoffs").glob("*-synth-0000-3.md"))
     victim.write_text(victim.read_text(encoding="utf-8").replace("ready_to_fire", "in_flight"), encoding="utf-8")
@@ -59,7 +60,7 @@ def test_digests_distinguish_a_changed_report(tmp_path):
 PER_BATON_BAR_MS = 0.1
 
 
-def test_sweep_cost_per_added_baton_is_under_the_bar():
+def test_sweep_cost_per_added_baton_is_under_the_bar() -> None:
     """(t(2N) - t(N)) / N < 0.1ms over the synthetic corpus. Reading every head is linear by
     construction, so the per-baton ceiling is the scaling bar; a t(2N)/t(N) ratio swings across 2.0
     on timer noise once the fixed cost is near zero."""

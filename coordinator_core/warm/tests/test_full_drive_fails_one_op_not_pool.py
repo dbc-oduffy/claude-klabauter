@@ -16,6 +16,7 @@ import pytest
 
 from coordinator_core import atomic_append
 from coordinator_core.warm import server, telemetry
+from pathlib import Path
 
 _HEAVY = "dispatch.ask_stage"
 _GUARD = "hooks.preuse_write_dispatch"
@@ -23,7 +24,7 @@ _Usage = namedtuple("_Usage", "total used free")
 
 
 @pytest.fixture(autouse=True)
-def _fast_drive_checks(monkeypatch):
+def _fast_drive_checks(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(server, "_DRIVE_WAIT_SLICE_SECS", 0.05)
     monkeypatch.setattr(server, "_DRIVE_VERDICT_TTL_SECS", 0.0)
     monkeypatch.setattr(server, "_DRIVE_PROBE_SECS", 0.05)
@@ -49,7 +50,7 @@ def _ctx(tmp_path):
     return ctx
 
 
-def _msg(method, root, i=1):
+def _msg(method, root, i: int = 1):
     return {"jsonrpc": "2.0", "id": i, "method": method, "params": {}, "_caller_cwd": str(root)}
 
 
@@ -62,14 +63,14 @@ def _wait_for(predicate, secs):
     return predicate()
 
 
-def _shutdown(ctx, release):
+def _shutdown(ctx, release) -> None:
     release.set()
     ctx._dispatch_pool.shutdown(wait=False, cancel_futures=True)
     ctx._guard_pool.shutdown(wait=False, cancel_futures=True)
 
 
 @pytest.mark.deliberate_wall_clock(reason="stall bound: a blocked drive write fails the one op while the guard lane keeps answering")
-def test_op_blocked_in_a_full_drive_write_fails_named_enospc_and_guard_stays_fast(tmp_path, monkeypatch):
+def test_op_blocked_in_a_full_drive_write_fails_named_enospc_and_guard_stays_fast(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     release = threading.Event()
     blocked = threading.Event()
     full = threading.Event()
@@ -115,7 +116,7 @@ def test_op_blocked_in_a_full_drive_write_fails_named_enospc_and_guard_stays_fas
 
 
 @pytest.mark.deliberate_wall_clock(reason="stall bound: a stalled drive probe must refuse fast, not wait on the probe")
-def test_stalled_drive_fails_named_drive_stall_then_recovers(tmp_path, monkeypatch):
+def test_stalled_drive_fails_named_drive_stall_then_recovers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     release = threading.Event()
     monkeypatch.setattr(server, "_probe_drive", lambda root, box: (release.wait(10), box.update(done=True)))
     monkeypatch.setattr(
@@ -138,7 +139,7 @@ def test_stalled_drive_fails_named_drive_stall_then_recovers(tmp_path, monkeypat
         _shutdown(ctx, release)
 
 
-def test_healthy_drive_serves_and_guard_ops_never_probe(tmp_path, monkeypatch):
+def test_healthy_drive_serves_and_guard_ops_never_probe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     probed: list = []
     real_probe = server._probe_drive
     monkeypatch.setattr(server, "_probe_drive", lambda root, box: (probed.append(root), real_probe(root, box)))
@@ -155,7 +156,7 @@ def test_healthy_drive_serves_and_guard_ops_never_probe(tmp_path, monkeypatch):
         _shutdown(ctx, threading.Event())
 
 
-def test_request_row_names_the_drive_fault(tmp_path, monkeypatch):
+def test_request_row_names_the_drive_fault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server.shutil, "disk_usage", lambda p: _Usage(100, 100, 0))
     telemetry._REQUESTS.clear()
     ctx = _ctx(tmp_path)

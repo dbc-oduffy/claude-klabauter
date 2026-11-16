@@ -28,6 +28,7 @@ import json
 from coordinator_core.write_guards import engine
 from pathlib import Path
 from coordinator_core.session.machinery_paths import share_dir
+import pytest
 
 _DENY_ENVELOPE = {
     "hookSpecificOutput": {
@@ -37,7 +38,7 @@ _DENY_ENVELOPE = {
 }
 
 
-def _payload(session_id="sess-c6-deny", cwd=None):
+def _payload(session_id: str = "sess-c6-deny", cwd=None):
     p = {
         "tool_name": "Write",
         "tool_input": {"file_path": "/repo/some_file.py"},
@@ -48,17 +49,17 @@ def _payload(session_id="sess-c6-deny", cwd=None):
     return p
 
 
-def _fake_hard_deny(name="destructive-rm"):
+def _fake_hard_deny(name: str = "destructive-rm"):
     # a deny_registry guard: an unregistered name is demoted to an advisory before the counter
     return engine._Guard(name, "hard-deny", ["Write"], 5, lambda payload: dict(_DENY_ENVELOPE))
 
 
-def _deny_counts_path(git_root, session_id):
+def _deny_counts_path(git_root, session_id) -> Path:
     return Path(share_dir(str(git_root), session_id)) / "deny-fire-counts.jsonl"
 
 
 class TestUnclearedHardDenyProducesOneRecord:
-    def test_one_uncleared_record_appended_and_deny_still_returned(self, tmp_path, monkeypatch):
+    def test_one_uncleared_record_appended_and_deny_still_returned(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(engine, "_discover_guards", lambda: ([_fake_hard_deny()], []))
         monkeypatch.setattr(engine, "_consume_unlock", lambda session_id, guard_name: False)
         monkeypatch.setattr(
@@ -78,7 +79,7 @@ class TestUnclearedHardDenyProducesOneRecord:
         assert record["session"] == "sess-c6-deny"
         assert record["cleared"] is False
 
-    def test_no_record_when_session_id_unresolvable(self, tmp_path, monkeypatch):
+    def test_no_record_when_session_id_unresolvable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(engine, "_discover_guards", lambda: ([_fake_hard_deny()], []))
         monkeypatch.setattr(
             "coordinator_core.guard_advisory_counter.resolve_git_root_cheap",
@@ -92,7 +93,7 @@ class TestUnclearedHardDenyProducesOneRecord:
 
 
 class TestClearedHardDenyProducesOneRecordAndChainContinues:
-    def test_cleared_record_appended_and_chain_continues(self, tmp_path, monkeypatch):
+    def test_cleared_record_appended_and_chain_continues(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(engine, "_discover_guards", lambda: ([_fake_hard_deny()], []))
         monkeypatch.setattr(engine, "_consume_unlock", lambda session_id, guard_name: True)
         monkeypatch.setattr(
@@ -118,7 +119,7 @@ class TestDenyCounterNeverReadBack:
     """KEEP IT COUNT-AND-LOG: nothing in `engine.py` or
     `guard_advisory_counter.py` reads `deny-fire-counts.jsonl` back."""
 
-    def test_module_source_has_no_read_of_deny_counts_file(self):
+    def test_module_source_has_no_read_of_deny_counts_file(self) -> None:
         import coordinator_core.write_guards.engine as engine_mod
         import coordinator_core.guard_advisory_counter as counter_mod
         import inspect

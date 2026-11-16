@@ -18,22 +18,22 @@ SPECIALIST = "example-game-repo-control:ue-python-executor"
 MCP = "mcp__example_game_repo-control__"
 
 
-def _agent_md(name, tools, model="sonnet"):
+def _agent_md(name, tools, model: str = "sonnet") -> str:
     return f"---\nname: {name}\nmodel: {model}\ntools: {tools}\n---\nbody\n"
 
 
-def _row(rid="C1", writes=("Source/Game/X.cpp",), title="t", body="", **kw):
+def _row(rid: str = "C1", writes=("Source/Game/X.cpp",), title: str = "t", body: str = "", **kw) -> WaveRow:
     return WaveRow(rid, title, "s", tuple(writes), [], [], body=body, **kw)
 
 
-def _clear():
+def _clear() -> None:
     ue_route_source.clear_caches()
     ar._PLUGIN_TABLE_CACHE.clear()
     ar._TABLE_CACHE.clear()
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     content = tmp_path / "content"
     (content / "agents").mkdir(parents=True)
     (content / "agents" / "executor.md").write_text(
@@ -60,7 +60,7 @@ def world(tmp_path, monkeypatch):
     _clear()
 
 
-def test_manifest_job_shape_routes_to_specialist(world):
+def test_manifest_job_shape_routes_to_specialist(world) -> None:
     repo, _ = world
     out, routes, notes = ar.route_rows([_row(body="run ExecutePythonScript on the level")], repo)
     assert out[0].agent_type == SPECIALIST
@@ -69,14 +69,14 @@ def test_manifest_job_shape_routes_to_specialist(world):
     assert notes == ["C1 -> example-game-repo-control:ue-python-executor (class ue-editor-python)"]
 
 
-def test_consumer_cpp_path_is_not_routed_by_plugin_path_class(world):
+def test_consumer_cpp_path_is_not_routed_by_plugin_path_class(world) -> None:
     repo, _ = world
     rows = [_row(writes=("Source/Game/X.cpp",), body="refactor")]
     out, routes, notes = ar.route_rows(rows, repo)
     assert out[0].agent_type is None and routes == {} and notes == []
 
 
-def test_non_ue_repo_returns_rows_unchanged(world):
+def test_non_ue_repo_returns_rows_unchanged(world) -> None:
     repo, _ = world
     (repo / "Game.uproject").unlink()
     _clear()
@@ -85,7 +85,7 @@ def test_non_ue_repo_returns_rows_unchanged(world):
     assert out is rows and routes == {} and notes == []
 
 
-def test_example_game_repo_not_installed_returns_rows_unchanged(world, monkeypatch):
+def test_example_game_repo_not_installed_returns_rows_unchanged(world, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, _ = world
     monkeypatch.setenv("COORDINATOR_PLUGIN_ROOTS", "")
     _clear()
@@ -94,7 +94,7 @@ def test_example_game_repo_not_installed_returns_rows_unchanged(world, monkeypat
     assert out is rows and routes == {} and notes == []
 
 
-def test_malformed_plugin_table_keeps_regular_with_drift_note(world):
+def test_malformed_plugin_table_keeps_regular_with_drift_note(world) -> None:
     repo, plugin = world
     (plugin / "routing" / "ue-job-shapes.json").write_text("{not json", encoding="utf-8")
     _clear()
@@ -104,7 +104,7 @@ def test_malformed_plugin_table_keeps_regular_with_drift_note(world):
     assert len(notes) == 1 and notes[0].startswith("drift:")
 
 
-def test_specialist_without_model_pin_keeps_regular_with_drift_note(world):
+def test_specialist_without_model_pin_keeps_regular_with_drift_note(world) -> None:
     repo, plugin = world
     (plugin / "agents" / "ue-python-executor.md").write_text(
         _agent_md("ue-python-executor", f"Read, {MCP}execute_python_code", model="inherit"), encoding="utf-8"
@@ -114,7 +114,7 @@ def test_specialist_without_model_pin_keeps_regular_with_drift_note(world):
     assert len(notes) == 1 and notes[0].startswith("drift:") and "model pin" in notes[0]
 
 
-def test_specialist_absent_from_roster_keeps_regular_with_drift_note(world, monkeypatch):
+def test_specialist_absent_from_roster_keeps_regular_with_drift_note(world, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, _ = world
     monkeypatch.setattr(ue_route_source, "example_game_repo_roster", lambda root: frozenset())
     out, routes, notes = ar.route_rows([_row(body="ExecutePythonScript")], repo)
@@ -164,7 +164,7 @@ def test_repo_owned_table_wins_over_plugin_table(world):
     assert out[0].agent_type == "coordinator:executor" and routes == {} and notes == []
 
 
-def test_run_only_likeness_class_keeps_python_authoring_rows_on_executor(world):
+def test_run_only_likeness_class_keeps_python_authoring_rows_on_executor(world) -> None:
     repo, _ = world
     (repo / ".claude").mkdir()
     likeness = SPECIALIST  # a defined agent: an undefined explicit type is left to the composer
@@ -198,7 +198,7 @@ def test_run_only_likeness_class_keeps_python_authoring_rows_on_executor(world):
     assert out[0].agent_type == likeness
 
 
-def test_stage_agents_fall_back_to_sid_in_ue_repo_only(world):
+def test_stage_agents_fall_back_to_sid_in_ue_repo_only(world) -> None:
     repo, _ = world
     defaults = {"plan": "p:a", "plan_review": "c:staff-eng", "code_review": "c:code-reviewer"}
     out = ar.resolve_stage_agents(repo, ask_text="x", defaults=defaults)
@@ -211,7 +211,7 @@ def test_stage_agents_fall_back_to_sid_in_ue_repo_only(world):
     assert out["plan_review"] == ("c:staff-eng", "default")
 
 
-def test_ue_marker_walk_skips_dot_and_workspace_dirs(tmp_path):
+def test_ue_marker_walk_skips_dot_and_workspace_dirs(tmp_path: Path) -> None:
     """A marker under .git/scratch/state never makes a repo UE, and those trees are never walked."""
     from coordinator_core.ops.dispatch_emit import ue_route_source
 

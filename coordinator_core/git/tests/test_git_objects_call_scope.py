@@ -6,6 +6,7 @@ import builtins
 from pathlib import Path
 
 from coordinator_core.git import call_io_scope, git_objects
+import pytest
 
 SHA_A = "a" * 40
 SHA_B = "b" * 40
@@ -34,7 +35,7 @@ def _count_config_opens(monkeypatch, gitdir: Path) -> list:
     return opened
 
 
-def test_config_opened_once_per_scope(tmp_path, monkeypatch):
+def test_config_opened_once_per_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     gitdir = _repo(tmp_path)
     opened = _count_config_opens(monkeypatch, gitdir)
     with call_io_scope.call_io_scope():
@@ -43,7 +44,7 @@ def test_config_opened_once_per_scope(tmp_path, monkeypatch):
     assert len(opened) == 1
 
 
-def test_config_opened_every_call_outside_scope(tmp_path, monkeypatch):
+def test_config_opened_every_call_outside_scope(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     gitdir = _repo(tmp_path)
     opened = _count_config_opens(monkeypatch, gitdir)
     for _ in range(3):
@@ -51,7 +52,7 @@ def test_config_opened_every_call_outside_scope(tmp_path, monkeypatch):
     assert len(opened) == 3
 
 
-def test_logallrefupdates_false_respected_through_scope(tmp_path):
+def test_logallrefupdates_false_respected_through_scope(tmp_path: Path) -> None:
     gitdir = _repo(tmp_path)
     (gitdir / "config").write_text("[core]\n\tlogallrefupdates = false\n")
     with call_io_scope.call_io_scope():
@@ -66,7 +67,7 @@ def _populated() -> bool:
     return call_io_scope.memo(call_io_scope.HEAD_NAMESPACE, "k", lambda: "fresh") == "stale"
 
 
-def test_head_memo_cleared_after_successful_cas_ref(tmp_path):
+def test_head_memo_cleared_after_successful_cas_ref(tmp_path: Path) -> None:
     gitdir = _repo(tmp_path)
     with call_io_scope.call_io_scope():
         _populate()
@@ -75,7 +76,7 @@ def test_head_memo_cleared_after_successful_cas_ref(tmp_path):
         assert not _populated()
 
 
-def test_head_memo_cleared_after_lost_cas_ref(tmp_path):
+def test_head_memo_cleared_after_lost_cas_ref(tmp_path: Path) -> None:
     gitdir = _repo(tmp_path)
     with call_io_scope.call_io_scope():
         _populate()
@@ -83,7 +84,7 @@ def test_head_memo_cleared_after_lost_cas_ref(tmp_path):
         assert not _populated()
 
 
-def test_head_memo_cleared_after_cas_head_symref(tmp_path):
+def test_head_memo_cleared_after_cas_head_symref(tmp_path: Path) -> None:
     gitdir = _repo(tmp_path)
     with call_io_scope.call_io_scope():
         _populate()
@@ -91,7 +92,7 @@ def test_head_memo_cleared_after_cas_head_symref(tmp_path):
         assert not _populated()
 
 
-def test_head_memo_cleared_after_lost_cas_head_symref(tmp_path):
+def test_head_memo_cleared_after_lost_cas_head_symref(tmp_path: Path) -> None:
     gitdir = _repo(tmp_path)
     with call_io_scope.call_io_scope():
         _populate()

@@ -6,14 +6,15 @@ import os
 import pytest
 
 from coordinator_core.session import landing_hold as lh
+from pathlib import Path
 
 
-def test_not_held_by_default(tmp_path):
+def test_not_held_by_default(tmp_path: Path) -> None:
     assert lh.is_held(str(tmp_path), "s1") is False
     assert lh.pending(str(tmp_path), "s1") == []
 
 
-def test_set_then_held_and_file_shape(tmp_path):
+def test_set_then_held_and_file_shape(tmp_path: Path) -> None:
     assert lh.set_hold(str(tmp_path), "s1") is True
     assert lh.is_held(str(tmp_path), "s1") is True
     p = tmp_path / ".coordinator-local" / "landing-hold" / "s1.json"
@@ -21,14 +22,14 @@ def test_set_then_held_and_file_shape(tmp_path):
     assert rec["session_id"] == "s1" and rec["deferred"] == [] and "set_at" in rec
 
 
-def test_hold_is_session_scoped(tmp_path):
+def test_hold_is_session_scoped(tmp_path: Path) -> None:
     lh.set_hold(str(tmp_path), "s1")
     assert lh.is_held(str(tmp_path), "s2") is False
     assert lh.defer(str(tmp_path), "s2", "halted_record", {}) is False
 
 
 @pytest.mark.parametrize("sid", [None, "", "..", ".", "a/b", "a\\b", "x y"])
-def test_unsafe_sid_is_never_held(tmp_path, sid):
+def test_unsafe_sid_is_never_held(tmp_path: Path, sid) -> None:
     assert lh.is_held(str(tmp_path), sid) is False
     assert lh.pending(str(tmp_path), sid) == []
     assert lh.clear_hold(str(tmp_path), sid) == []
@@ -37,7 +38,7 @@ def test_unsafe_sid_is_never_held(tmp_path, sid):
     assert not (tmp_path / ".coordinator-local").exists()
 
 
-def test_defer_defers_never_drops_and_clear_returns_in_order(tmp_path):
+def test_defer_defers_never_drops_and_clear_returns_in_order(tmp_path: Path) -> None:
     r = str(tmp_path)
     lh.set_hold(r, "s1")
     assert lh.defer(r, "s1", "halted_record", {"run": "a"}) is True
@@ -53,7 +54,7 @@ def test_defer_defers_never_drops_and_clear_returns_in_order(tmp_path):
     assert lh.pending(r, "s1") == []
 
 
-def test_defer_refused_when_not_held_or_unknown_kind(tmp_path):
+def test_defer_refused_when_not_held_or_unknown_kind(tmp_path: Path) -> None:
     r = str(tmp_path)
     assert lh.defer(r, "s1", "halted_record", {}) is False
     lh.set_hold(r, "s1")
@@ -61,7 +62,7 @@ def test_defer_refused_when_not_held_or_unknown_kind(tmp_path):
     assert lh.pending(r, "s1") == []
 
 
-def test_set_hold_again_keeps_deferred(tmp_path):
+def test_set_hold_again_keeps_deferred(tmp_path: Path) -> None:
     r = str(tmp_path)
     lh.set_hold(r, "s1")
     lh.defer(r, "s1", "halted_record", {"x": 1})
@@ -69,11 +70,11 @@ def test_set_hold_again_keeps_deferred(tmp_path):
     assert len(lh.pending(r, "s1")) == 1
 
 
-def test_clear_when_absent_is_empty(tmp_path):
+def test_clear_when_absent_is_empty(tmp_path: Path) -> None:
     assert lh.clear_hold(str(tmp_path), "s1") == []
 
 
-def test_malformed_record_is_held_but_pending_empty(tmp_path):
+def test_malformed_record_is_held_but_pending_empty(tmp_path: Path) -> None:
     d = tmp_path / ".coordinator-local" / "landing-hold"
     d.mkdir(parents=True)
     (d / "s1.json").write_text("{not json", encoding="utf-8")

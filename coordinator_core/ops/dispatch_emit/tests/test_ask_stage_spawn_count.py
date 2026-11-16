@@ -19,6 +19,7 @@ from coordinator_core.ops.dispatch_emit.tests._size_l_plan import (
     build_size_l_plan,
     isolate_launch_dirs,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -35,7 +36,7 @@ def _budget() -> dict:
     return {k: v for k, v in _full_budget().items() if k != REFIRE_KEY}
 
 
-def test_a_size_l_stage_spawns_exactly_the_budgeted_count(tmp_path, monkeypatch):
+def test_a_size_l_stage_spawns_exactly_the_budgeted_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     isolate_launch_dirs(monkeypatch, tmp_path)
     repo_root, plan_rel, run_id = build_size_l_plan(tmp_path)
 
@@ -46,7 +47,7 @@ def test_a_size_l_stage_spawns_exactly_the_budgeted_count(tmp_path, monkeypatch)
     assert len(spawns) == sum(_budget().values()), [s.argv for s in spawns]
 
 
-def test_a_26_row_dirty_stage_spawns_exactly_the_budgeted_count(tmp_path, monkeypatch):
+def test_a_26_row_dirty_stage_spawns_exactly_the_budgeted_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     isolate_launch_dirs(monkeypatch, tmp_path)
     root = tmp_path / "repo"
     root.mkdir()
@@ -61,7 +62,7 @@ def test_a_26_row_dirty_stage_spawns_exactly_the_budgeted_count(tmp_path, monkey
     assert len(spawns) == sum(_budget().values()), [s.argv for s in spawns]
 
 
-def test_a_refire_stage_spawns_exactly_the_budgeted_base_blob_read(tmp_path, monkeypatch):
+def test_a_refire_stage_spawns_exactly_the_budgeted_base_blob_read(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     isolate_launch_dirs(monkeypatch, tmp_path)
     repo_root, plan_rel, run_id = build_size_l_plan(tmp_path, dirty_files=4)
     head = subprocess.run(

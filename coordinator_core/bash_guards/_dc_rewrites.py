@@ -37,10 +37,10 @@ from coordinator_core.bash_guards._dc_shell_text import (
     _classify_heredoc_intro,
     _join_backslash_newlines,
     _shell_c_unwrap_payloads,
-    _split_segments,
     _strip_q,
     _word_present,
 )
+from coordinator_core.bash_guards._dc_blanket_add import _awk_quote_aware_split
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards._rewrite_support import (
     _GREP_FAMILY_BINARIES_BT,
@@ -944,7 +944,7 @@ def check_runaway_find(
     find_override = _override("COORDINATOR_ALLOW_FIND_ROOT", payload=payload)
     bounded_advisory: Optional[Dict[str, Any]] = None
 
-    for seg in _split_segments(cmd):
+    for seg in _awk_quote_aware_split(cmd):
         if not seg.strip():
             continue
         if not _find_is_find_segment(seg):

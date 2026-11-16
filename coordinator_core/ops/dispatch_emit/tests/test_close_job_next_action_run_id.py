@@ -5,6 +5,8 @@ from __future__ import annotations
 from coordinator_core.ops.dispatch_emit import ask_compose, run_close
 from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from pathlib import Path
+import pytest
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
@@ -25,7 +27,7 @@ def _script(monkeypatch) -> str:
     )
 
 
-def test_close_job_next_action_run_id_is_the_close_blocks(monkeypatch):
+def test_close_job_next_action_run_id_is_the_close_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     at = script.index("_nextAction = { kind: 'close_job'")
     head = script[at : script.index("close:", at)]
@@ -33,7 +35,7 @@ def test_close_job_next_action_run_id_is_the_close_blocks(monkeypatch):
     assert "params: { run_id: _runId," not in head
 
 
-def test_resolver_accepts_bare_and_suffixed_ids(tmp_path, monkeypatch):
+def test_resolver_accepts_bare_and_suffixed_ids(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {"run-1.workflow"}
     monkeypatch.setattr(run_close, "_load", lambda _root, stem: {} if stem in seen else None)
     assert run_close.resolve_close_job_stem(tmp_path, "run-1") == "run-1.workflow"

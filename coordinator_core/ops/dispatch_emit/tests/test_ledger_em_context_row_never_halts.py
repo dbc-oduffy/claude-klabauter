@@ -7,6 +7,7 @@ from coordinator_core.ops.dispatch_emit.ask_compose import _em_context_row_ids, 
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.design_conformance import ANCHOR_PREFIX
 from coordinator_core.ops.sizing_intake_contract import EM_CONTEXT_MARKER
+import pytest
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _SIZING = {
@@ -30,13 +31,13 @@ def _script(monkeypatch) -> str:
     )
 
 
-def test_only_em_context_rows_are_derived(monkeypatch):
+def test_only_em_context_rows_are_derived(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ask_compose, "load_sizing_effective", lambda *_: _SIZING)
     assert _em_context_row_ids("REPO", "x.yaml") == ["R2"]
     assert _em_context_row_ids("REPO", None) == []
 
 
-def test_composed_gate_exempts_em_context_ids_before_any_status_check(monkeypatch):
+def test_composed_gate_exempts_em_context_ids_before_any_status_check(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert 'const _emContextIds = ["R2"];' in script
     body = script.split("const _ledgerBlocking = ", 1)[1]

@@ -9,13 +9,14 @@ import pytest
 from coordinator_core.ops.dispatch_emit import reverify_delivery as rd
 from coordinator_core.ops.dispatch_emit.verdict_supersession import latest_delivery_binding
 from coordinator_core.ops.tests.test_review_stamp_superseding_record import _git, _record, _repo
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 _TERMINAL = "c" * 40
 
 
-def _null_run(tmp_path, **overrides):
+def _null_run(tmp_path, **overrides) -> tuple[Path, Path, str]:
     repo = _repo(tmp_path)
     head = _git(repo, "rev-parse", "HEAD")
     record = _record(repo, head, delivery=None, **overrides)
@@ -29,18 +30,18 @@ def _plan_file(repo):
     return plan
 
 
-def test_null_slot_is_not_refused_and_has_no_claims(tmp_path):
+def test_null_slot_is_not_refused_and_has_no_claims(tmp_path: Path) -> None:
     _, record, _ = _null_run(tmp_path)
     assert rd.prior_unbacked_claims(record)[1] == []
 
 
-def test_verdictless_delivery_block_is_a_null_slot(tmp_path):
+def test_verdictless_delivery_block_is_a_null_slot(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery={"verdict": None})
     assert rd.prior_unbacked_claims(record)[1] == []
 
 
-def test_record_without_a_review_still_refuses(tmp_path):
+def test_record_without_a_review_still_refuses(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery=None, prep=None)
     with pytest.raises(rd.ReverifyRefused, match="carries no delivery FAIL"):
@@ -48,7 +49,7 @@ def test_record_without_a_review_still_refuses(tmp_path):
 
 
 @pytest.mark.usefixtures("verifier_roster")
-def test_emit_binds_diff_sha_in_ident_and_briefs_the_reviewed_diff(tmp_path, monkeypatch):
+def test_emit_binds_diff_sha_in_ident_and_briefs_the_reviewed_diff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, record, rel = _null_run(tmp_path)
     plan = _plan_file(repo)
     monkeypatch.setattr(rd, "_head_sha", lambda root: "b" * 40)
@@ -61,7 +62,7 @@ def test_emit_binds_diff_sha_in_ident_and_briefs_the_reviewed_diff(tmp_path, mon
     assert f"..{_TERMINAL}" in text
 
 
-def test_emit_refuses_a_null_slot_when_no_terminal_commit_resolves(tmp_path, monkeypatch):
+def test_emit_refuses_a_null_slot_when_no_terminal_commit_resolves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, record, _ = _null_run(tmp_path)
     plan = _plan_file(repo)
     monkeypatch.setattr(rd, "_head_sha", lambda root: "b" * 40)
@@ -72,7 +73,7 @@ def test_emit_refuses_a_null_slot_when_no_terminal_commit_resolves(tmp_path, mon
     assert not out.exists()
 
 
-def test_fail_record_emits_no_diff_sha(tmp_path, monkeypatch):
+def test_fail_record_emits_no_diff_sha(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     fail = {"verdict": "FAIL", "unbacked": [{"claim": "c", "anchor": "a"}]}
     record = _record(repo, _git(repo, "rev-parse", "HEAD"), delivery=fail)
@@ -83,7 +84,7 @@ def test_fail_record_emits_no_diff_sha(tmp_path, monkeypatch):
     assert "diff_sha" not in out.read_text(encoding="utf-8")
 
 
-def test_recorded_verdict_carries_diff_sha_and_the_binding_reader_returns_it(tmp_path):
+def test_recorded_verdict_carries_diff_sha_and_the_binding_reader_returns_it(tmp_path: Path) -> None:
     repo, record, rel = _null_run(tmp_path)
     path = rd.record_delivery_verdict(
         repo_root=repo, supersedes=rel, plan_id="pln-example-abc123", head_sha="b" * 40,
@@ -93,7 +94,7 @@ def test_recorded_verdict_carries_diff_sha_and_the_binding_reader_returns_it(tmp
     assert binding["diff_sha"] == _TERMINAL and binding["record_path"] == path
 
 
-def test_record_cli_passes_the_ident_diff_sha_through(tmp_path, capsys):
+def test_record_cli_passes_the_ident_diff_sha_through(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo, record, rel = _null_run(tmp_path)
     result = {
         "reverify_delivery": {"head_sha": "b" * 40, "plan_id": "pln-example-abc123", "diff_sha": _TERMINAL},
@@ -104,7 +105,7 @@ def test_record_cli_passes_the_ident_diff_sha_through(tmp_path, capsys):
     assert latest_delivery_binding(repo, rel)["diff_sha"] == _TERMINAL
 
 
-def test_record_without_diff_sha_omits_the_key(tmp_path):
+def test_record_without_diff_sha_omits_the_key(tmp_path: Path) -> None:
     repo, _, rel = _null_run(tmp_path)
     rd.record_delivery_verdict(
         repo_root=repo, supersedes=rel, plan_id="pln-example-abc123", head_sha="b" * 40,

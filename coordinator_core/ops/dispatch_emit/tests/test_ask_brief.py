@@ -12,25 +12,26 @@ from coordinator_core.ops.dispatch_emit.ask_brief import (
     receipt_fields,
 )
 from coordinator_core.ops.dispatch_emit.ask_contract import GateVerdict
+from pathlib import Path
 
 
-def test_all_empty_is_none(tmp_path):
+def test_all_empty_is_none(tmp_path: Path) -> None:
     assert load_em_brief(tmp_path, brief=None, brief_file=None) is None
     assert load_em_brief(tmp_path, brief="", brief_file="", context=()) is None
 
 
-def test_brief_and_file_refused_naming_both(tmp_path):
+def test_brief_and_file_refused_naming_both(tmp_path: Path) -> None:
     with pytest.raises(EmBriefRefused) as e:
         load_em_brief(tmp_path, brief="x", brief_file="b.md")
     assert "--brief" in str(e.value) and "--brief-file" in str(e.value)
 
 
-def test_missing_context_names_path(tmp_path):
+def test_missing_context_names_path(tmp_path: Path) -> None:
     with pytest.raises(EmBriefRefused, match="nope.md"):
         load_em_brief(tmp_path, brief="x", brief_file=None, context=["nope.md"])
 
 
-def test_context_outside_repo_refused(tmp_path):
+def test_context_outside_repo_refused(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     (tmp_path / "out.md").write_text("x")
@@ -38,7 +39,7 @@ def test_context_outside_repo_refused(tmp_path):
         load_em_brief(root, brief="x", brief_file=None, context=["../out.md"])
 
 
-def test_over_cap_spills_instead_of_refusing(tmp_path):
+def test_over_cap_spills_instead_of_refusing(tmp_path: Path) -> None:
     full = "a" * (EM_BRIEF_BYTE_CAP + 1)
     b = load_em_brief(tmp_path, brief=full, brief_file=None)
     assert len(b.text.encode("utf-8")) == EM_BRIEF_BYTE_CAP
@@ -48,18 +49,18 @@ def test_over_cap_spills_instead_of_refusing(tmp_path):
     assert receipt_fields(b)["advisories"] == list(b.advisories)
 
 
-def test_over_cap_brief_file_is_its_own_spill(tmp_path):
+def test_over_cap_brief_file_is_its_own_spill(tmp_path: Path) -> None:
     (tmp_path / "big.md").write_text("b" * (EM_BRIEF_BYTE_CAP + 5))
     b = load_em_brief(tmp_path, brief=None, brief_file="big.md")
     assert b.context[0] == "big.md" and len(b.advisories) == 1
 
 
-def test_under_cap_has_no_advisory(tmp_path):
+def test_under_cap_has_no_advisory(tmp_path: Path) -> None:
     b = load_em_brief(tmp_path, brief="x", brief_file=None)
     assert b.advisories == () and "advisories" not in receipt_fields(b)
 
 
-def test_brief_file_read_and_empty_refused(tmp_path):
+def test_brief_file_read_and_empty_refused(tmp_path: Path) -> None:
     (tmp_path / "b.md").write_text("hello")
     b = load_em_brief(tmp_path, brief=None, brief_file="b.md")
     assert b.text == "hello" and b.source == "b.md"
@@ -70,7 +71,7 @@ def test_brief_file_read_and_empty_refused(tmp_path):
         load_em_brief(tmp_path, brief=None, brief_file="missing.md")
 
 
-def test_decl_round_trips_escapes():
+def test_decl_round_trips_escapes() -> None:
     b = EmBrief(text="it's a \\ path\nline2", source="inline", context=("a/b.md",))
     js = brief_decl_js(b)
     assert js.startswith("const _EM_BRIEF = ")
@@ -78,14 +79,14 @@ def test_decl_round_trips_escapes():
     assert "Read each context file first: a/b.md" in js
 
 
-def test_receipt_fields(tmp_path):
+def test_receipt_fields(tmp_path: Path) -> None:
     (tmp_path / "c.md").write_text("c")
     b = load_em_brief(tmp_path, brief="x", brief_file=None, context=["c.md"])
     r = receipt_fields(b)
     assert r["source"] == "inline" and r["context"] == ["c.md"] and len(r["sha256"]) == 64
 
 
-def test_resume_plan_emitted_only_when_set():
+def test_resume_plan_emitted_only_when_set() -> None:
     assert "resume_plan" not in GateVerdict(arm="s", halt=None).to_json()
     assert GateVerdict(arm="s", halt=None, resume_plan="docs/plans/p.md").to_json()["resume_plan"] == "docs/plans/p.md"
 
@@ -100,7 +101,7 @@ def _fake_tmp(tmp_path, monkeypatch):
     return tmp, pad, root
 
 
-def test_scratchpad_context_admitted_absolute(tmp_path, monkeypatch):
+def test_scratchpad_context_admitted_absolute(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, pad, root = _fake_tmp(tmp_path, monkeypatch)
     f = pad / "cap.md"
     f.write_text("c")
@@ -110,7 +111,7 @@ def test_scratchpad_context_admitted_absolute(tmp_path, monkeypatch):
     check_em_brief_paths(root, brief_file=None, context=[str(f)])
 
 
-def test_scratchpad_token_resolves_in_its_own_session_only(tmp_path, monkeypatch):
+def test_scratchpad_token_resolves_in_its_own_session_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, pad, root = _fake_tmp(tmp_path, monkeypatch)
     f = pad / "cap.md"
     f.write_text("c")
@@ -122,7 +123,7 @@ def test_scratchpad_token_resolves_in_its_own_session_only(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize("sid", ["9999-other", ""])
-def test_other_or_empty_session_scratchpad_refused(tmp_path, monkeypatch, sid):
+def test_other_or_empty_session_scratchpad_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, sid) -> None:
     _, pad, root = _fake_tmp(tmp_path, monkeypatch)
     f = pad / "cap.md"
     f.write_text("c")
@@ -130,7 +131,7 @@ def test_other_or_empty_session_scratchpad_refused(tmp_path, monkeypatch, sid):
         load_em_brief(root, brief="x", brief_file=None, context=[str(f)], session_id=sid)
 
 
-def test_non_scratchpad_temp_and_sibling_repo_still_refused(tmp_path, monkeypatch):
+def test_non_scratchpad_temp_and_sibling_repo_still_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     tmp, pad, root = _fake_tmp(tmp_path, monkeypatch)
     other = tmp / "claude" / "E--proj" / "1234-uuid" / "other.md"
     other.write_text("c")
@@ -141,7 +142,7 @@ def test_non_scratchpad_temp_and_sibling_repo_still_refused(tmp_path, monkeypatc
             load_em_brief(root, brief="x", brief_file=None, context=[str(f)])
 
 
-def test_brief_file_in_scratchpad_still_refused(tmp_path, monkeypatch):
+def test_brief_file_in_scratchpad_still_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, pad, root = _fake_tmp(tmp_path, monkeypatch)
     f = pad / "b.md"
     f.write_text("hello")
@@ -149,7 +150,7 @@ def test_brief_file_in_scratchpad_still_refused(tmp_path, monkeypatch):
         load_em_brief(root, brief=None, brief_file=str(f))
 
 
-def test_backslash_context_path_resolves_to_the_same_file(tmp_path):
+def test_backslash_context_path_resolves_to_the_same_file(tmp_path: Path) -> None:
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "ctx.md").write_text("c", encoding="utf-8")
     b = load_em_brief(tmp_path, brief="t", brief_file=None, context=["docs\\ctx.md"])

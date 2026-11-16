@@ -10,6 +10,7 @@ import yaml
 from coordinator_core.ops.dispatch_emit import ask_stage
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
 from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
+from pathlib import Path
 
 PLAN_REL = "docs/plans/2026-11-01-pin-fixture.md"
 SIZING_REL = "state/sizings/2026-11-01-xs-pin.yaml"
@@ -54,7 +55,7 @@ Rows with explicit and absent agent_type pins.
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     write_run_scripts(tmp_path, "r1", "x1run")
@@ -71,7 +72,7 @@ def _stage(repo, other=REVIEWER_AGENT_TYPE, **sizing_over):
     return {r.id: r for r in m.rows}, report
 
 
-def test_default_executor_pin_takes_the_sizing_family_like_an_unpinned_row(repo):
+def test_default_executor_pin_takes_the_sizing_family_like_an_unpinned_row(repo) -> None:
     rows, report = _stage(repo, family="codex")
     assert rows["C1"].agent_type == RUNNER and rows["C2"].agent_type == RUNNER
     assert rows["C1"].route_source == "default"
@@ -79,7 +80,7 @@ def test_default_executor_pin_takes_the_sizing_family_like_an_unpinned_row(repo)
     assert "warnings" not in report
 
 
-def test_sizing_family_row_carries_family_and_a_derived_claude_fallback(repo):
+def test_sizing_family_row_carries_family_and_a_derived_claude_fallback(repo) -> None:
     rows, _ = _stage(repo, family="codex")
     for rid in ("C1", "C2"):
         row = rows[rid]
@@ -91,20 +92,20 @@ def test_sizing_family_row_carries_family_and_a_derived_claude_fallback(repo):
     assert rows["C3"].family == "" and rows["C3"].fallback_brief_path == ""
 
 
-def test_other_pin_keeps_its_pin_and_overlay_source(repo):
+def test_other_pin_keeps_its_pin_and_overlay_source(repo) -> None:
     rows, report = _stage(repo, family="codex")
     assert rows["C3"].agent_type == REVIEWER_AGENT_TYPE
     assert rows["C3"].route_source == "overlay"
     assert "C3" not in report["family_routes"]
 
 
-def test_no_family_leaves_the_pin_an_overlay_on_claude(repo):
+def test_no_family_leaves_the_pin_an_overlay_on_claude(repo) -> None:
     rows, report = _stage(repo)
     assert rows["C1"].agent_type == EXECUTOR and rows["C1"].route_source == "overlay"
     assert report == {}
 
 
-def test_family_reaching_no_row_warns_naming_the_family(repo):
+def test_family_reaching_no_row_warns_naming_the_family(repo) -> None:
     report = ask_stage._family_routing_report("grok", {"C1": "claude", "C3": "claude"})
     assert "family_routes" not in report
     assert len(report["warnings"]) == 1 and "'grok'" in report["warnings"][0]
@@ -112,7 +113,7 @@ def test_family_reaching_no_row_warns_naming_the_family(repo):
     assert ask_stage._family_routing_report("claude", {"C1": "claude"}) == {}
 
 
-def test_receipt_names_the_family_the_stage_used(repo):
+def test_receipt_names_the_family_the_stage_used(repo) -> None:
     from coordinator_core.ops.dispatch_emit import ask_stage_receipt
 
     _, report = _stage(repo, family="codex")
@@ -121,7 +122,7 @@ def test_receipt_names_the_family_the_stage_used(repo):
     assert body["family_routes"] == {"C1": "codex", "C2": "codex"}
 
 
-def test_every_row_pinned_elsewhere_stages_with_the_warning_not_a_refusal(repo):
+def test_every_row_pinned_elsewhere_stages_with_the_warning_not_a_refusal(repo) -> None:
     (repo / PLAN_REL).write_text(
         _PLAN.format(other=REVIEWER_AGENT_TYPE).replace("agent_type: coordinator:executor", "agent_type: " + REVIEWER_AGENT_TYPE)
         .replace("  title: unpinned", "  title: unpinned\n  agent_type: " + REVIEWER_AGENT_TYPE),

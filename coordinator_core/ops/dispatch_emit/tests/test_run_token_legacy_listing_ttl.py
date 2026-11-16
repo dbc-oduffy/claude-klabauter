@@ -4,9 +4,10 @@ import os
 import time
 
 from coordinator_core.ops.dispatch_emit import run_token
+from pathlib import Path
 
 
-def test_legacy_listing_keeps_only_records_inside_the_ttl(tmp_path):
+def test_legacy_listing_keeps_only_records_inside_the_ttl(tmp_path: Path) -> None:
     fresh, stale = tmp_path / "fresh.json", tmp_path / "stale.json"
     fresh.write_text("{}", encoding="utf-8")
     stale.write_text("{}", encoding="utf-8")
@@ -17,11 +18,11 @@ def test_legacy_listing_keeps_only_records_inside_the_ttl(tmp_path):
     assert run_token._bounded_glob(tmp_path, 1000.0) == [fresh]
 
 
-def test_missing_legacy_dir_lists_nothing(tmp_path):
+def test_missing_legacy_dir_lists_nothing(tmp_path: Path) -> None:
     assert run_token._bounded_glob(tmp_path / "absent", 1000.0) == []
 
 
-def test_reap_deletes_expired_files_and_keeps_fresh_ones(tmp_path):
+def test_reap_deletes_expired_files_and_keeps_fresh_ones(tmp_path: Path) -> None:
     fresh, stale = tmp_path / "fresh.json", tmp_path / "stale.json"
     fresh.write_text("{}", encoding="utf-8")
     stale.write_text("{}", encoding="utf-8")
@@ -32,7 +33,7 @@ def test_reap_deletes_expired_files_and_keeps_fresh_ones(tmp_path):
     assert not stale.exists() and fresh.exists()
 
 
-def test_without_reap_an_expired_file_stays(tmp_path):
+def test_without_reap_an_expired_file_stays(tmp_path: Path) -> None:
     stale = tmp_path / "stale.json"
     stale.write_text("{}", encoding="utf-8")
     old = time.time() - run_token.TTL_SECONDS - 60

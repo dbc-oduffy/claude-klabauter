@@ -136,8 +136,11 @@ def test_sibling_sizing_reads_each_complete_when_every_read_is_slow(tmp_path, mo
         return real(r, rel)
 
     monkeypatch.setattr(sizing_fire, "load_sizing", slow)
-    monkeypatch.setattr(mod, "_BUDGET", [mod._READ_DEADLINE_MS])
-    docs = mod._load_sizing_docs(root, rels)
+    token = mod._BUDGET_VAR.set([mod._READ_DEADLINE_MS])
+    try:
+        docs = mod._load_sizing_docs(root, rels)
+    finally:
+        mod._BUDGET_VAR.reset(token)
     assert all(docs[rel] is not STALLED for rel in rels)
     assert all(docs[rel] == {"x": 1} for rel in rels)
 

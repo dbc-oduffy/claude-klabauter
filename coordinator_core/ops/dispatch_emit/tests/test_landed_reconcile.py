@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_emit_wake_digest import (
     _V5_STAGE_SCHEMAS,
 )
 from coordinator_core.session.record_homes import home_dir
+import pytest
 
 _SHA = "0123456789abcdef0123456789abcdef01234567"
 
@@ -51,7 +52,7 @@ _PLAN = textwrap.dedent(
 )
 
 
-def _repo(tmp_path):
+def _repo(tmp_path) -> Path:
     git = tmp_path / ".git"
     git.mkdir()
     (git / "HEAD").write_text(_SHA + "\n", encoding="utf-8")
@@ -92,7 +93,7 @@ def _dispositions(tmp_path, n):
     return text
 
 
-def test_landed_items_flip_their_open_rows_to_coded(tmp_path, monkeypatch):
+def test_landed_items_flip_their_open_rows_to_coded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inventory = _repo(tmp_path)
 
     reply = _emit(tmp_path, monkeypatch, inventory)
@@ -108,7 +109,7 @@ def test_landed_items_flip_their_open_rows_to_coded(tmp_path, monkeypatch):
     assert reply["landed_unevidenced"] == {"docs/plans/p1.md": ["C1", "C2"]}
 
 
-def test_live_item_plan_is_untouched_and_a_second_emit_changes_nothing(tmp_path, monkeypatch):
+def test_live_item_plan_is_untouched_and_a_second_emit_changes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     inventory = _repo(tmp_path)
     before = _dispositions(tmp_path, 3)
 

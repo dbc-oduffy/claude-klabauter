@@ -47,7 +47,7 @@ def _make_claude_home(tmp_path: Path, repos: dict[str, Path], local_text: str | 
 
 
 @pytest.fixture
-def registry(tmp_path, monkeypatch):
+def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> dict[str, Path]:
     receiver = _make_repo(tmp_path, "project-rag")
     mirror = _make_repo(tmp_path, "claude-klabauter")
     no_checkout = tmp_path / "project-gone"
@@ -61,7 +61,7 @@ def registry(tmp_path, monkeypatch):
 
 # AC1 -------------------------------------------------------------------
 
-def test_symbols_and_signatures():
+def test_symbols_and_signatures() -> None:
     assert WireRefusal._fields == ("message",)
     assert ReceiverTarget._fields == ("name", "inbox_dir", "receiver_repo_path", "all_repos")
     assert DeliveryTarget._fields == ReceiverTarget._fields + ("filename", "self_send")
@@ -80,7 +80,7 @@ def test_symbols_and_signatures():
 
 # AC2 -------------------------------------------------------------------
 
-def test_registered_receiver_resolves(registry):
+def test_registered_receiver_resolves(registry) -> None:
     target = resolve_receiver("example-retrieval-repo-em")
     assert isinstance(target, ReceiverTarget)
     assert target.name == "example-retrieval-repo-em"
@@ -89,7 +89,7 @@ def test_registered_receiver_resolves(registry):
     assert str(registry["receiver"]) in target.all_repos.values()
 
 
-def test_unknown_receiver_refused_with_suggestion(registry):
+def test_unknown_receiver_refused_with_suggestion(registry) -> None:
     refusal = resolve_receiver("project-rg-em")
     assert isinstance(refusal, WireRefusal)
     assert refusal.message.startswith("memo.send: UNKNOWN RECEIVER — 'project-rg-em'")
@@ -97,26 +97,26 @@ def test_unknown_receiver_refused_with_suggestion(registry):
     assert "machine-local set repos.<name>" in refusal.message
 
 
-def test_unknown_receiver_without_suggestion(registry):
+def test_unknown_receiver_without_suggestion(registry) -> None:
     refusal = resolve_receiver("zzzzzzzz-qqqq-em")
     assert isinstance(refusal, WireRefusal)
     assert "UNKNOWN RECEIVER" in refusal.message
     assert "Did you mean" not in refusal.message
 
 
-def test_mirror_refused(registry):
+def test_mirror_refused(registry) -> None:
     refusal = resolve_receiver("claude-klabauter-em")
     assert isinstance(refusal, WireRefusal)
     assert "resolves to a publish mirror, which has no inbox." in refusal.message
 
 
-def test_undeliverable_checkout_refused(registry):
+def test_undeliverable_checkout_refused(registry) -> None:
     refusal = resolve_receiver("project-gone-em")
     assert isinstance(refusal, WireRefusal)
     assert "resolves to no checkout on this machine — refusing the send." in refusal.message
 
 
-def test_unreadable_registry_refused(tmp_path, monkeypatch):
+def test_unreadable_registry_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     home = _make_claude_home(tmp_path, {}, local_text="this is = = not [valid toml\n")
     monkeypatch.setenv("CLAUDE_HOME", str(home))
     refusal = resolve_receiver("example-retrieval-repo-em")
@@ -125,7 +125,7 @@ def test_unreadable_registry_refused(tmp_path, monkeypatch):
     assert "no folder-scan fallback" in refusal.message
 
 
-def test_ambiguous_receiver_refused(monkeypatch):
+def test_ambiguous_receiver_refused(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(name):
         raise memo_wire.AmbiguousReceiverError("central-em", ["a", "b"])
 
@@ -138,7 +138,7 @@ def test_ambiguous_receiver_refused(monkeypatch):
 
 # AC3 -------------------------------------------------------------------
 
-def test_delivery_target_filename_and_not_self_send(registry, tmp_path):
+def test_delivery_target_filename_and_not_self_send(registry, tmp_path: Path) -> None:
     sender = _make_repo(tmp_path, "sender")
     target = resolve_delivery_target(
         "example-retrieval-repo-em", sender_worktree=sender, from_id="Sender EM",
@@ -150,7 +150,7 @@ def test_delivery_target_filename_and_not_self_send(registry, tmp_path):
     assert target.inbox_dir == registry["receiver"] / "cross-repo" / "inbox"
 
 
-def test_delivery_target_self_send_exactly_when_receiver_is_sender(registry):
+def test_delivery_target_self_send_exactly_when_receiver_is_sender(registry) -> None:
     target = resolve_delivery_target(
         "example-retrieval-repo-em", sender_worktree=registry["receiver"], from_id="example-retrieval-repo-em",
         topic="a-topic", today="2026-09-30",
@@ -159,7 +159,7 @@ def test_delivery_target_self_send_exactly_when_receiver_is_sender(registry):
     assert target.self_send is True
 
 
-def test_empty_slug_from_is_refusal_not_raise(registry, tmp_path):
+def test_empty_slug_from_is_refusal_not_raise(registry, tmp_path: Path) -> None:
     refusal = resolve_delivery_target(
         "example-retrieval-repo-em", sender_worktree=tmp_path, from_id="!!!",
         topic="a-topic", today="2026-09-30",
@@ -168,7 +168,7 @@ def test_empty_slug_from_is_refusal_not_raise(registry, tmp_path):
     assert "empty sender slug" in refusal.message
 
 
-def test_filename_refusal_wins_over_unknown_receiver(registry, tmp_path):
+def test_filename_refusal_wins_over_unknown_receiver(registry, tmp_path: Path) -> None:
     refusal = resolve_delivery_target(
         "nobody-em", sender_worktree=tmp_path, from_id="!!!",
         topic="a-topic", today="2026-09-30",
@@ -177,7 +177,7 @@ def test_filename_refusal_wins_over_unknown_receiver(registry, tmp_path):
     assert "empty sender slug" in refusal.message
 
 
-def test_unknown_receiver_surfaces_through_delivery_target(registry, tmp_path):
+def test_unknown_receiver_surfaces_through_delivery_target(registry, tmp_path: Path) -> None:
     refusal = resolve_delivery_target(
         "nobody-em", sender_worktree=tmp_path, from_id="sender-em",
         topic="a-topic", today="2026-09-30",
@@ -207,7 +207,7 @@ def test_unknown_receiver_surfaces_through_delivery_target(registry, tmp_path):
         ("other/memo-outbox/my-topic.md", None),
     ],
 )
-def test_memo_outbox_topic(relpath, expected):
+def test_memo_outbox_topic(relpath, expected) -> None:
     assert memo_outbox_topic(relpath) == expected
 
 
@@ -219,14 +219,14 @@ def _stage(worktree: Path, reldir: str, topic: str, text: str) -> None:
     (d / f"{topic}.md").write_text(text, encoding="utf-8", newline="\n")
 
 
-def test_read_staged_to_canonical_and_legacy(tmp_path):
+def test_read_staged_to_canonical_and_legacy(tmp_path: Path) -> None:
     _stage(tmp_path, ".coordinator-local/memo-outbox", "t1", '---\nto: "example-retrieval-repo-em"\n---\n\nbody\n')
     _stage(tmp_path, "state/memo-outbox", "t2", "---\nto: other-em\n---\n\nbody\n")
     assert read_staged_to(tmp_path, "t1") == "example-retrieval-repo-em"
     assert read_staged_to(tmp_path, "t2") == "other-em"
 
 
-def test_read_staged_to_none_cases(tmp_path):
+def test_read_staged_to_none_cases(tmp_path: Path) -> None:
     assert read_staged_to(tmp_path, "absent") is None
     _stage(tmp_path, ".coordinator-local/memo-outbox", "no-to", "---\ntitle: x\n---\n\nbody\n")
     _stage(tmp_path, ".coordinator-local/memo-outbox", "list-to", "---\nto:\n  - a\n---\n\nbody\n")
@@ -237,13 +237,13 @@ def test_read_staged_to_none_cases(tmp_path):
 
 # performed paths / filename pattern -----------------------------------
 
-def test_performed_paths_are_relative_forward_slash():
+def test_performed_paths_are_relative_forward_slash() -> None:
     assert memo_send_performed_paths("my-topic") == (
         ".coordinator-local/memo-outbox/sent/my-topic.md",
     )
 
 
-def test_delivered_filename_pattern():
+def test_delivered_filename_pattern() -> None:
     assert delivered_filename_pattern("Sender EM", "a-topic") == "<YYYY-MM-DD>-sender-em-a-topic.md"
     assert delivered_filename_pattern("Sender EM", "a-topic") == _memo_filename(
         memo_wire.DATE_PLACEHOLDER, "Sender EM", "a-topic",

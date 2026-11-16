@@ -7,13 +7,14 @@ import subprocess
 import pytest
 
 from coordinator_core.benchmarks import commit_leg_profile as clp
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _KEYS = {"mode", "sign", "paths", "head", "committed", "sha", "parent_ms", "children_ms", "spawns", "phases"}
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> None:
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True,
                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
@@ -30,7 +31,7 @@ def _restore_popen_hook():
 
 
 @pytest.fixture
-def tiny_repo(tmp_path):
+def tiny_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "r"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
@@ -44,7 +45,7 @@ def tiny_repo(tmp_path):
     return repo
 
 
-def test_report_pins_keys_and_commit(tiny_repo):
+def test_report_pins_keys_and_commit(tiny_repo) -> None:
     rep = clp.build_report(tiny_repo, "phased", 3, "off")
     assert _KEYS <= set(rep)
     assert rep["committed"] is True and rep["sha"]
@@ -56,7 +57,7 @@ def test_report_pins_keys_and_commit(tiny_repo):
         assert isinstance(value, float) and value >= 0, name
 
 
-def test_sign_off_writes_clone_local_config(tiny_repo):
+def test_sign_off_writes_clone_local_config(tiny_repo) -> None:
     _git(tiny_repo, "config", "commit.gpgsign", "true")
     clp.build_report(tiny_repo, "phased", 1, "off")
     out = subprocess.run(["git", "-C", str(tiny_repo), "config", "--local", "commit.gpgsign"],
@@ -65,7 +66,7 @@ def test_sign_off_writes_clone_local_config(tiny_repo):
     assert out.strip() == "false"
 
 
-def test_memoised_report_commits_and_names_label(tiny_repo):
+def test_memoised_report_commits_and_names_label(tiny_repo) -> None:
     rep = clp.build_report(tiny_repo, "phased", 2, "off", memoise="commit._identity")
     assert rep["memoised"] == "commit._identity"
     assert rep["memoise_served"] >= 0
@@ -74,7 +75,7 @@ def test_memoised_report_commits_and_names_label(tiny_repo):
     assert "caller_phases" not in rep
 
 
-def test_memoise_refuses_non_allowlisted_label(tiny_repo, capsys):
+def test_memoise_refuses_non_allowlisted_label(tiny_repo, capsys: pytest.CaptureFixture[str]) -> None:
     with pytest.raises(ValueError, match="allowlist"):
         clp.build_report(tiny_repo, "phased", 1, "off", memoise="commit.cas_ref")
     with pytest.raises(SystemExit) as exc:
@@ -83,7 +84,7 @@ def test_memoise_refuses_non_allowlisted_label(tiny_repo, capsys):
     assert "commit._identity" in capsys.readouterr().err
 
 
-def test_with_caller_brackets_both_callers(tiny_repo):
+def test_with_caller_brackets_both_callers(tiny_repo) -> None:
     rep = clp.build_report(tiny_repo, "phased", 2, "off", with_caller=True)
     assert _KEYS <= set(rep) and rep["committed"] is True
     assert set(rep["caller_phases"]) == {"caller.compose_message", "caller.apply_missing_trailers"}
@@ -93,7 +94,7 @@ def test_with_caller_brackets_both_callers(tiny_repo):
     assert "memoised" not in rep
 
 
-def test_sub_phases_added_without_changing_top_level_phases(tiny_repo):
+def test_sub_phases_added_without_changing_top_level_phases(tiny_repo) -> None:
     rep = clp.build_report(tiny_repo, "phased", 2, "off", sub_phases=True)
     assert rep["committed"] is True and _KEYS <= set(rep)
     assert set(rep["sub_phases"]) == set(rep["sub_counts"])
@@ -110,12 +111,12 @@ def test_sub_phases_added_without_changing_top_level_phases(tiny_repo):
     assert set(plain["phases"]) == set(rep["phases"])
 
 
-def test_sub_phase_keys_absent_without_flag(tiny_repo):
+def test_sub_phase_keys_absent_without_flag(tiny_repo) -> None:
     rep = clp.build_report(tiny_repo, "phased", 1, "off")
     assert "sub_phases" not in rep and "sub_counts" not in rep
 
 
-def test_outermost_only_bracket_counts_recursion_once():
+def test_outermost_only_bracket_counts_recursion_once() -> None:
     import types
 
     subs = clp._SubPhases()
@@ -128,7 +129,7 @@ def test_outermost_only_bracket_counts_recursion_once():
     assert not getattr(mod.f, "_sub_phase_wrapped", False)
 
 
-def test_commits_two_yields_two_distinct_commits(tiny_repo):
+def test_commits_two_yields_two_distinct_commits(tiny_repo) -> None:
     rep = clp.build_report(tiny_repo, "phased", 2, "off", commits=2)
     assert len(rep["per_commit"]) == 2
     assert all(e["committed"] is True for e in rep["per_commit"])
@@ -139,18 +140,18 @@ def test_commits_two_yields_two_distinct_commits(tiny_repo):
         assert {"parent_ms", "children_ms", "spawns", "phases"} <= set(e)
 
 
-def test_commits_two_with_memoise_does_not_serve_stale_head(tiny_repo):
+def test_commits_two_with_memoise_does_not_serve_stale_head(tiny_repo) -> None:
     rep = clp.build_report(tiny_repo, "phased", 2, "off", memoise="commit.head_sha", commits=2)
     assert all(e["committed"] is True for e in rep["per_commit"])
     assert rep["per_commit"][0]["sha"] != rep["per_commit"][1]["sha"]
 
 
-def test_rejects_zero_commits(tiny_repo):
+def test_rejects_zero_commits(tiny_repo) -> None:
     with pytest.raises(ValueError):
         clp.build_report(tiny_repo, "phased", 1, "off", commits=0)
 
 
-def test_rejects_unknown_arms(tiny_repo):
+def test_rejects_unknown_arms(tiny_repo) -> None:
     with pytest.raises(ValueError):
         clp.build_report(tiny_repo, "bogus", 1, "off")
     with pytest.raises(ValueError):

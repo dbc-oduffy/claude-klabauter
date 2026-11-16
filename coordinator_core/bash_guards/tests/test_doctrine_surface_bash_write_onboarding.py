@@ -5,6 +5,7 @@ import pytest
 
 from coordinator_core.bash_guards import guard_doctrine_surface_bash_write as g
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -18,7 +19,7 @@ def _check(cmd, cwd):
 
 
 @pytest.fixture(autouse=True)
-def _strict(monkeypatch):
+def _strict(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")
 
 
@@ -31,35 +32,35 @@ def _strict(monkeypatch):
         'for d in a b; do test -e "$d/coordinator.local.md" >/dev/null || echo "$d"; done',
     ],
 )
-def test_file_test_is_not_a_write(tmp_path, cmd):
+def test_file_test_is_not_a_write(tmp_path: Path, cmd) -> None:
     assert _check(cmd, tmp_path) is None
 
 
-def test_file_test_with_a_real_redirect_still_denies(tmp_path):
+def test_file_test_with_a_real_redirect_still_denies(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text("x")
     assert _check("test -f coordinator.local.md > coordinator.local.md", tmp_path) is not None
 
 
-def test_first_time_claude_md_render_is_allowed(tmp_path):
+def test_first_time_claude_md_render_is_allowed(tmp_path: Path) -> None:
     assert _check("cat tpl > CLAUDE.md", tmp_path) is None
 
 
-def test_existing_claude_md_write_still_denies(tmp_path):
+def test_existing_claude_md_write_still_denies(tmp_path: Path) -> None:
     (tmp_path / "CLAUDE.md").write_text("x")
     assert _check("cat tpl > CLAUDE.md", tmp_path) is not None
 
 
-def test_project_type_only_local_config_write_is_allowed(tmp_path):
+def test_project_type_only_local_config_write_is_allowed(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text("x")
     assert _check("printf 'project_type: general\\n' > coordinator.local.md", tmp_path) is None
 
 
-def test_local_config_write_with_command_key_denies(tmp_path):
+def test_local_config_write_with_command_key_denies(tmp_path: Path) -> None:
     assert _check("printf 'project_type: g\\nfast_test_cmd: x\\n' > coordinator.local.md", tmp_path) is not None
 
 
 @pytest.mark.parametrize("level", ["warn", "off"])
-def test_guard_level_never_silences_or_lifts_the_deny(tmp_path, monkeypatch, level):
+def test_guard_level_never_silences_or_lifts_the_deny(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, level) -> None:
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
     (tmp_path / "CLAUDE.md").write_text("x")
     out = _check("echo hi >> CLAUDE.md", tmp_path)

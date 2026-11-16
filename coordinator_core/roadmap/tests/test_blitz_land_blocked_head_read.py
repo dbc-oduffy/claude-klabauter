@@ -2,6 +2,7 @@
 import time
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -15,7 +16,7 @@ ENGINE_BUDGET_SECS = 5.0
 
 
 @pytest.fixture(autouse=True)
-def _wall(monkeypatch):
+def _wall(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(gate_v2, "HEAD_READ_DEADLINE_SECS", WALL)
     monkeypatch.setattr(bl, "shipped_in_refusals", lambda root, shas: {})
     gate_v2._HEAD_CACHE.clear()
@@ -24,7 +25,7 @@ def _wall(monkeypatch):
 
 
 @pytest.fixture
-def root(tmp_path):
+def root(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state/handoffs").mkdir(parents=True)
     return tmp_path
@@ -34,7 +35,7 @@ PARAMS = {"wave_result": {"waveIndex": 0, "ready": [], "pulled": [], "replan": [
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds the wall a blocked open may hold the landing")
-def test_land_answers_from_the_stale_head_while_a_live_open_blocks(root, monkeypatch):
+def test_land_answers_from_the_stale_head_while_a_live_open_blocks(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(root, "ok")
     blocked = _write(root, "stuck")
     gate_v2.compute_gate_report(root)
@@ -54,7 +55,7 @@ def test_land_answers_from_the_stale_head_while_a_live_open_blocks(root, monkeyp
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds the wall a blocked open may hold the landing")
-def test_land_refuses_naming_the_file_when_the_blocked_open_has_no_stale_head(root, monkeypatch):
+def test_land_refuses_naming_the_file_when_the_blocked_open_has_no_stale_head(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(root, "ok")
     blocked = _write(root, "stuck")
     blk = _Block(monkeypatch, blocked.as_posix())

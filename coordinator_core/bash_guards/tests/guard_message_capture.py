@@ -85,6 +85,8 @@ from coordinator_core.bash_guards._platform_verdict import (
     resolve_host_is_windows as _resolve_host_is_windows_public,
 )
 from coordinator_core.session.guard_unlock_sentinel import annotate_deny as _annotate_unlock
+from pathlib import Path
+import pytest
 
 
 @dataclass(frozen=True)
@@ -188,7 +190,7 @@ def _bash_payload(command: str, session_id: str) -> Dict[str, Any]:
     }
 
 
-def test_seam_captures_a_firing_guard_with_name_band_envelope():
+def test_seam_captures_a_firing_guard_with_name_band_envelope() -> None:
     """`no-verify` (CONFINEMENT_DENY) fires on a `--no-verify` commit and the
     seam attributes name/band alongside the envelope -- attribution
     `evaluate_payload_json`'s bare-envelope return never carries."""
@@ -210,7 +212,7 @@ def test_seam_captures_a_firing_guard_with_name_band_envelope():
     assert "no-verify" not in hso
 
 
-def test_seam_captures_a_non_firing_guard_as_none_envelope():
+def test_seam_captures_a_non_firing_guard_as_none_envelope() -> None:
     cmd = "git status"
     sid = "guard-message-capture-nonfiring"
     capture = capture_one_guard(
@@ -227,8 +229,8 @@ def test_seam_captures_a_non_firing_guard_as_none_envelope():
 
 
 def test_seam_captures_two_different_band_guards_on_the_same_input_no_short_circuit(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """The no-short-circuit proof this chunk exists for: `git commit
     --no-verify -m "msg"` fires BOTH `no-verify` (CONFINEMENT_DENY, deny)
     and `git-commit-safe-commit-advise` (ADVISORY_REWRITE, allow+advisory)
@@ -265,7 +267,7 @@ def test_seam_captures_two_different_band_guards_on_the_same_input_no_short_circ
     assert deny.band != advisory.band
 
 
-def test_seam_pins_host_is_windows_explicitly_per_cell():
+def test_seam_pins_host_is_windows_explicitly_per_cell() -> None:
     # Seam-confirmed multiprobe shape -- same fixture literal as
     # `test_guard_multiprobe_banner.py`'s `_BANNER_CMD_CONFIRMED`. The guard's
     # Windows deny leg is retired (DR-280): both legs advise. The pin is that

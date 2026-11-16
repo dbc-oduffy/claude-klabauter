@@ -82,7 +82,38 @@ def test_over_bound_carries_advisory_and_leaves_result_alone(tmp_path, monkeypat
 def test_advisory_names_the_hand_edit_size(tmp_path, monkeypatch):
     over = _repo(tmp_path, files=3, lines_each=13)
     stdout, _, _ = _run(monkeypatch, over, _FAMILY_ENV["codex"], f"nag-size-{tmp_path.name}")
-    assert "3 files / 39 lines" in json.loads(stdout)["advisory"]
+    assert "at least 3 files / 39 lines" in json.loads(stdout)["advisory"]
+
+
+def _stamp(repo: Path, sid: str) -> Path:
+    from coordinator_core.session import op_dispatch_nag, xs_lane_budget
+
+    return xs_lane_budget.lane_path(repo, sid).parent / op_dispatch_nag._STAMP_FILENAME
+
+
+def test_nag_window_is_stamped_once_the_advisory_is_printed(tmp_path, monkeypatch):
+    over = _repo(tmp_path / "over", files=3, lines_each=13)
+    sid = f"nag-stamp-{tmp_path.name}"
+    stamp = _stamp(over, sid)
+    stamp.unlink(missing_ok=True)
+    stdout, _, _ = _run(monkeypatch, over, _FAMILY_ENV["codex"], sid)
+    assert json.loads(stdout).get("advisory") and stamp.exists()
+
+    under = _repo(tmp_path / "under", files=1, lines_each=5)
+    sid2 = f"nag-nostamp-{tmp_path.name}"
+    stamp2 = _stamp(under, sid2)
+    stamp2.unlink(missing_ok=True)
+    _run(monkeypatch, under, _FAMILY_ENV["codex"], sid2)
+    assert not stamp2.exists()
+
+
+def test_bare_mode_stamps_after_the_advisory_reaches_stderr(tmp_path, monkeypatch):
+    over = _repo(tmp_path, files=3, lines_each=13)
+    sid = f"nag-bare-stamp-{tmp_path.name}"
+    stamp = _stamp(over, sid)
+    stamp.unlink(missing_ok=True)
+    _, stderr, _ = _run(monkeypatch, over, _FAMILY_ENV["agy"], sid, ("--bare",))
+    assert stderr.strip() and stamp.exists()
 
 
 def _repo_one_file(tmp_path: Path) -> Path:

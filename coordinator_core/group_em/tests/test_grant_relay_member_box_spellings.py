@@ -14,6 +14,7 @@ from coordinator_core.group_em import (
     session_registry,
     suite_grant,
 )
+from pathlib import Path
 
 NOW = 1_800_000_000.0
 HOLDER, SID = "sid-holder", "6e46574c-65ae-4c2f-a79e-fec5f2cfcc01"
@@ -27,21 +28,21 @@ class _Mem:
     class MembershipError(Exception):
         pass
 
-    def verified_members(self, home, run=None):
+    def verified_members(self, home, run=None) -> list[dict[str, str]]:
         return MEMBERS
 
 
 class _Transport:
-    def __init__(self):
+    def __init__(self) -> None:
         self.envelopes = []
 
-    def deliver_grant(self, box, envelope):
+    def deliver_grant(self, box, envelope) -> dict[str, bool]:
         self.envelopes.append(envelope)
         return {"ok": True}
 
 
 @pytest.fixture
-def relay(tmp_path, monkeypatch):
+def relay(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     directory = tmp_path / "state" / "group-em"
     directory.mkdir(parents=True)
     monkeypatch.setattr(nomination, "entry_status", lambda *a, **k: {"status": "verified"})
@@ -71,7 +72,7 @@ def _grant(relay, grantee):
 @pytest.mark.parametrize(
     "form", ["Machine-b", "machine-b", "MACHINE-B", "Machine-b.local", "machine-b.local", "example-operator@Machine-b.local"]
 )
-def test_every_machine_b_form_relays_under_the_membership_box_id(relay, form):
+def test_every_machine_b_form_relays_under_the_membership_box_id(relay, form) -> None:
     result = _grant(relay, f"{form}:{SID}")
     assert result.ok, result.reason
     assert relay["dialled"] == ["Machine-b"]
@@ -80,12 +81,12 @@ def test_every_machine_b_form_relays_under_the_membership_box_id(relay, form):
 
 
 @pytest.mark.parametrize("form", ["stranger", "stranger.local", "wrong-user@Machine-b.local"])
-def test_a_head_the_membership_does_not_name_is_left_as_typed(relay, form):
+def test_a_head_the_membership_does_not_name_is_left_as_typed(relay, form) -> None:
     assert suite_grant._member_host_key(f"{form}:{SID}", None) == f"{form}:{SID}"
 
 
 @pytest.fixture
-def receiver(tmp_path, monkeypatch):
+def receiver(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Issuer home A signs; receiver home B is a box whose box.json id is ``Machine-b``."""
     home_a, home_b = tmp_path / "home-a", tmp_path / "home-b"
     repo = tmp_path / "repo"
@@ -127,7 +128,7 @@ def _envelope(r, grantee_box):
 
 
 @pytest.mark.parametrize("stamped", ["Machine-b", "machine-b", "MACHINE-B", "machine-b.local", "Machine-b.local"])
-def test_receiver_accepts_an_alias_of_its_own_box_and_check_reads_granted(receiver, stamped):
+def test_receiver_accepts_an_alias_of_its_own_box_and_check_reads_granted(receiver, stamped) -> None:
     envelope = _envelope(receiver, stamped)
     assert suite_grant.receive_relayed_grant(envelope, now=NOW) == {"ok": True, "reason": "received"}
     granted, _record = suite_grant.check_group_em_suite_grant(
@@ -137,7 +138,7 @@ def test_receiver_accepts_an_alias_of_its_own_box_and_check_reads_granted(receiv
 
 
 @pytest.mark.parametrize("stamped", ["mac-mini", "Machineb2", "other.local", "local", ""])
-def test_receiver_still_refuses_another_box_and_check_reads_ungranted(receiver, stamped):
+def test_receiver_still_refuses_another_box_and_check_reads_ungranted(receiver, stamped) -> None:
     envelope = _envelope(receiver, stamped)
     assert suite_grant.receive_relayed_grant(envelope, now=NOW) == {"ok": False, "reason": "wrong_grantee_box"}
     planted = suite_grant._relayed_path(SID, None, receiver["b"])
@@ -149,12 +150,12 @@ def test_receiver_still_refuses_another_box_and_check_reads_ungranted(receiver, 
     assert granted is False
 
 
-def test_an_unconfigured_receiver_never_folds_an_alias(tmp_path):
+def test_an_unconfigured_receiver_never_folds_an_alias(tmp_path: Path) -> None:
     assert suite_grant.names_this_box("local", tmp_path) is True
     assert suite_grant.names_this_box("LOCAL", tmp_path) is False
 
 
-def test_a_membership_failure_leaves_the_grantee_as_typed(relay, monkeypatch):
+def test_a_membership_failure_leaves_the_grantee_as_typed(relay, monkeypatch: pytest.MonkeyPatch) -> None:
     class _Broken(_Mem):
         def verified_members(self, home, run=None):
             raise self.MembershipError("unpinned")

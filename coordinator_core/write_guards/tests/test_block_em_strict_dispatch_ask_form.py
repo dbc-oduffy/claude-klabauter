@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from coordinator_core.write_guards import block_em_strict_dispatch_code_write as guard
+from pathlib import Path
+import pytest
 
 
-def test_no_sizing_refusal_names_ask_form_and_target(monkeypatch, tmp_path):
+def test_no_sizing_refusal_names_ask_form_and_target(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     monkeypatch.setattr(guard, "resolve_repo_root", lambda cwd: str(tmp_path))
     monkeypatch.setattr(guard, "_is_subagent_session", lambda sid, root: False)

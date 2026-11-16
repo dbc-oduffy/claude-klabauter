@@ -4,6 +4,7 @@ import pytest
 
 from coordinator_core import machine_profile
 from coordinator_core.hooks import block_worktree_tool, guard_python_syntax_on_write
+from pathlib import Path
 
 _GLOBAL = "MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL"
 _WORKTREE_KEY = _GLOBAL + "_BLOCK-WORKTREE-TOOL"
@@ -22,7 +23,7 @@ def _bad_write(tmp_path):
 
 
 @pytest.fixture
-def isolated(monkeypatch, tmp_path):
+def isolated(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     reg = tmp_path / "reg"
     reg.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
@@ -36,12 +37,12 @@ def _denies(result):
     return (result.get("hookSpecificOutput") or {}).get("permissionDecision") == "deny"
 
 
-def _flag(mp, key, value):
+def _flag(mp, key, value) -> None:
     mp.setenv(key, value)
     machine_profile.reset_cache()
 
 
-def test_no_flags_registered_guard_denies_and_unregistered_guard_advises(isolated, tmp_path):
+def test_no_flags_registered_guard_denies_and_unregistered_guard_advises(isolated, tmp_path: Path) -> None:
     out = block_worktree_tool._handler(dict(_ENTER))
     assert _denies(out)
     assert out["hookSpecificOutput"]["permissionDecisionReason"]
@@ -50,20 +51,20 @@ def test_no_flags_registered_guard_denies_and_unregistered_guard_advises(isolate
     assert out["hookSpecificOutput"]["additionalContext"]
 
 
-def test_global_strict_denies_only_the_registered_guard(isolated, tmp_path):
+def test_global_strict_denies_only_the_registered_guard(isolated, tmp_path: Path) -> None:
     _flag(isolated, _GLOBAL, "strict")
     assert _denies(block_worktree_tool._handler(dict(_ENTER)))
     assert not _denies(guard_python_syntax_on_write._handler(_bad_write(tmp_path)))
 
 
-def test_per_guard_strict_does_not_lift_an_unregistered_guard(isolated, tmp_path):
+def test_per_guard_strict_does_not_lift_an_unregistered_guard(isolated, tmp_path: Path) -> None:
     _flag(isolated, _GLOBAL, "warn")
     _flag(isolated, _SYNTAX_KEY, "strict")
     assert not _denies(guard_python_syntax_on_write._handler(_bad_write(tmp_path)))
     assert _denies(block_worktree_tool._handler(dict(_ENTER)))
 
 
-def test_per_guard_off_does_not_silence_a_registered_deny(isolated):
+def test_per_guard_off_does_not_silence_a_registered_deny(isolated) -> None:
     _flag(isolated, _WORKTREE_KEY, "off")
     assert _denies(block_worktree_tool._handler(dict(_ENTER)))
 
@@ -79,7 +80,7 @@ def test_per_guard_off_does_not_silence_a_registered_deny(isolated):
         "guard_repo_setup_claude_home_refusal",
     ],
 )
-def test_guard_name_is_kebab_of_module(modname):
+def test_guard_name_is_kebab_of_module(modname) -> None:
     import importlib
 
     mod = importlib.import_module("coordinator_core.hooks." + modname)

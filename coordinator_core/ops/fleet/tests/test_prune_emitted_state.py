@@ -10,13 +10,14 @@ import pytest
 
 from coordinator_core.ops.fleet import prune_emitted as pe
 from coordinator_core.session import record_homes
+from pathlib import Path
 
 OLD = time.time() - 3 * 86400
 BLITZ = record_homes.home_dir("", "plan-blitz").replace(os.sep, "/") + "/20261001T000000Z"
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     state = {"tracked": set(), "live": set(), "spine_calls": 0}
 
@@ -37,11 +38,11 @@ def env(tmp_path, monkeypatch):
     return tmp_path, state
 
 
-def plan(root, name, status):
+def plan(root, name, status) -> None:
     (root / "docs" / "plans" / name).write_text(f"---\nstatus: {status}\n---\nb\n", encoding="utf-8")
 
 
-def fire(root, rel_dir, stem, plan_field, age=OLD, script=True):
+def fire(root, rel_dir, stem, plan_field, age: float = OLD, script: bool = True):
     d = root / rel_dir
     d.mkdir(parents=True, exist_ok=True)
     files = []
@@ -56,7 +57,7 @@ def fire(root, rel_dir, stem, plan_field, age=OLD, script=True):
     return files
 
 
-def run(root, dry=False):
+def run(root, dry: bool = False):
     return pe.prune_emitted_output(root, root / ".git", dry_run=dry)
 
 
@@ -67,7 +68,7 @@ def reasons(res, key):
 # fire-*.mjs: the script and its receipt are one unit.
 
 
-def test_fire_deleted_when_owner_implemented_and_old(env):
+def test_fire_deleted_when_owner_implemented_and_old(env) -> None:
     root, _ = env
     plan(root, "p.md", "implemented")
     files = fire(root, BLITZ, "fire-0-1", "p.md")
@@ -76,14 +77,14 @@ def test_fire_deleted_when_owner_implemented_and_old(env):
     assert not any(f.exists() for f in files)
 
 
-def test_fire_abandoned_owner_deleted(env):
+def test_fire_abandoned_owner_deleted(env) -> None:
     root, _ = env
     plan(root, "p.md", "abandoned")
     fire(root, BLITZ, "fire-0-1", "p.md")
     assert reasons(run(root, dry=True), "candidates")["fire-0-1.mjs"] == "plan-abandoned"
 
 
-def test_fire_tracked_kept(env):
+def test_fire_tracked_kept(env) -> None:
     root, state = env
     plan(root, "p.md", "implemented")
     files = fire(root, BLITZ, "fire-0-1", "p.md")
@@ -93,7 +94,7 @@ def test_fire_tracked_kept(env):
     assert all(f.exists() for f in files) and res["pruned"] == []
 
 
-def test_fire_too_young_kept(env):
+def test_fire_too_young_kept(env) -> None:
     root, _ = env
     plan(root, "p.md", "implemented")
     files = fire(root, BLITZ, "fire-0-1", "p.md", age=time.time() - 3600)
@@ -101,7 +102,7 @@ def test_fire_too_young_kept(env):
     assert all(f.exists() for f in files)
 
 
-def test_fire_owner_open_kept(env):
+def test_fire_owner_open_kept(env) -> None:
     root, _ = env
     plan(root, "p.md", "executing")
     files = fire(root, BLITZ, "fire-0-1", "p.md")
@@ -109,7 +110,7 @@ def test_fire_owner_open_kept(env):
     assert all(f.exists() for f in files)
 
 
-def test_fire_null_plan_or_missing_plan_or_no_receipt_kept(env):
+def test_fire_null_plan_or_missing_plan_or_no_receipt_kept(env) -> None:
     root, _ = env
     fire(root, BLITZ, "fire-0-1", None)
     fire(root, BLITZ, "fire-0-2", "gone.md")
@@ -122,7 +123,7 @@ def test_fire_null_plan_or_missing_plan_or_no_receipt_kept(env):
 # *.mjs.emitted.json receipts (non-fire): a receipt alone is the unit.
 
 
-def test_receipt_deleted_when_owner_closed_and_old(env):
+def test_receipt_deleted_when_owner_closed_and_old(env) -> None:
     root, _ = env
     plan(root, "p.md", "implemented")
     files = fire(root, "state/scratch/warp", "c9-m.workflow", "p.md", script=False)
@@ -131,7 +132,7 @@ def test_receipt_deleted_when_owner_closed_and_old(env):
     assert not files[0].exists()
 
 
-def test_receipt_tracked_kept(env):
+def test_receipt_tracked_kept(env) -> None:
     root, state = env
     plan(root, "p.md", "implemented")
     files = fire(root, "state/scratch/warp", "c9-m.workflow", "p.md", script=False)
@@ -141,7 +142,7 @@ def test_receipt_tracked_kept(env):
     assert files[0].exists()
 
 
-def test_receipt_too_young_kept(env):
+def test_receipt_too_young_kept(env) -> None:
     root, _ = env
     plan(root, "p.md", "implemented")
     files = fire(root, "state/scratch/warp", "c9-m.workflow", "p.md", age=time.time() - 3600, script=False)
@@ -149,7 +150,7 @@ def test_receipt_too_young_kept(env):
     assert files[0].exists()
 
 
-def test_receipt_owner_open_or_live_kept(env):
+def test_receipt_owner_open_or_live_kept(env) -> None:
     root, state = env
     plan(root, "open.md", "approved")
     plan(root, "live.md", "implemented")
@@ -161,7 +162,7 @@ def test_receipt_owner_open_or_live_kept(env):
     assert got["b.workflow.mjs.emitted.json"] == "live-claim"
 
 
-def test_unreadable_head_keeps_state_files(env, monkeypatch):
+def test_unreadable_head_keeps_state_files(env, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _ = env
     plan(root, "p.md", "implemented")
     files = fire(root, BLITZ, "fire-0-1", "p.md")
@@ -171,7 +172,7 @@ def test_unreadable_head_keeps_state_files(env, monkeypatch):
     assert all(f.exists() for f in files)
 
 
-def test_single_spine_call_covers_plans_and_state(env):
+def test_single_spine_call_covers_plans_and_state(env) -> None:
     root, state = env
     plan(root, "p.md", "implemented")
     for i in range(5):
@@ -186,7 +187,7 @@ def test_single_spine_call_covers_plans_and_state(env):
 WARP = "state/scratch/warp"
 
 
-def test_pair_deleted_together(env):
+def test_pair_deleted_together(env) -> None:
     root, _ = env
     plan(root, "p.md", "implemented")
     files = fire(root, WARP, "c9-m.workflow", "p.md")
@@ -195,7 +196,7 @@ def test_pair_deleted_together(env):
     assert not any(f.exists() for f in files)
 
 
-def test_pair_tracked_script_keeps_both(env):
+def test_pair_tracked_script_keeps_both(env) -> None:
     root, state = env
     plan(root, "p.md", "implemented")
     files = fire(root, WARP, "c9-m.workflow", "p.md")
@@ -205,7 +206,7 @@ def test_pair_tracked_script_keeps_both(env):
     assert set(reasons(res, "retained").values()) == {"tracked-at-head"}
 
 
-def test_pair_young_script_keeps_both(env):
+def test_pair_young_script_keeps_both(env) -> None:
     root, _ = env
     plan(root, "p.md", "implemented")
     files = fire(root, WARP, "c9-m.workflow", "p.md")
@@ -215,7 +216,7 @@ def test_pair_young_script_keeps_both(env):
     assert set(reasons(res, "retained").values()) == {"too-young"}
 
 
-def test_bare_non_fire_script_untouched(env):
+def test_bare_non_fire_script_untouched(env) -> None:
     root, _ = env
     d = root / WARP
     d.mkdir(parents=True)
@@ -226,7 +227,7 @@ def test_bare_non_fire_script_untouched(env):
     assert s.exists() and res["pruned"] == [] and res["retained"] == []
 
 
-def _landing(root, rel_dir, name, age):
+def _landing(root, rel_dir, name, age) -> None:
     f = root / rel_dir / name
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text("{}")
@@ -237,7 +238,7 @@ def _paths(res, key):
     return {r["path"] for r in res[key]}
 
 
-def test_blitz_fire_closed_by_its_waves_landing(env):
+def test_blitz_fire_closed_by_its_waves_landing(env) -> None:
     root, _ = env
     fire(root, BLITZ, "fire-2-1", None)
     fire(root, BLITZ, "fire-3-1", None)
@@ -249,7 +250,7 @@ def test_blitz_fire_closed_by_its_waves_landing(env):
     assert len(res["retained"]) == 2
 
 
-def test_blitz_closed_fire_without_receipt_is_deleted(env):
+def test_blitz_closed_fire_without_receipt_is_deleted(env) -> None:
     root, _ = env
     d = root / BLITZ
     d.mkdir(parents=True)
@@ -259,7 +260,7 @@ def test_blitz_closed_fire_without_receipt_is_deleted(env):
     assert _paths(run(root, dry=True), "candidates") == {f"{BLITZ}/fire-1-1.mjs"}
 
 
-def test_blitz_young_closed_fire_kept(env):
+def test_blitz_young_closed_fire_kept(env) -> None:
     root, _ = env
     fire(root, BLITZ, "fire-1-1", None, age=time.time())
     _landing(root, BLITZ, "wave-1.landing.json", OLD)
@@ -268,14 +269,14 @@ def test_blitz_young_closed_fire_kept(env):
     assert {r["reason"] for r in res["retained"]} == {"too-young"}
 
 
-def test_blitz_hash_suffixed_landing_does_not_close(env):
+def test_blitz_hash_suffixed_landing_does_not_close(env) -> None:
     root, _ = env
     fire(root, BLITZ, "fire-1-1", None)
     _landing(root, BLITZ, "wave-1.landing.abc123.json", OLD)
     assert not run(root)["candidates"]
 
 
-def test_blitz_repair_fire_with_newer_landing_deleted(env):
+def test_blitz_repair_fire_with_newer_landing_deleted(env) -> None:
     root, _ = env
     fire(root, BLITZ, "repair-fire-1", None, age=OLD)
     _landing(root, BLITZ, "wave-4.landing.json", OLD + 3600)
@@ -284,7 +285,7 @@ def test_blitz_repair_fire_with_newer_landing_deleted(env):
     assert {r["reason"] for r in res["candidates"]} == {"landed"}
 
 
-def test_blitz_repair_fire_with_older_landing_kept(env):
+def test_blitz_repair_fire_with_older_landing_kept(env) -> None:
     root, _ = env
     fire(root, BLITZ, "repair-fire-1", None, age=OLD)
     _landing(root, BLITZ, "wave-4.landing.json", OLD - 3600)
@@ -293,7 +294,7 @@ def test_blitz_repair_fire_with_older_landing_kept(env):
     assert {r["reason"] for r in res["retained"]} == {"owner-unresolved"}
 
 
-def test_blitz_landing_does_not_override_live_claim(env):
+def test_blitz_landing_does_not_override_live_claim(env) -> None:
     root, state = env
     plan(root, "p.md", "executing")
     state["live"].add("p.md")
@@ -309,7 +310,7 @@ def test_blitz_landing_does_not_override_live_claim(env):
 ANCIENT = time.time() - 8 * 86400
 
 
-def _multi(root, rel_dir, stem, plans, age=OLD):
+def _multi(root, rel_dir, stem, plans, age: float = OLD):
     files = fire(root, rel_dir, stem, None, age=age)
     receipt = root / rel_dir / f"{stem}.mjs.emitted.json"
     receipt.write_text(json.dumps({"plan": None, "plans": plans}))
@@ -317,7 +318,7 @@ def _multi(root, rel_dir, stem, plans, age=OLD):
     return files
 
 
-def test_unresolved_older_than_seven_days_ages_out(env):
+def test_unresolved_older_than_seven_days_ages_out(env) -> None:
     root, _ = env
     files = fire(root, WARP, "legacy.workflow", None, age=ANCIENT)
     res = run(root)
@@ -325,7 +326,7 @@ def test_unresolved_older_than_seven_days_ages_out(env):
     assert not any(f.exists() for f in files)
 
 
-def test_unresolved_under_seven_days_kept(env):
+def test_unresolved_under_seven_days_kept(env) -> None:
     root, _ = env
     files = fire(root, WARP, "legacy.workflow", None, age=time.time() - 6 * 86400)
     res = run(root)
@@ -333,7 +334,7 @@ def test_unresolved_under_seven_days_kept(env):
     assert set(reasons(res, "retained").values()) == {"owner-unresolved"}
 
 
-def test_unresolved_tracked_old_kept(env):
+def test_unresolved_tracked_old_kept(env) -> None:
     root, state = env
     files = fire(root, WARP, "legacy.workflow", None, age=ANCIENT)
     state["tracked"].add(f"{WARP}/legacy.workflow.mjs")
@@ -342,7 +343,7 @@ def test_unresolved_tracked_old_kept(env):
     assert set(reasons(res, "retained").values()) == {"tracked-at-head"}
 
 
-def test_owner_open_never_ages_out(env):
+def test_owner_open_never_ages_out(env) -> None:
     root, _ = env
     plan(root, "p.md", "executing")
     files = fire(root, WARP, "a.workflow", "p.md", age=ANCIENT)
@@ -351,7 +352,7 @@ def test_owner_open_never_ages_out(env):
     assert set(reasons(res, "retained").values()) == {"owner-open"}
 
 
-def test_multi_plan_all_closed_deleted(env):
+def test_multi_plan_all_closed_deleted(env) -> None:
     root, _ = env
     plan(root, "a.md", "implemented")
     plan(root, "b.md", "abandoned")
@@ -361,7 +362,7 @@ def test_multi_plan_all_closed_deleted(env):
     assert not any(f.exists() for f in files)
 
 
-def test_multi_plan_one_open_kept_even_when_ancient(env):
+def test_multi_plan_one_open_kept_even_when_ancient(env) -> None:
     root, _ = env
     plan(root, "a.md", "implemented")
     plan(root, "b.md", "executing")
@@ -371,7 +372,7 @@ def test_multi_plan_one_open_kept_even_when_ancient(env):
     assert set(reasons(res, "retained").values()) == {"owner-open"}
 
 
-def test_multi_plan_missing_plan_kept_until_aged(env):
+def test_multi_plan_missing_plan_kept_until_aged(env) -> None:
     root, _ = env
     plan(root, "a.md", "implemented")
     files = _multi(root, WARP, "m.workflow", ["a.md", "gone.md"], age=OLD)
@@ -380,7 +381,7 @@ def test_multi_plan_missing_plan_kept_until_aged(env):
     assert set(reasons(res, "retained").values()) == {"owner-unresolved"}
 
 
-def test_multi_plan_live_claim_kept(env):
+def test_multi_plan_live_claim_kept(env) -> None:
     root, state = env
     plan(root, "a.md", "implemented")
     plan(root, "b.md", "implemented")

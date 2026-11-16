@@ -7,21 +7,22 @@ import json
 from coordinator_core import workstream_complete as wsc
 from coordinator_core.workstream_complete import apply as wsc_apply
 from coordinator_core.workstream_complete.judgments import build_no_governing_plan_judgment_point
+import pytest
 
 
-def test_take_plan_flag_both_spellings_and_missing_value():
+def test_take_plan_flag_both_spellings_and_missing_value() -> None:
     assert wsc.take_plan_flag(["--plan", "p.md", "--decisions", "{}"]) == (["--decisions", "{}"], "p.md", None)
     assert wsc.take_plan_flag(["--plan=p.md"]) == ([], "p.md", None)
     assert wsc.take_plan_flag(["--plan"])[2] is not None
 
 
-def test_merge_plan_flag_never_overrides_decisions():
+def test_merge_plan_flag_never_overrides_decisions() -> None:
     assert wsc.merge_plan_flag(None, "p.md") == {"governing_plan_path": "p.md"}
     assert wsc.merge_plan_flag({"governing_plan_path": "x.md"}, "p.md") == {"governing_plan_path": "x.md"}
     assert wsc.merge_plan_flag({"a": 1}, None) == {"a": 1}
 
 
-def test_brief_cli_passes_plan_into_decisions(monkeypatch, capsys):
+def test_brief_cli_passes_plan_into_decisions(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     seen = {}
     monkeypatch.setattr(wsc, "brief", lambda decisions, *a, **k: seen.update(decisions) or {})
     assert wsc.main(["brief", "--plan", "docs/plans/p.md"]) == wsc.EXIT_OK
@@ -29,11 +30,11 @@ def test_brief_cli_passes_plan_into_decisions(monkeypatch, capsys):
     capsys.readouterr()
 
 
-def test_brief_cli_rejects_plan_without_value(capsys):
+def test_brief_cli_rejects_plan_without_value(capsys: pytest.CaptureFixture[str]) -> None:
     assert wsc.main(["brief", "--plan"]) == wsc.EXIT_USAGE
 
 
-def test_apply_cli_passes_plan_into_decisions(monkeypatch, capsys):
+def test_apply_cli_passes_plan_into_decisions(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     seen = {}
 
     def fake_apply(decisions=None):
@@ -46,5 +47,5 @@ def test_apply_cli_passes_plan_into_decisions(monkeypatch, capsys):
     json.loads(capsys.readouterr().out)
 
 
-def test_no_governing_plan_evidence_names_the_flag():
+def test_no_governing_plan_evidence_names_the_flag() -> None:
     assert "--plan" in build_no_governing_plan_judgment_point()["evidence"]

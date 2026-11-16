@@ -9,9 +9,11 @@ from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 from coordinator_core.ops.dispatch_emit import write_baseline as wb
 from coordinator_core.ops.dispatch_emit.ask_contract import ManifestRow, StageManifest
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest
+from pathlib import Path
+import pytest
 
 
-def _manifest(root, *, kept="", adopts=False, baseline=True):
+def _manifest(root, *, kept: str = "", adopts: bool = False, baseline: bool = True) -> StageManifest:
     (root / "a.py").write_text("one\n")
     row = ManifestRow(
         id="C1", agent_type="x", model="m", brief_path="b", writes=("a.py",), wave=0,
@@ -23,11 +25,11 @@ def _manifest(root, *, kept="", adopts=False, baseline=True):
     )
 
 
-def _request(review_only=False):
+def _request(review_only: bool = False) -> CommitRequest:
     return CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",)),), review_only=review_only)
 
 
-def test_unwritten_path_refuses_and_a_written_one_does_not(tmp_path):
+def test_unwritten_path_refuses_and_a_written_one_does_not(tmp_path: Path) -> None:
     m = _manifest(tmp_path)
     out = tc._no_change_refusal(tmp_path, m, _request(), None)
     assert out["refused"] == wb.NO_CHANGE_REFUSAL and out[wb.MEANT_TO_LAND_KEY] == ["a.py"]
@@ -51,29 +53,29 @@ def _crlf_case(tmp_path, monkeypatch, index_sha_of):
     return tc._no_change_refusal(tmp_path, m, _request(), None)
 
 
-def test_unchanged_crlf_path_routes_revise_the_ask(tmp_path, monkeypatch):
+def test_unchanged_crlf_path_routes_revise_the_ask(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _crlf_case(tmp_path, monkeypatch, lambda kw: kw.blob_sha(b"one\n"))
     assert "revise the ask" in out["error"] and "predates" not in out["error"]
 
 
-def test_crlf_path_with_a_different_index_blob_still_routes_pre_existing_dirt(tmp_path, monkeypatch):
+def test_crlf_path_with_a_different_index_blob_still_routes_pre_existing_dirt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _crlf_case(tmp_path, monkeypatch, lambda kw: kw.blob_sha(b"other\n"))
     assert "predates the run" in out["error"]
 
 
-def test_review_recorded_edit_lifts_the_refusal(tmp_path):
+def test_review_recorded_edit_lifts_the_refusal(tmp_path: Path) -> None:
     m = _manifest(tmp_path)
     assert tc._no_change_refusal(tmp_path, m, _request(), {"tests": {"edited": ["a.py"]}}) is None
 
 
-def test_exemptions_keep_todays_behaviour(tmp_path):
+def test_exemptions_keep_todays_behaviour(tmp_path: Path) -> None:
     assert tc._no_change_refusal(tmp_path, _manifest(tmp_path, baseline=False), _request(), None) is None
     assert tc._no_change_refusal(tmp_path, _manifest(tmp_path, kept="run0"), _request(), None) is None
     assert tc._no_change_refusal(tmp_path, _manifest(tmp_path), _request(review_only=True), None) is None
     assert tc._no_change_refusal(tmp_path, _manifest(tmp_path), CommitRequest(chunks=()), None) is None
 
 
-def test_ledger_rule_refuses_unwritten_and_skips_kept_adopting_or_written(tmp_path):
+def test_ledger_rule_refuses_unwritten_and_skips_kept_adopting_or_written(tmp_path: Path) -> None:
     ledger = SimpleNamespace(items=(1,), all_of_pm_ask=False)
     verdict = {"items": [{"id": "R1", "status": "post_commit"}]}
     out = tc._pre_existing_dirt_refusal(tmp_path, _manifest(tmp_path), verdict, ledger)

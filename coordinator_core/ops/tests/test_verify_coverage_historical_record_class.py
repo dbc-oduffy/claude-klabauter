@@ -8,17 +8,19 @@ import os
 from datetime import date, timedelta
 
 from coordinator_core.ops.verify_coverage import is_historical_plan, main
+from pathlib import Path
+import pytest
 
 QUOTE = "The retired agent `coordinator:gone-agent` was removed.\n"
 
 
-def _write(path, content):
+def _write(path, content) -> None:
     os.makedirs(os.path.dirname(str(path)), exist_ok=True)
     with open(str(path), "w", encoding="utf-8") as fh:
         fh.write(content)
 
 
-def _plan(status, created):
+def _plan(status, created) -> str:
     return f"---\ntitle: x\nstatus: {status}\ncreated: {created}\n---\n\n{QUOTE}"
 
 
@@ -34,7 +36,7 @@ def _sweep(tmp_path, files, capsys):
     return code, sorted(v["file"] for v in out["violations"])
 
 
-def test_historical_classes_exempt_and_live_doc_still_halts(tmp_path, capsys):
+def test_historical_classes_exempt_and_live_doc_still_halts(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     recent = date.today().isoformat()
     old = (date.today() - timedelta(days=200)).isoformat()
     code, flagged = _sweep(tmp_path, {
@@ -48,7 +50,7 @@ def test_historical_classes_exempt_and_live_doc_still_halts(tmp_path, capsys):
     assert flagged == [os.path.join("docs", "live.md")]
 
 
-def test_delivery_records_and_archived_deferred_plans_exempt(tmp_path, capsys):
+def test_delivery_records_and_archived_deferred_plans_exempt(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     recent = date.today().isoformat()
     code, flagged = _sweep(tmp_path, {
         "docs/delivery/ask-1.md": QUOTE,
@@ -65,7 +67,7 @@ def test_delivery_records_and_archived_deferred_plans_exempt(tmp_path, capsys):
     ])
 
 
-def test_queue_grind_evidence_exempt_but_other_evidence_dirs_halt(tmp_path, capsys):
+def test_queue_grind_evidence_exempt_but_other_evidence_dirs_halt(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     code, flagged = _sweep(tmp_path, {
         "state/queue-grind/bug/evidence/20261111T004924Z/a.verify.md": QUOTE,
         "docs/evidence/live.md": QUOTE,
@@ -74,7 +76,7 @@ def test_queue_grind_evidence_exempt_but_other_evidence_dirs_halt(tmp_path, caps
     assert flagged == [os.path.join("docs", "evidence", "live.md")]
 
 
-def test_recent_unfinished_plan_still_halts(tmp_path, capsys):
+def test_recent_unfinished_plan_still_halts(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     code, flagged = _sweep(tmp_path, {
         "docs/plans/live.md": _plan("executing", date.today().isoformat()),
     }, capsys)
@@ -82,7 +84,7 @@ def test_recent_unfinished_plan_still_halts(tmp_path, capsys):
     assert flagged == [os.path.join("docs", "plans", "live.md")]
 
 
-def test_plan_review_sidecar_inherits_parent_verdict(tmp_path, capsys):
+def test_plan_review_sidecar_inherits_parent_verdict(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     old = (date.today() - timedelta(days=200)).isoformat()
     recent = date.today().isoformat()
     code, flagged = _sweep(tmp_path, {
@@ -102,7 +104,7 @@ def test_plan_review_sidecar_inherits_parent_verdict(tmp_path, capsys):
     ])
 
 
-def test_plan_predicate_boundaries(tmp_path):
+def test_plan_predicate_boundaries(tmp_path: Path) -> None:
     sweep = str(tmp_path)
     f = os.path.join(sweep, "docs", "plans", "p.md")
     today = date(2026, 11, 13)

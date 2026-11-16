@@ -32,9 +32,10 @@ from coordinator_core.ops.dispatch_emit import emit
 from coordinator_core.ops.dispatch_emit import op as dispatch_op
 from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
+from pathlib import Path
 
 
-def _wave_row(id_, writes, surface="dispatch_emit"):
+def _wave_row(id_, writes, surface: str = "dispatch_emit") -> WaveRow:
     return WaveRow(
         id=id_,
         title=f"title-{id_}",
@@ -88,18 +89,18 @@ capabilities: []
 """
 
 
-def _write_plan(tmp_path, *, frontmatter, name="fixture-plan.md"):
+def _write_plan(tmp_path, *, frontmatter, name: str = "fixture-plan.md"):
     path = tmp_path / name
     path.write_text(f"---\n{frontmatter}---\n\n# fixture\n{_SPINE_ONE_ROW}", encoding="utf-8")
     return path
 
 
 @pytest.fixture(autouse=True)
-def _clean_marker(monkeypatch):
+def _clean_marker(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(_FIDELITY_MARKER_ENV, raising=False)
 
 
-def test_marker_unset_with_a_failing_plan_emits_as_today(tmp_path, monkeypatch):
+def test_marker_unset_with_a_failing_plan_emits_as_today(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(_FIDELITY_MARKER_ENV, raising=False)
     plan_path = _write_plan(tmp_path, frontmatter=_FAILING_FM, name="marker-unset-failing.md")
     (tmp_path / "coordinator_core").mkdir()
@@ -109,7 +110,7 @@ def test_marker_unset_with_a_failing_plan_emits_as_today(tmp_path, monkeypatch):
     assert script
 
 
-def test_marker_set_with_a_failing_plan_refuses(tmp_path, monkeypatch):
+def test_marker_set_with_a_failing_plan_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(_FIDELITY_MARKER_ENV, "1")
     plan_path = _write_plan(tmp_path, frontmatter=_FAILING_FM, name="marker-set-failing.md")
     (tmp_path / "coordinator_core").mkdir()
@@ -118,7 +119,7 @@ def test_marker_set_with_a_failing_plan_refuses(tmp_path, monkeypatch):
         emit.emit_script(plan_path, repo_root=tmp_path, **REVIEW_KW)
 
 
-def test_marker_set_with_a_passing_plan_emits(tmp_path, monkeypatch):
+def test_marker_set_with_a_passing_plan_emits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(_FIDELITY_MARKER_ENV, "1")
     plan_path = _write_plan(tmp_path, frontmatter=_PASSING_FM, name="marker-set-passing.md")
     (tmp_path / "coordinator_core").mkdir()
@@ -128,7 +129,7 @@ def test_marker_set_with_a_passing_plan_emits(tmp_path, monkeypatch):
     assert script
 
 
-def test_fidelity_bar_calls_prep_gate_in_process_not_by_file_path():
+def test_fidelity_bar_calls_prep_gate_in_process_not_by_file_path() -> None:
     """CSF-C5's own instruction: call ``coordinator_core.roadmap.prep_gate``
     directly, never load a hyphenated CLI script by file path the way DoE's
     ``_load_mise_prep_gate`` does (there is no such indirection to load in
@@ -146,7 +147,7 @@ def test_fidelity_bar_calls_prep_gate_in_process_not_by_file_path():
 # ---------------------------------------------------------------------------
 
 
-def test_declared_writes_are_rendered_with_the_test_path_in_scope():
+def test_declared_writes_are_rendered_with_the_test_path_in_scope() -> None:
     row = _wave_row(
         "C1",
         ["coordinator_core/ops/foo.py", "coordinator_core/ops/tests/test_foo.py"],
@@ -160,13 +161,13 @@ def test_declared_writes_are_rendered_with_the_test_path_in_scope():
     assert "IN SCOPE and is expected to be written" in out
 
 
-def test_brief_names_an_existing_listed_path_as_an_incumbent_to_read_first():
+def test_brief_names_an_existing_listed_path_as_an_incumbent_to_read_first() -> None:
     out = emit._declared_scope_block(_wave_row("C1", ["a/one.py"]))
     assert "already exists is an incumbent" in out
     assert "BEFORE writing" in out
 
 
-def test_brief_requires_examined_and_changed_as_separate_counts():
+def test_brief_requires_examined_and_changed_as_separate_counts() -> None:
     row = _wave_row("C1", ["a/one.py", "a/two.py", "a/three.py"])
     out = emit._declared_scope_block(row)
     assert "examined and changed as two separate counts" in out
@@ -174,21 +175,21 @@ def test_brief_requires_examined_and_changed_as_separate_counts():
     assert "A path you never opened is an omission" in out
 
 
-def test_empty_writes_renders_as_a_positive_no_files_claim():
+def test_empty_writes_renders_as_a_positive_no_files_claim() -> None:
     row = _wave_row("C1", [])
     out = emit._declared_scope_block(row)
     assert "writes: []" in out and "NO files" in out
     assert "- `" not in out.split("## Files you may write")[1]
 
 
-def test_undeclared_writes_instructs_stop_and_report_blocked():
+def test_undeclared_writes_instructs_stop_and_report_blocked() -> None:
     row = _wave_row("C1", UNDECLARED)
     out = emit._declared_scope_block(row)
     assert "UNDECLARED" in out
     assert "stop and report BLOCKED" in out.lower() or "Stop and report BLOCKED" in out
 
 
-def test_row_prompt_carries_the_declared_scope_block():
+def test_row_prompt_carries_the_declared_scope_block() -> None:
     """The block reaches the composed row prompt (the engine's own
     inlined-prompt shape, replacing DoE's on-disk brief append)."""
     row = _wave_row("C1", ["coordinator_core/ops/foo.py"])
@@ -208,20 +209,20 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def test_guard_against_fired_drift_passes_on_matching_sha256(tmp_path):
+def test_guard_against_fired_drift_passes_on_matching_sha256(tmp_path: Path) -> None:
     script_path = tmp_path / "plan.workflow.mjs"
     script_path.write_bytes(b"console.log(1);\n")
     dispatch_op.guard_against_fired_drift(script_path, _sha256("console.log(1);\n"))
 
 
-def test_guard_against_fired_drift_refuses_on_a_peer_overwrite(tmp_path):
+def test_guard_against_fired_drift_refuses_on_a_peer_overwrite(tmp_path: Path) -> None:
     script_path = tmp_path / "plan.workflow.mjs"
     script_path.write_text("console.log(1);\n", encoding="utf-8")
     with pytest.raises(dispatch_op.FiredDriftError):
         dispatch_op.guard_against_fired_drift(script_path, _sha256("console.log(2);\n"))
 
 
-def test_guard_against_fired_drift_is_a_noop_on_a_missing_script(tmp_path):
+def test_guard_against_fired_drift_is_a_noop_on_a_missing_script(tmp_path: Path) -> None:
     """A missing script is not this guard's refusal -- fire_workflow's own
     ScriptNotFoundError owns it."""
     script_path = tmp_path / "does-not-exist.mjs"
@@ -233,7 +234,7 @@ def test_guard_against_fired_drift_is_a_noop_on_a_missing_script(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_refuse_foreign_emission_is_called_from_the_registered_op():
+def test_refuse_foreign_emission_is_called_from_the_registered_op() -> None:
     """Confirms ``_refuse_foreign_emission`` is wired into the registered
     ``dispatch.emit`` handler's write path (``_dispatch_emit`` delegates to
     ``_dispatch_emit_body``, which writes through ``_emit_script_file``), not

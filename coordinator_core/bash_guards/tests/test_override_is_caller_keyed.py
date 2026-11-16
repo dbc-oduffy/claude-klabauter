@@ -27,16 +27,17 @@ import os
 from pathlib import Path
 
 from coordinator_core.bash_guards import dispatch_checks as dc
+import pytest
 
 
 _ENV_VAR = "COORDINATOR_ALLOW_RM"
 
 
-def _clear_env(monkeypatch):
+def _clear_env(monkeypatch) -> None:
     monkeypatch.delenv(_ENV_VAR, raising=False)
 
 
-def test_override_reads_payload_env_over_os_environ(monkeypatch):
+def test_override_reads_payload_env_over_os_environ(monkeypatch: pytest.MonkeyPatch) -> None:
     """A `payload["env"]` mapping wins over `os.environ` -- the core
     caller-keying behavior this chunk adds. `os.environ` says "0" (or is
     unset); `payload["env"]` says "1" -- the payload wins.
@@ -46,7 +47,7 @@ def test_override_reads_payload_env_over_os_environ(monkeypatch):
     assert dc._override(_ENV_VAR, payload=payload) is True
 
 
-def test_override_payload_env_can_withhold_an_os_environ_grant(monkeypatch):
+def test_override_payload_env_can_withhold_an_os_environ_grant(monkeypatch: pytest.MonkeyPatch) -> None:
     """The inverse: `os.environ` says "1" (a stale/frozen server-start
     value) but the CALLER's own resolved context says "0" -- the payload
     still wins, proving this is not just an OR-widening of the old check.
@@ -56,7 +57,7 @@ def test_override_payload_env_can_withhold_an_os_environ_grant(monkeypatch):
     assert dc._override(_ENV_VAR, payload=payload) is False
 
 
-def test_override_falls_back_to_os_environ_when_payload_is_none(monkeypatch):
+def test_override_falls_back_to_os_environ_when_payload_is_none(monkeypatch: pytest.MonkeyPatch) -> None:
     """No `payload` at all (every pre-C14c call site, and every direct
     function call in this file's own test suite) -- behavior is
     byte-identical to the pre-existing `os.environ`-only read.
@@ -67,7 +68,7 @@ def test_override_falls_back_to_os_environ_when_payload_is_none(monkeypatch):
     assert dc._override(_ENV_VAR) is False
 
 
-def test_override_falls_back_to_os_environ_when_payload_has_no_env_key(monkeypatch):
+def test_override_falls_back_to_os_environ_when_payload_has_no_env_key(monkeypatch: pytest.MonkeyPatch) -> None:
     """A `payload` dict that carries no `env` mapping (the shape of every
     real PreToolUse hook payload today, pre-C14b) falls back to
     `os.environ` unchanged -- this chunk does not require the wire shape to
@@ -78,7 +79,7 @@ def test_override_falls_back_to_os_environ_when_payload_has_no_env_key(monkeypat
     assert dc._override(_ENV_VAR, payload=payload) is True
 
 
-def test_override_falls_back_to_os_environ_when_payload_env_not_a_dict(monkeypatch):
+def test_override_falls_back_to_os_environ_when_payload_env_not_a_dict(monkeypatch: pytest.MonkeyPatch) -> None:
     """A malformed/unexpected `env` value (not a mapping) is treated the
     same as absent -- fail toward the pre-existing behavior, never toward a
     crash or a silent always-False read.
@@ -88,7 +89,7 @@ def test_override_falls_back_to_os_environ_when_payload_env_not_a_dict(monkeypat
     assert dc._override(_ENV_VAR, payload=payload) is True
 
 
-def test_override_missing_key_in_payload_env_defaults_false(monkeypatch):
+def test_override_missing_key_in_payload_env_defaults_false(monkeypatch: pytest.MonkeyPatch) -> None:
     """`payload["env"]` present but missing the specific override key reads
     as unset ("0"/False) -- mirrors `os.environ.get(name, "0")`'s own
     default, applied to the payload leg instead.
@@ -98,7 +99,7 @@ def test_override_missing_key_in_payload_env_defaults_false(monkeypatch):
     assert dc._override(_ENV_VAR, payload=payload) is False
 
 
-def test_all_override_call_sites_thread_payload_or_hook_payload(monkeypatch):
+def test_all_override_call_sites_thread_payload_or_hook_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every `_override(...)` call site inside `dispatch_checks.py` (other
     than the function's own definition/docstring) passes a `payload=`
     keyword argument -- pinning that this chunk re-keyed ALL 22 sites named
@@ -140,7 +141,7 @@ def test_all_override_call_sites_thread_payload_or_hook_payload(monkeypatch):
         )
 
 
-def test_check_destructive_rm_accepts_payload_kwarg(monkeypatch):
+def test_check_destructive_rm_accepts_payload_kwarg(monkeypatch: pytest.MonkeyPatch) -> None:
     """`check_destructive_rm` gained a `payload` parameter as part of this
     re-key (it previously had none, since its own `_override` call
     unconditionally read `os.environ`) -- confirm the new parameter is
@@ -158,7 +159,7 @@ def test_check_destructive_rm_accepts_payload_kwarg(monkeypatch):
     assert allowed is None, "payload-carried override should have allowed"
 
 
-def test_check_runaway_find_accepts_payload_kwarg(monkeypatch):
+def test_check_runaway_find_accepts_payload_kwarg(monkeypatch: pytest.MonkeyPatch) -> None:
     """Same contract as `check_destructive_rm` above, for
     `check_runaway_find`'s new `payload` parameter."""
     monkeypatch.delenv("COORDINATOR_ALLOW_FIND_ROOT", raising=False)
@@ -172,7 +173,7 @@ def test_check_runaway_find_accepts_payload_kwarg(monkeypatch):
     assert allowed is None, "payload-carried override should have allowed"
 
 
-def test_destructive_rm_forwards_payload_through_shell_c_unwrap(monkeypatch):
+def test_destructive_rm_forwards_payload_through_shell_c_unwrap(monkeypatch: pytest.MonkeyPatch) -> None:
     """A `sh -c '<rm ...>'` wrapper must carry the caller's payload into the
     unwrapped rescan. Ambient env is deliberately left CLEAN: if the recursion
     drops the payload, `_override` falls back to `os.environ`, finds nothing,
@@ -192,7 +193,7 @@ def test_destructive_rm_forwards_payload_through_shell_c_unwrap(monkeypatch):
     )
 
 
-def test_runaway_find_forwards_payload_through_shell_c_unwrap(monkeypatch):
+def test_runaway_find_forwards_payload_through_shell_c_unwrap(monkeypatch: pytest.MonkeyPatch) -> None:
     """Same contract as above for `check_runaway_find`'s unwrap recursion."""
     monkeypatch.delenv("COORDINATOR_ALLOW_FIND_ROOT", raising=False)
     wrapped = "sh -c \"find / -name '*.py'\""

@@ -2,21 +2,22 @@
 from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import stage_family as sf
+from pathlib import Path
 
 
-def test_two_runs_get_distinct_dirs():
+def test_two_runs_get_distinct_dirs() -> None:
     a = sf.family_scratch_dir("C2", "ask-A")
     b = sf.family_scratch_dir("C2", "ask-B")
     assert a != b and a.endswith("/C2") and "ask-A" in a
 
 
-def test_unknown_run_uses_token_under_scratch():
+def test_unknown_run_uses_token_under_scratch() -> None:
     d = sf.family_scratch_dir("C2")
     assert d == f"scratch/family-stage/{sf.RUN_ID_TOKEN}/C2"
     sf.runner_brief("agy", "other", "p.md", d)
 
 
-def test_brief_states_fresh_invoke_or_blocked():
+def test_brief_states_fresh_invoke_or_blocked() -> None:
     b = sf.runner_brief("agy", "write", "p.md", sf.family_scratch_dir("C2", "r1"), ["a.py"])
     assert sf.FRESH_INVOKE_LINE in b and "BLOCKED" in b
     assert "scratch: scratch/family-stage/r1/C2" in b
@@ -44,7 +45,7 @@ def _stage_family_rows(tmp_path, plan_task_extra, **sizing_over):
     return m.rows[0]
 
 
-def test_staged_family_brief_carries_this_runs_dir_never_the_token(tmp_path):
+def test_staged_family_brief_carries_this_runs_dir_never_the_token(tmp_path: Path) -> None:
     row = _stage_family_rows(tmp_path / "a", "", family="agy")
     for rel in (row.brief_path, row.fallback_brief_path):
         text = (tmp_path / "a" / rel).read_text(encoding="utf-8")
@@ -53,14 +54,14 @@ def test_staged_family_brief_carries_this_runs_dir_never_the_token(tmp_path):
     assert "scratch/family-stage/r1/C2" in brief
 
 
-def test_staged_per_row_family_brief_carries_this_runs_dir_never_the_token(tmp_path):
+def test_staged_per_row_family_brief_carries_this_runs_dir_never_the_token(tmp_path: Path) -> None:
     row = _stage_family_rows(tmp_path / "b", "  family: agy\n")
     brief = (tmp_path / "b" / row.brief_path).read_text(encoding="utf-8")
     assert sf.RUN_ID_TOKEN not in brief
     assert "scratch/family-stage/r1/C2" in brief
 
 
-def test_staged_family_brief_carries_fresh_invoke_line_through_token_substitution(tmp_path):
+def test_staged_family_brief_carries_fresh_invoke_line_through_token_substitution(tmp_path: Path) -> None:
     row = _stage_family_rows(tmp_path / "c", "", family="agy")
     brief = (tmp_path / "c" / row.brief_path).read_text(encoding="utf-8")
     assert sf.FRESH_INVOKE_LINE in brief

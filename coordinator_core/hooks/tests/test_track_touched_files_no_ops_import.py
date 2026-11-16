@@ -37,6 +37,7 @@ import textwrap
 import pytest
 
 from coordinator_core.session_hub_path import hub_for_common
+from pathlib import Path
 
 # Spawns a real subprocess (fresh interpreter) — the property under test
 # (sys.modules absence) is only meaningful in a process that never imported
@@ -100,7 +101,7 @@ def _run_subagent_shaped_handler(repo: "object") -> str:
 class TestNoOpsSessionContextImport:
     """Pins the C2 hygiene property: the ops package is off this hook's import graph."""
 
-    def test_ops_session_context_absent_after_subagent_fire(self, tmp_path) -> None:
+    def test_ops_session_context_absent_after_subagent_fire(self, tmp_path: Path) -> None:
         repo = tmp_path
         hub_for_common(repo / ".git").mkdir(parents=True, exist_ok=True)
         stdout = _run_subagent_shaped_handler(str(repo / ".git"))
@@ -111,7 +112,7 @@ class TestNoOpsSessionContextImport:
             f"session.core import. Subprocess stdout: {stdout!r}"
         )
 
-    def test_back_pointer_write_still_lands(self, tmp_path) -> None:
+    def test_back_pointer_write_still_lands(self, tmp_path: Path) -> None:
         """The import is gone; the back-pointer WRITE it fed is not (§ C2:
         removing the write needs a far higher evidence bar than removing the
         import, and is out of scope here)."""

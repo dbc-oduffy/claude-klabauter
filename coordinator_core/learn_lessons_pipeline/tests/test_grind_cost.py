@@ -13,9 +13,10 @@ from coordinator_core.ops.dispatch_emit.tests.test_queue_emit import (
     _emit,
     _setup_repo,
 )
+from pathlib import Path
 
 
-def test_measure_matches_the_emitted_script_batches(tmp_path):
+def test_measure_matches_the_emitted_script_batches(tmp_path: Path) -> None:
     repo_root, queue_dir, _run_dir = _setup_repo(tmp_path, n_rows=5)
     result = grind_cost.measure(
         repo_root, profile="fixture", queue=queue_dir, profile_dir=_FIXTURE_PROFILE_DIR
@@ -29,7 +30,7 @@ def test_measure_matches_the_emitted_script_batches(tmp_path):
     assert result["spawns_per_lesson"] == result["triage_batches"] / 5
 
 
-def test_measure_is_read_only(tmp_path):
+def test_measure_is_read_only(tmp_path: Path) -> None:
     repo_root, queue_dir, run_dir = _setup_repo(tmp_path, n_rows=3)
     before = sorted(p.relative_to(tmp_path).as_posix() for p in tmp_path.rglob("*"))
     grind_cost.measure(repo_root, profile="fixture", queue=queue_dir, profile_dir=_FIXTURE_PROFILE_DIR)
@@ -37,7 +38,7 @@ def test_measure_is_read_only(tmp_path):
     assert before == after
 
 
-def test_empty_queue_reports_zero_without_dividing(tmp_path):
+def test_empty_queue_reports_zero_without_dividing(tmp_path: Path) -> None:
     repo_root, queue_dir, _run_dir = _setup_repo(tmp_path, n_rows=0)
     result = grind_cost.measure(
         repo_root, profile="fixture", queue=queue_dir, profile_dir=_FIXTURE_PROFILE_DIR
@@ -47,7 +48,7 @@ def test_empty_queue_reports_zero_without_dividing(tmp_path):
     assert result["spawns_per_lesson"] == 0.0
 
 
-def test_measure_reports_the_routing_split(tmp_path, monkeypatch):
+def test_measure_reports_the_routing_split(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root, queue_dir, _run_dir = _setup_repo(tmp_path, n_rows=5)
     base = grind_cost.measure(
         repo_root, profile="fixture", queue=queue_dir, profile_dir=_FIXTURE_PROFILE_DIR
@@ -76,7 +77,7 @@ def test_measure_reports_the_routing_split(tmp_path, monkeypatch):
     assert result["llm_routed"] == 3
 
 
-def test_tokens_after_drops_closed_rows_but_keeps_retags(tmp_path, monkeypatch):
+def test_tokens_after_drops_closed_rows_but_keeps_retags(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root, queue_dir, _run_dir = _setup_repo(tmp_path, n_rows=4)
     kw = dict(profile="fixture", queue=queue_dir, profile_dir=_FIXTURE_PROFILE_DIR)
     base = grind_cost.measure(repo_root, **kw)
@@ -100,13 +101,13 @@ def test_tokens_after_drops_closed_rows_but_keeps_retags(tmp_path, monkeypatch):
     assert result["tokens_after"] < result["tokens_before"]
 
 
-def test_routed_out_counts_only_schema_declines():
+def test_routed_out_counts_only_schema_declines() -> None:
     assert grind_cost._is_routed_out("admission: row fails its schema and cannot be closed (x)")
     assert grind_cost._is_routed_out("admission: row carries a schema hand-back mark (x)")
     assert not grind_cost._is_routed_out("row carries a route-to-* hand-back mark ('route-to-x')")
 
 
-def test_main_prints_json_with_the_four_keys(tmp_path, monkeypatch, capsys):
+def test_main_prints_json_with_the_four_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo_root, queue_dir, _run_dir = _setup_repo(tmp_path, n_rows=2)
     monkeypatch.chdir(repo_root)
     real = grind_cost.measure
@@ -132,7 +133,7 @@ def test_main_prints_json_with_the_four_keys(tmp_path, monkeypatch, capsys):
     } <= payload.keys()
 
 
-def test_measure_reports_max_triage_batch_tokens_under_the_tier(tmp_path):
+def test_measure_reports_max_triage_batch_tokens_under_the_tier(tmp_path: Path) -> None:
     from coordinator_core.distill.prompt_tier import LONG_PROMPT_TIER_TOKENS
 
     repo_root, queue_dir, _run_dir = _setup_repo(tmp_path, n_rows=5)
@@ -142,7 +143,7 @@ def test_measure_reports_max_triage_batch_tokens_under_the_tier(tmp_path):
     assert 0 < result["max_triage_batch_tokens"] <= LONG_PROMPT_TIER_TOKENS
 
 
-def test_measure_splits_oversize_batches_so_the_max_stays_under_the_tier(tmp_path):
+def test_measure_splits_oversize_batches_so_the_max_stays_under_the_tier(tmp_path: Path) -> None:
     from coordinator_core.distill.prompt_tier import LONG_PROMPT_TIER_TOKENS
 
     repo_root, queue_dir, _run_dir = _setup_repo(tmp_path, n_rows=5)
@@ -156,7 +157,7 @@ def test_measure_splits_oversize_batches_so_the_max_stays_under_the_tier(tmp_pat
     assert result["max_triage_batch_tokens"] <= LONG_PROMPT_TIER_TOKENS
 
 
-def test_measure_reports_the_budget_before_and_after_narrowing(tmp_path):
+def test_measure_reports_the_budget_before_and_after_narrowing(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.tests.test_queue_emit_budget import _BATCH, _ROWS, _repo
 
     repo, queue, pdir = _repo(tmp_path)
@@ -178,7 +179,7 @@ def _calibration(tmp_path, rate):
     return path
 
 
-def test_a_prevet_spawn_is_priced_at_the_prevet_role_rate(tmp_path):
+def test_a_prevet_spawn_is_priced_at_the_prevet_role_rate(tmp_path: Path) -> None:
     rates = grind_cost.role_rates(True, _calibration(tmp_path, 5_000))
     assert rates["prevet"] == 5_000 != grind_cost.ROLE_TOKENS["triage"]
     spawns = {"prevet": 10, "triage": 3, "verify": 3}
@@ -188,14 +189,14 @@ def test_a_prevet_spawn_is_priced_at_the_prevet_role_rate(tmp_path):
     assert cost.tokens < 16 * grind_cost.ROLE_TOKENS["triage"]
 
 
-def test_batch_unit_cost_prices_each_role(tmp_path):
+def test_batch_unit_cost_prices_each_role(tmp_path: Path) -> None:
     rates = grind_cost.role_rates(True, _calibration(tmp_path, 5_000))
     unit = grind_cost.batch_unit_cost(True, 25, 50, rates)
     assert unit.agents == 4
     assert unit.tokens == 2 * 5_000 + 2 * grind_cost.ROLE_TOKENS["triage"]
 
 
-def test_a_declared_prevet_without_calibration_refuses_naming_the_file(tmp_path):
+def test_a_declared_prevet_without_calibration_refuses_naming_the_file(tmp_path: Path) -> None:
     missing = tmp_path / "prevet_calibration.json"
     with pytest.raises(grind_cost.PrevetCalibrationError, match="prevet_calibration.json"):
         grind_cost.role_rates(True, missing)
@@ -204,7 +205,7 @@ def test_a_declared_prevet_without_calibration_refuses_naming_the_file(tmp_path)
         grind_cost.role_rates(True, missing)
 
 
-def test_a_profile_without_prevet_never_reads_the_calibration(tmp_path, monkeypatch):
+def test_a_profile_without_prevet_never_reads_the_calibration(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(grind_cost, "PREVET_CALIBRATION", tmp_path / "absent.json")
     assert grind_cost.role_rates(False)["prevet"] == 0
     repo_root, queue_dir, _run_dir = _setup_repo(tmp_path, n_rows=3)
@@ -215,7 +216,7 @@ def test_a_profile_without_prevet_never_reads_the_calibration(tmp_path, monkeypa
     assert result["projected_spawns"] == sum(result["spawns_by_role"].values())
 
 
-def test_measure_does_not_narrow_a_profile_outside_the_mechanical_close_set(tmp_path):
+def test_measure_does_not_narrow_a_profile_outside_the_mechanical_close_set(tmp_path: Path) -> None:
     repo_root, queue_dir, _run_dir = _setup_repo(tmp_path, n_rows=5)
     result = grind_cost.measure(
         repo_root, profile="fixture", queue=queue_dir, profile_dir=_FIXTURE_PROFILE_DIR

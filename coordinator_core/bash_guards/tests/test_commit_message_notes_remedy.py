@@ -11,6 +11,7 @@ from coordinator_core.win_portability import no_console_passthrough_kwargs
 
 import pytest
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -20,7 +21,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> None:
     subprocess.run(["git", *args], cwd=repo, check=True, **no_console_passthrough_kwargs())
 
 
@@ -38,7 +39,7 @@ def _repo(tmp_path):
     return repo
 
 
-def test_amend_deny_remedy_carries_sentinel(tmp_path):
+def test_amend_deny_remedy_carries_sentinel(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     cmd = 'git -C %s commit --amend --only -m "x" -- mine.txt' % shlex.quote(str(repo))
     out = _enveloped(dispatch_checks.check_git_commit_safe_commit_advise)(cmd, "sess-mine")
@@ -48,6 +49,6 @@ def test_amend_deny_remedy_carries_sentinel(tmp_path):
     assert "<correction>" not in reason
 
 
-def test_prescribed_note_parses_back_to_its_subject():
+def test_prescribed_note_parses_back_to_its_subject() -> None:
     note = dispatch_checks._NOTE_CORRECTION.replace("<subject>", "fix: the thing")
     assert parse_note(note) == "fix: the thing"

@@ -11,6 +11,7 @@ from coordinator_core.lifecycle import git_common_dir
 from coordinator_core.ops.ceremony import git_native, push as push_mod
 from coordinator_core.ops.ceremony.git_native import GitResult
 from coordinator_core.ops.ceremony.tests.fixtures.push_repo import init_push_repo
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -53,7 +54,7 @@ def _fail(stderr: str) -> GitResult:
     return GitResult(returncode=1, stdout="", stderr=stderr)
 
 
-def test_stale_local_lock_is_removed_and_push_lands(tmp_path, monkeypatch):
+def test_stale_local_lock_is_removed_and_push_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = init_push_repo(tmp_path)
     lock = _make_lock(repo, age_secs=3600)
     calls: list = []
@@ -71,7 +72,7 @@ def test_stale_local_lock_is_removed_and_push_lands(tmp_path, monkeypatch):
     assert outcome.acted == ["push"]
 
 
-def test_fresh_local_lock_is_kept_and_deferred(tmp_path, monkeypatch):
+def test_fresh_local_lock_is_kept_and_deferred(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = init_push_repo(tmp_path)
     lock = _make_lock(repo, age_secs=1)
     calls: list = []
@@ -85,7 +86,7 @@ def test_fresh_local_lock_is_kept_and_deferred(tmp_path, monkeypatch):
     assert outcome.skipped == ["push:ref-contended"]
 
 
-def test_stale_lock_outside_refs_is_kept(tmp_path, monkeypatch):
+def test_stale_lock_outside_refs_is_kept(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = init_push_repo(tmp_path)
     outside = tmp_path / "elsewhere.lock"
     outside.write_bytes(b"")
@@ -101,7 +102,7 @@ def test_stale_lock_outside_refs_is_kept(tmp_path, monkeypatch):
     assert outcome.skipped == ["push:ref-contended"]
 
 
-def test_remote_contention_still_defers_and_leaves_locks(tmp_path, monkeypatch):
+def test_remote_contention_still_defers_and_leaves_locks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = init_push_repo(tmp_path)
     lock = _make_lock(repo, age_secs=3600)
     calls: list = []
@@ -115,12 +116,12 @@ def test_remote_contention_still_defers_and_leaves_locks(tmp_path, monkeypatch):
     assert outcome.skipped == ["push:ref-contended"]
 
 
-def test_recovery_happens_once_then_defers(tmp_path, monkeypatch):
+def test_recovery_happens_once_then_defers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = init_push_repo(tmp_path)
     lock = _make_lock(repo, age_secs=3600)
     calls: list = []
 
-    def _fake(*a, **kw):
+    def _fake(*a, **kw) -> GitResult:
         calls.append(1)
         _make_lock(repo, age_secs=3600)
         return _fail(_local_stderr(str(lock)))
@@ -142,10 +143,10 @@ def test_recovery_happens_once_then_defers(tmp_path, monkeypatch):
         "/home/u/repo/.git/refs/remotes/origin/b.lock",  # abs-path-ok: parser string shape
     ],
 )
-def test_lock_path_parsing_accepts_windows_and_posix_shapes(raw):
+def test_lock_path_parsing_accepts_windows_and_posix_shapes(raw) -> None:
     parsed = push_mod._local_ref_lock_path(_local_stderr(raw))
     assert parsed == raw.replace("\\", "/")
 
 
-def test_remote_stderr_names_no_local_lock():
+def test_remote_stderr_names_no_local_lock() -> None:
     assert push_mod._local_ref_lock_path(_REMOTE_STDERR) is None

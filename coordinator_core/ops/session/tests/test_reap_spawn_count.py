@@ -21,11 +21,12 @@ from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
 from coordinator_core.ops.session import reap
 from coordinator_core.session import touch_record
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> None:
     subprocess.run(
         ["git", *args], cwd=repo, check=True, capture_output=True, text=True,
         **no_console_creationflags(),
@@ -53,7 +54,7 @@ def _stale_agent_with_touched_path(sessions, aid: str) -> None:
     os.utime(adir, (when, when))
 
 
-def test_two_stale_agents_with_touched_paths_spawn_one_status_in_total(tmp_path, monkeypatch):
+def test_two_stale_agents_with_touched_paths_spawn_one_status_in_total(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(repo, "init", "-q")

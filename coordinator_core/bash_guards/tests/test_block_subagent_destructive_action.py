@@ -29,7 +29,7 @@ def _enveloped(check):
     return lambda *args, **kwargs: envelope_of(check(*args, **kwargs))
 
 
-def _payload(command, agent_id="deadbeef0123", agent_type=None, session_id="sess1"):
+def _payload(command, agent_id: str | None = "deadbeef0123", agent_type=None, session_id: str = "sess1"):
     p = {
         "tool_name": "Bash",
         "tool_input": {"command": command},
@@ -43,7 +43,7 @@ def _payload(command, agent_id="deadbeef0123", agent_type=None, session_id="sess
     return p
 
 
-def test_add_commit_deny_kind_names_commit_route_and_others_do_not():
+def test_add_commit_deny_kind_names_commit_route_and_others_do_not() -> None:
     from coordinator_core.bash_guards._commit_route import COMMIT_ROUTE
 
     for kind in (
@@ -56,12 +56,12 @@ def test_add_commit_deny_kind_names_commit_route_and_others_do_not():
     assert COMMIT_ROUTE not in other
 
 
-def test_non_bash_tool_allows():
+def test_non_bash_tool_allows() -> None:
     payload = {"tool_name": "Write", "tool_input": {"command": "git rebase -i"}}
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_no_agent_id_allows_even_destructive_git():
+def test_no_agent_id_allows_even_destructive_git() -> None:
     # Top-level EM call -- no agent_id in payload at all.
     payload = {
         "tool_name": "Bash",
@@ -71,12 +71,12 @@ def test_no_agent_id_allows_even_destructive_git():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_benign_command_allows_before_identity_cost():
+def test_benign_command_allows_before_identity_cost() -> None:
     payload = _payload("ls -la && grep foo bar.txt", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_rebase_denies():
+def test_git_rebase_denies() -> None:
     payload = _payload("git rebase -i HEAD~3", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
@@ -85,19 +85,19 @@ def test_git_rebase_denies():
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_git_status_allows_safe_forward():
+def test_git_status_allows_safe_forward() -> None:
     payload = _payload("git status", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_push_force_denies():
+def test_git_push_force_denies() -> None:
     payload = _payload("git push --force origin work/foo", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_push_force_with_lease_near_miss_allows():
+def test_git_push_force_with_lease_near_miss_allows() -> None:
     # Recipe-flagged near-miss: --force-with-lease must NOT match the
     # --force boundary pattern.
     payload = _payload(
@@ -106,14 +106,14 @@ def test_git_push_force_with_lease_near_miss_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_reset_hard_denies():
+def test_git_reset_hard_denies() -> None:
     payload = _payload("git reset --hard origin/main", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git reset --hard" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_novel_verb_default_denies():
+def test_git_novel_verb_default_denies() -> None:
     # "gc" is not on the safe-forward allowlist -> default-deny.
     payload = _payload("git gc --aggressive", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
@@ -121,14 +121,14 @@ def test_git_novel_verb_default_denies():
     assert "default-deny" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_rm_recursive_force_denies():
+def test_rm_recursive_force_denies() -> None:
     payload = _payload("rm -rf state/scratch/", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "rm -r/-f" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_rm_recursive_force_inside_a_scratch_looking_path_still_denies():
+def test_rm_recursive_force_inside_a_scratch_looking_path_still_denies() -> None:
     # Regression for the 2026-08-03 rm-carve-out proposal: the PM took the
     # standing offer to ship the message correction ALONE, with no
     # scratchpad/temp-root exception of any kind. A target that LOOKS like
@@ -142,7 +142,7 @@ def test_rm_recursive_force_inside_a_scratch_looking_path_still_denies():
     assert "rm -r/-f" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_rm_deny_message_does_not_advise_a_sandbox_scoping_that_does_not_exist():
+def test_rm_deny_message_does_not_advise_a_sandbox_scoping_that_does_not_exist() -> None:
     # Regression for state/improvement-queue/2026-08-03-destructive-action-
     # deny-advises-a-sandbox-scoping-that-does-not-exist.yaml: the deny must
     # NEVER tell a subagent to "scope the op to your sandbox dir" (or any
@@ -159,24 +159,24 @@ def test_rm_deny_message_does_not_advise_a_sandbox_scoping_that_does_not_exist()
     assert "no sandbox-\nscoped, path-based, or any other exception" in reason
 
 
-def test_rm_bare_path_allows():
+def test_rm_bare_path_allows() -> None:
     payload = _payload("rm state/scratch/one-file.txt", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_chmod_recursive_denies():
+def test_chmod_recursive_denies() -> None:
     payload = _payload("chmod -R 755 some_dir/", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "chmod/chown -R" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_chmod_non_recursive_allows():
+def test_chmod_non_recursive_allows() -> None:
     payload = _payload("chmod +x some_script.sh", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_generic_branch_deny_message_trimmed_below_prior_measurement():
+def test_generic_branch_deny_message_trimmed_below_prior_measurement() -> None:
     # C8a trim attempt (docs/plans/2026-09-11-trim-the-remaining-over-cap-
     # guard-messages.md): the intro/tail prose was shortened without
     # dropping the `Denied:`/`Command:` diagnostic lines, the "not a
@@ -194,7 +194,7 @@ def test_generic_branch_deny_message_trimmed_below_prior_measurement():
     assert len(reason.encode("utf-8")) < 278, "generic-branch deny message regressed above its trimmed size"
 
 
-def test_generic_branch_deny_message_does_not_advise_a_sandbox_scoping_that_does_not_exist():
+def test_generic_branch_deny_message_does_not_advise_a_sandbox_scoping_that_does_not_exist() -> None:
     # The generic
     # git/rm/chmod-chown-R fallback branch of `_build_reason` had the same
     # phantom "scope it to your sandbox dir" advice the rm-specific branch
@@ -212,7 +212,7 @@ def test_generic_branch_deny_message_does_not_advise_a_sandbox_scoping_that_does
     assert "engine op" in reason
 
 
-def test_generic_branch_deny_message_states_shell_surface_not_capability_boundary():
+def test_generic_branch_deny_message_states_shell_surface_not_capability_boundary() -> None:
     # Regression for state/bug-backlog/2026-08-10-the-git-verb-bash-guard-
     # does-not-stop-a-a1caf2991aa6.yaml: the generic fallback branch of
     # `_build_reason` used to claim the destructive-git surface was
@@ -236,7 +236,7 @@ def test_generic_branch_deny_message_states_shell_surface_not_capability_boundar
     assert "engine op" in reason
 
 
-def test_rm_deny_message_states_shell_surface_not_capability_boundary():
+def test_rm_deny_message_states_shell_surface_not_capability_boundary() -> None:
     # The rm branch (and the
     # machine-local branch below) claimed enforcement stronger than the
     # code holds ("denied OUTRIGHT ... no ... exception this guard will
@@ -254,7 +254,7 @@ def test_rm_deny_message_states_shell_surface_not_capability_boundary():
     assert "denied OUTRIGHT" in reason
 
 
-def test_machine_local_write_deny_message_states_shell_surface_not_capability_boundary():
+def test_machine_local_write_deny_message_states_shell_surface_not_capability_boundary() -> None:
     payload = _payload(
         "machine-local set repos.foo /tmp/evil", agent_type="coordinator:executor"
     )
@@ -266,7 +266,7 @@ def test_machine_local_write_deny_message_states_shell_surface_not_capability_bo
     assert "Surface it to the EM" not in reason and "EM-locked" not in reason.split("DR-125", 1)[-1]
 
 
-def test_ambiguous_identity_denies_even_on_benign_looking_git(monkeypatch):
+def test_ambiguous_identity_denies_even_on_benign_looking_git(monkeypatch: pytest.MonkeyPatch) -> None:
     # The module no longer calls a single resolve_effective_types(payload, git_root)
     # seam -- check() now inlines the DUAL OR-resolver via resolve_git_root(),
     # _resolve_subagent_identity() (imported from write_guards.block_subagent_plan_body_write),
@@ -287,7 +287,7 @@ def test_ambiguous_identity_denies_even_on_benign_looking_git(monkeypatch):
     assert "AMBIGUOUS" in reason
 
 
-def test_empty_effective_type_confines_as_subagent(monkeypatch):
+def test_empty_effective_type_confines_as_subagent(monkeypatch: pytest.MonkeyPatch) -> None:
     # agent_id resolves truthy, but BOTH the primary leg (payload agent_type,
     # absent here) and the secondary leg (_read_backpointer_subagent_type)
     # resolve empty -- effective_type ends up "". Fixed 2026-07-30: a
@@ -303,7 +303,7 @@ def test_empty_effective_type_confines_as_subagent(monkeypatch):
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_unparseable_agent_id_with_known_agent_type_still_denies(monkeypatch):
+def test_unparseable_agent_id_with_known_agent_type_still_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     # _resolve_subagent_identity resolves to "" even though a raw agent_id was
     # supplied. Fixed 2026-07-30: raw_agent_id presence (not whether it
     # canonicalizes) is the EM/subagent discriminator, so this no longer
@@ -318,7 +318,7 @@ def test_unparseable_agent_id_with_known_agent_type_still_denies(monkeypatch):
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_no_command_allows():
+def test_no_command_allows() -> None:
     payload = {"tool_name": "Bash", "tool_input": {}, "agent_id": "deadbeef0123"}
     assert _enveloped(guard.check)(payload) is None
 
@@ -334,7 +334,7 @@ def test_no_command_allows():
 # ---------------------------------------------------------------------------
 
 
-def test_indirection_bash_script_file_now_advises_not_denies():
+def test_indirection_bash_script_file_now_advises_not_denies() -> None:
     # RESHAPE (2026-08-06, C18d, docs/plans/2026-08-06-apply-guard-class-
     # census.md): `bash <file>` -- script content is not in the command text
     # at all, so this guard genuinely cannot see it. It no longer denies
@@ -349,7 +349,7 @@ def test_indirection_bash_script_file_now_advises_not_denies():
     assert "ADVISORY" in context
 
 
-def test_indirection_sh_script_file_advises_even_when_benign():
+def test_indirection_sh_script_file_advises_even_when_benign() -> None:
     # Same shape, memo's own "legitimate `bash run-tests.sh`" example --
     # now advises rather than denies, because the guard cannot examine the
     # file's content either way.
@@ -361,7 +361,7 @@ def test_indirection_sh_script_file_advises_even_when_benign():
     assert "sh <file>" in hso["additionalContext"]
 
 
-def test_indirection_bash_noexec_syntax_check_allows():
+def test_indirection_bash_noexec_syntax_check_allows() -> None:
     # Bug fix (2026-07-21: state/bug-backlog/2026-07-21-subagent-guard-
     # false-positive-bash-n-syn-5ef6ef52e2f9.yaml): `-n`/`--noexec` puts the
     # shell in parse-only mode -- it executes NOTHING regardless of what
@@ -371,13 +371,13 @@ def test_indirection_bash_noexec_syntax_check_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_indirection_sh_noexec_long_flag_syntax_check_allows():
+def test_indirection_sh_noexec_long_flag_syntax_check_allows() -> None:
     # `--noexec` is the long-flag spelling of the same `-n` behavior.
     payload = _payload("sh --noexec run-tests.sh", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_indirection_bash_n_as_filename_substring_still_advises():
+def test_indirection_bash_n_as_filename_substring_still_advises() -> None:
     # Bypass-risk check: a filename that merely CONTAINS "-n" as a substring
     # (not a standalone token) must NOT be mistaken for the `-n` flag -- the
     # opaque `<file>` shape still fires (now as an advisory, not a deny).
@@ -389,7 +389,7 @@ def test_indirection_bash_n_as_filename_substring_still_advises():
     assert "indirection wrapper" in hso["additionalContext"]
 
 
-def test_indirection_bash_n_after_script_path_still_advises():
+def test_indirection_bash_n_after_script_path_still_advises() -> None:
     # Bypass-risk check: `-n` AFTER the script path is a positional argument
     # PASSED TO the script (bash stops parsing its own options at the first
     # non-option token), not a noexec flag governing bash itself -- the
@@ -411,7 +411,7 @@ def test_indirection_bash_n_after_script_path_still_advises():
 # ---------------------------------------------------------------------------
 
 
-def test_indirection_advisory_message_does_not_claim_blocking():
+def test_indirection_advisory_message_does_not_claim_blocking() -> None:
     # The prior deny message's opening line read "indirection is blocked for
     # subagents" -- an overclaim even before this reshape (a bare python3-
     # file invocation was always allowed unconditionally). Now that this
@@ -425,14 +425,14 @@ def test_indirection_advisory_message_does_not_claim_blocking():
     assert "indirection is blocked for subagents" not in context
 
 
-def test_indirection_deny_message_scratch_script_form_actually_allows():
+def test_indirection_deny_message_scratch_script_form_actually_allows() -> None:
     # A bare python3-file invocation is a plain allow (no advisory, no
     # deny) -- unaffected by the reshape, still verified directly.
     payload = _payload("python3 /tmp/scratch/repro.py", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_heredoc_fed_python3_destructive_payload_bypasses_inline_c_deny():
+def test_heredoc_fed_python3_destructive_payload_bypasses_inline_c_deny() -> None:
     # B3: the identical logical payload that denies inline via `-c` (see
     # `test_indirection_python_inline_c_destructive_payload_denies`)
     # allows when fed the same text via a heredoc instead -- a bare
@@ -450,7 +450,7 @@ def test_heredoc_fed_python3_destructive_payload_bypasses_inline_c_deny():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_indirection_inline_c_destructive_payload_denies():
+def test_indirection_inline_c_destructive_payload_denies() -> None:
     # `sh -c '<destructive>'` -- reliably parseable, recurse-matched against
     # the same rm deny regex used by the direct rm surface check.
     payload = _payload("sh -c 'rm -rf /tmp/scratch'", agent_type="coordinator:executor")
@@ -461,14 +461,14 @@ def test_indirection_inline_c_destructive_payload_denies():
     assert "sh -c" in reason
 
 
-def test_indirection_inline_c_benign_payload_allows():
+def test_indirection_inline_c_benign_payload_allows() -> None:
     # Same wrapper shape, benign payload -- must NOT over-block since this
     # shape is reliably parseable.
     payload = _payload("sh -c 'echo hello world'", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_indirection_python_inline_c_destructive_payload_denies():
+def test_indirection_python_inline_c_destructive_payload_denies() -> None:
     # Memo's own explicit bypass example: `python -c '...'`.
     payload = _payload(
         "python -c 'import subprocess; subprocess.run([\"git\", \"push\", \"--force\"])'",
@@ -482,7 +482,7 @@ def test_indirection_python_inline_c_destructive_payload_denies():
     assert "python -c" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_python_inline_c_readonly_git_word_probe_allows():
+def test_python_inline_c_readonly_git_word_probe_allows() -> None:
     # AC5 repro (docs/plans/2026-08-15-the-close-s-three-deferred-defects-
     # becom.md C3): a review-integrator's read-only probe -- the word "git"
     # appears only as quoted DATA (a substring count over file content),
@@ -497,7 +497,7 @@ def test_python_inline_c_readonly_git_word_probe_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_python_inline_c_readonly_git_word_probe_single_quoted_allows():
+def test_python_inline_c_readonly_git_word_probe_single_quoted_allows() -> None:
     # Same shape, single-quoted -c payload -- confirms the fix is not
     # tied to a specific quote style.
     payload = _payload(
@@ -507,7 +507,7 @@ def test_python_inline_c_readonly_git_word_probe_single_quoted_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_python_inline_c_git_word_probe_with_grep_style_pattern_allows():
+def test_python_inline_c_git_word_probe_with_grep_style_pattern_allows() -> None:
     # A grep-shaped read of the WORD "git" via re.search, same non-
     # invocation data-only shape as the reported incident.
     payload = _payload(
@@ -517,7 +517,7 @@ def test_python_inline_c_git_word_probe_with_grep_style_pattern_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_python_inline_c_destructive_payload_still_denies_after_catchall_fix():
+def test_python_inline_c_destructive_payload_still_denies_after_catchall_fix() -> None:
     # AC6: the specific push --force free-text pattern (not the catchall
     # this fix narrows) still catches the memo's exact bypass example --
     # duplicate assertion of test_indirection_python_inline_c_destructive_
@@ -531,7 +531,7 @@ def test_python_inline_c_destructive_payload_still_denies_after_catchall_fix():
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_python_inline_c_rebase_payload_still_denies():
+def test_python_inline_c_rebase_payload_still_denies() -> None:
     # AC6: `git rebase` free-text pattern still fires inside a -c payload.
     payload = _payload(
         "python3 -c \"import os; os.system('git rebase -i HEAD~3')\"",
@@ -542,7 +542,7 @@ def test_python_inline_c_rebase_payload_still_denies():
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_python_inline_c_reset_hard_payload_still_denies():
+def test_python_inline_c_reset_hard_payload_still_denies() -> None:
     # AC6: `git reset --hard` free-text pattern still fires inside a -c
     # payload.
     payload = _payload(
@@ -554,7 +554,7 @@ def test_python_inline_c_reset_hard_payload_still_denies():
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_python_inline_c_stash_apply_payload_still_denies():
+def test_python_inline_c_stash_apply_payload_still_denies() -> None:
     # AC6: `git stash apply` free-text pattern still fires inside a -c
     # payload.
     payload = _payload(
@@ -566,7 +566,7 @@ def test_python_inline_c_stash_apply_payload_still_denies():
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_sh_c_unparseable_shell_segment_still_denies_via_catchall():
+def test_sh_c_unparseable_shell_segment_still_denies_via_catchall() -> None:
     # AC6: a genuinely unparseable REAL shell segment (unbalanced quote)
     # must keep the unchanged legacy catchall -- `strict=True`,
     # `subcmd is None` (not the interpreter-carve-out sentinel), so
@@ -583,19 +583,19 @@ def test_sh_c_unparseable_shell_segment_still_denies_via_catchall():
     assert "default-deny" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_unparseable_unknown_local_verb_is_not_denied():
+def test_unparseable_unknown_local_verb_is_not_denied() -> None:
     payload = _payload("git frobnicate 'unterminated", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is None or result["hookSpecificOutput"]["permissionDecision"] != "deny"
 
 
-def test_evaluate_git_segment_legacy_default_deny_on_unmatched_true_denies_directly():
+def test_evaluate_git_segment_legacy_default_deny_on_unmatched_true_denies_directly() -> None:
     # Direct unit coverage: an irreversible verb keeps the terminal catchall.
     assert guard._evaluate_git_segment_legacy("git gc --prune=now") == "unrecognized git verb (default-deny)"
     assert guard._evaluate_git_segment_legacy("some prose mentioning git only") is None
 
 
-def test_evaluate_git_segment_legacy_default_deny_on_unmatched_false_allows_directly():
+def test_evaluate_git_segment_legacy_default_deny_on_unmatched_false_allows_directly() -> None:
     # Direct unit coverage: False suppresses ONLY the terminal catchall.
     assert (
         guard._evaluate_git_segment_legacy(
@@ -605,7 +605,7 @@ def test_evaluate_git_segment_legacy_default_deny_on_unmatched_false_allows_dire
     )
 
 
-def test_evaluate_git_segment_legacy_default_deny_on_unmatched_false_still_denies_push_force():
+def test_evaluate_git_segment_legacy_default_deny_on_unmatched_false_still_denies_push_force() -> None:
     # Direct unit coverage: False does NOT touch the specific push --force
     # pattern above the catchall.
     assert (
@@ -617,7 +617,7 @@ def test_evaluate_git_segment_legacy_default_deny_on_unmatched_false_still_denie
     )
 
 
-def test_indirection_windows_bash_exe_backslash_path_inline_c_denies():
+def test_indirection_windows_bash_exe_backslash_path_inline_c_denies() -> None:
     # A2 fix: `C:\Windows\System32\bash.exe -c '<payload>'` -- the
     # memo's own explicit Windows-spelled bypass example. Before the fix,
     # `_evaluate_wrapper_indirection`'s raw `tokens[0].rsplit("/", 1)[-1]`
@@ -634,7 +634,7 @@ def test_indirection_windows_bash_exe_backslash_path_inline_c_denies():
     assert "force" in reason.lower()
 
 
-def test_indirection_windows_python_exe_backslash_path_inline_c_denies():
+def test_indirection_windows_python_exe_backslash_path_inline_c_denies() -> None:
     # A2 fix: `C:\Python311\python.exe -c '<payload>'` -- second
     # Windows-spelled bypass example named in the finding.
     payload = _payload(
@@ -646,7 +646,7 @@ def test_indirection_windows_python_exe_backslash_path_inline_c_denies():
     assert result is not None
 
 
-def test_indirection_windows_bash_exe_backslash_path_benign_allows():
+def test_indirection_windows_bash_exe_backslash_path_benign_allows() -> None:
     # Same Windows-spelled interpreter head, benign payload -- must still
     # allow (the fix must not over-block ordinary Windows-spelled bash
     # invocations, only the destructive-indirection shapes).
@@ -657,7 +657,7 @@ def test_indirection_windows_bash_exe_backslash_path_benign_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_normalize_windows_wrapper_argv0_rewrites_bash_and_python_directly():
+def test_normalize_windows_wrapper_argv0_rewrites_bash_and_python_directly() -> None:
     # Direct unit coverage of the widened pre-pass (git-only ->
     # git+bash+sh+zsh+python+python3+env+xargs).
     assert guard._normalize_windows_wrapper_argv0(
@@ -677,7 +677,7 @@ def test_normalize_windows_wrapper_argv0_rewrites_bash_and_python_directly():
     ) == "echo C:\\notes\\bash.exe for details"
 
 
-def test_indirection_xargs_with_visible_destructive_text_still_denies():
+def test_indirection_xargs_with_visible_destructive_text_still_denies() -> None:
     # `echo scratch/one-file.txt | xargs rm -rf` -- xargs's OWN argument text
     # literally contains `rm -rf`, so this hits the DIRECT rm surface match
     # (visible in the command text, not hidden behind xargs's stdin
@@ -691,7 +691,7 @@ def test_indirection_xargs_with_visible_destructive_text_still_denies():
     assert "rm -r/-f" in hso["permissionDecisionReason"]
 
 
-def test_indirection_xargs_read_only_head_is_silent():
+def test_indirection_xargs_read_only_head_is_silent() -> None:
     # xargs's own resolved command head is `echo` -- read-only
     # (`_XARGS_READ_ONLY_HEADS`), so this is no longer even an advisory:
     # the guard is silent, same as any other benign Bash call.
@@ -699,7 +699,7 @@ def test_indirection_xargs_read_only_head_is_silent():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_indirection_xargs_grep_head_is_silent():
+def test_indirection_xargs_grep_head_is_silent() -> None:
     # `find . -name '*.py' | xargs grep foo` -- xargs's resolved head is
     # `grep`, read-only, so the guard stays silent.
     payload = _payload(
@@ -708,14 +708,14 @@ def test_indirection_xargs_grep_head_is_silent():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_indirection_xargs_bundled_flags_skip_to_read_only_head():
+def test_indirection_xargs_bundled_flags_skip_to_read_only_head() -> None:
     # `-n1`/`-I{}` are xargs's OWN flags in attached form; the resolved
     # head is still `cat`, read-only, so this stays silent.
     payload = _payload("xargs -n1 -I{} cat {}", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_indirection_xargs_rm_head_still_advises_one_line():
+def test_indirection_xargs_rm_head_still_advises_one_line() -> None:
     # `rm` is not read-only -- unchanged advisory behavior, now folded to
     # one line. No `-r`/`-f`/`--force` flag here so the direct RM-surface
     # literal-text deny (`_RM_DENY_RE`, unaffected by this change) does not
@@ -731,7 +731,7 @@ def test_indirection_xargs_rm_head_still_advises_one_line():
     assert context.count("\n") == 0
 
 
-def test_indirection_xargs_sh_c_head_unchanged():
+def test_indirection_xargs_sh_c_head_unchanged() -> None:
     # `sh` is not read-only -- unchanged behavior: xargs's own unconditional
     # arm fires the generic "xargs <cmd>" advisory without unwrapping the
     # nested `sh -c` payload, exactly as before this change.
@@ -743,7 +743,7 @@ def test_indirection_xargs_sh_c_head_unchanged():
     assert "xargs" in hso["additionalContext"]
 
 
-def test_indirection_xargs_git_rm_head_unchanged():
+def test_indirection_xargs_git_rm_head_unchanged() -> None:
     # `git` is not read-only -- unchanged behavior.
     payload = _payload("xargs git rm", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
@@ -753,13 +753,13 @@ def test_indirection_xargs_git_rm_head_unchanged():
     assert "xargs" in hso["additionalContext"]
 
 
-def test_indirection_bare_xargs_is_silent():
+def test_indirection_bare_xargs_is_silent() -> None:
     # A bare `xargs` (no head at all) defaults to `echo` -- read-only.
     payload = _payload("echo hello | xargs", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_indirection_env_wrapped_c_destructive_payload_denies():
+def test_indirection_env_wrapped_c_destructive_payload_denies() -> None:
     # `env ... <cmd>` chained with a nested `-c` shape -- exercises the
     # env-strip -> interpreter -c -> recurse chain.
     payload = _payload(
@@ -771,18 +771,18 @@ def test_indirection_env_wrapped_c_destructive_payload_denies():
     assert "rm -r/-f" in reason
 
 
-def test_indirection_env_wrapped_benign_command_allows():
+def test_indirection_env_wrapped_benign_command_allows() -> None:
     # `env FOO=bar <benign>` -- reliably parseable, must not over-block.
     payload = _payload("env FOO=bar npm test", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_indirection_env_wrapped_benign_c_shape_allows():
+def test_indirection_env_wrapped_benign_c_shape_allows() -> None:
     payload = _payload("env FOO=bar sh -c 'ls -la'", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_indirection_unparseable_wrapper_segment_advises():
+def test_indirection_unparseable_wrapper_segment_advises() -> None:
     # A segment that matches the cheap wrapper probe but has unterminated
     # quoting cannot be tokenized by shlex -- an opaque shape, so this now
     # surfaces the advisory rather than failing closed as a hard deny.
@@ -794,7 +794,7 @@ def test_indirection_unparseable_wrapper_segment_advises():
     assert "unparseable indirection wrapper" in hso["additionalContext"]
 
 
-def test_indirection_wrapper_no_agent_id_allows():
+def test_indirection_wrapper_no_agent_id_allows() -> None:
     # Top-level EM call -- no agent_id in payload at all. Indirection
     # hardening must not affect the EM main-loop.
     payload = {
@@ -805,7 +805,7 @@ def test_indirection_wrapper_no_agent_id_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_indirection_wrapper_probe_does_not_over_block_plain_commands():
+def test_indirection_wrapper_probe_does_not_over_block_plain_commands() -> None:
     # Sanity check the new Layer-1 wrapper probe doesn't widen the
     # already-covered benign-command fast path.
     payload = _payload("ls -la && grep foo bar.txt", agent_type="coordinator:executor")
@@ -829,7 +829,7 @@ def test_indirection_wrapper_probe_does_not_over_block_plain_commands():
 
 
 @pytest.mark.parametrize("operator", [";", "&&", "||", "|"])
-def test_indirection_operator_inside_quoted_value_allows(operator):
+def test_indirection_operator_inside_quoted_value_allows(operator) -> None:
     payload = _payload(
         'python3 coordinator/bin/cross-repo-memo.py --to sibling '
         f'--title "some title{operator} with an operator" --summary "s"',
@@ -847,7 +847,7 @@ def test_indirection_operator_inside_quoted_value_allows(operator):
         ("|", "bash <file>"),
     ],
 )
-def test_indirection_operator_outside_quotes_still_advises(operator, expected_fragment):
+def test_indirection_operator_outside_quotes_still_advises(operator, expected_fragment) -> None:
     # The SAME operators, used as REAL command separators outside any quoted
     # value, must still surface the advisory -- the fix must not weaken
     # genuine-shape detection, only stop mis-segmenting quoted content.
@@ -859,7 +859,7 @@ def test_indirection_operator_outside_quotes_still_advises(operator, expected_fr
     assert expected_fragment in hso["additionalContext"]
 
 
-def test_indirection_semicolon_inside_quotes_directly_on_evaluator():
+def test_indirection_semicolon_inside_quotes_directly_on_evaluator() -> None:
     # Direct entrypoint check (no identity-resolution plumbing) mirroring the
     # exact repro: a cross-repo-memo invocation with a semicolon inside a
     # quoted --title value must classify as non-wrapper.
@@ -870,7 +870,7 @@ def test_indirection_semicolon_inside_quotes_directly_on_evaluator():
     assert guard._evaluate_wrapper_indirection(cmd) is None
 
 
-def test_indirection_prose_fix_is_flag_name_agnostic():
+def test_indirection_prose_fix_is_flag_name_agnostic() -> None:
     # cross-repo/archive/2026-07-26-example-cockpit-repo-em-guard-title-false-
     # positive-and-validator-rehoming.md, Finding 1: the fix landed in
     # 8fb0c481 is a general quote-aware SEGMENTATION fix, not a `--title`
@@ -890,7 +890,7 @@ def test_indirection_prose_fix_is_flag_name_agnostic():
         assert guard._evaluate_wrapper_indirection(cmd) is None, cmd
 
 
-def test_indirection_prose_trigger_word_does_not_mask_real_indirection_elsewhere():
+def test_indirection_prose_trigger_word_does_not_mask_real_indirection_elsewhere() -> None:
     # The false-positive fix must not go the other way: a subagent-crafted
     # command may legitimately deny for a REAL `bash <file>` indirection
     # while a --title in the SAME command also happens to mention "bash" (and
@@ -924,7 +924,7 @@ def test_indirection_prose_trigger_word_does_not_mask_real_indirection_elsewhere
 # ---------------------------------------------------------------------------
 
 
-def test_quoted_interpreter_name_advises():
+def test_quoted_interpreter_name_advises() -> None:
     # Finding 1: a quoted bare word is a shell no-op -- `'bash' repro.sh`
     # runs identically to `bash repro.sh` -- but the ORIGINAL boundary class
     # (`[;&|\s]` only) did not treat a quote character as a boundary, so
@@ -938,7 +938,7 @@ def test_quoted_interpreter_name_advises():
     assert "indirection wrapper" in hso["additionalContext"]
 
 
-def test_quoted_git_verb_denies():
+def test_quoted_git_verb_denies() -> None:
     # Finding 1's git-surface variant: `'git' push --force` bypassed the
     # ORIGINAL `_GIT_SURFACE_RE` Layer-1 gate entirely (quote not a boundary
     # char), so `check()` returned allow before identity resolution ever ran.
@@ -948,7 +948,7 @@ def test_quoted_git_verb_denies():
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_command_substitution_git_push_force_advises():
+def test_command_substitution_git_push_force_advises() -> None:
     # Finding 2: `$(...)` command substitution runs its inner command for
     # the side effect regardless of what the captured stdout is subsequently
     # used for -- `(`/`` ` `` were not boundary chars in the ORIGINAL class,
@@ -968,7 +968,7 @@ def test_command_substitution_git_push_force_advises():
     assert "unresolved" in hso["additionalContext"]
 
 
-def test_backtick_substitution_rm_denies():
+def test_backtick_substitution_rm_denies() -> None:
     # Finding 2's backtick variant: `` `rm -rf /tmp/x` ``.
     payload = _payload("`rm -rf /tmp/x`", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
@@ -976,7 +976,7 @@ def test_backtick_substitution_rm_denies():
     assert "rm -r/-f" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_subshell_paren_rm_denies():
+def test_subshell_paren_rm_denies() -> None:
     # Finding 2's bare-subshell variant: `(rm -rf /tmp/scratch)`.
     payload = _payload("(rm -rf /tmp/scratch)", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
@@ -984,7 +984,7 @@ def test_subshell_paren_rm_denies():
     assert "rm -r/-f" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_python_bundled_c_flag_denies():
+def test_python_bundled_c_flag_denies() -> None:
     # Finding 3: Python's CLI parser accepts bundled short flags --
     # `python3 -ic '<payload>'` behaves as `python3 -i -c '<payload>'` --
     # so an exact `tokens[1] == "-c"` check missed this shape entirely and
@@ -998,7 +998,7 @@ def test_python_bundled_c_flag_denies():
     assert "rm -r/-f" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_bundled_c_flag_detected_by_wrapper_evaluator_directly():
+def test_bundled_c_flag_detected_by_wrapper_evaluator_directly() -> None:
     # White-box isolation of Finding 3's fix, independent of the Finding 1/2
     # boundary widen (which can also catch a quote-adjacent destructive verb
     # via the direct surface probes and would otherwise mask whether the
@@ -1011,7 +1011,7 @@ def test_bundled_c_flag_detected_by_wrapper_evaluator_directly():
     assert "rm -r/-f" in verdict
 
 
-def test_versioned_python_interpreter_denies():
+def test_versioned_python_interpreter_denies() -> None:
     # Finding 4: `python3.11`/`python3.12` etc. were invisible to the
     # ORIGINAL `_WRAPPER_PROBE_RE` (`python3?` only matches literal `python`
     # or `python3`), so Layer 1 never fired for a versioned interpreter.
@@ -1021,7 +1021,7 @@ def test_versioned_python_interpreter_denies():
     assert "rm -r/-f" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_versioned_python_interpreter_normalized_by_wrapper_evaluator_directly():
+def test_versioned_python_interpreter_normalized_by_wrapper_evaluator_directly() -> None:
     # White-box isolation of Finding 4's fix: `_normalize_interpreter_basename`
     # must strip the `.11` suffix so `python3.11` is treated identically to
     # `python3` for the `_C_FLAG_INTERPRETERS` membership check.
@@ -1041,42 +1041,42 @@ def test_versioned_python_interpreter_normalized_by_wrapper_evaluator_directly()
 # ---------------------------------------------------------------------------
 
 
-def test_finding1_quote_split_rm_denies():
+def test_finding1_quote_split_rm_denies() -> None:
     payload = _payload("r''m -rf /tmp/foo", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "rm -r/-f" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_finding1_quote_split_git_denies():
+def test_finding1_quote_split_git_denies() -> None:
     payload = _payload("g''it push --force", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_finding1_quote_split_chmod_denies():
+def test_finding1_quote_split_chmod_denies() -> None:
     payload = _payload("ch\"m\"od -R 777 /tmp/foo", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "chmod/chown -R" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_finding1_quote_split_chown_denies():
+def test_finding1_quote_split_chown_denies() -> None:
     payload = _payload("ch''own -R x /tmp/foo", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "chmod/chown -R" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_finding2_backslash_split_rm_denies():
+def test_finding2_backslash_split_rm_denies() -> None:
     payload = _payload("r\\m -rf /tmp/foo", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "rm -r/-f" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_finding3_variable_indirection_advises():
+def test_finding3_variable_indirection_advises() -> None:
     # An unresolved $VAR referenced value is genuinely unresolvable (not a
     # recursively-classified real match) -- opaque, so it advises.
     payload = _payload("V=rm; $V -rf /tmp/foo", agent_type="coordinator:executor")
@@ -1089,7 +1089,7 @@ def test_finding3_variable_indirection_advises():
     assert "indirection" in context
 
 
-def test_finding4_bare_pipe_fed_interpreter_advises():
+def test_finding4_bare_pipe_fed_interpreter_advises() -> None:
     # Piped content is never present in the command text -- opaque, so this
     # advises rather than denies.
     payload = _payload(
@@ -1104,7 +1104,7 @@ def test_finding4_bare_pipe_fed_interpreter_advises():
     assert "indirection wrapper" in context
 
 
-def test_finding5_dot_source_advises():
+def test_finding5_dot_source_advises() -> None:
     # `.`/`source` executes a script in-process with content this guard
     # never sees -- opaque, so this advises rather than denies.
     payload = _payload(". /tmp/payload.sh", agent_type="coordinator:executor")
@@ -1115,7 +1115,7 @@ def test_finding5_dot_source_advises():
     assert "indirection wrapper" in hso["additionalContext"]
 
 
-def test_finding5_source_keyword_advises():
+def test_finding5_source_keyword_advises() -> None:
     # `source` (the long spelling of `.`) executes a script in-process with
     # content this guard never sees -- opaque, now advises rather than
     # denies.
@@ -1127,7 +1127,7 @@ def test_finding5_source_keyword_advises():
     assert "indirection wrapper" in hso["additionalContext"]
 
 
-def test_finding6_eval_unresolved_var_advises():
+def test_finding6_eval_unresolved_var_advises() -> None:
     # An unresolved `eval $X` operand is genuinely unresolvable -- opaque,
     # so it advises rather than denies.
     payload = _payload("eval $X", agent_type="coordinator:executor")
@@ -1138,7 +1138,7 @@ def test_finding6_eval_unresolved_var_advises():
     assert "unresolved" in hso["additionalContext"]
 
 
-def test_finding6_eval_command_substitution_advises():
+def test_finding6_eval_command_substitution_advises() -> None:
     payload = _payload(
         'eval "$(echo rm) -rf /tmp"', agent_type="coordinator:executor"
     )
@@ -1149,7 +1149,7 @@ def test_finding6_eval_command_substitution_advises():
     assert "unresolved" in hso["additionalContext"]
 
 
-def test_finding6_eval_literal_destructive_payload_denies():
+def test_finding6_eval_literal_destructive_payload_denies() -> None:
     payload = _payload("eval rm -rf /tmp/scratch", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
@@ -1162,47 +1162,47 @@ def test_finding6_eval_literal_destructive_payload_denies():
 # ---------------------------------------------------------------------------
 
 
-def test_tokenized_pass_python3_module_invocation_allows():
+def test_tokenized_pass_python3_module_invocation_allows() -> None:
     payload = _payload("python3 -m pytest", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_tokenized_pass_python3_script_invocation_allows():
+def test_tokenized_pass_python3_script_invocation_allows() -> None:
     payload = _payload("python3 script.py --flag", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_tokenized_pass_git_status_allows():
+def test_tokenized_pass_git_status_allows() -> None:
     payload = _payload("git status", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_tokenized_pass_git_log_allows():
+def test_tokenized_pass_git_log_allows() -> None:
     payload = _payload("git log", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_tokenized_pass_chmod_plus_x_allows():
+def test_tokenized_pass_chmod_plus_x_allows() -> None:
     payload = _payload("chmod +x file", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_tokenized_pass_sh_c_benign_allows():
+def test_tokenized_pass_sh_c_benign_allows() -> None:
     payload = _payload("sh -c 'echo hello'", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_tokenized_pass_env_wrapped_benign_allows():
+def test_tokenized_pass_env_wrapped_benign_allows() -> None:
     payload = _payload("env FOO=bar npm test", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_tokenized_pass_ls_allows():
+def test_tokenized_pass_ls_allows() -> None:
     payload = _payload("ls", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_tokenized_pass_quoted_apostrophe_in_double_quotes_allows():
+def test_tokenized_pass_quoted_apostrophe_in_double_quotes_allows() -> None:
     # A benign command with a literal apostrophe safely nested inside double
     # quotes must parse cleanly and not trip the fail-closed unparseable path.
     payload = _payload(
@@ -1213,7 +1213,7 @@ def test_tokenized_pass_quoted_apostrophe_in_double_quotes_allows():
     assert result is None
 
 
-def test_tokenized_pass_quoted_semicolon_in_argument_allows():
+def test_tokenized_pass_quoted_semicolon_in_argument_allows() -> None:
     # A quoted `;` inside an argument must stay attached to its word and not
     # be misread as a command separator that breaks tokenization.
     payload = _payload("echo 'a;b'", agent_type="coordinator:executor")
@@ -1228,19 +1228,19 @@ def test_tokenized_pass_quoted_semicolon_in_argument_allows():
 # ---------------------------------------------------------------------------
 
 
-def test_heredoc_benign_prose_containing_git_word_allows():
+def test_heredoc_benign_prose_containing_git_word_allows() -> None:
     command = "cat > notes.md <<'EOF'\nthe word git in prose\nEOF"
     payload = _payload(command, agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_heredoc_benign_prose_containing_rm_and_chmod_words_allows():
+def test_heredoc_benign_prose_containing_rm_and_chmod_words_allows() -> None:
     command = "cat > notes.md <<'EOF'\nrun rm -rf and chmod -R as an example\nEOF"
     payload = _payload(command, agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_heredoc_interpreter_fed_wrapper_still_surfaces():
+def test_heredoc_interpreter_fed_wrapper_still_surfaces() -> None:
     # Anti-bypass: an interpreter FED by a heredoc must still surface --
     # after the body is stripped, the residual `bash <<'EOF'` still matches
     # the wrapper probe and is an interpreter-invoked-script indirection
@@ -1254,7 +1254,7 @@ def test_heredoc_interpreter_fed_wrapper_still_surfaces():
     assert "additionalContext" in result["hookSpecificOutput"]
 
 
-def test_strip_heredoc_bodies_removes_body_keeps_command_line():
+def test_strip_heredoc_bodies_removes_body_keeps_command_line() -> None:
     cmd = "cat > f.md <<'EOF'\nthe word git in prose\nEOF"
     stripped = guard._strip_heredoc_bodies(cmd)
     assert stripped == "cat > f.md <<'EOF'"
@@ -1273,13 +1273,13 @@ def test_strip_heredoc_bodies_removes_body_keeps_command_line():
 # ---------------------------------------------------------------------------
 
 
-def test_heredoc_backslash_delimiter_benign_prose_allows():
+def test_heredoc_backslash_delimiter_benign_prose_allows() -> None:
     command = "cat > notes.md <<\\EOF\nthe word git in prose\nEOF"
     payload = _payload(command, agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_heredoc_backslash_delimiter_review_doc_quoting_worktree_add_allows():
+def test_heredoc_backslash_delimiter_review_doc_quoting_worktree_add_allows() -> None:
     # The false-deny fix case named by the review finding: a `cat <<\EOF`
     # write whose body quotes worktree/destructive text as prose must not
     # deny.
@@ -1292,14 +1292,14 @@ def test_heredoc_backslash_delimiter_review_doc_quoting_worktree_add_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_strip_heredoc_bodies_removes_backslash_delimited_body():
+def test_strip_heredoc_bodies_removes_backslash_delimited_body() -> None:
     cmd = "cat > f.md <<\\EOF\nthe word git in prose\nEOF"
     stripped = guard._strip_heredoc_bodies(cmd)
     assert stripped == "cat > f.md <<\\EOF"
     assert "git" not in stripped
 
 
-def test_heredoc_backslash_delimiter_interpreter_fed_wrapper_still_surfaces():
+def test_heredoc_backslash_delimiter_interpreter_fed_wrapper_still_surfaces() -> None:
     # Differential: widening `_HEREDOC_OP_RE` to recognize `<<\EOF` means the
     # body of `bash <<\EOF ... EOF` is now stripped too (previously it
     # wasn't -- the destructive verb inside was visible as raw, unstripped
@@ -1335,7 +1335,7 @@ def test_heredoc_backslash_delimiter_interpreter_fed_wrapper_still_surfaces():
 # ---------------------------------------------------------------------------
 
 
-def test_git_grep_hyphenated_merge_word_in_pattern_allows():
+def test_git_grep_hyphenated_merge_word_in_pattern_allows() -> None:
     # False positive (a): the search pattern merely CONTAINS the word
     # "merge" (hyphen-bounded) -- this is `git grep`, not `git merge`.
     payload = _payload(
@@ -1344,7 +1344,7 @@ def test_git_grep_hyphenated_merge_word_in_pattern_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_merge_base_is_ancestor_allows():
+def test_git_merge_base_is_ancestor_allows() -> None:
     # False positive (b): `merge-base` is a distinct read-only subcommand --
     # the hyphen is a word boundary, so `\bmerge\b` used to match inside it.
     payload = _payload(
@@ -1357,38 +1357,38 @@ def test_git_merge_base_is_ancestor_allows():
     "cmd",
     ["git cherry main", "git cherry -v origin/main HEAD", "git -C . cherry -v main"],
 )
-def test_git_cherry_allows(cmd):
+def test_git_cherry_allows(cmd) -> None:
     payload = _payload(cmd, agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_cherry_pick_verdict_unchanged():
+def test_git_cherry_pick_verdict_unchanged() -> None:
     payload = _payload("git cherry-pick abc123", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_cherry_pick_write_flag_still_gated():
+def test_git_cherry_pick_write_flag_still_gated() -> None:
     payload = _payload(
         "git cherry-pick --output=x abc123", agent_type="coordinator:executor"
     )
     assert _enveloped(guard.check)(payload) is not None
 
 
-def test_legacy_safe_verb_re_cherry_does_not_prefix_match():
+def test_legacy_safe_verb_re_cherry_does_not_prefix_match() -> None:
     assert guard._SAFE_VERB_RE.search("git cherry -v main")
     assert guard._SAFE_VERB_RE.search("git cherry-pick abc")
     assert not guard._SAFE_VERB_RE.search("git cherryx main")
     assert "cherry-pick" not in guard._SAFE_VERB_RE.search("git cherry -v main").group(0)
 
 
-def test_git_merge_still_denies():
+def test_git_merge_still_denies() -> None:
     payload = _payload("git merge foo", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git merge (not --ff-only)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_merge_ff_only_still_allows():
+def test_git_merge_ff_only_still_allows() -> None:
     payload = _payload("git merge --ff-only foo", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
@@ -1402,7 +1402,7 @@ def test_git_merge_ff_only_still_allows():
 # ---------------------------------------------------------------------------
 
 
-def test_git_no_optional_locks_merge_base_allows():
+def test_git_no_optional_locks_merge_base_allows() -> None:
     # AC4: the flag is now enumerated, so the anchored parser never bails
     # and `merge-base` reaches its correct exact-token, read-only handling.
     payload = _payload(
@@ -1412,7 +1412,7 @@ def test_git_no_optional_locks_merge_base_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_no_optional_locks_merge_no_ff_still_denies():
+def test_git_no_optional_locks_merge_no_ff_still_denies() -> None:
     # AC5: the flag must not become a bypass for a real merge -- same deny
     # reason as the unflagged form.
     payload = _payload(
@@ -1423,7 +1423,7 @@ def test_git_no_optional_locks_merge_no_ff_still_denies():
     assert "git merge (not --ff-only)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_no_optional_locks_merge_ff_only_allows():
+def test_git_no_optional_locks_merge_ff_only_allows() -> None:
     # AC5: the flagged --ff-only form behaves like the unflagged one.
     payload = _payload(
         "git --no-optional-locks merge --ff-only feat", agent_type="coordinator:executor"
@@ -1431,7 +1431,7 @@ def test_git_no_optional_locks_merge_ff_only_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_merge_word_re_pattern_unchanged():
+def test_merge_word_re_pattern_unchanged() -> None:
     # AC6: inert-probe guard against a future well-meaning narrowing of the
     # legacy classifier's merge regex -- see the plan's "one real judgment
     # call" section. This assertion must never be "fixed" by editing the
@@ -1439,19 +1439,19 @@ def test_merge_word_re_pattern_unchanged():
     assert guard._MERGE_WORD_RE.pattern == r"\bmerge\b"
 
 
-def test_git_pull_still_denies():
+def test_git_pull_still_denies() -> None:
     payload = _payload("git pull", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git pull (not --ff-only)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_pull_ff_only_still_allows():
+def test_git_pull_ff_only_still_allows() -> None:
     payload = _payload("git pull --ff-only", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_commit_message_mentioning_merge_allows_and_not_classified_as_merge():
+def test_git_commit_message_mentioning_merge_allows_and_not_classified_as_merge() -> None:
     payload = _payload(
         'git commit -m "merge the configs"', agent_type="coordinator:executor"
     )
@@ -1459,7 +1459,7 @@ def test_git_commit_message_mentioning_merge_allows_and_not_classified_as_merge(
     assert result is None
 
 
-def test_git_global_option_c_path_merge_still_denies():
+def test_git_global_option_c_path_merge_still_denies() -> None:
     # Global options (`-C <path>`) must be skipped correctly when resolving
     # the real subcommand -- `merge` here is still the real subcommand.
     payload = _payload(
@@ -1470,13 +1470,13 @@ def test_git_global_option_c_path_merge_still_denies():
     assert "git merge (not --ff-only)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_unknown_local_verb_is_not_denied():
+def test_git_unknown_local_verb_is_not_denied() -> None:
     payload = _payload("git frobnicate", agent_type="coordinator:executor")
     verdict = guard.check(payload)
     assert verdict is None or verdict.verdict_kind == "advisory"
 
 
-def test_git_unparseable_segment_does_not_become_allowed():
+def test_git_unparseable_segment_does_not_become_allowed() -> None:
     # Unbalanced quoting cannot be shlex-tokenized -- falls back to the
     # legacy free-text classifier, which still denies a genuinely
     # destructive `push --force`, rather than the parse failure silently
@@ -1500,7 +1500,7 @@ def test_git_unparseable_segment_does_not_become_allowed():
 # ---------------------------------------------------------------------------
 
 
-def test_legacy_worktree_unrecognized_subcommand_denies():
+def test_legacy_worktree_unrecognized_subcommand_denies() -> None:
     payload = _payload(
         "git --namespace worktree futuristic-verb", agent_type="coordinator:executor"
     )
@@ -1509,19 +1509,19 @@ def test_legacy_worktree_unrecognized_subcommand_denies():
     assert "default-deny" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_legacy_worktree_list_allows():
+def test_legacy_worktree_list_allows() -> None:
     payload = _payload(
         "git --namespace worktree list", agent_type="coordinator:executor"
     )
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_legacy_worktree_bare_allows():
+def test_legacy_worktree_bare_allows() -> None:
     payload = _payload("git --namespace worktree", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_legacy_worktree_remove_denies():
+def test_legacy_worktree_remove_denies() -> None:
     # Already-known mutating form -- must still deny via `_WORKTREE_MUTATE_RE`,
     # unchanged by the P2(b) fix.
     payload = _payload(
@@ -1532,7 +1532,7 @@ def test_legacy_worktree_remove_denies():
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_legacy_remote_unrecognized_subcommand_denies():
+def test_legacy_remote_unrecognized_subcommand_denies() -> None:
     payload = _payload(
         "git --namespace remote futuristic-verb", agent_type="coordinator:executor"
     )
@@ -1541,31 +1541,31 @@ def test_legacy_remote_unrecognized_subcommand_denies():
     assert "default-deny" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_legacy_remote_v_allows():
+def test_legacy_remote_v_allows() -> None:
     payload = _payload("git --namespace remote -v", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_legacy_remote_show_allows():
+def test_legacy_remote_show_allows() -> None:
     payload = _payload(
         "git --namespace remote show origin", agent_type="coordinator:executor"
     )
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_legacy_remote_get_url_allows():
+def test_legacy_remote_get_url_allows() -> None:
     payload = _payload(
         "git --namespace remote get-url origin", agent_type="coordinator:executor"
     )
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_legacy_remote_bare_allows():
+def test_legacy_remote_bare_allows() -> None:
     payload = _payload("git --namespace remote", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_legacy_remote_set_url_denies():
+def test_legacy_remote_set_url_denies() -> None:
     # Already-known mutating form -- must still deny via `_REMOTE_MUTATE_RE`,
     # unchanged by the P2(b) fix.
     payload = _payload(
@@ -1577,32 +1577,32 @@ def test_legacy_remote_set_url_denies():
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_git_ls_remote_allows():
+def test_git_ls_remote_allows() -> None:
     payload = _payload("git ls-remote origin", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_blame_allows():
+def test_git_blame_allows() -> None:
     payload = _payload("git blame file.py", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_shortlog_allows():
+def test_git_shortlog_allows() -> None:
     payload = _payload("git shortlog", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_cat_file_allows():
+def test_git_cat_file_allows() -> None:
     payload = _payload("git cat-file -p HEAD", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_for_each_ref_allows():
+def test_git_for_each_ref_allows() -> None:
     payload = _payload("git for-each-ref", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_symbolic_ref_repoint_head_denies():
+def test_git_symbolic_ref_repoint_head_denies() -> None:
     # `symbolic-ref` is NOT in the safe-forward allowlist -- it can repoint
     # HEAD (`git symbolic-ref HEAD refs/heads/evil`), so it must default-deny
     # like any other unenumerated verb, not allow.
@@ -1614,7 +1614,7 @@ def test_git_symbolic_ref_repoint_head_denies():
     assert "default-deny" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_symbolic_ref_delete_denies():
+def test_git_symbolic_ref_delete_denies() -> None:
     # `git symbolic-ref --delete <ref>` deletes a symbolic ref -- also
     # default-denied, not allowlisted.
     payload = _payload(
@@ -1625,17 +1625,17 @@ def test_git_symbolic_ref_delete_denies():
     assert "default-deny" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_name_rev_allows():
+def test_git_name_rev_allows() -> None:
     payload = _payload("git name-rev HEAD", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_check_ignore_allows():
+def test_git_check_ignore_allows() -> None:
     payload = _payload("git check-ignore foo.txt", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_subcommand_for_segment_skips_global_options():
+def test_git_subcommand_for_segment_skips_global_options() -> None:
     subcmd, parse_ok = guard._git_subcommand_for_segment(
         "git -C /some/path -c user.name=x merge foo"
     )
@@ -1643,7 +1643,7 @@ def test_git_subcommand_for_segment_skips_global_options():
     assert subcmd == "merge"
 
 
-def test_git_subcommand_for_segment_unparseable_fails_closed():
+def test_git_subcommand_for_segment_unparseable_fails_closed() -> None:
     subcmd, parse_ok = guard._git_subcommand_for_segment("git push --force 'unterminated")
     assert parse_ok is False
 
@@ -1663,7 +1663,7 @@ def test_git_subcommand_for_segment_unparseable_fails_closed():
 # ---------------------------------------------------------------------------
 
 
-def test_git_namespace_flag_bypass_denies():
+def test_git_namespace_flag_bypass_denies() -> None:
     payload = _payload(
         "git --namespace status push --force", agent_type="coordinator:executor"
     )
@@ -1672,7 +1672,7 @@ def test_git_namespace_flag_bypass_denies():
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_git_super_prefix_flag_bypass_denies():
+def test_git_super_prefix_flag_bypass_denies() -> None:
     payload = _payload(
         "git --super-prefix status push --force", agent_type="coordinator:executor"
     )
@@ -1681,7 +1681,7 @@ def test_git_super_prefix_flag_bypass_denies():
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_git_config_env_flag_bypass_denies():
+def test_git_config_env_flag_bypass_denies() -> None:
     payload = _payload(
         "git --config-env status push --force", agent_type="coordinator:executor"
     )
@@ -1690,7 +1690,7 @@ def test_git_config_env_flag_bypass_denies():
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_git_exec_path_flag_bypass_denies():
+def test_git_exec_path_flag_bypass_denies() -> None:
     payload = _payload(
         "git --exec-path status push --force", agent_type="coordinator:executor"
     )
@@ -1699,7 +1699,7 @@ def test_git_exec_path_flag_bypass_denies():
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_git_subcommand_for_segment_unrecognized_global_option_fails_over():
+def test_git_subcommand_for_segment_unrecognized_global_option_fails_over() -> None:
     # An unenumerated `--xxx` token (argument shape unknown) must fail the
     # segment over to the legacy classifier -- never guess "no argument".
     subcmd, parse_ok = guard._git_subcommand_for_segment(
@@ -1708,7 +1708,7 @@ def test_git_subcommand_for_segment_unrecognized_global_option_fails_over():
     assert parse_ok is False
 
 
-def test_git_known_no_arg_global_flags_still_resolve_subcommand():
+def test_git_known_no_arg_global_flags_still_resolve_subcommand() -> None:
     # The small explicit no-argument allowlist must still resolve the real
     # subcommand correctly (not a regression of the P0 fix).
     subcmd, parse_ok = guard._git_subcommand_for_segment(
@@ -1726,77 +1726,77 @@ def test_git_known_no_arg_global_flags_still_resolve_subcommand():
 # ---------------------------------------------------------------------------
 
 
-def test_git_worktree_remove_denies():
+def test_git_worktree_remove_denies() -> None:
     payload = _payload("git worktree remove /tmp/foo", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git worktree remove" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_worktree_prune_denies():
+def test_git_worktree_prune_denies() -> None:
     payload = _payload("git worktree prune", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git worktree prune" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_worktree_move_denies():
+def test_git_worktree_move_denies() -> None:
     payload = _payload("git worktree move A B", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git worktree move" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_worktree_add_denies():
+def test_git_worktree_add_denies() -> None:
     payload = _payload("git worktree add /tmp/wt branch", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git worktree add" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_worktree_repair_denies():
+def test_git_worktree_repair_denies() -> None:
     payload = _payload("git worktree repair", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
 
 
-def test_git_worktree_unlock_denies():
+def test_git_worktree_unlock_denies() -> None:
     payload = _payload("git worktree unlock /tmp/wt", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
 
 
-def test_git_worktree_lock_denies():
+def test_git_worktree_lock_denies() -> None:
     payload = _payload("git worktree lock /tmp/wt", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
 
 
-def test_git_worktree_list_allows():
+def test_git_worktree_list_allows() -> None:
     payload = _payload("git worktree list", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_worktree_bare_allows():
+def test_git_worktree_bare_allows() -> None:
     payload = _payload("git worktree", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_worktree_unrecognized_subcommand_denies():
+def test_git_worktree_unrecognized_subcommand_denies() -> None:
     payload = _payload("git worktree bogus-subcmd", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "default-deny" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_remote_remove_denies():
+def test_git_remote_remove_denies() -> None:
     payload = _payload("git remote remove origin", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git remote remove" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_remote_set_url_denies():
+def test_git_remote_set_url_denies() -> None:
     payload = _payload(
         "git remote set-url origin http://evil.example", agent_type="coordinator:executor"
     )
@@ -1805,33 +1805,33 @@ def test_git_remote_set_url_denies():
     assert "git remote set-url" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_remote_rename_denies():
+def test_git_remote_rename_denies() -> None:
     payload = _payload("git remote rename a b", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git remote rename" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_remote_prune_denies():
+def test_git_remote_prune_denies() -> None:
     payload = _payload("git remote prune origin", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git remote prune" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_remote_rm_denies():
+def test_git_remote_rm_denies() -> None:
     payload = _payload("git remote rm origin", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
 
 
-def test_git_remote_set_head_denies():
+def test_git_remote_set_head_denies() -> None:
     payload = _payload("git remote set-head origin -a", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
 
 
-def test_git_remote_set_branches_denies():
+def test_git_remote_set_branches_denies() -> None:
     payload = _payload(
         "git remote set-branches origin main", agent_type="coordinator:executor"
     )
@@ -1839,33 +1839,33 @@ def test_git_remote_set_branches_denies():
     assert result is not None
 
 
-def test_git_remote_update_denies():
+def test_git_remote_update_denies() -> None:
     payload = _payload("git remote update", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
 
 
-def test_git_remote_v_allows():
+def test_git_remote_v_allows() -> None:
     payload = _payload("git remote -v", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_remote_show_allows():
+def test_git_remote_show_allows() -> None:
     payload = _payload("git remote show origin", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_remote_get_url_allows():
+def test_git_remote_get_url_allows() -> None:
     payload = _payload("git remote get-url origin", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_remote_bare_allows():
+def test_git_remote_bare_allows() -> None:
     payload = _payload("git remote", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_remote_unrecognized_subcommand_denies():
+def test_git_remote_unrecognized_subcommand_denies() -> None:
     payload = _payload("git remote bogus-subcmd", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
@@ -1881,14 +1881,14 @@ def test_git_remote_unrecognized_subcommand_denies():
 # ---------------------------------------------------------------------------
 
 
-def test_git_exe_bare_push_force_denies():
+def test_git_exe_bare_push_force_denies() -> None:
     payload = _payload("git.exe push --force", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_exe_windows_absolute_path_push_force_denies():
+def test_git_exe_windows_absolute_path_push_force_denies() -> None:
     payload = _payload(
         "C:\\path\\to\\git.exe push --force", agent_type="coordinator:executor"
     )
@@ -1897,21 +1897,21 @@ def test_git_exe_windows_absolute_path_push_force_denies():
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_usr_bin_git_push_force_denies():
+def test_usr_bin_git_push_force_denies() -> None:
     payload = _payload("/usr/bin/git push --force", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_dot_slash_git_push_force_denies():
+def test_dot_slash_git_push_force_denies() -> None:
     payload = _payload("./git push --force", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_gitk_is_not_treated_as_git():
+def test_gitk_is_not_treated_as_git() -> None:
     # Negative case: `gitk` must NOT normalize to `git` -- substring
     # matching, not exact-basename matching, would be the exact bug class
     # this fix exists to avoid reintroducing.
@@ -1919,29 +1919,29 @@ def test_gitk_is_not_treated_as_git():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_foo_is_not_treated_as_git():
+def test_git_foo_is_not_treated_as_git() -> None:
     payload = _payload("git-foo status", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_mygit_is_not_treated_as_git():
+def test_mygit_is_not_treated_as_git() -> None:
     payload = _payload("mygit push --force", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_gitk_with_path_prefix_is_not_treated_as_git():
+def test_gitk_with_path_prefix_is_not_treated_as_git() -> None:
     # `/usr/bin/gitk`'s basename is `gitk`, not `git` -- exact-basename
     # identity, never substring, must hold regardless of the leading path.
     payload = _payload("/usr/bin/gitk push --force", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_gitk_bare_invocation_is_not_treated_as_git():
+def test_gitk_bare_invocation_is_not_treated_as_git() -> None:
     payload = _payload("gitk --all", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_normalize_executable_basename_exe_and_backslash_stripping_directly():
+def test_normalize_executable_basename_exe_and_backslash_stripping_directly() -> None:
     assert guard._normalize_executable_basename("git.exe") == "git"
     # 2026-07-28): the basename is
     # now fully case-folded (not just the `.exe` suffix), since Windows
@@ -1968,7 +1968,7 @@ def test_normalize_executable_basename_exe_and_backslash_stripping_directly():
     assert guard._normalize_executable_basename("mygit.exe") == "mygit"
 
 
-def test_tokenized_reconstruction_apostrophe_commit_message_with_rebase_word_allows():
+def test_tokenized_reconstruction_apostrophe_commit_message_with_rebase_word_allows() -> None:
     # P3 fix: _evaluate_tokenized used to rebuild a segment via a bare
     # " ".join() with no re-quoting before handing it to the shlex-based
     # subcommand resolver. A commit message containing an apostrophe broke
@@ -1998,7 +1998,7 @@ def test_tokenized_reconstruction_apostrophe_commit_message_with_rebase_word_all
 # ---------------------------------------------------------------------------
 
 
-def test_windows_git_exe_quoted_double_with_space_denies():
+def test_windows_git_exe_quoted_double_with_space_denies() -> None:
     payload = _payload(
         '"C:\\Program Files\\Git\\bin\\git.exe" push --force',
         agent_type="coordinator:executor",
@@ -2008,7 +2008,7 @@ def test_windows_git_exe_quoted_double_with_space_denies():
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_windows_git_exe_quoted_single_with_space_denies():
+def test_windows_git_exe_quoted_single_with_space_denies() -> None:
     payload = _payload(
         "'C:\\Program Files\\Git\\bin\\git.exe' push --force",
         agent_type="coordinator:executor",
@@ -2018,7 +2018,7 @@ def test_windows_git_exe_quoted_single_with_space_denies():
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_windows_git_exe_unc_path_denies():
+def test_windows_git_exe_unc_path_denies() -> None:
     payload = _payload(
         "\\\\server\\share\\git.exe push --force",
         agent_type="coordinator:executor",
@@ -2028,7 +2028,7 @@ def test_windows_git_exe_unc_path_denies():
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_windows_git_exe_doubled_backslashes_denies():
+def test_windows_git_exe_doubled_backslashes_denies() -> None:
     payload = _payload(
         "C:\\path\\\\to\\\\git.exe push --force",
         agent_type="coordinator:executor",
@@ -2038,7 +2038,7 @@ def test_windows_git_exe_doubled_backslashes_denies():
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_windows_git_exe_quoted_worktree_remove_denies():
+def test_windows_git_exe_quoted_worktree_remove_denies() -> None:
     payload = _payload(
         '"C:\\Program Files\\Git\\bin\\git.exe" worktree remove /p',
         agent_type="coordinator:executor",
@@ -2048,7 +2048,7 @@ def test_windows_git_exe_quoted_worktree_remove_denies():
     assert "git worktree remove" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_windows_git_exe_mention_in_commit_message_allows():
+def test_windows_git_exe_mention_in_commit_message_allows() -> None:
     # A mention of a Windows git.exe path inside a commit message string is
     # data, not an invocation -- must not be classified as git at all.
     payload = _payload(
@@ -2058,7 +2058,7 @@ def test_windows_git_exe_mention_in_commit_message_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_windows_git_exe_trailing_backslash_before_space_denies():
+def test_windows_git_exe_trailing_backslash_before_space_denies() -> None:
     # Fixed 2026-07-25: a Windows git.exe path whose argv0 token ends in a
     # backslash immediately before the separating space
     # (`C:\path\to\git.exe\ push --force`) used to normalize its basename to
@@ -2095,7 +2095,7 @@ def test_windows_git_exe_trailing_backslash_before_space_denies():
 # ---------------------------------------------------------------------------
 
 
-def test_windows_git_exe_spaced_path_backslash_rebase_denies():
+def test_windows_git_exe_spaced_path_backslash_rebase_denies() -> None:
     # The exact hole from the dispatch brief: unquoted, backslash-separated,
     # git-for-Windows' default install location.
     payload = _payload(
@@ -2107,7 +2107,7 @@ def test_windows_git_exe_spaced_path_backslash_rebase_denies():
     assert "git rebase" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_windows_git_exe_spaced_path_forward_slash_rebase_denies():
+def test_windows_git_exe_spaced_path_forward_slash_rebase_denies() -> None:
     # Same hole, forward-slash separator form -- both leaked per the brief.
     payload = _payload(
         "C:/Program Files/Git/bin/git.exe rebase -i HEAD~3",
@@ -2118,7 +2118,7 @@ def test_windows_git_exe_spaced_path_forward_slash_rebase_denies():
     assert "git rebase" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_windows_git_exe_spaced_path_backslash_push_force_denies():
+def test_windows_git_exe_spaced_path_backslash_push_force_denies() -> None:
     payload = _payload(
         "C:\\Program Files\\Git\\bin\\git.exe push --force origin x",
         agent_type="coordinator:executor",
@@ -2128,7 +2128,7 @@ def test_windows_git_exe_spaced_path_backslash_push_force_denies():
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_windows_git_exe_spaced_path_forward_slash_push_force_denies():
+def test_windows_git_exe_spaced_path_forward_slash_push_force_denies() -> None:
     payload = _payload(
         "C:/Program Files/Git/bin/git.exe push --force origin x",
         agent_type="coordinator:executor",
@@ -2138,7 +2138,7 @@ def test_windows_git_exe_spaced_path_forward_slash_push_force_denies():
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_windows_bash_exe_spaced_path_inline_c_denies():
+def test_windows_bash_exe_spaced_path_inline_c_denies() -> None:
     # Wrapper-indirection path, spaced argv0 head -- must stay DENY (this
     # shape was already reported working pre-fix; regression-locked here so
     # a future change to the new spaced-path normalizer cannot silently
@@ -2151,7 +2151,7 @@ def test_windows_bash_exe_spaced_path_inline_c_denies():
     assert result is not None
 
 
-def test_windows_bash_exe_unspaced_path_inline_c_denies():
+def test_windows_bash_exe_unspaced_path_inline_c_denies() -> None:
     # Same wrapper shape, unspaced argv0 head (System32 default install
     # location) -- both must deny identically.
     payload = _payload(
@@ -2162,7 +2162,7 @@ def test_windows_bash_exe_unspaced_path_inline_c_denies():
     assert result is not None
 
 
-def test_windows_git_exe_spaced_path_status_allows():
+def test_windows_git_exe_spaced_path_status_allows() -> None:
     # Negative control: a benign command through the SAME spaced path must
     # still allow -- the spaced-path handling must not make matching sloppy.
     payload = _payload(
@@ -2172,7 +2172,7 @@ def test_windows_git_exe_spaced_path_status_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_windows_gitk_exe_spaced_path_allows():
+def test_windows_gitk_exe_spaced_path_allows() -> None:
     # Negative control: a lookalike binary (`gitk`, not `git`) through the
     # same spaced path must not be treated as git.
     payload = _payload(
@@ -2182,7 +2182,7 @@ def test_windows_gitk_exe_spaced_path_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_windows_git_foo_spaced_path_allows():
+def test_windows_git_foo_spaced_path_allows() -> None:
     # Negative control: a hyphenated lookalike (`git-foo`, not `git`)
     # through the same spaced path must not be treated as git.
     payload = _payload(
@@ -2192,7 +2192,7 @@ def test_windows_git_foo_spaced_path_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_windows_legit_spaced_path_allows():
+def test_windows_legit_spaced_path_allows() -> None:
     # Negative control: `legit.exe` through the same spaced path must not
     # be treated as git (substring-of-"git" lookalike).
     payload = _payload(
@@ -2212,7 +2212,7 @@ def test_windows_legit_spaced_path_allows():
 # ---------------------------------------------------------------------------
 
 
-def test_windows_unc_spaced_path_backslash_rebase_denies():
+def test_windows_unc_spaced_path_backslash_rebase_denies() -> None:
     payload = _payload(
         "\\\\server\\share\\Program Files\\Git\\bin\\git.exe rebase -i HEAD~3",
         agent_type="coordinator:executor",
@@ -2221,7 +2221,7 @@ def test_windows_unc_spaced_path_backslash_rebase_denies():
     assert result is not None
 
 
-def test_windows_unc_spaced_path_forward_slash_push_force_denies():
+def test_windows_unc_spaced_path_forward_slash_push_force_denies() -> None:
     payload = _payload(
         "//server/share/Program Files/Git/bin/git.exe push --force origin x",
         agent_type="coordinator:executor",
@@ -2231,7 +2231,7 @@ def test_windows_unc_spaced_path_forward_slash_push_force_denies():
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_windows_unc_spaced_path_bash_exe_inline_c_rm_rf_denies():
+def test_windows_unc_spaced_path_bash_exe_inline_c_rm_rf_denies() -> None:
     payload = _payload(
         '\\\\server\\share\\Program Files\\Git\\bin\\bash.exe -c "rm -rf /tmp/x"',
         agent_type="coordinator:executor",
@@ -2240,7 +2240,7 @@ def test_windows_unc_spaced_path_bash_exe_inline_c_rm_rf_denies():
     assert result is not None
 
 
-def test_windows_unc_spaced_path_status_allows():
+def test_windows_unc_spaced_path_status_allows() -> None:
     # Negative control: a benign command through a spaced UNC path must
     # still allow.
     payload = _payload(
@@ -2259,21 +2259,21 @@ def test_windows_unc_spaced_path_status_allows():
 # ---------------------------------------------------------------------------
 
 
-def test_git_exe_uppercase_bare_stash_denies():
+def test_git_exe_uppercase_bare_stash_denies() -> None:
     payload = _payload("GIT.EXE stash", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "stash" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_exe_titlecase_bare_push_force_denies():
+def test_git_exe_titlecase_bare_push_force_denies() -> None:
     payload = _payload("Git.exe push --force", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_windows_git_exe_uppercase_spaced_path_rebase_denies():
+def test_windows_git_exe_uppercase_spaced_path_rebase_denies() -> None:
     payload = _payload(
         "C:\\Program Files\\Git\\bin\\GIT.EXE rebase -i HEAD~3",
         agent_type="coordinator:executor",
@@ -2282,7 +2282,7 @@ def test_windows_git_exe_uppercase_spaced_path_rebase_denies():
     assert result is not None
 
 
-def test_windows_git_exe_mixedcase_spaced_path_forward_slash_push_force_denies():
+def test_windows_git_exe_mixedcase_spaced_path_forward_slash_push_force_denies() -> None:
     payload = _payload(
         "C:/Program Files/Git/bin/Git.exe push --force origin x",
         agent_type="coordinator:executor",
@@ -2292,7 +2292,7 @@ def test_windows_git_exe_mixedcase_spaced_path_forward_slash_push_force_denies()
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_windows_git_exe_uppercase_spaced_path_status_allows():
+def test_windows_git_exe_uppercase_spaced_path_status_allows() -> None:
     # Negative control: a benign command through an uppercase-spelled spaced
     # path must still allow -- case-folding must not make matching sloppy.
     payload = _payload(
@@ -2302,24 +2302,24 @@ def test_windows_git_exe_uppercase_spaced_path_status_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_gitk_uppercase_bare_invocation_allows():
+def test_gitk_uppercase_bare_invocation_allows() -> None:
     # Negative control: `GITK` (case-varied lookalike) must not be treated
     # as `git`.
     payload = _payload("GITK --all", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_foo_uppercase_bare_invocation_allows():
+def test_git_foo_uppercase_bare_invocation_allows() -> None:
     payload = _payload("GIT-FOO.EXE status", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_legit_uppercase_bare_invocation_allows():
+def test_legit_uppercase_bare_invocation_allows() -> None:
     payload = _payload("LEGIT.EXE stash", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_mygit_exe_uppercase_bare_invocation_allows():
+def test_mygit_exe_uppercase_bare_invocation_allows() -> None:
     payload = _payload("MYGIT.EXE push --force", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
@@ -2333,7 +2333,7 @@ def test_mygit_exe_uppercase_bare_invocation_allows():
 # ---------------------------------------------------------------------------
 
 
-def test_git_show_output_write_denies():
+def test_git_show_output_write_denies() -> None:
     payload = _payload(
         "git show --output=/tmp/pwn.py HEAD", agent_type="coordinator:executor"
     )
@@ -2342,7 +2342,7 @@ def test_git_show_output_write_denies():
     assert "--output" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_log_output_write_denies():
+def test_git_log_output_write_denies() -> None:
     payload = _payload(
         "git log --output=/tmp/pwn.py", agent_type="coordinator:executor"
     )
@@ -2351,7 +2351,7 @@ def test_git_log_output_write_denies():
     assert "--output" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_show_output_attached_no_equals_denies():
+def test_git_show_output_attached_no_equals_denies() -> None:
     payload = _payload(
         "git show --output/tmp/pwn.py HEAD", agent_type="coordinator:executor"
     )
@@ -2359,14 +2359,14 @@ def test_git_show_output_attached_no_equals_denies():
     assert result is not None
 
 
-def test_git_show_ext_diff_denies():
+def test_git_show_ext_diff_denies() -> None:
     payload = _payload("git show --ext-diff HEAD", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "--ext-diff" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_show_dash_o_denies():
+def test_git_show_dash_o_denies() -> None:
     payload = _payload(
         "git show -o/tmp/pwn.py HEAD", agent_type="coordinator:executor"
     )
@@ -2374,7 +2374,7 @@ def test_git_show_dash_o_denies():
     assert result is not None
 
 
-def test_git_show_output_after_dashdash_allows():
+def test_git_show_output_after_dashdash_allows() -> None:
     # A pathspec literally named `--output=x` given AFTER a bare `--`
     # terminator is a pathspec, not an option -- must not deny.
     payload = _payload(
@@ -2383,7 +2383,7 @@ def test_git_show_output_after_dashdash_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_show_output_indicator_flag_still_allows():
+def test_git_show_output_indicator_flag_still_allows() -> None:
     # Hyphen-boundary exemption: `--output-indicator-new=X` is a real,
     # non-write git formatting flag and must NOT be caught by the
     # `--output` prefix denial.
@@ -2393,35 +2393,35 @@ def test_git_show_output_indicator_flag_still_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_show_stat_allows():
+def test_git_show_stat_allows() -> None:
     payload = _payload("git show --stat HEAD", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_log_patch_flag_allows():
+def test_git_log_patch_flag_allows() -> None:
     payload = _payload("git log -p", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_diff_name_only_allows():
+def test_git_diff_name_only_allows() -> None:
     payload = _payload("git diff --name-only", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_checkout_force_short_denies():
+def test_git_checkout_force_short_denies() -> None:
     payload = _payload("git checkout -f", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git checkout -f" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_checkout_force_long_denies():
+def test_git_checkout_force_long_denies() -> None:
     payload = _payload("git checkout --force", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
 
 
-def test_git_checkout_dash_b_force_reset_denies():
+def test_git_checkout_dash_b_force_reset_denies() -> None:
     payload = _payload(
         "git checkout -B main origin/main", agent_type="coordinator:executor"
     )
@@ -2429,7 +2429,7 @@ def test_git_checkout_dash_b_force_reset_denies():
     assert result is not None
 
 
-def test_git_checkout_dashdash_pathspec_still_allows_via_pre_existing_gate():
+def test_git_checkout_dashdash_pathspec_still_allows_via_pre_existing_gate() -> None:
     # `git checkout -- somefile` was ALREADY denied before this fix (the
     # pre-existing `_CHECKOUT_DASHDASH_RE` pathspec-clobber gate) -- not a
     # newly-introduced deny.
@@ -2441,18 +2441,18 @@ def test_git_checkout_dashdash_pathspec_still_allows_via_pre_existing_gate():
     assert "git checkout <pathspec>" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_checkout_new_branch_no_force_allows():
+def test_git_checkout_new_branch_no_force_allows() -> None:
     payload = _payload("git checkout -b feature/foo", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_switch_force_denies():
+def test_git_switch_force_denies() -> None:
     payload = _payload("git switch -f other-branch", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
 
 
-def test_git_switch_discard_changes_denies():
+def test_git_switch_discard_changes_denies() -> None:
     payload = _payload(
         "git switch --discard-changes other-branch", agent_type="coordinator:executor"
     )
@@ -2460,7 +2460,7 @@ def test_git_switch_discard_changes_denies():
     assert result is not None
 
 
-def test_git_switch_dash_c_force_reset_denies():
+def test_git_switch_dash_c_force_reset_denies() -> None:
     payload = _payload(
         "git switch -C main origin/main", agent_type="coordinator:executor"
     )
@@ -2468,25 +2468,25 @@ def test_git_switch_dash_c_force_reset_denies():
     assert result is not None
 
 
-def test_git_switch_plain_allows():
+def test_git_switch_plain_allows() -> None:
     payload = _payload("git switch other-branch", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_branch_dash_m_upper_force_rename_denies():
+def test_git_branch_dash_m_upper_force_rename_denies() -> None:
     payload = _payload("git branch -M main", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "-M/-C" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_branch_dash_c_upper_force_copy_denies():
+def test_git_branch_dash_c_upper_force_copy_denies() -> None:
     payload = _payload("git branch -C main copy", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
 
 
-def test_git_branch_lowercase_m_with_force_denies():
+def test_git_branch_lowercase_m_with_force_denies() -> None:
     payload = _payload(
         "git branch -m -f oldname newname", agent_type="coordinator:executor"
     )
@@ -2495,31 +2495,31 @@ def test_git_branch_lowercase_m_with_force_denies():
     assert "-m/-c --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_branch_move_without_force_allows():
+def test_git_branch_move_without_force_allows() -> None:
     payload = _payload(
         "git branch -m oldname newname", agent_type="coordinator:executor"
     )
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_branch_plain_create_allows():
+def test_git_branch_plain_create_allows() -> None:
     payload = _payload("git branch feature/foo", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_tag_force_replace_denies():
+def test_git_tag_force_replace_denies() -> None:
     payload = _payload("git tag -f v1.0.0", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git tag -f" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_tag_plain_create_allows():
+def test_git_tag_plain_create_allows() -> None:
     payload = _payload("git tag v1.0.0", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_merge_prose_ff_only_in_message_still_denies():
+def test_git_merge_prose_ff_only_in_message_still_denies() -> None:
     payload = _payload(
         'git merge -m "we prefer --ff-only merges" feat',
         agent_type="coordinator:executor",
@@ -2529,12 +2529,12 @@ def test_git_merge_prose_ff_only_in_message_still_denies():
     assert "git merge (not --ff-only)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_merge_real_ff_only_flag_still_allows():
+def test_git_merge_real_ff_only_flag_still_allows() -> None:
     payload = _payload("git merge --ff-only feat", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_config_prose_get_in_value_denies():
+def test_git_config_prose_get_in_value_denies() -> None:
     payload = _payload(
         'git config alias.lg "log --get"', agent_type="coordinator:executor"
     )
@@ -2543,7 +2543,7 @@ def test_git_config_prose_get_in_value_denies():
     assert "git config (not --get)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_config_real_get_flag_still_allows():
+def test_git_config_real_get_flag_still_allows() -> None:
     payload = _payload("git config --get user.name", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
@@ -2556,7 +2556,7 @@ def test_git_config_real_get_flag_still_allows():
 # ---------------------------------------------------------------------------
 
 
-def test_git_stash_bare_denies():
+def test_git_stash_bare_denies() -> None:
     payload = _payload("git stash", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
@@ -2565,14 +2565,14 @@ def test_git_stash_bare_denies():
     assert "sweeps EVERY" in reason
 
 
-def test_git_stash_push_no_pathspec_denies():
+def test_git_stash_push_no_pathspec_denies() -> None:
     payload = _payload("git stash push", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_implicit_push_flag_only_denies():
+def test_git_stash_implicit_push_flag_only_denies() -> None:
     # `git stash -u` is shorthand for `git stash push -u` -- same
     # sweep-everything shape, no pathspec.
     payload = _payload("git stash -u", agent_type="coordinator:executor")
@@ -2581,7 +2581,7 @@ def test_git_stash_implicit_push_flag_only_denies():
     assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_push_with_pathspec_allows():
+def test_git_stash_push_with_pathspec_allows() -> None:
     payload = _payload(
         "git stash push -- state/subagent-share/my-file.md",
         agent_type="coordinator:executor",
@@ -2589,7 +2589,7 @@ def test_git_stash_push_with_pathspec_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_stash_save_denies():
+def test_git_stash_save_denies() -> None:
     # 2026-07-28: `git stash save [<msg>]` is the pre-2.16 deprecated spelling
     # of `git stash push [-m <msg>]` -- identical working-tree sweep. It was
     # grouped with `create`/`store` as an "other subcommand" and fell through
@@ -2602,14 +2602,14 @@ def test_git_stash_save_denies():
     assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_save_with_message_denies():
+def test_git_stash_save_with_message_denies() -> None:
     payload = _payload('git stash save "wip"', agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_save_with_pathspec_allows():
+def test_git_stash_save_with_pathspec_allows() -> None:
     # The `--`-delimited pathspec scopes it, exactly as for `push`.
     payload = _payload(
         "git stash save -- state/subagent-share/my-file.md",
@@ -2618,12 +2618,12 @@ def test_git_stash_save_with_pathspec_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_stash_list_allows():
+def test_git_stash_list_allows() -> None:
     payload = _payload("git stash list", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_stash_show_allows():
+def test_git_stash_show_allows() -> None:
     payload = _payload("git stash show -p", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
@@ -2639,14 +2639,14 @@ def test_git_stash_show_allows():
 # ea557efb4908.yaml). Each case below reproduces the EXACT displacement
 # shape -- a redirection occupying the position this guard reads as "the
 # first real argument after stash" -- not a generic stash re-test.
-def test_git_stash_bare_with_stderr_redirect_denies():
+def test_git_stash_bare_with_stderr_redirect_denies() -> None:
     payload = _payload("git stash 2>&1", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_bare_with_stderr_redirect_and_pipe_denies():
+def test_git_stash_bare_with_stderr_redirect_and_pipe_denies() -> None:
     # The EXACT shape from the incident transcript (`cd <repo> && git stash
     # 2>&1 | head -5; echo done`) -- repo path elided, irrelevant to
     # classification.
@@ -2659,21 +2659,21 @@ def test_git_stash_bare_with_stderr_redirect_and_pipe_denies():
     assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_bare_with_stdout_redirect_denies():
+def test_git_stash_bare_with_stdout_redirect_denies() -> None:
     payload = _payload("git stash >/dev/null", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_bare_with_stderr_redirect_to_file_denies():
+def test_git_stash_bare_with_stderr_redirect_to_file_denies() -> None:
     payload = _payload("git stash 2>/dev/null", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_bare_with_separated_redirect_target_denies():
+def test_git_stash_bare_with_separated_redirect_target_denies() -> None:
     # Whitespace between the operator and its target still yields two
     # `shlex` tokens (`[">", "/dev/null"]`) -- both must be consumed.
     payload = _payload("git stash > /dev/null", agent_type="coordinator:executor")
@@ -2682,7 +2682,7 @@ def test_git_stash_bare_with_separated_redirect_target_denies():
     assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_push_with_redirect_still_denies():
+def test_git_stash_push_with_redirect_still_denies() -> None:
     # A real token (`push`) already occupies the first-argument position
     # before the redirect -- this shape denied even pre-fix; kept as a
     # boundary case so a future change can't silently narrow the strip to
@@ -2693,14 +2693,14 @@ def test_git_stash_push_with_redirect_still_denies():
     assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_dash_u_with_redirect_still_denies():
+def test_git_stash_dash_u_with_redirect_still_denies() -> None:
     payload = _payload("git stash -u 2>&1", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_pathspec_with_redirect_still_allows():
+def test_git_stash_pathspec_with_redirect_still_allows() -> None:
     # The `--`-delimited pathspec scoping must survive stripping a leading
     # redirection -- confirms the fix doesn't over-strip into `remaining`
     # and lose the `"--" not in remaining` scoping check.
@@ -2711,7 +2711,7 @@ def test_git_stash_pathspec_with_redirect_still_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_stash_bare_with_input_redirect_denies():
+def test_git_stash_bare_with_input_redirect_denies() -> None:
     # 2026-08-23 fix: `<`-family input redirection is a distinct character
     # class from `>`-family output redirection, and the original regex only
     # matched the latter. `git stash </dev/null` tokenized `remaining` to
@@ -2722,28 +2722,28 @@ def test_git_stash_bare_with_input_redirect_denies():
     assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_bare_with_heredoc_marker_denies():
+def test_git_stash_bare_with_heredoc_marker_denies() -> None:
     payload = _payload("git stash <<EOF", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_bare_with_herestring_denies():
+def test_git_stash_bare_with_herestring_denies() -> None:
     payload = _payload("git stash <<< x", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_bare_with_separated_input_redirect_target_denies():
+def test_git_stash_bare_with_separated_input_redirect_target_denies() -> None:
     payload = _payload("git stash < /dev/null", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_pathspec_with_input_redirect_still_allows():
+def test_git_stash_pathspec_with_input_redirect_still_allows() -> None:
     # Same over-stripping boundary as the `>`-family case above, for the
     # newly-widened `<`-family branch.
     payload = _payload(
@@ -2753,19 +2753,19 @@ def test_git_stash_pathspec_with_input_redirect_still_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_stash_pop_is_allowed_for_subagent():
+def test_git_stash_pop_is_allowed_for_subagent() -> None:
     payload = _payload("git stash pop", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_stash_apply_still_denies():
+def test_git_stash_apply_still_denies() -> None:
     payload = _payload("git stash apply stash@{0}", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git stash apply" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_drop_still_denies_as_drop_clear():
+def test_git_stash_drop_still_denies_as_drop_clear() -> None:
     payload = _payload("git stash drop", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
@@ -2774,14 +2774,14 @@ def test_git_stash_drop_still_denies_as_drop_clear():
     assert "git stash (unscoped)" not in reason
 
 
-def test_git_stash_clear_still_denies_as_drop_clear():
+def test_git_stash_clear_still_denies_as_drop_clear() -> None:
     payload = _payload("git stash clear", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git stash drop/clear" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_apply_deny_message_names_no_stash_recipe():
+def test_git_stash_apply_deny_message_names_no_stash_recipe() -> None:
     payload = _payload("git stash apply stash@{0}", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -2789,7 +2789,7 @@ def test_git_stash_apply_deny_message_names_no_stash_recipe():
     assert "STACK-POSITION" in reason
 
 
-def test_git_stash_drop_deny_message_does_not_redirect_to_the_em():
+def test_git_stash_drop_deny_message_does_not_redirect_to_the_em() -> None:
     payload = _payload("git stash drop", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -2798,14 +2798,14 @@ def test_git_stash_drop_deny_message_does_not_redirect_to_the_em():
     assert "no-stash" in reason
 
 
-def test_git_stash_clear_deny_message_does_not_redirect_to_the_em():
+def test_git_stash_clear_deny_message_does_not_redirect_to_the_em() -> None:
     payload = _payload("git stash clear", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "Surface it to the EM" not in reason
 
 
-def test_guard_is_registered_box_degrading_so_dispatch_keeps_its_deny():
+def test_guard_is_registered_box_degrading_so_dispatch_keeps_its_deny() -> None:
     from coordinator_core import deny_registry
     from coordinator_core.machine_profile import apply_guard_level
 
@@ -2817,7 +2817,7 @@ def test_guard_is_registered_box_degrading_so_dispatch_keeps_its_deny():
     assert kept["guardLevel"] == "floor"
 
 
-def test_no_stash_pre_existing_failure_recipe_end_to_end_allows():
+def test_no_stash_pre_existing_failure_recipe_end_to_end_allows() -> None:
     # Regression for the doctrine/guard reconciliation (2026-07-29): a
     # subagent can now complete the pre-existing-failure-verification recipe
     # WITHOUT ever touching the stash stack or doing a whole-tree checkout --
@@ -2846,14 +2846,14 @@ def test_no_stash_pre_existing_failure_recipe_end_to_end_allows():
         assert result is None, f"recipe command unexpectedly denied: {cmd!r} -> {result}"
 
 
-def test_git_stash_branch_form_unaffected_allows():
+def test_git_stash_branch_form_unaffected_allows() -> None:
     # `git stash branch <name>` is a different subcommand entirely, not the
     # sweep-everything push/bare shape -- unaffected by this fix.
     payload = _payload("git stash branch my-recovery-branch", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_stash_word_in_commit_message_not_denied():
+def test_stash_word_in_commit_message_not_denied() -> None:
     # The word "stash" appearing in an unrelated position (here, a commit
     # message) must not false-trip the new rule.
     payload = _payload(
@@ -2873,7 +2873,7 @@ def test_stash_word_in_commit_message_not_denied():
 # ---------------------------------------------------------------------------
 
 
-def test_settings_home_bin_documented_default_form_allows():
+def test_settings_home_bin_documented_default_form_allows() -> None:
     payload = _payload(
         '"${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-doc-new" '
         "--type run-report --plan foo.md --chunk C1",
@@ -2882,7 +2882,7 @@ def test_settings_home_bin_documented_default_form_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_settings_home_bin_documented_default_form_braced_home_allows():
+def test_settings_home_bin_documented_default_form_braced_home_allows() -> None:
     payload = _payload(
         '"${COORDINATOR_SETTINGS_HOME:-${HOME}/.coordinator-claude-settings}/bin/cross-repo-memo" '
         "draft foo --to bar-em",
@@ -2891,7 +2891,7 @@ def test_settings_home_bin_documented_default_form_braced_home_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_settings_home_bin_bare_var_no_default_allows():
+def test_settings_home_bin_bare_var_no_default_allows() -> None:
     payload = _payload(
         "$COORDINATOR_SETTINGS_HOME/bin/coordinator-doc-new --type run-report",
         agent_type="coordinator:executor",
@@ -2899,7 +2899,7 @@ def test_settings_home_bin_bare_var_no_default_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_settings_home_bin_braced_var_no_default_allows():
+def test_settings_home_bin_braced_var_no_default_allows() -> None:
     payload = _payload(
         "${COORDINATOR_SETTINGS_HOME}/bin/coordinator-doc-new --type run-report",
         agent_type="coordinator:executor",
@@ -2907,7 +2907,7 @@ def test_settings_home_bin_braced_var_no_default_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_settings_home_bin_unquoted_allows():
+def test_settings_home_bin_unquoted_allows() -> None:
     # No surrounding quotes at all -- the exemption must not depend on
     # quoting, since shlex quote-stripping is applied identically either way.
     payload = _payload(
@@ -2925,7 +2925,7 @@ def test_settings_home_bin_unquoted_allows():
         "${CLAUDE_HOME:-$HOME}/.coordinator-claude-settings/bin/mise-prep-gate",
     ],
 )
-def test_settings_home_bin_home_prefixed_allows(launcher):
+def test_settings_home_bin_home_prefixed_allows(launcher) -> None:
     payload = _payload(f"{launcher} --repo-root repo plan.md", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
@@ -2940,13 +2940,13 @@ def test_settings_home_bin_home_prefixed_allows(launcher):
         "$HOME/bin/mise-prep-gate",
     ],
 )
-def test_settings_home_bin_home_prefixed_bad_shapes_still_advise(launcher):
+def test_settings_home_bin_home_prefixed_bad_shapes_still_advise(launcher) -> None:
     result = _enveloped(guard.check)(_payload(f"{launcher} --flag", agent_type="coordinator:executor"))
     assert result is not None
     assert "unresolved" in result["hookSpecificOutput"]["additionalContext"]
 
 
-def test_settings_home_bin_other_variable_still_advises():
+def test_settings_home_bin_other_variable_still_advises() -> None:
     # A DIFFERENT variable name in the same shape must NOT be exempt --
     # still an unresolved (opaque) argv0, so it advises (RESHAPE, C18d).
     payload = _payload(
@@ -2959,7 +2959,7 @@ def test_settings_home_bin_other_variable_still_advises():
     assert "unresolved" in hso["additionalContext"]
 
 
-def test_settings_home_bin_arbitrary_braced_variable_still_advises():
+def test_settings_home_bin_arbitrary_braced_variable_still_advises() -> None:
     payload = _payload(
         "${ANYTHING}/bin/coordinator-doc-new --type run-report",
         agent_type="coordinator:executor",
@@ -2971,7 +2971,7 @@ def test_settings_home_bin_arbitrary_braced_variable_still_advises():
     assert "unresolved" in hso["additionalContext"]
 
 
-def test_settings_home_command_substitution_argv0_still_advises():
+def test_settings_home_command_substitution_argv0_still_advises() -> None:
     # Command substitution anywhere in argv0 position must never be exempt,
     # even if it happens to reference `COORDINATOR_SETTINGS_HOME` textually.
     payload = _payload(
@@ -2984,7 +2984,7 @@ def test_settings_home_command_substitution_argv0_still_advises():
     assert "unresolved" in hso["additionalContext"]
 
 
-def test_settings_home_backtick_argv0_not_reclassified_by_this_change():
+def test_settings_home_backtick_argv0_not_reclassified_by_this_change() -> None:
     # Pre-existing guard behavior, NOT something this change touches: `` `..`
     # `` is not `$`-prefixed, so it never entered `_ARGV0_UNRESOLVED_RE`'s
     # scope (that pattern is `^\$` only) even before this exemption existed
@@ -3000,7 +3000,7 @@ def test_settings_home_backtick_argv0_not_reclassified_by_this_change():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_settings_home_bin_wrong_default_still_advises():
+def test_settings_home_bin_wrong_default_still_advises() -> None:
     # `:-` supplies the value when the var is unset -- an attacker-chosen
     # default is an attacker-chosen command, so only the documented literal
     # default is exempt. Still opaque, so it advises rather than denies.
@@ -3015,7 +3015,7 @@ def test_settings_home_bin_wrong_default_still_advises():
     assert "unresolved" in hso["additionalContext"]
 
 
-def test_settings_home_bin_path_traversal_tail_still_advises():
+def test_settings_home_bin_path_traversal_tail_still_advises() -> None:
     payload = _payload(
         "${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/../../evil --flag",
         agent_type="coordinator:executor",
@@ -3027,7 +3027,7 @@ def test_settings_home_bin_path_traversal_tail_still_advises():
     assert "unresolved" in hso["additionalContext"]
 
 
-def test_settings_home_bin_nested_expansion_tail_still_advises():
+def test_settings_home_bin_nested_expansion_tail_still_advises() -> None:
     # A second, unresolved expansion embedded in the tail must not slip
     # through as a "plain name".
     payload = _payload(
@@ -3041,7 +3041,7 @@ def test_settings_home_bin_nested_expansion_tail_still_advises():
     assert "unresolved" in hso["additionalContext"]
 
 
-def test_settings_home_bin_metachar_in_tail_still_advises():
+def test_settings_home_bin_metachar_in_tail_still_advises() -> None:
     # A command-substitution suffix fused directly onto the tail (no
     # whitespace/separator, so it stays part of the SAME argv0 token) must
     # not be treated as a plain resolved name -- `[A-Za-z0-9_.-]+$` rejects
@@ -3057,7 +3057,7 @@ def test_settings_home_bin_metachar_in_tail_still_advises():
     assert "unresolved" in hso["additionalContext"]
 
 
-def test_settings_home_bin_env_wrapped_form_allows():
+def test_settings_home_bin_env_wrapped_form_allows() -> None:
     payload = _payload(
         "env FOO=bar ${COORDINATOR_SETTINGS_HOME:-$HOME/.coordinator-claude-settings}/bin/coordinator-doc-new --type run-report",
         agent_type="coordinator:executor",
@@ -3065,7 +3065,7 @@ def test_settings_home_bin_env_wrapped_form_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_settings_home_bin_env_wrapped_other_variable_still_advises():
+def test_settings_home_bin_env_wrapped_other_variable_still_advises() -> None:
     payload = _payload(
         "env FOO=bar $BAR/bin/coordinator-doc-new --type run-report",
         agent_type="coordinator:executor",
@@ -3086,7 +3086,7 @@ def test_settings_home_bin_env_wrapped_other_variable_still_advises():
 # ---------------------------------------------------------------------------
 
 
-def test_git_mv_still_denies():
+def test_git_mv_still_denies() -> None:
     payload = _payload(
         "git mv state/lessons/a.yaml state/lessons/archive/a.yaml",
         agent_type="coordinator:executor",
@@ -3097,7 +3097,7 @@ def test_git_mv_still_denies():
     assert "git mv (index-mutating rename)" in reason
 
 
-def test_git_mv_deny_message_offers_plain_mv():
+def test_git_mv_deny_message_offers_plain_mv() -> None:
     payload = _payload("git mv a.yaml b.yaml", agent_type="coordinator:executor")
     reason = _enveloped(guard.check)(payload)["hookSpecificOutput"]["permissionDecisionReason"]
     assert "mv A B" in reason
@@ -3107,7 +3107,7 @@ def test_git_mv_deny_message_offers_plain_mv():
     assert "unrecognized git verb" not in reason
 
 
-def test_git_mv_deny_message_substitutes_real_paths():
+def test_git_mv_deny_message_substitutes_real_paths() -> None:
     # 2026-07-29 duty-of-care promotion: the guard already holds the real
     # source/dest paths (`cmd`) -- the offer should reproduce them
     # concretely, ready to run, not just repeat the generic `mv A B`
@@ -3121,7 +3121,7 @@ def test_git_mv_deny_message_substitutes_real_paths():
     assert "Run it now, with your own paths already substituted in" in reason
 
 
-def test_git_mv_deny_message_quotes_spaced_real_paths():
+def test_git_mv_deny_message_quotes_spaced_real_paths() -> None:
     payload = _payload(
         'git mv "old dir/f 1.md" "new dir/f 2.md"',
         agent_type="coordinator:executor",
@@ -3130,13 +3130,13 @@ def test_git_mv_deny_message_quotes_spaced_real_paths():
     assert "mv 'old dir/f 1.md' 'new dir/f 2.md'" in reason
 
 
-def test_git_mv_deny_message_drops_flags_from_corrected_command():
+def test_git_mv_deny_message_drops_flags_from_corrected_command() -> None:
     payload = _payload("git mv -f a.md b.md", agent_type="coordinator:executor")
     reason = _enveloped(guard.check)(payload)["hookSpecificOutput"]["permissionDecisionReason"]
     assert "mv a.md b.md" in reason
 
 
-def test_git_mv_deny_message_keeps_hyphen_led_dest_path_after_end_of_options():
+def test_git_mv_deny_message_keeps_hyphen_led_dest_path_after_end_of_options() -> None:
     # 2026-07-30 M13/M19 review finding: a bare `-`-startswith filter with
     # no `--` end-of-options awareness dropped a REAL path operand that
     # merely happens to start with a hyphen, the same way `mv`/`git mv`
@@ -3150,7 +3150,7 @@ def test_git_mv_deny_message_keeps_hyphen_led_dest_path_after_end_of_options():
     assert "mv -weird-file.txt normal-dest.txt" in reason
 
 
-def test_git_mv_deny_message_still_drops_flags_before_end_of_options():
+def test_git_mv_deny_message_still_drops_flags_before_end_of_options() -> None:
     # Companion negative: a `-`-prefixed token BEFORE `--` (or with no `--`
     # at all) is still filtered as a flag -- this fix closes the dropped-
     # real-operand case, it does not stop filtering ordinary flags.
@@ -3159,7 +3159,7 @@ def test_git_mv_deny_message_still_drops_flags_before_end_of_options():
     assert "mv a.md b.md" in reason
 
 
-def test_git_mv_malformed_falls_back_to_generic_template_not_a_guess():
+def test_git_mv_malformed_falls_back_to_generic_template_not_a_guess() -> None:
     # Fewer than two path operands (a malformed `git mv` real git would
     # itself reject) -- the guard must not fabricate a corrected command;
     # it falls back to the pre-existing generic `mv A B` wording.
@@ -3169,7 +3169,7 @@ def test_git_mv_malformed_falls_back_to_generic_template_not_a_guess():
     assert "Run it now, with your own paths already substituted in" not in reason
 
 
-def test_irreversible_unrecognized_git_verb_still_default_denies_generically():
+def test_irreversible_unrecognized_git_verb_still_default_denies_generically() -> None:
     # The named `mv` branch must not weaken default-deny for the irreversible verbs.
     payload = _payload("git gc --prune=now", agent_type="coordinator:executor")
     reason = _enveloped(guard.check)(payload)["hookSpecificOutput"]["permissionDecisionReason"]
@@ -3185,14 +3185,14 @@ def test_irreversible_unrecognized_git_verb_still_default_denies_generically():
         "git -C /some/repo merge-file --stdout a b c",
     ],
 )
-def test_ls_tree_and_stdout_merge_file_allow(command):
+def test_ls_tree_and_stdout_merge_file_allow(command) -> None:
     assert _enveloped(guard.check)(_payload(command, agent_type="coordinator:executor")) is None
 
 
 @pytest.mark.parametrize(
     "command", ["git merge-file a b c", "git merge-file -- -p b c"]
 )
-def test_bare_merge_file_denies_naming_stdout_alternative(command):
+def test_bare_merge_file_denies_naming_stdout_alternative(command) -> None:
     result = _enveloped(guard.check)(_payload(command, agent_type="coordinator:executor"))
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "git merge-file (overwrites first file)" in reason
@@ -3200,7 +3200,7 @@ def test_bare_merge_file_denies_naming_stdout_alternative(command):
     assert "unrecognized git verb" not in reason
 
 
-def test_git_show_sha_path_allows():
+def test_git_show_sha_path_allows() -> None:
     # DoE memo's second P2 ask (read-only `git show <sha>:<path>` for a
     # before/after diff) needed no change -- `show` was already safe-listed.
     # Pinned so a future allowlist edit cannot silently retract it.
@@ -3234,7 +3234,7 @@ def test_git_show_sha_path_allows():
 # --- ALLOW side: "git" present as data, never invoked as a command --------
 
 
-def test_grep_quoted_git_pattern_allows():
+def test_grep_quoted_git_pattern_allows() -> None:
     # The exact live-denied shape: "git " as a double-quoted grep PATTERN
     # operand, piped to another command.
     payload = _payload(
@@ -3243,14 +3243,14 @@ def test_grep_quoted_git_pattern_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_grep_git_word_boundary_pattern_allows():
+def test_grep_git_word_boundary_pattern_allows() -> None:
     # A bare (unquoted-adjacent-word) "git" token as a grep pattern operand,
     # not the invoked command.
     payload = _payload("grep git somefile.md", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_grep_regex_alternation_containing_git_allows():
+def test_grep_regex_alternation_containing_git_allows() -> None:
     # "git" as one branch of a regex alternation inside a grep pattern --
     # the exact shape from the live sidecar reproduction.
     payload = _payload(
@@ -3259,49 +3259,49 @@ def test_grep_regex_alternation_containing_git_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_ripgrep_git_pattern_single_quoted_allows():
+def test_ripgrep_git_pattern_single_quoted_allows() -> None:
     payload = _payload("rg 'git verb' somefile.md", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_double_quoted_string_containing_git_allows():
+def test_double_quoted_string_containing_git_allows() -> None:
     payload = _payload('echo "this mentions git in prose"', agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_single_quoted_string_containing_git_allows():
+def test_single_quoted_string_containing_git_allows() -> None:
     payload = _payload("echo 'this mentions git in prose'", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_gitignore_filename_allows():
+def test_gitignore_filename_allows() -> None:
     payload = _payload("cat .gitignore", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_digit_substring_allows():
+def test_digit_substring_allows() -> None:
     payload = _payload("echo digit", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_legit_substring_allows():
+def test_legit_substring_allows() -> None:
     payload = _payload("echo legit", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_crypt_filename_as_argument_allows():
+def test_git_crypt_filename_as_argument_allows() -> None:
     payload = _payload("ls git-crypt", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_crypt_as_invoked_command_allows():
+def test_git_crypt_as_invoked_command_allows() -> None:
     # `git-crypt` invoked AS THE COMMAND itself (not `git` with a `-crypt`
     # suffix -- a distinct binary) must not be treated as a git invocation.
     payload = _payload("git-crypt status", agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_as_longer_word_substring_allows():
+def test_git_as_longer_word_substring_allows() -> None:
     # "git" as part of a longer unquoted word, with no word boundary at all
     # -- never matches the guard's own `\bgit\b` gate, included for
     # completeness of the "as part of a longer word" AC.
@@ -3309,7 +3309,7 @@ def test_git_as_longer_word_substring_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_subcommand_and_remaining_for_segment_not_a_git_invocation():
+def test_git_subcommand_and_remaining_for_segment_not_a_git_invocation() -> None:
     # Direct unit coverage of the sentinel contract: a command-position head
     # that is NOT `git` returns the `_NOT_A_GIT_INVOCATION` sentinel with
     # `parse_ok=True` (allow outright), never `parse_ok=False` (which would
@@ -3325,7 +3325,7 @@ def test_git_subcommand_and_remaining_for_segment_not_a_git_invocation():
 # --- DENY side: every subshell/env/pipe-adjacent shape must still deny ----
 
 
-def test_git_push_force_after_pipe_still_denies():
+def test_git_push_force_after_pipe_still_denies() -> None:
     payload = _payload(
         "echo hi | git push --force", agent_type="coordinator:executor"
     )
@@ -3334,7 +3334,7 @@ def test_git_push_force_after_pipe_still_denies():
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_push_force_after_and_and_still_denies():
+def test_git_push_force_after_and_and_still_denies() -> None:
     payload = _payload(
         "echo hi && git push --force", agent_type="coordinator:executor"
     )
@@ -3343,7 +3343,7 @@ def test_git_push_force_after_and_and_still_denies():
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_push_force_after_or_or_still_denies():
+def test_git_push_force_after_or_or_still_denies() -> None:
     payload = _payload(
         "false || git push --force", agent_type="coordinator:executor"
     )
@@ -3352,7 +3352,7 @@ def test_git_push_force_after_or_or_still_denies():
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_push_force_after_semicolon_still_denies():
+def test_git_push_force_after_semicolon_still_denies() -> None:
     payload = _payload(
         "echo hi ; git push --force", agent_type="coordinator:executor"
     )
@@ -3361,7 +3361,7 @@ def test_git_push_force_after_semicolon_still_denies():
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_push_force_env_prefixed_still_denies():
+def test_git_push_force_env_prefixed_still_denies() -> None:
     payload = _payload(
         "env FOO=1 git push --force", agent_type="coordinator:executor"
     )
@@ -3370,70 +3370,70 @@ def test_git_push_force_env_prefixed_still_denies():
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_push_force_glued_subshell_still_denies():
+def test_git_push_force_glued_subshell_still_denies() -> None:
     payload = _payload("(git push --force)", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_push_force_spaced_subshell_still_denies():
+def test_git_push_force_spaced_subshell_still_denies() -> None:
     payload = _payload("( git push --force )", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git push --force" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_rebase_still_denies_command_position():
+def test_git_rebase_still_denies_command_position() -> None:
     payload = _payload("git rebase -i HEAD~3", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git rebase" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_stash_unscoped_still_denies():
+def test_git_stash_unscoped_still_denies() -> None:
     payload = _payload("git stash", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git stash (unscoped)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_reset_hard_still_denies():
+def test_git_reset_hard_still_denies() -> None:
     payload = _payload("git reset --hard HEAD~1", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git reset --hard" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_branch_dash_d_upper_still_denies():
+def test_git_branch_dash_d_upper_still_denies() -> None:
     payload = _payload("git branch -D somebranch", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git branch -D" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_commit_amend_still_denies():
+def test_git_commit_amend_still_denies() -> None:
     payload = _payload("git commit --amend -m x", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git commit --amend" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_worktree_remove_still_denies():
+def test_git_worktree_remove_still_denies() -> None:
     payload = _payload("git worktree remove /tmp/foo", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git worktree remove" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_mv_still_denies_command_position():
+def test_git_mv_still_denies_command_position() -> None:
     payload = _payload("git mv a.yaml b.yaml", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
     assert "git mv (index-mutating rename)" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_restore_word_in_commit_message_does_not_deny():
+def test_restore_word_in_commit_message_does_not_deny() -> None:
     # Regression: `_RESTORE_KEYWORD_RE` used to be free-text `\brestore\b`,
     # matching the word ANYWHERE in the segment -- including inside a
     # quoted `-m` commit-message operand -- rather than an actual `git
@@ -3446,7 +3446,7 @@ def test_restore_word_in_commit_message_does_not_deny():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_restore_word_in_commit_message_within_indirection_payload_does_not_deny():
+def test_restore_word_in_commit_message_within_indirection_payload_does_not_deny() -> None:
     # Same false positive, hit via the `strict=False` indirection-payload
     # scan (`_unwrap_and_classify`, e.g. a `python3 -c '...'` one-liner
     # whose Python source text embeds a git-commit-with-message string) --
@@ -3459,7 +3459,7 @@ def test_restore_word_in_commit_message_within_indirection_payload_does_not_deny
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_git_restore_working_tree_still_denies():
+def test_git_restore_working_tree_still_denies() -> None:
     payload = _payload("git restore path/to/file.txt", agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
@@ -3468,7 +3468,7 @@ def test_git_restore_working_tree_still_denies():
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_git_subcommand_and_remaining_for_segment_bare_git_still_none_subcmd():
+def test_git_subcommand_and_remaining_for_segment_bare_git_still_none_subcmd() -> None:
     # Bare `git` (command-position head IS git, no subcommand) is a DISTINCT
     # state from `_NOT_A_GIT_INVOCATION` and must still route through the
     # anchored default-deny ladder, not the new allow-outright branch.
@@ -3489,7 +3489,7 @@ def test_git_subcommand_and_remaining_for_segment_bare_git_still_none_subcmd():
 # ---------------------------------------------------------------------------
 
 
-def test_main_thread_no_agent_id_key_logs_branch(tmp_path, monkeypatch):
+def test_main_thread_no_agent_id_key_logs_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     log_path = tmp_path / "fail-open.log"
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
     payload = {
@@ -3506,7 +3506,7 @@ def test_main_thread_no_agent_id_key_logs_branch(tmp_path, monkeypatch):
     assert "git rm --cached secret.txt" in content
 
 
-def test_kind_unresolved_unparseable_agent_id_logs_branch_and_denies(tmp_path, monkeypatch):
+def test_kind_unresolved_unparseable_agent_id_logs_branch_and_denies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # _resolve_subagent_identity resolves to "" AND no agent_type leg is
     # present -- effective_type ends up genuinely empty, so this is a true
     # kind-resolution failure (unlike the known-agent_type case covered by
@@ -3528,7 +3528,7 @@ def test_kind_unresolved_unparseable_agent_id_logs_branch_and_denies(tmp_path, m
     assert "raw_agent_id='deadbeef0123'" in content
 
 
-def test_kind_unresolved_empty_effective_type_logs_branch_and_denies(tmp_path, monkeypatch):
+def test_kind_unresolved_empty_effective_type_logs_branch_and_denies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     log_path = tmp_path / "fail-open.log"
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
     monkeypatch.setattr(guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123")
@@ -3551,7 +3551,7 @@ def test_kind_unresolved_empty_effective_type_logs_branch_and_denies(tmp_path, m
     assert "subagent_type=''" in content
 
 
-def test_fail_open_non_destructive_command_logs_nothing(tmp_path, monkeypatch):
+def test_fail_open_non_destructive_command_logs_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # Cost-gating: a command that never trips Layer 1 must never reach the
     # fail-open logging code at all, even with no agent_id key present.
     log_path = tmp_path / "fail-open.log"
@@ -3565,7 +3565,7 @@ def test_fail_open_non_destructive_command_logs_nothing(tmp_path, monkeypatch):
     assert not log_path.exists()
 
 
-def test_fail_open_logging_active_normal_deny_still_denies(tmp_path, monkeypatch):
+def test_fail_open_logging_active_normal_deny_still_denies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     log_path = tmp_path / "fail-open.log"
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
     payload = _payload("git rebase -i HEAD~3", agent_type="coordinator:executor")
@@ -3577,7 +3577,7 @@ def test_fail_open_logging_active_normal_deny_still_denies(tmp_path, monkeypatch
     assert not log_path.exists()
 
 
-def test_fail_open_logging_active_normal_allow_still_allows(tmp_path, monkeypatch):
+def test_fail_open_logging_active_normal_allow_still_allows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     log_path = tmp_path / "fail-open.log"
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
     payload = _payload("git status", agent_type="coordinator:executor")
@@ -3587,7 +3587,7 @@ def test_fail_open_logging_active_normal_allow_still_allows(tmp_path, monkeypatc
     assert not log_path.exists()
 
 
-def test_fail_open_logging_failure_does_not_raise_or_change_verdict(monkeypatch):
+def test_fail_open_logging_failure_does_not_raise_or_change_verdict(monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom():
         raise OSError("simulated unwritable settings-home")
 
@@ -3612,7 +3612,7 @@ def test_fail_open_logging_failure_does_not_raise_or_change_verdict(monkeypatch)
 # ---------------------------------------------------------------------------
 
 
-def test_machine_local_set_denies_executor():
+def test_machine_local_set_denies_executor() -> None:
     payload = _payload(
         "machine-local set repos.content_root /evil", agent_type="coordinator:executor"
     )
@@ -3623,7 +3623,7 @@ def test_machine_local_set_denies_executor():
     assert "machine-local set" in reason
 
 
-def test_machine_local_set_denies_code_reviewer():
+def test_machine_local_set_denies_code_reviewer() -> None:
     payload = _payload(
         "machine-local set repos.content_root /evil", agent_type="coordinator:code-reviewer"
     )
@@ -3632,7 +3632,7 @@ def test_machine_local_set_denies_code_reviewer():
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_machine_local_set_denies_unresolved_unknown_subagent_type(monkeypatch):
+def test_machine_local_set_denies_unresolved_unknown_subagent_type(monkeypatch: pytest.MonkeyPatch) -> None:
     # agent_id resolves truthy, but BOTH the PRIMARY leg (payload agent_type,
     # absent here) and the SECONDARY leg (_read_backpointer_subagent_type)
     # resolve empty -- effective_type ends up "". Layer 2's machine-local
@@ -3657,7 +3657,7 @@ def test_machine_local_set_denies_unresolved_unknown_subagent_type(monkeypatch):
         "machine-local migrate-publish-mirrors",
     ],
 )
-def test_machine_local_other_write_subcommands_deny(cmd):
+def test_machine_local_other_write_subcommands_deny(cmd) -> None:
     payload = _payload(cmd, agent_type="coordinator:executor")
     result = _enveloped(guard.check)(payload)
     assert result is not None
@@ -3674,12 +3674,12 @@ def test_machine_local_other_write_subcommands_deny(cmd):
         "machine-local dir",
     ],
 )
-def test_machine_local_read_subcommands_allow(cmd):
+def test_machine_local_read_subcommands_allow(cmd) -> None:
     payload = _payload(cmd, agent_type="coordinator:executor")
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_machine_local_path_prefixed_spelling_denies():
+def test_machine_local_path_prefixed_spelling_denies() -> None:
     payload = _payload(
         "/usr/local/bin/machine-local set repos.content_root /evil",
         agent_type="coordinator:executor",
@@ -3689,7 +3689,7 @@ def test_machine_local_path_prefixed_spelling_denies():
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_machine_local_windows_cmd_twin_spelling_denies():
+def test_machine_local_windows_cmd_twin_spelling_denies() -> None:
     payload = _payload(
         "machine-local.cmd set repos.content_root /evil", agent_type="coordinator:executor"
     )
@@ -3698,7 +3698,7 @@ def test_machine_local_windows_cmd_twin_spelling_denies():
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_machine_local_chained_segment_denies():
+def test_machine_local_chained_segment_denies() -> None:
     payload = _payload(
         "ls -la ; machine-local set repos.content_root /evil",
         agent_type="coordinator:executor",
@@ -3708,7 +3708,7 @@ def test_machine_local_chained_segment_denies():
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_machine_local_set_em_main_loop_unaffected():
+def test_machine_local_set_em_main_loop_unaffected() -> None:
     # No agent_id key at all -> top-level EM Bash call -> allow, before any
     # identity-resolution cost is paid.
     payload = {
@@ -3719,7 +3719,7 @@ def test_machine_local_set_em_main_loop_unaffected():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_machine_local_set_mutation_check_matcher_removed_flips_to_allow(monkeypatch):
+def test_machine_local_set_mutation_check_matcher_removed_flips_to_allow(monkeypatch: pytest.MonkeyPatch) -> None:
     # Confirms the deny is load-bearing on _MACHINE_LOCAL_WRITE_SUBCOMMANDS,
     # not on some other incidental gate -- emptying the set must flip the
     # exact same payload from deny to allow.
@@ -3759,7 +3759,7 @@ requires_powershell_grammar = pytest.mark.skipif(
 )
 
 
-def _ps_payload(command, agent_id="deadbeef0123", agent_type=None, session_id="sess1"):
+def _ps_payload(command, agent_id: str = "deadbeef0123", agent_type=None, session_id: str = "sess1"):
     p = {
         "tool_name": "PowerShell",
         "tool_input": {"command": command},
@@ -3781,7 +3781,7 @@ def _assert_denies(payload):
 
 
 @requires_powershell_grammar
-def test_powershell_remove_item_recurse_force_denies():
+def test_powershell_remove_item_recurse_force_denies() -> None:
     _assert_denies(
         _ps_payload(
             "Remove-Item -Recurse -Force C:/scratch/target",
@@ -3791,7 +3791,7 @@ def test_powershell_remove_item_recurse_force_denies():
 
 
 @requires_powershell_grammar
-def test_powershell_remove_item_prefix_flags_denies():
+def test_powershell_remove_item_prefix_flags_denies() -> None:
     # Prefix-set matching (finding 2): `-r`/`-fo` are the working PowerShell
     # spellings -- `rm -rf` (clustered) cannot execute in PowerShell at all.
     _assert_denies(
@@ -3800,26 +3800,26 @@ def test_powershell_remove_item_prefix_flags_denies():
 
 
 @requires_powershell_grammar
-def test_powershell_ri_alias_denies():
+def test_powershell_ri_alias_denies() -> None:
     _assert_denies(
         _ps_payload("ri -Recurse -Force C:/scratch/target", agent_type="coordinator:executor")
     )
 
 
 @requires_powershell_grammar
-def test_powershell_rd_slash_flags_denies():
+def test_powershell_rd_slash_flags_denies() -> None:
     _assert_denies(_ps_payload("rd /s /q C:/scratch/target", agent_type="coordinator:executor"))
 
 
 @requires_powershell_grammar
-def test_powershell_del_slash_flags_denies():
+def test_powershell_del_slash_flags_denies() -> None:
     _assert_denies(
         _ps_payload("del /f /s /q C:/scratch/target", agent_type="coordinator:executor")
     )
 
 
 @requires_powershell_grammar
-def test_powershell_icacls_denies():
+def test_powershell_icacls_denies() -> None:
     _assert_denies(
         _ps_payload(
             "icacls C:/scratch/target /grant Everyone:F /T", agent_type="coordinator:executor"
@@ -3828,13 +3828,13 @@ def test_powershell_icacls_denies():
 
 
 @requires_powershell_grammar
-def test_powershell_backtick_continuation_denies():
+def test_powershell_backtick_continuation_denies() -> None:
     cmd = "Remove-Item -Recurse -Force `\n  C:/scratch/target"
     _assert_denies(_ps_payload(cmd, agent_type="coordinator:executor"))
 
 
 @requires_powershell_grammar
-def test_powershell_env_path_target_denies():
+def test_powershell_env_path_target_denies() -> None:
     _assert_denies(
         _ps_payload(
             "Remove-Item -Recurse -Force $env:TEMP/scratch-target",
@@ -3844,7 +3844,7 @@ def test_powershell_env_path_target_denies():
 
 
 @requires_powershell_grammar
-def test_powershell_semicolon_chain_denies():
+def test_powershell_semicolon_chain_denies() -> None:
     _assert_denies(
         _ps_payload(
             "Set-Location C:/; Remove-Item -Recurse -Force C:/scratch/target",
@@ -3854,7 +3854,7 @@ def test_powershell_semicolon_chain_denies():
 
 
 @requires_powershell_grammar
-def test_powershell_call_operator_prefix_denies():
+def test_powershell_call_operator_prefix_denies() -> None:
     _assert_denies(
         _ps_payload(
             "& Remove-Item -Recurse -Force C:/scratch/target", agent_type="coordinator:executor"
@@ -3863,7 +3863,7 @@ def test_powershell_call_operator_prefix_denies():
 
 
 @requires_powershell_grammar
-def test_powershell_call_operator_quoted_verb_denies():
+def test_powershell_call_operator_quoted_verb_denies() -> None:
     _assert_denies(
         _ps_payload(
             "& 'Remove-Item' -Recurse -Force C:/scratch/target",
@@ -3873,7 +3873,7 @@ def test_powershell_call_operator_quoted_verb_denies():
 
 
 @requires_powershell_grammar
-def test_powershell_call_operator_double_quoted_verb_denies():
+def test_powershell_call_operator_double_quoted_verb_denies() -> None:
     _assert_denies(
         _ps_payload(
             '& "Remove-Item" -Recurse -Force C:/scratch/target',
@@ -3883,7 +3883,7 @@ def test_powershell_call_operator_double_quoted_verb_denies():
 
 
 @requires_powershell_grammar
-def test_powershell_call_operator_quoted_icacls_denies():
+def test_powershell_call_operator_quoted_icacls_denies() -> None:
     _assert_denies(
         _ps_payload(
             "& 'icacls' C:/scratch/target /grant Everyone:F /T",
@@ -3893,7 +3893,7 @@ def test_powershell_call_operator_quoted_icacls_denies():
 
 
 @requires_powershell_grammar
-def test_powershell_call_operator_quoted_stop_process_denies():
+def test_powershell_call_operator_quoted_stop_process_denies() -> None:
     _assert_denies(
         _ps_payload(
             "& 'Stop-Process' -Id 1234 -Force", agent_type="coordinator:executor"
@@ -3902,7 +3902,7 @@ def test_powershell_call_operator_quoted_stop_process_denies():
 
 
 @requires_powershell_grammar
-def test_powershell_backtick_inside_verb_denies():
+def test_powershell_backtick_inside_verb_denies() -> None:
     # `Rem`ove-Item` -- a backtick before an ordinary character is a no-op
     # escape PowerShell itself resolves to `Remove-Item` at runtime.
     _assert_denies(
@@ -3914,7 +3914,7 @@ def test_powershell_backtick_inside_verb_denies():
 
 
 @requires_powershell_grammar
-def test_powershell_call_operator_parenthesized_quoted_verb_denies():
+def test_powershell_call_operator_parenthesized_quoted_verb_denies() -> None:
     _assert_denies(
         _ps_payload(
             "&('Remove-Item') -Recurse -Force C:/scratch/target",
@@ -3924,7 +3924,7 @@ def test_powershell_call_operator_parenthesized_quoted_verb_denies():
 
 
 @requires_powershell_grammar
-def test_powershell_call_operator_get_command_denies():
+def test_powershell_call_operator_get_command_denies() -> None:
     _assert_denies(
         _ps_payload(
             "&(Get-Command Remove-Item) -Recurse -Force C:/scratch/target",
@@ -3934,14 +3934,14 @@ def test_powershell_call_operator_get_command_denies():
 
 
 @requires_powershell_grammar
-def test_powershell_stop_process_denies():
+def test_powershell_stop_process_denies() -> None:
     _assert_denies(
         _ps_payload("Stop-Process -Id 1234 -Force", agent_type="coordinator:executor")
     )
 
 
 @requires_powershell_grammar
-def test_powershell_rm_alias_denies_via_existing_dialect_neutral_probe():
+def test_powershell_rm_alias_denies_via_existing_dialect_neutral_probe() -> None:
     # `rm` is a real PowerShell alias for Remove-Item. The Bash-leg raw-text
     # `_RM_SURFACE_RE`/`_RM_DENY_RE` probes are never reached for a
     # `tool_name == "PowerShell"` dispatch (the PowerShell leg is a fully
@@ -3954,7 +3954,7 @@ def test_powershell_rm_alias_denies_via_existing_dialect_neutral_probe():
 
 
 @requires_powershell_grammar
-def test_powershell_object_pipeline_target_records_silent_not_bare_clean():
+def test_powershell_object_pipeline_target_records_silent_not_bare_clean() -> None:
     # The structurally-unfixable blind spot (guard-dialect-coverage.md,
     # "Object-pipeline defeats"): the target lives entirely in the object
     # pipeline, never as a token. Verdict may be a genuine allow (None), but
@@ -3971,7 +3971,7 @@ def test_powershell_object_pipeline_target_records_silent_not_bare_clean():
 
 
 @requires_powershell_grammar
-def test_powershell_benign_command_allows_no_silent():
+def test_powershell_benign_command_allows_no_silent() -> None:
     payload = _ps_payload("Get-ChildItem C:/scratch", agent_type="coordinator:executor")
     with collecting() as silences:
         result = _enveloped(guard.check)(payload)
@@ -3979,7 +3979,7 @@ def test_powershell_benign_command_allows_no_silent():
     assert not was_silent("block_subagent_destructive_action", silences)
 
 
-def test_powershell_no_agent_id_allows_even_destructive():
+def test_powershell_no_agent_id_allows_even_destructive() -> None:
     payload = {
         "tool_name": "PowerShell",
         "tool_input": {"command": "Remove-Item -Recurse -Force C:/scratch/target"},
@@ -3993,14 +3993,14 @@ def test_powershell_no_agent_id_allows_even_destructive():
 # ---------------------------------------------------------------------------
 
 
-def test_synthetic_corpus_session_id_matched():
+def test_synthetic_corpus_session_id_matched() -> None:
     assert guard._is_synthetic_corpus_session("guard-message-corpus-" + "a" * 32)
     assert guard._is_synthetic_corpus_session("guard-message-corpus-audience-em-" + "b" * 32)
     assert not guard._is_synthetic_corpus_session("sess1")
     assert not guard._is_synthetic_corpus_session("")
 
 
-def test_log_fail_open_suppresses_synthetic_corpus_session(tmp_path, monkeypatch):
+def test_log_fail_open_suppresses_synthetic_corpus_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     log_path = tmp_path / "destructive-guard-fail-open.log"
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
     guard._log_fail_open(
@@ -4011,7 +4011,7 @@ def test_log_fail_open_suppresses_synthetic_corpus_session(tmp_path, monkeypatch
     assert not log_path.exists()
 
 
-def test_log_fail_open_writes_real_session(tmp_path, monkeypatch):
+def test_log_fail_open_writes_real_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     log_path = tmp_path / "destructive-guard-fail-open.log"
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
     guard._log_fail_open(
@@ -4025,7 +4025,7 @@ def test_log_fail_open_writes_real_session(tmp_path, monkeypatch):
     assert "FAIL-OPEN" in text
 
 
-def test_rotate_fail_open_log_noop_when_small(tmp_path):
+def test_rotate_fail_open_log_noop_when_small(tmp_path: Path) -> None:
     log_path = tmp_path / "fail-open.log"
     log_path.write_text("small\n", encoding="utf-8")
     guard._rotate_fail_open_log_if_oversized(log_path)
@@ -4033,7 +4033,7 @@ def test_rotate_fail_open_log_noop_when_small(tmp_path):
     assert not log_path.with_name("fail-open.log.1").exists()
 
 
-def test_rotate_fail_open_log_shifts_generations(tmp_path, monkeypatch):
+def test_rotate_fail_open_log_shifts_generations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "_FAIL_OPEN_LOG_MAX_BYTES", 5)
     log_path = tmp_path / "fail-open.log"
     log_path.write_text("current\n", encoding="utf-8")
@@ -4051,13 +4051,13 @@ def test_rotate_fail_open_log_shifts_generations(tmp_path, monkeypatch):
     assert not log_path.with_name("fail-open.log.4").exists()
 
 
-def test_rotate_fail_open_log_never_raises_on_missing_file(tmp_path):
+def test_rotate_fail_open_log_never_raises_on_missing_file(tmp_path: Path) -> None:
     log_path = tmp_path / "does-not-exist.log"
     guard._rotate_fail_open_log_if_oversized(log_path)
     assert not log_path.exists()
 
 
-def test_log_fail_open_rotates_before_appending(tmp_path, monkeypatch):
+def test_log_fail_open_rotates_before_appending(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     log_path = tmp_path / "fail-open.log"
     monkeypatch.setattr(guard, "_fail_open_log_path", lambda: log_path)
     monkeypatch.setattr(guard, "_FAIL_OPEN_LOG_MAX_BYTES", 10)
@@ -4107,7 +4107,7 @@ class TestLegacyPushForceScanIgnoresWrapperOwnFlags:
             "nice -n 5 git " + "push" + " origin main",
         ],
     )
-    def test_wrapper_own_dash_f_does_not_deny(self, cmd):
+    def test_wrapper_own_dash_f_does_not_deny(self, cmd) -> None:
         assert guard._evaluate_git_segment_legacy(cmd, False) is None
 
     # ---- direction 2: a real forcing push still denies, wrapped or not ----
@@ -4123,13 +4123,13 @@ class TestLegacyPushForceScanIgnoresWrapperOwnFlags:
             "env -f other.env git " + "push" + " origin +main",
         ],
     )
-    def test_real_forcing_push_still_denies(self, cmd):
+    def test_real_forcing_push_still_denies(self, cmd) -> None:
         assert guard._evaluate_git_segment_legacy(cmd, False) == "git " + "push" + " --" + "force"
 
-    def test_plain_push_still_allowed(self):
+    def test_plain_push_still_allowed(self) -> None:
         assert guard._evaluate_git_segment_legacy("git " + "push" + " origin main", False) is None
 
-    def test_force_with_lease_still_allowed(self):
+    def test_force_with_lease_still_allowed(self) -> None:
         cmd = "git " + "push" + " --" + "force" + "-with-lease origin main"
         assert guard._evaluate_git_segment_legacy(cmd, False) is None
 
@@ -4143,69 +4143,69 @@ class TestV2DockerKillDbClientMatchers:
 
     # ---- docker ----
 
-    def test_docker_rm_denies(self):
+    def test_docker_rm_denies(self) -> None:
         payload = _payload("docker rm mycontainer", agent_type="coordinator:executor")
         result = _enveloped(guard.check)(payload)
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "docker rm" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
-    def test_docker_rmi_denies(self):
+    def test_docker_rmi_denies(self) -> None:
         payload = _payload("docker rmi myimage", agent_type="coordinator:executor")
         result = _enveloped(guard.check)(payload)
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_docker_prune_denies(self):
+    def test_docker_prune_denies(self) -> None:
         payload = _payload("docker container prune -f", agent_type="coordinator:executor")
         result = _enveloped(guard.check)(payload)
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_docker_system_prune_denies(self):
+    def test_docker_system_prune_denies(self) -> None:
         payload = _payload("docker system prune -a -f", agent_type="coordinator:executor")
         result = _enveloped(guard.check)(payload)
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "docker system prune" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
-    def test_docker_ps_allows(self):
+    def test_docker_ps_allows(self) -> None:
         payload = _payload("docker ps -a", agent_type="coordinator:executor")
         assert _enveloped(guard.check)(payload) is None
 
-    def test_docker_images_logs_inspect_allow(self):
+    def test_docker_images_logs_inspect_allow(self) -> None:
         for cmd in ("docker images", "docker logs mycontainer", "docker inspect mycontainer"):
             payload = _payload(cmd, agent_type="coordinator:executor")
             assert _enveloped(guard.check)(payload) is None
 
     # ---- kill / pkill ----
 
-    def test_kill_real_signal_to_pid_denies(self):
+    def test_kill_real_signal_to_pid_denies(self) -> None:
         payload = _payload("kill 12345", agent_type="coordinator:executor")
         result = _enveloped(guard.check)(payload)
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "kill" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
-    def test_kill_dash_9_denies(self):
+    def test_kill_dash_9_denies(self) -> None:
         payload = _payload("kill -9 12345", agent_type="coordinator:executor")
         result = _enveloped(guard.check)(payload)
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_pkill_denies(self):
+    def test_pkill_denies(self) -> None:
         payload = _payload("pkill -f some-process", agent_type="coordinator:executor")
         result = _enveloped(guard.check)(payload)
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_kill_dash_zero_liveness_check_allows(self):
+    def test_kill_dash_zero_liveness_check_allows(self) -> None:
         payload = _payload("kill -0 12345", agent_type="coordinator:executor")
         assert _enveloped(guard.check)(payload) is None
 
     # ---- DB clients ----
 
-    def test_psql_drop_table_denies(self):
+    def test_psql_drop_table_denies(self) -> None:
         payload = _payload(
             'psql -c "DROP TABLE users"', agent_type="coordinator:executor"
         )
@@ -4214,7 +4214,7 @@ class TestV2DockerKillDbClientMatchers:
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
         assert "DROP/TRUNCATE" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
-    def test_mysql_truncate_denies(self):
+    def test_mysql_truncate_denies(self) -> None:
         payload = _payload(
             'mysql -e "TRUNCATE TABLE sessions"', agent_type="coordinator:executor"
         )
@@ -4222,7 +4222,7 @@ class TestV2DockerKillDbClientMatchers:
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_sqlite3_drop_denies(self):
+    def test_sqlite3_drop_denies(self) -> None:
         payload = _payload(
             'sqlite3 db.sqlite -e "DROP TABLE t"', agent_type="coordinator:executor"
         )
@@ -4230,11 +4230,11 @@ class TestV2DockerKillDbClientMatchers:
         assert result is not None
         assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
-    def test_psql_select_allows(self):
+    def test_psql_select_allows(self) -> None:
         payload = _payload('psql -c "SELECT 1"', agent_type="coordinator:executor")
         assert _enveloped(guard.check)(payload) is None
 
-    def test_db_client_with_no_statement_flag_allows(self):
+    def test_db_client_with_no_statement_flag_allows(self) -> None:
         payload = _payload("psql mydb", agent_type="coordinator:executor")
         assert _enveloped(guard.check)(payload) is None
 
@@ -4254,7 +4254,7 @@ class TestV2DockerKillDbClientMatchers:
         ("git update-index --chmod=+x --add a.py", False),
     ],
 )
-def test_git_archive_to_stdout_and_update_index_chmod(cmd, allowed):
+def test_git_archive_to_stdout_and_update_index_chmod(cmd, allowed) -> None:
     result = _enveloped(guard.check)(_payload(cmd, agent_type="coordinator:executor"))
     denied = result is not None and result["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert denied is not allowed, (cmd, result)
@@ -4268,7 +4268,7 @@ def test_git_archive_to_stdout_and_update_index_chmod(cmd, allowed):
         "git apply --numstat --summary scratch/x.patch",
     ],
 )
-def test_git_apply_report_only_forms_allow(cmd):
+def test_git_apply_report_only_forms_allow(cmd) -> None:
     assert _enveloped(guard.check)(_payload(cmd, agent_type="coordinator:executor")) is None
 
 
@@ -4282,7 +4282,7 @@ def test_git_apply_report_only_forms_allow(cmd):
         "git apply --check --unsafe-paths scratch/x.patch",
     ],
 )
-def test_git_apply_writing_forms_deny(cmd):
+def test_git_apply_writing_forms_deny(cmd) -> None:
     result = _enveloped(guard.check)(_payload(cmd, agent_type="coordinator:executor"))
     assert result is not None
     assert "git apply" in result["hookSpecificOutput"]["permissionDecisionReason"]
@@ -4292,7 +4292,7 @@ _GOOD_PATCH = "diff --git a/pkg/a.py b/pkg/a.py\n--- a/pkg/a.py\n+++ b/pkg/a.py\
 
 
 @pytest.fixture
-def apply_repo(tmp_path):
+def apply_repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "scratch").mkdir()
     (tmp_path / "scratch" / "ok.patch").write_text(_GOOD_PATCH, encoding="utf-8")
@@ -4327,7 +4327,7 @@ def _apply_check(repo, cmd):
         "git apply -p0 --directory=sub scratch/ok.patch",
     ],
 )
-def test_git_apply_in_repo_patch_allowed(apply_repo, cmd):
+def test_git_apply_in_repo_patch_allowed(apply_repo, cmd) -> None:
     assert _apply_check(apply_repo, cmd) is None
 
 
@@ -4354,13 +4354,13 @@ def test_git_apply_in_repo_patch_allowed(apply_repo, cmd):
         "git apply scratch/big.patch",
     ],
 )
-def test_git_apply_excluded_forms_deny(apply_repo, cmd):
+def test_git_apply_excluded_forms_deny(apply_repo, cmd) -> None:
     result = _apply_check(apply_repo, cmd)
     assert result is not None
     assert "git apply" in result["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_git_apply_does_not_open_merge(apply_repo):
+def test_git_apply_does_not_open_merge(apply_repo) -> None:
     result = _apply_check(apply_repo, "git merge feature")
     assert result is not None and result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
@@ -4371,7 +4371,7 @@ _EXEC = "coordinator:executor"
 
 
 @pytest.fixture(autouse=True)
-def _ledger_home(tmp_path, monkeypatch):
+def _ledger_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Keep the guard's ledger append out of the real settings home."""
     from coordinator_core.bash_guards import agent_process_ownership as apo
 
@@ -4379,7 +4379,7 @@ def _ledger_home(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def tree_pids(monkeypatch):
+def tree_pids(monkeypatch: pytest.MonkeyPatch) -> None:
     """Ownership fake: agent `deadbeef0123` owns 4242 and 4243; `sibling` owns 5555."""
     from coordinator_core.bash_guards import agent_process_ownership as apo
 
@@ -4393,29 +4393,29 @@ def tree_pids(monkeypatch):
     "cmd",
     ["kill 4242", "kill -9 4242", "kill -TERM 4242 4243", "kill -s KILL 4242", "kill -- 4242"],
 )
-def test_own_descendant_kill_allows(tree_pids, cmd):
+def test_own_descendant_kill_allows(tree_pids, cmd) -> None:
     assert _enveloped(guard.check)(_payload(cmd, agent_type=_EXEC)) is None
 
 
 @pytest.mark.parametrize("cmd", ["kill 5555", "kill -9 4242 5555", "kill 1", "kill 77777"])
-def test_sibling_em_and_foreign_pid_kill_denies(tree_pids, cmd):
+def test_sibling_em_and_foreign_pid_kill_denies(tree_pids, cmd) -> None:
     _assert_denies(_payload(cmd, agent_type=_EXEC))
 
 
-def test_reused_pid_start_time_mismatch_kill_denies(monkeypatch):
+def test_reused_pid_start_time_mismatch_kill_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.bash_guards import agent_process_ownership as apo
 
     class _Proc:
-        def __init__(self, pid):
+        def __init__(self, pid) -> None:
             self.pid = pid
 
         def create_time(self):
             return 500.0
 
-        def cmdline(self):
+        def cmdline(self) -> list[str]:
             return ["python", "scratch/x/rescore.py"]
 
-        def parent(self):
+        def parent(self) -> None:
             return None
 
     class _Ps:
@@ -4432,14 +4432,14 @@ def test_reused_pid_start_time_mismatch_kill_denies(monkeypatch):
 
 
 @pytest.mark.parametrize("cmd", ["pkill -f rescore.py", "killall python", "pkill 4242"])
-def test_pkill_killall_deny_naming_kill_pid(tree_pids, cmd):
+def test_pkill_killall_deny_naming_kill_pid(tree_pids, cmd) -> None:
     out = _enveloped(guard.check)(_payload(cmd, agent_type=_EXEC))
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "kill <pid>" in reason
 
 
-def test_benign_launch_command_is_ledgered_before_layer1_exit():
+def test_benign_launch_command_is_ledgered_before_layer1_exit() -> None:
     from coordinator_core.bash_guards import agent_process_ownership as apo
 
     assert _enveloped(guard.check)(_payload("python scratch/x/rescore.py &")) is None
@@ -4447,14 +4447,14 @@ def test_benign_launch_command_is_ledgered_before_layer1_exit():
     assert [r["cmd"] for r in rows] == ["python scratch/x/rescore.py &"]
 
 
-def test_main_thread_payload_is_not_ledgered():
+def test_main_thread_payload_is_not_ledgered() -> None:
     from coordinator_core.bash_guards import agent_process_ownership as apo
 
     assert _enveloped(guard.check)(_payload("echo hi", agent_id=None)) is None
     assert not apo.ledger_path("sess1").exists()
 
 
-def test_own_descendant_kill_through_dispatch(tree_pids):
+def test_own_descendant_kill_through_dispatch(tree_pids) -> None:
     import json
 
     from coordinator_core.bash_guards import dispatch
@@ -4486,7 +4486,7 @@ def test_own_descendant_kill_through_dispatch(tree_pids):
         "kill",
     ],
 )
-def test_kill_outside_tree_or_unprovable_denies(tree_pids, cmd):
+def test_kill_outside_tree_or_unprovable_denies(tree_pids, cmd) -> None:
     _assert_denies(_payload(cmd, agent_type=_EXEC))
 
 
@@ -4500,7 +4500,7 @@ def test_kill_outside_tree_or_unprovable_denies(tree_pids, cmd):
         "Stop-Process -Id:4242",
     ],
 )
-def test_powershell_stop_process_of_session_tree_pid_allows(tree_pids, cmd):
+def test_powershell_stop_process_of_session_tree_pid_allows(tree_pids, cmd) -> None:
     assert _enveloped(guard.check)(_ps_payload(cmd, agent_type=_EXEC)) is None
 
 
@@ -4518,11 +4518,11 @@ def test_powershell_stop_process_of_session_tree_pid_allows(tree_pids, cmd):
         "Stop-Process -Id 4242 -InputObject $x",
     ],
 )
-def test_powershell_stop_process_outside_tree_or_unprovable_denies(tree_pids, cmd):
+def test_powershell_stop_process_outside_tree_or_unprovable_denies(tree_pids, cmd) -> None:
     _assert_denies(_ps_payload(cmd, agent_type=_EXEC))
 
 
-def test_kill_deny_message_names_kill_pid_alternative(tree_pids):
+def test_kill_deny_message_names_kill_pid_alternative(tree_pids) -> None:
     out = _enveloped(guard.check)(_payload("kill -9 9999", agent_type=_EXEC))
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
     assert "kill <pid>" in reason
@@ -4530,14 +4530,14 @@ def test_kill_deny_message_names_kill_pid_alternative(tree_pids):
 
 
 @requires_powershell_grammar
-def test_stop_process_deny_message_names_kill_pid_alternative(tree_pids):
+def test_stop_process_deny_message_names_kill_pid_alternative(tree_pids) -> None:
     out = _enveloped(guard.check)(_ps_payload("Stop-Process -Id 9999", agent_type=_EXEC))
     reason = out["hookSpecificOutput"]["permissionDecisionReason"]
     assert "Stop-Process -Id <pid>" in reason
 
 
 @pytest.fixture
-def scratch_tree(tmp_path):
+def scratch_tree(tmp_path: Path) -> tuple[Path, Path]:
     main = tmp_path / "repo"
     (main / ".git").mkdir(parents=True)
     clone = main / "scratch" / "merge-clone"
@@ -4555,7 +4555,7 @@ def _denied_kind(out):
     return None if out is None else out["hookSpecificOutput"].get("permissionDecisionReason", "")
 
 
-def test_subagent_may_clone_into_the_repos_scratch(scratch_tree):
+def test_subagent_may_clone_into_the_repos_scratch(scratch_tree) -> None:
     main, _clone = scratch_tree
     assert _enveloped(guard.check)(_at("git clone https://github.com/o/r.git scratch/merge-r", main)) is None
     assert _enveloped(guard.check)(_at("git clone --depth 50 -b main /x/r.git", main / "scratch")) is None
@@ -4597,7 +4597,7 @@ def _clone_spellings(main):
         "absolute-mixed-forward-tail",
     ],
 )
-def test_subagent_clone_into_scratch_allowed_for_every_spelling(scratch_tree, spelling):
+def test_subagent_clone_into_scratch_allowed_for_every_spelling(scratch_tree, spelling) -> None:
     main, _clone = scratch_tree
     dest = _clone_spellings(main)[spelling]
     assert _enveloped(guard.check)(_at(f"git clone {_URL} {dest}", main)) is None
@@ -4607,12 +4607,12 @@ def test_subagent_clone_into_scratch_allowed_for_every_spelling(scratch_tree, sp
     "url",
     [_URL, "https://github.com/o/r", "https://github.com/o/r/", "git@github.com:o/r.git"],
 )
-def test_subagent_clone_implicit_trailing_name_from_scratch_cwd_allowed(scratch_tree, url):
+def test_subagent_clone_implicit_trailing_name_from_scratch_cwd_allowed(scratch_tree, url) -> None:
     main, _clone = scratch_tree
     assert _enveloped(guard.check)(_at(f"git clone {url}", main / "scratch")) is None
 
 
-def _occupy(cwd, dest):
+def _occupy(cwd, dest) -> None:
     """Make `dest` (resolved against `cwd`) a non-empty directory so the clone has something to overwrite."""
     d = Path(os.path.normpath(cwd / dest.replace("\\", "/")))
     d.mkdir(parents=True, exist_ok=True)
@@ -4633,19 +4633,19 @@ def _occupy(cwd, dest):
         "../scratch/x",
     ],
 )
-def test_subagent_clone_outside_scratch_denied_for_every_spelling(scratch_tree, dest):
+def test_subagent_clone_outside_scratch_denied_for_every_spelling(scratch_tree, dest) -> None:
     main, _clone = scratch_tree
     _occupy(main, dest)
     assert _enveloped(guard.check)(_at(f"git clone {_URL} {dest}", main)) is not None
 
 
-def test_subagent_clone_decoy_segment_cannot_lend_its_backslashes(scratch_tree):
+def test_subagent_clone_decoy_segment_cannot_lend_its_backslashes(scratch_tree) -> None:
     main, _clone = scratch_tree
     _occupy(main, "scratchx")
     assert _enveloped(guard.check)(_at(f"git clone {_URL} scratchx; echo {_URL} scratch\\x", main)) is not None
 
 
-def test_subagent_clone_absolute_outside_scratch_denied(scratch_tree):
+def test_subagent_clone_absolute_outside_scratch_denied(scratch_tree) -> None:
     main, _clone = scratch_tree
     sibling_fwd = (main.parent / "repo2" / "scratch" / "x").as_posix()
     sibling_bs = sibling_fwd.replace("/", "\\")
@@ -4655,7 +4655,7 @@ def test_subagent_clone_absolute_outside_scratch_denied(scratch_tree):
         assert _enveloped(guard.check)(_at(f"git clone {_URL} {dest}", main)) is not None
 
 
-def test_subagent_clone_outside_scratch_or_with_a_hook_vector_is_denied(scratch_tree):
+def test_subagent_clone_outside_scratch_or_with_a_hook_vector_is_denied(scratch_tree) -> None:
     main, _clone = scratch_tree
     _occupy(main, "elsewhere")
     _occupy(main / "scratch", "../../r")
@@ -4664,7 +4664,7 @@ def test_subagent_clone_outside_scratch_or_with_a_hook_vector_is_denied(scratch_
     assert _enveloped(guard.check)(_at("git clone --template=/t https://h/o/r.git scratch/x", main)) is not None
 
 
-def test_subagent_may_merge_inside_a_scratch_clone_only(scratch_tree):
+def test_subagent_may_merge_inside_a_scratch_clone_only(scratch_tree) -> None:
     main, clone = scratch_tree
     assert _enveloped(guard.check)(_at("git merge --no-ff origin/feature", clone)) is None
     assert _enveloped(guard.check)(_at("git merge --no-ff origin/feature", main)) is not None
@@ -4673,7 +4673,7 @@ def test_subagent_may_merge_inside_a_scratch_clone_only(scratch_tree):
 
 
 
-def test_posix_argv0_path_with_a_slash_git_word_in_its_quoted_json_operand_allows():
+def test_posix_argv0_path_with_a_slash_git_word_in_its_quoted_json_operand_allows() -> None:
     # DoE report 2026-10-16: the Windows spaced-argv0 normaliser read
     # `/Users/x/bin/coordinator-invoke op '{..."grep/git grep"...}'` as ONE path ending in `/git`,
     # quoted it, broke the command's quoting, and the raw-text fallback split on a `;` in the JSON.
@@ -4687,7 +4687,7 @@ def test_posix_argv0_path_with_a_slash_git_word_in_its_quoted_json_operand_allow
     assert result is None or result["hookSpecificOutput"]["permissionDecision"] != "deny"
 
 
-def test_windows_spaced_git_path_is_still_normalised_to_one_token():
+def test_windows_spaced_git_path_is_still_normalised_to_one_token() -> None:
     cmd = r"C:\Program Files\Git\bin\git.exe push --force origin main"
     assert guard._normalize_windows_argv0_head_path_with_spaces(cmd).startswith("'C:/Program Files/Git/bin/git.exe'")
 
@@ -4709,7 +4709,7 @@ _COMMIT_V2_ROUTE = (
         "git show-ref --head && " + _COMMIT_V2_ROUTE,
     ],
 )
-def test_commit_agent_sanctioned_route_and_readonly_plumbing_allow(command):
+def test_commit_agent_sanctioned_route_and_readonly_plumbing_allow(command) -> None:
     payload = _payload(command, agent_type="coordinator:git-commit-agent")
     result = _enveloped(guard.check)(payload)
     assert result is None or result["hookSpecificOutput"]["permissionDecision"] != "deny"
@@ -4724,7 +4724,7 @@ def test_commit_agent_sanctioned_route_and_readonly_plumbing_allow(command):
         "rm -rf build && " + _COMMIT_V2_ROUTE,
     ],
 )
-def test_commit_agent_destructive_neighbours_still_deny(command):
+def test_commit_agent_destructive_neighbours_still_deny(command) -> None:
     payload = _payload(command, agent_type="coordinator:git-commit-agent")
     result = _enveloped(guard.check)(payload)
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
@@ -4740,7 +4740,7 @@ _REV_DECLARED = "pkg/a.py"
 
 
 @pytest.fixture
-def revert_repo(tmp_path, monkeypatch):
+def revert_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     import json
 
     from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, RUN_DIR_ROOT
@@ -4784,7 +4784,7 @@ def _revert_check(repo, command, session=_REV_SESSION):
         f"git restore -- {_REV_DECLARED}",
     ],
 )
-def test_declared_pathspec_revert_admitted(revert_repo, tail):
+def test_declared_pathspec_revert_admitted(revert_repo, tail) -> None:
     assert _revert_check(revert_repo, f"{_REV_MARK} {tail}") is None
 
 
@@ -4808,36 +4808,36 @@ def test_declared_pathspec_revert_admitted(revert_repo, tail):
         f"export {_REV_MARK}; git checkout -- {_REV_DECLARED}",
     ],
 )
-def test_undeclared_or_marker_less_revert_stays_denied(revert_repo, command):
+def test_undeclared_or_marker_less_revert_stays_denied(revert_repo, command) -> None:
     result = _revert_check(revert_repo, command)
     assert result is not None
     assert result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_revert_foreign_session_stays_denied(revert_repo):
+def test_revert_foreign_session_stays_denied(revert_repo) -> None:
     assert _revert_check(revert_repo, f"{_REV_MARK} git checkout -- {_REV_DECLARED}", session="sess-other") is not None
 
 
-def test_declared_path_carrying_a_peer_hunk_stays_denied(revert_repo, monkeypatch):
+def test_declared_path_carrying_a_peer_hunk_stays_denied(revert_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import live_write_guard
 
     monkeypatch.setattr(live_write_guard, "check_live_write", lambda *a, **k: "drops 1 unlanded hunk(s) held by peer")
     assert _revert_check(revert_repo, f"{_REV_MARK} git checkout -- {_REV_DECLARED}") is not None
 
 
-def test_declared_path_with_unreadable_head_stays_denied(revert_repo, monkeypatch):
+def test_declared_path_with_unreadable_head_stays_denied(revert_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import live_write_guard
 
     monkeypatch.setattr(live_write_guard, "_head_lines", lambda *a, **k: None)
     assert _revert_check(revert_repo, f"{_REV_MARK} git checkout -- {_REV_DECLARED}") is not None
 
 
-def test_revert_check_receives_the_marker_run_and_head_bytes(revert_repo, monkeypatch):
+def test_revert_check_receives_the_marker_run_and_head_bytes(revert_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import live_write_guard
 
     seen = {}
 
-    def fake(root, run_id, path, new_bytes):
+    def fake(root, run_id, path, new_bytes) -> None:
         seen.update(run_id=run_id, path=path, new_bytes=new_bytes)
 
     monkeypatch.setattr(live_write_guard, "check_live_write", fake)
@@ -4846,18 +4846,18 @@ def test_revert_check_receives_the_marker_run_and_head_bytes(revert_repo, monkey
     assert seen == {"run_id": _REV_RUN, "path": _REV_DECLARED, "new_bytes": b"h1\nh2\n"}
 
 
-def test_revert_dormant_channel_stays_denied(revert_repo, monkeypatch):
+def test_revert_dormant_channel_stays_denied(revert_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "_DECLARED_DELETE_CHANNEL_LIVE", False)
     assert _revert_check(revert_repo, f"{_REV_MARK} git checkout -- {_REV_DECLARED}") is not None
 
 
-def test_markerless_revert_deny_text_does_not_advertise_the_marker(revert_repo):
+def test_markerless_revert_deny_text_does_not_advertise_the_marker(revert_repo) -> None:
     result = _revert_check(revert_repo, f"git checkout -- {_REV_DECLARED}")
     reason = result["hookSpecificOutput"]["permissionDecisionReason"]
     assert "COORDINATOR_DISPATCH_ROW" not in reason
 
 
-def test_em_payload_revert_unaffected(revert_repo):
+def test_em_payload_revert_unaffected(revert_repo) -> None:
     payload = _payload(f"git checkout -- {_REV_DECLARED}", agent_id=None)
     payload["cwd"] = str(revert_repo)
     assert _enveloped(guard.check)(payload) is None
@@ -4867,7 +4867,7 @@ def test_em_payload_revert_unaffected(revert_repo):
 
 
 @pytest.fixture
-def commit_target_repo(tmp_path):
+def commit_target_repo(tmp_path: Path) -> tuple[Path, Path]:
     repo = tmp_path / "target"
     (repo / ".git").mkdir(parents=True)
     other = tmp_path / "cwd"
@@ -4886,7 +4886,7 @@ def _commit_verdict(command, repo_cwd, agent_type):
     "tail",
     ['commit -m "wave 1" -- a.py b.py', "commit -m x --only -- a.py"],
 )
-def test_commit_agent_git_dash_c_commit_with_pathspec_allows(commit_target_repo, tail):
+def test_commit_agent_git_dash_c_commit_with_pathspec_allows(commit_target_repo, tail) -> None:
     repo, cwd = commit_target_repo
     cmd = f'git -C "{repo.as_posix()}" {tail}'
     assert _commit_verdict(cmd, cwd, "coordinator:git-commit-agent") != "deny"
@@ -4896,13 +4896,13 @@ def test_commit_agent_git_dash_c_commit_with_pathspec_allows(commit_target_repo,
     "tail",
     ['commit -m "wave 1"', 'commit -a -m x -- a.py', 'commit --all -m x -- a.py', "commit -m x --", "commit --amend -m x -- a.py"],
 )
-def test_commit_agent_git_dash_c_commit_without_pathspec_or_sweeping_still_denies(commit_target_repo, tail):
+def test_commit_agent_git_dash_c_commit_without_pathspec_or_sweeping_still_denies(commit_target_repo, tail) -> None:
     repo, cwd = commit_target_repo
     cmd = f'git -C "{repo.as_posix()}" {tail}'
     assert _commit_verdict(cmd, cwd, "coordinator:git-commit-agent") == "deny"
 
 
-def test_other_agent_git_dash_c_commit_with_pathspec_still_denies(commit_target_repo):
+def test_other_agent_git_dash_c_commit_with_pathspec_still_denies(commit_target_repo) -> None:
     repo, cwd = commit_target_repo
     cmd = f'git -C "{repo.as_posix()}" commit -m x -- a.py'
     assert _commit_verdict(cmd, cwd, "coordinator:executor") == "deny"
@@ -4912,7 +4912,7 @@ def test_other_agent_git_dash_c_commit_with_pathspec_still_denies(commit_target_
     "tail",
     ["reset --hard HEAD~1", "clean -fd", "push --force origin main", "branch -D feat", "add -A", "add ."],
 )
-def test_commit_agent_destructive_dash_c_verbs_still_deny(commit_target_repo, tail):
+def test_commit_agent_destructive_dash_c_verbs_still_deny(commit_target_repo, tail) -> None:
     repo, cwd = commit_target_repo
     cmd = f'git -C "{repo.as_posix()}" {tail}'
     assert _commit_verdict(cmd, cwd, "coordinator:git-commit-agent") == "deny"
@@ -4933,7 +4933,7 @@ def _denied(cmd):
     return result is not None and result["hookSpecificOutput"]["permissionDecision"] == "deny"
 
 
-def test_private_index_commit_sequence_passes():
+def test_private_index_commit_sequence_passes() -> None:
     assert not _denied(_PRIVATE_COMMIT_LINE)
 
 
@@ -4959,7 +4959,7 @@ def test_private_index_commit_sequence_passes():
         "git apply --cached scratch/x.patch && export GIT_INDEX_FILE=scratch/i",
     ],
 )
-def test_plumbing_verb_passes_for_subagent(cmd):
+def test_plumbing_verb_passes_for_subagent(cmd) -> None:
     assert not _denied(cmd)
 
 
@@ -4982,7 +4982,7 @@ def test_plumbing_verb_passes_for_subagent(cmd):
         "export GIT_INDEX_FILE=scratch/i && git reset --hard HEAD~1",
     ],
 )
-def test_plumbing_unguarded_or_destructive_forms_still_deny(cmd):
+def test_plumbing_unguarded_or_destructive_forms_still_deny(cmd) -> None:
     assert _denied(cmd)
 
 
@@ -5003,7 +5003,7 @@ def test_plumbing_unguarded_or_destructive_forms_still_deny(cmd):
         ("git frobnicate", True),
     ],
 )
-def test_legacy_classifier_agrees_on_plumbing(seg, allowed):
+def test_legacy_classifier_agrees_on_plumbing(seg, allowed) -> None:
     assert (guard._evaluate_git_segment_legacy(seg) is None) is allowed
 
 
@@ -5023,7 +5023,7 @@ def _rm_verdict(command):
         'git grep -n "rm -rf" -- docs && echo done',
     ],
 )
-def test_rm_text_inside_a_quoted_operand_allows(command):
+def test_rm_text_inside_a_quoted_operand_allows(command) -> None:
     assert _rm_verdict(command) == "allow"
 
 
@@ -5046,11 +5046,11 @@ def test_rm_text_inside_a_quoted_operand_allows(command):
         'rg "x" docs && rm -rf build/out',
     ],
 )
-def test_rm_in_command_position_still_denies(command):
+def test_rm_in_command_position_still_denies(command) -> None:
     assert _rm_verdict(command) == "deny"
 
 
-def test_op_relay_rm_f_defer_params_tail_is_classified_by_target():
+def test_op_relay_rm_f_defer_params_tail_is_classified_by_target() -> None:
     relay = "coordinator-invoke dispatch.run --params-file {p} && rm -f {p}"
     assert _rm_verdict(relay.format(p="build/out/defer-params.json")) == "deny"
     assert _rm_verdict(relay.format(p=".pytest_cache/defer-params.json")) == "allow"
@@ -5065,7 +5065,7 @@ def test_op_relay_rm_f_defer_params_tail_is_classified_by_target():
         "rm -f E:/repo/.git/idx-a1b2c3",
     ],
 )
-def test_rm_of_private_temp_index_is_allowed(command):
+def test_rm_of_private_temp_index_is_allowed(command) -> None:
     assert _rm_verdict(command) == "allow"
 
 
@@ -5084,5 +5084,5 @@ def test_rm_of_private_temp_index_is_allowed(command):
         "rm -f .git/idx-a1b2c3; rm -f .git/index",
     ],
 )
-def test_rm_of_other_git_paths_stays_denied(command):
+def test_rm_of_other_git_paths_stays_denied(command) -> None:
     assert _rm_verdict(command) == "deny"

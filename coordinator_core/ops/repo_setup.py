@@ -501,7 +501,12 @@ def _step_manifests(ctx: _Ctx) -> None:
     if manifest.exists():
         ctx.existed("manifest", "agent-install-manifest.json present", manifest)
     else:
-        ctx.open("manifest", "seed a schema-compliant agent-install-manifest.json (contract version 3)", manifest)
+        ctx.open(
+            "manifest",
+            "seed a schema-compliant agent-install-manifest.json (contract version 3); "
+            "omit or stub any entry point (setup.sh/setup.ps1) this repo does not have",
+            manifest,
+        )
     skeleton = Path(record_homes.record_path(str(ctx.root), "strategic", "self-description.yaml"))
     if skeleton.exists():
         ctx.existed("self-description", "self-description.yaml present", skeleton)

@@ -8,11 +8,13 @@ from __future__ import annotations
 
 from coordinator_core import environment
 from coordinator_core.bash_guards import _write_bump_stand_down as sd
+from pathlib import Path
+import pytest
 
 _SINK = "ownership-leg.log"
 
 
-def _call(root, session="s1", evidence="ev"):
+def _call(root, session: str = "s1", evidence: str = "ev") -> None:
     sd._mirror_to_durable_sink(
         root,
         "%s | %s | MARK | repo | %s\n" % ("T", session, evidence),
@@ -24,27 +26,27 @@ def _lines(root):
     return (root / "state" / "stand-downs" / _SINK).read_text().splitlines()
 
 
-def _durable(monkeypatch, value=True):
+def _durable(monkeypatch, value: bool = True) -> None:
     monkeypatch.setattr(
         environment, "capability",
         lambda name, env=None: environment.Capability(name, value, "stub"),
     )
 
 
-def test_first_line_lands(tmp_path, monkeypatch):
+def test_first_line_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _durable(monkeypatch)
     _call(tmp_path)
     assert len(_lines(tmp_path)) == 1
 
 
-def test_repeat_differing_only_in_timestamp_is_suppressed(tmp_path, monkeypatch):
+def test_repeat_differing_only_in_timestamp_is_suppressed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _durable(monkeypatch)
     sd._mirror_to_durable_sink(tmp_path, "T1 | s1 | MARK | repo | ev\n", _SINK)
     sd._mirror_to_durable_sink(tmp_path, "T2 | s1 | MARK | repo | ev\n", _SINK)
     assert _lines(tmp_path) == ["T1 | s1 | MARK | repo | ev"]
 
 
-def test_distinct_session_or_evidence_still_lands(tmp_path, monkeypatch):
+def test_distinct_session_or_evidence_still_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _durable(monkeypatch)
     _call(tmp_path)
     _call(tmp_path, session="s2")
@@ -52,7 +54,7 @@ def test_distinct_session_or_evidence_still_lands(tmp_path, monkeypatch):
     assert len(_lines(tmp_path)) == 3
 
 
-def test_record_older_than_the_tail_is_rewritten_not_lost(tmp_path, monkeypatch):
+def test_record_older_than_the_tail_is_rewritten_not_lost(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _durable(monkeypatch)
     monkeypatch.setattr(sd, "_SINK_TAIL_BYTES", 64)
     _call(tmp_path)
@@ -62,7 +64,7 @@ def test_record_older_than_the_tail_is_rewritten_not_lost(tmp_path, monkeypatch)
     assert len(_lines(tmp_path)) == 7
 
 
-def test_non_durable_host_writes_nothing(tmp_path, monkeypatch):
+def test_non_durable_host_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _durable(monkeypatch, value=False)
     _call(tmp_path)
     assert not (tmp_path / "state" / "stand-downs").exists()

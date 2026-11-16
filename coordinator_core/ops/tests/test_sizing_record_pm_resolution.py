@@ -15,6 +15,7 @@ import coordinator_core.ops.sizing_record_pm_resolution as mod
 from coordinator_core.authz.classification import OP_CLASSIFICATION
 from coordinator_core.op_scopes import _OP_KEY_SCOPE
 from coordinator_core.ops._registry_map import OP_MODULE_MAP
+import pytest
 
 _QUOTE = "yes, prompt me after sizing"
 _REL = "state/sizings/20260101-a.yaml"
@@ -59,7 +60,7 @@ def _doc(path: Path) -> dict:
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
-def test_writes_new_block(tmp_path):
+def test_writes_new_block(tmp_path: Path) -> None:
     p = _seed(tmp_path)
     r = _run(tmp_path)
     assert r["exit_code"] == 0 and r["applied"] is True, r
@@ -69,7 +70,7 @@ def test_writes_new_block(tmp_path):
     assert d["route"] == "pm-decision" and d["xl_exit"] is None
 
 
-def test_preserves_existing_keys(tmp_path):
+def test_preserves_existing_keys(tmp_path: Path) -> None:
     p = _seed(
         tmp_path, ["pm_resolution:", "  decided_on: '2026-09-01'", "  wiki_home: docs/wiki"]
     )
@@ -79,7 +80,7 @@ def test_preserves_existing_keys(tmp_path):
     assert pm["decided_on"] == "2026-10-05"
 
 
-def test_block_not_last_lands_and_other_fields_byte_preserved(tmp_path):
+def test_block_not_last_lands_and_other_fields_byte_preserved(tmp_path: Path) -> None:
     block = ["pm_resolution:", "  decided_on: '2026-09-01'", "  wiki_home: docs/wiki"]
     p = _seed(tmp_path, block, block_first=True)
     before = p.read_text(encoding="utf-8")
@@ -90,7 +91,7 @@ def test_block_not_last_lands_and_other_fields_byte_preserved(tmp_path):
     assert after.endswith(stripped_before)
 
 
-def test_identical_quote_is_idempotent_and_keeps_decided_on(tmp_path):
+def test_identical_quote_is_idempotent_and_keeps_decided_on(tmp_path: Path) -> None:
     p = _seed(tmp_path)
     _run(tmp_path)
     before = p.read_text(encoding="utf-8")
@@ -99,7 +100,7 @@ def test_identical_quote_is_idempotent_and_keeps_decided_on(tmp_path):
     assert p.read_text(encoding="utf-8") == before
 
 
-def test_different_value_refused_without_supersede(tmp_path):
+def test_different_value_refused_without_supersede(tmp_path: Path) -> None:
     p = _seed(tmp_path)
     _run(tmp_path)
     before = p.read_text(encoding="utf-8")
@@ -108,7 +109,7 @@ def test_different_value_refused_without_supersede(tmp_path):
     assert p.read_text(encoding="utf-8") == before
 
 
-def test_supersede_replaces(tmp_path):
+def test_supersede_replaces(tmp_path: Path) -> None:
     p = _seed(tmp_path)
     _run(tmp_path)
     r = _run(tmp_path, quote="no, do not prompt", supersede=True, decided_on="2026-10-06")
@@ -119,7 +120,7 @@ def test_supersede_replaces(tmp_path):
     }
 
 
-def test_reserved_and_owned_keys_refused(tmp_path):
+def test_reserved_and_owned_keys_refused(tmp_path: Path) -> None:
     p = _seed(tmp_path)
     before = p.read_text(encoding="utf-8")
     for key in ("decided_on", "xl_exit", "fork"):
@@ -129,7 +130,7 @@ def test_reserved_and_owned_keys_refused(tmp_path):
     assert p.read_text(encoding="utf-8") == before
 
 
-def test_bad_key_shape_refused(tmp_path):
+def test_bad_key_shape_refused(tmp_path: Path) -> None:
     p = _seed(tmp_path)
     before = p.read_text(encoding="utf-8")
     for key in ("Bad", "1abc", "has-dash", "has space", "a" * 65):
@@ -137,7 +138,7 @@ def test_bad_key_shape_refused(tmp_path):
     assert p.read_text(encoding="utf-8") == before
 
 
-def test_missing_params_malformed_date_and_escape_refused(tmp_path):
+def test_missing_params_malformed_date_and_escape_refused(tmp_path: Path) -> None:
     p = _seed(tmp_path)
     before = p.read_text(encoding="utf-8")
     assert _run(tmp_path, quote="  ")["exit_code"] == 1
@@ -148,7 +149,7 @@ def test_missing_params_malformed_date_and_escape_refused(tmp_path):
     assert p.read_text(encoding="utf-8") == before
 
 
-def test_registered_everywhere():
+def test_registered_everywhere() -> None:
     assert OP_CLASSIFICATION.get("sizing.record_pm_resolution") is not None
     assert _OP_KEY_SCOPE.get("sizing.record_pm_resolution") == "common_dir"
     assert (
@@ -157,7 +158,7 @@ def test_registered_everywhere():
     )
 
 
-def test_sizing_assemble_cli_routes_to_writer(tmp_path, monkeypatch):
+def test_sizing_assemble_cli_routes_to_writer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core import sizing_assemble
 
     p = _seed(tmp_path)

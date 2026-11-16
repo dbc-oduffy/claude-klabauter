@@ -10,6 +10,7 @@ import urllib.error
 import pytest
 
 from coordinator_core.warm import front_door, supervisor
+from pathlib import Path
 
 
 def _raising(code: int):
@@ -20,7 +21,7 @@ def _raising(code: int):
 
 
 @pytest.fixture
-def live_supervisor(monkeypatch, tmp_path):
+def live_supervisor(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setattr(supervisor, "read_discovery", lambda root: {"port": 1})
     monkeypatch.setattr(supervisor, "discovery_is_live", lambda rec: True)
     monkeypatch.setattr(supervisor, "listener_url", lambda rec: "http://127.0.0.1:1")
@@ -29,7 +30,7 @@ def live_supervisor(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def live_door(monkeypatch, tmp_path):
+def live_door(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     monkeypatch.setattr(front_door, "read_discovery", lambda root: {"port": 1})
     monkeypatch.setattr(front_door, "discovery_is_live", lambda rec: True)
     monkeypatch.setattr(front_door.door_credential, "read_secret", lambda: "secret")
@@ -37,10 +38,10 @@ def live_door(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("code,expected", [(404, 0), (500, None), (403, None)])
-def test_supervisor_probe_reads_404_as_no_count(live_supervisor, code, expected):
+def test_supervisor_probe_reads_404_as_no_count(live_supervisor, code, expected) -> None:
     assert supervisor.in_flight_count(live_supervisor, opener=_raising(code)) == expected
 
 
 @pytest.mark.parametrize("code,expected", [(404, 0), (500, None), (403, None)])
-def test_front_door_probe_reads_404_as_no_count(live_door, code, expected):
+def test_front_door_probe_reads_404_as_no_count(live_door, code, expected) -> None:
     assert front_door.in_flight_count(live_door, opener=_raising(code)) == expected

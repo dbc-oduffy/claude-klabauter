@@ -8,6 +8,7 @@ import subprocess
 import sys
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -28,7 +29,7 @@ def _indent(text: str) -> str:
     return HEADER + "\n".join("  " + ln for ln in text.split("\n"))
 
 
-def _spawn_file(tmp_path, first_record, extra=""):
+def _spawn_file(tmp_path, first_record, extra: str = ""):
     p = tmp_path / "proj" / "subagents" / "workflows" / "wf_x" / "agent-a.jsonl"
     p.parent.mkdir(parents=True)
     p.write_text(json.dumps(first_record) + "\n" + extra, encoding="utf-8")
@@ -40,7 +41,7 @@ def _record(prompt):
 
 
 @pytest.mark.parametrize("root", ["C:/Users/x/repo", "/home/x/repo"])
-def test_params_path_is_forward_slash_absolute_shape(root):
+def test_params_path_is_forward_slash_absolute_shape(root) -> None:
     p = ch.params_path(root, "warp-x-1")
     assert p is not None
     assert "\\" not in p.as_posix()
@@ -48,25 +49,25 @@ def test_params_path_is_forward_slash_absolute_shape(root):
 
 
 @pytest.mark.parametrize("bad", ["", "../x", "a/b", None, 5, "-x"])
-def test_params_path_rejects_bad_run_id(bad):
+def test_params_path_rejects_bad_run_id(bad) -> None:
     assert ch.params_path("/r", bad) is None
 
 
-def test_block_round_trips_with_backslashes_quotes_and_newlines():
+def test_block_round_trips_with_backslashes_quotes_and_newlines() -> None:
     assert ch.prompt_params(ch.render_params_block(PARAMS)) == PARAMS
 
 
-def test_harness_indented_copy_parses_the_same():
+def test_harness_indented_copy_parses_the_same() -> None:
     prompt = "run this\n" + ch.render_params_block(PARAMS) + "\nafter"
     assert ch.prompt_params(_indent(prompt)) == PARAMS
 
 
-def test_block_survives_line_separator_characters_in_a_value():
+def test_block_survives_line_separator_characters_in_a_value() -> None:
     params = {**PARAMS, "note": "a b c\u0085d"}
     assert ch.prompt_params(_indent("x\n" + ch.render_params_block(params))) == params
 
 
-def test_prompt_params_rejects_malformed():
+def test_prompt_params_rejects_malformed() -> None:
     block = ch.render_params_block(PARAMS)
     no_token = {k: v for k, v in PARAMS.items() if k != "run_token"}
     for bad in (
@@ -80,12 +81,12 @@ def test_prompt_params_rejects_malformed():
         assert ch.prompt_params(bad) is None
 
 
-def test_read_spawn_prompt_returns_prompt_exactly(tmp_path):
+def test_read_spawn_prompt_returns_prompt_exactly(tmp_path: Path) -> None:
     prompt = _indent("x\n" + ch.render_params_block(PARAMS))
     assert ch.read_spawn_prompt(str(_spawn_file(tmp_path, _record(prompt)))) == prompt
 
 
-def test_read_spawn_prompt_accepts_backslash_separators(tmp_path, monkeypatch):
+def test_read_spawn_prompt_accepts_backslash_separators(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     f = _spawn_file(tmp_path, _record("hello"))
     winpath = str(f).replace("/", "\\")
     real_open = open
@@ -100,7 +101,7 @@ def test_read_spawn_prompt_accepts_backslash_separators(tmp_path, monkeypatch):
     assert ch.read_spawn_prompt(winpath) == "hello"
 
 
-def test_read_spawn_prompt_requires_workflow_spawn_segments(tmp_path):
+def test_read_spawn_prompt_requires_workflow_spawn_segments(tmp_path: Path) -> None:
     f = tmp_path / "plain.jsonl"
     f.write_text(json.dumps(_record("p")) + "\n", encoding="utf-8")
     assert ch.read_spawn_prompt(str(f)) is None
@@ -110,7 +111,7 @@ def test_read_spawn_prompt_requires_workflow_spawn_segments(tmp_path):
     assert ch.read_spawn_prompt(str(g)) is None
 
 
-def test_read_spawn_prompt_rejects_unreadable_shapes(tmp_path):
+def test_read_spawn_prompt_rejects_unreadable_shapes(tmp_path: Path) -> None:
     assert ch.read_spawn_prompt(str(tmp_path / "subagents" / "workflows" / "m.jsonl")) is None
     assert ch.read_spawn_prompt(None) is None
     d = tmp_path / "subagents" / "workflows" / "wf"
@@ -132,55 +133,55 @@ def test_read_spawn_prompt_rejects_unreadable_shapes(tmp_path):
 RELAY = f"{ch.RELAY_HEADER} please run the thing"
 
 
-def _lines(*records):
+def _lines(*records) -> str:
     return "".join(json.dumps(r) + "\n" for r in records)
 
 
-def test_read_spawn_prompt_skips_non_user_records_and_returns_first_non_relay_user_record(tmp_path):
+def test_read_spawn_prompt_skips_non_user_records_and_returns_first_non_relay_user_record(tmp_path: Path) -> None:
     f = _spawn_file(tmp_path, {"type": "system"}, extra=_lines(_record("second")))
     assert ch.read_spawn_prompt(str(f)) == "second"
     g = _spawn_file(tmp_path / "g", _record("first"), extra=_lines(_record("second")))
     assert ch.read_spawn_prompt(str(g)) == "first"
 
 
-def test_read_spawn_prompt_returns_computed_record_behind_the_relay(tmp_path):
+def test_read_spawn_prompt_returns_computed_record_behind_the_relay(tmp_path: Path) -> None:
     prompt = _indent("x\n" + ch.render_params_block(PARAMS))
     f = _spawn_file(tmp_path, _record(RELAY), extra=_lines(_record(prompt)))
     assert ch.read_spawn_prompt(str(f)) == prompt
     assert ch.prompt_params(ch.read_spawn_prompt(str(f))) == PARAMS
 
 
-def test_block_inside_the_relay_record_is_never_returned(tmp_path):
+def test_block_inside_the_relay_record_is_never_returned(tmp_path: Path) -> None:
     relay = RELAY + "\n" + ch.render_params_block(PARAMS)
     f = _spawn_file(tmp_path, _record(relay), extra=_lines(_record("no block")))
     assert ch.prompt_params(ch.read_spawn_prompt(str(f))) is None
 
 
-def test_relay_with_over_cap_second_record_returns_none(tmp_path):
+def test_relay_with_over_cap_second_record_returns_none(tmp_path: Path) -> None:
     f = _spawn_file(tmp_path, _record(RELAY), extra=_lines(_record("x" * (ch.PROMPT_RECORD_CAP_BYTES + 10))))
     assert ch.read_spawn_prompt(str(f)) is None
 
 
-def test_a_prompt_past_the_params_file_cap_still_yields_its_block(tmp_path):
+def test_a_prompt_past_the_params_file_cap_still_yields_its_block(tmp_path: Path) -> None:
     prompt = "x" * (ch.READ_CAP_BYTES + 7000) + "\n" + _indent(ch.render_params_block(PARAMS))
     assert len(json.dumps(_record(prompt))) > ch.READ_CAP_BYTES
     f = _spawn_file(tmp_path, _record(prompt))
     assert ch.prompt_params(ch.read_spawn_prompt(str(f))) == PARAMS
 
 
-def test_third_record_is_never_read(tmp_path):
+def test_third_record_is_never_read(tmp_path: Path) -> None:
     block = _indent(ch.render_params_block(PARAMS))
     f = _spawn_file(tmp_path, _record(RELAY), extra=_lines(_record("second"), _record(block)))
     assert ch.read_spawn_prompt(str(f)) == "second"
 
 
-def test_prompt_record_beyond_max_prompt_records_is_never_read(tmp_path):
+def test_prompt_record_beyond_max_prompt_records_is_never_read(tmp_path: Path) -> None:
     filler = [{"type": "attachment"}] * ch.MAX_PROMPT_RECORDS
     f = _spawn_file(tmp_path, _record(RELAY), extra=_lines(*filler, _record("late")))
     assert ch.read_spawn_prompt(str(f)) is None
 
 
-def test_materialize_writes_ascii_json_equal_to_input_and_replaces(tmp_path):
+def test_materialize_writes_ascii_json_equal_to_input_and_replaces(tmp_path: Path) -> None:
     target = tmp_path / "scratch" / "warp" / "r" / ch.PARAMS_FILE_NAME
     assert ch.materialize(target, {"old": "\u00e9"})
     params = {**PARAMS, "uni": "caf\u00e9 \u2014"}
@@ -191,11 +192,11 @@ def test_materialize_writes_ascii_json_equal_to_input_and_replaces(tmp_path):
     assert [p.name for p in target.parent.iterdir()] == [ch.PARAMS_FILE_NAME]
 
 
-def _product(run_id="ask-1"):
+def _product(run_id: str = "ask-1"):
     return {**PARAMS, "run_id": run_id, "inline_review": {"verdict": "approved"}}
 
 
-def test_product_materialize_records_land_params_and_a_halt_leaves_them(tmp_path):
+def test_product_materialize_records_land_params_and_a_halt_leaves_them(tmp_path: Path) -> None:
     target = ch.params_path(tmp_path, "ask-1")
     assert ch.land_params_path(tmp_path, "ask-1") == target.with_name(ch.LAND_PARAMS_FILE_NAME)
     product = _product()
@@ -213,7 +214,7 @@ def test_product_materialize_records_land_params_and_a_halt_leaves_them(tmp_path
     assert land.read_bytes() == recorded
 
 
-def test_a_params_write_without_inline_review_records_no_land_params(tmp_path):
+def test_a_params_write_without_inline_review_records_no_land_params(tmp_path: Path) -> None:
     target = ch.params_path(tmp_path, "ask-1")
     assert ch.materialize(target, {**PARAMS, "run_id": "ask-1"})
     assert not ch.land_params_path(tmp_path, "ask-1").exists()
@@ -221,7 +222,7 @@ def test_a_params_write_without_inline_review_records_no_land_params(tmp_path):
     assert not ch.land_params_path(tmp_path, "ask-1").exists()
 
 
-def test_a_failed_sibling_write_does_not_flip_materialize(tmp_path):
+def test_a_failed_sibling_write_does_not_flip_materialize(tmp_path: Path) -> None:
     target = ch.params_path(tmp_path, "ask-1")
     target.parent.mkdir(parents=True)
     target.with_name(ch.LAND_PARAMS_FILE_NAME).mkdir()
@@ -229,7 +230,7 @@ def test_a_failed_sibling_write_does_not_flip_materialize(tmp_path):
     assert ch.recorded_land_params(tmp_path, "ask-1") is None
 
 
-def test_recorded_land_params_refuses_mismatch_missing_review_and_garbage(tmp_path):
+def test_recorded_land_params_refuses_mismatch_missing_review_and_garbage(tmp_path: Path) -> None:
     assert ch.recorded_land_params(tmp_path, "ask-1") is None
     assert ch.recorded_land_params(tmp_path, "../x") is None
     land = ch.land_params_path(tmp_path, "ask-1")
@@ -244,13 +245,13 @@ def test_recorded_land_params_refuses_mismatch_missing_review_and_garbage(tmp_pa
     assert ch.recorded_land_params(tmp_path, "ask-1") is None
 
 
-def test_materialize_returns_false_when_parent_is_a_file(tmp_path):
+def test_materialize_returns_false_when_parent_is_a_file(tmp_path: Path) -> None:
     blocker = tmp_path / "blocker"
     blocker.write_text("x")
     assert ch.materialize(blocker / "sub" / ch.PARAMS_FILE_NAME, PARAMS) is False
 
 
-def test_missing_file_diagnosis_names_run_and_writer(tmp_path):
+def test_missing_file_diagnosis_names_run_and_writer(tmp_path: Path) -> None:
     diagnosis = ch.missing_file_diagnosis(str(tmp_path / "scratch" / "warp" / "run-1" / ch.PARAMS_FILE_NAME))
     assert diagnosis is not None
     assert "run-1" in diagnosis
@@ -258,11 +259,11 @@ def test_missing_file_diagnosis_names_run_and_writer(tmp_path):
     assert "Not dispatched" in diagnosis
 
 
-def test_missing_file_diagnosis_accepts_forward_slash_and_relative():
+def test_missing_file_diagnosis_accepts_forward_slash_and_relative() -> None:
     assert ch.missing_file_diagnosis("scratch/warp/run-1/" + ch.PARAMS_FILE_NAME) is not None
 
 
-def test_missing_file_diagnosis_is_none_when_the_file_exists(tmp_path):
+def test_missing_file_diagnosis_is_none_when_the_file_exists(tmp_path: Path) -> None:
     path = tmp_path / "scratch" / "warp" / "run-1" / ch.PARAMS_FILE_NAME
     path.parent.mkdir(parents=True)
     path.write_text("{}", encoding="utf-8")
@@ -274,13 +275,13 @@ def test_missing_file_diagnosis_is_none_when_the_file_exists(tmp_path):
     assert ch.find_existing(rel, below) == tmp_path / rel
 
 
-def test_missing_file_diagnosis_still_fires_when_absent_under_cwd(tmp_path):
+def test_missing_file_diagnosis_still_fires_when_absent_under_cwd(tmp_path: Path) -> None:
     rel = "scratch/warp/run-1/" + ch.PARAMS_FILE_NAME
     assert "was never written" in ch.missing_file_diagnosis(rel, tmp_path)
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="PurePosixPath does not split on backslash")
-def test_missing_file_diagnosis_accepts_backslash_separators():
+def test_missing_file_diagnosis_accepts_backslash_separators() -> None:
     assert ch.missing_file_diagnosis("r\\scratch\\warp\\run-1\\" + ch.PARAMS_FILE_NAME) is not None
 
 
@@ -295,7 +296,7 @@ def test_missing_file_diagnosis_accepts_backslash_separators():
         "",
     ],
 )
-def test_missing_file_diagnosis_refuses_other_paths(path):
+def test_missing_file_diagnosis_refuses_other_paths(path) -> None:
     assert ch.missing_file_diagnosis(path) is None
 
 
@@ -323,20 +324,20 @@ def _fail_open_env(tmp_path, monkeypatch, lines):
     return repo
 
 
-def test_diagnosis_names_a_door_fail_open_logged_since_the_mint(tmp_path, monkeypatch):
+def test_diagnosis_names_a_door_fail_open_logged_since_the_mint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _fail_open_env(tmp_path, monkeypatch, [(-100, "old one"), (5, "deadline blown")])
     text = ch.missing_file_diagnosis(str(ch.params_path(repo, "ask-1")))
     assert "PreToolUse door failed open" in text and "cause=deadline blown" in text
     assert "old one" not in text and "was not reached" not in text
 
 
-def test_diagnosis_ignores_a_fail_open_older_than_the_mint(tmp_path, monkeypatch):
+def test_diagnosis_ignores_a_fail_open_older_than_the_mint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _fail_open_env(tmp_path, monkeypatch, [(-100, "old one"), (-50, "older")])
     text = ch.missing_file_diagnosis(str(ch.params_path(repo, "ask-1")))
     assert "failed open" not in text and "run-token writer was not reached" in text
 
 
-def test_diagnosis_prefers_the_refusal_note_over_a_fail_open(tmp_path, monkeypatch):
+def test_diagnosis_prefers_the_refusal_note_over_a_fail_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _fail_open_env(tmp_path, monkeypatch, [(5, "x")])
     path = ch.params_path(repo, "ask-1")
     path.parent.mkdir(parents=True)
@@ -345,21 +346,21 @@ def test_diagnosis_prefers_the_refusal_note_over_a_fail_open(tmp_path, monkeypat
     assert "some-leg" in text and "failed open" not in text
 
 
-def test_fail_open_note_is_none_without_a_live_record_or_log(tmp_path, monkeypatch):
+def test_fail_open_note_is_none_without_a_live_record_or_log(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _fail_open_env(tmp_path, monkeypatch, [(5, "x")])
     assert ch.door_fail_open_note(repo, "no-such-run") is None
     (tmp_path / "home" / "state" / "door-fail-open.log").unlink()
     assert ch.door_fail_open_note(repo, "ask-1") is None
 
 
-def test_fail_open_note_skips_unparseable_ts(tmp_path, monkeypatch):
+def test_fail_open_note_skips_unparseable_ts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _fail_open_env(tmp_path, monkeypatch, [(5, "good")])
     log = tmp_path / "home" / "state" / "door-fail-open.log"
     log.write_text(log.read_text(encoding="utf-8") + "ts=garbage cause=bad\n", encoding="utf-8")
     assert "cause=good" in ch.door_fail_open_note(repo, "ask-1")
 
 
-def test_recover_params_rewrites_the_params_file_from_the_land_params(tmp_path):
+def test_recover_params_rewrites_the_params_file_from_the_land_params(tmp_path: Path) -> None:
     params = {**PARAMS, "run_id": "run-1", "inline_review": {"a": 1}}
     assert ch.recover_params(tmp_path, "run-1") is None
     ch.materialize(ch.params_path(tmp_path, "run-1"), params)
@@ -369,13 +370,13 @@ def test_recover_params_rewrites_the_params_file_from_the_land_params(tmp_path):
     assert json.loads(recovered.read_text(encoding="utf-8")) == params
 
 
-def test_repo_root_of_strips_the_canonical_tail(tmp_path):
+def test_repo_root_of_strips_the_canonical_tail(tmp_path: Path) -> None:
     assert ch.repo_root_of(str(ch.params_path(tmp_path, "run-1"))) == tmp_path
     assert ch.repo_root_of("scratch/warp/run-1/" + ch.PARAMS_FILE_NAME, tmp_path) == tmp_path
     assert ch.repo_root_of("other/x.json") is None
 
 
-def _minted_prompt(repo, run_id="ask-1", extra_block=False):
+def _minted_prompt(repo, run_id: str = "ask-1", extra_block: bool = False) -> str:
     from coordinator_core.ops.dispatch_emit import run_token
 
     (repo / ".git").mkdir(exist_ok=True)
@@ -384,7 +385,7 @@ def _minted_prompt(repo, run_id="ask-1", extra_block=False):
     return "Commit.\n" + block + ("\n" + block if extra_block else "")
 
 
-def test_materialize_from_prompt_admits_a_minted_token_and_writes(tmp_path):
+def test_materialize_from_prompt_admits_a_minted_token_and_writes(tmp_path: Path) -> None:
     prompt = _minted_prompt(tmp_path)
     written, leg = ch.materialize_from_prompt(tmp_path, prompt)
     assert leg is None
@@ -393,18 +394,18 @@ def test_materialize_from_prompt_admits_a_minted_token_and_writes(tmp_path):
 
 
 @pytest.mark.parametrize("extra_block", [False, True])
-def test_materialize_from_prompt_refuses_zero_or_two_blocks(tmp_path, extra_block):
+def test_materialize_from_prompt_refuses_zero_or_two_blocks(tmp_path: Path, extra_block) -> None:
     prompt = "Commit." if not extra_block else _minted_prompt(tmp_path, extra_block=True)
     assert ch.materialize_from_prompt(tmp_path, prompt) == (None, "no-params-block")
     assert not (tmp_path / "scratch").exists() or not list((tmp_path / "scratch").rglob(ch.PARAMS_FILE_NAME))
 
 
-def test_materialize_from_prompt_refuses_a_bad_run_id(tmp_path):
+def test_materialize_from_prompt_refuses_a_bad_run_id(tmp_path: Path) -> None:
     block = ch.render_params_block({"run_id": "../x", "run_token": "t", "script_path": _SCRIPT})
     assert ch.materialize_from_prompt(tmp_path, block) == (None, "params-path")
 
 
-def test_materialize_from_prompt_refuses_an_unminted_token_and_writes_nothing(tmp_path):
+def test_materialize_from_prompt_refuses_an_unminted_token_and_writes_nothing(tmp_path: Path) -> None:
     block = ch.render_params_block({"run_id": "ask-1", "run_token": "f" * 32, "script_path": _SCRIPT})
     canonical, leg = ch.materialize_from_prompt(tmp_path, block)
     assert leg == "params-token"
@@ -412,7 +413,7 @@ def test_materialize_from_prompt_refuses_an_unminted_token_and_writes_nothing(tm
     assert not canonical.exists()
 
 
-def test_materialize_from_prompt_reports_a_failed_write(tmp_path, monkeypatch):
+def test_materialize_from_prompt_reports_a_failed_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     prompt = _minted_prompt(tmp_path)
     monkeypatch.setattr(ch, "materialize", lambda path, params: False)
     canonical, leg = ch.materialize_from_prompt(tmp_path, prompt)
@@ -420,7 +421,7 @@ def test_materialize_from_prompt_reports_a_failed_write(tmp_path, monkeypatch):
     assert canonical == ch.params_path(tmp_path, "ask-1")
 
 
-def test_prewrite_for_spawn_round_trips_apostrophes_quotes_and_newlines(tmp_path):
+def test_prewrite_for_spawn_round_trips_apostrophes_quotes_and_newlines(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import run_token
 
     (tmp_path / ".git").mkdir()
@@ -431,7 +432,7 @@ def test_prewrite_for_spawn_round_trips_apostrophes_quotes_and_newlines(tmp_path
     assert json.loads(written.read_text(encoding="utf-8")) == params
 
 
-def test_prewrite_for_spawn_clears_a_stale_refusal_only_on_success(tmp_path):
+def test_prewrite_for_spawn_clears_a_stale_refusal_only_on_success(tmp_path: Path) -> None:
     target = ch.params_path(tmp_path, "ask-1")
     target.parent.mkdir(parents=True)
     ch.note_refusal(str(target), "stale")
@@ -444,11 +445,11 @@ def test_prewrite_for_spawn_clears_a_stale_refusal_only_on_success(tmp_path):
 
 
 @pytest.mark.parametrize("bad", ["", "../x", "a/b", None, 5, "-x"])
-def test_params_writer_bound_refuses_a_bad_run_id(tmp_path, bad):
+def test_params_writer_bound_refuses_a_bad_run_id(tmp_path: Path, bad) -> None:
     assert ch.params_writer_bound(tmp_path, bad) is False
 
 
-def test_params_writer_bound_needs_the_writer_seam_to_call_prewrite(tmp_path, monkeypatch):
+def test_params_writer_bound_needs_the_writer_seam_to_call_prewrite(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     assert ch.params_writer_bound(tmp_path, "ask-1") is True
     seam = tmp_path / "hook.py"
     seam.write_text("def compose_catering(): pass\n", encoding="utf-8")
@@ -459,7 +460,7 @@ def test_params_writer_bound_needs_the_writer_seam_to_call_prewrite(tmp_path, mo
 
 
 @pytest.mark.spawns_process
-def test_js_and_python_block_agree():
+def test_js_and_python_block_agree() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node unavailable")
@@ -474,7 +475,7 @@ def test_js_and_python_block_agree():
 _SESSION = "sess-door-open"
 
 
-def _door_failed_open_run(tmp_path, monkeypatch, run_id="ask-1", token=None, receipt=True):
+def _door_failed_open_run(tmp_path, monkeypatch, run_id: str = "ask-1", token=None, receipt: bool = True):
     """A run whose spawn prompt carries the params block but whose guard writer never ran:
     no params file, no land-params sibling, a door fail-open logged after the mint."""
     from coordinator_core.ops.dispatch_emit import run_token
@@ -503,7 +504,7 @@ def _door_failed_open_run(tmp_path, monkeypatch, run_id="ask-1", token=None, rec
     return repo, params
 
 
-def test_recover_params_rederives_from_the_spawn_prompt_when_the_door_failed_open(tmp_path, monkeypatch):
+def test_recover_params_rederives_from_the_spawn_prompt_when_the_door_failed_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, params = _door_failed_open_run(tmp_path, monkeypatch)
     target = ch.params_path(repo, "ask-1")
     assert not target.exists() and not ch.land_params_path(repo, "ask-1").exists()
@@ -513,7 +514,7 @@ def test_recover_params_rederives_from_the_spawn_prompt_when_the_door_failed_ope
     assert ch.recorded_land_params(repo, "ask-1") == params
 
 
-def test_cli_retry_recovers_and_never_reports_the_file_unwritten(tmp_path, monkeypatch):
+def test_cli_retry_recovers_and_never_reports_the_file_unwritten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.invoke import __main__ as invoke_main
 
     repo, _ = _door_failed_open_run(tmp_path, monkeypatch)
@@ -524,17 +525,17 @@ def test_cli_retry_recovers_and_never_reports_the_file_unwritten(tmp_path, monke
     assert "was never written" not in stderr
 
 
-def test_spawn_recovery_refuses_a_token_the_run_never_minted(tmp_path, monkeypatch):
+def test_spawn_recovery_refuses_a_token_the_run_never_minted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, _ = _door_failed_open_run(tmp_path, monkeypatch, token="f" * 32)
     assert ch.recover_params(repo, "ask-1") is None
     assert not ch.params_path(repo, "ask-1").exists()
 
 
-def test_spawn_recovery_needs_the_runs_emission_receipt(tmp_path, monkeypatch):
+def test_spawn_recovery_needs_the_runs_emission_receipt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, _ = _door_failed_open_run(tmp_path, monkeypatch, receipt=False)
     assert ch.recover_params(repo, "ask-1") is None
 
 
-def test_spawn_recovery_ignores_another_runs_prompt(tmp_path, monkeypatch):
+def test_spawn_recovery_ignores_another_runs_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, _ = _door_failed_open_run(tmp_path, monkeypatch)
     assert ch.recover_params(repo, "ask-2") is None

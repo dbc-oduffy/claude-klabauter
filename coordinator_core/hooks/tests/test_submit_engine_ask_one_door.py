@@ -26,7 +26,7 @@ _OLD_HALTS = ("which this script does not embed", "the roadmap arm takes no EM b
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     for name in ("CLAUDE_CODE_REMOTE", "CLAUDE_CODE_REMOTE_SESSION_ID", "CLAUDE_CODE_CONTAINER_ID",
                  "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_PLUGIN_ROOT", "DELIVERABLE_ID"):
         monkeypatch.delenv(name, raising=False)
@@ -87,15 +87,15 @@ def _assert_reaches_roadmap(script: str) -> None:
         assert text not in script
 
 
-def test_ask_with_brief_reaches_the_roadmap_arm(repo):
+def test_ask_with_brief_reaches_the_roadmap_arm(repo) -> None:
     _assert_reaches_roadmap(_fire(repo, {"ask": "add the widget", "source": "pm", "brief": _BRIEF}))
 
 
-def test_ask_without_brief_reaches_the_roadmap_arm(repo):
+def test_ask_without_brief_reaches_the_roadmap_arm(repo) -> None:
     _assert_reaches_roadmap(_fire(repo, {"ask": "add the widget", "source": "pm"}))
 
 
-def test_presized_roadmap_sizing_with_brief_embeds_the_stage_and_does_not_halt(repo):
+def test_presized_roadmap_sizing_with_brief_embeds_the_stage_and_does_not_halt(repo) -> None:
     _put_sizing(repo)
     script = _fire(repo, {"sizing": REL, "brief": _BRIEF})
     _assert_reaches_roadmap(script)
@@ -103,7 +103,7 @@ def test_presized_roadmap_sizing_with_brief_embeds_the_stage_and_does_not_halt(r
     assert gate(repo, REL).halt is None
 
 
-def test_presized_roadmap_sizing_without_brief_embeds_the_stage_and_does_not_halt(repo):
+def test_presized_roadmap_sizing_without_brief_embeds_the_stage_and_does_not_halt(repo) -> None:
     _put_sizing(repo)
     script = _fire(repo, {"sizing": REL})
     assert not any(text in script for text in _OLD_HALTS)
@@ -111,30 +111,30 @@ def test_presized_roadmap_sizing_without_brief_embeds_the_stage_and_does_not_hal
 
 
 @pytest.mark.parametrize("engine", ["XL", "XXL"])
-def test_gate_halts_on_em_size_m_against_an_engine_xl_or_xxl_naming_both(repo, engine):
+def test_gate_halts_on_em_size_m_against_an_engine_xl_or_xxl_naming_both(repo, engine) -> None:
     _put_sizing(repo, tshirt=engine)
     halt = gate(repo, REL, em_size="M").halt
     assert halt["kind"] == HALT_MISALIGNED
     assert "M" in halt["reason"] and engine in halt["reason"]
 
 
-def test_hook_carries_em_size_into_the_composed_script(repo):
+def test_hook_carries_em_size_into_the_composed_script(repo) -> None:
     script = _fire(repo, {"ask": "add the widget", "source": "pm", "em_size": "M"})
     assert '"em_size":"M"' in script or 'em_size: "M"' in script
 
 
-def test_em_size_of_l_or_above_does_not_halt_on_misalignment(repo):
+def test_em_size_of_l_or_above_does_not_halt_on_misalignment(repo) -> None:
     _put_sizing(repo)
     assert gate(repo, REL, em_size="L").halt is None
     assert gate(repo, REL, em_size="XXL").halt is None
 
 
-def test_em_size_m_against_a_smaller_engine_size_does_not_halt_on_misalignment(repo):
+def test_em_size_m_against_a_smaller_engine_size_does_not_halt_on_misalignment(repo) -> None:
     _put_sizing(repo, tshirt="M", route="plan")
     assert (gate(repo, REL, em_size="M").halt or {}).get("kind") != HALT_MISALIGNED
 
 
-def test_no_em_size_against_xxl_halts_nothing_terminal_at_sizing(repo):
+def test_no_em_size_against_xxl_halts_nothing_terminal_at_sizing(repo) -> None:
     script = _fire(repo, {"ask": "add the widget", "source": "pm"})
     assert ", em_size: " not in script and '"em_size"' not in script
     assert "_gate.halt.apm_xl_exit === true" in script and "phase('xl-exit')" in script
@@ -146,13 +146,13 @@ def test_no_em_size_against_xxl_halts_nothing_terminal_at_sizing(repo):
     assert gate(repo, REL).halt is None
 
 
-def test_an_em_size_outside_the_size_set_is_refused_by_the_hook(repo):
+def test_an_em_size_outside_the_size_set_is_refused_by_the_hook(repo) -> None:
     hso = mod.evaluate(_payload(repo, {"ask": "add the widget", "source": "pm", "em_size": "HUGE"}))["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
     assert "em_size" in hso["permissionDecisionReason"]
 
 
-def test_hook_and_op_reach_one_gate_function(repo, monkeypatch):
+def test_hook_and_op_reach_one_gate_function(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks import _engine_ask_gates as gates
 
     seen = []
@@ -163,20 +163,20 @@ def test_hook_and_op_reach_one_gate_function(repo, monkeypatch):
     assert [(k["ask"], k["ask_source"], k["caller"]) for k in seen] == [("add the widget", "pm", "hook")]
 
 
-def test_hook_adapter_envelope_matches_direct_evaluate(repo):
+def test_hook_adapter_envelope_matches_direct_evaluate(repo) -> None:
     payload = _payload(repo, {"ask": "add the widget", "source": "pm"})
     via = mod._through_shared_gates(payload)["hookSpecificOutput"]
     direct = mod.evaluate(payload)["hookSpecificOutput"]
     assert via["permissionDecision"] == direct["permissionDecision"] == "allow"
 
 
-def test_hook_adapter_still_refuses_what_the_gates_refuse(repo):
+def test_hook_adapter_still_refuses_what_the_gates_refuse(repo) -> None:
     out = mod._handler(_payload(repo, {"ask": "add the widget", "source": "pm", "em_size": "HUGE"}))
     assert out["hookSpecificOutput"]["permissionDecision"] == "deny"
     assert "em_size" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_hook_adapter_runs_a_shape_the_op_refuses_through_evaluate(repo):
+def test_hook_adapter_runs_a_shape_the_op_refuses_through_evaluate(repo) -> None:
     payload = _payload(repo, {"ask": "add the widget", "source": "pm", "sizing": REL})  # both: submit_ask refuses bad-request
     out = mod._handler(payload)
     direct = mod.evaluate(payload)

@@ -21,28 +21,32 @@ import json
 from pathlib import Path
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN = Path(__file__).with_name("coordinator-git-maintenance.py")
 _INVENTORY = Path(__file__).resolve().parents[2] / "docs" / "install" / "bin-inventory.json"
 
 
-def _load():
+def _load() -> "ModuleType":
     spec = importlib.util.spec_from_file_location("coordinator_git_maintenance_bin", _BIN)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def test_the_trampoline_is_on_disk_where_the_call_sites_name_it():
+def test_the_trampoline_is_on_disk_where_the_call_sites_name_it() -> None:
     assert _BIN.is_file()
 
 
 @pytest.mark.parametrize("tier", ["hourly", "daily", "weekly"])
-def test_trampoline_routes_every_tier_to_the_op(tier, monkeypatch):
+def test_trampoline_routes_every_tier_to_the_op(tier, monkeypatch: pytest.MonkeyPatch) -> None:
     module = _load()
     seen = {}
 
-    def fake_runner(op_module, argv):
+    def fake_runner(op_module, argv) -> int:
         seen["op_module"] = op_module
         seen["argv"] = list(argv)
         return 0
@@ -54,7 +58,7 @@ def test_trampoline_routes_every_tier_to_the_op(tier, monkeypatch):
     assert seen["argv"] == [tier]
 
 
-def test_engine_root_failure_is_transport_code_two_not_a_silent_zero(monkeypatch):
+def test_engine_root_failure_is_transport_code_two_not_a_silent_zero(monkeypatch: pytest.MonkeyPatch) -> None:
     """A caller must never read an unreachable engine as a successful run."""
     module = _load()
 
@@ -65,7 +69,7 @@ def test_engine_root_failure_is_transport_code_two_not_a_silent_zero(monkeypatch
     assert module.main(["hourly"]) == 2
 
 
-def test_unimportable_op_is_transport_code_two(monkeypatch):
+def test_unimportable_op_is_transport_code_two(monkeypatch: pytest.MonkeyPatch) -> None:
     module = _load()
 
     def runner(op_module, argv):
@@ -75,7 +79,7 @@ def test_unimportable_op_is_transport_code_two(monkeypatch):
     assert module.main(["weekly"]) == 2
 
 
-def test_tier_argument_is_passed_through_unparsed(monkeypatch):
+def test_tier_argument_is_passed_through_unparsed(monkeypatch: pytest.MonkeyPatch) -> None:
     """No argv parsing beyond the tier — the op owns validation, so a bad tier
     reaches it rather than being rejected twice in two places."""
     module = _load()
@@ -88,6 +92,6 @@ def test_tier_argument_is_passed_through_unparsed(monkeypatch):
     assert seen["argv"] == ["monthly"]
 
 
-def test_bin_is_in_the_tracked_inventory():
+def test_bin_is_in_the_tracked_inventory() -> None:
     entries = json.loads(_INVENTORY.read_text(encoding="utf-8"))["entries"]
     assert "coordinator-git-maintenance" in entries

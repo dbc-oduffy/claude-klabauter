@@ -28,6 +28,7 @@ import subprocess
 import pytest
 
 from coordinator_core.git import commit as commit_mod
+from pathlib import Path
 
 _ENV_KEYS = (
     "GIT_COMMITTER_NAME",
@@ -38,7 +39,7 @@ _ENV_KEYS = (
 
 
 @pytest.fixture
-def no_env_identity(monkeypatch):
+def no_env_identity(monkeypatch: pytest.MonkeyPatch):
     for key in _ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
     commit_mod._CONFIG_IDENTITY_MEMO.clear()
@@ -47,24 +48,24 @@ def no_env_identity(monkeypatch):
 
 
 @pytest.fixture
-def isolated_config(tmp_path, monkeypatch, no_env_identity):
+def isolated_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_env_identity) -> Path:
     monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(tmp_path / "global-gitconfig"))
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     return tmp_path
 
 
-def _write(path, body: str):
+def _write(path, body: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(body, encoding="utf-8")
 
 
-def _popen_spy(monkeypatch):
+def _popen_spy(monkeypatch) -> list[list[str]]:
     seen: "list[list[str]]" = []
     real = subprocess.Popen
 
     class Spy(real):  # type: ignore[misc,valid-type]
-        def __init__(self, cmd, *a, **kw):
+        def __init__(self, cmd, *a, **kw) -> None:
             seen.append(cmd if isinstance(cmd, str) else list(cmd)[:4])
             super().__init__(cmd, *a, **kw)
 
@@ -73,8 +74,8 @@ def _popen_spy(monkeypatch):
 
 
 def test_identity_resolves_with_zero_spawns_when_env_is_absent(
-    isolated_config, monkeypatch
-):
+    isolated_config, monkeypatch: pytest.MonkeyPatch
+) -> None:
     _write(isolated_config / "global-gitconfig", "[user]\n\tname = Cfg\n\temail = c@x\n")
     seen = _popen_spy(monkeypatch)
 
@@ -82,7 +83,7 @@ def test_identity_resolves_with_zero_spawns_when_env_is_absent(
     assert seen == [], f"identity resolution spawned {seen}"
 
 
-def test_identity_is_memoized_across_repeated_resolves(isolated_config):
+def test_identity_is_memoized_across_repeated_resolves(isolated_config) -> None:
     _write(isolated_config / "global-gitconfig", "[user]\n\temail = memo@x\n")
     first = commit_mod._config_identity(None)
     for _ in range(5):
@@ -90,7 +91,7 @@ def test_identity_is_memoized_across_repeated_resolves(isolated_config):
     assert len(commit_mod._CONFIG_IDENTITY_MEMO) == 1
 
 
-def test_env_outranks_config(isolated_config, monkeypatch):
+def test_env_outranks_config(isolated_config, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(isolated_config / "global-gitconfig", "[user]\n\tname = Cfg\n\temail = c@x\n")
     monkeypatch.setenv("GIT_COMMITTER_NAME", "EnvName")
     monkeypatch.setenv("GIT_COMMITTER_EMAIL", "env@x")
@@ -98,7 +99,7 @@ def test_env_outranks_config(isolated_config, monkeypatch):
     assert commit_mod._identity(None) == ("EnvName", "env@x")
 
 
-def test_repo_local_config_outranks_global(isolated_config):
+def test_repo_local_config_outranks_global(isolated_config) -> None:
     _write(isolated_config / "global-gitconfig", "[user]\n\tname = Global\n\temail = g@x\n")
     repo = isolated_config / "repo"
     _write(repo / ".git" / "config", "[user]\n\temail = local@x\n")
@@ -106,14 +107,14 @@ def test_repo_local_config_outranks_global(isolated_config):
     assert commit_mod._identity(repo) == ("Global", "local@x")
 
 
-def test_the_two_fields_resolve_independently(isolated_config, monkeypatch):
+def test_the_two_fields_resolve_independently(isolated_config, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(isolated_config / "global-gitconfig", "[user]\n\temail = only@x\n")
     monkeypatch.setenv("GIT_COMMITTER_NAME", "FromEnv")
     commit_mod._CONFIG_IDENTITY_MEMO.clear()
     assert commit_mod._identity(None) == ("FromEnv", "only@x")
 
 
-def test_synthetic_fallback_survives_a_world_with_no_identity(isolated_config):
+def test_synthetic_fallback_survives_a_world_with_no_identity(isolated_config) -> None:
     assert commit_mod._identity(None) == ("coordinator", "coordinator@local")
 
 
@@ -134,13 +135,13 @@ def test_synthetic_fallback_survives_a_world_with_no_identity(isolated_config):
         ("", (None, None)),
     ],
 )
-def test_user_section_parsing(tmp_path, body, expected):
+def test_user_section_parsing(tmp_path: Path, body, expected) -> None:
     path = tmp_path / "cfg"
     path.write_text(body, encoding="utf-8")
     assert commit_mod._user_section_identity(path) == expected
 
 
-def test_a_later_section_ends_the_user_section(tmp_path):
+def test_a_later_section_ends_the_user_section(tmp_path: Path) -> None:
     path = tmp_path / "cfg"
     path.write_text(
         "[user]\n\temail = u@x\n[core]\n\tname = CoreName\n", encoding="utf-8"
@@ -148,12 +149,12 @@ def test_a_later_section_ends_the_user_section(tmp_path):
     assert commit_mod._user_section_identity(path) == (None, "u@x")
 
 
-def test_an_unreadable_config_is_none_not_an_exception(tmp_path):
+def test_an_unreadable_config_is_none_not_an_exception(tmp_path: Path) -> None:
     assert commit_mod._user_section_identity(tmp_path / "does-not-exist") == (None, None)
     assert commit_mod._user_section_identity(tmp_path) == (None, None)
 
 
-def test_includes_are_not_followed_and_fall_through(isolated_config):
+def test_includes_are_not_followed_and_fall_through(isolated_config) -> None:
     included = isolated_config / "included-config"
     _write(included, "[user]\n\tname = Included\n\temail = inc@x\n")
     _write(

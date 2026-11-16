@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import run_token, terminal_commit
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -16,7 +17,7 @@ SCRIPT = "scratch/warp/run1.workflow.mjs"
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     subprocess.run(
         ["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags()
     )
@@ -28,11 +29,11 @@ def repo(tmp_path):
     return tmp_path
 
 
-def _twin(repo, run="run1"):
+def _twin(repo, run: str = "run1"):
     return repo / "scratch" / "warp" / f"{run}.staged-{SHA}.workflow.mjs"
 
 
-def test_successful_redeem_leaves_no_twin(repo):
+def test_successful_redeem_leaves_no_twin(repo) -> None:
     token = run_token.mint(repo, "run1", SCRIPT)
     assert terminal_commit._redeem_or_answer(repo, "run1", token, SCRIPT) is None
     assert not _twin(repo).exists()
@@ -40,14 +41,14 @@ def test_successful_redeem_leaves_no_twin(repo):
     assert (repo / SCRIPT).exists()
 
 
-def test_refused_redeem_leaves_the_twin(repo):
+def test_refused_redeem_leaves_the_twin(repo) -> None:
     run_token.mint(repo, "run1", SCRIPT)
     reply = terminal_commit._redeem_or_answer(repo, "run1", "0" * 32, SCRIPT)
     assert reply is not None
     assert _twin(repo).exists()
 
 
-def test_removal_failure_never_fails_the_redeem(repo, monkeypatch):
+def test_removal_failure_never_fails_the_redeem(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import launcher_staged_twin
 
     def boom(*a, **k):

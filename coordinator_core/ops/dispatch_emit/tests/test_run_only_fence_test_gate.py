@@ -18,6 +18,7 @@ from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 from coordinator_core.win_portability import no_console_creationflags
 
 from .conftest import REVIEW_KW
+from pathlib import Path
 
 _PLAN = "docs/plans/p.md"
 _FENCE_CLAUSE = "Test gate (run-only fence, work class fenced-tests)"
@@ -73,30 +74,30 @@ def _prompt_of(script: str, rid: str) -> str:
     return script[start : script.index("agentType", start)]
 
 
-def test_the_fence_is_read_from_the_route_table_run_only_key(tmp_path):
+def test_the_fence_is_read_from_the_route_table_run_only_key(tmp_path: Path) -> None:
     repo = _repo(tmp_path, _table(True))
     assert agent_route.run_only_fence(_row("C1", "pkg/fenced/a.py"), repo).id == "fenced-tests"
     assert agent_route.run_only_fence(_row("C2", "pkg/open/b.py"), repo) is None
 
 
-def test_a_class_without_run_only_is_no_fence(tmp_path):
+def test_a_class_without_run_only_is_no_fence(tmp_path: Path) -> None:
     repo = _repo(tmp_path, _table(False))
     assert agent_route.run_only_fence(_row("C1", "pkg/fenced/a.py"), repo) is None
 
 
-def test_no_table_and_no_repo_are_no_fence(tmp_path):
+def test_no_table_and_no_repo_are_no_fence(tmp_path: Path) -> None:
     repo = _repo(tmp_path, None)
     assert agent_route.run_only_fence(_row("C1", "pkg/fenced/a.py"), repo) is None
     assert agent_route.run_only_fence(_row("C1", "pkg/fenced/a.py"), None) is None
 
 
-def test_a_non_authoring_row_under_the_class_is_no_fence(tmp_path):
+def test_a_non_authoring_row_under_the_class_is_no_fence(tmp_path: Path) -> None:
     repo = _repo(tmp_path, _table(True))
     row = _row("C1", "pkg/fenced/a.py")._replace(change_kind="doc-edit")
     assert agent_route.run_only_fence(row, repo) is None
 
 
-def test_the_fenced_executor_prompt_drops_the_self_run_test_demand(tmp_path):
+def test_the_fenced_executor_prompt_drops_the_self_run_test_demand(tmp_path: Path) -> None:
     repo = _repo(tmp_path, _table(True))
     script = _script(repo, [_row("C1", "pkg/fenced/a.py")])
     prompt = _prompt_of(script, "C1")
@@ -104,7 +105,7 @@ def test_the_fenced_executor_prompt_drops_the_self_run_test_demand(tmp_path):
     assert _SELF_RUN_CLAUSE not in prompt
 
 
-def test_the_test_gate_is_a_test_runner_agent_call_over_the_fenced_scope(tmp_path):
+def test_the_test_gate_is_a_test_runner_agent_call_over_the_fenced_scope(tmp_path: Path) -> None:
     repo = _repo(tmp_path, _table(True))
     script = _script(repo, [_row("C1", "pkg/fenced/a.py")])
     call = script[script.index("label: 'test:terminal'") - 3000 : script.index("label: 'test:terminal'") + 400]
@@ -113,7 +114,7 @@ def test_the_test_gate_is_a_test_runner_agent_call_over_the_fenced_scope(tmp_pat
     assert "fence: C1 run no tests themselves" in script
 
 
-def test_an_unfenced_row_emits_as_before(tmp_path):
+def test_an_unfenced_row_emits_as_before(tmp_path: Path) -> None:
     repos = []
     for name, table in (("with-table", _table(True)), ("no-table", None)):
         root = tmp_path / name
@@ -128,7 +129,7 @@ def test_an_unfenced_row_emits_as_before(tmp_path):
         assert "fence: " not in script
 
 
-def test_a_fenced_row_beside_an_unfenced_one_fences_only_its_own_prompt(tmp_path):
+def test_a_fenced_row_beside_an_unfenced_one_fences_only_its_own_prompt(tmp_path: Path) -> None:
     repo = _repo(tmp_path, _table(True))
     script = _script(repo, [_row("C1", "pkg/fenced/a.py"), _row("C2", "pkg/open/b.py")])
     assert _FENCE_CLAUSE in _prompt_of(script, "C1")
@@ -136,7 +137,7 @@ def test_a_fenced_row_beside_an_unfenced_one_fences_only_its_own_prompt(tmp_path
     assert _SELF_RUN_CLAUSE in _prompt_of(script, "C2")
 
 
-def test_the_engine_names_no_consumer_path():
+def test_the_engine_names_no_consumer_path() -> None:
     from pathlib import Path
 
     from coordinator_core.ops.dispatch_emit import emit
@@ -182,7 +183,7 @@ def _run(reply: str) -> dict:
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_done_reply_from_the_fenced_executor_releases_the_run_with_no_halt():
+def test_a_done_reply_from_the_fenced_executor_releases_the_run_with_no_halt() -> None:
     out = _run("DONE: r.md")
     assert out["halted"] is None
     assert out["incomplete"] == [] and out["owed"] == {} and out["notStarted"] == []
@@ -191,7 +192,7 @@ def test_a_done_reply_from_the_fenced_executor_releases_the_run_with_no_halt():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_the_gate_blocker_the_fence_prevents_does_halt_the_run():
+def test_the_gate_blocker_the_fence_prevents_does_halt_the_run() -> None:
     out = _run("PARTIAL: r.md\ngate-blocker: tests not run: pytest is test-runner only")
     assert out["incomplete"] == ["C1"] and out["notStarted"] == ["C2"]
     assert "dependents unstarted: C2" in out["reason"]

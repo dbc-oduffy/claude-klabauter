@@ -11,9 +11,10 @@ from coordinator_core.roadmap.number_stubs import (
     main,
     parse_edges_file,
 )
+from pathlib import Path
 
 
-def test_parse_edges_file_line_form_sprint_tag_on_edge_sides():
+def test_parse_edges_file_line_form_sprint_tag_on_edge_sides() -> None:
     content = "WIDGET@2 <- BASE@1\nGADGET@2 <- WIDGET@2\n"
     parsed = parse_edges_file(content)
     assert parsed["edges"] == [
@@ -23,20 +24,20 @@ def test_parse_edges_file_line_form_sprint_tag_on_edge_sides():
     assert parsed["sprints"] == {"WIDGET": 2, "BASE": 1, "GADGET": 2}
 
 
-def test_parse_edges_file_line_form_sprint_tag_on_isolated_node():
+def test_parse_edges_file_line_form_sprint_tag_on_isolated_node() -> None:
     content = "LONER@3\n"
     parsed = parse_edges_file(content)
     assert parsed["isolatedNodes"] == ["LONER"]
     assert parsed["sprints"] == {"LONER": 3}
 
 
-def test_parse_edges_file_line_form_no_tags_has_empty_sprints():
+def test_parse_edges_file_line_form_no_tags_has_empty_sprints() -> None:
     content = "WIDGET <- BASE\n"
     parsed = parse_edges_file(content)
     assert parsed["sprints"] == {}
 
 
-def test_parse_edges_file_json_form_from_to_sprint_fields():
+def test_parse_edges_file_json_form_from_to_sprint_fields() -> None:
     content = json.dumps(
         [{"from": "BETA", "to": "ALPHA", "fromSprint": 2, "toSprint": 1}]
     )
@@ -45,13 +46,13 @@ def test_parse_edges_file_json_form_from_to_sprint_fields():
     assert parsed["sprints"] == {"BETA": 2, "ALPHA": 1}
 
 
-def test_parse_edges_file_json_form_no_sprint_fields_has_empty_sprints():
+def test_parse_edges_file_json_form_no_sprint_fields_has_empty_sprints() -> None:
     content = json.dumps([{"from": "BETA", "to": "ALPHA"}])
     parsed = parse_edges_file(content)
     assert parsed["sprints"] == {}
 
 
-def _rows(out: str):
+def _rows(out: str) -> dict[str, dict[str, int]]:
     rows = {}
     for ln in out.splitlines():
         if not ln or ln.startswith("#"):
@@ -62,8 +63,8 @@ def _rows(out: str):
 
 
 def test_default_mode_unannotated_edges_file_defaults_every_label_to_sprint_1(
-    tmp_path, capsys
-):
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     edges_file = tmp_path / "edges.txt"
     edges_file.write_text("WIDGET <- BASE\nGADGET <- WIDGET\n", encoding="utf-8")
 
@@ -75,7 +76,7 @@ def test_default_mode_unannotated_edges_file_defaults_every_label_to_sprint_1(
     assert rows["BASE"]["wave"] < rows["WIDGET"]["wave"] < rows["GADGET"]["wave"]
 
 
-def test_default_mode_stamps_author_assigned_sprint_values(tmp_path, capsys):
+def test_default_mode_stamps_author_assigned_sprint_values(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     edges_file = tmp_path / "edges.txt"
     edges_file.write_text("WIDGET@2 <- BASE@1\nGADGET@2 <- WIDGET@2\n", encoding="utf-8")
 
@@ -90,8 +91,8 @@ def test_default_mode_stamps_author_assigned_sprint_values(tmp_path, capsys):
 
 
 def test_default_mode_sprint_axis_order_is_dependency_monotone_across_sprints(
-    tmp_path, capsys
-):
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     edges_file = tmp_path / "edges.txt"
     edges_file.write_text("WIDGET@2 <- BASE@1\n", encoding="utf-8")
 
@@ -105,8 +106,8 @@ def test_default_mode_sprint_axis_order_is_dependency_monotone_across_sprints(
 
 
 def test_default_mode_dependency_assigned_later_sprint_than_dependent_fails_loud(
-    tmp_path, capsys
-):
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
     edges_file = tmp_path / "edges.txt"
     edges_file.write_text("WIDGET@1 <- BASE@2\n", encoding="utf-8")
 
@@ -118,7 +119,7 @@ def test_default_mode_dependency_assigned_later_sprint_than_dependent_fails_loud
     assert "same-or-inverted-slot" in err
 
 
-def test_default_mode_json_form_stamps_from_to_sprint_fields(tmp_path, capsys):
+def test_default_mode_json_form_stamps_from_to_sprint_fields(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     edges_file = tmp_path / "edges.json"
     edges_file.write_text(
         json.dumps([{"from": "BETA", "to": "ALPHA", "fromSprint": 2, "toSprint": 1}]),
@@ -133,14 +134,14 @@ def test_default_mode_json_form_stamps_from_to_sprint_fields(tmp_path, capsys):
     assert rows["BETA"]["sprint"] == 2
 
 
-def test_disjoint_ids_pass_silently():
+def test_disjoint_ids_pass_silently() -> None:
     assert_sprint_descriptor_stub_disjoint(
         sprint_descriptor_ids=["sprint-1", "sprint-2"],
         stub_ids=["stub-a-1", "stub-b-2"],
     )
 
 
-def test_colliding_id_raises_fail_loud():
+def test_colliding_id_raises_fail_loud() -> None:
     with pytest.raises(SprintDescriptorStubCollisionError) as excinfo:
         assert_sprint_descriptor_stub_disjoint(
             sprint_descriptor_ids=["sprint-1", "collide-id"],
@@ -153,7 +154,7 @@ def test_colliding_id_raises_fail_loud():
     assert "rm-c5a" in str(excinfo.value)
 
 
-def test_multiple_colliding_ids_all_reported():
+def test_multiple_colliding_ids_all_reported() -> None:
     with pytest.raises(SprintDescriptorStubCollisionError) as excinfo:
         assert_sprint_descriptor_stub_disjoint(
             sprint_descriptor_ids=["dup-1", "dup-2", "sprint-only"],
@@ -162,5 +163,5 @@ def test_multiple_colliding_ids_all_reported():
     assert excinfo.value.colliding_ids == ["dup-1", "dup-2"]
 
 
-def test_empty_id_sets_pass_silently():
+def test_empty_id_sets_pass_silently() -> None:
     assert_sprint_descriptor_stub_disjoint(sprint_descriptor_ids=[], stub_ids=[])

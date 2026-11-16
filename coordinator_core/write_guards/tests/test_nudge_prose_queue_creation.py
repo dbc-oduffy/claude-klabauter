@@ -17,6 +17,7 @@ import os
 import pytest
 
 from coordinator_core.write_guards import nudge_prose_queue_creation as guard
+from pathlib import Path
 
 
 def _payload(tool_name, tool_input, cwd=None):
@@ -49,7 +50,7 @@ class TestCreationDenyFires:
             ("debt-backlog.md", "debt-backlog"),
         ],
     )
-    def test_fires_on_new_file_all_three_families(self, tmp_path, basename, schema):
+    def test_fires_on_new_file_all_three_families(self, tmp_path: Path, basename, schema) -> None:
         target = tmp_path / "state" / basename
         result = guard.check(
             _payload(
@@ -64,7 +65,7 @@ class TestCreationDenyFires:
         assert f"--schema {schema}" in reason
         assert f"state/{schema}/" in reason
 
-    def test_fires_on_windows_separators(self, tmp_path):
+    def test_fires_on_windows_separators(self, tmp_path: Path) -> None:
         target = str(tmp_path) + "\\state\\bug-backlog.md"
         result = guard.check(
             _payload(
@@ -77,7 +78,7 @@ class TestCreationDenyFires:
         )
         _deny_reason(result)
 
-    def test_fires_on_case_variation(self, tmp_path):
+    def test_fires_on_case_variation(self, tmp_path: Path) -> None:
         target = tmp_path / "State" / "Bug-Backlog.md"
         result = guard.check(
             _payload(
@@ -98,7 +99,7 @@ class TestCreationDenyFires:
             "improvement-backlog.md",
         ],
     )
-    def test_fires_on_generic_family_variant(self, tmp_path, basename):
+    def test_fires_on_generic_family_variant(self, tmp_path: Path, basename) -> None:
         target = tmp_path / "state" / basename
         result = guard.check(
             _payload(
@@ -113,7 +114,7 @@ class TestCreationDenyFires:
 
 
 class TestCreationDenySilent:
-    def test_silent_when_target_already_exists(self, tmp_path):
+    def test_silent_when_target_already_exists(self, tmp_path: Path) -> None:
         state_dir = tmp_path / "state"
         state_dir.mkdir()
         target = state_dir / "improvement-queue.md"
@@ -129,7 +130,7 @@ class TestCreationDenySilent:
         )
         assert result is None
 
-    def test_silent_under_archive(self, tmp_path):
+    def test_silent_under_archive(self, tmp_path: Path) -> None:
         target = tmp_path / "archive" / "improvement-queue" / "2026-07" / "improvement-queue.md"
         result = guard.check(
             _payload(
@@ -142,7 +143,7 @@ class TestCreationDenySilent:
         )
         assert result is None
 
-    def test_silent_on_non_write_tool(self, tmp_path):
+    def test_silent_on_non_write_tool(self, tmp_path: Path) -> None:
         target = tmp_path / "state" / "bug-backlog.md"
         result = guard.check(
             _payload(
@@ -156,7 +157,7 @@ class TestCreationDenySilent:
         )
         assert result is None
 
-    def test_silent_on_non_queue_shaped_basename(self, tmp_path):
+    def test_silent_on_non_queue_shaped_basename(self, tmp_path: Path) -> None:
         target = tmp_path / "state" / "README.md"
         result = guard.check(
             _payload(
@@ -169,7 +170,7 @@ class TestCreationDenySilent:
         )
         assert result is None
 
-    def test_silent_on_unrelated_generic_backlog_name(self, tmp_path):
+    def test_silent_on_unrelated_generic_backlog_name(self, tmp_path: Path) -> None:
         target = tmp_path / "state" / "release-backlog.md"
         result = guard.check(
             _payload(
@@ -182,7 +183,7 @@ class TestCreationDenySilent:
         )
         assert result is None
 
-    def test_silent_when_no_dated_row_present(self, tmp_path):
+    def test_silent_when_no_dated_row_present(self, tmp_path: Path) -> None:
         target = tmp_path / "state" / "improvement-queue.md"
         result = guard.check(
             _payload(
@@ -195,7 +196,7 @@ class TestCreationDenySilent:
         )
         assert result is None
 
-    def test_silent_when_override_env_set(self, tmp_path):
+    def test_silent_when_override_env_set(self, tmp_path: Path) -> None:
         os.environ[guard._OVERRIDE_ENV_VAR] = "1"
         target = tmp_path / "state" / "improvement-queue.md"
         result = guard.check(
@@ -211,8 +212,8 @@ class TestCreationDenySilent:
 
 
 class TestFailOpen:
-    def test_non_dict_payload_shape_returns_none(self):
+    def test_non_dict_payload_shape_returns_none(self) -> None:
         assert guard.check({}) is None
 
-    def test_missing_file_path_returns_none(self):
+    def test_missing_file_path_returns_none(self) -> None:
         assert guard.check(_payload("Write", {"content": "- 2026-07-31 | x | y"})) is None

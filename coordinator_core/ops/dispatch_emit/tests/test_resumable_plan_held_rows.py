@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_refire_blocking_item_row_outs
     _git,
     _incident_repo,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -40,7 +41,7 @@ def _terminal_free(repo) -> None:
     plan.write_text(text, encoding="utf-8", newline="\n")
 
 
-def test_credited_named_row_is_held_not_dispatched(tmp_path):
+def test_credited_named_row_is_held_not_dispatched(tmp_path: Path) -> None:
     _incident_repo(tmp_path)
     _credit(tmp_path, "X1")
     got = resumable_plan({"plan": PLAN_REL}, SIZING_REL, tmp_path)
@@ -48,7 +49,7 @@ def test_credited_named_row_is_held_not_dispatched(tmp_path):
     assert ("X1", "credited") in got.held, got
 
 
-def test_serving_row_no_remaining_line_names_is_still_outside_credited(tmp_path):
+def test_serving_row_no_remaining_line_names_is_still_outside_credited(tmp_path: Path) -> None:
     _incident_repo(tmp_path, remaining="append the paired VERDICT line")
     _plan_named_landing(tmp_path)
     got = resumable_plan({"plan": PLAN_REL}, SIZING_REL, tmp_path)
@@ -57,7 +58,7 @@ def test_serving_row_no_remaining_line_names_is_still_outside_credited(tmp_path)
     assert got.held == ()
 
 
-def test_named_em_row_is_neither_dispatched_nor_held(tmp_path):
+def test_named_em_row_is_neither_dispatched_nor_held(tmp_path: Path) -> None:
     _incident_repo(tmp_path, remaining="R1: send the memo")
     _plan_named_landing(tmp_path)
     got = resumable_plan({"plan": PLAN_REL}, SIZING_REL, tmp_path)
@@ -65,14 +66,14 @@ def test_named_em_row_is_neither_dispatched_nor_held(tmp_path):
     assert all(i != "R1" for i, _ in got.held), got.held
 
 
-def test_bare_touch_landing_naming_no_plan_is_not_outside_credit(tmp_path):
+def test_bare_touch_landing_naming_no_plan_is_not_outside_credit(tmp_path: Path) -> None:
     _incident_repo(tmp_path, remaining="R1: send the memo")
     got = resumable_plan({"plan": PLAN_REL}, SIZING_REL, tmp_path)
     assert "X1" not in {i for i, _ in got.landed_open}, got.landed_open
     assert "X1" in got.incomplete, got
 
 
-def test_ledger_path_carries_held(tmp_path):
+def test_ledger_path_carries_held(tmp_path: Path) -> None:
     _incident_repo(tmp_path, stage_x1=True, add_t2=False)
     _terminal_free(tmp_path)
     _credit(tmp_path, "X1")
@@ -81,7 +82,7 @@ def test_ledger_path_carries_held(tmp_path):
     assert ("X1", "credited") in got.held, got
 
 
-def test_named_row_reaches_ledger_unlanded_when_staged(tmp_path):
+def test_named_row_reaches_ledger_unlanded_when_staged(tmp_path: Path) -> None:
     _incident_repo(tmp_path, stage_x1=True, add_t2=False)
     _terminal_free(tmp_path)
     got = resumable_plan({"plan": PLAN_REL}, SIZING_REL, tmp_path)
@@ -90,7 +91,7 @@ def test_named_row_reaches_ledger_unlanded_when_staged(tmp_path):
     assert got.held == ()
 
 
-def test_row_ids_named_matches_edges_and_whole_tokens_only():
+def test_row_ids_named_matches_edges_and_whole_tokens_only() -> None:
     ids = ["X1", "X10", "R1"]
     assert row_ids_named(["X1: append the line"], ids) == ["X1"]
     assert row_ids_named(["finish (X1)."], ids) == ["X1"]

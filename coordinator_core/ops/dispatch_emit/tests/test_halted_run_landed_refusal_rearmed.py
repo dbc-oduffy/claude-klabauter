@@ -29,12 +29,12 @@ def _git(repo: Path, *args: str) -> str:
 
 
 @pytest.fixture(autouse=True)
-def _no_launch(monkeypatch):
+def _no_launch(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(op, "_launch", lambda root, run_id: True)
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> tuple[Path, str]:
     _git(tmp_path, "init", "-q")
     (tmp_path / "one").write_text("one", encoding="utf-8")
     _git(tmp_path, "add", "--", "one")
@@ -56,7 +56,7 @@ def _marker(root: Path) -> None:
     )
 
 
-def test_rearmed_refusal_halt_with_marker_records_landed(repo):
+def test_rearmed_refusal_halt_with_marker_records_landed(repo) -> None:
     root, sha = repo
     _marker(root)
     assert run_token.is_live(root, RID)
@@ -66,7 +66,7 @@ def test_rearmed_refusal_halt_with_marker_records_landed(repo):
     assert status == "landed"
 
 
-def test_refusal_kind_marker_on_lagging_running_status_records_landed_at_defaults(repo):
+def test_refusal_kind_marker_on_lagging_running_status_records_landed_at_defaults(repo) -> None:
     root, sha = repo
     halted_run.write_halt_marker(
         ask_contract.record_dir(root, RID), halted="refusal", sizing_rel=None,
@@ -80,7 +80,7 @@ def test_refusal_kind_marker_on_lagging_running_status_records_landed_at_default
     assert json.loads((root / c.status_rel(RID)).read_text(encoding="utf-8"))["status"] == "landed"
 
 
-def test_live_staged_run_with_resumed_marker_still_refuses(repo):
+def test_live_staged_run_with_resumed_marker_still_refuses(repo) -> None:
     root, sha = repo
     _marker(root)
     assert halted_run.mark_resumed(ask_contract.record_dir(root, RID))
@@ -88,13 +88,13 @@ def test_live_staged_run_with_resumed_marker_still_refuses(repo):
     assert not out["ok"] and "not halted" in out["error"]
 
 
-def test_live_staged_run_without_marker_still_refuses(repo):
+def test_live_staged_run_without_marker_still_refuses(repo) -> None:
     root, sha = repo
     out = op._handler({"run_id": RID, "sha": sha}, root)
     assert not out["ok"] and "not halted" in out["error"]
 
 
-def test_resumed_marker_refuses_even_when_run_stage_records_halted(repo):
+def test_resumed_marker_refuses_even_when_run_stage_records_halted(repo) -> None:
     root, sha = repo
     _marker(root)
     assert halted_run.mark_resumed(ask_contract.record_dir(root, RID))

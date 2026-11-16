@@ -11,6 +11,7 @@ from coordinator_core.ops.dispatch_emit.nested_run_contract import (
 )
 from coordinator_core.ops.dispatch_emit.reply_sidecar import READ_STAGE_SIDECAR_JS
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from pathlib import Path
 
 _READER_CALL = "workflow({ scriptPath: reader })"
 _REAL_COMPOSE = ask_compose.compose_ask_script
@@ -23,18 +24,18 @@ def _compose(**kw) -> str:
     )
 
 
-def test_chain_params_carry_launcher_child_true():
+def test_chain_params_carry_launcher_child_true() -> None:
     assert f"{LAUNCHER_CHILD_EMIT_PARAM}: true" in ask_compose._CHAIN_EMIT_PARAMS_JS
 
 
-def test_chained_child_script_holds_no_workflow_reader():
+def test_chained_child_script_holds_no_workflow_reader() -> None:
     assert _READER_CALL in READ_STAGE_SIDECAR_JS
     child = _compose(launcher_child=True, in_run_commit=True)
     assert _READER_CALL not in child
     assert "workflow(" not in child
 
 
-def test_every_child_render_variant_is_reader_free_and_the_top_level_keeps_its_reader():
+def test_every_child_render_variant_is_reader_free_and_the_top_level_keeps_its_reader() -> None:
     for sizing_rel, prompt in ((None, "add a thing"), ("state/sizings/s.yaml", None)):
         for in_run_commit in (False, True):
             for accept_pending in (False, True):
@@ -59,7 +60,7 @@ def test_default_emit_renders_a_child_script_reader_free_and_a_standalone_one_wi
             assert "workflow(" not in rendered
 
 
-def test_child_script_sources_pass_launcher_child_to_the_emit(tmp_path):
+def test_child_script_sources_pass_launcher_child_to_the_emit(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import fan_launcher as fl
 
     child = fl.LaunchChild("ask-r1", "state/sizings/s.yaml", {"ask": True, "sizing_path": "state/sizings/s.yaml"})
@@ -68,7 +69,7 @@ def test_child_script_sources_pass_launcher_child_to_the_emit(tmp_path):
     assert f"{LAUNCHER_CHILD_EMIT_PARAM}: true" in ask_compose._CHAIN_EMIT_PARAMS_JS
 
 
-def test_chain_leg_starts_the_staged_twin_on_stage_pending():
+def test_chain_leg_starts_the_staged_twin_on_stage_pending() -> None:
     parent = _compose()
     chain = ask_compose._chain_stage_loop_js()
     assert chain in parent

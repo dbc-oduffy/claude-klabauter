@@ -7,6 +7,7 @@ from pathlib import Path
 
 from coordinator_core.git import ref_cas_retry
 from coordinator_core.ops.dispatch_emit import terminal_commit_stamp as tcs
+import pytest
 
 LOST = "compare-and-swap failed -- refs/heads/x moved since abc was read"
 
@@ -31,7 +32,7 @@ def _run(tmp_path: Path, commit_v2, monkeypatch):
     )
 
 
-def test_lost_cas_then_success_lands_without_error(tmp_path, monkeypatch):
+def test_lost_cas_then_success_lands_without_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     commit_v2, calls = _fake_commit(
         [{"committed": False, "error": LOST}, {"committed": True, "sha": "c0ffee"}]
     )
@@ -41,14 +42,14 @@ def test_lost_cas_then_success_lands_without_error(tmp_path, monkeypatch):
     assert len(calls) == 2
 
 
-def test_persistent_cas_loss_is_bounded_and_reads_retry(tmp_path, monkeypatch):
+def test_persistent_cas_loss_is_bounded_and_reads_retry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     commit_v2, calls = _fake_commit([{"committed": False, "error": LOST}])
     out = _run(tmp_path, commit_v2, monkeypatch)
     assert len(calls) == ref_cas_retry.REF_CAS_ATTEMPTS
     assert out["coded_stamp_error"].startswith("retry: ref moved")
 
 
-def test_other_refusal_is_not_retried(tmp_path, monkeypatch):
+def test_other_refusal_is_not_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     commit_v2, calls = _fake_commit([{"committed": False, "error": "blob drift"}])
     out = _run(tmp_path, commit_v2, monkeypatch)
     assert len(calls) == 1

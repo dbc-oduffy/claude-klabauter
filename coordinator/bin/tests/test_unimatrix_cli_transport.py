@@ -13,7 +13,7 @@ router = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(router)
 
 
-def write_session(directory, filename, name, endpoint, **extra):
+def write_session(directory, filename, name, endpoint, **extra) -> None:
     directory.mkdir(parents=True, exist_ok=True)
     entry = {"pid": os.getpid(), "name": name, "messagingSocketPath": endpoint, **extra}
     (directory / filename).write_text(json.dumps(entry))
@@ -23,22 +23,22 @@ def write_session(directory, filename, name, endpoint, **extra):
 
 @pytest.mark.skipif(os.name != "nt", reason="Real Windows pipes and registered transport child")
 @pytest.mark.parametrize("source", ["cli", "group-em-09"])
-def test_cli_with_no_vendor_peers_sends_to_mac_mirror_and_returns_named_replies(tmp_path, source):
+def test_cli_with_no_vendor_peers_sends_to_mac_mirror_and_returns_named_replies(tmp_path: Path, source) -> None:
     import win32pipe
 
-    async def run():
+    async def run() -> None:
         received, returned, client_pids = [], [], []
 
         class Receiver(router.PipeServer):
-            def _read(self, handle):
+            def _read(self, handle) -> None:
                 client_pids.append(win32pipe.GetNamedPipeClientProcessId(handle))
                 super()._read(handle)
 
-        async def receive(reader, writer):
+        async def receive(reader, writer) -> None:
             received.append(json.loads(await reader.readline()))
             writer.close()
 
-        async def receive_return(reader, writer):
+        async def receive_return(reader, writer) -> None:
             returned.append(json.loads(await reader.readline()))
             writer.close()
 
@@ -99,7 +99,7 @@ def test_cli_with_no_vendor_peers_sends_to_mac_mirror_and_returns_named_replies(
     asyncio.run(run())
 
 
-def test_ambiguous_names_are_refused_and_old_far_aliases_resolve_only_when_unique(tmp_path):
+def test_ambiguous_names_are_refused_and_old_far_aliases_resolve_only_when_unique(tmp_path: Path) -> None:
     write_session(tmp_path, "one.json", "readable-mac-peer", "one", unimatrixFarName="old-opaque-peer")
     r = router.Router([], sessions_dir=tmp_path, state_dir=tmp_path / "state")
     assert r.resolve_sender("old-opaque-peer") == "one"
@@ -111,7 +111,7 @@ def test_ambiguous_names_are_refused_and_old_far_aliases_resolve_only_when_uniqu
 
 
 
-def test_cli_sender_is_the_inherited_codex_target_never_a_hand_signed_name(monkeypatch):
+def test_cli_sender_is_the_inherited_codex_target_never_a_hand_signed_name(monkeypatch: pytest.MonkeyPatch) -> None:
     from types import SimpleNamespace
     spec = importlib.util.spec_from_file_location(
         "cli_send_override", Path(__file__).resolve().parents[1] / "unimatrix-send.py")

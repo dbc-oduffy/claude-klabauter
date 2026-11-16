@@ -38,6 +38,8 @@ from __future__ import annotations
 
 from coordinator_core.bash_guards import block_subagent_commit as guard
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
+import pytest
 
 
 def _enveloped(check):
@@ -46,7 +48,7 @@ def _enveloped(check):
 _SUBAGENT_TYPE = "coordinator:executor"
 
 
-def _payload(command, agent_id="deadbeef0123", agent_type=None, session_id="sess1"):
+def _payload(command, agent_id: str | None = "deadbeef0123", agent_type=None, session_id: str = "sess1"):
     p = {
         "tool_name": "Bash",
         "tool_input": {"command": command},
@@ -60,7 +62,7 @@ def _payload(command, agent_id="deadbeef0123", agent_type=None, session_id="sess
     return p
 
 
-def _subagent(monkeypatch, subagent_type=_SUBAGENT_TYPE):
+def _subagent(monkeypatch, subagent_type=_SUBAGENT_TYPE) -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(
         guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123"
@@ -72,7 +74,7 @@ def _subagent(monkeypatch, subagent_type=_SUBAGENT_TYPE):
     )
 
 
-def _denies(monkeypatch, cmd):
+def _denies(monkeypatch, cmd) -> None:
     _subagent(monkeypatch)
     result = _enveloped(guard.check)(_payload(cmd, agent_type=_SUBAGENT_TYPE))
     assert result is not None, f"expected DENY for: {cmd!r}"
@@ -81,7 +83,7 @@ def _denies(monkeypatch, cmd):
     ), f"expected DENY for: {cmd!r}"
 
 
-def _allows(monkeypatch, cmd):
+def _allows(monkeypatch, cmd) -> None:
     _subagent(monkeypatch)
     result = _enveloped(guard.check)(_payload(cmd, agent_type=_SUBAGENT_TYPE))
     assert result is None, f"expected ALLOW for: {cmd!r}, got {result!r}"
@@ -94,7 +96,7 @@ def _allows(monkeypatch, cmd):
 # ---------------------------------------------------------------------------
 
 
-def test_prefilter_admits_session_boot_sweep(monkeypatch):
+def test_prefilter_admits_session_boot_sweep(monkeypatch: pytest.MonkeyPatch) -> None:
     """``session.boot_sweep`` contains no ``commit`` substring -- the OLD
     prefilter returned ALLOW here before identity resolution ever ran.
     """
@@ -104,14 +106,14 @@ def test_prefilter_admits_session_boot_sweep(monkeypatch):
     )
 
 
-def test_prefilter_admits_distill_apply_disposal(monkeypatch):
+def test_prefilter_admits_distill_apply_disposal(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(
         monkeypatch,
         "python3 -m coordinator_core.invoke distill.apply_disposal '{}'",
     )
 
 
-def test_prefilter_admits_memo_send(monkeypatch):
+def test_prefilter_admits_memo_send(monkeypatch: pytest.MonkeyPatch) -> None:
     _subagent(monkeypatch)
     payload = _payload(
         "python3 -m coordinator_core.invoke memo.send '{}'",
@@ -120,13 +122,13 @@ def test_prefilter_admits_memo_send(monkeypatch):
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_subagent_permitted_ops_disjoint_from_committing_ops():
+def test_subagent_permitted_ops_disjoint_from_committing_ops() -> None:
     assert not (
         guard._SUBAGENT_PERMITTED_COMMITTING_OPS & guard._COMMITTING_OP_NAMES
     )
 
 
-def test_bare_params_file_value_accepts_one_trailing_repo_pair_only():
+def test_bare_params_file_value_accepts_one_trailing_repo_pair_only() -> None:
     assert guard._bare_params_file_value(["--params-file", "p.json"]) == "p.json"
     ok = ["--params-file", "p.json", "--repo", "/r"]
     assert guard._bare_params_file_value(ok) == "p.json"
@@ -144,7 +146,7 @@ def test_bare_params_file_value_accepts_one_trailing_repo_pair_only():
         assert guard._repo_operand(bad) is None, bad
 
 
-def test_run_root_falls_back_to_cwd_root_without_a_token_or_pinned_repo(tmp_path):
+def test_run_root_falls_back_to_cwd_root_without_a_token_or_pinned_repo(tmp_path: Path) -> None:
     cwd_root = tmp_path / "cwd"
     other = tmp_path / "other"
     (cwd_root / ".git").mkdir(parents=True)
@@ -157,7 +159,7 @@ def test_run_root_falls_back_to_cwd_root_without_a_token_or_pinned_repo(tmp_path
     assert guard._run_root(params, str(cwd_root), str(cwd_root), "sess1") == str(cwd_root)
 
 
-def test_committing_op_em_main_loop_still_allows():
+def test_committing_op_em_main_loop_still_allows() -> None:
     """No ``agent_id`` in the payload -> EM main-loop -> allowed exactly
     like every other committing shape this gate denies for a subagent.
     """
@@ -168,7 +170,7 @@ def test_committing_op_em_main_loop_still_allows():
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_non_committing_op_still_allows(monkeypatch):
+def test_non_committing_op_still_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """A DIFFERENT op dispatched through the same generic CLI (not in
     ``_COMMITTING_OP_NAMES``) must not be denied -- the widened prefilter
     must not become an unbounded "any op" denial.
@@ -179,7 +181,7 @@ def test_non_committing_op_still_allows(monkeypatch):
     )
 
 
-def test_repo_flag_before_positional_op_denies(monkeypatch):
+def test_repo_flag_before_positional_op_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """The documented CLI spelling -- ``--repo`` before the op -- must
     deny. This is the exact shape named in the C2 brief as walking
     straight past the OLD positional-adjacency matcher.
@@ -190,7 +192,7 @@ def test_repo_flag_before_positional_op_denies(monkeypatch):
     )
 
 
-def test_repo_flag_equals_form_before_positional_op_denies(monkeypatch):
+def test_repo_flag_equals_form_before_positional_op_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """``--repo=/path`` (attached flag=value form) before the op."""
     _denies(
         monkeypatch,
@@ -198,7 +200,7 @@ def test_repo_flag_equals_form_before_positional_op_denies(monkeypatch):
     )
 
 
-def test_params_file_flag_before_positional_op_denies(monkeypatch):
+def test_params_file_flag_before_positional_op_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """``--params-file`` (the OTHER value-taking flag) before the op."""
     _denies(
         monkeypatch,
@@ -206,7 +208,7 @@ def test_params_file_flag_before_positional_op_denies(monkeypatch):
     )
 
 
-def test_bare_flag_before_positional_op_denies(monkeypatch):
+def test_bare_flag_before_positional_op_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """A no-value flag (``--bare``) before the op must not desync the
     flag-skip walk's token accounting.
     """
@@ -216,7 +218,7 @@ def test_bare_flag_before_positional_op_denies(monkeypatch):
     )
 
 
-def test_multiple_flags_before_positional_op_denies(monkeypatch):
+def test_multiple_flags_before_positional_op_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """A value-taking flag AND a no-value flag stacked before the op, in
     combination -- the flag-skip walk must correctly account for both.
     """
@@ -226,7 +228,7 @@ def test_multiple_flags_before_positional_op_denies(monkeypatch):
     )
 
 
-def test_repo_flag_before_positional_non_committing_op_allows(monkeypatch):
+def test_repo_flag_before_positional_non_committing_op_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     """``--repo``-before-positional for a non-committing op must still
     allow -- the flag-tolerant walk must not become an unbounded
     "anything after coordinator_core.invoke" denial.
@@ -237,17 +239,17 @@ def test_repo_flag_before_positional_non_committing_op_allows(monkeypatch):
     )
 
 
-def test_plain_git_commit_still_denies(monkeypatch):
+def test_plain_git_commit_still_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(monkeypatch, 'git commit -m "msg"')
 
 
-def test_coordinator_safe_commit_still_denies(monkeypatch):
+def test_coordinator_safe_commit_still_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     _denies(monkeypatch, 'coordinator-safe-commit -m "msg"')
 
 
 def test_ceremony_scoped_git_commit_op_immediately_after_module_still_denies(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """The pre-existing matched shape -- op immediately after the module
     name, no intervening flags -- must still deny.
     """
@@ -258,8 +260,8 @@ def test_ceremony_scoped_git_commit_op_immediately_after_module_still_denies(
 
 
 def test_ceremony_scoped_git_commit_with_repo_flag_after_op_still_denies(
-    monkeypatch,
-):
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """``--repo`` AFTER the op (the in-repo callers' natural spelling,
     already pinned in the pre-existing suite) must still deny.
     """
@@ -269,19 +271,19 @@ def test_ceremony_scoped_git_commit_with_repo_flag_after_op_still_denies(
     )
 
 
-def test_no_agent_id_em_main_loop_allows():
+def test_no_agent_id_em_main_loop_allows() -> None:
     payload = _payload("git commit -m x", agent_id=None)
     assert _enveloped(guard.check)(payload) is None
 
 
-def test_bare_scoped_git_commit_denies(monkeypatch):
+def test_bare_scoped_git_commit_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """The bare helper name, exactly like ``coordinator-safe-commit``, must
     deny for a subagent identity.
     """
     _denies(monkeypatch, 'scoped-git-commit -m "subject" -- path')
 
 
-def test_path_prefixed_scoped_git_commit_denies(monkeypatch):
+def test_path_prefixed_scoped_git_commit_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """A path-prefixed spelling (e.g. installed under a settings-home bin
     directory) must still deny -- same boundary discipline as
     ``coordinator-safe-commit``'s path-prefixed forms.
@@ -292,7 +294,7 @@ def test_path_prefixed_scoped_git_commit_denies(monkeypatch):
     )
 
 
-def test_scoped_git_commit_cmd_windows_twin_denies(monkeypatch):
+def test_scoped_git_commit_cmd_windows_twin_denies(monkeypatch: pytest.MonkeyPatch) -> None:
     """The Windows ``.cmd`` launcher twin (this project's
     ``gen-launcher-shim.py`` generates one for every POSIX helper) must
     deny, matching ``coordinator-safe-commit.cmd``'s existing coverage.
@@ -301,7 +303,7 @@ def test_scoped_git_commit_cmd_windows_twin_denies(monkeypatch):
     _denies(monkeypatch, fixture)
 
 
-def test_no_agent_id_em_main_loop_allows_scoped_git_commit():
+def test_no_agent_id_em_main_loop_allows_scoped_git_commit() -> None:
     """No ``agent_id`` in the payload -> EM main-loop -> allowed exactly
     like every other committing shape this gate denies for a subagent.
     """
@@ -348,7 +350,7 @@ _NEWLY_ADDED_COMMITTING_OPS = (
 _NEWLY_ADDED_COMMITTING_OPS__SUBJECT_CLASS = "op-name"
 
 
-def test_newly_added_committing_ops_all_deny(monkeypatch):
+def test_newly_added_committing_ops_all_deny(monkeypatch: pytest.MonkeyPatch) -> None:
     """Every op name added by the B-commit-matchers Finding 1 fix must be
     denied for a subagent identity, exactly like ``ceremony.scoped_git_
     commit`` already was -- including the three (``fleet.archive_release_
@@ -362,7 +364,7 @@ def test_newly_added_committing_ops_all_deny(monkeypatch):
         _denies(monkeypatch, f"python3 -m coordinator_core.invoke {op_name} '{{}}'")
 
 
-def test_newly_added_committing_ops_all_members_of_the_set():
+def test_newly_added_committing_ops_all_members_of_the_set() -> None:
     """Sanity pin: the fixture list above is a subset of the real set, so a
     future edit to either can't silently desync the two.
     """
@@ -523,7 +525,7 @@ def _scannable_source_for_op(op_name: str, module_path: str, module_sources: dic
     return source
 
 
-def test_committing_op_names_covers_registry_sink_scan():
+def test_committing_op_names_covers_registry_sink_scan() -> None:
     """Every op registered in ``OP_MODULE_MAP`` whose own handler's source
     directly calls a known commit-sink helper must be a member of
     ``_COMMITTING_OP_NAMES`` -- so a new committing op added anywhere in the
@@ -552,7 +554,7 @@ def test_committing_op_names_covers_registry_sink_scan():
     )
 
 
-def test_commit_sink_scan_ignores_comment_and_string_occurrences():
+def test_commit_sink_scan_ignores_comment_and_string_occurrences() -> None:
     """Regression pin for the false positive this scan produced live
     (``repo_setup.validate_target_root``, coordinator:code-reviewer,
     2026-08-17): a sink name sitting in a comment or a string literal must
@@ -573,7 +575,7 @@ def test_commit_sink_scan_ignores_comment_and_string_occurrences():
     assert _source_calls_a_commit_sink(real_call)
 
 
-def test_invoke_flag_sets_match_real_arg_parser():
+def test_invoke_flag_sets_match_real_arg_parser() -> None:
     """A future value-taking flag added to ``_build_arg_parser`` without a
     corresponding update to ``_INVOKE_FLAGS_WITH_VALUE`` would silently fail
     this guard's flag-tolerant op-resolution walk OPEN (the unrecognized

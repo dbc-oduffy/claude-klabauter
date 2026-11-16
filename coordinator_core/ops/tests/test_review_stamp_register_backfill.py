@@ -6,6 +6,7 @@ from pathlib import Path
 import yaml
 
 from coordinator_core.ops import review_stamp as m
+import pytest
 
 OK_SIZING = "state/sizings/ok.yaml"
 OWED_SIZING = "state/sizings/owed.yaml"
@@ -16,7 +17,7 @@ STAMP = (
 )
 
 
-def _row(rid, status="met", wired=True):
+def _row(rid, status: str = "met", wired: bool = True):
     return {
         "id": rid, "source_text": f"text {rid}", "anchor": "§1", "surface": "internal",
         "status": status, "claimed_by": [], "wired": wired, "met_by": [],
@@ -33,7 +34,7 @@ def _sizing(root: Path, rel: str, rows) -> None:
         encoding="utf-8")
 
 
-def _plan(root: Path, name: str, sizing: str, *, extra: str = "", status="implemented") -> Path:
+def _plan(root: Path, name: str, sizing: str, *, extra: str = "", status: str = "implemented") -> Path:
     fm = f"title: T\nstatus: {status}\nregister_claims:\n  sizing: {sizing}\n  rows: [A]\n{extra}"
     path = root / "plans" / name
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -45,7 +46,7 @@ def _stamp(plan: Path) -> dict:
     return yaml.safe_load(plan.read_text(encoding="utf-8").split("---\n")[1])["review_stamp"]
 
 
-def _fixture(tmp_path: Path):
+def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path]:
     _sizing(tmp_path, OK_SIZING, [_row("A")])
     _sizing(tmp_path, OWED_SIZING, [_row("A", "open", False)])
     lacking = _plan(tmp_path, "lacking.md", OK_SIZING, extra=STAMP)
@@ -56,7 +57,7 @@ def _fixture(tmp_path: Path):
     return lacking, carrying, owed, executing
 
 
-def test_sweep_backfills_skips_and_reports(tmp_path):
+def test_sweep_backfills_skips_and_reports(tmp_path: Path) -> None:
     lacking, carrying, owed, executing = _fixture(tmp_path)
     carrying_before, owed_before, executing_before = (
         p.read_bytes() for p in (carrying, owed, executing))
@@ -72,7 +73,7 @@ def test_sweep_backfills_skips_and_reports(tmp_path):
     assert executing.read_bytes() == executing_before
 
 
-def test_sweep_is_idempotent(tmp_path):
+def test_sweep_is_idempotent(tmp_path: Path) -> None:
     lacking, *_ = _fixture(tmp_path)
     m.backfill_register(tmp_path / "plans", tmp_path)
     after = lacking.read_bytes()
@@ -81,7 +82,7 @@ def test_sweep_is_idempotent(tmp_path):
     assert lacking.read_bytes() == after
 
 
-def test_cli_exit_nonzero_naming_refused(tmp_path, capsys):
+def test_cli_exit_nonzero_naming_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     lacking, _, owed, _ = _fixture(tmp_path)
     rc = m.main(["register", "--backfill-under", str(tmp_path / "plans"), "--repo-root", str(tmp_path)])
     err = capsys.readouterr().err
@@ -90,7 +91,7 @@ def test_cli_exit_nonzero_naming_refused(tmp_path, capsys):
     assert "register" in _stamp(lacking)
 
 
-def test_cli_exit_zero_when_nothing_refused(tmp_path):
+def test_cli_exit_zero_when_nothing_refused(tmp_path: Path) -> None:
     _sizing(tmp_path, OK_SIZING, [_row("A")])
     lacking = _plan(tmp_path, "lacking.md", OK_SIZING, extra=STAMP)
     rc = m.main(["register", "--backfill-under", str(tmp_path / "plans"), "--repo-root", str(tmp_path)])
@@ -98,14 +99,14 @@ def test_cli_exit_zero_when_nothing_refused(tmp_path):
     assert "register" in _stamp(lacking)
 
 
-def test_single_plan_form_still_works(tmp_path):
+def test_single_plan_form_still_works(tmp_path: Path) -> None:
     _sizing(tmp_path, OK_SIZING, [_row("A")])
     plan = _plan(tmp_path, "one.md", OK_SIZING, extra=STAMP)
     assert m.main(["register", "--plan", str(plan), "--repo-root", str(tmp_path)]) == 0
     assert "register" in _stamp(plan)
 
 
-def test_sweep_reports_unparseable_frontmatter_without_aborting(tmp_path):
+def test_sweep_reports_unparseable_frontmatter_without_aborting(tmp_path: Path) -> None:
     lacking, _, _, _ = _fixture(tmp_path)
     bad = tmp_path / "plans" / "corrupt.md"
     bad.write_text("---\ntitle: [unclosed\nstatus: implemented\n---\n\nBody.\n", encoding="utf-8")

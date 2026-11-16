@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit import ask_fanout_contract as c
+from pathlib import Path
 
 
 pytestmark = pytest.mark.complete
@@ -14,7 +15,7 @@ def _slice(label, rows=(), writes=None):
     return c.AskSlice(label=label, ask=label, rows=tuple(rows), writes=writes)
 
 
-def test_partition_names_unclaimed_and_doubled_in_one_refusal():
+def test_partition_names_unclaimed_and_doubled_in_one_refusal() -> None:
     msg = c.ledger_partition(
         ["R1", "R2", "R3"], [_slice("a", ["R1", "R2"]), _slice("b", ["R2"])]
     )
@@ -23,40 +24,40 @@ def test_partition_names_unclaimed_and_doubled_in_one_refusal():
     assert "doubly-claimed rows: R2" in msg
 
 
-def test_partition_exact_is_none_and_no_row_exempt():
+def test_partition_exact_is_none_and_no_row_exempt() -> None:
     assert c.ledger_partition(["R1", "R2"], [_slice("a", ["R1"]), _slice("b", ["R2"])]) is None
     assert "R2" in c.ledger_partition(["R1", "R2"], [_slice("a", ["R1"])])
 
 
-def test_partition_names_row_unknown_to_parent():
+def test_partition_names_row_unknown_to_parent() -> None:
     msg = c.ledger_partition(["R1"], [_slice("a", ["R1", "R9"])])
     assert msg is not None and "R9" in msg
 
 
-def test_no_hint_pair_unsequenced_both_ways_of_order():
+def test_no_hint_pair_unsequenced_both_ways_of_order() -> None:
     edges = c.after_edges([_slice("a", writes=("x.py",)), _slice("b", writes=None)])
     assert edges == {0: (), 1: ()}
     edges = c.after_edges([_slice("a", writes=None), _slice("b", writes=("x.py",))])
     assert edges == {0: (), 1: ()}
 
 
-def test_undeclared_slices_get_empty_edges_for_every_index():
+def test_undeclared_slices_get_empty_edges_for_every_index() -> None:
     edges = c.after_edges([_slice(n) for n in "abc"])
     assert edges == {0: (), 1: (), 2: ()}
 
 
-def test_undeclared_slice_still_follows_lower_wave():
+def test_undeclared_slice_still_follows_lower_wave() -> None:
     later = c.AskSlice(label="b", ask="b", wave=1)
     earlier = c.AskSlice(label="a", ask="a", wave=0)
     assert c.after_edges([earlier, later])[1] == (0,)
 
 
-def test_disjoint_pair_unsequenced():
+def test_disjoint_pair_unsequenced() -> None:
     edges = c.after_edges([_slice("a", writes=("a/x.py",)), _slice("b", writes=("b/y.py",))])
     assert edges == {0: (), 1: ()}
 
 
-def test_overlap_by_path_and_directory_prefix():
+def test_overlap_by_path_and_directory_prefix() -> None:
     assert c.after_edges([_slice("a", writes=("a/x.py",)), _slice("b", writes=("a/x.py",))])[1] == (0,)
     assert c.after_edges([_slice("a", writes=("a",)), _slice("b", writes=("a/x.py",))])[1] == (0,)
     assert c.after_edges([_slice("a", writes=("ab/x.py",)), _slice("b", writes=("a/x.py",))])[1] == ()
@@ -80,12 +81,12 @@ def test_overlap_by_path_and_directory_prefix():
         ("src/*.py", "lib/*.py", False),
     ],
 )
-def test_declared_writes_overlap_as_globs(first, second, overlaps):
+def test_declared_writes_overlap_as_globs(first, second, overlaps) -> None:
     edges = c.after_edges([_slice("a", writes=(first,)), _slice("b", writes=(second,))])
     assert edges[1] == ((0,) if overlaps else ())
 
 
-def test_empty_writes_hint_overlaps_nothing():
+def test_empty_writes_hint_overlaps_nothing() -> None:
     assert c.after_edges([_slice("a", writes=()), _slice("b", writes=None)])[1] == ()
     assert c.after_edges([_slice("a", writes=()), _slice("b", writes=("x",))])[1] == ()
 
@@ -94,17 +95,17 @@ def _waved(label, wave, writes=()):
     return c.AskSlice(label=label, ask=label, writes=writes, wave=wave)
 
 
-def test_cross_wave_pair_with_disjoint_writes_gets_edge():
+def test_cross_wave_pair_with_disjoint_writes_gets_edge() -> None:
     edges = c.after_edges([_waved("a", 0, ("a.py",)), _waved("b", 1, ("b.py",))])
     assert edges == {0: (), 1: (0,)}
 
 
-def test_same_wave_pair_with_disjoint_writes_gets_no_edge():
+def test_same_wave_pair_with_disjoint_writes_gets_no_edge() -> None:
     edges = c.after_edges([_waved("a", 1, ("a.py",)), _waved("b", 1, ("b.py",))])
     assert edges == {0: (), 1: ()}
 
 
-def test_no_wave_slices_keep_overlap_rule():
+def test_no_wave_slices_keep_overlap_rule() -> None:
     assert c.after_edges([_slice("a", writes=("a.py",)), _slice("b", writes=("b.py",))])[1] == ()
     assert c.after_edges([_waved("a", 0, ("a.py",)), _slice("b", writes=("b.py",))])[1] == ()
 
@@ -120,12 +121,12 @@ def _chain_parent():
     )
 
 
-def test_release_frees_waiting_runs_whose_predecessors_landed():
+def test_release_frees_waiting_runs_whose_predecessors_landed() -> None:
     parent = _chain_parent()
     assert c.release(parent, {"r0": "landed", "r1": "after", "r2": "queued"}) == ("r1", "r2")
 
 
-def test_release_frees_waiting_run_while_two_siblings_run():
+def test_release_frees_waiting_run_while_two_siblings_run() -> None:
     parent = c.ParentRecord(
         "p",
         (
@@ -139,19 +140,19 @@ def test_release_frees_waiting_run_while_two_siblings_run():
     assert c.release(parent, statuses) == ("r2",)
 
 
-def test_release_withholds_successor_of_unlanded_predecessor():
+def test_release_withholds_successor_of_unlanded_predecessor() -> None:
     parent = _chain_parent()
     assert c.release(parent, {"r0": "running", "r1": "after", "r2": "queued"}) == ("r2",)
     assert c.release(parent, {"r0": "halted", "r1": "after", "r2": "queued"}) == ("r2",)
 
 
-def test_fanout_contract_defines_no_run_count_budget():
+def test_fanout_contract_defines_no_run_count_budget() -> None:
     assert not hasattr(c, "concurrent_run_budget")
     assert not hasattr(c, "admit")
     assert c.STATUS_QUEUED in c.RUN_STATUSES
 
 
-def test_reply_json_omits_empty_after():
+def test_reply_json_omits_empty_after() -> None:
     reply = c.FanoutReply(
         "ask-parent-1",
         (c.SiblingRun("r0", "a"), c.SiblingRun("r1", "b", after=("r0",))),
@@ -162,7 +163,7 @@ def test_reply_json_omits_empty_after():
     }
 
 
-def test_paths_and_marker_roundtrip():
+def test_paths_and_marker_roundtrip() -> None:
     assert c.parent_record_rel("P") == "scratch/warp/P/parent.json"
     assert c.run_parent_copy_rel("R") == "state/warp/R/parent.json"
     assert c.status_rel("R") == "scratch/warp/R/sibling-status.json"
@@ -172,7 +173,7 @@ def test_paths_and_marker_roundtrip():
     assert c.FANOUT_OP == "dispatch.ask_fanout"
 
 
-def test_parent_record_roundtrip_and_schema_guard():
+def test_parent_record_roundtrip_and_schema_guard() -> None:
     rec = c.ParentRecord("P", (c.SiblingRun("r0", "a", ("r9",), "s.yaml", "after"),), True)
     data = rec.to_json()
     assert data["schema"] == "ask-parent" and data["version"] == 1
@@ -181,29 +182,29 @@ def test_parent_record_roundtrip_and_schema_guard():
         c.ParentRecord.from_json({"schema": "other", "version": 1})
 
 
-def test_ask_slice_source_defaults_none():
+def test_ask_slice_source_defaults_none() -> None:
     assert c.AskSlice(label="a", ask="a").source is None
     assert c.AskSlice(label="a", ask="a", source="relayed").source == "relayed"
 
 
-def test_ask_slice_sizing_fields_default_none():
+def test_ask_slice_sizing_fields_default_none() -> None:
     sl = c.AskSlice(label="a", ask="a")
     assert sl.estimate is None and sl.exit_criterion is None
     sized = c.AskSlice(label="a", ask="a", estimate="M", exit_criterion="done")
     assert (sized.estimate, sized.exit_criterion) == ("M", "done")
 
 
-def test_fan_out_constants():
+def test_fan_out_constants() -> None:
     assert (c.FAN_OUT_PARAM, c.SEAM_PASS_LABEL) == ("fan_out", "seam-pass")
     assert c.FAN_OUT_COMPONENT_TSHIRTS == ("M", "L") and c.SEAM_PASS_TSHIRT == "S"
 
 
-def test_partition_admits_a_seam_slice_with_zero_rows():
+def test_partition_admits_a_seam_slice_with_zero_rows() -> None:
     slices = [_slice("a", ["R1"]), c.AskSlice(label=c.SEAM_PASS_LABEL, ask="seam")]
     assert c.ledger_partition(["R1"], slices) is None
 
 
-def test_slice_source_key_and_reader():
+def test_slice_source_key_and_reader() -> None:
     assert c.SLICE_SOURCE_KEY == "ask_source"
     assert c.slice_ask_source({"em_analysis": {"ask_source": "relayed"}}) == "relayed"
 
@@ -213,11 +214,11 @@ def test_slice_source_key_and_reader():
     [{}, {"em_analysis": None}, {"em_analysis": "x"}, {"em_analysis": {}},
      {"em_analysis": {"ask_source": 3}}, None, []],
 )
-def test_slice_ask_source_none_for_absent_or_malformed(sizing):
+def test_slice_ask_source_none_for_absent_or_malformed(sizing) -> None:
     assert c.slice_ask_source(sizing) is None
 
 
-def test_release_skip_frees_nothing_skipped():
+def test_release_skip_frees_nothing_skipped() -> None:
     parent = c.ParentRecord(
         "p",
         (
@@ -237,7 +238,7 @@ def _hq_batch():
     return ids, blocked, writes
 
 
-def test_blocked_by_edges_hq_batch_edges_and_holds():
+def test_blocked_by_edges_hq_batch_edges_and_holds() -> None:
     edges, holds = c.blocked_by_edges(*_hq_batch())
     assert edges[0] == () and edges[1] == ()
     assert edges[2] == (0,)
@@ -248,7 +249,7 @@ def test_blocked_by_edges_hq_batch_edges_and_holds():
     assert edges[3] == edges[4] == edges[5] == ()
 
 
-def test_blocked_by_edges_held_blocker_listed_first_reason_names_held():
+def test_blocked_by_edges_held_blocker_listed_first_reason_names_held() -> None:
     edges, holds = c.blocked_by_edges(
         [["a"], ["b"]], [["gone"], ["a"]], [["x"], ["y"]]
     )
@@ -262,26 +263,26 @@ def test_blocked_by_edges_held_blocker_listed_first_reason_names_held():
     assert holds[2] == "blocked_by a, which is held"
 
 
-def test_blocked_by_edges_follows_later_submitted_blocker_and_wave_free():
+def test_blocked_by_edges_follows_later_submitted_blocker_and_wave_free() -> None:
     edges, holds = c.blocked_by_edges([["a"], ["b"]], [["b"], []], [["x"], ["y"]])
     assert edges == {0: (1,), 1: ()} and holds == {}
 
 
-def test_blocked_by_edges_writes_overlap_oriented_along_topological_order():
+def test_blocked_by_edges_writes_overlap_oriented_along_topological_order() -> None:
     edges, _ = c.blocked_by_edges([["a"], ["b"]], [["b"], []], [["x"], ["x"]])
     assert edges == {0: (1,), 1: ()}
     edges, _ = c.blocked_by_edges([["a"], ["b"], ["c"]], [[], [], []], [["d"], ["d/e"], ["z"]])
     assert edges == {0: (), 1: (0,), 2: ()}
 
 
-def test_blocked_by_edges_no_hint_overlaps_and_ordered_pair_adds_no_redundant_edge():
+def test_blocked_by_edges_no_hint_overlaps_and_ordered_pair_adds_no_redundant_edge() -> None:
     edges, _ = c.blocked_by_edges([["a"], ["b"]], [[], []], [None, ["y"]])
     assert edges == {0: (), 1: (0,)}
     edges, _ = c.blocked_by_edges([["a"], ["b"]], [[], ["a"]], [["x"], ["x"]])
     assert edges == {0: (), 1: (0,)}
 
 
-def test_blocked_by_edges_overlap_with_held_item_adds_no_edge():
+def test_blocked_by_edges_overlap_with_held_item_adds_no_edge() -> None:
     edges, holds = c.blocked_by_edges([["a"], ["b"]], [["gone"], []], [["x"], ["x"]])
     assert edges == {0: (), 1: ()} and set(holds) == {0}
 
@@ -297,12 +298,12 @@ def test_blocked_by_edges_overlap_with_held_item_adds_no_edge():
         ([["a"], ["b"], ["c"]], [["c"], ["a"], ["b"]]),
     ],
 )
-def test_blocked_by_edges_bad_input_raises_value_error(ids, blocked):
+def test_blocked_by_edges_bad_input_raises_value_error(ids, blocked) -> None:
     with pytest.raises(ValueError):
         c.blocked_by_edges(ids, blocked, [["x"]] * len(ids))
 
 
-def test_held_run_parent_record_round_trips_and_non_held_json_is_unchanged():
+def test_held_run_parent_record_round_trips_and_non_held_json_is_unchanged() -> None:
     held = c.SiblingRun("r1", "a", (), "s1", c.STATUS_HELD, "blocked_by q, which is not in this fan-out")
     plain = c.SiblingRun("r2", "b", ("r1",), "s2", c.STATUS_AFTER)
     rec = c.ParentRecord("p", (held, plain))
@@ -316,20 +317,20 @@ def test_held_run_parent_record_round_trips_and_non_held_json_is_unchanged():
     assert c.SiblingRun("r", "l", (), "s", "ready").hold_reason == ""
 
 
-def test_held_run_is_never_released():
+def test_held_run_is_never_released() -> None:
     held = c.SiblingRun("r1", "a", (), "s1", c.STATUS_HELD, "why")
     parent = c.ParentRecord("p", (held,))
     assert c.release(parent, {"r1": "held"}) == ()
     assert c.STATUS_HELD in c.RUN_STATUSES
 
 
-def test_held_edge_mode_names():
+def test_held_edge_mode_names() -> None:
     assert (c.EDGES_FROM_PARAM, c.EDGES_FROM_BLOCKED_BY, c.ITEM_IDS_KEY, c.ITEM_BLOCKED_BY_KEY, c.HELD_KEY) == (
         "edges_from", "blocked_by", "ids", "blocked_by", "held",
     )
 
 
-def test_not_fired_names_and_vocabulary():
+def test_not_fired_names_and_vocabulary() -> None:
     assert (c.INTERACTION_MODE_PARAM, c.PARENT_SIZING_KEY, c.NOT_FIRED_KEY) == (
         "interaction_mode",
         "parent_sizing",
@@ -343,7 +344,7 @@ def test_not_fired_names_and_vocabulary():
     assert all(reason in c.NOT_FIRED_REASONS for _, reason in c.PLAN_BLITZ_UNFIRED_BUCKETS)
 
 
-def test_not_fired_entry_drops_none_and_refuses_unknown_reason():
+def test_not_fired_entry_drops_none_and_refuses_unknown_reason() -> None:
     assert c.not_fired_entry(reason="after", plan="p.md", detail="waits on r1") == {
         "plan": "p.md",
         "reason": "after",
@@ -358,7 +359,7 @@ def test_not_fired_entry_drops_none_and_refuses_unknown_reason():
         c.not_fired_entry(reason="bogus", plan="p.md")
 
 
-def test_not_fired_refusal_accepts_valid_and_names_first_bad_index():
+def test_not_fired_refusal_accepts_valid_and_names_first_bad_index() -> None:
     good = [c.not_fired_entry(reason="queued", plan="p.md"), c.not_fired_entry(reason="pulled", baton="b")]
     assert c.not_fired_refusal(good) is None
     assert c.not_fired_refusal([]) is None
@@ -369,7 +370,7 @@ def test_not_fired_refusal_accepts_valid_and_names_first_bad_index():
     assert c.not_fired_refusal("x") is not None
 
 
-def test_asks_item_keys_pinned():
+def test_asks_item_keys_pinned() -> None:
     assert c.ASKS_ITEM_KEYS == (
         "ask", "source", "sender", "relayed_text", "route_preference",
         "em_rationale", "em_context", "context", "label", "after",
@@ -377,7 +378,7 @@ def test_asks_item_keys_pinned():
     )
 
 
-def test_read_slices_repo_must_resolve_to_root(tmp_path):
+def test_read_slices_repo_must_resolve_to_root(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import ask_fanout as mod
 
     other = tmp_path / "other"
@@ -395,21 +396,21 @@ def test_read_slices_repo_must_resolve_to_root(tmp_path):
             mod._read_slices(params(bad), False, root)
 
 
-def test_unknown_keys_refusal_names_key_and_every_accepted_key():
+def test_unknown_keys_refusal_names_key_and_every_accepted_key() -> None:
     msg = c.unknown_keys_refusal("asks[1]", ["ask", "contxt"], c.ASKS_ITEM_KEYS)
     assert msg is not None and msg.startswith("asks[1]: unknown key 'contxt'")
     assert all(k in msg for k in c.ASKS_ITEM_KEYS)
     assert msg.endswith(", ".join(c.ASKS_ITEM_KEYS))
 
 
-def test_unknown_keys_refusal_none_for_subset_and_names_first_unknown():
+def test_unknown_keys_refusal_none_for_subset_and_names_first_unknown() -> None:
     assert c.unknown_keys_refusal("asks[0]", ["ask", "context"], c.ASKS_ITEM_KEYS) is None
     assert c.unknown_keys_refusal("asks[0]", [], c.ASKS_ITEM_KEYS) is None
     msg = c.unknown_keys_refusal("args", iter(["zz", "yy"]), ("a",))
     assert "'zz'" in msg and "'yy'" not in msg
 
 
-def test_superseded_marker_path_and_reader(tmp_path):
+def test_superseded_marker_path_and_reader(tmp_path: Path) -> None:
     assert c.superseded_rel("r") == "scratch/warp/r/superseded.json"
     assert c.read_superseded_by(tmp_path, "r") is None
     path = tmp_path / c.superseded_rel("r")
@@ -421,26 +422,26 @@ def test_superseded_marker_path_and_reader(tmp_path):
     assert (c.CLOSED_BY_KEY, c.SUPERSEDED_BY_KEY) == ("closed_by", "superseded_by")
 
 
-def test_declared_after_is_an_edge_without_writes_and_merges_with_overlap():
+def test_declared_after_is_an_edge_without_writes_and_merges_with_overlap() -> None:
     a, b = _slice("a", writes=("x.py",)), _slice("b", writes=("x.py",))
     third = c.AskSlice(label="c", ask="c", after=(0,))
     assert c.after_edges([a, _slice("b"), third]) == {0: (), 1: (), 2: (0,)}
     assert c.after_edges([a, b, c.AskSlice(label="c", ask="c", writes=("x.py",), after=(0,))])[2] == (0, 1)
 
 
-def test_inferred_hints_sequence_the_later_slice_and_an_empty_inference_overlaps_nothing():
+def test_inferred_hints_sequence_the_later_slice_and_an_empty_inference_overlaps_nothing() -> None:
     a, b = _slice("a", writes=("pkg/x.py",)), _slice("b", writes=("pkg/x.py",))
     assert c.after_edges([a, b]) == {0: (), 1: (0,)}
     assert c.after_edges([a, _slice("b", writes=None)]) == {0: (), 1: ()}
     assert c.after_edges([a, _slice("b", writes=())]) == {0: (), 1: ()}
 
 
-def test_resolve_after_accepts_label_and_index_of_earlier_siblings():
+def test_resolve_after_accepts_label_and_index_of_earlier_siblings() -> None:
     assert c.resolve_after("asks[2]", ["a", 1, "a"], ["a", "b", "c"], 2) == (0, 1)
 
 
 @pytest.mark.parametrize("refs", ["a", [], ["c"], ["zzz"], [2], [-1], [True], [None]])
-def test_resolve_after_refuses_non_earlier_or_malformed_naming_the_key(refs):
+def test_resolve_after_refuses_non_earlier_or_malformed_naming_the_key(refs) -> None:
     with pytest.raises(ValueError, match=r"asks\[2\]\.after"):
         c.resolve_after("asks[2]", refs, ["a", "b", "c"], 2)
 
@@ -457,7 +458,7 @@ def _join_parent(*externals):
     )
 
 
-def test_parent_record_round_trips_after_external_and_omits_it_when_empty():
+def test_parent_record_round_trips_after_external_and_omits_it_when_empty() -> None:
     ext = (c.ExternalInput("X"), c.ExternalInput("Y", "/other/repo"))
     data = _join_parent(*ext).to_json()
     assert data["runs"][1]["after_external"] == [{"run_id": "X"}, {"run_id": "Y", "repo": "/other/repo"}]
@@ -465,18 +466,18 @@ def test_parent_record_round_trips_after_external_and_omits_it_when_empty():
     assert c.ParentRecord.from_json(data).runs[1].after_external == ext
 
 
-def test_record_without_after_external_still_loads():
+def test_record_without_after_external_still_loads() -> None:
     data = _join_parent().to_json()
     assert "after_external" not in data["runs"][1]
     assert c.ParentRecord.from_json(data).runs[1].after_external == ()
 
 
-def test_external_key_local_and_foreign():
+def test_external_key_local_and_foreign() -> None:
     assert c.external_key(c.ExternalInput("X")) == "X"
     assert c.external_key(c.ExternalInput("X", "/r")) == "/r::X"
 
 
-def test_release_needs_every_after_and_after_external_landed():
+def test_release_needs_every_after_and_after_external_landed() -> None:
     p = _join_parent(c.ExternalInput("X"), c.ExternalInput("Y", "/r"))
     landed = c.STATUS_LANDED
     assert c.release(p, {"A": landed, "X": landed, "/r::Y": landed}) == ("J",)
@@ -485,7 +486,7 @@ def test_release_needs_every_after_and_after_external_landed():
     assert c.release(p, {"A": c.STATUS_RUNNING, "X": landed, "/r::Y": landed}) == ()
 
 
-def _write_status(root, run_id, body):
+def _write_status(root, run_id, body) -> None:
     import json
 
     path = root / c.status_rel(run_id)
@@ -493,7 +494,7 @@ def _write_status(root, run_id, body):
     path.write_text(json.dumps(body), encoding="utf-8")
 
 
-def test_external_status_reads_foreign_root_without_spawning(tmp_path, monkeypatch):
+def test_external_status_reads_foreign_root_without_spawning(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     def boom(*a, **k):
@@ -508,7 +509,7 @@ def test_external_status_reads_foreign_root_without_spawning(tmp_path, monkeypat
     assert c.external_status(local, c.ExternalInput("Y")) is None
 
 
-def test_external_status_closed_halted_reads_landed_plain_halt_does_not(tmp_path):
+def test_external_status_closed_halted_reads_landed_plain_halt_does_not(tmp_path: Path) -> None:
     _write_status(tmp_path, "R", {"status": "halted", "rows_committed": True})
     _write_status(tmp_path, "C", {"status": "halted", "closed_by": "abc"})
     _write_status(tmp_path, "H", {"status": "halted"})
@@ -517,7 +518,7 @@ def test_external_status_closed_halted_reads_landed_plain_halt_does_not(tmp_path
     assert c.external_status(tmp_path, c.ExternalInput("H")) == "halted"
 
 
-def test_join_constants_and_waiters_path():
+def test_join_constants_and_waiters_path() -> None:
     assert (c.JOIN_PARAM, c.JOIN_LABEL) == ("join", "join")
     assert "inputs" in c.JOIN_ITEM_KEYS and "after" not in c.JOIN_ITEM_KEYS
     assert c.join_waiters_rel("R") == "scratch/warp/R/join-waiters.json"

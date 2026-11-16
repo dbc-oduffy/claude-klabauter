@@ -234,6 +234,7 @@ Spec backlink: pln-the-emitter-turns-a-plan-spine-d08dda § C5
 
 from __future__ import annotations
 
+import contextvars
 import hashlib
 import json
 import os
@@ -1121,12 +1122,23 @@ def _unstamped_stem(sizing_rel: str) -> str:
     return stem
 
 
-def _preminted_ask_run_id(value: Any) -> str:
-    """The raw-ask run id the submit hook minted before answering; refuses any other shape."""
+#: The run id this emit chose for a fresh mint, set before the mint so a caller that re-emits after a
+#: failure (which rolls the first mint back) hands it back as `preminted_run_id` and the reported id survives.
+FRESH_RUN_ID: "contextvars.ContextVar[Optional[str]]" = contextvars.ContextVar("dispatch_emit_fresh_run_id", default=None)
+
+
+def _preminted_run_id(value: Any, sizing_rel: Optional[str]) -> str:
+    """The run id a caller minted or reported before this emit: `ask-<stamp>-<hex6>` for a raw ask, else
+    `warp-<sizing stem>-<stamp>` of this sizing; refuses any other shape."""
     from coordinator_core.ops.dispatch_emit.run_token import is_ask_run_id
 
-    if not is_ask_run_id(value):
-        raise ValueError(f"dispatch.emit preminted_run_id {value!r} is not an ask-<stamp>-<hex6> run id")
+    if not sizing_rel:
+        if not is_ask_run_id(value):
+            raise ValueError(f"dispatch.emit preminted_run_id {value!r} is not an ask-<stamp>-<hex6> run id")
+        return value
+    head = f"warp-{_unstamped_stem(sizing_rel)}-"
+    if not (isinstance(value, str) and value.startswith(head) and re.fullmatch(r"\d{8}T\d{6}-[0-9a-f]{6}", value[len(head):])):
+        raise ValueError(f"dispatch.emit preminted_run_id {value!r} is not a {head}<stamp>-<hex6> run id of {sizing_rel}")
     return value
 
 
@@ -1508,7 +1520,7 @@ def _output_landed(root: Path, rel: str) -> bool:
     return stat.S_ISREG(st.st_mode) and st.st_size > 0
 
 
-def _resume_missing_inputs(manifest, schedule, inputs: PipelineInputs, root: Path):
+def _resume_missing_inputs(manifest, schedule, inputs: PipelineInputs, root: Path) -> tuple[PipelineInputs, dict[str, dict[str, int]]]:
     """Drop every input-list element whose output file already landed.
 
     An element is done only when, for every active stage fanned ``over:
@@ -2833,8 +2845,9 @@ def _dispatch_emit_body(
         reserved_param = None if chain_hop else params.get("reserved_run_id")
         run_stamp = f"{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:6]}"
         run_id = f"warp-{_unstamped_stem(sizing_rel)}-{run_stamp}" if sizing_rel else f"ask-{run_stamp}"
-        if not sizing_rel and not chain_hop and params.get("preminted_run_id") is not None:
-            run_id = _preminted_ask_run_id(params["preminted_run_id"])
+        if not chain_hop and params.get("preminted_run_id") is not None:
+            run_id = _preminted_run_id(params["preminted_run_id"], sizing_rel)
+        FRESH_RUN_ID.set(None if chain_hop else run_id)
         reserved_parent = None
         rebound = False
         output_redirect = None

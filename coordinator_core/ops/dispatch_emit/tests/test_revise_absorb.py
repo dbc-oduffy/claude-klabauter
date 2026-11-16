@@ -9,13 +9,14 @@ from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import executor_economy as ee
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import revise_absorb as ra
+from pathlib import Path
 
 RUN = "ask-20261016T000000-abc123"
 REL = "state/sizings/2026-10-16-absorb.yaml"
 PLAN = "docs/plans/2026-10-16-absorb.md"
 
 
-def _repo(tmp_path, *, pin_text="build the op", claims_sizing=REL, rows_style="flow"):
+def _repo(tmp_path, *, pin_text: str = "build the op", claims_sizing=REL, rows_style: str = "flow"):
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / "docs" / "plans").mkdir(parents=True)
@@ -41,25 +42,25 @@ def _pending(root, **over):
     return ra._pending_handler({"run_id": RUN, "plan": PLAN, **over}, repo_root=root)
 
 
-def _revise(root, text="also cover Windows", **extra):
+def _revise(root, text: str = "also cover Windows", **extra):
     out = rl._handler({"run_id": RUN, "verbatim": text, **extra}, repo_root=root)
     assert out["ok"] is True
     return out
 
 
-def test_private_imports_resolve():
+def test_private_imports_resolve() -> None:
     for name in ("_unclaimed_rows", "_sizing_plan", "_sizing_path", "ledger_ids", "pinned_plan_drift", "run_dir", "read_run"):
         assert callable(getattr(rl, name))
     assert callable(rr._sub_block_end) and callable(rr._indent_of)
     assert ra.PENDING_REVISIONS_OP == ee.PENDING_REVISIONS_OP and ra.CLAIM_ROWS_OP == ee.CLAIM_ROWS_OP
 
 
-def test_no_new_row_replies_empty(tmp_path):
+def test_no_new_row_replies_empty(tmp_path: Path) -> None:
     out = _pending(_repo(tmp_path))
     assert out["rows"] == [] and out["drift"] == [] and out["plan"] == PLAN and out["sizing"] == REL
 
 
-def test_unclaimed_row_replies_id_and_text_in_well_under_the_bar(tmp_path):
+def test_unclaimed_row_replies_id_and_text_in_well_under_the_bar(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _revise(root)
     out = _pending(root)
@@ -67,7 +68,7 @@ def test_unclaimed_row_replies_id_and_text_in_well_under_the_bar(tmp_path):
     assert out["rows"] == [{"id": "R2", "text": "also cover Windows"}]
 
 
-def test_withheld_row_is_subtracted(tmp_path):
+def test_withheld_row_is_subtracted(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _revise(root)
     _revise(root, "drop that", out_of_scope=["R2"])
@@ -75,24 +76,24 @@ def test_withheld_row_is_subtracted(tmp_path):
     assert "R2" not in ids
 
 
-def test_drift_is_reported_not_absorbed(tmp_path):
+def test_drift_is_reported_not_absorbed(tmp_path: Path) -> None:
     root = _repo(tmp_path, pin_text="build a different op")
     out = _pending(root)
     assert out["drift"] == ["R1"] and out["rows"] == []
 
 
-def test_plan_mismatch_refuses(tmp_path):
+def test_plan_mismatch_refuses(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     assert "error" in _pending(root, plan="docs/plans/other.md")
 
 
-def test_claims_naming_another_sizing_refuse_not_empty(tmp_path):
+def test_claims_naming_another_sizing_refuse_not_empty(tmp_path: Path) -> None:
     root = _repo(tmp_path, claims_sizing="state/sizings/other.yaml")
     out = _pending(root)
     assert "error" in out and "rows" not in out
 
 
-def test_unemitted_run_and_missing_params_refuse(tmp_path):
+def test_unemitted_run_and_missing_params_refuse(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     assert "error" in ra._pending_handler({"run_id": "ask-20261016T000001-zzzzzz", "plan": PLAN}, repo_root=root)
     assert "error" in ra._pending_handler({"run_id": RUN}, repo_root=root)
@@ -103,7 +104,7 @@ def _claim(root, rows):
     return ra._claim_handler({"plan": PLAN, "rows": rows}, repo_root=root)
 
 
-def test_claim_appends_and_pins_and_keeps_other_bytes(tmp_path):
+def test_claim_appends_and_pins_and_keeps_other_bytes(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _revise(root)
     out = _claim(root, ["R2"])
@@ -117,7 +118,7 @@ def test_claim_appends_and_pins_and_keeps_other_bytes(tmp_path):
     assert _pending(root)["rows"] == []
 
 
-def test_claim_handles_block_style_rows(tmp_path):
+def test_claim_handles_block_style_rows(tmp_path: Path) -> None:
     root = _repo(tmp_path, rows_style="block")
     _revise(root)
     assert _claim(root, ["R2"])["ok"] is True
@@ -125,7 +126,7 @@ def test_claim_handles_block_style_rows(tmp_path):
     assert ids == {"R1", "R2"}
 
 
-def test_claim_refuses_unknown_and_already_claimed_and_writes_nothing(tmp_path):
+def test_claim_refuses_unknown_and_already_claimed_and_writes_nothing(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _revise(root)
     before = (root / PLAN).read_bytes()
@@ -135,13 +136,13 @@ def test_claim_refuses_unknown_and_already_claimed_and_writes_nothing(tmp_path):
     assert (root / PLAN).read_bytes() == before
 
 
-def test_claim_refuses_plan_outside_docs_plans(tmp_path):
+def test_claim_refuses_plan_outside_docs_plans(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     (root / "other.md").write_text("---\n---\n", encoding="utf-8")
     assert "error" in ra._claim_handler({"plan": "other.md", "rows": ["R2"]}, repo_root=root)
 
 
-def test_claim_preserves_crlf(tmp_path):
+def test_claim_preserves_crlf(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _revise(root)
     p = root / PLAN
@@ -151,7 +152,7 @@ def test_claim_preserves_crlf(tmp_path):
     assert raw.count(b"\n") == raw.count(b"\r\n")
 
 
-def test_tail_js_carries_both_agent_calls_ops_and_the_round_cap():
+def test_tail_js_carries_both_agent_calls_ops_and_the_round_cap() -> None:
     js = ra.absorb_tail_js(plan_path=PLAN, run_id=RUN)
     assert js.count("await agent(") == 2
     assert "workflow.pending_revisions" in js and "plan.claim_register_rows" in js
@@ -162,6 +163,6 @@ def test_tail_js_carries_both_agent_calls_ops_and_the_round_cap():
     assert "if (!Array.isArray(_absorbPending.rows) || !_absorbPending.rows.length) break;" in js
 
 
-def test_tail_js_check_precedes_author_and_rows():
+def test_tail_js_check_precedes_author_and_rows() -> None:
     js = ra.absorb_tail_js(plan_path=PLAN, run_id=RUN)
     assert js.index("absorb:check-") < js.index("absorb:plan-") < js.index("_runRow(")

@@ -7,6 +7,7 @@ import pytest
 
 from coordinator_core.ops import workweek_reverse_drift_gate as gate_mod
 from coordinator_core.ops.workweek_reverse_drift_gate import main, run_gate
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -57,7 +58,7 @@ def test_run_gate_reader_error_unexpected_rc_override_passes(monkeypatch: pytest
     assert any("unexpected code (rc=2)" in m for m in messages)
 
 
-def test_run_gate_runs_real_command_success(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_run_gate_runs_real_command_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     row = f"pluginA|{tmp_path}|true"
     monkeypatch.setattr(gate_mod, "_run", _stub_run([row], [], 0))
     messages, rc = run_gate("/some/repo", override=False)
@@ -65,7 +66,7 @@ def test_run_gate_runs_real_command_success(monkeypatch: pytest.MonkeyPatch, tmp
     assert messages == []
 
 
-def test_run_gate_runs_real_command_failure_blocks(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_run_gate_runs_real_command_failure_blocks(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     row = f"pluginA|{tmp_path}|false"
     monkeypatch.setattr(gate_mod, "_run", _stub_run([row], [], 0))
     messages, rc = run_gate("/some/repo", override=False)
@@ -75,7 +76,7 @@ def test_run_gate_runs_real_command_failure_blocks(monkeypatch: pytest.MonkeyPat
 
 
 def test_run_gate_runs_real_command_failure_override_passes(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     row = f"pluginA|{tmp_path}|false"
     monkeypatch.setattr(gate_mod, "_run", _stub_run([row], [], 0))
@@ -85,7 +86,7 @@ def test_run_gate_runs_real_command_failure_override_passes(
 
 
 def test_run_gate_multiple_rows_one_fails_still_reports_both(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     rows = [f"pluginA|{tmp_path}|true", f"pluginB|{tmp_path}|false"]
     monkeypatch.setattr(gate_mod, "_run", _stub_run(rows, [], 0))
@@ -122,7 +123,7 @@ def test_main_help_exits_0(capsys: pytest.CaptureFixture) -> None:
     assert "Usage" in capsys.readouterr().out
 
 
-def test_run_gate_shell_metachar_pipe_refused(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_run_gate_shell_metachar_pipe_refused(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     row = f"pluginA|{tmp_path}|git diff | grep foo"
     monkeypatch.setattr(gate_mod, "_run", _stub_run([row], [], 0))
     messages, rc = run_gate("/some/repo", override=False)
@@ -131,7 +132,7 @@ def test_run_gate_shell_metachar_pipe_refused(monkeypatch: pytest.MonkeyPatch, t
 
 
 def test_run_gate_shell_metachar_command_substitution_refused(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     row = f"pluginA|{tmp_path}|echo $(git rev-parse HEAD)"
     monkeypatch.setattr(gate_mod, "_run", _stub_run([row], [], 0))
@@ -141,7 +142,7 @@ def test_run_gate_shell_metachar_command_substitution_refused(
 
 
 def test_run_gate_shell_metachar_semicolon_refused_override_passes(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     row = f"pluginA|{tmp_path}|true; false"
     monkeypatch.setattr(gate_mod, "_run", _stub_run([row], [], 0))
@@ -151,7 +152,7 @@ def test_run_gate_shell_metachar_semicolon_refused_override_passes(
 
 
 def test_run_gate_plain_argv_with_quoted_args_runs_directly(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     row = f'pluginA|{tmp_path}|python -c "import sys" --flag "value with spaces"'
     monkeypatch.setattr(gate_mod, "_run", _stub_run([row], [], 0))
@@ -160,7 +161,7 @@ def test_run_gate_plain_argv_with_quoted_args_runs_directly(
     assert messages == []
 
 
-def test_run_gate_empty_cmd_after_parse_is_noop(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+def test_run_gate_empty_cmd_after_parse_is_noop(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     row = f"pluginA|{tmp_path}|   "
     monkeypatch.setattr(gate_mod, "_run", _stub_run([row], [], 0))
     messages, rc = run_gate("/some/repo", override=False)

@@ -8,6 +8,7 @@ import coordinator_core.ops  # noqa: F401 -- registers every op
 from coordinator_core import ipc
 from coordinator_core.authz.classification import OP_CLASSIFICATION, OpClass
 from coordinator_core.ops.distill_write_curated_clusters import _handler
+from pathlib import Path
 
 _COUNTS = {"git-safety": 3, "git-hooks": 2, "meta": 1}
 
@@ -22,7 +23,7 @@ def test_registered_and_classified_mutating() -> None:
     assert OP_CLASSIFICATION["distill.write_curated_clusters"] is OpClass.MUTATING
 
 
-def test_writes_curated_tags_object_with_threshold_fields(tmp_path) -> None:
+def test_writes_curated_tags_object_with_threshold_fields(tmp_path: Path) -> None:
     reply = _handler(
         {"tag_counts": _COUNTS, "output_path": "state/scratch/artifact-distillation/r1/curated.json"},
         repo_root=_common_dir(tmp_path),
@@ -40,19 +41,19 @@ def test_writes_curated_tags_object_with_threshold_fields(tmp_path) -> None:
 
 
 @pytest.mark.parametrize("bad", ["../escape.json", "state/other/x.json", "state/scratch", "/abs/x.json"])
-def test_refuses_output_path_outside_scratch(tmp_path, bad) -> None:
+def test_refuses_output_path_outside_scratch(tmp_path: Path, bad) -> None:
     with pytest.raises(ValueError):
         _handler({"tag_counts": _COUNTS, "output_path": bad}, repo_root=_common_dir(tmp_path))
 
 
-def test_run_id_alone_defaults_output_path(tmp_path) -> None:
+def test_run_id_alone_defaults_output_path(tmp_path: Path) -> None:
     reply = _handler({"tag_counts": _COUNTS, "run_id": "r9"}, repo_root=_common_dir(tmp_path))
     assert reply["output_path"] == "state/scratch/artifact-distillation/r9/curated.json"
     assert (tmp_path / reply["output_path"]).is_file()
     assert reply["curated_verdict_count"] == 3
 
 
-def test_explicit_output_path_wins_over_run_id(tmp_path) -> None:
+def test_explicit_output_path_wins_over_run_id(tmp_path: Path) -> None:
     reply = _handler(
         {"tag_counts": _COUNTS, "run_id": "r9", "output_path": "state/scratch/x.json"},
         repo_root=_common_dir(tmp_path),
@@ -61,7 +62,7 @@ def test_explicit_output_path_wins_over_run_id(tmp_path) -> None:
 
 
 @pytest.mark.parametrize("bad", [None, "", "../x", "a/b", "..", 5])
-def test_refuses_missing_or_unsafe_run_id_without_output_path(tmp_path, bad) -> None:
+def test_refuses_missing_or_unsafe_run_id_without_output_path(tmp_path: Path, bad) -> None:
     params = {"tag_counts": _COUNTS}
     if bad is not None:
         params["run_id"] = bad
@@ -70,19 +71,19 @@ def test_refuses_missing_or_unsafe_run_id_without_output_path(tmp_path, bad) -> 
     assert not (tmp_path / "state").exists()
 
 
-def test_refuses_degraded_curation_and_writes_nothing(tmp_path) -> None:
+def test_refuses_degraded_curation_and_writes_nothing(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         _handler({"tag_counts": {}, "output_path": "state/scratch/x.json"}, repo_root=_common_dir(tmp_path))
     assert not (tmp_path / "state" / "scratch" / "x.json").exists()
 
 
-def _write_a(tmp_path, run_id, body):
+def _write_a(tmp_path, run_id, body) -> None:
     d = tmp_path / "state" / "scratch" / "artifact-distillation" / run_id
     d.mkdir(parents=True)
     (d / "invocation-a.json").write_text(json.dumps(body), encoding="utf-8")
 
 
-def test_derives_tag_counts_and_threshold_from_run_dir_invocation_a(tmp_path) -> None:
+def test_derives_tag_counts_and_threshold_from_run_dir_invocation_a(tmp_path: Path) -> None:
     _write_a(tmp_path, "r5", {"tag_counts": _COUNTS, "recommended_keep_threshold": 1})
     reply = _handler({"run_id": "r5"}, repo_root=_common_dir(tmp_path))
     assert reply["curated_verdict_count"] == 3
@@ -90,13 +91,13 @@ def test_derives_tag_counts_and_threshold_from_run_dir_invocation_a(tmp_path) ->
     assert (tmp_path / reply["output_path"]).is_file()
 
 
-def test_explicit_keep_threshold_beats_recommended(tmp_path) -> None:
+def test_explicit_keep_threshold_beats_recommended(tmp_path: Path) -> None:
     _write_a(tmp_path, "r5", {"tag_counts": _COUNTS, "recommended_keep_threshold": 1})
     reply = _handler({"run_id": "r5", "keep_threshold": 3}, repo_root=_common_dir(tmp_path))
     assert reply["threshold_applied"] == 3
 
 
-def test_derives_from_inline_invocation_a_result(tmp_path) -> None:
+def test_derives_from_inline_invocation_a_result(tmp_path: Path) -> None:
     reply = _handler(
         {"run_id": "r6", "invocation_a": {"tag_counts": _COUNTS, "run_id": "r6"}},
         repo_root=_common_dir(tmp_path),
@@ -104,7 +105,7 @@ def test_derives_from_inline_invocation_a_result(tmp_path) -> None:
     assert reply["curated_verdict_count"] == 3
 
 
-def test_derives_from_invocation_a_file_and_confines_it(tmp_path) -> None:
+def test_derives_from_invocation_a_file_and_confines_it(tmp_path: Path) -> None:
     _write_a(tmp_path, "r7", {"tag_counts": _COUNTS})
     rel = "state/scratch/artifact-distillation/r7/invocation-a.json"
     common = _common_dir(tmp_path)
@@ -114,13 +115,13 @@ def test_derives_from_invocation_a_file_and_confines_it(tmp_path) -> None:
         _handler({"run_id": "r8", "invocation_a_file": "../x.json"}, repo_root=common)
 
 
-def test_caller_tag_counts_win_over_invocation_a(tmp_path) -> None:
+def test_caller_tag_counts_win_over_invocation_a(tmp_path: Path) -> None:
     _write_a(tmp_path, "r5", {"tag_counts": {"only-one": 4}})
     reply = _handler({"run_id": "r5", "tag_counts": _COUNTS}, repo_root=_common_dir(tmp_path))
     assert reply["curated_verdict_count"] == 3
 
 
-def test_run_id_without_invocation_a_still_refuses_and_writes_nothing(tmp_path) -> None:
+def test_run_id_without_invocation_a_still_refuses_and_writes_nothing(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match=r"tag_counts.*distill\.launch_args"):
         _handler({"run_id": "r5"}, repo_root=_common_dir(tmp_path))
     assert not (tmp_path / "state").exists()
@@ -132,14 +133,14 @@ def _installer_verdict(tmp_path):
     return body["verdicts"][0]
 
 
-def test_wiki_page_stem_keeps_bare_tag_at_default_arguments(tmp_path) -> None:
+def test_wiki_page_stem_keeps_bare_tag_at_default_arguments(tmp_path: Path) -> None:
     (tmp_path / "docs" / "wiki").mkdir(parents=True)
     (tmp_path / "docs" / "wiki" / "installation.md").write_text("x", encoding="utf-8")
     v = _installer_verdict(tmp_path)
     assert v["verdict"] == "keep" and v["drop_cause"] is None
 
 
-def test_wiki_folder_name_keeps_bare_tag(tmp_path) -> None:
+def test_wiki_folder_name_keeps_bare_tag(tmp_path: Path) -> None:
     (tmp_path / "docs" / "wiki" / "installation").mkdir(parents=True)
     assert _installer_verdict(tmp_path)["verdict"] == "keep"
 
@@ -152,7 +153,7 @@ def test_unmatched_bare_tag_is_kept_without_wiki_home(tmp_path) -> None:
     assert "wiki home" not in v["reason"]
 
 
-def test_nested_wiki_entries_are_not_walked(tmp_path) -> None:
+def test_nested_wiki_entries_are_not_walked(tmp_path: Path) -> None:
     (tmp_path / "docs" / "wiki" / "other").mkdir(parents=True)
     (tmp_path / "docs" / "wiki" / "other" / "installation.md").write_text("x", encoding="utf-8")
     v = _installer_verdict(tmp_path)

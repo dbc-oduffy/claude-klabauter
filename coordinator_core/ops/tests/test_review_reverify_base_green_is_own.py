@@ -12,6 +12,7 @@ from coordinator_core.ops.tests.test_review_reverify import (  # noqa: F401  (wo
 from coordinator_core.ops.tests.test_review_reverify_sibling_owned import (
     PARAM_NODE, SIBLING_FILE, TRACE, _dirty_sibling,
 )
+import pytest
 
 
 def _call(root, **kw):
@@ -21,7 +22,7 @@ def _call(root, **kw):
     )
 
 
-def test_base_green_head_red_with_dirty_unheld_cause_is_the_runs_own(world, monkeypatch):
+def test_base_green_head_red_with_dirty_unheld_cause_is_the_runs_own(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _declared = world
     _dirty_sibling(root, monkeypatch, held=False)
     out = _call(root, failing_at_base=[])
@@ -30,21 +31,21 @@ def test_base_green_head_red_with_dirty_unheld_cause_is_the_runs_own(world, monk
     assert from_reverify({**out, "failing": [PARAM_NODE]}) != []
 
 
-def test_base_green_head_red_with_halt_held_cause_is_still_the_runs_own(world, monkeypatch):
+def test_base_green_head_red_with_halt_held_cause_is_still_the_runs_own(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _declared = world
     _dirty_sibling(root, monkeypatch, held=True)
     out = _call(root, failing_at_base=[])
     assert out["sibling_owned"] == [] and out["foreign_red"] == {} and out["unattributed"] == [PARAM_NODE]
 
 
-def test_red_at_base_stays_pre_existing(world, monkeypatch):
+def test_red_at_base_stays_pre_existing(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _declared = world
     _dirty_sibling(root, monkeypatch, held=False)
     out = _call(root, failing_at_base=[PARAM_NODE])
     assert out["pre_existing"] == [PARAM_NODE] and out["unattributed"] == []
 
 
-def test_unmeasured_base_keeps_foreign_red_evidence(world, monkeypatch):
+def test_unmeasured_base_keeps_foreign_red_evidence(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _declared = world
     _dirty_sibling(root, monkeypatch, held=False)
     out = _call(root)

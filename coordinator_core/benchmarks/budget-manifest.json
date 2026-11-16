@@ -1121,6 +1121,7 @@
       "after_c6_guard_child_process_ms": 5250.0,
       "c2_end_guard_child_process_ms": 3953.1,
       "c2_end_guard_rerun_child_process_ms": 3328.1,
+      "c2_end_guard_after_c10_child_process_ms": 1484.4,
       "after_c6_error_code": null
     },
     "fixture_split_default_dirs": {

@@ -258,7 +258,8 @@ def test_pulled_plan_is_revised_once_and_regated_before_the_halt(m_plus_known_ar
     block = script[pulled:halt]
     assert block.count("label: 'plan-revise'") == 1
     assert block.count("await planBlitz(") == 1
-    assert "planPath: _revised?.plan_rel || _pulledEntry.planPath" in block
+    assert "planPath: _pullPlan" in block
+    assert "_revised?.plan_rel || _pulledEntry.planPath" not in block
     assert "_pulledEntry.prepGateReport" in block
     assert "if (!_planRel && _pulledEntry)" in block
     assert "_pulledEntry = (_blitz?.pulled ?? []).find((p) => p && p.planPath)" in block

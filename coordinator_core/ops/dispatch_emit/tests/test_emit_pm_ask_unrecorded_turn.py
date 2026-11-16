@@ -11,9 +11,10 @@ from coordinator_core.ops.dispatch_emit.tests.test_unmarked_ask_source_derivatio
     _seed,
     repo,
 )
+from pathlib import Path
 
 
-def test_pm_ask_matching_no_turn_is_admitted_and_recorded(repo):  # noqa: F811
+def test_pm_ask_matching_no_turn_is_admitted_and_recorded(repo) -> None:  # noqa: F811
     _seed(repo)
     said = "unrecorded words that nobody said yet"
     out, _ = _emit(repo, ask=said, ask_source="pm")
@@ -23,14 +24,14 @@ def test_pm_ask_matching_no_turn_is_admitted_and_recorded(repo):  # noqa: F811
     assert [t["prompt"] for t in turns] == [TURN, said]
 
 
-def test_matched_pm_ask_records_nothing_and_carries_no_advisory(repo):  # noqa: F811
+def test_matched_pm_ask_records_nothing_and_carries_no_advisory(repo) -> None:  # noqa: F811
     _seed(repo)
     out, _ = _emit(repo, ask=TURN, ask_source="pm")
     assert out["pm_verification"] == "matched" and "pm_advisory" not in out
     assert pm_turns.read_turns(session_id=SID, cwd=str(repo), all_turns=True)["count"] == 1
 
 
-def test_over_cap_inline_brief_spills_whole_text_with_advisory(tmp_path):
+def test_over_cap_inline_brief_spills_whole_text_with_advisory(tmp_path: Path) -> None:
     text = "é" * EM_BRIEF_BYTE_CAP
     b = load_em_brief(tmp_path, brief=text, brief_file=None)
     assert len(b.text.encode("utf-8")) <= EM_BRIEF_BYTE_CAP and text.startswith(b.text)
@@ -38,12 +39,12 @@ def test_over_cap_inline_brief_spills_whole_text_with_advisory(tmp_path):
     assert b.advisories and receipt_fields(b)["advisories"] == list(b.advisories)
 
 
-def test_over_cap_brief_file_is_its_own_spill(tmp_path):
+def test_over_cap_brief_file_is_its_own_spill(tmp_path: Path) -> None:
     (tmp_path / "b.md").write_text("a" * (EM_BRIEF_BYTE_CAP + 5), encoding="utf-8")
     b = load_em_brief(tmp_path, brief=None, brief_file="b.md")
     assert b.context == ("b.md",) and b.advisories
 
 
-def test_under_cap_brief_has_no_advisory(tmp_path):
+def test_under_cap_brief_has_no_advisory(tmp_path: Path) -> None:
     b = load_em_brief(tmp_path, brief="short", brief_file=None)
     assert b.advisories == () and "advisories" not in receipt_fields(b)

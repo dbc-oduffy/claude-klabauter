@@ -64,7 +64,7 @@ def _offenders() -> list[str]:
     return sorted(found)
 
 
-def test_only_host_sampler_reads_available_memory():
+def test_only_host_sampler_reads_available_memory() -> None:
     offenders = _offenders()
     assert not offenders, (
         "available memory is read outside host_sampler; call "
@@ -72,5 +72,5 @@ def test_only_host_sampler_reads_available_memory():
     )
 
 
-def test_host_sampler_still_reads_it():
+def test_host_sampler_still_reads_it() -> None:
     assert _reads_memory(_REPO / _SAMPLER)

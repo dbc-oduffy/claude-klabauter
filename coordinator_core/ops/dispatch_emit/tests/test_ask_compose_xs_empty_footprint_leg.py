@@ -14,6 +14,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
 )
 from coordinator_core.ops.dispatch_emit.ledger_remaining_paths import remaining_leg_plan
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from pathlib import Path
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _OWED = {"R1": {"remaining": ["do the thing"]}}
@@ -39,14 +40,14 @@ def _leg(arm: str, tmp_path) -> dict:
     return remaining_leg_plan(_OWED, ["please finish the work"], [], ["R1"], [], None, tmp_path, arm=arm)
 
 
-def test_xs_refire_with_empty_writes_leg_refuses_and_a_non_xs_arm_routes_to_replan(tmp_path):
+def test_xs_refire_with_empty_writes_leg_refuses_and_a_non_xs_arm_routes_to_replan(tmp_path: Path) -> None:
     xs = _leg("xs", tmp_path)
     assert xs["action"] == LEG_REFUSE and xs["writes"] == []
     other = _leg("m_plus", tmp_path)
     assert other["action"] == LEG_DISPATCH and other["writes"] == []
 
 
-def test_composed_xs_workflow_halts_on_the_refusal_before_any_ledger_remaining_dispatch(monkeypatch, tmp_path):
+def test_composed_xs_workflow_halts_on_the_refusal_before_any_ledger_remaining_dispatch(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     assert _leg("xs", tmp_path)["action"] == LEG_REFUSE
     script = _script(monkeypatch, "xs")
     leg = script.index(f".{RESUME_LEDGER_LEG_FIELD} ?? null;")
@@ -59,7 +60,7 @@ def test_composed_xs_workflow_halts_on_the_refusal_before_any_ledger_remaining_d
     assert script.count("label: 'ledger-remaining'") == 1
 
 
-def test_the_dispatch_never_runs_under_a_halt(monkeypatch):
+def test_the_dispatch_never_runs_under_a_halt(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch, "xs")
     assert "if (_resumeLedger && !_ledgerExec &&" in script
     assert "if (!_halted" in script

@@ -8,10 +8,12 @@ import threading
 import time
 
 from coordinator_core.warm import server
+from pathlib import Path
+import pytest
 
 
 class _CountingPool:
-    def __init__(self):
+    def __init__(self) -> None:
         self.submitted = []
 
     def submit(self, *a, **k):
@@ -34,7 +36,7 @@ def _msg(method):
     return {"jsonrpc": "2.0", "id": 9, "method": method, "params": {}}
 
 
-def test_saturated_pool_refuses_fast_naming_holders_and_does_not_submit(tmp_path, monkeypatch):
+def test_saturated_pool_refuses_fast_naming_holders_and_does_not_submit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "DISPATCH_PROCESS_POOL_SIZE", 2)
     monkeypatch.setattr(server, "STALL_DUMP_SECS", 0.05)
     monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", 0.05)
@@ -58,7 +60,7 @@ def test_saturated_pool_refuses_fast_naming_holders_and_does_not_submit(tmp_path
     assert diagnosis["stall_dump"] == str(tmp_path / "stderr")
 
 
-def test_a_pool_with_a_free_worker_or_fresh_tasks_still_submits(tmp_path, monkeypatch):
+def test_a_pool_with_a_free_worker_or_fresh_tasks_still_submits(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(server, "DISPATCH_PROCESS_POOL_SIZE", 2)
     monkeypatch.setattr(server, "STALL_DUMP_SECS", 0.05)
     monkeypatch.setattr(server, "_POOL_RESULT_DEADLINE_SECS", 0.05)

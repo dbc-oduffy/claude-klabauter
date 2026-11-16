@@ -18,6 +18,7 @@ from typing import Callable, Iterator, Mapping, Sequence
 
 import yaml
 
+from coordinator_core.frontmatter.yaml_load import safe_load as _yaml_safe_load
 from coordinator_core.ops._path_guard import contained_path
 from coordinator_core.ops._sizing_citation import resolve_sizing_citation
 from coordinator_core.ops.dispatch_emit.ask_contract import (
@@ -109,6 +110,22 @@ def _regular_stat(p: Path):
     return st if stat.S_ISREG(st.st_mode) else None
 
 
+_IMMUTABLE_LEAVES = (str, int, float, bool, type(None))
+
+
+def _copy_tree(value):
+    """`copy.deepcopy` for a parsed YAML tree: plain dicts and lists are rebuilt, immutable scalar leaves
+    are shared, any other type falls back to `deepcopy`. Several times cheaper on a thousands-of-rows register."""
+    kind = type(value)
+    if kind is dict:
+        return {k: _copy_tree(v) for k, v in value.items()}
+    if kind is list:
+        return [_copy_tree(v) for v in value]
+    if kind in _IMMUTABLE_LEAVES:
+        return value
+    return copy.deepcopy(value)
+
+
 def load_sizing(repo_root: Path, sizing_rel: str) -> dict:
     """Read a sizing YAML under `<repo_root>/state/sizings/`, else its archived copy.
 
@@ -137,15 +154,16 @@ def load_sizing(repo_root: Path, sizing_rel: str) -> dict:
     memo = _SIZING_MEMO.get()
     key = (str(p), st.st_mtime_ns, st.st_size)
     if memo is not None and key in memo:
-        return copy.deepcopy(memo[key])
+        return _copy_tree(memo[key])
     try:
-        doc = yaml.safe_load(p.read_text(encoding="utf-8"))
+        doc = _yaml_safe_load(p.read_text(encoding="utf-8"))
     except yaml.YAMLError as exc:
         raise SizingFireRefused([f"sizing-object is not valid YAML: {exc}"]) from exc
     if not isinstance(doc, dict):
         raise SizingFireRefused(["sizing-object is not a YAML mapping"])
     if memo is not None:
-        memo[key] = copy.deepcopy(doc)
+        memo[key] = doc
+        return _copy_tree(doc)
     return doc
 
 

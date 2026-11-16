@@ -19,15 +19,20 @@ import subprocess
 import pytest
 
 from coordinator_core.ops.fleet import mode_control
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 
 @pytest.fixture
-def isolated_home(tmp_path, monkeypatch):
+def isolated_home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     return tmp_path
 
 
-def test_set_then_show_round_trip_bool_key(isolated_home):
+def test_set_then_show_round_trip_bool_key(isolated_home) -> None:
     record = mode_control.set_fleet_mode_key("autonomous", "on")
     assert record["autonomous"] is True
 
@@ -37,7 +42,7 @@ def test_set_then_show_round_trip_bool_key(isolated_home):
     assert entry["precedence"] == "session-wins"
 
 
-def test_set_then_show_round_trip_enum_key(isolated_home):
+def test_set_then_show_round_trip_enum_key(isolated_home) -> None:
     record = mode_control.set_fleet_mode_key("compaction_warnings", "informational")
     assert record["compaction_warnings"] == "informational"
 
@@ -48,21 +53,21 @@ def test_set_then_show_round_trip_enum_key(isolated_home):
     assert entry["variant_that_fires"] == "informational"
 
 
-def test_set_preserves_other_keys(isolated_home):
+def test_set_preserves_other_keys(isolated_home) -> None:
     mode_control.set_fleet_mode_key("autonomous", "on")
     mode_control.set_fleet_mode_key("compaction_warnings", "informational")
     record = mode_control.set_fleet_mode_key("autonomous", "off")
     assert record == {"autonomous": False, "compaction_warnings": "informational"}
 
 
-def test_bool_accepts_true_false_tokens(isolated_home):
+def test_bool_accepts_true_false_tokens(isolated_home) -> None:
     record = mode_control.set_fleet_mode_key("autonomous", "true")
     assert record["autonomous"] is True
     record = mode_control.set_fleet_mode_key("autonomous", "FALSE")
     assert record["autonomous"] is False
 
 
-def test_set_unknown_key_rejected_with_known_key_list(isolated_home):
+def test_set_unknown_key_rejected_with_known_key_list(isolated_home) -> None:
     with pytest.raises(ValueError) as exc_info:
         mode_control.set_fleet_mode_key("not_a_real_key", "on")
     message = str(exc_info.value)
@@ -71,13 +76,13 @@ def test_set_unknown_key_rejected_with_known_key_list(isolated_home):
     assert "compaction_warnings" in message
 
 
-def test_set_bad_bool_value_rejected(isolated_home):
+def test_set_bad_bool_value_rejected(isolated_home) -> None:
     with pytest.raises(ValueError) as exc_info:
         mode_control.set_fleet_mode_key("autonomous", "maybe")
     assert "autonomous" in str(exc_info.value)
 
 
-def test_set_bad_enum_value_rejected(isolated_home):
+def test_set_bad_enum_value_rejected(isolated_home) -> None:
     with pytest.raises(ValueError) as exc_info:
         mode_control.set_fleet_mode_key("compaction_warnings", "silent")
     message = str(exc_info.value)
@@ -86,13 +91,13 @@ def test_set_bad_enum_value_rejected(isolated_home):
     assert "informational" in message
 
 
-def test_bad_set_does_not_write_anything(isolated_home):
+def test_bad_set_does_not_write_anything(isolated_home) -> None:
     with pytest.raises(ValueError):
         mode_control.set_fleet_mode_key("not_a_real_key", "on")
     assert mode_control.read_fleet_mode() == {}
 
 
-def test_failed_write_raises_oserror_and_leaves_no_partial_state(isolated_home, monkeypatch):
+def test_failed_write_raises_oserror_and_leaves_no_partial_state(isolated_home, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mode_control, "write_fleet_mode", lambda record: False)
     with pytest.raises(OSError) as exc_info:
         mode_control.set_fleet_mode_key("autonomous", "on")
@@ -100,7 +105,7 @@ def test_failed_write_raises_oserror_and_leaves_no_partial_state(isolated_home, 
     assert mode_control.read_fleet_mode() == {}
 
 
-def test_show_names_precedence_rule_per_key(isolated_home):
+def test_show_names_precedence_rule_per_key(isolated_home) -> None:
     rendered = mode_control.show_fleet_mode()
     keys = {entry["key"]: entry for entry in rendered["keys"]}
     assert keys["autonomous"]["precedence"] == "session-wins"
@@ -109,7 +114,7 @@ def test_show_names_precedence_rule_per_key(isolated_home):
     assert "fleet" in keys["compaction_warnings"]["wins"]
 
 
-def test_show_names_variant_that_fires_and_declares_unsuppressible(isolated_home):
+def test_show_names_variant_that_fires_and_declares_unsuppressible(isolated_home) -> None:
     rendered = mode_control.show_fleet_mode()
     entry = _entry(rendered, "compaction_warnings")
     assert entry["is_variant_selector"] is True
@@ -117,13 +122,13 @@ def test_show_names_variant_that_fires_and_declares_unsuppressible(isolated_home
     assert entry["variant_that_fires"] in ("standard", "informational")
 
 
-def test_show_variant_that_fires_tracks_the_set_value(isolated_home):
+def test_show_variant_that_fires_tracks_the_set_value(isolated_home) -> None:
     mode_control.set_fleet_mode_key("compaction_warnings", "informational")
     entry = _entry(mode_control.show_fleet_mode(), "compaction_warnings")
     assert entry["variant_that_fires"] == "informational"
 
 
-def test_show_absent_file_still_renders_every_known_key(isolated_home):
+def test_show_absent_file_still_renders_every_known_key(isolated_home) -> None:
     rendered = mode_control.show_fleet_mode()
     seen = {entry["key"] for entry in rendered["keys"]}
     assert seen == set(mode_control.known_keys())
@@ -131,7 +136,7 @@ def test_show_absent_file_still_renders_every_known_key(isolated_home):
         assert entry["fleet_value"] is None
 
 
-def test_set_spawns_no_subprocess(isolated_home, monkeypatch):
+def test_set_spawns_no_subprocess(isolated_home, monkeypatch: pytest.MonkeyPatch) -> None:
     def _forbidden(*args, **kwargs):
         raise AssertionError("mode_control must not spawn a subprocess")
 
@@ -140,7 +145,7 @@ def test_set_spawns_no_subprocess(isolated_home, monkeypatch):
     mode_control.set_fleet_mode_key("autonomous", "on")
 
 
-def test_show_spawns_no_subprocess(isolated_home, monkeypatch):
+def test_show_spawns_no_subprocess(isolated_home, monkeypatch: pytest.MonkeyPatch) -> None:
     def _forbidden(*args, **kwargs):
         raise AssertionError("mode_control must not spawn a subprocess")
 
@@ -149,7 +154,7 @@ def test_show_spawns_no_subprocess(isolated_home, monkeypatch):
     mode_control.show_fleet_mode()
 
 
-def test_module_resolves_no_session_list():
+def test_module_resolves_no_session_list() -> None:
     import inspect
 
     source = inspect.getsource(mode_control)
@@ -158,14 +163,14 @@ def test_module_resolves_no_session_list():
         assert term not in source, f"mode_control.py must not reference {term!r}"
 
 
-def test_op_handler_set_requires_key_and_value(isolated_home):
+def test_op_handler_set_requires_key_and_value(isolated_home) -> None:
     with pytest.raises(ValueError):
         mode_control._fleet_mode_set({}, repo_root=None)
     with pytest.raises(ValueError):
         mode_control._fleet_mode_set({"key": "autonomous"}, repo_root=None)
 
 
-def test_op_handler_set_and_show_round_trip(isolated_home):
+def test_op_handler_set_and_show_round_trip(isolated_home) -> None:
     result = mode_control._fleet_mode_set({"key": "autonomous", "value": "on"}, repo_root=None)
     assert result["autonomous"] is True
 
@@ -174,7 +179,7 @@ def test_op_handler_set_and_show_round_trip(isolated_home):
     assert entry["fleet_value"] is True
 
 
-def test_set_then_show_round_trip_interaction_mode(isolated_home):
+def test_set_then_show_round_trip_interaction_mode(isolated_home) -> None:
     record = mode_control.set_fleet_mode_key("interaction_mode", "ceo")
     assert record["interaction_mode"] == "ceo"
 
@@ -185,7 +190,7 @@ def test_set_then_show_round_trip_interaction_mode(isolated_home):
     assert entry["is_variant_selector"] is False
 
 
-def test_set_bad_interaction_mode_value_rejected(isolated_home):
+def test_set_bad_interaction_mode_value_rejected(isolated_home) -> None:
     with pytest.raises(ValueError) as exc_info:
         mode_control.set_fleet_mode_key("interaction_mode", "bogus")
     message = str(exc_info.value)
@@ -195,7 +200,7 @@ def test_set_bad_interaction_mode_value_rejected(isolated_home):
     assert "ceo" in message
 
 
-def test_show_default_interaction_mode_is_hands_on_when_unset(isolated_home):
+def test_show_default_interaction_mode_is_hands_on_when_unset(isolated_home) -> None:
     rendered = mode_control.show_fleet_mode()
     entry = _entry(rendered, "interaction_mode")
     assert entry["fleet_value"] is None
@@ -214,7 +219,7 @@ class TestShowReportsTheVariantThatActuallyFires:
     (indirectly) to explain its own behaviour, so a stated variant that is not
     the one that fires defeats the op's purpose."""
 
-    def test_environment_variant_is_reported_when_fleet_is_silent(self, monkeypatch):
+    def test_environment_variant_is_reported_when_fleet_is_silent(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.ops.fleet import mode_control as MC
 
         monkeypatch.setattr(MC, "read_fleet_mode", lambda: {})
@@ -233,8 +238,8 @@ class TestShowReportsTheVariantThatActuallyFires:
         assert "environment" in entry["variant_source"]
 
     def test_the_environment_rung_is_called_with_the_arity_it_declares(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The registry stores `environment_default` as a ONE-POSITIONAL-ARG
         callable (`ModeKey.environment_default`: it takes the caller's env).
         `show` called it with no argument, so every real render raised
@@ -251,7 +256,7 @@ class TestShowReportsTheVariantThatActuallyFires:
         monkeypatch.setattr(MC, "read_fleet_mode", lambda: {})
         seen = []
 
-        def _environment_rung(env):
+        def _environment_rung(env) -> str:
             seen.append(env)
             return "informational"
 
@@ -268,7 +273,7 @@ class TestShowReportsTheVariantThatActuallyFires:
         assert entry["variant_that_fires"] == "informational"
         assert "environment" in entry["variant_source"]
 
-    def test_a_stated_fleet_value_is_reported_as_stated(self, monkeypatch):
+    def test_a_stated_fleet_value_is_reported_as_stated(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.ops.fleet import mode_control as MC
 
         monkeypatch.setattr(MC, "read_fleet_mode",
@@ -279,8 +284,8 @@ class TestShowReportsTheVariantThatActuallyFires:
         assert entry["variant_source"] == "fleet record"
 
     def test_falls_back_to_the_declared_default_when_resolution_is_unavailable(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Lazy and fail-open: `show` must still render if the resolver cannot
         be reached."""
         from coordinator_core.ops.fleet import mode_control as MC
@@ -290,7 +295,7 @@ class TestShowReportsTheVariantThatActuallyFires:
 
         real_import = builtins.__import__
 
-        def _blocked(name, *a, **k):
+        def _blocked(name, *a, **k) -> ModuleType:
             if "mode_resolution" in name:
                 raise ImportError("blocked for test")
             return real_import(name, *a, **k)
@@ -301,7 +306,7 @@ class TestShowReportsTheVariantThatActuallyFires:
         assert variant == "standard"
         assert "declared default" in source
 
-    def test_no_variant_selector_is_ever_reported_suppressible(self):
+    def test_no_variant_selector_is_ever_reported_suppressible(self) -> None:
         from coordinator_core.ops.fleet import mode_control as MC
 
         for entry in MC.show_fleet_mode()["keys"]:

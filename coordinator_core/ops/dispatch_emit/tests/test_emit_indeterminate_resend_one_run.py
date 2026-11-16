@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -60,6 +64,65 @@ def test_a_resent_raw_ask_after_a_lost_reply_returns_the_one_live_run(repo, sess
     assert _run_dirs(repo) == [first["run_id"]]
 
 
+_CHILD = """
+import sys, time
+from pathlib import Path
+from coordinator_core.ops.dispatch_emit import op
+
+_real = op._emit_script_file
+
+
+def _write_then_hang(*args, **kwargs):
+    out = _real(*args, **kwargs)
+    print("WRITTEN", flush=True)
+    time.sleep(600)
+    return out
+
+
+op._emit_script_file = _write_then_hang
+op._dispatch_emit({"ask": sys.argv[2]}, Path(sys.argv[1]))
+"""
+
+
+def test_an_emit_killed_after_the_script_is_durable_and_resent_yields_one_run(repo, sessions, tmp_path):
+    root = Path(__file__).resolve().parents[4]
+    child = tmp_path / "emit_child.py"
+    child.write_text(_CHILD, encoding="utf-8")
+    env = {**os.environ, "PYTHONPATH": str(root) + os.pathsep + os.environ.get("PYTHONPATH", "")}
+    proc = subprocess.Popen(
+        [sys.executable, str(child), str(repo), ASK], cwd=root, env=env, stdout=subprocess.PIPE,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    watchdog = threading.Timer(120, proc.kill)
+    watchdog.start()
+    try:
+        assert proc.stdout.readline().strip() == b"WRITTEN"
+        proc.kill()
+        proc.wait()
+    finally:
+        watchdog.cancel()
+        proc.kill()
+    minted = _run_dirs(repo)
+    assert len(minted) == 1
+
+    resent = emit_op._dispatch_emit({"ask": ASK}, repo)
+
+    assert resent["run_id"] == minted[0] and resent["deduped"] is True
+    assert Path(resent["path"]).is_file() and resent["sha256"]
+    assert resent["fire_args"]["runToken"]
+    assert _run_dirs(repo) == minted
+    assert [r["run_id"] for r in run_token.held_records(repo)] == minted
+
+
+def test_a_resent_chained_successor_is_not_the_run_it_chains_from(repo, sessions):
+    first = emit_op._dispatch_emit({"ask": ASK}, repo)
+
+    rec = run_token._read_rec(repo, first["run_id"])
+    holder = emit_op._resend_holder(repo, None, ASK, exclude=first["run_id"])
+
+    assert rec is not None and holder is None
+
+
 def test_a_different_ask_still_mints_its_own_run(repo, sessions):
     first = emit_op._dispatch_emit({"ask": ASK}, repo)
     _fire(repo, first["run_id"], sessions)
@@ -80,6 +143,18 @@ def test_a_lost_reply_resend_returns_the_minted_unfired_run(repo, sessions):
     assert resent["deduped"] is True
     assert resent["sha256"] == first["sha256"]
     assert _run_dirs(repo) == [first["run_id"]]
+
+
+def test_the_deduped_reply_carries_the_keys_and_paths_of_the_first_reply(repo, sessions):
+    first = emit_op._dispatch_emit({"ask": ASK}, repo)
+
+    resent = emit_op._dispatch_emit({"ask": ASK}, repo)
+
+    for key in ("run_id", "path", "receipt", "sha256", "fanout", "ask_source"):
+        assert key in resent, key
+        assert resent[key] == first[key], key
+    assert Path(resent["path"]).is_absolute()
+    assert first["receipt"] is not None
 
 
 def test_an_unfired_run_past_the_window_is_not_resent_and_mints_afresh(repo, sessions, monkeypatch):

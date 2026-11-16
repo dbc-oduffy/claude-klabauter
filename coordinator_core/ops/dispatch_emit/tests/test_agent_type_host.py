@@ -27,12 +27,13 @@ from coordinator_core.ops.dispatch_emit.emit import (
     resolve_agent_type_host,
 )
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
+import pytest
 
 _MODEL_LITERAL_RE = re.compile(r"model:\s*'([^']*)'")
 _AGENT_TYPE_LITERAL_RE = re.compile(r"agentType:\s*'([^']*)'")
 
 
-def _wave_row(id_, writes, agent_type=None, agent_model=None):
+def _wave_row(id_, writes, agent_type=None, agent_model=None) -> WaveRow:
     return WaveRow(
         id=id_,
         title=f"title-{id_}",
@@ -45,11 +46,11 @@ def _wave_row(id_, writes, agent_type=None, agent_model=None):
     )
 
 
-def _one_wave_fixture():
+def _one_wave_fixture() -> list[list[WaveRow]]:
     return [[_wave_row("C1", ["coordinator_core/ops/dispatch_emit/spine_read.py"])]]
 
 
-def test_rung1_explicit_env_var_wins_over_everything():
+def test_rung1_explicit_env_var_wins_over_everything() -> None:
     assert (
         resolve_agent_type_host(
             coordinator_agent_type_host="coordinator",
@@ -68,7 +69,7 @@ def test_rung1_explicit_env_var_wins_over_everything():
     )
 
 
-def test_rung2_claude_plugin_root_resolves_coordinator_absent_env_var():
+def test_rung2_claude_plugin_root_resolves_coordinator_absent_env_var() -> None:
     assert (
         resolve_agent_type_host(
             coordinator_agent_type_host=None,
@@ -79,7 +80,7 @@ def test_rung2_claude_plugin_root_resolves_coordinator_absent_env_var():
     )
 
 
-def test_rung3_coordinator_hook_state_resolves_coordinator_absent_env_and_plugin_root():
+def test_rung3_coordinator_hook_state_resolves_coordinator_absent_env_and_plugin_root() -> None:
     assert (
         resolve_agent_type_host(
             coordinator_agent_type_host=None,
@@ -90,7 +91,7 @@ def test_rung3_coordinator_hook_state_resolves_coordinator_absent_env_and_plugin
     )
 
 
-def test_default_degrade_when_no_rung_resolves():
+def test_default_degrade_when_no_rung_resolves() -> None:
     assert (
         resolve_agent_type_host(
             coordinator_agent_type_host=None,
@@ -101,7 +102,7 @@ def test_default_degrade_when_no_rung_resolves():
     )
 
 
-def test_resolve_agent_type_host_reads_no_environment_itself(monkeypatch):
+def test_resolve_agent_type_host_reads_no_environment_itself(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_AGENT_TYPE_HOST", "coordinator")
     monkeypatch.setenv("CLAUDE_PLUGIN_ROOT", "/somewhere")
     assert (
@@ -114,7 +115,7 @@ def test_resolve_agent_type_host_reads_no_environment_itself(monkeypatch):
     )
 
 
-def test_degrade_agent_type_unchanged_when_not_degraded():
+def test_degrade_agent_type_unchanged_when_not_degraded() -> None:
     assert _degrade_agent_type(_EXECUTOR_AGENT_TYPE, None) == _EXECUTOR_AGENT_TYPE
     assert (
         _degrade_agent_type(_EXECUTOR_AGENT_TYPE, _AGENT_TYPE_HOST_COORDINATOR)
@@ -122,7 +123,7 @@ def test_degrade_agent_type_unchanged_when_not_degraded():
     )
 
 
-def test_degrade_agent_type_substitutes_known_types_on_degrade():
+def test_degrade_agent_type_substitutes_known_types_on_degrade() -> None:
     for agent_type in (
         _EXECUTOR_AGENT_TYPE,
         _ENRICHER_AGENT_TYPE,
@@ -131,14 +132,14 @@ def test_degrade_agent_type_substitutes_known_types_on_degrade():
         assert _degrade_agent_type(agent_type, _AGENT_TYPE_HOST_DEGRADED) == "general-purpose"
 
 
-def test_degrade_agent_type_leaves_unregistered_type_unchanged():
+def test_degrade_agent_type_leaves_unregistered_type_unchanged() -> None:
     assert (
         _degrade_agent_type("coordinator:workflow-maker", _AGENT_TYPE_HOST_DEGRADED)
         == "coordinator:workflow-maker"
     )
 
 
-def test_compose_script_leaves_agent_types_untouched_absent_agent_type_host():
+def test_compose_script_leaves_agent_types_untouched_absent_agent_type_host() -> None:
     waves = _one_wave_fixture()
     script = compose_script(waves, name="wf", description="one wave", **REVIEW_KW)
 
@@ -146,7 +147,7 @@ def test_compose_script_leaves_agent_types_untouched_absent_agent_type_host():
     assert "general-purpose" not in script
 
 
-def test_compose_script_degrades_every_emitted_agent_type_on_host():
+def test_compose_script_degrades_every_emitted_agent_type_on_host() -> None:
     waves = _one_wave_fixture()
     script = compose_script(
         waves, name="wf", description="one wave", agent_type_host=_AGENT_TYPE_HOST_DEGRADED, **REVIEW_KW
@@ -159,7 +160,7 @@ def test_compose_script_degrades_every_emitted_agent_type_on_host():
     assert "Review wave" in script and "acting as the" in script
 
 
-def test_compose_script_degraded_narrates_the_loss():
+def test_compose_script_degraded_narrates_the_loss() -> None:
     waves = _one_wave_fixture()
     script = compose_script(
         waves, name="wf", description="one wave", agent_type_host=_AGENT_TYPE_HOST_DEGRADED, **REVIEW_KW
@@ -169,14 +170,14 @@ def test_compose_script_degraded_narrates_the_loss():
     assert "general-purpose" in script
 
 
-def test_compose_script_not_degraded_emits_no_narration():
+def test_compose_script_not_degraded_emits_no_narration() -> None:
     waves = _one_wave_fixture()
     script = compose_script(waves, name="wf", description="one wave", **REVIEW_KW)
 
     assert "Agent-type host degradation" not in script
 
 
-def test_compose_script_degrade_never_touches_model_literal():
+def test_compose_script_degrade_never_touches_model_literal() -> None:
     waves = _one_wave_fixture()
     baseline = compose_script(waves, name="wf", description="one wave", **REVIEW_KW)
     degraded = compose_script(

@@ -23,23 +23,24 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops import install_health_run
+from pathlib import Path
 
 
 @pytest.fixture
-def settings_bin(tmp_path, monkeypatch):
+def settings_bin(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     home = tmp_path / "settings-home"
     (home / "bin").mkdir(parents=True)
     monkeypatch.setattr(install_health_run, "settings_home", lambda: home)
     return home / "bin"
 
 
-def test_the_leg_is_registered():
+def test_the_leg_is_registered() -> None:
     names = [name for name, _ in install_health_run._NATIVE_LEGS]
     assert "check-launch-chain-intact" in names
     assert names[-1] == "check-launch-chain-intact"
 
 
-def test_a_healthy_trampoline_passes(settings_bin):
+def test_a_healthy_trampoline_passes(settings_bin) -> None:
     (settings_bin / "claude-author").write_text(
         '#!/usr/bin/env python3\nos.execv(claude, ["exec claude --plugin-dir x"])\n',
         encoding="utf-8",
@@ -47,7 +48,7 @@ def test_a_healthy_trampoline_passes(settings_bin):
     assert install_health_run.check_launch_chain_intact("p", "m") == 0
 
 
-def test_a_native_image_wearing_the_name_fails(settings_bin, capsys):
+def test_a_native_image_wearing_the_name_fails(settings_bin, capsys: pytest.CaptureFixture[str]) -> None:
     (settings_bin / "claude-author").write_bytes(b"\xcf\xfa\xed\xfe\x0c\x00\x00\x01 a door image")
 
     assert install_health_run.check_launch_chain_intact("p", "m") == 1
@@ -63,19 +64,19 @@ def test_a_native_image_wearing_the_name_fails(settings_bin, capsys):
     "magic",
     [b"\x7fELF\x02\x01\x01", b"MZ\x90\x00", b"\xca\xfe\xba\xbe\x00\x00"],
 )
-def test_every_native_image_format_is_caught(settings_bin, magic):
+def test_every_native_image_format_is_caught(settings_bin, magic) -> None:
     (settings_bin / "claude-author").write_bytes(magic + b" not a trampoline")
     assert install_health_run.check_launch_chain_intact("p", "m") == 1
 
 
-def test_a_readable_launcher_that_never_execs_fails(settings_bin):
+def test_a_readable_launcher_that_never_execs_fails(settings_bin) -> None:
     (settings_bin / "claude-author").write_text(
         "#!/usr/bin/env python3\nprint('hello')\n", encoding="utf-8"
     )
     assert install_health_run.check_launch_chain_intact("p", "m") == 1
 
 
-def test_the_generated_forwarder_is_judged_by_the_wrapper_it_execs(settings_bin, tmp_path):
+def test_the_generated_forwarder_is_judged_by_the_wrapper_it_execs(settings_bin, tmp_path: Path) -> None:
     (settings_bin / "claude-author").write_text(
         "from _resolve_claude_klabauter import exec_cli\nexec_cli(\"claude-author.py\")\n",
         encoding="utf-8",
@@ -91,11 +92,11 @@ def test_the_generated_forwarder_is_judged_by_the_wrapper_it_execs(settings_bin,
     assert install_health_run.check_launch_chain_intact("p", engine) == 1
 
 
-def test_an_absent_launcher_is_not_a_failure(settings_bin):
+def test_an_absent_launcher_is_not_a_failure(settings_bin) -> None:
     assert install_health_run.check_launch_chain_intact("p", "m") == 0
 
 
-def test_a_passing_leg_says_nothing(settings_bin, capsys):
+def test_a_passing_leg_says_nothing(settings_bin, capsys: pytest.CaptureFixture[str]) -> None:
     assert install_health_run.check_launch_chain_intact("p", "m") == 0
     (settings_bin / "claude-author").write_text("exec claude --plugin-dir x\n", encoding="utf-8")
     assert install_health_run.check_launch_chain_intact("p", "m") == 0

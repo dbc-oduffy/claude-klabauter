@@ -15,7 +15,7 @@ from coordinator_core.ops.workflow_fire import headless_agents
 
 
 @pytest.fixture
-def denied_ledger(monkeypatch, tmp_path):
+def denied_ledger(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     """Real admission_post.post against a holder, with the ledger write refused."""
     (tmp_path / ".git").mkdir(exist_ok=True)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "01a1b63b-acfb-78d1-86f2-a74ad6ca4572")
@@ -49,7 +49,7 @@ def denied_ledger(monkeypatch, tmp_path):
     return tmp_path
 
 
-def test_post_returns_undelivered_when_ledger_dir_cannot_be_created(monkeypatch, tmp_path):
+def test_post_returns_undelivered_when_ledger_dir_cannot_be_created(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(admission_post.nomination, "fleet_holder", lambda *a: {"session_id": "holder"})
     monkeypatch.setattr(admission_post, "local_box_id", lambda *_a: "box")
 
@@ -61,13 +61,13 @@ def test_post_returns_undelivered_when_ledger_dir_cannot_be_created(monkeypatch,
     assert posted["delivered"] is False and posted["reason"].startswith("write_failed:PermissionError")
 
 
-def test_post_still_refuses_with_no_holder(monkeypatch, tmp_path):
+def test_post_still_refuses_with_no_holder(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(admission_post.nomination, "fleet_holder", lambda *a: None)
     monkeypatch.setattr(admission_post.nomination, "box_holder", lambda *a: None)
     assert admission_post.post("START", "sid", directory=tmp_path)["reason"] == "no_box_holder"
 
 
-def test_codex_start_denied_write_runs_child_and_records(denied_ledger, capsys):
+def test_codex_start_denied_write_runs_child_and_records(denied_ledger, capsys: pytest.CaptureFixture[str]) -> None:
     tmp_path = denied_ledger
     assert agents.run_agent("x", {}, repo_root=tmp_path, artifact_dir=tmp_path / "agent") == '{"ok":true}'
     record = json.loads((tmp_path / "agent" / "admission-undelivered.json").read_text(encoding="utf-8"))
@@ -75,14 +75,14 @@ def test_codex_start_denied_write_runs_child_and_records(denied_ledger, capsys):
     assert "undelivered" in capsys.readouterr().err
 
 
-def test_codex_slot_refusal_stays_fatal(denied_ledger, monkeypatch):
+def test_codex_slot_refusal_stays_fatal(denied_ledger, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(agents.capacity, "admit_before_spawn",
                         lambda key, peak, **_kw: SimpleNamespace(admitted=False, peak_gib=peak, reason="full"))
     with pytest.raises(agents.AgentFailed, match="memory admission refused"):
         agents.run_agent("x", {}, repo_root=denied_ledger, artifact_dir=denied_ledger / "agent")
 
 
-def test_headless_start_site_is_advisory(monkeypatch, tmp_path):
+def test_headless_start_site_is_advisory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     seen = []
     monkeypatch.setattr(headless_agents.admission_post, "record_undelivered",
                         lambda d, posted: seen.append((d, posted)))

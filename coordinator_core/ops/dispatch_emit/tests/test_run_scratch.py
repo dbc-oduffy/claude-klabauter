@@ -4,12 +4,13 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from coordinator_core.ops.dispatch_emit import run_scratch as rs
+from pathlib import Path
 
 RUN = "run-abc"
 NOW = datetime(2026, 11, 9, 12, 0, 0, tzinfo=timezone.utc)
 
 
-def test_record_paths_appends_deduped_normalised(tmp_path):
+def test_record_paths_appends_deduped_normalised(tmp_path: Path) -> None:
     rs.record_paths(tmp_path, RUN, ["scratch\\land-x", "scratch/probe-y/"])
     rs.record_paths(tmp_path, RUN, ["scratch/land-x"])
     ledger = rs.read_ledger(tmp_path, RUN)
@@ -33,7 +34,7 @@ def test_record_paths_appends_deduped_normalised(tmp_path):
         "",
     ],
 )
-def test_record_paths_refuses_and_writes_nothing(tmp_path, bad):
+def test_record_paths_refuses_and_writes_nothing(tmp_path: Path, bad) -> None:
     with pytest.raises(ValueError):
         rs.record_paths(tmp_path, RUN, ["scratch/ok", bad])
     assert rs.read_ledger(tmp_path, RUN)["paths"] == []
@@ -43,7 +44,7 @@ SHARE = ".coordinator-local/subagent-share"
 
 
 @pytest.mark.parametrize("name", ["p-1.review-prep.md", "p-1.review-prep.lock"])
-def test_review_prep_sidecar_and_lock_admitted(tmp_path, name):
+def test_review_prep_sidecar_and_lock_admitted(tmp_path: Path, name) -> None:
     rel = f"{SHARE}/sess-1/{name}"
     assert rs.record_paths(tmp_path, RUN, [rel]) == [rel]
     assert rs.read_ledger(tmp_path, RUN)["paths"] == [rel]
@@ -62,17 +63,17 @@ def test_review_prep_sidecar_and_lock_admitted(tmp_path, name):
         ".coordinator-local/p.review-prep.md",
     ],
 )
-def test_other_coordinator_local_paths_still_refused(tmp_path, bad):
+def test_other_coordinator_local_paths_still_refused(tmp_path: Path, bad) -> None:
     with pytest.raises(ValueError):
         rs.record_paths(tmp_path, RUN, [bad])
     assert rs.read_ledger(tmp_path, RUN)["paths"] == []
 
 
-def test_read_ledger_empty_when_absent(tmp_path):
+def test_read_ledger_empty_when_absent(tmp_path: Path) -> None:
     assert rs.read_ledger(tmp_path, RUN) == {"paths": [], "keeps": []}
 
 
-def test_declare_keep_records_ledger_and_index(tmp_path):
+def test_declare_keep_records_ledger_and_index(tmp_path: Path) -> None:
     entry = rs.declare_keep(tmp_path, RUN, "scratch/probe-keep", "repro for bug", 2, now=NOW)
     assert entry["kept_at"] == "2026-11-09T12:00:00Z"
     ledger = rs.read_ledger(tmp_path, RUN)
@@ -86,7 +87,7 @@ def test_declare_keep_records_ledger_and_index(tmp_path):
     }
 
 
-def test_declare_keep_upserts(tmp_path):
+def test_declare_keep_upserts(tmp_path: Path) -> None:
     rs.declare_keep(tmp_path, RUN, "scratch/k", "one", 1, now=NOW)
     rs.declare_keep(tmp_path, RUN, "scratch/k", "two", 3, now=NOW)
     assert [k["purpose"] for k in rs.read_ledger(tmp_path, RUN)["keeps"]] == ["two"]
@@ -97,20 +98,20 @@ def test_declare_keep_upserts(tmp_path):
     "purpose,ttl",
     [("", 1), ("   ", 1), (None, 1), ("p", 0), ("p", -1), ("p", True), ("p", None), ("p", rs.MAX_KEEP_TTL_HOURS + 1)],
 )
-def test_declare_keep_refusals_write_nothing(tmp_path, purpose, ttl):
+def test_declare_keep_refusals_write_nothing(tmp_path: Path, purpose, ttl) -> None:
     with pytest.raises(ValueError):
         rs.declare_keep(tmp_path, RUN, "scratch/k", purpose, ttl, now=NOW)
     assert rs.read_ledger(tmp_path, RUN) == {"paths": [], "keeps": []}
     assert rs.read_keep_index(tmp_path) == {}
 
 
-def test_declare_keep_accepts_cap_and_refuses_bad_path(tmp_path):
+def test_declare_keep_accepts_cap_and_refuses_bad_path(tmp_path: Path) -> None:
     rs.declare_keep(tmp_path, RUN, "scratch/k", "p", rs.MAX_KEEP_TTL_HOURS, now=NOW)
     with pytest.raises(ValueError):
         rs.declare_keep(tmp_path, RUN, "scratch/stage-readers/k", "p", 1, now=NOW)
 
 
-def test_keep_index_expired_boundary(tmp_path):
+def test_keep_index_expired_boundary(tmp_path: Path) -> None:
     rs.declare_keep(tmp_path, RUN, "scratch/short", "p", 1, now=NOW)
     rs.declare_keep(tmp_path, "run-two", "scratch/long", "p", 10, now=NOW)
     assert rs.keep_index_expired(tmp_path, NOW + timedelta(minutes=59)) == []
@@ -118,13 +119,13 @@ def test_keep_index_expired_boundary(tmp_path):
     assert rs.keep_index_expired(tmp_path, NOW + timedelta(hours=11)) == ["scratch/long", "scratch/short"]
 
 
-def test_keep_index_expired_empty_and_corrupt(tmp_path):
+def test_keep_index_expired_empty_and_corrupt(tmp_path: Path) -> None:
     assert rs.keep_index_expired(tmp_path, NOW) == []
     (tmp_path / "scratch").mkdir()
     (tmp_path / rs.KEEP_INDEX_REL).write_text("not json", encoding="utf-8")
     assert rs.keep_index_expired(tmp_path, NOW) == []
 
 
-def test_unsafe_run_id_refused(tmp_path):
+def test_unsafe_run_id_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         rs.record_paths(tmp_path, "../evil", ["scratch/x"])

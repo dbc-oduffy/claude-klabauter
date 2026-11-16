@@ -22,6 +22,10 @@ from coordinator_core.ops.plan_status_transition import (
 )
 from coordinator_core.testing import symlink_capability
 from coordinator_core.win_portability import no_console_creationflags
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 # Golden-oracle cases pin `main`'s real HEAD-commit and porcelain-status reads
 # against an actual git repo — the CLI's stdout/exit-code contract was captured
@@ -121,7 +125,7 @@ def _write(tmp_path: Path, name: str, body: str) -> Path:
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("status", ["draft", "reviewed", "approved", "executing"])
-def test_flippable_status_flips_to_implemented(tmp_path, capsys, status):
+def test_flippable_status_flips_to_implemented(tmp_path: Path, capsys: pytest.CaptureFixture[str], status) -> None:
     p = _write(tmp_path, "p.md", f"---\ntitle: T\nstatus: {status}\nowner: x\n---\n\nBody.\n")
     rc = main(["stamp-implemented", "--plan", str(p)])
     assert rc == 0
@@ -132,7 +136,7 @@ def test_flippable_status_flips_to_implemented(tmp_path, capsys, status):
     )
 
 
-def test_double_quoted_status_value_is_unquoted_before_matrix_check(tmp_path):
+def test_double_quoted_status_value_is_unquoted_before_matrix_check(tmp_path: Path) -> None:
     # A-F3 parity: node oracle's readFmField (schema.js) is quote-aware;
     # coordinator_core.frontmatter.primitives.read_fm_field deliberately is
     # not (callers unquote locally, per memo_transition.py convention) --
@@ -146,7 +150,7 @@ def test_double_quoted_status_value_is_unquoted_before_matrix_check(tmp_path):
     assert 'status: implemented' in p.read_text(encoding="utf-8")
 
 
-def test_status_with_trailing_inline_comment_flips_to_implemented(tmp_path):
+def test_status_with_trailing_inline_comment_flips_to_implemented(tmp_path: Path) -> None:
     # 2026-07-21 regression: state/improvement-queue/2026-07-21-stamp-plan-
     # implemented-fails-on-a-yaml-l-d99ba60c03cb.yaml -- `status: executing  #
     # authorized ...` is YAML-legal (a `#` preceded by whitespace starts a
@@ -168,14 +172,14 @@ def test_status_with_trailing_inline_comment_flips_to_implemented(tmp_path):
     )
 
 
-def test_status_without_comment_is_unaffected(tmp_path):
+def test_status_without_comment_is_unaffected(tmp_path: Path) -> None:
     p = _write(tmp_path, "p.md", "---\nstatus: executing\n---\n\nBody.\n")
     rc = main(["stamp-implemented", "--plan", str(p)])
     assert rc == 0
     assert p.read_text(encoding="utf-8") == "---\nstatus: implemented\n---\n\nBody.\n"
 
 
-def test_status_with_tab_preceded_comment_flips_to_implemented(tmp_path):
+def test_status_with_tab_preceded_comment_flips_to_implemented(tmp_path: Path) -> None:
     # _TRAILING_COMMENT_RE's character class is `[ \t]` -- a tab-preceded `#`
     # is also a comment opener, not just a space-preceded one. Every other
     # comment-strip test in this file uses a space; this pins the tab branch.
@@ -188,7 +192,7 @@ def test_status_with_tab_preceded_comment_flips_to_implemented(tmp_path):
     assert p.read_text(encoding="utf-8") == "---\nstatus: implemented\t# note\n---\n\nBody.\n"
 
 
-def test_comment_only_status_value_reports_no_status_field(tmp_path, capsys):
+def test_comment_only_status_value_reports_no_status_field(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # `status: #note` -- a comment with no real value before it. YAML parses
     # this as an absent/null status. read_fm_field's own `\s*` already
     # consumed the whitespace before the `#`, so the raw captured text starts
@@ -204,7 +208,7 @@ def test_comment_only_status_value_reports_no_status_field(tmp_path, capsys):
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_quoted_status_with_trailing_comment_reports_clear_diagnostic(tmp_path, capsys):
+def test_quoted_status_with_trailing_comment_reports_clear_diagnostic(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # `status: "draft"  # note` -- a quoted value followed by an inline
     # comment. The comment-strip is a no-op on anything that looks quoted
     # (defers to unquote_yaml_scalar), but unquote_yaml_scalar also fails to
@@ -221,7 +225,7 @@ def test_quoted_status_with_trailing_comment_reports_clear_diagnostic(tmp_path, 
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_quoted_status_with_hash_inside_quotes_is_not_comment_stripped(tmp_path, capsys):
+def test_quoted_status_with_hash_inside_quotes_is_not_comment_stripped(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # Quotes protect everything inside, including a literal '#' -- the
     # comment-strip must not fire inside a quoted scalar. No flippable status
     # value contains a literal '#' (the matrix is a closed set of bare words),
@@ -239,7 +243,7 @@ def test_quoted_status_with_hash_inside_quotes_is_not_comment_stripped(tmp_path,
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_terminal_status_with_trailing_comment_is_still_a_no_op(tmp_path, capsys):
+def test_terminal_status_with_trailing_comment_is_still_a_no_op(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     original = "---\nstatus: implemented  # note\n---\n\nBody.\n"
     p = _write(tmp_path, "p.md", original)
     rc = main(["stamp-implemented", "--plan", str(p)])
@@ -249,7 +253,7 @@ def test_terminal_status_with_trailing_comment_is_still_a_no_op(tmp_path, capsys
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_flip_preserves_preamble_and_body_verbatim(tmp_path):
+def test_flip_preserves_preamble_and_body_verbatim(tmp_path: Path) -> None:
     p = _write(
         tmp_path, "p.md",
         "\n<!-- lead comment -->\n---\nstatus: draft\n---\n\nBody line 1.\nBody line 2.\n",
@@ -261,7 +265,7 @@ def test_flip_preserves_preamble_and_body_verbatim(tmp_path):
     )
 
 
-def test_crlf_normalized_to_lf_before_rewrite(tmp_path):
+def test_crlf_normalized_to_lf_before_rewrite(tmp_path: Path) -> None:
     _ensure_git_repo(tmp_path)
     p = tmp_path / "p.md"
     p.write_bytes(b"---\r\nstatus: draft\r\n---\r\n\r\nBody.\r\n")
@@ -276,7 +280,7 @@ def test_crlf_normalized_to_lf_before_rewrite(tmp_path):
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("status", ["implemented", "superseded", "abandoned", "deferred"])
-def test_terminal_status_is_no_op(tmp_path, capsys, status):
+def test_terminal_status_is_no_op(tmp_path: Path, capsys: pytest.CaptureFixture[str], status) -> None:
     original = f"---\nstatus: {status}\n---\n\nBody.\n"
     p = _write(tmp_path, "p.md", original)
     rc = main(["stamp-implemented", "--plan", str(p)])
@@ -290,46 +294,46 @@ def test_terminal_status_is_no_op(tmp_path, capsys, status):
 # stamp-implemented — error cases (negative corpus)
 # ---------------------------------------------------------------------------
 
-def test_missing_verb(capsys):
+def test_missing_verb(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main([])
     assert rc == 1
     assert "unknown verb: (none)" in capsys.readouterr().err
 
 
-def test_unknown_verb(capsys):
+def test_unknown_verb(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["bogus-verb"])
     assert rc == 1
     assert "unknown verb: bogus-verb" in capsys.readouterr().err
 
 
-def test_missing_plan_flag(capsys):
+def test_missing_plan_flag(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["stamp-implemented"])
     assert rc == 1
     assert "requires --plan <path>" in capsys.readouterr().err
 
 
-def test_file_not_found(tmp_path, capsys):
+def test_file_not_found(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     missing = tmp_path / "nope.md"
     rc = main(["stamp-implemented", "--plan", str(missing)])
     assert rc == 1
     assert "plan not found" in capsys.readouterr().err
 
 
-def test_no_frontmatter(tmp_path, capsys):
+def test_no_frontmatter(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "p.md", "Just text, no frontmatter.\n")
     rc = main(["stamp-implemented", "--plan", str(p)])
     assert rc == 1
     assert "no parseable YAML frontmatter" in capsys.readouterr().err
 
 
-def test_no_status_field(tmp_path, capsys):
+def test_no_status_field(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "p.md", "---\ntitle: no status\n---\n\nBody.\n")
     rc = main(["stamp-implemented", "--plan", str(p)])
     assert rc == 1
     assert 'no "status" field found' in capsys.readouterr().err
 
 
-def test_unexpected_status_value(tmp_path, capsys):
+def test_unexpected_status_value(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "p.md", "---\nstatus: bogus\n---\n\nBody.\n")
     rc = main(["stamp-implemented", "--plan", str(p)])
     assert rc == 1
@@ -338,14 +342,14 @@ def test_unexpected_status_value(tmp_path, capsys):
     assert "draft, reviewed, approved, executing" in err
 
 
-def test_unknown_flag(tmp_path, capsys):
+def test_unknown_flag(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "p.md", "---\nstatus: draft\n---\n\nBody.\n")
     rc = main(["stamp-implemented", "--plan", str(p), "--bogus", "x"])
     assert rc == 1
     assert "unknown argument: --bogus" in capsys.readouterr().err
 
 
-def test_flag_missing_value(tmp_path, capsys):
+def test_flag_missing_value(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["stamp-implemented", "--plan"])
     assert rc == 1
     assert "flag requires a value: --plan" in capsys.readouterr().err
@@ -379,7 +383,7 @@ def _capture_cascade_key(monkeypatch):
 
     seen: list = []
 
-    def _fake_run_cascade(plan_path, deliverable_id, ship_sha=""):
+    def _fake_run_cascade(plan_path, deliverable_id, ship_sha: str = "") -> int:
         seen.append(deliverable_id)
         return 0
 
@@ -395,7 +399,7 @@ def _capture_cascade_key(monkeypatch):
         "deliverable_id: dlv-abc-123",     # bare — must be unaffected
     ],
 )
-def test_deliverable_id_reaches_cascade_unquoted(tmp_path, monkeypatch, fm_line):
+def test_deliverable_id_reaches_cascade_unquoted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fm_line) -> None:
     seen = _capture_cascade_key(monkeypatch)
     p = _write(
         tmp_path, "p.md",
@@ -408,7 +412,7 @@ def test_deliverable_id_reaches_cascade_unquoted(tmp_path, monkeypatch, fm_line)
     )
 
 
-def test_deliverable_id_quoting_style_does_not_change_the_join_key(tmp_path, monkeypatch):
+def test_deliverable_id_quoting_style_does_not_change_the_join_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """All three spellings must produce a byte-identical join key.
 
     Pinned as its own case because the defect was an ASYMMETRY between the two
@@ -429,7 +433,7 @@ def test_deliverable_id_quoting_style_does_not_change_the_join_key(tmp_path, mon
     assert len(set(keys)) == 1, f"quoting style leaked into the join key: {keys!r}"
 
 
-def test_deliverable_id_with_trailing_comment_reaches_cascade_clean(tmp_path, monkeypatch):
+def test_deliverable_id_with_trailing_comment_reaches_cascade_clean(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`read_fm_field_unquoted` comment-strips as well as unquotes -- the same
     treatment `status` already gets a few lines above the fixed call site."""
     seen = _capture_cascade_key(monkeypatch)
@@ -452,7 +456,7 @@ def test_deliverable_id_with_trailing_comment_reaches_cascade_clean(tmp_path, mo
 # fixed directory.
 # ---------------------------------------------------------------------------
 
-def test_in_containment_plan_path_flips_normally(tmp_path):
+def test_in_containment_plan_path_flips_normally(tmp_path: Path) -> None:
     p = _write(tmp_path, "p.md", "---\nstatus: draft\n---\n\nBody.\n")
     rc = main(["stamp-implemented", "--plan", str(p)])
     assert rc == 0
@@ -460,7 +464,7 @@ def test_in_containment_plan_path_flips_normally(tmp_path):
 
 
 @symlink_capability.requires_symlink_capability
-def test_out_of_containment_plan_path_is_refused(tmp_path, capsys):
+def test_out_of_containment_plan_path_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # `worktree` is a resolved git repo; `outside` is a SIBLING directory
     # (not nested under `worktree`). `--plan` names a SYMLINK that lives
     # inside `worktree` (so `_worktree_root`'s `git rev-parse
@@ -499,7 +503,7 @@ def test_out_of_containment_plan_path_is_refused(tmp_path, capsys):
 # only the commit is skipped, with a clear operator-facing diagnostic.
 # ---------------------------------------------------------------------------
 
-def test_untracked_plan_flips_on_disk_and_skips_commit(tmp_path, capsys):
+def test_untracked_plan_flips_on_disk_and_skips_commit(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # A repo WITH a HEAD (the ordinary initial-commit shape), but the plan
     # file itself was written directly to disk and never `git add`/committed
     # -- absent from HEAD. `commit_authored_content` would refuse this path;
@@ -532,7 +536,7 @@ def test_untracked_plan_flips_on_disk_and_skips_commit(tmp_path, capsys):
 # stamp-superseded (C2, docs/plans/2026-08-06-<this-plan>.md)
 # ---------------------------------------------------------------------------
 
-def test_stamp_superseded_happy_path(tmp_path, capsys):
+def test_stamp_superseded_happy_path(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "p.md", "---\ntitle: T\nstatus: draft\n---\n\nBody.\n")
     successor = _write(tmp_path, "successor.md", "---\ntitle: S\nstatus: draft\n---\n\nBody.\n")
     rc = main(["stamp-superseded", "--plan", str(p), "--by", str(successor)])
@@ -554,7 +558,7 @@ def test_stamp_superseded_happy_path(tmp_path, capsys):
     assert read_fm_field_unquoted(split.fm_text, "superseded_by") == str(successor)
 
 
-def test_stamp_superseded_missing_by_fails_loud(tmp_path, capsys):
+def test_stamp_superseded_missing_by_fails_loud(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "p.md", "---\nstatus: draft\n---\n\nBody.\n")
     rc = main(["stamp-superseded", "--plan", str(p)])
     assert rc == 1
@@ -562,7 +566,7 @@ def test_stamp_superseded_missing_by_fails_loud(tmp_path, capsys):
     assert p.read_text(encoding="utf-8") == "---\nstatus: draft\n---\n\nBody.\n"
 
 
-def test_stamp_superseded_by_nonexistent_plan_fails_loud(tmp_path, capsys):
+def test_stamp_superseded_by_nonexistent_plan_fails_loud(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "p.md", "---\nstatus: draft\n---\n\nBody.\n")
     missing_successor = tmp_path / "nope.md"
     rc = main(["stamp-superseded", "--plan", str(p), "--by", str(missing_successor)])
@@ -571,7 +575,7 @@ def test_stamp_superseded_by_nonexistent_plan_fails_loud(tmp_path, capsys):
     assert p.read_text(encoding="utf-8") == "---\nstatus: draft\n---\n\nBody.\n"
 
 
-def test_stamp_superseded_already_superseded_is_no_op(tmp_path, capsys):
+def test_stamp_superseded_already_superseded_is_no_op(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     original = "---\nstatus: superseded\nsuperseded_by: other.md\n---\n\nBody.\n"
     p = _write(tmp_path, "p.md", original)
     successor = _write(tmp_path, "successor.md", "---\nstatus: draft\n---\n\nBody.\n")
@@ -582,7 +586,7 @@ def test_stamp_superseded_already_superseded_is_no_op(tmp_path, capsys):
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_stamp_superseded_refuses_terminal_source_status(tmp_path, capsys):
+def test_stamp_superseded_refuses_terminal_source_status(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     original = "---\nstatus: implemented\n---\n\nBody.\n"
     p = _write(tmp_path, "p.md", original)
     successor = _write(tmp_path, "successor.md", "---\nstatus: draft\n---\n\nBody.\n")
@@ -616,7 +620,7 @@ _AC_RESOLVED_TABLE = (
 )
 
 
-def test_stamp_implemented_warns_on_open_ac_rows(tmp_path, capsys):
+def test_stamp_implemented_warns_on_open_ac_rows(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     body = f"---\nstatus: draft\n---\n\n{_AC_OPEN_TABLE}"
     p = _write(tmp_path, "p.md", body)
     rc = main(["stamp-implemented", "--plan", str(p)])
@@ -629,7 +633,7 @@ def test_stamp_implemented_warns_on_open_ac_rows(tmp_path, capsys):
     assert "AC-1" not in err.split("unticked")[1].split("\n")[0].replace("AC-2", "")
 
 
-def test_stamp_implemented_silent_when_ac_table_resolved(tmp_path, capsys):
+def test_stamp_implemented_silent_when_ac_table_resolved(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     body = f"---\nstatus: draft\n---\n\n{_AC_RESOLVED_TABLE}"
     p = _write(tmp_path, "p.md", body)
     rc = main(["stamp-implemented", "--plan", str(p)])
@@ -639,7 +643,7 @@ def test_stamp_implemented_silent_when_ac_table_resolved(tmp_path, capsys):
     assert "unticked" not in err
 
 
-def test_stamp_implemented_silent_when_no_ac_heading(tmp_path, capsys):
+def test_stamp_implemented_silent_when_no_ac_heading(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "p.md", "---\nstatus: draft\n---\n\nBody.\n")
     rc = main(["stamp-implemented", "--plan", str(p)])
     assert rc == 0
@@ -648,7 +652,7 @@ def test_stamp_implemented_silent_when_no_ac_heading(tmp_path, capsys):
     assert "unticked" not in err
 
 
-def test_stamp_implemented_silent_on_malformed_ac_table(tmp_path, capsys):
+def test_stamp_implemented_silent_on_malformed_ac_table(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     body = "---\nstatus: draft\n---\n\n## Acceptance Criteria\n\nJust prose, no table.\n"
     p = _write(tmp_path, "p.md", body)
     rc = main(["stamp-implemented", "--plan", str(p)])
@@ -658,7 +662,7 @@ def test_stamp_implemented_silent_on_malformed_ac_table(tmp_path, capsys):
     assert "unticked" not in err
 
 
-def test_stamp_implemented_ac_warning_never_changes_exit_code_or_write(tmp_path, capsys):
+def test_stamp_implemented_ac_warning_never_changes_exit_code_or_write(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     body = f"---\nstatus: draft\n---\n\n{_AC_OPEN_TABLE}"
     p = _write(tmp_path, "p.md", body)
     rc = main(["stamp-implemented", "--plan", str(p)])
@@ -670,7 +674,7 @@ def test_stamp_implemented_ac_warning_never_changes_exit_code_or_write(tmp_path,
     assert read_fm_field_unquoted(split.fm_text, "status") == "implemented"
 
 
-def test_stamp_implemented_no_ac_warning_on_terminal_no_op(tmp_path, capsys):
+def test_stamp_implemented_no_ac_warning_on_terminal_no_op(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     body = f"---\nstatus: implemented\n---\n\n{_AC_OPEN_TABLE}"
     p = _write(tmp_path, "p.md", body)
     rc = main(["stamp-implemented", "--plan", str(p)])
@@ -685,7 +689,7 @@ def test_stamp_implemented_no_ac_warning_on_terminal_no_op(tmp_path, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_stamp_implemented_rejects_by_flag(tmp_path, capsys):
+def test_stamp_implemented_rejects_by_flag(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     original = "---\nstatus: draft\n---\n\nBody.\n"
     p = _write(tmp_path, "p.md", original)
     rc = main(["stamp-implemented", "--plan", str(p), "--by", "some-session-id"])
@@ -695,7 +699,7 @@ def test_stamp_implemented_rejects_by_flag(tmp_path, capsys):
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_stamp_superseded_by_flag_still_works(tmp_path, capsys):
+def test_stamp_superseded_by_flag_still_works(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "p.md", "---\nstatus: draft\n---\n\nBody.\n")
     successor = _write(tmp_path, "successor.md", "---\nstatus: draft\n---\n\nBody.\n")
     rc = main(["stamp-superseded", "--plan", str(p), "--by", str(successor)])
@@ -711,7 +715,7 @@ def test_stamp_superseded_by_flag_still_works(tmp_path, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_override_reason_writes_canonical_fields(tmp_path, capsys, monkeypatch):
+def test_override_reason_writes_canonical_fields(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda *_a, **_k: "override-sid")
     body = f"---\nstatus: draft\n---\n\n{_AC_OPEN_TABLE}"
     p = _write(tmp_path, "p.md", body)
@@ -735,7 +739,7 @@ def test_override_reason_writes_canonical_fields(tmp_path, capsys, monkeypatch):
     assert "PM ratified partial close per memo X" in out
 
 
-def test_override_reason_still_refused_against_live_foreign_holder(tmp_path, capsys, monkeypatch):
+def test_override_reason_still_refused_against_live_foreign_holder(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     plan_body = (
         '---\ntitle: "Peer plan"\nstatus: approved\n'
         'deliverable_id: "dlv-override-peer-abc123"\n---\n\n## Body\n'
@@ -766,7 +770,7 @@ def test_override_reason_still_refused_against_live_foreign_holder(tmp_path, cap
     assert "status_override_by" not in text
 
 
-def test_override_reason_required_non_empty(tmp_path, capsys):
+def test_override_reason_required_non_empty(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     original = "---\nstatus: draft\n---\n\nBody.\n"
     p = _write(tmp_path, "p.md", original)
     rc = main(["stamp-implemented", "--plan", str(p), "--override-reason", "   "])
@@ -776,7 +780,7 @@ def test_override_reason_required_non_empty(tmp_path, capsys):
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_stamp_implemented_without_override_flag_unchanged(tmp_path, capsys):
+def test_stamp_implemented_without_override_flag_unchanged(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     body = f"---\nstatus: draft\n---\n\n{_AC_OPEN_TABLE}"
     p = _write(tmp_path, "p.md", body)
     rc = main(["stamp-implemented", "--plan", str(p)])
@@ -792,7 +796,7 @@ def test_stamp_implemented_without_override_flag_unchanged(tmp_path, capsys):
     assert read_fm_field_unquoted(split.fm_text, "status") == "implemented"
 
 
-def test_override_reason_ac_warning_still_fires(tmp_path, capsys):
+def test_override_reason_ac_warning_still_fires(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     body = f"---\nstatus: draft\n---\n\n{_AC_OPEN_TABLE}"
     p = _write(tmp_path, "p.md", body)
     rc = main(
@@ -806,7 +810,7 @@ def test_override_reason_ac_warning_still_fires(tmp_path, capsys):
     assert "AC-2" in err
 
 
-def test_stamp_superseded_rejects_override_reason_flag(tmp_path, capsys):
+def test_stamp_superseded_rejects_override_reason_flag(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "p.md", "---\nstatus: draft\n---\n\nBody.\n")
     successor = _write(tmp_path, "successor.md", "---\nstatus: draft\n---\n\nBody.\n")
     rc = main(
@@ -849,7 +853,7 @@ def test_stamp_superseded_rejects_override_reason_flag(tmp_path, capsys):
 # it from production.
 # ---------------------------------------------------------------------------
 
-def _load_doc_new_cli():
+def _load_doc_new_cli() -> ModuleType:
     """Load `coordinator/bin/coordinator-doc-new.py` as a module by file path --
     it is an extensionless polyglot entrypoint, not a `.py` module, so it
     cannot be imported normally. Mirrors the load idiom in
@@ -873,7 +877,7 @@ def _load_doc_new_cli():
 
 
 @pytest.mark.real_home
-def test_stamp_implemented_closes_cited_sizing_through_production_caller(tmp_path, capsys):
+def test_stamp_implemented_closes_cited_sizing_through_production_caller(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Flip a plan through `_stamp_implemented`'s own production call to
     `_run_cascade` (never a hand-built handler-dict) and assert the sizing it
     cites reaches `status: shipped` with its `plan` FK written -- the same
@@ -966,7 +970,7 @@ def test_stamp_implemented_closes_cited_sizing_through_production_caller(tmp_pat
     assert after["plan"] == plan_relpath
 
 
-def test_no_head_plan_flips_on_disk_and_skips_commit(tmp_path, capsys):
+def test_no_head_plan_flips_on_disk_and_skips_commit(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # A git repo with ZERO commits -- HEAD does not resolve at all. Distinct
     # from the untracked-but-HEAD-exists case above: `commit_authored_content`
     # would hit `git rev-parse HEAD` failure ("ambiguous argument 'HEAD'")
@@ -1002,7 +1006,7 @@ def test_no_head_plan_flips_on_disk_and_skips_commit(tmp_path, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_ac1_plan_trigger_never_stamps_own_flip_commit_as_shipped_in_e2e(tmp_path, capsys, monkeypatch):
+def test_ac1_plan_trigger_never_stamps_own_flip_commit_as_shipped_in_e2e(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     """AC1, end-to-end: a governing handoff's `shipped_in` must never resolve
     to the plan's own flip commit (`_commit_plan_flip`'s write, made
     immediately before the cascade fires) -- it must come from the handoff's
@@ -1092,7 +1096,7 @@ def test_ac1_plan_trigger_never_stamps_own_flip_commit_as_shipped_in_e2e(tmp_pat
     assert shipped_in == feature_sha[:8]
 
 
-def test_ac3_plan_trigger_no_scope_derived_evidence_falls_back_to_the_stamp_commit_e2e(tmp_path, capsys):
+def test_ac3_plan_trigger_no_scope_derived_evidence_falls_back_to_the_stamp_commit_e2e(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """When the governing handoff's own `scope:` resolves no commit, the plan's own
     `implemented` stamp commit lands as `shipped_in` (kind ship-commit)."""
     deliverable_id = "dlv-ac3-e2e-000000"
@@ -1167,7 +1171,7 @@ _CLOSED_SPINE_FENCE = (
 )
 
 
-def test_stamp_reopened_happy_path(tmp_path, capsys, monkeypatch):
+def test_stamp_reopened_happy_path(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("coordinator_core.session.core.resolve_session_id", lambda *_a, **_k: "reopen-sid")
     body = f"---\ntitle: T\nstatus: implemented\n---\n\n{_OPEN_SPINE_FENCE}Body.\n"
     p = _write(tmp_path, "p.md", body)
@@ -1186,7 +1190,7 @@ def test_stamp_reopened_happy_path(tmp_path, capsys, monkeypatch):
     assert read_fm_field_unquoted(split.fm_text, "reopened_at") is not None
 
 
-def test_stamp_reopened_refuses_without_open_spine_row(tmp_path, capsys):
+def test_stamp_reopened_refuses_without_open_spine_row(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     original = f"---\ntitle: T\nstatus: implemented\n---\n\n{_CLOSED_SPINE_FENCE}Body.\n"
     p = _write(tmp_path, "p.md", original)
     rc = main(["stamp-reopened", "--plan", str(p), "--reason", "caller thinks it's wrong"])
@@ -1196,7 +1200,7 @@ def test_stamp_reopened_refuses_without_open_spine_row(tmp_path, capsys):
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_stamp_reopened_refuses_when_no_spine_fence_at_all(tmp_path, capsys):
+def test_stamp_reopened_refuses_when_no_spine_fence_at_all(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     original = "---\ntitle: T\nstatus: implemented\n---\n\nBody.\n"
     p = _write(tmp_path, "p.md", original)
     rc = main(["stamp-reopened", "--plan", str(p), "--reason", "caller thinks it's wrong"])
@@ -1206,7 +1210,7 @@ def test_stamp_reopened_refuses_when_no_spine_fence_at_all(tmp_path, capsys):
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_stamp_reopened_refuses_non_implemented_status(tmp_path, capsys):
+def test_stamp_reopened_refuses_non_implemented_status(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     original = f"---\ntitle: T\nstatus: draft\n---\n\n{_OPEN_SPINE_FENCE}Body.\n"
     p = _write(tmp_path, "p.md", original)
     rc = main(["stamp-reopened", "--plan", str(p), "--reason", "not implemented anyway"])
@@ -1216,7 +1220,7 @@ def test_stamp_reopened_refuses_non_implemented_status(tmp_path, capsys):
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_stamp_reopened_requires_reason(tmp_path, capsys):
+def test_stamp_reopened_requires_reason(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     original = f"---\ntitle: T\nstatus: implemented\n---\n\n{_OPEN_SPINE_FENCE}Body.\n"
     p = _write(tmp_path, "p.md", original)
     rc = main(["stamp-reopened", "--plan", str(p)])
@@ -1225,7 +1229,7 @@ def test_stamp_reopened_requires_reason(tmp_path, capsys):
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_stamp_reopened_rejects_blank_reason(tmp_path, capsys):
+def test_stamp_reopened_rejects_blank_reason(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     original = f"---\ntitle: T\nstatus: implemented\n---\n\n{_OPEN_SPINE_FENCE}Body.\n"
     p = _write(tmp_path, "p.md", original)
     rc = main(["stamp-reopened", "--plan", str(p), "--reason", "   "])
@@ -1234,7 +1238,7 @@ def test_stamp_reopened_rejects_blank_reason(tmp_path, capsys):
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_stamp_reopened_reports_cascade_inconsistency(tmp_path, capsys):
+def test_stamp_reopened_reports_cascade_inconsistency(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     deliverable_id = "dlv-reopen-cascade-000001"
     (tmp_path / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
     (tmp_path / "docs" / "plans").mkdir(parents=True, exist_ok=True)
@@ -1268,7 +1272,7 @@ def test_stamp_reopened_reports_cascade_inconsistency(tmp_path, capsys):
     assert "deployment_state: ready_to_fire" in handoff_text
 
 
-def test_stamp_implemented_rejects_reason_flag(tmp_path, capsys):
+def test_stamp_implemented_rejects_reason_flag(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     original = "---\nstatus: draft\n---\n\nBody.\n"
     p = _write(tmp_path, "p.md", original)
     rc = main(["stamp-implemented", "--plan", str(p), "--reason", "nope"])
@@ -1277,7 +1281,7 @@ def test_stamp_implemented_rejects_reason_flag(tmp_path, capsys):
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_stamp_superseded_rejects_reason_flag(tmp_path, capsys):
+def test_stamp_superseded_rejects_reason_flag(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "p.md", "---\nstatus: draft\n---\n\nBody.\n")
     successor = _write(tmp_path, "successor.md", "---\nstatus: draft\n---\n\nBody.\n")
     rc = main(["stamp-superseded", "--plan", str(p), "--by", str(successor), "--reason", "nope"])
@@ -1285,14 +1289,14 @@ def test_stamp_superseded_rejects_reason_flag(tmp_path, capsys):
     assert "does not accept --reason" in capsys.readouterr().err
 
 
-def test_stamp_reopened_rejects_by_flag(tmp_path, capsys):
+def test_stamp_reopened_rejects_by_flag(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "p.md", f"---\nstatus: implemented\n---\n\n{_OPEN_SPINE_FENCE}Body.\n")
     rc = main(["stamp-reopened", "--plan", str(p), "--reason", "x", "--by", "some-plan.md"])
     assert rc == 1
     assert "does not accept --by" in capsys.readouterr().err
 
 
-def test_stamp_reopened_rejects_override_reason_flag(tmp_path, capsys):
+def test_stamp_reopened_rejects_override_reason_flag(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "p.md", f"---\nstatus: implemented\n---\n\n{_OPEN_SPINE_FENCE}Body.\n")
     rc = main(
         ["stamp-reopened", "--plan", str(p), "--reason", "x", "--override-reason", "y"]
@@ -1301,7 +1305,7 @@ def test_stamp_reopened_rejects_override_reason_flag(tmp_path, capsys):
     assert "does not accept --override-reason" in capsys.readouterr().err
 
 
-def test_unknown_verb_message_lists_stamp_reopened(capsys):
+def test_unknown_verb_message_lists_stamp_reopened(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["bogus-verb"])
     assert rc == 1
     assert "stamp-reopened" in capsys.readouterr().err
@@ -1312,7 +1316,7 @@ def test_unknown_verb_message_lists_stamp_reopened(capsys):
 # the-rungs-get-writers.md, AC13-14)
 # ---------------------------------------------------------------------------
 
-def test_stamp_review_verified_happy_path(tmp_path, capsys):
+def test_stamp_review_verified_happy_path(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     original = "---\ntitle: T\nstatus: implemented\n---\n\nBody.\n"
     p = _write(tmp_path, "p.md", original)
     findings = "state/review-trail/findings/2026-08-20-p-review.md"
@@ -1334,7 +1338,7 @@ def test_stamp_review_verified_happy_path(tmp_path, capsys):
     assert text.index("status:") < by_idx < findings_idx < at_idx
 
 
-def test_stamp_review_verified_rerun_same_findings_is_byte_identical_noop(tmp_path, capsys):
+def test_stamp_review_verified_rerun_same_findings_is_byte_identical_noop(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     original = "---\nstatus: implemented\n---\n\nBody.\n"
     p = _write(tmp_path, "p.md", original)
     findings = "state/review-trail/findings/2026-08-20-p-review.md"
@@ -1350,7 +1354,7 @@ def test_stamp_review_verified_rerun_same_findings_is_byte_identical_noop(tmp_pa
     assert p.read_text(encoding="utf-8") == first_text
 
 
-def test_stamp_review_verified_second_review_new_findings_writes(tmp_path, capsys):
+def test_stamp_review_verified_second_review_new_findings_writes(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     original = "---\nstatus: implemented\n---\n\nBody.\n"
     p = _write(tmp_path, "p.md", original)
     first_findings = "state/review-trail/findings/2026-08-20-p-review.md"
@@ -1371,7 +1375,7 @@ def test_stamp_review_verified_second_review_new_findings_writes(tmp_path, capsy
     assert read_fm_field_unquoted(split.fm_text, "review_verified_findings") == second_findings
 
 
-def test_stamp_review_verified_refuses_non_implemented_source(tmp_path, capsys):
+def test_stamp_review_verified_refuses_non_implemented_source(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     original = "---\nstatus: draft\n---\n\nBody.\n"
     p = _write(tmp_path, "p.md", original)
     rc = main(["stamp-review-verified", "--plan", str(p), "--findings", "state/review-trail/findings/x.md"])
@@ -1381,7 +1385,7 @@ def test_stamp_review_verified_refuses_non_implemented_source(tmp_path, capsys):
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_stamp_review_verified_missing_findings_fails_loud(tmp_path, capsys):
+def test_stamp_review_verified_missing_findings_fails_loud(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     original = "---\nstatus: implemented\n---\n\nBody.\n"
     p = _write(tmp_path, "p.md", original)
     rc = main(["stamp-review-verified", "--plan", str(p)])
@@ -1390,13 +1394,13 @@ def test_stamp_review_verified_missing_findings_fails_loud(tmp_path, capsys):
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_stamp_review_verified_missing_plan_fails_loud(capsys):
+def test_stamp_review_verified_missing_plan_fails_loud(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["stamp-review-verified", "--findings", "state/review-trail/findings/x.md"])
     assert rc == 1
     assert "requires --plan" in capsys.readouterr().err
 
 
-def test_stamp_review_verified_rejects_by_flag(tmp_path, capsys):
+def test_stamp_review_verified_rejects_by_flag(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "p.md", "---\nstatus: implemented\n---\n\nBody.\n")
     rc = main(
         ["stamp-review-verified", "--plan", str(p), "--findings", "x.md", "--by", "nope.md"]
@@ -1405,7 +1409,7 @@ def test_stamp_review_verified_rejects_by_flag(tmp_path, capsys):
     assert "does not accept --by" in capsys.readouterr().err
 
 
-def test_stamp_review_verified_rejects_reason_flag(tmp_path, capsys):
+def test_stamp_review_verified_rejects_reason_flag(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "p.md", "---\nstatus: implemented\n---\n\nBody.\n")
     rc = main(
         ["stamp-review-verified", "--plan", str(p), "--findings", "x.md", "--reason", "nope"]
@@ -1414,7 +1418,7 @@ def test_stamp_review_verified_rejects_reason_flag(tmp_path, capsys):
     assert "does not accept --reason" in capsys.readouterr().err
 
 
-def test_stamp_review_verified_rejects_override_reason_flag(tmp_path, capsys):
+def test_stamp_review_verified_rejects_override_reason_flag(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "p.md", "---\nstatus: implemented\n---\n\nBody.\n")
     rc = main(
         [
@@ -1426,7 +1430,7 @@ def test_stamp_review_verified_rejects_override_reason_flag(tmp_path, capsys):
     assert "does not accept --override-reason" in capsys.readouterr().err
 
 
-def test_unknown_verb_message_lists_stamp_review_verified(capsys):
+def test_unknown_verb_message_lists_stamp_review_verified(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["bogus-verb"])
     assert rc == 1
     assert "stamp-review-verified" in capsys.readouterr().err
@@ -1453,7 +1457,7 @@ def test_unknown_verb_message_lists_stamp_review_verified(capsys):
         ("executing  # authorized 2026-08-20", "executing"),
     ],
 )
-def test_read_and_normalize_status_strips_and_unquotes(raw, expected):
+def test_read_and_normalize_status_strips_and_unquotes(raw, expected) -> None:
     fm = "title: T\nstatus: " + raw + "\nowner: x\n"
     assert _read_and_normalize_status(fm, "p.md") == expected
 
@@ -1465,7 +1469,7 @@ def test_read_and_normalize_status_strips_and_unquotes(raw, expected):
         "title: T\nstatus: #note\n",
     ],
 )
-def test_read_and_normalize_status_absent_or_comment_only_aborts(fm):
+def test_read_and_normalize_status_absent_or_comment_only_aborts(fm) -> None:
     from coordinator_core.locked_write import MutateAbort
 
     with pytest.raises(MutateAbort) as exc:
@@ -1473,7 +1477,7 @@ def test_read_and_normalize_status_absent_or_comment_only_aborts(fm):
     assert 'no "status" field found' in exc.value.args[0]
 
 
-def test_read_and_normalize_status_quoted_plus_trailing_comment_fails_loud():
+def test_read_and_normalize_status_quoted_plus_trailing_comment_fails_loud() -> None:
     """The edge case the primitive exists to keep fail-loud rather than guess."""
     from coordinator_core.locked_write import MutateAbort
 
@@ -1483,11 +1487,11 @@ def test_read_and_normalize_status_quoted_plus_trailing_comment_fails_loud():
     assert "quoted-scalar-plus-trailing-comment" in exc.value.args[0]
 
 
-def test_read_and_normalize_status_hash_inside_quotes_is_not_stripped():
+def test_read_and_normalize_status_hash_inside_quotes_is_not_stripped() -> None:
     assert _read_and_normalize_status('status: "a#b"\n', "p.md") == "a#b"
 
 
-def test_resolve_worktree_root_accepts_any_path_inside_the_worktree(tmp_path):
+def test_resolve_worktree_root_accepts_any_path_inside_the_worktree(tmp_path: Path) -> None:
     """Containment is against the WHOLE worktree, not `docs/plans/` specifically.
 
     Deliberate, and documented at this module's own "Path containment" note: a
@@ -1505,7 +1509,7 @@ def test_resolve_worktree_root_accepts_any_path_inside_the_worktree(tmp_path):
     assert root is not None
 
 
-def test_resolve_worktree_root_returns_the_resolved_root_and_common_dir(tmp_path):
+def test_resolve_worktree_root_returns_the_resolved_root_and_common_dir(tmp_path: Path) -> None:
     """The resolution half of the primitive: a real repo resolves to itself."""
     _ensure_git_repo(tmp_path)
     plans = tmp_path / "docs" / "plans"
@@ -1532,7 +1536,7 @@ _RUNG_VERBS = [
 
 
 @pytest.mark.parametrize("verb,target", _RUNG_VERBS)
-def test_rung_verb_flips_draft_to_target(tmp_path, capsys, verb, target):
+def test_rung_verb_flips_draft_to_target(tmp_path: Path, capsys: pytest.CaptureFixture[str], verb, target) -> None:
     """AC1: each verb round-trips a plan through its flip."""
     p = _write(
         tmp_path, "p.md", "---\ntitle: T\nstatus: draft\nowner: x\n---\n\nBody.\n"
@@ -1553,7 +1557,7 @@ def test_rung_verb_flips_draft_to_target(tmp_path, capsys, verb, target):
 @pytest.mark.parametrize(
     "frozen", ["implemented", "superseded", "abandoned", "deferred"]
 )
-def test_rung_verb_refuses_frozen_source(tmp_path, capsys, verb, target, frozen):
+def test_rung_verb_refuses_frozen_source(tmp_path: Path, capsys: pytest.CaptureFixture[str], verb, target, frozen) -> None:
     """AC2: a frozen source refuses non-zero, with the status named."""
     original = "---\nstatus: " + frozen + "\n---\n\nBody.\n"
     p = _write(tmp_path, "p.md", original)
@@ -1566,7 +1570,7 @@ def test_rung_verb_refuses_frozen_source(tmp_path, capsys, verb, target, frozen)
 
 
 @pytest.mark.parametrize("verb,target", _RUNG_VERBS)
-def test_rung_verb_rejects_override_reason(tmp_path, capsys, verb, target):
+def test_rung_verb_rejects_override_reason(tmp_path: Path, capsys: pytest.CaptureFixture[str], verb, target) -> None:
     """AC3: none of the three assert completeness, so none may override one."""
     original = "---\nstatus: draft\n---\n\nBody.\n"
     p = _write(tmp_path, "p.md", original)
@@ -1587,8 +1591,8 @@ def test_rung_verb_rejects_override_reason(tmp_path, capsys, verb, target):
     ],
 )
 def test_rung_verb_at_or_past_target_is_byte_identical_no_op(
-    tmp_path, capsys, verb, target, source
-):
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], verb, target, source
+) -> None:
     """AC4: at-or-past the target rung is an rc-0 no-op that WRITES NOTHING.
 
     Asserts byte-identity and an unchanged mtime, not merely the exit code --
@@ -1604,7 +1608,7 @@ def test_rung_verb_at_or_past_target_is_byte_identical_no_op(
     assert p.stat().st_mtime_ns == before_mtime
 
 
-def test_stamp_approved_on_approved_plan_with_stamp_is_byte_identical_no_op(tmp_path, capsys):
+def test_stamp_approved_on_approved_plan_with_stamp_is_byte_identical_no_op(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     from coordinator_core.frontmatter.primitives import stamp_approved_body_sha
 
     original = stamp_approved_body_sha("---\nstatus: approved\n---\n\nBody.\n")
@@ -1616,7 +1620,7 @@ def test_stamp_approved_on_approved_plan_with_stamp_is_byte_identical_no_op(tmp_
     assert p.stat().st_mtime_ns == before_mtime
 
 
-def test_stamp_approved_stamps_an_approved_plan_whose_body_sha_is_absent(tmp_path):
+def test_stamp_approved_stamps_an_approved_plan_whose_body_sha_is_absent(tmp_path: Path) -> None:
     from coordinator_core.frontmatter.primitives import APPROVED_BODY_OK, check_approved_body
 
     p = _write(tmp_path, "p.md", "---\nstatus: approved\n---\n\nBody.\n")
@@ -1630,14 +1634,14 @@ def test_stamp_approved_stamps_an_approved_plan_whose_body_sha_is_absent(tmp_pat
     assert "stamp status" in log.stdout
 
 
-def test_stamp_approved_never_repairs_an_executing_plan_without_a_stamp(tmp_path):
+def test_stamp_approved_never_repairs_an_executing_plan_without_a_stamp(tmp_path: Path) -> None:
     original = "---\nstatus: executing\n---\n\nBody.\n"
     p = _write(tmp_path, "p.md", original)
     assert main(["stamp-approved", "--plan", str(p)]) == 0
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_stamp_approved_leaves_a_present_but_different_stamp_alone(tmp_path):
+def test_stamp_approved_leaves_a_present_but_different_stamp_alone(tmp_path: Path) -> None:
     from coordinator_core.frontmatter.primitives import stamp_approved_body_sha
 
     stamped = stamp_approved_body_sha("---\nstatus: approved\n---\n\nBody.\n")
@@ -1654,7 +1658,7 @@ def _tracked_state(tmp_path):
     ).stdout.strip()
 
 
-def test_stamp_approved_first_commits_an_untracked_plan(tmp_path):
+def test_stamp_approved_first_commits_an_untracked_plan(tmp_path: Path) -> None:
     from coordinator_core.frontmatter.primitives import APPROVED_BODY_OK, check_approved_body
 
     _ensure_git_repo(tmp_path)
@@ -1670,7 +1674,7 @@ def test_stamp_approved_first_commits_an_untracked_plan(tmp_path):
     assert shown.stdout == p.read_text(encoding="utf-8")
 
 
-def test_stamp_reviewed_leaves_an_untracked_plan_uncommitted(tmp_path):
+def test_stamp_reviewed_leaves_an_untracked_plan_uncommitted(tmp_path: Path) -> None:
     _ensure_git_repo(tmp_path)
     p = tmp_path / "p.md"
     p.write_text("---\nstatus: draft\n---\n\nBody.\n", encoding="utf-8")
@@ -1680,8 +1684,8 @@ def test_stamp_reviewed_leaves_an_untracked_plan_uncommitted(tmp_path):
 
 @pytest.mark.parametrize("verb", ["stamp-reviewed", "stamp-approved"])
 def test_rung_verb_on_executing_plan_with_changed_body_refuses_naming_restamp(
-    tmp_path, capsys, verb
-):
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], verb
+) -> None:
     from coordinator_core.frontmatter.primitives import stamp_approved_body_sha
 
     stamped = stamp_approved_body_sha("---\nstatus: executing\n---\n\nBody.\n")
@@ -1693,7 +1697,7 @@ def test_rung_verb_on_executing_plan_with_changed_body_refuses_naming_restamp(
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_changed_body_message_names_restamp_only_when_executing():
+def test_changed_body_message_names_restamp_only_when_executing() -> None:
     from coordinator_core.frontmatter.primitives import (
         check_approved_body,
         stamp_approved_body_sha,
@@ -1709,7 +1713,7 @@ def test_changed_body_message_names_restamp_only_when_executing():
 
 
 @pytest.mark.parametrize("verb,target", _RUNG_VERBS)
-def test_rung_verb_outside_flippable_aborts(tmp_path, capsys, verb, target):
+def test_rung_verb_outside_flippable_aborts(tmp_path: Path, capsys: pytest.CaptureFixture[str], verb, target) -> None:
     """AC5: a source outside _FLIPPABLE_STATUSES (and not frozen) aborts."""
     original = "---\nstatus: banana\n---\n\nBody.\n"
     p = _write(tmp_path, "p.md", original)
@@ -1721,7 +1725,7 @@ def test_rung_verb_outside_flippable_aborts(tmp_path, capsys, verb, target):
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_stamp_executing_accepts_landed_as_reentry(tmp_path, capsys):
+def test_stamp_executing_accepts_landed_as_reentry(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """AC6: `landed` sits PAST `executing`, but is legitimate re-entry.
 
     The generic at-or-past rule would make this a no-op; leaving the plan at
@@ -1735,7 +1739,7 @@ def test_stamp_executing_accepts_landed_as_reentry(tmp_path, capsys):
 
 
 @pytest.mark.parametrize("verb,target", [("stamp-reviewed", "reviewed"), ("stamp-approved", "approved")])
-def test_landed_is_not_reentry_for_the_other_two_verbs(tmp_path, capsys, verb, target):
+def test_landed_is_not_reentry_for_the_other_two_verbs(tmp_path: Path, capsys: pytest.CaptureFixture[str], verb, target) -> None:
     """AC6 negative: only stamp-executing special-cases `landed`."""
     original = "---\nstatus: landed\n---\n\nBody.\n"
     p = _write(tmp_path, "p.md", original)
@@ -1745,7 +1749,7 @@ def test_landed_is_not_reentry_for_the_other_two_verbs(tmp_path, capsys, verb, t
     assert p.read_text(encoding="utf-8") == original
 
 
-def test_reopened_then_landed_then_executing_end_to_end(tmp_path, capsys, monkeypatch):
+def test_reopened_then_landed_then_executing_end_to_end(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     """AC6 end-to-end: the reopen re-park path re-enters at `executing`.
 
     `stamp-reopened` refuses a plan whose spine has no open row, so this uses
@@ -1776,8 +1780,8 @@ def test_reopened_then_landed_then_executing_end_to_end(tmp_path, capsys, monkey
     ],
 )
 def test_rung_verb_status_parsing_edge_cases(
-    tmp_path, capsys, verb, target, raw, flips
-):
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], verb, target, raw, flips
+) -> None:
     """AC7: all four status-parsing edge cases survive on EVERY new verb.
 
     Parameterised across all three rather than spot-checked on one -- the
@@ -1795,7 +1799,7 @@ def test_rung_verb_status_parsing_edge_cases(
 
 
 @pytest.mark.parametrize("verb,target", _RUNG_VERBS)
-def test_rung_verb_absent_status_key_aborts(tmp_path, capsys, verb, target):
+def test_rung_verb_absent_status_key_aborts(tmp_path: Path, capsys: pytest.CaptureFixture[str], verb, target) -> None:
     """AC7's fourth edge case -- frontmatter with NO ``status:`` key at
     all -- exercised per-verb through ``main()``.
 
@@ -1821,8 +1825,8 @@ def test_rung_verb_absent_status_key_aborts(tmp_path, capsys, verb, target):
 
 @pytest.mark.parametrize("verb,target", _RUNG_VERBS)
 def test_rung_verb_quoted_status_with_trailing_comment_fails_loud(
-    tmp_path, capsys, verb, target
-):
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], verb, target
+) -> None:
     """AC7, fourth edge case: quoted scalar plus trailing comment, on each verb."""
     original = '---\nstatus: "draft"  # note\n---\n\nBody.\n'
     p = _write(tmp_path, "p.md", original)
@@ -1840,7 +1844,7 @@ def test_rung_verb_quoted_status_with_trailing_comment_fails_loud(
 # ---------------------------------------------------------------------------
 
 
-def test_stamp_implemented_archives_plan_and_sidecar_on_terminal_stamp(tmp_path, capsys):
+def test_stamp_implemented_archives_plan_and_sidecar_on_terminal_stamp(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     p = _write(
         tmp_path, "docs/plans/2026-08-01-archive-me.md",
@@ -1863,7 +1867,7 @@ def test_stamp_implemented_archives_plan_and_sidecar_on_terminal_stamp(tmp_path,
     assert "status: implemented" in dest.read_text(encoding="utf-8")
 
 
-def test_stamp_implemented_archives_untracked_fire_script_beside_plan(tmp_path, capsys):
+def test_stamp_implemented_archives_untracked_fire_script_beside_plan(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     p = _write(
         tmp_path, "docs/plans/2026-08-01-fired.md",
@@ -1886,7 +1890,7 @@ def test_stamp_implemented_archives_untracked_fire_script_beside_plan(tmp_path, 
     assert "untracked-at-head" not in capsys.readouterr().err
 
 
-def test_stamp_implemented_archival_failure_leaves_stamp_intact_and_reported(tmp_path, capsys):
+def test_stamp_implemented_archival_failure_leaves_stamp_intact_and_reported(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     from unittest.mock import patch
 
     (tmp_path / "docs" / "plans").mkdir(parents=True)
@@ -1914,7 +1918,7 @@ def test_stamp_implemented_archival_failure_leaves_stamp_intact_and_reported(tmp
     assert "simulated archival commit failure" in err
 
 
-def test_stamp_implemented_no_op_on_already_terminal_plan_archives_nothing(tmp_path, capsys):
+def test_stamp_implemented_no_op_on_already_terminal_plan_archives_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     # A plan already at a frozen/terminal status takes the no-op branch,
     # which returns before ever reaching the archival occasion -- a
     # non-terminal-transition call (nothing actually flipped this
@@ -1932,7 +1936,7 @@ def test_stamp_implemented_no_op_on_already_terminal_plan_archives_nothing(tmp_p
     assert not (tmp_path / "archive" / "specs").exists()
 
 
-def test_stamp_implemented_archives_despite_own_live_claim(tmp_path, capsys):
+def test_stamp_implemented_archives_despite_own_live_claim(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """example-store-repo-fb defect (2026-09-11, verified): the stamping session
     almost always still holds this plan's own execute-plan claim (claimed
     one directive earlier), so an unexempted plan_sweep read that as a
@@ -1967,7 +1971,7 @@ def test_stamp_implemented_archives_despite_own_live_claim(tmp_path, capsys):
     assert dest.is_file()
 
 
-def test_stamp_implemented_foreign_claim_skip_is_reported_not_silent(tmp_path, capsys):
+def test_stamp_implemented_foreign_claim_skip_is_reported_not_silent(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """A DIFFERENT, live session's claim on the plan still blocks archival —
     and the skip is now surfaced on stderr (never a silent None), per the
     same defect report's second half."""
@@ -2008,7 +2012,7 @@ def test_stamp_implemented_foreign_claim_skip_is_reported_not_silent(tmp_path, c
 # ---------------------------------------------------------------------------
 
 
-def test_run_cascade_prints_commit_notice_with_distinct_framing(tmp_path, monkeypatch, capsys):
+def test_run_cascade_prints_commit_notice_with_distinct_framing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """AC7: a diverged-path cascade -- one whose follow-up commit landed but
     carried a non-empty `commit_notice` -- prints that text to stderr framed
     as `cascade commit note`, a distinct, non-failure word from the
@@ -2041,7 +2045,7 @@ def test_run_cascade_prints_commit_notice_with_distinct_framing(tmp_path, monkey
     assert "cascade commit failed" not in err
 
 
-def test_run_cascade_no_commit_notice_key_prints_nothing(tmp_path, monkeypatch, capsys):
+def test_run_cascade_no_commit_notice_key_prints_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """Absence: a result carrying no `commit_notice` key prints no
     `cascade commit note` line -- mirrors the pre-existing `commit_error`
     absence contract."""
@@ -2067,7 +2071,7 @@ def test_run_cascade_no_commit_notice_key_prints_nothing(tmp_path, monkeypatch, 
     assert "cascade commit note" not in err
 
 
-def test_stamp_superseded_archives_plan_on_terminal_stamp(tmp_path, capsys):
+def test_stamp_superseded_archives_plan_on_terminal_stamp(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     p = _write(
         tmp_path, "docs/plans/2026-08-04-superseded-me.md",
@@ -2087,7 +2091,7 @@ def test_stamp_superseded_archives_plan_on_terminal_stamp(tmp_path, capsys):
     assert "status: superseded" in dest.read_text(encoding="utf-8")
 
 
-def test_stamp_implemented_refuses_subject_plan_with_no_review_stamp(tmp_path, capsys):
+def test_stamp_implemented_refuses_subject_plan_with_no_review_stamp(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """MK1: a plan authorized strictly after review_stamp's cutoff (a SUBJECT
     plan) cannot reach `implemented` with no `review_stamp` on record."""
     (tmp_path / "docs" / "plans").mkdir(parents=True)
@@ -2104,7 +2108,7 @@ def test_stamp_implemented_refuses_subject_plan_with_no_review_stamp(tmp_path, c
     assert "status: implemented" not in p.read_text(encoding="utf-8")
 
 
-def test_stamp_implemented_admits_subject_plan_with_valid_review_stamp(tmp_path, capsys):
+def test_stamp_implemented_admits_subject_plan_with_valid_review_stamp(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """MK1: a subject plan carrying a valid `review_stamp` bound to an
     ancestor commit whose tree matches is admitted to `implemented`."""
     import subprocess as _sp
@@ -2154,7 +2158,7 @@ def test_stamp_implemented_admits_subject_plan_with_valid_review_stamp(tmp_path,
     assert "status: implemented" in landed.read_text(encoding="utf-8")
 
 
-def test_ledger_met_without_no_commit_is_refused(tmp_path, capsys):
+def test_ledger_met_without_no_commit_is_refused(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = tmp_path / "plan.md"
     p.write_text("---\nstatus: executing\n---\n\n# Plan\n", encoding="utf-8")
     assert main(["stamp-implemented", "--plan", str(p), "--ledger-met", "ledger-met: R1"]) == 1
@@ -2188,7 +2192,7 @@ _PLAN_WITH_SPINE = (
 )
 
 
-def test_completed_flip_commits_a_ledger_row_with_flip_sha_and_blob(tmp_path):
+def test_completed_flip_commits_a_ledger_row_with_flip_sha_and_blob(tmp_path: Path) -> None:
     p = _write(tmp_path, "p.md", _PLAN_WITH_SPINE)
     assert main(["stamp-implemented", "--plan", str(p)]) == 0
     rows = _ledger_rows(tmp_path)
@@ -2205,7 +2209,7 @@ def test_completed_flip_commits_a_ledger_row_with_flip_sha_and_blob(tmp_path):
     assert _git(tmp_path, "status", "--porcelain", "--", "state/plan-completions.jsonl") == ""
 
 
-def test_second_completion_appends_to_the_committed_ledger(tmp_path):
+def test_second_completion_appends_to_the_committed_ledger(tmp_path: Path) -> None:
     a = _write(tmp_path, "a.md", _PLAN_WITH_SPINE)
     assert main(["stamp-implemented", "--plan", str(a)]) == 0
     b = _write(tmp_path, "b.md", _PLAN_WITH_SPINE)
@@ -2214,14 +2218,14 @@ def test_second_completion_appends_to_the_committed_ledger(tmp_path):
     assert _git(tmp_path, "status", "--porcelain", "--", "state/plan-completions.jsonl") == ""
 
 
-def test_non_completed_flip_leaves_no_ledger_row(tmp_path):
+def test_non_completed_flip_leaves_no_ledger_row(tmp_path: Path) -> None:
     p = _write(tmp_path, "p.md", "---\nstatus: approved\n---\n\nBody.\n")
     assert main(["stamp-blocked", "--plan", str(p), "--reason", "waiting"]) == 0
     assert "status: blocked" in p.read_text(encoding="utf-8")
     assert _ledger_rows(tmp_path) == []
 
 
-def test_ledger_failure_warns_and_never_fails_the_flip(tmp_path, capsys):
+def test_ledger_failure_warns_and_never_fails_the_flip(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     p = _write(tmp_path, "p.md", _PLAN_WITH_SPINE)
     # A directory at the ledger path makes append_row raise.
     (tmp_path / "state" / "plan-completions.jsonl").mkdir(parents=True)
@@ -2230,7 +2234,7 @@ def test_ledger_failure_warns_and_never_fails_the_flip(tmp_path, capsys):
     assert "status: implemented" in p.read_text(encoding="utf-8")
 
 
-def test_stranded_flip_resume_appends_a_ledger_row(tmp_path):
+def test_stranded_flip_resume_appends_a_ledger_row(tmp_path: Path) -> None:
     p = _write(tmp_path, "p.md", _PLAN_WITH_SPINE)
     # A prior run flipped on disk and never committed.
     p.write_text(_PLAN_WITH_SPINE.replace("status: executing", "status: implemented"), encoding="utf-8")
@@ -2240,7 +2244,7 @@ def test_stranded_flip_resume_appends_a_ledger_row(tmp_path):
     assert rows[0]["plan_blob"] == _git(tmp_path, "rev-parse", f"{rows[0]['completing_sha']}:p.md")
 
 
-def test_terminal_noop_leaves_no_ledger_row(tmp_path):
+def test_terminal_noop_leaves_no_ledger_row(tmp_path: Path) -> None:
     p = _write(tmp_path, "p.md", "---\nstatus: implemented\n---\n\nBody.\n")
     assert main(["stamp-implemented", "--plan", str(p)]) == 0
     assert _ledger_rows(tmp_path) == []

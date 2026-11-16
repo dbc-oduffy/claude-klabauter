@@ -899,7 +899,7 @@ def build_report(
 
     rows.sort(key=lambda row: -(row["content-age"] if row["content-age"] is not None else 1e9))
 
-    def count(verdict):
+    def count(verdict) -> int:
         return sum(1 for row in rows if row["verdict"] == verdict)
 
     return {

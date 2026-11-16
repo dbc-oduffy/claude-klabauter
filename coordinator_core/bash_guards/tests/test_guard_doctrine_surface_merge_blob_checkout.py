@@ -3,11 +3,12 @@ or cherry-pick is in progress; hand-authored and no-operation writes deny."""
 import pytest
 
 from coordinator_core.bash_guards.guard_doctrine_surface_bash_write import check
+from pathlib import Path
 
 F = "state/sizings/2026-10-27-weekly-gate-mechanical-to-code.yaml"
 
 
-def _repo(tmp_path, head=None):
+def _repo(tmp_path, head=None) -> str:
     git = tmp_path / ".git"
     git.mkdir()
     if head:
@@ -19,7 +20,7 @@ def _run(cmd, cwd):
     return check({"tool_name": "Bash", "cwd": cwd, "tool_input": {"command": cmd}}, None)
 
 
-def _assert_denied(result):
+def _assert_denied(result) -> None:
     # DR-475: a non-strict guard level returns the levelled advisory envelope in place of the deny record.
     assert result is not None
     if isinstance(result, dict):
@@ -37,7 +38,7 @@ def _assert_denied(result):
         f"git checkout origin/machine-b -- {F}",
     ],
 )
-def test_blob_checkout_admitted_mid_operation(tmp_path, head, cmd):
+def test_blob_checkout_admitted_mid_operation(tmp_path: Path, head, cmd) -> None:
     assert _run(cmd, _repo(tmp_path, head)) is None
 
 
@@ -45,11 +46,11 @@ def test_blob_checkout_admitted_mid_operation(tmp_path, head, cmd):
     "cmd",
     [f"git checkout --theirs -- {F}", f"git checkout origin/machine-b -- {F}"],
 )
-def test_blob_checkout_denied_with_no_operation(tmp_path, cmd):
+def test_blob_checkout_denied_with_no_operation(tmp_path: Path, cmd) -> None:
     _assert_denied(_run(cmd, _repo(tmp_path)))
 
 
-def test_blob_checkout_denied_without_a_repo(tmp_path):
+def test_blob_checkout_denied_without_a_repo(tmp_path: Path) -> None:
     _assert_denied(_run(f"git checkout --theirs -- {F}", str(tmp_path)))
 
 
@@ -68,5 +69,5 @@ def test_blob_checkout_denied_without_a_repo(tmp_path):
         f"git checkout --theirs -- {F} > {F}",
     ],
 )
-def test_non_blob_write_still_denied_mid_merge(tmp_path, cmd):
+def test_non_blob_write_still_denied_mid_merge(tmp_path: Path, cmd) -> None:
     _assert_denied(_run(cmd, _repo(tmp_path, "MERGE_HEAD")))

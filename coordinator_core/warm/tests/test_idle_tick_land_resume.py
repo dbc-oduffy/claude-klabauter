@@ -11,6 +11,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import land_resume
 from coordinator_core.warm import breadcrumb, idle, lifecycle, server
+from pathlib import Path
 
 
 class _FakeVersionState:
@@ -24,14 +25,14 @@ class _FakeVersionState:
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     path = tmp_path / "served"
     path.mkdir()
     return path
 
 
 @pytest.fixture
-def ctx(tmp_path, repo, monkeypatch):
+def ctx(tmp_path: Path, repo, monkeypatch: pytest.MonkeyPatch):
     lifecycle.reset_shutdown_guard_for_test()
     idle.reset_idle_clock_for_test()
     monkeypatch.setattr(idle, "should_demote", lambda **kwargs: False)
@@ -79,7 +80,7 @@ def _recorder(ctx, monkeypatch, reply):
     return calls
 
 
-def test_due_entry_lands_through_land_run_dispatch_and_finishes(ctx, repo, monkeypatch):
+def test_due_entry_lands_through_land_run_dispatch_and_finishes(ctx, repo, monkeypatch: pytest.MonkeyPatch) -> None:
     params = _queue(repo, "run-a")
     calls = _recorder(ctx, monkeypatch, {"jsonrpc": "2.0", "id": 1, "result": {"committed": True, "sha": "abc"}})
     ctx._idle_tick()
@@ -97,7 +98,7 @@ def test_due_entry_lands_through_land_run_dispatch_and_finishes(ctx, repo, monke
     assert len(calls) == 1
 
 
-def test_already_landed_reply_finishes_as_landed_never_landed_twice(ctx, repo, monkeypatch):
+def test_already_landed_reply_finishes_as_landed_never_landed_twice(ctx, repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _queue(repo, "run-b")
     calls = _recorder(
         ctx, monkeypatch, {"result": {"committed": True, "sha": "abc", "already_landed": True}}
@@ -110,7 +111,7 @@ def test_already_landed_reply_finishes_as_landed_never_landed_twice(ctx, repo, m
     assert len(calls) == 1
 
 
-def test_one_entry_per_tick(ctx, repo, monkeypatch):
+def test_one_entry_per_tick(ctx, repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _queue(repo, "run-c1")
     _queue(repo, "run-c2")
     calls = _recorder(ctx, monkeypatch, {"result": {"committed": True}})
@@ -124,13 +125,13 @@ def test_one_entry_per_tick(ctx, repo, monkeypatch):
     assert len(calls) == 2
 
 
-def test_tick_does_not_start_a_second_attempt_while_one_is_in_flight(ctx, repo, monkeypatch):
+def test_tick_does_not_start_a_second_attempt_while_one_is_in_flight(ctx, repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _queue(repo, "run-d1")
     _queue(repo, "run-d2")
     release = threading.Event()
     calls: list = []
 
-    def slow(msg, **kwargs):
+    def slow(msg, **kwargs) -> dict[str, dict[str, bool]]:
         calls.append(msg)
         release.wait(10)
         return {"result": {"committed": True}}
@@ -146,10 +147,10 @@ def test_tick_does_not_start_a_second_attempt_while_one_is_in_flight(ctx, repo, 
         _drain_thread(ctx)
 
 
-def test_reply_already_requeued_by_land_run_returns_entry_to_pending(ctx, repo, monkeypatch):
+def test_reply_already_requeued_by_land_run_returns_entry_to_pending(ctx, repo, monkeypatch: pytest.MonkeyPatch) -> None:
     params = _queue(repo, "run-e")
 
-    def reply(msg):
+    def reply(msg) -> dict[str, dict[str, bool]]:
         land_resume.enqueue(None, "run-e", params, "land_run.integrity")
         return {"result": {"committed": False, "queued_for_resume": True}}
 
@@ -170,7 +171,7 @@ def test_reply_already_requeued_by_land_run_returns_entry_to_pending(ctx, repo, 
         None,
     ],
 )
-def test_transient_failure_requeues_with_attempt_bumped(ctx, repo, monkeypatch, reply):
+def test_transient_failure_requeues_with_attempt_bumped(ctx, repo, monkeypatch: pytest.MonkeyPatch, reply) -> None:
     _queue(repo, "run-f")
     _recorder(ctx, monkeypatch, reply)
     ctx._idle_tick()
@@ -180,7 +181,7 @@ def test_transient_failure_requeues_with_attempt_bumped(ctx, repo, monkeypatch, 
     assert not (land_resume.queue_dir(None) / ("run-f" + land_resume.DONE_SUFFIX)).exists()
 
 
-def test_final_refusal_closes_entry_without_requeue(ctx, repo, monkeypatch):
+def test_final_refusal_closes_entry_without_requeue(ctx, repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _queue(repo, "run-g")
     _recorder(ctx, monkeypatch, {"result": {"committed": False, "refused": "unreviewed"}})
     ctx._idle_tick()
@@ -189,7 +190,7 @@ def test_final_refusal_closes_entry_without_requeue(ctx, repo, monkeypatch):
     assert not (land_resume.queue_dir(None) / ("run-g" + land_resume.PENDING_SUFFIX)).exists()
 
 
-def test_attempt_exception_requeues_and_never_escapes_the_tick(ctx, repo, monkeypatch):
+def test_attempt_exception_requeues_and_never_escapes_the_tick(ctx, repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _queue(repo, "run-h")
 
     def boom(msg, **kwargs):
@@ -201,7 +202,7 @@ def test_attempt_exception_requeues_and_never_escapes_the_tick(ctx, repo, monkey
     assert _entry("run-h", land_resume.PENDING_SUFFIX)["attempts"] == 2
 
 
-def test_retries_are_bounded_by_the_queue_expiry(ctx, repo, monkeypatch):
+def test_retries_are_bounded_by_the_queue_expiry(ctx, repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _queue(repo, "run-i")
     calls = _recorder(ctx, monkeypatch, None)
     for _ in range(land_resume.MAX_ATTEMPTS + 3):
@@ -211,7 +212,7 @@ def test_retries_are_bounded_by_the_queue_expiry(ctx, repo, monkeypatch):
     assert _entry("run-i", land_resume.DONE_SUFFIX)["outcome"] == land_resume.OUTCOME_EXPIRED
 
 
-def test_repo_resolved_from_halt_record_when_entry_names_none(ctx, repo, monkeypatch):
+def test_repo_resolved_from_halt_record_when_entry_names_none(ctx, repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import land_leg_record
     from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 
@@ -225,7 +226,7 @@ def test_repo_resolved_from_halt_record_when_entry_names_none(ctx, repo, monkeyp
     assert calls[0][0]["_origin_worktree"] == str(repo)
 
 
-def test_unresolvable_repo_requeues_without_dispatch(ctx, repo, monkeypatch):
+def test_unresolvable_repo_requeues_without_dispatch(ctx, repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _queue(repo, "run-k", repo_root=False)
     calls = _recorder(ctx, monkeypatch, {"result": {"committed": True}})
     ctx._idle_tick()
@@ -234,7 +235,7 @@ def test_unresolvable_repo_requeues_without_dispatch(ctx, repo, monkeypatch):
     assert _entry("run-k", land_resume.PENDING_SUFFIX)["attempts"] == 2
 
 
-def test_empty_queue_dispatches_nothing_and_spawns_nothing(ctx, monkeypatch):
+def test_empty_queue_dispatches_nothing_and_spawns_nothing(ctx, monkeypatch: pytest.MonkeyPatch) -> None:
     def no_spawn(*args, **kwargs):
         raise AssertionError("an empty land-resume queue must not spawn a process")
 
@@ -246,7 +247,7 @@ def test_empty_queue_dispatches_nothing_and_spawns_nothing(ctx, monkeypatch):
     assert ctx.__dict__.get("_land_resume_thread") is None
 
 
-def test_queue_failure_leaves_tick_intact(ctx, monkeypatch):
+def test_queue_failure_leaves_tick_intact(ctx, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(root, now):
         raise RuntimeError("queue broke")
 

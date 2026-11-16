@@ -10,6 +10,7 @@ from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.cartography_symbols import _cartography_symbols
 from coordinator_core.cartography._guard import PathEscapeError
 from coordinator_core.cartography.symbols import build_symbols, symbol_table_for_file
+from pathlib import Path
 
 _OP_NAME = "cartography.symbols"
 assert _OP_NAME in _REGISTRY, (
@@ -25,7 +26,7 @@ def _write(root, rel_path, content):
     return path
 
 
-def test_module_docstring_extracted(tmp_path):
+def test_module_docstring_extracted(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _write(root, "mod.py", '"""A module docstring."""\n')
@@ -35,7 +36,7 @@ def test_module_docstring_extracted(tmp_path):
     assert result["module_docstring"] == "A module docstring."
 
 
-def test_module_constant_literal_value_captured(tmp_path):
+def test_module_constant_literal_value_captured(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _write(root, "mod.py", "MAX_RETRIES = 3\nNAME = 'claude-klabauter'\n")
@@ -47,7 +48,7 @@ def test_module_constant_literal_value_captured(tmp_path):
     assert by_name["NAME"]["value"] == "claude-klabauter"
 
 
-def test_module_constant_non_literal_rhs_is_none(tmp_path):
+def test_module_constant_non_literal_rhs_is_none(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _write(root, "mod.py", "import os\nCWD = os.getcwd()\n")
@@ -58,7 +59,7 @@ def test_module_constant_non_literal_rhs_is_none(tmp_path):
     assert by_name["CWD"]["value"] is None
 
 
-def test_module_constant_set_literal_is_json_safe_sorted_list(tmp_path):
+def test_module_constant_set_literal_is_json_safe_sorted_list(tmp_path: Path) -> None:
     """Regression (AC8 gate-run finding): ``ast.literal_eval`` returns a real
     Python ``set``/``frozenset`` for a set-display RHS (e.g.
     ``coordinator_core/archival.py``'s ``_TERMINAL_STATUSES: Set[str] = {...}``).
@@ -84,7 +85,7 @@ def test_module_constant_set_literal_is_json_safe_sorted_list(tmp_path):
     json.dumps(result)
 
 
-def test_module_constant_nested_set_in_dict_is_json_safe(tmp_path):
+def test_module_constant_nested_set_in_dict_is_json_safe(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _write(root, "mod.py", "CFG = {'names': {'b', 'a'}}\n")
@@ -95,7 +96,7 @@ def test_module_constant_nested_set_in_dict_is_json_safe(tmp_path):
     assert by_name["CFG"]["value"] == {"names": ["a", "b"]}
 
 
-def test_top_level_function_signature_and_docstring(tmp_path):
+def test_top_level_function_signature_and_docstring(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _write(
@@ -116,7 +117,7 @@ def test_top_level_function_signature_and_docstring(tmp_path):
     assert fn["is_async"] is False
 
 
-def test_async_function_flagged(tmp_path):
+def test_async_function_flagged(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _write(root, "mod.py", "async def fetch():\n    pass\n")
@@ -127,7 +128,7 @@ def test_async_function_flagged(tmp_path):
     assert result["functions"][0]["signature"] == "async def fetch()"
 
 
-def test_class_bases_docstring_and_methods(tmp_path):
+def test_class_bases_docstring_and_methods(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _write(
@@ -154,7 +155,7 @@ def test_class_bases_docstring_and_methods(tmp_path):
     assert method["docstring"] == "Render the widget."
 
 
-def test_syntax_error_captured_not_raised(tmp_path):
+def test_syntax_error_captured_not_raised(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _write(root, "broken.py", "def f(:\n    pass\n")
@@ -165,7 +166,7 @@ def test_syntax_error_captured_not_raised(tmp_path):
     assert "SyntaxError" in result["error"]
 
 
-def test_build_symbols_aggregates_multiple_files(tmp_path):
+def test_build_symbols_aggregates_multiple_files(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _write(root, "a.py", "def a():\n    pass\n")
@@ -177,7 +178,7 @@ def test_build_symbols_aggregates_multiple_files(tmp_path):
     assert len(result["files"]) == 2
 
 
-def test_path_containment_escape_raises(tmp_path):
+def test_path_containment_escape_raises(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     outside = tmp_path / "secret.py"
@@ -187,7 +188,7 @@ def test_path_containment_escape_raises(tmp_path):
         symbol_table_for_file(root, "../secret.py")
 
 
-def test_emitted_path_is_target_root_relative_posix(tmp_path):
+def test_emitted_path_is_target_root_relative_posix(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     nested = root / "pkg" / "sub"
     nested.mkdir(parents=True)
@@ -198,19 +199,19 @@ def test_emitted_path_is_target_root_relative_posix(tmp_path):
     assert result["path"] == "pkg/sub/mod.py"
 
 
-def test_op_missing_target_root_raises_value_error():
+def test_op_missing_target_root_raises_value_error() -> None:
     with pytest.raises(ValueError):
         _cartography_symbols({"files": ["mod.py"]})
 
 
-def test_op_missing_files_raises_value_error(tmp_path):
+def test_op_missing_files_raises_value_error(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     with pytest.raises(ValueError):
         _cartography_symbols({"target_root": str(root)})
 
 
-def test_op_happy_path(tmp_path):
+def test_op_happy_path(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _write(root, "mod.py", "def f():\n    pass\n")
@@ -221,7 +222,7 @@ def test_op_happy_path(tmp_path):
     assert result["files"][0]["path"] == "mod.py"
 
 
-def test_op_guards_target_root_before_build_symbols_is_called(tmp_path, monkeypatch):
+def test_op_guards_target_root_before_build_symbols_is_called(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.ops.cartography_symbols as op_mod
 
     root = tmp_path / "repo"

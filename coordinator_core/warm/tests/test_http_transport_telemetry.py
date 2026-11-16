@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 
 from coordinator_core.warm import skew, supervisor, telemetry
+import pytest
 
 
 def _stamped(root: Path) -> Path:
@@ -18,15 +19,15 @@ def _ctx(root: Path) -> "supervisor._ServerContext":
     )
 
 
-def test_pipe_rows_keep_their_exact_shape():
+def test_pipe_rows_keep_their_exact_shape() -> None:
     assert "transport" not in telemetry.ServerTelemetry().snapshot()
 
 
-def test_http_rows_name_their_transport():
+def test_http_rows_name_their_transport() -> None:
     assert telemetry.ServerTelemetry(transport="http").snapshot()["transport"] == "http"
 
 
-def test_context_flushes_a_row_on_shutdown(tmp_path: Path):
+def test_context_flushes_a_row_on_shutdown(tmp_path: Path) -> None:
     root = _stamped(tmp_path)
     ctx = _ctx(root)
     ctx.record_invocation(True)
@@ -46,7 +47,7 @@ def test_context_flushes_a_row_on_shutdown(tmp_path: Path):
     assert rows[0]["exit_detail"] == "token"
 
 
-def test_shutdown_still_unlinks_discovery_when_the_flush_fails(tmp_path: Path, monkeypatch):
+def test_shutdown_still_unlinks_discovery_when_the_flush_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _stamped(tmp_path)
     ctx = _ctx(root)
     supervisor.write_discovery(
@@ -77,7 +78,7 @@ def test_shutdown_still_unlinks_discovery_when_the_flush_fails(tmp_path: Path, m
     assert supervisor.read_discovery(root) is None
 
 
-def test_shutdown_releases_election_handle_when_unlink_discovery_times_out(tmp_path: Path, monkeypatch):
+def test_shutdown_releases_election_handle_when_unlink_discovery_times_out(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _stamped(tmp_path)
     ctx = _ctx(root)
     sentinel_handle = object()

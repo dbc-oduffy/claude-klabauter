@@ -16,6 +16,7 @@ import pytest
 from coordinator_core.bash_guards import guard_heavy_command_admission as guard
 from coordinator_core.bash_guards._heavy_admission_contract import MemoryReading
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -52,7 +53,7 @@ def _spawn_trap(*_a, **_k):
 
 
 @pytest.fixture()
-def no_spawn(monkeypatch):
+def no_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(subprocess, "Popen", _spawn_trap)
     monkeypatch.setattr(os, "system", _spawn_trap)
     monkeypatch.setattr(os, "popen", _spawn_trap)
@@ -69,7 +70,7 @@ def _payload(command):
     }
 
 
-def test_light_calls_spawn_nothing_and_stay_under_the_bar(no_spawn):
+def test_light_calls_spawn_nothing_and_stay_under_the_bar(no_spawn) -> None:
     for command in LIGHT_COMMANDS:
         assert _enveloped(guard.check)(_payload(command)) is None
     start = time.process_time()
@@ -80,7 +81,7 @@ def test_light_calls_spawn_nothing_and_stay_under_the_bar(no_spawn):
     assert mean_ms < LIGHT_BAR_MS
 
 
-def test_heavy_calls_spawn_nothing_across_the_classifier_table(no_spawn, monkeypatch, tmp_path):
+def test_heavy_calls_spawn_nothing_across_the_classifier_table(no_spawn, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.bash_guards import _heavy_lease_store as leases
 
     monkeypatch.setattr(leases, "leases_dir", lambda: tmp_path / "leases")
@@ -109,7 +110,7 @@ def test_heavy_calls_spawn_nothing_across_the_classifier_table(no_spawn, monkeyp
         assert out is None or "BLOCKED" not in str(out), command
 
 
-def test_census_cost_is_measured_on_the_real_process_table(no_spawn):
+def test_census_cost_is_measured_on_the_real_process_table(no_spawn) -> None:
     from coordinator_core.bash_guards import _host_probe, _session_census
 
     rows = _host_probe.snapshot()

@@ -10,6 +10,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
 from coordinator_core.ops.dispatch_emit.write_baseline import exclude_halted_withheld
+from pathlib import Path
 
 RUNS = 500
 BAR_MS = 500.0
@@ -17,7 +18,7 @@ SIZING = "state/sizings/subject.yaml"
 
 
 @pytest.fixture
-def index_500(tmp_path, monkeypatch):
+def index_500(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """A tmp repo whose index holds RUNS run files, built; `reads` collects every file `_parse_file` opens."""
     idx._STAT_CACHE.clear()
     for i in range(RUNS):
@@ -45,13 +46,13 @@ def _timed(fn):
     return result, (time.process_time() - start) * 1000.0
 
 
-def test_cold_pass_reads_every_run_file_once(index_500):
+def test_cold_pass_reads_every_run_file_once(index_500) -> None:
     root, reads = index_500
     _ask_stage_read(root)
     assert len(reads) == RUNS
 
 
-def test_warm_ask_stage_read_opens_no_run_file_and_stays_under_the_bar(index_500):
+def test_warm_ask_stage_read_opens_no_run_file_and_stays_under_the_bar(index_500) -> None:
     root, reads = index_500
     cold = _ask_stage_read(root)
     reads.clear()
@@ -61,7 +62,7 @@ def test_warm_ask_stage_read_opens_no_run_file_and_stays_under_the_bar(index_500
     assert ms < BAR_MS, f"warm exclude_halted_withheld took {ms:.1f}ms process time"
 
 
-def test_one_rewritten_run_file_is_the_only_re_read(index_500):
+def test_one_rewritten_run_file_is_the_only_re_read(index_500) -> None:
     root, reads = index_500
     _ask_stage_read(root)
     reads.clear()
@@ -76,7 +77,7 @@ def test_one_rewritten_run_file_is_the_only_re_read(index_500):
     assert reads == []
 
 
-def test_add_run_through_the_store_re_reads_only_that_file(index_500):
+def test_add_run_through_the_store_re_reads_only_that_file(index_500) -> None:
     root, reads = index_500
     _ask_stage_read(root)
     reads.clear()
@@ -85,7 +86,7 @@ def test_add_run_through_the_store_re_reads_only_that_file(index_500):
     assert len(reads) == 1
 
 
-def test_record_halted_run_landed_index_leg_drops_one_run_and_re_reads_nothing(index_500):
+def test_record_halted_run_landed_index_leg_drops_one_run_and_re_reads_nothing(index_500) -> None:
     """mark_landed's index effect is remove_run; the next fresh_entry/run_ids/entries read opens no file."""
     root, reads = index_500
     _ask_stage_read(root)

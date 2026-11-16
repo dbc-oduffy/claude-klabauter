@@ -5,6 +5,11 @@ import time
 import pytest
 
 from coordinator_core import atomic_append
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from threading import Event
 
 pytestmark = pytest.mark.complete
 
@@ -12,11 +17,11 @@ _real_write = atomic_append.os.write
 
 
 @pytest.fixture
-def blocked_write(monkeypatch):
+def blocked_write(monkeypatch: pytest.MonkeyPatch):
     """Block os.write on append writer threads only, until the test releases it."""
     gate = threading.Event()
 
-    def write(fd, data):
+    def write(fd, data) -> int:
         if threading.current_thread().name.startswith("atomic-append-writer"):
             gate.wait(10)
         return _real_write(fd, data)
@@ -30,7 +35,7 @@ def blocked_write(monkeypatch):
 
 
 @pytest.mark.deliberate_wall_clock(reason="the caller must return at the deadline while the writer is blocked")
-def test_blocked_sink_returns_at_deadline_and_registers(tmp_path, blocked_write, capsys):
+def test_blocked_sink_returns_at_deadline_and_registers(tmp_path: Path, blocked_write, capsys: pytest.CaptureFixture[str]) -> None:
     sink = tmp_path / "s.jsonl"
     t0 = time.perf_counter()
     atomic_append.append_line(sink, b"a\n", droppable=True)
@@ -42,7 +47,7 @@ def test_blocked_sink_returns_at_deadline_and_registers(tmp_path, blocked_write,
 
 
 @pytest.mark.deliberate_wall_clock(reason="a stalled sink must drop at once, not wait another deadline")
-def test_stalled_sink_drops_immediately_and_healthy_sink_unaffected(tmp_path, blocked_write):
+def test_stalled_sink_drops_immediately_and_healthy_sink_unaffected(tmp_path: Path, blocked_write) -> None:
     bad = tmp_path / "bad.jsonl"
     atomic_append.append_line(bad, b"a\n", droppable=True)
     t0 = time.perf_counter()
@@ -59,11 +64,11 @@ def test_stalled_sink_drops_immediately_and_healthy_sink_unaffected(tmp_path, bl
 
 
 @pytest.mark.deliberate_wall_clock(reason="blocked sink A must not delay sink B")
-def test_blocked_sink_does_not_starve_other_sinks(tmp_path, monkeypatch):
+def test_blocked_sink_does_not_starve_other_sinks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     gate = threading.Event()
     slow = str(tmp_path / "slow.jsonl")
 
-    def write(fd, data):
+    def write(fd, data) -> int:
         if threading.current_thread().name.startswith("atomic-append-writer") and slow in threading.current_thread().name:
             gate.wait(10)
         return _real_write(fd, data)
@@ -78,14 +83,14 @@ def test_blocked_sink_does_not_starve_other_sinks(tmp_path, monkeypatch):
         gate.set()
 
 
-def test_writer_exception_inside_deadline_reraises(tmp_path):
+def test_writer_exception_inside_deadline_reraises(tmp_path: Path) -> None:
     with pytest.raises(OSError):
         atomic_append.append_line(tmp_path / "missing" / "s.jsonl", b"a\n")
     assert not atomic_append.stalled_sinks()
 
 
 @pytest.mark.deliberate_wall_clock(reason="a record line waits out a wedged writer instead of dropping")
-def test_a_record_line_waits_out_a_stall_and_lands(tmp_path, blocked_write):
+def test_a_record_line_waits_out_a_stall_and_lands(tmp_path: Path, blocked_write) -> None:
     sink = tmp_path / "notes.jsonl"
     atomic_append.append_line(sink, b"a\n", droppable=True)
     assert atomic_append.append_line(sink, b"b\n") is False
@@ -97,7 +102,7 @@ def test_a_record_line_waits_out_a_stall_and_lands(tmp_path, blocked_write):
 
 
 @pytest.mark.deliberate_wall_clock(reason="a record append to a wedged sink returns False at the default bound and the line still lands")
-def test_record_append_default_wait_is_bounded_and_line_survives(tmp_path, blocked_write):
+def test_record_append_default_wait_is_bounded_and_line_survives(tmp_path: Path, blocked_write) -> None:
     sink = tmp_path / "notes.jsonl"
     t0 = time.perf_counter()
     assert atomic_append.append_line(sink, b"a\n") is False
@@ -112,7 +117,7 @@ def test_record_append_default_wait_is_bounded_and_line_survives(tmp_path, block
 
 
 @pytest.mark.deliberate_wall_clock(reason="an explicit wait_secs=None still waits out the stall")
-def test_explicit_none_wait_is_unbounded(tmp_path, blocked_write, monkeypatch):
+def test_explicit_none_wait_is_unbounded(tmp_path: Path, blocked_write, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(atomic_append, "RECORD_WAIT_SECS", 0.05)
     sink = tmp_path / "notes.jsonl"
     threading.Timer(0.3, blocked_write.set).start()
@@ -120,16 +125,16 @@ def test_explicit_none_wait_is_unbounded(tmp_path, blocked_write, monkeypatch):
     assert sink.read_bytes() == b"a\n"
 
 
-def test_normal_append_registers_nothing(tmp_path):
+def test_normal_append_registers_nothing(tmp_path: Path) -> None:
     atomic_append.append_line(tmp_path / "s.jsonl", b"a\n")
     assert (tmp_path / "s.jsonl").read_bytes() == b"a\n"
     assert str(tmp_path / "s.jsonl") not in atomic_append.stalled_sinks()
 
 
-def _wedge_one_sink(monkeypatch, slow):
+def _wedge_one_sink(monkeypatch, slow) -> "Event":
     gate = threading.Event()
 
-    def write(fd, data):
+    def write(fd, data) -> int:
         name = threading.current_thread().name
         if name.startswith("atomic-append-writer") and slow in name:
             gate.wait(10)
@@ -141,7 +146,7 @@ def _wedge_one_sink(monkeypatch, slow):
     return gate
 
 
-def _settle():
+def _settle() -> None:
     deadline = time.monotonic() + 3
     while (atomic_append.in_flight_sinks() or atomic_append.stalled_sinks()) and time.monotonic() < deadline:
         time.sleep(0.01)
@@ -149,7 +154,7 @@ def _settle():
 
 
 @pytest.mark.deliberate_wall_clock(reason="retained rows to a wedged sink must not starve a healthy sink, then land on release")
-def test_retained_rows_held_while_wedged_and_land_on_release(tmp_path, monkeypatch):
+def test_retained_rows_held_while_wedged_and_land_on_release(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     slow = tmp_path / "slow.jsonl"
     gate = _wedge_one_sink(monkeypatch, str(slow))
     try:
@@ -167,7 +172,7 @@ def test_retained_rows_held_while_wedged_and_land_on_release(tmp_path, monkeypat
 
 
 @pytest.mark.deliberate_wall_clock(reason="rows past _RETAIN_MAX are dropped with one stderr count line")
-def test_retained_rows_past_cap_are_dropped_and_counted(tmp_path, monkeypatch, capsys):
+def test_retained_rows_past_cap_are_dropped_and_counted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     slow = tmp_path / "slow.jsonl"
     monkeypatch.setattr(atomic_append, "_RETAIN_MAX", 2)
     gate = _wedge_one_sink(monkeypatch, str(slow))
@@ -185,7 +190,7 @@ def test_retained_rows_past_cap_are_dropped_and_counted(tmp_path, monkeypatch, c
 
 
 @pytest.mark.deliberate_wall_clock(reason="the drain worker must keep serving healthy sinks while one sink is blocked")
-def test_drain_worker_not_starved_by_blocked_sink(tmp_path, blocked_write, monkeypatch):
+def test_drain_worker_not_starved_by_blocked_sink(tmp_path: Path, blocked_write, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(atomic_append, "_force_async", True)
     monkeypatch.setattr(atomic_append, "_queue", None)
     bad = tmp_path / "bad.jsonl"

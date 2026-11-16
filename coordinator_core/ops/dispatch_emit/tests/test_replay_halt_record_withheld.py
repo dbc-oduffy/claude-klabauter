@@ -9,6 +9,7 @@ import time
 import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = pytest.mark.spawns_process
 
@@ -20,7 +21,7 @@ PASSING = {"targeted_tests": {"status": "pass", "tests_failed": 0, "baseline": N
 
 
 @pytest.fixture(autouse=True)
-def _hosts_state(monkeypatch):
+def _hosts_state(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import process_artifact_policy
 
     monkeypatch.setattr(process_artifact_policy, "hosts_coordinator_state", lambda root: True)
@@ -45,13 +46,13 @@ def _repo(tmp_path):
     return root
 
 
-def _write(root, rel, text):
+def _write(root, rel, text) -> None:
     path = root / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8")
 
 
-def _halted_run_withholding_live_cell(root):
+def _halted_run_withholding_live_cell(root) -> None:
     rec = f"state/warp/{HALTED_RUN}"
     _write(root, f"{rec}/halted.json", json.dumps(
         {"status": "halted", "run_artifacts": {"withheld": {LIVE_CELL: "halt-record-only"}}}))
@@ -59,7 +60,7 @@ def _halted_run_withholding_live_cell(root):
     _write(root, LIVE_CELL, "# the halted run's unfinished work\n")
 
 
-def _landing_run_declaring_live_cell(root):
+def _landing_run_declaring_live_cell(root) -> None:
     from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 
     _write(root, f"state/warp/{LANDING_RUN}/run.json", "{}\n")
@@ -71,7 +72,7 @@ def _landing_run_declaring_live_cell(root):
     _write(root, "run.mjs", marker + "\n")
 
 
-def test_halt_record_does_not_commit_another_runs_withheld_untracked_file(tmp_path):
+def test_halt_record_does_not_commit_another_runs_withheld_untracked_file(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import terminal_commit
     from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM
 
@@ -90,7 +91,7 @@ def test_halt_record_does_not_commit_another_runs_withheld_untracked_file(tmp_pa
     assert LIVE_CELL not in landed, f"halt-record committed {LIVE_CELL} held by {HALTED_RUN}: {landed}"
 
 
-def test_landing_keeps_a_declared_path_another_halted_run_withholds_out_of_the_commit(tmp_path):
+def test_landing_keeps_a_declared_path_another_halted_run_withholds_out_of_the_commit(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import land_run
 
     root = _repo(tmp_path)
@@ -103,7 +104,7 @@ def test_landing_keeps_a_declared_path_another_halted_run_withholds_out_of_the_c
     assert land_run.foreign_halted_withheld(root, HALTED_RUN, None, [LIVE_CELL]) == {}
 
 
-def test_halt_record_still_lands_its_own_record_when_peer_withholds_an_undeclared_path(tmp_path):
+def test_halt_record_still_lands_its_own_record_when_peer_withholds_an_undeclared_path(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import terminal_commit
     from coordinator_core.ops.dispatch_emit.ask_contract import HALTED_RECORD_PARAM
 

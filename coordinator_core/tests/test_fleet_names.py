@@ -1,9 +1,11 @@
 """Tests for coordinator_core._fleet_names."""
 
 from coordinator_core import _fleet_names as fn
+from pathlib import Path
+import pytest
 
 
-def _env(tmp_path, monkeypatch, registry="", local=""):
+def _env(tmp_path, monkeypatch, registry: str = "", local: str = ""):
     home = tmp_path / "settings"
     (home / "machine-local").mkdir(parents=True)
     if registry:
@@ -17,7 +19,7 @@ def _env(tmp_path, monkeypatch, registry="", local=""):
     return claude
 
 
-def test_posix_windows_working_repos_and_empty(tmp_path, monkeypatch):
+def test_posix_windows_working_repos_and_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(
         tmp_path,
         monkeypatch,
@@ -27,24 +29,24 @@ def test_posix_windows_working_repos_and_empty(tmp_path, monkeypatch):
     assert fn.registry_repo_names() == ("Alpha", "Beta", "Gamma")
 
 
-def test_dedup_by_case_first_spelling_wins(tmp_path, monkeypatch):
+def test_dedup_by_case_first_spelling_wins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch, registry='"repos.a" = "/x/alpha"\n"repos.b" = "/x/Beta"\n')
     assert fn.sibling_repo_names(("ALPHA", "Delta")) == ("ALPHA", "Delta", "Beta")
 
 
-def test_missing_registry(tmp_path, monkeypatch):
+def test_missing_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     assert fn.registry_repo_names() == ()
     assert fn.sibling_repo_names(("Q",)) == ("Q",)
     assert fn.doctrine_repo_name() is None
 
 
-def test_unparseable_registry(tmp_path, monkeypatch):
+def test_unparseable_registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch, registry="= not toml [")
     assert fn.registry_repo_names() == ()
 
 
-def test_doctrine_via_pointer(tmp_path, monkeypatch):
+def test_doctrine_via_pointer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     claude = _env(tmp_path, monkeypatch)
     repo = tmp_path / "Doc"
     repo.mkdir()
@@ -53,7 +55,7 @@ def test_doctrine_via_pointer(tmp_path, monkeypatch):
     assert fn.doctrine_repo_name() == "Doc"
 
 
-def test_doctrine_via_sentinel_scan(tmp_path, monkeypatch):
+def test_doctrine_via_sentinel_scan(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plain = tmp_path / "Plain"
     plain.mkdir()
     doc = tmp_path / "Doc2"
@@ -63,7 +65,7 @@ def test_doctrine_via_sentinel_scan(tmp_path, monkeypatch):
     assert fn.doctrine_repo_name() == "Doc2"
 
 
-def test_pointer_without_sentinel_falls_through(tmp_path, monkeypatch):
+def test_pointer_without_sentinel_falls_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     doc = tmp_path / "Scanned"
     doc.mkdir()
     (doc / ".coordinator-dev-repo").write_text("")
@@ -74,7 +76,7 @@ def test_pointer_without_sentinel_falls_through(tmp_path, monkeypatch):
     assert fn.doctrine_repo_name() == "Scanned"
 
 
-def test_no_subprocess_import():
+def test_no_subprocess_import() -> None:
     import ast
 
     with open(fn.__file__, encoding="utf-8") as fh:

@@ -9,9 +9,10 @@ from coordinator_core.ops.dispatch_emit.tests.test_pipeline_compose_brief_and_ha
     _segment,
     _stage,
 )
+from pathlib import Path
 
 
-def test_one_sidecar_marker_per_stage_across_a_chain(tmp_path):
+def test_one_sidecar_marker_per_stage_across_a_chain(tmp_path: Path) -> None:
     first = _segment(tmp_path, "pa", [_stage("make"), _stage("use", depends_on=["make"])])
     second = _segment(tmp_path, "pb", [_stage("work")])
     script = _compose([first, second])
@@ -23,7 +24,7 @@ def test_one_sidecar_marker_per_stage_across_a_chain(tmp_path):
     assert len(script.encode("utf-8")) < WORKFLOW_SCRIPT_CAP_BYTES
 
 
-def test_label_slug_is_computed_at_fire_time(tmp_path):
+def test_label_slug_is_computed_at_fire_time(tmp_path: Path) -> None:
     script = _compose([_segment(tmp_path, "pa", [_stage("make")])])
     assert ".replace(/[^A-Za-z0-9._-]/g, '-')" in script
     assert "String('make')" in script

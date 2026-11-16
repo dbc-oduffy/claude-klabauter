@@ -31,6 +31,8 @@ import hashlib
 from typing import List, Tuple
 
 from coordinator_core.ops import review_coverage_core as rcc
+from pathlib import Path
+import pytest
 
 
 def _rec(sha_range: str, artifact: str) -> Tuple[str, dict]:
@@ -48,7 +50,7 @@ def _sha_for(sha_range: str) -> str:
     return hashlib.sha1(sha_range.encode()).hexdigest()
 
 
-def test_build_segments_dedupes_repeated_range_revlist_calls(monkeypatch):
+def test_build_segments_dedupes_repeated_range_revlist_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: List[List[str]] = []
 
     def fake_run(cmd, cwd=None):
@@ -81,7 +83,7 @@ def test_build_segments_dedupes_repeated_range_revlist_calls(monkeypatch):
         assert seg["files"] == [f"file-for-{seg['sha_range']}.py"]
 
 
-def test_build_segments_skip_on_unresolvable_ref_is_memoised(monkeypatch):
+def test_build_segments_skip_on_unresolvable_ref_is_memoised(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: List[List[str]] = []
 
     def fake_run(cmd, cwd=None):
@@ -104,7 +106,7 @@ def test_build_segments_skip_on_unresolvable_ref_is_memoised(monkeypatch):
     assert segments == []
 
 
-def test_build_segments_dedupes_repeated_range_namelog_calls(monkeypatch):
+def test_build_segments_dedupes_repeated_range_namelog_calls(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: List[List[str]] = []
 
     def fake_run(cmd, cwd=None):
@@ -133,7 +135,7 @@ def test_build_segments_dedupes_repeated_range_namelog_calls(monkeypatch):
         assert seg["files"] == [f"file-for-{seg['sha_range']}.py"]
 
 
-def test_build_segments_skip_on_unresolvable_namelog_is_memoised(monkeypatch):
+def test_build_segments_skip_on_unresolvable_namelog_is_memoised(monkeypatch: pytest.MonkeyPatch) -> None:
     calls: List[List[str]] = []
 
     def fake_run(cmd, cwd=None):
@@ -165,7 +167,7 @@ def _aggregate_lines(err: str) -> List[str]:
     return [ln for ln in err.splitlines() if _AGGREGATE_TOKEN in ln]
 
 
-def test_load_records_skip_emits_one_unparseable_file_aggregate(tmp_path, capsys):
+def test_load_records_skip_emits_one_unparseable_file_aggregate(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     bad = tmp_path / "2026-01-01-bad.json"
     bad.write_text("{not valid json", encoding="utf-8")
 
@@ -177,7 +179,7 @@ def test_load_records_skip_emits_one_unparseable_file_aggregate(tmp_path, capsys
     assert "1 trail file(s)" in lines[0]
 
 
-def test_build_segments_skip_emits_one_unresolvable_range_aggregate(monkeypatch, capsys):
+def test_build_segments_skip_emits_one_unresolvable_range_aggregate(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     def fake_run(cmd, cwd=None):
         if cmd[:2] == ["git", "log"]:
             sha_range = cmd[-1]
@@ -207,7 +209,7 @@ def test_build_segments_skip_emits_one_unresolvable_range_aggregate(monkeypatch,
     assert len(segments) == 1
 
 
-def test_build_segments_all_resolvable_emits_no_aggregate(monkeypatch, capsys):
+def test_build_segments_all_resolvable_emits_no_aggregate(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     def fake_run(cmd, cwd=None):
         if cmd[:2] == ["git", "log"]:
             sha_range = cmd[-1]

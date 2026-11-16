@@ -23,9 +23,13 @@ from coordinator_core.ops.compute_layer_scaffold.emit import (
     InvalidVerb,
     compose_producer_module,
 )
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 
-def _load_emitted_module(text: str, tmp_path: Path, module_name: str):
+def _load_emitted_module(text: str, tmp_path: Path, module_name: str) -> ModuleType:
     module_path = tmp_path / f"{module_name}.py"
     module_path.write_text(text, encoding="utf-8")
     spec = importlib.util.spec_from_file_location(module_name, module_path)
@@ -38,22 +42,22 @@ def _load_emitted_module(text: str, tmp_path: Path, module_name: str):
     return module
 
 
-def test_compose_producer_module_requires_skill_name():
+def test_compose_producer_module_requires_skill_name() -> None:
     with pytest.raises(ValueError):
         compose_producer_module("", ["do_thing"])
 
 
-def test_compose_producer_module_requires_at_least_one_verb():
+def test_compose_producer_module_requires_at_least_one_verb() -> None:
     with pytest.raises(ValueError):
         compose_producer_module("example_assemble", [])
 
 
-def test_compose_producer_module_rejects_empty_verb():
+def test_compose_producer_module_rejects_empty_verb() -> None:
     with pytest.raises(InvalidVerb):
         compose_producer_module("example_assemble", [""])
 
 
-def test_ac1_imports_contract_symbols_and_reimplements_none(tmp_path):
+def test_ac1_imports_contract_symbols_and_reimplements_none(tmp_path: Path) -> None:
     """AST-walk the emitted TEXT (not read-it-yourself) for the three
     required imports, and assert no local def named build_envelope,
     extend_exit_codes, or execute_directives shadows them."""
@@ -95,7 +99,7 @@ def test_ac1_imports_contract_symbols_and_reimplements_none(tmp_path):
     assert not reimplemented
 
 
-def test_ac2_brief_returns_exactly_the_8_envelope_keys(tmp_path):
+def test_ac2_brief_returns_exactly_the_8_envelope_keys(tmp_path: Path) -> None:
     """Write the emitted text to a tmp path, import it, and CALL brief() —
     not a string-match over the template."""
     from coordinator_core.contract.decision_object.envelope import ENVELOPE_KEYS
@@ -108,7 +112,7 @@ def test_ac2_brief_returns_exactly_the_8_envelope_keys(tmp_path):
     assert len(envelope) == 8
 
 
-def test_ac4_ladder_is_always_explicit_never_bare(tmp_path):
+def test_ac4_ladder_is_always_explicit_never_bare(tmp_path: Path) -> None:
     text = compose_producer_module("example_assemble", ["do_thing"])
     assert "BUSINESS_FAIL=1" in text
     assert "USAGE=2" in text
@@ -128,7 +132,7 @@ def test_ac4_ladder_is_always_explicit_never_bare(tmp_path):
                 assert kw.arg != "SUCCESS"
 
 
-def test_ac4_main_returns_exit_code_success_never_ok(tmp_path):
+def test_ac4_main_returns_exit_code_success_never_ok(tmp_path: Path) -> None:
     """Regression oracle for the spike's ExitCode.OK/SUCCESS crash: import
     the emitted module and CALL main(['brief']), which must not raise."""
     text = compose_producer_module("example_assemble", ["do_thing"])
@@ -140,7 +144,7 @@ def test_ac4_main_returns_exit_code_success_never_ok(tmp_path):
     assert hasattr(module.ExampleAssembleExitCode, "SUCCESS")
 
 
-def test_main_end_to_end_brief_apply_and_unknown_verb(tmp_path):
+def test_main_end_to_end_brief_apply_and_unknown_verb(tmp_path: Path) -> None:
     """Exercises main() across brief, apply, and the unknown-verb arm —
     the exact end-to-end path the spike's generated test skipped."""
     text = compose_producer_module("example_assemble", ["do_thing"])
@@ -152,7 +156,7 @@ def test_main_end_to_end_brief_apply_and_unknown_verb(tmp_path):
     assert module.main([]) == int(module.ExampleAssembleExitCode.USAGE)
 
 
-def test_ac5_cli_dispatch_is_a_closed_dict_literal_over_the_manifest(tmp_path):
+def test_ac5_cli_dispatch_is_a_closed_dict_literal_over_the_manifest(tmp_path: Path) -> None:
     text = compose_producer_module("example_assemble", ["do_thing", "undo_thing"])
     tree = ast.parse(text)
 
@@ -179,7 +183,7 @@ def test_ac5_cli_dispatch_is_a_closed_dict_literal_over_the_manifest(tmp_path):
     assert set(module._CLI_DISPATCH.keys()) == set(module.CONSUMES_MANIFEST)
 
 
-def test_emitter_source_has_no_getattr_or_import_module_dispatch_path():
+def test_emitter_source_has_no_getattr_or_import_module_dispatch_path() -> None:
     """The emitter itself (not just its output) must have no code path
     producing getattr/import_module dispatch (AC5, on the emitter)."""
     import coordinator_core.ops.compute_layer_scaffold.emit as emit_module
@@ -191,7 +195,7 @@ def test_emitter_source_has_no_getattr_or_import_module_dispatch_path():
             assert node.func.id not in ("getattr", "import_module")
 
 
-def test_ac1_skill_name_with_triple_quote_does_not_break_out_of_docstring():
+def test_ac1_skill_name_with_triple_quote_does_not_break_out_of_docstring() -> None:
     """Regression for a code-reviewer finding: skill_name reached the
     module docstring unescaped while every sibling caller-supplied value
     (verbs, exit-code class name) was sanitized/escaped first. A skill_name
@@ -201,7 +205,7 @@ def test_ac1_skill_name_with_triple_quote_does_not_break_out_of_docstring():
     ast.parse(text)  # must not raise SyntaxError
 
 
-def test_ac1_skill_name_with_trailing_backslash_before_quotes_does_not_break_out_of_docstring():
+def test_ac1_skill_name_with_trailing_backslash_before_quotes_does_not_break_out_of_docstring() -> None:
     """The prior payload here
     (letter, backslash, letter "b", newline, letter "c") is not a regression
     test: the backslash-then-"b" is a valid Python escape (backspace) and a
@@ -223,7 +227,7 @@ def test_ac1_skill_name_with_trailing_backslash_before_quotes_does_not_break_out
     ast.parse(text)  # must not raise SyntaxError
 
 
-def test_ac1_skill_name_with_nul_byte_rejected_fail_loud():
+def test_ac1_skill_name_with_nul_byte_rejected_fail_loud() -> None:
     """A NUL byte in skill_name
     used to pass through all three `.replace()` calls unchanged and land
     verbatim in the emitted text, which CPython's ast.parse()/compile()
@@ -233,7 +237,7 @@ def test_ac1_skill_name_with_nul_byte_rejected_fail_loud():
         compose_producer_module("bad\x00name", ["do_thing"])
 
 
-def test_ac1_skill_name_with_cr_crlf_and_unicode_line_separators_renders_single_line():
+def test_ac1_skill_name_with_cr_crlf_and_unicode_line_separators_renders_single_line() -> None:
     """_docstring_safe's own
     docstring claims it "neutralizes newlines so the header always renders
     as a single visual line"; a bare CR, CRLF, or the Unicode line
@@ -251,7 +255,7 @@ def test_ac1_skill_name_with_cr_crlf_and_unicode_line_separators_renders_single_
         assert " " not in text
 
 
-def test_ac1_skill_name_with_named_and_numeric_escape_shapes_still_parses():
+def test_ac1_skill_name_with_named_and_numeric_escape_shapes_still_parses() -> None:
     """Pins the escaping ORDER
     (double every backslash first, then neutralize quote runs) that the
     reviewer hand-verified neutralizes `\\N{...}`/`\\x41`/`\\uXXXX`-shaped
@@ -268,7 +272,7 @@ def test_ac1_skill_name_with_named_and_numeric_escape_shapes_still_parses():
         ast.parse(text)  # must not raise SyntaxError
 
 
-def test_ac12_compose_producer_module_performs_no_file_io(tmp_path, monkeypatch):
+def test_ac12_compose_producer_module_performs_no_file_io(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Emission writes module TEXT and nothing else — assert negatively
     that no file appears under a caller-named scratch dir during emission."""
     before = set(tmp_path.iterdir())

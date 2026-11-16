@@ -24,7 +24,7 @@ ME = "11111111-2222-3333-4444-555555555555"
 
 
 @pytest.fixture
-def orphan(repo, monkeypatch):  # noqa: F811
+def orphan(repo, monkeypatch: pytest.MonkeyPatch):  # noqa: F811
     """A run the dead session `DEAD` staged (plan, manifest, receipt) and never finished."""
     monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid, cwd=None: False)
     _committed_s_plan(repo, [("A1", "coded"), ("A2", "open")])
@@ -38,17 +38,17 @@ def orphan(repo, monkeypatch):  # noqa: F811
     return repo
 
 
-def test_gate_adopts_an_orphan_in_run_and_resumes_without_halting(orphan):
+def test_gate_adopts_an_orphan_in_run_and_resumes_without_halting(orphan) -> None:
     out = gate_handler({"sizing_path": REL, "run_id": FRESH, "writes": ["a.py"]}, repo_root=orphan)
 
     assert out["halt"] is None and out["resume_plan"] == PLAN_REL and out["resume_rows"] == ["A2"], out
 
 
-def _adopt_fails(monkeypatch):
+def _adopt_fails(monkeypatch) -> None:
     monkeypatch.setattr(oa, "_handler", lambda params, repo_root=None: {"ok": False, "reason": "adopt refused"})
 
 
-def test_gate_refuses_an_orphan_naming_the_adopt_call(orphan, monkeypatch):
+def test_gate_refuses_an_orphan_naming_the_adopt_call(orphan, monkeypatch: pytest.MonkeyPatch) -> None:
     _adopt_fails(monkeypatch)
     out = gate_handler({"sizing_path": REL, "run_id": FRESH, "writes": ["a.py"]}, repo_root=orphan)
 
@@ -59,7 +59,7 @@ def test_gate_refuses_an_orphan_naming_the_adopt_call(orphan, monkeypatch):
     assert ORPHAN in nxt["call"] and oa.OP_NAME in nxt["call"] and "Workflow" not in nxt["call"]
 
 
-def test_adopted_orphan_resumes_without_a_replan_and_ask_stage_is_already_staged(orphan):
+def test_adopted_orphan_resumes_without_a_replan_and_ask_stage_is_already_staged(orphan) -> None:
     reply = oa._handler({"run_id": ORPHAN, "session_id": ME}, repo_root=orphan)
     assert reply["ok"] is True and reply["resume_stage"] == "execute", reply
 
@@ -74,7 +74,7 @@ def test_adopted_orphan_resumes_without_a_replan_and_ask_stage_is_already_staged
         assert again.get(ask_stage_receipt.ALREADY_STAGED_KEY) is True, again
 
 
-def test_orphan_pending_fire_does_not_make_the_orphan_superseded(orphan, monkeypatch):
+def test_orphan_pending_fire_does_not_make_the_orphan_superseded(orphan, monkeypatch: pytest.MonkeyPatch) -> None:
     _adopt_fails(monkeypatch)
     out = gate_handler({"sizing_path": REL, "run_id": FRESH, "writes": ["a.py"]}, repo_root=orphan)
     assert out["halt"]["kind"] == oa.ORPHAN_PENDING
@@ -88,7 +88,7 @@ def test_orphan_pending_fire_does_not_make_the_orphan_superseded(orphan, monkeyp
     assert verdict["orphaned"] is True and verdict["superseded_by"] is None, verdict
 
 
-def test_a_live_owner_is_not_halted_on(orphan, monkeypatch):
+def test_a_live_owner_is_not_halted_on(orphan, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("coordinator_core.session.liveness.session_live", lambda sid, cwd=None: sid == DEAD)
     out = gate_handler({"sizing_path": REL, "run_id": FRESH, "writes": ["a.py"]}, repo_root=orphan)
     assert (out["halt"] or {}).get("kind") != oa.ORPHAN_PENDING, out

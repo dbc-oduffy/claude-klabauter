@@ -36,6 +36,7 @@ from coordinator_core.ops.cartography_stack import (
     _cartography_stack,
     detect_project_stack,
 )
+from pathlib import Path
 
 _OP_NAME = "cartography.stack"
 assert _OP_NAME in _REGISTRY, (
@@ -44,16 +45,16 @@ assert _OP_NAME in _REGISTRY, (
 )
 
 
-def test_op_registered_under_exact_key():
+def test_op_registered_under_exact_key() -> None:
     assert _REGISTRY[_OP_NAME] is _cartography_stack
 
 
-def test_op_missing_target_root_raises_value_error():
+def test_op_missing_target_root_raises_value_error() -> None:
     with pytest.raises(ValueError, match="target_root"):
         _cartography_stack({})
 
 
-def test_op_empty_tree_returns_empty_lists(tmp_path):
+def test_op_empty_tree_returns_empty_lists(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     result = _cartography_stack({"target_root": str(root)})
@@ -63,7 +64,7 @@ def test_op_empty_tree_returns_empty_lists(tmp_path):
     assert result["target_root"] == str(root.resolve())
 
 
-def test_detect_languages_present_only_and_fence_order(tmp_path):
+def test_detect_languages_present_only_and_fence_order(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     (root / "main.cpp").write_text("", encoding="utf-8")
@@ -73,7 +74,7 @@ def test_detect_languages_present_only_and_fence_order(tmp_path):
     assert result["languages"] == ["Python", "TypeScript", "C++"]
 
 
-def test_typescript_dedupes_ts_and_tsx(tmp_path):
+def test_typescript_dedupes_ts_and_tsx(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     (root / "a.ts").write_text("", encoding="utf-8")
@@ -82,7 +83,7 @@ def test_typescript_dedupes_ts_and_tsx(tmp_path):
     assert result["languages"] == ["TypeScript"]
 
 
-def test_language_hit_found_in_nested_directory(tmp_path):
+def test_language_hit_found_in_nested_directory(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     nested = root / "src" / "pkg"
     nested.mkdir(parents=True)
@@ -91,7 +92,7 @@ def test_language_hit_found_in_nested_directory(tmp_path):
     assert result["languages"] == ["Python"]
 
 
-def test_skip_dirs_do_not_contribute_language_hits(tmp_path):
+def test_skip_dirs_do_not_contribute_language_hits(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     vendored = root / "node_modules" / "pkg"
     vendored.mkdir(parents=True)
@@ -100,7 +101,7 @@ def test_skip_dirs_do_not_contribute_language_hits(tmp_path):
     assert result["languages"] == []
 
 
-def test_detect_test_frameworks_present_only(tmp_path):
+def test_detect_test_frameworks_present_only(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     (root / "tests").mkdir(parents=True)
     (root / "spec").mkdir(parents=True)
@@ -108,7 +109,7 @@ def test_detect_test_frameworks_present_only(tmp_path):
     assert result["test_frameworks"] == ["tests", "spec"]
 
 
-def test_detect_configs_present_only(tmp_path):
+def test_detect_configs_present_only(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     (root / "pyproject.toml").write_text("", encoding="utf-8")
@@ -117,7 +118,7 @@ def test_detect_configs_present_only(tmp_path):
     assert result["configs"] == ["pyproject.toml", "CMakeLists.txt"]
 
 
-def test_jest_config_glob_inserted_in_fence_order(tmp_path):
+def test_jest_config_glob_inserted_in_fence_order(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     (root / "pyproject.toml").write_text("", encoding="utf-8")
@@ -127,7 +128,7 @@ def test_jest_config_glob_inserted_in_fence_order(tmp_path):
     assert result["configs"] == ["pyproject.toml", "jest.config.*", "tsconfig.json"]
 
 
-def test_jest_config_glob_inserted_before_cmakelists_when_tsconfig_absent(tmp_path):
+def test_jest_config_glob_inserted_before_cmakelists_when_tsconfig_absent(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     (root / "pyproject.toml").write_text("", encoding="utf-8")
@@ -137,7 +138,7 @@ def test_jest_config_glob_inserted_before_cmakelists_when_tsconfig_absent(tmp_pa
     assert result["configs"] == ["pyproject.toml", "jest.config.*", "CMakeLists.txt"]
 
 
-def test_top_level_config_not_matched_when_nested(tmp_path):
+def test_top_level_config_not_matched_when_nested(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     nested = root / "sub"
     nested.mkdir(parents=True)
@@ -146,7 +147,7 @@ def test_top_level_config_not_matched_when_nested(tmp_path):
     assert result["configs"] == []
 
 
-def test_idempotent_second_invocation_is_byte_identical(tmp_path):
+def test_idempotent_second_invocation_is_byte_identical(tmp_path: Path) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     (root / "script.py").write_text("", encoding="utf-8")
@@ -158,7 +159,7 @@ def test_idempotent_second_invocation_is_byte_identical(tmp_path):
     assert first == second
 
 
-def test_nonexistent_target_root_degrades_to_empty_results(tmp_path):
+def test_nonexistent_target_root_degrades_to_empty_results(tmp_path: Path) -> None:
     missing = tmp_path / "does-not-exist"
     result = _cartography_stack({"target_root": str(missing)})
     assert result["languages"] == []

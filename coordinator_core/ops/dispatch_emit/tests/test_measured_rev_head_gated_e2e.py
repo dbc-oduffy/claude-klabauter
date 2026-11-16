@@ -8,26 +8,27 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import measured_rev as mr
 from coordinator_core.ops.dispatch_emit.ask_contract import MEASURED_REV_ENV
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 BUDGET = 100
 
 
-def _git(root, *args):
+def _git(root, *args) -> str:
     return subprocess.run(
         ["git", *args], cwd=root, check=True, capture_output=True, text=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
     ).stdout.strip()
 
 
-def _gate_size(root, path):
+def _gate_size(root, path) -> int:
     """Fixture gate: the blob size of `path` at COORDINATOR_MEASURED_REV or HEAD."""
     rev = os.environ.get(MEASURED_REV_ENV) or "HEAD"
     return int(_git(root, "cat-file", "-s", f"{rev}:{path}"))
 
 
-def _green(root, path):
+def _green(root, path) -> bool:
     return _gate_size(root, path) <= BUDGET
 
 
@@ -44,7 +45,7 @@ def _over_budget_repo(root):
     return skill
 
 
-def test_head_gated_row_goes_green_at_measured_rev(tmp_path, monkeypatch):
+def test_head_gated_row_goes_green_at_measured_rev(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     skill = _over_budget_repo(tmp_path)
 
     monkeypatch.delenv(MEASURED_REV_ENV, raising=False)
@@ -68,7 +69,7 @@ def test_head_gated_row_goes_green_at_measured_rev(tmp_path, monkeypatch):
     assert mr.measured_rev_drift(run_dir, tmp_path) == ["skill.md"]
 
 
-def test_over_budget_worktree_change_stays_red(tmp_path, monkeypatch):
+def test_over_budget_worktree_change_stays_red(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     skill = _over_budget_repo(tmp_path)
     skill.write_text("x" * 400)
     out = mr.measured_rev("run-red", ["skill.md"], repo_root=tmp_path)

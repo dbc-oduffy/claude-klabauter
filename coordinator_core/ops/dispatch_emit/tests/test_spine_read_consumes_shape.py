@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.dispatch_emit.spine_read import InvalidFieldTypeError, read_spine
+from pathlib import Path
 
 
 def _plan(tmp_path, field: str):
@@ -19,14 +20,14 @@ def _plan(tmp_path, field: str):
 
 
 @pytest.mark.parametrize("field", ["consumes", "reads"])
-def test_dict_entry_names_row_and_field(tmp_path, field):
+def test_dict_entry_names_row_and_field(tmp_path: Path, field) -> None:
     with pytest.raises(InvalidFieldTypeError) as info:
         read_spine(_plan(tmp_path, field))
     message = str(info.value)
     assert "'C1'" in message and f"{field}:" in message and "artifact" in message
 
 
-def test_valid_string_entries_parse_unchanged(tmp_path):
+def test_valid_string_entries_parse_unchanged(tmp_path: Path) -> None:
     path = tmp_path / "plan.md"
     path.write_text(
         "# p\n\n## Tasks\n\n```yaml plan-tasks\n"

@@ -7,6 +7,7 @@ from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.halted_run_route import route_line
+import pytest
 
 RUN = "ask-20261023T121013-e7c4ae"
 
@@ -30,7 +31,7 @@ def _land(root: Path, params: dict) -> dict:
     return land_run._handler(params, repo_root=root / ".git")
 
 
-def test_scriptless_land_of_halted_run_names_route(tmp_path):
+def test_scriptless_land_of_halted_run_names_route(tmp_path: Path) -> None:
     _halt(tmp_path, RUN)
     out = _land(tmp_path, {"task_output_path": _digest(tmp_path, {"run_id": RUN, "ledger_verdict": "drifted"})})
     assert out["refused"] == "halted-run"
@@ -38,7 +39,7 @@ def test_scriptless_land_of_halted_run_names_route(tmp_path):
     assert route_line(RUN) in out["error"]
 
 
-def test_scriptless_land_of_unhalted_run_keeps_generic_refusal(tmp_path):
+def test_scriptless_land_of_unhalted_run_keeps_generic_refusal(tmp_path: Path) -> None:
     _halt(tmp_path, RUN, status="landed")
     out = _land(tmp_path, {"task_output_path": _digest(tmp_path, {"run_id": RUN})})
     assert out.get("refused") != "halted-run"
@@ -53,13 +54,13 @@ def _halt_withheld(root: Path, run_id: str, withheld: dict) -> None:
     p.write_text(json.dumps(marker), encoding="utf-8")
 
 
-def test_land_only_ask_with_withheld_work_commits_halted_record(tmp_path, monkeypatch):
+def test_land_only_ask_with_withheld_work_commits_halted_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import halted_record_commit
 
     _halt_withheld(tmp_path, RUN, {"a/b.py": "held"})
     seen = {}
 
-    def fake(worktree_root, repo_root, params):
+    def fake(worktree_root, repo_root, params) -> dict[str, bool]:
         seen.update(params)
         return {"ok": True}
 
@@ -69,7 +70,7 @@ def test_land_only_ask_with_withheld_work_commits_halted_record(tmp_path, monkey
     assert seen["halted_by"]["halted"] == "ledger-check"
 
 
-def test_land_only_ask_with_nothing_withheld_keeps_refusal(tmp_path, monkeypatch):
+def test_land_only_ask_with_nothing_withheld_keeps_refusal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import halted_record_commit
 
     _halt(tmp_path, RUN)

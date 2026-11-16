@@ -3,6 +3,7 @@ import importlib.util
 import re
 from pathlib import Path
 from types import SimpleNamespace
+import pytest
 
 BIN = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('router_collision_free', BIN / 'unimatrix-peer-router.py')
@@ -27,7 +28,7 @@ def _register(tmp_path, monkeypatch, directory, sid, cwd):
         {'session_id': sid, 'cwd': str(cwd), 'hook_event_name': 'SessionStart'}, directory)
 
 
-def test_two_sessions_one_folder_get_distinct_sequenced_names(tmp_path, monkeypatch, capsys):
+def test_two_sessions_one_folder_get_distinct_sequenced_names(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     settings, locks = tmp_path / 'settings', tmp_path / 'locks'
     directory = settings / 'host-sessions' / 'codex'
     locks.mkdir()

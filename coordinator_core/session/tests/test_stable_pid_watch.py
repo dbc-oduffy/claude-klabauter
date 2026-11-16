@@ -12,6 +12,8 @@ from coordinator_core.session.stable_pid_watch import (
     STATUS_MISS,
     scan_stable_pid_misses,
 )
+from pathlib import Path
+import pytest
 
 
 def _write_session(root, sid, meta):
@@ -21,7 +23,7 @@ def _write_session(root, sid, meta):
     return sdir
 
 
-def test_zero_misses_reports_clean(tmp_path):
+def test_zero_misses_reports_clean(tmp_path: Path) -> None:
     root = tmp_path / "coordinator-sessions"
     _write_session(root, "s1", {"stable_pid": "1234", "stable_pid_start_epoch": "1700000000"})
     _write_session(root, "s2", {"stable_pid": "5678", "stable_pid_lstart": "Tue Jul 14 15:26:28 2026"})
@@ -33,7 +35,7 @@ def test_zero_misses_reports_clean(tmp_path):
     assert result["misses"] == []
 
 
-def test_one_session_missing_stable_pid_alerts(tmp_path):
+def test_one_session_missing_stable_pid_alerts(tmp_path: Path) -> None:
     root = tmp_path / "coordinator-sessions"
     _write_session(root, "s1", {"stable_pid": "1234", "stable_pid_start_epoch": "1700000000"})
     _write_session(root, "s2", {"stable_pid": "", "stable_pid_start_epoch": ""})
@@ -45,7 +47,7 @@ def test_one_session_missing_stable_pid_alerts(tmp_path):
     assert result["misses"] == [{"session": "s2", "reason": "empty"}]
 
 
-def test_stable_pid_present_without_birth_witness_counts_as_miss(tmp_path):
+def test_stable_pid_present_without_birth_witness_counts_as_miss(tmp_path: Path) -> None:
     root = tmp_path / "coordinator-sessions"
     _write_session(root, "s1", {"stable_pid": "9999"})
 
@@ -56,7 +58,7 @@ def test_stable_pid_present_without_birth_witness_counts_as_miss(tmp_path):
     assert result["misses"] == [{"session": "s1", "reason": "no_witness"}]
 
 
-def test_stable_pid_present_with_only_lstart_is_not_a_miss(tmp_path):
+def test_stable_pid_present_with_only_lstart_is_not_a_miss(tmp_path: Path) -> None:
     root = tmp_path / "coordinator-sessions"
     _write_session(root, "s1", {"stable_pid": "9999", "stable_pid_lstart": "Tue Jul 14 15:26:28 2026"})
 
@@ -66,7 +68,7 @@ def test_stable_pid_present_with_only_lstart_is_not_a_miss(tmp_path):
     assert result["misses"] == []
 
 
-def test_stable_pid_present_with_only_start_epoch_is_not_a_miss(tmp_path):
+def test_stable_pid_present_with_only_start_epoch_is_not_a_miss(tmp_path: Path) -> None:
     root = tmp_path / "coordinator-sessions"
     _write_session(root, "s1", {"stable_pid": "9999", "stable_pid_start_epoch": "1700000000"})
 
@@ -76,7 +78,7 @@ def test_stable_pid_present_with_only_start_epoch_is_not_a_miss(tmp_path):
     assert result["misses"] == []
 
 
-def test_empty_corpus_does_not_crash(tmp_path):
+def test_empty_corpus_does_not_crash(tmp_path: Path) -> None:
     root = tmp_path / "coordinator-sessions"
     root.mkdir()
 
@@ -87,7 +89,7 @@ def test_empty_corpus_does_not_crash(tmp_path):
     assert result["misses"] == []
 
 
-def test_missing_sessions_dir_does_not_crash(tmp_path):
+def test_missing_sessions_dir_does_not_crash(tmp_path: Path) -> None:
     result = scan_stable_pid_misses(sessions_dir=tmp_path / "does-not-exist")
 
     assert result["status"] == STATUS_EMPTY
@@ -95,7 +97,7 @@ def test_missing_sessions_dir_does_not_crash(tmp_path):
     assert result["misses"] == []
 
 
-def test_unreadable_meta_json_counts_as_miss(tmp_path):
+def test_unreadable_meta_json_counts_as_miss(tmp_path: Path) -> None:
     root = tmp_path / "coordinator-sessions"
     sdir = root / "s1"
     sdir.mkdir(parents=True)
@@ -108,7 +110,7 @@ def test_unreadable_meta_json_counts_as_miss(tmp_path):
     assert result["misses"] == [{"session": "s1", "reason": "empty"}]
 
 
-def test_non_session_subdir_without_meta_json_is_not_counted(tmp_path):
+def test_non_session_subdir_without_meta_json_is_not_counted(tmp_path: Path) -> None:
     root = tmp_path / "coordinator-sessions"
     stray = root / "logs"
     stray.mkdir(parents=True)
@@ -120,7 +122,7 @@ def test_non_session_subdir_without_meta_json_is_not_counted(tmp_path):
     assert result["checked"] == 0
 
 
-def test_touched_txt_without_meta_json_counts_as_miss(tmp_path):
+def test_touched_txt_without_meta_json_counts_as_miss(tmp_path: Path) -> None:
     # AC8/C4 (2026-08-22) originally pinned this via a bare `touched.txt`
     # sibling. AC11 (2026-08-27) retires `_touch_record_family`'s legacy
     # arm: `touch_record.discover_family` only recognizes the
@@ -139,7 +141,7 @@ def test_touched_txt_without_meta_json_counts_as_miss(tmp_path):
     assert result["checked"] == 0
 
 
-def test_dir_with_neither_meta_json_nor_any_file_is_not_counted(tmp_path):
+def test_dir_with_neither_meta_json_nor_any_file_is_not_counted(tmp_path: Path) -> None:
     root = tmp_path / "coordinator-sessions"
     sdir = root / "s1"
     sdir.mkdir(parents=True)
@@ -150,7 +152,7 @@ def test_dir_with_neither_meta_json_nor_any_file_is_not_counted(tmp_path):
     assert result["checked"] == 0
 
 
-def test_dir_with_only_an_unrelated_file_without_meta_json_is_not_counted(tmp_path):
+def test_dir_with_only_an_unrelated_file_without_meta_json_is_not_counted(tmp_path: Path) -> None:
     # INVERTED 2026-08-26, deliberately, from
     # `test_dir_with_unrelated_record_file_without_meta_json_counts_as_miss`.
     # C5 (AC6) widened the key off the `touched.txt` literal onto "newest of
@@ -182,7 +184,7 @@ def test_dir_with_only_an_unrelated_file_without_meta_json_is_not_counted(tmp_pa
     assert result["misses"] == []
 
 
-def test_a_rotated_touch_record_generation_still_counts(tmp_path):
+def test_a_rotated_touch_record_generation_still_counts(tmp_path: Path) -> None:
     root = tmp_path / "coordinator-sessions"
     sdir = root / "s1"
     sdir.mkdir(parents=True)
@@ -197,7 +199,7 @@ def test_a_rotated_touch_record_generation_still_counts(tmp_path):
     assert result["misses"] == [{"session": "s1", "reason": "no_meta_json"}]
 
 
-def test_dir_with_only_em_session_id_txt_without_meta_json_is_not_counted(tmp_path):
+def test_dir_with_only_em_session_id_txt_without_meta_json_is_not_counted(tmp_path: Path) -> None:
     root = tmp_path / "coordinator-sessions"
     sdir = root / "s1"
     sdir.mkdir(parents=True)
@@ -209,7 +211,7 @@ def test_dir_with_only_em_session_id_txt_without_meta_json_is_not_counted(tmp_pa
     assert result["checked"] == 0
 
 
-def test_stale_touched_txt_without_meta_json_is_not_counted(tmp_path):
+def test_stale_touched_txt_without_meta_json_is_not_counted(tmp_path: Path) -> None:
     root = tmp_path / "coordinator-sessions"
     sdir = root / "fossil"
     sdir.mkdir(parents=True)
@@ -225,7 +227,7 @@ def test_stale_touched_txt_without_meta_json_is_not_counted(tmp_path):
     assert result["misses"] == []
 
 
-def test_recency_scope_does_not_mask_a_current_no_meta_session(tmp_path):
+def test_recency_scope_does_not_mask_a_current_no_meta_session(tmp_path: Path) -> None:
     # Originally the other half of a pin that fed both dirs a bare
     # `touched.txt` sibling and expected the fresh one alone to count.
     # AC11 (2026-08-27) retires that legacy dialect from
@@ -250,7 +252,7 @@ def test_recency_scope_does_not_mask_a_current_no_meta_session(tmp_path):
     assert result["checked"] == 0
 
 
-def test_recency_scope_never_narrows_the_meta_json_bearing_population(tmp_path):
+def test_recency_scope_never_narrows_the_meta_json_bearing_population(tmp_path: Path) -> None:
     root = tmp_path / "coordinator-sessions"
     sdir = _write_session(root, "s1", {"pid": "1234"})
     touched = sdir / "touched.txt"
@@ -265,7 +267,7 @@ def test_recency_scope_never_narrows_the_meta_json_bearing_population(tmp_path):
     assert result["misses"] == [{"session": "s1", "reason": "empty"}]
 
 
-def test_old_dir_with_a_freshly_appended_guard_log_is_not_counted(tmp_path, monkeypatch):
+def test_old_dir_with_a_freshly_appended_guard_log_is_not_counted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.session.stable_pid_watch as watch
 
     root = tmp_path / "coordinator-sessions"
@@ -284,7 +286,7 @@ def test_old_dir_with_a_freshly_appended_guard_log_is_not_counted(tmp_path, monk
     assert result["misses"] == []
 
 
-def test_a_session_that_touched_files_without_init_is_still_counted(tmp_path):
+def test_a_session_that_touched_files_without_init_is_still_counted(tmp_path: Path) -> None:
     root = tmp_path / "coordinator-sessions"
     sdir = root / "471733e0-5785-4c97-b9c6-e4db17040fe9"
     sdir.mkdir(parents=True)
@@ -299,7 +301,7 @@ def test_a_session_that_touched_files_without_init_is_still_counted(tmp_path):
     assert result["checked"] == 0
 
 
-def test_a_freshly_started_session_before_its_first_touch_is_not_counted(tmp_path):
+def test_a_freshly_started_session_before_its_first_touch_is_not_counted(tmp_path: Path) -> None:
     root = tmp_path / "coordinator-sessions"
     sdir = root / "2518a105-4c31-4644-8bb2-7977d4af38e3"
     sdir.mkdir(parents=True)
@@ -320,7 +322,7 @@ def test_a_freshly_started_session_before_its_first_touch_is_not_counted(tmp_pat
     assert result["misses"] == []
 
 
-def test_a_long_running_session_is_not_excluded_by_its_own_age(tmp_path, monkeypatch):
+def test_a_long_running_session_is_not_excluded_by_its_own_age(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.session.stable_pid_watch as watch
 
     root = tmp_path / "coordinator-sessions"

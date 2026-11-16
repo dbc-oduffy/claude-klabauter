@@ -10,6 +10,7 @@ from coordinator_core.ops.dispatch_emit import ask_fanout_contract as c
 from coordinator_core.ops.dispatch_emit import run_close
 from coordinator_core.ops.dispatch_emit.sibling_blockers import sibling_blockers
 from coordinator_core.warp_fire import fire_command
+import pytest
 
 PARENT = "ask-parent-20261021T194132-ddef39"
 OWN = "ask-own"
@@ -58,7 +59,7 @@ def _seed(root: Path, sib_status: str = c.STATUS_RUNNING, manifest_writes=(), bo
     )
 
 
-def test_depends_on_plan_names_running_sibling_and_refire(tmp_path):
+def test_depends_on_plan_names_running_sibling_and_refire(tmp_path: Path) -> None:
     _plan(tmp_path, SIB_PLAN)
     _seed(tmp_path)
     out = sibling_blockers(tmp_path, OWN, PLAN)
@@ -75,14 +76,14 @@ def test_depends_on_plan_names_running_sibling_and_refire(tmp_path):
     ]
 
 
-def test_writes_overlap_is_the_fallback(tmp_path):
+def test_writes_overlap_is_the_fallback(tmp_path: Path) -> None:
     _plan(tmp_path, None)
     _seed(tmp_path, manifest_writes=[HOOK, "state/x.json"])
     out = sibling_blockers(tmp_path, OWN, PLAN)
     assert [(e["row"], e["run_id"], e["via"]) for e in out] == [("C4", SIB, "writes")]
 
 
-def test_mixed_separators_still_match(tmp_path):
+def test_mixed_separators_still_match(tmp_path: Path) -> None:
     _plan(tmp_path, "./docs/plans/sib.md", writes=["pkg\\__init__.py"])
     _seed(tmp_path, manifest_writes=["pkg\\__init__.py"])
     assert [e["via"] for e in sibling_blockers(tmp_path, OWN, PLAN)] == ["depends_on_plan"]
@@ -90,13 +91,13 @@ def test_mixed_separators_still_match(tmp_path):
     assert [e["via"] for e in sibling_blockers(tmp_path, OWN, PLAN)] == ["writes"]
 
 
-def test_landed_sibling_is_not_a_blocker(tmp_path):
+def test_landed_sibling_is_not_a_blocker(tmp_path: Path) -> None:
     _plan(tmp_path, SIB_PLAN)
     _seed(tmp_path, sib_status=c.STATUS_LANDED)
     assert sibling_blockers(tmp_path, OWN, PLAN) == []
 
 
-def test_missing_parent_record_or_status_file_returns_empty(tmp_path):
+def test_missing_parent_record_or_status_file_returns_empty(tmp_path: Path) -> None:
     _plan(tmp_path, SIB_PLAN)
     _seed(tmp_path)
     (tmp_path / c.parent_record_rel(PARENT)).unlink()
@@ -106,13 +107,13 @@ def test_missing_parent_record_or_status_file_returns_empty(tmp_path):
     assert sibling_blockers(tmp_path, OWN, PLAN) == []
 
 
-def test_unrelated_open_row_returns_empty(tmp_path):
+def test_unrelated_open_row_returns_empty(tmp_path: Path) -> None:
     _plan(tmp_path, None, writes=["elsewhere.py"])
     _seed(tmp_path, manifest_writes=[HOOK])
     assert sibling_blockers(tmp_path, OWN, PLAN) == []
 
 
-def test_no_subprocess_is_spawned(tmp_path, monkeypatch):
+def test_no_subprocess_is_spawned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*a, **k):
         raise AssertionError("spawned")
 
@@ -122,5 +123,5 @@ def test_no_subprocess_is_spawned(tmp_path, monkeypatch):
     assert len(sibling_blockers(tmp_path, OWN, PLAN)) == 1
 
 
-def test_sibling_blocked_is_an_admitted_close_input():
+def test_sibling_blocked_is_an_admitted_close_input() -> None:
     assert "sibling_blocked" in run_close.CLOSE_INPUT_KEYS

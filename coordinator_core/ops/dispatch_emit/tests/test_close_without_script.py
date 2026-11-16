@@ -22,10 +22,11 @@ from coordinator_core.ops.dispatch_emit import close_without_script as cws
 from coordinator_core.ops.dispatch_emit import run_close, terminal_commit
 from coordinator_core.ops.dispatch_emit import terminal_commit_closeout
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _no_continuation_spawn(monkeypatch):
+def _no_continuation_spawn(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(close_background, "_launch_continuation", lambda ctx: True)
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -37,7 +38,7 @@ STEM = scripted.INLINE_REVIEW["integration_stem"]
 
 
 class Env:
-    def __init__(self, repo, launches):
+    def __init__(self, repo, launches) -> None:
         self.repo, self.launches = repo, launches
 
     @property
@@ -51,7 +52,7 @@ class Env:
     def record(self) -> dict:
         return json.loads(self.record_file.read_text(encoding="utf-8"))
 
-    def set_record(self, **changes):
+    def set_record(self, **changes) -> None:
         record = self.record()
         for key, value in changes.items():
             if value is run_close.UNCHANGED:
@@ -60,11 +61,11 @@ class Env:
                 record[key] = value
         run_close._write_atomic(self.record_file, record)
 
-    def new_record(self, criterion=MET, falsifier=None):
+    def new_record(self, criterion=MET, falsifier=None) -> None:
         """The record a post-plan scripted run writes: verdict stored, mark read."""
         self.set_record(criterion=copy.deepcopy(criterion), falsifier_broken=falsifier)
 
-    def edit_review(self, mutate):
+    def edit_review(self, mutate) -> None:
         text = self.review_file.read_text(encoding="utf-8")
         split = split_frontmatter(text)
         data = yaml.safe_load(split.fm_text)
@@ -74,8 +75,8 @@ class Env:
             encoding="utf-8",
         )
 
-    def review_criterion(self, **fields):
-        def mutate(data):
+    def review_criterion(self, **fields) -> None:
+        def mutate(data) -> None:
             data["criterion"].update(fields)
 
         self.edit_review(mutate)
@@ -86,7 +87,7 @@ class Env:
             {"plan_path": PLAN, "run_id": RUN, "session_id": bench.SESSION_ID, **extra},
         )
 
-    def task_output(self, falsifier=(), criterion=None, name="to") -> str:
+    def task_output(self, falsifier=(), criterion=None, name: str = "to") -> str:
         return bench.write_task_output(self.repo, list(falsifier), criterion, name)
 
     def git(self, *args) -> str:
@@ -106,7 +107,7 @@ class Env:
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Env:
     from coordinator_core.session import claims
 
     parent = tmp_path / "work"
@@ -130,7 +131,7 @@ def _status(env, *paths) -> str:
     return env.git("status", "--porcelain", "--", *paths)
 
 
-def test_stored_verdict_closes_a_run_with_no_script(env):
+def test_stored_verdict_closes_a_run_with_no_script(env) -> None:
     env.new_record()
 
     out = env.call()
@@ -150,7 +151,7 @@ def test_stored_verdict_closes_a_run_with_no_script(env):
     assert not {"review", "plan-reconciliation", "completion-entry"} & set(close["outstanding"])
 
 
-def test_second_identical_call_is_answered_from_disk(env):
+def test_second_identical_call_is_answered_from_disk(env) -> None:
     env.new_record()
     env.call()
     before, head = env.bytes(), env.git("rev-parse", "HEAD")
@@ -162,7 +163,7 @@ def test_second_identical_call_is_answered_from_disk(env):
     assert len(env.launches) == 1
 
 
-def test_already_implemented_run_with_a_failed_review_leg_relaunches_it(env):
+def test_already_implemented_run_with_a_failed_review_leg_relaunches_it(env) -> None:
     env.new_record()
     env.call()
     env.set_record(legs={**env.record()["legs"], "review": {"status": "failed", "detail": "x"}})
@@ -176,7 +177,7 @@ def test_already_implemented_run_with_a_failed_review_leg_relaunches_it(env):
     assert env.record()["legs"]["review"]["status"] == "queued"
 
 
-def test_read_verdict_takes_the_first_source_with_a_judged_status(tmp_path):
+def test_read_verdict_takes_the_first_source_with_a_judged_status(tmp_path: Path) -> None:
     review = {"plan_id": "p", "criterion": {"status": "met"}}
     record = {"criterion": {"status": "not_met"}, "falsifier_broken": ["t"]}
 
@@ -190,7 +191,7 @@ def test_read_verdict_takes_the_first_source_with_a_judged_status(tmp_path):
     assert refused.value.reason == "no-judge-verdict"
 
 
-def test_foreign_review_record_is_not_a_verdict_source(env):
+def test_foreign_review_record_is_not_a_verdict_source(env) -> None:
     env.set_record(criterion=None, falsifier_broken=None)
     env.edit_review(lambda data: data.update(plan_id="pln-other-000000"))
 
@@ -199,7 +200,7 @@ def test_foreign_review_record_is_not_a_verdict_source(env):
     assert out["refused"] == "no-judge-verdict"
 
 
-def test_review_record_is_the_source_when_the_record_holds_none(env):
+def test_review_record_is_the_source_when_the_record_holds_none(env) -> None:
     env.set_record(falsifier_broken=None)
 
     out = env.call()
@@ -208,7 +209,7 @@ def test_review_record_is_the_source_when_the_record_holds_none(env):
     assert out["review_stamp"] == "minted" and out["plan_status"] == "implemented"
 
 
-def test_task_output_is_the_last_source_and_a_stored_source_wins_over_it(env):
+def test_task_output_is_the_last_source_and_a_stored_source_wins_over_it(env) -> None:
     env.set_record(falsifier_broken=None)
     unmet = {**MET, "status": "not_met", "observation": "no", "reason": "r"}
 
@@ -217,7 +218,7 @@ def test_task_output_is_the_last_source_and_a_stored_source_wins_over_it(env):
     assert out["verdict_source"] == "review-record" and out["criterion_status"] == "met"
 
 
-def test_record_criterion_wins_whatever_the_others_hold(env):
+def test_record_criterion_wins_whatever_the_others_hold(env) -> None:
     env.new_record(criterion={**MET, "observation": "stored"})
     env.review_criterion(status="not_met")
 
@@ -227,7 +228,7 @@ def test_record_criterion_wins_whatever_the_others_hold(env):
 
 
 @pytest.mark.parametrize("review_has_criterion", [False, True])
-def test_no_judge_verdict_refuses_and_writes_nothing(env, review_has_criterion):
+def test_no_judge_verdict_refuses_and_writes_nothing(env, review_has_criterion) -> None:
     env.set_record(criterion=None)
     if review_has_criterion:
         env.edit_review(lambda data: data.pop("criterion"))
@@ -241,7 +242,7 @@ def test_no_judge_verdict_refuses_and_writes_nothing(env, review_has_criterion):
     assert env.bytes() == before and env.launches == []
 
 
-def test_task_output_verdict_lands_in_the_record_before_the_legs(env):
+def test_task_output_verdict_lands_in_the_record_before_the_legs(env) -> None:
     env.set_record(criterion=None)
     env.review_file.unlink()
 
@@ -268,7 +269,7 @@ def _close_job_output(env, run_id=None) -> str:
     return path
 
 
-def test_close_job_task_output_binds_by_run_id(env):
+def test_close_job_task_output_binds_by_run_id(env) -> None:
     env.set_record(criterion=copy.deepcopy(MET), falsifier_broken=run_close.UNCHANGED)
 
     out = env.call(task_output_path=_close_job_output(env, RUN))
@@ -277,7 +278,7 @@ def test_close_job_task_output_binds_by_run_id(env):
     assert env.record()["falsifier_broken"] is None
 
 
-def test_legacy_record_with_a_recorded_met_rejudge_reads_as_never_marked(env):
+def test_legacy_record_with_a_recorded_met_rejudge_reads_as_never_marked(env) -> None:
     env.set_record(criterion=copy.deepcopy(MET), falsifier_broken=run_close.UNCHANGED)
     _rejudge_record(env, {"status": "met", "observation": "now true"})
 
@@ -289,7 +290,7 @@ def test_legacy_record_with_a_recorded_met_rejudge_reads_as_never_marked(env):
 
 
 @pytest.mark.parametrize("shape", ["other-run", "unreadable", "no-script", "close-job-other-run"])
-def test_task_output_not_bound_to_the_run_refuses(env, shape):
+def test_task_output_not_bound_to_the_run_refuses(env, shape) -> None:
     env.new_record()
     if shape == "unreadable":
         path = str(env.repo.parent / "absent.json")
@@ -312,7 +313,7 @@ def test_task_output_not_bound_to_the_run_refuses(env, shape):
     assert env.bytes() == before and env.launches == []
 
 
-def test_plan_mismatch_absent_record_and_unlanded_sha_refuse(env):
+def test_plan_mismatch_absent_record_and_unlanded_sha_refuse(env) -> None:
     env.new_record()
     other = cws.close_landed_run(
         env.repo, env.repo / ".git", {"plan_path": "docs/other.md", "run_id": RUN}
@@ -325,7 +326,7 @@ def test_plan_mismatch_absent_record_and_unlanded_sha_refuse(env):
     assert unlanded["refused"] == "terminal-commit-not-landed"
 
 
-def test_workflow_stem_record_closes_when_called_with_the_bare_run_id(env):
+def test_workflow_stem_record_closes_when_called_with_the_bare_run_id(env) -> None:
     env.new_record()
     bare = RUN.removesuffix(".workflow")
     assert bare != RUN and env.record_file.name == f"{bare}.workflow.json"
@@ -341,7 +342,7 @@ def test_workflow_stem_record_closes_when_called_with_the_bare_run_id(env):
     assert env.record()["review_receipt"] == PLAN
 
 
-def test_neither_close_job_record_present_names_both_paths(env):
+def test_neither_close_job_record_present_names_both_paths(env) -> None:
     env.record_file.unlink()
     bare = RUN.removesuffix(".workflow")
 
@@ -353,7 +354,7 @@ def test_neither_close_job_record_present_names_both_paths(env):
 
 
 @pytest.mark.parametrize("run_id", ["../x", "a/b", "a\\b", ".."])
-def test_run_id_that_is_not_a_file_stem_reads_no_file(env, monkeypatch, run_id):
+def test_run_id_that_is_not_a_file_stem_reads_no_file(env, monkeypatch: pytest.MonkeyPatch, run_id) -> None:
     def boom(*a, **k):
         raise AssertionError("read a file")
 
@@ -364,7 +365,7 @@ def test_run_id_that_is_not_a_file_stem_reads_no_file(env, monkeypatch, run_id):
     assert out["refused"] == "no-close-job"
 
 
-def test_not_met_verdict_stamps_not_met_and_pays_nothing(env):
+def test_not_met_verdict_stamps_not_met_and_pays_nothing(env) -> None:
     env.new_record(criterion={**MET, "status": "not_met", "reason": "r"})
     env.review_criterion(status="not_met")
 
@@ -377,7 +378,7 @@ def test_not_met_verdict_stamps_not_met_and_pays_nothing(env):
     assert out["close"]["legs"]["completion-entry"]["status"] == "failed"
 
 
-def test_review_record_that_disagrees_with_the_verdict_refuses_the_stamp(env, monkeypatch):
+def test_review_record_that_disagrees_with_the_verdict_refuses_the_stamp(env, monkeypatch: pytest.MonkeyPatch) -> None:
     env.new_record(criterion={**MET, "status": "not_met", "reason": "r"})
     written: list = []
     real = terminal_commit._register_writeback
@@ -396,7 +397,7 @@ def test_review_record_that_disagrees_with_the_verdict_refuses_the_stamp(env, mo
     assert env.entries() == [] and written == []
 
 
-def _rejudge_record(env, criterion):
+def _rejudge_record(env, criterion) -> str:
     path = env.repo / "state" / "delivery-verdicts" / "x" / "rejudge.md"
     path.parent.mkdir(parents=True)
     path.write_text(
@@ -410,7 +411,7 @@ def _rejudge_record(env, criterion):
 
 
 @pytest.mark.parametrize("with_summary", [True, False])
-def test_recorded_rejudge_replaces_an_unmet_verdict(env, with_summary):
+def test_recorded_rejudge_replaces_an_unmet_verdict(env, with_summary) -> None:
     env.new_record(criterion={**MET, "status": "not_met", "reason": "r"})
     env.review_criterion(status="not_met")
     again = {"status": "met", "observation": "now true"}
@@ -428,7 +429,7 @@ def test_recorded_rejudge_replaces_an_unmet_verdict(env, with_summary):
         assert any("now true" in p.read_text(encoding="utf-8") for p in env.entries())
 
 
-def test_unmet_verdict_with_no_review_record_stands(env):
+def test_unmet_verdict_with_no_review_record_stands(env) -> None:
     env.new_record(criterion={**MET, "status": "not_met", "reason": "r"})
     env.review_file.unlink()
     _rejudge_record(env, {"status": "met", "observation": "now true"})
@@ -438,7 +439,7 @@ def test_unmet_verdict_with_no_review_record_stands(env):
     assert out["criterion_status"] == "not_met" and "rejudged_by" not in out
 
 
-def test_broken_falsifier_mints_but_withholds_the_flip(env):
+def test_broken_falsifier_mints_but_withholds_the_flip(env) -> None:
     env.new_record(falsifier=[])
 
     out = env.call()
@@ -447,12 +448,12 @@ def test_broken_falsifier_mints_but_withholds_the_flip(env):
     assert "BROKEN" in out["plan_status_reason"] and env.plan()["status"] == "executing"
 
 
-def test_register_failure_withholds_the_flip_and_the_demotion_sticks(env, monkeypatch):
+def test_register_failure_withholds_the_flip_and_the_demotion_sticks(env, monkeypatch: pytest.MonkeyPatch) -> None:
     env.new_record()
     seen: list = []
     real_mint, real_gate = terminal_commit._mint_review_stamp, terminal_commit._register_gate
 
-    def gate(root, plan, inline, ledger=()):
+    def gate(root, plan, inline, ledger=()) -> str:
         inline["criterion"]["status"] = "not_met"
         return "register row R1: not wired"
 
@@ -476,7 +477,7 @@ def test_register_failure_withholds_the_flip_and_the_demotion_sticks(env, monkey
     assert second["review_stamp"] == "refused" and env.plan()["status"] == "executing"
 
 
-def test_unknown_falsifier_mark_withholds_the_flip_until_a_task_output_supplies_it(env):
+def test_unknown_falsifier_mark_withholds_the_flip_until_a_task_output_supplies_it(env) -> None:
     out = env.call()
 
     assert out["review_stamp"] == "minted" and out["plan_status"] == "not-stamped"
@@ -487,7 +488,7 @@ def test_unknown_falsifier_mark_withholds_the_flip_until_a_task_output_supplies_
     assert env.record()["falsifier_broken"] is None
 
 
-def test_completion_entry_rides_the_one_commit(env):
+def test_completion_entry_rides_the_one_commit(env) -> None:
     env.new_record()
     assert env.record()["settled"]["completion-entry"]["status"] == "failed"
 
@@ -500,7 +501,7 @@ def test_completion_entry_rides_the_one_commit(env):
     assert env.record()["settled"]["completion-entry"]["status"] == "ran"
 
 
-def test_commit_that_does_not_land_removes_the_entry_and_leaves_the_leg(env, monkeypatch):
+def test_commit_that_does_not_land_removes_the_entry_and_leaves_the_leg(env, monkeypatch: pytest.MonkeyPatch) -> None:
     env.new_record()
     monkeypatch.setattr(
         terminal_commit, "reentrant_dispatch", lambda op, params, repo_root=None: {"committed": False, "error": "boom"}
@@ -514,7 +515,7 @@ def test_commit_that_does_not_land_removes_the_entry_and_leaves_the_leg(env, mon
     assert out["close"]["legs"]["completion-entry"]["status"] == "failed"
 
 
-def test_foreign_plan_review_record_refuses_the_stamp(env):
+def test_foreign_plan_review_record_refuses_the_stamp(env) -> None:
     env.new_record()
     env.edit_review(lambda data: data.update(plan_id="pln-other-000000"))
     before = (env.repo / PLAN).read_bytes()
@@ -524,7 +525,7 @@ def test_foreign_plan_review_record_refuses_the_stamp(env):
     assert out["review_stamp"] == "refused" and (env.repo / PLAN).read_bytes() == before
 
 
-def test_delivery_supersession_refuses_the_stamp(env):
+def test_delivery_supersession_refuses_the_stamp(env) -> None:
     env.new_record()
     run_rel = env.review_file.relative_to(env.repo).as_posix()
     path = env.repo / "state" / "delivery-verdicts" / "x" / "reverify.md"
@@ -544,7 +545,7 @@ def test_delivery_supersession_refuses_the_stamp(env):
     assert (env.repo / PLAN).read_bytes() == before
 
 
-def test_untracked_ignored_plan_is_flipped_on_disk_and_not_committed(env):
+def test_untracked_ignored_plan_is_flipped_on_disk_and_not_committed(env) -> None:
     env.new_record()
     env.set_record(settled={**env.record()["settled"], "completion-entry": {"status": "ran", "detail": "entry x"}})
     env.git("rm", "--cached", "-q", PLAN)
@@ -558,7 +559,7 @@ def test_untracked_ignored_plan_is_flipped_on_disk_and_not_committed(env):
     assert env.plan()["status"] == "implemented" and "review_stamp" in env.plan()
 
 
-def test_empty_batons_and_memo_settle_not_applicable(env):
+def test_empty_batons_and_memo_settle_not_applicable(env) -> None:
     env.new_record()
     env.set_record(claimed_batons=[], source_memo=None)
     legs = env.call()["close"]
@@ -569,7 +570,7 @@ def test_empty_batons_and_memo_settle_not_applicable(env):
     assert env.launches[0].claimed_batons == ()
 
 
-def test_record_batons_reach_the_review_launcher(env):
+def test_record_batons_reach_the_review_launcher(env) -> None:
     env.new_record()
 
     env.call()
@@ -577,7 +578,7 @@ def test_record_batons_reach_the_review_launcher(env):
     assert env.launches[0].claimed_batons == (scripted.BATON_REL,)
 
 
-def test_launch_follows_the_last_amend(env, monkeypatch):
+def test_launch_follows_the_last_amend(env, monkeypatch: pytest.MonkeyPatch) -> None:
     env.new_record()
     order: list = []
     real = run_close.amend_close_job
@@ -589,7 +590,7 @@ def test_launch_follows_the_last_amend(env, monkeypatch):
     assert order == ["amend", "launch"]
 
 
-def test_launch_that_does_not_start_records_the_leg_failed(env, monkeypatch):
+def test_launch_that_does_not_start_records_the_leg_failed(env, monkeypatch: pytest.MonkeyPatch) -> None:
     env.new_record()
     monkeypatch.setattr(close_background, "_launch_close_review", lambda ctx: False)
 
@@ -599,7 +600,7 @@ def test_launch_that_does_not_start_records_the_leg_failed(env, monkeypatch):
     assert out["close"]["legs"]["review"]["status"] == "failed"
 
 
-def test_waived_not_met_and_attested_indeterminate_are_not_mismatches(env, monkeypatch):
+def test_waived_not_met_and_attested_indeterminate_are_not_mismatches(env, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import operator_attestation, plan_narrow_criterion
 
     env.new_record(criterion={**MET, "status": "not_met", "reason": "r"})
@@ -638,14 +639,14 @@ def _stamped_not_implemented(env) -> dict:
     return env.plan()["review_stamp"]
 
 
-def _forbid_mint(monkeypatch):
+def _forbid_mint(monkeypatch) -> None:
     def refuse(*args, **kwargs):
         raise AssertionError("a kept stamp is never re-minted")
 
     monkeypatch.setattr(terminal_commit, "_mint_review_stamp", refuse)
 
 
-def test_valid_stamp_is_kept_and_committed_whatever_the_review_record_says_of_build_test(env, monkeypatch):
+def test_valid_stamp_is_kept_and_committed_whatever_the_review_record_says_of_build_test(env, monkeypatch: pytest.MonkeyPatch) -> None:
     stamp = _stamped_not_implemented(env)
     env.edit_review(lambda data: data.update(build_test={"verdict": "fail"}))
     _forbid_mint(monkeypatch)
@@ -662,7 +663,7 @@ def test_valid_stamp_is_kept_and_committed_whatever_the_review_record_says_of_bu
     assert not {"completion-entry", "review", "plan-reconciliation"} & set(out["close"]["outstanding"])
 
 
-def test_kept_stamp_runs_the_close_legs_as_a_fresh_mint_does(env, monkeypatch):
+def test_kept_stamp_runs_the_close_legs_as_a_fresh_mint_does(env, monkeypatch: pytest.MonkeyPatch) -> None:
     env.new_record()
     fresh = env.call()
     env.set_record(legs={**env.record()["legs"], "review": {"status": "failed", "detail": "x"}})
@@ -678,7 +679,7 @@ def test_kept_stamp_runs_the_close_legs_as_a_fresh_mint_does(env, monkeypatch):
 
 
 @pytest.mark.parametrize("field", ["terminal_commit_sha", "terminal_tree_sha"])
-def test_stamp_for_another_commit_or_tree_is_not_kept_and_the_refused_mint_lands_nothing(env, field):
+def test_stamp_for_another_commit_or_tree_is_not_kept_and_the_refused_mint_lands_nothing(env, field) -> None:
     _stamped_not_implemented(env)
     text = (env.repo / PLAN).read_text(encoding="utf-8")
     current = env.plan()["review_stamp"][field]
@@ -693,7 +694,7 @@ def test_stamp_for_another_commit_or_tree_is_not_kept_and_the_refused_mint_lands
     assert env.git("status", "--porcelain") == status
 
 
-def test_refused_mint_lands_no_commit_and_leaves_no_entry_or_register_row(env):
+def test_refused_mint_lands_no_commit_and_leaves_no_entry_or_register_row(env) -> None:
     env.new_record()
     env.edit_review(lambda data: data.update(plan_id="pln-other-000000"))
     head, status = env.git("rev-parse", "HEAD"), env.git("status", "--porcelain")
@@ -705,7 +706,7 @@ def test_refused_mint_lands_no_commit_and_leaves_no_entry_or_register_row(env):
     assert env.entries() == [] and "register_sizing" not in out
 
 
-def test_kept_stamp_with_a_broken_falsifier_withholds_the_flip(env, monkeypatch):
+def test_kept_stamp_with_a_broken_falsifier_withholds_the_flip(env, monkeypatch: pytest.MonkeyPatch) -> None:
     env.new_record(falsifier=[])
     env.call()
     _forbid_mint(monkeypatch)
@@ -716,7 +717,7 @@ def test_kept_stamp_with_a_broken_falsifier_withholds_the_flip(env, monkeypatch)
     assert "BROKEN" in out["plan_status_reason"] and env.plan()["status"] == "executing"
 
 
-def test_kept_stamp_with_an_unknown_falsifier_mark_withholds_the_flip(env, monkeypatch):
+def test_kept_stamp_with_an_unknown_falsifier_mark_withholds_the_flip(env, monkeypatch: pytest.MonkeyPatch) -> None:
     env.call()
     _forbid_mint(monkeypatch)
 
@@ -726,7 +727,7 @@ def test_kept_stamp_with_an_unknown_falsifier_mark_withholds_the_flip(env, monke
     assert "task_output_path" in out["plan_status_reason"] and env.plan()["status"] == "executing"
 
 
-def test_kept_stamp_with_a_register_failure_withholds_the_flip(env, monkeypatch):
+def test_kept_stamp_with_a_register_failure_withholds_the_flip(env, monkeypatch: pytest.MonkeyPatch) -> None:
     env.new_record()
     env.call()
     text = (env.repo / PLAN).read_text(encoding="utf-8")
@@ -740,7 +741,7 @@ def test_kept_stamp_with_a_register_failure_withholds_the_flip(env, monkeypatch)
     assert env.plan()["status"] == "executing"
 
 
-def test_run_baton_recorded_at_emit_is_claimed_reviewed_and_shipped(env):
+def test_run_baton_recorded_at_emit_is_claimed_reviewed_and_shipped(env) -> None:
     from coordinator_core.ops.dispatch_emit import ask_contract
 
     env.new_record()
@@ -759,7 +760,7 @@ def test_run_baton_recorded_at_emit_is_claimed_reviewed_and_shipped(env):
     assert _status(env, scripted.BATON_REL) == ""
 
 
-def test_run_with_no_recorded_baton_still_claims_none(env):
+def test_run_with_no_recorded_baton_still_claims_none(env) -> None:
     env.new_record()
     env.set_record(claimed_batons=[], settled={})
 

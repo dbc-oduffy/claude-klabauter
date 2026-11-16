@@ -26,6 +26,7 @@ from __future__ import annotations
 import time
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -54,14 +55,14 @@ _DEFAULT_SLUG_MAP = {
 }
 
 
-def _age_file(path, age_secs):
+def _age_file(path, age_secs) -> None:
     stamp = time.time() - age_secs
     import os
 
     os.utime(path, (stamp, stamp))
 
 
-def _build_fixture(tmp_path, project_slug="X--demo-repo"):
+def _build_fixture(tmp_path, project_slug: str = "X--demo-repo"):
     claude_root = tmp_path / "claude" / project_slug
     claude_root.mkdir(parents=True)
 
@@ -91,14 +92,14 @@ def _fake_session_live(sid, cwd=None):
 
 
 @pytest.fixture(autouse=True)
-def _patch_liveness(monkeypatch):
+def _patch_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.ops.scratchpad_sweep._session_liveness.session_live",
         _fake_session_live,
     )
 
 
-def _sweep(tmp_path, slug_to_root_map=_DEFAULT_SLUG_MAP, **kwargs):
+def _sweep(tmp_path, slug_to_root_map: dict[str, str] = _DEFAULT_SLUG_MAP, **kwargs):
     kwargs.setdefault("self_session_id", _SID_SELF)
     return sweep_scratchpads(
         temp_root=str(tmp_path), slug_to_root_map=slug_to_root_map, **kwargs
@@ -111,7 +112,7 @@ def _entry_for(result, sid):
     return matches[0]
 
 
-def test_dry_run_is_default_and_mutates_nothing(tmp_path):
+def test_dry_run_is_default_and_mutates_nothing(tmp_path: Path) -> None:
     _build_fixture(tmp_path)
     old_scratch = tmp_path / "claude" / "X--demo-repo" / _SID_DEAD_OLD / "scratchpad"
     assert old_scratch.is_dir()
@@ -124,7 +125,7 @@ def test_dry_run_is_default_and_mutates_nothing(tmp_path):
     assert _entry_for(result, _SID_DEAD_OLD)["action"] == "preview"
 
 
-def test_live_session_never_touched(tmp_path):
+def test_live_session_never_touched(tmp_path: Path) -> None:
     _build_fixture(tmp_path)
     result = _sweep(tmp_path, reclaim=True)
     entry = _entry_for(result, _SID_LIVE)
@@ -133,7 +134,7 @@ def test_live_session_never_touched(tmp_path):
     assert scratch.is_dir()
 
 
-def test_dead_but_recent_is_too_recent_not_reclaimed(tmp_path):
+def test_dead_but_recent_is_too_recent_not_reclaimed(tmp_path: Path) -> None:
     _build_fixture(tmp_path)
     result = _sweep(tmp_path, reclaim=True)
     entry = _entry_for(result, _SID_DEAD_RECENT)
@@ -142,7 +143,7 @@ def test_dead_but_recent_is_too_recent_not_reclaimed(tmp_path):
     assert scratch.is_dir()
 
 
-def test_dead_and_old_is_reclaimed_when_opted_in(tmp_path):
+def test_dead_and_old_is_reclaimed_when_opted_in(tmp_path: Path) -> None:
     _build_fixture(tmp_path)
     scratch = tmp_path / "claude" / "X--demo-repo" / _SID_DEAD_OLD / "scratchpad"
     assert scratch.is_dir()
@@ -156,7 +157,7 @@ def test_dead_and_old_is_reclaimed_when_opted_in(tmp_path):
     assert result["bytes_reclaimed"] >= 100
 
 
-def test_own_session_never_reclaimed_even_if_dead_and_old(tmp_path):
+def test_own_session_never_reclaimed_even_if_dead_and_old(tmp_path: Path) -> None:
     fixture_root = _build_fixture(tmp_path)
     self_scratch = fixture_root / "claude" / "X--demo-repo" / _SID_SELF / "scratchpad"
     _age_file(self_scratch / "a.txt", _OLD_AGE_SECS)
@@ -168,14 +169,14 @@ def test_own_session_never_reclaimed_even_if_dead_and_old(tmp_path):
     assert self_scratch.is_dir()
 
 
-def test_no_scratchpad_child_is_skipped_not_an_error(tmp_path):
+def test_no_scratchpad_child_is_skipped_not_an_error(tmp_path: Path) -> None:
     _build_fixture(tmp_path)
     result = _sweep(tmp_path)
     entry = _entry_for(result, _SID_NO_SCRATCHPAD)
     assert entry["verdict"] == "no-scratchpad"
 
 
-def test_non_uuid_siblings_never_enumerated(tmp_path):
+def test_non_uuid_siblings_never_enumerated(tmp_path: Path) -> None:
     _build_fixture(tmp_path)
     result = _sweep(tmp_path)
     seen_sids = {e["session_id"] for e in result["entries"]}
@@ -183,14 +184,14 @@ def test_non_uuid_siblings_never_enumerated(tmp_path):
     assert len(result["entries"]) == len(_ALL_SIDS)
 
 
-def test_ttl_days_is_configurable(tmp_path):
+def test_ttl_days_is_configurable(tmp_path: Path) -> None:
     _build_fixture(tmp_path)
     result = _sweep(tmp_path, ttl_days=20.0)
     entry = _entry_for(result, _SID_DEAD_OLD)
     assert entry["verdict"] == "too-recent"
 
 
-def test_project_slugs_filter_restricts_scope(tmp_path):
+def test_project_slugs_filter_restricts_scope(tmp_path: Path) -> None:
     _build_fixture(tmp_path, project_slug="X--demo-repo")
     _build_fixture(tmp_path, project_slug="Y--other-project")
 
@@ -199,13 +200,13 @@ def test_project_slugs_filter_restricts_scope(tmp_path):
     assert slugs == {"X--demo-repo"}
 
 
-def test_missing_claude_dir_returns_empty_report(tmp_path):
+def test_missing_claude_dir_returns_empty_report(tmp_path: Path) -> None:
     result = _sweep(tmp_path)
     assert result["entries"] == []
     assert result["counts"] == {}
 
 
-def test_one_bad_directory_does_not_sink_the_sweep(tmp_path, monkeypatch):
+def test_one_bad_directory_does_not_sink_the_sweep(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _build_fixture(tmp_path)
 
     real_live = _fake_session_live
@@ -228,13 +229,13 @@ def test_one_bad_directory_does_not_sink_the_sweep(tmp_path, monkeypatch):
     assert _entry_for(result, _SID_SELF)["verdict"] == "self"
 
 
-def test_counts_are_consistent_with_entries(tmp_path):
+def test_counts_are_consistent_with_entries(tmp_path: Path) -> None:
     _build_fixture(tmp_path)
     result = _sweep(tmp_path)
     assert sum(result["counts"].values()) == len(result["entries"])
 
 
-def test_unmapped_slug_is_undeterminable_never_reclaimable(tmp_path):
+def test_unmapped_slug_is_undeterminable_never_reclaimable(tmp_path: Path) -> None:
     _build_fixture(tmp_path, project_slug="Z--unknown-project")
     scratch = tmp_path / "claude" / "Z--unknown-project" / _SID_DEAD_OLD / "scratchpad"
     assert scratch.is_dir()
@@ -249,7 +250,7 @@ def test_unmapped_slug_is_undeterminable_never_reclaimable(tmp_path):
     assert entry["live"] is None
 
 
-def test_undeterminable_never_reclaimed_even_when_live_session_mocked_dead(tmp_path):
+def test_undeterminable_never_reclaimed_even_when_live_session_mocked_dead(tmp_path: Path) -> None:
     _build_fixture(tmp_path, project_slug="Z--unknown-project")
 
     result = _sweep(
@@ -261,7 +262,7 @@ def test_undeterminable_never_reclaimed_even_when_live_session_mocked_dead(tmp_p
         assert entry["verdict"] == "undeterminable"
 
 
-def test_two_project_slugs_resolve_independent_liveness(tmp_path):
+def test_two_project_slugs_resolve_independent_liveness(tmp_path: Path) -> None:
     """Cross-repo isolation: X's dead-old fixture reclaims under X's mapped
     root; an identical fixture under an UNMAPPED slug must not."""
     _build_fixture(tmp_path, project_slug="X--demo-repo")
@@ -287,12 +288,12 @@ def test_two_project_slugs_resolve_independent_liveness(tmp_path):
     )
 
 
-def test_encode_project_slug_matches_harness_convention():
+def test_encode_project_slug_matches_harness_convention() -> None:
     assert _encode_project_slug("C:\\demo-repo") == "X--demo-repo"
     assert _encode_project_slug("C:/demo-repo") == "X--demo-repo"
 
 
-def test_build_slug_to_root_map_drops_encoding_collisions(monkeypatch):
+def test_build_slug_to_root_map_drops_encoding_collisions(monkeypatch: pytest.MonkeyPatch) -> None:
     """Two DIFFERENT discovered roots that encode to the SAME slug must be
     dropped from the map entirely (fail safe), never guessed toward either."""
     monkeypatch.setattr(
@@ -303,7 +304,7 @@ def test_build_slug_to_root_map_drops_encoding_collisions(monkeypatch):
     assert "X--demo-repo" not in mapping
 
 
-def test_build_slug_to_root_map_keeps_unambiguous_roots(monkeypatch):
+def test_build_slug_to_root_map_keeps_unambiguous_roots(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.ops.scratchpad_sweep._known_repo_roots",
         lambda: ["C:/demo-repo", "C:/Other-Repo"],
@@ -318,7 +319,7 @@ def test_build_slug_to_root_map_keeps_unambiguous_roots(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_handler_default_dry_run(tmp_path, monkeypatch):
+def test_handler_default_dry_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _build_fixture(tmp_path)
     monkeypatch.setattr(
         "coordinator_core.ops.scratchpad_sweep._build_slug_to_root_map",
@@ -341,12 +342,12 @@ def test_handler_default_dry_run(tmp_path, monkeypatch):
         {"project_slugs": [1, 2]},
     ],
 )
-def test_handler_invalid_params_structured_error(bad_params):
+def test_handler_invalid_params_structured_error(bad_params) -> None:
     result = _handler(bad_params)
     assert "error" in result
 
 
-def _make_dated_session(claude_root, sid, age_days, size_bytes=100):
+def _make_dated_session(claude_root, sid, age_days, size_bytes: int = 100) -> None:
     sdir = claude_root / sid
     sdir.mkdir()
     scratch = sdir / "scratchpad"
@@ -356,7 +357,7 @@ def _make_dated_session(claude_root, sid, age_days, size_bytes=100):
     _age_file(f, age_days * 86400)
 
 
-def test_size_cut_not_triggered_when_target_already_met(tmp_path):
+def test_size_cut_not_triggered_when_target_already_met(tmp_path: Path) -> None:
     _build_fixture(tmp_path)
     result = _sweep(tmp_path, reclaim=True)
 
@@ -365,7 +366,7 @@ def test_size_cut_not_triggered_when_target_already_met(tmp_path):
     assert _entry_for(result, _SID_DEAD_OLD)["verdict"] == "reclaimed"
 
 
-def test_size_cut_stops_at_right_threshold_whole_cohorts_only(tmp_path):
+def test_size_cut_stops_at_right_threshold_whole_cohorts_only(tmp_path: Path) -> None:
     slug = "X--demo-repo"
     claude_root = tmp_path / "claude" / slug
     claude_root.mkdir(parents=True)
@@ -404,7 +405,7 @@ def test_size_cut_stops_at_right_threshold_whole_cohorts_only(tmp_path):
         assert entry["verdict"] == "too-recent"
 
 
-def test_size_cut_floor_reached_reports_shortfall_deletes_nothing_below_floor(tmp_path):
+def test_size_cut_floor_reached_reports_shortfall_deletes_nothing_below_floor(tmp_path: Path) -> None:
     slug = "X--demo-repo"
     claude_root = tmp_path / "claude" / slug
     claude_root.mkdir(parents=True)
@@ -433,7 +434,7 @@ def test_size_cut_floor_reached_reports_shortfall_deletes_nothing_below_floor(tm
     assert entry["verdict"] == "too-recent"
 
 
-def test_size_cut_spares_live_directory_and_does_not_count_its_bytes(tmp_path, monkeypatch):
+def test_size_cut_spares_live_directory_and_does_not_count_its_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     slug = "X--demo-repo"
     claude_root = tmp_path / "claude" / slug
     claude_root.mkdir(parents=True)
@@ -474,7 +475,7 @@ def test_size_cut_spares_live_directory_and_does_not_count_its_bytes(tmp_path, m
     assert "live/undeterminable directories were never sized" in sc["shortfall_reason"]
 
 
-def test_size_cut_dry_run_full_accounting_no_deletion(tmp_path):
+def test_size_cut_dry_run_full_accounting_no_deletion(tmp_path: Path) -> None:
     slug = "X--demo-repo"
     claude_root = tmp_path / "claude" / slug
     claude_root.mkdir(parents=True)
@@ -501,7 +502,7 @@ def test_size_cut_dry_run_full_accounting_no_deletion(tmp_path):
     assert sc["bytes_reclaimable"] >= 100
 
 
-def _entry(sid, *, verdict, age_days, bytes_=100, path="unused"):
+def _entry(sid, *, verdict, age_days, bytes_: int = 100, path: str = "unused"):
     return {
         "project_slug": "X--demo-repo",
         "session_id": sid,
@@ -515,7 +516,7 @@ def _entry(sid, *, verdict, age_days, bytes_=100, path="unused"):
     }
 
 
-def test_fractional_floor_days_never_prunes_below_the_stated_floor():
+def test_fractional_floor_days_never_prunes_below_the_stated_floor() -> None:
     entries = [
         _entry("a", verdict="too-recent", age_days=1.2, bytes_=100),
         _entry("b", verdict="too-recent", age_days=1.8, bytes_=100),
@@ -530,7 +531,7 @@ def test_fractional_floor_days_never_prunes_below_the_stated_floor():
     )
 
 
-def test_fractional_ttl_days_still_visits_the_boundary_cohort(tmp_path):
+def test_fractional_ttl_days_still_visits_the_boundary_cohort(tmp_path: Path) -> None:
     a_dir = tmp_path / "a"
     a_dir.mkdir()
     (a_dir / "f.txt").write_text("x" * 100, encoding="utf-8")
@@ -543,7 +544,7 @@ def test_fractional_ttl_days_still_visits_the_boundary_cohort(tmp_path):
     assert any(c["age_days"] == 7 for c in report["cohorts"])
 
 
-def test_partial_cohort_delete_failure_is_not_subtracted_from_remaining(tmp_path):
+def test_partial_cohort_delete_failure_is_not_subtracted_from_remaining(tmp_path: Path) -> None:
     ok_dir = tmp_path / "ok"
     ok_dir.mkdir()
     (ok_dir / "f.txt").write_text("x" * 100, encoding="utf-8")
@@ -565,7 +566,7 @@ def test_partial_cohort_delete_failure_is_not_subtracted_from_remaining(tmp_path
     assert report["met"] is False
 
 
-def test_apply_size_cut_own_filter_excludes_live_verdict_even_with_age_days(tmp_path):
+def test_apply_size_cut_own_filter_excludes_live_verdict_even_with_age_days(tmp_path: Path) -> None:
     dead_dir = tmp_path / "dead"
     dead_dir.mkdir()
     (dead_dir / "f.txt").write_text("x" * 100, encoding="utf-8")
@@ -581,7 +582,7 @@ def test_apply_size_cut_own_filter_excludes_live_verdict_even_with_age_days(tmp_
     assert entries[1]["verdict"] == "size-cut-reclaimed"
 
 
-def test_large_file_directory_eligible_at_the_shorter_floor(tmp_path):
+def test_large_file_directory_eligible_at_the_shorter_floor(tmp_path: Path) -> None:
     slug = "X--demo-repo"
     claude_root = tmp_path / "claude" / slug
     claude_root.mkdir(parents=True)
@@ -606,7 +607,7 @@ def test_large_file_directory_eligible_at_the_shorter_floor(tmp_path):
     assert not scratch.exists()
 
 
-def test_small_file_directory_same_age_is_not_eligible(tmp_path):
+def test_small_file_directory_same_age_is_not_eligible(tmp_path: Path) -> None:
     slug = "X--demo-repo"
     claude_root = tmp_path / "claude" / slug
     claude_root.mkdir(parents=True)
@@ -631,7 +632,7 @@ def test_small_file_directory_same_age_is_not_eligible(tmp_path):
     assert scratch.is_dir()
 
 
-def test_live_directory_with_large_file_never_selected_at_any_threshold(tmp_path, monkeypatch):
+def test_live_directory_with_large_file_never_selected_at_any_threshold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     slug = "X--demo-repo"
     claude_root = tmp_path / "claude" / slug
     claude_root.mkdir(parents=True)
@@ -660,7 +661,7 @@ def test_live_directory_with_large_file_never_selected_at_any_threshold(tmp_path
     assert scratch.is_dir(), "a live directory must never be size-cut eligible"
 
 
-def test_apply_size_cut_large_file_floor_never_selects_live_verdict():
+def test_apply_size_cut_large_file_floor_never_selects_live_verdict() -> None:
     entries = [
         _entry("live-large", verdict="live", age_days=5.0, bytes_=5000, path="unused"),
     ]
@@ -678,7 +679,7 @@ def test_apply_size_cut_large_file_floor_never_selects_live_verdict():
     assert report["bytes_reclaimed"] == 0
 
 
-def test_large_file_floor_above_ordinary_floor_still_gates_the_upper_cohort(tmp_path):
+def test_large_file_floor_above_ordinary_floor_still_gates_the_upper_cohort(tmp_path: Path) -> None:
     large_dir = tmp_path / "large"
     large_dir.mkdir()
     (large_dir / "f.bin").write_text("x" * 100, encoding="utf-8")
@@ -703,7 +704,7 @@ def test_large_file_floor_above_ordinary_floor_still_gates_the_upper_cohort(tmp_
     assert report["bytes_reclaimed"] == 0
 
 
-def test_large_file_floor_above_ordinary_floor_boundary_is_eligible(tmp_path):
+def test_large_file_floor_above_ordinary_floor_boundary_is_eligible(tmp_path: Path) -> None:
     large_dir = tmp_path / "large"
     large_dir.mkdir()
     (large_dir / "f.bin").write_text("x" * 100, encoding="utf-8")
@@ -725,7 +726,7 @@ def test_large_file_floor_above_ordinary_floor_boundary_is_eligible(tmp_path):
     assert report["bytes_reclaimed"] == 100
 
 
-def test_large_file_floor_equal_to_ordinary_floor_is_eligible(tmp_path):
+def test_large_file_floor_equal_to_ordinary_floor_is_eligible(tmp_path: Path) -> None:
     large_dir = tmp_path / "large"
     large_dir.mkdir()
     (large_dir / "f.bin").write_text("x" * 100, encoding="utf-8")
@@ -747,7 +748,7 @@ def test_large_file_floor_equal_to_ordinary_floor_is_eligible(tmp_path):
     assert report["bytes_reclaimed"] == 100
 
 
-def test_fractional_floor_days_with_larger_large_file_floor_gates_correctly(tmp_path):
+def test_fractional_floor_days_with_larger_large_file_floor_gates_correctly(tmp_path: Path) -> None:
     short_dir = tmp_path / "short"
     short_dir.mkdir()
     (short_dir / "f.bin").write_text("x" * 100, encoding="utf-8")
@@ -780,7 +781,7 @@ def test_fractional_floor_days_with_larger_large_file_floor_gates_correctly(tmp_
     assert report["bytes_reclaimed"] == 100
 
 
-def test_size_cut_large_file_params_flow_through_the_op_handler(tmp_path, monkeypatch):
+def test_size_cut_large_file_params_flow_through_the_op_handler(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _build_fixture(tmp_path)
     monkeypatch.setattr(
         "coordinator_core.ops.scratchpad_sweep._build_slug_to_root_map",
@@ -808,18 +809,18 @@ def test_size_cut_large_file_params_flow_through_the_op_handler(tmp_path, monkey
         {"size_cut_large_file_floor_days": True},
     ],
 )
-def test_handler_invalid_large_file_params_structured_error(bad_params):
+def test_handler_invalid_large_file_params_structured_error(bad_params) -> None:
     result = _handler(bad_params)
     assert "error" in result
 
 
-def test_registered_under_op_key():
+def test_registered_under_op_key() -> None:
     from coordinator_core.ipc import get_op_handler
 
     assert get_op_handler("scratchpad.sweep") is _handler
 
 
-def _make_dated_session_with_files(claude_root, sid, age_days, files):
+def _make_dated_session_with_files(claude_root, sid, age_days, files) -> None:
     sdir = claude_root / sid
     sdir.mkdir()
     scratch = sdir / "scratchpad"
@@ -830,7 +831,7 @@ def _make_dated_session_with_files(claude_root, sid, age_days, files):
         _age_file(f, age_days * 86400)
 
 
-def test_archive_shaped_file_is_detected_and_totaled(tmp_path):
+def test_archive_shaped_file_is_detected_and_totaled(tmp_path: Path) -> None:
     slug = "X--demo-repo"
     claude_root = tmp_path / "claude" / slug
     claude_root.mkdir(parents=True)
@@ -863,7 +864,7 @@ def test_archive_shaped_file_is_detected_and_totaled(tmp_path):
         ("plain.log", False),
     ],
 )
-def test_archive_shape_pattern_set(tmp_path, fname, is_archive):
+def test_archive_shape_pattern_set(tmp_path: Path, fname, is_archive) -> None:
     slug = "X--demo-repo"
     claude_root = tmp_path / "claude" / slug
     claude_root.mkdir(parents=True)
@@ -878,7 +879,7 @@ def test_archive_shape_pattern_set(tmp_path, fname, is_archive):
     assert (entry["archive_count"] == 1) is is_archive
 
 
-def test_too_recent_entry_with_archive_is_no_longer_size_cut_exempt(tmp_path):
+def test_too_recent_entry_with_archive_is_no_longer_size_cut_exempt(tmp_path: Path) -> None:
     """REGRESSION-DIRECTION test for a deliberately reversed decision — do
     NOT "fix" this back. Through 2026-08-11 an archive-shaped file exempted
     its directory from the size-cut pass; the PM reversed that on
@@ -922,7 +923,7 @@ def test_too_recent_entry_with_archive_is_no_longer_size_cut_exempt(tmp_path):
     assert sc["archive_exempt_bytes"] == 0
 
 
-def test_stderr_warning_still_fires_for_archive_taken_by_ttl_gate(tmp_path, capsys):
+def test_stderr_warning_still_fires_for_archive_taken_by_ttl_gate(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     slug = "X--demo-repo"
     claude_root = tmp_path / "claude" / slug
     claude_root.mkdir(parents=True)
@@ -943,7 +944,7 @@ def test_stderr_warning_still_fires_for_archive_taken_by_ttl_gate(tmp_path, caps
     assert sid in captured.err
 
 
-def test_archive_past_ttl_is_still_reclaimed_by_ttl_gate(tmp_path):
+def test_archive_past_ttl_is_still_reclaimed_by_ttl_gate(tmp_path: Path) -> None:
     slug = "X--demo-repo"
     claude_root = tmp_path / "claude" / slug
     claude_root.mkdir(parents=True)
@@ -963,7 +964,7 @@ def test_archive_past_ttl_is_still_reclaimed_by_ttl_gate(tmp_path):
     assert not scratch.exists()
 
 
-def test_short_circuit_entries_carry_archive_keys(tmp_path):
+def test_short_circuit_entries_carry_archive_keys(tmp_path: Path) -> None:
     _build_fixture(tmp_path)
     result = _sweep(tmp_path)
     for entry in result["entries"]:
@@ -975,7 +976,7 @@ def test_short_circuit_entries_carry_archive_keys(tmp_path):
             assert entry["archives"] == []
 
 
-def test_archives_seen_flat_list_sorted_by_bytes_desc(tmp_path):
+def test_archives_seen_flat_list_sorted_by_bytes_desc(tmp_path: Path) -> None:
     slug = "X--demo-repo"
     claude_root = tmp_path / "claude" / slug
     claude_root.mkdir(parents=True)
@@ -999,7 +1000,7 @@ def test_archives_seen_flat_list_sorted_by_bytes_desc(tmp_path):
     assert top["verdict"] == "too-recent"
 
 
-def test_watchdog_ceiling_bails_remaining_directories_never_touches_them(tmp_path):
+def test_watchdog_ceiling_bails_remaining_directories_never_touches_them(tmp_path: Path) -> None:
     tmp_path = _build_fixture(tmp_path)
 
     result = _sweep(tmp_path, watchdog_ceiling_secs=0.0)

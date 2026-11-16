@@ -9,6 +9,7 @@ import yaml
 
 from coordinator_core.ops.dispatch_emit.ask_gate import gate
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -17,7 +18,7 @@ ACCEPTED = {"pm_quote": "yes", "on": "2026-10-01", "mode": "pm"}
 
 
 @pytest.fixture(autouse=True)
-def _mechanical_gate_kinds(monkeypatch):
+def _mechanical_gate_kinds(monkeypatch: pytest.MonkeyPatch) -> None:
     """The registry state C7 lands: `refusal` and `orphan_pending` are mechanical kinds."""
     from coordinator_core.ops.dispatch_emit import halt_remedy_class as hrc
 
@@ -26,7 +27,7 @@ def _mechanical_gate_kinds(monkeypatch):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
@@ -34,7 +35,7 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _put(repo, tshirt="S", route="spec-dispatch", accepted=None, mode="pm", **over):
+def _put(repo, tshirt: str = "S", route: str = "spec-dispatch", accepted=None, mode: str = "pm", **over) -> None:
     doc = {
         "schema": "sizing-object",
         "name": "gate fixture",
@@ -54,39 +55,39 @@ def _put(repo, tshirt="S", route="spec-dispatch", accepted=None, mode="pm", **ov
     (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
 
 
-def test_pm_decision_with_null_xl_exit_halts_as_room_with_route(repo):
+def test_pm_decision_with_null_xl_exit_halts_as_room_with_route(repo) -> None:
     _put(repo, tshirt="XL", route="pm-decision", accepted={"pm_quote": "y"}, xl_exit=None)
     v = gate(repo, REL)
     assert v.arm is None and v.halt["kind"] == "room" and v.halt["route"] == "pm-decision"
 
 
-def test_accepted_xl_shape_halts_as_room(repo):
+def test_accepted_xl_shape_halts_as_room(repo) -> None:
     _put(repo, tshirt="XL", route="shape", accepted=ACCEPTED)
     v = gate(repo, REL)
     assert v.arm is None and v.halt["kind"] == "room" and v.halt["route"] == "shape"
 
 
-def test_xl_null_acceptance_is_engine_owned_and_does_not_halt_as_touchpoint(repo):
+def test_xl_null_acceptance_is_engine_owned_and_does_not_halt_as_touchpoint(repo) -> None:
     (repo / ".git").mkdir()
     _put(repo, tshirt="XL", route="plan")
     v = gate(repo, REL)
     assert v.halt is None and v.arm == "m_plus"
 
 
-def test_m_null_acceptance_halts_as_touchpoint_naming_invoke_line(repo):
+def test_m_null_acceptance_halts_as_touchpoint_naming_invoke_line(repo) -> None:
     (repo / ".git").mkdir()
     _put(repo, tshirt="M", route="pm-decision", xl_exit="accept_multi_session")
     v = gate(repo, REL)
     assert v.arm is None and v.halt["kind"] == "touchpoint"
     assert "sizing-accept-exit-criterion" in v.halt["touchpoint"]
-def test_absent_statement_halts_as_touchpoint_naming_invoke_line(repo):
+def test_absent_statement_halts_as_touchpoint_naming_invoke_line(repo) -> None:
     _put(repo, tshirt="S", route="spec-dispatch", exit_criterion={"statement": None, "accepted": None})
     v = gate(repo, REL, writes=["a.py"])
     assert v.arm is None and v.halt["kind"] == "touchpoint"
     assert "sizing.accept_exit_criterion" in v.halt["touchpoint"] and REL in v.halt["touchpoint"]
 
 
-def test_refusals_halt_all_named_at_once(repo, monkeypatch):
+def test_refusals_halt_all_named_at_once(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     # With a resolvable fleet mode an absent interaction_mode is filled, not refused.
     from coordinator_core.ops.dispatch_emit import sizing_fire
 
@@ -98,13 +99,13 @@ def test_refusals_halt_all_named_at_once(repo, monkeypatch):
         assert field in v.halt["reason"]
 
 
-def test_unknown_tshirt_is_a_refusal(repo):
+def test_unknown_tshirt_is_a_refusal(repo) -> None:
     _put(repo, tshirt="Q")
     assert gate(repo, REL).halt["kind"] == "refusal"
 
 
 @pytest.mark.parametrize("tshirt,route,arm", [("S", "spec-dispatch", "s"), ("XS", "dispatch", "xs")])
-def test_xs_s_with_null_acceptance_proceeds(repo, tshirt, route, arm):
+def test_xs_s_with_null_acceptance_proceeds(repo, tshirt, route, arm) -> None:
     _put(repo, tshirt=tshirt, route=route)
     v = gate(repo, REL, writes=["a.py"])
     assert v.halt is None and v.arm == arm and v.baton is None
@@ -114,7 +115,7 @@ def test_xs_s_with_null_acceptance_proceeds(repo, tshirt, route, arm):
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
 @pytest.mark.parametrize("tshirt,route", [("M", "plan"), ("L", "spec-dispatch")])
-def test_agent_run_plan_and_dispatch_to_l_skip_acceptance_and_stamp_the_engine(repo, mode, tshirt, route):
+def test_agent_run_plan_and_dispatch_to_l_skip_acceptance_and_stamp_the_engine(repo, mode, tshirt, route) -> None:
     subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
     _put(repo, tshirt=tshirt, route=route, mode=mode)
     v = gate(repo, REL, writes=["a.py"])
@@ -124,7 +125,7 @@ def test_agent_run_plan_and_dispatch_to_l_skip_acceptance_and_stamp_the_engine(r
 
 @pytest.mark.cadence
 @pytest.mark.spawns_process
-def test_m_plus_baton_carries_the_sizing_deliverable_id(repo):
+def test_m_plus_baton_carries_the_sizing_deliverable_id(repo) -> None:
     subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
     _put(repo, tshirt="M", route="plan")
     v = gate(repo, REL)
@@ -137,7 +138,7 @@ def test_m_plus_baton_carries_the_sizing_deliverable_id(repo):
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
 @pytest.mark.parametrize("tshirt,route", [("XL", "plan"), ("XXL", "plan")])
-def test_xl_acceptance_is_engine_owned_in_every_mode(repo, mode, tshirt, route):
+def test_xl_acceptance_is_engine_owned_in_every_mode(repo, mode, tshirt, route) -> None:
     (repo / ".git").mkdir()
     _put(repo, tshirt=tshirt, route=route, mode=mode)
     v = gate(repo, REL)
@@ -147,7 +148,7 @@ def test_xl_acceptance_is_engine_owned_in_every_mode(repo, mode, tshirt, route):
 
 @pytest.mark.parametrize("em_size", ["XS", "S", "M", "m"])
 @pytest.mark.parametrize("tshirt", ["XL", "XXL"])
-def test_em_small_vs_engine_large_halts_misaligned_naming_both(repo, em_size, tshirt):
+def test_em_small_vs_engine_large_halts_misaligned_naming_both(repo, em_size, tshirt) -> None:
     _put(repo, tshirt=tshirt, route="plan")
     v = gate(repo, REL, em_size=em_size)
     assert v.arm is None and v.halt["kind"] == "misaligned"
@@ -155,20 +156,20 @@ def test_em_small_vs_engine_large_halts_misaligned_naming_both(repo, em_size, ts
 
 
 @pytest.mark.parametrize("em_size,tshirt", [("L", "XL"), ("XL", "XXL"), ("M", "L"), ("S", "M"), ("M", "S")])
-def test_em_size_without_the_misaligned_pairing_does_not_halt_misaligned(repo, em_size, tshirt):
+def test_em_size_without_the_misaligned_pairing_does_not_halt_misaligned(repo, em_size, tshirt) -> None:
     _put(repo, tshirt=tshirt, route="spec-dispatch", accepted=ACCEPTED)
     v = gate(repo, REL, em_size=em_size, writes=["a.py"])
     assert v.halt is None or v.halt["kind"] != "misaligned"
 
 
 @pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
-def test_pm_decision_without_em_size_takes_the_apm_xl_exit_in_every_mode(repo, mode):
+def test_pm_decision_without_em_size_takes_the_apm_xl_exit_in_every_mode(repo, mode) -> None:
     _put(repo, tshirt="XL", route="pm-decision", mode=mode)
     v = gate(repo, REL)
     assert v.arm is None and v.halt["kind"] == "room" and v.halt["apm_xl_exit"] is True
 
 
-def test_em_size_param_is_accepted_by_the_op_seam():
+def test_em_size_param_is_accepted_by_the_op_seam() -> None:
     from coordinator_core.ops.dispatch_emit.ask_gate import _PARAMS
 
     assert any(f.name == "em_size" for f in _PARAMS)
@@ -176,20 +177,20 @@ def test_em_size_param_is_accepted_by_the_op_seam():
 
 @pytest.mark.parametrize("mode", ["hands-on", "pm", "ceo"])
 @pytest.mark.parametrize("tshirt", ["M", "L"])
-def test_pm_decision_below_xl_resolved_to_plan_keeps_the_touchpoint(repo, mode, tshirt):
+def test_pm_decision_below_xl_resolved_to_plan_keeps_the_touchpoint(repo, mode, tshirt) -> None:
     _put(repo, tshirt=tshirt, route="pm-decision", mode=mode, xl_exit="accept_multi_session")
     v = gate(repo, REL)
     assert v.halt["kind"] == "touchpoint" and v.acceptance is None
 
 
 @pytest.mark.parametrize("tshirt", ["S", "L"])
-def test_shape_keeps_the_room_halt_at_any_size(repo, tshirt):
+def test_shape_keeps_the_room_halt_at_any_size(repo, tshirt) -> None:
     _put(repo, tshirt=tshirt, route="shape")
     assert gate(repo, REL).halt["kind"] == "room"
 
 
 @pytest.mark.parametrize("research", [None, {}])
-def test_research_route_without_a_research_block_refuses_naming_the_block_remedy(repo, research):
+def test_research_route_without_a_research_block_refuses_naming_the_block_remedy(repo, research) -> None:
     _put(repo, tshirt="S", route="research", research=research)
     v = gate(repo, REL)
     assert v.halt["kind"] == "refusal"
@@ -198,13 +199,13 @@ def test_research_route_without_a_research_block_refuses_naming_the_block_remedy
     assert "emit-dispatch-workflow" not in v.halt["reason"]
 
 
-def test_research_route_with_a_research_block_does_not_refuse_for_the_block(repo):
+def test_research_route_with_a_research_block_does_not_refuse_for_the_block(repo) -> None:
     _put(repo, tshirt="S", route="research", research={"class": "survey", "targets": []})
     v = gate(repo, REL)
     assert "has no research block" not in str((v.halt or {}).get("reason", ""))
 
 
-def test_skipped_acceptance_verdict_carries_the_engine_stamp(repo):
+def test_skipped_acceptance_verdict_carries_the_engine_stamp(repo) -> None:
     _put(repo, tshirt="XS", route="dispatch")
     v = gate(repo, REL, writes=["a.py"])
     assert v.halt is None
@@ -213,7 +214,7 @@ def test_skipped_acceptance_verdict_carries_the_engine_stamp(repo):
     }
 
 
-def test_recorded_acceptance_carries_no_engine_stamp(repo):
+def test_recorded_acceptance_carries_no_engine_stamp(repo) -> None:
     _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED)
     v = gate(repo, REL, writes=["a.py"])
     assert v.halt is None and "acceptance" not in v.to_json()
@@ -221,7 +222,7 @@ def test_recorded_acceptance_carries_no_engine_stamp(repo):
 
 @pytest.mark.cadence
 @pytest.mark.spawns_process
-def test_accepted_m_returns_arm_and_baton(repo):
+def test_accepted_m_returns_arm_and_baton(repo) -> None:
     subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
     _put(repo, tshirt="M", route="plan", accepted=ACCEPTED)
     v = gate(repo, REL)
@@ -232,7 +233,7 @@ def test_accepted_m_returns_arm_and_baton(repo):
 
 @pytest.mark.cadence
 @pytest.mark.spawns_process
-def test_accepted_multi_session_xl_baton_carries_the_plan_route(repo):
+def test_accepted_multi_session_xl_baton_carries_the_plan_route(repo) -> None:
     subprocess.run(["git", "init", "-q", str(repo)], capture_output=True, **no_console_creationflags())
     _put(repo, tshirt="XL", route="pm-decision", accepted=ACCEPTED, xl_exit="accept_multi_session")
     v = gate(repo, REL)
@@ -294,7 +295,7 @@ def _composed_objects(op: str) -> list:
     ]
 
 
-def test_gate_key_the_composed_script_sends_is_the_key_the_handler_accepts(repo):
+def test_gate_key_the_composed_script_sends_is_the_key_the_handler_accepts(repo) -> None:
     from coordinator_core.ops.dispatch_emit.ask_gate import _handler
 
     (repo / ".git").mkdir()
@@ -304,7 +305,7 @@ def test_gate_key_the_composed_script_sends_is_the_key_the_handler_accepts(repo)
     assert reply["arm"] == "s" and reply["halt"] is None
 
 
-def test_stage_keys_the_composed_script_sends_are_the_keys_the_handler_reads(repo):
+def test_stage_keys_the_composed_script_sends_are_the_keys_the_handler_reads(repo) -> None:
     from coordinator_core.ops.dispatch_emit import ask_stage
 
     # The handler reads its params through the typed `_PARAMS` schema, so a sent key it does not
@@ -314,7 +315,7 @@ def test_stage_keys_the_composed_script_sends_are_the_keys_the_handler_reads(rep
     assert sent <= declared, sent - declared
 
 
-def test_gate_resolves_the_sizing_from_the_common_dir_the_engine_passes(repo):
+def test_gate_resolves_the_sizing_from_the_common_dir_the_engine_passes(repo) -> None:
     """The dispatcher hands common_dir-scoped ops `<repo>/.git`, not the worktree root."""
     from coordinator_core.ops.dispatch_emit.ask_gate import _handler
 
@@ -324,7 +325,7 @@ def test_gate_resolves_the_sizing_from_the_common_dir_the_engine_passes(repo):
     assert reply["halt"] is None and reply["arm"] == "s", reply
 
 
-def test_stage_is_sent_exactly_one_of_plan_path_and_sizing_path():
+def test_stage_is_sent_exactly_one_of_plan_path_and_sizing_path() -> None:
     # C9's S run sent both; ask_stage refused, and the stage agent returned
     # an empty manifest, so nothing executed.
     objs = _composed_objects("dispatch.ask_stage")
@@ -345,14 +346,14 @@ def test_stage_is_sent_exactly_one_of_plan_path_and_sizing_path():
         {"sizing_path": "s.yaml", "writes": [1]},
     ],
 )
-def test_handler_refuses_malformed_params_with_a_structured_error(repo, params):
+def test_handler_refuses_malformed_params_with_a_structured_error(repo, params) -> None:
     from coordinator_core.ops.dispatch_emit.ask_gate import _handler
 
     reply = _handler(params, repo_root=repo)
     assert set(reply) == {"error"} and "dispatch.ask_gate" in reply["error"]
 
 
-def _handoff(repo, sizing_object):
+def _handoff(repo, sizing_object) -> str:
     (repo / "state" / "handoffs").mkdir(parents=True, exist_ok=True)
     (repo / "state" / "handoffs" / "x.md").write_text(
         f"---\nhandoff_id: hnd-x-abc123\nsizing_object: {sizing_object}\n---\nbody\n", encoding="utf-8", newline="\n"
@@ -360,7 +361,7 @@ def _handoff(repo, sizing_object):
     return "state/handoffs/x.md"
 
 
-def test_baton_given_at_xs_is_carried_when_it_is_the_sizings(repo):
+def test_baton_given_at_xs_is_carried_when_it_is_the_sizings(repo) -> None:
     from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS
 
     _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED)
@@ -368,7 +369,7 @@ def test_baton_given_at_xs_is_carried_when_it_is_the_sizings(repo):
     assert v.halt is None and v.arm == ARM_XS and v.baton is None
 
 
-def test_baton_given_at_xs_naming_another_sizing_is_dropped(repo):
+def test_baton_given_at_xs_naming_another_sizing_is_dropped(repo) -> None:
     from coordinator_core.ops.dispatch_emit.sizing_fire import ARM_XS
 
     _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED)
@@ -377,26 +378,26 @@ def test_baton_given_at_xs_naming_another_sizing_is_dropped(repo):
 
 
 @pytest.mark.parametrize("baton", ["../x.md", "/etc/passwd", "d:x.md"])
-def test_baton_given_at_xs_escaping_the_repo_is_dropped(repo, baton):
+def test_baton_given_at_xs_escaping_the_repo_is_dropped(repo, baton) -> None:
     _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED)
     v = gate(repo, REL, writes=["a.py"], baton=baton)
     assert v.halt is None and v.baton is None
 
 
-def test_baton_given_at_xs_missing_file_is_dropped(repo):
+def test_baton_given_at_xs_missing_file_is_dropped(repo) -> None:
     _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED)
     v = gate(repo, REL, writes=["a.py"], baton="state/handoffs/none.md")
     assert v.halt is None and v.baton is None
 
 
-def test_missing_statement_halts_as_touchpoint_for_the_accept_stage(repo):
+def test_missing_statement_halts_as_touchpoint_for_the_accept_stage(repo) -> None:
     _put(repo, tshirt="S", route="spec-dispatch", mode="ceo", exit_criterion=None)
     v = gate(repo, REL)
     assert v.arm is None and v.halt["kind"] == "touchpoint"
     assert "accept_exit_criterion" in v.halt["touchpoint"] and REL in v.halt["touchpoint"]
 
 
-def test_missing_statement_with_another_refusal_stays_a_refusal(repo):
+def test_missing_statement_with_another_refusal_stays_a_refusal(repo) -> None:
     _put(repo, tshirt="S", route="spec-dispatch", mode="ceo", exit_criterion=None, status="draft")
     v = gate(repo, REL)
     assert v.halt["kind"] == "refusal" and "statement" not in v.halt["reason"]
@@ -415,18 +416,18 @@ class _FakeDocNew:
         pass
 
     @staticmethod
-    def mint_baton_from_sizing(sizing_rel, repo_root, baton=None):
+    def mint_baton_from_sizing(sizing_rel, repo_root, baton=None) -> dict[str, str]:
         return {"id": "baton-fixture", "path": "state/handoffs/baton-fixture.md"}
 
 
-def _m_repo(repo, monkeypatch, **over):
+def _m_repo(repo, monkeypatch, **over) -> None:
     from coordinator_core.ops.dispatch_emit import ask_gate
 
     monkeypatch.setattr(ask_gate, "_load_doc_new", lambda: _FakeDocNew)
     _put(repo, tshirt="M", route="plan", accepted=ACCEPTED, **over)
 
 
-def test_concrete_m_writes_the_minted_spine_and_returns_its_path(repo, monkeypatch):
+def test_concrete_m_writes_the_minted_spine_and_returns_its_path(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _m_repo(repo, monkeypatch, acceptance_rows=CONCRETE_ROWS)
     v = gate(repo, REL)
     assert v.halt is None and v.arm == "m_plus"
@@ -436,19 +437,19 @@ def test_concrete_m_writes_the_minted_spine_and_returns_its_path(repo, monkeypat
     assert v.to_json()["spine_plan"] == v.spine_plan
 
 
-def test_non_concrete_m_has_no_spine_plan(repo, monkeypatch):
+def test_non_concrete_m_has_no_spine_plan(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _m_repo(repo, monkeypatch, acceptance_rows=[{"statement": "x", "writes": ["a.py"], "check": ""}])
     v = gate(repo, REL)
     assert v.halt is None and v.spine_plan is None and "spine_plan" not in v.to_json()
     assert not (repo / "docs" / "plans").exists()
 
 
-def test_m_without_acceptance_rows_has_no_spine_plan(repo, monkeypatch):
+def test_m_without_acceptance_rows_has_no_spine_plan(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _m_repo(repo, monkeypatch)
     assert gate(repo, REL).spine_plan is None
 
 
-def test_existing_spine_is_returned_unchanged_never_overwritten(repo, monkeypatch):
+def test_existing_spine_is_returned_unchanged_never_overwritten(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _m_repo(repo, monkeypatch, acceptance_rows=CONCRETE_ROWS)
     path = repo / "docs" / "plans" / "2026-10" / "2026-10-01-gate.md"
     path.parent.mkdir(parents=True)
@@ -459,7 +460,7 @@ def test_existing_spine_is_returned_unchanged_never_overwritten(repo, monkeypatc
     assert path.read_text(encoding="utf-8") == "edited by the reviewer\n"
 
 
-def test_existing_matching_spine_is_returned_unchanged(repo, monkeypatch):
+def test_existing_matching_spine_is_returned_unchanged(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _m_repo(repo, monkeypatch, acceptance_rows=CONCRETE_ROWS)
     first = gate(repo, REL)
     path = repo / first.spine_plan
@@ -469,7 +470,7 @@ def test_existing_matching_spine_is_returned_unchanged(repo, monkeypatch):
     assert path.read_text(encoding="utf-8").endswith("reviewer note\n")
 
 
-def test_existing_spine_with_stale_rows_refuses_naming_the_rows(repo, monkeypatch):
+def test_existing_spine_with_stale_rows_refuses_naming_the_rows(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _m_repo(repo, monkeypatch, acceptance_rows=CONCRETE_ROWS)
     path = repo / gate(repo, REL).spine_plan
     before = path.read_text(encoding="utf-8")
@@ -479,7 +480,7 @@ def test_existing_spine_with_stale_rows_refuses_naming_the_rows(repo, monkeypatc
     assert path.read_text(encoding="utf-8") == before
 
 
-def test_existing_directory_write_refuses_instead_of_raising(repo, monkeypatch):
+def test_existing_directory_write_refuses_instead_of_raising(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     (repo / "pkg").mkdir()
     _m_repo(repo, monkeypatch, acceptance_rows=[{"statement": "x", "writes": ["pkg"], "check": "true"}])
     v = gate(repo, REL)
@@ -487,14 +488,14 @@ def test_existing_directory_write_refuses_instead_of_raising(repo, monkeypatch):
     assert not (repo / "docs" / "plans").exists()
 
 
-def test_directory_check_resolves_against_the_gate_repo_root(repo, monkeypatch):
+def test_directory_check_resolves_against_the_gate_repo_root(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     # `coordinator_core` is a directory under the engine's own root, not under the tmp repo.
     _m_repo(repo, monkeypatch, acceptance_rows=[{"statement": "x", "writes": ["coordinator_core"], "check": "true"}])
     v = gate(repo, REL)
     assert v.halt is None and v.spine_plan
 
 
-def test_resume_plan_beats_a_concrete_sizing(repo, monkeypatch):
+def test_resume_plan_beats_a_concrete_sizing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _m_repo(repo, monkeypatch, acceptance_rows=CONCRETE_ROWS, plan="docs/plans/other.md")
     other = repo / "docs" / "plans" / "other.md"
     other.parent.mkdir(parents=True)
@@ -509,7 +510,7 @@ def test_resume_plan_beats_a_concrete_sizing(repo, monkeypatch):
 
 
 @pytest.mark.parametrize("tshirt,route", [("XS", "dispatch"), ("S", "spec-dispatch")])
-def test_xs_and_s_never_set_spine_plan(repo, tshirt, route):
+def test_xs_and_s_never_set_spine_plan(repo, tshirt, route) -> None:
     _put(repo, tshirt=tshirt, route=route, accepted=ACCEPTED, acceptance_rows=CONCRETE_ROWS)
     v = gate(repo, REL, writes=["a.py"] if tshirt == "XS" else ())
     assert v.halt is None and v.spine_plan is None
@@ -519,7 +520,7 @@ _CENSUS_INTENT = "Classify the land_run results in 28 cells of L-XXL and write o
 _RESEARCH = {"class": "corpus", "targets": [{"source": "repo", "ref": "x"}]}
 
 
-def test_bounded_single_write_research_sizing_routes_to_the_execute_arm(repo):
+def test_bounded_single_write_research_sizing_routes_to_the_execute_arm(repo) -> None:
     _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED, acceptance_rows=CONCRETE_ROWS,
          intent=_CENSUS_INTENT, research=_RESEARCH)
     v = gate(repo, REL, writes=["runs/census.md"])
@@ -529,27 +530,27 @@ def test_bounded_single_write_research_sizing_routes_to_the_execute_arm(repo):
 _SPLIT_RESEARCH = {"value_class": "scouts", "appetite": "small", "sources": ["web"], "questions": ["why?"]}
 
 
-def _assert_split(v):
+def _assert_split(v) -> None:
     assert v.arm is None and v.halt["kind"] == "research"
     r, b = v.halt["split"]["research"], v.halt["split"]["build"]
     assert (r["status"], b["status"]) == ("ready", "after") and b["after"] == [r["run_id"]]
 
 
-def test_unbounded_research_sizing_with_a_write_splits(repo):
+def test_unbounded_research_sizing_with_a_write_splits(repo) -> None:
     (repo / ".git").mkdir()
     _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED, acceptance_rows=CONCRETE_ROWS,
          intent="Survey how other tools handle retries.", research=_SPLIT_RESEARCH)
     _assert_split(gate(repo, REL, writes=["runs/census.md"]))
 
 
-def test_bounded_research_sizing_with_two_writes_splits(repo):
+def test_bounded_research_sizing_with_two_writes_splits(repo) -> None:
     (repo / ".git").mkdir()
     _put(repo, tshirt="XS", route="dispatch", accepted=ACCEPTED, acceptance_rows=CONCRETE_ROWS,
          intent=_CENSUS_INTENT, research=_SPLIT_RESEARCH)
     _assert_split(gate(repo, REL, writes=["runs/a.md", "runs/b.md"]))
 
 
-def _orphan(monkeypatch, handler):
+def _orphan(monkeypatch, handler) -> None:
     from coordinator_core.ops.dispatch_emit import ask_gate, orphan_adopt as oa
 
     monkeypatch.setattr(ask_gate, "_newest_run_binding", lambda root, rel, skip: "ask-20261029T010101-aaaaaa")
@@ -560,7 +561,7 @@ def _orphan(monkeypatch, handler):
     monkeypatch.setattr(oa, "_handler", handler)
 
 
-def test_orphan_pending_is_adopted_in_run_and_the_fire_goes_on(repo, monkeypatch):
+def test_orphan_pending_is_adopted_in_run_and_the_fire_goes_on(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     adopted = []
     _orphan(monkeypatch, lambda params, root=None: adopted.append(params["run_id"]) or {"ok": True})
     _put(repo, tshirt="S", route="spec-dispatch", accepted=ACCEPTED, acceptance_rows=CONCRETE_ROWS)
@@ -568,7 +569,7 @@ def test_orphan_pending_is_adopted_in_run_and_the_fire_goes_on(repo, monkeypatch
     assert adopted == ["ask-20261029T010101-aaaaaa"] and v.halt is None
 
 
-def test_orphan_pending_halts_only_when_both_adopt_tries_fail(repo, monkeypatch):
+def test_orphan_pending_halts_only_when_both_adopt_tries_fail(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     _orphan(monkeypatch, lambda params, root=None: calls.append(1) or {"ok": False, "reason": "no-session"})
     _put(repo, tshirt="S", route="spec-dispatch", accepted=ACCEPTED, acceptance_rows=CONCRETE_ROWS)
@@ -577,7 +578,7 @@ def test_orphan_pending_halts_only_when_both_adopt_tries_fail(repo, monkeypatch)
     assert v.halt["orphan_run"] == "ask-20261029T010101-aaaaaa" and "no-session" in v.halt["reason"]
 
 
-def test_held_sizing_lock_that_frees_inside_the_wait_is_not_a_refusal(repo, monkeypatch):
+def test_held_sizing_lock_that_frees_inside_the_wait_is_not_a_refusal(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import ask_gate
 
     held = iter(["locked by 42", None])
@@ -585,7 +586,7 @@ def test_held_sizing_lock_that_frees_inside_the_wait_is_not_a_refusal(repo, monk
     assert ask_gate._clear_held_lock(repo, repo / REL) is None
 
 
-def test_held_sizing_lock_that_never_frees_is_the_refusal(repo, monkeypatch):
+def test_held_sizing_lock_that_never_frees_is_the_refusal(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import ask_gate
 
     monkeypatch.setattr(ask_gate, "_held_lock_refusal", lambda root, target: "locked by 42")
@@ -593,7 +594,7 @@ def test_held_sizing_lock_that_never_frees_is_the_refusal(repo, monkeypatch):
     assert v.halt == {"kind": "refusal", "reason": "locked by 42"}
 
 
-def test_a_refusal_naming_a_sizing_defect_keeps_kind_reason_and_extras(repo):
+def test_a_refusal_naming_a_sizing_defect_keeps_kind_reason_and_extras(repo) -> None:
     """No engine repair exists for a defect in the sizing's own fields: the bounded tries end in the same halt."""
     from coordinator_core.ops.dispatch_emit import ask_gate
 
@@ -601,7 +602,7 @@ def test_a_refusal_naming_a_sizing_defect_keeps_kind_reason_and_extras(repo):
     assert v.arm is None and v.halt == {"kind": "refusal", "reason": "status: draft", "design_route": {"x": 1}}
 
 
-def test_resume_reuses_every_open_sibling_row_of_a_split_ledger_item(tmp_path, monkeypatch):
+def test_resume_reuses_every_open_sibling_row_of_a_split_ledger_item(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from types import SimpleNamespace
 
     from coordinator_core.frontmatter.body_blocks import LocateStatus

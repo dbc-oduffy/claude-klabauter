@@ -11,6 +11,7 @@ from coordinator_core.ops.dispatch_emit.emit import _resume_guard_clause, emit_s
 from coordinator_core.win_portability import no_console_creationflags
 
 from .conftest import REVIEW_KW
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -68,17 +69,17 @@ def _repo(tmp_path):
     return root, plan, _git(root, "rev-parse", "HEAD")
 
 
-def _move_head(root, name="peer.txt") -> None:
+def _move_head(root, name: str = "peer.txt") -> None:
     (root / name).write_text(name, encoding="utf-8")
     _git(root, "add", "--", name)
     _git(root, "commit", "-q", "-m", f"unrelated {name}")
 
 
-def _emit(root, plan, **kw):
+def _emit(root, plan, **kw) -> str:
     return emit_script(plan, repo_root=root, **REVIEW_KW, **kw)
 
 
-def test_reattempt_changes_only_the_failed_waves_commit_prompt(tmp_path):
+def test_reattempt_changes_only_the_failed_waves_commit_prompt(tmp_path: Path) -> None:
     root, plan, base = _repo(tmp_path)
     failed_run = _emit(root, plan)
     _move_head(root)
@@ -90,7 +91,7 @@ def test_reattempt_changes_only_the_failed_waves_commit_prompt(tmp_path):
     assert _RETRY_EXPR.sub("", _RETRY_CONST.sub("", retry)) == failed_run
 
 
-def test_the_pinned_base_keeps_every_earlier_prompt_in_the_resume_cache(tmp_path):
+def test_the_pinned_base_keeps_every_earlier_prompt_in_the_resume_cache(tmp_path: Path) -> None:
     root, plan, base = _repo(tmp_path)
     failed_run = _emit(root, plan)
     _move_head(root)
@@ -103,20 +104,20 @@ def test_the_pinned_base_keeps_every_earlier_prompt_in_the_resume_cache(tmp_path
     assert pinned.count(base) == failed_run.count(base)
 
 
-def test_without_a_retry_the_script_is_unchanged(tmp_path):
+def test_without_a_retry_the_script_is_unchanged(tmp_path: Path) -> None:
     root, plan, _ = _repo(tmp_path)
     script = _emit(root, plan)
     assert "_commitRetry" not in script
 
 
 @pytest.mark.parametrize("kw", [{"commit_retry": {1: REFUSAL}}, {"resume_run_base": "a" * 40}], ids=["no-base", "no-refusal"])
-def test_retry_and_base_travel_together(tmp_path, kw):
+def test_retry_and_base_travel_together(tmp_path: Path, kw) -> None:
     root, plan, _ = _repo(tmp_path)
     with pytest.raises(ValueError, match="only together"):
         _emit(root, plan, **kw)
 
 
-def test_a_base_that_is_not_an_ancestor_of_head_is_refused(tmp_path):
+def test_a_base_that_is_not_an_ancestor_of_head_is_refused(tmp_path: Path) -> None:
     root, plan, seed = _repo(tmp_path)
     main = _git(root, "rev-parse", "--abbrev-ref", "HEAD")
     _git(root, "checkout", "-q", "-b", "side")
@@ -128,7 +129,7 @@ def test_a_base_that_is_not_an_ancestor_of_head_is_refused(tmp_path):
     _emit(root, plan, resume_run_base=seed, commit_retry={1: REFUSAL})
 
 
-def test_the_commit_leg_stays_haiku_effort_low_on_a_retry(tmp_path):
+def test_the_commit_leg_stays_haiku_effort_low_on_a_retry(tmp_path: Path) -> None:
     root, plan, base = _repo(tmp_path)
     _move_head(root)
     script = _emit(root, plan, resume_run_base=base, commit_retry={1: REFUSAL})
@@ -136,7 +137,7 @@ def test_the_commit_leg_stays_haiku_effort_low_on_a_retry(tmp_path):
     assert "effort: 'low'" in leg and "haiku" in leg
 
 
-def test_the_resume_guard_names_this_plans_trailers_and_the_format_prints_them(tmp_path):
+def test_the_resume_guard_names_this_plans_trailers_and_the_format_prints_them(tmp_path: Path) -> None:
     root, _, base = _repo(tmp_path)
     clause = _resume_guard_clause(base, PLAN_REL)
     assert "Checkpoint-Plan" in clause and PLAN_REL in clause and "checkpoint(" in clause

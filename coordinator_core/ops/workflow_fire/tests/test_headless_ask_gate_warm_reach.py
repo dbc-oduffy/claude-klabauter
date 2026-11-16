@@ -17,11 +17,11 @@ ASK = {'ask': 'unused'}
 
 
 @pytest.fixture
-def warm_env(monkeypatch):
+def warm_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, 'is_warm_enabled', lambda: True)
     monkeypatch.setattr(skew, 'compute_client_token', lambda root=None: 'tok')
 
-    def no_cold(*args, **kwargs):
+    def no_cold(*args, **kwargs) -> None:
         pytest.fail('cold_operation spawned')
 
     monkeypatch.setattr(headless.subprocess, 'run', no_cold)
@@ -31,7 +31,7 @@ def route(artifacts):
     return json.loads((artifacts / 'warm_route.json').read_text(encoding='utf-8'))
 
 
-def test_warm_reply_is_used_inside_the_bar_without_a_cold_spawn(tmp_path, monkeypatch, warm_env):
+def test_warm_reply_is_used_inside_the_bar_without_a_cold_spawn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_env) -> None:
     seen = []
 
     def served(msg, **kwargs):
@@ -50,18 +50,18 @@ def test_warm_reply_is_used_inside_the_bar_without_a_cold_spawn(tmp_path, monkey
     assert json.loads((tmp_path / 'op' / 'request.json').read_text())['op'] == 'dispatch.ask_gate'
 
 
-def test_warm_error_envelope_raises_like_cold(tmp_path, monkeypatch, warm_env):
+def test_warm_error_envelope_raises_like_cold(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_env) -> None:
     monkeypatch.setattr(client, 'try_warm_dispatch',
                         lambda msg, **k: {'jsonrpc': '2.0', 'id': 1, 'error': {'code': -32004}})
     with pytest.raises(RuntimeError, match='-32004'):
         headless._invoke_source('dispatch.ask_gate', ASK, str(tmp_path), tmp_path / 'op', 15)
 
 
-def test_warm_attempt_never_spawns_a_server(tmp_path, monkeypatch, warm_env):
+def test_warm_attempt_never_spawns_a_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_env) -> None:
     spawned = []
     monkeypatch.setattr(client, '_spawn_once', lambda: spawned.append(1))
 
-    def missing(msg, **kwargs):
+    def missing(msg, **kwargs) -> None:
         client._spawn_once()
         return None
 
@@ -73,13 +73,13 @@ def test_warm_attempt_never_spawns_a_server(tmp_path, monkeypatch, warm_env):
     assert spawned == [1]
 
 
-def cold_fallthrough(tmp_path, monkeypatch, reason, **patches):
+def cold_fallthrough(tmp_path, monkeypatch, reason, **patches) -> None:
     for name, value in patches.items():
         target = skew if name == 'token' else client
         monkeypatch.setattr(target, 'compute_client_token' if name == 'token' else name, value)
     ran = []
 
-    def cold(command, **kwargs):
+    def cold(command, **kwargs) -> None:
         ran.append(command)
         Path(command[-1]).write_text(json.dumps({'jsonrpc': '2.0', 'id': 1, 'result': {'via': 'cold'}}),
                                      encoding='utf-8')
@@ -92,18 +92,18 @@ def cold_fallthrough(tmp_path, monkeypatch, reason, **patches):
     assert note['route'] == 'cold' and note['reason'].startswith(reason)
 
 
-def test_no_server_falls_through_cold_with_reason(tmp_path, monkeypatch):
+def test_no_server_falls_through_cold_with_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, 'is_warm_enabled', lambda: True)
     monkeypatch.setattr(skew, 'compute_client_token', lambda root=None: 'tok')
 
-    def missing(msg, **kwargs):
+    def missing(msg, **kwargs) -> None:
         client._spawn_once()
 
     monkeypatch.setattr(client, 'try_warm_dispatch', missing)
     cold_fallthrough(tmp_path, monkeypatch, 'no_server')
 
 
-def test_skew_or_silent_reply_falls_through_cold_with_reason(tmp_path, monkeypatch):
+def test_skew_or_silent_reply_falls_through_cold_with_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A None reply after a possible delivery still re-runs the op cold, once, with the reason on disk."""
     monkeypatch.setattr(client, 'is_warm_enabled', lambda: True)
     monkeypatch.setattr(skew, 'compute_client_token', lambda root=None: 'tok')
@@ -111,7 +111,7 @@ def test_skew_or_silent_reply_falls_through_cold_with_reason(tmp_path, monkeypat
     cold_fallthrough(tmp_path, monkeypatch, 'no_warm_reply')
 
 
-def test_unstamped_root_falls_through_cold_with_reason(tmp_path, monkeypatch):
+def test_unstamped_root_falls_through_cold_with_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, 'is_warm_enabled', lambda: True)
 
     def unstamped(root=None):
@@ -121,16 +121,16 @@ def test_unstamped_root_falls_through_cold_with_reason(tmp_path, monkeypatch):
     cold_fallthrough(tmp_path, monkeypatch, 'unstamped_root', token=unstamped)
 
 
-def test_warm_disabled_falls_through_cold_with_reason(tmp_path, monkeypatch):
+def test_warm_disabled_falls_through_cold_with_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, 'try_warm_dispatch', lambda msg, **k: pytest.fail('warm disabled'))
     cold_fallthrough(tmp_path, monkeypatch, 'warm_disabled', is_warm_enabled=lambda: False)
 
 
-def test_client_endpoint_is_this_executors_engine_root():
+def test_client_endpoint_is_this_executors_engine_root() -> None:
     assert engine_root.current_engine_clone() == Path(headless.__file__).resolve().parents[3]
 
 
-def test_warm_read_is_bounded_by_the_caller_timeout(tmp_path, monkeypatch, warm_env):
+def test_warm_read_is_bounded_by_the_caller_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, warm_env) -> None:
     seen = {}
 
     def served(msg, **kwargs):
@@ -208,7 +208,7 @@ def _point_everything_at(monkeypatch, root: Path) -> None:
 
 
 @pytest.fixture
-def real_warm(tmp_path, monkeypatch, request):
+def real_warm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest):
     """A real warm server child at a stamped temp engine root, reached by the real client."""
     runtime = mkdtemp_in('hw-', None if os.name == 'nt' else '/tmp')
     request.addfinalizer(lambda: shutil.rmtree(runtime, ignore_errors=True))
@@ -218,7 +218,7 @@ def real_warm(tmp_path, monkeypatch, request):
     _point_everything_at(monkeypatch, root)
     procs = []
 
-    def boot():
+    def boot() -> None:
         script = root / 'coordinator_core' / 'warm' / 'server.py'
         script.write_text(_SERVER_CHILD, encoding='utf-8')
         repo = str(Path(headless.__file__).resolve().parents[3])
@@ -239,7 +239,7 @@ def real_warm(tmp_path, monkeypatch, request):
     return boot, root
 
 
-def test_real_warm_server_answers_a_headless_ask_gate_inside_the_bar(tmp_path, monkeypatch, real_warm):
+def test_real_warm_server_answers_a_headless_ask_gate_inside_the_bar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, real_warm) -> None:
     boot, root = real_warm
     boot()
     monkeypatch.setattr(headless.subprocess, 'run', lambda *a, **k: pytest.fail('cold_operation spawned'))
@@ -255,7 +255,7 @@ def test_real_warm_server_answers_a_headless_ask_gate_inside_the_bar(tmp_path, m
     assert process_secs < 0.5, f'client process time {process_secs * 1000:.0f}ms (server side is billed in test_headless_fire_ask_gate_route)'
 
 
-def test_real_no_server_falls_through_cold_without_starting_one(tmp_path, monkeypatch, real_warm):
+def test_real_no_server_falls_through_cold_without_starting_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, real_warm) -> None:
     _, root = real_warm
     spawned = []
     monkeypatch.setattr(client, '_spawn_once', lambda: spawned.append(1))
@@ -263,7 +263,7 @@ def test_real_no_server_falls_through_cold_without_starting_one(tmp_path, monkey
     assert spawned == [] and breadcrumb.read_breadcrumb(root) is None
 
 
-def test_private_engine_root_never_reaches_the_shared_server(tmp_path, monkeypatch, real_warm):
+def test_private_engine_root_never_reaches_the_shared_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, real_warm) -> None:
     """The R1 private-engine shape: an executor at its own root, with the shared server's stamp, still goes cold.
 
     The endpoint is keyed on the clone path as well as the stamp token, so the private tree finds no server.

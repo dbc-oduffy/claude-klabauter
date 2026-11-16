@@ -16,6 +16,7 @@ from coordinator_core.ops.review_findings_ledger import _stamp_frontmatter_key
 from coordinator_core.write_guards import (
     nudge_sentinel_retained_review_sidecar as guard,
 )
+from pathlib import Path
 
 
 _TARGET_FILE = "coordinator_core/write_guards/block_priority_ledger_edit.py"
@@ -109,7 +110,7 @@ def _payload(
 
 
 @pytest.fixture(autouse=True)
-def _clear_override_env(monkeypatch):
+def _clear_override_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(guard._OVERRIDE_ENV_VAR, raising=False)
 
 
@@ -122,15 +123,15 @@ def _advise(payload):
     return result
 
 
-def _silent(payload):
+def _silent(payload) -> None:
     result = guard.check(payload)
     assert result is None, f"expected silent (None), got {result!r}"
 
 
 class TestFiresOnSentinelRetainedFilledFindings:
     def test_fires_when_sentinel_retained_but_findings_real_and_covers_target(
-        self, tmp_path
-    ):
+        self, tmp_path: Path
+    ) -> None:
         _write_sidecar(
             tmp_path,
             "sess-abc",
@@ -143,7 +144,7 @@ class TestFiresOnSentinelRetainedFilledFindings:
         assert "review-findings-ledger verify" in text
         assert _TARGET_FILE in text
 
-    def test_advisory_text_explains_warn_not_block(self, tmp_path):
+    def test_advisory_text_explains_warn_not_block(self, tmp_path: Path) -> None:
         _write_sidecar(
             tmp_path,
             "sess-abc",
@@ -157,7 +158,7 @@ class TestFiresOnSentinelRetainedFilledFindings:
 
 
 class TestSilentOnPristineScaffold:
-    def test_silent_when_sidecar_still_genuinely_unfilled(self, tmp_path):
+    def test_silent_when_sidecar_still_genuinely_unfilled(self, tmp_path: Path) -> None:
         _write_sidecar(
             tmp_path,
             "sess-abc",
@@ -168,7 +169,7 @@ class TestSilentOnPristineScaffold:
 
 
 class TestSilentWhenSentinelAbsent:
-    def test_silent_when_sentinel_already_removed(self, tmp_path):
+    def test_silent_when_sentinel_already_removed(self, tmp_path: Path) -> None:
         _write_sidecar(
             tmp_path,
             "sess-abc",
@@ -179,7 +180,7 @@ class TestSilentWhenSentinelAbsent:
 
 
 class TestSilentWhenDispositionsPresent:
-    def test_silent_once_integrator_dispositions_block_present(self, tmp_path):
+    def test_silent_once_integrator_dispositions_block_present(self, tmp_path: Path) -> None:
         """Historical marker only — no NEW sidecar ever writes this heading
         post-retirement, but a pre-retirement sidecar must still read as
         already-closed."""
@@ -192,7 +193,7 @@ class TestSilentWhenDispositionsPresent:
 
 
 class TestSilentWhenFindingsLedgerVerified:
-    def test_silent_once_verified_findings_ledger_stamp_present(self, tmp_path):
+    def test_silent_once_verified_findings_ledger_stamp_present(self, tmp_path: Path) -> None:
         """RRI-M4: the current "loop already closed" signal is a verified
         `findings_ledger:` frontmatter stamp, not the retired heading."""
         sidecar_dir = tmp_path / ".coordinator-local" / "subagent-share" / "sess-abc"
@@ -208,7 +209,7 @@ class TestSilentWhenFindingsLedgerVerified:
 
 
 class TestScopeIsEmInlineOnly:
-    def test_subagent_originated_edit_silent_unconditionally(self, tmp_path):
+    def test_subagent_originated_edit_silent_unconditionally(self, tmp_path: Path) -> None:
         _write_sidecar(
             tmp_path,
             "sess-abc",
@@ -219,7 +220,7 @@ class TestScopeIsEmInlineOnly:
 
 
 class TestOverrideAndToolGating:
-    def test_override_env_silences(self, tmp_path, monkeypatch):
+    def test_override_env_silences(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _write_sidecar(
             tmp_path,
             "sess-abc",
@@ -229,7 +230,7 @@ class TestOverrideAndToolGating:
         monkeypatch.setenv(guard._OVERRIDE_ENV_VAR, "1")
         _silent(_payload(tmp_path))
 
-    def test_non_write_tool_silent(self, tmp_path):
+    def test_non_write_tool_silent(self, tmp_path: Path) -> None:
         _write_sidecar(
             tmp_path,
             "sess-abc",
@@ -240,7 +241,7 @@ class TestOverrideAndToolGating:
 
 
 class TestCoverageHeuristic:
-    def test_silent_when_sidecar_does_not_cover_target_file(self, tmp_path):
+    def test_silent_when_sidecar_does_not_cover_target_file(self, tmp_path: Path) -> None:
         _write_sidecar(
             tmp_path,
             "sess-abc",
@@ -256,7 +257,7 @@ class TestCoverageHeuristic:
 # ---------------------------------------------------------------------------
 
 
-def _stub_roster(monkeypatch, roster, error=None):
+def _stub_roster(monkeypatch, roster, error=None) -> None:
     """Monkeypatch the `resolve_roster` seam the shared `_LazyRoster`
     resolves through -- same seam as the sibling guard's suite."""
     from coordinator_core.bash_guards import _helpers
@@ -267,7 +268,7 @@ def _stub_roster(monkeypatch, roster, error=None):
 class TestRosterKeyedInScope:
     _STUB_ROSTER = frozenset({"coordinator:staff-eng", "coordinator:enricher"})
 
-    def test_invented_type_off_roster_fires(self, tmp_path, monkeypatch):
+    def test_invented_type_off_roster_fires(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _stub_roster(monkeypatch, self._STUB_ROSTER)
         _write_sidecar(
             tmp_path,
@@ -278,7 +279,7 @@ class TestRosterKeyedInScope:
         )
         _advise(_payload(tmp_path))
 
-    def test_missing_agent_type_does_not_fire(self, tmp_path, monkeypatch):
+    def test_missing_agent_type_does_not_fire(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _stub_roster(monkeypatch, self._STUB_ROSTER)
         sidecar_dir = tmp_path / ".coordinator-local" / "subagent-share" / "sess-abc"
         sidecar_dir.mkdir(parents=True, exist_ok=True)
@@ -288,7 +289,7 @@ class TestRosterKeyedInScope:
         )
         _silent(_payload(tmp_path))
 
-    def test_enumerated_persona_on_roster_does_not_fire(self, tmp_path, monkeypatch):
+    def test_enumerated_persona_on_roster_does_not_fire(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         _stub_roster(monkeypatch, self._STUB_ROSTER)
         _write_sidecar(
             tmp_path,
@@ -301,7 +302,7 @@ class TestRosterKeyedInScope:
 
 
 class TestEnvelopeShape:
-    def test_envelope_is_additional_context_only(self, tmp_path):
+    def test_envelope_is_additional_context_only(self, tmp_path: Path) -> None:
         _write_sidecar(
             tmp_path,
             "sess-abc",

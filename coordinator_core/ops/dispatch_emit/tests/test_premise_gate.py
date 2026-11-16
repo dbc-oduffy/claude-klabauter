@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit import premise_gate as pg
+from pathlib import Path
 
 DEP = {"depends_on": [{"chunk": "C1", "gate_kind": "epistemic-premise"}]}
 
@@ -11,29 +12,29 @@ def _rows(disposition: str = "coded") -> dict:
     return {"C1": {"id": "C1", "disposition": disposition}, "C2": {"id": "C2", **DEP}}
 
 
-def _v(verdict, ref="docs/x.md"):
+def _v(verdict, ref: str = "docs/x.md"):
     return {"C1": {"verdict": verdict, "ref": ref, "recorded_at": "2026-10-27"}}
 
 
-def test_yes_dispatches():
+def test_yes_dispatches() -> None:
     out = pg.evaluate_premise_gate(_rows()["C2"], _rows(), _v("yes"), True)
     assert out == pg.GateOutcome("dispatch", None)
 
 
-def test_yaml_bool_spellings_normalise():
+def test_yaml_bool_spellings_normalise() -> None:
     assert pg.evaluate_premise_gate(DEP, _rows(), _v(True), True).action == "dispatch"
     out = pg.evaluate_premise_gate(DEP, _rows(), _v(False), True)
     assert out.action == "close_wont_do" and out.cite["verdict"] == "no"
 
 
-def test_no_closes_citing_premise_even_when_not_opted_in():
+def test_no_closes_citing_premise_even_when_not_opted_in() -> None:
     for opted in (True, False):
         out = pg.evaluate_premise_gate(DEP, _rows(), _v("no"), opted)
         assert out.action == "close_wont_do"
         assert out.cite == {"chunk": "C1", "verdict": "no", "ref": "docs/x.md"}
 
 
-def test_widened_halts_for_em_and_never_closes():
+def test_widened_halts_for_em_and_never_closes() -> None:
     verdicts = {"C1": {"verdict": "widened", "ref": "docs/x.md", "added_scope": "third leg"}}
     for opted in (True, False):
         out = pg.evaluate_premise_gate(DEP, _rows(), verdicts, opted)
@@ -41,7 +42,7 @@ def test_widened_halts_for_em_and_never_closes():
         assert out.cite == {"chunk": "C1", "verdict": "widened", "ref": "docs/x.md", "added_scope": "third leg"}
 
 
-def test_widened_yields_to_no_and_to_an_open_premise():
+def test_widened_yields_to_no_and_to_an_open_premise() -> None:
     two = {"depends_on": [
         {"chunk": "C1", "gate_kind": "epistemic-premise"}, {"chunk": "C3", "gate_kind": "epistemic-premise"},
     ]}
@@ -52,33 +53,33 @@ def test_widened_yields_to_no_and_to_an_open_premise():
     assert pg.evaluate_premise_gate(two, rows, {"C1": wide}, True).action == "wait"
 
 
-def test_absent_dispatches_when_opted_in():
+def test_absent_dispatches_when_opted_in() -> None:
     """Run 6467a3: C0 coded without recording its verdict, and every dependent closed wont_do."""
     out = pg.evaluate_premise_gate(DEP, _rows(), {}, True)
     assert out.action == "dispatch"
     assert out.cite == {"chunk": "C1", "reason": "verdict-absent"}
 
 
-def test_absent_legacy_dispatches_with_reason():
+def test_absent_legacy_dispatches_with_reason() -> None:
     out = pg.evaluate_premise_gate(DEP, _rows(), {}, False)
     assert out.action == "dispatch"
     assert out.cite == {"chunk": "C1", "reason": "legacy-absent"}
 
 
-def test_open_premise_waits_regardless_of_verdict():
+def test_open_premise_waits_regardless_of_verdict() -> None:
     for verdicts in ({}, _v("no"), _v("yes")):
         out = pg.evaluate_premise_gate(DEP, _rows("open"), verdicts, True)
         assert out == pg.GateOutcome("wait", {"chunk": "C1"})
 
 
-def test_non_epistemic_edges_and_unknown_premise_ignored():
+def test_non_epistemic_edges_and_unknown_premise_ignored() -> None:
     row = {"depends_on": [{"chunk": "C1", "gate_kind": "output-consumption-runtime"},
                           {"chunk": "ZZ", "gate_kind": "epistemic-premise"}]}
     assert pg.evaluate_premise_gate(row, _rows(), {}, True).action == "dispatch"
     assert pg.evaluate_premise_gate({}, _rows(), {}, True).action == "dispatch"
 
 
-def test_readers_missing_or_bad_sidecar(tmp_path):
+def test_readers_missing_or_bad_sidecar(tmp_path: Path) -> None:
     plan = tmp_path / "p.md"
     assert pg.read_premise_verdicts(plan) == {}
     (tmp_path / "p.evidence.yaml").write_text("premises: [1\n", encoding="utf-8")
@@ -87,7 +88,7 @@ def test_readers_missing_or_bad_sidecar(tmp_path):
     assert pg.read_premise_verdicts(plan) == {}
 
 
-def test_reader_and_opt_in(tmp_path):
+def test_reader_and_opt_in(tmp_path: Path) -> None:
     plan = tmp_path / "p.md"
     plan.write_text("---\ncreated: 2026-01-01\n---\nbody\n", encoding="utf-8")
     assert pg.plan_opted_in(plan) is False
@@ -97,7 +98,7 @@ def test_reader_and_opt_in(tmp_path):
     assert pg.plan_opted_in(plan) is True
 
 
-def test_opt_in_by_created_date(tmp_path):
+def test_opt_in_by_created_date(tmp_path: Path) -> None:
     plan = tmp_path / "p.md"
     plan.write_text("---\ncreated: 2026-10-27\n---\n", encoding="utf-8")
     assert pg.plan_opted_in(plan) is True
@@ -106,7 +107,7 @@ def test_opt_in_by_created_date(tmp_path):
     assert pg.plan_opted_in(tmp_path / "missing.md") is False
 
 
-def test_brief_line_names_verb():
+def test_brief_line_names_verb() -> None:
     assert "premise-record" in pg.PREMISE_RECORD_BRIEF_LINE
     assert "widened" in pg.PREMISE_RECORD_BRIEF_LINE
     assert "\n" not in pg.PREMISE_RECORD_BRIEF_LINE

@@ -38,6 +38,7 @@ import sys
 import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 # Declared, not excused: `test_cli_subprocess_*` and the other CLI-invoking
 # cases below spawn a real `sys.executable` child running
@@ -66,7 +67,7 @@ _spec.loader.exec_module(_module)  # type: ignore[union-attr]
 from cc_invoke import child_env  # noqa: E402
 
 
-def _write_frontmatter(path, **fields):
+def _write_frontmatter(path, **fields) -> None:
     lines = ["---"]
     for key, value in fields.items():
         lines.append(f"{key}: {value}")
@@ -80,7 +81,7 @@ def _load_ops():
     return _module._import_ops()
 
 
-def test_carry_from_plan_frontmatter(tmp_path):
+def test_carry_from_plan_frontmatter(tmp_path: Path) -> None:
     read_frontmatter_field, mint = _load_ops()
     plan = tmp_path / "plan.md"
     _write_frontmatter(plan, deliverable_id="dlv-existing-thing-abc123", initiative="init-foo")
@@ -93,7 +94,7 @@ def test_carry_from_plan_frontmatter(tmp_path):
     assert initiative_id == "init-foo"
 
 
-def test_falls_back_to_predecessor_when_plan_lacks_fields(tmp_path):
+def test_falls_back_to_predecessor_when_plan_lacks_fields(tmp_path: Path) -> None:
     read_frontmatter_field, mint = _load_ops()
     plan = tmp_path / "plan.md"
     _write_frontmatter(plan)
@@ -108,7 +109,7 @@ def test_falls_back_to_predecessor_when_plan_lacks_fields(tmp_path):
     assert initiative_id == "init-bar"
 
 
-def test_mints_fresh_slug_when_no_parent_id_discoverable(tmp_path):
+def test_mints_fresh_slug_when_no_parent_id_discoverable(tmp_path: Path) -> None:
     read_frontmatter_field, mint = _load_ops()
 
     dlvr_id, initiative_id = _module.resolve_deliverable_and_initiative(
@@ -120,7 +121,7 @@ def test_mints_fresh_slug_when_no_parent_id_discoverable(tmp_path):
     assert initiative_id == ""
 
 
-def test_missing_plan_and_predecessor_paths_degrade_gracefully(tmp_path):
+def test_missing_plan_and_predecessor_paths_degrade_gracefully(tmp_path: Path) -> None:
     read_frontmatter_field, mint = _load_ops()
     nonexistent_plan = str(tmp_path / "does-not-exist-plan.md")
     nonexistent_predecessor = str(tmp_path / "does-not-exist-predecessor.md")
@@ -134,7 +135,7 @@ def test_missing_plan_and_predecessor_paths_degrade_gracefully(tmp_path):
     assert initiative_id == ""
 
 
-def test_active_plan_with_deliverable_id_carries_no_failure(tmp_path):
+def test_active_plan_with_deliverable_id_carries_no_failure(tmp_path: Path) -> None:
     read_frontmatter_field, mint = _load_ops()
     plan = tmp_path / "plan.md"
     _write_frontmatter(plan, deliverable_id="dlv-populated-thing-abc123")
@@ -146,7 +147,7 @@ def test_active_plan_with_deliverable_id_carries_no_failure(tmp_path):
     assert dlvr_id == "dlv-populated-thing-abc123"
 
 
-def test_active_plan_without_deliverable_id_and_no_predecessor_fails_loud(tmp_path):
+def test_active_plan_without_deliverable_id_and_no_predecessor_fails_loud(tmp_path: Path) -> None:
     read_frontmatter_field, mint = _load_ops()
     plan = tmp_path / "plan.md"
     _write_frontmatter(plan)
@@ -155,7 +156,7 @@ def test_active_plan_without_deliverable_id_and_no_predecessor_fails_loud(tmp_pa
         _module.resolve_deliverable_and_initiative(read_frontmatter_field, mint, str(plan), None)
 
 
-def test_no_active_plan_and_no_predecessor_stays_benign_mint(tmp_path):
+def test_no_active_plan_and_no_predecessor_stays_benign_mint(tmp_path: Path) -> None:
     read_frontmatter_field, mint = _load_ops()
 
     dlvr_id, initiative_id = _module.resolve_deliverable_and_initiative(
@@ -167,7 +168,7 @@ def test_no_active_plan_and_no_predecessor_stays_benign_mint(tmp_path):
     assert initiative_id == ""
 
 
-def test_cli_subprocess_exits_dropped_join_fail_when_plan_lacks_deliverable_id(tmp_path):
+def test_cli_subprocess_exits_dropped_join_fail_when_plan_lacks_deliverable_id(tmp_path: Path) -> None:
     plan = tmp_path / "plan.md"
     _write_frontmatter(plan, initiative="init-only-no-deliverable")
 
@@ -186,7 +187,7 @@ def test_cli_subprocess_exits_dropped_join_fail_when_plan_lacks_deliverable_id(t
     assert "mint-from-slug path" not in proc.stderr
 
 
-def test_cli_subprocess_emits_shell_assignment_lines(tmp_path):
+def test_cli_subprocess_emits_shell_assignment_lines(tmp_path: Path) -> None:
     plan = tmp_path / "plan.md"
     _write_frontmatter(plan, deliverable_id="dlv-cli-check-111222", initiative="init-cli")
 
@@ -208,7 +209,7 @@ def test_cli_subprocess_emits_shell_assignment_lines(tmp_path):
     assert "carry path" in proc.stderr
 
 
-def test_cli_subprocess_exits_divergent_join_fail_when_plan_and_predecessor_disagree(tmp_path):
+def test_cli_subprocess_exits_divergent_join_fail_when_plan_and_predecessor_disagree(tmp_path: Path) -> None:
     plan = tmp_path / "plan.md"
     predecessor = tmp_path / "predecessor.md"
     _write_frontmatter(plan, deliverable_id="dlv-plan-side-111")
@@ -230,7 +231,7 @@ def test_cli_subprocess_exits_divergent_join_fail_when_plan_and_predecessor_disa
     assert proc.stdout == ""
 
 
-def test_cli_missing_subcommand_exits_nonzero():
+def test_cli_missing_subcommand_exits_nonzero() -> None:
     proc = subprocess.run(
         [sys.executable, _CLI],
         capture_output=True,
@@ -242,7 +243,7 @@ def test_cli_missing_subcommand_exits_nonzero():
     assert proc.returncode != 0
 
 
-def test_additional_predecessor_flag_accumulates_via_append(tmp_path):
+def test_additional_predecessor_flag_accumulates_via_append(tmp_path: Path) -> None:
     plan = tmp_path / "plan.md"
     first = tmp_path / "first.md"
     second = tmp_path / "second.md"
@@ -276,7 +277,7 @@ def test_additional_predecessor_flag_accumulates_via_append(tmp_path):
     assert proc.stdout == ""
 
 
-def test_additional_predecessor_flag_absent_defaults_to_empty_list():
+def test_additional_predecessor_flag_absent_defaults_to_empty_list() -> None:
     proc = subprocess.run(
         [sys.executable, _CLI, "resolve"],
         capture_output=True,
@@ -292,7 +293,7 @@ def test_additional_predecessor_flag_absent_defaults_to_empty_list():
     assert stdout_lines[1] == "INITIATIVE_ID="
 
 
-def test_additional_predecessor_reaches_cascade_kwarg_and_flags_divergence(tmp_path):
+def test_additional_predecessor_reaches_cascade_kwarg_and_flags_divergence(tmp_path: Path) -> None:
     plan = tmp_path / "plan.md"
     extra = tmp_path / "extra.md"
     _write_frontmatter(plan, deliverable_id="dlv-plan-side-333")
@@ -322,7 +323,7 @@ def test_additional_predecessor_reaches_cascade_kwarg_and_flags_divergence(tmp_p
     assert proc.stdout == ""
 
 
-def test_additional_predecessor_reaches_cascade_kwarg_when_agreeing(tmp_path):
+def test_additional_predecessor_reaches_cascade_kwarg_when_agreeing(tmp_path: Path) -> None:
     plan = tmp_path / "plan.md"
     extra = tmp_path / "extra.md"
     _write_frontmatter(plan, deliverable_id="dlv-agree-555")

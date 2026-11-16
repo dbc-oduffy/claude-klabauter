@@ -27,6 +27,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_land_run_landing_remedies imp
     _write,
     repo,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -44,7 +45,7 @@ def _emitted_retest_argv(root) -> list[str]:
     return [*shlex.split(match.group(1)), "--tests", INV_FILE]
 
 
-def test_the_emitted_retest_command_names_the_commit_stage_params_file_not_a_task_output(tmp_path):
+def test_the_emitted_retest_command_names_the_commit_stage_params_file_not_a_task_output(tmp_path: Path) -> None:
     call = ask_compose._invariant_retest_call(head="h", anchor="a", repo_root=str(tmp_path), run_id=RUN)
 
     assert f"--params-file {params_path(tmp_path, RUN).as_posix()}" in call
@@ -52,7 +53,7 @@ def test_the_emitted_retest_command_names_the_commit_stage_params_file_not_a_tas
     assert "--isolated-export" in call
 
 
-def test_the_commit_stage_threads_its_repo_root_into_the_retest_leg():
+def test_the_commit_stage_threads_its_repo_root_into_the_retest_leg() -> None:
     lines: list = []
     ask_compose._append_docs_and_commit(
         lines, head="h", anchor="a", repo_root="/r", run_id=RUN, manifest_rel="m.json"
@@ -61,7 +62,7 @@ def test_the_commit_stage_threads_its_repo_root_into_the_retest_leg():
     assert f"--params-file {params_path('/r', RUN).as_posix()}" in "\n".join(lines)
 
 
-def test_a_clean_run_lands_after_the_emitted_retest_command_writes_its_verdict(repo, monkeypatch):
+def test_a_clean_run_lands_after_the_emitted_retest_command_writes_its_verdict(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "pytest -q")
     monkeypatch.setattr(imp, "invariants_for_paths", lambda paths, root: [INV])
     monkeypatch.setattr(imp, "existing_invariants", lambda root, nodes: list(nodes))
@@ -84,7 +85,7 @@ def test_a_clean_run_lands_after_the_emitted_retest_command_writes_its_verdict(r
     verdict = landing_retest.fresh_verdict_path(repo, RUN)
     assert not verdict.exists()
 
-    def _child_inline(_engine, _script, child_argv, **_kw):
+    def _child_inline(_engine, _script, child_argv, **_kw) -> bool:
         return retest_targeted.main(child_argv, run=lambda *a, **k: 0) == 0
 
     argv = [*_emitted_retest_argv(repo), "--repo-root", str(repo)]
@@ -98,7 +99,7 @@ def test_a_clean_run_lands_after_the_emitted_retest_command_writes_its_verdict(r
     assert "a.py" in _git(["show", "--name-only", "--format=", "HEAD"], repo).split()
 
 
-def test_the_retired_task_output_argument_still_writes_no_record_for_an_unreadable_path(repo):
+def test_the_retired_task_output_argument_still_writes_no_record_for_an_unreadable_path(repo) -> None:
     argv = ["--from-task-output", "undefined", "--tests", INV_FILE, "--repo-root", str(repo)]
 
     assert retest_targeted.main(argv, spawn=lambda *a, **k: pytest.fail("must not spawn")) == 2

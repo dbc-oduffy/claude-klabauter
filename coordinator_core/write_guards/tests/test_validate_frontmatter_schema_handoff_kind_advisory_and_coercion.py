@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -13,7 +14,7 @@ _content_root, _doe_present = content_root_and_present()
 
 
 @pytest.fixture(autouse=True)
-def _pin_content_root(monkeypatch):
+def _pin_content_root(monkeypatch: pytest.MonkeyPatch) -> None:
     if not _doe_present:
         pytest.skip("sibling coordinator-content-repo checkout not found")
     monkeypatch.setattr(deny_guard, "read_content_root", lambda: _content_root)
@@ -45,8 +46,8 @@ class TestAdvisoryHandoffKindOffEnumStandDown:
 
     @pytest.mark.parametrize("strict", ["0", "1"])
     def test_off_enum_kind_never_warns_here_regardless_of_strict(
-        self, tmp_path, monkeypatch, strict
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, strict
+    ) -> None:
         if strict == "1":
             monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
         fp = _write_handoff(tmp_path, "off-enum.md", "not-a-real-kind")
@@ -61,7 +62,7 @@ class TestAdvisoryHandoffKindOffEnumStandDown:
             "otherwise the advisory stand-down above is vacuous"
         )
 
-    def test_absent_kind_stays_silent(self, tmp_path):
+    def test_absent_kind_stays_silent(self, tmp_path: Path) -> None:
         handoff_dir = tmp_path / "state" / "handoffs"
         handoff_dir.mkdir(parents=True, exist_ok=True)
         fp = handoff_dir / "absent-kind.md"
@@ -74,13 +75,13 @@ class TestAdvisoryHandoffKindOffEnumStandDown:
         payload = _payload("Edit", str(fp), str(tmp_path), old_string="body", new_string="body2")
         assert advisory_guard.check(payload) is None
 
-    def test_valid_kind_stays_silent(self, tmp_path):
+    def test_valid_kind_stays_silent(self, tmp_path: Path) -> None:
         fp = _write_handoff(tmp_path, "valid-kind.md", "session-handoff")
         payload = _payload("Edit", str(fp), str(tmp_path), old_string="body", new_string="body2")
         assert advisory_guard.check(payload) is None
 
     @pytest.mark.parametrize("strict", ["0", "1"])
-    def test_legacy_alias_kind_never_fires_this_branch(self, tmp_path, monkeypatch, strict):
+    def test_legacy_alias_kind_never_fires_this_branch(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, strict) -> None:
         if strict == "1":
             monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
         schema = {
@@ -106,7 +107,7 @@ class TestHandoffKindNonScalarCoercionRegression:
     ]
     _SCHEMA = {"properties": {"kind": {"enum": _ENUM_VALUES}}}
 
-    def test_deny_stands_down_on_list_kind(self):
+    def test_deny_stands_down_on_list_kind(self) -> None:
         message = deny_guard._evaluate_handoff_kind_enum(
             "handoff", self._SCHEMA, {"kind": ["session-handoff", "spinoff"]}
         )
@@ -115,19 +116,19 @@ class TestHandoffKindNonScalarCoercionRegression:
             "branch — it must stand down for the base schema type check"
         )
 
-    def test_deny_stands_down_on_mapping_kind(self):
+    def test_deny_stands_down_on_mapping_kind(self) -> None:
         message = deny_guard._evaluate_handoff_kind_enum(
             "handoff", self._SCHEMA, {"kind": {"nested": "mapping"}}
         )
         assert message is None
 
-    def test_advisory_stands_down_on_list_kind(self):
+    def test_advisory_stands_down_on_list_kind(self) -> None:
         fires = advisory_guard._handoff_kind_off_enum_fires(
             "handoff", self._SCHEMA, {"kind": ["session-handoff", "spinoff"]}
         )
         assert fires is False
 
-    def test_advisory_stands_down_on_mapping_kind(self):
+    def test_advisory_stands_down_on_mapping_kind(self) -> None:
         fires = advisory_guard._handoff_kind_off_enum_fires(
             "handoff", self._SCHEMA, {"kind": {"nested": "mapping"}}
         )
@@ -135,8 +136,8 @@ class TestHandoffKindNonScalarCoercionRegression:
 
     @pytest.mark.parametrize("strict", ["0", "1"])
     def test_end_to_end_list_kind_never_produces_a_garbled_message(
-        self, tmp_path, monkeypatch, strict
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, strict
+    ) -> None:
         if strict == "1":
             monkeypatch.setenv("COORDINATOR_SCHEMA_STRICT", "1")
         fp = _write_handoff(tmp_path, "list-kind.md", "[session-handoff, spinoff]")

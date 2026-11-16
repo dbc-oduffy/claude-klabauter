@@ -273,3 +273,49 @@ def test_root_outside_the_pin_keeps_the_dirty_check(tmp_path, monkeypatch):
     assert not ok and TRIPWIRE in err
     assert str(world.content) in err and "dirty tracked" in err
     assert str(world.engine_coord) not in err
+
+
+# ---------------------------------------------------------------------------
+# Case C: the coordinator-claude source_map payload carries bin/seed-cross-session-inbound.py
+# ---------------------------------------------------------------------------
+
+_SEED_INBOUND = "seed-cross-session-inbound.py"
+_PORTABLE = _REPO_ROOT / "setup" / "publish-targets.portable"
+
+
+def _portable_row_allowlist(name: str) -> "list[str]":
+    for line in _PORTABLE.read_text(encoding="utf-8").splitlines():
+        if line.startswith(name + "|"):
+            return line.split("|")[6].split(",")
+    raise AssertionError(f"row {name!r} absent from {_PORTABLE}")
+
+
+def _engine_ignore(root: Path):
+    sys.path.insert(0, str(_REPO_ROOT / "coordinator" / "lib"))
+    try:
+        from percolate import ignore
+    finally:
+        sys.path.pop(0)
+    return ignore.load_percolate_ignore(root / ".percolate-ignore"), ignore.is_ignored
+
+
+def test_seed_cross_session_inbound_clears_every_filter_on_the_coordinator_claude_route():
+    # coordinator-claude's `plugin-source:claude-klabauter/coordinator=bin,lib` reads the published
+    # klabauter engine tree: the klabauter allowlist row admits it, and neither contributing
+    # root's .percolate-ignore drops it.
+    assert _SEED_INBOUND in _portable_row_allowlist("claude-klabauter-coordinator-bin")
+    assert (_REPO_ROOT / "coordinator" / "bin" / _SEED_INBOUND).is_file()
+    for root, rel in (
+        (_REPO_ROOT / "coordinator", f"bin/{_SEED_INBOUND}"),
+        (_REPO_ROOT / "coordinator" / "bin", _SEED_INBOUND),
+    ):
+        patterns, is_ignored = _engine_ignore(root)
+        assert not is_ignored(rel, patterns), f"{root}/.percolate-ignore drops {rel}"
+
+
+def test_a_real_sibling_bin_script_off_the_klabauter_allowlist_is_still_refused():
+    allowlist = _portable_row_allowlist("claude-klabauter-coordinator-bin")
+    sibling = "publish.py"
+    assert (_REPO_ROOT / "coordinator" / "bin" / sibling).is_file()
+    assert _SEED_INBOUND in allowlist
+    assert sibling not in allowlist

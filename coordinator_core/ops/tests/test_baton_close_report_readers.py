@@ -8,6 +8,7 @@ from pathlib import Path
 
 from coordinator_core.ops import baton_close_report_readers as readers
 from coordinator_core.ops.baton_close_report_contract import HEADER_KEYS
+import pytest
 
 REL = "state/handoffs"
 
@@ -132,13 +133,13 @@ SHA = "a" * 40
 SIZ = "state/sizings/s.yaml"
 
 
-def _hdr(path="state/handoffs/b.md", status="open", kind="spinoff", sizing=SIZ):
+def _hdr(path: str = "state/handoffs/b.md", status: str = "open", kind: str | None = "spinoff", sizing=SIZ):
     return {"path": path, "status": status, "predecessor": None, "governing_plan": None,
             "origin_plan_id": None, "sizing_object": sizing, "roadmap_id": None,
             "origin_goal_id": [], "deliverable_id": None, "kind": kind}
 
 
-def _warp(root, run_id, *, baton=None, sizing=None):
+def _warp(root, run_id, *, baton=None, sizing=None) -> None:
     d = root / "state" / "warp" / run_id
     d.mkdir(parents=True, exist_ok=True)
     if baton is not None:
@@ -147,7 +148,7 @@ def _warp(root, run_id, *, baton=None, sizing=None):
         (d / "run.json").write_text(json.dumps({"sizing_rel": sizing}))
 
 
-def _job(root, name, **payload):
+def _job(root, name, **payload) -> None:
     d = root / ".coordinator-local" / "close-jobs"
     d.mkdir(parents=True, exist_ok=True)
     (d / name).write_text(json.dumps(payload))
@@ -161,7 +162,7 @@ REF = "c" * 40
 PLAN = "docs/plans/p.md"
 
 
-def _plan(root, status="implemented", disposition="coded", extra_row=""):
+def _plan(root, status: str = "implemented", disposition: str = "coded", extra_row: str = "") -> None:
     d = root / "docs" / "plans"
     d.mkdir(parents=True, exist_ok=True)
     (d / "p.md").write_text(
@@ -171,7 +172,7 @@ def _plan(root, status="implemented", disposition="coded", extra_row=""):
     )
 
 
-def test_run_claims_sizing_join_committed(tmp_path):
+def test_run_claims_sizing_join_committed(tmp_path: Path) -> None:
     _warp(tmp_path, "r1", sizing=SIZ)
     _plan(tmp_path)
     _job(tmp_path, "r1.workflow.json", terminal_sha=SHA, plan_rel=PLAN)
@@ -181,7 +182,7 @@ def test_run_claims_sizing_join_committed(tmp_path):
                     "target_status": "committed", "done": True, "ship_ref": REF}]
 
 
-def test_run_claims_planning_run_is_not_done(tmp_path):
+def test_run_claims_planning_run_is_not_done(tmp_path: Path) -> None:
     _warp(tmp_path, "r1", sizing=SIZ)
     _plan(tmp_path, status="reviewed", disposition="open")
     _job(tmp_path, "r1.workflow.json", terminal_sha=SHA, plan_rel=PLAN)
@@ -189,7 +190,7 @@ def test_run_claims_planning_run_is_not_done(tmp_path):
     assert got["target_status"] == "committed" and got["done"] is False and got["ship_ref"] is None
 
 
-def test_run_claims_implemented_plan_with_open_row_is_not_done(tmp_path):
+def test_run_claims_implemented_plan_with_open_row_is_not_done(tmp_path: Path) -> None:
     _warp(tmp_path, "r1", sizing=SIZ)
     _plan(tmp_path, extra_row="- id: C2\n  title: u\n  disposition: open\n")
     _job(tmp_path, "r1.workflow.json", terminal_sha=SHA, plan_rel=PLAN)
@@ -197,7 +198,7 @@ def test_run_claims_implemented_plan_with_open_row_is_not_done(tmp_path):
     assert got["done"] is False
 
 
-def test_run_claims_no_plan_rel_or_missing_plan_is_not_done(tmp_path):
+def test_run_claims_no_plan_rel_or_missing_plan_is_not_done(tmp_path: Path) -> None:
     _warp(tmp_path, "r1", sizing=SIZ)
     _job(tmp_path, "r1.workflow.json", terminal_sha=SHA)
     _warp(tmp_path, "r2", baton="state/handoffs/b.md")
@@ -206,7 +207,7 @@ def test_run_claims_no_plan_rel_or_missing_plan_is_not_done(tmp_path):
     assert [g["done"] for g in got] == [False, False]
 
 
-def test_terminal_deployment_state_baton_is_excluded(tmp_path):
+def test_terminal_deployment_state_baton_is_excluded(tmp_path: Path) -> None:
     _write(tmp_path, "s.md", _baton(extra="deployment_state: shipped\n"))
     _write(tmp_path, "g.md", _baton(extra="deployment_state: awaiting_gate  # x\n"))
     headers, unreadable = readers.read_baton_headers(str(tmp_path))
@@ -214,7 +215,7 @@ def test_terminal_deployment_state_baton_is_excluded(tmp_path):
     assert headers[f"{REL}/g.md"]["deployment_state"] == "awaiting_gate"
 
 
-def test_run_claims_baton_field_backslash_joins_and_bare_job_name(tmp_path):
+def test_run_claims_baton_field_backslash_joins_and_bare_job_name(tmp_path: Path) -> None:
     _warp(tmp_path, "r1", baton="state\\handoffs\\b.md")
     _plan(tmp_path)
     _job(tmp_path, "r1.json", terminal_sha=SHA, plan_rel=PLAN)
@@ -223,7 +224,7 @@ def test_run_claims_baton_field_backslash_joins_and_bare_job_name(tmp_path):
     assert got[0]["target_path"].endswith("close-jobs/r1.json")
 
 
-def test_run_claims_ended_without_sha_and_short_sha(tmp_path):
+def test_run_claims_ended_without_sha_and_short_sha(tmp_path: Path) -> None:
     _warp(tmp_path, "r1", sizing=SIZ)
     _job(tmp_path, "r1.workflow.json", terminal_sha=None)
     _warp(tmp_path, "r2", baton="state/handoffs/b.md")
@@ -233,27 +234,27 @@ def test_run_claims_ended_without_sha_and_short_sha(tmp_path):
     assert not any(g["done"] for g in got)
 
 
-def test_run_claims_live_when_no_close_job(tmp_path):
+def test_run_claims_live_when_no_close_job(tmp_path: Path) -> None:
     _warp(tmp_path, "r1", sizing=SIZ)
     got = _claims(tmp_path, _hdr())["state/handoffs/b.md"]
     assert got[0]["target_status"] == "live" and got[0]["target_path"] == "state/warp/r1"
     assert got[0]["done"] is False
 
 
-def test_run_claims_ambiguous_sizing_join_yields_nothing(tmp_path):
+def test_run_claims_ambiguous_sizing_join_yields_nothing(tmp_path: Path) -> None:
     _warp(tmp_path, "r1", sizing=SIZ)
     _job(tmp_path, "r1.workflow.json", terminal_sha=SHA)
     assert _claims(tmp_path, _hdr(), _hdr(path="state/handoffs/c.md")) == {}
 
 
-def test_run_claims_claimed_batons_join(tmp_path):
+def test_run_claims_claimed_batons_join(tmp_path: Path) -> None:
     _warp(tmp_path, "r1", sizing=SIZ)
     _job(tmp_path, "r1.workflow.json", terminal_sha=SHA, claimed_batons=["state/handoffs/c.md"])
     got = _claims(tmp_path, _hdr(), _hdr(path="state/handoffs/c.md", sizing="state/sizings/o.yaml"))
     assert got["state/handoffs/c.md"][0]["field"] == "run.claimed_batons"
 
 
-def test_run_claims_missing_dirs_and_malformed_json_yield_nothing(tmp_path):
+def test_run_claims_missing_dirs_and_malformed_json_yield_nothing(tmp_path: Path) -> None:
     assert _claims(tmp_path, _hdr()) == {}
     d = tmp_path / "state" / "warp" / "r1"
     d.mkdir(parents=True)
@@ -262,7 +263,7 @@ def test_run_claims_missing_dirs_and_malformed_json_yield_nothing(tmp_path):
     assert _claims(tmp_path, _hdr()) == {}
 
 
-def test_run_claims_reads_nothing_when_no_header_qualifies(tmp_path, monkeypatch):
+def test_run_claims_reads_nothing_when_no_header_qualifies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("listdir called")
     with monkeypatch.context() as m:

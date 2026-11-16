@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter, parse_yaml
+from pathlib import Path
+import pytest
 
 _VALID_HANDOFF_FM = """---
 title: "Duplicate key probe"
@@ -27,12 +29,12 @@ Body.
 
 class TestParseYamlDuplicateTopLevelKeys:
 
-    def test_no_duplicates_collector_stays_empty(self):
+    def test_no_duplicates_collector_stays_empty(self) -> None:
         dup_keys: list[str] = []
         parse_yaml('title: x\nstatus: open\n', dup_keys=dup_keys)
         assert dup_keys == []
 
-    def test_duplicate_top_level_key_is_collected_once(self):
+    def test_duplicate_top_level_key_is_collected_once(self) -> None:
         dup_keys: list[str] = []
         value = parse_yaml(
             'title: x\norigin_plan_id: pln-real-07b788\nstatus: open\norigin_plan_id: null\n',
@@ -42,26 +44,26 @@ class TestParseYamlDuplicateTopLevelKeys:
         assert value['origin_plan_id'] is None
         assert dup_keys == ['origin_plan_id']
 
-    def test_three_occurrences_collected_on_each_repeat(self):
+    def test_three_occurrences_collected_on_each_repeat(self) -> None:
         dup_keys: list[str] = []
         parse_yaml('a: 1\na: 2\na: 3\n', dup_keys=dup_keys)
         assert dup_keys == ['a', 'a']
 
-    def test_two_distinct_duplicated_keys_both_collected(self):
+    def test_two_distinct_duplicated_keys_both_collected(self) -> None:
         dup_keys: list[str] = []
         parse_yaml('a: 1\nb: x\na: 2\nb: y\n', dup_keys=dup_keys)
         assert dup_keys == ['a', 'b']
 
-    def test_default_collector_is_none_and_is_a_no_op(self):
+    def test_default_collector_is_none_and_is_a_no_op(self) -> None:
         assert parse_yaml('title: x\ntitle: y\n') == {'title': 'y'}
 
-    def test_nested_mapping_duplicate_key_is_out_of_scope(self):
+    def test_nested_mapping_duplicate_key_is_out_of_scope(self) -> None:
         dup_keys: list[str] = []
         value = parse_yaml('outer:\n  a: 1\n  a: 2\ntitle: x\n', dup_keys=dup_keys)
         assert value == {'outer': {'a': 2}, 'title': 'x'}
         assert dup_keys == []
 
-    def test_list_item_mapping_duplicate_key_is_out_of_scope(self):
+    def test_list_item_mapping_duplicate_key_is_out_of_scope(self) -> None:
         dup_keys: list[str] = []
         value = parse_yaml('probes:\n- a: 1\n  a: 2\n', dup_keys=dup_keys)
         assert value == {'probes': [{'a': 2}]}
@@ -70,7 +72,7 @@ class TestParseYamlDuplicateTopLevelKeys:
 
 class TestParseFrontmatterDuplicateTopLevelKeys:
 
-    def test_duplicate_key_reported_alongside_last_wins_value(self):
+    def test_duplicate_key_reported_alongside_last_wins_value(self) -> None:
         doc = (
             '---\n'
             'handoff_id: hnd-probe-abc123\n'
@@ -83,17 +85,17 @@ class TestParseFrontmatterDuplicateTopLevelKeys:
         assert parsed['frontmatter']['origin_plan_id'] is None
         assert parsed['duplicate_keys'] == ['origin_plan_id']
 
-    def test_three_occurrences_dedupe_to_one_entry(self):
+    def test_three_occurrences_dedupe_to_one_entry(self) -> None:
         doc = '---\na: 1\na: 2\na: 3\n---\nbody\n'
         parsed = parse_frontmatter(doc)
         assert parsed['duplicate_keys'] == ['a']
 
-    def test_no_duplicates_key_present_and_empty(self):
+    def test_no_duplicates_key_present_and_empty(self) -> None:
         parsed = parse_frontmatter(_VALID_HANDOFF_FM)
         assert parsed['frontmatter'] is not None
         assert parsed.get('duplicate_keys') == []
 
-    def test_no_frontmatter_block_has_no_duplicate_keys_field_crash(self):
+    def test_no_frontmatter_block_has_no_duplicate_keys_field_crash(self) -> None:
         parsed = parse_frontmatter('no frontmatter here\n')
         assert parsed['frontmatter'] is None
         assert (parsed.get('duplicate_keys') or []) == []
@@ -101,7 +103,7 @@ class TestParseFrontmatterDuplicateTopLevelKeys:
 
 class TestLintSingleFileReportsDuplicateTopLevelKey:
 
-    def test_duplicate_key_on_an_otherwise_valid_handoff_is_a_violation(self, tmp_path, capsys):
+    def test_duplicate_key_on_an_otherwise_valid_handoff_is_a_violation(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         from coordinator_core.frontmatter import schema_validate
 
         doc = _VALID_HANDOFF_FM.replace(
@@ -118,7 +120,7 @@ class TestLintSingleFileReportsDuplicateTopLevelKey:
         assert 'valid' not in out
         assert "duplicate top-level key 'origin_plan_id'" in out
 
-    def test_no_duplicate_key_still_reports_valid(self, tmp_path, capsys):
+    def test_no_duplicate_key_still_reports_valid(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         from coordinator_core.frontmatter import schema_validate
 
         target = tmp_path / 'clean-handoff.md'
@@ -130,7 +132,7 @@ class TestLintSingleFileReportsDuplicateTopLevelKey:
         assert rc == 0, capsys.readouterr()
         assert 'valid' in out
 
-    def test_duplicate_key_reported_even_when_no_schema_matches_the_path(self, tmp_path, capsys):
+    def test_duplicate_key_reported_even_when_no_schema_matches_the_path(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         from coordinator_core.frontmatter import schema_validate
 
         doc = (

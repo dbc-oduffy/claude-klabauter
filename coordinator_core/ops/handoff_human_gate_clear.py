@@ -55,6 +55,7 @@ from coordinator_core.ops.handoff_transition import (
     _write_gate_evidence_results,
 )
 from coordinator_core.reconcile.gate_eval import reduce_gate_evidence
+from coordinator_core.session import scope as session_scope
 
 _FULL_SHA = re.compile(r"^[0-9a-fA-F]{40}$")
 _CITATION_PREFIX = "pm-turn:"
@@ -175,7 +176,8 @@ def human_gate_clear_sync(params: dict, repo_root: Optional[Path] = None) -> dic
     """Core of 'handoff.human_gate_clear'.
 
     Params: handoff_path (required); exactly one of pm_turn {turn:int>=0, session_id?} or
-    commit_sha (full 40-hex) with verbatim; optional leg_ids [str].
+    commit_sha (full 40-hex) with verbatim; optional leg_ids [str]; optional session_id (the
+    caller's own: its claim over the handoff is released after the commit).
     Returns {ok, applied, gate_cleared_by, commit_sha, deployment_state} or an error envelope.
     """
     handoff_path = (params.get("handoff_path") or "").strip()
@@ -272,6 +274,8 @@ def human_gate_clear_sync(params: dict, repo_root: Optional[Path] = None) -> dic
             error=f"handoff.human_gate_clear: {rel} stamped but commit refused: {exc}",
         )
     reply["commit_sha"] = outcome.sha
+    # Only a caller-supplied `session_id` releases: `pm_turn.session_id` cites a transcript, not a claim holder.
+    session_scope.release_committed_claims_or_retain(worktree, [rel], params.get("session_id"), "handoff.human_gate_clear")
     return reply
 
 

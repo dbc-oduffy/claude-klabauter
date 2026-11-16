@@ -5,6 +5,7 @@ from __future__ import annotations
 from coordinator_core.ops.dispatch_emit import agent_body_dedupe, ask_compose, emit, prompt_fragments
 from coordinator_core.ops.dispatch_emit.ask_plan_blitz import AskPlanBlitzRefused
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+import pytest
 
 _CEILING = int(0.90 * emit._WORKFLOW_SCRIPT_BYTE_CAP)
 
@@ -38,7 +39,7 @@ def _single_quoted(script: str) -> str:
     return "".join(out) + script[last:]
 
 
-def test_hoisting_leaves_every_runtime_prompt_identical(monkeypatch):
+def test_hoisting_leaves_every_runtime_prompt_identical(monkeypatch: pytest.MonkeyPatch) -> None:
     plain = _largest(monkeypatch, hoist=False)
     hoisted = _largest(monkeypatch, hoist=True)
     assert "const _PF0 = '" in hoisted and "const _PF" not in plain
@@ -48,24 +49,24 @@ def test_hoisting_leaves_every_runtime_prompt_identical(monkeypatch):
     assert _single_quoted(resolved) == _single_quoted(expected)
 
 
-def test_fragment_consts_precede_their_first_use(monkeypatch):
+def test_fragment_consts_precede_their_first_use(monkeypatch: pytest.MonkeyPatch) -> None:
     hoisted = _largest(monkeypatch, hoist=True)
     first_ref = hoisted.index("_PF0 +") if "_PF0 +" in hoisted else hoisted.index("+ _PF0")
     assert hoisted.index("const _PF0 = ") < first_ref
 
 
-def test_largest_ask_stays_under_ninety_percent_of_the_runner_cap(monkeypatch):
+def test_largest_ask_stays_under_ninety_percent_of_the_runner_cap(monkeypatch: pytest.MonkeyPatch) -> None:
     size = len(_largest(monkeypatch, hoist=True).encode("utf-8"))
     assert size <= _CEILING, f"largest composed ask is {size} bytes; ceiling is {_CEILING} (90% of the runner cap)"
 
 
-def test_scanner_skips_templates_comments_and_regexes():
+def test_scanner_skips_templates_comments_and_regexes() -> None:
     src = "const a = 'x'; // 'no'\nconst r = /'q'/g; const t = `${'in'} 'no'`; const b = 'y';\n"
     spans = prompt_fragments._scan_literals(src)
     assert [src[s:e] for s, e in spans] == ["'x'", "'y'"]
 
 
-def test_hoist_wraps_a_literal_that_takes_a_method_call(monkeypatch):
+def test_hoist_wraps_a_literal_that_takes_a_method_call(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(prompt_fragments, "HOIST_ENABLED", True)
     sentence = "This sentence is long enough to be hoisted as a shared fragment of the script. "
     src = f"// anchor\nconst a = '{sentence}'.trim();\nconst b = 'z' + '{sentence}';\n"
@@ -84,14 +85,14 @@ def _compose_pipeline(monkeypatch, prompt: str) -> str:
         return ask_compose.compose_ask_script(**kw, **_STUB_KW)
 
 
-def _drop_caches():
+def _drop_caches() -> None:
     from coordinator_core.ops.dispatch_emit import agent_body_dedupe
 
     prompt_fragments._chunks.cache_clear()
     agent_body_dedupe._code_mask.cache_clear()
 
 
-def test_a_warm_cache_never_serves_one_asks_bytes_to_another(monkeypatch):
+def test_a_warm_cache_never_serves_one_asks_bytes_to_another(monkeypatch: pytest.MonkeyPatch) -> None:
     asks = ["do a big thing", "a different and longer job for the second ask", "third"]
     _drop_caches()
     cold = [_compose_pipeline(monkeypatch, a) for a in asks]
@@ -100,13 +101,13 @@ def test_a_warm_cache_never_serves_one_asks_bytes_to_another(monkeypatch):
     assert warm == cold
 
 
-def test_string_end_finds_the_close_and_flags_an_unterminated_string():
+def test_string_end_finds_the_close_and_flags_an_unterminated_string() -> None:
     assert prompt_fragments.string_end("'ab\\'c' x", 1, "'") == 6
     assert prompt_fragments.string_end("'ab", 1, "'") == 3
     assert prompt_fragments.string_end("'ab\\", 1, "'") == 5
 
 
-def test_scrub_masks_string_template_and_comment_contents_but_keeps_newlines():
+def test_scrub_masks_string_template_and_comment_contents_but_keeps_newlines() -> None:
     from coordinator_core.ops._workflow_contract import scrub
 
     src = 'a = \'x\\\'y\' + "q\\\n" // c\n/* d\ne */ `t${1}` b /* open'

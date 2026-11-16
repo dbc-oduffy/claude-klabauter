@@ -29,6 +29,9 @@ def test_prompt_orders_the_prewrite_before_the_one_bare_land_run_segment():
     assert "_shq(ROOT)" in call and "--run-id ' + (RID)" in call.replace("' + RID", "' + (RID)")
     assert call.count("coordinator-invoke") == 1
     assert "If command 1 exits non-zero, still run command 2" in call
+    assert "the engine already wrote the params file" in call
+    assert "pre-writes the params file" not in call
+    assert "The engine already wrote the params block below to that file" in call
 
 
 def test_composed_grind_script_carries_the_prewrite_in_the_commit_call_only():

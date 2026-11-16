@@ -7,6 +7,7 @@ from pathlib import Path
 from coordinator_core.ops.dispatch_emit import ask_stage
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage_resume_added_rows import PLAN_REL, RUN, _plan, _row
+import pytest
 
 
 def _capture_overlap(monkeypatch) -> list:
@@ -15,7 +16,7 @@ def _capture_overlap(monkeypatch) -> list:
     return seen
 
 
-def test_resume_review_paths_include_the_landed_row_it_dropped(tmp_path, monkeypatch):
+def test_resume_review_paths_include_the_landed_row_it_dropped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _plan(tmp_path, _row("C1") + _row("C2"))
     overlap = _capture_overlap(monkeypatch)
     m = stage(tmp_path, run_id=RUN, plan_rel=PLAN_REL, only_rows=["C2"])
@@ -27,7 +28,7 @@ def test_resume_review_paths_include_the_landed_row_it_dropped(tmp_path, monkeyp
     assert "docs/x/C1.md" not in {w for r in m.rows for w in r.writes}
 
 
-def test_fresh_run_review_paths_are_just_its_rows(tmp_path, monkeypatch):
+def test_fresh_run_review_paths_are_just_its_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _plan(tmp_path, _row("C1") + _row("C2"))
     _capture_overlap(monkeypatch)
     m = stage(tmp_path, run_id=RUN, plan_rel=PLAN_REL)
@@ -41,7 +42,7 @@ def _code_row(rid: str) -> str:
     )
 
 
-def test_ledger_resume_review_code_paths_include_landed_code_not_declared(tmp_path, monkeypatch):
+def test_ledger_resume_review_code_paths_include_landed_code_not_declared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _plan(tmp_path, _code_row("C1") + _row("C2"))
     _capture_overlap(monkeypatch)
     m = stage(tmp_path, run_id=RUN, plan_rel=PLAN_REL, only_rows=["C2"], ledger_resume=True)
@@ -50,7 +51,7 @@ def test_ledger_resume_review_code_paths_include_landed_code_not_declared(tmp_pa
     assert len(m.review_code_paths) == len(set(m.review_code_paths))
 
 
-def test_non_resume_only_rows_code_paths_unchanged_by_resume_branch(tmp_path, monkeypatch):
+def test_non_resume_only_rows_code_paths_unchanged_by_resume_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _plan(tmp_path, _code_row("C1") + _row("C2"))
     _capture_overlap(monkeypatch)
     m = stage(tmp_path, run_id=RUN, plan_rel=PLAN_REL, only_rows=["C2"])
@@ -58,7 +59,7 @@ def test_non_resume_only_rows_code_paths_unchanged_by_resume_branch(tmp_path, mo
     assert list(m.review_code_paths).count("pkg/C1.py") == 1
 
 
-def test_ledger_resume_review_paths_exclude_dropped_rows(tmp_path, monkeypatch):
+def test_ledger_resume_review_paths_exclude_dropped_rows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _plan(tmp_path, _row("C1") + _row("C2"))
     _capture_overlap(monkeypatch)
     m = stage(tmp_path, run_id=RUN, plan_rel=PLAN_REL, only_rows=["C2"], ledger_resume=True)

@@ -12,6 +12,7 @@ from coordinator_core.git.eol_declared import (
     repair_declared_eol_drift,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -36,7 +37,7 @@ def _git_out(repo, *args):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "r"
     root.mkdir()
     _git(root, "init", "-q", ".")
@@ -50,12 +51,12 @@ def repo(tmp_path):
     return root
 
 
-def _drift_to_lf(repo, name="run.cmd"):
+def _drift_to_lf(repo, name: str = "run.cmd") -> None:
     target = repo / name
     target.write_bytes(target.read_bytes().replace(b"\r\n", b"\n"))
 
 
-def test_executable_paths_selects_only_the_declared_classes():
+def test_executable_paths_selects_only_the_declared_classes() -> None:
     picked = executable_paths(
         [
             "a.cmd",
@@ -74,11 +75,11 @@ def test_executable_paths_selects_only_the_declared_classes():
     assert picked == ["a.cmd", "b.ps1", "c.sh", "d.bat"]
 
 
-def test_executable_paths_is_case_insensitive_and_deduplicates():
+def test_executable_paths_is_case_insensitive_and_deduplicates() -> None:
     assert executable_paths(["A.CMD", "A.CMD", "b.Ps1"]) == ["A.CMD", "b.Ps1"]
 
 
-def test_no_executable_in_the_commit_spawns_nothing(repo, monkeypatch):
+def test_no_executable_in_the_commit_spawns_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.git.eol_declared as mod
 
     def explode(*_a, **_k):  # pragma: no cover - must never run
@@ -88,7 +89,7 @@ def test_no_executable_in_the_commit_spawns_nothing(repo, monkeypatch):
     assert find_declared_eol_drift(repo, ["notes.md", "a.py"]) == []
 
 
-def test_one_spawn_for_many_executables(repo, monkeypatch):
+def test_one_spawn_for_many_executables(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.git.eol_declared as mod
 
     calls = []
@@ -104,23 +105,23 @@ def test_one_spawn_for_many_executables(repo, monkeypatch):
     assert calls[0].count("--") == 1
 
 
-def test_the_drift_git_cannot_show_you_is_detected(repo):
+def test_the_drift_git_cannot_show_you_is_detected(repo) -> None:
     _drift_to_lf(repo)
     drifts = find_declared_eol_drift(repo, ["run.cmd"])
     assert drifts == [Drift(path="run.cmd", declared="crlf", on_disk="lf")]
 
 
-def test_git_diff_stays_empty_for_the_drift_this_module_reports(repo):
+def test_git_diff_stays_empty_for_the_drift_this_module_reports(repo) -> None:
     _drift_to_lf(repo)
     assert _git_out(repo, "diff", "--stat").strip() == ""
     assert find_declared_eol_drift(repo, ["run.cmd"])
 
 
-def test_a_correct_launcher_is_not_a_finding(repo):
+def test_a_correct_launcher_is_not_a_finding(repo) -> None:
     assert find_declared_eol_drift(repo, ["run.cmd"]) == []
 
 
-def test_an_undeclared_path_is_not_a_finding(tmp_path):
+def test_an_undeclared_path_is_not_a_finding(tmp_path: Path) -> None:
     root = tmp_path / "u"
     root.mkdir()
     _git(root, "init", "-q", ".")
@@ -132,7 +133,7 @@ def test_an_undeclared_path_is_not_a_finding(tmp_path):
     assert find_declared_eol_drift(root, ["run.cmd"]) == []
 
 
-def test_lf_declaration_is_honoured_in_its_own_direction(repo):
+def test_lf_declaration_is_honoured_in_its_own_direction(repo) -> None:
     (repo / "tool.sh").write_bytes(b"#!/bin/sh\necho hi\n")
     _git(repo, "add", "tool.sh")
     _git(repo, "commit", "-qm", "add sh")
@@ -142,11 +143,11 @@ def test_lf_declaration_is_honoured_in_its_own_direction(repo):
     ]
 
 
-def test_untracked_path_folds_to_no_finding(repo):
+def test_untracked_path_folds_to_no_finding(repo) -> None:
     assert find_declared_eol_drift(repo, ["never-added.cmd"]) == []
 
 
-def test_reads_stdout_bytes_not_stdout(repo, monkeypatch):
+def test_reads_stdout_bytes_not_stdout(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.git.eol_declared as mod
 
     real = mod.run_git
@@ -159,7 +160,7 @@ def test_reads_stdout_bytes_not_stdout(repo, monkeypatch):
     assert find_declared_eol_drift(repo, ["run.cmd"])
 
 
-def test_a_failed_git_call_folds_to_no_finding(repo, monkeypatch):
+def test_a_failed_git_call_folds_to_no_finding(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.git.eol_declared as mod
 
     real = mod.run_git
@@ -172,7 +173,7 @@ def test_a_failed_git_call_folds_to_no_finding(repo, monkeypatch):
     assert find_declared_eol_drift(repo, ["run.cmd"]) == []
 
 
-def test_repair_restores_the_declared_bytes(repo):
+def test_repair_restores_the_declared_bytes(repo) -> None:
     original = (repo / "run.cmd").read_bytes()
     _drift_to_lf(repo)
     drifts = find_declared_eol_drift(repo, ["run.cmd"])
@@ -181,7 +182,7 @@ def test_repair_restores_the_declared_bytes(repo):
     assert find_declared_eol_drift(repo, ["run.cmd"]) == []
 
 
-def test_repair_does_not_change_what_a_commit_would_carry(repo):
+def test_repair_does_not_change_what_a_commit_would_carry(repo) -> None:
     before = _git_out(repo, "hash-object", "run.cmd")
     _drift_to_lf(repo)
     drifted = _git_out(repo, "hash-object", "run.cmd")
@@ -190,7 +191,7 @@ def test_repair_does_not_change_what_a_commit_would_carry(repo):
     assert before == drifted == after
 
 
-def test_repair_does_not_double_the_carriage_return_on_mixed_input(repo):
+def test_repair_does_not_double_the_carriage_return_on_mixed_input(repo) -> None:
     (repo / "run.cmd").write_bytes(b"@echo off\r\necho a\necho b\r\n")
     drifts = find_declared_eol_drift(repo, ["run.cmd"])
     assert drifts, "mixed endings must register as drift"
@@ -200,7 +201,7 @@ def test_repair_does_not_double_the_carriage_return_on_mixed_input(repo):
     assert body == b"@echo off\r\necho a\r\necho b\r\n"
 
 
-def test_repair_of_an_unwritable_file_is_skipped_not_raised(repo, monkeypatch):
+def test_repair_of_an_unwritable_file_is_skipped_not_raised(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _drift_to_lf(repo)
     drifts = find_declared_eol_drift(repo, ["run.cmd"])
 
@@ -211,11 +212,11 @@ def test_repair_of_an_unwritable_file_is_skipped_not_raised(repo, monkeypatch):
     assert repair_declared_eol_drift(repo, drifts) == []
 
 
-def test_suffix_tuple_is_the_executable_classes_only():
+def test_suffix_tuple_is_the_executable_classes_only() -> None:
     assert EXECUTABLE_SUFFIXES == (".cmd", ".ps1", ".sh", ".bat")
 
 
-def test_binary_autodetected_file_is_not_treated_as_drift(tmp_path):
+def test_binary_autodetected_file_is_not_treated_as_drift(tmp_path: Path) -> None:
     root = tmp_path / "b"
     root.mkdir()
     _git(root, "init", "-q", ".")
@@ -232,7 +233,7 @@ def test_binary_autodetected_file_is_not_treated_as_drift(tmp_path):
     assert find_declared_eol_drift(root, ["run.cmd"]) == []
 
 
-def test_a_tracked_symlink_is_never_repaired(repo):
+def test_a_tracked_symlink_is_never_repaired(repo) -> None:
     link = repo / "launch.cmd"
     target = repo / "outside.txt"
     target.write_bytes(b"do not touch")
@@ -249,7 +250,7 @@ def test_a_tracked_symlink_is_never_repaired(repo):
     assert target.read_bytes() == b"do not touch"
 
 
-def test_record_regex_matches_a_blank_i_or_w_field():
+def test_record_regex_matches_a_blank_i_or_w_field() -> None:
     from coordinator_core.git.eol_declared import _RECORD
 
     record = "i/ w/lf attr/text eol=lf\tsome/path.sh"

@@ -73,6 +73,7 @@ from coordinator_core.bash_guards import guard_inprocess_search as guard
 from coordinator_core.search import engine, sources_powershell, sources_read
 from coordinator_core.search.answer import answer, plan_for
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -107,12 +108,12 @@ RATIFIED_ANSWERABLE_READS = (
 class TestOnlyReadOnlySearchIsAnswerable:
 
     @pytest.mark.parametrize("command", MUTABLE_STATE_COMMANDS)
-    def test_mutable_state_command_is_never_answered(self, command, tmp_path):
+    def test_mutable_state_command_is_never_answered(self, command, tmp_path: Path) -> None:
         assert plan_for(command) is None
         assert answer(command, cwd=str(tmp_path)) is None
 
     @pytest.mark.parametrize("command", MUTABLE_STATE_COMMANDS)
-    def test_mutable_state_command_falls_through_the_guard(self, command, tmp_path):
+    def test_mutable_state_command_falls_through_the_guard(self, command, tmp_path: Path) -> None:
         payload = {
             "tool_name": "Bash",
             "tool_input": {"command": command},
@@ -121,10 +122,10 @@ class TestOnlyReadOnlySearchIsAnswerable:
         assert _enveloped(guard.check)(payload) is None
 
     @pytest.mark.parametrize("command", RATIFIED_ANSWERABLE_READS)
-    def test_ratified_read_verb_is_answerable(self, command):
+    def test_ratified_read_verb_is_answerable(self, command) -> None:
         assert plan_for(command) is not None
 
-    def test_every_answerable_vocabulary_is_pinned_by_membership(self):
+    def test_every_answerable_vocabulary_is_pinned_by_membership(self) -> None:
         """The leading-binary vocabulary of EVERY source class `plan_for`
         dispatches to, pinned by exact set equality.
 
@@ -151,7 +152,7 @@ class TestOnlyReadOnlySearchIsAnswerable:
         for outside in ("dir coordinator_core", "gci coordinator_core"):
             assert plan_for(outside) is None, outside
 
-    def test_absorbed_pipeline_stages_read_no_state(self):
+    def test_absorbed_pipeline_stages_read_no_state(self) -> None:
         assert set(engine._STAGE_BUILDERS) == {
             "head", "tail", "wc", "sort", "uniq", "cut", "grep", "egrep", "fgrep",
         }
@@ -159,17 +160,17 @@ class TestOnlyReadOnlySearchIsAnswerable:
 
 class TestUnreadableFileRefusesRatherThanReadsEmpty:
 
-    def test_read_text_raises_on_oserror(self, tmp_path):
+    def test_read_text_raises_on_oserror(self, tmp_path: Path) -> None:
         missing = tmp_path / "does-not-exist.py"
         with pytest.raises(engine.Unanswerable):
             engine._read_text(str(missing))
 
-    def test_read_text_skips_binary_without_refusing(self, tmp_path):
+    def test_read_text_skips_binary_without_refusing(self, tmp_path: Path) -> None:
         binary = tmp_path / "blob.bin"
         binary.write_bytes(b"alpha\x00beta")
         assert engine._read_text(str(binary)) is None
 
-    def test_unreadable_file_declines_the_whole_search(self, tmp_path, monkeypatch):
+    def test_unreadable_file_declines_the_whole_search(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         (tmp_path / "a.py").write_text("alpha\n", encoding="utf-8")
         (tmp_path / "b.py").write_text("alpha\n", encoding="utf-8")
 
@@ -183,7 +184,7 @@ class TestUnreadableFileRefusesRatherThanReadsEmpty:
         monkeypatch.setattr(engine, "_read_text", _locked_b)
         assert answer("grep -rn alpha .", cwd=str(tmp_path)) is None
 
-    def test_readable_tree_still_answers(self, tmp_path):
+    def test_readable_tree_still_answers(self, tmp_path: Path) -> None:
         (tmp_path / "a.py").write_text("alpha\n", encoding="utf-8")
         rendered = answer("grep -rn alpha .", cwd=str(tmp_path))
         assert rendered is not None
@@ -206,15 +207,15 @@ class TestBatchedGitStatusNeverFabricatesACleanTree:
 
     _CMD = 'echo "=== SESSION FACTS ==="; git status --porcelain; git rev-parse HEAD'
 
-    def test_payload_checks_the_return_code(self):
+    def test_payload_checks_the_return_code(self) -> None:
         script = _banner_rewrite_script(self._CMD)
         assert "returncode" in script, script
 
-    def test_payload_does_not_take_the_index_lock(self):
+    def test_payload_does_not_take_the_index_lock(self) -> None:
         script = _banner_rewrite_script(self._CMD)
         assert '"--no-optional-locks"' in script, script
 
-    def test_failed_git_status_propagates_instead_of_printing_a_clean_tree(self):
+    def test_failed_git_status_propagates_instead_of_printing_a_clean_tree(self) -> None:
         script = _banner_rewrite_script(self._CMD)
 
         class _FailedResult:

@@ -68,6 +68,11 @@ def test_deny_message_names_anchor_not_override_key():
     assert guard.OVERRIDE_ENV not in text
 
 
+def test_deny_names_delete_only_route():
+    text = str(envelope_of(guard.check(_payload(DENIED[1]))))
+    assert "consolidate-assemble delete-only" in text
+
+
 def test_interface():
     assert guard.CLASS == "hard-deny"
     assert guard.OVERRIDE_ENV == "COORDINATOR_OVERRIDE_PUSH_DELETE"

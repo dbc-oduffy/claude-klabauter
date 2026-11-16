@@ -21,6 +21,7 @@ import pytest
 
 from coordinator_core import _claude_klabauter_root
 from coordinator_core.telemetry import spawn_counter
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
@@ -46,7 +47,7 @@ def _write_impl(tmp_path, value: str):
     return impl
 
 
-def test_two_calls_same_key_spawn_once(monkeypatch, tmp_path):
+def test_two_calls_same_key_spawn_once(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """(a) two calls for the same key in one process spawn once, measured as
     a spawn_counter.spawn_count() delta of 1."""
     impl = _write_impl(tmp_path, "/some/python")
@@ -62,7 +63,7 @@ def test_two_calls_same_key_spawn_once(monkeypatch, tmp_path):
     assert delta == 1
 
 
-def test_different_key_spawns_again(monkeypatch, tmp_path):
+def test_different_key_spawns_again(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """(b) a different key spawns again -- the cache is keyed per (key, impl
     path), not per-process-wide."""
     impl = tmp_path / "_machine_local.py"
@@ -87,7 +88,7 @@ def test_different_key_spawns_again(monkeypatch, tmp_path):
     assert delta == 2
 
 
-def test_timeout_passed_on_every_spawn(monkeypatch, tmp_path):
+def test_timeout_passed_on_every_spawn(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """(c) the timeout is passed on every spawn -- one module constant, not
     three inconsistent copies (the improvement-queue gap this extraction
     closes)."""
@@ -115,7 +116,7 @@ def test_timeout_passed_on_every_spawn(monkeypatch, tmp_path):
     assert _claude_klabauter_root._MACHINE_LOCAL_TIMEOUT == 5
 
 
-def test_import_spawns_zero_and_registers_no_op(monkeypatch):
+def test_import_spawns_zero_and_registers_no_op(monkeypatch: pytest.MonkeyPatch) -> None:
     """(d) importing the module spawns 0 and registers no op -- no
     register_op, no I/O, no spawn at import, so a read-op module can import
     it without inheriting a write-op's side effects."""
@@ -136,7 +137,7 @@ def test_import_spawns_zero_and_registers_no_op(monkeypatch):
     assert hasattr(module, "_machine_local_get")
 
 
-def test_module_free_of_import_time_register_op_call():
+def test_module_free_of_import_time_register_op_call() -> None:
     """Static (AST) check the module source contains no `register_op(...)`
     call anywhere -- belt-and-suspenders alongside the dynamic import test
     above. AST-based rather than a text search so the module's own prose
@@ -155,7 +156,7 @@ def test_module_free_of_import_time_register_op_call():
     assert "register_op" not in call_names
 
 
-def test_timeout_expired_treated_as_unavailable(monkeypatch, tmp_path):
+def test_timeout_expired_treated_as_unavailable(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A hung registry script must not block indefinitely -- TimeoutExpired
     is treated the same as any other failure (None, memoized)."""
     impl = tmp_path / "_machine_local.py"

@@ -41,7 +41,7 @@ SUB_ID = "a1b2c3d4e5f6a7b8"
 
 
 @pytest.fixture(autouse=True)
-def _resolvable_home(_clean_bump_env, monkeypatch, tmp_path):
+def _resolvable_home(_clean_bump_env, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """`_clean_bump_env` deletes HOME and USERPROFILE; the dispatched guards resolve the plugin root from the home dir and crash without one."""
     sandbox_home(monkeypatch, tmp_path / "sandbox-home")
 
@@ -55,7 +55,7 @@ def _git(cwd: Path, *args: str) -> None:
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(root, "init", "-q")
@@ -66,7 +66,7 @@ def repo(tmp_path):
     return root
 
 
-def _payload(cmd, cwd, *, subagent=False, session="sess-fates"):
+def _payload(cmd, cwd, *, subagent: bool = False, session: str = "sess-fates"):
     p = {"tool_name": "Bash", "tool_input": {"command": cmd}, "session_id": session, "cwd": str(cwd)}
     if subagent:
         p["agent_id"] = SUB_ID
@@ -109,7 +109,7 @@ def _reason(envelope) -> str:
         "cd app && rm -rf .next",
     ],
 )
-def test_subagent_rm_of_regenerable_dir_is_not_denied(repo, cmd):
+def test_subagent_rm_of_regenerable_dir_is_not_denied(repo, cmd) -> None:
     assert _sub_check(cmd, repo) is None
 
 
@@ -124,7 +124,7 @@ def test_subagent_rm_of_regenerable_dir_is_not_denied(repo, cmd):
         "echo .next | xargs rm -rf",
     ],
 )
-def test_subagent_rm_of_anything_else_still_denies_and_names_the_trash_op(repo, cmd):
+def test_subagent_rm_of_anything_else_still_denies_and_names_the_trash_op(repo, cmd) -> None:
     reason = _reason(_sub_check(cmd, repo))
     assert "run.paths_trash" in reason
     assert "workflow.revise" not in reason and "EM runs the deletes" not in reason
@@ -134,14 +134,14 @@ def test_subagent_rm_of_anything_else_still_denies_and_names_the_trash_op(repo, 
 
 
 @pytest.fixture()
-def fired(monkeypatch):
+def fired(monkeypatch: pytest.MonkeyPatch):
     from coordinator_core.hooks import _em_post_fire
 
     monkeypatch.setattr(_em_post_fire, "fired", lambda _sid: True)
     return _em_post_fire
 
 
-def test_post_engine_ask_lock_is_unregistered_so_it_never_denies():
+def test_post_engine_ask_lock_is_unregistered_so_it_never_denies() -> None:
     assert deny_registry.guard_deny_class("block-em-post-fire-product-write") is None
     assert deny_registry.guard_deny_class("guard-em-post-fire-shell-write") is None
 
@@ -156,7 +156,7 @@ def test_post_engine_ask_lock_is_unregistered_so_it_never_denies():
         "mkdir -p {sp}/tree && cp -R . {sp}/tree",
     ],
 )
-def test_em_own_act_after_engine_ask_is_never_denied(repo, fired, tmp_path, cmd):
+def test_em_own_act_after_engine_ask_is_never_denied(repo, fired, tmp_path: Path, cmd) -> None:
     sp = tmp_path / "scratchpad"
     sp.mkdir()
     cmd = cmd.format(sp=sp)
@@ -165,7 +165,7 @@ def test_em_own_act_after_engine_ask_is_never_denied(repo, fired, tmp_path, cmd)
     assert not _denies(dispatch.evaluate_payload_json(json.dumps(_payload(cmd, repo))))
 
 
-def test_neither_leg_routes_the_delete_to_the_other(repo):
+def test_neither_leg_routes_the_delete_to_the_other(repo) -> None:
     sub_reason = _reason(_sub_check("rm -rf src", repo))
     assert "workflow.revise" not in sub_reason
     assert "run.paths_trash" in sub_reason
@@ -177,17 +177,17 @@ def test_neither_leg_routes_the_delete_to_the_other(repo):
 # --- block_subagent_destructive_action: the clone remedy must not refuse itself -------------------
 
 
-def test_clone_into_repo_scratch_from_the_repo_cwd_passes(repo):
+def test_clone_into_repo_scratch_from_the_repo_cwd_passes(repo) -> None:
     assert _sub_check(f"git clone {repo} scratch/head-clone-73", repo) is None
 
 
-def test_clone_after_one_leading_cd_into_repo_scratch_passes(repo, tmp_path):
+def test_clone_after_one_leading_cd_into_repo_scratch_passes(repo, tmp_path: Path) -> None:
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     assert _sub_check(f"cd {repo} && git clone {repo} scratch/head-clone-73", elsewhere) is None
 
 
-def test_clone_remedy_route_is_not_refused_by_its_own_guard(repo, tmp_path, monkeypatch):
+def test_clone_remedy_route_is_not_refused_by_its_own_guard(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.bash_guards import _write_bump_applicability
 
     temp_root = tmp_path / "tmproot"
@@ -204,7 +204,7 @@ def test_clone_remedy_route_is_not_refused_by_its_own_guard(repo, tmp_path, monk
     assert _sub_check(named_route, nowhere) is None
 
 
-def test_clone_into_an_absent_dir_passes_and_into_a_populated_dir_denies(repo, tmp_path):
+def test_clone_into_an_absent_dir_passes_and_into_a_populated_dir_denies(repo, tmp_path: Path) -> None:
     assert _sub_check(f"git clone {repo} {tmp_path / 'elsewhere' / 'c'}", repo) is None
     assert "empty or absent" in _reason(_sub_check(f"git clone {repo} {repo}", repo))
 
@@ -214,7 +214,7 @@ def test_clone_into_an_absent_dir_passes_and_into_a_populated_dir_denies(repo, t
 SID = "sess-fates-bump"
 
 
-def _bump_armed(monkeypatch, repos):  # noqa: F811
+def _bump_armed(monkeypatch, repos) -> None:  # noqa: F811
     from coordinator_core import machine_resolver
     from coordinator_core.ops.fleet import _memo_resolver
 
@@ -235,7 +235,7 @@ def _bump(repos, cmd):  # noqa: F811
     "verb",
     ["pull --ff-only origin candidate", "pull --ff-only", "fetch origin candidate", "fetch --all"],
 )
-def test_ff_only_mirror_catch_up_is_not_routed(repos, monkeypatch, verb):  # noqa: F811
+def test_ff_only_mirror_catch_up_is_not_routed(repos, monkeypatch: pytest.MonkeyPatch, verb) -> None:  # noqa: F811
     _bump_armed(monkeypatch, repos)
     assert _bump(repos, f"git -C {_posix(repos['foreign'])} {verb}") is None
 
@@ -250,18 +250,18 @@ def test_ff_only_mirror_catch_up_is_not_routed(repos, monkeypatch, verb):  # noq
         "commit -m x",
     ],
 )
-def test_non_ff_mirror_write_still_routes(repos, monkeypatch, verb):  # noqa: F811
+def test_non_ff_mirror_write_still_routes(repos, monkeypatch: pytest.MonkeyPatch, verb) -> None:  # noqa: F811
     _bump_armed(monkeypatch, repos)
     assert _bump(repos, f"git -C {_posix(repos['foreign'])} {verb}") is not None
 
 
-def test_ff_only_pull_of_a_non_mirror_peer_still_routes(repos, monkeypatch):  # noqa: F811
+def test_ff_only_pull_of_a_non_mirror_peer_still_routes(repos, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _bump_armed(monkeypatch, repos)
     monkeypatch.setattr(bump, "target_is_publish_destination", lambda *_a, **_k: False)
     assert _bump(repos, f"git -C {_posix(repos['foreign'])} pull --ff-only origin candidate") is not None
 
 
-def test_bump_guard_never_denies_at_any_level():
+def test_bump_guard_never_denies_at_any_level() -> None:
     assert deny_registry.guard_deny_class("bump-foreign-repo-write") is None
     envelope = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny"}}
     assert not _denies(machine_profile.apply_guard_level("bump-foreign-repo-write", envelope))
@@ -270,7 +270,7 @@ def test_bump_guard_never_denies_at_any_level():
 # --- remote delete, variable-held pytest paths: shapes, not irreversible acts ----------------------
 
 
-def test_xargs_remote_delete_is_guide_only(repo):
+def test_xargs_remote_delete_is_guide_only(repo) -> None:
     """A remote delete is irreversible but the engine cannot see the bucket path through `xargs`:
     the sentinel guard stays unregistered, so it logs and never denies."""
     assert deny_registry.guard_deny_class("block-approval-sentinel-creation") is None
@@ -283,7 +283,7 @@ def test_xargs_remote_delete_is_guide_only(repo):
 
 
 @pytest.mark.parametrize("cmd", ["python -m pytest $FILES", "pytest $F -q", "python -m pytest $(cat list.txt)"])
-def test_variable_held_pytest_path_list_still_blocks(repo, cmd):
+def test_variable_held_pytest_path_list_still_blocks(repo, cmd) -> None:
     assert deny_registry.guard_deny_class("check-test-suite-invocation") == "box-degrading"
     record = check_test_suite_invocation.check(_payload(cmd, repo))
     resolved = machine_profile.apply_guard_level("check-test-suite-invocation", envelope_of(record))
@@ -293,17 +293,17 @@ def test_variable_held_pytest_path_list_still_blocks(repo, cmd):
 # --- destructive-git-orphan: an index-only unstage is not a subshell-resolved ref -----------------
 
 
-def test_index_only_unstage_from_a_list_file_is_not_denied(repo):
+def test_index_only_unstage_from_a_list_file_is_not_denied(repo) -> None:
     (repo / "list.txt").write_text("a.txt\n")
     cmd = "git reset -q HEAD -- $(cat list.txt)"
     assert not _denies(dispatch.evaluate_payload_json(json.dumps(_payload(cmd, repo))))
 
 
-def test_reset_to_a_subshell_resolved_ref_still_denies(repo):
+def test_reset_to_a_subshell_resolved_ref_still_denies(repo) -> None:
     cmd = "git reset -q $(git rev-parse HEAD~1)"
     assert _denies(dispatch.evaluate_payload_json(json.dumps(_payload(cmd, repo))))
 
 
-def test_reset_with_subshell_ref_before_the_pathspec_still_denies(repo):
+def test_reset_with_subshell_ref_before_the_pathspec_still_denies(repo) -> None:
     cmd = "git reset -q $(git rev-parse HEAD~1) -- a.txt"
     assert _denies(dispatch.evaluate_payload_json(json.dumps(_payload(cmd, repo))))

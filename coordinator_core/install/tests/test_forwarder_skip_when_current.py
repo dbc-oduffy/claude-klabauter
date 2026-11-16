@@ -18,6 +18,7 @@ import os
 from pathlib import Path
 
 from coordinator_core.install import door_install, substrate
+import pytest
 
 
 def _stamp_engine_root(root: Path, *entrypoints: str) -> None:
@@ -38,7 +39,7 @@ def _counting_fake_install_door(payload: bytes, calls: list):
     exactly what a real current-and-unchanged install does) and records one
     entry per call."""
 
-    def _install_door(bin_dst, engine_root, *, check_only=False):
+    def _install_door(bin_dst, engine_root, *, check_only: bool = False) -> Path:
         calls.append(1)
         bin_dst = Path(bin_dst)
         bin_dst.mkdir(parents=True, exist_ok=True)
@@ -49,7 +50,7 @@ def _counting_fake_install_door(payload: bytes, calls: list):
     return _install_door
 
 
-def test_hardlinked_name_already_current_is_not_unlinked_or_relinked(tmp_path, monkeypatch):
+def test_hardlinked_name_already_current_is_not_unlinked_or_relinked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     engine_root = tmp_path / "engine"
     _stamp_engine_root(engine_root, "cross-repo-memo")
     bin_dst = tmp_path / "bin"
@@ -75,7 +76,7 @@ def test_hardlinked_name_already_current_is_not_unlinked_or_relinked(tmp_path, m
     assert len(calls) == 2
 
 
-def test_copy_fallback_name_with_equal_bytes_is_skipped(tmp_path, monkeypatch):
+def test_copy_fallback_name_with_equal_bytes_is_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     engine_root = tmp_path / "engine"
     _stamp_engine_root(engine_root, "cross-repo-memo")
     bin_dst = tmp_path / "bin"
@@ -99,7 +100,7 @@ def test_copy_fallback_name_with_equal_bytes_is_skipped(tmp_path, monkeypatch):
     assert dest.read_bytes() == door_dst.read_bytes() == b"door-v1"
 
 
-def test_copy_fallback_name_with_stale_bytes_is_replaced(tmp_path, monkeypatch):
+def test_copy_fallback_name_with_stale_bytes_is_replaced(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     engine_root = tmp_path / "engine"
     _stamp_engine_root(engine_root, "cross-repo-memo")
     bin_dst = tmp_path / "bin"
@@ -118,7 +119,7 @@ def test_copy_fallback_name_with_stale_bytes_is_replaced(tmp_path, monkeypatch):
     assert dest.read_bytes() == door_dst.read_bytes() == b"door-v1"
 
 
-def test_install_door_runs_once_per_loop_not_once_per_name(tmp_path, monkeypatch):
+def test_install_door_runs_once_per_loop_not_once_per_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     engine_root = tmp_path / "engine"
     _stamp_engine_root(engine_root, "cross-repo-memo", "coordinator-doc-new")
     bin_dst = tmp_path / "bin"
@@ -136,7 +137,7 @@ def test_install_door_runs_once_per_loop_not_once_per_name(tmp_path, monkeypatch
     assert len(calls) == 1
 
 
-def test_manifest_lists_skipped_names_on_a_second_current_run(tmp_path, monkeypatch):
+def test_manifest_lists_skipped_names_on_a_second_current_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     engine_root = tmp_path / "engine"
     _stamp_engine_root(engine_root, "cross-repo-memo", "coordinator-doc-new")
     bin_dst = tmp_path / "bin"

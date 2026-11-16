@@ -7,14 +7,15 @@ import sys
 import pytest
 
 from coordinator_core.benchmarks import bash_guard_commit_path_spawns as bench
+from pathlib import Path
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> None:
     subprocess.run(["git", "-C", str(repo), *args], check=True, capture_output=True)
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "r"
     root.mkdir()
     _git(root, "init", "-q")
@@ -26,7 +27,7 @@ def repo(tmp_path):
     return root
 
 
-def test_recorder_splits_git_from_other_spawns_and_names_the_leg():
+def test_recorder_splits_git_from_other_spawns_and_names_the_leg() -> None:
     rec = bench._Recorder()
     rec.stack.append("claims")
     rec.record_spawn(["git", "status"])
@@ -40,7 +41,7 @@ def test_recorder_splits_git_from_other_spawns_and_names_the_leg():
     assert len(rec.other) == 1
 
 
-def test_hooks_count_real_popen_and_restore_the_originals(repo):
+def test_hooks_count_real_popen_and_restore_the_originals(repo) -> None:
     original = subprocess.Popen.__init__
     rec = bench._Recorder()
     with bench._hooks(rec):
@@ -49,7 +50,7 @@ def test_hooks_count_real_popen_and_restore_the_originals(repo):
     assert subprocess.Popen.__init__ is original
 
 
-def test_tracked_legs_names_the_active_leg_and_restores_the_binding():
+def test_tracked_legs_names_the_active_leg_and_restores_the_binding() -> None:
     class _Mod:
         @staticmethod
         def leg(name):
@@ -67,7 +68,7 @@ def test_tracked_legs_names_the_active_leg_and_restores_the_binding():
     assert _Mod.leg is original
 
 
-def test_measure_through_the_hook_entry_reports_the_contract_keys(repo):
+def test_measure_through_the_hook_entry_reports_the_contract_keys(repo) -> None:
     bench._write_fixture(repo)
     report = bench.measure(repo)
     assert {

@@ -13,7 +13,7 @@ import pytest
 from coordinator_core.ops.compute_layer_scaffold.op import _compute_layer_scaffold
 
 
-def test_emit_mode_returns_module_text():
+def test_emit_mode_returns_module_text() -> None:
     result = _compute_layer_scaffold(
         {"mode": "emit", "skill_name": "example_assemble", "verbs": ["do_thing"]}
     )
@@ -22,17 +22,17 @@ def test_emit_mode_returns_module_text():
     assert "build_envelope" in result["module_text"]
 
 
-def test_emit_mode_requires_skill_name():
+def test_emit_mode_requires_skill_name() -> None:
     with pytest.raises(ValueError, match="skill_name"):
         _compute_layer_scaffold({"mode": "emit", "verbs": ["do_thing"]})
 
 
-def test_emit_mode_requires_verbs():
+def test_emit_mode_requires_verbs() -> None:
     with pytest.raises(ValueError, match="verbs"):
         _compute_layer_scaffold({"mode": "emit", "skill_name": "example_assemble"})
 
 
-def test_emit_mode_propagates_invalid_verb():
+def test_emit_mode_propagates_invalid_verb() -> None:
     from coordinator_core.ops.compute_layer_scaffold.emit import InvalidVerb
 
     with pytest.raises(InvalidVerb):
@@ -41,14 +41,14 @@ def test_emit_mode_propagates_invalid_verb():
         )
 
 
-def test_check_mode_returns_rendered_report():
+def test_check_mode_returns_rendered_report() -> None:
     result = _compute_layer_scaffold({"mode": "check"})
     assert "report" in result
     assert "Sub-shape B conformance:" in result["report"]
     assert "FLEET FINDING" in result["report"]
 
 
-def test_check_mode_honors_explicit_modules_param():
+def test_check_mode_honors_explicit_modules_param() -> None:
     result = _compute_layer_scaffold({"mode": "check", "modules": ["pickup_assemble"]})
     assert "report" in result
     report = result["report"]
@@ -59,17 +59,17 @@ def test_check_mode_honors_explicit_modules_param():
     assert "clean_on_all: 0/1" in report
 
 
-def test_unknown_mode_raises_value_error():
+def test_unknown_mode_raises_value_error() -> None:
     with pytest.raises(ValueError, match="mode"):
         _compute_layer_scaffold({"mode": "bogus"})
 
 
-def test_missing_mode_raises_value_error():
+def test_missing_mode_raises_value_error() -> None:
     with pytest.raises(ValueError, match="mode"):
         _compute_layer_scaffold({})
 
 
-def test_op_registered_under_compute_layer_scaffold():
+def test_op_registered_under_compute_layer_scaffold() -> None:
     from coordinator_core.ipc import get_op_handler
 
     assert get_op_handler("compute_layer.scaffold") is not None

@@ -10,7 +10,7 @@ import yaml
 from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import ask_compose, cli
-from coordinator_core.ops.dispatch_emit import op
+from coordinator_core.ops.dispatch_emit import live_run_index, op
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import ASK_TEXT_FILE, RECORD_DIR_ROOT, RELAYED_ASK_FILE
 from coordinator_core.ops.dispatch_emit.ask_stage import stage
@@ -233,6 +233,7 @@ def test_stage_binds_a_ledger_bearing_run_only(repo):
     write_run_scripts(repo, "noledger", "ledgered")
     stage(repo, run_id="noledger", sizing_rel=REL, writes=["pkg/a.py"])
     assert rr.read_register((repo / REL).read_text(encoding="utf-8")) is None
+    live_run_index.remove(repo, "noledger")
     run_dir = rl.start(repo, "ledgered")
     (run_dir / "ask.md").write_text("the raw ask", encoding="utf-8")
     stage(repo, run_id="ledgered", sizing_rel=REL, writes=["pkg/b.py"])

@@ -17,6 +17,7 @@ from coordinator_core.bash_guards import (
 )
 from coordinator_core.bash_guards import _dialect
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 TOOLS = ("Bash", "PowerShell")
 GATE_ENV = "MACHINE_LOCAL_COORDINATOR_FEATURE_DOCTRINE_EDIT_GATE"
@@ -36,7 +37,7 @@ def _ctx(result):
 
 
 @pytest.mark.parametrize("tool", TOOLS)
-def test_illegal_filename_fires(tool, tmp_path):
+def test_illegal_filename_fires(tool, tmp_path: Path) -> None:
     cmd = "echo x > " + str(tmp_path / "bad?name.txt")
     result = envelope_of(block_illegal_filename.check(_payload(tool, cmd, tmp_path)))
     assert result is not None
@@ -45,7 +46,7 @@ def test_illegal_filename_fires(tool, tmp_path):
 
 
 @pytest.mark.parametrize("tool", TOOLS)
-def test_for_loop_advises_and_offers_no_python_to_powershell(tool, tmp_path):
+def test_for_loop_advises_and_offers_no_python_to_powershell(tool, tmp_path: Path) -> None:
     result = guard_plumbing_and_loops.check(
         _payload(tool, "for f in *.txt; do echo $f; done", tmp_path)
     )
@@ -54,7 +55,7 @@ def test_for_loop_advises_and_offers_no_python_to_powershell(tool, tmp_path):
         assert "python3" not in _ctx(result)
 
 
-def test_head_pipe_advises(tmp_path):
+def test_head_pipe_advises(tmp_path: Path) -> None:
     tool = "PowerShell"
     dialect = _dialect.dialect_from_tool_name(tool)
     result = guard_head_tail_rewrite.check_head_tail_plumbing_rewrite(
@@ -70,7 +71,7 @@ def test_head_pipe_advises(tmp_path):
 
 
 @pytest.mark.parametrize("target", [r"C:\zz\p.txt", "C:/zz/p.txt"])
-def test_powershell_redirect_is_a_write_sink(target):
+def test_powershell_redirect_is_a_write_sink(target) -> None:
     tokens = ["echo", "hi", ">", target]
     assert sinks.extract_write_sink_targets_powershell(tokens, "echo") == [target]
     assert sinks.extract_write_sink_targets_powershell(["echo", "hi", ">>" + target], "echo") == [target]
@@ -79,7 +80,7 @@ def test_powershell_redirect_is_a_write_sink(target):
 
 
 @pytest.fixture()
-def author_box(tmp_path, monkeypatch):
+def author_box(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     reg = tmp_path / "reg"
     reg.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(reg))
@@ -102,8 +103,8 @@ def author_box(tmp_path, monkeypatch):
     ],
 )
 def test_approval_sentinel_denies_when_gate_on_and_allows_when_off(
-    tool, cmd, author_box, monkeypatch, tmp_path
-):
+    tool, cmd, author_box, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     payload = _payload(tool, cmd, tmp_path)
     mp.reset_cache()
     result = envelope_of(block_approval_sentinel_creation.check(payload))

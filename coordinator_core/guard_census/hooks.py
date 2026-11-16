@@ -143,6 +143,7 @@ _DISPATCHED = (
     "fanin-registries",
     "foreign-path-filter",
     "group-em-autofire",
+    "group-em-home-autoclaim",
     "group-em-park-spool",
     "guard-doctrine-changelog-prose",
     "guard-doctrine-surface-ratio",

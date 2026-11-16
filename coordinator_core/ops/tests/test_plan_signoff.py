@@ -12,6 +12,7 @@ from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.frontmatter.schema_validate import parse_frontmatter
 from coordinator_core.frontmatter.body_blocks import locate_fenced_block
 from coordinator_core.ops import plan_signoff as mod
+from pathlib import Path
 
 PLAN = """---
 title: t
@@ -56,7 +57,7 @@ RULING = "Angelique ruled the rows may proceed"
 
 
 @pytest.fixture
-def root(tmp_path, monkeypatch):
+def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, capture_output=True, **no_console_creationflags())
     (tmp_path / "docs/plans").mkdir(parents=True)
     (tmp_path / "docs/plans/p.md").write_text(PLAN, encoding="utf-8")
@@ -64,7 +65,7 @@ def root(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _call(root, target, source="pm", **kw):
+def _call(root, target, source: str = "pm", **kw):
     params = {"plan_path": "docs/plans/p.md", "target": target, "source": source, "on": "2026-10-09", **kw}
     if source == "pm":
         params.setdefault("pm_quote", "yes do it")
@@ -86,7 +87,7 @@ def _fm(root):
     return parse_frontmatter(_text(root))["frontmatter"]
 
 
-def test_row_pm_signoff(root):
+def test_row_pm_signoff(root) -> None:
     res = _call(root, {"rows": ["A1"]})
     assert res["applied"] is True
     row = _rows(root)["A1"]
@@ -95,13 +96,13 @@ def test_row_pm_signoff(root):
     assert "pm_approved" not in _rows(root)["A2"]
 
 
-def test_row_apm_signoff(root):
+def test_row_apm_signoff(root) -> None:
     _call(root, {"rows": ["A1", "A2"]}, source="apm")
     sig = _rows(root)["A2"]["signoff"]
     assert sig["source"] == "apm" and sig["apm_ruling"] == RULING and sig["ruling_ref"] == "docs/plans/p.md"
 
 
-def test_row_countersign_keeps_apm_in_history(root):
+def test_row_countersign_keeps_apm_in_history(root) -> None:
     _call(root, {"rows": ["A1"]}, source="apm")
     _call(root, {"rows": ["A1"]}, pm_quote="verified")
     sig = _rows(root)["A1"]["signoff"]
@@ -110,7 +111,7 @@ def test_row_countersign_keeps_apm_in_history(root):
     assert sig["history"][0]["apm_ruling"] == RULING
 
 
-def test_apm_over_pm_refused(root):
+def test_apm_over_pm_refused(root) -> None:
     _call(root, {"rows": ["A1"]})
     before = _text(root)
     with pytest.raises(ValueError, match="already signed off by the PM"):
@@ -118,42 +119,42 @@ def test_apm_over_pm_refused(root):
     assert _text(root) == before
 
 
-def test_apm_over_apm_refused(root):
+def test_apm_over_apm_refused(root) -> None:
     _call(root, {"rows": ["A1"]}, source="apm")
     with pytest.raises(ValueError, match="already signed off by the APM"):
         _call(root, {"rows": ["A1"]}, source="apm")
 
 
-def test_irreversible_ruling_refused(root):
+def test_irreversible_ruling_refused(root) -> None:
     before = _text(root)
     with pytest.raises(ValueError, match="irreversible"):
         _call(root, {"rows": ["A1"]}, source="apm", apm_ruling="ok to merge to main")
     assert _text(root) == before
 
 
-def test_apm_requires_ruling_ref(root):
+def test_apm_requires_ruling_ref(root) -> None:
     with pytest.raises(ValueError, match="ruling_ref"):
         _call(root, {"rows": ["A1"]}, source="apm", ruling_ref="")
 
 
-def test_absolute_ruling_ref_refused(root):
+def test_absolute_ruling_ref_refused(root) -> None:
     with pytest.raises(ValueError, match="absolute"):
         _call(root, {"rows": ["A1"]}, source="apm", ruling_ref="/etc/ruling.md")
 
 
-def test_batch_is_atomic(root):
+def test_batch_is_atomic(root) -> None:
     before = _text(root)
     with pytest.raises(ValueError, match="not found"):
         _call(root, {"rows": ["A1", "NOPE"]})
     assert _text(root) == before
 
 
-def test_untouched_rows_keep_their_bytes(root):
+def test_untouched_rows_keep_their_bytes(root) -> None:
     _call(root, {"rows": ["A1"]})
     assert "- id: A2\n  title: second\n  change_kind: code-edit\n  surface: b.py\n  writes: [b.py]\n" in _text(root)
 
 
-def test_grouping_pm_signoff(root):
+def test_grouping_pm_signoff(root) -> None:
     res = _call(root, {"grouping": "spun_off"}, pm_quote="spin it off")
     assert res["applied"] is True
     block = _fm(root)["grouping_approvals"]["spun_off"]
@@ -165,7 +166,7 @@ def test_grouping_pm_signoff(root):
     assert _fm(root)["grouping_approvals"]["do"] == {"status": "pending"}
 
 
-def test_grouping_apm_then_pm_countersign(root):
+def test_grouping_apm_then_pm_countersign(root) -> None:
     _call(root, {"grouping": "spun_off"}, source="apm")
     block = _fm(root)["grouping_approvals"]["spun_off"]
     assert block["approver"] == "APM" and block["pm_utterance"] == RULING
@@ -176,7 +177,7 @@ def test_grouping_apm_then_pm_countersign(root):
 
 
 @pytest.mark.parametrize("source", ["pm", "apm"])
-def test_a_grouping_this_op_signs_passes_the_grouping_check(root, source):
+def test_a_grouping_this_op_signs_passes_the_grouping_check(root, source) -> None:
     from coordinator_core.frontmatter.schema_validate import _grouping_signoff_error
 
     _call(root, {"grouping": "spun_off"}, **({"source": "apm"} if source == "apm" else {}))
@@ -184,7 +185,7 @@ def test_a_grouping_this_op_signs_passes_the_grouping_check(root, source):
 
 
 @pytest.mark.parametrize("source,approver", [("g-em", "G-EM"), ("uhura", "Uhura")])
-def test_grouping_delegate_role_signoff(root, source, approver):
+def test_grouping_delegate_role_signoff(root, source, approver) -> None:
     from coordinator_core.frontmatter.schema_validate import _grouping_signoff_error
     from coordinator_core.ops.signoff_digest import _bucket
     from coordinator_core.ops.signoff_provenance import read_grouping
@@ -210,32 +211,32 @@ def test_grouping_delegate_role_signoff(root, source, approver):
                       "approver": "x", "ruling": "again", "ruling_ref": "docs/plans/p.md"}, root)
 
 
-def test_delegate_role_on_rows_refused(root):
+def test_delegate_role_on_rows_refused(root) -> None:
     with pytest.raises(ValueError, match="grouping only"):
         mod._handler({"plan_path": "docs/plans/p.md", "target": {"rows": ["A1"]}, "source": "g-em",
                       "approver": "x", "ruling": "ok", "ruling_ref": "docs/plans/p.md"}, root)
 
 
-def test_delegate_role_requires_approver(root):
+def test_delegate_role_requires_approver(root) -> None:
     with pytest.raises(ValueError, match="approver"):
         mod._handler({"plan_path": "docs/plans/p.md", "target": {"grouping": "spun_off"}, "source": "uhura",
                       "ruling": "ok", "ruling_ref": "docs/plans/p.md"}, root)
 
 
-def test_grouping_apm_over_pm_refused(root):
+def test_grouping_apm_over_pm_refused(root) -> None:
     _call(root, {"grouping": "spun_off"})
     with pytest.raises(ValueError, match="already signed off by the PM"):
         _call(root, {"grouping": "spun_off"}, source="apm")
 
 
-def test_grouping_stale_digest_refused(root):
+def test_grouping_stale_digest_refused(root) -> None:
     before = _text(root)
     with pytest.raises(ValueError, match="digest"):
         _call(root, {"grouping": "spun_off"}, digest="sha256:" + "0" * 64)
     assert _text(root) == before
 
 
-def test_grouping_digest_match_accepted(root):
+def test_grouping_digest_match_accepted(root) -> None:
     from coordinator_core.frontmatter.schema_validate import compute_grouping_digest
 
     digest = compute_grouping_digest(list(_rows(root).values()), "spun_off")
@@ -255,12 +256,12 @@ def _resolve(root, ids):
     ]}, repo_root=root / ".git"))
 
 
-def _with_ruled_out(root):
+def _with_ruled_out(root) -> None:
     p = root / "docs/plans/p.md"
     p.write_text(_text(root).replace("  do:\n", "  ruled_out:\n    status: pending\n  do:\n", 1), encoding="utf-8")
 
 
-def test_empty_grouping_refused_without_cut_set_and_hint_names_route(root):
+def test_empty_grouping_refused_without_cut_set_and_hint_names_route(root) -> None:
     _with_ruled_out(root)
     with pytest.raises(ValueError, match="cut_set"):
         _call(root, {"grouping": "ruled_out"})
@@ -269,7 +270,7 @@ def test_empty_grouping_refused_without_cut_set_and_hint_names_route(root):
     assert "plan.signoff" in _GROUPING_APPROVAL_HINT and "cut_set" in _GROUPING_APPROVAL_HINT
 
 
-def test_cut_set_signoff_then_resolve_accepts_exactly_that_set(root, monkeypatch):
+def test_cut_set_signoff_then_resolve_accepts_exactly_that_set(root, monkeypatch: pytest.MonkeyPatch) -> None:
     _with_ruled_out(root)
     res = _call(root, {"grouping": "ruled_out"}, source="g-em", cut_set=CUT, approver="group-em-44",
                 ruling="close A2", ruling_ref="docs/plans/p.md")
@@ -286,7 +287,7 @@ def test_cut_set_signoff_then_resolve_accepts_exactly_that_set(root, monkeypatch
     assert _rows(root)["A1"]["disposition"] == "open"
 
 
-def test_cut_set_wrong_grouping_unknown_row_and_no_grouping_refused(root):
+def test_cut_set_wrong_grouping_unknown_row_and_no_grouping_refused(root) -> None:
     _with_ruled_out(root)
     before = _text(root)
     with pytest.raises(ValueError, match="does not close"):
@@ -298,7 +299,7 @@ def test_cut_set_wrong_grouping_unknown_row_and_no_grouping_refused(root):
     assert _text(root) == before
 
 
-def test_target_shape_refused(root):
+def test_target_shape_refused(root) -> None:
     with pytest.raises(ValueError, match="exactly one"):
         _call(root, {"rows": ["A1"], "grouping": "do"})
     with pytest.raises(ValueError, match="digest applies"):

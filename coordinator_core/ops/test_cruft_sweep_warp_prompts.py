@@ -6,6 +6,8 @@ import time
 
 from coordinator_core.ops import cruft_sweep
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_OUTCOME_FILE
+from pathlib import Path
+import pytest
 
 DAY = 86400
 
@@ -22,7 +24,7 @@ def _run(tmp_path, name, *, outcome_age_days=None):
     return run
 
 
-def test_old_closed_run_prompts_deleted_others_kept(tmp_path):
+def test_old_closed_run_prompts_deleted_others_kept(tmp_path: Path) -> None:
     old = _run(tmp_path, "old", outcome_age_days=8)
     fresh = _run(tmp_path, "fresh", outcome_age_days=6)
     open_ = _run(tmp_path, "open")
@@ -34,14 +36,14 @@ def test_old_closed_run_prompts_deleted_others_kept(tmp_path):
     assert (open_ / "prompts" / "p.md").exists()
 
 
-def test_dry_run_counts_without_deleting(tmp_path):
+def test_dry_run_counts_without_deleting(tmp_path: Path) -> None:
     old = _run(tmp_path, "old", outcome_age_days=30)
     _, n = cruft_sweep.sweep_warp_prompts(tmp_path, now=time.time(), dry_run=True, quiet=True)
     assert n == 1
     assert (old / "prompts" / "p.md").exists()
 
 
-def _rm_spawns(tmp_path, monkeypatch, n_due):
+def _rm_spawns(tmp_path, monkeypatch, n_due) -> int:
     for i in range(n_due):
         _run(tmp_path, f"old{i}", outcome_age_days=30)
     real = cruft_sweep.subprocess.run
@@ -58,13 +60,13 @@ def _rm_spawns(tmp_path, monkeypatch, n_due):
     return len(calls)
 
 
-def test_rm_spawn_count_independent_of_due_runs(tmp_path, monkeypatch):
+def test_rm_spawn_count_independent_of_due_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     one = _rm_spawns(tmp_path / "a", monkeypatch, 1)
     five = _rm_spawns(tmp_path / "b", monkeypatch, 5)
     assert one == five
 
 
-def test_surviving_target_not_counted(tmp_path, monkeypatch):
+def test_surviving_target_not_counted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     keep = _run(tmp_path, "keep", outcome_age_days=30)
     gone = _run(tmp_path, "gone", outcome_age_days=30)
     real = cruft_sweep._delete_paths_batch
@@ -80,5 +82,5 @@ def test_surviving_target_not_counted(tmp_path, monkeypatch):
     assert not (gone / "prompts").exists()
 
 
-def test_missing_warp_root_is_noop(tmp_path):
+def test_missing_warp_root_is_noop(tmp_path: Path) -> None:
     assert cruft_sweep.sweep_warp_prompts(tmp_path, now=time.time(), dry_run=False, quiet=True) == (0, 0)

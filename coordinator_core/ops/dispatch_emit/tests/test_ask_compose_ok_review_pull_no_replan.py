@@ -45,7 +45,7 @@ def test_ok_branch_adopts_on_ready_with_pull_class_none_or_mechanical():
         "_revised?.verdict === 'ready' && (_revised?.pull_class === 'mechanical' || _revised?.pull_class === 'none')"
         in block
     )
-    adopt = block.index("_planRel = _revised.plan_rel")
+    adopt = block.index("_planRel = _pullPlan")
     assert adopt < block.index("await planBlitz(")
 
 

@@ -10,13 +10,14 @@ import yaml
 from coordinator_core.locked_write import held_lock
 from coordinator_core.ops.dispatch_emit import ask_gate
 from coordinator_core.ops.dispatch_emit.ask_contract import HALT_REFUSAL
+from pathlib import Path
 
 REL = "state/sizings/2026-10-01-gate.yaml"
 RUN = "warp-fixture-run"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
@@ -38,7 +39,7 @@ def repo(tmp_path, monkeypatch):
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds a held sizing lock that must refuse at the budget instead of waiting")
-def test_held_sizing_lock_refuses_under_budget_naming_holder(repo):
+def test_held_sizing_lock_refuses_under_budget_naming_holder(repo) -> None:
     with held_lock(repo / REL, anchor_root=repo, holder_label="abandoned-run-thread"):
         start = time.monotonic()
         out = ask_gate._handler({"sizing_path": REL, "run_id": RUN}, repo_root=repo)
@@ -49,13 +50,13 @@ def test_held_sizing_lock_refuses_under_budget_naming_holder(repo):
     assert elapsed < 0.5
 
 
-def test_free_sizing_lock_does_not_refuse(repo):
+def test_free_sizing_lock_does_not_refuse(repo) -> None:
     out = ask_gate._handler({"sizing_path": REL, "run_id": RUN}, repo_root=repo)
     assert "lock held" not in str((out.get("halt") or {}).get("reason", ""))
 
 
 @pytest.mark.deliberate_wall_clock(reason="bounds a held spine lock that must not stall the gate past its budget")
-def test_gate_waits_no_longer_than_the_budget_on_a_held_spine_lock(repo):
+def test_gate_waits_no_longer_than_the_budget_on_a_held_spine_lock(repo) -> None:
     plan = repo / "state" / "plans" / "spine.md"
     plan.parent.mkdir(parents=True)
     plan.write_text("x\n", encoding="utf-8")

@@ -27,7 +27,7 @@ _THREE = [
 ]
 
 
-def _compose():
+def _compose() -> str:
     return compose_ask_script(
         repo_root="REPO",
         prompt="add a thing",
@@ -40,7 +40,7 @@ def _compose():
     )
 
 
-def _filter(phase_verdicts, *, reused=False):
+def _filter(phase_verdicts, *, reused: bool = False):
     """Evaluate the emitted filter expression under node against a gate's resume_phases verdicts."""
     node = shutil.which("node")
     if node is None:
@@ -57,7 +57,7 @@ def _filter(phase_verdicts, *, reused=False):
     return json.loads(out.stdout)
 
 
-def test_the_composed_wave_hands_the_filter_to_every_slice_reviewer_and_caps_the_count():
+def test_the_composed_wave_hands_the_filter_to_every_slice_reviewer_and_caps_the_count() -> None:
     script = _compose()
     assert _RESUME_REVIEW_SLICE_FILTER_JS in script
     assert "review_slice_ids: " in script
@@ -66,20 +66,20 @@ def test_the_composed_wave_hands_the_filter_to_every_slice_reviewer_and_caps_the
     assert "_resumeSliceIds().length : Infinity" in script
 
 
-def test_resumed_run_with_one_blocked_slice_filters_to_that_slice():
+def test_resumed_run_with_one_blocked_slice_filters_to_that_slice() -> None:
     assert _filter({"review": {"wave": _THREE}}) == ["s2"]
 
 
-def test_a_merged_group_id_splits_into_its_member_slices():
+def test_a_merged_group_id_splits_into_its_member_slices() -> None:
     wave = [{"slice_id": "s4+s5", "verdict": "BLOCKED", "findings": 2, "applied": 0}]
     assert _filter({"review": {"wave": wave}}) == ["s4", "s5"]
 
 
-def test_fresh_run_filters_nothing_so_every_prep_slice_is_reviewed():
+def test_fresh_run_filters_nothing_so_every_prep_slice_is_reviewed() -> None:
     assert _filter({}) is None
 
 
-def test_a_reused_review_or_an_all_clean_prior_wave_filters_nothing():
+def test_a_reused_review_or_an_all_clean_prior_wave_filters_nothing() -> None:
     assert _filter({"review": {"wave": _THREE}}, reused=True) is None
     assert _filter({"review": {"wave": [_THREE[0], _THREE[2]]}}) is None
 
@@ -152,14 +152,14 @@ def _resumed_gate():
     }
 
 
-def test_resumed_wave_spawns_one_reviewer_told_to_review_only_the_blocked_slice():
+def test_resumed_wave_spawns_one_reviewer_told_to_review_only_the_blocked_slice() -> None:
     got = _run_wave(_resumed_gate())
     assert got["halted"] is None
     assert got["calls"] == [{"i": 0, "n": 1, "ids": ["s2"], "only": ["s2"]}]
     assert sorted(got["wave"]) == ["s1", "s2", "s3"]
 
 
-def test_fresh_wave_spawns_a_reviewer_per_group_and_reviews_every_slice():
+def test_fresh_wave_spawns_a_reviewer_per_group_and_reviews_every_slice() -> None:
     got = _run_wave({"arm": "s"})
     assert got["halted"] is None
     assert [c["only"] for c in got["calls"]] == [None, None, None]

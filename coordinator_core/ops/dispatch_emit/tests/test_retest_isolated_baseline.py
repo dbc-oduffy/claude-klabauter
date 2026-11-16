@@ -8,6 +8,7 @@ from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import landing_export as le
 from coordinator_core.ops.dispatch_emit import landing_retest, landing_targeted_tests, retest_targeted
+import pytest
 
 RUN_ID = "run-base"
 PARAM = "test_a.py::test_x[## status: done]"
@@ -17,9 +18,9 @@ CAUSED = "test_a.py::test_new"
 MEASURED = {"head_red": [], "owed_cleared": [], "head_sha": "h" * 40}
 
 
-def _setup(tmp_path: Path, monkeypatch, *, export_red: list[str], head_red: list[str], head_broken=False,
-           head_counts=None, export_counts=None, extra_files=(), collect_rc=0, head_files=("test_a.py",),
-           head_collect_error=False, head_ran_short=0, land=("src/own.py",), dirty_files=(),
+def _setup(tmp_path: Path, monkeypatch, *, export_red: list[str], head_red: list[str], head_broken: bool = False,
+           head_counts=None, export_counts=None, extra_files=(), collect_rc: int = 0, head_files=("test_a.py",),
+           head_collect_error: bool = False, head_ran_short: int = 0, land=("src/own.py",), dirty_files=(),
            foreign_reds_export=(), run_base_sha=None, head2_red=None, reverify=None):
     monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "pytest -q")
     root = tmp_path / "repo"
@@ -61,7 +62,7 @@ def _setup(tmp_path: Path, monkeypatch, *, export_red: list[str], head_red: list
 
     monkeypatch.setattr(le, "build_head_export", _build)
 
-    def _run(argv, cwd, *, log=None, timeout=None, append=False):
+    def _run(argv, cwd, *, log=None, timeout=None, append: bool = False):
         cwd = Path(cwd)
         if cwd.name == "export" and any((cwd / f).exists() for f in foreign_reds_export):
             red, code = [*export_red, CAUSED], 1
@@ -97,7 +98,7 @@ def _setup(tmp_path: Path, monkeypatch, *, export_red: list[str], head_red: list
     return rc, record, built
 
 
-def test_pre_existing_red_folds_to_pre_existing_only(tmp_path, monkeypatch):
+def test_pre_existing_red_folds_to_pre_existing_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, record, built = _setup(tmp_path, monkeypatch, export_red=[PARAM, PRE], head_red=[PARAM, PRE])
     assert rc == 1 and record["baseline"] == {
         "method": "isolated-export", "base_sha": "h" * 40, "caused": [], "foreign": [PARAM, PRE], "evidence": sorted([PARAM, PRE]),
@@ -108,7 +109,7 @@ def test_pre_existing_red_folds_to_pre_existing_only(tmp_path, monkeypatch):
     assert not built[-1].exists()
 
 
-def test_baseline_measures_the_run_base_and_records_its_sha(tmp_path, monkeypatch):
+def test_baseline_measures_the_run_base_and_records_its_sha(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = "b" * 40
     _, record, _ = _setup(tmp_path, monkeypatch, export_red=[PRE], head_red=[PRE], run_base_sha=base)
     assert record["baseline"]["base_sha"] == base
@@ -116,13 +117,13 @@ def test_baseline_measures_the_run_base_and_records_its_sha(tmp_path, monkeypatc
     assert dict(_setup.shas)["export"] is None
 
 
-def test_baseline_without_a_recorded_run_base_measures_head(tmp_path, monkeypatch):
+def test_baseline_without_a_recorded_run_base_measures_head(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, record, _ = _setup(tmp_path, monkeypatch, export_red=[PRE], head_red=[PRE])
     assert dict(_setup.shas)["export-head"] is None
     assert record["baseline"]["base_sha"] == "h" * 40
 
 
-def test_landing_caused_red_yields_targeted_tests_failed(tmp_path, monkeypatch):
+def test_landing_caused_red_yields_targeted_tests_failed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, record, _ = _setup(tmp_path, monkeypatch, export_red=[PRE, CAUSED], head_red=[PRE])
     assert record["baseline"]["caused"] == [CAUSED]
     findings, check = landing_targeted_tests.failed_targeted_tests(record)
@@ -130,14 +131,14 @@ def test_landing_caused_red_yields_targeted_tests_failed(tmp_path, monkeypatch):
     assert [(f.path, f.reason) for f in findings] == [("test_a.py", landing_targeted_tests.TARGETED_TESTS_FAILED)]
 
 
-def test_broken_head_run_leaves_no_baseline_so_the_gate_refuses(tmp_path, monkeypatch):
+def test_broken_head_run_leaves_no_baseline_so_the_gate_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, record, _ = _setup(tmp_path, monkeypatch, export_red=[PRE], head_red=[], head_broken=True)
     assert "baseline" not in record
     assert record["baseline_skipped"]["reason"] == "HEAD pass error"
     assert landing_targeted_tests.failed_targeted_tests(record)[1] == "failed"
 
 
-def test_file_new_at_head_counts_as_caused_and_baseline_is_written(tmp_path, monkeypatch):
+def test_file_new_at_head_counts_as_caused_and_baseline_is_written(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     new_red = "test_new.py::test_n"
     _, record, _ = _setup(tmp_path, monkeypatch, export_red=[PRE, new_red], head_red=[PRE], extra_files=("test_new.py",))
     assert record["baseline"] == {
@@ -147,14 +148,14 @@ def test_file_new_at_head_counts_as_caused_and_baseline_is_written(tmp_path, mon
     assert "baseline_skipped" not in record
 
 
-def test_existing_file_collecting_zero_at_head_yields_no_baseline(tmp_path, monkeypatch):
+def test_existing_file_collecting_zero_at_head_yields_no_baseline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, record, _ = _setup(tmp_path, monkeypatch, export_red=[PRE, CAUSED], head_red=[], head_counts={})
     assert "baseline" not in record
     assert record["baseline_skipped"]["files"] == {"test_a.py": {"head": 0}}
     assert landing_targeted_tests.failed_targeted_tests(record)[1] == "failed"
 
 
-def test_one_existing_file_collecting_zero_at_head_is_named(tmp_path, monkeypatch):
+def test_one_existing_file_collecting_zero_at_head_is_named(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, record, _ = _setup(
         tmp_path, monkeypatch, export_red=[PRE, CAUSED], head_red=[PRE], extra_files=("test_b.py",),
         head_files=("test_a.py", "test_b.py"), head_counts={"test_a.py": 2},
@@ -163,7 +164,7 @@ def test_one_existing_file_collecting_zero_at_head_is_named(tmp_path, monkeypatc
     assert "test_b.py" in record["baseline_skipped"]["reason"]
 
 
-def test_new_id_in_existing_file_is_caused_when_red_and_baseline_is_written(tmp_path, monkeypatch):
+def test_new_id_in_existing_file_is_caused_when_red_and_baseline_is_written(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     new = "test_a.py::t2"
     _, record, _ = _setup(
         tmp_path, monkeypatch, export_red=[PRE, new], head_red=[PRE], head_counts={"test_a.py": 2},
@@ -176,7 +177,7 @@ def test_new_id_in_existing_file_is_caused_when_red_and_baseline_is_written(tmp_
     assert "baseline_skipped" not in record
 
 
-def test_removed_id_is_ignored_and_baseline_is_written(tmp_path, monkeypatch):
+def test_removed_id_is_ignored_and_baseline_is_written(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, record, _ = _setup(
         tmp_path, monkeypatch, export_red=[PRE, CAUSED], head_red=[PRE], head_counts={"test_a.py": 3},
         export_counts={"test_a.py": 2},
@@ -187,20 +188,20 @@ def test_removed_id_is_ignored_and_baseline_is_written(tmp_path, monkeypatch):
     }
 
 
-def test_head_collection_error_in_existing_file_writes_no_baseline_and_names_it(tmp_path, monkeypatch):
+def test_head_collection_error_in_existing_file_writes_no_baseline_and_names_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, record, _ = _setup(tmp_path, monkeypatch, export_red=[PRE, CAUSED], head_red=[PRE], head_collect_error=True)
     assert "baseline" not in record
     assert "test_a.py" in record["baseline_skipped"]["reason"]
     assert record["baseline_skipped"]["files"]["test_a.py"]["collection_error"] is True
 
 
-def test_head_run_that_ran_fewer_than_it_collected_writes_no_baseline(tmp_path, monkeypatch):
+def test_head_run_that_ran_fewer_than_it_collected_writes_no_baseline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, record, _ = _setup(tmp_path, monkeypatch, export_red=[PRE, CAUSED], head_red=[PRE], head_ran_short=1)
     assert "baseline" not in record
     assert "did not run what it collected" in record["baseline_skipped"]["reason"]
 
 
-def test_equal_zero_counts_on_both_sides_yield_no_baseline(tmp_path, monkeypatch):
+def test_equal_zero_counts_on_both_sides_yield_no_baseline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, record, _ = _setup(
         tmp_path, monkeypatch, export_red=[PRE, CAUSED], head_red=[PRE], head_counts={}, export_counts={},
     )
@@ -208,19 +209,19 @@ def test_equal_zero_counts_on_both_sides_yield_no_baseline(tmp_path, monkeypatch
     assert record["baseline_skipped"]["reason"] == "HEAD pass collected 0 items"
 
 
-def test_broken_collect_only_session_yields_no_baseline(tmp_path, monkeypatch):
+def test_broken_collect_only_session_yields_no_baseline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, record, _ = _setup(tmp_path, monkeypatch, export_red=[PRE, CAUSED], head_red=[PRE], collect_rc=4)
     assert "baseline" not in record
     assert record["baseline_skipped"]["reason"] == "collection unavailable"
 
 
-def test_green_export_runs_no_head_pass(tmp_path, monkeypatch):
+def test_green_export_runs_no_head_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, record, built = _setup(tmp_path, monkeypatch, export_red=[], head_red=[])
     assert "baseline" not in record
     assert all(b.name != "export-head" for b in built)
 
 
-def test_parametrised_id_with_spaces_is_captured_whole(tmp_path):
+def test_parametrised_id_with_spaces_is_captured_whole(tmp_path: Path) -> None:
     log = tmp_path / "x.log"
     log.write_text(
         f"FAILED {PARAM} - assert 1 == 2\nERROR test_b.py::test_y[a b] \nFAILED test_c.py::test_z\n",
@@ -241,7 +242,7 @@ def _collect(tmp_path, monkeypatch, export, lines):
     monkeypatch.setenv("COORDINATOR_FAST_TEST_CMD", "pytest -q")
     seen: list[list[str]] = []
 
-    def _run(argv, cwd, *, log=None, timeout=None, append=False):
+    def _run(argv, cwd, *, log=None, timeout=None, append: bool = False) -> int:
         seen.append(argv)
         Path(log).write_text("".join(f"{x}\n" for x in lines), encoding="utf-8")
         return 0
@@ -255,7 +256,7 @@ def _collect(tmp_path, monkeypatch, export, lines):
 TEST_FILE = "coordinator_core/ops/dispatch_emit/tests/test_terminal_commit.py"
 
 
-def test_rootdir_relative_collect_log_maps_onto_repo_relative_keys(tmp_path, monkeypatch):
+def test_rootdir_relative_collect_log_maps_onto_repo_relative_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     export = _export_with(tmp_path, (TEST_FILE,))
     rootdir = export / "coordinator_core"
     ids = ["ops/dispatch_emit/tests/test_terminal_commit.py::test_x", "ops/dispatch_emit/tests/test_terminal_commit.py::test_y"]
@@ -264,13 +265,13 @@ def test_rootdir_relative_collect_log_maps_onto_repo_relative_keys(tmp_path, mon
     assert f"--rootdir={export}" in seen[0]
 
 
-def test_pinned_rootdir_collect_log_without_header_is_repo_relative(tmp_path, monkeypatch):
+def test_pinned_rootdir_collect_log_without_header_is_repo_relative(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     export = _export_with(tmp_path, (TEST_FILE,))
     out, _ = _collect(tmp_path, monkeypatch, export, [f"{TEST_FILE}::test_x"])
     assert out[0] == {f"{TEST_FILE}::test_x"}
 
 
-def test_real_pytest_header_line_with_configfile_is_parsed_to_the_directory(tmp_path, monkeypatch):
+def test_real_pytest_header_line_with_configfile_is_parsed_to_the_directory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     export = _export_with(tmp_path, (TEST_FILE,))
     header = f"rootdir: {export / 'coordinator_core'}, configfile: pytest.ini, testpaths: tests"
     out, _ = _collect(
@@ -279,26 +280,26 @@ def test_real_pytest_header_line_with_configfile_is_parsed_to_the_directory(tmp_
     assert out[0] == {f"{TEST_FILE}::test_x"}
 
 
-def test_collect_rootdir_outside_the_export_is_a_reason(tmp_path, monkeypatch):
+def test_collect_rootdir_outside_the_export_is_a_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     export = _export_with(tmp_path, (TEST_FILE,))
     out, _ = _collect(tmp_path, monkeypatch, export, [f"rootdir: {tmp_path / 'elsewhere'}", f"{TEST_FILE}::test_x"])
     assert isinstance(out, str) and "outside" in out
 
 
-def test_collect_ids_that_resolve_to_no_file_are_a_reason(tmp_path, monkeypatch):
+def test_collect_ids_that_resolve_to_no_file_are_a_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     export = _export_with(tmp_path, (TEST_FILE,))
     out, _ = _collect(tmp_path, monkeypatch, export, ["ops/dispatch_emit/tests/test_terminal_commit.py::test_x"])
     assert isinstance(out, str) and "does not resolve" in out
 
 
-def test_unmappable_collect_log_writes_no_baseline_and_names_the_reason(tmp_path, monkeypatch):
+def test_unmappable_collect_log_writes_no_baseline_and_names_the_reason(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(retest_targeted, "_collect_ids", lambda *a, **k: "collect rootdir /x resolves outside /y")
     _, record, _ = _setup(tmp_path, monkeypatch, export_red=[PRE, CAUSED], head_red=[PRE])
     assert "baseline" not in record
     assert record["baseline_skipped"]["reason"] == "collect rootdir /x resolves outside /y"
 
 
-def test_collected_and_failed_ids_share_one_normalised_form(tmp_path, monkeypatch):
+def test_collected_and_failed_ids_share_one_normalised_form(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     export = _export_with(tmp_path, (TEST_FILE,))
     rootdir = export / "coordinator_core"
     rel = "ops/dispatch_emit/tests/test_terminal_commit.py::test_x"
@@ -309,7 +310,7 @@ def test_collected_and_failed_ids_share_one_normalised_form(tmp_path, monkeypatc
     assert retest_targeted._normalise_node_id("../../x.py::t", export, export) is None
 
 
-def test_dirty_non_land_file_is_absent_from_export_and_cannot_cause_a_red(tmp_path, monkeypatch):
+def test_dirty_non_land_file_is_absent_from_export_and_cannot_cause_a_red(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, record, _ = _setup(
         tmp_path, monkeypatch, export_red=[PRE], head_red=[PRE], dirty_files=("peer/sizing_fire.py",),
         foreign_reds_export=("peer/sizing_fire.py",),
@@ -321,7 +322,7 @@ def test_dirty_non_land_file_is_absent_from_export_and_cannot_cause_a_red(tmp_pa
     }
 
 
-def test_record_lists_the_exported_set(tmp_path, monkeypatch):
+def test_record_lists_the_exported_set(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, record, _ = _setup(tmp_path, monkeypatch, export_red=[], head_red=[], dirty_files=("peer/x.py",))
     assert record["isolated_export"]["files"] == ["src/own.py"]
 
@@ -329,7 +330,7 @@ def test_record_lists_the_exported_set(tmp_path, monkeypatch):
 RED_ID = "test_a.py::t1"
 
 
-def test_caused_id_red_at_pure_head_is_recorded_when_the_run_base_differs(tmp_path, monkeypatch):
+def test_caused_id_red_at_pure_head_is_recorded_when_the_run_base_differs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, record, _ = _setup(
         tmp_path, monkeypatch, export_red=[RED_ID], head_red=[], head2_red=[RED_ID], run_base_sha="b" * 40,
     )
@@ -339,14 +340,14 @@ def test_caused_id_red_at_pure_head_is_recorded_when_the_run_base_differs(tmp_pa
     assert [s for n, s in _setup.shas if n == "export-head"] == ["b" * 40, None]
 
 
-def test_caused_id_green_at_pure_head_stays_out_of_head_red(tmp_path, monkeypatch):
+def test_caused_id_green_at_pure_head_stays_out_of_head_red(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, record, _ = _setup(
         tmp_path, monkeypatch, export_red=[RED_ID], head_red=[], head2_red=[], run_base_sha="b" * 40,
     )
     assert record["baseline"]["caused"] == [RED_ID] and record["baseline"]["head_red"] == []
 
 
-def test_run_base_equal_to_head_reuses_the_base_export(tmp_path, monkeypatch):
+def test_run_base_equal_to_head_reuses_the_base_export(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("coordinator_core.git.git_state.head_sha", lambda *a, **k: "b" * 40)
     _, record, _ = _setup(tmp_path, monkeypatch, export_red=[RED_ID], head_red=[], run_base_sha="b" * 40)
     assert [n for n, _ in _setup.shas].count("export-head") == 1
@@ -363,7 +364,7 @@ def _checks(tmp_path, monkeypatch, *, ran: int, red: list[str], baseline: dict, 
     head.mkdir(exist_ok=True)
     (head / "test_a.py").write_text("", encoding="utf-8")
 
-    def _run(argv, cwd, *, log=None, timeout=None, append=False):
+    def _run(argv, cwd, *, log=None, timeout=None, append: bool = False):
         reds = head_red if head_red is not None and Path(cwd).name == "export-head" else red
         text = "".join(f"{f}::t{k}\n" for f in ("test_a.py",) for k in range(2)) if "--collect-only" in argv else (
             "".join(f"FAILED {n} - boom\n" for n in reds) + f"{ran - len(reds)} passed, {len(reds)} failed in 0.1s\n"
@@ -382,17 +383,17 @@ def _checks(tmp_path, monkeypatch, *, ran: int, red: list[str], baseline: dict, 
 OWED = {"caused": [], "foreign": [], "evidence": [], "unverified": ["test_a.py::t0", "test_a.py::t1"]}
 
 
-def test_owed_ids_green_at_head_plus_landing_paths_are_cleared(tmp_path, monkeypatch):
+def test_owed_ids_green_at_head_plus_landing_paths_are_cleared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _checks(tmp_path, monkeypatch, ran=2, red=[RED_ID], baseline=OWED)
     assert out["owed_cleared"] == ["test_a.py::t0"] and out["head_sha"] == "h" * 40
 
 
-def test_owed_run_that_ran_fewer_than_named_records_no_owed_cleared(tmp_path, monkeypatch):
+def test_owed_run_that_ran_fewer_than_named_records_no_owed_cleared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _checks(tmp_path, monkeypatch, ran=1, red=[], baseline=OWED)
     assert "owed_cleared" not in out
 
 
-def test_head_export_failure_records_no_head_red_and_keeps_the_owed_check(tmp_path, monkeypatch):
+def test_head_export_failure_records_no_head_red_and_keeps_the_owed_check(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def _boom(*a, **k):
         raise le.LandingExportError("no space")
 
@@ -404,7 +405,7 @@ def test_head_export_failure_records_no_head_red_and_keeps_the_owed_check(tmp_pa
     assert "head_red" not in out and out["owed_cleared"] == ["test_a.py::t0"] and out["head_sha"] == "e" * 40
 
 
-def test_underivable_landing_set_writes_no_baseline_and_no_export(tmp_path, monkeypatch):
+def test_underivable_landing_set_writes_no_baseline_and_no_export(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, record, built = _setup(
         tmp_path, monkeypatch, export_red=[PRE, CAUSED], head_red=[PRE], land=None, dirty_files=("peer/x.py",),
     )
@@ -426,7 +427,7 @@ def _counting_build(builds: list):
     return _build
 
 
-def test_reverify_ids_green_in_the_export_are_owed_cleared_and_red_ones_reverify_export_red(tmp_path, monkeypatch):
+def test_reverify_ids_green_in_the_export_are_owed_cleared_and_red_ones_reverify_export_red(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _checks(
         tmp_path, monkeypatch, ran=2, red=[RED_ID], head_red=[], baseline=NO_OWED, reverify_ids=[GREEN_ID, RED_ID],
     )
@@ -435,7 +436,7 @@ def test_reverify_ids_green_in_the_export_are_owed_cleared_and_red_ones_reverify
     assert out[landing_targeted_tests.HEAD_RED_KEY] == []
 
 
-def test_reverify_id_red_at_pure_head_is_recorded_in_head_red(tmp_path, monkeypatch):
+def test_reverify_id_red_at_pure_head_is_recorded_in_head_red(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _checks(
         tmp_path, monkeypatch, ran=2, red=[RED_ID], head_red=[RED_ID], baseline=NO_OWED, reverify_ids=[GREEN_ID, RED_ID],
     )
@@ -443,17 +444,17 @@ def test_reverify_id_red_at_pure_head_is_recorded_in_head_red(tmp_path, monkeypa
     assert out[landing_targeted_tests.REVERIFY_EXPORT_RED_KEY] == [RED_ID]
 
 
-def test_no_reverify_ids_records_no_reverify_export_red(tmp_path, monkeypatch):
+def test_no_reverify_ids_records_no_reverify_export_red(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _checks(tmp_path, monkeypatch, ran=2, red=[RED_ID], baseline=NO_OWED)
     assert landing_targeted_tests.REVERIFY_EXPORT_RED_KEY not in out
 
 
-def test_reverify_export_run_that_ran_fewer_than_named_records_neither_key(tmp_path, monkeypatch):
+def test_reverify_export_run_that_ran_fewer_than_named_records_neither_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _checks(tmp_path, monkeypatch, ran=1, red=[], baseline=NO_OWED, reverify_ids=[GREEN_ID, RED_ID])
     assert landing_targeted_tests.REVERIFY_EXPORT_RED_KEY not in out and "owed_cleared" not in out
 
 
-def test_reverify_ids_at_head_equal_to_the_measured_sha_build_no_head_export(tmp_path, monkeypatch):
+def test_reverify_ids_at_head_equal_to_the_measured_sha_build_no_head_export(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     builds: list = []
     _checks(
         tmp_path, monkeypatch, ran=2, red=[], baseline=NO_OWED, reverify_ids=[RED_ID], build=_counting_build(builds),
@@ -461,7 +462,7 @@ def test_reverify_ids_at_head_equal_to_the_measured_sha_build_no_head_export(tmp
     assert builds == []
 
 
-def test_reverify_ids_with_a_moved_head_build_exactly_one_head_export_for_both_id_sets(tmp_path, monkeypatch):
+def test_reverify_ids_with_a_moved_head_build_exactly_one_head_export_for_both_id_sets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("coordinator_core.git.git_state.head_sha", lambda *a, **k: "z" * 40)
     builds: list = []
     out = _checks(
@@ -472,14 +473,14 @@ def test_reverify_ids_with_a_moved_head_build_exactly_one_head_export_for_both_i
     assert out[landing_targeted_tests.HEAD_RED_KEY] == [RED_ID] and out["head_sha"] == "z" * 40
 
 
-def test_moved_head_with_neither_caused_nor_reverify_ids_builds_no_head_export(tmp_path, monkeypatch):
+def test_moved_head_with_neither_caused_nor_reverify_ids_builds_no_head_export(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("coordinator_core.git.git_state.head_sha", lambda *a, **k: "z" * 40)
     builds: list = []
     _checks(tmp_path, monkeypatch, ran=2, red=[], base_sha="b" * 40, build=_counting_build(builds), baseline=NO_OWED)
     assert builds == []
 
 
-def test_reverify_failing_ids_are_posix_normalised_and_drop_the_records_base_red(tmp_path):
+def test_reverify_failing_ids_are_posix_normalised_and_drop_the_records_base_red(tmp_path: Path) -> None:
     params = {"inline_review": {"reverify": {
         "status_after": "fail", "failing": ["a\\test_x.py::t1", "a/test_x.py::t2", "a/test_x.py::t3", "a/test_x.py::t4"],
         "pre_existing": ["a/test_x.py::t2"], "foreign": ["a\\test_x.py::t3"],
@@ -488,14 +489,14 @@ def test_reverify_failing_ids_are_posix_normalised_and_drop_the_records_base_red
     assert retest_targeted._reverify_failing_ids({}) == []
 
 
-def test_reverify_failing_ids_strip_leading_dot_slash(tmp_path):
+def test_reverify_failing_ids_strip_leading_dot_slash(tmp_path: Path) -> None:
     params = {"inline_review": {"reverify": {
         "status_after": "fail", "failing": [".\\a/test_x.py::t1", "./a/test_x.py::t2"], "pre_existing": ["a/test_x.py::t2"],
     }}}
     assert retest_targeted._reverify_failing_ids(params) == ["a/test_x.py::t1"]
 
 
-def test_isolated_child_measures_the_run_reverify_failing_ids_at_head(tmp_path, monkeypatch):
+def test_isolated_child_measures_the_run_reverify_failing_ids_at_head(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, record, _ = _setup(
         tmp_path, monkeypatch, export_red=[RED_ID], head_red=[RED_ID],
         reverify={"status_after": "fail", "failing": [RED_ID]},
@@ -506,7 +507,7 @@ def test_isolated_child_measures_the_run_reverify_failing_ids_at_head(tmp_path, 
     assert record["baseline"]["head_red"] == []
 
 
-def test_green_export_still_records_the_reverify_measurement_and_the_land_judges_it_foreign(tmp_path, monkeypatch):
+def test_green_export_still_records_the_reverify_measurement_and_the_land_judges_it_foreign(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, record, built = _setup(
         tmp_path, monkeypatch, export_red=[], head_red=[],
         reverify={"status_after": "fail", "failing": [RED_ID]},
@@ -520,6 +521,6 @@ def test_green_export_still_records_the_reverify_measurement_and_the_land_judges
     assert not built[-1].exists()
 
 
-def test_green_export_without_a_reverify_record_measures_no_baseline(tmp_path, monkeypatch):
+def test_green_export_without_a_reverify_record_measures_no_baseline(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     rc, record, _ = _setup(tmp_path, monkeypatch, export_red=[], head_red=[])
     assert rc == 0 and "baseline" not in record

@@ -116,3 +116,29 @@ def test_a_footprint_breach_is_never_already_landed(halted):  # noqa: F811
 
     assert out["committed"] is False and out["refused"] == "ledger-unmet", out
     assert not out.get(ALREADY_LANDED_KEY)
+
+
+def test_landed_met_credit_drops_an_empty_commit_and_gives_an_unresolvable_sha_no_credit(tmp_path):
+    from coordinator_core.ops.dispatch_emit.pre_halt_ancestry import landed_met_credit
+
+    import subprocess
+
+    def git(*a):
+        return subprocess.run(["git", *a], cwd=tmp_path, check=True, capture_output=True, text=True).stdout.strip()
+
+    git("init", "-q")
+    git("config", "user.email", "t@t")
+    git("config", "user.name", "t")
+    (tmp_path / "f.txt").write_text("x")
+    git("add", "f.txt")
+    git("commit", "-q", "-m", "real")
+    real = git("rev-parse", "HEAD")
+    git("commit", "-q", "--allow-empty", "-m", "empty")
+    empty = git("rev-parse", "HEAD")
+
+    def items(**by):
+        return [{"id": rid, "status": "met", "met_by": [sha]} for rid, sha in by.items()]
+
+    assert landed_met_credit(tmp_path, items(A=real, B=empty), ["A", "B"]) == frozenset({"A"})
+    assert landed_met_credit(tmp_path, items(A=real), []) == frozenset()
+    assert landed_met_credit(tmp_path, items(A="0" * 40), ["A"]) == frozenset()

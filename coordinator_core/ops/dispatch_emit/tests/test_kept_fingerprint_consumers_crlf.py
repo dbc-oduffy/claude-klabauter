@@ -27,6 +27,7 @@ from coordinator_core.ops.dispatch_emit import (
 from coordinator_core.ops.dispatch_emit.ask_contract import ManifestRow, StageManifest
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest
 from coordinator_core.ops.dispatch_emit.tests._kept_fixture import crlf_repo, git, hold_kept
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -43,7 +44,7 @@ def _drift(root, rel, same: bool) -> None:
         (root / rel).write_bytes(OTHER)
 
 
-def _stage(root, run_id, *, baseline, stage="staged", last=START_AT, started=START_AT) -> None:
+def _stage(root, run_id, *, baseline, stage: str = "staged", last=START_AT, started=START_AT) -> None:
     rdir = ask_contract.record_dir(root, run_id)
     rdir.mkdir(parents=True, exist_ok=True)
     (rdir / "manifest.json").write_text(json.dumps({"write_baseline": baseline}), encoding="utf-8")
@@ -52,13 +53,13 @@ def _stage(root, run_id, *, baseline, stage="staged", last=START_AT, started=STA
     )
 
 
-def _still_kept(tmp_path, same):
+def _still_kept(tmp_path, same) -> bool:
     root, rel, _, raw = crlf_repo(tmp_path)
     _drift(root, rel, same)
     return kept_work.still_kept(root, {"paths": {rel: raw}}, [], "C1")
 
 
-def _post_checkpoint(tmp_path, same):
+def _post_checkpoint(tmp_path, same) -> bool:
     root, rel, _, _ = crlf_repo(tmp_path)
     record = hold_kept(root, "run-a", [], post=[rel])
     _drift(root, rel, same)
@@ -66,14 +67,14 @@ def _post_checkpoint(tmp_path, same):
     return rel in holding and not drifted
 
 
-def _persist_blobs(tmp_path, same):
+def _persist_blobs(tmp_path, same) -> bool:
     root, rel, _, raw = crlf_repo(tmp_path)
     _drift(root, rel, same)
     written = halted_record_commit._persist_blobs(root, resolve_git_common_dir(root), {rel: raw})
     return rel in written
 
 
-def _hunk_kept_blobs_branch(tmp_path, same):
+def _hunk_kept_blobs_branch(tmp_path, same) -> bool:
     """The kept_blobs branch holds the path; with the keep gone the landing baseline would release it."""
     root, rel, _, raw = crlf_repo(tmp_path)
     git(root, "add", rel)
@@ -85,7 +86,7 @@ def _hunk_kept_blobs_branch(tmp_path, same):
     return halted_hunk_attribution.reader(root, LANDING)(HALTED, [rel]) == {rel}
 
 
-def _hunk_landing_baseline_branch(tmp_path, same):
+def _hunk_landing_baseline_branch(tmp_path, same) -> bool:
     """No keep; the index holds the LF form of the landing baseline, so the path releases."""
     root, rel, committed, raw = crlf_repo(tmp_path)
     assert git(root, "rev-parse", f":{rel}") == committed
@@ -97,14 +98,14 @@ def _hunk_landing_baseline_branch(tmp_path, same):
     return halted_hunk_attribution.reader(root, LANDING)(HALTED, [rel]) == set()
 
 
-def _own_dirt_kept_branch(tmp_path, same):
+def _own_dirt_kept_branch(tmp_path, same) -> bool:
     root, rel, _, _ = crlf_repo(tmp_path)
     hold_kept(root, RUN, [rel])
     _drift(root, rel, same)
     return sibling_claims._own_dirt(root, RUN, rel, {rel: None})
 
 
-def _own_dirt_baseline_branch(tmp_path, same):
+def _own_dirt_baseline_branch(tmp_path, same) -> bool:
     """HEAD holds the LF form of the baseline; the run then edited the file, so the dirt is its own."""
     root, rel, committed, raw = crlf_repo(tmp_path)
     _stage(root, RUN, baseline={rel: raw})
@@ -112,7 +113,7 @@ def _own_dirt_baseline_branch(tmp_path, same):
     return sibling_claims._own_dirt(root, RUN, rel, {rel: committed if same else "1" * 40})
 
 
-def _unwritten(tmp_path, same):
+def _unwritten(tmp_path, same) -> bool:
     root, rel, _, raw = crlf_repo(tmp_path)
     baseline = write_baseline.capture(root, [rel])
     assert baseline == {rel: raw}
@@ -120,7 +121,7 @@ def _unwritten(tmp_path, same):
     return write_baseline.unwritten(root, baseline, [rel]) == [rel]
 
 
-def _terminal_commit_no_change(tmp_path, same):
+def _terminal_commit_no_change(tmp_path, same) -> bool:
     """The unchanged CRLF path whose index holds its LF form routes 'revise the ask', not 'predates the run'."""
     root, rel, _, raw = crlf_repo(tmp_path)
     if not same:
@@ -135,7 +136,7 @@ def _terminal_commit_no_change(tmp_path, same):
     return "revise the ask" in out["error"]
 
 
-def _hold_release(tmp_path, same):
+def _hold_release(tmp_path, same) -> bool:
     root, rel, _, raw = crlf_repo(tmp_path)
     if not same:
         raw = write_object(resolve_git_common_dir(root), b"blob", OTHER)
@@ -147,7 +148,7 @@ def _hold_release(tmp_path, same):
     return halted_hold_release.kept_at_head_paths(root, record, marker) == {rel}
 
 
-def _land_run_halt_differs(tmp_path, same):
+def _land_run_halt_differs(tmp_path, same) -> bool:
     root, rel, committed, _ = crlf_repo(tmp_path)
     entries = {rel: ("100644", committed if same else "1" * 40)}
     differ, gone = land_run_halt._differs(root, entries, [rel])
@@ -171,16 +172,16 @@ CASES = {
 
 
 @pytest.mark.parametrize("consumer", CASES)
-def test_crlf_file_reads_as_an_lf_file_does(consumer, tmp_path):
+def test_crlf_file_reads_as_an_lf_file_does(consumer, tmp_path: Path) -> None:
     assert CASES[consumer](tmp_path, True) is True
 
 
 @pytest.mark.parametrize("consumer", CASES)
-def test_different_content_still_reads_as_different(consumer, tmp_path):
+def test_different_content_still_reads_as_different(consumer, tmp_path: Path) -> None:
     assert CASES[consumer](tmp_path, False) is False
 
 
-def test_committed_sha_comes_from_the_real_filter_and_differs_from_the_raw_keep(tmp_path):
+def test_committed_sha_comes_from_the_real_filter_and_differs_from_the_raw_keep(tmp_path: Path) -> None:
     root, rel, committed, raw = crlf_repo(tmp_path)
     assert committed == git(root, "rev-parse", f"HEAD:{rel}") and committed != raw
     assert kept_work.fingerprint(root, rel) == raw

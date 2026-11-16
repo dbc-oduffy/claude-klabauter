@@ -14,6 +14,11 @@ import re
 from pathlib import Path
 
 import yaml
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _CLI_PATH = Path(__file__).resolve().parent.parent / "coordinator-doc-new.py"
 _SIZING_REL = "state/sizings/2026-10-01-fixture.yaml"
@@ -34,7 +39,7 @@ _REGISTER = (
 )
 
 
-def _cli():
+def _cli() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader("cdn_prep_gate_slots_test", str(_CLI_PATH))
     spec = importlib.util.spec_from_loader("cdn_prep_gate_slots_test", loader)
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
@@ -58,7 +63,7 @@ def _rows(text: str) -> list[dict]:
     return yaml.safe_load(re.search(r"```yaml plan-tasks\n(.*?)```", text, re.DOTALL).group(1))
 
 
-def test_with_register_seeds_every_slot(tmp_path, monkeypatch):
+def test_with_register_seeds_every_slot(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _scaffold(tmp_path, monkeypatch, _BASE + _REGISTER)
     fm = _fm(out)
     assert fm["anchor_premises"] == []
@@ -70,7 +75,7 @@ def test_with_register_seeds_every_slot(tmp_path, monkeypatch):
         assert row["body"].strip()
 
 
-def test_without_register_declares_empty_rows_and_no_claims(tmp_path, monkeypatch):
+def test_without_register_declares_empty_rows_and_no_claims(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _scaffold(tmp_path, monkeypatch, _BASE)
     fm = _fm(out)
     assert fm["anchor_premises"] == []
@@ -80,7 +85,7 @@ def test_without_register_declares_empty_rows_and_no_claims(tmp_path, monkeypatc
         assert row["body"].strip()
 
 
-def test_scaffold_without_sizing_still_carries_anchor_premises():
+def test_scaffold_without_sizing_still_carries_anchor_premises() -> None:
     out = _cli()._scaffold_plan(title="t", branch="main", author="a")
     assert _fm(out)["anchor_premises"] == []
     assert all("register_rows" not in r for r in _rows(out))

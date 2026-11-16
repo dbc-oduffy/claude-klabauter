@@ -47,7 +47,7 @@ def _drive(handoff: dict, agent_reply: dict) -> dict:
     return json.loads(out.stdout)
 
 
-def test_a_handoff_carrying_emit_error_emits_without_it_and_starts_the_fresh_chain():
+def test_a_handoff_carrying_emit_error_emits_without_it_and_starts_the_fresh_chain() -> None:
     chained = f"/r/scratch/warp/{_FRESH}.workflow.mjs"
     out = _drive({"ask": True, "sizing_path": "state/sizings/s.yaml", "emit_error": _EMIT_ERROR},
                  {"path": chained, "run_id": _FRESH, "fire_args": {}})
@@ -57,7 +57,7 @@ def test_a_handoff_carrying_emit_error_emits_without_it_and_starts_the_fresh_cha
     assert "emit_error" not in out["prompts"][0] and _EMIT_ERROR not in out["prompts"][0]
 
 
-def test_a_chain_emit_naming_the_ask_again_is_still_refused_unstarted():
+def test_a_chain_emit_naming_the_ask_again_is_still_refused_unstarted() -> None:
     out = _drive({"ask": True, "sizing_path": "state/sizings/s.yaml", "emit_error": _EMIT_ERROR},
                  {"path": _ASK_PATH, "run_id": _ASK, "fire_args": {}})
     assert out["started"] == []

@@ -21,6 +21,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.ops import cruft_sweep
+import pytest
 
 
 def _touch(path: Path) -> None:
@@ -35,12 +36,12 @@ class _FakeCompleted:
         self.stderr = b""
 
 
-def test_multi_target_batch_deletes_only_files_the_fake_rm_actually_touches(tmp_path, monkeypatch):
+def test_multi_target_batch_deletes_only_files_the_fake_rm_actually_touches(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     a, b, c = (tmp_path / n for n in ("a.txt", "b.txt", "c.txt"))
     for p in (a, b, c):
         _touch(p)
 
-    def _fake_run(argv, **kwargs):
+    def _fake_run(argv, **kwargs) -> _FakeCompleted:
         a.unlink(missing_ok=True)
         c.unlink(missing_ok=True)
         return _FakeCompleted(0)
@@ -53,7 +54,7 @@ def test_multi_target_batch_deletes_only_files_the_fake_rm_actually_touches(tmp_
     assert b.exists()
 
 
-def test_large_batch_is_split_into_fixed_size_chunks(tmp_path, monkeypatch):
+def test_large_batch_is_split_into_fixed_size_chunks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Regression pin for review finding amp-s1 #1: a batch bigger than
     `_DELETE_BATCH_CHUNK_SIZE` must be issued as multiple bounded
     subprocess calls, not one call timed out at `60s * N`. Before the fix
@@ -66,7 +67,7 @@ def test_large_batch_is_split_into_fixed_size_chunks(tmp_path, monkeypatch):
 
     calls = []
 
-    def _fake_run(argv, timeout=None, **kwargs):
+    def _fake_run(argv, timeout=None, **kwargs) -> _FakeCompleted:
         calls.append((len(argv) - 2, timeout))
         for a in argv[2:]:
             Path(a).unlink(missing_ok=True)
@@ -89,7 +90,7 @@ def test_large_batch_is_split_into_fixed_size_chunks(tmp_path, monkeypatch):
     assert not any(p.exists() for p in targets)
 
 
-def test_one_chunk_timing_out_does_not_stop_later_chunks(tmp_path, monkeypatch):
+def test_one_chunk_timing_out_does_not_stop_later_chunks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     n = cruft_sweep._DELETE_BATCH_CHUNK_SIZE + 2
     targets = [tmp_path / f"t{i}.txt" for i in range(n)]
     for p in targets:
@@ -97,7 +98,7 @@ def test_one_chunk_timing_out_does_not_stop_later_chunks(tmp_path, monkeypatch):
 
     call_n = {"i": 0}
 
-    def _fake_run(argv, timeout=None, **kwargs):
+    def _fake_run(argv, timeout=None, **kwargs) -> _FakeCompleted:
         call_n["i"] += 1
         if call_n["i"] == 1:
             raise cruft_sweep.subprocess.TimeoutExpired(cmd=argv, timeout=timeout)
@@ -117,7 +118,7 @@ def test_one_chunk_timing_out_does_not_stop_later_chunks(tmp_path, monkeypatch):
     assert not any(p.exists() for p in second_chunk)
 
 
-def test_chunk_timeout_is_clamped_to_the_watchdog_remainder(tmp_path, monkeypatch):
+def test_chunk_timeout_is_clamped_to_the_watchdog_remainder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A supplied watchdog's REMAINDER caps each chunk's bound, so stacking
     chunks cannot buy more time than the phase's own ceiling grants."""
     a, b = (tmp_path / n for n in ("a.txt", "b.txt"))
@@ -126,7 +127,7 @@ def test_chunk_timeout_is_clamped_to_the_watchdog_remainder(tmp_path, monkeypatc
 
     calls = []
 
-    def _fake_run(argv, timeout=None, **kwargs):
+    def _fake_run(argv, timeout=None, **kwargs) -> _FakeCompleted:
         calls.append(timeout)
         for t in argv[2:]:
             Path(t).unlink(missing_ok=True)
@@ -143,8 +144,8 @@ def test_chunk_timeout_is_clamped_to_the_watchdog_remainder(tmp_path, monkeypatc
 
 
 def test_exhausted_watchdog_skips_the_spawn_but_still_reports_every_target(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     a, b = (tmp_path / n for n in ("a.txt", "b.txt"))
     _touch(a)
     _touch(b)
@@ -162,7 +163,7 @@ def test_exhausted_watchdog_skips_the_spawn_but_still_reports_every_target(
     assert a.exists()
 
 
-def test_watchdog_env_knob_may_lower_the_ceiling_but_never_raise_it(monkeypatch):
+def test_watchdog_env_knob_may_lower_the_ceiling_but_never_raise_it(monkeypatch: pytest.MonkeyPatch) -> None:
     """DR-349 § 3: `CRUFT_SWEEP_WATCHDOG_CEILING_SECS` is narrow-only. A stale
     `export` in a sibling repo must not be able to grant this sweep more of a
     box already carrying 50-70 concurrent sessions."""
@@ -181,6 +182,6 @@ def test_watchdog_env_knob_may_lower_the_ceiling_but_never_raise_it(monkeypatch)
     assert cruft_sweep._resolve_watchdog_ceiling_secs() == default
 
 
-def test_watchdog_remaining_is_floored_at_zero():
+def test_watchdog_remaining_is_floored_at_zero() -> None:
     assert cruft_sweep._Watchdog(ceiling_secs=-10.0).remaining() == 0.0
     assert cruft_sweep._Watchdog(ceiling_secs=30.0).remaining() > 0.0

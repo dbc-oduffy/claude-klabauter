@@ -71,6 +71,34 @@ def test_ambiguous_run_dir_writes_nothing_and_does_not_fail(tmp_path, monkeypatc
     assert not (root / RECORD_DIR_ROOT / RUN / "usage.json").exists()
 
 
+def test_marker_stamps_as_of_without_locating_and_keeps_an_existing_body(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import terminal_commit_closeout as closeout
+    from coordinator_core.usage import run_locate
+
+    root = _stage(tmp_path, monkeypatch)
+
+    def boom(*_a, **_k):
+        raise AssertionError("marker must not locate")
+
+    monkeypatch.setattr(run_locate, "locate_run_dir", boom)
+    target = root / RECORD_DIR_ROOT / RUN / "usage.json"
+    reply = closeout._stamp_usage_marker(root, RUN)
+    assert reply["usage_total"] is None and reply["usage_reason"]
+    assert json.loads(target.read_text(encoding="utf-8")) == {"as_of": "terminal-commit", "unsettled": []}
+    target.write_text(json.dumps({"as_of": "x", "run_total": {"total_tokens": 7}}), encoding="utf-8")
+    closeout._stamp_usage_marker(root, RUN)
+    assert json.loads(target.read_text(encoding="utf-8")) == {"as_of": "terminal-commit", "run_total": {"total_tokens": 7}}
+
+
+def test_marker_never_raises(tmp_path, monkeypatch):
+    from coordinator_core.ops.dispatch_emit import terminal_commit_closeout as closeout
+
+    blocker = tmp_path / "file"
+    blocker.write_text("x", encoding="utf-8")
+    reply = closeout._stamp_usage_marker(blocker, RUN)
+    assert reply["usage_total"] is None and "failed" in reply["usage_reason"]
+
+
 @pytest.mark.parametrize("sid", [None, "", "no-such-session"])
 def test_unlocatable_session_is_null_with_reason(tmp_path, monkeypatch, sid):
     root = _stage(tmp_path, monkeypatch)

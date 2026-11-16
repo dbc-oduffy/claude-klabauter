@@ -16,7 +16,7 @@ windows_only = pytest.mark.skipif(os.name != "nt", reason="Windows console seman
 
 
 @pytest.fixture
-def recorded(monkeypatch):
+def recorded(monkeypatch: pytest.MonkeyPatch):
     import _winapi
 
     calls = []
@@ -24,7 +24,7 @@ def recorded(monkeypatch):
     return calls
 
 
-def _spawn(flags):
+def _spawn(flags) -> None:
     import _winapi
 
     _winapi.CreateProcess(None, "x", None, None, False, flags, None, None, None)
@@ -40,7 +40,7 @@ def _spawn(flags):
         (False, 0, 0),
     ],
 )
-def test_flag_added_only_when_console_less_and_unchosen(recorded, monkeypatch, no_console, flags, expected):
+def test_flag_added_only_when_console_less_and_unchosen(recorded, monkeypatch: pytest.MonkeyPatch, no_console, flags, expected) -> None:
     monkeypatch.setattr(wp, "_process_has_no_console", lambda: no_console)
     wp.install_console_less_spawn_default()
     _spawn(flags)
@@ -48,7 +48,7 @@ def test_flag_added_only_when_console_less_and_unchosen(recorded, monkeypatch, n
 
 
 @windows_only
-def test_install_is_idempotent(recorded, monkeypatch):
+def test_install_is_idempotent(recorded, monkeypatch: pytest.MonkeyPatch) -> None:
     import _winapi
 
     monkeypatch.setattr(wp, "_process_has_no_console", lambda: True)
@@ -59,7 +59,7 @@ def test_install_is_idempotent(recorded, monkeypatch):
 
 
 @windows_only
-def test_pythonw_parent_child_gets_windowless_console(tmp_path):
+def test_pythonw_parent_child_gets_windowless_console(tmp_path: Path) -> None:
     pythonw = Path(sys.executable).with_name("pythonw.exe")
     if not pythonw.is_file():
         pytest.skip("no pythonw.exe beside the interpreter")

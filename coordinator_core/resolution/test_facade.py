@@ -23,6 +23,7 @@ from coordinator_core.trusted_root_guard import (
     UntrustedRootError,
     coordinator_trusted_root_guard,
 )
+from pathlib import Path
 
 
 pytestmark = pytest.mark.complete
@@ -36,7 +37,7 @@ def _guard_env(**overrides):
     return base
 
 
-def test_resolve_operator_config_never_invokes_trust_guard(tmp_path, monkeypatch):
+def test_resolve_operator_config_never_invokes_trust_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(
         facade_module,
@@ -72,10 +73,10 @@ def test_resolve_operator_config_never_invokes_trust_guard(tmp_path, monkeypatch
     }
 
 
-def test_guard_plugin_root_always_routes_through_trust_guard(monkeypatch):
+def test_guard_plugin_root_always_routes_through_trust_guard(monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
 
-    def _spy(**kwargs):
+    def _spy(**kwargs) -> bool:
         calls.append(kwargs)
         return True
 
@@ -108,7 +109,7 @@ def test_guard_plugin_root_always_routes_through_trust_guard(monkeypatch):
         ("fail-open", "/tmp/some/plugin/dir", _guard_env(COORDINATOR_PLUGIN_ROOT_TRUSTED="1")),
     ],
 )
-def test_guard_plugin_root_matches_delegate_across_fixture_matrix(mode, root, env):
+def test_guard_plugin_root_matches_delegate_across_fixture_matrix(mode, root, env) -> None:
     try:
         expected = coordinator_trusted_root_guard(mode=mode, root=root, env=env)
     except UntrustedRootError:
@@ -119,7 +120,7 @@ def test_guard_plugin_root_matches_delegate_across_fixture_matrix(mode, root, en
     assert guard_plugin_root(root, mode=mode, env=env) == expected
 
 
-def test_guard_plugin_root_fail_loud_untrusted_raises_parity():
+def test_guard_plugin_root_fail_loud_untrusted_raises_parity() -> None:
     env = _guard_env()
     with pytest.raises(UntrustedRootError):
         coordinator_trusted_root_guard(mode="fail-loud", root="/tmp/evil", env=env)
@@ -127,7 +128,7 @@ def test_guard_plugin_root_fail_loud_untrusted_raises_parity():
         guard_plugin_root("/tmp/evil", mode="fail-loud", env=env)
 
 
-def test_guard_plugin_root_mode_empty_raises_value_error_parity():
+def test_guard_plugin_root_mode_empty_raises_value_error_parity() -> None:
     env = _guard_env()
     with pytest.raises(ValueError):
         coordinator_trusted_root_guard(mode="", root="/tmp/evil", env=env)
@@ -135,7 +136,7 @@ def test_guard_plugin_root_mode_empty_raises_value_error_parity():
         guard_plugin_root("/tmp/evil", mode="", env=env)
 
 
-def test_guard_plugin_root_mode_unrecognized_raises_value_error_parity():
+def test_guard_plugin_root_mode_unrecognized_raises_value_error_parity() -> None:
     env = _guard_env()
     with pytest.raises(ValueError):
         coordinator_trusted_root_guard(mode="fail-quiet", root="/tmp/evil", env=env)
@@ -143,7 +144,7 @@ def test_guard_plugin_root_mode_unrecognized_raises_value_error_parity():
         guard_plugin_root("/tmp/evil", mode="fail-quiet", env=env)
 
 
-def test_guard_plugin_root_content_root_sentinel_anchor_parity(tmp_path):
+def test_guard_plugin_root_content_root_sentinel_anchor_parity(tmp_path: Path) -> None:
     home = tmp_path
     (home / ".claude").mkdir()
     (home / ".claude" / ".coordinator-content-root").write_text(str(tmp_path / "content-clone") + "\n")
@@ -155,7 +156,7 @@ def test_guard_plugin_root_content_root_sentinel_anchor_parity(tmp_path):
     assert expected is True
 
 
-def test_guard_plugin_root_registry_content_root_anchor_parity(tmp_path):
+def test_guard_plugin_root_registry_content_root_anchor_parity(tmp_path: Path) -> None:
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     registry_root = tmp_path / "from-registry"
@@ -171,7 +172,7 @@ def test_guard_plugin_root_registry_content_root_anchor_parity(tmp_path):
     assert expected is True
 
 
-def test_guard_plugin_root_registry_claude_klabauter_anchor_parity(tmp_path):
+def test_guard_plugin_root_registry_claude_klabauter_anchor_parity(tmp_path: Path) -> None:
     settings_home_dir = tmp_path / "settings-home"
     (settings_home_dir / "machine-local").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
@@ -188,7 +189,7 @@ def test_guard_plugin_root_registry_claude_klabauter_anchor_parity(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows path-spelling normalization")
-def test_guard_plugin_root_windows_separator_and_case_normalization_parity(tmp_path):
+def test_guard_plugin_root_windows_separator_and_case_normalization_parity(tmp_path: Path) -> None:
     home = tmp_path
     (home / ".claude").mkdir()
     clone = tmp_path / "content-clone"
@@ -202,7 +203,7 @@ def test_guard_plugin_root_windows_separator_and_case_normalization_parity(tmp_p
 
 
 @pytest.mark.skipif(os.name != "nt", reason="Windows path-spelling normalization")
-def test_guard_plugin_root_windows_backslash_traversal_rejected_parity(tmp_path):
+def test_guard_plugin_root_windows_backslash_traversal_rejected_parity(tmp_path: Path) -> None:
     env = {"HOME": str(tmp_path)}
     root = str(tmp_path / ".claude") + "\\..\\..\\tmp\\evil"
 
@@ -231,7 +232,7 @@ def _happy_env(tmp_path):
     return env, settings_home, claude_klabauter_root, content_root
 
 
-def test_resolve_operator_config_happy_path(tmp_path):
+def test_resolve_operator_config_happy_path(tmp_path: Path) -> None:
     env, settings_home, claude_klabauter_root, content_root = _happy_env(tmp_path)
 
     result = resolve_operator_config(env=env)
@@ -245,8 +246,8 @@ def test_resolve_operator_config_happy_path(tmp_path):
 
 
 def test_resolve_operator_config_missing_claude_klabauter_root_registry_key_is_corrupt(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     env, settings_home, _claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)
     (settings_home / "machine-local" / "registry.local.toml").unlink()
 
@@ -264,7 +265,7 @@ def test_resolve_operator_config_missing_claude_klabauter_root_registry_key_is_c
         resolve_operator_config(env=env)
 
 
-def test_resolve_operator_config_whitespace_only_sentinel_is_corrupt(tmp_path):
+def test_resolve_operator_config_whitespace_only_sentinel_is_corrupt(tmp_path: Path) -> None:
     env, settings_home, _claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)
     (settings_home / "machine-local" / ".coordinator-content-root").write_text("   \n")
 
@@ -272,7 +273,7 @@ def test_resolve_operator_config_whitespace_only_sentinel_is_corrupt(tmp_path):
         resolve_operator_config(env=env)
 
 
-def test_resolve_operator_config_traversal_segment_is_corrupt(tmp_path):
+def test_resolve_operator_config_traversal_segment_is_corrupt(tmp_path: Path) -> None:
     env, settings_home, _claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)
     (settings_home / "machine-local" / ".coordinator-content-root").write_text(
         str(tmp_path / "content-clone" / ".." / "evil") + "\n"
@@ -282,7 +283,7 @@ def test_resolve_operator_config_traversal_segment_is_corrupt(tmp_path):
         resolve_operator_config(env=env)
 
 
-def test_resolve_operator_config_not_a_directory_is_corrupt(tmp_path):
+def test_resolve_operator_config_not_a_directory_is_corrupt(tmp_path: Path) -> None:
     env, settings_home, claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)
     not_a_dir = tmp_path / "not-a-real-directory"
     (settings_home / "machine-local" / "registry.local.toml").write_text(
@@ -294,8 +295,8 @@ def test_resolve_operator_config_not_a_directory_is_corrupt(tmp_path):
 
 
 def test_resolve_operator_config_embedded_newline_from_list_registry_value_is_corrupt(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     env, settings_home, claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)
     (settings_home / "machine-local" / "registry.local.toml").write_text(
         f"\"repos.claude_klabauter\" = '{claude_klabauter_root}'\n"
@@ -306,7 +307,7 @@ def test_resolve_operator_config_embedded_newline_from_list_registry_value_is_co
         resolve_operator_config(env=env)
 
 
-def test_resolve_operator_config_empty_content_root_with_legacy_pointer_resolves(tmp_path):
+def test_resolve_operator_config_empty_content_root_with_legacy_pointer_resolves(tmp_path: Path) -> None:
     env, settings_home, _claude_klabauter_root, content_root = _happy_env(tmp_path)
     ml = settings_home / "machine-local"
     (ml / ".coordinator-content-root").unlink()
@@ -319,7 +320,7 @@ def test_resolve_operator_config_empty_content_root_with_legacy_pointer_resolves
     assert result["content_root"] == str(content_root)
 
 
-def test_resolve_operator_config_unset_content_root_does_not_raise(tmp_path):
+def test_resolve_operator_config_unset_content_root_does_not_raise(tmp_path: Path) -> None:
     env, settings_home, _claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)
     (settings_home / "machine-local" / ".coordinator-content-root").unlink()
 
@@ -328,7 +329,7 @@ def test_resolve_operator_config_unset_content_root_does_not_raise(tmp_path):
     assert result["content_root"] == ""
 
 
-def test_resolve_operator_config_claude_klabauter_bin_missing_subdir_is_corrupt(tmp_path):
+def test_resolve_operator_config_claude_klabauter_bin_missing_subdir_is_corrupt(tmp_path: Path) -> None:
     env, settings_home, claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)
     shutil.rmtree(claude_klabauter_root / "coordinator" / "bin")
 
@@ -336,7 +337,7 @@ def test_resolve_operator_config_claude_klabauter_bin_missing_subdir_is_corrupt(
         resolve_operator_config(env=env)
 
 
-def test_resolve_operator_config_settings_home_whitespace_only_is_corrupt(tmp_path):
+def test_resolve_operator_config_settings_home_whitespace_only_is_corrupt(tmp_path: Path) -> None:
     # `COORDINATOR_SETTINGS_HOME` pointed
     env, _settings_home, _claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)
     env["COORDINATOR_SETTINGS_HOME"] = "   "
@@ -345,7 +346,7 @@ def test_resolve_operator_config_settings_home_whitespace_only_is_corrupt(tmp_pa
         resolve_operator_config(env=env)
 
 
-def test_resolve_operator_config_settings_home_nonexistent_is_corrupt(tmp_path):
+def test_resolve_operator_config_settings_home_nonexistent_is_corrupt(tmp_path: Path) -> None:
     # `COORDINATOR_SETTINGS_HOME` pointed
     env, _settings_home, _claude_klabauter_root, _content_root_dir = _happy_env(tmp_path)
     env["COORDINATOR_SETTINGS_HOME"] = str(tmp_path / "no-such-settings-home")
@@ -354,7 +355,7 @@ def test_resolve_operator_config_settings_home_nonexistent_is_corrupt(tmp_path):
         resolve_operator_config(env=env)
 
 
-def test_probe_engine_reachability_reachable_via_registry_reports_its_rung(tmp_path):
+def test_probe_engine_reachability_reachable_via_registry_reports_its_rung(tmp_path: Path) -> None:
     settings_home = tmp_path / "settings-home"
     (settings_home / "machine-local").mkdir(parents=True)
     claude_klabauter_root = tmp_path / "claude-klabauter"
@@ -372,7 +373,7 @@ def test_probe_engine_reachability_reachable_via_registry_reports_its_rung(tmp_p
     assert verdict.remediation is None
 
 
-def test_probe_engine_reachability_unreachable_names_runnable_remediation_script(tmp_path):
+def test_probe_engine_reachability_unreachable_names_runnable_remediation_script(tmp_path: Path) -> None:
     env = {
         "COORDINATOR_SETTINGS_HOME": str(tmp_path / "no-such-settings-home"),
         "HOME": str(tmp_path / "home"),
@@ -389,7 +390,7 @@ def test_probe_engine_reachability_unreachable_names_runnable_remediation_script
     assert "/coordinator:" not in verdict.remediation
 
 
-def test_probe_engine_reachability_stale_registry_value_to_missing_dir_is_unreachable(tmp_path):
+def test_probe_engine_reachability_stale_registry_value_to_missing_dir_is_unreachable(tmp_path: Path) -> None:
     settings_home = tmp_path / "settings-home"
     (settings_home / "machine-local").mkdir(parents=True)
     stale_root = tmp_path / "no-longer-on-disk"
@@ -404,7 +405,7 @@ def test_probe_engine_reachability_stale_registry_value_to_missing_dir_is_unreac
     assert verdict.remediation is not None
 
 
-def test_probe_engine_reachability_never_calls_trust_guard(tmp_path, monkeypatch):
+def test_probe_engine_reachability_never_calls_trust_guard(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     calls = []
     monkeypatch.setattr(
         facade_module,

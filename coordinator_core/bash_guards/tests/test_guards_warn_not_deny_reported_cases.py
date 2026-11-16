@@ -16,6 +16,7 @@ from coordinator_core.bash_guards._heavy_admission_contract import (
     ProcRow,
 )
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 BS = chr(92)
 
@@ -75,13 +76,13 @@ def _rewrites(envs) -> bool:
 
 
 @pytest.mark.parametrize("cmd", NOT_DENY)
-def test_reported_shape_warns_without_deny_or_rewrite(cmd, tmp_path):
+def test_reported_shape_warns_without_deny_or_rewrite(cmd, tmp_path: Path) -> None:
     envs = _run(cmd, tmp_path)
     assert not _denies(envs), envs
     assert not _rewrites(envs), envs
 
 
-def test_cd_git_show_pipeline_never_denies_and_rewrites_faithfully(tmp_path):
+def test_cd_git_show_pipeline_never_denies_and_rewrites_faithfully(tmp_path: Path) -> None:
     envs = _run("cd sub && git show HEAD:f | head", tmp_path)
     assert not _denies(envs), envs
     rewrites = [
@@ -102,12 +103,12 @@ def test_cd_git_show_pipeline_never_denies_and_rewrites_faithfully(tmp_path):
         "find /e /f/dev -maxdepth 4 -iname '*x*'",
     ],
 )
-def test_unbounded_root_find_still_denies(cmd, tmp_path):
+def test_unbounded_root_find_still_denies(cmd, tmp_path: Path) -> None:
     assert _denies(_run(cmd, tmp_path))
 
 
 @pytest.fixture()
-def _cap_host(tmp_path, monkeypatch):
+def _cap_host(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.bash_guards import _heavy_lease_store as leases
 
     claude = ProcRow(pid=100, ppid=1, ctime=10, name="claude.exe")
@@ -119,19 +120,19 @@ def _cap_host(tmp_path, monkeypatch):
     rows = [claude, tool, caller] + shells
 
     class _Prims:
-        def alive(self, pid, ctime):
+        def alive(self, pid, ctime) -> bool:
             return True
 
-        def creation_time(self, pid):
+        def creation_time(self, pid) -> None:
             return None
 
-        def parent(self, pid):
+        def parent(self, pid) -> None:
             return None
 
-        def image_name(self, pid):
+        def image_name(self, pid) -> None:
             return None
 
-        def snapshot(self):
+        def snapshot(self) -> list[ProcRow]:
             return rows
 
     from coordinator_core.bash_guards._heavy_admission_contract import MemoryReading
@@ -147,7 +148,7 @@ def _cap_host(tmp_path, monkeypatch):
     monkeypatch.delenv("CLAUDE_PID", raising=False)
 
 
-def test_session_cap_over_live_shells_warns_not_denies(_cap_host):
+def test_session_cap_over_live_shells_warns_not_denies(_cap_host) -> None:
     payload = {
         "tool_name": "Bash",
         "tool_input": {"command": "sleep 600", "run_in_background": True},

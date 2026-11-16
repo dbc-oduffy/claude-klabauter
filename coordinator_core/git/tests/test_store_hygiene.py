@@ -6,6 +6,7 @@ import stat
 import struct
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -14,7 +15,7 @@ from coordinator_core.git import store_hygiene as sh
 
 
 @pytest.fixture(autouse=True)
-def _unpaused(monkeypatch):
+def _unpaused(monkeypatch: pytest.MonkeyPatch) -> None:
     """These tests pin the unlink paths themselves; the paused behaviour is pinned in test_pack_deletion_pause."""
     monkeypatch.setattr(pack_deletion_pause, "PACK_DELETION_PAUSED", False)
 
@@ -22,7 +23,7 @@ def _unpaused(monkeypatch):
 pytestmark = pytest.mark.complete
 
 
-def _store(tmp_path, packs=0):
+def _store(tmp_path, packs: int = 0):
     pack_dir = tmp_path / "objects" / "pack"
     pack_dir.mkdir(parents=True)
     for i in range(packs):
@@ -31,25 +32,25 @@ def _store(tmp_path, packs=0):
     return pack_dir
 
 
-def _midx(pack_dir, n):
+def _midx(pack_dir, n) -> None:
     header = b"MIDX" + bytes([1, 1, 0, 0]) + struct.pack(">I", n)
     (pack_dir / "multi-pack-index").write_bytes(header + b"\0" * 32)
 
 
-def test_no_midx_is_none(tmp_path):
+def test_no_midx_is_none(tmp_path: Path) -> None:
     _store(tmp_path, packs=3)
     s = sh.status(tmp_path)
     assert (s.pack_count, s.midx_pack_count) == (3, None)
 
 
-def test_midx_covering_k_of_n(tmp_path):
+def test_midx_covering_k_of_n(tmp_path: Path) -> None:
     pack_dir = _store(tmp_path, packs=5)
     _midx(pack_dir, 2)
     s = sh.status(tmp_path)
     assert (s.pack_count, s.midx_pack_count) == (5, 2)
 
 
-def test_torn_or_foreign_header_is_none(tmp_path):
+def test_torn_or_foreign_header_is_none(tmp_path: Path) -> None:
     pack_dir = _store(tmp_path, packs=2)
     (pack_dir / "multi-pack-index").write_bytes(b"MIDX\x01\x01")
     assert sh.status(tmp_path).midx_pack_count is None
@@ -57,7 +58,7 @@ def test_torn_or_foreign_header_is_none(tmp_path):
     assert sh.status(tmp_path).midx_pack_count is None
 
 
-def test_loose_estimate_scales_one_sampled_fanout(tmp_path):
+def test_loose_estimate_scales_one_sampled_fanout(tmp_path: Path) -> None:
     _store(tmp_path)
     fan = tmp_path / "objects" / "00"
     fan.mkdir()
@@ -68,11 +69,11 @@ def test_loose_estimate_scales_one_sampled_fanout(tmp_path):
     assert (s.loose_dirs_sampled, s.loose_estimate) == (1, 3 * 256)
 
 
-def test_missing_store_is_zeroes(tmp_path):
+def test_missing_store_is_zeroes(tmp_path: Path) -> None:
     assert sh.status(tmp_path / "absent") == sh.StoreHygiene(0, None, 1, 0)
 
 
-def test_cli_prints_tuple_as_json(tmp_path, capsys):
+def test_cli_prints_tuple_as_json(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     pack_dir = _store(tmp_path / ".git", packs=2)
     _midx(pack_dir, 1)
     assert sh.main(["--repo", str(tmp_path)]) == 0
@@ -81,7 +82,7 @@ def test_cli_prints_tuple_as_json(tmp_path, capsys):
     assert sh.main([]) == 2
 
 
-def _repo(tmp_path, packs=0, fresh_liveness=True):
+def _repo(tmp_path, packs: int = 0, fresh_liveness: bool = True):
     from coordinator_core.ops.ceremony import housekeeping_liveness as hl
 
     repo = tmp_path / "repo"
@@ -94,22 +95,22 @@ def _repo(tmp_path, packs=0, fresh_liveness=True):
     return repo, common
 
 
-def test_no_commit_route_launcher_remains():
+def test_no_commit_route_launcher_remains() -> None:
     assert not hasattr(sh, "maybe_refresh") and not hasattr(sh, "_fire_daily")
 
 
-def test_healthy_store_owes_nothing(tmp_path):
+def test_healthy_store_owes_nothing(tmp_path: Path) -> None:
     repo, common = _repo(tmp_path, packs=3)
     assert sh._owes_maintenance(repo, common) is False
 
 
-def test_midx_lag_is_owed(tmp_path):
+def test_midx_lag_is_owed(tmp_path: Path) -> None:
     repo, common = _repo(tmp_path, packs=sh.STALE_PACK_SLACK + 5)
     _midx(common / "objects" / "pack", 1)
     assert sh._owes_maintenance(repo, common) is True
 
 
-def test_loose_growth_alone_is_owed(tmp_path):
+def test_loose_growth_alone_is_owed(tmp_path: Path) -> None:
     repo, common = _repo(tmp_path, packs=1)
     fan = common / "objects" / "00"
     fan.mkdir()
@@ -118,7 +119,7 @@ def test_loose_growth_alone_is_owed(tmp_path):
     assert sh._owes_maintenance(repo, common) is True
 
 
-def test_stale_liveness_is_owed(tmp_path):
+def test_stale_liveness_is_owed(tmp_path: Path) -> None:
     from coordinator_core.ops.ceremony import housekeeping_liveness as hl
 
     repo, common = _repo(tmp_path, packs=1)
@@ -127,30 +128,115 @@ def test_stale_liveness_is_owed(tmp_path):
     assert sh._owes_maintenance(repo, common) is True
 
 
-def test_daily_child_exits_early_when_nothing_is_owed(tmp_path, monkeypatch):
+def test_daily_child_exits_early_when_nothing_is_owed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import git_maintenance as gm
 
     repo, common = _repo(tmp_path, packs=3)
     monkeypatch.setattr(sh, "_box_busy", lambda: False)
-    monkeypatch.setattr(gm, "run_tier", lambda r, t: pytest.fail("tier ran with nothing owed"))
+    monkeypatch.setattr(gm, "run_tier", lambda r, t, **kw: pytest.fail("tier ran with nothing owed"))
     assert sh._run_daily(repo) == 0
 
 
-def test_daily_child_backs_off_on_a_busy_box_and_keeps_the_claim(tmp_path, monkeypatch):
+def test_daily_child_backs_off_on_a_busy_box_with_no_midx_upkeep_owed_and_keeps_the_claim(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from coordinator_core.ops import git_maintenance as gm
 
-    repo, common = _repo(tmp_path, packs=sh.STALE_PACK_SLACK + 5)
-    _midx(common / "objects" / "pack", 1)
+    repo, common = _repo(tmp_path, packs=1)
+    fan = common / "objects" / "00"
+    fan.mkdir()
+    for i in range(sh.STALE_LOOSE_SLACK // 256 + 1):
+        (fan / f"{i:038x}").write_bytes(b"x")
     claim = common / "coordinator" / "store-hygiene.claim"
     claim.parent.mkdir(parents=True, exist_ok=True)
     claim.write_bytes(b"")
     monkeypatch.setattr(sh, "_box_busy", lambda: True)
-    monkeypatch.setattr(gm, "run_tier", lambda r, t: pytest.fail("tier ran on a busy box"))
-    assert sh._run_daily(repo) == 0
+    monkeypatch.setattr(gm, "run_tier", lambda r, t, **kw: pytest.fail("tier ran on a busy box"))
+    assert sh._run_daily_outcome(repo) == (0, True)
     assert claim.exists()
 
 
-def test_box_busy_reads_cpu_load(monkeypatch):
+def _record_tier(monkeypatch: pytest.MonkeyPatch) -> list:
+    from coordinator_core.ops import git_maintenance as gm
+
+    calls: list = []
+    monkeypatch.setattr(
+        gm, "run_tier", lambda r, t, **kw: calls.append((t, kw.get("heavy", True))) or gm.MaintenanceResult(tier=t, ran=True)
+    )
+    return calls
+
+
+def test_busy_box_with_a_midx_behind_runs_the_light_daily_tier(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, common = _repo(tmp_path, packs=sh.STALE_PACK_SLACK + 5)
+    _midx(common / "objects" / "pack", 1)
+    stamp = common / "coordinator" / "store-hygiene.last-batch"
+    stamp.parent.mkdir()
+    stamp.write_bytes(b"")
+    old = time.time() - 100
+    os.utime(stamp, (old, old))
+    monkeypatch.setattr(sh, "_box_busy", lambda: True)
+    calls = _record_tier(monkeypatch)
+    assert sh._run_daily_outcome(repo) == (0, False)
+    assert calls == [("daily", False)]
+    assert stamp.stat().st_mtime == pytest.approx(old, abs=2)
+
+
+def test_busy_box_with_a_midx_naming_a_gone_pack_runs_the_light_daily_tier(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, common = _repo(tmp_path, packs=2)
+    _plant_midx(common / "objects" / "pack", [f"pack-{i:040x}.idx" for i in range(3)])
+    monkeypatch.setattr(sh, "_box_busy", lambda: True)
+    calls = _record_tier(monkeypatch)
+    assert sh._run_daily_outcome(repo) == (0, False)
+    assert calls == [("daily", False)]
+
+
+def test_busy_box_runs_the_batch_past_pack_count_force(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, common = _repo(tmp_path, packs=sh.PACK_COUNT_FORCE + 1)
+    monkeypatch.setattr(sh, "_box_busy", lambda: True)
+    calls = _record_tier(monkeypatch)
+    assert sh._run_daily_outcome(repo) == (0, False)
+    assert calls == [("daily", True)]
+    assert (common / "coordinator" / "store-hygiene.last-batch").exists()
+
+
+def test_busy_box_runs_the_batch_once_the_last_batch_is_older_than_the_defer_bound(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    repo, common = _repo(tmp_path, packs=sh.CONSOLIDATE_MAX_PACKS + 3)
+    stamp = common / "coordinator" / "store-hygiene.last-batch"
+    stamp.parent.mkdir()
+    stamp.write_bytes(b"")
+    monkeypatch.setattr(sh, "_box_busy", lambda: True)
+    calls = _record_tier(monkeypatch)
+    assert sh._run_daily_outcome(repo) == (0, True)
+    assert calls == []
+    old = time.time() - sh.CONSOLIDATE_MAX_DEFER_S - 5
+    os.utime(stamp, (old, old))
+    assert sh._run_daily_outcome(repo) == (0, False)
+    assert calls == [("daily", True)]
+    assert time.time() - stamp.stat().st_mtime < 60
+
+
+def test_paused_busy_box_runs_light_and_never_forces_the_batch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(pack_deletion_pause, "PACK_DELETION_PAUSED", True)
+    repo, common = _repo(tmp_path, packs=sh.PACK_COUNT_FORCE + 1)
+    _midx(common / "objects" / "pack", 1)
+    monkeypatch.setattr(sh, "_box_busy", lambda: True)
+    calls = _record_tier(monkeypatch)
+    assert sh._run_daily_outcome(repo) == (0, False)
+    assert calls == [("daily", False)]
+
+
+def test_idle_box_runs_the_heavy_daily_tier(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    repo, common = _repo(tmp_path, packs=sh.STALE_PACK_SLACK + 5)
+    _midx(common / "objects" / "pack", 1)
+    monkeypatch.setattr(sh, "_box_busy", lambda: False)
+    calls = _record_tier(monkeypatch)
+    assert sh._run_daily_outcome(repo) == (0, False)
+    assert calls == [("daily", True)]
+
+
+def test_box_busy_reads_cpu_load(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.telemetry import host_sampler
 
     monkeypatch.setattr(host_sampler, "read_load", lambda: {"cpu_load": sh.BUSY_CPU_LOAD})
@@ -161,7 +247,7 @@ def test_box_busy_reads_cpu_load(monkeypatch):
     assert sh._box_busy() is False
 
 
-def test_old_claim_is_reclaimed_and_young_claim_refuses(tmp_path):
+def test_old_claim_is_reclaimed_and_young_claim_refuses(tmp_path: Path) -> None:
     repo, common = _repo(tmp_path, packs=3)
     assert sh._claim(common) is True
     claim = common / "coordinator" / "store-hygiene.claim"
@@ -171,12 +257,12 @@ def test_old_claim_is_reclaimed_and_young_claim_refuses(tmp_path):
     assert sh._claim(common) is False
 
 
-def test_concurrent_claims_produce_one_winner(tmp_path):
+def test_concurrent_claims_produce_one_winner(tmp_path: Path) -> None:
     repo, common = _repo(tmp_path, packs=3)
     barrier = threading.Barrier(8)
     wins = []
 
-    def go():
+    def go() -> None:
         barrier.wait()
         wins.append(sh._claim(common))
 
@@ -186,7 +272,7 @@ def test_concurrent_claims_produce_one_winner(tmp_path):
     assert wins.count(True) == 1
 
 
-def test_release_claim_lets_the_next_claim_win(tmp_path):
+def test_release_claim_lets_the_next_claim_win(tmp_path: Path) -> None:
     repo, common = _repo(tmp_path, packs=3)
     assert sh._claim(common) is True
     sh._release_claim(common)
@@ -202,7 +288,7 @@ def _common(tmp_path):
     return common
 
 
-def _git_fixture(tmp_path, n, real_git=False):
+def _git_fixture(tmp_path, n, real_git: bool = False):
     import hashlib
     import subprocess
 
@@ -220,7 +306,7 @@ def _git_fixture(tmp_path, n, real_git=False):
     return tmp_path, common, shas
 
 
-def _forget_pack_caches():
+def _forget_pack_caches() -> None:
     from coordinator_core.git import git_objects as go
 
     go._PACK_LISTING_CACHE.clear()
@@ -229,7 +315,7 @@ def _forget_pack_caches():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_pack_batches_consolidate_200_engine_packs_and_keep_every_object(tmp_path):
+def test_pack_batches_consolidate_200_engine_packs_and_keep_every_object(tmp_path: Path) -> None:
     from coordinator_core.git import git_objects as go
 
     _, common, shas = _git_fixture(tmp_path, 200, real_git=True)
@@ -247,13 +333,13 @@ def test_pack_batches_consolidate_200_engine_packs_and_keep_every_object(tmp_pat
         assert go.read_object(common, sha) == ("blob", body)
 
 
-def test_consolidate_leaves_a_store_at_the_bound_alone(tmp_path):
+def test_consolidate_leaves_a_store_at_the_bound_alone(tmp_path: Path) -> None:
     _, common, _ = _git_fixture(tmp_path, sh.CONSOLIDATE_MAX_PACKS)
     assert sh.consolidate_pack_batch(common) == 0
     assert sh.status(common).pack_count == sh.CONSOLIDATE_MAX_PACKS
 
 
-def _sized_packs(common, n, nbytes):
+def _sized_packs(common, n, nbytes) -> list[tuple[str, bytes]]:
     import hashlib
 
     from coordinator_core.git import git_objects as go
@@ -268,7 +354,7 @@ def _sized_packs(common, n, nbytes):
 
 
 @pytest.mark.spawns_process
-def test_pack_batch_merges_packs_in_the_64kb_to_1mb_band_and_is_bounded(tmp_path):
+def test_pack_batch_merges_packs_in_the_64kb_to_1mb_band_and_is_bounded(tmp_path: Path) -> None:
     from coordinator_core.git import git_objects as go
 
     _, common, _ = _git_fixture(tmp_path, 0, real_git=True)
@@ -283,7 +369,7 @@ def test_pack_batch_merges_packs_in_the_64kb_to_1mb_band_and_is_bounded(tmp_path
         assert go.read_object(common, sha) == ("blob", body)
 
 
-def test_pack_batch_leaves_packs_at_or_over_the_floor_alone(tmp_path):
+def test_pack_batch_leaves_packs_at_or_over_the_floor_alone(tmp_path: Path) -> None:
     common = _common(tmp_path)
     _sized_packs(common, sh.CONSOLIDATE_MAX_PACKS + 3, sh.CONSOLIDATE_SIZE_FLOOR)
     assert sh.consolidate_pack_batch(common) == 0
@@ -291,7 +377,7 @@ def test_pack_batch_leaves_packs_at_or_over_the_floor_alone(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_pack_batch_stops_at_the_byte_bound(tmp_path, monkeypatch):
+def test_pack_batch_stops_at_the_byte_bound(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _, common, _ = _git_fixture(tmp_path, 0, real_git=True)
     n = sh.CONSOLIDATE_MAX_PACKS + 20
     _sized_packs(common, n, 200 * 1024)
@@ -302,7 +388,7 @@ def test_pack_batch_stops_at_the_byte_bound(tmp_path, monkeypatch):
 
 
 @pytest.mark.spawns_process
-def test_pack_batch_skips_keep_packs_and_drops_the_stale_midx(tmp_path):
+def test_pack_batch_skips_keep_packs_and_rewrites_the_midx_in_its_locked_step(tmp_path: Path) -> None:
     _, common, _ = _git_fixture(tmp_path, sh.CONSOLIDATE_MAX_PACKS + 5, real_git=True)
     pack_dir = common / "objects" / "pack"
     kept = sorted(pack_dir.glob("*.idx"))[0]
@@ -313,10 +399,11 @@ def test_pack_batch_skips_keep_packs_and_drops_the_stale_midx(tmp_path):
     assert (pack_dir / "multi-pack-index").exists()
     assert sh.consolidate_pack_batch(common) > 0
     assert kept.exists() and kept.with_suffix(".pack").exists()
-    assert not (pack_dir / "multi-pack-index").exists()
+    assert (pack_dir / "multi-pack-index").exists()
+    assert not sh.midx_names_missing_pack(common)
 
 
-def test_deferred_tier_releases_the_claim_after_one_call(tmp_path, monkeypatch):
+def test_deferred_tier_releases_the_claim_after_one_call(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import git_maintenance as gm
 
     repo, common = _repo(tmp_path)
@@ -325,7 +412,7 @@ def test_deferred_tier_releases_the_claim_after_one_call(tmp_path, monkeypatch):
     claim.write_bytes(b"")
     calls = []
 
-    def deferred(r, tier):
+    def deferred(r, tier, **kw):
         calls.append(tier)
         return gm.MaintenanceResult(tier=tier, deferred="object-store lock is held")
 
@@ -338,14 +425,14 @@ def test_deferred_tier_releases_the_claim_after_one_call(tmp_path, monkeypatch):
     assert not hasattr(sh, "DEFER_RETRIES") and not hasattr(sh, "DEFER_RETRY_S")
 
 
-def test_ran_tier_keeps_the_claim(tmp_path, monkeypatch):
+def test_ran_tier_keeps_the_claim(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import git_maintenance as gm
 
     repo, common = _repo(tmp_path)
     claim = common / "coordinator" / "store-hygiene.claim"
     claim.parent.mkdir(parents=True, exist_ok=True)
     claim.write_bytes(b"")
-    monkeypatch.setattr(gm, "run_tier", lambda r, t: gm.MaintenanceResult(tier=t, ran=True))
+    monkeypatch.setattr(gm, "run_tier", lambda r, t, **kw: gm.MaintenanceResult(tier=t, ran=True))
     monkeypatch.setattr(sh, "_owes_maintenance", lambda r, c: True)
     monkeypatch.setattr(sh, "_box_busy", lambda: False)
     assert sh._run_daily(repo) == 0
@@ -363,7 +450,7 @@ with hold(Path(sys.argv[1]), wait_s=30.0, holder_label="test-holder"):
 
 
 @pytest.fixture()
-def foreign_holder(tmp_path):
+def foreign_holder(tmp_path: Path):
     """Start a real process holding the object-store lock of a common dir."""
     import subprocess
     import sys
@@ -424,7 +511,7 @@ _TRIPLET = ["pack-aaa.pack", "pack-aaa.idx", "pack-aaa.rev"]
 _UNKNOWN = ["claude-klabauter-tail", "claude-klabauter-tail", ".keepme", "pack-aaa.keep", "multi-pack-index.tmp"]
 
 
-def test_sweep_removes_each_aged_orphan_class(tmp_path):
+def test_sweep_removes_each_aged_orphan_class(tmp_path: Path) -> None:
     common = _common(tmp_path)
     live = _tmp_pack_files(common, _TRIPLET, 48 * 3600)
     unknown = _tmp_pack_files(common, _UNKNOWN, 48 * 3600)
@@ -436,14 +523,14 @@ def test_sweep_removes_each_aged_orphan_class(tmp_path):
     assert all(p.exists() for p in live + unknown)
 
 
-def test_sweep_keeps_young_orphans(tmp_path):
+def test_sweep_keeps_young_orphans(tmp_path: Path) -> None:
     common = _common(tmp_path)
     young = _tmp_pack_files(common, ["pack-bbb.rev", "pack-ccc.pack", *_STALE_NAMES], _YOUNG_S)
     assert sh.sweep_orphan_pack_files(common) == 0
     assert all(p.exists() for p in young)
 
 
-def test_sweep_clears_a_read_only_orphan(tmp_path):
+def test_sweep_clears_a_read_only_orphan(tmp_path: Path) -> None:
     common = _common(tmp_path)
     (orphan,) = _tmp_pack_files(common, ["pack-bbb.rev"], _AGED_S)
     os.chmod(orphan, stat.S_IREAD)
@@ -451,11 +538,11 @@ def test_sweep_clears_a_read_only_orphan(tmp_path):
     assert not orphan.exists()
 
 
-def test_sweep_on_a_missing_pack_dir_is_zero(tmp_path):
+def test_sweep_on_a_missing_pack_dir_is_zero(tmp_path: Path) -> None:
     assert sh.sweep_orphan_pack_files(_common(tmp_path)) == 0
 
 
-def _plant_midx(pack_dir, names):
+def _plant_midx(pack_dir, names) -> None:
     """A MIDX with a PNAM chunk naming `names`, in git's on-disk shape."""
     pnam = b"".join(n.encode() + b"\0" for n in names)
     pnam += b"\0" * (-len(pnam) % 4)
@@ -467,7 +554,7 @@ def _plant_midx(pack_dir, names):
     (pack_dir / "multi-pack-index").write_bytes(header + table + pnam + b"\0" * 8)
 
 
-def test_midx_names_missing_pack_reads_the_pnam_chunk(tmp_path):
+def test_midx_names_missing_pack_reads_the_pnam_chunk(tmp_path: Path) -> None:
     pack_dir = _store(tmp_path, packs=3)
     present = [f"pack-{i:040x}.idx" for i in range(3)]
     _plant_midx(pack_dir, present)
@@ -479,7 +566,7 @@ def test_midx_names_missing_pack_reads_the_pnam_chunk(tmp_path):
     assert sh.midx_names_missing_pack(tmp_path) is True
 
 
-def test_midx_names_missing_pack_is_false_without_a_usable_midx(tmp_path):
+def test_midx_names_missing_pack_is_false_without_a_usable_midx(tmp_path: Path) -> None:
     pack_dir = _store(tmp_path, packs=2)
     assert sh.midx_names_missing_pack(tmp_path) is False
     _midx(pack_dir, 9)
@@ -490,7 +577,7 @@ def test_midx_names_missing_pack_is_false_without_a_usable_midx(tmp_path):
 
 
 @pytest.fixture()
-def no_spawn_no_liveness(monkeypatch):
+def no_spawn_no_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     from coordinator_core.git import run
@@ -504,20 +591,20 @@ def no_spawn_no_liveness(monkeypatch):
     monkeypatch.setattr(hl, "liveness_status", refuse)
 
 
-def test_owed_by_threshold_is_false_under_both_slacks(tmp_path, no_spawn_no_liveness):
+def test_owed_by_threshold_is_false_under_both_slacks(tmp_path: Path, no_spawn_no_liveness) -> None:
     _, common = _repo(tmp_path, packs=3)
     fan = common / "objects" / "00"
     fan.mkdir()
     assert sh.owed_by_threshold(common) is False
 
 
-def test_owed_by_threshold_is_true_past_the_uncovered_pack_slack(tmp_path, no_spawn_no_liveness):
+def test_owed_by_threshold_is_true_past_the_uncovered_pack_slack(tmp_path: Path, no_spawn_no_liveness) -> None:
     _, common = _repo(tmp_path, packs=sh.STALE_PACK_SLACK + 5)
     _midx(common / "objects" / "pack", 4)
     assert sh.owed_by_threshold(common) is True
 
 
-def test_owed_by_threshold_is_true_past_the_loose_slack(tmp_path, no_spawn_no_liveness):
+def test_owed_by_threshold_is_true_past_the_loose_slack(tmp_path: Path, no_spawn_no_liveness) -> None:
     _, common = _repo(tmp_path, packs=1)
     fan = common / "objects" / "00"
     fan.mkdir()
@@ -526,7 +613,7 @@ def test_owed_by_threshold_is_true_past_the_loose_slack(tmp_path, no_spawn_no_li
     assert sh.owed_by_threshold(common) is True
 
 
-def test_owed_by_threshold_is_true_for_a_midx_naming_a_missing_pack(tmp_path, no_spawn_no_liveness):
+def test_owed_by_threshold_is_true_for_a_midx_naming_a_missing_pack(tmp_path: Path, no_spawn_no_liveness) -> None:
     _, common = _repo(tmp_path, packs=2)
     pack_dir = common / "objects" / "pack"
     _plant_midx(pack_dir, [f"pack-{i:040x}.idx" for i in range(2)])
@@ -535,7 +622,7 @@ def test_owed_by_threshold_is_true_for_a_midx_naming_a_missing_pack(tmp_path, no
     assert sh.owed_by_threshold(common) is True
 
 
-def test_owed_by_threshold_sees_aged_orphans_but_not_young_ones(tmp_path, no_spawn_no_liveness):
+def test_owed_by_threshold_sees_aged_orphans_but_not_young_ones(tmp_path: Path, no_spawn_no_liveness) -> None:
     _, common = _repo(tmp_path, packs=1)
     young = _tmp_pack_files(common, ["pack-bbb.rev"], _YOUNG_S)
     assert sh.owed_by_threshold(common) is False
@@ -543,7 +630,7 @@ def test_owed_by_threshold_sees_aged_orphans_but_not_young_ones(tmp_path, no_spa
     assert sh.owed_by_threshold(common) is True
 
 
-def test_owed_by_threshold_counts_small_packs_past_the_merge_bound(tmp_path, no_spawn_no_liveness):
+def test_owed_by_threshold_counts_small_packs_past_the_merge_bound(tmp_path: Path, no_spawn_no_liveness) -> None:
     _, common = _repo(tmp_path, packs=sh.CONSOLIDATE_MAX_PACKS)
     assert sh.owed_by_threshold(common) is False
     pack_dir = common / "objects" / "pack"
@@ -554,7 +641,7 @@ def test_owed_by_threshold_counts_small_packs_past_the_merge_bound(tmp_path, no_
     assert sh.owed_by_threshold(common) is True
 
 
-def test_owes_maintenance_is_the_threshold_or_stale_liveness(tmp_path, monkeypatch):
+def test_owes_maintenance_is_the_threshold_or_stale_liveness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, common = _repo(tmp_path, packs=1)
     monkeypatch.setattr(sh, "owed_by_threshold", lambda c: True)
     assert sh._owes_maintenance(repo, common) is True
@@ -562,19 +649,19 @@ def test_owes_maintenance_is_the_threshold_or_stale_liveness(tmp_path, monkeypat
     assert sh._owes_maintenance(repo, common) is False
 
 
-def test_daily_outcome_runs_the_tier_for_an_aged_orphan_on_an_otherwise_healthy_store(tmp_path, monkeypatch):
+def test_daily_outcome_runs_the_tier_for_an_aged_orphan_on_an_otherwise_healthy_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import git_maintenance as gm
 
     repo, common = _repo(tmp_path, packs=1)
     _tmp_pack_files(common, ["pack-bbb.rev"], _AGED_S)
     calls = []
     monkeypatch.setattr(sh, "_box_busy", lambda: False)
-    monkeypatch.setattr(gm, "run_tier", lambda r, t: calls.append(t) or gm.MaintenanceResult(tier=t, ran=True))
+    monkeypatch.setattr(gm, "run_tier", lambda r, t, **kw: calls.append(t) or gm.MaintenanceResult(tier=t, ran=True))
     assert sh._run_daily_outcome(repo) == (0, False)
     assert calls == ["daily"]
 
 
-def test_daily_outcome_does_nothing_for_young_orphans(tmp_path, monkeypatch):
+def test_daily_outcome_does_nothing_for_young_orphans(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, common = _repo(tmp_path, packs=1)
     young = _tmp_pack_files(common, ["pack-bbb.rev", *_STALE_NAMES], _YOUNG_S)
     monkeypatch.setattr(sh, "_box_busy", lambda: pytest.fail("sampled load with nothing owed"))
@@ -583,7 +670,7 @@ def test_daily_outcome_does_nothing_for_young_orphans(tmp_path, monkeypatch):
 
 
 @pytest.mark.spawns_process
-def test_daily_outcome_reports_deferral_for_busy_box_and_held_lock(tmp_path, monkeypatch, foreign_holder):
+def test_daily_outcome_reports_deferral_for_busy_box_and_held_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, foreign_holder) -> None:
     import subprocess
 
     repo, common = _repo(tmp_path)

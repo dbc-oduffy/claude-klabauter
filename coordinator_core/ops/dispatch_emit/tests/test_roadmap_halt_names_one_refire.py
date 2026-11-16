@@ -12,6 +12,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import halt_refire as hr
 from coordinator_core.ops.dispatch_emit.ask_roadmap import ROADMAP_STAGE_FN, compose_roadmap_script
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 
 def _script() -> str:
@@ -28,7 +29,7 @@ def _script() -> str:
     )
 
 
-def test_script_calls_finaliser_before_its_return():
+def test_script_calls_finaliser_before_its_return() -> None:
     s = _script()
     assert "function _refireNextAction()" in s
     call = s.index("  _refireNextAction();")
@@ -39,7 +40,7 @@ def test_script_calls_finaliser_before_its_return():
 @pytest.mark.cadence
 @pytest.mark.spawns_process
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
-def test_no_arm_no_halt_gate_reason_names_the_refire_call(tmp_path):
+def test_no_arm_no_halt_gate_reason_names_the_refire_call(tmp_path: Path) -> None:
     line = next(ln for ln in _script().splitlines() if ln.startswith("  if (_gate.halt || !_gate.arm)"))
     js = (
         "let _runId='run-1', _sizingRel='state/sizings/x.yaml', _halted=null;\n"
@@ -55,7 +56,7 @@ def test_no_arm_no_halt_gate_reason_names_the_refire_call(tmp_path):
 @pytest.mark.cadence
 @pytest.mark.spawns_process
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
-def test_no_arm_gate_halt_yields_refire_envelope(tmp_path):
+def test_no_arm_gate_halt_yields_refire_envelope(tmp_path: Path) -> None:
     s = _script()
     fn = re.search(r"function _refireNextAction\(\) \{.*?\n\}", s, re.S).group(0)
     footprint = re.search(r"function _withFootprint\(_call\) \{.*?\n\}", s, re.S).group(0)

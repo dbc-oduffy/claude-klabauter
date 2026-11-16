@@ -10,7 +10,10 @@ Denied, from the command text alone (zero spawns, no git config read):
 Allowed: `--dry-run` / `-n`, a refspec without `:`, a literal 40-hex source.
 Known uncovered shapes: `--mirror` and `--prune`.
 
-Override: `COORDINATOR_OVERRIDE_PUSH_DELETE=1` in the call's env.
+Sanctioned delete route: the `delete-only` directive of `consolidate-assemble`
+(`consolidate_assemble/apply.py`), which refuses a tip that is not an ancestor of HEAD.
+Override: `COORDINATOR_OVERRIDE_PUSH_DELETE=1` in the call's env, for a delete
+that route does not cover.
 """
 
 from __future__ import annotations
@@ -70,19 +73,27 @@ def _offending_refspec(args: List[str]) -> Optional[str]:
 
 
 def _deny_record(offender: str) -> Any:
-    from coordinator_core.guard_messages.alternative_record import AlternativeRecord, EscalationRoute
+    from coordinator_core.guard_messages.alternative_record import (
+        AlternativeRecord,
+        EscalationRoute,
+        Override,
+    )
 
     summary = f"BLOCKED: `git push` with {offender} can delete a remote branch. {ANCHOR}."
     return AlternativeRecord(
         verdict_kind="deny",
         guard_name="block-empty-source-push",
         summary=summary,
-        em_text=f"{summary} Alternative: push an explicit 40-char sha or branch name.",
+        em_text=(
+            f"{summary} Alternative: push an explicit 40-char sha or branch name; "
+            "to delete a merged remote branch, run its consolidate-assemble delete-only directive."
+        ),
         members=(
             EscalationRoute(
                 report_what="the branch the push was meant to update",
                 authorize_what="a human running the delete",
             ),
+            Override(env_var=OVERRIDE_ENV),
         ),
     )
 

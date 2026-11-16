@@ -28,6 +28,7 @@ import pytest
 from coordinator_core.session_hub_path import hub_for_common
 
 import coordinator_core.ipc as ipc
+from pathlib import Path
 
 
 def _fake_common_dir(tmp_path):
@@ -36,7 +37,7 @@ def _fake_common_dir(tmp_path):
     return common_dir
 
 
-def _sink(common_dir):
+def _sink(common_dir) -> Path:
     return hub_for_common(common_dir) / "logs" / "op-latency.jsonl"
 
 
@@ -44,7 +45,7 @@ def _read_entries(sink):
     return [json.loads(line) for line in sink.read_text(encoding="utf-8").splitlines()]
 
 
-def test_record_op_process_time_shape(tmp_path, monkeypatch):
+def test_record_op_process_time_shape(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     common_dir = _fake_common_dir(tmp_path)
     monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
 
@@ -76,7 +77,7 @@ def test_record_op_process_time_shape(tmp_path, monkeypatch):
     assert "elapsed_ms" not in entry
 
 
-def test_record_op_process_time_caller_defaults_to_none(tmp_path, monkeypatch):
+def test_record_op_process_time_caller_defaults_to_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A caller that omits `caller=` (pre-C16) gets `caller: null`, never a
     raise -- purely additive, same contract as `record_op_latency`'s own
     optional `caller` field."""
@@ -96,7 +97,7 @@ def test_record_op_process_time_caller_defaults_to_none(tmp_path, monkeypatch):
     assert entries[0]["caller"] is None
 
 
-def test_record_op_process_time_never_raises_on_unresolvable_repo(tmp_path, monkeypatch):
+def test_record_op_process_time_never_raises_on_unresolvable_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     blocking_file = tmp_path / "blocked"
     blocking_file.write_text("not a directory", encoding="utf-8")
     unwritable_common_dir = blocking_file / "impossible-child"
@@ -115,7 +116,7 @@ def test_record_op_process_time_never_raises_on_unresolvable_repo(tmp_path, monk
     )
 
 
-def test_record_op_process_time_no_repo_root_is_a_noop(tmp_path):
+def test_record_op_process_time_no_repo_root_is_a_noop(tmp_path: Path) -> None:
     # Must not raise even without a monkeypatched git_common_dir -- repo_root
     # falls back to Path.cwd() per _write_entry's own contract.
     ipc.record_op_process_time(
@@ -128,7 +129,7 @@ def test_record_op_process_time_no_repo_root_is_a_noop(tmp_path):
     )
 
 
-def test_unrecognised_measurement_scope_coerced_not_raised(tmp_path, monkeypatch):
+def test_unrecognised_measurement_scope_coerced_not_raised(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     common_dir = _fake_common_dir(tmp_path)
     monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
 
@@ -145,7 +146,7 @@ def test_unrecognised_measurement_scope_coerced_not_raised(tmp_path, monkeypatch
     assert entries[0]["measurement_scope"] == "unknown"
 
 
-def test_process_time_rows_excluded_from_cost_census_hot_path_percentiles(tmp_path, monkeypatch):
+def test_process_time_rows_excluded_from_cost_census_hot_path_percentiles(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A `kind: "process_time"` row must never enter `cost_census`'s
     `elapsed_ms_by_op` population -- it lacks `elapsed_ms` entirely and its
     `kind` fails the module's existing `kind != "complete"` skip, so no
@@ -181,7 +182,7 @@ def test_process_time_rows_excluded_from_cost_census_hot_path_percentiles(tmp_pa
     assert summary["n"] == 1
 
 
-def test_pool_dispatch_worker_records_per_op_process_time(tmp_path, monkeypatch):
+def test_pool_dispatch_worker_records_per_op_process_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`_pool_dispatch_worker` runs `asyncio.run(dispatch_message(...))`
     entirely inside its own process -- the C9 row's per-op-CPU claim for the
     pool-worker path. Asserts the emitted row's scope and source_path,
@@ -219,7 +220,7 @@ def test_pool_dispatch_worker_records_per_op_process_time(tmp_path, monkeypatch)
     assert captured_caller["caller"] == "coordinator_core.warm.server._pool_dispatch_worker"
 
 
-def test_run_dispatch_records_process_wide_process_time(tmp_path, monkeypatch):
+def test_run_dispatch_records_process_wide_process_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`_run_dispatch` (the accept-process connection-thread path) must
     label its process-time row `MEASUREMENT_SCOPE_PROCESS_WIDE`, never
     `PER_OP_PROCESS` — `WORKER_POOL_SIZE` threads there share one
@@ -253,7 +254,7 @@ def test_run_dispatch_records_process_wide_process_time(tmp_path, monkeypatch):
     assert captured_caller["caller"] == "coordinator_core.warm.server._run_dispatch"
 
 
-def test_dispatch_from_hook_records_per_op_process_time_one_shot_cli(tmp_path, monkeypatch):
+def test_dispatch_from_hook_records_per_op_process_time_one_shot_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     common_dir = _fake_common_dir(tmp_path)
     monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
     monkeypatch.setattr(ipc, "_STAMP_GATE_ARMED", False)
@@ -277,8 +278,8 @@ def test_dispatch_from_hook_records_per_op_process_time_one_shot_cli(tmp_path, m
     assert captured_caller["caller"] == "coordinator_core.ipc.dispatch_from_hook"
 
 def test_dispatch_from_hook_process_time_row_shares_corr_id_with_started_row(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Regression, 2026-08-25-a-process-time-row-cannot-be-joined-to-its-own:
     dispatch_from_hook's own process_time row must carry the SAME corr_id as
     the started/complete rows dispatch_message records for the same call, so
@@ -301,7 +302,7 @@ def test_dispatch_from_hook_process_time_row_shares_corr_id_with_started_row(
     assert process_time[0]["corr_id"] == started[0]["corr_id"]
 
 
-def test_run_dispatch_process_time_row_shares_corr_id_with_started_row(tmp_path, monkeypatch):
+def test_run_dispatch_process_time_row_shares_corr_id_with_started_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`_run_dispatch`'s own process_time row (source_path "accept_thread")
     must carry the SAME corr_id as the started/complete rows dispatch_message
     records for the same call, so a CPU sample can be joined to the
@@ -331,8 +332,8 @@ def test_run_dispatch_process_time_row_shares_corr_id_with_started_row(tmp_path,
 
 
 def test_pool_dispatch_worker_process_time_row_shares_corr_id_with_started_row(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """`_pool_dispatch_worker`'s own process_time row (source_path
     "pool_worker") must carry the SAME corr_id as the started/complete rows
     dispatch_message records for the same call, so a CPU sample can be joined
@@ -361,7 +362,7 @@ def test_pool_dispatch_worker_process_time_row_shares_corr_id_with_started_row(
     assert process_time[0]["corr_id"] == started[0]["corr_id"]
 
 
-def test_process_time_rows_carry_a_session_id(tmp_path, monkeypatch):
+def test_process_time_rows_carry_a_session_id(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A process-time row must be joinable to the session that produced it.
 
     Regression, 2026-08-25. Every `process_time`-kind row in the live sink
@@ -378,7 +379,7 @@ def test_process_time_rows_carry_a_session_id(tmp_path, monkeypatch):
     assert _telemetry_sid() == "sid-under-test"
 
 
-def test_telemetry_sid_never_raises(monkeypatch):
+def test_telemetry_sid_never_raises(monkeypatch: pytest.MonkeyPatch) -> None:
     """Telemetry must never break dispatch -- a null sid beats a raise."""
     import coordinator_core.session.core as _core
 
@@ -391,7 +392,7 @@ def test_telemetry_sid_never_raises(monkeypatch):
     assert _telemetry_sid() is None
 
 
-def test_invoke_cli_dispatch_records_a_process_time_row(tmp_path, monkeypatch):
+def test_invoke_cli_dispatch_records_a_process_time_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The `coordinator_core.invoke` CLI branch samples process time too.
 
     Regression, 2026-08-25. Four dispatch sites sampled process time -- two in
@@ -428,7 +429,7 @@ def test_invoke_cli_dispatch_records_a_process_time_row(tmp_path, monkeypatch):
     assert "elapsed_ms" not in entries[0]
 
 
-def test_invoke_cli_process_time_never_breaks_dispatch(tmp_path, monkeypatch):
+def test_invoke_cli_process_time_never_breaks_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Telemetry failure on the CLI path costs a row, never the envelope."""
     monkeypatch.setattr(
         "coordinator_core.lifecycle.git_common_dir",
@@ -442,7 +443,7 @@ def test_invoke_cli_process_time_never_breaks_dispatch(tmp_path, monkeypatch):
     _record_dispatch_process_time(None, 1.0, 0.0)  # type: ignore[arg-type]
 
 
-def test_invoke_cli_cold_branch_still_calls_the_recorder():
+def test_invoke_cli_cold_branch_still_calls_the_recorder() -> None:
     """Pins the CALL, not just the helper.
 
     The helper passing its own unit test proves nothing if a future edit to the
@@ -466,7 +467,7 @@ def test_invoke_cli_cold_branch_still_calls_the_recorder():
 # --- C1 caller-provenance stamp (2026-08-25-reconcile-open-comes-back-under-the-bar) ---
 
 
-def test_caller_module_reports_the_calling_test_module():
+def test_caller_module_reports_the_calling_test_module() -> None:
     """Called directly (no dispatch chokepoint in between), `caller_module()`
     must name THIS test module -- it is not itself skipped, since it is not
     `coordinator_core.ipc`/`coordinator_core.telemetry.op_latency`/`asyncio`."""
@@ -475,7 +476,7 @@ def test_caller_module_reports_the_calling_test_module():
     assert caller_module() == __name__
 
 
-def test_caller_module_skips_the_ipc_dispatch_chokepoint(tmp_path, monkeypatch):
+def test_caller_module_skips_the_ipc_dispatch_chokepoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A row recorded via `ipc.dispatch_message` must attribute to the module
     that called `dispatch_message`, never to `coordinator_core.ipc` itself --
     the whole point `_CALLER_SKIP_PREFIXES` exists to enforce."""
@@ -502,7 +503,7 @@ def test_caller_module_skips_the_ipc_dispatch_chokepoint(tmp_path, monkeypatch):
     assert started[0]["corr_id"] == complete[0]["corr_id"]
 
 
-def test_record_op_latency_and_started_carry_an_optional_caller_field(tmp_path, monkeypatch):
+def test_record_op_latency_and_started_carry_an_optional_caller_field(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """`caller` is purely additive -- an explicit value round-trips, and
     omitting it (pre-C1 callers) never raises and defaults to null."""
     from coordinator_core.telemetry.op_latency import record_op_latency, record_op_started
@@ -525,7 +526,7 @@ def test_record_op_latency_and_started_carry_an_optional_caller_field(tmp_path, 
     assert entries[1]["caller"] is None
 
 
-def test_caller_module_never_raises_at_the_top_of_the_stack(monkeypatch):
+def test_caller_module_never_raises_at_the_top_of_the_stack(monkeypatch: pytest.MonkeyPatch) -> None:
     """Defensive per the module's never-breaks-dispatch contract: a
     `sys._getframe` failure degrades to `None`, never a raised exception."""
     from coordinator_core.telemetry import op_latency
@@ -541,7 +542,7 @@ def test_caller_module_never_raises_at_the_top_of_the_stack(monkeypatch):
 # (2026-08-25-reconcile-open-comes-back-under-the-bar)
 
 
-def test_dispatch_message_explicit_caller_wins_over_the_stack_walk(tmp_path, monkeypatch):
+def test_dispatch_message_explicit_caller_wins_over_the_stack_walk(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A caller that declares itself via `dispatch_message(msg, caller=...)`
     is attributed to THAT declared string, never to the frame-walk's answer
     (which would otherwise resolve to this test module, per the test above)."""
@@ -565,7 +566,7 @@ def test_dispatch_message_explicit_caller_wins_over_the_stack_walk(tmp_path, mon
     assert started[0]["caller"] != __name__
 
 
-def test_dispatch_message_falls_back_to_the_walk_when_no_caller_declared(tmp_path, monkeypatch):
+def test_dispatch_message_falls_back_to_the_walk_when_no_caller_declared(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A caller that omits `caller=` (not yet migrated to declare itself)
     still gets SOME attribution via the retained `caller_module()` fallback
     -- the walk is dead code on the measured, migrated population, not a
@@ -585,7 +586,7 @@ def test_dispatch_message_falls_back_to_the_walk_when_no_caller_declared(tmp_pat
     assert started[0]["caller"] == __name__
 
 
-def test_caller_module_prefers_spec_name_over_dunder_name_for_a_main_frame():
+def test_caller_module_prefers_spec_name_over_dunder_name_for_a_main_frame() -> None:
     """The measured C15 finding: a module executed as the process entry point
     (`python -m ...`) carries `__name__ == "__main__"` in its OWN frame --
     a correct answer to "which module" and a useless one to "which call
@@ -598,7 +599,7 @@ def test_caller_module_prefers_spec_name_over_dunder_name_for_a_main_frame():
         name = "coordinator_core.invoke.__main__"
 
     class _FakeFrame:
-        def __init__(self, f_globals, f_back):
+        def __init__(self, f_globals, f_back) -> None:
             self.f_globals = f_globals
             self.f_back = f_back
 
@@ -620,8 +621,8 @@ def test_caller_module_prefers_spec_name_over_dunder_name_for_a_main_frame():
 
 
 def test_process_time_row_carries_no_per_row_clock_resolution_but_feeds_the_process_tick(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Nothing reads a per-row `clock_resolution_ms`, so none is written; the
     row's `process_ms` still feeds the process-wide observed tick that
     `op_budget_breaches` reports (see `process_clock_resolution_ms`)."""
@@ -647,7 +648,7 @@ def test_process_time_row_carries_no_per_row_clock_resolution_but_feeds_the_proc
     assert op_latency.process_clock_resolution_ms() == 1.0
 
 
-def test_spawns_key_present_when_spawns_passed(tmp_path, monkeypatch):
+def test_spawns_key_present_when_spawns_passed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     common_dir = _fake_common_dir(tmp_path)
     monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common_dir)
 
@@ -666,7 +667,7 @@ def test_spawns_key_present_when_spawns_passed(tmp_path, monkeypatch):
     assert entries[0]["spawns"] == 0
 
 
-def test_spawns_key_absent_when_not_passed(tmp_path, monkeypatch):
+def test_spawns_key_absent_when_not_passed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A null `spawns` reads as 'not counted', never as a substantive zero --
     the whole defect C1 exists to close. Key ABSENCE is the signal: a reader
     asks `"spawns" in row`, and no companion bool restates it (that flag was
@@ -688,7 +689,7 @@ def test_spawns_key_absent_when_not_passed(tmp_path, monkeypatch):
     assert "spawns" not in entries[0]
 
 
-def test_process_clock_resolution_ms_never_raises_and_memoizes(monkeypatch):
+def test_process_clock_resolution_ms_never_raises_and_memoizes(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.telemetry import op_latency
 
     monkeypatch.setattr(op_latency, "_PROCESS_CLOCK_RESOLUTION_MS", None)
@@ -719,7 +720,7 @@ def test_process_clock_resolution_ms_never_raises_and_memoizes(monkeypatch):
     assert op_latency.process_clock_resolution_ms() == 15.625
 
 
-def test_process_clock_resolution_ms_never_raises_on_a_broken_clock(monkeypatch):
+def test_process_clock_resolution_ms_never_raises_on_a_broken_clock(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.telemetry import op_latency
 
     monkeypatch.setattr(op_latency, "_PROCESS_CLOCK_RESOLUTION_MS", None)
@@ -731,7 +732,7 @@ def test_process_clock_resolution_ms_never_raises_on_a_broken_clock(monkeypatch)
     assert op_latency.process_clock_resolution_ms() is None
 
 
-def test_caller_module_falls_back_to_dunder_name_when_spec_is_absent():
+def test_caller_module_falls_back_to_dunder_name_when_spec_is_absent() -> None:
     """A frame with no `__spec__` at all (e.g. code executed via `exec`, or
     an older/synthetic frame) must still resolve via the plain `__name__`
     lookup -- the `__spec__` preference is a strict widening, not a
@@ -739,7 +740,7 @@ def test_caller_module_falls_back_to_dunder_name_when_spec_is_absent():
     from coordinator_core.telemetry.op_latency import caller_module
 
     class _FakeFrame:
-        def __init__(self, f_globals, f_back):
+        def __init__(self, f_globals, f_back) -> None:
             self.f_globals = f_globals
             self.f_back = f_back
 

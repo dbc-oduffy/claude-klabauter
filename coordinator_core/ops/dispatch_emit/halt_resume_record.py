@@ -12,6 +12,7 @@ import hashlib
 import json
 import queue
 import threading
+import time
 from pathlib import Path
 from typing import Optional, Union
 
@@ -39,7 +40,7 @@ class _Sentinel:
 MISSING = _Sentinel("MISSING")
 STALLED = _Sentinel("STALLED")
 
-_inflight: set[str] = set()
+_inflight: dict[str, threading.Event] = {}
 _inflight_lock = threading.Lock()
 
 
@@ -77,20 +78,30 @@ def _run_on_worker(job) -> None:
 
 
 def bounded_read(
-    path: Union[str, Path], deadline_ms: float, max_bytes: int = DEFAULT_MAX_BYTES
+    path: Union[str, Path],
+    deadline_ms: float,
+    max_bytes: int = DEFAULT_MAX_BYTES,
+    await_inflight: bool = False,
 ) -> Union[bytes, _Sentinel]:
     """Bytes of `path`, `MISSING` when absent or unreadable, `OVERSIZE` when the file exceeds
     `max_bytes`, `STALLED` when the read outlives `deadline_ms`. The size check runs before the
     read, on the worker thread. The read runs on a daemon thread left to finish after a stall; at
     most one read per path is in flight, so a second call while one is outstanding returns
-    `STALLED` at once."""
+    `STALLED` at once. With `await_inflight` it instead waits, within `deadline_ms`, for that
+    outstanding read to finish and then reads with whatever deadline remains."""
     key = str(path)
-    with _inflight_lock:
-        if key in _inflight:
-            return STALLED
-        _inflight.add(key)
-    box: list = []
+    started = time.monotonic()
     done = threading.Event()
+    with _inflight_lock:
+        pending = _inflight.get(key)
+        if pending is None:
+            _inflight[key] = done
+    if pending is not None:
+        if not await_inflight or not pending.wait(max(deadline_ms, 0) / 1000.0):
+            return STALLED
+        remaining_ms = deadline_ms - (time.monotonic() - started) * 1000.0
+        return bounded_read(path, remaining_ms, max_bytes)
+    box: list = []
 
     def work() -> None:
         try:
@@ -105,14 +116,15 @@ def bounded_read(
             box.append(MISSING)
         finally:
             with _inflight_lock:
-                _inflight.discard(key)
+                _inflight.pop(key, None)
             done.set()
 
     try:
         _run_on_worker(work)
     except BaseException:
         with _inflight_lock:
-            _inflight.discard(key)
+            _inflight.pop(key, None)
+        done.set()
         return STALLED
     if not done.wait(max(deadline_ms, 0) / 1000.0):
         return STALLED
@@ -292,7 +304,7 @@ def claim_recompose(record_dir: Union[str, Path], now: float, ttl_s: float) -> b
     stamp = Path(record_dir) / BUILDING_FILE
     try:
         stamp.parent.mkdir(parents=True, exist_ok=True)
-        with stamp.open("x", encoding="utf-8") as fh:
+        with stamp.open("x", encoding="utf-8", newline="\n") as fh:
             fh.write(repr(now))
         return True
     except FileExistsError:
@@ -305,7 +317,7 @@ def claim_recompose(record_dir: Union[str, Path], now: float, ttl_s: float) -> b
     except (OSError, ValueError):
         pass
     try:
-        stamp.write_text(repr(now), encoding="utf-8")
+        stamp.write_text(repr(now), encoding="utf-8", newline="\n")
     except OSError:
         pass
     return True
@@ -449,11 +461,29 @@ def bounded_json_object(
     path: Union[str, Path], deadline_ms: float = JSON_READ_DEADLINE_MS, max_bytes: int = JSON_READ_MAX_BYTES
 ) -> Optional[dict]:
     """The JSON object in `path`; None when absent, unreadable, oversize, stalled, malformed or not an object."""
-    raw = bounded_read(path, deadline_ms, max_bytes)
+    got = bounded_json_state(path, deadline_ms, max_bytes)
+    return got if isinstance(got, dict) else None
+
+
+MALFORMED = _Sentinel("MALFORMED")
+
+
+def bounded_json_state(
+    path: Union[str, Path],
+    deadline_ms: float = JSON_READ_DEADLINE_MS,
+    max_bytes: int = JSON_READ_MAX_BYTES,
+    await_inflight: bool = False,
+) -> Union[dict, _Sentinel]:
+    """The JSON object in `path`, or why not: `MISSING` (absent or unreadable), `STALLED` (read past
+    `deadline_ms`), `MALFORMED` (oversize, not UTF-8 JSON, or not an object). `await_inflight` as in
+    `bounded_read`."""
+    raw = bounded_read(path, deadline_ms, max_bytes, await_inflight)
+    if raw is MISSING or raw is STALLED:
+        return raw
     if not isinstance(raw, bytes):
-        return None
+        return MALFORMED
     try:
         got = json.loads(raw.decode("utf-8"))
     except (UnicodeDecodeError, ValueError):
-        return None
-    return got if isinstance(got, dict) else None
+        return MALFORMED
+    return got if isinstance(got, dict) else MALFORMED

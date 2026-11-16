@@ -47,6 +47,61 @@ def test_agent_write_into_registered_sibling_is_denied(fleet):
     assert "run-repo" in out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
+def test_message_agrees_with_the_outcome_the_policy_point_enforces(fleet):
+    """The deny envelope is downgraded to an allow plus advisory, so its text may not claim a block."""
+    from coordinator_core.machine_profile import apply_guard_level
+
+    out = guard.check(_payload(fleet, fleet.sib / "src" / "merge_band_parts.py"))
+    reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+    assert not any(word in reason.lower() for word in ("blocked", "denied", "refused"))
+
+    enforced = apply_guard_level("block-cross-repo-agent-write", out)["hookSpecificOutput"]
+    assert enforced["permissionDecision"] == "allow"
+    assert "outside this run's repo" in enforced["additionalContext"]
+    assert "cross_repo_audit_writes" in enforced["additionalContext"]
+
+
+def test_audit_write_declared_in_the_brief_field_is_admitted_silently(fleet):
+    row = SimpleNamespace(
+        id="R1", writes=[], writes_under=(), cross_repo_audit_writes=[(fleet.sib / "docs").as_posix()]
+    )
+    check_cross_repo_writes([row], fleet.run, session_id=SESSION, env={"CLAUDECODE": "1"})
+    assert guard.check(_payload(fleet, fleet.sib / "docs" / "audit" / "findings.md")) is None
+    assert guard.check(_payload(fleet, fleet.sib / "src" / "other.py")) is not None
+
+
+def test_parsed_plan_row_audit_field_is_admitted_silently(fleet):
+    from coordinator_core.ops.dispatch_emit import ask_stage
+
+    plan = fleet.run / "docs" / "plans" / "p.md"
+    plan.parent.mkdir(parents=True)
+    text = f"""---
+title: fixture
+---
+# Fixture
+
+## Tasks
+
+```yaml plan-tasks
+- id: A1
+  title: audit a sibling
+  change_kind: code-edit
+  surface: pkg/a.py
+  writes:
+    - pkg/a.py
+  cross_repo_audit_writes:
+    - '{(fleet.sib / "docs").as_posix()}'
+```
+"""
+    plan.write_text(text, encoding="utf-8")
+    parse = ask_stage._parse_plan(fleet.run, plan, text)
+    check_cross_repo_writes(
+        parse.rows, fleet.run, session_id=SESSION, env={"CLAUDECODE": "1"}, raw_by_id=parse.raw_by_id
+    )
+    assert guard.check(_payload(fleet, fleet.sib / "docs" / "audit" / "findings.md")) is None
+    assert guard.check(_payload(fleet, fleet.sib / "src" / "other.py")) is not None
+
+
 def test_write_tool_and_relative_path_are_denied_too(fleet):
     rel = "../sib-repo/new_test.py"
     p = _payload(fleet, rel, tool_name="Write")

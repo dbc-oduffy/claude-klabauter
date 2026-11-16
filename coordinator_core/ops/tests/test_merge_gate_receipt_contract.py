@@ -28,6 +28,7 @@ from pathlib import Path
 from coordinator_core.ops import gate_dimension_review
 from coordinator_core.session.machinery_paths import share_root
 from coordinator_core.subagent_sandbox.provision_report import _splice_review_receipt
+import pytest
 
 _SHA = "c" * 40
 _SESSION = "aaaa1111-2222-3333-4444-555566667777"
@@ -78,7 +79,7 @@ def _check(monkeypatch, repo_root: Path, *, sha: str, committed_at: str, session
     )
 
 
-def test_credits_a_commit_the_real_writer_stamped_before_it(tmp_path, monkeypatch) -> None:
+def test_credits_a_commit_the_real_writer_stamped_before_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """THE POSITIVE CONTROL (1). A commit dated before `stamped_at`, whose
     Session-Id matches, is credited by a receipt rendered through the real
     writer -- PASS in the receipt-credited form, not the empty-population
@@ -96,7 +97,7 @@ def test_credits_a_commit_the_real_writer_stamped_before_it(tmp_path, monkeypatc
     assert "covered: all 1 commit(s)" in result.detail
 
 
-def test_removing_the_sidecar_fails_the_same_fixture(tmp_path, monkeypatch) -> None:
+def test_removing_the_sidecar_fails_the_same_fixture(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     result = _check(
         monkeypatch, tmp_path, sha=_SHA, committed_at="2026-09-20T11:00:00+00:00", session_id=_SESSION
     )
@@ -104,7 +105,7 @@ def test_removing_the_sidecar_fails_the_same_fixture(tmp_path, monkeypatch) -> N
     assert result.verdict == gate_dimension_review.Verdict.FAIL
 
 
-def test_does_not_credit_a_commit_authored_after_the_receipt(tmp_path, monkeypatch) -> None:
+def test_does_not_credit_a_commit_authored_after_the_receipt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     doc_text = _render_receipt_doc(
         session_id=_SESSION, agent_type="code-reviewer", stamped_at="2026-09-20T12:00:00+00:00"
     )
@@ -117,7 +118,7 @@ def test_does_not_credit_a_commit_authored_after_the_receipt(tmp_path, monkeypat
     assert result.verdict == gate_dimension_review.Verdict.FAIL
 
 
-def test_a_blank_body_sidecar_from_the_real_writer_does_not_credit(tmp_path, monkeypatch) -> None:
+def test_a_blank_body_sidecar_from_the_real_writer_does_not_credit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     doc_text = (
         "---\n"
         "agent_type: 'code-reviewer'\n"
@@ -136,7 +137,7 @@ def test_a_blank_body_sidecar_from_the_real_writer_does_not_credit(tmp_path, mon
     assert result.verdict == gate_dimension_review.Verdict.FAIL
 
 
-def test_a_non_reviewer_receipt_does_not_credit(tmp_path, monkeypatch) -> None:
+def test_a_non_reviewer_receipt_does_not_credit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """(4): a receipt stamped for agent_type `executor` gives FAIL --
     it integrates findings, it does not render a review verdict, and is not
     a `DELEGATE_REVIEWERS` member."""
@@ -152,7 +153,7 @@ def test_a_non_reviewer_receipt_does_not_credit(tmp_path, monkeypatch) -> None:
     assert result.verdict == gate_dimension_review.Verdict.FAIL
 
 
-def test_never_spawns_a_subprocess(tmp_path, monkeypatch) -> None:
+def test_never_spawns_a_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import subprocess
 
     def explode(*args, **kwargs):

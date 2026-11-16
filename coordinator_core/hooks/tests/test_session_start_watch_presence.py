@@ -4,40 +4,41 @@ import pytest
 
 from coordinator_core.hooks import session_start_watch_presence as mod
 from coordinator_core.ipc import _REGISTRY
+from pathlib import Path
 
 
-def test_op_registered():
+def test_op_registered() -> None:
     assert "hooks.session_start_watch_presence" in _REGISTRY
 
 
-def test_handler_silent_when_nothing_to_report(monkeypatch):
+def test_handler_silent_when_nothing_to_report(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod, "compute_context", lambda payload: None)
     result = mod._handler({})
     assert result.get("hookSpecificOutput", {}).get("additionalContext") is None
 
 
-def test_handler_returns_additional_context(monkeypatch):
+def test_handler_returns_additional_context(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod, "compute_context", lambda payload: "GROUP EM WATCH: armed")
     result = mod._handler({})
     assert "GROUP EM WATCH: armed" in result["hookSpecificOutput"]["additionalContext"]
     assert result["hookSpecificOutput"]["hookEventName"] == "SessionStart"
 
 
-def test_render_watch_line():
+def test_render_watch_line() -> None:
     assert mod.render_watch_line({"verdict": "armed"}) == "GROUP EM WATCH: armed"
     assert mod.render_watch_line({}) is None
 
 
-def test_render_presence_line_named_holder():
+def test_render_presence_line_named_holder() -> None:
     line = mod.render_presence_line({"holder_name": "em-alpha", "holder_session_id": "sid1"})
     assert line is not None and "em-alpha" in line
 
 
-def test_render_presence_line_absent():
+def test_render_presence_line_absent() -> None:
     assert mod.render_presence_line({"verdict": "absent"}) is None
 
 
-def _stamp_heartbeat(root, sid, now, ahead=300):
+def _stamp_heartbeat(root, sid, now, ahead: int = 300) -> None:
     import json
 
     from coordinator_core.group_em import watch_heartbeat as hb
@@ -58,7 +59,7 @@ def _stamp_heartbeat(root, sid, now, ahead=300):
 
 
 @pytest.fixture(autouse=True)
-def _no_real_roster(monkeypatch):
+def _no_real_roster(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(mod.nomination, "fleet_holder", lambda *a, **k: None)
 
 
@@ -71,7 +72,7 @@ _REMOTE = {
 }
 
 
-def test_stale_local_holder_with_live_remote_gem_names_the_remote_gem(monkeypatch, tmp_path):
+def test_stale_local_holder_with_live_remote_gem_names_the_remote_gem(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     stale = "1152426d-cb66-46bb-9a41-6de53e4f3a70"
@@ -82,14 +83,14 @@ def test_stale_local_holder_with_live_remote_gem_names_the_remote_gem(monkeypatc
     assert "vacant" not in out.lower() and stale not in out
 
 
-def test_no_local_holder_with_live_remote_gem_names_the_remote_gem(monkeypatch, tmp_path):
+def test_no_local_holder_with_live_remote_gem_names_the_remote_gem(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(mod.nomination, "box_holder", lambda *a, **k: None)
     monkeypatch.setattr(mod.nomination, "fleet_holder", lambda *a, **k: dict(_REMOTE))
     out = mod.compute_context({"cwd": str(tmp_path)})
     assert "group-em-56" in out and "GROUP EM WATCH: UNKNOWN" in out
 
 
-def test_live_local_holder_is_not_overridden_by_the_roster(monkeypatch, tmp_path):
+def test_live_local_holder_is_not_overridden_by_the_roster(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import time
 
     home = tmp_path / "home"
@@ -100,14 +101,14 @@ def test_live_local_holder_is_not_overridden_by_the_roster(monkeypatch, tmp_path
     assert "group-em-ad" in out and "GROUP EM WATCH: armed" in out and "group-em-56" not in out
 
 
-def test_local_fleet_holder_hit_is_not_treated_as_remote(monkeypatch, tmp_path):
+def test_local_fleet_holder_hit_is_not_treated_as_remote(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(mod.nomination, "box_holder", lambda *a, **k: None)
     monkeypatch.setattr(mod.nomination, "fleet_holder", lambda *a, **k: {**_REMOTE, "remote": False})
     out = mod.compute_context({"cwd": str(tmp_path)})
     assert "no live holder on record" in out and "group-em-56" not in out
 
 
-def _box(monkeypatch, root, sid="sid-live", live=True):
+def _box(monkeypatch, root, sid: str = "sid-live", live: bool = True) -> None:
     monkeypatch.setattr(
         mod.nomination,
         "box_holder",
@@ -115,7 +116,7 @@ def _box(monkeypatch, root, sid="sid-live", live=True):
     )
 
 
-def test_foreign_cwd_reads_the_gem_home_heartbeat(monkeypatch, tmp_path):
+def test_foreign_cwd_reads_the_gem_home_heartbeat(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import time
 
     home, foreign = tmp_path / "home", tmp_path / "foreign"
@@ -128,7 +129,7 @@ def test_foreign_cwd_reads_the_gem_home_heartbeat(monkeypatch, tmp_path):
     assert "group-em-ad" in from_foreign and "GROUP EM WATCH: armed" in from_foreign
 
 
-def test_missing_heartbeat_is_unknown_never_vacant(monkeypatch, tmp_path):
+def test_missing_heartbeat_is_unknown_never_vacant(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     home = tmp_path / "home"
     home.mkdir()
     _box(monkeypatch, home)
@@ -136,7 +137,7 @@ def test_missing_heartbeat_is_unknown_never_vacant(monkeypatch, tmp_path):
     assert "GROUP EM WATCH: UNKNOWN" in out and "vacant" not in out.lower()
 
 
-def test_expired_heartbeat_is_unknown_not_armed(monkeypatch, tmp_path):
+def test_expired_heartbeat_is_unknown_not_armed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import time
 
     home = tmp_path / "home"
@@ -146,7 +147,7 @@ def test_expired_heartbeat_is_unknown_not_armed(monkeypatch, tmp_path):
     assert "UNKNOWN" in out and "armed" not in out
 
 
-def test_heartbeat_of_another_holder_is_unknown(monkeypatch, tmp_path):
+def test_heartbeat_of_another_holder_is_unknown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import time
 
     home = tmp_path / "home"
@@ -156,7 +157,7 @@ def test_heartbeat_of_another_holder_is_unknown(monkeypatch, tmp_path):
     assert "UNKNOWN" in out and "armed" not in out
 
 
-def test_stale_record_holder_names_live_box_holder_never_vacant(monkeypatch, tmp_path):
+def test_stale_record_holder_names_live_box_holder_never_vacant(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import time
 
     home = tmp_path / "home"
@@ -169,7 +170,7 @@ def test_stale_record_holder_names_live_box_holder_never_vacant(monkeypatch, tmp
     assert stale not in out
 
 
-def test_dead_holder_is_unknown_and_unnamed(monkeypatch, tmp_path):
+def test_dead_holder_is_unknown_and_unnamed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import time
 
     home = tmp_path / "home"
@@ -179,7 +180,7 @@ def test_dead_holder_is_unknown_and_unnamed(monkeypatch, tmp_path):
     assert "UNKNOWN" in out and "armed" not in out and "group-em-ad" not in out
 
 
-def test_no_box_holder_stale_cwd_heartbeat_is_unknown(monkeypatch, tmp_path):
+def test_no_box_holder_stale_cwd_heartbeat_is_unknown(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import time
 
     monkeypatch.setattr(mod.nomination, "box_holder", lambda *a, **k: None)
@@ -188,11 +189,11 @@ def test_no_box_holder_stale_cwd_heartbeat_is_unknown(monkeypatch, tmp_path):
     assert "UNKNOWN" in out and "armed" not in out
 
 
-def test_render_uhura_line_none_record():
+def test_render_uhura_line_none_record() -> None:
     assert mod.render_uhura_line(None) is None
 
 
-def test_render_uhura_line_named_peer():
+def test_render_uhura_line_named_peer() -> None:
     line = mod.render_uhura_line({"peer_name": "uhura-1", "session_id": "sidX"})
     assert line == (
         "Uhura channel: uhura-1. Its relayed PM rulings carry the PM's "

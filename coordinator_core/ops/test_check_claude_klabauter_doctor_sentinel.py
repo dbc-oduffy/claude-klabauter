@@ -9,10 +9,11 @@ import time
 import pytest
 
 from coordinator_core.ops import check_claude_klabauter_doctor_sentinel as mod
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
-def _clean_env(monkeypatch):
+def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_CLAUDE_KLABAUTER_DOCTOR_STALE_SEC", raising=False)
 
 
@@ -27,7 +28,7 @@ def _write_sentinel(tmp_path, payload):
     return sentinel
 
 
-def test_sentinel_absent(tmp_path, monkeypatch, capsys):
+def test_sentinel_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(mod, "_claude_klabauter_root", lambda: tmp_path)
     rc = mod.main([])
     out = capsys.readouterr().out
@@ -35,7 +36,7 @@ def test_sentinel_absent(tmp_path, monkeypatch, capsys):
     assert "sentinel absent (doctor never run on this machine)" in out
 
 
-def test_green_fresh_is_silent(tmp_path, monkeypatch, capsys):
+def test_green_fresh_is_silent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _write_sentinel(tmp_path, {"verdict": "GREEN", "red_probes": [], "hint": "", "ts": int(time.time())})
     monkeypatch.setattr(mod, "_claude_klabauter_root", lambda: tmp_path)
     rc = mod.main([])
@@ -44,7 +45,7 @@ def test_green_fresh_is_silent(tmp_path, monkeypatch, capsys):
     assert out == ""
 
 
-def test_green_stale(tmp_path, monkeypatch, capsys):
+def test_green_stale(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _write_sentinel(
         tmp_path,
         {"verdict": "GREEN", "red_probes": [], "hint": "", "ts": int(time.time()) - 999999},
@@ -56,7 +57,7 @@ def test_green_stale(tmp_path, monkeypatch, capsys):
     assert "stale (last run 11d ago). Run python bin/claude-klabauter-doctor-probe.py --triage." in out
 
 
-def test_amber(tmp_path, monkeypatch, capsys):
+def test_amber(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _write_sentinel(
         tmp_path,
         {"verdict": "AMBER", "red_probes": ["p1"], "hint": "fix p1", "ts": int(time.time())},
@@ -68,7 +69,7 @@ def test_amber(tmp_path, monkeypatch, capsys):
     assert out.strip() == "[health] claude-klabauter-doctor: AMBER — fix p1. Run python bin/claude-klabauter-doctor-probe.py --triage to re-probe."
 
 
-def test_red(tmp_path, monkeypatch, capsys):
+def test_red(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _write_sentinel(
         tmp_path,
         {"verdict": "RED", "red_probes": ["p1", "p2"], "hint": "run doctor", "ts": int(time.time())},
@@ -80,7 +81,7 @@ def test_red(tmp_path, monkeypatch, capsys):
     assert out.strip() == "[health] claude-klabauter-doctor: RED (p1,p2) — run doctor. Run python bin/claude-klabauter-doctor-probe.py --triage for details."
 
 
-def test_malformed_json(tmp_path, monkeypatch, capsys):
+def test_malformed_json(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _write_sentinel(tmp_path, "not json")
     monkeypatch.setattr(mod, "_claude_klabauter_root", lambda: tmp_path)
     rc = mod.main([])
@@ -90,7 +91,7 @@ def test_malformed_json(tmp_path, monkeypatch, capsys):
     assert "malformed JSON?" in out
 
 
-def test_unknown_verdict(tmp_path, monkeypatch, capsys):
+def test_unknown_verdict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _write_sentinel(tmp_path, {"verdict": "PURPLE", "red_probes": [], "hint": "", "ts": int(time.time())})
     monkeypatch.setattr(mod, "_claude_klabauter_root", lambda: tmp_path)
     rc = mod.main([])
@@ -99,7 +100,7 @@ def test_unknown_verdict(tmp_path, monkeypatch, capsys):
     assert out.strip() == "[health] claude-klabauter-doctor: unknown verdict 'PURPLE'. Run python bin/claude-klabauter-doctor-probe.py --triage."
 
 
-def test_missing_ts(tmp_path, monkeypatch, capsys):
+def test_missing_ts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _write_sentinel(tmp_path, {"verdict": "GREEN", "red_probes": [], "hint": ""})
     monkeypatch.setattr(mod, "_claude_klabauter_root", lambda: tmp_path)
     rc = mod.main([])
@@ -108,7 +109,7 @@ def test_missing_ts(tmp_path, monkeypatch, capsys):
     assert out.strip() == "[health] claude-klabauter-doctor: sentinel ts unparseable. Run python bin/claude-klabauter-doctor-probe.py --triage."
 
 
-def test_custom_stale_sec_env(tmp_path, monkeypatch, capsys):
+def test_custom_stale_sec_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _write_sentinel(
         tmp_path,
         {"verdict": "GREEN", "red_probes": [], "hint": "", "ts": int(time.time()) - 999999},
@@ -121,7 +122,7 @@ def test_custom_stale_sec_env(tmp_path, monkeypatch, capsys):
     assert out == ""
 
 
-def test_non_dict_json_is_treated_as_malformed(tmp_path, monkeypatch, capsys):
+def test_non_dict_json_is_treated_as_malformed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _write_sentinel(tmp_path, [1, 2, 3])
     monkeypatch.setattr(mod, "_claude_klabauter_root", lambda: tmp_path)
     rc = mod.main([])
@@ -130,7 +131,7 @@ def test_non_dict_json_is_treated_as_malformed(tmp_path, monkeypatch, capsys):
     assert "sentinel unreadable" in out
 
 
-def test_tolerant_of_sentinel_lacking_vendor_drift_key(tmp_path, monkeypatch, capsys):
+def test_tolerant_of_sentinel_lacking_vendor_drift_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _write_sentinel(
         tmp_path,
         {
@@ -149,7 +150,7 @@ def test_tolerant_of_sentinel_lacking_vendor_drift_key(tmp_path, monkeypatch, ca
     assert out == ""
 
 
-def test_tolerant_of_sentinel_carrying_vendor_drift_key(tmp_path, monkeypatch, capsys):
+def test_tolerant_of_sentinel_carrying_vendor_drift_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _write_sentinel(
         tmp_path,
         {
@@ -184,7 +185,7 @@ def test_tolerant_of_sentinel_carrying_vendor_drift_key(tmp_path, monkeypatch, c
     )
 
 
-def test_amber_advisory_only_renders_advisory_not_amber(tmp_path, monkeypatch, capsys):
+def test_amber_advisory_only_renders_advisory_not_amber(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """A non-required-only degradation (advisory_only=True) must render as
     ADVISORY, not the bare AMBER band a real prerequisite failure gets.
 
@@ -217,7 +218,7 @@ def test_amber_advisory_only_renders_advisory_not_amber(tmp_path, monkeypatch, c
     assert "AMBER" not in out
 
 
-def test_red_advisory_only_renders_advisory_not_red(tmp_path, monkeypatch, capsys):
+def test_red_advisory_only_renders_advisory_not_red(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _write_sentinel(
         tmp_path,
         {
@@ -241,7 +242,7 @@ def test_red_advisory_only_renders_advisory_not_red(tmp_path, monkeypatch, capsy
     assert "RED" not in out
 
 
-def test_amber_required_failure_still_renders_amber(tmp_path, monkeypatch, capsys):
+def test_amber_required_failure_still_renders_amber(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _write_sentinel(
         tmp_path,
         {"verdict": "AMBER", "red_probes": ["p1"], "hint": "fix p1", "ts": int(time.time())},
@@ -254,7 +255,7 @@ def test_amber_required_failure_still_renders_amber(tmp_path, monkeypatch, capsy
     assert "ADVISORY" not in out
 
 
-def test_red_required_failure_still_renders_red(tmp_path, monkeypatch, capsys):
+def test_red_required_failure_still_renders_red(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _write_sentinel(
         tmp_path,
         {
@@ -273,7 +274,7 @@ def test_red_required_failure_still_renders_red(tmp_path, monkeypatch, capsys):
     assert "ADVISORY" not in out
 
 
-def test_old_sentinel_lacking_advisory_only_key_renders_as_before(tmp_path, monkeypatch, capsys):
+def test_old_sentinel_lacking_advisory_only_key_renders_as_before(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """An OLD sentinel written before `advisory_only` existed (key wholly
     absent) must behave identically to today's pre-change behavior — no
     crash, no new ADVISORY band, plain AMBER."""

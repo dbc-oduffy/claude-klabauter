@@ -3,14 +3,16 @@ from __future__ import annotations
 
 from coordinator_core.session import harness_registry as hr
 from coordinator_core.session import peer_roster
+from pathlib import Path
+import pytest
 
 
 def _record(
     name,
     socket,
-    cwd="/repo",
-    pid=1,
-    start_epoch=1000.0,
+    cwd: str | None = "/repo",
+    pid: int = 1,
+    start_epoch: float = 1000.0,
     status=None,
 ):
     return hr.RegistryRecord(
@@ -24,7 +26,7 @@ def _record(
 
 
 class TestCwdFiltering:
-    def test_default_filters_to_current_repo_via_getcwd(self, monkeypatch):
+    def test_default_filters_to_current_repo_via_getcwd(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-57", "/sock/a.sock", cwd="/repo/claude-klabauter"),
             "sid-b": _record("other-12", "/sock/b.sock", cwd="/repo/other"),
@@ -36,7 +38,7 @@ class TestCwdFiltering:
         rows = peer_roster.build_roster()
         assert {r.session_id for r in rows} == {"sid-a"}
 
-    def test_named_sibling_repo_filters_correctly(self, monkeypatch):
+    def test_named_sibling_repo_filters_correctly(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-57", "/sock/a.sock", cwd="/repo/claude-klabauter"),
             "sid-b": _record("other-12", "/sock/b.sock", cwd="/repo/coordinator-content-repo"),
@@ -47,7 +49,7 @@ class TestCwdFiltering:
         rows = peer_roster.build_roster("/repo/coordinator-content-repo")
         assert {r.session_id for r in rows} == {"sid-b"}
 
-    def test_subdirectory_cwd_is_contained(self, monkeypatch):
+    def test_subdirectory_cwd_is_contained(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-57", "/sock/a.sock", cwd="/repo/claude-klabauter/sub/dir"),
         }
@@ -57,7 +59,7 @@ class TestCwdFiltering:
         rows = peer_roster.build_roster("/repo/claude-klabauter")
         assert {r.session_id for r in rows} == {"sid-a"}
 
-    def test_sibling_prefix_that_is_not_a_real_subdirectory_is_excluded(self, monkeypatch):
+    def test_sibling_prefix_that_is_not_a_real_subdirectory_is_excluded(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-a": _record("other", "/sock/a.sock", cwd="/repo/claude-klabauter-other"),
         }
@@ -68,8 +70,8 @@ class TestCwdFiltering:
         assert rows == []
 
     def test_symlinked_cwd_resolves_to_the_same_repo_as_a_real_root(
-        self, monkeypatch, tmp_path
-    ):
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
         real_root = tmp_path / "real_repo"
         real_root.mkdir()
         link_root = tmp_path / "link_repo"
@@ -84,7 +86,7 @@ class TestCwdFiltering:
         rows = peer_roster.build_roster(str(real_root))
         assert {r.session_id for r in rows} == {"sid-a"}
 
-    def test_missing_cwd_is_excluded_never_raises(self, monkeypatch):
+    def test_missing_cwd_is_excluded_never_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-a": _record(None, None, cwd=None),
         }
@@ -96,7 +98,7 @@ class TestCwdFiltering:
 
 
 class TestRefAddressStabilityUnderFiltering:
-    def test_filtered_out_session_still_widens_the_kept_sessions_ref(self, monkeypatch):
+    def test_filtered_out_session_still_widens_the_kept_sessions_ref(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # AC "Critical": ref/name-collision must be computed over the WHOLE
         # snapshot, never a filtered subset. Two sessions named identically
         # ("claude-klabauter-89") live in DIFFERENT repos -- filtering must not change
@@ -123,8 +125,8 @@ class TestRefAddressStabilityUnderFiltering:
         assert row.address.startswith("claude-klabauter-89 [")
 
     def test_ref_widening_survives_the_filtered_out_peer_being_absent_from_output(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         snap = {
             "sid-in": _record("claude-klabauter-89", "/sock/in.sock", cwd="/repo/claude-klabauter"),
             "sid-out": _record("claude-klabauter-89", "/sock/out.sock", cwd="/repo/other"),
@@ -139,7 +141,7 @@ class TestRefAddressStabilityUnderFiltering:
 
 
 class TestSelfRow:
-    def test_self_row_marked_explicitly(self, monkeypatch):
+    def test_self_row_marked_explicitly(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "self-sid": _record("claude-klabauter-84", "/sock/self.sock", cwd="/repo/claude-klabauter"),
             "peer-sid": _record("claude-klabauter-99", "/sock/peer.sock", cwd="/repo/claude-klabauter"),
@@ -152,7 +154,7 @@ class TestSelfRow:
         assert by_id["self-sid"].is_self is True
         assert by_id["peer-sid"].is_self is False
 
-    def test_no_self_record_marks_nothing_self(self, monkeypatch):
+    def test_no_self_record_marks_nothing_self(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-57", "/sock/a.sock", cwd="/repo/claude-klabauter"),
         }
@@ -164,7 +166,7 @@ class TestSelfRow:
         assert rows[0].is_self is False
         assert rows[0].self_determination == "unresolved"
 
-    def test_self_record_success_marks_resolved(self, monkeypatch):
+    def test_self_record_success_marks_resolved(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "self-sid": _record("claude-klabauter-84", "/sock/self.sock", cwd="/repo/claude-klabauter"),
             "peer-sid": _record("claude-klabauter-99", "/sock/peer.sock", cwd="/repo/claude-klabauter"),
@@ -178,8 +180,8 @@ class TestSelfRow:
         assert all(r.self_determination == "resolved" for r in rows)
 
     def test_self_record_none_falls_back_to_messaging_socket_env_match(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         # The reproduced live defect: `self_record()` declines (e.g. the
         # pid resolver's `env-miss:name-mismatch` leg) even though
         # `CLAUDE_PID` was correct -- the roster must still find `self` via
@@ -201,8 +203,8 @@ class TestSelfRow:
         assert all(r.self_determination == "resolved" for r in rows)
 
     def test_both_self_signals_absent_marks_unresolved_not_silently_no_self(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-57", "/sock/a.sock", cwd="/repo/claude-klabauter"),
         }
@@ -215,8 +217,8 @@ class TestSelfRow:
         assert rows[0].self_determination == "unresolved"
 
     def test_self_socket_env_empty_string_never_matches_none_socket(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         snap = {
             "sid-a": _record(None, None, cwd="/repo/claude-klabauter"),
         }
@@ -231,7 +233,7 @@ class TestSelfRow:
 
 class TestWarmServedSelfRow:
 
-    def test_carried_identity_wins_over_spawner_pid_match(self, monkeypatch):
+    def test_carried_identity_wins_over_spawner_pid_match(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.session import core as session_core
 
         caller_sid = "11111111-1111-1111-1111-111111111111"
@@ -258,8 +260,8 @@ class TestWarmServedSelfRow:
 
 class TestDegradedAddress:
     def test_missing_name_or_socket_degrades_to_none_address_never_bare_uuid(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         snap = {
             "sid-a": _record(None, None, cwd="/repo/claude-klabauter"),
         }
@@ -273,13 +275,13 @@ class TestDegradedAddress:
 
 
 class TestEmptyOrAbsentRegistry:
-    def test_empty_snapshot_yields_empty_roster_no_raise(self, monkeypatch):
+    def test_empty_snapshot_yields_empty_roster_no_raise(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(hr, "snapshot", lambda: {})
         monkeypatch.setattr(hr, "self_record", lambda: None)
 
         assert peer_roster.build_roster("/repo/claude-klabauter") == []
 
-    def test_snapshot_exception_degrades_to_empty_roster(self, monkeypatch):
+    def test_snapshot_exception_degrades_to_empty_roster(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _raise():
             raise RuntimeError("boom")
 
@@ -288,7 +290,7 @@ class TestEmptyOrAbsentRegistry:
 
         assert peer_roster.build_roster("/repo/claude-klabauter") == []
 
-    def test_self_record_exception_still_returns_rows(self, monkeypatch):
+    def test_self_record_exception_still_returns_rows(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-57", "/sock/a.sock", cwd="/repo/claude-klabauter"),
         }
@@ -305,7 +307,7 @@ class TestEmptyOrAbsentRegistry:
         assert rows[0].is_self is False
         assert rows[0].self_determination == "unresolved"
 
-    def test_snapshot_exception_reraised_when_raise_on_failure(self, monkeypatch):
+    def test_snapshot_exception_reraised_when_raise_on_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _raise():
             raise RuntimeError("registry unreadable")
 
@@ -317,7 +319,7 @@ class TestEmptyOrAbsentRegistry:
         with pytest.raises(RuntimeError, match="registry unreadable"):
             peer_roster.build_roster("/repo/claude-klabauter", raise_on_failure=True)
 
-    def test_self_record_exception_reraised_when_raise_on_failure(self, monkeypatch):
+    def test_self_record_exception_reraised_when_raise_on_failure(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-57", "/sock/a.sock", cwd="/repo/claude-klabauter"),
         }
@@ -334,14 +336,14 @@ class TestEmptyOrAbsentRegistry:
             peer_roster.build_roster("/repo/claude-klabauter", raise_on_failure=True)
 
     def test_empty_snapshot_still_returns_empty_list_even_with_raise_on_failure(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(hr, "snapshot", lambda: {})
         monkeypatch.setattr(hr, "self_record", lambda: None)
 
         assert peer_roster.build_roster("/repo/claude-klabauter", raise_on_failure=True) == []
 
-    def test_empty_snapshot_raises_when_raise_on_empty_snapshot(self, monkeypatch):
+    def test_empty_snapshot_raises_when_raise_on_empty_snapshot(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(hr, "snapshot", lambda: {})
         monkeypatch.setattr(hr, "self_record", lambda: None)
 
@@ -351,8 +353,8 @@ class TestEmptyOrAbsentRegistry:
             peer_roster.build_roster("/repo/claude-klabauter", raise_on_empty_snapshot=True)
 
     def test_empty_snapshot_still_returns_empty_list_by_default_when_raise_on_empty_snapshot_absent(
-        self, monkeypatch
-    ):
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         monkeypatch.setattr(hr, "snapshot", lambda: {})
         monkeypatch.setattr(hr, "self_record", lambda: None)
 
@@ -364,7 +366,7 @@ class TestEmptyOrAbsentRegistry:
 
 
 class TestStatusAndRunningSeconds:
-    def test_status_parsed_display_only(self, monkeypatch):
+    def test_status_parsed_display_only(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-57", "/sock/a.sock", cwd="/repo/claude-klabauter", status="busy"),
         }
@@ -374,7 +376,7 @@ class TestStatusAndRunningSeconds:
         rows = peer_roster.build_roster("/repo/claude-klabauter")
         assert rows[0].status == "busy"
 
-    def test_missing_status_is_none(self, monkeypatch):
+    def test_missing_status_is_none(self, monkeypatch: pytest.MonkeyPatch) -> None:
         snap = {
             "sid-a": _record("claude-klabauter-57", "/sock/a.sock", cwd="/repo/claude-klabauter"),
         }
@@ -384,7 +386,7 @@ class TestStatusAndRunningSeconds:
         rows = peer_roster.build_roster("/repo/claude-klabauter")
         assert rows[0].status is None
 
-    def test_running_seconds_is_a_plain_number(self, monkeypatch):
+    def test_running_seconds_is_a_plain_number(self, monkeypatch: pytest.MonkeyPatch) -> None:
         now = 2000.0
         snap = {
             "sid-a": _record(

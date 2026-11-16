@@ -12,25 +12,26 @@ import pytest
 
 from coordinator_core.hooks import postuse_advisory_dispatch as mod
 from coordinator_core.workflow_watch import stall
+from pathlib import Path
 
 SID = "sess-1"
 NOW = 2_000_000_000.0
 
 
 @pytest.fixture
-def tdir(tmp_path, monkeypatch):
+def tdir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     d = tmp_path / "tmp"
     d.mkdir()
     monkeypatch.setattr(mod, "_managed_tmpdir", lambda: str(d))
     return d
 
 
-def _age(path, seconds):
+def _age(path, seconds) -> None:
     t = NOW - seconds
     os.utime(path, (t, t))
 
 
-def _run(tmp_path, name, *, settled=False, transcript_age=7200):
+def _run(tmp_path, name, *, settled: bool = False, transcript_age: int = 7200):
     run_dir = tmp_path / name
     (run_dir / "subagents").mkdir(parents=True)
     events = [{"type": "started", "agentId": "a1", "key": "k1", "label": "scout"}]
@@ -45,11 +46,11 @@ def _run(tmp_path, name, *, settled=False, transcript_age=7200):
     return run_dir
 
 
-def _rec_path(tdir, session, task):
+def _rec_path(tdir, session, task) -> Path:
     return pathlib.Path(mod._workflow_run_record_path(str(tdir), session, task))
 
 
-def _record(tdir, run_dir, *, session=SID, task="t1", run="wf_1", fired_at=NOW - 3600, args=None):
+def _record(tdir, run_dir, *, session=SID, task: str = "t1", run: str = "wf_1", fired_at=NOW - 3600, args=None):
     rec = {
         "run_id": run, "scriptPath": "scripts/x.workflow.mjs",
         "args": {"repoRoot": str(tdir)} if args is None else args,
@@ -60,7 +61,7 @@ def _record(tdir, run_dir, *, session=SID, task="t1", run="wf_1", fired_at=NOW -
     return rec
 
 
-def test_stalled_run_names_original_call(tmp_path, tdir):
+def test_stalled_run_names_original_call(tmp_path: Path, tdir) -> None:
     rec = _record(tdir, _run(tmp_path, "r1"))
     text = mod.workflow_stall_resume_text(SID, "", NOW)
     assert stall.render_resume_call("wf_1", rec["scriptPath"], rec["args"], "t1") in text
@@ -68,29 +69,29 @@ def test_stalled_run_names_original_call(tmp_path, tdir):
     assert json.dumps(rec["args"]) in text
 
 
-def test_settled_run_yields_nothing(tmp_path, tdir):
+def test_settled_run_yields_nothing(tmp_path: Path, tdir) -> None:
     _record(tdir, _run(tmp_path, "r1", settled=True))
     assert mod.workflow_stall_resume_text(SID, "", NOW) == ""
 
 
-def test_fresh_transcript_yields_nothing(tmp_path, tdir):
+def test_fresh_transcript_yields_nothing(tmp_path: Path, tdir) -> None:
     _record(tdir, _run(tmp_path, "r1", transcript_age=10))
     assert mod.workflow_stall_resume_text(SID, "", NOW) == ""
 
 
-def test_stopped_marker_yields_nothing(tmp_path, tdir):
+def test_stopped_marker_yields_nothing(tmp_path: Path, tdir) -> None:
     _record(tdir, _run(tmp_path, "r1"))
     open(stall.stopped_marker_path(str(tdir), SID, "t1"), "w", encoding="utf-8").close()
     assert mod.workflow_stall_resume_text(SID, "", NOW) == ""
 
 
-def _transcript(tmp_path, text):
+def _transcript(tmp_path, text) -> str:
     p = tmp_path / "session.jsonl"
     p.write_text(text + "\n", encoding="utf-8")
     return str(p)
 
 
-def test_reaped_task_reported_once_then_silent(tmp_path, tdir):
+def test_reaped_task_reported_once_then_silent(tmp_path: Path, tdir) -> None:
     _record(tdir, _run(tmp_path, "r1"))
     tp = _transcript(tmp_path, json.dumps({"content": "Error: No task found with ID: t1"}))
     first = mod.workflow_stall_resume_text(SID, tp, NOW)
@@ -98,7 +99,7 @@ def test_reaped_task_reported_once_then_silent(tmp_path, tdir):
     assert mod.workflow_stall_resume_text(SID, tp, NOW) == ""
 
 
-def test_other_tasks_no_task_found_leaves_live_run_advised(tmp_path, tdir):
+def test_other_tasks_no_task_found_leaves_live_run_advised(tmp_path: Path, tdir) -> None:
     _record(tdir, _run(tmp_path, "r1"))
     tp = _transcript(tmp_path, json.dumps({"content": "Error: No task found with ID: zzz"}))
     text = mod.workflow_stall_resume_text(SID, tp, NOW)
@@ -106,7 +107,7 @@ def test_other_tasks_no_task_found_leaves_live_run_advised(tmp_path, tdir):
 
 
 @pytest.mark.parametrize("status", ["completed", "failed", "killed"])
-def test_finished_task_yields_nothing_and_retires_record(tmp_path, tdir, status):
+def test_finished_task_yields_nothing_and_retires_record(tmp_path: Path, tdir, status) -> None:
     _record(tdir, _run(tmp_path, "r1"))
     note = (f"<task-notification><task-id>t1</task-id><status>{status}</status>"
             "</task-notification>")
@@ -115,7 +116,7 @@ def test_finished_task_yields_nothing_and_retires_record(tmp_path, tdir, status)
     assert not _rec_path(tdir, SID, "t1").exists()
 
 
-def test_completion_seen_before_stall_stays_silent_after_it_leaves_the_tail(tmp_path, tdir):
+def test_completion_seen_before_stall_stays_silent_after_it_leaves_the_tail(tmp_path: Path, tdir) -> None:
     run_dir = _run(tmp_path, "r1", transcript_age=10)  # fresh: not yet stalled
     _record(tdir, run_dir)
     note = "<task-notification><task-id>t1</task-id><status>completed</status></task-notification>"
@@ -128,7 +129,7 @@ def test_completion_seen_before_stall_stays_silent_after_it_leaves_the_tail(tmp_
     assert mod.workflow_stall_resume_text(SID, "", NOW) == ""
 
 
-def test_other_tasks_completion_leaves_live_run_advised(tmp_path, tdir):
+def test_other_tasks_completion_leaves_live_run_advised(tmp_path: Path, tdir) -> None:
     _record(tdir, _run(tmp_path, "r1"))
     note = "<task-notification><task-id>zzz</task-id><status>completed</status></task-notification>"
     tp = _transcript(tmp_path, json.dumps({"content": note}))
@@ -136,39 +137,39 @@ def test_other_tasks_completion_leaves_live_run_advised(tmp_path, tdir):
     assert _rec_path(tdir, SID, "t1").exists()
 
 
-def test_paused_task_yields_nothing(tmp_path, tdir):
+def test_paused_task_yields_nothing(tmp_path: Path, tdir) -> None:
     _record(tdir, _run(tmp_path, "r1"))
     tp = _transcript(tmp_path, json.dumps({"content": "Task t1 is not running, status: paused"}))
     assert mod.workflow_stall_resume_text(SID, tp, NOW) == ""
 
 
-def test_other_tasks_paused_leaves_live_run_advised(tmp_path, tdir):
+def test_other_tasks_paused_leaves_live_run_advised(tmp_path: Path, tdir) -> None:
     _record(tdir, _run(tmp_path, "r1"))
     tp = _transcript(tmp_path, json.dumps({"content": "Task zzz is not running, status: paused"}))
     assert 'TaskStop({"task_id": "t1"})' in mod.workflow_stall_resume_text(SID, tp, NOW)
 
 
-def test_run_superseded_by_newer_live_run_yields_nothing(tmp_path, tdir):
+def test_run_superseded_by_newer_live_run_yields_nothing(tmp_path: Path, tdir) -> None:
     _record(tdir, _run(tmp_path, "r1"), task="old", run="wf_old", fired_at=NOW - 5000)
     _record(tdir, _run(tmp_path, "r2", transcript_age=10), task="new", run="wf_new",
             fired_at=NOW - 4000)
     assert mod.workflow_stall_resume_text(SID, "", NOW) == ""
 
 
-def test_newer_run_of_other_script_does_not_supersede(tmp_path, tdir):
+def test_newer_run_of_other_script_does_not_supersede(tmp_path: Path, tdir) -> None:
     _record(tdir, _run(tmp_path, "r1"), task="old", run="wf_old", fired_at=NOW - 5000)
     _record(tdir, _run(tmp_path, "r2", transcript_age=10), task="new", run="wf_new",
             fired_at=NOW - 4000, args={"other": 1})
     assert 'TaskStop({"task_id": "old"})' in mod.workflow_stall_resume_text(SID, "", NOW)
 
 
-def _sizing_record(tdir, run_dir, *, sizing, task, run, fired_at, script):
+def _sizing_record(tdir, run_dir, *, sizing, task, run, fired_at, script) -> None:
     rec = _record(tdir, run_dir, task=task, run=run, fired_at=fired_at, args={"sizing": sizing})
     rec["scriptPath"] = script
     _rec_path(tdir, SID, task).write_text(json.dumps(rec), encoding="utf-8")
 
 
-def test_refire_of_same_sizing_under_new_script_supersedes(tmp_path, tdir):
+def test_refire_of_same_sizing_under_new_script_supersedes(tmp_path: Path, tdir) -> None:
     _sizing_record(tdir, _run(tmp_path, "r1"), sizing="s.yaml", task="old", run="wf_old",
                    fired_at=NOW - 5000, script="scripts/warp-1.workflow.mjs")
     _sizing_record(tdir, _run(tmp_path, "r2", transcript_age=10), sizing="s.yaml", task="new",
@@ -176,7 +177,7 @@ def test_refire_of_same_sizing_under_new_script_supersedes(tmp_path, tdir):
     assert mod.workflow_stall_resume_text(SID, "", NOW) == ""
 
 
-def test_refire_of_same_sizing_landed_supersedes_gone_task(tmp_path, tdir):
+def test_refire_of_same_sizing_landed_supersedes_gone_task(tmp_path: Path, tdir) -> None:
     _sizing_record(tdir, _run(tmp_path, "r1"), sizing="s.yaml", task="old", run="wf_old",
                    fired_at=NOW - 5000, script="scripts/warp-1.workflow.mjs")
     _sizing_record(tdir, _run(tmp_path, "r2", settled=True), sizing="s.yaml", task="new",
@@ -185,7 +186,7 @@ def test_refire_of_same_sizing_landed_supersedes_gone_task(tmp_path, tdir):
     assert mod.workflow_stall_resume_text(SID, tp, NOW) == ""
 
 
-def test_refire_of_other_sizing_does_not_supersede(tmp_path, tdir):
+def test_refire_of_other_sizing_does_not_supersede(tmp_path: Path, tdir) -> None:
     _sizing_record(tdir, _run(tmp_path, "r1"), sizing="s.yaml", task="old", run="wf_old",
                    fired_at=NOW - 5000, script="scripts/warp-1.workflow.mjs")
     _sizing_record(tdir, _run(tmp_path, "r2", transcript_age=10), sizing="t.yaml", task="new",
@@ -193,18 +194,18 @@ def test_refire_of_other_sizing_does_not_supersede(tmp_path, tdir):
     assert 'TaskStop({"task_id": "old"})' in mod.workflow_stall_resume_text(SID, "", NOW)
 
 
-def test_newer_stalled_rerun_does_not_supersede(tmp_path, tdir):
+def test_newer_stalled_rerun_does_not_supersede(tmp_path: Path, tdir) -> None:
     _record(tdir, _run(tmp_path, "r1"), task="old", run="wf_old", fired_at=NOW - 5000)
     _record(tdir, _run(tmp_path, "r2"), task="new", run="wf_new", fired_at=NOW - 4000)
     assert "Workflow run" in mod.workflow_stall_resume_text(SID, "", NOW)
 
 
-def test_another_sessions_record_yields_nothing(tmp_path, tdir):
+def test_another_sessions_record_yields_nothing(tmp_path: Path, tdir) -> None:
     _record(tdir, _run(tmp_path, "r1"), session="other")
     assert mod.workflow_stall_resume_text(SID, "", NOW) == ""
 
 
-def test_stall_line_given_once_per_window_then_again_after_it(tmp_path, tdir):
+def test_stall_line_given_once_per_window_then_again_after_it(tmp_path: Path, tdir) -> None:
     _record(tdir, _run(tmp_path, "r1"))
     assert "wf_1" in mod.workflow_stall_resume_text(SID, "", NOW)
     assert mod.workflow_stall_resume_text(SID, "", NOW + 1) == ""
@@ -214,23 +215,23 @@ def test_stall_line_given_once_per_window_then_again_after_it(tmp_path, tdir):
     assert "wf_1" in mod.workflow_stall_resume_text(SID, "", after)
 
 
-def test_record_naming_another_session_yields_nothing(tmp_path, tdir):
+def test_record_naming_another_session_yields_nothing(tmp_path: Path, tdir) -> None:
     _record(tdir, _run(tmp_path, "r1"), session="other")
     _rec_path(tdir, SID, "t1").write_text(
         _rec_path(tdir, "other", "t1").read_text(encoding="utf-8"), encoding="utf-8")
     assert mod.workflow_stall_resume_text(SID, "", NOW) == ""
 
 
-def test_record_past_horizon_yields_nothing(tmp_path, tdir):
+def test_record_past_horizon_yields_nothing(tmp_path: Path, tdir) -> None:
     _record(tdir, _run(tmp_path, "r1"), fired_at=NOW - stall.STALL_HORIZON_SECONDS - 1)
     assert mod.workflow_stall_resume_text(SID, "", NOW) == ""
 
 
-def test_unsafe_session_id_yields_nothing(tdir):
+def test_unsafe_session_id_yields_nothing(tdir) -> None:
     assert mod.workflow_stall_resume_text("../x", "", NOW) == ""
 
 
-def test_newest_record_per_run_wins(tmp_path, tdir):
+def test_newest_record_per_run_wins(tmp_path: Path, tdir) -> None:
     run_dir = _run(tmp_path, "r1")
     _record(tdir, run_dir, task="old", fired_at=NOW - 5000)
     _record(tdir, run_dir, task="new", fired_at=NOW - 4000)
@@ -239,7 +240,7 @@ def test_newest_record_per_run_wins(tmp_path, tdir):
     assert 'TaskStop({"task_id": "new"})' in text
 
 
-def test_twenty_records_one_stalled_within_budget_no_subprocess(tmp_path, tdir, monkeypatch):
+def test_twenty_records_one_stalled_within_budget_no_subprocess(tmp_path: Path, tdir, monkeypatch: pytest.MonkeyPatch) -> None:
     for i in range(19):
         _record(tdir, _run(tmp_path, f"ok{i}", settled=True), task=f"o{i}", run=f"wf_ok{i}")
     _record(tdir, _run(tmp_path, "stuck"), task="tS", run="wf_stuck")

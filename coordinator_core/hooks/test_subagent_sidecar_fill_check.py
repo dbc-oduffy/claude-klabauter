@@ -271,7 +271,7 @@ class TestDedupe:
 
 
 class TestFailOpen:
-    def test_scan_exception_fails_open_to_no_advisory(self, tmp_path: Path, monkeypatch) -> None:
+    def test_scan_exception_fails_open_to_no_advisory(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.hooks import subagent_sidecar_fill_check as mod
 
         _git_init(tmp_path)

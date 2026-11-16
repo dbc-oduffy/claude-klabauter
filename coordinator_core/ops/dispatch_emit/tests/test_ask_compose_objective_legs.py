@@ -13,6 +13,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import ask_compose, objective_contract as oc
 from coordinator_core.ops.dispatch_emit.tests._reacher_leg_probe import compose_cell
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 _OBJ = {"attempts_n": 2, "minutes": 90, "tokens": 1_000_000, "ceiling_spend_usd": 10.0,
         "ceiling_wall_minutes": 480, "falsifier_script": "state/warp/run-1/falsify.py"}
@@ -20,24 +21,24 @@ _LINE = "Objective: read state/warp/run-1/objective.json on entry"
 
 
 @pytest.fixture
-def script(monkeypatch):
+def script(monkeypatch: pytest.MonkeyPatch) -> str:
     return compose_cell(monkeypatch, "m_plus", objective=_OBJ)
 
 
-def test_no_objective_composes_no_objective_leg(monkeypatch):
+def test_no_objective_composes_no_objective_leg(monkeypatch: pytest.MonkeyPatch) -> None:
     plain = compose_cell(monkeypatch, "m_plus")
     assert "Objective: read" not in plain
     for name in ("_objectiveGate", "_objectiveCalibrate", "_objectiveWaveCheck", "objective_loop"):
         assert name not in plain
 
 
-def test_every_ledger_carrying_prompt_names_the_objective_next_to_the_ledger(script):
+def test_every_ledger_carrying_prompt_names_the_objective_next_to_the_ledger(script) -> None:
     assert script.count(_LINE) >= 2
     for m in re.finditer(r"Requirements ledger: read ", script):
         assert _LINE in script[m.start(): m.start() + 1500]
 
 
-def test_calibration_runs_before_the_first_execute_row_and_halts_the_rows_on_failure(script):
+def test_calibration_runs_before_the_first_execute_row_and_halts_the_rows_on_failure(script) -> None:
     execute = script.index("  const _rows = {};")
     assert execute < script.index("await _objectiveCalibrate();") < script.index("for (const w of _waves) {")
     assert "const _waves = _halted ? [] :" in script
@@ -45,7 +46,7 @@ def test_calibration_runs_before_the_first_execute_row_and_halts_the_rows_on_fai
     assert ask_compose.OBJECTIVE_FALSIFIER_AGENT in script
 
 
-def test_every_objective_leg_passes_a_model_and_no_effort(script):
+def test_every_objective_leg_passes_a_model_and_no_effort(script) -> None:
     for label in ("objective-check:wave-", "objective-calibrate", "objective-falsifier-rewrite", "objective-judge",
                   "objective-research", "objective-rethink", "objective-row:"):
         at = script.index(f"label: '{label}")
@@ -53,7 +54,7 @@ def test_every_objective_leg_passes_a_model_and_no_effort(script):
         assert "model:" in opts and "effort:" not in opts, label
 
 
-def test_the_wave_check_rides_the_checkpoint_gate_once_and_is_never_its_own_wave(script):
+def test_the_wave_check_rides_the_checkpoint_gate_once_and_is_never_its_own_wave(script) -> None:
     gate = script[script.index("async function _waveTestsGreen(n, ids) {"):]
     gate = gate[: gate.index("\n  }\n") + 4]
     assert gate.count("await _objectiveWaveCheck(n);") == 1
@@ -65,7 +66,7 @@ def test_the_wave_check_rides_the_checkpoint_gate_once_and_is_never_its_own_wave
     assert "objective-judge" not in wave_check and "objective-rethink" not in wave_check
 
 
-def test_the_terminal_gate_runs_after_execution_and_before_review_and_reaches_the_return(script):
+def test_the_terminal_gate_runs_after_execution_and_before_review_and_reaches_the_return(script) -> None:
     assert script.index("await _objectiveGate();") < script.index("phase('Review wave')")
     assert "objective_loop: _objResult" in script
     assert "_nextAction.params.objective_loop = _objResult" in script
@@ -74,7 +75,7 @@ def test_the_terminal_gate_runs_after_execution_and_before_review_and_reaches_th
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_the_composed_script_with_objective_legs_parses_and_passes_the_static_checks(script, tmp_path):
+def test_the_composed_script_with_objective_legs_parses_and_passes_the_static_checks(script, tmp_path: Path) -> None:
     from coordinator_core.ops._workflow_contract import Severity, run_checks
 
     assert not [f for f in run_checks(script) if f.severity == Severity.ERROR]
@@ -132,7 +133,7 @@ _ROWS = {"delta_plan_path": "d.md", "rows": [{"id": "D1", "wave": 0, "writes": [
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_passing_falsifier_after_one_reacher_iteration_is_met_and_not_first_pass():
+def test_a_passing_falsifier_after_one_reacher_iteration_is_met_and_not_first_pass() -> None:
     out = _run_gate({"objective-judge": _ROWS, "objective-row": {"status": "DONE"}}, last_checks=[_FAIL, _MET])
     assert out["result"]["outcome"] == "met" and out["result"]["first_pass"] is False
     assert out["halted"] is None and not out["result"]["rethinks"]
@@ -141,7 +142,7 @@ def test_a_passing_falsifier_after_one_reacher_iteration_is_met_and_not_first_pa
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_exhausting_n_attempts_fires_the_rethink_and_reenters_the_loop_instead_of_closing():
+def test_exhausting_n_attempts_fires_the_rethink_and_reenters_the_loop_instead_of_closing() -> None:
     out = _run_gate(
         {"objective-judge": _ROWS, "objective-research": {"findings_path": "f.md"},
          "objective-rethink": {"verdict": "new_plan", "approach_path": "a.md", "rows": _ROWS["rows"]},
@@ -162,7 +163,7 @@ def test_exhausting_n_attempts_fires_the_rethink_and_reenters_the_loop_instead_o
     [("impossible", "impossible", "impossible", "objective_impossible"),
      ("escalate", "doctrine_conflict", "first_officer", "objective_escalated")],
 )
-def test_only_a_rethink_that_ends_impossible_or_escalate_closes_the_run(verdict, outcome, reason, halt):
+def test_only_a_rethink_that_ends_impossible_or_escalate_closes_the_run(verdict, outcome, reason, halt) -> None:
     out = _run_gate(
         {"objective-judge": _ROWS, "objective-research": {"findings_path": "f.md"},
          "objective-rethink": {"verdict": verdict, "reason": "why"}, "objective-row": {"status": "DONE"}},
@@ -175,7 +176,7 @@ def test_only_a_rethink_that_ends_impossible_or_escalate_closes_the_run(verdict,
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_rethinks_that_never_pass_reach_the_ceiling_after_the_cap():
+def test_rethinks_that_never_pass_reach_the_ceiling_after_the_cap() -> None:
     out = _run_gate(
         {"objective-judge": _ROWS, "objective-research": {"findings_path": "f.md"},
          "objective-rethink": {"verdict": "new_plan", "rows": _ROWS["rows"]}, "objective-row": {"status": "DONE"}},
@@ -187,7 +188,7 @@ def test_rethinks_that_never_pass_reach_the_ceiling_after_the_cap():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_the_outer_ceiling_escalates_as_ceiling_and_never_closes_silently():
+def test_the_outer_ceiling_escalates_as_ceiling_and_never_closes_silently() -> None:
     out = _run_gate(
         {"objective-judge": {**_ROWS, "cost_usd": 11.0}, "objective-row": {"status": "DONE"}},
         last_checks=[_FAIL] * 6,

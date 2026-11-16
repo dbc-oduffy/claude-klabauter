@@ -7,6 +7,7 @@ from pathlib import Path
 
 from coordinator_core.ops.fleet import memo_sent_records as msr
 from coordinator_core.session import machinery_paths
+import pytest
 
 NOW = datetime.datetime(2026, 10, 21, 12, 0, 0, tzinfo=datetime.timezone.utc)
 _ILLEGAL = set('<>:"/\\|?*')
@@ -28,14 +29,14 @@ def _write_legacy(path: Path, rows: list[dict]) -> bytes:
     return data
 
 
-def test_record_relpath_shape_has_no_windows_illegal_characters():
+def test_record_relpath_shape_has_no_windows_illegal_characters() -> None:
     rel = msr.record_relpath(_row(NOW, topic="a b:c/d?", sent_by="unresolved"))
     assert rel == "sent-records/2026-10/20261021T120000Z-a-b-c-d-unattrib.json"
     assert not (_ILLEGAL & set(rel.replace("/", "")))
     assert msr.record_relpath(_row(NOW)).endswith("-t-abcdef12.json")
 
 
-def test_write_record_is_write_once_with_collision_suffix(tmp_path):
+def test_write_record_is_write_once_with_collision_suffix(tmp_path: Path) -> None:
     p1 = msr.write_record(tmp_path, _row(NOW))
     p2 = msr.write_record(tmp_path, _row(NOW))
     p3 = msr.write_record(tmp_path, _row(NOW))
@@ -45,13 +46,13 @@ def test_write_record_is_write_once_with_collision_suffix(tmp_path):
     assert b"\r" not in p1.read_bytes()
 
 
-def test_view_opens_exactly_view_max_rows_of_300(tmp_path, monkeypatch):
+def test_view_opens_exactly_view_max_rows_of_300(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for i in range(300):
         msr.write_record(tmp_path, _row(NOW - datetime.timedelta(seconds=i), topic=f"t{i}"))
     opened: list[Path] = []
     real = Path.read_text
 
-    def spy(self, *a, **k):
+    def spy(self, *a, **k) -> str:
         opened.append(self)
         return real(self, *a, **k)
 
@@ -63,13 +64,13 @@ def test_view_opens_exactly_view_max_rows_of_300(tmp_path, monkeypatch):
     assert rows[0]["topic"] == "t249"
 
 
-def test_view_age_bound_is_by_filename_and_spans_previous_month(tmp_path):
+def test_view_age_bound_is_by_filename_and_spans_previous_month(tmp_path: Path) -> None:
     msr.write_record(tmp_path, _row(NOW - datetime.timedelta(days=20), "recent"))
     msr.write_record(tmp_path, _row(NOW - datetime.timedelta(days=31), "old"))
     assert [r["topic"] for r in msr.iter_view(tmp_path, now=NOW)] == ["recent"]
 
 
-def test_malformed_files_and_lines_are_skipped(tmp_path):
+def test_malformed_files_and_lines_are_skipped(tmp_path: Path) -> None:
     good = msr.write_record(tmp_path, _row(NOW, "good"))
     (good.parent / "20261021T120001Z-bad-x.json").write_text("{nope", encoding="utf-8")
     (good.parent / "20261021T120002Z-list-x.json").write_text("[1]", encoding="utf-8")
@@ -78,7 +79,7 @@ def test_malformed_files_and_lines_are_skipped(tmp_path):
     assert [r["topic"] for r in msr.iter_view(tmp_path, now=NOW)] == ["good"]
 
 
-def test_legacy_rows_union_in_and_dedup_against_records(tmp_path):
+def test_legacy_rows_union_in_and_dedup_against_records(tmp_path: Path) -> None:
     dup = _row(NOW - datetime.timedelta(hours=1), "dup")
     msr.write_record(tmp_path, dup)
     live = Path(machinery_paths.memo_outbox_sent_ledger_path(str(tmp_path)))
@@ -91,7 +92,7 @@ def test_legacy_rows_union_in_and_dedup_against_records(tmp_path):
     assert topics == ["state-only", "live-only", "dup"]
 
 
-def test_migration_is_idempotent_and_moves_bytes_unchanged(tmp_path):
+def test_migration_is_idempotent_and_moves_bytes_unchanged(tmp_path: Path) -> None:
     live = Path(machinery_paths.memo_outbox_sent_ledger_path(str(tmp_path)))
     state = tmp_path / "state" / "memo-outbox" / "sent-ledger.jsonl"
     rows = [_row(NOW - datetime.timedelta(minutes=i), f"m{i}") for i in range(3)]
@@ -112,7 +113,7 @@ def test_migration_is_idempotent_and_moves_bytes_unchanged(tmp_path):
     assert len(msr.iter_view(tmp_path, now=NOW)) == 3
 
 
-def test_migration_lifts_a_row_appended_to_a_retired_ledger(tmp_path):
+def test_migration_lifts_a_row_appended_to_a_retired_ledger(tmp_path: Path) -> None:
     live = Path(machinery_paths.memo_outbox_sent_ledger_path(str(tmp_path)))
     _write_legacy(live, [_row(NOW, "a")])
     msr.migrate_legacy_ledgers(tmp_path, dry_run=False)
@@ -125,7 +126,7 @@ def test_migration_lifts_a_row_appended_to_a_retired_ledger(tmp_path):
     assert topics == {"a", "late"}
 
 
-def test_two_sender_record_sets_merge_into_one_view(tmp_path):
+def test_two_sender_record_sets_merge_into_one_view(tmp_path: Path) -> None:
     msr.write_record(tmp_path, _row(NOW, "same", sent_by="aaaaaaaa-1"))
     msr.write_record(tmp_path, _row(NOW, "same", sent_by="bbbbbbbb-2"))
     assert len(msr.iter_view(tmp_path, now=NOW)) == 2

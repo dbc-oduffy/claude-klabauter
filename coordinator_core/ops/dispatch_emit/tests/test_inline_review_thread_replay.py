@@ -18,6 +18,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_commit_halt_refire_e2e im
     halted,
 )
 from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import repo  # noqa: F401
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -45,7 +46,7 @@ def _xs_script(monkeypatch) -> str:
     )
 
 
-def test_a_scratch_only_xs_run_with_a_zero_slice_review_passes_the_floor(tmp_path):
+def test_a_scratch_only_xs_run_with_a_zero_slice_review_passes_the_floor(tmp_path: Path) -> None:
     review = refusals._xs_zero_slice_review(_digest("41bbaf"))
     assert review is not None and review["wave_reviews"] == []
 
@@ -54,7 +55,7 @@ def test_a_scratch_only_xs_run_with_a_zero_slice_review_passes_the_floor(tmp_pat
     assert refused is not None and "0 verdicts" in refused
 
 
-def test_a_code_writing_xs_run_composes_a_review_wave_before_commit(tmp_path, monkeypatch):
+def test_a_code_writing_xs_run_composes_a_review_wave_before_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     script = _xs_script(monkeypatch)
     # Wiring pins on the composed JS (no end-to-end xs commit is driven here); they guard the review-wave gate text only.
     assert "((_gate.arm !== 'xs' && !_xsTail) || _codeReviewOwed)" in script
@@ -72,7 +73,7 @@ def test_a_code_writing_xs_run_composes_a_review_wave_before_commit(tmp_path, mo
     assert "review_code_paths" in ask_compose._MANIFEST_SCHEMA["properties"]
 
 
-def test_a_non_commit_halt_refire_under_a_new_run_id_still_sees_its_review(halted):  # noqa: F811
+def test_a_non_commit_halt_refire_under_a_new_run_id_still_sees_its_review(halted) -> None:  # noqa: F811
     root = halted
     sidecar = "scratch/reviews/pred.md"
     refire._write(root, sidecar, "verdict: PASS\n")

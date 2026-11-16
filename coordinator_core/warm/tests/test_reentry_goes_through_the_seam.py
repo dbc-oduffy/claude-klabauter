@@ -42,7 +42,7 @@ def _files_calling_get_op_handler(root: Path) -> set[str]:
     return found
 
 
-def test_only_allowlisted_modules_call_get_op_handler():
+def test_only_allowlisted_modules_call_get_op_handler() -> None:
     found = _files_calling_get_op_handler(_CORE)
     offenders = sorted(found - set(ALLOWLIST))
     assert not offenders, (
@@ -52,7 +52,7 @@ def test_only_allowlisted_modules_call_get_op_handler():
     assert not stale, f"{stale[0]} no longer calls get_op_handler; drop it from ALLOWLIST."
 
 
-def test_collector_reports_an_offending_module(tmp_path):
+def test_collector_reports_an_offending_module(tmp_path: Path) -> None:
     pkg = tmp_path / "coordinator_core"
     pkg.mkdir()
     (pkg / "bad.py").write_text(

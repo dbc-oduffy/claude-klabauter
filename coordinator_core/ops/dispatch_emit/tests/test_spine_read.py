@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -42,22 +43,22 @@ def _writes_of(tmp_path, writes: list):
     return read_spine(_plan_in(tmp_path, body))[0].writes
 
 
-def test_own_plan_body_write_on_a_mixed_row_routes_to_the_evidence_sidecar(tmp_path):
+def test_own_plan_body_write_on_a_mixed_row_routes_to_the_evidence_sidecar(tmp_path: Path) -> None:
     writes = _writes_of(tmp_path, ["docs/plans/2026-10-14-own.md", "some/code.py"])
     assert writes == ["docs/plans/2026-10-14-own.evidence.yaml", "some/code.py"]
 
 
-def test_a_row_writing_only_its_own_plan_body_is_left_alone(tmp_path):
+def test_a_row_writing_only_its_own_plan_body_is_left_alone(tmp_path: Path) -> None:
     writes = _writes_of(tmp_path, ["docs/plans/2026-10-14-own.md"])
     assert writes == ["docs/plans/2026-10-14-own.md"]
 
 
-def test_another_plans_body_on_a_mixed_row_is_left_alone(tmp_path):
+def test_another_plans_body_on_a_mixed_row_is_left_alone(tmp_path: Path) -> None:
     writes = _writes_of(tmp_path, ["docs/plans/2026-10-14-other.md", "some/code.py"])
     assert writes == ["docs/plans/2026-10-14-other.md", "some/code.py"]
 
 
-def test_writes_declared_vs_undeclared(tmp_path):
+def test_writes_declared_vs_undeclared(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: has writes
@@ -83,7 +84,7 @@ def test_writes_declared_vs_undeclared(tmp_path):
     assert rows["C2"].writes != []
 
 
-def test_writes_present_but_empty_value_collapses_to_undeclared(tmp_path):
+def test_writes_present_but_empty_value_collapses_to_undeclared(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: writes key present with no value
@@ -104,7 +105,7 @@ def test_writes_present_but_empty_value_collapses_to_undeclared(tmp_path):
     assert rows["C2"].writes is UNDECLARED
 
 
-def test_scalar_writes_raises_invalid_field_type_error(tmp_path):
+def test_scalar_writes_raises_invalid_field_type_error(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: writes declared as a bare scalar, not a list
@@ -121,7 +122,7 @@ def test_scalar_writes_raises_invalid_field_type_error(tmp_path):
     assert "some/file.py" in message
 
 
-def test_scalar_reads_raises_invalid_field_type_error(tmp_path):
+def test_scalar_reads_raises_invalid_field_type_error(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: reads declared as a bare scalar, not a list
@@ -138,7 +139,7 @@ def test_scalar_reads_raises_invalid_field_type_error(tmp_path):
     assert "some/file.py" in message
 
 
-def test_dangling_depends_on_raises(tmp_path):
+def test_dangling_depends_on_raises(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: depends on a chunk that does not exist
@@ -157,7 +158,7 @@ def test_dangling_depends_on_raises(tmp_path):
     assert "C99" in message
 
 
-def test_dangling_depends_on_error_is_a_spine_read_error(tmp_path):
+def test_dangling_depends_on_error_is_a_spine_read_error(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: depends on a chunk that does not exist
@@ -172,7 +173,7 @@ def test_dangling_depends_on_error_is_a_spine_read_error(tmp_path):
         read_spine(plan_path)
 
 
-def test_truthy_non_list_depends_on_raises_a_spine_read_error(tmp_path):
+def test_truthy_non_list_depends_on_raises_a_spine_read_error(tmp_path: Path) -> None:
     # Review-B MAJOR (the actual regression): commit ab7df1af0's schema-shape
     # preflight fires on a TRUTHY non-list depends_on (e.g. a dict where a
     # list belongs) before spine_read's own `elif not isinstance(depends_on,
@@ -205,7 +206,7 @@ def test_truthy_non_list_depends_on_raises_a_spine_read_error(tmp_path):
     assert isinstance(excinfo.value, MalformedDependencyEdgeError)
 
 
-def test_resolvable_depends_on_succeeds(tmp_path):
+def test_resolvable_depends_on_succeeds(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: predecessor
@@ -225,7 +226,7 @@ def test_resolvable_depends_on_succeeds(tmp_path):
     assert rows["C2"].depends_on == [{"chunk": "C1", "gate_kind": "output-consumption-runtime"}]
 
 
-def test_absent_spine_block_raises_spine_read_error(tmp_path):
+def test_absent_spine_block_raises_spine_read_error(tmp_path: Path) -> None:
     plan_path = tmp_path / "plan.md"
     plan_path.write_text("# fixture plan\n\nno tasks block here.\n", encoding="utf-8")
 
@@ -233,7 +234,7 @@ def test_absent_spine_block_raises_spine_read_error(tmp_path):
         read_spine(plan_path)
 
 
-def test_reads_and_depends_on_default_to_empty_list(tmp_path):
+def test_reads_and_depends_on_default_to_empty_list(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: minimal row
@@ -246,7 +247,7 @@ def test_reads_and_depends_on_default_to_empty_list(tmp_path):
     assert rows[0].depends_on == []
 
 
-def test_duplicate_id_raises_invalid_row_id_error(tmp_path):
+def test_duplicate_id_raises_invalid_row_id_error(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: first
@@ -263,7 +264,7 @@ def test_duplicate_id_raises_invalid_row_id_error(tmp_path):
     assert "C1" in str(excinfo.value)
 
 
-def test_missing_id_raises_invalid_row_id_error(tmp_path):
+def test_missing_id_raises_invalid_row_id_error(tmp_path: Path) -> None:
     body = """\
 - title: no id key at all
   surface: some/surface
@@ -274,7 +275,7 @@ def test_missing_id_raises_invalid_row_id_error(tmp_path):
         read_spine(plan_path)
 
 
-def test_non_string_id_raises_invalid_row_id_error(tmp_path):
+def test_non_string_id_raises_invalid_row_id_error(tmp_path: Path) -> None:
     body = """\
 - id: 123
   title: numeric id
@@ -286,7 +287,7 @@ def test_non_string_id_raises_invalid_row_id_error(tmp_path):
         read_spine(plan_path)
 
 
-def test_falsy_scalar_reads_raises_instead_of_silently_coercing(tmp_path):
+def test_falsy_scalar_reads_raises_instead_of_silently_coercing(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: reads declared as a falsy scalar
@@ -301,7 +302,7 @@ def test_falsy_scalar_reads_raises_instead_of_silently_coercing(tmp_path):
     assert "C1" in str(excinfo.value)
 
 
-def test_falsy_scalar_depends_on_raises_instead_of_silently_coercing(tmp_path):
+def test_falsy_scalar_depends_on_raises_instead_of_silently_coercing(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: depends_on declared as a falsy scalar
@@ -317,7 +318,7 @@ def test_falsy_scalar_depends_on_raises_instead_of_silently_coercing(tmp_path):
 
 
 @pytest.mark.parametrize("disposition", sorted(NON_DISPATCHABLE_DISPOSITIONS))
-def test_closed_disposition_rows_are_excluded(tmp_path, disposition):
+def test_closed_disposition_rows_are_excluded(tmp_path: Path, disposition) -> None:
     body = f"""\
 - id: C1
   title: closed row
@@ -333,7 +334,7 @@ def test_closed_disposition_rows_are_excluded(tmp_path, disposition):
     assert ids == {"C2"}
 
 
-def test_open_and_absent_disposition_rows_are_kept(tmp_path):
+def test_open_and_absent_disposition_rows_are_kept(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: explicitly open
@@ -349,7 +350,7 @@ def test_open_and_absent_disposition_rows_are_kept(tmp_path):
     assert ids == {"C1", "C2"}
 
 
-def test_deferred_row_is_excluded_independent_of_disposition(tmp_path):
+def test_deferred_row_is_excluded_independent_of_disposition(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: deferred but otherwise open
@@ -365,7 +366,7 @@ def test_deferred_row_is_excluded_independent_of_disposition(tmp_path):
     assert ids == {"C2"}
 
 
-def test_em_performed_open_row_is_excluded_with_reason(tmp_path):
+def test_em_performed_open_row_is_excluded_with_reason(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: EM sends the memos
@@ -385,7 +386,7 @@ def test_em_performed_open_row_is_excluded_with_reason(tmp_path):
     assert "em-discharge" in exclusions[0]["detail"]
 
 
-def test_open_em_row_holds_its_dependents_until_resolved(tmp_path):
+def test_open_em_row_holds_its_dependents_until_resolved(tmp_path: Path) -> None:
     """An EM premise probe left open once let its dependents run before it:
     the rows it could void were built first."""
     body = """\
@@ -407,7 +408,7 @@ def test_open_em_row_holds_its_dependents_until_resolved(tmp_path):
     assert {row.id for row in read_spine(_write_plan(tmp_path, resolved))} == {"C2"}
 
 
-def test_live_row_depends_on_filtered_row_does_not_raise_and_edge_is_stripped(tmp_path):
+def test_live_row_depends_on_filtered_row_does_not_raise_and_edge_is_stripped(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: shipped predecessor
@@ -429,7 +430,7 @@ def test_live_row_depends_on_filtered_row_does_not_raise_and_edge_is_stripped(tm
     assert rows["C2"].depends_on == []
 
 
-def test_genuinely_dangling_referent_still_raises_after_filtering(tmp_path):
+def test_genuinely_dangling_referent_still_raises_after_filtering(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: shipped row, unrelated
@@ -451,7 +452,7 @@ def test_genuinely_dangling_referent_still_raises_after_filtering(tmp_path):
     assert "C2" in message
 
 
-def test_external_gate_absent_blocks_key_and_no_evidence_excludes_row(tmp_path):
+def test_external_gate_absent_blocks_key_and_no_evidence_excludes_row(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: blocked on another repo, no blocks key
@@ -466,7 +467,7 @@ def test_external_gate_absent_blocks_key_and_no_evidence_excludes_row(tmp_path):
     assert ids == set()
 
 
-def test_external_gate_explicit_blocks_execution_excludes_row(tmp_path):
+def test_external_gate_explicit_blocks_execution_excludes_row(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: blocked on another repo, explicit blocks
@@ -482,7 +483,7 @@ def test_external_gate_explicit_blocks_execution_excludes_row(tmp_path):
     assert ids == set()
 
 
-def test_external_gate_blocks_ac_closure_does_not_exclude_row(tmp_path):
+def test_external_gate_blocks_ac_closure_does_not_exclude_row(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: only an acceptance criterion is gated
@@ -498,7 +499,7 @@ def test_external_gate_blocks_ac_closure_does_not_exclude_row(tmp_path):
     assert ids == {"C1"}
 
 
-def test_external_gate_with_closure_evidence_now_excludes_row(tmp_path):
+def test_external_gate_with_closure_evidence_now_excludes_row(tmp_path: Path) -> None:
     # INVERTED by the joint gate-reader bump (2026-08-20). `closure_evidence`
     # is authored when the evidence has NOT arrived, so its natural content
     # describes what is being awaited -- and under the retired rule that
@@ -521,7 +522,7 @@ def test_external_gate_with_closure_evidence_now_excludes_row(tmp_path):
     )
 
 
-def test_cleared_false_overrides_closure_evidence_and_excludes_row(tmp_path):
+def test_cleared_false_overrides_closure_evidence_and_excludes_row(tmp_path: Path) -> None:
     body = """- id: C1
   title: gate documented but NOT discharged
   surface: some/surface
@@ -539,7 +540,7 @@ def test_cleared_false_overrides_closure_evidence_and_excludes_row(tmp_path):
     assert ids == set()
 
 
-def test_cleared_absent_means_uncleared_whatever_evidence_is_named(tmp_path):
+def test_cleared_absent_means_uncleared_whatever_evidence_is_named(tmp_path: Path) -> None:
     # The 1.9.0 bump was the additive half only and left `closure_evidence`
     # clearing on its own. The joint two-repo bump its x-bump-note deferred
     # has now landed, so absence of `cleared` means UNCLEARED -- which is what
@@ -561,7 +562,7 @@ def test_cleared_absent_means_uncleared_whatever_evidence_is_named(tmp_path):
     )
 
 
-def test_cleared_non_true_value_does_not_clear(tmp_path):
+def test_cleared_non_true_value_does_not_clear(tmp_path: Path) -> None:
     # The fail-closed posture SURVIVES the bump and gets stronger. Before, a
     # malformed `cleared` fell through to closure_evidence and the row was
     # admitted; now only the literal True clears, so a malformed value cannot
@@ -584,7 +585,7 @@ def test_cleared_non_true_value_does_not_clear(tmp_path):
     )
 
 
-def test_live_row_depends_on_gated_row_is_also_excluded(tmp_path):
+def test_live_row_depends_on_gated_row_is_also_excluded(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: blocked predecessor
@@ -605,7 +606,7 @@ def test_live_row_depends_on_gated_row_is_also_excluded(tmp_path):
     assert ids == set()
 
 
-def test_transitive_dependent_of_gated_row_is_excluded_two_hops_out(tmp_path):
+def test_transitive_dependent_of_gated_row_is_excluded_two_hops_out(tmp_path: Path) -> None:
     body = """\
 - id: C1b
   title: gated predecessor
@@ -632,7 +633,7 @@ def test_transitive_dependent_of_gated_row_is_excluded_two_hops_out(tmp_path):
     assert ids == set()
 
 
-def test_transitively_gated_rows_are_reported_in_exclusions(tmp_path):
+def test_transitively_gated_rows_are_reported_in_exclusions(tmp_path: Path) -> None:
     """DoE parity (emit-dispatch-workflow.py `_transitive_gate_closure`,
     commit aee52a6a5): a row excluded only because it `depends_on`, directly
     or through a chain, a gated row gets its own `exclusions` entry too --
@@ -690,7 +691,7 @@ def _closure_detail(tmp_path, root_fields: str) -> dict:
     return {e["id"]: e for e in exclusions}["C2"]
 
 
-def test_closure_detail_names_external_gate_root(tmp_path):
+def test_closure_detail_names_external_gate_root(tmp_path: Path) -> None:
     entry = _closure_detail(
         tmp_path,
         "  external_gate:\n    - owner_repo: r\n      condition: c\n",
@@ -701,14 +702,14 @@ def test_closure_detail_names_external_gate_root(tmp_path):
     assert entry["detail"].endswith("; root C1 carries an uncleared external_gate")
 
 
-def test_closure_detail_names_operator_root(tmp_path):
+def test_closure_detail_names_operator_root(tmp_path: Path) -> None:
     entry = _closure_detail(tmp_path, "  execution_mode: operator\n")
     assert entry["reason"] == "withheld_by_owed_dependency"
     assert (entry["root"], entry["root_reason"]) == ("C1", "operator")
     assert entry["detail"].endswith("; root C1 is execution_mode: operator")
 
 
-def test_closure_detail_names_em_owed_root_not_gated(tmp_path):
+def test_closure_detail_names_em_owed_root_not_gated(tmp_path: Path) -> None:
     entry = _closure_detail(tmp_path, "  performer: em\n")
     assert entry["reason"] == "withheld_by_owed_dependency"
     assert (entry["root"], entry["root_reason"]) == ("C1", "em-performed")
@@ -717,7 +718,7 @@ def test_closure_detail_names_em_owed_root_not_gated(tmp_path):
     assert entry["detail"].endswith("), not gated")
 
 
-def test_closure_detail_names_memo_send_root_not_gated(tmp_path):
+def test_closure_detail_names_memo_send_root_not_gated(tmp_path: Path) -> None:
     entry = _closure_detail(tmp_path, "  kind: memo-send\n  performer: em\n  memo_to: coordinator-content-repo\n  receipt: .coordinator-local/memo-outbox/sent/slug-x.md\n")
     assert entry["reason"] == "withheld_by_owed_dependency"
     assert (entry["root"], entry["root_reason"]) == ("C1", "memo-send")
@@ -726,7 +727,7 @@ def test_closure_detail_names_memo_send_root_not_gated(tmp_path):
     assert "uncleared gate/operator mode" not in entry["detail"]
 
 
-def test_coded_rows_dependent_is_still_promoted_with_edge_stripped(tmp_path):
+def test_coded_rows_dependent_is_still_promoted_with_edge_stripped(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: shipped predecessor
@@ -746,7 +747,7 @@ def test_coded_rows_dependent_is_still_promoted_with_edge_stripped(tmp_path):
     assert rows["C2"].depends_on == []
 
 
-def test_row_both_coded_and_gated_resolves_as_satisfied_not_blocked(tmp_path):
+def test_row_both_coded_and_gated_resolves_as_satisfied_not_blocked(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: shipped but with a stale uncleared gate
@@ -769,7 +770,7 @@ def test_row_both_coded_and_gated_resolves_as_satisfied_not_blocked(tmp_path):
     assert rows["C2"].depends_on == []
 
 
-def test_row_gated_with_blocks_ac_closure_is_still_scheduled(tmp_path):
+def test_row_gated_with_blocks_ac_closure_is_still_scheduled(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: only an acceptance criterion is gated
@@ -792,7 +793,7 @@ def test_row_gated_with_blocks_ac_closure_is_still_scheduled(tmp_path):
     assert rows["C2"].depends_on == [{"chunk": "C1", "gate_kind": "output-consumption-runtime"}]
 
 
-def test_external_gate_two_entries_one_cleared_one_uncleared_excludes_row(tmp_path):
+def test_external_gate_two_entries_one_cleared_one_uncleared_excludes_row(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: two gates, one cleared one not
@@ -810,7 +811,7 @@ def test_external_gate_two_entries_one_cleared_one_uncleared_excludes_row(tmp_pa
     assert ids == set()
 
 
-def test_malformed_external_gate_scalar_gates_without_raising(tmp_path):
+def test_malformed_external_gate_scalar_gates_without_raising(tmp_path: Path) -> None:
     """klabauter#43: a present-but-unparseable `external_gate` GATES the row.
 
     This shape -- the field declared as a bare scalar instead of a list --
@@ -831,7 +832,7 @@ def test_malformed_external_gate_scalar_gates_without_raising(tmp_path):
     assert ids == set()
 
 
-def test_malformed_external_gate_entry_bare_string_gates_without_raising(tmp_path):
+def test_malformed_external_gate_entry_bare_string_gates_without_raising(tmp_path: Path) -> None:
     """klabauter#43, second shape: a non-mapping list ENTRY gates the row too.
 
     Same fail-open class as the bare-scalar case above, and the same
@@ -850,7 +851,7 @@ def test_malformed_external_gate_entry_bare_string_gates_without_raising(tmp_pat
     assert ids == set()
 
 
-def test_bare_string_depends_on_entry_raises_malformed_dependency_edge_error(tmp_path):
+def test_bare_string_depends_on_entry_raises_malformed_dependency_edge_error(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: depends_on entry is a bare string, not a mapping
@@ -869,7 +870,7 @@ def test_bare_string_depends_on_entry_raises_malformed_dependency_edge_error(tmp
     assert "None" not in message
 
 
-def test_depends_on_entry_missing_chunk_key_raises_malformed_dependency_edge_error(tmp_path):
+def test_depends_on_entry_missing_chunk_key_raises_malformed_dependency_edge_error(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: depends_on entry has no chunk key
@@ -887,7 +888,7 @@ def test_depends_on_entry_missing_chunk_key_raises_malformed_dependency_edge_err
     assert "None" not in message
 
 
-def test_scalar_depends_on_entry_raises_malformed_dependency_edge_error(tmp_path):
+def test_scalar_depends_on_entry_raises_malformed_dependency_edge_error(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: depends_on entry is a bare scalar
@@ -906,7 +907,7 @@ def test_scalar_depends_on_entry_raises_malformed_dependency_edge_error(tmp_path
     assert "None" not in message
 
 
-def test_schema_shape_preflight_raises_with_validator_message(tmp_path):
+def test_schema_shape_preflight_raises_with_validator_message(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: depends_on entry is a bare string, not a mapping
@@ -925,7 +926,7 @@ def test_schema_shape_preflight_raises_with_validator_message(tmp_path):
     assert "expected object, got str" in message
 
 
-def test_schema_shape_preflight_catches_out_of_enum_gate_kind_for_free(tmp_path):
+def test_schema_shape_preflight_catches_out_of_enum_gate_kind_for_free(tmp_path: Path) -> None:
     body = """\
 - id: C0
   title: predecessor
@@ -949,7 +950,7 @@ def test_schema_shape_preflight_catches_out_of_enum_gate_kind_for_free(tmp_path)
     assert "banana" in message
 
 
-def test_out_of_enum_gate_kind_passes_silently_when_other_required_fields_absent(tmp_path):
+def test_out_of_enum_gate_kind_passes_silently_when_other_required_fields_absent(tmp_path: Path) -> None:
     body = """\
 - id: C0
   title: predecessor
@@ -967,7 +968,7 @@ def test_out_of_enum_gate_kind_passes_silently_when_other_required_fields_absent
     assert rows["C1"].depends_on == [{"chunk": "C0", "gate_kind": "banana"}]
 
 
-def test_unrecognized_blocks_value_still_excludes(tmp_path):
+def test_unrecognized_blocks_value_still_excludes(tmp_path: Path) -> None:
     """A `blocks` value outside the schema enum resolves to execution.
 
     Fail-closed: only the literal ``ac-closure`` spares a row, so an author's
@@ -986,7 +987,7 @@ def test_unrecognized_blocks_value_still_excludes(tmp_path):
     assert read_spine(plan_path) == []
 
 
-def test_an_unknown_disposition_refuses_rather_than_dispatching(tmp_path):
+def test_an_unknown_disposition_refuses_rather_than_dispatching(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: reconciled with a plausible but invalid word
@@ -1005,7 +1006,7 @@ def test_an_unknown_disposition_refuses_rather_than_dispatching(tmp_path):
     assert "coded" in message
 
 
-def test_unknown_disposition_error_is_a_spine_read_error(tmp_path):
+def test_unknown_disposition_error_is_a_spine_read_error(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: bad value
@@ -1018,7 +1019,7 @@ def test_unknown_disposition_error_is_a_spine_read_error(tmp_path):
 
 
 @pytest.mark.parametrize("disposition", sorted(KNOWN_DISPOSITIONS))
-def test_every_schema_disposition_is_accepted(tmp_path, disposition):
+def test_every_schema_disposition_is_accepted(tmp_path: Path, disposition) -> None:
     body = f"""\
 - id: C1
   title: schema-legal row
@@ -1032,13 +1033,13 @@ def test_every_schema_disposition_is_accepted(tmp_path, disposition):
     read_spine(plan_path)
 
 
-def test_operator_row_is_not_dispatched():
+def test_operator_row_is_not_dispatched() -> None:
     from coordinator_core.ops.dispatch_emit.spine_read import _is_operator_row
 
     assert _is_operator_row({"execution_mode": "operator"}) is True
 
 
-def test_exclusion_is_opt_in_so_no_existing_plan_changes_behaviour():
+def test_exclusion_is_opt_in_so_no_existing_plan_changes_behaviour() -> None:
     """Absent, `agent`, null, and any unrecognised value all still dispatch.
 
     A typo must fail toward the OLD default. A row that vanishes from a wave
@@ -1053,7 +1054,7 @@ def test_exclusion_is_opt_in_so_no_existing_plan_changes_behaviour():
         assert _is_operator_row(raw) is False, raw
 
 
-def test_operator_blocks_like_a_gate_not_like_a_deferral():
+def test_operator_blocks_like_a_gate_not_like_a_deferral() -> None:
     """An operator row's work has NOT run at emit time, so a dependent
     dispatched now would run against work that does not exist. It must join
     `blocked_ids` (transitive) rather than `satisfied_ids` (edge-stripped)."""
@@ -1067,7 +1068,7 @@ def test_operator_blocks_like_a_gate_not_like_a_deferral():
     assert re.search(r"_has_uncleared_execution_gate\(raw\b[^\n]*\)\s*or _is_operator_row\(raw\)", src)
 
 
-def test_an_excluded_row_is_reported_not_silently_dropped():
+def test_an_excluded_row_is_reported_not_silently_dropped() -> None:
     """Exclusion without surfacing is a silent skip, and for an operator row
     that is worse than the mis-dispatch the field exists to prevent."""
     from coordinator_core.ops.dispatch_emit.emit import _excluded_rows_narration
@@ -1081,7 +1082,7 @@ def test_an_excluded_row_is_reported_not_silently_dropped():
     assert "physically do" in out and "waiting on a human" not in out
 
 
-def test_operator_rows_are_called_out_separately_from_other_exclusions():
+def test_operator_rows_are_called_out_separately_from_other_exclusions() -> None:
     """A deferred row's work is done or dropped; an operator row's is owed."""
     from coordinator_core.ops.dispatch_emit.emit import _excluded_rows_narration
 
@@ -1092,7 +1093,7 @@ def test_operator_rows_are_called_out_separately_from_other_exclusions():
     assert "OWED WORK" not in out
 
 
-def test_dependent_of_a_deferred_row_is_withheld_and_reported(tmp_path):
+def test_dependent_of_a_deferred_row_is_withheld_and_reported(tmp_path: Path) -> None:
     body = """\
 - id: C9
   title: deferred predecessor
@@ -1123,7 +1124,7 @@ def test_dependent_of_a_deferred_row_is_withheld_and_reported(tmp_path):
     assert "C9" in by_id["C9h"]["detail"]
 
 
-def test_deferred_until_row_is_withheld_like_deferred_true(tmp_path):
+def test_deferred_until_row_is_withheld_like_deferred_true(tmp_path: Path) -> None:
     body = """\
 - id: C9
   title: held row
@@ -1149,7 +1150,7 @@ def test_deferred_until_row_is_withheld_like_deferred_true(tmp_path):
     assert by_id["C9f"]["reason"] == "withheld_by_deferred_dependency"
 
 
-def test_memo_close_route_names_every_delivered_elsewhere_field():
+def test_memo_close_route_names_every_delivered_elsewhere_field() -> None:
     from coordinator_core.ops.dispatch_emit.spine_read import memo_close_route
 
     for slug in ("topic", None):
@@ -1165,7 +1166,7 @@ def _kind_rows(kinds: dict) -> str:
     )
 
 
-def test_every_invalid_change_kind_row_is_named_in_one_error(tmp_path):
+def test_every_invalid_change_kind_row_is_named_in_one_error(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.spine_read import InvalidChangeKindError
 
     plan_path = _write_plan(
@@ -1181,7 +1182,7 @@ def test_every_invalid_change_kind_row_is_named_in_one_error(tmp_path):
     assert "'E3'" not in message
 
 
-def test_a_single_invalid_change_kind_row_is_still_named(tmp_path):
+def test_a_single_invalid_change_kind_row_is_still_named(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.spine_read import InvalidChangeKindError
 
     plan_path = _write_plan(tmp_path, _kind_rows({"E1": "code-edit", "E2": "bogus-b"}))

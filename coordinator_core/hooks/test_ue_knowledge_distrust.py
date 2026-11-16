@@ -12,9 +12,11 @@ import json
 import subprocess
 
 from coordinator_core.hooks import ue_knowledge_distrust as mod
+from pathlib import Path
+import pytest
 
 
-def test_fast_path_writes_fresh_settings(tmp_path, monkeypatch):
+def test_fast_path_writes_fresh_settings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """No existing settings.json: writes it fresh with every bootstrap key true."""
     monkeypatch.setattr(subprocess, "run", _forbid_subprocess)
 
@@ -29,7 +31,7 @@ def test_fast_path_writes_fresh_settings(tmp_path, monkeypatch):
         assert data["enabledPlugins"][key] is True
 
 
-def test_merge_path_preserves_unrelated_keys(tmp_path, monkeypatch):
+def test_merge_path_preserves_unrelated_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Existing settings.json with unrelated keys: merges bootstrap keys in,
     leaves everything else untouched."""
     monkeypatch.setattr(subprocess, "run", _forbid_subprocess)
@@ -52,7 +54,7 @@ def test_merge_path_preserves_unrelated_keys(tmp_path, monkeypatch):
         assert data["enabledPlugins"][key] is True
 
 
-def test_merge_path_noop_when_already_true(tmp_path, monkeypatch):
+def test_merge_path_noop_when_already_true(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """All bootstrap keys already true: no write, no-change message."""
     monkeypatch.setattr(subprocess, "run", _forbid_subprocess)
     claude_dir = tmp_path / ".claude"
@@ -71,7 +73,7 @@ def test_merge_path_noop_when_already_true(tmp_path, monkeypatch):
     assert settings_path.stat().st_mtime_ns == before
 
 
-def test_malformed_settings_fails_open(tmp_path, monkeypatch):
+def test_malformed_settings_fails_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Unparseable settings.json: returns ok=False with a diagnostic message,
     never raises -- matches the bash oracle's fail-open-and-silent contract
     from the calling hook's perspective."""
@@ -87,7 +89,7 @@ def test_malformed_settings_fails_open(tmp_path, monkeypatch):
     assert "ERROR" in message
 
 
-def test_mkdir_failure_fails_open(tmp_path, monkeypatch):
+def test_mkdir_failure_fails_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """mkdir() raising OSError must fail open
     (ok=False, ERROR-prefixed message), never raise, matching the malformed-
     JSON test's shape."""
@@ -104,7 +106,7 @@ def test_mkdir_failure_fails_open(tmp_path, monkeypatch):
     assert message.startswith("ERROR")
 
 
-def test_write_failure_fails_open(tmp_path, monkeypatch):
+def test_write_failure_fails_open(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """write_text() raising OSError on the
     fresh-write path must fail open (ok=False, ERROR-prefixed message)."""
     monkeypatch.setattr(subprocess, "run", _forbid_subprocess)
@@ -120,7 +122,7 @@ def test_write_failure_fails_open(tmp_path, monkeypatch):
     assert message.startswith("ERROR")
 
 
-def test_fixture_only_uproject_is_silent(tmp_path):
+def test_fixture_only_uproject_is_silent(tmp_path: Path) -> None:
     fixture = tmp_path / "tests" / "fixtures" / "polyglot"
     fixture.mkdir(parents=True)
     (fixture / "Foo.uproject").write_text("{}", encoding="utf-8")
@@ -132,7 +134,7 @@ def test_fixture_only_uproject_is_silent(tmp_path):
     assert not (tmp_path / ".claude" / "settings.json").exists()
 
 
-def test_declared_non_ue_suppresses_banner_and_write(tmp_path):
+def test_declared_non_ue_suppresses_banner_and_write(tmp_path: Path) -> None:
     (tmp_path / "Game.uproject").write_text("{}", encoding="utf-8")
     (tmp_path / "coordinator.local.md").write_text(
         "---\nproject_type: general\n---\n", encoding="utf-8"
@@ -145,7 +147,7 @@ def test_declared_non_ue_suppresses_banner_and_write(tmp_path):
     assert not (tmp_path / ".claude").exists()
 
 
-def test_root_uproject_undeclared_still_banners(tmp_path):
+def test_root_uproject_undeclared_still_banners(tmp_path: Path) -> None:
     (tmp_path / "Game.uproject").write_text("{}", encoding="utf-8")
 
     result = mod.run(str(tmp_path), "unused")

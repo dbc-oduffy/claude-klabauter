@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import grind_commit_contract as gcc
 from coordinator_core.ops.dispatch_emit import reply_sidecar as rs
+from pathlib import Path
 
 
 def _manifest(rows: int = 40) -> dict:
@@ -21,21 +22,21 @@ def _manifest(rows: int = 40) -> dict:
     }
 
 
-def _plain_script(root, run_id="run1"):
+def _plain_script(root, run_id: str = "run1") -> None:
     script = root / "scratch" / "warp" / f"{run_id}.workflow.mjs"
     script.parent.mkdir(parents=True, exist_ok=True)
     script.write_text("export const meta = { name: 'x' }\nreturn 1;\n", encoding="utf-8")
 
 
 @pytest.fixture
-def sidecar(tmp_path):
+def sidecar(tmp_path: Path):
     _plain_script(tmp_path)
     path = tmp_path / "state" / "warp" / "run1" / "manifest.json"
     handle = rs.write_reply(tmp_path, path, _manifest())
     return tmp_path, path, handle
 
 
-def test_forty_row_payload_round_trips_with_tail_fields(sidecar):
+def test_forty_row_payload_round_trips_with_tail_fields(sidecar) -> None:
     root, _, handle = sidecar
     assert set(handle) == set(rs.HANDLE_KEYS)
     assert handle["path"] == "state/warp/run1/manifest.json"
@@ -43,7 +44,7 @@ def test_forty_row_payload_round_trips_with_tail_fields(sidecar):
     assert len(rs.read_reply(root, handle)["rows"]) == 40
 
 
-def test_sidecar_is_canonical_ascii_json(sidecar):
+def test_sidecar_is_canonical_ascii_json(sidecar) -> None:
     _, path, handle = sidecar
     raw = path.read_bytes()
     assert raw.isascii() and raw.endswith(b"}") and b"\n" not in raw
@@ -51,7 +52,7 @@ def test_sidecar_is_canonical_ascii_json(sidecar):
     assert handle["bytes"] == len(raw)
 
 
-def test_reindented_content_canonicalizes_to_the_written_text(sidecar):
+def test_reindented_content_canonicalizes_to_the_written_text(sidecar) -> None:
     _, path, _ = sidecar
     m = {"z": {"b": 1, "a": ["café", " ", "q\"\\"]}, "a": None, "n": "中"}
     reindented = json.dumps(m, indent=4)
@@ -59,17 +60,17 @@ def test_reindented_content_canonicalizes_to_the_written_text(sidecar):
     assert rs.canonical_json(json.loads(json.dumps(_manifest(), indent=4))) == path.read_text("ascii")
 
 
-def test_handle_for_matches_write_handle(sidecar):
+def test_handle_for_matches_write_handle(sidecar) -> None:
     root, path, handle = sidecar
     assert rs.handle_for(root, path) == handle
 
 
-def test_no_tmp_file_left_behind(sidecar):
+def test_no_tmp_file_left_behind(sidecar) -> None:
     _, path, _ = sidecar
     assert [p.name for p in path.parent.iterdir()] == ["manifest.json"]
 
 
-def test_one_flipped_byte_is_refused(sidecar):
+def test_one_flipped_byte_is_refused(sidecar) -> None:
     root, path, handle = sidecar
     raw = bytearray(path.read_bytes())
     raw[10] ^= 0x01
@@ -80,20 +81,20 @@ def test_one_flipped_byte_is_refused(sidecar):
     assert rs.SIDECAR_CAUSE in str(exc.value)
 
 
-def test_truncated_sidecar_is_refused(sidecar):
+def test_truncated_sidecar_is_refused(sidecar) -> None:
     root, path, handle = sidecar
     path.write_bytes(path.read_bytes()[:-50])
     with pytest.raises(rs.ReplySidecarError, match=gcc.RELAY_CORRUPT_HEAD):
         rs.read_text(root, handle)
 
 
-def test_wrong_bytes_value_is_refused(sidecar):
+def test_wrong_bytes_value_is_refused(sidecar) -> None:
     root, _, handle = sidecar
     with pytest.raises(rs.ReplySidecarError, match=gcc.RELAY_CORRUPT_HEAD):
         rs.read_text(root, {**handle, "bytes": handle["bytes"] + 1})
 
 
-def test_non_ascii_sidecar_is_refused(sidecar):
+def test_non_ascii_sidecar_is_refused(sidecar) -> None:
     root, path, handle = sidecar
     path.write_bytes("caf\u00e9".encode("utf-8"))
     with pytest.raises(rs.ReplySidecarError, match="not ASCII"):
@@ -104,7 +105,7 @@ def test_non_ascii_sidecar_is_refused(sidecar):
     "bad",
     ["../outside.json", "state/warp/../../etc/x", "/abs/x.json", "C" + ":/x.json", "state\\warp\\x", "docs/plans/x.json", "stateX/x"],
 )
-def test_path_outside_roots_refused_before_any_read(tmp_path, bad):
+def test_path_outside_roots_refused_before_any_read(tmp_path: Path, bad) -> None:
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / "docs" / "plans" / "x.json").write_text("{}\n")
     handle = {"path": bad, "sha256": "0" * 64, "bytes": 3}
@@ -114,19 +115,19 @@ def test_path_outside_roots_refused_before_any_read(tmp_path, bad):
     assert "arrived as" not in str(exc.value)
 
 
-def test_write_outside_roots_refused(tmp_path):
+def test_write_outside_roots_refused(tmp_path: Path) -> None:
     with pytest.raises(rs.ReplySidecarError):
         rs.write_reply(tmp_path, tmp_path / "docs" / "x.json", {})
     assert not (tmp_path / "docs").exists()
 
 
-def test_malformed_handle_refused(tmp_path):
+def test_malformed_handle_refused(tmp_path: Path) -> None:
     for bad in ({}, {"path": "scratch/x", "sha256": "0" * 64}, {"path": "scratch/x", "sha256": "0" * 64, "bytes": True}):
         with pytest.raises(rs.ReplySidecarError):
             rs.read_text(tmp_path, bad)
 
 
-def test_missing_sidecar_refused(tmp_path):
+def test_missing_sidecar_refused(tmp_path: Path) -> None:
     with pytest.raises(rs.ReplySidecarError, match=gcc.RELAY_CORRUPT_HEAD):
         rs.read_text(tmp_path, {"path": "scratch/none.json", "sha256": "0" * 64, "bytes": 1})
 
@@ -136,7 +137,7 @@ def _payload_with_reader_bytes(target: int) -> dict:
     return {"k": "x" * (target - base)}
 
 
-def test_reader_over_cap_is_refused_before_any_file_is_written(tmp_path):
+def test_reader_over_cap_is_refused_before_any_file_is_written(tmp_path: Path) -> None:
     payload = _payload_with_reader_bytes(rs.READER_MAX_BYTES + 1)
     assert len(rs.reader_script(rs.canonical_json(payload))) == rs.READER_MAX_BYTES + 1
     path = tmp_path / "state" / "warp" / "run1" / "big.json"
@@ -145,7 +146,7 @@ def test_reader_over_cap_is_refused_before_any_file_is_written(tmp_path):
     assert list(tmp_path.rglob("*")) == []
 
 
-def test_reader_exactly_at_cap_is_written(tmp_path):
+def test_reader_exactly_at_cap_is_written(tmp_path: Path) -> None:
     assert rs.READER_MAX_BYTES == 524288
     payload = _payload_with_reader_bytes(rs.READER_MAX_BYTES)
     path = tmp_path / "state" / "warp" / "run1" / "big.json"
@@ -154,7 +155,7 @@ def test_reader_exactly_at_cap_is_written(tmp_path):
     assert rs.read_reply(tmp_path, handle) == payload
 
 
-def test_handle_for_refuses_an_over_cap_reader_and_writes_no_reader(tmp_path):
+def test_handle_for_refuses_an_over_cap_reader_and_writes_no_reader(tmp_path: Path) -> None:
     path = tmp_path / "state" / "warp" / "run1" / "big.json"
     path.parent.mkdir(parents=True)
     path.write_bytes(rs.canonical_json(_payload_with_reader_bytes(rs.READER_MAX_BYTES + 1)).encode("ascii"))
@@ -163,7 +164,7 @@ def test_handle_for_refuses_an_over_cap_reader_and_writes_no_reader(tmp_path):
     assert not (tmp_path / rs.READER_ROOT).exists()
 
 
-def test_stage_reply_schema_carries_the_parked_reply():
+def test_stage_reply_schema_carries_the_parked_reply() -> None:
     from coordinator_core.ops.dispatch_emit import ask_contract as ac
     from coordinator_core.ops.dispatch_emit import ask_stage
 
@@ -186,7 +187,7 @@ def test_stage_reply_schema_carries_the_parked_reply():
         jsonschema.validate({"parked": "plan", "plan_path": 3}, rs.STAGE_REPLY_SCHEMA)
 
 
-def test_stage_wait_park_reply_with_its_remedy_validates_and_keeps_the_blockers():
+def test_stage_wait_park_reply_with_its_remedy_validates_and_keeps_the_blockers() -> None:
     from coordinator_core.ops.dispatch_emit import ask_contract as ac
     from coordinator_core.ops.dispatch_emit import ask_stage
 
@@ -210,7 +211,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_ask_compose_stage_handle impo
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_composed_script_ends_parked_on_a_stage_wait_reply(monkeypatch, stage_root):  # noqa: F811
+def test_composed_script_ends_parked_on_a_stage_wait_reply(monkeypatch: pytest.MonkeyPatch, stage_root) -> None:  # noqa: F811
     from coordinator_core.ops.dispatch_emit import ask_contract as ac
     from coordinator_core.ops.dispatch_emit import ask_stage
     from coordinator_core.ops.dispatch_emit.tests import test_ask_compose_stage_handle as handle
@@ -222,7 +223,7 @@ def test_composed_script_ends_parked_on_a_stage_wait_reply(monkeypatch, stage_ro
     assert out["workflowCalls"] == []
 
 
-def test_stage_reply_schema_accepts_already_staged_and_in_flight_replies(sidecar):
+def test_stage_reply_schema_accepts_already_staged_and_in_flight_replies(sidecar) -> None:
     from coordinator_core.ops.dispatch_emit import ask_stage_receipt as asr
 
     _, _, handle = sidecar
@@ -237,7 +238,7 @@ def test_stage_reply_schema_accepts_already_staged_and_in_flight_replies(sidecar
         jsonschema.validate({"manifest_handle": handle, "already_stagedd": True}, rs.STAGE_REPLY_SCHEMA)
 
 
-def test_stage_reply_schema_accepts_both_shapes_and_refuses_manifest_key(sidecar):
+def test_stage_reply_schema_accepts_both_shapes_and_refuses_manifest_key(sidecar) -> None:
     _, _, handle = sidecar
     jsonschema.validate({"manifest_handle": handle}, rs.STAGE_REPLY_SCHEMA)
     jsonschema.validate({"error": "x", "owed_em_ids": ["a"], "owed_plan": None}, rs.STAGE_REPLY_SCHEMA)
@@ -247,7 +248,7 @@ def test_stage_reply_schema_accepts_both_shapes_and_refuses_manifest_key(sidecar
         jsonschema.validate({"manifest_handle": {**handle, "sha256": "zz"}}, rs.STAGE_REPLY_SCHEMA)
 
 
-def test_js_names_no_runtime_decoder():
+def test_js_names_no_runtime_decoder() -> None:
     for banned in ("atob", "Buffer", "TextDecoder", "_canonJson"):
         assert banned not in rs.VERIFY_REPLY_JS
 
@@ -256,14 +257,14 @@ def _reader_file(root, handle):
     return root / rs.reader_rel(handle["sha256"])
 
 
-def test_reader_rel_refuses_bad_sha_before_any_filesystem_access():
+def test_reader_rel_refuses_bad_sha_before_any_filesystem_access() -> None:
     for bad in ("", "abc", "A" * 64, "g" * 64, "a" * 63, "a" * 65, None, 5):
         with pytest.raises(rs.ReplySidecarError):
             rs.reader_rel(bad)
     assert rs.reader_rel("a" * 64) == f"scratch/stage-readers/{'a' * 64}.js"
 
 
-def test_reader_script_is_pure_ascii_single_return():
+def test_reader_script_is_pure_ascii_single_return() -> None:
     text = 'q"\\   café\n'
     body = rs.reader_script(text)
     assert body.startswith(rs.READER_META)
@@ -272,7 +273,7 @@ def test_reader_script_is_pure_ascii_single_return():
     assert json.loads(body[len("return "):-2]) == text
 
 
-def test_write_reply_leaves_reader_and_handle_for_remints_it(sidecar):
+def test_write_reply_leaves_reader_and_handle_for_remints_it(sidecar) -> None:
     root, path, handle = sidecar
     reader = _reader_file(root, handle)
     assert reader.read_bytes() == rs.reader_script(path.read_text("ascii")).encode("ascii")
@@ -282,7 +283,7 @@ def test_write_reply_leaves_reader_and_handle_for_remints_it(sidecar):
     assert not list(reader.parent.glob("*.tmp"))
 
 
-def test_second_write_of_same_payload_leaves_reader_mtime_unchanged(sidecar):
+def test_second_write_of_same_payload_leaves_reader_mtime_unchanged(sidecar) -> None:
     root, path, handle = sidecar
     reader = _reader_file(root, handle)
     before = reader.stat().st_mtime_ns
@@ -291,12 +292,12 @@ def test_second_write_of_same_payload_leaves_reader_mtime_unchanged(sidecar):
     assert reader.stat().st_mtime_ns == before
 
 
-def test_read_stage_sidecar_js_names_no_runtime_decoder():
+def test_read_stage_sidecar_js_names_no_runtime_decoder() -> None:
     for banned in ("atob", "Buffer", "TextDecoder", "agent("):
         assert banned not in rs.READ_STAGE_SIDECAR_JS
 
 
-def _slotted_script(root, run_id="run1"):
+def _slotted_script(root, run_id: str = "run1"):
     from coordinator_core.ops.dispatch_emit import nested_run_contract as nrc
 
     script = root / "scratch" / "warp" / f"{run_id}.workflow.mjs"
@@ -305,7 +306,7 @@ def _slotted_script(root, run_id="run1"):
     return nrc.staged_twin_rel
 
 
-def test_write_reply_and_handle_for_leave_the_staged_twin_beside_a_slotted_script(tmp_path):
+def test_write_reply_and_handle_for_leave_the_staged_twin_beside_a_slotted_script(tmp_path: Path) -> None:
     twin_rel = _slotted_script(tmp_path)
     path = tmp_path / "state" / "warp" / "run1" / "manifest.json"
     handle = rs.write_reply(tmp_path, path, _manifest())
@@ -317,7 +318,7 @@ def test_write_reply_and_handle_for_leave_the_staged_twin_beside_a_slotted_scrip
     assert twin.is_file()
 
 
-def test_write_reply_refuses_by_name_when_the_twin_cannot_be_written(tmp_path):
+def test_write_reply_refuses_by_name_when_the_twin_cannot_be_written(tmp_path: Path) -> None:
     twin_rel = _slotted_script(tmp_path)
     path = tmp_path / "state" / "warp" / "run1" / "manifest.json"
     handle = rs.write_reply(tmp_path, path, _manifest())
@@ -330,7 +331,7 @@ def test_write_reply_refuses_by_name_when_the_twin_cannot_be_written(tmp_path):
         rs.handle_for(tmp_path, path)
 
 
-def test_over_cap_twin_refuses_with_its_own_head_not_the_corrupt_head(tmp_path, monkeypatch):
+def test_over_cap_twin_refuses_with_its_own_head_not_the_corrupt_head(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import nested_run_contract as nrc
 
     _slotted_script(tmp_path)
@@ -344,7 +345,7 @@ def test_over_cap_twin_refuses_with_its_own_head_not_the_corrupt_head(tmp_path, 
     assert not str(err.value).startswith(gcc.RELAY_CORRUPT_HEAD)
 
 
-def test_write_reply_for_a_slotless_script_writes_with_no_twin_and_no_refusal(tmp_path):
+def test_write_reply_for_a_slotless_script_writes_with_no_twin_and_no_refusal(tmp_path: Path) -> None:
     _plain_script(tmp_path)
     path = tmp_path / "state" / "warp" / "run1" / "manifest.json"
     handle = rs.write_reply(tmp_path, path, _manifest())
@@ -352,14 +353,14 @@ def test_write_reply_for_a_slotless_script_writes_with_no_twin_and_no_refusal(tm
     assert not list(tmp_path.glob("scratch/warp/*staged*"))
 
 
-def test_write_reply_for_a_non_run_sidecar_needs_no_script(tmp_path):
+def test_write_reply_for_a_non_run_sidecar_needs_no_script(tmp_path: Path) -> None:
     path = tmp_path / "scratch" / "other" / "x.json"
     handle = rs.write_reply(tmp_path, path, _manifest())
     assert path.is_file() and handle["path"] == "scratch/other/x.json"
 
 
 @pytest.mark.absent_run_script_live
-def test_write_reply_and_handle_for_without_a_run_script_refuse_by_name(tmp_path):
+def test_write_reply_and_handle_for_without_a_run_script_refuse_by_name(tmp_path: Path) -> None:
     path = tmp_path / "state" / "warp" / "runx" / "manifest.json"
     with pytest.raises(rs.ReplySidecarError, match="staged twin write failed: run script 'runx.workflow.mjs' is absent"):
         rs.write_reply(tmp_path, path, _manifest())
@@ -368,12 +369,12 @@ def test_write_reply_and_handle_for_without_a_run_script_refuse_by_name(tmp_path
     assert not list(tmp_path.glob("scratch/warp/*staged*"))
 
 
-def test_check_relay_default_cause_unchanged():
+def test_check_relay_default_cause_unchanged() -> None:
     msg = gcc.check_relay("record-urlenc", "abc", "9", "0" * 64)
     assert msg.endswith("the agent's copy of the pieces is damaged")
 
 
-def test_stage_reply_schema_carries_every_key_the_stage_ops_reply_with():
+def test_stage_reply_schema_carries_every_key_the_stage_ops_reply_with() -> None:
     """A key the stage ops return but this schema omits never reaches the run script (additionalProperties is False)."""
     import inspect
 

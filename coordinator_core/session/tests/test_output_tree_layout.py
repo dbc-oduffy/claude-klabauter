@@ -8,6 +8,7 @@ import os
 import pytest
 
 from coordinator_core.session import output_tree_layout as otl
+from pathlib import Path
 
 NAMES = {
     "docs/plans": ["2026-11-03-foo.md", "2026-01-31-x.md", "2026-11-031-bad.md", "undated.md", "README.md"],
@@ -17,7 +18,7 @@ NAMES = {
 }
 
 
-def test_shard_path_rules():
+def test_shard_path_rules() -> None:
     assert otl.shard_path("docs/plans", "2026-11-03-foo.md") == "docs/plans/2026-11/2026-11-03-foo.md"
     assert otl.shard_path("docs/delivery", "ask-20261103T072346-abc.md") == "docs/delivery/2026-11/ask-20261103T072346-abc.md"
     assert otl.shard_path("docs/delivery", "warp-2026-11-03-d1-x.md") == "docs/delivery/2026-11/warp-2026-11-03-d1-x.md"
@@ -30,37 +31,37 @@ def test_shard_path_rules():
         otl.shard_path("state/other", "2026-11-03-x.md")
 
 
-def test_write_rel_dated_shards_undated_stays_flat():
+def test_write_rel_dated_shards_undated_stays_flat() -> None:
     assert otl.write_rel("state/sizings", "2026-10-20-a.yaml") == "state/sizings/2026-10/2026-10-20-a.yaml"
     assert otl.write_rel("state/sizings", "notes.yaml") == "state/sizings/notes.yaml"
     assert otl.write_rel("docs/delivery", "2026-11-03-x.md") == "docs/delivery/2026-11-03-x.md"
 
 
-def _touch(root, rel, text="x"):
+def _touch(root, rel, text: str = "x") -> None:
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text, encoding="utf-8")
 
 
-def test_locate_flat_wins_when_it_exists(tmp_path):
+def test_locate_flat_wins_when_it_exists(tmp_path: Path) -> None:
     _touch(tmp_path, "docs/plans/2026-11-03-foo.md")
     assert otl.locate(str(tmp_path), "docs/plans/2026-11-03-foo.md") == "docs/plans/2026-11-03-foo.md"
     assert otl.locate(str(tmp_path), "docs\\plans\\2026-11-03-foo.md") == "docs/plans/2026-11-03-foo.md"
 
 
-def test_locate_missing_flat_goes_to_shard(tmp_path):
+def test_locate_missing_flat_goes_to_shard(tmp_path: Path) -> None:
     assert otl.locate(str(tmp_path), "docs/plans/2026-11-03-foo.md") == "docs/plans/2026-11/2026-11-03-foo.md"
     assert otl.locate(str(tmp_path), "docs/plans/undated.md") == "docs/plans/undated.md"
 
 
-def test_locate_sharded_cite_resolves_to_existing_flat_file(tmp_path):
+def test_locate_sharded_cite_resolves_to_existing_flat_file(tmp_path: Path) -> None:
     _touch(tmp_path, "docs/plans/2026-11-03-foo.md")
     assert otl.locate(str(tmp_path), "docs/plans/2026-11/2026-11-03-foo.md") == "docs/plans/2026-11-03-foo.md"
     absent = "docs/plans/2026-11/2026-11-04-bar.md"
     assert otl.locate(str(tmp_path), absent) == absent
 
 
-def test_layout_edge_follows_the_layout_the_repo_uses(tmp_path):
+def test_layout_edge_follows_the_layout_the_repo_uses(tmp_path: Path) -> None:
     sharded = "docs/plans/2026-11/2026-11-03-foo.md"
     assert otl.layout_edge(str(tmp_path), sharded) == sharded
     _touch(tmp_path, "docs/plans/2026-10-01-old.md")
@@ -70,19 +71,19 @@ def test_layout_edge_follows_the_layout_the_repo_uses(tmp_path):
     assert otl.layout_edge(str(tmp_path), "src/a.py") == "src/a.py"
 
 
-def test_locate_redirects_row_beats_shard_rule(tmp_path):
+def test_locate_redirects_row_beats_shard_rule(tmp_path: Path) -> None:
     _touch(tmp_path, "docs/plans/REDIRECTS.md",
            "| old | new |\n|---|---|\n| `docs/plans/2026-11-03-foo.md` | `docs/plans/archive/foo.md` |\n")
     assert otl.locate(str(tmp_path), "docs/plans/2026-11-03-foo.md") == "docs/plans/archive/foo.md"
     assert otl.locate(str(tmp_path), "docs/plans/2026-11-04-bar.md") == "docs/plans/2026-11/2026-11-04-bar.md"
 
 
-def test_locate_foreign_and_nested_paths_pass_through(tmp_path):
+def test_locate_foreign_and_nested_paths_pass_through(tmp_path: Path) -> None:
     assert otl.locate(str(tmp_path), "src/a.py") == "src/a.py"
     assert otl.locate(str(tmp_path), "docs/plans/2026-11/2026-11-03-foo.md") == "docs/plans/2026-11/2026-11-03-foo.md"
 
 
-def test_locate_is_cwd_independent(tmp_path, monkeypatch):
+def test_locate_is_cwd_independent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     other = tmp_path / "other"
     other.mkdir()
     root = tmp_path / "repo"
@@ -91,7 +92,7 @@ def test_locate_is_cwd_independent(tmp_path, monkeypatch):
     assert otl.locate(str(root), "state/handoffs/2026-09-01-h.md") == "state/handoffs/2026-09-01-h.md"
 
 
-def test_iter_entries_flat_and_sharded(tmp_path):
+def test_iter_entries_flat_and_sharded(tmp_path: Path) -> None:
     _touch(tmp_path, "docs/plans/2026-10-01-a.md")
     _touch(tmp_path, "docs/plans/README.md")
     _touch(tmp_path, "docs/plans/REDIRECTS.md")
@@ -116,7 +117,7 @@ def _load_doe():
     return mod
 
 
-def test_shard_path_parity_with_doe():
+def test_shard_path_parity_with_doe() -> None:
     doe = _load_doe()
     if doe is None:
         pytest.skip("CONTENT_ROOT_ROOT output_tree_layout.py not present")

@@ -8,6 +8,7 @@ from coordinator_core import machine_profile
 from coordinator_core.bash_guards import _write_bump_sink_shapes as sinks
 from coordinator_core.bash_guards import block_drive_root_new_dir_bash_write as guard
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -15,7 +16,7 @@ def _enveloped(check):
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     root = tmp_path / "root"
     home = tmp_path / "home"
     work = tmp_path / "work"
@@ -32,7 +33,7 @@ def world(tmp_path, monkeypatch):
     machine_profile.reset_cache()
 
 
-def _payload(cmd, tool="Bash", cwd=None, env=None):
+def _payload(cmd, tool: str = "Bash", cwd=None, env=None):
     p = {"tool_name": tool, "tool_input": {"command": cmd}}
     if cwd is not None:
         p["cwd"] = str(cwd)
@@ -41,7 +42,7 @@ def _payload(cmd, tool="Bash", cwd=None, env=None):
     return p
 
 
-def _denied(result):
+def _denied(result) -> bool:
     if result is None:
         return False
     out = result["hookSpecificOutput"]
@@ -71,7 +72,7 @@ def _denied(result):
         ("PowerShell", "curl.exe -o {r}/new/f http://u"),
     ],
 )
-def test_new_root_entry_is_denied(world, tool, tmpl):
+def test_new_root_entry_is_denied(world, tool, tmpl) -> None:
     root, _, work = world
     assert _denied(_enveloped(guard.check)(_payload(tmpl.format(r=root.as_posix()), tool, work)))
 
@@ -86,7 +87,7 @@ def test_new_root_entry_is_denied(world, tool, tmpl):
         "ls {r}/new",
     ],
 )
-def test_existing_or_nonwriting_is_allowed(world, tmpl):
+def test_existing_or_nonwriting_is_allowed(world, tmpl) -> None:
     root, _, work = world
     assert _enveloped(guard.check)(_payload(tmpl.format(r=root.as_posix()), "Bash", work)) is None
 
@@ -102,19 +103,19 @@ def test_existing_or_nonwriting_is_allowed(world, tmpl):
         "rg.exe -o {r}/new f",
     ],
 )
-def test_only_matching_search_with_absolute_pattern_is_allowed(world, tmpl):
+def test_only_matching_search_with_absolute_pattern_is_allowed(world, tmpl) -> None:
     root, _, work = world
     assert _enveloped(guard.check)(_payload(tmpl.format(r=root.as_posix()), "Bash", work)) is None
 
 
-def test_curl_output_still_denied_beside_only_matching_search(world):
+def test_curl_output_still_denied_beside_only_matching_search(world) -> None:
     root, _, work = world
     r = root.as_posix()
     assert _denied(_enveloped(guard.check)(_payload(f"curl -o {r}/new/f http://u", "Bash", work)))
     assert _denied(_enveloped(guard.check)(_payload(f"git grep -o x f && curl -o {r}/new/f http://u", "Bash", work)))
 
 
-def test_cwd_at_root(world):
+def test_cwd_at_root(world) -> None:
     root, _, _ = world
     assert _denied(_enveloped(guard.check)(_payload("mkdir new", "Bash", root)))
     assert _enveloped(guard.check)(_payload("grep -o foo f", "Bash", root)) is None
@@ -122,19 +123,19 @@ def test_cwd_at_root(world):
 
 
 @pytest.mark.parametrize("prefix", ["cd {r} && ", "cd {w} && cd {r} && ", "cd {w}; cd {r} && "])
-def test_relative_write_after_cd_chain_into_root_is_denied(world, prefix):
+def test_relative_write_after_cd_chain_into_root_is_denied(world, prefix) -> None:
     root, _, work = world
     cmd = prefix.format(r=root.as_posix(), w=work.as_posix()) + "mkdir new"
     assert _denied(_enveloped(guard.check)(_payload(cmd, "Bash", work)))
 
 
-def test_relative_write_after_cd_chain_out_of_root_is_allowed(world):
+def test_relative_write_after_cd_chain_out_of_root_is_allowed(world) -> None:
     root, _, work = world
     cmd = f"cd {root.as_posix()} && cd {work.as_posix()} && mkdir new"
     assert _enveloped(guard.check)(_payload(cmd, "Bash", work)) is None
 
 
-def test_general_work_cwd_is_exempt_other_cwd_still_denied(world, monkeypatch):
+def test_general_work_cwd_is_exempt_other_cwd_still_denied(world, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import general_work_scope as gws
 
     root, _, work = world
@@ -144,7 +145,7 @@ def test_general_work_cwd_is_exempt_other_cwd_still_denied(world, monkeypatch):
     assert _denied(_enveloped(guard.check)(_payload(cmd, "Bash", root / "existing")))
 
 
-def test_home_rules(world):
+def test_home_rules(world) -> None:
     _, home, work = world
     assert _denied(_enveloped(guard.check)(_payload("mkdir -p ~/newdir/a", "Bash", work)))
     assert _denied(_enveloped(guard.check)(_payload("mkdir $HOME/newdir/a", "Bash", work)))
@@ -152,14 +153,14 @@ def test_home_rules(world):
     assert _enveloped(guard.check)(_payload("echo x > ~/f.txt", "Bash", work)) is None
 
 
-def test_override_in_payload_env_allows(world):
+def test_override_in_payload_env_allows(world) -> None:
     root, _, work = world
     cmd = f"mkdir {root.as_posix()}/new"
     assert _enveloped(guard.check)(_payload(cmd, "Bash", work, env={"COORDINATOR_ALLOW_DRIVE_ROOT_NEW_DIR": "1"})) is None
     assert _denied(_enveloped(guard.check)(_payload(cmd, "Bash", work, env={"COORDINATOR_DRIVE_ROOTS": str(root)})))
 
 
-def test_bare_slash_on_windows(world, monkeypatch):
+def test_bare_slash_on_windows(world, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sinks, "_host_is_windows", lambda: True)
     monkeypatch.setattr(guard, "_host_is_windows", lambda: True)
     monkeypatch.delenv("COORDINATOR_DRIVE_ROOTS", raising=False)
@@ -173,7 +174,7 @@ def test_bare_slash_on_windows(world, monkeypatch):
     "cmd",
     ["pytest --basetemp=../root/new", "pytest --basetemp ../root/new/a", "curl --out ../root/new/f http://u"],
 )
-def test_relative_climbing_out_flag_is_judged(world, cmd):
+def test_relative_climbing_out_flag_is_judged(world, cmd) -> None:
     _, _, work = world
     assert _denied(_enveloped(guard.check)(_payload(cmd, "Bash", work)))
 
@@ -182,7 +183,7 @@ def test_relative_climbing_out_flag_is_judged(world, cmd):
     "cmd",
     ["pytest --basetemp=../root/existing/t", "pytest --basetemp=tmp/x", "pytest --basetemp=../work/t"],
 )
-def test_relative_out_flag_inside_or_existing_is_allowed(world, cmd):
+def test_relative_out_flag_inside_or_existing_is_allowed(world, cmd) -> None:
     _, _, work = world
     assert _enveloped(guard.check)(_payload(cmd, "Bash", work)) is None
 
@@ -202,7 +203,7 @@ def test_relative_out_flag_inside_or_existing_is_allowed(world, cmd):
         ("PowerShell", "python -m pytest --basetemp {rw}/new x"),
     ],
 )
-def test_pytest_temp_root_route_into_a_new_root_entry_is_denied(world, tool, tmpl):
+def test_pytest_temp_root_route_into_a_new_root_entry_is_denied(world, tool, tmpl) -> None:
     root, _, work = world
     cmd = tmpl.format(r=root.as_posix(), rw=str(root))
     assert _denied(_enveloped(guard.check)(_payload(cmd, tool, work)))
@@ -219,12 +220,12 @@ def test_pytest_temp_root_route_into_a_new_root_entry_is_denied(world, tool, tmp
         ("PowerShell", "python -m pytest --basetemp=scratch/x"),
     ],
 )
-def test_pytest_temp_root_route_inside_or_existing_is_allowed(world, tool, tmpl):
+def test_pytest_temp_root_route_inside_or_existing_is_allowed(world, tool, tmpl) -> None:
     root, _, work = world
     assert _enveloped(guard.check)(_payload(tmpl.format(r=root.as_posix()), tool, work)) is None
 
 
-def test_delete_of_top_level_entry_is_not_a_creation(world, monkeypatch):
+def test_delete_of_top_level_entry_is_not_a_creation(world, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sinks, "_host_is_windows", lambda: True)
     monkeypatch.setattr(guard, "_host_is_windows", lambda: True)
     monkeypatch.delenv("COORDINATOR_DRIVE_ROOTS", raising=False)
@@ -243,14 +244,14 @@ def test_delete_of_top_level_entry_is_not_a_creation(world, monkeypatch):
         assert _warned(guard.check(_payload(cmd, "Bash", cwd))), cmd
 
 
-def _warned(result):
+def _warned(result) -> bool:
     out = envelope_of(result)["hookSpecificOutput"]
     assert out["permissionDecision"] == "allow"
     assert "<repo>/scratch/" in out["additionalContext"]
     return True
 
 
-def test_heredoc_prose_and_interpreter_body_warn_never_deny(world, monkeypatch):
+def test_heredoc_prose_and_interpreter_body_warn_never_deny(world, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sinks, "_host_is_windows", lambda: True)
     monkeypatch.setattr(guard, "_host_is_windows", lambda: True)
     monkeypatch.delenv("COORDINATOR_DRIVE_ROOTS", raising=False)
@@ -262,13 +263,13 @@ def test_heredoc_prose_and_interpreter_body_warn_never_deny(world, monkeypatch):
     assert _denied(_enveloped(guard.check)(_payload("mkdir /zz-new-top", "Bash", cwd)))
 
 
-def test_heredoc_strip_keeps_redirect_target(world):
+def test_heredoc_strip_keeps_redirect_target(world) -> None:
     root, _, work = world
     cmd = f"cat > {root.as_posix()}/new/f <<'EOF'\nbody\nEOF"
     assert _denied(_enveloped(guard.check)(_payload(cmd, "Bash", work)))
 
 
-def test_shell_variable_assignment_to_msys_path_is_not_a_write(world, monkeypatch):
+def test_shell_variable_assignment_to_msys_path_is_not_a_write(world, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sinks, "_host_is_windows", lambda: True)
     monkeypatch.setattr(guard, "_host_is_windows", lambda: True)
     monkeypatch.delenv("COORDINATOR_DRIVE_ROOTS", raising=False)
@@ -284,7 +285,7 @@ def test_shell_variable_assignment_to_msys_path_is_not_a_write(world, monkeypatc
 
 
 class _Counter:
-    def __init__(self, fn):
+    def __init__(self, fn) -> None:
         self.fn, self.calls = fn, 0
 
     def __call__(self, *a, **k):
@@ -293,7 +294,7 @@ class _Counter:
 
 
 @pytest.fixture
-def counters(monkeypatch):
+def counters(monkeypatch: pytest.MonkeyPatch) -> tuple[_Counter, _Counter]:
     c1 = _Counter(guard.resolve_command_positions)
     c2 = _Counter(guard.resolve_segments_for_dialect)
     monkeypatch.setattr(guard, "resolve_command_positions", c1)
@@ -301,14 +302,14 @@ def counters(monkeypatch):
     return c1, c2
 
 
-def test_prepass_skips_tokenising_when_all_tops_exist(world, counters):
+def test_prepass_skips_tokenising_when_all_tops_exist(world, counters) -> None:
     root, _, work = world
     cmd = f"cat {root.as_posix()}/existing/a > {root.as_posix()}/existing/b"
     assert _enveloped(guard.check)(_payload(cmd, "Bash", work)) is None
     assert sum(c.calls for c in counters) == 0
 
 
-def test_prepass_admits_new_and_root_and_cwd_root(world, counters):
+def test_prepass_admits_new_and_root_and_cwd_root(world, counters) -> None:
     root, _, work = world
     r = root.as_posix()
     assert _denied(_enveloped(guard.check)(_payload(f"mkdir {r}/new", "Bash", work)))
@@ -343,7 +344,7 @@ _PM_DIRS = ("ptbase-c1", "tmp-c2", "ps7-c5-tmp", "pytest-reverify-warp-2026-11-1
         ("PowerShell", "[Environment]::SetEnvironmentVariable('TMP','{r}/{n}')"),
     ],
 )
-def test_basetemp_and_temp_env_to_new_root_entry_is_denied(world, tool, tmpl, name):
+def test_basetemp_and_temp_env_to_new_root_entry_is_denied(world, tool, tmpl, name) -> None:
     root, _, work = world
     assert _denied(_enveloped(guard.check)(_payload(tmpl.format(r=root.as_posix(), n=name), tool, work)))
 
@@ -361,7 +362,7 @@ def test_basetemp_and_temp_env_to_new_root_entry_is_denied(world, tool, tmpl, na
         ("PowerShell", "$env:TMP = 'relative/x'; pytest"),
     ],
 )
-def test_basetemp_and_temp_env_to_existing_or_nonroot_is_allowed(world, tool, tmpl):
+def test_basetemp_and_temp_env_to_existing_or_nonroot_is_allowed(world, tool, tmpl) -> None:
     root, _, work = world
     assert _enveloped(guard.check)(_payload(tmpl.format(r=root.as_posix()), tool, work)) is None
 
@@ -377,13 +378,13 @@ def test_basetemp_and_temp_env_to_existing_or_nonroot_is_allowed(world, tool, tm
         ("Bash", 'bash -c "TMP={r}/newroot pytest"', True),
     ],
 )
-def test_quoted_print_text_is_not_a_temp_route(world, tool, cmd, denied):
+def test_quoted_print_text_is_not_a_temp_route(world, tool, cmd, denied) -> None:
     root, _, work = world
     result = _enveloped(guard.check)(_payload(cmd.format(r=root.as_posix()), tool, work))
     assert bool(_denied(result)) is denied
 
 
-def test_managed_temp_layout_basetemp_and_env_pass(world):
+def test_managed_temp_layout_basetemp_and_env_pass(world) -> None:
     import tempfile
     from pathlib import Path
 
@@ -398,7 +399,7 @@ def test_managed_temp_layout_basetemp_and_env_pass(world):
         assert check(_payload(cmd, tool, work)) is None, cmd
 
 
-def test_msys_and_native_spellings_of_drive_root_basetemp_and_temp_env(world, monkeypatch):
+def test_msys_and_native_spellings_of_drive_root_basetemp_and_temp_env(world, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sinks, "_host_is_windows", lambda: True)
     monkeypatch.setattr(guard, "_host_is_windows", lambda: True)
     monkeypatch.delenv("COORDINATOR_DRIVE_ROOTS", raising=False)
@@ -415,6 +416,6 @@ def test_msys_and_native_spellings_of_drive_root_basetemp_and_temp_env(world, mo
     assert check(_payload("TMP=/tmp/x pytest", "Bash", cwd)) is None
 
 
-def test_malformed_payload_is_allowed(world):
+def test_malformed_payload_is_allowed(world) -> None:
     assert _enveloped(guard.check)({"tool_name": "Bash", "tool_input": None}) is None
     assert _enveloped(guard.check)({"tool_name": "Read"}) is None

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -36,14 +37,14 @@ def _op(root, **params):
     return op._session_landing_hold(params, repo_root=root / ".git")
 
 
-def test_registration_quad():
+def test_registration_quad() -> None:
     assert ipc._REGISTRY.get("session.landing_hold") is not None
     assert _registry_map.OP_MODULE_MAP["session.landing_hold"] == "coordinator_core.ops.session_landing_hold"
     assert OP_KEY_SCOPE["session.landing_hold"] == "common_dir"
     assert OP_CLASSIFICATION["session.landing_hold"] is OpClass.MUTATING
 
 
-def test_invalid_params_return_error(tmp_path):
+def test_invalid_params_return_error(tmp_path: Path) -> None:
     assert "error" in _op(tmp_path, action="bogus", session_id=SID)
     assert "error" in _op(tmp_path, action="set")
     assert "error" in _op(tmp_path, action="set", session_id="../x")
@@ -51,7 +52,7 @@ def test_invalid_params_return_error(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_set_status_clear_without_deferrals(repo):
+def test_set_status_clear_without_deferrals(repo) -> None:
     assert _op(repo, action="status", session_id=SID) == {"action": "status", "held": False, "deferred_count": 0}
     assert _op(repo, action="set", session_id=SID) == {"action": "set", "held": True}
     assert landing_hold.is_held(str(repo), SID)
@@ -62,7 +63,7 @@ def test_set_status_clear_without_deferrals(repo):
 
 
 @pytest.mark.spawns_process
-def test_clear_replays_deferred_halted_record(repo):
+def test_clear_replays_deferred_halted_record(repo) -> None:
     _write_record(repo, RUN)
     head = _git(["rev-parse", "HEAD"], repo).strip()
     _op(repo, action="set", session_id=SID)
@@ -84,7 +85,7 @@ def test_clear_replays_deferred_halted_record(repo):
 
 
 @pytest.mark.spawns_process
-def test_clear_replays_deferred_row_mark_through_land_stamp(tmp_path):
+def test_clear_replays_deferred_row_mark_through_land_stamp(tmp_path: Path) -> None:
     root, sha = _repo(tmp_path)
     _op(root, action="set", session_id=SID)
 
@@ -104,7 +105,7 @@ def test_clear_replays_deferred_row_mark_through_land_stamp(tmp_path):
 
 
 @pytest.mark.spawns_process
-def test_failed_replay_is_kept_not_dropped(repo):
+def test_failed_replay_is_kept_not_dropped(repo) -> None:
     _op(repo, action="set", session_id=SID)
     landing_hold.defer(str(repo), SID, "checkpoint_stamp", {"paths": ["missing.md"], "message": "m", "session_id": SID})
 

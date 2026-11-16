@@ -13,9 +13,10 @@ from coordinator_core import ipc
 from coordinator_core.session import core
 from coordinator_core.session_hub_path import hub_for_common
 from coordinator_core.telemetry.op_latency import record_op_started
+from pathlib import Path
 
 
-async def _handler(params, ctx=None, repo_root=None):
+async def _handler(params, ctx=None, repo_root=None) -> dict[str, bool]:
     return {"ok": True}
 
 
@@ -25,14 +26,14 @@ def _started_rows(sink):
 
 
 @pytest.fixture()
-def sink(tmp_path, monkeypatch):
+def sink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     common = tmp_path / ".git"
     common.mkdir()
     monkeypatch.setattr("coordinator_core.lifecycle.git_common_dir", lambda repo_root: common)
     return hub_for_common(common) / "logs" / "op-latency.jsonl"
 
 
-def _dispatch(tmp_path):
+def _dispatch(tmp_path) -> None:
     method = "test.sid_source"
     ipc._REGISTRY[method] = _handler
     try:
@@ -43,29 +44,29 @@ def _dispatch(tmp_path):
         ipc._REGISTRY.pop(method, None)
 
 
-def test_record_op_started_writes_sid_source(tmp_path, sink):
+def test_record_op_started_writes_sid_source(tmp_path: Path, sink) -> None:
     record_op_started(op="p", t_start=1.0, corr_id="c", repo_root=tmp_path,
                       sid="s", sid_source="env")
     assert _started_rows(sink)[0]["sid_source"] == "env"
 
 
-def test_record_op_started_sid_source_defaults_to_null(tmp_path, sink):
+def test_record_op_started_sid_source_defaults_to_null(tmp_path: Path, sink) -> None:
     record_op_started(op="p", t_start=1.0, corr_id="c", repo_root=tmp_path)
     assert _started_rows(sink)[0]["sid_source"] is None
 
 
-def test_dispatch_labels_a_carried_identity(tmp_path, sink):
+def test_dispatch_labels_a_carried_identity(tmp_path: Path, sink) -> None:
     with core.session_identity_override(str(uuid.uuid4())):
         _dispatch(tmp_path)
     assert _started_rows(sink)[0]["sid_source"] == "carried"
 
 
-def test_dispatch_labels_a_warm_request_without_identity_spawner_env(tmp_path, sink):
+def test_dispatch_labels_a_warm_request_without_identity_spawner_env(tmp_path: Path, sink) -> None:
     with core.warm_served_request():
         _dispatch(tmp_path)
     assert _started_rows(sink)[0]["sid_source"] == "spawner-env"
 
 
-def test_dispatch_labels_a_cold_invocation_env(tmp_path, sink):
+def test_dispatch_labels_a_cold_invocation_env(tmp_path: Path, sink) -> None:
     _dispatch(tmp_path)
     assert _started_rows(sink)[0]["sid_source"] == "env"

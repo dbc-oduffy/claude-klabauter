@@ -25,11 +25,16 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit.emit import _BLOCKED_STATUS_JS_RE, compose_script
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from re import Pattern
 
 pytestmark = pytest.mark.complete
 
 
-def _row(id_, writes, **kwargs):
+def _row(id_, writes, **kwargs) -> WaveRow:
     return WaveRow(
         id=id_,
         title=f"title {id_}",
@@ -90,7 +95,7 @@ _V5_STAGE_SCHEMAS = {
 }
 
 
-def test_the_terminal_return_validates_as_a_wake_digest_for_a_plain_run():
+def test_the_terminal_return_validates_as_a_wake_digest_for_a_plain_run() -> None:
     """A run with no review, no falsifier, one unresolved test scope
     (prose-only spine): the digest still validates against the schema, and
     `tests.status` reads `not_run` (AC14's "empty scope maps to not_run")."""
@@ -111,7 +116,7 @@ def test_the_terminal_return_validates_as_a_wake_digest_for_a_plain_run():
     assert order == sorted(order)
 
 
-def test_a_resolved_scope_runs_before_the_falsifier_judge():
+def test_a_resolved_scope_runs_before_the_falsifier_judge() -> None:
     """When both a resolved test scope and a plan-declared falsifier exist,
     the scoped test is awaited first, then the falsifier (never one parallel)."""
     waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
@@ -133,7 +138,7 @@ def test_a_resolved_scope_runs_before_the_falsifier_judge():
     assert "test:terminal-falsifier'" in terminal[falsifier_at:]
 
 
-def test_a_falsifier_alone_never_touches_tests_status():
+def test_a_falsifier_alone_never_touches_tests_status() -> None:
     """Rung 2 (no resolvable scope, falsifier present): the falsifier is a
     `criterion`, not a `tests` result -- `tests.status` stays `not_run`."""
     from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
@@ -154,7 +159,7 @@ def test_a_falsifier_alone_never_touches_tests_status():
     assert obj["tests"]["status"] == "not_run"
 
 
-def test_the_falsifier_agent_must_return_a_boolean_comparison_not_prose():
+def test_the_falsifier_agent_must_return_a_boolean_comparison_not_prose() -> None:
     waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/nonexistent_module.py"])]]
     falsifier = {"how": "run it", "baseline_output": "fails", "expected_when_true": "passes"}
     script = compose_script(waves, name="wf", description="f", falsifier=falsifier, **REVIEW_KW)
@@ -167,7 +172,7 @@ def test_the_falsifier_agent_must_return_a_boolean_comparison_not_prose():
     assert {"differs_from_baseline", "baseline_output"} <= set(schema["required"])
 
 
-def test_blocked_chunks_land_in_their_own_array_and_partial_stays_incomplete():
+def test_blocked_chunks_land_in_their_own_array_and_partial_stays_incomplete() -> None:
     waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
     script = compose_script(waves, name="wf", description="b", **REVIEW_KW)
     assert "const _blockedChunks = [];" in script
@@ -177,7 +182,7 @@ def test_blocked_chunks_land_in_their_own_array_and_partial_stays_incomplete():
     )
 
 
-def test_a_prose_only_spine_still_runs_its_falsifier():
+def test_a_prose_only_spine_still_runs_its_falsifier() -> None:
     """An empty scope (nothing testable written) is not a missing criterion:
     the falsifier still composes, and `tests.status` stays `not_run`."""
     from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
@@ -199,7 +204,7 @@ def test_a_prose_only_spine_still_runs_its_falsifier():
     assert obj["tests"]["status"] == "not_run"
 
 
-def test_no_scoped_target_and_no_falsifier_degrades_to_degraded_status():
+def test_no_scoped_target_and_no_falsifier_degrades_to_degraded_status() -> None:
     from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
 
     waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/nonexistent_module.py"])]]
@@ -212,7 +217,7 @@ def test_no_scoped_target_and_no_falsifier_degrades_to_degraded_status():
     assert obj["tests"]["status"] == "degraded"
 
 
-def test_review_wave_composes_only_from_a_v5_fragment_with_stage_schemas():
+def test_review_wave_composes_only_from_a_v5_fragment_with_stage_schemas() -> None:
     waves = [[_row("C1", ["a.py"])]]
 
     with pytest.raises(NoReviewStageError):
@@ -250,7 +255,7 @@ _V5_FRAGMENT_ZERO_STAGE = {
 }
 
 
-def test_zero_integration_stage_emits_no_integrate_dispatch_and_points_inline_review_at_the_record():
+def test_zero_integration_stage_emits_no_integrate_dispatch_and_points_inline_review_at_the_record() -> None:
     """2026-09-28 PM order step b': the engine tolerates zero integration
     stages -- no `_reviewIntegration` call in the emitted script, and the
     wake digest's `inline_review` points at the mechanical bookkeeping
@@ -270,7 +275,7 @@ def test_zero_integration_stage_emits_no_integrate_dispatch_and_points_inline_re
     assert "integration_stem: 'pln-zero-stage-abc123.review-wave-bookkeeping'" in script
 
 
-def test_inline_review_carries_wave_reviews_on_integration_and_zero_integration_paths():
+def test_inline_review_carries_wave_reviews_on_integration_and_zero_integration_paths() -> None:
     expr = (
         "wave_reviews: (Array.isArray("
     )
@@ -287,7 +292,7 @@ def test_inline_review_carries_wave_reviews_on_integration_and_zero_integration_
         assert "agent_type: r.agent_type ?? null, sidecar_path: r.sidecar_path, verdict: r.verdict ?? null" in script
 
 
-def test_review_stages_feed_the_digests_review_block():
+def test_review_stages_feed_the_digests_review_block() -> None:
     from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
 
     waves = [[_row("C1", ["a.py"])]]
@@ -311,7 +316,7 @@ def test_review_stages_feed_the_digests_review_block():
     assert obj["review"]["fixes_applied"] == 2
 
 
-def test_a_halted_run_still_returns_a_validating_digest():
+def test_a_halted_run_still_returns_a_validating_digest() -> None:
     from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
 
     waves = [[_row("C1", ["a.py"]), _row("C2", ["a.py"], depends_on=["C1"])]]
@@ -401,7 +406,7 @@ def _simulate_return(
     }
 
 
-def test_dispatch_emit_loads_the_v5_fragment_and_stage_schemas_via_content_root(tmp_path, monkeypatch):
+def test_dispatch_emit_loads_the_v5_fragment_and_stage_schemas_via_content_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC22: the plan route resolves the roster fragment and DoE's stage
     schemas through the same content-root pointer ``review_mint.op.load_fragment``
     already uses -- never a caller-supplied fragment param, and never a
@@ -427,7 +432,7 @@ def test_dispatch_emit_loads_the_v5_fragment_and_stage_schemas_via_content_root(
     assert stage_schemas == _V5_STAGE_SCHEMAS
 
 
-def test_dispatch_emit_refuses_when_the_content_root_is_unresolvable(monkeypatch):
+def test_dispatch_emit_refuses_when_the_content_root_is_unresolvable(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import op as op_mod
 
     monkeypatch.setattr(
@@ -440,7 +445,7 @@ def test_dispatch_emit_refuses_when_the_content_root_is_unresolvable(monkeypatch
         op_mod._load_review_inputs("plan")
 
 
-def test_dispatch_emit_plan_route_wires_the_loaded_fragment_end_to_end(tmp_path, monkeypatch):
+def test_dispatch_emit_plan_route_wires_the_loaded_fragment_end_to_end(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import op as op_mod
 
     monkeypatch.setattr(
@@ -477,7 +482,7 @@ if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
 
 
-def test_a_row_the_halt_kept_from_starting_is_handed_to_terminal_commit_as_incomplete():
+def test_a_row_the_halt_kept_from_starting_is_handed_to_terminal_commit_as_incomplete() -> None:
     """terminal_commit stamps every row it is NOT told is incomplete as coded,
     so a halted run's not-started rows must ride `incomplete_chunks` too --
     otherwise they are stamped coded with no work behind them."""
@@ -487,7 +492,7 @@ def test_a_row_the_halt_kept_from_starting_is_handed_to_terminal_commit_as_incom
     assert "_notStarted" in line and "_incompleteChunks" in line
 
 
-def test_every_executor_prompt_tells_the_row_to_delete_its_own_scratch():
+def test_every_executor_prompt_tells_the_row_to_delete_its_own_scratch() -> None:
     """Per-row clones and venvs left behind filled a cloud disk mid-run."""
     waves = [[_row("C1", ["a.py"])]]
     script = compose_script(
@@ -496,7 +501,7 @@ def test_every_executor_prompt_tells_the_row_to_delete_its_own_scratch():
     assert "delete that directory before you write your report" in script
 
 
-def test_one_stage_inline_review_names_the_engine_record_and_carries_stage_returns():
+def test_one_stage_inline_review_names_the_engine_record_and_carries_stage_returns() -> None:
     """The one-stage digest points its trailer at the engine's run record and
     relays the stage RETURNS (prep, delivery, tests, criterion, integration)
     `dispatch.terminal_commit` writes into it -- never the integrator's own
@@ -544,7 +549,7 @@ _V5_FRAGMENT_WITH_JUDGE = {
 _STAGE_SCHEMAS_WITH_JUDGE = {**_V5_STAGE_SCHEMAS, "judge": {"type": "object"}}
 
 
-def test_a_roster_judge_takes_the_criterion_leg_even_with_no_falsifier_and_no_test_target():
+def test_a_roster_judge_takes_the_criterion_leg_even_with_no_falsifier_and_no_test_target() -> None:
     """The judge is the criterion leg at every size: a statement-only plan on a
     prose spine still gets a verdict, from the agent DoE's roster names."""
     waves = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
@@ -559,7 +564,7 @@ def test_a_roster_judge_takes_the_criterion_leg_even_with_no_falsifier_and_no_te
     assert "criterion: (_falsifierResult ?" in script
 
 
-def test_a_throwing_judge_leaves_the_criterion_indeterminate_and_the_run_reaching_its_commit():
+def test_a_throwing_judge_leaves_the_criterion_indeterminate_and_the_run_reaching_its_commit() -> None:
     """A judge whose agentType the firing session cannot resolve throws; that
     must not kill a run whose executors have all written."""
     waves = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
@@ -575,7 +580,7 @@ def test_a_throwing_judge_leaves_the_criterion_indeterminate_and_the_run_reachin
     assert "'unresolved-agent-type'" in leg and "'schema-reject'" in leg and "'api-error '" in leg
 
 
-def test_a_judge_met_is_held_to_does_verdict_rules_post_hoc():
+def test_a_judge_met_is_held_to_does_verdict_rules_post_hoc() -> None:
     """terminal-judge-verdict-rules: a `met` with nothing observed, a failing
     falsifier or an unmet clause demotes; only the judge leg is held to it."""
     waves = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
@@ -590,7 +595,7 @@ def test_a_judge_met_is_held_to_does_verdict_rules_post_hoc():
     assert "'met demoted: '" not in plain
 
 
-def test_the_criterion_record_carries_the_judge_reason():
+def test_the_criterion_record_carries_the_judge_reason() -> None:
     """The judged record branch reads `reason` off the judge result; the unjudged literal is null."""
     waves = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
     judged = compose_script(
@@ -601,7 +606,7 @@ def test_the_criterion_record_carries_the_judge_reason():
     assert "status: 'not_run', observation: null, reason: null, sidecar: null" in judged
 
 
-def test_a_judge_met_naming_an_unwired_entry_is_not_met():
+def test_a_judge_met_naming_an_unwired_entry_is_not_met() -> None:
     """DoE judge-reachability-check: unreachable or broken click paths turn a met
     into not_met naming the first; undecidable never moves the status."""
     waves = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
@@ -615,7 +620,7 @@ def test_a_judge_met_naming_an_unwired_entry_is_not_met():
     assert rule.index("status: 'not_met'") < rule.index("'met demoted: '")
 
 
-def test_the_judge_runs_a_recorded_falsifier_rather_than_the_test_runner():
+def test_the_judge_runs_a_recorded_falsifier_rather_than_the_test_runner() -> None:
     waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
     falsifier = {"how": "run it", "baseline_output": "fails", "expected_when_true": "passes"}
     script = compose_script(
@@ -627,7 +632,7 @@ def test_the_judge_runs_a_recorded_falsifier_rather_than_the_test_runner():
     assert "label: 'test:terminal" not in script
 
 
-def test_a_delivery_fail_tells_the_operator_landed_rows_are_uncommitted():
+def test_a_delivery_fail_tells_the_operator_landed_rows_are_uncommitted() -> None:
     """A delivery FAIL stops the run for review but the rows are already on
     disk: the digest says so and points at the terminal_commit next_action,
     which stays populated (a FAIL never drops it) and within the cap."""
@@ -644,7 +649,7 @@ def test_a_delivery_fail_tells_the_operator_landed_rows_are_uncommitted():
     assert "? 'none' : 'terminal_commit')" in script
 
 
-def _criterion_status_regex(script: str):
+def _criterion_status_regex(script: str) -> Pattern[str]:
     """The emitted contradiction guard's JS regex literal, as a Python pattern."""
     import re
 
@@ -653,7 +658,7 @@ def _criterion_status_regex(script: str):
     return re.compile(m.group(1), re.IGNORECASE)
 
 
-def test_a_met_criterion_whose_observation_says_baseline_matched_is_reported_not_met():
+def test_a_met_criterion_whose_observation_says_baseline_matched_is_reported_not_met() -> None:
     """A falsifier agent reported `met` with observation "baseline matches
     ('absent'). Exit criterion not yet met": the BASELINE matching is the
     pre-change state, so the digest must read not_met -- `met` stamps the plan
@@ -672,7 +677,7 @@ def test_a_met_criterion_whose_observation_says_baseline_matched_is_reported_not
     assert script.count("'not_met' : _falsifierResult.status") >= 2
 
 
-def test_a_halted_or_unanswered_row_is_not_blanket_labelled_not_started():
+def test_a_halted_or_unanswered_row_is_not_blanket_labelled_not_started() -> None:
     """Rows reported PARTIAL/BLOCKED have written files; only a row the halt kept
     from starting is `not_started`. Deviations are deduped and kinded per id."""
     waves = [[_row("C1", ["a.py"])]]
@@ -686,7 +691,7 @@ def test_a_halted_or_unanswered_row_is_not_blanket_labelled_not_started():
     assert line.index("'no_answer'") < line.index("'blocked'") < line.index("'partial'")
 
 
-def test_criterion_status_is_computed_from_the_boolean_before_the_agents_status():
+def test_criterion_status_is_computed_from_the_boolean_before_the_agents_status() -> None:
     """The boolean leg precedes the legacy status/regex leg, and a null result is
     `not_run` in the criterion block, the run record and decision_required alike."""
     waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
@@ -702,7 +707,7 @@ def test_criterion_status_is_computed_from_the_boolean_before_the_agents_status(
     assert first < script.index("_falsifierResult.status === 'met'", first)
 
 
-def test_composed_script_routes_a_pass_with_skips_and_tells_the_agent_to_report_skips():
+def test_composed_script_routes_a_pass_with_skips_and_tells_the_agent_to_report_skips() -> None:
     waves = [[_row("C1", ["coordinator_core/ops/dispatch_emit/wave_map.py"])]]
     script = compose_script(waves, name="wf", description="skips", **REVIEW_KW)
 
@@ -712,7 +717,7 @@ def test_composed_script_routes_a_pass_with_skips_and_tells_the_agent_to_report_
     assert "skipped" in script
 
 
-def test_composed_script_passes_the_dispatch_suite_guard():
+def test_composed_script_passes_the_dispatch_suite_guard() -> None:
     # A scriptPath fire cannot carry the override marker, so an engine template that
     # reads as a suite command strands the run (example-stats-repo C12, 2026-10-07).
     from coordinator_core.hooks.block_dispatch_suite_invocation import _classify
@@ -734,7 +739,7 @@ _JUDGE_CRITERION = {
 }
 
 
-def test_a_judge_result_carrying_both_fields_yields_them_in_digest_and_inline_review():
+def test_a_judge_result_carrying_both_fields_yields_them_in_digest_and_inline_review() -> None:
     from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
 
     waves = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
@@ -756,7 +761,7 @@ def test_a_judge_result_carrying_both_fields_yields_them_in_digest_and_inline_re
     assert validate_digest(obj) == []
 
 
-def test_a_judge_result_without_the_fields_yields_null_and_a_digest_without_them_validates():
+def test_a_judge_result_without_the_fields_yields_null_and_a_digest_without_them_validates() -> None:
     from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
 
     waves = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
@@ -769,7 +774,7 @@ def test_a_judge_result_without_the_fields_yields_null_and_a_digest_without_them
     assert validate_digest(obj) == []
 
 
-def test_the_judge_fields_are_capped_by_the_schema():
+def test_the_judge_fields_are_capped_by_the_schema() -> None:
     from coordinator_core.ops.dispatch_emit.wake_digest import validate_digest
 
     waves = [[_row("C1", ["coordinator_core/subagent_sandbox/CONTRACT.md"])]]
@@ -805,7 +810,7 @@ def _js_rec(**baseline):
 
 
 @pytest.mark.spawns_process
-def test_js_baseline_clear_requires_evidence_for_foreign_ids():
+def test_js_baseline_clear_requires_evidence_for_foreign_ids() -> None:
     assert _js_baseline_clears(_js_rec(foreign=["a"], evidence=["a"], base_log="/x/base.log")) is True
     assert _js_baseline_clears(_js_rec(foreign=["a"], evidence=["a"])) is False
     assert _js_baseline_clears(_js_rec(foreign=["a"])) is False
@@ -813,5 +818,5 @@ def test_js_baseline_clear_requires_evidence_for_foreign_ids():
 
 
 @pytest.mark.spawns_process
-def test_js_baseline_clear_accepts_a_manifest_id_as_evidence():
+def test_js_baseline_clear_accepts_a_manifest_id_as_evidence() -> None:
     assert _js_baseline_clears(_js_rec(pre_existing=["a"]), manifest_ids=("a",)) is True

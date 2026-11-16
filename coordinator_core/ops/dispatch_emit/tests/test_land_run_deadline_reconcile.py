@@ -14,6 +14,7 @@ from coordinator_core.benchmarks import land_run_slow_disk_profile as prof
 from coordinator_core.ops.dispatch_emit import land_deadline, land_intent, land_run, run_token
 from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.warm import dispatch_ack, dispatch_fence
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -21,7 +22,7 @@ KEY = "321-654"
 
 
 @pytest.fixture
-def landing(tmp_path, monkeypatch):
+def landing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("COORDINATOR_SESSION_ID", prof.SELF)
     monkeypatch.delenv("CLAUDE_SESSION_ID", raising=False)
     monkeypatch.delenv("CLAUDE_CODE_SESSION_ID", raising=False)
@@ -45,7 +46,7 @@ def _deadline_at(monkeypatch, phase: str, *, extra_expected: dict | None = None)
     path the commit will never carry to the committing record."""
     real = land_intent.mark
 
-    def mark(p, sha=None, **kw):
+    def mark(p, sha=None, **kw) -> None:
         if p == land_intent.PHASE_COMMITTING and extra_expected:
             kw["expected_blobs"] = {**(kw.get("expected_blobs") or {}), **extra_expected}
         real(p, sha, **kw)
@@ -69,7 +70,7 @@ def _head(root) -> str:
     return prof._git(["rev-parse", "HEAD"], root).strip()
 
 
-def test_deadline_after_commit_reports_committed_with_sha(landing, monkeypatch):
+def test_deadline_after_commit_reports_committed_with_sha(landing, monkeypatch: pytest.MonkeyPatch) -> None:
     root, base = landing
     before = _head(root)
     _deadline_at(monkeypatch, land_intent.PHASE_COMMITTED)
@@ -81,7 +82,7 @@ def test_deadline_after_commit_reports_committed_with_sha(landing, monkeypatch):
     assert "refused" not in reply and "queued_for_resume" not in reply
 
 
-def test_committing_record_carries_base_and_the_expected_map(landing, monkeypatch):
+def test_committing_record_carries_base_and_the_expected_map(landing, monkeypatch: pytest.MonkeyPatch) -> None:
     root, base = landing
     _deadline_at(monkeypatch, land_intent.PHASE_COMMITTED)
     _fire(root, base)
@@ -91,7 +92,7 @@ def test_committing_record_carries_base_and_the_expected_map(landing, monkeypatc
     assert set(body["expected_blobs"][prof.PATH_P]) == {"sha256"}
 
 
-def test_deadline_before_commit_reports_not_committed(landing, monkeypatch):
+def test_deadline_before_commit_reports_not_committed(landing, monkeypatch: pytest.MonkeyPatch) -> None:
     root, base = landing
     before = _head(root)
     _deadline_at(monkeypatch, land_intent.PHASE_COMMITTING)
@@ -103,7 +104,7 @@ def test_deadline_before_commit_reports_not_committed(landing, monkeypatch):
     assert "queued_for_resume" not in reply
 
 
-def test_partial_commit_named_loudly(landing, monkeypatch):
+def test_partial_commit_named_loudly(landing, monkeypatch: pytest.MonkeyPatch) -> None:
     root, base = landing
     _deadline_at(
         monkeypatch, land_intent.PHASE_COMMITTED, extra_expected={"src/never.py": {"blob": "1" * 40}},

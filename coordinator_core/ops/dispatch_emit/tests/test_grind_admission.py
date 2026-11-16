@@ -13,53 +13,53 @@ from coordinator_core.ops.dispatch_emit.grind_admission import (
 IDS = tuple(f"r{i}" for i in range(61))
 
 
-def test_charge_covers_the_measured_batched_run():
+def test_charge_covers_the_measured_batched_run() -> None:
     # claude-klabauter 20261114T173532Z: 10 rows, one batch-40 batch, verify-routing batched, 17 calls.
     assert 17 <= run_agent_calls(10, 40) <= 18
 
 
-def test_larger_batches_admit_more_rows_under_one_cap():
+def test_larger_batches_admit_more_rows_under_one_cap() -> None:
     small = admit(IDS, max_agent_calls=150, budget_tokens=None, batch_size=4)
     large = admit(IDS, max_agent_calls=150, budget_tokens=None, batch_size=40)
     assert len(large.admitted) > len(small.admitted)
 
 
-def test_bound_is_the_largest_count_whose_charge_fits():
+def test_bound_is_the_largest_count_whose_charge_fits() -> None:
     a = admit(IDS, max_agent_calls=32, budget_tokens=None, batch_size=40)
     n = len(a.admitted)
     assert run_agent_calls(n, 40) <= 32 < run_agent_calls(n + 1, 40)
 
 
-def test_caps_too_small_for_one_row_admit_none():
+def test_caps_too_small_for_one_row_admit_none() -> None:
     a = admit(IDS, max_agent_calls=run_agent_calls(1, 40) - 1, budget_tokens=None, batch_size=40)
     assert a.admitted == () and a.not_admitted == IDS and a.arithmetic["bound_by_calls"] == 0
 
 
-def test_both_none_admits_all():
+def test_both_none_admits_all() -> None:
     a = admit(IDS, max_agent_calls=None, budget_tokens=None)
     assert a.admitted == IDS and a.not_admitted == ()
 
 
-def test_token_bound_and_min_of_bounds():
+def test_token_bound_and_min_of_bounds() -> None:
     a = admit(IDS, max_agent_calls=None, budget_tokens=1_000_000)
     assert len(a.admitted) == 7 == a.arithmetic["bound_by_tokens"]
     assert len(admit(IDS, max_agent_calls=500, budget_tokens=1_000_000, batch_size=40).admitted) == 7
 
 
-def test_none_budget_substitutes_row_scaled_default():
+def test_none_budget_substitutes_row_scaled_default() -> None:
     a = admit(IDS, max_agent_calls=None, budget_tokens=None)
     assert a.arithmetic["budget_source"] == "default"
     assert a.arithmetic["budget_tokens"] == default_budget(len(IDS))
     assert a.arithmetic["bound_by_tokens"] >= len(IDS) and a.admitted == IDS
 
 
-def test_explicit_budget_overrides_default_and_is_recorded():
+def test_explicit_budget_overrides_default_and_is_recorded() -> None:
     a = admit(IDS, max_agent_calls=None, budget_tokens=1_000_000)
     assert a.arithmetic["budget_source"] == "explicit" and a.arithmetic["budget_tokens"] == 1_000_000
     assert len(a.admitted) == 7
 
 
-def test_default_budget_is_not_named_as_the_cut_cap():
+def test_default_budget_is_not_named_as_the_cut_cap() -> None:
     a = admit(IDS, max_agent_calls=32, budget_tokens=None, batch_size=40)
     assert a.not_admitted
     reason = not_admitted_entries(a)[0]["reason"]
@@ -68,7 +68,7 @@ def test_default_budget_is_not_named_as_the_cut_cap():
     assert "budget_tokens=1000000" in not_admitted_entries(b)[0]["reason"]
 
 
-def test_order_preserved_no_loss():
+def test_order_preserved_no_loss() -> None:
     a = admit(IDS, max_agent_calls=40, budget_tokens=None, batch_size=40)
     assert a.admitted + a.not_admitted == IDS
 
@@ -76,12 +76,12 @@ def test_order_preserved_no_loss():
 @pytest.mark.parametrize("kw", [{"max_agent_calls": 0, "budget_tokens": None},
                                 {"max_agent_calls": None, "budget_tokens": -1},
                                 {"max_agent_calls": 40, "budget_tokens": None, "batch_size": 0}])
-def test_non_positive_refused(kw):
+def test_non_positive_refused(kw) -> None:
     with pytest.raises(ValueError):
         admit(IDS, **kw)
 
 
-def test_receipt_block_names_batch_shape():
+def test_receipt_block_names_batch_shape() -> None:
     a = admit(IDS, max_agent_calls=40, budget_tokens=None, batch_size=40)
     b = receipt_block(a)
     assert b["count"] == len(IDS) - len(a.admitted) and b["row_ids"] == list(a.not_admitted)

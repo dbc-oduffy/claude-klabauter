@@ -11,45 +11,46 @@ from coordinator_core.bash_guards import _taskstop_launch_store as store
 from coordinator_core.bash_guards._heavy_admission_contract import ProcRow
 from coordinator_core.bash_guards._taskstop_contract import FILETIME_UNIX_EPOCH, LaunchRecord
 from coordinator_core.hooks import taskstop_reaper as reaper
+from pathlib import Path
 
 MARK = FILETIME_UNIX_EPOCH + 10**15
 S = 10_000_000
 
 
 class StubKill:
-    def __init__(self, fail=(), cmd="sleep 3001"):
+    def __init__(self, fail=(), cmd: str = "sleep 3001") -> None:
         self.killed = []
         self.fail = set(fail)
         self.cmd = cmd
 
-    def terminate_verified(self, pid, ctime):
+    def terminate_verified(self, pid, ctime) -> bool:
         if pid in self.fail:
             return False
         self.killed.append((pid, ctime))
         return True
 
-    def command_line(self, pid, ctime):
+    def command_line(self, pid, ctime) -> str:
         return self.cmd
 
 
 @pytest.fixture(autouse=True)
-def _home(tmp_path, monkeypatch):
+def _home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     monkeypatch.setattr(reaper.sys, "platform", "win32")
     return tmp_path
 
 
-def _rec(task_id="bg1", mark=MARK, session="s1", command="sleep 3001"):
+def _rec(task_id: str = "bg1", mark=MARK, session: str = "s1", command: str = "sleep 3001") -> LaunchRecord:
     r = LaunchRecord(task_id, session, "tu", command, mark)
     store.write_record(r, now_s=(mark - FILETIME_UNIX_EPOCH) / 1e7)
     return r
 
 
-def _payload(task_id="bg1", session="s1"):
+def _payload(task_id: str = "bg1", session: str = "s1"):
     return {"payload": {"tool_name": "TaskStop", "session_id": session, "tool_input": {"task_id": task_id}}}
 
 
-def _tree(base=MARK):
+def _tree(base=MARK) -> list[ProcRow]:
     return [
         ProcRow(100, 1, base, "bash.exe"),
         ProcRow(101, 100, base + 1, "sleep.exe"),
@@ -57,7 +58,7 @@ def _tree(base=MARK):
     ]
 
 
-def _install(monkeypatch, kill, *snaps):
+def _install(monkeypatch, kill, *snaps) -> None:
     seq = list(snaps)
     monkeypatch.setattr(reaper, "_kill", kill)
     monkeypatch.setattr(reaper, "_snapshot", lambda: seq.pop(0) if len(seq) > 1 else seq[0])
@@ -68,7 +69,7 @@ def _log(tmp_path):
     return [json.loads(x) for x in p.read_text().splitlines()] if p.exists() else []
 
 
-def test_kills_claimed_tree_deepest_first(monkeypatch, tmp_path):
+def test_kills_claimed_tree_deepest_first(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _rec()
     k = StubKill()
     _install(monkeypatch, k, _tree())
@@ -81,7 +82,7 @@ def test_kills_claimed_tree_deepest_first(monkeypatch, tmp_path):
     assert store.read_record("bg1") is None
 
 
-def test_kill_set_excludes_unrelated_processes(monkeypatch):
+def test_kill_set_excludes_unrelated_processes(monkeypatch: pytest.MonkeyPatch) -> None:
     _rec()
     k = StubKill()
     other = ProcRow(500, 1, MARK - 600 * S, "bash.exe")
@@ -90,7 +91,7 @@ def test_kill_set_excludes_unrelated_processes(monkeypatch):
     assert 500 not in [p for p, _ in k.killed]
 
 
-def test_refused_verified_kill_logs_incomplete(monkeypatch, tmp_path):
+def test_refused_verified_kill_logs_incomplete(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _rec()
     k = StubKill(fail={101})
     _install(monkeypatch, k, _tree())
@@ -100,7 +101,7 @@ def test_refused_verified_kill_logs_incomplete(monkeypatch, tmp_path):
     assert store.read_record("bg1") is None
 
 
-def test_stale_ppid_orphan_of_killed_pid_is_killed(monkeypatch, tmp_path):
+def test_stale_ppid_orphan_of_killed_pid_is_killed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _rec()
     k = StubKill()
     late = ProcRow(103, 102, MARK + 3, "sleep.exe")
@@ -112,14 +113,14 @@ def test_stale_ppid_orphan_of_killed_pid_is_killed(monkeypatch, tmp_path):
     assert _log(tmp_path)[0]["outcome"] == "killed"
 
 
-def test_no_record(monkeypatch, tmp_path):
+def test_no_record(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     k = StubKill()
     _install(monkeypatch, k, _tree())
     reaper._handler(_payload("nope"))
     assert _log(tmp_path)[0]["outcome"] == "no-record" and not k.killed
 
 
-def test_session_mismatch_keeps_record(monkeypatch, tmp_path):
+def test_session_mismatch_keeps_record(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _rec()
     k = StubKill()
     _install(monkeypatch, k, _tree())
@@ -128,7 +129,7 @@ def test_session_mismatch_keeps_record(monkeypatch, tmp_path):
     assert not k.killed and store.read_record("bg1") is not None
 
 
-def test_ambiguous_when_sibling_window_overlaps(monkeypatch, tmp_path):
+def test_ambiguous_when_sibling_window_overlaps(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _rec()
     _rec("bg2", mark=MARK + S // 10)
     k = StubKill()
@@ -138,7 +139,7 @@ def test_ambiguous_when_sibling_window_overlaps(monkeypatch, tmp_path):
     assert row["outcome"] == "ambiguous" and row["competing"] == ["bg2"] and not k.killed
 
 
-def test_no_candidate_when_command_differs(monkeypatch, tmp_path):
+def test_no_candidate_when_command_differs(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _rec()
     k = StubKill(cmd="something else")
     _install(monkeypatch, k, _tree())
@@ -146,7 +147,7 @@ def test_no_candidate_when_command_differs(monkeypatch, tmp_path):
     assert _log(tmp_path)[0]["outcome"] == "no-candidate" and not k.killed
 
 
-def test_unreadable_snapshot_is_no_candidate(monkeypatch, tmp_path):
+def test_unreadable_snapshot_is_no_candidate(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _rec()
     k = StubKill()
     _install(monkeypatch, k, None)
@@ -154,7 +155,7 @@ def test_unreadable_snapshot_is_no_candidate(monkeypatch, tmp_path):
     assert _log(tmp_path)[0]["outcome"] == "no-candidate" and not k.killed
 
 
-def test_never_raises_and_allows(monkeypatch):
+def test_never_raises_and_allows(monkeypatch: pytest.MonkeyPatch) -> None:
     _rec()
 
     def boom():
@@ -166,7 +167,7 @@ def test_never_raises_and_allows(monkeypatch):
     assert reaper._handler({}) == {}
 
 
-def test_non_taskstop_and_non_windows_are_noops(monkeypatch, tmp_path):
+def test_non_taskstop_and_non_windows_are_noops(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _rec()
     k = StubKill()
     _install(monkeypatch, k, _tree())
@@ -185,14 +186,14 @@ def _marker_dir(monkeypatch, tmp_path):
     return d
 
 
-def test_stopped_marker_written_off_windows(monkeypatch, tmp_path):
+def test_stopped_marker_written_off_windows(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     d = _marker_dir(monkeypatch, tmp_path)
     monkeypatch.setattr(reaper.sys, "platform", "linux")
     assert reaper._handler(_payload("bg9", "s9")) == {}
     assert (d / "workflow-stopped-s9-bg9").exists()
 
 
-def test_no_stopped_marker_for_invalid_task_id(monkeypatch, tmp_path):
+def test_no_stopped_marker_for_invalid_task_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     d = _marker_dir(monkeypatch, tmp_path)
     monkeypatch.setattr(reaper.sys, "platform", "linux")
     assert reaper._handler(_payload("../evil", "s9")) == {}
@@ -200,7 +201,7 @@ def test_no_stopped_marker_for_invalid_task_id(monkeypatch, tmp_path):
     assert list(d.iterdir()) == []
 
 
-def test_reap_still_reached_on_windows_with_marker(monkeypatch, tmp_path):
+def test_reap_still_reached_on_windows_with_marker(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     d = _marker_dir(monkeypatch, tmp_path)
     _rec()
     k = StubKill()
@@ -210,7 +211,7 @@ def test_reap_still_reached_on_windows_with_marker(monkeypatch, tmp_path):
     assert [p for p, _ in k.killed] == [102, 101, 100]
 
 
-def test_reap_opens_only_records_inside_the_window(monkeypatch, tmp_path):
+def test_reap_opens_only_records_inside_the_window(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import os
 
     now_mark = int(time.time() * 1e7) + FILETIME_UNIX_EPOCH
@@ -233,7 +234,7 @@ def test_reap_opens_only_records_inside_the_window(monkeypatch, tmp_path):
 
 
 @pytest.mark.skipif(sys.platform != "win32", reason="real Windows snapshot")
-def test_cost_real_snapshot_zero_spawns(monkeypatch, tmp_path):
+def test_cost_real_snapshot_zero_spawns(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.undo()
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
 

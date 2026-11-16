@@ -88,7 +88,7 @@ def _fire(root: Path, *paths: str) -> dict:
     return terminal_commit._handler(params, repo_root=root / ".git")
 
 
-def test_declared_path_without_baseline_lands(tmp_path, monkeypatch):
+def test_declared_path_without_baseline_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _build(tmp_path, monkeypatch)
     seed = _git(["rev-parse", "HEAD"], root)
     (root / DECLARED).write_text("a = 1\nb = 3\n", encoding="utf-8")
@@ -101,7 +101,7 @@ def test_declared_path_without_baseline_lands(tmp_path, monkeypatch):
     assert _git(["show", f"HEAD:{DECLARED}"], root).splitlines()[1] == "b = 3"
 
 
-def test_undeclared_path_without_baseline_is_excluded_as_residue(tmp_path, monkeypatch):
+def test_undeclared_path_without_baseline_is_excluded_as_residue(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _build(tmp_path, monkeypatch)
     seed = _git(["rev-parse", "HEAD"], root)
     (root / DECLARED).write_text("a = 1\nb = 3\n", encoding="utf-8")
@@ -119,7 +119,7 @@ def test_undeclared_path_without_baseline_is_excluded_as_residue(tmp_path, monke
     assert [p for p in out["provenance"] if p["path"] == UNDECLARED][0]["reason"] == "foreign-path-no-baseline"
 
 
-def test_new_undeclared_path_without_baseline_still_refuses(tmp_path, monkeypatch):
+def test_new_undeclared_path_without_baseline_still_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _build(tmp_path, monkeypatch)
     seed = _git(["rev-parse", "HEAD"], root)
     (root / "pkg" / "fresh.py").write_text("a = 1\n", encoding="utf-8")
@@ -144,7 +144,7 @@ def _measure_own_write(root: Path) -> str:
     return measured_rev.measured_rev(RUN, [DECLARED], root)["blobs"][DECLARED]
 
 
-def test_peer_edit_after_measure_lands_the_measured_blob_and_keeps_the_peer_bytes(tmp_path, monkeypatch):
+def test_peer_edit_after_measure_lands_the_measured_blob_and_keeps_the_peer_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _build(tmp_path, monkeypatch)
     seed = _git(["rev-parse", "HEAD"], root)
     measured = _measure_own_write(root)
@@ -160,7 +160,7 @@ def test_peer_edit_after_measure_lands_the_measured_blob_and_keeps_the_peer_byte
     assert DECLARED in _git(["status", "--porcelain"], root)
 
 
-def test_peer_edit_after_measure_with_head_moved_on_the_path_does_not_land_the_measured_blob(tmp_path, monkeypatch):
+def test_peer_edit_after_measure_with_head_moved_on_the_path_does_not_land_the_measured_blob(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _build(tmp_path, monkeypatch)
     measured = _measure_own_write(root)
     (root / DECLARED).write_text("a = 1\nb = 7\n", encoding="utf-8")
@@ -174,7 +174,7 @@ def test_peer_edit_after_measure_with_head_moved_on_the_path_does_not_land_the_m
     assert "b = 3" not in _git(["show", f"HEAD:{DECLARED}"], root)
 
 
-def test_peer_edit_after_measure_with_unreadable_record_does_not_land_a_measured_blob(tmp_path, monkeypatch):
+def test_peer_edit_after_measure_with_unreadable_record_does_not_land_a_measured_blob(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _build(tmp_path, monkeypatch)
     _measure_own_write(root)
     from coordinator_core.ops.dispatch_emit.ask_contract import measured_rev_record_path
@@ -187,7 +187,7 @@ def test_peer_edit_after_measure_with_unreadable_record_does_not_land_a_measured
     assert "measured_blob_landed" not in out, out
 
 
-def test_unreadable_provenance_on_declared_path_is_advisory(tmp_path, monkeypatch):
+def test_unreadable_provenance_on_declared_path_is_advisory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _build(tmp_path, monkeypatch)
     monkeypatch.setattr(hp, "_unproduced", lambda r, run, p: (_ for _ in ()).throw(ValueError("x")))
     advisories: list = []

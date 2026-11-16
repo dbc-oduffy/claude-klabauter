@@ -8,13 +8,14 @@ import pytest
 
 from coordinator_core.ops.ceremony.git_native import GitResult
 from coordinator_core.warm import push_cadence
+from pathlib import Path
 
 BRANCH = "work/m/2026-10-10"
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _git(cwd, *args):
+def _git(cwd, *args) -> str:
     return subprocess.run(
         ["git", *args], cwd=cwd, check=True, capture_output=True, text=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -22,7 +23,7 @@ def _git(cwd, *args):
 
 
 @pytest.fixture(autouse=True)
-def _state(monkeypatch):
+def _state(monkeypatch: pytest.MonkeyPatch):
     push_cadence.reset_cadence_for_test()
     monkeypatch.setattr(push_cadence, "machine_profile", lambda: "author")
     yield
@@ -30,7 +31,7 @@ def _state(monkeypatch):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> tuple[Path, Path]:
     bare = tmp_path / "origin.git"
     _git(tmp_path, "init", "--bare", "-b", "main", str(bare))
     root = tmp_path / "recv"
@@ -47,7 +48,7 @@ def repo(tmp_path):
     return root, bare
 
 
-def _tick():
+def _tick() -> bool:
     return push_cadence.on_idle_tick(
         served_repos=lambda: [], clock=lambda: 0.0, interval_secs=0.0
     ) or push_cadence.on_idle_tick(
@@ -55,7 +56,7 @@ def _tick():
     )
 
 
-def test_unpushed_day_branch_reaches_origin(repo):
+def test_unpushed_day_branch_reaches_origin(repo) -> None:
     root, bare = repo
     push_cadence.note_foreign_delivery(root, BRANCH)
     assert _tick()
@@ -63,7 +64,7 @@ def test_unpushed_day_branch_reaches_origin(repo):
     assert push_cadence.foreign_deliveries() == []
 
 
-def test_main_is_never_pushed(repo):
+def test_main_is_never_pushed(repo) -> None:
     root, bare = repo
     (root / "b.txt").write_text("b")
     _git(root, "add", "b.txt")
@@ -75,7 +76,7 @@ def test_main_is_never_pushed(repo):
     assert push_cadence.foreign_deliveries() == []
 
 
-def test_up_to_date_pair_is_dropped_with_zero_spawns(repo, monkeypatch):
+def test_up_to_date_pair_is_dropped_with_zero_spawns(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _bare = repo
     push_cadence.note_foreign_delivery(root, BRANCH)
     _tick()
@@ -89,7 +90,7 @@ def test_up_to_date_pair_is_dropped_with_zero_spawns(repo, monkeypatch):
     assert push_cadence.foreign_deliveries() == []
 
 
-def test_non_author_profile_pushes_nothing(repo, monkeypatch):
+def test_non_author_profile_pushes_nothing(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, bare = repo
     monkeypatch.setattr(push_cadence, "machine_profile", lambda: "consumer")
     push_cadence.note_foreign_delivery(root, BRANCH)
@@ -99,7 +100,7 @@ def test_non_author_profile_pushes_nothing(repo, monkeypatch):
     assert refs == ""
 
 
-def test_deadline_shorter_than_ceiling_defers_push(repo):
+def test_deadline_shorter_than_ceiling_defers_push(repo) -> None:
     root, bare = repo
     push_cadence.note_foreign_delivery(root, BRANCH)
     push_cadence._sweep_foreign(deadline=0.0, clock=lambda: 0.0)
@@ -107,7 +108,7 @@ def test_deadline_shorter_than_ceiling_defers_push(repo):
     assert _git(bare, "for-each-ref", f"refs/heads/{BRANCH}") == ""
 
 
-def test_resolver_error_does_not_escape_sweep(repo, monkeypatch):
+def test_resolver_error_does_not_escape_sweep(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _bare = repo
 
     def _boom(*a, **k):
@@ -119,7 +120,7 @@ def test_resolver_error_does_not_escape_sweep(repo, monkeypatch):
     assert push_cadence.foreign_deliveries() == [(root, BRANCH)]
 
 
-def test_rejected_push_stays_registered_and_feeds_detector(repo, monkeypatch):
+def test_rejected_push_stays_registered_and_feeds_detector(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, bare = repo
     hook = bare / "hooks" / "pre-receive"
     hook.write_text("#!/bin/sh\nexit 1\n")
@@ -139,7 +140,7 @@ def _reject_hook(bare):
     return hook
 
 
-def test_a_pair_rejected_max_times_is_dropped(repo, monkeypatch):
+def test_a_pair_rejected_max_times_is_dropped(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, bare = repo
     _reject_hook(bare)
     rows = []
@@ -153,7 +154,7 @@ def test_a_pair_rejected_max_times_is_dropped(repo, monkeypatch):
     assert len(rows) == push_cadence.FOREIGN_PUSH_MAX_REJECTS
 
 
-def test_re_registration_resets_the_reject_count(repo, monkeypatch):
+def test_re_registration_resets_the_reject_count(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, bare = repo
     _reject_hook(bare)
     monkeypatch.setattr(push_cadence, "log_failure", lambda *a, **k: None)
@@ -168,7 +169,7 @@ def test_re_registration_resets_the_reject_count(repo, monkeypatch):
     assert push_cadence.foreign_deliveries() == []
 
 
-def test_transient_failures_never_drop_the_pair(repo, monkeypatch):
+def test_transient_failures_never_drop_the_pair(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _bare = repo
     rows = []
     monkeypatch.setattr(push_cadence, "log_failure", lambda *a, **k: rows.append(a))
@@ -189,7 +190,7 @@ def test_transient_failures_never_drop_the_pair(repo, monkeypatch):
     assert len(rows) == len(transient) * 2
 
 
-def test_success_forgets_the_pair_even_if_the_tracking_cas_fails(repo, monkeypatch):
+def test_success_forgets_the_pair_even_if_the_tracking_cas_fails(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _bare = repo
     push_cadence.note_foreign_delivery(root, BRANCH)
     monkeypatch.setattr(push_cadence, "cas_ref", lambda *a, **k: False)

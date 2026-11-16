@@ -59,7 +59,7 @@ def _count_popen():
     calls: list[tuple[str, ...]] = []
 
     class _Counting(real):  # type: ignore[misc,valid-type]
-        def __init__(self, args, *a, **kw):
+        def __init__(self, args, *a, **kw) -> None:
             calls.append(tuple(str(x) for x in args) if isinstance(args, (list, tuple)) else (str(args),))
             super().__init__(args, *a, **kw)
 

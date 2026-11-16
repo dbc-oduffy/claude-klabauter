@@ -95,6 +95,9 @@ _HOST_CAP_RES = (
     (re.compile(r"(Run pytest only as `)[^\s`]+( -m coordinator_core\.testing\.scoped_pytest)"),
      r"\1<TEST_PYTHON>\2"),
     (re.compile(r"(Run Python as `)[^\s`]+(` \(this repo)"), r"\1<PINNED_PYTHON>\2"),
+    # engine_module_command names the engine's own checkout and interpreter, not the temp repo.
+    (re.compile(r'PYTHONPATH="[^"]+" [^\s`]+( -m coordinator_core\.)'),
+     r'PYTHONPATH="<ENGINE_ROOT>" <ENGINE_PYTHON>\1'),
 )
 
 
@@ -121,7 +124,7 @@ def _golden_text(path: Path) -> str:
 
 
 @pytest.fixture(scope="module")
-def emission(tmp_path_factory):
+def emission(tmp_path_factory: pytest.TempPathFactory):
     repo = _build_repo(tmp_path_factory.mktemp("emit_plan_route_parity"))
     out = repo / _OUT_REL
     out.parent.mkdir()
@@ -159,34 +162,34 @@ def emission(tmp_path_factory):
     }
 
 
-def test_door_exits_zero_and_writes_script_and_receipt(emission):
+def test_door_exits_zero_and_writes_script_and_receipt(emission) -> None:
     assert emission["rc"] == 0, emission["stderr"]
     assert emission["raw_script"], "no workflow script written"
     assert emission["raw_receipt"], "no emission receipt written"
 
 
-def test_script_bytes_match_golden(emission):
+def test_script_bytes_match_golden(emission) -> None:
     assert emission["script"] == _golden_text(GOLDEN_SCRIPT)
 
 
-def test_receipt_bytes_match_golden(emission):
+def test_receipt_bytes_match_golden(emission) -> None:
     assert emission["receipt"] == _golden_text(GOLDEN_RECEIPT)
 
 
-def test_raw_receipt_digest_names_the_raw_script_bytes(emission):
+def test_raw_receipt_digest_names_the_raw_script_bytes(emission) -> None:
     receipt = json.loads(emission["raw_receipt"])
     assert receipt["sha256"] == hashlib.sha256(emission["raw_script"]).hexdigest()
 
 
 @pytest.mark.parametrize("golden", [GOLDEN_SCRIPT, GOLDEN_RECEIPT], ids=lambda p: p.name)
-def test_goldens_hold_no_host_path(golden):
+def test_goldens_hold_no_host_path(golden) -> None:
     text = _golden_text(golden)
     assert not re.search(r"(?<![A-Za-z0-9])[A-Za-z]:[\\/](?![\\/])", text), "drive-letter path in golden"
     assert not re.search(r"/(?:Users|home)/|\\Users\\", text), "home-directory path in golden"
     assert "pytest-of-" not in text
 
 
-def test_normalisation_names_only_the_volatile_fields(emission):
+def test_normalisation_names_only_the_volatile_fields(emission) -> None:
     golden = json.loads(_golden_text(GOLDEN_RECEIPT))
     assert golden["session_id"] == SESSION_ID_TOKEN
     assert golden["emitted_at"] == EMITTED_AT_TOKEN

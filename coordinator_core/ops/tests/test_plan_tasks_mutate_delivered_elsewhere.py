@@ -11,6 +11,7 @@ from coordinator_core.ops.plan_tasks_mutate import _handler
 from coordinator_core.ops.plan_tasks_render import load_rows
 from coordinator_core.ops.tests.test_plan_tasks_mutate import _make_git_repo, _seed_plan
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -82,7 +83,7 @@ def _delivered(repo, plan, **overrides):
     return _call(repo, plan, **params)
 
 
-def test_coded_refusal_is_replaced_by_delivered_elsewhere(tmp_path):
+def test_coded_refusal_is_replaced_by_delivered_elsewhere(tmp_path: Path) -> None:
     repo, plan, sha = _fixture(tmp_path)
     original = plan.read_bytes()
 
@@ -100,7 +101,7 @@ def test_coded_refusal_is_replaced_by_delivered_elsewhere(tmp_path):
     assert row["disposition_ref"] == _REF
 
 
-def test_spun_off_refusal_is_replaced_by_delivered_elsewhere(tmp_path):
+def test_spun_off_refusal_is_replaced_by_delivered_elsewhere(tmp_path: Path) -> None:
     repo, plan, _sha = _fixture(tmp_path)
     original = plan.read_bytes()
 
@@ -117,7 +118,7 @@ def test_spun_off_refusal_is_replaced_by_delivered_elsewhere(tmp_path):
     assert load_rows(plan.read_text(encoding="utf-8")).rows[0]["delivered_via"] == "memo"
 
 
-def test_close_warns_that_completion_is_asserted_not_proven(tmp_path):
+def test_close_warns_that_completion_is_asserted_not_proven(tmp_path: Path) -> None:
     repo, plan, _sha = _fixture(tmp_path)
 
     closed = _delivered(repo, plan)
@@ -126,7 +127,7 @@ def test_close_warns_that_completion_is_asserted_not_proven(tmp_path):
     assert f"completion asserted, not commit-proven: {_REF} via direct-message" in closed["warnings"]
 
 
-def test_all_missing_required_fields_are_named_in_one_refusal(tmp_path):
+def test_all_missing_required_fields_are_named_in_one_refusal(tmp_path: Path) -> None:
     repo, plan, _sha = _fixture(tmp_path)
     original = plan.read_bytes()
 
@@ -156,7 +157,7 @@ def test_all_missing_required_fields_are_named_in_one_refusal(tmp_path):
         {"delivered_via": "carrier-pigeon"},
     ],
 )
-def test_blank_ref_detail_or_bad_via_is_refused_and_writes_nothing(tmp_path, overrides):
+def test_blank_ref_detail_or_bad_via_is_refused_and_writes_nothing(tmp_path: Path, overrides) -> None:
     repo, plan, _sha = _fixture(tmp_path)
     original = plan.read_bytes()
 

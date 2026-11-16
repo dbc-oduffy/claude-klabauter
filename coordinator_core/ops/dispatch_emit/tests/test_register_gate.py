@@ -7,6 +7,7 @@ import yaml
 
 from coordinator_core.ops.dispatch_emit.register_gate import register_gate as _register_gate
 from coordinator_core.ops.dispatch_emit.register_gate import register_writeback
+from pathlib import Path
 
 _SIZING = "state/sizings/2026-10-09-x.yaml"
 _PLAN = "docs/plans/p.md"
@@ -27,7 +28,7 @@ def _good(**over):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / _SIZING).write_text(_REGISTER, encoding="utf-8")
@@ -41,13 +42,13 @@ def _review(rows):
     return {"criterion": {"status": "met", "observation": "ok", "register_rows": rows}}
 
 
-def test_all_rows_met_and_wired_passes(repo):
+def test_all_rows_met_and_wired_passes(repo) -> None:
     review = _review([_good()])
     assert _register_gate(repo, _PLAN, review) is None
     assert review["criterion"]["status"] == "met"
 
 
-def test_surface_only_mismatch_on_met_wired_row_is_reported_not_refused(repo):
+def test_surface_only_mismatch_on_met_wired_row_is_reported_not_refused(repo) -> None:
     review = _review([_good(surface="api")])
     assert _register_gate(repo, _PLAN, review) is None
     crit = review["criterion"]
@@ -55,14 +56,14 @@ def test_surface_only_mismatch_on_met_wired_row_is_reported_not_refused(repo):
     assert "differs from register surface" in crit["observation"]
 
 
-def test_repeated_judge_leaves_one_surface_mismatch_note(repo):
+def test_repeated_judge_leaves_one_surface_mismatch_note(repo) -> None:
     review = _review([_good(surface="api")])
     assert _register_gate(repo, _PLAN, review) is None
     assert _register_gate(repo, _PLAN, review) is None
     assert review["criterion"]["observation"].count("differs from register surface") == 1
 
 
-def test_surface_mismatch_with_empty_observed_ref_still_refuses(repo):
+def test_surface_mismatch_with_empty_observed_ref_still_refuses(repo) -> None:
     review = _review([_good(surface="api", observed_ref="")])
     reason = _register_gate(repo, _PLAN, review)
     assert reason is not None and "observed_ref is empty" in reason
@@ -80,7 +81,7 @@ def test_surface_mismatch_with_empty_observed_ref_still_refuses(repo):
         ([_good(observed_ref=None)], "observed_ref is empty"),
     ],
 )
-def test_failing_row_demotes_naming_row(repo, rows, fragment):
+def test_failing_row_demotes_naming_row(repo, rows, fragment) -> None:
     review = _review(rows)
     reason = _register_gate(repo, _PLAN, review)
     assert reason is not None and "r1" in reason and fragment in reason
@@ -88,20 +89,20 @@ def test_failing_row_demotes_naming_row(repo, rows, fragment):
     assert review["criterion"]["reason"] == reason
 
 
-def test_claimed_row_the_ledger_judged_is_not_demoted_as_not_judged(repo):
+def test_claimed_row_the_ledger_judged_is_not_demoted_as_not_judged(repo) -> None:
     review = _review([])
     assert _register_gate(repo, _PLAN, review, ["r1"]) is None
     assert review["criterion"]["status"] == "met"
 
 
-def test_claimed_row_absent_from_judge_and_ledger_still_demotes(repo):
+def test_claimed_row_absent_from_judge_and_ledger_still_demotes(repo) -> None:
     review = _review([])
     reason = _register_gate(repo, _PLAN, review, ["other"])
     assert reason is not None and "r1" in reason and "not judged" in reason
     assert review["criterion"]["status"] == "not_met"
 
 
-def _claimed_row(repo, tail):
+def _claimed_row(repo, tail) -> None:
     _set_register(
         repo,
         "    - {id: r1, source_text: t1, anchor: a1, surface: ui, claimed_by: [docs/plans/p.md], " + tail + "}\n",
@@ -109,7 +110,7 @@ def _claimed_row(repo, tail):
 
 
 @pytest.mark.parametrize("rows", [None, []])
-def test_disk_met_wired_attributed_claimed_row_is_not_owed_a_judge_verdict(repo, rows):
+def test_disk_met_wired_attributed_claimed_row_is_not_owed_a_judge_verdict(repo, rows) -> None:
     _claimed_row(repo, "status: met, wired: true, met_by: [abc1234]")
     review = _review(rows)
     assert _register_gate(repo, _PLAN, review) is None
@@ -125,7 +126,7 @@ def test_disk_met_wired_attributed_claimed_row_is_not_owed_a_judge_verdict(repo,
         "status: met, wired: true",
     ],
 )
-def test_claimed_row_not_fully_met_on_disk_still_reports_not_judged(repo, tail):
+def test_claimed_row_not_fully_met_on_disk_still_reports_not_judged(repo, tail) -> None:
     _claimed_row(repo, tail)
     review = _review(None)
     reason = _register_gate(repo, _PLAN, review)
@@ -133,13 +134,13 @@ def test_claimed_row_not_fully_met_on_disk_still_reports_not_judged(repo, tail):
     assert review["criterion"]["status"] == "not_met"
 
 
-def test_judged_not_met_verdict_demotes_a_disk_met_row(repo):
+def test_judged_not_met_verdict_demotes_a_disk_met_row(repo) -> None:
     _claimed_row(repo, "status: met, wired: true, met_by: [abc1234]")
     reason = _register_gate(repo, _PLAN, _review([_good(status="partial")]))
     assert reason is not None and "judged status 'partial', not met" in reason
 
 
-def test_no_rows_claimed_by_plan_is_untouched(repo):
+def test_no_rows_claimed_by_plan_is_untouched(repo) -> None:
     other = "docs/plans/nobody.md"
     (repo / other).write_text(f"---\nsizing_object: {_SIZING}\n---\nbody\n", encoding="utf-8")
     review = _review([])
@@ -147,24 +148,24 @@ def test_no_rows_claimed_by_plan_is_untouched(repo):
     assert review["criterion"]["status"] == "met"
 
 
-def test_no_register_is_untouched(repo):
+def test_no_register_is_untouched(repo) -> None:
     (repo / _SIZING).write_text("status: routed\n", encoding="utf-8")
     review = _review([])
     assert _register_gate(repo, _PLAN, review) is None
     assert review["criterion"]["status"] == "met"
 
 
-def _own_plan(repo, claims=""):
+def _own_plan(repo, claims: str = "") -> None:
     (repo / _PLAN).write_text(
         f"---\nplan_id: plan-x\nsizing_object: {_SIZING}\n{claims}---\nbody\n", encoding="utf-8"
     )
 
 
-def _set_register(repo, rows):
+def _set_register(repo, rows) -> None:
     (repo / _SIZING).write_text("status: routed\nrequirement_register:\n  rows:\n" + rows, encoding="utf-8")
 
 
-def test_unclaimed_open_row_demotes_even_when_plan_claims_nothing(repo):
+def test_unclaimed_open_row_demotes_even_when_plan_claims_nothing(repo) -> None:
     _set_register(repo, "    - {id: z, source_text: t, anchor: a, surface: ui, status: open, claimed_by: []}\n")
     review = _review([])
     reason = _register_gate(repo, _PLAN, review)
@@ -172,7 +173,7 @@ def test_unclaimed_open_row_demotes_even_when_plan_claims_nothing(repo):
     assert review["criterion"]["status"] == "not_met"
 
 
-def test_rows_claimed_only_via_register_claims_are_judged(repo):
+def test_rows_claimed_only_via_register_claims_are_judged(repo) -> None:
     _set_register(repo, "    - {id: z, source_text: t, anchor: a, surface: ui, status: open, claimed_by: []}\n")
     _own_plan(repo, f"register_claims:\n  sizing: {_SIZING}\n  rows: [z]\n")
     review = _review([])
@@ -182,7 +183,7 @@ def test_rows_claimed_only_via_register_claims_are_judged(repo):
     assert _register_gate(repo, _PLAN, review) is None
 
 
-def test_ruled_met_wired_and_other_plan_rows_do_not_block(repo):
+def test_ruled_met_wired_and_other_plan_rows_do_not_block(repo) -> None:
     _set_register(
         repo,
         "    - {id: m, source_text: t, anchor: a, surface: ui, status: met, wired: true, claimed_by: []}\n"
@@ -195,12 +196,12 @@ def test_ruled_met_wired_and_other_plan_rows_do_not_block(repo):
     assert review["criterion"]["status"] == "met"
 
 
-def test_unruled_deferred_row_still_blocks(repo):
+def test_unruled_deferred_row_still_blocks(repo) -> None:
     _set_register(repo, "    - {id: d, source_text: t, anchor: a, surface: ui, status: deferred, claimed_by: []}\n")
     assert _register_gate(repo, _PLAN, _review([])) is not None
 
 
-def test_seed_plan_on_foreign_root_is_not_demoted_by_sibling_rows(repo):
+def test_seed_plan_on_foreign_root_is_not_demoted_by_sibling_rows(repo) -> None:
     root = "state/sizings/2026-10-01-root.yaml"
     (repo / root).write_text(
         "status: routed\nrequirement_register:\n  rows:\n"
@@ -214,7 +215,7 @@ def test_seed_plan_on_foreign_root_is_not_demoted_by_sibling_rows(repo):
     assert review["criterion"]["status"] == "met"
 
 
-def test_claims_sizing_equal_to_own_still_demotes_on_orphan(repo):
+def test_claims_sizing_equal_to_own_still_demotes_on_orphan(repo) -> None:
     _set_register(
         repo,
         "    - {id: mine, source_text: t, anchor: a, surface: ui, status: open, claimed_by: []}\n"
@@ -226,7 +227,7 @@ def test_claims_sizing_equal_to_own_still_demotes_on_orphan(repo):
     assert reason is not None and "z" in reason
 
 
-def test_claims_sizing_outside_sizings_home_falls_back_to_own(repo):
+def test_claims_sizing_outside_sizings_home_falls_back_to_own(repo) -> None:
     _set_register(repo, "    - {id: z, source_text: t, anchor: a, surface: ui, status: open, claimed_by: []}\n")
     (repo / "docs").mkdir(exist_ok=True)
     (repo / "docs" / "x.yaml").write_text("status: routed\n", encoding="utf-8")
@@ -235,7 +236,7 @@ def test_claims_sizing_outside_sizings_home_falls_back_to_own(repo):
     assert reason is not None and "z" in reason
 
 
-def test_non_met_criterion_is_left_alone(repo):
+def test_non_met_criterion_is_left_alone(repo) -> None:
     review = {"criterion": {"status": "not_met", "observation": "no"}}
     assert _register_gate(repo, _PLAN, review) is None
     assert review["criterion"]["observation"] == "no"
@@ -244,7 +245,7 @@ def test_non_met_criterion_is_left_alone(repo):
 _ROW_T = "    - {id: z, source_text: shape back, anchor: a, surface: ui, status: met, wired: true, claimed_by: []}\n"
 
 
-def _turns_sizing(repo, rows=_ROW_T, extra=""):
+def _turns_sizing(repo, rows=_ROW_T, extra: str = "") -> None:
     (repo / _SIZING).write_text(
         "status: routed\npm_verbatims:\n  - {turn: 9, text: 'use the shape  back now'}\n"
         "  - {turn: 2, text: 'take a nap'}\n" + extra + "requirement_register:\n  rows:\n" + rows,
@@ -255,7 +256,7 @@ def _turns_sizing(repo, rows=_ROW_T, extra=""):
 _CITE_TURN_2 = "intent_source: pm-verbatim\nintent: take a nap\n"
 
 
-def test_uncovered_turn_demotes_and_names_it(repo):
+def test_uncovered_turn_demotes_and_names_it(repo) -> None:
     _turns_sizing(repo, extra=_CITE_TURN_2)
     review = _review([])
     reason = _register_gate(repo, _PLAN, review)
@@ -263,14 +264,14 @@ def test_uncovered_turn_demotes_and_names_it(repo):
     assert review["criterion"]["status"] == "not_met"
 
 
-def test_sibling_slice_met_criterion_survives_uncovered_shared_turn(repo):
+def test_sibling_slice_met_criterion_survives_uncovered_shared_turn(repo) -> None:
     _turns_sizing(repo, extra=_CITE_TURN_2 + "em_analysis:\n  ask_parent: ask-parent-x ask-x\n")
     review = _review([])
     assert _register_gate(repo, _PLAN, review) is None
     assert review["criterion"]["status"] == "met"
 
 
-def test_uncited_turn_is_not_owed(repo):
+def test_uncited_turn_is_not_owed(repo) -> None:
     _turns_sizing(repo)
     review = _review([])
     assert _register_gate(repo, _PLAN, review) is None
@@ -282,7 +283,7 @@ _SUBMITTED = 1792146000.0  # 2026-10-16T10:20:00Z
 _ROW_ASK = "    - {id: R1, source_text: slice ask text, anchor: ask, surface: ui, status: met, wired: true, claimed_by: []}\n"
 
 
-def _replay_sizing(repo, ts, extra="", resolution=""):
+def _replay_sizing(repo, ts, extra: str = "", resolution: str = "") -> None:
     (repo / _SIZING).write_text(
         "status: routed\nintent_source: em-elaborated\nintent: elaborated slice ask\n"
         f"pm_verbatims:\n  - {{turn: 19, ts: '{ts}', text: 'is the tree dirty'}}\n{resolution}"
@@ -294,14 +295,14 @@ def _replay_sizing(repo, ts, extra="", resolution=""):
     (run / "submission.json").write_text(f'{{"submitted_at": {_SUBMITTED}}}\n', encoding="utf-8")
 
 
-def test_pre_start_uncited_turn_leaves_criterion_met(repo):
+def test_pre_start_uncited_turn_leaves_criterion_met(repo) -> None:
     _replay_sizing(repo, "2026-10-16T10:19:39Z")
     review = _review([])
     assert _register_gate(repo, _PLAN, review, run_id=_RUN) is None
     assert review["criterion"]["status"] == "met"
 
 
-def test_post_start_turn_demotes_naming_it(repo):
+def test_post_start_turn_demotes_naming_it(repo) -> None:
     _replay_sizing(repo, "2026-10-16T10:20:39Z")
     review = _review([])
     reason = _register_gate(repo, _PLAN, review, run_id=_RUN)
@@ -309,7 +310,7 @@ def test_post_start_turn_demotes_naming_it(repo):
     assert review["criterion"]["status"] == "not_met"
 
 
-def test_post_start_turn_in_unrelated_turns_is_cleared(repo):
+def test_post_start_turn_in_unrelated_turns_is_cleared(repo) -> None:
     _replay_sizing(repo, "2026-10-16T10:20:39Z")
     (repo / _SIZING).write_text(
         (repo / _SIZING).read_text(encoding="utf-8") + "  unrelated_turns:\n    - {turn: 19, reason: chat}\n",
@@ -320,18 +321,18 @@ def test_post_start_turn_in_unrelated_turns_is_cleared(repo):
     assert review["criterion"]["status"] == "met"
 
 
-def test_run_id_defaults_to_the_sizings_resolution(repo):
+def test_run_id_defaults_to_the_sizings_resolution(repo) -> None:
     _replay_sizing(repo, "2026-10-16T10:20:39Z", resolution=f"resolution:\n  sha: abcdef1\n  run_id: {_RUN}\n")
     reason = _register_gate(repo, _PLAN, _review([]))
     assert reason is not None and "PM turn 19" in reason
 
 
-def test_no_run_start_owes_only_cited_turns(repo):
+def test_no_run_start_owes_only_cited_turns(repo) -> None:
     _replay_sizing(repo, "2026-10-16T10:20:39Z")
     assert _register_gate(repo, _PLAN, _review([])) is None
 
 
-def test_unrelated_turns_clears_the_uncovered_turn(repo):
+def test_unrelated_turns_clears_the_uncovered_turn(repo) -> None:
     _turns_sizing(repo, extra=_CITE_TURN_2)
     (repo / _SIZING).write_text(
         (repo / _SIZING).read_text(encoding="utf-8")
@@ -343,7 +344,7 @@ def test_unrelated_turns_clears_the_uncovered_turn(repo):
     assert review["criterion"]["status"] == "met"
 
 
-def test_seed_plan_is_not_demoted_by_root_turns(repo):
+def test_seed_plan_is_not_demoted_by_root_turns(repo) -> None:
     root = "state/sizings/2026-10-01-root.yaml"
     (repo / root).write_text(
         "status: routed\npm_verbatims:\n  - {turn: 2, text: 'take a nap'}\nrequirement_register:\n  rows:\n"
@@ -354,7 +355,7 @@ def test_seed_plan_is_not_demoted_by_root_turns(repo):
     assert _register_gate(repo, _PLAN, _review([_good(id="mine")])) is None
 
 
-def _pinned_plan(repo, text="shape back"):
+def _pinned_plan(repo, text: str = "shape back") -> None:
     from coordinator_core.ops import requirement_register as rr
 
     _own_plan(
@@ -363,13 +364,13 @@ def _pinned_plan(repo, text="shape back"):
     )
 
 
-def test_pinned_row_with_matching_text_passes(repo):
+def test_pinned_row_with_matching_text_passes(repo) -> None:
     _set_register(repo, _ROW_T)
     _pinned_plan(repo)
     assert _register_gate(repo, _PLAN, _review([_good(id="z")])) is None
 
 
-def test_pinned_row_whose_source_text_changed_demotes_naming_row(repo):
+def test_pinned_row_whose_source_text_changed_demotes_naming_row(repo) -> None:
     _set_register(repo, _ROW_T)
     _pinned_plan(repo)
     _set_register(repo, _ROW_T.replace("shape back", "something else"))
@@ -380,14 +381,14 @@ def test_pinned_row_whose_source_text_changed_demotes_naming_row(repo):
     assert review["criterion"]["reason"] == reason
 
 
-def test_pinned_row_with_whitespace_only_edit_passes(repo):
+def test_pinned_row_with_whitespace_only_edit_passes(repo) -> None:
     _set_register(repo, _ROW_T)
     _pinned_plan(repo)
     _set_register(repo, _ROW_T.replace("shape back", "shape   back"))
     assert _register_gate(repo, _PLAN, _review([_good(id="z")])) is None
 
 
-def test_plan_without_pins_ignores_a_source_text_edit(repo):
+def test_plan_without_pins_ignores_a_source_text_edit(repo) -> None:
     _set_register(repo, _ROW_T.replace("shape back", "edited"))
     _own_plan(repo, f"register_claims:\n  sizing: {_SIZING}\n  rows: [z]\n")
     assert _register_gate(repo, _PLAN, _review([_good(id="z")])) is None
@@ -411,7 +412,7 @@ _WB_TAIL = "# trailer outside the register\n"
 _WB_SOURCES = [{"doc": "brief.md", "ref": "r@abc"}]
 
 
-def _wb_row(rid, claimed=True, **kw):
+def _wb_row(rid, claimed: bool = True, **kw):
     row = {"id": rid, "source_text": f"t {rid}", "surface": "ui", "status": "open",
            "claimed_by": [_PLAN] if claimed else [], "wired": False}
     row.update(kw)
@@ -424,7 +425,7 @@ def _wb_sizing_text(rows):
 
 
 @pytest.fixture
-def wb_repo(tmp_path):
+def wb_repo(tmp_path: Path) -> Path:
     """A bare-bones git dir: ``locked_rmw`` locks under the git common dir, resolved in-process."""
     git_dir = tmp_path / ".git"
     (git_dir / "refs").mkdir(parents=True)
@@ -439,12 +440,12 @@ def wb_repo(tmp_path):
     return tmp_path
 
 
-def _wb_judged(rid, status="met", wired=True):
+def _wb_judged(rid, status: str = "met", wired: bool = True):
     return {"id": rid, "claim": "this-plan", "status": status, "wired": wired, "surface": "ui",
             "observed_ref": "x.py::f", "command": "run x", "observed": "ok"}
 
 
-def _wb_review(rows, status="met"):
+def _wb_review(rows, status: str = "met"):
     return {"integration_stem": "s", "slices": 1, "fixes": 0,
             "criterion": {"status": status, "observation": "ok", "register_rows": rows}}
 
@@ -453,7 +454,7 @@ def _wb_register(root):
     return yaml.safe_load((root / _SIZING).read_text(encoding="utf-8"))["requirement_register"]
 
 
-def test_writeback_met_rows_get_status_wired_met_by_progress_and_rollup(wb_repo):
+def test_writeback_met_rows_get_status_wired_met_by_progress_and_rollup(wb_repo) -> None:
     out = register_writeback(wb_repo, _PLAN, _wb_review([_wb_judged("r1"), _wb_judged("r2")]), "abc1234")
 
     assert out == {"register_sizing": _SIZING}
@@ -467,7 +468,7 @@ def test_writeback_met_rows_get_status_wired_met_by_progress_and_rollup(wb_repo)
     assert reg["sources"] == _WB_SOURCES
 
 
-def test_writeback_moves_row_claimed_only_through_register_claims(wb_repo):
+def test_writeback_moves_row_claimed_only_through_register_claims(wb_repo) -> None:
     (wb_repo / _PLAN).write_text(
         f"---\nsizing_object: {_SIZING}\nregister_claims:\n  sizing: {_SIZING}\n  rows: [r3]\n---\nbody\n",
         encoding="utf-8",
@@ -480,7 +481,7 @@ def test_writeback_moves_row_claimed_only_through_register_claims(wb_repo):
     assert (r3["status"], r3["wired"], r3["met_by"]) == ("met", True, [f"{_PLAN}@abc1234"])
 
 
-def test_writeback_also_claim_moves_a_row_the_plan_does_not_claim(wb_repo):
+def test_writeback_also_claim_moves_a_row_the_plan_does_not_claim(wb_repo) -> None:
     (wb_repo / _PLAN).write_text(f"---\nsizing_object: {_SIZING}\n---\nbody\n", encoding="utf-8")
 
     unclaimed = register_writeback(wb_repo, _PLAN, _wb_review([_wb_judged("r3")]), "abc1234")
@@ -491,7 +492,7 @@ def test_writeback_also_claim_moves_a_row_the_plan_does_not_claim(wb_repo):
     assert _wb_register(wb_repo)["rows"][2]["status"] == "met"
 
 
-def test_writeback_not_met_run_appends_no_met_by_and_advances_progress(wb_repo):
+def test_writeback_not_met_run_appends_no_met_by_and_advances_progress(wb_repo) -> None:
     register_writeback(
         wb_repo, _PLAN,
         _wb_review([_wb_judged("r1", "partial", True)], status="not_met"),
@@ -503,7 +504,7 @@ def test_writeback_not_met_run_appends_no_met_by_and_advances_progress(wb_repo):
     assert r1["last_progress_at"]
 
 
-def test_writeback_not_met_run_that_changes_no_row_state_writes_no_timestamp(wb_repo):
+def test_writeback_not_met_run_that_changes_no_row_state_writes_no_timestamp(wb_repo) -> None:
     register_writeback(
         wb_repo, _PLAN, _wb_review([_wb_judged("r1", "partial", False)], status="not_met"), "abc1234"
     )
@@ -513,14 +514,14 @@ def test_writeback_not_met_run_that_changes_no_row_state_writes_no_timestamp(wb_
     assert "last_progress_at" not in r1
 
 
-def test_writeback_leaves_bytes_outside_the_register_block_unchanged(wb_repo):
+def test_writeback_leaves_bytes_outside_the_register_block_unchanged(wb_repo) -> None:
     register_writeback(wb_repo, _PLAN, _wb_review([_wb_judged("r1")]), "abc1234")
 
     text = (wb_repo / _SIZING).read_text(encoding="utf-8")
     assert text.startswith(_WB_HEAD) and text.endswith(_WB_TAIL)
 
 
-def test_schema_invalid_writeback_is_refused_and_named_and_file_untouched(wb_repo):
+def test_schema_invalid_writeback_is_refused_and_named_and_file_untouched(wb_repo) -> None:
     bad = _wb_sizing_text([_wb_row("r1", surface="nope")])
     (wb_repo / _SIZING).write_text(bad, encoding="utf-8")
 
@@ -530,7 +531,7 @@ def test_schema_invalid_writeback_is_refused_and_named_and_file_untouched(wb_rep
     assert (wb_repo / _SIZING).read_text(encoding="utf-8") == bad
 
 
-def test_no_judged_rows_or_no_register_writeback_is_a_noop(wb_repo):
+def test_no_judged_rows_or_no_register_writeback_is_a_noop(wb_repo) -> None:
     before = (wb_repo / _SIZING).read_text(encoding="utf-8")
     assert register_writeback(wb_repo, _PLAN, _wb_review([]), "abc1234") == {}
     assert (wb_repo / _SIZING).read_text(encoding="utf-8") == before

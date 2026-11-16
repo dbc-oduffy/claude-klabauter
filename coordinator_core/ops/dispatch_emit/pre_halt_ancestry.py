@@ -91,12 +91,31 @@ def landed_met_credit(
     root: Path, items: Sequence[object], ids: Iterable[str], detail: Optional[dict] = None
 ) -> frozenset[str]:
     """The subset of `ids` whose met verdict item has a met_by naming a commit reachable from HEAD,
-    whether it landed before or after the halt base. Nothing is credited when `detail` already
-    holds CITED_DETAIL_KEY (the at-or-before-base landing stands). Never raises; no git spawn when
-    no row cites a token."""
+    whether it landed before or after the halt base, and the cited commit changed a file or is a
+    merge (an empty commit is no landing evidence). Nothing is credited when `detail` already
+    holds CITED_DETAIL_KEY (the at-or-before-base landing stands). Never raises; one extra git
+    spawn over the cited shas, none when no row cites a token; a git failure credits no row."""
     if isinstance(detail, dict) and CITED_DETAIL_KEY in detail:
         return frozenset()
-    return frozenset(cited_at_or_before(root, "HEAD", items, ids))
+    try:
+        cited = cited_at_or_before(root, "HEAD", items, ids)
+        if not cited:
+            return frozenset()
+        res = run_git(
+            ["log", "--no-walk=unsorted", "--format=%x00%H %P", "--name-only", *sorted(set(cited.values()))],
+            cwd=str(root),
+        )
+        if res.returncode != 0:
+            return frozenset()
+        changed: set[str] = set()
+        for block in res.stdout.split("\0")[1:]:
+            head, _, names = block.partition("\n")
+            parts = head.split()
+            if parts and (len(parts) > 2 or names.strip()):
+                changed.add(parts[0])
+        return frozenset(rid for rid, sha in cited.items() if sha in changed)
+    except Exception:
+        return frozenset()
 
 
 def verified_post_commit_credit(

@@ -19,6 +19,7 @@ from coordinator_core.tests.gate_verdict.contract import (
     disagreement,
 )
 from coordinator_core.workstream_complete import apply as wsc_apply
+from pathlib import Path
 
 GATE_VERDICT_CASE = "workstream-complete-apply"
 
@@ -66,7 +67,7 @@ def _fail() -> dict[str, Any]:
     return {"exit_code": 1, "stdout": "", "stderr": _GATE_STDERR, "args": []}
 
 
-def test_known_clean_close_with_advisory_gate_is_success(monkeypatch, tmp_path):
+def test_known_clean_close_with_advisory_gate_is_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     directives = [
         _directive("d-a", "coordinator-complete-entry"),
         _directive("d-gate", _GATE),
@@ -84,7 +85,7 @@ def test_known_clean_close_with_advisory_gate_is_success(monkeypatch, tmp_path):
     assert disagreement(GATE_VERDICT_CASE, observed, expected) is None
 
 
-def test_halting_gate_with_a_landed_sibling_is_partial_mutation(monkeypatch, tmp_path):
+def test_halting_gate_with_a_landed_sibling_is_partial_mutation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     directives = [
         _directive("d-a", "regenerate-orientation-cache"),
         _directive("d-gate", _GATE),
@@ -98,7 +99,7 @@ def test_halting_gate_with_a_landed_sibling_is_partial_mutation(monkeypatch, tmp
     assert _GATE_STDERR in report["failed"][0]["error"]
 
 
-def test_halting_gate_alone_is_directive_failed(monkeypatch, tmp_path):
+def test_halting_gate_alone_is_directive_failed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     observed, report = _observe(
         monkeypatch, tmp_path, [_directive("d-gate", _GATE)], {"d-gate": _fail()}
     )
@@ -109,7 +110,7 @@ def test_halting_gate_alone_is_directive_failed(monkeypatch, tmp_path):
     assert _GATE_STDERR in report["failed"][0]["error"]
 
 
-def test_best_effort_gate_failure_is_degraded_success(monkeypatch, tmp_path):
+def test_best_effort_gate_failure_is_degraded_success(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     observed, _ = _observe(
         monkeypatch,
         tmp_path,
@@ -123,7 +124,7 @@ def test_best_effort_gate_failure_is_degraded_success(monkeypatch, tmp_path):
 
 
 @pytest.mark.parametrize("verdict_class", [VerdictClass.CLEAN, VerdictClass.HALT])
-def test_harness_refuses_a_wrong_expectation(monkeypatch, tmp_path, verdict_class):
+def test_harness_refuses_a_wrong_expectation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, verdict_class) -> None:
     observed, _ = _observe(
         monkeypatch, tmp_path, [_directive("d-gate", _GATE)], {"d-gate": _fail()}
     )

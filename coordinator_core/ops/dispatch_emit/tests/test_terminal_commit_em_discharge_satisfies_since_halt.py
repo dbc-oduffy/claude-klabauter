@@ -10,6 +10,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 from coordinator_core.ops.dispatch_emit.ask_contract import UNCHANGED_SINCE_HALT_REASON
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -31,7 +32,7 @@ _PLAIN_TEMPLATE: list = []
 
 
 @pytest.fixture
-def plain_repo(tmp_path):
+def plain_repo(tmp_path: Path):
     import shutil
     import tempfile
     from pathlib import Path
@@ -52,7 +53,7 @@ def plain_repo(tmp_path):
     return tmp_path, manifest, _git(tmp_path, "rev-parse", "HEAD")
 
 
-def test_em_discharged_row_exempts_a_met_row_without_a_git_spawn(plain_repo, monkeypatch):
+def test_em_discharged_row_exempts_a_met_row_without_a_git_spawn(plain_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     root, manifest, halt = plain_repo
 
     def boom(*a, **k):
@@ -63,7 +64,7 @@ def test_em_discharged_row_exempts_a_met_row_without_a_git_spawn(plain_repo, mon
     assert tc._unchanged_since_halt_failures(root, resume, VERDICT, manifest) == []
 
 
-def test_em_discharge_exempts_a_met_row_when_a_hand_commit_landed_between_halts(plain_repo):
+def test_em_discharge_exempts_a_met_row_when_a_hand_commit_landed_between_halts(plain_repo) -> None:
     root, manifest, halt = plain_repo
     (root / "CLAUDE.md").write_text("rule\n", encoding="utf-8")
     _git(root, "add", "CLAUDE.md")
@@ -72,7 +73,7 @@ def test_em_discharge_exempts_a_met_row_when_a_hand_commit_landed_between_halts(
     assert tc._unchanged_since_halt_failures(root, resume, VERDICT, manifest) == []
 
 
-def test_discharge_credits_only_the_linked_row_and_refuses_the_other(plain_repo):
+def test_discharge_credits_only_the_linked_row_and_refuses_the_other(plain_repo) -> None:
     root, manifest, halt = plain_repo
     verdict = {"items": [{"id": "R1", "status": "met"}, {"id": "R2", "status": "met"}]}
     resume = _resume(halt, blocking=["R1", "R2"], em_discharged={"V1": "R1 landed by hand"})
@@ -80,7 +81,7 @@ def test_discharge_credits_only_the_linked_row_and_refuses_the_other(plain_repo)
     assert got == [{"id": "R2", "reason": UNCHANGED_SINCE_HALT_REASON}]
 
 
-def test_discharge_text_naming_a_longer_id_does_not_credit_the_prefix_row(plain_repo):
+def test_discharge_text_naming_a_longer_id_does_not_credit_the_prefix_row(plain_repo) -> None:
     root, manifest, halt = plain_repo
     verdict = {"items": [{"id": "R1", "status": "met"}, {"id": "R10", "status": "met"}]}
     resume = _resume(halt, blocking=["R1", "R10"], em_discharged={"V1": "R10 landed by hand"})
@@ -88,7 +89,7 @@ def test_discharge_text_naming_a_longer_id_does_not_credit_the_prefix_row(plain_
     assert got == [{"id": "R1", "reason": UNCHANGED_SINCE_HALT_REASON}]
 
 
-def test_met_by_naming_the_discharged_row_links_it(plain_repo):
+def test_met_by_naming_the_discharged_row_links_it(plain_repo) -> None:
     root, manifest, halt = plain_repo
     verdict = {"items": [{"id": "R1", "status": "met", "met_by": ["V1"]}, {"id": "R2", "status": "met"}]}
     resume = _resume(halt, blocking=["R1", "R2"], em_discharged={"V1": "landed by hand"})
@@ -97,7 +98,7 @@ def test_met_by_naming_the_discharged_row_links_it(plain_repo):
 
 
 @pytest.mark.parametrize("discharged", [{}, None, {"V1": "  "}, {"V1": 3}, ["V1"]])
-def test_no_usable_em_discharge_still_refuses(plain_repo, discharged):
+def test_no_usable_em_discharge_still_refuses(plain_repo, discharged) -> None:
     root, manifest, halt = plain_repo
     resume = _resume(halt, em_discharged=discharged)
     got = tc._unchanged_since_halt_failures(root, resume, VERDICT, manifest)

@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.git import tree_spine
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -22,14 +23,14 @@ def _git_out(cwd, *args):
     return result.stdout.strip()
 
 
-def test_absent_is_a_distinct_sentinel_object():
+def test_absent_is_a_distinct_sentinel_object() -> None:
     assert tree_spine._ABSENT is tree_spine._ABSENT
     assert tree_spine._ABSENT is not object()
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_write_tree_level_matches_git_mktree(tmp_path):
+def test_write_tree_level_matches_git_mktree(tmp_path: Path) -> None:
     subprocess.run(
         ["git", "init", "-q"],
         cwd=tmp_path,

@@ -7,6 +7,7 @@ import os
 
 from coordinator_core.ops.dispatch_emit import stranded_sibling as ss
 from coordinator_core.ops.dispatch_emit.kept_work import blob_sha
+from pathlib import Path
 
 MOD = "coordinator_core/x/mod.py"
 TST = "coordinator_core/x/tests/test_mod.py"
@@ -25,14 +26,14 @@ def _record(warp, run_id, touched, mtime=None):
     return d
 
 
-def _tree(tmp_path, files):
+def _tree(tmp_path, files) -> None:
     for rel, data in files.items():
         p = tmp_path / rel
         p.parent.mkdir(parents=True, exist_ok=True)
         p.write_bytes(data)
 
 
-def test_write_read_roundtrip_and_bad_record(tmp_path):
+def test_write_read_roundtrip_and_bad_record(tmp_path: Path) -> None:
     ss.write(tmp_path, {MOD: {"base": None, "run": "aa"}})
     assert ss.read(tmp_path) == {MOD: {"base": None, "run": "aa"}}
     (tmp_path / ss.TOUCHED_FILE).write_text("{not json", encoding="utf-8")
@@ -40,13 +41,13 @@ def test_write_read_roundtrip_and_bad_record(tmp_path):
     assert ss.read(tmp_path / "absent") == {}
 
 
-def test_kind():
+def test_kind() -> None:
     assert ss.kind_of(MOD) == "module"
     assert ss.kind_of(TST) == "test"
     assert ss.kind_of("a/test_b.py") == "test"
 
 
-def test_unlanded_module_is_named(tmp_path):
+def test_unlanded_module_is_named(tmp_path: Path) -> None:
     warp = tmp_path / "state" / "warp"
     run_mod = _blob(b"new module")
     _record(warp, "r1", {MOD: {"base": None, "run": run_mod}, TST: {"base": None, "run": _blob(b"t")}})
@@ -55,7 +56,7 @@ def test_unlanded_module_is_named(tmp_path):
     assert hits == [{"path": MOD, "run": "r1", "kind": "module", "reason": "unlanded"}]
 
 
-def test_lost_when_worktree_differs_from_run_blob(tmp_path):
+def test_lost_when_worktree_differs_from_run_blob(tmp_path: Path) -> None:
     warp = tmp_path / "state" / "warp"
     _record(warp, "r1", {MOD: {"base": "b0", "run": _blob(b"run")}, TST: {"base": None, "run": "t"}})
     _tree(tmp_path, {MOD: b"someone else"})
@@ -63,7 +64,7 @@ def test_lost_when_worktree_differs_from_run_blob(tmp_path):
     assert [(h["path"], h["reason"]) for h in hits] == [(MOD, "lost")]
 
 
-def test_not_refused_when_sibling_landed_or_already_at_run_blob(tmp_path):
+def test_not_refused_when_sibling_landed_or_already_at_run_blob(tmp_path: Path) -> None:
     warp = tmp_path / "state" / "warp"
     run = _blob(b"run")
     _record(warp, "r1", {MOD: {"base": None, "run": run}, TST: {"base": None, "run": "t"}})
@@ -71,14 +72,14 @@ def test_not_refused_when_sibling_landed_or_already_at_run_blob(tmp_path):
     assert ss.stranded(tmp_path, warp, [TST], {MOD: run}) == []
 
 
-def test_no_claim_when_landing_misses_the_record(tmp_path):
+def test_no_claim_when_landing_misses_the_record(tmp_path: Path) -> None:
     warp = tmp_path / "state" / "warp"
     _record(warp, "r1", {MOD: {"base": None, "run": "x"}})
     assert ss.stranded(tmp_path, warp, ["other.py"], {}) == []
     assert ss.stranded(tmp_path, tmp_path / "nowhere", [MOD], {}) == []
 
 
-def test_newest_record_judges_a_shared_path(tmp_path):
+def test_newest_record_judges_a_shared_path(tmp_path: Path) -> None:
     warp = tmp_path / "state" / "warp"
     _record(warp, "old", {MOD: {"base": None, "run": "old-blob"}, TST: {"base": None, "run": "t"}}, 1000)
     _record(warp, "new", {MOD: {"base": "old-blob", "run": "new-blob"}}, 2000)
@@ -87,7 +88,7 @@ def test_newest_record_judges_a_shared_path(tmp_path):
     assert hits == []
 
 
-def test_shared_file_names_the_other_runs_sibling(tmp_path):
+def test_shared_file_names_the_other_runs_sibling(tmp_path: Path) -> None:
     warp = tmp_path / "state" / "warp"
     shared = "coordinator/bin/unimatrix-install.py"
     seed = "coordinator/bin/unimatrix-doctrine-seed.py"
@@ -97,12 +98,12 @@ def test_shared_file_names_the_other_runs_sibling(tmp_path):
     assert hits == [{"path": seed, "run": "6ad434", "kind": "module", "reason": "unlanded"}]
 
 
-def test_single_record_dir_is_judged(tmp_path):
+def test_single_record_dir_is_judged(tmp_path: Path) -> None:
     d = _record(tmp_path, "r1", {MOD: {"base": None, "run": "x"}, TST: {"base": None, "run": "t"}})
     assert [h["path"] for h in ss.stranded(tmp_path, d, [TST], {})] == [MOD]
 
 
-def test_ownerless_names_undeclared_dirty_paths(tmp_path):
+def test_ownerless_names_undeclared_dirty_paths(tmp_path: Path) -> None:
     run = tmp_path / "state" / "warp" / "r1"
     run.mkdir(parents=True)
     (run / "manifest.json").write_text(
@@ -113,7 +114,7 @@ def test_ownerless_names_undeclared_dirty_paths(tmp_path):
     assert ss.ownerless(tmp_path / "none", ["stray.py"]) == []
 
 
-def test_recent_run_dirs_skips_runs_older_than_the_cap(tmp_path):
+def test_recent_run_dirs_skips_runs_older_than_the_cap(tmp_path: Path) -> None:
     n = ss.OWNERLESS_SCAN_CAP + 1
     for i in range(n):
         d = tmp_path / f"r{i:03d}"

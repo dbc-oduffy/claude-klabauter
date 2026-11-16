@@ -81,7 +81,7 @@ class _SpawnCount:
     def __enter__(self) -> "_SpawnCount":
         counter = self
 
-        def counting(self_, *a, **k):
+        def counting(self_, *a, **k) -> None:
             counter.n += 1
             counter._real(self_, *a, **k)
 

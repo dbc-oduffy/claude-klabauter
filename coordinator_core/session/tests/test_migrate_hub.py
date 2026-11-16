@@ -5,9 +5,10 @@ from pathlib import Path
 
 from coordinator_core.session import migrate_hub as mh
 from coordinator_core.session_hub_path import hub_for_common
+import pytest
 
 
-def _seed(tmp_path: Path):
+def _seed(tmp_path: Path) -> tuple[Path, Path]:
     common = tmp_path / ".git"
     legacy = common / "coordinator-sessions"
     (legacy / "s1").mkdir(parents=True)
@@ -16,7 +17,7 @@ def _seed(tmp_path: Path):
     return common, legacy
 
 
-def test_merges_into_resolver_hub_and_keeps_legacy(tmp_path):
+def test_merges_into_resolver_hub_and_keeps_legacy(tmp_path: Path) -> None:
     common, legacy = _seed(tmp_path)
     c = mh.migrate_common(common)
     hub = hub_for_common(common)
@@ -25,14 +26,14 @@ def test_merges_into_resolver_hub_and_keeps_legacy(tmp_path):
     assert (legacy / "s1" / "meta.json").exists()
 
 
-def test_second_run_is_noop(tmp_path):
+def test_second_run_is_noop(tmp_path: Path) -> None:
     common, _ = _seed(tmp_path)
     mh.migrate_common(common)
     c = mh.migrate_common(common)
     assert c == {"copied": 0, "merged": 0, "skipped": 2}
 
 
-def test_newer_destination_wins_and_older_is_replaced(tmp_path):
+def test_newer_destination_wins_and_older_is_replaced(tmp_path: Path) -> None:
     common, legacy = _seed(tmp_path)
     hub = hub_for_common(common)
     (hub / "s1").mkdir(parents=True)
@@ -46,7 +47,7 @@ def test_newer_destination_wins_and_older_is_replaced(tmp_path):
     assert dst.read_text() == "legacy-meta"
 
 
-def test_jsonl_unions_even_when_destination_is_newer(tmp_path):
+def test_jsonl_unions_even_when_destination_is_newer(tmp_path: Path) -> None:
     common, legacy = _seed(tmp_path)
     hub = hub_for_common(common)
     (hub / "s1").mkdir(parents=True)
@@ -59,14 +60,14 @@ def test_jsonl_unions_even_when_destination_is_newer(tmp_path):
     assert mh.migrate_common(common)["merged"] == 0
 
 
-def test_bare_repo_is_noop(tmp_path):
+def test_bare_repo_is_noop(tmp_path: Path) -> None:
     bare = tmp_path / "repo.git"
     (bare / "coordinator-sessions" / "s1").mkdir(parents=True)
     (bare / "coordinator-sessions" / "s1" / "x").write_text("x")
     assert mh.migrate_common(bare) == {"copied": 0, "merged": 0, "skipped": 0}
 
 
-def test_main_runs_against_repo(tmp_path, monkeypatch, capsys):
+def test_main_runs_against_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     common, _ = _seed(tmp_path)
     import coordinator_core.git.repo_root as rr
 
@@ -75,7 +76,7 @@ def test_main_runs_against_repo(tmp_path, monkeypatch, capsys):
     assert "copied=2" in capsys.readouterr().out
 
 
-def test_interrupted_copy_leaves_no_destination_so_a_rerun_copies(tmp_path, monkeypatch):
+def test_interrupted_copy_leaves_no_destination_so_a_rerun_copies(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     common, _ = _seed(tmp_path)
     real = mh.shutil.copy2
 

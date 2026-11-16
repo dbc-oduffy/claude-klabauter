@@ -8,6 +8,7 @@ from coordinator_core.bash_guards import check_test_suite_invocation as guard
 from coordinator_core.group_em import box_registry, nomination, suite_grant
 from coordinator_core.session import grant
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -19,7 +20,7 @@ _AGENT = "a0123456789abcdef"
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / "pyproject.toml").write_text(
         "[tool.pytest.ini_options]\ntestpaths = [\"coordinator_core\"]\n", encoding="utf-8"
     )
@@ -41,13 +42,13 @@ def _reason(out):
     return out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_live_group_em_grant_clears_the_authority_leg(repo, monkeypatch):
+def test_live_group_em_grant_clears_the_authority_leg(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(suite_grant, "check_group_em_suite_grant", lambda *a, **k: (True, {"k": 1}))
     assert guard._tier_u_grant(str(repo)) == (True, {"k": 1})
     assert "with-suite-mutex" in _reason(_enveloped(guard.check)(_payload(_FULL, repo)))
 
 
-def test_expired_group_em_grant_is_denied_with_both_remedy_lines(repo, monkeypatch):
+def test_expired_group_em_grant_is_denied_with_both_remedy_lines(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(suite_grant, "check_group_em_suite_grant", lambda *a, **k: (False, {"k": 1}))
     monkeypatch.setattr(nomination, "box_holder", lambda *a, **k: {"live": True})
     reason = _reason(_enveloped(guard.check)(_payload(_FULL, repo)))
@@ -57,7 +58,7 @@ def test_expired_group_em_grant_is_denied_with_both_remedy_lines(repo, monkeypat
     assert "tier-u-grant-cli grant pm" not in reason
 
 
-def test_no_live_local_holder_names_the_cross_box_form(repo, monkeypatch):
+def test_no_live_local_holder_names_the_cross_box_form(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(suite_grant, "check_group_em_suite_grant", lambda *a, **k: (False, {"k": 1}))
     monkeypatch.setattr(box_registry, "local_box_id", lambda home=None: "box-abc123")
     for holder in (None, {"live": False}):
@@ -68,7 +69,7 @@ def test_no_live_local_holder_names_the_cross_box_form(repo, monkeypatch):
         assert "ask the PM" not in reason
 
 
-def test_holder_read_error_fails_closed_to_the_cross_box_form(repo, monkeypatch):
+def test_holder_read_error_fails_closed_to_the_cross_box_form(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise RuntimeError("x")
 
@@ -79,14 +80,14 @@ def test_holder_read_error_fails_closed_to_the_cross_box_form(repo, monkeypatch)
     assert "group-em-grant <session>" not in line
 
 
-def test_pm_grant_record_is_returned_when_both_legs_miss(repo, monkeypatch):
+def test_pm_grant_record_is_returned_when_both_legs_miss(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     rec = {"session_id": "z", "granted_by": "pm"}
     monkeypatch.setattr(grant, "check_tier_u_grant", lambda cwd=None, **k: (False, rec))
     monkeypatch.setattr(suite_grant, "check_group_em_suite_grant", lambda *a, **k: (False, {"k": 1}))
     assert guard._tier_u_grant(str(repo)) == (False, rec)
 
 
-def test_group_em_reader_error_reads_ungranted(repo, monkeypatch):
+def test_group_em_reader_error_reads_ungranted(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise RuntimeError("x")
 
@@ -94,7 +95,7 @@ def test_group_em_reader_error_reads_ungranted(repo, monkeypatch):
     assert guard._tier_u_grant(str(repo)) == (False, None)
 
 
-def test_subagent_issuing_group_em_grant_is_denied(repo):
+def test_subagent_issuing_group_em_grant_is_denied(repo) -> None:
     out = _enveloped(guard.check)(_payload(_ISSUE, repo, agent_id=_AGENT))
     assert out is not None
     assert "Group EM issues this grant itself" in _reason(out)
@@ -107,13 +108,13 @@ def test_subagent_issuing_group_em_grant_is_denied(repo):
         "tier-u-grant-cli.cmd group-em-grant x y",
     ],
 )
-def test_subagent_issue_denied_through_interpreter_and_suffix(repo, cmd):
+def test_subagent_issue_denied_through_interpreter_and_suffix(repo, cmd) -> None:
     assert _enveloped(guard.check)(_payload(cmd, repo, agent_id=_AGENT)) is not None
 
 
-def test_em_issuing_group_em_grant_is_not_denied_by_this_leg(repo):
+def test_em_issuing_group_em_grant_is_not_denied_by_this_leg(repo) -> None:
     assert _enveloped(guard.check)(_payload(_ISSUE, repo)) is None
 
 
-def test_subagent_other_grant_verbs_are_not_denied_by_this_leg(repo):
+def test_subagent_other_grant_verbs_are_not_denied_by_this_leg(repo) -> None:
     assert _enveloped(guard.check)(_payload('tier-u-grant-cli read', repo, agent_id=_AGENT)) is None

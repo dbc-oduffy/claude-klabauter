@@ -13,6 +13,7 @@ from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.ceremony import close_background
 from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.tests.test_met_judge_reaches_close_legs_e2e import _run_close_job
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -20,7 +21,7 @@ OTHER_RUN = "ask-20990101T000000-aaaaaa"
 OPEN_TRAILER = "Requirement-Open: R1 withheld by out-of-scope ruling"
 
 
-def _fixture(tmp_path, monkeypatch, ruling_run):
+def _fixture(tmp_path, monkeypatch, ruling_run) -> tuple[Path, str]:
     from coordinator_core.session import claims
 
     parent = tmp_path / "work"
@@ -62,7 +63,7 @@ def _drive(repo, script, verdict):
     )
 
 
-def _assert_closed(repo, out):
+def _assert_closed(repo, out) -> None:
     import subprocess
 
     from coordinator_core.win_portability import no_console_creationflags
@@ -79,11 +80,11 @@ def _assert_closed(repo, out):
 
 
 @pytest.mark.parametrize("ruling_run", [OTHER_RUN, driver.ASK_RUN], ids=["re-fire-other-run", "same-run"])
-def test_all_ruled_out_register_with_empty_verdict_closes(tmp_path, monkeypatch, ruling_run):
+def test_all_ruled_out_register_with_empty_verdict_closes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, ruling_run) -> None:
     repo, script = _fixture(tmp_path, monkeypatch, ruling_run)
     _assert_closed(repo, _drive(repo, script, {"items": []}))
 
 
-def test_verdict_judging_the_ruled_out_row_met_still_closes(tmp_path, monkeypatch):
+def test_verdict_judging_the_ruled_out_row_met_still_closes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, script = _fixture(tmp_path, monkeypatch, OTHER_RUN)
     _assert_closed(repo, _drive(repo, script, {"items": [{"id": "R1", "status": "met"}]}))

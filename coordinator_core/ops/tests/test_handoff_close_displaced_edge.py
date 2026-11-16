@@ -29,6 +29,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.ops.handoff_transition import _close
+import pytest
 
 
 def _fake_git_common_dir(worktree: Path, monkeypatch) -> None:
@@ -66,7 +67,7 @@ def _seed_handoff(
     return handoff
 
 
-def test_close_displaced_refuses_when_continued_into_non_empty(tmp_path, monkeypatch):
+def test_close_displaced_refuses_when_continued_into_non_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     worktree = tmp_path
     _fake_git_common_dir(worktree, monkeypatch)
     handoff = _seed_handoff(worktree, continued_into="state/handoffs/successor.md")
@@ -81,7 +82,7 @@ def test_close_displaced_refuses_when_continued_into_non_empty(tmp_path, monkeyp
     assert handoff.read_text(encoding="utf-8") == before
 
 
-def test_close_displaced_still_closes_when_no_lineage_edge(tmp_path, monkeypatch):
+def test_close_displaced_still_closes_when_no_lineage_edge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     worktree = tmp_path
     _fake_git_common_dir(worktree, monkeypatch)
     handoff = _seed_handoff(worktree, continued_into=None)
@@ -95,7 +96,7 @@ def test_close_displaced_still_closes_when_no_lineage_edge(tmp_path, monkeypatch
     assert "closed_reason: displaced" in text
 
 
-def test_close_cancelled_and_stale_unaffected_by_lineage_edge(tmp_path, monkeypatch):
+def test_close_cancelled_and_stale_unaffected_by_lineage_edge(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     worktree = tmp_path
     _fake_git_common_dir(worktree, monkeypatch)
 

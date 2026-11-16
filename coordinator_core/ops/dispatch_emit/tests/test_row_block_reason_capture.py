@@ -56,44 +56,44 @@ def _solo(reply):
     return _go({"X": reply}, "_rows.X = _runRow('X', [], null, run('X'));").get("X")
 
 
-def test_blocked_line_text_is_the_reason():
+def test_blocked_line_text_is_the_reason() -> None:
     assert _solo("BLOCKED: no pnpm on host") == "no pnpm on host"
 
 
-def test_partial_line_after_prose_is_the_reason():
+def test_partial_line_after_prose_is_the_reason() -> None:
     assert _solo("Did work.\nPARTIAL: C3 tests unwritten") == "C3 tests unwritten"
 
 
-def test_bare_exit_status_takes_next_non_status_line_across_crlf():
+def test_bare_exit_status_takes_next_non_status_line_across_crlf() -> None:
     reply = "<exit-status>BLOCKED</exit-status>\r\nThe obstacle: guard denied the write"
     assert _solo(reply) == "The obstacle: guard denied the write"
 
 
-def test_bare_status_field_with_nothing_else_is_empty():
+def test_bare_status_field_with_nothing_else_is_empty() -> None:
     assert _solo("**Status:** BLOCKED") == ""
 
 
-def test_object_reply_with_status_in_a_field():
+def test_object_reply_with_status_in_a_field() -> None:
     reply = {"summary": "stuck\nBLOCKED: schema refused the key"}
     assert _solo(reply) == "schema refused the key"
 
 
-def test_reason_is_one_collapsed_line_and_bounded():
+def test_reason_is_one_collapsed_line_and_bounded() -> None:
     reason = _solo("BLOCKED:   a\t b   " + "x" * 2000)
     assert "\n" not in reason and "\r" not in reason
     assert reason.startswith("a b xxx") and len(reason) <= 1000
 
 
-def test_no_contract_status_line_is_recorded():
+def test_no_contract_status_line_is_recorded() -> None:
     assert _solo("just chatting") == "no contract status line in the executor reply"
 
 
-def test_abstain_line_names_the_abstention_not_a_missing_status():
+def test_abstain_line_names_the_abstention_not_a_missing_status() -> None:
     reason = _solo("Read the row.\nABSTAIN: row is out of role for this agent")
     assert reason == "executor abstained: row is out of role for this agent"
 
 
-def test_abstain_in_object_reply_and_dependents_held():
+def test_abstain_in_object_reply_and_dependents_held() -> None:
     reasons = _go(
         {"A": {"summary": "x\nABSTAIN: fence is run-only"}, "B": "DONE: b"},
         "_rows.A = _runRow('A', [], null, run('A'));"
@@ -103,15 +103,15 @@ def test_abstain_in_object_reply_and_dependents_held():
     assert reasons["B"] == "held: dependency A did not finish DONE"
 
 
-def test_abstain_word_in_prose_keeps_the_missing_status_reason():
+def test_abstain_word_in_prose_keeps_the_missing_status_reason() -> None:
     assert _solo("I will not ABSTAIN from this") == "no contract status line in the executor reply"
 
 
-def test_done_reply_records_nothing():
+def test_done_reply_records_nothing() -> None:
     assert _solo("DONE: report.md") is None
 
 
-def test_dependent_of_blocked_row_names_the_dependency():
+def test_dependent_of_blocked_row_names_the_dependency() -> None:
     reasons = _go(
         {"A": "BLOCKED: no pnpm on host", "B": "DONE: b"},
         "_rows.A = _runRow('A', [], null, run('A'));"

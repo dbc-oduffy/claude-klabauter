@@ -25,6 +25,7 @@ from coordinator_core.ops.dispatch_emit.spine_read import (
     read_spine,
 )
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow, build_waves
+from pathlib import Path
 
 _HEADER = "# fixture plan\n\n## Tasks\n\n"
 _AUDITS = "state/audits/"
@@ -36,7 +37,7 @@ def _write_plan(tmp_path, body: str):
     return path
 
 
-def _row(id_, writes, writes_under=(), reads=None):
+def _row(id_, writes, writes_under=(), reads=None) -> EmitterRow:
     return EmitterRow(
         id=id_,
         title=f"title-{id_}",
@@ -48,7 +49,7 @@ def _row(id_, writes, writes_under=(), reads=None):
     )
 
 
-def _wave_row(id_, writes, writes_under=()):
+def _wave_row(id_, writes, writes_under=()) -> WaveRow:
     return WaveRow(
         id=id_,
         title=f"title-{id_}",
@@ -60,7 +61,7 @@ def _wave_row(id_, writes, writes_under=()):
     )
 
 
-def test_a_prefix_only_row_reads_as_declared_empty_writes(tmp_path):
+def test_a_prefix_only_row_reads_as_declared_empty_writes(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: dated audit
@@ -73,7 +74,7 @@ def test_a_prefix_only_row_reads_as_declared_empty_writes(tmp_path):
     assert row.writes_under == (_AUDITS,)
 
 
-def test_a_row_without_the_key_keeps_undeclared_writes_and_no_prefix(tmp_path):
+def test_a_row_without_the_key_keeps_undeclared_writes_and_no_prefix(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: nothing declared
@@ -84,7 +85,7 @@ def test_a_row_without_the_key_keeps_undeclared_writes_and_no_prefix(tmp_path):
     assert row.writes_under == ()
 
 
-def test_a_backslash_terminated_prefix_is_accepted(tmp_path):
+def test_a_backslash_terminated_prefix_is_accepted(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: windows-authored prefix
@@ -96,7 +97,7 @@ def test_a_backslash_terminated_prefix_is_accepted(tmp_path):
     assert row.writes_under == ("state/audits/",)
 
 
-def test_a_file_shaped_prefix_is_refused_naming_row_and_entry(tmp_path):
+def test_a_file_shaped_prefix_is_refused_naming_row_and_entry(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: file in the prefix field
@@ -110,7 +111,7 @@ def test_a_file_shaped_prefix_is_refused_naming_row_and_entry(tmp_path):
     assert "state/audits/report.md" in str(excinfo.value)
 
 
-def test_a_scalar_prefix_is_refused(tmp_path):
+def test_a_scalar_prefix_is_refused(tmp_path: Path) -> None:
     body = """\
 - id: C1
   title: scalar prefix
@@ -121,7 +122,7 @@ def test_a_scalar_prefix_is_refused(tmp_path):
         read_spine(_write_plan(tmp_path, body))
 
 
-def test_an_epistemic_premise_gated_prefix_row_is_not_held_out(tmp_path):
+def test_an_epistemic_premise_gated_prefix_row_is_not_held_out(tmp_path: Path) -> None:
     # The holdout keys on UNDECLARED writes. A prefix row has declared where
     # it writes, so it must be scheduled after its gate, not held.
     body = """\
@@ -144,24 +145,24 @@ def test_an_epistemic_premise_gated_prefix_row_is_not_held_out(tmp_path):
     assert waves[1][0].writes_under == (_AUDITS,)
 
 
-def test_two_rows_under_one_prefix_cannot_share_a_wave():
+def test_two_rows_under_one_prefix_cannot_share_a_wave() -> None:
     waves = build_waves([_row("C1", [], [_AUDITS]), _row("C2", [], [_AUDITS])])
     assert len(waves) == 2
 
 
-def test_a_prefix_and_a_file_beneath_it_cannot_share_a_wave():
+def test_a_prefix_and_a_file_beneath_it_cannot_share_a_wave() -> None:
     waves = build_waves(
         [_row("C1", [], [_AUDITS]), _row("C2", ["state/audits/2026-09-11-x.md"])]
     )
     assert len(waves) == 2
 
 
-def test_disjoint_prefixes_share_a_wave():
+def test_disjoint_prefixes_share_a_wave() -> None:
     waves = build_waves([_row("C1", [], [_AUDITS]), _row("C2", [], ["state/lessons/"])])
     assert len(waves) == 1
 
 
-def test_a_reader_under_a_prefix_lands_after_its_writer():
+def test_a_reader_under_a_prefix_lands_after_its_writer() -> None:
     rows = [
         _row("C2", ["b.py"], reads=["state/audits/2026-09-11-x.md"]),
         _row("C1", [], [_AUDITS]),
@@ -170,7 +171,7 @@ def test_a_reader_under_a_prefix_lands_after_its_writer():
     assert [[row.id for row in wave] for wave in waves] == [["C1"], ["C2"]]
 
 
-def test_a_reader_of_the_prefixs_own_ancestor_lands_after_its_writer():
+def test_a_reader_of_the_prefixs_own_ancestor_lands_after_its_writer() -> None:
     rows = [
         _row("C2", ["b.py"], reads=["state/"]),
         _row("C1", [], [_AUDITS]),
@@ -180,8 +181,8 @@ def test_a_reader_of_the_prefixs_own_ancestor_lands_after_its_writer():
 
 
 def test_two_rows_sharing_a_backslash_spelled_prefix_from_a_spine_cannot_share_a_wave(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     body = """\
 - id: C1
   title: first dated audit
@@ -198,7 +199,7 @@ def test_two_rows_sharing_a_backslash_spelled_prefix_from_a_spine_cannot_share_a
     assert len(waves) == 2
 
 
-def test_a_prefix_only_wave_returns_an_empty_static_pathspec_without_refusing(caplog):
+def test_a_prefix_only_wave_returns_an_empty_static_pathspec_without_refusing(caplog: pytest.LogCaptureFixture) -> None:
     wave = [_wave_row("C1", [], [_AUDITS])]
     with caplog.at_level(logging.WARNING):
         assert commit_pathspec(wave) == []
@@ -206,7 +207,7 @@ def test_a_prefix_only_wave_returns_an_empty_static_pathspec_without_refusing(ca
     assert commit_prefixes(wave) == [("C1", (_AUDITS,))]
 
 
-def test_prefixes_stay_attributed_to_their_own_row():
+def test_prefixes_stay_attributed_to_their_own_row() -> None:
     wave = [
         _wave_row("C1", ["a.py"]),
         _wave_row("C2", [], [_AUDITS]),
@@ -216,22 +217,22 @@ def test_prefixes_stay_attributed_to_their_own_row():
     assert commit_prefixes(wave) == [("C2", (_AUDITS,)), ("C3", ("state/lessons/",))]
 
 
-def test_an_all_empty_wave_without_a_prefix_still_refuses():
+def test_an_all_empty_wave_without_a_prefix_still_refuses() -> None:
     with pytest.raises(NoWritesDeclaredError):
         commit_pathspec([_wave_row("C1", []), _wave_row("C2", [])])
 
 
-def test_the_directory_shaped_refusal_names_the_prefix_spelling():
+def test_the_directory_shaped_refusal_names_the_prefix_spelling() -> None:
     with pytest.raises(DirectoryShapedWriteError) as excinfo:
         commit_pathspec([_wave_row("C1", [_AUDITS])])
     assert "writes_under:" in str(excinfo.value)
 
 
-def test_a_prefix_only_spine_has_a_legitimately_empty_test_scope():
+def test_a_prefix_only_spine_has_a_legitimately_empty_test_scope() -> None:
     assert terminal_test_scope([[_wave_row("C1", [], [_AUDITS])]]) == []
 
 
-def test_a_prefix_only_wave_still_names_its_prefix_in_the_row_prompt():
+def test_a_prefix_only_wave_still_names_its_prefix_in_the_row_prompt() -> None:
     script = compose_script(
         [[_wave_row("C1", [], [_AUDITS])]],
         name="wf",
@@ -241,7 +242,7 @@ def test_a_prefix_only_wave_still_names_its_prefix_in_the_row_prompt():
     assert "state/audits/" in script
 
 
-def test_the_executor_names_its_own_prefix_files_and_never_runs_porcelain_over_the_prefix():
+def test_the_executor_names_its_own_prefix_files_and_never_runs_porcelain_over_the_prefix() -> None:
     contract = emit._row_return_contract(
         _wave_row("C1", ["a.py"], [_AUDITS]), "docs/plans/2026-09-11-x.md"
     )
@@ -259,7 +260,7 @@ def test_the_executor_names_its_own_prefix_files_and_never_runs_porcelain_over_t
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_gitignored_batch_with_a_prefix_still_keeps_its_commit_phase(tmp_path):
+def test_a_gitignored_batch_with_a_prefix_still_keeps_its_commit_phase(tmp_path: Path) -> None:
     import subprocess as _subprocess
 
     repo = tmp_path / "r"
@@ -267,7 +268,7 @@ def test_a_gitignored_batch_with_a_prefix_still_keeps_its_commit_phase(tmp_path)
 
     @pytest.mark.spawns_process
     @pytest.mark.cadence
-    def _git(*args, check=True):
+    def _git(*args, check: bool = True):
         return _subprocess.run(
             ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **no_console_creationflags()
         )
@@ -290,7 +291,7 @@ def test_a_gitignored_batch_with_a_prefix_still_keeps_its_commit_phase(tmp_path)
     assert request.chunks[0].prefixes == (_AUDITS,)
 
 
-def test_a_row_without_prefixes_gets_no_prefix_claim_field():
+def test_a_row_without_prefixes_gets_no_prefix_claim_field() -> None:
     contract = emit._row_return_contract(
         _wave_row("C1", ["a.py"]), "docs/plans/2026-09-11-x.md"
     )

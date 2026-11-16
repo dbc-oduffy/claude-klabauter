@@ -55,7 +55,7 @@ def _images(root: Path, pre, post, *, raw: str | None = None) -> None:
     }), encoding="utf-8")
 
 
-def _no_peers(monkeypatch, held=()):
+def _no_peers(monkeypatch, held=()) -> None:
     from coordinator_core.ops.ceremony import commit_v2
 
     def fake(root, paths, peer_holds=None, **_kw):
@@ -73,7 +73,7 @@ def _blob_text(root: Path, sha: str) -> bytes:
     return got[1]
 
 
-def test_pre_equals_head_lands_post_without_peer_edit(tmp_path, monkeypatch):
+def test_pre_equals_head_lands_post_without_peer_edit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _no_peers(monkeypatch)
     _images(root, HEAD_TXT, ROW_TXT)
@@ -84,7 +84,7 @@ def test_pre_equals_head_lands_post_without_peer_edit(tmp_path, monkeypatch):
     assert s.landed_text(REL) == ROW_TXT.decode()
 
 
-def test_pre_equals_head_post_is_worktree_needs_no_blob(tmp_path, monkeypatch):
+def test_pre_equals_head_post_is_worktree_needs_no_blob(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _no_peers(monkeypatch)
     _images(root, HEAD_TXT, ROW_TXT)
@@ -93,7 +93,7 @@ def test_pre_equals_head_post_is_worktree_needs_no_blob(tmp_path, monkeypatch):
     assert s.supplied_blobs == {} and s.dropped == {}
 
 
-def test_incident_shape_peer_import_in_pre_excluded(tmp_path, monkeypatch):
+def test_incident_shape_peer_import_in_pre_excluded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _no_peers(monkeypatch)
     _images(root, PEER_TXT, BOTH_TXT)
@@ -105,7 +105,7 @@ def test_incident_shape_peer_import_in_pre_excluded(tmp_path, monkeypatch):
     assert b"import peer_pkg" not in landed and b"doc edited" in landed
 
 
-def test_overlapping_peer_edit_drops_with_conflict(tmp_path, monkeypatch):
+def test_overlapping_peer_edit_drops_with_conflict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _no_peers(monkeypatch)
     pre = b'"""doc peer"""\nbody = 1\n'
@@ -117,7 +117,7 @@ def test_overlapping_peer_edit_drops_with_conflict(tmp_path, monkeypatch):
     assert REL not in s.supplied_blobs
 
 
-def test_unparseable_record_drops_fail_closed(tmp_path, monkeypatch):
+def test_unparseable_record_drops_fail_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _no_peers(monkeypatch)
     _images(root, None, None, raw="{not json")
@@ -126,7 +126,7 @@ def test_unparseable_record_drops_fail_closed(tmp_path, monkeypatch):
     assert s.dropped == {REL: {ROW: contract.DROP_UNATTRIBUTED_SHARED}}
 
 
-def test_missing_blob_drops_fail_closed(tmp_path, monkeypatch):
+def test_missing_blob_drops_fail_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _no_peers(monkeypatch)
     _images(root, None, None, raw=json.dumps({"pre": {REL: "0" * 40}, "post": {REL: "1" * 40}}))
@@ -134,7 +134,7 @@ def test_missing_blob_drops_fail_closed(tmp_path, monkeypatch):
     assert s.dropped == {REL: {ROW: contract.DROP_UNATTRIBUTED_SHARED}}
 
 
-def test_no_images_lands_worktree_when_unheld(tmp_path, monkeypatch):
+def test_no_images_lands_worktree_when_unheld(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _no_peers(monkeypatch)
     (root / REL).write_bytes(ROW_TXT)
@@ -143,7 +143,7 @@ def test_no_images_lands_worktree_when_unheld(tmp_path, monkeypatch):
     assert s.landed_text(REL) == ROW_TXT.decode()
 
 
-def test_no_images_peer_held_drops(tmp_path, monkeypatch):
+def test_no_images_peer_held_drops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _no_peers(monkeypatch, held={REL})
     (root / REL).write_bytes(ROW_TXT)
@@ -151,13 +151,13 @@ def test_no_images_peer_held_drops(tmp_path, monkeypatch):
     assert s.dropped == {REL: {ROW: contract.DROP_UNATTRIBUTED_SHARED}}
 
 
-def test_reads_the_record_grind_row_image_writes(tmp_path, monkeypatch):
+def test_reads_the_record_grind_row_image_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.backlog_grind_assemble import grind_rows
 
     root = _repo(tmp_path)
     _no_peers(monkeypatch)
 
-    def image(phase):
+    def image(phase) -> None:
         argv = ["image", "--run-id", RUN, "--row-id", ROW, "--phase", phase, "--repo-root", str(root), "--path", REL]
         assert grind_rows.main(argv) == 0
 
@@ -170,7 +170,7 @@ def test_reads_the_record_grind_row_image_writes(tmp_path, monkeypatch):
     assert _blob_text(root, s.supplied_blobs[REL]) == ROW_TXT
 
 
-def test_pre_without_post_drops_unattributed(tmp_path, monkeypatch):
+def test_pre_without_post_drops_unattributed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _no_peers(monkeypatch)
     _images(root, None, None, raw=json.dumps({"pre": {REL: _blob(root, HEAD_TXT)}, "post": {}}))
@@ -185,7 +185,7 @@ EDIT_B = BASE20.replace("line19 = 19\n", "line19 = 'b'\n")
 EDIT_AB = EDIT_A.replace("line19 = 19\n", "line19 = 'b'\n")
 
 
-def _two_row_repo(tmp_path, monkeypatch):
+def _two_row_repo(tmp_path, monkeypatch) -> Path:
     root = _repo(tmp_path)
     _no_peers(monkeypatch)
     (root / REL).write_bytes(BASE20.encode())
@@ -200,7 +200,7 @@ def _row_images(root: Path, row: str, pre: bytes, post: bytes) -> None:
     f.write_text(json.dumps({"pre": {REL: _blob(root, pre)}, "post": {REL: _blob(root, post)}}), encoding="utf-8")
 
 
-def test_two_owners_sequential_disjoint_hunks_both_land(tmp_path, monkeypatch):
+def test_two_owners_sequential_disjoint_hunks_both_land(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _two_row_repo(tmp_path, monkeypatch)
     _row_images(root, ROW, BASE20.encode(), EDIT_A.encode())
     _row_images(root, "r2", EDIT_A.encode(), EDIT_AB.encode())
@@ -210,7 +210,7 @@ def test_two_owners_sequential_disjoint_hunks_both_land(tmp_path, monkeypatch):
     assert s.landed_text(REL) == EDIT_AB
 
 
-def test_two_owners_concurrent_disjoint_hunks_both_land(tmp_path, monkeypatch):
+def test_two_owners_concurrent_disjoint_hunks_both_land(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _two_row_repo(tmp_path, monkeypatch)
     _row_images(root, ROW, BASE20.encode(), EDIT_A.encode())
     _row_images(root, "r2", BASE20.encode(), EDIT_B.encode())
@@ -220,7 +220,7 @@ def test_two_owners_concurrent_disjoint_hunks_both_land(tmp_path, monkeypatch):
     assert s.landed_text(REL) == EDIT_AB
 
 
-def test_two_owners_colliding_hunks_drop_only_the_second(tmp_path, monkeypatch):
+def test_two_owners_colliding_hunks_drop_only_the_second(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _two_row_repo(tmp_path, monkeypatch)
     clash = BASE20.replace("line2 = 2\n", "line2 = 'z'\n")
     _row_images(root, ROW, BASE20.encode(), EDIT_A.encode())
@@ -232,7 +232,7 @@ def test_two_owners_colliding_hunks_drop_only_the_second(tmp_path, monkeypatch):
     assert _blob_text(root, s.supplied_blobs[REL]) == EDIT_A.encode()
 
 
-def test_crlf_images_over_lf_head_land_lf_with_the_edit(tmp_path, monkeypatch):
+def test_crlf_images_over_lf_head_land_lf_with_the_edit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _two_row_repo(tmp_path, monkeypatch)
     _git(root, "config", "core.autocrlf", "true")
     crlf = BASE20.replace("\n", "\r\n")
@@ -245,7 +245,7 @@ def test_crlf_images_over_lf_head_land_lf_with_the_edit(tmp_path, monkeypatch):
     assert s.landed_text(REL) == EDIT_A
 
 
-def test_untracked_new_file_with_prior_pre_lands_pre_to_post(tmp_path, monkeypatch):
+def test_untracked_new_file_with_prior_pre_lands_pre_to_post(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _no_peers(monkeypatch)
     f = root / "new.py"
@@ -260,7 +260,7 @@ def test_untracked_new_file_with_prior_pre_lands_pre_to_post(tmp_path, monkeypat
     assert s.landed_text("new.py") == "a = 1\nb = 2\n"
 
 
-def test_second_owner_without_images_drops_first_lands(tmp_path, monkeypatch):
+def test_second_owner_without_images_drops_first_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _no_peers(monkeypatch)
     _images(root, HEAD_TXT, ROW_TXT)
@@ -271,7 +271,7 @@ def test_second_owner_without_images_drops_first_lands(tmp_path, monkeypatch):
     assert s.landed_text(REL) == ROW_TXT.decode()
 
 
-def test_single_owner_deletion_with_file_gone_lands_the_deletion(tmp_path, monkeypatch):
+def test_single_owner_deletion_with_file_gone_lands_the_deletion(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _no_peers(monkeypatch)
     _images(root, HEAD_TXT, None)
@@ -281,7 +281,7 @@ def test_single_owner_deletion_with_file_gone_lands_the_deletion(tmp_path, monke
     assert s.landed_text(REL) is None
 
 
-def test_two_owner_deletion_drops_both_unattributed(tmp_path, monkeypatch):
+def test_two_owner_deletion_drops_both_unattributed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _no_peers(monkeypatch)
     _images(root, HEAD_TXT, None)
@@ -301,7 +301,7 @@ PS1_BASE = "".join(f"l{i} = {i}\n" for i in range(1, 6))
 PS1_EDIT = PS1_BASE.replace("l2 = 2\n", "l2 = 'x'\n")
 
 
-def _ps1_repo(tmp_path, monkeypatch):
+def _ps1_repo(tmp_path, monkeypatch) -> Path:
     root = _repo(tmp_path)
     _no_peers(monkeypatch)
     (root / ".gitattributes").write_bytes(b"*.ps1 text eol=crlf\n")
@@ -317,7 +317,7 @@ def _ps1_images(root: Path, pre: bytes, post: bytes) -> None:
     f.write_text(json.dumps({"pre": {PS1: _blob(root, pre)}, "post": {PS1: _blob(root, post)}}), encoding="utf-8")
 
 
-def test_refused_checkin_worktree_lands_the_lf_image_as_a_supplied_blob(tmp_path, monkeypatch):
+def test_refused_checkin_worktree_lands_the_lf_image_as_a_supplied_blob(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _ps1_repo(tmp_path, monkeypatch)
     _ps1_images(root, PS1_BASE.encode(), PS1_EDIT.encode())
     (root / PS1).write_bytes(PS1_EDIT.replace("\n", "\r\n").encode())
@@ -327,7 +327,7 @@ def test_refused_checkin_worktree_lands_the_lf_image_as_a_supplied_blob(tmp_path
     assert s.landed_text(PS1) == PS1_EDIT
 
 
-def test_refused_checkin_crlf_image_lands_the_lf_form(tmp_path, monkeypatch):
+def test_refused_checkin_crlf_image_lands_the_lf_form(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _ps1_repo(tmp_path, monkeypatch)
     crlf = PS1_EDIT.replace("\n", "\r\n").encode()
     _ps1_images(root, PS1_BASE.encode(), crlf)
@@ -337,7 +337,7 @@ def test_refused_checkin_crlf_image_lands_the_lf_form(tmp_path, monkeypatch):
     assert _blob_text(root, s.supplied_blobs[PS1]) == PS1_EDIT.encode()
 
 
-def test_non_string_image_value_drops_fail_closed(tmp_path, monkeypatch):
+def test_non_string_image_value_drops_fail_closed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     _no_peers(monkeypatch)
     _images(root, None, None, raw=json.dumps({"pre": {REL: 7}, "post": {REL: None}}))

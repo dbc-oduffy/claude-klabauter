@@ -11,6 +11,7 @@ import urllib.request
 import pytest
 
 from coordinator_core.warm import http_listener
+from pathlib import Path
 
 
 pytestmark = pytest.mark.complete
@@ -30,15 +31,15 @@ def _post(port: int, payload: dict, token: str | None = None, timeout: float = 5
         return resp.status, resp.read()
 
 
-def test_bind_host_is_the_ipv4_literal_never_the_name():
+def test_bind_host_is_the_ipv4_literal_never_the_name() -> None:
     assert http_listener.bind_host() == "127.0.0.1"
     assert "localhost" not in http_listener.bind_host()
 
 
-def test_round_trip_reaches_serve_line_and_returns_its_frame():
+def test_round_trip_reaches_serve_line_and_returns_its_frame() -> None:
     seen = {}
 
-    def fake_serve_line(raw, *, write, **kwargs):
+    def fake_serve_line(raw, *, write, **kwargs) -> None:
         seen["raw"] = raw
         seen["kwargs"] = kwargs
         write(b'{"jsonrpc":"2.0","id":1,"result":{"ok":true}}')
@@ -57,10 +58,10 @@ def test_round_trip_reaches_serve_line_and_returns_its_frame():
     assert seen["kwargs"]["version_state"] == "vs"
 
 
-def test_token_header_lands_in_the_frame_for_serve_line_to_judge():
+def test_token_header_lands_in_the_frame_for_serve_line_to_judge() -> None:
     seen = {}
 
-    def fake_serve_line(raw, *, write, **kwargs):
+    def fake_serve_line(raw, *, write, **kwargs) -> None:
         seen["frame"] = json.loads(raw)
         write(b"{}")
 
@@ -73,10 +74,10 @@ def test_token_header_lands_in_the_frame_for_serve_line_to_judge():
     assert seen["frame"]["_engine_token"] == "tok-123"
 
 
-def test_absent_token_reaches_serve_line_without_one_rather_than_being_faked():
+def test_absent_token_reaches_serve_line_without_one_rather_than_being_faked() -> None:
     seen = {}
 
-    def fake_serve_line(raw, *, write, **kwargs):
+    def fake_serve_line(raw, *, write, **kwargs) -> None:
         seen["frame"] = json.loads(raw)
         write(b"{}")
 
@@ -89,7 +90,7 @@ def test_absent_token_reaches_serve_line_without_one_rather_than_being_faked():
     assert "_engine_token" not in seen["frame"]
 
 
-def test_dispatch_exception_becomes_500_not_a_hung_connection():
+def test_dispatch_exception_becomes_500_not_a_hung_connection() -> None:
 
     def boom(raw, *, write, **kwargs):
         raise RuntimeError("dispatch exploded")
@@ -103,10 +104,10 @@ def test_dispatch_exception_becomes_500_not_a_hung_connection():
         srv.shutdown()
 
 
-def test_oversized_body_is_refused_before_it_reaches_the_frame_parser():
+def test_oversized_body_is_refused_before_it_reaches_the_frame_parser() -> None:
     called = []
 
-    def fake_serve_line(raw, *, write, **kwargs):
+    def fake_serve_line(raw, *, write, **kwargs) -> None:
         called.append(raw)
         write(b"{}")
 
@@ -126,17 +127,17 @@ def test_oversized_body_is_refused_before_it_reaches_the_frame_parser():
     assert called == []
 
 
-def test_concurrent_requests_are_served(monkeypatch):
+def test_concurrent_requests_are_served(monkeypatch: pytest.MonkeyPatch) -> None:
     barrier = threading.Barrier(2, timeout=10)
 
-    def fake_serve_line(raw, *, write, **kwargs):
+    def fake_serve_line(raw, *, write, **kwargs) -> None:
         barrier.wait()
         write(b'{"ok":true}')
 
     srv, port, _t = http_listener.start(lambda: (fake_serve_line, {}))
     results = []
 
-    def worker():
+    def worker() -> None:
         results.append(_post(port, {"method": "ping"})[0])
 
     threads = [threading.Thread(target=worker) for _ in range(2)]
@@ -156,12 +157,12 @@ def test_concurrent_requests_are_served(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-def test_engine_link_absent_at_start_never_reports_a_move(monkeypatch):
+def test_engine_link_absent_at_start_never_reports_a_move(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(http_listener, "_link_realpath_at_start", None, raising=False)
     assert http_listener._engine_link_has_moved() is False
 
 
-def test_engine_link_unchanged_since_start_does_not_report_a_move(monkeypatch, tmp_path):
+def test_engine_link_unchanged_since_start_does_not_report_a_move(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     target = tmp_path / "klabauter"
     target.mkdir()
     link = tmp_path / "engine-current"
@@ -173,7 +174,7 @@ def test_engine_link_unchanged_since_start_does_not_report_a_move(monkeypatch, t
     assert http_listener._engine_link_has_moved() is False
 
 
-def test_engine_link_repointed_since_start_reports_a_move(monkeypatch, tmp_path):
+def test_engine_link_repointed_since_start_reports_a_move(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     old_target = tmp_path / "klabauter"
     old_target.mkdir()
     new_target = tmp_path / "claude-klabauter"
@@ -198,7 +199,7 @@ def test_engine_link_repointed_since_start_reports_a_move(monkeypatch, tmp_path)
     assert http_listener._engine_link_has_moved() is True
 
 
-def test_engine_link_missing_after_start_reports_a_move(monkeypatch, tmp_path):
+def test_engine_link_missing_after_start_reports_a_move(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A link that existed at start and is later removed/broken IS evidence of a re-point --
     only "never existed at bind time" is the no-op case (see `_engine_link_has_moved`'s own
     docstring). Serving forever off a since-deleted tree is exactly the defect this closes."""
@@ -210,7 +211,7 @@ def test_engine_link_missing_after_start_reports_a_move(monkeypatch, tmp_path):
     assert http_listener._engine_link_has_moved() is True
 
 
-def test_do_post_answers_then_hands_off_to_recycle_when_link_has_moved(monkeypatch):
+def test_do_post_answers_then_hands_off_to_recycle_when_link_has_moved(monkeypatch: pytest.MonkeyPatch) -> None:
     """The request thread itself must never exit/exec -- it answers 503 and delegates to
     `server.request_recycle()`, a dedicated non-request thread. `os._exit`/`os.execv` are not
     even reachable from `do_POST` any more; this pins that the moved-link branch never touches
@@ -239,7 +240,7 @@ def test_do_post_answers_then_hands_off_to_recycle_when_link_has_moved(monkeypat
     assert calls == [("respond", 503), "recycled"]
 
 
-def test_concurrent_in_flight_requests_complete_across_a_recycle(monkeypatch):
+def test_concurrent_in_flight_requests_complete_across_a_recycle(monkeypatch: pytest.MonkeyPatch) -> None:
     """The concrete EM-directed scenario: two requests already in flight when a recycle is
     triggered. Both in-flight requests must complete normally -- recycling must not exit/exec
     out from under them mid-response."""
@@ -247,14 +248,14 @@ def test_concurrent_in_flight_requests_complete_across_a_recycle(monkeypatch):
     exit_calls = []
     monkeypatch.setattr(http_listener.os, "_exit", lambda code: exit_calls.append(code))
 
-    def fake_serve_line(raw, *, write, **kwargs):
+    def fake_serve_line(raw, *, write, **kwargs) -> None:
         release.wait(timeout=10)
         write(b'{"ok":true}')
 
     srv, port, _t = http_listener.start(lambda: (fake_serve_line, {}))
     results = []
 
-    def worker():
+    def worker() -> None:
         results.append(_post(port, {"method": "ping"})[0])
 
     threads = [threading.Thread(target=worker) for _ in range(2)]
@@ -284,7 +285,7 @@ def test_concurrent_in_flight_requests_complete_across_a_recycle(monkeypatch):
     assert results == [200, 200]
 
 
-def test_request_recycle_drains_in_flight_before_exiting(monkeypatch):
+def test_request_recycle_drains_in_flight_before_exiting(monkeypatch: pytest.MonkeyPatch) -> None:
     """`request_recycle` must not exit while a request `enter_request()`ed is still running --
     the concurrent-in-flight case the P1 finding named. Two requests: both complete."""
     exit_calls = []

@@ -2,9 +2,11 @@
 from __future__ import annotations
 
 from coordinator_core.plugin_health import claude_md_handoff_convention as mod
+from pathlib import Path
+import pytest
 
 
-def _repo(tmp_path, name, text, rel="CLAUDE.md"):
+def _repo(tmp_path, name, text, rel: str = "CLAUDE.md"):
     root = tmp_path / name
     target = root / rel
     target.parent.mkdir(parents=True)
@@ -12,7 +14,7 @@ def _repo(tmp_path, name, text, rel="CLAUDE.md"):
     return root
 
 
-def test_retired_path_is_flagged(tmp_path):
+def test_retired_path_is_flagged(tmp_path: Path) -> None:
     root = _repo(tmp_path, "a", "Write notes into .claude/handoffs/today.md\n")
     out = mod.report({"a": root})
     assert len(out) == 1
@@ -20,22 +22,22 @@ def test_retired_path_is_flagged(tmp_path):
     assert mod.REMEDY in out[0]
 
 
-def test_negated_mention_is_not_flagged(tmp_path):
+def test_negated_mention_is_not_flagged(tmp_path: Path) -> None:
     root = _repo(tmp_path, "a", "The retired .claude/handoffs path is gone.\nNever write a handoff to disk by hand.\n")
     assert mod.report({"a": root}) == []
 
 
-def test_manual_write_phrase_is_flagged_in_nested_claude_md(tmp_path):
+def test_manual_write_phrase_is_flagged_in_nested_claude_md(tmp_path: Path) -> None:
     root = _repo(tmp_path, "a", "Always write a handoff file manually.\n", rel=".claude/CLAUDE.md")
     out = mod.report({"a": root})
     assert len(out) == 1 and ".claude/CLAUDE.md:1:" in out[0]
 
 
-def test_unreadable_repo_is_skipped(tmp_path):
+def test_unreadable_repo_is_skipped(tmp_path: Path) -> None:
     assert mod.report({"gone": tmp_path / "missing"}) == []
 
 
-def test_fleet_repos_reads_registry_dedupes_and_skips_missing(tmp_path):
+def test_fleet_repos_reads_registry_dedupes_and_skips_missing(tmp_path: Path) -> None:
     root = tmp_path / "r"
     root.mkdir()
     raw = {
@@ -48,14 +50,14 @@ def test_fleet_repos_reads_registry_dedupes_and_skips_missing(tmp_path):
     assert mod.fleet_repos(raw) == {"one": root}
 
 
-def test_main_always_returns_zero_and_prints_offences(tmp_path, monkeypatch, capsys):
+def test_main_always_returns_zero_and_prints_offences(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     root = _repo(tmp_path, "a", "save handoff to .claude/handoffs\n")
     monkeypatch.setattr(mod, "fleet_repos", lambda raw=None: {"a": root})
     assert mod.main([]) == 0
     assert "a: CLAUDE.md:1:" in capsys.readouterr().out
 
 
-def test_main_skips_on_registry_failure(monkeypatch, capsys):
+def test_main_skips_on_registry_failure(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     def boom(raw=None):
         raise RuntimeError("no registry")
 

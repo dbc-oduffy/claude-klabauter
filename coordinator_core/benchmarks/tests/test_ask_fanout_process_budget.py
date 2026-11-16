@@ -13,12 +13,18 @@ import time
 from coordinator_core.ops import baton_pm_turns as PT
 from coordinator_core.ops.dispatch_emit import ask_fanout as mod
 from coordinator_core.session_baton import store
+from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import Popen
 
 BUDGET_MS = 500.0
 SID = "sid-fanout-budget"
 
 
-def test_fanout_is_under_the_bar_with_zero_spawns(tmp_path, monkeypatch):
+def test_fanout_is_under_the_bar_with_zero_spawns(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / "hub" / SID).mkdir(parents=True)
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "hub" / s)
@@ -28,7 +34,7 @@ def test_fanout_is_under_the_bar_with_zero_spawns(tmp_path, monkeypatch):
     spawns = []
     real_popen = subprocess.Popen
 
-    def counting_popen(*a, **k):
+    def counting_popen(*a, **k) -> Popen[str]:
         spawns.append(a)
         return real_popen(*a, **k)
 

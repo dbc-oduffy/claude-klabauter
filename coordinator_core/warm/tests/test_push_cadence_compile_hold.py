@@ -7,11 +7,12 @@ import subprocess
 import pytest
 
 from coordinator_core.warm import push_cadence
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _git(cwd, *args):
+def _git(cwd, *args) -> str:
     return subprocess.run(
         ["git", *args], cwd=cwd, check=True, capture_output=True, text=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -19,7 +20,7 @@ def _git(cwd, *args):
 
 
 @pytest.fixture(autouse=True)
-def _state(monkeypatch):
+def _state(monkeypatch: pytest.MonkeyPatch):
     push_cadence.reset_cadence_for_test()
     monkeypatch.setattr(push_cadence, "machine_profile", lambda: "author")
     yield
@@ -27,7 +28,7 @@ def _state(monkeypatch):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> tuple[Path, Path]:
     bare = tmp_path / "origin.git"
     _git(tmp_path, "init", "--bare", "-b", "main", str(bare))
     root = tmp_path / "recv"
@@ -47,7 +48,7 @@ def repo(tmp_path):
     return root, bare
 
 
-def test_held_sweep_declines_and_logs(repo):
+def test_held_sweep_declines_and_logs(repo) -> None:
     root, bare = repo
     _git(root, "config", "coordinator.compileHold", "example-game-repo compile pending")
     assert push_cadence._sweep_one(root) == "skipped"
@@ -56,7 +57,7 @@ def test_held_sweep_declines_and_logs(repo):
     assert "compile-hold: recv push declined" in log
 
 
-def test_clear_sweep_pushes(repo):
+def test_clear_sweep_pushes(repo) -> None:
     root, bare = repo
     assert push_cadence._sweep_one(root) == "pushed"
     assert _git(bare, "rev-parse", "work/m/2026-10-10") == _git(root, "rev-parse", "HEAD")

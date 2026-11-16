@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.benchmarks import ask_gate_run_bound_process_budget as bench
+from pathlib import Path
 
 pytestmark = pytest.mark.cadence
 
@@ -21,7 +22,7 @@ def report():
     return bench.measure(dirs=DIRS, runs=1)
 
 
-def test_fixture_holds_the_requested_dir_count_plus_the_two_bound_runs(tmp_path, monkeypatch):
+def test_fixture_holds_the_requested_dir_count_plus_the_two_bound_runs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
     root = tmp_path / "repo"
     root.mkdir()
@@ -33,7 +34,7 @@ def test_fixture_holds_the_requested_dir_count_plus_the_two_bound_runs(tmp_path,
     assert any(warp.glob("*/parent.json")) and any(warp.glob("ask-*/run.json")) and any(warp.glob("warp-*/run.json"))
 
 
-def test_both_shapes_are_measured_run_bound_with_every_promised_figure(report):
+def test_both_shapes_are_measured_run_bound_with_every_promised_figure(report) -> None:
     assert report["dirs"] == DIRS
     assert set(report["shapes"]) == set(bench.SHAPES)
     for shape, res in report["shapes"].items():
@@ -47,12 +48,12 @@ def test_both_shapes_are_measured_run_bound_with_every_promised_figure(report):
         assert res["largest_leg"] in res["cold_legs_ms"]
 
 
-def test_the_incident_shape_is_not_a_build_stem():
+def test_the_incident_shape_is_not_a_build_stem() -> None:
     assert not bench.SHAPES["non_build"][0].endswith("-build")
     assert bench.SHAPES["build"][0].endswith("-build")
 
 
-def test_the_plan_resume_shape_reaches_the_resume_read_and_spends_its_one_history_log(report):
+def test_the_plan_resume_shape_reaches_the_resume_read_and_spends_its_one_history_log(report) -> None:
     res = report["shapes"][bench.PLAN_SHAPE]
     assert res["resume_plan"] == f"docs/plans/{bench.SHAPES[bench.PLAN_SHAPE][0]}.md", res
     argv = res["spawn_argv"][0] if res["spawn_argv"] else ()

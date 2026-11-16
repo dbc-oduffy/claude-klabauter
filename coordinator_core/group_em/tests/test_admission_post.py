@@ -6,9 +6,11 @@ import json
 import os
 
 from coordinator_core.group_em import admission_post, nomination
+from pathlib import Path
+import pytest
 
 
-def _holder(monkeypatch, record):
+def _holder(monkeypatch, record) -> None:
     monkeypatch.setattr(nomination, "box_holder", lambda directory=None, now=None: record)
 
 
@@ -17,7 +19,7 @@ def _lines(tmp_path):
     return [json.loads(x) for x in p.read_text(encoding="utf-8").splitlines()]
 
 
-def test_start_appends_one_line_with_live_pid(tmp_path, monkeypatch):
+def test_start_appends_one_line_with_live_pid(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     r = admission_post.post("start", "s1", [os.getpid()], run="probe", directory=tmp_path, now=5.0)
     assert r["posted"] and r["pids"] == [os.getpid()]
@@ -29,7 +31,7 @@ def test_start_appends_one_line_with_live_pid(tmp_path, monkeypatch):
 _REMOTE = {"session_id": "remote-gem", "peer_name": "group-em-56", "live": True, "remote": True}
 
 
-def test_start_stamps_the_remote_live_gem_over_a_stale_local_holder(tmp_path, monkeypatch):
+def test_start_stamps_the_remote_live_gem_over_a_stale_local_holder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, {"session_id": "stale-local", "live": False})
     monkeypatch.setattr(nomination, "fleet_holder", lambda directory=None, now=None, local_id=None: dict(_REMOTE))
     r = admission_post.post("START", "s1", [os.getpid()], directory=tmp_path)
@@ -38,7 +40,7 @@ def test_start_stamps_the_remote_live_gem_over_a_stale_local_holder(tmp_path, mo
     assert line["holder_session"] == "remote-gem"
 
 
-def test_start_keeps_the_stale_local_holder_when_no_live_gem_is_found(tmp_path, monkeypatch):
+def test_start_keeps_the_stale_local_holder_when_no_live_gem_is_found(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, {"session_id": "stale-local", "live": False})
     monkeypatch.setattr(nomination, "fleet_holder", lambda directory=None, now=None, local_id=None: None)
     r = admission_post.post("START", "s1", [os.getpid()], directory=tmp_path)
@@ -47,20 +49,20 @@ def test_start_keeps_the_stale_local_holder_when_no_live_gem_is_found(tmp_path, 
     assert line["holder_session"] == "stale-local"
 
 
-def test_remote_gem_satisfies_require_holder_when_no_local_record(tmp_path, monkeypatch):
+def test_remote_gem_satisfies_require_holder_when_no_local_record(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, None)
     monkeypatch.setattr(nomination, "fleet_holder", lambda directory=None, now=None, local_id=None: dict(_REMOTE))
     assert admission_post.post("START", "s1", [], directory=tmp_path)["posted"] is True
 
 
-def test_end_appends_second_line(tmp_path, monkeypatch):
+def test_end_appends_second_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     admission_post.post("START", "s1", [os.getpid()], directory=tmp_path)
     admission_post.post("END", "s1", [os.getpid()], directory=tmp_path)
     assert [x["phase"] for x in _lines(tmp_path)] == ["START", "END"]
 
 
-def test_dead_pid_never_reported_live(tmp_path, monkeypatch):
+def test_dead_pid_never_reported_live(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     monkeypatch.setattr(
         admission_post.session_registry, "pid_alive", lambda pid: pid == 111
@@ -71,14 +73,14 @@ def test_dead_pid_never_reported_live(tmp_path, monkeypatch):
     assert line["pids"] == [111] and line["dead_pids"] == [222]
 
 
-def test_no_holder_fails_open_and_writes_nothing(tmp_path, monkeypatch):
+def test_no_holder_fails_open_and_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, None)
     r = admission_post.post("START", "s1", [os.getpid()], directory=tmp_path)
     assert r == {"posted": False, "reason": "no_box_holder"}
     assert not (tmp_path / "box").exists()
 
 
-def test_holderless_start_written_when_holder_not_required(tmp_path, monkeypatch):
+def test_holderless_start_written_when_holder_not_required(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, None)
     r = admission_post.post(
         "START", "s1", [os.getpid()], run="r", directory=tmp_path, require_holder=False
@@ -88,14 +90,14 @@ def test_holderless_start_written_when_holder_not_required(tmp_path, monkeypatch
     assert line["phase"] == "START" and line["holder_session"] is None
 
 
-def test_bad_phase_refused(tmp_path, monkeypatch):
+def test_bad_phase_refused(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     r = admission_post.post("PAUSE", "s1", [], directory=tmp_path)
     assert r == {"posted": False, "reason": "bad_phase"}
     assert not admission_post.admission_path(tmp_path).exists()
 
 
-def test_success_reply_reports_delivered_and_keeps_keys(tmp_path, monkeypatch):
+def test_success_reply_reports_delivered_and_keeps_keys(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     r = admission_post.post("START", "s1", [os.getpid()], directory=tmp_path)
     assert r["delivered"] is True and "reason" not in r
@@ -103,7 +105,7 @@ def test_success_reply_reports_delivered_and_keeps_keys(tmp_path, monkeypatch):
         assert key in r
 
 
-def test_short_write_reports_not_delivered_loudly(tmp_path, monkeypatch, capsys):
+def test_short_write_reports_not_delivered_loudly(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     real = os.write
     monkeypatch.setattr(os, "write", lambda fd, d: real(fd, d[: len(d) // 2]))
@@ -112,7 +114,7 @@ def test_short_write_reports_not_delivered_loudly(tmp_path, monkeypatch, capsys)
     assert "NOT delivered" in capsys.readouterr().err
 
 
-def test_write_oserror_reports_not_delivered(tmp_path, monkeypatch):
+def test_write_oserror_reports_not_delivered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, {"session_id": "gem", "live": True})
 
     def boom(fd, d):
@@ -123,11 +125,11 @@ def test_write_oserror_reports_not_delivered(tmp_path, monkeypatch):
     assert r["delivered"] is False and r["reason"].startswith("write_failed")
 
 
-def test_line_absent_at_path_reports_not_delivered(tmp_path, monkeypatch):
+def test_line_absent_at_path_reports_not_delivered(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     real = os.write
 
-    def write_elsewhere(fd, d):
+    def write_elsewhere(fd, d) -> int:
         real(fd, d)
         admission_post.admission_path(tmp_path).write_bytes(b"")
         return len(d)
@@ -137,21 +139,21 @@ def test_line_absent_at_path_reports_not_delivered(tmp_path, monkeypatch):
     assert r["delivered"] is False and r["reason"] == "not_found_at_path"
 
 
-def test_start_with_declared_peak_carries_field(tmp_path, monkeypatch):
+def test_start_with_declared_peak_carries_field(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     admission_post.post("START", "s1", [], directory=tmp_path, declared_peak_mb=2048)
     (line,) = _lines(tmp_path)
     assert line["declared_peak_mb"] == 2048.0
 
 
-def test_start_without_peak_and_end_omit_field(tmp_path, monkeypatch):
+def test_start_without_peak_and_end_omit_field(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     admission_post.post("START", "s1", [], directory=tmp_path)
     admission_post.post("END", "s1", [], directory=tmp_path, declared_peak_mb=2048)
     assert all("declared_peak_mb" not in x for x in _lines(tmp_path))
 
 
-def test_invalid_peak_is_dropped_but_line_written(tmp_path, monkeypatch):
+def test_invalid_peak_is_dropped_but_line_written(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     for bad in (-1, float("nan"), float("inf"), True, "5", admission_post.MAX_PEAK_MB * 2):
         admission_post.post("START", "s1", [], directory=tmp_path, declared_peak_mb=bad)
@@ -159,7 +161,7 @@ def test_invalid_peak_is_dropped_but_line_written(tmp_path, monkeypatch):
     assert len(lines) == 6 and all("declared_peak_mb" not in x for x in lines)
 
 
-def test_oversize_note_and_pid_list_are_capped(tmp_path, monkeypatch):
+def test_oversize_note_and_pid_list_are_capped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     monkeypatch.setattr(admission_post.session_registry, "pid_alive", lambda pid: True)
     n = admission_post.MAX_PIDS + 10
@@ -169,7 +171,7 @@ def test_oversize_note_and_pid_list_are_capped(tmp_path, monkeypatch):
     assert len(line["pids"]) == admission_post.MAX_PIDS
 
 
-def test_request_carries_declared_peak(tmp_path, monkeypatch):
+def test_request_carries_declared_peak(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     r = admission_post.post("request", "s1", run="r", directory=tmp_path, declared_peak_mb=4096)
     assert r["posted"] and r["phase"] == "REQUEST"
@@ -177,7 +179,7 @@ def test_request_carries_declared_peak(tmp_path, monkeypatch):
     assert line["phase"] == "REQUEST" and line["declared_peak_mb"] == 4096.0
 
 
-def test_request_without_valid_peak_refused_and_writes_nothing(tmp_path, monkeypatch):
+def test_request_without_valid_peak_refused_and_writes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     for bad in (None, -1, True, "x", float("nan"), admission_post.MAX_PEAK_MB + 1):
         r = admission_post.post("REQUEST", "s1", directory=tmp_path, declared_peak_mb=bad)
@@ -185,7 +187,7 @@ def test_request_without_valid_peak_refused_and_writes_nothing(tmp_path, monkeyp
     assert not (tmp_path / "box").exists()
 
 
-def test_start_and_end_unchanged_without_peak(tmp_path, monkeypatch):
+def test_start_and_end_unchanged_without_peak(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     assert admission_post.post("START", "s1", directory=tmp_path)["posted"]
     assert admission_post.post("END", "s1", directory=tmp_path, declared_peak_mb=5)["posted"]
@@ -199,7 +201,7 @@ def _group_em_dir(home):
     return d
 
 
-def test_line_carries_box_id_of_the_home_the_directory_resolves_under(tmp_path, monkeypatch):
+def test_line_carries_box_id_of_the_home_the_directory_resolves_under(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _holder(monkeypatch, {"session_id": "gem", "live": True})
     stamped = _group_em_dir(tmp_path / "second")
     (stamped / "box.json").write_text('{"box_id": "box-abc12345"}', encoding="utf-8")

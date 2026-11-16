@@ -29,12 +29,13 @@ import os
 import pytest
 
 from coordinator_core.session import scope, touch_record
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> str:
     """A session hub on disk, so nothing here reaches the real tree's live-
     session directory.
 
@@ -64,7 +65,7 @@ def _peer_claim(repo: str, sid: str, path: str, kind) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _everyone_is_live(monkeypatch):
+def _everyone_is_live(monkeypatch: pytest.MonkeyPatch) -> None:
     """Liveness is a different axis and a different module's question; pin it
     True so a failure here can only be about the kind."""
     monkeypatch.setattr(scope.touch_record, "session_live", lambda *a, **k: True)
@@ -73,14 +74,14 @@ def _everyone_is_live(monkeypatch):
     )
 
 
-def test_a_read_hold_does_not_contest_a_peer_commit(repo):
+def test_a_read_hold_does_not_contest_a_peer_commit(repo) -> None:
     """The defect. A peer that only READ the file must not refuse my commit."""
     _peer_claim(repo, "peer-reader", "pkg/mod.py", touch_record.KIND_READ)
 
     assert scope.contested_by_live_peers(["pkg/mod.py"], "mine", repo) == {}
 
 
-def test_a_write_hold_still_contests(repo):
+def test_a_write_hold_still_contests(repo) -> None:
     """The half that must NOT change: this is the mechanism working."""
     _peer_claim(repo, "peer-writer", "pkg/mod.py", touch_record.KIND_WRITE)
 
@@ -89,7 +90,7 @@ def test_a_write_hold_still_contests(repo):
     }
 
 
-def test_an_unknown_hold_still_contests(repo):
+def test_an_unknown_hold_still_contests(repo) -> None:
     """Every pre-axis line. Migration is monotonic: nothing that blocks today
     stops blocking until a writer positively says it was a read."""
     _peer_claim(repo, "peer-legacy", "pkg/mod.py", None)
@@ -99,7 +100,7 @@ def test_an_unknown_hold_still_contests(repo):
     }
 
 
-def test_the_reader_is_dropped_and_the_writer_named_from_the_same_path(repo):
+def test_the_reader_is_dropped_and_the_writer_named_from_the_same_path(repo) -> None:
     """The incident's own shape: two live holders on one file, one of each
     kind. The refusal must name the writer and ONLY the writer -- naming both
     is what sent the operator to a session that could not act."""
@@ -111,7 +112,7 @@ def test_the_reader_is_dropped_and_the_writer_named_from_the_same_path(repo):
     }
 
 
-def test_a_read_touch_is_still_recorded(repo):
+def test_a_read_touch_is_still_recorded(repo) -> None:
     """NEGATIVE SPEC: reads are not dropped from the record. The hash churn on
     a read is what makes interleaved-writer detection work, and it is what
     identified the true author in the filed incident. The record keeps them;
@@ -126,7 +127,7 @@ def test_a_read_touch_is_still_recorded(repo):
     assert projection.claims["pkg/mod.py"].kind == touch_record.KIND_READ
 
 
-def test_the_blocking_rule_lives_in_exactly_one_place():
+def test_the_blocking_rule_lives_in_exactly_one_place() -> None:
     """A consumer comparing to `KIND_READ` itself gets the unknown case wrong
     the first time it forgets about it, which is the whole failure mode. The
     rule is one function, and it is total over the three states."""
@@ -135,7 +136,7 @@ def test_the_blocking_rule_lives_in_exactly_one_place():
     assert touch_record.kind_blocks_a_peer_commit(touch_record.KIND_READ) is False
 
 
-def test_a_kindless_line_is_byte_identical_to_what_was_written_before():
+def test_a_kindless_line_is_byte_identical_to_what_was_written_before() -> None:
     """No schema bump, and no historical line changes meaning. An encoder that
     started writing `"kind":null` would grow every line and make a pre-axis
     record distinguishable from a new kind-less one for no gain."""
@@ -146,7 +147,7 @@ def test_a_kindless_line_is_byte_identical_to_what_was_written_before():
     assert touch_record.decode_line(line).kind is None
 
 
-def test_an_unrecognised_kind_is_malformed_not_silently_unknown():
+def test_an_unrecognised_kind_is_malformed_not_silently_unknown() -> None:
     """Folding an unrecognised kind into "unknown" would let a typo inherit
     unknown's conservative blocking and never be noticed."""
     with pytest.raises(ValueError):
@@ -163,7 +164,7 @@ def test_an_unrecognised_kind_is_malformed_not_silently_unknown():
         )
 
 
-def test_a_release_carries_no_kind():
+def test_a_release_carries_no_kind() -> None:
     """A RELEASE ends a hold rather than describing one."""
     line = touch_record.encode_line(
         session_id="s", agent_id=None, verb=touch_record.VERB_RELEASE, path="a.py"
@@ -192,7 +193,7 @@ def _sid_dir(repo: str, sid: str) -> str:
     return os.path.join(repo, ".coordinator-local", "coordinator-sessions", sid)
 
 
-def test_a_holder_releases_its_own_in_flight_claim(repo, monkeypatch):
+def test_a_holder_releases_its_own_in_flight_claim(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """No committedness term anywhere in the release condition: the path is
     uncommitted, untracked, and not even present on disk, and the release
     still lands."""
@@ -208,7 +209,7 @@ def test_a_holder_releases_its_own_in_flight_claim(repo, monkeypatch):
     assert "pkg/mod.py" not in touch_record.project_live_claims(sink, cwd=repo).claims
 
 
-def test_releasing_an_unknown_kind_claim_is_the_whole_corpus_migration(repo, monkeypatch):
+def test_releasing_an_unknown_kind_claim_is_the_whole_corpus_migration(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """Pre-axis lines are never backfilled, so the only way one stops blocking
     is that its own author retires it. This is that route, and it is the same
     one -- no separate legacy path to keep working."""
@@ -226,7 +227,7 @@ def test_releasing_an_unknown_kind_claim_is_the_whole_corpus_migration(repo, mon
     assert scope.contested_by_live_peers(["pkg/mod.py"], "mine", repo) == {}
 
 
-def test_the_post_commit_name_is_an_alias_and_adds_no_condition(repo, monkeypatch):
+def test_the_post_commit_name_is_an_alias_and_adds_no_condition(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """`release_committed_claims` never checked committedness -- the name did
     the misleading on its own. Pinned so a future reader restoring the check
     the name implies breaks a test instead of a peer's commit."""
@@ -242,7 +243,7 @@ def test_the_post_commit_name_is_an_alias_and_adds_no_condition(repo, monkeypatc
     assert "never-committed.py" not in touch_record.project_live_claims(sink, cwd=repo).claims
 
 
-def test_the_release_route_cannot_reach_a_peers_claim(repo, monkeypatch):
+def test_the_release_route_cannot_reach_a_peers_claim(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """The reason this route can be handed to an operator at all. It takes one
     sid -- its own -- and a peer naming mine in the paths list changes
     nothing."""
@@ -342,7 +343,7 @@ def _is_touch_record_write(owner, name, rel: str) -> bool:
     return True
 
 
-def _unstamped_touch_writes():
+def _unstamped_touch_writes() -> list[str]:
     offenders = []
     for path in sorted(_PKG_ROOT.rglob("*.py")):
         rel = path.relative_to(_PKG_ROOT).as_posix()
@@ -368,14 +369,14 @@ def _unstamped_touch_writes():
     return offenders
 
 
-def test_every_live_touch_writer_states_a_kind():
+def test_every_live_touch_writer_states_a_kind() -> None:
     """A new writer that omits `kind` refills the unknown population, which
     then never drains -- and unknown blocks, so the too-strict guard this
     axis was built to fix comes back one call site at a time."""
     assert _unstamped_touch_writes() == []
 
 
-def test_the_gate_can_see_a_kindless_writer(tmp_path, monkeypatch):
+def test_the_gate_can_see_a_kindless_writer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Guards the gate. A structural check that matches nothing passes for
     free, which is the failure shape this module has already met once."""
     src = (
@@ -393,7 +394,7 @@ def test_the_gate_can_see_a_kindless_writer(tmp_path, monkeypatch):
     assert _unstamped_touch_writes() == ["writer.py:3 touch_record.append_event"]
 
 
-def test_an_in_process_write_claim_lands_as_a_write(repo, monkeypatch):
+def test_an_in_process_write_claim_lands_as_a_write(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """End to end through the busiest of the five: every handler's declared
     writes and every in-process writer reach the record via this helper."""
     monkeypatch.setattr(scope.core, "session_dir", lambda sid, cwd=None: _sid_dir(repo, sid))
@@ -407,7 +408,7 @@ def test_an_in_process_write_claim_lands_as_a_write(repo, monkeypatch):
     assert claims["pkg/mod.py"].kind == touch_record.KIND_WRITE
 
 
-def test_a_holder_can_enumerate_its_own_path_claims(repo, monkeypatch):
+def test_a_holder_can_enumerate_its_own_path_claims(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """The path plane is listable by its holder; a release drops the path and
     a peer's claim never appears."""
     monkeypatch.setattr(scope.core, "session_dir", lambda sid, cwd=None: _sid_dir(repo, sid))

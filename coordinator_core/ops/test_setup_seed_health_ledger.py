@@ -10,9 +10,10 @@ import os
 import pytest
 
 from coordinator_core.ops.setup_seed_health_ledger import main, seed_health_ledger
+from pathlib import Path
 
 
-def test_fresh_repo_seeds_ledger(tmp_path):
+def test_fresh_repo_seeds_ledger(tmp_path: Path) -> None:
     repo_root = str(tmp_path)
     rc = seed_health_ledger(repo_root)
     assert rc == 0
@@ -30,7 +31,7 @@ def test_fresh_repo_seeds_ledger(tmp_path):
     assert content.rstrip("\n").endswith("|--------|-------|-------------|-------|")
 
 
-def test_idempotent_when_ledger_already_exists(tmp_path, capsys):
+def test_idempotent_when_ledger_already_exists(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     state_dir = tmp_path / "state"
     state_dir.mkdir()
     ledger_path = state_dir / "health-ledger.md"
@@ -45,14 +46,14 @@ def test_idempotent_when_ledger_already_exists(tmp_path, capsys):
     assert "skipping (idempotent)" in out
 
 
-def test_creates_state_dir_if_missing(tmp_path):
+def test_creates_state_dir_if_missing(tmp_path: Path) -> None:
     assert not (tmp_path / "state").exists()
     rc = seed_health_ledger(str(tmp_path))
     assert rc == 0
     assert (tmp_path / "state").is_dir()
 
 
-def test_nonexistent_repo_root_fails_loud(capsys):
+def test_nonexistent_repo_root_fails_loud(capsys: pytest.CaptureFixture[str]) -> None:
     rc = seed_health_ledger("/does/not/exist/xyz-nonexistent-path-example-operator")
     assert rc == 1
     err = capsys.readouterr().err
@@ -60,20 +61,20 @@ def test_nonexistent_repo_root_fails_loud(capsys):
     assert "Remediation" in err
 
 
-def test_main_defaults_repo_root_to_cwd(tmp_path, monkeypatch):
+def test_main_defaults_repo_root_to_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(tmp_path)
     rc = main([])
     assert rc == 0
     assert (tmp_path / "state" / "health-ledger.md").is_file()
 
 
-def test_main_uses_explicit_argv_repo_root(tmp_path):
+def test_main_uses_explicit_argv_repo_root(tmp_path: Path) -> None:
     rc = main([str(tmp_path)])
     assert rc == 0
     assert (tmp_path / "state" / "health-ledger.md").is_file()
 
 
-def test_write_failure_reports_error_and_nonzero(tmp_path, monkeypatch):
+def test_write_failure_reports_error_and_nonzero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo_root = str(tmp_path)
 
     def _boom(*args, **kwargs):
@@ -84,7 +85,7 @@ def test_write_failure_reports_error_and_nonzero(tmp_path, monkeypatch):
     assert rc == 1
 
 
-def test_resolve_state_root_meta_repo_routes_to_claude_klabauter(tmp_path, monkeypatch):
+def test_resolve_state_root_meta_repo_routes_to_claude_klabauter(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import setup_seed_health_ledger as mod
 
     fake_home = tmp_path / "dotclaude"
@@ -99,7 +100,7 @@ def test_resolve_state_root_meta_repo_routes_to_claude_klabauter(tmp_path, monke
     assert os.path.realpath(resolved) == os.path.realpath(str(fake_claude_klabauter / "state"))
 
 
-def test_resolve_state_root_non_meta_repo_stays_local(tmp_path, monkeypatch):
+def test_resolve_state_root_non_meta_repo_stays_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import setup_seed_health_ledger as mod
 
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "dotclaude"))
@@ -111,7 +112,7 @@ def test_resolve_state_root_non_meta_repo_stays_local(tmp_path, monkeypatch):
     assert os.path.realpath(resolved) == os.path.realpath(str(other_repo / "state"))
 
 
-def test_resolve_state_root_meta_repo_falls_back_when_claude_klabauter_unresolvable(tmp_path, monkeypatch):
+def test_resolve_state_root_meta_repo_falls_back_when_claude_klabauter_unresolvable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import setup_seed_health_ledger as mod
 
     fake_home = tmp_path / "dotclaude"

@@ -28,7 +28,7 @@ def load(filename, modname):
 
 
 @pytest.fixture
-def roster(tmp_path, monkeypatch):
+def roster(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     mod = load("unimatrix-roster.py", "unimatrix_roster_listing")
     sess = tmp_path / "sessions"
     sess.mkdir()
@@ -59,14 +59,14 @@ def local_claude_row(roster, name):
             "messagingSocketPath": f"/tmp/cc-socks/{name}.sock", "startedAt": now_ms()}
 
 
-def test_far_codex_row_from_a_box_reporting_no_holder_is_unlisted_past_grace(roster):
+def test_far_codex_row_from_a_box_reporting_no_holder_is_unlisted_past_grace(roster) -> None:
     old = now_ms() - 2 * GRACE_MS
     ghost = mirror_row(roster, "codex-claude-klabauter.machine-b", "codex", "me@machine-b", startedAt=old)
     assert "codexHolder" not in ghost
     assert not roster.listed_row(ghost, [ghost])
 
 
-def test_far_codex_row_is_listed_while_fresh_or_while_its_holder_is_live(roster):
+def test_far_codex_row_is_listed_while_fresh_or_while_its_holder_is_live(roster) -> None:
     fresh = mirror_row(roster, "codex-example-retrieval-repo.machine-b", "codex", "me@machine-b", startedAt=now_ms())
     held = mirror_row(roster, "codex-example-game-workbench-repo.machine-b", "codex", "me@machine-b",
                       startedAt=now_ms() - 2 * GRACE_MS, codexHolder="live")
@@ -75,13 +75,13 @@ def test_far_codex_row_is_listed_while_fresh_or_while_its_holder_is_live(roster)
 
 
 @pytest.mark.parametrize("holder", ["dead", "unknown"])
-def test_far_codex_row_with_a_dead_or_unproven_holder_is_unlisted_past_grace(roster, holder):
+def test_far_codex_row_with_a_dead_or_unproven_holder_is_unlisted_past_grace(roster, holder) -> None:
     ghost = mirror_row(roster, "codex-example-retrieval-repo.macmini", "codex", "me@macmini",
                        startedAt=now_ms() - 2 * GRACE_MS, codexHolder=holder)
     assert not roster.listed_row(ghost, [ghost])
 
 
-def test_transport_vendor_row_is_never_listed(roster):
+def test_transport_vendor_row_is_never_listed(roster) -> None:
     me = os.getpid()
     face = {"name": "unimatrix-transport-on-machine-b", "vendor": "transport", "unimatrixTransport": True,
             "pid": me, "procStart": roster.proc_start(me), "messagingSocketPath": "/tmp/cc-socks/t.sock",
@@ -89,14 +89,14 @@ def test_transport_vendor_row_is_never_listed(roster):
     assert not roster.listed_row(face, [face])
 
 
-def test_one_far_session_under_two_aliases_of_one_box_is_listed_once(roster):
+def test_one_far_session_under_two_aliases_of_one_box_is_listed_once(roster) -> None:
     low = mirror_row(roster, "x.Machine-b.local", "claude", "me@Machine-b.local")
     high = mirror_row(roster, "x.machine-b", "claude", "me@machine-b")
     rows = [high, low]
     assert [r["unimatrixRemote"] for r in rows if roster.listed_row(r, rows)] == ["me@Machine-b.local"]
 
 
-def test_same_far_socket_on_another_box_and_other_sessions_of_one_box_stay_listed(roster):
+def test_same_far_socket_on_another_box_and_other_sessions_of_one_box_stay_listed(roster) -> None:
     a = mirror_row(roster, "x.machine-b", "claude", "me@machine-b")
     other_box = mirror_row(roster, "x.macmini", "claude", "me@macmini")
     other_sock = mirror_row(roster, "y.Machine-b.local", "claude", "me@Machine-b.local",
@@ -105,7 +105,7 @@ def test_same_far_socket_on_another_box_and_other_sessions_of_one_box_stay_liste
     assert all(roster.listed_row(r, rows) for r in rows)
 
 
-def test_a_live_claude_row_is_listed_once_beside_other_rows(roster):
+def test_a_live_claude_row_is_listed_once_beside_other_rows(roster) -> None:
     mine = local_claude_row(roster, "group-em-54")
     peer = mirror_row(roster, "example-retrieval-repo.machine-b", "claude", "me@machine-b")
     ghost = mirror_row(roster, "codex-example-retrieval-repo.macmini", "codex", "me@macmini",
@@ -114,14 +114,14 @@ def test_a_live_claude_row_is_listed_once_beside_other_rows(roster):
     assert [r["name"] for r in rows if roster.listed_row(r, rows)] == ["group-em-54", "example-retrieval-repo.machine-b"]
 
 
-def test_a_dead_pid_row_is_unlisted(roster):
+def test_a_dead_pid_row_is_unlisted(roster) -> None:
     row = local_claude_row(roster, "gone")
     row["pid"], row["procStart"] = 2 ** 22 + 12345, "gone"
     assert not roster.listed_row(row, [row])
 
 
 @pytest.fixture
-def router(tmp_path):
+def router(tmp_path: Path):
     pr = load("unimatrix-peer-router.py", "unimatrix_peer_router_listing")
     base = tmp_path / "router"
     for sub in ("sessions", "state", "eps"):
@@ -132,11 +132,11 @@ def router(tmp_path):
     return r
 
 
-def put_session(router, row):
+def put_session(router, row) -> None:
     (Path(router.sessions_dir) / f"{row['name']}.json").write_text(json.dumps(row), encoding="utf-8")
 
 
-def test_send_to_a_ghost_or_unknown_name_fails_naming_it_and_a_listed_name_resolves(router, roster):
+def test_send_to_a_ghost_or_unknown_name_fails_naming_it_and_a_listed_name_resolves(router, roster) -> None:
     me = os.getpid()
     live = local_claude_row(roster, "group-em-54")
     ghost = mirror_row(roster, "codex-claude-klabauter.machine-b", "codex", "me@machine-b",

@@ -5,6 +5,7 @@ import time
 import pytest
 
 from coordinator_core.bash_guards import dispatch
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -19,20 +20,20 @@ from coordinator_core.bash_guards.tests.test_git_shaped_advisories_fire_under_bo
 class TestValidateCommitBothDialects:
     NAME = "validate-commit"
 
-    def test_matchers_declare_both_dialects(self, tmp_path):
+    def test_matchers_declare_both_dialects(self, tmp_path: Path) -> None:
         chain = _chain("git commit -m x", "sess-a", str(tmp_path), "Bash")
         entry = _entry(chain, self.NAME)
         assert "Bash" in entry.matchers
         assert "PowerShell" in entry.matchers
 
-    def _init_repo_with_no_staged_changes(self, tmp_path):
+    def _init_repo_with_no_staged_changes(self, tmp_path) -> str:
         import subprocess
 
         from coordinator_core.win_portability import no_console_creationflags
 
         root = str(tmp_path)
 
-        def _git(*args):
+        def _git(*args) -> None:
             subprocess.run(
                 ["git", *args],
                 cwd=root,
@@ -50,8 +51,8 @@ class TestValidateCommitBothDialects:
         return root
 
     def test_no_staged_changes_declines_identically_under_both_dialects(
-        self, tmp_path
-    ):
+        self, tmp_path: Path
+    ) -> None:
         root = self._init_repo_with_no_staged_changes(tmp_path)
 
         bash_entry = _entry(_chain("git commit -m x", "sess-a", root, "Bash"), self.NAME)

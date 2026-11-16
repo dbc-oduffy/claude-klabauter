@@ -3538,13 +3538,17 @@ def _cmd_send(args: argparse.Namespace) -> int:
 
     acted_item = acted[0] if isinstance(acted[0], dict) else {}
     receiver_side_path = acted_item.get("id")
+    undelivered = False
     if receiver_side_path:
         abs_receiver_path = os.path.abspath(receiver_side_path)
-        print(f"Receiver-side: {abs_receiver_path}")
-        print(
-            "That commit is the channel, not a cross-repo write grant — it "
-            "touches cross-repo/ only."
-        )
+        if os.path.isfile(abs_receiver_path):
+            print(f"Receiver-side: {abs_receiver_path}")
+            print(
+                "That commit is the channel, not a cross-repo write grant — it "
+                "touches cross-repo/ only."
+            )
+        else:
+            undelivered = not _print_receiver_file_absent(abs_receiver_path, acted_item)
     sent_receipt = acted_item.get("sent_receipt")
     if sent_receipt:
         print(f"Sender-side receipt: {sent_receipt}")
@@ -3608,7 +3612,30 @@ def _cmd_send(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 1
-    return 0
+    return 1 if undelivered else 0
+
+
+def _print_receiver_file_absent(abs_receiver_path: str, acted_item: dict) -> bool:
+    """Report a receiver-side file that is not on disk; never a `Receiver-side:` line.
+
+    Returns True when delivery is anchored (object-only delivery; `memo_heal`
+    materializes it), False when there is no anchor/commit evidence at all."""
+    anchored = bool(
+        acted_item.get("delivery_commit_sha")
+        or acted_item.get("anchor_ref")
+        or acted_item.get("anchored")
+    )
+    if anchored:
+        print(
+            f"cross-repo-memo: anchored, not materialized: {abs_receiver_path} "
+            "is not on disk yet; the receiver's heal restores it from the anchor."
+        )
+    else:
+        print(
+            f"cross-repo-memo: undelivered: {abs_receiver_path} is not on disk "
+            "and no delivery anchor was reported."
+        )
+    return anchored
 
 
 def _cmd_redeliver(args: argparse.Namespace) -> int:
@@ -3657,9 +3684,73 @@ def _cmd_redeliver(args: argparse.Namespace) -> int:
         print("cross-repo-memo redeliver: claude-klabauter reported success but delivered nothing — aborting.", file=sys.stderr)
         return 1
     acted_item = acted[0] if isinstance(acted[0], dict) else {}
-    print(f"Receiver-side: {os.path.abspath(acted_item.get('id', ''))}")
+    abs_receiver_path = os.path.abspath(acted_item.get("id", ""))
+    anchored = True
+    if os.path.isfile(abs_receiver_path):
+        print(f"Receiver-side: {abs_receiver_path}")
+    else:
+        anchored = _print_receiver_file_absent(abs_receiver_path, acted_item)
     if acted_item.get("reconciled"):
         print("cross-repo-memo redeliver: already delivered; no second commit.")
+    return 0 if anchored else 1
+
+
+def _print_sweep_table(result: dict) -> None:
+    for name, row in sorted((result.get("repos") or {}).items()):
+        only = row.get("ref_only") or {}
+        print(
+            f"{name}: refs={row.get('refs')} inbox_files={row.get('inbox_files')} "
+            f"ref_only.open={only.get('open')} ref_only.terminal={only.get('terminal')} "
+            f"unreadable={only.get('unreadable')}"
+        )
+        for kind in ("open", "terminal"):
+            buckets = (row.get("age") or {}).get(kind) or {}
+            print(f"  age.{kind}: " + " ".join(f"{b}={n}" for b, n in buckets.items()))
+    for name in result.get("not_local") or []:
+        print(f"{name}: not_local")
+
+
+def _cmd_sweep(args: argparse.Namespace) -> int:
+    """Handle: cross-repo-memo sweep [--apply] [--repo NAME ...] [--limit N]
+
+    Forwarder onto `memo.sweep_ref_only`: with no flag it only counts, per fleet repo, the memos
+    held as a ref but not as a file; `--apply` materialises them (one engine call per `--limit`
+    files, so repeat while it reports `materialized` above zero). No direct-write fallback (DR-210).
+    """
+    import lib  # noqa: F401 — bootstraps coordinator/bin/lib onto sys.path
+    import cc_invoke
+
+    apply = bool(getattr(args, "apply", False))
+    params: dict = {"dry_run": not apply}
+    if getattr(args, "repo", None):
+        params["repos"] = list(args.repo)
+    if getattr(args, "limit", None) is not None:
+        params["limit"] = args.limit
+
+    sender_root = _current_repo_root()
+    if sender_root is None:
+        print("cross-repo-memo sweep: cwd is not a git working tree.", file=sys.stderr)
+        return 2
+
+    def legacy_sweep() -> None:
+        raise RuntimeError(
+            "claude-klabauter engine seam not found (the engine root unresolvable or "
+            "coordinator_core.invoke not importable) — there is no direct-write fallback (DR-210)."
+        )
+
+    try:
+        result = cc_invoke.route_mutation("memo.sweep_ref_only", params, sender_root, legacy_sweep)
+    except RuntimeError as exc:
+        print(f"cross-repo-memo sweep: {exc}", file=sys.stderr)
+        _print_route_mutation_failure_reasons(exc)
+        result = getattr(exc, "result", None)
+        if isinstance(result, dict) and result.get("repos"):
+            _print_sweep_table(result)
+        return 1
+
+    _print_sweep_table(result)
+    if apply:
+        print(f"materialized={result.get('materialized')} remaining={result.get('remaining')}")
     return 0
 
 
@@ -3876,7 +3967,7 @@ def _cmd_compose(args: argparse.Namespace) -> int:
 # ---------------------------------------------------------------------------
 
 # Verbs that trigger subcommand dispatch (not legacy flag-only path).
-_SUBCOMMAND_VERBS: frozenset[str] = frozenset({"draft", "compose", "list", "inbox", "discard", "reconcile", "send", "redeliver"})
+_SUBCOMMAND_VERBS: frozenset[str] = frozenset({"draft", "compose", "list", "inbox", "discard", "reconcile", "send", "redeliver", "sweep"})
 
 # Verbs that plausibly name "close/action an inbound memo" intent — this tool
 # has no such verb (it only sends OUTBOUND memos), so these get a pointer at
@@ -4133,6 +4224,24 @@ def _build_combined_parser(for_help: bool = False) -> argparse.ArgumentParser:
     )
     redeliver_p.add_argument("memo_file", metavar="MEMO_FILE", help="Path of the existing memo (.md) to deliver")
 
+    # sweep subparser (handler is _cmd_sweep) — forwarder onto memo.sweep_ref_only
+    sweep_p = subparsers.add_parser(
+        "sweep",
+        help="Count (default) or materialise memos a receiver holds only as a ref, across fleet repos",
+    )
+    sweep_p.add_argument(
+        "--apply", action="store_true", default=False,
+        help="Materialise ref-only memos (default is a dry run that writes nothing)",
+    )
+    sweep_p.add_argument(
+        "--repo", action="append", default=None, metavar="NAME",
+        help="Registry repo name to sweep (repeatable; default every registry repo)",
+    )
+    sweep_p.add_argument(
+        "--limit", type=int, default=None, metavar="N",
+        help="With --apply: files materialised per engine call (default: the op's own)",
+    )
+
     return parser
 
 
@@ -4305,6 +4414,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_send(args)
         elif verb == "redeliver":
             return _cmd_redeliver(args)
+        elif verb == "sweep":
+            return _cmd_sweep(args)
         else:
             # Should not reach here — argparse would have exited.
             print(f"cross-repo-memo: unknown verb {verb!r}", file=sys.stderr)
@@ -4336,7 +4447,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         print(
             f"cross-repo-memo: unknown subcommand '{first}'. "
-            f"Valid verbs: draft, compose, list, inbox, discard, reconcile, send, redeliver. "
+            f"Valid verbs: draft, compose, list, inbox, discard, reconcile, send, redeliver, sweep. "
             f"Run 'cross-repo-memo --help' for the legacy flag-only form.",
             file=sys.stderr,
         )

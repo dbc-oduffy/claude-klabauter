@@ -13,6 +13,8 @@ Invariants:
     child imports ops modules lazily.
   - `sweep_orphan_pack_files` and `consolidate_pack_batch` mutate the pack dir: the caller
     holds the object-store lock.
+  - `consolidate_pack_batch` rewrites the MIDX before releasing its hold; load gates only
+    the daily batch leg, never the MIDX heal and write.
   - `midx_pack_count` is None for no MIDX, a torn header, or an unreadable file; a
     caller treats None as "uncovered", never as an error.
   - `loose_estimate` is `entries in ONE sampled fan-out dir * 256`: coarse (multiples of
@@ -49,9 +51,15 @@ CONSOLIDATE_MAX_PACKS = 32
 CONSOLIDATE_BATCH_PACKS = 40
 #: Pack bytes merged by one call at most, bounding the merge's memory and time.
 CONSOLIDATE_GROUP_BYTES = 16 * 1024 * 1024
-#: 1-minute load per logical CPU at or past which the daily child does no work this claim
-#: interval; the claim stays, so a busy box spawns no further child until it ages out.
+#: 1-minute load per logical CPU at or past which the daily child defers its heavy batch leg
+#: (bounded by CONSOLIDATE_MAX_DEFER_S / PACK_COUNT_FORCE); MIDX upkeep never waits on it.
 BUSY_CPU_LOAD = 0.85
+#: Longest, in seconds, a heavy consolidation batch may be deferred for load before it runs
+#: anyway: how long is a busy box allowed to starve merging.
+CONSOLIDATE_MAX_DEFER_S = 6 * 3600
+#: Small-pack count past which a consolidation batch runs regardless of load: how many packs
+#: may pile up before load stops being an excuse.
+PACK_COUNT_FORCE = 4 * CONSOLIDATE_MAX_PACKS
 
 #: An orphan or temp pack file untouched this long belongs to a dead writer. Git and the
 #: engine finish a pack in milliseconds (idx renamed last), and a live temp pack keeps
@@ -167,6 +175,17 @@ def midx_names_missing_pack(common_dir) -> bool:
     return any(n.decode("utf-8", "replace") not in present for n in blob.split(b"\0") if n)
 
 
+def midx_upkeep_owed(common_dir) -> bool:
+    """True when the MIDX needs a (sub-second) rewrite, whatever the box load: it names a pack
+    whose `.idx` is gone, or the packs it does not cover exceed STALE_PACK_SLACK. Stat calls
+    plus one read of the MIDX file; no spawn, no lock, no liveness read."""
+    common_dir = Path(common_dir)
+    s = status(common_dir)
+    if s.pack_count - (s.midx_pack_count or 0) > STALE_PACK_SLACK:
+        return True
+    return midx_names_missing_pack(common_dir)
+
+
 def _orphan_pack_files(pack_dir: Path, names: set[str], now: float) -> list[tuple[Path, str]]:
     """`(path, partner_name)` for each pack-dir file that is a dead writer's leaving and
     untouched for ORPHAN_PACK_AGE_S: a temp pack name, a `.pack` with no `.idx`, a `.rev`
@@ -230,12 +249,10 @@ def owed_by_threshold(common_dir) -> bool:
     estimate past STALE_LOOSE_SLACK, a MIDX naming a missing pack, an aged orphan pack file,
     or more small packs than CONSOLIDATE_MAX_PACKS."""
     common_dir = Path(common_dir)
+    if midx_upkeep_owed(common_dir):
+        return True
     s = status(common_dir)
-    if s.pack_count - (s.midx_pack_count or 0) > STALE_PACK_SLACK:
-        return True
     if s.loose_estimate > STALE_LOOSE_SLACK:
-        return True
-    if midx_names_missing_pack(common_dir):
         return True
     pack_dir = common_dir / "objects" / "pack"
     names = _pack_dir_names(pack_dir)
@@ -359,7 +376,8 @@ def consolidate_pack_batch(common_dir) -> int:
     first; then the MIDX is unlinked (it would name the deleted sources, and git refuses to
     rewrite a stale one) and each source goes idx-first, so a source that cannot be unlinked
     (Windows handle) stays whole for a later call. A MIDX that cannot be unlinked leaves
-    every source in place. The caller rewrites the MIDX.
+    every source in place. The MIDX is rewritten under the same hold once the sources are
+    gone, so it never names a deleted pack; a failed write leaves no MIDX, never a stale one.
     Lock order is fleet (outer), object-store (inner): the caller must already hold the fleet
     maintenance lock (as `run_tier` does), which this call re-enters with wait_s=0; calling it
     with only the object-store lock held inverts the order. Returns 0 with no git spawned
@@ -414,6 +432,9 @@ def _consolidate_locked(common_dir) -> int:
         if _unlink_quiet(idx) and _unlink_quiet(pack):
             removed += 1
             _unlink_quiet(pack.with_suffix(".rev"))
+    mw = run_git(["multi-pack-index", "write"], cwd=str(common_dir))
+    if mw.returncode != 0:
+        print(f"store_hygiene: multi-pack-index write failed rc={mw.returncode}: {mw.stderr.strip()}", file=sys.stderr)
     return removed
 
 
@@ -421,23 +442,60 @@ def _is_tmp_pack_name(name: str) -> bool:
     return _TMP_PACK_RE.match(name) is not None
 
 
+_LAST_BATCH_RELPATH = ("coordinator", "store-hygiene.last-batch")
+
+
+def _stamp_last_batch(common_dir: Path) -> None:
+    path = Path(common_dir, *_LAST_BATCH_RELPATH)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.touch()
+    except OSError:
+        pass
+
+
+def _batch_forced(common_dir) -> bool:
+    """True when a consolidation batch is owed and load may no longer defer it: small packs
+    past PACK_COUNT_FORCE, or past CONSOLIDATE_MAX_PACKS with the last heavy run (mtime of
+    the last-batch stamp, absent = never) older than CONSOLIDATE_MAX_DEFER_S. Stat calls only."""
+    common_dir = Path(common_dir)
+    if status(common_dir).pack_count <= CONSOLIDATE_MAX_PACKS:
+        return False
+    small = len(_small_packs(common_dir / "objects" / "pack"))
+    if small <= CONSOLIDATE_MAX_PACKS:
+        return False
+    if small > PACK_COUNT_FORCE:
+        return True
+    try:
+        return time.time() - Path(common_dir, *_LAST_BATCH_RELPATH).stat().st_mtime > CONSOLIDATE_MAX_DEFER_S
+    except OSError:
+        return True
+
+
 def _run_daily_outcome(repo: Path) -> tuple[int, bool]:
     """Run the daily tier; returns `(rc, deferred)`. `deferred` is True when the tier did not
-    run for want of the box (busy, or the tier deferred), so the caller retries soon;
-    not-owed is not a deferral. The tier takes the object-store lock and does the reaping
-    and merging."""
+    run for want of the box (busy with nothing cheap owed, or the tier deferred), so the
+    caller retries soon; not-owed is not a deferral. Load defers only the heavy batch leg:
+    a busy box still gets the light legs (sweep, MIDX heal and write) when `midx_upkeep_owed`,
+    and the batch once `_batch_forced`. While pack deletion is paused the tier runs light."""
     try:
         from coordinator_core.ops.git_maintenance import run_tier
 
         common_dir = resolve_git_common_dir(str(repo))
         if not _owes_maintenance(repo, common_dir):
             return 0, False
-        if _box_busy():
+        paused = pack_deletion_pause.paused()
+        busy = _box_busy()
+        forced = busy and not paused and _batch_forced(common_dir)
+        if busy and not forced and not midx_upkeep_owed(common_dir):
             return 0, True
-        result = run_tier(repo, "daily")
+        heavy = not paused and (not busy or forced)
+        result = run_tier(repo, "daily", heavy=heavy)
         if result.deferred:
             _release_claim(common_dir)
             return result.rc, True
+        if heavy and not result.errors:
+            _stamp_last_batch(common_dir)
         return result.rc, False
     except Exception as exc:  # noqa: BLE001
         _record_failure(repo, exc)

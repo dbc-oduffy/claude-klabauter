@@ -141,6 +141,27 @@ def test_explicit_basetemp_is_respected(tmp_path, monkeypatch):
     assert cfg.option.basetemp == "/explicit/x"
 
 
+@pytest.mark.parametrize("marker", ["dir", "file"])
+def test_explicit_basetemp_inside_a_git_tree_is_a_usage_error(tmp_path, monkeypatch, marker):
+    from coordinator_core import temp_layout
+
+    work = tmp_path / "work"
+    (work / "scratch").mkdir(parents=True)
+    if marker == "dir":
+        (work / ".git").mkdir()
+    else:
+        (work / ".git").write_text("gitdir: elsewhere\n")
+    with pytest.raises(pytest.UsageError) as err:
+        _configure(monkeypatch, tmp_path, basetemp=str(work / "scratch" / "x"))
+    assert str(temp_layout.pytest_basetemp_root(tmp_path / "myrepo")) in str(err.value)
+
+
+def test_worker_basetemp_inside_a_git_tree_is_not_refused(tmp_path, monkeypatch):
+    (tmp_path / "work" / ".git").mkdir(parents=True)
+    cfg, _ = _configure(monkeypatch, tmp_path, basetemp=str(tmp_path / "work" / "w0"), worker=True)
+    assert cfg.option.basetemp == str(tmp_path / "work" / "w0")
+
+
 def test_xdist_worker_is_left_alone(tmp_path, monkeypatch):
     cfg, temp = _configure(monkeypatch, tmp_path, worker=True)
     assert cfg.option.basetemp is None
@@ -353,8 +374,9 @@ def test_counted_numbered_dir_never_scans_the_root(tmp_path, monkeypatch):
             raise AssertionError("root was scanned")
         return real_scandir(path, *a, **k)
 
-    monkeypatch.setattr(os, "scandir", _no_scan)
-    made = [fc._counted_numbered_dir(tmp_path, "work").name for _ in range(3)]
+    with monkeypatch.context() as scoped:
+        scoped.setattr(os, "scandir", _no_scan)
+        made = [fc._counted_numbered_dir(tmp_path, "work").name for _ in range(3)]
     assert made == ["work0", "work2", "work3"]
     assert not (tmp_path / "workcurrent").exists()
 
@@ -541,3 +563,37 @@ def test_worker_configure_reaps_nothing(tmp_path, monkeypatch):
     dead.mkdir()
     _configure(monkeypatch, tmp_path, worker=True)
     assert dead.is_dir()
+
+
+def _conftest_only_run(pytester, basetemp):
+    pytester.makeconftest(
+        """
+from coordinator_core.testing.fs_containment import _install_counted_numbered_dir
+_install_counted_numbered_dir()
+"""
+    )
+    pytester.makepyfile(
+        test_inner="""
+def test_uses_tmp(tmp_path):
+    assert tmp_path.is_dir()
+"""
+    )
+    pytester.makeini("[pytest]")
+    pytester._monkeypatch.setenv("PYTHONPATH", str(Path(fc.__file__).resolve().parents[2]))
+    return pytester.runpytest_subprocess("-p", "no:cacheprovider", "--basetemp", str(basetemp))
+
+
+def test_conftest_install_refuses_in_repo_basetemp_without_the_plugin(pytester, tmp_path):
+    (tmp_path / "work" / ".git").mkdir(parents=True)
+    victim = tmp_path / "work" / "state"
+    victim.mkdir()
+    (victim / "keep.txt").write_text("x")
+    result = _conftest_only_run(pytester, tmp_path / "work" / "state")
+    assert result.ret != 0
+    assert "is inside the git working tree" in result.stdout.str() + result.stderr.str()
+    assert (victim / "keep.txt").exists()
+
+
+def test_conftest_install_accepts_basetemp_outside_a_git_tree(pytester, tmp_path):
+    result = _conftest_only_run(pytester, tmp_path / "bt")
+    result.assert_outcomes(passed=1)

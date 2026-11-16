@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.git import commit as gcommit
 from coordinator_core.git import git_objects, pack_deletion_pause
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -39,7 +40,7 @@ def _repo(tmp_path):
     return repo
 
 
-def _add_files(repo, count, sub=""):
+def _add_files(repo, count, sub: str = "") -> list[str]:
     paths = []
     for i in range(count):
         p = f"d{i % 2}/{sub}f{i}.txt"
@@ -49,7 +50,7 @@ def _add_files(repo, count, sub=""):
     return paths
 
 
-def test_small_unsigned_commit_adds_no_pack_and_stays_loose(tmp_path):
+def test_small_unsigned_commit_adds_no_pack_and_stays_loose(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     paths = _add_files(repo, 2)
     before, packs_before = _loose(repo), _idx(repo)
@@ -62,7 +63,7 @@ def test_small_unsigned_commit_adds_no_pack_and_stays_loose(tmp_path):
     _git(repo, "fsck", "--no-dangling")
 
 
-def test_batch_over_the_threshold_adds_no_pack(tmp_path):
+def test_batch_over_the_threshold_adds_no_pack(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     paths = _add_files(repo, 50, sub="sub/")
     packs_before = _idx(repo)
@@ -106,7 +107,7 @@ def _land_fixture(tmp_path, count):
 
 
 @pytest.mark.parametrize("count", [50, 150])
-def test_land_fetch_adds_no_pack(tmp_path, count):
+def test_land_fetch_adds_no_pack(tmp_path: Path, count) -> None:
     from coordinator_core.ops.ceremony import git_native
 
     clone, paths = _land_fixture(tmp_path, count)
@@ -119,14 +120,14 @@ def test_land_fetch_adds_no_pack(tmp_path, count):
     assert set(_git(clone, "ls-tree", "-r", "--name-only", "origin/main").split()) >= set(paths)
 
 
-def test_signed_commit_keeps_flush_then_loose_write(tmp_path, monkeypatch):
+def test_signed_commit_keeps_flush_then_loose_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     paths = _add_files(repo, 2)
     monkeypatch.setattr(gcommit, "_gpgsign_enabled", lambda repo: True)
     order = []
     real_flush = gcommit.flush_object_batch
 
-    def flush():
+    def flush() -> None:
         order.append("flush")
         real_flush()
 
@@ -145,7 +146,7 @@ def test_signed_commit_keeps_flush_then_loose_write(tmp_path, monkeypatch):
     _git(repo, "fsck", "--no-dangling")
 
 
-def test_refused_commit_writes_no_objects(tmp_path):
+def test_refused_commit_writes_no_objects(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     before, packs_before = _loose(repo), _idx(repo)
     with pytest.raises(gcommit.NothingToCommit):

@@ -7,6 +7,7 @@ import json
 import os
 import time
 from pathlib import Path
+import pytest
 
 _PAST = time.time() - 3600
 _FUTURE = time.time() + 3600
@@ -21,7 +22,7 @@ def _now_iso(offset_seconds: float = 0.0) -> str:
     return ts.strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
 
 
-def _assistant_record(*, stop_reason=None, timestamp=None, with_tool_use=False) -> str:
+def _assistant_record(*, stop_reason=None, timestamp=None, with_tool_use: bool = False) -> str:
     content = [{"type": "tool_use", "id": "t1", "name": "Read", "input": {}}] if with_tool_use else [
         {"type": "text", "text": "done"}
     ]
@@ -202,7 +203,7 @@ class TestUnknown:
         assert "a1" in result["agent_id"]
         assert "transcript_path" in result["reason"]
 
-    def test_unreadable_transcript_resolves_unknown(self, tmp_path: Path, monkeypatch) -> None:
+    def test_unreadable_transcript_resolves_unknown(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.hooks import subagent_arrival_check as mod
         parent = tmp_path / "abc123.jsonl"
         sub = _subagent_path(parent, "a1")

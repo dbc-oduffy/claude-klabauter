@@ -266,7 +266,7 @@ class AskStageError(ValueError):
         plan_path: Optional[str] = None,
         gated_rows: Optional[list] = None,
         criterion_blocking_drops: Optional[list] = None,
-    ):
+    ) -> None:
         super().__init__(message)
         self.owed_em_ids = list(owed_em_ids) if owed_em_ids else None
         self.gated_rows = list(gated_rows) if gated_rows else None

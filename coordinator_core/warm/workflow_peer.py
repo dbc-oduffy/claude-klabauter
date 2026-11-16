@@ -16,6 +16,11 @@ import sys
 import uuid
 
 from coordinator_core.session_hub_path import hub_for_common
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ctypes import WinDLL
+    from psutil import Process
 
 PRIVATE_ROSTER_ENV = 'COORDINATOR_WARM_PRIVATE_ROSTER'
 MAX_ROSTER_BYTES = 128 * 1024
@@ -45,11 +50,11 @@ def _birth(value):
     return value
 
 
-def _same_path(a, b):
+def _same_path(a, b) -> bool:
     return os.path.normcase(str(Path(a).resolve())) == os.path.normcase(str(Path(b).resolve()))
 
 
-def _within(path, root):
+def _within(path, root) -> bool:
     try:
         Path(path).resolve().relative_to(Path(root).resolve())
         return True
@@ -211,12 +216,12 @@ def kernel_client_pid(stream):
     return _pid(pid.value)
 
 
-def _process(pid):
+def _process(pid) -> Process:
     import psutil
     return psutil.Process(pid)
 
 
-def _kernel_api():
+def _kernel_api() -> WinDLL:
     import ctypes
     from ctypes import wintypes
     api = ctypes.WinDLL('kernel32', use_last_error=True)
@@ -269,7 +274,7 @@ def _matches(proc, record):
 
 
 @lru_cache(maxsize=16)
-def _digest_executable(path, size, modified):
+def _digest_executable(path, size, modified) -> str:
     if size > 512 * 1024 * 1024:
         _refuse('native executable exceeds verification bound')
     digest = hashlib.sha256()
@@ -285,7 +290,7 @@ def _digest_executable(path, size, modified):
     return digest.hexdigest()
 
 
-def _verified_image(path, expected):
+def _verified_image(path, expected) -> None:
     info = os.stat(path)
     if _digest_executable(str(path), info.st_size, info.st_mtime_ns) != expected:
         _refuse('observed executable digest changed')

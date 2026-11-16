@@ -11,16 +11,18 @@ from coordinator_core.group_em import box_hold
 from coordinator_core.op_scopes import OP_KEY_SCOPE
 from coordinator_core.ops import _registry_map
 from coordinator_core.ops import group_em_box_hold as op
+from pathlib import Path
+import pytest
 
 
-def test_registration_quad():
+def test_registration_quad() -> None:
     assert ipc._REGISTRY.get("groupem.box_hold") is not None
     assert _registry_map.OP_MODULE_MAP["groupem.box_hold"] == "coordinator_core.ops.group_em_box_hold"
     assert OP_KEY_SCOPE["groupem.box_hold"] == "none"
     assert OP_CLASSIFICATION["groupem.box_hold"] is OpClass.MUTATING
 
 
-def test_set_then_clear_round_trip(tmp_path, monkeypatch):
+def test_set_then_clear_round_trip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     out = op._groupem_box_hold({"action": "set", "session_id": "s1", "reason": "swap", "ttl_s": 60})
     assert out["hold"]["set_by_session"] == "s1"
@@ -32,20 +34,20 @@ def test_set_then_clear_round_trip(tmp_path, monkeypatch):
     assert box_hold.read_hold() is None
 
 
-def test_operator_clear_omits_session(tmp_path, monkeypatch):
+def test_operator_clear_omits_session(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     op._groupem_box_hold({"action": "set", "session_id": "s1", "reason": "r"})
     out = op._groupem_box_hold({"action": "clear"})
     assert out == {"action": "clear", "cleared": True, "operator": True}
 
 
-def test_set_ttl_is_capped(tmp_path, monkeypatch):
+def test_set_ttl_is_capped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     h = op._groupem_box_hold({"action": "set", "session_id": "s1", "ttl_s": 10**9})["hold"]
     assert h["expires_at"] - h["set_at"] == box_hold.MAX_HOLD_TTL_S
 
 
-def test_invalid_params_return_error(tmp_path, monkeypatch):
+def test_invalid_params_return_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     assert "error" in op._groupem_box_hold({"action": "bogus"})
     assert "error" in op._groupem_box_hold({})

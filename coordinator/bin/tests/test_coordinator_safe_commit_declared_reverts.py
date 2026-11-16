@@ -18,13 +18,17 @@ import importlib.util
 import pathlib
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = pytest.mark.complete
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _load_cli_module():
+def _load_cli_module() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "coordinator_safe_commit", str(_BIN_DIR / "coordinator-safe-commit.py")
     )
@@ -34,7 +38,7 @@ def _load_cli_module():
     return mod
 
 
-def test_the_flag_survives_the_pathspec_form():
+def test_the_flag_survives_the_pathspec_form() -> None:
     """The subject sits immediately BEFORE `--` on this form, not last. A
     variadic flag sweeps it up as a path; a repeatable single-value one
     cannot, which is why the flag is shaped this way."""
@@ -51,13 +55,13 @@ def test_the_flag_survives_the_pathspec_form():
     assert args.paths == ["a/one.py"]
 
 
-def test_the_flag_requires_a_path():
+def test_the_flag_requires_a_path() -> None:
     mod = _load_cli_module()
     with pytest.raises(mod.UsageError, match="requires a path"):
         mod.parse_args(["--declared-revert"])
 
 
-def test_the_refusal_message_names_a_flag_this_cli_accepts():
+def test_the_refusal_message_names_a_flag_this_cli_accepts() -> None:
     """The gate's remediation text and the CLI's flag set must not drift
     apart again. Whatever the op tells a caller to pass, `parse_args` has to
     be able to accept."""
@@ -72,13 +76,13 @@ def test_the_refusal_message_names_a_flag_this_cli_accepts():
     assert args.declared_reverts == ["x.py"]
 
 
-def test_an_ordinary_commit_sends_no_declared_reverts_key():
+def test_an_ordinary_commit_sends_no_declared_reverts_key() -> None:
     mod = _load_cli_module()
     args = mod.parse_args(["subject", "--", "a/one.py"])
     assert args.declared_reverts == []
 
 
-def test_a_flag_shaped_value_is_refused_rather_than_consumed():
+def test_a_flag_shaped_value_is_refused_rather_than_consumed() -> None:
     """An omitted path must not eat the pathspec separator.
 
     `--declared-revert -- a.py "subject"` used to take `--` as the flag's
@@ -92,7 +96,7 @@ def test_a_flag_shaped_value_is_refused_rather_than_consumed():
         mod.parse_args(["--declared-revert", "--body-file", "x.txt", "subject"])
 
 
-def test_the_flag_reaches_the_op_params(monkeypatch):
+def test_the_flag_reaches_the_op_params(monkeypatch: pytest.MonkeyPatch) -> None:
     """The wiring the parse tests do not reach.
 
     `parse_args` passing proves nothing about whether `args.declared_reverts`

@@ -5,21 +5,22 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.git import reconcile_manifest as rm
+from pathlib import Path
 
 SHA = "a" * 40
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     (tmp_path / ".git").mkdir()
     return tmp_path
 
 
-def _open_merge(repo, sha=SHA):
+def _open_merge(repo, sha=SHA) -> None:
     (repo / ".git" / "MERGE_HEAD").write_text(sha + "\n", encoding="utf-8")
 
 
-def test_round_trip_sorts_and_normalises(repo):
+def test_round_trip_sorts_and_normalises(repo) -> None:
     _open_merge(repo)
     rm.write(repo, merge_head=SHA, branch="b", paths=["z\\y.py", "a.py", "a.py"])
     m = rm.read(repo)
@@ -27,7 +28,7 @@ def test_round_trip_sorts_and_normalises(repo):
     assert rm.manifest_path(repo).parent == repo / ".git" / "coordinator-reconcile"
 
 
-def test_write_leaves_only_the_manifest(repo):
+def test_write_leaves_only_the_manifest(repo) -> None:
     _open_merge(repo)
     rm.write(repo, merge_head=SHA, branch="b", paths=["a"])
     assert [p.name for p in rm.manifest_path(repo).parent.iterdir()] == [
@@ -35,12 +36,12 @@ def test_write_leaves_only_the_manifest(repo):
     ]
 
 
-def test_absent_returns_none(repo):
+def test_absent_returns_none(repo) -> None:
     _open_merge(repo)
     assert rm.read(repo) is None
 
 
-def test_malformed_returns_none(repo):
+def test_malformed_returns_none(repo) -> None:
     _open_merge(repo)
     p = rm.manifest_path(repo)
     p.parent.mkdir(parents=True)
@@ -48,7 +49,7 @@ def test_malformed_returns_none(repo):
     assert rm.read(repo) is None
 
 
-def test_wrong_schema_returns_none(repo):
+def test_wrong_schema_returns_none(repo) -> None:
     _open_merge(repo)
     rm.write(repo, merge_head=SHA, branch="b", paths=["a"])
     p = rm.manifest_path(repo)
@@ -56,7 +57,7 @@ def test_wrong_schema_returns_none(repo):
     assert rm.read(repo) is None
 
 
-def test_bad_field_types_return_none(repo):
+def test_bad_field_types_return_none(repo) -> None:
     _open_merge(repo)
     p = rm.manifest_path(repo)
     p.parent.mkdir(parents=True)
@@ -67,20 +68,20 @@ def test_bad_field_types_return_none(repo):
     assert rm.read(repo) is None
 
 
-def test_stale_merge_head_returns_none(repo):
+def test_stale_merge_head_returns_none(repo) -> None:
     _open_merge(repo, "b" * 40)
     rm.write(repo, merge_head=SHA, branch="b", paths=["a"])
     assert rm.read(repo) is None
 
 
-def test_missing_merge_head_returns_none(repo):
+def test_missing_merge_head_returns_none(repo) -> None:
     _open_merge(repo)
     rm.write(repo, merge_head=SHA, branch="b", paths=["a"])
     (repo / ".git" / "MERGE_HEAD").unlink()
     assert rm.read(repo) is None
 
 
-def test_remove_is_idempotent(repo):
+def test_remove_is_idempotent(repo) -> None:
     _open_merge(repo)
     rm.write(repo, merge_head=SHA, branch="b", paths=["a"])
     rm.remove(repo)
@@ -88,7 +89,7 @@ def test_remove_is_idempotent(repo):
     assert rm.read(repo) is None
 
 
-def test_gitdir_pointer_file_is_honoured(tmp_path):
+def test_gitdir_pointer_file_is_honoured(tmp_path: Path) -> None:
     real = tmp_path / "real-gitdir"
     real.mkdir()
     (real / "MERGE_HEAD").write_text(SHA, encoding="utf-8")
@@ -109,7 +110,7 @@ def test_gitdir_pointer_file_is_honoured(tmp_path):
         "a\r\n=======\r\nb\r\n",
     ],
 )
-def test_marker_matches(text):
+def test_marker_matches(text) -> None:
     assert rm.has_marker(text)
 
 
@@ -127,11 +128,11 @@ def test_marker_matches(text):
         "# heading\n=======x\n",
     ],
 )
-def test_marker_ignores_non_anchored(text):
+def test_marker_ignores_non_anchored(text) -> None:
     assert not rm.has_marker(text)
 
 
-def test_pinned_strings():
+def test_pinned_strings() -> None:
     assert rm.CONCLUDE_CLI == "reconcile-merge-conclude"
     assert rm.OUTCOME_CONFLICT_OPEN == "RECONCILE-CONFLICT-OPEN"
     assert rm.OUTCOME_CONCLUDED == "RECONCILED-MERGE-CONCLUDED"

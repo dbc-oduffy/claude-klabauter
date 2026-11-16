@@ -11,12 +11,13 @@ import pytest
 from coordinator_core.hooks import block_workflow_foreign_emission as bwfe
 from coordinator_core.ops.dispatch_emit import halted_run
 from coordinator_core.warp_fire import fire_command
+from pathlib import Path
 
 RUN_ID = "ask-20261019T162916-dfedf5"
 SIZING = "state/sizings/2026-10-19-x.yaml"
 
 
-def _setup(tmp_path, *, status="halted", revised=True, sizing=SIZING):
+def _setup(tmp_path, *, status: str = "halted", revised: bool = True, sizing=SIZING):
     script = tmp_path / "scratch" / "warp" / f"{RUN_ID}.workflow.mjs"
     script.parent.mkdir(parents=True)
     script.write_text("// emitted\n", encoding="utf-8")
@@ -39,7 +40,7 @@ def _call(script, tmp_path, **extra):
     })
 
 
-def test_resume_of_revised_halt_is_denied_naming_fresh_fire(tmp_path):
+def test_resume_of_revised_halt_is_denied_naming_fresh_fire(tmp_path: Path) -> None:
     script = _setup(tmp_path)
     hso = _call(script, tmp_path, resumeFromRunId=RUN_ID)["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
@@ -47,25 +48,25 @@ def test_resume_of_revised_halt_is_denied_naming_fresh_fire(tmp_path):
     assert RUN_ID in hso["permissionDecisionReason"]
 
 
-def test_missing_sizing_names_ask_fire(tmp_path):
+def test_missing_sizing_names_ask_fire(tmp_path: Path) -> None:
     script = _setup(tmp_path, sizing=None)
     hso = _call(script, tmp_path, resumeFromRunId=RUN_ID)["hookSpecificOutput"]
     assert fire_command(None) in hso["permissionDecisionReason"]
 
 
-def test_without_resume_is_unchanged(tmp_path):
+def test_without_resume_is_unchanged(tmp_path: Path) -> None:
     assert _call(_setup(tmp_path), tmp_path) == {}
 
 
-def test_no_stamp_is_unchanged(tmp_path):
+def test_no_stamp_is_unchanged(tmp_path: Path) -> None:
     assert _call(_setup(tmp_path, revised=False), tmp_path, resumeFromRunId=RUN_ID) == {}
 
 
-def test_resumed_status_is_unchanged(tmp_path):
+def test_resumed_status_is_unchanged(tmp_path: Path) -> None:
     assert _call(_setup(tmp_path, status="resumed"), tmp_path, resumeFromRunId=RUN_ID) == {}
 
 
-def test_script_outside_scratch_warp_is_unchanged(tmp_path):
+def test_script_outside_scratch_warp_is_unchanged(tmp_path: Path) -> None:
     script = _setup(tmp_path)
     other = tmp_path / "elsewhere" / script.name
     other.parent.mkdir()
@@ -76,7 +77,7 @@ def test_script_outside_scratch_warp_is_unchanged(tmp_path):
     assert _call(other, tmp_path, resumeFromRunId=RUN_ID) == {}
 
 
-def test_changed_script_keeps_sha_deny(tmp_path):
+def test_changed_script_keeps_sha_deny(tmp_path: Path) -> None:
     script = _setup(tmp_path)
     script.write_text("// edited\n", encoding="utf-8")
     hso = _call(script, tmp_path, resumeFromRunId=RUN_ID)["hookSpecificOutput"]
@@ -84,13 +85,13 @@ def test_changed_script_keeps_sha_deny(tmp_path):
 
 
 @pytest.mark.skipif(os.name != "nt", reason="backslash separators are native only on Windows")
-def test_backslash_script_path_is_denied(tmp_path):
+def test_backslash_script_path_is_denied(tmp_path: Path) -> None:
     script = _setup(tmp_path)
     hso = _call(str(script).replace("/", "\\"), tmp_path, resumeFromRunId=RUN_ID)["hookSpecificOutput"]
     assert hso["permissionDecision"] == "deny"
 
 
-def test_backslash_path_parsed_without_os_dependence(tmp_path):
+def test_backslash_path_parsed_without_os_dependence(tmp_path: Path) -> None:
     _setup(tmp_path)
     from pathlib import Path
 

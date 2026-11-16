@@ -8,6 +8,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit import deferred_emit_script as des
 from coordinator_core.ops.dispatch_emit.fan_launcher import LAUNCHER_CHILD_EMIT_PARAM
+from pathlib import Path
 
 
 def _description(script) -> str:
@@ -18,17 +19,17 @@ def _description(script) -> str:
     return json.loads(m.group(1))
 
 
-def test_premint_params_do_not_claim_an_overrun(tmp_path):
+def test_premint_params_do_not_claim_an_overrun(tmp_path: Path) -> None:
     script = des.write_deferred_script(tmp_path, {"ask_brief": "x", "preminted_run_id": "ask-1"})
     assert "outran" not in _description(script)
 
 
-def test_unminted_overrun_says_it_outran_the_hook_budget(tmp_path):
+def test_unminted_overrun_says_it_outran_the_hook_budget(tmp_path: Path) -> None:
     script = des.write_deferred_script(tmp_path, {"ask_brief": "x"})
     assert "outran the hook budget" in _description(script)
 
 
-def test_fan_child_and_reemit_carry_their_own_text(tmp_path):
+def test_fan_child_and_reemit_carry_their_own_text(tmp_path: Path) -> None:
     child = _description(des.write_deferred_script(tmp_path, {"ask_brief": "x", LAUNCHER_CHILD_EMIT_PARAM: True}))
     reemit = _description(des.write_deferred_script(tmp_path, {"ask_brief": "x", "preminted_run_id": "a"}, branch="reemit"))
     assert child == des.BRANCH_DESCRIPTIONS["fan_child"]
@@ -37,12 +38,12 @@ def test_fan_child_and_reemit_carry_their_own_text(tmp_path):
     assert len(set(des.BRANCH_DESCRIPTIONS.values())) == 4
 
 
-def test_unknown_branch_is_refused(tmp_path):
+def test_unknown_branch_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         des.write_deferred_script(tmp_path, {"ask_brief": "x"}, branch="nope")
 
 
-def test_reemit_op_passes_its_branch(tmp_path, monkeypatch):
+def test_reemit_op_passes_its_branch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import reemit
 
     seen = {}

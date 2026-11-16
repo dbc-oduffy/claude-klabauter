@@ -21,6 +21,7 @@ from coordinator_core.ops.dispatch_emit import ask_compose, design_approval, des
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 from coordinator_core.ops.dispatch_emit.halted_run import HALTED_FILE, halted_run_to_resume, write_halt_marker
+from pathlib import Path
 
 STEM = "2026-11-05-methodology-deck-match-mobile-canvas-build-dd0a4b"
 REL = f"state/sizings/2026-11/{STEM}.yaml"
@@ -37,7 +38,7 @@ def _files(repo):
 
 
 @pytest.fixture(params=["month-bound", "flat-bound"])
-def repo(request, tmp_path, monkeypatch):
+def repo(request: pytest.FixtureRequest, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
@@ -76,12 +77,12 @@ def _payload(repo):
     return design_route.read(doc, REL)[0]
 
 
-def test_ac1_the_resolver_returns_the_halted_warp_run_for_the_month_subdir_sizing(repo):
+def test_ac1_the_resolver_returns_the_halted_warp_run_for_the_month_subdir_sizing(repo) -> None:
     assert halted_run_to_resume(repo, REL) == HALTED
     assert halted_run_to_resume(repo, REL, build=False) == HALTED
 
 
-def test_ac1_the_submit_hook_resolves_the_halted_run_for_the_default_refire(repo, monkeypatch):
+def test_ac1_the_submit_hook_resolves_the_halted_run_for_the_default_refire(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks import submit_engine_ask as hook
 
     launched = []
@@ -96,7 +97,7 @@ def test_ac1_the_submit_hook_resolves_the_halted_run_for_the_default_refire(repo
     assert envelope is not None and [c.run_id for c in launched] == [HALTED]
 
 
-def test_ac1_the_default_refire_resumes_the_halted_run_carrying_the_revise_note(repo):
+def test_ac1_the_default_refire_resumes_the_halted_run_carrying_the_revise_note(repo) -> None:
     reply = _fire(repo)
     assert reply["run_id"] == HALTED
     marker = json.loads((record_dir(repo, HALTED) / HALTED_FILE).read_text(encoding="utf-8"))
@@ -104,13 +105,13 @@ def test_ac1_the_default_refire_resumes_the_halted_run_carrying_the_revise_note(
     assert [e["note"] for e in rl.carried_notes(repo, reply["run_id"])] == [NOTE]
 
 
-def test_ac2_the_refire_writes_no_new_sizing_plan_or_board(repo):
+def test_ac2_the_refire_writes_no_new_sizing_plan_or_board(repo) -> None:
     before = _files(repo)
     _fire(repo)
     assert _files(repo) == before
 
 
-def test_ac3_the_recorded_approval_carries_through_the_refire(repo):
+def test_ac3_the_recorded_approval_carries_through_the_refire(repo) -> None:
     assert design_route.stage_refusal(_payload(repo)) is None
     _fire(repo)
     payload = _payload(repo)
@@ -118,7 +119,7 @@ def test_ac3_the_recorded_approval_carries_through_the_refire(repo):
     assert design_route.stage_refusal(payload) is None
 
 
-def test_an_unapproved_build_board_still_refuses(repo):
+def test_an_unapproved_build_board_still_refuses(repo) -> None:
     doc = yaml.safe_load((repo / REL).read_text(encoding="utf-8"))
     doc["design_route"]["approval"] = None
     doc["design_route"]["board_url"] = None

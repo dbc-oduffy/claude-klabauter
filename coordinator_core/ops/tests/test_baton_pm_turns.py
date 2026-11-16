@@ -7,6 +7,7 @@ from pathlib import Path
 
 from coordinator_core.ops import baton_pm_turns as PT
 from coordinator_core.session_baton import store
+import pytest
 
 
 def _session(tmp_path: Path, monkeypatch, sid: str) -> Path:
@@ -16,7 +17,7 @@ def _session(tmp_path: Path, monkeypatch, sid: str) -> Path:
     return sdir
 
 
-def test_turns_append_in_order_verbatim_and_uncapped(tmp_path, monkeypatch):
+def test_turns_append_in_order_verbatim_and_uncapped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sdir = _session(tmp_path, monkeypatch, "sid-pm")
     launch = "  build the thing\n\n" + "x" * 20000 + "  "
     assert PT.append_turn(launch, session_id="sid-pm")["turn"] == 0
@@ -29,7 +30,7 @@ def test_turns_append_in_order_verbatim_and_uncapped(tmp_path, monkeypatch):
     assert not (sdir / store.BATON_FILENAME).exists()
 
 
-def test_selectors(tmp_path, monkeypatch):
+def test_selectors(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-sel")
     for p in ("zero", "one", "two", "three"):
         PT.append_turn(p, session_id="sid-sel")
@@ -45,7 +46,7 @@ def test_selectors(tmp_path, monkeypatch):
     assert miss["ok"] is False and miss["count"] == 4
 
 
-def test_torn_line_keeps_its_index_and_is_skipped(tmp_path, monkeypatch):
+def test_torn_line_keeps_its_index_and_is_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sdir = _session(tmp_path, monkeypatch, "sid-torn")
     PT.append_turn("zero", session_id="sid-torn")
     with open(sdir / PT.PM_TURNS_FILENAME, "ab") as fh:
@@ -57,7 +58,7 @@ def test_torn_line_keeps_its_index_and_is_skipped(tmp_path, monkeypatch):
     assert PT.read_turns(session_id="sid-torn", turn=2)["text"] == "two"
 
 
-def test_entries_are_never_rewritten(tmp_path, monkeypatch):
+def test_entries_are_never_rewritten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sdir = _session(tmp_path, monkeypatch, "sid-ao")
     PT.append_turn("first", session_id="sid-ao")
     before = (sdir / PT.PM_TURNS_FILENAME).read_bytes()
@@ -67,21 +68,21 @@ def test_entries_are_never_rewritten(tmp_path, monkeypatch):
     assert json.loads(after.splitlines()[1])["prompt"] == "second"
 
 
-def test_missing_session_dir_records_nothing(tmp_path, monkeypatch):
+def test_missing_session_dir_records_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(store, "baton_dir", lambda s, cwd=None: tmp_path / "absent" / s)
     out = PT.append_turn("hello", session_id="sid-none")
     assert out["ok"] is False and "no session directory" in out["reason"]
     assert not (tmp_path / "absent").exists()
 
 
-def test_rejects_empty_prompt_and_bad_selector(tmp_path, monkeypatch):
+def test_rejects_empty_prompt_and_bad_selector(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-bad")
     assert PT.append_turn("   ", session_id="sid-bad")["ok"] is False
     out = PT._pm_turns({"session_id": "sid-bad", "turn": "2"})
     assert out["ok"] is False and "integer" in out["reason"]
 
 
-def test_recent_window_after_turn_bounds_newest_first_with_no_total_budget(tmp_path, monkeypatch):
+def test_recent_window_after_turn_bounds_newest_first_with_no_total_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-win")
     for n in range(6):
         PT.append_turn(f"{n}" * 5000, session_id="sid-win")
@@ -91,7 +92,7 @@ def test_recent_window_after_turn_bounds_newest_first_with_no_total_budget(tmp_p
     assert [e["turn"] for e in PT.recent_window(session_id="sid-win")] == [5, 4, 3, 2, 1, 0]
 
 
-def test_recent_window_cuts_an_oversized_single_turn(tmp_path, monkeypatch):
+def test_recent_window_cuts_an_oversized_single_turn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-big")
     PT.append_turn("small", session_id="sid-big")
     PT.append_turn("z" * (PT.SIZING_WINDOW_CHARS + 100), session_id="sid-big")
@@ -101,7 +102,7 @@ def test_recent_window_cuts_an_oversized_single_turn(tmp_path, monkeypatch):
     assert "truncated" not in win[1]
 
 
-def test_recent_window_defaults_to_the_session_mark_and_mark_never_lowers(tmp_path, monkeypatch):
+def test_recent_window_defaults_to_the_session_mark_and_mark_never_lowers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-mark")
     for n in range(4):
         PT.append_turn(f"t{n}", session_id="sid-mark")
@@ -111,7 +112,7 @@ def test_recent_window_defaults_to_the_session_mark_and_mark_never_lowers(tmp_pa
     assert [e["turn"] for e in PT.recent_window(session_id="sid-mark")] == [3]
 
 
-def test_bound_window_embeds_the_newest_quoted_turn_only(tmp_path, monkeypatch):
+def test_bound_window_embeds_the_newest_quoted_turn_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-bw")
     quoted = "please make the sizing embed one turn only"
     PT.append_turn(quoted, session_id="sid-bw")
@@ -121,7 +122,7 @@ def test_bound_window_embeds_the_newest_quoted_turn_only(tmp_path, monkeypatch):
     assert [e["turn"] for e in win] == [0] and win[0]["text"] == quoted
 
 
-def test_bound_window_falls_back_to_the_newest_turn_past_the_mark(tmp_path, monkeypatch):
+def test_bound_window_falls_back_to_the_newest_turn_past_the_mark(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-bf")
     for n in range(5):
         PT.append_turn(f"turn number {n}", session_id="sid-bf")
@@ -131,14 +132,14 @@ def test_bound_window_falls_back_to_the_newest_turn_past_the_mark(tmp_path, monk
     assert PT.bound_window("a paraphrase", session_id="sid-bf") == []
 
 
-def test_bound_window_head_cuts_an_oversized_turn(tmp_path, monkeypatch):
+def test_bound_window_head_cuts_an_oversized_turn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-bc")
     PT.append_turn("z" * (PT.SIZING_WINDOW_CHARS + 50), session_id="sid-bc")
     win = PT.bound_window(None, session_id="sid-bc")
     assert win[0]["text"] == "z" * PT.SIZING_WINDOW_CHARS and win[0]["truncated"] is True
 
 
-def test_is_turn_excerpt_rule():
+def test_is_turn_excerpt_rule() -> None:
     turn = "Shouldn't the engine only recognize PMs words if that flag is chosen, and otherwise relay?"
     assert PT.is_turn_excerpt(turn.upper(), turn)
     assert PT.is_turn_excerpt("only recognize PMs words if that flag", turn)
@@ -150,7 +151,7 @@ def test_is_turn_excerpt_rule():
     assert not PT.is_turn_excerpt("yes", "yes please do")
 
 
-def test_verify_pm_ask_has_three_verdicts(tmp_path, monkeypatch):
+def test_verify_pm_ask_has_three_verdicts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-ptf")
     said = "make the engine default unmarked asks to relayed"
     PT.append_turn(said, session_id="sid-ptf")
@@ -167,7 +168,7 @@ def test_verify_pm_ask_has_three_verdicts(tmp_path, monkeypatch):
     assert PT.verify_pm_ask(said, session_id="sid-nolog") == {"verdict": "unverifiable", "turn": None}
 
 
-def test_verify_pm_ask_matches_joined_verbatim_turns_per_piece(tmp_path, monkeypatch):
+def test_verify_pm_ask_matches_joined_verbatim_turns_per_piece(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-join")
     first = "make the engine default unmarked asks to relayed"
     second = "and never let the log make an unmarked ask pm"
@@ -179,7 +180,7 @@ def test_verify_pm_ask_matches_joined_verbatim_turns_per_piece(tmp_path, monkeyp
     assert [t["turn"] for t in got["turns"]] == [0, 2] and got["turn"]["turn"] == 2
 
 
-def test_verify_pm_ask_one_bad_piece_is_unmatched_with_nearest_and_diff(tmp_path, monkeypatch):
+def test_verify_pm_ask_one_bad_piece_is_unmatched_with_nearest_and_diff(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-bad1")
     first = "make the engine default unmarked asks to relayed"
     second = "and never let the log make an unmarked ask pm"
@@ -196,7 +197,7 @@ def test_verify_pm_ask_one_bad_piece_is_unmatched_with_nearest_and_diff(tmp_path
 _PASTE = '<\\pasted_content id="0da2">\n╭ Phases │ alpha beta gamma delta\n╰──╯\n</pasted_content>'
 
 
-def test_verify_pm_ask_ignores_pasted_content_blocks(tmp_path, monkeypatch):
+def test_verify_pm_ask_ignores_pasted_content_blocks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-paste")
     before, after = "why is apply rulings an opus", "and what does it cost us"
     turn = f"{before}\n\n```\n\n\n{_PASTE}\n\n{after}"
@@ -214,25 +215,25 @@ def test_verify_pm_ask_ignores_pasted_content_blocks(tmp_path, monkeypatch):
     assert "alpha" not in padded["diff"] and "gamma" not in padded["diff"]
 
 
-def test_strip_pasted_handles_unclosed_block():
+def test_strip_pasted_handles_unclosed_block() -> None:
     assert PT.strip_pasted('said this <pasted_content id="1">junk').strip() == "said this"
 
 
-def test_nearest_turn_none_when_no_shared_word(tmp_path, monkeypatch):
+def test_nearest_turn_none_when_no_shared_word(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-nn")
     PT.append_turn("alpha beta gamma", session_id="sid-nn")
     got = PT.verify_pm_ask("zzz qqq", session_id="sid-nn")
     assert got["verdict"] == "unmatched" and got["nearest"] is None and got["diff"] == ""
 
 
-def test_unicode_line_separators_stay_inside_one_turn(tmp_path, monkeypatch):
+def test_unicode_line_separators_stay_inside_one_turn(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-u")
     prompt = "a b c\u0085d"
     PT.append_turn(prompt, session_id="sid-u")
     assert PT.read_turns(session_id="sid-u")["text"] == prompt
 
 
-def test_torn_multibyte_tail_is_skipped_not_raised(tmp_path, monkeypatch):
+def test_torn_multibyte_tail_is_skipped_not_raised(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sdir = _session(tmp_path, monkeypatch, "sid-mb")
     PT.append_turn("zero", session_id="sid-mb")
     with open(sdir / PT.PM_TURNS_FILENAME, "ab") as fh:
@@ -241,7 +242,7 @@ def test_torn_multibyte_tail_is_skipped_not_raised(tmp_path, monkeypatch):
     assert PT.append_turn("two", session_id="sid-mb")["turn"] == 2
 
 
-def test_referent_round_trips(tmp_path, monkeypatch):
+def test_referent_round_trips(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-rf")
     ref = {"excerpt": " which one?\n", "transcript_uuid": "u-1"}
     out = PT.append_turn("the second", session_id="sid-rf", referent=ref)
@@ -250,7 +251,7 @@ def test_referent_round_trips(tmp_path, monkeypatch):
     assert got["referent"] == ref
 
 
-def test_referent_excerpt_keeps_tail_and_flags_truncation(tmp_path, monkeypatch):
+def test_referent_excerpt_keeps_tail_and_flags_truncation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-rt")
     excerpt = "a" * 500 + "b" * 2000
     out = PT.append_turn("p", session_id="sid-rt", referent={"excerpt": excerpt})
@@ -258,7 +259,7 @@ def test_referent_excerpt_keeps_tail_and_flags_truncation(tmp_path, monkeypatch)
     assert got["excerpt"] == "b" * 2000 and got["excerpt_truncated"] is True
 
 
-def test_malformed_referent_still_appends_prompt(tmp_path, monkeypatch):
+def test_malformed_referent_still_appends_prompt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-bad")
     bad = ["str", {"other": "x"}, {"excerpt": ""}, {"excerpt": 3}, {},
            {"excerpt": "ok", "extra": "x"}]
@@ -271,7 +272,7 @@ def test_malformed_referent_still_appends_prompt(tmp_path, monkeypatch):
     assert all("referent" not in t for t in turns)
 
 
-def test_absent_referent_shape_is_unchanged(tmp_path, monkeypatch):
+def test_absent_referent_shape_is_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sdir = _session(tmp_path, monkeypatch, "sid-ab")
     out = PT.append_turn("hello", session_id="sid-ab", referent=None)
     assert set(out) == {"ok", "turn", "log_path", "session_id", "reason"}
@@ -279,7 +280,7 @@ def test_absent_referent_shape_is_unchanged(tmp_path, monkeypatch):
     assert set(line) == {"turn", "ts", "prompt"}
 
 
-def test_harness_notices_are_refused_without_consuming_an_index(tmp_path, monkeypatch):
+def test_harness_notices_are_refused_without_consuming_an_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sdir = _session(tmp_path, monkeypatch, "sid-notice")
     for i, seed in enumerate(PT._HARNESS_NOTICE_PREFIXES):
         assert PT.append_turn("real", session_id="sid-notice")["turn"] == i
@@ -292,14 +293,14 @@ def test_harness_notices_are_refused_without_consuming_an_index(tmp_path, monkey
     assert PT.append_turn("next", session_id="sid-notice")["turn"] == len(lines)
 
 
-def test_peer_message_wrapper_is_refused_but_typed_text_is_recorded(tmp_path, monkeypatch):
+def test_peer_message_wrapper_is_refused_but_typed_text_is_recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-peer")
     wrapped = '<cross-session-message from="uds:/tmp/cc-socks/1.sock" from-name="peer">hi</cross-session-message>'
     assert PT.append_turn(wrapped, session_id="sid-peer")["ok"] is False
     assert PT.append_turn("typed, mentioning <cross-session-message", session_id="sid-peer")["turn"] == 0
 
 
-def test_prompt_containing_a_notice_prefix_mid_text_is_recorded(tmp_path, monkeypatch):
+def test_prompt_containing_a_notice_prefix_mid_text_is_recorded(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _session(tmp_path, monkeypatch, "sid-mid")
     text = "see <task-notification> and [Cross-session idle notice] here"
     assert PT.append_turn(text, session_id="sid-mid")["turn"] == 0
@@ -307,7 +308,7 @@ def test_prompt_containing_a_notice_prefix_mid_text_is_recorded(tmp_path, monkey
     assert PT.read_turns(session_id="sid-mid")["count"] == 1
 
 
-def _inject_log(tmp_path, monkeypatch, *records):
+def _inject_log(tmp_path, monkeypatch, *records) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings"))
     from coordinator_core.idle_compact import contract
     log = contract.injection_log_path()
@@ -315,13 +316,13 @@ def _inject_log(tmp_path, monkeypatch, *records):
     log.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
 
 
-def _rec(sid, run_id, age_s, action="injected"):
+def _rec(sid, run_id, age_s, action: str = "injected"):
     from datetime import datetime, timedelta, timezone
     ts = (datetime.now(timezone.utc) - timedelta(seconds=age_s)).strftime("%Y-%m-%dT%H:%M:%SZ")
     return {"ts": ts, "run_id": run_id, "session_id": sid, "pid": 1, "action": action, "reason": ""}
 
 
-def test_fresh_injected_compact_is_marked_once_and_ignored_as_pm_evidence(tmp_path, monkeypatch):
+def test_fresh_injected_compact_is_marked_once_and_ignored_as_pm_evidence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sdir = _session(tmp_path, monkeypatch, "sid-inj")
     _inject_log(tmp_path, monkeypatch, _rec("sid-inj", "run-1", 5))
     PT.append_turn("please ship the thing now", session_id="sid-inj")
@@ -337,7 +338,7 @@ def test_fresh_injected_compact_is_marked_once_and_ignored_as_pm_evidence(tmp_pa
     assert PT.verify_pm_ask("/compact", session_id="sid-inj")["verdict"] == "matched"
 
 
-def test_compact_without_fresh_injection_record_is_unmarked(tmp_path, monkeypatch):
+def test_compact_without_fresh_injection_record_is_unmarked(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sdir = _session(tmp_path, monkeypatch, "sid-old")
     _inject_log(tmp_path, monkeypatch,
                 _rec("sid-old", "stale", 600),

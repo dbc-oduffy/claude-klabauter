@@ -9,12 +9,13 @@ from coordinator_core.ops.dispatch_emit import review_edits
 from coordinator_core.ops.tests.test_review_reverify import (  # noqa: F401  (world is a fixture)
     _revert, world,
 )
+import pytest
 
 NEW = "tests/test_new.py"
 NEW_BODY = "def test_n():\n    assert False\n"
 
 
-def _create(root, monkeypatch, files):
+def _create(root, monkeypatch, files) -> None:
     for rel, body in files.items():
         f = root / rel
         f.parent.mkdir(parents=True, exist_ok=True)
@@ -22,7 +23,7 @@ def _create(root, monkeypatch, files):
     monkeypatch.setattr(review_edits, "review_writes", lambda *_a, **_k: {rel: "a1" for rel in files})
 
 
-def test_id_recorded_pre_existing_by_an_earlier_call_is_never_reverted(world, monkeypatch):
+def test_id_recorded_pre_existing_by_an_earlier_call_is_never_reverted(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _ = world
     _create(root, monkeypatch, {NEW: NEW_BODY})
     node = f"{NEW}::test_n"
@@ -36,14 +37,14 @@ def test_id_recorded_pre_existing_by_an_earlier_call_is_never_reverted(world, mo
     assert record["pre_existing"] == [node] and record["reverted"] == []
 
 
-def test_id_not_in_pre_existing_is_still_reverted(world, monkeypatch):
+def test_id_not_in_pre_existing_is_still_reverted(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _ = world
     _create(root, monkeypatch, {NEW: NEW_BODY})
     out = _revert(root, [f"{NEW}::test_n"], failing_at_base=[f"{NEW}::test_other"])
     assert [(e["path"], e["action"]) for e in out["reverted"]] == [(NEW, "removed")]
 
 
-def test_failing_id_in_a_foreign_test_file_reverts_nothing_it_names(world, monkeypatch):
+def test_failing_id_in_a_foreign_test_file_reverts_nothing_it_names(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _ = world
     _create(root, monkeypatch, {
         "pkg/newmod.py": "X = 1\n",
@@ -60,7 +61,7 @@ def test_failing_id_in_a_foreign_test_file_reverts_nothing_it_names(world, monke
     assert (root / "pkg/newmod.py").exists()
 
 
-def test_removing_a_created_module_a_kept_edited_file_imports_is_refused(world, monkeypatch):
+def test_removing_a_created_module_a_kept_edited_file_imports_is_refused(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _ = world
     _create(root, monkeypatch, {"pkg/newmod.py": "X = 1\n"})
     (root / "pkg/mod.py").write_text("from pkg.newmod import X\nVALUE = X\n", encoding="utf-8")
@@ -70,7 +71,7 @@ def test_removing_a_created_module_a_kept_edited_file_imports_is_refused(world, 
     assert (root / "pkg/newmod.py").exists()
 
 
-def test_removing_a_created_module_nothing_kept_imports_still_proceeds(world, monkeypatch):
+def test_removing_a_created_module_nothing_kept_imports_still_proceeds(world, monkeypatch: pytest.MonkeyPatch) -> None:
     root, _orig, _ = world
     _create(root, monkeypatch, {"pkg/newmod.py": "X = 1\n"})
     (root / "pkg/mod.py").write_text("VALUE = 2\n", encoding="utf-8")

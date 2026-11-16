@@ -14,12 +14,17 @@ import psutil
 import pytest
 
 from coordinator_core.warm import dispatch_ack, server
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from concurrent.futures.process import ProcessPoolExecutor
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 class _FakeIO:
-    def __init__(self, lines):
+    def __init__(self, lines) -> None:
         self._lines = list(lines)
         self.written: list[bytes] = []
 
@@ -44,7 +49,7 @@ class _FakeVersionState:
         return self.is_skewed(client_token)
 
 
-def _frame(params, id_=1) -> bytes:
+def _frame(params, id_: int = 1) -> bytes:
     msg = {
         "jsonrpc": "2.0",
         "id": id_,
@@ -69,7 +74,7 @@ def _serve(frame, dispatch):
     return [json.loads(line) for line in io_obj.written]
 
 
-def _hang_or_answer(msg, caller, dispatch_key=None, claim_dir=None, stall_secs=10.0):
+def _hang_or_answer(msg, caller, dispatch_key=None, claim_dir=None, stall_secs: float = 10.0):
     """Module-level so the spawned worker can unpickle it. Records its own claim like the real worker."""
     claim = server._claim_path(claim_dir, dispatch_key)
     if claim is not None:
@@ -80,12 +85,12 @@ def _hang_or_answer(msg, caller, dispatch_key=None, claim_dir=None, stall_secs=1
     return {"jsonrpc": "2.0", "id": msg.get("id"), "result": {"stdout": "ok\n", "stderr": "", "exit_code": 0}}
 
 
-def test_dispatch_pool_size_is_no_larger_than_the_io_cap():
+def test_dispatch_pool_size_is_no_larger_than_the_io_cap() -> None:
     assert server._DISPATCH_POOL_IO_CAP <= 4
     assert 1 <= server.DISPATCH_PROCESS_POOL_SIZE <= server._DISPATCH_POOL_IO_CAP
 
 
-def test_a_worker_past_its_deadline_is_terminated_and_the_pool_serves_the_next_op(tmp_path, monkeypatch):
+def test_a_worker_past_its_deadline_is_terminated_and_the_pool_serves_the_next_op(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     store = dispatch_ack.AckStore(boot_ns=0)
     monkeypatch.setattr(server, "_ack_store", store)
     claim_dir = tmp_path / "dispatch-claims"
@@ -93,7 +98,7 @@ def test_a_worker_past_its_deadline_is_terminated_and_the_pool_serves_the_next_o
     stderr_dir = tmp_path / "pool-worker-stderr"
     stall_dir = tmp_path / "stall"
 
-    def _build():
+    def _build() -> ProcessPoolExecutor:
         return concurrent.futures.ProcessPoolExecutor(
             max_workers=2,
             mp_context=multiprocessing.get_context("spawn"),
@@ -110,7 +115,7 @@ def test_a_worker_past_its_deadline_is_terminated_and_the_pool_serves_the_next_o
     ctx._worker_stderr_dir = stderr_dir
     ctx._stall_dir = stall_dir
 
-    def _ensure():
+    def _ensure() -> ProcessPoolExecutor:
         with ctx._dispatch_pool_lock:
             if ctx._dispatch_pool is None:
                 ctx._dispatch_pool = _build()
@@ -148,12 +153,12 @@ def test_a_worker_past_its_deadline_is_terminated_and_the_pool_serves_the_next_o
             pool.shutdown(wait=False, cancel_futures=True)
 
 
-def test_the_worker_holds_its_dispatch_for_the_op_and_clears_it_after(tmp_path, monkeypatch):
+def test_the_worker_holds_its_dispatch_for_the_op_and_clears_it_after(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm import dispatch_fence
 
     seen = []
 
-    def _body(msg, caller):
+    def _body(msg, caller) -> dict[str, bool]:
         dispatch_fence.write(tmp_path, "k-1")
         seen.append(dispatch_fence.current_dispatch_fenced())
         return {"ok": True}

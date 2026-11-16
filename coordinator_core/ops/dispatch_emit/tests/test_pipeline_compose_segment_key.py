@@ -11,6 +11,8 @@ from coordinator_core.ops.dispatch_emit.tests.test_pipeline_compose_brief_and_ha
     _segment,
     _stage,
 )
+from pathlib import Path
+import pytest
 
 KW = {"run_id": "r1", "agent_type_host": None}
 
@@ -20,7 +22,7 @@ def _keyed(tmp_path, key, stages):
     return manifest, replace(inputs, segment_key=key), schedule
 
 
-def test_keyed_segments_of_one_pipeline_nest_under_their_keys_from_index_zero(tmp_path):
+def test_keyed_segments_of_one_pipeline_nest_under_their_keys_from_index_zero(tmp_path: Path) -> None:
     stages = [_stage("work")]
     script = compose_chain_script(
         [_keyed(tmp_path, "repo-1-a", stages), _keyed(tmp_path, "repo-2-b", stages)], **KW,
@@ -31,12 +33,12 @@ def test_keyed_segments_of_one_pipeline_nest_under_their_keys_from_index_zero(tm
     assert "scratch/run/repo/" not in script
 
 
-def test_a_lone_keyed_segment_still_nests(tmp_path):
+def test_a_lone_keyed_segment_still_nests(tmp_path: Path) -> None:
     script = compose_chain_script([_keyed(tmp_path, "repo-1-a", [_stage("work")])], **KW)
     assert "scratch/run/repo-1-a/work.md" in script and "scratch/run/work.md" not in script
 
 
-def test_each_keyed_segment_is_its_own_leg_and_records_its_key_on_halt(tmp_path):
+def test_each_keyed_segment_is_its_own_leg_and_records_its_key_on_halt(tmp_path: Path) -> None:
     gate = [_stage("gate", halts_unless="ok", schema=GATE_SCHEMA)]
     script = compose_chain_script(
         [_keyed(tmp_path, "repo-1-a", gate), _keyed(tmp_path, "repo-2-b", gate)],
@@ -50,14 +52,14 @@ def test_each_keyed_segment_is_its_own_leg_and_records_its_key_on_halt(tmp_path)
     assert ", pipeline: 'repo', segment: 'repo-2-b'" in script
 
 
-def test_unkeyed_results_carry_no_segment_tag(tmp_path):
+def test_unkeyed_results_carry_no_segment_tag(tmp_path: Path) -> None:
     a = _segment(tmp_path, "pre", [_stage("work")])
     b = _segment(tmp_path, "main", [_stage("work")])
     assert "segment: '" not in compose_chain_script([a, b], **KW).replace("segment: 'pre'", "").replace("segment: 'main'", "")
     assert ", segment:" not in compose_chain_script([a, b], **KW).replace("segment_halts.push({ segment:", "")
 
 
-def test_over_cap_split_is_one_part_per_key_named_by_key(tmp_path, monkeypatch):
+def test_over_cap_split_is_one_part_per_key_named_by_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     stages = [_stage("work")]
     segments = [_keyed(tmp_path, "repo-1-a", stages), _keyed(tmp_path, "repo-2-b", stages)]
     whole = len(compose_chain_script(segments, **KW).encode("utf-8"))
@@ -68,7 +70,7 @@ def test_over_cap_split_is_one_part_per_key_named_by_key(tmp_path, monkeypatch):
     assert "scratch/run/repo-2-b/work.md" in parts[1].script
 
 
-def test_under_cap_part_names_the_keys(tmp_path):
+def test_under_cap_part_names_the_keys(tmp_path: Path) -> None:
     segments = [_keyed(tmp_path, "repo-1-a", [_stage("work")]), _keyed(tmp_path, "repo-2-b", [_stage("work")])]
     (part,) = compose_chain_parts(segments, **KW)
     assert part.pipelines == ("repo-1-a", "repo-2-b")

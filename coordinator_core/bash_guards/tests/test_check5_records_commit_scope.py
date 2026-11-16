@@ -23,6 +23,7 @@ from coordinator_core.win_portability import no_console_creationflags, no_consol
 
 import pytest
 from coordinator_core.guard_messages.testing import envelope_of
+from pathlib import Path
 
 
 def _enveloped(check):
@@ -77,7 +78,7 @@ def _init_session(repo, sid=SID):
     return sdir
 
 
-def _stage(repo, name, content="x"):
+def _stage(repo, name, content: str = "x") -> None:
     (repo / name).write_text(content, encoding="utf-8")
     subprocess.run(["git", "add", name], cwd=repo, check=True, **no_console_passthrough_kwargs())
 
@@ -101,7 +102,7 @@ def _events(repo, sid=SID):
     ]
 
 
-def test_scoped_commit_records_the_pathspec_scope_not_the_whole_index(tmp_path):
+def test_scoped_commit_records_the_pathspec_scope_not_the_whole_index(tmp_path: Path) -> None:
     repo = _init_repo(tmp_path)
     _init_session(repo)
     # Two paths staged; the commit below names ONLY foreign.txt via an

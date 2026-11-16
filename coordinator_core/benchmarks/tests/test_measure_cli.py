@@ -8,13 +8,14 @@ import pytest
 
 from coordinator_core.benchmarks import measure
 from coordinator_core.telemetry import op_latency
+from pathlib import Path
 
 
 pytestmark = pytest.mark.complete
 
 
 @pytest.fixture(autouse=True)
-def _restore_benchmark_origin_env(monkeypatch):
+def _restore_benchmark_origin_env(monkeypatch: pytest.MonkeyPatch) -> None:
     # measure.main declares benchmark origin into the process-global env;
     # monkeypatch restores the pre-test value on teardown.
     # setenv first: delenv(raising=False) on an absent key records no undo, so the
@@ -29,7 +30,7 @@ _STAMPED_RE = re.compile(
 )
 
 
-def test_default_run_prints_one_stamped_line(capsys):
+def test_default_run_prints_one_stamped_line(capsys: pytest.CaptureFixture[str]) -> None:
     rc = measure.main(["--k", "1", "--", sys.executable, "-c", "pass"])
     assert rc == 0
     out = capsys.readouterr().out.strip()
@@ -40,7 +41,7 @@ def test_default_run_prints_one_stamped_line(capsys):
     assert "k=1" in lines[0]
 
 
-def test_once_on_linux_exits_2_and_names_not_implemented_error(capsys):
+def test_once_on_linux_exits_2_and_names_not_implemented_error(capsys: pytest.CaptureFixture[str]) -> None:
     if not sys.platform.startswith("linux"):
         return
     rc = measure.main(["--once", "--", sys.executable, "-c", "pass"])
@@ -49,14 +50,14 @@ def test_once_on_linux_exits_2_and_names_not_implemented_error(capsys):
     assert "NotImplementedError" in err
 
 
-def test_empty_argv_exits_2_with_usage(capsys):
+def test_empty_argv_exits_2_with_usage(capsys: pytest.CaptureFixture[str]) -> None:
     rc = measure.main([])
     assert rc == 2
     err = capsys.readouterr().err
     assert "usage" in err.lower()
 
 
-def test_json_flag_emits_parseable_json(capsys):
+def test_json_flag_emits_parseable_json(capsys: pytest.CaptureFixture[str]) -> None:
     import json
 
     rc = measure.main(["--k", "1", "--json", "--", sys.executable, "-c", "pass"])
@@ -72,7 +73,7 @@ _EXIT3 = [sys.executable, "-c", "import sys; sys.exit(3)"]
 
 
 @pytest.mark.parametrize("flags", [["--k", "1"], ["--k", "1", "--json"]])
-def test_nonzero_rc_batched_prints_no_figure(capsys, flags):
+def test_nonzero_rc_batched_prints_no_figure(capsys: pytest.CaptureFixture[str], flags) -> None:
     rc = measure.main([*flags, "--", *_EXIT3])
     captured = capsys.readouterr()
     assert rc == 1
@@ -80,7 +81,7 @@ def test_nonzero_rc_batched_prints_no_figure(capsys, flags):
     assert "rc=3" in captured.err
 
 
-def test_nonzero_rc_once_prints_no_figure(capsys):
+def test_nonzero_rc_once_prints_no_figure(capsys: pytest.CaptureFixture[str]) -> None:
     try:
         rc = measure.main(["--once", "--json", "--", *_EXIT3])
     except NotImplementedError:
@@ -93,7 +94,7 @@ def test_nonzero_rc_once_prints_no_figure(capsys):
     assert "rc=3" in captured.err
 
 
-def test_suite_shaped_argv_is_refused_before_spawn(monkeypatch, capsys):
+def test_suite_shaped_argv_is_refused_before_spawn(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     called = []
     monkeypatch.setattr(measure, "_run", lambda *a, **k: called.append(a))
     rc = measure.main(["--", sys.executable, "-m", "pytest", "coordinator_core"])
@@ -102,7 +103,7 @@ def test_suite_shaped_argv_is_refused_before_spawn(monkeypatch, capsys):
     assert "measure: refused:" in capsys.readouterr().err
 
 
-def test_scoped_file_and_python_c_argv_reach_run(monkeypatch):
+def test_scoped_file_and_python_c_argv_reach_run(monkeypatch: pytest.MonkeyPatch) -> None:
     seen = []
 
     def fake_run(argv, k, once):
@@ -119,7 +120,7 @@ def test_scoped_file_and_python_c_argv_reach_run(monkeypatch):
 
 
 @pytest.fixture
-def tiny_repo(tmp_path):
+def tiny_repo(tmp_path: Path) -> Path:
     from coordinator_core.git.run import run_git
 
     repo = tmp_path / "src"
@@ -140,7 +141,7 @@ def _clones(repo):
 
 
 @pytest.mark.spawns_process
-def test_clone_mode_without_token_is_refused_before_mint(tiny_repo, monkeypatch, capsys):
+def test_clone_mode_without_token_is_refused_before_mint(tiny_repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     called = []
     monkeypatch.setattr(measure, "single_invocation_tree_process_time", lambda *a, **k: called.append(a))
     rc = measure.main(
@@ -153,7 +154,7 @@ def test_clone_mode_without_token_is_refused_before_mint(tiny_repo, monkeypatch,
 
 
 @pytest.mark.spawns_process
-def test_clone_mode_refuses_working_repo_target(tiny_repo, monkeypatch, capsys):
+def test_clone_mode_refuses_working_repo_target(tiny_repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     called = []
     monkeypatch.setattr(measure, "single_invocation_tree_process_time", lambda *a, **k: called.append(a))
     rc = measure.main(
@@ -167,7 +168,7 @@ def test_clone_mode_refuses_working_repo_target(tiny_repo, monkeypatch, capsys):
 
 
 @pytest.mark.spawns_process
-def test_clone_mode_mints_distinct_clones_and_removes_them(tiny_repo, capsys):
+def test_clone_mode_mints_distinct_clones_and_removes_them(tiny_repo, capsys: pytest.CaptureFixture[str]) -> None:
     import json
     from pathlib import Path
 
@@ -192,7 +193,7 @@ def test_clone_mode_mints_distinct_clones_and_removes_them(tiny_repo, capsys):
 
 
 @pytest.mark.spawns_process
-def test_clone_mode_head_moving_prints_no_figure(tiny_repo, monkeypatch, capsys):
+def test_clone_mode_head_moving_prints_no_figure(tiny_repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     shas = iter(["a" * 40, "b" * 40, "b" * 40])
     monkeypatch.setattr(measure, "head_sha", lambda *a, **k: next(shas))
     rc = measure.main(
@@ -205,7 +206,7 @@ def test_clone_mode_head_moving_prints_no_figure(tiny_repo, monkeypatch, capsys)
     assert "a" * 40 in captured.err and "b" * 40 in captured.err
 
 
-def test_clone_mode_with_once_is_refused(capsys):
+def test_clone_mode_with_once_is_refused(capsys: pytest.CaptureFixture[str]) -> None:
     rc = measure.main(["--clone-per-run", "--once", "--", sys.executable, "-c", "pass", "{clone}"])
     assert rc == 2
     assert "measure: refused:" in capsys.readouterr().err

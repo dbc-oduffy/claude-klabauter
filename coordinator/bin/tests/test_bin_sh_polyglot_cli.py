@@ -36,6 +36,11 @@ import sys
 import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -46,7 +51,7 @@ SIBLING_GUARD = os.path.join(_BIN_DIR, "check-sh-suffix-polyglot.py")
 PYTHON = sys.executable
 
 
-def _load_guard_module():
+def _load_guard_module() -> ModuleType:
     spec = importlib.util.spec_from_file_location("_cli_check_bin_sh_polyglot", GUARD)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -70,7 +75,7 @@ def _run_guard(bin_dir):
     )
 
 
-def test_guard_pair_alone_is_clean(tmp_path):
+def test_guard_pair_alone_is_clean(tmp_path: Path) -> None:
     """A `bin/` containing only the two trampoline-quoting guards must exit 0.
     Both quote the trampoline as data under a `#!/usr/bin/env python3` shebang;
     neither is a polyglot CLI. Drop either from `_GUARD_SELF_SKIP_BASENAMES` and
@@ -85,7 +90,7 @@ def test_guard_pair_alone_is_clean(tmp_path):
     assert "OK" in r.stdout
 
 
-def test_real_offender_still_fires(tmp_path):
+def test_real_offender_still_fires(tmp_path: Path) -> None:
     guard = _load_guard_module()
     bin_dir = _scratch_bin(tmp_path)
     (bin_dir / "some-tool").write_text(

@@ -7,9 +7,11 @@ no-op), and the fail-open path when state-root resolution comes back empty.
 from __future__ import annotations
 
 from coordinator_core.ops import write_workday_start_marker as wwsm
+from pathlib import Path
+import pytest
 
 
-def test_writes_marker_when_absent(tmp_path, monkeypatch):
+def test_writes_marker_when_absent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wwsm, "_resolve_state_root", lambda: str(tmp_path))
     monkeypatch.setattr(wwsm, "local_day", lambda: "2026-07-25")
 
@@ -22,7 +24,7 @@ def test_writes_marker_when_absent(tmp_path, monkeypatch):
     assert "written" in text
 
 
-def test_overwrites_stale_marker(tmp_path, monkeypatch):
+def test_overwrites_stale_marker(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wwsm, "_resolve_state_root", lambda: str(tmp_path))
     monkeypatch.setattr(wwsm, "local_day", lambda: "2026-07-25")
 
@@ -36,7 +38,7 @@ def test_overwrites_stale_marker(tmp_path, monkeypatch):
     assert "written" in text
 
 
-def test_already_fresh_is_a_noop(tmp_path, monkeypatch):
+def test_already_fresh_is_a_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wwsm, "_resolve_state_root", lambda: str(tmp_path))
     monkeypatch.setattr(wwsm, "local_day", lambda: "2026-07-25")
 
@@ -51,7 +53,7 @@ def test_already_fresh_is_a_noop(tmp_path, monkeypatch):
     assert "already fresh" in text
 
 
-def test_unresolvable_state_root_fails_open(monkeypatch):
+def test_unresolvable_state_root_fails_open(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wwsm, "_resolve_state_root", lambda: None)
 
     text, rc = wwsm.write_marker()
@@ -60,11 +62,11 @@ def test_unresolvable_state_root_fails_open(monkeypatch):
     assert text == ""
 
 
-def test_main_rejects_arguments():
+def test_main_rejects_arguments() -> None:
     assert wwsm.main(["--bogus"]) == 2
 
 
-def test_main_writes_and_returns_zero(tmp_path, monkeypatch):
+def test_main_writes_and_returns_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(wwsm, "_resolve_state_root", lambda: str(tmp_path))
     monkeypatch.setattr(wwsm, "local_day", lambda: "2026-07-25")
 

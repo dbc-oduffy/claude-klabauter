@@ -16,6 +16,7 @@ import pytest
 from coordinator_core.ops.scope_warning_resolve import VALID_RESOLUTIONS, main, resolve
 from coordinator_core.session_hub_path import session_dir_for
 from coordinator_core.win_portability import no_console_passthrough_kwargs
+from pathlib import Path
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -31,7 +32,7 @@ _LOG_LINES = [
 ]
 
 
-def _make_repo(tmp_path, session_id: str = "test-session-1"):
+def _make_repo(tmp_path, session_id: str = "test-session-1") -> tuple[str, Path]:
     sess_dir = session_dir_for(tmp_path / ".git", session_id)
     sess_dir.mkdir(parents=True)
     log = sess_dir / "scope-warnings.log"
@@ -49,7 +50,7 @@ def _make_repo(tmp_path, session_id: str = "test-session-1"):
     [(1, "legitimate-mine"), (2, "not-mine-unstaged"), (3, "not-mine-committed-anyway"),
      (1, "orphan-claimed"), (1, "orphan-rejected")],
 )
-def test_1_to_5_resolution_written_to_target_line(tmp_path, line_no, resolution):
+def test_1_to_5_resolution_written_to_target_line(tmp_path: Path, line_no, resolution) -> None:
     root, log = _make_repo(tmp_path)
     text, rc = resolve("test-session-1", str(line_no), resolution, git_root=root)
     assert rc == 0
@@ -57,7 +58,7 @@ def test_1_to_5_resolution_written_to_target_line(tmp_path, line_no, resolution)
     assert resolution in lines[line_no - 1]
 
 
-def test_6_sibling_lines_untouched(tmp_path):
+def test_6_sibling_lines_untouched(tmp_path: Path) -> None:
     root, log = _make_repo(tmp_path)
     resolve("test-session-1", "1", "legitimate-mine", git_root=root)
     lines = log.read_text(encoding="utf-8").splitlines()
@@ -70,19 +71,19 @@ def test_6_sibling_lines_untouched(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_7_line_number_beyond_file_length_exits_nonzero(tmp_path):
+def test_7_line_number_beyond_file_length_exits_nonzero(tmp_path: Path) -> None:
     root, _log = _make_repo(tmp_path)
     text, rc = resolve("test-session-1", "99", "legitimate-mine", git_root=root)
     assert rc != 0
 
 
-def test_8_invalid_resolution_code_exits_nonzero(tmp_path):
+def test_8_invalid_resolution_code_exits_nonzero(tmp_path: Path) -> None:
     root, _log = _make_repo(tmp_path)
     text, rc = resolve("test-session-1", "1", "not-a-real-resolution", git_root=root)
     assert rc != 0
 
 
-def test_9_missing_log_file_exits_nonzero(tmp_path):
+def test_9_missing_log_file_exits_nonzero(tmp_path: Path) -> None:
     session_dir_for(tmp_path / ".git", "test-session-1").mkdir(parents=True)
     text, rc = resolve("test-session-1", "1", "legitimate-mine", git_root=str(tmp_path))
     assert rc != 0
@@ -93,7 +94,7 @@ def test_9_missing_log_file_exits_nonzero(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_line_number_format_rejected_before_other_checks(tmp_path):
+def test_line_number_format_rejected_before_other_checks(tmp_path: Path) -> None:
     root, _log = _make_repo(tmp_path)
     # both an invalid line-number format AND an invalid resolution — format
     # check must win (matches bash validation order: format before allowlist)
@@ -101,14 +102,14 @@ def test_line_number_format_rejected_before_other_checks(tmp_path):
     assert rc == 1
 
 
-def test_not_in_git_repo_exits_1(capsys):
+def test_not_in_git_repo_exits_1(capsys: pytest.CaptureFixture[str]) -> None:
     text, rc = resolve("sess", "1", "legitimate-mine", git_root="")
     captured = capsys.readouterr()
     assert rc == 1
     assert "not inside a git repository" in captured.err
 
 
-def test_last_field_anchoring_survives_embedded_pipes(tmp_path):
+def test_last_field_anchoring_survives_embedded_pipes(tmp_path: Path) -> None:
     # A field earlier in the line containing a literal '|' character must
     # not mis-anchor the last-field replace — $NF in awk / fields[-1] in
     # Python both anchor on the LAST '|'-delimited segment regardless of
@@ -125,7 +126,7 @@ def test_last_field_anchoring_survives_embedded_pipes(tmp_path):
     assert "msg with a | pipe in it" in result
 
 
-def test_noop_when_content_already_matches(tmp_path):
+def test_noop_when_content_already_matches(tmp_path: Path) -> None:
     root, log = _make_repo(tmp_path)
     resolve("test-session-1", "1", "legitimate-mine", git_root=root)
     before = log.read_text(encoding="utf-8")
@@ -136,7 +137,7 @@ def test_noop_when_content_already_matches(tmp_path):
     assert before == after
 
 
-def test_valid_resolutions_allowlist_is_exact():
+def test_valid_resolutions_allowlist_is_exact() -> None:
     assert VALID_RESOLUTIONS == (
         "legitimate-mine",
         "not-mine-unstaged",
@@ -146,7 +147,7 @@ def test_valid_resolutions_allowlist_is_exact():
     )
 
 
-def test_main_argc_mismatch_exits_1(capsys):
+def test_main_argc_mismatch_exits_1(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["only-one-arg"])
     captured = capsys.readouterr()
     assert rc == 1
@@ -154,7 +155,7 @@ def test_main_argc_mismatch_exits_1(capsys):
     assert "Usage: scope-warning-resolve" in captured.err
 
 
-def test_main_happy_path(tmp_path, monkeypatch, capsys):
+def test_main_happy_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     import subprocess
 
     root, log = _make_repo(tmp_path)

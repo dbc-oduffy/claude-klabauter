@@ -20,6 +20,7 @@ import pytest
 
 from coordinator_core import claims_emit
 from coordinator_core.frontmatter import schema_drift_watch
+from pathlib import Path
 
 VALID_CLAIM = {
     "id": "c1",
@@ -32,7 +33,7 @@ VALID_PIPELINE = "linux-x86_64"
 VALID_PRODUCER = "some-producer"
 
 
-def _emit(tmp_path, claims=None, **overrides):
+def _emit(tmp_path, claims=None, **overrides) -> int:
     kwargs = dict(
         claims=[VALID_CLAIM] if claims is None else claims,
         producer=VALID_PRODUCER,
@@ -44,7 +45,7 @@ def _emit(tmp_path, claims=None, **overrides):
     return claims_emit.emit_claims(**kwargs)
 
 
-def test_ac1_writes_exactly_two_files_and_nothing_else(tmp_path):
+def test_ac1_writes_exactly_two_files_and_nothing_else(tmp_path: Path) -> None:
     before = set(tmp_path.iterdir())
     assert before == set()
 
@@ -56,7 +57,7 @@ def test_ac1_writes_exactly_two_files_and_nothing_else(tmp_path):
     assert after == expected
 
 
-def test_ac2_claims_file_is_bare_top_level_array(tmp_path):
+def test_ac2_claims_file_is_bare_top_level_array(tmp_path: Path) -> None:
     rc = _emit(tmp_path)
     assert rc == claims_emit.EXIT_OK
 
@@ -65,12 +66,12 @@ def test_ac2_claims_file_is_bare_top_level_array(tmp_path):
     assert isinstance(loaded, list)
 
 
-def test_ac3_valid_record_passes_per_record_schema_validation(tmp_path):
+def test_ac3_valid_record_passes_per_record_schema_validation(tmp_path: Path) -> None:
     rc = _emit(tmp_path, claims=[VALID_CLAIM])
     assert rc == claims_emit.EXIT_OK
 
 
-def test_ac3_invalid_record_rejected_with_producer_failure_exit(tmp_path):
+def test_ac3_invalid_record_rejected_with_producer_failure_exit(tmp_path: Path) -> None:
     bad_claim = {"id": "c1", "confidence": "NOT-A-REAL-CONFIDENCE-LEVEL"}
     rc = _emit(tmp_path, claims=[bad_claim])
     assert rc == claims_emit.EXIT_PRODUCER_FAILURE
@@ -78,7 +79,7 @@ def test_ac3_invalid_record_rejected_with_producer_failure_exit(tmp_path):
     assert not (tmp_path / "run1.claims.meta.json").exists()
 
 
-def test_ac4_sidecar_is_object_with_at_least_ran_at_and_pipeline(tmp_path):
+def test_ac4_sidecar_is_object_with_at_least_ran_at_and_pipeline(tmp_path: Path) -> None:
     rc = _emit(tmp_path)
     assert rc == claims_emit.EXIT_OK
 
@@ -98,7 +99,7 @@ def test_ac4_sidecar_is_object_with_at_least_ran_at_and_pipeline(tmp_path):
     ],
     ids=["naive", "date-only", "empty"],
 )
-def test_ac5_ran_at_rejected_variants_exit_2(tmp_path, bad_ran_at):
+def test_ac5_ran_at_rejected_variants_exit_2(tmp_path: Path, bad_ran_at) -> None:
     rc = _emit(tmp_path, ran_at=bad_ran_at)
     assert rc == claims_emit.EXIT_INVALID_INVOCATION
     assert not (tmp_path / "run1.claims.json").exists()
@@ -110,14 +111,14 @@ def test_ac5_ran_at_rejected_variants_exit_2(tmp_path, bad_ran_at):
     ["", "   ", None],
     ids=["empty", "whitespace", "none"],
 )
-def test_ac6_blank_pipeline_exits_2(tmp_path, bad_pipeline):
+def test_ac6_blank_pipeline_exits_2(tmp_path: Path, bad_pipeline) -> None:
     rc = _emit(tmp_path, pipeline=bad_pipeline)
     assert rc == claims_emit.EXIT_INVALID_INVOCATION
     assert not (tmp_path / "run1.claims.json").exists()
     assert not (tmp_path / "run1.claims.meta.json").exists()
 
 
-def test_ac6_blank_pipeline_never_becomes_producer_slug(tmp_path):
+def test_ac6_blank_pipeline_never_becomes_producer_slug(tmp_path: Path) -> None:
     rc = claims_emit.emit_claims(
         claims=[VALID_CLAIM],
         producer=VALID_PRODUCER,
@@ -130,27 +131,27 @@ def test_ac6_blank_pipeline_never_becomes_producer_slug(tmp_path):
     assert not meta_path.exists()
 
 
-def test_ac7_exit_0_on_success(tmp_path):
+def test_ac7_exit_0_on_success(tmp_path: Path) -> None:
     assert _emit(tmp_path) == claims_emit.EXIT_OK
 
 
-def test_ac7_exit_1_on_producer_side_failure(tmp_path):
+def test_ac7_exit_1_on_producer_side_failure(tmp_path: Path) -> None:
     bad_claim = {"confidence": "GARBAGE-VALUE"}
     assert _emit(tmp_path, claims=[bad_claim]) == claims_emit.EXIT_PRODUCER_FAILURE
 
 
-def test_ac7_exit_2_on_invalid_invocation(tmp_path):
+def test_ac7_exit_2_on_invalid_invocation(tmp_path: Path) -> None:
     assert _emit(tmp_path, producer="") == claims_emit.EXIT_INVALID_INVOCATION
 
 
-def test_ac7_schema_failure_is_exit_1_not_exit_2(tmp_path):
+def test_ac7_schema_failure_is_exit_1_not_exit_2(tmp_path: Path) -> None:
     bad_claim = {"confidence": "GARBAGE-VALUE"}
     rc = _emit(tmp_path, claims=[bad_claim])
     assert rc == claims_emit.EXIT_PRODUCER_FAILURE
     assert rc != claims_emit.EXIT_INVALID_INVOCATION
 
 
-def test_ac8_mid_pair_failure_leaves_neither_file_and_no_temps(tmp_path, monkeypatch):
+def test_ac8_mid_pair_failure_leaves_neither_file_and_no_temps(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     claims_path = tmp_path / "run1.claims.json"
     meta_path = tmp_path / "run1.claims.meta.json"
     real_replace = os.replace
@@ -177,7 +178,7 @@ def test_ac8_mid_pair_failure_leaves_neither_file_and_no_temps(tmp_path, monkeyp
     assert leftovers == []
 
 
-def test_ac9_output_path_isolation_diff_is_exactly_the_two_files(tmp_path):
+def test_ac9_output_path_isolation_diff_is_exactly_the_two_files(tmp_path: Path) -> None:
     sibling_dir = tmp_path / "untouched-sibling"
     sibling_dir.mkdir()
     (sibling_dir / "leave-me-alone.txt").write_text("hi", encoding="utf-8")
@@ -198,13 +199,13 @@ def test_ac9_output_path_isolation_diff_is_exactly_the_two_files(tmp_path):
     assert removed == set()
 
 
-def test_ac10_vendored_schema_appears_in_vendored_schema_paths():
+def test_ac10_vendored_schema_appears_in_vendored_schema_paths() -> None:
     paths = schema_drift_watch.vendored_schema_paths()
     names = {p.name for p in paths}
     assert "research-claim.schema.json" in names
 
 
-def test_a_failed_re_run_leaves_the_pre_existing_pair_intact(tmp_path, monkeypatch):
+def test_a_failed_re_run_leaves_the_pre_existing_pair_intact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     first_rc = _emit(tmp_path)
     assert first_rc == claims_emit.EXIT_OK
     claims_path = tmp_path / "run1.claims.json"
@@ -243,7 +244,7 @@ def test_a_failed_re_run_leaves_the_pre_existing_pair_intact(tmp_path, monkeypat
     assert leftovers == []
 
 
-def test_a_failed_restore_never_destroys_the_caller_s_only_surviving_copy(tmp_path, monkeypatch):
+def test_a_failed_restore_never_destroys_the_caller_s_only_surviving_copy(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     first_rc = _emit(tmp_path)
     assert first_rc == claims_emit.EXIT_OK
     claims_path = tmp_path / "run1.claims.json"
@@ -281,7 +282,7 @@ def test_a_failed_restore_never_destroys_the_caller_s_only_surviving_copy(tmp_pa
     )
 
 
-def test_failed_re_run_restores_when_only_claims_json_pre_exists(tmp_path, monkeypatch):
+def test_failed_re_run_restores_when_only_claims_json_pre_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     claims_path = tmp_path / "run1.claims.json"
     meta_path = tmp_path / "run1.claims.meta.json"
     original_claims_bytes = b'[{"pre-existing": "claims-only"}]\n'
@@ -314,7 +315,7 @@ def test_failed_re_run_restores_when_only_claims_json_pre_exists(tmp_path, monke
     assert leftovers == []
 
 
-def test_failed_re_run_restores_when_only_meta_json_pre_exists(tmp_path, monkeypatch):
+def test_failed_re_run_restores_when_only_meta_json_pre_exists(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     claims_path = tmp_path / "run1.claims.json"
     meta_path = tmp_path / "run1.claims.meta.json"
     original_meta_bytes = b'{"pre-existing": "meta-only"}\n'
@@ -347,14 +348,14 @@ def test_failed_re_run_restores_when_only_meta_json_pre_exists(tmp_path, monkeyp
     assert leftovers == []
 
 
-def test_a_repeated_claim_id_is_refused_and_writes_nothing(tmp_path, capsys):
+def test_a_repeated_claim_id_is_refused_and_writes_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     dup = [VALID_CLAIM, {**VALID_CLAIM, "claim_text": "Another."}]
     assert _emit(tmp_path, claims=dup) == claims_emit.EXIT_PRODUCER_FAILURE
     assert "'c1' repeats at [0] and [1]" in capsys.readouterr().err
     assert list(tmp_path.iterdir()) == []
 
 
-def test_local_only_refuses_an_out_stem_inside_a_checkout(tmp_path, capsys):
+def test_local_only_refuses_an_out_stem_inside_a_checkout(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     (repo / "docs").mkdir()
@@ -364,7 +365,7 @@ def test_local_only_refuses_an_out_stem_inside_a_checkout(tmp_path, capsys):
     assert list((repo / "docs").iterdir()) == []
 
 
-def test_local_only_writes_the_pair_outside_any_checkout(tmp_path):
+def test_local_only_writes_the_pair_outside_any_checkout(tmp_path: Path) -> None:
     local = tmp_path / "local"
     local.mkdir()
     assert _emit(tmp_path, out_stem=str(local / "run1"), local_only=True) == claims_emit.EXIT_OK
@@ -374,18 +375,18 @@ def test_local_only_writes_the_pair_outside_any_checkout(tmp_path):
 ALLOWED_CLAIM_TYPES = ("fact", "limitation", "opinion", "pattern", "recommendation", "feature_update")
 
 
-def test_claim_type_enum_is_the_pinned_contract():
+def test_claim_type_enum_is_the_pinned_contract() -> None:
     with open(claims_emit.DEFAULT_SCHEMA_PATH, encoding="utf-8") as f:
         schema = json.load(f)
     assert tuple(schema["properties"]["type"]["enum"]) == ALLOWED_CLAIM_TYPES
 
 
 @pytest.mark.parametrize("claim_type", ALLOWED_CLAIM_TYPES)
-def test_every_allowed_claim_type_is_accepted(tmp_path, claim_type):
+def test_every_allowed_claim_type_is_accepted(tmp_path: Path, claim_type) -> None:
     assert _emit(tmp_path, claims=[{**VALID_CLAIM, "type": claim_type}]) == claims_emit.EXIT_OK
 
 
-def test_type_inference_is_refused_naming_the_allowed_types_and_writes_nothing(tmp_path, capsys):
+def test_type_inference_is_refused_naming_the_allowed_types_and_writes_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = _emit(tmp_path, claims=[{**VALID_CLAIM, "type": "inference"}])
 
     assert rc == claims_emit.EXIT_PRODUCER_FAILURE

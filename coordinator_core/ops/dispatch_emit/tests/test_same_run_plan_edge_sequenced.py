@@ -7,6 +7,7 @@ from __future__ import annotations
 import textwrap
 
 from coordinator_core.ops.dispatch_emit import inventory_mint as im
+from pathlib import Path
 
 _PLAN_A = """\
 ---
@@ -78,7 +79,7 @@ def _mint(inv, **kw):
     return im.mint_rows(rows, inventory_path=inv, **kw)
 
 
-def test_in_run_target_becomes_depends_on_edge_and_does_not_withhold(tmp_path):
+def test_in_run_target_becomes_depends_on_edge_and_does_not_withhold(tmp_path: Path) -> None:
     inv = _repo(tmp_path, {"plan-a": _PLAN_A, "plan-b": _PLAN_B}, [("PA", "plan-a"), ("PB", "plan-b")])
     withheld: dict = {}
 
@@ -89,7 +90,7 @@ def test_in_run_target_becomes_depends_on_edge_and_does_not_withhold(tmp_path):
     assert {"chunk": "PA.A1", "gate_kind": "output-consumption-runtime"} in by_id["PB.B1"]["depends_on"]
 
 
-def test_edge_orders_when_the_dependent_item_precedes_its_target_in_the_table(tmp_path):
+def test_edge_orders_when_the_dependent_item_precedes_its_target_in_the_table(tmp_path: Path) -> None:
     inv = _repo(tmp_path, {"plan-a": _PLAN_A, "plan-b": _PLAN_B}, [("PB", "plan-b"), ("PA", "plan-a")])
 
     by_id = {r["id"]: r for r in _mint(inv)}
@@ -97,7 +98,7 @@ def test_edge_orders_when_the_dependent_item_precedes_its_target_in_the_table(tm
     assert [e["chunk"] for e in by_id["PB.B1"]["depends_on"]] == ["PA.A1"]
 
 
-def test_edge_outside_the_run_still_withholds(tmp_path):
+def test_edge_outside_the_run_still_withholds(tmp_path: Path) -> None:
     inv = _repo(
         tmp_path,
         {"plan-a": _PLAN_A, "plan-b": _PLAN_B_OUT_OF_RUN, "plan-z": _PLAN_Z},
@@ -111,7 +112,7 @@ def test_edge_outside_the_run_still_withholds(tmp_path):
     assert "PB" in withheld
 
 
-def test_tranche_keeps_the_dependent_with_its_in_run_predecessor(tmp_path):
+def test_tranche_keeps_the_dependent_with_its_in_run_predecessor(tmp_path: Path) -> None:
     inv = _repo(tmp_path, {"plan-a": _PLAN_A, "plan-b": _PLAN_B}, [("PB", "plan-b"), ("PA", "plan-a")])
     minted = _mint(inv)
 
@@ -131,7 +132,7 @@ _PLAN_A_TWO = _PLAN_A.replace(
 )
 
 
-def test_budget_one_still_splits_the_two_row_pair(tmp_path):
+def test_budget_one_still_splits_the_two_row_pair(tmp_path: Path) -> None:
     inv = _repo(tmp_path, {"plan-a": _PLAN_A, "plan-b": _PLAN_B}, [("PB", "plan-b"), ("PA", "plan-a")])
 
     taken, report = im.select_tranche(_mint(inv), ["PB", "PA"], 1, bound={"PB": {"PA"}})
@@ -140,7 +141,7 @@ def test_budget_one_still_splits_the_two_row_pair(tmp_path):
     assert "split across tranches" in report["deferred"][0]["reason"]
 
 
-def test_squeeze_takes_the_bound_pair_together_and_defers_the_unrelated_item(tmp_path):
+def test_squeeze_takes_the_bound_pair_together_and_defers_the_unrelated_item(tmp_path: Path) -> None:
     inv = _repo(
         tmp_path,
         {"plan-a": _PLAN_A, "plan-b": _PLAN_B, "plan-c": _PLAN_C},
@@ -158,7 +159,7 @@ def test_squeeze_takes_the_bound_pair_together_and_defers_the_unrelated_item(tmp
     assert sorted(r["id"] for r in unbound_taken) == ["PA.A1", "PC.C1"]
 
 
-def test_mint_spine_tranche_keeps_the_pair_in_one_tranche(tmp_path):
+def test_mint_spine_tranche_keeps_the_pair_in_one_tranche(tmp_path: Path) -> None:
     inv = _repo(
         tmp_path,
         {"plan-a": _PLAN_A, "plan-b": _PLAN_B, "plan-c": _PLAN_C},
@@ -172,7 +173,7 @@ def test_mint_spine_tranche_keeps_the_pair_in_one_tranche(tmp_path):
     assert [d["plan"] for d in report["deferred"]] == ["PC"]
 
 
-def test_status_form_edge_orders_on_every_minted_chunk_of_the_in_run_plan(tmp_path):
+def test_status_form_edge_orders_on_every_minted_chunk_of_the_in_run_plan(tmp_path: Path) -> None:
     inv = _repo(tmp_path, {"plan-a": _PLAN_A_TWO, "plan-b": _PLAN_B_STATUS}, [("PB", "plan-b"), ("PA", "plan-a")])
     withheld: dict = {}
     bound: dict = {}

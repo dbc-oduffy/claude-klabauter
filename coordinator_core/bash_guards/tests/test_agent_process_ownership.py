@@ -11,6 +11,7 @@ import pytest
 
 from coordinator_core.bash_guards import agent_process_ownership as apo
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 SESSION = "sess-1"
 AGENT = "agent-a"
@@ -21,10 +22,10 @@ class FakePsutil:
     class Error(Exception):
         pass
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.procs = {}
 
-    def add(self, pid, ppid, created, cmdline, sid=None):
+    def add(self, pid, ppid, created, cmdline, sid=None) -> None:
         self.procs[pid] = FakeProc(self, pid, ppid, created, cmdline, sid)
 
     def Process(self, pid):
@@ -37,7 +38,7 @@ class FakePsutil:
 
 
 class FakeProc:
-    def __init__(self, table, pid, ppid, created, cmdline, sid):
+    def __init__(self, table, pid, ppid, created, cmdline, sid) -> None:
         self.table, self.pid, self.ppid = table, pid, ppid
         self._created, self._cmdline, self.sid = created, cmdline, sid
         self.info = {"pid": pid, "cmdline": cmdline, "create_time": created}
@@ -53,14 +54,14 @@ class FakeProc:
 
 
 @pytest.fixture
-def home(tmp_path, monkeypatch):
+def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr(apo, "settings_home", lambda: tmp_path)
     monkeypatch.delenv("CLAUDE_PID", raising=False)
     return tmp_path
 
 
 @pytest.fixture
-def table(monkeypatch):
+def table(monkeypatch: pytest.MonkeyPatch) -> FakePsutil:
     t = FakePsutil()
     monkeypatch.setattr(apo, "_psutil", lambda: t)
     monkeypatch.setattr(apo, "_has_session_ids", lambda: True)
@@ -70,7 +71,7 @@ def table(monkeypatch):
     return t
 
 
-def _record(at):
+def _record(at) -> None:
     apo.record_agent_command(SESSION, AGENT, CMD)
     # Pin the recorded time for deterministic comparisons.
     path = apo.ledger_path(SESSION)
@@ -81,11 +82,11 @@ def _record(at):
     path.write_text("\n".join(json.dumps(r) for r in rows) + "\n")
 
 
-def _shell(table, pid=100, created=1000.0, sid=100):
+def _shell(table, pid: int = 100, created: float = 1000.0, sid: int = 100) -> None:
     table.add(pid, 1, created, ["bash", "-c", CMD], sid)
 
 
-def test_ledger_append_only_and_torn_row_skipped(home):
+def test_ledger_append_only_and_torn_row_skipped(home) -> None:
     apo.record_agent_command(SESSION, AGENT, "echo 1")
     apo.record_agent_command(SESSION, AGENT, "echo 2")
     path = apo.ledger_path(SESSION)
@@ -97,55 +98,55 @@ def test_ledger_append_only_and_torn_row_skipped(home):
     assert path.is_relative_to(home)
 
 
-def test_missing_ledger_denies(home, table):
+def test_missing_ledger_denies(home, table) -> None:
     _shell(table)
     table.add(200, 100, 1001.0, ["python", "scratch/x/rescore.py", "--fast"], 100)
     assert apo.pid_owned_by_agent(200, AGENT, SESSION) is False
 
 
-def test_own_child_allowed_even_when_reparented(home, table):
+def test_own_child_allowed_even_when_reparented(home, table) -> None:
     _record(1000.0)
     _shell(table)
     table.add(200, 1, 1001.0, ["python", "scratch/x/rescore.py", "--fast"], 100)
     assert apo.pid_owned_by_agent(200, AGENT, SESSION) is True
 
 
-def test_sibling_agent_denied(home, table):
+def test_sibling_agent_denied(home, table) -> None:
     _record(1000.0)
     _shell(table)
     table.add(200, 1, 1001.0, ["python", "scratch/x/rescore.py", "--fast"], 100)
     assert apo.pid_owned_by_agent(200, "agent-b", SESSION) is False
 
 
-def test_em_or_foreign_session_denied(home, table):
+def test_em_or_foreign_session_denied(home, table) -> None:
     _record(1000.0)
     _shell(table)
     table.add(300, 1, 1001.0, ["python", "scratch/x/rescore.py", "--fast"], 999)
     assert apo.pid_owned_by_agent(300, AGENT, SESSION) is False
 
 
-def test_same_session_but_unrelated_cmdline_denied(home, table):
+def test_same_session_but_unrelated_cmdline_denied(home, table) -> None:
     _record(1000.0)
     _shell(table)
     table.add(400, 1, 1001.0, ["vim", "notes.txt"], 100)
     assert apo.pid_owned_by_agent(400, AGENT, SESSION) is False
 
 
-def test_target_older_than_shell_denied(home, table):
+def test_target_older_than_shell_denied(home, table) -> None:
     _record(1000.0)
     _shell(table)
     table.add(200, 1, 900.0, ["python", "scratch/x/rescore.py", "--fast"], 100)
     assert apo.pid_owned_by_agent(200, AGENT, SESSION) is False
 
 
-def test_reused_shell_pid_older_than_record_denied(home, table):
+def test_reused_shell_pid_older_than_record_denied(home, table) -> None:
     _record(5000.0)
     _shell(table, created=1000.0)
     table.add(200, 100, 5001.0, ["python", "scratch/x/rescore.py", "--fast"], 100)
     assert apo.pid_owned_by_agent(200, AGENT, SESSION) is False
 
 
-def test_ambiguous_shell_match_denied(home, table):
+def test_ambiguous_shell_match_denied(home, table) -> None:
     _record(1000.0)
     _shell(table)
     table.add(101, 1, 1000.5, ["bash", "-c", CMD], 101)
@@ -153,7 +154,7 @@ def test_ambiguous_shell_match_denied(home, table):
     assert apo.pid_owned_by_agent(200, AGENT, SESSION) is False
 
 
-def test_pid_floor_and_claude_pid_denied(home, table, monkeypatch):
+def test_pid_floor_and_claude_pid_denied(home, table, monkeypatch: pytest.MonkeyPatch) -> None:
     _record(1000.0)
     _shell(table)
     table.add(1, 0, 1.0, ["init"], 1)
@@ -164,7 +165,7 @@ def test_pid_floor_and_claude_pid_denied(home, table, monkeypatch):
     assert apo.pid_owned_by_agent(200, AGENT, SESSION) is False
 
 
-def test_windows_ancestor_walk_without_session_id(home, table, monkeypatch):
+def test_windows_ancestor_walk_without_session_id(home, table, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(apo, "_has_session_ids", lambda: False)
     _record(1000.0)
     _shell(table)
@@ -181,7 +182,7 @@ def test_windows_ancestor_walk_without_session_id(home, table, monkeypatch):
 
 @pytest.mark.spawns_process
 @pytest.mark.skipif(not hasattr(os, "getsid"), reason="POSIX sessions only")
-def test_live_sleep_own_vs_new_session(home, monkeypatch):
+def test_live_sleep_own_vs_new_session(home, monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("psutil")
     monkeypatch.delenv("CLAUDE_PID", raising=False)
     shell_cmd = "import subprocess; subprocess.run(['sleep', '47.31'])"
@@ -207,39 +208,39 @@ def test_live_sleep_own_vs_new_session(home, monkeypatch):
             p.wait()
 
 
-def test_orphan_after_dead_shell_with_command_text_allowed(home, table):
+def test_orphan_after_dead_shell_with_command_text_allowed(home, table) -> None:
     _record(1000.0)
     table.add(500, 9999, 1001.0, ["python", "scratch/x/rescore.py", "--fast"], 777)
     assert apo.pid_owned_by_agent(500, AGENT, SESSION) is True
 
 
-def test_orphan_with_cwd_under_ledgered_path_allowed(home, table):
+def test_orphan_with_cwd_under_ledgered_path_allowed(home, table) -> None:
     apo.record_agent_command(SESSION, AGENT, "cd scratch/spike-run && ./editor &")
     table.add(510, 1, time.time() + 5, ["CrashReportClient", "-x"], 777)
     table.procs[510].cwd = lambda: "E:/r/scratch/spike-run/out"
     assert apo.pid_owned_by_agent(510, AGENT, SESSION) is True
 
 
-def test_orphan_under_repo_root_token_denied(home, table):
+def test_orphan_under_repo_root_token_denied(home, table) -> None:
     apo.record_agent_command(SESSION, AGENT, "cd E:/r/repo-root && ./editor &")  # abs-path-ok: synthetic fixture path, never touched
     table.add(515, 1, time.time() + 5, ["python", "-c", "refresh()"], 777)
     table.procs[515].cwd = lambda: "E:\\r\\repo-root"  # abs-path-ok: synthetic fixture path, never touched
     assert apo.pid_owned_by_agent(515, AGENT, SESSION) is False
 
 
-def test_unrelated_orphan_denied(home, table):
+def test_unrelated_orphan_denied(home, table) -> None:
     _record(1000.0)
     table.add(520, 1, 1001.0, ["vim", "notes.txt"], 777)
     assert apo.pid_owned_by_agent(520, AGENT, SESSION) is False
 
 
-def test_orphan_older_than_row_denied(home, table):
+def test_orphan_older_than_row_denied(home, table) -> None:
     _record(1000.0)
     table.add(530, 1, 500.0, ["python", "scratch/x/rescore.py", "--fast"], 777)
     assert apo.pid_owned_by_agent(530, AGENT, SESSION) is False
 
 
-def test_orphan_sibling_agent_denied(home, table):
+def test_orphan_sibling_agent_denied(home, table) -> None:
     _record(1000.0)
     table.add(540, 1, 1001.0, ["python", "scratch/x/rescore.py", "--fast"], 777)
     assert apo.pid_owned_by_agent(540, "agent-b", SESSION) is False

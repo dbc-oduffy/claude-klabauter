@@ -11,6 +11,10 @@ from __future__ import annotations
 import re
 from typing import Any, Dict, Optional
 
+from coordinator_core.bash_guards._dc_shell_text import (
+    _strip_heredoc_bodies,
+    _strip_shell_comments_for_prose_scan,
+)
 from coordinator_core.bash_guards._rewrite_support import _advisory_record
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 
@@ -63,7 +67,9 @@ def check_piped_pytest_exit(
         return None
     if any(marker in cmd for marker in _SAFE_MARKERS):
         return None
-    bare = _QUOTED.sub('""', cmd)
+    bare = _QUOTED.sub(
+        '""', _strip_shell_comments_for_prose_scan(_strip_heredoc_bodies(cmd))
+    )
     for match in _PYTEST.finditer(bare):
         rest = bare[match.end():]
         end = _SEGMENT_END.search(rest)

@@ -36,11 +36,12 @@ def caller_family(env: Mapping[str, str]) -> Optional[str]:
     return None
 
 
-def _measure(repo_root: str) -> tuple[int, int]:
-    """(files, lines) of the uncommitted edit: the tracked diff against HEAD plus untracked, non-ignored files.
+def _measure(repo_root: str) -> tuple[int, int, bool]:
+    """(files, lines, truncated) of the uncommitted edit: the tracked diff against HEAD plus untracked, non-ignored files.
 
     A binary row is a file with 0 lines. At most two git spawns; the untracked listing runs only
-    while the tracked diff is still within the XS bound, and the count stops once the bound is passed.
+    while the tracked diff is still within the XS bound, and the count stops once the bound is passed;
+    `truncated` is true then, and files/lines are lower bounds.
     `.coordinator-local` and `state/` are engine-written records (untracked until committed), never
     a hand edit, so they are not counted.
     """
@@ -59,20 +60,19 @@ def _measure(repo_root: str) -> tuple[int, int]:
             if n.isdigit():
                 lines += int(n)
     if files > xs_lane_budget.BUDGET_FILES or lines > xs_lane_budget.BUDGET_LINES:
-        return files, lines
+        return files, lines, True
     listing = subprocess.run(
         ["git", "-C", str(repo_root), "ls-files", "--others", "--exclude-standard", "-z",
          "--", ".", ":(exclude).coordinator-local", ":(exclude)state"],
         capture_output=True, timeout=5, check=True, creationflags=flags,
     )
-    for raw in listing.stdout.split(b"\0"):
-        if not raw:
-            continue
+    rows = [raw for raw in listing.stdout.split(b"\0") if raw]
+    for i, raw in enumerate(rows):
         files += 1
         lines += _untracked_lines(Path(repo_root) / raw.decode("utf-8", "surrogateescape"))
         if files > xs_lane_budget.BUDGET_FILES or lines > xs_lane_budget.BUDGET_LINES:
-            break
-    return files, lines
+            return files, lines, i < len(rows) - 1
+    return files, lines, False
 
 
 def _untracked_lines(path: Path) -> int:
@@ -101,12 +101,23 @@ def _mark(stamp: Path, now: float) -> None:
     stamp.write_text(repr(now), encoding="ascii")
 
 
+def mark_nag_emitted(repo_root, session_id: Optional[str]) -> None:
+    """Open the nag window for this session; the writer calls it once the nag is on the wire. Never raises."""
+    try:
+        if repo_root is None or not session_id:
+            return
+        _mark(xs_lane_budget.lane_path(repo_root, session_id).parent / _STAMP_FILENAME, time.time())
+    except Exception:
+        return
+
+
 def advisory_for_dispatch(repo_root, session_id: Optional[str], env: Mapping[str, str]) -> Optional[str]:
     """The DIY nag text when a non-Claude EM's uncommitted edit exceeds the XS bound, else None.
 
     Surface-agnostic: needs no prior op call, only repo root, session id and caller env. A hook on
     a surface the EM always crosses (the only cover for an EM that edits and never invokes an op)
-    calls this directly; hook wiring is DoE-owned.
+    calls this directly; hook wiring is DoE-owned. It never stamps the nag window: the writer that
+    put the nag on the wire calls `mark_nag_emitted`.
     """
     try:
         if repo_root is None or not session_id:
@@ -122,12 +133,13 @@ def advisory_for_dispatch(repo_root, session_id: Optional[str], env: Mapping[str
         if _within(stamp, now, THROTTLE_SECONDS) or _within(checked, now, CHECK_SECONDS):
             return None
         _mark(checked, now)
-        files, lines = _measure(str(repo_root))
+        files, lines, truncated = _measure(str(repo_root))
         if files <= xs_lane_budget.BUDGET_FILES and lines <= xs_lane_budget.BUDGET_LINES:
             return None
         from coordinator_core import warp_fire
 
-        _mark(stamp, now)
-        return warp_fire.nag_text(session_id, host=family, edit_size=(files, lines))
+        return warp_fire.nag_text(
+            session_id, host=family, edit_size=(files, lines), edit_size_truncated=truncated
+        )
     except Exception:
         return None

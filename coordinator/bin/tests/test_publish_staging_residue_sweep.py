@@ -6,6 +6,7 @@ Run: python -m pytest coordinator/bin/tests/test_publish_staging_residue_sweep.p
 from __future__ import annotations
 
 import importlib.util
+import io
 import os
 import shutil
 import stat
@@ -189,3 +190,77 @@ def test_stale_sweep_still_spares_a_fresh_unminted_dir(tmp_path):
     publish._sweep_stale_publish_staging_dirs(dest, publish.RunTotals())
 
     assert fresh.is_dir()
+
+
+def _dead_pid() -> int:
+    # popup-safe-env-suppressed
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "pass"], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)
+    )
+    proc.wait()
+    return proc.pid
+
+
+def _owned_dir(dest: Path, pid: int, *, age_seconds: float = 0.0) -> Path:
+    path = dest.parent / f".{dest.name}.publish-staging-p{pid}-abcd1234"
+    path.mkdir()
+    if age_seconds:
+        old = path.stat().st_mtime - age_seconds
+        os.utime(path, (old, old))
+    return path
+
+
+def test_minted_dir_name_records_the_owner_pid(tmp_path):
+    dest = _dest(tmp_path)
+    staging = publish._create_publish_staging_dir(dest)
+
+    assert f".publish-staging-p{os.getpid()}-" in staging.name
+
+
+def test_dead_owner_young_dir_is_removed(tmp_path):
+    dest = _dest(tmp_path)
+    dead = _owned_dir(dest, _dead_pid())
+
+    publish._sweep_stale_publish_staging_dirs(dest, publish.RunTotals())
+
+    assert not dead.exists()
+
+
+def test_live_owner_old_dir_is_kept(tmp_path):
+    dest = _dest(tmp_path)
+    live = _owned_dir(dest, os.getppid(), age_seconds=7 * 3600)
+
+    publish._sweep_stale_publish_staging_dirs(dest, publish.RunTotals())
+
+    assert live.is_dir()
+
+
+def test_ownerless_dir_follows_the_age_rule(tmp_path):
+    dest = _dest(tmp_path)
+    old = dest.parent / f".{dest.name}.publish-staging-abcd1234"
+    old.mkdir()
+    stamp = old.stat().st_mtime - 7200
+    os.utime(old, (stamp, stamp))
+
+    publish._sweep_stale_publish_staging_dirs(dest, publish.RunTotals())
+
+    assert not old.exists()
+
+
+def test_dry_run_removes_no_dead_owner_dir(tmp_path):
+    dest = _dest(tmp_path)
+    dead = _owned_dir(dest, _dead_pid())
+
+    publish._sweep_stale_publish_staging_dirs(dest, publish.RunTotals(), dry_run=True, out=io.StringIO())
+
+    assert dead.is_dir()
+
+
+def test_a_dir_this_process_minted_is_never_swept(tmp_path):
+    dest = _dest(tmp_path)
+    dead = _owned_dir(dest, _dead_pid())
+    publish._MINTED_STAGING_DIRS.add(dead.resolve())
+
+    publish._sweep_stale_publish_staging_dirs(dest, publish.RunTotals())
+
+    assert dead.is_dir()

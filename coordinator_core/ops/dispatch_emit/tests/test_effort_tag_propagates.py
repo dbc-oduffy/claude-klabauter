@@ -7,6 +7,7 @@ import json
 from coordinator_core.ops.dispatch_emit import agent_route
 from coordinator_core.ops.dispatch_emit.spine_read import read_spine
 from coordinator_core.ops.dispatch_emit.wave_map import build_waves
+from pathlib import Path
 
 _PLAN = (
     "---\ntitle: fixture\n---\n# Fixture\n\n## Tasks\n\n```yaml plan-tasks\n"
@@ -23,7 +24,7 @@ def _spine(tmp_path):
     return read_spine(plan, schema_preflight=False)
 
 
-def test_effort_survives_spine_waves_and_unrouted_route(tmp_path):
+def test_effort_survives_spine_waves_and_unrouted_route(tmp_path: Path) -> None:
     rows = _spine(tmp_path)
     assert {r.id: r.effort for r in rows} == {"A1": "high", "A2": None}
 

@@ -6,12 +6,14 @@ import json
 
 from coordinator_core.ops.dispatch_emit import halt_tree_evict as hte
 from coordinator_core.ops.dispatch_emit import live_write_guard
+from pathlib import Path
+import pytest
 
 BAD = b"peer hunk\n"
 HEAD = b"ok = 1\n"
 
 
-def _stage(root, run_id, baseline):
+def _stage(root, run_id, baseline) -> None:
     """Stage `run_id` against `baseline` ({path: bytes | None}) so its hunks are attributable."""
     from coordinator_core.git import git_objects
     from coordinator_core.git.git_dir import resolve_git_common_dir
@@ -35,11 +37,11 @@ def _world(tmp_path, baseline=HEAD):
     return root, rec
 
 
-def test_refusal_leaves_tree_and_record_untouched_and_names_holder(tmp_path, monkeypatch):
+def test_refusal_leaves_tree_and_record_untouched_and_names_holder(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, rec = _world(tmp_path)
     seen = []
 
-    def refuse(r, run_id, path, new_bytes):
+    def refuse(r, run_id, path, new_bytes) -> str:
         seen.append((run_id, path, new_bytes))
         return "write to a.py drops 1 unlanded hunk(s) held by peer-run."
 
@@ -54,7 +56,7 @@ def test_refusal_leaves_tree_and_record_untouched_and_names_holder(tmp_path, mon
     assert not (rec / "withheld-blobs").exists()
 
 
-def test_no_refusal_still_evicts(tmp_path, monkeypatch):
+def test_no_refusal_still_evicts(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, rec = _world(tmp_path)
     monkeypatch.setattr(live_write_guard, "check_live_write", lambda *a: None)
     refused: dict = {}
@@ -63,7 +65,7 @@ def test_no_refusal_still_evicts(tmp_path, monkeypatch):
     assert (root / "a.py").read_bytes() == HEAD
 
 
-def test_untracked_path_is_checked_as_removal(tmp_path, monkeypatch):
+def test_untracked_path_is_checked_as_removal(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, rec = _world(tmp_path, baseline=None)
     seen = []
     monkeypatch.setattr(live_write_guard, "check_live_write", lambda r, i, p, b: seen.append(b))
@@ -72,7 +74,7 @@ def test_untracked_path_is_checked_as_removal(tmp_path, monkeypatch):
     assert not (root / "a.py").exists()
 
 
-def test_without_run_id_guard_is_not_consulted(tmp_path, monkeypatch):
+def test_without_run_id_guard_is_not_consulted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root, rec = _world(tmp_path)
 
     def boom(*a):
@@ -86,7 +88,7 @@ def test_without_run_id_guard_is_not_consulted(tmp_path, monkeypatch):
     assert (root / "a.py").read_bytes() == BAD
 
 
-def test_tree_eviction_apply_surfaces_refusal_as_unowned(tmp_path, monkeypatch):
+def test_tree_eviction_apply_surfaces_refusal_as_unowned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit.halted_record_eviction import TreeEviction
 
     root, _ = _world(tmp_path)

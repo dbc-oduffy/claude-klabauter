@@ -21,6 +21,7 @@ from coordinator_core.ops.dispatch_emit import land_run
 from coordinator_core.ops.dispatch_emit.emit import _JUDGE_VERDICT_RULES_JS
 from coordinator_core.ops.dispatch_emit.run_close import close_job_path
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -100,11 +101,11 @@ def _rejudge_files(repo) -> list:
 
 
 @pytest.fixture(autouse=True)
-def _work_dir(tmp_path):
+def _work_dir(tmp_path: Path) -> None:
     (tmp_path / "work").mkdir()
 
 
-def test_a_met_over_an_unrun_falsifier_closes_every_leg_in_run(tmp_path, monkeypatch):
+def test_a_met_over_an_unrun_falsifier_closes_every_leg_in_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     judged = _judged("error")
     assert judged["status"] == "met" and judged["reason"].startswith("met; recorded falsifier did not run")
 
@@ -123,7 +124,7 @@ def test_a_met_over_an_unrun_falsifier_closes_every_leg_in_run(tmp_path, monkeyp
     assert _rejudge_files(repo) == []
 
 
-def test_the_same_run_with_a_falsifier_fail_closes_none_of_them(tmp_path, monkeypatch):
+def test_the_same_run_with_a_falsifier_fail_closes_none_of_them(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     judged = _judged("fail")
     assert judged["status"] == "indeterminate"
 

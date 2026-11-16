@@ -61,7 +61,7 @@ def _run(notes: str, reply: object) -> dict:
     return json.loads(out.stdout)
 
 
-def test_hook_carries_the_no_sha_form_and_sends_no_sha_when_none_named():
+def test_hook_carries_the_no_sha_form_and_sends_no_sha_when_none_named() -> None:
     hook = _hook(_script())
     assert "nothing changed|already at HEAD" in hook
     assert "_sha ? { sha: _sha } : {}" in hook
@@ -74,7 +74,7 @@ _node = pytest.mark.skipif(shutil.which("node") is None, reason="node unavailabl
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @_node
-def test_literal_5e924e_note_closes_with_the_sha_from_the_reply():
+def test_literal_5e924e_note_closes_with_the_sha_from_the_reply() -> None:
     result = _run(_NO_SHA, {"ok": True, "sha": _LANDED, "close": {"queued": False}})
     assert result["halted"] is None
     assert result["delivered"]["sha"] == _LANDED
@@ -84,7 +84,7 @@ def test_literal_5e924e_note_closes_with_the_sha_from_the_reply():
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @_node
-def test_two_executors_both_at_head_close():
+def test_two_executors_both_at_head_close() -> None:
     result = _run(f"{_NO_SHA} | r2: DONE (already at HEAD, no edits)", {"ok": True, "close": {"sha": _LANDED}})
     assert result["halted"] is None
     assert result["delivered"]["sha"] == _LANDED
@@ -104,7 +104,7 @@ def test_two_executors_both_at_head_close():
         "",
     ],
 )
-def test_mixed_or_unrecognized_note_sets_still_halt_without_a_spawn(notes):
+def test_mixed_or_unrecognized_note_sets_still_halt_without_a_spawn(notes) -> None:
     result = _run(notes, {"ok": True, "sha": _LANDED})
     assert result["calls"] == []
     assert result["halted"]["halted"].startswith(NO_SLICES_HALT)
@@ -114,7 +114,7 @@ def test_mixed_or_unrecognized_note_sets_still_halt_without_a_spawn(notes):
 @pytest.mark.spawns_process
 @pytest.mark.cadence
 @_node
-def test_op_refusal_on_a_no_sha_claim_still_halts_with_the_reason():
+def test_op_refusal_on_a_no_sha_claim_still_halts_with_the_reason() -> None:
     result = _run(_NO_SHA, {"ok": False, "error": "write set not clean since head_sha"})
     assert result["halted"]["halted"].startswith(NO_SLICES_HALT)
     assert "write set not clean" in result["halted"]["reason"]

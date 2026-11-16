@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.install import settings_env
+from pathlib import Path
 
 _FAKE_CHECKER = (
     "import json, sys\n"
@@ -14,7 +15,7 @@ _FAKE_CHECKER = (
 )
 
 
-def test_missing_settings_parent_dir_is_created_and_a_verdict_returned(tmp_path, monkeypatch):
+def test_missing_settings_parent_dir_is_created_and_a_verdict_returned(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     plugin = tmp_path / "plugin"
     (plugin / "bin").mkdir(parents=True)
     (plugin / "bin" / "check-settings-env.py").write_text(_FAKE_CHECKER, encoding="utf-8")
@@ -28,7 +29,7 @@ def test_missing_settings_parent_dir_is_created_and_a_verdict_returned(tmp_path,
     assert record["applied"] == ["X"]
 
 
-def test_missing_checker_still_raises_file_not_found(tmp_path):
+def test_missing_checker_still_raises_file_not_found(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError):
         settings_env.apply_settings_env(tmp_path / "nope", tmp_path / "h" / "settings.json")
     assert not (tmp_path / "h").exists()

@@ -15,6 +15,11 @@ from coordinator_core.ops.extract_cited_sidecars import (
     run_extraction,
     scan,
 )
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import Popen
 
 # Spawns a real external process (git ls-files); runs at cadence gates.
 pytestmark = [
@@ -30,7 +35,7 @@ def _write(root: str, rel: str, content: str) -> None:
         fh.write(content)
 
 
-def test_uuid_cited_and_on_disk_is_captured(tmp_path):
+def test_uuid_cited_and_on_disk_is_captured(tmp_path: Path) -> None:
     root = str(tmp_path)
     uid = "abcd1234-1111-2222-3333-444455556666"
     _write(root, "state/subagent-share/" + uid + "/a.md", "sidecar content\n")
@@ -44,7 +49,7 @@ def test_uuid_cited_and_on_disk_is_captured(tmp_path):
     assert uuid_citations[uid] == ["archive/bug-backlog/foo.yaml"]
 
 
-def test_uuid_cited_but_not_on_disk_is_excluded(tmp_path):
+def test_uuid_cited_but_not_on_disk_is_excluded(tmp_path: Path) -> None:
     root = str(tmp_path)
     uid = "deadbeef-1111-2222-3333-444455556666"
     _write(
@@ -56,7 +61,7 @@ def test_uuid_cited_but_not_on_disk_is_excluded(tmp_path):
     assert uid not in uuid_citations
 
 
-def test_citations_inside_state_are_excluded_from_walk(tmp_path):
+def test_citations_inside_state_are_excluded_from_walk(tmp_path: Path) -> None:
     root = str(tmp_path)
     uid = "11112222-1111-2222-3333-444455556666"
     _write(root, "state/subagent-share/" + uid + "/a.md", "sidecar\n")
@@ -69,7 +74,7 @@ def test_citations_inside_state_are_excluded_from_walk(tmp_path):
     assert uid not in uuid_citations
 
 
-def test_sha_shaped_token_is_captured_raw(tmp_path):
+def test_sha_shaped_token_is_captured_raw(tmp_path: Path) -> None:
     root = str(tmp_path)
     sha = "a" * 40
     _write(root, "docs/notes.md", f"see commit {sha} for details\n")
@@ -78,7 +83,7 @@ def test_sha_shaped_token_is_captured_raw(tmp_path):
     assert sha in sha_citations["docs/notes.md"]
 
 
-def test_sha_scan_does_not_require_git_commit_shape(tmp_path):
+def test_sha_scan_does_not_require_git_commit_shape(tmp_path: Path) -> None:
     # Raw-set contract: any 40-hex token is captured, not just real commits.
     root = str(tmp_path)
     fake_sha = "f" * 40
@@ -87,7 +92,7 @@ def test_sha_scan_does_not_require_git_commit_shape(tmp_path):
     assert fake_sha in sha_citations["docs/notes.md"]
 
 
-def test_one_git_subprocess_regardless_of_uuid_count(tmp_path, monkeypatch):
+def test_one_git_subprocess_regardless_of_uuid_count(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = str(tmp_path)
     for i in range(5):
         uid = f"{i:08d}-1111-2222-3333-444455556666"
@@ -106,7 +111,7 @@ def test_one_git_subprocess_regardless_of_uuid_count(tmp_path, monkeypatch):
         calls.append(args)
         return real_run(*args, **kwargs)
 
-    def _spy_popen(*args, **kwargs):
+    def _spy_popen(*args, **kwargs) -> Popen[str]:
         calls.append(args)
         return real_popen(*args, **kwargs)
 
@@ -116,7 +121,7 @@ def test_one_git_subprocess_regardless_of_uuid_count(tmp_path, monkeypatch):
     assert len(calls) == 1, calls
 
 
-def test_main_writes_both_audit_files(tmp_path):
+def test_main_writes_both_audit_files(tmp_path: Path) -> None:
     root = str(tmp_path)
     uid = "22223333-1111-2222-3333-444455556666"
     _write(root, "state/subagent-share/" + uid + "/a.md", "x\n")
@@ -142,7 +147,7 @@ def test_main_writes_both_audit_files(tmp_path):
     assert "docs/notes.md" in sha_text
 
 
-def test_run_extraction_no_citations_still_renders(tmp_path):
+def test_run_extraction_no_citations_still_renders(tmp_path: Path) -> None:
     root = str(tmp_path)
     uuid_text, sha_text = run_extraction(root)
     assert "No citations found." in uuid_text

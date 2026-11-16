@@ -224,33 +224,33 @@ def _base_params(**overrides) -> dict:
 # ---------------------------------------------------------------------------
 
 class TestValidateSendParams:
-    def test_dry_run_must_be_bool(self):
+    def test_dry_run_must_be_bool(self) -> None:
         result = _validate_send_params({"dry_run": "yes", "topic": "x"})
         assert isinstance(result, dict)
         assert result["exit_code"] == 1
 
-    def test_omitted_dry_run_defaults_false(self):
+    def test_omitted_dry_run_defaults_false(self) -> None:
         assert _validate_send_params({"topic": "a-topic"}) == (False, "a-topic")
 
-    def test_unknown_param_rejected(self):
+    def test_unknown_param_rejected(self) -> None:
         result = _validate_send_params({"dry_run": True, "topic": "x", "body": "nope"})
         assert isinstance(result, dict)
         assert result["exit_code"] == 1
 
-    def test_known_param_keys_is_exactly_dry_run_and_topic(self):
+    def test_known_param_keys_is_exactly_dry_run_and_topic(self) -> None:
         assert _KNOWN_PARAM_KEYS == frozenset({"dry_run", "topic"})
 
-    def test_invalid_topic_slug_rejected(self):
+    def test_invalid_topic_slug_rejected(self) -> None:
         result = _validate_send_params({"dry_run": True, "topic": "NOT-A-SLUG!!"})
         assert isinstance(result, dict)
         assert result["exit_code"] == 1
 
-    def test_missing_topic_rejected(self):
+    def test_missing_topic_rejected(self) -> None:
         result = _validate_send_params({"dry_run": True, "topic": ""})
         assert isinstance(result, dict)
         assert result["exit_code"] == 1
 
-    def test_valid_params_pass_through(self):
+    def test_valid_params_pass_through(self) -> None:
         result = _validate_send_params({"dry_run": False, "topic": "a-topic"})
         assert result == (False, "a-topic")
 
@@ -260,19 +260,19 @@ class TestValidateSendParams:
 # ---------------------------------------------------------------------------
 
 class TestMissingDraft:
-    def test_no_repo_root_is_setup_error(self):
+    def test_no_repo_root_is_setup_error(self) -> None:
         result = _memo_send({"dry_run": True, "topic": "x"}, repo_root=None)
         assert result["exit_code"] == 1
         assert result["mode"] == _MODE
 
-    def test_no_staged_draft_is_setup_error(self, tmp_path, monkeypatch):
+    def test_no_staged_draft_is_setup_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         result = _memo_send({"dry_run": True, "topic": "never-drafted"}, repo_root=sender_repo)
         assert result["exit_code"] == 1
 
-    def test_draft_missing_required_field_is_setup_error(self, tmp_path, monkeypatch):
+    def test_draft_missing_required_field_is_setup_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
@@ -285,7 +285,7 @@ class TestMissingDraft:
         result = _memo_send({"dry_run": False, "topic": "bad-topic"}, repo_root=sender_repo)
         assert result["exit_code"] == 1
 
-    def test_draft_with_no_prose_body_is_refused(self, tmp_path, monkeypatch, capsys):
+    def test_draft_with_no_prose_body_is_refused(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         # Regression, coordinator-content-repo 2026-08-19: a scaffold composed and never
         # written back was delivered as frontmatter plus empty comment blocks,
         # its title advertising four items the body did not carry. Refuse at
@@ -315,7 +315,7 @@ class TestMissingDraft:
         # Nothing was written into the receiver's tree.
         assert result["acted"] == []
 
-    def test_self_addressed_draft_is_refused(self, tmp_path, monkeypatch, capsys):
+    def test_self_addressed_draft_is_refused(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
@@ -342,7 +342,7 @@ class TestMissingDraft:
 # ---------------------------------------------------------------------------
 
 class TestDryRun:
-    def test_dry_run_previews_without_writing(self, tmp_path, monkeypatch):
+    def test_dry_run_previews_without_writing(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -358,7 +358,7 @@ class TestDryRun:
         assert list((receiver_repo / "cross-repo" / "inbox").glob("*.md")) == []
         assert not (sender_repo / ".coordinator-local" / "memo-outbox" / "sent").exists()
 
-    def test_unknown_receiver_is_setup_error(self, tmp_path, monkeypatch):
+    def test_unknown_receiver_is_setup_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
@@ -374,7 +374,7 @@ class TestDryRun:
 # ---------------------------------------------------------------------------
 
 class TestEndToEndDelivery:
-    def test_main_only_receiver_receives_the_memo_on_main(self, tmp_path, monkeypatch):
+    def test_main_only_receiver_receives_the_memo_on_main(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         _git(receiver_repo, "checkout", "-q", "main")
@@ -393,7 +393,7 @@ class TestEndToEndDelivery:
         assert _git(receiver_repo, "symbolic-ref", "HEAD").stdout.strip() == b"refs/heads/main"
         assert _git(receiver_repo, "branch", "-a", "--list", "*work/*").stdout.strip() == b""
 
-    def test_happy_path_three_writes(self, tmp_path, monkeypatch):
+    def test_happy_path_three_writes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -479,7 +479,7 @@ class TestEndToEndDelivery:
     # the new canonical root, no legacy dir present at all, so a broken
     # new-root branch of `_draft_path`'s dual-root resolution (ordering
     # flip, inverted existence check) cannot hide behind the legacy leg.
-    def test_happy_path_finds_sends_and_moves_a_new_root_draft(self, tmp_path, monkeypatch):
+    def test_happy_path_finds_sends_and_moves_a_new_root_draft(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -548,7 +548,7 @@ class TestEndToEndDelivery:
         ).stdout.decode("utf-8")
         return row, delivery_msg
 
-    def test_sent_by_absent_on_draft_is_resolved_at_send_time(self, tmp_path, monkeypatch):
+    def test_sent_by_absent_on_draft_is_resolved_at_send_time(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A draft with no `sent_by` gets one resolved HERE, at send time.
 
         That is the whole point of the field: memo.draft never authors it and
@@ -560,7 +560,7 @@ class TestEndToEndDelivery:
         row, _ = self._send_draft_without_sent_by(tmp_path, monkeypatch)
         assert row["sent_by"] == "6f1e0c9a-1111-4222-8333-444455556666"
 
-    def test_delivery_commit_carries_a_session_id_trailer(self, tmp_path, monkeypatch):
+    def test_delivery_commit_carries_a_session_id_trailer(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The delivery commit carries `Session-Id:` as a SECOND, independent
         carrier of sender identity.
 
@@ -577,7 +577,7 @@ class TestEndToEndDelivery:
             "\n\nSession-Id: 6f1e0c9a-1111-4222-8333-444455556666"
         ), delivery_msg
 
-    def test_delivery_commit_omits_the_trailer_when_unresolved(self, tmp_path, monkeypatch):
+    def test_delivery_commit_omits_the_trailer_when_unresolved(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """No trailer at all beats a `Session-Id: unresolved` one — a trailer
         exists to be joined to an address, and a sentinel value would be one
         every reader must learn to reject. The absence is recorded in the
@@ -587,7 +587,7 @@ class TestEndToEndDelivery:
         _, delivery_msg = self._send_draft_without_sent_by(tmp_path, monkeypatch)
         assert "Session-Id" not in delivery_msg, delivery_msg
 
-    def test_unresolved_sender_is_reported_on_the_envelope(self, tmp_path, monkeypatch):
+    def test_unresolved_sender_is_reported_on_the_envelope(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """An un-nameable sender is DELIVERED, and SAID.
 
         The sentinel is write-only otherwise -- it reaches the delivered
@@ -611,7 +611,7 @@ class TestEndToEndDelivery:
         assert result["exit_code"] == 0, result
         assert result["acted"][0]["sender_unattributed"] is True
 
-    def test_named_sender_is_not_flagged_unattributed(self, tmp_path, monkeypatch):
+    def test_named_sender_is_not_flagged_unattributed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The flag is not always-on: a resolved sender clears it."""
         monkeypatch.setenv("COORDINATOR_SESSION_ID", "6f1e0c9a-1111-4222-8333-444455556666")
         sender_repo = _make_sender_git_repo(tmp_path)
@@ -627,7 +627,7 @@ class TestEndToEndDelivery:
         assert result["exit_code"] == 0, result
         assert result["acted"][0]["sender_unattributed"] is False
 
-    def test_sent_by_unresolvable_session_uses_the_sentinel(self, tmp_path, monkeypatch):
+    def test_sent_by_unresolvable_session_uses_the_sentinel(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The sentinel is the resolution-FAILURE case, never the ordinary one:
         an un-nameable sender says so in the field, is never silently omitted,
         and never fails the delivery."""
@@ -660,7 +660,7 @@ def _install_hook_canary(repo: Path) -> Path:
 
 
 class TestNoReceiverHooksFire:
-    def test_failed_sender_receipt_carries_its_reason(self, tmp_path, monkeypatch):
+    def test_failed_sender_receipt_carries_its_reason(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A failed sender-side receipt must carry the git stderr on the result.
 
         Regression, 2026-08-25. The pathspec cause fixed the same day
@@ -703,8 +703,8 @@ class TestNoReceiverHooksFire:
         )
 
     def test_git_ignored_receipt_paths_are_not_a_failed_receipt(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Ignored sent/ + ledger paths have nothing to commit: no commit is
         forced, and the CLI's "recover: ..." line (keyed off sender_committed)
         stays silent."""
@@ -727,8 +727,8 @@ class TestNoReceiverHooksFire:
         assert len(_read_sent_records(sender_repo)) == 1
 
     def test_sender_receipt_lands_when_the_draft_was_never_committed(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """An UNTRACKED outbox draft must still produce a sender-side receipt.
 
         Regression, 2026-08-25. Every other test here stages the draft through
@@ -782,7 +782,7 @@ class TestNoReceiverHooksFire:
         _git(sender_repo, "cat-file", "-e", f"HEAD:{result['acted'][0]['sent_record']}")
         assert not (sender_repo / "state" / "memo-outbox" / "untracked-topic.md").exists()
 
-    def test_sender_deleted_is_never_a_head_absent_member(self, tmp_path, monkeypatch):
+    def test_sender_deleted_is_never_a_head_absent_member(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """P027-T5 census: `sender_deleted`'s derivation
         (`memo_send.py`'s `[outbox_relpath] if draft_removed and
         git_native._head_entry_for(...) is not None else []`) can only ever
@@ -817,7 +817,7 @@ class TestNoReceiverHooksFire:
         assert result["exit_code"] == 0, result
         assert seen.get("deleted_paths") == []
 
-    def test_receiver_side_hooks_never_fire(self, tmp_path, monkeypatch):
+    def test_receiver_side_hooks_never_fire(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         witness = _install_hook_canary(receiver_repo)
@@ -837,7 +837,7 @@ class TestNoReceiverHooksFire:
 # ---------------------------------------------------------------------------
 
 class TestReceiverCommitDeclineFailsLoud:
-    def test_declined_commit_fails_loud_no_sender_receipt(self, tmp_path, monkeypatch):
+    def test_declined_commit_fails_loud_no_sender_receipt(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -866,8 +866,8 @@ class TestReceiverCommitDeclineFailsLoud:
         assert _read_sent_records(sender_repo) == []
 
     def test_retry_after_declined_commit_is_not_blocked_by_no_clobber(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A declined delivery leaves nothing that makes the identical re-run a
         collision: the retry reaches the commit leg again and lands."""
         sender_repo = _make_sender_git_repo(tmp_path)
@@ -908,7 +908,7 @@ def _fake_ok_but_unverifiable_commit(*args, **kwargs):
 
 
 class TestUnverifiedDeliveryCommitFailsLoud:
-    def test_unverified_commit_sha_leaves_nothing_half_done(self, tmp_path, monkeypatch):
+    def test_unverified_commit_sha_leaves_nothing_half_done(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -954,7 +954,7 @@ class TestUnverifiedDeliveryCommitFailsLoud:
 # ---------------------------------------------------------------------------
 
 class TestCollisionRefused:
-    def test_precheck_refuses_existing_file(self, tmp_path, monkeypatch):
+    def test_precheck_refuses_existing_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -981,7 +981,7 @@ class TestCollisionRefused:
         assert target.read_text(encoding="utf-8") == "already here\n"
         assert _pending_records(sender_repo) == []
 
-    def test_a_worktree_only_file_is_not_a_collision(self, tmp_path, monkeypatch):
+    def test_a_worktree_only_file_is_not_a_collision(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Only the upstream base tree decides a collision: an untracked copy in
         the receiver's checkout neither blocks the delivery nor is touched."""
         sender_repo = _make_sender_git_repo(tmp_path)
@@ -1000,7 +1000,7 @@ class TestCollisionRefused:
         assert result["exit_code"] == 0, result
         assert target.read_text(encoding="utf-8") == "local scratch\n"
 
-    def test_the_delivery_refuses_a_collision_the_precheck_misses(self, tmp_path, monkeypatch):
+    def test_the_delivery_refuses_a_collision_the_precheck_misses(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The base-tree check inside the delivery is the second, independent
         leg: with the pre-check blinded, a path already upstream is still refused."""
         sender_repo = _make_sender_git_repo(tmp_path)
@@ -1036,8 +1036,8 @@ class TestCollisionRefused:
 
 class TestDeliveryIsAnchored:
     def test_successful_send_creates_the_ref_pointing_at_the_delivered_bytes(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -1064,7 +1064,7 @@ class TestDeliveryIsAnchored:
         ).stdout
         assert resolve_anchor(common_dir, blob_sha) == shown
 
-    def test_ledger_row_carries_anchor_ref(self, tmp_path, monkeypatch):
+    def test_ledger_row_carries_anchor_ref(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -1083,8 +1083,8 @@ class TestDeliveryIsAnchored:
         assert rows[0]["anchor_ref"] == ANCHOR_REF_PREFIX + filename + "/" + delivery_commit_sha
 
     def test_lost_anchor_cas_refuses_the_delivery_and_owes_no_push(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Pre-create the anchor's own lock file so `write_anchor`'s CAS
         loses for real (`cas_ref`'s `O_CREAT|O_EXCL` on `<ref>.lock` refuses
         outright against an existing lock) -- simulating a peer holding it.
@@ -1124,8 +1124,8 @@ class TestDeliveryIsAnchored:
         assert _read_sent_records(sender_repo) == []
 
     def test_lost_cas_where_the_ref_already_matches_reports_anchored_true_no_warning(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """eng-director F7. A CAS loss whose ref already equals the
         intended blob (a peer anchored the SAME delivery -- identical
         filename, commit sha, and bytes -- immediately before this call's
@@ -1166,7 +1166,7 @@ class TestDeliveryIsAnchored:
         assert acted["anchored"] is True
         assert "anchor_warning" not in acted
 
-    def test_declined_commit_writes_no_anchor(self, tmp_path, monkeypatch):
+    def test_declined_commit_writes_no_anchor(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -1186,7 +1186,7 @@ class TestDeliveryIsAnchored:
         common_dir = resolve_git_common_dir(receiver_repo)
         assert anchor_names(common_dir) == []
 
-    def test_unverified_commit_sha_writes_no_anchor(self, tmp_path, monkeypatch):
+    def test_unverified_commit_sha_writes_no_anchor(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -1204,8 +1204,8 @@ class TestDeliveryIsAnchored:
         assert anchor_names(common_dir) == []
 
     def test_send_path_from_the_anchor_write_onward_makes_zero_spawns(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The anchor write (`_memo_anchor`, in-process per its own module
         docstring) and the sender-side receipt commit (`commit_paths`, zero
         spawns per this module's own docstring) must add no git spawn to the
@@ -1282,7 +1282,7 @@ class TestReceiverCheckoutIsNeverWritten:
             monkeypatch.delenv(key)
         return result, receiver_repo
 
-    def test_receiver_status_is_clean_after_a_send(self, tmp_path, monkeypatch):
+    def test_receiver_status_is_clean_after_a_send(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         result, receiver_repo = self._send(tmp_path, monkeypatch, "index-clean-topic")
 
         assert result["exit_code"] == 0, result
@@ -1290,8 +1290,8 @@ class TestReceiverCheckoutIsNeverWritten:
         assert _receiver_status(receiver_repo) == ""
 
     def test_an_inherited_git_index_file_does_not_redirect_anything(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Inside a git hook `GIT_INDEX_FILE` names the CALLER's index; no index
         is created or written for it."""
         foreign_index = tmp_path / "foreign.index"
@@ -1304,7 +1304,7 @@ class TestReceiverCheckoutIsNeverWritten:
         assert _receiver_status(receiver_repo) == ""
         assert not foreign_index.exists()
 
-    def test_an_unspliceable_index_is_irrelevant(self, tmp_path, monkeypatch):
+    def test_an_unspliceable_index_is_irrelevant(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A v4 index is refused by the in-process writer; the delivery never
         asks for it, so the send lands and the index stays byte-identical."""
         before: dict = {}
@@ -1320,7 +1320,7 @@ class TestReceiverCheckoutIsNeverWritten:
         assert result["exit_code"] == 0, result
         assert _receiver_checkout_state(receiver_repo) == before["state"]
 
-    def test_a_held_index_lock_neither_blocks_nor_is_stolen(self, tmp_path, monkeypatch):
+    def test_a_held_index_lock_neither_blocks_nor_is_stolen(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A peer holding `index.lock` has no effect on the delivery: it never
         takes the lock, and leaves the peer's lock in place."""
         def _hold_lock(repo: Path) -> None:
@@ -1337,8 +1337,8 @@ class TestReceiverCheckoutIsNeverWritten:
         assert (receiver_repo / ".git" / "index.lock").exists()
 
     def test_a_dirty_tree_on_a_branch_behind_upstream_is_untouched(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The R1 shape: the receiver's local branch is behind upstream and its
         tree is dirty. The delivery parents on the upstream tip and every
         checkout fact stays byte-identical."""
@@ -1386,17 +1386,17 @@ class TestReceiverCheckoutIsNeverWritten:
 # ---------------------------------------------------------------------------
 
 class TestRegistration:
-    def test_registered_in_registry_map(self):
+    def test_registered_in_registry_map(self) -> None:
         from coordinator_core.ops._registry_map import OP_MODULE_MAP
         assert OP_MODULE_MAP["memo.send"] == "coordinator_core.ops.fleet.memo_send"
 
-    def test_registered_in_ipc_registry_after_import(self):
+    def test_registered_in_ipc_registry_after_import(self) -> None:
         import coordinator_core.ops.fleet.memo_send  # noqa: F401
         from coordinator_core.ipc import _REGISTRY
         assert "memo.send" in _REGISTRY
         assert _REGISTRY["memo.send"] is memo_send_module._memo_send
 
-    def test_mutates_declaration_matches_deleted_originals_contract(self):
+    def test_mutates_declaration_matches_deleted_originals_contract(self) -> None:
         """The per-send record is a globbed write in `MUTATES`; no append-only
         file is declared."""
         assert not hasattr(memo_send_module, "MUTATES_APPEND")
@@ -1413,7 +1413,7 @@ class TestRegistration:
 # ---------------------------------------------------------------------------
 
 class TestSendWritesOneSentRecord:
-    def _sender_and_receiver(self, tmp_path, monkeypatch, topic):
+    def _sender_and_receiver(self, tmp_path, monkeypatch, topic) -> Path:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {"project_rag": receiver_repo})
@@ -1422,8 +1422,8 @@ class TestSendWritesOneSentRecord:
         return sender_repo
 
     def test_send_leaves_no_ledger_and_one_record_named_in_the_commit(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         sender_repo = self._sender_and_receiver(tmp_path, monkeypatch, "record-topic")
 
         result = _memo_send({"dry_run": False, "topic": "record-topic"}, repo_root=sender_repo)
@@ -1451,8 +1451,8 @@ class TestSendWritesOneSentRecord:
         assert "record-topic.md" in stat, stat
 
     def test_two_sends_write_two_records_and_never_rewrite_the_first(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         sender_repo = self._sender_and_receiver(tmp_path, monkeypatch, "first-topic")
         _memo_send({"dry_run": False, "topic": "first-topic"}, repo_root=sender_repo)
         records_dir = sender_repo / ".coordinator-local" / "memo-outbox" / "sent-records"
@@ -1468,8 +1468,8 @@ class TestSendWritesOneSentRecord:
         assert first[0].read_bytes() == first_bytes
 
     def test_record_write_failure_reports_partial_failure_without_committing(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from coordinator_core.ops.fleet import memo_sent_records
 
         sender_repo = self._sender_and_receiver(tmp_path, monkeypatch, "boom-topic")
@@ -1507,8 +1507,8 @@ class TestIndexLockOnReceiptIsNotAFailedSend:
     """
 
     def test_index_lock_busy_reports_uncommitted_receipt_not_an_exception(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         from coordinator_core.git.index_write import IndexWriteLockBusy
 
         sender_repo = _make_sender_git_repo(tmp_path)
@@ -1542,8 +1542,8 @@ class TestIndexLockOnReceiptIsNotAFailedSend:
         assert result["failed"] == [], "a delivered memo is not a failed item"
 
     def test_delivered_memo_is_actually_on_disk_in_the_receiver_inbox(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The claim above rests on the delivery having really landed, so it is
         asserted against the receiver's object store rather than the envelope
         alone: the memo is in the anchored delivery commit's tree."""
@@ -1608,37 +1608,37 @@ def _receiver_head_sha(receiver_repo: Path) -> str:
 
 
 class TestCheckDeliveriesParams:
-    def test_known_param_keys_is_exactly_dry_run(self):
+    def test_known_param_keys_is_exactly_dry_run(self) -> None:
         assert _CHECK_DELIVERIES_KNOWN_PARAM_KEYS == frozenset({"dry_run"})
 
-    def test_dry_run_must_be_bool(self):
+    def test_dry_run_must_be_bool(self) -> None:
         result = _memo_check_deliveries({"dry_run": "yes"}, repo_root=None)
         assert result["exit_code"] == 1
 
-    def test_dry_run_false_is_setup_error(self, tmp_path):
+    def test_dry_run_false_is_setup_error(self, tmp_path: Path) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         result = _memo_check_deliveries({"dry_run": False}, repo_root=sender_repo)
         assert result["exit_code"] == 1
 
-    def test_unknown_param_rejected(self):
+    def test_unknown_param_rejected(self) -> None:
         result = _memo_check_deliveries(
             {"dry_run": True, "topic": "nope"}, repo_root=None
         )
         assert result["exit_code"] == 1
 
-    def test_no_repo_root_is_setup_error(self):
+    def test_no_repo_root_is_setup_error(self) -> None:
         result = _memo_check_deliveries({"dry_run": True}, repo_root=None)
         assert result["exit_code"] == 1
 
 
 class TestCheckDeliveriesSweep:
-    def test_empty_ledger_is_no_candidates(self, tmp_path):
+    def test_empty_ledger_is_no_candidates(self, tmp_path: Path) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         result = _memo_check_deliveries({"dry_run": True}, repo_root=sender_repo)
         assert result["exit_code"] == 0
         assert result["candidates"] == []
 
-    def test_separates_verified_from_gone(self, tmp_path, monkeypatch):
+    def test_separates_verified_from_gone(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """One row's commit is a real object in the receiver, one row's is not
         — the sweep must classify each independently, never collapsing them."""
         sender_repo = _make_sender_git_repo(tmp_path)
@@ -1687,7 +1687,7 @@ class TestCheckDeliveriesSweep:
             "end-to-end"
         )
 
-    def test_unregistered_receiver_is_not_checkable_not_gone(self, tmp_path, monkeypatch):
+    def test_unregistered_receiver_is_not_checkable_not_gone(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """A receiver absent from this machine's registry must never read as
         GONE — that would manufacture a false loss report for a peer nobody
         checked out here."""
@@ -1710,8 +1710,8 @@ class TestCheckDeliveriesSweep:
         assert candidate["status"] != _VERDICT_GONE
 
     def test_missing_delivery_branch_is_unknown_never_a_mismatch(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A row predating the delivery_branch field must not be misread as a
         branch mismatch — its verdict rests solely on object existence."""
         sender_repo = _make_sender_git_repo(tmp_path)
@@ -1733,7 +1733,7 @@ class TestCheckDeliveriesSweep:
         assert candidate["delivery_branch"] is None
         assert candidate["status"] == _VERDICT_VERIFIED
 
-    def test_malformed_record_is_skipped_not_fatal(self, tmp_path, monkeypatch):
+    def test_malformed_record_is_skipped_not_fatal(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         claude_home = _make_claude_home(tmp_path, {})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
@@ -1761,8 +1761,8 @@ class TestCheckDeliveriesSweep:
 
 class TestCheckDeliveriesPresenceAndAnchor:
     def test_present_in_inbox_is_verified_even_if_commit_object_is_gone(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Presence in the receiver's own tree is the FIRST question — a row
         whose commit object is long gone still reads verified when the
         memo itself is sitting right there in inbox/."""
@@ -1790,7 +1790,7 @@ class TestCheckDeliveriesPresenceAndAnchor:
         assert candidate["status"] == _VERDICT_VERIFIED
         assert candidate["note"] is None
 
-    def test_present_in_archive_is_verified(self, tmp_path, monkeypatch):
+    def test_present_in_archive_is_verified(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """The corpus is inbox OR archive — a memo the receiver has since
         filed away is still delivered, not lost."""
         sender_repo = _make_sender_git_repo(tmp_path)
@@ -1816,7 +1816,7 @@ class TestCheckDeliveriesPresenceAndAnchor:
         candidate = result["candidates"][0]
         assert candidate["status"] == _VERDICT_VERIFIED
 
-    def test_absent_but_anchored_is_restorable(self, tmp_path, monkeypatch):
+    def test_absent_but_anchored_is_restorable(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Absent from the tree, but the anchor for this exact (filename,
         commit) still resolves -- the receiver's next workday-start
         restores it, so this is restorable, not gone."""
@@ -1846,8 +1846,8 @@ class TestCheckDeliveriesPresenceAndAnchor:
         assert "workday-start" in candidate["note"]
 
     def test_absent_no_anchor_but_row_carries_anchor_ref_is_verified_disposed(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Absent from the tree, the live anchor is gone too, but the row
         DID record an anchor_ref -- the receiver's own heal only retires an
         anchor after observing an archive or deliberate removal, so this
@@ -1877,8 +1877,8 @@ class TestCheckDeliveriesPresenceAndAnchor:
         assert "disposed" in candidate["note"]
 
     def test_absent_no_anchor_no_anchor_ref_falls_back_to_object_existence(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """A row predating anchors (no anchor_ref ever recorded) with a
         live commit object is the documented pre-A2 trap case -- verified,
         same outcome the old rule gave, now for the recorded reason."""
@@ -1904,8 +1904,8 @@ class TestCheckDeliveriesPresenceAndAnchor:
         assert candidate["status"] == _VERDICT_VERIFIED
 
     def test_absent_no_anchor_no_anchor_ref_commit_gone_is_gone(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Same pre-A2 shape as above, but the commit object is also gone
         -- nothing left to call this delivered."""
         sender_repo = _make_sender_git_repo(tmp_path)
@@ -1929,8 +1929,8 @@ class TestCheckDeliveriesPresenceAndAnchor:
         assert candidate["status"] == _VERDICT_GONE
 
     def test_receiver_not_on_this_machine_is_not_checkable_even_with_anchor_ref(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """The not-checked-out-here refusal fires before any presence or
         anchor read is attempted -- a receiver absent from this machine
         says nothing about delivery, restorable included."""
@@ -1961,8 +1961,8 @@ _DISCHARGES_BODY = "discharges:\n  closure_key: x\n"
 
 class TestBodyDischargesWithoutBlock:
     def test_body_line_without_frontmatter_block_is_refused(
-        self, tmp_path, monkeypatch, capsys,
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str],
+    ) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {})))
         _write_draft(sender_repo, "body-discharges", body=_DISCHARGES_BODY)
@@ -1971,17 +1971,17 @@ class TestBodyDischargesWithoutBlock:
         assert result["acted"] == []
         assert "gate_liveness.emit_discharge" in capsys.readouterr().err
 
-    def test_indented_body_line_is_refused(self):
+    def test_indented_body_line_is_refused(self) -> None:
         from coordinator_core.ops.fleet.memo_send import _body_discharges_without_block
         assert _body_discharges_without_block({}, "prose\n  discharges: yes\n")
 
-    def test_frontmatter_block_passes(self):
+    def test_frontmatter_block_passes(self) -> None:
         from coordinator_core.ops.fleet.memo_send import _body_discharges_without_block
         assert not _body_discharges_without_block(
             {"discharges": {"closure_key": {}}}, _DISCHARGES_BODY,
         )
 
-    def test_no_discharges_anywhere_passes(self, tmp_path, monkeypatch):
+    def test_no_discharges_anywhere_passes(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         monkeypatch.setenv(
@@ -1993,7 +1993,7 @@ class TestBodyDischargesWithoutBlock:
 
 
 class TestDischargesBlockSurvivesDelivery:
-    def test_full_send_delivers_frontmatter_discharges_block(self, tmp_path, monkeypatch):
+    def test_full_send_delivers_frontmatter_discharges_block(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         sender_repo = _make_sender_git_repo(tmp_path)
         receiver_repo = _make_receiver_git_repo(tmp_path)
         monkeypatch.setenv(

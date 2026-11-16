@@ -12,6 +12,8 @@ from coordinator_core.frontmatter.body_blocks import locate_fenced_block
 from coordinator_core.ops.dispatch_emit import terminal_commit
 import pytest
 
+from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import repo  # noqa: F401  (fixture)
+
 # The _git helper drives a real git repo; needs a real process.
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -172,3 +174,87 @@ def test_rows_landed_by_checkpoint_commits_close_at_the_checkpoint_sha(tmp_path,
     assert by_id["C3"]["disposition_ref"] == terminal
     assert by_id["C3"]["disposition_detail"] == terminal_commit._NOOP_DETAIL
     assert all(_row_disposition(r) == "coded" for r in by_id.values())
+
+
+def _noop_repo(tmp_path: Path) -> tuple:
+    """A plan whose C0/C1/C2 a checkpoint commit landed; returns (plan rel, checkpoint sha)."""
+    rel = "docs/plan.md"
+    _git(tmp_path, "init", "-q")
+    (tmp_path / "docs").mkdir()
+    rows = "".join(
+        f"- id: {i}\n  title: t{i}\n  change_kind: code-edit\n  surface: {i.lower()}.py\n  disposition: open\n  deferred: false\n"
+        for i in ("C0", "C1", "C2")
+    )
+    (tmp_path / rel).write_text(f"---\ntitle: p\n---\n\n## Tasks\n\n```yaml plan-tasks\n{rows}```\n", encoding="utf-8", newline="\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-qm", "base")
+    base = _git(tmp_path, "rev-parse", "HEAD")
+    for f in ("c0.py", "c1.py", "c2.py"):
+        (tmp_path / f).write_text("x\n")
+    _git(tmp_path, "add", "-A")
+    _git(
+        tmp_path, "commit", "-qm",
+        f"checkpoint(wave 1): 3 rows — C0, C1, C2\n\nCheckpoint-Plan: {rel}\nCheckpoint-Base: {base}",
+    )
+    return rel, _git(tmp_path, "rev-parse", "HEAD")
+
+
+def test_nothing_to_commit_stamps_done_rows_matching_head_and_leaves_the_rest_open(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from coordinator_core.ops.dispatch_emit import refusal_coded_stamp
+
+    rel, checkpoint = _noop_repo(tmp_path)
+    (tmp_path / "c1.py").write_text("edited\n")  # C1's write differs from HEAD
+    monkeypatch.setattr(terminal_commit, "_changed_paths", lambda _root, paths: set(paths))
+    monkeypatch.setattr(refusal_coded_stamp, "_commit_v2", lambda p, r: {"committed": True, "sha": "f" * 40})
+    done = [SimpleNamespace(id=i, paths=[f"{i.lower()}.py"]) for i in ("C0", "C1")]  # C2 is not done
+
+    out = refusal_coded_stamp.stamp_noop_done_rows(tmp_path, tmp_path, {}, rel, None, done)
+
+    assert out["rows_coded"] == {rel: ["C0"]}
+    assert out["coded_sha"] == "f" * 40
+    by_id = _rows((tmp_path / rel).read_text(encoding="utf-8"))
+    assert by_id["C0"]["disposition_ref"] == checkpoint
+    assert _row_disposition(by_id["C1"]) == "open"
+    assert _row_disposition(by_id["C2"]) == "open"
+
+
+def test_close_block_reads_coded_stamp_ran_for_a_nothing_to_commit_reply_that_stamped(tmp_path):
+    from coordinator_core.ops.dispatch_emit import terminal_commit_closeout as closeout
+
+    ctx = {"applies": True, "legs": {}, "presets": {}, "root": tmp_path, "plan_rel": None, "kind": "plan-run",
+           "inline_review": {}, "run_id": "r", "completion_entry": None}
+    stamped = closeout._close_block(ctx, {"committed": False, "nothing_to_commit": True, "coded_sha": "f" * 40})
+    assert stamped["legs"]["coded-stamp"]["status"] == "ran"
+    bare = closeout._close_block(
+        {**ctx, "legs": {}}, {"committed": False, "nothing_to_commit": True}
+    )
+    assert bare["legs"]["coded-stamp"]["status"] == "not-applicable"
+
+
+def test_terminal_commit_at_defaults_codes_a_run_whose_done_rows_all_match_head(repo):
+    from coordinator_core.ops.dispatch_emit.tests.test_ask_run_product_commit import _SID, PLAN
+    from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_review_floor import EMPTY_WAVE
+
+    plan_text = (repo / PLAN).read_text(encoding="utf-8")
+    plan_text = plan_text.replace("  disposition: open\n", "  writes:\n    - a.py\n  disposition: open\n", 1)
+    (repo / PLAN).write_text(plan_text, encoding="utf-8", newline="\n")
+    _git(repo, "add", PLAN)
+    _git(repo, "commit", "-q", "-m", "seed plan")
+    base = _git(repo, "rev-parse", "HEAD")
+    _git(repo, "add", "a.py")
+    _git(repo, "commit", "-q", "-m", f"checkpoint(wave 1): 1 rows — C1\n\nCheckpoint-Plan: {PLAN}\nCheckpoint-Base: {base}")
+    landed = _git(repo, "rev-parse", "HEAD")
+
+    params = {
+        "script_path": "run.mjs", "incomplete_chunks": [], "inline_review": EMPTY_WAVE,
+        "session_id": _SID, "ledger_verdict": {"items": [{"id": "R1", "status": "met", "wired": True}]},
+    }
+    out = terminal_commit._handler(params, repo_root=repo / ".git")
+
+    assert out["committed"] is False and out.get("refused") is None and out.get("error") is None, out
+    assert out["rows_coded"] == {PLAN: ["C1"]}, out
+    row = _rows((repo / PLAN).read_text(encoding="utf-8"))["C1"]
+    assert _row_disposition(row) == "coded" and row["disposition_ref"] == landed
+    assert out["close"]["legs"]["coded-stamp"]["status"] == "ran", out["close"]

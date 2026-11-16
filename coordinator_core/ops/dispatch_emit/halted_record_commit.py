@@ -7,9 +7,10 @@ record dirs, claimed docs-stage paths), the baton the run recorded (left open, `
 stamped with the halt), and
 the halt reason in the message. Candidates are named paths, never the dirty tree. A finished chunk's tracked
 deletion is declared, a deletion git cannot see is dropped, and a path a live peer's claim holds
-is withheld and named. Every halt kind, ``ledger-check`` included, lands the record and run artifacts
-only: a chunk's product and test files are withheld as ``halt-record-only``, because a shared dirty
-tree puts other runs' hunks in those files. A ``review_blocked``/``failing_test`` halt whose every
+is withheld and named. A ``ledger-check`` halt whose targeted-test check is ``pass``/``pass-on-retest``
+(``halt_review_passed.review_passed_chunks``) lands its review-passed chunks' product and test files path
+by path, after every peer, product and hunk-provenance gate; any other halt kind, and any other check,
+lands the record and run artifacts only and withholds chunk product as ``halt-record-only``. A ``review_blocked``/``failing_test`` halt whose every
 failing id is red at run_base lands its finished rows earlier, through ``dispatch.terminal_commit``
 (``terminal_commit_refusals._review_halt_commit_params``); any other halt waits for the resumed
 run's terminal commit. The reply's ``targeted_tests.check`` still reports a carried verdict.
@@ -35,6 +36,7 @@ from coordinator_core.session import landing_hold
 from coordinator_core.ops.dispatch_emit import halt_product_gates, process_artifact_policy, review_edits, run_artifacts
 from coordinator_core.ops.warp_run_deliverable import record_sizing_rel
 from coordinator_core.ops.dispatch_emit import halted_run, stage_dirt_snapshot
+from coordinator_core.ops.dispatch_emit.halt_review_passed import review_passed_chunks
 from coordinator_core.ops.dispatch_emit.worktree_snapshot import record_dir_changes
 from coordinator_core.ops.dispatch_emit.halted_run import write_halt_marker
 from coordinator_core.ops.dispatch_emit.row_returns import CONSUMED_RETURNS_PARAM
@@ -47,7 +49,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import (
     halted_record_message,
 )
 from coordinator_core.ops.dispatch_emit.land_run_halt import (
-    _peer_only_after_checkpoint, _settle_ledger_pointer, held_rows_for, marker_kind,
+    _peer_only_after_checkpoint, _settle_ledger_pointer, held_rows_for, marker_kind, unexecuted_withholds,
 )
 from coordinator_core.ops.dispatch_emit.halted_record_request import (  # noqa: F401 -- re-exported
     _coded_rows,
@@ -85,6 +87,7 @@ from coordinator_core.ops.dispatch_emit.halted_record_eviction import (  # noqa:
     _run_written,
     _withhold_run_dirt,
     plan_tree_eviction,
+    record_touched_blobs,
 )
 
 
@@ -449,6 +452,80 @@ def _sizing_recoverable(worktree_root: Path, sizing_rel: str) -> bool:
     return True
 
 
+def _own_recorded_cleared(worktree_root: Path, run_id: str, unproduced: list) -> tuple:
+    """`(findings, {"foreign_hunks": {path: [{lines, owner}]}}, supplied)`: a finding whose path's every hunk the run
+    recorded (`own_hunk_candidate`) is dropped, so an own hunk a peer also recorded lands instead of
+    reading as `unknown`; the others stay and name their lines and owner. A path with a peer hunk and an
+    own recorded hunk is dropped too, its own-hunks-only blob in `supplied` (`{path: sha}`) so the peer
+    hunk stays in the worktree uncommitted and is named under `foreign_hunks`."""
+    kept: list = []
+    named: dict = {}
+    supplied: dict = {}
+    for finding in unproduced:
+        res = _candidate_for(worktree_root, run_id, finding.path, declared=False)
+        if "excluded" in res and not res["excluded"]:
+            continue
+        hunks = res.get("foreign") or res.get("excluded")
+        if "bytes" in res and hunks and _supply(worktree_root, finding.path, res, supplied):
+            named[finding.path] = hunks
+            continue
+        kept.append(finding)
+        if hunks:
+            named[finding.path] = hunks
+    return kept, ({"foreign_hunks": named} if named else {}), supplied
+
+
+def _candidate_for(worktree_root: Path, run_id: str, path: str, *, declared: Optional[bool]) -> dict:
+    """`own_hunk_candidate.candidate` of `path`'s worktree bytes against its HEAD blob; `{}` when unreadable."""
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import read_object
+    from coordinator_core.git.git_state import head_blobs
+    from coordinator_core.ops.dispatch_emit import kept_work, own_hunk_candidate
+
+    try:
+        entry = head_blobs(worktree_root, [path]).get(path)
+        stored = read_object(resolve_git_common_dir(worktree_root), entry[1]) if entry else None
+        tree = kept_work.checkin_form(worktree_root, path, (worktree_root / path).read_bytes())
+        if tree is None or (entry and stored is None):
+            return {}
+        return own_hunk_candidate.candidate(
+            worktree_root, run_id, path, stored[1] if stored else b"", tree, declared=declared,
+        )
+    except OSError:
+        return {}
+
+
+def _supply(worktree_root: Path, path: str, res: dict, supplied: dict) -> bool:
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_objects import write_object
+
+    try:
+        supplied[path] = write_object(resolve_git_common_dir(worktree_root), b"blob", res["bytes"])
+    except OSError:
+        return False
+    return True
+
+
+def _peer_hunks_excluded(worktree_root: Path, run_id: str, paths: list, supplied: dict) -> tuple:
+    """`(refused, {"foreign_hunks": {...}})` over `paths` the run declares: a hunk another run recorded
+    is left out of the path's own-hunks-only blob (added to `supplied`, the peer hunk stays dirty in the
+    worktree); a path whose candidate is refused is returned in `refused`. A path no peer recorded
+    changes nothing."""
+    refused: list = []
+    named: dict = {}
+    for path in paths:
+        if path in supplied:
+            continue
+        res = _candidate_for(worktree_root, run_id, path, declared=True)
+        if not res or ("excluded" in res and not res["excluded"]):
+            continue
+        hunks = res.get("foreign") or res.get("excluded")
+        named[path] = hunks
+        if "bytes" not in res or not _supply(worktree_root, path, res, supplied):
+            refused.append(path)
+    return refused, ({"foreign_hunks": named} if named else {})
+
+
 def _land(
     worktree_root: Path, repo_root: Path, params: dict, run_id: str, record_dir_rel: str, halted: dict
 ) -> dict:
@@ -735,13 +812,24 @@ def _land(
     tfind: list = []
     tcheck = ""
     if halted["halted"] == "ledger-check":
-        tfind, tcheck = landing_integrity.landing_test_gate(worktree_root, params, run_id)
+        candidates = [p for p in product + gone if p in owner]
+        tfind, tcheck = landing_integrity.landing_test_gate(worktree_root, params, run_id, candidates)
         targeted = {
             "check": tcheck,
             "findings": [{"path": f.path, "reason": f.reason, "detail": f.detail} for f in tfind],
             **({"note": tfind.deleted_note} if tfind.deleted_note else {}),
         }
-    withheld.update({p: "halt-record-only" for p in product + gone if p in owner})
+    foreign_hunks_reply: dict = {}
+    own_blobs: dict = {}
+    finding_details: dict = {}
+    passed = review_passed_chunks(halted, tcheck, (c.id for c in finished))
+    unexecuted = unexecuted_withholds(worktree_root, params.get("script_path"), halted, record_dir_rel)
+    # A chunk lands whole: one of its declared paths already withheld keeps the rest record-only.
+    split = {owner[p] for p in owner if p in withheld}
+    withheld.update({
+        p: unexecuted.get(p, "halt-record-only") for p in product + gone
+        if p in owner and (owner[p] not in passed or owner[p] in split or p in unexecuted)
+    })
     product = [p for p in product if p not in withheld]
     gone = [p for p in gone if p not in withheld]
     # Run artifacts already tracked at HEAD (plan, handoff, sidecars) are staged whole-file too, so
@@ -766,9 +854,33 @@ def _land(
             [p for p in product if p not in land_only or p in baseline] + sorted(art_tracked),
             own_plan=halt_plan if isinstance(halt_plan, str) else None,
         )
+        unproduced, foreign_hunks_reply, own_blobs = _own_recorded_cleared(worktree_root, run_id, unproduced)
         withheld.update({f.path: hunk_provenance.FOREIGN_HUNK_UNPRODUCED for f in unproduced})
+        finding_details = {f.path: f.detail for f in unproduced if f.detail}
         product = [p for p in product if p not in withheld]
         art_paths = [p for p in art_paths if p not in withheld]
+        # A landing product path a peer run also records lands as HEAD plus the run's own hunks.
+        peer_refused, peer_reply = _peer_hunks_excluded(
+            worktree_root, run_id, [p for p in product if p in owner or p in land_only], own_blobs,
+        )
+        withheld.update({p: hunk_provenance.FOREIGN_HUNK_UNPRODUCED for p in peer_refused})
+        for p in peer_refused:
+            own_blobs.pop(p, None)
+        foreign_hunks_reply = {
+            "foreign_hunks": {**foreign_hunks_reply.get("foreign_hunks", {}), **peer_reply.get("foreign_hunks", {})},
+            **({"foreign_hunk_findings": finding_details} if finding_details else {}),
+        } if (foreign_hunks_reply or peer_reply or finding_details) else {}
+        product = [p for p in product if p not in withheld]
+    from coordinator_core.ops.dispatch_emit import own_hunk_candidate
+
+    closed = own_hunk_candidate.close_over(worktree_root, paths + product + art_paths, sorted(withheld))
+    if closed:
+        withheld.update(closed)
+        paths = [p for p in paths if p not in closed]
+        product = [p for p in product if p not in closed]
+        art_paths = [p for p in art_paths if p not in closed]
+        for p in closed:
+            own_blobs.pop(p, None)
     paths = paths + product + art_paths
     deleted = deleted + gone + art_deleted
     paths, state_paths = _split_run_state(paths, record_dir_rel, record_ignored)
@@ -820,6 +932,12 @@ def _land(
         worktree_root, record_dir_rel, run_written, snapshot.changed,
         [*run_written, *owner, *declared], withheld, paths, run_id,
     )
+    # Kept off ``paths`` until a commit is due: the record file alone must not turn a no-op halt into a commit.
+    touched_paths: list = []
+    ownerless = record_touched_blobs(
+        worktree_root, record_dir_rel, run_written, touched_paths, dirty=sorted(snapshot.changed),
+    )
+    ownerless_reply = {"ownerless": ownerless} if ownerless else {}
 
     if process_withheld:
         process_artifact_policy.exclude_locally(worktree_root, process_withheld, artifacts.record_dirs)
@@ -855,9 +973,11 @@ def _land(
             **({"run_artifacts": {"landed": [], "withheld": withheld, "ignored_excluded": sorted(set(ignored_excluded))}}
                if ignored_excluded else {}),
             **({"targeted_tests": targeted} if targeted is not None else {}), **review_reply,
-            **baton_reply, **coded_reply, **_baton_cascade(worktree_root, repo_root, run_id), **base,
+            **baton_reply, **coded_reply, **ownerless_reply, **foreign_hunks_reply,
+            **_baton_cascade(worktree_root, repo_root, run_id), **base,
         }
 
+    paths.extend(p for p in touched_paths if p not in paths)
     if (worktree_root / record_dir_rel).is_dir():
         halted_run.record_withheld(worktree_root / record_dir_rel, withheld)
         _stamp_ignored_excluded(worktree_root / record_dir_rel, ignored_excluded)
@@ -916,6 +1036,16 @@ def _land(
             expected = _recorded_fingerprints(worktree_root, session_id, product, paths, deleted, excluded=set())
             if expected:
                 commit_params["expected_content_sha256"] = expected
+    supplied = {p: sha for p, sha in own_blobs.items() if p in paths}
+    if supplied:
+        # The blob lands as supplied; the worktree bytes (peer hunks included) are never re-hashed against it.
+        commit_params["supplied_blobs"] = supplied
+        if "expected_content_sha256" in commit_params:
+            commit_params["expected_content_sha256"] = {
+                p: h for p, h in commit_params["expected_content_sha256"].items() if p not in supplied
+            }
+            if not commit_params["expected_content_sha256"]:
+                commit_params.pop("expected_content_sha256")
     left = dispatch_abandon.remaining()
     if left is not None and left - dispatch_abandon.REPLY_MARGIN_SECS <= 0:
         return _error(
@@ -950,6 +1080,12 @@ def _land(
                 else:
                     commit_params.pop(key, None)
             commit_params["ignored_untracked"] = snapshot.ignored_among(paths)
+            if "supplied_blobs" in commit_params:
+                kept_blobs = {p: s for p, s in commit_params["supplied_blobs"].items() if p in paths}
+                if kept_blobs:
+                    commit_params["supplied_blobs"] = kept_blobs
+                else:
+                    commit_params.pop("supplied_blobs")
             if "expected_content_sha256" in commit_params:
                 kept_hashes = {p: h for p, h in commit_params["expected_content_sha256"].items() if p in paths}
                 if kept_hashes:
@@ -962,7 +1098,10 @@ def _land(
                 return _error("ceremony.commit_v2 is not registered", **base)
             if not isinstance(reply, dict):
                 return _error(f"unexpected commit_v2 reply: {reply!r}", **base)
-    extra: dict = {**review_reply, **peer_held_by, **baton_reply, **coded_reply, **kept_reply, **extra_evicted}
+    extra: dict = {
+        **review_reply, **peer_held_by, **baton_reply, **coded_reply, **kept_reply, **extra_evicted,
+        **ownerless_reply, **foreign_hunks_reply,
+    }
     if not reply.get("error"):
         _settle_ledger_pointer(repo_root, run_id, halted, sizing_rel, outcome_rel)
         extra.update(_baton_cascade(worktree_root, repo_root, run_id))

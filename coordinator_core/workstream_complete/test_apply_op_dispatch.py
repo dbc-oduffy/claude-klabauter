@@ -28,6 +28,7 @@ from coordinator_core.authz.dispatchable import ASSEMBLER_DISPATCHABLE
 from coordinator_core.ceremony_common.apply_halt import UnrecognizedDirective
 from coordinator_core.contract.apply_base import UnrecognizedDirective as ApplyBaseUnrecognizedDirective
 from coordinator_core.workstream_complete import apply as wsc_apply
+from pathlib import Path
 
 
 def test_every_consumes_manifest_member_is_allowlisted() -> None:
@@ -70,7 +71,7 @@ def test_load_cli_module_denial_reaches_no_module_load(
 
 
 def test_admission_pre_pass_refuses_whole_run_before_any_directive_dispatches(
-    tmp_path,
+    tmp_path: Path,
 ) -> None:
     directives = [
         {"id": "d1", "cli": "wsc-coverage-gate-runner", "args": []},
@@ -83,7 +84,7 @@ def test_admission_pre_pass_refuses_whole_run_before_any_directive_dispatches(
     assert report["failed"] and report["failed"][0]["id"] is None
 
 
-def test_admission_pre_pass_skips_an_already_satisfied_directive(monkeypatch, tmp_path) -> None:
+def test_admission_pre_pass_skips_an_already_satisfied_directive(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """Slice-B review finding 1 (2026-08-20): an `already_satisfied` directive
     cannot dispatch, so the pre-pass must not refuse the whole run over its
     verb -- a replayed directive whose verb has since left

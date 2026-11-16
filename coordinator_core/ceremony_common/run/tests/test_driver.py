@@ -44,7 +44,7 @@ def _directive(did, depends_on):
 
 
 class Box:
-    def __init__(self, tmp_path, capsys):
+    def __init__(self, tmp_path, capsys) -> None:
         self.root = tmp_path / "repo"
         (self.root / ".git").mkdir(parents=True)
         (self.root / ".git" / "HEAD").write_text("ref: refs/heads/work/test\n", encoding="utf-8")
@@ -60,11 +60,11 @@ class Box:
         (self.plugin / "workflows" / "fixture.mjs").write_text(TEMPLATE, encoding="utf-8")
         return self
 
-    def envelope(self, points=(), directives=()):
+    def envelope(self, points=(), directives=()) -> None:
         self.outputs["orient"] = (0, json.dumps({"judgment_points": list(points), "directives": list(directives)}), "")
 
     def table(self):
-        def run(step, *, repo_root, run_dir, deadline_s, **_kw):
+        def run(step, *, repo_root, run_dir, deadline_s, **_kw) -> ChildOutcome:
             self.ran.append(step.id)
             code, stdout, stderr = self.outputs.get(step.id, (0, "", ""))
             return ChildOutcome(exit_code=code, process_ms=1.0, spawns=1, stdout=stdout, stderr=stderr)
@@ -75,7 +75,7 @@ class Box:
         }
 
     def spec(self, **over) -> CeremonySpec:
-        def finish_steps(decisions, ledger_rows, *, run):
+        def finish_steps(decisions, ledger_rows, *, run) -> list[StepSpec]:
             self.tail_calls.append((list(decisions), dict(run)))
             return [_step("tail-1", "tail")]
 
@@ -94,7 +94,7 @@ class Box:
         fields.update(over)
         return CeremonySpec(**fields)
 
-    def launch(self, spec=None, flags=None, session="S-launch"):
+    def launch(self, spec=None, flags=None, session: str = "S-launch"):
         code = driver.launch(
             spec or self.spec(), repo_root=self.root, flags=flags or {}, session_id=session,
             prog_argv=PROG, dispatch=self.table(), plugin_root=self.plugin, today=DAY,
@@ -114,7 +114,7 @@ class Box:
         out = self.capsys.readouterr()
         return code, out.out, out.err
 
-    def runs(self):
+    def runs(self) -> list[Path]:
         base = ledger.run_dir(self.root, "fixture", "x").parent
         return sorted(p for p in base.iterdir() if p.is_dir())
 
@@ -124,15 +124,15 @@ class Box:
     def status(self, step_id):
         return {r["id"]: (r["status"], r["reason"]) for r in self.rows()}.get(step_id)
 
-    def run_id(self, out):
+    def run_id(self, out) -> str:
         return Path(re.search(r"^digest: (.+)$", out, re.MULTILINE).group(1)).parent.name
 
-    def lock(self):
+    def lock(self) -> Path:
         return single_flight._lock_dir(self.root, "fixture") / "lock.json"
 
 
 @pytest.fixture
-def box(tmp_path, capsys):
+def box(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> Box:
     return Box(tmp_path, capsys)
 
 
@@ -141,7 +141,7 @@ def _results(point_id, disposition, **extra):
     return {"groups": {"judgment": [{"key": point_id, "outcome": "decided", "decision": decision}]}}
 
 
-def test_launch_with_no_agent_work_prints_a_receipt_and_no_workflow(box):
+def test_launch_with_no_agent_work_prints_a_receipt_and_no_workflow(box) -> None:
     code, out, _ = box.launch()
     assert code == 0 and "Workflow(" not in out
     assert out.startswith("# fixture receipt: 2026-10-12 (work/test)")
@@ -149,7 +149,7 @@ def test_launch_with_no_agent_work_prints_a_receipt_and_no_workflow(box):
     assert {r["id"] for r in box.rows()} >= {"prep-1", "orient", "decide-resolve", "tail-1"}
 
 
-def test_launch_with_a_judgment_entry_prints_one_workflow_line_and_a_receipt_that_verifies(box):
+def test_launch_with_a_judgment_entry_prints_one_workflow_line_and_a_receipt_that_verifies(box) -> None:
     box.with_template().envelope([_point("j-1", ["a", "b"])])
     code, out, _ = box.launch()
     assert code == 0 and out.count("Workflow(") == 1
@@ -163,7 +163,7 @@ def test_launch_with_a_judgment_entry_prints_one_workflow_line_and_a_receipt_tha
     assert box.lock().exists()
 
 
-def test_finish_hands_the_payload_and_the_launching_session_to_finish_steps(box):
+def test_finish_hands_the_payload_and_the_launching_session_to_finish_steps(box) -> None:
     spec = box.spec()
     box.with_template().envelope([_point("j-1", ["a", "b"])])
     _, out, _ = box.launch(spec, session="S-launch")
@@ -175,7 +175,7 @@ def test_finish_hands_the_payload_and_the_launching_session_to_finish_steps(box)
     assert not box.lock().exists()
 
 
-def test_undecided_point_exits_5_and_halts_its_dependants(box):
+def test_undecided_point_exits_5_and_halts_its_dependants(box) -> None:
     spec = box.spec()
     box.with_template().envelope(
         [_point("j-1", ["a", "b"], resolves=["d-1"])], [_directive("d-1", "j-1")]
@@ -188,7 +188,7 @@ def test_undecided_point_exits_5_and_halts_its_dependants(box):
     assert "d-1" not in box.ran
 
 
-def test_a_decision_that_does_not_open_a_directive_closes_it_and_an_unknown_dependency_fails_it(box):
+def test_a_decision_that_does_not_open_a_directive_closes_it_and_an_unknown_dependency_fails_it(box) -> None:
     spec = box.spec()
     box.with_template().envelope(
         [_point("j-1", ["a", "b"], resolves=["d-1"])], [_directive("d-1", "j-1"), _directive("d-2", "zz")]
@@ -200,7 +200,7 @@ def test_a_decision_that_does_not_open_a_directive_closes_it_and_an_unknown_depe
     assert box.status("d-2") == ("failed", "unknown-dependency:zz")
 
 
-def test_a_decision_that_opens_a_directive_runs_it_once(box):
+def test_a_decision_that_opens_a_directive_runs_it_once(box) -> None:
     spec = box.spec()
     box.with_template().envelope([_point("j-1", ["a", "b"], resolves=["d-1"])], [_directive("d-1", "j-1")])
     _, out, _ = box.launch(spec)
@@ -209,7 +209,7 @@ def test_a_decision_that_opens_a_directive_runs_it_once(box):
     assert box.status("d-1") == ("ran", "")
 
 
-def test_a_chained_spec_runs_it_last_and_returns_its_digest(box):
+def test_a_chained_spec_runs_it_last_and_returns_its_digest(box) -> None:
     digest_file = box.root / "child-digest.json"
     digest_file.write_text(json.dumps({"ceremony": "other"}), encoding="utf-8")
     box.outputs["chain:whats-next"] = (0, f'digest: {digest_file.as_posix()}\nWorkflow({{scriptPath: "child.mjs"}})\n', "")
@@ -223,20 +223,20 @@ def test_a_chained_spec_runs_it_last_and_returns_its_digest(box):
     assert stored["chained"] == {"ceremony": "other"}
 
 
-def test_a_flag_outside_launch_flags_exits_2_by_name_and_takes_no_lock(box):
+def test_a_flag_outside_launch_flags_exits_2_by_name_and_takes_no_lock(box) -> None:
     code, _, err = box.launch(flags={"--nope": "1"})
     assert code == 2 and "--nope" in err
     assert not box.lock().exists() and not box.ran
 
 
-def test_a_declared_flag_reaches_the_spec(box):
+def test_a_declared_flag_reaches_the_spec(box) -> None:
     seen = []
     spec = box.spec(spec_points=lambda envelope, flags, rows: seen.append(dict(flags)) or [])
     code, _, _ = box.launch(spec, flags={"--x": "1"})
     assert code == 0 and seen == [{"--x": "1"}]
 
 
-def test_missing_template_exits_4_and_releases_the_lock(box):
+def test_missing_template_exits_4_and_releases_the_lock(box) -> None:
     box.envelope([_point("j-1", ["a", "b"])])
     code, out, err = box.launch()
     assert code == 4 and "workflows/fixture.mjs" in err and "### Failed" in out
@@ -244,7 +244,7 @@ def test_missing_template_exits_4_and_releases_the_lock(box):
     assert not box.lock().exists()
 
 
-def test_finish_twice_runs_the_tail_once(box):
+def test_finish_twice_runs_the_tail_once(box) -> None:
     spec = box.spec()
     box.with_template().envelope([_point("j-1", ["a", "b"])])
     _, out, _ = box.launch(spec)
@@ -254,7 +254,7 @@ def test_finish_twice_runs_the_tail_once(box):
     assert first == second and box.ran.count("tail-1") == 1 and len(box.tail_calls) == 1
 
 
-def test_a_failing_gate_step_halts_the_rest_and_exits_5(box):
+def test_a_failing_gate_step_halts_the_rest_and_exits_5(box) -> None:
     spec = box.spec(front_door=[_step("prep-1", "prep", gates_next=True), _step("orient", "orient")])
     box.outputs["prep-1"] = (1, "", "boom")
     code, out, _ = box.launch(spec)
@@ -273,7 +273,7 @@ def _two_failing_tails(box):
 
 
 @pytest.fixture
-def commits(monkeypatch):
+def commits(monkeypatch: pytest.MonkeyPatch):
     from coordinator_core.ops.ceremony import git_native
 
     calls = []
@@ -289,7 +289,7 @@ def commits(monkeypatch):
     return calls
 
 
-def test_filed_failure_rows_land_in_one_scoped_commit(box, commits):
+def test_filed_failure_rows_land_in_one_scoped_commit(box, commits) -> None:
     code, _, _ = box.launch(_two_failing_tails(box))
     assert code == 0
     (paths, msg), = commits
@@ -297,12 +297,12 @@ def test_filed_failure_rows_land_in_one_scoped_commit(box, commits):
     assert msg.startswith("fixture: file failure rows (run ")
 
 
-def test_a_run_with_no_failures_makes_no_commit(box, commits):
+def test_a_run_with_no_failures_makes_no_commit(box, commits) -> None:
     box.launch()
     assert commits == []
 
 
-def test_a_cited_open_row_commits_nothing(box, commits):
+def test_a_cited_open_row_commits_nothing(box, commits) -> None:
     directory = box.root / "state" / "bug-backlog"
     directory.mkdir(parents=True)
     spec = box.spec(finish_steps=lambda decisions, rows, *, run: [_step("tail-1", "tail")])
@@ -316,7 +316,7 @@ def test_a_cited_open_row_commits_nothing(box, commits):
     assert commits == []
 
 
-def test_a_failed_commit_becomes_a_ledger_row_and_the_finish_completes(box, monkeypatch):
+def test_a_failed_commit_becomes_a_ledger_row_and_the_finish_completes(box, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.ceremony import git_native
 
     def boom(*_a, **_k):
@@ -329,6 +329,6 @@ def test_a_failed_commit_becomes_a_ledger_row_and_the_finish_completes(box, monk
     assert (box.runs()[-1] / driver.DONE_FILE).exists()
 
 
-def test_the_driver_names_no_ceremony():
+def test_the_driver_names_no_ceremony() -> None:
     text = Path(driver.__file__).read_text(encoding="utf-8").lower()
     assert not [name for name in ("workday", "workweek") if name in text]

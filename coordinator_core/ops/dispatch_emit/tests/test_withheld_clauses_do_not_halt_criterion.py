@@ -16,6 +16,7 @@ from coordinator_core.ops.review_mint.execute_review import (
     _widen_judge_schema,
     withheld_rows_clause,
 )
+from pathlib import Path
 
 _PLAN = "docs/plans/2026-10-22-w.md"
 _SIZING = "state/sizings/2026-10-22-w.yaml"
@@ -80,7 +81,7 @@ def _not_met(**over) -> dict:
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_only_withheld_clauses_unmet_lands_met_with_the_clauses_carried_open():
+def test_only_withheld_clauses_unmet_lands_met_with_the_clauses_carried_open() -> None:
     out = _rules(_not_met(), ["C12", "C20"])
     assert out["status"] == "met"
     assert out[WITHHELD_CLAUSES_KEY] == _WITHHELD
@@ -89,29 +90,29 @@ def test_only_withheld_clauses_unmet_lands_met_with_the_clauses_carried_open():
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_non_withheld_unmet_clause_still_halts():
+def test_a_non_withheld_unmet_clause_still_halts() -> None:
     unmet = _not_met(clauses=[{"clause": "tests pass", "status": "not_met", "observed_ref": "r"}])
     assert _rules(unmet, ["C12"])["status"] == "not_met"
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_withheld_clause_naming_a_row_that_is_not_withheld_still_halts():
+def test_a_withheld_clause_naming_a_row_that_is_not_withheld_still_halts() -> None:
     assert _rules(_not_met(), ["C99"])["status"] == "not_met"
 
 
-def test_judge_prompt_clause_names_withheld_rows_and_register_rows():
+def test_judge_prompt_clause_names_withheld_rows_and_register_rows() -> None:
     text = withheld_rows_clause([{"id": "C12", "title": "switch callers", "register_rows": ["R1"]}])
     assert "C12 (switch callers) [register R1]" in text and WITHHELD_CLAUSES_KEY in text
     assert withheld_rows_clause([]) == ""
 
 
-def test_judge_schema_accepts_withheld_clauses():
+def test_judge_schema_accepts_withheld_clauses() -> None:
     props = json.loads(_widen_judge_schema(json.dumps({"type": "object", "properties": {}})))["properties"]
     assert WITHHELD_CLAUSES_KEY in props
 
 
-def test_gated_row_carries_its_title_and_register_rows():
+def test_gated_row_carries_its_title_and_register_rows() -> None:
     raw = {"C12": {"id": "C12", "title": "switch callers", "register_rows": ["R1"],
                    "external_gate": [{"owner_repo": "coordinator-content-repo", "requires": "landed-work"}]}}
     (g,) = gated_rows([{"id": "C12", "reason": "external_gate"}], raw)
@@ -128,7 +129,7 @@ def _repo(tmp_path):
     return tmp_path
 
 
-def _review(withheld=True):
+def _review(withheld: bool = True):
     judged = {"id": "R1", "claim": "this-plan", "status": "not_met", "wired": False}
     crit = {"status": "met", "observation": "ok", "register_rows": [judged]}
     if withheld:
@@ -136,7 +137,7 @@ def _review(withheld=True):
     return {"criterion": crit}
 
 
-def test_register_gate_leaves_a_withheld_row_open_without_demoting(tmp_path):
+def test_register_gate_leaves_a_withheld_row_open_without_demoting(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     review = _review()
     assert withheld_register_rows(root, _PLAN, review["criterion"]) == frozenset({"R1"})
@@ -144,7 +145,7 @@ def test_register_gate_leaves_a_withheld_row_open_without_demoting(tmp_path):
     assert review["criterion"]["status"] == "met"
 
 
-def test_register_gate_still_demotes_an_unmet_row_no_withheld_clause_names(tmp_path):
+def test_register_gate_still_demotes_an_unmet_row_no_withheld_clause_names(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     review = _review(withheld=False)
     reason = register_gate(root, _PLAN, review)
@@ -152,7 +153,7 @@ def test_register_gate_still_demotes_an_unmet_row_no_withheld_clause_names(tmp_p
     assert review["criterion"]["status"] == "not_met"
 
 
-def test_register_gate_ignores_a_withheld_clause_the_plan_does_not_confirm(tmp_path):
+def test_register_gate_ignores_a_withheld_clause_the_plan_does_not_confirm(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     (root / _PLAN).write_text(_PLAN_TEXT.replace("disposition: open", "disposition: coded"), encoding="utf-8")
     review = _review()
@@ -170,7 +171,7 @@ _SLOT_PLAN = _PLAN_TEXT.replace(
 )
 
 
-def test_needs_slot_row_is_withheld_for_the_judge_without_widening_gated():
+def test_needs_slot_row_is_withheld_for_the_judge_without_widening_gated() -> None:
     from coordinator_core.ops.dispatch_emit.emit import _withheld_judge_rows
 
     (row,) = _withheld_judge_rows(_SLOT_PLAN.replace("\r\n", "\n"), [])
@@ -179,7 +180,7 @@ def test_needs_slot_row_is_withheld_for_the_judge_without_widening_gated():
     assert _withheld_judge_rows(done, []) == []
 
 
-def test_register_gate_leaves_a_needs_slot_row_open(tmp_path):
+def test_register_gate_leaves_a_needs_slot_row_open(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     (root / _PLAN).write_text(_SLOT_PLAN, encoding="utf-8")
     review = _review()
@@ -187,7 +188,7 @@ def test_register_gate_leaves_a_needs_slot_row_open(tmp_path):
     assert review["criterion"]["status"] == "met"
 
 
-def test_stage_manifest_carries_slot_withheld_apart_from_gated():
+def test_stage_manifest_carries_slot_withheld_apart_from_gated() -> None:
     from coordinator_core.ops.dispatch_emit.ask_contract import StageManifest
 
     base = {"run_dir": "r", "rows": [], "review_declared_paths": [], "marker_path": "m"}

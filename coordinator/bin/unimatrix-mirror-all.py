@@ -26,13 +26,18 @@ import sys
 import threading
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from argparse import Namespace
+    from types import ModuleType
 
 HERE = Path(__file__).resolve().parent
 NAME_RE = re.compile(r"[A-Za-z0-9._-]{1,64}")
 POLL_SECONDS = 30
 
 
-def _shared():
+def _shared() -> "ModuleType":
     spec = importlib.util.spec_from_file_location("unimatrix_roster", HERE / "unimatrix-roster.py")
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -42,7 +47,7 @@ def _shared():
 _ROSTER = None
 
 
-def _roster():
+def _roster() -> "ModuleType":
     """The roster module, loaded on first use: a bin entrypoint stays inert at import."""
     global _ROSTER
     if _ROSTER is None:
@@ -50,13 +55,13 @@ def _roster():
     return _ROSTER
 
 
-def __getattr__(name):
+def __getattr__(name) -> "ModuleType":
     if name == "R":
         return _roster()
     raise AttributeError(name)
 
 
-def parse_args(argv):
+def parse_args(argv) -> "Namespace":
     p = argparse.ArgumentParser(prog="unimatrix-mirror-all.py")
     p.add_argument("log")
     p.add_argument("skip", nargs="*", help="session names mirrored by a client started elsewhere")
@@ -72,7 +77,7 @@ def parse_args(argv):
 _RELAY = None
 
 
-def _relay():
+def _relay() -> "ModuleType":
     """The relay module, loaded on first use for its `codex_holder_dead`."""
     global _RELAY
     if _RELAY is None:
@@ -113,7 +118,7 @@ def inbox_cmd(d, name, log_dir, remote, key, tunnel_remote=None):
     return cmd + ["--tunnel-remote", tunnel_remote] if tunnel_remote else cmd
 
 
-def mux_names_path(log_dir, remote):
+def mux_names_path(log_dir, remote) -> str:
     """The file the mux client polls for the names to hold: name -> {pid, endpoint}."""
     return os.path.join(log_dir, f"unimatrix-inbox-mux-{re.sub(r'[^A-Za-z0-9._-]', '_', str(remote))}.names.json")
 
@@ -166,7 +171,7 @@ def _client_log_tail(log_dir, name):
         return ""
 
 
-def refused_by_far_owner(log_dir, name):
+def refused_by_far_owner(log_dir, name) -> bool:
     """True when the client's last attempt was refused because the far box already holds `name`.
 
     The far box's pull supervisor owns such a name: one owner per name, so this push side parks it
@@ -175,7 +180,7 @@ def refused_by_far_owner(log_dir, name):
     return any(m in tail for m in FAR_OWNER_REFUSALS)
 
 
-def refused_by_far_host(log_dir, name):
+def refused_by_far_host(log_dir, name) -> bool:
     """True when the client's last attempt was told the far box hosts no mirrors, whatever the exit code."""
     return HOST_REFUSAL in _client_log_tail(log_dir, name)
 
@@ -204,7 +209,7 @@ def _mux_held(live, clients, m, absent, say):
     return held
 
 
-def _mux_reap(m, clients, live, cfg, log_dir, say):
+def _mux_reap(m, clients, live, cfg, log_dir, say) -> bool:
     """Account for a mux client that exited; True when the pass must fall back to per-name clients."""
     rc = m["proc"].poll()
     m["proc"] = None
@@ -230,11 +235,11 @@ def _mux_reap(m, clients, live, cfg, log_dir, say):
     return False
 
 
-def _tag(remote):
+def _tag(remote) -> str:
     return re.sub(r"[^A-Za-z0-9._-]", "_", str(remote))
 
 
-def _pair_contract():
+def _pair_contract() -> "ModuleType":
     path = HERE / "lib" / "unimatrix_pair_contract.py"
     mod = sys.modules.get("unimatrix_pair_contract")
     if mod is None:
@@ -245,7 +250,7 @@ def _pair_contract():
     return mod
 
 
-def far_owns_mirror(cfg, say):
+def far_owns_mirror(cfg, say) -> bool:
     """True when the far box is the pair's mirror owner, so this side starts no mirror.
 
     The far side's own sync starts the one mirror; replies still return down its inbox connection.
@@ -307,7 +312,7 @@ def sync_mux(clients, live, cfg, say):
     publish_stale(clients, live, cfg, say)
 
 
-def sync_per_name(clients, live, cfg, say):
+def sync_per_name(clients, live, cfg, say) -> None:
     """One reconcile pass with one client per session: `clients` is name -> (session pid, Popen)."""
     if far_owns_mirror(cfg, say):
         return
@@ -373,12 +378,12 @@ DEAD_MARK_SECONDS = 2 * BACKOFF_CAP_SECONDS
 _PUBLISHED = {}  # name -> (state, until epoch) last sent to the far box
 
 
-def _box_mux():
+def _box_mux() -> "ModuleType":
     """The box_mux module, for the calls that open a stream to the far box."""
     return _box_mux_module()
 
 
-def _box_mux_module():
+def _box_mux_module() -> "ModuleType":
     """The box_mux module itself; pure helpers like `box_of` read it here, never opening a stream."""
     path = HERE / "lib" / "unimatrix_box_mux.py"
     mod = sys.modules.get("unimatrix_box_mux")
@@ -395,7 +400,7 @@ def _send_stale_mark(cfg, command):
     return _box_mux().for_remote(remote, key=cfg.key, extra=["-o", "ConnectTimeout=10"]).run(command, b"", timeout=15)
 
 
-def publish_stale(clients, live, cfg, say, send=None):
+def publish_stale(clients, live, cfg, say, send=None) -> None:
     """Tell the far box about each dead or backed-off mirror so a sender there lists it as stale.
 
     The mirror-state file describes this box; the far box's senders cannot read it. One relay call
@@ -422,8 +427,8 @@ def publish_stale(clients, live, cfg, say, send=None):
         (send or _start_publish)(cfg, due, say)
 
 
-def _start_publish(cfg, commands, say):
-    def run():
+def _start_publish(cfg, commands, say) -> None:
+    def run() -> None:
         for command in commands:
             try:
                 r = _send_stale_mark(cfg, command)
@@ -461,7 +466,7 @@ def mirror_states(clients, live):
     return out
 
 
-def write_mirror_state(log_dir, clients, live):
+def write_mirror_state(log_dir, clients, live) -> None:
     """Atomically rewrite the mirror-state file when a name's state, rc or retry time changed."""
     states = mirror_states(clients, live)
     sig = {n: (v["state"], v["rc"], _STATE["retry_at"].get(n)) for n, v in states.items()}
@@ -477,7 +482,7 @@ def write_mirror_state(log_dir, clients, live):
 _ROUTER_MODULE = None
 
 
-def _router_module():
+def _router_module() -> "ModuleType":
     """Load the router module once: ensure_router probes every poll and every 0.2s while waiting."""
     global _ROUTER_MODULE
     if _ROUTER_MODULE is None:
@@ -516,7 +521,7 @@ def router_answers(ctl):
         return False
 
 
-def ensure_router(say, wait=3.0):
+def ensure_router(say, wait: float = 3.0) -> bool:
     """Spawn the peer router detached when its endpoint does not answer on either OS.
 
     A nonblocking process lock held across probe, spawn and bind keeps two supervisors (one per far
@@ -552,7 +557,7 @@ def ensure_router(say, wait=3.0):
             transport.unlock_file(lock)
 
 
-def boot_prune(log_dir, live, say):
+def boot_prune(log_dir, live, say) -> None:
     """Drop the recorded mirror state of every name whose near source face is gone or dead.
 
     A restarted supervisor would otherwise carry the last life's rows (and re-publish their stale
@@ -575,17 +580,17 @@ def boot_prune(log_dir, live, say):
             pass
 
 
-def main(argv=None):
+def main(argv=None) -> None:
     cfg = parse_args(sys.argv[1:] if argv is None else argv)
     skip = set(cfg.skip)
     log = open(cfg.log, "a", encoding="utf-8", buffering=1)
 
-    def say(msg):
+    def say(msg) -> None:
         log.write(f"{time.strftime('%H:%M:%SZ', time.gmtime())} {msg}\n")
 
     if sys.platform != "win32":
         # A stop is never silent: a clean 0 would read as "nothing to mirror" while every mirror drops.
-        def stopped(signum, _frame):
+        def stopped(signum, _frame) -> None:
             say(f"stopped by signal {signum}; mirrors drop until relaunched")
             sys.exit(128 + signum)
         signal.signal(signal.SIGTERM, stopped)

@@ -41,7 +41,7 @@ from coordinator_core.ops.fleet._memo_compose import (
 
 
 @pytest.fixture(autouse=True)
-def _drop_settings_home_override(monkeypatch):
+def _drop_settings_home_override(monkeypatch: pytest.MonkeyPatch) -> None:
     """Neutralise ``COORDINATOR_SETTINGS_HOME`` for every test in this module.
 
     ``_make_claude_home`` below writes its registry under
@@ -133,38 +133,38 @@ def _snapshot(tmp_path: Path) -> set:
 
 
 class TestSetupErrorEnvelope:
-    def test_dry_run_missing(self):
+    def test_dry_run_missing(self) -> None:
         result = _validate_list_params({})
         assert isinstance(result, dict)
         assert result["exit_code"] == 1
 
-    def test_dry_run_not_bool(self):
+    def test_dry_run_not_bool(self) -> None:
         result = _validate_list_params({"dry_run": "yes"})
         assert isinstance(result, dict)
         assert result["exit_code"] == 1
 
-    def test_dry_run_false_rejected(self):
+    def test_dry_run_false_rejected(self) -> None:
         result = _validate_list_params({"dry_run": False})
         assert isinstance(result, dict)
         assert result["exit_code"] == 1
 
-    def test_to_wrong_type_rejected(self):
+    def test_to_wrong_type_rejected(self) -> None:
         result = _validate_list_params({"dry_run": True, "to": 12345})
         assert isinstance(result, dict)
         assert result["exit_code"] == 1
 
-    def test_from_id_wrong_type_rejected(self):
+    def test_from_id_wrong_type_rejected(self) -> None:
         result = _validate_list_params({"dry_run": True, "from_id": 12345})
         assert isinstance(result, dict)
         assert result["exit_code"] == 1
 
-    def test_from_id_absent_is_fine(self):
+    def test_from_id_absent_is_fine(self) -> None:
         result = _validate_list_params({"dry_run": True})
         assert not isinstance(result, dict)
         dry_run, to, topic, from_id = result
         assert from_id is None
 
-    def test_handler_dry_run_false_returns_setup_error(self, tmp_path, monkeypatch):
+    def test_handler_dry_run_false_returns_setup_error(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         claude_home = _make_claude_home(tmp_path, {})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
         result = _run(_memo_list({"dry_run": False}))
@@ -173,7 +173,7 @@ class TestSetupErrorEnvelope:
 
 
 class TestEnumerationMode:
-    def test_enumerates_all_registered_receivers(self, tmp_path, monkeypatch):
+    def test_enumerates_all_registered_receivers(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         rag_repo = tmp_path / "gadget-repo"
         holo_repo = tmp_path / "example-game-workbench-repo"
         rag_repo.mkdir()
@@ -203,8 +203,8 @@ class TestEnumerationMode:
             assert c["aliases"] == []
 
     def test_empty_registry_yields_no_receivers_but_registry_status_present(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         claude_home = _make_claude_home(tmp_path, {})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
@@ -216,7 +216,7 @@ class TestEnumerationMode:
         assert len(statuses) == 1
         assert statuses[0]["ok"] is True
 
-    def test_no_registry_configured_yields_no_receivers(self, tmp_path, monkeypatch):
+    def test_no_registry_configured_yields_no_receivers(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         missing_home = tmp_path / "nonexistent-claude-home"
         missing_home.mkdir()
         monkeypatch.setenv("CLAUDE_HOME", str(missing_home))
@@ -232,8 +232,8 @@ class TestEnumerationMode:
 
 class TestEnumerationPublishMirrors:
     def test_publish_mirrors_land_in_own_section_not_conflated_with_receivers(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
         claude_home = _make_claude_home(
@@ -272,8 +272,8 @@ class TestEnumerationPublishMirrors:
         assert "deep-research-claude-em" in mirror["aliases"]
 
     def test_no_publish_mirrors_configured_yields_empty_mirror_section(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         claude_home = _make_claude_home(tmp_path, {})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
@@ -285,8 +285,8 @@ class TestEnumerationPublishMirrors:
 
 class TestEnumerationAliasesAndCentral:
     def test_canonical_home_alias_section_present_and_empty_when_field_absent(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         claude_home = _make_claude_home(tmp_path, {})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
@@ -297,8 +297,8 @@ class TestEnumerationAliasesAndCentral:
         assert aliases == []
 
     def test_is_central_from_settings_home_sentinel_with_no_legacy_pointer(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         doe_repo = tmp_path / "coordinator-content-repo-repo"
         doe_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"content_root": str(doe_repo)})
@@ -320,7 +320,7 @@ class TestEnumerationAliasesAndCentral:
         assert len(doe) == 1
         assert doe[0]["is_central"] is True
 
-    def test_registry_status_entry_shape(self, tmp_path, monkeypatch):
+    def test_registry_status_entry_shape(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
@@ -335,7 +335,7 @@ class TestEnumerationAliasesAndCentral:
 
 
 class TestRedirectPrecedenceOverPublishMirror:
-    def test_fully_shadowed_mirror_is_omitted_entirely(self, tmp_path, monkeypatch):
+    def test_fully_shadowed_mirror_is_omitted_entirely(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         claude_home = _make_claude_home(
             tmp_path,
             {},
@@ -386,8 +386,8 @@ class TestRedirectPrecedenceOverPublishMirror:
         assert mirror_surface.isdisjoint(alias_ids)
 
     def test_partial_shadowing_mirror_survives_with_non_colliding_alias_only(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Mirror with one colliding alias and one non-colliding alias ->
         entry SURVIVES with only the non-colliding alias — the naive
         "drop the whole mirror on any collision" shape would wrongly delete
@@ -430,8 +430,8 @@ class TestRedirectPrecedenceOverPublishMirror:
         assert mirror_surface.isdisjoint(alias_ids)
 
     def test_degraded_no_redirect_field_matches_pre_fix_behavior(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         claude_home = _make_claude_home(
             tmp_path,
             {},
@@ -466,8 +466,8 @@ class TestRedirectPrecedenceOverPublishMirror:
 
 class TestReceiverMirrorPathCollision:
     def test_repo_shadowed_by_mirror_path_excluded_from_receivers(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         shared_repo = tmp_path / "claude-klabauter"
         shared_repo.mkdir()
         claude_home = _make_claude_home(
@@ -503,8 +503,8 @@ class TestReceiverMirrorPathCollision:
         assert str(shared_repo) not in receiver_paths
 
     def test_normal_sibling_with_no_mirror_collision_unaffected(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         rag_repo = tmp_path / "gadget-repo"
         mirror_repo = tmp_path / "unrelated-mirror"
         rag_repo.mkdir()
@@ -532,8 +532,8 @@ class TestReceiverMirrorPathCollision:
         assert mirrors[0]["mirror_key"] == "deep_research_claude"
 
     def test_redirect_alias_subtraction_still_behaves_alongside_path_collision(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         shared_repo = tmp_path / "claude-klabauter"
         shared_repo.mkdir()
         claude_home = _make_claude_home(
@@ -578,7 +578,7 @@ class TestReceiverMirrorPathCollision:
 
 
 class TestResolutionMode:
-    def test_resolved_to_reports_destination_inbox(self, tmp_path, monkeypatch):
+    def test_resolved_to_reports_destination_inbox(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
@@ -594,7 +594,7 @@ class TestResolutionMode:
         assert candidate["target_inbox"] == str(rag_repo / "cross-repo" / "inbox")
         assert candidate["note"] is None
 
-    def test_unresolved_to_reports_resolved_false_with_reason(self, tmp_path, monkeypatch):
+    def test_unresolved_to_reports_resolved_false_with_reason(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         claude_home = _make_claude_home(tmp_path, {})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
@@ -606,7 +606,7 @@ class TestResolutionMode:
         assert candidate["target_inbox"] is None
         assert "not registered" in candidate["note"]
 
-    def test_unresolved_to_suggests_nearest_match(self, tmp_path, monkeypatch):
+    def test_unresolved_to_suggests_nearest_match(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         engine_repo = tmp_path / "sprocket-engine"
         engine_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"sprocket_engine": str(engine_repo)})
@@ -621,8 +621,8 @@ class TestResolutionMode:
 
 class TestResolvedFilename:
     def test_resolved_to_plus_topic_yields_resolved_filename_matching_send(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
@@ -645,8 +645,8 @@ class TestResolvedFilename:
         assert candidate["resolved_filename"] == expected
 
     def test_non_claude_klabauter_caller_preview_matches_send_shared_derivation(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
@@ -675,7 +675,7 @@ class TestResolvedFilename:
         assert "claude-klabauter-engine" not in candidate["resolved_filename"]
         assert "other-caller-em" in candidate["resolved_filename"]
 
-    def test_claude_klabauter_origin_caller_still_previews_correctly(self, tmp_path, monkeypatch):
+    def test_claude_klabauter_origin_caller_still_previews_correctly(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Guard against regressing the currently-accidentally-correct case:
         a caller that supplies NO from_id (claude-klabauter-origin / engine-default
         send) still previews with the SAME resolved sender id memo.send
@@ -702,8 +702,8 @@ class TestResolvedFilename:
         assert "claude-klabauter-engine" not in candidate["resolved_filename"]
 
     def test_root_threaded_preview_matches_caller_worktree_not_ambient_cwd(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """memo.list's
         `repo_root` handler param must be threaded through to the defaulted-
         sender resolution, never left to the engine process's ambient cwd
@@ -752,8 +752,8 @@ class TestResolvedFilename:
         assert "ambient-repo-em" not in candidate["resolved_filename"]
 
     def test_unknown_caller_identity_fails_loud_not_engine_fallback(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
@@ -772,7 +772,7 @@ class TestResolvedFilename:
         assert "resolved_filename" not in str(result)
         assert "claude-klabauter-engine" not in str(result)
 
-    def test_to_only_resolution_has_no_resolved_filename(self, tmp_path, monkeypatch):
+    def test_to_only_resolution_has_no_resolved_filename(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
@@ -784,7 +784,7 @@ class TestResolvedFilename:
         assert candidate["resolved"] is True
         assert "resolved_filename" not in candidate
 
-    def test_topic_only_no_to_has_no_effect(self, tmp_path, monkeypatch):
+    def test_topic_only_no_to_has_no_effect(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
@@ -797,8 +797,8 @@ class TestResolvedFilename:
             assert "resolved_filename" not in candidate
 
     def test_unresolved_to_plus_topic_has_no_resolved_filename(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         claude_home = _make_claude_home(tmp_path, {})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
@@ -812,7 +812,7 @@ class TestResolvedFilename:
         assert candidate["resolved"] is False
         assert "resolved_filename" not in candidate
 
-    def test_invalid_topic_fails_loud_locked_to_memo_send_regex(self, tmp_path, monkeypatch):
+    def test_invalid_topic_fails_loud_locked_to_memo_send_regex(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """to resolves + an INVALID topic (slash) -> exit_code:1 setup error,
         no resolved_filename anywhere — and the same input is independently
         confirmed to fail memo.send's own _TOPIC_SLUG_RE (locks the two
@@ -835,7 +835,7 @@ class TestResolvedFilename:
         assert result["exit_code"] == 1
         assert "resolved_filename" not in str(result)
 
-    def test_empty_string_topic_fails_loud_not_coerced_to_absent(self, tmp_path, monkeypatch):
+    def test_empty_string_topic_fails_loud_not_coerced_to_absent(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
@@ -847,7 +847,7 @@ class TestResolvedFilename:
 
         assert result["exit_code"] == 1
 
-    def test_absent_topic_key_still_behaves_as_before(self, tmp_path, monkeypatch):
+    def test_absent_topic_key_still_behaves_as_before(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
@@ -862,7 +862,7 @@ class TestResolvedFilename:
 
 
 class TestNoWriteProof:
-    def test_enumeration_leaves_filesystem_unchanged(self, tmp_path, monkeypatch):
+    def test_enumeration_leaves_filesystem_unchanged(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
@@ -877,7 +877,7 @@ class TestNoWriteProof:
             f"(AC2 no-write proof). New paths: {after - before}"
         )
 
-    def test_resolution_leaves_filesystem_unchanged_resolved(self, tmp_path, monkeypatch):
+    def test_resolution_leaves_filesystem_unchanged_resolved(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
@@ -892,7 +892,7 @@ class TestNoWriteProof:
             f"on disk (AC2 no-write proof). New paths: {after - before}"
         )
 
-    def test_resolution_leaves_filesystem_unchanged_unresolved(self, tmp_path, monkeypatch):
+    def test_resolution_leaves_filesystem_unchanged_unresolved(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         claude_home = _make_claude_home(tmp_path, {})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
@@ -908,7 +908,7 @@ class TestNoWriteProof:
 
 class TestNoMemoIndex:
 
-    def test_no_memo_index(self):
+    def test_no_memo_index(self) -> None:
         import types
         import coordinator_core.ops.fleet.memo_list as memo_list_mod
 
@@ -930,7 +930,7 @@ class TestNoMemoIndex:
             f"invariant. Found violating names: {sorted(mutable_collections.keys())}"
         )
 
-    def test_handler_calls_do_not_mutate_module_state(self, tmp_path, monkeypatch):
+    def test_handler_calls_do_not_mutate_module_state(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         import coordinator_core.ops.fleet.memo_list as memo_list_mod
 
         rag_repo = tmp_path / "gadget-repo"
@@ -938,7 +938,7 @@ class TestNoMemoIndex:
         claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
         monkeypatch.setenv("CLAUDE_HOME", str(claude_home))
 
-        def _mutable_module_names():
+        def _mutable_module_names() -> frozenset[str]:
             return frozenset(
                 name
                 for name, val in vars(memo_list_mod).items()
@@ -973,7 +973,7 @@ class TestListAndResolverAgreeOnInboxTarget:
 
         return list_target, resolver_target
 
-    def test_unmigrated_receiver_list_and_resolver_agree(self, tmp_path, monkeypatch):
+    def test_unmigrated_receiver_list_and_resolver_agree(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         rag_repo = tmp_path / "gadget-repo"
         rag_repo.mkdir()
         claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})
@@ -986,7 +986,7 @@ class TestListAndResolverAgreeOnInboxTarget:
         assert list_target == resolver_target
         assert list_target == str(rag_repo / "cross-repo" / "inbox")
 
-    def test_migrated_receiver_list_and_resolver_agree(self, tmp_path, monkeypatch):
+    def test_migrated_receiver_list_and_resolver_agree(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         rag_repo = tmp_path / "gadget-repo"
         (rag_repo / "state" / "cross-repo").mkdir(parents=True)
         claude_home = _make_claude_home(tmp_path, {"gadget_repo": str(rag_repo)})

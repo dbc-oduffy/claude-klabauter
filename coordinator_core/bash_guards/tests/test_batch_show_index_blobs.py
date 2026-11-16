@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from coordinator_core.bash_guards import dispatch_checks
+import pytest
 
 
 class _FakeCompleted:
@@ -20,7 +21,7 @@ def _batch_stdout(sha_a: str, sha_c: str) -> bytes:
     return header_a + content_a + missing_b + header_c + content_c
 
 
-def test_multi_path_batch_resolves_present_and_missing_by_own_slot(monkeypatch):
+def test_multi_path_batch_resolves_present_and_missing_by_own_slot(monkeypatch: pytest.MonkeyPatch) -> None:
     sha_a = "1" * 40
     sha_c = "2" * 40
     stdout = _batch_stdout(sha_a, sha_c)
@@ -37,7 +38,7 @@ def test_multi_path_batch_resolves_present_and_missing_by_own_slot(monkeypatch):
     assert results == {"paths/a": "hello", "paths/b": None, "paths/c": "xyz"}
 
 
-def test_nonzero_returncode_fails_the_whole_batch_closed(monkeypatch):
+def test_nonzero_returncode_fails_the_whole_batch_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     sha_a = "1" * 40
     sha_c = "2" * 40
     stdout = _batch_stdout(sha_a, sha_c)
@@ -54,7 +55,7 @@ def test_nonzero_returncode_fails_the_whole_batch_closed(monkeypatch):
     assert results == {"paths/a": None, "paths/b": None, "paths/c": None}
 
 
-def test_empty_input_short_circuits_without_spawning(monkeypatch):
+def test_empty_input_short_circuits_without_spawning(monkeypatch: pytest.MonkeyPatch) -> None:
     def _fail(*a, **k):
         raise AssertionError("must not spawn for an empty path list")
 

@@ -177,7 +177,7 @@ def judge_shipped_claims(
     for claim in claims:
         rel = claim.path
 
-        def verdict(v, why, claim=claim, rel=rel):
+        def verdict(v, why, claim: ShippedClaim = claim, rel: str = rel) -> None:
             left = why
             if v == "withheld" and reasons is not None:
                 left = reasons.get(rel) or why

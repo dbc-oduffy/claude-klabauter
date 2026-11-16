@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit import terminal_commit as tc
 from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, CommitRequest, render_marker
 from coordinator_core.ops.dispatch_emit.terminal_commit_refusals import REFUSED_REVIEW_OWED
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -28,7 +29,7 @@ def _git(root, *a):
 
 
 @pytest.fixture
-def root(tmp_path):
+def root(tmp_path: Path) -> Path:
     _git(tmp_path, "init", "-q")
     _git(tmp_path, "config", "user.email", "t@t.example")
     _git(tmp_path, "config", "user.name", "t")
@@ -47,7 +48,7 @@ def root(tmp_path):
     return tmp_path
 
 
-def _sidecar(root, rows, verdict="REQUIRES_CHANGES"):
+def _sidecar(root, rows, verdict: str = "REQUIRES_CHANGES") -> None:
     (root / SIDECAR).write_text(
         f"---\nverdict: {verdict}\nfindings_ledger: {{rows: {len(rows)}, verified_at: 2026-11-10T00:00:00Z}}\n---\n\n"
         f"## Findings Ledger\n\n```json\n{json.dumps(rows)}\n```\n",
@@ -63,7 +64,7 @@ def _review(**extra):
     }
 
 
-def _fire(root, review, arm="s"):
+def _fire(root, review, arm: str = "s"):
     params = {
         "script_path": SCRIPT, "incomplete_chunks": [], "run_id": RUN_ID, "arm": arm,
         "run_token": run_token.mint(root / ".git", RUN_ID, SCRIPT),
@@ -74,7 +75,7 @@ def _fire(root, review, arm="s"):
     return reply, head
 
 
-def _refused(root, review, code, arm="s"):
+def _refused(root, review, code, arm: str = "s"):
     reply, head = _fire(root, review, arm)
     assert reply.get("refused") == code, reply
     assert reply.get("committed") is not True
@@ -86,24 +87,24 @@ def _refused(root, review, code, arm="s"):
 UNAPPLIED = [{"id": "F1", "file": "tests/test_a.py", "before": "pass", "after": "assert True", "status": "applied", "verified": True}]
 
 
-def test_standing_verdict_with_an_unapplied_finding_refuses(root):
+def test_standing_verdict_with_an_unapplied_finding_refuses(root) -> None:
     _sidecar(root, UNAPPLIED)
     _refused(root, _review(wave_sidecar_paths=[SIDECAR]), REFUSED_REVIEW_OWED)
 
 
-def test_standing_verdict_with_no_ledger_rows_refuses(root):
+def test_standing_verdict_with_no_ledger_rows_refuses(root) -> None:
     _sidecar(root, [])
     reply = _refused(root, _review(wave_sidecar_paths=[SIDECAR]), REFUSED_REVIEW_OWED)
     assert "no-ledger-rows" in reply["error"]
 
 
-def test_standing_verdict_claimed_with_no_wave_sidecar_refuses(root):
+def test_standing_verdict_claimed_with_no_wave_sidecar_refuses(root) -> None:
     review = _review(wave_reviews=[{"agent_type": "coordinator:reviewer", "verdict": "REQUIRES_CHANGES"}])
     reply = _refused(root, review, REFUSED_REVIEW_OWED)
     assert "no-sidecar" in reply["error"]
 
 
-def test_standing_verdict_whose_sidecar_is_unreadable_refuses(root):
+def test_standing_verdict_whose_sidecar_is_unreadable_refuses(root) -> None:
     review = _review(
         wave_sidecar_paths=["gone.md"],
         wave_reviews=[{"agent_type": "coordinator:reviewer", "verdict": "REQUIRES_CHANGES", "sidecar_path": "gone.md"}],
@@ -112,7 +113,7 @@ def test_standing_verdict_whose_sidecar_is_unreadable_refuses(root):
     assert "sidecar-unreadable" in reply["error"]
 
 
-def test_claimed_standing_verdict_with_verdictless_sidecar_and_no_rows_refuses(root):
+def test_claimed_standing_verdict_with_verdictless_sidecar_and_no_rows_refuses(root) -> None:
     (root / SIDECAR).write_text("no frontmatter\n", encoding="utf-8")
     review = _review(
         wave_sidecar_paths=[SIDECAR],
@@ -123,17 +124,17 @@ def test_claimed_standing_verdict_with_verdictless_sidecar_and_no_rows_refuses(r
 
 
 @pytest.mark.parametrize("arm", ["xs", "s", "m", "l"])
-def test_not_run_tests_on_a_diff_declaring_a_test_file_refuse_at_every_arm(root, arm):
+def test_not_run_tests_on_a_diff_declaring_a_test_file_refuse_at_every_arm(root, arm) -> None:
     _refused(root, _review(tests={"status": "not_run"}), tc.REFUSED_TESTS_NOT_RUN, arm)
 
 
-def test_an_approved_verdict_with_passed_tests_lands(root):
+def test_an_approved_verdict_with_passed_tests_lands(root) -> None:
     _sidecar(root, [], verdict="APPROVED")
     reply, _ = _fire(root, _review(wave_sidecar_paths=[SIDECAR]))
     assert reply.get("committed") is True, reply
 
 
-def test_a_standing_verdict_whose_findings_are_all_in_the_tree_lands(root):
+def test_a_standing_verdict_whose_findings_are_all_in_the_tree_lands(root) -> None:
     rows = [{"id": "F1", "file": "tests/test_a.py", "before": "zzz", "after": "pass", "status": "applied", "verified": True}]
     _sidecar(root, rows)
     reply, _ = _fire(root, _review(wave_sidecar_paths=[SIDECAR]))

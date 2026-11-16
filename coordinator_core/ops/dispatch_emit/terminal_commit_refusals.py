@@ -1006,6 +1006,11 @@ def _pre_existing_dirt_refusal(
             _tc._plan_checkpoint_touched(worktree_root, plan_rel, writes) | prior,
         )
         if dirt:
+            from coordinator_core.ops.dispatch_emit.write_baseline import delivered_at_head
+
+            delivered = delivered_at_head(worktree_root, plan_rel, dirt)
+            dirt = [p for p in dirt if p.replace("\\", "/") not in delivered]
+        if dirt:
             failures.append({"id": iid, "reason": "pre-existing-dirt: " + ", ".join(sorted(set(dirt)))})
     if not failures:
         return None

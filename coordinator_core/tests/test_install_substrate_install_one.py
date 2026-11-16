@@ -24,9 +24,11 @@ Coordinator-content-repo coordinator/tests/test_percolate_store_copies_parity.py
 from __future__ import annotations
 
 from coordinator_core.install import substrate
+from pathlib import Path
+import pytest
 
 
-def test_force_overwrite_repairs_stale_hook_file_destination(tmp_path, capsys):
+def test_force_overwrite_repairs_stale_hook_file_destination(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """The regression this fixes: a percolate-hook-shaped destination (e.g.
     percolate-store.yaml) that has drifted from source must be repaired on
     re-install when the call site marks it force_overwrite=True — it is a
@@ -46,7 +48,7 @@ def test_force_overwrite_repairs_stale_hook_file_destination(tmp_path, capsys):
     assert "re-install overwrites" in out
 
 
-def test_non_hook_config_file_still_preserved_on_diff(tmp_path, capsys):
+def test_non_hook_config_file_still_preserved_on_diff(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Operator-protection path must not regress: a plain .toml (no
     force_overwrite passed, default False) with a differing destination is
     preserved, not overwritten."""
@@ -64,7 +66,7 @@ def test_non_hook_config_file_still_preserved_on_diff(tmp_path, capsys):
     assert "preserved" in out
 
 
-def test_destination_absent_copies_regardless_of_force_overwrite(tmp_path):
+def test_destination_absent_copies_regardless_of_force_overwrite(tmp_path: Path) -> None:
     src = tmp_path / "README.md"
     src.write_text("hello\n", encoding="utf-8")
     dst = tmp_path / "dst" / "README.md"
@@ -75,7 +77,7 @@ def test_destination_absent_copies_regardless_of_force_overwrite(tmp_path):
     assert dst.read_text(encoding="utf-8") == "hello\n"
 
 
-def test_destination_identical_is_noop_with_force_overwrite(tmp_path, capsys):
+def test_destination_identical_is_noop_with_force_overwrite(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Byte-identical destination is a no-op even under force_overwrite —
     no spurious "updated" print, no unnecessary copy."""
     src = tmp_path / "README.md"
@@ -91,7 +93,7 @@ def test_destination_identical_is_noop_with_force_overwrite(tmp_path, capsys):
     assert "updated" not in out
 
 
-def test_code_file_force_overwrite_reason_unchanged(tmp_path, capsys):
+def test_code_file_force_overwrite_reason_unchanged(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     """Pre-existing code-file classification (suffix/name) still reports
     'code file' as the reason, independent of the new caller-forced class."""
     src = tmp_path / "foo.py"

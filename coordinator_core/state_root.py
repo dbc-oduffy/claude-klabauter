@@ -155,7 +155,7 @@ class StateRootError(RuntimeError):
 
 class CrossCuttingStateRoot(StateRootError):
 
-    def __init__(self, artifact: str, message: str):
+    def __init__(self, artifact: str, message: str) -> None:
         super().__init__(message)
         self.artifact = artifact
         self.message = message

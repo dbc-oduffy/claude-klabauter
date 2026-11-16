@@ -38,7 +38,7 @@ def _write_two(repo) -> None:
     (repo / "b.py").write_text("b = 1\n", encoding="utf-8")
 
 
-def test_a_staged_path_in_no_slice_refuses_and_commits_nothing(repo):
+def test_a_staged_path_in_no_slice_refuses_and_commits_nothing(repo) -> None:
     _write_two(repo)
     head = _git(["rev-parse", "HEAD"], repo)
 
@@ -51,7 +51,7 @@ def test_a_staged_path_in_no_slice_refuses_and_commits_nothing(repo):
     assert _git(["rev-parse", "HEAD"], repo) == head
 
 
-def test_a_fully_covered_staged_set_still_lands(repo):
+def test_a_fully_covered_staged_set_still_lands(repo) -> None:
     _write_two(repo)
 
     out = _fire(repo, ("a.py", "b.py"), _review(["a.py", "./b.py"]))
@@ -61,11 +61,11 @@ def test_a_fully_covered_staged_set_still_lands(repo):
     assert set(_git(["show", "--name-only", "--format=", "HEAD"], repo).split()) >= {"a.py", "b.py"}
 
 
-def test_an_empty_slice_list_defers_to_the_floor_note():
+def test_an_empty_slice_list_defers_to_the_floor_note() -> None:
     assert _staged_outside_slices_refusal(_review([]), ["a.py"]) is None
     assert _staged_outside_slices_refusal({"prep": None}, ["a.py"]) is None
 
 
-def test_bookkeeping_and_non_code_paths_are_not_review_owed():
+def test_bookkeeping_and_non_code_paths_are_not_review_owed() -> None:
     review = _review(["a.py"])
     assert _staged_outside_slices_refusal(review, ["a.py", "state/x.yaml", "notes.md"]) is None

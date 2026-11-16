@@ -8,6 +8,7 @@ from coordinator_core.ops.dispatch_emit.emit import (
     UnresolvedAgentTypeError,
     check_agent_types_resolve,
 )
+from pathlib import Path
 
 _SCRIPT = (
     "await agent('p', { agentType: 'coordinator:executor' });\n"
@@ -15,7 +16,7 @@ _SCRIPT = (
 )
 
 
-def _plugin(tmp_path, *names):
+def _plugin(tmp_path, *names) -> str:
     agents = tmp_path / "plugin" / "agents"
     agents.mkdir(parents=True)
     for n in names:
@@ -23,7 +24,7 @@ def _plugin(tmp_path, *names):
     return str(tmp_path / "plugin")
 
 
-def test_refuses_when_a_roster_type_is_missing(tmp_path):
+def test_refuses_when_a_roster_type_is_missing(tmp_path: Path) -> None:
     root = _plugin(tmp_path, "executor")
     with pytest.raises(UnresolvedAgentTypeError) as exc:
         check_agent_types_resolve(_SCRIPT, claude_plugin_root=root, agent_type_host="coordinator")
@@ -32,16 +33,16 @@ def test_refuses_when_a_roster_type_is_missing(tmp_path):
     assert "agents" in str(exc.value)
 
 
-def test_passes_when_every_type_is_present(tmp_path):
+def test_passes_when_every_type_is_present(tmp_path: Path) -> None:
     root = _plugin(tmp_path, "executor", "exit-criterion-judge")
     check_agent_types_resolve(_SCRIPT, claude_plugin_root=root, agent_type_host="coordinator")
 
 
-def test_skips_when_no_plugin_root():
+def test_skips_when_no_plugin_root() -> None:
     check_agent_types_resolve(_SCRIPT, claude_plugin_root=None, agent_type_host="coordinator")
 
 
-def test_degraded_host_skips_the_plugin_stat_for_a_script_with_no_coordinator_type(tmp_path):
+def test_degraded_host_skips_the_plugin_stat_for_a_script_with_no_coordinator_type(tmp_path: Path) -> None:
     root = _plugin(tmp_path)
     check_agent_types_resolve(
         "await agent('p', { agentType: 'general-purpose' });\n",
@@ -50,7 +51,7 @@ def test_degraded_host_skips_the_plugin_stat_for_a_script_with_no_coordinator_ty
     )
 
 
-def test_dispatch_emit_op_refuses_before_writing(tmp_path, monkeypatch):
+def test_dispatch_emit_op_refuses_before_writing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
     from coordinator_core.ops.dispatch_emit.tests.test_op import _write_fixture_plan
 
@@ -105,13 +106,13 @@ def _row(agent_type):
     return WaveRow("C1", "t", "s", ("x.py",), [], [], agent_type=agent_type)
 
 
-def test_emit_qualifies_a_bare_type_naming_one_installed_plugin_agent(tmp_path, monkeypatch):
+def test_emit_qualifies_a_bare_type_naming_one_installed_plugin_agent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _home_with_plugins(tmp_path, monkeypatch, "example-game-repo-control")
     script = _emit_bare_row(tmp_path, monkeypatch, _STEM)
     assert f"example-game-repo-control:{_STEM}" in script
 
 
-def test_emit_refuses_an_unknown_bare_type_by_name(tmp_path, monkeypatch):
+def test_emit_refuses_an_unknown_bare_type_by_name(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit.emit import UnresolvableBareAgentTypeError
 
     _home_with_plugins(tmp_path, monkeypatch)
@@ -120,7 +121,7 @@ def test_emit_refuses_an_unknown_bare_type_by_name(tmp_path, monkeypatch):
     assert not (tmp_path / "out" / "emitted.mjs").exists()
 
 
-def test_emit_refuses_an_ambiguous_bare_type_naming_every_candidate(tmp_path, monkeypatch):
+def test_emit_refuses_an_ambiguous_bare_type_naming_every_candidate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit.emit import UnresolvableBareAgentTypeError
 
     _home_with_plugins(tmp_path, monkeypatch, "example-game-repo-control", "example-game-repo")
@@ -130,7 +131,7 @@ def test_emit_refuses_an_ambiguous_bare_type_naming_every_candidate(tmp_path, mo
     assert _STEM in msg and f"example-game-repo-control:{_STEM}" in msg and f"example-game-repo:{_STEM}" in msg
 
 
-def test_row_agent_type_leaves_qualified_and_builtin_types_unchanged(tmp_path, monkeypatch):
+def test_row_agent_type_leaves_qualified_and_builtin_types_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import emit
 
     _home_with_plugins(tmp_path, monkeypatch, "example-game-repo-control", "example-game-repo")
@@ -138,7 +139,7 @@ def test_row_agent_type_leaves_qualified_and_builtin_types_unchanged(tmp_path, m
         assert emit._row_agent_type(_row(kept)) == kept
 
 
-def test_refusal_is_a_routing_error_so_prep_gate_reports_the_row(tmp_path, monkeypatch):
+def test_refusal_is_a_routing_error_so_prep_gate_reports_the_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import emit
     from coordinator_core.roadmap.prep_gate import _unroutable_rows
 
@@ -150,7 +151,7 @@ def test_refusal_is_a_routing_error_so_prep_gate_reports_the_row(tmp_path, monke
     assert ids == [] and first is None
 
 
-def test_qualified_type_in_the_full_roster_but_not_the_plugin_leg_passes(tmp_path, monkeypatch):
+def test_qualified_type_in_the_full_roster_but_not_the_plugin_leg_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks import block_unenumerated_agent_type as hook
     from coordinator_core.ops.dispatch_emit import emit
 

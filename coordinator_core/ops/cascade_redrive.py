@@ -15,6 +15,7 @@ proceed. The no-divergence path reads frontmatter in-process and spawns no git p
 
 from __future__ import annotations
 
+import os
 from datetime import date
 from pathlib import Path
 from typing import Optional
@@ -77,19 +78,46 @@ def _ship_sha(rel: str, is_plan: bool, handoff_metas: Optional[dict[str, dict]],
     return value.strip() if isinstance(value, str) else ""
 
 
-def _clears_predicate(worktree_root: Path, common_dir: Path, did: str) -> tuple[bool, bool]:
-    """(some live candidate clears the per-target predicate, scan incomplete)."""
-    metas: dict[str, dict] = {}
-    candidates, incomplete, _ = _collect_live_candidates_for_kind(
-        worktree_root, did, kind=_HANDOFF_KIND, metas_out=metas
-    )
-    for candidate in candidates:
+def _live_index(metas: dict[str, dict]) -> dict[str, list[dict]]:
+    """{deliverable_id: [{"path", "fm"}]} of the metas whose lifecycle field is not terminal.
+
+    Mirrors `_collect_live_candidates_for_kind`'s own match filter over one shared scan."""
+    index: dict[str, list[dict]] = {}
+    for key, fm in metas.items():
+        did = fm.get("deliverable_id")
+        if not isinstance(did, str) or not did.strip():
+            continue
+        if fm.get(_HANDOFF_KIND.lifecycle_field) in _HANDOFF_KIND.terminal_values:
+            continue
+        index.setdefault(did.strip(), []).append({"path": Path(key), "fm": fm})
+    return index
+
+
+def _refresh_metas(metas: dict[str, dict], paths: list[str]) -> None:
+    """Re-read exactly `paths` into `metas`; an unreadable or empty record leaves the corpus, as in a fresh scan."""
+    for raw in paths:
+        key = os.path.abspath(raw)
+        try:
+            fm = _HANDOFF_KIND.reader(key)
+        except Exception:  # noqa: BLE001 — a fresh scan drops an unreadable record
+            fm = None
+        if fm:
+            metas[key] = fm
+        else:
+            metas.pop(key, None)
+
+
+def _clears_predicate(
+    common_dir: Path, did: str, index: dict[str, list[dict]], metas: dict[str, dict]
+) -> bool:
+    """True when some live candidate of `did` clears the per-target predicate."""
+    for candidate in index.get(did, []):
         refusal = _predicate_refusal_sync(
             candidate["path"], candidate["fm"], common_dir, kind=_HANDOFF_KIND, corpus_metas=metas
         )
         if refusal is None:
-            return True, incomplete
-    return False, incomplete
+            return True
+    return False
 
 
 def redrive_terminal_divergences(
@@ -123,12 +151,25 @@ def redrive_terminal_divergences(
     if deliverable_ids is not None:
         sources = {did: rels for did, rels in sources.items() if did in deliverable_ids}
 
+    metas: dict[str, dict] = {}
+    index: dict[str, list[dict]] = {}
+    if sources:
+        try:
+            # An empty deliverable id matches nothing: the one scan only fills `metas`.
+            _, incomplete, _ = _collect_live_candidates_for_kind(
+                worktree_root, "", kind=_HANDOFF_KIND, metas_out=metas
+            )
+            index = _live_index(metas)
+        except Exception as exc:  # noqa: BLE001 — the redrive never raises into its caller
+            result["errors"].append({"deliverable_id": None, "error": f"scan failed: {exc}"})
+            result["scan_incomplete"] = True
+            return result
+        if incomplete:
+            result["scan_incomplete"] = True
+
     for did in sorted(sources):
         try:
-            clears, incomplete = _clears_predicate(worktree_root, common_dir, did)
-            if incomplete:
-                result["scan_incomplete"] = True
-            if not clears:
+            if not _clears_predicate(common_dir, did, index, metas):
                 continue
             rel = sorted(sources[did])[0]
             is_plan = rel in plan_ids.get(did, [])
@@ -155,6 +196,11 @@ def redrive_terminal_divergences(
             result["refused"].append({"deliverable_id": did, "source": rel, **entry})
         if cascade.get("scan_incomplete"):
             result["scan_incomplete"] = True
+        touched = [e["path"] for e in cascade.get("advanced", []) + cascade.get("already_advanced", []) if e.get("path")]
+        if touched:
+            # The next id's leg (b) must see these handoffs as the cascade left them.
+            _refresh_metas(metas, touched)
+            index = _live_index(metas)
         if cascade.get("commit_sha"):
             result["commit_shas"].append(cascade["commit_sha"])
         if cascade.get("commit_error"):

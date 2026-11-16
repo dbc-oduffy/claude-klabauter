@@ -33,11 +33,16 @@ import os
 import sys
 
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
-def _load_cli_module():
+def _load_cli_module() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "percolate_liveops_preflight", str(_BIN_DIR / "percolate-liveops-preflight.py")
     )
@@ -51,7 +56,7 @@ _cli = _load_cli_module()
 
 
 class _PeerRow:
-    def __init__(self, session_id: str, address: "str | None"):
+    def __init__(self, session_id: str, address: "str | None") -> None:
         self.session_id = session_id
         self.address = address
 
@@ -60,7 +65,7 @@ class _StubLiveness:
     """Stand-in for coordinator_core.session.liveness — `live_ids_by_cwd` and
     `lines_by_cwd` key on the exact `cwd` the CLI passes."""
 
-    def __init__(self, live_ids_by_cwd: dict, lines_by_cwd: "dict | None" = None):
+    def __init__(self, live_ids_by_cwd: dict, lines_by_cwd: "dict | None" = None) -> None:
         self._live_ids_by_cwd = live_ids_by_cwd
         self._lines_by_cwd = lines_by_cwd or {}
 
@@ -72,10 +77,10 @@ class _StubLiveness:
 
 
 class _StubPeerRoster:
-    def __init__(self, rows_by_cwd: "dict | None" = None):
+    def __init__(self, rows_by_cwd: "dict | None" = None) -> None:
         self._rows_by_cwd = rows_by_cwd or {}
 
-    def build_roster(self, repo_root, raise_on_failure=False):
+    def build_roster(self, repo_root, raise_on_failure: bool = False):
         return self._rows_by_cwd.get(repo_root, [])
 
 
@@ -85,20 +90,20 @@ class _StubMachineResolver:
     per-file flat dict up by `path.name`, mirroring the real module's
     two-file (tracked, local) merge without touching any real TOML."""
 
-    def __init__(self, tracked: "dict | None" = None, local: "dict | None" = None):
+    def __init__(self, tracked: "dict | None" = None, local: "dict | None" = None) -> None:
         self._files = {
             "registry.toml": tracked or {},
             "registry.local.toml": local or {},
         }
 
-    def registry_dir(self):
+    def registry_dir(self) -> Path:
         return Path("/stub-registry-dir")
 
     def load_flat_registry_file(self, path):
         return dict(self._files.get(Path(path).name, {}))
 
 
-def _patch_import_modules(monkeypatch, liveness, peer_roster, machine_resolver):
+def _patch_import_modules(monkeypatch, liveness, peer_roster, machine_resolver) -> None:
     monkeypatch.setattr(_cli, "_import_modules", lambda: (liveness, peer_roster, machine_resolver))
 
 
@@ -127,7 +132,7 @@ def _run(
     return rc, out
 
 
-def test_working_repo_session_reported_unaffected_and_excluded_from_verdict(tmp_path, monkeypatch, capsys):
+def test_working_repo_session_reported_unaffected_and_excluded_from_verdict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo = tmp_path / "engine-working-repo"
     repo.mkdir()
     registry = {
@@ -147,7 +152,7 @@ def test_working_repo_session_reported_unaffected_and_excluded_from_verdict(tmp_
     assert "verdict: affects 0 of 1 live sessions." in out
 
 
-def test_non_working_repo_session_reported_affected_and_counted(tmp_path, monkeypatch, capsys):
+def test_non_working_repo_session_reported_affected_and_counted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo = tmp_path / "published-mirror-consumer"
     repo.mkdir()
     registry = {
@@ -165,7 +170,7 @@ def test_non_working_repo_session_reported_affected_and_counted(tmp_path, monkey
     assert "verdict: affects 1 of 1 live sessions." in out
 
 
-def test_addressable_session_prints_its_resolved_address(tmp_path, monkeypatch, capsys):
+def test_addressable_session_prints_its_resolved_address(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo = tmp_path / "consumer-with-address"
     repo.mkdir()
     registry = {"repos.consumer_two": str(repo)}
@@ -182,7 +187,7 @@ def test_addressable_session_prints_its_resolved_address(tmp_path, monkeypatch, 
     assert "address=not addressable" not in out
 
 
-def test_unaddressable_session_names_the_gap_not_a_guess(tmp_path, monkeypatch, capsys):
+def test_unaddressable_session_names_the_gap_not_a_guess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo = tmp_path / "consumer-without-address"
     repo.mkdir()
     registry = {"repos.consumer_three": str(repo)}
@@ -198,7 +203,7 @@ def test_unaddressable_session_names_the_gap_not_a_guess(tmp_path, monkeypatch, 
     assert "address=not addressable" in out
 
 
-def test_two_registry_aliases_of_same_path_censused_once(tmp_path, monkeypatch, capsys):
+def test_two_registry_aliases_of_same_path_censused_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo = tmp_path / "aliased-repo"
     repo.mkdir()
     registry = {
@@ -218,7 +223,7 @@ def test_two_registry_aliases_of_same_path_censused_once(tmp_path, monkeypatch, 
     assert "verdict: affects 0 of 1 live sessions." in out
 
 
-def test_module_docstring_is_populated():
+def test_module_docstring_is_populated() -> None:
     """`from __future__ import
     annotations` used to precede the module docstring, demoting it to a
     dead expression that never became `__doc__`. Pins that it now does."""
@@ -226,7 +231,7 @@ def test_module_docstring_is_populated():
     assert "REPORT, not a gate" in _cli.__doc__
 
 
-def test_two_registry_aliases_with_path_shape_variance_censused_once(tmp_path, monkeypatch, capsys):
+def test_two_registry_aliases_with_path_shape_variance_censused_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """Same on-disk repo aliased via a case variant and a trailing
     separator -- covers the case/separator/trailing-slash variance
     `_normalize_path`'s realpath+normpath+normcase pipeline exists to
@@ -263,7 +268,7 @@ def test_two_registry_aliases_with_path_shape_variance_censused_once(tmp_path, m
     assert "verdict: affects 0 of 1 live sessions." in out
 
 
-def test_zero_affected_case_reads_as_a_normal_unremarkable_line(tmp_path, monkeypatch, capsys):
+def test_zero_affected_case_reads_as_a_normal_unremarkable_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """AC (negative spec): "affects 0 of N" is a correct, ordinary output —
     not a special-cased or broken-looking one — including with N > 1.
 
@@ -290,7 +295,7 @@ def test_zero_affected_case_reads_as_a_normal_unremarkable_line(tmp_path, monkey
     assert "AFFECTED" not in out
 
 
-def test_no_live_sessions_anywhere_reports_zero_of_zero(tmp_path, monkeypatch, capsys):
+def test_no_live_sessions_anywhere_reports_zero_of_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo = tmp_path / "idle-repo"
     repo.mkdir()
     registry = {"repos.idle_one": str(repo)}
@@ -306,7 +311,7 @@ def test_no_live_sessions_anywhere_reports_zero_of_zero(tmp_path, monkeypatch, c
     assert "no live sessions found" in out
 
 
-def test_never_exits_nonzero_on_a_nonzero_verdict(tmp_path, monkeypatch, capsys):
+def test_never_exits_nonzero_on_a_nonzero_verdict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """Negative spec, hard boundary: this is a report, never a gate — a
     verdict with affected > 0 must still exit 0."""
     repo = tmp_path / "affected-repo"
@@ -323,12 +328,12 @@ def test_never_exits_nonzero_on_a_nonzero_verdict(tmp_path, monkeypatch, capsys)
     assert "verdict: affects 2 of 2 live sessions." in out
 
 
-def test_unknown_subcommand_exits_2(capsys):
+def test_unknown_subcommand_exits_2(capsys: pytest.CaptureFixture[str]) -> None:
     rc = _cli.main(["bogus-subcommand"])
     assert rc == 2
 
 
-def test_help_flag_exits_0_without_importing_modules(monkeypatch, capsys):
+def test_help_flag_exits_0_without_importing_modules(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     def _boom():
         raise AssertionError("help must not import coordinator_core modules")
 
@@ -337,7 +342,7 @@ def test_help_flag_exits_0_without_importing_modules(monkeypatch, capsys):
     assert rc == 0
 
 
-def test_claude_klabauter_root_resolution_failure_is_transport_fail(monkeypatch, capsys):
+def test_claude_klabauter_root_resolution_failure_is_transport_fail(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     def _boom():
         raise RuntimeError("CLAUDE_KLABAUTER_ROOT not resolvable")
 

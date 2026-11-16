@@ -195,6 +195,33 @@ def test_manifest_is_created_exclusively(tmp_path, prep):
     assert manifest.read_text(encoding="utf-8") == "sentinel"
 
 
+def test_blobs_are_written_without_a_tempfile_replace(tmp_path, prep, monkeypatch):
+    real = rp.atomic_write_bytes
+    calls = []
+    monkeypatch.setattr(rp, "atomic_write_bytes", lambda p, d: calls.append(Path(p).name) or real(p, d))
+    reply = prep()
+    assert reply["error"] is None
+    assert not [n for n in calls if len(n) == 64]
+
+
+def test_declare_write_fires_per_distinct_blob_and_manifest(tmp_path, prep, monkeypatch):
+    seen = []
+    monkeypatch.setattr(rp, "declare_write", lambda p: seen.append(Path(p)))
+    reply = prep()
+    manifest = _manifest(tmp_path, reply)
+    digests = set(json.loads(manifest.read_text(encoding="utf-8"))["files"].values())
+    assert {p.name for p in seen if p.parent == manifest.parent} == digests | {"manifest.json"}
+
+
+def test_truncated_blob_from_a_crash_is_repaired_not_trusted(tmp_path):
+    blob = tmp_path / "d"
+    blob.write_bytes(b"ab")
+    rp._land_blob(blob, b"abcdef")
+    assert blob.read_bytes() == b"abcdef"
+    rp._land_blob(blob, b"abcdef")
+    assert blob.read_bytes() == b"abcdef"
+
+
 def test_manifest_head_is_the_repo_head_sha(tmp_path, prep):
     sha = "c" * 40
     (tmp_path / ".git" / "refs" / "heads").mkdir(parents=True)

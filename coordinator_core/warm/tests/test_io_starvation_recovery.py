@@ -71,7 +71,7 @@ class _FsFreeze:
 
 
 @pytest.fixture
-def engine(monkeypatch, tmp_path):
+def engine(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     monkeypatch.setenv("COORDINATOR_WARM_RUNTIME_BASE", str(tmp_path))
     monkeypatch.setattr(client, "is_warm_enabled", lambda: True)
     monkeypatch.setattr(client, "engine_token", lambda: _TOKEN)
@@ -150,7 +150,7 @@ def _unanswered_calls(monkeypatch, count: int) -> None:
         client.try_warm_dispatch({"jsonrpc": "2.0", "id": 1, "method": "review.prep", "params": {}})
 
 
-def test_a_hung_engine_restarts_with_a_growing_backoff_and_a_quiet_window_resets_it(engine, monkeypatch):
+def test_a_hung_engine_restarts_with_a_growing_backoff_and_a_quiet_window_resets_it(engine, monkeypatch: pytest.MonkeyPatch) -> None:
     svc, killed = engine
     stall_dir = svc / "stalls"
 
@@ -229,7 +229,7 @@ class _FakeVersionState:
 
 
 @pytest.fixture
-def ctx(tmp_path, repo, monkeypatch):
+def ctx(tmp_path: Path, repo, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
     lifecycle.reset_shutdown_guard_for_test()
     idle.reset_idle_clock_for_test()
@@ -251,7 +251,7 @@ def _starve_commit_leg(monkeypatch, freeze: _FsFreeze) -> None:
     real_now, real_check = land_deadline._now, land_deadline.check
     monkeypatch.setattr(land_deadline, "_now", lambda: real_now() + skew[0])
 
-    def check(name):
+    def check(name) -> None:
         if name == "land_run.commit" and freeze.frozen:
             freeze.entered.set()
             skew[0] += land_deadline.LAND_BUDGET_SECS + land_deadline.RESERVE_SECS + 1.0
@@ -277,7 +277,7 @@ def _quiet_unrelated_idle_legs(monkeypatch) -> None:
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_a_run_queued_at_the_commit_leg_lands_on_the_idle_tick_after_io_recovers(ctx, repo, monkeypatch):
+def test_a_run_queued_at_the_commit_leg_lands_on_the_idle_tick_after_io_recovers(ctx, repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _quiet_unrelated_idle_legs(monkeypatch)
     _author(repo, "src/a.py", "a = 1\n")
     _declare(repo, "src/a.py")
@@ -331,7 +331,7 @@ def test_a_run_queued_at_the_commit_leg_lands_on_the_idle_tick_after_io_recovers
 
 
 @pytest.fixture
-def spool_root(tmp_path, monkeypatch):
+def spool_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path / "settings-home"))
     return tmp_path
 
@@ -357,7 +357,7 @@ def _allow(reason: str) -> dict:
     }
 
 
-def test_a_spooled_ask_is_minted_only_once_a_run_exists(spool_root):
+def test_a_spooled_ask_is_minted_only_once_a_run_exists(spool_root) -> None:
     sid = _spooled(spool_root)
     starved = drain.run(str(spool_root), evaluate=lambda payload: _allow("Submitted to the engine."))
     assert starved["minted"] == 0 and starved["failed"] == 1

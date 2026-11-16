@@ -1,4 +1,4 @@
-"""halt_closure.partial_chunks, and land_run's halted mode withholding a chunk whole against real throwaway git repos."""
+"""halt_closure.partial_chunks, and land_run's halted mode landing the record only, never product, against real throwaway git repos."""
 
 from __future__ import annotations
 
@@ -69,27 +69,28 @@ def _halt_with_a_peer_held(repo, monkeypatch, chunk_paths: dict, held: str):
     )
 
 
-def test_halt_commit_withholds_chunk_with_a_peer_held_write(repo, monkeypatch):
+def test_halt_commit_lands_the_record_only_and_names_a_peer_held_write(repo, monkeypatch):
     reply = _halt_with_a_peer_held(
         repo, monkeypatch, {"A": ["pkg/a1.py", "pkg/a2.py"], "B": ["pkg/b1.py"]}, held="pkg/a2.py"
     )
     assert reply["committed"] is True, reply
     landed = set(_git(repo, "show", "--name-only", "--format=", reply["sha"]).split())
-    assert "pkg/a1.py" not in landed and "pkg/a2.py" not in landed
-    assert "pkg/b1.py" in landed
-    assert reply["withheld"]["pkg/a1.py"] == "chunk-write-set-partial"
+    assert landed and all(p.startswith("state/warp/r1/") for p in landed), landed
+    assert "pkg/a2.py" not in landed
     assert reply["withheld"]["pkg/a2.py"] == "peer-held"
-    assert reply["landed_chunks"] == ["B"]
-    assert "Lands-Chunks: B" in _git(repo, "log", "-1", "--format=%B", reply["sha"])
+    assert reply["withheld"]["pkg/a1.py"] == "halt-record-only"
+    assert reply["withheld"]["pkg/b1.py"] == "halt-record-only"
+    assert "landed_chunks" not in reply
     json.dumps(reply)
 
 
-def test_halt_commit_withholds_a_peer_held_definer_and_lands_the_other_chunks(repo, monkeypatch):
+def test_halt_commit_carries_no_product_even_beside_a_peer_held_definer(repo, monkeypatch):
     reply = _halt_with_a_peer_held(
         repo, monkeypatch, {"C1": ["pkg/li.py"], "C4": ["pkg/caller.py"], "C9": ["pkg/other.py"]}, held="pkg/li.py"
     )
     assert reply["committed"] is True, reply
     landed = set(_git(repo, "show", "--name-only", "--format=", reply["sha"]).split())
-    assert reply["withheld"]["pkg/li.py"] == "peer-held"
     assert "pkg/li.py" not in landed
-    assert "pkg/other.py" in landed
+    assert reply["withheld"]["pkg/li.py"] == "peer-held"
+    assert reply["withheld"]["pkg/other.py"] == "halt-record-only"
+    assert not any(p.startswith("pkg/") for p in landed), landed

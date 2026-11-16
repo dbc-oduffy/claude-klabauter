@@ -20,6 +20,7 @@ from coordinator_core.ops.dispatch_emit.commit_request import ChunkCommit, Commi
 from coordinator_core.ops.review_mint import wave_bookkeeping
 from coordinator_core.session import touch_record
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -34,7 +35,7 @@ B_NOTE = f"docs/delivery/{RUN_B}.md"
 SEED = "seed\n"
 
 
-def _git(args, cwd):
+def _git(args, cwd) -> None:
     subprocess.run(
         ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
         **no_console_creationflags(),
@@ -45,13 +46,13 @@ def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _write(repo, rel, text):
+def _write(repo, rel, text) -> None:
     path = repo / rel
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="")
 
 
-def _touch(repo, rel, text, kind, ts):
+def _touch(repo, rel, text, kind, ts) -> None:
     touch_record.append_event(
         touch_record.sink_path(session_dir_for(repo / ".git", SID)),
         session_id=SID, agent_id=None, verb="T", path=rel,
@@ -64,7 +65,7 @@ def _sizing_text(run_id: str, body: str) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], root)
@@ -94,7 +95,7 @@ def repo(tmp_path):
     return root
 
 
-def _fire(root, monkeypatch, tmp_path, run_id, declared, ask_run=False):
+def _fire(root, monkeypatch, tmp_path, run_id, declared, ask_run: bool = False):
     outside = tmp_path / "record.md"
     outside.write_text("record\n", encoding="utf-8", newline="")
     monkeypatch.setattr(
@@ -141,7 +142,7 @@ def _fire(root, monkeypatch, tmp_path, run_id, declared, ask_run=False):
     return out, seen
 
 
-def _expect_b(root, product_drift: bool):
+def _expect_b(root, product_drift: bool) -> None:
     """Record B's expectations at the seed bytes (B's sizing as a READ), then B's own edit and the
     own-stage rewrites with no touch event."""
     for i, rel in enumerate((SIZING[RUN_B], B_RECORD, B_NOTE, PRODUCT[RUN_B])):
@@ -154,7 +155,7 @@ def _expect_b(root, product_drift: bool):
         _touch(root, PRODUCT[RUN_B], SEED + "# edit\n", touch_record.KIND_WRITE, 9.0)
 
 
-def test_ask_run_path_delivery_note_rewrite_lands_and_is_not_reread(repo, tmp_path, monkeypatch):
+def test_ask_run_path_delivery_note_rewrite_lands_and_is_not_reread(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _expect_b(repo, product_drift=False)
     _write(repo, SIZING[RUN_B], _sizing_text(RUN_B, "premise: filled by the size stage"))
     _write(repo, B_RECORD, SEED + '{"stage": "size"}\n')
@@ -167,7 +168,7 @@ def test_ask_run_path_delivery_note_rewrite_lands_and_is_not_reread(repo, tmp_pa
     assert SIZING[RUN_B] not in expected
 
 
-def test_child_bs_own_stage_rewrites_are_reread_and_land(repo, tmp_path, monkeypatch):
+def test_child_bs_own_stage_rewrites_are_reread_and_land(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     declared = [PRODUCT[RUN_B], SIZING[RUN_B], B_RECORD, B_NOTE]
     _expect_b(repo, product_drift=False)
     _write(repo, SIZING[RUN_B], _sizing_text(RUN_B, "premise: filled by the size stage"))
@@ -181,7 +182,7 @@ def test_child_bs_own_stage_rewrites_are_reread_and_land(repo, tmp_path, monkeyp
     assert B_RECORD not in expected
 
 
-def test_child_bs_product_path_drift_still_refuses(repo, tmp_path, monkeypatch):
+def test_child_bs_product_path_drift_still_refuses(repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     declared = [PRODUCT[RUN_B], SIZING[RUN_B], B_RECORD, B_NOTE]
     _expect_b(repo, product_drift=True)
     _write(repo, SIZING[RUN_B], _sizing_text(RUN_B, "premise: filled by the size stage"))

@@ -31,6 +31,7 @@ from coordinator_core import baton_assemble as ba
 from coordinator_core.baton_assemble import apply as ba_apply
 from coordinator_core.contract import apply_base
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 _NO_CONSOLE = no_console_creationflags()
 
@@ -51,7 +52,7 @@ pytestmark = [
 
 
 @pytest.fixture(autouse=True)
-def _stub_operator_config(monkeypatch):
+def _stub_operator_config(monkeypatch: pytest.MonkeyPatch) -> None:
     """Restated per-module, same values -- see the sibling test file's own
     fixture of this name for why an autouse fixture cannot cross modules."""
     monkeypatch.setattr(ba, "resolve_operator_config", lambda: dict(_FAKE_OPERATOR_CONFIG))
@@ -59,7 +60,7 @@ def _stub_operator_config(monkeypatch):
 
 
 class TestOrphanCleanupOnCommitPipelineError:
-    def test_successor_not_stranded_when_scoped_commit_raises(self, tmp_path, monkeypatch):
+    def test_successor_not_stranded_when_scoped_commit_raises(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         harness = _ReplayHarness(tmp_path, monkeypatch)
 
         def _boom(*args, **kwargs):
@@ -79,7 +80,7 @@ class TestOrphanCleanupOnCommitPipelineError:
             f"orphan successor(s) survived a commit-pipeline error: {successors}"
         )
 
-    def test_scoped_commit_success_path_is_unaffected(self, tmp_path, monkeypatch):
+    def test_scoped_commit_success_path_is_unaffected(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Control: the happy path (no exception) is byte-identical to
         before this fix -- the successor lands and survives."""
         harness = _ReplayHarness(tmp_path, monkeypatch)
@@ -90,8 +91,8 @@ class TestOrphanCleanupOnCommitPipelineError:
         assert len(successors) == 1, report
 
     def test_git_add_succeeds_commit_fails_unstages_as_well_as_unlinks(
-        self, tmp_path, monkeypatch
-    ):
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """Reviewer BLOCKER: `apply_base.scoped_commit` is `git add` then
         `git commit` as two independently-raising steps. Let the real `add`
         land (the scaffold IS staged at the moment `commit` fails) and force
@@ -128,7 +129,7 @@ class TestOrphanCleanupOnCommitPipelineError:
             f"cleanup unlinked the file but left a stale staged blob: {staged}"
         )
 
-    def test_lineage_fallback_artifact_is_never_deleted(self, tmp_path, monkeypatch):
+    def test_lineage_fallback_artifact_is_never_deleted(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         """Reviewer WARN: when the decision object carries no lineage,
         `committed_artifact_path` falls back to `effective_artifact_path` --
         per the pre-existing comment above that fallback, the predecessor

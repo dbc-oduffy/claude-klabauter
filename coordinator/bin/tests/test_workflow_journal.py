@@ -12,11 +12,16 @@ import importlib.machinery
 import importlib.util
 import json
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
-def _load_workflow_journal():
+def _load_workflow_journal() -> ModuleType:
     path = _BIN_DIR / "workflow-journal.py"
     loader = importlib.machinery.SourceFileLoader("workflow_journal_cli", str(path))
     spec = importlib.util.spec_from_loader(loader.name, loader)
@@ -34,7 +39,7 @@ def _write_journal(tmp_path, events):
     return path
 
 
-def test_summarize_orders_started_then_result(tmp_path):
+def test_summarize_orders_started_then_result(tmp_path: Path) -> None:
     events = [
         {"agentId": "a1", "type": "started", "label": "executor-C1"},
         {"agentId": "a1", "type": "result", "result": "DONE: C1\nfiles changed: x.py"},
@@ -46,7 +51,7 @@ def test_summarize_orders_started_then_result(tmp_path):
     assert summary["a1"]["result"] == "DONE: C1"
 
 
-def test_failed_agent_reports_failed_status(tmp_path):
+def test_failed_agent_reports_failed_status(tmp_path: Path) -> None:
     events = [
         {"agentId": "a2", "type": "started", "label": "reviewer-slice-1"},
         {"agentId": "a2", "type": "failed", "error": "timeout after 900s"},
@@ -57,7 +62,7 @@ def test_failed_agent_reports_failed_status(tmp_path):
     assert summary["a2"]["result"] == "timeout after 900s"
 
 
-def test_malformed_line_and_terminal_stamp_are_skipped_not_fatal(tmp_path):
+def test_malformed_line_and_terminal_stamp_are_skipped_not_fatal(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     journal.write_text(
         "not json at all\n"
@@ -71,7 +76,7 @@ def test_malformed_line_and_terminal_stamp_are_skipped_not_fatal(tmp_path):
     assert list(summary.keys()) == ["a1"]
 
 
-def _agent(tmp_path, agent_id, phase, model, records):
+def _agent(tmp_path, agent_id, phase, model, records) -> None:
     (tmp_path / f"agent-{agent_id}.meta.json").write_text(
         json.dumps({"workflowPhase": phase, "model": model, "agentType": "x"}), encoding="utf-8")
     if records is not None:
@@ -85,7 +90,7 @@ def _rec(msg_id, inp, cc, out, cr):
         "output_tokens": out, "cache_read_input_tokens": cr}}}
 
 
-def test_phase_tokens_dedups_by_message_id_and_groups_phase(tmp_path):
+def test_phase_tokens_dedups_by_message_id_and_groups_phase(tmp_path: Path) -> None:
     journal = _write_journal(tmp_path, [])
     _agent(tmp_path, "a", "Prep gate", "sonnet", [_rec("m1", 1, 2, 3, 10), _rec("m1", 1, 2, 3, 10)])
     _agent(tmp_path, "b", "Prep gate", "haiku", [_rec("m2", 0, 0, 4, 5)])
@@ -94,13 +99,13 @@ def test_phase_tokens_dedups_by_message_id_and_groups_phase(tmp_path):
         "agents": 2, "models": ["sonnet", "haiku"], "fresh": 10, "cache_read": 15}
 
 
-def test_phase_tokens_skips_meta_without_transcript(tmp_path):
+def test_phase_tokens_skips_meta_without_transcript(tmp_path: Path) -> None:
     journal = _write_journal(tmp_path, [])
     _agent(tmp_path, "a", "stage", "haiku", None)
     assert wj.phase_tokens(str(journal)) == {}
 
 
-def test_cli_tokens_prints_table_exit_zero(tmp_path, capsys):
+def test_cli_tokens_prints_table_exit_zero(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     journal = _write_journal(tmp_path, [])
     _agent(tmp_path, "a", "stage", "haiku", [_rec("m1", 1, 1, 1, 7)])
     assert wj.main(["workflow-journal", str(journal), "--tokens"]) == wj.EXIT_OK
@@ -108,7 +113,7 @@ def test_cli_tokens_prints_table_exit_zero(tmp_path, capsys):
     assert "stage" in out and "TOTAL" in out and "7" in out
 
 
-def _timed(tmp_path, agent_id, phase, start, end):
+def _timed(tmp_path, agent_id, phase, start, end) -> None:
     stamp = lambda s: f"2026-01-01T00:00:{s:02d}Z"
     _agent(tmp_path, agent_id, phase, "m", [
         {"type": "user", "timestamp": stamp(start)},
@@ -116,7 +121,7 @@ def _timed(tmp_path, agent_id, phase, start, end):
     ])
 
 
-def test_critical_path_three_serial_agents_depth_three(tmp_path):
+def test_critical_path_three_serial_agents_depth_three(tmp_path: Path) -> None:
     journal = _write_journal(tmp_path, [{"agentId": "a", "type": "started", "label": "plan"}])
     _timed(tmp_path, "a", "Plan", 0, 10)
     _timed(tmp_path, "b", "Review", 10, 20)
@@ -126,7 +131,7 @@ def test_critical_path_three_serial_agents_depth_three(tmp_path):
     assert r["chain"] == [("plan", "Plan"), ("b", "Review"), ("c", "Execute")]
 
 
-def test_critical_path_overlap_shortens_depth(tmp_path):
+def test_critical_path_overlap_shortens_depth(tmp_path: Path) -> None:
     journal = _write_journal(tmp_path, [])
     _timed(tmp_path, "a", "Review", 0, 20)
     _timed(tmp_path, "b", "Premise", 5, 15)
@@ -135,7 +140,7 @@ def test_critical_path_overlap_shortens_depth(tmp_path):
     assert (r["legs"], r["depth"]) == (3, 2)
 
 
-def test_critical_path_unreadable_transcript_is_unplaced(tmp_path, capsys):
+def test_critical_path_unreadable_transcript_is_unplaced(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     journal = _write_journal(tmp_path, [])
     _timed(tmp_path, "a", "Plan", 0, 10)
     _agent(tmp_path, "b", "Review", "m", None)
@@ -153,7 +158,7 @@ def _tool_rec(msg_id, out, tools):
         "usage": {"output_tokens": out}}}
 
 
-def _census_run(root, run, events, transcripts):
+def _census_run(root, run, events, transcripts) -> None:
     d = root / "proj" / "sess" / "subagents" / "workflows" / run
     d.mkdir(parents=True)
     (d / "journal.jsonl").write_text(
@@ -163,7 +168,7 @@ def _census_run(root, run, events, transcripts):
             "\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
 
 
-def test_census_folds_by_normalised_label_across_journals(tmp_path):
+def test_census_folds_by_normalised_label_across_journals(tmp_path: Path) -> None:
     _census_run(tmp_path, "w1", [
         {"agentId": "a1", "type": "started", "label": "stage:x1"},
         {"agentId": "a2", "type": "started", "label": "stage:y2"},
@@ -184,7 +189,7 @@ def test_census_folds_by_normalised_label_across_journals(tmp_path):
     assert labels["plan"]["runs"] == 1 and labels["plan"]["tool_calls"] == 0
 
 
-def test_cli_census_prints_one_line_per_label(tmp_path, capsys):
+def test_cli_census_prints_one_line_per_label(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _census_run(tmp_path, "w1", [{"agentId": "a1", "type": "started", "label": "stage:x"}],
                 {"a1": [_tool_rec("m1", 8, [("t1", "Bash")])]})
     assert wj.main(["workflow-journal", "--census", "--root", str(tmp_path), "--since", "30"]) == wj.EXIT_OK
@@ -192,7 +197,7 @@ def test_cli_census_prints_one_line_per_label(tmp_path, capsys):
     assert "stage  runs=1  avg_tokens=8  avg_tool_calls=1.0  tools: Bash=1" in out
 
 
-def test_census_since_skips_old_journals(tmp_path):
+def test_census_since_skips_old_journals(tmp_path: Path) -> None:
     import os
     _census_run(tmp_path, "w1", [{"agentId": "a1", "type": "started", "label": "old"}],
                 {"a1": [_tool_rec("m1", 1, [])]})
@@ -201,7 +206,7 @@ def test_census_since_skips_old_journals(tmp_path):
     assert wj.census(tmp_path, since_days=30) == {}
 
 
-def test_cli_label_filter_and_missing_label_exit_code(tmp_path, capsys):
+def test_cli_label_filter_and_missing_label_exit_code(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     events = [
         {"agentId": "a1", "type": "started", "label": "executor-C1"},
         {"agentId": "a1", "type": "result", "result": "DONE: C1"},

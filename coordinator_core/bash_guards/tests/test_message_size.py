@@ -22,6 +22,7 @@ from __future__ import annotations
 from coordinator_core.bash_guards import _message_size as msz
 from coordinator_core.bash_guards._helpers import operator_override_note
 from coordinator_core.bash_guards.dispatch import GuardBand
+import pytest
 
 
 def _envelope(*, additional_context: str = None, permission_reason: str = None, updated_input: dict = None) -> dict:
@@ -36,13 +37,13 @@ def _envelope(*, additional_context: str = None, permission_reason: str = None, 
 
 
 class TestMessageProseCap:
-    def test_cap_is_220_not_440(self):
+    def test_cap_is_220_not_440(self) -> None:
         assert msz.MESSAGE_PROSE_CAP_BYTES == 220
 
 
 class TestNoneEnvelope:
 
-    def test_none_envelope_is_zero_bytes_and_not_speaker(self):
+    def test_none_envelope_is_zero_bytes_and_not_speaker(self) -> None:
         result = msz.measure_envelope(None)
         assert result.total_bytes == 0
         assert result.prose_bytes == 0
@@ -54,7 +55,7 @@ class TestNoneEnvelope:
 
 class TestSpeakerPredicateIsProseBytesNotEnvelopeIdentity:
 
-    def test_zero_prose_non_none_envelope_is_not_a_speaker(self):
+    def test_zero_prose_non_none_envelope_is_not_a_speaker(self) -> None:
         envelope = _envelope(updated_input={"command": "git status"})
         assert envelope is not None
         result = msz.measure_envelope(envelope)
@@ -62,7 +63,7 @@ class TestSpeakerPredicateIsProseBytesNotEnvelopeIdentity:
         assert result.prose_bytes == 0
         assert result.is_speaker is False
 
-    def test_updated_input_command_never_counted_as_prose(self):
+    def test_updated_input_command_never_counted_as_prose(self) -> None:
         long_command = "x" * 5000
         envelope = _envelope(
             additional_context="short",
@@ -71,7 +72,7 @@ class TestSpeakerPredicateIsProseBytesNotEnvelopeIdentity:
         result = msz.measure_envelope(envelope)
         assert result.total_bytes == len("short".encode("utf-8"))
 
-    def test_nonempty_prose_is_a_speaker(self):
+    def test_nonempty_prose_is_a_speaker(self) -> None:
         envelope = _envelope(additional_context="Advisory: do the other thing.")
         result = msz.measure_envelope(envelope)
         assert result.is_speaker is True
@@ -79,7 +80,7 @@ class TestSpeakerPredicateIsProseBytesNotEnvelopeIdentity:
 
 
 class TestProseExemptSplit:
-    def test_plain_prose_with_no_cue_window_is_all_prose(self):
+    def test_plain_prose_with_no_cue_window_is_all_prose(self) -> None:
         text = "This command is denied for a structural reason with no offered alternative."
         envelope = _envelope(additional_context=text)
         result = msz.measure_envelope(envelope)
@@ -87,7 +88,7 @@ class TestProseExemptSplit:
         assert result.total_bytes == len(text.encode("utf-8"))
         assert result.prose_bytes == result.total_bytes
 
-    def test_backtick_command_inside_cue_window_is_exempted(self):
+    def test_backtick_command_inside_cue_window_is_exempted(self) -> None:
         text = "This shape is denied. Use instead: `git status --short`."
         envelope = _envelope(additional_context=text)
         result = msz.measure_envelope(envelope)
@@ -95,28 +96,28 @@ class TestProseExemptSplit:
         assert result.prose_bytes < result.total_bytes
         assert result.prose_bytes == result.total_bytes - result.exempt_bytes
 
-    def test_backtick_outside_any_cue_window_is_not_exempted(self):
+    def test_backtick_outside_any_cue_window_is_not_exempted(self) -> None:
         text = "This command was classified as a `destructive-rm` shape."
         envelope = _envelope(additional_context=text)
         result = msz.measure_envelope(envelope)
         assert result.exempt_bytes == 0
         assert result.prose_bytes == result.total_bytes
 
-    def test_indented_block_after_cue_word_is_exempted(self):
+    def test_indented_block_after_cue_word_is_exempted(self) -> None:
         text = "Use instead:\n  git status --short\n  git diff --stat\n"
         envelope = _envelope(additional_context=text)
         result = msz.measure_envelope(envelope)
         assert result.exempt_bytes > 0
         assert result.prose_bytes < result.total_bytes
 
-    def test_overlapping_backtick_and_indented_spans_are_not_double_subtracted(self):
+    def test_overlapping_backtick_and_indented_spans_are_not_double_subtracted(self) -> None:
         text = "Use instead:\n  `git status --short`\n"
         envelope = _envelope(additional_context=text)
         result = msz.measure_envelope(envelope)
         assert result.exempt_bytes <= result.total_bytes
         assert result.prose_bytes >= 0
 
-    def test_diagnostic_prefixed_indented_line_inside_cue_window_is_not_exempted(self):
+    def test_diagnostic_prefixed_indented_line_inside_cue_window_is_not_exempted(self) -> None:
         text = (
             "Use instead:\n"
             "  git status --short\n"
@@ -132,7 +133,7 @@ class TestProseExemptSplit:
 
 class TestTailSubtractionByIdentity:
 
-    def test_tail_is_subtracted_by_identity(self):
+    def test_tail_is_subtracted_by_identity(self) -> None:
         tail = operator_override_note(
             "COORDINATOR_ALLOW_TEST_GUARD", payload={"session_id": "sess-c1d-em"}
         )
@@ -143,7 +144,7 @@ class TestTailSubtractionByIdentity:
         assert result.prose_bytes == result.total_bytes - result.exempt_bytes - result.tail_bytes
         assert result.prose_bytes < result.total_bytes
 
-    def test_tail_is_identical_regardless_of_env_var_or_reason_placeholder(self):
+    def test_tail_is_identical_regardless_of_env_var_or_reason_placeholder(self) -> None:
         flag_tail = operator_override_note(
             "COORDINATOR_ALLOW_TEST_GUARD", payload={"session_id": "sess-c1d-em"}
         )
@@ -157,23 +158,23 @@ class TestTailSubtractionByIdentity:
         )
         assert flag_tail == other_flag_tail == reason_tail
 
-    def test_no_override_note_leaves_tail_bytes_zero(self):
+    def test_no_override_note_leaves_tail_bytes_zero(self) -> None:
         envelope = _envelope(additional_context="Advisory prose sentence, no override offered.")
         result = msz.measure_envelope(envelope)
         assert result.tail_bytes == 0
 
 
 class TestBandResolution:
-    def test_guard_band_enum_resolves_to_its_value(self):
+    def test_guard_band_enum_resolves_to_its_value(self) -> None:
         result = msz.measure_envelope(None, band=GuardBand.ADVISORY_REWRITE)
         assert result.band == "advisory-rewrite"
 
-    def test_proxy_band_is_namespaced_and_distinct_from_guard_band_values(self):
+    def test_proxy_band_is_namespaced_and_distinct_from_guard_band_values(self) -> None:
         band = msz.proxy_band("write_guards")
         assert band == "directory:write_guards"
         assert band not in {b.value for b in GuardBand}
 
-    def test_no_band_resolves_to_none(self):
+    def test_no_band_resolves_to_none(self) -> None:
         result = msz.measure_envelope(None)
         assert result.band is None
 
@@ -184,7 +185,7 @@ class TestFoundDataVsAuthoredProse:
     "FOUND DATA vs. AUTHORED PROSE" for the full abuse-resistance argument
     this class exists to prove."""
 
-    def test_path_list_after_colon_is_charged_as_data_not_prose(self):
+    def test_path_list_after_colon_is_charged_as_data_not_prose(self) -> None:
         text = (
             "BLOCKED: 'git checkout .' discards 1 uncommitted file(s):\n"
             "  state/x.json (load-bearing)\n"
@@ -196,7 +197,7 @@ class TestFoundDataVsAuthoredProse:
         assert result.data_bytes > 0
         assert result.prose_bytes == result.total_bytes - result.exempt_bytes - result.tail_bytes - result.data_bytes
 
-    def test_data_bytes_flat_across_short_and_long_path(self):
+    def test_data_bytes_flat_across_short_and_long_path(self) -> None:
         short_text = (
             "BLOCKED: 'git checkout .' discards 1 uncommitted file(s):\n"
             "  state/x.json (load-bearing)\n"
@@ -209,7 +210,7 @@ class TestFoundDataVsAuthoredProse:
         long_result = msz.measure_envelope(_envelope(additional_context=long_text))
         assert short_result.prose_bytes == long_result.prose_bytes
 
-    def test_indented_prose_paragraph_without_path_tokens_stays_prose(self):
+    def test_indented_prose_paragraph_without_path_tokens_stays_prose(self) -> None:
         text = (
             "Rationale:\n"
             "  This line explains why the command is denied for a purely\n"
@@ -222,7 +223,7 @@ class TestFoundDataVsAuthoredProse:
         assert result.data_bytes == 0
         assert result.prose_bytes == result.total_bytes
 
-    def test_one_prose_line_smuggled_into_path_block_disqualifies_whole_block(self):
+    def test_one_prose_line_smuggled_into_path_block_disqualifies_whole_block(self) -> None:
         text = (
             "BLOCKED: discards 2 uncommitted file(s):\n"
             "  state/x.json (load-bearing)\n"
@@ -246,7 +247,7 @@ class TestFoundDataVsAuthoredProse:
     # cases are the regression test for exactly that failure mode.
     # -----------------------------------------------------------------
 
-    def test_legit_path_list_is_charged_as_data(self):
+    def test_legit_path_list_is_charged_as_data(self) -> None:
         text = (
             "BLOCKED: refusing 2 paths:\n"
             "  state/a.json (load-bearing)\n"
@@ -256,7 +257,7 @@ class TestFoundDataVsAuthoredProse:
         assert result.data_bytes > 0
         assert result.prose_bytes < result.total_bytes
 
-    def test_ordinary_prose_with_no_slash_stays_prose(self):
+    def test_ordinary_prose_with_no_slash_stays_prose(self) -> None:
         text = (
             "BLOCKED: this is bad:\n"
             "  because the tree is shared and other people are working in it right now\n"
@@ -266,7 +267,7 @@ class TestFoundDataVsAuthoredProse:
         assert result.data_bytes == 0
         assert result.prose_bytes == result.total_bytes
 
-    def test_prose_paragraph_with_slashes_in_every_line_stays_prose(self):
+    def test_prose_paragraph_with_slashes_in_every_line_stays_prose(self) -> None:
         text = (
             "BLOCKED: this is bad:\n"
             "  the shared/tree carries every session's work and a sweep takes all of it\n"
@@ -277,7 +278,7 @@ class TestFoundDataVsAuthoredProse:
         assert result.data_bytes == 0
         assert result.prose_bytes == result.total_bytes
 
-    def test_smuggled_prose_line_with_slash_disqualifies_whole_block(self):
+    def test_smuggled_prose_line_with_slash_disqualifies_whole_block(self) -> None:
         text = (
             "BLOCKED: refusing:\n"
             "  state/a.json (load-bearing)\n"
@@ -287,7 +288,7 @@ class TestFoundDataVsAuthoredProse:
         assert result.data_bytes == 0
         assert result.prose_bytes == result.total_bytes
 
-    def test_reason_with_comma_still_qualifies_as_path_entry(self):
+    def test_reason_with_comma_still_qualifies_as_path_entry(self) -> None:
         text = (
             "BLOCKED: refusing 1 path:\n"
             "  state/a.json (load-bearing, peer-claimed by s1)\n"
@@ -295,7 +296,7 @@ class TestFoundDataVsAuthoredProse:
         result = msz.measure_envelope(_envelope(additional_context=text))
         assert result.data_bytes > 0
 
-    def test_reason_with_sentence_punctuation_disqualifies_the_line(self):
+    def test_reason_with_sentence_punctuation_disqualifies_the_line(self) -> None:
         text = (
             "BLOCKED: refusing 1 path:\n"
             "  state/a.json (this one really should not go. trust me)\n"
@@ -304,7 +305,7 @@ class TestFoundDataVsAuthoredProse:
         assert result.data_bytes == 0
         assert result.prose_bytes == result.total_bytes
 
-    def test_data_block_overlapping_cue_window_is_not_double_counted(self):
+    def test_data_block_overlapping_cue_window_is_not_double_counted(self) -> None:
         text = "Use instead:\n  git checkout -- state/x.json\n"
         envelope = _envelope(additional_context=text)
         result = msz.measure_envelope(envelope)
@@ -333,7 +334,7 @@ class TestRelayedProse:
     def _pin(self, monkeypatch, text: str) -> None:
         monkeypatch.setattr(msz, "_RELAYED_ROLE_APPEND", text)
 
-    def test_relayed_document_is_not_charged_as_prose(self, monkeypatch):
+    def test_relayed_document_is_not_charged_as_prose(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._pin(monkeypatch, self._RELAYED)
         own = "Provisioning missed. Say so in your report."
         envelope = _envelope(additional_context=own + "\n\n" + self._RELAYED)
@@ -348,28 +349,28 @@ class TestRelayedProse:
             - result.data_bytes
         )
 
-    def test_a_message_carrying_only_relayed_prose_still_speaks(self, monkeypatch):
+    def test_a_message_carrying_only_relayed_prose_still_speaks(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._pin(monkeypatch, self._RELAYED)
         envelope = _envelope(additional_context="Missed.\n\n" + self._RELAYED)
         result = msz.measure_envelope(envelope)
         assert result.is_speaker is True
         assert 0 < result.prose_bytes < 50
 
-    def test_absent_relayed_document_subtracts_nothing(self, monkeypatch):
+    def test_absent_relayed_document_subtracts_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._pin(monkeypatch, self._RELAYED)
         envelope = _envelope(additional_context="An ordinary advisory with no relayed document.")
         result = msz.measure_envelope(envelope)
         assert result.relayed_bytes == 0
         assert result.prose_bytes == result.total_bytes
 
-    def test_empty_identity_source_subtracts_nothing(self, monkeypatch):
+    def test_empty_identity_source_subtracts_nothing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._pin(monkeypatch, "")
         envelope = _envelope(additional_context="An ordinary advisory.")
         result = msz.measure_envelope(envelope)
         assert result.relayed_bytes == 0
         assert result.prose_bytes == result.total_bytes
 
-    def test_paraphrase_of_the_relayed_document_is_still_charged(self, monkeypatch):
+    def test_paraphrase_of_the_relayed_document_is_still_charged(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """ABUSE RESISTANCE: the class is keyed by IDENTITY, not by
         resemblance. Near-identical text an author wrote themselves is
         prose, and stays charged."""
@@ -380,21 +381,21 @@ class TestRelayedProse:
         assert result.relayed_bytes == 0
         assert result.prose_bytes > 0
 
-    def test_a_second_copy_is_charged_as_prose(self, monkeypatch):
+    def test_a_second_copy_is_charged_as_prose(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._pin(monkeypatch, self._RELAYED)
         envelope = _envelope(additional_context=self._RELAYED + self._RELAYED)
         result = msz.measure_envelope(envelope)
         assert result.relayed_bytes == len(self._RELAYED.encode("utf-8"))
         assert result.prose_bytes > 0
 
-    def test_relayed_and_exempt_never_double_subtract(self, monkeypatch):
+    def test_relayed_and_exempt_never_double_subtract(self, monkeypatch: pytest.MonkeyPatch) -> None:
         self._pin(monkeypatch, self._RELAYED)
         envelope = _envelope(additional_context=self._RELAYED)
         result = msz.measure_envelope(envelope)
         assert result.exempt_bytes == 0
         assert result.relayed_bytes + result.prose_bytes == result.total_bytes
 
-    def test_resolution_fails_open_to_empty_when_the_loader_raises(self, monkeypatch):
+    def test_resolution_fails_open_to_empty_when_the_loader_raises(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.hooks import cater_subagent_start
 
         def _boom() -> str:
@@ -403,7 +404,7 @@ class TestRelayedProse:
         monkeypatch.setattr(cater_subagent_start, "_load_role_append", _boom)
         assert msz._resolve_relayed_role_append() == ""
 
-    def test_resolution_reads_the_real_artifact_not_a_copy(self, monkeypatch):
+    def test_resolution_reads_the_real_artifact_not_a_copy(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from coordinator_core.hooks import cater_subagent_start
 
         monkeypatch.setattr(
@@ -411,7 +412,7 @@ class TestRelayedProse:
         )
         assert msz._resolve_relayed_role_append() == "SENTINEL ROLE TEXT"
 
-    def test_identity_is_resolved_at_import_not_on_first_measurement(self):
+    def test_identity_is_resolved_at_import_not_on_first_measurement(self) -> None:
         """THE REGRESSION THIS CLASS EXISTS TO PREVENT, and the reason
         `_RELAYED_ROLE_APPEND` is a module constant rather than a lazily
         filled cache.
@@ -438,7 +439,7 @@ class TestRelayedProse:
             "CLAUDE_CONFIG_DIR said at the first measurement"
         )
 
-    def test_a_patched_config_dir_cannot_change_what_is_recognized(self, monkeypatch):
+    def test_a_patched_config_dir_cannot_change_what_is_recognized(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The same regression from the caller's side: patching
         `CLAUDE_CONFIG_DIR` mid-run (what the corpus fixtures do) must not
         change this module's answer, because the answer was already
@@ -449,12 +450,12 @@ class TestRelayedProse:
 
 
 class TestOverCap:
-    def test_under_cap_prose_is_not_over_cap(self):
+    def test_under_cap_prose_is_not_over_cap(self) -> None:
         envelope = _envelope(additional_context="short advisory")
         result = msz.measure_envelope(envelope)
         assert result.over_cap is False
 
-    def test_over_cap_prose_is_flagged(self):
+    def test_over_cap_prose_is_flagged(self) -> None:
         envelope = _envelope(additional_context="x" * (msz.MESSAGE_PROSE_CAP_BYTES + 1))
         result = msz.measure_envelope(envelope)
         assert result.over_cap is True
@@ -462,7 +463,7 @@ class TestOverCap:
 
 class TestRouteLineTail:
 
-    def test_route_line_lands_in_tail_bytes(self):
+    def test_route_line_lands_in_tail_bytes(self) -> None:
         from coordinator_core.guard_routes.keys import route_line
 
         line = route_line("some-guard")
@@ -470,6 +471,6 @@ class TestRouteLineTail:
         result = msz.measure_envelope(_envelope(permission_reason=text))
         assert result.tail_bytes == len(line.encode("utf-8"))
 
-    def test_no_route_line_leaves_tail_zero(self):
+    def test_no_route_line_leaves_tail_zero(self) -> None:
         result = msz.measure_envelope(_envelope(permission_reason="Denied.\n\nGuard: `some-guard`."))
         assert result.tail_bytes == 0

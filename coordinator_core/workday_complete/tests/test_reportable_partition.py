@@ -6,6 +6,7 @@ from datetime import datetime
 from coordinator_core.contract.decision_object.judgment import partition_reportable
 from coordinator_core.ops.requirement_register import StallReport
 from coordinator_core.workday_complete import brief as wc_brief
+import pytest
 
 _NONEMPTY_OPEN_DAY_GOALS = {
     "today": [{"goal_id": "g_today", "text": "ship the thing"}],
@@ -28,7 +29,7 @@ def _build_all(open_day_goals: dict, dirty_tree_verdict: dict):
     return partition_reportable(judgment_points, directives)
 
 
-def test_predicate_keeps_the_three_action_class_ids_asked():
+def test_predicate_keeps_the_three_action_class_ids_asked() -> None:
     asked, reported = _build_all(_NONEMPTY_OPEN_DAY_GOALS, _DIRTY_TREE)
     assert reported == []
     asked_ids = {p["id"] for p in asked}
@@ -41,7 +42,7 @@ def test_predicate_keeps_the_three_action_class_ids_asked():
     }
 
 
-def test_known_action_class_points_are_explicitly_marked_not_reportable():
+def test_known_action_class_points_are_explicitly_marked_not_reportable() -> None:
     _, points = (
         wc_brief._build_directives({}, _NONEMPTY_OPEN_DAY_GOALS, _DIRTY_TREE),
         wc_brief._build_judgment_points(_NONEMPTY_OPEN_DAY_GOALS, _DIRTY_TREE),
@@ -51,7 +52,7 @@ def test_known_action_class_points_are_explicitly_marked_not_reportable():
         assert by_id[jid]["reportable"] is False, jid
 
 
-def test_asked_points_include_action_class_points_regardless_of_resolves():
+def test_asked_points_include_action_class_points_regardless_of_resolves() -> None:
     directives = wc_brief._build_directives({}, _NONEMPTY_OPEN_DAY_GOALS, _DIRTY_TREE)
     directive_ids = {d["id"] for d in directives}
     asked, _ = _build_all(_NONEMPTY_OPEN_DAY_GOALS, _DIRTY_TREE)
@@ -66,7 +67,7 @@ def test_asked_points_include_action_class_points_regardless_of_resolves():
         assert not (resolves_ids & directive_ids), jid
 
 
-def test_register_stall_point_lands_in_reported_never_asked():
+def test_register_stall_point_lands_in_reported_never_asked() -> None:
     directives = wc_brief._build_directives({}, _NONEMPTY_OPEN_DAY_GOALS, _DIRTY_TREE)
     points = wc_brief._build_judgment_points(
         _NONEMPTY_OPEN_DAY_GOALS,
@@ -78,7 +79,7 @@ def test_register_stall_point_lands_in_reported_never_asked():
     assert "jp_requirement_register_stall" not in {p["id"] for p in asked}
 
 
-def test_reported_narration_suffix_empty_when_nothing_reported():
+def test_reported_narration_suffix_empty_when_nothing_reported() -> None:
     assert wc_brief._reported_narration_suffix([]) == ""
 
 
@@ -95,7 +96,7 @@ def _stub_operator_config(monkeypatch) -> None:
     )
 
 
-def test_brief_end_to_end_keeps_action_class_points_in_judgment_points(monkeypatch):
+def test_brief_end_to_end_keeps_action_class_points_in_judgment_points(monkeypatch: pytest.MonkeyPatch) -> None:
     _stub_operator_config(monkeypatch)
     monkeypatch.setattr(wc_brief, "head_branch", lambda _p: "work/x")
     monkeypatch.setattr(wc_brief, "_compute_open_day_goals", lambda: _EMPTY_OPEN_DAY_GOALS)
@@ -112,7 +113,7 @@ def test_brief_end_to_end_keeps_action_class_points_in_judgment_points(monkeypat
     assert "point(s) gate nothing on this run and are reported, not asked" not in envelope["narration"]
 
 
-def test_catch_up_reduced_set_partitions_with_no_dangling_resolves():
+def test_catch_up_reduced_set_partitions_with_no_dangling_resolves() -> None:
     directives = wc_brief._build_directives(
         {}, _NONEMPTY_OPEN_DAY_GOALS, _DIRTY_TREE, catch_up=True
     )

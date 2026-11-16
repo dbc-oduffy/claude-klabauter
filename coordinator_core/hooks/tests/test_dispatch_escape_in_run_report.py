@@ -13,13 +13,14 @@ from coordinator_core.bash_guards import guard_post_executor_verification as g
 from coordinator_core.hooks import dispatch_escape as de
 from coordinator_core.hooks import nudge_em_code_dispatch as nd
 from coordinator_core.session_hub_path import session_dir_for
+from pathlib import Path
 
 SID = "sess-inrun-1"
 FOREIGN = "sess-inrun-other"
 
 
 @pytest.fixture(autouse=True)
-def _env(monkeypatch, tmp_path):
+def _env(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(tmp_path / "tmp"))
     (tmp_path / "tmp").mkdir()
     monkeypatch.setattr(nd, "_is_bootstrap_or_out_of_repo", lambda p: False)
@@ -32,7 +33,7 @@ def _env(monkeypatch, tmp_path):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     return tmp_path / "repo"
 
 

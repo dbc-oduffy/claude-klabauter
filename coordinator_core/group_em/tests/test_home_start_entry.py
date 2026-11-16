@@ -7,6 +7,7 @@ import json
 import pytest
 
 from coordinator_core.group_em import human_entry
+from pathlib import Path
 
 SID = "11111111-2222-3333-4444-555555555555"
 CLAIMED = "2026-10-21T00:00:00+00:00"
@@ -14,7 +15,7 @@ CLAIMED_TS = human_entry._parse_iso(CLAIMED)
 HOME = "/the/home"
 
 
-def _cwd_line(cwd=HOME, ts="2026-10-21T00:00:05Z", entrypoint="cli", uuid="u-1"):
+def _cwd_line(cwd=HOME, ts: str = "2026-10-21T00:00:05Z", entrypoint: str = "cli", uuid: str = "u-1") -> str:
     return json.dumps(
         {"type": "attachment", "uuid": uuid, "timestamp": ts, "cwd": cwd, "entrypoint": entrypoint}
     )
@@ -26,7 +27,7 @@ PRELUDE = [
 ]
 
 
-def _write(root, *lines, project="proj-a", sid=SID):
+def _write(root, *lines, project: str = "proj-a", sid=SID):
     d = root / project
     d.mkdir(parents=True, exist_ok=True)
     path = d / f"{sid}.jsonl"
@@ -42,7 +43,7 @@ def _record(claimed_at=CLAIMED, sid=SID):
 
 
 @pytest.fixture
-def projects(tmp_path, monkeypatch):
+def projects(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "projects"
     root.mkdir()
     monkeypatch.setattr(human_entry, "_in_home", lambda cwd: cwd.startswith(HOME))
@@ -55,36 +56,36 @@ def _verdict(projects, record=None, now=CLAIMED_TS + 10, cache=None):
     )
 
 
-def test_earliest_cwd_entry_skips_cwdless_lines(projects):
+def test_earliest_cwd_entry_skips_cwdless_lines(projects) -> None:
     _write(projects, *PRELUDE, _cwd_line())
     entry = human_entry.earliest_cwd_entry(SID, projects)
     assert entry["cwd"] == HOME and entry["entrypoint"] == "cli" and entry["uuid"] == "u-1"
 
 
-def test_scan_stops_at_first_cwd_line(projects):
+def test_scan_stops_at_first_cwd_line(projects) -> None:
     _write(projects, *PRELUDE, _cwd_line(), _cwd_line(cwd="/elsewhere", uuid="u-2"))
     assert human_entry.earliest_cwd_entry(SID, projects)["cwd"] == HOME
 
 
-def test_earlier_timestamp_wins_across_project_dirs(projects):
+def test_earlier_timestamp_wins_across_project_dirs(projects) -> None:
     _write(projects, _cwd_line(cwd="/late", ts="2026-10-21T00:00:09Z"), project="a")
     _write(projects, _cwd_line(cwd=HOME, ts="2026-10-21T00:00:01Z"), project="b")
     assert human_entry.earliest_cwd_entry(SID, projects)["cwd"] == HOME
 
 
-def test_no_entry_is_none(projects):
+def test_no_entry_is_none(projects) -> None:
     _write(projects, *PRELUDE)
     assert human_entry.earliest_cwd_entry(SID, projects) is None
 
 
-def test_inside_home_cli_verifies(projects):
+def test_inside_home_cli_verifies(projects) -> None:
     _write(projects, *PRELUDE, _cwd_line())
     verdict = _verdict(projects)
     assert verdict["status"] == "verified"
     assert verdict["kind"] == human_entry.HOME_START and verdict["cwd"] == HOME
 
 
-def test_outside_home_rejects(projects):
+def test_outside_home_rejects(projects) -> None:
     _write(projects, _cwd_line(cwd="/elsewhere"))
     assert _verdict(projects) == {
         "status": "rejected", "reason": "cwd-outside-home",
@@ -92,24 +93,24 @@ def test_outside_home_rejects(projects):
     }
 
 
-def test_sdk_cli_rejects_not_interactive(projects):
+def test_sdk_cli_rejects_not_interactive(projects) -> None:
     _write(projects, _cwd_line(entrypoint="sdk-cli"))
     assert _verdict(projects)["reason"] == "not-interactive"
 
 
-def test_home_unresolved_rejects(projects, monkeypatch):
+def test_home_unresolved_rejects(projects, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(human_entry, "_in_home", lambda cwd: None)
     _write(projects, _cwd_line())
     assert _verdict(projects)["reason"] == "home-unresolved"
 
 
-def test_no_entry_pending_then_rejected(projects):
+def test_no_entry_pending_then_rejected(projects) -> None:
     assert _verdict(projects, now=CLAIMED_TS + 10)["status"] == "pending"
     verdict = _verdict(projects, now=CLAIMED_TS + 120)
     assert verdict["status"] == "rejected" and verdict["reason"] == "no-start-entry"
 
 
-def test_late_cwd_line_overturns_no_start_entry_rejection(projects, tmp_path):
+def test_late_cwd_line_overturns_no_start_entry_rejection(projects, tmp_path: Path) -> None:
     cache = tmp_path / "cache.json"
     late = CLAIMED_TS + 120
     first = _verdict(projects, now=late, cache=cache)
@@ -119,7 +120,7 @@ def test_late_cwd_line_overturns_no_start_entry_rejection(projects, tmp_path):
     assert _verdict(projects, now=late + 5, cache=cache)["status"] == "verified"
 
 
-def test_poisoned_no_start_entry_cache_is_ignored(projects, tmp_path):
+def test_poisoned_no_start_entry_cache_is_ignored(projects, tmp_path: Path) -> None:
     cache = tmp_path / "cache.json"
     cache.write_text(
         json.dumps({"session_id": SID, "claimed_at": CLAIMED, "kind": human_entry.HOME_START,
@@ -130,7 +131,7 @@ def test_poisoned_no_start_entry_cache_is_ignored(projects, tmp_path):
     assert _verdict(projects, now=CLAIMED_TS + 120, cache=cache)["status"] == "verified"
 
 
-def test_other_home_start_rejections_stay_cached(projects, tmp_path):
+def test_other_home_start_rejections_stay_cached(projects, tmp_path: Path) -> None:
     cache = tmp_path / "cache.json"
     path = _write(projects, _cwd_line(cwd="/elsewhere"))
     assert _verdict(projects, cache=cache)["reason"] == "cwd-outside-home"
@@ -138,14 +139,14 @@ def test_other_home_start_rejections_stay_cached(projects, tmp_path):
     assert _verdict(projects, cache=cache)["reason"] == "cwd-outside-home"
 
 
-def test_pending_becomes_verified_once_line_appears(projects, tmp_path):
+def test_pending_becomes_verified_once_line_appears(projects, tmp_path: Path) -> None:
     cache = tmp_path / "cache.json"
     assert _verdict(projects, cache=cache)["status"] == "pending"
     _write(projects, _cwd_line())
     assert _verdict(projects, cache=cache)["status"] == "verified"
 
 
-def test_final_verdict_served_from_cache_without_transcript(projects, tmp_path):
+def test_final_verdict_served_from_cache_without_transcript(projects, tmp_path: Path) -> None:
     cache = tmp_path / "cache.json"
     path = _write(projects, _cwd_line())
     assert _verdict(projects, cache=cache)["status"] == "verified"
@@ -153,7 +154,7 @@ def test_final_verdict_served_from_cache_without_transcript(projects, tmp_path):
     assert _verdict(projects, cache=cache)["status"] == "verified"
 
 
-def test_human_group_em_line_alone_never_verifies_home_start(projects):
+def test_human_group_em_line_alone_never_verifies_home_start(projects) -> None:
     tag = "<command-name>/group-em</command-name>"
     line = json.dumps({
         "type": "user", "uuid": "u-1", "timestamp": "2026-10-21T00:00:01Z", "promptId": "p-1",
@@ -163,7 +164,7 @@ def test_human_group_em_line_alone_never_verifies_home_start(projects):
     assert _verdict(projects, now=CLAIMED_TS + 120)["status"] == "rejected"
 
 
-def test_prompt_id_cache_without_kind_still_reads_back(projects, tmp_path):
+def test_prompt_id_cache_without_kind_still_reads_back(projects, tmp_path: Path) -> None:
     cache = tmp_path / "cache.json"
     cache.write_text(
         json.dumps({"session_id": SID, "prompt_id": "p-1", "offsets": {}, "status": "verified",
@@ -176,7 +177,7 @@ def test_prompt_id_cache_without_kind_still_reads_back(projects, tmp_path):
     }
 
 
-def test_reclaim_after_cached_rejection_is_judged_afresh(projects, tmp_path):
+def test_reclaim_after_cached_rejection_is_judged_afresh(projects, tmp_path: Path) -> None:
     cache = tmp_path / "cache.json"
     assert _verdict(projects, now=CLAIMED_TS + 120, cache=cache)["status"] == "rejected"
     _write(projects, _cwd_line())
@@ -187,12 +188,12 @@ def test_reclaim_after_cached_rejection_is_judged_afresh(projects, tmp_path):
     assert verdict["status"] == "verified"
 
 
-def test_invalid_session_id_rejected(projects):
+def test_invalid_session_id_rejected(projects) -> None:
     verdict = human_entry.resolve_entry_evidence(_record(sid="../x"), CLAIMED_TS, projects)
     assert verdict == {"status": "rejected", "reason": "bad-session-id"}
 
 
-def test_home_start_refusal(projects):
+def test_home_start_refusal(projects) -> None:
     assert human_entry.home_start_refusal("../x", projects) == "bad-session-id"
     assert human_entry.home_start_refusal(SID, projects) is None
     _write(projects, _cwd_line(cwd="/elsewhere"))
@@ -201,7 +202,7 @@ def test_home_start_refusal(projects):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_prompt_id_readers_do_not_import_gem_home():
+def test_prompt_id_readers_do_not_import_gem_home() -> None:
     import subprocess
     import sys
 

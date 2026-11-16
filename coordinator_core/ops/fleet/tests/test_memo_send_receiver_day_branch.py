@@ -32,7 +32,7 @@ def _git(cwd, *args) -> str:
 
 
 @pytest.fixture(autouse=True)
-def _cadence(monkeypatch):
+def _cadence(monkeypatch: pytest.MonkeyPatch):
     push_cadence.reset_cadence_for_test()
     monkeypatch.setattr(push_cadence, "machine_profile", lambda: "author")
     yield
@@ -74,7 +74,7 @@ def _tick(sender: Path) -> bool:
     )
 
 
-def _setup(tmp_path, monkeypatch):
+def _setup(tmp_path, monkeypatch) -> tuple[Path, Path, Path]:
     sender = _make_sender_git_repo(tmp_path)
     receiver = _make_receiver_git_repo(tmp_path)
     monkeypatch.setenv("CLAUDE_HOME", str(_make_claude_home(tmp_path, {"project_rag": receiver})))
@@ -89,7 +89,7 @@ def _checkout_state(root: Path) -> tuple:
     )
 
 
-def test_main_with_remote_only_live_branch_neither_mints_nor_switches_and_pushes(tmp_path, monkeypatch):
+def test_main_with_remote_only_live_branch_neither_mints_nor_switches_and_pushes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sender, receiver, bare = _setup(tmp_path, monkeypatch)
     _cut_remote_only(receiver)
     main_before = _git(receiver, "rev-parse", "refs/heads/main")
@@ -114,7 +114,7 @@ def test_main_with_remote_only_live_branch_neither_mints_nor_switches_and_pushes
     assert _pending_records(sender) == []
 
 
-def test_day_branch_at_head_is_delivered_onto_without_moving_it(tmp_path, monkeypatch):
+def test_day_branch_at_head_is_delivered_onto_without_moving_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sender, receiver, bare = _setup(tmp_path, monkeypatch)
     day = _day_branch(receiver)
     _git(receiver, "checkout", "-q", "-b", day)
@@ -135,7 +135,7 @@ def test_day_branch_at_head_is_delivered_onto_without_moving_it(tmp_path, monkey
     assert _git(bare, "rev-parse", f"refs/heads/{day}") == sha
 
 
-def test_day_branch_elsewhere_delivers_without_touching_checkout(tmp_path, monkeypatch):
+def test_day_branch_elsewhere_delivers_without_touching_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sender, receiver, bare = _setup(tmp_path, monkeypatch)
     day = _day_branch(receiver)
     _git(receiver, "checkout", "-q", "-b", day)
@@ -165,7 +165,7 @@ def test_day_branch_elsewhere_delivers_without_touching_checkout(tmp_path, monke
     assert _git(bare, "rev-parse", "refs/heads/main") == main_before
 
 
-def test_collision_is_refused_against_the_base_tree(tmp_path, monkeypatch):
+def test_collision_is_refused_against_the_base_tree(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sender, receiver, _bare = _setup(tmp_path, monkeypatch)
     day = _day_branch(receiver)
     _write_draft(sender, "t-d")
@@ -186,7 +186,7 @@ def test_collision_is_refused_against_the_base_tree(tmp_path, monkeypatch):
     assert _pending_records(sender) == []
 
 
-def test_dry_run_reports_the_upstream_tip_without_minting_or_switching(tmp_path, monkeypatch):
+def test_dry_run_reports_the_upstream_tip_without_minting_or_switching(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sender, receiver, _bare = _setup(tmp_path, monkeypatch)
     _cut_remote_only(receiver)
     _write_draft(sender, "t-e")
@@ -223,7 +223,7 @@ def test_a_receiver_with_no_branch_at_all_is_refused_and_owes_no_push(tmp_path, 
     assert _pending_records(sender) == []
 
 
-def test_a_receiver_without_a_push_remote_is_refused_and_owes_no_push(tmp_path, monkeypatch):
+def test_a_receiver_without_a_push_remote_is_refused_and_owes_no_push(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sender, receiver, _bare = _setup(tmp_path, monkeypatch)
     _git(receiver, "branch", LIVE)
     _git(receiver, "remote", "remove", "origin")
@@ -238,7 +238,7 @@ def test_a_receiver_without_a_push_remote_is_refused_and_owes_no_push(tmp_path, 
     assert (sender / "state" / "memo-outbox" / "t-nr.md").exists()
 
 
-def test_cc_arm_delivers_onto_the_cc_receivers_tip(tmp_path, monkeypatch):
+def test_cc_arm_delivers_onto_the_cc_receivers_tip(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sender = _make_sender_git_repo(tmp_path)
     to_repo = _make_receiver_git_repo(tmp_path, name="to-repo")
     cc_repo = _make_receiver_git_repo(tmp_path, name="cc-repo")

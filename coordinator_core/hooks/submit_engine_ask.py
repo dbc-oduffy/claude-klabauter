@@ -488,9 +488,20 @@ def _hoisting(on: bool):
 
 def _default_emit(params: dict, repo_root: Path) -> dict:
     """`dispatch.emit` with fragment hoisting off: hoisting only shrinks the script and costs ~200ms per
-    run of process time. A script then over the Workflow byte cap is re-emitted hoisted."""
-    from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
+    run of process time. A script then over the Workflow byte cap is re-emitted hoisted. `FRESH_RUN_ID`
+    is cleared on exit so a warm engine never carries a past run's id."""
+    from coordinator_core.ops.dispatch_emit.op import FRESH_RUN_ID
 
+    try:
+        return _emit_hoist_retry(params, repo_root)
+    finally:
+        FRESH_RUN_ID.set(None)
+
+
+def _emit_hoist_retry(params: dict, repo_root: Path) -> dict:
+    from coordinator_core.ops.dispatch_emit.op import FRESH_RUN_ID, _dispatch_emit
+
+    FRESH_RUN_ID.set(None)
     try:
         with _hoisting(False):
             result = _dispatch_emit(params, repo_root)
@@ -501,6 +512,10 @@ def _default_emit(params: dict, repo_root: Path) -> dict:
         over = True
     if not over:
         return result
+    # Trap: the first attempt's failure rolled its mint back, and the hook may already have reported that id.
+    first = FRESH_RUN_ID.get()
+    if first and params.get("preminted_run_id") is None:
+        params = {**params, "preminted_run_id": first}
     with _hoisting(True):
         return _dispatch_emit(params, repo_root)
 
@@ -599,6 +614,9 @@ _CALLER_BUDGET_S = 12.0
 #: bound for this op alone; every other hook read is held to `DOOR_HOOK_READ_DEADLINE_MS`, 500ms):
 #: past it the door gives up and relays no hook answer. Pinned equal by test_submit_engine_ask_door_deadline.py.
 _DOOR_HOOK_READ_DEADLINE_S = 8.0
+#: Twin of `DOOR_HOOK_SUBMIT_TOTAL_MS`: the one clock every door leg of this op charges, so the door answers
+#: before `_CALLER_BUDGET_S` kills it. Pinned by test_submit_engine_ask_door_deadline.py.
+_DOOR_HOOK_TOTAL_S = 10.0
 _EMIT_BUDGET_SHARE = 0.8
 _FANOUT_TAIL_GRACE_S = 0.25
 

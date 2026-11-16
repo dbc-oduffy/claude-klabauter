@@ -12,6 +12,7 @@ from coordinator_core.ops import requirement_register as rr
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.session import record_homes
+import pytest
 
 RUN = "ask-20261014T000000-abc123"
 ASK = "fix the relayed thing"
@@ -32,7 +33,7 @@ deliverable_id: null
 """
 
 
-def test_relayed_ask_registers_only_its_text(tmp_path: Path, monkeypatch) -> None:
+def test_relayed_ask_registers_only_its_text(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     (tmp_path / ".git").mkdir()
     Path(record_homes.home_dir(str(tmp_path), "sizings")).mkdir(parents=True)
     window = [{"turn": n, "ts": "2026-10-08T10:00:00Z", "text": f"session chatter {n}"} for n in range(44, 48)]

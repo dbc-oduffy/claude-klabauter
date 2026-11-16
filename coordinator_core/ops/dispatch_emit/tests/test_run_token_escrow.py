@@ -6,6 +6,7 @@ import json
 import time
 
 from coordinator_core.ops.dispatch_emit import run_token
+from pathlib import Path
 
 
 def _repo(tmp_path):
@@ -13,11 +14,11 @@ def _repo(tmp_path):
     return tmp_path
 
 
-def _escrow_file(repo, run_id="ask-1"):
+def _escrow_file(repo, run_id: str = "ask-1"):
     return run_token._record_path(repo, run_id, escrow=True)
 
 
-def test_escrowed_returns_the_token_for_a_fresh_record(tmp_path):
+def test_escrowed_returns_the_token_for_a_fresh_record(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     token = run_token.mint(repo, "ask-1", "a.mjs")
     assert run_token.escrowed(repo, "ask-1") is None
@@ -26,14 +27,14 @@ def test_escrowed_returns_the_token_for_a_fresh_record(tmp_path):
     assert run_token.escrowed(repo, "ask-1") == token
 
 
-def test_escrow_refuses_no_git_dir_and_malformed_id(tmp_path):
+def test_escrow_refuses_no_git_dir_and_malformed_id(tmp_path: Path) -> None:
     assert not run_token.escrow(tmp_path, "ask-1", "a" * 32)
     repo = _repo(tmp_path)
     assert not run_token.escrow(repo, "../x", "a" * 32)
     assert run_token.escrowed(repo, "../x") is None
 
 
-def test_claimed_run_does_not_admit_and_release_restores(tmp_path):
+def test_claimed_run_does_not_admit_and_release_restores(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     token = run_token.mint(repo, "ask-1", "a.mjs")
     run_token.escrow(repo, "ask-1", token)
@@ -43,7 +44,7 @@ def test_claimed_run_does_not_admit_and_release_restores(tmp_path):
     assert run_token.escrowed(repo, "ask-1") == token
 
 
-def test_consume_and_discard_remove_the_escrow(tmp_path):
+def test_consume_and_discard_remove_the_escrow(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     for remover in (lambda: run_token.consume(repo, "ask-1"), lambda: run_token.discard(repo, "ask-1")):
         token = run_token.mint(repo, "ask-1", "a.mjs")
@@ -54,7 +55,7 @@ def test_consume_and_discard_remove_the_escrow(tmp_path):
         assert run_token.escrowed(repo, "ask-1") is None
 
 
-def test_mint_unlinks_a_stale_escrow(tmp_path):
+def test_mint_unlinks_a_stale_escrow(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     old = run_token.mint(repo, "ask-1", "a.mjs")
     run_token.escrow(repo, "ask-1", old)
@@ -65,7 +66,7 @@ def test_mint_unlinks_a_stale_escrow(tmp_path):
     assert run_token.escrowed(repo, "ask-1") == new
 
 
-def test_aged_record_and_digest_mismatch_and_malformed_token_refuse(tmp_path):
+def test_aged_record_and_digest_mismatch_and_malformed_token_refuse(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     token = run_token.mint(repo, "ask-1", "a.mjs")
     run_token.escrow(repo, "ask-1", "b" * 32)
@@ -81,7 +82,7 @@ def test_aged_record_and_digest_mismatch_and_malformed_token_refuse(tmp_path):
     assert run_token.escrowed(repo, "ask-1") is None
 
 
-def test_escrow_files_are_not_live_or_held_records(tmp_path):
+def test_escrow_files_are_not_live_or_held_records(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     token = run_token.mint(repo, "ask-1", "a.mjs")
     run_token.escrow(repo, "ask-1", token)
@@ -92,7 +93,7 @@ def test_escrow_files_are_not_live_or_held_records(tmp_path):
     assert run_token.held_records(repo) == []
 
 
-def test_sweep_expired_escrows_unlinks_only_the_aged(tmp_path):
+def test_sweep_expired_escrows_unlinks_only_the_aged(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     for rid in ("old", "new"):
         run_token.escrow(repo, rid, "c" * 32)

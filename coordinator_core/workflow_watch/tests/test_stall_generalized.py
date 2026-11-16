@@ -10,6 +10,7 @@ import time
 import pytest
 
 from coordinator_core.workflow_watch import stall
+from pathlib import Path
 
 NOW = 2_000_000_000.0
 OLD = NOW - stall.STALL_BOUND_SECONDS - 600
@@ -21,7 +22,7 @@ def _started(agent_id, key=None):
             "key": key or f"v2:{agent_id}"}
 
 
-def _run(tmp_path, events, transcripts, journal_mtime=OLD):
+def _run(tmp_path, events, transcripts, journal_mtime: float = OLD) -> str:
     run_dir = tmp_path / "wf_abc"
     run_dir.mkdir()
     journal = run_dir / "journal.jsonl"
@@ -34,48 +35,48 @@ def _run(tmp_path, events, transcripts, journal_mtime=OLD):
     return str(journal)
 
 
-def test_started_no_result_with_stale_transcript_is_stalled(tmp_path):
+def test_started_no_result_with_stale_transcript_is_stalled(tmp_path: Path) -> None:
     journal = _run(tmp_path, [_started("a1")], {"a1": OLD})
     found = stall.scan_for_stall(journal, NOW)
     assert found == stall.StalledRun("wf_abc", "a1", "L-a1", NOW - OLD)
 
 
-def test_fresh_transcript_is_not_stalled(tmp_path):
+def test_fresh_transcript_is_not_stalled(tmp_path: Path) -> None:
     journal = _run(tmp_path, [_started("a1")], {"a1": FRESH})
     assert stall.scan_for_stall(journal, NOW) is None
 
 
-def test_settled_run_is_not_stalled(tmp_path):
+def test_settled_run_is_not_stalled(tmp_path: Path) -> None:
     done = {"type": "result", "agentId": "a1", "key": "v2:a1", "result": "ok"}
     journal = _run(tmp_path, [_started("a1"), done], {"a1": OLD})
     assert stall.scan_for_stall(journal, NOW) is None
 
 
-def test_resumed_key_with_fresh_transcript_is_not_stalled(tmp_path):
+def test_resumed_key_with_fresh_transcript_is_not_stalled(tmp_path: Path) -> None:
     journal = _run(tmp_path, [_started("a1"), _started("a2", key="v2:a1")],
                    {"a1": OLD, "a2": FRESH})
     assert stall.scan_for_stall(journal, NOW) is None
 
 
-def test_absent_transcript_falls_back_to_journal_mtime(tmp_path):
+def test_absent_transcript_falls_back_to_journal_mtime(tmp_path: Path) -> None:
     journal = _run(tmp_path, [_started("a1")], {})
     assert stall.scan_for_stall(journal, NOW) is not None
     os.utime(journal, (FRESH, FRESH))
     assert stall.scan_for_stall(journal, NOW) is None
 
 
-def test_fresh_journal_blocks_a_stale_transcript(tmp_path):
+def test_fresh_journal_blocks_a_stale_transcript(tmp_path: Path) -> None:
     journal = _run(tmp_path, [_started("a1")], {"a1": OLD}, journal_mtime=FRESH)
     assert stall.scan_for_stall(journal, NOW) is None
 
 
-def test_oldest_progress_agent_is_named(tmp_path):
+def test_oldest_progress_agent_is_named(tmp_path: Path) -> None:
     journal = _run(tmp_path, [_started("a1"), _started("a2")],
                    {"a1": OLD, "a2": OLD - 500})
     assert stall.scan_for_stall(journal, NOW).agent_id == "a2"
 
 
-def test_scan_is_fast_and_spawns_nothing(tmp_path, monkeypatch):
+def test_scan_is_fast_and_spawns_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     journal = _run(tmp_path, [_started("a1")], {"a1": OLD})
 
     def boom(*args, **kwargs):
@@ -87,7 +88,7 @@ def test_scan_is_fast_and_spawns_nothing(tmp_path, monkeypatch):
     assert time.process_time() - began < 0.05
 
 
-def test_render_matches_precompact_contract():
+def test_render_matches_precompact_contract() -> None:
     assert stall.render_resume_call("wf_x", "a.mjs", {"repoRoot": "R"}) == (
         'Workflow({scriptPath: "a.mjs", args: {"repoRoot": "R"}, resumeFromRunId: "wf_x"})')
     assert stall.render_resume_call("wf_x", "a.mjs", None) == (
@@ -100,13 +101,13 @@ def test_render_matches_precompact_contract():
         "Workflow({scriptPath: <unknown")
 
 
-def test_render_with_task_id_prefixes_taskstop():
+def test_render_with_task_id_prefixes_taskstop() -> None:
     out = stall.render_resume_call("wf_x", "a.mjs", {"k": 1}, task_id="t1")
     assert out == ('TaskStop({"task_id": "t1"}) then '
                    'Workflow({scriptPath: "a.mjs", args: {"k": 1}, resumeFromRunId: "wf_x"})')
 
 
-def test_stopped_marker_path_builds_and_validates(tmp_path):
+def test_stopped_marker_path_builds_and_validates(tmp_path: Path) -> None:
     assert stall.stopped_marker_path(str(tmp_path), "s-1", "t_2") == os.path.join(
         str(tmp_path), "workflow-stopped-s-1-t_2")
     for session, task in (("s/1", "t"), ("s", "../t"), ("", "t"), ("s", "t t")):

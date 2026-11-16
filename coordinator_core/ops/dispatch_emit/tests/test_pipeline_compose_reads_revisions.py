@@ -4,9 +4,10 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit.pipeline_run import REVISIONS_MARKER, reads_revisions, revisions_rel
 from coordinator_core.ops.dispatch_emit.tests.test_pipeline_compose import _compose, agent_graph
+from pathlib import Path
 
 
-def test_every_stage_prompt_carries_marker_and_normalised_path():
+def test_every_stage_prompt_carries_marker_and_normalised_path() -> None:
     script = _compose(run_id="r1")
     name = "pipeline-structured-r1"
     assert reads_revisions(script)
@@ -16,7 +17,7 @@ def test_every_stage_prompt_carries_marker_and_normalised_path():
     assert script.count("(RELAY + REVISIONS + '\\n\\n' + ") == len(agent_graph(script))
 
 
-def test_path_binds_to_prefixed_name_not_raw_run_id():
+def test_path_binds_to_prefixed_name_not_raw_run_id() -> None:
     raw = _compose(run_id="r1")
     full = _compose(run_id="pipeline-structured-r1")
     assert revisions_rel("pipeline-structured-r1") in raw
@@ -24,7 +25,7 @@ def test_path_binds_to_prefixed_name_not_raw_run_id():
     assert raw == full
 
 
-def test_research_run_id_keeps_its_name_so_writer_and_stages_share_one_file(tmp_path):
+def test_research_run_id_keeps_its_name_so_writer_and_stages_share_one_file(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.pipeline_run import append_revision, finished_rel
 
     run_id = "pipeline-research-20261101T181654-abc123"
@@ -37,7 +38,7 @@ def test_research_run_id_keeps_its_name_so_writer_and_stages_share_one_file(tmp_
     assert "pipeline-structured-pipeline-research" not in script
 
 
-def test_finished_instruction_rides_the_last_stage_only():
+def test_finished_instruction_rides_the_last_stage_only() -> None:
     from coordinator_core.ops.dispatch_emit.pipeline_run import finished_rel
 
     script = _compose(run_id="r1")

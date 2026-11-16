@@ -18,13 +18,14 @@ from coordinator_core.source_edit_gate.selection import (
     _build_import_prefilter_regex,
     select_test_files,
 )
+from pathlib import Path
 
 
 def _regex_for(leaf: str):
     return _build_import_prefilter_regex({leaf})
 
 
-def test_multiline_parenthesized_from_import_matches():
+def test_multiline_parenthesized_from_import_matches() -> None:
     regex = _regex_for("derive")
     source = (
         "from pkg import (\n"
@@ -36,25 +37,25 @@ def test_multiline_parenthesized_from_import_matches():
     assert regex.search(source)
 
 
-def test_relative_import_naming_leaf_as_module_matches():
+def test_relative_import_naming_leaf_as_module_matches() -> None:
     regex = _regex_for("derive")
     assert regex.search("from .derive import thing\n")
     assert regex.search("from ..pkg.derive import thing\n")
 
 
-def test_importlib_import_module_string_matches():
+def test_importlib_import_module_string_matches() -> None:
     regex = _regex_for("derive")
     assert regex.search('importlib.import_module("pkg.sub.derive")\n')
     assert regex.search('__import__("pkg.sub.derive")\n')
 
 
-def test_leaf_in_prose_does_not_match():
+def test_leaf_in_prose_does_not_match() -> None:
     regex = _regex_for("derive")
     assert not regex.search("# we derive the value from configuration here\n")
     assert not regex.search("derived = compute_derived_value()\n")
 
 
-def test_prose_only_file_not_parsed_and_not_selected(tmp_path):
+def test_prose_only_file_not_parsed_and_not_selected(tmp_path: Path) -> None:
     repo = tmp_path
     (repo / "pkg").mkdir()
     (repo / "pkg" / "derive.py").write_text("x = 1\n")

@@ -54,6 +54,20 @@ def test_load_template_rules_skips_blank_and_comments(tmp_path):
     assert load_template_rules(t) == RULES
 
 
+def test_engine_runtime_rules_missing_then_tracked_receipts_found(tmp_path):
+    receipts = (
+        "state/test-runs/r1/receipt.json",
+        "state/warp/clean-clone-proofs/p1.json",
+        "state/queue-grind/q1/evidence/e.md",
+    )
+    repo = _repo(tmp_path, "", (*receipts, "state/queue-grind/q1/summary.md"))
+    got = runtime_ignore_findings(repo, mod.ENGINE_RUNTIME_IGNORE_RULES)
+    assert got.missing == mod.ENGINE_RUNTIME_IGNORE_RULES
+    assert set(got.tracked) == set(receipts)
+    (repo / ".gitignore").write_text("\n".join(mod.ENGINE_RUNTIME_IGNORE_RULES) + "\n", encoding="utf-8")
+    assert runtime_ignore_findings(repo, mod.ENGINE_RUNTIME_IGNORE_RULES).missing == ()
+
+
 def test_resolve_template_path_none_when_root_unresolved(monkeypatch):
     import coordinator_core.subagent_sandbox.provision_report as pr
 

@@ -6,14 +6,15 @@ import pytest
 from coordinator_core.git.content_hash import eol_folded_sha256
 from coordinator_core.ops.dispatch_emit import halted_hold_release, land_run, terminal_commit_refusals
 from coordinator_core.session import claim_index, liveness, touch_record
+from pathlib import Path
 
 BODY = b"landed\r\nbytes\n"
 PATH = "t/test_x.py"
 
 
 @pytest.fixture
-def repo(tmp_path):
-    def git(*a):
+def repo(tmp_path: Path) -> Path:
+    def git(*a) -> None:
         subprocess.run(["git", *a], cwd=tmp_path, check=True, capture_output=True)
 
     git("init", "-q")
@@ -27,7 +28,7 @@ def repo(tmp_path):
 
 
 @pytest.fixture
-def peer(monkeypatch):
+def peer(monkeypatch: pytest.MonkeyPatch):
     """A live peer ``peer1`` holding PATH; ``state['hash']`` is its newest recorded hash."""
     state = {"hash": None, "reads": 0}
     monkeypatch.setattr(claim_index, "lookup", lambda paths, cwd=None: {p: ["peer1"] for p in paths})
@@ -52,33 +53,33 @@ def peer(monkeypatch):
     return state
 
 
-def test_a_claimant_whose_hash_is_the_head_blob_holds_nothing(repo, peer):
+def test_a_claimant_whose_hash_is_the_head_blob_holds_nothing(repo, peer) -> None:
     peer["hash"] = eol_folded_sha256(BODY)
     assert land_run._peer_held(repo, [PATH], "me", None, None) == {}
     assert terminal_commit_refusals._peer_held(repo, "me", [PATH]) == set()
 
 
 @pytest.mark.parametrize("recorded", [None, "0" * 64])
-def test_a_hashless_or_differing_claimant_still_holds(repo, peer, recorded):
+def test_a_hashless_or_differing_claimant_still_holds(repo, peer, recorded) -> None:
     peer["hash"] = recorded
     assert land_run._peer_held(repo, [PATH], "me", None, None) == {PATH: ["peer1"]}
     assert terminal_commit_refusals._peer_held(repo, "me", [PATH]) == {PATH}
 
 
-def test_a_path_absent_from_head_still_holds(repo, peer):
+def test_a_path_absent_from_head_still_holds(repo, peer) -> None:
     peer["hash"] = eol_folded_sha256(BODY)
     assert land_run._peer_held(repo, ["t/new.py"], "me", None, None) == {"t/new.py": ["peer1"]}
     assert terminal_commit_refusals._peer_held(repo, "me", ["t/new.py"]) == {"t/new.py"}
 
 
-def test_a_failed_blob_read_keeps_the_hold(repo, peer, monkeypatch):
+def test_a_failed_blob_read_keeps_the_hold(repo, peer, monkeypatch: pytest.MonkeyPatch) -> None:
     peer["hash"] = eol_folded_sha256(BODY)
     monkeypatch.setattr(halted_hold_release, "_blob_fetch", lambda root, specs: None)
     assert land_run._peer_held(repo, [PATH], "me", None, None) == {PATH: ["peer1"]}
     assert terminal_commit_refusals._peer_held(repo, "me", [PATH]) == {PATH}
 
 
-def test_one_batched_read_over_many_held_paths_and_none_when_nothing_is_held(repo, peer, monkeypatch):
+def test_one_batched_read_over_many_held_paths_and_none_when_nothing_is_held(repo, peer, monkeypatch: pytest.MonkeyPatch) -> None:
     peer["hash"] = "0" * 64
     land_run._peer_held(repo, [PATH, "t/other.py"], "me", None, None)
     assert peer["reads"] == 1

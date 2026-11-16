@@ -7,6 +7,7 @@ import pytest
 from coordinator_core import warp_live
 from coordinator_core.ipc import get_op_handler
 from coordinator_core.ops.dispatch_emit import release_run_token, run_token
+from pathlib import Path
 
 SIZING = "state/sizings/s.yaml"
 
@@ -16,11 +17,11 @@ def _repo(tmp_path):
     return tmp_path
 
 
-def _mint(repo, run_id="ask-1"):
+def _mint(repo, run_id: str = "ask-1") -> str:
     return run_token.mint(repo, run_id, "scratch/w.mjs", session_id="s1", sizing_rel=SIZING)
 
 
-def test_discard_returns_record_and_removes_unclaimed_file(tmp_path):
+def test_discard_returns_record_and_removes_unclaimed_file(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _mint(repo)
     path = run_token._record_path(repo, "ask-1")
@@ -30,7 +31,7 @@ def test_discard_returns_record_and_removes_unclaimed_file(tmp_path):
     assert run_token.discard(repo, "ask-1") is None
 
 
-def test_discard_leaves_a_claimed_file(tmp_path):
+def test_discard_leaves_a_claimed_file(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     token = _mint(repo)
     assert run_token.redeem(repo, "ask-1", token, "scratch/w.mjs")
@@ -39,11 +40,11 @@ def test_discard_leaves_a_claimed_file(tmp_path):
     assert claimed.exists()
 
 
-def test_discard_malformed_id_returns_none(tmp_path):
+def test_discard_malformed_id_returns_none(tmp_path: Path) -> None:
     assert run_token.discard(_repo(tmp_path), "../x") is None
 
 
-def test_handler_round_trip(tmp_path):
+def test_handler_round_trip(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _mint(repo)
     handler = release_run_token._handler
@@ -58,7 +59,7 @@ def test_handler_round_trip(tmp_path):
     assert again["ok"] is True and again["released"] is False and again["record"] is None
 
 
-def test_handler_names_token_and_index_entry_removed(tmp_path):
+def test_handler_names_token_and_index_entry_removed(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _mint(repo)
     reply = release_run_token._handler({"run_id": "ask-1"}, repo_root=repo)
@@ -68,7 +69,7 @@ def test_handler_names_token_and_index_entry_removed(tmp_path):
     assert again["released"] is False and again["index_entry_removed"] is False
 
 
-def test_handler_reports_index_only_release(tmp_path):
+def test_handler_reports_index_only_release(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _mint(repo)
     run_token.discard(repo, "ask-1")
@@ -81,7 +82,7 @@ def test_handler_reports_index_only_release(tmp_path):
 
 
 @pytest.mark.parametrize("params", [{}, {"run_id": ""}, {"run_id": 7}, {"run_id": None}])
-def test_handler_refuses_bad_run_id_and_removes_nothing(tmp_path, params):
+def test_handler_refuses_bad_run_id_and_removes_nothing(tmp_path: Path, params) -> None:
     repo = _repo(tmp_path)
     _mint(repo)
     reply = release_run_token._handler(params, repo_root=repo)
@@ -89,10 +90,10 @@ def test_handler_refuses_bad_run_id_and_removes_nothing(tmp_path, params):
     assert run_token.is_live(repo, "ask-1")
 
 
-def test_handler_without_repo_root_errors():
+def test_handler_without_repo_root_errors() -> None:
     reply = release_run_token._handler({"run_id": "ask-1"}, repo_root=None)
     assert reply["ok"] is False and "repo_root" in reply["error"]
 
 
-def test_handler_reachable_through_get_op_handler():
+def test_handler_reachable_through_get_op_handler() -> None:
     assert get_op_handler(release_run_token.OP_NAME) is release_run_token._handler

@@ -7,12 +7,17 @@ import importlib.util
 import pathlib
 
 import pytest
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 _SYNTAX = 'coordinator-safe-commit [--body-file F] "<subject>" -- <path>...'
 
 
-def _load_cli_module():
+def _load_cli_module() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "coordinator_safe_commit", str(_BIN_DIR / "coordinator-safe-commit.py")
     )
@@ -22,7 +27,7 @@ def _load_cli_module():
     return mod
 
 
-def test_missing_separator_prints_fact_then_usage_line(monkeypatch, tmp_path, capsys):
+def test_missing_separator_prints_fact_then_usage_line(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     mod = _load_cli_module()
     monkeypatch.chdir(tmp_path)
     (tmp_path / "a.py").write_text("x")
@@ -39,7 +44,7 @@ def test_missing_separator_prints_fact_then_usage_line(monkeypatch, tmp_path, ca
     assert "DR-344" not in err and "killed" not in err
 
 
-def test_missing_separator_with_nonexistent_paths_offers_no_rewrite(monkeypatch, tmp_path, capsys):
+def test_missing_separator_with_nonexistent_paths_offers_no_rewrite(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     mod = _load_cli_module()
     monkeypatch.chdir(tmp_path)
     with pytest.raises(SystemExit):

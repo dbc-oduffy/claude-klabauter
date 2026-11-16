@@ -11,6 +11,7 @@ from coordinator_core.ops.ceremony.tests.test_close_background_land_run_legs imp
     _fake_mint,
     _flip_ctx,
 )
+from pathlib import Path
 
 # Tiering follows the imported land_run_legs helpers, which drive real git.
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
@@ -35,23 +36,23 @@ def _detail(tmp_path, **record) -> str:
     return result.detail
 
 
-def test_open_row_with_a_sibling_entry_names_the_run_status_and_refire(tmp_path):
+def test_open_row_with_a_sibling_entry_names_the_run_status_and_refire(tmp_path: Path) -> None:
     detail = _detail(tmp_path, inputs={"sibling_blocked": [ENTRY]})
     assert f"C2 (waits on sibling run sib-0772b0, running; after it lands: {ENTRY['refire']})" in detail
 
 
-def test_text_is_bare_without_the_key(tmp_path):
+def test_text_is_bare_without_the_key(tmp_path: Path) -> None:
     detail = _detail(tmp_path)
     assert "waits on sibling" not in detail
     assert detail.endswith("C2") or ", C2" in detail or "open: C2" in detail
 
 
-def test_entry_for_a_row_that_is_not_open_adds_nothing(tmp_path):
+def test_entry_for_a_row_that_is_not_open_adds_nothing(tmp_path: Path) -> None:
     other = dict(ENTRY, row="C9")
     assert "waits on sibling" not in _detail(tmp_path, inputs={"sibling_blocked": [other]})
 
 
-def test_wait_notes_skip_malformed_entries_and_keep_the_first_per_row():
+def test_wait_notes_skip_malformed_entries_and_keep_the_first_per_row() -> None:
     notes = cb._sibling_wait_notes(["x", {"row": "C1"}, ENTRY, dict(ENTRY, run_id="later")])
     assert list(notes) == ["C2"] and "sib-0772b0" in notes["C2"]
     assert cb._sibling_wait_notes(None) == {}

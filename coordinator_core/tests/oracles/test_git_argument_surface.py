@@ -22,6 +22,7 @@ import subprocess
 import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -37,7 +38,7 @@ def _git(repo, *args: str) -> subprocess.CompletedProcess:
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     subprocess.run(
         ["git", "init", "-q", str(tmp_path)],
         check=True,
@@ -53,7 +54,7 @@ def repo(tmp_path):
     return tmp_path
 
 
-def test_git_config_unset_takes_exactly_one_key(repo):
+def test_git_config_unset_takes_exactly_one_key(repo) -> None:
     _git(repo, "config", "--local", "a.one", "1")
     _git(repo, "config", "--local", "a.two", "2")
 
@@ -71,7 +72,7 @@ def test_git_config_unset_takes_exactly_one_key(repo):
     )
 
 
-def test_git_config_set_takes_exactly_one_pair(repo):
+def test_git_config_set_takes_exactly_one_pair(repo) -> None:
     result = _git(repo, "config", "--local", "b.one", "1", "b.two", "2")
 
     assert result.returncode != 0, (
@@ -84,7 +85,7 @@ def test_git_config_set_takes_exactly_one_pair(repo):
     )
 
 
-def test_git_rm_is_atomic_across_its_pathspec(repo):
+def test_git_rm_is_atomic_across_its_pathspec(repo) -> None:
     (repo / "f2").write_text("modified\n", encoding="utf-8")
 
     result = _git(repo, "rm", "--", "f1", "f2")
@@ -100,7 +101,7 @@ def test_git_rm_is_atomic_across_its_pathspec(repo):
     )
 
 
-def test_git_rev_list_exclusions_are_global(repo):
+def test_git_rev_list_exclusions_are_global(repo) -> None:
     """The `no-primitive-MEASURED-wrong` family: `coverage::_reviewed_via_graph_walk`,
     `review_coverage_core::build_reviewed_set` / `build_segments`,
     `plan_suggest_completion_steps::_plans_with_review_trail_coverage`,

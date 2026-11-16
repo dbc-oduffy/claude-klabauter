@@ -46,8 +46,28 @@ def test_line_number_flag_is_evaluated_not_skipped(root, cmd):
     assert evaluate(cmd, "2", root)["state"] == "MISMATCH"
 
 
+@pytest.mark.parametrize(
+    "cmd",
+    ["grep -ci baz a.txt", "grep -c -i baz a.txt", "grep -ic baz a.txt", "grep -cin baz a.txt",
+     "grep -ni baz a.txt", "grep -ciE 'BAZ' a.txt", "grep -ciF baz a.txt",
+     "grep -ci -e BAZ -e nomatch a.txt"],
+)
+def test_ignore_case_counts_case_insensitively(root, cmd):
+    assert evaluate(cmd, "1", root)["state"] == "MATCH"
+    assert evaluate(cmd, "0", root)["state"] == "MISMATCH"
+
+
+def test_case_sensitive_stays_case_sensitive(root):
+    assert evaluate("grep -c baz a.txt", "0", root)["state"] == "MATCH"
+    assert evaluate("grep -ci foo a.txt", "3", root)["state"] == "MATCH"
+
+
+@pytest.mark.parametrize("cmd", ["grep -cii baz a.txt", "grep -ci -i baz a.txt", "grep -cEi -i baz a.txt"])
+def test_duplicate_ignore_case_refused(root, cmd):
+    assert _state(root, cmd, "1") == "NOT_EVALUABLE"
+
+
 def test_line_number_flag_does_not_admit_other_flags(root):
-    assert _state(root, "grep -ni foo a.txt", "3") == "NOT_EVALUABLE"
     assert _state(root, "grep -nn foo a.txt", "3") == "NOT_EVALUABLE"
     assert _state(root, "grep foo a.txt", "3") == "NOT_EVALUABLE"
 
@@ -169,7 +189,7 @@ def test_symlink_escape(root, tmp_path_factory):
 @pytest.mark.parametrize(
     "cmd",
     ["find sub -name c.py | wc -l", "grep -c foo a.txt | wc -l", "grep -c foo a.txt b.txt",
-     "grep -ci foo a.txt", "grep -cv foo a.txt", "grep -cw foo a.txt", "grep -cx foo a.txt",
+     "grep -cv foo a.txt", "grep -cw foo a.txt", "grep -cx foo a.txt",
      "grep -cr foo sub", "grep -cl foo a.txt", "grep -ce foo a.txt", "grep -cEF foo a.txt",
      "grep foo a.txt", "grep -c foo a.txt; echo hi", "grep -c foo a.txt || true",
      "grep -c foo a.txt > out.txt", "cat a.txt", "", "grep -c 'unterminated a.txt"],
@@ -258,7 +278,7 @@ def test_grammar_names_grep_c():
 
 def _git(repo, *args):
     subprocess.run(
-        ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", *args],
+        ["git", "-C", str(repo), "-c", "user.name=t", "-c", "user.email=t@t", "-c", "core.autocrlf=false", *args],
         check=True, capture_output=True,
     )
 
@@ -360,3 +380,58 @@ def test_default_without_base_ref_reads_tree_and_spawns_nothing(repo, monkeypatc
 
     monkeypatch.setattr(subprocess, "Popen", boom)
     assert evaluate("grep -c nothing a.py", "1", repo)["state"] == "MATCH"
+
+
+def test_count_over_bound_is_not_evaluable_not_a_hang(root, monkeypatch):
+    monkeypatch.setattr(_anchor_check, "MAX_LANE_BYTES", 64)
+    (root / "big.txt").write_bytes(b"foo\n" * 100)
+    got = evaluate("grep -c foo big.txt", "100", root)
+    assert got["state"] == "NOT_EVALUABLE" and "bound" in got["detail"]
+    assert evaluate("grep -c foo a.txt", ">=1", root)["state"] == "MATCH"
+
+
+def test_cap_charges_bytes_read_so_a_decided_big_file_still_evaluates(root, monkeypatch):
+    monkeypatch.setattr(_anchor_check, "MAX_LANE_BYTES", 64)
+    (root / "big.txt").write_bytes(b"foo\n" * 100)
+    got = evaluate("grep -c foo big.txt", ">=1", root)
+    assert got["state"] == "MATCH" and got["observed"] == ">=1"
+
+
+def test_cap_is_shared_across_the_lane_stages(root, monkeypatch):
+    monkeypatch.setattr(_anchor_check, "MAX_LANE_BYTES", 150)
+    (root / "big.txt").write_bytes(b"foo\n" * 30)
+    cmd = "grep -c foo big.txt && grep -c foo big.txt"
+    assert evaluate(cmd, "30 then 30", root)["state"] == "NOT_EVALUABLE"
+    assert evaluate("grep -c foo big.txt", "30", root)["state"] == "MATCH"
+
+
+def test_short_circuited_count_is_reported_as_a_lower_bound(root):
+    got = evaluate("grep -c foo a.txt", ">=1", root)
+    assert got["state"] == "MATCH" and got["observed"] == ">=1"
+    got = evaluate("grep -c foo a.txt", ">1", root)
+    assert got["state"] == "MATCH" and got["observed"] == ">=2"
+    miss = evaluate("grep -c foo a.txt && grep -c nomatch b.txt", ">=1 then >=2", root)
+    assert miss["state"] == "MISMATCH" and miss["observed"] == ">=1\n0"
+    assert "b.txt counted 0" in miss["detail"]
+    exact = evaluate("grep -c foo a.txt", "3", root)
+    assert exact["observed"] == "3"
+    assert evaluate("grep -c foo a.txt", "<=2", root)["observed"] == "3"
+
+
+def test_large_ascii_file_counts_fast_and_short_circuits(root):
+    import time
+
+    (root / "big.txt").write_bytes(b"alpha beta gamma\n" * 200_000 + b"needle\n")
+    t0 = time.process_time()
+    assert evaluate("grep -c needle big.txt", "1", root)["state"] == "MATCH"
+    assert evaluate("grep -c alpha big.txt", ">=3", root)["observed"] == ">=3"
+    assert time.process_time() - t0 < 0.5
+
+
+def test_fast_path_agrees_with_decoded_path_on_non_ascii(root):
+    (root / "u.txt").write_bytes("caf\u00e9 x\nabc\n\xff\xfe x\n".encode("latin-1", "replace"))
+    (root / "u8.txt").write_bytes("a\u00e9b\nacb\nab\n".encode("utf-8"))
+    assert evaluate("grep -c a.b u8.txt", "2", root)["state"] == "MATCH"
+    assert evaluate("grep -c -e a.b -e zzz u8.txt", "2", root)["state"] == "MATCH"
+    assert evaluate("grep -c ab u8.txt", "1", root)["state"] == "MATCH"
+    assert evaluate("grep -c x u.txt", "2", root)["state"] == "MATCH"

@@ -22,6 +22,7 @@ import subprocess
 import sys
 
 import pytest
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -32,7 +33,7 @@ _NO_CONSOLE = {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0)}
 _DLV_ID_RE = re.compile(r'^deliverable_id: "(dlv-[a-z0-9-]+)"', re.MULTILINE)
 
 
-def _run(args, cwd, session_id="test-session-abc123", extra_env=None):
+def _run(args, cwd, session_id: str = "test-session-abc123", extra_env=None):
     env = dict(os.environ)
     env.pop("COORDINATOR_SESSION_ID", None)
     env.pop("CLAUDE_SESSION_ID", None)
@@ -54,7 +55,7 @@ def _run(args, cwd, session_id="test-session-abc123", extra_env=None):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "testrepo"
     r.mkdir()
     subprocess.run(["git", "init", "-q", str(r)], capture_output=True, **_NO_CONSOLE)
@@ -70,7 +71,7 @@ def repo(tmp_path):
     return r
 
 
-def _write_recent_baton(repo, name, deliverable_id):
+def _write_recent_baton(repo, name, deliverable_id) -> None:
     """A minimal `state/handoffs/YYYY-MM-DD-<name>.md` baton frontmatter —
     same output path/naming handoff/spinoff/recovery batons share."""
     handoffs = repo / "state" / "handoffs"
@@ -85,7 +86,7 @@ def _write_recent_baton(repo, name, deliverable_id):
     )
 
 
-def test_sizing_object_joins_a_same_title_batons_deliverable_id(repo, tmp_path):
+def test_sizing_object_joins_a_same_title_batons_deliverable_id(repo, tmp_path: Path) -> None:
     """A baton scaffolded moments earlier under this same title already
     minted this work's id; the sizing scout joins it instead of forking the
     spine (25a)."""
@@ -103,7 +104,7 @@ def test_sizing_object_joins_a_same_title_batons_deliverable_id(repo, tmp_path):
     assert "same-title baton" in result.stderr
 
 
-def test_sizing_object_same_title_carry_refuses_an_ambiguous_match(repo, tmp_path):
+def test_sizing_object_same_title_carry_refuses_an_ambiguous_match(repo, tmp_path: Path) -> None:
     _write_recent_baton(repo, "a", "dlv-ambiguous-sizing-baton-test-111111")
     _write_recent_baton(repo, "b", "dlv-ambiguous-sizing-baton-test-222222")
     out = tmp_path / "sz-ambiguous.yaml"
@@ -121,7 +122,7 @@ def test_sizing_object_same_title_carry_refuses_an_ambiguous_match(repo, tmp_pat
     assert "share this title slug" in result.stderr
 
 
-def test_sizing_object_same_title_carry_honours_new_chain(repo, tmp_path):
+def test_sizing_object_same_title_carry_honours_new_chain(repo, tmp_path: Path) -> None:
     _write_recent_baton(repo, "new-chain-sizing-baton-test", "dlv-new-chain-sizing-baton-test-407949")
     out = tmp_path / "sz-new-chain.yaml"
     result = _run(
@@ -136,7 +137,7 @@ def test_sizing_object_same_title_carry_honours_new_chain(repo, tmp_path):
     assert _DLV_ID_RE.search(out.read_text()).group(1) != "dlv-new-chain-sizing-baton-test-407949"
 
 
-def test_sizing_object_with_no_matching_baton_still_mints(repo, tmp_path):
+def test_sizing_object_with_no_matching_baton_still_mints(repo, tmp_path: Path) -> None:
     """No baton on disk at all: the existing mint-from-title path is
     unaffected (negative-spec — this tier never blocks scaffolding)."""
     out = tmp_path / "sz-no-baton.yaml"

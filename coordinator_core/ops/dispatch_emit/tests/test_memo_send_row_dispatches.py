@@ -7,6 +7,7 @@ import pytest
 from coordinator_core.bash_guards import block_subagent_commit as guard
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
+from pathlib import Path
 
 PLAN_REL = "docs/plans/2026-10-22-memo-dispatch.md"
 OUTBOX = ".coordinator-local/memo-outbox"
@@ -82,7 +83,7 @@ def _owed(reply):
     return {o["id"]: o["reason"] for o in reply["owed"]}
 
 
-def test_registered_receiver_stages_the_memo_row_as_an_executor_row(monkeypatch, tmp_path):
+def test_registered_receiver_stages_the_memo_row_as_an_executor_row(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(_CLASSIFIER, lambda to, dry_run: None)
     reply = _stage(tmp_path)
 
@@ -98,7 +99,7 @@ def test_registered_receiver_stages_the_memo_row_as_an_executor_row(monkeypatch,
     assert _owed(reply) == {"E": "memo-send"}
 
 
-def test_unregistered_receiver_owes_the_memo_row_and_its_dependent(monkeypatch, tmp_path):
+def test_unregistered_receiver_owes_the_memo_row_and_its_dependent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(_CLASSIFIER, lambda to, dry_run: {"rejection_class": "unknown_receiver"})
     reply = _stage(tmp_path)
 
@@ -110,13 +111,13 @@ _SEND_OP = "memo" + "." + "send"
 
 
 @pytest.fixture
-def _subagent(monkeypatch):
+def _subagent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(guard, "resolve_git_root", lambda cwd: "/fake/git-root")
     monkeypatch.setattr(guard, "_resolve_subagent_identity", lambda raw, session: "deadbeef0123")
     monkeypatch.setattr(guard, "_read_backpointer_subagent_type", lambda git_root, agent_id: "coordinator:executor")
 
 
-def test_guard_admits_a_subagent_memo_send_invoke(_subagent):
+def test_guard_admits_a_subagent_memo_send_invoke(_subagent) -> None:
     payload = {
         "tool_name": "Bash",
         "tool_input": {"command": f'coordinator-invoke {_SEND_OP} \'{{"topic": "x"}}\''},

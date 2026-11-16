@@ -5,13 +5,15 @@ import json
 from coordinator_core.idle_compact import contract as c
 from coordinator_core.session import context_usage_sidecar as cus
 from coordinator_core.session_hub_path import session_dir_for
+from pathlib import Path
+import pytest
 
 
-def test_thresholds():
+def test_thresholds() -> None:
     assert (c.IDLE_SECONDS, c.CONTEXT_PCT, c.TICK_SECONDS) == (300, 18.0, 30)
 
 
-def test_settings_home_matches_sidecar_resolver(tmp_path, monkeypatch):
+def test_settings_home_matches_sidecar_resolver(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     assert cus.sidecar_path("s1").parents[2] == c.settings_home() == tmp_path
     assert c.injection_log_path() == tmp_path / "state" / "idle-compact" / "injections.jsonl"
@@ -19,12 +21,12 @@ def test_settings_home_matches_sidecar_resolver(tmp_path, monkeypatch):
     assert not c.allowlist_path().exists()
 
 
-def test_default_settings_home(monkeypatch):
+def test_default_settings_home(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     assert c.settings_home().name == ".coordinator-claude-settings"
 
 
-def test_marker_paths_in_hub(tmp_path):
+def test_marker_paths_in_hub(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     o = c.optout_marker_path("sid1", str(tmp_path))
     h = c.compact_hold_marker_path("sid1", str(tmp_path))
@@ -33,11 +35,11 @@ def test_marker_paths_in_hub(tmp_path):
     assert o.parent == session_dir_for(tmp_path / ".git", "sid1")
 
 
-def test_marker_paths_none_outside_repo(tmp_path):
+def test_marker_paths_none_outside_repo(tmp_path: Path) -> None:
     assert c.optout_marker_path("sid1", str(tmp_path)) is None
 
 
-def test_injector_protocol_and_log_record():
+def test_injector_protocol_and_log_record() -> None:
     class Fake:
         def inject(self, pid):
             return c.InjectResult(True, "ok")

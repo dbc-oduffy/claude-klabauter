@@ -2,82 +2,84 @@
 from __future__ import annotations
 
 from coordinator_core.write_guards import _sentinel_write_guard as helper
+from pathlib import Path
+import pytest
 
 
 class TestExtractTargetPath:
-    def test_write_edit_multiedit_use_file_path(self):
+    def test_write_edit_multiedit_use_file_path(self) -> None:
         assert (
             helper.extract_target_path({"file_path": "/repo/.sentinel"})
             == "/repo/.sentinel"
         )
 
-    def test_notebook_edit_uses_notebook_path(self):
+    def test_notebook_edit_uses_notebook_path(self) -> None:
         assert (
             helper.extract_target_path({"notebook_path": "/repo/nb.ipynb"})
             == "/repo/nb.ipynb"
         )
 
-    def test_file_path_preferred_over_notebook_path(self):
+    def test_file_path_preferred_over_notebook_path(self) -> None:
         payload = {"file_path": "/repo/.sentinel", "notebook_path": "/repo/nb.ipynb"}
         assert helper.extract_target_path(payload) == "/repo/.sentinel"
 
-    def test_bare_path_key_supported(self):
+    def test_bare_path_key_supported(self) -> None:
         assert helper.extract_target_path({"path": "/repo/.sentinel"}) == "/repo/.sentinel"
 
-    def test_missing_keys_returns_empty_string(self):
+    def test_missing_keys_returns_empty_string(self) -> None:
         assert helper.extract_target_path({}) == ""
 
-    def test_non_dict_input_returns_empty_string(self):
+    def test_non_dict_input_returns_empty_string(self) -> None:
         assert helper.extract_target_path("not-a-dict") == ""  # type: ignore[arg-type]
 
-    def test_non_string_value_falls_through(self):
+    def test_non_string_value_falls_through(self) -> None:
         payload = {"file_path": ["a", "list"], "notebook_path": "/repo/nb.ipynb"}
         assert helper.extract_target_path(payload) == "/repo/nb.ipynb"
 
-    def test_blank_string_falls_through(self):
+    def test_blank_string_falls_through(self) -> None:
         payload = {"file_path": "   ", "path": "/repo/.sentinel"}
         assert helper.extract_target_path(payload) == "/repo/.sentinel"
 
-    def test_value_is_stripped(self):
+    def test_value_is_stripped(self) -> None:
         assert helper.extract_target_path({"file_path": "  /repo/.sentinel  "}) == "/repo/.sentinel"
 
 
 class TestIsSentinelWrite:
-    def test_exact_basename_match(self, tmp_path):
+    def test_exact_basename_match(self, tmp_path: Path) -> None:
         target = str(tmp_path / ".coordinator-override-worktree-guard")
         assert helper.is_sentinel_write(
             target, ".coordinator-override-worktree-guard"
         )
 
-    def test_case_folded_match(self, tmp_path):
+    def test_case_folded_match(self, tmp_path: Path) -> None:
         target = str(tmp_path / ".Coordinator-Override-Worktree-Guard")
         assert helper.is_sentinel_write(
             target, ".coordinator-override-worktree-guard"
         )
 
-    def test_no_match_for_unrelated_file(self, tmp_path):
+    def test_no_match_for_unrelated_file(self, tmp_path: Path) -> None:
         target = str(tmp_path / "some-other-file.txt")
         assert not helper.is_sentinel_write(
             target, ".coordinator-override-worktree-guard"
         )
 
-    def test_no_substring_or_prefix_match(self, tmp_path):
+    def test_no_substring_or_prefix_match(self, tmp_path: Path) -> None:
         target = str(tmp_path / ".coordinator-override-worktree-guard-typo")
         assert not helper.is_sentinel_write(
             target, ".coordinator-override-worktree-guard"
         )
 
-    def test_empty_path_returns_false(self):
+    def test_empty_path_returns_false(self) -> None:
         assert not helper.is_sentinel_write("", ".coordinator-override-worktree-guard")
 
-    def test_relative_path_resolved_against_cwd(self, tmp_path, monkeypatch):
+    def test_relative_path_resolved_against_cwd(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.chdir(tmp_path)
         assert helper.is_sentinel_write(
             ".coordinator-override-worktree-guard",
             ".coordinator-override-worktree-guard",
         )
 
-    def test_nonexistent_leaf_does_not_raise(self, tmp_path):
+    def test_nonexistent_leaf_does_not_raise(self, tmp_path: Path) -> None:
         target = str(tmp_path / "not-yet-created" / ".coordinator-override-worktree-guard")
         assert helper.is_sentinel_write(
             target, ".coordinator-override-worktree-guard"
@@ -92,7 +94,7 @@ class TestSentinelWriteDenial:
     there is no "omit it" shape left to test.
     """
 
-    def test_returns_none_for_non_sentinel_path(self):
+    def test_returns_none_for_non_sentinel_path(self) -> None:
         result = helper.sentinel_write_denial(
             "/repo/README.md",
             ".coordinator-override-worktree-guard",
@@ -101,7 +103,7 @@ class TestSentinelWriteDenial:
         )
         assert result is None
 
-    def test_returns_nested_deny_envelope_for_sentinel_path(self):
+    def test_returns_nested_deny_envelope_for_sentinel_path(self) -> None:
         result = helper.sentinel_write_denial(
             "/repo/.coordinator-override-worktree-guard",
             ".coordinator-override-worktree-guard",
@@ -116,7 +118,7 @@ class TestSentinelWriteDenial:
             }
         }
 
-    def test_reason_string_preserved_byte_for_byte(self):
+    def test_reason_string_preserved_byte_for_byte(self) -> None:
         reason = "Sentinel write blocked: exact reason text, byte-for-byte."
         result = helper.sentinel_write_denial(
             "/repo/.coordinator-override-worktree-guard",
@@ -126,7 +128,7 @@ class TestSentinelWriteDenial:
         )
         assert result["hookSpecificOutput"]["permissionDecisionReason"] == reason
 
-    def test_empty_target_path_passes_through(self):
+    def test_empty_target_path_passes_through(self) -> None:
         assert (
             helper.sentinel_write_denial(
                 "", ".coordinator-override-worktree-guard", "reason", payload=None
@@ -134,7 +136,7 @@ class TestSentinelWriteDenial:
             is None
         )
 
-    def test_missing_payload_keyword_raises_type_error(self):
+    def test_missing_payload_keyword_raises_type_error(self) -> None:
         import pytest
 
         with pytest.raises(TypeError):

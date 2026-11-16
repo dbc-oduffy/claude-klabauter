@@ -115,7 +115,7 @@ def _git(repo: Path, *args: str) -> None:
 
 
 @pytest.fixture(scope="module")
-def staleness_repo(tmp_path_factory) -> Path:
+def staleness_repo(tmp_path_factory: pytest.TempPathFactory) -> Path:
     repo = tmp_path_factory.mktemp("engine_overhead_repo")
     _git(repo, "init", "-q")
     for doc in ("README.md", "INSTALL.md"):
@@ -226,7 +226,7 @@ def accountant(engine) -> LiveTreeAccountant:
         yield acct
 
 
-def test_ping_overhead_is_under_the_bar(engine, accountant):
+def test_ping_overhead_is_under_the_bar(engine, accountant) -> None:
     sample = _measure(
         "ping", engine, [str(_PING_DOOR), "ping", "{}"],
         [sys.executable, "-c", _driver(_PING_DRIVER)], accountant,
@@ -234,7 +234,7 @@ def test_ping_overhead_is_under_the_bar(engine, accountant):
     assert over_budget(sample) is None, over_budget(sample)
 
 
-def test_doc_staleness_overhead_is_under_the_bar(engine, accountant, staleness_repo):
+def test_doc_staleness_overhead_is_under_the_bar(engine, accountant, staleness_repo) -> None:
     sample = _measure(
         "doc-staleness", engine, [str(_ENTRY_DOOR), "--root", str(staleness_repo)],
         [sys.executable, "-c", _driver(_DOC_STALENESS_DRIVER), str(staleness_repo)], accountant,

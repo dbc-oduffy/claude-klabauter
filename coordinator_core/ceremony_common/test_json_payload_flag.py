@@ -8,11 +8,12 @@ from coordinator_core.ceremony_common.json_payload_flag import (
     detect_conflicting_payload_channels,
     resolve_json_payload_flag,
 )
+from pathlib import Path
 
 _HOSTILE_PAYLOAD = '{"a": "has a \\"quote\\" and a space"}'
 
 
-def test_inline_happy_path():
+def test_inline_happy_path() -> None:
     tokens = ["apply", "--decisions", '{"jp-1": {"disposition": "accept"}}']
     result = resolve_json_payload_flag(tokens, 1)
     assert result.consumed == 2
@@ -20,7 +21,7 @@ def test_inline_happy_path():
     assert result.value == {"jp-1": {"disposition": "accept"}}
 
 
-def test_file_happy_path(tmp_path):
+def test_file_happy_path(tmp_path: Path) -> None:
     payload_path = tmp_path / "decisions.json"
     payload_path.write_text('{"jp-1": {"disposition": "accept"}}', encoding="utf-8")
     tokens = ["apply", "--decisions-file", str(payload_path)]
@@ -30,21 +31,21 @@ def test_file_happy_path(tmp_path):
     assert result.value == {"jp-1": {"disposition": "accept"}}
 
 
-def test_inline_missing_value():
+def test_inline_missing_value() -> None:
     result = resolve_json_payload_flag(["apply", "--decisions"], 1)
     assert result.consumed == 1
     assert result.value is None
     assert result.error == "--decisions requires a value"
 
 
-def test_file_missing_value():
+def test_file_missing_value() -> None:
     result = resolve_json_payload_flag(["apply", "--decisions-file"], 1)
     assert result.consumed == 1
     assert result.value is None
     assert result.error == "--decisions-file requires a value"
 
 
-def test_file_unreadable_path(tmp_path):
+def test_file_unreadable_path(tmp_path: Path) -> None:
     missing_path = tmp_path / "does-not-exist.json"
     tokens = ["apply", "--decisions-file", str(missing_path)]
     result = resolve_json_payload_flag(tokens, 1)
@@ -54,7 +55,7 @@ def test_file_unreadable_path(tmp_path):
     assert result.error.startswith(f"--decisions-file unreadable: {missing_path}: ")
 
 
-def test_inline_malformed_json():
+def test_inline_malformed_json() -> None:
     tokens = ["apply", "--decisions", "{not valid json"]
     result = resolve_json_payload_flag(tokens, 1)
     assert result.consumed == 2
@@ -63,7 +64,7 @@ def test_inline_malformed_json():
     assert result.error.startswith("malformed --decisions JSON: ")
 
 
-def test_file_malformed_json_shares_inline_prefix(tmp_path):
+def test_file_malformed_json_shares_inline_prefix(tmp_path: Path) -> None:
     payload_path = tmp_path / "decisions.json"
     payload_path.write_text("{not valid json", encoding="utf-8")
     tokens = ["apply", "--decisions-file", str(payload_path)]
@@ -75,24 +76,24 @@ def test_file_malformed_json_shares_inline_prefix(tmp_path):
     assert str(payload_path) in result.error
 
 
-def test_non_matching_token_is_not_consumed():
+def test_non_matching_token_is_not_consumed() -> None:
     result = resolve_json_payload_flag(["apply", "--session-id", "s-1"], 1)
     assert result == (0, None, None)
 
 
-def test_detect_conflicting_payload_channels_neither_present():
+def test_detect_conflicting_payload_channels_neither_present() -> None:
     assert detect_conflicting_payload_channels(["apply", "--session-id", "s-1"]) is None
 
 
-def test_detect_conflicting_payload_channels_only_inline():
+def test_detect_conflicting_payload_channels_only_inline() -> None:
     assert detect_conflicting_payload_channels(["apply", "--decisions", "{}"]) is None
 
 
-def test_detect_conflicting_payload_channels_only_file():
+def test_detect_conflicting_payload_channels_only_file() -> None:
     assert detect_conflicting_payload_channels(["apply", "--decisions-file", "p.json"]) is None
 
 
-def test_detect_conflicting_payload_channels_both_present():
+def test_detect_conflicting_payload_channels_both_present() -> None:
     tokens = ["apply", "--decisions", "{}", "--decisions-file", "p.json"]
     assert (
         detect_conflicting_payload_channels(tokens)
@@ -100,7 +101,7 @@ def test_detect_conflicting_payload_channels_both_present():
     )
 
 
-def test_hostile_payload_round_trips_byte_identically_through_file_form(tmp_path):
+def test_hostile_payload_round_trips_byte_identically_through_file_form(tmp_path: Path) -> None:
     payload_path = tmp_path / "decisions.json"
     payload_path.write_text(_HOSTILE_PAYLOAD, encoding="utf-8")
     tokens = ["apply", "--decisions-file", str(payload_path)]
@@ -111,7 +112,7 @@ def test_hostile_payload_round_trips_byte_identically_through_file_form(tmp_path
     assert result.value["a"] == 'has a "quote" and a space'
 
 
-def test_file_channel_accepts_a_bom_prefixed_payload(tmp_path):
+def test_file_channel_accepts_a_bom_prefixed_payload(tmp_path: Path) -> None:
     payload = '{"j-kind": {"disposition": "ack-nil"}}'
     payload_path = tmp_path / "bom.json"
     payload_path.write_text(payload, encoding="utf-8-sig")
@@ -124,7 +125,7 @@ def test_file_channel_accepts_a_bom_prefixed_payload(tmp_path):
     assert result.value == {"j-kind": {"disposition": "ack-nil"}}
 
 
-def test_inline_quote_stripped_payload_names_the_transport():
+def test_inline_quote_stripped_payload_names_the_transport() -> None:
     stripped = "{lesson-worth-capturing:{disposition:skip},j-kind:{disposition:ack-nil}}"
     result = resolve_json_payload_flag(["apply", "--decisions", stripped], 1)
 
@@ -136,7 +137,7 @@ def test_inline_quote_stripped_payload_names_the_transport():
     assert "--decisions-file" in result.error
 
 
-def test_inline_malformed_but_quoted_payload_gets_no_transport_hint():
+def test_inline_malformed_but_quoted_payload_gets_no_transport_hint() -> None:
     result = resolve_json_payload_flag(["apply", "--decisions", '{"a": }'], 1)
 
     assert result.error is not None
@@ -144,14 +145,14 @@ def test_inline_malformed_but_quoted_payload_gets_no_transport_hint():
     assert ".cmd" not in result.error
 
 
-def test_non_container_malformed_payload_gets_no_transport_hint():
+def test_non_container_malformed_payload_gets_no_transport_hint() -> None:
     result = resolve_json_payload_flag(["apply", "--decisions", "not-json-at-all"], 1)
 
     assert result.error is not None
     assert ".cmd" not in result.error
 
 
-def test_file_channel_malformed_payload_gets_no_transport_hint(tmp_path):
+def test_file_channel_malformed_payload_gets_no_transport_hint(tmp_path: Path) -> None:
     payload_path = tmp_path / "decisions.json"
     payload_path.write_text("{lesson:{disposition:skip}}", encoding="utf-8")
     result = resolve_json_payload_flag(["apply", "--decisions-file", str(payload_path)], 1)

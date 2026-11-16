@@ -43,7 +43,7 @@ def _repo(tmp_path: Path, n: int = 2) -> Path:
 class FakeTool:
     """Stands in for the stamp/lint/send verbs: stamps edit the memo and commit it, as the CLI does."""
 
-    def __init__(self, repo: Path, peer_after_first_stamp: bool = False):
+    def __init__(self, repo: Path, peer_after_first_stamp: bool = False) -> None:
         self.repo = repo
         self.calls: list[list[str]] = []
         self.ledger_seen: list[bool] = []
@@ -93,7 +93,7 @@ def _manifest(tmp_path: Path, repo: Path, n: int = 2, baton: str = "ok") -> Path
     return mp
 
 
-def test_applies_in_order_squashes_and_commits_scoped(tmp_path):
+def test_applies_in_order_squashes_and_commits_scoped(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     base = _git(repo, "rev-parse", "HEAD").strip()
     (repo / "peer.txt").write_text("dirty\n", encoding="utf-8")
@@ -115,7 +115,7 @@ def test_applies_in_order_squashes_and_commits_scoped(tmp_path):
     assert "peer.txt" not in changed and f"{INBOX}/m0.md" in changed and f"{ARCHIVE}/m0.md" in changed
 
 
-def test_ledger_lists_the_manifest_memos(tmp_path):
+def test_ledger_lists_the_manifest_memos(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     seen = {}
 
@@ -128,7 +128,7 @@ def test_ledger_lists_the_manifest_memos(tmp_path):
     assert seen["shard1.json.json"]["memos"] == [(repo / INBOX / f"m{i}.md").as_posix() for i in range(2)]
 
 
-def test_guard_drops_lines_for_a_memo_no_longer_open(tmp_path):
+def test_guard_drops_lines_for_a_memo_no_longer_open(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _memo(repo, "m1.md", status="actioned")
     _git(repo, "commit", "-q", "-am", "peer stamped m1")
@@ -138,7 +138,7 @@ def test_guard_drops_lines_for_a_memo_no_longer_open(tmp_path):
     assert stamped == [(repo / INBOX / "m0.md").as_posix()]
 
 
-def test_baton_lint_failure_refuses_before_any_stamp(tmp_path):
+def test_baton_lint_failure_refuses_before_any_stamp(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     head = _git(repo, "rev-parse", "HEAD")
     tool = FakeTool(repo)
@@ -150,7 +150,7 @@ def test_baton_lint_failure_refuses_before_any_stamp(tmp_path):
     assert (repo / INBOX / "m0.md").exists() and _git(repo, "rev-parse", "HEAD") == head
 
 
-def test_peer_commit_in_range_leaves_stamp_commits_unsquashed(tmp_path):
+def test_peer_commit_in_range_leaves_stamp_commits_unsquashed(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     base = _git(repo, "rev-parse", "HEAD").strip()
     tool = FakeTool(repo, peer_after_first_stamp=True)
@@ -160,7 +160,7 @@ def test_peer_commit_in_range_leaves_stamp_commits_unsquashed(tmp_path):
     assert "peer work" in subjects and "inbox: G-EM blitz - test" in subjects[0]
 
 
-def test_git_spawn_count_is_constant_in_memo_count(tmp_path):
+def test_git_spawn_count_is_constant_in_memo_count(tmp_path: Path) -> None:
     counts = []
     for n, sub in ((1, "a"), (4, "b")):
         root = tmp_path / sub
@@ -179,7 +179,7 @@ def test_git_spawn_count_is_constant_in_memo_count(tmp_path):
     assert counts[0] == counts[1] <= 6
 
 
-def test_a_line_with_a_backslash_is_refused_naming_the_line(tmp_path):
+def test_a_line_with_a_backslash_is_refused_naming_the_line(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     mp = _manifest(tmp_path, repo)
     manifest = json.loads(mp.read_text(encoding="utf-8"))
@@ -195,10 +195,10 @@ def test_a_line_with_a_backslash_is_refused_naming_the_line(tmp_path):
     assert any(bad in m and "backslash" in m for m in messages)
 
 
-def test_a_forward_slash_line_is_not_refused(tmp_path):
+def test_a_forward_slash_line_is_not_refused(tmp_path: Path) -> None:
     assert gia._split_line('archive-stamp-cli resolve-memo state/a/b.md --actioned-note "x y"') == [
         "archive-stamp-cli", "resolve-memo", "state/a/b.md", "--actioned-note", "x y"]
 
 
-def test_a_non_verb_line_is_refused_by_the_default_runner(tmp_path):
+def test_a_non_verb_line_is_refused_by_the_default_runner(tmp_path: Path) -> None:
     assert gia.run_tools([["rm", "-rf", "x"]], str(tmp_path)) == [127]

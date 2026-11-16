@@ -49,7 +49,7 @@ const makeWorkflow = (cfg) => async (spec) => {
 
 
 @pytest.fixture(autouse=True)
-def stage_root(tmp_path):
+def stage_root(tmp_path: Path):
     """The directory `readers_cfg()` writes every staged sidecar and its reader under."""
     _ROOT[:] = [tmp_path]
     yield tmp_path
@@ -205,7 +205,7 @@ def _edit_reader(handle: dict, old: str, new: str) -> None:
     path.write_text(body.replace(old, new, 1), encoding="ascii")
 
 
-def test_a_forty_row_manifest_is_assembled_whole_from_the_reader_with_no_agent_leg(monkeypatch):
+def test_a_forty_row_manifest_is_assembled_whole_from_the_reader_with_no_agent_leg(monkeypatch: pytest.MonkeyPatch) -> None:
     manifest = big_manifest(120)
     reply = stage_reply(manifest)
     sha = reply["manifest_handle"]["sha256"]
@@ -226,14 +226,14 @@ def test_a_forty_row_manifest_is_assembled_whole_from_the_reader_with_no_agent_l
     assert "pkg/f119.py" not in prompts[0]
 
 
-def test_a_one_row_manifest_is_read_by_one_workflow_call(monkeypatch):
+def test_a_one_row_manifest_is_read_by_one_workflow_call(monkeypatch: pytest.MonkeyPatch) -> None:
     reply = stage_reply(big_manifest(2))
     out = _run(_script(monkeypatch), reply)
     assert out["result"]["halted_by"] is None
     assert len(out["workflowCalls"]) == 1
 
 
-def test_a_reader_one_byte_off_the_handle_halts_and_dispatches_no_executor(monkeypatch):
+def test_a_reader_one_byte_off_the_handle_halts_and_dispatches_no_executor(monkeypatch: pytest.MonkeyPatch) -> None:
     reply = stage_reply(big_manifest(40))
     handle = reply["manifest_handle"]
     out = _run(_script(monkeypatch), reply, tamper=lambda: _edit_reader(handle, '\\"C1\\"', '\\"C9\\"'))
@@ -241,7 +241,7 @@ def test_a_reader_one_byte_off_the_handle_halts_and_dispatches_no_executor(monke
     assert _no_executor(out), _labels(out)
 
 
-def test_a_reader_returning_a_shorter_text_halts(monkeypatch):
+def test_a_reader_returning_a_shorter_text_halts(monkeypatch: pytest.MonkeyPatch) -> None:
     reply = stage_reply(big_manifest(40))
     handle = reply["manifest_handle"]
     out = _run(_script(monkeypatch), reply, tamper=lambda: _edit_reader(handle, '\\"marker_path\\"', '\\"marker\\"'))
@@ -249,7 +249,7 @@ def test_a_reader_returning_a_shorter_text_halts(monkeypatch):
     assert _no_executor(out)
 
 
-def test_a_missing_reader_halts_naming_the_reader(monkeypatch):
+def test_a_missing_reader_halts_naming_the_reader(monkeypatch: pytest.MonkeyPatch) -> None:
     reply = stage_reply(big_manifest(40))
     handle = reply["manifest_handle"]
     out = _run(_script(monkeypatch), reply, tamper=lambda: reader_file(handle).unlink())
@@ -259,25 +259,25 @@ def test_a_missing_reader_halts_naming_the_reader(monkeypatch):
     assert _no_executor(out)
 
 
-def test_a_manifest_an_agent_relays_under_manifest_is_ignored(monkeypatch):
+def test_a_manifest_an_agent_relays_under_manifest_is_ignored(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(_script(monkeypatch), None, relay=big_manifest(3))
     assert _halt_reason(out).startswith("no folded stage manifest")
     assert out["workflowCalls"] == []
 
 
-def test_a_stage_refusal_still_halts_by_name_with_no_reader_read(monkeypatch):
+def test_a_stage_refusal_still_halts_by_name_with_no_reader_read(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(_script(monkeypatch), {"error": "boom"})
     assert _halt_reason(out) == "stage refused: boom"
     assert out["workflowCalls"] == []
 
 
-def test_a_reply_carrying_both_an_error_and_a_handle_is_not_adopted(monkeypatch):
+def test_a_reply_carrying_both_an_error_and_a_handle_is_not_adopted(monkeypatch: pytest.MonkeyPatch) -> None:
     reply = stage_reply(big_manifest(2))
     out = _run(_script(monkeypatch), {**reply, "error": "boom"})
     assert _halt_reason(out) == "stage manifest relay is not whole: stage reply carries both error and manifest_handle"
 
 
-def test_a_reply_carrying_neither_is_reread_then_halts_as_no_folded_manifest(monkeypatch):
+def test_a_reply_carrying_neither_is_reread_then_halts_as_no_folded_manifest(monkeypatch: pytest.MonkeyPatch) -> None:
     out = _run(_script(monkeypatch), {})
     reason = _halt_reason(out)
     assert reason.startswith("no folded stage manifest")
@@ -301,7 +301,7 @@ def _launcher_script(monkeypatch) -> str:
     )
 
 
-def test_a_launcher_child_script_holds_no_reader_no_workflow_call_and_one_slot_line(monkeypatch):
+def test_a_launcher_child_script_holds_no_reader_no_workflow_call_and_one_slot_line(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _launcher_script(monkeypatch)
     assert "workflow(" not in script
     assert "_readStageSidecar" not in script
@@ -310,7 +310,7 @@ def test_a_launcher_child_script_holds_no_reader_no_workflow_call_and_one_slot_l
     assert script.index(STAGED_INLINE_SLOT) < script.index("function _adoptStagedInline(")
 
 
-def test_a_launcher_child_with_an_empty_slot_is_pending_and_never_calls_workflow(monkeypatch):
+def test_a_launcher_child_with_an_empty_slot_is_pending_and_never_calls_workflow(monkeypatch: pytest.MonkeyPatch) -> None:
     reply = stage_reply(big_manifest(3))
     out = _run(_launcher_script(monkeypatch), reply)
     assert out["result"] == {"stage_pending": {"handle": reply["manifest_handle"]}}
@@ -318,7 +318,7 @@ def test_a_launcher_child_with_an_empty_slot_is_pending_and_never_calls_workflow
     assert _no_executor(out)
 
 
-def test_a_launcher_child_adopts_the_matching_inline_manifest_with_no_workflow_call(monkeypatch):
+def test_a_launcher_child_adopts_the_matching_inline_manifest_with_no_workflow_call(monkeypatch: pytest.MonkeyPatch) -> None:
     manifest = big_manifest(3)
     reply = stage_reply(manifest)
     script = _slotted(_launcher_script(monkeypatch), reply["manifest_handle"], sidecar_text(manifest))
@@ -328,7 +328,7 @@ def test_a_launcher_child_adopts_the_matching_inline_manifest_with_no_workflow_c
     assert out["workflowCalls"] == []
 
 
-def test_a_launcher_child_refuses_inline_text_that_does_not_match_its_handle(monkeypatch):
+def test_a_launcher_child_refuses_inline_text_that_does_not_match_its_handle(monkeypatch: pytest.MonkeyPatch) -> None:
     manifest = big_manifest(3)
     reply = stage_reply(manifest)
     bad = sidecar_text(manifest).replace('"C1"', '"C9"', 1)
@@ -338,7 +338,7 @@ def test_a_launcher_child_refuses_inline_text_that_does_not_match_its_handle(mon
     assert out["workflowCalls"] == []
 
 
-def test_an_inline_manifest_for_another_handle_is_pending_not_adopted(monkeypatch):
+def test_an_inline_manifest_for_another_handle_is_pending_not_adopted(monkeypatch: pytest.MonkeyPatch) -> None:
     other_manifest = big_manifest(2)
     other = stage_reply(other_manifest)["manifest_handle"]
     reply = stage_reply(big_manifest(3))
@@ -346,7 +346,7 @@ def test_an_inline_manifest_for_another_handle_is_pending_not_adopted(monkeypatc
     assert "stage_pending" in out["result"]
 
 
-def test_a_standalone_script_has_no_slot_no_args_branch_and_reads_the_reader_unconditionally(monkeypatch):
+def test_a_standalone_script_has_no_slot_no_args_branch_and_reads_the_reader_unconditionally(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert STAGED_INLINE_SLOT not in script
     for gone in ("_LAUNCHER_CHILD", "_LAUNCHER_ARGS", "_adoptStagedArg", "_adoptStagedInline"):
@@ -355,7 +355,7 @@ def test_a_standalone_script_has_no_slot_no_args_branch_and_reads_the_reader_unc
     assert ask_compose._ADOPT_STAGE_REPLY_JS in script
 
 
-def test_a_standalone_run_ignores_launcher_args_and_reads_the_reader(monkeypatch):
+def test_a_standalone_run_ignores_launcher_args_and_reads_the_reader(monkeypatch: pytest.MonkeyPatch) -> None:
     manifest = big_manifest(3)
     reply = stage_reply(manifest)
     args = {
@@ -367,7 +367,7 @@ def test_a_standalone_run_ignores_launcher_args_and_reads_the_reader(monkeypatch
     assert len(out["workflowCalls"]) == 1
 
 
-def test_the_script_reads_the_reader_through_workflow_and_composes_no_page_leg(monkeypatch):
+def test_the_script_reads_the_reader_through_workflow_and_composes_no_page_leg(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert "workflow({ scriptPath: reader })" in script
     assert "await _readStageSidecar(r.manifest_handle, REPO_ROOT)" in script
@@ -375,7 +375,7 @@ def test_the_script_reads_the_reader_through_workflow_and_composes_no_page_leg(m
     assert "_MANIFEST_READ_SCHEMA" not in script and "_adoptManifest" not in script
 
 
-def test_a_launcher_child_run_token_reads_the_inline_slot_and_standalone_bytes_are_unchanged(monkeypatch):
+def test_a_launcher_child_run_token_reads_the_inline_slot_and_standalone_bytes_are_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _launcher_script(monkeypatch)
     assert "_STAGED_INLINE.runToken" in script
     assert script.index(STAGED_INLINE_SLOT) < script.index("const _RUN_TOKEN")

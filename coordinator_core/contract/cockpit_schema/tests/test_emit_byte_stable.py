@@ -3,9 +3,10 @@ from __future__ import annotations
 
 from coordinator_core.contract.cockpit_schema import ENTITY_SCHEMAS
 from coordinator_core.contract.cockpit_schema.emit_schema import emit_schemas
+from pathlib import Path
 
 
-def test_two_consecutive_emits_are_byte_identical(tmp_path):
+def test_two_consecutive_emits_are_byte_identical(tmp_path: Path) -> None:
     first, second = tmp_path / "first", tmp_path / "second"
     emit_schemas(ENTITY_SCHEMAS, out_dir=first)
     emit_schemas(ENTITY_SCHEMAS, out_dir=second)

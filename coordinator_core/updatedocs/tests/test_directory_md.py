@@ -21,14 +21,14 @@ def _write(tmp_path, name, text):
     return path
 
 
-def test_absent_file_raises_typed_unavailable(tmp_path):
+def test_absent_file_raises_typed_unavailable(tmp_path: Path) -> None:
     missing = tmp_path / "DIRECTORY.md"
     with pytest.raises(UpdatedocsTargetMissing) as excinfo:
         compute_directory_md_drift(missing)
     assert excinfo.value.missing_path == missing
 
 
-def test_real_trailing_parenthetical_line_is_parsed(tmp_path):
+def test_real_trailing_parenthetical_line_is_parsed(tmp_path: Path) -> None:
     doc = _write(tmp_path, "DIRECTORY.md", REAL_REFRESHED_LINE + "\n")
     drift = compute_directory_md_drift(doc)
     assert drift.refreshed_on is not None
@@ -37,14 +37,14 @@ def test_real_trailing_parenthetical_line_is_parsed(tmp_path):
     assert drift.age_days >= 0
 
 
-def test_malformed_last_refreshed_line_yields_none_not_zero(tmp_path):
+def test_malformed_last_refreshed_line_yields_none_not_zero(tmp_path: Path) -> None:
     doc = _write(tmp_path, "DIRECTORY.md", "Last refreshed: not-a-date\n")
     drift = compute_directory_md_drift(doc)
     assert drift.refreshed_on is None
     assert drift.age_days is None
 
 
-def test_absent_last_refreshed_line_yields_none_not_zero(tmp_path):
+def test_absent_last_refreshed_line_yields_none_not_zero(tmp_path: Path) -> None:
     doc = _write(tmp_path, "DIRECTORY.md", "No refresh line here at all.\n")
     drift = compute_directory_md_drift(doc)
     assert drift.refreshed_on is None
@@ -61,12 +61,12 @@ def test_absent_last_refreshed_line_yields_none_not_zero(tmp_path):
         "- Last refreshed: 2026-10-12",
     ],
 )
-def test_bold_and_last_updated_date_forms_are_parsed(tmp_path, line):
+def test_bold_and_last_updated_date_forms_are_parsed(tmp_path: Path, line) -> None:
     doc = _write(tmp_path, "DIRECTORY.md", line + "\n")
     assert compute_directory_md_drift(doc).refreshed_on == date(2026, 10, 12)
 
 
-def test_extension_glob_count_with_commas_mismatch_is_a_finding(tmp_path):
+def test_extension_glob_count_with_commas_mismatch_is_a_finding(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("", encoding="utf-8")
     doc = _write(tmp_path, "DIRECTORY.md", "2,288 `*.py` files\n1 `.py` files\n")
     claims = compute_directory_md_drift(doc).count_claims
@@ -76,7 +76,7 @@ def test_extension_glob_count_with_commas_mismatch_is_a_finding(tmp_path):
     ]
 
 
-def test_count_claim_matches_when_actual_equals_asserted(tmp_path):
+def test_count_claim_matches_when_actual_equals_asserted(tmp_path: Path) -> None:
     (tmp_path / "conftest.py").write_text("", encoding="utf-8")
     sub = tmp_path / "sub"
     sub.mkdir()
@@ -96,7 +96,7 @@ def test_count_claim_matches_when_actual_equals_asserted(tmp_path):
     assert claim.matches is True
 
 
-def test_count_claim_mismatch_is_reported_not_hidden(tmp_path):
+def test_count_claim_mismatch_is_reported_not_hidden(tmp_path: Path) -> None:
     (tmp_path / "conftest.py").write_text("", encoding="utf-8")
 
     doc = _write(
@@ -113,13 +113,13 @@ def test_count_claim_mismatch_is_reported_not_hidden(tmp_path):
     assert drift.has_drift is True
 
 
-def _git(root, *args):
+def _git(root, *args) -> None:
     subprocess.run(
         ["git", "-C", str(root), *args], check=True, capture_output=True
     )
 
 
-def test_count_claim_counts_tracked_files_not_untracked_or_node_modules(tmp_path):
+def test_count_claim_counts_tracked_files_not_untracked_or_node_modules(tmp_path: Path) -> None:
     _git(tmp_path, "init", "-q")
     (tmp_path / "a.py").write_text("", encoding="utf-8")
     (tmp_path / "b.py").write_text("", encoding="utf-8")
@@ -138,13 +138,13 @@ def test_count_claim_counts_tracked_files_not_untracked_or_node_modules(tmp_path
     assert (claim.asserted, claim.actual, claim.matches) == (4, 2, False)
 
 
-def test_no_count_assertions_yields_empty_list(tmp_path):
+def test_no_count_assertions_yields_empty_list(tmp_path: Path) -> None:
     doc = _write(tmp_path, "DIRECTORY.md", REAL_REFRESHED_LINE + "\n")
     drift = compute_directory_md_drift(doc)
     assert drift.count_claims == []
 
 
-def test_never_infers_a_count_the_document_does_not_state(tmp_path):
+def test_never_infers_a_count_the_document_does_not_state(tmp_path: Path) -> None:
     (tmp_path / "a.py").write_text("", encoding="utf-8")
     (tmp_path / "b.py").write_text("", encoding="utf-8")
     doc = _write(
@@ -156,7 +156,7 @@ def test_never_infers_a_count_the_document_does_not_state(tmp_path):
     assert drift.count_claims == []
 
 
-def test_real_repo_directory_md_reports_drift():
+def test_real_repo_directory_md_reports_drift() -> None:
     real_path = Path(__file__).resolve().parents[2] / "DIRECTORY.md"
     drift = compute_directory_md_drift(real_path)
     assert drift.refreshed_on == date(2026, 8, 6)

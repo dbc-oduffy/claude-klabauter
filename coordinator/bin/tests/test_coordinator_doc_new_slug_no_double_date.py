@@ -6,11 +6,16 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
-def _load():
+def _load() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader("coordinator_doc_new_no_double_date", str(_BIN_DIR / "coordinator-doc-new.py"))
     spec = importlib.util.spec_from_loader("coordinator_doc_new_no_double_date", loader)
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
@@ -21,14 +26,14 @@ def _load():
 _MOD = _load()
 
 
-def test_a_dated_slug_gets_one_date_prefix(monkeypatch):
+def test_a_dated_slug_gets_one_date_prefix(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_MOD, "_today", lambda: "2026-11-01")
     monkeypatch.setattr(_MOD, "_bootstrap_engine", lambda: None)
     out = _MOD._default_output_path("plan", "t", None, slug_override="2026-11-01-footballer-04-mapping")
     assert Path(out).as_posix() == "docs/plans/2026-11/2026-11-01-footballer-04-mapping.md"
 
 
-def test_an_undated_slug_is_unchanged(monkeypatch):
+def test_an_undated_slug_is_unchanged(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(_MOD, "_today", lambda: "2026-11-01")
     monkeypatch.setattr(_MOD, "_bootstrap_engine", lambda: None)
     out = _MOD._default_output_path("plan", "t", None, slug_override="footballer-03-reach")

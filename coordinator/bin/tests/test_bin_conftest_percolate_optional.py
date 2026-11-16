@@ -9,7 +9,7 @@ import pytest
 _CONFTEST = Path(__file__).with_name("conftest.py")
 
 
-def _stub_fn(name="_stub_source_preflight"):
+def _stub_fn(name: str = "_stub_source_preflight"):
     spec = importlib.util.spec_from_file_location("_bin_conftest_under_test", _CONFTEST)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -17,7 +17,7 @@ def _stub_fn(name="_stub_source_preflight"):
     return getattr(fixture, "__wrapped__", None) or fixture.__pytest_wrapped__.obj
 
 
-def test_absent_percolate_returns_without_raising(monkeypatch):
+def test_absent_percolate_returns_without_raising(monkeypatch: pytest.MonkeyPatch) -> None:
     fn = _stub_fn()
     monkeypatch.setitem(sys.modules, "coordinator_core.percolate", None)
     monkeypatch.delitem(sys.modules, "coordinator_core.percolate.source_preflight", raising=False)
@@ -25,14 +25,14 @@ def test_absent_percolate_returns_without_raising(monkeypatch):
     assert fn(request, monkeypatch) is None
 
 
-def test_opt_in_real_preflight_returns_before_import(monkeypatch):
+def test_opt_in_real_preflight_returns_before_import(monkeypatch: pytest.MonkeyPatch) -> None:
     fn = _stub_fn()
     monkeypatch.setitem(sys.modules, "coordinator_core.percolate", None)
     request = SimpleNamespace(module=SimpleNamespace(REAL_SOURCE_PREFLIGHT=True))
     assert fn(request, monkeypatch) is None
 
 
-def _fake_percolate_package(tmp_path, monkeypatch, files):
+def _fake_percolate_package(tmp_path, monkeypatch, files) -> None:
     """A real `coordinator_core.percolate` package on tmp_path holding only `files`."""
     import types
 
@@ -47,7 +47,7 @@ def _fake_percolate_package(tmp_path, monkeypatch, files):
     monkeypatch.delitem(sys.modules, "coordinator_core.percolate.source_preflight", raising=False)
 
 
-def test_percolate_present_without_source_preflight_returns_without_raising(tmp_path, monkeypatch):
+def test_percolate_present_without_source_preflight_returns_without_raising(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_percolate_package(tmp_path, monkeypatch, {})
     with pytest.raises(ImportError) as shape:
         from coordinator_core.percolate import source_preflight  # noqa: F401
@@ -56,7 +56,7 @@ def test_percolate_present_without_source_preflight_returns_without_raising(tmp_
     assert _stub_fn()(request, monkeypatch) is None
 
 
-def test_fold_bar_absent_with_ops_present_returns_without_raising(tmp_path, monkeypatch):
+def test_fold_bar_absent_with_ops_present_returns_without_raising(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import types
 
     ops_dir = tmp_path / "ops"
@@ -70,21 +70,21 @@ def test_fold_bar_absent_with_ops_present_returns_without_raising(tmp_path, monk
     assert fn(request, monkeypatch) is None
 
 
-def test_present_module_with_broken_transitive_import_raises(tmp_path, monkeypatch):
+def test_present_module_with_broken_transitive_import_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_percolate_package(tmp_path, monkeypatch, {"source_preflight.py": "from . import no_such_sibling\n"})
     request = SimpleNamespace(module=SimpleNamespace())
     with pytest.raises(ImportError):
         _stub_fn()(request, monkeypatch)
 
 
-def test_present_module_importing_a_foreign_missing_module_raises(tmp_path, monkeypatch):
+def test_present_module_importing_a_foreign_missing_module_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fake_percolate_package(tmp_path, monkeypatch, {"source_preflight.py": "import not_a_real_dep_xyz\n"})
     request = SimpleNamespace(module=SimpleNamespace())
     with pytest.raises(ModuleNotFoundError):
         _stub_fn()(request, monkeypatch)
 
 
-def test_present_percolate_is_stubbed(monkeypatch):
+def test_present_percolate_is_stubbed(monkeypatch: pytest.MonkeyPatch) -> None:
     pytest.importorskip("coordinator_core.percolate.source_preflight")
     from coordinator_core.percolate import source_preflight
 
@@ -99,7 +99,7 @@ def test_present_percolate_is_stubbed(monkeypatch):
     assert source_preflight.check_source_published("x") is None
 
 
-def test_present_package_missing_submodule_returns(monkeypatch, tmp_path):
+def test_present_package_missing_submodule_returns(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import types
     package = types.ModuleType("coordinator_core.percolate")
     package.__path__ = [str(tmp_path)]
@@ -108,7 +108,7 @@ def test_present_package_missing_submodule_returns(monkeypatch, tmp_path):
     assert _stub_fn()(SimpleNamespace(module=SimpleNamespace()), monkeypatch) is None
 
 
-def test_present_module_internal_import_failure_propagates(monkeypatch, tmp_path):
+def test_present_module_internal_import_failure_propagates(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import types
     package = types.ModuleType("coordinator_core.percolate")
     package.__path__ = [str(tmp_path)]

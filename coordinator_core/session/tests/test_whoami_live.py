@@ -10,9 +10,10 @@ from __future__ import annotations
 
 from coordinator_core.ops.session_whoami_live import _session_whoami_live
 from coordinator_core.session import core, liveness
+import pytest
 
 
-def test_live_session_shape(monkeypatch):
+def test_live_session_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(core, "resolve_session_id", lambda cwd=None: "sid-a")
     monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: sid == "sid-a")
 
@@ -20,7 +21,7 @@ def test_live_session_shape(monkeypatch):
     assert result == {"session_id": "sid-a", "live": True}
 
 
-def test_dead_session_shape(monkeypatch):
+def test_dead_session_shape(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(core, "resolve_session_id", lambda cwd=None: "sid-a")
     monkeypatch.setattr(liveness, "session_live", lambda sid, cwd=None: False)
 
@@ -28,7 +29,7 @@ def test_dead_session_shape(monkeypatch):
     assert result == {"session_id": "sid-a", "live": False}
 
 
-def test_unresolvable_session_id_never_calls_liveness(monkeypatch):
+def test_unresolvable_session_id_never_calls_liveness(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(core, "resolve_session_id", lambda cwd=None: "")
 
     def _fail_if_called(sid, cwd=None):
@@ -40,6 +41,6 @@ def test_unresolvable_session_id_never_calls_liveness(monkeypatch):
     assert result == {"session_id": "", "live": False}
 
 
-def test_params_ignored():
+def test_params_ignored() -> None:
     result = _session_whoami_live({"unused": "value"})
     assert set(result.keys()) == {"session_id", "live"}

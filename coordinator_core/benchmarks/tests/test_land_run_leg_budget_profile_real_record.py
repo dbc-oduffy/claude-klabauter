@@ -17,7 +17,7 @@ pytestmark = [pytest.mark.spawns_process, pytest.mark.complete]
 
 
 @pytest.fixture(autouse=True)
-def _env_restored(monkeypatch):
+def _env_restored(monkeypatch: pytest.MonkeyPatch) -> None:
     for name in ("COORDINATOR_INVOCATION_ORIGIN", "COORDINATOR_SESSION_ID", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID"):
         monkeypatch.setenv(name, "x")
 
@@ -39,7 +39,7 @@ def _landing(tmp_path: Path, stop: bool) -> tuple:
         return before, _head(root), rows[0]
 
 
-def test_stop_before_commit_takes_no_commit(tmp_path):
+def test_stop_before_commit_takes_no_commit(tmp_path: Path) -> None:
     before, after, whole = _landing(tmp_path, stop=True)
     assert after == before
     assert whole.attribution["commit_leg_reached"] is True
@@ -47,18 +47,18 @@ def test_stop_before_commit_takes_no_commit(tmp_path):
     assert any(leg["to"] == prof.LEG_COMMIT for leg in whole.attribution["legs"])
 
 
-def test_without_the_stop_the_same_landing_commits(tmp_path):
+def test_without_the_stop_the_same_landing_commits(tmp_path: Path) -> None:
     before, after, whole = _landing(tmp_path, stop=False)
     assert whole.attribution["commit_leg_reached"] is True
     assert after != before
 
 
-def test_stop_is_not_an_exception_subclass():
+def test_stop_is_not_an_exception_subclass() -> None:
     assert issubclass(prof.StopBeforeCommit, BaseException)
     assert not issubclass(prof.StopBeforeCommit, Exception)
 
 
-def test_real_record_params_drop_halt_envelope_and_token(tmp_path):
+def test_real_record_params_drop_halt_envelope_and_token(tmp_path: Path) -> None:
     run_id = "ask-20260101T000000-abcdef"
     (tmp_path / "scratch" / "warp" / run_id).mkdir(parents=True)
     (tmp_path / "state" / "warp" / run_id).mkdir(parents=True)
@@ -91,7 +91,7 @@ def _record_without_params(root: Path, run_id: str) -> None:
     (scratch / "run-base").write_text("5" * 40 + "\n")
 
 
-def test_real_record_params_rebuild_a_run_with_no_terminal_commit_params(tmp_path):
+def test_real_record_params_rebuild_a_run_with_no_terminal_commit_params(tmp_path: Path) -> None:
     run_id = "ask-20260101T000000-abcdef"
     _record_without_params(tmp_path, run_id)
     params = prof.real_record_params(tmp_path, run_id)
@@ -103,7 +103,7 @@ def test_real_record_params_rebuild_a_run_with_no_terminal_commit_params(tmp_pat
     assert "run_token" not in params
 
 
-def test_run_base_falls_back_to_halted_then_manifest(tmp_path):
+def test_run_base_falls_back_to_halted_then_manifest(tmp_path: Path) -> None:
     run_id = "ask-20260101T000000-abcdef"
     _record_without_params(tmp_path, run_id)
     (tmp_path / "scratch" / "warp" / run_id / "run-base").unlink()
@@ -112,14 +112,14 @@ def test_run_base_falls_back_to_halted_then_manifest(tmp_path):
     assert prof.record_run_base(tmp_path, run_id) == "9" * 40
 
 
-def test_a_run_with_neither_params_nor_outcome_is_refused(tmp_path):
+def test_a_run_with_neither_params_nor_outcome_is_refused(tmp_path: Path) -> None:
     run_id = "ask-20260101T000000-abcdef"
     (tmp_path / "state" / "warp" / run_id).mkdir(parents=True)
     with pytest.raises(FileNotFoundError):
         prof.real_record_params(tmp_path, run_id)
 
 
-def test_seed_copies_withheld_paths_the_live_tree_holds(tmp_path):
+def test_seed_copies_withheld_paths_the_live_tree_holds(tmp_path: Path) -> None:
     run_id = "ask-20260101T000000-abcdef"
     src, dst = tmp_path / "src", tmp_path / "dst"
     _record_without_params(src, run_id)
@@ -130,7 +130,7 @@ def test_seed_copies_withheld_paths_the_live_tree_holds(tmp_path):
     assert (dst / "src" / "w.py").read_text() == "dirty\n"
 
 
-def test_halted_shape_fixture_lands_seven_py_and_a_doc_past_peer_dirt(tmp_path):
+def test_halted_shape_fixture_lands_seven_py_and_a_doc_past_peer_dirt(tmp_path: Path) -> None:
     prof.declare_benchmark_origin()
     _bind_session()
     with ExitStack() as stack:
@@ -153,7 +153,7 @@ def test_halted_shape_fixture_lands_seven_py_and_a_doc_past_peer_dirt(tmp_path):
         assert not set(shape["peer_dirty"]) & set(listing)
 
 
-def test_seed_real_record_copies_the_record_and_script(tmp_path):
+def test_seed_real_record_copies_the_record_and_script(tmp_path: Path) -> None:
     run_id = "ask-20260101T000000-abcdef"
     src, dst = tmp_path / "src", tmp_path / "dst"
     for rel, text in (
@@ -170,7 +170,7 @@ def test_seed_real_record_copies_the_record_and_script(tmp_path):
     assert (dst / f"scratch/warp/{run_id}.workflow.mjs").read_text() == "// s"
 
 
-def test_seed_real_record_copies_halt_withheld_index_and_sentinel(tmp_path):
+def test_seed_real_record_copies_halt_withheld_index_and_sentinel(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import halted_withheld_index as hwi
 
     src, dst = tmp_path / "src", tmp_path / "dst"
@@ -201,7 +201,7 @@ def _fresh_id(tag: str) -> str:
     return f"ask-{(datetime.now(timezone.utc) - timedelta(hours=1)).strftime('%Y%m%dT%H%M%S')}-{tag}"
 
 
-def test_scale_halted_runs_copies_only_in_window_halted_runs_inside_the_clone(tmp_path):
+def test_scale_halted_runs_copies_only_in_window_halted_runs_inside_the_clone(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import halted_withheld_index as hwi
 
     clone = tmp_path / "clone"
@@ -223,18 +223,18 @@ def test_scale_halted_runs_copies_only_in_window_halted_runs_inside_the_clone(tm
     assert sorted(p.name for p in tmp_path.iterdir()) == ["clone"]
 
 
-def test_scale_below_one_is_refused(tmp_path):
+def test_scale_below_one_is_refused(tmp_path: Path) -> None:
     with pytest.raises(ValueError):
         prof.scale_halted_runs(tmp_path, 0)
 
 
-def test_seed_parse_verdicts_fills_the_cache_for_dirty_py_only(tmp_path):
+def test_seed_parse_verdicts_fills_the_cache_for_dirty_py_only(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import landing_integrity as li
 
     root = tmp_path / "r"
     root.mkdir()
 
-    def git(*a):
+    def git(*a) -> None:
         subprocess.run(["git", *a], cwd=str(root), capture_output=True, check=True, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
 
     git("init", "-q")
@@ -248,7 +248,7 @@ def test_seed_parse_verdicts_fills_the_cache_for_dirty_py_only(tmp_path):
     assert not li._verdict_path(root, b"x = 1\n").is_file()
 
 
-def test_seed_real_record_without_an_index_copies_none(tmp_path):
+def test_seed_real_record_without_an_index_copies_none(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import halted_withheld_index as hwi
 
     src, dst = tmp_path / "src", tmp_path / "dst"

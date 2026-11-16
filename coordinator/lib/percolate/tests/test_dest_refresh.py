@@ -43,7 +43,7 @@ def _commit(root: Path, name: str) -> None:
 
 
 @pytest.fixture()
-def origin_and_clone(tmp_path: Path):
+def origin_and_clone(tmp_path: Path) -> tuple[Path, Path]:
     origin = tmp_path / "origin"
     origin.mkdir()
     _git(origin, "init", "-b", "main")
@@ -68,7 +68,7 @@ def _capture():
     return io.StringIO(), io.StringIO()
 
 
-def test_level_clone_passes_and_reports_level(origin_and_clone):
+def test_level_clone_passes_and_reports_level(origin_and_clone) -> None:
     clone = origin_and_clone[1]
     out, err = _capture()
     result = refresh_dest_from_origin(clone, out=out, err=err)
@@ -79,7 +79,7 @@ def test_level_clone_passes_and_reports_level(origin_and_clone):
     assert "already level" in out.getvalue()
 
 
-def test_behind_clone_is_fast_forwarded_to_the_landing_branch(origin_and_clone):
+def test_behind_clone_is_fast_forwarded_to_the_landing_branch(origin_and_clone) -> None:
     origin, clone = origin_and_clone
     _git(origin, "checkout", "candidate")
     _commit(origin, "peer-landed")
@@ -96,7 +96,7 @@ def test_behind_clone_is_fast_forwarded_to_the_landing_branch(origin_and_clone):
     assert (clone / "peer-landed").exists()
 
 
-def test_main_is_fast_forwarded_even_though_candidate_is_checked_out(origin_and_clone):
+def test_main_is_fast_forwarded_even_though_candidate_is_checked_out(origin_and_clone) -> None:
     origin, clone = origin_and_clone
     _git(origin, "checkout", "main")
     _commit(origin, "main-moved")
@@ -110,7 +110,7 @@ def test_main_is_fast_forwarded_even_though_candidate_is_checked_out(origin_and_
     assert _git(clone, "rev-parse", "main") == _git(clone, "rev-parse", "origin/main")
 
 
-def test_diverged_landing_branch_is_refused_not_reconciled(origin_and_clone):
+def test_diverged_landing_branch_is_refused_not_reconciled(origin_and_clone) -> None:
     origin, clone = origin_and_clone
     _git(origin, "checkout", "candidate")
     _commit(origin, "peer-landed")
@@ -155,7 +155,7 @@ def _diverge_by_peer_publish(origin: Path, clone: Path, subject: str) -> None:
     _git(clone, "commit", "-m", "our publish")
 
 
-def test_divergence_by_a_subsumed_peer_publish_is_reconciled(origin_and_clone, tmp_path):
+def test_divergence_by_a_subsumed_peer_publish_is_reconciled(origin_and_clone, tmp_path: Path) -> None:
     origin, clone = origin_and_clone
     src, peer = _source_with(tmp_path, merged=True)
     _diverge_by_peer_publish(origin, clone, "percolate publish [source-head {0}]".format(peer[:12]))
@@ -168,7 +168,7 @@ def test_divergence_by_a_subsumed_peer_publish_is_reconciled(origin_and_clone, t
     assert (clone / "published").read_text(encoding="utf-8") == "our bytes"
 
 
-def test_divergence_by_a_peer_publish_the_source_lacks_is_refused(origin_and_clone, tmp_path):
+def test_divergence_by_a_peer_publish_the_source_lacks_is_refused(origin_and_clone, tmp_path: Path) -> None:
     origin, clone = origin_and_clone
     src, peer = _source_with(tmp_path, merged=False)
     _diverge_by_peer_publish(origin, clone, "percolate publish [source-head {0}]".format(peer[:12]))
@@ -182,7 +182,7 @@ def test_divergence_by_a_peer_publish_the_source_lacks_is_refused(origin_and_clo
     assert _git(clone, "rev-parse", "HEAD") == before
 
 
-def test_subsumption_is_judged_against_the_pinned_source_ref_not_head(origin_and_clone, tmp_path):
+def test_subsumption_is_judged_against_the_pinned_source_ref_not_head(origin_and_clone, tmp_path: Path) -> None:
     origin, clone = origin_and_clone
     src, peer = _source_with(tmp_path, merged=False)
     _git(src, "checkout", "-b", "pin")
@@ -199,7 +199,7 @@ def test_subsumption_is_judged_against_the_pinned_source_ref_not_head(origin_and
     assert _git(clone, "rev-list", "--count", "HEAD..origin/candidate") == "0"
 
 
-def test_divergence_by_an_unstamped_commit_is_refused(origin_and_clone, tmp_path):
+def test_divergence_by_an_unstamped_commit_is_refused(origin_and_clone, tmp_path: Path) -> None:
     origin, clone = origin_and_clone
     src, _ = _source_with(tmp_path, merged=True)
     _diverge_by_peer_publish(origin, clone, "hand edit")
@@ -219,7 +219,7 @@ def _peer_publish_on_origin(origin: Path, subject: str) -> None:
     _git(origin, "checkout", "parked")
 
 
-def test_fast_forward_over_a_peer_publish_the_source_lacks_is_refused(origin_and_clone, tmp_path):
+def test_fast_forward_over_a_peer_publish_the_source_lacks_is_refused(origin_and_clone, tmp_path: Path) -> None:
     # Live 2026-10-10: two boxes each fast-forwarded over the other's publish and reverted it.
     origin, clone = origin_and_clone
     src, peer = _source_with(tmp_path, merged=False)
@@ -234,7 +234,7 @@ def test_fast_forward_over_a_peer_publish_the_source_lacks_is_refused(origin_and
     assert _git(clone, "rev-parse", "HEAD") == before
 
 
-def test_fast_forward_contains_check_probes_the_source_ref_not_head(origin_and_clone, tmp_path):
+def test_fast_forward_contains_check_probes_the_source_ref_not_head(origin_and_clone, tmp_path: Path) -> None:
     origin, clone = origin_and_clone
     src, peer = _source_with(tmp_path, merged=False)
     _git(src, "checkout", "-b", "pin")
@@ -259,7 +259,7 @@ def test_fast_forward_contains_check_probes_the_source_ref_not_head(origin_and_c
     assert _git(clone, "rev-list", "--count", "HEAD..origin/candidate") == "0"
 
 
-def test_fast_forward_over_a_peer_publish_the_source_contains_proceeds(origin_and_clone, tmp_path):
+def test_fast_forward_over_a_peer_publish_the_source_contains_proceeds(origin_and_clone, tmp_path: Path) -> None:
     origin, clone = origin_and_clone
     src, peer = _source_with(tmp_path, merged=True)
     _peer_publish_on_origin(origin, "percolate publish [source-head {0}]".format(peer[:12]))
@@ -270,7 +270,7 @@ def test_fast_forward_over_a_peer_publish_the_source_contains_proceeds(origin_an
     assert result.ok and result.fast_forwarded
 
 
-def test_ahead_only_clone_passes(origin_and_clone):
+def test_ahead_only_clone_passes(origin_and_clone) -> None:
     clone = origin_and_clone[1]
     _commit(clone, "unpushed-round")
 
@@ -282,7 +282,7 @@ def test_ahead_only_clone_passes(origin_and_clone):
     assert result.behind == 0
 
 
-def test_untracked_landing_branch_is_measured_against_the_remote_default(origin_and_clone):
+def test_untracked_landing_branch_is_measured_against_the_remote_default(origin_and_clone) -> None:
     """A fresh branch with no upstream PROCEEDS, measured against origin's
     default branch.
 
@@ -305,7 +305,7 @@ def test_untracked_landing_branch_is_measured_against_the_remote_default(origin_
     assert "no upstream; measuring against" in out.getvalue()
 
 
-def test_untracked_branch_behind_the_default_is_fast_forwarded(origin_and_clone):
+def test_untracked_branch_behind_the_default_is_fast_forwarded(origin_and_clone) -> None:
     origin, clone = origin_and_clone
     _git(clone, "checkout", "-b", "no-upstream")
     base = default_remote_branch(clone)
@@ -322,7 +322,7 @@ def test_untracked_branch_behind_the_default_is_fast_forwarded(origin_and_clone)
     assert (clone / "peer-on-default").exists()
 
 
-def test_untracked_branch_with_no_remote_branch_at_all_is_refused_with_the_fix(tmp_path):
+def test_untracked_branch_with_no_remote_branch_at_all_is_refused_with_the_fix(tmp_path: Path) -> None:
     solo = tmp_path / "solo"
     solo.mkdir()
     _git(solo, "init", "-b", "work")
@@ -338,7 +338,7 @@ def test_untracked_branch_with_no_remote_branch_at_all_is_refused_with_the_fix(t
     assert "remote set-head origin --auto" in result.reason
 
 
-def test_detached_head_is_refused_with_its_own_reason(origin_and_clone):
+def test_detached_head_is_refused_with_its_own_reason(origin_and_clone) -> None:
     clone = origin_and_clone[1]
     _git(clone, "checkout", "--detach", "HEAD")
 
@@ -349,7 +349,7 @@ def test_detached_head_is_refused_with_its_own_reason(origin_and_clone):
     assert "detached HEAD" in result.reason
 
 
-def test_unreachable_origin_is_refused_rather_than_skipped(origin_and_clone, tmp_path):
+def test_unreachable_origin_is_refused_rather_than_skipped(origin_and_clone, tmp_path: Path) -> None:
     clone = origin_and_clone[1]
     _git(clone, "remote", "set-url", "origin", str(tmp_path / "does-not-exist"))
 
@@ -360,7 +360,7 @@ def test_unreachable_origin_is_refused_rather_than_skipped(origin_and_clone, tmp
     assert "could not fetch origin" in result.reason
 
 
-def test_diverged_local_main_warns_but_does_not_block(origin_and_clone):
+def test_diverged_local_main_warns_but_does_not_block(origin_and_clone) -> None:
     origin, clone = origin_and_clone
     _git(origin, "checkout", "main")
     _commit(origin, "main-moved")
@@ -387,7 +387,7 @@ def _worktree_state(clone: Path) -> "tuple[str, str, str]":
     )
 
 
-def test_fetch_when_behind_writes_nothing_and_records_the_upstream_tip_as_landing_tip(origin_and_clone):
+def test_fetch_when_behind_writes_nothing_and_records_the_upstream_tip_as_landing_tip(origin_and_clone) -> None:
     origin, clone = origin_and_clone
     _git(origin, "checkout", "candidate")
     _commit(origin, "peer-landed")
@@ -410,7 +410,7 @@ def test_fetch_when_behind_writes_nothing_and_records_the_upstream_tip_as_landin
     assert _git(clone, "rev-parse", "main") == _git(clone, "rev-parse", "origin/main")
 
 
-def test_fetch_level_and_ahead_land_on_the_current_head(origin_and_clone):
+def test_fetch_level_and_ahead_land_on_the_current_head(origin_and_clone) -> None:
     _origin, clone = origin_and_clone
     out, err = _capture()
     level = fetch_dest_upstream(clone, out=out, err=err)
@@ -422,7 +422,7 @@ def test_fetch_level_and_ahead_land_on_the_current_head(origin_and_clone):
     assert ahead.landing_tip == _git(clone, "rev-parse", "HEAD")
 
 
-def test_fetch_refuses_divergence_and_unreachable_origin_without_writing(origin_and_clone, tmp_path):
+def test_fetch_refuses_divergence_and_unreachable_origin_without_writing(origin_and_clone, tmp_path: Path) -> None:
     origin, clone = origin_and_clone
     _git(origin, "checkout", "candidate")
     _commit(origin, "peer-landed")
@@ -442,7 +442,7 @@ def test_fetch_refuses_divergence_and_unreachable_origin_without_writing(origin_
     assert _worktree_state(clone) == before
 
 
-def test_fetch_subsumed_divergence_defers_the_merge_to_fast_forward_dest(origin_and_clone, tmp_path):
+def test_fetch_subsumed_divergence_defers_the_merge_to_fast_forward_dest(origin_and_clone, tmp_path: Path) -> None:
     origin, clone = origin_and_clone
     src, peer = _source_with(tmp_path, merged=True)
     _diverge_by_peer_publish(origin, clone, "percolate publish [source-head {0}]".format(peer[:12]))
@@ -461,7 +461,7 @@ def test_fetch_subsumed_divergence_defers_the_merge_to_fast_forward_dest(origin_
     assert _git(clone, "rev-parse", "HEAD") != before
 
 
-def test_fetch_defers_the_abort_of_an_own_interrupted_peer_merge(origin_and_clone):
+def test_fetch_defers_the_abort_of_an_own_interrupted_peer_merge(origin_and_clone) -> None:
     from percolate.interrupted_op import PEER_MERGE_MARKER
 
     origin, clone = origin_and_clone
@@ -485,7 +485,7 @@ def test_fetch_defers_the_abort_of_an_own_interrupted_peer_merge(origin_and_clon
     assert "aborted an interrupted peer-merge" in out.getvalue()
 
 
-def test_refresh_dest_from_origin_is_fetch_then_fast_forward(origin_and_clone):
+def test_refresh_dest_from_origin_is_fetch_then_fast_forward(origin_and_clone) -> None:
     origin, clone = origin_and_clone
     _git(origin, "checkout", "candidate")
     _commit(origin, "peer-landed")
@@ -503,7 +503,7 @@ def _peer_lands(origin: Path, name: str) -> None:
     _git(origin, "checkout", "parked")
 
 
-def test_consumer_behind_clean_is_fast_forwarded_and_reports_behind_zero(origin_and_clone):
+def test_consumer_behind_clean_is_fast_forwarded_and_reports_behind_zero(origin_and_clone) -> None:
     origin, clone = origin_and_clone
     _peer_lands(origin, "peer")
     result = fast_forward_consumer(clone)
@@ -511,7 +511,7 @@ def test_consumer_behind_clean_is_fast_forwarded_and_reports_behind_zero(origin_
     assert (clone / "peer").exists()
 
 
-def test_consumer_level_is_a_noop(origin_and_clone):
+def test_consumer_level_is_a_noop(origin_and_clone) -> None:
     clone = origin_and_clone[1]
     before = _git(clone, "rev-parse", "HEAD")
     result = fast_forward_consumer(clone)
@@ -519,7 +519,7 @@ def test_consumer_level_is_a_noop(origin_and_clone):
     assert _git(clone, "rev-parse", "HEAD") == before
 
 
-def test_consumer_dirty_tracked_file_is_never_merged_but_behind_is_reported(origin_and_clone):
+def test_consumer_dirty_tracked_file_is_never_merged_but_behind_is_reported(origin_and_clone) -> None:
     origin, clone = origin_and_clone
     _peer_lands(origin, "peer")
     (clone / "candidate-seed").write_text("local patch", encoding="utf-8")
@@ -530,7 +530,7 @@ def test_consumer_dirty_tracked_file_is_never_merged_but_behind_is_reported(orig
     assert _git(clone, "rev-parse", "HEAD") == before
 
 
-def test_consumer_ignored_dirt_alone_is_restored_and_fast_forwarded(origin_and_clone):
+def test_consumer_ignored_dirt_alone_is_restored_and_fast_forwarded(origin_and_clone) -> None:
     origin, clone = origin_and_clone
     _peer_lands(origin, "peer")
     (clone / "candidate-seed").write_text("local patch", encoding="utf-8")
@@ -539,7 +539,7 @@ def test_consumer_ignored_dirt_alone_is_restored_and_fast_forwarded(origin_and_c
     assert (clone / "candidate-seed").read_text(encoding="utf-8") == "candidate-seed"
 
 
-def test_consumer_ignored_dirt_beside_other_dirt_still_refuses(origin_and_clone):
+def test_consumer_ignored_dirt_beside_other_dirt_still_refuses(origin_and_clone) -> None:
     origin, clone = origin_and_clone
     _peer_lands(origin, "peer")
     (clone / "candidate-seed").write_text("local patch", encoding="utf-8")
@@ -549,7 +549,7 @@ def test_consumer_ignored_dirt_beside_other_dirt_still_refuses(origin_and_clone)
     assert (clone / "candidate-seed").read_text(encoding="utf-8") == "local patch"
 
 
-def test_consumer_ignored_dirt_level_is_left_alone(origin_and_clone):
+def test_consumer_ignored_dirt_level_is_left_alone(origin_and_clone) -> None:
     clone = origin_and_clone[1]
     (clone / "candidate-seed").write_text("local patch", encoding="utf-8")
     result = fast_forward_consumer(clone, ignore_dirty=("candidate-seed",))
@@ -557,7 +557,7 @@ def test_consumer_ignored_dirt_level_is_left_alone(origin_and_clone):
     assert (clone / "candidate-seed").read_text(encoding="utf-8") == "local patch"
 
 
-def test_consumer_held_handover_leaves_ignored_dirt_untouched(origin_and_clone, monkeypatch):
+def test_consumer_held_handover_leaves_ignored_dirt_untouched(origin_and_clone, monkeypatch: pytest.MonkeyPatch) -> None:
     origin, clone = origin_and_clone
     _peer_lands(origin, "peer")
     (clone / "candidate-seed").write_text("local patch", encoding="utf-8")
@@ -567,13 +567,13 @@ def test_consumer_held_handover_leaves_ignored_dirt_untouched(origin_and_clone, 
     assert (clone / "candidate-seed").read_bytes() == b"local patch"
 
 
-def test_consumer_failed_ff_after_restore_puts_the_ignored_bytes_back(origin_and_clone, monkeypatch):
+def test_consumer_failed_ff_after_restore_puts_the_ignored_bytes_back(origin_and_clone, monkeypatch: pytest.MonkeyPatch) -> None:
     origin, clone = origin_and_clone
     _peer_lands(origin, "peer")
     (clone / "candidate-seed").write_text("local patch", encoding="utf-8")
     real = dest_refresh._git
 
-    def failing_merge(repo_root, args, **kw):
+    def failing_merge(repo_root, args, **kw) -> GitResult:
         if args[:1] == ["merge"]:
             return GitResult(1, "", "boom", False)
         return real(repo_root, args, **kw)
@@ -585,7 +585,7 @@ def test_consumer_failed_ff_after_restore_puts_the_ignored_bytes_back(origin_and
     assert (clone / "candidate-seed").read_bytes() == b"local patch"
 
 
-def test_consumer_diverged_refuses_and_does_not_move_head(origin_and_clone):
+def test_consumer_diverged_refuses_and_does_not_move_head(origin_and_clone) -> None:
     origin, clone = origin_and_clone
     _peer_lands(origin, "peer")
     _commit(clone, "local-only")
@@ -596,7 +596,7 @@ def test_consumer_diverged_refuses_and_does_not_move_head(origin_and_clone):
     assert _git(clone, "rev-parse", "HEAD") == before
 
 
-def test_consumer_ahead_only_is_ok_and_unmoved(origin_and_clone):
+def test_consumer_ahead_only_is_ok_and_unmoved(origin_and_clone) -> None:
     clone = origin_and_clone[1]
     _commit(clone, "local-only")
     before = _git(clone, "rev-parse", "HEAD")
@@ -605,14 +605,14 @@ def test_consumer_ahead_only_is_ok_and_unmoved(origin_and_clone):
     assert _git(clone, "rev-parse", "HEAD") == before
 
 
-def test_consumer_detached_head_refuses(origin_and_clone):
+def test_consumer_detached_head_refuses(origin_and_clone) -> None:
     clone = origin_and_clone[1]
     _git(clone, "checkout", "--detach", "HEAD")
     result = fast_forward_consumer(clone)
     assert not result.ok and "detached HEAD" in result.reason
 
 
-def test_consumer_unreachable_origin_reports_stale_tracking_counts(origin_and_clone, tmp_path):
+def test_consumer_unreachable_origin_reports_stale_tracking_counts(origin_and_clone, tmp_path: Path) -> None:
     origin, clone = origin_and_clone
     _commit(clone, "local-only")
     _git(clone, "remote", "set-url", "origin", str(tmp_path / "does-not-exist"))
@@ -633,7 +633,7 @@ _PLAIN_STDERR = "fatal: unable to access 'https://example.invalid/x.git/': Could
 def _fail_fetches(monkeypatch, stderr: str, *, local_ref: bool = False) -> None:
     real_git = dest_refresh._git
 
-    def _git_double(repo_root, args, *, remote=False):
+    def _git_double(repo_root, args, *, remote: bool = False) -> GitResult:
         is_origin_fetch = args[:1] == ["fetch"] and "origin" in args and "." not in args
         is_local_fetch = args[:1] == ["fetch"] and "." in args
         if is_local_fetch if local_ref else is_origin_fetch:
@@ -653,8 +653,8 @@ def _origin_fetch_reasons(clone: Path) -> dict:
 
 
 def test_every_origin_fetch_site_names_stderr_line_url_and_unlock_first_remediation(
-    origin_and_clone, monkeypatch
-):
+    origin_and_clone, monkeypatch: pytest.MonkeyPatch
+) -> None:
     clone = origin_and_clone[1]
     _git(clone, "remote", "set-url", "origin", _ORIGIN_URL)
     _fail_fetches(monkeypatch, _AGENT_STDERR)
@@ -669,8 +669,8 @@ def test_every_origin_fetch_site_names_stderr_line_url_and_unlock_first_remediat
 
 
 def test_every_origin_fetch_site_for_a_non_ssh_failure_has_line_and_url_but_no_ssh_remediation(
-    origin_and_clone, monkeypatch
-):
+    origin_and_clone, monkeypatch: pytest.MonkeyPatch
+) -> None:
     clone = origin_and_clone[1]
     _git(clone, "remote", "set-url", "origin", _ORIGIN_URL)
     _fail_fetches(monkeypatch, _PLAIN_STDERR)
@@ -682,8 +682,8 @@ def test_every_origin_fetch_site_for_a_non_ssh_failure_has_line_and_url_but_no_s
 
 
 def test_local_main_fast_forward_failure_names_stderr_line_and_the_local_remote(
-    origin_and_clone, monkeypatch
-):
+    origin_and_clone, monkeypatch: pytest.MonkeyPatch
+) -> None:
     origin, clone = origin_and_clone
     _git(origin, "checkout", "main")
     _commit(origin, "main-moved")

@@ -36,6 +36,10 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _REPO = Path(__file__).resolve().parents[2]
 if str(_REPO) not in sys.path:
@@ -138,7 +142,7 @@ def isolate_gate_cache(publish: Any, cache_dir: Path, identities_keep: Optional[
     )
 
 
-def load_publish_module():
+def load_publish_module() -> ModuleType:
     """`coordinator/bin/publish.py` loaded by path, the way its own tests load it."""
     path = _REPO / "coordinator" / "bin" / "publish.py"
     spec = importlib.util.spec_from_file_location("publish_end_of_run_gates_profile_publish", path)

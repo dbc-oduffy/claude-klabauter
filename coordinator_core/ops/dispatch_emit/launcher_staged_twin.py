@@ -13,6 +13,7 @@ import json
 import os
 import re
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Callable, Mapping
 
@@ -165,7 +166,7 @@ def _slim_manifest(raw: bytes, handle: Mapping) -> tuple[str, dict] | None:
     return text, {"path": handle.get("path"), "sha256": hashlib.sha256(text.encode("ascii")).hexdigest(), "bytes": len(text)}
 
 
-_JSON_STRING = re.compile(r'"(?:[^"\\]|\\.)*"')
+_JSON_STRING = re.compile(r'"[^"\\]*(?:\\.[^"\\]*)*"')
 _PACK_MARKS = "~^|#@$%"
 _BASE36 = "0123456789abcdefghijklmnopqrstuvwxyz"
 
@@ -178,24 +179,141 @@ def _base36(n: int) -> str:
     return digits
 
 
-def _pack_manifest(text: str) -> tuple[str, dict] | None:
-    """``(packed text, {m, t})`` replacing every repeated JSON string literal of ``text`` with a table
-    reference (``STAGED_UNPACK_JS`` inverts it), else None when no mark char is free or nothing repeats.
+def _worth_packing(counts: Mapping[str, int], mark_len: int) -> list[str]:
+    """The keys of ``counts`` that shrink the twin when tabled, most frequent first.
 
-    Lossless: a manifest repeats its write paths across rows, review scope, test scopes and baseline, so the
-    whole manifest stays readable in-script at a fraction of its size."""
+    A table entry costs ``len + 3`` bytes and each of its ``n`` references ``2 * mark_len + digits``, so an
+    entry repeated few times and short loses bytes against leaving it inline."""
+    ranked = sorted(((k, n) for k, n in counts.items() if n > 1), key=lambda kn: -kn[1])
+    kept: list[str] = []
+    digits, ceiling = 1, 36  # len(_base36(rank)): rank < 36 -> 1, < 1296 -> 2, ...
+    for rank, (k, n) in enumerate(ranked):
+        while rank >= ceiling:
+            digits += 1
+            ceiling *= 36
+        if n * (len(k) - 2 * mark_len - digits) > len(k) + 3:
+            kept.append(k)
+    return kept
+
+
+def _dir_prefix(token: str) -> str | None:
+    """The interior of a quoted JSON string literal up to and including its last ``/``, else None."""
+    cut = token.rfind("/", 1, len(token) - 1)
+    return token[1 : cut + 1] if cut > 0 else None
+
+
+_LAST_PACK: list = []
+
+
+def _pack_manifest(text: str) -> tuple[str, dict] | None:
+    """`_pack_manifest_uncached` with a one-entry memo on ``text``: a stage writes its reply and then
+    stages the same manifest again, and packing a thousands-of-rows manifest twice is the cost."""
+    if _LAST_PACK and _LAST_PACK[0] == text:
+        return _LAST_PACK[1]
+    result = _pack_manifest_uncached(text)
+    _LAST_PACK[:] = [text, result]
+    return result
+
+
+def _pack_manifest_uncached(text: str) -> tuple[str, dict] | None:
+    """``(packed text, {m, t})`` replacing every repeated JSON string literal of ``text``, and the repeated
+    directory prefix of every other literal, with a table reference (``STAGED_UNPACK_JS`` inverts it), else
+    None when no mark char is free or nothing repeats.
+
+    Lossless: a manifest repeats its write paths across rows, review scope, test scopes and baseline, and
+    every row's ``brief_path`` shares one directory, so the whole manifest stays readable in-script at a
+    fraction of its size. A table entry is a whole quoted literal or a raw string-interior prefix; the
+    unpacker only joins, so either rebuilds the original bytes."""
     mark = next((ch for ch in _PACK_MARKS if ch not in text), None)
     if mark is None:
         return None
-    counts: dict[str, int] = {}
-    for token in _JSON_STRING.findall(text):
-        counts[token] = counts.get(token, 0) + 1
-    table = [t for t, n in sorted(counts.items(), key=lambda kv: -kv[1]) if n > 1 and len(t) > 2 * len(mark) + 2]
+    tokens = _JSON_STRING.findall(text)
+    counts = Counter(tokens)
+    table = _worth_packing(counts, len(mark))
+    whole = set(table)
+    prefixes: dict[str, int] = {}
+    for token, n in counts.items():
+        if token not in whole:
+            prefix = _dir_prefix(token)
+            if prefix is not None:
+                prefixes[prefix] = prefixes.get(prefix, 0) + n
+    shared = _worth_packing(prefixes, len(mark))
+    table += shared
     if not table:
         return None
     index = {t: _base36(i) for i, t in enumerate(table)}
-    packed = _JSON_STRING.sub(lambda m: f"{mark}{index[m.group(0)]}{mark}" if m.group(0) in index else m.group(0), text)
-    return packed, {"m": mark, "t": table}
+    prefix_index = {p: index[p] for p in shared}
+    replacement: dict[str, str] = {}
+    for token in counts:
+        if token in whole:
+            replacement[token] = f"{mark}{index[token]}{mark}"
+            continue
+        prefix = _dir_prefix(token)
+        replacement[token] = (
+            f'"{mark}{prefix_index[prefix]}{mark}{token[1 + len(prefix):]}' if prefix in prefix_index else token
+        )
+
+    pieces = _JSON_STRING.split(text)
+    out = [pieces[0]]
+    for token, between in zip(tokens, pieces[1:]):
+        out.append(replacement[token])
+        out.append(between)
+    packed = "".join(out)
+    packed, runs = _pack_runs(packed, mark, table)
+    return packed, {"m": mark, "t": table + runs}
+
+
+_RUN_MIN_COUNT = 8
+
+
+def _pack_runs(packed: str, mark: str, table: list[str]) -> tuple[str, list[str]]:
+    """``(text, new table entries)`` with each repeated run of comma-separated items of ``packed`` replaced by one reference.
+
+    The rows of a manifest repeat the same unreferenced skeleton between their unique fields; a run is
+    a maximal stretch of items that each occur ``_RUN_MIN_COUNT`` times or more. An entry is the run's
+    expansion (its references resolved against ``table``), so the unpacker still only joins."""
+    items = packed.split(",")
+    counts: dict[str, int] = {}
+    for item in items:
+        counts[item] = counts.get(item, 0) + 1
+    spans: list[tuple[int, int]] = []
+    start = None
+    for i, item in enumerate(items):
+        if counts[item] >= _RUN_MIN_COUNT:
+            if start is None:
+                start = i
+        elif start is not None:
+            spans.append((start, i))
+            start = None
+    if start is not None:
+        spans.append((start, len(items)))
+    run_counts: dict[str, int] = {}
+    for a, b in spans:
+        run = ",".join(items[a:b])
+        run_counts[run] = run_counts.get(run, 0) + 1
+    chosen = _worth_packing(run_counts, len(mark))
+    if not chosen:
+        return packed, []
+    base = len(table)
+    index = {run: _base36(base + i) for i, run in enumerate(chosen)}
+    out: list[str] = []
+    cursor = 0
+    for a, b in spans:
+        ref = index.get(",".join(items[a:b]))
+        if ref is not None:
+            out.extend(items[cursor:a])
+            out.append(f"{mark}{ref}{mark}")
+            cursor = b
+    out.extend(items[cursor:])
+    return ",".join(out), [_expand(run, mark, table) for run in chosen]
+
+
+def _expand(text: str, mark: str, table: list[str]) -> str:
+    """``text`` with each ``mark``-delimited reference replaced by its ``table`` entry, as ``STAGED_UNPACK_JS`` does."""
+    parts = text.split(mark)
+    for i in range(1, len(parts), 2):
+        parts[i] = table[int(parts[i], 36)]
+    return "".join(parts)
 
 
 def _land(target: Path, body: bytes, refuse: Callable[[str], Exception], label: str) -> None:

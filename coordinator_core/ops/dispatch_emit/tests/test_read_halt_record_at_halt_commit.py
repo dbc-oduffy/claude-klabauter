@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_emit.ask_contract import read_halt_record
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -32,7 +33,7 @@ def _git(repo, *a):
     ).stdout.strip()
 
 
-def _write(repo, name, obj):
+def _write(repo, name, obj) -> None:
     path = repo / "state" / "warp" / RUN / name
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(obj), encoding="utf-8")
@@ -56,7 +57,7 @@ def _halt_commit(tmp_path):
     return _git(tmp_path, "rev-parse", "HEAD")
 
 
-def test_overwritten_worktree_record_is_read_from_the_halt_commit(tmp_path):
+def test_overwritten_worktree_record_is_read_from_the_halt_commit(tmp_path: Path) -> None:
     _repo(tmp_path)
     halt = _halt_commit(tmp_path)
     _write(tmp_path, "halted.json", {"status": "halted", "halted": "refusal"})
@@ -68,7 +69,7 @@ def test_overwritten_worktree_record_is_read_from_the_halt_commit(tmp_path):
     assert rec.remaining["R1"]["remaining"] == ["fix a", "fix b"]
 
 
-def test_ledger_check_worktree_record_ignores_at_sha(tmp_path):
+def test_ledger_check_worktree_record_ignores_at_sha(tmp_path: Path) -> None:
     seed = _repo(tmp_path)
     _halt_commit(tmp_path)
     _write(tmp_path, "halted.json", {**LEDGER, "blocking": ["R2"]})
@@ -76,7 +77,7 @@ def test_ledger_check_worktree_record_ignores_at_sha(tmp_path):
     assert rec is not None and rec.blocking == ("R2",)
 
 
-def test_commit_without_the_file_answers_none(tmp_path):
+def test_commit_without_the_file_answers_none(tmp_path: Path) -> None:
     seed = _repo(tmp_path)
     _halt_commit(tmp_path)
     _write(tmp_path, "halted.json", {"status": "halted", "halted": "refusal"})
@@ -84,13 +85,13 @@ def test_commit_without_the_file_answers_none(tmp_path):
 
 
 @pytest.mark.parametrize("bad", ["", "abc", "z" * 40, "0" * 40, "../x"])
-def test_bad_sha_answers_none(tmp_path, bad):
+def test_bad_sha_answers_none(tmp_path: Path, bad) -> None:
     _repo(tmp_path)
     _halt_commit(tmp_path)
     _write(tmp_path, "halted.json", {"status": "halted", "halted": "refusal"})
     assert read_halt_record(tmp_path, RUN, at_sha=bad) is None
 
 
-def test_unsafe_run_id_answers_none_with_at_sha(tmp_path):
+def test_unsafe_run_id_answers_none_with_at_sha(tmp_path: Path) -> None:
     seed = _repo(tmp_path)
     assert read_halt_record(tmp_path, "../escape", at_sha=seed) is None

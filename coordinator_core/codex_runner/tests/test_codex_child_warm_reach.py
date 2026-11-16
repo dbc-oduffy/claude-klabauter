@@ -85,7 +85,7 @@ def _requests(root: Path) -> list[str]:
 
 
 @pytest.fixture
-def runtime(tmp_path, monkeypatch, request):
+def runtime(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, request: pytest.FixtureRequest) -> Path:
     """A test-isolated warm runtime base, so the in-process client may reach a server at all."""
     base = mkdtemp_in("cw-", None if os.name == "nt" else "/tmp")
     request.addfinalizer(lambda: shutil.rmtree(base, ignore_errors=True))
@@ -95,7 +95,7 @@ def runtime(tmp_path, monkeypatch, request):
 
 
 @pytest.fixture
-def boot_server(request):
+def boot_server(request: pytest.FixtureRequest):
     procs: list[subprocess.Popen] = []
 
     def boot(root: Path) -> None:
@@ -143,7 +143,7 @@ def _become_the_child_of(monkeypatch, root: Path) -> dict[str, str]:
     return env
 
 
-def test_child_env_names_its_own_clone_as_the_engine_root_the_door_resolves(tmp_path, monkeypatch):
+def test_child_env_names_its_own_clone_as_the_engine_root_the_door_resolves(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _stamped_root(tmp_path, "a")
     other = _stamped_root(tmp_path, "b")
     env = _become_the_child_of(monkeypatch, root)
@@ -152,7 +152,7 @@ def test_child_env_names_its_own_clone_as_the_engine_root_the_door_resolves(tmp_
     assert resolved == str(root) and resolved != str(other)
 
 
-def test_live_engine_of_the_pinned_clone_answers_the_childs_ask_gate_warm(tmp_path, monkeypatch, runtime, boot_server):
+def test_live_engine_of_the_pinned_clone_answers_the_childs_ask_gate_warm(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runtime, boot_server) -> None:
     root = _stamped_root(tmp_path, "a")
     boot_server(root)
     env = _become_the_child_of(monkeypatch, root)
@@ -164,7 +164,7 @@ def test_live_engine_of_the_pinned_clone_answers_the_childs_ask_gate_warm(tmp_pa
     assert _requests(root) == ["dispatch.ask_gate"]
 
 
-def test_no_live_engine_goes_cold_and_starts_neither_listener_nor_warm_server(tmp_path, monkeypatch, runtime):
+def test_no_live_engine_goes_cold_and_starts_neither_listener_nor_warm_server(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runtime) -> None:
     root = _stamped_root(tmp_path, "a")
     server_spawns: list = []
     listener_spawns: list = []
@@ -181,7 +181,7 @@ def test_no_live_engine_goes_cold_and_starts_neither_listener_nor_warm_server(tm
     assert breadcrumb.read_breadcrumb(root) is None
 
 
-def test_a_second_live_clone_is_never_dispatched_into(tmp_path, monkeypatch, runtime, boot_server):
+def test_a_second_live_clone_is_never_dispatched_into(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runtime, boot_server) -> None:
     root = _stamped_root(tmp_path, "a")
     other = _stamped_root(tmp_path, "b")
     assert skew.compute_client_token(root) == skew.compute_client_token(other)
@@ -194,7 +194,7 @@ def test_a_second_live_clone_is_never_dispatched_into(tmp_path, monkeypatch, run
     assert _requests(other) == []
 
 
-def test_a_child_pinned_where_no_engine_lives_never_reaches_the_other_live_clone(tmp_path, monkeypatch, runtime, boot_server):
+def test_a_child_pinned_where_no_engine_lives_never_reaches_the_other_live_clone(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, runtime, boot_server) -> None:
     root = _stamped_root(tmp_path, "a")
     other = _stamped_root(tmp_path, "b")
     boot_server(other)
@@ -204,20 +204,20 @@ def test_a_child_pinned_where_no_engine_lives_never_reaches_the_other_live_clone
     assert _requests(other) == []
 
 
-def _denied(winerror):
+def _denied(winerror) -> PermissionError:
     exc = PermissionError(13, "denied")
     exc.winerror = winerror
     return exc
 
 
-def test_a_restricted_token_pipe_denial_names_its_cause(monkeypatch):
+def test_a_restricted_token_pipe_denial_names_its_cause(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, "_cold_reason", None)
     monkeypatch.setattr(client, "_process_token_is_restricted", lambda: True)
     client._record_restricted_token_denial(_denied(5))
     assert "restricted" in (client.last_cold_reason() or "")
 
 
-def test_an_unrestricted_or_other_denial_records_no_cause(monkeypatch):
+def test_an_unrestricted_or_other_denial_records_no_cause(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, "_process_token_is_restricted", lambda: False)
     monkeypatch.setattr(client, "_cold_reason", None)
     client._record_restricted_token_denial(_denied(5))
@@ -227,7 +227,7 @@ def test_an_unrestricted_or_other_denial_records_no_cause(monkeypatch):
     assert client.last_cold_reason() is None
 
 
-def test_the_first_cold_reason_is_never_overwritten_by_a_restricted_denial(monkeypatch):
+def test_the_first_cold_reason_is_never_overwritten_by_a_restricted_denial(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(client, "_cold_reason", "earlier reason")
     monkeypatch.setattr(client, "_process_token_is_restricted", lambda: True)
     client._record_restricted_token_denial(_denied(5))

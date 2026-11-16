@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from coordinator_core.ops.dispatch_emit import inventory_mint as im
 from coordinator_core.ops.dispatch_emit.emit import _row_source_plan
 from coordinator_core.ops.dispatch_emit.op import _has_live_row, _live_spec_paths
+from pathlib import Path
 
 
 def _inv(header: str, *rows: str) -> str:
@@ -25,7 +26,7 @@ _NO_OPTIONAL = _inv(
 )
 
 
-def test_table_without_optional_columns_mints_with_no_spec_or_complexity_line():
+def test_table_without_optional_columns_mints_with_no_spec_or_complexity_line() -> None:
     rows = im.parse_chunk_table(_NO_OPTIONAL)
     assert rows[0]["spec path"] == "" and rows[0]["complexity"] == ""
     (minted,) = im.mint_rows(rows)
@@ -34,7 +35,7 @@ def test_table_without_optional_columns_mints_with_no_spec_or_complexity_line():
     assert _row_source_plan(SimpleNamespace(body=minted["body"])) is None
 
 
-def test_cx_header_is_read_as_complexity():
+def test_cx_header_is_read_as_complexity() -> None:
     text = _inv(
         "| id | spec path | summary | footprint | deps | verification | cx | disposition |",
         "| C1 | `docs/plans/p.md` | s | `a.py` | - | v | M | pending |",
@@ -45,7 +46,7 @@ def test_cx_header_is_read_as_complexity():
     assert "Complexity: M\n" in minted["body"]
 
 
-def test_dash_cells_read_as_absent():
+def test_dash_cells_read_as_absent() -> None:
     for cell in ("—", "-", ""):
         text = _inv(
             "| id | spec path | summary | footprint | deps | verification | complexity | disposition |",
@@ -55,7 +56,7 @@ def test_dash_cells_read_as_absent():
         assert row["spec path"] == "" and row["complexity"] == ""
 
 
-def test_spec_less_row_is_not_expanded(tmp_path):
+def test_spec_less_row_is_not_expanded(tmp_path: Path) -> None:
     plan = tmp_path / "docs" / "plans" / "p.md"
     plan.parent.mkdir(parents=True)
     plan.write_text("# plan\n", encoding="utf-8")
@@ -67,13 +68,13 @@ def test_spec_less_row_is_not_expanded(tmp_path):
     assert "." not in minted["id"]
 
 
-def test_live_spec_paths_excludes_blank():
+def test_live_spec_paths_excludes_blank() -> None:
     rows = im.parse_chunk_table(_NO_OPTIONAL)
     assert _live_spec_paths(rows) == []
     assert _has_live_row(rows) is True
 
 
-def test_all_spec_less_part_is_not_skipped_but_closed_part_is():
+def test_all_spec_less_part_is_not_skipped_but_closed_part_is() -> None:
     closed = _inv(
         "| id | summary | footprint | deps | verification | disposition |",
         "| C1 | s | `a.py` | - | v | landed |",
@@ -82,7 +83,7 @@ def test_all_spec_less_part_is_not_skipped_but_closed_part_is():
     assert _has_live_row(im.parse_chunk_table(closed)) is False
 
 
-def test_full_column_table_body_is_unchanged():
+def test_full_column_table_body_is_unchanged() -> None:
     text = textwrap.dedent(
         """\
         ## Chunk table

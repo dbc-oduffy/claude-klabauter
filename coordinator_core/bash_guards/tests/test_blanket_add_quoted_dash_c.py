@@ -49,7 +49,7 @@ def _quote(style: str, path: Path) -> str:
 @pytest.mark.parametrize("repo_name", ["repo", "my repo"])
 @pytest.mark.parametrize("style", ["double", "single"])
 @pytest.mark.parametrize("tail", ["add -A", "add .", "add --all", "commit -am x"])
-def test_quoted_dash_c_blanket_forms_deny(tmp_path, monkeypatch, repo_name, style, tail):
+def test_quoted_dash_c_blanket_forms_deny(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, repo_name, style, tail) -> None:
     repo = _repo(tmp_path, repo_name)
     monkeypatch.setattr(_dc_git_shared, "_is_hazard_repo", lambda root: True)
     text = _verdict(f"git -C {_quote(style, repo)} {tail}")
@@ -59,7 +59,7 @@ def test_quoted_dash_c_blanket_forms_deny(tmp_path, monkeypatch, repo_name, styl
 
 @pytest.mark.spawns_process
 @pytest.mark.parametrize("style", ["double", "single"])
-def test_quoted_dash_c_scoped_add_still_passes(tmp_path, monkeypatch, style):
+def test_quoted_dash_c_scoped_add_still_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, style) -> None:
     repo = _repo(tmp_path, "my repo")
     monkeypatch.setattr(_dc_git_shared, "_is_hazard_repo", lambda root: True)
     assert _verdict(f"git -C {_quote(style, repo)} add -- base.txt") == ""

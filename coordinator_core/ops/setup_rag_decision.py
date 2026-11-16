@@ -9,10 +9,10 @@ repo that cannot be indexed.
 Decision branches:
     1. UE repo + example-retrieval-repo daemon present  -> emit "offer to index" text
        (caller surfaces it; nothing written to disk).
-    2. Non-UE repo (any daemon state)        -> write tripwire block into
-       target CLAUDE.md.
-    3. UE repo + no daemon present            -> write tripwire block into
-       target CLAUDE.md.
+    2. Non-UE repo (any daemon state)        -> print the decision; nothing
+       is written to the target repo.
+    3. UE repo + no daemon present            -> print the decision; nothing
+       is written to the target repo.
 
 Non-UE upstream limitation (branch 2): the "offer to index" branch is
 currently UE-only because an upstream `example-retrieval-repo-ue-addon`
@@ -20,14 +20,12 @@ currently UE-only because an upstream `example-retrieval-repo-ue-addon`
 upstream limitation in example-retrieval-repo-ue-addon (tracked via cross-repo memo
 Example-retrieval-repo-ue-addon-em); widen to non-UE only after that defect is resolved.
 
-Consumer profile: the whole decision is skipped and nothing is written, so
-no RAG text reaches a consumer CLAUDE.md.
+No branch writes CLAUDE.md: no RAG Index heading or tripwire block is ever
+added to a target repo. The consumer profile skips the whole decision.
 
 Detect-then-fail-loud: if UE-vs-non-UE or daemon-presence cannot be
 determined unambiguously, main() returns non-zero with a remediation message
 rather than silently picking a branch.
-
-Idempotent: re-running does NOT duplicate the tripwire block in CLAUDE.md.
 
 Mockable probe: SETUP_RAG_DAEMON_PROBE can be set to a command string
 (word-split, NOT shell-interpreted -- no shell metacharacter injection) that
@@ -87,7 +85,7 @@ Negative-spec:
 
 from __future__ import annotations
 
-GENERATES = []  # appends the un-indexed tripwire block to <root>/CLAUDE.md where root is a caller-supplied --root/cwd target repo (any repo /repo-setup targets), not a fixed path inside claude-klabauter's own tree
+GENERATES = []  # writes nothing: the decision is printed, never persisted into the target repo
 
 import os
 import shlex
@@ -101,18 +99,6 @@ from coordinator_core.win_portability import no_console_creationflags
 
 _CREATIONFLAGS = no_console_creationflags()
 
-
-_TRIPWIRE_SENTINEL = "coordinator-rag-tripwire: un-indexed"
-
-_TRIPWIRE_BLOCK = f"""<!-- {_TRIPWIRE_SENTINEL} -->
-## RAG Index
-
-**Status: un-indexed; use Tier-3 (Read/Grep/Glob)**
-
-This repo is not indexed by example-retrieval-repo. Use Tier-3 investigation:
-Read known paths, Grep specific symbols, Glob patterns.
-Do not assume a semantic search index is available.
-<!-- end coordinator-rag-tripwire -->"""
 
 _HELP_TEXT = """Usage (standalone):
   setup-rag-decision.sh [--root <path>] [--dry-run] [--help]
@@ -268,46 +254,6 @@ def _daemon_present() -> bool:
         return False
 
 
-def _tripwire_present(claude_md: Path) -> bool:
-    """Idempotency guard: True if the tripwire sentinel already exists in `claude_md`."""
-    if not claude_md.is_file():
-        return False
-    try:
-        content = claude_md.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        print(f"skip: _tripwire_present: content = claude_md.read_text(encoding=\"utf-8\", errors=\"replace\") failed: {sys.exc_info()[1]}", file=sys.stderr)
-        return False
-    return _TRIPWIRE_SENTINEL in content
-
-
-def _write_tripwire(root: str, dry_run: bool) -> None:
-    """Append the tripwire block to `<root>/CLAUDE.md` if not already present.
-
-    When dry_run, print what would happen without writing.
-    """
-    claude_md = Path(root) / "CLAUDE.md"
-
-    # An index on disk outranks the branch that led here: the block would be false.
-    if (Path(root) / ".project-rag" / "graph.db").is_file():
-        print(f"setup-rag-decision: {root} already has a RAG index — no tripwire written")
-        return
-
-    if _tripwire_present(claude_md):
-        if dry_run:
-            print(
-                f"[setup-rag-decision dry-run] tripwire already present in {claude_md} — skipping (idempotent)"
-            )
-        return
-
-    if dry_run:
-        print(f"[setup-rag-decision dry-run] would append tripwire block to {claude_md}")
-        return
-
-    with claude_md.open("a", encoding="utf-8") as fh:
-        fh.write(f"\n{_TRIPWIRE_BLOCK}\n")
-    print(f"setup-rag-decision: tripwire block written to {claude_md}")
-
-
 def _normalize_root(root: str) -> str:
     """Normalise path separators (Git-Bash/MSYS on Windows) -- mirrors the
     bash oracle's `root="${root//\\\\//}"`."""
@@ -399,31 +345,28 @@ def setup_rag_decision(argv: List[str]) -> int:
                 print("  Offer: run the RAG indexer to build a semantic index for this repo.")
             return 0
 
-        # Branch 3: UE repo but no daemon -> tripwire.
+        # Branch 3: UE repo but no daemon -> decision printed only.
         if dry_run:
-            print("[setup-rag-decision dry-run] branch 3: UE repo but no daemon → tripwire")
+            print("[setup-rag-decision dry-run] branch 3: UE repo but no daemon → no index offered")
         else:
             print("setup-rag-decision: branch 3 — UE repo detected but the RAG daemon is absent.")
-            print("  Writing un-indexed tripwire to CLAUDE.md.")
             print("  To enable indexing: install and start the RAG daemon, then re-run /repo-setup.")
-        _write_tripwire(root, dry_run)
         return 0
 
-    # Branch 2: non-UE repo -> tripwire (daemon state irrelevant).
+    # Branch 2: non-UE repo -> decision printed only (daemon state irrelevant).
     # Upstream limitation: the "offer to index" branch is currently UE-only
     # because example-retrieval-repo-ue-addon's .uproject-abstention defect blocks
     # indexing of non-UE repos (tracked via cross-repo memo
     # example-retrieval-repo-ue-addon-em). Widen after that upstream defect is resolved.
     if dry_run:
         print(
-            "[setup-rag-decision dry-run] branch 2: non-UE repo → tripwire "
+            "[setup-rag-decision dry-run] branch 2: non-UE repo → no index offered "
             "(upstream .uproject-abstention defect, cross-repo memo example-retrieval-repo-ue-addon-em)"
         )
     else:
         print("setup-rag-decision: branch 2 — non-UE repo. RAG indexing is not yet supported")
         print("  for non-UE repos: blocked by the UE addon's .uproject-abstention defect")
-        print("  (cross-repo memo example-retrieval-repo-ue-addon-em). Writing un-indexed tripwire to CLAUDE.md.")
-    _write_tripwire(root, dry_run)
+        print("  (cross-repo memo example-retrieval-repo-ue-addon-em).")
     return 0
 
 

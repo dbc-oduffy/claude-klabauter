@@ -12,6 +12,7 @@ from coordinator_core.ops.list_files_newer_than_marker import (
     _list_files_newer_than_marker,
     list_files_newer_than_marker,
 )
+from pathlib import Path
 
 
 def _touch(path, *, mtime: float) -> None:
@@ -21,7 +22,7 @@ def _touch(path, *, mtime: float) -> None:
 
 
 class TestMarkerMissing:
-    def test_missing_marker_returns_empty_and_flag(self, tmp_path):
+    def test_missing_marker_returns_empty_and_flag(self, tmp_path: Path) -> None:
         (tmp_path / "some_file.py").write_text("x", encoding="utf-8")
 
         result = list_files_newer_than_marker(str(tmp_path))
@@ -30,7 +31,7 @@ class TestMarkerMissing:
 
 
 class TestNewerThanMarker:
-    def test_only_files_newer_than_marker_are_listed(self, tmp_path):
+    def test_only_files_newer_than_marker_are_listed(self, tmp_path: Path) -> None:
         base = time.time() - 1000
         _touch(tmp_path / ".percolate-ignore", mtime=base)
         _touch(tmp_path / "older.py", mtime=base - 100)
@@ -42,14 +43,14 @@ class TestNewerThanMarker:
         assert result["marker_missing"] is False
         assert result["files"] == ["newer.py", "sub/newer_nested.py"]
 
-    def test_marker_itself_excluded_from_its_own_listing(self, tmp_path):
+    def test_marker_itself_excluded_from_its_own_listing(self, tmp_path: Path) -> None:
         base = time.time()
         _touch(tmp_path / ".percolate-ignore", mtime=base)
         result = list_files_newer_than_marker(str(tmp_path))
 
         assert ".percolate-ignore" not in result["files"]
 
-    def test_result_capped_at_limit(self, tmp_path):
+    def test_result_capped_at_limit(self, tmp_path: Path) -> None:
         base = time.time() - 1000
         _touch(tmp_path / ".percolate-ignore", mtime=base)
         for i in range(5):
@@ -60,7 +61,7 @@ class TestNewerThanMarker:
         assert len(result["files"]) == 2
         assert result["files"] == sorted(result["files"])
 
-    def test_default_limit_is_twenty(self, tmp_path):
+    def test_default_limit_is_twenty(self, tmp_path: Path) -> None:
         base = time.time() - 1000
         _touch(tmp_path / ".percolate-ignore", mtime=base)
         for i in range(25):
@@ -72,7 +73,7 @@ class TestNewerThanMarker:
 
 
 class TestIdempotency:
-    def test_second_invocation_is_a_safe_no_op(self, tmp_path):
+    def test_second_invocation_is_a_safe_no_op(self, tmp_path: Path) -> None:
         base = time.time() - 1000
         _touch(tmp_path / ".percolate-ignore", mtime=base)
         _touch(tmp_path / "newer.py", mtime=base + 100)
@@ -83,7 +84,7 @@ class TestIdempotency:
         assert first == second
         assert first == {"files": ["newer.py"], "marker_missing": False}
 
-    def test_second_invocation_after_marker_missing_is_still_safe(self, tmp_path):
+    def test_second_invocation_after_marker_missing_is_still_safe(self, tmp_path: Path) -> None:
         (tmp_path / "some_file.py").write_text("x", encoding="utf-8")
 
         first = list_files_newer_than_marker(str(tmp_path))
@@ -93,18 +94,18 @@ class TestIdempotency:
 
 
 class TestOpHandler:
-    def test_handler_requires_source_dir(self):
+    def test_handler_requires_source_dir(self) -> None:
         with pytest.raises(ValueError, match="source_dir"):
             _list_files_newer_than_marker({})
 
-    def test_handler_rejects_non_directory_source_dir(self, tmp_path):
+    def test_handler_rejects_non_directory_source_dir(self, tmp_path: Path) -> None:
         not_a_dir = tmp_path / "nope.txt"
         not_a_dir.write_text("x", encoding="utf-8")
 
         with pytest.raises(ValueError, match="not a directory"):
             _list_files_newer_than_marker({"source_dir": str(not_a_dir)})
 
-    def test_handler_returns_wire_shape(self, tmp_path):
+    def test_handler_returns_wire_shape(self, tmp_path: Path) -> None:
         base = time.time() - 1000
         _touch(tmp_path / ".percolate-ignore", mtime=base)
         _touch(tmp_path / "newer.py", mtime=base + 100)

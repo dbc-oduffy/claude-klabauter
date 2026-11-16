@@ -4,6 +4,7 @@ from __future__ import annotations
 import subprocess
 
 import pytest
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -34,7 +35,7 @@ def _index_sha(repo, path) -> str:
     return out.split()[1]
 
 
-def test_content_matches_index_sha_true_for_a_genuinely_clean_crlf_file(tmp_path):
+def test_content_matches_index_sha_true_for_a_genuinely_clean_crlf_file(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     _real_git(["config", "core.autocrlf", "true"], repo)
     (repo / "crlf.txt").write_bytes(b"line one\r\nline two\r\n")
@@ -46,7 +47,7 @@ def test_content_matches_index_sha_true_for_a_genuinely_clean_crlf_file(tmp_path
     assert result is True
 
 
-def test_content_matches_index_sha_false_when_worktree_bytes_actually_changed(tmp_path):
+def test_content_matches_index_sha_false_when_worktree_bytes_actually_changed(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     _real_git(["config", "core.autocrlf", "true"], repo)
     (repo / "crlf.txt").write_bytes(b"line one\r\nline two\r\n")
@@ -59,7 +60,7 @@ def test_content_matches_index_sha_false_when_worktree_bytes_actually_changed(tm
     assert result is False
 
 
-def test_content_matches_index_sha_declines_without_autocrlf_true(tmp_path, monkeypatch):
+def test_content_matches_index_sha_declines_without_autocrlf_true(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """No `core.autocrlf=true` resolved anywhere in the layer stack ->
     unconditional decline (`None`), never a guess.
 
@@ -81,7 +82,7 @@ def test_content_matches_index_sha_declines_without_autocrlf_true(tmp_path, monk
     assert result is None
 
 
-def test_content_matches_index_sha_declines_on_text_attribute_pin(tmp_path):
+def test_content_matches_index_sha_declines_on_text_attribute_pin(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     _real_git(["config", "core.autocrlf", "true"], repo)
     (repo / ".gitattributes").write_text("*.sha text eol=lf\n", encoding="utf-8")
@@ -94,7 +95,7 @@ def test_content_matches_index_sha_declines_on_text_attribute_pin(tmp_path):
     assert result is None
 
 
-def test_content_matches_index_sha_declines_on_filter_clean_pipeline(tmp_path):
+def test_content_matches_index_sha_declines_on_filter_clean_pipeline(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     _real_git(["config", "core.autocrlf", "true"], repo)
     (repo / ".gitattributes").write_text("*.bin filter=lfs\n", encoding="utf-8")
@@ -107,7 +108,7 @@ def test_content_matches_index_sha_declines_on_filter_clean_pipeline(tmp_path):
     assert result is None
 
 
-def test_content_matches_index_sha_declines_on_unreadable_path(tmp_path):
+def test_content_matches_index_sha_declines_on_unreadable_path(tmp_path: Path) -> None:
     repo = _init_real_repo(tmp_path)
     _real_git(["config", "core.autocrlf", "true"], repo)
 
@@ -116,7 +117,7 @@ def test_content_matches_index_sha_declines_on_unreadable_path(tmp_path):
     assert result is None
 
 
-def test_autocrlf_checkin_normalize_reexported_unchanged_from_git_native(tmp_path):
+def test_autocrlf_checkin_normalize_reexported_unchanged_from_git_native(tmp_path: Path) -> None:
     from coordinator_core.ops.ceremony import git_native
 
     assert git_native._autocrlf_checkin_normalize is content_hash._autocrlf_checkin_normalize

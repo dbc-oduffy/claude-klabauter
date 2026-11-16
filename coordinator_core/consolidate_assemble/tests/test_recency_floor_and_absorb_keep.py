@@ -69,6 +69,13 @@ def test_old_zero_commit_branch_still_gets_a_delete() -> None:
     assert "delete-only" in _clis(_brief(OLD, ""))
 
 
+def test_old_zero_commit_branch_delete_is_ungated() -> None:
+    obj = _brief(OLD, "")
+    d = next(d for d in obj["directives"] if d["cli"] == "delete-only")
+    assert d["depends_on"] is None
+    assert not any(j["id"] == "j-delete-work/stale" for j in obj["judgment_points"])
+
+
 def test_recent_zero_commit_branch_is_a_delete_keep_judgment_point() -> None:
     obj = _brief(FRESH, "")
     stale = next(b for b in obj["gates"]["branches"] if b["name"] == "work/stale")

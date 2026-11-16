@@ -13,9 +13,10 @@ from coordinator_core.ops.learn_lessons_config_update import (
     main,
 )
 from coordinator_core.testing.fake_machine_local import write_fake_machine_local
+from pathlib import Path
 
 
-def test_meta_repo_cwd_is_silent_noop(tmp_path, monkeypatch, capsys):
+def test_meta_repo_cwd_is_silent_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """cwd equal to CLAUDE_HOME: silent no-op, exit 0."""
     home_parent = tmp_path / "home"
     home_parent.mkdir()
@@ -32,7 +33,7 @@ def test_meta_repo_cwd_is_silent_noop(tmp_path, monkeypatch, capsys):
     assert captured.err == ""
 
 
-def test_registered_repo_is_silent_noop(tmp_path, monkeypatch, capsys):
+def test_registered_repo_is_silent_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     home_parent = tmp_path / "home"
     claude_home = home_parent / ".claude"
     claude_home.mkdir(parents=True)
@@ -60,7 +61,7 @@ def test_registered_repo_is_silent_noop(tmp_path, monkeypatch, capsys):
     assert captured.err == ""
 
 
-def test_registered_repo_among_multiple_dump_entries_is_silent_noop(tmp_path, monkeypatch, capsys):
+def test_registered_repo_among_multiple_dump_entries_is_silent_noop(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     home_parent = tmp_path / "home"
     claude_home = home_parent / ".claude"
     claude_home.mkdir(parents=True)
@@ -93,7 +94,7 @@ def test_registered_repo_among_multiple_dump_entries_is_silent_noop(tmp_path, mo
     assert captured.err == ""
 
 
-def test_unregistered_repo_prints_hint_and_exits_zero(tmp_path, monkeypatch, capsys):
+def test_unregistered_repo_prints_hint_and_exits_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """cwd neither registered nor equal to CLAUDE_HOME: advisory hint on stderr, exit 0."""
     home_parent = tmp_path / "home"
     claude_home = home_parent / ".claude"
@@ -113,7 +114,7 @@ def test_unregistered_repo_prints_hint_and_exits_zero(tmp_path, monkeypatch, cap
     assert "machine-local set repos.some_repo " in captured.err
 
 
-def test_repo_flag_targets_repo_from_foreign_cwd(tmp_path, monkeypatch, capsys):
+def test_repo_flag_targets_repo_from_foreign_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     home_parent = tmp_path / "home"
     (home_parent / ".claude").mkdir(parents=True)
     target = tmp_path / "target-repo"
@@ -132,7 +133,7 @@ def test_repo_flag_targets_repo_from_foreign_cwd(tmp_path, monkeypatch, capsys):
         assert "machine-local set repos.target_repo " in err
 
 
-def test_repo_flag_meta_repo_is_silent_noop_from_foreign_cwd(tmp_path, monkeypatch, capsys):
+def test_repo_flag_meta_repo_is_silent_noop_from_foreign_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     home_parent = tmp_path / "home"
     claude_home = home_parent / ".claude"
     claude_home.mkdir(parents=True)
@@ -146,7 +147,7 @@ def test_repo_flag_meta_repo_is_silent_noop_from_foreign_cwd(tmp_path, monkeypat
     assert captured.out == "" and captured.err == ""
 
 
-def test_missing_machine_local_falls_through_to_hint(tmp_path, monkeypatch, capsys):
+def test_missing_machine_local_falls_through_to_hint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     home_parent = tmp_path / "home"
     claude_home = home_parent / ".claude"
     claude_home.mkdir(parents=True)
@@ -172,14 +173,14 @@ def test_missing_machine_local_falls_through_to_hint(tmp_path, monkeypatch, caps
         ("already_clean", "already_clean"),
     ],
 )
-def test_slugify(raw, expected):
+def test_slugify(raw, expected) -> None:
     assert _slugify(raw) == expected
 
 
-def test_norm_resolves_existing_dir(tmp_path):
+def test_norm_resolves_existing_dir(tmp_path: Path) -> None:
     assert _norm(str(tmp_path)) == os.path.realpath(str(tmp_path))
 
 
-def test_norm_nonexistent_path_returns_input_or_realpath():
+def test_norm_nonexistent_path_returns_input_or_realpath() -> None:
     result = _norm("/definitely/does/not/exist/path")
     assert isinstance(result, str)

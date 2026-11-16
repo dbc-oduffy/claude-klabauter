@@ -4,11 +4,16 @@ from __future__ import annotations
 import importlib.util
 import sys
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _MOD = Path(__file__).resolve().parents[1] / "plan-spine-check.py"
 
 
-def _load():
+def _load() -> ModuleType:
     spec = importlib.util.spec_from_file_location("plan_spine_check_agent_classes", _MOD)
     mod = importlib.util.module_from_spec(spec)
     sys.modules["plan_spine_check_agent_classes"] = mod
@@ -23,7 +28,7 @@ class _Malformed(ValueError):
     pass
 
 
-def _resolve(agent_type, override=None):
+def _resolve(agent_type, override=None) -> str:
     if override == "bad":
         raise _Malformed("agent_model 'bad' is malformed\nsecond line")
     return "sonnet"
@@ -47,24 +52,24 @@ def _overlap(reads, head):
     return sorted(set(reads) & set(head))
 
 
-def test_path_in_reads_at_head_and_consumes_flagged():
+def test_path_in_reads_at_head_and_consumes_flagged() -> None:
     rows = [{"id": "C1", "consumes": ["a.py"], "reads_at_head": ["a.py", "b.py"]}]
     found = psc.contradictory_read_findings(rows, _overlap)
     assert [f["class"] for f in found] == ["contradictory-read-declaration"]
     assert "'a.py'" in found[0]["detail"] and "row C1" in found[0]["detail"]
 
 
-def test_path_in_reads_and_reads_at_head_flagged():
+def test_path_in_reads_and_reads_at_head_flagged() -> None:
     rows = [{"id": "C1", "reads": ["a.py"], "reads_at_head": ["a.py"]}]
     assert len(psc.contradictory_read_findings(rows, _overlap)) == 1
 
 
-def test_disjoint_declarations_pass():
+def test_disjoint_declarations_pass() -> None:
     rows = [{"id": "C1", "consumes": ["a.py"], "reads_at_head": ["b.py"]}, "not-a-row", {"id": "C2"}]
     assert psc.contradictory_read_findings(rows, _overlap) == []
 
 
-def test_engine_predicate_agrees():
+def test_engine_predicate_agrees() -> None:
     from coordinator_core.ops.dispatch_emit import spine_read
 
     rows = [{"id": "C1", "consumes": ["a.py"], "reads_at_head": ["a.py"]}]
@@ -74,33 +79,33 @@ def test_engine_predicate_agrees():
 # --- agent-type-undispatchable --------------------------------------------------------------------
 
 
-def test_em_never_dispatchable():
+def test_em_never_dispatchable() -> None:
     found = _classes([{"id": "C1", "agent_type": "coordinator:em"}])
     assert [f["class"] for f in found] == ["agent-type-undispatchable"]
     assert "never dispatchable" in found[0]["detail"]
 
 
-def test_non_executing_definition_flagged_string_and_bool():
+def test_non_executing_definition_flagged_string_and_bool() -> None:
     for agent in ("coordinator:objective-reacher", "coordinator:flagged-bool"):
         found = _classes([{"id": "C1", "agent_type": agent}])
         assert len(found) == 1 and "does not execute rows" in found[0]["detail"]
 
 
-def test_executing_agent_passes():
+def test_executing_agent_passes() -> None:
     assert _classes([{"id": "C1", "agent_type": "coordinator:executor"}]) == []
 
 
-def test_unknown_coordinator_agent_has_no_definition():
+def test_unknown_coordinator_agent_has_no_definition() -> None:
     found = _classes([{"id": "C1", "agent_type": "coordinator:nope"}])
     assert len(found) == 1 and "no agent definition" in found[0]["detail"]
 
 
-def test_malformed_override_flagged():
+def test_malformed_override_flagged() -> None:
     found = _classes([{"id": "C1", "agent_type": "coordinator:executor", "agent_model": "bad"}])
     assert len(found) == 1 and found[0]["detail"] == "row C1: agent_model 'bad' is malformed"
 
 
-def test_unresolvable_source_yields_only_em_refusal():
+def test_unresolvable_source_yields_only_em_refusal() -> None:
     rows = [
         {"id": "C1", "agent_type": "coordinator:objective-reacher"},
         {"id": "C2", "agent_type": "coordinator:nope", "agent_model": "bad"},
@@ -110,14 +115,14 @@ def test_unresolvable_source_yields_only_em_refusal():
     assert [f["detail"].split(":")[0] for f in found] == ["row C3"]
 
 
-def test_row_without_agent_type_ignored():
+def test_row_without_agent_type_ignored() -> None:
     assert _classes([{"id": "C1"}, {"id": "C2", "agent_type": ""}]) == []
 
 
 # --- emission through _extra_findings -------------------------------------------------------------
 
 
-def test_extra_findings_maps_to_structural_at_class(monkeypatch, tmp_path):
+def test_extra_findings_maps_to_structural_at_class(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     from coordinator_core.roadmap import prep_gate
 
     monkeypatch.setattr(prep_gate, "gate_plan", lambda *a, **k: {"terminal": False})
@@ -141,7 +146,7 @@ def test_extra_findings_maps_to_structural_at_class(monkeypatch, tmp_path):
     ]
 
 
-def test_agent_contract_findings_never_crashes_on_unresolvable_source(monkeypatch):
+def test_agent_contract_findings_never_crashes_on_unresolvable_source(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.hooks import block_unenumerated_agent_type as mod
 
     def boom(**kw):

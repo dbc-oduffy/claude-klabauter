@@ -4,21 +4,22 @@ import pytest
 from coordinator_core.git.provider_attribution import attribution_value, caller_attribution
 from coordinator_core.git.commit_trailers import apply_missing_trailers
 from coordinator_core.warm.entry_seam import per_request_state
+from pathlib import Path
 
 
 @pytest.mark.parametrize("provider,label", [("codex", "Codex"), ("claude", "Claude"), ("agy", "agy"), ("grok", "Grok"), ("mistral", "Mistral"), ("deepseek", "DeepSeek")])
-def test_explicit_provider(monkeypatch, provider, label):
+def test_explicit_provider(monkeypatch: pytest.MonkeyPatch, provider, label) -> None:
     monkeypatch.setenv("COORDINATOR_AGENT_PROVIDER", provider)
     assert attribution_value().startswith(label + " <")
 
 
-def test_codex_automatic(monkeypatch):
+def test_codex_automatic(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("COORDINATOR_AGENT_PROVIDER", raising=False)
     monkeypatch.setenv("CODEX_THREAD_ID", "thread")
     assert attribution_value() == "Codex <noreply@openai.com>"
 
 
-def test_warm_caller_beats_daemon_and_resets(monkeypatch):
+def test_warm_caller_beats_daemon_and_resets(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_AGENT_PROVIDER", "claude")
     with per_request_state(warm_served=True, isolated=False, env={"COORDINATOR_AGENT_PROVIDER": "codex"}):
         assert attribution_value() == "Codex <noreply@openai.com>"
@@ -28,13 +29,13 @@ def test_warm_caller_beats_daemon_and_resets(monkeypatch):
     assert attribution_value().startswith("Claude ")
 
 
-def test_unidentified_warm_caller_omits_daemon(monkeypatch):
+def test_unidentified_warm_caller_omits_daemon(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_AGENT_PROVIDER", "claude")
     with per_request_state(warm_served=True, isolated=False, env={}):
         assert attribution_value() == ""
 
 
-def test_codex_commit_preserves_other_contributors_and_is_idempotent(tmp_path, monkeypatch):
+def test_codex_commit_preserves_other_contributors_and_is_idempotent(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_AGENT_PROVIDER", "codex")
     monkeypatch.setattr("coordinator_core.git.commit_trailers._resolve_git_dir", lambda cwd: "")
     msg = "fix: caller identity\n\nCo-Authored-By: Human <human@example.com>\n"
@@ -46,19 +47,19 @@ def test_codex_commit_preserves_other_contributors_and_is_idempotent(tmp_path, m
     assert "Claude <" not in once
 
 
-def test_unknown_provider_omitted(monkeypatch):
+def test_unknown_provider_omitted(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_AGENT_PROVIDER", "unregistered")
     assert attribution_value() == ""
 
 
 @pytest.mark.parametrize("identity,label", [("CODEX_THREAD_ID", "Codex"), ("CLAUDE_CODE_SESSION_ID", "Claude"), ("CLAUDE_SESSION_ID", "Claude")])
-def test_warm_platform_identity_infers_provider_without_explicit_marker(monkeypatch, identity, label):
+def test_warm_platform_identity_infers_provider_without_explicit_marker(monkeypatch: pytest.MonkeyPatch, identity, label) -> None:
     monkeypatch.setenv("COORDINATOR_AGENT_PROVIDER", "grok")
     with per_request_state(warm_served=True, isolated=False, env={identity: "01a1b63c-040a-76f2-a9b9-929d9a0d0098"}):
         assert attribution_value().startswith(label + " <")
 
 
-def test_sequential_warm_callers_do_not_leak(monkeypatch):
+def test_sequential_warm_callers_do_not_leak(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_AGENT_PROVIDER", "grok")
     for provider, label in [("codex", "Codex"), ("claude", "Claude"), ("codex", "Codex")]:
         with per_request_state(warm_served=True, isolated=False, env={"COORDINATOR_AGENT_PROVIDER": provider}):
@@ -66,7 +67,7 @@ def test_sequential_warm_callers_do_not_leak(monkeypatch):
 
 
 @pytest.mark.spawns_process
-def test_real_git_hook_attributes_codex_preserves_human(tmp_path, monkeypatch):
+def test_real_git_hook_attributes_codex_preserves_human(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import os
     import subprocess
     import sys
@@ -97,7 +98,7 @@ def test_real_git_hook_attributes_codex_preserves_human(tmp_path, monkeypatch):
     assert git("log", "-1", "--format=%an <%ae>").strip() == "Human Operator <human@example.com>"
 
 
-def test_warm_reentrant_op_preserves_outer_provider(monkeypatch):
+def test_warm_reentrant_op_preserves_outer_provider(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.warm import entry_seam
     monkeypatch.setenv("COORDINATOR_AGENT_PROVIDER", "grok")
     monkeypatch.setattr(entry_seam, "_resolve_handler", lambda name: lambda params, repo_root=None: attribution_value())

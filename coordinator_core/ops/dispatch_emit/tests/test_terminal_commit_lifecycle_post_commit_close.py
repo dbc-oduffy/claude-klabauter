@@ -20,6 +20,7 @@ from coordinator_core.ops.dispatch_emit.tests import test_terminal_commit_regist
 from coordinator_core.ops.dispatch_emit.tests.test_terminal_commit_register_ship_in_run import (  # noqa: F401
     _ARCHIVED_BATON, _BATON, _PLAN, _SID, _SIZING, _git, _row, _sizing_text, repo,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -36,7 +37,7 @@ _EXTRA_ROW = (
 
 
 @pytest.fixture(autouse=True)
-def _no_review_write_source(monkeypatch):
+def _no_review_write_source(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import review_edits
 
     monkeypatch.setattr(review_edits, "review_writes", lambda *a, **k: {})
@@ -79,7 +80,7 @@ def _fire(repo, ledger_verdict, *, flip_refused: bool = False, chunk_report: str
     )
 
 
-def test_a_lifecycle_only_post_commit_row_flips_the_plan_archives_the_baton_and_owes_nothing(repo):
+def test_a_lifecycle_only_post_commit_row_flips_the_plan_archives_the_baton_and_owes_nothing(repo) -> None:
     out = _fire(repo, {"items": [_LIFECYCLE]})
 
     assert out["committed"] is True and "coded_stamp_error" not in out, out
@@ -89,7 +90,7 @@ def test_a_lifecycle_only_post_commit_row_flips_the_plan_archives_the_baton_and_
     assert "post_commit_owed" not in out
 
 
-def test_a_refused_flip_reports_the_lifecycle_acts_still_owed(repo):
+def test_a_refused_flip_reports_the_lifecycle_acts_still_owed(repo) -> None:
     out = _fire(repo, {"items": [_LIFECYCLE]}, flip_refused=True)
 
     assert out["committed"] is True, out
@@ -99,7 +100,7 @@ def test_a_refused_flip_reports_the_lifecycle_acts_still_owed(repo):
     assert "plan_implemented" in owed[0]["acts"] and owed[0]["sha"] == out["sha"]
 
 
-def test_a_sha_memo_row_still_owes_its_memo_after_the_lifecycle_acts_land(repo):
+def test_a_sha_memo_row_still_owes_its_memo_after_the_lifecycle_acts_land(repo) -> None:
     row = {**_LIFECYCLE, "post_commit_acts": ["baton_archive", "plan_implemented", "sha_memo"]}
     out = _fire(repo, {"items": [row]})
 
@@ -107,7 +108,7 @@ def test_a_sha_memo_row_still_owes_its_memo_after_the_lifecycle_acts_land(repo):
     assert [o["acts"] for o in out["post_commit_owed"]] == [row["post_commit_acts"]]
 
 
-def test_a_lifecycle_row_does_not_regrade_a_chunk_whose_report_is_blocked(tmp_path):
+def test_a_lifecycle_row_does_not_regrade_a_chunk_whose_report_is_blocked(tmp_path: Path) -> None:
     (tmp_path / "r.md").write_text("BLOCKED on: C1\n<exit-status>BLOCKED</exit-status>\n", encoding="utf-8")
     request = CommitRequest(chunks=(ChunkCommit(id="C1", title="t", paths=("a.py",), report="r.md"),))
     verdict = {"items": [_LIFECYCLE]}

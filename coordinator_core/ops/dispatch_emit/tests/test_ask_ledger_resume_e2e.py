@@ -45,7 +45,7 @@ _HALT = {"halted": "ledger-check", "plan": PLAN, "items": [{"id": "R1"}]}
 
 
 @pytest.fixture
-def halted(repo, monkeypatch):  # noqa: F811
+def halted(repo, monkeypatch: pytest.MonkeyPatch):  # noqa: F811
     """The product-commit repo with every plan row checkpoint-landed and run `RUN` halted at R1."""
     monkeypatch.chdir(repo)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", _SID)
@@ -116,7 +116,7 @@ def _commit(root, token: str, verdict: dict) -> dict:
     )
 
 
-def test_row_met_out_of_band_resumes_the_same_sizing_and_the_new_run_commits(halted):
+def test_row_met_out_of_band_resumes_the_same_sizing_and_the_new_run_commits(halted) -> None:
     before = _sizings(halted)
     _met_out_of_band(halted)
 
@@ -138,7 +138,7 @@ def test_row_met_out_of_band_resumes_the_same_sizing_and_the_new_run_commits(hal
     assert later.halt["kind"] == "refusal" and "'shipped'" in later.halt["reason"]
 
 
-def test_row_still_not_met_refuses_the_commit_at_the_ledger_gate(halted):
+def test_row_still_not_met_refuses_the_commit_at_the_ledger_gate(halted) -> None:
     rows = {r["id"]: r for r in rr.read_register((halted / SIZING).read_text(encoding="utf-8")).rows}
     assert rows["R1"]["status"] != "met"
     token = _second_run(halted)

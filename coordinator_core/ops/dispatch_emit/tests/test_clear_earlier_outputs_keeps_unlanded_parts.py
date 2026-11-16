@@ -7,6 +7,7 @@ import json
 from pathlib import Path
 
 from coordinator_core.ops.dispatch_emit import cli as cli_module
+import pytest
 
 _BASE = "20261021T182452-4b88be1d"
 
@@ -19,7 +20,7 @@ def _make(d: Path, name: str, receipt: dict | None) -> Path:
     return path
 
 
-def test_unlanded_part_survives_sibling_tranche_emit(tmp_path, capsys):
+def test_unlanded_part_survives_sibling_tranche_emit(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     d = tmp_path
     (d / f"{_BASE}-t2.md").write_text("rec", encoding="utf-8")
     t3 = d / f"{_BASE}-t3.md"
@@ -45,7 +46,7 @@ def test_unlanded_part_survives_sibling_tranche_emit(tmp_path, capsys):
     assert f"kept unlanded part {p1}" not in err
 
 
-def test_unlanded_spine_without_script_survives_and_landed_one_goes(tmp_path):
+def test_unlanded_spine_without_script_survives_and_landed_one_goes(tmp_path: Path) -> None:
     t3 = tmp_path / f"{_BASE}-t3.md"
     t3.write_text("rec", encoding="utf-8")
     unlanded = tmp_path / f"{_BASE}-t2.spine.md"
@@ -62,7 +63,7 @@ def test_unlanded_spine_without_script_survives_and_landed_one_goes(tmp_path):
     assert not landed.exists()
 
 
-def test_resume_sibling_spends_a_receiptless_part(tmp_path, capsys):
+def test_resume_sibling_spends_a_receiptless_part(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     t2 = tmp_path / f"{_BASE}-t2.md"
     t2.write_text("rec", encoding="utf-8")
     part = _make(tmp_path, f"{_BASE}-t1-p1.workflow.mjs", None)
@@ -76,7 +77,7 @@ def test_resume_sibling_spends_a_receiptless_part(tmp_path, capsys):
     assert f"kept spent part {part}" in capsys.readouterr().err
 
 
-def test_orphan_spine_superseded_by_live_parts_is_removed(tmp_path, capsys):
+def test_orphan_spine_superseded_by_live_parts_is_removed(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     t3 = tmp_path / f"{_BASE}-t3.md"
     t3.write_text("rec", encoding="utf-8")
     whole = tmp_path / f"{_BASE}-t2.spine.md"
@@ -90,7 +91,7 @@ def test_orphan_spine_superseded_by_live_parts_is_removed(tmp_path, capsys):
     assert f"superseded by this emit's live output {_BASE}-t2-p1" in capsys.readouterr().err
 
 
-def test_orphan_part_spine_superseded_by_live_whole_is_removed(tmp_path):
+def test_orphan_part_spine_superseded_by_live_whole_is_removed(tmp_path: Path) -> None:
     t3 = tmp_path / f"{_BASE}-t3.md"
     t3.write_text("rec", encoding="utf-8")
     part = tmp_path / f"{_BASE}-t2-p2.spine.md"
@@ -103,7 +104,7 @@ def test_orphan_part_spine_superseded_by_live_whole_is_removed(tmp_path):
     assert not part.exists()
 
 
-def test_orphan_spine_without_evidence_is_kept_and_surfaced(tmp_path, capsys):
+def test_orphan_spine_without_evidence_is_kept_and_surfaced(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     t3 = tmp_path / f"{_BASE}-t3.md"
     t3.write_text("rec", encoding="utf-8")
     orphan = tmp_path / f"{_BASE}-t2.spine.md"
@@ -117,7 +118,7 @@ def test_orphan_spine_without_evidence_is_kept_and_surfaced(tmp_path, capsys):
     assert f"kept unlanded spine {orphan}" in capsys.readouterr().err
 
 
-def test_orphan_spine_is_kept_when_live_stem_only_shares_a_prefix(tmp_path):
+def test_orphan_spine_is_kept_when_live_stem_only_shares_a_prefix(tmp_path: Path) -> None:
     t3 = tmp_path / f"{_BASE}-t3.md"
     t3.write_text("rec", encoding="utf-8")
     orphan = tmp_path / f"{_BASE}-t2.spine.md"
@@ -130,7 +131,7 @@ def test_orphan_spine_is_kept_when_live_stem_only_shares_a_prefix(tmp_path):
     assert orphan.is_file()
 
 
-def test_orphan_spine_is_not_removed_on_age_alone(tmp_path):
+def test_orphan_spine_is_not_removed_on_age_alone(tmp_path: Path) -> None:
     import os
 
     t3 = tmp_path / f"{_BASE}-t3.md"
@@ -145,7 +146,7 @@ def test_orphan_spine_is_not_removed_on_age_alone(tmp_path):
     assert orphan.is_file()
 
 
-def test_unlanded_tranche_script_is_kept_too(tmp_path):
+def test_unlanded_tranche_script_is_kept_too(tmp_path: Path) -> None:
     t3 = tmp_path / f"{_BASE}-t3.md"
     t3.write_text("rec", encoding="utf-8")
     t2 = _make(tmp_path, f"{_BASE}-t2.workflow.mjs", {"sha256": "x"})

@@ -47,7 +47,7 @@ def _repo(root: Path, rows: dict) -> Path:
     return root
 
 
-def test_row_with_every_write_committed_after_the_plan_resolves(tmp_path):
+def test_row_with_every_write_committed_after_the_plan_resolves(tmp_path: Path) -> None:
     repo = _repo(tmp_path, {"C1": ("c1.py",), "C5": ("c5.py",)})
     landed = _commit(repo, {"c1.py": "1"}, "hand edit" + "\n\nDeliverable-Id: dlv-t-111111")
     _commit(repo, {"later": "1"}, "later")
@@ -58,7 +58,7 @@ def test_row_with_every_write_committed_after_the_plan_resolves(tmp_path):
     assert "C1" not in got.incomplete and plan == (repo / _REL).read_text(encoding="utf-8")
 
 
-def test_write_older_than_the_plan_does_not_count(tmp_path):
+def test_write_older_than_the_plan_does_not_count(tmp_path: Path) -> None:
     repo = _repo(tmp_path, {"C1": ("old.py",), "C5": ("c5.py",)})
     assert rows_landed_outside_executor(
         repo, _REL, [{"id": "C1", "writes": ["old.py"]}, {"id": "C5", "writes": ["c5.py"]}]
@@ -66,13 +66,13 @@ def test_write_older_than_the_plan_does_not_count(tmp_path):
     assert resumable_plan({"plan": _REL}, "state/sizings/p.yaml", repo).incomplete == ("C1", "C5")
 
 
-def test_partially_landed_row_stays_incomplete(tmp_path):
+def test_partially_landed_row_stays_incomplete(tmp_path: Path) -> None:
     repo = _repo(tmp_path, {"C1": ("c1.py", "c1b.py")})
     _commit(repo, {"c1.py": "1"}, "half")
     assert resumable_plan({"plan": _REL}, "state/sizings/p.yaml", repo).incomplete == ("C1",)
 
 
-def test_the_walk_spawns_no_process(tmp_path, monkeypatch):
+def test_the_walk_spawns_no_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path, {"C1": ("c1.py",)})
     landed = _commit(repo, {"c1.py": "1"}, "hand edit" + "\n\nDeliverable-Id: dlv-t-111111")
 

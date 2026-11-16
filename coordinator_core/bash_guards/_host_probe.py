@@ -16,6 +16,10 @@ import re
 import sys
 from pathlib import Path
 from typing import Callable, List, Optional, Sequence
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _THIS_DIR = Path(__file__).resolve().parent
 _contract_mod = sys.modules.get("coordinator_core.bash_guards._heavy_admission_contract")
@@ -32,7 +36,7 @@ ProcRow = _contract_mod.ProcRow
 _SAMPLER_FILE = _THIS_DIR.parent / "telemetry" / "host_sampler.py"
 
 
-def _host_sampler():
+def _host_sampler() -> ModuleType:
     """host_sampler loaded by file path (no package import), reusing an already-imported copy."""
     for name in ("coordinator_core.telemetry.host_sampler", "host_sampler"):
         mod = sys.modules.get(name)

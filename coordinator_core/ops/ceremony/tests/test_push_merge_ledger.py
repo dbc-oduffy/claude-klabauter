@@ -4,9 +4,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from coordinator_core.ops.ceremony import push
+from pathlib import Path
+import pytest
 
 
-def _ok(stdout=""):
+def _ok(stdout: str = "") -> SimpleNamespace:
     return SimpleNamespace(ok=True, returncode=0, stdout=stdout, stderr="")
 
 
@@ -22,7 +24,7 @@ def _wire(monkeypatch):
     return gn
 
 
-def test_merge_commit_records_ledger_entry(monkeypatch, tmp_path):
+def test_merge_commit_records_ledger_entry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     gn = _wire(monkeypatch)
     monkeypatch.setattr(gn, "update_ref", lambda *a, **k: _ok())
     calls = []
@@ -36,7 +38,7 @@ def test_merge_commit_records_ledger_entry(monkeypatch, tmp_path):
     assert calls == [(tmp_path, [], "b" * 40)]
 
 
-def test_failed_ref_move_records_no_ledger_entry(monkeypatch, tmp_path):
+def test_failed_ref_move_records_no_ledger_entry(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     gn = _wire(monkeypatch)
     monkeypatch.setattr(
         gn, "update_ref",

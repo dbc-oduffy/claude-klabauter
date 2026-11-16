@@ -12,6 +12,7 @@ from coordinator_core.ipc import get_op_handler
 from coordinator_core.ops.dispatch_emit import halted_hold_release, release_halted_path
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -22,7 +23,7 @@ HELD = "src/held.py"
 OTHER = "src/other.py"
 
 
-def _repo(tmp_path, *, status="halted", manifest=None):
+def _repo(tmp_path, *, status: str = "halted", manifest=None):
     subprocess.run(["git", "init", "-q"], cwd=tmp_path, check=True, **no_console_creationflags())
     (tmp_path / OTHER).parent.mkdir(parents=True)
     (tmp_path / OTHER).write_text("wip\n", encoding="utf-8")  # dirty: a clean withheld path frees the run
@@ -43,11 +44,11 @@ def _marker(root):
     return json.loads((record_dir(root, RUN) / "halted.json").read_text(encoding="utf-8"))
 
 
-def test_op_is_registered():
+def test_op_is_registered() -> None:
     assert get_op_handler(release_halted_path.OP_NAME) is not None
 
 
-def test_release_drops_only_that_path_and_records_the_reason(tmp_path):
+def test_release_drops_only_that_path_and_records_the_reason(tmp_path: Path) -> None:
     root = _repo(tmp_path)
 
     out = _call(root, run_id=RUN, path=HELD, reason="criterion met at HEAD")
@@ -60,7 +61,7 @@ def test_release_drops_only_that_path_and_records_the_reason(tmp_path):
     assert halted_hold_release.held_paths(root, RUN, COMMITTING) == frozenset({OTHER})
 
 
-def test_a_repeat_release_is_a_no_op_reply(tmp_path):
+def test_a_repeat_release_is_a_no_op_reply(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     _call(root, run_id=RUN, path=HELD, reason="r")
 
@@ -69,7 +70,7 @@ def test_a_repeat_release_is_a_no_op_reply(tmp_path):
     assert again["ok"] is True and again["released"] is False and again["reason"] == "r"
 
 
-def test_a_blank_reason_is_refused_and_writes_nothing(tmp_path):
+def test_a_blank_reason_is_refused_and_writes_nothing(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     before = _marker(root)
 
@@ -79,7 +80,7 @@ def test_a_blank_reason_is_refused_and_writes_nothing(tmp_path):
     assert _marker(root) == before
 
 
-def test_a_path_the_run_neither_withholds_nor_declares_is_refused(tmp_path):
+def test_a_path_the_run_neither_withholds_nor_declares_is_refused(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     before = _marker(root)
 
@@ -89,7 +90,7 @@ def test_a_path_the_run_neither_withholds_nor_declares_is_refused(tmp_path):
     assert _marker(root) == before
 
 
-def test_a_manifest_declared_path_released_per_path_is_dropped_from_holds(tmp_path):
+def test_a_manifest_declared_path_released_per_path_is_dropped_from_holds(tmp_path: Path) -> None:
     root = _repo(tmp_path, manifest={"rows": [{"id": "C1", "writes": ["docs/declared.md"]}]})
 
     out = _call(root, run_id=RUN, path="docs/declared.md", reason="dirt is the landing run's")
@@ -99,7 +100,7 @@ def test_a_manifest_declared_path_released_per_path_is_dropped_from_holds(tmp_pa
     assert halted_hold_release.without_released_paths(root, holds) == [(HELD, RUN)]
 
 
-def test_a_landed_run_is_an_idempotent_ok_and_writes_nothing(tmp_path):
+def test_a_landed_run_is_an_idempotent_ok_and_writes_nothing(tmp_path: Path) -> None:
     root = _repo(tmp_path, status="landed")
     before = _marker(root)
 
@@ -111,7 +112,7 @@ def test_a_landed_run_is_an_idempotent_ok_and_writes_nothing(tmp_path):
     assert _marker(root) == before
 
 
-def test_a_run_with_no_marker_whose_stage_reads_landed_is_ok(tmp_path):
+def test_a_run_with_no_marker_whose_stage_reads_landed_is_ok(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     (record_dir(root, RUN) / "halted.json").unlink()
     (record_dir(root, RUN) / "run-stage.json").write_text(json.dumps({"stage": "landed"}), encoding="utf-8")
@@ -122,7 +123,7 @@ def test_a_run_with_no_marker_whose_stage_reads_landed_is_ok(tmp_path):
 
 
 @pytest.mark.parametrize("status", ["resumed", "superseded"])
-def test_a_run_that_is_neither_halted_nor_landed_is_still_refused(tmp_path, status):
+def test_a_run_that_is_neither_halted_nor_landed_is_still_refused(tmp_path: Path, status) -> None:
     root = _repo(tmp_path, status=status)
     before = _marker(root)
 
@@ -132,7 +133,7 @@ def test_a_run_that_is_neither_halted_nor_landed_is_still_refused(tmp_path, stat
     assert _marker(root) == before
 
 
-def test_a_run_with_no_marker_and_a_staged_stage_is_refused(tmp_path):
+def test_a_run_with_no_marker_and_a_staged_stage_is_refused(tmp_path: Path) -> None:
     root = _repo(tmp_path)
     (record_dir(root, RUN) / "halted.json").unlink()
     (record_dir(root, RUN) / "run-stage.json").write_text(json.dumps({"stage": "staged"}), encoding="utf-8")

@@ -29,6 +29,7 @@ from coordinator_core.bash_guards._rewrite_support import (
     _bt_python3_invocation,
     _bt_render_interpreter_path,
 )
+from pathlib import Path
 
 
 def _home_interpreter() -> str:
@@ -37,7 +38,7 @@ def _home_interpreter() -> str:
     )
 
 
-def test_home_relative_interpreter_drops_the_username():
+def test_home_relative_interpreter_drops_the_username() -> None:
     rendered = _bt_render_interpreter_path(_home_interpreter())
     username = os.path.basename(os.path.expanduser("~"))
     assert username not in rendered, (
@@ -70,7 +71,7 @@ def _account_home() -> str:
     return pwd.getpwuid(os.getuid()).pw_dir
 
 
-def test_redirected_home_env_still_drops_the_username(tmp_path, monkeypatch):
+def test_redirected_home_env_still_drops_the_username(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     real = _account_home()
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -80,7 +81,7 @@ def test_redirected_home_env_still_drops_the_username(tmp_path, monkeypatch):
     assert rendered.startswith('"$HOME/'), rendered
 
 
-def test_interpreter_outside_home_is_left_alone():
+def test_interpreter_outside_home_is_left_alone() -> None:
     # Must be absolute on the host OS: "C:/..." is a relative path on POSIX and
     # would be resolved against the cwd, which can sit under the home directory.
     root = "C:" + os.sep if os.name == "nt" else os.sep + "opt"
@@ -90,24 +91,24 @@ def test_interpreter_outside_home_is_left_alone():
     assert "Program Files" in rendered
 
 
-def test_home_rendering_uses_expandable_quotes_not_literal_ones():
+def test_home_rendering_uses_expandable_quotes_not_literal_ones() -> None:
     rendered = _bt_render_interpreter_path(_home_interpreter())
     assert not rendered.startswith("'"), "single quotes would suppress $HOME expansion: %r" % rendered
     assert "\\" not in rendered, "backslashes escape inside a double-quoted shell string: %r" % rendered
 
 
-def test_live_invocation_carries_no_username():
+def test_live_invocation_carries_no_username() -> None:
     username = os.path.basename(os.path.expanduser("~"))
     assert username not in _bt_python3_invocation()
 
 
-def test_rendering_stays_paste_runnable_by_construction():
+def test_rendering_stays_paste_runnable_by_construction() -> None:
     rendered = _bt_render_interpreter_path(_home_interpreter())
     assert rendered.startswith('"$HOME/') and rendered.endswith('"')
     assert "/" in rendered and "\\" not in rendered
 
 
-def test_rendering_version_is_folded_into_the_cache_key():
+def test_rendering_version_is_folded_into_the_cache_key() -> None:
     from coordinator_core.bash_guards._rewrite_support import (
         _BT_INTERPRETER_RENDERING_VERSION,
         _bt_python3_invocation_cache_key,

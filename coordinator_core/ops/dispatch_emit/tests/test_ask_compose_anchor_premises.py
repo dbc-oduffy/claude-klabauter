@@ -13,7 +13,7 @@ pytestmark = pytest.mark.usefixtures("m_plus_known_arm")
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 
 
-def _script():
+def _script() -> str:
     return compose_ask_script(
         repo_root="REPO",
         prompt="add a thing",
@@ -26,7 +26,7 @@ def _script():
     )
 
 
-def test_both_prompts_state_the_evaluator_grammar_and_refuse_pipes():
+def test_both_prompts_state_the_evaluator_grammar_and_refuse_pipes() -> None:
     from coordinator_core.ops._anchor_check import GRAMMAR
 
     script = _script()
@@ -35,7 +35,7 @@ def test_both_prompts_state_the_evaluator_grammar_and_refuse_pipes():
     assert script.count("anchor-premise-no-verdict") == 2
 
 
-def test_review_and_revise_prompts_carry_anchor_sentence_before_readiness_op():
+def test_review_and_revise_prompts_carry_anchor_sentence_before_readiness_op() -> None:
     script = _script()
     for needle in ("anchor_premises", "plan.premise_record", "anchor: <id>", ask_compose._ANCHOR_BRIEF_VERSION):
         assert script.count(needle) >= 2, needle

@@ -7,6 +7,7 @@ from coordinator_core.engine_root import ENGINE_CHECKOUT_ROOT
 from coordinator_core.roadmap import probe_store
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -15,7 +16,7 @@ def _sig(st):
     return (st.st_size, st.st_mtime_ns)
 
 
-def test_parity_with_os_stat_over_closure():
+def test_parity_with_os_stat_over_closure() -> None:
     paths = probe_store._closure(os.path.normpath(str(ENGINE_CHECKOUT_ROOT)))
     assert paths
     ds = probe_store._DirStats()
@@ -29,12 +30,12 @@ def test_parity_with_os_stat_over_closure():
         assert _sig(got) == _sig(want), p
 
 
-def test_absent_path_is_none(tmp_path):
+def test_absent_path_is_none(tmp_path: Path) -> None:
     assert probe_store._DirStats().stat(str(tmp_path / "nope.py")) is None
     assert probe_store._DirStats().stat(str(tmp_path / "nodir" / "nope.py")) is None
 
 
-def test_two_files_one_scandir(tmp_path, monkeypatch):
+def test_two_files_one_scandir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     a, b = tmp_path / "a.py", tmp_path / "b.py"
     a.write_text("a")
     b.write_text("bb")
@@ -52,7 +53,7 @@ def test_two_files_one_scandir(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
-def test_name_missing_from_listing_falls_through(tmp_path, monkeypatch):
+def test_name_missing_from_listing_falls_through(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     f = tmp_path / "f.py"
     f.write_text("x")
     real = os.scandir

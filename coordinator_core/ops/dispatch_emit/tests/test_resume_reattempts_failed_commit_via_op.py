@@ -11,6 +11,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
 from coordinator_core.ops.dispatch_emit.halt_refire import commit_retry_from_reason
 from coordinator_core.ops.dispatch_emit.op import _dispatch_emit
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -56,7 +57,7 @@ def _git(root, *args) -> str:
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("COORDINATOR_AGENT_TYPE_HOST", "claude")
     root = tmp_path / "repo"
     (root / "docs" / "plans").mkdir(parents=True)
@@ -69,7 +70,7 @@ def repo(tmp_path, monkeypatch):
     return root
 
 
-def _halt(root, reason, base):
+def _halt(root, reason, base) -> None:
     rec = root / RECORD_DIR_ROOT / RUN_ID
     rec.mkdir(parents=True)
     marker = {"status": "halted", "halted": "dependents_unstarted", "sizing_rel": SIZING_REL}
@@ -87,7 +88,7 @@ def _emit(root) -> str:
     return out.read_text(encoding="utf-8")
 
 
-def test_the_reason_the_finaliser_writes_parses_to_a_wave_map():
+def test_the_reason_the_finaliser_writes_parses_to_a_wave_map() -> None:
     assert commit_retry_from_reason(REASON) == {1: REFUSAL}
     two = REASON.replace(REFUSAL, REFUSAL + "; wave 2: no committer reply")
     assert commit_retry_from_reason(two) == {1: REFUSAL, 2: "wave 2: no committer reply"}
@@ -95,7 +96,7 @@ def test_the_reason_the_finaliser_writes_parses_to_a_wave_map():
     assert commit_retry_from_reason(None) == {}
 
 
-def test_a_halted_run_with_a_commit_failure_re_emits_with_the_retry_and_its_base(repo):
+def test_a_halted_run_with_a_commit_failure_re_emits_with_the_retry_and_its_base(repo) -> None:
     base = _git(repo, "rev-parse", "HEAD")
     _halt(repo, REASON, base)
     (repo / "peer.txt").write_text("p", encoding="utf-8")
@@ -108,15 +109,15 @@ def test_a_halted_run_with_a_commit_failure_re_emits_with_the_retry_and_its_base
     assert f'let _runBase = "{base}";' in script or f"let _runBase = '{base}';" in script
 
 
-def test_a_halted_run_without_a_commit_failure_emits_no_retry(repo):
+def test_a_halted_run_without_a_commit_failure_emits_no_retry(repo) -> None:
     _halt(repo, "run halted by stop rule", _git(repo, "rev-parse", "HEAD"))
     assert "_commitRetry" not in _emit(repo)
 
 
-def test_no_halted_run_emits_no_retry(repo):
+def test_no_halted_run_emits_no_retry(repo) -> None:
     assert "_commitRetry" not in _emit(repo)
 
 
-def test_a_recorded_base_that_does_not_reach_head_emits_no_retry(repo):
+def test_a_recorded_base_that_does_not_reach_head_emits_no_retry(repo) -> None:
     _halt(repo, REASON, "a" * 40)
     assert "_commitRetry" not in _emit(repo)

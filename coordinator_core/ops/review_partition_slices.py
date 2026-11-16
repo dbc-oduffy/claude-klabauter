@@ -110,14 +110,28 @@ def apply_roster_rules(out: dict, roster: Optional[dict], rostered: Optional[Lis
         }]
 
 
+def base_resolver(base: str, path_bases: Dict[str, str]) -> Callable[[str], str]:
+    """`path -> base`: the longest `path_bases` key equal to the path or an ancestor directory, else `base`.
+    One lookup per path ancestor instead of a scan of every key, so N paths cost N, not N x keys."""
+    keyed: Dict[str, str] = {}
+    for key, value in path_bases.items():
+        keyed.setdefault(key.rstrip("/"), value)
+
+    def resolve(path: str) -> str:
+        k = path
+        while True:
+            if k in keyed:
+                return keyed[k]
+            k, sep, _ = k.rpartition("/")
+            if not sep:
+                return base
+
+    return resolve
+
+
 def _effective_base(path: str, base: str, path_bases: Dict[str, str]) -> str:
     """Base for `path`: the longest `path_bases` key equal to it or an ancestor directory."""
-    best_len, result = -1, base
-    for key, value in path_bases.items():
-        k = key.rstrip("/")
-        if (path == k or path.startswith(k + "/")) and len(k) > best_len:
-            best_len, result = len(k), value
-    return result
+    return base_resolver(base, path_bases)(path)
 
 
 _DIFF_SECTION = re.compile(r"(?m)^(?=diff --git )")
@@ -299,9 +313,10 @@ def _partition(
         out["error"] = "base, paths and slice_prefix are required"
         return out
     bases = path_bases or {}
+    effective_base = base_resolver(base, bases)
     by_base: Dict[str, List[str]] = {}
     for p in paths:
-        by_base.setdefault(_effective_base(p, base, bases), []).append(p)
+        by_base.setdefault(effective_base(p), []).append(p)
     held: dict = {}
 
     def load_whole() -> Optional[dict]:
@@ -402,7 +417,7 @@ def _partition(
     for group in group_paths(sorted(files)):
         sub: Dict[str, List[str]] = {}
         for f in group:
-            sub.setdefault(_effective_base(f, base, bases), []).append(f)
+            sub.setdefault(effective_base(f), []).append(f)
         for b, sub_group in sorted(sub.items()):
             n += 1
             slice_id = f"{slice_prefix}-{n}"

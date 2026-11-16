@@ -16,6 +16,7 @@ from coordinator_core.ops.review_mint import wave_bookkeeping
 from coordinator_core.session import touch_record
 from coordinator_core.ops.dispatch_emit.tests._review_fixture import reviewed
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -25,7 +26,7 @@ EVIDENCE = "docs/plans/ex.evidence.yaml"
 SEED = "reviews: []\n"
 
 
-def _git(args, cwd):
+def _git(args, cwd) -> None:
     subprocess.run(
         ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
         **no_console_creationflags(),
@@ -104,7 +105,7 @@ def _fire(tmp_path, monkeypatch, recorded: str) -> tuple:
     return out, seen, repo
 
 
-def test_the_runs_own_review_row_append_commits_the_sidecar(tmp_path, monkeypatch):
+def test_the_runs_own_review_row_append_commits_the_sidecar(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out, seen, repo = _fire(tmp_path, monkeypatch, SEED)
     assert out["committed"] is True, out
     final = (repo / EVIDENCE).read_bytes()
@@ -112,7 +113,7 @@ def test_the_runs_own_review_row_append_commits_the_sidecar(tmp_path, monkeypatc
     assert seen[0]["expected_content_sha256"][EVIDENCE] == hashlib.sha256(final).hexdigest()
 
 
-def test_a_recorded_write_that_is_not_the_pre_append_bytes_still_refuses(tmp_path, monkeypatch):
+def test_a_recorded_write_that_is_not_the_pre_append_bytes_still_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out, seen, _ = _fire(tmp_path, monkeypatch, "reviews: [peer]\n")
     assert out["committed"] is False, out
     assert out["refused"] == "blob-drift"

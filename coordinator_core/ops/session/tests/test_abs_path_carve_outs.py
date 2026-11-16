@@ -7,6 +7,7 @@ from coordinator_core.ops.session.abs_path_carve_outs import (
     load_carve_outs,
     marker_is_discharged,
 )
+from pathlib import Path
 
 TOML = """
 [registry_keys]
@@ -30,17 +31,17 @@ def _load(tmp_path, text=TOML):
     return load_carve_outs(tmp_path)
 
 
-def test_missing_file_is_empty(tmp_path):
+def test_missing_file_is_empty(tmp_path: Path) -> None:
     co = load_carve_outs(tmp_path)
     assert not co.keys and not co.by_id and not co.sites and co.malformed == ""
 
 
-def test_malformed_file_is_empty_with_sentinel(tmp_path):
+def test_malformed_file_is_empty_with_sentinel(tmp_path: Path) -> None:
     co = _load(tmp_path, "this = [not toml")
     assert not co.keys and not co.by_id and co.malformed
 
 
-def test_loads_entries_and_rejects_glob_and_reasonless(tmp_path):
+def test_loads_entries_and_rejects_glob_and_reasonless(tmp_path: Path) -> None:
     co = _load(tmp_path)
     assert co.keys == frozenset({"data_root"})
     assert co.by_id["fixtures"] == frozenset({"a/b.py"})
@@ -49,13 +50,13 @@ def test_loads_entries_and_rejects_glob_and_reasonless(tmp_path):
     assert any("missing reason" in r for r in co.rejected)
 
 
-def test_key_marker(tmp_path):
+def test_key_marker(tmp_path: Path) -> None:
     co = _load(tmp_path)
     assert marker_is_discharged('X = "C:/d"  # abs-path-ok: key=data_root', "any.py", co)
     assert not marker_is_discharged('X = "C:/d"  # abs-path-ok: key=unlisted', "any.py", co)
 
 
-def test_carve_out_marker_needs_listed_path(tmp_path):
+def test_carve_out_marker_needs_listed_path(tmp_path: Path) -> None:
     co = _load(tmp_path)
     line = 'X = "C:/d"  # abs-path-ok: carve-out=fixtures'
     assert marker_is_discharged(line, "a/b.py", co)
@@ -64,7 +65,7 @@ def test_carve_out_marker_needs_listed_path(tmp_path):
     assert not marker_is_discharged('# abs-path-ok: carve-out=nope', "a/b.py", co)
 
 
-def test_bare_reason_only_at_listed_site(tmp_path):
+def test_bare_reason_only_at_listed_site(tmp_path: Path) -> None:
     co = _load(tmp_path)
     listed = 'X = "C:/data"  # abs-path-ok: legacy'
     assert marker_is_discharged("   " + listed + "  ", "c/d.py", co)
@@ -73,9 +74,9 @@ def test_bare_reason_only_at_listed_site(tmp_path):
     assert not marker_is_discharged('Y = "C:/new"  # abs-path-ok:', "c/d.py", co)
 
 
-def test_bare_reason_without_registry_not_discharged(tmp_path):
+def test_bare_reason_without_registry_not_discharged(tmp_path: Path) -> None:
     assert not marker_is_discharged('X  # abs-path-ok: because', "a.py", load_carve_outs(tmp_path))
 
 
-def test_code_surface_exts():
+def test_code_surface_exts() -> None:
     assert ".py" in CODE_SURFACE_EXTS and ".md" not in CODE_SURFACE_EXTS

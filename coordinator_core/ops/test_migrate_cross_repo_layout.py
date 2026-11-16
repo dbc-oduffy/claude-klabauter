@@ -10,6 +10,7 @@ from coordinator_core.session import scope as session_scope
 
 import pytest
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -23,7 +24,7 @@ def _git(args, cwd):
     return result
 
 
-def _make_fixture_repo(tmp_path, n_flat=1, m_archive=2, include_dotfile=True):
+def _make_fixture_repo(tmp_path, n_flat: int = 1, m_archive: int = 2, include_dotfile: bool = True):
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(["init", "-q"], repo)
@@ -59,7 +60,7 @@ def _make_fixture_repo(tmp_path, n_flat=1, m_archive=2, include_dotfile=True):
     return repo
 
 
-def test_standard_migration_moves_flat_and_archive_files(tmp_path, capsys):
+def test_standard_migration_moves_flat_and_archive_files(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_fixture_repo(tmp_path, n_flat=1, m_archive=2)
 
     rc = main(["--root", str(repo)])
@@ -85,7 +86,7 @@ def test_standard_migration_moves_flat_and_archive_files(tmp_path, capsys):
     assert staged != ""
 
 
-def test_idempotent_rerun_after_commit_is_noop(tmp_path, capsys):
+def test_idempotent_rerun_after_commit_is_noop(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_fixture_repo(tmp_path, n_flat=1, m_archive=2)
     main(["--root", str(repo)])
     _git(["commit", "-q", "-m", "migrate: cross-repo layout"], repo)
@@ -102,7 +103,7 @@ def test_idempotent_rerun_after_commit_is_noop(tmp_path, capsys):
     assert staged == ""
 
 
-def test_mixed_tracked_and_untracked_archive_files(tmp_path, capsys):
+def test_mixed_tracked_and_untracked_archive_files(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_fixture_repo(tmp_path, n_flat=0, m_archive=1, include_dotfile=False)
     untracked = repo / "archive" / "cross-repo" / "2026-05-23-untracked-memo.md"
     untracked.write_text(
@@ -122,7 +123,7 @@ def test_mixed_tracked_and_untracked_archive_files(tmp_path, capsys):
     assert staged != ""
 
 
-def test_target_collision_fails_loud_with_filename(tmp_path, capsys):
+def test_target_collision_fails_loud_with_filename(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_fixture_repo(tmp_path, n_flat=1, m_archive=0, include_dotfile=False)
 
     inbox = repo / "cross-repo" / "inbox"
@@ -140,7 +141,7 @@ def test_target_collision_fails_loud_with_filename(tmp_path, capsys):
     assert "2026-05-21-test-memo-1.md" in err
 
 
-def test_readme_never_moved(tmp_path, capsys):
+def test_readme_never_moved(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _make_fixture_repo(tmp_path, n_flat=0, m_archive=0, include_dotfile=False)
 
     rc = main(["--root", str(repo)])
@@ -150,7 +151,7 @@ def test_readme_never_moved(tmp_path, capsys):
     assert not (repo / "cross-repo" / "inbox" / "README.md").exists()
 
 
-def test_not_a_git_repo_exits_1(tmp_path, capsys):
+def test_not_a_git_repo_exits_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     plain_dir = tmp_path / "not-a-repo"
     plain_dir.mkdir()
 
@@ -161,7 +162,7 @@ def test_not_a_git_repo_exits_1(tmp_path, capsys):
     assert "not a git repository" in err
 
 
-def test_nonexistent_root_exits_1(tmp_path, capsys):
+def test_nonexistent_root_exits_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--root", str(tmp_path / "does-not-exist")])
 
     assert rc == 1
@@ -169,7 +170,7 @@ def test_nonexistent_root_exits_1(tmp_path, capsys):
     assert "repo root does not exist" in err
 
 
-def test_unknown_argument_exits_1(tmp_path, capsys):
+def test_unknown_argument_exits_1(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--bogus"])
 
     assert rc == 1
@@ -177,7 +178,7 @@ def test_unknown_argument_exits_1(tmp_path, capsys):
     assert "Unknown argument" in err
 
 
-def test_root_flag_missing_value_exits_1(capsys):
+def test_root_flag_missing_value_exits_1(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--root"])
 
     assert rc == 1
@@ -185,7 +186,7 @@ def test_root_flag_missing_value_exits_1(capsys):
     assert "--root requires a value" in err
 
 
-def test_help_flag_exits_0(capsys):
+def test_help_flag_exits_0(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--help"])
 
     assert rc == 0
@@ -194,7 +195,7 @@ def test_help_flag_exits_0(capsys):
     assert "Exit codes:" in out
 
 
-def test_untracked_move_with_live_session_relocates_touch_claim(tmp_path, capsys, monkeypatch):
+def test_untracked_move_with_live_session_relocates_touch_claim(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _make_fixture_repo(tmp_path, n_flat=0, m_archive=0, include_dotfile=False)
     src_rel = "archive/cross-repo/2026-05-23-untracked-memo.md"
     (repo / src_rel).parent.mkdir(parents=True, exist_ok=True)
@@ -220,7 +221,7 @@ def test_untracked_move_with_live_session_relocates_touch_claim(tmp_path, capsys
     assert dest_rel in offer["safe_paths"]
 
 
-def test_no_op_when_nothing_to_migrate(tmp_path, capsys):
+def test_no_op_when_nothing_to_migrate(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(["init", "-q"], repo)
@@ -241,7 +242,7 @@ def test_no_op_when_nothing_to_migrate(tmp_path, capsys):
 # ---------------------------------------------------------------------------
 
 
-def test_process_count_does_not_grow_with_the_set(tmp_path, capsys, monkeypatch):
+def test_process_count_does_not_grow_with_the_set(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.ops.migrate_cross_repo_layout as mcrl
 
     spawns: list[list[str]] = []

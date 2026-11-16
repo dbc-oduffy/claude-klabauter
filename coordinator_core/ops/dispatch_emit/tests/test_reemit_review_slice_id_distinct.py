@@ -13,6 +13,7 @@ from coordinator_core.ops.review_mint.execute_review import GROUP_PREP_HALT
 from coordinator_core.win_portability import no_console_creationflags
 
 from .conftest import REVIEW_KW
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -82,7 +83,7 @@ def _prefixes(script: str) -> set:
     return set(_SLICE_PREFIX_RE.findall(script))
 
 
-def test_same_session_reemit_mints_disjoint_group_slice_prefixes(tmp_path):
+def test_same_session_reemit_mints_disjoint_group_slice_prefixes(tmp_path: Path) -> None:
     root, plan = _repo(tmp_path)
     first = emit_script(
         plan, repo_root=root, session_id=_SESSION, script_path=str(tmp_path / "r1.workflow.mjs"),
@@ -98,7 +99,7 @@ def test_same_session_reemit_mints_disjoint_group_slice_prefixes(tmp_path):
     assert a.isdisjoint(b), f"re-emit reuses a frozen group slice id: {sorted(a & b)}"
 
 
-def test_group_prep_halt_leaves_the_groups_rows_owing_review():
+def test_group_prep_halt_leaves_the_groups_rows_owing_review() -> None:
     run_text = (
         "checkpoint(wave 1): 1 rows — D0\n"
         f"{{halted: '{GROUP_PREP_HALT} (freeze of 620dde2b-p.g0 failed: slice_id already names a "
@@ -113,7 +114,7 @@ def test_group_prep_halt_leaves_the_groups_rows_owing_review():
     )
 
 
-def test_group_prep_halt_with_owing_review_strikes_only_the_named_rows():
+def test_group_prep_halt_with_owing_review_strikes_only_the_named_rows() -> None:
     run_text = (
         "checkpoint(wave 1): 2 rows — D0, X0\n"
         f'{{"halted": "{GROUP_PREP_HALT} (freeze failed)", "owing_review": ["X0"]}}\n'

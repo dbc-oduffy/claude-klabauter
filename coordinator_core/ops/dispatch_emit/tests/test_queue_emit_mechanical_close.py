@@ -15,6 +15,7 @@ from coordinator_core.ops.dispatch_emit import queue_emit
 from coordinator_core.ops.dispatch_emit.queue_emit import emit_queue_script
 
 from .conftest import REVIEW_KW
+import pytest
 
 _FIXTURE_PROFILE_DIR = Path(__file__).parent / "fixtures" / "queue-profiles"
 
@@ -61,7 +62,7 @@ def _distinct(i: int) -> str:
     return f"A distinct rule number {i} that nobody has written down anywhere else."
 
 
-def test_limit_two_with_three_covered_duplicates_admits_both_distinct_rows(tmp_path):
+def test_limit_two_with_three_covered_duplicates_admits_both_distinct_rows(tmp_path: Path) -> None:
     repo, queue, run_dir, pdir = _lessons_repo(tmp_path, limit=2)
     archived = repo / "archive" / "lessons" / "2026-09"
     archived.mkdir(parents=True)
@@ -86,7 +87,7 @@ def test_limit_two_with_three_covered_duplicates_admits_both_distinct_rows(tmp_p
     ]
 
 
-def test_open_duplicates_keep_the_oldest_and_the_limit_counts_survivors(tmp_path):
+def test_open_duplicates_keep_the_oldest_and_the_limit_counts_survivors(tmp_path: Path) -> None:
     repo, queue, run_dir, pdir = _lessons_repo(tmp_path, limit=2)
     for i in range(3):
         _row(queue, f"dup{i}.yaml", created=f"2026-08-0{i + 1}")
@@ -100,7 +101,7 @@ def test_open_duplicates_keep_the_oldest_and_the_limit_counts_survivors(tmp_path
     assert sorted(c["row_id"] for c in emission.receipt_extras["mechanically_closed"]) == ["dup1", "dup2"]
 
 
-def test_no_closable_row_changes_nothing_on_disk_and_spawns_nothing(tmp_path, monkeypatch):
+def test_no_closable_row_changes_nothing_on_disk_and_spawns_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, queue, run_dir, pdir = _lessons_repo(tmp_path, limit=None)
     for i in range(5):
         _row(queue, f"r{i}.yaml", body=_distinct(i))
@@ -117,7 +118,7 @@ def test_no_closable_row_changes_nothing_on_disk_and_spawns_nothing(tmp_path, mo
     assert len(_batched_row_ids(emission.script)) == 5
 
 
-def test_lessons_emit_selects_the_whole_eligible_set_and_writes_handback_marks(tmp_path, monkeypatch):
+def test_lessons_emit_selects_the_whole_eligible_set_and_writes_handback_marks(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo, queue, run_dir, pdir = _lessons_repo(tmp_path, limit=2)
     _row(queue, "a.yaml", body=_distinct(1))
     seen: dict = {}
@@ -133,7 +134,7 @@ def test_lessons_emit_selects_the_whole_eligible_set_and_writes_handback_marks(t
     assert seen["write_handback_marks"] is True
 
 
-def test_a_profile_outside_the_mechanical_set_keeps_its_limit_at_selection(tmp_path, monkeypatch):
+def test_a_profile_outside_the_mechanical_set_keeps_its_limit_at_selection(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     (repo / ".git").mkdir(parents=True)
     queue = repo / "state" / "bug-backlog"

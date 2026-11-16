@@ -11,6 +11,7 @@ import pytest
 
 from coordinator_core.benchmarks.process_time import in_process_time_ms
 from coordinator_core.ops.generator_census import store
+from pathlib import Path
 
 declarations = pytest.importorskip("coordinator_core.ops.generator_census.declarations")
 
@@ -33,19 +34,19 @@ def _entries(n: int = 3):
     return out
 
 
-def test_round_trip(tmp_path):
+def test_round_trip(tmp_path: Path) -> None:
     entries = _entries()
     store.save(tmp_path, HEADER, entries)
     assert store.load(tmp_path, HEADER) == entries
 
 
-def test_negative_entries_survive(tmp_path):
+def test_negative_entries_survive(tmp_path: Path) -> None:
     store.save(tmp_path, HEADER, {"a" * 40: None})
     loaded = store.load(tmp_path, HEADER)
     assert loaded == {"a" * 40: None}
 
 
-def test_malformed_marker_survives(tmp_path):
+def test_malformed_marker_survives(tmp_path: Path) -> None:
     d = declarations.Declarations(
         generates=declarations.MALFORMED,
         mutates=None,
@@ -57,18 +58,18 @@ def test_malformed_marker_survives(tmp_path):
     assert store.load(tmp_path, HEADER)["b" * 40].generates is declarations.MALFORMED
 
 
-def test_absent_reads_empty(tmp_path):
+def test_absent_reads_empty(tmp_path: Path) -> None:
     assert store.load(tmp_path / "nope", HEADER) == {}
 
 
-def test_truncated_blob_reads_empty(tmp_path):
+def test_truncated_blob_reads_empty(tmp_path: Path) -> None:
     store.save(tmp_path, HEADER, _entries())
     path = tmp_path / store.CACHE_FILENAME
     path.write_bytes(path.read_bytes()[:-20])
     assert store.load(tmp_path, HEADER) == {}
 
 
-def test_garbage_reads_empty(tmp_path):
+def test_garbage_reads_empty(tmp_path: Path) -> None:
     (tmp_path / store.CACHE_FILENAME).write_bytes(b"\xff\x00not json")
     assert store.load(tmp_path, HEADER) == {}
 
@@ -76,25 +77,25 @@ def test_garbage_reads_empty(tmp_path):
 @pytest.mark.parametrize(
     "field,value", [("extractor", "zzz"), ("py", [3, 12]), ("machinery", "cafe")]
 )
-def test_each_header_field_mismatch_reads_empty(tmp_path, field, value):
+def test_each_header_field_mismatch_reads_empty(tmp_path: Path, field, value) -> None:
     store.save(tmp_path, HEADER, _entries())
     assert store.load(tmp_path, {**HEADER, field: value}) == {}
 
 
-def test_tuple_header_matches_after_json_round_trip(tmp_path):
+def test_tuple_header_matches_after_json_round_trip(tmp_path: Path) -> None:
     header = {**HEADER, "py": (3, 11)}
     store.save(tmp_path, header, _entries())
     assert store.load(tmp_path, header) != {}
 
 
-def test_save_prunes_to_given_keys(tmp_path):
+def test_save_prunes_to_given_keys(tmp_path: Path) -> None:
     store.save(tmp_path, HEADER, _entries(5))
     keep = {k: v for k, v in list(_entries(5).items())[:2]}
     store.save(tmp_path, HEADER, keep)
     assert set(store.load(tmp_path, HEADER)) == set(keep)
 
 
-def test_interleaved_writers_leave_loadable_file(tmp_path):
+def test_interleaved_writers_leave_loadable_file(tmp_path: Path) -> None:
     a = {f"{i:040x}": _decls("a") for i in range(200)}
     b = {f"{i:040x}": _decls("b") for i in range(100, 400)}
     threads = [
@@ -109,7 +110,7 @@ def test_interleaved_writers_leave_loadable_file(tmp_path):
     assert [p.name for p in tmp_path.iterdir()] == [store.CACHE_FILENAME]
 
 
-def test_unwritable_dir_is_noop_with_one_stderr_line(tmp_path, capsys):
+def test_unwritable_dir_is_noop_with_one_stderr_line(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     blocker = tmp_path / "file"
     blocker.write_text("x")
     store.save(blocker / "cache", HEADER, _entries())
@@ -118,7 +119,7 @@ def test_unwritable_dir_is_noop_with_one_stderr_line(tmp_path, capsys):
     assert store.load(blocker / "cache", HEADER) == {}
 
 
-def test_unchanged_entries_skip_rewrite(tmp_path):
+def test_unchanged_entries_skip_rewrite(tmp_path: Path) -> None:
     store.save(tmp_path, HEADER, _entries())
     path = tmp_path / store.CACHE_FILENAME
     os.utime(path, (1, 1))
@@ -126,13 +127,13 @@ def test_unchanged_entries_skip_rewrite(tmp_path):
     assert os.stat(path).st_mtime == 1
 
 
-def test_extractor_digest_is_stable_hex():
+def test_extractor_digest_is_stable_hex() -> None:
     d = store.extractor_digest()
     assert d == store.extractor_digest()
     assert len(d) == 40 and int(d, 16) >= 0
 
 
-def test_load_budget_6000_entries(tmp_path):
+def test_load_budget_6000_entries(tmp_path: Path) -> None:
     entries = {f"{i:040x}": (_decls(str(i)) if i % 2 else None) for i in range(6000)}
     store.save(tmp_path, HEADER, entries)
     assert len(store.load(tmp_path, HEADER)) == 6000
@@ -142,7 +143,7 @@ def test_load_budget_6000_entries(tmp_path):
     assert figure["process_time_ms"] <= 20, (figure, threads)
 
 
-def test_file_is_plain_json(tmp_path):
+def test_file_is_plain_json(tmp_path: Path) -> None:
     store.save(tmp_path, HEADER, _entries())
     blob = json.loads((tmp_path / store.CACHE_FILENAME).read_bytes())
     assert set(blob) == {"header", "entries"}

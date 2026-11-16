@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.ops import workday_surface_stale_stash_entries as mod
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -16,7 +17,7 @@ pytestmark = [
 ]
 
 
-def _git(args, cwd, check=True):
+def _git(args, cwd, check: bool = True):
     return subprocess.run(
         ["git", *args],
         cwd=str(cwd),
@@ -28,7 +29,7 @@ def _git(args, cwd, check=True):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "--quiet"], root)
@@ -40,13 +41,13 @@ def repo(tmp_path):
     return root
 
 
-def _make_stash(repo, filename, content):
+def _make_stash(repo, filename, content) -> None:
     (repo / filename).write_text(content, encoding="utf-8")
     _git(["add", filename], repo)
     _git(["stash", "push", "--quiet", "-u", "--", filename], repo)
 
 
-def test_no_stashes_is_silent(repo):
+def test_no_stashes_is_silent(repo) -> None:
     result = mod.surface_stale_stash_entries(str(repo))
     assert result == {
         "threshold_days": 7,
@@ -57,7 +58,7 @@ def test_no_stashes_is_silent(repo):
     }
 
 
-def test_fresh_stashes_only_reports_total_but_no_stale_entries(repo):
+def test_fresh_stashes_only_reports_total_but_no_stale_entries(repo) -> None:
     _make_stash(repo, "a.txt", "fresh work\n")
     result = mod.surface_stale_stash_entries(str(repo), threshold_days=7)
     assert result["total"] == 1
@@ -65,7 +66,7 @@ def test_fresh_stashes_only_reports_total_but_no_stale_entries(repo):
     assert result["error"] is None
 
 
-def test_stale_stash_present_is_reported(repo):
+def test_stale_stash_present_is_reported(repo) -> None:
     _make_stash(repo, "b.txt", "abandoned work\n")
 
     old_ts = int((datetime.now(timezone.utc) - timedelta(days=10)).timestamp())
@@ -87,7 +88,7 @@ def test_stale_stash_present_is_reported(repo):
     assert result["advice"] == mod.ADVICE
 
 
-def test_threshold_boundary_just_under_and_just_over(repo):
+def test_threshold_boundary_just_under_and_just_over(repo) -> None:
     now = datetime.now(timezone.utc)
     just_under = int((now - timedelta(days=7) + timedelta(seconds=60)).timestamp())
     just_over = int((now - timedelta(days=7) - timedelta(seconds=60)).timestamp())
@@ -106,7 +107,7 @@ def test_threshold_boundary_just_under_and_just_over(repo):
     assert refs == {"stash@{1}"}
 
 
-def test_malformed_line_does_not_crash_and_is_excluded(repo):
+def test_malformed_line_does_not_crash_and_is_excluded(repo) -> None:
     old_ts = int((datetime.now(timezone.utc) - timedelta(days=30)).timestamp())
     stdout = (
         "not a stash line at all\n"
@@ -125,7 +126,7 @@ def test_malformed_line_does_not_crash_and_is_excluded(repo):
     assert result["error"] is None
 
 
-def test_non_repo_repo_root_degrades_quietly_never_raises(tmp_path):
+def test_non_repo_repo_root_degrades_quietly_never_raises(tmp_path: Path) -> None:
     non_repo = tmp_path / "not-a-git-repo"
     non_repo.mkdir()
     result = mod.surface_stale_stash_entries(str(non_repo))
@@ -134,11 +135,11 @@ def test_non_repo_repo_root_degrades_quietly_never_raises(tmp_path):
     assert result["error"] is not None
 
 
-def test_missing_repo_root_raises_structured_error(tmp_path):
+def test_missing_repo_root_raises_structured_error(tmp_path: Path) -> None:
     with pytest.raises(mod.StaleStashEntriesError, match="repo_root"):
         mod.surface_stale_stash_entries(str(tmp_path / "no-such-repo"))
 
 
-def test_default_threshold_is_seven_days(repo):
+def test_default_threshold_is_seven_days(repo) -> None:
     result = mod.surface_stale_stash_entries(str(repo))
     assert result["threshold_days"] == 7

@@ -2,7 +2,9 @@
 guard: a dispatched agent's Write/Edit into a registered fleet repo other than
 its own run repo is flagged unless the run's cross-repo grant ledger names the
 path. The write is recoverable by redo (``deny_registry``), so the policy point
-downgrades the verdict to an advisory; the write proceeds.
+(``machine_profile.apply_guard_level``) downgrades the deny envelope to an
+advisory and the write proceeds. The reason text therefore states the fact and
+the route, never a block: it is what the agent reads on a write that lands.
 
 The emit-time check (``cross_repo_write_refusal.check_cross_repo_writes``)
 reads declared ``writes:``; it never sees an agent's actual tool calls. This
@@ -44,8 +46,9 @@ GENERATES = []
 _PATH_KEYS = ("file_path", "notebook_path")
 
 _DENY_REASON = (
-    "BLOCKED {path}: outside this run's repo ({run_repo}).\n"
-    "Use instead: declare the path in the row's `writes:` and re-emit with cross-repo approval."
+    "{path} is outside this run's repo ({run_repo}) and holds no cross-repo grant.\n"
+    "Use instead: declare it in the row's `writes:` and re-emit with cross-repo approval, "
+    "or, for an EM-authorized audit write, in the row's `cross_repo_audit_writes:`."
 )
 
 

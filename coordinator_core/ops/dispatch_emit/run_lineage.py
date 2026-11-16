@@ -12,12 +12,14 @@ from __future__ import annotations
 
 import re
 from pathlib import Path, PurePosixPath
-from typing import Iterable
+from typing import Iterable, Optional
 
 from coordinator_core.ops._path_guard import safe_id
 
 
-def chain_kin(root: Path, run_id: str, candidates: Iterable[str]) -> set[str]:
+def chain_kin(
+    root: Path, run_id: str, candidates: Iterable[str], held_records: Optional[list[dict]] = None
+) -> set[str]:
     """The `candidates` that are `run_id`'s own chain: a record under `run_id` plus a `-` suffix (a
     stage call with a suffixed id), runs bound to the same sizing (a chained
     run's `chained_from` ancestor and descendants carry the sizing it hands on) and any run on its

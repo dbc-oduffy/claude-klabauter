@@ -7,12 +7,16 @@ import sys
 from pathlib import Path
 
 import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _ENTRY = Path(__file__).resolve().parents[1] / "machine-local.py"
 
 
 @pytest.fixture
-def entry(tmp_path, monkeypatch):
+def entry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     (tmp_path / "registry.toml").write_text('[demo]\nfoo = "bar"\n', encoding="utf-8")
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(tmp_path))
     spec = importlib.util.spec_from_file_location("machine_local_entry", _ENTRY)
@@ -21,25 +25,25 @@ def entry(tmp_path, monkeypatch):
     return mod
 
 
-def test_keys_lists_key(entry, capsys):
+def test_keys_lists_key(entry, capsys: pytest.CaptureFixture[str]) -> None:
     assert entry.main(["keys"]) == 0
     assert "demo.foo" in capsys.readouterr().out.split()
 
 
-def test_get_prints_value(entry, capsys):
+def test_get_prints_value(entry, capsys: pytest.CaptureFixture[str]) -> None:
     assert entry.main(["get", "demo.foo"]) == 0
     assert capsys.readouterr().out.strip() == "bar"
 
 
-def test_has_missing_returns_1(entry):
+def test_has_missing_returns_1(entry) -> None:
     assert entry.main(["has", "demo.missing"]) == 1
 
 
-def test_help_returns_0(entry):
+def test_help_returns_0(entry) -> None:
     assert entry.main(["--help"]) == 0
 
 
-def test_argv_restored(entry):
+def test_argv_restored(entry) -> None:
     before = list(sys.argv)
     entry.main(["keys"])
     entry.main(["has", "demo.missing"])
@@ -47,24 +51,24 @@ def test_argv_restored(entry):
     assert sys.argv == before
 
 
-def test_no_execv():
+def test_no_execv() -> None:
     assert "execv" not in _ENTRY.read_text(encoding="utf-8")
 
 
-def test_kernel_is_loaded_once_per_process(entry):
+def test_kernel_is_loaded_once_per_process(entry) -> None:
     entry.main(["keys"])
     first = entry._impl
     entry.main(["has", "demo.foo"])
     assert first is not None and entry._impl is first
 
 
-def test_read_verb_clears_the_in_process_budget(entry):
+def test_read_verb_clears_the_in_process_budget(entry) -> None:
     entry.main(["get", "demo.foo"])
     impl = entry._impl
     assert impl._scan_budget_s is None and impl._deadline_at is None
 
 
-def test_read_verb_arms_the_budget_while_it_runs(entry, monkeypatch):
+def test_read_verb_arms_the_budget_while_it_runs(entry, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
     impl = entry._load_impl()
     monkeypatch.setattr(impl, "main", lambda: seen.update(scan=impl._scan_budget_s, at=impl._deadline_at) or 0)
@@ -72,7 +76,7 @@ def test_read_verb_arms_the_budget_while_it_runs(entry, monkeypatch):
     assert seen["scan"] == impl._SCAN_BUDGET_S and seen["at"] is not None
 
 
-def test_write_verb_leaves_the_budget_unarmed(entry, monkeypatch):
+def test_write_verb_leaves_the_budget_unarmed(entry, monkeypatch: pytest.MonkeyPatch) -> None:
     seen = {}
     impl = entry._load_impl()
     monkeypatch.setattr(impl, "main", lambda: seen.update(scan=impl._scan_budget_s, at=impl._deadline_at) or 0)
@@ -80,7 +84,7 @@ def test_write_verb_leaves_the_budget_unarmed(entry, monkeypatch):
     assert seen == {"scan": None, "at": None}
 
 
-def test_warm_stalled_scan_is_exit_4_not_unset(entry, tmp_path, monkeypatch, capsys):
+def test_warm_stalled_scan_is_exit_4_not_unset(entry, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     root = tmp_path / "roots"
     for i in range(4):
         c = root / f"copy{i}"
@@ -96,11 +100,11 @@ def test_warm_stalled_scan_is_exit_4_not_unset(entry, tmp_path, monkeypatch, cap
     assert cap.err.startswith("machine-local-timeout:") and "fallback" not in cap.out
 
 
-def test_unset_key_stays_exit_1_warm(entry):
+def test_unset_key_stays_exit_1_warm(entry) -> None:
     assert entry.main(["get", "demo.missing"]) == 1
 
 
-def test_machine_local_is_on_both_allowlist_keys():
+def test_machine_local_is_on_both_allowlist_keys() -> None:
     import json
 
     path = Path(__file__).resolve().parents[3] / "coordinator_core" / "ops" / "warm_entrypoint_allowlist.json"
@@ -109,7 +113,7 @@ def test_machine_local_is_on_both_allowlist_keys():
     assert "machine-local" in data["door_eligible_entrypoints"]
 
 
-def test_machine_local_passes_the_serve_classifier():
+def test_machine_local_passes_the_serve_classifier() -> None:
     from coordinator_core.warm.serve_classifier import classify_entrypoint
 
     verdict = classify_entrypoint("machine-local")
@@ -117,7 +121,7 @@ def test_machine_local_passes_the_serve_classifier():
     assert not verdict.findings
 
 
-def test_budget_manifest_carries_the_warm_get_row():
+def test_budget_manifest_carries_the_warm_get_row() -> None:
     import json
 
     path = Path(__file__).resolve().parents[3] / "coordinator_core" / "benchmarks" / "budget-manifest.json"
@@ -125,7 +129,7 @@ def test_budget_manifest_carries_the_warm_get_row():
     assert row["target_ms"] == 500 and row["spawn_count_budget"] == 0
 
 
-def test_entrypoint_read_verbs_match_the_kernel_main_guard(entry):
+def test_entrypoint_read_verbs_match_the_kernel_main_guard(entry) -> None:
     import re
 
     kernel = (_ENTRY.parents[1] / "templates" / "bin" / "_machine_local.py").read_text(encoding="utf-8")

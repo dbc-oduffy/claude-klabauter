@@ -10,6 +10,7 @@ import pytest
 from coordinator_core import _settings_home
 from coordinator_core.hooks import sweep_boot
 from coordinator_core.install import forwarder_self_heal
+from pathlib import Path
 
 
 def _spy_self_heal(monkeypatch) -> list:
@@ -26,7 +27,7 @@ def _arm_self_heal(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(sweep_boot, "_resolve_this_repo_root", lambda: str(tmp_path))
 
 
-def test_handler_refuses_loudly_when_settings_home_is_the_forbidden_real_one(monkeypatch, tmp_path):
+def test_handler_refuses_loudly_when_settings_home_is_the_forbidden_real_one(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     real = tmp_path / "real-settings-home"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(real))
     monkeypatch.setenv(_settings_home.FORBID_REAL_SETTINGS_HOME_ENV, str(real))
@@ -37,7 +38,7 @@ def test_handler_refuses_loudly_when_settings_home_is_the_forbidden_real_one(mon
     assert calls == []
 
 
-def test_handler_self_heals_an_isolated_settings_home(monkeypatch, tmp_path):
+def test_handler_self_heals_an_isolated_settings_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     isolated = tmp_path / "isolated-settings-home"
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(isolated))
     monkeypatch.setenv(_settings_home.FORBID_REAL_SETTINGS_HOME_ENV, str(tmp_path / "elsewhere"))
@@ -47,7 +48,7 @@ def test_handler_self_heals_an_isolated_settings_home(monkeypatch, tmp_path):
     assert calls == [1]
 
 
-def test_default_test_environment_never_self_heals(monkeypatch, tmp_path):
+def test_default_test_environment_never_self_heals(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setenv("COORDINATOR_ORIENTATION_SELFHEAL_OFF", "1")
     monkeypatch.setenv("COORDINATOR_SESSION_REAP_OFF", "1")
     monkeypatch.setenv("COORDINATOR_INDEX_RESYNC_DRAIN_OFF", "1")
@@ -57,7 +58,7 @@ def test_default_test_environment_never_self_heals(monkeypatch, tmp_path):
     assert calls == []
 
 
-def test_default_settings_home_is_not_the_real_one():
+def test_default_settings_home_is_not_the_real_one() -> None:
     forbidden = os.environ.get(_settings_home.FORBID_REAL_SETTINGS_HOME_ENV)
     if not forbidden:
         pytest.skip("real settings home unresolvable on this box; guard inert")

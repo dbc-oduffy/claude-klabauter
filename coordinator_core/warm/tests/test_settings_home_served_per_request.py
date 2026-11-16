@@ -28,6 +28,8 @@ from dataclasses import replace
 
 from coordinator_core.warm import server
 from coordinator_core.warm.caller_context import resolve_caller_context
+from pathlib import Path
+import pytest
 
 
 async def _echo_settings_home(msg, *, caller: str | None = None, corr_id: str | None = None) -> dict:
@@ -40,7 +42,7 @@ def _caller_for(home) -> "server.CallerContext":
     return replace(resolve_caller_context(), settings_home=home)
 
 
-def test_two_requests_each_resolve_their_own_claimed_home(monkeypatch, tmp_path):
+def test_two_requests_each_resolve_their_own_claimed_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("coordinator_core.ipc.dispatch_message", _echo_settings_home)
 
     home_a = str(tmp_path / "home-a")
@@ -57,7 +59,7 @@ def test_two_requests_each_resolve_their_own_claimed_home(monkeypatch, tmp_path)
     assert result_b["result"] == home_b
 
 
-def test_a_later_request_cannot_observe_an_earlier_ones_home(monkeypatch, tmp_path):
+def test_a_later_request_cannot_observe_an_earlier_ones_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     from coordinator_core._settings_home import settings_home as _resolve_settings_home
 
@@ -77,7 +79,7 @@ def test_a_later_request_cannot_observe_an_earlier_ones_home(monkeypatch, tmp_pa
     assert result_none["result"] == ambient_home
 
 
-def test_no_caller_at_all_is_unaffected(monkeypatch, tmp_path):
+def test_no_caller_at_all_is_unaffected(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     from coordinator_core._settings_home import settings_home as _resolve_settings_home
 
@@ -101,7 +103,7 @@ def test_no_caller_at_all_is_unaffected(monkeypatch, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_a_leaked_home_is_repaired_before_the_next_request_binds(monkeypatch, tmp_path):
+def test_a_leaked_home_is_repaired_before_the_next_request_binds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     pristine = str(tmp_path / "pristine-home")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", pristine)
     monkeypatch.setattr("coordinator_core.ipc.dispatch_message", _echo_settings_home)
@@ -116,7 +118,7 @@ def test_a_leaked_home_is_repaired_before_the_next_request_binds(monkeypatch, tm
     assert result["result"] == pristine
 
 
-def test_a_worker_whose_spawner_set_no_home_repairs_by_unsetting(monkeypatch, tmp_path):
+def test_a_worker_whose_spawner_set_no_home_repairs_by_unsetting(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr("coordinator_core.ipc.dispatch_message", _echo_settings_home)
     monkeypatch.delenv("COORDINATOR_SETTINGS_HOME", raising=False)
     monkeypatch.setattr(server, "_worker_pristine_environ", dict(os.environ))
@@ -127,7 +129,7 @@ def test_a_worker_whose_spawner_set_no_home_repairs_by_unsetting(monkeypatch, tm
     assert "COORDINATOR_SETTINGS_HOME" not in os.environ
 
 
-def test_repair_is_inert_in_a_process_that_never_captured(monkeypatch, tmp_path):
+def test_repair_is_inert_in_a_process_that_never_captured(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     ambient = str(tmp_path / "ambient-home")
     monkeypatch.setattr(server, "_worker_pristine_environ", None)
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", ambient)
@@ -137,7 +139,7 @@ def test_repair_is_inert_in_a_process_that_never_captured(monkeypatch, tmp_path)
     assert os.environ["COORDINATOR_SETTINGS_HOME"] == ambient
 
 
-def test_worker_process_init_captures_the_pristine_disposition(monkeypatch, tmp_path):
+def test_worker_process_init_captures_the_pristine_disposition(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     captured = str(tmp_path / "spawner-home")
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", captured)
     monkeypatch.setattr(server, "_bind_null_std_streams", lambda: None)

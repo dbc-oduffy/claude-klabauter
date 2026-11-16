@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit import in_run_widen
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+from pathlib import Path
 
 RUN = "ask-20261029T000000-abc123"
 REL = "state/sizings/2026-10-29-widen.yaml"
@@ -20,7 +21,7 @@ PATH = "pkg/scripts/install_plugin.py"
 
 
 @pytest.fixture
-def run(tmp_path):
+def run(tmp_path: Path) -> tuple[Path, Path]:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     doc = {
@@ -39,7 +40,7 @@ def _revise(root, **params):
     return rl._handler({"run_id": RUN, **params}, repo_root=root)
 
 
-def test_widened_is_recorded_where_the_resumed_run_reads_it(run):
+def test_widened_is_recorded_where_the_resumed_run_reads_it(run) -> None:
     repo, d = run
     out = _revise(repo, widened=[{"row": "C1", "path": PATH}])
     assert out["ok"] is True and out["widened"] == 1 and out["refused"] == []
@@ -47,20 +48,20 @@ def test_widened_is_recorded_where_the_resumed_run_reads_it(run):
     assert [json.loads(x) for x in lines] == [{"row": "C1", "path": PATH}]
 
 
-def test_a_malformed_widened_item_is_refused_not_dropped(run):
+def test_a_malformed_widened_item_is_refused_not_dropped(run) -> None:
     repo, d = run
     out = _revise(repo, widened=[{"row": "C1", "path": "../escape.py"}])
     assert out["ok"] is False and out["refused"][0]["input"] == "widened"
     assert not (d / in_run_widen.WIDEN_RECORD_NAME).exists()
 
 
-def test_an_unknown_key_is_refused_naming_it_and_the_accepted_keys(run):
+def test_an_unknown_key_is_refused_naming_it_and_the_accepted_keys(run) -> None:
     repo, _d = run
     out = _revise(repo, widenned=[{"row": "C1", "path": PATH}])
     assert "params.widenned is not accepted" in out["error"] and "widened" in out["error"]
 
 
-def test_revise_next_action_params_are_accepted_fields():
+def test_revise_next_action_params_are_accepted_fields() -> None:
     emitted = set(re.findall(r"[{,]\s*(\w+):", ask_compose.REVISE_NEXT_ACTION_JS.split("params:", 1)[1]))
     emitted |= {"widened"}
     assert emitted <= {f.name for f in rl._PARAMS}

@@ -6,9 +6,10 @@ import pytest
 
 from coordinator_core.resource_lifecycle.errors import AllowanceExceeded
 from coordinator_core.resource_lifecycle.store import BoundedStore
+from pathlib import Path
 
 
-def test_write_past_allowance_refused_and_history_intact(tmp_path):
+def test_write_past_allowance_refused_and_history_intact(tmp_path: Path) -> None:
     p = tmp_path / "s.jsonl"
     store = BoundedStore(p, max_bytes=40)
     store.write({"n": 1})
@@ -22,7 +23,7 @@ def test_write_past_allowance_refused_and_history_intact(tmp_path):
     assert list(store.read()) == [{"n": 1}, {"n": 2}]
 
 
-def test_exact_fit_accepted_and_one_more_byte_refused(tmp_path):
+def test_exact_fit_accepted_and_one_more_byte_refused(tmp_path: Path) -> None:
     p = tmp_path / "s.jsonl"
     line = len(b'{"n":1}\n')
     store = BoundedStore(p, max_bytes=line)
@@ -32,7 +33,7 @@ def test_exact_fit_accepted_and_one_more_byte_refused(tmp_path):
     assert BoundedStore(p, max_bytes=line - 1).size == line
 
 
-def test_reopen_counts_existing_bytes(tmp_path):
+def test_reopen_counts_existing_bytes(tmp_path: Path) -> None:
     p = tmp_path / "s.jsonl"
     BoundedStore(p, max_bytes=100).write({"n": 1})
     again = BoundedStore(p, max_bytes=10)
@@ -41,6 +42,6 @@ def test_reopen_counts_existing_bytes(tmp_path):
     assert list(again.read()) == [{"n": 1}]
 
 
-def test_no_destructive_api():
+def test_no_destructive_api() -> None:
     for name in ("truncate", "rotate", "delete", "clear", "evict", "remove"):
         assert not hasattr(BoundedStore, name)

@@ -453,6 +453,55 @@ def test_wave_test_scopes_equals_the_per_wave_terminal_test_scope(tmp_path):
     assert "pkg/tests/test_c.py" not in got["0"] and "pkg/tests/test_c.py" in got["1"]
 
 
+def test_wave_test_scopes_a_later_declared_higher_priority_candidate_replaces_the_disk_one(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ask_stage import _wave_test_scopes
+
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "test_b.py").write_text("", encoding="utf-8")
+    waves = [
+        [_row("W0", ["pkg/b.py", "pkg/other.py"])],
+        [_row("W1", ["pkg/tests/test_b.py", "pkg/tests/test_other.py"])],
+        [_row("W2", ["pkg/z.py"])],
+    ]
+    got = _wave_test_scopes(waves, tmp_path)
+    assert got == _naive_wave_test_scopes(waves, tmp_path)
+    assert got["0"] == ("pkg/test_b.py",)
+    assert got["1"] == ("pkg/tests/test_b.py", "pkg/tests/test_other.py")
+
+
+def test_wave_test_scopes_a_prefix_without_a_declared_write_has_no_scope_even_with_a_surface(tmp_path):
+    from coordinator_core.ops.dispatch_emit.ask_stage import _wave_test_scopes
+    from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED
+
+    (tmp_path / "pkg").mkdir()
+    (tmp_path / "pkg" / "test_a.py").write_text("", encoding="utf-8")
+    first = _row("W0", UNDECLARED)._replace(surface="pkg/a.py")
+    waves = [[first], [_row("W1", ["pkg/b.py"])], [_row("W2", ["pkg/c.py"])]]
+    got = _wave_test_scopes(waves, tmp_path)
+    assert got == _naive_wave_test_scopes(waves, tmp_path)
+    assert "0" not in got and got["1"] == ("pkg/test_a.py",)
+
+
+def test_widen_with_existing_tests_shares_one_probe_memo_across_rows(tmp_path, monkeypatch):
+    import os
+
+    from coordinator_core.ops.dispatch_emit import ask_stage
+
+    (tmp_path / "pkg" / "tests").mkdir(parents=True)
+    (tmp_path / "pkg" / "tests" / "test_a.py").write_text("", encoding="utf-8")
+    rows = [["pkg/a.py"], ["pkg/b.py"], ["pkg/a.py", "pkg/c.py"]]
+    expected = [ask_stage._widen_with_existing_tests(r, tmp_path) for r in rows]
+    assert expected[0] == ["pkg/a.py", "pkg/tests/test_a.py"] and expected[1] == ["pkg/b.py"]
+
+    probed: list[str] = []
+    real = os.path.isfile
+    monkeypatch.setattr(os.path, "isfile", lambda p: probed.append(str(p)) or real(p))
+    shared: dict = {}
+    assert [ask_stage._widen_with_existing_tests(r, tmp_path, shared) for r in rows] == expected
+    assert len(probed) == len(set(probed)) == 3
+    assert ("f", "pkg/tests/test_a.py") in shared
+
+
 def test_wave_test_scopes_is_empty_without_a_testable_write_or_a_second_wave(tmp_path):
     from coordinator_core.ops.dispatch_emit.ask_stage import _wave_test_scopes
     from coordinator_core.ops.dispatch_emit.spine_read import UNDECLARED

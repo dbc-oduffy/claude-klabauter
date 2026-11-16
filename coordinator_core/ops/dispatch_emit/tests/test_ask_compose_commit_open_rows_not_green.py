@@ -22,13 +22,14 @@ from coordinator_core.ops.dispatch_emit.tests.test_reserved_refire_reads_halt_re
     SLICE,
     _slice_sizing,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _OPEN = "else if (_incompleteChunks.length > 0 || _blockedChunks.length > 0) {"
 
 
-def test_open_rows_arm_sits_between_sibling_arm_and_close_job(monkeypatch):
+def test_open_rows_arm_sits_between_sibling_arm_and_close_job(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert script.count(_OPEN) == 1
     branch = script.index("if (_commit && _commit.committed === true) { const _blockedRows")
@@ -38,7 +39,7 @@ def test_open_rows_arm_sits_between_sibling_arm_and_close_job(monkeypatch):
     assert script.index("for (const _uk of Object.keys(_commit.incomplete_reasons") < at
 
 
-def test_open_rows_record_keeps_close_and_fire_beside_params(monkeypatch):
+def test_open_rows_record_keeps_close_and_fire_beside_params(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     arm = script[script.index(_OPEN) :].split("_reviseAndRefire = _mkRevise(); }", 1)[0]
     assert "kind: 'revise_and_refire', op: 'workflow.revise'" in arm
@@ -49,7 +50,7 @@ def test_open_rows_record_keeps_close_and_fire_beside_params(monkeypatch):
     assert "halted: '" not in arm and "REVISE_NEXT_ACTION" not in arm
 
 
-def test_reason_names_landed_rows_open_ahead_of_verdict_fail(monkeypatch):
+def test_reason_names_landed_rows_open_ahead_of_verdict_fail(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     reason = "? 'landed-rows-open' : 'delivery verdict FAIL'"
     assert script.count(reason) == 1
@@ -80,7 +81,7 @@ def _drive_commit_block(monkeypatch, *, incomplete, commit):
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
 @pytest.mark.spawns_process
-def test_credited_chunk_in_commit_reply_is_not_open_and_closes(monkeypatch):
+def test_credited_chunk_in_commit_reply_is_not_open_and_closes(monkeypatch: pytest.MonkeyPatch) -> None:
     got = _drive_commit_block(
         monkeypatch, incomplete=["X"], commit={"committed": True, "credited_chunks": ["X"]}
     )
@@ -89,7 +90,7 @@ def test_credited_chunk_in_commit_reply_is_not_open_and_closes(monkeypatch):
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
 @pytest.mark.spawns_process
-def test_uncredited_incomplete_reason_still_revises_and_refires(monkeypatch):
+def test_uncredited_incomplete_reason_still_revises_and_refires(monkeypatch: pytest.MonkeyPatch) -> None:
     got = _drive_commit_block(
         monkeypatch,
         incomplete=[],
@@ -99,7 +100,7 @@ def test_uncredited_incomplete_reason_still_revises_and_refires(monkeypatch):
 
 
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
-def test_credit_closes_only_the_delivered_row_and_keeps_the_held_row_open(monkeypatch):
+def test_credit_closes_only_the_delivered_row_and_keeps_the_held_row_open(monkeypatch) -> None:
     got = _drive_commit_block(
         monkeypatch, incomplete=["C1", "C2"],
         commit={"committed": True, "credited_chunks": ["C1"], "incomplete_reasons": {"C2": "held: pending"}},
@@ -107,13 +108,13 @@ def test_credit_closes_only_the_delivered_row_and_keeps_the_held_row_open(monkey
     assert got == {"kind": "revise_and_refire", "open": ["C2"]}
 
 
-def test_commit_schema_declares_credited_chunks():
+def test_commit_schema_declares_credited_chunks() -> None:
     from coordinator_core.ops.dispatch_emit.ask_compose import _COMMIT_SCHEMA
 
     assert _COMMIT_SCHEMA["properties"]["credited_chunks"]["items"] == {"type": "string"}
 
 
-def _land_slice(repo):
+def _land_slice(repo) -> None:
     from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 
     rl.start(repo, SLICE)
@@ -123,7 +124,7 @@ def _land_slice(repo):
     status.write_text(json.dumps({"status": "landed", "sha": "abc1234", "run_id": SLICE}), encoding="utf-8")
 
 
-def test_refiring_a_landed_reserved_run_mints_a_residue_run_not_a_refusal(repo, composed):  # noqa: F811
+def test_refiring_a_landed_reserved_run_mints_a_residue_run_not_a_refusal(repo, composed) -> None:  # noqa: F811
     from coordinator_core.ops.dispatch_emit import op
     from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 
@@ -134,7 +135,7 @@ def test_refiring_a_landed_reserved_run_mints_a_residue_run_not_a_refusal(repo, 
     assert rl.read_run(rl.run_dir(repo, reply["run_id"]))[rl.RESUMED_FROM_FIELD] == SLICE
 
 
-def test_reserved_run_still_refuses_a_landed_run_called_directly(tmp_path):
+def test_reserved_run_still_refuses_a_landed_run_called_directly(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import op
 
     status = tmp_path / "scratch" / "warp" / "r1" / "sibling-status.json"
@@ -147,6 +148,6 @@ def test_reserved_run_still_refuses_a_landed_run_called_directly(tmp_path):
         op._reserved_run(tmp_path, "r1", sizing, "state/sizings/s.yaml")
 
 
-def test_close_job_still_composed_for_the_empty_case(monkeypatch):
+def test_close_job_still_composed_for_the_empty_case(monkeypatch: pytest.MonkeyPatch) -> None:
     script = _script(monkeypatch)
     assert "else { _nextAction = { kind: 'close_job', op: null," in script

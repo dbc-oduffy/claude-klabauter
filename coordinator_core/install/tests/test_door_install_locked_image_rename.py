@@ -15,9 +15,10 @@ import shutil
 import pytest
 
 from coordinator_core.install import door_install
+from pathlib import Path
 
 
-def test_replace_possibly_running_image_renames_locked_dest_and_lands_new_content(tmp_path):
+def test_replace_possibly_running_image_renames_locked_dest_and_lands_new_content(tmp_path: Path) -> None:
     source = tmp_path / "source.bin"
     source.write_bytes(b"new-image")
     dest = tmp_path / "dest.bin"
@@ -47,7 +48,7 @@ def test_replace_possibly_running_image_renames_locked_dest_and_lands_new_conten
     assert list(tmp_path.glob("dest.bin.stale-*")) == []
 
 
-def test_replace_possibly_running_image_rolls_back_when_second_copy_also_fails(tmp_path):
+def test_replace_possibly_running_image_rolls_back_when_second_copy_also_fails(tmp_path: Path) -> None:
     source = tmp_path / "source.bin"
     source.write_bytes(b"new-image")
     dest = tmp_path / "dest.bin"
@@ -73,7 +74,7 @@ def test_replace_possibly_running_image_rolls_back_when_second_copy_also_fails(t
     assert not list(tmp_path.glob("dest.bin.stale-*"))
 
 
-def test_replace_possibly_running_image_reraises_permission_error_when_dest_absent(tmp_path):
+def test_replace_possibly_running_image_reraises_permission_error_when_dest_absent(tmp_path: Path) -> None:
     source = tmp_path / "source.bin"
     source.write_bytes(b"new-image")
     dest = tmp_path / "dest.bin"

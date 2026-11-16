@@ -14,17 +14,19 @@ from coordinator_core.benchmarks.percolate_round_ab import (
     _SHIM_SOURCE,
     _write_machine_local_shim,
 )
+from pathlib import Path
+import pytest
 
 
 def _formatted_shim_source() -> str:
     return _SHIM_SOURCE.format(real_bin="/bin/does-not-matter", overrides={})
 
 
-def test_shim_source_is_syntactically_valid_python():
+def test_shim_source_is_syntactically_valid_python() -> None:
     ast.parse(_formatted_shim_source())
 
 
-def test_shim_source_dump_spawn_suppresses_windows_console():
+def test_shim_source_dump_spawn_suppresses_windows_console() -> None:
     tree = ast.parse(_formatted_shim_source())
     run_calls = [
         node
@@ -40,7 +42,7 @@ def test_shim_source_dump_spawn_suppresses_windows_console():
     assert "creationflags" in keyword_names
 
 
-def test_write_machine_local_shim_writes_suppressed_script(tmp_path, monkeypatch):
+def test_write_machine_local_shim_writes_suppressed_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.benchmarks.percolate_round_ab._real_machine_local_exe",
         lambda: "/bin/does-not-matter",

@@ -30,7 +30,7 @@ def _sha(data: bytes) -> str:
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     snap = Path(share_dir(str(tmp_path), SESSION)) / f"{PREFIX}.pre-review"
     snap.mkdir(parents=True)
     for rel, data in SNAPSHOT.items():
@@ -65,24 +65,24 @@ def _call(root, **kw):
     return rr.review_reverify(root, base=BASE, slice_prefix=PREFIX, session_id=SESSION, **kw)
 
 
-def _closed_probe(root):
+def _closed_probe(root) -> None:
     assert _call(root, failing=FAILING, sidecars=SIDECARS, probe="open")["error"] is None
     assert _call(root, failing=FAILING, probe="close")["error"] is None
 
 
-def test_red_before_and_under_probe_but_not_at_base_is_not_pre_existing(world):
+def test_red_before_and_under_probe_but_not_at_base_is_not_pre_existing(world) -> None:
     _closed_probe(world)
     out = _call(world, failing=FAILING, failing_before=FAILING, failing_at_base=[], sidecars=SIDECARS)
     assert out["error"] is None and out["pre_existing"] == []
 
 
-def test_red_in_all_three_is_pre_existing(world):
+def test_red_in_all_three_is_pre_existing(world) -> None:
     _closed_probe(world)
     out = _call(world, failing=FAILING, failing_before=FAILING, failing_at_base=FAILING, sidecars=SIDECARS)
     assert out["error"] is None and out["pre_existing"] == FAILING
 
 
-def test_absent_failing_at_base_vouches_for_nothing(world):
+def test_absent_failing_at_base_vouches_for_nothing(world) -> None:
     _closed_probe(world)
     out = _call(world, failing=FAILING, failing_before=FAILING, sidecars=SIDECARS)
     assert out["error"] is None and out["pre_existing"] == []
@@ -92,7 +92,7 @@ def _mod_bytes(root):
     return (root / "pkg/mod.py").read_bytes()
 
 
-def test_red_at_base_without_probe_is_pre_existing_and_not_reverted(world):
+def test_red_at_base_without_probe_is_pre_existing_and_not_reverted(world) -> None:
     before = _mod_bytes(world)
     out = _call(world, failing=FAILING, failing_at_base=FAILING, sidecars=SIDECARS)
     assert out["error"] is None
@@ -101,7 +101,7 @@ def test_red_at_base_without_probe_is_pre_existing_and_not_reverted(world):
     assert _mod_bytes(world) == before
 
 
-def test_pre_existing_id_implicating_an_applied_finding_is_not_inverted(world):
+def test_pre_existing_id_implicating_an_applied_finding_is_not_inverted(world) -> None:
     before = _mod_bytes(world)
     out = _call(world, failing=FAILING, failing_before=FAILING, failing_at_base=FAILING, sidecars=SIDECARS)
     assert out["pre_existing"] == FAILING and out["reverted"] == []
@@ -111,7 +111,7 @@ def test_pre_existing_id_implicating_an_applied_finding_is_not_inverted(world):
     assert out["pre_existing"] == []
 
 
-def test_red_that_still_fails_after_its_revert_is_pre_existing_on_the_settle_call(world):
+def test_red_that_still_fails_after_its_revert_is_pre_existing_on_the_settle_call(world) -> None:
     first = _call(world, failing=FAILING, failing_at_base=[], sidecars=SIDECARS)
     assert first["error"] is None and first["pre_existing"] == []
     assert [r["tests"] for r in first["reverted"]] == [FAILING]
@@ -122,7 +122,7 @@ def test_red_that_still_fails_after_its_revert_is_pre_existing_on_the_settle_cal
     assert record["pre_existing"] == FAILING
 
 
-def test_unreverted_red_not_at_base_is_still_not_pre_existing(world):
+def test_unreverted_red_not_at_base_is_still_not_pre_existing(world) -> None:
     other = ["tests/test_elsewhere.py::test_other"]
     out = _call(world, failing=FAILING + other, failing_at_base=[], sidecars=SIDECARS)
     assert out["pre_existing"] == [] and out["unattributed"] == other
@@ -132,18 +132,18 @@ def test_unreverted_red_not_at_base_is_still_not_pre_existing(world):
     assert mixed["pre_existing"] == FAILING and mixed["unattributed"] == other
 
 
-def test_at_base_id_outside_failing_is_never_reported(world):
+def test_at_base_id_outside_failing_is_never_reported(world) -> None:
     out = _call(world, failing=FAILING, failing_at_base=["tests/test_x.py::test_z"], sidecars=SIDECARS)
     assert out["pre_existing"] == []
 
 
-def test_record_carries_pre_existing(world):
+def test_record_carries_pre_existing(world) -> None:
     out = _call(world, failing=FAILING, failing_at_base=FAILING, sidecars=SIDECARS)
     record = json.loads((world / out["record"]).read_text(encoding="utf-8"))
     assert record["pre_existing"] == FAILING
 
 
-def test_handler_refuses_non_list_failing_at_base(world):
+def test_handler_refuses_non_list_failing_at_base(world) -> None:
     out = rr._handler(
         {"base": BASE, "slice_prefix": PREFIX, "session_id": SESSION, "failing": FAILING, "failing_at_base": "x"},
         world,

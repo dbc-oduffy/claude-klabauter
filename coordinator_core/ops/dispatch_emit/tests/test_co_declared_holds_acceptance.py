@@ -15,6 +15,7 @@ from coordinator_core.ops.dispatch_emit import co_declared_settle as cds
 from coordinator_core.ops.dispatch_emit import halted_hold_release, own_hunk_stage, release_halted_path
 from coordinator_core.ops.dispatch_emit import halted_hunk_attribution as hha
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -24,7 +25,7 @@ DELIVERY = "DELIVERY.md"
 HALTED = f"ask-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%S')}-8f2097"  # a stale mint stamp frees the hold
 
 
-def _git(root, *args):
+def _git(root, *args) -> str:
     return subprocess.run(
         ["git", *args], cwd=root, check=True, capture_output=True, text=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
@@ -32,13 +33,13 @@ def _git(root, *args):
 
 
 class _World:
-    def __init__(self, root, baseline):
+    def __init__(self, root, baseline) -> None:
         self.root = root
         self.baseline = baseline
 
 
 @pytest.fixture
-def world(tmp_path, monkeypatch):
+def world(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> _World:
     for cmd in (("init", "-q"), ("config", "user.email", "t@t"), ("config", "user.name", "t")):
         _git(tmp_path, *cmd)
     (tmp_path / DELIVERY).write_text("head\n")
@@ -47,14 +48,14 @@ def world(tmp_path, monkeypatch):
     baselines: dict = {}
     monkeypatch.setattr(hha, "_baseline", lambda root, run: baselines.get(run))
 
-    def baseline(run, text):
+    def baseline(run, text) -> None:
         sha = git_objects.write_object(resolve_git_common_dir(tmp_path), b"blob", text.encode())
         baselines[run] = {DELIVERY: sha}
 
     return _World(tmp_path, baseline)
 
 
-def test_two_siblings_co_declaring_delivery_md_both_land_their_own_hunks(world):
+def test_two_siblings_co_declaring_delivery_md_both_land_their_own_hunks(world) -> None:
     repo = world.root
     first_lines, second_lines = "first1\nfirst2\n", "second1\n"
     (repo / DELIVERY).write_bytes(("head\n" + first_lines + second_lines).encode())
@@ -75,7 +76,7 @@ def test_two_siblings_co_declaring_delivery_md_both_land_their_own_hunks(world):
     assert _git(repo, "show", f"HEAD:{DELIVERY}") == "head\n" + first_lines + second_lines
 
 
-def test_a_line_both_siblings_edit_still_holds_the_landing(world):
+def test_a_line_both_siblings_edit_still_holds_the_landing(world) -> None:
     repo = world.root
     (repo / DELIVERY).write_bytes(("both\n").encode())
     world.baseline(FIRST, "head\n")
@@ -84,7 +85,7 @@ def test_a_line_both_siblings_edit_still_holds_the_landing(world):
     assert cds.settle(repo, FIRST, holds) == ({}, holds)
 
 
-def test_a_halted_hold_lands_through_a_per_path_release_with_a_reason(world):
+def test_a_halted_hold_lands_through_a_per_path_release_with_a_reason(world) -> None:
     repo = world.root
     rdir = record_dir(repo, HALTED)
     rdir.mkdir(parents=True)
@@ -130,7 +131,7 @@ def _halted_sibling(root) -> None:
     )
 
 
-def test_land_run_lands_a_halted_hold_only_after_a_per_path_release_with_a_reason(repo):
+def test_land_run_lands_a_halted_hold_only_after_a_per_path_release_with_a_reason(repo) -> None:
     from coordinator_core.ops.dispatch_emit import release_halted_path as rhp
 
     _halted_sibling(repo)

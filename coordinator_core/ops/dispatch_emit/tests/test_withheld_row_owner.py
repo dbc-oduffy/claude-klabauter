@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
+from pathlib import Path
+import pytest
 
 PLAN_REL = "docs/plans/2026-10-15-withheld-owner.md"
 
@@ -33,20 +35,20 @@ _GATE = (
 )
 
 
-def test_transitive_row_inherits_root_gate_owner(tmp_path):
+def test_transitive_row_inherits_root_gate_owner(tmp_path: Path) -> None:
     reply = _stage(tmp_path, _row("U1"), _row("G1", _GATE), _row("T1", dep="G1"))
     by_id = {g["id"]: g for g in reply["gated"]}
     assert by_id["T1"]["owner_repo"] == "other"
     assert by_id["T1"]["closure_key"] == "K"
 
 
-def test_em_rooted_dependent_is_owed_not_gated(tmp_path):
+def test_em_rooted_dependent_is_owed_not_gated(tmp_path: Path) -> None:
     reply = _stage(tmp_path, _row("U1"), _row("E1", "  performer: em\n", ext="md"), _row("T1", dep="E1"))
     assert ("T1", "withheld_by_owed_dependency") in [(o["id"], o["reason"]) for o in reply["owed"]]
     assert "T1" not in [g["id"] for g in reply["gated"]]
 
 
-def test_no_gated_entry_has_empty_owner(tmp_path):
+def test_no_gated_entry_has_empty_owner(tmp_path: Path) -> None:
     pred = tmp_path / "docs" / "plans" / "pred.md"
     pred.parent.mkdir(parents=True, exist_ok=True)
     pred.write_text(
@@ -71,7 +73,7 @@ def test_no_gated_entry_has_empty_owner(tmp_path):
     assert "TH" not in [g["id"] for g in reply["gated"]]
 
 
-def test_judge_engine_clause_excludes_withheld_reasons(monkeypatch, tmp_path):
+def test_judge_engine_clause_excludes_withheld_reasons(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import coordinator_core.ops.dispatch_emit.engine_owned_rows as eor
     from coordinator_core.ops.dispatch_emit.emit import _judge_engine_clause
 

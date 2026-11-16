@@ -6,13 +6,14 @@ from datetime import date
 import pytest
 
 from coordinator_core.architecture_survey import health_ledger
+from pathlib import Path
 
 TODAY = date(2026, 10, 12)
 LEDGER = "# Ledger\r\n\r\n**Last full audit:** 2026-08-06\r\n**Last targeted audit:** 2026-09-01\r\nfoo\r\n"
 
 
 @pytest.fixture
-def ledger(tmp_path, monkeypatch):
+def ledger(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("CAAS_TEST_STATE_ROOT", str(tmp_path))
     p = tmp_path / "health-ledger.md"
     p.write_bytes(LEDGER.encode())
@@ -20,28 +21,28 @@ def ledger(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("mode,state", [("targeted", "current"), ("refresh", "behind")])
-def test_no_write(ledger, mode, state):
+def test_no_write(ledger, mode, state) -> None:
     before = ledger.read_bytes()
     d = health_ledger.stamp_last_full_audit(ledger.parent, mode=mode, index_state=state, today=TODAY)
     assert d.chosen == ("not-a-full-pass" if mode == "targeted" else "index-behind")
     assert ledger.read_bytes() == before
 
 
-def test_full_pass_changes_one_line_and_keeps_crlf(ledger):
+def test_full_pass_changes_one_line_and_keeps_crlf(ledger) -> None:
     d = health_ledger.stamp_last_full_audit(ledger.parent, mode="refresh", index_state="current", today=TODAY)
     assert d.chosen == "stamped"
     assert "2026-08-06" in d.evidence and "2026-10-12" in d.evidence
     assert ledger.read_bytes() == LEDGER.replace("2026-08-06", "2026-10-12").encode()
 
 
-def test_missing_line_is_named_error(ledger):
+def test_missing_line_is_named_error(ledger) -> None:
     ledger.write_text("# nothing\n", encoding="utf-8")
     with pytest.raises(health_ledger.LedgerLineMissing):
         health_ledger.stamp_last_full_audit(ledger.parent, mode="bootstrap", index_state="current", today=TODAY)
     assert ledger.read_text(encoding="utf-8") == "# nothing\n"
 
 
-def test_default_path_is_repo_state_dir(tmp_path, monkeypatch):
+def test_default_path_is_repo_state_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("CAAS_TEST_STATE_ROOT", raising=False)
     monkeypatch.setenv("CLAUDE_HOME", str(tmp_path / "elsewhere"))
     (tmp_path / "state").mkdir()
@@ -50,7 +51,7 @@ def test_default_path_is_repo_state_dir(tmp_path, monkeypatch):
     assert (tmp_path / "state" / "health-ledger.md").read_text(encoding="utf-8") == "**Last full audit:** 2026-10-12\n"
 
 
-def test_dateless_line_with_text_keeps_separator(ledger):
+def test_dateless_line_with_text_keeps_separator(ledger) -> None:
     ledger.write_text("**Last full audit:** never\n", encoding="utf-8")
     health_ledger.stamp_last_full_audit(ledger.parent, mode="refresh", index_state="current", today=TODAY)
     assert ledger.read_text(encoding="utf-8") == "**Last full audit:** 2026-10-12 never\n"

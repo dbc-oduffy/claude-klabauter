@@ -16,6 +16,7 @@ from coordinator_core.ops.dispatch_emit.emit import SeamInputs, compose_script
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 
 from .conftest import REVIEW_KW
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -23,14 +24,14 @@ P1, P2, P3 = "docs/plans/p1.md", "docs/plans/p2.md", "docs/plans/p3.md"
 ABSENT_EDGES = SeamInputs({}, False)
 
 
-def _row(id_, writes, plan=None, reads=()):
+def _row(id_, writes, plan=None, reads=()) -> WaveRow:
     body = f"Spec: {plan} ({id_})\nSummary.\n" if plan else ""
     return WaveRow(
         id=id_, title=f"t-{id_}", surface="s", writes=writes, reads=list(reads), depends_on=[], body=body
     )
 
 
-def _compose(waves, seam=ABSENT_EDGES, plan_path="state/mise-inventory/x.spine.md"):
+def _compose(waves, seam: SeamInputs | None = ABSENT_EDGES, plan_path: str = "state/mise-inventory/x.spine.md") -> str:
     return compose_script(
         waves,
         name="n",
@@ -43,14 +44,14 @@ def _compose(waves, seam=ABSENT_EDGES, plan_path="state/mise-inventory/x.spine.m
     )
 
 
-def _two_plan_waves():
+def _two_plan_waves() -> list[list[WaveRow]]:
     return [
         [_row("P1-C1", ["a.py"], P1), _row("P3-C1", ["z.py"], P3)],
         [_row("P2-C1", ["b.py"], P2, reads=["a.py"]), _row("P3-C2", ["y.py"], P3)],
     ]
 
 
-def test_certified_plans_ride_into_the_leg_params_only_when_given():
+def test_certified_plans_ride_into_the_leg_params_only_when_given() -> None:
     assert "certified_plans" not in _compose(_two_plan_waves())
     script = _compose(_two_plan_waves(), seam=SeamInputs({}, False, (P1, "docs/plans/p9.md")))
     assert 'const _seamCertified = ["docs/plans/p1.md", "docs/plans/p9.md"];' in script
@@ -61,7 +62,7 @@ def _registration(script: str, row_id: str) -> str:
     return next(line for line in script.splitlines() if line.startswith(f"  _rows['{row_id}'] = _runRow("))
 
 
-def test_two_plan_run_emits_the_leg_with_the_pinned_params():
+def test_two_plan_run_emits_the_leg_with_the_pinned_params() -> None:
     script = _compose(_two_plan_waves())
     assert "plan.seam_record" in script
     assert "phase: 'wave-boundary'" in script
@@ -73,7 +74,7 @@ def test_two_plan_run_emits_the_leg_with_the_pinned_params():
     assert "'seam drift at wave ' + n + (finding[p] ? ': ' + finding[p] : '')" in script
 
 
-def test_a_spine_owned_row_never_puts_the_spine_in_the_leg_plans():
+def test_a_spine_owned_row_never_puts_the_spine_in_the_leg_plans() -> None:
     waves = [
         [_row("P1-C1", ["a.py"], P1), _row("G0", ["g.py"])],
         [_row("P2-C1", ["b.py"], P2, reads=["a.py"])],
@@ -82,19 +83,19 @@ def test_a_spine_owned_row_never_puts_the_spine_in_the_leg_plans():
     assert f'const _seamPlans = ["{P1}", "{P2}"];' in script
 
 
-def test_a_run_whose_rows_are_all_spine_owned_emits_no_leg():
+def test_a_run_whose_rows_are_all_spine_owned_emits_no_leg() -> None:
     waves = [[_row("G0", ["g.py"])], [_row("G1", ["h.py"], reads=["g.py"])]]
     assert "plan.seam_record" not in _compose(waves)
 
 
-def test_only_the_row_with_something_to_falsify_waits_on_the_leg():
+def test_only_the_row_with_something_to_falsify_waits_on_the_leg() -> None:
     script = _compose(_two_plan_waves())
     assert "_seamGates[1]" in _registration(script, "P2-C1")
     for unrelated in ("P1-C1", "P3-C1", "P3-C2"):
         assert "_seamGates" not in _registration(script, unrelated)
 
 
-def test_a_row_of_a_plan_naming_a_depends_on_plan_edge_waits_on_the_named_plans_wave():
+def test_a_row_of_a_plan_naming_a_depends_on_plan_edge_waits_on_the_named_plans_wave() -> None:
     seam = SeamInputs({P2: (P1,)}, False)
     waves = [
         [_row("P1-C1", ["a.py"], P1)],
@@ -106,19 +107,19 @@ def test_a_row_of_a_plan_naming_a_depends_on_plan_edge_waits_on_the_named_plans_
     assert "_seamGates" not in _registration(script, "P3-C1")
 
 
-def test_a_held_row_never_awaits_its_own_waves_leg():
+def test_a_held_row_never_awaits_its_own_waves_leg() -> None:
     waves = [[_row("P1-C1", ["a.py"], P1), _row("P2-C1", ["b.py"], P2, reads=["a.py"])]]
     assert "_seamGates[1]" not in _registration(_compose(waves), "P2-C1")
 
 
-def test_the_gate_releases_after_the_wave_commit_and_leg_settle():
+def test_the_gate_releases_after_the_wave_commit_and_leg_settle() -> None:
     script = _compose(_two_plan_waves())
     assert ".then(() => _commitWave(n, ids)).finally(() => _seamRelease[n](" in script
     commit_wave = script.split("async function _commitWave", 1)[1].split("const _seamDrift", 1)[0]
     assert commit_wave.rstrip().endswith("await _seamLeg(n, r.sha);\n  }")
 
 
-def test_the_digest_names_class_both_plans_and_path():
+def test_the_digest_names_class_both_plans_and_path() -> None:
     script = _compose(_two_plan_waves())
     digest = script.split("decision_required:", 1)[1].splitlines()[0]
     assert "d.class + ': ' + d.plans.join(' and ')" in digest
@@ -129,12 +130,12 @@ def test_the_digest_names_class_both_plans_and_path():
 ONE = "docs/plans/one.md"
 
 
-def _single_plan_waves(reads=("a.py",)):
+def _single_plan_waves(reads=("a.py",)) -> list[list[WaveRow]]:
     return [[_row("C1", ["a.py"])], [_row("C2", ["b.py"], reads=list(reads))]]
 
 
 @pytest.mark.parametrize("seam", [SeamInputs({}, False), None])
-def test_a_single_plan_one_wave_run_emits_no_leg_and_matches_a_run_without_seam_inputs(seam):
+def test_a_single_plan_one_wave_run_emits_no_leg_and_matches_a_run_without_seam_inputs(seam) -> None:
     waves = [[_row("C1", ["a.py"]), _row("C2", ["b.py"])]]
     script = _compose(waves, seam, ONE)
     assert "_seam" not in script
@@ -142,7 +143,7 @@ def test_a_single_plan_one_wave_run_emits_no_leg_and_matches_a_run_without_seam_
     assert script == _compose(waves, None, ONE)
 
 
-def test_a_single_plan_two_wave_run_emits_the_leg_and_holds_its_read_after_write_row():
+def test_a_single_plan_two_wave_run_emits_the_leg_and_holds_its_read_after_write_row() -> None:
     script = _compose(_single_plan_waves(), SeamInputs({}, False), ONE)
     assert "plan.seam_record" in script
     assert "'seam:wave-' + n" in script
@@ -150,20 +151,20 @@ def test_a_single_plan_two_wave_run_emits_the_leg_and_holds_its_read_after_write
     assert "_seamGates" not in _registration(script, "C1")
 
 
-def test_a_single_plan_two_wave_run_whose_rows_read_nothing_composes_the_leg_and_holds_nothing():
+def test_a_single_plan_two_wave_run_whose_rows_read_nothing_composes_the_leg_and_holds_nothing() -> None:
     script = _compose(_single_plan_waves(reads=()), SeamInputs({}, False), ONE)
     assert "plan.seam_record" in script
     assert "_seamGates" not in _registration(script, "C2")
 
 
-def test_a_single_plan_run_declaring_capabilities_or_an_edge_holds_its_read_after_write_row():
+def test_a_single_plan_run_declaring_capabilities_or_an_edge_holds_its_read_after_write_row() -> None:
     for seam in (SeamInputs({}, True), SeamInputs({ONE: (P1,)}, False)):
         script = _compose(_single_plan_waves(), seam, ONE)
         assert "plan.seam_record" in script
         assert "_seamGates[1]" in _registration(script, "C2")
 
 
-def test_a_wave_with_no_committable_row_gets_no_gate_and_no_leg_call():
+def test_a_wave_with_no_committable_row_gets_no_gate_and_no_leg_call() -> None:
     waves = [
         [_row("P1-C1", [], P1), _row("P3-C1", [], P3)],
         [_row("P2-C1", ["b.py"], P2), _row("P3-C2", ["y.py"], P3)],
@@ -173,12 +174,12 @@ def test_a_wave_with_no_committable_row_gets_no_gate_and_no_leg_call():
     assert "_seamGates[2] =" in script
 
 
-def test_an_all_empty_write_run_emits_no_leg():
+def test_an_all_empty_write_run_emits_no_leg() -> None:
     script = _compose([[_row("P1-C1", [], P1), _row("P2-C1", [], P2)]])
     assert "_seam" not in script
 
 
-def test_the_review_only_compose_emits_no_leg():
+def test_the_review_only_compose_emits_no_leg() -> None:
     waves = [[_row("P1-C1", ["a.py"], P1), _row("P2-C1", ["b.py"], P2)]]
     script = compose_script(
         waves,
@@ -240,7 +241,7 @@ CLEAN_REPLY = {"verdict": "CLEAN", "per_plan": {}, "findings": []}
 COMMITTED = {"outcome": "committed", "sha": "c0ffee1"}
 
 
-def _run_script(tmp_path, script: str, reply: dict, commit: dict = COMMITTED, repair=None) -> dict:
+def _run_script(tmp_path, script: str, reply: dict, commit: dict | None = COMMITTED, repair=None) -> dict:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
@@ -266,7 +267,7 @@ def _run_script(tmp_path, script: str, reply: dict, commit: dict = COMMITTED, re
 
 
 @_NODE
-def test_drift_keeps_the_consuming_row_from_dispatching_and_lets_unimplicated_rows_run(tmp_path):
+def test_drift_keeps_the_consuming_row_from_dispatching_and_lets_unimplicated_rows_run(tmp_path: Path) -> None:
     out = _run_script(tmp_path, _compose(_two_plan_waves()), DRIFT_REPLY)
     assert "work:P2-C1" not in out["calls"]
     assert "work:P3-C2" in out["calls"]
@@ -281,7 +282,7 @@ def test_drift_keeps_the_consuming_row_from_dispatching_and_lets_unimplicated_ro
 
 
 @_NODE
-def test_a_clean_leg_dispatches_the_held_row(tmp_path):
+def test_a_clean_leg_dispatches_the_held_row(tmp_path: Path) -> None:
     out = _run_script(tmp_path, _compose(_two_plan_waves()), CLEAN_REPLY)
     assert "work:P2-C1" in out["calls"]
     assert out["drift"] == [] and out["notStarted"] == []
@@ -289,7 +290,7 @@ def test_a_clean_leg_dispatches_the_held_row(tmp_path):
 
 @_NODE
 @pytest.mark.parametrize("reply", [{"verdict": "REFUSED"}, {"verdict": "CLEAN"}, None])
-def test_a_leg_with_no_usable_reply_halts_the_plans_held_behind_it(tmp_path, reply):
+def test_a_leg_with_no_usable_reply_halts_the_plans_held_behind_it(tmp_path: Path, reply) -> None:
     out = _run_script(tmp_path, _compose(_two_plan_waves()), reply)
     assert "work:P2-C1" not in out["calls"]
     assert "work:P3-C2" in out["calls"]
@@ -300,7 +301,7 @@ def test_a_leg_with_no_usable_reply_halts_the_plans_held_behind_it(tmp_path, rep
 
 
 @_NODE
-def test_a_finding_plan_is_the_owner_and_per_plan_is_the_fallback(tmp_path):
+def test_a_finding_plan_is_the_owner_and_per_plan_is_the_fallback(tmp_path: Path) -> None:
     reply = {
         "verdict": "DRIFT",
         "per_plan": {P2: "DRIFT"},
@@ -314,14 +315,14 @@ def test_a_finding_plan_is_the_owner_and_per_plan_is_the_fallback(tmp_path):
 
 
 @_NODE
-def test_an_edge_free_row_dispatches_before_any_leg_settles(tmp_path):
+def test_an_edge_free_row_dispatches_before_any_leg_settles(tmp_path: Path) -> None:
     out = _run_script(tmp_path, _compose(_two_plan_waves()), DRIFT_REPLY)
     assert "work:P3-C2" in out["calls"]
     assert "_seamGates" not in _registration(_compose(_two_plan_waves()), "P3-C2")
 
 
 @_NODE
-def test_a_commit_reporting_committed_without_a_sha_records_nothing_and_releases_the_gate(tmp_path):
+def test_a_commit_reporting_committed_without_a_sha_records_nothing_and_releases_the_gate(tmp_path: Path) -> None:
     out = _run_script(tmp_path, _compose(_two_plan_waves()), DRIFT_REPLY, {"outcome": "committed"})
     assert not any(c.startswith("seam:") for c in out["calls"])
     assert "work:P2-C1" in out["calls"]
@@ -329,7 +330,7 @@ def test_a_commit_reporting_committed_without_a_sha_records_nothing_and_releases
 
 
 @_NODE
-def test_a_failed_wave_commit_holds_only_its_dependents_and_records_no_seam_failure(tmp_path):
+def test_a_failed_wave_commit_holds_only_its_dependents_and_records_no_seam_failure(tmp_path: Path) -> None:
     refusal = "attribution_gate: path not attributed"
     out = _run_script(
         tmp_path, _compose(_two_plan_waves()), CLEAN_REPLY, {"outcome": "commit-failed", "reason": refusal}
@@ -345,14 +346,14 @@ def test_a_failed_wave_commit_holds_only_its_dependents_and_records_no_seam_fail
 
 
 @_NODE
-def test_a_failed_wave_commit_with_no_reply_names_it(tmp_path):
+def test_a_failed_wave_commit_with_no_reply_names_it(tmp_path: Path) -> None:
     out = _run_script(tmp_path, _compose(_two_plan_waves()), CLEAN_REPLY, None)
     assert out["planHeld"]["P2-C1"] == "commit-failed: wave 1: no committer reply"
     assert out["failures"] == [] and out["drift"] == []
 
 
 @_NODE
-def test_an_op_error_relay_fails_closed_and_an_empty_drift_does_too(tmp_path):
+def test_an_op_error_relay_fails_closed_and_an_empty_drift_does_too(tmp_path: Path) -> None:
     for reply in (
         {"verdict": "REFUSED", "per_plan": {}, "findings": [{"class": "op-error"}]},
         {"verdict": "DRIFT", "per_plan": {}, "findings": []},
@@ -366,12 +367,12 @@ def _refused(text):
     return {"verdict": "REFUSED", "per_plan": {}, "findings": [{"class": "op-error", "output": text}]}
 
 
-def _seam_calls(out):
+def _seam_calls(out) -> int:
     return sum("seam check for wave 1." in p for p in out["seamParams"])
 
 
 @_NODE
-def test_a_refused_reply_halts_the_held_plan_with_the_finding_text(tmp_path):
+def test_a_refused_reply_halts_the_held_plan_with_the_finding_text(tmp_path: Path) -> None:
     out = _run_script(tmp_path, _compose(_two_plan_waves()), _refused("param validation: landed_range missing"))
     assert _seam_calls(out) == 1
     assert "param validation: landed_range missing" in out["reasons"][P2]
@@ -381,7 +382,7 @@ def test_a_refused_reply_halts_the_held_plan_with_the_finding_text(tmp_path):
 
 @_NODE
 @pytest.mark.parametrize("first", [_refused("ETIMEDOUT reaching the engine"), "THROW"])
-def test_an_infra_refusal_is_retried_once_and_a_clean_retry_dispatches_the_held_row(tmp_path, first):
+def test_an_infra_refusal_is_retried_once_and_a_clean_retry_dispatches_the_held_row(tmp_path: Path, first) -> None:
     out = _run_script(tmp_path, _compose(_two_plan_waves()), [first, CLEAN_REPLY])
     assert _seam_calls(out) == 2
     assert "work:P2-C1" in out["calls"]
@@ -390,7 +391,7 @@ def test_an_infra_refusal_is_retried_once_and_a_clean_retry_dispatches_the_held_
 
 @_NODE
 @pytest.mark.parametrize("bad", [_refused("invoke timed out after 30s"), "THROW"])
-def test_a_persistent_infra_refusal_is_an_engine_defect_with_its_cause_and_no_drift_entry(tmp_path, bad):
+def test_a_persistent_infra_refusal_is_an_engine_defect_with_its_cause_and_no_drift_entry(tmp_path: Path, bad) -> None:
     out = _run_script(tmp_path, _compose(_two_plan_waves()), [bad, bad])
     assert _seam_calls(out) == 2
     assert "work:P2-C1" not in out["calls"]
@@ -402,18 +403,18 @@ def test_a_persistent_infra_refusal_is_an_engine_defect_with_its_cause_and_no_dr
 
 
 @_NODE
-def test_a_non_infra_refusal_is_not_retried_and_carries_its_cause(tmp_path):
+def test_a_non_infra_refusal_is_not_retried_and_carries_its_cause(tmp_path: Path) -> None:
     out = _run_script(tmp_path, _compose(_two_plan_waves()), [_refused("budget exceeded"), CLEAN_REPLY])
     assert _seam_calls(out) == 1
     assert "budget exceeded" in out["reasons"][P2]
     assert "engine defect" not in out["reasons"][P2]
 
 
-def test_the_relay_prompt_says_refused_for_an_op_error():
+def test_the_relay_prompt_says_refused_for_an_op_error() -> None:
     assert "REFUSED for any op refusal or error" in _compose(_two_plan_waves())
 
 
-def test_a_run_without_a_base_sha_does_not_qualify_for_the_leg():
+def test_a_run_without_a_base_sha_does_not_qualify_for_the_leg() -> None:
     script = compose_script(
         _two_plan_waves(),
         name="n",
@@ -427,7 +428,7 @@ def test_a_run_without_a_base_sha_does_not_qualify_for_the_leg():
 
 
 @_NODE
-def test_the_digest_renders_the_class_and_collapses_repeats():
+def test_the_digest_renders_the_class_and_collapses_repeats() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
@@ -453,7 +454,7 @@ def test_the_digest_renders_the_class_and_collapses_repeats():
 
 
 @_NODE
-def test_the_digest_names_a_refused_wave_commit_as_a_commit_failure_never_a_seam_failure():
+def test_the_digest_names_a_refused_wave_commit_as_a_commit_failure_never_a_seam_failure() -> None:
     node = shutil.which("node")
     if node is None:
         pytest.skip("node is not installed")
@@ -476,7 +477,7 @@ def test_the_digest_names_a_refused_wave_commit_as_a_commit_failure_never_a_seam
     assert "seam check failed" not in done.stdout
 
 
-def _seed_plan(root, rel: str, with_sidecar: bool):
+def _seed_plan(root, rel: str, with_sidecar: bool) -> None:
     plan = root / rel
     plan.parent.mkdir(parents=True, exist_ok=True)
     plan.write_text("---\ntitle: p\n---\n", encoding="utf-8")
@@ -489,7 +490,7 @@ def _seams(root, plan) -> list:
     return list(run_artifacts.candidate_paths(root, "ask-20261016T120000-aaaaaa", plan_rel=plan).by_class.get("seam-sidecar", ()))
 
 
-def test_seam_sidecars_join_the_terminal_pathspec(tmp_path):
+def test_seam_sidecars_join_the_terminal_pathspec(tmp_path: Path) -> None:
     _seed_plan(tmp_path, "docs/plans/p1.md", True)
     _seed_plan(tmp_path, "docs/plans/p2.md", False)
     found = _seams(tmp_path, "docs/plans/p1.md")
@@ -498,7 +499,7 @@ def test_seam_sidecars_join_the_terminal_pathspec(tmp_path):
     assert _seams(tmp_path, None) == []
 
 
-def test_terminal_pathspec_carries_prep_and_wave_sidecars_only_of_its_own_plan(tmp_path):
+def test_terminal_pathspec_carries_prep_and_wave_sidecars_only_of_its_own_plan(tmp_path: Path) -> None:
     _seed_plan(tmp_path, "docs/plans/p1.md", True)
     _seed_plan(tmp_path, "docs/plans/p10.md", False)
     d = tmp_path / "docs/plans"
@@ -515,7 +516,7 @@ def test_terminal_pathspec_carries_prep_and_wave_sidecars_only_of_its_own_plan(t
     assert _seams(tmp_path, "docs/plans/p3.md") == ["docs/plans/p3.wave-1.seam.yaml"]
 
 
-def test_run_artifacts_enumerates_wave_sidecars_and_maps_them_to_the_plan_sizing(tmp_path):
+def test_run_artifacts_enumerates_wave_sidecars_and_maps_them_to_the_plan_sizing(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import run_artifacts as ra
 
     run = "ask-20261016T120000-cccccc"
@@ -546,7 +547,7 @@ def test_run_artifacts_enumerates_wave_sidecars_and_maps_them_to_the_plan_sizing
     assert ra._sizing_of_artifact(tmp_path, "docs/plans/2026-10-16-x.seam.yaml") == sizing
 
 
-def test_a_month_folder_plan_reaches_the_seam_leg_and_a_deeper_dir_does_not():
+def test_a_month_folder_plan_reaches_the_seam_leg_and_a_deeper_dir_does_not() -> None:
     m1, m2 = "docs/plans/2026-11/p1.md", "docs/plans/2026-11/p2.md"
     waves = [[_row("P1-C1", ["a.py"], m1)], [_row("P2-C1", ["b.py"], m2, reads=["a.py"])]]
     assert f'const _seamPlans = ["{m1}", "{m2}"];' in _compose(waves)
@@ -554,7 +555,7 @@ def test_a_month_folder_plan_reaches_the_seam_leg_and_a_deeper_dir_does_not():
     assert "plan.seam_record" not in _compose([[_row("D-C1", ["a.py"], deep)], [_row("D-C2", ["b.py"], deep, reads=["a.py"])]])
 
 
-def test_month_folder_sidecars_map_to_the_plan_sizing_read_from_its_month_folder(tmp_path):
+def test_month_folder_sidecars_map_to_the_plan_sizing_read_from_its_month_folder(tmp_path: Path) -> None:
     sizing = "state/sizings/2026-11/x.yaml"
     files = {
         "docs/plans/2026-11/x.md": f"sizing_object: {sizing}\n",
@@ -571,7 +572,7 @@ def test_month_folder_sidecars_map_to_the_plan_sizing_read_from_its_month_folder
     assert ra._sizing_of_artifact(tmp_path, "docs/plans/2026-11/sub/x.md") is None
 
 
-def test_archive_plans_treats_wave_sidecars_as_sidecars_of_their_plan(tmp_path):
+def test_archive_plans_treats_wave_sidecars_as_sidecars_of_their_plan(tmp_path: Path) -> None:
     from pathlib import Path
 
     from coordinator_core.ops.fleet import archive_plans
@@ -588,7 +589,7 @@ def test_archive_plans_treats_wave_sidecars_as_sidecars_of_their_plan(tmp_path):
 
 
 @_NODE
-def test_a_single_plan_drift_keeps_the_held_row_out_and_a_clean_leg_dispatches_it(tmp_path):
+def test_a_single_plan_drift_keeps_the_held_row_out_and_a_clean_leg_dispatches_it(tmp_path: Path) -> None:
     script = _compose(_single_plan_waves(), SeamInputs({}, False), ONE)
     drift = {"verdict": "DRIFT", "per_plan": {ONE: "DRIFT"}, "findings": [{"class": "drifted-contract", "blocking": True, "plan": ONE, "path": "a.py"}]}
     out = _run_script(tmp_path, script, drift)
@@ -599,7 +600,7 @@ def test_a_single_plan_drift_keeps_the_held_row_out_and_a_clean_leg_dispatches_i
     assert "work:C2" in clean["calls"] and clean["notStarted"] == []
 
 
-def test_the_emitted_leg_names_no_review_reachability():
+def test_the_emitted_leg_names_no_review_reachability() -> None:
     script = _compose(_two_plan_waves())
     leg = script.split("async function _seamLeg", 1)[1].split("  function _seamFail", 1)[0]
     assert "review.reachability" not in leg

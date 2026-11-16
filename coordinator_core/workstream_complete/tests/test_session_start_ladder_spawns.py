@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workstream_complete import directives_memo_lifecycle as ml
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -20,7 +21,7 @@ def _git(cwd, *args):
     )
 
 
-def test_ladder_issues_no_merge_base_and_resolves_branch_point(tmp_path, monkeypatch):
+def test_ladder_issues_no_merge_base_and_resolves_branch_point(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _git(tmp_path, "init", "-q", "-b", "main")
     _git(tmp_path, "config", "user.email", "t@example.com")
     _git(tmp_path, "config", "user.name", "T")

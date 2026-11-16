@@ -49,6 +49,7 @@ from coordinator_core.bash_guards import dispatch_checks as _dc
 from coordinator_core.bash_guards.dispatch import evaluate_payload_json
 from coordinator_core.bash_guards._tool_names import COMMAND_TOOL_NAMES
 from coordinator_core.ops.warm_guard_evaluate import _verdict_from_envelope, NO_OBJECTION
+from pathlib import Path
 
 
 def _is_deny(out: Any) -> bool:
@@ -64,7 +65,7 @@ def _deny_reason(out: Any) -> str:
     return out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-def test_ac2_ac7_negative_oracles_are_disqualified_or_stale():
+def test_ac2_ac7_negative_oracles_are_disqualified_or_stale() -> None:
     """Pins the disqualification/staleness claims the two tests above rely
     on, so a future editor cannot silently believe `destructive-rm`,
     `validate-commit`, or `head-tail-plumbing-rewrite` still qualify as
@@ -95,7 +96,7 @@ def test_ac2_ac7_negative_oracles_are_disqualified_or_stale():
     )
 
 
-def test_ac6b_derivation_site_is_a_bare_membership_test_no_conditional_gate():
+def test_ac6b_derivation_site_is_a_bare_membership_test_no_conditional_gate() -> None:
     """(b) Structural, via `ast`: the derivation site
     (`_gating_tool_name = ... if ... else ...`) must contain no `If`,
     `BoolOp`, or `Call` node anywhere in its subtree -- only the one
@@ -165,7 +166,7 @@ def test_ac6b_derivation_site_is_a_bare_membership_test_no_conditional_gate():
     assert test_node.comparators[0].id == "COMMAND_TOOL_NAMES", ast.dump(test_node)
 
 
-def test_ac7_oracle_liveness_runaway_find_and_grep_rewrite_still_bash_only():
+def test_ac7_oracle_liveness_runaway_find_and_grep_rewrite_still_bash_only() -> None:
     """Fails loudly, rather than turning this suite's evidence into a silent
     tautology, if a peer widens either chosen oracle's matchers to include
     `PowerShell` (which would make AC1/AC2/AC3's "denies with normalization,
@@ -202,7 +203,7 @@ def test_ac7_oracle_liveness_runaway_find_and_grep_rewrite_still_bash_only():
     assert "grep-via-bash-rewrite" in bash_only_names
 
 
-def test_m5_resolve_once_prepass_skips_posix_tokenize_for_powershell_payload(monkeypatch):
+def test_m5_resolve_once_prepass_skips_posix_tokenize_for_powershell_payload(monkeypatch: pytest.MonkeyPatch) -> None:
     """`_evaluate_payload_json_budgeted` gates its `resolve_command_positions`
     pre-pass on `"git" in cmd` alone (M5) -- for a `tool_name="PowerShell"`
     payload that pre-pass must not run at all, since it feeds the raw
@@ -239,7 +240,7 @@ def test_m5_resolve_once_prepass_skips_posix_tokenize_for_powershell_payload(mon
     )
 
 
-def test_halted_withheld_commit_guard_never_denies_through_dispatch(tmp_path):
+def test_halted_withheld_commit_guard_never_denies_through_dispatch(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit import halted_withheld_index as idx
 
     (tmp_path / ".git").mkdir()

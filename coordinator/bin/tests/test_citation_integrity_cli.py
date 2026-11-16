@@ -118,9 +118,54 @@ def test_uncited_tombstone_is_orphan_despite_self_citation(tmp_path: Path):
     assert "old-name.md" not in health["dead_ends"]
 
 
+def test_run_enumerates_the_wiki_once_and_findings_match(tmp_path: Path, monkeypatch):
+    wiki = _tomb_wiki(tmp_path)
+    _write(wiki / "DIRECTORY_GUIDE.md", "# Guide\n")
+    baseline_path = tmp_path / "baseline.json"
+    baseline_path.write_text(json.dumps(_baseline_for(wiki, tmp_path)), encoding="utf-8")
+    calls = []
+    real = cci._wiki_files
+    monkeypatch.setattr(cci, "_wiki_files", lambda root: calls.append(root) or real(root))
+
+    exit_code, summary, _ = cci.run(
+        wiki_root=wiki, repo_root=tmp_path, baseline_path=baseline_path
+    )
+
+    assert len(calls) == 1
+    assert exit_code == 0 and summary["clean"] is True
+    files = real(wiki)
+    assert cci.tombstone_pages(wiki, files) == cci.tombstone_pages(wiki)
+    assert cci.guide_drift(wiki, wiki_files=files) == cci.guide_drift(wiki)
+
+
 def test_guide_drift_omits_tombstone(tmp_path: Path):
     wiki = _tomb_wiki(tmp_path)
     _write(wiki / "DIRECTORY_GUIDE.md", "# Guide\n")
     absent = cci.guide_drift(wiki)["absent_pages"]
     assert "old-name.md" not in absent
     assert "citer.md" in absent
+
+
+def test_relpath_resolves_each_path_once_per_run_and_a_rerun_sees_a_changed_tree(tmp_path: Path, monkeypatch):
+    wiki = tmp_path / "wiki"
+    _write(wiki / "a.md", "# a\n")
+    cci._RESOLVED.clear()
+    calls = []
+    real = Path.resolve
+    monkeypatch.setattr(Path, "resolve", lambda self, *a, **k: calls.append(self) or real(self, *a, **k))
+
+    assert cci._relpath(wiki / "a.md", wiki) == "a.md"
+    first = len(calls)
+    for _ in range(5):
+        assert cci._relpath(wiki / "a.md", wiki) == "a.md"
+    assert len(calls) == first == 2
+
+    cci._RESOLVED.clear()
+    cci._relpath(wiki / "a.md", wiki)
+    assert len(calls) == first + 2
+
+
+def test_relpath_outside_root_falls_back_to_posix(tmp_path: Path):
+    cci._RESOLVED.clear()
+    other = tmp_path / "other" / "b.md"
+    assert cci._relpath(other, tmp_path / "wiki") == other.as_posix()

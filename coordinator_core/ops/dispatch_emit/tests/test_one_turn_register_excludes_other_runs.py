@@ -11,6 +11,7 @@ from coordinator_core.ops import baton_pm_turns as pm_turns
 from coordinator_core.ops import requirement_register as rr
 from coordinator_core.session_baton import store
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
+from pathlib import Path
 
 RUN = "ask-20261014T000000-abc123"
 REL = "state/sizings/2026-10-14-one-turn.yaml"
@@ -18,7 +19,7 @@ OWN_ASK = "add retry with backoff to the uploader so transient failures recover"
 FOREIGN = "rebuild the nightly report exporter to stream rows instead of buffering them"
 
 
-def _write(repo, turn_text, derived_rows):
+def _write(repo, turn_text, derived_rows) -> None:
     doc = {
         "schema": "sizing-object", "intent": "Uploader retry", "estimate": {"tshirt": "S", "provisional": True},
         "route": "dispatch", "detents": [], "fork": None, "xl_exit": None, "status": "sized",
@@ -42,7 +43,7 @@ def _write(repo, turn_text, derived_rows):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (tmp_path / ".git").mkdir()
     (tmp_path / "state" / "sizings").mkdir(parents=True)
     sdir = session_dir_for(tmp_path / ".git", "sid-f2")
@@ -59,7 +60,7 @@ def _register(repo):
     return rr.read_register((repo / REL).read_text(encoding="utf-8"))
 
 
-def test_a_foreign_turn_derived_into_the_register_is_dropped_and_waived(repo):
+def test_a_foreign_turn_derived_into_the_register_is_dropped_and_waived(repo) -> None:
     _write(repo, FOREIGN, derived_rows=True)
     rl.bind(repo, RUN, REL, ask_text=OWN_ASK)
     reg = _register(repo)
@@ -68,13 +69,13 @@ def test_a_foreign_turn_derived_into_the_register_is_dropped_and_waived(repo):
     assert [i.id for i in rl.read_ledger(repo, repo / rl.RECORD_DIR_ROOT / RUN).items] == ["R1"]
 
 
-def test_a_foreign_turn_without_derived_rows_is_not_seeded(repo):
+def test_a_foreign_turn_without_derived_rows_is_not_seeded(repo) -> None:
     _write(repo, FOREIGN, derived_rows=False)
     rl.bind(repo, RUN, REL, ask_text=OWN_ASK)
     assert [r["source_text"] for r in _register(repo).rows] == [OWN_ASK]
 
 
-def test_binding_twice_changes_nothing_more(repo):
+def test_binding_twice_changes_nothing_more(repo) -> None:
     _write(repo, FOREIGN, derived_rows=True)
     rl.bind(repo, RUN, REL, ask_text=OWN_ASK)
     first = (repo / REL).read_text(encoding="utf-8")
@@ -83,19 +84,19 @@ def test_binding_twice_changes_nothing_more(repo):
     assert (repo / REL).read_text(encoding="utf-8").count("unrelated_turns") == first.count("unrelated_turns")
 
 
-def test_an_ask_no_session_turn_quotes_leaves_the_turn_seeded(repo):
+def test_an_ask_no_session_turn_quotes_leaves_the_turn_seeded(repo) -> None:
     _write(repo, FOREIGN, derived_rows=False)
     rl.bind(repo, RUN, REL, ask_text="a paraphrase nobody typed into the session")
     assert [r["anchor"] for r in _register(repo).rows] == ["pm_verbatims", "ask"]
 
 
-def test_the_runs_own_turn_stays_a_row(repo):
+def test_the_runs_own_turn_stays_a_row(repo) -> None:
     _write(repo, OWN_ASK, derived_rows=True)
     rl.bind(repo, RUN, REL, ask_text=OWN_ASK)
     assert [r["id"] for r in _register(repo).rows] == ["T3"]
 
 
-def test_a_short_ask_contained_in_the_turn_keeps_the_turn(repo):
+def test_a_short_ask_contained_in_the_turn_keeps_the_turn(repo) -> None:
     _write(repo, "fix it", derived_rows=False)
     rl.bind(repo, RUN, REL, ask_text="fix it")
     assert [r["source_text"] for r in _register(repo).rows] == ["fix it"]
@@ -105,7 +106,7 @@ TOKEN_Q = "how many tokens did the last session burn on exploration alone"
 FOLLOW_UP = "also log every retry attempt with the failure reason at warning level"
 
 
-def _write_two(repo, turns):
+def _write_two(repo, turns) -> None:
     doc = {
         "schema": "sizing-object", "intent": "Uploader retry", "estimate": {"tshirt": "S", "provisional": True},
         "route": "dispatch", "detents": [], "fork": None, "xl_exit": None, "status": "sized",
@@ -115,7 +116,7 @@ def _write_two(repo, turns):
     (repo / REL).write_text(yaml.safe_dump(doc, sort_keys=False), encoding="utf-8")
 
 
-def test_a_later_session_turn_the_ask_does_not_address_is_unrelated_not_uncovered(repo):
+def test_a_later_session_turn_the_ask_does_not_address_is_unrelated_not_uncovered(repo) -> None:
     pm_turns.append_turn(TOKEN_Q, session_id="sid-f2")
     _write_two(repo, [(1, OWN_ASK), (4, TOKEN_Q)])
     rl.bind(repo, RUN, REL, ask_text=OWN_ASK)
@@ -124,7 +125,7 @@ def test_a_later_session_turn_the_ask_does_not_address_is_unrelated_not_uncovere
     assert rr.uncovered_turns(text) == []
 
 
-def test_a_follow_up_after_the_ask_stays_coverable(repo):
+def test_a_follow_up_after_the_ask_stays_coverable(repo) -> None:
     pm_turns.append_turn(FOLLOW_UP, session_id="sid-f2")
     _write_two(repo, [(1, OWN_ASK), (4, FOLLOW_UP)])
     rl.bind(repo, RUN, REL, ask_text=OWN_ASK)
@@ -132,7 +133,7 @@ def test_a_follow_up_after_the_ask_stays_coverable(repo):
     assert FOLLOW_UP in [r["source_text"] for r in _register(repo).rows]
 
 
-def test_a_claimed_foreign_row_is_not_removed(repo):
+def test_a_claimed_foreign_row_is_not_removed(repo) -> None:
     _write(repo, FOREIGN, derived_rows=True)
     path = repo / REL
     path.write_text(path.read_text(encoding="utf-8").replace("claimed_by: []", "claimed_by: [docs/plans/p.md]"), encoding="utf-8")

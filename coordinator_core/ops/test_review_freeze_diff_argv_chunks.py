@@ -10,6 +10,7 @@ from pathlib import Path
 
 import coordinator_core.ops.review_freeze_diff as review_freeze_diff
 from coordinator_core.ops.review_freeze_diff import _pathspec_chunks, freeze_diff
+import pytest
 
 _WINDOWS_CMDLINE_CAP = 32767
 
@@ -26,7 +27,7 @@ def test_chunks_cover_every_spec_in_order_and_stay_under_budget() -> None:
     assert all(sum(len(s) + 3 for s in c) <= review_freeze_diff._ARGV_CHAR_BUDGET for c in chunks)
 
 
-def test_worktree_freeze_over_many_paths_splits_the_diff_argv(tmp_path: Path, monkeypatch) -> None:
+def test_worktree_freeze_over_many_paths_splits_the_diff_argv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = tmp_path / "repo"
     repo.mkdir()
     _git(["init", "-q"], repo)

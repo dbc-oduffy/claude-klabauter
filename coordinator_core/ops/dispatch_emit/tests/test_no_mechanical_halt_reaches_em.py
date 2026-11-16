@@ -61,7 +61,7 @@ def _halt_constants() -> dict[str, str]:
     return found
 
 
-def test_every_halt_constant_and_landing_refusal_code_is_classified():
+def test_every_halt_constant_and_landing_refusal_code_is_classified() -> None:
     kinds = dict(_halt_constants())
     kinds.update({
         "REGISTER_ROWS_UNCLAIMED_REFUSAL": REGISTER_ROWS_UNCLAIMED_REFUSAL,
@@ -76,7 +76,7 @@ def test_every_halt_constant_and_landing_refusal_code_is_classified():
     assert not missing, f"halt kinds missing from halt_remedy_class.HALT_REMEDY: {missing}"
 
 
-def test_registry_shape_and_remedy_or_halt_bound():
+def test_registry_shape_and_remedy_or_halt_bound() -> None:
     for kind, (cls, remedy) in hrc.HALT_REMEDY.items():
         assert cls in (hrc.DECISION, hrc.MECHANICAL), kind
         assert (remedy is not None) == (cls == hrc.MECHANICAL), kind
@@ -85,7 +85,7 @@ def test_registry_shape_and_remedy_or_halt_bound():
 
     calls: list[int] = []
 
-    def flaky(n: int):
+    def flaky(n: int) -> str:
         calls.append(n)
         if n < 2:
             raise RuntimeError("not yet")
@@ -225,7 +225,7 @@ def _designed_red_unhonoured() -> list[str]:
     return [] if "if not is_designed_red(" in src else ["ops/review_test_blocker.py: from_reverify never consults designed_red"]
 
 
-def test_no_mechanical_halt_kind_reaches_the_em():
+def test_no_mechanical_halt_kind_reaches_the_em() -> None:
     sites = _offending_sites()
     sites["review_blocked-designed_red"] = _designed_red_unhonoured()
     bad = {k: v for k, v in sites.items() if v}

@@ -134,7 +134,7 @@ class SafeDirectionDeclaration:
 
     __slots__ = ("direction", "because", "anchor")
 
-    def __init__(self, direction, because, anchor=None):
+    def __init__(self, direction, because, anchor=None) -> None:
         self.direction = direction
         self.because = because
         self.anchor = anchor

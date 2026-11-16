@@ -6,6 +6,7 @@ import pytest
 
 from coordinator_core.win_portability import no_console_creationflags
 from coordinator_core.workweek_complete.release.state import detect
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
@@ -13,7 +14,7 @@ WEEK = "state/week-changelog"
 NOTES = "archive/release-notes"
 
 
-def _g(root, *args, out=False):
+def _g(root, *args, out: bool = False):
     res = subprocess.run(
         ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@t", *args],
         check=True, capture_output=True, text=True, **no_console_creationflags(),
@@ -21,19 +22,19 @@ def _g(root, *args, out=False):
     return res.stdout.strip() if out else None
 
 
-def _write(root, rel, text="x"):
+def _write(root, rel, text: str = "x") -> None:
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text, encoding="utf-8")
 
 
-def _header(root, prior="v0.6.0 (commit abc, 2026-09-06)"):
+def _header(root, prior: str = "v0.6.0 (commit abc, 2026-09-06)") -> None:
     _write(root, f"{WEEK}/HEADER.md",
            f"# Week\n\n**Week starting:** 2026-10-05 (ISO W41)\n**Prior week released:** {prior}\n")
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     origin = tmp_path / "origin.git"
     work = tmp_path / "work"
     work.mkdir()
@@ -51,39 +52,39 @@ def repo(tmp_path):
     return work
 
 
-def _commit(root, msg="c"):
+def _commit(root, msg: str = "c") -> None:
     _g(root, "add", "-A")
     _g(root, "commit", "-qm", msg)
 
 
-def _state(root, mode="git-tag"):
+def _state(root, mode: str = "git-tag"):
     return detect(root, tag_prefix="v", release_mode=mode)
 
 
-def _pending(root):
+def _pending(root) -> None:
     _write(root, f"{WEEK}/2026-10-10-pending-release.md")
 
 
-def _push_fetch(root):
+def _push_fetch(root) -> None:
     _g(root, "push", "-q", "origin", "main")
     _g(root, "fetch", "-q", "origin")
 
 
-def test_empty_week_is_nothing_to_release(repo):
+def test_empty_week_is_nothing_to_release(repo) -> None:
     assert _state(repo).state == "nothing-to-release"
 
 
-def test_week_with_pending_entry_is_unstamped(repo):
+def test_week_with_pending_entry_is_unstamped(repo) -> None:
     _pending(repo)
     assert _state(repo).state == "unstamped"
 
 
-def test_daily_block_is_unstamped(repo):
+def test_daily_block_is_unstamped(repo) -> None:
     _write(repo, f"{WEEK}/2026-10-06-host.md")
     assert _state(repo).state == "unstamped"
 
 
-def test_stamped(repo):
+def test_stamped(repo) -> None:
     _pending(repo)
     _write(repo, f"{NOTES}/2026-10-12-v0.7.0.md")
     _commit(repo)
@@ -91,20 +92,20 @@ def test_stamped(repo):
     assert (s.state, s.version, s.tag) == ("stamped", "0.7.0", "v0.7.0")
 
 
-def test_uncommitted_notes_wrapper_reads_unstamped(repo):
+def test_uncommitted_notes_wrapper_reads_unstamped(repo) -> None:
     _pending(repo)
     _write(repo, f"{NOTES}/2026-10-12-v0.7.0.md")
     assert _state(repo).state == "unstamped"
 
 
-def test_placeholder_notes_never_stamped(repo):
+def test_placeholder_notes_never_stamped(repo) -> None:
     _pending(repo)
     _write(repo, f"{NOTES}/2026-10-12-vX.Y.Z.md")
     _commit(repo)
     assert _state(repo).state == "unstamped"
 
 
-def test_merged_unpublished(repo):
+def test_merged_unpublished(repo) -> None:
     _pending(repo)
     _write(repo, f"{NOTES}/2026-10-12-v0.7.0.md")
     _commit(repo, "stamp")
@@ -114,7 +115,7 @@ def test_merged_unpublished(repo):
     assert s.merge_sha == _g(repo, "rev-parse", "HEAD", out=True)
 
 
-def test_published_unarchived_then_archived(repo):
+def test_published_unarchived_then_archived(repo) -> None:
     _pending(repo)
     _write(repo, f"{NOTES}/2026-10-12-v0.7.0.md")
     _commit(repo, "stamp")
@@ -128,7 +129,7 @@ def test_published_unarchived_then_archived(repo):
     assert _state(repo).state == "nothing-to-release"
 
 
-def test_week_after_finished_release_is_not_published_unarchived(repo):
+def test_week_after_finished_release_is_not_published_unarchived(repo) -> None:
     _pending(repo)
     _write(repo, f"{NOTES}/2026-10-12-v0.7.0.md")
     _commit(repo, "stamp")
@@ -142,7 +143,7 @@ def test_week_after_finished_release_is_not_published_unarchived(repo):
     assert _state(repo).state == "unstamped"
 
 
-def test_release_mode_none_is_unstamped_or_nothing(repo):
+def test_release_mode_none_is_unstamped_or_nothing(repo) -> None:
     assert _state(repo, "none").state == "nothing-to-release"
     _pending(repo)
     _write(repo, f"{NOTES}/2026-10-12-v0.7.0.md")

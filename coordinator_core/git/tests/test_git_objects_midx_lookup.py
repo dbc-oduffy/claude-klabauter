@@ -3,8 +3,10 @@ and never walks the packs a MIDX covers."""
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import struct
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -25,7 +27,9 @@ def _reset() -> None:
 
 
 @pytest.fixture(autouse=True)
-def _clean():
+def _clean(monkeypatch: pytest.MonkeyPatch):
+    # The fixtures' "common dir" is a bare tmp dir, not a repo; the writer lock resolves a repo.
+    monkeypatch.setattr(go.object_store_lock, "hold", lambda *a, **k: contextlib.nullcontext())
     _reset()
     yield
     _reset()
@@ -96,14 +100,14 @@ def _assert_all(common: Path, want: dict[str, bytes]) -> None:
     assert not go.packed_contains(common, "not-hex")
 
 
-def test_no_midx_small_and_large_uncovered_sets(tmp_path):
+def test_no_midx_small_and_large_uncovered_sets(tmp_path: Path) -> None:
     common = tmp_path / "small"
     _assert_all(common, _packs(common, 3))
     common = tmp_path / "large"
     _assert_all(common, _packs(common, go._UNCOVERED_LAZY_MAX + 12))
 
 
-def test_midx_plus_newer_packs_answer_identically(tmp_path):
+def test_midx_plus_newer_packs_answer_identically(tmp_path: Path) -> None:
     want = _packs(tmp_path, 12)
     _write_midx(tmp_path, _idx_names(tmp_path))
     want.update(_packs(tmp_path, 3, start=100))
@@ -112,7 +116,7 @@ def test_midx_plus_newer_packs_answer_identically(tmp_path):
     _assert_all(tmp_path, want)
 
 
-def test_covered_packs_are_never_parsed(tmp_path, monkeypatch):
+def test_covered_packs_are_never_parsed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     want = _packs(tmp_path, 10)
     _write_midx(tmp_path, _idx_names(tmp_path))
     _reset()
@@ -126,7 +130,7 @@ def test_covered_packs_are_never_parsed(tmp_path, monkeypatch):
     assert parsed == []
 
 
-def test_merged_table_is_built_once_for_many_uncovered_packs(tmp_path, monkeypatch):
+def test_merged_table_is_built_once_for_many_uncovered_packs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     n = go._UNCOVERED_LAZY_MAX + 10
     want = _packs(tmp_path, n)
     _reset()
@@ -141,7 +145,7 @@ def test_merged_table_is_built_once_for_many_uncovered_packs(tmp_path, monkeypat
     assert len(parsed) == n
 
 
-def test_torn_midx_falls_back(tmp_path):
+def test_torn_midx_falls_back(tmp_path: Path) -> None:
     want = _packs(tmp_path, 6)
     _write_midx(tmp_path, _idx_names(tmp_path))
     midx = tmp_path / "objects" / "pack" / "multi-pack-index"
@@ -151,7 +155,7 @@ def test_torn_midx_falls_back(tmp_path):
         _assert_all(tmp_path, want)
 
 
-def test_stale_midx_naming_a_vanished_pack(tmp_path):
+def test_stale_midx_naming_a_vanished_pack(tmp_path: Path) -> None:
     want = _packs(tmp_path, 6)
     names = _idx_names(tmp_path)
     _write_midx(tmp_path, names)
@@ -167,14 +171,170 @@ def test_stale_midx_naming_a_vanished_pack(tmp_path):
     assert not go.packed_contains(tmp_path, gone_sha)
 
 
-def test_midx_large_offset_chunk(tmp_path):
+def test_vanished_midx_pack_is_absent_for_that_pack_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    want = _packs(tmp_path, 8)
+    names = _idx_names(tmp_path)
+    _write_midx(tmp_path, names)
+    pack_dir = tmp_path / "objects" / "pack"
+    gone = names[3]
+    gone_sha = go._parse_pack_index_uncached(pack_dir / gone).shas[:20].hex()
+    (pack_dir / gone).unlink()
+    (pack_dir / gone.replace(".idx", ".pack")).unlink()
+    del want[gone_sha]
+    newer = _packs(tmp_path, 3, start=100)
+    want.update(newer)
+    covered_survivors = set(names) - {gone}
+    _reset()
+    parsed: list[str] = []
+    real = go._parse_pack_index
+    monkeypatch.setattr(go, "_parse_pack_index", lambda p: parsed.append(p.name) or real(p))
+    for sha, payload in want.items():
+        assert go.read_object(tmp_path, sha) == ("blob", payload)
+    assert not covered_survivors & set(parsed)
+    assert set(parsed) <= set(_idx_names(tmp_path)) - covered_survivors
+    src = go._LOOKUP_SOURCES[str(tmp_path)]
+    assert len(src.uncovered) == len(newer) <= go._UNCOVERED_LAZY_MAX
+    assert src._merged is None
+    assert not go.packed_contains(tmp_path, gone_sha)
+    assert not go.packed_contains(tmp_path, "ab" * 20)
+    assert go.read_object(tmp_path, gone_sha) is None
+    assert src._merged is None
+
+
+def _blob_sha(payload: bytes) -> str:
+    return hashlib.sha1(b"blob %d\x00" % len(payload) + payload).hexdigest()
+
+
+def _gone_pack_store(common: Path) -> tuple[str, str, str, bytes, int]:
+    """5 plain packs, pack G (holds X and Z) and pack S (holds X and Y), all under one MIDX; G is
+    then deleted. Returns `(x_sha, z_sha, y_sha, y_payload, G's pack id in the MIDX)`."""
+    _packs(common, 5)
+    x, z, y = b"shared-x", b"only-in-gone-z", b"only-in-survivor-y"
+    plain = set(_idx_names(common))
+    go._write_pack(common, {_blob_sha(x): (b"blob", x), _blob_sha(z): (b"blob", z)})
+    (gone_idx,) = set(_idx_names(common)) - plain
+    go._write_pack(common, {_blob_sha(x): (b"blob", x), _blob_sha(y): (b"blob", y)})
+    names = _idx_names(common)
+    _write_midx(common, names)
+    pack_dir = common / "objects" / "pack"
+    (pack_dir / gone_idx).unlink()
+    (pack_dir / gone_idx.replace(".idx", ".pack")).unlink()
+    return _blob_sha(x), _blob_sha(z), _blob_sha(y), y, names.index(gone_idx)
+
+
+def test_gone_pack_midx_hit_resolves_from_a_surviving_covered_pack(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    x_sha, _, y_sha, y_payload, gone_pid = _gone_pack_store(tmp_path)
+    real_find = go._midx_find
+    monkeypatch.setattr(
+        go, "_midx_find", lambda midx, target: (gone_pid, 0) if target.hex() == x_sha else real_find(midx, target)
+    )
+    _reset()
+    got = go.read_object(tmp_path, x_sha)
+    assert got == ("blob", b"shared-x")
+    assert go.read_object(tmp_path, y_sha) == ("blob", y_payload)
+    assert go._LOOKUP_SOURCES[str(tmp_path)]._merged is None
+
+
+def test_sha_only_the_gone_pack_held_is_absent_and_survivors_parse_once(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _, z_sha, _, _, _ = _gone_pack_store(tmp_path)
+    survivors = set(_idx_names(tmp_path))
+    _reset()
+    parsed: list[str] = []
+    real = go._parse_pack_index
+    monkeypatch.setattr(go, "_parse_pack_index", lambda p: parsed.append(p.name) or real(p))
+    for _ in range(5):
+        assert go.read_object(tmp_path, z_sha) is None
+        assert not go.packed_contains(tmp_path, z_sha)
+    assert len(parsed) == len(set(parsed))
+    assert set(parsed) <= survivors
+    assert go._LOOKUP_SOURCES[str(tmp_path)]._merged is None
+
+
+def _fold_store(common: Path, *, midx_names: "list[str] | None" = None) -> tuple[dict[str, bytes], Path, str, str, bytes]:
+    """3 packs under one MIDX, the first marked as the fold tail. Returns
+    `(want, pack_dir, tail, new_sha, new_payload)`."""
+    want = _packs(common, 3)
+    names = _idx_names(common)
+    _write_midx(common, names if midx_names is None else midx_names)
+    pack_dir = common / "objects" / "pack"
+    tail = names[0][len("pack-"):-len(".idx")]
+    go._write_tail_marker(pack_dir, tail, [])
+    new_payload = b"fresh-after-fold"
+    return want, pack_dir, tail, _blob_sha(new_payload), new_payload
+
+
+def test_fold_of_a_midx_covered_pack_drops_the_midx_and_lookups_stay_whole(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    want, pack_dir, tail, new_sha, new_payload = _fold_store(tmp_path)
+    (pack_dir / "multi-pack-index-abc.bitmap").write_bytes(b"x")
+    (pack_dir / "multi-pack-index-abc.rev").write_bytes(b"x")
+    _reset()
+    assert go.read_object(tmp_path, next(iter(want))) is not None
+    spawned: list = []
+
+    def _no_spawn(*a, **k):
+        spawned.append(a)
+        raise AssertionError("git spawned")
+
+    monkeypatch.setattr(subprocess, "Popen", _no_spawn)
+
+    go._flush_pack_locked(tmp_path, {new_sha: (b"blob", new_payload)}, True)
+
+    assert spawned == []
+    assert not (pack_dir / f"pack-{tail}.idx").exists()
+    assert not (pack_dir / "multi-pack-index").exists()
+    assert not list(pack_dir.glob("multi-pack-index-*"))
+    from coordinator_core.git import store_hygiene
+
+    assert not store_hygiene.midx_names_missing_pack(tmp_path)
+    want[new_sha] = new_payload
+    opened: list[str] = []
+    real = go._parse_pack_index
+    monkeypatch.setattr(go, "_parse_pack_index", lambda p: opened.append(p.name) or real(p))
+    _assert_all(tmp_path, want)
+    assert f"pack-{tail}.idx" not in opened
+
+
+def test_fold_keeps_a_midx_that_names_no_doomed_pack(tmp_path: Path) -> None:
+    _, pack_dir, tail, new_sha, new_payload = _fold_store(tmp_path, midx_names=[])
+    other = [n for n in _idx_names(tmp_path) if tail not in n]
+    _write_midx(tmp_path, other)
+
+    go._flush_pack_locked(tmp_path, {new_sha: (b"blob", new_payload)}, True)
+
+    assert (pack_dir / "multi-pack-index").exists()
+    assert not (pack_dir / f"pack-{tail}.idx").exists()
+
+
+def test_fold_keeps_every_doomed_pack_when_the_midx_cannot_be_unlinked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    want, pack_dir, tail, new_sha, new_payload = _fold_store(tmp_path)
+    monkeypatch.setattr(go, "_unlink_midx_file", lambda path: False)
+
+    go._flush_pack_locked(tmp_path, {new_sha: (b"blob", new_payload)}, True)
+
+    assert (pack_dir / "multi-pack-index").exists()
+    assert (pack_dir / f"pack-{tail}.idx").exists()
+    assert (pack_dir / f"pack-{tail}.pack").exists()
+    assert go._read_tail_marker(pack_dir)[1] == [tail]
+    want[new_sha] = new_payload
+    _assert_all(tmp_path, want)
+
+
+def test_midx_large_offset_chunk(tmp_path: Path) -> None:
     want = _packs(tmp_path, 4)
     sha = next(iter(want))
     _write_midx(tmp_path, _idx_names(tmp_path), large_for=sha)
     _assert_all(tmp_path, want)
 
 
-def test_midx_hit_in_pack_without_parsing_idx_reads_bytes(tmp_path):
+def test_midx_hit_in_pack_without_parsing_idx_reads_bytes(tmp_path: Path) -> None:
     want = _packs(tmp_path, 5)
     _write_midx(tmp_path, _idx_names(tmp_path))
     midx = go._parse_midx(tmp_path)

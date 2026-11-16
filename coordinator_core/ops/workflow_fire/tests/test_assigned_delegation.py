@@ -5,10 +5,11 @@ import pytest
 
 from coordinator_core.ops.workflow_fire import authority
 from coordinator_core.ops.workflow_fire.receipt import FIRE_TOKEN_ENV, fire_token_digest
+from pathlib import Path
 
 
 @pytest.fixture
-def assignment(tmp_path, monkeypatch):
+def assignment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, str, dict[str, str], Path, dict[str, str]]:
     script = tmp_path / 'run.mjs'
     script.write_text('export const meta={}; return {};')
     digest = hashlib.sha256(script.read_bytes()).hexdigest()
@@ -26,7 +27,7 @@ def assignment(tmp_path, monkeypatch):
     return script, digest, {FIRE_TOKEN_ENV: 'assigned-token', 'COORDINATOR_PARENT_SESSION_ID': 'parent-em'}, path, record
 
 
-def test_exact_assignment_is_accepted_without_creating_authority(assignment):
+def test_exact_assignment_is_accepted_without_creating_authority(assignment) -> None:
     script, digest, env, path, _ = assignment
     before = path.read_bytes()
     assert authority.assigned_script_delegation(str(script), digest, env)[0]
@@ -34,7 +35,7 @@ def test_exact_assignment_is_accepted_without_creating_authority(assignment):
 
 
 @pytest.mark.parametrize('change', ['digest', 'script', 'repository', 'ended', 'missing'])
-def test_receipt_token_cannot_authorize_a_different_or_finished_assignment(assignment, change):
+def test_receipt_token_cannot_authorize_a_different_or_finished_assignment(assignment, change) -> None:
     script, digest, env, path, record = assignment
     if change == 'digest':
         record['sha256'] = '0' * 64
@@ -51,7 +52,7 @@ def test_receipt_token_cannot_authorize_a_different_or_finished_assignment(assig
     assert not authority.assigned_script_delegation(str(script), digest, env)[0]
 
 
-def test_token_and_current_bytes_are_both_required(assignment):
+def test_token_and_current_bytes_are_both_required(assignment) -> None:
     script, digest, env, _, _ = assignment
     assert not authority.assigned_script_delegation(str(script), digest, {})[0]
     script.write_text('export const meta={}; return {changed:true};')

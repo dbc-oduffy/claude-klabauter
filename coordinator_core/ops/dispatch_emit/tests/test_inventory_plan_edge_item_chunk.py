@@ -13,6 +13,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_inventory_tranche_and_withhel
     _chunk,
     _repo,
 )
+from pathlib import Path
 
 _GATE = "output-consumption-runtime"
 _SHARED = "src/shared_with_pred.py"
@@ -28,7 +29,7 @@ def _chain(owner: str, n: int, disposition: str = "open") -> list:
     return rows
 
 
-def _fixture(tmp_path, pred_item: str, dep_item: str, *, pred_disposition="open", dep_first=False):
+def _fixture(tmp_path, pred_item: str, dep_item: str, *, pred_disposition: str = "open", dep_first: bool = False) -> Path:
     """Predecessor plan (6 chunks) and dependent plan (7 chunks) whose C7 carries a chunk-form
     `depends_on_plan` edge onto the predecessor's C6 and also writes `_SHARED`, which the
     predecessor item's Chunk-table footprint names."""
@@ -76,7 +77,7 @@ _IDS = [
 @pytest.mark.parametrize("pred_item,dep_item", _IDS)
 @pytest.mark.parametrize("dep_first", [False, True])
 @pytest.mark.parametrize("budget", [None, 40, 13])
-def test_open_predecessor_chunk_mints_item_dot_chunk(tmp_path, pred_item, dep_item, dep_first, budget):
+def test_open_predecessor_chunk_mints_item_dot_chunk(tmp_path: Path, pred_item, dep_item, dep_first, budget) -> None:
     inv = _fixture(tmp_path, pred_item, dep_item, dep_first=dep_first)
     text, spine_path = im.mint_spine(str(inv), row_budget=budget)
 
@@ -89,7 +90,7 @@ def test_open_predecessor_chunk_mints_item_dot_chunk(tmp_path, pred_item, dep_it
 
 @pytest.mark.parametrize("pred_item,dep_item", _IDS)
 @pytest.mark.parametrize("budget", [None, 40])
-def test_fully_landed_predecessor_leaves_no_bare_item_edge(tmp_path, pred_item, dep_item, budget):
+def test_fully_landed_predecessor_leaves_no_bare_item_edge(tmp_path: Path, pred_item, dep_item, budget) -> None:
     """A predecessor item whose plan chunks are all closed mints no row, so a
     write overlap with it must not surface as an edge onto the bare item id."""
     inv = _fixture(tmp_path, pred_item, dep_item, pred_disposition="coded")
@@ -103,7 +104,7 @@ def test_fully_landed_predecessor_leaves_no_bare_item_edge(tmp_path, pred_item, 
 
 
 @pytest.mark.parametrize("pred_item,dep_item", _IDS)
-def test_tight_budget_defers_the_dependent_with_its_predecessor_only(tmp_path, pred_item, dep_item):
+def test_tight_budget_defers_the_dependent_with_its_predecessor_only(tmp_path: Path, pred_item, dep_item) -> None:
     inv = _fixture(tmp_path, pred_item, dep_item)
     report: dict = {}
     text, spine_path = im.mint_spine(str(inv), row_budget=6, tranche_out=report)
@@ -116,7 +117,7 @@ def test_tight_budget_defers_the_dependent_with_its_predecessor_only(tmp_path, p
 
 @pytest.mark.parametrize("pred_item,dep_item", _IDS)
 @pytest.mark.parametrize("index", [1, 2])
-def test_part_cut_never_leaves_a_bare_item_edge(tmp_path, pred_item, dep_item, index):
+def test_part_cut_never_leaves_a_bare_item_edge(tmp_path: Path, pred_item, dep_item, index) -> None:
     inv = _fixture(tmp_path, pred_item, dep_item)
     text, _ = im.mint_spine(str(inv), part=(index, 2))
 
@@ -125,7 +126,7 @@ def test_part_cut_never_leaves_a_bare_item_edge(tmp_path, pred_item, dep_item, i
             assert edge["chunk"] not in (pred_item, dep_item), (row["id"], edge)
 
 
-def test_edge_to_a_pred_chunk_outside_the_run_still_withholds(tmp_path):
+def test_edge_to_a_pred_chunk_outside_the_run_still_withholds(tmp_path: Path) -> None:
     """Anti-scope: an edge onto a plan that is not an inventory item is never rewritten
     to a bare item id (asserts the no-bare-edge half only; withholding is not asserted)."""
     pred, dep = "pred-plan", "dep-plan"

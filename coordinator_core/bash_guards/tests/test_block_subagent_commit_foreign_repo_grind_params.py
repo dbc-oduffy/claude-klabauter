@@ -16,6 +16,7 @@ import pytest
 from coordinator_core.bash_guards import block_subagent_commit as guard
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit import terminal_commit_params_channel as chan
+from pathlib import Path
 
 _COMMIT_AGENT = "coordinator:git-commit-agent"
 _RUN = "20261113T025852Z"
@@ -24,7 +25,7 @@ _LEG = "leg:run-token-params-path"
 
 
 @pytest.fixture
-def repos(tmp_path, monkeypatch):
+def repos(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     engine, consumer = tmp_path / "engine", tmp_path / "consumer"
     for r in (engine, consumer):
         (r / ".git").mkdir(parents=True)
@@ -35,7 +36,7 @@ def repos(tmp_path, monkeypatch):
     return engine, consumer
 
 
-def _grind_params(consumer, script_rel="scratch/lessons-custom.workflow.mjs") -> dict:
+def _grind_params(consumer, script_rel: str = "scratch/lessons-custom.workflow.mjs") -> dict:
     script = (consumer / script_rel).as_posix()
     token = run_token.mint(consumer, _RUN, script, kind="grind")
     return {"script_path": script, "run_id": _RUN, "run_token": token}
@@ -81,14 +82,14 @@ def _refusal_note(path) -> str:
     return note.read_text(encoding="utf-8") if note.exists() else ""
 
 
-def test_prewritten_grind_params_in_a_foreign_consumer_repo_are_admitted(repos, tmp_path):
+def test_prewritten_grind_params_in_a_foreign_consumer_repo_are_admitted(repos, tmp_path: Path) -> None:
     engine, consumer = repos
     path = _prewrite(consumer, _grind_params(consumer))
     assert _check(_cmd(path), _transcript(tmp_path, None)) is None, _refusal_note(path)
     assert _refusal_note(path) == ""
 
 
-def test_prompt_carried_grind_params_in_a_foreign_consumer_repo_are_admitted(repos, tmp_path):
+def test_prompt_carried_grind_params_in_a_foreign_consumer_repo_are_admitted(repos, tmp_path: Path) -> None:
     _engine, consumer = repos
     params = _grind_params(consumer)
     path = chan.params_path(consumer, _RUN)
@@ -96,7 +97,7 @@ def test_prompt_carried_grind_params_in_a_foreign_consumer_repo_are_admitted(rep
     assert _check(_cmd(path), _transcript(tmp_path, params)) is None, _refusal_note(path)
 
 
-def test_a_session_owned_ask_token_in_a_foreign_repo_stays_refused(repos, tmp_path):
+def test_a_session_owned_ask_token_in_a_foreign_repo_stays_refused(repos, tmp_path: Path) -> None:
     engine, consumer = repos
     script = (consumer / "scratch/a.workflow.mjs").as_posix()
     token = run_token.mint(consumer, _RUN, script, session_id="someone-else")
@@ -104,7 +105,7 @@ def test_a_session_owned_ask_token_in_a_foreign_repo_stays_refused(repos, tmp_pa
     assert _check(_cmd(path), _transcript(tmp_path, None)) is not None
 
 
-def test_a_token_minted_for_another_run_does_not_admit_this_runs_params(repos, tmp_path):
+def test_a_token_minted_for_another_run_does_not_admit_this_runs_params(repos, tmp_path: Path) -> None:
     engine, consumer = repos
     run_token.mint(consumer, "20261113T000000Z", (consumer / "scratch/o.workflow.mjs").as_posix(), kind="grind")
     params = {"script_path": "scratch/x.workflow.mjs", "run_id": _RUN, "run_token": "never-minted"}
@@ -113,21 +114,21 @@ def test_a_token_minted_for_another_run_does_not_admit_this_runs_params(repos, t
     assert _refusal_note(path) == guard._NOTE_GUARD_PREFIX + _LEG
 
 
-def test_a_foreign_repo_with_no_token_for_the_run_stays_refused(repos, tmp_path):
+def test_a_foreign_repo_with_no_token_for_the_run_stays_refused(repos, tmp_path: Path) -> None:
     engine, consumer = repos
     params = {"script_path": "scratch/x.workflow.mjs", "run_id": _RUN, "run_token": "never-minted"}
     path = _prewrite(consumer, params)
     assert _check(_cmd(path), _transcript(tmp_path, None)) is not None
 
 
-def test_the_cwd_repo_holding_the_grind_run_is_admitted(repos, tmp_path):
+def test_the_cwd_repo_holding_the_grind_run_is_admitted(repos, tmp_path: Path) -> None:
     engine, consumer = repos
     params = _grind_params(engine)
     path = _prewrite(engine, params)
     assert _check(_cmd(path), _transcript(tmp_path, None)) is None
 
 
-def test_other_agent_types_stay_refused_for_a_foreign_grind_run(repos, tmp_path):
+def test_other_agent_types_stay_refused_for_a_foreign_grind_run(repos, tmp_path: Path) -> None:
     engine, consumer = repos
     path = _prewrite(consumer, _grind_params(consumer))
     assert _check(_cmd(path), _transcript(tmp_path, None), agent_type="general-purpose") is not None

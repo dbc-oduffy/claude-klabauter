@@ -91,6 +91,10 @@ from coordinator_core.ops.distill_stamp_disposal import (
     manifest_path_for_run,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from asyncio.subprocess import Process
 
 # Spawns a real external process; runs at cadence gates, not per-commit.
 # Spawn ratchet: coordinator_core/tests/test_no_new_spawning_tests.py
@@ -200,7 +204,7 @@ def _stamped(manifest: dict, *, note: str = "approved") -> dict:
 
 
 @_requires_rg
-def test_is_tracked_batch_returns_all_three_states(tmp_path: Path):
+def test_is_tracked_batch_returns_all_three_states(tmp_path: Path) -> None:
     _init_repo_with_commits(tmp_path)
     tracked_abs = tmp_path / "archive" / "handoffs" / "eligible.md"
 
@@ -212,13 +216,13 @@ def test_is_tracked_batch_returns_all_three_states(tmp_path: Path):
     assert result == {tracked_abs: "tracked", untracked_abs: "untracked"}
 
 
-def test_is_tracked_batch_empty_input_returns_empty_dict_no_spawn(tmp_path: Path):
+def test_is_tracked_batch_empty_input_returns_empty_dict_no_spawn(tmp_path: Path) -> None:
     result = _run(_is_tracked_batch(tmp_path, []))
     assert result == {}
 
 
 @_requires_rg
-def test_is_tracked_batch_all_tracked_rc0_branch(tmp_path: Path):
+def test_is_tracked_batch_all_tracked_rc0_branch(tmp_path: Path) -> None:
     """A batch where every path is tracked exercises the rc==0 branch
     (`{p: "tracked" for p in paths}`) in isolation -- the existing mixed
     fixture only reaches rc==0 incidentally via rc==1's stdout parse.
@@ -234,7 +238,7 @@ def test_is_tracked_batch_all_tracked_rc0_branch(tmp_path: Path):
 
 
 @_requires_rg
-def test_is_tracked_batch_quoted_path_is_classified_tracked(tmp_path: Path):
+def test_is_tracked_batch_quoted_path_is_classified_tracked(tmp_path: Path) -> None:
     """A tracked path containing a non-ASCII byte is C-quoted by `git
     ls-files` under the default `core.quotePath=true` -- a raw
     `splitlines()` parse of that quoted stdout form never matches the
@@ -259,8 +263,8 @@ def test_is_tracked_batch_quoted_path_is_classified_tracked(tmp_path: Path):
 
 
 def test_is_tracked_batch_nonzero_nonone_rc_is_indeterminate_for_every_path(
-    tmp_path: Path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A returncode outside {0, 1} (e.g. a fatal git error) must mark EVERY
     path in the batch indeterminate, never silently downgrade to
     untracked -- the same fail-closed contract as the per-item `_is_tracked`
@@ -294,13 +298,13 @@ def test_is_tracked_batch_nonzero_nonone_rc_is_indeterminate_for_every_path(
 # ---------------------------------------------------------------------------
 
 
-def test_verify_stamp_and_throttle_refuses_unstamped():
+def test_verify_stamp_and_throttle_refuses_unstamped() -> None:
     manifest = _manifest([_eligible_row("archive/handoffs/eligible.md")])
     with pytest.raises(ApplyDisposalError, match="unstamped"):
         verify_stamp_and_throttle(manifest)
 
 
-def test_verify_stamp_and_throttle_refuses_sha_drift():
+def test_verify_stamp_and_throttle_refuses_sha_drift() -> None:
     manifest = _manifest([_eligible_row("archive/handoffs/eligible.md")])
     stamped = _stamped(manifest)
     # Mutate the body AFTER stamping (simulates a re-assemble or hand-edit).
@@ -310,27 +314,27 @@ def test_verify_stamp_and_throttle_refuses_sha_drift():
         verify_stamp_and_throttle(drifted)
 
 
-def test_verify_stamp_and_throttle_refuses_unacknowledged_mass_throttle():
+def test_verify_stamp_and_throttle_refuses_unacknowledged_mass_throttle() -> None:
     manifest = _manifest([_eligible_row("archive/handoffs/eligible.md")], mass_throttle=True)
     stamped = _stamped(manifest, note="approved, no special mention")
     with pytest.raises(ApplyDisposalError, match="re-assemble it, then stamp"):
         verify_stamp_and_throttle(stamped)
 
 
-def test_verify_stamp_and_throttle_passes_acknowledged_mass_throttle():
+def test_verify_stamp_and_throttle_passes_acknowledged_mass_throttle() -> None:
     manifest = _manifest([_eligible_row("archive/handoffs/eligible.md")], mass_throttle=True)
     stamped = _stamped(manifest, note=f"approved, {MASS_THROTTLE_ACK_MARKER}")
     verify_stamp_and_throttle(stamped)  # must not raise
 
 
-def test_verify_stamp_and_throttle_passes_below_soft_band():
+def test_verify_stamp_and_throttle_passes_below_soft_band() -> None:
     # No mass_throttle flag, no ack needed -- ordinary small run applies.
     manifest = _manifest([_eligible_row("archive/handoffs/eligible.md")])
     stamped = _stamped(manifest, note="approved")
     verify_stamp_and_throttle(stamped)  # must not raise
 
 
-def test_verify_stamp_and_throttle_refuses_above_hard_cap_even_with_ack():
+def test_verify_stamp_and_throttle_refuses_above_hard_cap_even_with_ack() -> None:
     # E2: MASS_THROTTLE_HARD_CAP is an unconditional ceiling -- the soft-band
     # ack (MASS_THROTTLE_ACK_MARKER) authorizes the ratio/absolute -> hard-cap
     # band but cannot lift the hard cap itself.
@@ -349,7 +353,7 @@ def test_verify_stamp_and_throttle_refuses_above_hard_cap_even_with_ack():
 # ---------------------------------------------------------------------------
 
 
-def test_verify_drain_ordering_refuses_non_ancestor_sha(tmp_path: Path):
+def test_verify_drain_ordering_refuses_non_ancestor_sha(tmp_path: Path) -> None:
     shas = _init_repo_with_commits(tmp_path)
     bogus_sha = "0" * 40
     with pytest.raises(ApplyDisposalError, match="not an ancestor"):
@@ -358,13 +362,13 @@ def test_verify_drain_ordering_refuses_non_ancestor_sha(tmp_path: Path):
     assert shas["root"] != shas["harvest"] != shas["head"]
 
 
-def test_verify_drain_ordering_refuses_ancestor_without_containment(tmp_path: Path):
+def test_verify_drain_ordering_refuses_ancestor_without_containment(tmp_path: Path) -> None:
     shas = _init_repo_with_commits(tmp_path)
     with pytest.raises(ApplyDisposalError, match="neither"):
         _run(verify_drain_ordering(tmp_path, shas["root"]))
 
 
-def test_verify_drain_ordering_passes_ancestor_with_log_containment(tmp_path: Path):
+def test_verify_drain_ordering_passes_ancestor_with_log_containment(tmp_path: Path) -> None:
     shas = _init_repo_with_commits(tmp_path)
     _run(verify_drain_ordering(tmp_path, shas["harvest"]))  # must not raise
 
@@ -375,7 +379,7 @@ def test_verify_drain_ordering_passes_ancestor_with_log_containment(tmp_path: Pa
 
 
 @_requires_rg
-def test_already_deleted_path_is_skipped(tmp_path: Path):
+def test_already_deleted_path_is_skipped(tmp_path: Path) -> None:
     _init_repo_with_commits(tmp_path)
     manifest = _manifest([_eligible_row("archive/handoffs/does-not-exist.md")])
     plan = compute_apply_plan(tmp_path, manifest)
@@ -386,7 +390,7 @@ def test_already_deleted_path_is_skipped(tmp_path: Path):
 
 
 @_requires_rg
-def test_toctou_reblock_skips_newly_blocked_row(tmp_path: Path):
+def test_toctou_reblock_skips_newly_blocked_row(tmp_path: Path) -> None:
     _init_repo_with_commits(tmp_path)
     # Overwrite the candidate AFTER assemble time to strip shipped_in — the
     # manifest still says eligible=True (stale), but a re-check now blocks it.
@@ -402,7 +406,7 @@ def test_toctou_reblock_skips_newly_blocked_row(tmp_path: Path):
 
 
 @_requires_rg
-def test_order_shuffled_is_commutative(tmp_path: Path):
+def test_order_shuffled_is_commutative(tmp_path: Path) -> None:
     _init_repo_with_commits(tmp_path)
     second = tmp_path / "archive" / "handoffs" / "aaa-second.md"
     second.write_text(
@@ -434,7 +438,7 @@ def test_order_shuffled_is_commutative(tmp_path: Path):
 
 
 @_requires_rg
-def test_apply_disposal_manifest_deletes_tracked_and_appends_log(tmp_path: Path):
+def test_apply_disposal_manifest_deletes_tracked_and_appends_log(tmp_path: Path) -> None:
     shas = _init_repo_with_commits(tmp_path)
     manifest = _manifest([_eligible_row("archive/handoffs/eligible.md")])
     stamped = _stamped(manifest)
@@ -458,7 +462,7 @@ def test_apply_disposal_manifest_deletes_tracked_and_appends_log(tmp_path: Path)
 
 
 @_requires_rg
-def test_apply_disposal_manifest_deletes_untracked_no_commit_for_that_half(tmp_path: Path):
+def test_apply_disposal_manifest_deletes_untracked_no_commit_for_that_half(tmp_path: Path) -> None:
     shas = _init_repo_with_commits(tmp_path)
     untracked = tmp_path / "archive" / "handoffs" / "untracked.md"
     untracked.write_text(
@@ -493,7 +497,7 @@ def test_apply_disposal_manifest_deletes_untracked_no_commit_for_that_half(tmp_p
 
 
 @_requires_rg
-def test_replay_is_idempotent_no_op(tmp_path: Path):
+def test_replay_is_idempotent_no_op(tmp_path: Path) -> None:
     shas = _init_repo_with_commits(tmp_path)
     manifest = _manifest([_eligible_row("archive/handoffs/eligible.md")])
     stamped = _stamped(manifest)
@@ -521,8 +525,8 @@ def test_replay_is_idempotent_no_op(tmp_path: Path):
 
 @_requires_rg
 def test_git_add_failure_reverts_log_path_and_replay_has_no_duplicates(
-    tmp_path: Path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """A `git add` failure on the canonical-log path (simulated via a
     real-git-backed wrapper that fails only that one call) must revert
     log_path's own on-disk mutation, not just the git-rm'd candidates —
@@ -569,8 +573,8 @@ def test_git_add_failure_reverts_log_path_and_replay_has_no_duplicates(
 
 
 def test_git_add_failure_and_revert_failure_both_surface_in_reason(
-    tmp_path: Path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """When the log-stage-failed revert path's own `git checkout HEAD --`
     ALSO fails (disk full, index lock contention, ...), the original
     log-stage failure must remain the primary reported cause — never masked
@@ -625,7 +629,7 @@ def _stage_pending_watermark(root: Path, run_id: str, **fields) -> None:
     )
 
 
-def test_apply_promotes_pending_watermark_into_the_one_commit(tmp_path: Path):
+def test_apply_promotes_pending_watermark_into_the_one_commit(tmp_path: Path) -> None:
     shas = _init_repo_with_commits(tmp_path)
     manifest = _manifest([_eligible_row("archive/handoffs/eligible.md")])
     _stage_pending_watermark(tmp_path, manifest["run_id"], cursor="2026-01-01 x.md")
@@ -645,7 +649,7 @@ def test_apply_promotes_pending_watermark_into_the_one_commit(tmp_path: Path):
     assert stored["cursor"] == "2026-01-01 x.md"
 
 
-def test_apply_without_pending_watermark_leaves_state_absent(tmp_path: Path):
+def test_apply_without_pending_watermark_leaves_state_absent(tmp_path: Path) -> None:
     shas = _init_repo_with_commits(tmp_path)
     manifest = _manifest([_eligible_row("archive/handoffs/eligible.md")])
 
@@ -655,7 +659,7 @@ def test_apply_without_pending_watermark_leaves_state_absent(tmp_path: Path):
     assert "state/run-watermarks" not in _git("show", "--name-only", "--format=", "HEAD", cwd=tmp_path)
 
 
-def test_failed_commit_restores_the_prior_watermark(tmp_path: Path, monkeypatch):
+def test_failed_commit_restores_the_prior_watermark(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import distill_apply_disposal as mod
 
     shas = _init_repo_with_commits(tmp_path)
@@ -680,7 +684,7 @@ def test_failed_commit_restores_the_prior_watermark(tmp_path: Path, monkeypatch)
     assert prior.read_text(encoding="utf-8") == '{"base_sha": "old"}\n'
 
 
-def test_exception_on_commit_restores_the_prior_watermark(tmp_path: Path, monkeypatch):
+def test_exception_on_commit_restores_the_prior_watermark(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import distill_apply_disposal as mod
 
     shas = _init_repo_with_commits(tmp_path)
@@ -694,7 +698,7 @@ def test_exception_on_commit_restores_the_prior_watermark(tmp_path: Path, monkey
 
     real_run_git = mod._run_git
 
-    async def raising_commit(*args, **kwargs):
+    async def raising_commit(*args, **kwargs) -> tuple[int, bytes, bytes]:
         if "commit" in args:
             raise RuntimeError("boom")
         return await real_run_git(*args, **kwargs)
@@ -706,7 +710,7 @@ def test_exception_on_commit_restores_the_prior_watermark(tmp_path: Path, monkey
     assert prior.read_text(encoding="utf-8") == '{"base_sha": "old"}\n'
 
 
-def test_apply_disposal_manifest_absent_run_raises(tmp_path: Path):
+def test_apply_disposal_manifest_absent_run_raises(tmp_path: Path) -> None:
     _init_repo_with_commits(tmp_path)
     with pytest.raises(DisposalStampError, match="not found on disk"):
         load_disposal_manifest(manifest_path_for_run(tmp_path, "no-such-run"))
@@ -717,7 +721,7 @@ def test_apply_disposal_manifest_absent_run_raises(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_write_apply_receipt_shape(tmp_path: Path):
+def test_write_apply_receipt_shape(tmp_path: Path) -> None:
     from coordinator_core.ops.distill_apply_disposal import ApplyDisposalResult
 
     (tmp_path / ".git").mkdir()
@@ -742,19 +746,19 @@ def test_write_apply_receipt_shape(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 
-def test_handler_raises_on_repo_root_none():
+def test_handler_raises_on_repo_root_none() -> None:
     with pytest.raises(ValueError, match="repo_root is None"):
         _run(_handler({"run_id": "x", "harvest_committed_sha": "abc"}, repo_root=None))
 
 
-def test_handler_raises_on_missing_harvest_sha(tmp_path: Path):
+def test_handler_raises_on_missing_harvest_sha(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     with pytest.raises(ValueError, match="harvest_committed_sha"):
         _run(_handler({"run_id": "x"}, repo_root=tmp_path / ".git"))
 
 
 @_requires_rg
-def test_handler_end_to_end_dispatch_message_smoke(tmp_path: Path):
+def test_handler_end_to_end_dispatch_message_smoke(tmp_path: Path) -> None:
     """assemble (C12) -> stamp (C13) -> apply (C14) via the REAL registered
     wiring (ops/__init__.py eager import + _registry_map.py + op_scopes.py +
     the @register_op decorator)."""
@@ -904,7 +908,7 @@ def _write_parent_handoff(path: Path, *, extra_fm: str = "") -> None:
 
 
 @_requires_rg
-def test_denorm_predecessor_edge_appends_disposed_successor_before_delete(tmp_path: Path):
+def test_denorm_predecessor_edge_appends_disposed_successor_before_delete(tmp_path: Path) -> None:
     shas = _init_repo_for_denorm(tmp_path)
     parent = tmp_path / "state" / "handoffs" / "parent.md"
     _write_parent_handoff(parent)
@@ -936,7 +940,7 @@ def test_denorm_predecessor_edge_appends_disposed_successor_before_delete(tmp_pa
 
 
 @_requires_rg
-def test_denorm_origin_handoff_edge_appends_disposed_successor_before_delete(tmp_path: Path):
+def test_denorm_origin_handoff_edge_appends_disposed_successor_before_delete(tmp_path: Path) -> None:
     shas = _init_repo_for_denorm(tmp_path)
     parent = tmp_path / "state" / "handoffs" / "origin-parent.md"
     _write_parent_handoff(parent)
@@ -965,7 +969,7 @@ def test_denorm_origin_handoff_edge_appends_disposed_successor_before_delete(tmp
 
 
 @_requires_rg
-def test_denorm_skips_when_parent_also_in_disposal_batch(tmp_path: Path):
+def test_denorm_skips_when_parent_also_in_disposal_batch(tmp_path: Path) -> None:
     shas = _init_repo_for_denorm(tmp_path)
     parent = tmp_path / "archive" / "handoffs" / "doomed-parent.md"
     _write_child_handoff(parent, edge_field="predecessor", edge_value="none")
@@ -1010,7 +1014,7 @@ def test_denorm_skips_when_parent_also_in_disposal_batch(tmp_path: Path):
 
 
 @_requires_rg
-def test_denorm_idempotent_noop_when_parent_already_has_matching_entry(tmp_path: Path):
+def test_denorm_idempotent_noop_when_parent_already_has_matching_entry(tmp_path: Path) -> None:
     shas = _init_repo_for_denorm(tmp_path)
     parent = tmp_path / "state" / "handoffs" / "already-denormed-parent.md"
     _write_parent_handoff(
@@ -1052,7 +1056,7 @@ def test_denorm_idempotent_noop_when_parent_already_has_matching_entry(tmp_path:
 
 
 @_requires_rg
-def test_denorm_two_disposed_children_of_one_parent_both_get_entries(tmp_path: Path):
+def test_denorm_two_disposed_children_of_one_parent_both_get_entries(tmp_path: Path) -> None:
     """The case the single-valued continued_into design silently dropped: a
     parent with TWO children disposed in the SAME batch must end up with
     BOTH successor_refs in disposed_successors, not just the first."""
@@ -1103,7 +1107,7 @@ def test_denorm_two_disposed_children_of_one_parent_both_get_entries(tmp_path: P
 
 
 @_requires_rg
-def test_denorm_partial_batch_failure_only_succeeded_child_gets_entry(tmp_path: Path):
+def test_denorm_partial_batch_failure_only_succeeded_child_gets_entry(tmp_path: Path) -> None:
     """Two children of one parent, tracked; one child's git rm fails (it
     carries an uncommitted local edit, so plain `git rm` — never `git rm -f`,
     per module docstring — correctly refuses to remove it) while the other
@@ -1164,8 +1168,8 @@ def test_denorm_partial_batch_failure_only_succeeded_child_gets_entry(tmp_path: 
 
 @_requires_rg
 def test_denorm_untracked_child_unlink_failure_writes_no_denorm_entry(
-    tmp_path: Path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """An untracked child whose `unlink()` raises must produce NO denorm
     entry on its parent — the write is a direct synchronous
     `Path.write_text` with no commit gate, so writing it BEFORE the unlink
@@ -1211,7 +1215,7 @@ def test_denorm_untracked_child_unlink_failure_writes_no_denorm_entry(
 
 
 @_requires_rg
-def test_denorm_compute_apply_plan_alone_writes_nothing(tmp_path: Path):
+def test_denorm_compute_apply_plan_alone_writes_nothing(tmp_path: Path) -> None:
     """Dry-run must stay write-free: compute_apply_plan (never
     apply_disposal_manifest) must not touch the parent or child files on
     disk, even though it computes a non-empty denorm_writes plan."""
@@ -1254,7 +1258,7 @@ def test_denorm_compute_apply_plan_alone_writes_nothing(tmp_path: Path):
 
 
 @_requires_rg
-def test_main_index_resync_collapses_to_one_call_not_per_path(tmp_path: Path, monkeypatch):
+def test_main_index_resync_collapses_to_one_call_not_per_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC-7 — counted demonstration: the main-index resync after a
     multi-survivor tracked delete must cost ONE `git update-index`
     subprocess call, not one per reaped/denorm/log path."""
@@ -1281,7 +1285,7 @@ def test_main_index_resync_collapses_to_one_call_not_per_path(tmp_path: Path, mo
     real_exec = asyncio.create_subprocess_exec
     update_index_calls: list[tuple] = []
 
-    async def _counting_exec(*args, **kwargs):
+    async def _counting_exec(*args, **kwargs) -> Process:
         if "update-index" in args:
             update_index_calls.append(args)
         return await real_exec(*args, **kwargs)
@@ -1309,7 +1313,7 @@ def test_main_index_resync_collapses_to_one_call_not_per_path(tmp_path: Path, mo
 
 
 @_requires_rg
-def test_main_index_resync_retries_through_lock_contention(tmp_path: Path, monkeypatch):
+def test_main_index_resync_retries_through_lock_contention(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC-8 — retry composed locally via
     `coordinator_core.ops.fleet._common._update_index_with_retry` (see this
     module's in-code note, above the resync call site, for the rejected
@@ -1355,8 +1359,8 @@ def test_main_index_resync_retries_through_lock_contention(tmp_path: Path, monke
 
 @_requires_rg
 def test_main_index_resync_persistent_failure_log_is_honest_about_scope(
-    tmp_path: Path, monkeypatch, caplog
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
     """On a persistent (retry-
     exhausted) resync failure, the error log must NOT claim every batched
     path is confirmed affected (git update-index applies positionally and
@@ -1410,8 +1414,8 @@ def test_main_index_resync_persistent_failure_log_is_honest_about_scope(
 
 @_requires_rg
 def test_tracked_rm_process_count_does_not_grow_with_the_set(
-    tmp_path: Path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """`_delete_tracked_and_append_log`'s tracked-delete loop must issue ONE
     `git rm` spawn for the whole tracked_paths batch, not one per path
     (amplification hitlist, 2026-08-19 — `git rm` natively accepts N
@@ -1420,7 +1424,7 @@ def test_tracked_rm_process_count_does_not_grow_with_the_set(
     real_exec = asyncio.create_subprocess_exec
     rm_spawns: list[list[str]] = []
 
-    async def _counting_exec(*args, **kwargs):
+    async def _counting_exec(*args, **kwargs) -> Process:
         if len(args) >= 2 and args[0] == "git" and args[1] == "rm":
             rm_spawns.append(list(args))
         return await real_exec(*args, **kwargs)
@@ -1534,7 +1538,7 @@ def _dispatch_apply(tmp_path: Path, harvest: str, run_id: str) -> dict:
 
 
 @_requires_rg
-def test_default_param_apply_ends_in_post_run_finish_as_its_own_commit(tmp_path: Path, monkeypatch):
+def test_default_param_apply_ends_in_post_run_finish_as_its_own_commit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
     harvest = _init_repo_with_wiki_harvest(tmp_path)
     before = _git("rev-list", "--count", "HEAD", cwd=tmp_path)
@@ -1578,7 +1582,7 @@ def _seed_run_result_after_manifest(tmp_path: Path, monkeypatch, run_id: str, pr
 
     real = dad.write_apply_receipt
 
-    def _receipt(root, result, **kw):
+    def _receipt(root, result, **kw) -> Path:
         _write_run_result(tmp_path, run_id, promoted)
         return real(root, result, **kw)
 
@@ -1586,7 +1590,7 @@ def _seed_run_result_after_manifest(tmp_path: Path, monkeypatch, run_id: str, pr
 
 
 @_requires_rg
-def test_p5_audit_fails_the_tail_on_an_unexplained_tree_change(tmp_path: Path, monkeypatch):
+def test_p5_audit_fails_the_tail_on_an_unexplained_tree_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
     harvest = _init_repo_with_wiki_harvest(tmp_path)
     (tmp_path / "stray.txt").write_text("x\n", encoding="utf-8")
@@ -1601,7 +1605,7 @@ def test_p5_audit_fails_the_tail_on_an_unexplained_tree_change(tmp_path: Path, m
 
 
 @_requires_rg
-def test_p5_audit_passes_when_every_change_is_explained(tmp_path: Path, monkeypatch):
+def test_p5_audit_passes_when_every_change_is_explained(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("CLAUDE_CODE_SESSION_ID", _SID)
     harvest = _init_repo_with_wiki_harvest(tmp_path)
     _seed_run_result_after_manifest(tmp_path, monkeypatch, "2026-07-23-08h00", [_WIKI + "harvest/page.md"])
@@ -1613,7 +1617,7 @@ def test_p5_audit_passes_when_every_change_is_explained(tmp_path: Path, monkeypa
 
 
 @_requires_rg
-def test_a_refused_apply_skips_the_tail(tmp_path: Path, monkeypatch):
+def test_a_refused_apply_skips_the_tail(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops import post_run_finish
 
     calls: list[dict] = []
@@ -1627,20 +1631,20 @@ def test_a_refused_apply_skips_the_tail(tmp_path: Path, monkeypatch):
     assert calls == []
 
 
-def test_verify_drain_ordering_returns_the_harvest_commit_paths(tmp_path: Path):
+def test_verify_drain_ordering_returns_the_harvest_commit_paths(tmp_path: Path) -> None:
     shas = _init_repo_with_commits(tmp_path)
 
     assert _run(verify_drain_ordering(tmp_path, shas["harvest"])) == ["state/distillation-log.md"]
 
 
-def test_missing_run_id_error_names_the_producing_op(tmp_path: Path):
+def test_missing_run_id_error_names_the_producing_op(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     with pytest.raises(ValueError, match="distill.assemble_disposal_manifest"):
         _run(_handler({"harvest_committed_sha": "abc"}, repo_root=tmp_path / ".git"))
     assert not (tmp_path / "state").exists()
 
 
-def test_absent_manifest_error_names_assemble_not_stamp_as_producer(tmp_path: Path):
+def test_absent_manifest_error_names_assemble_not_stamp_as_producer(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     with pytest.raises(ValueError, match="run distill.assemble_disposal_manifest"):
         _run(_handler({"run_id": "r1", "harvest_committed_sha": "abc"}, repo_root=tmp_path / ".git"))

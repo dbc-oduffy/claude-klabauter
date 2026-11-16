@@ -10,8 +10,10 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+import yaml
 
 from coordinator_core.ops import plan_set_code_done as mod
+from coordinator_core.ops.plan_tasks_mutate import EM_DISCHARGE_KEY, evidence_sidecar_path
 
 
 def _repo(tmp_path: Path) -> Path:
@@ -159,6 +161,41 @@ def test_the_op_writes_nothing(tmp_path):
     _run(root, [plan])
     assert sorted(p.as_posix() for p in root.rglob("*") if p.is_file()) == before
     assert (root / plan).stat().st_mtime_ns == stat
+
+
+def _discharge(root: Path, plan: str, entries: dict) -> None:
+    sidecar = evidence_sidecar_path(root / plan)
+    sidecar.write_text(yaml.safe_dump({EM_DISCHARGE_KEY: entries}), encoding="utf-8")
+
+
+_FULL = {"recorded_at": "2026-11-16T00:00:00Z", "text": "done", "commit": "a" * 40, "evidence": "landed"}
+
+
+def test_em_discharged_executor_rows_are_closed_and_code_complete(tmp_path):
+    root = _repo(tmp_path)
+    plan = _plan(root, "a.md", [_row("C1", "coded"), _row("C2", "open"), _row("C3", "open")])
+    _discharge(root, plan, {"C2": _FULL, "C3": _FULL})
+    reply = _run(root, [plan])
+    assert reply["code_complete"] is True
+    assert reply["plans"] == [{"plan": plan, "open_rows": [], "error": None}]
+
+
+def test_row_without_a_discharge_record_stays_open(tmp_path):
+    root = _repo(tmp_path)
+    plan = _plan(root, "a.md", [_row("C1", "open"), _row("C2", "open")])
+    _discharge(root, plan, {"C1": _FULL})
+    reply = _run(root, [plan])
+    assert reply["code_complete"] is False
+    assert reply["plans"][0]["open_rows"] == ["C2"]
+
+
+def test_ineligible_discharge_record_does_not_close_the_row(tmp_path):
+    root = _repo(tmp_path)
+    plan = _plan(root, "a.md", [_row("C1", "open")])
+    _discharge(root, plan, {"C1": {"recorded_at": "2026-11-16T00:00:00Z", "text": "done"}})
+    reply = _run(root, [plan])
+    assert reply["code_complete"] is False
+    assert reply["plans"][0]["open_rows"] == ["C1"]
 
 
 def test_malformed_agent_type_fails_closed_as_an_executor_row():

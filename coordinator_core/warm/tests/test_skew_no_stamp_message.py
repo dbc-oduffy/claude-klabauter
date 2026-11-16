@@ -27,9 +27,10 @@ from __future__ import annotations
 from pathlib import Path
 
 from coordinator_core.warm import skew
+import pytest
 
 
-def test_absent_root_names_the_path_and_routes_to_root_channel_reconcile(tmp_path):
+def test_absent_root_names_the_path_and_routes_to_root_channel_reconcile(tmp_path: Path) -> None:
     absent = tmp_path / "does-not-exist"
 
     message = skew._no_stamp_message(absent)
@@ -39,7 +40,7 @@ def test_absent_root_names_the_path_and_routes_to_root_channel_reconcile(tmp_pat
     assert "setup.py" not in message
 
 
-def test_present_unstamped_root_names_resolved_path_and_routes_to_setup_py(tmp_path):
+def test_present_unstamped_root_names_resolved_path_and_routes_to_setup_py(tmp_path: Path) -> None:
     present = tmp_path / "unstamped-clone"
     present.mkdir()
 
@@ -52,7 +53,7 @@ def test_present_unstamped_root_names_resolved_path_and_routes_to_setup_py(tmp_p
     assert "root_channel_reconcile" not in message
 
 
-def test_compute_client_token_raises_with_root_and_root_exists_paired(tmp_path, monkeypatch):
+def test_compute_client_token_raises_with_root_and_root_exists_paired(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     absent = tmp_path / "does-not-exist"
 
     try:
@@ -64,7 +65,7 @@ def test_compute_client_token_raises_with_root_and_root_exists_paired(tmp_path, 
         raise AssertionError("expected UnstampedEngineRootError")
 
 
-def test_bare_construction_leaves_root_exists_unknown_not_present():
+def test_bare_construction_leaves_root_exists_unknown_not_present() -> None:
     exc = skew.UnstampedEngineRootError("some message")
 
     assert exc.root is None

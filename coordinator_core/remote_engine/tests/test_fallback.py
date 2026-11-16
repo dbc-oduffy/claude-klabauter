@@ -4,11 +4,17 @@ import json
 import subprocess
 
 from coordinator_core.remote_engine import fallback
+from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from subprocess import CompletedProcess
 
 SSH = {"kind": "ssh", "host": "h", "invoke": "/x/coordinator-invoke"}
 
 
-def _box(bid, transport=SSH):
+def _box(bid, transport: dict[str, str] | None = SSH):
     rec = {"box_id": bid, "root": "/r", "capability": {}}
     if transport is not None:
         rec["transport"] = transport
@@ -16,16 +22,16 @@ def _box(bid, transport=SSH):
 
 
 class Runner:
-    def __init__(self, stdout='{"result": {"rows": []}}', rc=0):
+    def __init__(self, stdout: str = '{"result": {"rows": []}}', rc: int = 0) -> None:
         self.calls = []
         self.stdout, self.rc = stdout, rc
 
-    def __call__(self, argv, timeout):
+    def __call__(self, argv, timeout) -> "CompletedProcess[str]":
         self.calls.append((argv, timeout))
         return subprocess.CompletedProcess(argv, self.rc, self.stdout, "")
 
 
-def _env(tmp_path, monkeypatch):
+def _env(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("COORDINATOR_SETTINGS_HOME", str(tmp_path))
     monkeypatch.setattr(fallback.box_transport, "_registered", lambda box, host, invoke: None)
     fallback.box_transport._reset_limits()
@@ -33,7 +39,7 @@ def _env(tmp_path, monkeypatch):
     monkeypatch.setattr(fallback, "telemetry_path", lambda: tmp_path / "t.jsonl")
 
 
-def test_serves_once_excluding_local(tmp_path, monkeypatch):
+def test_serves_once_excluding_local(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     monkeypatch.setattr(fallback.policy, "remote_safe", lambda op: True)
     r = Runner()
@@ -48,7 +54,7 @@ def test_serves_once_excluding_local(tmp_path, monkeypatch):
     assert line["served_by"] == "b" and line["ok"] is True
 
 
-def test_explicit_timeout_passed(tmp_path, monkeypatch):
+def test_explicit_timeout_passed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     monkeypatch.setattr(fallback.policy, "remote_safe", lambda op: True)
     r = Runner()
@@ -56,14 +62,14 @@ def test_explicit_timeout_passed(tmp_path, monkeypatch):
     assert r.calls[0][1] == 2.5
 
 
-def test_refuses_not_remote_safe(tmp_path, monkeypatch):
+def test_refuses_not_remote_safe(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     r = Runner()
     assert fallback.try_remote("trim-file-cache", {}, runner=r, boxes=[_box("b")], local_id="a") is None
     assert r.calls == []
 
 
-def test_refuses_in_hook_context(tmp_path, monkeypatch):
+def test_refuses_in_hook_context(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     monkeypatch.setattr(fallback.policy, "remote_safe", lambda op: True)
     monkeypatch.setenv(fallback.HOOK_ENV, "0")
@@ -74,7 +80,7 @@ def test_refuses_in_hook_context(tmp_path, monkeypatch):
     assert fallback.try_remote("x", {}, runner=r, boxes=[_box("b")], local_id="a") is not None
 
 
-def test_no_ssh_box_returns_none(tmp_path, monkeypatch):
+def test_no_ssh_box_returns_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     monkeypatch.setattr(fallback.policy, "remote_safe", lambda op: True)
     r = Runner()
@@ -83,7 +89,7 @@ def test_no_ssh_box_returns_none(tmp_path, monkeypatch):
     assert r.calls == []
 
 
-def test_transport_failure_returns_none_and_records(tmp_path, monkeypatch):
+def test_transport_failure_returns_none_and_records(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     monkeypatch.setattr(fallback.policy, "remote_safe", lambda op: True)
     r = Runner(rc=255)
@@ -93,7 +99,7 @@ def test_transport_failure_returns_none_and_records(tmp_path, monkeypatch):
     assert line["ok"] is False
 
 
-def test_timeout_returns_none(tmp_path, monkeypatch):
+def test_timeout_returns_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     monkeypatch.setattr(fallback.policy, "remote_safe", lambda op: True)
 
@@ -103,7 +109,7 @@ def test_timeout_returns_none(tmp_path, monkeypatch):
     assert fallback.try_remote("x", {}, runner=boom, boxes=[_box("b")], local_id="a") is None
 
 
-def test_phase2_timeout_returns_indeterminate_not_none(tmp_path, monkeypatch):
+def test_phase2_timeout_returns_indeterminate_not_none(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
 
     def boom(argv, timeout):
@@ -114,7 +120,7 @@ def test_phase2_timeout_returns_indeterminate_not_none(tmp_path, monkeypatch):
     assert out["request_key"] is None and "dispatch.emit" in out["reason"]
 
 
-def test_phase2_far_error_key_is_carried(tmp_path, monkeypatch):
+def test_phase2_far_error_key_is_carried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     res = {"ok": False, "reason": "remote_error", "error": {"code": -32004, "data": {"dispatch_key": "k-1"}}}
     monkeypatch.setattr(fallback.box_transport, "invoke_remote", lambda *a, **k: res)
@@ -122,7 +128,7 @@ def test_phase2_far_error_key_is_carried(tmp_path, monkeypatch):
     assert out["indeterminate"] is True and out["request_key"] == "k-1"
 
 
-def test_phase2_exception_after_send_is_indeterminate(tmp_path, monkeypatch):
+def test_phase2_exception_after_send_is_indeterminate(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
 
     def raising(*a, **k):
@@ -135,13 +141,13 @@ def test_phase2_exception_after_send_is_indeterminate(tmp_path, monkeypatch):
     assert fallback.try_remote("x", {}, boxes=[_box("b")], local_id="a") is None
 
 
-def test_phase2_success_is_a_normal_reply(tmp_path, monkeypatch):
+def test_phase2_success_is_a_normal_reply(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     out = fallback.try_remote("dispatch.emit", {}, runner=Runner(), boxes=[_box("b")], local_id="a")
     assert "indeterminate" not in out and out["remote"] is True
 
 
-def test_local_path_params_refused_before_send(tmp_path, monkeypatch):
+def test_local_path_params_refused_before_send(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     r = Runner()
     for params in ({"cwd": "/abs/tree"}, {"repo_root": "E:\\repo"}):
@@ -151,7 +157,7 @@ def test_local_path_params_refused_before_send(tmp_path, monkeypatch):
                                boxes=[_box("b")], local_id="a") is not None
 
 
-def test_explicit_hook_marker_refuses(tmp_path, monkeypatch):
+def test_explicit_hook_marker_refuses(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _env(tmp_path, monkeypatch)
     monkeypatch.setattr(fallback.policy, "remote_safe", lambda op: True)
     monkeypatch.setenv(fallback.HOOK_MARKER_ENV, "1")

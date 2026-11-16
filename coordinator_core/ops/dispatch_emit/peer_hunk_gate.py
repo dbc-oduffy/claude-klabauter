@@ -458,7 +458,23 @@ def landing_holds(
     co-declares it; an out-of-ask path is held regardless. A declared path in any of these sets is
     released when `landable_under_hold` can carry it (the peer's hunks are absent, or this run's own
     hunks split off as a settled blob; a reviewer- or conflict-named path only through the split), and
-    a deleted path or an unreadable halt record releases the hold."""
+    a deleted path or an unreadable halt record releases the hold. Every provenance pass of one call
+    shares one `hunk_provenance.RunInvariants`."""
+    from coordinator_core.ops.dispatch_emit import hunk_provenance
+
+    with hunk_provenance.invariants_scope(worktree_root, run_id):
+        return _landing_holds(
+            worktree_root, session_id, run_id, plan_path, all_paths, deleted_paths, chunk_declared,
+            own_declared, own_seniority, ledger_conflicts,
+        )
+
+
+def _landing_holds(
+    worktree_root: Path, session_id: Optional[str], run_id: str, plan_path: Optional[str],
+    all_paths: Sequence[str], deleted_paths: Sequence[str], chunk_declared: Iterable[str],
+    own_declared: Iterable[str], own_seniority: Optional[tuple],
+    ledger_conflicts: Sequence[str],
+) -> dict:
     from coordinator_core.ops.dispatch_emit import hunk_provenance
     from coordinator_core.ops.dispatch_emit.land_run import UNREADABLE_HALT_RECORD, foreign_halted_withheld
     from coordinator_core.ops.workflow_fire.finalizer import review_owner

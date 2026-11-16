@@ -13,6 +13,7 @@ from coordinator_core.contract.cockpit_schema.emit_schema import (
 from coordinator_core.contract.cockpit_schema.entities.completion_receipt import (
     CompletionReceipt,
 )
+from pathlib import Path
 
 PROV = {
     "source_kind": "local_fs",
@@ -59,12 +60,12 @@ REQUIRED = {
 }
 
 
-def test_contract_version_carries_completion_receipts():
+def test_contract_version_carries_completion_receipts() -> None:
     # Receipts entered at 4.11.0; later MINOR bumps keep them, so pin the floor, not the value.
     assert tuple(int(p) for p in CONTRACT_VERSION.split(".")) >= (4, 11, 0)
 
 
-def test_envelope_declares_optional_completion_receipts(tmp_path):
+def test_envelope_declares_optional_completion_receipts(tmp_path: Path) -> None:
     from coordinator_core.contract.cockpit_schema.entities.snapshot_envelope import (
         SnapshotEnvelope,
     )
@@ -78,12 +79,12 @@ def test_envelope_declares_optional_completion_receipts(tmp_path):
     assert "completion_rollups" in doc["required"]
 
 
-def test_registered_before_snapshot_envelope():
+def test_registered_before_snapshot_envelope() -> None:
     keys = list(ENTITY_SCHEMAS)
     assert keys.index("completion-receipt") == keys.index("snapshot-envelope") - 1
 
 
-def test_emitted_schema_shape(tmp_path):
+def test_emitted_schema_shape(tmp_path: Path) -> None:
     emit_schemas({"completion-receipt": CompletionReceipt}, out_dir=tmp_path)
     doc = json.loads((tmp_path / "completion-receipt.schema.json").read_text(encoding="utf-8"))
     assert doc["additionalProperties"] is False
@@ -95,11 +96,11 @@ def test_emitted_schema_shape(tmp_path):
     assert "superseded" not in verdict
 
 
-def test_valid_parses():
+def test_valid_parses() -> None:
     CompletionReceipt.model_validate(VALID)
 
 
-def test_extra_key_refused():
+def test_extra_key_refused() -> None:
     with pytest.raises(ValidationError):
         CompletionReceipt.model_validate({**VALID, "inherited_from": "x"})
 
@@ -114,12 +115,12 @@ def test_extra_key_refused():
         {"receipt_id": "bad"},
     ],
 )
-def test_invalid_refused(patch):
+def test_invalid_refused(patch) -> None:
     with pytest.raises(ValidationError):
         CompletionReceipt.model_validate({**VALID, **patch})
 
 
-def test_human_approved_with_supersedes_parses():
+def test_human_approved_with_supersedes_parses() -> None:
     CompletionReceipt.model_validate(
         {**VALID, "verdict": "human-approved", "supersedes": "rcp-fixture-ffffff", "approved_by": "pm"}
     )

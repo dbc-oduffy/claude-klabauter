@@ -19,6 +19,7 @@ import sys
 import pytest
 
 from coordinator_core.benchmarks.process_time import batched_process_time_ms
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -42,7 +43,7 @@ def _min_sample(workdir, *extra: str) -> dict:
 
 
 @pytest.fixture(scope="module")
-def job_measurement(tmp_path_factory):
+def job_measurement(tmp_path_factory: pytest.TempPathFactory):
     workdir = tmp_path_factory.mktemp("close_background_budget")
     setup = _min_sample(workdir, "--setup-only")
     full = _min_sample(workdir)
@@ -58,13 +59,13 @@ def job_measurement(tmp_path_factory):
     return {"net_ms": net_ms, "net_procs": net_procs, "detail": detail}
 
 
-def test_close_background_job_is_under_the_500ms_bar(job_measurement):
+def test_close_background_job_is_under_the_500ms_bar(job_measurement) -> None:
     m = job_measurement
     assert m["net_ms"] > 0 and m["net_procs"] > 0, f"job cost not observed (full <= setup-only): {m['detail']}"
     assert m["net_ms"] < BUDGET_MS, f"over the {BUDGET_MS}ms bar: {m['detail']}"
 
 
-def test_deferred_close_legs_over_a_1250_sizing_corpus_stay_under_the_job_budget(tmp_path, monkeypatch):
+def test_deferred_close_legs_over_a_1250_sizing_corpus_stay_under_the_job_budget(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Every deferred landing leg, corpus padded to the real-shape sizing count: in-process time
     (children excluded) under JOB_BUDGET_MS and the 500ms bar. Spawns are printed, not asserted.
     The mint is stubbed (its cost is the mint's own gate)."""
@@ -89,7 +90,7 @@ def test_deferred_close_legs_over_a_1250_sizing_corpus_stay_under_the_job_budget
     real = subprocess.Popen
 
     class Counting(real):
-        def __init__(self, *a, **k):
+        def __init__(self, *a, **k) -> None:
             spawns.append(1)
             super().__init__(*a, **k)
 

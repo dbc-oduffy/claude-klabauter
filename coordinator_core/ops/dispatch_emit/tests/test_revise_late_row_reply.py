@@ -9,6 +9,8 @@ import yaml
 from coordinator_core.ops.dispatch_emit import requirements_ledger as rl
 from coordinator_core.ops.dispatch_emit import run_token
 from coordinator_core.ops.dispatch_emit.ask_contract import record_dir
+from pathlib import Path
+import pytest
 
 RUN = "ask-20261029T000000-aaa111"
 REL = "state/sizings/2026-10-29-late-row.yaml"
@@ -34,7 +36,7 @@ def _revise(root, monkeypatch):
     return rl._handler({"run_id": RUN, "verbatim": "also cover Windows"}, repo_root=root)
 
 
-def test_before_verify_the_reply_names_the_pre_verify_leg(tmp_path, monkeypatch):
+def test_before_verify_the_reply_names_the_pre_verify_leg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _revise(_repo(tmp_path), monkeypatch)
     assert "lands_on_refire" not in out and "next" not in out
     assert "pre-verify late-row leg" in out["note"]
@@ -43,7 +45,7 @@ def test_before_verify_the_reply_names_the_pre_verify_leg(tmp_path, monkeypatch)
     assert "next stage claims" not in json.dumps(out)
 
 
-def test_after_verify_the_reply_says_it_lands_on_refire(tmp_path, monkeypatch):
+def test_after_verify_the_reply_says_it_lands_on_refire(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _repo(tmp_path)
     (record_dir(root, RUN) / rl.VERIFY_READ_MARKER).write_text("1", encoding="utf-8")
     out = _revise(root, monkeypatch)

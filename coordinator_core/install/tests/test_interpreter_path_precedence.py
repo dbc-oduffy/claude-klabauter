@@ -25,13 +25,14 @@ from unittest import mock
 import pytest
 
 from coordinator_core.install import substrate
+from pathlib import Path
 
 
 @pytest.mark.skipif(
     os.name == "nt",
     reason="this test asserts the POSIX skip path; run only where os.name != 'nt'",
 )
-def test_skips_cleanly_on_posix(monkeypatch):
+def test_skips_cleanly_on_posix(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OSTYPE", raising=False)
     monkeypatch.delenv("OS", raising=False)
     assert substrate._is_windows_shell() is False
@@ -43,12 +44,12 @@ def test_skips_cleanly_on_posix(monkeypatch):
     resolve_mock.assert_not_called()
 
 
-def _fake_win_user_path_entries(already_present=False, target=""):
+def _fake_win_user_path_entries(already_present: bool = False, target: str = ""):
     entries = [target] if already_present else []
     return lambda: (entries, ";".join(entries), 2)
 
 
-def _force_windows_shell(monkeypatch):
+def _force_windows_shell(monkeypatch) -> None:
     monkeypatch.setenv("OS", "Windows_NT")
     assert substrate._is_windows_shell() is True
 
@@ -64,7 +65,7 @@ _FAKE_REAL_INTERPRETER_DIR = (
 )
 
 
-def test_prepends_resolved_interpreter_dir_when_absent(monkeypatch, tmp_path, capsys):
+def test_prepends_resolved_interpreter_dir_when_absent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _force_windows_shell(monkeypatch)
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
 
@@ -93,7 +94,7 @@ def test_prepends_resolved_interpreter_dir_when_absent(monkeypatch, tmp_path, ca
     assert "added" in capsys.readouterr().out
 
 
-def test_idempotent_on_second_run(monkeypatch, tmp_path, capsys):
+def test_idempotent_on_second_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _force_windows_shell(monkeypatch)
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
 
@@ -122,7 +123,7 @@ def test_idempotent_on_second_run(monkeypatch, tmp_path, capsys):
     assert not calls, "a second run with the interpreter dir already on PATH must not re-prepend"
 
 
-def test_check_only_reports_without_mutating(monkeypatch, tmp_path, capsys):
+def test_check_only_reports_without_mutating(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _force_windows_shell(monkeypatch)
     monkeypatch.delenv("COORDINATOR_DISABLE_MACHINE_MUTATION", raising=False)
 
@@ -149,7 +150,7 @@ def test_check_only_reports_without_mutating(monkeypatch, tmp_path, capsys):
     assert "would: add" in capsys.readouterr().out
 
 
-def test_no_interpreter_resolved_warns_and_skips(monkeypatch, tmp_path, capsys):
+def test_no_interpreter_resolved_warns_and_skips(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     _force_windows_shell(monkeypatch)
     monkeypatch.setattr(
         "coordinator_core.ops.ensure_python3_exe_shim._resolve_python_bin",

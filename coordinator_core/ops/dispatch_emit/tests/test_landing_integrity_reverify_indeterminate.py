@@ -71,14 +71,14 @@ def test_gate_never_launders_indeterminate_with_failing_files(tmp_path):
     assert check == "failed" and [f.reason for f in findings] == [IND]
 
 
-def test_gate_plain_fail_with_failing_files_and_no_baseline_is_a_caused_finding(tmp_path):
+def test_gate_plain_fail_with_failing_files_and_no_baseline_is_unknown_and_does_not_refuse(tmp_path):
     params = {
         "targeted_tests": {"status": "fail", "status_before": "fail"},
         "failed_tests": ["pkg/tests/test_x.py::t"],
     }
     findings, check = li.landing_test_gate(tmp_path, params, "run1")
-    assert check == "failed" and [f.path for f in findings] == ["pkg/tests/test_x.py"]
-    assert "counted caused" in findings[0].detail
+    assert check == landing_targeted_tests.UNKNOWN_ONLY and list(findings) == []
+    assert findings.unknown_ids == ["pkg/tests/test_x.py::t"]
 
 
 RUN = "run-ind"

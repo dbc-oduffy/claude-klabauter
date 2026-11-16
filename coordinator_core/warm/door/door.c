@@ -872,6 +872,9 @@ static char g_hook_op[128] = "";
 /* The one hook op that does real work in-line (mints and emits runs); every
  * other hook read is a guard verdict held to the 500ms bar. */
 #define DOOR_HOOK_SUBMIT_READ_DEADLINE_MS 8000
+/* One clock for every leg of the submit door (drain, dial, delivery, read), started at call entry; the
+ * answer must be on stdout inside it. Below the harness's 12s hook timeout, which kills a door silently. */
+#define DOOR_HOOK_SUBMIT_TOTAL_MS 10000
 
 static int door_hook_read_deadline_ms(void) {
     return strcmp(g_hook_op, DOOR_SUBMIT_ASK_OP) == 0 ? DOOR_HOOK_SUBMIT_READ_DEADLINE_MS
@@ -1023,10 +1026,10 @@ static int spool_submit_ask(const char *reason, char id[17]) {
  * allocation failure can leave stdout empty. */
 #define DOOR_SUBMIT_UNSPOOLED_ADVISORY \
     "{\"systemMessage\":\"coordinator: the engine gave no answer and the ask could not be spooled; " \
-    "nothing was minted - re-submit, or check state/warp for a minted run.\",\"suppressOutput\":false," \
+    "nothing was minted - list recent runs under state/warp, then re-submit if none.\",\"suppressOutput\":false," \
     "\"hookSpecificOutput\":{\"hookEventName\":\"PreToolUse\",\"additionalContext\":\"coordinator: " \
-    "the engine gave no answer and the ask could not be spooled; nothing was minted - re-submit, " \
-    "or check state/warp for a minted run.\"}}\n"
+    "the engine gave no answer and the ask could not be spooled; nothing was minted - list recent runs " \
+    "under state/warp, then re-submit if none.\"}}\n"
 
 static int hook_op_is_submit_ask(void) {
     return strcmp(g_hook_op, DOOR_SUBMIT_ASK_OP) == 0;
@@ -1596,6 +1599,20 @@ static DWORD remaining_ms(ULONGLONG started_ticks, DWORD total_ms) {
     return (DWORD)((ULONGLONG)total_ms - elapsed);
 }
 
+/* Ms the submit op may still spend before its answer is due; unbounded (0xFFFFFFFF) for every other op,
+ * which keeps its per-leg bounds. */
+static DWORD door_hook_total_left_ms(void) {
+    if (!g_door_hook_mode || strcmp(g_hook_op, DOOR_SUBMIT_ASK_OP) != 0 || !g_call_started_ticks) {
+        return 0xFFFFFFFFu;
+    }
+    return remaining_ms(g_call_started_ticks, DOOR_HOOK_SUBMIT_TOTAL_MS);
+}
+
+static DWORD door_hook_clamp_to_total(DWORD want_ms) {
+    DWORD left = door_hook_total_left_ms();
+    return want_ms < left ? want_ms : left;
+}
+
 /* Waits for one ALREADY-ISSUED overlapped operation to finish, or for
  * `timeout_ms` to expire. `started_ok`/`started_err` are `ReadFile`'s or
  * `WriteFile`'s own return value and `GetLastError()`, captured by the
@@ -1667,7 +1684,7 @@ static int write_frame_bounded(HANDLE h, HANDLE ev, const char *data, size_t len
     ULONGLONG started = GetTickCount64();
     size_t off = 0;
     while (off < len) {
-        DWORD budget = remaining_ms(started, DOOR_WRITE_DEADLINE_MS);
+        DWORD budget = door_hook_clamp_to_total(remaining_ms(started, DOOR_WRITE_DEADLINE_MS));
         if (budget == 0) return 0;
 
         OVERLAPPED ov;
@@ -1928,7 +1945,7 @@ static int door_drain_publish_hold(const char *clone_hash) {
     wchar_t svc_dir[MAX_PATH * 2];
     if (!door_svc_dir_w(svc_dir, MAX_PATH * 2, clone_hash)) return 0;
     if (!door_publish_marker_held_w(svc_dir)) return 0;
-    ULONGLONG deadline = GetTickCount64() + DOOR_DRAIN_WAIT_MS;
+    ULONGLONG deadline = GetTickCount64() + door_hook_clamp_to_total(DOOR_DRAIN_WAIT_MS);
     for (;;) {
         Sleep(DOOR_DRAIN_POLL_MS);
         if (!door_publish_marker_held_w(svc_dir)) return 1;
@@ -2743,7 +2760,7 @@ int main(void) {
     int plan_consulted = 0;
     if (g_door_hook_mode) g_hook_read_total_ms = read_total_ms;
     for (;;) {
-        DWORD budget = remaining_ms(read_started, read_total_ms);
+        DWORD budget = door_hook_clamp_to_total(remaining_ms(read_started, read_total_ms));
         char chunk[4096];
         DWORD got = 0;
         int state = 0;
@@ -2784,10 +2801,17 @@ int main(void) {
             }
 
             char detail[160];
-            snprintf(detail, sizeof(detail),
-                     "no response within %ums of delivery -- the door stopped "
-                     "waiting, the engine did not stop working",
-                     (unsigned)read_total_ms);
+            if (door_hook_total_left_ms() == 0 && remaining_ms(read_started, read_total_ms) > 0) {
+                snprintf(detail, sizeof(detail),
+                         "no response within the %ums submit budget -- the door stopped "
+                         "waiting, the engine did not stop working",
+                         (unsigned)DOOR_HOOK_SUBMIT_TOTAL_MS);
+            } else {
+                snprintf(detail, sizeof(detail),
+                         "no response within %ums of delivery -- the door stopped "
+                         "waiting, the engine did not stop working",
+                         (unsigned)read_total_ms);
+            }
             return emit_post_delivery_failure(detail, argc, wargv, engine_root_w);
         }
 

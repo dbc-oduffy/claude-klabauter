@@ -9,6 +9,7 @@ import yaml
 
 from coordinator_core.git import checkpoint_hunks
 from coordinator_core.ops.ceremony import commit_v2
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -25,7 +26,7 @@ def _git(repo, *args):
     ).stdout.strip()
 
 
-def _w(path, text):
+def _w(path, text) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
 
@@ -45,7 +46,7 @@ def _rows(repo) -> dict:
 
 
 @pytest.fixture()
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     r = tmp_path / "r"
     r.mkdir()
     _git(r, "init", "-q", "-b", "work/p")
@@ -69,7 +70,7 @@ def _checkpoint(repo):
     )
 
 
-def _withhold_held(monkeypatch):
+def _withhold_held(monkeypatch) -> None:
     monkeypatch.setattr(checkpoint_hunks, "checkpoint_run_id", lambda root, message, sid: "run1")
 
     def own_blobs(root, run_id, paths, message, reasons):
@@ -79,7 +80,7 @@ def _withhold_held(monkeypatch):
     monkeypatch.setattr(checkpoint_hunks, "checkpoint_own_blobs", own_blobs)
 
 
-def test_a_withholding_checkpoint_carries_the_trailer_and_leaves_the_row_open(repo, monkeypatch):
+def test_a_withholding_checkpoint_carries_the_trailer_and_leaves_the_row_open(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _withhold_held(monkeypatch)
 
     out = _checkpoint(repo)
@@ -95,7 +96,7 @@ def test_a_withholding_checkpoint_carries_the_trailer_and_leaves_the_row_open(re
     assert rows["C2"]["disposition"] == "coded"
 
 
-def test_a_checkpoint_that_withholds_nothing_has_no_trailer_and_stamps_every_row(repo):
+def test_a_checkpoint_that_withholds_nothing_has_no_trailer_and_stamps_every_row(repo) -> None:
     out = _checkpoint(repo)
 
     assert out["committed"] is True, out

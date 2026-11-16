@@ -6,6 +6,7 @@ import time
 
 from coordinator_core.ops import cruft_sweep
 from coordinator_core.ops.dispatch_emit.ask_contract import RUN_OUTCOME_FILE
+from pathlib import Path
 
 DAY = 86400
 
@@ -24,7 +25,7 @@ def _run(root, name, *, outcome_age_days=None):
     return run
 
 
-def _prune(root):
+def _prune(root) -> tuple[int, int]:
     now = time.time()
     cruft_sweep.sweep_warp_prompts(root, now=now, dry_run=False, quiet=True)
     return cruft_sweep.sweep_warp_runs(root, now=now, dry_run=False, quiet=True)
@@ -34,7 +35,7 @@ def _files(root):
     return {p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file()}
 
 
-def test_open_and_in_retention_receipts_kept_past_retention_deleted(tmp_path):
+def test_open_and_in_retention_receipts_kept_past_retention_deleted(tmp_path: Path) -> None:
     open_ = _run(tmp_path, "ask-20260101T000000-aaaaaa")
     fresh = _run(tmp_path, "ask-20260102T000000-bbbbbb", outcome_age_days=6)
     old = _run(tmp_path, "ask-20260103T000000-cccccc", outcome_age_days=30)
@@ -45,7 +46,7 @@ def test_open_and_in_retention_receipts_kept_past_retention_deleted(tmp_path):
     assert not old.exists()
 
 
-def test_prune_promotes_nothing_outside_state_warp(tmp_path):
+def test_prune_promotes_nothing_outside_state_warp(tmp_path: Path) -> None:
     _run(tmp_path, "ask-20260101T000000-aaaaaa")
     _run(tmp_path, "ask-20260102T000000-bbbbbb", outcome_age_days=30)
     before = _files(tmp_path)

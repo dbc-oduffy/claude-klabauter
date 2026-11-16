@@ -34,6 +34,7 @@ from coordinator_core.ops.dispatch_emit.tests.test_land_run_landing_remedies imp
     repo,
 )
 from coordinator_core.session import touch_record
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -45,7 +46,7 @@ def _sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _session_sink(root):
+def _session_sink(root) -> Path:
     return touch_record.sink_path(session_dir_for(root / ".git", SELF))
 
 
@@ -78,7 +79,7 @@ def _fresh_verdict(root, *, head: str) -> None:
     )
 
 
-def test_p3_a_fresh_retest_pass_clears_a_recorded_failure(repo):
+def test_p3_a_fresh_retest_pass_clears_a_recorded_failure(repo) -> None:
     _author(repo, "a.py", "a = 1\n")
     _declare(repo, [("C1", ["a.py"])])
     _fresh_verdict(repo, head=_git(["rev-parse", "HEAD"], repo).strip())
@@ -93,7 +94,7 @@ def _recorded_failures(out: dict) -> list[dict]:
     return [e for e in out.get("provenance", []) if e["reason"] == landing_targeted_tests.TARGETED_TESTS_FAILED]
 
 
-def test_p3_a_retest_pass_at_a_moved_head_with_unchanged_covered_files_clears_the_failure(repo):
+def test_p3_a_retest_pass_at_a_moved_head_with_unchanged_covered_files_clears_the_failure(repo) -> None:
     _author(repo, "a.py", "a = 1\n")
     _declare(repo, [("C1", ["a.py"])])
     _fresh_verdict(repo, head="0" * 40)
@@ -105,7 +106,7 @@ def test_p3_a_retest_pass_at_a_moved_head_with_unchanged_covered_files_clears_th
     assert _recorded_failures(out) == []
 
 
-def test_p3_control_a_covered_file_change_keeps_the_recorded_failure_refusing(repo):
+def test_p3_control_a_covered_file_change_keeps_the_recorded_failure_refusing(repo) -> None:
     _author(repo, "a.py", "a = 1\n")
     _declare(repo, [("C1", ["a.py"])])
     _fresh_verdict(repo, head=_git(["rev-parse", "HEAD"], repo).strip())
@@ -120,7 +121,7 @@ def test_p3_control_a_covered_file_change_keeps_the_recorded_failure_refusing(re
 # ---- P11: a held chunk's sole-declared path is never staged ---------------------------------------
 
 
-def test_p11_a_held_sole_path_a_review_agent_wrote_is_not_staged(repo, monkeypatch):
+def test_p11_a_held_sole_path_a_review_agent_wrote_is_not_staged(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _author(repo, "a.py", "a = 1\n")
     _author(repo, "contract/held.json", "{}\n")
     _declare(repo, [("C1", ["a.py"]), ("H1", ["contract/held.json"])])
@@ -138,7 +139,7 @@ def test_p11_a_held_sole_path_a_review_agent_wrote_is_not_staged(repo, monkeypat
 # ---- P12: a review fix-pass agent's own write is the expectation ----------------------------------
 
 
-def test_p12_review_agent_write_events_name_the_agents_own_bytes(repo, monkeypatch):
+def test_p12_review_agent_write_events_name_the_agents_own_bytes(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     now = time.time()
     _agent_write(repo, "src/x.py", "fixed\n", now)
     monkeypatch.setattr(
@@ -165,7 +166,7 @@ def _original_event(root, at: float, text: str = "original\n") -> None:
     )
 
 
-def test_p12_a_fixpass_write_is_declared_at_the_agents_hash(repo):
+def test_p12_a_fixpass_write_is_declared_at_the_agents_hash(repo) -> None:
     _write(repo, "src/x.py", "fixed\n")
     base = time.time() - 100
     _original_event(repo, base)
@@ -173,7 +174,7 @@ def test_p12_a_fixpass_write_is_declared_at_the_agents_hash(repo):
     assert _fingerprints(repo, {"src/x.py": (_sha("fixed\n"), base + 50)}) == {"src/x.py": _sha("fixed\n")}
 
 
-def test_p12_a_foreign_edit_after_the_fixpass_keeps_the_agents_hash_so_it_refuses(repo):
+def test_p12_a_foreign_edit_after_the_fixpass_keeps_the_agents_hash_so_it_refuses(repo) -> None:
     _write(repo, "src/x.py", "foreign\n")
     base = time.time() - 100
     _original_event(repo, base)
@@ -183,7 +184,7 @@ def test_p12_a_foreign_edit_after_the_fixpass_keeps_the_agents_hash_so_it_refuse
     assert expected["src/x.py"] == _sha("fixed\n") != _sha("foreign\n")
 
 
-def test_p12_a_newer_session_write_outranks_an_older_fixpass_event(repo):
+def test_p12_a_newer_session_write_outranks_an_older_fixpass_event(repo) -> None:
     _write(repo, "src/x.py", "later\n")
     base = time.time() - 100
     _original_event(repo, base + 80, "later\n")
@@ -206,14 +207,14 @@ def _fixpass_landing(repo, monkeypatch, *, agent_recorded: bool) -> dict:
     return _land(repo)
 
 
-def test_p12_the_fixpass_write_lands_without_blob_drift(repo, monkeypatch):
+def test_p12_the_fixpass_write_lands_without_blob_drift(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _fixpass_landing(repo, monkeypatch, agent_recorded=True)
 
     assert out["committed"] is True, out
     assert _tree(repo) == ["src/x.py"]
 
 
-def test_p12_control_an_unrecorded_outside_edit_still_refuses_as_blob_drift(repo, monkeypatch):
+def test_p12_control_an_unrecorded_outside_edit_still_refuses_as_blob_drift(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     out = _fixpass_landing(repo, monkeypatch, agent_recorded=False)
 
     assert out["committed"] is False and out["refused"] == "blob-drift", out
@@ -249,7 +250,7 @@ def _drifted(root, reviewed: dict, current: dict) -> None:
 
 
 class _CountingCommit:
-    def __init__(self, monkeypatch):
+    def __init__(self, monkeypatch) -> None:
         from coordinator_core.git import commit as git_commit
 
         self.calls = 0
@@ -262,7 +263,7 @@ class _CountingCommit:
         monkeypatch.setattr(git_commit, "commit_paths", spy)
 
 
-def test_p13_a_comment_only_edit_after_review_lands_with_a_trailer(repo, monkeypatch):
+def test_p13_a_comment_only_edit_after_review_lands_with_a_trailer(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _drifted(repo, {"a.py": _PY_SOURCE}, {"a.py": "x = 1\n"})
     counter = _CountingCommit(monkeypatch)
 
@@ -276,7 +277,7 @@ def test_p13_a_comment_only_edit_after_review_lands_with_a_trailer(repo, monkeyp
     assert "comment_only_drift" not in out
 
 
-def test_p13_a_one_token_code_edit_refuses_after_one_attempt(repo, monkeypatch):
+def test_p13_a_one_token_code_edit_refuses_after_one_attempt(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _drifted(repo, {"a.py": _PY_SOURCE}, {"a.py": "# Reviewed-by: kira\nx = 2\n"})
     head = _git(["rev-parse", "HEAD"], repo)
     counter = _CountingCommit(monkeypatch)
@@ -288,7 +289,7 @@ def test_p13_a_one_token_code_edit_refuses_after_one_attempt(repo, monkeypatch):
     assert _git(["rev-parse", "HEAD"], repo) == head
 
 
-def test_p13_mixed_drift_refuses_and_the_remedy_names_only_the_real_path(repo):
+def test_p13_mixed_drift_refuses_and_the_remedy_names_only_the_real_path(repo) -> None:
     _drifted(
         repo, {"a.py": _PY_SOURCE, "b.py": "y = 1\n"}, {"a.py": "x = 1\n", "b.py": "y = 2\n"},
     )
@@ -300,7 +301,7 @@ def test_p13_mixed_drift_refuses_and_the_remedy_names_only_the_real_path(repo):
     assert "b.py" in withhold_call and "a.py" not in withhold_call
 
 
-def test_p13_a_deleted_snapshot_is_unprovable_and_refuses(repo):
+def test_p13_a_deleted_snapshot_is_unprovable_and_refuses(repo) -> None:
     import shutil
 
     _drifted(repo, {"a.py": _PY_SOURCE}, {"a.py": "x = 1\n"})
@@ -311,7 +312,7 @@ def test_p13_a_deleted_snapshot_is_unprovable_and_refuses(repo):
     assert out["refused"] == "blob-drift", out
 
 
-def test_p14_the_landing_set_is_passed_as_untrusted_paths(repo, monkeypatch):
+def test_p14_the_landing_set_is_passed_as_untrusted_paths(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit import comment_only_drift
 
     seen: dict = {}
@@ -353,7 +354,7 @@ def _declare_verifier(root, tmp_path, exit_code: int, declared: bool = True):
     return marker
 
 
-def test_p14_a_verifier_exit_zero_tolerates_ts_drift_with_a_trailer(repo, tmp_path):
+def test_p14_a_verifier_exit_zero_tolerates_ts_drift_with_a_trailer(repo, tmp_path: Path) -> None:
     marker = _declare_verifier(repo, tmp_path, 0)
     _drifted(repo, {"a.ts": _TS_SOURCE}, {"a.ts": _TS_CURRENT})
 
@@ -366,7 +367,7 @@ def test_p14_a_verifier_exit_zero_tolerates_ts_drift_with_a_trailer(repo, tmp_pa
     assert marker.exists()
 
 
-def test_p14_a_verifier_exit_one_is_real_drift(repo, tmp_path):
+def test_p14_a_verifier_exit_one_is_real_drift(repo, tmp_path: Path) -> None:
     marker = _declare_verifier(repo, tmp_path, 1)
     _drifted(repo, {"a.ts": _TS_SOURCE}, {"a.ts": _TS_CURRENT})
     head = _git(["rev-parse", "HEAD"], repo)
@@ -378,7 +379,7 @@ def test_p14_a_verifier_exit_one_is_real_drift(repo, tmp_path):
     assert _git(["rev-parse", "HEAD"], repo) == head
 
 
-def test_p14_no_declaration_refuses_without_running_a_verifier(repo, tmp_path):
+def test_p14_no_declaration_refuses_without_running_a_verifier(repo, tmp_path: Path) -> None:
     marker = _declare_verifier(repo, tmp_path, 0, declared=False)
     _drifted(repo, {"a.ts": _TS_SOURCE}, {"a.ts": _TS_CURRENT})
 
@@ -388,7 +389,7 @@ def test_p14_no_declaration_refuses_without_running_a_verifier(repo, tmp_path):
     assert not marker.exists()
 
 
-def test_p14_a_verifier_in_the_landing_set_refuses_without_running(repo, tmp_path):
+def test_p14_a_verifier_in_the_landing_set_refuses_without_running(repo, tmp_path: Path) -> None:
     marker = _declare_verifier(repo, tmp_path, 0)
     edited = (repo / "tools" / "v.py").read_text(encoding="utf-8") + "# edited\n"
     _drifted(
@@ -405,7 +406,7 @@ def test_p14_a_verifier_in_the_landing_set_refuses_without_running(repo, tmp_pat
 
 
 @pytest.fixture
-def anchored(tmp_path, monkeypatch):
+def anchored(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, str]:
     """A run whose declared write (a.py) is already committed at HEAD; returns (repo, script)."""
     root, script = driver.build_fixture(tmp_path)
     _git(["add", "a.py"], root)
@@ -423,7 +424,7 @@ def _anchor_land(root, script, *, fixes: int) -> dict:
     )
 
 
-def test_p15_a_review_with_applied_fixes_lands_its_trailer_over_a_tree_equal_product(anchored):
+def test_p15_a_review_with_applied_fixes_lands_its_trailer_over_a_tree_equal_product(anchored) -> None:
     root, script = anchored
     before = _git(["rev-parse", "HEAD"], root).strip()
 
@@ -435,7 +436,7 @@ def test_p15_a_review_with_applied_fixes_lands_its_trailer_over_a_tree_equal_pro
     assert "Review: " in body and "Inline-Review: applies" in body
 
 
-def test_p15_control_a_review_without_fixes_has_nothing_to_commit(anchored):
+def test_p15_control_a_review_without_fixes_has_nothing_to_commit(anchored) -> None:
     root, script = anchored
 
     out = _anchor_land(root, script, fixes=0)
@@ -443,7 +444,7 @@ def test_p15_control_a_review_without_fixes_has_nothing_to_commit(anchored):
     assert out["committed"] is False and out.get("nothing_to_commit") is True, out
 
 
-def test_p15_the_machine_local_review_record_is_never_in_the_commit(anchored):
+def test_p15_the_machine_local_review_record_is_never_in_the_commit(anchored) -> None:
     root, script = anchored
 
     out = _anchor_land(root, script, fixes=2)

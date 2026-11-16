@@ -278,6 +278,16 @@ def _is_cold_reach_timeout(response: object) -> bool:
     )
 
 
+def _mark_nag_emitted(repo_root) -> None:
+    """Open the DIY-nag window once the advisory has been written out. Never raises."""
+    try:
+        from coordinator_core.session.op_dispatch_nag import mark_nag_emitted
+
+        mark_nag_emitted(repo_root, _resolved_sid())
+    except Exception:
+        return
+
+
 def _resolved_sid() -> Optional[str]:
     """Session id for a telemetry row, or None.
 
@@ -1539,6 +1549,7 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     #     detector returns None before any git spawn). Rides beside `result`; never
     #     alters result, error or exit code. --bare keeps stdout the result JSON, so the
     #     advisory goes to stderr there.
+    _mark_after_print = False
     if isinstance(response, dict) and repo_root is not None:
         try:
             from coordinator_core.session.op_dispatch_nag import advisory_for_dispatch
@@ -1550,8 +1561,10 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
             if args.bare:
                 print(_advisory, file=sys.stderr)
                 sys.stderr.flush()
+                _mark_nag_emitted(repo_root)
             else:
                 response["advisory"] = _advisory
+                _mark_after_print = True
 
     # 7b. WARM_DISPATCH_INDETERMINATE (-32004) carrying `error.data.dispatch_key`
     #     (C5, contract § 9) -- print the exact, runnable poll command to stderr.
@@ -1608,6 +1621,9 @@ def _dispatch_argv_body(argv: list, cwd: str, *, allow_warm: bool) -> None:
     except (TypeError, ValueError) as exc:
         _fatal_stderr(f"Handler returned non-serializable result: {exc}")
     print(output)
+    if _mark_after_print:
+        sys.stdout.flush()
+        _mark_nag_emitted(repo_root)
 
     # 9. Exit 0 on success result, 2 on a structural contract-pin error, 1 on any
     #    other JSON-RPC error result — see module docstring's "Exit codes" section

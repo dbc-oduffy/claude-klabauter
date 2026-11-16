@@ -91,16 +91,16 @@ def _seed_git_repo(tmp_path: Path) -> Path:
     return repo_root
 
 
-def test_op_is_registered():
+def test_op_is_registered() -> None:
     assert _OP_NAME in _REGISTRY
 
 
-def test_repo_root_none_raises():
+def test_repo_root_none_raises() -> None:
     with pytest.raises(ValueError):
         dcs._distill_curation_status({}, repo_root=None)
 
 
-def test_bare_compute_does_not_write(tmp_path):
+def test_bare_compute_does_not_write(tmp_path: Path) -> None:
     repo_root = _seed_repo(tmp_path)
     common_dir = repo_root / ".git"
     reply = dcs._distill_curation_status({}, repo_root=common_dir)
@@ -110,7 +110,7 @@ def test_bare_compute_does_not_write(tmp_path):
     assert not (repo_root / "state" / "ceremony" / "curation-status.json").exists()
 
 
-def test_default_run_id_branch_mints_wallclock_id_when_omitted(tmp_path):
+def test_default_run_id_branch_mints_wallclock_id_when_omitted(tmp_path: Path) -> None:
     # 2026-07-23 code review finding: distill.curation_status is a named
     # exemption from the "run_id is a required param, never datetime.now()"
     # rule its siblings (distill.scope, memo.fate_partition) enforce, because
@@ -125,7 +125,7 @@ def test_default_run_id_branch_mints_wallclock_id_when_omitted(tmp_path):
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}-\d{2}h\d{2}m\d{2}s", reply["run_id"])
 
 
-def test_explicit_run_id_is_never_overridden_by_wallclock(tmp_path):
+def test_explicit_run_id_is_never_overridden_by_wallclock(tmp_path: Path) -> None:
     repo_root = _seed_repo(tmp_path)
     common_dir = repo_root / ".git"
     reply = dcs._distill_curation_status({"run_id": "caller-supplied-id"}, repo_root=common_dir)
@@ -134,7 +134,7 @@ def test_explicit_run_id_is_never_overridden_by_wallclock(tmp_path):
     assert reply["run_id"] == "caller-supplied-id"
 
 
-def test_emit_writes_schema_valid_artifact(tmp_path):
+def test_emit_writes_schema_valid_artifact(tmp_path: Path) -> None:
     repo_root = _seed_git_repo(tmp_path)
     common_dir = repo_root / ".git"
     reply = dcs._distill_curation_status({"emit": True, "run_id": "r-test-1"}, repo_root=common_dir)
@@ -152,7 +152,7 @@ def test_emit_writes_schema_valid_artifact(tmp_path):
     assert validate_curation_status(on_disk) == []
 
 
-def test_age_math_frozen_clock(tmp_path, monkeypatch):
+def test_age_math_frozen_clock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # _seed_repo seeds state/distillation-log.md with exactly one row under
     # "## Run 2026-07-23-11h58" — that is the real disk truth this op must derive
     # last_run_id/last_run_age_seconds from, never from its own prior emission.
@@ -180,7 +180,7 @@ def _seed_bare_repo(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def test_absent_log_degrades_to_no_last_run(tmp_path):
+def test_absent_log_degrades_to_no_last_run(tmp_path: Path) -> None:
     repo_root = _seed_bare_repo(tmp_path)
     common_dir = repo_root / ".git"
 
@@ -189,7 +189,7 @@ def test_absent_log_degrades_to_no_last_run(tmp_path):
     assert reply["last_run_age_seconds"] is None
 
 
-def test_log_wins_over_stale_prior_emission(tmp_path, monkeypatch):
+def test_log_wins_over_stale_prior_emission(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A stale/fabricated PRIOR EMISSION of curation-status.json must have zero
     # influence on last_run_id/last_run_age_seconds — only the canonical log
     # (state/distillation-log.md) is a legitimate source now. This is the direct
@@ -221,7 +221,7 @@ def test_log_wins_over_stale_prior_emission(tmp_path, monkeypatch):
     assert reply["last_run_age_seconds"] == pytest.approx(42.0)
 
 
-def test_fresh_mtime_does_not_fake_a_recent_run(tmp_path, monkeypatch):
+def test_fresh_mtime_does_not_fake_a_recent_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """THE regression test for this fix: a log whose FILE MTIME is 'now' but whose
     last run-id is old must report the OLD age.
 
@@ -257,7 +257,7 @@ def test_fresh_mtime_does_not_fake_a_recent_run(tmp_path, monkeypatch):
     assert reply["last_run_age_seconds"] > 86_400 * 180
 
 
-def test_unparseable_run_id_reports_known_run_unknown_age(tmp_path):
+def test_unparseable_run_id_reports_known_run_unknown_age(tmp_path: Path) -> None:
     """A run-id that will not parse must fail SOFT: the run is known, the age is not.
     A fabricated or zero age would be a confidently wrong freshness reading, which is
     strictly worse than an absent one for a cadence consumer."""

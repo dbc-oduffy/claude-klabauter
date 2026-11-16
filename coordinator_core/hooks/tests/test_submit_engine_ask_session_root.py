@@ -9,13 +9,14 @@ import pytest
 from coordinator_core.bash_guards import _write_bump_applicability as wba
 from coordinator_core.hooks import submit_engine_ask as sea
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 SID = "sess-root-anchor-test"
 
 
-def _init(path):
+def _init(path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["git", "init", "-q"], cwd=str(path), check=True, capture_output=True, **no_console_creationflags()
@@ -23,7 +24,7 @@ def _init(path):
 
 
 @pytest.fixture
-def repos(tmp_path):
+def repos(tmp_path: Path) -> tuple[Path, Path]:
     a = tmp_path / "A"
     _init(a)
     clone = a / "scratch" / "clone"
@@ -42,26 +43,26 @@ def _anchor(monkeypatch, value):
     return seen
 
 
-def test_session_anchor_beats_nested_clone_cwd(repos, monkeypatch):
+def test_session_anchor_beats_nested_clone_cwd(repos, monkeypatch: pytest.MonkeyPatch) -> None:
     a, clone = repos
     _anchor(monkeypatch, str(a))
     assert sea._repo_root(None, {"session_id": SID, "cwd": str(clone)}).resolve() == a
 
 
-def test_no_anchor_falls_back_to_cwd(repos, monkeypatch):
+def test_no_anchor_falls_back_to_cwd(repos, monkeypatch: pytest.MonkeyPatch) -> None:
     a, clone = repos
     _anchor(monkeypatch, None)
     assert sea._repo_root(None, {"session_id": SID, "cwd": str(clone)}).resolve() == clone.resolve()
 
 
-def test_no_session_id_never_consults_anchor(repos, monkeypatch):
+def test_no_session_id_never_consults_anchor(repos, monkeypatch: pytest.MonkeyPatch) -> None:
     a, clone = repos
     seen = _anchor(monkeypatch, str(a))
     assert sea._repo_root(None, {"cwd": str(clone)}).resolve() == clone.resolve()
     assert seen == []
 
 
-def test_relative_repo_arg_resolves_against_anchor(repos, monkeypatch):
+def test_relative_repo_arg_resolves_against_anchor(repos, monkeypatch: pytest.MonkeyPatch) -> None:
     a, clone = repos
     _anchor(monkeypatch, str(a))
     got = sea._repo_root("scratch/clone", {"session_id": SID, "cwd": str(a)})
@@ -70,7 +71,7 @@ def test_relative_repo_arg_resolves_against_anchor(repos, monkeypatch):
     assert other.resolve() == clone.resolve()
 
 
-def test_absolute_repo_arg_wins(repos, monkeypatch):
+def test_absolute_repo_arg_wins(repos, monkeypatch: pytest.MonkeyPatch) -> None:
     a, clone = repos
     seen = _anchor(monkeypatch, str(a))
     got = sea._repo_root(str(clone), {"session_id": SID, "cwd": str(a)})
@@ -83,7 +84,7 @@ def _child_emit_params(root):
     return sea._child_params(root, {"args": {}}, "sid", run, None, False)
 
 
-def test_child_emit_finds_its_sizing_in_the_submitting_repo_not_the_engine_root(tmp_path, monkeypatch):
+def test_child_emit_finds_its_sizing_in_the_submitting_repo_not_the_engine_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.ops.dispatch_emit.op import _sizing_root
     from coordinator_core.ops.dispatch_emit.sizing_fire import SizingFireRefused, load_sizing
 
@@ -106,7 +107,7 @@ def test_child_emit_finds_its_sizing_in_the_submitting_repo_not_the_engine_root(
         load_sizing(_sizing_root(bare, None, bare["sizing_path"]), bare["sizing_path"])
 
 
-def test_claude_project_dir_from_payload_env_anchors(repos, monkeypatch):
+def test_claude_project_dir_from_payload_env_anchors(repos, monkeypatch: pytest.MonkeyPatch) -> None:
     a, clone = repos
     monkeypatch.setattr(wba, "read_session_start_record", lambda *args, **kw: None)
     payload = {"session_id": SID, "cwd": str(clone), "env": {"CLAUDE_PROJECT_DIR": str(a)}}

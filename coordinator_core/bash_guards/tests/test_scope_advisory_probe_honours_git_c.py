@@ -11,12 +11,13 @@ import subprocess
 import pytest
 
 from coordinator_core.bash_guards import dispatch_checks as dc
+from pathlib import Path
 
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> None:
     subprocess.run(
         ["git", "-C", str(repo), *args],
         check=True,
@@ -26,7 +27,7 @@ def _git(repo, *args):
 
 
 @pytest.fixture
-def peer_repo(tmp_path):
+def peer_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "peer"
     repo.mkdir()
     _git(repo, "init", "-q")
@@ -43,7 +44,7 @@ def _check(cmd, cwd):
     return dc.check_git_commit_safe_commit_advise(cmd, "", {"cwd": str(cwd)})
 
 
-def test_dash_c_commit_reads_the_peer_index_for_an_index_only_removal(peer_repo, tmp_path):
+def test_dash_c_commit_reads_the_peer_index_for_an_index_only_removal(peer_repo, tmp_path: Path) -> None:
     _git(peer_repo, "rm", "--cached", "-q", "gone.txt")
     rec = _check(f'git -C "{peer_repo.as_posix()}" commit -q -m x', tmp_path)
     text = rec.em_text
@@ -53,7 +54,7 @@ def test_dash_c_commit_reads_the_peer_index_for_an_index_only_removal(peer_repo,
     assert "coordinator.staged" in text
 
 
-def test_tilde_dash_c_is_expanded_before_the_probe_spawns(peer_repo, tmp_path, monkeypatch):
+def test_tilde_dash_c_is_expanded_before_the_probe_spawns(peer_repo, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _git(peer_repo, "rm", "--cached", "-q", "gone.txt")
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("USERPROFILE", str(tmp_path))
@@ -61,13 +62,13 @@ def test_tilde_dash_c_is_expanded_before_the_probe_spawns(peer_repo, tmp_path, m
     assert "NOT read" not in rec.em_text
 
 
-def test_a_staged_real_deletion_still_offers_the_pathspec_form(peer_repo, tmp_path):
+def test_a_staged_real_deletion_still_offers_the_pathspec_form(peer_repo, tmp_path: Path) -> None:
     _git(peer_repo, "rm", "-q", "gone.txt")
     rec = _check(f'git -C "{peer_repo.as_posix()}" commit -q -m x', tmp_path)
     assert "git rm --cached" not in rec.em_text
     assert "-- <paths>" in rec.em_text
 
 
-def test_a_missing_dash_c_target_still_reports_the_index_unread(tmp_path):
+def test_a_missing_dash_c_target_still_reports_the_index_unread(tmp_path: Path) -> None:
     rec = _check(f'git -C "{(tmp_path / "nope").as_posix()}" commit -q -m x', tmp_path)
     assert "NOT read" in rec.em_text

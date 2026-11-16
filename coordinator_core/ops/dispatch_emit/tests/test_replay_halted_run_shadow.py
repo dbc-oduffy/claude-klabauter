@@ -4,6 +4,7 @@ import json
 
 from coordinator_core.ops.dispatch_emit import halted_run as hr
 from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT
+from pathlib import Path
 
 SIZING = "state/sizings/2026-10-25-foo.yaml"
 STEM = "2026-10-25-foo"
@@ -13,7 +14,7 @@ def _dir(root, stamp):
     return root / RECORD_DIR_ROOT / f"warp-{STEM}-{stamp}"
 
 
-def _shell(root, stamp, stage="minted"):
+def _shell(root, stamp, stage: str = "minted"):
     d = _dir(root, stamp)
     d.mkdir(parents=True)
     (d / "run.json").write_text(json.dumps({"sizing_rel": SIZING}), encoding="utf-8")
@@ -21,7 +22,7 @@ def _shell(root, stamp, stage="minted"):
     return d
 
 
-def test_minted_only_newer_dirs_do_not_shadow_a_halted_run(tmp_path):
+def test_minted_only_newer_dirs_do_not_shadow_a_halted_run(tmp_path: Path) -> None:
     halted = _dir(tmp_path, "20261025T120000-aaaaaa")
     hr.write_halt_marker(halted, halted="x", sizing_rel=SIZING)
     _shell(tmp_path, "20261025T125615-1e2761")
@@ -29,7 +30,7 @@ def test_minted_only_newer_dirs_do_not_shadow_a_halted_run(tmp_path):
     assert hr.halted_run_for(tmp_path, SIZING) == halted.name
 
 
-def test_refire_over_shell_dirs_resolves_the_halted_run_and_mints_nothing(tmp_path):
+def test_refire_over_shell_dirs_resolves_the_halted_run_and_mints_nothing(tmp_path: Path) -> None:
     halted = _dir(tmp_path, "20261025T120000-aaaaaa")
     hr.write_halt_marker(halted, halted="x", sizing_rel=SIZING)
     _shell(tmp_path, "20261025T125615-1e2761")
@@ -38,13 +39,13 @@ def test_refire_over_shell_dirs_resolves_the_halted_run_and_mints_nothing(tmp_pa
     assert sorted(p.name for p in (tmp_path / RECORD_DIR_ROOT).iterdir()) == before
 
 
-def test_a_newer_staged_dir_still_supersedes(tmp_path):
+def test_a_newer_staged_dir_still_supersedes(tmp_path: Path) -> None:
     hr.write_halt_marker(_dir(tmp_path, "20261025T120000-aaaaaa"), halted="x", sizing_rel=SIZING)
     _shell(tmp_path, "20261025T125615-1e2761", stage="staged")
     assert hr.halted_run_for(tmp_path, SIZING) is None
 
 
-def test_resumed_with_a_dead_unstaged_resumer_is_halted_again(tmp_path):
+def test_resumed_with_a_dead_unstaged_resumer_is_halted_again(tmp_path: Path) -> None:
     halted = _dir(tmp_path, "20261025T120000-aaaaaa")
     hr.write_halt_marker(halted, halted="x", sizing_rel=SIZING)
     hr.mark_resumed(halted)
@@ -53,7 +54,7 @@ def test_resumed_with_a_dead_unstaged_resumer_is_halted_again(tmp_path):
     assert json.loads((halted / hr.HALTED_FILE).read_text())["status"] == hr.STATUS_HALTED
 
 
-def test_resumed_without_a_newer_dir_or_with_a_staged_one_stays_resumed(tmp_path):
+def test_resumed_without_a_newer_dir_or_with_a_staged_one_stays_resumed(tmp_path: Path) -> None:
     halted = _dir(tmp_path, "20261025T120000-aaaaaa")
     hr.write_halt_marker(halted, halted="x", sizing_rel=SIZING)
     hr.mark_resumed(halted)
@@ -63,7 +64,7 @@ def test_resumed_without_a_newer_dir_or_with_a_staged_one_stays_resumed(tmp_path
     assert json.loads((halted / hr.HALTED_FILE).read_text())["status"] == hr.STATUS_RESUMED
 
 
-def test_landed_is_never_reopened(tmp_path):
+def test_landed_is_never_reopened(tmp_path: Path) -> None:
     d = _dir(tmp_path, "20261025T120000-aaaaaa")
     hr.write_halt_marker(d, halted="x", sizing_rel=SIZING)
     hr.mark_landed(d, "a" * 40)

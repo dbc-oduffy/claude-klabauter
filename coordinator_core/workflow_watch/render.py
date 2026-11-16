@@ -129,7 +129,7 @@ def _render_event(event: dict, run_dir: str, cache: dict) -> str | None:
 
 class JournalRenderer:
 
-    def __init__(self, journal_path: str):
+    def __init__(self, journal_path: str) -> None:
         self._run_dir = os.path.dirname(journal_path)
         self._reader = TailReader(journal_path)
         self._seen: set[tuple[str, str]] = set()

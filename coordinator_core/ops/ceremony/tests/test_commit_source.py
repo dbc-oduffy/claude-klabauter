@@ -9,6 +9,7 @@ from coordinator_core.git import git_objects
 from coordinator_core.git.git_dir import resolve_git_common_dir
 from coordinator_core.ops.ceremony import commit_source
 from coordinator_core.telemetry import spawn_counter
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -21,7 +22,7 @@ def _git(repo, *args):
     )
 
 
-def _write(repo, rel, data: bytes):
+def _write(repo, rel, data: bytes) -> None:
     p = repo / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_bytes(data)
@@ -56,7 +57,7 @@ def _landed(repo, path):
     return r.stdout if r.returncode == 0 else None
 
 
-def test_default_mode_matches_landed_tree(tmp_path):
+def test_default_mode_matches_landed_tree(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write(repo, "a.txt", b"a1\n")
     _write(repo, "new/n.txt", b"n1\n")
@@ -70,7 +71,7 @@ def test_default_mode_matches_landed_tree(tmp_path):
     assert pre["nope"] is None
 
 
-def test_prefer_staged_returns_index_blob(tmp_path):
+def test_prefer_staged_returns_index_blob(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write(repo, "a.txt", b"STAGED\n")
     _git(repo, "add", "--", "a.txt")
@@ -81,7 +82,7 @@ def test_prefer_staged_returns_index_blob(tmp_path):
     assert got == b"STAGED\n" == _landed(repo, "a.txt")
 
 
-def test_prefer_deliberate_stage_only_when_index_differs_from_head(tmp_path):
+def test_prefer_deliberate_stage_only_when_index_differs_from_head(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write(repo, "a.txt", b"STAGED\n")
     _git(repo, "add", "--", "a.txt")
@@ -97,7 +98,7 @@ def test_prefer_deliberate_stage_only_when_index_differs_from_head(tmp_path):
         assert pre[p] == _landed(repo, p)
 
 
-def test_deletion_reads_none(tmp_path):
+def test_deletion_reads_none(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     (repo / "gone.txt").unlink()
     read = _reader(repo, paths=["a.txt"], deleted_paths=["gone.txt"])
@@ -107,7 +108,7 @@ def test_deletion_reads_none(tmp_path):
     assert read("a.txt") == _landed(repo, "a.txt")
 
 
-def test_crlf_bytes_pass_through(tmp_path):
+def test_crlf_bytes_pass_through(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write(repo, "crlf.bin", b"x\r\ny\r\n")
     read = _reader(repo, paths=["crlf.bin"])
@@ -116,7 +117,7 @@ def test_crlf_bytes_pass_through(tmp_path):
     assert got == b"x\r\ny\r\n" == _landed(repo, "crlf.bin")
 
 
-def test_backslash_paths_normalised(tmp_path):
+def test_backslash_paths_normalised(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write(repo, "sub/c.txt", b"c1\n")
     read = _reader(repo, paths=["sub\\c.txt"])
@@ -137,7 +138,7 @@ def _stalling_read(real, fail_times):
     return fake, calls
 
 
-def test_one_stalled_pack_read_is_retried(tmp_path, monkeypatch):
+def test_one_stalled_pack_read_is_retried(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     fake, calls = _stalling_read(commit_source._read_object, 1)
     monkeypatch.setattr(commit_source, "_read_object", fake)
@@ -146,7 +147,7 @@ def test_one_stalled_pack_read_is_retried(tmp_path, monkeypatch):
     assert calls["n"] >= 2
 
 
-def test_two_stalled_pack_reads_raise_pack_read_stalled(tmp_path, monkeypatch):
+def test_two_stalled_pack_reads_raise_pack_read_stalled(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _repo(tmp_path)
     fake, _ = _stalling_read(commit_source._read_object, 2)
     monkeypatch.setattr(commit_source, "_read_object", fake)
@@ -155,7 +156,7 @@ def test_two_stalled_pack_reads_raise_pack_read_stalled(tmp_path, monkeypatch):
         read("b.txt")
 
 
-def test_zero_spawns_and_no_subprocess_import(tmp_path):
+def test_zero_spawns_and_no_subprocess_import(tmp_path: Path) -> None:
     repo = _repo(tmp_path)
     _write(repo, "a.txt", b"a1\n")
     _git(repo, "add", "--", "a.txt")

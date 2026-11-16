@@ -35,12 +35,12 @@ def _seed(root: Path) -> None:
     prod._git(["commit", "-q", "-m", "seed pk"], root)
 
 
-def _run(root: Path, callee_text: str, monkeypatch, *, holder: str | None) -> dict:
-    """The run declares and edits ``CALLER`` only; ``CALLEE`` is edited and in the review-prep whole diff."""
+def _run(root: Path, callee_text: str, monkeypatch, *, holder: str | None, declare: tuple = (CALLER,)) -> dict:
+    """The run declares ``declare`` (``CALLER`` only by default) and edits both files; ``CALLEE`` is in the review-prep whole diff."""
     _seed(root)
     prod._author(root, CALLER, U_NEW)
     prod._author(root, CALLEE, callee_text)
-    prod._declare(root, CALLER)
+    prod._declare(root, *declare)
     prod._record_dir(root)
     digest = touch_record.compute_content_hash(root / CALLEE)
     monkeypatch.setattr(land_run, "_reconcile_prep", lambda *a, **k: ({CALLEE: digest}, None, True))
@@ -100,3 +100,48 @@ def test_gate_splits_free_from_barred_and_names_the_withhold(product_repo):
         root, [CALLER], [], {CALLEE}, reasons={CALLEE: "withheld by run-x"}, barred={CALLEE}, **kw,
     )
     assert carry == [] and refusal[0]["holder"] == "withheld by run-x", refusal
+
+
+def _halted_index(monkeypatch, holder: str) -> None:
+    """The halted index names ``holder`` for ``CALLEE``; the holder's hold is not released."""
+    from coordinator_core.ops.dispatch_emit import halted_hold_release, halted_withheld_index
+
+    monkeypatch.setattr(halted_withheld_index, "withheld_by_path", lambda root: {CALLEE: holder})
+    monkeypatch.setattr(halted_hold_release, "still_held_by_index", lambda root, held, *a, **k: dict(held))
+
+
+def test_gate_carries_a_halted_runs_withheld_path_and_names_it(product_repo, monkeypatch):
+    root = product_repo
+    _seed(root)
+    prod._write(root, CALLER, U_NEW)
+    prod._write(root, CALLEE, M_SIGNATURE)
+    _halted_index(monkeypatch, "halted-run-x")
+    kw = dict(
+        session_id=prod.SELF, rid=prod.RUN, script_path=prod.SCRIPT, plan_rel=None, run_base=None,
+        minted_before=None, own_run_ids=(prod.RUN, None),
+    )
+
+    advisories: list = []
+    carry, refusal = land_run._needed_path_gate(
+        root, [CALLER], [], {CALLEE}, reasons={}, barred=set(), advisories=advisories, **kw,
+    )
+    assert carry == [CALLEE] and refusal == []
+    assert advisories == [{"path": CALLEE, "halted_run": "halted-run-x"}]
+
+    carry, refusal = land_run._needed_path_gate(
+        root, [CALLER], [], {CALLEE}, reasons={CALLEE: "withheld"}, barred={CALLEE}, advisories=advisories, **kw,
+    )
+    assert carry == [] and refusal[0]["holder"] == "withheld", (carry, refusal)
+
+
+def test_landing_carries_a_callee_a_halted_run_withholds_with_an_advisory(product_repo, monkeypatch):
+    _halted_index(monkeypatch, "halted-run-x")
+    monkeypatch.setattr(
+        land_run, "foreign_halted_withheld", lambda *a, **k: {CALLEE: "halted-run-x"},
+    )
+
+    out = _run(product_repo, M_SIGNATURE, monkeypatch, holder=None, declare=(CALLER, CALLEE))
+
+    assert out["committed"] is True and out.get("refused") is None, out
+    assert CALLEE in prod._tree(product_repo)
+    assert out.get("halted_hold_advisory") == [{"path": CALLEE, "halted_run": "halted-run-x"}], out

@@ -12,12 +12,13 @@ from coordinator_core.ops.dispatch_emit.ask_compose import compose_ask_script
 from coordinator_core.ops.dispatch_emit.ask_gate import gate, handback_line
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.session import record_homes
+import pytest
 
 _BASENAME = "2026-10-06-shape.yaml"
 REL = Path(record_homes.record_path("", "sizings", _BASENAME)).as_posix()
 
 
-def _put(repo, **over):
+def _put(repo, **over) -> None:
     Path(record_homes.home_dir(str(repo), "sizings")).mkdir(parents=True, exist_ok=True)
     doc = {
         "schema": "sizing-object",
@@ -38,7 +39,7 @@ def _put(repo, **over):
     (repo / REL).write_text(yaml.safe_dump(doc), encoding="utf-8", newline="\n")
 
 
-def test_shape_sizing_hands_back_one_line_with_a_clean_exit(tmp_path, monkeypatch, capsys):
+def test_shape_sizing_hands_back_one_line_with_a_clean_exit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
     monkeypatch.delenv("DELIVERABLE_ID", raising=False)
     _put(tmp_path)
@@ -53,19 +54,19 @@ def test_shape_sizing_hands_back_one_line_with_a_clean_exit(tmp_path, monkeypatc
     }
 
 
-def test_topic_falls_back_to_a_slice_of_intent():
+def test_topic_falls_back_to_a_slice_of_intent() -> None:
     line = handback_line({"name": "", "intent": "x" * 200})
     assert line.startswith("Job unclear: " + "x" * 60 + ". ")
 
 
-def test_gate_still_halts_shape_as_room(tmp_path, monkeypatch):
+def test_gate_still_halts_shape_as_room(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("COORDINATOR_SESSION_ID", "11111111-2222-3333-4444-555555555555")
     _put(tmp_path)
     v = gate(tmp_path, REL)
     assert v.halt["kind"] == "room" and v.halt["handback"].startswith("Job unclear: ")
 
 
-def test_fresh_ask_sizes_afresh_never_reusing_a_shape_sizing():
+def test_fresh_ask_sizes_afresh_never_reusing_a_shape_sizing() -> None:
     script = compose_ask_script(
         repo_root="REPO",
         prompt="the JTBD is now stated",

@@ -198,6 +198,77 @@ def test_source_with_no_covering_test_is_not_fully_mapped(repo: Path) -> None:
     assert out["fully_mapped"] is False
 
 
+def _js_repo(tmp_path: Path) -> Path:
+    """A TypeScript consumer: no pyproject, no pytest testpaths."""
+    _git(tmp_path, "init", "-q")
+    _write(tmp_path, "src/x.ts", "export const x = 1;\n")
+    _write(tmp_path, "src/y.ts", "export const y = 1;\n")
+    _write(tmp_path, "src/z.ts", "export const z = 1;\n")
+    _write(tmp_path, "test/x.test.ts", "test('x', () => {});\n")
+    _write(tmp_path, "test/y.spec.tsx", "test('y', () => {});\n")
+    _write(tmp_path, "test/other.test.js", "test('o', () => {});\n")
+    _git(tmp_path, "add", "-A")
+    _git(tmp_path, "commit", "-q", "-m", "base")
+    return tmp_path
+
+
+def test_js_source_and_test_diff_selects_the_test_with_no_pyproject(tmp_path: Path) -> None:
+    root = _js_repo(tmp_path)
+    base = _git(root, "rev-parse", "HEAD")
+    _write(root, "src/x.ts", "export const x = 2;\n")
+    _write(root, "test/x.test.ts", "test('x', () => { /* edited */ });\n")
+    _commit(root)
+    out = select_tests(root, base)
+    assert out["tests"] == ["test/x.test.ts"]
+    assert out["fully_mapped"] is True
+
+
+def test_js_source_selects_stem_matched_test_not_unrelated(tmp_path: Path) -> None:
+    root = _js_repo(tmp_path)
+    base = _git(root, "rev-parse", "HEAD")
+    _write(root, "src/y.ts", "export const y = 2;\n")
+    _commit(root)
+    out = select_tests(root, base)
+    assert out["tests"] == ["test/y.spec.tsx"]
+
+
+def test_edited_js_test_selects_itself(tmp_path: Path) -> None:
+    root = _js_repo(tmp_path)
+    base = _git(root, "rev-parse", "HEAD")
+    _write(root, "test/other.test.js", "test('o', () => { /* edited */ });\n")
+    _commit(root)
+    assert select_tests(root, base)["tests"] == ["test/other.test.js"]
+
+
+def test_js_source_with_no_test_selects_nothing_and_is_not_fully_mapped(tmp_path: Path) -> None:
+    root = _js_repo(tmp_path)
+    base = _git(root, "rev-parse", "HEAD")
+    _write(root, "src/z.ts", "export const z = 2;\n")
+    _commit(root)
+    out = select_tests(root, base)
+    assert out["tests"] == []
+    assert out["fully_mapped"] is False
+
+
+def test_js_stem_does_not_select_a_python_test_and_the_index_is_one_spawn(
+    repo: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from coordinator_core.ops import reverify_scope
+
+    _write(repo, "pkg/alpha.ts", "export const a = 1;\n")
+    _write(repo, "web/alpha.test.ts", "test('a', () => {});\n")
+    _commit(repo)
+    base = _git(repo, "rev-parse", "HEAD")
+    _write(repo, "pkg/alpha.ts", "export const a = 2;\n")
+    _commit(repo)
+    spawns: list = []
+    real = reverify_scope.run_git
+    monkeypatch.setattr(reverify_scope, "run_git", lambda args, **kw: (spawns.append(args[0]), real(args, **kw))[1])
+    out = select_tests(repo, base)
+    assert out["tests"] == ["web/alpha.test.ts"]
+    assert spawns.count("ls-files") == 1
+
+
 def test_deleted_file_is_dropped(repo: Path) -> None:
     base = _git(repo, "rev-parse", "HEAD")
     (repo / "pkg/tests/test_other.py").unlink()

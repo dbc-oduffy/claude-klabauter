@@ -356,7 +356,7 @@ def _parse(argv: list[str]) -> Optional[dict]:
 
 def _remove_tree(path: Path) -> None:
     """rmtree that clears the read-only bit first: git object files are read-only on Windows."""
-    def clear(func, target, _exc):
+    def clear(func, target, _exc) -> None:
         os.chmod(target, 0o700)
         func(target)
 

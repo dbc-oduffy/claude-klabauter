@@ -12,9 +12,10 @@ from pathlib import Path
 
 from coordinator_core import machine_resolver
 from coordinator_core.ops.session import guard_settings_integrity as gsi
+import pytest
 
 
-def _fixture(tmp_path: Path, monkeypatch, *, ack=None, directory_source=False):
+def _fixture(tmp_path: Path, monkeypatch, *, ack=None, directory_source: bool = False) -> tuple[Path, Path]:
     content_root = tmp_path / "plugin-root"
     (content_root / "hooks" / "scripts").mkdir(parents=True)
     (content_root / "hooks" / "scripts" / "foo.py").write_text("", encoding="utf-8")
@@ -58,37 +59,37 @@ def _fixture(tmp_path: Path, monkeypatch, *, ack=None, directory_source=False):
     return config_dir, only
 
 
-def test_unacknowledged_settings_only_still_raises(tmp_path, monkeypatch):
+def test_unacknowledged_settings_only_still_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_dir, only = _fixture(tmp_path, monkeypatch)
     report = gsi.detect_hook_delivery_duplication(config_dir)
     assert report.settings_only_scripts == [str(only.resolve())]
     assert "declared ONLY in settings.json" in gsi.evaluate_hook_delivery_duplication(config_dir)
 
 
-def test_allowlisted_basename_is_exempt(tmp_path, monkeypatch):
+def test_allowlisted_basename_is_exempt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_dir, _ = _fixture(tmp_path, monkeypatch, ack="other.py\nnudge.py")
     assert gsi.detect_hook_delivery_duplication(config_dir).settings_only_scripts == []
     assert "declared ONLY in settings.json" not in gsi.evaluate_hook_delivery_duplication(config_dir)
 
 
-def test_allowlist_does_not_exempt_a_different_basename(tmp_path, monkeypatch):
+def test_allowlist_does_not_exempt_a_different_basename(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_dir, only = _fixture(tmp_path, monkeypatch, ack="other.py")
     assert gsi.detect_hook_delivery_duplication(config_dir).settings_only_scripts == [
         str(only.resolve())
     ]
 
 
-def test_directory_source_plugin_install_is_exempt(tmp_path, monkeypatch):
+def test_directory_source_plugin_install_is_exempt(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_dir, _ = _fixture(tmp_path, monkeypatch, directory_source=True)
     assert gsi.detect_hook_delivery_duplication(config_dir).settings_only_scripts == []
 
 
-def test_directory_source_exemption_leaves_double_fire_detection_intact(tmp_path, monkeypatch):
+def test_directory_source_exemption_leaves_double_fire_detection_intact(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_dir, _ = _fixture(tmp_path, monkeypatch, directory_source=True)
     assert gsi.detect_hook_delivery_duplication(config_dir).double_fire is True
 
 
-def test_unreadable_registry_defaults_to_empty(tmp_path, monkeypatch):
+def test_unreadable_registry_defaults_to_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_dir, only = _fixture(tmp_path, monkeypatch)
 
     def boom(key):

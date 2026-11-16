@@ -9,6 +9,8 @@ from coordinator_core.ops.dispatch_emit.ask_contract import PARK_SOURCE_REPLY_KE
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import PLAN, PLAN_REL, read_stage_reply
 from coordinator_core.ops.dispatch_emit.tests.conftest import write_run_scripts
+from pathlib import Path
+import pytest
 
 _RUN = "parkrun"
 
@@ -20,7 +22,7 @@ def _seed(root) -> None:
     (root / PLAN_REL).write_text(PLAN, encoding="utf-8", newline="\n")
 
 
-def _marker(root, text: str):
+def _marker(root, text: str) -> Path:
     path = record_dir(root, _RUN) / STOP_AFTER_FILE
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text, encoding="utf-8", newline="\n")
@@ -31,7 +33,7 @@ def _params() -> dict:
     return {"run_id": _RUN, "plan_path": PLAN_REL, "writes": []}
 
 
-def test_marker_parks_without_staging(tmp_path, monkeypatch):
+def test_marker_parks_without_staging(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _seed(tmp_path)
     _marker(tmp_path, json.dumps({"stop_after": "plan", "at": "2026-10-21T00:00:00Z", "from": None}))
     monkeypatch.setattr(ask_stage, "stage", lambda *a, **k: (_ for _ in ()).throw(AssertionError("staged")))
@@ -45,7 +47,7 @@ def test_marker_parks_without_staging(tmp_path, monkeypatch):
     assert not (record_dir(tmp_path, _RUN) / "manifest.json").exists()
 
 
-def test_park_stamps_the_run_stage_halted(tmp_path):
+def test_park_stamps_the_run_stage_halted(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage, write_run_stage
 
     _seed(tmp_path)
@@ -56,7 +58,7 @@ def test_park_stamps_the_run_stage_halted(tmp_path):
     assert read_run_stage(tmp_path, _RUN)["stage"] == "halted"
 
 
-def test_unparked_stage_call_never_stamps_halted(tmp_path):
+def test_unparked_stage_call_never_stamps_halted(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.ask_contract import read_run_stage, write_run_stage
 
     _seed(tmp_path)
@@ -65,7 +67,7 @@ def test_unparked_stage_call_never_stamps_halted(tmp_path):
     assert read_run_stage(tmp_path, _RUN)["stage"] != "halted"
 
 
-def test_parked_reply_plan_path_none_when_absent(tmp_path):
+def test_parked_reply_plan_path_none_when_absent(tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     _marker(tmp_path, json.dumps({"stop_after": "plan"}))
 
@@ -75,7 +77,7 @@ def test_parked_reply_plan_path_none_when_absent(tmp_path):
     assert reply[PARK_SOURCE_REPLY_KEY] == {"run_id": _RUN, "from": "", "inherited": False}
 
 
-def test_absent_marker_stages_as_today(tmp_path):
+def test_absent_marker_stages_as_today(tmp_path: Path) -> None:
     _seed(tmp_path)
 
     reply = _handler(_params(), repo_root=tmp_path)
@@ -84,7 +86,7 @@ def test_absent_marker_stages_as_today(tmp_path):
     assert read_stage_reply(tmp_path, reply)["rows"]
 
 
-def test_malformed_marker_stages_as_today(tmp_path):
+def test_malformed_marker_stages_as_today(tmp_path: Path) -> None:
     _seed(tmp_path)
     marker = _marker(tmp_path, "{not json")
 
@@ -94,7 +96,7 @@ def test_malformed_marker_stages_as_today(tmp_path):
     assert marker.exists()
 
 
-def test_other_stop_value_stages_as_today(tmp_path):
+def test_other_stop_value_stages_as_today(tmp_path: Path) -> None:
     _seed(tmp_path)
     _marker(tmp_path, json.dumps({"stop_after": "review"}))
 
@@ -103,7 +105,7 @@ def test_other_stop_value_stages_as_today(tmp_path):
     assert PARKED_REPLY_KEY not in reply
 
 
-def test_marker_holds_until_the_park_is_recorded(tmp_path):
+def test_marker_holds_until_the_park_is_recorded(tmp_path: Path) -> None:
     _seed(tmp_path)
     marker = _marker(tmp_path, json.dumps({"stop_after": "plan"}))
 
@@ -123,7 +125,7 @@ def test_marker_holds_until_the_park_is_recorded(tmp_path):
 _ANCESTOR = "ancestorrun"
 
 
-def _ancestor_marker(root, parked: bool = False):
+def _ancestor_marker(root, parked: bool = False) -> Path:
     adir = record_dir(root, _ANCESTOR)
     adir.mkdir(parents=True, exist_ok=True)
     (adir / STOP_AFTER_FILE).write_text(json.dumps({"stop_after": "plan"}), encoding="utf-8")
@@ -135,7 +137,7 @@ def _ancestor_marker(root, parked: bool = False):
     return rdir
 
 
-def test_ancestor_marker_parks_a_markerless_successor(tmp_path, monkeypatch):
+def test_ancestor_marker_parks_a_markerless_successor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _seed(tmp_path)
     rdir = _ancestor_marker(tmp_path)
     monkeypatch.setattr(ask_stage, "stage", lambda *a, **k: (_ for _ in ()).throw(AssertionError("staged")))
@@ -150,7 +152,7 @@ def test_ancestor_marker_parks_a_markerless_successor(tmp_path, monkeypatch):
     assert (record_dir(tmp_path, _ANCESTOR) / STOP_AFTER_FILE).exists()
 
 
-def test_successor_that_recorded_its_park_stages(tmp_path):
+def test_successor_that_recorded_its_park_stages(tmp_path: Path) -> None:
     _seed(tmp_path)
     rdir = _ancestor_marker(tmp_path)
     (rdir / "halted.json").write_text(json.dumps({"halted": "parked"}), encoding="utf-8")
@@ -162,7 +164,7 @@ def test_successor_that_recorded_its_park_stages(tmp_path):
     assert (record_dir(tmp_path, _ANCESTOR) / STOP_AFTER_FILE).exists()
 
 
-def test_unrelated_ancestor_marker_does_not_park(tmp_path):
+def test_unrelated_ancestor_marker_does_not_park(tmp_path: Path) -> None:
     _seed(tmp_path)
     adir = record_dir(tmp_path, _ANCESTOR)
     adir.mkdir(parents=True, exist_ok=True)

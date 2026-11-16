@@ -20,7 +20,7 @@ pytestmark = pytest.mark.complete
 
 
 @pytest.fixture(autouse=True)
-def _ambient_spawn_depth_is_zero(monkeypatch) -> None:
+def _ambient_spawn_depth_is_zero(monkeypatch: pytest.MonkeyPatch) -> None:
     """A suite run by an engine spawner carries depth 1; these tests set their own depth."""
     monkeypatch.delenv(spawn_depth.ENV_KEY, raising=False)
     monkeypatch.delenv(spawn_depth.COUNTED_KEY, raising=False)

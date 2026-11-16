@@ -10,6 +10,11 @@ import time
 import pytest
 
 from coordinator_core import atomic_replace
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from threading import Thread
 
 win_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows rename semantics")
 
@@ -18,7 +23,7 @@ win_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows rename se
 _REAL_SLEEP = time.sleep
 
 
-def _hold_shared(target, hold_s: float, seen: list):
+def _hold_shared(target, hold_s: float, seen: list) -> Thread:
     import _winapi
     import msvcrt
 
@@ -43,7 +48,7 @@ def _hold_shared(target, hold_s: float, seen: list):
 
 
 @win_only
-def test_share_delete_reader_does_not_block_first_try(tmp_path, monkeypatch):
+def test_share_delete_reader_does_not_block_first_try(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "f.bin"
     target.write_bytes(b"old")
     seen: list = []
@@ -60,7 +65,7 @@ def test_share_delete_reader_does_not_block_first_try(tmp_path, monkeypatch):
 
 
 @win_only
-def test_flag_rejection_falls_back_to_os_replace(tmp_path, monkeypatch):
+def test_flag_rejection_falls_back_to_os_replace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     target = tmp_path / "f.bin"
     target.write_bytes(b"old")
     monkeypatch.setattr(atomic_replace, "_posix_rename_windows", lambda s, d: False)
@@ -75,7 +80,7 @@ def test_flag_rejection_falls_back_to_os_replace(tmp_path, monkeypatch):
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX path")
-def test_posix_uses_plain_os_replace(tmp_path, monkeypatch):
+def test_posix_uses_plain_os_replace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a):
         raise AssertionError("windows rename called on POSIX")
 

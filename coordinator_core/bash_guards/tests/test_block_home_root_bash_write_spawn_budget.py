@@ -16,12 +16,13 @@ import pytest
 from coordinator_core import machine_profile
 from coordinator_core.bash_guards import block_home_root_bash_write as guard
 from coordinator_core.bash_guards import dispatch
+from pathlib import Path
 
 _GUARD_FILE = os.path.normcase(guard.__file__)
 
 
 @pytest.fixture
-def home(tmp_path, monkeypatch):
+def home(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     h = tmp_path / "home"
     (h / "X" / "repo" / "scratch").mkdir(parents=True)  # an existing repo's scratch, not a new home-dir folder
     monkeypatch.setenv("USERPROFILE", str(h))
@@ -33,7 +34,7 @@ def home(tmp_path, monkeypatch):
     machine_profile.reset_cache()
 
 
-def _raw(cmd, tool, cwd):
+def _raw(cmd, tool, cwd) -> str:
     return json.dumps(
         {
             "tool_name": tool,
@@ -45,7 +46,7 @@ def _raw(cmd, tool, cwd):
 
 
 @pytest.fixture
-def spawns_from_guard(monkeypatch) -> List[str]:
+def spawns_from_guard(monkeypatch: pytest.MonkeyPatch) -> List[str]:
     """Spawn sites whose call stack passes through the guard module; other guards' spawns are not counted."""
     seen: List[str] = []
 
@@ -65,7 +66,7 @@ def spawns_from_guard(monkeypatch) -> List[str]:
     return seen
 
 
-def test_guard_check_spawns_nothing_when_spawning_is_forbidden(home, tmp_path, monkeypatch):
+def test_guard_check_spawns_nothing_when_spawning_is_forbidden(home, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     def forbidden(*_a, **_k):
         raise AssertionError("spawn attempted")
 
@@ -95,8 +96,8 @@ def test_guard_check_spawns_nothing_when_spawning_is_forbidden(home, tmp_path, m
     ],
 )
 def test_dispatch_verdict_spawns_nothing_from_this_guard(
-    home, tmp_path, spawns_from_guard, cmd, tool, denied
-):
+    home, tmp_path: Path, spawns_from_guard, cmd, tool, denied
+) -> None:
     out = dispatch.evaluate_payload_json(_raw(cmd, tool, tmp_path))
     text = json.dumps(out)
     assert ("home dir" in text) is denied, text

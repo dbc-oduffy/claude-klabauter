@@ -22,6 +22,7 @@ from .conftest import REVIEW_KW
 import textwrap
 
 from coordinator_core.ops.dispatch_emit.emit import emit_script
+from pathlib import Path
 
 _HEADER_TEMPLATE = textwrap.dedent(
     """\
@@ -87,7 +88,7 @@ def _two_row_body(gated_row_extra: str = "") -> str:
     )
 
 
-def test_frontmatter_row_gate_withholds_the_row_from_every_wave(tmp_path):
+def test_frontmatter_row_gate_withholds_the_row_from_every_wave(tmp_path: Path) -> None:
     extra_frontmatter = (
         "external_gate:\n"
         "  - id: claude-klabauter-inbox-delivery\n"
@@ -108,7 +109,7 @@ def test_frontmatter_row_gate_withholds_the_row_from_every_wave(tmp_path):
     assert "T2" in script
 
 
-def test_row_level_plain_string_gate_list_withholds_the_row_from_every_wave(tmp_path):
+def test_row_level_plain_string_gate_list_withholds_the_row_from_every_wave(tmp_path: Path) -> None:
     gated_row_extra = (
         "  external_gate:\n"
         "    - host-retrieval-runtime\n"

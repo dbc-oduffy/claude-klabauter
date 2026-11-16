@@ -42,6 +42,7 @@ from coordinator_core.ops.gate_validate_invocable import (
     _gate_validate_invocable,
     _run_dimension,
 )
+from pathlib import Path
 
 
 @pytest.fixture(autouse=True)
@@ -54,13 +55,13 @@ def _restore_dimension_registry():
 
 
 def _record(
-    op="fake.op",
-    verdict_source="pass",
-    sample_count=10,
+    op: str = "fake.op",
+    verdict_source: str = "pass",
+    sample_count: int = 10,
     code_sha="a" * 40,
-    live_sessions=5,
+    live_sessions: int | None = 5,
     machine=None,
-):
+) -> ConformanceRecord:
     if machine is None:
         machine = compose_machine_id()
     gating_value = 50.0
@@ -101,11 +102,11 @@ def _inventory(tmp_path, entries):
     return path
 
 
-def test_latency_slot_is_registered_not_stub():
+def test_latency_slot_is_registered_not_stub() -> None:
     assert _DIMENSION_REGISTRY["latency"] is latency_dim._check_latency
 
 
-def test_self_excluded_paths_never_reach_op_mapping(monkeypatch):
+def test_self_excluded_paths_never_reach_op_mapping(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         latency_dim,
         "_load_op_inventory",
@@ -127,7 +128,7 @@ def test_self_excluded_paths_never_reach_op_mapping(monkeypatch):
     assert op_map == {}
 
 
-def test_only_validator_changed_yields_unavailable_not_gating():
+def test_only_validator_changed_yields_unavailable_not_gating() -> None:
     result = _gate_validate_invocable(
         {"changed_files": ["coordinator_core/ops/gate_validate_invocable.py"]}
     )
@@ -135,7 +136,7 @@ def test_only_validator_changed_yields_unavailable_not_gating():
     assert latency["verdict"] == Verdict.UNAVAILABLE.value
 
 
-def test_reentrant_call_raises_loudly():
+def test_reentrant_call_raises_loudly() -> None:
     latency_dim._REENTRANCY_GUARD.set(True)
     try:
         with pytest.raises(latency_dim.LatencyDimensionReentrancyError):
@@ -144,7 +145,7 @@ def test_reentrant_call_raises_loudly():
         latency_dim._REENTRANCY_GUARD.set(False)
 
 
-def test_reentrant_call_via_run_dimension_reads_as_error_not_silent_pass():
+def test_reentrant_call_via_run_dimension_reads_as_error_not_silent_pass() -> None:
     latency_dim._REENTRANCY_GUARD.set(True)
     try:
         result = _run_dimension("latency", ["x.py"], None, None)
@@ -154,20 +155,20 @@ def test_reentrant_call_via_run_dimension_reads_as_error_not_silent_pass():
     assert "LatencyDimensionReentrancyError" in result.detail
 
 
-def test_guard_is_reset_after_a_normal_call():
+def test_guard_is_reset_after_a_normal_call() -> None:
     assert latency_dim._REENTRANCY_GUARD.get() is False
     latency_dim._check_latency([], None, None)
     assert latency_dim._REENTRANCY_GUARD.get() is False
 
 
-def test_unmapped_changed_file_is_unavailable(monkeypatch):
+def test_unmapped_changed_file_is_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(latency_dim, "_load_op_inventory", lambda: [])
     result = latency_dim._check_latency(["docs/some-doc.md"], None, None)
     assert result.dimension == "latency"
     assert result.verdict is Verdict.UNAVAILABLE
 
 
-def test_compute_only_op_with_passing_record_gates_pass(monkeypatch):
+def test_compute_only_op_with_passing_record_gates_pass(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         latency_dim,
         "_load_op_inventory",
@@ -187,7 +188,7 @@ def test_compute_only_op_with_passing_record_gates_pass(monkeypatch):
     assert "fake.op" in result.detail
 
 
-def test_compute_only_op_with_failing_record_gates_fail(monkeypatch):
+def test_compute_only_op_with_failing_record_gates_fail(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         latency_dim,
         "_load_op_inventory",
@@ -206,7 +207,7 @@ def test_compute_only_op_with_failing_record_gates_fail(monkeypatch):
     assert result.verdict is Verdict.FAIL
 
 
-def test_failing_record_with_null_ambient_downgrades_to_advisory(monkeypatch):
+def test_failing_record_with_null_ambient_downgrades_to_advisory(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         latency_dim,
         "_load_op_inventory",
@@ -228,7 +229,7 @@ def test_failing_record_with_null_ambient_downgrades_to_advisory(monkeypatch):
     assert "downgraded from fail" in result.detail
 
 
-def test_failing_record_with_high_load_ambient_downgrades_to_advisory(monkeypatch):
+def test_failing_record_with_high_load_ambient_downgrades_to_advisory(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         latency_dim,
         "_load_op_inventory",
@@ -250,7 +251,7 @@ def test_failing_record_with_high_load_ambient_downgrades_to_advisory(monkeypatc
     assert "downgraded from fail" in result.detail
 
 
-def test_mutating_op_never_gates_even_with_bad_latency(monkeypatch):
+def test_mutating_op_never_gates_even_with_bad_latency(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         latency_dim,
         "_load_op_inventory",
@@ -273,7 +274,7 @@ def test_mutating_op_never_gates_even_with_bad_latency(monkeypatch):
     assert "advisory" in result.detail
 
 
-def test_never_benchmarked_compute_only_op_is_unavailable_not_fail(monkeypatch):
+def test_never_benchmarked_compute_only_op_is_unavailable_not_fail(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         latency_dim,
         "_load_op_inventory",
@@ -290,7 +291,7 @@ def test_never_benchmarked_compute_only_op_is_unavailable_not_fail(monkeypatch):
     assert result.verdict is Verdict.UNAVAILABLE
 
 
-def test_op_class_resolution_returns_none_for_unclassified_op(monkeypatch):
+def test_op_class_resolution_returns_none_for_unclassified_op(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         latency_dim,
         "_load_op_inventory",
@@ -306,7 +307,7 @@ def test_op_class_resolution_returns_none_for_unclassified_op(monkeypatch):
     assert latency_dim._op_class_for("nonexistent.op") is None
 
 
-def test_unclassified_op_is_unavailable_not_gated(monkeypatch):
+def test_unclassified_op_is_unavailable_not_gated(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         latency_dim,
         "_load_op_inventory",
@@ -361,14 +362,14 @@ def _hash_file(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def _assert_tracked_partition_untouched(real_store_path, before_hash):
+def _assert_tracked_partition_untouched(real_store_path, before_hash) -> None:
     assert _hash_file(real_store_path) == before_hash, (
         "the real, tracked baseline.jsonl partition was mutated by a test — "
         "store-path isolation (R6) failed to redirect the write"
     )
 
 
-def test_end_to_end_over_budget_record_gates_fail_through_real_store(monkeypatch, tmp_path):
+def test_end_to_end_over_budget_record_gates_fail_through_real_store(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     real_store_path = baseline_store.DEFAULT_STORE_PATH
     before_hash = _hash_file(real_store_path)
     monkeypatch.setattr(baseline_store, "DEFAULT_STORE_PATH", tmp_path / "baseline.jsonl")
@@ -404,7 +405,7 @@ def test_end_to_end_over_budget_record_gates_fail_through_real_store(monkeypatch
     _assert_tracked_partition_untouched(real_store_path, before_hash)
 
 
-def test_end_to_end_below_min_gating_sample_count_is_advisory_not_fail(monkeypatch, tmp_path):
+def test_end_to_end_below_min_gating_sample_count_is_advisory_not_fail(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     real_store_path = baseline_store.DEFAULT_STORE_PATH
     before_hash = _hash_file(real_store_path)
     monkeypatch.setattr(baseline_store, "DEFAULT_STORE_PATH", tmp_path / "baseline.jsonl")
@@ -441,7 +442,7 @@ def test_end_to_end_below_min_gating_sample_count_is_advisory_not_fail(monkeypat
     _assert_tracked_partition_untouched(real_store_path, before_hash)
 
 
-def test_end_to_end_unknown_ambient_band_suppresses_fail_to_advisory(monkeypatch, tmp_path):
+def test_end_to_end_unknown_ambient_band_suppresses_fail_to_advisory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     real_store_path = baseline_store.DEFAULT_STORE_PATH
     before_hash = _hash_file(real_store_path)
     monkeypatch.setattr(baseline_store, "DEFAULT_STORE_PATH", tmp_path / "baseline.jsonl")
@@ -476,7 +477,7 @@ def test_end_to_end_unknown_ambient_band_suppresses_fail_to_advisory(monkeypatch
     _assert_tracked_partition_untouched(real_store_path, before_hash)
 
 
-def test_end_to_end_high_load_ambient_band_suppresses_fail_to_advisory(monkeypatch, tmp_path):
+def test_end_to_end_high_load_ambient_band_suppresses_fail_to_advisory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     real_store_path = baseline_store.DEFAULT_STORE_PATH
     before_hash = _hash_file(real_store_path)
     monkeypatch.setattr(baseline_store, "DEFAULT_STORE_PATH", tmp_path / "baseline.jsonl")
@@ -511,7 +512,7 @@ def test_end_to_end_high_load_ambient_band_suppresses_fail_to_advisory(monkeypat
     _assert_tracked_partition_untouched(real_store_path, before_hash)
 
 
-def test_self_exclusion_and_reentrancy_pins_are_present():
+def test_self_exclusion_and_reentrancy_pins_are_present() -> None:
     module_globals = globals()
     for name in (
         "test_self_excluded_paths_never_reach_op_mapping",

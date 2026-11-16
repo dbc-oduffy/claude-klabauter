@@ -13,6 +13,8 @@ from coordinator_core.ops.dispatch_emit.ask_gate import _bind_run, _resume_ledge
 from coordinator_core.ops.dispatch_emit.ask_stage import _handler as stage_handler
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.ops.dispatch_emit.tests.test_ask_stage import read_stage_reply
+from pathlib import Path
+import pytest
 
 RUN = "ask-20261022T000000-abc123"
 PLAN_REL = "docs/plans/2026-10-22-route-plan.md"
@@ -54,7 +56,7 @@ def _sizing() -> dict:
     }
 
 
-def _setup(tmp_path):
+def _setup(tmp_path) -> None:
     (tmp_path / ".git").mkdir()
     (tmp_path / "docs" / "plans").mkdir(parents=True)
     (tmp_path / "state" / "sizings").mkdir(parents=True)
@@ -97,11 +99,11 @@ def _composed(monkeypatch) -> str:
     )
 
 
-def test_composed_script_prefers_minted_manifest_ids_over_resume_ids(monkeypatch):
+def test_composed_script_prefers_minted_manifest_ids_over_resume_ids(monkeypatch: pytest.MonkeyPatch) -> None:
     assert LEDGER_IDS_EXPR in _composed(monkeypatch)
 
 
-def test_fresh_route_plan_run_is_seeded_and_does_not_refuse(tmp_path):
+def test_fresh_route_plan_run_is_seeded_and_does_not_refuse(tmp_path: Path) -> None:
     _setup(tmp_path)
     assert _bind_run(tmp_path, RUN, SIZING_REL) is None
     assert _register_ids(tmp_path) == []
@@ -114,7 +116,7 @@ def test_fresh_route_plan_run_is_seeded_and_does_not_refuse(tmp_path):
     assert not refuses_as_empty_register(None, manifest)
 
 
-def test_l1_empty_resume_ledger_ids_do_not_shadow_the_minted_manifest_ids(tmp_path):
+def test_l1_empty_resume_ledger_ids_do_not_shadow_the_minted_manifest_ids(tmp_path: Path) -> None:
     _setup(tmp_path)
     _bind_run(tmp_path, RUN, SIZING_REL)
     sizing_at_gate = yaml.safe_load((tmp_path / SIZING_REL).read_text(encoding="utf-8"))
@@ -126,12 +128,12 @@ def test_l1_empty_resume_ledger_ids_do_not_shadow_the_minted_manifest_ids(tmp_pa
     assert not refuses_as_empty_register(resume, manifest)
 
 
-def test_l2_stage_reply_carries_ledger_item_ids_when_the_plan_is_authored_in_run(tmp_path):
+def test_l2_stage_reply_carries_ledger_item_ids_when_the_plan_is_authored_in_run(tmp_path: Path) -> None:
     _setup(tmp_path)
     _bind_run(tmp_path, RUN, SIZING_REL)
     manifest = _stage(tmp_path, commit_sizing_path=SIZING_REL)
     assert isinstance(manifest.get("ledger_item_ids"), list) and manifest["ledger_item_ids"]
 
 
-def test_a_register_with_nothing_to_mint_still_refuses():
+def test_a_register_with_nothing_to_mint_still_refuses() -> None:
     assert refuses_as_empty_register({"ledger_item_ids": [], "withheld_ids": []}, {"ledger_item_ids": [], "withheld_ids": []})

@@ -70,6 +70,10 @@ import coordinator_core.ops.plan_tasks_mutate as plan_tasks_mutate  # noqa: F401
 from coordinator_core.ipc import _REGISTRY
 from coordinator_core.ops.plan_tasks_mutate import _handler
 from coordinator_core.win_portability import no_console_creationflags
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import SimpleNamespace
 
 # _invoke_cli spawns `python -m coordinator_core.invoke` as a real subprocess.
 # That child inherits cwd but NOT pytest's rootdir sys.path insertion, so it
@@ -105,7 +109,7 @@ def _run(coro):
 
 
 @pytest.fixture(autouse=True)
-def _seed_pm_approved_via_stamp(request, monkeypatch):
+def _seed_pm_approved_via_stamp(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
     """Resolve-gate tests seed a legacy row's pm_approved through stamp, which
     now refuses it in production; lift the refusal for those fixtures only.
     Tests named `*stamp_refuses_signoff*` keep the real refusal."""
@@ -276,7 +280,7 @@ def _valid_task(task_id: str = "C2") -> dict:
 # ---------------------------------------------------------------------------
 
 
-def test_op_registered():
+def test_op_registered() -> None:
     """plan.tasks.mutate must appear in _REGISTRY (import guard validates at load)."""
     assert _OP_NAME in _REGISTRY
 
@@ -286,7 +290,7 @@ def test_op_registered():
 # ---------------------------------------------------------------------------
 
 
-def test_add_task_happy_path(tmp_path):
+def test_add_task_happy_path(tmp_path: Path) -> None:
     """add-task appends a schema-valid row; result is applied=True, row present."""
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "happy.md", _PLAN_WITH_TASKS)
@@ -307,7 +311,7 @@ def test_add_task_happy_path(tmp_path):
     assert "## Trailer\n\nTrailing prose after the tasks block.\n" in text
 
 
-def test_add_task_lands_an_open_row_above_closed_rows_without_moving_them(tmp_path):
+def test_add_task_lands_an_open_row_above_closed_rows_without_moving_them(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "ordered.md", _PLAN_WITH_TASKS)
     closed = {
@@ -329,7 +333,7 @@ def test_add_task_lands_an_open_row_above_closed_rows_without_moving_them(tmp_pa
 # ---------------------------------------------------------------------------
 
 
-def test_add_task_duplicate_id_fails_loud_no_write(tmp_path):
+def test_add_task_duplicate_id_fails_loud_no_write(tmp_path: Path) -> None:
     """Duplicate id aborts via MutateAbort — no write; on-disk bytes unchanged."""
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "dup.md", _PLAN_WITH_TASKS)
@@ -355,7 +359,7 @@ def test_add_task_duplicate_id_fails_loud_no_write(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_add_task_no_tasks_heading_synthesizes_section(tmp_path):
+def test_add_task_no_tasks_heading_synthesizes_section(tmp_path: Path) -> None:
     """A plan with no '## Tasks' heading gets a fresh section + fence synthesized."""
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "no-heading.md", _PLAN_NO_TASKS_HEADING)
@@ -383,7 +387,7 @@ def test_add_task_no_tasks_heading_synthesizes_section(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_add_task_empty_heading_inserts_fence_under_existing_heading(tmp_path):
+def test_add_task_empty_heading_inserts_fence_under_existing_heading(tmp_path: Path) -> None:
     """A '## Tasks' heading with no adjacent fence gets the fence inserted under
     the EXISTING heading — no second heading is created (F3)."""
     repo = _make_git_repo(tmp_path)
@@ -450,7 +454,7 @@ status: draft
 """
 
 
-def test_stamp_multi_id_all_applied(tmp_path):
+def test_stamp_multi_id_all_applied(tmp_path: Path) -> None:
     """stamp updates fields on N ids in a single locked_rmw — all applied."""
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "stamp-ok.md", _PLAN_TWO_ROWS)
@@ -481,7 +485,7 @@ def test_stamp_multi_id_all_applied(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_stamp_atomicity_bad_id_zero_writes(tmp_path):
+def test_stamp_atomicity_bad_id_zero_writes(tmp_path: Path) -> None:
     """One id-not-found in a multi-id stamp batch aborts the WHOLE batch — no
     writes, including the valid updates in the same batch."""
     repo = _make_git_repo(tmp_path)
@@ -510,7 +514,7 @@ def test_stamp_atomicity_bad_id_zero_writes(tmp_path):
     )
 
 
-def test_stamp_duplicate_id_in_batch_fails_loud_no_write(tmp_path):
+def test_stamp_duplicate_id_in_batch_fails_loud_no_write(tmp_path: Path) -> None:
     """A duplicate id within one `updates` batch
     aborts the whole batch (fail-loud, mirrors add-task's dup discipline) —
     no writes, not last-write-wins."""
@@ -545,7 +549,7 @@ def test_stamp_duplicate_id_in_batch_fails_loud_no_write(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_add_task_schema_invalid_row_rejected(tmp_path):
+def test_add_task_schema_invalid_row_rejected(tmp_path: Path) -> None:
     """A row missing a required field (e.g. 'surface') is rejected; no write."""
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "invalid-row.md", _PLAN_WITH_TASKS)
@@ -567,7 +571,7 @@ def test_add_task_schema_invalid_row_rejected(tmp_path):
     assert plan.read_text(encoding="utf-8") == original
 
 
-def test_stamp_schema_invalid_result_rejected(tmp_path):
+def test_stamp_schema_invalid_result_rejected(tmp_path: Path) -> None:
     """A stamp that produces a schema-invalid resulting row (bad change_kind
     enum value) is rejected; no write."""
     repo = _make_git_repo(tmp_path)
@@ -594,7 +598,7 @@ def test_stamp_schema_invalid_result_rejected(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_splice_fidelity_outside_span_byte_identical(tmp_path):
+def test_splice_fidelity_outside_span_byte_identical(tmp_path: Path) -> None:
     """Frontmatter, intro prose, and trailing prose are byte-identical after
     a mutation; only the fence-body span content changes."""
     repo = _make_git_repo(tmp_path)
@@ -628,7 +632,7 @@ def test_splice_fidelity_outside_span_byte_identical(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_add_task_idempotent_no_write_on_identical_row(tmp_path):
+def test_add_task_idempotent_no_write_on_identical_row(tmp_path: Path) -> None:
     """Re-invoking add-task with the SAME row that is already present is a
     duplicate-id abort (fail-loud, no write) — distinct from a semantic no-op,
     per F6's note. This test asserts the file remains byte-unchanged either way."""
@@ -658,7 +662,7 @@ def test_add_task_idempotent_no_write_on_identical_row(tmp_path):
     )
 
 
-def test_stamp_no_op_no_write(tmp_path):
+def test_stamp_no_op_no_write(tmp_path: Path) -> None:
     """A stamp whose updates set fields to their CURRENT values re-serializes
     to byte-identical text (given the pinned deterministic dump options), so
     locked_rmw's byte-identity skip results in no actual write to disk — even
@@ -707,7 +711,7 @@ def test_stamp_no_op_no_write(tmp_path):
     )
 
 
-def test_stamp_no_op_idempotent_for_multiline_body_with_blank_line(tmp_path):
+def test_stamp_no_op_idempotent_for_multiline_body_with_blank_line(tmp_path: Path) -> None:
     """_dump_rows re-serialization idempotency
     must also hold for a `body` value shaped to stress PyYAML's scalar-style
     selection: an embedded blank line plus trailing whitespace on a line.
@@ -826,7 +830,7 @@ status: draft
 """
 
 
-def test_stamp_one_row_preserves_literal_block_style_on_other_rows(tmp_path):
+def test_stamp_one_row_preserves_literal_block_style_on_other_rows(tmp_path: Path) -> None:
     """Regression (2026-08-21, row-body-flattening defect): stamping ONE row
     of a multi-row spine must not flatten every OTHER row's multi-line
     `body:` field from a literal block scalar (`body: |`) into a
@@ -881,7 +885,7 @@ def test_stamp_one_row_preserves_literal_block_style_on_other_rows(tmp_path):
         ("trailing-whitespace-on-line", "para one.   \npara two.\n"),
     ],
 )
-def test_dump_rows_round_trips_every_body_shape_byte_for_byte(label, body):
+def test_dump_rows_round_trips_every_body_shape_byte_for_byte(label, body) -> None:
     """`_dump_rows` must return the body it was given, for every newline and
     whitespace shape — whichever scalar style it picks to get there.
 
@@ -918,7 +922,7 @@ def test_dump_rows_round_trips_every_body_shape_byte_for_byte(label, body):
 # ---------------------------------------------------------------------------
 
 
-def test_rejects_out_of_tree_absolute_path(tmp_path):
+def test_rejects_out_of_tree_absolute_path(tmp_path: Path) -> None:
     """An absolute plan_path outside docs/plans/ is rejected; target untouched."""
     repo = _make_git_repo(tmp_path)
     outside = tmp_path / "outside" / "secret.md"
@@ -936,7 +940,7 @@ def test_rejects_out_of_tree_absolute_path(tmp_path):
     assert outside.read_text(encoding="utf-8") == original
 
 
-def test_rejects_traversal_path(tmp_path):
+def test_rejects_traversal_path(tmp_path: Path) -> None:
     """A '../' traversal plan_path escaping docs/plans/ is rejected; target
     (if it exists) is untouched.
 
@@ -968,7 +972,7 @@ def test_rejects_traversal_path(tmp_path):
     assert secret.read_text(encoding="utf-8") == original
 
 
-def test_rejects_out_of_tree_path_nonexistent_target(tmp_path):
+def test_rejects_out_of_tree_path_nonexistent_target(tmp_path: Path) -> None:
     """An out-of-tree plan_path pointing at a NON-existent file is still
     rejected on containment grounds (never reaches the FileNotFoundError path),
     and no file is created at the target."""
@@ -990,7 +994,7 @@ def test_rejects_out_of_tree_path_nonexistent_target(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_sequential_add_task_calls_both_land_in_final_spine(tmp_path):
+def test_sequential_add_task_calls_both_land_in_final_spine(tmp_path: Path) -> None:
     """Two add-task calls in sequence, distinct ids, both land in the final
     spine — proves the second locked_rmw invocation reads the first's
     committed bytes, not a stale snapshot."""
@@ -1053,7 +1057,7 @@ def _invoke_cli(op: str, params: dict, repo: Path) -> subprocess.CompletedProces
     )
 
 
-def test_cli_seam_add_task_end_to_end(tmp_path):
+def test_cli_seam_add_task_end_to_end(tmp_path: Path) -> None:
     """plan.tasks.mutate add-task via the real invoke path: exit 0, valid
     JSON-RPC result, and the plan file is mutated on disk (AC8)."""
     repo = _make_git_repo(tmp_path)
@@ -1088,7 +1092,7 @@ def test_cli_seam_add_task_end_to_end(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_coded_no_pm_approved_needed(tmp_path):
+def test_resolve_coded_no_pm_approved_needed(tmp_path: Path) -> None:
     """resolve --disposition coded writes disposition + ref + detail with no
     pm_approved required — D3: coded is evidence of work done, not a scope
     decision."""
@@ -1116,7 +1120,7 @@ def test_resolve_coded_no_pm_approved_needed(tmp_path):
     assert "disposition_detail: shipped in abc1234" in text
 
 
-def test_resolve_voided_without_reason_is_refused(tmp_path):
+def test_resolve_voided_without_reason_is_refused(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "resolve-voided-noreason.md", _PLAN_WITH_TASKS)
     before = plan.read_text(encoding="utf-8")
@@ -1132,7 +1136,7 @@ def test_resolve_voided_without_reason_is_refused(tmp_path):
     assert plan.read_text(encoding="utf-8") == before
 
 
-def test_resolve_voided_records_reason_date_actor(tmp_path):
+def test_resolve_voided_records_reason_date_actor(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "resolve-voided.md", _PLAN_WITH_TASKS)
 
@@ -1148,7 +1152,7 @@ def test_resolve_voided_records_reason_date_actor(tmp_path):
     assert re.search(r"superseded by C9 \(voided \d{4}-\d{2}-\d{2} by em-1\)", text)
 
 
-def test_resolve_coded_on_deferred_row_names_the_lift(tmp_path):
+def test_resolve_coded_on_deferred_row_names_the_lift(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     deferred = _PLAN_WITH_TASKS.replace(
         "  deferred: false\n", "  deferred: true\n  deferred_until: 2026-12-01\n"
@@ -1177,7 +1181,7 @@ def test_resolve_coded_on_deferred_row_names_the_lift(tmp_path):
     assert plan.read_text(encoding="utf-8") == before
 
 
-def test_stamp_null_lifts_deferred_until_then_resolve_succeeds(tmp_path):
+def test_stamp_null_lifts_deferred_until_then_resolve_succeeds(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     deferred = _PLAN_WITH_TASKS.replace(
         "  deferred: false\n", "  deferred: true\n  deferred_until: 2026-12-01\n"
@@ -1201,7 +1205,7 @@ def test_stamp_null_lifts_deferred_until_then_resolve_succeeds(tmp_path):
     assert result["exit_code"] == 0, result
 
 
-def test_stamp_null_on_required_key_refuses(tmp_path):
+def test_stamp_null_on_required_key_refuses(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "stamp-null-required.md", _PLAN_WITH_TASKS)
     before = plan.read_text(encoding="utf-8")
@@ -1215,7 +1219,7 @@ def test_stamp_null_on_required_key_refuses(tmp_path):
     assert plan.read_text(encoding="utf-8") == before
 
 
-def test_resolve_governed_admits_on_approved_grouping(tmp_path, monkeypatch):
+def test_resolve_governed_admits_on_approved_grouping(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """On a governed plan the per-row pm_approved boolean is absent by
     design, and an approved grouping whose digest covers this write is what
     authorizes it.
@@ -1249,7 +1253,7 @@ def test_resolve_governed_admits_on_approved_grouping(tmp_path, monkeypatch):
     assert "disposition: backlogged" in plan.read_text(encoding="utf-8")
 
 
-def test_add_task_governed_admits_row_without_pm_approved(tmp_path):
+def test_add_task_governed_admits_row_without_pm_approved(tmp_path: Path) -> None:
     """add-task must resolve `governed` from the same plan frontmatter
     `resolve` does, so a governed plan's rows are validated against the
     governed schema (pm_approved not required) rather than the legacy one.
@@ -1287,7 +1291,7 @@ def test_add_task_governed_admits_row_without_pm_approved(tmp_path):
     assert "id: C2" in plan.read_text(encoding="utf-8")
 
 
-def test_stamp_governed_uses_governed_schema(tmp_path):
+def test_stamp_governed_uses_governed_schema(tmp_path: Path) -> None:
     """stamp must resolve `governed` the same way add-task/resolve do —
     stamping a non-reserved field on a governed-plan row that already
     carries `disposition: backlogged` (and no pm_approved) must not be
@@ -1318,7 +1322,7 @@ def test_stamp_governed_uses_governed_schema(tmp_path):
     assert "title: First chunk (renamed)" in plan.read_text(encoding="utf-8")
 
 
-def test_resolve_governed_refuses_pending_grouping(tmp_path):
+def test_resolve_governed_refuses_pending_grouping(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "resolve-governed-pending.md", _governed_plan(status="pending"))
     original = plan.read_text(encoding="utf-8")
@@ -1341,7 +1345,7 @@ def test_resolve_governed_refuses_pending_grouping(tmp_path):
     assert plan.read_text(encoding="utf-8") == original
 
 
-def test_resolve_governed_refuses_stale_digest(tmp_path):
+def test_resolve_governed_refuses_stale_digest(tmp_path: Path) -> None:
     """A digest approved over a different cut-set than this write produces.
 
     This is the widened-cut-set case: the PM approved something, then the
@@ -1372,7 +1376,7 @@ def test_resolve_governed_refuses_stale_digest(tmp_path):
     assert plan.read_text(encoding="utf-8") == original
 
 
-def test_resolve_closed_disposition_refuses_without_pm_approved(tmp_path):
+def test_resolve_closed_disposition_refuses_without_pm_approved(tmp_path: Path) -> None:
     """resolve --disposition backlogged on a LEGACY plan whose row has no
     pm_approved: true is refused (MutateAbort) — no write, and the refusal
     directs the author to the PM WITHOUT naming a command that would satisfy
@@ -1437,7 +1441,7 @@ def test_resolve_closed_disposition_refuses_without_pm_approved(tmp_path):
     )
 
 
-def test_resolve_governed_spun_off_refused_without_grouping_approval(tmp_path):
+def test_resolve_governed_spun_off_refused_without_grouping_approval(tmp_path: Path) -> None:
     """A GOVERNED plan REFUSES a spun_off row whose `spun_off` grouping is not
     approved.
 
@@ -1504,7 +1508,7 @@ grouping_approvals:
     )
 
 
-def test_resolve_governed_spun_off_succeeds_with_approved_grouping(tmp_path):
+def test_resolve_governed_spun_off_succeeds_with_approved_grouping(tmp_path: Path) -> None:
     """The other half of the inversion: an APPROVED `spun_off` block carrying a
     digest over the membership this write produces lets the same close land.
 
@@ -1564,7 +1568,7 @@ grouping_approvals:
     assert "disposition: spun_off" in plan.read_text(encoding="utf-8")
 
 
-def test_resolve_legacy_spun_off_still_needs_no_pm_approved(tmp_path):
+def test_resolve_legacy_spun_off_still_needs_no_pm_approved(tmp_path: Path) -> None:
     """The LEGACY leg is deliberately NOT widened alongside the governed one.
 
     A plan carrying no `grouping_approvals` key keeps DoE's 2026-08-05
@@ -1592,7 +1596,7 @@ def test_resolve_legacy_spun_off_still_needs_no_pm_approved(tmp_path):
     assert result["applied"] is True
 
 
-def test_resolve_closed_disposition_succeeds_with_pm_approved(tmp_path):
+def test_resolve_closed_disposition_succeeds_with_pm_approved(tmp_path: Path) -> None:
     """resolve --disposition spun_off succeeds once the row already carries
     pm_approved: true (set via a prior stamp call, since pm_approved is not a
     reserved field) (AC4/D4).
@@ -1645,7 +1649,7 @@ def test_resolve_closed_disposition_succeeds_with_pm_approved(tmp_path):
     assert spinoff.is_file()
 
 
-def test_resolve_task_id_not_found_no_write(tmp_path):
+def test_resolve_task_id_not_found_no_write(tmp_path: Path) -> None:
     """resolve on a non-existent id aborts — no write."""
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "resolve-missing.md", _PLAN_WITH_TASKS)
@@ -1668,7 +1672,7 @@ def test_resolve_task_id_not_found_no_write(tmp_path):
     assert plan.read_text(encoding="utf-8") == original
 
 
-def test_resolve_missing_disposition_errors_no_write(tmp_path):
+def test_resolve_missing_disposition_errors_no_write(tmp_path: Path) -> None:
     """resolve without a 'disposition' param is rejected before any lock is
     taken — no write."""
     repo = _make_git_repo(tmp_path)
@@ -1685,7 +1689,7 @@ def test_resolve_missing_disposition_errors_no_write(tmp_path):
     assert plan.read_text(encoding="utf-8") == original
 
 
-def test_stamp_refuses_batch_carrying_disposition_field_no_write(tmp_path):
+def test_stamp_refuses_batch_carrying_disposition_field_no_write(tmp_path: Path) -> None:
     """stamp refuses the WHOLE batch when any update entry names disposition/
     disposition_ref/disposition_detail — the offer names --verb resolve, and
     no writes are applied (including the otherwise-valid sibling entry in the
@@ -1719,7 +1723,7 @@ def test_stamp_refuses_batch_carrying_disposition_field_no_write(tmp_path):
 
 
 @pytest.mark.parametrize("field", ["pm_approved", "signoff"])
-def test_stamp_refuses_signoff_field_naming_plan_signoff(tmp_path, field):
+def test_stamp_refuses_signoff_field_naming_plan_signoff(tmp_path: Path, field) -> None:
     """stamp refuses pm_approved/signoff for the whole batch, naming
     plan.signoff; no write."""
     repo = _make_git_repo(tmp_path)
@@ -1744,14 +1748,14 @@ def test_stamp_refuses_signoff_field_naming_plan_signoff(tmp_path, field):
     assert plan.read_text(encoding="utf-8") == original
 
 
-def test_legacy_pm_approval_hint_names_plan_signoff_and_apm():
+def test_legacy_pm_approval_hint_names_plan_signoff_and_apm() -> None:
     hint = plan_tasks_mutate._LEGACY_PM_APPROVAL_HINT
     assert "plan.signoff" in hint
     assert "APM" in hint
     assert "plan-tasks-stamp" not in hint
 
 
-def test_stamp_refuses_disposition_ref_field_alone(tmp_path):
+def test_stamp_refuses_disposition_ref_field_alone(tmp_path: Path) -> None:
     """The reserved-field refusal fires on disposition_ref/disposition_detail
     individually too, not only on 'disposition' itself."""
     repo = _make_git_repo(tmp_path)
@@ -1815,7 +1819,7 @@ status: draft
 """
 
 
-def _make_fake_harvest_module(repo: Path, plan_id: str = "test-plan-id"):
+def _make_fake_harvest_module(repo: Path, plan_id: str = "test-plan-id") -> SimpleNamespace:
     """A minimal stand-in for the loaded coordinator-harvest-deferrals
     module, exposing only the attributes _dispatch_backlogged calls.
     _run_queue_append / _run_lesson_promote actually write a small
@@ -1868,13 +1872,13 @@ def _make_fake_harvest_module(repo: Path, plan_id: str = "test-plan-id"):
     )
     module._LESSON_PROMOTE_CHANGE_KINDS = frozenset({"doctrine-edit", "snippet-sync-update"})
 
-    def _run_queue_append(row, key, dry_run):
+    def _run_queue_append(row, key, dry_run) -> bool:
         write_calls.append(("queue", row["id"], key))
         target = queue_dir / f"{row['id']}.yaml"
         target.write_text(f"title: {row['title']}\nevidence: {key}\n", encoding="utf-8")
         return True
 
-    def _run_lesson_promote(row, key, dry_run):
+    def _run_lesson_promote(row, key, dry_run) -> bool:
         write_calls.append(("lesson", row["id"], key))
         target = lessons_dir / f"{row['id']}.yaml"
         target.write_text(f"title: {row['title']}\nevidence: {key}\n", encoding="utf-8")
@@ -1885,7 +1889,7 @@ def _make_fake_harvest_module(repo: Path, plan_id: str = "test-plan-id"):
     return module
 
 
-def test_resolve_backlogged_delegates_to_harvest_row_routing(tmp_path, monkeypatch):
+def test_resolve_backlogged_delegates_to_harvest_row_routing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """resolve --disposition backlogged on a queue-eligible change_kind
     delegates to coordinator-harvest-deferrals' own queue route
     (coordinator-queue-append shape), one operation from the caller's point
@@ -1928,7 +1932,7 @@ def test_resolve_backlogged_delegates_to_harvest_row_routing(tmp_path, monkeypat
     assert ref_value.endswith("C1.yaml"), ref_value
 
 
-def test_resolve_backlogged_ignores_caller_supplied_disposition_ref(tmp_path, monkeypatch):
+def test_resolve_backlogged_ignores_caller_supplied_disposition_ref(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A caller-supplied NON-repo-relative (absolute) `disposition_ref` for a
     `backlogged` disposition is NOT a pass-through (a repo-relative one is kept;
     see test_plan_tasks_mutate_backlogged_repo) — it is silently overridden by the path
@@ -2008,7 +2012,7 @@ status: draft
 """
 
 
-def test_resolve_backlogged_repositions_rather_than_d5_refusing(tmp_path, monkeypatch):
+def test_resolve_backlogged_repositions_rather_than_d5_refusing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Closing C1 (position 1) to `backlogged` while C2 stays `open` in `do`
     at position 2 used to violate D5 (a `defer` row above a `do` row) and
     refuse outright. `_reposition_rows_for_d5` (2026-08-06, D5 ordering-
@@ -2156,7 +2160,7 @@ def _spine_id_order(text: str) -> list:
     return re.findall(r"^- id:\s*(\S+)", text, re.MULTILINE)
 
 
-def test_resolve_last_row_wont_do_after_earlier_coded_repositions_and_succeeds(tmp_path):
+def test_resolve_last_row_wont_do_after_earlier_coded_repositions_and_succeeds(tmp_path: Path) -> None:
     """THE bug repro: closing a spine's last (still-open) row to `wont_do`
     once every earlier row is already `coded` used to deadlock — refused on
     the PRE-write check (the do-suborder rule already called C3-after-C1/C2
@@ -2199,7 +2203,7 @@ def test_resolve_last_row_wont_do_after_earlier_coded_repositions_and_succeeds(t
     assert _spine_id_order(text) == ["C1", "C2", "C3"], _spine_id_order(text)
 
 
-def test_resolve_last_row_backlogged_after_earlier_coded_dispatches_and_succeeds(tmp_path, monkeypatch):
+def test_resolve_last_row_backlogged_after_earlier_coded_dispatches_and_succeeds(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The same deadlock scenario, closed to `backlogged` instead of
     `wont_do` — the harvest-delegation dispatch must still fire correctly
     once the pre-write deadlock is removed."""
@@ -2239,7 +2243,7 @@ def test_resolve_last_row_backlogged_after_earlier_coded_dispatches_and_succeeds
     assert _spine_id_order(text) == ["C1", "C2", "C3"], _spine_id_order(text)
 
 
-def test_resolve_middle_row_wont_do_repositions_preserving_sibling_order(tmp_path):
+def test_resolve_middle_row_wont_do_repositions_preserving_sibling_order(tmp_path: Path) -> None:
     """Closing a MIDDLE row (C2 of three open rows) to `wont_do` must move
     it past its still-open siblings into the `ruled_out` grouping, WITHOUT
     shuffling C1 and C3 relative to each other — the stable sort's own
@@ -2278,7 +2282,7 @@ def test_resolve_middle_row_wont_do_repositions_preserving_sibling_order(tmp_pat
     )
 
 
-def test_resolve_backlogged_doctrine_edit_routes_to_lesson_promote(tmp_path, monkeypatch):
+def test_resolve_backlogged_doctrine_edit_routes_to_lesson_promote(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A change_kind in {doctrine-edit, snippet-sync-update} routes through
     _run_lesson_promote rather than _run_queue_append — the improvement-queue
     schema rejects those two kinds at project scope (AC5)."""
@@ -2309,7 +2313,7 @@ def test_resolve_backlogged_doctrine_edit_routes_to_lesson_promote(tmp_path, mon
     assert fake_harvest._write_calls == [("lesson", "C1", "harvest-key: test-plan-id:C1")]
 
 
-def test_resolve_backlogged_is_idempotent_no_double_write(tmp_path, monkeypatch):
+def test_resolve_backlogged_is_idempotent_no_double_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Re-running resolve --backlogged on an already-routed row does not
     double-write the queue entry — the (plan_id, row id) idempotency key is
     reused verbatim from coordinator-harvest-deferrals, so the second call's
@@ -2360,7 +2364,7 @@ def test_resolve_backlogged_is_idempotent_no_double_write(tmp_path, monkeypatch)
     assert text.count("disposition_ref:") == 1
 
 
-def test_resolve_backlogged_missing_detail_aborts_no_dispatch(tmp_path, monkeypatch):
+def test_resolve_backlogged_missing_detail_aborts_no_dispatch(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """resolve --disposition backlogged with no disposition_detail refuses
     BEFORE dispatching to coordinator-harvest-deferrals (D4 Defect 2 fix) —
     a synthesised detail would only restate disposition_ref, so the caller
@@ -2391,7 +2395,7 @@ def test_resolve_backlogged_missing_detail_aborts_no_dispatch(tmp_path, monkeypa
     assert plan.read_text(encoding="utf-8") == before
 
 
-def test_resolve_backlogged_missing_plan_id_aborts_no_write(tmp_path, monkeypatch):
+def test_resolve_backlogged_missing_plan_id_aborts_no_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A plan whose frontmatter carries no plan_id cannot form the
     (plan_id, row id) idempotency key — resolve --backlogged aborts before
     any write (spine untouched, no queue/lesson dispatch attempted)."""
@@ -2427,7 +2431,7 @@ def test_resolve_backlogged_missing_plan_id_aborts_no_write(tmp_path, monkeypatc
     assert plan.read_text(encoding="utf-8") == before
 
 
-def test_resolve_backlogged_unroutable_change_kind_aborts_no_write(tmp_path, monkeypatch):
+def test_resolve_backlogged_unroutable_change_kind_aborts_no_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A change_kind absent from BOTH of the harvest module's routing sets
     aborts with no write, rather than silently defaulting to one route."""
     repo = _make_git_repo(tmp_path)
@@ -2462,7 +2466,7 @@ def test_resolve_backlogged_unroutable_change_kind_aborts_no_write(tmp_path, mon
     assert plan.read_text(encoding="utf-8") == before
 
 
-def test_resolve_backlogged_dispatch_failure_aborts_no_write(tmp_path, monkeypatch):
+def test_resolve_backlogged_dispatch_failure_aborts_no_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A False return from the underlying _run_queue_append (e.g. the
     subprocess failed) aborts resolve — no disposition write against a
     queue write that didn't actually land."""
@@ -2509,7 +2513,7 @@ def test_resolve_backlogged_dispatch_failure_aborts_no_write(tmp_path, monkeypat
 # own docstring in plan_tasks_mutate.py for the full defect writeup.
 
 
-def test_resolve_wont_do_missing_detail_refuses_no_write(tmp_path):
+def test_resolve_wont_do_missing_detail_refuses_no_write(tmp_path: Path) -> None:
     """resolve --disposition wont_do with no disposition_detail refuses
     (MutateAbort) before any write, mirroring the pm_approved/backlogged
     detail gate's offer-shaped voice."""
@@ -2533,7 +2537,7 @@ def test_resolve_wont_do_missing_detail_refuses_no_write(tmp_path):
     assert plan.read_text(encoding="utf-8") == before
 
 
-def test_resolve_wont_do_blank_detail_refuses_no_write(tmp_path):
+def test_resolve_wont_do_blank_detail_refuses_no_write(tmp_path: Path) -> None:
     """A whitespace-only disposition_detail is treated as absent -- the gate
     strips before checking, so a caller cannot satisfy it with blank
     padding."""
@@ -2574,7 +2578,7 @@ def test_resolve_wont_do_blank_detail_refuses_no_write(tmp_path):
 # mirroring the disposition_detail gate's own coverage shape above.
 
 
-def test_resolve_backlogged_missing_case_against_refuses_no_write(tmp_path):
+def test_resolve_backlogged_missing_case_against_refuses_no_write(tmp_path: Path) -> None:
     """resolve --disposition backlogged with disposition_detail but no
     case_against refuses (MutateAbort) before any write, in this op's own
     offer-shaped voice -- not the vendored schema's raw 'required field
@@ -2609,7 +2613,7 @@ def test_resolve_backlogged_missing_case_against_refuses_no_write(tmp_path):
     assert plan.read_text(encoding="utf-8") == before
 
 
-def test_resolve_backlogged_blank_case_against_refuses_no_write(tmp_path):
+def test_resolve_backlogged_blank_case_against_refuses_no_write(tmp_path: Path) -> None:
     """A whitespace-only case_against is treated as absent -- the gate
     strips before checking, mirroring the disposition_detail gate."""
     repo = _make_git_repo(tmp_path)
@@ -2639,7 +2643,7 @@ def test_resolve_backlogged_blank_case_against_refuses_no_write(tmp_path):
     assert plan.read_text(encoding="utf-8") == before
 
 
-def test_resolve_wont_do_missing_case_against_refuses_no_write(tmp_path):
+def test_resolve_wont_do_missing_case_against_refuses_no_write(tmp_path: Path) -> None:
     """resolve --disposition wont_do with disposition_detail but no
     case_against refuses before any write -- same trigger set as
     backlogged."""
@@ -2669,7 +2673,7 @@ def test_resolve_wont_do_missing_case_against_refuses_no_write(tmp_path):
     assert plan.read_text(encoding="utf-8") == before
 
 
-def test_resolve_spun_off_does_not_require_case_against(tmp_path):
+def test_resolve_spun_off_does_not_require_case_against(tmp_path: Path) -> None:
     """spun_off is deliberately excluded from the case_against trigger set
     -- nothing leaves the corpus on a spinoff, so there is no scope cut to
     argue against. Mirrors the pm_approved gate's own spun_off exemption."""
@@ -2695,7 +2699,7 @@ def test_resolve_spun_off_does_not_require_case_against(tmp_path):
     assert "case_against" not in text
 
 
-def test_resolve_coded_does_not_require_case_against(tmp_path):
+def test_resolve_coded_does_not_require_case_against(tmp_path: Path) -> None:
     """coded is not a scope-cut disposition at all -- unaffected by the
     case_against gate."""
     repo = _make_git_repo(tmp_path)
@@ -2719,7 +2723,7 @@ def test_resolve_coded_does_not_require_case_against(tmp_path):
     assert "case_against" not in text
 
 
-def test_resolve_wont_do_with_detail_writes_and_validates_clean(tmp_path):
+def test_resolve_wont_do_with_detail_writes_and_validates_clean(tmp_path: Path) -> None:
     """resolve --disposition wont_do WITH disposition_detail writes
     successfully and the resulting plan source validates clean end-to-end
     (ordering + grouping-approval + per-row JSON-Schema/cross-field rules,
@@ -2765,7 +2769,7 @@ def test_resolve_wont_do_with_detail_writes_and_validates_clean(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_resolve_spun_off_round_trip_ref_points_at_real_file(tmp_path):
+def test_resolve_spun_off_round_trip_ref_points_at_real_file(tmp_path: Path) -> None:
     """Round-trip (AC16): resolve --disposition spun_off on a row whose
     disposition_ref names a spinoff artifact that actually exists on disk
     succeeds, and the recorded disposition_ref is the artifact's own
@@ -2811,7 +2815,7 @@ def test_resolve_spun_off_round_trip_ref_points_at_real_file(tmp_path):
     assert spinoff.is_file()
 
 
-def test_resolve_spun_off_missing_ref_aborts_no_write(tmp_path):
+def test_resolve_spun_off_missing_ref_aborts_no_write(tmp_path: Path) -> None:
     """resolve --disposition spun_off with no disposition_ref at all is
     refused (MutateAbort) — /spinoff must create the artifact and pass its
     path; resolve does not synthesize one."""
@@ -2842,7 +2846,7 @@ def test_resolve_spun_off_missing_ref_aborts_no_write(tmp_path):
     assert plan.read_text(encoding="utf-8") == after_stamp, "no write when disposition_ref is missing"
 
 
-def test_resolve_spun_off_nonexistent_ref_aborts_no_write(tmp_path):
+def test_resolve_spun_off_nonexistent_ref_aborts_no_write(tmp_path: Path) -> None:
     """resolve --disposition spun_off whose disposition_ref does not resolve
     to a real file is refused (MutateAbort) — a ref pointing at nothing is
     the failure mode this producer exists to prevent (AC16/AC17)."""
@@ -3006,7 +3010,7 @@ grouping_approvals:
 """
 
 
-def test_resolve_batch_two_row_cutset_lands(tmp_path, monkeypatch):
+def test_resolve_batch_two_row_cutset_lands(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """THE composition test that did not exist before C13: a two-row
     'defer' cut-set is approved as a SET, applied as a BATCH, and lands.
     Before batch resolve this scenario was structurally unreachable --
@@ -3055,7 +3059,7 @@ def test_resolve_batch_two_row_cutset_lands(tmp_path, monkeypatch):
     assert text.count("disposition: backlogged") == 2
 
 
-def test_resolve_batch_spans_two_groupings_each_checked_independently(tmp_path, monkeypatch):
+def test_resolve_batch_spans_two_groupings_each_checked_independently(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """A single batch closes C1 -> backlogged ('defer') and C2 -> wont_do
     ('ruled_out') -- each grouping's approval is checked against its OWN
     block and its OWN prospective membership.
@@ -3100,7 +3104,7 @@ def test_resolve_batch_spans_two_groupings_each_checked_independently(tmp_path, 
     assert "disposition: wont_do" in text
 
 
-def test_resolve_batch_one_grouping_unapproved_refuses_whole_batch(tmp_path):
+def test_resolve_batch_one_grouping_unapproved_refuses_whole_batch(tmp_path: Path) -> None:
     """Batch spans two groupings; 'ruled_out' is still pending. The WHOLE
     batch is refused (including the otherwise-approved C1/'defer' half) --
     no partial application, and the file is byte-unchanged.
@@ -3147,7 +3151,7 @@ def test_resolve_batch_one_grouping_unapproved_refuses_whole_batch(tmp_path):
     )
 
 
-def test_resolve_batch_atomicity_last_row_fails_leaves_bytes_unchanged(tmp_path):
+def test_resolve_batch_atomicity_last_row_fails_leaves_bytes_unchanged(tmp_path: Path) -> None:
     """Atomicity: a batch where the LAST row fails (missing
     disposition_detail) leaves the spine byte-identical to before the
     call -- asserted on the raw bytes, not just on the exception."""
@@ -3199,7 +3203,7 @@ def test_resolve_batch_atomicity_last_row_fails_leaves_bytes_unchanged(tmp_path)
     )
 
 
-def test_resolve_batch_of_one_matches_single_row_behaviour(tmp_path):
+def test_resolve_batch_of_one_matches_single_row_behaviour(tmp_path: Path) -> None:
     """A `resolves` list containing exactly one entry behaves identically to
     the single-row id/disposition param shape -- same write, same message
     shape (no 'N task(s)' plural wording for a batch of one)."""
@@ -3232,7 +3236,7 @@ def test_resolve_batch_of_one_matches_single_row_behaviour(tmp_path):
     assert "disposition_ref: abc1234" in text
 
 
-def test_resolve_batch_prospective_set_mismatch_refuses(tmp_path):
+def test_resolve_batch_prospective_set_mismatch_refuses(tmp_path: Path) -> None:
     """A batch whose prospective (post-write) membership does not match the
     approved digest is refused -- the approval was for a DIFFERENT cut-set
     than this batch would produce (e.g. approved {C1, C2}, but only C1 is
@@ -3263,7 +3267,7 @@ def test_resolve_batch_prospective_set_mismatch_refuses(tmp_path):
     assert plan.read_text(encoding="utf-8") == original
 
 
-def test_resolve_single_row_against_multirow_approved_cut_still_refused(tmp_path):
+def test_resolve_single_row_against_multirow_approved_cut_still_refused(tmp_path: Path) -> None:
     """The pre-existing, CORRECT refusal: a single-row (non-batch) resolve
     call against a grouping approved over a two-row cut-set is refused --
     this is not a regression introduced by batch resolve, it is the exact
@@ -3291,7 +3295,7 @@ def test_resolve_single_row_against_multirow_approved_cut_still_refused(tmp_path
     assert plan.read_text(encoding="utf-8") == original
 
 
-def test_resolve_batch_unknown_task_id_aborts_whole_call(tmp_path):
+def test_resolve_batch_unknown_task_id_aborts_whole_call(tmp_path: Path) -> None:
     """An unknown id anywhere in the batch aborts the WHOLE call -- C1's
     otherwise-valid resolution must not land just because it was checked
     first."""
@@ -3317,7 +3321,7 @@ def test_resolve_batch_unknown_task_id_aborts_whole_call(tmp_path):
     assert plan.read_text(encoding="utf-8") == original
 
 
-def test_resolve_batch_duplicate_id_aborts_no_write(tmp_path):
+def test_resolve_batch_duplicate_id_aborts_no_write(tmp_path: Path) -> None:
     """A duplicate id within one `resolves` batch aborts before the lock is
     even taken -- no write."""
     repo = _make_git_repo(tmp_path)
@@ -3342,7 +3346,7 @@ def test_resolve_batch_duplicate_id_aborts_no_write(tmp_path):
     assert plan.read_text(encoding="utf-8") == original
 
 
-def test_resolve_batch_legacy_plan_each_row_checked_independently(tmp_path):
+def test_resolve_batch_legacy_plan_each_row_checked_independently(tmp_path: Path) -> None:
     """On a LEGACY plan (no grouping_approvals) a batch checks each row's
     own pm_approved independently -- one approved + one not-yet-approved in
     the same batch refuses the whole call."""
@@ -3382,7 +3386,7 @@ def test_resolve_batch_legacy_plan_each_row_checked_independently(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def test_to_repo_relative_emits_posix_form(tmp_path):
+def test_to_repo_relative_emits_posix_form(tmp_path: Path) -> None:
     from coordinator_core.ops.plan_tasks_mutate import _to_repo_relative
 
     worktree = tmp_path
@@ -3396,7 +3400,7 @@ def test_to_repo_relative_emits_posix_form(tmp_path):
     assert "\\" not in result
 
 
-def test_to_repo_relative_windows_style_input_still_posix(tmp_path, monkeypatch):
+def test_to_repo_relative_windows_style_input_still_posix(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     # A4 fix: `_to_repo_relative` now routes through `rel_id`
     # (`path.relative_to(root).as_posix()`), which is ALWAYS forward-slash
     # regardless of the producing host's OS -- unlike the prior
@@ -3420,7 +3424,7 @@ def test_to_repo_relative_windows_style_input_still_posix(tmp_path, monkeypatch)
     assert "\\" not in result
 
 
-def test_to_repo_relative_outside_worktree_falls_back_unchanged(tmp_path):
+def test_to_repo_relative_outside_worktree_falls_back_unchanged(tmp_path: Path) -> None:
     from coordinator_core.ops.plan_tasks_mutate import _to_repo_relative
 
     worktree = tmp_path / "repo"
@@ -3448,7 +3452,7 @@ def _read_status(plan: Path) -> str:
     return m.group(1)
 
 
-def test_resolve_all_rows_resolved_stamps_landed_no_execute_plan_involved(tmp_path):
+def test_resolve_all_rows_resolved_stamps_landed_no_execute_plan_involved(tmp_path: Path) -> None:
     """AC1: resolving the LAST still-open row of an otherwise-fully-resolved
     spine acquires `status: landed` from the `resolve` path alone -- no
     operator action, no `/execute-plan` run. `_PLAN_WITH_CODED_PREFIX_AND_
@@ -3480,7 +3484,7 @@ def test_resolve_all_rows_resolved_stamps_landed_no_execute_plan_involved(tmp_pa
     assert _read_status(plan) == "landed"
 
 
-def test_resolve_landed_stamp_exception_does_not_fail_the_resolve(tmp_path, monkeypatch):
+def test_resolve_landed_stamp_exception_does_not_fail_the_resolve(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """The `try/except Exception` around
     `_stamp_plan_landed` (C1) is plan-specified as a derived side effect
     that "must never fail resolve", but that contract had zero test
@@ -3524,7 +3528,7 @@ def test_resolve_landed_stamp_exception_does_not_fail_the_resolve(tmp_path, monk
     assert _read_status(plan) == "draft"
 
 
-def test_resolve_landed_stamp_nonzero_rc_does_not_fail_the_resolve(tmp_path, monkeypatch):
+def test_resolve_landed_stamp_nonzero_rc_does_not_fail_the_resolve(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Same contract as above, exercised via the OTHER failure shape the
     swallow's own body distinguishes: `_stamp_plan_landed` returning a
     non-zero rc (an ordinary business-logic failure, no exception) rather
@@ -3560,7 +3564,7 @@ def test_resolve_landed_stamp_nonzero_rc_does_not_fail_the_resolve(tmp_path, mon
     assert _read_status(plan) == "draft"
 
 
-def test_resolve_one_row_still_open_does_not_acquire_landed(tmp_path):
+def test_resolve_one_row_still_open_does_not_acquire_landed(tmp_path: Path) -> None:
     """AC2: a plan with at least one `open` row does NOT acquire `landed`
     via the resolve path -- resolving one of two rows leaves the other
     `open`, so status is left exactly as it was."""
@@ -3592,7 +3596,7 @@ def test_resolve_one_row_still_open_does_not_acquire_landed(tmp_path):
     )
 
 
-def test_resolve_all_wont_do_backlogged_reaches_landed_never_implemented(tmp_path, monkeypatch):
+def test_resolve_all_wont_do_backlogged_reaches_landed_never_implemented(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """AC4: a plan whose rows resolve entirely as `wont_do`/`backlogged`
     (i.e. NOTHING shipped) still reaches `landed`, and never `implemented`
     -- landed derivation is a separate oracle from the ACs/shipped-evidence
@@ -3652,7 +3656,7 @@ def test_resolve_all_wont_do_backlogged_reaches_landed_never_implemented(tmp_pat
     assert "disposition: wont_do" in text
 
 
-def test_resolve_path_never_reaches_a_terminal_status(tmp_path):
+def test_resolve_path_never_reaches_a_terminal_status(tmp_path: Path) -> None:
     """AC5: no path exists from spine-resolution to a terminal status.
 
     Distinct from `test_landed_transition_does_not_reach_the_cascade_
@@ -3751,7 +3755,7 @@ status: draft
 """
 
 
-def test_stamp_repairs_one_invalid_row_in_one_call(tmp_path):
+def test_stamp_repairs_one_invalid_row_in_one_call(tmp_path: Path) -> None:
     """A spine with ONE pre-existing schema-invalid row can be repaired to
     valid via a single stamp call that touches only that row."""
     repo = _make_git_repo(tmp_path)
@@ -3778,7 +3782,7 @@ def test_stamp_repairs_one_invalid_row_in_one_call(tmp_path):
     assert "change_kind: script-edit" in plan.read_text(encoding="utf-8")
 
 
-def test_stamp_two_invalid_rows_repaired_in_two_calls_no_deadlock(tmp_path):
+def test_stamp_two_invalid_rows_repaired_in_two_calls_no_deadlock(tmp_path: Path) -> None:
     """The exact deadlock this fix exists for: two rows in the SAME spine
     are each pre-existing schema-invalid, and neither call touches the
     other row. Repairing B1 alone must succeed despite B2 still being
@@ -3821,7 +3825,7 @@ def test_stamp_two_invalid_rows_repaired_in_two_calls_no_deadlock(tmp_path):
     assert final_text.count("change_kind: script-edit") == 2
 
 
-def test_stamp_mutation_writing_a_newly_invalid_row_still_refused(tmp_path):
+def test_stamp_mutation_writing_a_newly_invalid_row_still_refused(tmp_path: Path) -> None:
     """Invariant (1) must not regress: a mutation that would WRITE a row
     into an invalid state is still refused with no write — even when the
     spine ALREADY carries an untouched pre-existing invalid row. The
@@ -3854,7 +3858,7 @@ def test_stamp_mutation_writing_a_newly_invalid_row_still_refused(tmp_path):
     )
 
 
-def test_stamp_untouched_invalid_rows_diagnostic_names_the_ids(tmp_path):
+def test_stamp_untouched_invalid_rows_diagnostic_names_the_ids(tmp_path: Path) -> None:
     """A successful stamp that repairs one row while a sibling row remains
     pre-existing-invalid surfaces a `warnings` diagnostic naming the
     untouched row's id — a repair must not silently normalize a broken
@@ -3919,7 +3923,7 @@ status: draft
 """
 
 
-def test_add_task_succeeds_with_untouched_invalid_row_and_warns(tmp_path):
+def test_add_task_succeeds_with_untouched_invalid_row_and_warns(tmp_path: Path) -> None:
     """add-task on a spine carrying a pre-existing, untouched schema-invalid
     row (BX) still succeeds and appends the new valid row — the untouched
     row must not veto an unrelated write — and the reply names BX in
@@ -3944,7 +3948,7 @@ def test_add_task_succeeds_with_untouched_invalid_row_and_warns(tmp_path):
     assert any("BX" in w for w in warnings), warnings
 
 
-def test_add_task_writing_a_newly_invalid_row_still_refused(tmp_path):
+def test_add_task_writing_a_newly_invalid_row_still_refused(tmp_path: Path) -> None:
     """Invariant (1) must not regress for add-task: a new row that is itself
     schema-invalid is still refused with no write, even on a spine that
     already carries an untouched pre-existing invalid row (BX) — the
@@ -3974,7 +3978,7 @@ def test_add_task_writing_a_newly_invalid_row_still_refused(tmp_path):
     )
 
 
-def test_resolve_succeeds_with_untouched_invalid_row_and_warns_untouched_ids(tmp_path):
+def test_resolve_succeeds_with_untouched_invalid_row_and_warns_untouched_ids(tmp_path: Path) -> None:
     """resolve repairs/closes a valid row (C1 -> coded) on a spine that also
     carries a pre-existing, untouched schema-invalid row (BX) — Phase 1
     writes disposition fields, Phase 2 builds `resolved_ids` around
@@ -4007,7 +4011,7 @@ def test_resolve_succeeds_with_untouched_invalid_row_and_warns_untouched_ids(tmp
     assert any("BX" in w for w in warnings), warnings
 
 
-def test_resolve_writing_a_newly_invalid_touched_row_still_refused(tmp_path):
+def test_resolve_writing_a_newly_invalid_touched_row_still_refused(tmp_path: Path) -> None:
     """Invariant (1) must not regress for resolve: resolving a row that is
     ITSELF schema-invalid (bad change_kind) still leaves it invalid after
     Phase 1 writes only the disposition fields — resolve never touches
@@ -4065,7 +4069,7 @@ _PLAN_UNPARSEABLE_SPINE = _PLAN_WITH_TASKS.replace(
     ],
     ids=["add-task", "stamp"],
 )
-def test_unparseable_spine_refuses_the_write_naming_the_line(tmp_path, params):
+def test_unparseable_spine_refuses_the_write_naming_the_line(tmp_path: Path, params) -> None:
     """A fence that locates but does not parse aborts cleanly, naming the line.
 
     `locate_fenced_block` blanks HTML comments for its own scan but slices
@@ -4107,7 +4111,7 @@ def _certified(content: str) -> str:
     return "---\n" + stamp + content[len("---\n"):]
 
 
-def test_resolve_keeps_a_certified_plan_certified(tmp_path):
+def test_resolve_keeps_a_certified_plan_certified(tmp_path: Path) -> None:
     from coordinator_core.roadmap.prep_gate import CERTIFIED, read_stamp
 
     repo = _make_git_repo(tmp_path)
@@ -4132,7 +4136,7 @@ def test_resolve_keeps_a_certified_plan_certified(tmp_path):
     assert read_stamp(text)["state"] == CERTIFIED
 
 
-def test_resolve_leaves_an_uncertified_plan_unstamped(tmp_path):
+def test_resolve_leaves_an_uncertified_plan_unstamped(tmp_path: Path) -> None:
     from coordinator_core.roadmap.prep_gate import UNSTAMPED, read_stamp
 
     repo = _make_git_repo(tmp_path)
@@ -4145,7 +4149,7 @@ def test_resolve_leaves_an_uncertified_plan_unstamped(tmp_path):
     assert read_stamp(plan.read_text(encoding="utf-8"))["state"] == UNSTAMPED
 
 
-def _approve_in_place(plan):
+def _approve_in_place(plan) -> None:
     from coordinator_core.frontmatter.primitives import stamp_approved_body_sha
 
     plan.write_text(
@@ -4153,7 +4157,7 @@ def _approve_in_place(plan):
     )
 
 
-def test_resolve_keeps_an_approved_plan_verifiable(tmp_path):
+def test_resolve_keeps_an_approved_plan_verifiable(tmp_path: Path) -> None:
     from coordinator_core.frontmatter.primitives import APPROVED_BODY_OK, check_approved_body
 
     repo = _make_git_repo(tmp_path)
@@ -4171,7 +4175,7 @@ def test_resolve_keeps_an_approved_plan_verifiable(tmp_path):
     assert check_approved_body(plan.read_text(encoding="utf-8"))[0] == APPROVED_BODY_OK
 
 
-def test_add_task_makes_an_approved_plan_read_changed(tmp_path):
+def test_add_task_makes_an_approved_plan_read_changed(tmp_path: Path) -> None:
     from coordinator_core.frontmatter.primitives import APPROVED_BODY_CHANGED, check_approved_body
 
     repo = _make_git_repo(tmp_path)
@@ -4262,7 +4266,7 @@ def _changed_lines(before: str, after: str) -> list:
 
 
 @pytest.mark.parametrize("eol", ["\n", "\r\n"])
-def test_resolve_one_row_edits_only_that_rows_lines(tmp_path, eol):
+def test_resolve_one_row_edits_only_that_rows_lines(tmp_path: Path, eol) -> None:
     repo = _make_git_repo(tmp_path)
     plan = repo / "docs" / "plans" / "minimal-edit.md"
     plan.write_bytes(_THREE_ROW_PLAN.replace("\n", eol).encode("utf-8"))
@@ -4286,7 +4290,7 @@ def test_resolve_one_row_edits_only_that_rows_lines(tmp_path, eol):
     assert after.decode("utf-8").replace("\r\n", "\n").startswith(untouched)
 
 
-def test_resolve_coded_sha_touching_none_of_the_writes_is_refused(tmp_path):
+def test_resolve_coded_sha_touching_none_of_the_writes_is_refused(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "sha-gate.md", _THREE_ROW_PLAN)
     (repo / "unrelated.txt").write_text("x", encoding="utf-8")
@@ -4305,7 +4309,7 @@ def test_resolve_coded_sha_touching_none_of_the_writes_is_refused(tmp_path):
     assert plan.read_text(encoding="utf-8") == before
 
 
-def test_resolve_coded_sha_touching_a_write_passes_and_empty_writes_are_exempt(tmp_path):
+def test_resolve_coded_sha_touching_a_write_passes_and_empty_writes_are_exempt(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "sha-gate-ok.md", _THREE_ROW_PLAN)
     (repo / "some").mkdir()
@@ -4334,11 +4338,11 @@ def test_resolve_coded_sha_touching_a_write_passes_and_empty_writes_are_exempt(t
         ("src/a/x.py", "src/*/x.py", True),
     ],
 )
-def test_memo_send_row_matches_its_sent_receipt(changed, write, hit):
+def test_memo_send_row_matches_its_sent_receipt(changed, write, hit) -> None:
     assert plan_tasks_mutate._writes_match(changed, write) is hit
 
 
-def test_reopen_returns_a_wrong_coded_row_to_open(tmp_path):
+def test_reopen_returns_a_wrong_coded_row_to_open(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "reopen.md", _PLAN_WITH_TASKS)
     assert _resolve_coded(repo, plan, "C1", "abc1234")["exit_code"] == 0
@@ -4356,7 +4360,7 @@ def test_reopen_returns_a_wrong_coded_row_to_open(tmp_path):
     assert "executor BLOCKED; coded by terminal_commit in error" in text
 
 
-def test_reopen_refuses_a_row_that_is_not_coded_or_has_no_reason(tmp_path):
+def test_reopen_refuses_a_row_that_is_not_coded_or_has_no_reason(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "reopen-refused.md", _PLAN_WITH_TASKS)
     before = plan.read_text(encoding="utf-8")
@@ -4423,7 +4427,7 @@ def _depends_on_call(repo, plan, **kw):
     ))
 
 
-def test_depends_on_add_writes_object_form_and_leaves_other_rows_alone(tmp_path):
+def test_depends_on_add_writes_object_form_and_leaves_other_rows_alone(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "edge-add.md", _PLAN_THREE_ROWS)
 
@@ -4443,14 +4447,14 @@ def test_depends_on_add_writes_object_form_and_leaves_other_rows_alone(tmp_path)
     assert text.count("    one\n") == 1 and "    two\n" in text
 
 
-def test_depends_on_add_defaults_gate_kind(tmp_path):
+def test_depends_on_add_defaults_gate_kind(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "edge-default.md", _PLAN_THREE_ROWS)
     assert _depends_on_call(repo, plan, id="C3", action="add", chunk="C1")["exit_code"] == 0
     assert "gate_kind: output-consumption-runtime" in plan.read_text(encoding="utf-8")
 
 
-def test_depends_on_remove_drops_edge_and_empty_key(tmp_path):
+def test_depends_on_remove_drops_edge_and_empty_key(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "edge-remove.md", _PLAN_THREE_ROWS)
 
@@ -4473,7 +4477,7 @@ def test_depends_on_remove_drops_edge_and_empty_key(tmp_path):
         ({"id": "C3", "action": "toggle", "chunk": "C1"}, "'add' or 'remove'"),
     ],
 )
-def test_depends_on_refusals_leave_the_plan_unchanged(tmp_path, kw, needle):
+def test_depends_on_refusals_leave_the_plan_unchanged(tmp_path: Path, kw, needle) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "edge-refuse.md", _PLAN_THREE_ROWS)
     before = plan.read_text(encoding="utf-8")
@@ -4484,7 +4488,7 @@ def test_depends_on_refusals_leave_the_plan_unchanged(tmp_path, kw, needle):
     assert plan.read_text(encoding="utf-8") == before
 
 
-def test_depends_on_refuses_a_transitive_cycle(tmp_path):
+def test_depends_on_refuses_a_transitive_cycle(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "edge-cycle.md", _PLAN_THREE_ROWS)
     assert _depends_on_call(repo, plan, id="C3", action="add", chunk="C2")["exit_code"] == 0
@@ -4525,7 +4529,7 @@ status: draft
 """
 
 
-def test_resolve_keeps_the_rows_comments_and_formatting(tmp_path):
+def test_resolve_keeps_the_rows_comments_and_formatting(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "resolve-comments.md", _PLAN_ROW_WITH_COMMENTS)
 
@@ -4546,14 +4550,14 @@ def test_resolve_keeps_the_rows_comments_and_formatting(tmp_path):
 _CODED_SHAPE_TOKENS = ("verb: 'resolve'", "disposition: 'coded'", "disposition_ref", "plan_path")
 
 
-def _assert_names_coded_shape(result):
+def _assert_names_coded_shape(result) -> None:
     assert result["exit_code"] == 1, result
     err = result["error"]
     for token in _CODED_SHAPE_TOKENS:
         assert token in err, (token, err)
 
 
-def test_first_shape_error_names_full_mark_coded_shape(tmp_path):
+def test_first_shape_error_names_full_mark_coded_shape(tmp_path: Path) -> None:
     """Every first shape error on the mark-coded path carries the whole shape, no write."""
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "coded-shape.md", _PLAN_WITH_TASKS)
@@ -4582,7 +4586,7 @@ def _spine_rows(text: str) -> list:
 
 
 @pytest.mark.parametrize("note", _COLON_NOTES)
-def test_stamp_note_with_yaml_significant_text_round_trips(tmp_path, note):
+def test_stamp_note_with_yaml_significant_text_round_trips(tmp_path: Path, note) -> None:
     """A note value that a hand-interpolated `key: value` line would corrupt parses back verbatim through stamp."""
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "stamp-colon-note.md", _PLAN_TWO_ROWS)
@@ -4599,7 +4603,7 @@ def test_stamp_note_with_yaml_significant_text_round_trips(tmp_path, note):
     assert next(r for r in rows if r["id"] == "C2")["title"] == "Second chunk"
 
 
-def test_depends_on_note_with_colon_round_trips(tmp_path):
+def test_depends_on_note_with_colon_round_trips(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "edge-colon-note.md", _PLAN_THREE_ROWS)
 
@@ -4614,7 +4618,7 @@ def _note_call(repo, plan, **params):
     return _run(_handler({"verb": "note", "plan_path": str(plan), **params}, repo_root=repo / ".git"))
 
 
-def test_note_verb_colon_text_round_trips_through_spine_read(tmp_path):
+def test_note_verb_colon_text_round_trips_through_spine_read(tmp_path: Path) -> None:
     from coordinator_core.ops.dispatch_emit.spine_read import read_spine
 
     repo = _make_git_repo(tmp_path)
@@ -4629,7 +4633,7 @@ def test_note_verb_colon_text_round_trips_through_spine_read(tmp_path):
     assert read_spine(plan) is not None
 
 
-def test_note_verb_refuses_empty_text_unknown_id_and_missing_id(tmp_path):
+def test_note_verb_refuses_empty_text_unknown_id_and_missing_id(tmp_path: Path) -> None:
     repo = _make_git_repo(tmp_path)
     plan = _seed_plan(repo, "note-refuse.md", _PLAN_TWO_ROWS)
     before = plan.read_text(encoding="utf-8")

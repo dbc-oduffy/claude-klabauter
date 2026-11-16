@@ -284,3 +284,21 @@ def test_unknown_leg_id_refused(repo: _Repo, pm_log: Path) -> None:
         },
     )
     _assert_untouched(repo, path, before, head, result)
+
+
+def test_commit_releases_the_callers_claim_only_when_session_id_given(repo: _Repo, pm_log: Path, monkeypatch) -> None:
+    from coordinator_core.session import scope as session_scope
+
+    released: list = []
+    monkeypatch.setattr(session_scope, "release_committed_claims", lambda sid, paths, cwd=None: released.append((sid, list(paths))))
+    repo.seed("h.md", [_HUMAN])
+    cite = {"session_id": _SID, "turn": 1}
+    result = _call(repo, {"handoff_path": _path(repo), "pm_turn": cite, "session_id": "caller-sid"})
+    assert result["ok"] is True and result["commit_sha"]
+    assert released == [("caller-sid", ["state/handoffs/h.md"])]
+
+    released.clear()
+    repo.seed("h2.md", [_HUMAN])
+    result = _call(repo, {"handoff_path": _path(repo, "h2.md"), "pm_turn": cite})
+    assert result["ok"] is True and result["commit_sha"]
+    assert released == []

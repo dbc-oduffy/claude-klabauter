@@ -5,9 +5,10 @@ import tempfile
 from pathlib import Path
 
 from coordinator_core.session.autonomous_sentinel import sentinel_path
+import pytest
 
 
-def test_sentinel_path_uses_platform_tempdir_not_hardcoded_posix_tmp(monkeypatch):
+def test_sentinel_path_uses_platform_tempdir_not_hardcoded_posix_tmp(monkeypatch: pytest.MonkeyPatch) -> None:
     sandboxed = "/sandboxed/windows-shaped-temp"
     monkeypatch.setattr(tempfile, "gettempdir", lambda: sandboxed)
 
@@ -17,7 +18,7 @@ def test_sentinel_path_uses_platform_tempdir_not_hardcoded_posix_tmp(monkeypatch
     assert str(result) != "/tmp/autonomous-run-abc123"
 
 
-def test_sentinel_path_is_keyed_on_session_id():
+def test_sentinel_path_is_keyed_on_session_id() -> None:
     a = sentinel_path("session-a")
     b = sentinel_path("session-b")
 
@@ -26,7 +27,7 @@ def test_sentinel_path_is_keyed_on_session_id():
     assert b.name == "autonomous-run-session-b"
 
 
-def test_writer_and_all_readers_agree_on_the_same_path(monkeypatch, tmp_path):
+def test_writer_and_all_readers_agree_on_the_same_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     sandboxed = tmp_path / "shared-tempdir"
     sandboxed.mkdir()
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(sandboxed))
@@ -47,7 +48,7 @@ def test_writer_and_all_readers_agree_on_the_same_path(monkeypatch, tmp_path):
         assert reader_path == writer_path
 
 
-def test_writer_written_sentinel_is_found_by_reader(tmp_path, monkeypatch):
+def test_writer_written_sentinel_is_found_by_reader(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     sandboxed = tmp_path / "e2e-tempdir"
     sandboxed.mkdir()
     monkeypatch.setattr(tempfile, "gettempdir", lambda: str(sandboxed))

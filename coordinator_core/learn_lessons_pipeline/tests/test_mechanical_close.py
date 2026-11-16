@@ -25,7 +25,7 @@ def _home(tmp_path) -> Path:
     return home
 
 
-def _row(home: Path, name: str, *, title="T", body=BODY, scope="project", created="2026-10-01", extra="") -> Path:
+def _row(home: Path, name: str, *, title: str = "T", body=BODY, scope: str = "project", created: str = "2026-10-01", extra: str = "") -> Path:
     p = home / f"{name}.yaml"
     p.write_text(
         f'created: "{created}"\ntitle: "{title}"\nbody: |\n  {body}\nstatus: open\nscope: {scope}\n'
@@ -35,7 +35,7 @@ def _row(home: Path, name: str, *, title="T", body=BODY, scope="project", create
     return p
 
 
-def _archived(tmp_path, name="old", month="2026-09", **kw) -> Path:
+def _archived(tmp_path, name: str = "old", month: str = "2026-09", **kw) -> Path:
     adir = tmp_path / "archive" / "lessons" / month
     adir.mkdir(parents=True, exist_ok=True)
     return _row(adir, name, **kw)
@@ -45,13 +45,13 @@ def _by_id(verdicts):
     return {v.row_id: v for v in verdicts}
 
 
-def test_verdict_shape():
+def test_verdict_shape() -> None:
     v = mc.MechanicalVerdict("r1", "retag", "", "scope local -> project", "state/lessons/r1.yaml", "project")
     assert v.new_scope == "project" and v.row_path == "state/lessons/r1.yaml"
     assert mc.MechanicalVerdict("r2", "discard", "x", "y", "p").new_scope is None
 
 
-def test_scan_queue_one_pass(tmp_path):
+def test_scan_queue_one_pass(tmp_path: Path) -> None:
     home = _home(tmp_path)
     (home / "b.yaml").write_text("bb" * 10, encoding="utf-8")
     (home / "a.yaml").write_text("a", encoding="utf-8")
@@ -62,15 +62,15 @@ def test_scan_queue_one_pass(tmp_path):
     assert [r["size_bytes"] for r in rows] == [1, 20]
 
 
-def test_scan_queue_missing_home(tmp_path):
+def test_scan_queue_missing_home(tmp_path: Path) -> None:
     assert mc.scan_queue(tmp_path) == []
 
 
-def test_empty_queue_has_no_candidates(tmp_path):
+def test_empty_queue_has_no_candidates(tmp_path: Path) -> None:
     assert mc.close_candidates(object(), tmp_path) == []
 
 
-def test_apply_empty_reports_equal_tokens(tmp_path):
+def test_apply_empty_reports_equal_tokens(tmp_path: Path) -> None:
     home = _home(tmp_path)
     (home / "a.yaml").write_text("x" * 400, encoding="utf-8")
     report = mc.apply_verdicts([], tmp_path)
@@ -79,7 +79,7 @@ def test_apply_empty_reports_equal_tokens(tmp_path):
     assert report["archived"] == [] and report["rewritten"] == []
 
 
-def test_duplicate_of_open_row_names_oldest_survivor(tmp_path):
+def test_duplicate_of_open_row_names_oldest_survivor(tmp_path: Path) -> None:
     home = _home(tmp_path)
     _row(home, "b-newer", created="2026-10-05", title="Warm Server")
     _row(home, "a-oldest", created="2026-10-01", title="warm   server")
@@ -91,7 +91,7 @@ def test_duplicate_of_open_row_names_oldest_survivor(tmp_path):
     assert "a-oldest" in v["b-newer"].reason
 
 
-def test_duplicate_of_archived_lesson_closes_every_open_copy(tmp_path):
+def test_duplicate_of_archived_lesson_closes_every_open_copy(tmp_path: Path) -> None:
     home = _home(tmp_path)
     _archived(tmp_path, "old")
     _row(home, "x")
@@ -100,7 +100,7 @@ def test_duplicate_of_archived_lesson_closes_every_open_copy(tmp_path):
     assert v["x"].covered_by == "archive/lessons/2026-09/old.yaml"
 
 
-def test_empty_body_and_memory_stub_discard(tmp_path):
+def test_empty_body_and_memory_stub_discard(tmp_path: Path) -> None:
     home = _home(tmp_path)
     (home / "empty.yaml").write_text('created: "2026-10-01"\ntitle: t\nbody: ""\nstatus: open\nscope: project\n', encoding="utf-8")
     (home / "short.yaml").write_text('created: "2026-10-01"\ntitle: t\nbody: "no frontmatter"\nstatus: open\nscope: project\n', encoding="utf-8")
@@ -113,7 +113,7 @@ def test_empty_body_and_memory_stub_discard(tmp_path):
     assert "empty body" in v["empty"].reason and "memory-ingest stub" in v["mem"].reason
 
 
-def test_empty_body_with_other_content_is_kept(tmp_path):
+def test_empty_body_with_other_content_is_kept(tmp_path: Path) -> None:
     home = _home(tmp_path)
     (home / "lesson-form.yaml").write_text(
         'created: "2026-10-01"\ntitle: t\nstatus: open\nscope: project\nlesson: >-\n  A real lesson stored outside body.\n',
@@ -122,7 +122,7 @@ def test_empty_body_with_other_content_is_kept(tmp_path):
     assert mc.close_candidates(object(), tmp_path) == []
 
 
-def test_retag_table_and_unmapped_scope(tmp_path):
+def test_retag_table_and_unmapped_scope(tmp_path: Path) -> None:
     home = _home(tmp_path)
     for i, scope in enumerate(['local', '"local"', "'claude-klabauter'", "fleet", "bespoke", "universal", "project"]):
         _row(home, f"r{i}", scope=scope, body=f"{BODY} variant {i}", created=f"2026-10-0{i + 1}")
@@ -135,14 +135,14 @@ def test_retag_table_and_unmapped_scope(tmp_path):
     }
 
 
-def test_unique_substantive_row_yields_no_verdict(tmp_path):
+def test_unique_substantive_row_yields_no_verdict(tmp_path: Path) -> None:
     home = _home(tmp_path)
     _row(home, "only")
     _row(home, "other", body="A different substantive lesson about guards and hooks.")
     assert mc.close_candidates(object(), tmp_path) == []
 
 
-def test_closed_status_rows_are_not_candidates(tmp_path):
+def test_closed_status_rows_are_not_candidates(tmp_path: Path) -> None:
     home = _home(tmp_path)
     _row(home, "a")
     p = _row(home, "b")
@@ -150,7 +150,7 @@ def test_closed_status_rows_are_not_candidates(tmp_path):
     assert mc.close_candidates(object(), tmp_path) == []
 
 
-def test_manifest_restricts_reported_rows(tmp_path):
+def test_manifest_restricts_reported_rows(tmp_path: Path) -> None:
     home = _home(tmp_path)
     _row(home, "a", created="2026-10-01")
     _row(home, "b", created="2026-10-02")
@@ -160,7 +160,7 @@ def test_manifest_restricts_reported_rows(tmp_path):
     assert [v.row_id for v in mc.close_candidates(manifest, tmp_path)] == ["b"]
 
 
-def test_apply_archives_stamps_retags_and_second_run_is_noop(tmp_path):
+def test_apply_archives_stamps_retags_and_second_run_is_noop(tmp_path: Path) -> None:
     home = _home(tmp_path)
     _row(home, "a-keep", created="2026-10-01")
     _row(home, "b-dup", created="2026-10-02")
@@ -196,7 +196,7 @@ def test_apply_archives_stamps_retags_and_second_run_is_noop(tmp_path):
     assert again["tokens_before"] == again["tokens_after"]
 
 
-def test_apply_replaces_existing_paper_trail_keys(tmp_path):
+def test_apply_replaces_existing_paper_trail_keys(tmp_path: Path) -> None:
     home = _home(tmp_path)
     _archived(tmp_path, "old")
     _row(home, "x", extra='covered_by: "stale"\n')
@@ -207,7 +207,7 @@ def test_apply_replaces_existing_paper_trail_keys(tmp_path):
     assert moved.read_text(encoding="utf-8").count("covered_by:") == 1
 
 
-def test_apply_archive_name_collision_never_overwrites(tmp_path):
+def test_apply_archive_name_collision_never_overwrites(tmp_path: Path) -> None:
     home = _home(tmp_path)
     _row(home, "a", created="2026-10-01")
     _row(home, "b", created="2026-10-02")
@@ -220,7 +220,7 @@ def test_apply_archive_name_collision_never_overwrites(tmp_path):
     assert report["archived"] == [f"archive/lessons/{month}/b-2.yaml"]
 
 
-def test_apply_refuses_a_path_outside_the_lessons_home(tmp_path):
+def test_apply_refuses_a_path_outside_the_lessons_home(tmp_path: Path) -> None:
     _home(tmp_path)
     outside = tmp_path / "elsewhere.yaml"
     outside.write_text("title: x\n", encoding="utf-8")
@@ -229,7 +229,7 @@ def test_apply_refuses_a_path_outside_the_lessons_home(tmp_path):
     assert report["skipped"] == ["elsewhere.yaml"] and outside.exists()
 
 
-def test_apply_dedupe_with_missing_survivor_is_skipped(tmp_path):
+def test_apply_dedupe_with_missing_survivor_is_skipped(tmp_path: Path) -> None:
     home = _home(tmp_path)
     _row(home, "x")
     v = mc.MechanicalVerdict("x", "dedupe", "state/lessons/gone.yaml", "r", "state/lessons/x.yaml")
@@ -237,7 +237,7 @@ def test_apply_dedupe_with_missing_survivor_is_skipped(tmp_path):
     assert report["skipped"] == ["state/lessons/x.yaml"] and (home / "x.yaml").exists()
 
 
-def test_apply_preserves_crlf(tmp_path):
+def test_apply_preserves_crlf(tmp_path: Path) -> None:
     home = _home(tmp_path)
     p = home / "crlf.yaml"
     p.write_bytes(b'created: "2026-10-01"\r\ntitle: t\r\nbody: "' + BODY.encode() + b'"\r\nstatus: open\r\nscope: local # note\r\n')
@@ -246,7 +246,7 @@ def test_apply_preserves_crlf(tmp_path):
     assert b"\n" not in p.read_bytes().replace(b"\r\n", b"")
 
 
-def _wiki(tmp_path, indexed=True) -> Path:
+def _wiki(tmp_path, indexed: bool = True) -> Path:
     wiki = tmp_path / "docs" / "wiki"
     wiki.mkdir(parents=True, exist_ok=True)
     page = wiki / "page.md"
@@ -255,7 +255,7 @@ def _wiki(tmp_path, indexed=True) -> Path:
     return page
 
 
-def test_wiki_append_needs_a_named_existing_index_reachable_page(tmp_path):
+def test_wiki_append_needs_a_named_existing_index_reachable_page(tmp_path: Path) -> None:
     home = _home(tmp_path)
     _wiki(tmp_path)
     _row(home, "named", body="Named wiki body alpha.", extra=f"target_wiki: {_PAGE}\n")
@@ -267,14 +267,14 @@ def test_wiki_append_needs_a_named_existing_index_reachable_page(tmp_path):
     assert len(open_rows) == 4
 
 
-def test_wiki_append_target_not_linked_by_an_index_stays_residue(tmp_path):
+def test_wiki_append_target_not_linked_by_an_index_stays_residue(tmp_path: Path) -> None:
     home = _home(tmp_path)
     _wiki(tmp_path, indexed=False)
     _row(home, "named", body="Named wiki body alpha.", extra=f"target_wiki: {_PAGE}\n")
     assert mc.close_candidates(None, tmp_path) == []
 
 
-def test_apply_wiki_append_appends_once_and_archives(tmp_path):
+def test_apply_wiki_append_appends_once_and_archives(tmp_path: Path) -> None:
     home = _home(tmp_path)
     page = _wiki(tmp_path)
     _row(home, "named", title="Heading", body="Named wiki body alpha.", extra=f"target_wiki: {_PAGE}\n")
@@ -288,7 +288,7 @@ def test_apply_wiki_append_appends_once_and_archives(tmp_path):
     assert again["skipped"] and page.read_text(encoding="utf-8") == text
 
 
-def test_apply_wiki_append_to_a_non_wiki_path_is_skipped(tmp_path):
+def test_apply_wiki_append_to_a_non_wiki_path_is_skipped(tmp_path: Path) -> None:
     home = _home(tmp_path)
     _row(home, "named", body="Named wiki body alpha.")
     other = home / "other.yaml"
@@ -299,7 +299,7 @@ def test_apply_wiki_append_to_a_non_wiki_path_is_skipped(tmp_path):
     assert other.read_text(encoding="utf-8") == "body: x\n"
 
 
-def test_discard_when_named_wiki_already_holds_the_body_else_wiki_append(tmp_path):
+def test_discard_when_named_wiki_already_holds_the_body_else_wiki_append(tmp_path: Path) -> None:
     home = _home(tmp_path)
     page = _wiki(tmp_path)
     page.write_text("# Page\n\nExisting   TEXT already recorded in this page.\n", encoding="utf-8")
@@ -309,7 +309,7 @@ def test_discard_when_named_wiki_already_holds_the_body_else_wiki_append(tmp_pat
     assert got == {"covered": ("discard", _PAGE), "fresh": ("wiki-append", _PAGE)}
 
 
-def test_universal_scope_retags_only_with_a_domain_tag(tmp_path):
+def test_universal_scope_retags_only_with_a_domain_tag(tmp_path: Path) -> None:
     home = _home(tmp_path)
     _row(home, "ue", body="Unreal specific lesson body one.", scope="universal", extra="tags: [ue, other]\n")
     _row(home, "plain", body="Generic lesson body two here.", scope="universal", extra="tags: [process]\n")
@@ -318,7 +318,7 @@ def test_universal_scope_retags_only_with_a_domain_tag(tmp_path):
     assert got == {"ue": "project"}
 
 
-def test_dedupe_ignores_title(tmp_path):
+def test_dedupe_ignores_title(tmp_path: Path) -> None:
     home = _home(tmp_path)
     _row(home, "a", title="One", created="2026-10-01")
     _row(home, "b", title="Two", created="2026-10-02")
@@ -331,7 +331,7 @@ def _call(name, params, root):
     return asyncio.run(ipc._REGISTRY[name](params, root))
 
 
-def _mixed_queue(tmp_path):
+def _mixed_queue(tmp_path) -> None:
     home = _home(tmp_path)
     _wiki(tmp_path)
     _row(home, "a-keep", title="Keeper", body="A unique judgment lesson about nothing else here.", created="2026-10-01")
@@ -341,7 +341,7 @@ def _mixed_queue(tmp_path):
     _row(home, "e-wiki", body="Wiki lesson with its own distinct body text.", extra=f"target_wiki: {_PAGE}\n")
 
 
-def test_both_op_names_dry_run_return_the_same_report_with_residue_ids(tmp_path):
+def test_both_op_names_dry_run_return_the_same_report_with_residue_ids(tmp_path: Path) -> None:
     _mixed_queue(tmp_path)
     reports = [
         _call(n, {"repo": str(tmp_path), "dry_run": True}, None)["report"]
@@ -352,21 +352,21 @@ def test_both_op_names_dry_run_return_the_same_report_with_residue_ids(tmp_path)
     assert reports[0]["closed"] == {"dedupe": 1, "discard": 1, "wiki-append": 1, "retag": 1}
 
 
-def test_op_write_reports_residue_ids_and_defaults_to_repo_root(tmp_path):
+def test_op_write_reports_residue_ids_and_defaults_to_repo_root(tmp_path: Path) -> None:
     _mixed_queue(tmp_path)
     report = _call("learn_lessons_pipeline.apply_mechanical", {}, tmp_path)["report"]
     assert report["residue_ids"] == ["a-keep"] and report["appended"] == [_PAGE]
     assert _call("learn_lessons_pipeline.mechanical_close", {"dry_run": True}, tmp_path)["report"]["verdicts"] == []
 
 
-def test_unknown_repo_is_refused_naming_the_param(tmp_path):
+def test_unknown_repo_is_refused_naming_the_param(tmp_path: Path) -> None:
     for name in ("learn_lessons_pipeline.apply_mechanical", "learn_lessons_pipeline.mechanical_close"):
         for dry in (True, False):
             with pytest.raises(ipc.CallerFacingValidationError, match="param `repo`"):
                 _call(name, {"repo": str(tmp_path / "nope"), "dry_run": dry}, tmp_path)
 
 
-def test_archive_digests_memoized_and_invalidated_on_new_row(tmp_path, monkeypatch):
+def test_archive_digests_memoized_and_invalidated_on_new_row(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.learn_lessons_pipeline import mechanical_close as mc
 
     month = tmp_path / "archive" / "lessons" / "2026-11"

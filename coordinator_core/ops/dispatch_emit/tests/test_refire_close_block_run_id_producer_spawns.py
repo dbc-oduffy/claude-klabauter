@@ -15,18 +15,19 @@ from coordinator_core.ops.dispatch_emit.tests.test_refire_close_block_run_id_pro
 from coordinator_core.ops.review_mint import wave_bookkeeping
 from coordinator_core.session import touch_record
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _git(args, cwd):
+def _git(args, cwd) -> None:
     subprocess.run(
         ["git", *args], cwd=str(cwd), capture_output=True, text=True, check=True,
         **no_console_creationflags(),
     )
 
 
-def test_terminal_commit_handler_keys_the_close_to_its_own_run_not_the_stale_script(tmp_path, monkeypatch):
+def test_terminal_commit_handler_keys_the_close_to_its_own_run_not_the_stale_script(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = tmp_path / "repo"
     root.mkdir()
     _git(["init", "-q"], root)

@@ -4,11 +4,16 @@ from __future__ import annotations
 import importlib.machinery
 import importlib.util
 import pathlib
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
 
 
-def _load_cli_module():
+def _load_cli_module() -> ModuleType:
     loader = importlib.machinery.SourceFileLoader(
         "cross_repo_memo_citation_warning", str(_BIN_DIR / "cross-repo-memo.py")
     )
@@ -18,14 +23,14 @@ def _load_cli_module():
     return mod
 
 
-def test_ambiguous_only_prints_nothing(capsys):
+def test_ambiguous_only_prints_nothing(capsys: pytest.CaptureFixture[str]) -> None:
     mod = _load_cli_module()
     mod._print_citation_warning({"citations_ambiguous": ["docs/b.md"]})
     cap = capsys.readouterr()
     assert cap.out == "" and cap.err == ""
 
 
-def test_unresolved_prints_new_text(capsys):
+def test_unresolved_prints_new_text(capsys: pytest.CaptureFixture[str]) -> None:
     mod = _load_cli_module()
     mod._print_citation_warning({"citations_unresolved": ["docs/n.md"]})
     cap = capsys.readouterr()

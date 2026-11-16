@@ -31,7 +31,7 @@ Negative-spec, three parts.
 
 ``newline=""`` is accepted alongside ``newline="\\n"``: both disable translation,
 and ``""`` is what the ``csv`` module requires. Binary mode is skipped -- it never
-translates.
+translates. ``tarfile.open`` and its archive-module peers are not text writes.
 
 Spec backlink: state/sizings/2026-08-19-lf-convention-for-text-mode-writes-that.yaml
 """
@@ -60,6 +60,8 @@ _OPEN_NAMES = frozenset({"open"})
 #: ``os.fdopen``, ``io.open``, ``Path.open`` all take the same mode/newline pair.
 _OPEN_ATTRS = frozenset({"fdopen", "open"})
 _TEXT_WRITE_ATTRS = frozenset({"write_text"})
+#: Modules whose ``open`` is not a text-file open (``tarfile.open(mode="w|")`` is a binary stream).
+_NON_TEXT_OPEN_MODULES = frozenset({"tarfile", "zipfile", "gzip", "bz2", "lzma", "webbrowser"})
 
 
 def _is_test_file(rel: str) -> bool:
@@ -140,6 +142,8 @@ def _offenders_in(src: str, rel: str) -> list[str]:
         elif isinstance(func, ast.Attribute) and (
             func.attr in _OPEN_ATTRS or func.attr in _TEXT_WRITE_ATTRS
         ):
+            if isinstance(func.value, ast.Name) and func.value.id in _NON_TEXT_OPEN_MODULES:
+                continue
             attr = func.attr
         else:
             continue
@@ -223,6 +227,7 @@ def test_guard_detects_a_planted_violation() -> None:
         'open("f", "wb")',
         'open("f")',
         'open("f", "r", encoding="utf-8")',
+        'tarfile.open(fileobj=out_fp, mode="w|")',
     ):
         assert not _offenders_in(clean, "clean.py"), f"guard false-positived on: {clean}"
 

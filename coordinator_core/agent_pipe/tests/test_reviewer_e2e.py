@@ -19,6 +19,7 @@ from coordinator_core.ops.dispatch_emit.emit import compose_script
 from coordinator_core.ops.dispatch_emit.predispatch import AgentSpec
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
+from pathlib import Path
 
 STAFF_ENG = "coordinator:staff-eng"
 BRIEF = "Review this plan: BRIEF-MARKER-E2E"
@@ -62,7 +63,7 @@ def _emit_plan_review_wave() -> str:
 
 
 @pytest.fixture
-def codex_home(monkeypatch, tmp_path):
+def codex_home(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Path:
     agents = tmp_path / ".claude" / "plugins" / "coordinator" / "agents"
     agents.mkdir(parents=True)
     (agents / "staff-eng.md").write_text(
@@ -77,7 +78,7 @@ def codex_home(monkeypatch, tmp_path):
     return tmp_path
 
 
-def test_configured_staff_eng_leg_runs_reviewer_run_on_the_codex_opus_equivalent(monkeypatch):
+def test_configured_staff_eng_leg_runs_reviewer_run_on_the_codex_opus_equivalent(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(PROVIDER_ENV, f"{STAFF_ENG}=codex")
     script = _emit_plan_review_wave()
     match = _LEG_COMMAND.search(script)
@@ -90,7 +91,7 @@ def test_configured_staff_eng_leg_runs_reviewer_run_on_the_codex_opus_equivalent
     assert f"agentType: '{STAFF_ENG}'" not in script
 
 
-def test_unconfigured_staff_eng_leg_stays_on_claude(monkeypatch):
+def test_unconfigured_staff_eng_leg_stays_on_claude(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(PROVIDER_ENV, raising=False)
     script = _emit_plan_review_wave()
     assert "reviewer_run" not in script
@@ -98,8 +99,8 @@ def test_unconfigured_staff_eng_leg_stays_on_claude(monkeypatch):
 
 
 def test_emitted_leg_executes_against_fake_codex_and_returns_the_verdict_shape(
-    monkeypatch, codex_home, capsys
-):
+    monkeypatch: pytest.MonkeyPatch, codex_home, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setenv(PROVIDER_ENV, f"{STAFF_ENG}=codex")
     agent_type, provider, model = _LEG_COMMAND.search(_emit_plan_review_wave()).groups()
     monkeypatch.setattr(sys, "stdin", io.StringIO(BRIEF))
@@ -115,7 +116,7 @@ def test_emitted_leg_executes_against_fake_codex_and_returns_the_verdict_shape(
     assert "error" not in out
 
 
-def test_emitted_leg_with_a_failing_codex_returns_failed_not_a_pass(monkeypatch, codex_home, capsys):
+def test_emitted_leg_with_a_failing_codex_returns_failed_not_a_pass(monkeypatch: pytest.MonkeyPatch, codex_home, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv(PROVIDER_ENV, f"{STAFF_ENG}=codex")
     agent_type, provider, model = _LEG_COMMAND.search(_emit_plan_review_wave()).groups()
     (codex_home / "fake_codex.py").write_text("import sys\nsys.exit(3)\n", encoding="utf-8")
@@ -125,7 +126,7 @@ def test_emitted_leg_with_a_failing_codex_returns_failed_not_a_pass(monkeypatch,
     assert json.loads(capsys.readouterr().out)["verdict"] == reviewer_run.FAILED
 
 
-def test_windows_reviewer_start_uses_powershell_json_stdin():
+def test_windows_reviewer_start_uses_powershell_json_stdin() -> None:
     from pathlib import Path
     from coordinator_core.agent_pipe.reviewer_provider import ProviderChoice
     from coordinator_core.ops.dispatch_emit.emit import _external_reviewer_thunk_js

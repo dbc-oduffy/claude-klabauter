@@ -7,6 +7,8 @@ import os
 import time
 
 from coordinator_core import _engine_landing as el
+from pathlib import Path
+import pytest
 
 
 def _root(tmp_path):
@@ -14,7 +16,7 @@ def _root(tmp_path):
     return tmp_path
 
 
-def test_miss_path_is_one_stat(tmp_path, monkeypatch):
+def test_miss_path_is_one_stat(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path)
     calls = []
     real = os.stat
@@ -23,7 +25,7 @@ def test_miss_path_is_one_stat(tmp_path, monkeypatch):
     assert len(calls) == 1
 
 
-def test_hit_then_clear(tmp_path):
+def test_hit_then_clear(tmp_path: Path) -> None:
     root = _root(tmp_path)
     path = el.begin_swap(root, deadline_s=30)
     assert path == root / ".git" / el.MARKER_NAME
@@ -33,7 +35,7 @@ def test_hit_then_clear(tmp_path):
     el.end_swap(root)
 
 
-def test_stale_deadline_reads_clear(tmp_path):
+def test_stale_deadline_reads_clear(tmp_path: Path) -> None:
     root = _root(tmp_path)
     (root / ".git" / el.MARKER_NAME).write_text(
         json.dumps({"deadline_epoch": time.time() - 5}), encoding="utf-8"
@@ -42,7 +44,7 @@ def test_stale_deadline_reads_clear(tmp_path):
     assert el.wait_until_clear(root, sleep=lambda s: None) is True
 
 
-def test_non_directory_git_yields_none_and_never_blocks(tmp_path):
+def test_non_directory_git_yields_none_and_never_blocks(tmp_path: Path) -> None:
     (tmp_path / ".git").write_text("gitdir: elsewhere", encoding="utf-8")
     assert el.marker_path(tmp_path) is None
     assert el.begin_swap(tmp_path, deadline_s=30) is None
@@ -51,12 +53,12 @@ def test_non_directory_git_yields_none_and_never_blocks(tmp_path):
     assert el.wait_until_clear(tmp_path, sleep=lambda s: None) is True
 
 
-def test_wait_returns_when_marker_removed(tmp_path):
+def test_wait_returns_when_marker_removed(tmp_path: Path) -> None:
     root = _root(tmp_path)
     el.begin_swap(root, deadline_s=30)
     ticks = []
 
-    def sleeper(s):
+    def sleeper(s) -> None:
         ticks.append(s)
         if len(ticks) == 3:
             el.end_swap(root)
@@ -65,7 +67,7 @@ def test_wait_returns_when_marker_removed(tmp_path):
     assert len(ticks) == 3
 
 
-def test_budget_overrun_returns_false_without_raising(tmp_path, capsys, monkeypatch):
+def test_budget_overrun_returns_false_without_raising(tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch) -> None:
     root = _root(tmp_path)
     monkeypatch.setattr(el, "_reported_overrun", False)
     el.begin_swap(root, deadline_s=30)
@@ -74,7 +76,7 @@ def test_budget_overrun_returns_false_without_raising(tmp_path, capsys, monkeypa
     assert capsys.readouterr().err.count("still live") == 1
 
 
-def test_begin_swap_replaces_an_existing_marker(tmp_path):
+def test_begin_swap_replaces_an_existing_marker(tmp_path: Path) -> None:
     root = _root(tmp_path)
     el.begin_swap(root, deadline_s=1)
     el.begin_swap(root, deadline_s=30)
@@ -84,7 +86,7 @@ def test_begin_swap_replaces_an_existing_marker(tmp_path):
     assert not list((root / ".git").glob("*.tmp"))
 
 
-def test_corrupt_marker_reads_clear(tmp_path):
+def test_corrupt_marker_reads_clear(tmp_path: Path) -> None:
     root = _root(tmp_path)
     marker = root / ".git" / el.MARKER_NAME
     for body in ("not json", "{}", '{"deadline_epoch": null}'):
@@ -92,5 +94,5 @@ def test_corrupt_marker_reads_clear(tmp_path):
         assert el.swap_in_progress(root) is False
 
 
-def test_budgets_stay_under_load_norm():
+def test_budgets_stay_under_load_norm() -> None:
     assert el.SWAP_GRACE_S < el.WAIT_BUDGET_S <= 2.0

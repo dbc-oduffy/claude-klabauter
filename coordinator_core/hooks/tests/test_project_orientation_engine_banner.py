@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from coordinator_core.hooks import project_orientation as po
+import pytest
 
 _FETCH = "Engine: none - fetch claude-klabauter (github.com/dbc-oduffy/claude-klabauter)"
 
@@ -15,25 +16,25 @@ def _banner(monkeypatch, root, klass) -> str:
     return "".join(out)
 
 
-def test_published_engine_names_the_mirror(monkeypatch):
+def test_published_engine_names_the_mirror(monkeypatch: pytest.MonkeyPatch) -> None:
     text = _banner(monkeypatch, "/x/klabauter", po.RESOLUTION_RESOLVED_ENGINE)
     assert "published mirror" in text
     assert "/x/klabauter" in text
     assert "fetch claude-klabauter" not in text
 
 
-def test_live_tree_is_never_reported_as_the_engine(monkeypatch):
+def test_live_tree_is_never_reported_as_the_engine(monkeypatch: pytest.MonkeyPatch) -> None:
     text = _banner(monkeypatch, "/x/live", po.RESOLUTION_LIVE_WORKING_TREE)
     assert _FETCH in text
     assert "live tree" not in text
     assert "/x/live" not in text
 
 
-def test_unresolved_engine_says_how_to_fetch(monkeypatch):
+def test_unresolved_engine_says_how_to_fetch(monkeypatch: pytest.MonkeyPatch) -> None:
     assert _FETCH in _banner(monkeypatch, None, None)
 
 
-def test_resolver_raising_degrades_to_fetch_banner(monkeypatch):
+def test_resolver_raising_degrades_to_fetch_banner(monkeypatch: pytest.MonkeyPatch) -> None:
     def boom():
         raise RuntimeError("no engine")
 

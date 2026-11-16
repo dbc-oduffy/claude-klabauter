@@ -10,6 +10,7 @@ import json
 from pathlib import Path
 
 from coordinator_core.install import door_install, substrate
+import pytest
 
 _REPO = Path(__file__).resolve().parents[3]
 _ALLOWLIST = _REPO / "coordinator_core" / "ops" / "warm_entrypoint_allowlist.json"
@@ -21,14 +22,14 @@ def _allowlist() -> dict:
     return json.loads(_ALLOWLIST.read_text(encoding="utf-8"))
 
 
-def test_both_allowlists_name_machine_local_and_not_the_install_class_helper():
+def test_both_allowlists_name_machine_local_and_not_the_install_class_helper() -> None:
     data = _allowlist()
     for key in ("entrypoints", "door_eligible_entrypoints"):
         assert _NAME in data[key], key
         assert "_machine_local" not in data[key], key
 
 
-def test_machine_local_is_reserved_so_the_door_only_step_not_the_census_serves_it():
+def test_machine_local_is_reserved_so_the_door_only_step_not_the_census_serves_it() -> None:
     target_map = substrate._derive_agent_helper_target_map(_REPO / "coordinator" / "bin")
     assert _NAME not in target_map
     assert _NAME in substrate._AGENT_HELPER_RESERVED_NAMES
@@ -41,8 +42,8 @@ def test_machine_local_is_reserved_so_the_door_only_step_not_the_census_serves_i
 
 
 def test_door_only_step_lays_a_native_machine_local_image_under_a_fixture_bin(
-    monkeypatch, tmp_path
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     door = bin_dst / door_install.DOOR_INSTALLED_NAME
@@ -66,8 +67,8 @@ def test_door_only_step_lays_a_native_machine_local_image_under_a_fixture_bin(
 
 
 def test_door_only_step_lays_nothing_when_the_engine_lacks_the_entrypoint(
-    monkeypatch, tmp_path
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     bin_dst = tmp_path / "bin"
     bin_dst.mkdir()
     monkeypatch.setattr(substrate, "_door_only_platform", lambda: True)

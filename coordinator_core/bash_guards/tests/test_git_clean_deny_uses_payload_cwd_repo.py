@@ -8,11 +8,12 @@ import subprocess
 import pytest
 
 from coordinator_core.bash_guards import dispatch
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 
-def _init(path):
+def _init(path) -> None:
     path.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         ["git", "init", "-q"], cwd=str(path), check=True,
@@ -37,7 +38,7 @@ def _reasons(command: str, tool_name: str, cwd: str) -> str:
 
 
 @pytest.mark.parametrize("tool_name", ["Bash", "PowerShell"])
-def test_deny_lists_nested_repo_files_not_outer(tmp_path, monkeypatch, tool_name):
+def test_deny_lists_nested_repo_files_not_outer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, tool_name) -> None:
     outer = tmp_path / "outer"
     nested = outer / "nested"
     _init(outer)

@@ -26,9 +26,10 @@ from __future__ import annotations
 import sys
 
 from coordinator_core.write_guards import engine
+import pytest
 
 
-def _payload(tool_name="Write", file_path="/repo/some_file.py", session_id=""):
+def _payload(tool_name: str = "Write", file_path: str = "/repo/some_file.py", session_id: str = ""):
     return {
         "tool_name": tool_name,
         "tool_input": {"file_path": file_path},
@@ -45,7 +46,7 @@ def _unload(name: str) -> None:
 
 
 class TestHardDenyShortCircuitStopsImporting:
-    def test_guard_past_the_winning_hard_deny_is_never_imported(self, monkeypatch):
+    def test_guard_past_the_winning_hard_deny_is_never_imported(self, monkeypatch: pytest.MonkeyPatch) -> None:
         # Only a deny_registry guard's deny survives the policy point, and no shipped write
         # guard is both hard-deny and registered, so the winner is a registered name served
         # through the real engine seams (metadata, discovery, import) with fakes.
@@ -61,7 +62,7 @@ class TestHardDenyShortCircuitStopsImporting:
 
         def _fake_iter_modules(path):
             class _Info:
-                def __init__(self, name):
+                def __init__(self, name) -> None:
                     self.name = name
 
             return [_Info("destructive_rm"), _Info("g_past")]
@@ -72,7 +73,7 @@ class TestHardDenyShortCircuitStopsImporting:
 
             class _Mod:
                 @staticmethod
-                def check(payload):
+                def check(payload) -> dict[str, dict[str, str]]:
                     return dict(deny)
 
             return _Mod()
@@ -91,7 +92,7 @@ class TestHardDenyShortCircuitStopsImporting:
 
 
 class TestAdvisoryFirstWinsStopsImporting:
-    def test_lower_priority_advisory_never_imported_once_one_fires(self, monkeypatch):
+    def test_lower_priority_advisory_never_imported_once_one_fires(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = []
 
         def _fake_metadata(name):
@@ -103,7 +104,7 @@ class TestAdvisoryFirstWinsStopsImporting:
 
         def _fake_iter_modules(path):
             class _Info:
-                def __init__(self, name):
+                def __init__(self, name) -> None:
                     self.name = name
 
             return [_Info("g-high"), _Info("g-low")]
@@ -114,7 +115,7 @@ class TestAdvisoryFirstWinsStopsImporting:
 
             class _Mod:
                 @staticmethod
-                def check(payload):
+                def check(payload) -> dict[str, dict[str, str]]:
                     return {"hookSpecificOutput": {"additionalContext": f"fired:{name}"}}
 
             return _Mod()
@@ -130,7 +131,7 @@ class TestAdvisoryFirstWinsStopsImporting:
 
 
 class TestRealDiscoveryImportsNoGuardBody:
-    def test_real_discovery_scan_leaves_every_guard_module_unimported(self):
+    def test_real_discovery_scan_leaves_every_guard_module_unimported(self) -> None:
         guard_keys = [
             k for k in list(sys.modules)
             if k.startswith("coordinator_core.write_guards.")
@@ -150,7 +151,7 @@ class TestRealDiscoveryImportsNoGuardBody:
         ]
         assert imported == [], f"stage-one discovery imported guard bodies: {imported}"
 
-    def test_real_evaluate_imports_the_firing_guard_only_on_reach(self):
+    def test_real_evaluate_imports_the_firing_guard_only_on_reach(self) -> None:
         _unload("block_illegal_filename")
 
         out = engine.evaluate(_payload(file_path="/repo/bad:name.txt"))
@@ -160,7 +161,7 @@ class TestRealDiscoveryImportsNoGuardBody:
 
 
 class TestCheapMetadataReadsRealGuardWithoutImporting:
-    def test_reads_class_matchers_priority_from_source_only(self):
+    def test_reads_class_matchers_priority_from_source_only(self) -> None:
         _unload("block_illegal_filename")
 
         meta = engine._cheap_guard_metadata("block_illegal_filename")
@@ -176,7 +177,7 @@ class TestCheapMetadataReadsRealGuardWithoutImporting:
 
 
 class TestFullDiscoveryUnaffectedByLazyHotPath:
-    def test_discover_guard_names_still_uses_the_full_eager_path(self, monkeypatch):
+    def test_discover_guard_names_still_uses_the_full_eager_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
         calls = []
         real_full = engine._discover_guards_full
 
@@ -194,7 +195,7 @@ class TestFullDiscoveryUnaffectedByLazyHotPath:
 
 
 class TestSkippedOutOnlyReflectsGuardsActuallyReached:
-    def test_import_failure_past_a_winning_hard_deny_is_not_surfaced(self, monkeypatch):
+    def test_import_failure_past_a_winning_hard_deny_is_not_surfaced(self, monkeypatch: pytest.MonkeyPatch) -> None:
         def _fake_metadata(name):
             if name == "g-deny":
                 return ("hard-deny", ["Write"], 5)
@@ -204,7 +205,7 @@ class TestSkippedOutOnlyReflectsGuardsActuallyReached:
 
         def _fake_iter_modules(path):
             class _Info:
-                def __init__(self, name):
+                def __init__(self, name) -> None:
                     self.name = name
 
             return [_Info("g-deny"), _Info("g-broken")]
@@ -216,7 +217,7 @@ class TestSkippedOutOnlyReflectsGuardsActuallyReached:
 
             class _Mod:
                 @staticmethod
-                def check(payload):
+                def check(payload) -> dict[str, dict[str, str]]:
                     return {
                         "hookSpecificOutput": {
                             "permissionDecision": "deny",

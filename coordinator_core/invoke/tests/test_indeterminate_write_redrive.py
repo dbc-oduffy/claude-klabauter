@@ -10,6 +10,7 @@ import pytest
 
 import coordinator_core.ipc as ipc
 from coordinator_core.invoke.__main__ import _dispatch_argv
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -18,10 +19,10 @@ KEY = "4242-0-63324006915000"
 
 
 @pytest.fixture()
-def draft_path(tmp_path):
+def draft_path(tmp_path: Path):
     path = tmp_path / "draft.md"
 
-    def _write_op(params, ctx=None, repo_root=None):
+    def _write_op(params, ctx=None, repo_root=None) -> dict[str, bool]:
         fd = os.open(str(path), os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
         with os.fdopen(fd, "w") as fh:
             fh.write("draft")
@@ -78,13 +79,13 @@ def _run(monkeypatch, tmp_path, poll_reply):
     return calls, _dispatch_argv([OP, "{}"], str(tmp_path), allow_warm=True)
 
 
-def test_memo_draft_is_not_classified_compute_only():
+def test_memo_draft_is_not_classified_compute_only() -> None:
     from coordinator_core.authz.classification import OpClass, classify
 
     assert classify("memo.draft") is not OpClass.COMPUTE_ONLY
 
 
-def test_never_ran_is_redriven_cold_once_and_the_draft_is_written(monkeypatch, tmp_path, draft_path):
+def test_never_ran_is_redriven_cold_once_and_the_draft_is_written(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, draft_path) -> None:
     poll = {"jsonrpc": "2.0", "id": 2, "result": {"state": "not_received", "outcome": "not-dispatched"}}
     calls, (stdout, stderr, code) = _run(monkeypatch, tmp_path, poll)
 
@@ -95,7 +96,7 @@ def test_never_ran_is_redriven_cold_once_and_the_draft_is_written(monkeypatch, t
     assert "Reconcile via" not in stderr
 
 
-def test_completed_is_the_reply_and_nothing_is_redriven(monkeypatch, tmp_path, draft_path):
+def test_completed_is_the_reply_and_nothing_is_redriven(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, draft_path) -> None:
     result = {"written": True, "path": "elsewhere"}
     poll = {
         "jsonrpc": "2.0",
@@ -121,8 +122,8 @@ def test_completed_is_the_reply_and_nothing_is_redriven(monkeypatch, tmp_path, d
     ],
 )
 def test_unknown_or_failed_reconcile_prints_the_hint_and_never_redrives(
-    monkeypatch, tmp_path, draft_path, poll
-):
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, draft_path, poll
+) -> None:
     calls, (stdout, stderr, code) = _run(monkeypatch, tmp_path, poll)
 
     assert code == 1

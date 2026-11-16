@@ -18,6 +18,7 @@ import pytest
 
 from coordinator_core.git import commit as gcommit
 from coordinator_core.git.git_index import parse_index_identity
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
@@ -27,7 +28,7 @@ _CRLF = b"alpha\r\nbeta\r\ngamma\r\n"
 _LF = b"alpha\nbeta\ngamma\n"
 
 
-def _git(repo, *args, check=True):
+def _git(repo, *args, check: bool = True):
     return subprocess.run(
         ["git", *args], cwd=str(repo), capture_output=True, text=True, check=check, **_NOWIN
     )
@@ -55,7 +56,7 @@ def _status(repo):
     return _git(repo, "status", "--porcelain").stdout
 
 
-def test_lf_rewrite_over_crlf_checkout_is_refreshed_clean(tmp_path):
+def test_lf_rewrite_over_crlf_checkout_is_refreshed_clean(tmp_path: Path) -> None:
     repo = _commit_crlf_checkout(tmp_path)
     (repo / "f.txt").write_bytes(_LF)
     assert _status(repo) == " M f.txt\n"
@@ -71,7 +72,7 @@ def test_lf_rewrite_over_crlf_checkout_is_refreshed_clean(tmp_path):
     assert after.size == len(_LF)
 
 
-def test_real_edit_is_never_refreshed(tmp_path):
+def test_real_edit_is_never_refreshed(tmp_path: Path) -> None:
     repo = _commit_crlf_checkout(tmp_path)
     (repo / "f.txt").write_bytes(b"alpha\nCHANGED\ngamma\n")
     before = parse_index_identity(repo, wanted={"f.txt"})["f.txt"]
@@ -81,7 +82,7 @@ def test_real_edit_is_never_refreshed(tmp_path):
     assert _status(repo) == " M f.txt\n"
 
 
-def test_lf_write_over_a_blob_committed_with_crlf_is_a_real_change(tmp_path):
+def test_lf_write_over_a_blob_committed_with_crlf_is_a_real_change(tmp_path: Path) -> None:
     repo = _repo(tmp_path, "false")
     (repo / "f.txt").write_bytes(_CRLF)
     _git(repo, "add", "f.txt")
@@ -94,7 +95,7 @@ def test_lf_write_over_a_blob_committed_with_crlf_is_a_real_change(tmp_path):
     assert _git(repo, "diff", "--name-only").stdout == "f.txt\n"
 
 
-def test_untracked_missing_and_already_clean_paths_are_skipped(tmp_path):
+def test_untracked_missing_and_already_clean_paths_are_skipped(tmp_path: Path) -> None:
     repo = _commit_crlf_checkout(tmp_path)
     (repo / "new.txt").write_bytes(_LF)
     index_before = (repo / ".git" / "index").read_bytes()

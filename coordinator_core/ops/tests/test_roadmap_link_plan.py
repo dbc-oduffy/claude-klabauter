@@ -6,11 +6,12 @@ import pytest
 
 from coordinator_core.ops import roadmap_link_plan as op
 from coordinator_core.roadmap import gate_v2
+from pathlib import Path
 
 PLAN = "docs/plans/2026-10-21-derive.md"
 
 
-def _setup(root, **baton_extra):
+def _setup(root, **baton_extra) -> None:
     (root / ".git").mkdir()
     (root / "docs/plans").mkdir(parents=True)
     (root / PLAN).write_text(
@@ -40,7 +41,7 @@ def _disp(root):
     return next(b for b in gate_v2.compute_gate_report(root)["batons"] if b["id"] == "eet-22")
 
 
-def test_eet22_shape_goes_from_unplanned_to_the_plans_disposition(tmp_path, monkeypatch):
+def test_eet22_shape_goes_from_unplanned_to_the_plans_disposition(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(op, "main_worktree_root", lambda r: tmp_path)
     _setup(tmp_path)
     assert _disp(tmp_path)["plan"] is None
@@ -63,7 +64,7 @@ def test_eet22_shape_goes_from_unplanned_to_the_plans_disposition(tmp_path, monk
     ({"roadmap_id": "zzz"}, "roadmap_id"),
     ({"reason": ""}, "reason"),
 ])
-def test_refusals(tmp_path, monkeypatch, kw, needle):
+def test_refusals(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, kw, needle) -> None:
     monkeypatch.setattr(op, "main_worktree_root", lambda r: tmp_path)
     _setup(tmp_path)
     out = _call(tmp_path, **kw)
@@ -75,7 +76,7 @@ def test_refusals(tmp_path, monkeypatch, kw, needle):
     ({"governing_plan": "docs/plans/other.md"}, "governing_plan"),
     ({"plan_ids": "[pln-a]"}, "plan_ids"),
 ])
-def test_existing_link_is_named_and_not_overwritten(tmp_path, monkeypatch, extra, needle):
+def test_existing_link_is_named_and_not_overwritten(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, extra, needle) -> None:
     monkeypatch.setattr(op, "main_worktree_root", lambda r: tmp_path)
     _setup(tmp_path, **extra)
     before = (tmp_path / "state/handoffs/2026-10-21_eet-22.md").read_text(encoding="utf-8")
@@ -85,14 +86,14 @@ def test_existing_link_is_named_and_not_overwritten(tmp_path, monkeypatch, extra
 
 
 @pytest.mark.parametrize("wanted,near", [("roadmap-eet-22", "eet-22"), ("eet22", "eet-22")])
-def test_unknown_stub_id_names_the_closest_roadmap_baton(tmp_path, monkeypatch, wanted, near):
+def test_unknown_stub_id_names_the_closest_roadmap_baton(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, wanted, near) -> None:
     monkeypatch.setattr(op, "main_worktree_root", lambda r: tmp_path)
     _setup(tmp_path)
     out = _call(tmp_path, stub_id=wanted)
     assert out["exit_code"] == 1 and f"closest roadmap baton: {near!r}" in out["error"]
 
 
-def test_unknown_stub_id_with_nothing_close_adds_no_hint(tmp_path, monkeypatch):
+def test_unknown_stub_id_with_nothing_close_adds_no_hint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(op, "main_worktree_root", lambda r: tmp_path)
     _setup(tmp_path)
     out = _call(tmp_path, stub_id="zzzzzzzz")

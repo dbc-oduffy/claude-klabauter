@@ -1,8 +1,8 @@
-"""`coordinator-safe-commit` at default arguments refuses a plan ADDING an absolute machine path.
+"""`coordinator-safe-commit` refuses a staged plan that ADDS an absolute machine path, through
+`ceremony.commit_v2`'s in-process abs-path gate; the clean variant commits.
 
-The CLI's `cc_invoke` transport is replaced by an in-process call to the registered
-`ceremony.commit_v2` handler, so the refusal under test is the engine's own gate and no warm or
-spawned engine is involved. The path literal is built from parts so this file carries none.
+The op call is routed in-process to `commit_v2._handler` so the gate under test is this checkout's,
+never a warm engine's. Path literals are built from parts so this file carries none.
 """
 
 from __future__ import annotations
@@ -11,87 +11,90 @@ import importlib.machinery
 import importlib.util
 import pathlib
 import subprocess
-import sys
 
 import pytest
 
 pytestmark = [pytest.mark.spawns_process, pytest.mark.cadence]
 
 _BIN_DIR = pathlib.Path(__file__).resolve().parent.parent
+_PLAN = "docs/plans/p.md"
 _DRIVE = "C" + ":" + "\\" + "Users" + "\\" + "jdoe_dev" + "\\" + "repo"
-_PLAN = "docs/plans/2026-11/abs-gate-fixture.md"
 
 
 def _load_cli_module():
     loader = importlib.machinery.SourceFileLoader(
-        "coordinator_safe_commit_abs_path_gate", str(_BIN_DIR / "coordinator-safe-commit.py")
+        "coordinator_safe_commit_abs_path", str(_BIN_DIR / "coordinator-safe-commit.py")
     )
-    spec = importlib.util.spec_from_loader("coordinator_safe_commit_abs_path_gate", loader)
+    spec = importlib.util.spec_from_loader("coordinator_safe_commit_abs_path", loader)
     mod = importlib.util.module_from_spec(spec)  # type: ignore[arg-type]
     loader.exec_module(mod)
     return mod
 
 
-def _git(repo: pathlib.Path, *args: str) -> str:
+def _git(args, cwd) -> str:
     return subprocess.run(
-        ["git", "-C", str(repo), *args], check=True, capture_output=True, text=True,
+        ["git", *args], cwd=str(cwd), check=True, capture_output=True, text=True,
         creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-    ).stdout.strip()
+    ).stdout
 
 
 @pytest.fixture
 def repo(tmp_path, monkeypatch):
-    root = tmp_path / "r"
-    (root / "docs" / "plans" / "2026-11").mkdir(parents=True)
-    (root / "README.md").write_text("seed\n", encoding="utf-8")
-    _git(root, "init", "-q")
-    _git(root, "config", "user.email", "t@example.invalid")
-    _git(root, "config", "user.name", "t")
-    _git(root, "add", "-A")
-    _git(root, "commit", "-qm", "seed")
-    monkeypatch.chdir(root)
-    return root
+    r = tmp_path / "repo"
+    (r / "docs" / "plans").mkdir(parents=True)
+    _git(["init", "-q"], r)
+    _git(["config", "user.email", "t@t.example"], r)
+    _git(["config", "user.name", "t"], r)
+    (r / _PLAN).write_text("# plan\nclean line\n", encoding="utf-8")
+    _git(["add", "-A"], r)
+    _git(["commit", "-q", "-m", "seed"], r)
+    monkeypatch.chdir(r)
+    return r
 
 
 @pytest.fixture
-def cli(monkeypatch):
+def run_cli(repo, monkeypatch):
+    """Drive `main` with `ceremony.commit_v2` served in-process; returns the SystemExit code (0 on a clean return)."""
     mod = _load_cli_module()
     mod._bootstrap_engine()
-    mod.require_engine_on_path(mod.__file__)
-    import cc_invoke as transport
-    from coordinator_core import ipc
+    import cc_invoke
+    from coordinator_core.ops.ceremony import commit_v2
 
-    def in_process(op, params, repo_root, **_kw):
-        return ipc.get_op_handler(op)(params, repo_root=pathlib.Path(repo_root) / ".git")
+    def _in_process(op, params, worktree_root, *a, **k):
+        assert op == "ceremony.commit_v2"
+        return commit_v2._handler(params, repo_root=pathlib.Path(worktree_root) / ".git")
 
-    monkeypatch.setattr(transport, "cc_invoke", in_process)
-    monkeypatch.setattr(mod, "_refuse_contested_pathspec", lambda paths, root: None)
-    return mod
+    monkeypatch.setattr(cc_invoke, "cc_invoke", _in_process)
+
+    def _run(subject: str) -> int:
+        try:
+            mod.main([subject, "--", _PLAN])
+        except SystemExit as exc:
+            return int(exc.code or 0)
+        return 0
+
+    return _run
 
 
-def _commit(cli, text: str, repo: pathlib.Path):
-    (repo / _PLAN).write_text(text, encoding="utf-8")
-    return cli.main(["add the plan", "--", _PLAN])
+def test_a_plan_adding_an_absolute_path_is_refused_with_the_one_line_fix(repo, run_cli, capsys):
+    (repo / _PLAN).write_text("# plan\nclean line\nsee " + _DRIVE + "\n", encoding="utf-8")
+    before = _git(["rev-parse", "HEAD"], repo).strip()
 
-
-def test_a_plan_adding_an_absolute_path_exits_nonzero_with_the_one_line_fix(cli, repo, capsys):
-    before = _git(repo, "rev-parse", "HEAD")
-
-    with pytest.raises(SystemExit) as exc:
-        _commit(cli, f"# plan\nsee {_DRIVE}\n", repo)
+    code = run_cli("edit plan")
 
     err = capsys.readouterr().err
-    assert exc.value.code == 1
+    assert code != 0, err
     assert "abs_path_citation_gate" in err
-    assert f"{_PLAN}:2" in err
+    assert f"{_PLAN}:3" in err
     assert "abs-path-ok" in err
-    assert _git(repo, "rev-parse", "HEAD") == before
+    assert _git(["rev-parse", "HEAD"], repo).strip() == before
 
 
-def test_the_clean_variant_of_the_same_plan_commits(cli, repo, capsys):
-    before = _git(repo, "rev-parse", "HEAD")
+def test_the_clean_plan_commits(repo, run_cli, capsys):
+    (repo / _PLAN).write_text("# plan\nclean line\nmore prose\n", encoding="utf-8")
+    before = _git(["rev-parse", "HEAD"], repo).strip()
 
-    _commit(cli, "# plan\nsee docs/other.md\n", repo)
+    code = run_cli("edit plan")
 
-    assert "committed sha=" in capsys.readouterr().err
-    assert _git(repo, "rev-parse", "HEAD") != before
+    assert code == 0, capsys.readouterr().err
+    assert _git(["rev-parse", "HEAD"], repo).strip() != before

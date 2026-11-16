@@ -17,23 +17,23 @@ from coordinator_core.workweek_complete.release.contract import (
 
 
 @pytest.mark.parametrize("seq", [RULE_IDS, RELEASE_STATES, RELEASE_MODES, FORBIDDEN_ARGV_TOKENS])
-def test_tuples_are_unique(seq):
+def test_tuples_are_unique(seq) -> None:
     assert isinstance(seq, tuple) and len(set(seq)) == len(seq)
 
 
-def test_every_rule_has_nonempty_unique_reasons():
+def test_every_rule_has_nonempty_unique_reasons() -> None:
     assert set(MISS_REASONS) == set(RULE_IDS)
     for rule, reasons in MISS_REASONS.items():
         assert reasons and len(set(reasons)) == len(reasons), rule
 
 
-def test_pass_has_empty_reason():
+def test_pass_has_empty_reason() -> None:
     assert RuleResult("version-bump", True).reason == ""
     with pytest.raises(ValueError):
         RuleResult("version-bump", True, "tag-exists")
 
 
-def test_miss_accepts_listed_reason_only():
+def test_miss_accepts_listed_reason_only() -> None:
     assert not RuleResult("version-bump", False, "tag-exists", {"tag": "v1"}).passed
     with pytest.raises(ValueError):
         RuleResult("version-bump", False, "uncovered-commits")
@@ -41,22 +41,22 @@ def test_miss_accepts_listed_reason_only():
         RuleResult("version-bump", False, "")
 
 
-def test_gate_ids_unique_tuple():
+def test_gate_ids_unique_tuple() -> None:
     assert isinstance(GATE_IDS, tuple) and len(set(GATE_IDS)) == len(GATE_IDS)
     assert GATE_IDS == ("d6", "d0", "validate-fast-and-packageability")
 
 
 @pytest.mark.parametrize("reason", ["head-moved", "tree-modified"])
-def test_merge_evidence_refuses_retired_reasons(reason):
+def test_merge_evidence_refuses_retired_reasons(reason) -> None:
     with pytest.raises(ValueError):
         RuleResult("merge-evidence", False, reason)
 
 
-def test_merge_evidence_accepts_candidate_not_on_branch():
+def test_merge_evidence_accepts_candidate_not_on_branch() -> None:
     assert not RuleResult("merge-evidence", False, "candidate-not-on-branch").passed
 
 
-def test_gate_record_accepts_valid_and_refuses_bad_fields():
+def test_gate_record_accepts_valid_and_refuses_bad_fields() -> None:
     rec = GateRecord("d6", "ran", 0, "abc123")
     assert rec.tested_sha == "abc123"
     with pytest.raises(ValueError):
@@ -67,11 +67,11 @@ def test_gate_record_accepts_valid_and_refuses_bad_fields():
         GateRecord("d6", "ran", 0, "")
 
 
-def test_stamp_result_changed_is_tuple_default_empty():
+def test_stamp_result_changed_is_tuple_default_empty() -> None:
     assert StampResult().changed == ()
 
 
-def test_unknown_rule_and_state_refused():
+def test_unknown_rule_and_state_refused() -> None:
     with pytest.raises(ValueError):
         RuleResult("nope", True)
     with pytest.raises(ValueError):

@@ -155,6 +155,40 @@ def test_no_peer_owners_leaves_findings_untouched():
     assert ltt.tag_findings_with_peer_owners([failed], {}) == [failed]
 
 
+def _tf(*ids):
+    return ltt.tests_failed_finding(ids[0].split("::")[0], "; ".join(ids))
+
+
+def test_caused_only_reports_base_red_and_refuses_the_rest():
+    red_only, mixed, green = _tf("t.py::a"), _tf("u.py::a", "u.py::b"), _tf("v.py::c")
+    refusing, reported = ltt.caused_only([red_only, mixed, green], {"t.py::a", "u.py::a"})
+    assert reported == [red_only] and refusing == [mixed, green]
+    assert ltt.advisory_entries(reported)[0]["detail"] == "t.py::a"
+
+
+def test_caused_only_keeps_a_finding_naming_no_node_and_other_reasons():
+    bare = ltt.tests_failed_finding("t.py", "")
+    other = ltt.Finding("t.py", ltt.INVARIANT_UNMEASURED, "t.py::a")
+    assert ltt.caused_only([bare, other], {"t.py::a"}) == ([bare, other], [])
+
+
+def _carried(**baseline):
+    return {"status": "fail", "baseline": {"caused": [], "foreign": ["t.py::a"], **baseline}}
+
+
+def test_carried_id_nothing_measured_is_unrun_owed_not_a_finding():
+    assert ltt.failed_targeted_tests(_carried(), measured=False) == ([], ltt.UNRUN_OWED)
+
+
+def test_carried_id_measured_green_at_base_is_still_a_finding():
+    findings, check = ltt.failed_targeted_tests(_carried(head_red=[]), measured=False)
+    assert check == "failed" and [f.reason for f in findings] == [ltt.TARGETED_TESTS_FAILED]
+
+
+def test_carried_id_measured_red_at_base_is_not_refused():
+    assert ltt.failed_targeted_tests(_carried(head_red=["t.py::a"]), measured=False) == ([], "pre-existing-only")
+
+
 def test_scope_clause_carries_the_tier_markers_only_when_it_runs_tests():
     clause = rd._scope_clause(["coordinator_core/tests/test_a.py"], "", "abc")
     assert '-m "not pending_fix and not designed_red"' in clause

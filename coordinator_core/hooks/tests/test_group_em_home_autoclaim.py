@@ -9,12 +9,13 @@ import pytest
 from coordinator_core.group_em import nomination
 from coordinator_core.hooks import group_em_home_autoclaim as m
 from coordinator_core.ops import group_em_enter as gee
+from pathlib import Path
 
 SID = "11111111-2222-3333-4444-555555555555"
 
 
 @pytest.fixture
-def env(tmp_path, monkeypatch):
+def env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, Path]:
     config = tmp_path / "claude"
     (config / "projects" / "proj-a").mkdir(parents=True)
     settings = tmp_path / "settings"
@@ -39,7 +40,7 @@ def env(tmp_path, monkeypatch):
     return config, home
 
 
-def _transcript(config, cwd, sid=SID):
+def _transcript(config, cwd, sid=SID) -> None:
     line = json.dumps({
         "type": "attachment", "uuid": "u-1", "timestamp": "2026-10-21T00:00:05Z",
         "cwd": str(cwd), "entrypoint": "cli",
@@ -55,7 +56,7 @@ def _context(out):
     return (out.get("hookSpecificOutput") or {}).get("additionalContext")
 
 
-def test_home_boot_claims_home_start(env):
+def test_home_boot_claims_home_start(env) -> None:
     config, home = env
     _transcript(config, home)
 
@@ -68,7 +69,7 @@ def test_home_boot_claims_home_start(env):
     assert "Group EM ACTIVE" in _context(out)
 
 
-def test_home_subdirectory_boot_claims(env):
+def test_home_subdirectory_boot_claims(env) -> None:
     config, home = env
     sub = home / "inbox"
     sub.mkdir()
@@ -79,7 +80,7 @@ def test_home_subdirectory_boot_claims(env):
     assert nomination.read_record(str(sub.resolve()))["entry_evidence"]["kind"] == "home-start"
 
 
-def test_claim_before_transcript_exists_stands_pending(env):
+def test_claim_before_transcript_exists_stands_pending(env) -> None:
     _config, home = env
 
     m._handler(_payload(home))
@@ -89,7 +90,7 @@ def test_claim_before_transcript_exists_stands_pending(env):
     assert nomination.entry_status(record)["status"] == "pending"
 
 
-def test_outside_home_writes_no_claim(env, tmp_path):
+def test_outside_home_writes_no_claim(env, tmp_path: Path) -> None:
     config, _home = env
     repo = tmp_path / "repo"
     repo.mkdir()
@@ -101,7 +102,7 @@ def test_outside_home_writes_no_claim(env, tmp_path):
     assert nomination.read_record(str(repo.resolve())) is None
 
 
-def test_compact_source_is_silent(env):
+def test_compact_source_is_silent(env) -> None:
     config, home = env
     _transcript(config, home)
 
@@ -111,7 +112,7 @@ def test_compact_source_is_silent(env):
     assert nomination.read_record(str(home.resolve())) is None
 
 
-def test_missing_session_id_is_silent(env):
+def test_missing_session_id_is_silent(env) -> None:
     _config, home = env
 
     out = m._handler({"cwd": str(home), "source": "startup"})
@@ -120,7 +121,7 @@ def test_missing_session_id_is_silent(env):
     assert nomination.read_record(str(home.resolve())) is None
 
 
-def test_refuted_transcript_refusal_is_reported_and_writes_nothing(env, tmp_path):
+def test_refuted_transcript_refusal_is_reported_and_writes_nothing(env, tmp_path: Path) -> None:
     config, home = env
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
@@ -132,7 +133,7 @@ def test_refuted_transcript_refusal_is_reported_and_writes_nothing(env, tmp_path
     assert nomination.read_record(str(home.resolve())) is None
 
 
-def test_op_call_carries_payload_session_and_only_home_start_evidence(env, monkeypatch):
+def test_op_call_carries_payload_session_and_only_home_start_evidence(env, monkeypatch: pytest.MonkeyPatch) -> None:
     _config, home = env
     monkeypatch.setenv("CLAUDE_SESSION_ID", "ambient-session-id")
     calls = []
@@ -150,7 +151,7 @@ def test_op_call_carries_payload_session_and_only_home_start_evidence(env, monke
     })]
 
 
-def test_engine_failure_degrades_to_silence(env, monkeypatch):
+def test_engine_failure_degrades_to_silence(env, monkeypatch: pytest.MonkeyPatch) -> None:
     _config, home = env
 
     def boom(*a, **k):

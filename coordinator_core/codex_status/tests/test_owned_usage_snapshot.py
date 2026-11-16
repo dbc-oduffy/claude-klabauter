@@ -2,6 +2,7 @@
 import json
 import pytest
 from coordinator_core.codex_status.__main__ import snapshot
+from pathlib import Path
 
 ROOT = "01a1b63c-040a-76f2-a9b9-929d9a0d0098"
 CHILD = "01a1b63c-040a-76f2-a9b9-929d9a0d0099"
@@ -15,7 +16,7 @@ def usage(request):
             'usage':{'input_tokens':500,'cache_read_input_tokens':500,'cache_creation_input_tokens':0,'output_tokens':100}}}
 
 
-def test_owned_journal_is_automatic_exact_and_idempotent(tmp_path,monkeypatch):
+def test_owned_journal_is_automatic_exact_and_idempotent(tmp_path: Path,monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('COORDINATOR_SETTINGS_HOME',str(tmp_path))
     directory=tmp_path/'state'/'codex-usage';directory.mkdir(parents=True)
     journal=directory/f'{ROOT}.jsonl'
@@ -35,7 +36,7 @@ def test_owned_journal_is_automatic_exact_and_idempotent(tmp_path,monkeypatch):
     assert list(cache['files']).count(str(journal.resolve()))==1
 
 
-def test_absent_owned_journal_preserves_unknown_workflow_coverage(tmp_path,monkeypatch):
+def test_absent_owned_journal_preserves_unknown_workflow_coverage(tmp_path: Path,monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('COORDINATOR_SETTINGS_HOME',str(tmp_path))
     value=snapshot({'session_id':ROOT})
     assert value['coverage']['workflows'] is False

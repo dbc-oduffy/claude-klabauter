@@ -10,11 +10,16 @@ import importlib.util
 import io
 import sys
 from pathlib import Path
+import pytest
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 _BIN_DIR = Path(__file__).resolve().parent.parent
 
 
-def _load(name: str, filename: str):
+def _load(name: str, filename: str) -> ModuleType:
     spec = importlib.util.spec_from_file_location(name, _BIN_DIR / filename)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
@@ -31,7 +36,7 @@ def _write(path: Path, text: str = "x = 1\n") -> None:
     path.write_text(text, encoding="utf-8")
 
 
-def _trees(tmp_path: Path):
+def _trees(tmp_path: Path) -> tuple[Path, Path]:
     doe, engine = tmp_path / "doe", tmp_path / "engine"
     _write(doe / "lib" / "output_tree_layout.py")
     _write(doe / "lib" / "shared.py")
@@ -47,14 +52,14 @@ def _target(doe: Path, source_map: str, name: str = "coordinator-claude"):
                                   dest_dir=doe.parent / "dest", source_map=source_map)
 
 
-def test_dropped_files_are_listed(tmp_path):
+def test_dropped_files_are_listed(tmp_path: Path) -> None:
     doe, engine = _trees(tmp_path)
     assert publish._source_map_shadowed_files(_target(doe, f"{engine}=bin,lib")) == [
         "lib/output_tree_layout.py"
     ]
 
 
-def test_single_source_lists_nothing_and_prints_nothing(tmp_path, capsys):
+def test_single_source_lists_nothing_and_prints_nothing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     doe, _engine = _trees(tmp_path)
     target = _target(doe, "")
     assert publish._source_map_shadowed_files(target) == []
@@ -62,12 +67,12 @@ def test_single_source_lists_nothing_and_prints_nothing(tmp_path, capsys):
     assert capsys.readouterr().out == ""
 
 
-def test_entry_routed_to_own_source_drops_nothing(tmp_path):
+def test_entry_routed_to_own_source_drops_nothing(tmp_path: Path) -> None:
     doe, engine = _trees(tmp_path)
     assert publish._source_map_shadowed_files(_target(doe, f"{doe}=lib;{engine}=bin")) == []
 
 
-def test_assert_authored_parity_prints_the_dropped_list_without_refusing(tmp_path, capsys):
+def test_assert_authored_parity_prints_the_dropped_list_without_refusing(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     doe, engine = _trees(tmp_path)
     publish.assert_authored_parity(_target(doe, f"{engine}=bin,lib"))
     assert "lib/output_tree_layout.py" in capsys.readouterr().out
@@ -87,7 +92,7 @@ def _run_gate(tmp_path: Path, monkeypatch, docs, imports):
     return ok, err.getvalue()
 
 
-def test_dropped_and_imported_file_fails_and_names_it(tmp_path, monkeypatch):
+def test_dropped_and_imported_file_fails_and_names_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     doe, engine = _trees(tmp_path)
     publish.assert_authored_parity(_target(doe, f"{engine}=bin,lib"))
     ok, err = _run_gate(tmp_path, monkeypatch, [], [("hooks/h.py", "output_tree_layout")])
@@ -96,7 +101,7 @@ def test_dropped_and_imported_file_fails_and_names_it(tmp_path, monkeypatch):
     assert "carry the file into the source_map root" in err
 
 
-def test_dropped_and_doc_referenced_file_fails_and_names_it(tmp_path, monkeypatch):
+def test_dropped_and_doc_referenced_file_fails_and_names_it(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     doe, engine = _trees(tmp_path)
     publish.assert_authored_parity(_target(doe, f"{engine}=bin,lib"))
     ok, err = _run_gate(tmp_path, monkeypatch, [("README.md", "lib/output_tree_layout.py")], [])
@@ -104,7 +109,7 @@ def test_dropped_and_doc_referenced_file_fails_and_names_it(tmp_path, monkeypatc
     assert "lib/output_tree_layout.py: referenced by README.md" in err
 
 
-def test_dropped_but_unreferenced_file_passes_and_prints(tmp_path, monkeypatch, capsys):
+def test_dropped_but_unreferenced_file_passes_and_prints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     doe, engine = _trees(tmp_path)
     publish.assert_authored_parity(_target(doe, f"{engine}=bin,lib"))
     assert "lib/output_tree_layout.py" in capsys.readouterr().out
@@ -113,7 +118,7 @@ def test_dropped_but_unreferenced_file_passes_and_prints(tmp_path, monkeypatch, 
     assert err == ""
 
 
-def test_unrelated_failure_is_not_attributed_to_a_shadowed_file(tmp_path, monkeypatch):
+def test_unrelated_failure_is_not_attributed_to_a_shadowed_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     doe, engine = _trees(tmp_path)
     publish.assert_authored_parity(_target(doe, f"{engine}=bin,lib"))
     ok, err = _run_gate(tmp_path, monkeypatch, [], [("hooks/h.py", "other_module")])

@@ -13,12 +13,13 @@ import pytest
 
 from coordinator_core import run_watermark
 from coordinator_core.benchmarks.spawn_counter import _count_spawns_attributed
+from pathlib import Path
 
 pytestmark = [pytest.mark.spawns_process]
 
 
-def _repo(tmp_path):
-    def git(*a):
+def _repo(tmp_path) -> str:
+    def git(*a) -> None:
         subprocess.run(["git", "-C", str(tmp_path), *a], check=True, capture_output=True)
     git("init", "-q")
     git("config", "user.email", "t@t")
@@ -35,7 +36,7 @@ def _repo(tmp_path):
     return base
 
 
-def test_git_fallback_issues_exactly_one_spawn_for_many_changed_files(tmp_path, monkeypatch):
+def test_git_fallback_issues_exactly_one_spawn_for_many_changed_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = _repo(tmp_path)
     monkeypatch.setattr(run_watermark, "registry_get", lambda key: None)
     wm = run_watermark.Watermark("distill", base)
@@ -46,7 +47,7 @@ def test_git_fallback_issues_exactly_one_spawn_for_many_changed_files(tmp_path, 
     assert spawns[0].origin == "run_git"
 
 
-def test_first_run_spawns_nothing(tmp_path, monkeypatch):
+def test_first_run_spawns_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(run_watermark, "registry_get", lambda key: None)
     with _count_spawns_attributed(monkeypatch) as spawns:
         run_watermark.changed_since(tmp_path, None, scope_dirs=["docs"])

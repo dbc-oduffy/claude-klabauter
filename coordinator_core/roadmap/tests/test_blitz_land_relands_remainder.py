@@ -7,6 +7,7 @@ from pathlib import Path
 from coordinator_core.roadmap import blitz_land as bl
 from coordinator_core.roadmap.tests._multi_plan_wave_fixture import build_wave, install_fixture_gate
 from coordinator_core.roadmap.tests.test_blitz_land import _status
+import pytest
 
 N = 7
 
@@ -19,7 +20,7 @@ def _tree(root: Path) -> dict:
     }
 
 
-def test_relanding_with_six_of_seven_landed_lands_only_the_seventh(tmp_path, monkeypatch):
+def test_relanding_with_six_of_seven_landed_lands_only_the_seventh(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     install_fixture_gate(monkeypatch)
     # The fixture's `landed` plans carry no approval stamp, so land the first six for real:
     # that is the state a timed-out fire leaves behind.
@@ -45,7 +46,7 @@ def test_relanding_with_six_of_seven_landed_lands_only_the_seventh(tmp_path, mon
     assert "deliverable_id: dlv-w-6" in plan_text
 
 
-def test_landing_the_same_fire_twice_equals_landing_it_once(tmp_path, monkeypatch):
+def test_landing_the_same_fire_twice_equals_landing_it_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     install_fixture_gate(monkeypatch)
     for name in ("once", "twice"):
         (tmp_path / name).mkdir()

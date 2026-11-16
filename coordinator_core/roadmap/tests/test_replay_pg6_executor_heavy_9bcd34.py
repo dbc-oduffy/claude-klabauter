@@ -2,6 +2,8 @@
 
 from coordinator_core.roadmap import prep_gate as pg
 from coordinator_core.roadmap.tests.test_prep_gate_four_legs import _CLEAN_FM, _write_plan
+from pathlib import Path
+import pytest
 
 _EXEC_ROW = """- id: C1
   title: Build
@@ -24,7 +26,7 @@ _V_ROW = """- id: V1
 """
 
 
-def _agents(tmp_path, monkeypatch, admits):
+def _agents(tmp_path, monkeypatch, admits) -> None:
     d = tmp_path / "agents"
     d.mkdir()
     for name, fm in admits.items():
@@ -37,7 +39,7 @@ def _gate(tmp_path, spine):
     return pg.gate_plan(tmp_path, _write_plan(tmp_path, frontmatter=_CLEAN_FM, spine=spine))
 
 
-def test_build_command_moved_to_test_runner_row_still_pulls(tmp_path, monkeypatch):
+def test_build_command_moved_to_test_runner_row_still_pulls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _agents(tmp_path, monkeypatch, {"executor": "", "test-runner": ""})
     result = _gate(tmp_path, _V_ROW.format(cmd="cargo build --release"))
     cls = result["classes"]["TEST_RUNNER_OUT_OF_ROLE"]
@@ -46,19 +48,19 @@ def test_build_command_moved_to_test_runner_row_still_pulls(tmp_path, monkeypatc
     assert "V1" in cls["withheld"]
 
 
-def test_broad_suite_moved_to_test_runner_row_still_pulls(tmp_path, monkeypatch):
+def test_broad_suite_moved_to_test_runner_row_still_pulls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _agents(tmp_path, monkeypatch, {"executor": "", "test-runner": ""})
     result = _gate(tmp_path, _V_ROW.format(cmd="pnpm vitest run"))
     assert result["classes"]["TEST_RUNNER_OUT_OF_ROLE"]["status"] == "DEFECT"
 
 
-def test_scoped_test_on_test_runner_row_still_passes(tmp_path, monkeypatch):
+def test_scoped_test_on_test_runner_row_still_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _agents(tmp_path, monkeypatch, {"executor": "", "test-runner": ""})
     result = _gate(tmp_path, _V_ROW.format(cmd="python -m pytest src/test_a.py"))
     assert result["classes"]["TEST_RUNNER_OUT_OF_ROLE"]["status"] == "PASS"
 
 
-def test_no_role_admits_both_remedy_names_em_and_never_test_runner(tmp_path, monkeypatch):
+def test_no_role_admits_both_remedy_names_em_and_never_test_runner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _agents(tmp_path, monkeypatch, {"executor": "", "test-runner": "admits: [build]\n"})
     result = _gate(tmp_path, _EXEC_ROW)
     cls = result["classes"]["EXECUTOR_HEAVY"]
@@ -69,7 +71,7 @@ def test_no_role_admits_both_remedy_names_em_and_never_test_runner(tmp_path, mon
     assert cls["mechanical"] is True
 
 
-def test_remedy_names_the_role_the_definitions_admit(tmp_path, monkeypatch):
+def test_remedy_names_the_role_the_definitions_admit(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _agents(
         tmp_path, monkeypatch,
         {"executor": "", "test-runner": "", "heavy-runner": "admits: [build, measure]\n"},
@@ -79,7 +81,7 @@ def test_remedy_names_the_role_the_definitions_admit(tmp_path, monkeypatch):
     assert "coordinator:test-runner" not in cls["detail"]
 
 
-def test_row_retyped_to_admitted_role_passes(tmp_path, monkeypatch):
+def test_row_retyped_to_admitted_role_passes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _agents(tmp_path, monkeypatch, {"heavy-runner": "admits: [build, measure]\n"})
     spine = _EXEC_ROW.replace("  disposition: open", "  agent_type: coordinator:heavy-runner\n  disposition: open")
     assert _gate(tmp_path, spine)["classes"]["EXECUTOR_HEAVY"]["status"] == "PASS"

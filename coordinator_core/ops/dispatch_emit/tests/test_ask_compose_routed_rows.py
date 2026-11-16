@@ -11,6 +11,7 @@ import pytest
 from coordinator_core.ops.dispatch_emit import ask_compose
 from coordinator_core.ops.dispatch_emit.tests.conftest import REVIEW_KW
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 _BLITZ_FN = "  async function planBlitz(args) {\n    return { ready: [] };\n  }"
 _ROADMAP_TEXT = (
@@ -36,7 +37,7 @@ def _script(repo_root: str) -> str:
 
 
 @pytest.fixture
-def routed_repo(tmp_path):
+def routed_repo(tmp_path: Path) -> str:
     (tmp_path / ".claude").mkdir()
     (tmp_path / ".claude" / "route-table.json").write_text(json.dumps(_TABLE), encoding="utf-8")
     return str(tmp_path)
@@ -105,12 +106,12 @@ def _run(repo_root: str, rows: list[dict], replies: dict) -> dict:
     return json.loads(out.stdout.strip().splitlines()[-1])
 
 
-def test_no_route_table_emits_no_routing_bytes(tmp_path):
+def test_no_route_table_emits_no_routing_bytes(tmp_path: Path) -> None:
     script = _script(str(tmp_path))
     assert "_routedRun" not in script and "_routeOf" not in script
 
 
-def test_routed_run_declared_once_and_only_routed_rows_use_it(routed_repo):
+def test_routed_run_declared_once_and_only_routed_rows_use_it(routed_repo) -> None:
     script = _script(routed_repo)
     assert script.count("async function _routedRun(") == 1
     assert script.count("_routedRun(_routeOf(r)") == 1
@@ -119,7 +120,7 @@ def test_routed_run_declared_once_and_only_routed_rows_use_it(routed_repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
-def test_routed_row_dispatches_triage_first_and_plain_row_is_untouched(routed_repo):
+def test_routed_row_dispatches_triage_first_and_plain_row_is_untouched(routed_repo) -> None:
     rows = [_row("C1", route=_ROUTE), _row("C2")]
     got = _run(routed_repo, rows, {"ue:triage": "disposition: proceed", "*": "DONE: ok"})
     c1 = [c for c in got["calls"] if c["label"].endswith("C1")]
@@ -131,7 +132,7 @@ def test_routed_row_dispatches_triage_first_and_plain_row_is_untouched(routed_re
 
 @pytest.mark.spawns_process
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
-def test_triage_pick_dispatches_target_with_its_model(routed_repo):
+def test_triage_pick_dispatches_target_with_its_model(routed_repo) -> None:
     rows = [_row("C1", route=_ROUTE)]
     got = _run(
         routed_repo, rows,
@@ -144,7 +145,7 @@ def test_triage_pick_dispatches_target_with_its_model(routed_repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
-def test_refusal_settles_blocked_route_refused(routed_repo):
+def test_refusal_settles_blocked_route_refused(routed_repo) -> None:
     rows = [_row("C1", route=_ROUTE)]
     got = _run(routed_repo, rows, {"*": "disposition: refuse\nreason: just script it is wrong"})
     assert got["settled"]["C1"].startswith("BLOCKED: route-refused")
@@ -153,7 +154,7 @@ def test_refusal_settles_blocked_route_refused(routed_repo):
 
 @pytest.mark.spawns_process
 @pytest.mark.skipif(shutil.which("node") is None, reason="node absent")
-def test_grouped_routed_row_is_not_merged_into_a_shared_agent(routed_repo):
+def test_grouped_routed_row_is_not_merged_into_a_shared_agent(routed_repo) -> None:
     rows = [_row("C1", route=_ROUTE, group="g1"), _row("C2", route=_ROUTE, group="g1")]
     got = _run(routed_repo, rows, {"*": "DONE: ok"})
     labels = sorted(c["label"][-2:] for c in got["calls"])

@@ -5,14 +5,15 @@ import time
 import pytest
 
 from coordinator_core import atomic_append
+from pathlib import Path
 
 
 @pytest.mark.deliberate_wall_clock(reason="the caller must return while the worker is stalled; a blocked caller burns no CPU")
-def test_stalled_open_does_not_block_caller_and_full_queue_drops(tmp_path, monkeypatch):
+def test_stalled_open_does_not_block_caller_and_full_queue_drops(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     gate = threading.Event()
     landed = []
 
-    def slow_append(sink, encoded, droppable=False, *, hold=False):
+    def slow_append(sink, encoded, droppable: bool = False, *, hold: bool = False) -> None:
         gate.wait(5)
         landed.append(encoded)
 
@@ -30,7 +31,7 @@ def test_stalled_open_does_not_block_caller_and_full_queue_drops(tmp_path, monke
     assert 0 < len(landed) < 50
 
 
-def test_async_path_lands_line(tmp_path, monkeypatch):
+def test_async_path_lands_line(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(atomic_append, "_force_async", True)
     monkeypatch.setattr(atomic_append, "_queue", None)
     sink = tmp_path / "s.jsonl"
@@ -39,7 +40,7 @@ def test_async_path_lands_line(tmp_path, monkeypatch):
     assert sink.read_bytes() == b"a\n"
 
 
-def test_sync_under_pytest_and_never_raises(tmp_path):
+def test_sync_under_pytest_and_never_raises(tmp_path: Path) -> None:
     sink = tmp_path / "s.jsonl"
     atomic_append.append_line_bounded(sink, b"a\n")
     assert sink.read_bytes() == b"a\n"

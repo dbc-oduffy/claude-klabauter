@@ -5,10 +5,11 @@ from __future__ import annotations
 import pytest
 
 from coordinator_core.ops.session import safe_commit_offer as sco
+from pathlib import Path
 
 
 @pytest.fixture()
-def no_claims(monkeypatch):
+def no_claims(monkeypatch: pytest.MonkeyPatch):
     calls = []
 
     def boom(*a, **k):
@@ -19,7 +20,7 @@ def no_claims(monkeypatch):
     return calls
 
 
-def test_inside_workspace_declines_naming_key(tmp_path, monkeypatch, no_claims):
+def test_inside_workspace_declines_naming_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_claims) -> None:
     ws = tmp_path / "ws"
     (ws / "sub").mkdir(parents=True)
     (ws / "dirty.txt").write_text("x", encoding="utf-8")
@@ -33,7 +34,7 @@ def test_inside_workspace_declines_naming_key(tmp_path, monkeypatch, no_claims):
     assert no_claims == []
 
 
-def test_handler_refuses_inside_workspace(tmp_path, monkeypatch, no_claims):
+def test_handler_refuses_inside_workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, no_claims) -> None:
     monkeypatch.setattr(
         "coordinator_core.machine_resolver.external_workspace_containing",
         lambda p: "p4_fifa_slice",
@@ -42,7 +43,7 @@ def test_handler_refuses_inside_workspace(tmp_path, monkeypatch, no_claims):
     assert "p4_fifa_slice" in out["error"]
 
 
-def test_outside_workspace_unchanged(tmp_path, monkeypatch):
+def test_outside_workspace_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.machine_resolver.external_workspace_containing",
         lambda p: None,

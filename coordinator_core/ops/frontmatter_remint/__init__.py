@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import importlib
 import logging
-import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping, Optional
 
@@ -205,35 +204,6 @@ def _remint_one(rel_raw: str, worktree: Path, wanted: Optional[list[str]], repo_
     return out
 
 
-def _old_handoff_ids(rels: list[str], worktree: Path) -> list[str]:
-    ids = []
-    for rel in rels:
-        try:
-            fm = _read_fm(worktree / rel)
-        except (OSError, yaml.YAMLError):
-            continue
-        if fm and fm.get("handoff_id"):
-            ids.append(str(fm["handoff_id"]).strip())
-    return ids
-
-
-def _remint_all(rels: list[str], worktree: Path, wanted: Optional[list[str]], repo_root: Path) -> list[dict]:
-    # One citer scan for the whole call (handoff_id family); a failed scan falls back to per-path scans.
-    if wanted is not None and "handoff_id" not in wanted:
-        return [_remint_one(r, worktree, wanted, repo_root) for r in rels]
-    from coordinator_core.ops.frontmatter_remint import handoff_id as _hid
-
-    try:
-        ctx = _hid.primed(_old_handoff_ids(rels, worktree), worktree)
-        ctx.__enter__()
-    except (OSError, subprocess.SubprocessError, RuntimeError):
-        return [_remint_one(r, worktree, wanted, repo_root) for r in rels]
-    try:
-        return [_remint_one(r, worktree, wanted, repo_root) for r in rels]
-    finally:
-        ctx.__exit__(None, None, None)
-
-
 @register_op("frontmatter.remint")
 def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
     """JSON-RPC "frontmatter.remint" — re-mint engine-owned frontmatter fields.
@@ -267,5 +237,5 @@ def _handler(params: dict, repo_root: Optional[Path] = None) -> dict:
         return {"exit_code": 2, "error": "repo_root is required", "results": []}
 
     worktree = main_worktree_root(repo_root)
-    results = _remint_all([p.strip() for p in paths], worktree, wanted, repo_root)
+    results = [_remint_one(p.strip(), worktree, wanted, repo_root) for p in paths]
     return {"exit_code": 0, "error": None, "results": results}

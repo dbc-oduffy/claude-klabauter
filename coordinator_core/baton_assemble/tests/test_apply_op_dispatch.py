@@ -10,6 +10,7 @@ from coordinator_core.authz.dispatchable import ASSEMBLER_DISPATCHABLE
 from coordinator_core.authz.registration_quad import _live_registry
 from coordinator_core.contract.apply_base import UnrecognizedDirective
 from coordinator_core.baton_assemble import apply as ba_apply
+from pathlib import Path
 
 _BATON_CLI_VERBS = (
     "coordinator-doc-new",
@@ -123,7 +124,7 @@ class TestExecuteDirectivesThreadsAssemblerName:
     through the allowlisted seam rather than falling back to
     `ASSEMBLER_DISPATCHABLE.get(None, frozenset())`'s always-empty default."""
 
-    def test_a_migrated_op_directive_dispatches_successfully(self, tmp_path) -> None:
+    def test_a_migrated_op_directive_dispatches_successfully(self, tmp_path: Path) -> None:
         calls = []
 
         def _tracking_handler(args, repo_root):
@@ -141,7 +142,7 @@ class TestExecuteDirectivesThreadsAssemblerName:
         assert report["landed"] == ["d1"]
 
     def test_execute_directives_threads_assembler_name_into_apply_base(
-        self, monkeypatch, tmp_path
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         captured: dict[str, Any] = {}
 
@@ -156,7 +157,7 @@ class TestExecuteDirectivesThreadsAssemblerName:
 
 class TestCliKeyedMigratedVerbIsRefused:
 
-    def test_cli_keyed_handoff_stamp_phase_reaches_nothing(self, tmp_path) -> None:
+    def test_cli_keyed_handoff_stamp_phase_reaches_nothing(self, tmp_path: Path) -> None:
         directives = [{"id": "d1", "cli": "handoff.stamp_phase", "args": ["x"]}]
         exit_code, report = ba_apply._execute_directives(directives, [], tmp_path)
         assert exit_code == apply_base.APPLY_EXIT_TRANSPORT_FAIL

@@ -9,6 +9,7 @@ import pytest
 
 from coordinator_core import deny_registry
 from coordinator_core import machine_profile as mp
+from pathlib import Path
 
 # The registry reader caches on mtime; each rewrite must advance it by a full
 # second or a coarse-resolution filesystem serves the previous contents.
@@ -18,7 +19,7 @@ _last_mtime: dict = {}
 
 
 @pytest.fixture()
-def reg(tmp_path, monkeypatch):
+def reg(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     d = tmp_path / "reg"
     d.mkdir()
     monkeypatch.setenv("MACHINE_LOCAL_REGISTRY_DIR", str(d))
@@ -30,7 +31,7 @@ def reg(tmp_path, monkeypatch):
     mp.reset_cache()
 
 
-def _write(reg, text):
+def _write(reg, text) -> None:
     (reg / "registry.local.toml").write_text(text, encoding="utf-8")
     path = reg / "registry.local.toml"
     prev = _last_mtime.get(path, 0)
@@ -46,7 +47,7 @@ def _nudges(env):
     return text.startswith(mp.ADVISORY_PREFIX) and "\n" not in text
 
 
-def _deny(event="PreToolUse", reason="Bad thing.\n\nSecond paragraph."):
+def _deny(event: str = "PreToolUse", reason: str = "Bad thing.\n\nSecond paragraph.") -> dict[str, dict[str, str]]:
     return {
         "hookSpecificOutput": {
             "hookEventName": event,
@@ -56,7 +57,7 @@ def _deny(event="PreToolUse", reason="Bad thing.\n\nSecond paragraph."):
     }
 
 
-def test_non_deny_input_passes_through_unchanged(reg):
+def test_non_deny_input_passes_through_unchanged(reg) -> None:
     _write(reg, '"coordinator.guard_level" = "off"\n')
     allow = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "allow"}}
     for env in (allow, {}, {"x": 1}):
@@ -64,13 +65,13 @@ def test_non_deny_input_passes_through_unchanged(reg):
 
 
 @pytest.mark.parametrize("event", ["PreToolUse", "Stop"])
-def test_unregistered_guard_nudges_once_and_never_denies_at_every_level(reg, event):
+def test_unregistered_guard_nudges_once_and_never_denies_at_every_level(reg, event) -> None:
     for level in ("strict", "warn", "off"):
         _write(reg, '"coordinator.guard_level" = "%s"\n' % level)
         assert _nudges(mp.apply_guard_level("g", _deny(event)))
 
 
-def test_unregistered_guard_logs_under_the_author_profile(reg, tmp_path):
+def test_unregistered_guard_logs_under_the_author_profile(reg, tmp_path: Path) -> None:
     repo = tmp_path / "authoring"
     repo.mkdir()
     (repo / ".coordinator-dev-repo").write_text("")
@@ -81,19 +82,19 @@ def test_unregistered_guard_logs_under_the_author_profile(reg, tmp_path):
     assert _nudges(mp.apply_guard_level("g", _deny()))
 
 
-def test_per_guard_strict_key_cannot_lift_an_unregistered_guard(reg):
+def test_per_guard_strict_key_cannot_lift_an_unregistered_guard(reg) -> None:
     _write(reg, '"coordinator.guard_level.g" = "strict"\n')
     assert mp.guard_level("g") == "strict"
     assert mp.resolved_level("g") == "log"
     assert _nudges(mp.apply_guard_level("g", _deny()))
 
 
-def test_underscore_name_resolves_kebab_registration(reg):
+def test_underscore_name_resolves_kebab_registration(reg) -> None:
     assert mp.resolved_level("destructive_rm") == "floor"
     assert mp.resolved_level("a_b") == "log"
 
 
-def test_floor_guards_are_the_registry_and_name_the_degrading_set():
+def test_floor_guards_are_the_registry_and_name_the_degrading_set() -> None:
     assert mp.FLOOR_GUARDS == frozenset(deny_registry.GUARD_DENY_CLASS)
     assert "block-whole-filesystem-scan" in mp.FLOOR_GUARDS
     assert "guard-heavy-command-admission" in mp.FLOOR_GUARDS
@@ -109,19 +110,19 @@ def test_floor_guards_are_the_registry_and_name_the_degrading_set():
         assert demoted not in mp.FLOOR_GUARDS
 
 
-def test_heavy_command_admission_blocks_at_every_level(reg):
+def test_heavy_command_admission_blocks_at_every_level(reg) -> None:
     assert mp.apply_guard_level("guard-heavy-command-admission", _deny()) is not None
     assert mp.apply_guard_level("guard-heavy-command-admission", _deny(), subagent=True) is not None
 
 
-def test_memory_store_cap_no_longer_denies_under_any_level(reg):
+def test_memory_store_cap_no_longer_denies_under_any_level(reg) -> None:
     for level in ("strict", "warn", "off"):
         _write(reg, '"coordinator.guard_level" = "%s"\n' % level)
         assert mp.resolved_level("guard-memory-store-cap") == "log"
         assert _nudges(mp.apply_guard_level("guard-memory-store-cap", _deny()))
 
 
-def test_heavy_ue_launch_guard_is_a_subagent_floor():
+def test_heavy_ue_launch_guard_is_a_subagent_floor() -> None:
     assert "guard-subagent-heavy-ue-launch" in mp.SUBAGENT_FLOOR_GUARDS
     assert _nudges(mp.apply_guard_level("guard-subagent-heavy-ue-launch", _deny()))
     deny = _deny()
@@ -130,19 +131,19 @@ def test_heavy_ue_launch_guard_is_a_subagent_floor():
 
 @pytest.mark.parametrize("name", sorted(mp.FLOOR_GUARDS))
 @pytest.mark.parametrize("level", ["warn", "off"])
-def test_floor_guard_denies_at_every_level(reg, name, level):
+def test_floor_guard_denies_at_every_level(reg, name, level) -> None:
     _write(reg, '"coordinator.guard_level" = "%s"\n' % level)
     deny = _deny()
     assert mp.apply_guard_level(name, deny) is deny
     assert mp.apply_guard_level(name.replace("-", "_"), deny) is deny
 
 
-def test_empty_registry_is_consumer_warn(reg):
+def test_empty_registry_is_consumer_warn(reg) -> None:
     assert mp.machine_profile() == "consumer"
     assert mp.guard_level("any-guard") == "warn"
 
 
-def test_author_box_guard_level_fallback_is_warn(reg, tmp_path):
+def test_author_box_guard_level_fallback_is_warn(reg, tmp_path: Path) -> None:
     repo = tmp_path / "authoring"
     repo.mkdir()
     (repo / ".coordinator-dev-repo").write_text("")
@@ -156,14 +157,14 @@ def test_author_box_guard_level_fallback_is_warn(reg, tmp_path):
     assert mp.guard_level("g") == "warn"
 
 
-def test_registered_repo_without_sentinel_stays_consumer(reg, tmp_path):
+def test_registered_repo_without_sentinel_stays_consumer(reg, tmp_path: Path) -> None:
     repo = tmp_path / "plain"
     repo.mkdir()
     _write(reg, '"repos.plain" = "%s"\n' % repo.as_posix())
     assert mp.machine_profile() == "consumer"
 
 
-def test_explicit_profile_beats_sentinel(reg, tmp_path):
+def test_explicit_profile_beats_sentinel(reg, tmp_path: Path) -> None:
     repo = tmp_path / "authoring"
     repo.mkdir()
     (repo / ".coordinator-dev-repo").write_text("")
@@ -175,7 +176,7 @@ def test_explicit_profile_beats_sentinel(reg, tmp_path):
     assert mp.machine_profile() == "consumer"
 
 
-def test_global_and_per_guard_levels(reg):
+def test_global_and_per_guard_levels(reg) -> None:
     _write(
         reg,
         '"coordinator.guard_level" = "off"\n'
@@ -185,24 +186,24 @@ def test_global_and_per_guard_levels(reg):
     assert mp.guard_level("block-x") == "strict"
 
 
-def test_invalid_value_falls_through_to_default(reg):
+def test_invalid_value_falls_through_to_default(reg) -> None:
     _write(reg, '"coordinator.guard_level" = "loud"\n')
     assert mp.guard_level("g") == "warn"
 
 
-def test_env_override_wins(reg, monkeypatch):
+def test_env_override_wins(reg, monkeypatch: pytest.MonkeyPatch) -> None:
     _write(reg, '"coordinator.guard_level" = "off"\n')
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", "strict")
     assert mp.guard_level("g") == "strict"
 
 
-def test_registry_change_is_seen_without_reset(reg):
+def test_registry_change_is_seen_without_reset(reg) -> None:
     assert mp.guard_level("g") == "warn"
     _write(reg, '"coordinator.guard_level" = "strict"\n')
     assert mp.guard_level("g") == "strict"
 
 
-def test_zero_subprocesses(reg, monkeypatch):
+def test_zero_subprocesses(reg, monkeypatch: pytest.MonkeyPatch) -> None:
     def boom(*a, **k):
         raise AssertionError("subprocess spawned")
 
@@ -211,7 +212,7 @@ def test_zero_subprocesses(reg, monkeypatch):
     mp.guard_level("g")
 
 
-def test_apply_guard_level_keeps_a_registered_deny_and_logs_the_rest(reg):
+def test_apply_guard_level_keeps_a_registered_deny_and_logs_the_rest(reg) -> None:
     deny = {"hookSpecificOutput": {"permissionDecision": "deny"}}
     for level in ("strict", "off", "warn"):
         _write(reg, '"coordinator.guard_level" = "%s"\n' % level)
@@ -220,7 +221,7 @@ def test_apply_guard_level_keeps_a_registered_deny_and_logs_the_rest(reg):
     assert mp.apply_guard_level("g", None, risk="r.") is None
 
 
-def test_level_verb_is_a_well_formed_registry_set():
+def test_level_verb_is_a_well_formed_registry_set() -> None:
     import shlex
 
     argv = shlex.split(mp.LEVEL_VERB)
@@ -229,7 +230,7 @@ def test_level_verb_is_a_well_formed_registry_set():
     assert argv[3] in mp.LEVELS
 
 
-def test_advisory_tail_verbs_are_well_formed():
+def test_advisory_tail_verbs_are_well_formed() -> None:
     import re
     import shlex
 
@@ -243,7 +244,7 @@ def test_advisory_tail_verbs_are_well_formed():
 
 
 @pytest.mark.parametrize("feature", ["cross_repo_memos", "publishing"])
-def test_feature_default_follows_profile(reg, tmp_path, feature):
+def test_feature_default_follows_profile(reg, tmp_path: Path, feature) -> None:
     assert mp.feature_enabled(feature) is False
     repo = tmp_path / "authoring"
     repo.mkdir()
@@ -254,7 +255,7 @@ def test_feature_default_follows_profile(reg, tmp_path, feature):
 
 
 @pytest.mark.parametrize("feature", ["cross_repo_memos", "publishing"])
-def test_feature_explicit_overrides_both_ways(reg, tmp_path, feature):
+def test_feature_explicit_overrides_both_ways(reg, tmp_path: Path, feature) -> None:
     _write(reg, '"coordinator.feature.%s" = "on"\n' % feature)
     assert mp.feature_enabled(feature) is True
     repo = tmp_path / "authoring"
@@ -265,14 +266,14 @@ def test_feature_explicit_overrides_both_ways(reg, tmp_path, feature):
     assert mp.feature_enabled(feature) is False
 
 
-def _author_repo(reg, tmp_path, extra=""):
+def _author_repo(reg, tmp_path, extra: str = "") -> None:
     repo = tmp_path / "authoring"
     repo.mkdir(exist_ok=True)
     (repo / ".coordinator-dev-repo").write_text("")
     _write(reg, '"repos.content" = "%s"\n%s' % (repo.as_posix(), extra))
 
 
-def test_gem_cross_repo_commit_unset_is_on_for_consumer_and_author(reg, tmp_path):
+def test_gem_cross_repo_commit_unset_is_on_for_consumer_and_author(reg, tmp_path: Path) -> None:
     assert mp.machine_profile() == "consumer"
     assert mp.feature_enabled("gem_cross_repo_commit") is True
     _author_repo(reg, tmp_path)
@@ -281,7 +282,7 @@ def test_gem_cross_repo_commit_unset_is_on_for_consumer_and_author(reg, tmp_path
     assert mp.feature_enabled("gem_cross_repo_commit") is True
 
 
-def test_gem_cross_repo_commit_explicit_wins_both_ways(reg, tmp_path):
+def test_gem_cross_repo_commit_explicit_wins_both_ways(reg, tmp_path: Path) -> None:
     _write(reg, '"coordinator.feature.gem_cross_repo_commit" = "off"\n')
     assert mp.feature_enabled("gem_cross_repo_commit") is False
     _write(reg, '"coordinator.feature.gem_cross_repo_commit" = "on"\n')
@@ -291,13 +292,13 @@ def test_gem_cross_repo_commit_explicit_wins_both_ways(reg, tmp_path):
     assert mp.feature_enabled("gem_cross_repo_commit") is False
 
 
-def test_gem_cross_repo_commit_env_override_wins(reg, monkeypatch):
+def test_gem_cross_repo_commit_env_override_wins(reg, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_FEATURE_GEM_CROSS_REPO_COMMIT", "off")
     mp.reset_cache()
     assert mp.feature_enabled("gem_cross_repo_commit") is False
 
 
-def test_gem_cross_repo_commit_leaves_other_defaults(reg):
+def test_gem_cross_repo_commit_leaves_other_defaults(reg) -> None:
     assert mp.feature_enabled("gem_cross_repo_commit") is True
     assert mp.feature_enabled("cross_repo_memos") is False
     assert mp.feature_enabled("publishing") is False
@@ -307,13 +308,13 @@ def test_gem_cross_repo_commit_leaves_other_defaults(reg):
 _OOR = "out_of_repo_write_block"
 
 
-def test_out_of_repo_write_block_registered():
+def test_out_of_repo_write_block_registered() -> None:
     assert len(mp.FEATURES) == 5
     assert _OOR in mp.FEATURES
     assert not hasattr(mp, "OUT_OF_REPO_WRITE_GUARDS")
 
 
-def test_out_of_repo_write_block_unset_follows_profile(reg, tmp_path):
+def test_out_of_repo_write_block_unset_follows_profile(reg, tmp_path: Path) -> None:
     assert mp.out_of_repo_write_blocked() is False
     _author_repo(reg, tmp_path)
     mp.reset_cache()
@@ -321,7 +322,7 @@ def test_out_of_repo_write_block_unset_follows_profile(reg, tmp_path):
     assert mp.out_of_repo_write_blocked() is True
 
 
-def test_out_of_repo_write_block_explicit_wins_on_both_profiles(reg, tmp_path):
+def test_out_of_repo_write_block_explicit_wins_on_both_profiles(reg, tmp_path: Path) -> None:
     _write(reg, '"coordinator.feature.%s" = "on"\n' % _OOR)
     assert mp.out_of_repo_write_blocked() is True
     _author_repo(reg, tmp_path, '"coordinator.feature.%s" = "off"\n' % _OOR)
@@ -340,22 +341,22 @@ def test_out_of_repo_write_block_explicit_wins_on_both_profiles(reg, tmp_path):
     ],
 )
 @pytest.mark.parametrize("block", ["on", "off"])
-def test_out_of_repo_write_guards_never_deny_whatever_the_feature(reg, name, block):
+def test_out_of_repo_write_guards_never_deny_whatever_the_feature(reg, name, block) -> None:
     _write(reg, '"coordinator.feature.%s" = "%s"\n' % (_OOR, block))
     assert _nudges(mp.apply_guard_level(name, _deny()))
 
 
-def test_features_are_independent(reg):
+def test_features_are_independent(reg) -> None:
     _write(reg, '"coordinator.feature.publishing" = "on"\n')
     assert mp.feature_enabled("publishing") is True
     assert mp.feature_enabled("cross_repo_memos") is False
 
 
-def test_source_default_rung(reg):
+def test_source_default_rung(reg) -> None:
     assert mp.machine_profile_source() == ("consumer", "default", None)
 
 
-def test_source_sentinel_rung_names_the_repo(reg, tmp_path):
+def test_source_sentinel_rung_names_the_repo(reg, tmp_path: Path) -> None:
     repo = tmp_path / "clone"
     repo.mkdir()
     (repo / ".coordinator-dev-repo").write_text("")
@@ -364,7 +365,7 @@ def test_source_sentinel_rung_names_the_repo(reg, tmp_path):
     assert mp.machine_profile() == "author"
 
 
-def test_source_explicit_rung_beats_sentinel(reg, tmp_path):
+def test_source_explicit_rung_beats_sentinel(reg, tmp_path: Path) -> None:
     repo = tmp_path / "clone"
     repo.mkdir()
     (repo / ".coordinator-dev-repo").write_text("")
@@ -377,7 +378,7 @@ def test_source_explicit_rung_beats_sentinel(reg, tmp_path):
     assert mp.machine_profile_source() == ("author", "explicit-key", mp.PROFILE_KEY)
 
 
-def test_suite_guard_keeps_its_block_for_subagent_and_em(monkeypatch):
+def test_suite_guard_keeps_its_block_for_subagent_and_em(monkeypatch: pytest.MonkeyPatch) -> None:
     """An unscheduled suite run is box-degrading: the registered deny holds for both callers."""
     monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL_CHECK-TEST-SUITE-INVOCATION", "strict")
     mp.reset_cache()
@@ -387,7 +388,7 @@ def test_suite_guard_keeps_its_block_for_subagent_and_em(monkeypatch):
     assert mp.is_deny_envelope(mp.apply_guard_level("check-test-suite-invocation", deny))
 
 
-def test_ladder_arm_env_pin_resolves_strict_on_consumer_box(reg, monkeypatch):
+def test_ladder_arm_env_pin_resolves_strict_on_consumer_box(reg, monkeypatch: pytest.MonkeyPatch) -> None:
     """The arm pins strict by env var on a consumer-profile box with an empty registry."""
     assert mp.machine_profile() == "consumer"
     assert mp.guard_level("xs-lane-shell-write") == "warn"
@@ -396,7 +397,7 @@ def test_ladder_arm_env_pin_resolves_strict_on_consumer_box(reg, monkeypatch):
     assert mp.guard_level("nudge-em-code-dispatch") == "strict"
 
 
-def test_ladder_arm_registry_pin_resolves_strict_and_is_never_stale(reg):
+def test_ladder_arm_registry_pin_resolves_strict_and_is_never_stale(reg) -> None:
     assert mp.guard_level("nudge-em-code-dispatch") == "warn"
     _write(reg, '"coordinator.guard_level" = "strict"\n')
     assert mp.guard_level("nudge-em-code-dispatch") == "strict"
@@ -404,14 +405,14 @@ def test_ladder_arm_registry_pin_resolves_strict_and_is_never_stale(reg):
     assert mp.guard_level("nudge-em-code-dispatch") == "warn"
 
 
-def test_resolved_level_is_floor_or_log_whatever_the_key(reg, monkeypatch):
+def test_resolved_level_is_floor_or_log_whatever_the_key(reg, monkeypatch: pytest.MonkeyPatch) -> None:
     for level in ("warn", "strict", "off"):
         monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
         assert mp.resolved_level("nudge_em_code_dispatch") == "log"
         assert mp.resolved_level("destructive-rm") == "floor"
 
 
-def test_envelope_records_floor_and_unregistered_returns_a_nudge(reg, monkeypatch):
+def test_envelope_records_floor_and_unregistered_returns_a_nudge(reg, monkeypatch: pytest.MonkeyPatch) -> None:
     for level in ("strict", "warn", "off"):
         monkeypatch.setenv("MACHINE_LOCAL_COORDINATOR_GUARD_LEVEL", level)
         assert _nudges(mp.apply_guard_level("nudge-em-code-dispatch", _deny()))
@@ -430,7 +431,7 @@ _OFF_LIST_OUT_OF_REPO = (
 
 
 @pytest.mark.parametrize("name", _OFF_LIST_OUT_OF_REPO)
-def test_fresh_author_box_denies_no_recoverable_out_of_repo_write(reg, tmp_path, name):
+def test_fresh_author_box_denies_no_recoverable_out_of_repo_write(reg, tmp_path: Path, name) -> None:
     repo = tmp_path / "authoring"
     repo.mkdir()
     (repo / ".coordinator-dev-repo").write_text("")
@@ -446,7 +447,7 @@ def _git_repo(tmp_path):
     return repo
 
 
-def test_one_event_yields_one_nudge_in_process(reg, tmp_path):
+def test_one_event_yields_one_nudge_in_process(reg, tmp_path: Path) -> None:
     repo = _git_repo(tmp_path)
     first = mp.apply_guard_level(
         "g1", _deny(), session_id="sess", cwd=str(repo), event_id="toolu_1"
@@ -462,7 +463,7 @@ def test_one_event_yields_one_nudge_in_process(reg, tmp_path):
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_one_event_yields_one_nudge_across_two_hook_processes(reg, tmp_path):
+def test_one_event_yields_one_nudge_across_two_hook_processes(reg, tmp_path: Path) -> None:
     import json
     import subprocess
     import sys
@@ -489,7 +490,7 @@ def test_one_event_yields_one_nudge_across_two_hook_processes(reg, tmp_path):
     assert sum(o is not None for o in outs) == 1
 
 
-def test_dispatch_two_off_list_denies_on_one_event_yield_one_advisory(reg, tmp_path, monkeypatch):
+def test_dispatch_two_off_list_denies_on_one_event_yield_one_advisory(reg, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     import json
 
     from coordinator_core.bash_guards import dispatch

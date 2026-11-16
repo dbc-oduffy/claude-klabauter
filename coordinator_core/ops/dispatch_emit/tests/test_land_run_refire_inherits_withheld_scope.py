@@ -35,12 +35,12 @@ HALT_REASON = "content-withheld"
 
 
 @pytest.fixture(autouse=True)
-def _ledger_open(monkeypatch):
+def _ledger_open(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(land_run, "_ledger_gate", lambda *a, **k: (None, None, []))
 
 
 @pytest.fixture(autouse=True)
-def _sessions_live(monkeypatch):
+def _sessions_live(monkeypatch: pytest.MonkeyPatch) -> None:
     from coordinator_core.session import touch_record
 
     monkeypatch.setattr(touch_record, "session_live", lambda sid, cwd=None: True)
@@ -73,7 +73,7 @@ def _resume() -> dict:
     return {"run_id": PRED, "sizing": SIZING, "run_artifacts": {"withheld": {INHERITED: HALT_REASON}}}
 
 
-def test_refire_lands_the_path_its_predecessor_withheld(repo):  # noqa: F811
+def test_refire_lands_the_path_its_predecessor_withheld(repo) -> None:  # noqa: F811
     _stage(repo)
     _predecessor_halt(repo, PRED, {INHERITED: HALT_REASON})
 
@@ -84,7 +84,7 @@ def test_refire_lands_the_path_its_predecessor_withheld(repo):  # noqa: F811
     assert out["shipped_claims"]["unbacked"] == []
 
 
-def test_the_same_landing_without_a_resume_lands_and_records_the_path_dropped_foreign(repo):  # noqa: F811
+def test_the_same_landing_without_a_resume_lands_and_records_the_path_dropped_foreign(repo) -> None:  # noqa: F811
     _stage(repo)
 
     out = prod._land(repo)
@@ -94,7 +94,7 @@ def test_the_same_landing_without_a_resume_lands_and_records_the_path_dropped_fo
     assert out["shipped_claims"]["dropped_foreign"] == [INHERITED], out
 
 
-def test_refire_lands_a_reviewer_applied_path(repo, monkeypatch):  # noqa: F811
+def test_refire_lands_a_reviewer_applied_path(repo, monkeypatch: pytest.MonkeyPatch) -> None:  # noqa: F811
     _stage(repo)
     monkeypatch.setattr(land_run, "inherited_scope", lambda root, resume: {INHERITED: ORIGIN_REVIEWER_APPLIED})
 
@@ -104,7 +104,7 @@ def test_refire_lands_a_reviewer_applied_path(repo, monkeypatch):  # noqa: F811
     assert INHERITED in prod._tree(repo)
 
 
-def test_a_path_a_different_halted_run_holds_lands_without_it_and_records_provenance(repo):  # noqa: F811
+def test_a_path_a_different_halted_run_holds_lands_without_it_and_records_provenance(repo) -> None:  # noqa: F811
     _stage(repo)
     _predecessor_halt(repo, PRED, {INHERITED: HALT_REASON})
     _predecessor_halt(repo, FOREIGN, {INHERITED: HALT_REASON})

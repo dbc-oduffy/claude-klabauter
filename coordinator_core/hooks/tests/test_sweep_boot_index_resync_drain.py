@@ -6,9 +6,11 @@ from __future__ import annotations
 import asyncio
 
 from coordinator_core.hooks import sweep_boot
+from pathlib import Path
+import pytest
 
 
-def _neutralise_other_legs(monkeypatch, root):
+def _neutralise_other_legs(monkeypatch, root) -> None:
     monkeypatch.setenv("COORDINATOR_FORWARDER_SELFHEAL_OFF", "1")
     monkeypatch.setenv("COORDINATOR_ORIENTATION_SELFHEAL_OFF", "1")
     monkeypatch.setenv("COORDINATOR_SESSION_REAP_OFF", "1")
@@ -16,11 +18,11 @@ def _neutralise_other_legs(monkeypatch, root):
     monkeypatch.setattr(sweep_boot, "_resolve_this_repo_root", lambda: str(root))
 
 
-def test_leg_called_once_per_handler_run(monkeypatch, tmp_path):
+def test_leg_called_once_per_handler_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _neutralise_other_legs(monkeypatch, tmp_path)
     calls = []
 
-    async def fake(repo_root):
+    async def fake(repo_root) -> None:
         calls.append(repo_root)
 
     monkeypatch.setattr(sweep_boot, "_drain_index_resyncs", fake)
@@ -28,7 +30,7 @@ def test_leg_called_once_per_handler_run(monkeypatch, tmp_path):
     assert calls == [str(tmp_path)]
 
 
-def test_raising_drain_is_isolated_and_handler_returns_no_advisory(monkeypatch, tmp_path):
+def test_raising_drain_is_isolated_and_handler_returns_no_advisory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     _neutralise_other_legs(monkeypatch, tmp_path)
     import coordinator_core.ops.fleet._index_resync_drain as drain
 
@@ -40,12 +42,12 @@ def test_raising_drain_is_isolated_and_handler_returns_no_advisory(monkeypatch, 
     assert result == sweep_boot.no_advisory()
 
 
-def test_off_switch_skips_drain(monkeypatch, tmp_path):
+def test_off_switch_skips_drain(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     import coordinator_core.ops.fleet._index_resync_drain as drain
 
     called = []
 
-    async def spy(*_a, **_k):
+    async def spy(*_a, **_k) -> None:
         called.append(1)
 
     monkeypatch.setattr(drain, "drain_pending_resyncs", spy)
@@ -54,12 +56,12 @@ def test_off_switch_skips_drain(monkeypatch, tmp_path):
     assert called == []
 
 
-def test_no_repo_root_skips_drain(monkeypatch):
+def test_no_repo_root_skips_drain(monkeypatch: pytest.MonkeyPatch) -> None:
     import coordinator_core.ops.fleet._index_resync_drain as drain
 
     called = []
 
-    async def spy(*_a, **_k):
+    async def spy(*_a, **_k) -> None:
         called.append(1)
 
     monkeypatch.setattr(drain, "drain_pending_resyncs", spy)
@@ -68,7 +70,7 @@ def test_no_repo_root_skips_drain(monkeypatch):
     assert called == []
 
 
-def test_no_records_spawns_nothing(monkeypatch, tmp_path):
+def test_no_records_spawns_nothing(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     (tmp_path / ".git").mkdir()
     monkeypatch.delenv("COORDINATOR_INDEX_RESYNC_DRAIN_OFF", raising=False)
     spawns = []

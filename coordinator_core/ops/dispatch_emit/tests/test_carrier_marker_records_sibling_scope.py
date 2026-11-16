@@ -9,13 +9,14 @@ from coordinator_core.ops.dispatch_emit.commit_request import parse_marker
 from coordinator_core.ops.dispatch_emit.emit import emit_script
 
 from .conftest import REVIEW_KW
+from pathlib import Path
 
 ROWS = [("C1", ()), ("C2", ()), ("C3", ()), ("C4", ()), ("C5", ("C1",))]
 ALL_IDS = ["C1", "C2", "C3", "C4", "C5"]
 
 
 @pytest.fixture
-def cap2(monkeypatch):
+def cap2(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(ss, "runtime_cap", lambda cpus=None: 2)
 
 
@@ -39,7 +40,7 @@ def _plan_file(tmp_path):
     return path
 
 
-def test_carrier_marker_names_other_siblings_rows_as_sibling_scope(tmp_path, cap2):
+def test_carrier_marker_names_other_siblings_rows_as_sibling_scope(tmp_path: Path, cap2) -> None:
     plan = _plan_file(tmp_path)
     with pytest.raises(ss.WidthOverCapError) as exc:
         emit_script(plan, repo_root=tmp_path, auto_split=True, **REVIEW_KW)
@@ -68,7 +69,7 @@ def test_carrier_marker_names_other_siblings_rows_as_sibling_scope(tmp_path, cap
     assert all(m is None for s, m in markers.values() if not s.carrier)
 
 
-def test_below_cap_marker_carries_no_sibling_scope(tmp_path):
+def test_below_cap_marker_carries_no_sibling_scope(tmp_path: Path) -> None:
     script = emit_script(_plan_file(tmp_path), repo_root=tmp_path, **REVIEW_KW)
     marker = parse_marker(script)
     assert marker is not None

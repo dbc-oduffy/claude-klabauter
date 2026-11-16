@@ -9,9 +9,11 @@ import time
 from coordinator_core.ops.fleet import scratch_hygiene as op
 from coordinator_core.ops.fleet import scratch_hygiene_plan as plan_module
 from coordinator_core.ops.fleet.scratch_hygiene_plan import classify_entry
+from pathlib import Path
+import pytest
 
 
-def _old_tree(root, name, files=3):
+def _old_tree(root, name, files: int = 3):
     d = root / "scratch" / name
     d.mkdir(parents=True)
     old = time.time() - 30 * 86400
@@ -23,14 +25,14 @@ def _old_tree(root, name, files=3):
     return d
 
 
-def test_entry_past_the_deadline_is_reported_unwalked(tmp_path):
+def test_entry_past_the_deadline_is_reported_unwalked(tmp_path: Path) -> None:
     entry = _old_tree(tmp_path, "a")
     rec = classify_entry(entry, repo_root=tmp_path, deadline=time.monotonic() - 1)
     assert (rec["action"], rec["reason"], rec["files"]) == ("skipped-budget", "budget-exhausted", 0)
     assert entry.exists()
 
 
-def test_zero_budget_apply_deletes_nothing_and_exits_one(tmp_path):
+def test_zero_budget_apply_deletes_nothing_and_exits_one(tmp_path: Path) -> None:
     entry = _old_tree(tmp_path, "a")
     out = op.run_hygiene({"repo_root": str(tmp_path), "cadence": "distill", "apply": True, "budget_secs": 0})
     assert [r["action"] for r in out["records"] if r.get("kind") == "purge" and r["path"] == "scratch/a"] == ["skipped-budget"]
@@ -38,19 +40,19 @@ def test_zero_budget_apply_deletes_nothing_and_exits_one(tmp_path):
     assert entry.exists()
 
 
-def test_apply_within_budget_deletes_the_gated_entry(tmp_path):
+def test_apply_within_budget_deletes_the_gated_entry(tmp_path: Path) -> None:
     entry = _old_tree(tmp_path, "a")
     out = op.run_hygiene({"repo_root": str(tmp_path), "cadence": "distill", "apply": True, "budget_secs": 30})
     assert [r["action"] for r in out["records"] if r.get("kind") == "purge" and r["path"] == "scratch/a"] == ["deleted"]
     assert not entry.exists()
 
 
-def test_negative_budget_is_a_bad_argument(tmp_path):
+def test_negative_budget_is_a_bad_argument(tmp_path: Path) -> None:
     out = op.run_hygiene({"repo_root": str(tmp_path), "cadence": "distill", "budget_secs": -1})
     assert out["exit_code"] == 2
 
 
-def _limited(monkeypatch, per_call):
+def _limited(monkeypatch, per_call) -> list[str]:
     """Make each run_hygiene call gate only ``per_call`` entries; the rest report skipped-budget."""
     real = plan_module.classify_entry
     seen: list[str] = []
@@ -67,7 +69,7 @@ def _limited(monkeypatch, per_call):
     return seen
 
 
-def _fixture(tmp_path, kept=5, old=15):
+def _fixture(tmp_path, kept: int = 5, old: int = 15) -> None:
     for i in range(kept):
         d = tmp_path / "scratch" / f"a{i:02d}-kept"
         d.mkdir(parents=True)
@@ -80,7 +82,7 @@ def _call(tmp_path, apply):
     return op.run_hygiene({"repo_root": str(tmp_path), "cadence": "distill", "apply": apply, "budget_secs": 30})
 
 
-def test_successive_apply_calls_drain_past_kept_leading_entries(tmp_path, monkeypatch):
+def test_successive_apply_calls_drain_past_kept_leading_entries(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fixture(tmp_path)
     seen = _limited(monkeypatch, 4)
     walked_per_call = []
@@ -96,7 +98,7 @@ def test_successive_apply_calls_drain_past_kept_leading_entries(tmp_path, monkey
     assert len(flat) == len(set(flat)) == 20
 
 
-def test_no_entry_is_walked_twice_before_all_are_walked_once(tmp_path, monkeypatch):
+def test_no_entry_is_walked_twice_before_all_are_walked_once(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fixture(tmp_path, old=0)
     seen = _limited(monkeypatch, 2)
     order = []
@@ -107,7 +109,7 @@ def test_no_entry_is_walked_twice_before_all_are_walked_once(tmp_path, monkeypat
     assert order == [f"a{i:02d}-kept" for i in range(5)] + ["a00-kept"]
 
 
-def test_cursor_names_an_entry_so_deletions_do_not_shift_the_resume_point(tmp_path, monkeypatch):
+def test_cursor_names_an_entry_so_deletions_do_not_shift_the_resume_point(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fixture(tmp_path, kept=0, old=6)
     seen = _limited(monkeypatch, 3)
     _call(tmp_path, True)
@@ -118,7 +120,7 @@ def test_cursor_names_an_entry_so_deletions_do_not_shift_the_resume_point(tmp_pa
     assert not list((tmp_path / "scratch").glob("b*-old"))
 
 
-def test_missing_or_garbled_cursor_starts_from_the_top(tmp_path, monkeypatch):
+def test_missing_or_garbled_cursor_starts_from_the_top(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fixture(tmp_path, kept=3, old=0)
     seen = _limited(monkeypatch, 1)
     (tmp_path / "scratch" / ".scratch-hygiene-cursor").write_text("{not json", encoding="utf-8")
@@ -126,7 +128,7 @@ def test_missing_or_garbled_cursor_starts_from_the_top(tmp_path, monkeypatch):
     assert seen == ["a00-kept"]
 
 
-def test_dry_run_advances_the_cursor_and_deletes_nothing(tmp_path, monkeypatch):
+def test_dry_run_advances_the_cursor_and_deletes_nothing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fixture(tmp_path, kept=2, old=4)
     seen = _limited(monkeypatch, 4)
     dry = _call(tmp_path, False)
@@ -145,7 +147,7 @@ def _default_call(tmp_path, apply):
     return op.run_hygiene({"repo_root": str(tmp_path), "cadence": "distill", "apply": apply})
 
 
-def test_default_call_walks_a_slow_first_entry_and_moves_the_cursor(tmp_path, monkeypatch):
+def test_default_call_walks_a_slow_first_entry_and_moves_the_cursor(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     for apply in (False, True):
         root = tmp_path / str(apply)
         root.mkdir()
@@ -170,7 +172,7 @@ def test_default_call_walks_a_slow_first_entry_and_moves_the_cursor(tmp_path, mo
         assert (root / "scratch" / "b00-old").exists() is (not apply)
 
 
-def test_default_calls_cover_the_whole_backlog_and_wrap(tmp_path, monkeypatch):
+def test_default_calls_cover_the_whole_backlog_and_wrap(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fixture(tmp_path, kept=4, old=0)
     real = plan_module._walk
     order: list[str] = []
@@ -190,7 +192,7 @@ def test_default_calls_cover_the_whole_backlog_and_wrap(tmp_path, monkeypatch):
     assert order == [f"a{i:02d}-kept" for i in range(4)] + ["a00-kept"]
 
 
-def test_an_entry_cut_off_by_the_deadline_is_never_deleted(tmp_path, monkeypatch):
+def test_an_entry_cut_off_by_the_deadline_is_never_deleted(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fixture(tmp_path, kept=0, old=3)
     real = plan_module._walk
 
@@ -206,7 +208,7 @@ def test_an_entry_cut_off_by_the_deadline_is_never_deleted(tmp_path, monkeypatch
     assert len(list((tmp_path / "scratch").glob("b*-old"))) == 3
 
 
-def test_progressing_budget_deferred_call_exits_zero_and_other_skips_still_exit_one(tmp_path, monkeypatch):
+def test_progressing_budget_deferred_call_exits_zero_and_other_skips_still_exit_one(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fixture(tmp_path, kept=0, old=4)
     seen = _limited(monkeypatch, 2)
     for apply in (False, True):
@@ -231,7 +233,7 @@ def test_progressing_budget_deferred_call_exits_zero_and_other_skips_still_exit_
     assert out["contract_exit"] == 1
 
 
-def test_default_call_on_a_large_backlog_with_slow_first_entry_exits_zero(tmp_path, monkeypatch):
+def test_default_call_on_a_large_backlog_with_slow_first_entry_exits_zero(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     _fixture(tmp_path, kept=0, old=60)
     real = plan_module._walk
     monkeypatch.setattr(op, "DEFAULT_BUDGET_SECS", 0.01)
@@ -250,7 +252,7 @@ def test_default_call_on_a_large_backlog_with_slow_first_entry_exits_zero(tmp_pa
     assert out["contract_exit"] == 0
 
 
-def test_cursor_file_is_never_a_purge_candidate(tmp_path):
+def test_cursor_file_is_never_a_purge_candidate(tmp_path: Path) -> None:
     _fixture(tmp_path, kept=0, old=1)
     _call(tmp_path, True)
     cursor = tmp_path / "scratch" / ".scratch-hygiene-cursor"
@@ -381,7 +383,7 @@ def test_files_follow_directories_and_the_cursor_rotates_through_both(tmp_path):
     assert [os.path.basename(p) for p, _d in gone] == ["b-file", "z-dir", "a-file"]
 
 
-def test_a_top_level_file_entry_is_deleted(tmp_path):
+def test_a_top_level_file_entry_is_deleted(tmp_path: Path) -> None:
     (tmp_path / "scratch").mkdir()
     f = tmp_path / "scratch" / "probe.txt"
     f.write_text("x", encoding="utf-8")

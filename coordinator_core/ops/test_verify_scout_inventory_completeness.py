@@ -7,6 +7,7 @@ import pytest
 
 from coordinator_core.ipc import get_op_handler
 from coordinator_core.ops import verify_scout_inventory_completeness as mod
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -14,7 +15,7 @@ pytestmark = [
 ]
 
 
-def _git(repo, *args):
+def _git(repo, *args) -> None:
     subprocess.run(
         ["git", *args],
         cwd=str(repo),
@@ -25,7 +26,7 @@ def _git(repo, *args):
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     root = tmp_path / "repo"
     root.mkdir()
     _git(root, "init")
@@ -43,18 +44,18 @@ def repo(tmp_path):
     return root
 
 
-def _expected(names):
+def _expected(names) -> list[str]:
     return [f"tasks/demo/scratch/{name}" for name in names]
 
 
-def test_all_present_and_long_enough_is_complete(repo):
+def test_all_present_and_long_enough_is_complete(repo) -> None:
     result = mod.verify_scout_inventory_completeness(
         _expected(["complete.md"]), worktree=repo
     )
     assert result == {"complete": True, "missing": [], "short": []}
 
 
-def test_missing_file_is_reported(repo):
+def test_missing_file_is_reported(repo) -> None:
     result = mod.verify_scout_inventory_completeness(
         _expected(["complete.md", "absent.md"]), worktree=repo
     )
@@ -65,7 +66,7 @@ def test_missing_file_is_reported(repo):
     }
 
 
-def test_short_file_is_reported(repo):
+def test_short_file_is_reported(repo) -> None:
     result = mod.verify_scout_inventory_completeness(
         _expected(["complete.md", "short.md"]), worktree=repo
     )
@@ -76,40 +77,40 @@ def test_short_file_is_reported(repo):
     }
 
 
-def test_directory_at_expected_path_counts_as_missing(repo):
+def test_directory_at_expected_path_counts_as_missing(repo) -> None:
     result = mod.verify_scout_inventory_completeness(
         _expected(["complete.md"]) + ["tasks/demo/scratch"], worktree=repo
     )
     assert result["missing"] == ["tasks/demo/scratch"]
 
 
-def test_custom_min_lines_threshold(repo):
+def test_custom_min_lines_threshold(repo) -> None:
     result = mod.verify_scout_inventory_completeness(
         _expected(["short.md"]), min_lines=3, worktree=repo
     )
     assert result == {"complete": True, "missing": [], "short": []}
 
 
-def test_absolute_path_entry_resolves_outside_worktree(repo, tmp_path):
+def test_absolute_path_entry_resolves_outside_worktree(repo, tmp_path: Path) -> None:
     outside = tmp_path / "outside.md"
     outside.write_text("line\n" * 40, encoding="utf-8")
     result = mod.verify_scout_inventory_completeness([str(outside)], worktree=repo)
     assert result == {"complete": True, "missing": [], "short": []}
 
 
-def test_empty_expected_files_is_vacuously_complete(repo):
+def test_empty_expected_files_is_vacuously_complete(repo) -> None:
     result = mod.verify_scout_inventory_completeness([], worktree=repo)
     assert result == {"complete": True, "missing": [], "short": []}
 
 
-def test_double_invocation_identical_results(repo):
+def test_double_invocation_identical_results(repo) -> None:
     expected = _expected(["complete.md", "short.md", "absent.md"])
     first = mod.verify_scout_inventory_completeness(expected, worktree=repo)
     second = mod.verify_scout_inventory_completeness(expected, worktree=repo)
     assert first == second
 
 
-def test_op_registered_and_handler_contract(repo):
+def test_op_registered_and_handler_contract(repo) -> None:
     handler = get_op_handler("research.verify_scout_inventory_completeness")
     assert handler is not None
     common_dir = repo / ".git"
@@ -123,25 +124,25 @@ def test_op_registered_and_handler_contract(repo):
     }
 
 
-def test_handler_repo_root_none_falls_back_to_cwd(repo, monkeypatch):
+def test_handler_repo_root_none_falls_back_to_cwd(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.chdir(repo)
     result = mod._handler({"expected_files": _expected(["complete.md"])}, None)
     assert result == {"complete": True, "missing": [], "short": []}
 
 
-def test_handler_rejects_non_list_expected_files(repo):
+def test_handler_rejects_non_list_expected_files(repo) -> None:
     common_dir = repo / ".git"
     with pytest.raises(mod.ScoutInventoryParamsError, match="expected_files"):
         mod._handler({"expected_files": "not-a-list"}, common_dir)
 
 
-def test_handler_rejects_non_string_entries(repo):
+def test_handler_rejects_non_string_entries(repo) -> None:
     common_dir = repo / ".git"
     with pytest.raises(mod.ScoutInventoryParamsError, match="expected_files"):
         mod._handler({"expected_files": ["ok.md", 3]}, common_dir)
 
 
-def test_handler_rejects_non_int_min_lines(repo):
+def test_handler_rejects_non_int_min_lines(repo) -> None:
     common_dir = repo / ".git"
     with pytest.raises(mod.ScoutInventoryParamsError, match="min_lines"):
         mod._handler(
@@ -149,13 +150,13 @@ def test_handler_rejects_non_int_min_lines(repo):
         )
 
 
-def test_handler_rejects_bool_min_lines(repo):
+def test_handler_rejects_bool_min_lines(repo) -> None:
     common_dir = repo / ".git"
     with pytest.raises(mod.ScoutInventoryParamsError, match="min_lines"):
         mod._handler({"expected_files": [], "min_lines": True}, common_dir)
 
 
-def test_handler_repo_root_mismatch_raises(repo, tmp_path):
+def test_handler_repo_root_mismatch_raises(repo, tmp_path: Path) -> None:
     other = tmp_path / "other"
     other.mkdir()
     _git(other, "init")

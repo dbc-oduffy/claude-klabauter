@@ -12,6 +12,7 @@ from coordinator_core.bash_guards.check_test_suite_invocation import (
     classify_command_precision,
     classify_runner_footprint,
 )
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -36,7 +37,7 @@ _EXT = {"pytest": "py", "node-test": "mjs"}
 
 
 @pytest.fixture
-def repo(tmp_path):
+def repo(tmp_path: Path) -> Path:
     (tmp_path / "pyproject.toml").write_text(
         '[tool.pytest.ini_options]\ntestpaths = ["tests"]\n'
     )
@@ -46,7 +47,7 @@ def repo(tmp_path):
     return tmp_path
 
 
-def _files(repo, name, n):
+def _files(repo, name, n) -> list[str]:
     ext = _EXT.get(name, "ts")
     out = []
     for i in range(n):
@@ -58,7 +59,7 @@ def _files(repo, name, n):
 
 @pytest.mark.parametrize("n", [1, 3])
 @pytest.mark.parametrize("name", sorted(ADMITTED_HEADS))
-def test_head_with_files_is_scoped(repo, name, n):
+def test_head_with_files_is_scoped(repo, name, n) -> None:
     cmd = " ".join(ADMITTED_HEADS[name] + _files(repo, name, n))
     assert classify_runner_footprint(cmd, cwd=str(repo)) == RUNNER_FOOTPRINT_SCOPED
     assert classify_command_precision(cmd, cwd=str(repo)) == []
@@ -66,18 +67,18 @@ def test_head_with_files_is_scoped(repo, name, n):
 
 
 @pytest.mark.parametrize("cmd", ["pnpm test", "npm test", "pytest", "pytest -q"])
-def test_suite_shapes_are_not_scoped(repo, cmd):
+def test_suite_shapes_are_not_scoped(repo, cmd) -> None:
     assert classify_runner_footprint(cmd, cwd=str(repo)) != RUNNER_FOOTPRINT_SCOPED
 
 
 @pytest.mark.parametrize("n", [1, 3])
 @pytest.mark.parametrize("name", sorted(NOT_ADMITTED_HEADS))
-def test_unadmitted_head_is_not_scoped(repo, name, n):
+def test_unadmitted_head_is_not_scoped(repo, name, n) -> None:
     cmd = " ".join(NOT_ADMITTED_HEADS[name] + _files(repo, name, n))
     assert classify_runner_footprint(cmd, cwd=str(repo)) != RUNNER_FOOTPRINT_SCOPED
 
 
-def test_declared_fast_test_cmd_bare_is_denied_but_files_appended_is_scoped(repo):
+def test_declared_fast_test_cmd_bare_is_denied_but_files_appended_is_scoped(repo) -> None:
     (repo / "tests" / "test_0.py").write_text("")
     assert classify_runner_footprint("pytest -q", cwd=str(repo)) != RUNNER_FOOTPRINT_SCOPED
     assert classify_command("pytest -q", cwd=str(repo))

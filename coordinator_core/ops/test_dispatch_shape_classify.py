@@ -13,6 +13,7 @@ import pytest
 
 from coordinator_core.ops.dispatch_shape_classify import main
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -41,7 +42,7 @@ def _run(argv, capsys, env_extra=None):
     return rc, captured.out, captured.err
 
 
-def _init_repo(tmp_path):
+def _init_repo(tmp_path) -> None:
     subprocess.run(
         ["git", "init", "-q"], cwd=str(tmp_path), check=True,
         timeout=10, stdin=subprocess.DEVNULL,
@@ -49,7 +50,7 @@ def _init_repo(tmp_path):
     )
 
 
-def _write_agents(tmp_path, sid, rows):
+def _write_agents(tmp_path, sid, rows) -> None:
     d = session_dir_for(tmp_path / ".git", sid)
     d.mkdir(parents=True, exist_ok=True)
     (d / "dispatched-agents.txt").write_text("\n".join(rows) + "\n", encoding="utf-8")
@@ -70,7 +71,7 @@ def _spine_row(row_id, deferred):
     return _SPINE_ROW.format(id=row_id, deferred=deferred)
 
 
-def _write_plan(plan_path, spine_body):
+def _write_plan(plan_path, spine_body) -> None:
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(
         "# Test Plan\n\nSome plan body text.\n\n## Tasks\n\n"
@@ -79,7 +80,7 @@ def _write_plan(plan_path, spine_body):
     )
 
 
-def _write_plan_no_spine(plan_path):
+def _write_plan_no_spine(plan_path) -> None:
     plan_path.parent.mkdir(parents=True, exist_ok=True)
     plan_path.write_text(
         "# Test Plan\n\n## Tasks\n\nNo machine-parseable spine here — just prose.\n\n"
@@ -88,25 +89,25 @@ def _write_plan_no_spine(plan_path):
     )
 
 
-def test_no_args_prints_usage_exit_0(capsys):
+def test_no_args_prints_usage_exit_0(capsys: pytest.CaptureFixture[str]) -> None:
     rc, out, err = _run([], capsys)
     assert rc == 0
     assert "Usage: classify-dispatch-shape.sh" in err
 
 
-def test_plan_file_flag_missing_path_exit_0(capsys):
+def test_plan_file_flag_missing_path_exit_0(capsys: pytest.CaptureFixture[str]) -> None:
     rc, out, err = _run(["--plan-file"], capsys)
     assert rc == 0
     assert "--plan-file requires a path argument" in err
 
 
-def test_plan_file_not_found_exit_0(capsys, tmp_path):
+def test_plan_file_not_found_exit_0(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     rc, out, err = _run(["--plan-file", str(tmp_path / "nope.md")], capsys)
     assert rc == 0
     assert "plan file not found" in err
 
 
-def test_a_three_chunks_three_executors_silent(capsys, tmp_path):
+def test_a_three_chunks_three_executors_silent(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     _init_repo(tmp_path)
     sid = "test-session-sid-001"
     _write_agents(
@@ -129,7 +130,7 @@ def test_a_three_chunks_three_executors_silent(capsys, tmp_path):
     assert "DISPATCH SHAPE QUESTION" not in err
 
 
-def test_b_three_chunks_one_executor_offer(capsys, tmp_path):
+def test_b_three_chunks_one_executor_offer(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     _init_repo(tmp_path)
     sid = "test-session-sid-001"
     _write_agents(
@@ -156,7 +157,7 @@ def test_b_three_chunks_one_executor_offer(capsys, tmp_path):
     assert "Multi-plan sessions may include" in err
 
 
-def test_c_no_spine_silent(capsys, tmp_path):
+def test_c_no_spine_silent(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     _init_repo(tmp_path)
     sid = "test-session-sid-001"
     _write_agents(
@@ -174,7 +175,7 @@ def test_c_no_spine_silent(capsys, tmp_path):
     assert "DISPATCH SHAPE QUESTION" not in err
 
 
-def test_d_deferred_rows_excluded_from_denominator(capsys, tmp_path):
+def test_d_deferred_rows_excluded_from_denominator(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     _init_repo(tmp_path)
     sid = "test-session-sid-001"
     _write_agents(tmp_path, sid, ["agent-solo-001\tsonnet\tgeneral-purpose\t1782100000"])
@@ -189,7 +190,7 @@ def test_d_deferred_rows_excluded_from_denominator(capsys, tmp_path):
     assert "DISPATCH SHAPE QUESTION" not in err
 
 
-def test_d2_deferred_rows_do_not_suppress_offer_when_denominator_gt_1(capsys, tmp_path):
+def test_d2_deferred_rows_do_not_suppress_offer_when_denominator_gt_1(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     _init_repo(tmp_path)
     sid = "test-session-sid-001"
     _write_agents(
@@ -218,7 +219,7 @@ def test_d2_deferred_rows_do_not_suppress_offer_when_denominator_gt_1(capsys, tm
     assert "DISPATCH SHAPE QUESTION" in err
 
 
-def test_f3_reviewer_agents_excluded_from_executor_count(capsys, tmp_path):
+def test_f3_reviewer_agents_excluded_from_executor_count(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     _init_repo(tmp_path)
     sid = "test-session-sid-001"
     _write_agents(
@@ -241,7 +242,7 @@ def test_f3_reviewer_agents_excluded_from_executor_count(capsys, tmp_path):
     assert "DISPATCH SHAPE QUESTION" in err
 
 
-def test_f3b_three_executors_plus_reviewers_no_offer(capsys, tmp_path):
+def test_f3b_three_executors_plus_reviewers_no_offer(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     _init_repo(tmp_path)
     sid = "test-session-sid-001"
     _write_agents(
@@ -266,7 +267,7 @@ def test_f3b_three_executors_plus_reviewers_no_offer(capsys, tmp_path):
     assert "DISPATCH SHAPE QUESTION" not in err
 
 
-def test_f7_zero_executor_agents_no_offer(capsys, tmp_path):
+def test_f7_zero_executor_agents_no_offer(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     _init_repo(tmp_path)
     sid = "test-session-sid-001"
     _write_agents(
@@ -289,7 +290,7 @@ def test_f7_zero_executor_agents_no_offer(capsys, tmp_path):
     assert "DISPATCH SHAPE QUESTION" not in err
 
 
-def test_g1_multiple_fenced_blocks_malformed_spine_silent(capsys, tmp_path):
+def test_g1_multiple_fenced_blocks_malformed_spine_silent(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     _init_repo(tmp_path)
     sid = "test-session-sid-001"
     _write_agents(tmp_path, sid, ["agent-solo-001\tsonnet\tgeneral-purpose\t1782100000"])
@@ -313,7 +314,7 @@ def test_g1_multiple_fenced_blocks_malformed_spine_silent(capsys, tmp_path):
     assert "DISPATCH SHAPE QUESTION" not in err
 
 
-def test_no_git_repo_silent(capsys, tmp_path):
+def test_no_git_repo_silent(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     plan = tmp_path / "docs" / "plans" / "test-plan.md"
     spine = _spine_row("C1", "false") + _spine_row("C2", "false") + _spine_row("C3", "false")
     _write_plan(plan, spine)
@@ -332,7 +333,7 @@ def test_no_git_repo_silent(capsys, tmp_path):
     assert "DISPATCH SHAPE QUESTION" not in err
 
 
-def test_no_agents_file_silent(capsys, tmp_path):
+def test_no_agents_file_silent(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     _init_repo(tmp_path)
     plan = tmp_path / "docs" / "plans" / "test-plan.md"
     spine = _spine_row("C1", "false") + _spine_row("C2", "false") + _spine_row("C3", "false")
@@ -345,7 +346,7 @@ def test_no_agents_file_silent(capsys, tmp_path):
     assert "DISPATCH SHAPE QUESTION" not in err
 
 
-def test_slug_resolution_via_script_dir(capsys, tmp_path):
+def test_slug_resolution_via_script_dir(capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     """A bare slug (no --plan-file) resolves via the docs/plans/ search order,
     using script_dir to derive REPO_ROOT the same way the DoE trampoline would."""
     _init_repo(tmp_path)
@@ -375,7 +376,7 @@ def test_slug_resolution_via_script_dir(capsys, tmp_path):
     assert "DISPATCH SHAPE QUESTION" in err
 
 
-def test_executor_class_filter_feature_dev_prefix():
+def test_executor_class_filter_feature_dev_prefix() -> None:
     from coordinator_core.ops.dispatch_shape_classify import _is_executor_class
 
     assert _is_executor_class("general-purpose") is True

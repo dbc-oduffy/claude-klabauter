@@ -343,6 +343,27 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "function threads no session id to release one with",
         "confirmed": True,
     },
+    "benchmarks/ask_gate_run_bound_process_budget.py::_seed_history": {
+        "reason": "ineligible: a benchmark fixture commit in a throwaway "
+        "repo -- no session holds a claim over these paths, and the "
+        "function threads no session id to release one with",
+        "confirmed": True,
+    },
+    "ops/ceremony/git_native.py::build_new_file_commit": {
+        "reason": "ineligible: object-only commit builder that writes no ref "
+        "and threads no session id; the caller that anchors the commit owns "
+        "any claim release",
+        "confirmed": True,
+    },
+    "warm/push_cadence.py::_land_tracking_ref": {
+        "reason": "ineligible: advances a remote-tracking ref after a push "
+        "and threads no session id to release a claim with",
+        "confirmed": True,
+    },
+    "ops/handoff_human_gate_clear.py::human_gate_clear_sync": {
+        "reason": "release",
+        "confirmed": True,
+    },
     "ops/dispatch_emit/land_run.py::_land_merge_artifacts": {
         "reason": "ineligible: already routed through the native commit_paths "
         "writer; lands only the run artifacts the merge commit left out, "
@@ -654,6 +675,10 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "reason": "release",
         "confirmed": True,
     },
+    "ops/fleet/_common.py::archive_and_commit_sync": {
+        "reason": "release",
+        "confirmed": False,
+    },
     "ops/fleet/_common.py::rm_and_commit": {
         "reason": "release",
         "confirmed": False,
@@ -849,6 +874,10 @@ ALLOWLIST: dict[str, dict[str, object]] = {
         "the HEAD symref -- no commit is authored, no pathspec, no session id",
         "confirmed": True,
     },
+    "ops/dispatch_emit/checkpoint_stamp.py::_land_stamp": {
+        "reason": "release",
+        "confirmed": True,
+    },
     "ops/research_close.py::_close_archived": {
         "reason": "ineligible: threads no session id (params carry none), so "
         "there is no id to release claims under",
@@ -914,6 +943,34 @@ ALLOWLIST: dict[str, dict[str, object]] = {
     "ops/dispatch_emit/run_close_parts.py::part_closes": {
         "reason": "ineligible: pure outcome computation; its commit_paths "
         "parameter is a read-only commit-to-files lookup, no commit is made",
+        "confirmed": True,
+    },
+    "benchmarks/ask_gate_run_bound_process_budget.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/consolidate_brief_cost.py::_build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/land_run_dirty_scan_bytes.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/publish_under_live_engine.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/review_prep_peer_scale.py::_fast_import": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/sizing_assemble_process_budget.py::build_fixture": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
+        "confirmed": True,
+    },
+    "benchmarks/validate_commit_machine_a_replay.py::inflate_index": {
+        "reason": "ineligible: benchmark fixture seeding a throwaway repo; no claims exist",
         "confirmed": True,
     },
     "benchmarks/distill_bookkeeping_bench.py::build_fixture": {

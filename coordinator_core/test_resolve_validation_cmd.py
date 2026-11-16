@@ -26,6 +26,11 @@ from coordinator_core.resolve_validation_cmd import (
     resolve_python_interp,
 )
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 pytestmark = [
     pytest.mark.spawns_process,
@@ -34,61 +39,61 @@ pytestmark = [
 
 
 @pytest.fixture(autouse=True)
-def _clean_env(monkeypatch):
+def _clean_env(monkeypatch: pytest.MonkeyPatch) -> None:
     for var in (FAST_TEST_CMD_ENV, FULL_TEST_CMD_ENV, SUPPRESS_METACHAR_WARN_ENV):
         monkeypatch.delenv(var, raising=False)
 
 
-def test_redact_for_diag_short_passthrough():
+def test_redact_for_diag_short_passthrough() -> None:
     assert redact_for_diag("pytest") == "pytest"
 
 
-def test_redact_for_diag_truncates_past_60_chars():
+def test_redact_for_diag_truncates_past_60_chars() -> None:
     s = "x" * 80
     out = redact_for_diag(s)
     assert out.startswith("x" * 60)
     assert "…(truncated; 80 chars total)" in out
 
 
-def test_redact_for_diag_boundary_exactly_60_not_truncated():
+def test_redact_for_diag_boundary_exactly_60_not_truncated() -> None:
     s = "x" * 60
     assert redact_for_diag(s) == s
 
 
-def test_metachar_warn_fires_on_dollar_paren(capsys):
+def test_metachar_warn_fires_on_dollar_paren(capsys: pytest.CaptureFixture[str]) -> None:
     metachar_warn("echo $(whoami)", "env-var")
     err = capsys.readouterr().err
     assert "WARN (step=env-var)" in err
     assert "cs_resolve_fast_test_cmd" in err
 
 
-def test_metachar_warn_fires_on_backtick(capsys):
+def test_metachar_warn_fires_on_backtick(capsys: pytest.CaptureFixture[str]) -> None:
     metachar_warn("echo `whoami`", "local-md")
     assert "WARN" in capsys.readouterr().err
 
 
-def test_metachar_warn_fires_on_semicolon_space(capsys):
+def test_metachar_warn_fires_on_semicolon_space(capsys: pytest.CaptureFixture[str]) -> None:
     metachar_warn("pytest; rm -rf /", "env-var")
     assert "WARN" in capsys.readouterr().err
 
 
-def test_metachar_warn_silent_on_clean_command(capsys):
+def test_metachar_warn_silent_on_clean_command(capsys: pytest.CaptureFixture[str]) -> None:
     metachar_warn("pnpm test", "env-var")
     assert capsys.readouterr().err == ""
 
 
-def test_metachar_warn_suppressed_via_env(monkeypatch, capsys):
+def test_metachar_warn_suppressed_via_env(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv(SUPPRESS_METACHAR_WARN_ENV, "1")
     metachar_warn("echo $(whoami)", "env-var")
     assert capsys.readouterr().err == ""
 
 
-def test_metachar_warn_custom_caller_label(capsys):
+def test_metachar_warn_custom_caller_label(capsys: pytest.CaptureFixture[str]) -> None:
     metachar_warn("echo $(x)", "env-var", "cs_resolve_full_test_cmd")
     assert "[cs_resolve_full_test_cmd]" in capsys.readouterr().err
 
 
-def test_resolve_python_interp_prefers_python3(monkeypatch):
+def test_resolve_python_interp_prefers_python3(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.resolve_validation_cmd.shutil.which",
         lambda name: f"/usr/bin/{name}" if name == "python3" else None,
@@ -96,7 +101,7 @@ def test_resolve_python_interp_prefers_python3(monkeypatch):
     assert resolve_python_interp() == "python3"
 
 
-def test_resolve_python_interp_falls_back_to_python(monkeypatch):
+def test_resolve_python_interp_falls_back_to_python(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.resolve_validation_cmd.shutil.which",
         lambda name: "/usr/bin/python" if name == "python" else None,
@@ -104,14 +109,14 @@ def test_resolve_python_interp_falls_back_to_python(monkeypatch):
     assert resolve_python_interp() == "python"
 
 
-def test_resolve_python_interp_none_when_neither_present(monkeypatch):
+def test_resolve_python_interp_none_when_neither_present(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.resolve_validation_cmd.shutil.which", lambda name: None
     )
     assert resolve_python_interp() is None
 
 
-def test_shared_console_python_returns_none_on_import_error(monkeypatch):
+def test_shared_console_python_returns_none_on_import_error(monkeypatch: pytest.MonkeyPatch) -> None:
     """`_shared_console_python` resolves `coordinator/bin/lib/python_interp.py`
     -- but `coordinator_core` and `coordinator/bin` publish to klabauter as
     TWO INDEPENDENT mirror rows (setup/publish-targets.portable:
@@ -129,7 +134,7 @@ def test_shared_console_python_returns_none_on_import_error(monkeypatch):
 
     real_import = builtins.__import__
 
-    def _fake_import(name, *args, **kwargs):
+    def _fake_import(name, *args, **kwargs) -> ModuleType:
         if name == "python_interp":
             raise ImportError("simulated missing coordinator/bin/lib")
         return real_import(name, *args, **kwargs)
@@ -139,7 +144,7 @@ def test_shared_console_python_returns_none_on_import_error(monkeypatch):
     assert _shared_console_python() is None
 
 
-def test_normalize_python_token_bare_python_no_args(monkeypatch):
+def test_normalize_python_token_bare_python_no_args(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.resolve_validation_cmd.resolve_python_interp",
         lambda: "python3",
@@ -147,7 +152,7 @@ def test_normalize_python_token_bare_python_no_args(monkeypatch):
     assert normalize_python_token("python") == "python3"
 
 
-def test_normalize_python_token_bare_python_with_args(monkeypatch):
+def test_normalize_python_token_bare_python_with_args(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.resolve_validation_cmd.resolve_python_interp",
         lambda: "python3",
@@ -158,27 +163,27 @@ def test_normalize_python_token_bare_python_with_args(monkeypatch):
     )
 
 
-def test_normalize_python_token_does_not_match_python3():
+def test_normalize_python_token_does_not_match_python3() -> None:
     assert normalize_python_token("python3 -m pytest") == "python3 -m pytest"
 
 
-def test_normalize_python_token_does_not_match_python2():
+def test_normalize_python_token_does_not_match_python2() -> None:
     assert normalize_python_token("python2 foo.py") == "python2 foo.py"
 
 
-def test_normalize_python_token_does_not_match_explicit_path():
+def test_normalize_python_token_does_not_match_explicit_path() -> None:
     assert normalize_python_token("/usr/bin/python foo.py") == "/usr/bin/python foo.py"
 
 
-def test_normalize_python_token_does_not_match_env_prefixed():
+def test_normalize_python_token_does_not_match_env_prefixed() -> None:
     assert normalize_python_token("FOO=1 python foo.py") == "FOO=1 python foo.py"
 
 
-def test_normalize_python_token_passthrough_non_python():
+def test_normalize_python_token_passthrough_non_python() -> None:
     assert normalize_python_token("pnpm test") == "pnpm test"
 
 
-def test_normalize_python_token_raises_when_no_interpreter(monkeypatch, capsys):
+def test_normalize_python_token_raises_when_no_interpreter(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setattr(
         "coordinator_core.resolve_validation_cmd.resolve_python_interp", lambda: None
     )
@@ -187,7 +192,7 @@ def test_normalize_python_token_raises_when_no_interpreter(monkeypatch, capsys):
     assert "no python3/python on PATH" in capsys.readouterr().err
 
 
-def test_underscore_normalize_python_token_bare_python_no_args(monkeypatch):
+def test_underscore_normalize_python_token_bare_python_no_args(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.resolve_validation_cmd._resolve_python_interp",
         lambda repo_root=None: "python3",
@@ -195,7 +200,7 @@ def test_underscore_normalize_python_token_bare_python_no_args(monkeypatch):
     assert _normalize_python_token("python") == "python3"
 
 
-def test_underscore_normalize_python_token_bare_python3_no_args(monkeypatch):
+def test_underscore_normalize_python_token_bare_python3_no_args(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.resolve_validation_cmd._resolve_python_interp",
         lambda repo_root=None: "/repo/.venv/bin/python3",
@@ -203,7 +208,7 @@ def test_underscore_normalize_python_token_bare_python3_no_args(monkeypatch):
     assert _normalize_python_token("python3") == "/repo/.venv/bin/python3"
 
 
-def test_underscore_normalize_python_token_bare_python3_with_args(monkeypatch):
+def test_underscore_normalize_python_token_bare_python3_with_args(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "coordinator_core.resolve_validation_cmd._resolve_python_interp",
         lambda repo_root=None: "/repo/.venv/bin/python3",
@@ -214,11 +219,11 @@ def test_underscore_normalize_python_token_bare_python3_with_args(monkeypatch):
     )
 
 
-def test_underscore_normalize_python_token_does_not_match_python2():
+def test_underscore_normalize_python_token_does_not_match_python2() -> None:
     assert _normalize_python_token("python2 foo.py") == "python2 foo.py"
 
 
-def test_underscore_normalize_python_token_does_not_match_explicit_path():
+def test_underscore_normalize_python_token_does_not_match_explicit_path() -> None:
     assert (
         _normalize_python_token("/usr/bin/python3 foo.py")
         == "/usr/bin/python3 foo.py"
@@ -226,8 +231,8 @@ def test_underscore_normalize_python_token_does_not_match_explicit_path():
 
 
 def test_underscore_normalize_python_token_raises_when_no_interpreter_for_python3(
-    monkeypatch, capsys
-):
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setattr(
         "coordinator_core.resolve_validation_cmd._resolve_python_interp",
         lambda repo_root=None: None,
@@ -237,7 +242,7 @@ def test_underscore_normalize_python_token_raises_when_no_interpreter_for_python
     assert "no python3/python on PATH" in capsys.readouterr().err
 
 
-def test_fast_env_var_wins_over_local_md(monkeypatch, tmp_path):
+def test_fast_env_var_wins_over_local_md(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "---\nfast_test_cmd: pytest local\n---\n"
     )
@@ -246,7 +251,7 @@ def test_fast_env_var_wins_over_local_md(monkeypatch, tmp_path):
     assert result == ResolvedCommand("pytest env", 0)
 
 
-def test_fast_local_md_resolution(tmp_path):
+def test_fast_local_md_resolution(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "---\nfast_test_cmd: pytest -x tests/\n---\n"
     )
@@ -254,7 +259,7 @@ def test_fast_local_md_resolution(tmp_path):
     assert result == ResolvedCommand("pytest -x tests/", 0)
 
 
-def test_fast_local_md_preserves_internal_whitespace_strips_quotes(tmp_path):
+def test_fast_local_md_preserves_internal_whitespace_strips_quotes(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         '---\nfast_test_cmd: "pytest  -x  tests/"\n---\n'
     )
@@ -263,7 +268,7 @@ def test_fast_local_md_preserves_internal_whitespace_strips_quotes(tmp_path):
     assert result.exit_code == 0
 
 
-def test_fast_local_md_preserves_interior_single_quoted_marker_expression(tmp_path):
+def test_fast_local_md_preserves_interior_single_quoted_marker_expression(tmp_path: Path) -> None:
     """Regression: a quoted multi-word marker-selector argument (the
     coordinator.local.md shape from the BREAK-CLASS bug this pins) must
     survive resolution intact, as ONE shell-executable argument — not word-
@@ -282,7 +287,7 @@ def test_fast_local_md_preserves_interior_single_quoted_marker_expression(tmp_pa
     assert argv[:5] == ["python3", "-m", "pytest", "-m", "not cadence and not complete and not pending_fix and not designed_red"]
 
 
-def test_full_local_md_preserves_interior_single_quoted_marker_expression(tmp_path):
+def test_full_local_md_preserves_interior_single_quoted_marker_expression(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "---\nfull_test_cmd: \"python3 -m pytest -m 'not pending_fix and "
         "not designed_red'\"\n---\n"
@@ -297,7 +302,7 @@ def test_full_local_md_preserves_interior_single_quoted_marker_expression(tmp_pa
     assert argv == ["python3", "-m", "pytest", "-m", "not pending_fix and not designed_red"]
 
 
-def test_fast_local_md_marker_expression_survives_a_real_shell(tmp_path):
+def test_fast_local_md_marker_expression_survives_a_real_shell(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "---\nfast_test_cmd: \"python3 -m pytest -m 'not cadence and not "
         "complete and not pending_fix and not designed_red'\"\n---\n"
@@ -321,19 +326,19 @@ def test_fast_local_md_marker_expression_survives_a_real_shell(tmp_path):
     )
 
 
-def test_check_escape_residue_raises_on_unresolvable_escaped_quote(monkeypatch):
+def test_check_escape_residue_raises_on_unresolvable_escaped_quote(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(FAST_TEST_CMD_ENV, 'pytest -m \\"not slow\\"')
     result = cs_resolve_fast_test_cmd("/nonexistent")
     assert result == ResolvedCommand(None, 126)
 
 
-def test_full_check_escape_residue_raises_on_unresolvable_escaped_quote(monkeypatch):
+def test_full_check_escape_residue_raises_on_unresolvable_escaped_quote(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(FULL_TEST_CMD_ENV, 'pytest -m \\"not slow\\"')
     result = cs_resolve_full_test_cmd("/nonexistent")
     assert result == ResolvedCommand(None, 126)
 
 
-def test_fast_skip_when_unconfigured(tmp_path, capsys):
+def test_fast_skip_when_unconfigured(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     result = cs_resolve_fast_test_cmd(str(tmp_path))
     assert result == ResolvedCommand(None, 2)
     err = capsys.readouterr().err
@@ -342,7 +347,7 @@ def test_fast_skip_when_unconfigured(tmp_path, capsys):
     assert "fast_test_cmd" in err
 
 
-def test_fast_normalizes_bare_python_from_env(monkeypatch):
+def test_fast_normalizes_bare_python_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(FAST_TEST_CMD_ENV, "python run.py")
     monkeypatch.setattr(
         "coordinator_core.resolve_validation_cmd.resolve_python_interp",
@@ -352,7 +357,7 @@ def test_fast_normalizes_bare_python_from_env(monkeypatch):
     assert result == ResolvedCommand("python3 run.py", 0)
 
 
-def test_fast_exit_127_when_bare_python_and_no_interpreter(monkeypatch):
+def test_fast_exit_127_when_bare_python_and_no_interpreter(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(FAST_TEST_CMD_ENV, "python")
     monkeypatch.setattr(
         "coordinator_core.resolve_validation_cmd.resolve_python_interp", lambda: None
@@ -361,13 +366,13 @@ def test_fast_exit_127_when_bare_python_and_no_interpreter(monkeypatch):
     assert result == ResolvedCommand(None, 127)
 
 
-def test_fast_ignores_local_md_missing_fast_test_cmd_key(tmp_path):
+def test_fast_ignores_local_md_missing_fast_test_cmd_key(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text("---\nfull_test_cmd: pytest\n---\n")
     result = cs_resolve_fast_test_cmd(str(tmp_path))
     assert result == ResolvedCommand(None, 2)
 
 
-def test_fast_only_reads_between_first_and_second_marker(tmp_path):
+def test_fast_only_reads_between_first_and_second_marker(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "preamble\nfast_test_cmd: should-not-count\n"
         "---\nfast_test_cmd: pytest tests/\n---\nfast_test_cmd: should-not-count-either\n"
@@ -376,26 +381,26 @@ def test_fast_only_reads_between_first_and_second_marker(tmp_path):
     assert result == ResolvedCommand("pytest tests/", 0)
 
 
-def test_read_local_md_key_basic(tmp_path):
+def test_read_local_md_key_basic(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text("---\nfull_test_cmd: pytest -q\n---\n")
     assert cs_read_local_md_key(str(tmp_path), "full_test_cmd") == "pytest -q"
 
 
-def test_read_local_md_key_missing_file(tmp_path):
+def test_read_local_md_key_missing_file(tmp_path: Path) -> None:
     assert cs_read_local_md_key(str(tmp_path), "full_test_cmd") == ""
 
 
-def test_read_local_md_key_missing_key(tmp_path):
+def test_read_local_md_key_missing_key(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text("---\nfast_test_cmd: pytest\n---\n")
     assert cs_read_local_md_key(str(tmp_path), "full_test_cmd") == ""
 
 
-def test_read_local_md_key_strips_quotes(tmp_path):
+def test_read_local_md_key_strips_quotes(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text('---\nfull_test_cmd: "pytest -q"\n---\n')
     assert cs_read_local_md_key(str(tmp_path), "full_test_cmd") == "pytest -q"
 
 
-def test_read_local_md_key_faithful_unanchored_match_no_prefix_strip(tmp_path):
+def test_read_local_md_key_faithful_unanchored_match_no_prefix_strip(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "---\nsome_prefix full_test_cmd: pytest -q\n---\n"
     )
@@ -403,13 +408,13 @@ def test_read_local_md_key_faithful_unanchored_match_no_prefix_strip(tmp_path):
     assert result == "some_prefix full_test_cmd: pytest -q"
 
 
-def test_full_env_var_resolution(monkeypatch):
+def test_full_env_var_resolution(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv(FULL_TEST_CMD_ENV, "pytest --full")
     result = cs_resolve_full_test_cmd("/nonexistent")
     assert result == ResolvedCommand("pytest --full", 0)
 
 
-def test_full_local_md_resolution(tmp_path):
+def test_full_local_md_resolution(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "---\nfull_test_cmd: pytest --full-suite\n---\n"
     )
@@ -417,7 +422,7 @@ def test_full_local_md_resolution(tmp_path):
     assert result == ResolvedCommand("pytest --full-suite", 0)
 
 
-def test_full_falls_back_to_fast_with_exit_3(tmp_path):
+def test_full_falls_back_to_fast_with_exit_3(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "---\nfast_test_cmd: pytest -x tests/\n---\n"
     )
@@ -425,7 +430,7 @@ def test_full_falls_back_to_fast_with_exit_3(tmp_path):
     assert result == ResolvedCommand("pytest -x tests/", 3)
 
 
-def test_full_falls_back_to_fast_suppresses_fast_tier_diags(tmp_path, capsys):
+def test_full_falls_back_to_fast_suppresses_fast_tier_diags(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "---\nfast_test_cmd: pytest -x tests/\n---\n"
     )
@@ -435,13 +440,13 @@ def test_full_falls_back_to_fast_suppresses_fast_tier_diags(tmp_path, capsys):
     assert "step=fast-fallback" in err
 
 
-def test_full_skip_when_neither_tier_configured(tmp_path, capsys):
+def test_full_skip_when_neither_tier_configured(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     result = cs_resolve_full_test_cmd(str(tmp_path))
     assert result == ResolvedCommand(None, 2)
     assert "step=skipped" in capsys.readouterr().err
 
 
-def test_full_propagates_hard_failure_not_a_skip(monkeypatch, tmp_path, capsys):
+def test_full_propagates_hard_failure_not_a_skip(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.setenv(FAST_TEST_CMD_ENV, "python")
     monkeypatch.setattr(
         "coordinator_core.resolve_validation_cmd.resolve_python_interp", lambda: None
@@ -451,7 +456,7 @@ def test_full_propagates_hard_failure_not_a_skip(monkeypatch, tmp_path, capsys):
     assert "propagating (NOT a skip)" in capsys.readouterr().err
 
 
-def test_full_env_var_wins_over_local_md_key(monkeypatch, tmp_path):
+def test_full_env_var_wins_over_local_md_key(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "---\nfull_test_cmd: pytest local\n---\n"
     )
@@ -460,7 +465,7 @@ def test_full_env_var_wins_over_local_md_key(monkeypatch, tmp_path):
     assert result == ResolvedCommand("pytest env", 0)
 
 
-def test_full_local_md_key_wins_over_fast_fallback(tmp_path):
+def test_full_local_md_key_wins_over_fast_fallback(tmp_path: Path) -> None:
     (tmp_path / "coordinator.local.md").write_text(
         "---\nfull_test_cmd: pytest full\nfast_test_cmd: pytest fast\n---\n"
     )
@@ -468,7 +473,7 @@ def test_full_local_md_key_wins_over_fast_fallback(tmp_path):
     assert result == ResolvedCommand("pytest full", 0)
 
 
-def test_main_help_prints_real_usage_and_returns_0(capsys):
+def test_main_help_prints_real_usage_and_returns_0(capsys: pytest.CaptureFixture[str]) -> None:
     # B13: --help/-h used to fall through to the unknown-mode branch (no
     # help branch existed), so the launcher's `_usage_lines` synthesized an
     # empty usage instead of surfacing this real one.
@@ -480,7 +485,7 @@ def test_main_help_prints_real_usage_and_returns_0(capsys):
     assert "--read-key" in out
 
 
-def test_main_dash_h_prints_real_usage_and_returns_0(capsys):
+def test_main_dash_h_prints_real_usage_and_returns_0(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["-h"])
     out = capsys.readouterr().out
     assert rc == 0

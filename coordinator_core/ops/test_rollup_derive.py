@@ -15,12 +15,13 @@ from coordinator_core.win_portability import (
     no_console_creationflags,
     no_console_passthrough_kwargs,
 )
+from pathlib import Path
 
 pytestmark = [pytest.mark.cadence, pytest.mark.spawns_process]
 
 
 @pytest.fixture()
-def git_repo(tmp_path):
+def git_repo(tmp_path: Path) -> Path:
     repo = tmp_path / "repo"
     repo.mkdir()
     subprocess.run(["git", "init", "-q", "-b", "main"], cwd=repo, check=True, **no_console_passthrough_kwargs())
@@ -45,21 +46,21 @@ def _commit(repo, message: str) -> str:
     return result.stdout.strip()
 
 
-def test_no_args_prints_usage_to_stdout_exit_1(capsys):
+def test_no_args_prints_usage_to_stdout_exit_1(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main([])
     out = capsys.readouterr().out
     assert rc == 1
     assert "Usage: rollup-derive.sh <artifact-id>" in out
 
 
-def test_help_prints_usage_to_stdout_exit_0(capsys):
+def test_help_prints_usage_to_stdout_exit_0(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main(["--help"])
     out = capsys.readouterr().out
     assert rc == 0
     assert "Usage: rollup-derive.sh <artifact-id>" in out
 
 
-def test_empty_artifact_id_errors_exit_1(capsys):
+def test_empty_artifact_id_errors_exit_1(capsys: pytest.CaptureFixture[str]) -> None:
     rc = main([""])
     captured = capsys.readouterr()
     assert rc == 1
@@ -67,7 +68,7 @@ def test_empty_artifact_id_errors_exit_1(capsys):
     assert captured.out == ""
 
 
-def test_not_a_git_repo_unknown_error_exit_0(tmp_path, monkeypatch, capsys):
+def test_not_a_git_repo_unknown_error_exit_0(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.chdir(tmp_path)
     rc = main(["some-id"])
     captured = capsys.readouterr()
@@ -76,7 +77,7 @@ def test_not_a_git_repo_unknown_error_exit_0(tmp_path, monkeypatch, capsys):
     assert "not inside a git repository" in captured.err
 
 
-def test_no_resolving_commits_vacuous_pass(git_repo, monkeypatch, capsys):
+def test_no_resolving_commits_vacuous_pass(git_repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """AC14: rollup_derive's own zero-match case is per-query, not a scan --
     this token must stay a distinct, quiet value (never collapsed into
     not-shipped), which is exactly what the downstream promoter's own AC14
@@ -91,7 +92,7 @@ def test_no_resolving_commits_vacuous_pass(git_repo, monkeypatch, capsys):
     assert captured.out.strip() == "no-resolving-commits"
 
 
-def test_substring_prefix_is_not_a_false_positive_match(git_repo, monkeypatch, capsys):
+def test_substring_prefix_is_not_a_false_positive_match(git_repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """hnd-abc must NOT match a commit carrying Resolves: hnd-abc-def456 (F1/P1 fix)."""
     monkeypatch.chdir(git_repo)
     _commit(git_repo, "commit with longer id\n\nResolves: hnd-abc-def456\n")
@@ -101,7 +102,7 @@ def test_substring_prefix_is_not_a_false_positive_match(git_repo, monkeypatch, c
     assert captured.out.strip() == "no-resolving-commits"
 
 
-def test_body_mention_without_trailer_does_not_resolve(git_repo, monkeypatch, capsys):
+def test_body_mention_without_trailer_does_not_resolve(git_repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """(c) A commit whose BODY merely mentions the artifact id, with no actual
     `Resolves:` trailer at the true trailer position, does NOT resolve.
 
@@ -132,7 +133,7 @@ def test_body_mention_without_trailer_does_not_resolve(git_repo, monkeypatch, ca
     assert captured.out.strip() == "no-resolving-commits"
 
 
-def test_malformed_trailer_drop_is_named_on_stderr(git_repo, monkeypatch, capsys):
+def test_malformed_trailer_drop_is_named_on_stderr(git_repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """A `Resolves:` line outside the final trailer block is the one drop reason
     the caller can act on -- stdout keeps the quiet token, stderr names the count
     and the SHA so the reader does not conclude the primitive is broken.
@@ -153,7 +154,7 @@ def test_malformed_trailer_drop_is_named_on_stderr(git_repo, monkeypatch, capsys
     assert sha in captured.err
 
 
-def test_prefix_sharing_drop_is_not_reported_on_stderr(git_repo, monkeypatch, capsys):
+def test_prefix_sharing_drop_is_not_reported_on_stderr(git_repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """The prefix-sharing narrowing is correct behaviour, not a defect -- reporting
     it would train the reader to ignore the malformed-trailer line.
     """
@@ -167,7 +168,7 @@ def test_prefix_sharing_drop_is_not_reported_on_stderr(git_repo, monkeypatch, ca
     assert captured.err == ""
 
 
-def test_true_zero_candidates_emits_no_diagnostic(git_repo, monkeypatch, capsys):
+def test_true_zero_candidates_emits_no_diagnostic(git_repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     monkeypatch.chdir(git_repo)
     _commit(git_repo, "unrelated commit")
 
@@ -178,7 +179,7 @@ def test_true_zero_candidates_emits_no_diagnostic(git_repo, monkeypatch, capsys)
     assert captured.err == ""
 
 
-def test_shipped_all_resolving_commits_on_origin_main(tmp_path, monkeypatch, capsys):
+def test_shipped_all_resolving_commits_on_origin_main(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     bare = tmp_path / "bare_origin.git"
     work = tmp_path / "work"
     subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(bare)], check=True, **no_console_passthrough_kwargs())
@@ -199,7 +200,7 @@ def test_shipped_all_resolving_commits_on_origin_main(tmp_path, monkeypatch, cap
     assert lines[1:] == [sha]
 
 
-def test_not_shipped_resolving_commit_ahead_of_origin_main(tmp_path, monkeypatch, capsys):
+def test_not_shipped_resolving_commit_ahead_of_origin_main(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     bare = tmp_path / "bare_origin.git"
     work = tmp_path / "work"
     subprocess.run(["git", "init", "--bare", "-q", "-b", "main", str(bare)], check=True, **no_console_passthrough_kwargs())
@@ -221,7 +222,7 @@ def test_not_shipped_resolving_commit_ahead_of_origin_main(tmp_path, monkeypatch
     assert lines[1:] == [sha]
 
 
-def test_multiple_resolving_commits_batched_order_preserved(git_repo, monkeypatch, capsys):
+def test_multiple_resolving_commits_batched_order_preserved(git_repo, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """C19: several candidates resolve the SAME artifact-id -- the batched
     primary-trailer lookup must still find every one of them and preserve
     the original (git log --all, reverse-chron) candidate order, exactly
@@ -240,7 +241,7 @@ def test_multiple_resolving_commits_batched_order_preserved(git_repo, monkeypatc
     assert lines[1:] == [sha2, sha1]
 
 
-def test_resolving_shas_batches_one_git_log_call_not_per_candidate(git_repo, monkeypatch):
+def test_resolving_shas_batches_one_git_log_call_not_per_candidate(git_repo, monkeypatch: pytest.MonkeyPatch) -> None:
     """C19: the primary-trailer lookup across N candidates must cost ONE
     `git log` spawn, not one per candidate -- pinning the fix against
     regressing back to the N-spawn shape.
@@ -268,7 +269,7 @@ def test_resolving_shas_batches_one_git_log_call_not_per_candidate(git_repo, mon
     assert len(batch_calls) == 1
 
 
-def test_unknown_error_when_origin_main_missing(tmp_path, monkeypatch, capsys):
+def test_unknown_error_when_origin_main_missing(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     """No 'origin' remote at all -> resolvers.main rc=2 -> propagated as unknown-error, not not-shipped."""
     work = tmp_path / "work"
     subprocess.run(["git", "init", "-q", "-b", "main", str(work)], check=True, **no_console_passthrough_kwargs())

@@ -10,6 +10,7 @@ from coordinator_core.ops.dispatch_emit.ask_contract import RECORD_DIR_ROOT, Man
 from coordinator_core.ops.dispatch_emit.write_baseline import WITHHELD_PRINTS_FILE, capture, fingerprint
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -18,7 +19,7 @@ PLAN = "docs/plans/inherit.md"
 DIRTY = "pkg/carried.py"
 
 
-def _put(root, rel, text):
+def _put(root, rel, text) -> None:
     p = root / rel
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(text, encoding="utf-8")
@@ -53,12 +54,12 @@ def _call(root, manifest, run_dir):
     return terminal_commit._pre_existing_dirt_refusal(root, manifest, verdict, ledger, PLAN, run_dir)
 
 
-def test_path_withheld_by_predecessor_proceeds(tmp_path):
+def test_path_withheld_by_predecessor_proceeds(tmp_path: Path) -> None:
     manifest, run_dir = _setup(tmp_path, True)
     assert _call(tmp_path, manifest, run_dir) is None
 
 
-def test_same_dirt_not_withheld_by_predecessor_refuses(tmp_path):
+def test_same_dirt_not_withheld_by_predecessor_refuses(tmp_path: Path) -> None:
     manifest, run_dir = _setup(tmp_path, False)
     refusal = _call(tmp_path, manifest, run_dir)
     assert refusal is not None
@@ -75,7 +76,7 @@ def _shipped(root, withheld):
     return shipped_gate(root, NOTE, landing_paths=["pkg/carried.py", "pkg/other.py"], withheld_paths=withheld)[0]
 
 
-def test_shipped_gate_admits_inherited_withheld_path(tmp_path):
+def test_shipped_gate_admits_inherited_withheld_path(tmp_path: Path) -> None:
     withheld = {DIRTY: "withhold_paths: abc", "pkg/other.py": "withhold_paths: z"}
     inherited = {DIRTY: "predecessor-withheld"}
     assert _shipped(tmp_path, withheld) is not None
@@ -84,7 +85,7 @@ def test_shipped_gate_admits_inherited_withheld_path(tmp_path):
     assert _shipped(tmp_path, kept) is not None  # a non-inherited withheld claim still refuses
 
 
-def test_shipped_gate_admits_reviewer_applied_and_completed_row_path(tmp_path):
+def test_shipped_gate_admits_reviewer_applied_and_completed_row_path(tmp_path: Path) -> None:
     withheld = {DIRTY: "withhold_paths: abc"}
     kept = terminal_commit._drop_inherited_withheld(
         tmp_path, withheld, {DIRTY: "reviewer-applied"}, "run-a", PLAN
@@ -93,7 +94,7 @@ def test_shipped_gate_admits_reviewer_applied_and_completed_row_path(tmp_path):
     assert _shipped(tmp_path, kept) is None
 
 
-def test_foreign_held_inherited_path_stays_withheld(tmp_path, monkeypatch):
+def test_foreign_held_inherited_path_stays_withheld(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(terminal_commit, "foreign_halted_withheld", lambda *a, **k: {DIRTY: "other-run"})
     kept = terminal_commit._drop_inherited_withheld(
         tmp_path, {DIRTY: "w"}, {DIRTY: "predecessor-withheld"}, "run-a", PLAN
@@ -144,20 +145,20 @@ def _refire(root, withheld: dict, live_sibling: str = ""):
     return terminal_commit._handler(params, repo_root=root / ".git")
 
 
-def test_terminal_commit_lands_the_path_a_halted_predecessor_withheld(repo):  # noqa: F811
+def test_terminal_commit_lands_the_path_a_halted_predecessor_withheld(repo) -> None:  # noqa: F811
     out = _refire(repo, {_INHERITED: "halt-record-only"})
 
     assert out.get("committed") is True, out
     assert _INHERITED in _fx._git(repo, "show", "--name-only", "--format=", out["sha"]).split()
 
 
-def test_terminal_commit_leaves_the_same_dirt_alone_without_a_predecessor_withhold(repo):  # noqa: F811
+def test_terminal_commit_leaves_the_same_dirt_alone_without_a_predecessor_withhold(repo) -> None:  # noqa: F811
     out = _refire(repo, {})
 
     assert _INHERITED not in (_fx._git(repo, "show", "--name-only", "--format=", out["sha"]).split() if out.get("sha") else [])
 
 
-def test_terminal_commit_withholds_an_inherited_path_a_live_sibling_claims(repo):  # noqa: F811
+def test_terminal_commit_withholds_an_inherited_path_a_live_sibling_claims(repo) -> None:  # noqa: F811
     from datetime import datetime, timedelta, timezone
 
     stamp = (datetime.now(timezone.utc) - timedelta(seconds=60)).strftime("%Y%m%dT%H%M%S")

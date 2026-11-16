@@ -142,15 +142,75 @@ def pre_existing_dirt(
     path is never dirt; ``unwritten`` still counts it, for the no-change refusal. A path whose bytes
     equal HEAD's blob, raw or in checkin form (a CRLF worktree file under ``core.autocrlf``), has no
     diff to land (another run committed it), so it is never dirt either; HEAD is read in-process
-    (``head_blobs``), no git spawn."""
+    (``head_blobs``), no git spawn. A path absent from HEAD that the repo's ignore rules match
+    (``IgnoreMatcher``) is gitignored scratch, never landable, so never dirt; a tracked path
+    matching an ignore rule still is. An ignore-rule gap keeps the path as dirt."""
     own = set(own_written)
     cand = [p for p in unwritten(root, baseline, paths) if p not in own and fingerprint(root, p) is not None]
     if not cand:
         return cand
     from coordinator_core.git.git_state import head_blobs
+    from coordinator_core.git.ignore_match import IgnoreMatcher
 
     head = head_blobs(root, cand)
-    return [p for p in cand if p not in head or not _equals_head(root, p, head[p][1])]
+    matcher: Optional[IgnoreMatcher] = None
+    out: list[str] = []
+    for p in cand:
+        if p in head:
+            if not _equals_head(root, p, head[p][1]):
+                out.append(p)
+            continue
+        matcher = matcher or IgnoreMatcher(Path(root))
+        if matcher.ignored(PurePosixPath(p.replace("\\", "/")).as_posix(), False) is not True:
+            out.append(p)
+    return out
+
+
+_DELIVERY_WALK_CAP = 500
+
+
+def delivered_at_head(root: Path, plan_rel: Optional[str], paths: Iterable[str]) -> frozenset[str]:
+    """The ``paths`` a commit already on HEAD's first-parent line changed since ``plan_rel`` was created
+    (its ``created:`` floor, one day of slack): a requirement whose delivery sits at HEAD is met, and
+    the worktree dirt left in such a file is a peer's, never this run's. Both pre-existing-dirt checks
+    credit it, so they cannot diverge. In-process (``_walk_commit_meta`` + tree reads, no spawn),
+    capped at ``_DELIVERY_WALK_CAP`` commits; nothing without a plan carrying a ``created:`` date.
+    Trap: any commit since the floor counts, a peer's included; the foreign-hunk check, not this
+    credit, keeps peers' lines out of the run's commit."""
+    wanted = {p.replace("\\", "/") for p in paths if isinstance(p, str) and p}
+    if not plan_rel or not wanted:
+        return frozenset()
+    from coordinator_core.git.git_dir import resolve_git_common_dir
+    from coordinator_core.git.git_state import head_sha
+    from coordinator_core.git.rollback_check import ABSENT, _blob_at_commit
+    from coordinator_core.ops.dispatch_emit.checkpoint_stamp import _walk_commit_meta, plan_created_floor
+
+    try:
+        floor = plan_created_floor((Path(root) / plan_rel).read_text(encoding="utf-8"))
+        sha = head_sha(root)
+        common = resolve_git_common_dir(Path(root))
+    except (OSError, ValueError):
+        return frozenset()
+    if floor is None or not sha:
+        return frozenset()
+    delivered: set[str] = set()
+    for _ in range(_DELIVERY_WALK_CAP):
+        meta = _walk_commit_meta(common, sha)
+        if meta is None:
+            break
+        epoch = meta.get("committer_epoch")
+        if isinstance(epoch, int) and epoch < floor:
+            break
+        parents = meta.get("parents") or []
+        for p in sorted(wanted - delivered):
+            cur = _blob_at_commit(common, sha, p)
+            prev = ABSENT if not parents else _blob_at_commit(common, parents[0], p)
+            if cur is not None and cur is not ABSENT and prev is not None and cur != prev:
+                delivered.add(p)
+        if delivered == wanted or not parents:
+            break
+        sha = parents[0]
+    return frozenset(delivered)
 
 
 def _equals_head(root: Path, rel: str, head_sha: str) -> bool:

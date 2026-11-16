@@ -13,6 +13,7 @@ import pytest
 from coordinator_core.install.write_surface import StaticClause
 from coordinator_core.ops import configure_git as cg
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 # Declared, not excused: this file spawns a real git process because the
 # hardening under test writes real git config (`gc.auto`,
@@ -40,7 +41,7 @@ def _init_repo(tmp_path):
     return repo
 
 
-def test_not_a_git_repo_fails(tmp_path, monkeypatch):
+def test_not_a_git_repo_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     empty = tmp_path / "not-a-repo"
     empty.mkdir()
     monkeypatch.chdir(empty)
@@ -48,7 +49,7 @@ def test_not_a_git_repo_fails(tmp_path, monkeypatch):
     assert rc == 1
 
 
-def test_install_clone_skipped_without_config_write(tmp_path, monkeypatch, capsys):
+def test_install_clone_skipped_without_config_write(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
     monkeypatch.setattr(cg, "is_install_clone", lambda p: True)
@@ -61,7 +62,7 @@ def test_install_clone_skipped_without_config_write(tmp_path, monkeypatch, capsy
     assert "install clone" in capsys.readouterr().out
 
 
-def test_configures_fresh_repo(tmp_path, monkeypatch):
+def test_configures_fresh_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
     rc = cg.main([])
@@ -70,7 +71,7 @@ def test_configures_fresh_repo(tmp_path, monkeypatch):
     assert _git(repo, "config", "--get", "core.checkStat").stdout.strip() == "minimal"
 
 
-def test_default_call_pins_gc_auto_and_maintenance_auto(tmp_path, monkeypatch):
+def test_default_call_pins_gc_auto_and_maintenance_auto(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
     assert cg.main([]) == 0
@@ -78,7 +79,7 @@ def test_default_call_pins_gc_auto_and_maintenance_auto(tmp_path, monkeypatch):
     assert _git(repo, "config", "--get", "maintenance.auto").stdout.strip() == "false"
 
 
-def test_default_call_overwrites_a_differing_maintenance_auto(tmp_path, monkeypatch):
+def test_default_call_overwrites_a_differing_maintenance_auto(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     _git(repo, "config", "maintenance.auto", "true")
     monkeypatch.chdir(repo)
@@ -86,7 +87,7 @@ def test_default_call_overwrites_a_differing_maintenance_auto(tmp_path, monkeypa
     assert _git(repo, "config", "--get", "maintenance.auto").stdout.strip() == "false"
 
 
-def test_idempotent_rerun_reports_no_change(tmp_path, monkeypatch, capsys):
+def test_idempotent_rerun_reports_no_change(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
     assert cg.main([]) == 0
@@ -100,7 +101,7 @@ def test_idempotent_rerun_reports_no_change(tmp_path, monkeypatch, capsys):
     assert _git(repo, "config", "--get", "core.checkStat").stdout.strip() == "minimal"
 
 
-def test_partial_prior_config_only_reports_changed_key(tmp_path, monkeypatch, capsys):
+def test_partial_prior_config_only_reports_changed_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _init_repo(tmp_path)
     _git(repo, "config", "gc.auto", "0")
     monkeypatch.chdir(repo)
@@ -113,7 +114,7 @@ def test_partial_prior_config_only_reports_changed_key(tmp_path, monkeypatch, ca
     assert _git(repo, "config", "--get", "core.checkStat").stdout.strip() == "minimal"
 
 
-def test_unrecognized_first_arg_behaves_as_per_repo_mode(tmp_path, monkeypatch):
+def test_unrecognized_first_arg_behaves_as_per_repo_mode(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
     rc = cg.main(["--globl"])
@@ -122,7 +123,7 @@ def test_unrecognized_first_arg_behaves_as_per_repo_mode(tmp_path, monkeypatch):
     assert _git(repo, "config", "--get", "core.checkStat").stdout.strip() == "minimal"
 
 
-def test_config_set_failure_exits_1_with_partial_success(tmp_path, monkeypatch, capsys):
+def test_config_set_failure_exits_1_with_partial_success(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
 
@@ -150,7 +151,7 @@ def test_config_set_failure_exits_1_with_partial_success(tmp_path, monkeypatch, 
     assert res.returncode != 0
 
 
-def test_global_scope_does_not_require_git_repo(tmp_path, monkeypatch):
+def test_global_scope_does_not_require_git_repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     outside = tmp_path / "outside"
     outside.mkdir()
     monkeypatch.chdir(outside)
@@ -178,7 +179,7 @@ def test_global_scope_does_not_require_git_repo(tmp_path, monkeypatch):
     assert res2.stdout.strip() == "minimal"
 
 
-def test_write_surface_derived_from_settings_not_restated():
+def test_write_surface_derived_from_settings_not_restated() -> None:
     declaration = cg.WRITE_SURFACE
     assert declaration.writer_id == "configure-git"
     assert declaration.source_module == "coordinator_core.ops.configure_git"
@@ -195,8 +196,8 @@ def test_write_surface_derived_from_settings_not_restated():
 
 
 def test_global_scope_setting_written_machine_wide_from_repo_invocation(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
@@ -224,7 +225,7 @@ def test_global_scope_setting_written_machine_wide_from_repo_invocation(
     assert local.returncode != 0
 
 
-def test_repo_scope_setting_follows_invocation_both_modes(tmp_path, monkeypatch):
+def test_repo_scope_setting_follows_invocation_both_modes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
 
@@ -247,7 +248,7 @@ def test_repo_scope_setting_follows_invocation_both_modes(tmp_path, monkeypatch)
     assert res.stdout.strip() == "0"
 
 
-def test_setting_skipped_for_platform(tmp_path, monkeypatch):
+def test_setting_skipped_for_platform(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
 
@@ -272,7 +273,7 @@ def test_setting_skipped_for_platform(tmp_path, monkeypatch):
     assert _git(repo, "config", "--get", "core.checkStat").stdout.strip() == "minimal"
 
 
-def test_setting_written_for_matching_platform(tmp_path, monkeypatch):
+def test_setting_written_for_matching_platform(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     repo = _init_repo(tmp_path)
     monkeypatch.chdir(repo)
 
@@ -294,7 +295,7 @@ def test_setting_written_for_matching_platform(tmp_path, monkeypatch):
 _HELP_BROWSER_KEYS = ("help.format", "web.browser", "browser.noop.cmd")
 
 
-def _stub_git_config(monkeypatch, initial: dict[tuple[tuple[str, ...], str], str]):
+def _stub_git_config(monkeypatch, initial: dict[tuple[tuple[str, ...], str], str]) -> tuple[dict[tuple[tuple[str, ...], str], str], list[tuple[tuple[str, ...], str]]]:
     store = dict(initial)
     get_calls: list[tuple[tuple[str, ...], str]] = []
 
@@ -303,7 +304,7 @@ def _stub_git_config(monkeypatch, initial: dict[tuple[tuple[str, ...], str], str
         get_calls.append((scope, key))
         return store.get((scope, key))
 
-    def fake_set(scope, key, value):
+    def fake_set(scope, key, value) -> bool:
         store[(tuple(scope), key)] = value
         return True
 
@@ -313,8 +314,8 @@ def _stub_git_config(monkeypatch, initial: dict[tuple[tuple[str, ...], str], str
 
 
 def test_help_browser_triple_written_machine_wide_windows_both_invocations(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
     for i, argv in enumerate(([], ["--global"])):
         store, _ = _stub_git_config(monkeypatch, {})
@@ -331,7 +332,7 @@ def test_help_browser_triple_written_machine_wide_windows_both_invocations(
             )[key]
 
 
-def test_help_browser_triple_not_written_on_non_windows(tmp_path, monkeypatch):
+def test_help_browser_triple_not_written_on_non_windows(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "linux")
     for i, argv in enumerate(([], ["--global"])):
         store, _ = _stub_git_config(monkeypatch, {})
@@ -347,8 +348,8 @@ def test_help_browser_triple_not_written_on_non_windows(tmp_path, monkeypatch):
 
 
 def test_help_browser_triple_skipped_when_web_browser_already_set(
-    tmp_path, monkeypatch, capsys
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
     store, _ = _stub_git_config(
         monkeypatch, {(("--global",), "web.browser"): "chrome"}
@@ -368,7 +369,7 @@ def test_help_browser_triple_skipped_when_web_browser_already_set(
     assert store[(("--global",), "web.browser")] == "chrome"
 
 
-def test_help_browser_group_precondition_evaluated_once_per_run(tmp_path, monkeypatch):
+def test_help_browser_group_precondition_evaluated_once_per_run(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(sys, "platform", "win32")
     _stub_git_config(monkeypatch, {})
     base = tmp_path / "once"
@@ -379,7 +380,7 @@ def test_help_browser_group_precondition_evaluated_once_per_run(tmp_path, monkey
     call_count = 0
     real_predicate = cg._help_browser_group_precondition
 
-    def counting_predicate(resolve_scope):
+    def counting_predicate(resolve_scope) -> tuple[bool, str]:
         nonlocal call_count
         call_count += 1
         return real_predicate(resolve_scope)
@@ -391,7 +392,7 @@ def test_help_browser_group_precondition_evaluated_once_per_run(tmp_path, monkey
     assert call_count == 1
 
 
-def test_settings_are_gitsetting_records():
+def test_settings_are_gitsetting_records() -> None:
     for setting in cg._SETTINGS:
         assert isinstance(setting, cg.GitSetting)
 

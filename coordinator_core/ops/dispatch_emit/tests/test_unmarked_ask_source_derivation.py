@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pytest
+from pathlib import Path
 
 pytestmark = pytest.mark.complete
 
@@ -15,7 +16,7 @@ TURN = "please make the widget faster and keep the old behaviour intact"
 _BLITZ = "export const meta = { phases: [{ title: 'Plan' }] };\nreturn { ready: [] };\n"
 
 
-def _git_skeleton(root):
+def _git_skeleton(root) -> None:
     git = root / ".git"
     (git / "objects").mkdir(parents=True)
     (git / "refs").mkdir()
@@ -23,7 +24,7 @@ def _git_skeleton(root):
 
 
 @pytest.fixture
-def repo(tmp_path, monkeypatch):
+def repo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     _git_skeleton(tmp_path)
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("COORDINATOR_SESSION_ID", SID)
@@ -32,7 +33,7 @@ def repo(tmp_path, monkeypatch):
     return tmp_path
 
 
-def _seed(root, text=TURN):
+def _seed(root, text=TURN) -> None:
     pm_turns.log_path(SID, str(root)).parent.mkdir(parents=True, exist_ok=True)
     assert pm_turns.append_turn(text, session_id=SID, cwd=str(root))["ok"]
 
@@ -43,20 +44,20 @@ def _emit(repo, **params):
     return out, records
 
 
-def test_unmarked_ask_with_no_recorded_turn_runs_relayed(repo):
+def test_unmarked_ask_with_no_recorded_turn_runs_relayed(repo) -> None:
     out, records = _emit(repo, ask="add a thing")
     assert out["ask_source"] == "relayed" and "pm_verification" not in out
     assert (records / RELAYED_ASK_FILE).is_file() and not (records / ASK_TEXT_FILE).exists()
 
 
-def test_unmarked_ask_equal_to_a_recorded_turn_runs_relayed(repo):
+def test_unmarked_ask_equal_to_a_recorded_turn_runs_relayed(repo) -> None:
     _seed(repo)
     out, records = _emit(repo, ask=TURN)
     assert out["ask_source"] == "relayed" and "pm_verification" not in out
     assert (records / RELAYED_ASK_FILE).is_file() and not (records / ASK_TEXT_FILE).exists()
 
 
-def test_unmarked_ask_reads_no_turn_log(repo, monkeypatch):
+def test_unmarked_ask_reads_no_turn_log(repo, monkeypatch: pytest.MonkeyPatch) -> None:
     _seed(repo)
 
     def boom(*_a, **_k):
@@ -68,14 +69,14 @@ def test_unmarked_ask_reads_no_turn_log(repo, monkeypatch):
     assert out["ask_source"] == "relayed"
 
 
-def test_pm_marked_ask_matching_a_turn_runs_pm_matched(repo):
+def test_pm_marked_ask_matching_a_turn_runs_pm_matched(repo) -> None:
     _seed(repo)
     out, records = _emit(repo, ask=TURN, ask_source="pm")
     assert out["ask_source"] == "pm" and out["pm_verification"] == "matched"
     assert (records / ASK_TEXT_FILE).is_file() and not (records / RELAYED_ASK_FILE).exists()
 
 
-def test_pm_marked_ask_quoting_no_turn_is_admitted_and_recorded_unreconciled(repo):
+def test_pm_marked_ask_quoting_no_turn_is_admitted_and_recorded_unreconciled(repo) -> None:
     _seed(repo)
     out, records = _emit(repo, ask="unrecorded words that nobody said", ask_source="pm")
     assert out["ask_source"] == "pm" and out["pm_verification"] == "unmatched-admitted"
@@ -84,7 +85,7 @@ def test_pm_marked_ask_quoting_no_turn_is_admitted_and_recorded_unreconciled(rep
     assert (records / ASK_TEXT_FILE).is_file()
 
 
-def test_pm_unmatched_advisory_shows_nearest_turn_and_diff(repo):
+def test_pm_unmatched_advisory_shows_nearest_turn_and_diff(repo) -> None:
     _seed(repo)
     near = TURN.replace("faster", "slower")
     out, _ = _emit(repo, ask=near, ask_source="pm")
@@ -93,7 +94,7 @@ def test_pm_unmatched_advisory_shows_nearest_turn_and_diff(repo):
     assert "Nearest recorded turn" in text and repr(TURN)[1:40] in text
 
 
-def test_pm_ask_of_joined_verbatim_turns_emits(repo):
+def test_pm_ask_of_joined_verbatim_turns_emits(repo) -> None:
     other = "also remember the rollback plan before shipping"
     _seed(repo)
     _seed(repo, other)
@@ -102,19 +103,19 @@ def test_pm_ask_of_joined_verbatim_turns_emits(repo):
     assert (records / ASK_TEXT_FILE).is_file()
 
 
-def test_pm_joined_ask_with_one_bad_piece_is_admitted_unreconciled(repo):
+def test_pm_joined_ask_with_one_bad_piece_is_admitted_unreconciled(repo) -> None:
     _seed(repo)
     out, _ = _emit(repo, ask=f"{TURN} / words nobody said at all", ask_source="pm")
     assert out["pm_verification"] == "unmatched-admitted"
     assert "quotes no recorded PM turn" in out["pm_advisory"]
 
 
-def test_pm_marked_ask_with_no_log_runs_pm_unverifiable(repo):
+def test_pm_marked_ask_with_no_log_runs_pm_unverifiable(repo) -> None:
     out, _ = _emit(repo, ask="unrecorded words", ask_source="pm")
     assert out["ask_source"] == "pm" and out["pm_verification"] == "unverifiable"
 
 
-def test_session_root_locates_the_turn_log_of_another_repo(repo, tmp_path_factory):
+def test_session_root_locates_the_turn_log_of_another_repo(repo, tmp_path_factory: pytest.TempPathFactory) -> None:
     other = tmp_path_factory.mktemp("target")
     _git_skeleton(other)
     _seed(repo)
@@ -124,13 +125,13 @@ def test_session_root_locates_the_turn_log_of_another_repo(repo, tmp_path_factor
     assert out["pm_verification"] == "unverifiable"
 
 
-def test_relayed_is_honoured_whatever_the_log_holds(repo):
+def test_relayed_is_honoured_whatever_the_log_holds(repo) -> None:
     _seed(repo)
     out, _ = _emit(repo, ask=TURN, ask_source="relayed")
     assert out["ask_source"] == "relayed" and "pm_verification" not in out
 
 
-def test_relayed_beside_a_sizing_path_is_still_refused(repo):
+def test_relayed_beside_a_sizing_path_is_still_refused(repo) -> None:
     with pytest.raises(ValueError, match="relayed"):
         op._dispatch_emit(
             {"ask": True, "sizing_path": "state/sizings/x.yaml", "ask_source": "relayed"}, repo_root=repo

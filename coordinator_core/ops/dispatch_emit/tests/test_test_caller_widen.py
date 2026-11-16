@@ -6,11 +6,12 @@ import pytest
 from coordinator_core.ops.dispatch_emit import emit
 from coordinator_core.ops.dispatch_emit.test_caller_widen import widen_waves
 from coordinator_core.ops.dispatch_emit.wave_map import WaveRow
+from pathlib import Path
 
 MOD = "pkg/sub/mod.py"
 
 
-def _row(rid, writes, body=""):
+def _row(rid, writes, body: str = "") -> WaveRow:
     return WaveRow(id=rid, title=rid, surface="s", writes=list(writes), reads=[], depends_on=[], body=body)
 
 
@@ -25,7 +26,7 @@ def _grep(output):
     return run
 
 
-def test_row_gets_module_test_referencers():
+def test_row_gets_module_test_referencers() -> None:
     grep = _grep(
         "pkg/tests/test_a.py:from pkg.sub.mod import f\n"
         "pkg/tests/test_b.py:import pkg.sub.mod\n"
@@ -37,7 +38,7 @@ def test_row_gets_module_test_referencers():
     assert len(grep.calls) == 1
 
 
-def test_referencer_another_same_wave_row_writes_is_excluded_and_named():
+def test_referencer_another_same_wave_row_writes_is_excluded_and_named() -> None:
     grep = _grep("pkg/tests/test_a.py:from pkg.sub.mod import f\n")
     wave = [_row("A", [MOD], body="b"), _row("B", ["pkg/tests/test_a.py"])]
     [[a, b]] = widen_waves([wave], grep)
@@ -47,7 +48,7 @@ def test_referencer_another_same_wave_row_writes_is_excluded_and_named():
     assert b.writes == ["pkg/tests/test_a.py"] and b.body == ""
 
 
-def test_referencer_written_by_row_in_another_wave_is_added():
+def test_referencer_written_by_row_in_another_wave_is_added() -> None:
     grep = _grep("pkg/tests/test_a.py:from pkg.sub.mod import f\n")
     waves = [[_row("A", [MOD])], [_row("B", ["pkg/tests/test_a.py"])]]
     [[a], _] = widen_waves(waves, grep)
@@ -60,42 +61,42 @@ _GOLDEN_LINE = (
 GOLDEN = "pkg/tests/fixtures/x-fixture.golden.mjs"
 
 
-def test_row_gets_the_golden_its_covering_test_names():
+def test_row_gets_the_golden_its_covering_test_names() -> None:
     grep = _grep("pkg/tests/test_a.py:from pkg.sub.mod import f\n" + _GOLDEN_LINE)
     [[row]] = widen_waves([[_row("A", [MOD])]], grep)
     assert row.writes == [MOD, "pkg/tests/test_a.py", GOLDEN]
     assert len(grep.calls) == 1
 
 
-def test_golden_named_by_a_test_not_covering_the_module_is_not_added():
+def test_golden_named_by_a_test_not_covering_the_module_is_not_added() -> None:
     grep = _grep("pkg/tests/test_a.py:from pkg.sub import other\n" + _GOLDEN_LINE)
     waves = [[_row("A", [MOD])]]
     assert widen_waves(waves, grep) == waves
 
 
-def test_golden_another_same_wave_row_writes_is_not_added():
+def test_golden_another_same_wave_row_writes_is_not_added() -> None:
     grep = _grep("pkg/tests/test_a.py:from pkg.sub.mod import f\n" + _GOLDEN_LINE)
     [[a, b]] = widen_waves([[_row("A", [MOD]), _row("B", [GOLDEN])]], grep)
     assert a.writes == [MOD, "pkg/tests/test_a.py"]
     assert b.writes == [GOLDEN]
 
 
-def test_no_modules_means_no_grep_and_no_change():
+def test_no_modules_means_no_grep_and_no_change() -> None:
     grep = _grep("x")
     waves = [[_row("A", ["pkg/tests/test_a.py", "doc.md"])]]
     assert widen_waves(waves, grep) == waves
     assert grep.calls == []
 
 
-def test_failed_grep_widens_nothing():
+def test_failed_grep_widens_nothing() -> None:
     waves = [[_row("A", [MOD])]]
     assert widen_waves(waves, _grep(None)) == waves
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_git_grep_pattern_finds_referencers_in_a_real_repo(tmp_path):
-    def git(*a):
+def test_git_grep_pattern_finds_referencers_in_a_real_repo(tmp_path: Path) -> None:
+    def git(*a) -> None:
         subprocess.run(
             ["git", *a],
             cwd=tmp_path,

@@ -382,7 +382,8 @@ def landable_under_hold(
     landing can still carry: the holder's recorded hunks are not in the file, or the run's own hunks
     split off as a settled blob. Any other path stays withheld, because its worktree bytes would carry
     the holder's hunks. A `split_only` path (a reviewer flagged its peer hunks out of the ask) is
-    carried only through the split blob: an unrecorded peer hunk does not release it."""
+    carried only through the split blob, and only when the split names an owner: an unrecorded peer hunk
+    or an undeclared peer (`UNKNOWN_OWNER`) does not release it."""
     keep: set = set()
     with invariants_scope(root, run_id) as inv:
         for path, holder in held.items():
@@ -395,6 +396,8 @@ def landable_under_hold(
             )
             entry = settled.get(path)
             if not found and entry is not None and entry["lines"] not in ("", UNATTRIBUTABLE_LINES):
+                if path in split_only and entry["owner"] == UNKNOWN_OWNER:
+                    continue
                 keep.add(path)
     return keep
 

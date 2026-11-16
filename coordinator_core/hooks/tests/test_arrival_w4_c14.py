@@ -6,6 +6,7 @@ import asyncio
 import pytest
 
 from coordinator_core.session_hub_path import session_dir_for
+from pathlib import Path
 
 
 def _stop_message(out):
@@ -18,26 +19,26 @@ def _run(coro):
     return asyncio.run(coro)
 
 
-def test_guard_manufactured_blocker_registers():
+def test_guard_manufactured_blocker_registers() -> None:
     from coordinator_core.ipc import _REGISTRY
     import coordinator_core.hooks.guard_manufactured_blocker  # noqa: F401
 
     assert "hooks.guard_manufactured_blocker" in _REGISTRY
 
 
-def test_guard_manufactured_blocker_no_op_on_subagent_stop():
+def test_guard_manufactured_blocker_no_op_on_subagent_stop() -> None:
     from coordinator_core.hooks.guard_manufactured_blocker import _handler
 
     assert _handler({"payload": {"agent_id": "sub-1"}}) == {}
 
 
-def test_guard_manufactured_blocker_no_op_without_transcript_path():
+def test_guard_manufactured_blocker_no_op_without_transcript_path() -> None:
     from coordinator_core.hooks.guard_manufactured_blocker import _handler
 
     assert _handler({"payload": {}}) == {}
 
 
-def test_guard_manufactured_blocker_fires_on_handoff_construct(tmp_path):
+def test_guard_manufactured_blocker_fires_on_handoff_construct(tmp_path: Path) -> None:
     from coordinator_core.hooks.guard_manufactured_blocker import _handler
 
     transcript = tmp_path / "transcript.jsonl"
@@ -76,7 +77,7 @@ def _write_transcript(tmp_path, text):
     return transcript
 
 
-def test_guard_manufactured_blocker_skips_negated_handoff(tmp_path):
+def test_guard_manufactured_blocker_skips_negated_handoff(tmp_path: Path) -> None:
     from coordinator_core.hooks.guard_manufactured_blocker import _handler
 
     transcript = _write_transcript(
@@ -94,7 +95,7 @@ def test_guard_manufactured_blocker_skips_negated_handoff(tmp_path):
     assert not _stop_message(out)
 
 
-def test_guard_manufactured_blocker_skips_quoted_handoff(tmp_path):
+def test_guard_manufactured_blocker_skips_quoted_handoff(tmp_path: Path) -> None:
     from coordinator_core.hooks.guard_manufactured_blocker import _handler
 
     transcript = _write_transcript(
@@ -113,7 +114,7 @@ def test_guard_manufactured_blocker_skips_quoted_handoff(tmp_path):
     assert not _stop_message(out)
 
 
-def test_guard_manufactured_blocker_genuine_handup_still_fires(tmp_path):
+def test_guard_manufactured_blocker_genuine_handup_still_fires(tmp_path: Path) -> None:
     from coordinator_core.hooks.guard_manufactured_blocker import _handler
 
     transcript = _write_transcript(
@@ -131,7 +132,7 @@ def test_guard_manufactured_blocker_genuine_handup_still_fires(tmp_path):
     assert _stop_message(out)
 
 
-def test_guard_manufactured_blocker_fires_at_most_once_per_session(tmp_path):
+def test_guard_manufactured_blocker_fires_at_most_once_per_session(tmp_path: Path) -> None:
     from coordinator_core.hooks.guard_manufactured_blocker import _handler
 
     (tmp_path / ".git").mkdir()
@@ -149,48 +150,48 @@ def test_guard_manufactured_blocker_fires_at_most_once_per_session(tmp_path):
     assert second == {}
 
 
-def test_postuse_stop_family_dispatch_registers():
+def test_postuse_stop_family_dispatch_registers() -> None:
     from coordinator_core.ipc import _REGISTRY
     import coordinator_core.hooks.postuse_stop_family_dispatch  # noqa: F401
 
     assert "hooks.postuse_stop_family_dispatch" in _REGISTRY
 
 
-def test_postuse_stop_family_dispatch_no_op_on_non_dict_payload():
+def test_postuse_stop_family_dispatch_no_op_on_non_dict_payload() -> None:
     from coordinator_core.hooks.postuse_stop_family_dispatch import _handler
 
     assert _run(_handler({"payload": None})) == {}
 
 
-def test_sessionend_auto_commit_registers():
+def test_sessionend_auto_commit_registers() -> None:
     from coordinator_core.ipc import _REGISTRY
     import coordinator_core.hooks.sessionend_auto_commit  # noqa: F401
 
     assert "hooks.sessionend_auto_commit" in _REGISTRY
 
 
-def test_sessionend_auto_commit_no_op_without_session_id():
+def test_sessionend_auto_commit_no_op_without_session_id() -> None:
     from coordinator_core.hooks.sessionend_auto_commit import _handler
 
     assert _handler({"payload": {}}) == {}
 
 
-def test_subagent_zero_tool_use_detect_registers():
+def test_subagent_zero_tool_use_detect_registers() -> None:
     from coordinator_core.ipc import _REGISTRY
     import coordinator_core.hooks.subagent_zero_tool_use_detect  # noqa: F401
 
     assert "hooks.subagent_zero_tool_use_detect" in _REGISTRY
 
 
-def test_subagent_zero_tool_use_detect_no_op_without_agent_type():
+def test_subagent_zero_tool_use_detect_no_op_without_agent_type() -> None:
     from coordinator_core.hooks.subagent_zero_tool_use_detect import _handler
 
     assert _run(_handler({"payload": {}})) == {}
 
 
 def test_subagent_zero_tool_use_detect_no_op_when_not_dispatched_this_session(
-    tmp_path,
-):
+    tmp_path: Path,
+) -> None:
     from coordinator_core.hooks.subagent_zero_tool_use_detect import _handler
 
     (tmp_path / ".git").mkdir()
@@ -244,8 +245,8 @@ def _arm_zero_tool_use_detect(tmp_path, monkeypatch, raising=()):
 
 
 def test_subagent_zero_tool_use_detect_fires_each_leg_with_agent_transcript(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     mod, calls, payload = _arm_zero_tool_use_detect(tmp_path, monkeypatch)
 
     assert _run(mod._handler({"payload": payload})) == {}
@@ -260,8 +261,8 @@ def test_subagent_zero_tool_use_detect_fires_each_leg_with_agent_transcript(
 
 
 def test_subagent_zero_tool_use_detect_raising_leg_does_not_drop_the_others(
-    tmp_path, monkeypatch
-):
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     mod, calls, payload = _arm_zero_tool_use_detect(
         tmp_path, monkeypatch, raising=("zero",)
     )
@@ -275,20 +276,20 @@ def test_subagent_zero_tool_use_detect_raising_leg_does_not_drop_the_others(
     }
 
 
-def test_group_em_park_spool_registers():
+def test_group_em_park_spool_registers() -> None:
     from coordinator_core.ipc import _REGISTRY
     import coordinator_core.hooks.group_em_park_spool  # noqa: F401
 
     assert "hooks.group_em_park_spool" in _REGISTRY
 
 
-def test_group_em_park_spool_no_op_without_session_id():
+def test_group_em_park_spool_no_op_without_session_id() -> None:
     from coordinator_core.hooks.group_em_park_spool import _handler
 
     assert _handler({"payload": {}}) == {}
 
 
-def test_group_em_park_spool_no_op_without_state_dir(tmp_path):
+def test_group_em_park_spool_no_op_without_state_dir(tmp_path: Path) -> None:
     from coordinator_core.hooks.group_em_park_spool import _handler
 
     (tmp_path / ".git").mkdir()
@@ -298,7 +299,7 @@ def test_group_em_park_spool_no_op_without_state_dir(tmp_path):
     assert out == {}
 
 
-def test_group_em_park_spool_build_record_only_spools_paused():
+def test_group_em_park_spool_build_record_only_spools_paused() -> None:
     from coordinator_core.hooks.group_em_park_spool import build_record
 
     assert build_record("sess-1", {"verdict": "ACTIVE"}) is None
@@ -318,7 +319,7 @@ if __name__ == "__main__":
     raise SystemExit(pytest.main([__file__, "-v"]))
 
 
-def test_day_branch_assert_loads_the_engines_own_session_ensure_branch():
+def test_day_branch_assert_loads_the_engines_own_session_ensure_branch() -> None:
     from coordinator_core.hooks import day_branch_assert
 
     day_branch_assert._session_ensure_branch = None
@@ -350,18 +351,18 @@ def _stop(tmp_path, text, sid):
         "Operator action: now wait on you for the sign-in.",
     ],
 )
-def test_declared_operator_action_is_exempt(tmp_path, line):
+def test_declared_operator_action_is_exempt(tmp_path: Path, line) -> None:
     out = _stop(tmp_path, "Deployed the fix.\n" + line + "\nDone otherwise.", "sess-op")
     assert out == {}
 
 
-def test_declared_construct_does_not_exempt_other_lines(tmp_path):
+def test_declared_construct_does_not_exempt_other_lines(tmp_path: Path) -> None:
     text = "Operator action: sign in once.\nThe merge strategy is waiting on you to decide."
     out = _stop(tmp_path, text, "sess-op-mixed")
     assert _stop_message(out)
 
 
-def test_hand_up_message_names_the_construct(tmp_path):
+def test_hand_up_message_names_the_construct(tmp_path: Path) -> None:
     out = _stop(tmp_path, "Three things now wait on you: A, B, C.", "sess-msg")
     msg = _stop_message(out)
     assert "Hands-on task:" in msg and "Operator action:" in msg

@@ -19,7 +19,7 @@ class _Clock:
 
 
 @pytest.fixture
-def stall_env(monkeypatch):
+def stall_env(monkeypatch: pytest.MonkeyPatch):
     clock = _Clock()
     monkeypatch.setattr(go, "_pack_clock", clock)
     monkeypatch.setattr(time, "sleep", lambda *_: pytest.fail("retry_past_stall slept"))

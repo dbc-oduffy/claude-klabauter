@@ -9,11 +9,12 @@ import pytest
 
 from coordinator_core.ops.verify_coverage import gitignored_dirs, walk_markdown
 from coordinator_core.win_portability import no_console_creationflags
+from pathlib import Path
 
 
 @pytest.mark.spawns_process
 @pytest.mark.cadence
-def test_ignored_directory_is_skipped_and_tracked_one_is_walked(tmp_path):
+def test_ignored_directory_is_skipped_and_tracked_one_is_walked(tmp_path: Path) -> None:
     subprocess.run(["git", "init", "-q", str(tmp_path)], check=True, **no_console_creationflags())
     (tmp_path / ".gitignore").write_text("data-hold/\n", encoding="utf-8")
     for d in ("data-hold/deep", "docs"):
@@ -26,5 +27,5 @@ def test_ignored_directory_is_skipped_and_tracked_one_is_walked(tmp_path):
     assert found == {os.path.join("docs", "live.md")}
 
 
-def test_outside_a_checkout_nothing_is_ignored(tmp_path):
+def test_outside_a_checkout_nothing_is_ignored(tmp_path: Path) -> None:
     assert gitignored_dirs(str(tmp_path / "missing")) == set()

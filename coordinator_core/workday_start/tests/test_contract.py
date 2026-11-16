@@ -36,11 +36,11 @@ def _results() -> dict:
     }]}}
 
 
-def test_digest_validates():
+def test_digest_validates() -> None:
     assert c.validate_digest(_digest()) == []
 
 
-def test_digest_rejects_bad_state_and_extra_key():
+def test_digest_rejects_bad_state_and_extra_key() -> None:
     bad = _digest()
     bad["state"] = "waiting"
     assert c.validate_digest(bad)
@@ -49,13 +49,13 @@ def test_digest_rejects_bad_state_and_extra_key():
     assert c.validate_digest(bad)
 
 
-def test_digest_group_phase_is_integer():
+def test_digest_group_phase_is_integer() -> None:
     bad = copy.deepcopy(_digest())
     bad["agent_work"]["groups"][0]["phase"] = "one"
     assert c.validate_digest(bad)
 
 
-def test_build_digest_raises_on_invalid():
+def test_build_digest_raises_on_invalid() -> None:
     try:
         c.build_digest(ceremony="x", run_id="nope", repo_root="/r", state="ran", finish_argv=[], groups=[])
     except ValueError:
@@ -63,11 +63,11 @@ def test_build_digest_raises_on_invalid():
     raise AssertionError("expected ValueError")
 
 
-def test_agent_results_validate():
+def test_agent_results_validate() -> None:
     assert c.validate_agent_results(_results()) == []
 
 
-def test_no_handback_disposition_validates():
+def test_no_handback_disposition_validates() -> None:
     assert c.HANDBACK_DISPOSITIONS
     for value in c.HANDBACK_DISPOSITIONS:
         obj = _results()
@@ -75,13 +75,13 @@ def test_no_handback_disposition_validates():
         assert c.validate_agent_results(obj), value
 
 
-def test_stage_tuples_disjoint_and_unique():
+def test_stage_tuples_disjoint_and_unique() -> None:
     assert not set(c.LAUNCH_STAGES) & set(c.FINISH_STAGES)
     assert len(set(c.LAUNCH_STAGES)) == len(c.LAUNCH_STAGES)
     assert len(set(c.FINISH_STAGES)) == len(c.FINISH_STAGES)
 
 
-def test_step_from_directive_round_trips_build_directive():
+def test_step_from_directive_round_trips_build_directive() -> None:
     d = build_directive("d1", "some-cli", ["--a", "b"], "why")
     d["stdin_from"] = "ignored"
     step = c.step_from_directive(d, stage="orient", heading="H", cost_class="engine")
@@ -90,13 +90,13 @@ def test_step_from_directive_round_trips_build_directive():
     assert step.kind == "cli" and step.stage == "orient" and not step.gates_next and step.on_exit == {}
 
 
-def test_on_exit_rules_are_known_and_deny_list_is_closed():
+def test_on_exit_rules_are_known_and_deny_list_is_closed() -> None:
     assert set(c.RULE_IDS) >= {"step0-stale-branch", "step0-reconcile-outcome"}
     assert "Parked for you" in c.NARRATION_DENY_LIST
     assert c.EXIT_GATE_FAILED == 5 and c.EXIT_IN_FLIGHT == 3
 
 
-def test_neutral_names_are_the_shared_objects():
+def test_neutral_names_are_the_shared_objects() -> None:
     from coordinator_core.ceremony_common.run import contract as shared
 
     for name in ("StepSpec", "StepResult", "Decision", "DEADLINE_S", "build_digest", "validate_digest",
@@ -105,7 +105,7 @@ def test_neutral_names_are_the_shared_objects():
     assert c.SCHEMA_PATH.is_file()
 
 
-def test_ledger_row_and_decision_rows():
+def test_ledger_row_and_decision_rows() -> None:
     row = c.StepResult(id="s", status="ran").to_row()
     assert tuple(row) == c.LEDGER_ROW_KEYS
     d = c.Decision("p", "q", "defer", "rule", "recommendation", "r", "e", ("s",)).to_row()

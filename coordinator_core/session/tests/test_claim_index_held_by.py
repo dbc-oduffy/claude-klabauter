@@ -4,11 +4,13 @@ import os
 import subprocess
 
 from coordinator_core.session import claim_index, touch_record
+from pathlib import Path
+import pytest
 
 T0 = 1_780_000_000.0
 
 
-def _ev(base, sid, verb, path, kind=None, ts=T0):
+def _ev(base, sid, verb, path, kind=None, ts=T0) -> None:
     touch_record.append_event(
         os.path.join(base, sid, "touch-record.jsonl"),
         session_id=sid,
@@ -20,7 +22,7 @@ def _ev(base, sid, verb, path, kind=None, ts=T0):
     )
 
 
-def test_peer_write_held_paths_exclude_reads(tmp_path):
+def test_peer_write_held_paths_exclude_reads(tmp_path: Path) -> None:
     base = str(tmp_path)
     _ev(base, "peer", "T", "a.py", touch_record.KIND_WRITE)
     _ev(base, "peer", "T", "t.py", touch_record.KIND_WRITE)
@@ -33,7 +35,7 @@ def test_peer_write_held_paths_exclude_reads(tmp_path):
     assert "me" in result.held_by
 
 
-def test_unreturned_claimant_absent(tmp_path):
+def test_unreturned_claimant_absent(tmp_path: Path) -> None:
     base = str(tmp_path)
     _ev(base, "peer", "T", "a.py", touch_record.KIND_WRITE)
     _ev(base, "other", "T", "z.py", touch_record.KIND_WRITE)
@@ -43,7 +45,7 @@ def test_unreturned_claimant_absent(tmp_path):
     assert set(result.held_by) == {"peer"}
 
 
-def test_released_path_absent(tmp_path):
+def test_released_path_absent(tmp_path: Path) -> None:
     base = str(tmp_path)
     _ev(base, "peer", "T", "a.py", touch_record.KIND_WRITE, ts=T0)
     _ev(base, "peer", "T", "t.py", touch_record.KIND_WRITE, ts=T0)
@@ -54,14 +56,14 @@ def test_released_path_absent(tmp_path):
     assert result.held_by["peer"] == ["a.py"]
 
 
-def test_absent_kind_counts_as_write(tmp_path):
+def test_absent_kind_counts_as_write(tmp_path: Path) -> None:
     base = str(tmp_path)
     _ev(base, "peer", "T", "a.py", None)
 
     assert claim_index.lookup(["a.py"], sessions_dir=base).held_by == {"peer": ["a.py"]}
 
 
-def test_fully_released_sid_contributes_nothing(tmp_path):
+def test_fully_released_sid_contributes_nothing(tmp_path: Path) -> None:
     base = str(tmp_path)
     _ev(base, "peer", "T", "a.py", touch_record.KIND_WRITE, ts=T0)
     _ev(base, "peer", "R", "a.py", None, ts=T0 + 1)
@@ -69,7 +71,7 @@ def test_fully_released_sid_contributes_nothing(tmp_path):
     assert claim_index.lookup(["a.py"], sessions_dir=base).held_by == {}
 
 
-def test_empty_base_yields_empty_held_by(monkeypatch):
+def test_empty_base_yields_empty_held_by(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(claim_index, "_resolve_base", lambda *a, **k: None)
 
     result = claim_index.lookup(["a.py"])
@@ -77,7 +79,7 @@ def test_empty_base_yields_empty_held_by(monkeypatch):
     assert result.held_by == {}
 
 
-def test_no_subprocess(tmp_path, monkeypatch):
+def test_no_subprocess(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     base = str(tmp_path)
     _ev(base, "peer", "T", "a.py", touch_record.KIND_WRITE)
 
